@@ -45,3 +45,21 @@ def test_weibo_parse_fixture():
     assert posts[0].external_id == "M1"
     assert posts[0].url == "https://m.weibo.cn/detail/M1"
     assert "行情" in posts[0].content
+
+
+from app.fetchers.rss import RssFetcher
+
+
+def test_rss_parse_fixture():
+    content = (FIXTURES / "rss_sample.xml").read_bytes()
+
+    def handler(request):
+        return httpx.Response(200, content=content)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    fetcher = RssFetcher(client=client)
+    posts = fetcher.fetch({"id": 3, "name": "X大V", "external_id": "https://rss.example/feed"})
+    assert len(posts) == 1
+    assert posts[0].external_id == "1"
+    assert posts[0].url == "https://x.com/status/1"
+    assert "world" in posts[0].content
