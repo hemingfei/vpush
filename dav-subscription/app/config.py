@@ -98,20 +98,59 @@ def _set_path(obj, path, value) -> None:
     setattr(obj, path[-1], value)
 
 
+def _validate(config: Config) -> None:
+    """类型归一化与校验：配置错误在启动时尽早暴露。"""
+    checks = (
+        ("polling.interval_seconds", config.polling, "interval_seconds", int),
+        ("polling.jitter_seconds", config.polling, "jitter_seconds", int),
+        ("polling.notify_on_start", config.polling, "notify_on_start", bool),
+    )
+    for label, obj, attr, expected in checks:
+        value = getattr(obj, attr)
+        try:
+            if expected is bool and isinstance(value, str):
+                lowered = value.strip().lower()
+                if lowered in ("1", "true", "yes", "on"):
+                    value = True
+                elif lowered in ("0", "false", "no", "off"):
+                    value = False
+                else:
+                    raise ValueError(f"无法解析为布尔值: {value!r}")
+            elif expected is bool and isinstance(value, int) and value in (0, 1):
+                value = bool(value)
+            elif expected is int and isinstance(value, str):
+                value = int(value.strip())
+            if not isinstance(value, expected):
+                raise ValueError(
+                    f"期望 {expected.__name__}, 实际 {type(value).__name__}: {value!r}"
+                )
+        except ValueError as exc:
+            raise ValueError(f"配置项 {label} 无效: {exc}") from exc
+        setattr(obj, attr, value)
+    if config.polling.interval_seconds < 1:
+        raise ValueError("配置项 polling.interval_seconds 必须 >= 1")
+    if config.polling.jitter_seconds < 0:
+        raise ValueError("配置项 polling.jitter_seconds 必须 >= 0")
+
+
 def load_config(path: str | Path | None = None) -> Config:
     """加载 config.yaml（如存在），再用环境变量覆盖。"""
-    path = Path(path or os.environ.get("CONFIG_PATH", "config.yaml"))
+    path = Path(path or os.environ.get("CONFIG_PATH") or "config.yaml")
     config = Config()
     if path.exists():
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         _fill(config, raw)
     for env_name, attr_path in _ENV_MAP.items():
         value = os.environ.get(env_name)
-        if value is None:
+        if not value:
             continue
-        if env_name in ("POLLING_INTERVAL_SECONDS", "POLLING_JITTER_SECONDS"):
-            value = int(value)
-        elif env_name == "NOTIFY_ON_START":
-            value = value.strip().lower() in ("1", "true", "yes")
+        try:
+            if env_name in ("POLLING_INTERVAL_SECONDS", "POLLING_JITTER_SECONDS"):
+                value = int(value)
+            elif env_name == "NOTIFY_ON_START":
+                value = value.strip().lower() in ("1", "true", "yes", "on")
+        except ValueError as exc:
+            raise ValueError(f"环境变量 {env_name} 无效: {exc}") from exc
         _set_path(config, attr_path, value)
+    _validate(config)
     return config
