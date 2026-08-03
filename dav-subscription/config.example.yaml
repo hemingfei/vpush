@@ -1,0 +1,21 @@
+notifiers:
+  feishu:
+    webhook_url: ""   # 飞书群机器人 webhook：群设置 → 群机器人 → 自定义机器人
+  telegram:
+    bot_token: ""     # @BotFather 创建 bot 获取
+    chat_id: ""       # 接收推送的会话 ID（可用 @userinfobot 查询）
+
+sources:
+  xueqiu:
+    cookie: ""        # 可选：浏览器登录雪球后复制 Cookie，推荐配置
+  weibo:
+    cookie: ""        # 推荐：浏览器登录 weibo.cn 后复制 Cookie
+    token: ""         # 可选：x-xsrf-token
+
+polling:
+  interval_seconds: 180
+  jitter_seconds: 30
+  notify_on_start: true
+
+web:
+  password: ""        # 可选：管理界面 Basic Auth 密码
