@@ -1,0 +1,14 @@
+services:
+  dav-subscription:
+    build: .
+    container_name: dav-subscription
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - TZ=Asia/Shanghai
+      - CONFIG_PATH=/app/config.yaml
+      - DB_PATH=/data/dav.db
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - ./data:/data
