@@ -1,0 +1,18 @@
+{
+  "data": {
+    "cards": [
+      {
+        "card_type": 9,
+        "mblog": {
+          "id": "M1",
+          "text": "今天<em>行情</em>不错，继续关注",
+          "created_at": "08-04"
+        }
+      },
+      {
+        "card_type": 8,
+        "mblog": null
+      }
+    ]
+  }
+}

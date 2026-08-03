@@ -25,3 +25,23 @@ def test_xueqiu_parse_fixture():
     assert "大涨" in posts[0].content
     assert "<strong>" not in posts[0].content
     assert posts[0].kol_name == "大V"
+
+
+from app.config import WeiboConfig
+from app.fetchers.weibo import WeiboFetcher
+
+
+def test_weibo_parse_fixture():
+    payload = json.loads((FIXTURES / "weibo_sample.json").read_text(encoding="utf-8"))
+
+    def handler(request):
+        assert request.headers.get("Cookie", "").startswith("SUB=")
+        return httpx.Response(200, json=payload)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    fetcher = WeiboFetcher(WeiboConfig(cookie="SUB=xyz"), client=client)
+    posts = fetcher.fetch({"id": 2, "name": "微博大V", "external_id": "1234567890"})
+    assert len(posts) == 1
+    assert posts[0].external_id == "M1"
+    assert posts[0].url == "https://m.weibo.cn/detail/M1"
+    assert "行情" in posts[0].content
