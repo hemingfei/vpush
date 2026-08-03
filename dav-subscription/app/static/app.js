@@ -13,6 +13,7 @@ async function api(path, options = {}) {
 }
 
 const PLATFORM_LABELS = { xueqiu: "雪球", weibo: "微博", twitter: "X" };
+const PAGE_TITLES = { kols: "订阅管理", posts: "帖子", logs: "推送记录" };
 
 async function loadKols() {
   const kols = await api("/api/kols");
@@ -22,7 +23,7 @@ async function loadKols() {
       <td>${PLATFORM_LABELS[k.platform] || k.platform}</td>
       <td>${escapeHtml(k.name)}</td>
       <td>${escapeHtml(k.external_id)}</td>
-      <td>${k.enabled ? "启用" : "停用"}</td>
+      <td class="${k.enabled ? "ok" : ""}">${k.enabled ? "启用" : "停用"}</td>
       <td class="row">
         <button onclick="toggleKol(${k.id}, ${k.enabled ? 0 : 1})">${k.enabled ? "停用" : "启用"}</button>
         <button onclick="deleteKol(${k.id})">删除</button>
@@ -74,12 +75,13 @@ function escapeHtml(text) {
   }[c]));
 }
 
-document.querySelectorAll(".tab").forEach((btn) => {
+document.querySelectorAll(".menu-item").forEach((btn) => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
-    document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
+    document.querySelectorAll(".menu-item").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".page").forEach((p) => p.classList.remove("active"));
     btn.classList.add("active");
-    $(`#tab-${btn.dataset.tab}`).classList.add("active");
+    $(`#page-${btn.dataset.page}`).classList.add("active");
+    $("#page-title").textContent = PAGE_TITLES[btn.dataset.page] || btn.dataset.page;
   });
 });
 

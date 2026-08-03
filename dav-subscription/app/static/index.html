@@ -7,51 +7,74 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <header>
-    <h1>大V订阅</h1>
-    <nav>
-      <button class="tab active" data-tab="kols">订阅管理</button>
-      <button class="tab" data-tab="posts">帖子</button>
-      <button class="tab" data-tab="logs">推送记录</button>
-    </nav>
-  </header>
-  <main>
-    <section id="tab-kols" class="tab-panel active">
-      <form id="kol-form" class="row">
-        <select id="platform">
-          <option value="xueqiu">雪球</option>
-          <option value="weibo">微博</option>
-          <option value="twitter">X (RSS)</option>
-        </select>
-        <input id="name" placeholder="昵称" required>
-        <input id="external-id" placeholder="雪球user_id / 微博uid / RSS链接" required>
-        <button type="submit">添加</button>
-      </form>
-      <table>
-        <thead><tr><th>ID</th><th>平台</th><th>昵称</th><th>外部ID</th><th>状态</th><th>操作</th></tr></thead>
-        <tbody id="kol-body"></tbody>
-      </table>
-    </section>
-    <section id="tab-posts" class="tab-panel">
-      <div class="row">
-        <select id="post-platform">
-          <option value="">全部平台</option>
-          <option value="xueqiu">雪球</option>
-          <option value="weibo">微博</option>
-          <option value="twitter">X</option>
-        </select>
-        <button id="refresh-posts">刷新</button>
+  <div class="app">
+    <aside class="sider">
+      <div class="logo">
+        <span class="logo-mark">V</span>
+        <span class="logo-text">大V订阅</span>
       </div>
-      <ul id="post-list" class="list"></ul>
-    </section>
-    <section id="tab-logs" class="tab-panel">
-      <div class="row"><button id="refresh-logs">刷新</button></div>
-      <table>
-        <thead><tr><th>时间</th><th>KOL</th><th>标题</th><th>渠道</th><th>状态</th><th>错误</th></tr></thead>
-        <tbody id="log-body"></tbody>
-      </table>
-    </section>
-  </main>
+      <nav class="menu">
+        <button class="menu-item active" data-page="kols"><span class="menu-icon">◎</span>订阅管理</button>
+        <button class="menu-item" data-page="posts"><span class="menu-icon">▤</span>帖子</button>
+        <button class="menu-item" data-page="logs"><span class="menu-icon">☰</span>推送记录</button>
+      </nav>
+    </aside>
+    <div class="main">
+      <header class="header">
+        <h2 id="page-title">订阅管理</h2>
+        <span class="status"><span class="dot"></span>运行中</span>
+      </header>
+      <main class="content">
+        <section id="page-kols" class="page active">
+          <div class="card">
+            <div class="card-title">添加订阅</div>
+            <form id="kol-form" class="row">
+              <select id="platform">
+                <option value="xueqiu">雪球</option>
+                <option value="weibo">微博</option>
+                <option value="twitter">X (RSS)</option>
+              </select>
+              <input id="name" placeholder="昵称" required>
+              <input id="external-id" placeholder="雪球user_id / 微博uid / RSS链接" required>
+              <button type="submit" class="btn-primary">添加</button>
+            </form>
+          </div>
+          <div class="card">
+            <div class="card-title">订阅列表</div>
+            <table>
+              <thead><tr><th>ID</th><th>平台</th><th>昵称</th><th>外部ID</th><th>状态</th><th>操作</th></tr></thead>
+              <tbody id="kol-body"></tbody>
+            </table>
+          </div>
+        </section>
+        <section id="page-posts" class="page">
+          <div class="card">
+            <div class="card-title">帖子列表</div>
+            <div class="row">
+              <select id="post-platform">
+                <option value="">全部平台</option>
+                <option value="xueqiu">雪球</option>
+                <option value="weibo">微博</option>
+                <option value="twitter">X</option>
+              </select>
+              <button id="refresh-posts">刷新</button>
+            </div>
+            <ul id="post-list" class="list"></ul>
+          </div>
+        </section>
+        <section id="page-logs" class="page">
+          <div class="card">
+            <div class="card-title">推送记录</div>
+            <div class="row"><button id="refresh-logs">刷新</button></div>
+            <table>
+              <thead><tr><th>时间</th><th>KOL</th><th>标题</th><th>渠道</th><th>状态</th><th>错误</th></tr></thead>
+              <tbody id="log-body"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
   <script src="/app.js"></script>
 </body>
 </html>
