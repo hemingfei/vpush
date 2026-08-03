@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import httpx
+import rsa
 
 from app.config import XueqiuConfig
 from app.db import DB
@@ -64,12 +65,90 @@ def test_weibo_parse_fixture():
         return httpx.Response(200, json=payload)
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    fetcher = WeiboFetcher(WeiboConfig(cookie="SUB=xyz"), client=client)
+    fetcher = WeiboFetcher(WeiboConfig(cookie="SUB=xyz"), db=DB(":memory:"), client=client)
     posts = fetcher.fetch({"id": 2, "name": "微博大V", "external_id": "1234567890"})
     assert len(posts) == 1
     assert posts[0].external_id == "M1"
     assert posts[0].url == "https://m.weibo.cn/detail/M1"
     assert "行情" in posts[0].content
+
+
+def _make_weibo_login_mocks(fixture):
+    """返回 (handler, client) —— prelogin 返回测试公钥，login 返回 retcode=0 并下发 SUB cookie。"""
+    _, priv = rsa.newkeys(512)
+    pubkey_hex = format(priv.n, "x")
+    timeline_hits = {"n": 0}
+
+    def handler(request):
+        path = request.url.path
+        if path == "/sso/prelogin.php":
+            body = (
+                'sinaSSOController.preloginCallBack({"retcode":0,'
+                f'"pubkey":"{pubkey_hex}","nonce":"abc","rsakv":"1",'
+                '"servertime":"1700000000","pcid":"pc1"})'
+            )
+            return httpx.Response(200, text=body)
+        if path == "/sso/login.php":
+            assert request.url.params["client"] == "ssologin.js(v1.4.19)"
+            return httpx.Response(
+                200,
+                text="location.replace('https://weibo.cn/?retcode=0')",
+                headers={"set-cookie": "SUB=sub123; Path=/"},
+            )
+        # timeline
+        timeline_hits["n"] += 1
+        if timeline_hits["n"] == 1:
+            return httpx.Response(200, json={"ok": 0, "msg": "请先登录"})
+        assert "SUB=sub123" in request.headers.get("Cookie", "")
+        return httpx.Response(200, json=fixture)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    return client, timeline_hits
+
+
+def test_weibo_auto_login_and_retry():
+    fixture = json.loads((FIXTURES / "weibo_sample.json").read_text(encoding="utf-8"))
+    client, timeline_hits = _make_weibo_login_mocks(fixture)
+    db = DB(":memory:")
+    fetcher = WeiboFetcher(
+        WeiboConfig(username="user", password="pass"),
+        db=db,
+        client=client,
+    )
+    posts = fetcher.fetch({"id": 2, "name": "微博大V", "external_id": "1234567890"})
+    assert len(posts) == 1
+    assert timeline_hits["n"] == 2
+    assert "SUB=sub123" in db.get_setting("weibo_cookie")
+
+
+def test_weibo_login_failure_raises():
+    fixture = json.loads((FIXTURES / "weibo_sample.json").read_text(encoding="utf-8"))
+
+    def handler(request):
+        if request.url.path == "/sso/prelogin.php":
+            _, priv = rsa.newkeys(512)
+            body = (
+                'sinaSSOController.preloginCallBack({"retcode":0,'
+                f'"pubkey":"{format(priv.n, "x")}","nonce":"abc","rsakv":"1",'
+                '"servertime":"1700000000","pcid":""})'
+            )
+            return httpx.Response(200, text=body)
+        if request.url.path == "/sso/login.php":
+            return httpx.Response(200, text="retcode=101 密码错误")
+        return httpx.Response(200, json={"ok": 0, "msg": "请先登录"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    fetcher = WeiboFetcher(
+        WeiboConfig(username="user", password="wrong"),
+        db=DB(":memory:"),
+        client=client,
+    )
+    try:
+        fetcher.fetch({"id": 2, "name": "微博大V", "external_id": "1234567890"})
+    except RuntimeError as exc:
+        assert "登录失败" in str(exc)
+        return
+    raise AssertionError("登录失败时应抛出异常")
 
 
 from app.fetchers.rss import RssFetcher

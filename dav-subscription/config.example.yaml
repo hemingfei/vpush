@@ -11,6 +11,8 @@ sources:
   weibo:
     cookie: ""        # 推荐：浏览器登录 weibo.cn 后复制 Cookie
     token: ""         # 可选：x-xsrf-token
+    username: ""      # 可选：微博账号（配置后自动登录续期 cookie）
+    password: ""      # 可选：微博密码
 
 polling:
   interval_seconds: 180

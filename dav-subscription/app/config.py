@@ -34,6 +34,8 @@ class XueqiuConfig:
 class WeiboConfig:
     cookie: str = ""
     token: str = ""
+    username: str = ""
+    password: str = ""
 
 
 @dataclass
@@ -71,6 +73,8 @@ _ENV_MAP = {
     "XUEQIU_COOKIE": ("sources", "xueqiu", "cookie"),
     "WEIBO_COOKIE": ("sources", "weibo", "cookie"),
     "WEIBO_TOKEN": ("sources", "weibo", "token"),
+    "WEIBO_USERNAME": ("sources", "weibo", "username"),
+    "WEIBO_PASSWORD": ("sources", "weibo", "password"),
     "POLLING_INTERVAL_SECONDS": ("polling", "interval_seconds"),
     "POLLING_JITTER_SECONDS": ("polling", "jitter_seconds"),
     "NOTIFY_ON_START": ("polling", "notify_on_start"),

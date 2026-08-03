@@ -24,9 +24,13 @@ class FakeNotifier:
 
     def __init__(self):
         self.calls = []
+        self.texts = []
 
     def notify(self, post):
         self.calls.append(post)
+
+    def send_text(self, text):
+        self.texts.append(text)
 
 
 def make_db() -> DB:
@@ -86,3 +90,21 @@ def test_push_failure_logged():
     logs = db.list_push_logs()
     assert logs[0]["status"] == "failed"
     assert "down" in logs[0]["error"]
+
+
+def test_weibo_login_failure_warns_once_per_day():
+    db = make_db()
+    db.add_kol("weibo", "微博大V", "123")
+
+    class LoginErrorFetcher:
+        def fetch(self, kol):
+            raise RuntimeError("微博登录失败（可能需要验证码或凭据错误）")
+
+    notifier = FakeNotifier()
+    poll_once(db, {"weibo": LoginErrorFetcher()}, [notifier])
+    assert len(notifier.texts) == 1
+    assert "微博" in notifier.texts[0]
+
+    # 同一天再次失败不再重复告警
+    poll_once(db, {"weibo": LoginErrorFetcher()}, [notifier])
+    assert len(notifier.texts) == 1

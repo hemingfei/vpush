@@ -12,6 +12,8 @@ from .notifiers.base import Notifier
 
 logger = logging.getLogger(__name__)
 
+WEIBO_WARNING_KEY = "weibo_warning_date"
+
 
 class PlatformState:
     """每个平台连续失败次数与退避截止时间。"""
@@ -19,6 +21,20 @@ class PlatformState:
     def __init__(self):
         self.fail_count = 0
         self.skip_until = 0.0
+
+
+def maybe_warn_weibo_login(db: DB, notifiers: list[Notifier], detail: str) -> None:
+    """微博自动登录失败时向各渠道推告警，每天最多一次。"""
+    today = time.strftime("%Y-%m-%d")
+    if db.get_setting(WEIBO_WARNING_KEY) == today:
+        return
+    db.set_setting(WEIBO_WARNING_KEY, today)
+    message = f"⚠️ 微博 cookie 自动登录失败，请检查 weibo.username/password 或手动更新 cookie。详情：{detail[:200]}"
+    for notifier in notifiers:
+        try:
+            notifier.send_text(message)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("微博告警发送失败 channel=%s err=%s", notifier.channel, exc)
 
 
 def notify_post(db: DB, post_id: int, post: Post, notifiers: list[Notifier]) -> None:
@@ -69,6 +85,8 @@ def poll_once(
                 exc,
                 delay,
             )
+            if kol["platform"] == "weibo" and ("登录" in str(exc) or "login" in str(exc).lower()):
+                maybe_warn_weibo_login(db, notifiers, str(exc))
             continue
         state.fail_count = 0
         for post in posts:
