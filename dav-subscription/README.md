@@ -40,9 +40,11 @@ docker compose up -d --build
 | `notifiers.feishu.webhook_url` | 飞书群机器人 webhook |
 | `notifiers.telegram.bot_token` | Telegram Bot token |
 | `notifiers.telegram.chat_id` | 接收消息的会话 ID |
-| `sources.xueqiu.cookie` | 可选，雪球登录 Cookie，推荐配置 |
-| `sources.weibo.cookie` | 微博登录 Cookie（weibo.cn），建议配置 |
+| `sources.xueqiu.cookie` | 可选，雪球 Cookie 初始值；服务会自动续期，无需手动更新 |
+| `sources.weibo.cookie` | 可选，微博 Cookie 初始值（未配置账号密码时的兜底） |
 | `sources.weibo.token` | 可选，x-xsrf-token |
+| `sources.weibo.username` | 可选，微博账号；配置后自动登录并自动续期 cookie |
+| `sources.weibo.password` | 可选，微博密码 |
 | `polling.interval_seconds` | 轮询间隔（默认 180） |
 | `polling.jitter_seconds` | 随机抖动（默认 30） |
 | `polling.notify_on_start` | 启动时发上线消息（默认 true） |
@@ -50,12 +52,16 @@ docker compose up -d --build
 
 所有配置项均可通过环境变量覆盖（见 `.env.example`）。注意 `.env` 文件本身不会被程序自动读取，环境变量需由运行环境注入（Docker compose 已处理，直接 `python app/main.py` 本地运行不会读取 `.env`）。
 
-## Cookie 获取
+## Cookie 获取与自动续期
 
-- 雪球：浏览器登录 xueqiu.com → 开发者工具 → Network → 复制请求头里的 `Cookie` 整串
-- 微博：浏览器登录 weibo.cn → 同上复制 Cookie；token 取 Cookie 中 `XSRF-TOKEN` 的值
+- **雪球**：服务会自动续期——匿名访问首页即可获得新的 `xq_a_token`（约 30 天有效），无需手动维护；初始值可选填。
+- **微博**：推荐配置 `sources.weibo.username/password`，服务会自动走 weibo.cn 登录流程获取 cookie 并续期（可能偶尔遇到验证码导致登录失败，失败时会推送告警并在次日重试）。不想用账号密码时，也可手动填 cookie：浏览器登录 weibo.cn → 开发者工具 → Network → 复制请求头里的 `Cookie` 整串。
 
-Cookie 过期后重新复制即可，无需重启容器（改 `config.yaml` 后 `docker compose restart`）。
+手动 cookie 过期后重新复制即可，无需重启容器（改 `config.yaml` 后 `docker compose restart`）。
+
+## 配置校验
+
+程序启动时会校验配置：数字/布尔字段会自动归一化类型（如引号包裹的 `"60"`），类型错误或取值非法会直接启动报错并指明具体配置项；环境变量解析失败也会提示变量名。
 
 ## X (Twitter) 订阅
 
@@ -84,7 +90,7 @@ python -m pytest
 
 ## 常见问题
 
-**微博抓不到内容？** 检查 `sources.weibo.cookie` 是否有效（过期需更新）。
+**微博抓不到内容？** 检查是否配置了 `sources.weibo.username/password`；如未配置，手动更新 `sources.weibo.cookie`。自动登录失败时飞书/Telegram 会收到告警。
 
 **飞书收不到推送？** 确认 webhook 正确且机器人未被移出群。
 
