@@ -35,6 +35,10 @@ CREATE TABLE IF NOT EXISTS push_logs (
     error TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 ALLOWED_PLATFORMS = {"xueqiu", "weibo", "twitter"}
@@ -149,4 +153,16 @@ class DB:
             "JOIN kols k ON k.id = p.kol_id "
             "ORDER BY l.id DESC LIMIT ?",
             (limit,),
+        )
+
+    # ---- Settings ----
+    def get_setting(self, key: str) -> str | None:
+        rows = self._rows("SELECT value FROM settings WHERE key = ?", (key,))
+        return rows[0]["value"] if rows else None
+
+    def set_setting(self, key: str, value: str) -> None:
+        self._execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
         )

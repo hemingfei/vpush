@@ -36,3 +36,12 @@ def test_invalid_platform_rejected():
     except ValueError:
         return
     raise AssertionError("应拒绝不支持的平台")
+
+
+def test_settings_roundtrip():
+    db = make_db()
+    assert db.get_setting("xueqiu_cookie") is None
+    db.set_setting("xueqiu_cookie", "xq_a_token=abc")
+    assert db.get_setting("xueqiu_cookie") == "xq_a_token=abc"
+    db.set_setting("xueqiu_cookie", "xq_a_token=def")
+    assert db.get_setting("xueqiu_cookie") == "xq_a_token=def"

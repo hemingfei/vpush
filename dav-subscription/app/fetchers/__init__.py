@@ -6,10 +6,10 @@ from .weibo import WeiboFetcher
 from .xueqiu import XueqiuFetcher
 
 
-def build_fetchers(config) -> dict[str, Fetcher]:
+def build_fetchers(config, db) -> dict[str, Fetcher]:
     """根据全局配置构造各平台抓取器。"""
     return {
-        "xueqiu": XueqiuFetcher(config.sources.xueqiu),
+        "xueqiu": XueqiuFetcher(config.sources.xueqiu, db),
         "weibo": WeiboFetcher(config.sources.weibo),
         "twitter": RssFetcher(),
     }

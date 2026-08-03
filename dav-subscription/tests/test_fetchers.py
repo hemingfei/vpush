@@ -4,6 +4,7 @@ from pathlib import Path
 import httpx
 
 from app.config import XueqiuConfig
+from app.db import DB
 from app.fetchers.xueqiu import XueqiuFetcher
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -17,7 +18,7 @@ def test_xueqiu_parse_fixture():
         return httpx.Response(200, json=payload)
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    fetcher = XueqiuFetcher(XueqiuConfig(cookie="xq_a_token=abc"), client=client)
+    fetcher = XueqiuFetcher(XueqiuConfig(cookie="xq_a_token=abc"), db=DB(":memory:"), client=client)
     posts = fetcher.fetch({"id": 1, "name": "大V", "external_id": "123"})
     assert len(posts) == 2
     assert posts[0].external_id == "101"
@@ -25,6 +26,30 @@ def test_xueqiu_parse_fixture():
     assert "大涨" in posts[0].content
     assert "<strong>" not in posts[0].content
     assert posts[0].kol_name == "大V"
+
+
+def test_xueqiu_cookie_refresh_on_401():
+    fixture = json.loads((FIXTURES / "xueqiu_sample.json").read_text(encoding="utf-8"))
+    timeline_hits = {"n": 0}
+
+    def handler(request):
+        if request.url.path == "/":
+            return httpx.Response(
+                200,
+                headers={"set-cookie": "xq_a_token=newtoken; Path=/; Domain=.xueqiu.com"},
+            )
+        timeline_hits["n"] += 1
+        if timeline_hits["n"] == 1:
+            return httpx.Response(401)
+        assert request.headers.get("Cookie", "").startswith("xq_a_token=newtoken")
+        return httpx.Response(200, json=fixture)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    db = DB(":memory:")
+    fetcher = XueqiuFetcher(XueqiuConfig(cookie="xq_a_token=old"), db=db, client=client)
+    posts = fetcher.fetch({"id": 1, "name": "大V", "external_id": "123"})
+    assert len(posts) == 2
+    assert "xq_a_token=newtoken" in db.get_setting("xueqiu_cookie")
 
 
 from app.config import WeiboConfig

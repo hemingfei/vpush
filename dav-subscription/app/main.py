@@ -24,7 +24,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     if db_path is not None:
         config.db_path = str(db_path)
     db = DB(config.db_path)
-    fetchers = build_fetchers(config)
+    fetchers = build_fetchers(config, db)
     notifiers = build_notifiers(config)
     scheduler = Scheduler(db, fetchers, notifiers, config.polling)
 
