@@ -60,7 +60,7 @@ class Config:
     sources: SourcesConfig = field(default_factory=SourcesConfig)
     polling: PollingConfig = field(default_factory=PollingConfig)
     web: WebConfig = field(default_factory=WebConfig)
-    db_path: str = "/data/dav.db"
+    db_path: str = "data/dav.db"
 
 
 # 环境变量 -> Config 属性路径（用于覆盖）

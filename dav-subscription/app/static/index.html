@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>大V订阅</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>大V订阅</h1>
+    <nav>
+      <button class="tab active" data-tab="kols">订阅管理</button>
+      <button class="tab" data-tab="posts">帖子</button>
+      <button class="tab" data-tab="logs">推送记录</button>
+    </nav>
+  </header>
+  <main>
+    <section id="tab-kols" class="tab-panel active">
+      <form id="kol-form" class="row">
+        <select id="platform">
+          <option value="xueqiu">雪球</option>
+          <option value="weibo">微博</option>
+          <option value="twitter">X (RSS)</option>
+        </select>
+        <input id="name" placeholder="昵称" required>
+        <input id="external-id" placeholder="雪球user_id / 微博uid / RSS链接" required>
+        <button type="submit">添加</button>
+      </form>
+      <table>
+        <thead><tr><th>ID</th><th>平台</th><th>昵称</th><th>外部ID</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody id="kol-body"></tbody>
+      </table>
+    </section>
+    <section id="tab-posts" class="tab-panel">
+      <div class="row">
+        <select id="post-platform">
+          <option value="">全部平台</option>
+          <option value="xueqiu">雪球</option>
+          <option value="weibo">微博</option>
+          <option value="twitter">X</option>
+        </select>
+        <button id="refresh-posts">刷新</button>
+      </div>
+      <ul id="post-list" class="list"></ul>
+    </section>
+    <section id="tab-logs" class="tab-panel">
+      <div class="row"><button id="refresh-logs">刷新</button></div>
+      <table>
+        <thead><tr><th>时间</th><th>KOL</th><th>标题</th><th>渠道</th><th>状态</th><th>错误</th></tr></thead>
+        <tbody id="log-body"></tbody>
+      </table>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
