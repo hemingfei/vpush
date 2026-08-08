@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re
-import time
 
 import httpx
 
@@ -172,20 +171,15 @@ class XueqiuFetcher(Fetcher):
             self.client.headers["Cookie"] = cookie
 
     def _refresh_cookie(self) -> None:
-        """访问雪球首页拿新 token（匿名访问也会下发 xq_a_token），持久化到 DB。"""
-        resp = self.client.get("https://xueqiu.com/")
-        resp.raise_for_status()
-        if _is_waf_html(resp):
-            raise RuntimeError(
-                "雪球 cookie 自动续期被反爬拦截（首页需要浏览器执行 JS 验证），"
-                "请手动更新 sources.xueqiu.cookie 后重试"
-            )
-        if not self.client.cookies.get("xq_a_token"):
-            raise RuntimeError("雪球首页未返回 xq_a_token，cookie 续期失败")
-        old = self.client.headers.get("Cookie") or ""
-        cookie = merge_cookie_strings(old, self.client.cookies)
-        self.db.set_setting(XUEQIU_COOKIE_KEY, cookie)
-        self.db.set_setting(XUEQIU_COOKIE_TIME_KEY, str(int(time.time())))
+        """雪球 cookie 失效时尝试续期（已不可用，直接抛错进入退避告警链路）。
+
+        旧实现访问首页拿新 token：但无法从首页自动续期，
+        且不再下发 xq_a_token 登录态 token，续期通道已死。404 说明。
+        """
+        raise RuntimeError(
+            "雪球 cookie 已失效（接口返回 401/403）。无法自动续期，"
+            "请手动更新 sources.xueqiu.cookie 后重试"
+        )
 
     def fetch(self, kol: dict) -> list[Post]:
         self._apply_cookie()
