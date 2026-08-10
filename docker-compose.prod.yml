@@ -79,6 +79,8 @@ services:
 
   # sidecar 定期刷新共享 cookie（共享 cookie），
   # 把验证通过的 cookie 写到共享数据卷，主容器抓取时读取复用。
+  # 回退方案：若挑战升级导致 jsdom 失效，把 build 改为
+  #   build: { context: ./waf-bot, dockerfile: Dockerfile.chromium }
   waf-bot:
     build: ./waf-bot
     container_name: dav-waf-bot
