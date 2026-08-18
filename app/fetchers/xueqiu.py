@@ -279,7 +279,7 @@ class XueqiuFetcher(Fetcher):
         """
         raise RuntimeError(
             "雪球 cookie 已失效（接口返回 401/403）。无法自动续期，"
-            "请手动更新 sources.xueqiu.cookie 后重试"
+            "请到后台「数据源 → Cookie 管理」手动更新后重试"
         )
 
     def fetch(self, kol: dict) -> list[Post]:
