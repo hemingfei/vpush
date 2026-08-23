@@ -1786,9 +1786,9 @@ class Scheduler:
             try:
                 removed_users = self.db.purge_inactive_users_if_due()
                 if removed_users:
-                    logger.info("清理非活跃用户 %d 人", removed_users)
+                    logger.info("清理未激活用户 %d 人", removed_users)
             except Exception:  # noqa: BLE001
-                logger.exception("非活跃用户清理失败")
+                logger.exception("未激活用户清理失败")
             # 定期清理过期帖子（默认每 6 小时检查一次）
             if now_mono - self._last_cleanup > 6 * 3600:
                 self._last_cleanup = now_mono

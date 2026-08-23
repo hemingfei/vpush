@@ -1350,9 +1350,9 @@ def test_admin_users_page_has_batch_bar():
 
 
 def test_admin_users_page_has_inactive_policy():
-    """用户管理：非活跃天数设置 + 筛选 Tab + 状态列文案。"""
+    """用户管理：未激活天数设置 + 筛选 Tab + 状态列文案。"""
     render = _fn_body("renderAdminUsers")
-    assert "非活跃" in render
+    assert "未激活" in render
     assert "au-policy" in render
     assert ">登录<" in render
     assert "登录名不合规" in render
@@ -1361,14 +1361,22 @@ def test_admin_users_page_has_inactive_policy():
     assert 'id="au-inactive-save"' in render
     assert "rc-field" in render
     assert "rc-generate" in render
-    assert "列为非活跃" in render
+    assert "列为未激活" in render
     assert "之后删除" in render
     assert "adminSaveInactivePolicy" in render
     assert "btn-normal" in render
+    assert "inactivePolicyRuleLabel" in render
+    assert "领码或网页注册后从未登录" in render
+    assert "没有未激活账号" in render
     src = APP_JS.read_text()
     assert "adminSaveInactivePolicy" in src
     assert "adminInactivePolicySyncSave" in src
+    assert "adminRefreshInactivePreview" in src
     assert "每天扫一次" in _fn_body("inactivePolicyHint")
+    assert "未改过" in _fn_body("inactivePolicyHint")
+    assert "默认" in _fn_body("inactivePolicyRuleLabel")
+    assert "规则" in _fn_body("inactivePolicyRuleLabel")
+    assert "下次扫描将删除" in _fn_body("adminSaveInactivePolicy")
     assert "/api/admin/inactive-users-policy" in _fn_body("adminSaveInactivePolicy")
     assert "/api/admin/inactive-users-policy" in _fn_body("loadAdminUsers")
     filt = _fn_body("adminUsersFiltered")

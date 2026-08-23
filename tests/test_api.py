@@ -4599,21 +4599,29 @@ def test_inactive_user_policy_and_list_flags():
     client = make_client()
     admin_headers = auth_headers(client)
     db = client.app.state.db
-    assert client.get("/api/admin/inactive-users-policy", headers=admin_headers).json() == {
-        "inactive_after_days": 90,
-        "inactive_purge_after_days": 30,
-    }
+    first = client.get("/api/admin/inactive-users-policy", headers=admin_headers).json()
+    assert first["inactive_after_days"] == 90
+    assert first["inactive_purge_after_days"] == 30
+    assert first["customized"] is False
+    assert first["marked_count"] == 0
+    assert first["purge_count"] == 0
+    assert db.get_setting("inactive_after_days") == "90"
+    assert db.get_setting("inactive_purge_after_days") == "30"
+    assert not db.inactive_policy_customized()
     uh = user_headers(client, "inact_norm")
     assert client.put(
         "/api/admin/inactive-users-policy",
         headers=uh,
         json={"inactive_after_days": 10, "inactive_purge_after_days": 5},
     ).status_code == 403
-    assert client.put(
+    saved = client.put(
         "/api/admin/inactive-users-policy",
         headers=admin_headers,
         json={"inactive_after_days": 10, "inactive_purge_after_days": 5},
-    ).status_code == 200
+    )
+    assert saved.status_code == 200
+    assert saved.json()["customized"] is True
+    assert saved.json()["inactive_after_days"] == 10
     assert client.put(
         "/api/admin/inactive-users-policy",
         headers=admin_headers,
@@ -4627,6 +4635,22 @@ def test_inactive_user_policy_and_list_flags():
 
     ghost = db.add_user("ghost90", "h")
     db._execute("UPDATE users SET created_at = datetime('now', '-12 days') WHERE id = ?", (ghost,))
+    preview = client.get(
+        "/api/admin/inactive-users-policy",
+        headers=admin_headers,
+        params={"inactive_after_days": 10, "inactive_purge_after_days": 5},
+    ).json()
+    assert preview["inactive_after_days"] == 10
+    assert preview["marked_count"] == 1
+    assert preview["purge_count"] == 0
+    tight = client.get(
+        "/api/admin/inactive-users-policy",
+        headers=admin_headers,
+        params={"inactive_after_days": 1, "inactive_purge_after_days": 1},
+    ).json()
+    assert tight["inactive_after_days"] == 10
+    assert tight["marked_count"] == 1
+    assert tight["purge_count"] == 1
     rows = {u["id"]: u for u in client.get("/api/users", headers=admin_headers).json()}
     assert rows[ghost]["inactive"] is True
     assert rows[ghost]["days_until_purge"] == days_until_purge(
@@ -4664,11 +4688,15 @@ def test_inactive_user_policy_and_list_flags():
 
     ghost4 = db.add_user("ghost93", "h")
     db._execute("UPDATE users SET created_at = datetime('now', '-12 days') WHERE id = ?", (ghost4,))
-    assert client.put(
+    g4_policy = client.put(
         "/api/admin/inactive-users-policy",
         headers=admin_headers,
         json={"inactive_after_days": 10, "inactive_purge_after_days": 0},
-    ).json() == {"inactive_after_days": 10, "inactive_purge_after_days": 0}
+    ).json()
+    assert g4_policy["inactive_after_days"] == 10
+    assert g4_policy["inactive_purge_after_days"] == 0
+    assert g4_policy["customized"] is True
+    assert g4_policy["purge_count"] == 0
     g4 = next(u for u in client.get("/api/users", headers=admin_headers).json() if u["id"] == ghost4)
     assert g4["inactive"] is True
     assert g4["days_until_purge"] is None

@@ -3095,10 +3095,31 @@ def create_api_router(
             for u in db.list_users()
         ]
 
-    @router.get("/admin/inactive-users-policy", dependencies=[Depends(require_admin)])
-    def get_inactive_users_policy():
+    def _inactive_policy_out(
+        preview_after: int | None = None,
+        preview_purge: int | None = None,
+    ) -> dict:
         n, m = db.get_inactive_policy()
-        return {"inactive_after_days": n, "inactive_purge_after_days": m}
+        pn = n if preview_after is None else preview_after
+        pm = m if preview_purge is None else preview_purge
+        marked, doomed = db.inactive_policy_counts(pn, pm)
+        return {
+            "inactive_after_days": n,
+            "inactive_purge_after_days": m,
+            "customized": db.inactive_policy_customized(),
+            "marked_count": marked,
+            "purge_count": doomed,
+        }
+
+    @router.get("/admin/inactive-users-policy", dependencies=[Depends(require_admin)])
+    def get_inactive_users_policy(
+        preview_after: int | None = Query(None, alias="inactive_after_days"),
+        preview_purge: int | None = Query(None, alias="inactive_purge_after_days"),
+    ):
+        for value in (preview_after, preview_purge):
+            if value is not None and (value < 0 or value > 3650):
+                raise HTTPException(status_code=400, detail="天数须在 0–3650")
+        return _inactive_policy_out(preview_after, preview_purge)
 
     @router.put("/admin/inactive-users-policy")
     def put_inactive_users_policy(body: InactiveUsersPolicyIn, admin: dict = Depends(require_admin)):
@@ -3107,7 +3128,7 @@ def create_api_router(
             raise HTTPException(status_code=400, detail="天数须在 0–3650")
         n, m = db.set_inactive_policy(n, m)
         _audit(admin, "update_inactive_users_policy", "", f"n={n} m={m}")
-        return {"inactive_after_days": n, "inactive_purge_after_days": m}
+        return _inactive_policy_out()
 
     @router.post("/admin/users/batch", dependencies=[Depends(require_admin)])
     def users_batch_action(body: UserBatchAction, admin: dict = Depends(require_admin)):

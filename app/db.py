@@ -56,6 +56,9 @@ def _user_has_channel_sql(alias: str = "") -> str:
 INACTIVE_AFTER_KEY = "inactive_after_days"
 INACTIVE_PURGE_KEY = "inactive_purge_after_days"
 INACTIVE_LAST_PURGE_KEY = "inactive_users_last_purge_at"
+INACTIVE_CUSTOMIZED_KEY = "inactive_policy_customized"
+INACTIVE_AFTER_DEFAULT = 90
+INACTIVE_PURGE_DEFAULT = 30
 
 
 def _parse_inactive_days(value, default: int) -> int:
@@ -1332,15 +1335,35 @@ class DB:
         return self._rows("SELECT * FROM users ORDER BY id DESC")
 
     def get_inactive_policy(self) -> tuple[int, int]:
-        n = _parse_inactive_days(self.get_setting(INACTIVE_AFTER_KEY), 90)
-        m = _parse_inactive_days(self.get_setting(INACTIVE_PURGE_KEY), 30)
+        raw_n = self.get_setting(INACTIVE_AFTER_KEY)
+        raw_m = self.get_setting(INACTIVE_PURGE_KEY)
+        n = _parse_inactive_days(raw_n, INACTIVE_AFTER_DEFAULT)
+        m = _parse_inactive_days(raw_m, INACTIVE_PURGE_DEFAULT)
+        if raw_n is None:
+            self.set_setting(INACTIVE_AFTER_KEY, str(n))
+        if raw_m is None:
+            self.set_setting(INACTIVE_PURGE_KEY, str(m))
         return n, m
+
+    def inactive_policy_customized(self) -> bool:
+        return (self.get_setting(INACTIVE_CUSTOMIZED_KEY) or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+
+    def inactive_policy_counts(self, after_days: int, purge_after_days: int) -> tuple[int, int]:
+        return (
+            len(self.list_inactive_user_rows(after_days)),
+            len(self.list_inactive_purge_ids(after_days, purge_after_days)),
+        )
 
     def set_inactive_policy(self, after_days: int, purge_after_days: int) -> tuple[int, int]:
         n = int(after_days)
         m = int(purge_after_days)
         self.set_setting(INACTIVE_AFTER_KEY, str(n))
         self.set_setting(INACTIVE_PURGE_KEY, str(m))
+        self.set_setting(INACTIVE_CUSTOMIZED_KEY, "1")
         return n, m
 
     def list_inactive_user_rows(self, after_days: int) -> list[dict]:

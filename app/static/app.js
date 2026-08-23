@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.40";
+const APP_VERSION = "1.12.41";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"];
 const TL_PLATFORMS = PLATFORM_TABS.map((p) => [p, p ? PLATFORM_LABELS[p] : "全部"]);
@@ -79,7 +79,7 @@ const state = {
   adminUsers: [],
   adminUsersQ: "",
   adminUsersFilter: "all",
-  inactivePolicy: { inactive_after_days: 90, inactive_purge_after_days: 30 },
+  inactivePolicy: { inactive_after_days: 90, inactive_purge_after_days: 30, customized: false },
   homeQ: "",
   homeCategory: "",
   timelineFavorite: false,
@@ -6404,39 +6404,93 @@ let _adminUsersSelected = new Set();
 let _inactivePolicyDraft = null;
 let _inactivePolicySaving = false;
 let _auPolicyOpen = false;
+let _inactivePreview = { marked_count: 0, purge_count: 0 };
+let _inactivePreviewTimer = 0;
+let _inactivePreviewSeq = 0;
 
 function inactivePolicySaved() {
-  return state.inactivePolicy || { inactive_after_days: 90, inactive_purge_after_days: 30 };
+  return state.inactivePolicy || { inactive_after_days: 90, inactive_purge_after_days: 30, customized: false };
 }
 
 function inactivePolicyDraft() {
   return _inactivePolicyDraft || inactivePolicySaved();
 }
 
-function inactivePolicyHint(n, m) {
-  n = Number(n);
-  m = Number(m);
-  if (!Number.isFinite(n) || n <= 0) return "已关闭标记与删除";
-  if (!Number.isFinite(m) || m <= 0) return "只标记，不自动删除";
-  return `每天扫一次 · 满 ${n + m} 天删除`;
+function inactivePolicyRuleLabel() {
+  const saved = inactivePolicySaved();
+  const n = Number(saved.inactive_after_days);
+  const m = Number(saved.inactive_purge_after_days);
+  return saved.customized ? `规则 ${n}+${m}` : `默认 ${n}+${m}`;
 }
 
-function adminInactivePolicySyncSave() {
+function inactivePolicyHint(n, m, preview) {
+  n = Number(n);
+  m = Number(m);
+  preview = preview || _inactivePreview || {};
+  const marked = Number(preview.marked_count);
+  const doomed = Number(preview.purge_count);
+  const blast = Number.isFinite(marked)
+    ? (Number.isFinite(doomed) && doomed > 0 ? `现标 ${marked} 人，下次删 ${doomed} 人` : `现标 ${marked} 人`)
+    : "";
+  let core;
+  if (!Number.isFinite(n) || n <= 0) core = "已关闭标记与删除";
+  else if (!Number.isFinite(m) || m <= 0) core = "只标记，不自动删除";
+  else if (!inactivePolicySaved().customized && n === 90 && m === 30) core = `未改过 · 默认 ${n}+${m}`;
+  else core = `每天扫一次 · 满 ${n + m} 天删除`;
+  return blast ? `${core} · ${blast}` : core;
+}
+
+function paintInactivePolicyHint() {
+  const draft = inactivePolicyDraft();
+  const text = inactivePolicyHint(draft.inactive_after_days, draft.inactive_purge_after_days);
+  const hint = $("#au-inactive-hint");
+  const summary = document.querySelector("details.au-policy > summary .muted");
+  if (hint) hint.textContent = text;
+  if (summary) summary.textContent = text;
+}
+
+function adminInactivePolicySyncSave(queuePreview) {
   const nEl = $("#au-inactive-n");
   const mEl = $("#au-inactive-m");
   const btn = $("#au-inactive-save");
-  const hint = $("#au-inactive-hint");
   if (!nEl || !mEl) return;
   _inactivePolicyDraft = {
     inactive_after_days: nEl.value,
     inactive_purge_after_days: mEl.value,
   };
-  if (hint) hint.textContent = inactivePolicyHint(nEl.value, mEl.value);
+  paintInactivePolicyHint();
   const saved = inactivePolicySaved();
   const dirty =
     Number(nEl.value) !== Number(saved.inactive_after_days) ||
     Number(mEl.value) !== Number(saved.inactive_purge_after_days);
   if (btn) btn.disabled = !dirty || _inactivePolicySaving;
+  if (queuePreview) adminInactivePolicyQueuePreview();
+}
+
+function adminInactivePolicyQueuePreview() {
+  const seq = ++_inactivePreviewSeq;
+  clearTimeout(_inactivePreviewTimer);
+  _inactivePreviewTimer = setTimeout(() => adminRefreshInactivePreview(seq), 360);
+}
+
+async function adminRefreshInactivePreview(seq) {
+  const draft = inactivePolicyDraft();
+  const n = Number(draft.inactive_after_days);
+  const m = Number(draft.inactive_purge_after_days);
+  if (!Number.isInteger(n) || !Number.isInteger(m) || n < 0 || n > 3650 || m < 0 || m > 3650) return;
+  try {
+    const data = await api(
+      `/api/admin/inactive-users-policy?inactive_after_days=${n}&inactive_purge_after_days=${m}`
+    );
+    if (seq && seq !== _inactivePreviewSeq) return;
+    _inactivePreview = {
+      marked_count: Number(data.marked_count) || 0,
+      purge_count: Number(data.purge_count) || 0,
+    };
+    paintInactivePolicyHint();
+  } catch {
+    /* 输入过程中的预览失败不打断保存 */
+  }
 }
 
 function adminInactivePolicyKeydown(event) {
@@ -6539,7 +6593,13 @@ async function loadAdminUsers() {
     return;
   }
   state.adminUsers = users;
-  if (policy) state.inactivePolicy = policy;
+  if (policy) {
+    state.inactivePolicy = policy;
+    _inactivePreview = {
+      marked_count: Number(policy.marked_count) || 0,
+      purge_count: Number(policy.purge_count) || 0,
+    };
+  }
   const known = new Set(users.map((u) => u.id));
   for (const id of [..._adminUsersSelected]) {
     if (!known.has(id)) _adminUsersSelected.delete(id);
@@ -6570,12 +6630,28 @@ async function adminSaveInactivePolicy() {
   _inactivePolicySaving = true;
   if (btn) btn.disabled = true;
   try {
+    const seq = ++_inactivePreviewSeq;
+    const preview = await api(
+      `/api/admin/inactive-users-policy?inactive_after_days=${n}&inactive_purge_after_days=${m}`
+    );
+    if (seq !== _inactivePreviewSeq) return;
+    _inactivePreview = {
+      marked_count: Number(preview.marked_count) || 0,
+      purge_count: Number(preview.purge_count) || 0,
+    };
+    paintInactivePolicyHint();
+    if (
+      _inactivePreview.purge_count > 0 &&
+      !confirm(`下次扫描将删除 ${_inactivePreview.purge_count} 个未激活账号。确认按 ${n}+${m} 天保存？`)
+    ) {
+      return;
+    }
     state.inactivePolicy = await api("/api/admin/inactive-users-policy", {
       method: "PUT",
       body: JSON.stringify({ inactive_after_days: n, inactive_purge_after_days: m }),
     });
     _inactivePolicyDraft = null;
-    flash("已保存非活跃规则");
+    flash("已保存未激活规则");
     await loadAdminUsers();
   } catch (err) {
     flash(err.message, "error");
@@ -6604,15 +6680,17 @@ function renderAdminUsers() {
   const tab = (key, label) =>
     `<button class="settings-tab ${filter === key ? "active" : ""}" role="tab" aria-selected="${filter === key}" onclick="adminUsersApplyFilter('${key}')">${label} ${counts[key]}</button>`;
   const emptyMsg = users.length
-    ? "没有匹配的用户"
+    ? (filter === "inactive"
+      ? "没有未激活账号。领码后从未登录、没绑渠道、没订阅的才会出现。"
+      : "没有匹配的用户")
     : "还没有注册用户";
   const rows = filtered.map((u) => {
     const self = state.user && u.id === state.user.id;
     const pills = `${u.is_admin ? `<span class="user-pill">管理员</span>` : ""}${self ? `<span class="user-pill muted">本人</span>` : ""}${u.username_valid === false ? `<span class="user-pill warn">登录名不合规</span>` : ""}`;
     const push = u.inactive
       ? (u.days_until_purge == null
-        ? `<span class="status-warn">非活跃</span>`
-        : `<span class="status-warn">非活跃</span><span class="muted"> · ${Number(u.days_until_purge)} 天后删除</span>`)
+        ? `<span class="status-warn">未激活</span>`
+        : `<span class="status-warn">未激活</span><span class="muted"> · ${Number(u.days_until_purge)} 天后删除</span>`)
       : u.notify_enabled
       ? `<span class="status-ok">开启</span>${u.dnd_enabled ? `<span class="muted"> · 免打扰</span>` : ""}`
       : `<span class="status-fail">关闭</span>`;
@@ -6640,7 +6718,7 @@ function renderAdminUsers() {
       <header class="section-head au-head">
         <div>
           <h2 class="section-title">用户管理</h2>
-          <p class="section-meta">${users.length} 人 · ${adminN} 管理员 · ${boundN} 已绑定渠道</p>
+          <p class="section-meta">${users.length} 人 · ${adminN} 管理员 · ${boundN} 已绑定渠道 · 未激活 ${counts.inactive} · ${escapeHtml(inactivePolicyRuleLabel())}</p>
         </div>
         <div class="search-bar au-search">
           ${SEARCH_ICON}
@@ -6652,7 +6730,7 @@ function renderAdminUsers() {
         ${tab("admin", "管理员")}
         ${tab("unbound", "未绑定")}
         ${tab("push-off", "推送关闭")}
-        ${tab("inactive", "非活跃")}
+        ${tab("inactive", "未激活")}
       </div>
       <div class="toolbar admin-batch-bar" id="au-batch-bar" style="margin-top:10px;display:${_adminUsersSelected.size ? "flex" : "none"};align-items:center;gap:8px;flex-wrap:wrap">
         <strong>已选 ${_adminUsersSelected.size} 人</strong>
@@ -6677,15 +6755,16 @@ function renderAdminUsers() {
         </table>
       </div>
       <details class="au-policy" ${_auPolicyOpen ? "open" : ""}>
-        <summary>非活跃清理规则<span class="muted">${escapeHtml(inactivePolicyHint(inactivePolicyDraft().inactive_after_days, inactivePolicyDraft().inactive_purge_after_days))}</span></summary>
+        <summary>未激活清理规则<span class="muted">${escapeHtml(inactivePolicyHint(inactivePolicyDraft().inactive_after_days, inactivePolicyDraft().inactive_purge_after_days))}</span></summary>
+        <p class="section-meta">领码或网页注册后从未登录，且没有渠道、订阅和推送记录。</p>
         <div class="rc-generate au-inactive-policy">
           <label class="rc-field rc-field-num">
-            <span>列为非活跃 <span class="cfg-unit">天</span></span>
-            <input id="au-inactive-n" class="form-control" type="number" min="0" max="3650" inputmode="numeric" value="${escapeHtml(String(inactivePolicyDraft().inactive_after_days ?? 90))}" oninput="adminInactivePolicySyncSave()" onkeydown="adminInactivePolicyKeydown(event)" aria-describedby="au-inactive-hint">
+            <span>列为未激活 <span class="cfg-unit">天</span></span>
+            <input id="au-inactive-n" class="form-control" type="number" min="0" max="3650" inputmode="numeric" value="${escapeHtml(String(inactivePolicyDraft().inactive_after_days ?? 90))}" oninput="adminInactivePolicySyncSave(true)" onkeydown="adminInactivePolicyKeydown(event)" aria-describedby="au-inactive-hint">
           </label>
           <label class="rc-field rc-field-num">
             <span>之后删除 <span class="cfg-unit">天</span></span>
-            <input id="au-inactive-m" class="form-control" type="number" min="0" max="3650" inputmode="numeric" value="${escapeHtml(String(inactivePolicyDraft().inactive_purge_after_days ?? 30))}" oninput="adminInactivePolicySyncSave()" onkeydown="adminInactivePolicyKeydown(event)" aria-describedby="au-inactive-hint">
+            <input id="au-inactive-m" class="form-control" type="number" min="0" max="3650" inputmode="numeric" value="${escapeHtml(String(inactivePolicyDraft().inactive_purge_after_days ?? 30))}" oninput="adminInactivePolicySyncSave(true)" onkeydown="adminInactivePolicyKeydown(event)" aria-describedby="au-inactive-hint">
           </label>
           <div class="rc-field-submit">
             <button type="button" class="btn-normal" id="au-inactive-save" onclick="adminSaveInactivePolicy()">保存</button>
