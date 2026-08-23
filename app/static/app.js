@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.39";
+const APP_VERSION = "1.12.40";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"];
 const TL_PLATFORMS = PLATFORM_TABS.map((p) => [p, p ? PLATFORM_LABELS[p] : "全部"]);
@@ -285,6 +285,17 @@ function resetAuthButtons() {
   const regBtn = $("#register-form")?.querySelector('button[type="submit"]');
   if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = "登 录"; }
   if (regBtn) { regBtn.disabled = false; regBtn.textContent = "创建账号"; }
+}
+
+const USERNAME_RE = /^[A-Za-z\u4e00-\u9fff][A-Za-z0-9_\-\u4e00-\u9fff]{5,29}$/;
+const USERNAME_CHARSET_MSG = "用户名仅限中文、字母、数字、下划线和连字符，须以中文或字母开头";
+
+function usernameRuleError(name) {
+  const trimmed = (name || "").trim();
+  if (trimmed.length < 6) return "用户名至少6位";
+  if (trimmed.length > 30) return "用户名最长30位";
+  if (!USERNAME_RE.test(trimmed)) return USERNAME_CHARSET_MSG;
+  return "";
 }
 
 function avatarText(name) {
@@ -6346,15 +6357,53 @@ function adminUsersFiltered() {
     if (filter === "push-off" && u.notify_enabled) return false;
     if (filter === "inactive" && !u.inactive) return false;
     if (!q) return true;
-    return [u.username, u.register_code, u.register_note].some(
+    return [u.username, u.origin_label, u.register_code, u.register_note].some(
       (s) => String(s || "").toLowerCase().includes(q)
     );
   });
 }
 
+function adminUserBoundLabels(u) {
+  return USER_CHANNEL_KEYS.filter((ch) => u[`${ch}_bound`]).map((ch) => CHANNEL_LABELS[ch]);
+}
+
+function adminUserOriginHtml(u) {
+  const label = escapeHtml(u.origin_label || "网页");
+  const note = escapeHtml(u.register_note || u.register_code || "");
+  if (u.origin === "invite" && note) {
+    return `<div class="user-origin"><span>${label}</span><span class="muted">${note}</span></div>`;
+  }
+  return `<div class="user-origin"><span>${label}</span></div>`;
+}
+
+function adminUserLoginHtml(u) {
+  const login = u.has_password
+    ? `<span class="status-ok">可登录</span>`
+    : `<span class="muted">无密码</span>`;
+  const seen = u.last_login_at
+    ? escapeHtml(fmtDbTime(u.last_login_at))
+    : "从未登录";
+  return `<div class="user-login">${login}<span class="muted">${seen}</span></div>`;
+}
+
+function adminDeleteImpact(users) {
+  const list = (users || []).filter(Boolean);
+  const subs = list.reduce((n, u) => n + (Number(u.subscription_count) || 0), 0);
+  const bound = list.filter(userHasBoundChannel).length;
+  const parts = [`订阅 ${subs} 个`];
+  if (list.length === 1) {
+    const names = adminUserBoundLabels(list[0]);
+    if (names.length) parts.push(`已绑 ${names.join("、")}`);
+  } else if (bound) {
+    parts.push(`${bound} 人已绑渠道`);
+  }
+  return parts.join(" · ");
+}
+
 let _adminUsersSelected = new Set();
 let _inactivePolicyDraft = null;
 let _inactivePolicySaving = false;
+let _auPolicyOpen = false;
 
 function inactivePolicySaved() {
   return state.inactivePolicy || { inactive_after_days: 90, inactive_purge_after_days: 30 };
@@ -6442,16 +6491,28 @@ function adminUserClearSelect() {
 async function adminUsersBatch(action) {
   const ids = [..._adminUsersSelected];
   if (!ids.length) return;
-  if (action === "delete" && !confirm(`确认删除选中的 ${ids.length} 个用户？其订阅关系将一并删除，不可恢复。`)) return;
+  let payloadIds = ids;
+  if (action === "delete") {
+    const picked = ids.map((id) => (state.adminUsers || []).find((u) => u.id === id)).filter(Boolean);
+    const blocked = picked.filter((u) => u.is_admin || (state.user && u.id === state.user.id)).length;
+    const doomed = picked.filter((u) => !u.is_admin && !(state.user && u.id === state.user.id));
+    if (!doomed.length) {
+      flash(blocked ? "选中的都是管理员，已跳过" : "没有可删除的用户", "error");
+      return;
+    }
+    const extra = blocked ? `\n将跳过 ${blocked} 个管理员。` : "";
+    if (!confirm(`确认删除选中的 ${doomed.length} 个用户？${extra}\n${adminDeleteImpact(doomed)}\n删除后不可恢复。`)) return;
+    payloadIds = doomed.map((u) => u.id);
+  }
   try {
     const data = await api("/api/admin/users/batch", {
       method: "POST",
-      body: JSON.stringify({ ids, action }),
+      body: JSON.stringify({ ids: payloadIds, action }),
     });
     const n = data.count || 0;
     const skipped = data.skipped || 0;
     if (action === "delete") {
-      flash(skipped ? `已删除 ${n} 人，跳过本人` : `已删除 ${n} 人`);
+      flash(skipped ? `已删除 ${n} 人，跳过 ${skipped} 个管理员或无效项` : `已删除 ${n} 人`);
     } else if (action === "enable_notify") {
       flash(`已开启 ${n} 人推送`);
     } else if (action === "disable_notify") {
@@ -6547,7 +6608,7 @@ function renderAdminUsers() {
     : "还没有注册用户";
   const rows = filtered.map((u) => {
     const self = state.user && u.id === state.user.id;
-    const pills = `${u.is_admin ? `<span class="user-pill">管理员</span>` : ""}${self ? `<span class="user-pill muted">本人</span>` : ""}`;
+    const pills = `${u.is_admin ? `<span class="user-pill">管理员</span>` : ""}${self ? `<span class="user-pill muted">本人</span>` : ""}${u.username_valid === false ? `<span class="user-pill warn">登录名不合规</span>` : ""}`;
     const push = u.inactive
       ? (u.days_until_purge == null
         ? `<span class="status-warn">非活跃</span>`
@@ -6563,11 +6624,11 @@ function renderAdminUsers() {
           ${pills}
         </div>
       </td>
-      <td>${escapeHtml(u.register_note || u.register_code || "—")}</td>
+      <td>${adminUserOriginHtml(u)}</td>
+      <td>${adminUserLoginHtml(u)}</td>
       <td>${userChannelIconsHtml(u)}</td>
       <td>${Number(u.subscription_count) || 0}</td>
       <td>${push}</td>
-      <td>${escapeHtml(fmtDbTime(u.created_at))}</td>
       <td>
         <button class="btn-sm" onclick="adminOpenUser(${u.id})">管理</button>
         <button class="btn-sm" onclick="adminOpenUser(${u.id}, 'push')">测试推送</button>
@@ -6583,23 +6644,9 @@ function renderAdminUsers() {
         </div>
         <div class="search-bar au-search">
           ${SEARCH_ICON}
-          <input id="au-q" type="search" placeholder="搜索用户名 / 邀请码 / 备注，回车" value="${escapeHtml(state.adminUsersQ || "")}" onkeydown="if(event.key==='Enter')adminUsersApplyFilter()">
+          <input id="au-q" type="search" placeholder="搜索用户名 / 来源 / 邀请码，回车" value="${escapeHtml(state.adminUsersQ || "")}" onkeydown="if(event.key==='Enter')adminUsersApplyFilter()">
         </div>
       </header>
-      <div class="rc-generate au-inactive-policy">
-        <label class="rc-field rc-field-num">
-          <span>列为非活跃 <span class="cfg-unit">天</span></span>
-          <input id="au-inactive-n" class="form-control" type="number" min="0" max="3650" inputmode="numeric" value="${escapeHtml(String(inactivePolicyDraft().inactive_after_days ?? 90))}" oninput="adminInactivePolicySyncSave()" onkeydown="adminInactivePolicyKeydown(event)" aria-describedby="au-inactive-hint">
-        </label>
-        <label class="rc-field rc-field-num">
-          <span>之后删除 <span class="cfg-unit">天</span></span>
-          <input id="au-inactive-m" class="form-control" type="number" min="0" max="3650" inputmode="numeric" value="${escapeHtml(String(inactivePolicyDraft().inactive_purge_after_days ?? 30))}" oninput="adminInactivePolicySyncSave()" onkeydown="adminInactivePolicyKeydown(event)" aria-describedby="au-inactive-hint">
-        </label>
-        <div class="rc-field-submit">
-          <button type="button" class="btn-normal" id="au-inactive-save" onclick="adminSaveInactivePolicy()">保存</button>
-        </div>
-        <span class="muted rc-generate-hint" id="au-inactive-hint">${escapeHtml(inactivePolicyHint(inactivePolicyDraft().inactive_after_days, inactivePolicyDraft().inactive_purge_after_days))}</span>
-      </div>
       <div class="settings-tabs" role="tablist" aria-label="用户筛选">
         ${tab("all", "全部")}
         ${tab("admin", "管理员")}
@@ -6620,15 +6667,32 @@ function renderAdminUsers() {
             <th scope="col" style="width:32px"><input type="checkbox" id="au-checkall" onchange="adminUserTogglePage(this)" aria-label="全选当前筛选"></th>
             <th scope="col">用户</th>
             <th scope="col">来源</th>
+            <th scope="col">登录</th>
             <th scope="col">渠道</th>
             <th scope="col">订阅</th>
             <th scope="col">推送</th>
-            <th scope="col">注册</th>
             <th scope="col">操作</th>
           </tr></thead>
           <tbody>${rows || `<tr><td colspan="8" class="muted">${emptyMsg}</td></tr>`}</tbody>
         </table>
       </div>
+      <details class="au-policy" ${_auPolicyOpen ? "open" : ""}>
+        <summary>非活跃清理规则<span class="muted">${escapeHtml(inactivePolicyHint(inactivePolicyDraft().inactive_after_days, inactivePolicyDraft().inactive_purge_after_days))}</span></summary>
+        <div class="rc-generate au-inactive-policy">
+          <label class="rc-field rc-field-num">
+            <span>列为非活跃 <span class="cfg-unit">天</span></span>
+            <input id="au-inactive-n" class="form-control" type="number" min="0" max="3650" inputmode="numeric" value="${escapeHtml(String(inactivePolicyDraft().inactive_after_days ?? 90))}" oninput="adminInactivePolicySyncSave()" onkeydown="adminInactivePolicyKeydown(event)" aria-describedby="au-inactive-hint">
+          </label>
+          <label class="rc-field rc-field-num">
+            <span>之后删除 <span class="cfg-unit">天</span></span>
+            <input id="au-inactive-m" class="form-control" type="number" min="0" max="3650" inputmode="numeric" value="${escapeHtml(String(inactivePolicyDraft().inactive_purge_after_days ?? 30))}" oninput="adminInactivePolicySyncSave()" onkeydown="adminInactivePolicyKeydown(event)" aria-describedby="au-inactive-hint">
+          </label>
+          <div class="rc-field-submit">
+            <button type="button" class="btn-normal" id="au-inactive-save" onclick="adminSaveInactivePolicy()">保存</button>
+          </div>
+          <span class="muted rc-generate-hint" id="au-inactive-hint">${escapeHtml(inactivePolicyHint(inactivePolicyDraft().inactive_after_days, inactivePolicyDraft().inactive_purge_after_days))}</span>
+        </div>
+      </details>
     </section>`;
   const qEl = $("#au-q");
   if (qEl) qEl.value = state.adminUsersQ || "";
@@ -6637,6 +6701,10 @@ function renderAdminUsers() {
   if (checkall) {
     checkall.checked = boxes.length > 0 && boxes.every((c) => _adminUsersSelected.has(Number(c.dataset.id)));
     checkall.indeterminate = boxes.some((c) => c.checked) && !checkall.checked;
+  }
+  const policy = body.querySelector("details.au-policy");
+  if (policy) {
+    policy.addEventListener("toggle", () => { _auPolicyOpen = policy.open; });
   }
   adminInactivePolicySyncSave();
 }
@@ -6652,42 +6720,58 @@ function adminOpenUser(userId, focus) {
     return;
   }
   const self = state.user && u.id === state.user.id;
+  const origin = escapeHtml(u.origin_label || "网页");
+  const loginHint = u.has_password ? "可网页登录" : "无密码，不能网页登录";
+  const lastSeen = u.last_login_at ? escapeHtml(fmtDbTime(u.last_login_at)) : "从未登录";
   closeAdminModal();
   const mask = document.createElement("div");
   mask.className = "modal-mask";
   mask.innerHTML = `
     <div class="modal-card user-modal" role="dialog" aria-modal="true" aria-labelledby="um-title">
       <h3 id="um-title">管理用户 · ${escapeHtml(u.username)}</h3>
-      <p class="muted um-meta">ID ${u.id} · 订阅 ${Number(u.subscription_count) || 0} · 注册 ${escapeHtml(fmtDbTime(u.created_at))}</p>
-      <label class="form-label">用户名
-        <div class="row">
-          <input id="um-name" class="form-control" maxlength="30" value="${escapeHtml(u.username)}" autocomplete="username">
-          <button class="btn-sm" onclick="adminSaveUsername(${u.id})">保存</button>
-        </div>
-      </label>
-      <label class="form-label">新密码
-        <div class="row">
-          <input id="um-pass" class="form-control" type="password" minlength="6" placeholder="至少 6 位" autocomplete="new-password">
-          <button class="btn-sm" onclick="adminSavePassword(${u.id})">重置</button>
-        </div>
-      </label>
-      ${self ? "" : `<div class="form-label">管理员
+      <p class="muted um-meta">${origin} · ${loginHint} · ${lastSeen}<br>ID ${u.id} · 订阅 ${Number(u.subscription_count) || 0} · 注册 ${escapeHtml(fmtDbTime(u.created_at))}</p>
+      <section class="um-block">
+        <h4>改名</h4>
+        ${u.username_valid === false ? `<p class="muted">当前登录名不合规，保存前请改成 6-30 位中文、字母、数字、下划线或连字符，须以中文或字母开头。</p>` : ""}
+        <label class="form-label">用户名
+          <div class="row">
+            <input id="um-name" class="form-control" maxlength="30" value="${escapeHtml(u.username)}" autocomplete="username">
+            <button class="btn-sm" onclick="adminSaveUsername(${u.id})">保存</button>
+          </div>
+        </label>
+      </section>
+      <section class="um-block">
+        <h4>密码</h4>
+        ${u.has_password ? "" : `<p class="muted">这个账号没有密码，不能网页登录。设了密码后才能用账号登录。</p>`}
+        <label class="form-label">${u.has_password ? "新密码" : "设置密码"}
+          <div class="row">
+            <input id="um-pass" class="form-control" type="password" minlength="6" placeholder="至少 6 位" autocomplete="new-password">
+            <button class="btn-sm" onclick="adminSavePassword(${u.id})">${u.has_password ? "重置" : "设置"}</button>
+          </div>
+        </label>
+      </section>
+      ${self ? "" : `<section class="um-block">
+        <h4>权限</h4>
         <div class="toolbar">
           <button class="btn-sm" onclick="adminToggleAdmin(${u.id}, ${!u.is_admin})">${u.is_admin ? "取消管理员" : "设为管理员"}</button>
         </div>
-      </div>`}
-      <label class="form-label">测试推送
-        <textarea id="um-push-msg" class="form-control" rows="2">这是一条测试推送</textarea>
-      </label>
-      <div class="toolbar">
-        <button class="btn-sm" id="um-push-send" onclick="adminSendTestPush(${u.id})">发送测试</button>
-      </div>
-      <p id="um-push-result" class="muted um-push-result" hidden></p>
-      ${self ? "" : `<div class="user-modal-danger">
-        <p class="muted">删除后订阅一并清除，不可恢复。</p>
+      </section>`}
+      <section class="um-block">
+        <h4>测试推送</h4>
+        <label class="form-label">内容
+          <textarea id="um-push-msg" class="form-control" rows="2">这是一条测试推送</textarea>
+        </label>
+        <div class="toolbar">
+          <button class="btn-sm" id="um-push-send" onclick="adminSendTestPush(${u.id})">发送测试</button>
+        </div>
+        <p id="um-push-result" class="muted um-push-result" hidden></p>
+      </section>
+      ${self || u.is_admin ? "" : `<section class="um-block user-modal-danger">
+        <h4>删除</h4>
+        <p class="muted">${escapeHtml(adminDeleteImpact([u]))}。删除后不可恢复。</p>
         <button class="btn-sm danger" onclick="adminDeleteUser(${u.id})">删除用户</button>
-      </div>`}
-      <div class="toolbar" style="margin-top:16px">
+      </section>`}
+      <div class="toolbar um-close">
         <button class="btn-sm" onclick="closeAdminModal()">关闭</button>
       </div>
     </div>`;
@@ -6713,8 +6797,9 @@ function adminOpenUser(userId, focus) {
 async function adminSaveUsername(userId) {
   const input = $("#um-name");
   const trimmed = (input ? input.value : "").trim();
-  if (trimmed.length < 6 || trimmed.length > 30) {
-    flash("用户名需 6-30 位", "error");
+  const ruleErr = usernameRuleError(trimmed);
+  if (ruleErr) {
+    flash(ruleErr, "error");
     return;
   }
   try {
@@ -6789,7 +6874,15 @@ async function adminSendTestPush(userId) {
 
 async function adminDeleteUser(userId) {
   const user = (state.adminUsers || []).find((u) => u.id === userId);
-  if (!confirm(`确认删除用户「${user ? user.username : userId}」？其订阅关系将一并删除，不可恢复。`)) return;
+  if (!user) {
+    flash("用户不存在或列表已过期", "error");
+    return;
+  }
+  if (user.is_admin) {
+    flash("不能删除管理员", "error");
+    return;
+  }
+  if (!confirm(`确认删除用户「${user.username}」？\n${adminDeleteImpact([user])}\n删除后不可恢复。`)) return;
   try {
     await api(`/api/users/${userId}`, { method: "DELETE" });
     closeAdminModal();
@@ -7060,6 +7153,12 @@ async function doLogin(e) {
 async function doRegister(e) {
   e.preventDefault();
   $("#reg-error").textContent = "";
+  const username = $("#reg-username").value.trim();
+  const ruleErr = usernameRuleError(username);
+  if (ruleErr) {
+    $("#reg-error").textContent = ruleErr;
+    return;
+  }
   const btn = $("#register-form").querySelector('button[type="submit"]');
   btn.disabled = true;
   btn.textContent = "创建中…";
@@ -7067,7 +7166,7 @@ async function doRegister(e) {
     const data = await api("/api/auth/register", {
       method: "POST",
       body: JSON.stringify({
-        username: $("#reg-username").value.trim(),
+        username,
         password: $("#reg-password").value,
         code: $("#reg-code").value.trim(),
       }),

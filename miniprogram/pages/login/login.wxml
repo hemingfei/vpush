@@ -16,7 +16,7 @@
     </view>
     <view class="form-item">
       <view class="form-label">用户名</view>
-      <input class="input" placeholder="输入用户名" value="{{username}}" bindinput="onUsername" />
+      <input class="input" placeholder="6-30 位，字母或中文开头" value="{{username}}" maxlength="30" bindinput="onUsername" />
     </view>
     <view class="form-item">
       <view class="form-label">密码</view>

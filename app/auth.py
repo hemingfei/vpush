@@ -6,9 +6,35 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
 
 TOKEN_TTL_SECONDS = 30 * 24 * 3600
+USERNAME_MIN_LEN = 6
+USERNAME_MAX_LEN = 30
+# 登录名不是展示名：禁止空格、引号、符号和 emoji。机器人自动建号不走这条。
+_USERNAME_RE = re.compile(r"^[A-Za-z\u4e00-\u9fff][A-Za-z0-9_\-\u4e00-\u9fff]{5,29}$")
+USERNAME_CHARSET_MSG = "用户名仅限中文、字母、数字、下划线和连字符，须以中文或字母开头"
+
+
+def validate_username(username: str) -> str:
+    """规范化并校验网页注册 / 管理员改名用的用户名。非法则 ValueError。"""
+    name = (username or "").strip()
+    if len(name) < USERNAME_MIN_LEN:
+        raise ValueError("用户名至少6位")
+    if len(name) > USERNAME_MAX_LEN:
+        raise ValueError("用户名最长30位")
+    if not _USERNAME_RE.fullmatch(name):
+        raise ValueError(USERNAME_CHARSET_MSG)
+    return name
+
+
+def is_valid_username(username: str) -> bool:
+    try:
+        validate_username(username)
+        return True
+    except ValueError:
+        return False
 
 def hash_password(password: str, salt: str | None = None) -> str:
     salt = salt or os.urandom(16).hex()

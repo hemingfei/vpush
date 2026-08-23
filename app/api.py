@@ -606,6 +606,42 @@ IMAGE_PROXY_HOSTS = frozenset({
 })
 
 
+ACCOUNT_ORIGIN_LABELS = {
+    "invite": "邀请码",
+    "telegram": "Telegram",
+    "feishu": "飞书",
+    "wechat": "微信",
+    "web": "网页",
+}
+
+
+def account_origin(user: dict, invite: dict | None = None) -> str:
+    """推断账号从哪来：邀请码 > 自动建号 > 网页。后来绑定的渠道不改来源。"""
+    invite = invite or {}
+    if invite.get("code"):
+        return "invite"
+    # 微信 openid 只在小程序自动建号时写入，/me 改不了
+    if user.get("wechat_openid"):
+        return "wechat"
+    # 机器人自动建号没有密码；网页号后来绑定 Telegram/飞书仍算网页
+    has_password = bool(user.get("password_hash"))
+    if user.get("telegram_chat_id") and not has_password:
+        return "telegram"
+    if (user.get("feishu_open_id") or user.get("feishu_chat_id")) and not has_password:
+        return "feishu"
+    return "web"
+
+
+def delete_user_block_reason(target: dict | None, admin: dict) -> str | None:
+    if target is None:
+        return "用户不存在"
+    if target["id"] == admin["id"]:
+        return "不能删除自己的账号"
+    if target.get("is_admin"):
+        return "不能删除管理员"
+    return None
+
+
 def admin_user_summary(
     user: dict,
     invite: dict | None = None,
@@ -618,6 +654,7 @@ def admin_user_summary(
 ) -> dict:
     """管理员用户列表摘要：只暴露管理所需字段，不含 feed_token/bark_key/wecom_webhook/llm_api_key 等凭证。"""
     invite = invite or {}
+    origin = account_origin(user, invite)
     return {
         "id": user["id"],
         "username": user["username"],
@@ -638,6 +675,11 @@ def admin_user_summary(
         "register_note": invite.get("note") or "",
         "inactive": bool(inactive),
         "days_until_purge": days_until_purge,
+        "origin": origin,
+        "origin_label": ACCOUNT_ORIGIN_LABELS[origin],
+        "has_password": bool(user.get("password_hash")),
+        "last_login_at": user.get("last_login_at") or "",
+        "username_valid": auth.is_valid_username(user.get("username") or ""),
     }
 
 
@@ -1126,11 +1168,12 @@ def create_api_router(
         ip = _client_ip(request)
         _check_login_limit(ip)
         try:
-            username = body.username.strip()
-            if len(username) < 6 or len(body.password) < 6:
-                raise HTTPException(status_code=400, detail="用户名至少6位，密码至少6位")
-            if len(username) > 30:
-                raise HTTPException(status_code=400, detail="用户名最长30位")
+            try:
+                username = auth.validate_username(body.username)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from None
+            if len(body.password) < 6:
+                raise HTTPException(status_code=400, detail="密码至少6位")
             if len(body.password) > MAX_PASSWORD_LEN:
                 raise HTTPException(status_code=400, detail=f"密码最长{MAX_PASSWORD_LEN}位")
             if not body.code.strip():
@@ -3080,7 +3123,8 @@ def create_api_router(
             count = 0
             skipped = 0
             for uid in body.ids:
-                if uid == admin["id"] or db.get_user(uid) is None:
+                target = db.get_user(uid)
+                if delete_user_block_reason(target, admin):
                     skipped += 1
                     continue
                 db.delete_user(uid)
@@ -3253,9 +3297,10 @@ def create_api_router(
             updates["password_hash"] = auth.hash_password(password)
             revoke_tokens = True
         if "username" in body.model_fields_set:
-            username = (body.username or "").strip()
-            if len(username) < 6 or len(username) > 30:
-                raise HTTPException(status_code=400, detail="用户名需6-30位")
+            try:
+                username = auth.validate_username(body.username or "")
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from None
             existing = db.get_user_by_username_ci(username)
             if existing is not None and existing["id"] != user_id:
                 raise HTTPException(status_code=400, detail="用户名已存在")
@@ -3279,11 +3324,11 @@ def create_api_router(
 
     @router.delete("/users/{user_id}", dependencies=[Depends(require_admin)])
     def delete_user(user_id: int, admin: dict = Depends(require_admin)):
-        if user_id == admin["id"]:
-            raise HTTPException(status_code=400, detail="不能删除自己的账号")
         target = db.get_user(user_id)
-        if target is None:
-            raise HTTPException(status_code=404, detail="用户不存在")
+        blocked = delete_user_block_reason(target, admin)
+        if blocked:
+            status = 404 if blocked == "用户不存在" else 400
+            raise HTTPException(status_code=status, detail=blocked)
         db.delete_user(user_id)
         _audit(admin, "delete_user", str(user_id), target["username"])
         return {"ok": True}

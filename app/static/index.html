@@ -32,7 +32,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/vendor/design-tokens.css?v=26">
-  <link rel="stylesheet" href="/style.css?v=162">
+  <link rel="stylesheet" href="/style.css?v=163">
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -82,7 +82,7 @@
             <h2 class="login-title">创建账号</h2>
             <p class="login-subtitle">注册后即可自选大V，开启订阅推送。</p>
             <label class="field-label" for="reg-username">用户名</label>
-            <input id="reg-username" class="form-control" placeholder="至少 6 位字符" autocomplete="username" required>
+            <input id="reg-username" class="form-control" placeholder="6-30 位，字母或中文开头" autocomplete="username" maxlength="30" required>
             <label class="field-label" for="reg-password">密码</label>
             <div class="pw-field">
               <input id="reg-password" class="form-control" type="password" placeholder="至少 6 位字符" autocomplete="new-password" required>
@@ -129,6 +129,6 @@
     </div>
     <nav id="bottom-nav" class="bottom-nav"></nav>
   </div>
-  <script src="/app.js?v=217"></script>
+  <script src="/app.js?v=220"></script>
 </body>
 </html>

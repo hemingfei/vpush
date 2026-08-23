@@ -41,8 +41,26 @@ Page({
 
   async submitAccount() {
     const { username, password, isRegister } = this.data;
-    if (username.trim().length < 6 || password.length < 6) {
-      this.setData({ error: "用户名至少6位，密码至少6位" });
+    const name = username.trim();
+    if (isRegister) {
+      if (name.length < 6) {
+        this.setData({ error: "用户名至少6位" });
+        return;
+      }
+      if (name.length > 30) {
+        this.setData({ error: "用户名最长30位" });
+        return;
+      }
+      if (!/^[A-Za-z\u4e00-\u9fff][A-Za-z0-9_\-\u4e00-\u9fff]{5,29}$/.test(name)) {
+        this.setData({ error: "用户名仅限中文、字母、数字、下划线和连字符，须以中文或字母开头" });
+        return;
+      }
+    } else if (name.length < 6) {
+      this.setData({ error: "用户名至少6位" });
+      return;
+    }
+    if (password.length < 6) {
+      this.setData({ error: "密码至少6位" });
       return;
     }
     this.setData({ error: "" });
@@ -52,7 +70,7 @@ Page({
         this.setData({ error: "请填写邀请码" });
         return;
       }
-      await accountLogin(username.trim(), password, isRegister, code);
+      await accountLogin(name, password, isRegister, code);
       wx.reLaunch({ url: "/pages/index/index" });
     } catch (err) {
       this.setData({ error: err.message });

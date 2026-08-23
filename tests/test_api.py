@@ -3755,6 +3755,44 @@ def test_register_username_min_length_6():
         assert resp.status_code == expected, f"{name} 应 {expected}"
         if expected == 400:
             assert "用户名至少6位" in resp.json()["detail"]
+    db.add_register_code("SHORTPW1")
+    pw = client.post(
+        "/api/auth/register",
+        json={"username": "goodname", "password": "123", "code": "SHORTPW1"},
+    )
+    assert pw.status_code == 400
+    assert pw.json()["detail"] == "密码至少6位"
+    assert db.get_register_code("SHORTPW1")["used_by"] is None
+
+
+def test_register_rejects_unreasonable_username():
+    """空格、引号、符号不能当登录名；邀请码不被消耗。"""
+    from app.auth import USERNAME_CHARSET_MSG
+
+    client = make_client()
+    db = client.app.state.db
+    db.add_register_code("BADNAME1")
+    resp = client.post(
+        "/api/auth/register",
+        json={"username": "ag's trend", "password": "secret123", "code": "BADNAME1"},
+    )
+    assert resp.status_code == 400
+    assert USERNAME_CHARSET_MSG in resp.json()["detail"]
+    assert db.get_register_code("BADNAME1")["used_by"] is None
+    assert db.get_user_by_username_ci("ag's trend") is None
+
+
+def test_existing_unreasonable_username_can_still_login():
+    """历史脏数据仍可登录，避免改规则把人锁在门外。"""
+    client = make_client()
+    db = client.app.state.db
+    from app.auth import hash_password
+
+    db.add_user("ag's trend", hash_password("secret123"))
+    assert client.post(
+        "/api/auth/login",
+        json={"username": "ag's trend", "password": "secret123"},
+    ).status_code == 200
 
 
 def test_admin_rename_username_min_length_6():
@@ -3765,6 +3803,9 @@ def test_admin_rename_username_min_length_6():
     uid = reg.json()["user"]["id"]
     assert client.put(
         f"/api/users/{uid}", headers=admin_headers, json={"username": "abcde"}
+    ).status_code == 400
+    assert client.put(
+        f"/api/users/{uid}", headers=admin_headers, json={"username": "ag's trend"}
     ).status_code == 400
     assert client.put(
         f"/api/users/{uid}", headers=admin_headers, json={"username": "abcdef"}
@@ -4344,6 +4385,64 @@ def test_admin_user_list_includes_register_source():
     seeded = next(u for u in rows if u["id"] == uid)
     assert seeded["register_code"] == ""
     assert seeded["register_note"] == ""
+    assert invitee["origin"] == "invite"
+    assert invitee["origin_label"] == "邀请码"
+    assert invitee["has_password"] is True
+    assert invitee["username_valid"] is True
+    assert seeded["origin"] == "web"
+    assert seeded["has_password"] is True
+    client.app.state.db.update_user(uid, telegram_chat_id="888")
+    seeded = next(u for u in client.get("/api/users", headers=admin_headers).json() if u["id"] == uid)
+    assert seeded["origin"] == "web"
+    assert seeded["telegram_bound"] is True
+    # 邀请码用户后来绑定 Telegram，来源仍是邀请码
+    client.app.state.db.update_user(invitee["id"], telegram_chat_id="999")
+    invitee = next(
+        u for u in client.get("/api/users", headers=admin_headers).json() if u["id"] == invitee["id"]
+    )
+    assert invitee["origin"] == "invite"
+    assert invitee["telegram_bound"] is True
+
+
+def test_admin_user_list_marks_bot_and_dirty_usernames():
+    client = make_client()
+    admin_headers = auth_headers(client)
+    db = client.app.state.db
+    tg = db.add_user("tgname1", "", telegram_chat_id="111")
+    dirty = db.add_user("ag's trend", "h")
+    rows = {u["id"]: u for u in client.get("/api/users", headers=admin_headers).json()}
+    assert rows[tg]["origin"] == "telegram"
+    assert rows[tg]["has_password"] is False
+    assert rows[tg]["last_login_at"] == ""
+    assert rows[dirty]["username_valid"] is False
+    assert "password_hash" not in rows[tg]
+    assert "wechat_openid" not in rows[tg]
+
+
+def test_cannot_delete_other_admin():
+    client = make_client()
+    admin_headers = auth_headers(client, "boss01")
+    other = register(client, "admin02")
+    oid = other.json()["user"]["id"]
+    client.app.state.db.update_user(oid, is_admin=True)
+    victim = register(client, "deletable")
+    vid = victim.json()["user"]["id"]
+
+    resp = client.delete(f"/api/users/{oid}", headers=admin_headers)
+    assert resp.status_code == 400
+    assert "不能删除管理员" in resp.json()["detail"]
+    assert client.app.state.db.get_user(oid) is not None
+
+    batch = client.post(
+        "/api/admin/users/batch",
+        headers=admin_headers,
+        json={"ids": [oid, vid], "action": "delete"},
+    )
+    assert batch.status_code == 200
+    assert batch.json()["count"] == 1
+    assert batch.json()["skipped"] == 1
+    assert client.app.state.db.get_user(oid) is not None
+    assert client.app.state.db.get_user(vid) is None
 
 
 def test_admin_user_list_newest_first_and_subscription_count():

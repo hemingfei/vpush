@@ -1239,8 +1239,11 @@ def test_channel_status_poll_skips_identical_and_restores_focus():
 def test_register_placeholder_matches_username_min_length():
     html = (APP_JS.parent / "index.html").read_text()
     assert 'id="reg-username"' in html
+    assert "6-30 位，字母或中文开头" in html
     assert "至少 6 位字符" in html
     assert "至少 2 位字符" not in html
+    assert "USERNAME_RE" in APP_JS.read_text()
+    assert "usernameRuleError" in APP_JS.read_text()
     assert 'id="page-title"' in html and "<h1 id=\"page-title\"" in html
     assert 'class="skip-link" href="#main"' in html
     assert "Bark / 浏览器" in html
@@ -1306,11 +1309,17 @@ def test_admin_users_page_uses_modal_not_prompt():
     assert "renderAdminUsers" in body
     assert "adminUsersApplyFilter" in body
     assert "userChannelIconsHtml" in body
+    assert "adminUserOriginHtml" in body
+    assert "adminUserLoginHtml" in body
     open_user = _fn_body("adminOpenUser")
     assert "modal-mask" in open_user
+    assert "um-block" in open_user
     assert "um-name" in open_user
     assert "um-pass" in open_user
     assert "um-push-msg" in open_user
+    assert "无密码，不能网页登录" in open_user
+    assert "登录名不合规" in open_user
+    assert "下划线或连字符" in open_user
     for name in ("adminSaveUsername", "adminSavePassword", "adminSendTestPush", "adminDeleteUser", "adminToggleAdmin"):
         fn = _fn_body(name)
         assert "flash(" in fn, f"{name} 应使用 flash toast"
@@ -1333,15 +1342,20 @@ def test_admin_users_page_has_batch_bar():
     assert "let _adminUsersSelected" in src
     delete_fn = _fn_body("adminUsersBatch")
     assert "confirm(" in delete_fn
+    assert "adminDeleteImpact" in delete_fn
     assert "enable_notify" in delete_fn
     assert "disable_notify" in delete_fn
     assert "delete" in delete_fn
+    assert "不能删除管理员" in _fn_body("adminDeleteUser")
 
 
 def test_admin_users_page_has_inactive_policy():
     """用户管理：非活跃天数设置 + 筛选 Tab + 状态列文案。"""
     render = _fn_body("renderAdminUsers")
     assert "非活跃" in render
+    assert "au-policy" in render
+    assert ">登录<" in render
+    assert "登录名不合规" in render
     assert 'id="au-inactive-n"' in render
     assert 'id="au-inactive-m"' in render
     assert 'id="au-inactive-save"' in render
