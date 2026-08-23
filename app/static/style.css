@@ -324,24 +324,21 @@ textarea.form-control {
   padding: 18px 12px;
 }
 .sidebar-brand { display: flex; align-items: center; gap: 12px; padding: 6px 10px 20px; border-bottom: var(--border-default); }
-.sidebar-toggle {
-  margin-left: auto;
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
+.sidebar-brand-toggle {
   border: none;
   background: transparent;
-  border-radius: var(--radius-xs);
+  padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--color-text-faint);
-  transition: background var(--ease-standard), color var(--ease-standard);
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+  flex-shrink: 0;
+  line-height: 0;
 }
-.sidebar-toggle:hover { background: var(--color-surface-hover); color: var(--color-accent-text); }
-.sidebar-toggle svg { width: 16px; height: 16px; }
+.sidebar-brand-toggle:hover { opacity: 0.72; }
 /* 侧边栏品牌符号：与 topbar/favicon 同源融合符号，32px 与标题协调 */
-.sidebar-logo { height: 32px; width: auto; flex-shrink: 0; }
+.sidebar-logo { height: 32px; width: auto; flex-shrink: 0; pointer-events: none; }
 .sidebar-brand-text { display: flex; flex-direction: column; }
 .sidebar-brand-name { font-size: var(--text-title); font-weight: var(--font-weight-semibold); color: var(--color-text-strong); }
 .sidebar-brand-meta { font-size: var(--text-xs); color: var(--color-text-faint); letter-spacing: 0.4px; }
@@ -1879,12 +1876,7 @@ details.au-policy > summary .muted { font-weight: var(--font-weight-medium); }
 
 /* 宽屏手动收起：与 ≤900px 自动收成同一条 68px 图标轨 */
 html.sidebar-slim .sidebar { width: 68px; padding: 18px 8px; }
-html.sidebar-slim .sidebar-brand {
-  flex-direction: column;
-  justify-content: center;
-  padding: 6px 0 16px;
-  gap: 8px;
-}
+html.sidebar-slim .sidebar-brand { justify-content: center; padding: 6px 0 16px; }
 html.sidebar-slim .sidebar-brand-text,
 html.sidebar-slim .sidebar-brand-meta,
 html.sidebar-slim .nav-item .nav-label,
@@ -1893,14 +1885,13 @@ html.sidebar-slim .nav-sub-label,
 html.sidebar-slim .sidebar-user { display: none; }
 html.sidebar-slim .nav-item { justify-content: center; padding: 12px; }
 html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
-html.sidebar-slim .sidebar-toggle { margin-left: 0; }
 
 /* 响应式 */
 @media (max-width: 900px) {
   .sidebar { width: 68px; padding: 18px 8px; }
   .sidebar-brand { justify-content: center; padding: 6px 0 16px; }
   .sidebar-brand-text, .sidebar-brand-meta, .nav-item .nav-label, .nav-group-label, .nav-sub-label, .sidebar-user { display: none; }
-  .sidebar-toggle { display: none; }
+  .sidebar-brand-toggle { pointer-events: none; cursor: default; }
   .nav-item { justify-content: center; padding: 12px; }
   .nav-sub .nav-item { padding-left: 12px; }
   .login-shell { flex-direction: column; gap: 28px; max-width: 420px; }

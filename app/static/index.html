@@ -33,7 +33,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/vendor/design-tokens.css?v=26">
-  <link rel="stylesheet" href="/style.css?v=164">
+  <link rel="stylesheet" href="/style.css?v=165">
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -107,11 +107,12 @@
     <a class="skip-link" href="#main">跳到主要内容</a>
     <aside class="sidebar">
       <div class="sidebar-brand">
-        <img class="sidebar-logo" id="sidebar-logo" src="/logo-mark.svg" alt="V Push">
+        <button type="button" class="sidebar-brand-toggle" id="sidebar-toggle" aria-label="收起侧栏" aria-expanded="true" title="收起侧栏" onclick="toggleSidebarSlim()">
+          <img class="sidebar-logo" id="sidebar-logo" src="/logo-mark.svg" alt="">
+        </button>
         <div class="sidebar-brand-text">
           <span class="sidebar-brand-name">V Push</span>
         </div>
-        <button type="button" class="sidebar-toggle" id="sidebar-toggle" aria-label="收起侧栏" aria-expanded="true" title="收起侧栏" onclick="toggleSidebarSlim()"></button>
       </div>
       <nav id="sidebar-nav" class="sidebar-nav"></nav>
       <div class="sidebar-foot">
@@ -131,6 +132,6 @@
     </div>
     <nav id="bottom-nav" class="bottom-nav"></nav>
   </div>
-  <script src="/app.js?v=224"></script>
+  <script src="/app.js?v=225"></script>
 </body>
 </html>

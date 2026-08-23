@@ -1760,17 +1760,21 @@ def test_admin_tag_page_has_llm_maintain():
 
 
 def test_sidebar_has_slim_toggle_matching_rail():
-    """宽屏可手动收成与 ≤900px 相同的图标轨；窄屏不显示按钮。"""
+    """宽屏点侧栏 V 收成与 ≤900px 相同的图标轨；窄屏 logo 不可点。"""
     html = (APP_JS.parent / "index.html").read_text()
     css = STYLE_CSS.read_text()
     src = APP_JS.read_text()
     assert 'id="sidebar-toggle"' in html
+    assert "sidebar-brand-toggle" in html
+    assert 'id="sidebar-logo"' in html
     assert "sidebar-slim" in html
     assert "toggleSidebarSlim" in src
+    assert "SIDEBAR_COLLAPSE_ICON" not in src
     assert 'localStorage.setItem(SIDEBAR_SLIM_KEY' in _fn_body("toggleSidebarSlim")
+    assert "max-width: 900px" in _fn_body("toggleSidebarSlim")
     assert "html.sidebar-slim .sidebar { width: 68px" in css
     rail = _media_block(css, "@media (max-width: 900px)")
     assert ".sidebar { width: 68px" in rail
-    assert ".sidebar-toggle { display: none; }" in rail
+    assert "pointer-events: none" in rail
     assert "@media (max-width: 768px)" in css
     assert ".sidebar { display: none; }" in _media_block(css, "@media (max-width: 768px)")
