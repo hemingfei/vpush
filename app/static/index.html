@@ -26,13 +26,14 @@
         var m = localStorage.getItem("theme") || "auto";
         var dark = m === "dark" || (m === "auto" && window.matchMedia("(prefers-color-scheme: dark)").matches);
         if (dark) document.documentElement.classList.add("theme-dark");
+        if (localStorage.getItem("sidebar-slim") === "1") document.documentElement.classList.add("sidebar-slim");
         var fav = document.getElementById("favicon");
         if (fav) fav.setAttribute("href", dark ? "/logo-mark-dark.svg" : "/logo-mark.svg");
       } catch (e) { /* localStorage 不可用时静默 */ }
     })();
   </script>
   <link rel="stylesheet" href="/vendor/design-tokens.css?v=26">
-  <link rel="stylesheet" href="/style.css?v=163">
+  <link rel="stylesheet" href="/style.css?v=164">
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -110,6 +111,7 @@
         <div class="sidebar-brand-text">
           <span class="sidebar-brand-name">V Push</span>
         </div>
+        <button type="button" class="sidebar-toggle" id="sidebar-toggle" aria-label="收起侧栏" aria-expanded="true" title="收起侧栏" onclick="toggleSidebarSlim()"></button>
       </div>
       <nav id="sidebar-nav" class="sidebar-nav"></nav>
       <div class="sidebar-foot">
@@ -129,6 +131,6 @@
     </div>
     <nav id="bottom-nav" class="bottom-nav"></nav>
   </div>
-  <script src="/app.js?v=222"></script>
+  <script src="/app.js?v=224"></script>
 </body>
 </html>

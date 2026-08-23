@@ -1757,3 +1757,20 @@ def test_admin_tag_page_has_llm_maintain():
     assert "/api/tags/maintain" in body
     assert "backfill" in body
     assert "textContent" in body
+
+
+def test_sidebar_has_slim_toggle_matching_rail():
+    """宽屏可手动收成与 ≤900px 相同的图标轨；窄屏不显示按钮。"""
+    html = (APP_JS.parent / "index.html").read_text()
+    css = STYLE_CSS.read_text()
+    src = APP_JS.read_text()
+    assert 'id="sidebar-toggle"' in html
+    assert "sidebar-slim" in html
+    assert "toggleSidebarSlim" in src
+    assert 'localStorage.setItem(SIDEBAR_SLIM_KEY' in _fn_body("toggleSidebarSlim")
+    assert "html.sidebar-slim .sidebar { width: 68px" in css
+    rail = _media_block(css, "@media (max-width: 900px)")
+    assert ".sidebar { width: 68px" in rail
+    assert ".sidebar-toggle { display: none; }" in rail
+    assert "@media (max-width: 768px)" in css
+    assert ".sidebar { display: none; }" in _media_block(css, "@media (max-width: 768px)")

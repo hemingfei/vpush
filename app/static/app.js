@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.41";
+const APP_VERSION = "1.12.42";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"];
 const TL_PLATFORMS = PLATFORM_TABS.map((p) => [p, p ? PLATFORM_LABELS[p] : "全部"]);
@@ -337,9 +337,37 @@ const NAV = [
   ]},
 ];
 
+const SIDEBAR_SLIM_KEY = "sidebar-slim";
+const SIDEBAR_COLLAPSE_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>`;
+const SIDEBAR_EXPAND_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>`;
+
+function sidebarIsSlim() {
+  return document.documentElement.classList.contains("sidebar-slim");
+}
+
+function syncSidebarToggle() {
+  const btn = $("#sidebar-toggle");
+  if (!btn) return;
+  const slim = sidebarIsSlim();
+  btn.setAttribute("aria-expanded", slim ? "false" : "true");
+  btn.setAttribute("aria-label", slim ? "展开侧栏" : "收起侧栏");
+  btn.title = slim ? "展开侧栏" : "收起侧栏";
+  btn.innerHTML = slim ? SIDEBAR_EXPAND_ICON : SIDEBAR_COLLAPSE_ICON;
+}
+
+function toggleSidebarSlim() {
+  document.documentElement.classList.toggle("sidebar-slim", !sidebarIsSlim());
+  try {
+    localStorage.setItem(SIDEBAR_SLIM_KEY, sidebarIsSlim() ? "1" : "0");
+  } catch {
+    /* 无 localStorage 时只改本页 */
+  }
+  syncSidebarToggle();
+}
+
 function renderSidebar(user) {
   const navItemHtml = (item) => `
-        <button class="nav-item" data-route="${item.route}" onclick="go('${item.route}')">
+        <button class="nav-item" data-route="${item.route}" onclick="go('${item.route}')" title="${item.label}">
           <span class="nav-icon">${item.icon}</span>
           <span class="nav-label">${item.label}</span>
         </button>`;
@@ -362,6 +390,7 @@ function renderSidebar(user) {
     </div>
   `;
   renderThemeSwitcher();
+  syncSidebarToggle();
   checkUpdate();
 }
 
