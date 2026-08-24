@@ -10,7 +10,7 @@ import rsa
 
 from app.config import XueqiuConfig
 from app.db import DB
-from app.fetchers.combination import CombinationFetcher, extract_cube_symbol
+from app.fetchers.combination import CombinationFetcher, _format_trade_price, extract_cube_symbol
 from app.fetchers.xueqiu import (
     XueqiuFetcher,
     _crop_watermark,
@@ -369,6 +369,7 @@ def test_combination_fetch_parses_rebalancing():
                     {
                         "stock_name": "贵州茅台",
                         "stock_symbol": "SH600519",
+                        "price": 1560.5,
                         "prev_weight": 0.0,
                         "target_weight": 5.2,
                     },
@@ -457,6 +458,11 @@ def test_combination_fetch_parses_rebalancing():
     # 调仓卡今日/年化/净值都取 quote，不取搜索
     assert "今日 +0.55%" in p.content
     assert p.detail["stats"] == [("今日", "+0.55%"), ("年化", "27.1%"), ("净值", "1.847")]
+    assert p.detail["actions"][1]["price"] == "1560.50"
+    assert p.detail["holdings"] == [
+        {"name": "贵州茅台", "symbol": "SH600519", "weight": 5.2},
+        {"name": "中国平安", "symbol": "SH601318", "weight": 30.0},
+    ]
     assert "🗑 永杉锂业 清仓 21.1%" in p.content
     assert "➕ 贵州茅台 0.0% → 5.2%" in p.content
     # 现金取 cash_value/净值（真实现金 0.0%），不显示接口伪值 80.0%
@@ -473,7 +479,9 @@ def test_combination_fetch_parses_rebalancing():
     assert posts[1].detail["cash"] == "25.0%"
 
 
-def test_combination_snapshots_stored_and_ttl_skips_refetch():
+def test_combination_trade_price_missing_is_omitted():
+    assert _format_trade_price({"prev_weight": 10.0, "target_weight": 12.0}) == ""
+    assert _format_trade_price({"price": "not-a-number"}) == ""
     """快照写入 cube_snapshots；TTL 内第二轮 fetch 不再请求雪球快照接口。"""
     counts = {"quote": 0, "current": 0, "nav": 0}
     rebalancing_payload = {"list": []}  # 无新调仓，仍应刷新快照

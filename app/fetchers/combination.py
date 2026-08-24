@@ -120,6 +120,14 @@ def _num(v):
     return None
 
 
+def _format_trade_price(history: dict) -> str:
+    for key in ("price", "stock_price", "trade_price"):
+        value = _num(history.get(key))
+        if value is not None:
+            return f"{value:.2f}"
+    return ""
+
+
 def parse_quote(data) -> dict:
     """解析 cubes/quote.json 响应。
 
@@ -380,6 +388,8 @@ class CombinationFetcher(Fetcher):
             parts.append(f"净值 {quote['net_value']:.3f}")
         if parts:
             stats_line = " · ".join(parts)
+        holdings_snapshot = self.db.get_cube_snapshot(kol["id"], "holdings") or {}
+        holdings = (holdings_snapshot.get("payload") or {}).get("holdings") or []
         for item in (data or {}).get("list") or []:
             histories = item.get("rebalancing_histories") or []
             if item.get("status") != "success" or not histories:
@@ -409,15 +419,17 @@ class CombinationFetcher(Fetcher):
                     action = "增持" if target_w > prev_w else "减持"
                     icon = "➕" if target_w > prev_w else "➖"
                     lines.append(f"{icon} {stock} {prev_s} → {target_s}")
-                actions.append(
-                    {
-                        "type": action,
-                        "stock": stock,
-                        "symbol": stock_symbol,
-                        "prev": prev_s or "0.0%",
-                        "target": target_s or "0.0%",
-                    }
-                )
+                action_data = {
+                    "type": action,
+                    "stock": stock,
+                    "symbol": stock_symbol,
+                    "prev": prev_s or "0.0%",
+                    "target": target_s or "0.0%",
+                }
+                price = _format_trade_price(h)
+                if price:
+                    action_data["price"] = price
+                actions.append(action_data)
             # 接口的 cash 字段对「只列变动」的记录是伪值（100 − Σ变动targets，如新建后显示
             # 现金 81%，实际 0%）；cash_value 才是组合内真实现金（按净值计），现金占比 = cash_value / 净值。
             cash_value = item.get("cash_value")
@@ -455,6 +467,7 @@ class CombinationFetcher(Fetcher):
                             if v
                         ],
                         "actions": actions,
+                        "holdings": holdings,
                         "cash": cash_pct,
                     },
                 )
