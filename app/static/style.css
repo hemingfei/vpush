@@ -1408,9 +1408,14 @@ body.lightbox-open { overflow: hidden; }
 }
 #tl-rail-recs:empty,
 #tl-rail-tags:empty { display: none; }
+.tl-rail-card {
+  background: var(--color-surface);
+  border: var(--border-default);
+  border-radius: var(--radius-card);
+  padding: 16px;
+}
 .tl-live-rail { display: none; }
 .tl-layout.live-mode .tl-live-rail { display: block; }
-.live-rail-card + .live-rail-source { margin-top: 12px; }
 .live-rail-stats { margin: 0; }
 .live-rail-stats > div {
   display: flex;
@@ -1424,8 +1429,6 @@ body.lightbox-open { overflow: hidden; }
 .live-rail-stats dd { margin: 0; color: var(--color-text-strong); font-variant-numeric: tabular-nums; }
 .live-rail-refresh { width: 100%; margin-top: 12px; justify-content: center; }
 .live-rail-refresh .refresh-icon { width: 15px; height: 15px; }
-.live-rail-source a { color: var(--color-accent-text); font-size: var(--text-sm); }
-.live-rail-source a:hover { text-decoration: underline; }
 .tl-rail-title {
   font-size: var(--text-title);
   font-weight: var(--font-weight-semibold);

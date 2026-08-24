@@ -2026,10 +2026,6 @@ function liveRailHtml() {
         <div><dt>最新快讯</dt><dd>${escapeHtml(updated)}</dd></div>
       </dl>
       <button type="button" class="btn-ghost live-rail-refresh" onclick="refreshTimeline()">${REFRESH_ICON} 刷新快讯</button>
-    </section>
-    <section class="tl-rail-card live-rail-source">
-      <h3 class="tl-rail-title">数据来源渠道</h3>
-      <a href="https://wallstreetcn.com/live/global" target="_blank" rel="noopener">华尔街见闻 · 快讯</a>
     </section>`;
 }
 

@@ -1140,20 +1140,23 @@ def test_timeline_wide_rail_markup():
     assert "max-width: 1279px" in css or "max-width:1279px" in css
 
 
-def test_live_rail_reuses_sidebar_and_shows_source_channel():
-    """快讯宽屏侧栏复用现有外壳，显示概览、刷新和数据来源渠道。"""
+def test_live_rail_reuses_sidebar_and_shows_summary():
+    """快讯宽屏侧栏复用现有外壳，只显示概览和刷新操作。"""
     src = APP_JS.read_text()
     css = STYLE_CSS.read_text()
     rail = _fn_body("liveRailHtml")
     assert 'id="tl-live-rail"' in _fn_body("renderTimeline")
     assert "liveRailHtml()" in _fn_body("renderLiveRail")
-    for text in ("快讯概览", "已加载", "重要快讯", "最新快讯", "刷新快讯", "数据来源渠道", "wallstreetcn.com/live/global"):
+    for text in ("快讯概览", "已加载", "重要快讯", "最新快讯", "刷新快讯"):
         assert text in rail
     assert "_livePosts.filter" in rail
     assert "refreshTimeline()" in rail
+    assert "数据来源渠道" not in rail
+    assert "wallstreetcn.com/live/global" not in rail
     assert ".tl-layout.live-mode .tl-rail-view" in css
     assert ".tl-layout.live-mode #tl-rail-recs" in css
     assert ".tl-layout.live-mode #tl-rail-tags" in css
+    assert ".tl-layout.live-mode .tl-live-rail" in css
 
 def test_timeline_rail_subscription_button_toggles_in_place():
     """推荐按钮用自身状态在 POST/DELETE 间切换，不确认、不刷新推荐列表。"""
@@ -1460,8 +1463,8 @@ def test_channel_status_poll_skips_identical_and_restores_focus():
 def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
-    assert 'href="/style.css?v=178"' in html
-    assert 'src="/app.js?v=241"' in html
+    assert 'href="/style.css?v=179"' in html
+    assert 'src="/app.js?v=242"' in html
 
 
 def test_register_placeholder_matches_username_min_length():
