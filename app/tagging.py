@@ -31,7 +31,8 @@ STOCK_PER_POST_MAX = 2
 STOCK_TABLE_MAX = 200
 # 黑话候选只扫最近 N 帖（控 token）；$标记$ 全库扫描（纯本地、便宜）
 ALIAS_CANDIDATE_SCAN = 500
-MARK_RESOLVE_BATCH = 80
+# Grok thinking 单批 16 条约 150s；8 条可压进 MARK_RESOLVE_TIMEOUT（180s）
+MARK_RESOLVE_BATCH = 8
 
 # 雪球 $股票名(代码)$ 标记：名称可有 N/C 等新股前缀，代码为交易所前缀（SH/SZ/BJ）+ 数字。
 # 排除组合（ZH）、板块指数（BK）以及上证/深证指数代码。

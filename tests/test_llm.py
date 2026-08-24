@@ -461,3 +461,63 @@ def test_resolve_stock_marks_failure_and_invalid():
     # 未配置 / 空输入 → []
     assert resolve_stock_marks([], make_config()) == []
     assert resolve_stock_marks([("涂改液", "SZ000858")], None) == []
+
+
+def _spy_timeout_client(monkeypatch, handler):
+    seen = {}
+
+    class SpyClient(httpx.Client):
+        def __init__(self, *args, **kwargs):
+            seen["timeout"] = kwargs.get("timeout")
+            kwargs.setdefault("transport", httpx.MockTransport(handler))
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", SpyClient)
+    return seen
+
+
+def test_chat_passes_timeout_to_httpx_client(monkeypatch):
+    from app.llm import DEFAULT_CHAT_TIMEOUT, MARK_RESOLVE_TIMEOUT, _chat
+
+    seen = _spy_timeout_client(
+        monkeypatch,
+        lambda request: httpx.Response(200, json={"choices": [{"message": {"content": "通"}}]}),
+    )
+    assert _chat(make_config(), [{"role": "user", "content": "x"}], 16) == "通"
+    assert seen["timeout"] == DEFAULT_CHAT_TIMEOUT
+    assert (
+        _chat(
+            make_config(),
+            [{"role": "user", "content": "x"}],
+            16,
+            timeout=MARK_RESOLVE_TIMEOUT,
+        )
+        == "通"
+    )
+    assert seen["timeout"] == MARK_RESOLVE_TIMEOUT
+
+
+def test_resolve_stock_marks_uses_long_timeout(monkeypatch):
+    from app.llm import MARK_RESOLVE_TIMEOUT, resolve_stock_marks
+
+    seen = _spy_timeout_client(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '[{"name":"涂改液","code":"SZ000858",'
+                                '"official":"五粮液","is_alias":true}]'
+                            )
+                        }
+                    }
+                ]
+            },
+        ),
+    )
+    result = resolve_stock_marks([("涂改液", "SZ000858")], make_config())
+    assert seen["timeout"] == MARK_RESOLVE_TIMEOUT
+    assert result[0]["official"] == "五粮液"

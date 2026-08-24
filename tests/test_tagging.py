@@ -1,6 +1,7 @@
 """纯代码关键词规则打标：零 token，子串匹配，词表顺序取前 3 个。"""
 from app.fetchers.base import Post
 from app.tagging import (
+    MARK_RESOLVE_BATCH,
     TAG_PER_POST_MAX,
     _maintain_lock,
     backfill_post_tags,
@@ -448,6 +449,48 @@ def test_run_tag_maintenance_scans_marks_beyond_recent_500():
 
     assert any(name == "盐湖股份" for name, _code in captured.get("marks", []))
     assert "盐湖股份" in db.get_stock_names()
+    db.close()
+
+
+def test_run_tag_maintenance_resolves_marks_in_small_batches():
+    """新标记超过一批时拆开调用，避免 thinking 模型单次读超时。"""
+    import tempfile
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from app.db import DB
+
+    db = DB(Path(tempfile.mkdtemp()) / "batch.db")
+    kid = db.add_kol("xueqiu", "A", "1")
+    total = MARK_RESOLVE_BATCH + 3
+    for i in range(total):
+        name = f"测试票{i:02d}"
+        code = f"SZ300{i:03d}"
+        db.insert_post("xueqiu", kid, f"b{i}", name, f"${name}({code})$ 涨", "u", "")
+
+    calls = []
+
+    def fake_resolve(marks, cfg, client=None):
+        calls.append(list(marks))
+        return [
+            {"name": n, "code": c, "official": n, "is_alias": False} for n, c in marks
+        ]
+
+    import app.llm as llm
+
+    orig_resolve = llm.resolve_stock_marks
+    llm.resolve_stock_marks = fake_resolve
+    try:
+        result = run_tag_maintenance(
+            db, SimpleNamespace(api_key="sk-test", api_base="https://x", model="m")
+        )
+    finally:
+        llm.resolve_stock_marks = orig_resolve
+
+    assert result["marks_new"] == total
+    assert len(calls) == 2
+    assert [len(c) for c in calls] == [MARK_RESOLVE_BATCH, 3]
+    assert all(len(c) <= MARK_RESOLVE_BATCH for c in calls)
     db.close()
 
 

@@ -13,6 +13,10 @@ import time
 
 logger = logging.getLogger(__name__)
 
+# 摘要通常几秒到十几秒；标记解析走 thinking + JSON，16 条实测约 150s。
+DEFAULT_CHAT_TIMEOUT = 60
+MARK_RESOLVE_TIMEOUT = 180
+
 class _RetryableError(Exception):
     """瞬时错误（429/5xx/空响应），可重试一次。"""
 
@@ -56,6 +60,7 @@ def _chat(
     temperature=0.3,
     attempts: int = 2,
     response_format=None,
+    timeout: float = DEFAULT_CHAT_TIMEOUT,
 ) -> str | None:
     """OpenAI 兼容 chat/completions；未配置或失败返回 None。"""
     values = _config_values(llm_config)
@@ -65,7 +70,7 @@ def _chat(
     import httpx
 
     owns_client = client is None
-    client = client or httpx.Client(timeout=60)
+    client = client or httpx.Client(timeout=timeout)
     try:
         last_err: Exception | None = None
         use_format = response_format
@@ -423,8 +428,9 @@ def resolve_stock_marks(marks, llm_config=None, client=None) -> list[dict]:
         2000,
         client=client,
         temperature=0,
-        attempts=1,
+        attempts=2,
         response_format={"type": "json_object"},
+        timeout=MARK_RESOLVE_TIMEOUT,
     )
     if not text:
         return []
