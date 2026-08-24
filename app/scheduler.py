@@ -1125,14 +1125,16 @@ def _user_llm_config(user: dict, fallback=None):
     )
 
 
+def _system_llm_config(fallback=None):
+    """站点任务（标签维护）只走环境变量 / app.state.llm_config。"""
+    if fallback and getattr(fallback, "api_key", ""):
+        return fallback
+    return None
+
+
 def _admin_llm_config(db: DB, fallback=None):
-    """系统任务跟管理员推送设置同一套；没有自配再退回环境变量。"""
-    for user in db.list_users():
-        if user.get("is_admin"):
-            cfg = _user_llm_config(user)
-            if cfg is not None:
-                return cfg
-    return fallback
+    """旧名兼容：不再读取管理员个人 key。"""
+    return _system_llm_config(fallback)
 
 
 def _send_digest_bundle(
@@ -1195,9 +1197,9 @@ def notify_digest_subscribers(
 ) -> None:
     """把合并摘要推送给订阅了该大V的用户（各自绑定的渠道）。
 
-    用户自配 LLM（或全局 llm_config）时，先发一条 AI 要点再发摘要卡片；
+    用户自配 LLM 时先发一条 AI 要点再发摘要卡片；未自配不调模型。
     生成失败自动降级，不影响摘要推送。summary_cache 透传给 summarize_posts，
-    同一批帖文多个订阅用户只调一次大模型。
+    同一批帖文、同一模型的多个订阅用户只调一次大模型。
     """
     if notifiers_config is None or not posts:
         return
@@ -1206,7 +1208,6 @@ def notify_digest_subscribers(
     from .channels import build_channel_notifier, iter_user_channels
 
     client = httpx.Client(timeout=15)
-    admin_llm = _admin_llm_config(db, llm_config)
     try:
         subscribers = db.subscribers_of_kol(kol["id"])
         keywords_by_user = db.get_users_keywords([u["id"] for u in subscribers])
@@ -1237,7 +1238,7 @@ def notify_digest_subscribers(
                     continue
                 matched = instant
             summary = None
-            llm_cfg = _user_llm_config(user, admin_llm)
+            llm_cfg = _user_llm_config(user)
             if llm_cfg is not None:
                 try:
                     from .llm import summarize_posts
@@ -1276,7 +1277,6 @@ def flush_digest(
     if not digest:
         return
     summary_cache: dict = {}
-    admin_llm = _admin_llm_config(db, llm_config)
     for kol_id, posts in list(digest.items()):
         try:
             kol = db.get_kol(kol_id)
@@ -1284,7 +1284,7 @@ def flush_digest(
                 digest.pop(kol_id, None)
                 continue
             notify_digest_subscribers(
-                db, posts, kol, notifiers_config, notifiers, retry_queue, dnd_buffer, admin_llm, summary_cache
+                db, posts, kol, notifiers_config, notifiers, retry_queue, dnd_buffer, None, summary_cache
             )
             digest.pop(kol_id, None)
         except Exception:  # noqa: BLE001
@@ -2106,9 +2106,7 @@ class Scheduler:
         if use_llm:
             from .llm import summarize_posts
 
-            llm_cfg = _user_llm_config(
-                user, _admin_llm_config(self.db, getattr(self, "llm_config", None))
-            )
+            llm_cfg = _user_llm_config(user)
             if llm_cfg is not None:
                 try:
                     summary = summarize_posts(posts, llm_cfg)
@@ -2204,7 +2202,7 @@ class Scheduler:
         from .tagging import try_run_tag_maintenance
 
         result = try_run_tag_maintenance(
-            self.db, _admin_llm_config(self.db, getattr(self, "llm_config", None))
+            self.db, _system_llm_config(getattr(self, "llm_config", None))
         )
         if result is None:
             return False
@@ -2306,10 +2304,7 @@ class Scheduler:
                 for r in rows
             ]
             summary = None
-            # 跟推送设置同一套：用户自配 → 管理员自配 → 环境变量
-            llm_cfg = _user_llm_config(
-                user, _admin_llm_config(self.db, getattr(self, "llm_config", None))
-            )
+            llm_cfg = _user_llm_config(user)
             if llm_cfg is not None:
                 try:
                     from .llm import summarize_daily

@@ -3027,9 +3027,9 @@ def create_api_router(
         stock_aliases 为黑话别名表（LLM 每日自动识别 + 管理端可手动修正）。
         maintain 为最近一次维护摘要 + 是否已配置 LLM（管理端按钮用）。
         """
-        from .scheduler import _admin_llm_config
+        from .scheduler import _system_llm_config
 
-        llm_cfg = _admin_llm_config(db, getattr(request.app.state, "llm_config", None))
+        llm_cfg = _system_llm_config(getattr(request.app.state, "llm_config", None))
         return {
             "tags": db.get_tag_vocabulary(),
             "stock_names": db.get_stock_names(),
@@ -3039,6 +3039,7 @@ def create_api_router(
             "maintain": {
                 "last": db.get_tag_maintain_last(),
                 "llm_ready": bool(llm_cfg and getattr(llm_cfg, "api_key", "")),
+                "llm_model": (getattr(llm_cfg, "model", "") or "") if llm_cfg else "",
             },
         }
 
@@ -3132,10 +3133,10 @@ def create_api_router(
         与每日调度任务同一套逻辑。已有维护在跑时返回 409。
         backfill=none 只改词表；pending/all 随后按当前规则回填贴文。
         """
-        from .scheduler import _admin_llm_config
+        from .scheduler import _system_llm_config
         from .tagging import backfill_post_tags, try_run_tag_maintenance
 
-        llm_cfg = _admin_llm_config(db, getattr(request.app.state, "llm_config", None))
+        llm_cfg = _system_llm_config(getattr(request.app.state, "llm_config", None))
         result = try_run_tag_maintenance(db, llm_cfg)
         if result is None:
             raise HTTPException(status_code=409, detail="标签维护正在进行")

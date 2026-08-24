@@ -56,10 +56,10 @@ class WebPushConfig:
 
 @dataclass
 class LLMConfig:
-    """可选 LLM 摘要：配置 api_key 即启用（免打扰汇总/每日精选生成 AI 要点）。
+    """站点级 LLM：只给标签维护等系统任务用（环境变量 LLM_API_KEY）。
 
-    使用 OpenAI 兼容接口（/chat/completions），可对接 OpenAI、DeepSeek、
-    本地 Ollama/vLLM 等任何兼容服务。未配置时推送管线完全不受影响。
+    用户摘要必须在推送设置里自配 key，不会回落到这一份。
+    使用 OpenAI 兼容接口（/chat/completions）。未配置时系统任务跳过识别，推送不受影响。
     """
 
     api_base: str = "https://api.openai.com/v1"

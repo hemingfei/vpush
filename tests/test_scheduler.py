@@ -1417,7 +1417,19 @@ def test_digest_llm_summary_computed_once_for_multiple_subscribers(monkeypatch):
     kid = db.add_kol("xueqiu", "A", "1")
     uid1 = db.add_user("u1", "h", telegram_chat_id="111")
     uid2 = db.add_user("u2", "h")
-    db.update_user(uid2, wecom_webhook="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=wc2")
+    db.update_user(
+        uid1,
+        llm_api_key="sk-1",
+        llm_api_base="https://api.deepseek.com",
+        llm_model="deepseek-chat",
+    )
+    db.update_user(
+        uid2,
+        wecom_webhook="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=wc2",
+        llm_api_key="sk-2",
+        llm_api_base="https://api.deepseek.com",
+        llm_model="deepseek-chat",
+    )
     db.add_subscription(uid1, kid)
     db.add_subscription(uid2, kid)
     post = make_post(kid)
@@ -1469,6 +1481,46 @@ def test_digest_llm_summary_computed_once_for_multiple_subscribers(monkeypatch):
     llm_cfg = SimpleNamespace(api_key="sk-test", api_base="https://api.deepseek.com", model="deepseek-chat")
     flush_digest(db, {kid: [post]}, [], ncfg, llm_config=llm_cfg)
     assert calls["n"] == 1
+
+
+def test_digest_skips_llm_when_user_has_no_key(monkeypatch):
+    db = make_db()
+    kid = db.add_kol("xueqiu", "A", "1")
+    uid = db.add_user("u1", "h", telegram_chat_id="111")
+    db.add_subscription(uid, kid)
+    post = make_post(kid)
+    calls = {"n": 0}
+
+    def fake_summarize(*a, **k):
+        calls["n"] += 1
+        return "AI 要点"
+
+    monkeypatch.setattr("app.llm.summarize_posts", fake_summarize)
+
+    class FakeTG:
+        def __init__(self, config, chat_id=None, client=None, **kwargs):
+            self.client = SimpleNamespace(close=lambda: None)
+
+        def send_text(self, text):
+            pass
+
+        def send_digest(self, posts, kol_name, platform):
+            pass
+
+    monkeypatch.setattr("app.notifiers.telegram.TelegramNotifier", FakeTG)
+    ncfg = SimpleNamespace(
+        telegram=SimpleNamespace(bot_token="t", chat_id=""),
+        feishu=SimpleNamespace(),
+        wecom=SimpleNamespace(),
+    )
+    flush_digest(
+        db,
+        {kid: [post]},
+        [],
+        ncfg,
+        llm_config=SimpleNamespace(api_key="sk-env", api_base="https://api.deepseek.com", model="deepseek-chat"),
+    )
+    assert calls["n"] == 0
 
 
 def test_dnd_summary_failure_alerts_admin(monkeypatch):
@@ -2267,7 +2319,13 @@ def test_daily_report_sends_ai_summary(monkeypatch):
     kid = db.add_kol("xueqiu", "A", "1")
     db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", "")
     uid = db.add_user("u", "h", telegram_chat_id="111")
-    db.update_user(uid, daily_report=True)
+    db.update_user(
+        uid,
+        daily_report=True,
+        llm_api_key="sk-user",
+        llm_api_base="https://api.deepseek.com",
+        llm_model="deepseek-chat",
+    )
     db.add_subscription(uid, kid)
 
     fake = FakeDailyNotifier()
@@ -3244,6 +3302,12 @@ def test_secondary_summary_skips_llm(monkeypatch):
     db = make_db()
     kid = db.add_kol("xueqiu", "S", "1", secondary=True)
     uid = db.add_user("u", "h", telegram_chat_id="111")
+    db.update_user(
+        uid,
+        llm_api_key="sk-user",
+        llm_api_base="https://api.deepseek.com",
+        llm_model="deepseek-chat",
+    )
     db.add_subscription(uid, kid)
     sent = []
     llm_calls = []
@@ -4118,10 +4182,7 @@ def test_stock_alias_task_writes_aliases_and_cleans(monkeypatch):
     pid = db.insert_post("xueqiu", kid, "al1", "宁王大涨", "宁王今天创新高，市场沸腾", "u", "")
     db.update_post_tags(pid, ["观点", "宏观"])  # 观点是过期标签
 
-    monkeypatch.setattr(
-        "app.llm.suggest_stock_aliases",
-        lambda cands, stocks, cfg, client=None: [{"alias": "宁王", "stock": "宁德时代", "confidence": "high"}],
-    )
+    monkeypatch.setattr("app.llm.resolve_stock_marks", lambda *a, **k: [])
     scheduler = Scheduler(
         db, {}, [],
         SimpleNamespace(),
@@ -4154,7 +4215,7 @@ def test_stock_alias_task_without_llm_skips_but_cleans(monkeypatch):
         calls["n"] += 1
         return []
 
-    monkeypatch.setattr("app.llm.suggest_stock_aliases", boom)
+    monkeypatch.setattr("app.llm.resolve_stock_marks", boom)
     scheduler = Scheduler(
         db, {}, [],
         SimpleNamespace(),
@@ -4238,11 +4299,11 @@ def _alias_scheduler(db, llm_config):
     )
 
 
-def test_stock_alias_task_prefers_admin_push_settings_llm(monkeypatch):
-    """系统别名任务与管理员推送设置同一套 LLM，不走环境变量里的另一套。"""
+def test_stock_alias_task_uses_env_llm_not_admin_personal(monkeypatch):
+    """系统别名任务只走环境变量，不读管理员个人 key。"""
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "al-admin", "宁王", "宁王今天创新高", "u", "")
+    db.insert_post("xueqiu", kid, "al-admin", "$涂改液(SZ000858)$", "戏称", "u", "")
     uid = db.add_user("kale", "h", is_admin=True)
     db.update_user(
         uid,
@@ -4252,14 +4313,13 @@ def test_stock_alias_task_prefers_admin_push_settings_llm(monkeypatch):
     )
     seen = {}
 
-    def fake_suggest(cands, stocks, cfg, client=None):
+    def fake_resolve(marks, cfg, client=None):
         seen["key"] = cfg.api_key
         seen["model"] = cfg.model
         seen["user_supplied"] = getattr(cfg, "user_supplied", False)
-        return [{"alias": "宁王", "stock": "宁德时代", "confidence": "high"}]
+        return [{"name": "涂改液", "code": "SZ000858", "official": "五粮液", "is_alias": True}]
 
-    monkeypatch.setattr("app.llm.suggest_stock_aliases", fake_suggest)
-    monkeypatch.setattr("app.llm.resolve_stock_marks", lambda *a, **k: [])
+    monkeypatch.setattr("app.llm.resolve_stock_marks", fake_resolve)
     _alias_scheduler(
         db,
         SimpleNamespace(
@@ -4268,16 +4328,16 @@ def test_stock_alias_task_prefers_admin_push_settings_llm(monkeypatch):
             model="deepseek-chat",
         ),
     )._run_stock_alias_task()
-    assert seen["key"] == "sk-grok"
-    assert seen["model"] == "grok-4.6"
-    assert seen["user_supplied"] is True
+    assert seen["key"] == "sk-deepseek"
+    assert seen["model"] == "deepseek-chat"
+    assert seen.get("user_supplied") is not True
 
 
-def test_stock_alias_task_runs_with_admin_llm_when_env_empty(monkeypatch):
-    """环境变量没配 LLM 时，管理员推送设置也能跑别名识别。"""
+def test_stock_alias_task_skips_llm_when_env_empty(monkeypatch):
+    """环境变量没配 LLM 时，管理员个人 key 也不能跑标记解析。"""
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "al-only", "宁王", "宁王大涨", "u", "")
+    db.insert_post("xueqiu", kid, "al-only", "$涂改液(SZ000858)$", "戏称", "u", "")
     uid = db.add_user("kale", "h", is_admin=True)
     db.update_user(
         uid,
@@ -4287,16 +4347,14 @@ def test_stock_alias_task_runs_with_admin_llm_when_env_empty(monkeypatch):
     )
     seen = {"n": 0}
 
-    def fake_suggest(cands, stocks, cfg, client=None):
+    def fake_resolve(marks, cfg, client=None):
         seen["n"] += 1
-        seen["key"] = cfg.api_key
         return []
 
-    monkeypatch.setattr("app.llm.suggest_stock_aliases", fake_suggest)
-    monkeypatch.setattr("app.llm.resolve_stock_marks", lambda *a, **k: [])
+    monkeypatch.setattr("app.llm.resolve_stock_marks", fake_resolve)
     _alias_scheduler(db, None)._run_stock_alias_task()
-    assert seen["n"] == 1
-    assert seen["key"] == "sk-grok"
+    assert seen["n"] == 0
+    assert any(a["alias"] == "宁王" for a in db.get_stock_aliases())
 
 
 def test_daily_report_uses_admin_push_settings_llm(monkeypatch):

@@ -173,10 +173,17 @@ DEFAULT_STOCK_NAMES = [
     "恒瑞医药", "招商银行", "中国平安", "茅台", "腾讯", "阿里", "小米",
     "华为", "赛力斯", "理想", "蔚来", "小鹏", "隆基", "通威", "阳光电源",
     "京东方", "立讯精密", "海康威视", "紫光国微", "兆易创新", "寒武纪",
+    "五粮液",
 ]
 STOCK_NAMES_KEY = "stock_names"
 
-# 黑话别名表：LLM 每日自动识别（settings 键 stock_aliases），结构为
+# 常见黑话种子：启动时合并进别名表，不经过 LLM。正式名必须已在股票名表中。
+DEFAULT_STOCK_ALIASES = [
+    {"alias": "宁王", "stock": "宁德时代"},
+    {"alias": "药茅", "stock": "恒瑞医药"},
+]
+
+# 黑话别名表：种子词表 + $戏称(代码)$ 解析（settings 键 stock_aliases）。
 # [{"alias": "宁王", "stock": "宁德时代"}, ...]；打标时命中别名输出正式名。
 STOCK_ALIASES_KEY = "stock_aliases"
 # 最近一次标签维护结果（管理端展示用）
@@ -2887,6 +2894,17 @@ class DB:
     def set_stock_aliases(self, aliases: list[dict]) -> None:
         """保存黑话别名表。"""
         self.set_setting(STOCK_ALIASES_KEY, json.dumps(aliases, ensure_ascii=False))
+
+    def merge_default_stock_aliases(self) -> dict:
+        """去掉正式名切半等碎片别名，并合并种子黑话。返回 purged/seeded。"""
+        from .tagging import reconcile_alias_table
+
+        kept, purged, seeded = reconcile_alias_table(
+            self.get_stock_aliases(), self.get_stock_names(), DEFAULT_STOCK_ALIASES
+        )
+        if purged or seeded:
+            self.set_stock_aliases(kept)
+        return {"purged": purged, "seeded": seeded}
 
     def get_tag_maintain_last(self) -> dict | None:
         """读最近一次标签维护摘要；无记录或损坏返回 None。"""

@@ -9,8 +9,9 @@
 股票标签（stock_tag_posts）：$股票名(代码)$ 标记精确提取 + 常用股票名表
 子串匹配，每条最多 STOCK_PER_POST_MAX 个，叠加在话题标签之后。
 
-LLM 标签维护（run_tag_maintenance）：识别黑话别名、从 $标记$ 扩充名表、
-清理过期标签。调度器每日一次，管理端也可立即执行。
+标签维护（run_tag_maintenance）：合并种子黑话、从 $戏称(代码)$ 扩充名表、
+清碎片别名和过期标签。调度器每日一次，管理端也可立即执行。
+滑窗候选不再送进 LLM。
 """
 from __future__ import annotations
 
@@ -35,8 +36,6 @@ MARK_RESOLVE_BATCH = 80
 # 雪球 $股票名(代码)$ 标记：名称可有 N/C 等新股前缀，代码为交易所前缀（SH/SZ/BJ）+ 数字。
 # 排除组合（ZH）、板块指数（BK）以及上证/深证指数代码。
 _STOCK_MARK_RE = re.compile(r"\$([^$()\n]+)\(([A-Za-z]{2}\d{0,6})\)\$")
-# 代码前缀 → 允许的交易所（个股）
-_STOCK_EXCHANGE_PREFIXES = ("SH", "SZ", "BJ")
 # 新股/特殊前缀（N=上市首日，C=上市次日至第5日），去前缀后才是股票名
 _STOCK_NAME_PREFIXES = ("N", "C", "U", "W")
 # 名称含这些词不当个股（上证指数/沪深300ETF 等）
@@ -71,18 +70,20 @@ _ALIAS_STOPWORDS = {
 
 
 def is_equity_code(code: str) -> bool:
-    """是否为沪深京个股代码。排除 ZH 组合、BK 板块、上证指数（SH000）、深证指数（SZ399）。"""
+    """是否为沪深京个股代码。排除组合、板块、指数、ETF、债券。"""
     raw = str(code or "").strip().upper()
-    if len(raw) < 4:
+    if len(raw) < 6:
         return False
     exch, digits = raw[:2], raw[2:]
-    if exch not in _STOCK_EXCHANGE_PREFIXES:
+    if not digits.isdigit():
         return False
-    if exch == "SH" and digits.startswith("000"):
-        return False
-    if exch == "SZ" and digits.startswith("399"):
-        return False
-    return True
+    if exch == "SH":
+        return digits.startswith(("60", "68"))
+    if exch == "SZ":
+        return digits.startswith(("00", "30"))
+    if exch == "BJ":
+        return digits[:1] in "489"
+    return False
 
 
 def is_equity_name(name: str) -> bool:
@@ -366,11 +367,62 @@ def backfill_post_tags(db, mode: str = "pending") -> dict:
     return {"processed": processed, "tagged": tagged_count}
 
 
-def _append_alias(aliases: list[dict], existing: set[str], alias: str, stock: str) -> bool:
-    """写入一条别名；与股票名/已有别名冲突时跳过。满员返回 False。"""
+def is_acceptable_alias(alias: str, stock: str, stock_names=None) -> bool:
+    """别名能否入库：必须指向已知名，且不能是正式名切半或 1~2 位英文。"""
+    alias = str(alias or "").strip()
+    stock = str(stock or "").strip()
     if not alias or not stock or alias == stock:
         return False
-    if alias in existing or alias in {a["stock"] for a in aliases}:
+    names = {str(n).strip() for n in (stock_names or []) if str(n).strip()}
+    if alias in names or stock not in names:
+        return False
+    if alias in _ALIAS_STOPWORDS:
+        return False
+    if re.fullmatch(r"[A-Za-z0-9]{1,2}", alias):
+        return False
+    for name in names | {stock}:
+        if alias != name and alias.casefold() in name.casefold():
+            return False
+    return True
+
+
+def reconcile_alias_table(aliases, stock_names, seeds=None) -> tuple[list[dict], list[dict], list[dict]]:
+    """净化别名表并合并种子。返回 (保留, 清除的碎片, 新种子)。"""
+    names = [str(n).strip() for n in (stock_names or []) if str(n).strip()]
+    kept: list[dict] = []
+    purged: list[dict] = []
+    seen: set[str] = set()
+    for item in aliases or []:
+        alias = str((item or {}).get("alias") or "").strip()
+        stock = str((item or {}).get("stock") or "").strip()
+        if not alias:
+            continue
+        if alias in seen:
+            continue
+        if is_acceptable_alias(alias, stock, names):
+            kept.append({"alias": alias, "stock": stock})
+            seen.add(alias)
+        else:
+            purged.append({"alias": alias, "stock": stock})
+    seeded: list[dict] = []
+    for item in seeds or []:
+        alias = str((item or {}).get("alias") or "").strip()
+        stock = str((item or {}).get("stock") or "").strip()
+        if alias in seen:
+            continue
+        if is_acceptable_alias(alias, stock, names):
+            kept.append({"alias": alias, "stock": stock})
+            seen.add(alias)
+            seeded.append({"alias": alias, "stock": stock})
+    return kept, purged, seeded
+
+
+def _append_alias(aliases: list[dict], existing: set[str], alias: str, stock: str, stock_names=None) -> bool:
+    """写入一条别名；碎片/冲突/满员时跳过。"""
+    names = stock_names if stock_names is not None else {a["stock"] for a in aliases}
+    if not is_acceptable_alias(alias, stock, names):
+        return False
+    if alias in existing:
         return False
     if len(aliases) >= STOCK_TABLE_MAX:
         return False
@@ -390,57 +442,42 @@ def _append_stock_name(stock_names: list[str], existing: set[str], name: str) ->
 
 
 def run_tag_maintenance(db, llm_config=None) -> dict:
-    """跑一轮标签维护：去非个股名、LLM 识别别名/$标记$、清理误标。
+    """跑一轮标签维护：去非个股名、清碎片别名、合并种子、$标记$ 解析、清误标。
 
-    未配置 LLM 时跳过识别，清理仍执行。别名与 $标记$ 两路结果合并后再写库，
-    避免后一步覆盖前一步。返回供管理端展示的结果摘要。
+    未配置系统 LLM 时跳过标记解析，种子与清理仍执行。
     """
+    from .db import DEFAULT_STOCK_ALIASES
+
     tag_rules = db.get_tag_vocabulary()
     topic_tags = {r["tag"] for r in tag_rules}
     stock_names = [n for n in db.get_stock_names() if str(n).strip()]
-    aliases = list(db.get_stock_aliases())
 
     removed_stock_names = [n for n in stock_names if not is_equity_name(n)]
     if removed_stock_names:
         stock_names = [n for n in stock_names if is_equity_name(n)]
         db.set_stock_names(stock_names)
 
-    added_aliases: list[dict] = []
+    aliases, purged_aliases, seeded_aliases = reconcile_alias_table(
+        db.get_stock_aliases(), stock_names, DEFAULT_STOCK_ALIASES
+    )
+    if purged_aliases or seeded_aliases:
+        db.set_stock_aliases(aliases)
+
+    added_aliases: list[dict] = list(seeded_aliases)
     added_stock_names: list[str] = []
     llm_used = False
     error = None
-    candidates_n = 0
     marks_n = 0
+    marks_new = 0
+    llm_model = (getattr(llm_config, "model", "") or "") if llm_config else ""
 
     llm_ok = bool(llm_config and getattr(llm_config, "api_key", ""))
     if llm_ok:
         try:
-            from .llm import resolve_stock_marks, suggest_stock_aliases
+            from .llm import resolve_stock_marks
 
-            llm_used = True
-            recent = db.list_posts(limit=ALIAS_CANDIDATE_SCAN)
-            known = list(topic_tags) + stock_names
-            known += [a["stock"] for a in aliases]
-            known += [a["alias"] for a in aliases]
-            candidates = extract_alias_candidates(_rows_to_posts(recent), known)
-            candidates_n = len(candidates)
             existing_aliases = {a["alias"] for a in aliases}
             existing_stocks = set(stock_names)
-
-            if candidates:
-                suggestions = suggest_stock_aliases(candidates, stock_names, llm_config)
-                for item in suggestions or []:
-                    if item.get("confidence") != "high":
-                        continue
-                    alias = str(item.get("alias") or "").strip()
-                    stock = str(item.get("stock") or "").strip()
-                    if alias in topic_tags or alias in existing_stocks:
-                        continue
-                    if stock not in existing_stocks:
-                        continue
-                    if _append_alias(aliases, existing_aliases, alias, stock):
-                        added_aliases.append({"alias": alias, "stock": stock})
-
             all_marks: list[tuple[str, str]] = []
             seen_marks: set[tuple[str, str]] = set()
             for batch in iter_post_row_batches(db):
@@ -454,30 +491,37 @@ def run_tag_maintenance(db, llm_config=None) -> dict:
             known_names.update(a["stock"] for a in aliases)
             known_names.update(topic_tags)
             new_marks = [(n, c) for n, c in all_marks if n not in known_names]
+            marks_new = len(new_marks)
 
-            resolved: list[dict] = []
-            for i in range(0, len(new_marks), MARK_RESOLVE_BATCH):
-                resolved.extend(
-                    resolve_stock_marks(new_marks[i : i + MARK_RESOLVE_BATCH], llm_config)
-                    or []
-                )
-            for item in resolved:
-                official = str(item.get("official") or "").strip()
-                name = str(item.get("name") or "").strip()
-                if official in topic_tags or not is_equity_name(official):
-                    continue
-                if _append_stock_name(stock_names, existing_stocks, official):
-                    added_stock_names.append(official)
-                if item.get("is_alias") and name and name != official:
-                    if name in topic_tags or name in existing_stocks:
-                        continue
-                    if _append_alias(aliases, existing_aliases, name, official):
-                        added_aliases.append({"alias": name, "stock": official})
-
-            if added_stock_names or removed_stock_names:
-                db.set_stock_names(stock_names)
-            if added_aliases:
-                db.set_stock_aliases(aliases)
+            if new_marks:
+                resolved: list[dict] = []
+                for i in range(0, len(new_marks), MARK_RESOLVE_BATCH):
+                    resolved.extend(
+                        resolve_stock_marks(new_marks[i : i + MARK_RESOLVE_BATCH], llm_config)
+                        or []
+                    )
+                if resolved:
+                    llm_used = True
+                    for item in resolved:
+                        official = str(item.get("official") or "").strip()
+                        name = str(item.get("name") or "").strip()
+                        if official in topic_tags or not is_equity_name(official):
+                            continue
+                        if _append_stock_name(stock_names, existing_stocks, official):
+                            added_stock_names.append(official)
+                        if item.get("is_alias") and name and name != official:
+                            if name in topic_tags:
+                                continue
+                            if _append_alias(
+                                aliases, existing_aliases, name, official, existing_stocks
+                            ):
+                                added_aliases.append({"alias": name, "stock": official})
+                    if added_stock_names:
+                        db.set_stock_names(stock_names)
+                    if any(a not in seeded_aliases for a in added_aliases):
+                        db.set_stock_aliases(aliases)
+                else:
+                    error = "LLM 标记解析无有效输出"
         except Exception as exc:  # noqa: BLE001
             error = str(exc)
             logger.warning("标签维护识别异常: %s", exc)
@@ -497,9 +541,13 @@ def run_tag_maintenance(db, llm_config=None) -> dict:
         "added_aliases": added_aliases,
         "added_stock_names": added_stock_names,
         "removed_stock_names": removed_stock_names,
-        "candidates": candidates_n,
+        "purged_aliases": purged_aliases,
+        "seeded_aliases": seeded_aliases,
+        "candidates": 0,
         "marks": marks_n,
+        "marks_new": marks_new,
         "llm_used": llm_used,
+        "llm_model": llm_model,
         "error": error,
     }
 

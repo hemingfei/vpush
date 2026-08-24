@@ -30,6 +30,17 @@ def test_no_config_returns_none():
     assert summarize_posts([make_post()], SimpleNamespace(api_key="")) is None
 
 
+def test_reasoning_content_used_when_content_empty():
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "", "reasoning_content": "- 要点"}}]},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    assert summarize_posts([make_post()], make_config(), client=client) == "- 要点"
+
+
 def test_success_returns_text():
     def handler(request):
         payload = request.read() and json.loads(request.read())
@@ -333,7 +344,7 @@ def test_summarize_daily_max_tokens():
     client = httpx.Client(transport=httpx.MockTransport(handler))
     summarize_daily([make_post(external_id=f"p{i}") for i in range(30)], make_config(), client=client)
     # 固定给足上限，兼容推理模型思考预算（普通模型不会用满）
-    assert captured["max_tokens"] == 16000
+    assert captured["max_tokens"] == 4000
 
 
 def test_summarize_daily_enforces_max_eight_points():

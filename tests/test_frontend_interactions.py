@@ -1486,7 +1486,7 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     assert 'href="/style.css?v=181"' in html
-    assert 'src="/app.js?v=244"' in html
+    assert 'src="/app.js?v=245"' in html
 
 
 def test_register_placeholder_matches_username_min_length():
@@ -2003,7 +2003,8 @@ def test_weibo_qr_poll_is_serial():
 def test_admin_tag_page_has_llm_maintain():
     """标签管理页可一键跑 LLM 维护，不必再走脚本。"""
     render = _fn_body("loadAdminTagsTab")
-    assert "LLM 标签维护" in render
+    assert "标签维护" in render
+    assert "LLM_API_KEY" in render
     assert "adminMaintainTags" in render
     assert "维护并回填待打标" in render
     body = _fn_body("adminMaintainTags")

@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.49";
+const APP_VERSION = "1.12.50";
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"];
@@ -3080,7 +3080,7 @@ async function renderSettings(seq) {
         <header class="section-head">
           <div>
             <h2 class="section-title">AI 摘要（可选，用你的大模型）</h2>
-            <p class="section-meta">配置后，每日精选摘要和免打扰汇总会先用大模型生成 AI 要点，再发原文列表。接口为 OpenAI 兼容格式（/chat/completions），DeepSeek / 通义 / Kimi / 本地 Ollama 均可。不填则用系统默认摘要。</p>
+            <p class="section-meta">配置后，合并摘要、每日精选和免打扰汇总会先用你的大模型生成要点。接口为 OpenAI 兼容格式（/chat/completions）。不填则不调用大模型，只用普通摘要。</p>
           </div>
         </header>
         <div class="form-row">
@@ -6385,18 +6385,18 @@ async function loadAdminTagsTab() {
     </section>
     <section class="section-panel">
       <header class="section-head">
-        <div><h2 class="section-title">黑话别名（LLM 每日自动识别）</h2>
-        <p class="section-meta">LLM 每日扫描帖子自动识别股票昵称并写入（如 宁王→宁德时代）；此处可手动修正。每行「别名=正式名」，正式名需在常用股票名表中。</p></div>
+        <div><h2 class="section-title">黑话别名</h2>
+        <p class="section-meta">常见黑话（宁王、药茅）启动时写入；雪球 $戏称(代码)$ 由系统 LLM 解析。正式名切半（宁德/英伟）不会入库。每行「别名=正式名」，正式名需在常用股票名表中。</p></div>
       </header>
       <textarea id="stock-aliases-input" class="form-control" rows="5" style="margin-top:12px;font-family:monospace;line-height:1.6" placeholder="宁王=宁德时代">${escapeHtml(aliasText)}</textarea>
     </section>
     <section class="section-panel">
       <header class="section-head">
-        <div><h2 class="section-title">LLM 标签维护</h2>
-        <p class="section-meta">扫描帖子识别黑话别名和 $标记$ 新股，去掉指数/ETF 误入的股票名，并清理过期标签。每日自动一次，也可立即执行。别名识别用推送设置里的 AI。</p></div>
+        <div><h2 class="section-title">标签维护</h2>
+        <p class="section-meta">合并种子黑话、解析 $标记$ 新股、去掉指数/ETF 误入的股票名，并清理过期标签与碎片别名。每日自动一次，也可立即执行。标记解析用服务器环境变量 LLM_API_KEY，与个人推送设置无关。</p></div>
       </header>
       <p class="section-meta" style="margin-top:8px" id="tag-maintain-meta">${escapeHtml(adminMaintainSummary(data))}</p>
-      ${data.maintain && data.maintain.llm_ready ? "" : `<p class="section-meta">未检测到 LLM，点运行只会清理误标；要识别别名请到「推送设置 → AI 摘要」配置。</p>`}
+      ${data.maintain && data.maintain.llm_ready ? "" : `<p class="section-meta">未检测到系统 LLM（环境变量 LLM_API_KEY）。点运行仍会合并种子、清碎片和误标，但不会解析新的 $标记$。</p>`}
       <div class="toolbar" style="margin-top:12px">
         <button class="btn-normal" onclick="adminMaintainTags('pending')">维护并回填待打标</button>
         <button class="btn-ghost" onclick="adminMaintainTags('none')">仅维护词表</button>
@@ -6449,10 +6449,16 @@ function adminMaintainSummary(data) {
   const last = data && data.maintain && data.maintain.last;
   if (!last || !last.at) return "尚未执行过";
   const parts = [`上次 ${last.at}`];
+  if (last.llm_model) parts.push(String(last.llm_model));
+  if (last.llm_used) parts.push("LLM 已返回");
   const aliases = last.added_aliases || [];
   const names = last.added_stock_names || [];
   const removed = last.removed_stock_names || [];
+  const purged = last.purged_aliases || [];
+  const seeded = last.seeded_aliases || [];
   if (aliases.length) parts.push(`新增别名 ${aliases.length}`);
+  if (seeded.length) parts.push(`种子 ${seeded.length}`);
+  if (purged.length) parts.push(`清除碎片 ${purged.length}`);
   if (names.length) parts.push(`新增股票 ${names.length}`);
   if (removed.length) parts.push(`移除非个股 ${removed.length}`);
   if (last.cleaned) parts.push(`清理 ${last.cleaned} 条`);
@@ -6466,16 +6472,20 @@ function formatMaintainResult(data) {
   const aliases = data.added_aliases || [];
   const names = data.added_stock_names || [];
   const removed = data.removed_stock_names || [];
+  const purged = data.purged_aliases || [];
   if (aliases.length) {
     bits.push("新增别名 " + aliases.map((a) => `${a.alias}→${a.stock}`).join("、"));
   } else {
     bits.push("无新别名");
   }
+  if (purged.length) bits.push("清除碎片 " + purged.map((a) => a.alias).join("、"));
   if (names.length) bits.push("新增股票 " + names.join("、"));
   if (removed.length) bits.push("移除 " + removed.join("、"));
+  if (data.llm_used) bits.push("LLM 已返回");
+  else if (data.error) bits.push("识别异常：" + data.error);
   if (data.cleaned) bits.push(`清理误标 ${data.cleaned} 条`);
   if (data.backfill) bits.push(`回填 ${data.backfill.processed} 条，其中 ${data.backfill.tagged} 条有标签`);
-  if (data.error) bits.push("识别异常：" + data.error);
+  if (data.error && data.llm_used) bits.push("识别异常：" + data.error);
   return bits.join("；");
 }
 

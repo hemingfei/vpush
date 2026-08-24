@@ -1,7 +1,7 @@
-"""可选 LLM 摘要：把一批动态用 OpenAI 兼容接口生成中文要点 / 每日综述。
+"""可选 LLM：站点任务用环境变量；用户摘要只用该用户自己的 key。
 
 设计要点：
-- 默认关闭：未配置 LLM_API_KEY（或 config.llm.api_key）时不生效，推送管线零变化；
+- 用户未自配时不调模型，推送走普通摘要；
 - 失败静默降级：任何异常只记日志并返回 None，调用方回退原逻辑；
 - 只传帖文标题/大V/平台/摘要，不传用户隐私字段。
 """
@@ -32,7 +32,32 @@ def _config_values(llm_config):
     return api_key, api_base, getattr(llm_config, "model", "") or "gpt-4o-mini"
 
 
-def _chat(llm_config, messages, max_tokens, client=None, temperature=0.3, attempts: int = 2) -> str | None:
+def _message_text(message: dict) -> str:
+    """取出模型正文；thinking 模型常把结果放在 reasoning_content。"""
+    content = (message or {}).get("content")
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                parts.append(str(block.get("text") or ""))
+            elif isinstance(block, str):
+                parts.append(block)
+        content = "".join(parts)
+    text = str(content or "").strip()
+    if text:
+        return text
+    return str((message or {}).get("reasoning_content") or "").strip()
+
+
+def _chat(
+    llm_config,
+    messages,
+    max_tokens,
+    client=None,
+    temperature=0.3,
+    attempts: int = 2,
+    response_format=None,
+) -> str | None:
     """OpenAI 兼容 chat/completions；未配置或失败返回 None。"""
     values = _config_values(llm_config)
     if values is None:
@@ -44,26 +69,30 @@ def _chat(llm_config, messages, max_tokens, client=None, temperature=0.3, attemp
     client = client or httpx.Client(timeout=60)
     try:
         last_err: Exception | None = None
+        use_format = response_format
         for attempt in range(attempts):
             try:
+                payload = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+                if use_format:
+                    payload["response_format"] = use_format
                 resp = client.post(
                     f"{api_base}/chat/completions",
                     headers={"Authorization": f"Bearer {api_key}"},
-                    json={
-                        "model": model,
-                        "messages": messages,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                    },
+                    json=payload,
                 )
+                if resp.status_code == 400 and use_format:
+                    use_format = None
+                    raise _RetryableError("LLM 不支持 response_format")
                 if resp.status_code == 429 or resp.status_code >= 500:
                     raise _RetryableError(f"LLM HTTP {resp.status_code}")
                 resp.raise_for_status()
-                text = (
-                    (resp.json().get("choices") or [{}])[0]
-                    .get("message", {})
-                    .get("content", "")
-                    .strip()
+                text = _message_text(
+                    ((resp.json().get("choices") or [{}])[0].get("message")) or {}
                 )
                 if not text:
                     raise _RetryableError("LLM 返回空")
@@ -287,7 +316,7 @@ def summarize_daily(posts, llm_config=None, client=None) -> DailySummary | None:
             {"role": "system", "content": DAILY_SUMMARY_SYSTEM_PROMPT},
             {"role": "user", "content": f"共 {len(posts)} 条动态，请整理成每日综述：\n{content[:12000]}"},
         ],
-        16000,
+        4000,
         client=client,
     )
     return _parse_daily_summary(text or "", len(posts))
@@ -326,10 +355,11 @@ def suggest_stock_aliases(candidates, known_stocks, llm_config=None, client=None
                 ),
             },
         ],
-        8000,
+        2000,
         client=client,
         temperature=0,
         attempts=1,
+        response_format={"type": "json_object"},
     )
     if not text:
         return []
@@ -391,10 +421,11 @@ def resolve_stock_marks(marks, llm_config=None, client=None) -> list[dict]:
                 + "\n".join(f"{name}({code})" for name, code in marks),
             },
         ],
-        8000,
+        2000,
         client=client,
         temperature=0,
         attempts=1,
+        response_format={"type": "json_object"},
     )
     if not text:
         return []

@@ -459,6 +459,27 @@ def test_default_tag_rules_cover_market_topics():
     assert all(r.get("keywords") for r in DEFAULT_TAG_RULES)
 
 
+def test_merge_default_stock_aliases_seeds_and_purges(tmp_path):
+    from app.db import DB
+
+    db = DB(str(tmp_path / "alias.db"))
+    db.set_stock_aliases(
+        [
+            {"alias": "宁德", "stock": "宁德时代"},
+            {"alias": "涂改液", "stock": "五粮液"},
+        ]
+    )
+    result = db.merge_default_stock_aliases()
+    aliases = {a["alias"]: a["stock"] for a in db.get_stock_aliases()}
+    assert aliases["涂改液"] == "五粮液"
+    assert aliases["宁王"] == "宁德时代"
+    assert aliases["药茅"] == "恒瑞医药"
+    assert "宁德" not in aliases
+    assert any(a["alias"] == "宁德" for a in result["purged"])
+    assert {a["alias"] for a in result["seeded"]} == {"宁王", "药茅"}
+    db.close()
+
+
 def test_merge_default_tag_vocabulary_adds_missing_keeps_custom(tmp_path):
     from app.db import DEFAULT_TAG_RULES, DB
 
