@@ -1284,16 +1284,25 @@ def test_timeline_live_source_is_platform_pill():
     assert '.live-item[data-score="3"]' in css
 
 
-def test_timeline_pills_use_equal_dynamic_grid_tracks():
-    """时间线筛选按钮按可见数量等宽，文字长度不能改变单个按钮宽度。"""
+def test_timeline_pills_stay_content_sized():
+    """桌面筛选胶囊按内容收缩，禁止等宽拉伸。"""
     render = _fn_body("renderTimeline")
     css = STYLE_CSS.read_text()
-    assert 'style="--tl-pill-count:${tlPlazaEntries().length + 1}"' in render
-    assert "grid-template-columns: repeat(var(--tl-pill-count" in css
-    assert ".tl-pill {" in css and "width: 100%" in css
-    assert "min-width: 0" in css
+    assert "--tl-pill-count" not in render
+    pills = re.search(r"\.tl-pills\s*\{([^}]*)\}", css)
+    assert pills and "display: flex" in pills.group(1)
+    assert "grid-template-columns: repeat(var(--tl-pill-count" not in css
+    assert not re.search(r"\.tl-pill \{ width: 100%;", css)
 
 
+def test_leaving_live_mode_rerenders_timeline_shell():
+    """从快讯点回平台必须重绘时间线壳层，否则宽屏侧栏不会恢复。"""
+    pick = _fn_body("tlPickPlatform")
+    assert "renderTimeline(routeRenderSeq)" in pick
+    assert "isLiveTimeline()" in pick
+
+
+def test_live_feed_high_priority_text_is_red_and_not_linked():
     """重点快讯的时间、标题和正文统一标红，正文不作为链接。"""
     item = _fn_body("liveFeedItem")
     css = STYLE_CSS.read_text()
@@ -1385,8 +1394,8 @@ def test_channel_status_poll_skips_identical_and_restores_focus():
 def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
-    assert 'href="/style.css?v=172"' in html
-    assert 'src="/app.js?v=234"' in html
+    assert 'href="/style.css?v=173"' in html
+    assert 'src="/app.js?v=235"' in html
 
 
     html = (APP_JS.parent / "index.html").read_text()
