@@ -1415,20 +1415,27 @@ def test_live_toolbar_keeps_existing_filter_structure():
     assert "日期" not in head
 
 
-def test_live_feed_uses_scroll_loading_instead_of_more_button():
-    """快讯滚动到底部自动加载下一页，不再要求点击加载更多。"""
-    render = _fn_body("renderLiveFeed")
-    auto = _fn_body("startLiveAutoLoad")
-    stop = _fn_body("stopLiveAutoLoad")
+def test_timeline_feeds_use_scroll_loading_instead_of_more_button():
+    """快讯和其他动态源都在列表底部自动加载下一页，并显示加载状态。"""
+    src = APP_JS.read_text()
+    auto = _fn_body("startFeedAutoLoad")
+    stop = _fn_body("stopFeedAutoLoad")
     load_more = _fn_body("feedLoadMore")
-    assert 'id="live-load-sentinel"' in render
-    assert "startLiveAutoLoad()" in render
+    live_render = _fn_body("renderLiveFeed")
+    timeline_render = _fn_body("renderTimelineFeed")
+    assert 'id="feed-load-sentinel"' in live_render
+    assert 'id="feed-load-sentinel"' in timeline_render
+    assert "startFeedAutoLoad()" in live_render
+    assert "startFeedAutoLoad()" in timeline_render
     assert "IntersectionObserver" in auto
     assert 'rootMargin: "400px 0px"' in auto
     assert "feedLoadMore()" in auto
     assert "disconnect()" in stop
-    assert "stopLiveAutoLoad()" in load_more
-    assert 'onclick="feedLoadMore()"' not in render
+    assert "stopFeedAutoLoad()" in load_more
+    assert "正在加载更多" in load_more
+    assert 'onclick="feedLoadMore()"' not in live_render
+    assert 'onclick="timelineLoadMore()"' not in timeline_render
+    assert ".feed-load-spinner" in STYLE_CSS.read_text()
 
 
     """渠道勾选不能只看 users.feishu_*，否则个人机器人用户会看到「还没有绑定」。"""
@@ -1478,8 +1485,8 @@ def test_channel_status_poll_skips_identical_and_restores_focus():
 def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
-    assert 'href="/style.css?v=180"' in html
-    assert 'src="/app.js?v=243"' in html
+    assert 'href="/style.css?v=181"' in html
+    assert 'src="/app.js?v=244"' in html
 
 
 def test_register_placeholder_matches_username_min_length():

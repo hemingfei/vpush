@@ -1026,8 +1026,8 @@ let _livePendingLatestId = 0;
 let _liveSavedScrollY = 0;
 let _liveClockTimer = null;
 let _liveInflight = null;
-let _liveLoadObserver = null;
-let _liveLoadFallback = null;
+let _feedLoadObserver = null;
+let _feedLoadFallback = null;
 
 function isLiveTimeline() {
   return state.timelineSource === "live";
@@ -1959,9 +1959,15 @@ async function loadTimeline(reset = true, routeSeq, opts) {
 function feedLoadMore() {
   if (isLiveTimeline()) {
     if (_liveLoadingMore || !_liveHasMore) return;
-    stopLiveAutoLoad();
   } else if (_tlLoadingMore || !_tlHasMore) {
     return;
+  }
+  stopFeedAutoLoad();
+  const sentinel = $("#feed-load-sentinel");
+  if (sentinel) {
+    sentinel.classList.add("is-loading");
+    sentinel.setAttribute("aria-busy", "true");
+    sentinel.innerHTML = `<span class="feed-load-spinner" aria-hidden="true"></span><span>正在加载更多…</span>`;
   }
   loadTimeline(false, routeRenderSeq);
 }
@@ -2047,35 +2053,35 @@ function stopLiveClock() {
   if (_liveClockTimer) { clearInterval(_liveClockTimer); _liveClockTimer = null; }
 }
 
-function stopLiveAutoLoad() {
-  _liveLoadObserver?.disconnect();
-  _liveLoadObserver = null;
-  if (_liveLoadFallback) {
-    window.removeEventListener("scroll", _liveLoadFallback);
-    _liveLoadFallback = null;
+function stopFeedAutoLoad() {
+  _feedLoadObserver?.disconnect();
+  _feedLoadObserver = null;
+  if (_feedLoadFallback) {
+    window.removeEventListener("scroll", _feedLoadFallback);
+    _feedLoadFallback = null;
   }
 }
 
-function startLiveAutoLoad() {
-  stopLiveAutoLoad();
-  const sentinel = $("#live-load-sentinel");
-  if (!sentinel || !_liveHasMore) return;
-  const load = () => {
-    if (isLiveTimeline()) feedLoadMore();
-  };
+function startFeedAutoLoad() {
+  stopFeedAutoLoad();
+  const sentinel = $("#feed-load-sentinel");
+  const hasMore = isLiveTimeline() ? _liveHasMore : _tlHasMore;
+  if (!sentinel || !hasMore) return;
+  const load = () => feedLoadMore();
   if ("IntersectionObserver" in window) {
-    _liveLoadObserver = new IntersectionObserver((entries) => {
+    _feedLoadObserver = new IntersectionObserver((entries) => {
       if (entries.some((entry) => entry.isIntersecting)) load();
     }, { rootMargin: "400px 0px" });
-    _liveLoadObserver.observe(sentinel);
+    _feedLoadObserver.observe(sentinel);
     return;
   }
-  _liveLoadFallback = () => {
+  _feedLoadFallback = () => {
     if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 400) load();
   };
-  window.addEventListener("scroll", _liveLoadFallback, { passive: true });
-  _liveLoadFallback();
+  window.addEventListener("scroll", _feedLoadFallback, { passive: true });
+  _feedLoadFallback();
 }
+
 
 function liveFilteredPosts() {
   const q = (state.liveQ || "").trim().toLowerCase();
@@ -2129,7 +2135,7 @@ function renderLiveFeed() {
       <div class="live-feed">${list.map(liveFeedItem).join("")}</div>
     </div>`).join("");
   const footer = _liveHasMore && posts.length
-    ? `<div id="live-load-sentinel" class="tl-feed-more" aria-hidden="true"></div>`
+    ? `<div id="feed-load-sentinel" class="tl-feed-more" role="status" aria-live="polite"></div>`
     : (posts.length ? `<p class="muted tl-feed-end">已加载全部</p>` : "");
   const empty = allPosts.length
     ? emptyState("没有匹配的快讯")
@@ -2139,11 +2145,10 @@ function renderLiveFeed() {
     : empty;
   feed.innerHTML = attr;
   renderLiveRail();
-  startLiveAutoLoad();
+  startFeedAutoLoad();
 }
 
 function renderTimelineFeed() {
-  stopLiveAutoLoad();
   const feed = $("#feed");
   if (!feed) return;
   const posts = _tlPosts;
@@ -2163,7 +2168,7 @@ function renderTimelineFeed() {
       ${list.map(postCard).join("")}
     </div>`).join("");
   const footer = _tlHasMore
-    ? `<div class="toolbar tl-feed-more"><button class="btn-normal" onclick="timelineLoadMore()">加载更多</button></div>`
+    ? `<div id="feed-load-sentinel" class="tl-feed-more" role="status" aria-live="polite"></div>`
     : (posts.length ? `<p class="muted tl-feed-end">已加载全部</p>` : "");
   const hasFilter = state.timelineQ || state.timelinePlatform || state.timelineCategory || state.timelineTag;
   const emptyMsg = state.timelinePlatform === "zsxq"
@@ -2177,6 +2182,7 @@ function renderTimelineFeed() {
   feed.innerHTML = posts.length
     ? html + footer
     : emptyState(emptyMsg, emptyAction);
+  startFeedAutoLoad();
   tlSyncActiveChips();
 }
 

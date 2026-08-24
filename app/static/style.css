@@ -1823,8 +1823,31 @@ pre.content-cell { white-space: pre-wrap; overflow-wrap: break-word; min-width: 
 
 .empty { text-align: center; color: var(--color-text-muted); padding: 56px 20px; }
 .empty > div { margin-top: 18px; }
-.tl-feed-more { margin-top: 14px; justify-content: center; }
-.tl-feed-end { text-align: center; margin-top: 14px; }
+.tl-feed-more {
+  display: flex;
+  justify-content: center;
+  min-height: 34px;
+  gap: 8px;
+  margin-top: 14px;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+.feed-load-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--color-line);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: feed-load-spin .7s linear infinite;
+}
+@keyframes feed-load-spin { to { transform: rotate(360deg); } }
+.tl-feed-end {
+  margin-top: 14px;
+  padding: 8px 0 4px;
+  color: var(--color-text-faint);
+  font-size: var(--text-xs);
+  text-align: center;
+}
 .notice {
   background: var(--color-surface-accent);
   color: var(--color-accent-text);
