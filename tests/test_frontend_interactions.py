@@ -192,6 +192,35 @@ def test_timeline_pills_always_show_short_labels():
     assert ".tl-pill:focus-visible" in css
 
 
+def test_mobile_platform_swipe_switches_adjacent_tab():
+    """手机在列表上左右滑切相邻平台；胶囊条和按钮不抢手势；不循环。"""
+    src = APP_JS.read_text()
+    css = STYLE_CSS.read_text()
+    ignore = _fn_body("mobilePlatformSwipeIgnore")
+    ctx = _fn_body("mobilePlatformSwipeContext")
+    surface = _fn_body("mobilePlatformSwipeSurface")
+    adj = _fn_body("mobileSwipeAdjacent")
+    start = _fn_body("onPlatSwipeStart")
+    end = _fn_body("onPlatSwipeEnd")
+    assert "isMobileTimelineFilter()" in start
+    assert "surface" in start
+    assert 'return "timeline"' in surface
+    assert "tlPickPlatform" in ctx
+    assert "homePickMobilePlatform" in ctx
+    assert "switchMySubsPlatform" in ctx
+    assert "start.surface" in end
+    assert ".tl-pills" in ignore
+    assert ".bottom-nav" in ignore
+    assert ".post-images" in ignore
+    assert "idx + dir" in adj
+    assert "return null" in adj
+    assert "56" in end
+    assert "ensureMobilePlatformSwipe()" in _fn_body("renderBottomNav")
+    assert "touch-action: pan-x" in css
+    assert "touch-action: pan-y" in css
+    assert "-webkit-overflow-scrolling: touch" in css
+
+
 def test_timeline_filter_status_is_pills_only():
     """平台只由胶囊表达；漏斗里的视图/搜索/标签点亮筛选并写出 chip。"""
     chips = _fn_body("tlActiveChips")

@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.46";
+const APP_VERSION = "1.12.47";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"];
 const TL_PLATFORMS = PLATFORM_TABS.map((p) => [p, p ? PLATFORM_LABELS[p] : "全部"]);
@@ -408,6 +408,7 @@ function renderBottomNav(user) {
       <span class="bnav-icon">${t.icon}</span>
       <span class="bnav-label">${t.label}</span>
     </button>`).join("");
+  ensureMobilePlatformSwipe();
 }
 
 async function renderMore(seq) {
@@ -1104,6 +1105,74 @@ function plazaVisibleSet() {
 function tlPlazaEntries() {
   const vis = plazaVisibleSet();
   return TL_PLATFORMS.filter(([p]) => !p || vis.has(p));
+}
+
+let _platSwipe = null;
+
+function mobilePlatformSwipeIgnore(el) {
+  return !!el.closest("a, button, input, select, textarea, .tl-pills, .platform-tabs, .icon-badge-bar, .tl-filter-panel, .home-filter-content, .lightbox, .bottom-nav, .post-images");
+}
+
+function mobilePlatformSwipeSurface(el) {
+  if ($("#tl-feed-panel") && el.closest(".tl-main")) return "timeline";
+  if ($("#home-mobile-platforms") && ($("#kol-list")?.contains(el) || el.closest(".home-panel"))) return "home";
+  if ($("#mysubs-tabs") && $("#mysubs-list")?.contains(el)) return "mysubs";
+  return null;
+}
+
+function mobilePlatformSwipeContext(surface) {
+  if (surface === "timeline") return { current: () => state.timelinePlatform, apply: (p) => tlPickPlatform(p) };
+  if (surface === "home") return { current: () => state.platform, apply: (p) => homePickMobilePlatform(p) };
+  if (surface === "mysubs") return { current: () => state.mysubsPlatform, apply: (p) => switchMySubsPlatform(p) };
+  return null;
+}
+
+function mobileSwipeAdjacent(current, dir) {
+  const entries = tlPlazaEntries();
+  const idx = entries.findIndex(([p]) => p === current);
+  const next = idx + dir;
+  if (idx < 0 || next < 0 || next >= entries.length) return null;
+  return entries[next][0];
+}
+
+function onPlatSwipeStart(e) {
+  if (!isMobileTimelineFilter() || e.touches.length !== 1) {
+    _platSwipe = null;
+    return;
+  }
+  const t = e.target;
+  if (!(t instanceof Element) || mobilePlatformSwipeIgnore(t)) {
+    _platSwipe = null;
+    return;
+  }
+  const surface = mobilePlatformSwipeSurface(t);
+  if (!surface) {
+    _platSwipe = null;
+    return;
+  }
+  _platSwipe = { x: e.touches[0].clientX, y: e.touches[0].clientY, surface };
+}
+
+function onPlatSwipeEnd(e) {
+  if (!_platSwipe) return;
+  const start = _platSwipe;
+  _platSwipe = null;
+  if (!isMobileTimelineFilter()) return;
+  const dx = e.changedTouches[0].clientX - start.x;
+  const dy = e.changedTouches[0].clientY - start.y;
+  if (Math.abs(dx) < 56 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
+  const ctx = mobilePlatformSwipeContext(start.surface);
+  if (!ctx) return;
+  const next = mobileSwipeAdjacent(ctx.current(), dx < 0 ? 1 : -1);
+  if (next === null) return;
+  ctx.apply(next);
+}
+
+function ensureMobilePlatformSwipe() {
+  if (ensureMobilePlatformSwipe.bound) return;
+  ensureMobilePlatformSwipe.bound = true;
+  document.addEventListener("touchstart", onPlatSwipeStart, { passive: true });
+  document.addEventListener("touchend", onPlatSwipeEnd, { passive: true });
 }
 
 function ensurePlazaPlatformSelection() {
