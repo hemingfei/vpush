@@ -182,10 +182,12 @@ V Push 是值班台，不是内容社区，也不是营销落地页。界面服�
 
 顶栏高 56px，左右 24px；主列内边距 24px，窄屏 16px。内容铺满可用宽，正文可读性由帖文行宽上限管，不靠居中留白。区块间距约 18px，内部节奏走 spacing 2–5（8 / 12 / 16 / 20）。
 
-触控目标 42–44px。筛选条可横滑，不换行挤碎。
+触控目标 42–44px。桌面筛选是带字胶囊。手机（≤768px）平台/分类条是一行 7 格等宽图标角标，不是横滑 chip。
 
 ### Named Rules
 **The Scan Density Rule.** 密度优先。不为展示加空、不放大选中、不让控件跳跃。选中用 Duty Blue，尺寸不变。
+
+**The Mobile Badge Rule.** ≤768px 动态 / 广场 / 订阅的平台筛选必须是 `.icon-badge-bar`：7 等宽 44px 格，图标可见，短字 `display:none`，名称只在 `aria-label`。把角标改回带字胶囊即违规。
 
 ## Elevation & Depth
 
@@ -223,8 +225,9 @@ V Push 是值班台，不是内容社区，也不是营销落地页。界面服�
 - **Ghost:** Surface 底 + 强描边，Ink Strong，13px。Hover 加深描边，不填蓝。危险幽灵用 Danger 字与淡红边。
 
 ### Chips
-- **Style:** 胶囊，高 44px，Surface + 强描边，13px。
-- **State:** Hover 描边与字变 Duty Blue Text。Selected 实底 Duty Blue、白字。未选中平台图标可用品牌色；选中后图标反白。同一套语言用于动态筛选与首页平台条。
+- **Desktop:** 胶囊，高 44px，Surface + 强描边，13px，图标+短字。
+- **Mobile ≤768px:** 同一套控件收成角标：等宽格、只露图标、圆角改控件档（12px）。筛选/星标同样藏字。
+- **State:** Hover 描边与字变 Duty Blue Text。Selected 实底 Duty Blue、图标反白。
 
 ### Cards / Containers
 - **Corner Style:** 卡片圆角（20px）。
@@ -245,7 +248,7 @@ V Push 是值班台，不是内容社区，也不是营销落地页。界面服�
 - **Theme switcher:** 无边小图标钮，选中淡蓝底 + Duty Blue Text。
 
 ### Timeline filters (signature)
-最新动态的平台胶囊横排可扫。特别关注 / 次要大V 是描边切换，开态描边与字走 Duty Blue，不另起一套选中语言。筛选状态必须和列表一致：点选立刻改控件，请求失败则回滚或明示，不能 pill 已亮、列表仍是上一档。
+桌面：平台胶囊横排，图标+短字。手机：必须进 `.icon-badge-bar` 角标坞，与广场 / 订阅同一套。特别关注 / 次要大V 仍在漏斗里，开态走 Duty Blue。筛选状态必须和列表一致：点选立刻改控件，请求失败则回滚。列表左右滑可切相邻平台，不代替角标。
 
 ## Do's and Don'ts
 
@@ -262,3 +265,4 @@ V Push 是值班台，不是内容社区，也不是营销落地页。界面服�
 - **Don't** 用第二套强调色（紫、橙、渐变）表示「选中」。
 - **Don't** 同一筛选条件用三种控件各说一遍还不互相同步。
 - **Don't** 为了好看加大字号或留白，把值班台做成展示页。
+- **Don't** 把手机平台分类改成带字胶囊或横滑 chip。角标是产品约定，不是未完成态。

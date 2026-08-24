@@ -2048,7 +2048,7 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   .tl-feed-panel,
   #kol-list,
   #mysubs-list { touch-action: pan-y; }
-  /* 订阅/广场：一行等宽图标角标。时间线自己横滑带字胶囊，不进这套坞 */
+  /* 动态/订阅/广场：一行等宽图标角标（全部+5平台+筛选/星标）。字只留 aria，禁止改回带字胶囊。 */
   .icon-badge-bar {
     display: grid;
     grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -2072,16 +2072,6 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   .icon-badge-bar .tl-actions button { font-size: 0; gap: 0; }
   .icon-badge-bar .funnel-icon,
   .icon-badge-bar .star-icon { width: 20px; height: 20px; }
-  .tl-filterbar-top {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    min-width: 0;
-  }
-  .tl-filterbar-top .tl-pills { flex: 1; min-width: 0; }
-  .tl-filterbar-top .tl-pill { flex-shrink: 0; }
-  .tl-filterbar-top .tl-actions { flex-shrink: 0; }
   .home-filter-content[hidden] { display: none; }
   .home-head .icon-badge-bar { margin-top: 10px; }
   .tl-new-badge-btn { min-height: 44px; overflow: hidden; }

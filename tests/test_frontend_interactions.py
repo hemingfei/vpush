@@ -299,16 +299,15 @@ def test_mobile_platform_filter_keeps_hidden_state_and_applies_immediately():
 
 
 def test_mobile_platform_filter_is_five_equal_44px_targets():
-    """旧图标宫格已删；时间线胶囊带短字 44px，窄屏横滑不进角标坞。"""
+    """手机分类必须走角标坞；桌面胶囊仍 44px 带短字。"""
     css = STYLE_CSS.read_text()
     render = _fn_body("renderTimeline")
     mobile = _media_block(css, "@media (max-width: 768px)")
     assert ".tl-mobile-platform" not in css
     pill = re.search(r"\.tl-pill\s*\{([^}]*)\}", css)
     assert pill and "44px" in pill.group(1)
-    assert 'class="tl-filterbar-top icon-badge-bar"' not in render
-    assert ".tl-filterbar-top .tl-pill span { display: none" not in css
-    assert "flex-shrink: 0" in mobile
+    assert 'class="tl-filterbar-top icon-badge-bar"' in render
+    assert ".icon-badge-bar .tl-pill span" in css and "display: none" in css
     assert "display: none" not in re.search(r"\.topbar-title h1\s*\{([^}]*)\}", mobile).group(1)
     assert "clip: rect(0, 0, 0, 0)" in re.search(r"\.topbar-title h1\s*\{([^}]*)\}", mobile).group(1)
 
@@ -371,6 +370,16 @@ def test_platform_tabs_always_show_short_labels():
     assert ".platform-tab:focus-visible" in css
 
 
+def test_product_spec_locks_mobile_platform_badges():
+    """产品规范：手机分类条必须是角标，禁止带字胶囊。"""
+    product = (APP_JS.parent.parent.parent / "PRODUCT.md").read_text()
+    design = (APP_JS.parent.parent.parent / "DESIGN.md").read_text()
+    assert "必须用一行等宽图标角标" in product
+    assert "禁止改成图标+短字胶囊" in product
+    assert "The Mobile Badge Rule" in design
+    assert "把角标改回带字胶囊即违规" in design
+
+
 def test_mobile_mysubs_filter_is_seven_equal_44px_targets():
     """订阅/动态移动端：6 平台 + 星标/筛选共 7 等宽 44px 角标，文字仅 aria。"""
     css = STYLE_CSS.read_text()
@@ -382,10 +391,8 @@ def test_mobile_mysubs_filter_is_seven_equal_44px_targets():
     assert ".icon-badge-bar .tl-pill span" in css and "display: none" in css
     assert ".icon-badge-bar > .fav-toggle" in css and "font-size: 0" in css
     assert 'class="icon-badge-bar"' in _fn_body("renderHome")
-    assert 'class="tl-filterbar-top icon-badge-bar"' not in _fn_body("renderTimeline")
-    assert 'class="tl-filterbar-top"' in _fn_body("renderTimeline")
+    assert 'class="tl-filterbar-top icon-badge-bar"' in _fn_body("renderTimeline")
     assert "repeat(7, minmax(0, 1fr))" in css
-    assert ".tl-filterbar-top .tl-pill { flex-shrink: 0; }" in css
     # 不再把筛选条竖着堆成两行
     mobile = re.search(r"@media \(max-width: 768px\) \{(.*)\}\s*/\* ----------", css, re.DOTALL)
     body = mobile.group(1) if mobile else css
