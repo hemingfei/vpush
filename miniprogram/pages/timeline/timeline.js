@@ -5,6 +5,9 @@ Page({
   data: { posts: [], loading: true, currentTag: "" },
 
   onShow() {
+    if (this._loadedAt && Date.now() - this._loadedAt < 30000 && this.data.posts && this.data.posts.length) {
+      return;
+    }
     this.load();
   },
 
@@ -23,6 +26,7 @@ Page({
         avatar_url: resolveAvatar(p.avatar_url),
         tags: Array.isArray(p.tags) ? p.tags : [],
       }));
+      this._loadedAt = Date.now();
       this.setData({ posts, loading: false });
     } catch (err) {
       this.setData({ loading: false });

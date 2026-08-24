@@ -93,12 +93,19 @@ def public_b64url_from_pem(pem: str) -> str:
     return _public_b64url(_load_private_pem(pem).public_key())
 
 
+_VAPID_CACHE: dict[str, tuple[str, str]] = {}
+
+
 def ensure_vapid_keys(db=None, config=None) -> tuple[str, str]:
     """返回 (private_pem, public_b64url)。配置优先，否则读/写入 settings。"""
     cfg_priv = (getattr(config, "vapid_private_key", "") or "").strip() if config else ""
     cfg_pub = (getattr(config, "vapid_public_key", "") or "").strip() if config else ""
     if cfg_priv:
         return cfg_priv, cfg_pub or public_b64url_from_pem(cfg_priv)
+    db_path = getattr(db, "path", "") if db is not None else ""
+    cache_key = db_path if db_path and db_path != ":memory:" else ""
+    if cache_key and cache_key in _VAPID_CACHE:
+        return _VAPID_CACHE[cache_key]
     if db is not None:
         stored_priv = (db.get_setting(VAPID_PRIV_SETTING) or "").strip()
         stored_pub = (db.get_setting(VAPID_PUB_SETTING) or "").strip()
@@ -106,11 +113,17 @@ def ensure_vapid_keys(db=None, config=None) -> tuple[str, str]:
             pub = stored_pub or public_b64url_from_pem(stored_priv)
             if not stored_pub:
                 db.set_setting(VAPID_PUB_SETTING, pub)
-            return stored_priv, pub
+            pair = (stored_priv, pub)
+            if cache_key:
+                _VAPID_CACHE[cache_key] = pair
+            return pair
         pem, pub = generate_vapid_keys()
         db.set_setting(VAPID_PRIV_SETTING, pem)
         db.set_setting(VAPID_PUB_SETTING, pub)
-        return pem, pub
+        pair = (pem, pub)
+        if cache_key:
+            _VAPID_CACHE[cache_key] = pair
+        return pair
     return generate_vapid_keys()
 
 

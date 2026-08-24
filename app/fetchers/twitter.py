@@ -491,8 +491,18 @@ class TwitterFetcher(Fetcher):
             if not tweet_id:
                 continue
             text = (legacy.get("full_text") or legacy.get("text") or "").strip()
+            images = extract_twitter_images(legacy)
+            media = (legacy.get("extended_entities") or {}).get("media") or []
+            has_video = any(
+                (m.get("type") or "") in ("video", "animated_gif") for m in media
+            )
             if not text:
-                continue
+                if images:
+                    text = "图片"
+                elif has_video:
+                    text = "视频"
+                else:
+                    continue
             # 长文帖（NoteTweet/article）：legacy.full_text 只是摘要（实测 200 字截断），
             # 完整正文在 note_tweet.note_tweet_results.result.text（同响应，最长 2500+ 字）
             note = (
@@ -516,7 +526,7 @@ class TwitterFetcher(Fetcher):
                         str(legacy.get("created_at") or "")
                     ),
                     post_type=post_type,
-                    images=extract_twitter_images(legacy),
+                    images=images,
                 )
             )
         if user.get("avatar") and self.db is not None:

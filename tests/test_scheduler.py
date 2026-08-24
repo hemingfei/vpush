@@ -3694,7 +3694,7 @@ def test_notify_digest_dnd_keyword_penetration(monkeypatch):
 
 
 def test_digest_partial_success_does_not_retry_posts(monkeypatch):
-    """AI 摘要已发出、digest 卡片失败时，不得把帖子逐条入重试队列。"""
+    """digest 卡片没发出时，帖子入重试；仅 AI 要点成功不算送达。"""
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
     uid = db.add_user("u", "h", telegram_chat_id="111")
@@ -3726,7 +3726,7 @@ def test_digest_partial_success_does_not_retry_posts(monkeypatch):
     notify_digest_subscribers(
         db, [post], db.get_kol(kid), ncfg, notifiers=[], retry_queue=retry_queue, llm_config=llm_cfg
     )
-    assert retry_queue.calls == []
+    assert retry_queue.calls == [("telegram", uid)]
 
 
 def test_notify_subscribers_bark_channel(monkeypatch):

@@ -2154,6 +2154,7 @@ def test_catalog_sorted_by_priority_and_activity():
     priority_id = db.add_kol("xueqiu", "优先P", "2", priority=True)
     old_post_id = db.insert_post("xueqiu", normal_id, "p1", "t", "c", "u", "")
     db._execute("UPDATE posts SET fetched_at = datetime('now', '-1 day') WHERE id = ?", (old_post_id,))
+    db._execute("UPDATE kols SET last_post_at = datetime('now', '-1 day') WHERE id = ?", (normal_id,))
     active_id = db.add_kol("xueqiu", "活跃B", "3")
     db.insert_post("xueqiu", active_id, "p2", "t2", "c2", "u", "")
 

@@ -11,6 +11,9 @@ Page({
   data: { kols: [], shown: [], view: "all", subTypes: SUB_TYPES, loading: true },
 
   onShow() {
+    if (this._loadedAt && Date.now() - this._loadedAt < 30000 && this.data.kols && this.data.kols.length) {
+      return;
+    }
     this.load();
   },
 
@@ -28,6 +31,7 @@ Page({
         favorite: !!k.favorite,
         secondary: !!k.secondary,
       }));
+      this._loadedAt = Date.now();
       this.setData({ kols, shown: this._filter(kols, this.data.view), loading: false });
     } catch (err) {
       this.setData({ loading: false });

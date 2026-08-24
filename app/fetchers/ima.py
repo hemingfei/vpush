@@ -20,7 +20,7 @@ import time
 
 import httpx
 
-from .base import Fetcher, Post, format_published_at
+from .base import Fetcher, Post, ThreadLocalClient, format_published_at
 from .ima_inspect import (
     TEXT_LIKE_TYPES,
     classify_item,
@@ -106,8 +106,12 @@ class ImaFetcher(Fetcher):
     def __init__(self, source_config=None, db=None, client=None):
         super().__init__(source_config)
         self.db = db
-        # httpx.Client 线程安全，多线程轮询直接共享一个
-        self._http = client or httpx.Client(timeout=30)
+        # httpx.Client 非线程安全：poll_once 同平台最多 2 并发，每线程懒建一个
+        self._clients = ThreadLocalClient(lambda: httpx.Client(timeout=30), injected=client)
+
+    @property
+    def http(self):
+        return self._clients.get()
 
     # ---- 凭证与请求 ----
 
@@ -145,7 +149,7 @@ class ImaFetcher(Fetcher):
             raise RuntimeError("未配置 ima OpenAPI 凭证（IMA_OPENAPI_CLIENTID / IMA_OPENAPI_APIKEY）")
         self._pause()
         try:
-            resp = self._http.post(f"{OPENAPI_BASE}/{method}", headers=headers, json=body)
+            resp = self.http.post(f"{OPENAPI_BASE}/{method}", headers=headers, json=body)
         except httpx.TransportError as exc:
             raise RuntimeError(f"ima OpenAPI 网络错误 {method}: {exc}") from exc
         try:
@@ -168,7 +172,7 @@ class ImaFetcher(Fetcher):
         """网页列表接口（Cookie 模式）。返回 payload（code 字段在里层或顶层）。"""
         self._pause()
         try:
-            resp = self._http.post(
+            resp = self.http.post(
                 WEB_LIST,
                 headers=self._web_headers(cookie),
                 json={
@@ -237,7 +241,7 @@ class ImaFetcher(Fetcher):
         if not url:
             return ""
         try:
-            resp = self._http.get(url, headers=headers, timeout=30)
+            resp = self.http.get(url, headers=headers, timeout=30)
         except httpx.TransportError as exc:
             logger.info("ima 原文下载网络错误 media=%s err=%s", media_id[:30], exc)
             return ""
@@ -291,8 +295,8 @@ class ImaFetcher(Fetcher):
         ):
             try:
                 known = self.db.post_exists(self.platform, media_id)
-            except Exception:  # noqa: BLE001 - 查询失败不阻塞本轮抓取
-                known = True
+            except Exception:  # noqa: BLE001 - 查询失败当未知，仍尝试拉全文
+                known = False
             if not known:
                 full = self._full_text(media_id)
                 if full:

@@ -125,12 +125,58 @@ def _in_x_fallback(db: DB) -> bool:
     return not direct_ok or fallback_at > direct_ok
 
 
+def _is_platform_wide_error(exc: BaseException) -> bool:
+    """只有 cookie/WAF/登录/代理池枯竭才停整平台；单大V超时不连坐。"""
+    from .proxy import ProxyUnavailable
+
+    if isinstance(exc, ProxyUnavailable):
+        return True
+    text = str(exc)
+    if any(token in text for token in ("cookie", "WAF", "反爬", "登录")):
+        return True
+    return "login" in text.lower()
+
+
+def _load_poll_tuning(
+    db: DB, interval_seconds: int, priority_interval_seconds: int
+) -> dict:
+    """一轮抓取只读一次后台 config_*，避免每个大V反复 get_setting。"""
+    return {
+        "interval": interval_seconds,
+        "priority_interval": priority_interval_seconds,
+        "combination_base": _polling_setting(
+            db, "config_combination_base_seconds", COMBINATION_BASE_SECONDS, positive=True
+        ),
+        "combination_cap": _polling_setting(
+            db, "config_combination_idle_cap_seconds", COMBINATION_IDLE_CAP_SECONDS, positive=True
+        ),
+        "priority_cap": _polling_setting(
+            db, "config_priority_idle_cap_seconds", PRIORITY_IDLE_CAP_SECONDS, positive=True
+        ),
+        "secondary_base": _polling_setting(
+            db, "config_secondary_base_seconds", SECONDARY_BASE_SECONDS, positive=True
+        ),
+        "secondary_cap": _polling_setting(
+            db, "config_secondary_idle_cap_seconds", SECONDARY_IDLE_CAP_SECONDS, positive=True
+        ),
+        "normal_cap": _polling_setting(
+            db, "config_normal_idle_cap_seconds", NORMAL_IDLE_CAP_SECONDS, positive=True
+        ),
+        "x_fallback_cap": _polling_setting(
+            db, "config_x_fallback_cap_seconds", X_FALLBACK_CAP_SECONDS, positive=True
+        ),
+        "x_fallback": _in_x_fallback(db),
+        "translate_twitter": _polling_bool(db, "config_translate_twitter_content", False),
+    }
+
+
 def _effective_interval(
     db: DB,
     kol: dict,
     state: PlatformState,
     interval_seconds: int,
     priority_interval_seconds: int,
+    tuning: dict | None = None,
 ) -> int:
     """单个大V本轮的有效抓取间隔。
 
@@ -138,25 +184,25 @@ def _effective_interval(
     封顶）→ 有效间隔；平台为 X 且直抓失败时再 ×4（封顶），避免空打已挂接口。
     各档位数值可在后台「数据源」页调参。
     """
+    if tuning is None and db is not None:
+        tuning = _load_poll_tuning(db, interval_seconds, priority_interval_seconds)
     if kol["platform"] == "combination":
-        base = _polling_setting(db, "config_combination_base_seconds", COMBINATION_BASE_SECONDS, positive=True)
-        cap = _polling_setting(
-            db, "config_combination_idle_cap_seconds", COMBINATION_IDLE_CAP_SECONDS, positive=True
-        )
+        base = (tuning or {}).get("combination_base") or COMBINATION_BASE_SECONDS
+        cap = (tuning or {}).get("combination_cap") or COMBINATION_IDLE_CAP_SECONDS
     else:
         if kol.get("priority"):
             base = priority_interval_seconds
-            cap = _polling_setting(db, "config_priority_idle_cap_seconds", PRIORITY_IDLE_CAP_SECONDS, positive=True)
+            cap = (tuning or {}).get("priority_cap") or PRIORITY_IDLE_CAP_SECONDS
         elif kol.get("secondary"):
-            base = _polling_setting(db, "config_secondary_base_seconds", SECONDARY_BASE_SECONDS, positive=True)
-            cap = _polling_setting(db, "config_secondary_idle_cap_seconds", SECONDARY_IDLE_CAP_SECONDS, positive=True)
+            base = (tuning or {}).get("secondary_base") or SECONDARY_BASE_SECONDS
+            cap = (tuning or {}).get("secondary_cap") or SECONDARY_IDLE_CAP_SECONDS
         else:
             base = interval_seconds
-            cap = _polling_setting(db, "config_normal_idle_cap_seconds", NORMAL_IDLE_CAP_SECONDS, positive=True)
+            cap = (tuning or {}).get("normal_cap") or NORMAL_IDLE_CAP_SECONDS
     empty = min(state.empty_rounds.get(kol["id"], 0), 6)
     effective = min(base * (2**empty), cap)
-    if kol["platform"] == "twitter" and db is not None and _in_x_fallback(db):
-        x_cap = _polling_setting(db, "config_x_fallback_cap_seconds", X_FALLBACK_CAP_SECONDS, positive=True)
+    if kol["platform"] == "twitter" and (tuning or {}).get("x_fallback"):
+        x_cap = (tuning or {}).get("x_fallback_cap") or X_FALLBACK_CAP_SECONDS
         effective = min(effective * 4, x_cap)  # 直抓失败期放慢，避免空打已挂的接口
     return effective
 
@@ -371,6 +417,7 @@ class PlatformState:
     def __init__(self):
         self.fail_count = 0
         self.skip_until = 0.0
+        self.kol_skip_until: dict[int, float] = {}
         self.last_fetched: dict[int, float] = {}
         self.empty_rounds: dict[int, int] = {}  # 无新帖连续空轮数，驱动自适应降频
         self.kol_fails: dict[int, int] = {}
@@ -638,14 +685,16 @@ def notify_subscribers(
     owns_client = client is None
     client = client or httpx.Client(timeout=15)
     try:
-        for user in db.subscribers_of_kol(post.kol_id):
+        subscribers = db.subscribers_of_kol(post.kol_id)
+        keywords_by_user = db.get_users_keywords([u["id"] for u in subscribers])
+        for user in subscribers:
             sub_type = user.get("subscribe_type") or "post"
             if not _sub_type_matches(sub_type, post.post_type):
                 continue  # 订阅类型不覆盖该动态（帖子/回复分订）
             favorite = bool(user.get("favorite"))
             if only_favorites and not favorite:
                 continue
-            keywords = db.get_user_keywords(user["id"])
+            keywords = keywords_by_user.get(user["id"], [])
             keyword_hit = _keyword_hit(keywords, post)
             if (
                 dnd_buffer is not None
@@ -699,6 +748,10 @@ def poll_once(
     """执行一轮：并发抓取启用 KOL → 去重 → 推送。"""
     states = states if states is not None else {}
     now = time.monotonic()
+    tuning = _load_poll_tuning(db, interval_seconds, priority_interval_seconds)
+    tag_rules = db.get_tag_vocabulary()
+    stock_names = db.get_stock_names()
+    stock_aliases = db.get_stock_aliases()
     # 无人订阅的大V不抓取：没有订阅者就没有推送/阅读对象，白耗抓取配额。
     # 新上架的大V需要先有用户订阅（订阅广场/组合订阅）才开始抓取。
     subscribed_ids = db.kol_ids_with_subscribers()
@@ -714,9 +767,11 @@ def poll_once(
         state = states.setdefault(kol["platform"], PlatformState())
         if now < state.skip_until:
             continue
+        if now < state.kol_skip_until.get(kol["id"], 0):
+            continue
         # 自适应间隔：优先大V更短，空轮拉伸，X 直抓失败期间加倍
         effective = _effective_interval(
-            db, kol, state, interval_seconds, priority_interval_seconds
+            db, kol, state, interval_seconds, priority_interval_seconds, tuning
         )
         # 从未抓取过的大V首轮立即抓取（monotonic 基准在容器启动早期可能小于间隔，
         # 用「从未抓取」标记判断而不是拿 0 当基准，避免首轮被误跳过）
@@ -735,10 +790,10 @@ def poll_once(
 
     import httpx
 
-    client = httpx.Client(timeout=15)
-    try:
-        def _worker(job):
-            kol, fetcher, state = job
+    def _worker(job):
+        kol, fetcher, state = job
+        client = httpx.Client(timeout=15)
+        try:
             with platform_sem[kol["platform"]]:
                 _fetch_kol_once(
                     db,
@@ -760,41 +815,45 @@ def poll_once(
                     secondary_buffer,
                     round_stats,
                     llm_config,
+                    tuning,
+                    tag_rules,
+                    stock_names,
+                    stock_aliases,
                 )
+        finally:
+            client.close()
 
-        with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as ex:
-            list(ex.map(_worker, jobs))
-        for platform, st in round_stats.items():
-            if st["ok"]:
-                db.add_source_event(
-                    platform,
-                    "ok",
-                    f"ok={st['ok']} fail={st['fail']}",
-                    ok_count=st["ok"],
-                )
-            if st["fail"]:
-                db.add_source_event(
-                    platform,
-                    "fail",
-                    f"fail={st['fail']} ok={st['ok']} kol={st['kol']} err={st['err'][:200]}",
-                    fail_count=st["fail"],
-                )
-            # 健康最终状态按整轮聚合写入（worker 内不再写），并发顺序不再影响结果
-            if st["fail"]:
-                db.set_setting(SOURCE_ERR_KEY.format(platform=platform), st["err"][:300])
-                db.set_setting(SOURCE_FAILS_KEY.format(platform=platform), str(st["fail"]))
-                db.set_setting(
-                    f"source_next_retry_at_{platform}",
-                    str(int(time.time()) + min(30 * (2 ** (st["fail"] - 1)), 600)),
-                )
-            elif st["ok"]:
-                db.set_setting(SOURCE_OK_KEY.format(platform=platform), str(int(time.time())))
-                db.set_setting(SOURCE_ERR_KEY.format(platform=platform), "")
-                db.set_setting(SOURCE_FAILS_KEY.format(platform=platform), "0")
-                # 整轮无失败才清掉重试倒计时；有失败保留，避免并发顺序导致状态抖动
-                db.set_setting(f"source_next_retry_at_{platform}", "")
-    finally:
-        client.close()
+    with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as ex:
+        list(ex.map(_worker, jobs))
+    for platform, st in round_stats.items():
+        if st["ok"]:
+            db.add_source_event(
+                platform,
+                "ok",
+                f"ok={st['ok']} fail={st['fail']}",
+                ok_count=st["ok"],
+            )
+        if st["fail"]:
+            db.add_source_event(
+                platform,
+                "fail",
+                f"fail={st['fail']} ok={st['ok']} kol={st['kol']} err={st['err'][:200]}",
+                fail_count=st["fail"],
+            )
+        # 健康最终状态按整轮聚合写入（worker 内不再写），并发顺序不再影响结果
+        if st["fail"]:
+            db.set_setting(SOURCE_ERR_KEY.format(platform=platform), st["err"][:300])
+            db.set_setting(SOURCE_FAILS_KEY.format(platform=platform), str(st["fail"]))
+            db.set_setting(
+                f"source_next_retry_at_{platform}",
+                str(int(time.time()) + min(30 * (2 ** (st["fail"] - 1)), 600)),
+            )
+        elif st["ok"]:
+            db.set_setting(SOURCE_OK_KEY.format(platform=platform), str(int(time.time())))
+            db.set_setting(SOURCE_ERR_KEY.format(platform=platform), "")
+            db.set_setting(SOURCE_FAILS_KEY.format(platform=platform), "0")
+            # 整轮无失败才清掉重试倒计时；有失败保留，避免并发顺序导致状态抖动
+            db.set_setting(f"source_next_retry_at_{platform}", "")
     logger.info("轮询完成：%d 个大V，耗时 %.0fms", len(jobs), (time.monotonic() - now) * 1000)
     maybe_alert_x_fallback(db, notifiers)
 
@@ -819,19 +878,20 @@ def _fetch_kol_once(
     secondary_buffer: dict[int, list[Post]] | None = None,
     round_stats: dict[str, dict] | None = None,
     llm_config=None,
+    tuning: dict | None = None,
+    tag_rules=None,
+    stock_names=None,
+    stock_aliases=None,
 ) -> None:
     """并发 worker：抓取单个大V并处理新帖（状态读写加锁保护）。"""
     effective = _effective_interval(
-        db, kol, state, interval_seconds, priority_interval_seconds
+        db, kol, state, interval_seconds, priority_interval_seconds, tuning
     )
     # 与 poll_once 一致：从未抓取过的大V立即抓取，避免用 0 当基准误跳过首轮
     if kol["id"] in state.last_fetched and now - state.last_fetched[kol["id"]] < effective:
         return
     # 轮内随机错峰（0.2~1.2s）：避免同平台并发扎堆
     time.sleep(random.uniform(0.2, 1.2))
-    if kol["id"] not in state.last_fetched:
-        # 冷启动首轮错峰：避免应用启动瞬间各平台请求同时打出
-        time.sleep(random.uniform(0, 5))
     try:
         posts = fetcher.fetch(kol)
     except Exception as exc:  # noqa: BLE001 - 单源失败不影响其他
@@ -842,10 +902,14 @@ def _fetch_kol_once(
 
         if isinstance(exc, (httpx.TransportError, RequestsError, ProxyUnavailable)):
             note_fetch_proxy(fetcher, False, str(exc))
+        should_alert = False
         with state_lock:
             state.fail_count += 1
             delay = min(30 * (2 ** (state.fail_count - 1)), 600)
-            state.skip_until = time.monotonic() + delay
+            until = time.monotonic() + delay
+            state.kol_skip_until[kol["id"]] = until
+            if _is_platform_wide_error(exc):
+                state.skip_until = until
             if round_stats is not None:
                 st = round_stats.setdefault(
                     kol["platform"], {"ok": 0, "fail": 0, "err": "", "kol": ""}
@@ -855,10 +919,12 @@ def _fetch_kol_once(
                 st["kol"] = kol["name"]
             kol_fail = state.kol_fails.get(kol["id"], 0) + 1
             state.kol_fails[kol["id"]] = kol_fail
-            if kol_fail == SOURCE_FAIL_THRESHOLD or kol_fail % 10 == 0:
-                if maybe_alert_source_failure(
-                    db, notifiers, kol["platform"], kol["name"], str(exc), kol_fail
-                ):
+            should_alert = kol_fail == SOURCE_FAIL_THRESHOLD or kol_fail % 10 == 0
+        if should_alert:
+            if maybe_alert_source_failure(
+                db, notifiers, kol["platform"], kol["name"], str(exc), kol_fail
+            ):
+                with state_lock:
                     state.alerted_kols.add(kol["id"])
         logger.warning(
             "抓取失败 platform=%s kol=%s err=%s 下次尝试 %.0fs 后",
@@ -877,26 +943,33 @@ def _fetch_kol_once(
         # 避免并发 worker 互相清空同平台的成功/失败状态
         return
     note_fetch_proxy(fetcher, True)
+    recovered = False
     with state_lock:
-        if kol["id"] in state.alerted_kols:
-            maybe_alert_source_recovered(db, notifiers, kol["platform"], kol["name"])
+        recovered = kol["id"] in state.alerted_kols
+        if recovered:
             state.alerted_kols.discard(kol["id"])
         state.kol_fails[kol["id"]] = 0
         state.fail_count = 0
-        state.last_fetched[kol["id"]] = now
+        state.skip_until = 0.0
+        state.kol_skip_until.pop(kol["id"], None)
+        state.last_fetched[kol["id"]] = time.monotonic()
         if round_stats is not None:
             st = round_stats.setdefault(
                 kol["platform"], {"ok": 0, "fail": 0, "err": "", "kol": ""}
             )
             st["ok"] += 1
+    if recovered:
+        maybe_alert_source_recovered(db, notifiers, kol["platform"], kol["name"])
     # 按发布时间升序推送，避免各平台返回顺序（置顶/反爬兜底）导致乱序
     posts = sorted(posts, key=_post_sort_key)
+    existing_keys = db.existing_post_keys([(p.platform, p.external_id) for p in posts])
+    translate_twitter = bool((tuning or {}).get("translate_twitter"))
     for post in posts:
         post.category = kol.get("category_name") or ""
         if (
             post.platform == "twitter"
-            and _polling_bool(db, "config_translate_twitter_content", False)
-            and db.get_post_id(post.platform, post.external_id) is None
+            and translate_twitter
+            and (post.platform, post.external_id) not in existing_keys
         ):
             # 仅翻译新帖，避免每轮重复调用翻译接口
             try:
@@ -923,12 +996,15 @@ def _fetch_kol_once(
     try:
         from .tagging import rule_tag_posts, stock_tag_posts
 
-        fresh = [p for p in posts if db.get_post_id(p.platform, p.external_id) is None]
+        fresh = [p for p in posts if (p.platform, p.external_id) not in existing_keys]
         if fresh:
-            tag_rules = db.get_tag_vocabulary()
+            if tag_rules is None:
+                tag_rules = db.get_tag_vocabulary()
             tagged = rule_tag_posts(fresh, tag_rules)
-            stock_names = db.get_stock_names()
-            stock_aliases = db.get_stock_aliases()
+            if stock_names is None:
+                stock_names = db.get_stock_names()
+            if stock_aliases is None:
+                stock_aliases = db.get_stock_aliases()
             stock_tagged = stock_tag_posts(fresh, stock_names, aliases=stock_aliases)
             for i, post in enumerate(fresh):
                 # 合并：话题标签（≤3）+ 股票标签（≤2），总上限 5
@@ -1070,14 +1146,13 @@ def _send_digest_bundle(
     retry_queue: PushRetryQueue | None,
     notifiers,
 ) -> None:
-    """发 AI 要点 + 摘要卡片。已发出部分成功时不再把帖子逐条入重试队列。"""
-    sent_any = False
+    """发 AI 要点 + 摘要卡片。卡片发出后才算送达；仅要点成功仍入重试。"""
+    sent_digest = False
     try:
         if summary:
             notifier.send_text(f"📊 AI 摘要\n\n{summary}")
-            sent_any = True
         notifier.send_digest(posts, kol["name"], kol["platform"])
-        sent_any = True
+        sent_digest = True
         for post in posts:
             db.add_push_log(
                 db.get_post_id(post.platform, post.external_id),
@@ -1092,7 +1167,7 @@ def _send_digest_bundle(
             notifiers or [],
             f"user={user['username']} channel={channel} digest err={exc}",
         )
-        if sent_any:
+        if sent_digest:
             return
         if retry_queue is not None:
             for post in posts:
@@ -1131,8 +1206,11 @@ def notify_digest_subscribers(
     from .channels import build_channel_notifier, iter_user_channels
 
     client = httpx.Client(timeout=15)
+    admin_llm = _admin_llm_config(db, llm_config)
     try:
-        for user in db.subscribers_of_kol(kol["id"]):
+        subscribers = db.subscribers_of_kol(kol["id"])
+        keywords_by_user = db.get_users_keywords([u["id"] for u in subscribers])
+        for user in subscribers:
             sub_type = user.get("subscribe_type") or "post"
             matched = [p for p in posts if _sub_type_matches(sub_type, p.post_type)]
             if not matched:
@@ -1141,7 +1219,7 @@ def notify_digest_subscribers(
             if bool(user.get("secondary")) and not favorite:
                 # 个人次要用户不参与 KOL 摘要：帖子已进用户级延迟缓冲，避免重复推送
                 continue
-            keywords = db.get_user_keywords(user["id"])
+            keywords = keywords_by_user.get(user["id"], [])
             if (
                 dnd_buffer is not None
                 and _in_dnd_window(user)
@@ -1159,7 +1237,7 @@ def notify_digest_subscribers(
                     continue
                 matched = instant
             summary = None
-            llm_cfg = _user_llm_config(user, _admin_llm_config(db, llm_config))
+            llm_cfg = _user_llm_config(user, admin_llm)
             if llm_cfg is not None:
                 try:
                     from .llm import summarize_posts
@@ -1198,15 +1276,19 @@ def flush_digest(
     if not digest:
         return
     summary_cache: dict = {}
-    items = list(digest.items())
-    digest.clear()
-    for kol_id, posts in items:
-        kol = db.get_kol(kol_id)
-        if kol is None or not posts:
-            continue
-        notify_digest_subscribers(
-            db, posts, kol, notifiers_config, notifiers, retry_queue, dnd_buffer, llm_config, summary_cache
-        )
+    admin_llm = _admin_llm_config(db, llm_config)
+    for kol_id, posts in list(digest.items()):
+        try:
+            kol = db.get_kol(kol_id)
+            if kol is None or not posts:
+                digest.pop(kol_id, None)
+                continue
+            notify_digest_subscribers(
+                db, posts, kol, notifiers_config, notifiers, retry_queue, dnd_buffer, admin_llm, summary_cache
+            )
+            digest.pop(kol_id, None)
+        except Exception:  # noqa: BLE001
+            logger.exception("摘要推送失败 kol=%s", kol_id)
 
 
 def _scheduler_loop_delay(
@@ -1842,7 +1924,7 @@ class Scheduler:
             return
         from .fetchers.base import Post
 
-        rows = self.db.list_failed_push_logs(since_hours=24, limit=200)
+        rows = self.db.list_failed_push_logs(since_hours=24, limit=2000)
         recovered = 0
         for row in rows:
             post_row = self.db.get_post(row["post_id"])
@@ -1950,11 +2032,12 @@ class Scheduler:
                 continue
             if not force and _in_dnd_window(user, now):
                 continue  # 仍在免打扰时段，等时段结束再推
-            self._dnd_buffer.pop(user_id, None)
             try:
                 self._send_dnd_summary(user, posts)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("免打扰汇总推送失败 user=%s err=%s", user["username"], exc)
+                continue
+            self._dnd_buffer.pop(user_id, None)
 
     def _pop_secondary_user(self, user_id: int) -> None:
         self._secondary_first_at.pop(user_id, None)
@@ -1992,11 +2075,12 @@ class Scheduler:
                 continue
             if len(posts) < min_count and (interval <= 0 or waited < max_wait):
                 continue
-            self._pop_secondary_user(user_id)
             try:
                 self._send_dnd_summary(user, posts, title="🔕 次要大V合并摘要", use_llm=False)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("次要大V汇总推送失败 user=%s err=%s", user["username"], exc)
+                continue
+            self._pop_secondary_user(user_id)
 
     def _send_dnd_summary(
         self, user: dict, posts: list[Post], title: str | None = None, use_llm: bool = True

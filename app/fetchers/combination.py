@@ -14,9 +14,6 @@ import httpx
 from .base import Fetcher, Post, ThreadLocalClient, format_published_at
 from .xueqiu import (
     XUEQIU_COOKIE_KEY,
-    XUEQIU_COOKIE_TIME_KEY,
-    _is_waf_html,
-    merge_cookie_strings,
     merge_waf_cookie,
 )
 
@@ -295,16 +292,11 @@ class CombinationFetcher(Fetcher):
         self.client.headers["Cookie"] = merge_waf_cookie(cookie)
 
     def _refresh_cookie(self) -> None:
-        """访问雪球首页刷新会话，持久化最新 cookie（与雪球帖抓取共用）。"""
-        resp = self.client.get("https://xueqiu.com/")
-        resp.raise_for_status()
-        if _is_waf_html(resp):
-            raise RuntimeError("雪球 cookie 续期被反爬拦截，请到后台更新雪球 cookie")
-        old = self.client.headers.get("Cookie") or ""
-        cookie = merge_cookie_strings(old, self.client.cookies)
-        if cookie:
-            self.db.set_setting(XUEQIU_COOKIE_KEY, cookie)
-            self.db.set_setting(XUEQIU_COOKIE_TIME_KEY, str(int(time.time())))
+        """雪球 cookie 失效时直接抛错（与雪球帖抓取共用，首页续期通道已死）。"""
+        raise RuntimeError(
+            "雪球 cookie 已失效（接口返回 401/403）。无法自动续期，"
+            "请到后台「数据源 → Cookie 管理」手动更新后重试"
+        )
 
     def _snapshot(self, kol_id: int, cube_symbol: str, kind: str, url: str, params: dict) -> None:
         """抓取并写入一种组合快照；TTL 内跳过，失败仅记日志（不阻断调仓推送）。"""
@@ -358,11 +350,6 @@ class CombinationFetcher(Fetcher):
         )
         if resp.status_code in (401, 403):
             self._refresh_cookie()
-            self._apply_cookie()
-            resp = self.client.get(
-                REBALANCING_URL,
-                params={"cube_symbol": cube_symbol, "page": 1, "count": 20},
-            )
         resp.raise_for_status()
         try:
             data = resp.json()
@@ -432,6 +419,8 @@ class CombinationFetcher(Fetcher):
                 actions.append(action_data)
             # 接口的 cash 字段对「只列变动」的记录是伪值（100 − Σ变动targets，如新建后显示
             # 现金 81%，实际 0%）；cash_value 才是组合内真实现金（按净值计），现金占比 = cash_value / 净值。
+            if not lines and not actions:
+                continue
             cash_value = item.get("cash_value")
             cube_net = quote.get("net_value")
             cash_pct = (

@@ -1,6 +1,7 @@
 """REST API：认证、订阅目录、我的动态、KOL/分类管理。"""
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -1572,7 +1573,7 @@ def create_api_router(
     def catalog(platform: str | None = None, category_id: int | None = None, user: dict = Depends(get_current_user)):
         if is_plaza_hidden(db, platform):
             return []
-        kols = filter_plaza_rows(db, db.list_kols(platform, category_id))
+        kols = filter_plaza_rows(db, db.list_kols(platform, category_id, status=1))
         if not user["is_admin"]:
             visible = db.visible_kol_ids(user["id"])
             kols = [k for k in kols if k["id"] in visible]
@@ -1589,6 +1590,8 @@ def create_api_router(
         )
         favorite_ids = db.subscribed_favorite_ids(user["id"])
         secondary_ids = db.subscribed_secondary_ids(user["id"])
+        combo_ids = [k["id"] for k in kols if k["platform"] == "combination"]
+        quotes = db.list_cube_snapshots(combo_ids, "quote")
         rows = []
         for kol in kols:
             row = {
@@ -1599,7 +1602,7 @@ def create_api_router(
                 "secondary": kol["id"] in secondary_ids,
             }
             if kol["platform"] == "combination":
-                snap = db.get_cube_snapshot(kol["id"], "quote")
+                snap = quotes.get(kol["id"])
                 row["quote"] = snap["payload"] if snap else None
             rows.append(row)
         return rows
@@ -1626,7 +1629,7 @@ def create_api_router(
     @router.post("/subscriptions")
     def subscribe(body: SubscriptionIn, user: dict = Depends(get_current_user)):
         kol = db.get_kol(body.kol_id)
-        if kol is None or (
+        if kol is None or not kol.get("enabled") or (
             not user["is_admin"]
             and (
                 kol["id"] not in db.visible_kol_ids(user["id"])
@@ -1636,7 +1639,8 @@ def create_api_router(
             raise HTTPException(status_code=404, detail="大V不存在")
         if body.type not in ("post", "reply", "both"):
             raise HTTPException(status_code=400, detail="订阅类型需为 post / reply / both")
-        db.add_subscription(user["id"], body.kol_id, type=body.type)
+        if not db.add_subscription(user["id"], body.kol_id, type=body.type):
+            db.update_subscription_type(user["id"], body.kol_id, body.type)
         return {"ok": True}
 
     @router.put("/subscriptions/{kol_id}")
@@ -1721,13 +1725,13 @@ def create_api_router(
         kol = db.get_kol(kol_id)
         if not _plaza_kol_visible(user, kol):
             raise HTTPException(status_code=404, detail="大V不存在")
-        kol["subscribed"] = kol_id in db.subscribed_kol_ids(user["id"])
-        kol["subscribe_type"] = db.subscribed_kol_types(user["id"]).get(kol_id, "post")
-        kol["favorite"] = kol_id in db.subscribed_favorite_ids(user["id"])
-        kol["secondary"] = kol_id in db.subscribed_secondary_ids(user["id"])
+        sub = db.get_subscription(user["id"], kol_id)
+        kol["subscribed"] = sub is not None
+        kol["subscribe_type"] = (sub or {}).get("type") or "post"
+        kol["favorite"] = bool(sub and sub.get("favorite"))
+        kol["secondary"] = bool(sub and sub.get("secondary"))
         if user["is_admin"]:
-            acl_ids = set(db.acl_user_ids(kol_id))
-            kol["visible_users"] = [u["username"] for u in db.list_users() if u["id"] in acl_ids]
+            kol["visible_users"] = db.acl_usernames(kol_id)
         # 组合详情附带实时净值/涨跌快照（抓取端定时写入，无则前端隐藏）
         if kol["platform"] == "combination":
             snap = db.get_cube_snapshot(kol_id, "quote")
@@ -1789,7 +1793,7 @@ def create_api_router(
 
     @router.get("/my/kol-requests")
     def my_kol_requests(user: dict = Depends(get_current_user)):
-        return [r for r in db.list_kol_requests() if r["user_id"] == user["id"]]
+        return db.list_kol_requests(user_id=user["id"])
 
     @router.get("/admin/kol-requests", dependencies=[Depends(require_admin)])
     def admin_kol_requests(status: str | None = None):
@@ -2057,16 +2061,14 @@ def create_api_router(
         _audit(admin, "purge_zsxq_cache", "", f"deleted={result['deleted']}")
         return result
 
-    def _zsxq_file_name(file_id: str) -> str:
-        import json as _json
+    def _zsxq_file_hits(file_id: str) -> list[dict]:
+        return db.find_zsxq_file_posts(file_id)
 
-        for row in db._rows(
-            "SELECT detail FROM posts WHERE platform='zsxq' AND detail LIKE ?",
-            (f"%{file_id}%",),
-        ):
+    def _zsxq_file_name(file_id: str) -> str:
+        for row in _zsxq_file_hits(file_id):
             detail = row.get("detail") or ""
             try:
-                files = (_json.loads(detail) if isinstance(detail, str) else detail).get("files") or []
+                files = (json.loads(detail) if isinstance(detail, str) else detail).get("files") or []
             except Exception:
                 files = []
             for f in files:
@@ -2077,15 +2079,10 @@ def create_api_router(
     def _stored_zsxq_url(file_id: str):
         """库里已有的未过期签名 URL；缺失/过期返回空串。签名 URL e= 为过期时间戳。"""
         now = int(time.time())
-        for row in db._rows(
-            "SELECT detail FROM posts WHERE platform='zsxq' AND detail LIKE ?",
-            (f"%{file_id}%",),
-        ):
+        for row in _zsxq_file_hits(file_id):
             detail = row.get("detail") or ""
             try:
-                import json as _json
-
-                files = (_json.loads(detail) if isinstance(detail, str) else detail).get("files") or []
+                files = (json.loads(detail) if isinstance(detail, str) else detail).get("files") or []
             except Exception:
                 files = []
             for f in files:
@@ -2111,16 +2108,14 @@ def create_api_router(
 
     def _write_back_zsxq_url(file_id: str, name: str, local_url: str) -> None:
         """把落盘后的本地 URL 写回库里该文件的 files[].url，供列表直接展示。"""
-        import json as _json
-
-        for row in db._rows(
-            "SELECT id, detail FROM posts WHERE platform='zsxq' AND detail LIKE ?",
-            (f"%{file_id}%",),
-        ):
+        updates = []
+        for row in _zsxq_file_hits(file_id):
             detail = row.get("detail") or ""
             try:
-                d = _json.loads(detail) if isinstance(detail, str) else detail
+                d = json.loads(detail) if isinstance(detail, str) else dict(detail)
             except Exception:  # noqa: S112 - 坏 JSON 行跳过，行为同原有实现
+                continue
+            if not isinstance(d, dict):
                 continue
             files = d.get("files") or []
             changed = False
@@ -2129,16 +2124,18 @@ def create_api_router(
                     f["url"] = local_url
                     changed = True
             if changed:
-                db._conn.execute(
-                    "UPDATE posts SET detail=? WHERE id=?",
-                    (_json.dumps(d, ensure_ascii=False), row["id"]),
-                )
-        db._conn.commit()
+                updates.append((row["id"], d))
+        db.update_post_details(updates)
 
     @router.get("/media/zsxq-file/{file_id}")
     def download_zsxq_file(file_id: str, user: dict = Depends(get_current_user)):
         if not file_id.isdigit() or len(file_id) > 32:
             raise HTTPException(status_code=400, detail="无效附件")
+        hits = _zsxq_file_hits(file_id)
+        if not user.get("is_admin"):
+            readable = db.readable_subscribed_kol_ids(user["id"], False)
+            if not any(h["kol_id"] in readable for h in hits):
+                raise HTTPException(status_code=404, detail="附件不存在")
         from pathlib import Path as _Path
 
         name = _zsxq_file_name(file_id)

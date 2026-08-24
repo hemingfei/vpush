@@ -116,6 +116,32 @@ def _normalize_post_tags(rows: list[dict]) -> list[dict]:
     return rows
 
 
+def _sanitize_post_detail(rows: list[dict]) -> list[dict]:
+    """列表接口丢掉星球 detail.raw（完整 API 载荷），只留 files/comments。"""
+    for row in rows:
+        raw = row.get("detail")
+        if not raw:
+            continue
+        try:
+            detail = json.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, ValueError):
+            continue
+        if isinstance(detail, dict) and "raw" in detail:
+            detail = {k: v for k, v in detail.items() if k != "raw"}
+            row["detail"] = detail
+        elif isinstance(detail, dict):
+            row["detail"] = detail
+    return rows
+
+
+def _detail_json(detail) -> str:
+    if not detail:
+        return ""
+    if isinstance(detail, dict) and "raw" in detail:
+        detail = {k: v for k, v in detail.items() if k != "raw"}
+    return json.dumps(detail, ensure_ascii=False)
+
+
 # 贴文规则打标的默认词表（标签 + 关键词，管理员可在后台改，存 settings 表 tag_vocabulary）。
 # 关键词做子串匹配：任一命中即给该标签；英文关键词打标时统一小写比较，故此处可混用大小写。
 DEFAULT_TAG_RULES = [
@@ -213,7 +239,8 @@ CREATE TABLE IF NOT EXISTS push_logs (
     channel TEXT NOT NULL,
     status TEXT NOT NULL,
     error TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    user_id INTEGER
 );
 CREATE TABLE IF NOT EXISTS error_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -399,8 +426,10 @@ CREATE INDEX IF NOT EXISTS idx_proxies_expires ON proxies(expires_at);
 -- 性能索引：帖子/日志/订阅按数据量增长后的高频查询
 CREATE INDEX IF NOT EXISTS idx_posts_kol_id ON posts(kol_id);
 CREATE INDEX IF NOT EXISTS idx_posts_fetched_at ON posts(fetched_at);
+CREATE INDEX IF NOT EXISTS idx_posts_kol_id_id ON posts(kol_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_push_logs_created_at ON push_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_push_logs_post_id ON push_logs(post_id);
+CREATE INDEX IF NOT EXISTS idx_kol_acl_user ON kol_acl(user_id);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_kol_id ON subscriptions(kol_id);
 CREATE INDEX IF NOT EXISTS idx_source_events_platform ON source_events(platform, created_at);
 """
@@ -523,6 +552,7 @@ class DB:
         push_cols = {row["name"] for row in self._rows("PRAGMA table_info(push_logs)")}
         if "user_id" not in push_cols:
             self._conn.execute("ALTER TABLE push_logs ADD COLUMN user_id INTEGER")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_push_logs_user ON push_logs(user_id)")
         user_cols = {row["name"] for row in self._rows("PRAGMA table_info(users)")}
         if "wechat_openid" not in user_cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN wechat_openid TEXT NOT NULL DEFAULT ''")
@@ -602,6 +632,19 @@ class DB:
             self._conn.execute(
                 "ALTER TABLE kols ADD COLUMN baseline_ready INTEGER NOT NULL DEFAULT 1"
             )
+        if "last_post_at" not in kol_cols:
+            self._conn.execute(
+                "ALTER TABLE kols ADD COLUMN last_post_at TEXT NOT NULL DEFAULT ''"
+            )
+            self._conn.execute(
+                "UPDATE kols SET last_post_at = COALESCE(("
+                "SELECT MAX(fetched_at) FROM posts WHERE posts.kol_id = kols.id), '')"
+            )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_posts_kol_id_id ON posts(kol_id, id DESC)"
+        )
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_push_logs_user ON push_logs(user_id)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_kol_acl_user ON kol_acl(user_id)")
         req_cols = {row["name"] for row in self._rows("PRAGMA table_info(kol_requests)")}
         if "category_id" not in req_cols:
             self._conn.execute("ALTER TABLE kol_requests ADD COLUMN category_id INTEGER")
@@ -860,11 +903,20 @@ class DB:
     ) -> list[dict]:
         """大V列表：可选平台/分类/关键词/启用状态筛选 + 分页（管理列表用）。"""
         extra = (
-            ", (SELECT COUNT(*) FROM subscriptions s WHERE s.kol_id = k.id) AS subscriber_count"
+            ", COALESCE(sc.n, 0) AS subscriber_count"
             if with_subscriber_count
             else ""
         )
-        sql = f"SELECT k.*, c.name AS category_name{extra} FROM kols k LEFT JOIN categories c ON c.id = k.category_id"
+        join_counts = (
+            " LEFT JOIN (SELECT kol_id, COUNT(*) AS n FROM subscriptions GROUP BY kol_id) sc "
+            "ON sc.kol_id = k.id"
+            if with_subscriber_count
+            else ""
+        )
+        sql = (
+            f"SELECT k.*, c.name AS category_name{extra} FROM kols k "
+            f"LEFT JOIN categories c ON c.id = k.category_id{join_counts}"
+        )
         conds, params = self._kol_filters(platform, category_id, q, status)
         if conds:
             sql += " WHERE " + " AND ".join(conds)
@@ -961,11 +1013,11 @@ class DB:
         )
 
     def last_post_time_by_kol(self) -> dict[int, str]:
-        """每个大V最近一次抓到帖子的时间（fetched_at），用于活跃度排序。"""
+        """每个大V最近一次抓到帖子的时间（kols.last_post_at），用于活跃度排序。"""
         rows = self._rows(
-            "SELECT kol_id, MAX(fetched_at) AS last_at FROM posts GROUP BY kol_id"
+            "SELECT id, last_post_at FROM kols WHERE last_post_at IS NOT NULL AND last_post_at != ''"
         )
-        return {r["kol_id"]: r["last_at"] for r in rows}
+        return {r["id"]: r["last_post_at"] for r in rows}
 
     def update_kol(
         self,
@@ -1029,6 +1081,7 @@ class DB:
                     (kol_id,),
                 )
                 self._conn.execute("DELETE FROM posts WHERE kol_id = ?", (kol_id,))
+                self._conn.execute("DELETE FROM cube_snapshots WHERE kol_id = ?", (kol_id,))
                 self._conn.execute("DELETE FROM kols WHERE id = ?", (kol_id,))
                 self._conn.commit()
             except Exception:
@@ -1037,12 +1090,29 @@ class DB:
 
     # ---- KOL 可见性（白名单） ----
     def set_kol_acl(self, kol_id: int, user_ids: list[int]) -> None:
-        self._execute("DELETE FROM kol_acl WHERE kol_id = ?", (kol_id,))
-        for uid in set(user_ids):
-            self._execute(
-                "INSERT OR IGNORE INTO kol_acl (kol_id, user_id) VALUES (?, ?)",
-                (kol_id, uid),
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                self._conn.execute("DELETE FROM kol_acl WHERE kol_id = ?", (kol_id,))
+                for uid in set(user_ids):
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO kol_acl (kol_id, user_id) VALUES (?, ?)",
+                        (kol_id, uid),
+                    )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def acl_usernames(self, kol_id: int) -> list[str]:
+        return [
+            r["username"]
+            for r in self._rows(
+                "SELECT u.username FROM kol_acl a JOIN users u ON u.id = a.user_id "
+                "WHERE a.kol_id = ? ORDER BY u.username",
+                (kol_id,),
             )
+        ]
 
     def acl_user_ids(self, kol_id: int) -> list[int]:
         return [r["user_id"] for r in self._rows("SELECT user_id FROM kol_acl WHERE kol_id = ?", (kol_id,))]
@@ -1084,17 +1154,25 @@ class DB:
         except sqlite3.IntegrityError:
             raise ValueError("该大V的申请已在处理中") from None
 
-    def list_kol_requests(self, status: str | None = None) -> list[dict]:
+    def list_kol_requests(
+        self, status: str | None = None, user_id: int | None = None
+    ) -> list[dict]:
         sql = (
             "SELECT r.*, u.username AS requester, c.name AS category_name "
             "FROM kol_requests r "
             "LEFT JOIN users u ON u.id = r.user_id "
             "LEFT JOIN categories c ON c.id = r.category_id"
         )
-        params: tuple = ()
+        conds: list[str] = []
+        params: list = []
         if status:
-            sql += " WHERE r.status = ?"
-            params = (status,)
+            conds.append("r.status = ?")
+            params.append(status)
+        if user_id is not None:
+            conds.append("r.user_id = ?")
+            params.append(user_id)
+        if conds:
+            sql += " WHERE " + " AND ".join(conds)
         sql += " ORDER BY r.id DESC"
         return self._rows(sql, params)
 
@@ -1801,12 +1879,23 @@ class DB:
         )
         return {row["kol_id"] for row in rows}
 
+    def get_users_keywords(self, user_ids: list[int]) -> dict[int, list[str]]:
+        """一次取出多名用户的关键词。"""
+        if not user_ids:
+            return {}
+        out: dict[int, list[str]] = {int(uid): [] for uid in user_ids}
+        placeholders = ", ".join("?" * len(user_ids))
+        for row in self._rows(
+            f"SELECT user_id, keyword FROM user_keywords WHERE user_id IN ({placeholders}) "
+            "ORDER BY rowid",
+            tuple(user_ids),
+        ):
+            out.setdefault(int(row["user_id"]), []).append(row["keyword"])
+        return out
+
     def get_user_keywords(self, user_id: int) -> list[str]:
         """用户的关键词提醒规则（命中即穿透免打扰并加急推送）。"""
-        rows = self._rows(
-            "SELECT keyword FROM user_keywords WHERE user_id = ? ORDER BY rowid", (user_id,)
-        )
-        return [r["keyword"] for r in rows]
+        return self.get_users_keywords([user_id]).get(int(user_id), [])
 
     def set_user_keywords(self, user_id: int, keywords: list[str]) -> None:
         with self._lock:
@@ -1905,6 +1994,17 @@ class DB:
                 self._conn.execute("DELETE FROM push_logs WHERE user_id = ?", (user_id,))
                 self._conn.execute("DELETE FROM kol_acl WHERE user_id = ?", (user_id,))
                 self._conn.execute("DELETE FROM webpush_subscriptions WHERE user_id = ?", (user_id,))
+                self._conn.execute("DELETE FROM user_keywords WHERE user_id = ?", (user_id,))
+                self._conn.execute(
+                    "DELETE FROM feishu_personal_bots WHERE user_id = ?", (user_id,)
+                )
+                self._conn.execute(
+                    "DELETE FROM feishu_registration_sessions WHERE user_id = ?", (user_id,)
+                )
+                self._conn.execute(
+                    "DELETE FROM daily_report_deliveries WHERE user_id = ?", (user_id,)
+                )
+                self._conn.execute("DELETE FROM kol_requests WHERE user_id = ?", (user_id,))
                 self._conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
                 self._conn.commit()
             except Exception:
@@ -1959,20 +2059,21 @@ class DB:
         )
         return rows[0]["id"] if rows else None
 
-    def get_post_detail(self, platform: str, external_id: str) -> dict:
-        """读单帖 detail JSON；不存在或解析失败返回空 dict。"""
-        rows = self._rows(
-            "SELECT detail FROM posts WHERE platform = ? AND external_id = ?",
-            (platform, external_id),
-        )
-        if not rows:
-            return {}
-        raw = rows[0].get("detail") or ""
-        try:
-            d = json.loads(raw)
-            return d if isinstance(d, dict) else {}
-        except (TypeError, ValueError):
-            return {}
+    def existing_post_keys(self, pairs: list[tuple[str, str]]) -> set[tuple[str, str]]:
+        """一次查出已存在的 (platform, external_id)。"""
+        found: set[tuple[str, str]] = set()
+        if not pairs:
+            return found
+        chunk = 200
+        for i in range(0, len(pairs), chunk):
+            part = pairs[i : i + chunk]
+            conds = " OR ".join("(platform = ? AND external_id = ?)" for _ in part)
+            params = [x for pair in part for x in pair]
+            for row in self._rows(
+                f"SELECT platform, external_id FROM posts WHERE {conds}", params
+            ):
+                found.add((row["platform"], row["external_id"]))
+        return found
 
     def get_post_detail(self, platform: str, external_id: str) -> dict:
         """读单帖 detail JSON；不存在或解析失败返回空 dict。"""
@@ -1988,6 +2089,59 @@ class DB:
             return d if isinstance(d, dict) else {}
         except (TypeError, ValueError):
             return {}
+
+    def find_zsxq_file_posts(self, file_id: str) -> list[dict]:
+        """按 file_id 找星球帖（精确 JSON 边界，避免 123 命中 1234）。"""
+        fid = str(file_id or "").strip()
+        if not fid:
+            return []
+        rows = self._rows(
+            "SELECT id, kol_id, detail FROM posts WHERE platform = 'zsxq' AND "
+            "(detail LIKE ? OR detail LIKE ? OR detail LIKE ?)",
+            (f'%"file_id": "{fid}"%', f'%"file_id":"{fid}"%', f'%"file_id": {fid}%'),
+        )
+        hits = []
+        for row in rows:
+            raw = row.get("detail") or ""
+            try:
+                detail = json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError):
+                continue
+            files = (detail or {}).get("files") if isinstance(detail, dict) else []
+            if any(str(f.get("file_id")) == fid for f in (files or []) if isinstance(f, dict)):
+                hits.append(row)
+        return hits
+
+    def update_post_details(self, updates: list[tuple[int, dict]]) -> None:
+        if not updates:
+            return
+        with self._lock:
+            for post_id, detail in updates:
+                self._conn.execute(
+                    "UPDATE posts SET detail = ? WHERE id = ?",
+                    (json.dumps(detail, ensure_ascii=False), post_id),
+                )
+            self._conn.commit()
+
+    def list_cube_snapshots(self, kol_ids: list[int], kind: str) -> dict[int, dict]:
+        if not kol_ids:
+            return {}
+        placeholders = ", ".join("?" * len(kol_ids))
+        rows = self._rows(
+            f"SELECT kol_id, payload, fetched_at FROM cube_snapshots "
+            f"WHERE kind = ? AND kol_id IN ({placeholders})",
+            (kind, *kol_ids),
+        )
+        out = {}
+        for row in rows:
+            payload = row.get("payload")
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except (TypeError, ValueError):
+                    payload = None
+            out[row["kol_id"]] = {"payload": payload, "fetched_at": row.get("fetched_at") or ""}
+        return out
 
     def mark_kol_baseline(self, kol_id: int) -> None:
         """标记该大V已建立首次抓取基线（首次成功 fetch 后调用，含空列表）。"""
@@ -2015,7 +2169,7 @@ class DB:
         images: list[str] | None = None,
         tags: list[str] | None = None,
     ) -> int | None:
-        detail_json = json.dumps(detail, ensure_ascii=False) if detail else ""
+        detail_json = _detail_json(detail)
         images_json = json.dumps(images, ensure_ascii=False) if images else ""
         # None=未打标（pending，待回填）；[]=已处理但零命中（也持久化为 '[]'，避免重复回填）
         tags_json = json.dumps(tags, ensure_ascii=False) if tags is not None else ""
@@ -2040,6 +2194,11 @@ class DB:
                 )
                 # 无论是否命中唯一约束都提交：忽略插入同样会打开隐式事务，
                 # 提前 return 不提交会把悬空事务留给下一个 BEGIN（事务嵌套报错）
+                if cur.rowcount:
+                    self._conn.execute(
+                        "UPDATE kols SET last_post_at = datetime('now') WHERE id = ?",
+                        (kol_id,),
+                    )
                 self._conn.commit()
                 if cur.rowcount == 0:
                     return None  # 唯一约束命中，帖子已存在
@@ -2058,7 +2217,7 @@ class DB:
                 self._conn.execute("BEGIN")
                 ids: list[int | None] = []
                 for p in posts:
-                    detail_json = json.dumps(p.detail, ensure_ascii=False) if p.detail else ""
+                    detail_json = _detail_json(p.detail)
                     images_json = json.dumps(p.images, ensure_ascii=False) if p.images else ""
                     tags_json = (
                         json.dumps(p.tags, ensure_ascii=False)
@@ -2092,6 +2251,12 @@ class DB:
                                 "UPDATE posts SET images = ?, detail = ? WHERE platform = ? AND external_id = ?",
                                 (images_json, detail_json, p.platform, p.external_id),
                             )
+                touched = {p.kol_id for p, pid in zip(posts, ids) if pid is not None}
+                for kid in touched:
+                    self._conn.execute(
+                        "UPDATE kols SET last_post_at = datetime('now') WHERE id = ?",
+                        (kid,),
+                    )
                 self._conn.commit()
                 return ids
             except Exception:
@@ -2138,7 +2303,9 @@ class DB:
             sql += " WHERE " + " AND ".join(conds)
         sql += " ORDER BY p.id DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
-        return _normalize_post_tags(_normalize_post_images(self._rows(sql, params)))
+        return _sanitize_post_detail(
+            _normalize_post_tags(_normalize_post_images(self._rows(sql, params)))
+        )
 
     def count_posts(self) -> int:
         rows = self._rows("SELECT COUNT(*) AS n FROM posts")
@@ -2247,7 +2414,7 @@ class DB:
         if since_id:
             conds.append("p.id > ?")
             params.append(since_id)
-        rows = _normalize_post_tags(_normalize_post_images(self._rows(
+        rows = _sanitize_post_detail(_normalize_post_tags(_normalize_post_images(self._rows(
             "SELECT p.*, k.name AS kol_name, k.category_id AS category_id, "
             "k.avatar_url AS avatar_url, c.name AS category_name, "
             "COALESCE(s.favorite, 0) AS favorite, "
@@ -2257,7 +2424,7 @@ class DB:
             "LEFT JOIN subscriptions s ON s.kol_id = p.kol_id AND s.user_id = ? "
             f"WHERE {' AND '.join(conds)} ORDER BY p.id DESC LIMIT ? OFFSET ?",
             (*params, limit, offset),
-        )))
+        ))))
         for row in rows:
             if row.pop("_hide_images"):
                 row["images"] = []
@@ -2270,7 +2437,7 @@ class DB:
         if not kol_ids:
             return []
         placeholders = ", ".join("?" * len(kol_ids))
-        return _normalize_post_tags(_normalize_post_images(self._rows(
+        return _sanitize_post_detail(_normalize_post_tags(_normalize_post_images(self._rows(
             "SELECT p.*, k.name AS kol_name, k.avatar_url AS avatar_url, "
             "c.name AS category_name, COALESCE(s.favorite, 0) AS favorite FROM posts p "
             "JOIN kols k ON k.id = p.kol_id "
@@ -2280,7 +2447,7 @@ class DB:
             "AND COALESCE(k.silent, 0) = 0 "
             "ORDER BY p.id DESC LIMIT ?",
             (user_id, *kol_ids, since_ts, limit),
-        )))
+        ))))
 
     def daily_report_users(self) -> list[dict]:
         """开启每日精选、启用通知且绑定过渠道的用户。"""
@@ -2309,16 +2476,16 @@ class DB:
     ERROR_LOG_KEEP = 5000
 
     def record_error_log(self, level: str, logger: str, message: str) -> None:
-        self._execute(
+        rowid = self._execute(
             "INSERT INTO error_logs (level, logger, message) VALUES (?, ?, ?)",
             (level.upper(), logger, message),
         )
-        # 保留最近 N 条，防止无界增长（WARNING+ 频率低，代价可忽略）
-        self._execute(
-            "DELETE FROM error_logs WHERE id NOT IN "
-            "(SELECT id FROM error_logs ORDER BY id DESC LIMIT ?)",
-            (self.ERROR_LOG_KEEP,),
-        )
+        if rowid and rowid % 50 == 0:
+            self._execute(
+                "DELETE FROM error_logs WHERE id NOT IN "
+                "(SELECT id FROM error_logs ORDER BY id DESC LIMIT ?)",
+                (self.ERROR_LOG_KEEP,),
+            )
 
     def list_error_logs(
         self, limit: int = 200, level: str | None = None, q: str | None = None
@@ -2371,7 +2538,7 @@ class DB:
             (*params, limit),
         )
 
-    def list_failed_push_logs(self, since_hours: int = 24, limit: int = 200) -> list[dict]:
+    def list_failed_push_logs(self, since_hours: int = 24, limit: int = 2000) -> list[dict]:
         """最近 N 小时内失败的推送记录（用于重启后恢复重推）。"""
         return self._rows(
             "SELECT post_id, channel, user_id FROM push_logs "

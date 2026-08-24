@@ -20,6 +20,9 @@ Page({
   },
 
   onShow() {
+    if (this._loadedAt && Date.now() - this._loadedAt < 30000 && this.data.kols && this.data.kols.length) {
+      return;
+    }
     this.load();
   },
 
@@ -44,6 +47,7 @@ Page({
         (byCat[key] = byCat[key] || []).push(k);
       }
       const groups = Object.entries(byCat).map(([name, items]) => ({ name, items }));
+      this._loadedAt = Date.now();
       this.setData({ kols, groups, platforms, platform: selected, loading: false });
     } catch (err) {
       this.setData({ loading: false });

@@ -248,6 +248,9 @@ def _ext_for(name: str, content_type: str) -> str:
     }.get(ct, "bin")
 
 
+MAX_ZSXQ_FILE_BYTES = 80 * 1024 * 1024
+
+
 def cache_zsxq_file(db, file_id: str, name: str, url: str, client=None) -> str:
     """把附件下载到 data/zsxq_files/{file_id}.{ext} 并返回本地 URL。
 
@@ -259,24 +262,41 @@ def cache_zsxq_file(db, file_id: str, name: str, url: str, client=None) -> str:
         return ""
     dest = Path(db_path).parent / "zsxq_files"
     dest.mkdir(parents=True, exist_ok=True)
-    existing = sorted(dest.glob(f"{file_id}.*"))
+    existing = sorted(
+        p for p in dest.glob(f"{file_id}.*") if p.suffix != ".part" and p.is_file()
+    )
     if existing:
         return f"/zsxq-files/{existing[0].name}"
     if not url:
         return ""
     owns = client is None
     client = client or httpx.Client(timeout=90, follow_redirects=True, headers=headers_for(url))
+    tmp = None
     try:
-        resp = client.get(url, follow_redirects=True)
-        if resp.status_code != 200 or not resp.content:
-            return ""
-        ext = _ext_for(name, resp.headers.get("content-type", ""))
-        target = dest / f"{file_id}.{ext}"
-        target.write_bytes(resp.content)
-        return f"/zsxq-files/{target.name}"
+        with client.stream("GET", url, follow_redirects=True) as resp:
+            if resp.status_code != 200:
+                return ""
+            ext = _ext_for(name, resp.headers.get("content-type", ""))
+            target = dest / f"{file_id}.{ext}"
+            tmp = dest / f"{file_id}.{ext}.part"
+            written = 0
+            with tmp.open("wb") as out:
+                for chunk in resp.iter_bytes(65536):
+                    if not chunk:
+                        continue
+                    written += len(chunk)
+                    if written > MAX_ZSXQ_FILE_BYTES:
+                        return ""
+                    out.write(chunk)
+            if written == 0:
+                return ""
+            tmp.replace(target)
+            return f"/zsxq-files/{target.name}"
     except Exception:
         return ""
     finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
         if owns:
             client.close()
 
@@ -562,8 +582,7 @@ class ZsxqFetcher(Fetcher):
         topic_id = str(topic.get("topic_id") or "")
         title, content, kind = _topic_text(topic)
         # 长文（article）或正文缺失时补详情
-        article = (topic.get("talk") or {}).get("article")
-        if (not content) or article:
+        if not content:
             try:
                 detail = self._get(token, f"/topics/{topic_id}")
                 raw = detail.get("topic") or detail
@@ -601,7 +620,7 @@ class ZsxqFetcher(Fetcher):
         # 过滤空 content（列表里一些无声主题）
         if not content and not images and not files:
             content = title or "（无声主题）"
-        detail = {"files": files, "raw": topic}
+        detail = {"files": files}
         comments = self._comments_for(topic_id, topic, token)
         if comments is not None:
             detail["comments"] = comments

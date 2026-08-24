@@ -513,7 +513,6 @@ async function homeResetFilters() {
 async function renderHome(seq) {
   setPageTitle("订阅广场");
   ensurePlazaPlatformSelection();
-  state.platform = "";
   const mobileHome = isMobileTimelineFilter();
   let onboardingHtml = "";
   if (state.user && !state.user.subscription_count) {
@@ -615,9 +614,11 @@ function pickHomeCategory(cat) {
   renderHomeList();
 }
 
+let _homeSearchTimer = null;
 function homeSearch(v) {
   state.homeQ = v.trim();
-  renderHomeList();
+  clearTimeout(_homeSearchTimer);
+  _homeSearchTimer = setTimeout(renderHomeList, 200);
 }
 
 function homeFilteredKols() {
@@ -1310,6 +1311,7 @@ function stopTimelinePoll() {
 
 async function pollNewPosts() {
   // X 式新帖检测：按 since_id 只拉新帖，缓存到 _tlPendingNew；胶囊显示「已发布」，条数写在 aria-label
+  if (document.visibilityState === "hidden") return;
   if (!_tlLatestId || !$("#feed")) return;
   const seq = routeRenderSeq;
   try {
@@ -1664,6 +1666,10 @@ function renderTimelineFeed() {
   const feed = $("#feed");
   if (!feed) return;
   const posts = _tlPosts;
+  const visibleIds = new Set(posts.map((p) => p.id));
+  for (const id of [..._tlExpanded]) {
+    if (!visibleIds.has(id)) _tlExpanded.delete(id);
+  }
   const grouped = new Map();
   for (const p of posts) {
     const bucket = feedDateBucket(p.published_at);
@@ -1714,6 +1720,17 @@ function toggleTimelineSecondary() {
 function tlTogglePost(id) {
   if (_tlExpanded.has(id)) _tlExpanded.delete(id);
   else _tlExpanded.add(id);
+  const post = _tlPosts.find((p) => p.id === id);
+  const card = document.querySelector(`.post-item[data-post-id="${id}"]`);
+  if (post && card) {
+    const wrap = document.createElement("div");
+    wrap.innerHTML = postCard(post).trim();
+    const next = wrap.firstElementChild;
+    if (next) {
+      card.replaceWith(next);
+      return;
+    }
+  }
   renderTimelineFeed();
 }
 
@@ -1723,7 +1740,7 @@ function parsePublished(s) {
   const raw = String(s || "").trim();
   if (!raw) return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(raw);
-  if (m) return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
+  if (m) return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4] - 8, +m[5], +(m[6] || 0)));
   const d = new Date(raw); // RFC2822 等 JS 可解析格式（带时区偏移，正确换算本地时间）
   return isNaN(d.getTime()) ? null : d;
 }
@@ -1777,7 +1794,7 @@ function postCard(post) {
     || (post.content || "").trimStart().startsWith(post.title.trim())
   );
   return `
-    <div class="post-item">
+    <div class="post-item" data-post-id="${post.id}">
       <div class="p-header">
         ${avatarHtml(post.kol_name, post.avatar_url)}
         <div class="p-name-line">
@@ -2146,6 +2163,19 @@ function stopSettingsPoll() {
   }
 }
 
+function startSettingsPoll() {
+  stopSettingsPoll();
+  settingsPollTimer = setInterval(refreshSettingsStatus, 10000);
+}
+
+function pendingBindActive() {
+  return !!(pendingBind && Date.now() < pendingBind.expiresAt);
+}
+
+function settingsTargetBound(user) {
+  return !!(user && (user.telegram_chat_id || feishuChannelBound(user)));
+}
+
 async function reloadSettings() {
   stopSettingsPoll();
   await renderSettings(routeRenderSeq);
@@ -2299,7 +2329,7 @@ async function refreshSettingsStatus() {
     } else if (pendingBind) {
       pendingBind = null;
     }
-    if (user.telegram_chat_id && user.feishu_open_id && user.feishu_chat_id && user.wecom_webhook && user.bark_key) stopSettingsPoll();
+    if (!pendingBindActive() || settingsTargetBound(user)) stopSettingsPoll();
   } catch {
     /* 轮询失败忽略 */
   }
@@ -2597,7 +2627,7 @@ async function renderSettings(seq) {
       </section>
       </div>`;
     _pushStatusHtml = channelStatusHtml(state.user);
-    settingsPollTimer = setInterval(refreshSettingsStatus, 10000);
+    if (pendingBindActive() && !settingsTargetBound(state.user)) startSettingsPoll();
     switchSettingsTab(state.settingsTab || "push"); // 恢复上次所在分栏
     toggleDnd(); // 根据开关初始状态同步时段输入框的禁用/置灰
     loadKolImageSettings(seq);
@@ -3168,6 +3198,7 @@ async function bindChannel(channel) {
       expiresAt: Date.now() + (data.expires_in_seconds || 600) * 1000,
     };
     renderBindResult(channel, data.code);
+    startSettingsPoll();
   } catch (err) {
     flash(err.message, "error");
   }
@@ -3377,10 +3408,16 @@ async function savePassword() {
 async function genBindCode() {
   try {
     const data = await api("/api/me/bind-code", { method: "POST" });
+    pendingBind = {
+      channel: "any",
+      code: data.code,
+      expiresAt: Date.now() + (data.expires_in_seconds || 600) * 1000,
+    };
     $("#bind-result").innerHTML =
       `绑定码：<b style="font-size:var(--text-icon);letter-spacing:3px;font-family:var(--font-mono);font-variant-numeric:tabular-nums">${escapeHtml(data.code)}</b>` +
       `（${Math.floor(data.expires_in_seconds / 60)} 分钟内有效）<br>` +
       `发给机器人：<code>/bind ${escapeHtml(data.code)}</code>`;
+    startSettingsPoll();
   } catch (err) {
     flash(err.message, "error");
   }

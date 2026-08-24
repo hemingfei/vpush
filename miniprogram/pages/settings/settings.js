@@ -126,15 +126,11 @@ Page({
       if (!this.wecomDirty) {
         this.setData({ wecomInput: user.wecom_webhook || "" });
       }
-      if (
-        user.telegram_chat_id &&
-        user.feishu_open_id &&
-        user.feishu_chat_id &&
-        user.wecom_webhook &&
-        this._pollTimer
-      ) {
-        clearInterval(this._pollTimer);
-        this._pollTimer = null;
+      const tgOk = !!user.telegram_chat_id;
+      const fsOk = !!(user.feishu_open_id && user.feishu_chat_id)
+        || !!(user.feishu_personal && user.feishu_personal.status === "active");
+      if ((tgOk || fsOk) && this._pollTimer) {
+        this._stopPolling();
       }
     } catch (err) {
       wx.showToast({ title: err.message, icon: "none" });

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import tempfile
@@ -12,6 +13,8 @@ import httpx
 
 from ..avatar_cache import cache_avatar
 from .base import Fetcher, Post, ThreadLocalClient, format_published_at, strip_html
+
+logger = logging.getLogger(__name__)
 
 XUEQIU_COOKIE_KEY = "xueqiu_cookie"
 XUEQIU_COOKIE_TIME_KEY = "xueqiu_cookie_updated_at"
@@ -84,6 +87,7 @@ def merge_waf_cookie(cookie: str) -> str:
             return cookie or ""
         raise
     if metadata.get("seed_sha256") != _cookie_sha256(cookie):
+        logger.warning("sidecar cookie 与当前登录 cookie 不一致，沿用原 cookie")
         return cookie or ""
     return "; ".join(f"{c['name']}={c['value']}" for c in waf)
 

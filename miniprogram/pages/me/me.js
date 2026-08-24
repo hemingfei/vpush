@@ -5,6 +5,9 @@ Page({
   data: { user: null },
 
   onShow() {
+    if (this._loadedAt && Date.now() - this._loadedAt < 30000 && this.data.user) {
+      return;
+    }
     this.load();
   },
 
@@ -12,6 +15,7 @@ Page({
     try {
       const user = await request("/api/me");
       app.globalData.user = user;
+      this._loadedAt = Date.now();
       this.setData({ user });
     } catch (err) {
       wx.showToast({ title: err.message, icon: "none" });

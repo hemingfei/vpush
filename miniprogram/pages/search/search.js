@@ -15,6 +15,7 @@ Page({
       { value: "combination", label: "雪球组合" },
       { value: "weibo", label: "微博" },
       { value: "twitter", label: "X" },
+      { value: "zsxq", label: "知识星球" },
     ],
     askLink: "",
     askCategories: [{ id: 0, name: "请选择分类" }],
