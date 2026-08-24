@@ -4940,6 +4940,7 @@ def test_wscn_fetch_reuses_cache_and_http_client(monkeypatch):
 
     api_mod._WSCN_CACHE.clear()
     monkeypatch.setattr(api_mod, "_wscn_client", lambda: FakeClient())
+    assert api_mod._WSCN_CACHE_TTL == 15
     first = api_mod._fetch_wscn_lives(limit=30)
     second = api_mod._fetch_wscn_lives(limit=30)
     assert first["items"][0]["id"] == 1
@@ -5008,7 +5009,63 @@ def test_wscn_warmup_fetches_first_page_and_swallows_errors(monkeypatch):
     api_mod.warmup_wscn_live()  # 不抛
 
 
-def test_wscn_warmup_hooked_in_lifespan():
+def test_wscn_refresh_does_not_hold_lock_during_http(monkeypatch):
+    import threading
+    from app import api as api_mod
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_load(cursor, limit):
+        del cursor, limit
+        entered.set()
+        release.wait(1)
+        return {"items": [], "next_cursor": "", "polling_cursor": 0}
+
+    monkeypatch.setattr(api_mod, "_wscn_load", slow_load)
+    api_mod._WSCN_REFRESHING.add(":30")
+    t = threading.Thread(target=api_mod._wscn_refresh, args=("", 30, ":30"), daemon=True)
+    t.start()
+    assert entered.wait(1)
+    assert api_mod._WSCN_LOCK.acquire(timeout=0.2)
+    api_mod._WSCN_LOCK.release()
+    release.set()
+    t.join(1)
+
+
+def test_wscn_refresh_home_skips_when_already_refreshing(monkeypatch):
+    from app import api as api_mod
+
+    called = []
+    monkeypatch.setattr(api_mod, "_wscn_refresh", lambda *a: called.append(a))
+    api_mod._WSCN_REFRESHING.clear()
+    api_mod._WSCN_REFRESHING.add(":30")
+    api_mod._wscn_refresh_home()
+    assert called == []
+    api_mod._WSCN_REFRESHING.clear()
+    api_mod._wscn_refresh_home()
+    assert called == [("", 30, ":30")]
+
+
+def test_wscn_live_refresh_hooked_in_lifespan():
     src = Path(__file__).resolve().parents[1].joinpath("app", "main.py").read_text(encoding="utf-8")
-    assert "warmup_wscn_live" in src
+    assert "start_wscn_live_refresh" in src
     assert "PYTEST_CURRENT_TEST" in src
+
+
+def test_start_wscn_live_refresh_warms_then_loops(monkeypatch):
+    from app import api as api_mod
+
+    started = []
+
+    class FakeThread:
+        def __init__(self, target=None, daemon=None, name=None):
+            started.append(target)
+
+        def start(self):
+            started.append("start")
+
+    monkeypatch.setattr(api_mod, "warmup_wscn_live", lambda: started.append("warm"))
+    monkeypatch.setattr(api_mod.threading, "Thread", FakeThread)
+    api_mod.start_wscn_live_refresh()
+    assert started == ["warm", api_mod._wscn_home_loop, "start"]
