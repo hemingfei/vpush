@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import sqlite3
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -694,7 +695,18 @@ def bounded_limit(value: int, default: int = 100) -> int:
 
 
 _WSCN_LIVES_URL = "https://api-one-wscn.awtmt.com/apiv1/content/lives"
-_WSCN_CACHE: tuple[float, str, dict] | None = None
+_WSCN_CACHE: dict[str, tuple[float, dict]] = {}
+_WSCN_CACHE_TTL = 90
+_WSCN_LOCK = threading.Lock()
+_WSCN_CLIENT: httpx.Client | None = None
+_WSCN_HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+
+
+def _wscn_client() -> httpx.Client:
+    global _WSCN_CLIENT
+    if _WSCN_CLIENT is None:
+        _WSCN_CLIENT = httpx.Client(timeout=8, headers=_WSCN_HEADERS)
+    return _WSCN_CLIENT
 
 
 def _wscn_plain_body(content: str) -> str:
@@ -720,36 +732,31 @@ def _normalize_wscn_item(raw: dict) -> dict:
 
 
 def _fetch_wscn_lives(*, cursor: str = "", limit: int = 30) -> dict:
-    global _WSCN_CACHE
     limit = max(1, min(int(limit), 50))
     cursor = (cursor or "").strip()
     cache_key = f"{cursor}:{limit}"
     now = time.time()
-    if _WSCN_CACHE and now - _WSCN_CACHE[0] <= 20 and _WSCN_CACHE[1] == cache_key:
-        return _WSCN_CACHE[2]
-
-    params: dict[str, str | int] = {"channel": "global-channel", "limit": limit}
-    if cursor:
-        params["cursor"] = cursor
-    with httpx.Client(
-        timeout=15,
-        headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
-    ) as client:
-        resp = client.get(_WSCN_LIVES_URL, params=params)
+    with _WSCN_LOCK:
+        cached = _WSCN_CACHE.get(cache_key)
+        if cached and now - cached[0] <= _WSCN_CACHE_TTL:
+            return cached[1]
+        params: dict[str, str | int] = {"channel": "global-channel", "limit": limit}
+        if cursor:
+            params["cursor"] = cursor
+        resp = _wscn_client().get(_WSCN_LIVES_URL, params=params)
         resp.raise_for_status()
         payload = resp.json()
-    if payload.get("code") != 20000:
-        raise RuntimeError(payload.get("message") or "WSCN API 错误")
-
-    data = payload.get("data") or {}
-    items = [_normalize_wscn_item(row) for row in (data.get("items") or [])]
-    result = {
-        "items": items,
-        "next_cursor": (data.get("next_cursor") or "").strip(),
-        "polling_cursor": int(data.get("polling_cursor") or (items[0]["id"] if items else 0)),
-    }
-    _WSCN_CACHE = (now, cache_key, result)
-    return result
+        if payload.get("code") != 20000:
+            raise RuntimeError(payload.get("message") or "WSCN API 错误")
+        data = payload.get("data") or {}
+        items = [_normalize_wscn_item(row) for row in (data.get("items") or [])]
+        result = {
+            "items": items,
+            "next_cursor": (data.get("next_cursor") or "").strip(),
+            "polling_cursor": int(data.get("polling_cursor") or (items[0]["id"] if items else 0)),
+        }
+        _WSCN_CACHE[cache_key] = (now, result)
+        return result
 
 
 def _prune_window_dict(

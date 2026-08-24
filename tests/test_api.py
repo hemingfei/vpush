@@ -4906,3 +4906,42 @@ def test_wscn_live_returns_normalized_items(monkeypatch):
 
     resp3 = client.get("/api/live/wscn?since_id=9", headers=headers)
     assert resp3.json()["items"] == []
+
+
+def test_wscn_fetch_reuses_cache_and_http_client(monkeypatch):
+    from app import api as api_mod
+
+    calls = []
+
+    class FakeResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "code": 20000,
+                "data": {
+                    "items": [{
+                        "id": 1,
+                        "score": 1,
+                        "content_text": "hello",
+                        "display_time": 0,
+                        "uri": "https://wallstreetcn.com/livenews/1",
+                    }],
+                    "next_cursor": "",
+                    "polling_cursor": 1,
+                },
+            }
+
+    class FakeClient:
+        def get(self, url, params=None):
+            calls.append((url, params))
+            return FakeResp()
+
+    api_mod._WSCN_CACHE.clear()
+    monkeypatch.setattr(api_mod, "_wscn_client", lambda: FakeClient())
+    first = api_mod._fetch_wscn_lives(limit=30)
+    second = api_mod._fetch_wscn_lives(limit=30)
+    assert first["items"][0]["id"] == 1
+    assert second["items"][0]["body"] == "hello"
+    assert len(calls) == 1

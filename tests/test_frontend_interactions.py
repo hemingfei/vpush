@@ -1287,6 +1287,18 @@ def test_timeline_live_source_is_platform_pill():
     assert '.live-item[data-score="3"]' in css
 
 
+def test_live_feed_is_prefetched_and_shares_inflight_request():
+    """进入动态页即预取快讯；点快讯应复用进行中的同一请求。"""
+    render = _fn_body("renderTimeline")
+    load = _fn_body("loadTimeline")
+    src = APP_JS.read_text()
+    assert "prefetchLiveFeed()" in render
+    assert "function prefetchLiveFeed" in src
+    assert "function liveWscnRequest" in src
+    assert "liveWscnRequest(" in load
+    assert "liveWscnRequest(" in _fn_body("prefetchLiveFeed")
+
+
 def test_live_pill_icon_matches_platform_badge_size():
     """快讯角标与其他平台同尺寸，选中不得反色出白圆。"""
     src = APP_JS.read_text()
@@ -1411,7 +1423,7 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     assert 'href="/style.css?v=175"' in html
-    assert 'src="/app.js?v=236"' in html
+    assert 'src="/app.js?v=237"' in html
 
 
 def test_register_placeholder_matches_username_min_length():

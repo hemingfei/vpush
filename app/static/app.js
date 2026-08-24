@@ -280,6 +280,14 @@ function clearSessionCaches() {
   state.timelineSecondary = false;
   state.liveImportant = false;
   state.liveQ = "";
+  if (typeof _livePosts !== "undefined") {
+    _livePosts.length = 0;
+    _liveCursor = "";
+    _liveLatestId = 0;
+    _livePendingNew.length = 0;
+    _livePendingLatestId = 0;
+    _liveInflight = null;
+  }
 }
 
 function logout() {
@@ -1016,6 +1024,7 @@ let _livePendingNew = [];
 let _livePendingLatestId = 0;
 let _liveSavedScrollY = 0;
 let _liveClockTimer = null;
+let _liveInflight = null;
 
 function isLiveTimeline() {
   return state.timelineSource === "live";
@@ -1359,6 +1368,7 @@ async function renderTimeline(seq) {
     pollFeedUpdates();
     if (!wide && !live) loadTimelineTags().catch(() => { _tlTags = []; _tlDynamicTags = []; });
     if (wide) loadTimelineRail(seq);
+    if (!live) prefetchLiveFeed();
     return;
   }
   if (live) {
@@ -1389,6 +1399,7 @@ async function renderTimeline(seq) {
     if (wide) loadTimelineRail(seq);
     startTimelinePoll();
     pollFeedUpdates();
+    prefetchLiveFeed();
   } catch (err) {
     if (!routeStillActive(seq)) return;
     const feed = $("#feed");
@@ -1762,7 +1773,7 @@ async function loadTimeline(reset = true, routeSeq, opts) {
     if (live) {
       const params = new URLSearchParams({ limit: "30" });
       if (!reset && _liveCursor) params.set("cursor", _liveCursor);
-      const data = await api(`/api/live/wscn?${params}`);
+      const data = await liveWscnRequest(params);
       if (seq !== _liveSeq || !$("#feed") || !routeStillActive(routeSeq) || !isLiveTimeline()) return;
       if (reset) _livePosts.length = 0;
       const items = data.items || [];
@@ -1829,6 +1840,30 @@ function feedLoadMore() {
 
 function timelineLoadMore() {
   feedLoadMore();
+}
+
+function liveWscnRequest(params) {
+  const key = params.toString();
+  if (_liveInflight && _liveInflight.key === key) return _liveInflight.p;
+  const p = api(`/api/live/wscn?${params}`).finally(() => {
+    if (_liveInflight && _liveInflight.p === p) _liveInflight = null;
+  });
+  _liveInflight = { key, p };
+  return p;
+}
+
+function prefetchLiveFeed() {
+  if (isLiveTimeline() || _livePosts.length) return;
+  const params = new URLSearchParams({ limit: "30" });
+  liveWscnRequest(params).then((data) => {
+    if (isLiveTimeline() || _livePosts.length) return;
+    const items = data.items || [];
+    if (!items.length) return;
+    _livePosts.push(...items);
+    _liveCursor = data.next_cursor || "";
+    _liveHasMore = !!(data.next_cursor && items.length);
+    _liveLatestId = _livePosts[0]?.id || 0;
+  }).catch(() => { /* 预取失败时点进快讯再拉 */ });
 }
 
 function liveClockText(now = new Date()) {
