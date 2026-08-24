@@ -1415,7 +1415,22 @@ def test_live_toolbar_keeps_existing_filter_structure():
     assert "日期" not in head
 
 
-def test_push_channels_html_treats_personal_feishu_as_bound():
+def test_live_feed_uses_scroll_loading_instead_of_more_button():
+    """快讯滚动到底部自动加载下一页，不再要求点击加载更多。"""
+    render = _fn_body("renderLiveFeed")
+    auto = _fn_body("startLiveAutoLoad")
+    stop = _fn_body("stopLiveAutoLoad")
+    load_more = _fn_body("feedLoadMore")
+    assert 'id="live-load-sentinel"' in render
+    assert "startLiveAutoLoad()" in render
+    assert "IntersectionObserver" in auto
+    assert 'rootMargin: "400px 0px"' in auto
+    assert "feedLoadMore()" in auto
+    assert "disconnect()" in stop
+    assert "stopLiveAutoLoad()" in load_more
+    assert 'onclick="feedLoadMore()"' not in render
+
+
     """渠道勾选不能只看 users.feishu_*，否则个人机器人用户会看到「还没有绑定」。"""
     assert "feishu_personal" in _fn_body("feishuChannelBound")
     assert "feishuChannelBound(user)" in _fn_body("pushChannelsHtml")
@@ -1463,8 +1478,8 @@ def test_channel_status_poll_skips_identical_and_restores_focus():
 def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
-    assert 'href="/style.css?v=179"' in html
-    assert 'src="/app.js?v=242"' in html
+    assert 'href="/style.css?v=180"' in html
+    assert 'src="/app.js?v=243"' in html
 
 
 def test_register_placeholder_matches_username_min_length():

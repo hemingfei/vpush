@@ -1026,6 +1026,8 @@ let _livePendingLatestId = 0;
 let _liveSavedScrollY = 0;
 let _liveClockTimer = null;
 let _liveInflight = null;
+let _liveLoadObserver = null;
+let _liveLoadFallback = null;
 
 function isLiveTimeline() {
   return state.timelineSource === "live";
@@ -1957,6 +1959,7 @@ async function loadTimeline(reset = true, routeSeq, opts) {
 function feedLoadMore() {
   if (isLiveTimeline()) {
     if (_liveLoadingMore || !_liveHasMore) return;
+    stopLiveAutoLoad();
   } else if (_tlLoadingMore || !_tlHasMore) {
     return;
   }
@@ -2044,6 +2047,36 @@ function stopLiveClock() {
   if (_liveClockTimer) { clearInterval(_liveClockTimer); _liveClockTimer = null; }
 }
 
+function stopLiveAutoLoad() {
+  _liveLoadObserver?.disconnect();
+  _liveLoadObserver = null;
+  if (_liveLoadFallback) {
+    window.removeEventListener("scroll", _liveLoadFallback);
+    _liveLoadFallback = null;
+  }
+}
+
+function startLiveAutoLoad() {
+  stopLiveAutoLoad();
+  const sentinel = $("#live-load-sentinel");
+  if (!sentinel || !_liveHasMore) return;
+  const load = () => {
+    if (isLiveTimeline()) feedLoadMore();
+  };
+  if ("IntersectionObserver" in window) {
+    _liveLoadObserver = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) load();
+    }, { rootMargin: "400px 0px" });
+    _liveLoadObserver.observe(sentinel);
+    return;
+  }
+  _liveLoadFallback = () => {
+    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 400) load();
+  };
+  window.addEventListener("scroll", _liveLoadFallback, { passive: true });
+  _liveLoadFallback();
+}
+
 function liveFilteredPosts() {
   const q = (state.liveQ || "").trim().toLowerCase();
   return _livePosts.filter((item) => {
@@ -2096,19 +2129,21 @@ function renderLiveFeed() {
       <div class="live-feed">${list.map(liveFeedItem).join("")}</div>
     </div>`).join("");
   const footer = _liveHasMore && posts.length
-    ? `<div class="toolbar tl-feed-more"><button class="btn-normal" onclick="feedLoadMore()">加载更多</button></div>`
+    ? `<div id="live-load-sentinel" class="tl-feed-more" aria-hidden="true"></div>`
     : (posts.length ? `<p class="muted tl-feed-end">已加载全部</p>` : "");
   const empty = allPosts.length
-    ? emptyState("没有匹配的快讯", _liveHasMore ? `<div><button class="btn-normal" onclick="feedLoadMore()">继续加载</button></div>` : "")
+    ? emptyState("没有匹配的快讯")
     : emptyState("暂无快讯", `<div><button class="btn-normal" onclick="loadTimeline(true, routeRenderSeq)">刷新</button></div>`);
   const attr = posts.length
     ? html + footer + `<p class="live-attribution muted">数据来源：<a href="https://wallstreetcn.com/live/global" target="_blank" rel="noopener">华尔街见闻 · 快讯</a></p>`
     : empty;
   feed.innerHTML = attr;
   renderLiveRail();
+  startLiveAutoLoad();
 }
 
 function renderTimelineFeed() {
+  stopLiveAutoLoad();
   const feed = $("#feed");
   if (!feed) return;
   const posts = _tlPosts;
