@@ -1412,6 +1412,10 @@ body.lightbox-open { overflow: hidden; }
     position: sticky;
     top: 56px;
   }
+  .tl-layout.live-mode {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .tl-layout.live-mode .tl-rail { display: none; }
 }
 @media (max-width: 1279px) {
   .tl-layout { display: block; }

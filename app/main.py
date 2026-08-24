@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -188,6 +189,10 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
                 from .feishu_personal import FeishuPersonalManager
 
                 FeishuPersonalManager(db, config.notifiers.feishu).expire_stale()
+            if "PYTEST_CURRENT_TEST" not in os.environ:
+                from .api import warmup_wscn_live
+
+                threading.Thread(target=warmup_wscn_live, daemon=True, name="wscn-warmup").start()
         else:
             logger.warning("DAV_UI_ONLY=1 已跳过调度器与机器人长连接，仅提供网页 UI")
         yield

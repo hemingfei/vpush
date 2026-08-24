@@ -1294,6 +1294,92 @@ function tlApplyRailSearch() {
   tlApplyFilter();
 }
 
+function tlFilterActionsHtml() {
+  return `<div class="tl-actions">
+          <button id="tl-filter-toggle" class="fav-toggle ${tlPanelFilterOn() ? "has-filter" : ""}" aria-label="筛选" aria-expanded="false" aria-controls="tl-filter-panel" onclick="tlFilterPanel()">${FILTER_ICON}筛选</button>
+        </div>`;
+}
+
+function tlFilterPanelHtml() {
+  return `<div class="tl-filter-panel" id="tl-filter-panel">
+        ${tlSearchBarHtml()}
+        <div class="tl-filter-views">${tlViewTogglesHtml()}</div>
+        <div class="tl-filter-row">
+          <select id="tl-tag" class="form-control" onchange="tlApplyFilter()"><option value="">全部标签</option></select>
+        </div>
+        <div class="tl-filter-actions">
+          <button class="btn-ghost" onclick="tlResetFilters()">清除筛选</button>
+          <button class="btn-normal" onclick="tlApplyFilter()">完成</button>
+        </div>
+      </div>`;
+}
+
+function syncTimelineSourceView() {
+  if (!$("#tl-feed-panel") || !$("#tl-filterbar")) {
+    renderTimeline(routeRenderSeq);
+    return;
+  }
+  const live = isLiveTimeline();
+  const wide = isWideTimeline();
+  document.querySelector(".tl-layout")?.classList.toggle("live-mode", live);
+  $("#tl-filterbar")?.classList.toggle("live-mode", live);
+  const pills = $("#tl-pills");
+  if (pills) pills.innerHTML = tlPillsHtml();
+  const bar = $("#tl-platform-bar");
+  if (live) {
+    if (!$("#live-toolbar") && bar) {
+      bar.insertAdjacentHTML("afterend", `<div class="live-toolbar" id="live-toolbar">${liveToolbarHtml()}</div>`);
+    } else if ($("#live-toolbar")) $("#live-toolbar").innerHTML = liveToolbarHtml();
+  } else {
+    $("#live-toolbar")?.remove();
+  }
+  const actions = bar?.querySelector(".tl-actions");
+  if (wide || live) actions?.remove();
+  else if (bar && !actions) bar.insertAdjacentHTML("beforeend", tlFilterActionsHtml());
+  const panel = $("#tl-filter-panel");
+  if (wide || live) {
+    panel?.remove();
+    $("#tl-filterbar")?.classList.remove("open");
+  } else if (!panel) {
+    const badge = $("#tl-new-badge");
+    if (badge) badge.insertAdjacentHTML("beforebegin", tlFilterPanelHtml());
+    else $("#tl-filterbar")?.insertAdjacentHTML("beforeend", tlFilterPanelHtml());
+    loadTimelineTags().catch(() => { _tlTags = []; _tlDynamicTags = []; });
+  }
+  const chips = $("#tl-active-chips-wrap");
+  if (chips) {
+    chips.classList.toggle("is-hidden", live);
+    chips.innerHTML = live ? "" : tlActiveChipsHtml();
+  }
+  const btn = $(".tl-new-badge-btn");
+  if (btn) btn.setAttribute("aria-label", live ? "有新快讯，点击查看" : "有新动态，点击查看");
+  $("#tl-new-badge")?.classList.toggle("live-mode", live);
+  if (live) startLiveClock();
+  else stopLiveClock();
+  tlSyncNewBadgeMode();
+  startTimelinePoll();
+  if (live) {
+    if (_livePosts.length) {
+      renderLiveFeed();
+      pollFeedUpdates();
+    } else {
+      loadTimeline(true, routeRenderSeq).then(() => pollFeedUpdates());
+    }
+    return;
+  }
+  if (_tlPosts.length && _tlLoadedFilter === tlFilterKey()) {
+    renderTimelineFeed();
+    pollFeedUpdates();
+    if (wide) loadTimelineRail(routeRenderSeq);
+  } else {
+    loadTimeline(true, routeRenderSeq).then(() => {
+      if (wide) loadTimelineRail(routeRenderSeq);
+      pollFeedUpdates();
+    });
+  }
+  prefetchLiveFeed();
+}
+
 function tlPickSource(source) {
   const next = source === "live" ? "live" : "kol";
   if (state.timelineSource === next) return;
@@ -1302,7 +1388,8 @@ function tlPickSource(source) {
   state.timelineSource = next;
   tlPersistSource();
   stopTimelinePoll();
-  renderTimeline(routeRenderSeq);
+  if ($("#tl-feed-panel")) syncTimelineSourceView();
+  else renderTimeline(routeRenderSeq);
 }
 
 async function renderTimeline(seq) {
@@ -1313,29 +1400,17 @@ async function renderTimeline(seq) {
   const reuse = live
     ? _livePosts.length > 0
     : (_tlPosts.length && _tlLoadedFilter === tlFilterKey());
-  const wide = isWideTimeline() && !live;
+  const wide = isWideTimeline();
   $("#main").innerHTML = `
-    <div class="tl-layout">
+    <div class="tl-layout${live ? " live-mode" : ""}">
     <div class="tl-main">
     <div class="tl-filterbar${live ? " live-mode" : ""}" id="tl-filterbar">
       <div class="tl-filterbar-top icon-badge-bar" id="tl-platform-bar">
         <div class="tl-pills" id="tl-pills" role="radiogroup" aria-label="平台和内容源">${tlPillsHtml()}</div>
-        ${wide || live ? "" : `<div class="tl-actions">
-          <button id="tl-filter-toggle" class="fav-toggle ${tlPanelFilterOn() ? "has-filter" : ""}" aria-label="筛选" aria-expanded="false" aria-controls="tl-filter-panel" onclick="tlFilterPanel()">${FILTER_ICON}筛选</button>
-        </div>`}
+        ${wide || live ? "" : tlFilterActionsHtml()}
       </div>
       ${live ? `<div class="live-toolbar" id="live-toolbar">${liveToolbarHtml()}</div>` : ""}
-      ${wide || live ? "" : `<div class="tl-filter-panel" id="tl-filter-panel">
-        ${tlSearchBarHtml()}
-        <div class="tl-filter-views">${tlViewTogglesHtml()}</div>
-        <div class="tl-filter-row">
-          <select id="tl-tag" class="form-control" onchange="tlApplyFilter()"><option value="">全部标签</option></select>
-        </div>
-        <div class="tl-filter-actions">
-          <button class="btn-ghost" onclick="tlResetFilters()">清除筛选</button>
-          <button class="btn-normal" onclick="tlApplyFilter()">完成</button>
-        </div>
-      </div>`}
+      ${wide || live ? "" : tlFilterPanelHtml()}
       <div class="tl-new-badge${live ? " live-mode" : ""}" id="tl-new-badge">
         <button class="tl-new-badge-btn" onclick="refreshTimeline()" aria-label="${live ? "有新快讯，点击查看" : "有新动态，点击查看"}">
           ${ARROW_UP_ICON}
@@ -1556,7 +1631,8 @@ function tlPickPlatform(p) {
   state.timelinePlatform = p;
   if (leftLive) {
     stopTimelinePoll();
-    renderTimeline(routeRenderSeq);
+    if ($("#tl-feed-panel")) syncTimelineSourceView();
+    else renderTimeline(routeRenderSeq);
     return;
   }
   const pills = $("#tl-pills");

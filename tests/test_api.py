@@ -4995,3 +4995,20 @@ def test_wscn_serves_stale_cache_while_refreshing(monkeypatch):
     assert entered.wait(1)
     assert len(calls) == 2
     release.set()
+
+
+def test_wscn_warmup_fetches_first_page_and_swallows_errors(monkeypatch):
+    from app import api as api_mod
+
+    called = []
+    monkeypatch.setattr(api_mod, "_fetch_wscn_lives", lambda **kw: called.append(kw) or {"items": []})
+    api_mod.warmup_wscn_live()
+    assert called == [{"limit": 30}]
+    monkeypatch.setattr(api_mod, "_fetch_wscn_lives", lambda **kw: (_ for _ in ()).throw(RuntimeError("down")))
+    api_mod.warmup_wscn_live()  # 不抛
+
+
+def test_wscn_warmup_hooked_in_lifespan():
+    src = Path(__file__).resolve().parents[1].joinpath("app", "main.py").read_text(encoding="utf-8")
+    assert "warmup_wscn_live" in src
+    assert "PYTEST_CURRENT_TEST" in src

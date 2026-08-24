@@ -156,14 +156,17 @@ def test_mobile_timeline_filter_keeps_pills_out_of_panel():
     assert "function tlPickMobilePlatform" not in src
     assert "function tlPlatformOptions" not in src
     assert 'role="radiogroup"' in render
-    actions = render.split("tl-actions")[1].split("tl-filter-panel")[0]
+    actions = _fn_body("tlFilterActionsHtml")
+    panel = _fn_body("tlFilterPanelHtml")
     assert "tlViewTogglesHtml" not in actions
-    assert "tlViewTogglesHtml()" in render.split('id="tl-filter-panel"')[1]
+    assert "tlViewTogglesHtml()" in panel
+    assert "tlFilterActionsHtml()" in render
+    assert "tlFilterPanelHtml()" in render
 
-    assert "tlSearchBarHtml()" in render
+    assert "tlSearchBarHtml()" in panel
     assert 'id="tl-q"' in _fn_body("tlSearchBarHtml")
-    assert 'id="tl-tag"' in render
-    assert "tlApplyFilter()" in render
+    assert 'id="tl-tag"' in panel
+    assert "tlApplyFilter()" in panel
     assert 'id="tl-category"' not in render
     assert "tlApplyRailSearch" in src
 
@@ -387,7 +390,7 @@ def test_mobile_mysubs_filter_is_seven_equal_44px_targets():
     assert pill and "44px" in pill.group(1)
     assert "特别关注" in _fn_body("mysubsMobileFiltersHtml")
     assert 'aria-label="特别关注"' in _fn_body("mysubsMobileFiltersHtml")
-    assert 'aria-label="筛选"' in _fn_body("renderTimeline")
+    assert 'aria-label="筛选"' in _fn_body("tlFilterActionsHtml")
     assert ".icon-badge-bar .tl-pill span" in css and "display: none" in css
     assert ".icon-badge-bar > .fav-toggle" in css and "font-size: 0" in css
     assert 'class="icon-badge-bar"' in _fn_body("renderHome")
@@ -1101,7 +1104,7 @@ def test_timeline_filterbar_stays_in_main_column():
     html = re.search(r'\$\("#main"\)\.innerHTML = `(.*?)`;', render, re.S)
     assert html, "renderTimeline 未写入主栏 HTML"
     chunk = html.group(1)
-    assert chunk.index('class="tl-layout"') < chunk.index('id="tl-filterbar"')
+    assert chunk.index("tl-layout") < chunk.index('id="tl-filterbar"')
     assert 'class="tl-main"' in chunk
     assert chunk.index('class="tl-main"') < chunk.index('id="tl-filterbar"') < chunk.index('id="tl-feed-panel"')
     assert chunk.index('id="tl-feed-panel"') < chunk.index('id="tl-rail"')
@@ -1287,6 +1290,21 @@ def test_timeline_live_source_is_platform_pill():
     assert '.live-item[data-score="3"]' in css
 
 
+def test_timeline_source_switch_reuses_shell_when_feed_exists():
+    """已在动态页时切快讯只同步壳层，不整页 innerHTML。"""
+    src = APP_JS.read_text()
+    css = STYLE_CSS.read_text()
+    assert "function syncTimelineSourceView" in src
+    assert "syncTimelineSourceView(" in _fn_body("tlPickSource")
+    assert "syncTimelineSourceView(" in _fn_body("tlPickPlatform")
+    render = _fn_body("renderTimeline")
+    assert 'class="tl-layout${live ? " live-mode" : ""}"' in render
+    assert "const wide = isWideTimeline()" in render
+    assert "isWideTimeline() && !live" not in render
+    assert ".tl-layout.live-mode" in css
+    assert ".tl-layout.live-mode .tl-rail" in css
+
+
 def test_live_feed_is_prefetched_and_shares_inflight_request():
     """进入动态页即预取快讯；点快讯应复用进行中的同一请求。"""
     render = _fn_body("renderTimeline")
@@ -1423,8 +1441,8 @@ def test_channel_status_poll_skips_identical_and_restores_focus():
 def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
-    assert 'href="/style.css?v=175"' in html
-    assert 'src="/app.js?v=238"' in html
+    assert 'href="/style.css?v=176"' in html
+    assert 'src="/app.js?v=239"' in html
 
 
 def test_register_placeholder_matches_username_min_length():

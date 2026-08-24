@@ -703,6 +703,13 @@ _WSCN_CLIENT: httpx.Client | None = None
 _WSCN_HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
 
+def warmup_wscn_live() -> None:
+    try:
+        _fetch_wscn_lives(limit=30)
+    except Exception:
+        logger.warning("wscn warmup failed", exc_info=True)
+
+
 def _wscn_client() -> httpx.Client:
     global _WSCN_CLIENT
     if _WSCN_CLIENT is None:
