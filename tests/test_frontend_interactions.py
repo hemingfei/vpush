@@ -141,7 +141,7 @@ def test_post_tags_filter_timeline_without_inline_user_string():
     assert 'data-tag="${escapeHtml(t)}"' in post_card
     assert "tlPickTag(this.dataset.tag)" in post_card
     assert "state.timelineTag = tag" in pick_tag
-    assert "loadTimeline(true, routeRenderSeq)" in pick_tag
+    assert "loadTimeline(true, routeRenderSeq, { revert })" in pick_tag
 
 
 def test_mobile_timeline_filter_keeps_pills_out_of_panel():
@@ -185,7 +185,7 @@ def test_timeline_pills_always_show_short_labels():
     assert 'combination: "组合"' in src
     assert ".tl-pill-icon" not in css
     assert ".tl-pills { display: none" not in css
-    assert "flex-wrap: wrap" in css
+    assert "flex-wrap: nowrap" in css
     assert 'data-platform="xueqiu"]' in css and "margin-inline-end" in css
     pill = re.search(r"\.tl-pill\s*\{([^}]*)\}", css)
     assert pill and "44px" in pill.group(1)
@@ -193,17 +193,46 @@ def test_timeline_pills_always_show_short_labels():
 
 
 def test_timeline_filter_status_is_pills_only():
-    """平台只由胶囊表达；筛选高亮和生效芯片只服务搜索/标签。"""
+    """平台只由胶囊表达；漏斗里的视图/搜索/标签点亮筛选并写出 chip。"""
     chips = _fn_body("tlActiveChips")
+    panel = _fn_body("tlPanelFilterOn")
     pick = _fn_body("tlPickPlatform")
     apply_f = _fn_body("tlApplyFilter")
     render = _fn_body("renderTimeline")
     assert 'key: "platform"' not in chips
     assert "平台：" not in chips
+    assert 'key: "favorite"' in chips
+    assert 'key: "secondary"' in chips
+    assert "timelineFavorite" in panel
+    assert "timelineSecondary" in panel
     assert "timelinePlatform || state.timelineTag" not in pick
     assert "timelinePlatform || state.timelineTag" not in apply_f
     assert "state.timelineQ || state.timelinePlatform || state.timelineTag" not in render
-    assert "tlPanelFilterOn()" in pick or "state.timelineQ || state.timelineTag" in pick
+    assert "tlSyncFilterChrome" in pick
+
+
+def test_timeline_filter_controls_revert_on_failure():
+    """平台、视图开关、搜索/标签失败时回滚控件，reset 重写次要大V 图标。"""
+    load = _fn_body("loadTimeline")
+    reset = _fn_body("tlResetFilters")
+    paint = _fn_body("tlPaintViewToggles")
+    assert "opts.revert" in load
+    assert "tlRestoreFilters" in load
+    assert "revertPlatform" not in load
+    for name in (
+        "tlPickPlatform",
+        "toggleTimelineFav",
+        "toggleTimelineSecondary",
+        "tlApplyFilter",
+        "tlResetFilters",
+        "tlRemoveFilter",
+        "tlPickTag",
+    ):
+        body = _fn_body(name)
+        assert "tlSnapshotFilters" in body
+        assert "{ revert }" in body
+    assert "tlPaintViewToggles" in reset
+    assert "EYE_OFF_ICON" in paint
 
 
 def test_timeline_platform_switch_reverts_on_failure():
@@ -213,7 +242,8 @@ def test_timeline_platform_switch_reverts_on_failure():
     assert "TL_SKELETON" in load
     assert "catch" in load
     assert "加载失败" in load
-    assert "revertPlatform" in pick or "prev" in pick
+    assert "tlSnapshotFilters" in pick
+    assert "{ revert }" in pick
     assert "aria-busy" in load or "aria-busy" in pick
 
 
@@ -240,11 +270,18 @@ def test_mobile_platform_filter_keeps_hidden_state_and_applies_immediately():
 
 
 def test_mobile_platform_filter_is_five_equal_44px_targets():
-    """旧图标宫格已删；时间线胶囊桌面带短字 44px。"""
+    """旧图标宫格已删；时间线胶囊带短字 44px，窄屏横滑不进角标坞。"""
     css = STYLE_CSS.read_text()
+    render = _fn_body("renderTimeline")
+    mobile = _media_block(css, "@media (max-width: 768px)")
     assert ".tl-mobile-platform" not in css
     pill = re.search(r"\.tl-pill\s*\{([^}]*)\}", css)
     assert pill and "44px" in pill.group(1)
+    assert 'class="tl-filterbar-top icon-badge-bar"' not in render
+    assert ".tl-filterbar-top .tl-pill span { display: none" not in css
+    assert "flex-shrink: 0" in mobile
+    assert "display: none" not in re.search(r"\.topbar-title h1\s*\{([^}]*)\}", mobile).group(1)
+    assert "clip: rect(0, 0, 0, 0)" in re.search(r"\.topbar-title h1\s*\{([^}]*)\}", mobile).group(1)
 
 
 def test_timeline_polish_matches_chip_row_and_browser_surfaces():
@@ -316,8 +353,10 @@ def test_mobile_mysubs_filter_is_seven_equal_44px_targets():
     assert ".icon-badge-bar .tl-pill span" in css and "display: none" in css
     assert ".icon-badge-bar > .fav-toggle" in css and "font-size: 0" in css
     assert 'class="icon-badge-bar"' in _fn_body("renderHome")
-    assert 'class="tl-filterbar-top icon-badge-bar"' in _fn_body("renderTimeline")
+    assert 'class="tl-filterbar-top icon-badge-bar"' not in _fn_body("renderTimeline")
+    assert 'class="tl-filterbar-top"' in _fn_body("renderTimeline")
     assert "repeat(7, minmax(0, 1fr))" in css
+    assert ".tl-filterbar-top .tl-pill { flex-shrink: 0; }" in css
     # 不再把筛选条竖着堆成两行
     mobile = re.search(r"@media \(max-width: 768px\) \{(.*)\}\s*/\* ----------", css, re.DOTALL)
     body = mobile.group(1) if mobile else css
@@ -1176,7 +1215,7 @@ def test_timeline_rail_fills_main_and_survives_resize():
     assert "min-width: 1280px" in watch
     assert 'addEventListener("change"' in watch
     assert "renderTimeline(" in watch
-    assert "tlSyncActiveChips()" in _fn_body("tlPickTag")
+    assert "tlSyncFilterChrome()" in _fn_body("tlPickTag")
     assert "renderRailTags" in _fn_body("tlRemoveFilter")
 
 

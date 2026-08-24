@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.45";
+const APP_VERSION = "1.12.46";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"];
 const TL_PLATFORMS = PLATFORM_TABS.map((p) => [p, p ? PLATFORM_LABELS[p] : "全部"]);
@@ -1001,14 +1001,63 @@ function tlFilterKey() {
 // 生效筛选条件 → 可见 chip 列表：用户随时能看到自己被什么过滤着，逐个可移除
 // label 直接存已转义文本（escapeHtml 在构造行完成，渲染处不再重复转义）
 function tlPanelFilterOn() {
-  return !!(state.timelineQ || state.timelineTag);
+  return !!(state.timelineQ || state.timelineTag || state.timelineFavorite || state.timelineSecondary);
 }
 
 function tlActiveChips() {
   const chips = [];
+  if (state.timelineFavorite) chips.push({ key: "favorite", label: "特别关注" });
+  if (state.timelineSecondary) chips.push({ key: "secondary", label: "次要大V" });
   if (state.timelineQ) chips.push({ key: "q", label: `关键词：${escapeHtml(state.timelineQ)}` });
   if (state.timelineTag) chips.push({ key: "tag", label: `标签：${escapeHtml(state.timelineTag)}` });
   return chips;
+}
+
+function tlSnapshotFilters() {
+  return {
+    timelinePlatform: state.timelinePlatform,
+    timelineFavorite: state.timelineFavorite,
+    timelineSecondary: state.timelineSecondary,
+    timelineQ: state.timelineQ,
+    timelineTag: state.timelineTag,
+    timelineCategory: state.timelineCategory,
+  };
+}
+
+function tlPaintViewToggles() {
+  const fav = $("#timeline-fav-toggle");
+  if (fav) {
+    fav.classList.toggle("fav-on", state.timelineFavorite);
+    fav.setAttribute("aria-pressed", String(state.timelineFavorite));
+  }
+  const sec = $("#timeline-secondary-toggle");
+  if (sec) {
+    sec.classList.toggle("fav-on", state.timelineSecondary);
+    sec.setAttribute("aria-pressed", String(state.timelineSecondary));
+    sec.innerHTML = `${state.timelineSecondary ? EYE_ICON : EYE_OFF_ICON} 次要大V`;
+  }
+}
+
+function tlSyncFilterChrome() {
+  const btn = $("#tl-filter-toggle");
+  if (btn) btn.classList.toggle("has-filter", tlPanelFilterOn());
+  tlSyncActiveChips();
+}
+
+function tlRestoreFilters(snap) {
+  if (!snap) return;
+  state.timelinePlatform = snap.timelinePlatform;
+  state.timelineFavorite = snap.timelineFavorite;
+  state.timelineSecondary = snap.timelineSecondary;
+  state.timelineQ = snap.timelineQ;
+  state.timelineTag = snap.timelineTag;
+  state.timelineCategory = snap.timelineCategory;
+  const q = $("#tl-q"); if (q) q.value = state.timelineQ || "";
+  const tag = $("#tl-tag"); if (tag) tag.value = state.timelineTag || "";
+  const pills = $("#tl-pills");
+  if (pills) pills.innerHTML = tlPillsHtml();
+  tlPaintViewToggles();
+  tlSyncFilterChrome();
 }
 
 function tlActiveChipsHtml() {
@@ -1019,13 +1068,17 @@ function tlActiveChipsHtml() {
 }
 
 function tlRemoveFilter(key) {
+  const revert = tlSnapshotFilters();
   if (key === "q") state.timelineQ = "";
   else if (key === "tag") {
     state.timelineTag = "";
     const tagSel = $("#tl-tag");
     if (tagSel) tagSel.value = "";
-  }
-  loadTimeline(true, routeRenderSeq);
+  } else if (key === "favorite") state.timelineFavorite = false;
+  else if (key === "secondary") state.timelineSecondary = false;
+  tlPaintViewToggles();
+  tlSyncFilterChrome();
+  loadTimeline(true, routeRenderSeq, { revert });
   renderRailTags(_tlDynamicTags.slice(0, 8));
 }
 
@@ -1110,7 +1163,7 @@ async function renderTimeline(seq) {
     <div class="tl-layout">
     <div class="tl-main">
     <div class="tl-filterbar" id="tl-filterbar">
-      <div class="tl-filterbar-top icon-badge-bar">
+      <div class="tl-filterbar-top">
         <div class="tl-pills" id="tl-pills" role="radiogroup" aria-label="平台">${tlPillsHtml()}</div>
         ${wide ? "" : `<div class="tl-actions">
           <button id="tl-filter-toggle" class="fav-toggle ${tlPanelFilterOn() ? "has-filter" : ""}" aria-label="筛选" aria-expanded="false" aria-controls="tl-filter-panel" onclick="tlFilterPanel()">${FILTER_ICON}筛选</button>
@@ -1286,14 +1339,12 @@ function tlPillsHtml() {
 }
 
 function tlPickPlatform(p) {
-  const prev = state.timelinePlatform;
+  const revert = tlSnapshotFilters();
   state.timelinePlatform = p;
   const pills = $("#tl-pills");
   if (pills) pills.innerHTML = tlPillsHtml();
-  const btn = $("#tl-filter-toggle");
-  if (btn) btn.classList.toggle("has-filter", tlPanelFilterOn());
-  tlSyncActiveChips();
-  loadTimeline(true, routeRenderSeq, { revertPlatform: prev });
+  tlSyncFilterChrome();
+  loadTimeline(true, routeRenderSeq, { revert });
 }
 
 function tlSyncActiveChips() {
@@ -1311,6 +1362,7 @@ function tlFilterPanel() {
 }
 
 function tlApplyFilter() {
+  const revert = tlSnapshotFilters();
   const q = $("#tl-q");
   if (q) state.timelineQ = q.value.trim();
   const tag = $("#tl-tag");
@@ -1318,15 +1370,13 @@ function tlApplyFilter() {
   state.timelineCategory = "";
   $("#tl-filterbar")?.classList.remove("open");
   const btn = $("#tl-filter-toggle");
-  if (btn) {
-    btn.classList.toggle("has-filter", tlPanelFilterOn());
-    btn.setAttribute("aria-expanded", "false");
-  }
-  tlSyncActiveChips();
-  loadTimeline(true, routeRenderSeq);
+  if (btn) btn.setAttribute("aria-expanded", "false");
+  tlSyncFilterChrome();
+  loadTimeline(true, routeRenderSeq, { revert });
 }
 
 function tlResetFilters() {
+  const revert = tlSnapshotFilters();
   state.timelineQ = "";
   state.timelineCategory = "";
   state.timelineTag = "";
@@ -1336,34 +1386,22 @@ function tlResetFilters() {
   const q = $("#tl-q"); if (q) q.value = "";
   const tag = $("#tl-tag"); if (tag) tag.value = "";
   const pills = $("#tl-pills"); if (pills) pills.innerHTML = tlPillsHtml();
-  const fb = $("#tl-filter-toggle"); if (fb) {
-    fb.classList.remove("has-filter");
-    fb.setAttribute("aria-expanded", "false");
-  }
-  const fav = $("#timeline-fav-toggle"); if (fav) {
-    fav.classList.remove("fav-on");
-    fav.setAttribute("aria-pressed", "false");
-  }
-  const sec = $("#timeline-secondary-toggle"); if (sec) {
-    sec.classList.remove("fav-on");
-    sec.setAttribute("aria-pressed", "false");
-  }
+  const fb = $("#tl-filter-toggle"); if (fb) fb.setAttribute("aria-expanded", "false");
   $("#tl-filterbar")?.classList.remove("open");
-  loadTimeline(true, routeRenderSeq);
+  tlPaintViewToggles();
+  tlSyncFilterChrome();
+  loadTimeline(true, routeRenderSeq, { revert });
   renderRailTags(_tlDynamicTags.slice(0, 8));
 }
 
 // 点击帖子标签直接进入该标签筛选（复用 timelineTag 状态与筛选条）
 function tlPickTag(tag) {
+  const revert = tlSnapshotFilters();
   state.timelineTag = tag;
   const tagSel = $("#tl-tag");
   if (tagSel) tagSel.value = tag;
-  const btn = $("#tl-filter-toggle");
-  if (btn) {
-    btn.classList.toggle("has-filter", tlPanelFilterOn());
-  }
-  tlSyncActiveChips();
-  loadTimeline(true, routeRenderSeq);
+  tlSyncFilterChrome();
+  loadTimeline(true, routeRenderSeq, { revert });
   renderRailTags(_tlDynamicTags.slice(0, 8));
 }
 
@@ -1539,10 +1577,7 @@ async function loadTimeline(reset = true, routeSeq, opts) {
     renderTimelineFeed();
   } catch (err) {
     if (seq !== _tlSeq || !$("#feed") || !routeStillActive(routeSeq)) return;
-    if (reset && Object.prototype.hasOwnProperty.call(opts, "revertPlatform")) {
-      state.timelinePlatform = opts.revertPlatform;
-      if (pills) pills.innerHTML = tlPillsHtml();
-    }
+    if (reset && opts.revert) tlRestoreFilters(opts.revert);
     $("#feed").innerHTML = emptyState("加载失败: " + err.message,
       `<div><button class="btn-normal" onclick="loadTimeline(true, routeRenderSeq)">重试</button></div>`);
   } finally {
@@ -1590,26 +1625,21 @@ function renderTimelineFeed() {
 }
 
 function toggleTimelineFav() {
+  const revert = tlSnapshotFilters();
   state.timelineFavorite = !state.timelineFavorite;
-  const btn = $("#timeline-fav-toggle");
-  if (btn) {
-    btn.classList.toggle("fav-on", state.timelineFavorite);
-    btn.setAttribute("aria-pressed", String(state.timelineFavorite));
-  }
-  loadTimeline(true, routeRenderSeq);
+  tlPaintViewToggles();
+  tlSyncFilterChrome();
+  loadTimeline(true, routeRenderSeq, { revert });
 }
 
 function toggleTimelineSecondary() {
   // 次要大V开关：默认关闭（动态页隐藏次要大V），开启后显示其动态。
   // 图标随状态切换：隐藏 = 划线眼睛（不看），显示 = 睁眼（看）。
+  const revert = tlSnapshotFilters();
   state.timelineSecondary = !state.timelineSecondary;
-  const btn = $("#timeline-secondary-toggle");
-  if (btn) {
-    btn.classList.toggle("fav-on", state.timelineSecondary);
-    btn.setAttribute("aria-pressed", String(state.timelineSecondary));
-    btn.innerHTML = `${state.timelineSecondary ? EYE_ICON : EYE_OFF_ICON} 次要大V`;
-  }
-  loadTimeline(true, routeRenderSeq);
+  tlPaintViewToggles();
+  tlSyncFilterChrome();
+  loadTimeline(true, routeRenderSeq, { revert });
 }
 
 function tlTogglePost(id) {

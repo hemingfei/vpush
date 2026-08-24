@@ -441,7 +441,7 @@ textarea.form-control {
   background: var(--color-bg);
   border-bottom: var(--border-default);
 }
-.topbar-title { display: flex; align-items: center; gap: 6px; }
+.topbar-title { position: relative; display: flex; align-items: center; gap: 6px; }
 .topbar-title h1 { font-size: var(--text-title); font-weight: var(--font-weight-semibold); color: var(--color-text-strong); }
 /* topbar 左上角品牌符号：PC 端与页面文字标题并存（logo 品牌锚 + 文字定位），移动端单独显示 */
 .topbar-logo { display: inline-block; height: 28px; width: auto; flex-shrink: 0; }
@@ -1244,7 +1244,15 @@ body.lightbox-open { overflow: hidden; }
 .admin-sk-table-row { display: flex; gap: 12px; }
 .admin-sk-table-row .admin-sk-line { flex: 1; }
 .tl-filterbar-top { display: flex; align-items: center; gap: 10px; }
-.tl-pills { display: flex; flex-wrap: wrap; gap: 8px; flex: 1; min-width: 0; }
+.tl-pills {
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
 .tl-pill[data-platform="xueqiu"],
 .platform-tab[data-platform="xueqiu"] { margin-inline-end: 6px; }
 .tl-filter-views { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -2022,12 +2030,12 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   .cookie-paste { font-size: 16px; }
   .topbar { padding: 0 14px; } /* 左右 14px 与内容区 page-main 对齐，logo 和下方胶囊同列 */
 
-  /* 移动端左上角：logo 单独显示并放大，隐藏文字标题 */
+  /* 移动端左上角：logo 单独显示并放大；页名仍留在无障碍树 */
   .topbar-logo { height: 32px; }
-  .topbar-title h1 { display: none; }
+  .topbar-title h1 { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   .page-main { padding: 16px 14px calc(74px + env(safe-area-inset-bottom)); --page-pad-x: 14px; }
   .platform-tabs { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; }
-  /* 动态/订阅/广场：一行等宽图标角标（全部+5平台+筛选） */
+  /* 订阅/广场：一行等宽图标角标。时间线自己横滑带字胶囊，不进这套坞 */
   .icon-badge-bar {
     display: grid;
     grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -2051,6 +2059,16 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   .icon-badge-bar .tl-actions button { font-size: 0; gap: 0; }
   .icon-badge-bar .funnel-icon,
   .icon-badge-bar .star-icon { width: 20px; height: 20px; }
+  .tl-filterbar-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+  }
+  .tl-filterbar-top .tl-pills { flex: 1; min-width: 0; }
+  .tl-filterbar-top .tl-pill { flex-shrink: 0; }
+  .tl-filterbar-top .tl-actions { flex-shrink: 0; }
   .home-filter-content[hidden] { display: none; }
   .home-head .icon-badge-bar { margin-top: 10px; }
   .tl-new-badge-btn { min-height: 44px; overflow: hidden; }
