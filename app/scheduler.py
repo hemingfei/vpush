@@ -126,7 +126,7 @@ def _in_x_fallback(db: DB) -> bool:
 
 
 def _is_platform_wide_error(exc: BaseException) -> bool:
-    """只有 cookie/WAF/登录/代理池枯竭才停整平台；单大V超时不连坐。"""
+    """只有 cookie/登录/代理池枯竭才停整平台；单大V超时不连坐。"""
     from .proxy import ProxyUnavailable
 
     if isinstance(exc, ProxyUnavailable):
@@ -572,7 +572,7 @@ def maybe_warn_weibo_login(db: DB, notifiers: list[Notifier], detail: str) -> No
 
 
 def maybe_warn_xueqiu_cookie(db: DB, notifiers: list[Notifier], detail: str) -> None:
-    """雪球 cookie/WAF 失效时向各渠道推告警，每天最多一次。"""
+    """雪球 cookie 失效时向各渠道推告警，每天最多一次。"""
     if not _alerts_enabled() or not _daily_ok(db, XUEQIU_WARNING_KEY):
         return
     _send_admin_text(
@@ -784,7 +784,7 @@ def poll_once(
     if not jobs:
         maybe_alert_x_fallback(db, notifiers)
         return
-    # 并发抓取：跨平台并行、同平台最多 2 个并发，控制并发
+    # 并发抓取：跨平台并行、同平台最多 2 个并发
     platforms = {kol["platform"] for kol, _, _ in jobs}
     platform_sem = {p: threading.Semaphore(2) for p in platforms}
     platform_lock = {p: threading.Lock() for p in platforms}
@@ -893,7 +893,7 @@ def _fetch_kol_once(
     # 与 poll_once 一致：从未抓取过的大V立即抓取，避免用 0 当基准误跳过首轮
     if kol["id"] in state.last_fetched and now - state.last_fetched[kol["id"]] < effective:
         return
-    # 轮内随机错峰（0.2~1.2s）：避免同平台并发扎堆
+    # 轮内随机错峰（0.2~1.2s），避免同平台并发扎堆
     time.sleep(random.uniform(0.2, 1.2))
     try:
         posts = fetcher.fetch(kol)
@@ -963,7 +963,7 @@ def _fetch_kol_once(
             st["ok"] += 1
     if recovered:
         maybe_alert_source_recovered(db, notifiers, kol["platform"], kol["name"])
-    # 按发布时间升序推送，避免各平台返回顺序（置顶/反爬兜底）导致乱序
+    # 按发布时间升序推送，避免各平台返回顺序（置顶等）导致乱序
     posts = sorted(posts, key=_post_sort_key)
     existing_keys = db.existing_post_keys([(p.platform, p.external_id) for p in posts])
     translate_twitter = bool((tuning or {}).get("translate_twitter"))
@@ -1329,8 +1329,7 @@ def _scheduler_loop_delay(
 
 
 def probe_xueqiu(db: DB, notifiers: list[Notifier], source_config) -> None:
-    """主动探测雪球抓取接口可用性（与抓取同路径，不用首页——首页对
-    首页不能作为失效依据，不能作为失效依据）。"""
+    """主动探测雪球抓取接口可用性（与抓取同路径，不用首页）。"""
     import httpx
 
     from .fetchers.xueqiu import XUEQIU_COOKIE_KEY, XUEQIU_TIMELINE_URL, _is_waf_html
@@ -1414,10 +1413,7 @@ def keepalive_xueqiu_cookie(
 ) -> None:
     """定时探测雪球 cookie 是否仍有效，失效时告警（与抓取同路径）。
 
-    无法从首页自动续期，且不再下发登录态 token，无法续期；
-    改为请求 timeline JSON 接口（与 probe_xueqiu / fetch 同路径）：
-    有效 cookie → 200 正常返回；无/失效 cookie → 400 需登录。
-    保活从「续期」退化为「失效检测 + 告警」，cookie 需手动更新。
+    请求 timeline JSON：有效 cookie 返回 200，失效返回 400。无法自动续期，需手动更新。
     """
     from .fetchers.xueqiu import (
         XUEQIU_COOKIE_KEY,

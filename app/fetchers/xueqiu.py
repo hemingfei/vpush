@@ -20,8 +20,7 @@ XUEQIU_COOKIE_KEY = "xueqiu_cookie"
 XUEQIU_COOKIE_TIME_KEY = "xueqiu_cookie_updated_at"
 XUEQIU_TIMELINE_URL = "https://xueqiu.com/statuses/user_timeline.json"
 
-# waf-bot sidecar 刷新的共享 cookie 文件；
-# 由独立容器验证时间线 API 后周期刷新，主容器抓取时整体读取使用。未配置时不启用。
+# waf-bot sidecar 刷新的共享 cookie 文件；未配置时不启用。
 WAF_COOKIE_FILE = os.environ.get("WAF_COOKIE_FILE", "/data/waf_cookies.json")
 XUEQIU_SEED_COOKIE_FILE = os.environ.get(
     "XUEQIU_SEED_COOKIE_FILE", "/data/xueqiu_seed_cookie.txt"
@@ -52,10 +51,7 @@ def write_xueqiu_seed_cookie(cookie: str) -> None:
 
 
 def _load_waf_cookies() -> list[dict[str, str]]:
-    """读 waf-bot 写的共享 cookie（文件会周期刷新，waf-bot 会周期刷新文件）。
-
-    文件缺失或损坏时返回空列表。
-    """
+    """读 sidecar 写入的 cookie 文件；缺失或损坏时返回空列表。"""
     try:
         with open(WAF_COOKIE_FILE, encoding="utf-8") as f:
             data = json.load(f)
@@ -69,13 +65,7 @@ def _load_waf_cookies() -> list[dict[str, str]]:
 
 
 def merge_waf_cookie(cookie: str) -> str:
-    """返回整套 waf 共享 cookie；文件缺失时退回原登录串。
-
-    cookie 需整套使用：只 merge 部分 cookie（如 acw_tc + 旧登录态）
-    因此 waf-bot 每次带登录态（若配置）访问导出整套
-    自洽 cookie，这里整体使用；登录态过期时退化为游客会话（公开时间线可用，
-    组合等需登录的接口报 10022，需更新登录 cookie 后由 waf-bot 重新导出）。
-    """
+    """有 sidecar cookie 文件时整套使用，否则退回原登录串。"""
     waf = _load_waf_cookies()
     if not waf:
         return cookie or ""
@@ -122,7 +112,7 @@ def classify_status(status: dict) -> str | None:
 
 
 def _is_waf_html(resp: httpx.Response) -> bool:
-    """判断响应是否为拦截用的 HTML 页（普通 HTTP 客户端无法通过）。"""
+    """判断响应是否为拦截用的 HTML 页，而不是预期的 JSON。"""
     content_type = resp.headers.get("content-type", "")
     return "text/html" in content_type and any(
         marker in resp.text for marker in ("renderData", "aliyun_waf", "acw_sc__v2")
@@ -285,24 +275,20 @@ class XueqiuFetcher(Fetcher):
         self._http.set(value)
 
     def _apply_cookie(self) -> None:
-        """合并 cookie：登录态（DB/配置）打底，叠加 waf-bot 的共享 cookie（同名覆盖）。"""
+        """合并 cookie：登录态（DB/配置）打底，叠加 sidecar cookie（同名覆盖）。"""
         cookie = self.db.get_setting(XUEQIU_COOKIE_KEY) or self.source_config.cookie
         self.client.headers["Cookie"] = merge_waf_cookie(cookie)
 
     def _refresh_cookie(self) -> None:
-        """雪球 cookie 失效时尝试续期（已不可用，直接抛错进入退避告警链路）。
-
-        旧实现访问首页拿新 token：但无法从首页自动续期，
-        且不再下发 xq_a_token 登录态 token，续期通道已死。404 说明。
-        """
+        """雪球 cookie 失效时无法自动续期，直接抛错进入退避告警链路。"""
         raise RuntimeError(
-            "雪球 cookie 已失效（接口返回 401/403）。无法自动续期，"
+            "雪球 cookie 已失效（接口返回 401/403），"
             "请到后台「数据源 → Cookie 管理」手动更新后重试"
         )
 
     def fetch(self, kol: dict) -> list[Post]:
         self._apply_cookie()
-        # 用户时间线 JSON 接口不受 WAF 挑战保护；original/timeline.json 反而会cookie 失效
+        # 使用用户时间线 JSON 接口
         url = XUEQIU_TIMELINE_URL
         uid = normalize_xueqiu_id(kol["external_id"])
         params = {"user_id": uid, "page": 1, "count": 20}
@@ -320,14 +306,14 @@ class XueqiuFetcher(Fetcher):
             params=params,
         )
         if resp.status_code in (401, 403):
-            # cookie 失效：_refresh_cookie 永远 raise（无法自动续期），进入退避告警链路
+            # cookie 失效：续期不可用，进入退避告警链路
             self._refresh_cookie()
         resp.raise_for_status()
         try:
             data = resp.json()
         except ValueError:
             raise RuntimeError(
-                "雪球接口返回异常（接口返回异常），请检查 xueqiu cookie 配置后重试"
+                "雪球接口返回异常，请检查 xueqiu cookie 配置后重试"
             ) from None
         statuses = (data or {}).get("statuses") or []
         posts = []

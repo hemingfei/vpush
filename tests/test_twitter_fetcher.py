@@ -479,8 +479,7 @@ def test_twitter_network_error_skips_failure_mark(monkeypatch):
 
 
 def test_direct_fetch_never_calls_api_twitter(monkeypatch):
-    """直抓不再打 api.twitter.com：guest/activate 已被 接口限制 锁死，
-    且 x.com GraphQL/typeahead 不带 guest token 也 200（curl_cffi 指纹即可过）。"""
+    """直抓只走 x.com GraphQL，不再请求 api.twitter.com。"""
     monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b; lang=zh-CN")
     api_twitter_calls = {"n": 0}
 

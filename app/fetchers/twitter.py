@@ -5,14 +5,9 @@ GraphQL 接口：UserByScreenName（拿 userId/头像）+ UserTweets（拿时间
 queryId 由 X 前端轮换，启动后每 6 小时自动从前端 main bundle 提取一次，
 提取失败时用内置默认值兜底；接口失败则抛出，由调度器告警并放慢采集。
 
-
-
-
-
-
-
-curl_cffi.Session 非线程安全：生产同平台 2 并发共享 fetcher，用 ThreadLocalClient
-每线程懒建一个 session；外部注入的 client（测试 mock / 解析头像）直接复用。
+HTTP 客户端用 curl_cffi.Session；该对象非线程安全，生产同平台 2 并发共享
+fetcher，用 ThreadLocalClient 每线程懒建一个 session；外部注入的 client
+（测试 mock / 解析头像）直接复用。
 """
 
 from __future__ import annotations

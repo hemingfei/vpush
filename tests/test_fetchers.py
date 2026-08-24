@@ -83,7 +83,7 @@ def test_xueqiu_parse_fixture():
 
 
 def test_xueqiu_waf_cookie_merged_into_request(monkeypatch, tmp_path):
-    """waf-bot 写的共享 cookie 整体使用：请求 cookie 与文件一致（含 acw_tc）。"""
+    """sidecar cookie 文件存在时整套使用，请求 cookie 与文件一致。"""
     waf_file = tmp_path / "waf_cookies.json"
     waf_file.write_text(
         json.dumps(
@@ -535,7 +535,7 @@ def test_cube_snapshot_fresh_uses_real_timestamps():
 
 
 def test_combination_snapshot_failure_does_not_break_rebalancing():
-    """快照接口失败（WAF/超时）只记日志，调仓推送照常。"""
+    """快照接口失败只记日志，调仓推送照常。"""
     payload = {
         "list": [
             {
@@ -744,9 +744,9 @@ def test_xueqiu_waf_html_raises_clear_error():
     try:
         fetcher.fetch({"id": 1, "name": "大V", "external_id": "123"})
     except RuntimeError as exc:
-        assert "反爬" in str(exc)
+        assert "接口返回异常" in str(exc)
         return
-    raise AssertionError("WAF HTML 应抛出清晰错误")
+    raise AssertionError("非 JSON 响应应抛出清晰错误")
 
 
 from app.config import WeiboConfig

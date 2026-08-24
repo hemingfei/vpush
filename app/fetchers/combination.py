@@ -292,9 +292,9 @@ class CombinationFetcher(Fetcher):
         self.client.headers["Cookie"] = merge_waf_cookie(cookie)
 
     def _refresh_cookie(self) -> None:
-        """雪球 cookie 失效时直接抛错（与雪球帖抓取共用，首页续期通道已死）。"""
+        """雪球 cookie 失效时直接抛错（与雪球帖抓取共用，无法自动续期）。"""
         raise RuntimeError(
-            "雪球 cookie 已失效（接口返回 401/403）。无法自动续期，"
+            "雪球 cookie 已失效（接口返回 401/403），"
             "请到后台「数据源 → Cookie 管理」手动更新后重试"
         )
 
@@ -354,7 +354,7 @@ class CombinationFetcher(Fetcher):
         try:
             data = resp.json()
         except ValueError:
-            raise RuntimeError("雪球组合接口返回异常（接口返回异常）") from None
+            raise RuntimeError("雪球组合接口返回异常") from None
         # 先刷新快照（TTL 内跳过），调仓卡与详情页引用本次的 quote/持仓/净值数据
         self._refresh_snapshots(kol["id"], cube_symbol)
         name = kol["name"]

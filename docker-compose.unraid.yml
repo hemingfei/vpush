@@ -58,7 +58,7 @@ services:
       # 日志落盘到数据卷（随 data 持久化，滚动 5MB×3，重启不丢）
       LOG_FILE: "${LOG_FILE:-/data/logs/app.log}"
       XUEQIU_SEED_COOKIE_FILE: "/data/xueqiu_seed_cookie.txt"
-      # waf-bot sidecar 写的共享 cookie 文件（共享 cookie）
+      # waf-bot 写入的共享 cookie 文件
       WAF_COOKIE_FILE: "/data/waf_cookies.json"
     volumes:
       - /mnt/user/appdata/dav-subscription/data:/data
@@ -66,8 +66,7 @@ services:
       # - /mnt/user/appdata/dav-subscription/config.yaml:/app/config.yaml:ro
     restart: unless-stopped
 
-  # sidecar 定期刷新共享 cookie（共享 cookie），
-  # 把验证通过的 cookie 写到共享数据卷，主容器抓取时读取复用。
+  # sidecar：定期刷新共享 cookie 文件，主容器抓取时读取。
   waf-bot:
     build:
       context: ./waf-bot

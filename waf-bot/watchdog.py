@@ -30,8 +30,7 @@ SEED_COOKIE_FILE = Path(
 SOLVER = Path(__file__).with_name("solver.js")
 PROBE_URL = "https://xueqiu.com/statuses/user_timeline.json"
 PROBE_PARAMS = {"user_id": "1247347556", "page": 1, "count": 1}
-# 登录态探测：组合调仓接口未登录必返回 error_code 10022（实测确认），
-# 配置了 WAF_SEED_COOKIE 时用它验证登录会话有效后才允许覆盖 Cookie。
+# 配置了登录 cookie 时，先做一次需登录的探测，通过后才覆盖共享文件。
 AUTH_PROBE_URL = "https://xueqiu.com/cubes/rebalancing/history.json"
 AUTH_PROBE_PARAMS = {"cube_symbol": "ZH000001", "page": 1, "count": 1}
 AUTH_ERROR_CODE = "10022"
@@ -163,8 +162,7 @@ def refresh(
         stage = "probe"
         seed = seed_cookie
         if seed:
-            # 登录态会话：必须通过需要登录的组合调仓接口验证，
-            # 登录失效（10022）时保留旧 Cookie，不覆盖成游客会话。
+            # 有登录 cookie 时走需登录的探测；失败则保留旧文件。
             probe_url, probe_params = AUTH_PROBE_URL, AUTH_PROBE_PARAMS
         else:
             probe_url, probe_params = PROBE_URL, PROBE_PARAMS
@@ -179,8 +177,7 @@ def refresh(
         except ValueError:
             return False
         if seed:
-            # 登录态验证：组合调仓接口对登录有效但组合不存在返回 400+20809，
-            # 同样证明登录会话有效；仅 10022（登录失效）拒绝覆盖。
+            # 需登录的探测失败时不覆盖已有文件。
             if not isinstance(payload, dict) or payload.get("error_code") == AUTH_ERROR_CODE:
                 return False
         else:
