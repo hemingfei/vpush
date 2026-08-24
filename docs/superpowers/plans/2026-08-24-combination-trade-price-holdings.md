@@ -65,7 +65,15 @@ Expected: PASS.
 
 - [ ] **Step 5: Add missing-price compatibility coverage.**
 
-新增一个小测试，构造只含 `prev_weight` / `target_weight` 的 history，调用 `_format_trade_price` 或完整抓取路径，断言 action 没有 `price` 或 `action.get("price") == ""`，并断言没有价格时抓取不抛错。
+在 `tests/test_fetchers.py` 的组合抓取器导入中加入 `_format_trade_price`，并新增：
+
+```python
+def test_combination_trade_price_missing_is_omitted():
+    assert _format_trade_price({"prev_weight": 10.0, "target_weight": 12.0}) == ""
+    assert _format_trade_price({"price": "not-a-number"}) == ""
+```
+
+这固定了没有价格字段或价格不可解析时不抛错、也不生成空外的伪价格。
 
 - [ ] **Step 6: Run all fetcher tests and commit.**
 
@@ -122,12 +130,15 @@ if price:
 所有 action 结束后、现金之前或之后固定追加：
 
 ```python
-holdings = detail.get("holdings") or []
-if holdings:
+valid_holdings = [
+    h for h in (detail.get("holdings") or [])
+    if isinstance(h, dict) and h.get("name") and h.get("weight") is not None
+]
+if valid_holdings:
     lines.append("现有持仓")
     lines.extend(
-        f"{h.get('name') or ''}（{h.get('symbol') or ''}） {h.get('weight')}%".strip()
-        for h in holdings
+        f"{h['name']}（{h.get('symbol') or ''}） {h['weight']}%"
+        for h in valid_holdings
     )
 ```
 
@@ -145,15 +156,18 @@ content = f"{icon} **{a_type}** {stock_text}\n{prev} → {target}{price_line}"
 现金后增加一个 `div` 元素：
 
 ```python
-if holdings:
+valid_holdings = [
+    h for h in (detail.get("holdings") or [])
+    if isinstance(h, dict) and h.get("name") and h.get("weight") is not None
+]
+if valid_holdings:
     elements.append({
         "tag": "div",
         "text": {
             "tag": "lark_md",
             "content": "**现有持仓**\n" + "\n".join(
                 f"{h['name']}（{h.get('symbol') or ''}） {h['weight']}%"
-                for h in holdings
-                if isinstance(h, dict) and h.get("name") and h.get("weight") is not None
+                for h in valid_holdings
             ),
         },
     })
@@ -163,7 +177,37 @@ if holdings:
 
 - [ ] **Step 5: Update Telegram rich HTML table.**
 
-在 `build_combination_rich_html` 的 action table 中增加“成交价”列；没有任何价格时保持原三列表格，避免历史帖子多出空列。若有 holdings，追加一个 HTML table 或紧凑段落，标题为 `现有持仓`，每行显示名称、代码、权重。
+在 `build_combination_rich_html` 中先过滤有效 action 和 holding：
+
+```python
+holdings = detail.get("holdings") or []
+priced_actions = [a for a in actions if isinstance(a, dict) and a.get("price")]
+headers = ["操作", "标的", "仓位"] + (["成交价"] if priced_actions else [])
+rows = []
+for a in actions:
+    row = [
+        action_label(str(a.get("type") or "调整")),
+        f"{a.get('stock') or ''}（{a.get('symbol') or ''}）",
+        f"{a.get('prev') or '0.0%'} → {a.get('target') or '0.0%'}",
+    ]
+    if priced_actions:
+        row.append(str(a.get("price") or "—"))
+    rows.append(row)
+if rows:
+    parts.append(_table(headers, rows, striped=True))
+```
+
+若 `holdings` 中存在有效条目，追加：
+
+```python
+holding_rows = [
+    [str(h["name"]), str(h.get("symbol") or ""), f"{h['weight']}%"]
+    for h in holdings
+    if isinstance(h, dict) and h.get("name") and h.get("weight") is not None
+]
+if holding_rows:
+    parts.append(_table(["名称", "代码", "仓位"], holding_rows, caption="现有持仓", striped=True))
+```
 
 - [ ] **Step 6: Run the notifier tests and compatibility tests.**
 
