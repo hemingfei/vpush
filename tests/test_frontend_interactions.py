@@ -1265,13 +1265,19 @@ def test_timeline_new_badge_shows_posted_not_count():
     assert ".tl-badge-more" not in STYLE_CSS.read_text()
 
 
-def test_timeline_live_source_switch_hides_platform_bar_in_live_mode():
-    """7x24 快讯：时间线内切换内容源，live 模式隐藏平台角标条。"""
+def test_timeline_live_source_is_platform_pill():
+    """快讯作为平台条第二项：移除独立动态按钮，保留快讯模式与平台条。"""
     render = _fn_body("renderTimeline")
-    assert 'class="tl-source-switch"' in render
-    assert 'tlPickSource(' in APP_JS.read_text()
-    assert "tlPickSource(" in APP_JS.read_text()
-    assert "pollFeedUpdates" in APP_JS.read_text()
+    pills = _fn_body("tlPillsHtml")
+    src = APP_JS.read_text()
+    assert 'class="tl-source-switch"' not in render
+    assert 'class="tl-source-switch"' not in src
+    assert 'class="tl-filterbar-top icon-badge-bar${live ? " is-hidden" : ""}"' not in render
+    assert 'data-platform="live"' in pills
+    assert "快讯" in pills
+    assert "WSCN_LIVE_ICON" in pills
+    assert "tlPickSource('live')" in pills
+    assert "pollFeedUpdates" in src
     assert 'data-score="' in _fn_body("liveFeedItem")
     css = STYLE_CSS.read_text()
     assert '.live-item[data-score="2"]' in css

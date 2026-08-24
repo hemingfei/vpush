@@ -41,7 +41,7 @@ const V_ICON = `<svg class="nav-v-icon" viewBox="0 0 24 24" fill="none" stroke="
 const BOOK_ICON = `<svg class="nav-book-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>`;
 // 导航线性图标集（lucide 风格，stroke=currentColor，与 STAR/BELL/EYE 同一词汇）
 const LIST_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg>`;
-const RADIO_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>`;
+const WSCN_LIVE_ICON = `<svg class="wscn-live-icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="#1378F0" d="M512 0C229.216 0 0 229.216 0 512s229.216 512 512 512 512-229.216 512-512S794.784 0 512 0"/><path fill="#FFF" d="m466.944 649.6 41.152-102.464 18.4 49.472L432.192 828.8H416.32L246.08 423.136c-11.808-26.208-34.656-46.368-62.72-54.336l-1.6-.448V367.2h216.992v.608l-.192.096c-17.664 11.84-24.48 25.696-24.48 45.056 0 5.664 2.784 14.08 2.784 14.08l90.08 222.56zm239.648-345.92h135.264v.832l-.864.128c-16.96 3.136-32.576 18.848-43.104 44.576l-1.632 4.16-161.28 424.96h-14.4L548.192 597.76l67.488-151.104 55.2 140.544L752 370.176l.032-.032c11.68-31.616-11.424-65.28-45.12-65.728h-.32v-.736zm-21.44-68.576c-1.152 2.304-5.568 12.8-5.568 12.8L538.432 573.44 433.056 310.944c-6.4-18.4-25.184-51.84-64.64-62.816v-.768h248.48v1.216h-.448c-6.784 0-53.856 1.504-53.856 51.296 0 7.168 4.512 24.096 6.304 29.248l18.304 46.24 54.336-132.544c3.936-9.984 2.048-16.256 1.472-18.496-4.416-10.88-17.312-23.68-35.648-26.56v-.448h115.904v.576c-19.584 4.192-29.632 18.944-38.144 37.184"/></svg>`;
 const GRID_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>`;
 const TRENDING_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 7l-8.5 8.5-5-5L2 17"/><path d="M16 7h6v6"/></svg>`;
 const BOOKMARK_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>`;
@@ -1280,18 +1280,6 @@ function tlApplyRailSearch() {
   tlApplyFilter();
 }
 
-function tlSourceSwitchHtml() {
-  const kolOn = !isLiveTimeline();
-  const liveOn = isLiveTimeline();
-  return `
-    <button class="tl-pill tl-source-pill ${kolOn ? "selected" : ""}" role="radio" data-source="kol" aria-label="大V动态" title="大V动态" aria-checked="${kolOn}" onclick="tlPickSource('kol')">
-      ${LIST_ICON}<span>动态</span>
-    </button>
-    <button class="tl-pill tl-source-pill ${liveOn ? "selected" : ""}" role="radio" data-source="live" aria-label="7x24快讯" title="7x24快讯" aria-checked="${liveOn}" onclick="tlPickSource('live')">
-      ${RADIO_ICON}<span>7x24</span>
-    </button>`;
-}
-
 function tlPickSource(source) {
   const next = source === "live" ? "live" : "kol";
   if (state.timelineSource === next) return;
@@ -1316,14 +1304,13 @@ async function renderTimeline(seq) {
     <div class="tl-layout">
     <div class="tl-main">
     <div class="tl-filterbar${live ? " live-mode" : ""}" id="tl-filterbar">
-      <div class="tl-source-switch" role="radiogroup" aria-label="内容源">${tlSourceSwitchHtml()}</div>
-      <div class="tl-filterbar-top icon-badge-bar${live ? " is-hidden" : ""}" id="tl-platform-bar">
-        <div class="tl-pills" id="tl-pills" role="radiogroup" aria-label="平台">${tlPillsHtml()}</div>
-        ${wide ? "" : `<div class="tl-actions">
+      <div class="tl-filterbar-top icon-badge-bar" id="tl-platform-bar">
+        <div class="tl-pills" id="tl-pills" role="radiogroup" aria-label="平台和内容源">${tlPillsHtml()}</div>
+        ${wide || live ? "" : `<div class="tl-actions">
           <button id="tl-filter-toggle" class="fav-toggle ${tlPanelFilterOn() ? "has-filter" : ""}" aria-label="筛选" aria-expanded="false" aria-controls="tl-filter-panel" onclick="tlFilterPanel()">${FILTER_ICON}筛选</button>
         </div>`}
       </div>
-      ${wide ? "" : `<div class="tl-filter-panel" id="tl-filter-panel">
+      ${wide || live ? "" : `<div class="tl-filter-panel" id="tl-filter-panel">
         ${tlSearchBarHtml()}
         <div class="tl-filter-views">${tlViewTogglesHtml()}</div>
         <div class="tl-filter-row">
@@ -1520,19 +1507,31 @@ async function refreshTimeline() {
 }
 
 function tlPillsHtml() {
-  return tlPlazaEntries().map(([p, label]) => {
-    const selected = state.timelinePlatform === p;
+  const liveSelected = isLiveTimeline();
+  const livePill = `
+    <button class="tl-pill ${liveSelected ? "selected" : ""}" role="radio" data-platform="live" aria-label="快讯" title="快讯" aria-checked="${liveSelected}" onclick="tlPickSource('live')">
+      ${WSCN_LIVE_ICON}<span>快讯</span>
+    </button>`;
+  const pills = [];
+  for (const [p, label] of tlPlazaEntries()) {
+    const selected = !liveSelected && state.timelinePlatform === p;
     const short = platformShortLabel(p);
-    return `
+    pills.push(`
     <button class="tl-pill ${selected ? "selected" : ""}" role="radio" data-platform="${p}" aria-label="${label}" title="${label}" aria-checked="${selected}" onclick="tlPickPlatform('${p}')">
       ${PLATFORM_ICONS[p || ""]}
       <span>${short}</span>
-    </button>`;
-  }).join("");
+    </button>`);
+    if (!p) pills.push(livePill);
+  }
+  return pills.join("");
 }
 
 function tlPickPlatform(p) {
   const revert = tlSnapshotFilters();
+  if (isLiveTimeline()) {
+    state.timelineSource = "kol";
+    tlPersistSource();
+  }
   state.timelinePlatform = p;
   const pills = $("#tl-pills");
   if (pills) pills.innerHTML = tlPillsHtml();
@@ -1852,7 +1851,7 @@ function renderLiveFeed() {
     ? `<div class="toolbar tl-feed-more"><button class="btn-normal" onclick="feedLoadMore()">加载更多</button></div>`
     : (posts.length ? `<p class="muted tl-feed-end">已加载全部</p>` : "");
   const attr = posts.length
-    ? html + footer + `<p class="live-attribution muted">数据来源：<a href="https://wallstreetcn.com/live/global" target="_blank" rel="noopener">华尔街见闻 · 7x24全球直播</a></p>`
+    ? html + footer + `<p class="live-attribution muted">数据来源：<a href="https://wallstreetcn.com/live/global" target="_blank" rel="noopener">华尔街见闻 · 快讯</a></p>`
     : emptyState("暂无快讯", `<div><button class="btn-normal" onclick="loadTimeline(true, routeRenderSeq)">刷新</button></div>`);
   feed.innerHTML = attr;
 }
