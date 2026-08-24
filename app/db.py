@@ -176,6 +176,8 @@ DEFAULT_STOCK_NAMES = [
     "五粮液",
 ]
 STOCK_NAMES_KEY = "stock_names"
+# 管理员从常用股票名里删掉的名字；每日维护 / $标记$ 解析不再写回。
+STOCK_NAMES_EXCLUDED_KEY = "stock_names_excluded"
 
 # 常见黑话种子：启动时合并进别名表，不经过 LLM。正式名必须已在股票名表中。
 DEFAULT_STOCK_ALIASES = [
@@ -2851,20 +2853,58 @@ class DB:
         }
 
     def get_stock_names(self) -> list[str]:
-        """读常用股票名表（settings 持久化），缺省用内置默认名单。"""
+        """读常用股票名表（settings 持久化），从未保存过时用内置默认名单。"""
         raw = self.get_setting(STOCK_NAMES_KEY)
         if raw:
             try:
                 parsed = json.loads(raw)
-                if isinstance(parsed, list) and parsed:
+                if isinstance(parsed, list):
                     return [str(n) for n in parsed]
             except (TypeError, ValueError):
                 pass
         return list(DEFAULT_STOCK_NAMES)
 
     def set_stock_names(self, names: list[str]) -> None:
-        """保存常用股票名表。"""
+        """保存常用股票名表。空列表表示管理员清空，不再回落到默认名单。"""
         self.set_setting(STOCK_NAMES_KEY, json.dumps(names, ensure_ascii=False))
+
+    def get_stock_name_exclusions(self) -> list[str]:
+        """管理员删掉、维护不得加回的股票名。"""
+        raw = self.get_setting(STOCK_NAMES_EXCLUDED_KEY)
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    seen, out = set(), []
+                    for n in parsed:
+                        name = str(n).strip()
+                        if name and name not in seen:
+                            seen.add(name)
+                            out.append(name)
+                    return out
+            except (TypeError, ValueError):
+                pass
+        return []
+
+    def set_stock_name_exclusions(self, names: list[str]) -> None:
+        seen, out = set(), []
+        for n in names or []:
+            name = str(n).strip()
+            if name and name not in seen:
+                seen.add(name)
+                out.append(name)
+        self.set_setting(STOCK_NAMES_EXCLUDED_KEY, json.dumps(out, ensure_ascii=False))
+
+    def sync_stock_name_exclusions(self, previous, updated) -> list[str]:
+        """按管理员本次编辑更新排除表。返回新删掉的名字。"""
+        prev = {str(n).strip() for n in previous or [] if str(n).strip()}
+        new = {str(n).strip() for n in updated or [] if str(n).strip()}
+        excluded = set(self.get_stock_name_exclusions())
+        removed = sorted(prev - new)
+        excluded.update(removed)
+        excluded -= new
+        self.set_stock_name_exclusions(sorted(excluded))
+        return removed
 
     def get_stock_aliases(self) -> list[dict]:
         """读黑话别名表（settings 持久化），缺省空表。

@@ -425,7 +425,7 @@ class TagAliasIn(BaseModel):
 
 
 class TagVocabularyIn(BaseModel):
-    tags: list[TagRuleIn]
+    tags: list[TagRuleIn] | None = None
     stock_names: list[str] | None = None
     stock_aliases: list[TagAliasIn] | None = None
 
@@ -3047,8 +3047,9 @@ def create_api_router(
         """贴文话题词表：登录用户可读（动态页标签筛选），管理与写入仍需管理员。
 
         stats 供管理端展示已打标/待打标贴文数量。
-        stock_names 为常用股票名表（纯文字提及打标用）；dynamic_tags 为贴文里
-        实际出现过的标签（含股票名，去重按频次），供时间线筛选下拉合并展示。
+        stock_names 为常用股票名表（纯文字提及打标用，管理端可手动增删）；
+        excluded_stock_names 为管理员删掉、维护不加回的名字。
+        dynamic_tags 为贴文里实际出现过的标签（含股票名，去重按频次）。
         stock_aliases 为黑话别名表（LLM 每日自动识别 + 管理端可手动修正）。
         maintain 为最近一次维护摘要 + 是否已配置 LLM（管理端按钮用）。
         """
@@ -3059,6 +3060,7 @@ def create_api_router(
             "tags": db.get_tag_vocabulary(),
             "stock_names": db.get_stock_names(),
             "stock_aliases": db.get_stock_aliases(),
+            "excluded_stock_names": db.get_stock_name_exclusions(),
             "dynamic_tags": db.aggregate_post_tags(),
             "stats": db.tag_stats(),
             "maintain": {
@@ -3070,45 +3072,66 @@ def create_api_router(
 
     @router.put("/tags", dependencies=[Depends(require_admin)])
     def update_tag_vocabulary(body: TagVocabularyIn, admin: dict = Depends(require_admin)):
-        from .tagging import TAG_VOCABULARY_MAX
+        from .tagging import STOCK_TABLE_MAX, TAG_VOCABULARY_MAX, is_equity_name
 
-        tags = []
-        for rule in body.tags:
-            tag = (rule.tag or "").strip()
-            if not tag:
-                continue
-            tags.append(
-                {
-                    "tag": tag,
-                    "keywords": [
-                        str(k).strip() for k in (rule.keywords or []) if str(k).strip()
-                    ],
-                }
-            )
-        # 按 tag 去重（保留首个）
-        seen, deduped = set(), []
-        for rule in tags:
-            if rule["tag"] not in seen:
-                seen.add(rule["tag"])
-                deduped.append(rule)
-        if not deduped:
-            raise HTTPException(status_code=400, detail="词表不能为空")
-        if len(deduped) > TAG_VOCABULARY_MAX:
-            raise HTTPException(
-                status_code=400, detail=f"词表最多 {TAG_VOCABULARY_MAX} 个标签"
-            )
+        if body.tags is None and body.stock_names is None and body.stock_aliases is None:
+            raise HTTPException(status_code=400, detail="没有可保存的字段")
+
+        deduped = None
+        if body.tags is not None:
+            tags = []
+            for rule in body.tags:
+                tag = (rule.tag or "").strip()
+                if not tag:
+                    continue
+                tags.append(
+                    {
+                        "tag": tag,
+                        "keywords": [
+                            str(k).strip() for k in (rule.keywords or []) if str(k).strip()
+                        ],
+                    }
+                )
+            seen, deduped = set(), []
+            for rule in tags:
+                if rule["tag"] not in seen:
+                    seen.add(rule["tag"])
+                    deduped.append(rule)
+            if not deduped:
+                raise HTTPException(status_code=400, detail="词表不能为空")
+            if len(deduped) > TAG_VOCABULARY_MAX:
+                raise HTTPException(
+                    status_code=400, detail=f"词表最多 {TAG_VOCABULARY_MAX} 个标签"
+                )
+
         # 先校验后写入：任一 400 都不产生部分持久化
-        stock_names = db.get_stock_names()
+        previous_names = db.get_stock_names()
+        stock_names = previous_names
         if body.stock_names is not None:
-            seen_stocks, deduped_stocks = set(), []
+            seen_stocks, deduped_stocks, rejected = set(), [], []
             for n in body.stock_names:
                 name = (n or "").strip()
-                if name and name not in seen_stocks:
-                    seen_stocks.add(name)
-                    deduped_stocks.append(name)
+                if not name or name in seen_stocks:
+                    continue
+                if not is_equity_name(name):
+                    rejected.append(name)
+                    continue
+                seen_stocks.add(name)
+                deduped_stocks.append(name)
+            if rejected:
+                raise HTTPException(
+                    status_code=400, detail=f"不是个股名：{'、'.join(rejected)}"
+                )
+            if len(deduped_stocks) > STOCK_TABLE_MAX:
+                raise HTTPException(
+                    status_code=400, detail=f"常用股票名最多 {STOCK_TABLE_MAX} 个"
+                )
             stock_names = deduped_stocks
-        alias_targets: dict[str, str] = {}
+
+        alias_targets: dict[str, str] | None = None
+        dropped_aliases: list[dict] = []
         if body.stock_aliases is not None:
+            alias_targets = {}
             for a in body.stock_aliases:
                 alias = (a.alias or "").strip()
                 stock = (a.stock or "").strip()
@@ -3131,21 +3154,41 @@ def create_api_router(
                         detail=f"别名 {alias} 映射冲突：{previous} / {stock}",
                     )
                 alias_targets[alias] = stock
-        db.set_tag_vocabulary(deduped)
+        elif body.stock_names is not None:
+            kept, dropped_aliases = [], []
+            for item in db.get_stock_aliases():
+                if item.get("stock") in stock_names:
+                    kept.append(item)
+                else:
+                    dropped_aliases.append(item)
+            alias_targets = {item["alias"]: item["stock"] for item in kept}
+
+        if deduped is not None:
+            db.set_tag_vocabulary(deduped)
         if body.stock_names is not None:
+            db.sync_stock_name_exclusions(previous_names, stock_names)
             db.set_stock_names(stock_names)
-        if body.stock_aliases is not None:
+        if alias_targets is not None:
             db.set_stock_aliases(
                 [
                     {"alias": alias, "stock": stock}
                     for alias, stock in alias_targets.items()
                 ]
             )
-        _audit(admin, "update_tag_vocabulary", detail=f"{len(deduped)} tags")
+        bits = []
+        if deduped is not None:
+            bits.append(f"{len(deduped)} tags")
+        if body.stock_names is not None:
+            bits.append(f"{len(stock_names)} stocks")
+        if alias_targets is not None:
+            bits.append(f"{len(alias_targets)} aliases")
+        _audit(admin, "update_tag_vocabulary", detail=", ".join(bits))
         return {
             "tags": db.get_tag_vocabulary(),
             "stock_names": db.get_stock_names(),
             "stock_aliases": db.get_stock_aliases(),
+            "excluded_stock_names": db.get_stock_name_exclusions(),
+            "dropped_aliases": dropped_aliases,
             "dynamic_tags": db.aggregate_post_tags(),
         }
 

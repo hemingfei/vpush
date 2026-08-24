@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.53";
+const APP_VERSION = "1.12.54";
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"];
@@ -6370,6 +6370,7 @@ async function loadAdminTagsTab() {
   const tags = Array.isArray(data?.tags) ? data.tags : [];
   const stockNames = Array.isArray(data?.stock_names) ? data.stock_names : [];
   const stockAliases = Array.isArray(data?.stock_aliases) ? data.stock_aliases : [];
+  const excludedNames = Array.isArray(data?.excluded_stock_names) ? data.excluded_stock_names : [];
   const stats = data?.stats || { total: 0, processed: 0, tagged: 0, pending: 0 };
   if (!routeStillActive(_adminRenderSeq)) return;
   // 词表编辑：每行一个标签，格式「标签名 | 关键词,关键词」；关键词为空则该标签不命中
@@ -6391,9 +6392,13 @@ async function loadAdminTagsTab() {
     <section class="section-panel">
       <header class="section-head">
         <div><h2 class="section-title">常用股票名</h2>
-        <p class="section-meta">帖子纯文字提及这些股票名时会打上股票标签（每行一个；$股票名(代码)$ 标记自动识别、无需在此登记）。</p></div>
+        <p class="section-meta">管理员可增删，每行一个。纯文字提及会打股票标签；$股票名(代码)$ 仍自动识别。删掉的名字每日维护不会加回，再写进列表并保存即可恢复。</p></div>
       </header>
-      <textarea id="stock-names-input" class="form-control" rows="6" style="margin-top:12px;font-family:monospace;line-height:1.6" placeholder="贵州茅台&#10;宁德时代">${escapeHtml(stockNames.join("\n"))}</textarea>
+      <textarea id="stock-names-input" class="form-control" rows="8" style="margin-top:12px;font-family:monospace;line-height:1.6" placeholder="贵州茅台&#10;宁德时代">${escapeHtml(stockNames.join("\n"))}</textarea>
+      <div class="toolbar" style="margin-top:12px">
+        <button class="btn-normal" onclick="adminSaveStockNames()">保存股票名</button>
+      </div>
+      ${excludedNames.length ? `<p class="section-meta" style="margin-top:8px">维护不加回：${excludedNames.map((n) => escapeHtml(n)).join("、")}</p>` : ""}
     </section>
     <section class="section-panel">
       <header class="section-head">
@@ -6433,6 +6438,20 @@ async function loadAdminTagsTab() {
         ${tags.length ? tags.map((r) => `<span class="cat cat-tag">${escapeHtml(r.tag)}</span>`).join("") : "（空）"}
       </div>
     </section>`;
+}
+
+async function adminSaveStockNames() {
+  const stockNames = $("#stock-names-input").value.split(/\n/).map((s) => s.trim()).filter(Boolean);
+  try {
+    const data = await api("/api/tags", { method: "PUT", body: JSON.stringify({ stock_names: stockNames }) });
+    const dropped = data.dropped_aliases || [];
+    flash(dropped.length
+      ? `已保存 ${data.stock_names.length} 只股票，去掉别名 ${dropped.map((a) => a.alias).join("、")}`
+      : `已保存 ${data.stock_names.length} 只股票`);
+    loadAdminVocabTab("tags");
+  } catch (err) {
+    alert("保存失败: " + err.message);
+  }
 }
 
 async function adminSaveTags() {

@@ -479,6 +479,7 @@ def run_tag_maintenance(db, llm_config=None) -> dict:
 
             existing_aliases = {a["alias"] for a in aliases}
             existing_stocks = set(stock_names)
+            excluded_names = set(db.get_stock_name_exclusions())
             all_marks: list[tuple[str, str]] = []
             seen_marks: set[tuple[str, str]] = set()
             for batch in iter_post_row_batches(db):
@@ -491,6 +492,7 @@ def run_tag_maintenance(db, llm_config=None) -> dict:
             known_names.update(existing_aliases)
             known_names.update(a["stock"] for a in aliases)
             known_names.update(topic_tags)
+            known_names.update(excluded_names)
             new_marks = [(n, c) for n, c in all_marks if n not in known_names]
             marks_new = len(new_marks)
 
@@ -506,7 +508,9 @@ def run_tag_maintenance(db, llm_config=None) -> dict:
                     for item in resolved:
                         official = str(item.get("official") or "").strip()
                         name = str(item.get("name") or "").strip()
-                        if official in topic_tags or not is_equity_name(official):
+                        if official in topic_tags or official in excluded_names:
+                            continue
+                        if not is_equity_name(official):
                             continue
                         if _append_stock_name(stock_names, existing_stocks, official):
                             added_stock_names.append(official)

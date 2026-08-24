@@ -3970,6 +3970,62 @@ def test_tag_alias_deduplicates_identical_mapping():
     ]
 
 
+def test_tag_stock_names_can_be_saved_without_tags():
+    """管理员可只改常用股票名，不必连话题词表一起提交。"""
+    client = make_client()
+    admin = auth_headers(client, "tagadmin")
+    db = client.app.state.db
+    db.set_stock_names(["宁德时代", "千岸科技"])
+    db.set_stock_aliases(
+        [
+            {"alias": "宁王", "stock": "宁德时代"},
+            {"alias": "岸科技", "stock": "千岸科技"},
+        ]
+    )
+
+    response = client.put(
+        "/api/tags",
+        headers=admin,
+        json={"stock_names": ["宁德时代", "五粮液", "宁德时代", " "]},
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["stock_names"] == ["宁德时代", "五粮液"]
+    assert data["stock_aliases"] == [{"alias": "宁王", "stock": "宁德时代"}]
+    assert data["dropped_aliases"] == [{"alias": "岸科技", "stock": "千岸科技"}]
+    assert data["excluded_stock_names"] == ["千岸科技"]
+    assert [r["tag"] for r in data["tags"]]  # 话题词表未动
+    listed = client.get("/api/tags", headers=admin).json()
+    assert listed["excluded_stock_names"] == ["千岸科技"]
+
+
+def test_tag_stock_names_reject_index_and_restore_exclusion():
+    client = make_client()
+    admin = auth_headers(client, "tagadmin")
+    db = client.app.state.db
+    db.set_stock_names(["宁德时代"])
+    db.set_stock_name_exclusions(["五粮液"])
+
+    bad = client.put(
+        "/api/tags",
+        headers=admin,
+        json={"stock_names": ["宁德时代", "上证指数"]},
+    )
+    assert bad.status_code == 400
+    assert "不是个股名" in bad.json()["detail"]
+    assert db.get_stock_names() == ["宁德时代"]
+
+    restored = client.put(
+        "/api/tags",
+        headers=admin,
+        json={"stock_names": ["宁德时代", "五粮液"]},
+    )
+    assert restored.status_code == 200
+    assert restored.json()["stock_names"] == ["宁德时代", "五粮液"]
+    assert restored.json()["excluded_stock_names"] == []
+
+
 def test_tag_vocabulary_update_keeps_stock_config_when_omitted():
     """只改话题词表时不传 stock 字段，不得误清空已保存的股票名和别名。"""
     client = make_client()

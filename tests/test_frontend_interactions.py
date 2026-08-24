@@ -1491,7 +1491,7 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     assert 'href="/style.css?v=181"' in html
-    assert 'src="/app.js?v=248"' in html
+    assert 'src="/app.js?v=249"' in html
 
 
 def test_register_placeholder_matches_username_min_length():
@@ -2003,6 +2003,18 @@ def test_weibo_qr_poll_is_serial():
     assert "setInterval" not in poll
     assert "await pollWeiboQr(" in start
     assert "setTimeout" in start.split("await pollWeiboQr", 1)[1]
+
+
+def test_admin_stock_names_are_manually_editable():
+    """常用股票名有独立保存，不依赖「保存词表」。"""
+    render = _fn_body("loadAdminTagsTab")
+    assert "stock-names-input" in render
+    assert "adminSaveStockNames" in render
+    assert "保存股票名" in render
+    body = _fn_body("adminSaveStockNames")
+    assert "/api/tags" in body
+    assert "stock_names" in body
+    assert "dropped_aliases" in body
 
 
 def test_admin_tag_page_has_llm_maintain():

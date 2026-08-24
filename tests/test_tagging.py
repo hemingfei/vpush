@@ -452,6 +452,46 @@ def test_run_tag_maintenance_scans_marks_beyond_recent_500():
     db.close()
 
 
+def test_run_tag_maintenance_skips_admin_excluded_stock_names():
+    """管理员删掉的股票名不进 LLM，也不写回名表。"""
+    import tempfile
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from app.db import DB
+
+    db = DB(Path(tempfile.mkdtemp()) / "ex.db")
+    kid = db.add_kol("xueqiu", "A", "1")
+    db.set_stock_names(["宁德时代"])
+    db.set_stock_name_exclusions(["盐湖股份"])
+    db.insert_post("xueqiu", kid, "m1", "t", "$盐湖股份(SZ000792)$ $涂改液(SZ000858)$", "u", "")
+
+    captured = {}
+
+    def fake_resolve(marks, cfg, client=None):
+        captured["marks"] = list(marks)
+        return [
+            {"name": n, "code": c, "official": "五粮液" if n == "涂改液" else n, "is_alias": n == "涂改液"}
+            for n, c in marks
+        ]
+
+    import app.llm as llm
+
+    orig_resolve = llm.resolve_stock_marks
+    llm.resolve_stock_marks = fake_resolve
+    try:
+        run_tag_maintenance(
+            db, SimpleNamespace(api_key="sk-test", api_base="https://x", model="m")
+        )
+    finally:
+        llm.resolve_stock_marks = orig_resolve
+
+    assert all(name != "盐湖股份" for name, _code in captured.get("marks", []))
+    assert "盐湖股份" not in db.get_stock_names()
+    assert "五粮液" in db.get_stock_names()
+    db.close()
+
+
 def test_run_tag_maintenance_resolves_marks_in_small_batches():
     """新标记超过一批时拆开调用，避免 thinking 模型单次读超时。"""
     import tempfile
