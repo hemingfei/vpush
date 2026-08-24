@@ -306,7 +306,7 @@ def test_mobile_platform_filter_is_five_equal_44px_targets():
     assert ".tl-mobile-platform" not in css
     pill = re.search(r"\.tl-pill\s*\{([^}]*)\}", css)
     assert pill and "44px" in pill.group(1)
-    assert 'class="tl-filterbar-top icon-badge-bar"' in render
+    assert "tl-filterbar-top icon-badge-bar" in render
     assert ".icon-badge-bar .tl-pill span" in css and "display: none" in css
     assert "display: none" not in re.search(r"\.topbar-title h1\s*\{([^}]*)\}", mobile).group(1)
     assert "clip: rect(0, 0, 0, 0)" in re.search(r"\.topbar-title h1\s*\{([^}]*)\}", mobile).group(1)
@@ -391,7 +391,7 @@ def test_mobile_mysubs_filter_is_seven_equal_44px_targets():
     assert ".icon-badge-bar .tl-pill span" in css and "display: none" in css
     assert ".icon-badge-bar > .fav-toggle" in css and "font-size: 0" in css
     assert 'class="icon-badge-bar"' in _fn_body("renderHome")
-    assert 'class="tl-filterbar-top icon-badge-bar"' in _fn_body("renderTimeline")
+    assert "tl-filterbar-top icon-badge-bar" in _fn_body("renderTimeline")
     assert "repeat(7, minmax(0, 1fr))" in css
     # 不再把筛选条竖着堆成两行
     mobile = re.search(r"@media \(max-width: 768px\) \{(.*)\}\s*/\* ----------", css, re.DOTALL)
@@ -1258,12 +1258,24 @@ def test_timeline_rail_fills_main_and_survives_resize():
 def test_timeline_new_badge_shows_posted_not_count():
     """新帖胶囊跟 X：可见文案是「已发布」，不画 +N，条数只在 aria-label。"""
     src = APP_JS.read_text()
-    render = _fn_body("renderTimeline")
-    assert "已发布" in render
+    assert "已发布" in _fn_body("tlNewBadgeLabel")
     assert 'id="tl-new-count"' not in src
     assert "tl-badge-more" not in _fn_body("tlBadgeAvatarsHtml")
-    assert "条新动态，点击查看" in _fn_body("pollNewPosts")
+    assert "条新${unit}" in _fn_body("pollFeedUpdates")
     assert ".tl-badge-more" not in STYLE_CSS.read_text()
+
+
+def test_timeline_live_source_switch_hides_platform_bar_in_live_mode():
+    """7x24 快讯：时间线内切换内容源，live 模式隐藏平台角标条。"""
+    render = _fn_body("renderTimeline")
+    assert 'class="tl-source-switch"' in render
+    assert 'tlPickSource(' in APP_JS.read_text()
+    assert "tlPickSource(" in APP_JS.read_text()
+    assert "pollFeedUpdates" in APP_JS.read_text()
+    assert 'data-score="' in _fn_body("liveFeedItem")
+    css = STYLE_CSS.read_text()
+    assert '.live-item[data-score="2"]' in css
+    assert '.live-item[data-score="3"]' in css
 
 
 def test_push_channels_html_treats_personal_feishu_as_bound():

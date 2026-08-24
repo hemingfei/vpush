@@ -4861,3 +4861,48 @@ def test_zsxq_file_download_ascii_safe_disposition():
     resp2 = client.get(f"/api/media/zsxq-file/181528458481522?token={token}")
     assert resp2.status_code == 200, resp2.text
     assert resp2.content == b"%PDF-1.7 data"
+
+
+def test_wscn_plain_body_strips_tags():
+    from app.api import _wscn_plain_body
+
+    assert _wscn_plain_body("<p>第一段</p><p><strong>重点</strong></p>") == "第一段\n重点"
+
+
+def test_wscn_live_requires_auth():
+    client = make_client("wscn_auth.db")
+    assert client.get("/api/live/wscn").status_code == 401
+
+
+def test_wscn_live_returns_normalized_items(monkeypatch):
+    client = make_client("wscn_live.db")
+    headers = auth_headers(client, "wscnuser", "secret123")
+
+    def fake_fetch(*, cursor: str = "", limit: int = 30):
+        del cursor, limit
+        return {
+            "items": [{
+                "id": 9,
+                "score": 3,
+                "highlight_title": "",
+                "body": "测试快讯",
+                "published_at": "2026-08-24T13:00:00+08:00",
+                "url": "https://wallstreetcn.com/livenews/9",
+            }],
+            "next_cursor": "next",
+            "polling_cursor": 9,
+        }
+
+    monkeypatch.setattr("app.api._fetch_wscn_lives", fake_fetch)
+    resp = client.get("/api/live/wscn", headers=headers)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["items"][0]["score"] == 3
+    assert data["polling_cursor"] == 9
+
+    resp2 = client.get("/api/live/wscn?since_id=8", headers=headers)
+    assert resp2.status_code == 200
+    assert len(resp2.json()["items"]) == 1
+
+    resp3 = client.get("/api/live/wscn?since_id=9", headers=headers)
+    assert resp3.json()["items"] == []

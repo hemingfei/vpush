@@ -1138,6 +1138,74 @@ body.lightbox-open { overflow: hidden; }
 .post-expand-btn:hover { text-decoration: underline; }
 
 /* ---------- 动态页筛选条（平台胶囊 + 折叠筛选面板） ---------- */
+.tl-source-switch {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.tl-source-switch .tl-source-pill {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.tl-filterbar-top.is-hidden,
+#tl-active-chips-wrap.is-hidden { display: none; }
+.tl-new-badge.live-mode .tl-badge-avatars { display: none; }
+
+.live-feed { display: flex; flex-direction: column; }
+.live-item {
+  display: flex;
+  gap: 12px;
+  padding: 12px 4px;
+  border-bottom: var(--border-soft);
+}
+.live-item:last-child { border-bottom: none; }
+.live-time {
+  flex: 0 0 42px;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.65;
+  padding-top: 1px;
+}
+.live-main { flex: 1; min-width: 0; }
+.live-title {
+  font-size: var(--text-body);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-danger);
+  margin-bottom: 4px;
+}
+.live-body {
+  display: block;
+  color: var(--color-text);
+  font-size: var(--text-body);
+  line-height: 1.65;
+  text-decoration: none;
+  overflow-wrap: break-word;
+  word-break: normal;
+  max-width: 75ch;
+}
+.live-body:hover { color: var(--color-accent-text); }
+.live-body p { margin: 0 0 8px; }
+.live-body p:last-child { margin-bottom: 0; }
+.live-body strong, .live-body b { font-weight: var(--font-weight-semibold); }
+.live-item[data-score="2"] .live-time {
+  color: var(--color-danger);
+  font-weight: var(--font-weight-semibold);
+}
+.live-item[data-score="3"] {
+  background: var(--color-danger-soft);
+  border-radius: var(--radius-control);
+  padding-inline: 8px;
+}
+.live-item[data-score="3"] .live-time { color: var(--color-danger-strong); }
+.live-attribution {
+  margin: 16px 4px 0;
+  font-size: var(--text-xs);
+  text-align: center;
+}
+.live-attribution a { color: var(--color-text-muted); }
+.live-attribution a:hover { color: var(--color-accent-text); }
+
 .tl-filterbar {
   position: sticky;
   top: 56px;
@@ -2074,6 +2142,7 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   .icon-badge-bar .star-icon { width: 20px; height: 20px; }
   .home-filter-content[hidden] { display: none; }
   .home-head .icon-badge-bar { margin-top: 10px; }
+  .tl-source-switch .tl-source-pill { min-height: 44px; }
   .tl-new-badge-btn { min-height: 44px; overflow: hidden; }
   .kol-item { flex-wrap: wrap; }
   .kol-item .btn-sub { width: 100%; min-height: 44px; }

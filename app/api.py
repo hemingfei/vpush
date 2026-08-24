@@ -33,7 +33,7 @@ from . import auth, wechat
 from .avatar_cache import cache_avatar
 from .bot_core import BIND_CODE_TTL
 from .db import _UNSET, ALLOWED_PLATFORMS, DB, days_until_purge
-from .fetchers.base import PLATFORM_LABELS
+from .fetchers.base import CN_TZ, PLATFORM_LABELS, strip_html
 from .plaza import (
     filter_plaza_rows,
     is_plaza_hidden,
@@ -691,6 +691,65 @@ def bounded_limit(value: int, default: int = 100) -> int:
     except (TypeError, ValueError):
         return default
     return max(1, min(value, 500))
+
+
+_WSCN_LIVES_URL = "https://api-one-wscn.awtmt.com/apiv1/content/lives"
+_WSCN_CACHE: tuple[float, str, dict] | None = None
+
+
+def _wscn_plain_body(content: str) -> str:
+    text = re.sub(r"<br\s*/?>", "\n", content or "", flags=re.I)
+    text = re.sub(r"</p>", "\n", text, flags=re.I)
+    text = re.sub(r"<p[^>]*>", "", text, flags=re.I)
+    return strip_html(text).strip()
+
+
+def _normalize_wscn_item(raw: dict) -> dict:
+    item_id = int(raw["id"])
+    ts = int(raw.get("display_time") or 0)
+    published_at = datetime.fromtimestamp(ts, tz=CN_TZ).isoformat() if ts > 0 else ""
+    content = raw.get("content") or raw.get("content_text") or ""
+    return {
+        "id": item_id,
+        "score": int(raw.get("score") or 1),
+        "highlight_title": (raw.get("highlight_title") or "").strip(),
+        "body": _wscn_plain_body(content),
+        "published_at": published_at,
+        "url": (raw.get("uri") or f"https://wallstreetcn.com/livenews/{item_id}").strip(),
+    }
+
+
+def _fetch_wscn_lives(*, cursor: str = "", limit: int = 30) -> dict:
+    global _WSCN_CACHE
+    limit = max(1, min(int(limit), 50))
+    cursor = (cursor or "").strip()
+    cache_key = f"{cursor}:{limit}"
+    now = time.time()
+    if _WSCN_CACHE and now - _WSCN_CACHE[0] <= 20 and _WSCN_CACHE[1] == cache_key:
+        return _WSCN_CACHE[2]
+
+    params: dict[str, str | int] = {"channel": "global-channel", "limit": limit}
+    if cursor:
+        params["cursor"] = cursor
+    with httpx.Client(
+        timeout=15,
+        headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
+    ) as client:
+        resp = client.get(_WSCN_LIVES_URL, params=params)
+        resp.raise_for_status()
+        payload = resp.json()
+    if payload.get("code") != 20000:
+        raise RuntimeError(payload.get("message") or "WSCN API 错误")
+
+    data = payload.get("data") or {}
+    items = [_normalize_wscn_item(row) for row in (data.get("items") or [])]
+    result = {
+        "items": items,
+        "next_cursor": (data.get("next_cursor") or "").strip(),
+        "polling_cursor": int(data.get("polling_cursor") or (items[0]["id"] if items else 0)),
+    }
+    _WSCN_CACHE = (now, cache_key, result)
+    return result
 
 
 def _prune_window_dict(
@@ -1719,6 +1778,27 @@ def create_api_router(
             since_id=since_id,
             exclude_platforms=plaza_hidden_platforms(db),
         )
+
+    @router.get("/live/wscn")
+    def wscn_live(
+        cursor: str = "",
+        limit: int = 30,
+        since_id: int | None = None,
+        user: dict = Depends(get_current_user),
+    ):
+        """华尔街见闻 7x24 全球直播快讯（代理 + 短缓存，不入库）。"""
+        del user  # 仅要求登录，不做 per-user 状态
+        try:
+            data = _fetch_wscn_lives(cursor=cursor, limit=bounded_limit(limit, default=30))
+        except httpx.HTTPError as exc:
+            logger.warning("wscn live fetch failed: %s", exc)
+            raise HTTPException(status_code=502, detail="快讯源暂时不可用") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if since_id is not None and since_id > 0:
+            newer = [row for row in data["items"] if row["id"] > since_id]
+            data = {**data, "items": newer}
+        return data
 
     @router.get("/kols/{kol_id}")
     def get_kol(kol_id: int, user: dict = Depends(get_current_user)):

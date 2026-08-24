@@ -22,7 +22,8 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.48";
+const APP_VERSION = "1.12.49";
+const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"];
 const TL_PLATFORMS = PLATFORM_TABS.map((p) => [p, p ? PLATFORM_LABELS[p] : "全部"]);
@@ -40,6 +41,7 @@ const V_ICON = `<svg class="nav-v-icon" viewBox="0 0 24 24" fill="none" stroke="
 const BOOK_ICON = `<svg class="nav-book-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>`;
 // 导航线性图标集（lucide 风格，stroke=currentColor，与 STAR/BELL/EYE 同一词汇）
 const LIST_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg>`;
+const RADIO_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>`;
 const GRID_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>`;
 const TRENDING_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 7l-8.5 8.5-5-5L2 17"/><path d="M16 7h6v6"/></svg>`;
 const BOOKMARK_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>`;
@@ -88,6 +90,14 @@ const state = {
   timelineCategory: "",
   timelineTag: "",
   timelineQ: "",
+  timelineSource: (() => {
+    try {
+      const v = sessionStorage.getItem(TL_SOURCE_KEY);
+      return v === "live" ? "live" : "kol";
+    } catch {
+      return "kol";
+    }
+  })(),
 };
 
 function escapeHtml(text) {
@@ -992,6 +1002,53 @@ let _tlRefreshing = false;  // 刷新锁：防止连点/并发 poll 重复插入
 let _tlPollTimer = null;    // 新帖轮询定时器
 let _tlWideWatchBound = false; // 1280px 断点只绑一次，避免开关留在已隐藏的栏里
 
+let _liveSeq = 0;
+const _livePosts = [];
+let _liveCursor = "";
+let _liveHasMore = true;
+let _liveLoadingMore = false;
+let _liveLatestId = 0;
+let _livePendingNew = [];
+let _livePendingLatestId = 0;
+let _liveSavedScrollY = 0;
+
+function isLiveTimeline() {
+  return state.timelineSource === "live";
+}
+
+function feedScrollY() {
+  return isLiveTimeline() ? _liveSavedScrollY : _tlSavedScrollY;
+}
+
+function feedPosts() {
+  return isLiveTimeline() ? _livePosts : _tlPosts;
+}
+
+function feedPendingNew() {
+  return isLiveTimeline() ? _livePendingNew : _tlPendingNew;
+}
+
+function renderFeed() {
+  if (isLiveTimeline()) renderLiveFeed();
+  else renderTimelineFeed();
+}
+
+function tlPersistSource() {
+  try { sessionStorage.setItem(TL_SOURCE_KEY, state.timelineSource); } catch { /* */ }
+}
+
+function tlNewBadgeLabel() {
+  return isLiveTimeline() ? "有新快讯" : "已发布";
+}
+
+function tlSyncNewBadgeMode() {
+  const badge = $("#tl-new-badge");
+  if (!badge) return;
+  badge.classList.toggle("live-mode", isLiveTimeline());
+  const label = badge.querySelector(".tl-new-badge-label");
+  if (label) label.textContent = tlNewBadgeLabel();
+}
+
 function tlFilterKey() {
   return JSON.stringify([
     state.timelineQ || "", state.timelinePlatform || "",
@@ -1115,6 +1172,7 @@ function mobilePlatformSwipeIgnore(el) {
 }
 
 function mobilePlatformSwipeSurface(el) {
+  if (isLiveTimeline()) return null;
   if ($("#tl-feed-panel") && el.closest(".tl-main")) return "timeline";
   if ($("#home-mobile-platforms") && ($("#kol-list")?.contains(el) || el.closest(".home-panel"))) return "home";
   if ($("#mysubs-tabs") && $("#mysubs-list")?.contains(el)) return "mysubs";
@@ -1222,18 +1280,44 @@ function tlApplyRailSearch() {
   tlApplyFilter();
 }
 
+function tlSourceSwitchHtml() {
+  const kolOn = !isLiveTimeline();
+  const liveOn = isLiveTimeline();
+  return `
+    <button class="tl-pill tl-source-pill ${kolOn ? "selected" : ""}" role="radio" data-source="kol" aria-label="大V动态" title="大V动态" aria-checked="${kolOn}" onclick="tlPickSource('kol')">
+      ${LIST_ICON}<span>动态</span>
+    </button>
+    <button class="tl-pill tl-source-pill ${liveOn ? "selected" : ""}" role="radio" data-source="live" aria-label="7x24快讯" title="7x24快讯" aria-checked="${liveOn}" onclick="tlPickSource('live')">
+      ${RADIO_ICON}<span>7x24</span>
+    </button>`;
+}
+
+function tlPickSource(source) {
+  const next = source === "live" ? "live" : "kol";
+  if (state.timelineSource === next) return;
+  if (isLiveTimeline()) _liveSavedScrollY = window.scrollY;
+  else _tlSavedScrollY = window.scrollY;
+  state.timelineSource = next;
+  tlPersistSource();
+  stopTimelinePoll();
+  renderTimeline(routeRenderSeq);
+}
+
 async function renderTimeline(seq) {
   setPageTitle("最新动态");
   ensurePlazaPlatformSelection();
   ensureWideTimelineWatch();
-  // 离开期间筛选条件未变且有缓存 → 直接恢复列表并检测新帖，不重新加载（保留阅读位置）
-  const reuse = _tlPosts.length && _tlLoadedFilter === tlFilterKey();
-  const wide = isWideTimeline();
+  const live = isLiveTimeline();
+  const reuse = live
+    ? _livePosts.length > 0
+    : (_tlPosts.length && _tlLoadedFilter === tlFilterKey());
+  const wide = isWideTimeline() && !live;
   $("#main").innerHTML = `
     <div class="tl-layout">
     <div class="tl-main">
-    <div class="tl-filterbar" id="tl-filterbar">
-      <div class="tl-filterbar-top icon-badge-bar">
+    <div class="tl-filterbar${live ? " live-mode" : ""}" id="tl-filterbar">
+      <div class="tl-source-switch" role="radiogroup" aria-label="内容源">${tlSourceSwitchHtml()}</div>
+      <div class="tl-filterbar-top icon-badge-bar${live ? " is-hidden" : ""}" id="tl-platform-bar">
         <div class="tl-pills" id="tl-pills" role="radiogroup" aria-label="平台">${tlPillsHtml()}</div>
         ${wide ? "" : `<div class="tl-actions">
           <button id="tl-filter-toggle" class="fav-toggle ${tlPanelFilterOn() ? "has-filter" : ""}" aria-label="筛选" aria-expanded="false" aria-controls="tl-filter-panel" onclick="tlFilterPanel()">${FILTER_ICON}筛选</button>
@@ -1250,15 +1334,15 @@ async function renderTimeline(seq) {
           <button class="btn-normal" onclick="tlApplyFilter()">完成</button>
         </div>
       </div>`}
-      <div class="tl-new-badge" id="tl-new-badge">
-        <button class="tl-new-badge-btn" onclick="refreshTimeline()" aria-label="有新动态，点击查看">
+      <div class="tl-new-badge${live ? " live-mode" : ""}" id="tl-new-badge">
+        <button class="tl-new-badge-btn" onclick="refreshTimeline()" aria-label="${live ? "有新快讯，点击查看" : "有新动态，点击查看"}">
           ${ARROW_UP_ICON}
           <span class="tl-badge-avatars" id="tl-new-avatars"></span>
-          已发布
+          <span class="tl-new-badge-label">${tlNewBadgeLabel()}</span>
         </button>
       </div>
     </div>
-    <div id="tl-active-chips-wrap">${tlActiveChipsHtml()}</div>
+    <div id="tl-active-chips-wrap"${live ? ' class="is-hidden"' : ""}>${live ? "" : tlActiveChipsHtml()}</div>
     <section class="section-panel tl-feed-panel" id="tl-feed-panel">
       <div id="feed">${reuse ? "" : TL_SKELETON}</div>
     </section>
@@ -1272,13 +1356,30 @@ async function renderTimeline(seq) {
       </div>
     </aside>` : ""}
     </div>`;
+  tlSyncNewBadgeMode();
   if (reuse) {
-    renderTimelineFeed();
-    window.scrollTo(0, _tlSavedScrollY); // 恢复离开时的阅读位置
+    renderFeed();
+    window.scrollTo(0, feedScrollY());
     startTimelinePoll();
-    pollNewPosts(); // 后台检测新帖，有则浮出提示条
-    if (!wide) loadTimelineTags().catch(() => { _tlTags = []; _tlDynamicTags = []; });
+    pollFeedUpdates();
+    if (!wide && !live) loadTimelineTags().catch(() => { _tlTags = []; _tlDynamicTags = []; });
     if (wide) loadTimelineRail(seq);
+    return;
+  }
+  if (live) {
+    _liveCursor = "";
+    _liveHasMore = true;
+    _liveLatestId = 0;
+    try {
+      await loadTimeline(true, seq);
+      startTimelinePoll();
+      pollFeedUpdates();
+    } catch (err) {
+      if (!routeStillActive(seq)) return;
+      const feed = $("#feed");
+      if (feed) feed.innerHTML = emptyState("加载失败: " + err.message,
+        `<div><button class="btn-normal" onclick="renderTimeline()">重试</button></div>`);
+    }
     return;
   }
   _tlPosts.length = 0;
@@ -1292,7 +1393,7 @@ async function renderTimeline(seq) {
     await loadTimeline(true, seq);
     if (wide) loadTimelineRail(seq);
     startTimelinePoll();
-    pollNewPosts(); // 首屏就绪后立即查一次新帖
+    pollFeedUpdates();
   } catch (err) {
     if (!routeStillActive(seq)) return;
     const feed = $("#feed");
@@ -1303,50 +1404,66 @@ async function renderTimeline(seq) {
 
 function startTimelinePoll() {
   stopTimelinePoll();
-  _tlPollTimer = setInterval(pollNewPosts, 60000); // X 式：约每分钟静默查一次新帖，计数实时更新
+  _tlPollTimer = setInterval(pollFeedUpdates, 60000);
 }
 function stopTimelinePoll() {
   if (_tlPollTimer) { clearInterval(_tlPollTimer); _tlPollTimer = null; }
 }
 
-async function pollNewPosts() {
-  // X 式新帖检测：按 since_id 只拉新帖，缓存到 _tlPendingNew；胶囊显示「已发布」，条数写在 aria-label
+async function pollFeedUpdates() {
   if (document.visibilityState === "hidden") return;
-  if (!_tlLatestId || !$("#feed")) return;
+  const live = isLiveTimeline();
+  const latestId = live ? _liveLatestId : _tlLatestId;
+  const pendingLatestId = live ? _livePendingLatestId : _tlPendingLatestId;
+  const pendingNew = feedPendingNew();
+  if (!latestId || !$("#feed") || (live && !isLiveTimeline()) || (!live && isLiveTimeline())) return;
   const seq = routeRenderSeq;
   try {
-    const params = new URLSearchParams({ limit: "50", since_id: String(_tlPendingLatestId || _tlLatestId) });
-    if (state.timelineQ) params.set("q", state.timelineQ);
-    if (state.timelinePlatform) params.set("platform", state.timelinePlatform);
-    if (state.timelineCategory) params.set("category_id", state.timelineCategory);
-    if (state.timelineTag) params.set("tag", state.timelineTag);
-    if (state.timelineFavorite) params.set("favorite", "1");
-    if (state.timelineSecondary) params.set("include_secondary", "1");
-    const posts = await api(`/api/my/feed?${params}`);
-    if (!routeStillActive(seq) || !$("#feed")) return;
-    const newer = posts.filter((p) => p.id > _tlPendingLatestId);
+    let newer = [];
+    if (live) {
+      const params = new URLSearchParams({
+        limit: "30",
+        since_id: String(pendingLatestId || latestId),
+      });
+      const data = await api(`/api/live/wscn?${params}`);
+      if (!routeStillActive(seq) || !$("#feed") || !isLiveTimeline()) return;
+      newer = data.items || [];
+    } else {
+      const params = new URLSearchParams({ limit: "50", since_id: String(pendingLatestId || latestId) });
+      if (state.timelineQ) params.set("q", state.timelineQ);
+      if (state.timelinePlatform) params.set("platform", state.timelinePlatform);
+      if (state.timelineCategory) params.set("category_id", state.timelineCategory);
+      if (state.timelineTag) params.set("tag", state.timelineTag);
+      if (state.timelineFavorite) params.set("favorite", "1");
+      if (state.timelineSecondary) params.set("include_secondary", "1");
+      const posts = await api(`/api/my/feed?${params}`);
+      if (!routeStillActive(seq) || !$("#feed") || isLiveTimeline()) return;
+      newer = posts.filter((p) => p.id > pendingLatestId);
+    }
     if (!newer.length) return;
-    // 并发轮询/点击补拉可能重叠：pending 按 id 去重后再累加
-    const have = new Set(_tlPendingNew.map((p) => p.id));
+    const have = new Set(pendingNew.map((p) => p.id));
     for (const p of newer) {
       if (!have.has(p.id)) {
         have.add(p.id);
-        _tlPendingNew.push(p);
+        pendingNew.push(p);
       }
     }
-    _tlPendingLatestId = Math.max(_tlPendingLatestId, ...newer.map((p) => p.id));
-    const label = `${_tlPendingNew.length} 条新动态，点击查看`;
+    if (live) _livePendingLatestId = Math.max(_livePendingLatestId, ...newer.map((p) => p.id));
+    else _tlPendingLatestId = Math.max(_tlPendingLatestId, ...newer.map((p) => p.id));
+    const unit = live ? "快讯" : "动态";
+    const label = `${pendingNew.length} 条新${unit}，点击查看`;
     const btn = $(".tl-new-badge-btn");
     if (btn) {
       btn.title = label;
       btn.setAttribute("aria-label", label);
     }
-    const avatars = $("#tl-new-avatars");
-    if (avatars) avatars.innerHTML = tlBadgeAvatarsHtml(_tlPendingNew);
-    const badge = $("#tl-new-badge");
-    if (badge) badge.classList.add("show");
+    if (!live) {
+      const avatars = $("#tl-new-avatars");
+      if (avatars) avatars.innerHTML = tlBadgeAvatarsHtml(pendingNew);
+    }
+    $("#tl-new-badge")?.classList.add("show");
     $("#tl-feed-panel")?.classList.add("has-new");
-  } catch { /* 新帖检测失败静默 */ }
+  } catch { /* 轮询失败静默 */ }
 }
 
 // 新帖胶囊头像：去重取前 3 个（无头像用首字色块）；超出的作者不另画 +N，条数只在 aria-label
@@ -1366,30 +1483,35 @@ function tlBadgeAvatarsHtml(posts, max = 3) {
 }
 
 async function refreshTimeline() {
-  if (_tlRefreshing) return; // 连点/并发：已有刷新在飞则忽略
+  if (_tlRefreshing) return;
   _tlRefreshing = true;
   try {
-    if (!_tlPendingNew.length) {
-      // 兜底：无缓存新帖时全量刷新
+    const live = isLiveTimeline();
+    const pending = feedPendingNew();
+    const posts = feedPosts();
+    if (!pending.length) {
       await loadTimeline(true, routeRenderSeq);
       window.scrollTo({ top: 0, behavior: "smooth" });
       return;
     }
-    // 先补拉一次最新：覆盖「提示条出现后又有新帖」的窗口，点击即刷新到真正最新状态
-    await pollNewPosts();
-    const badge = $("#tl-new-badge");
-    // 与已渲染列表按 id 去重后插入：多批轮询累积（含并发重叠）统一按 id 倒序
-    const seen = new Set(_tlPosts.map((p) => p.id));
-    const incoming = _tlPendingNew.filter((p) => !seen.has(p.id)).sort((a, b) => b.id - a.id);
+    await pollFeedUpdates();
+    const seen = new Set(posts.map((p) => p.id));
+    const incoming = pending.filter((p) => !seen.has(p.id)).sort((a, b) => b.id - a.id);
     if (incoming.length) {
-      _tlPosts.unshift(...incoming);
-      _tlOffset += incoming.length; // 新帖进了 DB 顶部，offset 分页要同步后移
-      _tlLatestId = Math.max(_tlLatestId, _tlPendingLatestId);
-      _tlPendingNew = [];
-      _tlPendingLatestId = 0;
-      renderTimelineFeed();
+      posts.unshift(...incoming);
+      if (live) {
+        _liveLatestId = Math.max(_liveLatestId, _livePendingLatestId, ...incoming.map((p) => p.id));
+        _livePendingNew.length = 0;
+        _livePendingLatestId = 0;
+      } else {
+        _tlOffset += incoming.length;
+        _tlLatestId = Math.max(_tlLatestId, _tlPendingLatestId);
+        _tlPendingNew.length = 0;
+        _tlPendingLatestId = 0;
+      }
+      renderFeed();
     }
-    if (badge) badge.classList.remove("show");
+    $("#tl-new-badge")?.classList.remove("show");
     $("#tl-feed-panel")?.classList.remove("has-new");
     window.scrollTo({ top: 0, behavior: "smooth" });
   } finally {
@@ -1609,57 +1731,130 @@ async function railToggleSubscribe(kolId, btn) {
 
 async function loadTimeline(reset = true, routeSeq, opts) {
   opts = opts || {};
-  if (!reset && _tlLoadingMore) return;
-  if (!reset) _tlLoadingMore = true;
-  const seq = ++_tlSeq;
+  const live = isLiveTimeline();
+  if (!reset && (live ? _liveLoadingMore : _tlLoadingMore)) return;
+  if (!reset) {
+    if (live) _liveLoadingMore = true;
+    else _tlLoadingMore = true;
+  }
+  const seq = live ? ++_liveSeq : ++_tlSeq;
   const pills = $("#tl-pills");
   if (reset) {
     const feed = $("#feed");
     if (feed) feed.innerHTML = TL_SKELETON;
-    pills?.setAttribute("aria-busy", "true");
+    if (!live) pills?.setAttribute("aria-busy", "true");
   }
   try {
-    const params = new URLSearchParams({ limit: "50", offset: String(reset ? 0 : _tlOffset) });
-    if (state.timelineQ) params.set("q", state.timelineQ);
-    if (state.timelinePlatform) params.set("platform", state.timelinePlatform);
-    if (state.timelineCategory) params.set("category_id", state.timelineCategory);
-    if (state.timelineTag) params.set("tag", state.timelineTag);
-    if (state.timelineFavorite) params.set("favorite", "1");
-    if (state.timelineSecondary) params.set("include_secondary", "1");
-    const posts = await api(`/api/my/feed?${params}`);
-    // 条件改变、已离开动态页或路由已切换：丢弃过期响应
-    if (seq !== _tlSeq || !$("#feed") || !routeStillActive(routeSeq)) return;
-    if (reset) {
-      _tlPosts.length = 0;
-      _tlOffset = 0;
+    if (live) {
+      const params = new URLSearchParams({ limit: "30" });
+      if (!reset && _liveCursor) params.set("cursor", _liveCursor);
+      const data = await api(`/api/live/wscn?${params}`);
+      if (seq !== _liveSeq || !$("#feed") || !routeStillActive(routeSeq) || !isLiveTimeline()) return;
+      if (reset) _livePosts.length = 0;
+      const items = data.items || [];
+      _livePosts.push(...items);
+      _liveCursor = data.next_cursor || "";
+      _liveHasMore = !!(data.next_cursor && items.length);
+      if (reset) {
+        _liveLatestId = _livePosts[0]?.id || 0;
+        _livePendingNew.length = 0;
+        _livePendingLatestId = 0;
+        $("#tl-new-badge")?.classList.remove("show");
+        $("#tl-feed-panel")?.classList.remove("has-new");
+      }
+    } else {
+      const params = new URLSearchParams({ limit: "50", offset: String(reset ? 0 : _tlOffset) });
+      if (state.timelineQ) params.set("q", state.timelineQ);
+      if (state.timelinePlatform) params.set("platform", state.timelinePlatform);
+      if (state.timelineCategory) params.set("category_id", state.timelineCategory);
+      if (state.timelineTag) params.set("tag", state.timelineTag);
+      if (state.timelineFavorite) params.set("favorite", "1");
+      if (state.timelineSecondary) params.set("include_secondary", "1");
+      const posts = await api(`/api/my/feed?${params}`);
+      if (seq !== _tlSeq || !$("#feed") || !routeStillActive(routeSeq)) return;
+      if (reset) {
+        _tlPosts.length = 0;
+        _tlOffset = 0;
+      }
+      _tlPosts.push(...posts);
+      _tlOffset += posts.length;
+      _tlHasMore = posts.length >= 50;
+      if (reset) {
+        _tlLatestId = posts[0]?.id || 0;
+        _tlLoadedFilter = tlFilterKey();
+        _tlPendingNew.length = 0;
+        _tlPendingLatestId = 0;
+        $("#tl-new-badge")?.classList.remove("show");
+        $("#tl-feed-panel")?.classList.remove("has-new");
+      }
     }
-    _tlPosts.push(...posts);
-    _tlOffset += posts.length;
-    _tlHasMore = posts.length >= 50;
-    if (reset) {
-      _tlLatestId = posts[0]?.id || 0; // 记录第一页最新帖 id，供新帖检测
-      _tlLoadedFilter = tlFilterKey();
-      _tlPendingNew = []; // 筛选/刷新变化后，旧缓存的新帖失效
-      _tlPendingLatestId = 0;
-      const badge = $("#tl-new-badge");
-      if (badge) badge.classList.remove("show");
-      $("#tl-feed-panel")?.classList.remove("has-new");
-    }
-    renderTimelineFeed();
+    renderFeed();
   } catch (err) {
-    if (seq !== _tlSeq || !$("#feed") || !routeStillActive(routeSeq)) return;
-    if (reset && opts.revert) tlRestoreFilters(opts.revert);
+    const activeSeq = live ? _liveSeq : _tlSeq;
+    if (seq !== activeSeq || !$("#feed") || !routeStillActive(routeSeq)) return;
+    if (!live && reset && opts.revert) tlRestoreFilters(opts.revert);
     $("#feed").innerHTML = emptyState("加载失败: " + err.message,
       `<div><button class="btn-normal" onclick="loadTimeline(true, routeRenderSeq)">重试</button></div>`);
   } finally {
-    if (reset) pills?.removeAttribute("aria-busy");
-    if (!reset) _tlLoadingMore = false;
+    if (reset && !live) pills?.removeAttribute("aria-busy");
+    if (!reset) {
+      if (live) _liveLoadingMore = false;
+      else _tlLoadingMore = false;
+    }
   }
 }
 
-function timelineLoadMore() {
-  if (_tlLoadingMore || !_tlHasMore) return;
+function feedLoadMore() {
+  if (isLiveTimeline()) {
+    if (_liveLoadingMore || !_liveHasMore) return;
+  } else if (_tlLoadingMore || !_tlHasMore) {
+    return;
+  }
   loadTimeline(false, routeRenderSeq);
+}
+
+function timelineLoadMore() {
+  feedLoadMore();
+}
+
+function liveFeedItem(item) {
+  const score = Number(item.score) || 1;
+  const title = item.highlight_title
+    ? `<div class="live-title">${escapeHtml(item.highlight_title)}</div>`
+    : "";
+  const body = escapeHtml(item.body || "").replace(/\n/g, "<br>");
+  return `
+    <article class="live-item" data-score="${score}">
+      <time class="live-time" datetime="${escapeHtml(item.published_at || "")}">${fmtPublished(item.published_at, true)}</time>
+      <div class="live-main">
+        ${title}
+        <a class="live-body" href="${escapeHtml(item.url || "#")}" target="_blank" rel="noopener">${body}</a>
+      </div>
+    </article>`;
+}
+
+function renderLiveFeed() {
+  const feed = $("#feed");
+  if (!feed) return;
+  const posts = _livePosts;
+  const grouped = new Map();
+  for (const p of posts) {
+    const bucket = feedDateBucket(p.published_at);
+    if (!grouped.has(bucket)) grouped.set(bucket, []);
+    grouped.get(bucket).push(p);
+  }
+  const html = [...grouped.entries()].map(([bucket, list], gi) => `
+    <div class="tl-group live-group">
+      <div class="tl-group-head"><span>${escapeHtml(bucket)}</span>${gi === 0 ? `<span class="tl-group-count">已加载 ${posts.length} 条快讯</span>` : ""}</div>
+      <div class="live-feed">${list.map(liveFeedItem).join("")}</div>
+    </div>`).join("");
+  const footer = _liveHasMore
+    ? `<div class="toolbar tl-feed-more"><button class="btn-normal" onclick="feedLoadMore()">加载更多</button></div>`
+    : (posts.length ? `<p class="muted tl-feed-end">已加载全部</p>` : "");
+  const attr = posts.length
+    ? html + footer + `<p class="live-attribution muted">数据来源：<a href="https://wallstreetcn.com/live/global" target="_blank" rel="noopener">华尔街见闻 · 7x24全球直播</a></p>`
+    : emptyState("暂无快讯", `<div><button class="btn-normal" onclick="loadTimeline(true, routeRenderSeq)">刷新</button></div>`);
+  feed.innerHTML = attr;
 }
 
 function renderTimelineFeed() {
@@ -1745,11 +1940,12 @@ function parsePublished(s) {
   return isNaN(d.getTime()) ? null : d;
 }
 
-function fmtPublished(s) {
+function fmtPublished(s, clockOnly = false) {
   const d = parsePublished(s);
   if (!d) return escapeHtml(s || "");
   const now = new Date();
   const p = (n) => String(n).padStart(2, "0");
+  if (clockOnly) return `${p(d.getHours())}:${p(d.getMinutes())}`;
   const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
   if (sameDay(d, now)) return `今天 ${p(d.getHours())}:${p(d.getMinutes())}`;
   const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
@@ -7300,7 +7496,10 @@ async function router() {
   stopStatsTimer();
   stopTimelinePoll();
   // 离开动态页前记录滚动位置，切回时恢复阅读位置
-  if (document.querySelector("#feed")) _tlSavedScrollY = window.scrollY;
+  if (document.querySelector("#feed")) {
+    if (isLiveTimeline()) _liveSavedScrollY = window.scrollY;
+    else _tlSavedScrollY = window.scrollY;
+  }
   const path = routePath();
   const [page, rawParam] = path.split("/");
   // 管理后台默认全景概览：/admin 与 /admin/dashboard 等价，侧边栏高亮才能对上
