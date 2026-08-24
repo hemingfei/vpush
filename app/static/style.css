@@ -836,6 +836,7 @@ textarea.proxy-import { min-height: 96px; }
 .tl-pill.selected .pt-icon { filter: brightness(0) invert(1); }
 .pt-label { display: inline; }
 .pt-icon { width: 16px; height: 16px; flex-shrink: 0; }
+.tl-pill[data-platform="live"]:not(.selected) .pt-icon { color: #1378F0; }
 .platform-tab[data-platform="xueqiu"]:not(.selected) .pt-icon,
 .tl-pill[data-platform="xueqiu"]:not(.selected) .pt-icon { color: var(--color-brand-xueqiu); }
 .platform-tab[data-platform="combination"]:not(.selected) .pt-icon,
@@ -1365,8 +1366,6 @@ body.lightbox-open { overflow: hidden; }
   touch-action: pan-x;
   overscroll-behavior-x: contain;
 }
-.tl-pill .wscn-live-icon { width: 18px; height: 18px; flex: 0 0 auto; }
-.tl-pill.selected .wscn-live-icon { filter: grayscale(1) brightness(0) invert(1); }
 .tl-pill[data-platform="xueqiu"],
 .platform-tab[data-platform="xueqiu"] { margin-inline-end: 6px; }
 .tl-filter-views { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -2194,8 +2193,7 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
     justify-content: center;
   }
   .icon-badge-bar .tl-pill span { display: none; }
-  .icon-badge-bar .tl-pill .pt-icon,
-  .icon-badge-bar .tl-pill .wscn-live-icon { width: 20px; height: 20px; }
+  .icon-badge-bar .tl-pill .pt-icon { width: 20px; height: 20px; }
   .icon-badge-bar > .fav-toggle,
   .icon-badge-bar .tl-actions button { font-size: 0; gap: 0; }
   .icon-badge-bar .funnel-icon,

@@ -1287,6 +1287,18 @@ def test_timeline_live_source_is_platform_pill():
     assert '.live-item[data-score="3"]' in css
 
 
+def test_live_pill_icon_matches_platform_badge_size():
+    """快讯角标与其他平台同尺寸，选中不得反色出白圆。"""
+    src = APP_JS.read_text()
+    css = STYLE_CSS.read_text()
+    icon = re.search(r"const WSCN_LIVE_ICON = `([^`]+)`", src).group(1)
+    assert 'class="pt-icon"' in icon
+    assert "#FFF" not in icon and "#1378F0" not in icon
+    assert 'fill="currentColor"' in icon
+    assert ".tl-pill.selected .wscn-live-icon" not in css
+    assert ".tl-pill .wscn-live-icon { width: 18px" not in css
+
+
 def test_timeline_pills_stay_content_sized():
     """桌面筛选胶囊按内容收缩，禁止等宽拉伸。"""
     render = _fn_body("renderTimeline")
@@ -1398,8 +1410,8 @@ def test_channel_status_poll_skips_identical_and_restores_focus():
 def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
-    assert 'href="/style.css?v=174"' in html
-    assert 'src="/app.js?v=235"' in html
+    assert 'href="/style.css?v=175"' in html
+    assert 'src="/app.js?v=236"' in html
 
 
 def test_register_placeholder_matches_username_min_length():
