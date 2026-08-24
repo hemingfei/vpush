@@ -1284,7 +1284,16 @@ def test_timeline_live_source_is_platform_pill():
     assert '.live-item[data-score="3"]' in css
 
 
-def test_live_feed_high_priority_text_is_red_and_not_linked():
+def test_timeline_pills_use_equal_dynamic_grid_tracks():
+    """时间线筛选按钮按可见数量等宽，文字长度不能改变单个按钮宽度。"""
+    render = _fn_body("renderTimeline")
+    css = STYLE_CSS.read_text()
+    assert 'style="--tl-pill-count:${tlPlazaEntries().length + 1}"' in render
+    assert "grid-template-columns: repeat(var(--tl-pill-count" in css
+    assert ".tl-pill {" in css and "width: 100%" in css
+    assert "min-width: 0" in css
+
+
     """重点快讯的时间、标题和正文统一标红，正文不作为链接。"""
     item = _fn_body("liveFeedItem")
     css = STYLE_CSS.read_text()

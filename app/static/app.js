@@ -1305,7 +1305,7 @@ async function renderTimeline(seq) {
     <div class="tl-main">
     <div class="tl-filterbar${live ? " live-mode" : ""}" id="tl-filterbar">
       <div class="tl-filterbar-top icon-badge-bar" id="tl-platform-bar">
-        <div class="tl-pills" id="tl-pills" role="radiogroup" aria-label="平台和内容源">${tlPillsHtml()}</div>
+        <div class="tl-pills" id="tl-pills" role="radiogroup" aria-label="平台和内容源" style="--tl-pill-count:${tlPlazaEntries().length + 1}">${tlPillsHtml()}</div>
         ${wide || live ? "" : `<div class="tl-actions">
           <button id="tl-filter-toggle" class="fav-toggle ${tlPanelFilterOn() ? "has-filter" : ""}" aria-label="筛选" aria-expanded="false" aria-controls="tl-filter-panel" onclick="tlFilterPanel()">${FILTER_ICON}筛选</button>
         </div>`}
