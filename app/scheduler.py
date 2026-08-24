@@ -1107,34 +1107,43 @@ def _buffer_secondary_subscribers(db, kol_id: int, post: Post, secondary_buffer)
 
 
 def _user_llm_config(user: dict, fallback=None):
-    """用户自配 LLM 优先；不安全地址忽略并回退管理员全局配置。"""
+    """用户自配 LLM 优先；没配或地址不安全时回退站点 Grok。"""
     if not user.get("llm_api_key"):
         return fallback
     from types import SimpleNamespace
 
     from .url_safety import is_allowed_user_llm_base
 
-    api_base = user.get("llm_api_base") or "https://api.deepseek.com"
-    if not is_allowed_user_llm_base(api_base):
+    api_base = (user.get("llm_api_base") or "").strip() or (
+        getattr(fallback, "api_base", "") if fallback else ""
+    )
+    if not api_base or not is_allowed_user_llm_base(api_base):
         return fallback
     return SimpleNamespace(
         api_base=api_base,
         api_key=user["llm_api_key"],
-        model=user.get("llm_model") or "deepseek-chat",
+        model=(user.get("llm_model") or "").strip()
+        or (getattr(fallback, "model", "") if fallback else "")
+        or "grok-4.6",
         user_supplied=True,
     )
 
 
-def _system_llm_config(fallback=None):
-    """站点任务（标签维护）只走环境变量 / app.state.llm_config。"""
+def _system_llm_config(db: DB, fallback=None):
+    """站点 LLM：管理员推送设置（Grok）优先，没有再退环境变量。"""
+    for user in db.list_users():
+        if user.get("is_admin"):
+            cfg = _user_llm_config(user)
+            if cfg is not None:
+                return cfg
     if fallback and getattr(fallback, "api_key", ""):
         return fallback
     return None
 
 
 def _admin_llm_config(db: DB, fallback=None):
-    """旧名兼容：不再读取管理员个人 key。"""
-    return _system_llm_config(fallback)
+    """旧名兼容，等同 _system_llm_config。"""
+    return _system_llm_config(db, fallback)
 
 
 def _send_digest_bundle(
@@ -1197,7 +1206,7 @@ def notify_digest_subscribers(
 ) -> None:
     """把合并摘要推送给订阅了该大V的用户（各自绑定的渠道）。
 
-    用户自配 LLM 时先发一条 AI 要点再发摘要卡片；未自配不调模型。
+    用户自配 LLM 优先，否则用站点 Grok（管理员推送设置 / 环境变量）。
     生成失败自动降级，不影响摘要推送。summary_cache 透传给 summarize_posts，
     同一批帖文、同一模型的多个订阅用户只调一次大模型。
     """
@@ -1208,6 +1217,7 @@ def notify_digest_subscribers(
     from .channels import build_channel_notifier, iter_user_channels
 
     client = httpx.Client(timeout=15)
+    site_llm = _system_llm_config(db, llm_config)
     try:
         subscribers = db.subscribers_of_kol(kol["id"])
         keywords_by_user = db.get_users_keywords([u["id"] for u in subscribers])
@@ -1238,7 +1248,7 @@ def notify_digest_subscribers(
                     continue
                 matched = instant
             summary = None
-            llm_cfg = _user_llm_config(user)
+            llm_cfg = _user_llm_config(user, site_llm)
             if llm_cfg is not None:
                 try:
                     from .llm import summarize_posts
@@ -1284,7 +1294,7 @@ def flush_digest(
                 digest.pop(kol_id, None)
                 continue
             notify_digest_subscribers(
-                db, posts, kol, notifiers_config, notifiers, retry_queue, dnd_buffer, None, summary_cache
+                db, posts, kol, notifiers_config, notifiers, retry_queue, dnd_buffer, llm_config, summary_cache
             )
             digest.pop(kol_id, None)
         except Exception:  # noqa: BLE001
@@ -2106,7 +2116,9 @@ class Scheduler:
         if use_llm:
             from .llm import summarize_posts
 
-            llm_cfg = _user_llm_config(user)
+            llm_cfg = _user_llm_config(
+                user, _system_llm_config(self.db, getattr(self, "llm_config", None))
+            )
             if llm_cfg is not None:
                 try:
                     summary = summarize_posts(posts, llm_cfg)
@@ -2202,7 +2214,7 @@ class Scheduler:
         from .tagging import try_run_tag_maintenance
 
         result = try_run_tag_maintenance(
-            self.db, _system_llm_config(getattr(self, "llm_config", None))
+            self.db, _system_llm_config(self.db, getattr(self, "llm_config", None))
         )
         if result is None:
             return False
@@ -2304,7 +2316,9 @@ class Scheduler:
                 for r in rows
             ]
             summary = None
-            llm_cfg = _user_llm_config(user)
+            llm_cfg = _user_llm_config(
+                user, _system_llm_config(self.db, getattr(self, "llm_config", None))
+            )
             if llm_cfg is not None:
                 try:
                     from .llm import summarize_daily

@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.50";
+const APP_VERSION = "1.12.51";
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"];
@@ -1523,11 +1523,23 @@ async function renderTimeline(seq) {
 
 function startTimelinePoll() {
   stopTimelinePoll();
-  _tlPollTimer = setInterval(pollFeedUpdates, 60000);
+  ensureTimelineVisibilityPoll();
+  const interval = isLiveTimeline() ? 15000 : 60000;
+  _tlPollTimer = setInterval(pollFeedUpdates, interval);
 }
 function stopTimelinePoll() {
   if (_tlPollTimer) { clearInterval(_tlPollTimer); _tlPollTimer = null; }
   stopLiveClock();
+}
+
+function ensureTimelineVisibilityPoll() {
+  if (ensureTimelineVisibilityPoll.bound) return;
+  ensureTimelineVisibilityPoll.bound = true;
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    if (!$("#feed")) return;
+    pollFeedUpdates();
+  });
 }
 
 async function pollFeedUpdates() {
@@ -3080,33 +3092,33 @@ async function renderSettings(seq) {
         <header class="section-head">
           <div>
             <h2 class="section-title">AI 摘要（可选，用你的大模型）</h2>
-            <p class="section-meta">配置后，合并摘要、每日精选和免打扰汇总会先用你的大模型生成要点。接口为 OpenAI 兼容格式（/chat/completions）。不填则不调用大模型，只用普通摘要。</p>
+            <p class="section-meta">默认用站点 Grok。填了自己的 Key 才改用你的账号。接口为 OpenAI 兼容格式（/chat/completions）。</p>
           </div>
         </header>
         <div class="form-row">
           <label for="set-llm-base">API 地址（Base URL）</label>
           <input id="set-llm-base" class="form-control" type="text"
-            placeholder="https://api.deepseek.com"
+            placeholder="留空则跟站点 Grok"
             value="${escapeHtml(state.user.llm_api_base || "")}">
-          <p class="muted" style="margin-top:4px">OpenAI 兼容的公网 http(s) 地址即可，不能指向内网。留空默认 DeepSeek：<code>https://api.deepseek.com</code></p>
+          <p class="muted" style="margin-top:4px">OpenAI 兼容的公网 http(s) 地址即可，不能指向内网。留空跟站点同一套。</p>
         </div>
         <div class="form-row">
           <label for="set-llm-key">API Key</label>
           <input id="set-llm-key" class="form-control" type="password"
-            placeholder="sk-...（清空并保存 = 关闭 AI 摘要）"
+            placeholder="sk-...（清空并保存 = 用站点 Grok）"
             value="${escapeHtml(state.user.llm_api_key || "")}" autocomplete="off">
         </div>
         <div class="form-row">
           <label for="set-llm-model">模型名</label>
           <input id="set-llm-model" class="form-control" type="text"
-            placeholder="deepseek-chat"
+            placeholder="grok-4.6"
             value="${escapeHtml(state.user.llm_model || "")}">
-          <p class="muted" style="margin-top:4px">留空默认 <code>deepseek-chat</code></p>
+          <p class="muted" style="margin-top:4px">留空默认 <code>grok-4.6</code></p>
         </div>
         <div class="toolbar" style="margin-top:10px">
           <button class="btn-normal" onclick="saveLlm()">保存</button>
         </div>
-        <p class="muted">🔒 配置仅对当前账号生效，费用由你自己的 API 账号承担；生成失败会自动回退为普通摘要，不影响推送。</p>
+        <p class="muted">🔒 自己的 Key 只对当前账号生效，费用由你的 API 账号承担；生成失败会自动回退为普通摘要，不影响推送。</p>
       </section>
       </div>
       <div id="st-account" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-account">
@@ -3900,7 +3912,7 @@ async function saveLlm() {
   };
   try {
     await api("/api/me", { method: "PUT", body: JSON.stringify(payload) });
-    flash(payload.llm_api_key ? "已保存" : "AI 摘要已关闭");
+    flash(payload.llm_api_key ? "已保存，将用你的模型" : "已保存，将用站点 Grok");
     await reloadSettings();
   } catch (err) {
     flash(err.message, "error");
@@ -6393,10 +6405,10 @@ async function loadAdminTagsTab() {
     <section class="section-panel">
       <header class="section-head">
         <div><h2 class="section-title">标签维护</h2>
-        <p class="section-meta">合并种子黑话、解析 $标记$ 新股、去掉指数/ETF 误入的股票名，并清理过期标签与碎片别名。每日自动一次，也可立即执行。标记解析用服务器环境变量 LLM_API_KEY，与个人推送设置无关。</p></div>
+        <p class="section-meta">合并种子黑话、解析 $标记$ 新股、去掉指数/ETF 误入的股票名，并清理过期标签与碎片别名。每日自动一次，也可立即执行。标记解析跟管理员「推送设置 → AI 摘要」同一套 Grok。</p></div>
       </header>
       <p class="section-meta" style="margin-top:8px" id="tag-maintain-meta">${escapeHtml(adminMaintainSummary(data))}</p>
-      ${data.maintain && data.maintain.llm_ready ? "" : `<p class="section-meta">未检测到系统 LLM（环境变量 LLM_API_KEY）。点运行仍会合并种子、清碎片和误标，但不会解析新的 $标记$。</p>`}
+      ${data.maintain && data.maintain.llm_ready ? "" : `<p class="section-meta">未检测到 Grok。请到「推送设置 → AI 摘要」配置，或设环境变量 LLM_API_KEY。点运行仍会合并种子、清碎片和误标。</p>`}
       <div class="toolbar" style="margin-top:12px">
         <button class="btn-normal" onclick="adminMaintainTags('pending')">维护并回填待打标</button>
         <button class="btn-ghost" onclick="adminMaintainTags('none')">仅维护词表</button>

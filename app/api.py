@@ -696,7 +696,7 @@ def bounded_limit(value: int, default: int = 100) -> int:
 
 _WSCN_LIVES_URL = "https://api-one-wscn.awtmt.com/apiv1/content/lives"
 _WSCN_CACHE: dict[str, tuple[float, dict]] = {}
-_WSCN_CACHE_TTL = 90
+_WSCN_CACHE_TTL = 15
 _WSCN_LOCK = threading.Lock()
 _WSCN_REFRESHING: set[str] = set()
 _WSCN_CLIENT: httpx.Client | None = None
@@ -708,6 +708,12 @@ def warmup_wscn_live() -> None:
         _fetch_wscn_lives(limit=30)
     except Exception:
         logger.warning("wscn warmup failed", exc_info=True)
+
+
+def start_wscn_live_refresh() -> None:
+    """预热首屏后每 TTL 秒刷一次，请求只读这份缓存。"""
+    warmup_wscn_live()
+    threading.Thread(target=_wscn_home_loop, daemon=True, name="wscn-refresh").start()
 
 
 def _wscn_client() -> httpx.Client:
@@ -759,13 +765,32 @@ def _wscn_load(cursor: str, limit: int) -> dict:
 
 def _wscn_refresh(cursor: str, limit: int, cache_key: str) -> None:
     try:
+        result = _wscn_load(cursor, limit)
         with _WSCN_LOCK:
-            _WSCN_CACHE[cache_key] = (time.time(), _wscn_load(cursor, limit))
+            _WSCN_CACHE[cache_key] = (time.time(), result)
     except Exception:
         logger.warning("wscn live refresh failed", exc_info=True)
     finally:
         with _WSCN_LOCK:
             _WSCN_REFRESHING.discard(cache_key)
+
+
+def _wscn_refresh_home() -> None:
+    cache_key = ":30"
+    with _WSCN_LOCK:
+        if cache_key in _WSCN_REFRESHING:
+            return
+        _WSCN_REFRESHING.add(cache_key)
+    _wscn_refresh("", 30, cache_key)
+
+
+def _wscn_home_loop() -> None:
+    while True:
+        time.sleep(_WSCN_CACHE_TTL)
+        try:
+            _wscn_refresh_home()
+        except Exception:
+            logger.warning("wscn home loop failed", exc_info=True)
 
 
 def _fetch_wscn_lives(*, cursor: str = "", limit: int = 30) -> dict:
@@ -3029,7 +3054,7 @@ def create_api_router(
         """
         from .scheduler import _system_llm_config
 
-        llm_cfg = _system_llm_config(getattr(request.app.state, "llm_config", None))
+        llm_cfg = _system_llm_config(db, getattr(request.app.state, "llm_config", None))
         return {
             "tags": db.get_tag_vocabulary(),
             "stock_names": db.get_stock_names(),
@@ -3136,7 +3161,7 @@ def create_api_router(
         from .scheduler import _system_llm_config
         from .tagging import backfill_post_tags, try_run_tag_maintenance
 
-        llm_cfg = _system_llm_config(getattr(request.app.state, "llm_config", None))
+        llm_cfg = _system_llm_config(db, getattr(request.app.state, "llm_config", None))
         result = try_run_tag_maintenance(db, llm_cfg)
         if result is None:
             raise HTTPException(status_code=409, detail="标签维护正在进行")

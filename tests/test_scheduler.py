@@ -1483,7 +1483,7 @@ def test_digest_llm_summary_computed_once_for_multiple_subscribers(monkeypatch):
     assert calls["n"] == 1
 
 
-def test_digest_skips_llm_when_user_has_no_key(monkeypatch):
+def test_digest_uses_site_llm_when_user_has_no_key(monkeypatch):
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
     uid = db.add_user("u1", "h", telegram_chat_id="111")
@@ -1518,9 +1518,9 @@ def test_digest_skips_llm_when_user_has_no_key(monkeypatch):
         {kid: [post]},
         [],
         ncfg,
-        llm_config=SimpleNamespace(api_key="sk-env", api_base="https://api.deepseek.com", model="deepseek-chat"),
+        llm_config=SimpleNamespace(api_key="sk-grok", api_base="https://example.com/v1", model="grok-4.6"),
     )
-    assert calls["n"] == 0
+    assert calls["n"] == 1
 
 
 def test_dnd_summary_failure_alerts_admin(monkeypatch):
@@ -4299,8 +4299,8 @@ def _alias_scheduler(db, llm_config):
     )
 
 
-def test_stock_alias_task_uses_env_llm_not_admin_personal(monkeypatch):
-    """系统别名任务只走环境变量，不读管理员个人 key。"""
+def test_stock_alias_task_prefers_admin_grok_over_env(monkeypatch):
+    """系统别名任务跟管理员推送设置同一套 Grok，不走环境变量里的另一套。"""
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
     db.insert_post("xueqiu", kid, "al-admin", "$涂改液(SZ000858)$", "戏称", "u", "")
@@ -4328,13 +4328,13 @@ def test_stock_alias_task_uses_env_llm_not_admin_personal(monkeypatch):
             model="deepseek-chat",
         ),
     )._run_stock_alias_task()
-    assert seen["key"] == "sk-deepseek"
-    assert seen["model"] == "deepseek-chat"
-    assert seen.get("user_supplied") is not True
+    assert seen["key"] == "sk-grok"
+    assert seen["model"] == "grok-4.6"
+    assert seen["user_supplied"] is True
 
 
-def test_stock_alias_task_skips_llm_when_env_empty(monkeypatch):
-    """环境变量没配 LLM 时，管理员个人 key 也不能跑标记解析。"""
+def test_stock_alias_task_runs_with_admin_llm_when_env_empty(monkeypatch):
+    """环境变量没配 LLM 时，管理员推送设置也能跑标记解析。"""
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
     db.insert_post("xueqiu", kid, "al-only", "$涂改液(SZ000858)$", "戏称", "u", "")
@@ -4349,12 +4349,13 @@ def test_stock_alias_task_skips_llm_when_env_empty(monkeypatch):
 
     def fake_resolve(marks, cfg, client=None):
         seen["n"] += 1
+        seen["key"] = cfg.api_key
         return []
 
     monkeypatch.setattr("app.llm.resolve_stock_marks", fake_resolve)
     _alias_scheduler(db, None)._run_stock_alias_task()
-    assert seen["n"] == 0
-    assert any(a["alias"] == "宁王" for a in db.get_stock_aliases())
+    assert seen["n"] == 1
+    assert seen["key"] == "sk-grok"
 
 
 def test_daily_report_uses_admin_push_settings_llm(monkeypatch):

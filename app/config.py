@@ -56,10 +56,10 @@ class WebPushConfig:
 
 @dataclass
 class LLMConfig:
-    """站点级 LLM：只给标签维护等系统任务用（环境变量 LLM_API_KEY）。
+    """站点 LLM 兜底（环境变量 LLM_*）。管理员推送设置里的 Grok 优先于这一份。
 
-    用户摘要必须在推送设置里自配 key，不会回落到这一份。
-    使用 OpenAI 兼容接口（/chat/completions）。未配置时系统任务跳过识别，推送不受影响。
+    用户未自配时，摘要 / 每日精选 / 标签维护都走站点 Grok。
+    使用 OpenAI 兼容接口（/chat/completions）。
     """
 
     api_base: str = "https://api.openai.com/v1"
