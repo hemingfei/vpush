@@ -1318,6 +1318,25 @@ def test_web_combination_posts_use_structured_rebalance_details():
     assert ".combo-action" in css
 
 
+def test_live_toolbar_keeps_existing_filter_structure():
+    """快讯工具条复用现有吸顶栏，提供重要筛选和当前列表搜索，暂不放日期伪功能。"""
+    render = _fn_body("renderTimeline")
+    toolbar = _fn_body("liveToolbarHtml")
+    filtered = _fn_body("liveFilteredPosts")
+    css = STYLE_CSS.read_text()
+    assert "liveToolbarHtml()" in render
+    assert 'id="live-clock"' in toolbar
+    assert 'id="live-important"' in toolbar
+    assert "toggleLiveImportant" in toolbar
+    assert 'id="live-q"' in toolbar
+    assert "liveSearch" in toolbar
+    assert "score" in filtered and "state.liveImportant" in filtered
+    assert "state.liveQ" in filtered
+    assert ".live-toolbar" in css
+    assert ".live-search" in css
+    assert "日期" not in toolbar
+
+
 def test_push_channels_html_treats_personal_feishu_as_bound():
     """渠道勾选不能只看 users.feishu_*，否则个人机器人用户会看到「还没有绑定」。"""
     assert "feishu_personal" in _fn_body("feishuChannelBound")
@@ -1366,8 +1385,8 @@ def test_channel_status_poll_skips_identical_and_restores_focus():
 def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
-    assert 'href="/style.css?v=171"' in html
-    assert 'src="/app.js?v=233"' in html
+    assert 'href="/style.css?v=172"' in html
+    assert 'src="/app.js?v=234"' in html
 
 
     html = (APP_JS.parent / "index.html").read_text()

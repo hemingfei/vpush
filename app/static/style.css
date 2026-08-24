@@ -1159,6 +1159,37 @@ body.lightbox-open { overflow: hidden; }
 #tl-active-chips-wrap.is-hidden { display: none; }
 .tl-new-badge.live-mode .tl-badge-avatars { display: none; }
 
+.live-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 10px 4px 12px;
+  border-bottom: var(--border-soft);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+.live-toolbar-clock { color: var(--color-text-strong); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.live-toolbar-divider { width: 1px; height: 18px; background: var(--color-line); flex: 0 0 auto; }
+.live-important-toggle { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; cursor: pointer; }
+.live-important-toggle input { width: 16px; height: 16px; margin: 0; accent-color: var(--color-accent); }
+.live-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 190px;
+  height: 34px;
+  margin-left: auto;
+  padding: 0 10px 0 12px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  color: var(--color-text-muted);
+}
+.live-search:focus-within { box-shadow: var(--shadow-focus-ring); }
+.live-search .search-ic { width: 16px; height: 16px; flex: 0 0 auto; }
+.live-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--color-text); font: inherit; }
+.live-search input::placeholder { color: var(--color-text-faint); }
+
 .live-feed { display: flex; flex-direction: column; }
 .live-item {
   display: flex;
@@ -2107,6 +2138,10 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   }
   .home-filter-content .cat-chip { flex-shrink: 0; }
   .home-filter-actions { display: flex; justify-content: flex-end; }
+  .live-toolbar { flex-wrap: wrap; gap: 10px; }
+  .live-toolbar-clock { flex: 1 1 auto; }
+  .live-toolbar-divider { display: none; }
+  .live-search { order: 3; width: 100%; margin-left: 0; }
   .request-banner { padding: 10px 12px; gap: 8px; }
   .request-banner-copy .desc { display: none; }
   .request-banner .btn-normal { min-height: 44px; }

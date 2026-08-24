@@ -90,6 +90,8 @@ const state = {
   timelineCategory: "",
   timelineTag: "",
   timelineQ: "",
+  liveImportant: false,
+  liveQ: "",
   timelineSource: (() => {
     try {
       const v = sessionStorage.getItem(TL_SOURCE_KEY);
@@ -276,6 +278,8 @@ function clearSessionCaches() {
   state.timelinePlatform = "";
   state.timelineFavorite = false;
   state.timelineSecondary = false;
+  state.liveImportant = false;
+  state.liveQ = "";
 }
 
 function logout() {
@@ -1011,6 +1015,7 @@ let _liveLatestId = 0;
 let _livePendingNew = [];
 let _livePendingLatestId = 0;
 let _liveSavedScrollY = 0;
+let _liveClockTimer = null;
 
 function isLiveTimeline() {
   return state.timelineSource === "live";
@@ -1310,6 +1315,7 @@ async function renderTimeline(seq) {
           <button id="tl-filter-toggle" class="fav-toggle ${tlPanelFilterOn() ? "has-filter" : ""}" aria-label="筛选" aria-expanded="false" aria-controls="tl-filter-panel" onclick="tlFilterPanel()">${FILTER_ICON}筛选</button>
         </div>`}
       </div>
+      ${live ? `<div class="live-toolbar" id="live-toolbar">${liveToolbarHtml()}</div>` : ""}
       ${wide || live ? "" : `<div class="tl-filter-panel" id="tl-filter-panel">
         ${tlSearchBarHtml()}
         <div class="tl-filter-views">${tlViewTogglesHtml()}</div>
@@ -1344,6 +1350,8 @@ async function renderTimeline(seq) {
     </aside>` : ""}
     </div>`;
   tlSyncNewBadgeMode();
+  if (live) startLiveClock();
+  else stopLiveClock();
   if (reuse) {
     renderFeed();
     window.scrollTo(0, feedScrollY());
@@ -1395,6 +1403,7 @@ function startTimelinePoll() {
 }
 function stopTimelinePoll() {
   if (_tlPollTimer) { clearInterval(_tlPollTimer); _tlPollTimer = null; }
+  stopLiveClock();
 }
 
 async function pollFeedUpdates() {
@@ -1816,6 +1825,59 @@ function timelineLoadMore() {
   feedLoadMore();
 }
 
+function liveClockText(now = new Date()) {
+  const pad = (value) => String(value).padStart(2, "0");
+  const weekdays = ["日", "一", "二", "三", "四", "五", "六"];
+  return `${now.getMonth() + 1}月${now.getDate()}日，星期${weekdays[now.getDay()]}，${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+}
+
+function liveToolbarHtml() {
+  return `<div class="live-toolbar-clock" id="live-clock" role="status" aria-live="off">${liveClockText()}</div>
+    <span class="live-toolbar-divider" aria-hidden="true"></span>
+    <label class="live-important-toggle" for="live-important">
+      <input id="live-important" type="checkbox" ${state.liveImportant ? "checked" : ""} onchange="toggleLiveImportant(this.checked)">
+      <span>只看重要的</span>
+    </label>
+    <label class="live-search" for="live-q">
+      ${SEARCH_ICON}
+      <input id="live-q" type="search" value="${escapeHtml(state.liveQ)}" placeholder="搜索快讯" aria-label="搜索快讯" oninput="liveSearch(this.value)">
+    </label>`;
+}
+
+function updateLiveClock() {
+  const clock = $("#live-clock");
+  if (clock) clock.textContent = liveClockText();
+}
+
+function startLiveClock() {
+  stopLiveClock();
+  updateLiveClock();
+  _liveClockTimer = setInterval(updateLiveClock, 1000);
+}
+
+function stopLiveClock() {
+  if (_liveClockTimer) { clearInterval(_liveClockTimer); _liveClockTimer = null; }
+}
+
+function liveFilteredPosts() {
+  const q = (state.liveQ || "").trim().toLowerCase();
+  return _livePosts.filter((item) => {
+    if (state.liveImportant && Number(item.score) < 2) return false;
+    if (!q) return true;
+    return `${item.highlight_title || ""} ${item.body || ""}`.toLowerCase().includes(q);
+  });
+}
+
+function liveSearch(value) {
+  state.liveQ = value;
+  renderLiveFeed();
+}
+
+function toggleLiveImportant(checked) {
+  state.liveImportant = !!checked;
+  renderLiveFeed();
+}
+
 function liveFeedItem(item) {
   const score = Number(item.score) || 1;
   const title = item.highlight_title
@@ -1835,7 +1897,8 @@ function liveFeedItem(item) {
 function renderLiveFeed() {
   const feed = $("#feed");
   if (!feed) return;
-  const posts = _livePosts;
+  const allPosts = _livePosts;
+  const posts = liveFilteredPosts();
   const grouped = new Map();
   for (const p of posts) {
     const bucket = feedDateBucket(p.published_at);
@@ -1844,15 +1907,18 @@ function renderLiveFeed() {
   }
   const html = [...grouped.entries()].map(([bucket, list], gi) => `
     <div class="tl-group live-group">
-      <div class="tl-group-head"><span>${escapeHtml(bucket)}</span>${gi === 0 ? `<span class="tl-group-count">已加载 ${posts.length} 条快讯</span>` : ""}</div>
+      <div class="tl-group-head"><span>${escapeHtml(bucket)}</span>${gi === 0 ? `<span class="tl-group-count">已加载 ${posts.length}${posts.length !== allPosts.length ? ` / ${allPosts.length}` : ""} 条快讯</span>` : ""}</div>
       <div class="live-feed">${list.map(liveFeedItem).join("")}</div>
     </div>`).join("");
-  const footer = _liveHasMore
+  const footer = _liveHasMore && posts.length
     ? `<div class="toolbar tl-feed-more"><button class="btn-normal" onclick="feedLoadMore()">加载更多</button></div>`
     : (posts.length ? `<p class="muted tl-feed-end">已加载全部</p>` : "");
+  const empty = allPosts.length
+    ? emptyState("没有匹配的快讯", _liveHasMore ? `<div><button class="btn-normal" onclick="feedLoadMore()">继续加载</button></div>` : "")
+    : emptyState("暂无快讯", `<div><button class="btn-normal" onclick="loadTimeline(true, routeRenderSeq)">刷新</button></div>`);
   const attr = posts.length
     ? html + footer + `<p class="live-attribution muted">数据来源：<a href="https://wallstreetcn.com/live/global" target="_blank" rel="noopener">华尔街见闻 · 快讯</a></p>`
-    : emptyState("暂无快讯", `<div><button class="btn-normal" onclick="loadTimeline(true, routeRenderSeq)">刷新</button></div>`);
+    : empty;
   feed.innerHTML = attr;
 }
 
