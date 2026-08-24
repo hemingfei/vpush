@@ -698,6 +698,7 @@ _WSCN_LIVES_URL = "https://api-one-wscn.awtmt.com/apiv1/content/lives"
 _WSCN_CACHE: dict[str, tuple[float, dict]] = {}
 _WSCN_CACHE_TTL = 90
 _WSCN_LOCK = threading.Lock()
+_WSCN_REFRESHING: set[str] = set()
 _WSCN_CLIENT: httpx.Client | None = None
 _WSCN_HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
@@ -731,31 +732,64 @@ def _normalize_wscn_item(raw: dict) -> dict:
     }
 
 
+def _wscn_load(cursor: str, limit: int) -> dict:
+    params: dict[str, str | int] = {"channel": "global-channel", "limit": limit}
+    if cursor:
+        params["cursor"] = cursor
+    resp = _wscn_client().get(_WSCN_LIVES_URL, params=params)
+    resp.raise_for_status()
+    payload = resp.json()
+    if payload.get("code") != 20000:
+        raise RuntimeError(payload.get("message") or "WSCN API 错误")
+    data = payload.get("data") or {}
+    items = [_normalize_wscn_item(row) for row in (data.get("items") or [])]
+    return {
+        "items": items,
+        "next_cursor": (data.get("next_cursor") or "").strip(),
+        "polling_cursor": int(data.get("polling_cursor") or (items[0]["id"] if items else 0)),
+    }
+
+
+def _wscn_refresh(cursor: str, limit: int, cache_key: str) -> None:
+    try:
+        with _WSCN_LOCK:
+            _WSCN_CACHE[cache_key] = (time.time(), _wscn_load(cursor, limit))
+    except Exception:
+        logger.warning("wscn live refresh failed", exc_info=True)
+    finally:
+        with _WSCN_LOCK:
+            _WSCN_REFRESHING.discard(cache_key)
+
+
 def _fetch_wscn_lives(*, cursor: str = "", limit: int = 30) -> dict:
     limit = max(1, min(int(limit), 50))
     cursor = (cursor or "").strip()
     cache_key = f"{cursor}:{limit}"
     now = time.time()
+    start_refresh = False
     with _WSCN_LOCK:
         cached = _WSCN_CACHE.get(cache_key)
         if cached and now - cached[0] <= _WSCN_CACHE_TTL:
             return cached[1]
-        params: dict[str, str | int] = {"channel": "global-channel", "limit": limit}
-        if cursor:
-            params["cursor"] = cursor
-        resp = _wscn_client().get(_WSCN_LIVES_URL, params=params)
-        resp.raise_for_status()
-        payload = resp.json()
-        if payload.get("code") != 20000:
-            raise RuntimeError(payload.get("message") or "WSCN API 错误")
-        data = payload.get("data") or {}
-        items = [_normalize_wscn_item(row) for row in (data.get("items") or [])]
-        result = {
-            "items": items,
-            "next_cursor": (data.get("next_cursor") or "").strip(),
-            "polling_cursor": int(data.get("polling_cursor") or (items[0]["id"] if items else 0)),
-        }
-        _WSCN_CACHE[cache_key] = (now, result)
+        if cached:
+            if cache_key not in _WSCN_REFRESHING:
+                _WSCN_REFRESHING.add(cache_key)
+                start_refresh = True
+            stale = cached[1]
+        else:
+            stale = None
+    if stale is not None:
+        if start_refresh:
+            threading.Thread(
+                target=_wscn_refresh, args=(cursor, limit, cache_key), daemon=True
+            ).start()
+        return stale
+    with _WSCN_LOCK:
+        cached = _WSCN_CACHE.get(cache_key)
+        if cached:
+            return cached[1]
+        result = _wscn_load(cursor, limit)
+        _WSCN_CACHE[cache_key] = (time.time(), result)
         return result
 
 

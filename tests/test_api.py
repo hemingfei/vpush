@@ -4945,3 +4945,53 @@ def test_wscn_fetch_reuses_cache_and_http_client(monkeypatch):
     assert first["items"][0]["id"] == 1
     assert second["items"][0]["body"] == "hello"
     assert len(calls) == 1
+
+
+def test_wscn_serves_stale_cache_while_refreshing(monkeypatch):
+    import threading
+    from app import api as api_mod
+
+    calls = []
+    entered = threading.Event()
+    release = threading.Event()
+
+    class FakeResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "code": 20000,
+                "data": {
+                    "items": [{
+                        "id": 1,
+                        "score": 1,
+                        "content_text": "hello",
+                        "display_time": 0,
+                        "uri": "https://wallstreetcn.com/livenews/1",
+                    }],
+                    "next_cursor": "",
+                    "polling_cursor": 1,
+                },
+            }
+
+    class FakeClient:
+        def get(self, url, params=None):
+            calls.append(1)
+            if len(calls) > 1:
+                entered.set()
+                release.wait(1)
+            return FakeResp()
+
+    api_mod._WSCN_CACHE.clear()
+    api_mod._WSCN_REFRESHING.clear()
+    monkeypatch.setattr(api_mod, "_wscn_client", lambda: FakeClient())
+    api_mod._fetch_wscn_lives(limit=30)
+    key = ":30"
+    ts, data = api_mod._WSCN_CACHE[key]
+    api_mod._WSCN_CACHE[key] = (ts - 120, data)
+    stale = api_mod._fetch_wscn_lives(limit=30)
+    assert stale["items"][0]["id"] == 1
+    assert entered.wait(1)
+    assert len(calls) == 2
+    release.set()

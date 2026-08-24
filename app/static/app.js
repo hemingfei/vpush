@@ -7665,6 +7665,7 @@ async function router() {
   renderSidebar(state.user);
   renderTopbar(state.user);
   renderBottomNav(state.user);
+  prefetchLiveFeed();
   document.querySelectorAll(".nav-item").forEach((b) =>
     b.classList.toggle("active", b.dataset.route === page || b.dataset.route === `${page}/${param}`)
   );

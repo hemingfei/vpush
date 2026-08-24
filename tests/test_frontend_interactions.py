@@ -1293,6 +1293,7 @@ def test_live_feed_is_prefetched_and_shares_inflight_request():
     load = _fn_body("loadTimeline")
     src = APP_JS.read_text()
     assert "prefetchLiveFeed()" in render
+    assert "prefetchLiveFeed()" in _fn_body("router")
     assert "function prefetchLiveFeed" in src
     assert "function liveWscnRequest" in src
     assert "liveWscnRequest(" in load
@@ -1423,7 +1424,7 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     assert 'href="/style.css?v=175"' in html
-    assert 'src="/app.js?v=237"' in html
+    assert 'src="/app.js?v=238"' in html
 
 
 def test_register_placeholder_matches_username_min_length():
