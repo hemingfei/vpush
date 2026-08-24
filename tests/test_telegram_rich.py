@@ -59,9 +59,13 @@ def test_combination_rich_uses_tables():
     assert html.count("<table") == 2
     assert "年化" in html and "27.1%" in html
     assert "清仓" in html and "永杉锂业" in html and "SH603399" in html
+    assert "永杉锂业<br>SH603399" in html
     assert "21.1%" in html and "0.0%" in html
     assert "成交价" in html and "1560.50" in html
-    assert "现有持仓" in html and "贵州茅台" in html and "12.5%" in html
+    assert 'align="right"' in html
+    assert "现有持仓" in html and "贵州茅台（SH600519）" in html and "12.5%" in html
+    assert "<th" in html and "持仓" in html
+    assert ">代码<" not in html
     assert "💵 现金 80.0%" in html
     assert "🗑 清仓" in html and "🆕 新建" in html
     assert "查看原文" not in html

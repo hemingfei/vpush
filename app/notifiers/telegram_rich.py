@@ -61,15 +61,30 @@ def _a(url: str, label: str) -> str:
     return f'<a href="{_e(url, attr=True)}">{_e(label)}</a>'
 
 
+def _cell_html(value) -> str:
+    """单元格：字符串转义；list/tuple 每项转义后用 <br> 叠行，避免名称+代码挤宽一列。"""
+    if isinstance(value, (list, tuple)):
+        return "<br>".join(_e(str(part)) for part in value if str(part).strip())
+    return _e(str(value))
+
+
 def _table(
     headers: list[str],
-    rows: list[list[str]],
+    rows: list[list],
     caption: str = "",
     *,
     striped: bool = False,
+    aligns: list[str] | None = None,
 ) -> str:
-    head = "".join(f"<th>{_e(h)}</th>" for h in headers)
-    body = "".join("<tr>" + "".join(f"<td>{_e(c)}</td>" for c in row) + "</tr>" for row in rows)
+    def cell(tag: str, value, index: int) -> str:
+        align = aligns[index] if aligns and index < len(aligns) else ""
+        attr = f' align="{align}"' if align in ("left", "center", "right") else ""
+        return f"<{tag}{attr}>{_cell_html(value)}</{tag}>"
+
+    head = "".join(cell("th", h, i) for i, h in enumerate(headers))
+    body = "".join(
+        "<tr>" + "".join(cell("td", c, i) for i, c in enumerate(row)) + "</tr>" for row in rows
+    )
     cap = f"<caption>{_e(caption)}</caption>" if caption else ""
     attrs = " striped" if striped else ""
     return f"<table{attrs}>{cap}<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
@@ -188,31 +203,38 @@ def build_combination_rich_html(post: Post) -> str:
         has_prices = any(isinstance(a, dict) and a.get("price") for a in actions)
         rows = []
         for a in actions:
-            stock = a.get("stock") or ""
-            symbol = a.get("symbol") or ""
-            name = f"{stock}（{symbol}）" if symbol else stock
+            stock = str(a.get("stock") or "").strip()
+            symbol = str(a.get("symbol") or "").strip()
             a_type = str(a.get("type") or "调整")
             row = [
                 action_label(a_type),
-                name,
+                [stock, symbol] if stock and symbol else (stock or symbol),
                 f"{a.get('prev') or '0.0%'} → {a.get('target') or '0.0%'}",
             ]
             if has_prices:
                 row.append(str(a.get("price") or "—"))
             rows.append(row)
         headers = ["操作", "标的", "仓位"] + (["成交价"] if has_prices else [])
-        parts.append(_table(headers, rows, striped=True))
+        aligns = ["left", "left", "right"] + (["right"] if has_prices else [])
+        parts.append(_table(headers, rows, striped=True, aligns=aligns))
     valid_holdings = [
         h for h in detail.get("holdings") or []
         if isinstance(h, dict) and h.get("name") and h.get("weight") is not None
     ]
     if valid_holdings:
+        holding_rows = []
+        for h in valid_holdings:
+            name = str(h.get("name") or "").strip()
+            symbol = str(h.get("symbol") or "").strip()
+            label = f"{name}（{symbol}）" if name and symbol else (name or symbol)
+            holding_rows.append([label, f"{h['weight']}%"])
         parts.append(
             _table(
-                ["名称", "代码", "仓位"],
-                [[h["name"], h.get("symbol") or "", f"{h['weight']}%"] for h in valid_holdings],
+                ["持仓", "仓位"],
+                holding_rows,
                 caption="现有持仓",
                 striped=True,
+                aligns=["left", "right"],
             )
         )
     foot = []
