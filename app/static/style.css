@@ -1047,6 +1047,23 @@ textarea.proxy-import { min-height: 96px; }
   pointer-events: none;
 }
 
+/* 组合调仓：与 Telegram / 飞书通知保持同一信息顺序 */
+.combo-post { margin-top: 12px; max-width: 75ch; }
+.combo-detail { display: grid; gap: 14px; }
+.combo-stats { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 10px 12px; border: var(--border-soft); background: var(--color-bg-muted); font-size: var(--text-sm); }
+.combo-stat { color: var(--color-text); }
+.combo-stat b { color: var(--color-text-strong); }
+.combo-section { display: grid; gap: 6px; }
+.combo-section-title { margin: 0; font-size: var(--text-sm); font-weight: var(--font-weight-semibold); color: var(--color-text-strong); }
+.combo-actions, .combo-holdings { border-top: var(--border-soft); }
+.combo-action, .combo-holding { padding: 10px 0; border-bottom: var(--border-soft); }
+.combo-action-head, .combo-holding { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.combo-action-type { color: var(--color-text-muted); white-space: nowrap; }
+.combo-action-position { margin-top: 4px; color: var(--color-text-muted); font-size: var(--text-sm); }
+.combo-action-price { margin-top: 4px; color: var(--color-accent-text); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.combo-holding { font-size: var(--text-sm); }
+.combo-holding b, .combo-cash b { color: var(--color-text-strong); font-variant-numeric: tabular-nums; }
+.combo-cash { color: var(--color-text-muted); font-size: var(--text-sm); }
 /* ---------- 图片灯箱 ---------- */
 .lightbox {
   position: fixed; inset: 0; z-index: 300;
@@ -1174,12 +1191,16 @@ body.lightbox-open { overflow: hidden; }
   word-break: normal;
   max-width: 75ch;
 }
-.live-body:hover { color: var(--color-accent-text); }
 .live-body p { margin: 0 0 8px; }
 .live-body p:last-child { margin-bottom: 0; }
 .live-body strong, .live-body b { font-weight: var(--font-weight-semibold); }
-.live-item[data-score="2"] .live-time {
-  color: var(--color-danger);
+.live-item[data-score="2"] .live-time,
+.live-item[data-score="2"] .live-title,
+.live-item[data-score="2"] .live-body,
+.live-item[data-score="3"] .live-time,
+.live-item[data-score="3"] .live-title,
+.live-item[data-score="3"] .live-body {
+  color: var(--color-danger-strong);
   font-weight: var(--font-weight-semibold);
 }
 .live-item[data-score="3"] {
@@ -1187,7 +1208,6 @@ body.lightbox-open { overflow: hidden; }
   border-radius: var(--radius-control);
   padding-inline: 8px;
 }
-.live-item[data-score="3"] .live-time { color: var(--color-danger-strong); }
 .live-attribution {
   margin: 16px 4px 0;
   font-size: var(--text-xs);

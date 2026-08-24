@@ -1284,6 +1284,31 @@ def test_timeline_live_source_is_platform_pill():
     assert '.live-item[data-score="3"]' in css
 
 
+def test_live_feed_high_priority_text_is_red_and_not_linked():
+    """重点快讯的时间、标题和正文统一标红，正文不作为链接。"""
+    item = _fn_body("liveFeedItem")
+    css = STYLE_CSS.read_text()
+    assert '<div class="live-body">' in item
+    assert '<a class="live-body"' not in item
+    assert '.live-item[data-score="2"] .live-body' in css
+    assert '.live-item[data-score="3"] .live-body' in css
+    assert '.live-item[data-score="2"] .live-title' in css
+    assert '.live-item[data-score="3"] .live-title' in css
+
+
+def test_web_combination_posts_use_structured_rebalance_details():
+    """网页组合帖应展示推送渠道相同的调仓、成交价、现金和现有持仓内容。"""
+    card = _fn_body("postCard")
+    detail = _fn_body("combinationDetailHtml")
+    css = STYLE_CSS.read_text()
+    assert "combinationDetailHtml(post)" in card
+    for text in ("stats", "actions", "price", "holdings", "cash", "成交价", "现有持仓"):
+        assert text in detail
+    assert "combo-detail" in detail
+    assert ".combo-detail" in css
+    assert ".combo-action" in css
+
+
 def test_push_channels_html_treats_personal_feishu_as_bound():
     """渠道勾选不能只看 users.feishu_*，否则个人机器人用户会看到「还没有绑定」。"""
     assert "feishu_personal" in _fn_body("feishuChannelBound")

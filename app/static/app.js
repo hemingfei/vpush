@@ -1827,7 +1827,7 @@ function liveFeedItem(item) {
       <time class="live-time" datetime="${escapeHtml(item.published_at || "")}">${fmtPublished(item.published_at, true)}</time>
       <div class="live-main">
         ${title}
-        <a class="live-body" href="${escapeHtml(item.url || "#")}" target="_blank" rel="noopener">${body}</a>
+        <div class="live-body">${body}</div>
       </div>
     </article>`;
 }
@@ -1977,8 +1977,46 @@ function postFiles(post) {
   return Array.isArray(d?.files) ? d.files.filter((f) => f && (f.url || f.name)) : [];
 }
 
+function combinationDetailHtml(post) {
+  let detail = post.detail;
+  if (typeof detail === "string" && detail) {
+    try { detail = JSON.parse(detail); } catch { return ""; }
+  }
+  if (!detail || typeof detail !== "object") return "";
+  const stats = Array.isArray(detail.stats) ? detail.stats.filter((s) => Array.isArray(s) && s.length >= 2) : [];
+  const actions = Array.isArray(detail.actions) ? detail.actions.filter((a) => a && typeof a === "object") : [];
+  const holdings = Array.isArray(detail.holdings)
+    ? detail.holdings.filter((h) => h && h.name && h.weight != null)
+    : [];
+  const sections = [];
+  if (stats.length) {
+    sections.push(`<div class="combo-stats">${stats.map(([key, value]) => `<span class="combo-stat"><b>${escapeHtml(key)}</b> ${escapeHtml(value)}</span>`).join("")}</div>`);
+  }
+  if (actions.length) {
+    sections.push(`<section class="combo-section"><h3 class="combo-section-title">调仓明细</h3><div class="combo-actions">${actions.map((a) => {
+      const type = a.type || "调整";
+      const icon = { 清仓: "🗑", 新建: "🆕", 增持: "➕", 减持: "➖" }[type] || "•";
+      const stock = a.stock || a.symbol || "";
+      const symbol = a.stock && a.symbol ? `（${a.symbol}）` : "";
+      const price = a.price != null && String(a.price).trim() ? `<div class="combo-action-price">成交价 ${escapeHtml(a.price)}</div>` : "";
+      return `<div class="combo-action"><div class="combo-action-head"><span class="combo-action-type">${icon} ${escapeHtml(type)}</span><strong>${escapeHtml(stock)}${escapeHtml(symbol)}</strong></div><div class="combo-action-position">${escapeHtml(a.prev || "0.0%")} → ${escapeHtml(a.target || "0.0%")}</div>${price}</div>`;
+    }).join("")}</div></section>`);
+  }
+  if (holdings.length) {
+    sections.push(`<section class="combo-section"><h3 class="combo-section-title">现有持仓</h3><div class="combo-holdings">${holdings.map((h) => {
+      const name = h.name || h.symbol || "";
+      const symbol = h.name && h.symbol ? `（${h.symbol}）` : "";
+      return `<div class="combo-holding"><span>${escapeHtml(name)}${escapeHtml(symbol)}</span><b>${escapeHtml(h.weight)}%</b></div>`;
+    }).join("")}</div></section>`);
+  }
+  if (detail.cash) sections.push(`<div class="combo-cash">💵 现金 <b>${escapeHtml(detail.cash)}</b></div>`);
+  return sections.length ? `<div class="combo-detail">${sections.join("")}</div>` : "";
+}
+
 function postCard(post) {
   const safeUrl = /^https?:\/\//i.test(post.url || "") ? post.url : "#";
+  const comboHtml = post.platform === "combination" ? combinationDetailHtml(post) : "";
+  const isCombination = !!comboHtml;
   const body = post.content || "（无正文）";
   const expanded = _tlExpanded.has(post.id);
   const shown = expanded ? body : body.slice(0, 200);
@@ -2000,10 +2038,10 @@ function postCard(post) {
           <span class="p-time" title="${escapeHtml(post.published_at)}">${fmtPublished(post.published_at)}</span>
         </div>
       </div>
-      ${!titleDup && post.title ? `<div class="p-title">${escapeHtml(post.title)}</div>` : ""}
+      ${isCombination ? `<div class="combo-post">${comboHtml}</div>` : `${!titleDup && post.title ? `<div class="p-title">${escapeHtml(post.title)}</div>` : ""}
       <div class="p-content">${escapeHtml(shown)}${body.length > 200
         ? `<button class="post-expand-btn" onclick="tlTogglePost(${post.id})" aria-expanded="${expanded}">${expanded ? "收起 ▲" : "展开全文 ▼"}</button>`
-        : ""}</div>
+        : ""}</div>`}
       ${Array.isArray(post.images) && post.images.length ? `
         <div class="post-images">
           ${post.images.slice(0, 4).map((img) => `
