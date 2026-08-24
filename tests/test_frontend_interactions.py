@@ -393,6 +393,9 @@ def test_mobile_mysubs_filter_is_seven_equal_44px_targets():
     assert 'class="icon-badge-bar"' in _fn_body("renderHome")
     assert "tl-filterbar-top icon-badge-bar" in _fn_body("renderTimeline")
     assert "repeat(7, minmax(0, 1fr))" in css
+    assert "#tl-filterbar .icon-badge-bar" in css
+    assert "repeat(8, minmax(0, 1fr))" in css
+    assert "#tl-filterbar.live-mode .icon-badge-bar" in css
     # 不再把筛选条竖着堆成两行
     mobile = re.search(r"@media \(max-width: 768px\) \{(.*)\}\s*/\* ----------", css, re.DOTALL)
     body = mobile.group(1) if mobile else css
@@ -1344,6 +1347,7 @@ def test_live_toolbar_keeps_existing_filter_structure():
     assert ".live-toolbar" in css
     assert ".live-search" in css
     assert "日期" not in toolbar
+    assert re.search(r"\.tl-filterbar\.live-mode\s*\{[^}]*height:\s*auto", css)
 
 
 def test_push_channels_html_treats_personal_feishu_as_bound():
@@ -1394,10 +1398,11 @@ def test_channel_status_poll_skips_identical_and_restores_focus():
 def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
-    assert 'href="/style.css?v=173"' in html
+    assert 'href="/style.css?v=174"' in html
     assert 'src="/app.js?v=235"' in html
 
 
+def test_register_placeholder_matches_username_min_length():
     html = (APP_JS.parent / "index.html").read_text()
     assert 'id="reg-username"' in html
     assert "6-30 位，字母或中文开头" in html
