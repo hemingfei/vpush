@@ -58,6 +58,7 @@ const KEY_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="c
 const PLUS_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>`;
 const X_ICON = `<svg class="x-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>`;
 const ARROW_UP_ICON = `<svg class="tl-badge-arrow" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3.59l7.457 7.45-1.414 1.42L13 7.41V21h-2V7.41l-5.043 5.05-1.414-1.42L12 3.59z"/></svg>`;
+const REFRESH_ICON = `<svg class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 5v4h4"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 19v-4h-4"/></svg>`;
 const SEARCH_ICON = `<svg class="search-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`;
 const GITHUB_ICON = `<svg class="sidebar-gh-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.55 0-.27-.01-1.17-.02-2.12-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.75 2.69 1.25 3.35.95.1-.74.4-1.25.72-1.54-2.55-.29-5.23-1.28-5.23-5.68 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.05 0 0 .96-.31 3.15 1.18a10.9 10.9 0 0 1 5.74 0c2.19-1.49 3.15-1.18 3.15-1.18.62 1.59.23 2.76.11 3.05.73.81 1.18 1.83 1.18 3.09 0 4.41-2.69 5.38-5.25 5.67.41.35.77 1.05.77 2.12 0 1.53-.01 2.76-.01 3.14 0 .3.2.66.8.55A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></svg>`;
 // 主题切换图标：线性风格，与 TRASH_ICON 一致（stroke=currentColor）
@@ -1378,6 +1379,7 @@ function syncTimelineSourceView() {
     head?.remove();
   }
   tlSyncSearchBox();
+  renderLiveRail();
   const chips = $("#tl-active-chips-wrap");
   if (chips) {
     chips.classList.toggle("is-hidden", live);
@@ -1459,7 +1461,8 @@ async function renderTimeline(seq) {
     ${wide ? `<aside class="tl-rail" id="tl-rail" aria-label="发现">
       <div class="tl-rail-head">${tlSearchBarHtml()}</div>
       <div class="tl-rail-body">
-        <div class="tl-rail-card tl-rail-view">${tlViewTogglesHtml()}</div>
+        <div class="tl-rail-card tl-rail-view" id="tl-rail-view">${tlViewTogglesHtml()}</div>
+        <div id="tl-live-rail"></div>
         <div id="tl-rail-recs"></div>
         <div id="tl-rail-tags"></div>
       </div>
@@ -1468,6 +1471,7 @@ async function renderTimeline(seq) {
   tlSyncNewBadgeMode();
   if (live) startLiveClock();
   else stopLiveClock();
+  renderLiveRail();
   if (reuse) {
     renderFeed();
     window.scrollTo(0, feedScrollY());
@@ -2009,6 +2013,31 @@ function updateLiveClock() {
   if (clock) clock.textContent = liveClockText();
 }
 
+function liveRailHtml() {
+  const total = _livePosts.length;
+  const important = _livePosts.filter((item) => Number(item.score) >= 2).length;
+  const latest = _livePosts[0]?.published_at;
+  const updated = latest ? fmtPublished(latest, true) : "暂无";
+  return `<section class="tl-rail-card live-rail-card">
+      <h3 class="tl-rail-title">快讯概览</h3>
+      <dl class="live-rail-stats">
+        <div><dt>已加载</dt><dd>${total} 条</dd></div>
+        <div><dt>重要快讯</dt><dd>${important} 条</dd></div>
+        <div><dt>最新快讯</dt><dd>${escapeHtml(updated)}</dd></div>
+      </dl>
+      <button type="button" class="btn-ghost live-rail-refresh" onclick="refreshTimeline()">${REFRESH_ICON} 刷新快讯</button>
+    </section>
+    <section class="tl-rail-card live-rail-source">
+      <h3 class="tl-rail-title">数据来源渠道</h3>
+      <a href="https://wallstreetcn.com/live/global" target="_blank" rel="noopener">华尔街见闻 · 快讯</a>
+    </section>`;
+}
+
+function renderLiveRail() {
+  const el = $("#tl-live-rail");
+  if (el) el.innerHTML = isLiveTimeline() ? liveRailHtml() : "";
+}
+
 function startLiveClock() {
   stopLiveClock();
   updateLiveClock();
@@ -2080,6 +2109,7 @@ function renderLiveFeed() {
     ? html + footer + `<p class="live-attribution muted">数据来源：<a href="https://wallstreetcn.com/live/global" target="_blank" rel="noopener">华尔街见闻 · 快讯</a></p>`
     : empty;
   feed.innerHTML = attr;
+  renderLiveRail();
 }
 
 function renderTimelineFeed() {
