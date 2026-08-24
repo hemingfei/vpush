@@ -398,7 +398,6 @@ def test_mobile_mysubs_filter_is_seven_equal_44px_targets():
     assert "repeat(7, minmax(0, 1fr))" in css
     assert "#tl-filterbar .icon-badge-bar" in css
     assert "repeat(8, minmax(0, 1fr))" in css
-    assert "#tl-filterbar.live-mode .icon-badge-bar" in css
     # 不再把筛选条竖着堆成两行
     mobile = re.search(r"@media \(max-width: 768px\) \{(.*)\}\s*/\* ----------", css, re.DOTALL)
     body = mobile.group(1) if mobile else css
@@ -1302,7 +1301,7 @@ def test_timeline_source_switch_reuses_shell_when_feed_exists():
     assert "const wide = isWideTimeline()" in render
     assert "isWideTimeline() && !live" not in render
     assert ".tl-layout.live-mode" in css
-    assert ".tl-layout.live-mode .tl-rail" in css
+    assert ".tl-layout.live-mode .tl-rail-body" in css
 
 
 def test_live_feed_is_prefetched_and_shares_inflight_request():
@@ -1374,23 +1373,28 @@ def test_web_combination_posts_use_structured_rebalance_details():
 
 
 def test_live_toolbar_keeps_existing_filter_structure():
-    """快讯工具条复用现有吸顶栏，提供重要筛选和当前列表搜索，暂不放日期伪功能。"""
+    """时钟和重要筛选放进白色内容区；搜索复用动态页同一搜索框。"""
     render = _fn_body("renderTimeline")
-    toolbar = _fn_body("liveToolbarHtml")
+    head = _fn_body("liveFeedHeadHtml")
+    search = _fn_body("tlSearchBarHtml")
+    apply_s = _fn_body("tlApplyRailSearch")
     filtered = _fn_body("liveFilteredPosts")
     css = STYLE_CSS.read_text()
-    assert "liveToolbarHtml()" in render
-    assert 'id="live-clock"' in toolbar
-    assert 'id="live-important"' in toolbar
-    assert "toggleLiveImportant" in toolbar
-    assert 'id="live-q"' in toolbar
-    assert "liveSearch" in toolbar
+    assert "liveFeedHeadHtml()" in render
+    assert 'id="live-clock"' in head
+    assert 'id="live-important"' in head
+    assert "toggleLiveImportant" in head
+    assert "live-search" not in head
+    assert 'id="live-q"' not in head
+    assert 'id="tl-q"' in search
+    assert "isLiveTimeline()" in search
+    assert "isLiveTimeline()" in apply_s
+    assert "liveSearch" in apply_s
     assert "score" in filtered and "state.liveImportant" in filtered
     assert "state.liveQ" in filtered
-    assert ".live-toolbar" in css
-    assert ".live-search" in css
-    assert "日期" not in toolbar
-    assert re.search(r"\.tl-filterbar\.live-mode\s*\{[^}]*height:\s*auto", css)
+    assert ".live-feed-head" in css
+    assert ".live-search" not in css
+    assert "日期" not in head
 
 
 def test_push_channels_html_treats_personal_feishu_as_bound():
@@ -1441,8 +1445,8 @@ def test_channel_status_poll_skips_identical_and_restores_focus():
 def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
-    assert 'href="/style.css?v=176"' in html
-    assert 'src="/app.js?v=239"' in html
+    assert 'href="/style.css?v=177"' in html
+    assert 'src="/app.js?v=240"' in html
 
 
 def test_register_placeholder_matches_username_min_length():

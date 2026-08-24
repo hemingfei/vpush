@@ -1284,14 +1284,37 @@ function tlViewTogglesHtml() {
 }
 
 function tlSearchBarHtml() {
+  const live = isLiveTimeline();
+  const q = live ? state.liveQ : state.timelineQ;
+  const label = live ? "搜索快讯" : "搜索动态";
   return `<div class="search-bar tl-rail-search">
       ${SEARCH_ICON}
-      <input id="tl-q" type="search" placeholder="搜索动态" value="${escapeHtml(state.timelineQ || "")}" aria-label="搜索动态" onkeydown="if(event.key==='Enter')tlApplyRailSearch()">
+      <input id="tl-q" type="search" placeholder="${label}" value="${escapeHtml(q || "")}" aria-label="${label}" oninput="tlOnSearchInput(this.value)" onkeydown="if(event.key==='Enter')tlApplyRailSearch()">
     </div>`;
 }
 
+function tlOnSearchInput(value) {
+  if (isLiveTimeline()) liveSearch(value);
+}
+
 function tlApplyRailSearch() {
+  if (isLiveTimeline()) {
+    const q = $("#tl-q");
+    liveSearch(q ? q.value : state.liveQ);
+    $("#tl-filterbar")?.classList.remove("open");
+    return;
+  }
   tlApplyFilter();
+}
+
+function tlSyncSearchBox() {
+  const q = $("#tl-q");
+  if (!q) return;
+  const live = isLiveTimeline();
+  q.value = live ? (state.liveQ || "") : (state.timelineQ || "");
+  const label = live ? "搜索快讯" : "搜索动态";
+  q.placeholder = label;
+  q.setAttribute("aria-label", label);
 }
 
 function tlFilterActionsHtml() {
@@ -1301,12 +1324,13 @@ function tlFilterActionsHtml() {
 }
 
 function tlFilterPanelHtml() {
+  const live = isLiveTimeline();
   return `<div class="tl-filter-panel" id="tl-filter-panel">
         ${tlSearchBarHtml()}
-        <div class="tl-filter-views">${tlViewTogglesHtml()}</div>
+        ${live ? "" : `<div class="tl-filter-views">${tlViewTogglesHtml()}</div>
         <div class="tl-filter-row">
           <select id="tl-tag" class="form-control" onchange="tlApplyFilter()"><option value="">全部标签</option></select>
-        </div>
+        </div>`}
         <div class="tl-filter-actions">
           <button class="btn-ghost" onclick="tlResetFilters()">清除筛选</button>
           <button class="btn-normal" onclick="tlApplyFilter()">完成</button>
@@ -1325,27 +1349,35 @@ function syncTimelineSourceView() {
   $("#tl-filterbar")?.classList.toggle("live-mode", live);
   const pills = $("#tl-pills");
   if (pills) pills.innerHTML = tlPillsHtml();
+  $("#live-toolbar")?.remove();
   const bar = $("#tl-platform-bar");
-  if (live) {
-    if (!$("#live-toolbar") && bar) {
-      bar.insertAdjacentHTML("afterend", `<div class="live-toolbar" id="live-toolbar">${liveToolbarHtml()}</div>`);
-    } else if ($("#live-toolbar")) $("#live-toolbar").innerHTML = liveToolbarHtml();
-  } else {
-    $("#live-toolbar")?.remove();
-  }
   const actions = bar?.querySelector(".tl-actions");
-  if (wide || live) actions?.remove();
+  if (wide) actions?.remove();
   else if (bar && !actions) bar.insertAdjacentHTML("beforeend", tlFilterActionsHtml());
   const panel = $("#tl-filter-panel");
-  if (wide || live) {
+  if (wide) {
     panel?.remove();
     $("#tl-filterbar")?.classList.remove("open");
   } else if (!panel) {
     const badge = $("#tl-new-badge");
     if (badge) badge.insertAdjacentHTML("beforebegin", tlFilterPanelHtml());
     else $("#tl-filterbar")?.insertAdjacentHTML("beforeend", tlFilterPanelHtml());
-    loadTimelineTags().catch(() => { _tlTags = []; _tlDynamicTags = []; });
+    if (!live) loadTimelineTags().catch(() => { _tlTags = []; _tlDynamicTags = []; });
+  } else {
+    panel.outerHTML = tlFilterPanelHtml();
   }
+  $("#tl-filterbar")?.classList.remove("open");
+  const filterBtn = $("#tl-filter-toggle");
+  if (filterBtn) filterBtn.setAttribute("aria-expanded", "false");
+  const feedPanel = $("#tl-feed-panel");
+  const head = $("#live-feed-head");
+  if (live) {
+    if (head) head.outerHTML = liveFeedHeadHtml();
+    else if (feedPanel) feedPanel.insertAdjacentHTML("afterbegin", liveFeedHeadHtml());
+  } else {
+    head?.remove();
+  }
+  tlSyncSearchBox();
   const chips = $("#tl-active-chips-wrap");
   if (chips) {
     chips.classList.toggle("is-hidden", live);
@@ -1407,10 +1439,9 @@ async function renderTimeline(seq) {
     <div class="tl-filterbar${live ? " live-mode" : ""}" id="tl-filterbar">
       <div class="tl-filterbar-top icon-badge-bar" id="tl-platform-bar">
         <div class="tl-pills" id="tl-pills" role="radiogroup" aria-label="平台和内容源">${tlPillsHtml()}</div>
-        ${wide || live ? "" : tlFilterActionsHtml()}
+        ${wide ? "" : tlFilterActionsHtml()}
       </div>
-      ${live ? `<div class="live-toolbar" id="live-toolbar">${liveToolbarHtml()}</div>` : ""}
-      ${wide || live ? "" : tlFilterPanelHtml()}
+      ${wide ? "" : tlFilterPanelHtml()}
       <div class="tl-new-badge${live ? " live-mode" : ""}" id="tl-new-badge">
         <button class="tl-new-badge-btn" onclick="refreshTimeline()" aria-label="${live ? "有新快讯，点击查看" : "有新动态，点击查看"}">
           ${ARROW_UP_ICON}
@@ -1421,6 +1452,7 @@ async function renderTimeline(seq) {
     </div>
     <div id="tl-active-chips-wrap"${live ? ' class="is-hidden"' : ""}>${live ? "" : tlActiveChipsHtml()}</div>
     <section class="section-panel tl-feed-panel" id="tl-feed-panel">
+      ${live ? liveFeedHeadHtml() : ""}
       <div id="feed">${reuse ? "" : TL_SKELETON}</div>
     </section>
     </div>
@@ -1656,6 +1688,10 @@ function tlFilterPanel() {
 }
 
 function tlApplyFilter() {
+  if (isLiveTimeline()) {
+    tlApplyRailSearch();
+    return;
+  }
   const revert = tlSnapshotFilters();
   const q = $("#tl-q");
   if (q) state.timelineQ = q.value.trim();
@@ -1670,6 +1706,15 @@ function tlApplyFilter() {
 }
 
 function tlResetFilters() {
+  if (isLiveTimeline()) {
+    state.liveQ = "";
+    tlSyncSearchBox();
+    renderLiveFeed();
+    $("#tl-filterbar")?.classList.remove("open");
+    const fb = $("#tl-filter-toggle");
+    if (fb) fb.setAttribute("aria-expanded", "false");
+    return;
+  }
   const revert = tlSnapshotFilters();
   state.timelineQ = "";
   state.timelineCategory = "";
@@ -1948,17 +1993,15 @@ function liveClockText(now = new Date()) {
   return `${now.getMonth() + 1}月${now.getDate()}日，星期${weekdays[now.getDay()]}，${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
 }
 
-function liveToolbarHtml() {
-  return `<div class="live-toolbar-clock" id="live-clock" role="status" aria-live="off">${liveClockText()}</div>
+function liveFeedHeadHtml() {
+  return `<div class="live-feed-head" id="live-feed-head">
+    <div class="live-toolbar-clock" id="live-clock" role="status" aria-live="off">${liveClockText()}</div>
     <span class="live-toolbar-divider" aria-hidden="true"></span>
     <label class="live-important-toggle" for="live-important">
       <input id="live-important" type="checkbox" ${state.liveImportant ? "checked" : ""} onchange="toggleLiveImportant(this.checked)">
       <span>只看重要的</span>
     </label>
-    <label class="live-search" for="live-q">
-      ${SEARCH_ICON}
-      <input id="live-q" type="search" value="${escapeHtml(state.liveQ)}" placeholder="搜索快讯" aria-label="搜索快讯" oninput="liveSearch(this.value)">
-    </label>`;
+  </div>`;
 }
 
 function updateLiveClock() {
