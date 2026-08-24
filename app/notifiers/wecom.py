@@ -64,9 +64,21 @@ def build_wecom_combination_text(post: Post) -> str:
             head += f"（{symbol}）"
         lines.append(head)
         lines.append(f"{a.get('prev') or '0.0%'} → {a.get('target') or '0.0%'}")
+        if a.get("price"):
+            lines.append(f"成交价 {a['price']}")
         lines.append("")
     if cash:
         lines.append(f"💵 现金 **{cash}**")
+    valid_holdings = [
+        h for h in detail.get("holdings") or []
+        if isinstance(h, dict) and h.get("name") and h.get("weight") is not None
+    ]
+    if valid_holdings:
+        lines.append("现有持仓")
+        lines.extend(
+            f"{h['name']}（{h.get('symbol') or ''}） {h['weight']}%"
+            for h in valid_holdings
+        )
     if post.published_at:
         lines.append(f"🕐 {post.published_at}")
     if post.url:

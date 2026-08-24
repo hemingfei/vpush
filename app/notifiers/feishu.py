@@ -185,12 +185,30 @@ def build_feishu_combination_card(post: Post) -> dict:
                     "content": (
                         f"{icon} **{a_type}** {stock_text}\n"
                         f"{a.get('prev') or '0.0%'} → {a.get('target') or '0.0%'}"
+                        + (f"\n成交价 {a['price']}" if a.get("price") else "")
                     ),
                 },
             }
         )
     if cash:
         elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"💵 现金 **{cash}**"}})
+    valid_holdings = [
+        h for h in detail.get("holdings") or []
+        if isinstance(h, dict) and h.get("name") and h.get("weight") is not None
+    ]
+    if valid_holdings:
+        elements.append(
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": "**现有持仓**\n" + "\n".join(
+                        f"{h['name']}（{h.get('symbol') or ''}） {h['weight']}%"
+                        for h in valid_holdings
+                    ),
+                },
+            }
+        )
     elements.append({"tag": "hr"})
     elements.append(
         {

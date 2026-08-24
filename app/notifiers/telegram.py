@@ -115,10 +115,22 @@ def build_combination_text(post: Post) -> str:
         name = f"{stock}（{symbol}）" if symbol else stock
         lines.append(f"{escape(action_label(a_type))}　{escape(name)}")
         lines.append(f"{escape(a.get('prev') or '0.0%')} → {escape(a.get('target') or '0.0%')}")
+        if a.get("price"):
+            lines.append(f"成交价 {escape(str(a['price']))}")
         lines.append("")
     foot = []
     if cash:
         foot.append(f"💵 现金 {cash}")
+    valid_holdings = [
+        h for h in detail.get("holdings") or []
+        if isinstance(h, dict) and h.get("name") and h.get("weight") is not None
+    ]
+    if valid_holdings:
+        lines.append("现有持仓")
+        lines.extend(
+            f"{h['name']}（{h.get('symbol') or ''}） {h['weight']}%"
+            for h in valid_holdings
+        )
     if post.published_at:
         foot.append(f"🕐 {post.published_at}")
     if foot:

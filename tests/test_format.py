@@ -9,6 +9,7 @@ from app.notifiers.telegram import (
     build_telegram_daily,
     build_telegram_text,
 )
+from app.notifiers.wecom import build_wecom_combination_text
 
 
 def make_post() -> Post:
@@ -91,7 +92,11 @@ def make_combination_post() -> Post:
             "stats": [("年化", "27.1%"), ("净值", "1.271")],
             "actions": [
                 {"type": "清仓", "stock": "永杉锂业", "symbol": "SH603399", "prev": "21.1%", "target": "0.0%"},
-                {"type": "新建", "stock": "天华新能", "symbol": "SZ300390", "prev": "0.0%", "target": "20.0%"},
+                {"type": "新建", "stock": "天华新能", "symbol": "SZ300390", "prev": "0.0%", "target": "20.0%", "price": "1560.50"},
+            ],
+            "holdings": [
+                {"name": "贵州茅台", "symbol": "SH600519", "weight": 12.5},
+                {"name": "天华新能", "symbol": "SZ300390", "weight": 20.0},
             ],
             "cash": "80.0%",
         },
@@ -105,7 +110,12 @@ def test_combination_text_layout():
     assert "🗑 清仓　永杉锂业（SH603399）" in text
     assert "🆕 新建　天华新能（SZ300390）" in text
     assert "21.1% → 0.0%" in text
+    assert "成交价 1560.50" in text
+    assert "现有持仓" in text and "贵州茅台（SH600519） 12.5%" in text
     assert "💵 现金 80.0% · 🕐 2026-08-04" in text
+    wecom_text = build_wecom_combination_text(make_combination_post())
+    assert "成交价 1560.50" in wecom_text
+    assert "现有持仓" in wecom_text and "天华新能（SZ300390） 20.0%" in wecom_text
     assert "查看原文" not in text
     # 每个操作独立成块，避免挤在一行
     assert text.count("→") == 2
@@ -121,6 +131,8 @@ def test_combination_feishu_card():
     ]
     assert any("**年化** 27.1%" in c for c in contents)
     assert any("🗑 **清仓** 永杉锂业（SH603399）" in c for c in contents)
+    assert any("成交价 1560.50" in c for c in contents)
+    assert any("现有持仓" in c and "贵州茅台（SH600519） 12.5%" in c for c in contents)
     assert any("💵 现金 **80.0%**" in c for c in contents)
 
 

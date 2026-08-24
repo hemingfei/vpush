@@ -39,7 +39,11 @@ def make_combination_post() -> Post:
             "stats": [("年化", "27.1%"), ("净值", "1.271")],
             "actions": [
                 {"type": "清仓", "stock": "永杉锂业", "symbol": "SH603399", "prev": "21.1%", "target": "0.0%"},
-                {"type": "新建", "stock": "天华新能", "symbol": "SZ300390", "prev": "0.0%", "target": "20.0%"},
+                {"type": "新建", "stock": "天华新能", "symbol": "SZ300390", "prev": "0.0%", "target": "20.0%", "price": "1560.50"},
+            ],
+            "holdings": [
+                {"name": "贵州茅台", "symbol": "SH600519", "weight": 12.5},
+                {"name": "天华新能", "symbol": "SZ300390", "weight": 20.0},
             ],
             "cash": "80.0%",
         },
@@ -52,10 +56,12 @@ def test_combination_rich_uses_tables():
     html = build_combination_rich_html(make_combination_post())
     assert "<p><b>📌 伯言-A股 · 雪球组合 · 调仓</b></p>" in html
     assert "🕐 2026-08-04" in html
-    assert html.count("<table") == 1
+    assert html.count("<table") == 2
     assert "年化" in html and "27.1%" in html
     assert "清仓" in html and "永杉锂业" in html and "SH603399" in html
     assert "21.1%" in html and "0.0%" in html
+    assert "成交价" in html and "1560.50" in html
+    assert "现有持仓" in html and "贵州茅台" in html and "12.5%" in html
     assert "💵 现金 80.0%" in html
     assert "🗑 清仓" in html and "🆕 新建" in html
     assert "查看原文" not in html

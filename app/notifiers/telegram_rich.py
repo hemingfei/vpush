@@ -185,20 +185,36 @@ def build_combination_rich_html(post: Post) -> str:
     if stats:
         parts.append(_p(" · ".join(f"{k} {v}" for k, v in stats)))
     if actions:
+        has_prices = any(isinstance(a, dict) and a.get("price") for a in actions)
         rows = []
         for a in actions:
             stock = a.get("stock") or ""
             symbol = a.get("symbol") or ""
             name = f"{stock}（{symbol}）" if symbol else stock
             a_type = str(a.get("type") or "调整")
-            rows.append(
-                [
-                    action_label(a_type),
-                    name,
-                    f"{a.get('prev') or '0.0%'} → {a.get('target') or '0.0%'}",
-                ]
+            row = [
+                action_label(a_type),
+                name,
+                f"{a.get('prev') or '0.0%'} → {a.get('target') or '0.0%'}",
+            ]
+            if has_prices:
+                row.append(str(a.get("price") or "—"))
+            rows.append(row)
+        headers = ["操作", "标的", "仓位"] + (["成交价"] if has_prices else [])
+        parts.append(_table(headers, rows, striped=True))
+    valid_holdings = [
+        h for h in detail.get("holdings") or []
+        if isinstance(h, dict) and h.get("name") and h.get("weight") is not None
+    ]
+    if valid_holdings:
+        parts.append(
+            _table(
+                ["名称", "代码", "仓位"],
+                [[h["name"], h.get("symbol") or "", f"{h['weight']}%"] for h in valid_holdings],
+                caption="现有持仓",
+                striped=True,
             )
-        parts.append(_table(["操作", "标的", "仓位"], rows, striped=True))
+        )
     foot = []
     if cash:
         foot.append(f"💵 现金 {cash}")
