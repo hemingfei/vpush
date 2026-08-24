@@ -3049,11 +3049,13 @@ def create_api_router(
         stats 供管理端展示已打标/待打标贴文数量。
         stock_names 为常用股票名表（纯文字提及打标用，管理端可手动增删）；
         excluded_stock_names 为管理员删掉、维护不加回的名字。
+        universe 为全市场 3 字及以上正式简称规模（不进手改名单）。
         dynamic_tags 为贴文里实际出现过的标签（含股票名，去重按频次）。
         stock_aliases 为黑话别名表（LLM 每日自动识别 + 管理端可手动修正）。
         maintain 为最近一次维护摘要 + 是否已配置 LLM（管理端按钮用）。
         """
         from .scheduler import _system_llm_config
+        from .stock_universe import universe_meta
 
         llm_cfg = _system_llm_config(db, getattr(request.app.state, "llm_config", None))
         return {
@@ -3061,6 +3063,7 @@ def create_api_router(
             "stock_names": db.get_stock_names(),
             "stock_aliases": db.get_stock_aliases(),
             "excluded_stock_names": db.get_stock_name_exclusions(),
+            "universe": universe_meta(),
             "dynamic_tags": db.aggregate_post_tags(),
             "stats": db.tag_stats(),
             "maintain": {
@@ -3128,6 +3131,13 @@ def create_api_router(
                 )
             stock_names = deduped_stocks
 
+        from .stock_universe import bundled_plain_names
+
+        pending_excluded = set(db.get_stock_name_exclusions())
+        if body.stock_names is not None:
+            pending_excluded |= set(previous_names) - set(stock_names)
+            pending_excluded -= set(stock_names)
+        known_officials = (set(stock_names) | set(bundled_plain_names())) - pending_excluded
         alias_targets: dict[str, str] | None = None
         dropped_aliases: list[dict] = []
         if body.stock_aliases is not None:
@@ -3137,15 +3147,15 @@ def create_api_router(
                 stock = (a.stock or "").strip()
                 if not alias or not stock:
                     continue
-                if stock not in stock_names:
+                if stock not in known_officials:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"别名 {alias} 的正式名 {stock} 不在常用股票名中",
+                        detail=f"别名 {alias} 的正式名 {stock} 不在股票名表中",
                     )
-                if alias in stock_names:
+                if alias in known_officials:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"别名 {alias} 与常用股票名重复",
+                        detail=f"别名 {alias} 与股票名重复",
                     )
                 previous = alias_targets.get(alias)
                 if previous and previous != stock:
@@ -3157,7 +3167,7 @@ def create_api_router(
         elif body.stock_names is not None:
             kept, dropped_aliases = [], []
             for item in db.get_stock_aliases():
-                if item.get("stock") in stock_names:
+                if item.get("stock") in known_officials:
                     kept.append(item)
                 else:
                     dropped_aliases.append(item)

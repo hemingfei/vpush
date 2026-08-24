@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.54";
+const APP_VERSION = "1.12.55";
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"];
@@ -6371,6 +6371,9 @@ async function loadAdminTagsTab() {
   const stockNames = Array.isArray(data?.stock_names) ? data.stock_names : [];
   const stockAliases = Array.isArray(data?.stock_aliases) ? data.stock_aliases : [];
   const excludedNames = Array.isArray(data?.excluded_stock_names) ? data.excluded_stock_names : [];
+  const universe = data?.universe && typeof data.universe === "object" ? data.universe : {};
+  const universeCount = Number(universe.count) || 0;
+  const universeUpdated = universe.updated ? String(universe.updated) : "";
   const stats = data?.stats || { total: 0, processed: 0, tagged: 0, pending: 0 };
   if (!routeStillActive(_adminRenderSeq)) return;
   // 词表编辑：每行一个标签，格式「标签名 | 关键词,关键词」；关键词为空则该标签不命中
@@ -6392,18 +6395,19 @@ async function loadAdminTagsTab() {
     <section class="section-panel">
       <header class="section-head">
         <div><h2 class="section-title">常用股票名</h2>
-        <p class="section-meta">管理员可增删，每行一个。纯文字提及会打股票标签；$股票名(代码)$ 仍自动识别。删掉的名字每日维护不会加回，再写进列表并保存即可恢复。</p></div>
+        <p class="section-meta">管理员可增删，每行一个。纯文字提及会打股票标签；$股票名(代码)$ 仍自动识别。删掉的名字每日维护不会加回，再写进列表并保存即可恢复。两字名只认这张表。</p></div>
       </header>
       <textarea id="stock-names-input" class="form-control" rows="8" style="margin-top:12px;font-family:monospace;line-height:1.6" placeholder="贵州茅台&#10;宁德时代">${escapeHtml(stockNames.join("\n"))}</textarea>
       <div class="toolbar" style="margin-top:12px">
         <button class="btn-normal" onclick="adminSaveStockNames()">保存股票名</button>
       </div>
+      ${universeCount ? `<p class="section-meta" style="margin-top:8px">另有全市场 ${universeCount} 只 3 字及以上正式简称参与纯文字打标${universeUpdated ? `（${escapeHtml(universeUpdated)}）` : ""}，不占手改名单。</p>` : ""}
       ${excludedNames.length ? `<p class="section-meta" style="margin-top:8px">维护不加回：${excludedNames.map((n) => escapeHtml(n)).join("、")}</p>` : ""}
     </section>
     <section class="section-panel">
       <header class="section-head">
         <div><h2 class="section-title">黑话别名</h2>
-        <p class="section-meta">常见黑话（宁王、药茅）启动时写入；雪球 $戏称(代码)$ 由系统 LLM 解析。正式名切半（宁德/英伟）不会入库。每行「别名=正式名」，正式名需在常用股票名表中。</p></div>
+        <p class="section-meta">常见黑话（宁王、药茅）启动时写入；雪球 $戏称(代码)$ 由系统 LLM 解析。正式名切半（宁德/英伟）不会入库。每行「别名=正式名」，正式名需在常用表或全市场名表中。</p></div>
       </header>
       <textarea id="stock-aliases-input" class="form-control" rows="5" style="margin-top:12px;font-family:monospace;line-height:1.6" placeholder="宁王=宁德时代">${escapeHtml(aliasText)}</textarea>
     </section>

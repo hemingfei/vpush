@@ -4277,12 +4277,12 @@ def test_stock_alias_task_expands_names_from_marks(monkeypatch):
         llm_config=SimpleNamespace(api_key="sk-test", api_base="https://api.deepseek.com", model="deepseek-chat"),
     )
     scheduler._run_stock_alias_task()
-    # 官方名进名表
-    assert "盐湖股份" in db.get_stock_names()
-    # 戏称进别名表 + 正式名补进名表
+    from app.stock_universe import bundled_plain_names
+
+    # 已在全市场名表的官方名不再写入常用表；戏称进别名表
+    assert "盐湖股份" in bundled_plain_names()
     aliases = db.get_stock_aliases()
     assert any(a["alias"] == "涂改液" and a["stock"] == "五粮液" for a in aliases)
-    assert "五粮液" in db.get_stock_names()
 
 
 def _alias_scheduler(db, llm_config):

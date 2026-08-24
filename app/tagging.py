@@ -27,8 +27,10 @@ TAG_PER_POST_MAX = 3
 TAG_VOCABULARY_MAX = 30
 # 每条贴文最多股票标签数（叠加在话题标签之后，总上限 5）
 STOCK_PER_POST_MAX = 2
-# 股票名表 / 别名表上限，防膨胀
-STOCK_TABLE_MAX = 200
+# 常用股票名表上限（手改）；全市场正式简称另库存，不占这个额度
+STOCK_TABLE_MAX = 400
+# 别名表上限
+ALIAS_TABLE_MAX = 200
 # 黑话候选只扫最近 N 帖（控 token）；$标记$ 全库扫描（纯本地、便宜）
 ALIAS_CANDIDATE_SCAN = 500
 # Grok thinking 单批 16 条约 150s；8 条可压进 MARK_RESOLVE_TIMEOUT（180s）
@@ -95,22 +97,65 @@ def is_equity_name(name: str) -> bool:
     return not any(marker in cleaned for marker in _NON_EQUITY_NAME_MARKERS)
 
 
-def _contains_term(text_casefolded: str, term: str) -> bool:
-    """匹配单个关键词：纯 ASCII 词用英文单词边界，其他（中文/混合）子串匹配。
+def _term_span(text_casefolded: str, term: str) -> tuple[int, int] | None:
+    """返回 term 在已 casefold 文本里的首个区间；未命中返回 None。
 
-    英文短词（如 AI、NVDA）做子串匹配会误命中 said/train 等含子串的单词，
-    因此对纯 ASCII 字母数字词要求前后不能是字母数字。text 需已 casefold。
+    纯 ASCII 词用英文单词边界，避免 AI 误命中 said/train。
     """
     cleaned = str(term).strip()
     if not cleaned:
-        return False
+        return None
     folded = cleaned.casefold()
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+#-]*", cleaned):
-        return re.search(
+        match = re.search(
             rf"(?<![A-Za-z0-9]){re.escape(folded)}(?![A-Za-z0-9])",
             text_casefolded,
-        ) is not None
-    return folded in text_casefolded
+        )
+        if match is None:
+            return None
+        return match.start(), match.end()
+    pos = text_casefolded.find(folded)
+    if pos < 0:
+        return None
+    return pos, pos + len(folded)
+
+
+def _contains_term(text_casefolded: str, term: str) -> bool:
+    """匹配单个关键词：纯 ASCII 词用英文单词边界，其他（中文/混合）子串匹配。"""
+    return _term_span(text_casefolded, term) is not None
+
+
+def _ranked_plain_hits(
+    text: str, terms: list[tuple[str, str]], limit: int, skip=None
+) -> list[str]:
+    """按出现位置取股票名；重叠时留更长短语。terms 为 (needle, official)。"""
+    if limit <= 0 or not text.strip():
+        return []
+    skip_names = {str(n).strip() for n in (skip or []) if str(n).strip()}
+    folded = text.casefold()
+    found: list[tuple[int, int, str]] = []
+    for needle, official in terms:
+        official = str(official or "").strip()
+        if not official or official in skip_names:
+            continue
+        span = _term_span(folded, needle)
+        if span is None:
+            continue
+        found.append((span[0], span[1], official))
+    found.sort(key=lambda item: (item[0] - item[1], item[0]))
+    kept: list[tuple[int, int, str]] = []
+    for start, end, official in found:
+        if any(start >= other[0] and end <= other[1] and (start, end) != (other[0], other[1]) for other in kept):
+            continue
+        kept.append((start, end, official))
+    kept.sort(key=lambda item: item[0])
+    out: list[str] = []
+    for _start, _end, official in kept:
+        if official not in out:
+            out.append(official)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def rule_tag_posts(posts, tag_rules) -> dict[int, list[str]]:
@@ -197,22 +242,17 @@ def stock_tag_posts(posts, stock_names, aliases=None) -> dict[int, list[str]]:
                 tags.append(name)
             if len(tags) >= STOCK_PER_POST_MAX:
                 break
-        # 2) 常用股票名表子串匹配
+        # 2) 纯文字：常用名 + 全市场正式简称 + 别名；重叠留更长，再按出现顺序
         if len(tags) < STOCK_PER_POST_MAX:
-            folded = text.casefold()
-            for name in names:
-                if _contains_term(folded, name) and name not in tags:
-                    tags.append(name)
-                    if len(tags) >= STOCK_PER_POST_MAX:
-                        break
-        # 3) 黑话别名 → 正式名
-        if len(tags) < STOCK_PER_POST_MAX:
-            folded = text.casefold()
-            for alias, stock in alias_map:
-                if _contains_term(folded, alias) and stock not in tags:
-                    tags.append(stock)
-                    if len(tags) >= STOCK_PER_POST_MAX:
-                        break
+            terms = [(name, name) for name in names]
+            terms.extend(alias_map)
+            for official in _ranked_plain_hits(
+                text, terms, STOCK_PER_POST_MAX - len(tags), skip=tags
+            ):
+                if official not in tags:
+                    tags.append(official)
+                if len(tags) >= STOCK_PER_POST_MAX:
+                    break
         result[idx] = tags
     return result
 
@@ -348,9 +388,12 @@ def backfill_post_tags(db, mode: str = "pending") -> dict:
     """
     if mode not in ("pending", "all"):
         raise ValueError(f"unknown backfill mode: {mode}")
+    from .stock_universe import aliases_for_tagging, names_for_plain_text_tagging
+
     tag_rules = db.get_tag_vocabulary()
-    stock_names = db.get_stock_names()
-    stock_aliases = db.get_stock_aliases()
+    excluded = db.get_stock_name_exclusions()
+    stock_names = names_for_plain_text_tagging(db.get_stock_names(), excluded)
+    stock_aliases = aliases_for_tagging(db.get_stock_aliases(), excluded)
     processed = 0
     tagged_count = 0
     for batch in iter_post_row_batches(db, untagged_only=mode == "pending"):
@@ -425,7 +468,7 @@ def _append_alias(aliases: list[dict], existing: set[str], alias: str, stock: st
         return False
     if alias in existing:
         return False
-    if len(aliases) >= STOCK_TABLE_MAX:
+    if len(aliases) >= ALIAS_TABLE_MAX:
         return False
     aliases.append({"alias": alias, "stock": stock})
     existing.add(alias)
@@ -477,8 +520,11 @@ def run_tag_maintenance(db, llm_config=None) -> dict:
         try:
             from .llm import resolve_stock_marks
 
+            from .stock_universe import bundled_plain_names
+
             existing_aliases = {a["alias"] for a in aliases}
-            existing_stocks = set(stock_names)
+            universe_names = set(bundled_plain_names())
+            existing_stocks = set(stock_names) | universe_names
             excluded_names = set(db.get_stock_name_exclusions())
             all_marks: list[tuple[str, str]] = []
             seen_marks: set[tuple[str, str]] = set()
@@ -512,7 +558,9 @@ def run_tag_maintenance(db, llm_config=None) -> dict:
                             continue
                         if not is_equity_name(official):
                             continue
-                        if _append_stock_name(stock_names, existing_stocks, official):
+                        if official in universe_names:
+                            existing_stocks.add(official)
+                        elif _append_stock_name(stock_names, existing_stocks, official):
                             added_stock_names.append(official)
                         if item.get("is_alias") and name and name != official:
                             if name in topic_tags:
@@ -531,8 +579,12 @@ def run_tag_maintenance(db, llm_config=None) -> dict:
             error = str(exc)
             logger.warning("标签维护识别异常: %s", exc)
 
+    from .stock_universe import bundled_plain_names
+
+    excluded_names = set(db.get_stock_name_exclusions())
     valid_tags = [r["tag"] for r in tag_rules] + stock_names
     valid_tags += [a["stock"] for a in aliases]
+    valid_tags += [n for n in bundled_plain_names() if n not in excluded_names]
     cleaned = 0
     try:
         cleaned = cleanup_stale_tags(db, valid_tags)

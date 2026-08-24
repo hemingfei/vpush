@@ -3874,6 +3874,7 @@ def test_post_tags_list_readable_by_any_user():
     assert data["tags"][0]["keywords"]  # 默认规则带关键词
     # 常用股票名表（默认含宁德时代）+ 动态标签聚合（空库无）
     assert "宁德时代" in data["stock_names"]
+    assert data["universe"]["count"] > 4000
     assert data["dynamic_tags"] == []
     assert data["stats"]["total"] == 0
     assert "maintain" in data
@@ -3908,6 +3909,22 @@ def test_tag_vocabulary_update_admin_only():
     assert client.put("/api/tags", headers=admin, json={"tags": []}).status_code == 400
 
 
+def test_tag_alias_accepts_universe_official_name():
+    client = make_client()
+    admin = auth_headers(client, "tagadmin")
+    response = client.put(
+        "/api/tags",
+        headers=admin,
+        json={
+            "tags": [{"tag": "科技", "keywords": ["芯片"]}],
+            "stock_names": ["宁德时代"],
+            "stock_aliases": [{"alias": "浦发", "stock": "浦发银行"}],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["stock_aliases"] == [{"alias": "浦发", "stock": "浦发银行"}]
+
+
 def test_tag_alias_requires_known_stock_name():
     client = make_client()
     admin = auth_headers(client, "tagadmin")
@@ -3923,7 +3940,7 @@ def test_tag_alias_requires_known_stock_name():
     )
 
     assert response.status_code == 400
-    assert "常用股票名" in response.json()["detail"]
+    assert "股票名" in response.json()["detail"]
 
 
 def test_tag_alias_rejects_conflicting_mapping():

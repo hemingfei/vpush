@@ -112,6 +112,12 @@ def test_stock_mark_strips_new_prefix():
     assert result[0] == ["长鑫"]
 
 
+def test_plain_text_prefers_longer_stock_name():
+    post = make_post(content="贵州茅台今天大涨")
+    result = stock_tag_posts([post], ["茅台", "贵州茅台"])
+    assert result[0] == ["贵州茅台"]
+
+
 def test_stock_name_substring_match():
     """纯文字提及命中常用股票名表。"""
     post = make_post(content="昨天清仓中际旭创，梭哈了长鑫。")
@@ -363,7 +369,9 @@ def test_run_tag_maintenance_merges_seed_and_mark_paths():
     aliases = db.get_stock_aliases()
     assert any(a["alias"] == "宁王" and a["stock"] == "宁德时代" for a in aliases)
     assert any(a["alias"] == "涂改液" and a["stock"] == "五粮液" for a in aliases)
-    assert "五粮液" in db.get_stock_names()
+    from app.stock_universe import bundled_plain_names
+
+    assert "五粮液" in bundled_plain_names()
     assert {a["alias"] for a in result["added_aliases"]} == {"宁王", "药茅", "涂改液"}
     assert result["llm_used"] is True
     db.close()
@@ -422,7 +430,7 @@ def test_run_tag_maintenance_scans_marks_beyond_recent_500():
 
     db = DB(Path(tempfile.mkdtemp()) / "s.db")
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "old", "$盐湖股份(SZ000792)$ 反弹", "早期帖", "u", "")
+    db.insert_post("xueqiu", kid, "old", "$测试盐湖(SZ000792)$ 反弹", "早期帖", "u", "")
     for i in range(500):
         db.insert_post("xueqiu", kid, f"n{i}", "普通", "没有标记", "u", "")
 
@@ -431,7 +439,7 @@ def test_run_tag_maintenance_scans_marks_beyond_recent_500():
     def fake_resolve(marks, cfg, client=None):
         captured["marks"] = list(marks)
         return [
-            {"name": "盐湖股份", "code": "SZ000792", "official": "盐湖股份", "is_alias": False},
+            {"name": "测试盐湖", "code": "SZ000792", "official": "盐湖股份", "is_alias": True},
         ]
 
     import app.llm as llm
@@ -447,8 +455,8 @@ def test_run_tag_maintenance_scans_marks_beyond_recent_500():
         llm.suggest_stock_aliases = orig_suggest
         llm.resolve_stock_marks = orig_resolve
 
-    assert any(name == "盐湖股份" for name, _code in captured.get("marks", []))
-    assert "盐湖股份" in db.get_stock_names()
+    assert any(name == "测试盐湖" for name, _code in captured.get("marks", []))
+    assert any(a["alias"] == "测试盐湖" and a["stock"] == "盐湖股份" for a in db.get_stock_aliases())
     db.close()
 
 
@@ -488,7 +496,7 @@ def test_run_tag_maintenance_skips_admin_excluded_stock_names():
 
     assert all(name != "盐湖股份" for name, _code in captured.get("marks", []))
     assert "盐湖股份" not in db.get_stock_names()
-    assert "五粮液" in db.get_stock_names()
+    assert any(a["alias"] == "涂改液" and a["stock"] == "五粮液" for a in db.get_stock_aliases())
     db.close()
 
 

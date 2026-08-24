@@ -749,9 +749,12 @@ def poll_once(
     states = states if states is not None else {}
     now = time.monotonic()
     tuning = _load_poll_tuning(db, interval_seconds, priority_interval_seconds)
+    from .stock_universe import aliases_for_tagging, names_for_plain_text_tagging
+
     tag_rules = db.get_tag_vocabulary()
-    stock_names = db.get_stock_names()
-    stock_aliases = db.get_stock_aliases()
+    excluded = db.get_stock_name_exclusions()
+    stock_names = names_for_plain_text_tagging(db.get_stock_names(), excluded)
+    stock_aliases = aliases_for_tagging(db.get_stock_aliases(), excluded)
     # 无人订阅的大V不抓取：没有订阅者就没有推送/阅读对象，白耗抓取配额。
     # 新上架的大V需要先有用户订阅（订阅广场/组合订阅）才开始抓取。
     subscribed_ids = db.kol_ids_with_subscribers()
@@ -1002,7 +1005,11 @@ def _fetch_kol_once(
                 tag_rules = db.get_tag_vocabulary()
             tagged = rule_tag_posts(fresh, tag_rules)
             if stock_names is None:
-                stock_names = db.get_stock_names()
+                from .stock_universe import names_for_plain_text_tagging
+
+                stock_names = names_for_plain_text_tagging(
+                    db.get_stock_names(), db.get_stock_name_exclusions()
+                )
             if stock_aliases is None:
                 stock_aliases = db.get_stock_aliases()
             stock_tagged = stock_tag_posts(fresh, stock_names, aliases=stock_aliases)

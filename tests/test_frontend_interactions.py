@@ -1491,7 +1491,7 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     assert 'href="/style.css?v=181"' in html
-    assert 'src="/app.js?v=249"' in html
+    assert 'src="/app.js?v=250"' in html
 
 
 def test_register_placeholder_matches_username_min_length():
@@ -2011,6 +2011,7 @@ def test_admin_stock_names_are_manually_editable():
     assert "stock-names-input" in render
     assert "adminSaveStockNames" in render
     assert "保存股票名" in render
+    assert "全市场" in render
     body = _fn_body("adminSaveStockNames")
     assert "/api/tags" in body
     assert "stock_names" in body
