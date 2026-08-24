@@ -25,8 +25,7 @@
     }
   ],
   "holdings": [
-    {"name": "同花顺", "symbol": "SZ300033", "weight": 20.0},
-    {"name": "现金", "symbol": "CASH", "weight": 31.4}
+    {"name": "同花顺", "symbol": "SZ300033", "weight": 20.0}
   ],
   "cash": "31.4%"
 }
