@@ -11,11 +11,13 @@ import httpx
 from app.config import FeishuConfig, NotifiersConfig, TelegramConfig
 from app.db import DB
 from app.fetchers.base import Post
+import app.scheduler as app_scheduler
 from app.scheduler import (
     PlatformState,
     PushRetryQueue,
     Scheduler,
     _effective_interval,
+    _parse_x_translation_body,
     _polling_bool,
     _polling_setting,
     _x_fallback_advice,
@@ -2717,6 +2719,45 @@ def test_parse_twitter_cookie():
     cookie = "guest_id=v1%3A1; auth_token=abc123; ct0=csrf-token; lang=zh-CN"
     assert parse_twitter_cookie(cookie) == {"auth_token": "abc123", "ct0": "csrf-token"}
     assert parse_twitter_cookie("") == {}
+
+
+def test_parse_x_translation_body_reads_later_ndjson_chunk():
+    empty = '{"result":{"content_type":"POST","text":""}}'
+    body = empty + "\n" + json.dumps(
+        {"result": {"content_type": "POST", "text": "特朗普政府计划撤销签证"}},
+        ensure_ascii=False,
+    )
+    assert _parse_x_translation_body(body) == "特朗普政府计划撤销签证"
+    assert _parse_x_translation_body(json.dumps({"result": {"text": "单段"}})) == "单段"
+
+
+def test_translate_text_skips_already_chinese():
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        return httpx.Response(500)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    src = "特朗普政府计划撤销申请庇护的外国公民签证，国务院已开始审查。"
+    assert translate_text(src, client=client, tweet_id="1", twitter_cookie="auth_token=a; ct0=b") == src
+    assert calls == []
+
+
+def test_translate_text_mymemory_429_keeps_original_and_cools_down():
+    app_scheduler._mymemory_skip_until = 0.0
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        return httpx.Response(429, text="Too Many Requests")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    assert translate_text("Hello world from Washington", client=client) == "Hello world from Washington"
+    assert len(calls) == 1
+    assert translate_text("Another English sentence here", client=client) == "Another English sentence here"
+    assert len(calls) == 1  # 冷却期内不再打 MyMemory
+    app_scheduler._mymemory_skip_until = 0.0
 
 
 def test_translate_text_uses_x_official_translation():

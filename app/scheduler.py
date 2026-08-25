@@ -207,6 +207,48 @@ def _effective_interval(
     return effective
 
 
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_MYMEMORY_COOLDOWN = 30 * 60
+_mymemory_skip_until = 0.0
+
+
+def _already_chinese(text: str) -> bool:
+    """原文已是中文就不必再译（X/MyMemory 都会空耗并刷 429）。"""
+    cjk = len(_CJK_RE.findall(text))
+    if cjk < 8:
+        return False
+    latin = sum(1 for ch in text if ch.isascii() and ch.isalpha())
+    return cjk >= latin
+
+
+def _x_translation_text(payload) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return ""
+    text = result.get("text") or ""
+    return text.strip() if isinstance(text, str) else ""
+
+
+def _parse_x_translation_body(body: str) -> str:
+    """Grok 翻译常先推一段空 text 的 JSON，再跟译文；不能用 resp.json()。"""
+    decoder = json.JSONDecoder()
+    found = ""
+    idx = 0
+    data = body or ""
+    while idx < len(data):
+        while idx < len(data) and data[idx].isspace():
+            idx += 1
+        if idx >= len(data):
+            break
+        obj, idx = decoder.raw_decode(data, idx)
+        text = _x_translation_text(obj)
+        if text:
+            found = text
+    return found
+
+
 def translate_text(
     text: str,
     target: str = "zh-CN",
@@ -218,8 +260,10 @@ def translate_text(
     """把 X 内容转成中文。优先官方翻译，失败回退 MyMemory。"""
     import httpx
 
+    global _mymemory_skip_until
+
     text = (text or "").strip()
-    if not text:
+    if not text or _already_chinese(text):
         return text
     if twitter_cookie is None:
         from .fetchers.twitter import configured_twitter_cookie
@@ -255,16 +299,22 @@ def translate_text(
                     },
                 )
                 resp.raise_for_status()
-                translated = ((resp.json() or {}).get("result") or {}).get("text") or ""
-                if translated.strip():
-                    return translated.strip()
+                translated = _parse_x_translation_body(resp.text)
+                if translated:
+                    return translated
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"x_translate: {exc}")
+        if time.monotonic() < _mymemory_skip_until:
+            return text
         try:
             resp = client.get(
                 "https://api.mymemory.translated.net/get",
                 params={"q": text[:500], "langpair": "en|zh-CN"},
             )
+            if resp.status_code == 429:
+                _mymemory_skip_until = time.monotonic() + _MYMEMORY_COOLDOWN
+                logger.warning("MyMemory 翻译限流，%d 分钟内回退原文", _MYMEMORY_COOLDOWN // 60)
+                return text
             resp.raise_for_status()
             translated = ((resp.json() or {}).get("responseData") or {}).get("translatedText") or ""
             if translated:
@@ -274,7 +324,10 @@ def translate_text(
     finally:
         if owns_client:
             client.close()
-    raise RuntimeError("; ".join(errors) or "无可用翻译源")
+    if errors:
+        raise RuntimeError("; ".join(errors) or "无可用翻译源")
+    return text
+
 
 class PushRetryQueue:
     """推送失败重试队列：指数退避（1m/5m/15m），超过次数放弃。"""
