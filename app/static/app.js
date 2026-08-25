@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.57";
+const APP_VERSION = "1.12.58";
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"];
@@ -2917,6 +2917,14 @@ async function renderSettings(seq) {
           </select>
         </div>
         <p class="muted">开启后，每天 20:00 把你订阅大V当天的新动态汇总成一条推送。</p>
+        <div class="form-row" style="margin-top:16px">
+          <label for="set-x-translate">X 帖文</label>
+          <select id="set-x-translate" class="form-control" onchange="saveTranslateTwitter()">
+            <option value="1" ${state.user.translate_twitter !== false ? "selected" : ""}>翻译成中文</option>
+            <option value="0" ${state.user.translate_twitter === false ? "selected" : ""}>保留原文</option>
+          </select>
+        </div>
+        <p class="muted">只影响你的时间线和推送。管理员需开启「X 内容自动翻译」后，新抓的帖才会同时留下原文。</p>
       </section>
       <section class="section-panel">
         <header class="section-head">
@@ -3671,6 +3679,20 @@ async function saveDailyReport() {
   }
 }
 
+async function saveTranslateTwitter() {
+  try {
+    const on = $("#set-x-translate").value === "1";
+    await api("/api/me", {
+      method: "PUT",
+      body: JSON.stringify({ translate_twitter: on }),
+    });
+    state.user.translate_twitter = on;
+    flash("已保存");
+  } catch (err) {
+    flash(err.message, "error");
+  }
+}
+
 function toggleDnd() {
   // 免打扰开关与时段输入联动：关闭时时段输入禁用并置灰
   const on = $("#dnd-enabled").checked;
@@ -4167,7 +4189,7 @@ async function loadAdminStats() {
                 <input id="pc-translate" type="checkbox" ${s.polling_config.translate_twitter_content ? "checked" : ""}>
                 <span class="cfg-flag-text">
                   <span>X 内容自动翻译成中文</span>
-                  <span class="cfg-check-desc">配置 TWITTER_COOKIE 后走 X 官方翻译，质量同网页版</span>
+                  <span class="cfg-check-desc">抓取时保存译文和原文；用户可在推送设置里选看哪一种</span>
                 </span>
               </label>
               <label class="cfg-field cfg-check" title="关闭后全部退回旧版 sendMessage + HTML，配图走相册">

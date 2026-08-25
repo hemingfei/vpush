@@ -17,7 +17,13 @@ from datetime import datetime
 from .backup import run_scheduled
 from .channels import channel_bound, channel_enabled
 from .db import ALLOWED_PLATFORMS, DB
-from .fetchers.base import PLATFORM_LABELS, Fetcher, Post
+from .fetchers.base import (
+    PLATFORM_LABELS,
+    Fetcher,
+    Post,
+    twitter_translate_enabled,
+    with_twitter_display,
+)
 from .notifiers.base import Notifier
 from .proxy import note_fetch_proxy, tick_proxy_pools
 
@@ -460,7 +466,16 @@ def _keyword_hit(keywords: list[str], post: Post) -> bool:
     """帖子正文/标题是否命中任一关键词（大小写不敏感）。"""
     if not keywords:
         return False
-    text = ((post.content or "") + "\n" + (post.title or "")).lower()
+    text = "\n".join(
+        part
+        for part in (
+            post.content,
+            post.title,
+            post.content_src,
+            post.title_src,
+        )
+        if part
+    ).lower()
     return any(kw.lower() in text for kw in keywords if kw.strip())
 
 
@@ -762,13 +777,14 @@ def notify_subscribers(
             if bool(user.get("secondary")) and not favorite and secondary_buffer is not None:
                 secondary_buffer.setdefault(user["id"], []).append(post)
                 continue
+            delivery = with_twitter_display(post, twitter_translate_enabled(user))
             for channel in CHANNELS:
                 if not channel_enabled(user, channel) or not channel_bound(user, channel, notifiers_config, db):
                     continue
                 deliver_post(
                     db,
                     post_id,
-                    post,
+                    delivery,
                     user,
                     channel,
                     notifiers_config,
@@ -1034,6 +1050,8 @@ def _fetch_kol_once(
 
                 tw_cookie = configured_twitter_cookie(db)
                 x_cookie = parse_twitter_cookie(tw_cookie)
+                post.title_src = post.title or ""
+                post.content_src = post.content or ""
                 if tweet_id and x_cookie.get("auth_token") and x_cookie.get("ct0"):
                     # X 官方翻译按整条推文返回，翻译一次后拆出标题
                     translated = translate_text(
@@ -1307,6 +1325,9 @@ def notify_digest_subscribers(
                 if not instant:
                     continue
                 matched = instant
+            matched = [
+                with_twitter_display(p, twitter_translate_enabled(user)) for p in matched
+            ]
             summary = None
             llm_cfg = _user_llm_config(user, site_llm)
             if llm_cfg is not None:
@@ -2021,6 +2042,8 @@ class Scheduler:
                 post_type=post_row.get("post_type") or "",
                 detail=detail,
                 images=images,
+                title_src=post_row.get("title_src") or "",
+                content_src=post_row.get("content_src") or "",
             )
             # 重试前复查：退订/关闭通知/改选渠道的用户不再恢复推送
             if user_id is not None:
@@ -2041,11 +2064,11 @@ class Scheduler:
         ):
             self.retry_queue.drop(item)
             return
-        delivery_post = post
+        delivery_post = with_twitter_display(post, twitter_translate_enabled(user))
         if item["user_id"] is not None:
             subscription = self.db.get_subscription(item["user_id"], post.kol_id)
             if subscription and subscription["hide_images"]:
-                delivery_post = replace(post, images=[])
+                delivery_post = replace(delivery_post, images=[])
         favorite = bool(
             item["user_id"] is not None
             and post.kol_id in self.db.subscribed_favorite_ids(item["user_id"])
@@ -2159,6 +2182,7 @@ class Scheduler:
         """
         if self.notifiers_config is None or not posts:
             return
+        posts = [with_twitter_display(p, twitter_translate_enabled(user)) for p in posts]
         import httpx
 
         from .channels import (
@@ -2358,16 +2382,21 @@ class Scheduler:
             if not rows:
                 continue
             posts = [
-                Post(
-                    platform=r["platform"],
-                    kol_id=r["kol_id"],
-                    kol_name=r["kol_name"] or "",
-                    external_id=r["external_id"],
-                    title=r["title"],
-                    content=r["content"],
-                    url=r["url"],
-                    published_at=r["published_at"],
-                    favorite=bool(r.get("favorite")),
+                with_twitter_display(
+                    Post(
+                        platform=r["platform"],
+                        kol_id=r["kol_id"],
+                        kol_name=r["kol_name"] or "",
+                        external_id=r["external_id"],
+                        title=r["title"],
+                        content=r["content"],
+                        url=r["url"],
+                        published_at=r["published_at"],
+                        favorite=bool(r.get("favorite")),
+                        title_src=r.get("title_src") or "",
+                        content_src=r.get("content_src") or "",
+                    ),
+                    twitter_translate_enabled(user),
                 )
                 for r in rows
             ]

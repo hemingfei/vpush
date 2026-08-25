@@ -41,6 +41,7 @@ Page({
     keywordsInput: "",
     notify: true,
     dailyReport: false,
+    translateTwitter: true,
     bindCode: "",
     bindMinutes: 0,
     tgBot: "",
@@ -114,6 +115,7 @@ Page({
         Object.assign(patch, {
           notify: user.notify_enabled,
           dailyReport: !!user.daily_report_enabled,
+          translateTwitter: user.translate_twitter !== false,
           dndEnabled: !!user.dnd_start,
           dndStart: user.dnd_start || "23:00",
           dndEnd: user.dnd_end || "07:00",
@@ -139,6 +141,7 @@ Page({
 
   onNotify(e) { this.setData({ notify: e.detail.value }); },
   onDaily(e) { this.setData({ dailyReport: e.detail.value }); },
+  onTranslateTwitter(e) { this.setData({ translateTwitter: e.detail.value }); },
   onChannelToggle(e) {
     const channel = e.currentTarget.dataset.channel;
     const checked = e.detail.value;
@@ -174,6 +177,7 @@ Page({
         data: {
           notify_enabled: this.data.notify,
           daily_report_enabled: this.data.dailyReport,
+          translate_twitter: this.data.translateTwitter,
           push_channels: channels.join(","),
         },
       });

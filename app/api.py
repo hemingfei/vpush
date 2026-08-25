@@ -34,7 +34,7 @@ from . import auth, wechat
 from .avatar_cache import cache_avatar
 from .bot_core import BIND_CODE_TTL
 from .db import _UNSET, ALLOWED_PLATFORMS, DB, days_until_purge
-from .fetchers.base import CN_TZ, PLATFORM_LABELS, strip_html
+from .fetchers.base import CN_TZ, PLATFORM_LABELS, apply_twitter_feed, strip_html
 from .plaza import (
     filter_plaza_rows,
     is_plaza_hidden,
@@ -342,6 +342,7 @@ class MeUpdate(BaseModel):
     bark_key: str | None = None
     notify_enabled: bool | None = None
     daily_report_enabled: bool | None = None
+    translate_twitter: bool | None = None
     push_channels: str | None = None
     dnd_start: str | None = None
     dnd_end: str | None = None
@@ -587,6 +588,7 @@ def public_user(user: dict) -> dict:
         "bark_key": user.get("bark_key") or "",
         "notify_enabled": bool(user["notify_enabled"]),
         "daily_report_enabled": bool(user.get("daily_report")),
+        "translate_twitter": bool(user.get("translate_twitter", 1)),
         "push_channels": user.get("push_channels") or "",
         "dnd_start": user.get("dnd_start") or "",
         "dnd_end": user.get("dnd_end") or "",
@@ -1509,6 +1511,8 @@ def create_api_router(
             updates["notify_enabled"] = body.notify_enabled
         if "daily_report_enabled" in body.model_fields_set and body.daily_report_enabled is not None:
             updates["daily_report"] = body.daily_report_enabled
+        if "translate_twitter" in body.model_fields_set and body.translate_twitter is not None:
+            updates["translate_twitter"] = body.translate_twitter
         if "push_channels" in body.model_fields_set:
             value = (body.push_channels or "").strip()
             channels = [c.strip() for c in value.split(",") if c.strip()] if value else []
@@ -1837,19 +1841,22 @@ def create_api_router(
         user: dict = Depends(get_current_user),
     ):
         kol_ids = sorted(db.readable_subscribed_kol_ids(user["id"], user["is_admin"]))
-        return db.list_feed_posts(
-            kol_ids,
-            limit=bounded_limit(limit),
-            user_id=user["id"],
-            offset=max(offset, 0),
-            platform=platform,
-            category_id=category_id,
-            q=q,
-            favorite=bool(favorite),
-            tag=tag,
-            include_secondary=bool(include_secondary),
-            since_id=since_id,
-            exclude_platforms=plaza_hidden_platforms(db),
+        return apply_twitter_feed(
+            db.list_feed_posts(
+                kol_ids,
+                limit=bounded_limit(limit),
+                user_id=user["id"],
+                offset=max(offset, 0),
+                platform=platform,
+                category_id=category_id,
+                q=q,
+                favorite=bool(favorite),
+                tag=tag,
+                include_secondary=bool(include_secondary),
+                since_id=since_id,
+                exclude_platforms=plaza_hidden_platforms(db),
+            ),
+            user,
         )
 
     @router.get("/live/wscn")
@@ -1897,7 +1904,10 @@ def create_api_router(
         kol = db.get_kol(kol_id)
         if not _plaza_kol_visible(user, kol):
             raise HTTPException(status_code=404, detail="大V不存在")
-        posts = db.list_posts(limit=bounded_limit(limit), kol_id=kol_id)
+        posts = apply_twitter_feed(
+            db.list_posts(limit=bounded_limit(limit), kol_id=kol_id),
+            user,
+        )
         subscription = db.get_subscription(user["id"], kol_id)
         if subscription and subscription["hide_images"]:
             return [{**post, "images": []} for post in posts]

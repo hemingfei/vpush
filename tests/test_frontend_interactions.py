@@ -522,7 +522,7 @@ def test_settings_save_feedback_uses_flash():
     for span_id in ("dnd-result", "keywords-result", "push-channels-result", "llm-result", "custom-tg-result"):
         assert span_id not in settings
     for name in (
-        "saveNotify", "saveDailyReport", "saveDnd", "saveKeywords",
+        "saveNotify", "saveDailyReport", "saveTranslateTwitter", "saveDnd", "saveKeywords",
         "savePushChannels", "saveLlm", "savePassword", "saveCustomTgBot",
         "saveWecomWebhook", "saveBarkKey", "enableWebPush", "disableWebPush",
     ):
@@ -1491,7 +1491,7 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     assert 'href="/style.css?v=181"' in html
-    assert 'src="/app.js?v=252"' in html
+    assert 'src="/app.js?v=253"' in html
 
 
 def test_register_placeholder_matches_username_min_length():
@@ -1522,6 +1522,7 @@ def test_settings_controls_are_44px_by_default():
 def test_settings_section_titles_are_h2_under_page_h1():
     render = _fn_body("renderSettings")
     assert '<h2 class="section-title">推送开关</h2>' in render
+    assert 'id="set-x-translate"' in render
     assert '<h3 class="section-title">' not in render
 
 

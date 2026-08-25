@@ -127,6 +127,13 @@
       <view class="form-label">每日精选摘要（每天 20:00 推一次今日总览）</view>
       <switch checked="{{dailyReport}}" color="#1677ff" bindchange="onDaily" />
     </view>
+    <view class="form-item">
+      <view class="form-label">X 帖文翻译成中文</view>
+      <switch checked="{{translateTwitter}}" color="#1677ff" bindchange="onTranslateTwitter" />
+    </view>
+    <view class="notice-line" style="color:var(--text-faint);font-size:22rpx;margin-top:8rpx">
+      关掉则时间线和推送看英文原文（需管理员已开启抓取翻译）。
+    </view>
     <button class="btn btn-primary btn-block" bindtap="save">保存新帖设置</button>
   </view>
   <view class="card">

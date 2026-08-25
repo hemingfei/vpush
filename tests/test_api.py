@@ -2016,6 +2016,36 @@ def test_register_expired_and_revoked_codes_have_distinct_errors():
     assert resp.status_code == 400 and "已作废" in resp.json()["detail"]
 
 
+def test_me_translate_twitter_pref_swaps_feed_text():
+    client = make_client()
+    headers = user_headers(client, "reader")
+    db = client.app.state.db
+    me = client.get("/api/me", headers=headers).json()
+    assert me["translate_twitter"] is True
+    uid = me["id"]
+    kid = db.add_kol("twitter", "Semi", "semi")
+    db.add_subscription(uid, kid)
+    db.insert_post(
+        "twitter",
+        kid,
+        "2092100432948781527",
+        "中文标题",
+        "中文译文",
+        "https://x.com/a/status/1",
+        "",
+        title_src="Hello title",
+        content_src="Hello original",
+    )
+    feed = client.get("/api/my/feed", headers=headers).json()
+    assert feed[0]["title"] == "中文标题" and feed[0]["content"] == "中文译文"
+    assert client.put("/api/me", headers=headers, json={"translate_twitter": False}).status_code == 200
+    assert client.get("/api/me", headers=headers).json()["translate_twitter"] is False
+    feed = client.get("/api/my/feed", headers=headers).json()
+    assert feed[0]["title"] == "Hello title" and feed[0]["content"] == "Hello original"
+    kol_posts = client.get(f"/api/kols/{kid}/posts", headers=headers).json()
+    assert kol_posts[0]["content"] == "Hello original"
+
+
 def test_me_includes_push_guide():
     cfg = Config()
     cfg.notifiers.telegram.bot_username = "dav_bot"

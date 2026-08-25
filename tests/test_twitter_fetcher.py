@@ -775,3 +775,56 @@ def test_query_id_refresh_serialized_under_lock(monkeypatch):
     finally:
         tw_mod._query_ids_loaded = saved_loaded
         tw_mod._query_ids_error_until = saved_error
+
+
+def test_twitter_display_pref_swaps_stored_src():
+    from app.fetchers.base import (
+        Post,
+        apply_twitter_feed,
+        twitter_translate_enabled,
+        with_twitter_display,
+        with_twitter_display_row,
+    )
+
+    assert twitter_translate_enabled(None) is True
+    assert twitter_translate_enabled({}) is True
+    assert twitter_translate_enabled({"translate_twitter": 1}) is True
+    assert twitter_translate_enabled({"translate_twitter": 0}) is False
+
+    post = Post(
+        platform="twitter",
+        kol_id=1,
+        kol_name="Semi",
+        external_id="t1",
+        title="中文标题",
+        content="中文译文",
+        url="u",
+        published_at="",
+        title_src="Hello title",
+        content_src="Hello original",
+    )
+    assert with_twitter_display(post, True) is post
+    shown = with_twitter_display(post, False)
+    assert shown.title == "Hello title" and shown.content == "Hello original"
+    assert post.title == "中文标题"
+
+    xq = Post(
+        platform="xueqiu",
+        kol_id=1,
+        kol_name="A",
+        external_id="p1",
+        title="中文",
+        content="中文",
+        url="u",
+        published_at="",
+        title_src="ignored",
+        content_src="ignored",
+    )
+    assert with_twitter_display(xq, False) is xq
+
+    legacy = {"platform": "twitter", "title": "中文标题", "content": "中文译文"}
+    assert with_twitter_display_row(legacy, False) is legacy
+    row = {**legacy, "title_src": "Hello title", "content_src": "Hello original"}
+    assert with_twitter_display_row(row, True)["title"] == "中文标题"
+    swapped = apply_twitter_feed([row], {"translate_twitter": 0})
+    assert swapped[0]["title"] == "Hello title" and swapped[0]["content"] == "Hello original"

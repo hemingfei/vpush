@@ -235,6 +235,8 @@ CREATE TABLE IF NOT EXISTS posts (
     external_id TEXT NOT NULL,
     title TEXT NOT NULL DEFAULT '',
     content TEXT NOT NULL DEFAULT '',
+    title_src TEXT NOT NULL DEFAULT '',
+    content_src TEXT NOT NULL DEFAULT '',
     post_type TEXT NOT NULL DEFAULT '',
     images TEXT NOT NULL DEFAULT '',
     url TEXT NOT NULL DEFAULT '',
@@ -284,6 +286,7 @@ CREATE TABLE IF NOT EXISTS users (
     wecom_webhook TEXT NOT NULL DEFAULT '',
     notify_enabled INTEGER NOT NULL DEFAULT 1,
     daily_report INTEGER NOT NULL DEFAULT 0,
+    translate_twitter INTEGER NOT NULL DEFAULT 1,
     push_channels TEXT NOT NULL DEFAULT '',
     dnd_start TEXT NOT NULL DEFAULT '',
     dnd_end TEXT NOT NULL DEFAULT '',
@@ -523,6 +526,14 @@ class DB:
             self._conn.execute(
                 "ALTER TABLE posts ADD COLUMN tags TEXT NOT NULL DEFAULT ''"
             )
+        if "title_src" not in post_cols:
+            self._conn.execute(
+                "ALTER TABLE posts ADD COLUMN title_src TEXT NOT NULL DEFAULT ''"
+            )
+        if "content_src" not in post_cols:
+            self._conn.execute(
+                "ALTER TABLE posts ADD COLUMN content_src TEXT NOT NULL DEFAULT ''"
+            )
         sub_cols = {row["name"] for row in self._rows("PRAGMA table_info(subscriptions)")}
         if "type" not in sub_cols:
             self._conn.execute(
@@ -569,6 +580,10 @@ class DB:
             self._conn.execute("ALTER TABLE users ADD COLUMN feishu_chat_id TEXT NOT NULL DEFAULT ''")
         if "daily_report" not in user_cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN daily_report INTEGER NOT NULL DEFAULT 0")
+        if "translate_twitter" not in user_cols:
+            self._conn.execute(
+                "ALTER TABLE users ADD COLUMN translate_twitter INTEGER NOT NULL DEFAULT 1"
+            )
         if "push_channels" not in user_cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN push_channels TEXT NOT NULL DEFAULT ''")
         if "dnd_start" not in user_cols:
@@ -1341,6 +1356,7 @@ class DB:
         "username", "password_hash", "is_admin", "wechat_openid",
         "telegram_chat_id", "telegram_bot_token", "feishu_open_id",
         "feishu_chat_id", "wecom_webhook", "notify_enabled", "daily_report",
+        "translate_twitter",
         "push_channels", "dnd_start", "dnd_end", "dnd_allow_favorite",
         "feed_token", "bark_key", "llm_api_base", "llm_api_key", "llm_model",
         "token_version", "last_login_at",
@@ -1352,7 +1368,7 @@ class DB:
             if key not in self._UPDATE_USER_COLUMNS:
                 raise ValueError(f"非法用户字段: {key}")
             # 布尔字段统一归一化为 0/1，避免字符串 "false"/"0" 误判为真
-            if key in ("is_admin", "notify_enabled", "daily_report", "dnd_allow_favorite"):
+            if key in ("is_admin", "notify_enabled", "daily_report", "translate_twitter", "dnd_allow_favorite"):
                 value = _to_bool(value)
             sets.append(f"{key} = ?")
             params.append(value)
@@ -1387,7 +1403,7 @@ class DB:
         for key, value in updates.items():
             if key not in self._UPDATE_USER_COLUMNS:
                 raise ValueError(f"非法用户字段: {key}")
-            if key in ("is_admin", "notify_enabled", "daily_report", "dnd_allow_favorite"):
+            if key in ("is_admin", "notify_enabled", "daily_report", "translate_twitter", "dnd_allow_favorite"):
                 value = _to_bool(value)
             sets.append(f"{key} = ?")
             params.append(value)
@@ -2177,6 +2193,8 @@ class DB:
         detail: dict | None = None,
         images: list[str] | None = None,
         tags: list[str] | None = None,
+        title_src: str = "",
+        content_src: str = "",
     ) -> int | None:
         detail_json = _detail_json(detail)
         images_json = json.dumps(images, ensure_ascii=False) if images else ""
@@ -2185,14 +2203,16 @@ class DB:
         try:
             with self._lock:
                 cur = self._conn.execute(
-                    "INSERT OR IGNORE INTO posts (platform, kol_id, external_id, title, content, post_type, images, url, published_at, detail, tags) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT OR IGNORE INTO posts (platform, kol_id, external_id, title, content, title_src, content_src, post_type, images, url, published_at, detail, tags) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         platform,
                         kol_id,
                         external_id,
                         title,
                         content,
+                        title_src,
+                        content_src,
                         post_type,
                         images_json,
                         url,
@@ -2234,14 +2254,16 @@ class DB:
                         else ""
                     )
                     cur = self._conn.execute(
-                        "INSERT OR IGNORE INTO posts (platform, kol_id, external_id, title, content, post_type, images, url, published_at, detail, tags) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT OR IGNORE INTO posts (platform, kol_id, external_id, title, content, title_src, content_src, post_type, images, url, published_at, detail, tags) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             p.platform,
                             p.kol_id,
                             p.external_id,
                             p.title,
                             p.content,
+                            p.title_src or "",
+                            p.content_src or "",
                             p.post_type,
                             images_json,
                             p.url,

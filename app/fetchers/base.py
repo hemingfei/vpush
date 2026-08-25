@@ -5,7 +5,7 @@ import email.utils
 import html
 import re
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 
 # 项目面向中文社交平台，发布时间统一按北京时间展示，避免依赖服务器时区
@@ -42,6 +42,45 @@ class Post:
     favorite: bool = False
     # None = 尚未执行规则打标（pending）；空列表 = 已执行但零命中；非空 = 已打标
     tags: list[str] | None = None
+    title_src: str = ""
+    content_src: str = ""
+
+
+def twitter_translate_enabled(user: dict | None) -> bool:
+    """默认看中文译文；显式关掉才回原文。"""
+    if not user or user.get("translate_twitter") is None:
+        return True
+    return bool(user.get("translate_twitter"))
+
+
+def with_twitter_display(post: Post, translate: bool) -> Post:
+    if post.platform != "twitter" or translate:
+        return post
+    title = post.title_src or post.title
+    content = post.content_src or post.content
+    if title == post.title and content == post.content:
+        return post
+    return replace(post, title=title, content=content)
+
+
+def with_twitter_display_row(row: dict, translate: bool) -> dict:
+    if (row.get("platform") or "") != "twitter" or translate:
+        return row
+    src_t = row.get("title_src") or ""
+    src_c = row.get("content_src") or ""
+    if not src_t and not src_c:
+        return row
+    out = dict(row)
+    if src_t:
+        out["title"] = src_t
+    if src_c:
+        out["content"] = src_c
+    return out
+
+
+def apply_twitter_feed(rows: list[dict], user: dict | None) -> list[dict]:
+    translate = twitter_translate_enabled(user)
+    return [with_twitter_display_row(row, translate) for row in rows]
 
 
 def strip_html(text: str) -> str:

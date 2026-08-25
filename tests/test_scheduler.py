@@ -2556,6 +2556,7 @@ def test_twitter_content_translated_once_for_new_posts(monkeypatch):
     poll_once(db, {"twitter": FakeFetcher([post])}, [FakeNotifier()], interval_seconds=0)
     rows = db.list_posts(limit=5)
     assert rows[0]["title"] == "你好世界" and rows[0]["content"] == "你好世界"
+    assert rows[0]["title_src"] == "Hello world" and rows[0]["content_src"] == "Hello world"
 
     # 第二轮：帖子已存在，不应再调用翻译
     calls = {"n": 0}
@@ -2577,6 +2578,47 @@ def test_twitter_content_translated_once_for_new_posts(monkeypatch):
     )
     poll_once(db, {"twitter": FakeFetcher([post2])}, [FakeNotifier()], interval_seconds=0)
     assert db.list_posts(limit=10)[0]["title"] == "Stay hungry"
+
+
+def test_notify_subscribers_twitter_pref_uses_original(monkeypatch):
+    db = make_db()
+    kid = db.add_kol("twitter", "Semi", "semi")
+    uid_zh = db.add_user("zh", "h", telegram_chat_id="111")
+    uid_en = db.add_user("en", "h", telegram_chat_id="222")
+    db.update_user(uid_en, translate_twitter=0)
+    db.add_subscription(uid_zh, kid)
+    db.add_subscription(uid_en, kid)
+    post = Post(
+        platform="twitter",
+        kol_id=kid,
+        kol_name="Semi",
+        external_id="t1",
+        title="中文标题",
+        content="中文译文",
+        url="u",
+        published_at="",
+        title_src="Hello title",
+        content_src="Hello original",
+    )
+    sent = []
+
+    class FakeTG:
+        def __init__(self, *args, **kwargs):
+            self.client = SimpleNamespace(close=lambda: None)
+            self.chat_id = kwargs.get("chat_id")
+
+        def notify(self, delivered):
+            sent.append((self.chat_id, delivered.title, delivered.content))
+
+    monkeypatch.setattr("app.notifiers.telegram.TelegramNotifier", FakeTG)
+    ncfg = SimpleNamespace(
+        telegram=SimpleNamespace(bot_token="t", chat_id=""),
+        feishu=SimpleNamespace(),
+    )
+    notify_subscribers(db, 1, post, ncfg, notifiers=[], retry_queue=None)
+    by_chat = {chat: (title, content) for chat, title, content in sent}
+    assert by_chat["111"] == ("中文标题", "中文译文")
+    assert by_chat["222"] == ("Hello title", "Hello original")
 
 
 def test_new_posts_tagged_by_rules_on_ingest():
@@ -3706,6 +3748,14 @@ def test_keyword_hit():
     assert _keyword_hit(["etf"], hit)  # 大小写不敏感
     assert _keyword_hit(["观察"], hit)  # 标题命中
     assert _keyword_hit(["正"], hit)  # 正文命中
+
+    src_only = Post(
+        platform="twitter", kol_id=1, kol_name="A",
+        external_id="t1", title="中文译文", content="中文译文",
+        url="u", published_at="",
+        title_src="NVDA guidance", content_src="NVDA guidance",
+    )
+    assert _keyword_hit(["nvda"], src_only)  # 原文也参与关键词
 
 
 def test_notify_subscribers_dnd_keyword_penetration(monkeypatch):
