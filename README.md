@@ -107,6 +107,9 @@ cp .env.example .env
 | `TWITTER_COOKIE` | 可选 | 浏览器登录 x.com 后复制的完整 Cookie（直抓 X + 自动翻译中文）；也可在后台「数据源 → Cookie 管理」覆盖，无需重启 |
 | `IMA_COOKIE` | 可选 | ima 网页登录 Cookie（请求头 `x-ima-cookie`），抓列表/标题/时间/摘要/封面；可用 `scripts/ima_qr_login.py` 扫码自动捕获 |
 | `IMA_OPENAPI_CLIENTID` / `IMA_OPENAPI_APIKEY` | 可选 | ima OpenAPI 凭证（登录 https://ima.qq.com/agent-interface 生成），官方通道，**取全文必须**；对订阅的知识库原文仍受客户端限制，自动降级为摘要 |
+| `IMA_UID` / `IMA_REFRESH_TOKEN` | 可选 | IMA 纯 VPS 文档中心凭证；Refresh Token 只在服务端运行时使用，不要提交到仓库或镜像 |
+| `IMA_KB_ID` / `IMA_ROOT_FOLDER_ID` | 可选 | 纯 VPS 文档中心的知识库与根文件夹，后台已预填目标库值 |
+| `IMA_INTERVAL_SECONDS` | 可选 | 纯 VPS 清单检查间隔，默认 3600，最小 1800；只下载新增文件，不进入推送流 |
 | `LOG_LEVEL` | 可选 | 日志级别 `INFO`/`DEBUG`（DEBUG 记录每次 API 请求与慢请求告警，便于排查） |
 | `LOG_FILE` | 可选 | 日志文件，默认 `/data/logs/app.log`（随数据卷持久化，滚动 5MB×3，重启不丢） |
 
@@ -235,6 +238,7 @@ docker compose up -d --build
 - **雪球**：后台「数据源 → Cookie 管理」粘贴 Cookie，保存即时生效；配置 `WEIBO_USERNAME/PASSWORD` 可自动登录续期微博 Cookie，微博也支持网页扫码登录
 - **X**：配置 `TWITTER_COOKIE` 或在「数据源 → Cookie 管理」粘贴后直抓 X 官方接口并把内容翻译成中文；直抓失败会告警并放慢采集，不再走备用内容通道
 - **ima**：知识库条目在后台按平台 `ima` 添加，`external_id` 填知识库 ID（OpenAPI 模式）或 wiki URL 的 `knowledgeBaseId`（Cookie 模式）；Cookie 用 `scripts/ima_qr_login.py` 扫码捕获；OpenAPI 凭证取全文，订阅库全文受 ima 客户端限制时自动降级为摘要（`detail.full_text` 标记是否拿到全文）
+- **IMA 文档中心**：后台「数据源 → Cookie 管理 → IMA 文档采集」会预填 UID、知识库 ID 和根文件夹 ID；管理员重新登录 IMA 后粘贴 Refresh Token，保存并点击「立即同步」。VPUSH 每小时检查一次，只下载新增 PDF 并生成 TXT；所有登录用户从侧栏「IMA 文档」浏览，PDF 不进入动态推送。
 - **Cookie sidecar**：`waf-bot` 定期刷新共享 cookie 文件，主服务抓取时读取；容器只读根文件系统、禁止提权。Cookie 失效时到后台更新，详见下方「常见问题」
 - **抓取频率**：后台「数据源」页可实时调整轮询间隔、优先大V间隔、次要大V间隔/封顶/推送周期/**合并推送最低条数**（积压不足此条数不推送、继续攒，够数才发）、合并推送周期等，即时生效
 

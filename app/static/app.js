@@ -59,6 +59,7 @@ const PLUS_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="
 const X_ICON = `<svg class="x-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>`;
 const ARROW_UP_ICON = `<svg class="tl-badge-arrow" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3.59l7.457 7.45-1.414 1.42L13 7.41V21h-2V7.41l-5.043 5.05-1.414-1.42L12 3.59z"/></svg>`;
 const REFRESH_ICON = `<svg class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 5v4h4"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 19v-4h-4"/></svg>`;
+const DOWNLOAD_ICON = `<svg class="download-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>`;
 const SEARCH_ICON = `<svg class="search-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`;
 const GITHUB_ICON = `<svg class="sidebar-gh-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.55 0-.27-.01-1.17-.02-2.12-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.75 2.69 1.25 3.35.95.1-.74.4-1.25.72-1.54-2.55-.29-5.23-1.28-5.23-5.68 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.05 0 0 .96-.31 3.15 1.18a10.9 10.9 0 0 1 5.74 0c2.19-1.49 3.15-1.18 3.15-1.18.62 1.59.23 2.76.11 3.05.73.81 1.18 1.83 1.18 3.09 0 4.41-2.69 5.38-5.25 5.67.41.35.77 1.05.77 2.12 0 1.53-.01 2.76-.01 3.14 0 .3.2.66.8.55A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></svg>`;
 // 主题切换图标：线性风格，与 TRASH_ICON 一致（stroke=currentColor）
@@ -101,6 +102,8 @@ const state = {
       return "kol";
     }
   })(),
+  imaDocumentsQuery: "",
+  imaDocumentsDay: "",
 };
 
 function escapeHtml(text) {
@@ -261,7 +264,36 @@ async function api(path, options = {}) {
   return data;
 }
 
+async function apiBlob(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (state.token) headers.Authorization = `Bearer ${state.token}`;
+  const resp = await fetch(path, { ...options, headers });
+  if (resp.status === 401) {
+    logout();
+    throw new Error("登录已过期，请重新登录");
+  }
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    const detail = data.detail;
+    const msg = typeof detail === "string" ? detail : (detail ? JSON.stringify(detail) : resp.statusText);
+    throw new Error(msg);
+  }
+  return resp.blob();
+}
+
+function clearImaPdfUrl() {
+  if (window._imaPdfUrl) {
+    URL.revokeObjectURL(window._imaPdfUrl);
+    window._imaPdfUrl = "";
+  }
+}
+
+function _imaDocumentRoute(mediaId) {
+  return `ima-documents/${encodeURIComponent(mediaId).replace(/'/g, "%27")}`;
+}
+
 function clearSessionCaches() {
+  clearImaPdfUrl();
   if (typeof stopTimelinePoll === "function") stopTimelinePoll();
   _tlPosts.length = 0;
   _tlOffset = 0;
@@ -338,6 +370,9 @@ const NAV = [
     { route: "combinations", icon: TRENDING_ICON, label: "组合订阅" },
     { route: "mysubs", icon: BOOKMARK_ICON, label: "我的订阅" },
     { route: "settings", icon: GEAR_ICON, label: "推送设置" },
+  ]},
+  { group: "资料", items: [
+    { route: "ima-documents", icon: BOOK_ICON, label: "IMA 文档" },
   ]},
   { group: "", admin: true, subs: [
     { label: "内容管理", items: [
@@ -421,6 +456,7 @@ const MOBILE_NAV = [
   { route: "combinations", icon: TRENDING_ICON, label: "组合" },
   { route: "mysubs", icon: BOOKMARK_ICON, label: "订阅" },
   { route: "settings", icon: GEAR_ICON, label: "设置" },
+  { route: "ima-documents", icon: BOOK_ICON, label: "文档" },
 ];
 
 function renderBottomNav(user) {
@@ -452,6 +488,141 @@ async function renderMore(seq) {
           </button>`).join("")}
       </div>
     </section>`;
+}
+
+function imaDocumentRow(item) {
+  return `
+    <button type="button" class="ima-doc-row" onclick="go('${_imaDocumentRoute(item.media_id)}')">
+      <span class="ima-doc-row-icon">${FILE_TEXT_ICON}</span>
+      <span class="ima-doc-row-copy">
+        <span class="ima-doc-row-name">${escapeHtml(item.name)}</span>
+        <span class="ima-doc-row-meta">${fmtCacheBytes(item.size)} · ${Number(item.chars || 0).toLocaleString()} 字</span>
+      </span>
+      <span class="ima-doc-row-arrow" aria-hidden="true">›</span>
+    </button>`;
+}
+
+function imaDocumentGroups(items) {
+  const groups = new Map();
+  for (const item of items || []) {
+    if (!groups.has(item.day)) groups.set(item.day, []);
+    groups.get(item.day).push(item);
+  }
+  return [...groups.entries()].map(([day, rows]) => `
+    <section class="ima-doc-day">
+      <header class="ima-doc-day-head"><h2>${escapeHtml(day)}</h2><span>${rows.length} 份</span></header>
+      <div class="ima-doc-list">${rows.map(imaDocumentRow).join("")}</div>
+    </section>`).join("");
+}
+
+function searchImaDocuments() {
+  state.imaDocumentsQuery = $("#ima-doc-q")?.value?.trim() || "";
+  renderImaDocuments(routeRenderSeq);
+}
+
+async function renderImaDocuments(seq, encodedMediaId = "") {
+  const mediaId = encodedMediaId ? decodeURIComponent(encodedMediaId) : "";
+  if (mediaId) {
+    await renderImaDocument(seq, mediaId);
+    return;
+  }
+  clearImaPdfUrl();
+  setPageTitle("IMA 文档");
+  const query = state.imaDocumentsQuery || "";
+  const day = state.imaDocumentsDay || "";
+  $("#main").innerHTML = `
+    <section class="section-panel ima-docs-shell">
+      <header class="section-head ima-docs-head">
+        <div><h2 class="section-title">IMA 文档</h2><p class="section-meta">已归档 PDF 与全文文本</p></div>
+        <button type="button" class="btn-ghost" onclick="renderImaDocuments(routeRenderSeq)">${REFRESH_ICON}<span>刷新</span></button>
+      </header>
+      <div class="ima-doc-toolbar">
+        <label class="search-bar ima-doc-search">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜索文档标题" aria-label="搜索 IMA 文档" onkeydown="if(event.key==='Enter'){state.imaDocumentsQuery=this.value.trim();renderImaDocuments(routeRenderSeq)}"></label>
+        <select id="ima-doc-day" class="form-control ima-doc-day-filter" aria-label="按日期筛选" onchange="state.imaDocumentsDay=this.value;renderImaDocuments(routeRenderSeq)"><option value="">全部日期</option></select>
+        <button type="button" class="btn-normal" onclick="searchImaDocuments()">搜索</button>
+      </div>
+      <div id="ima-docs-body" class="ima-docs-body"><div class="admin-skeleton" aria-hidden="true"></div></div>
+    </section>`;
+  try {
+    const params = new URLSearchParams();
+    if (query) params.set("q", query);
+    if (day) params.set("day", day);
+    const data = await api(`/api/ima-documents?${params.toString()}`);
+    if (!routeStillActive(seq)) return;
+    const items = data.items || [];
+    const days = [...new Set(items.map((item) => item.day))];
+    const daySelect = $("#ima-doc-day");
+    if (daySelect) {
+      daySelect.innerHTML = `<option value="">全部日期</option>${days.map((value) => `<option value="${escapeHtml(value)}" ${value === day ? "selected" : ""}>${escapeHtml(value)}</option>`).join("")}`;
+    }
+    $("#ima-docs-body").innerHTML = items.length ? imaDocumentGroups(items) : emptyState("暂无匹配的 IMA 文档");
+  } catch (err) {
+    if (routeStillActive(seq)) $("#ima-docs-body").innerHTML = emptyState(`加载失败：${err.message}`, `<button type="button" class="btn-normal" onclick="renderImaDocuments(routeRenderSeq)">重试</button>`);
+  }
+}
+
+async function renderImaDocument(seq, mediaId) {
+  clearImaPdfUrl();
+  setPageTitle("IMA 文档", true);
+  $("#main").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
+  try {
+    const item = await api(`/api/ima-documents/${encodeURIComponent(mediaId)}`);
+    const text = await (await apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/text`)).text();
+    if (!routeStillActive(seq)) return;
+    $("#main").innerHTML = `
+      <section class="section-panel ima-reader">
+        <header class="section-head ima-reader-head">
+          <div><p class="ima-reader-day">${escapeHtml(item.day)}</p><h2 class="section-title ima-reader-title">${escapeHtml(item.name)}</h2><p class="section-meta">${fmtCacheBytes(item.size)} · ${Number(item.chars || 0).toLocaleString()} 字</p></div>
+          <div class="toolbar ima-reader-actions"><button type="button" class="btn-normal" onclick="loadImaPdf('${escapeHtml(mediaId)}')">${FILE_TEXT_ICON}<span>查看 PDF</span></button><button type="button" class="btn-ghost" onclick="downloadImaPdf('${escapeHtml(mediaId)}')">${DOWNLOAD_ICON}<span>下载</span></button></div>
+        </header>
+        <div id="ima-pdf-panel" class="ima-pdf-panel" hidden><iframe id="ima-pdf-frame" title="PDF 预览"></iframe></div>
+        <pre class="ima-text-view" id="ima-text-view"></pre>
+      </section>`;
+    $("#ima-text-view").textContent = text;
+  } catch (err) {
+    if (routeStillActive(seq)) $("#main").innerHTML = emptyState(`文档加载失败：${err.message}`, `<button type="button" class="btn-normal" onclick="go('ima-documents')">返回文档列表</button>`);
+  }
+}
+
+async function loadImaPdf(mediaId) {
+  const seq = routeRenderSeq;
+  const button = document.querySelector(".ima-reader-actions .btn-normal");
+  if (button) button.disabled = true;
+  try {
+    const blob = await apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/pdf`);
+    if (!routeStillActive(seq)) return;
+    clearImaPdfUrl();
+    window._imaPdfUrl = URL.createObjectURL(blob);
+    const frame = $("#ima-pdf-frame");
+    const panel = $("#ima-pdf-panel");
+    if (frame && panel) {
+      frame.src = window._imaPdfUrl;
+      panel.hidden = false;
+    }
+  } catch (err) {
+    if (routeStillActive(seq)) flash(`PDF 打开失败：${err.message}`, "error");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function downloadImaPdf(mediaId) {
+  try {
+    const [blob, item] = await Promise.all([
+      apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/pdf?download=1`),
+      api(`/api/ima-documents/${encodeURIComponent(mediaId)}`),
+    ]);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = item.name || "ima-document.pdf";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (err) {
+    flash(`PDF 下载失败：${err.message}`, "error");
+  }
 }
 
 async function checkUpdate() {
@@ -4051,6 +4222,8 @@ async function loadAdminStats() {
   const xq = s.xueqiu_cookie || {};
   const tw = s.twitter_cookie || {};
   const ima = s.ima_credentials || {};
+  const imaCollector = s.ima_collector || {};
+  const pure = imaCollector.config || {};
   const zq = s.zsxq_cookie || {};
   const zc = s.zsxq_cache || { files: 0, bytes: 0 };
   const zcSize = fmtCacheBytes(zc.bytes);
@@ -4333,8 +4506,22 @@ async function loadAdminStats() {
         </div>
       </section>
       <section class="section-panel">
-        <header class="section-head">
-          <div><h2 class="section-title">知识星球 Cookie</h2>
+        <header class="section-head"><div><h2 class="section-title">IMA 文档采集</h2>
+        <p class="section-meta">默认每小时检查一次，只下载新增 PDF；Refresh Token 留空表示保持已保存值。</p></div></header>
+        <div class="cfg-grid ima-collector-grid">
+          <label class="cfg-field"><span>IMA UID</span><input id="ima-pure-uid" class="form-control" value="${escapeHtml(pure.uid || "001aa361168019ef")}" maxlength="64"></label>
+          <label class="cfg-field"><span>知识库 ID</span><input id="ima-pure-kb" class="form-control" value="${escapeHtml(pure.knowledge_base_id || "7464369361259867")}" maxlength="64"></label>
+          <label class="cfg-field"><span>根文件夹 ID</span><input id="ima-pure-root" class="form-control" value="${escapeHtml(pure.root_folder_id || "folder_7489327974078249")}" maxlength="128"></label>
+          <label class="cfg-field"><span>检查间隔<span class="cfg-unit">分钟</span></span><input id="ima-pure-interval" type="number" class="form-control" min="30" max="10080" value="${Math.round(Number(pure.interval_seconds || 3600) / 60)}"></label>
+          <label class="cfg-field cfg-field--wide"><span>Refresh Token</span><input id="ima-pure-token" class="form-control" type="password" autocomplete="off" placeholder="${pure.refresh_token?.set ? "已保存，留空保持不变" : "重新登录 IMA 后粘贴"}"></label>
+        </div>
+        <div class="ima-collector-foot">
+          <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
+          <div class="toolbar"><button type="button" class="btn-normal" onclick="saveImaCollector()">保存采集配置</button><button type="button" class="btn-ghost" onclick="triggerImaCollector()">${REFRESH_ICON}<span>立即同步</span></button></div>
+        </div>
+      </section>
+      <section class="section-panel">
+        <header class="section-head"><div><h2 class="section-title">知识星球 Cookie</h2>
           <p class="section-meta">${cookieUpdatedLabel(zq)}${zq.preview ? ` · 预览 ${escapeHtml(zq.preview)}` : ""}。登录 wx.zsxq.com → F12 → Application → Cookies，复制整串（需含 zsxq_access_token），保存即时生效。</p></div>
         </header>
         <label class="field-label" for="zq-cookie">知识星球 Cookie</label>
@@ -4519,6 +4706,8 @@ function renderStatsData(s) {
   }
   const refreshAt = $("#stats-refresh-at");
   if (refreshAt) refreshAt.textContent = `更新于 ${new Date().toLocaleTimeString()}`;
+  const imaCollectorStatus = $("#ima-collector-status");
+  if (imaCollectorStatus && s.ima_collector) imaCollectorStatus.textContent = imaCollectorStatusText(s.ima_collector);
 }
 
 async function savePollingConfig() {
@@ -4980,6 +5169,55 @@ async function saveZsxqCookie() {
   }
 }
 
+function imaCollectorStatusText(status) {
+  const result = status.last_result || {};
+  if (!status.config?.configured) return "未配置 Refresh Token";
+  if (status.running) return "同步中…";
+  if (status.last_finished_at) {
+    const ok = Number(result.downloaded || 0);
+    const failed = Number(result.failed || 0);
+    return `已归档 ${Number(status.documents || 0).toLocaleString()} 份 · 上次新增 ${ok} 份${failed ? ` · 失败 ${failed} 份` : ""}`;
+  }
+  return `已配置 · 每 ${Math.round(Number(status.config.interval_seconds || 3600) / 60)} 分钟检查`;
+}
+
+async function saveImaCollector() {
+  const minutes = Number($("#ima-pure-interval")?.value || 60);
+  if (!Number.isInteger(minutes) || minutes < 30 || minutes > 10080) {
+    flash("检查间隔须在 30–10080 分钟", "error");
+    return;
+  }
+  const body = {
+    uid: $("#ima-pure-uid")?.value?.trim() || "",
+    knowledge_base_id: $("#ima-pure-kb")?.value?.trim() || "",
+    root_folder_id: $("#ima-pure-root")?.value?.trim() || "",
+    interval_seconds: minutes * 60,
+  };
+  const token = $("#ima-pure-token")?.value?.trim() || "";
+  if (token) body.refresh_token = token;
+  try {
+    await api("/api/admin/ima-collector", { method: "PUT", body: JSON.stringify(body) });
+    const tokenInput = $("#ima-pure-token");
+    if (tokenInput) tokenInput.value = "";
+    flash("IMA 文档采集配置已保存");
+    await loadAdminStats();
+  } catch (err) {
+    flash(err.message || "保存失败", "error");
+  }
+}
+
+async function triggerImaCollector() {
+  try {
+    await api("/api/admin/ima-collector/sync", { method: "POST" });
+    flash("IMA 文档同步已启动");
+    const status = await api("/api/admin/ima-collector");
+    const target = $("#ima-collector-status");
+    if (target) target.textContent = imaCollectorStatusText(status);
+  } catch (err) {
+    flash(err.message || "同步启动失败", "error");
+  }
+}
+
 async function saveImaCredentials() {
   const cookie = $("#ima-cookie")?.value?.trim() || "";
   const cid = $("#ima-cid")?.value?.trim() || "";
@@ -4991,7 +5229,7 @@ async function saveImaCredentials() {
   try {
     await api("/api/admin/ima-credentials", {
       method: "POST",
-      body: { cookie, openapi_clientid: cid, openapi_apikey: key },
+      body: JSON.stringify({ cookie, openapi_clientid: cid, openapi_apikey: key }),
     });
     flash("ima 凭证已保存");
     history.replaceState(null, "", "/admin/stats?tab=cookies");
@@ -7834,7 +8072,7 @@ if (window.matchMedia) {
 let routeRenderSeq = 0; // 每次路由切换递增；异步渲染完成后凭此丢弃过期响应
 const SPA_PREFIXES = new Set([
   "timeline", "home", "combinations", "mysubs", "settings",
-  "search", "kol", "more", "admin", "zsxq",
+  "search", "kol", "more", "admin", "zsxq", "ima-documents",
 ]);
 
 function routeStillActive(seq) {
@@ -7941,6 +8179,7 @@ async function router() {
     else if (page === "more") await renderMore(renderSeq);
     else if (page === "search") await renderSearch(renderSeq);
     else if (page === "kol") await renderKolPage(Number(param), renderSeq);
+    else if (page === "ima-documents") await renderImaDocuments(renderSeq, param);
     else if (page === "admin") {
       if (!state.user.is_admin) { replaceRoute("timeline"); return; }
       // 分类管理/标签管理已合并为 admin/vocab：旧书签自动跳转

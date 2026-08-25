@@ -35,14 +35,6 @@ from .avatar_cache import cache_avatar
 from .bot_core import BIND_CODE_TTL
 from .db import _UNSET, ALLOWED_PLATFORMS, DB, days_until_purge
 from .fetchers.base import CN_TZ, PLATFORM_LABELS, apply_twitter_feed, strip_html
-from .plaza import (
-    filter_plaza_rows,
-    is_plaza_hidden,
-    plaza_hidden_platforms,
-    plaza_source_rows,
-    plaza_visible_platforms,
-    set_plaza_visibility,
-)
 from .fetchers.combination import extract_cube_symbol, resolve_combination_profile
 from .fetchers.ima import (
     IMA_API_KEY_KEY,
@@ -81,6 +73,24 @@ from .fetchers.zsxq import (
     resolve_zsxq_file_url,
     resolve_zsxq_profile,
     zsxq_cache_stats,
+)
+from .ima_documents import (
+    IMA_PURE_INTERVAL_KEY,
+    IMA_PURE_INTERVAL_MAX,
+    IMA_PURE_INTERVAL_MIN,
+    IMA_PURE_KB_ID_KEY,
+    IMA_PURE_REFRESH_TOKEN_KEY,
+    IMA_PURE_ROOT_FOLDER_KEY,
+    IMA_PURE_UID_KEY,
+    ImaDocumentService,
+)
+from .plaza import (
+    filter_plaza_rows,
+    is_plaza_hidden,
+    plaza_hidden_platforms,
+    plaza_source_rows,
+    plaza_visible_platforms,
+    set_plaza_visibility,
 )
 from .proxy import (
     ProxyRouter,
@@ -501,6 +511,14 @@ class ImaCredentialsIn(BaseModel):
     cookie: str | None = None
     openapi_clientid: str | None = None
     openapi_apikey: str | None = None
+
+
+class ImaCollectorIn(BaseModel):
+    uid: str | None = None
+    refresh_token: str | None = None
+    knowledge_base_id: str | None = None
+    root_folder_id: str | None = None
+    interval_seconds: int | None = None
 
 
 class ProxyPoolIn(BaseModel):
@@ -998,6 +1016,7 @@ def create_api_router(
     wechat_config=None,
     notifiers_config=None,
     trust_proxy: bool = False,
+    ima_documents: ImaDocumentService | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api")
     # 登录/注册限流（内存版，单实例够用）：每 IP 窗口内失败次数超限后 429
@@ -2340,6 +2359,118 @@ def create_api_router(
             )
         raise HTTPException(status_code=502, detail="附件下载失败")
 
+    @router.get("/ima-documents")
+    def list_ima_documents(
+        q: str = Query("", max_length=200),
+        day: str = Query("", max_length=64),
+        user: dict = Depends(get_current_user),
+    ):
+        if ima_documents is None:
+            raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
+        return {"items": ima_documents.store.documents(q, day)}
+
+    def _ima_document(media_id: str) -> dict:
+        if ima_documents is None:
+            raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
+        try:
+            document = ima_documents.store.document(media_id)
+        except ValueError:
+            document = None
+        if document is None:
+            raise HTTPException(status_code=404, detail="IMA 文档不存在")
+        return document
+
+    @router.get("/ima-documents/{media_id}")
+    def get_ima_document(media_id: str, user: dict = Depends(get_current_user)):
+        document = _ima_document(media_id)
+        return {
+            "media_id": document["media_id"],
+            "name": document["name"],
+            "day": document["day"],
+            "size": document["size"],
+            "chars": document["chars"],
+            "downloaded_at": document["downloaded_at"],
+        }
+
+    @router.get("/ima-documents/{media_id}/text")
+    def get_ima_document_text(media_id: str, user: dict = Depends(get_current_user)):
+        document = _ima_document(media_id)
+        try:
+            content = document["txt"].read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise HTTPException(status_code=404, detail="TXT 文件不存在") from exc
+        return Response(content=content, media_type="text/plain")
+
+    @router.get("/ima-documents/{media_id}/pdf")
+    def get_ima_document_pdf(
+        media_id: str,
+        download: int = Query(0, ge=0, le=1),
+        user: dict = Depends(get_current_user),
+    ):
+        document = _ima_document(media_id)
+        from urllib.parse import quote
+
+        disposition = "attachment" if download else "inline"
+        filename = quote(str(document["name"] or "document.pdf"))
+        return FileResponse(
+            str(document["pdf"]),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"{disposition}; filename*=UTF-8''{filename}"},
+        )
+
+    @router.get("/admin/ima-collector", dependencies=[Depends(require_admin)])
+    def get_ima_collector():
+        if ima_documents is None:
+            raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
+        return ima_documents.status()
+
+    @router.put("/admin/ima-collector", dependencies=[Depends(require_admin)])
+    def set_ima_collector(body: ImaCollectorIn, admin: dict = Depends(require_admin)):
+        if ima_documents is None:
+            raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
+        updates: dict[str, str] = {}
+        if body.uid is not None:
+            value = body.uid.strip()
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value):
+                raise HTTPException(status_code=400, detail="IMA UID 格式无效")
+            updates[IMA_PURE_UID_KEY] = value
+        if body.refresh_token is not None and body.refresh_token.strip():
+            value = body.refresh_token.strip()
+            if len(value) > 4096:
+                raise HTTPException(status_code=400, detail="Refresh Token 过长")
+            updates[IMA_PURE_REFRESH_TOKEN_KEY] = value
+        if body.knowledge_base_id is not None:
+            value = body.knowledge_base_id.strip()
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value):
+                raise HTTPException(status_code=400, detail="知识库 ID 格式无效")
+            updates[IMA_PURE_KB_ID_KEY] = value
+        if body.root_folder_id is not None:
+            value = body.root_folder_id.strip()
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", value):
+                raise HTTPException(status_code=400, detail="根文件夹 ID 格式无效")
+            updates[IMA_PURE_ROOT_FOLDER_KEY] = value
+        if body.interval_seconds is not None:
+            if not IMA_PURE_INTERVAL_MIN <= body.interval_seconds <= IMA_PURE_INTERVAL_MAX:
+                raise HTTPException(status_code=400, detail="同步间隔须在 1800–604800 秒")
+            updates[IMA_PURE_INTERVAL_KEY] = str(body.interval_seconds)
+        for key, value in updates.items():
+            db.set_setting(key, value)
+        if updates:
+            _audit(admin, "set_ima_collector", "", ",".join(sorted(updates)))
+        return ima_documents.status()
+
+    @router.post("/admin/ima-collector/sync", dependencies=[Depends(require_admin)])
+    def trigger_ima_collector(admin: dict = Depends(require_admin)):
+        if ima_documents is None:
+            raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
+        result = ima_documents.trigger()
+        if result["status"] == "not_configured":
+            raise HTTPException(status_code=400, detail="请先配置 IMA UID、Refresh Token、知识库和根文件夹")
+        if result["status"] == "too_soon":
+            raise HTTPException(status_code=429, detail="距离上次同步时间太短，请稍后再试")
+        _audit(admin, "trigger_ima_collector", "", result["status"])
+        return result
+
     @router.get("/admin/ima-credentials", dependencies=[Depends(require_admin)])
     def get_ima_credentials():
         cookie = db.get_setting(IMA_COOKIE_KEY) or os.environ.get("IMA_COOKIE", "")
@@ -3498,6 +3629,7 @@ def create_api_router(
                     "preview": _cred_preview(db.get_setting(IMA_CLIENT_ID_KEY) or os.environ.get("IMA_OPENAPI_CLIENTID", "")),
                 },
             },
+            "ima_collector": ima_documents.status() if ima_documents is not None else None,
             "polling_config": _effective_polling(),
             "plaza_sources": plaza_source_rows(db),
             "zsxq_cache": zsxq_cache_stats(db),

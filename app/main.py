@@ -18,6 +18,7 @@ from .api import create_api_router
 from .config import load_config
 from .db import DB
 from .fetchers import build_fetchers
+from .ima_documents import ImaDocumentService
 from .logging_setup import register_error_sink, setup_logging
 from .notifiers import build_notifiers
 from .scheduler import Scheduler, set_alerts_enabled
@@ -45,7 +46,7 @@ def docs_enabled() -> bool:
 
 SPA_PREFIXES = frozenset({
     "timeline", "home", "combinations", "mysubs", "settings",
-    "search", "kol", "more", "admin", "zsxq",
+    "search", "kol", "more", "admin", "zsxq", "ima-documents",
 })
 
 
@@ -81,6 +82,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     if db_path is not None:
         config.db_path = str(db_path)
     db = DB(config.db_path)
+    ima_documents = ImaDocumentService(db, Path(config.db_path).parent / "ima")
     # WARNING+ 日志持久化到 error_logs 表（跨重启可查，管理后台错误记录面板）
     register_error_sink(
         lambda record: db.record_error_log(record.levelname, record.name, record.getMessage())
@@ -166,6 +168,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         # 在 lifespan 内注入而非模块级，避免导入即钉死全局 flag、影响测试对环境变量的操控
         set_alerts_enabled(config.alerts_enabled)
         if background_workers_enabled():
+            ima_documents.start()
             task = asyncio.create_task(scheduler.run())
             if config.alerts_enabled and config.notifiers.telegram.bot_token:
                 from .telegram_bot import TelegramBot
@@ -209,6 +212,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
                 pass
             if bot is not None:
                 bot.client.close()
+        ima_documents.stop()
         db.close()
 
     docs = docs_enabled()
@@ -221,6 +225,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     )
     app.state.db = db
     app.state.llm_config = config.llm
+    app.state.ima_documents = ima_documents
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -265,6 +270,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
             wechat_config=config.wechat,
             notifiers_config=config.notifiers,
             trust_proxy=config.web.trust_proxy,
+            ima_documents=ima_documents,
         )
     )
     # 本地头像缓存（数据目录/avatars），避免第三方图床过期/外链失效
