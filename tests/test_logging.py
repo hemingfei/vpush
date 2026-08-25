@@ -50,6 +50,22 @@ def test_recent_logs_filter_by_level_and_keyword():
     assert not any("抓取正常" in line for line in lines_q)
 
 
+def test_lark_benign_errors_are_filtered():
+    logging_setup.setup_logging("DEBUG")
+    with logging_setup._ring_lock:
+        logging_setup._ring.clear()
+    log = logging.getLogger("Lark")
+    log.error(
+        "handle message failed, err: processor not found, type: im.message.message_read_v1"
+    )
+    log.error("receive message loop exit, err: sent 1000 (OK); then received 1000 (OK) bye")
+    log.error("connect failed, err: this event loop is already running.")
+    text = "\n".join(logging_setup.recent_logs(limit=50))
+    assert "message_read_v1" not in text
+    assert "1000 (OK)" not in text
+    assert "event loop is already running" in text
+
+
 def test_telegram_transport_error_does_not_log_bot_token():
     logging_setup.setup_logging("DEBUG")
     token = "123456:secret-token"

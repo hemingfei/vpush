@@ -195,6 +195,7 @@ class FeishuBindListener:
         handler = (
             EventDispatcherHandler.builder("", "")
             .register_p2_im_message_receive_v1(self._on_message)
+            .register_p2_im_message_message_read_v1(lambda _event: None)
             .build()
         )
         ws_client = lark_oapi.ws.Client(

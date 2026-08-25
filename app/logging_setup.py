@@ -39,6 +39,22 @@ def register_error_sink(sink) -> None:
     _error_sink = sink
 
 
+_LARK_BENIGN_ERRORS = (
+    "processor not found, type: im.message.message_read_v1",
+    "sent 1000 (OK); then received 1000 (OK) bye",
+)
+
+
+class LarkBenignErrorFilter(logging.Filter):
+    """丢掉 lark-oapi 的已知无害 ERROR，真故障（连不上、event loop）仍留下。"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno < logging.ERROR:
+            return True
+        msg = record.getMessage()
+        return not any(needle in msg for needle in _LARK_BENIGN_ERRORS)
+
+
 class ErrorDbHandler(logging.Handler):
     """把 WARNING+ 日志写入 DB，跨重启可查（管理后台错误记录面板）。"""
 
@@ -117,3 +133,7 @@ def setup_logging(level: str | None = None, log_file: str | None = None) -> None
                 root.addHandler(file_handler)
     # httpx 访问日志可能包含 Telegram bot token；始终禁止请求 URL 进入应用日志。
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    # lark-oapi 把已读回执未注册、WebSocket 正常关闭（1000）打成 ERROR。
+    lark = logging.getLogger("Lark")
+    if not any(isinstance(f, LarkBenignErrorFilter) for f in lark.filters):
+        lark.addFilter(LarkBenignErrorFilter())
