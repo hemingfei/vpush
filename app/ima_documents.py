@@ -276,10 +276,13 @@ class ImaPureClient:
                     continue
                 if item.get("media_type") == 99:
                     continue
+                name = str(item.get("name") or media_id)
+                if not (name.lower().endswith(".pdf") or media_id.lower().startswith("pdf_")):
+                    continue
                 records.append(
                     {
                         "media_id": media_id,
-                        "name": str(item.get("name") or media_id),
+                        "name": name,
                         "day": day,
                         "size": int(item.get("file_size") or 0),
                         "md5": str(item.get("md5_sum") or ""),

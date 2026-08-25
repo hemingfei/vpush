@@ -8,6 +8,7 @@ from app.ima_documents import (
     ImaDocumentConfig,
     ImaDocumentService,
     ImaDocumentStore,
+    ImaPureClient,
     _safe_error,
     decrypt_body,
     encrypt_body,
@@ -247,6 +248,22 @@ def test_document_api_auth_file_access_and_admin_config(tmp_path, monkeypatch):
     assert status["config"]["refresh_token"]["set"] is True
     assert "secret-token" not in saved.text
     assert "secret-token" not in str(status)
+
+
+def test_manifest_excludes_non_pdf_media():
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    responses = iter(
+        [
+            [{"media_type": 99, "folder_info": {"name": "0812", "folder_id": "day"}}],
+            [
+                {"media_id": "pdf_report", "name": "pdf_report", "file_size": 8},
+                {"media_id": "txt_report", "name": "txt_report", "file_size": 4},
+                {"media_id": "file_report", "name": "Report.pdf", "file_size": 8},
+            ],
+        ]
+    )
+    client.list_items = lambda folder_id: next(responses)
+    assert [item["media_id"] for item in client.manifest()] == ["file_report", "pdf_report"]
 
 
 def test_service_sync_is_incremental(tmp_path, monkeypatch):
