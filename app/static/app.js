@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.59";
+const APP_VERSION = "1.12.60";
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"];
@@ -366,13 +366,11 @@ function avatarHtml(name, url) {
 const NAV = [
   { group: "订阅", items: [
     { route: "timeline", icon: LIST_ICON, label: "最新动态" },
+    { route: "ima-documents", icon: BOOK_ICON, label: "IMA 文档" },
     { route: "home", icon: GRID_ICON, label: "订阅广场" },
     { route: "combinations", icon: TRENDING_ICON, label: "组合订阅" },
     { route: "mysubs", icon: BOOKMARK_ICON, label: "我的订阅" },
     { route: "settings", icon: GEAR_ICON, label: "推送设置" },
-  ]},
-  { group: "资料", items: [
-    { route: "ima-documents", icon: BOOK_ICON, label: "IMA 文档" },
   ]},
   { group: "", admin: true, subs: [
     { label: "内容管理", items: [
@@ -456,7 +454,6 @@ const MOBILE_NAV = [
   { route: "combinations", icon: TRENDING_ICON, label: "组合" },
   { route: "mysubs", icon: BOOKMARK_ICON, label: "订阅" },
   { route: "settings", icon: GEAR_ICON, label: "设置" },
-  { route: "ima-documents", icon: BOOK_ICON, label: "文档" },
 ];
 
 function renderBottomNav(user) {
@@ -1626,6 +1623,12 @@ async function renderTimeline(seq) {
       </div>
     </div>
     <div id="tl-active-chips-wrap"${live ? ' class="is-hidden"' : ""}>${live ? "" : tlActiveChipsHtml()}</div>
+    <div class="tl-ima-entry">
+      <button type="button" class="tl-ima-entry-btn" onclick="go('ima-documents')">
+        <span class="tl-ima-entry-icon">${BOOK_ICON}</span>
+        <span><strong>IMA 文档</strong><small>查看已归档研报 PDF 与全文</small></span>
+      </button>
+    </div>
     <section class="section-panel tl-feed-panel" id="tl-feed-panel">
       ${live ? liveFeedHeadHtml() : ""}
       <div id="feed">${reuse ? "" : TL_SKELETON}</div>

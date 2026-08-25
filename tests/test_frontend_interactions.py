@@ -1490,8 +1490,23 @@ def test_channel_status_poll_skips_identical_and_restores_focus():
 def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
-    assert 'href="/style.css?v=182"' in html
-    assert 'src="/app.js?v=254"' in html
+    assert 'href="/style.css?v=183"' in html
+    assert 'src="/app.js?v=255"' in html
+
+
+def test_ima_documents_follow_latest_dynamic_navigation():
+    src = APP_JS.read_text()
+    nav = src[src.index("const NAV ="):src.index("const SIDEBAR_SLIM_KEY")]
+    mobile = src[src.index("const MOBILE_NAV ="):src.index("function renderBottomNav")]
+    timeline = src[src.index("async function renderTimeline"):src.index("function startTimelinePoll")]
+    assert nav.index('route: "timeline"') < nav.index('route: "ima-documents"')
+    assert 'group: "资料"' not in nav
+    assert 'route: "ima-documents"' not in mobile
+    assert 'class="tl-ima-entry"' in timeline
+    assert "go('ima-documents')" in timeline
+    css = STYLE_CSS.read_text()
+    assert ".tl-ima-entry { display: none; }" in css
+    assert ".tl-ima-entry { display: block;" in css
 
 
 def test_register_placeholder_matches_username_min_length():
