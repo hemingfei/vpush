@@ -96,9 +96,10 @@ def decrypt_body(cipher_b64: str, key: bytes) -> bytes:
 def _safe_error(exc: BaseException) -> str:
     text = str(exc).splitlines()[0][:240]
     text = re.sub(r"https?://\S+", "<url>", text)
+    text = re.sub(r"(?i)((?:bearer|token|access_token|refresh_token|signature|sig)\s+)[^\s]+", r"\1<redacted>", text)
     return re.sub(
-        r"(?i)(ima-token|refresh_token|authorization|x-ima-cookie|cookie|sign|q-sign)\s*[=:]\s*[^&;\s]+",
-        r"\1=<redacted>",
+        r"(?i)((?:ima-token|token|access_token|refresh_token|authorization|signature|sig|sign|q-sign|x-ima-cookie)\s*[=:]\s*)[^&;,\s]+",
+        r"\1<redacted>",
         text,
     )
 
@@ -410,7 +411,10 @@ def _safe_component(value: str, fallback: str = "unknown") -> str:
 
 class ImaDocumentStore:
     def __init__(self, root: str | Path):
-        self.root = Path(root).expanduser().resolve()
+        raw_root = Path(root).expanduser()
+        if raw_root.exists() and raw_root.is_symlink():
+            raise ValueError("archive root must not be a symlink")
+        self.root = raw_root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.manifest_path = self.root / "manifest.json"
         self.state_path = self.root / "state.json"
@@ -435,7 +439,7 @@ class ImaDocumentStore:
         media_id = self.validate_media_id(record.get("media_id", ""))
         filename = safe_filename(str(record.get("name") or media_id), media_id)
         path = Path(filename)
-        unique_id = re.sub(r"[^A-Za-z0-9_-]", "_", media_id[-12:])
+        unique_id = hashlib.sha256(media_id.encode("utf-8")).hexdigest()[:16]
         filename = f"{path.stem[:150]}__{unique_id}{path.suffix or '.pdf'}"
         relative = Path(_safe_component(str(record.get("day") or "unknown"))) / filename
         day_path = self.root / relative.parent

@@ -86,7 +86,7 @@ def test_completed_media_is_skipped_but_missing_txt_is_pending(tmp_path):
     pdf, txt = store.pdf_path(record), store.txt_path(record)
     pdf.parent.mkdir(parents=True)
     pdf.write_bytes(b"%PDF-1.7")
-    store.save_state({"file_abc": {"pdf": "0825/report__file_abc.pdf", "txt": "0825/report__file_abc.txt"}})
+    store.save_state({"file_abc": {"pdf": str(pdf.relative_to(store.root)), "txt": str(txt.relative_to(store.root))}})
     assert store.is_complete(record) is False
     txt.write_text("text", encoding="utf-8")
     assert store.is_complete(record) is True
@@ -127,6 +127,18 @@ def test_error_summary_redacts_urls_and_credentials():
     text = _safe_error(RuntimeError("failed https://res-skb.ima.qq.com/a.pdf?sign=secret"))
     assert "res-skb.ima.qq.com" not in text
     assert "sign=secret" not in text
+    assert "secret" not in _safe_error(RuntimeError("Authorization: Bearer secret"))
+    assert "secret" not in _safe_error(RuntimeError("access_token=secret"))
+    assert "secret" not in _safe_error(RuntimeError("token secret"))
+
+
+def test_archive_root_rejects_symlink(tmp_path):
+    real_root = tmp_path / "real-ima"
+    real_root.mkdir()
+    link_root = tmp_path / "ima"
+    link_root.symlink_to(real_root, target_is_directory=True)
+    with pytest.raises(ValueError, match="root.*symlink"):
+        ImaDocumentStore(link_root)
 
 
 def test_archive_path_rejects_symlinked_day_directory(tmp_path):
