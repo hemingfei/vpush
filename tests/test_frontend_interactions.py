@@ -1490,8 +1490,8 @@ def test_channel_status_poll_skips_identical_and_restores_focus():
 def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
-    assert 'href="/style.css?v=181"' in html
-    assert 'src="/app.js?v=253"' in html
+    assert 'href="/style.css?v=182"' in html
+    assert 'src="/app.js?v=254"' in html
 
 
 def test_register_placeholder_matches_username_min_length():
