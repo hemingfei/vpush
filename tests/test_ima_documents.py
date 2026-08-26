@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import time
 
 import pytest
@@ -51,11 +52,80 @@ def test_archive_paths_are_relative_and_confined(tmp_path):
     assert ".." not in path.name
 
 
+def test_archive_uses_original_filename_when_unique(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima")
+    record = {"media_id": "file_abc", "name": "中金-宏观周报.pdf", "day": "0825"}
+    path = store.pdf_path(record)
+    assert path.name == "中金-宏观周报.pdf"
+    assert path.parent.name == "0825"
+    assert "__" not in path.name
+
+
 def test_archive_paths_are_unique_for_same_day_same_name(tmp_path):
     store = ImaDocumentStore(tmp_path / "ima")
     first = {"media_id": "file_first", "name": "report.pdf", "day": "0825"}
     second = {"media_id": "file_second", "name": "report.pdf", "day": "0825"}
-    assert store.pdf_path(first) != store.pdf_path(second)
+    first_path = store.pdf_path(first)
+    occupied = {str(first_path.relative_to(store.root))}
+    second_path = store.pdf_path(second, occupied=occupied)
+    assert first_path.name == "report.pdf"
+    assert second_path != first_path
+    assert second_path.parent == first_path.parent
+    assert second_path.name.endswith(".pdf")
+
+
+def test_restore_legacy_hashed_filenames_to_original_names(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima")
+    record = {"media_id": "file_abc", "name": "中金-宏观周报.pdf", "day": "0825"}
+    unique = hashlib.sha256(b"file_abc").hexdigest()[:16]
+    hashed = store.root / "0825" / f"中金-宏观周报__{unique}.pdf"
+    hashed.parent.mkdir(parents=True)
+    hashed.write_bytes(b"%PDF-1.7")
+    hashed.with_suffix(".txt").write_text("text", encoding="utf-8")
+    store.save_manifest([record])
+    store.save_state(
+        {
+            "file_abc": {
+                "name": record["name"],
+                "day": "0825",
+                "pdf": f"0825/中金-宏观周报__{unique}.pdf",
+                "txt": f"0825/中金-宏观周报__{unique}.txt",
+            }
+        }
+    )
+
+    result = store.restore_original_filenames()
+    assert result["renamed"] == 1
+    restored = store.pdf_path(record)
+    assert restored.name == "中金-宏观周报.pdf"
+    assert restored.is_file()
+    assert restored.with_suffix(".txt").is_file()
+    assert not hashed.exists()
+    state = store.load_state()
+    assert state["file_abc"]["pdf"] == "0825/中金-宏观周报.pdf"
+    assert state["file_abc"]["txt"] == "0825/中金-宏观周报.txt"
+
+
+def test_restore_keeps_remote_names_that_already_contain_double_underscore(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima")
+    record = {"media_id": "file_abc", "name": "研报__终稿.pdf", "day": "0825"}
+    path = store.pdf_path(record)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"%PDF-1.7")
+    path.with_suffix(".txt").write_text("text", encoding="utf-8")
+    store.save_manifest([record])
+    store.save_state(
+        {
+            "file_abc": {
+                "name": record["name"],
+                "pdf": str(path.relative_to(store.root)),
+                "txt": str(path.with_suffix(".txt").relative_to(store.root)),
+            }
+        }
+    )
+    assert store.restore_original_filenames()["renamed"] == 0
+    assert path.name == "研报__终稿.pdf"
+    assert path.is_file()
 
 
 def test_documents_ignore_invalid_manifest_media_ids(tmp_path):
@@ -233,7 +303,9 @@ def test_document_api_auth_file_access_and_admin_config(tmp_path, monkeypatch):
     assert pdf_response.status_code == 200
     assert pdf_response.headers["content-type"].startswith("application/pdf")
     download_response = client.get("/api/ima-documents/file_abc/pdf?download=1", headers=user_headers)
-    assert "attachment" in download_response.headers["content-disposition"]
+    disposition = download_response.headers["content-disposition"]
+    assert "attachment" in disposition
+    assert "Report.pdf" in disposition
     assert client.get("/api/ima-documents/missing/text", headers=user_headers).status_code == 404
     assert client.get("/api/ima-documents/../outside/text", headers=user_headers).status_code in (404, 400)
 
@@ -302,5 +374,58 @@ def test_service_sync_is_incremental(tmp_path, monkeypatch):
     monkeypatch.setattr(ima_documents, "convert_pdf", lambda pdf, txt: (txt.write_text("text", encoding="utf-8") or 4))
     service = ImaDocumentService(db, tmp_path / "ima")
     assert service.sync_once()["downloaded"] == 1
+    pdf = next((tmp_path / "ima").joinpath("0825").glob("*.pdf"))
+    assert pdf.name == "Report.pdf"
     assert service.sync_once()["downloaded"] == 0
     assert calls == ["file_abc"]
+
+
+def test_sync_restores_legacy_hashed_files_without_redownload(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    db = FakeDB(
+        {
+            "ima_pure_uid": "uid",
+            "ima_pure_refresh_token": "refresh",
+            "ima_pure_knowledge_base_id": "kb",
+            "ima_pure_root_folder_id": "root",
+        }
+    )
+    unique = hashlib.sha256(b"file_abc").hexdigest()[:16]
+    root = tmp_path / "ima"
+    hashed = root / "0825" / f"Report__{unique}.pdf"
+    hashed.parent.mkdir(parents=True)
+    hashed.write_bytes(b"%PDF-1.7")
+    hashed.with_suffix(".txt").write_text("text", encoding="utf-8")
+    store = ImaDocumentStore(root)
+    store.save_manifest([{"media_id": "file_abc", "name": "Report.pdf", "day": "0825", "size": 8}])
+    store.save_state(
+        {
+            "file_abc": {
+                "name": "Report.pdf",
+                "day": "0825",
+                "pdf": f"0825/Report__{unique}.pdf",
+                "txt": f"0825/Report__{unique}.txt",
+                "size": 8,
+                "chars": 4,
+            }
+        }
+    )
+
+    class FakeClient:
+        def __init__(self, config):
+            self.config = config
+
+        def manifest(self):
+            return [{"media_id": "file_abc", "name": "Report.pdf", "day": "0825", "size": 8}]
+
+        def get_media(self, media_id):
+            raise AssertionError("completed legacy file must not redownload")
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    service = ImaDocumentService(db, root)
+    result = service.sync_once()
+    assert result["downloaded"] == 0
+    assert (root / "0825" / "Report.pdf").is_file()
+    assert not hashed.exists()
+    assert store.load_state()["file_abc"]["pdf"] == "0825/Report.pdf"

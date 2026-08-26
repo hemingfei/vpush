@@ -438,25 +438,110 @@ class ImaDocumentStore:
     def _day_dir(self, day: str) -> Path:
         return self.root / _safe_component(day)
 
-    def pdf_path(self, record: dict[str, Any]) -> Path:
-        media_id = self.validate_media_id(record.get("media_id", ""))
-        filename = safe_filename(str(record.get("name") or media_id), media_id)
-        path = Path(filename)
-        unique_id = hashlib.sha256(media_id.encode("utf-8")).hexdigest()[:16]
-        filename = f"{path.stem[:150]}__{unique_id}{path.suffix or '.pdf'}"
-        relative = Path(_safe_component(str(record.get("day") or "unknown"))) / filename
-        day_path = self.root / relative.parent
+    @staticmethod
+    def _legacy_unique_tokens(media_id: str) -> set[str]:
+        return {
+            hashlib.sha256(media_id.encode("utf-8")).hexdigest()[:16],
+            re.sub(r"[^A-Za-z0-9_-]", "_", media_id[-12:]),
+        }
+
+    @staticmethod
+    def _collision_token(media_id: str) -> str:
+        return hashlib.sha256(media_id.encode("utf-8")).hexdigest()[:8]
+
+    def _is_legacy_hashed_name(self, filename: str, media_id: str, original_name: str) -> bool:
+        stem = Path(filename).stem
+        if "__" not in stem:
+            return False
+        base, suffix = stem.rsplit("__", 1)
+        if suffix not in self._legacy_unique_tokens(media_id):
+            return False
+        expected = Path(safe_filename(str(original_name or media_id), media_id)).stem[:150]
+        return base == expected
+
+    def _archive_path(self, relative: str) -> Path:
+        day_path = self.root / Path(relative).parent
         if day_path.is_symlink():
             raise ValueError("archive directory must not be a symlink")
-        candidate = self._safe_path(str(relative))
+        candidate = self._safe_path(relative)
         if candidate is None:
             raise ValueError("archive path escapes root")
         if candidate.parent.exists() and candidate.parent.is_symlink():
             raise ValueError("archive directory must not be a symlink")
         return candidate
 
-    def txt_path(self, record: dict[str, Any]) -> Path:
-        return self.pdf_path(record).with_suffix(".txt")
+    def pdf_path(self, record: dict[str, Any], *, occupied: set[str] | None = None) -> Path:
+        media_id = self.validate_media_id(record.get("media_id", ""))
+        filename = safe_filename(str(record.get("name") or media_id), media_id)
+        day = _safe_component(str(record.get("day") or "unknown"))
+        relative = f"{day}/{filename}"
+        if occupied and relative in occupied:
+            path = Path(filename)
+            filename = f"{path.stem}__{self._collision_token(media_id)}{path.suffix or '.pdf'}"
+            relative = f"{day}/{filename}"
+        return self._archive_path(relative)
+
+    def txt_path(self, record: dict[str, Any], *, occupied: set[str] | None = None) -> Path:
+        return self.pdf_path(record, occupied=occupied).with_suffix(".txt")
+
+    def _occupied_pdfs(self, state: dict[str, dict[str, Any]], skip_media_id: str = "") -> set[str]:
+        occupied: set[str] = set()
+        for media_id, item in state.items():
+            if media_id == skip_media_id or not isinstance(item, dict):
+                continue
+            relative = item.get("pdf")
+            if isinstance(relative, str) and relative:
+                occupied.add(relative)
+        return occupied
+
+    def restore_original_filenames(self) -> dict[str, int]:
+        records = {str(item.get("media_id") or ""): item for item in self.load_manifest()}
+        state = self.load_state()
+        occupied = self._occupied_pdfs(state)
+        renamed = 0
+        for media_id, item in list(state.items()):
+            if not isinstance(item, dict):
+                continue
+            try:
+                media_id = self.validate_media_id(media_id)
+            except ValueError:
+                continue
+            record = dict(records.get(media_id) or {})
+            record.setdefault("media_id", media_id)
+            record.setdefault("name", item.get("name") or media_id)
+            record.setdefault("day", item.get("day") or "unknown")
+            current_rel = item.get("pdf")
+            current_pdf = self._state_path(current_rel)
+            if not current_pdf or not current_pdf.is_file():
+                continue
+            if not self._is_legacy_hashed_name(
+                current_pdf.name, media_id, str(record.get("name") or "")
+            ):
+                continue
+            others = occupied - ({current_rel} if isinstance(current_rel, str) else set())
+            try:
+                desired = self.pdf_path(record, occupied=others)
+            except ValueError:
+                continue
+            if desired == current_pdf or desired.exists():
+                continue
+            current_txt = self._state_path(item.get("txt")) or current_pdf.with_suffix(".txt")
+            desired_txt = desired.with_suffix(".txt")
+            desired.parent.mkdir(parents=True, exist_ok=True)
+            if desired.parent.is_symlink():
+                continue
+            os.replace(current_pdf, desired)
+            if current_txt.is_file() and current_txt != desired_txt:
+                os.replace(current_txt, desired_txt)
+            new_pdf = str(desired.relative_to(self.root))
+            occupied.discard(str(current_rel or ""))
+            occupied.add(new_pdf)
+            item["pdf"] = new_pdf
+            item["txt"] = str(desired_txt.relative_to(self.root))
+            renamed += 1
+        if renamed:
+            self.save_state(state)
+        return {"renamed": renamed}
 
     def _load(self, path: Path, default: Any) -> Any:
         try:
@@ -608,6 +693,12 @@ class ImaDocumentService:
         }
 
     def start(self) -> None:
+        try:
+            restored = self.store.restore_original_filenames()
+            if restored.get("renamed"):
+                logger.info("IMA restored %s original filenames", restored["renamed"])
+        except Exception:
+            logger.exception("IMA original filename restore failed")
         with self._state_lock:
             if self._scheduler_thread and self._scheduler_thread.is_alive():
                 return
@@ -688,6 +779,7 @@ class ImaDocumentService:
             client = ImaPureClient(cfg)
             records = client.manifest()
             self.store.save_manifest(records)
+            self.store.restore_original_filenames()
             state = self.store.load_state()
             pending = [
                 record for record in records if not self.store.is_complete(record, state)
@@ -699,8 +791,9 @@ class ImaDocumentService:
                 if self._cancel_requested:
                     break
                 media_id = str(record["media_id"])
-                pdf = self.store.pdf_path(record)
-                txt = self.store.txt_path(record)
+                occupied = self.store._occupied_pdfs(state, skip_media_id=media_id)
+                pdf = self.store.pdf_path(record, occupied=occupied)
+                txt = self.store.txt_path(record, occupied=occupied)
                 try:
                     pdf.parent.mkdir(parents=True, exist_ok=True)
                     if pdf.parent.is_symlink():
