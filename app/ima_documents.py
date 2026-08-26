@@ -165,14 +165,17 @@ def normalize_discovered_groups(payload: Any) -> tuple[ImaGroupConfig, ...]:
     for item in raw if isinstance(raw, list) else []:
         if not isinstance(item, dict):
             continue
-        group_id = str(item.get("id") or item.get("knowledge_base_id") or "").strip()
-        root = str(item.get("root_folder_id") or item.get("folder_id") or "").strip()
-        if not group_id or not root:
+        group_id_value = item.get("id") or item.get("knowledge_base_id")
+        root_value = item.get("root_folder_id") or item.get("folder_id")
+        name_value = item.get("name") or item.get("kb_name") or group_id_value
+        if not all(isinstance(value, str) and value.strip() for value in (group_id_value, root_value, name_value)):
             continue
+        group_id = group_id_value.strip()
+        root = root_value.strip()
         groups.append(
             ImaGroupConfig(
                 id=group_id,
-                name=str(item.get("name") or item.get("kb_name") or group_id).strip()[:100],
+                name=name_value.strip()[:100],
                 knowledge_base_id=group_id,
                 root_folder_id=root,
                 source="discovered",
@@ -411,8 +414,14 @@ class ImaPureClient:
             cursor = str(payload["next_cursor"])
 
         for item in raw_items:
-            group_id = str(item.get("id") or item.get("knowledge_base_id") or "").strip()
-            root = str(item.get("root_folder_id") or item.get("folder_id") or "").strip()
+            group_id_value = item.get("id") or item.get("knowledge_base_id")
+            root_value = item.get("root_folder_id") or item.get("folder_id")
+            if not isinstance(group_id_value, str) or not group_id_value.strip():
+                continue
+            if root_value and (not isinstance(root_value, str) or not root_value.strip()):
+                continue
+            group_id = group_id_value.strip()
+            root = root_value.strip() if isinstance(root_value, str) else ""
             if group_id and not root and group_id not in resolved_roots:
                 root = ""
                 previous_kb = getattr(self, "_discovery_knowledge_base_id", None)
@@ -427,10 +436,14 @@ class ImaPureClient:
                 for folder in folders:
                     if not isinstance(folder, dict):
                         continue
-                    folder_info = folder.get("folder_info") or {}
-                    root = str(folder_info.get("folder_id") or "").strip()
-                    if root:
-                        break
+                    folder_info = folder.get("folder_info")
+                    if not isinstance(folder_info, dict):
+                        continue
+                    folder_id = folder_info.get("folder_id")
+                    if not isinstance(folder_id, str) or not folder_id.strip():
+                        continue
+                    root = folder_id.strip()
+                    break
                 resolved_roots[group_id] = root
             if not root and group_id:
                 root = resolved_roots.get(group_id, "")

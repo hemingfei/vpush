@@ -330,6 +330,35 @@ def test_discover_groups_normalizes_knowledge_base_payload():
     assert all(group.source == "discovered" for group in groups)
 
 
+def test_discovery_rejects_non_string_ids_and_roots():
+    groups = normalize_discovered_groups(
+        {
+            "knowledge_list": [
+                {"id": 123, "root_folder_id": "root-bad"},
+                {"id": "kb-bad", "root_folder_id": 456},
+                {"id": "kb-good", "root_folder_id": "root-good", "name": "有效"},
+            ]
+        }
+    )
+    assert [(group.id, group.root_folder_id) for group in groups] == [("kb-good", "root-good")]
+
+
+def test_discovery_root_fallback_skips_malformed_folder_info(monkeypatch):
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    client._token = lambda: "access"
+    client._open_json = lambda request: (
+        {"code": 0, "data": {"knowledge_base_list": [{"id": "kb-good", "name": "有效"}], "is_end": True}},
+        {},
+    )
+    client.list_items = lambda folder_id: [
+        {"media_type": 99, "folder_info": None},
+        {"media_type": 99, "folder_info": "invalid"},
+        {"media_type": 99, "folder_info": {"folder_id": "root-good"}},
+    ]
+    groups = client.discover_groups()
+    assert [(group.id, group.root_folder_id) for group in groups] == [("kb-good", "root-good")]
+
+
 def test_merge_groups_updates_discovered_without_deleting_manual():
     existing = (
         ImaGroupConfig("manual-1", "手动群", "kb-manual", "folder-manual", source="manual"),
