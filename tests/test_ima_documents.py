@@ -363,6 +363,7 @@ def test_discover_groups_normalizes_knowledge_base_payload():
                 {"knowledge_base_id": "kb-1", "name": "投行研报", "root_folder_id": "folder-1"},
                 {"id": "kb-2", "kb_name": "宏观策略", "folder_id": "folder-2"},
                 {"id": "missing-root"},
+                {"id": "uid-personal", "name": "个人知识库", "type": 1, "root_folder_id": "root-personal"},
                 "invalid",
             ]
         }
@@ -371,6 +372,7 @@ def test_discover_groups_normalizes_knowledge_base_payload():
     assert [(g.id, g.name, g.knowledge_base_id, g.root_folder_id) for g in groups] == [
         ("kb-1", "投行研报", "kb-1", "folder-1"),
         ("kb-2", "宏观策略", "kb-2", "folder-2"),
+        ("missing-root", "missing-root", "missing-root", "missing-root"),
     ]
     assert all(group.source == "discovered" for group in groups)
 
@@ -442,20 +444,60 @@ def test_discovery_rejects_non_string_ids_and_roots():
     assert [(group.id, group.root_folder_id) for group in groups] == [("kb-good", "root-good")]
 
 
-def test_discovery_root_fallback_skips_malformed_folder_info(monkeypatch):
+def test_discover_groups_uses_search_knowledge_base(monkeypatch):
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    requests = []
+    client._token = lambda: "access"
+
+    def open_json(request):
+        requests.append((request.full_url, json.loads(request.data)))
+        return {
+            "code": 0,
+            "searched_knowledge_bases": [
+                {"id": "uid-personal", "name": "我的知识库", "type": 1},
+                {"id": "kb-1", "name": "八大顶级投行研报VIP", "type": 3},
+            ],
+            "is_end": True,
+            "next_cursor": "ignore-when-ended",
+        }, {}
+
+    client._open_json = open_json
+    groups = client.discover_groups()
+    assert requests[0][0].endswith("/knowledge_tab_reader/search_knowledge_base")
+    assert requests[0][1] == {"query": "", "limit": 50, "cursor": ""}
+    assert [(group.id, group.name, group.root_folder_id) for group in groups] == [
+        ("kb-1", "八大顶级投行研报VIP", "kb-1"),
+    ]
+
+
+def test_discover_groups_reads_home_page_sections(monkeypatch):
     client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
     client._token = lambda: "access"
     client._open_json = lambda request: (
-        {"code": 0, "data": {"knowledge_base_list": [{"id": "kb-good", "name": "有效"}], "is_end": True}},
+        {
+            "code": 0,
+            "results": [
+                {
+                    "type": 1,
+                    "knowledge_base_list": [
+                        {"id": "uid-personal", "type": 1, "basic_info": {"name": "个人知识库"}},
+                    ],
+                },
+                {
+                    "type": 3,
+                    "knowledge_base_list": [
+                        {"id": "kb-join", "type": 3, "basic_info": {"name": "加入的知识库"}},
+                    ],
+                },
+            ],
+            "is_end": True,
+        },
         {},
     )
-    client.list_items = lambda folder_id: [
-        {"media_type": 99, "folder_info": None},
-        {"media_type": 99, "folder_info": "invalid"},
-        {"media_type": 99, "folder_info": {"folder_id": "root-good"}},
-    ]
     groups = client.discover_groups()
-    assert [(group.id, group.root_folder_id) for group in groups] == [("kb-good", "root-good")]
+    assert [(group.id, group.name, group.root_folder_id) for group in groups] == [
+        ("kb-join", "加入的知识库", "kb-join"),
+    ]
 
 
 def test_merge_groups_updates_discovered_without_deleting_manual():
@@ -470,6 +512,21 @@ def test_merge_groups_updates_discovered_without_deleting_manual():
     assert [(g.id, g.name, g.root_folder_id) for g in merged] == [
         ("manual-1", "手动群", "folder-manual"),
         ("kb-1", "新名称", "folder-new"),
+    ]
+
+
+def test_merge_groups_matches_existing_manual_by_knowledge_base_id():
+    existing = (
+        ImaGroupConfig("legacy", "外行研报", "kb-1", "folder-aug", source="manual"),
+    )
+    discovered = (
+        ImaGroupConfig("kb-1", "八大顶级投行研报VIP", "kb-1", "kb-1", source="discovered"),
+        ImaGroupConfig("kb-2", "新建知识库", "kb-2", "kb-2", source="discovered"),
+    )
+    merged = merge_groups(existing, discovered)
+    assert [(g.id, g.name, g.knowledge_base_id, g.root_folder_id, g.source) for g in merged] == [
+        ("legacy", "外行研报", "kb-1", "folder-aug", "manual"),
+        ("kb-2", "新建知识库", "kb-2", "kb-2", "discovered"),
     ]
 
 
@@ -500,7 +557,7 @@ def test_group_manifest_replaces_only_target_and_legacy_records(tmp_path):
     assert {item["media_id"] for item in store.load_manifest()} == {"new", "first-new", "second"}
 
 
-def test_discover_groups_paginates_and_resolves_missing_root(monkeypatch):
+def test_discover_groups_paginates_and_defaults_root_to_knowledge_base_id(monkeypatch):
     client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
     requests = []
     pages = iter([
@@ -509,10 +566,12 @@ def test_discover_groups_paginates_and_resolves_missing_root(monkeypatch):
     ])
     client._token = lambda: "access"
     client._open_json = lambda request: (requests.append(json.loads(request.data)) or (next(pages), {}))
-    client.list_items = lambda folder_id: [{"media_type": 99, "folder_info": {"folder_id": "root-1"}}]
     groups = client.discover_groups()
-    assert [group.root_folder_id for group in groups] == ["root-1", "root-2"]
-    assert requests == [{"cursor": ""}, {"cursor": "next"}]
+    assert [group.root_folder_id for group in groups] == ["kb-1", "root-2"]
+    assert requests == [
+        {"query": "", "limit": 50, "cursor": ""},
+        {"query": "", "limit": 50, "cursor": "next"},
+    ]
 
 
 def test_discovery_error_is_preserved_when_group_also_fails(tmp_path, monkeypatch):

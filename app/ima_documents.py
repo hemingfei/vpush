@@ -155,33 +155,67 @@ def _legacy_group(kb: str, root: str) -> ImaGroupConfig:
     )
 
 
-def normalize_discovered_groups(payload: Any) -> tuple[ImaGroupConfig, ...]:
+def _discovery_payload(payload: Any) -> dict[str, Any]:
     data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else payload
-    if not isinstance(data, dict):
-        return ()
-    raw: Any = []
-    for field in ("knowledge_base_list", "knowledge_list", "info_list"):
+    return data if isinstance(data, dict) else {}
+
+
+def _discovery_page_items(payload: Any) -> list[dict[str, Any]]:
+    data = _discovery_payload(payload)
+    items: list[dict[str, Any]] = []
+    for field in ("searched_knowledge_bases", "knowledge_base_list", "knowledge_list", "info_list"):
         candidate = data.get(field)
-        if candidate:
-            raw = candidate
+        if isinstance(candidate, list) and candidate:
+            items.extend(item for item in candidate if isinstance(item, dict))
             break
+    if items:
+        return items
+    for section in data.get("results") or []:
+        if not isinstance(section, dict):
+            continue
+        for item in section.get("knowledge_base_list") or []:
+            if isinstance(item, dict):
+                items.append(item)
+    return items
+
+
+def _prepare_discovery_item(item: dict[str, Any]) -> dict[str, Any] | None:
+    if item.get("type") == 1:
+        return None
+    group_id_value = item.get("id") or item.get("knowledge_base_id")
+    if not isinstance(group_id_value, str) or not group_id_value.strip():
+        return None
+    basic = item.get("basic_info") if isinstance(item.get("basic_info"), dict) else {}
+    name_value = item.get("name") or item.get("kb_name") or basic.get("name") or group_id_value
+    root_value = item.get("root_folder_id") or item.get("folder_id") or group_id_value
+    if not all(isinstance(value, str) and value.strip() for value in (name_value, root_value)):
+        return None
+    prepared = dict(item)
+    prepared["id"] = group_id_value.strip()
+    prepared["name"] = name_value.strip()
+    prepared["root_folder_id"] = root_value.strip()
+    return prepared
+
+
+def normalize_discovered_groups(payload: Any) -> tuple[ImaGroupConfig, ...]:
     groups: list[ImaGroupConfig] = []
-    for item in raw if isinstance(raw, list) else []:
-        if not isinstance(item, dict):
+    for item in _discovery_page_items(payload):
+        prepared = _prepare_discovery_item(item)
+        if prepared is None:
             continue
-        group_id_value = item.get("id") or item.get("knowledge_base_id")
-        root_value = item.get("root_folder_id") or item.get("folder_id")
-        name_value = item.get("name") or item.get("kb_name") or group_id_value
-        if not all(isinstance(value, str) and value.strip() for value in (group_id_value, root_value, name_value)):
+        root_value = prepared.get("root_folder_id")
+        name_value = prepared.get("name")
+        group_id = prepared["id"]
+        if not isinstance(root_value, str) or not root_value.strip():
             continue
-        group_id = group_id_value.strip()
-        root = root_value.strip()
+        if not isinstance(name_value, str) or not name_value.strip():
+            continue
         groups.append(
             ImaGroupConfig(
                 id=group_id,
                 name=name_value.strip()[:100],
                 knowledge_base_id=group_id,
-                root_folder_id=root,
+                root_folder_id=root_value.strip(),
                 source="discovered",
             )
         )
@@ -193,17 +227,22 @@ def merge_groups(
     discovered: tuple[ImaGroupConfig, ...],
 ) -> tuple[ImaGroupConfig, ...]:
     by_id = {group.id: group for group in existing}
+    kb_to_id = {group.knowledge_base_id: group.id for group in existing}
     for group in discovered:
         previous = by_id.get(group.id)
+        if previous is None:
+            previous = by_id.get(kb_to_id.get(group.knowledge_base_id, ""))
         manual = previous and previous.source == "manual"
-        by_id[group.id] = ImaGroupConfig(
-            id=group.id,
+        target_id = previous.id if previous else group.id
+        by_id[target_id] = ImaGroupConfig(
+            id=target_id,
             name=previous.name if manual else group.name,
             knowledge_base_id=group.knowledge_base_id,
-            root_folder_id=group.root_folder_id,
+            root_folder_id=previous.root_folder_id if manual else group.root_folder_id,
             enabled=previous.enabled if previous else True,
             source=previous.source if manual else "discovered",
         )
+        kb_to_id[group.knowledge_base_id] = target_id
     return tuple(by_id.values())
 
 
@@ -403,15 +442,17 @@ class ImaPureClient:
         raw_items: list[dict[str, Any]] = []
         cursor = ""
         seen_cursors: set[str] = set()
-        resolved_roots: dict[str, str] = {}
         while True:
             if cursor in seen_cursors:
                 raise RuntimeError("IMA group discovery pagination repeated cursor")
             seen_cursors.add(cursor)
             token = self._token()
             request = urllib.request.Request(
-                BASE + "/knowledge_tab_reader/list_knowledge_bases",
-                data=json.dumps({"cursor": cursor}, ensure_ascii=False).encode(),
+                BASE + "/knowledge_tab_reader/search_knowledge_base",
+                data=json.dumps(
+                    {"query": "", "limit": 50, "cursor": cursor},
+                    ensure_ascii=False,
+                ).encode(),
                 method="POST",
                 headers=self._headers(token),
             )
@@ -419,59 +460,14 @@ class ImaPureClient:
             code = data.get("code", data.get("retcode"))
             if code not in (0, None):
                 raise RuntimeError(f"IMA group discovery failed code={code}")
-            payload = data.get("data") if isinstance(data.get("data"), dict) else data
-            if not isinstance(payload, dict):
-                payload = {}
-            page_items: Any = []
-            for field in ("knowledge_base_list", "knowledge_list", "info_list"):
-                candidate = payload.get(field)
-                if candidate:
-                    page_items = candidate
-                    break
-            raw_items.extend(item for item in page_items if isinstance(item, dict))
+            payload = _discovery_payload(data)
+            raw_items.extend(_discovery_page_items(payload))
             if payload.get("is_end") is True or not payload.get("next_cursor"):
                 break
             next_cursor = str(payload["next_cursor"])
             if next_cursor in seen_cursors:
                 raise RuntimeError("IMA group discovery pagination repeated cursor")
             cursor = next_cursor
-
-        for item in raw_items:
-            group_id_value = item.get("id") or item.get("knowledge_base_id")
-            root_value = item.get("root_folder_id") or item.get("folder_id")
-            if not isinstance(group_id_value, str) or not group_id_value.strip():
-                continue
-            if root_value and (not isinstance(root_value, str) or not root_value.strip()):
-                continue
-            group_id = group_id_value.strip()
-            root = root_value.strip() if isinstance(root_value, str) else ""
-            if group_id and not root and group_id not in resolved_roots:
-                root = ""
-                previous_kb = getattr(self, "_discovery_knowledge_base_id", None)
-                self._discovery_knowledge_base_id = group_id
-                try:
-                    folders = self.list_items(group_id)
-                finally:
-                    if previous_kb is None:
-                        del self._discovery_knowledge_base_id
-                    else:
-                        self._discovery_knowledge_base_id = previous_kb
-                for folder in folders:
-                    if not isinstance(folder, dict):
-                        continue
-                    folder_info = folder.get("folder_info")
-                    if not isinstance(folder_info, dict):
-                        continue
-                    folder_id = folder_info.get("folder_id")
-                    if not isinstance(folder_id, str) or not folder_id.strip():
-                        continue
-                    root = folder_id.strip()
-                    break
-                resolved_roots[group_id] = root
-            if not root and group_id:
-                root = resolved_roots.get(group_id, "")
-            if root and group_id:
-                item["root_folder_id"] = root
         return normalize_discovered_groups({"knowledge_base_list": raw_items})
 
     def list_items(self, folder_id: str) -> list[dict[str, Any]]:
