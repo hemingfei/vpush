@@ -253,7 +253,8 @@ async function api(path, options = {}) {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
   const resp = await fetch(path, { ...options, headers });
-  if (resp.status === 401) {
+  // 登录/注册的 401 是「凭据错误」业务响应：透出后端 detail，不清会话
+  if (resp.status === 401 && !path.startsWith("/api/auth/")) {
     logout();
     throw new Error("登录已过期，请重新登录");
   }
@@ -271,7 +272,7 @@ async function apiBlob(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
   const resp = await fetch(path, { ...options, headers });
-  if (resp.status === 401) {
+  if (resp.status === 401 && !path.startsWith("/api/auth/")) {
     logout();
     throw new Error("登录已过期，请重新登录");
   }
@@ -314,6 +315,8 @@ function openImaDocument(mediaId) {
 function clearSessionCaches() {
   clearImaPdfUrl();
   if (typeof stopTimelinePoll === "function") stopTimelinePoll();
+  // 飞书扫码轮询不能跨会话存活：登出后它会每秒拿旧 token 打 401 循环
+  if (typeof stopFeishuPersonalPoll === "function") stopFeishuPersonalPoll();
   _tlPosts.length = 0;
   _tlOffset = 0;
   _tlHasMore = true;
