@@ -293,6 +293,17 @@ function _imaDocumentRoute(mediaId) {
   return `ima-documents/${encodeURIComponent(mediaId).replace(/'/g, "%27")}`;
 }
 
+function imaDocumentReaderRoute(mediaId) {
+  const listRoute = imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay);
+  const queryStart = listRoute.indexOf("?");
+  const query = queryStart >= 0 ? listRoute.slice(queryStart) : "";
+  return `${_imaDocumentRoute(mediaId)}${query}`;
+}
+
+function openImaDocument(mediaId) {
+  go(imaDocumentReaderRoute(mediaId));
+}
+
 function clearSessionCaches() {
   clearImaPdfUrl();
   if (typeof stopTimelinePoll === "function") stopTimelinePoll();
@@ -492,7 +503,7 @@ function imaDocumentRow(item, showGroupLabel = false) {
   const groupLabel = showGroupLabel && item.group_name
     ? `<span class="ima-doc-group-label">${escapeHtml(item.group_name)}</span>` : "";
   return `
-    <button type="button" class="ima-doc-row" onclick="go('${_imaDocumentRoute(item.media_id)}')">
+    <button type="button" class="ima-doc-row" data-media-id="${escapeHtml(item.media_id)}" onclick="openImaDocument(this.dataset.mediaId)">
       <span class="ima-doc-row-icon">${FILE_TEXT_ICON}</span>
       <span class="ima-doc-row-copy">
         <span class="ima-doc-row-name">${escapeHtml(item.name)}</span>
@@ -646,16 +657,22 @@ async function renderImaDocument(seq, mediaId) {
   const group = currentQuery.get("group") || state.imaDocumentsGroup || "";
   const query = currentQuery.get("q") || state.imaDocumentsQuery || "";
   const day = currentQuery.get("day") || state.imaDocumentsDay || "";
-  const backRoute = imaDocumentsRoute(group, query, day);
+  let backRoute = imaDocumentsRoute(group, query, day);
   $("#main").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
   try {
     const item = await api(`/api/ima-documents/${encodeURIComponent(mediaId)}`);
+    if (!currentQuery.has("group") && item.group_id) {
+      backRoute = imaDocumentsRoute(item.group_id, query, day);
+    }
     const text = await (await apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/text`)).text();
     if (!routeStillActive(seq)) return;
+    const groupContext = item.group_name
+      ? `<p class="ima-reader-group">${escapeHtml(item.group_name)}</p>`
+      : "";
     $("#main").innerHTML = `
       <section class="section-panel ima-reader">
         <header class="section-head ima-reader-head">
-          <div><p class="ima-reader-group">${escapeHtml(item.group_name || "")}</p><p class="ima-reader-day">${escapeHtml(item.day)}</p><h2 class="section-title ima-reader-title">${escapeHtml(item.name)}</h2><p class="section-meta">${fmtCacheBytes(item.size)} · ${Number(item.chars || 0).toLocaleString()} 字</p></div>
+          <div>${groupContext}<p class="ima-reader-day">${escapeHtml(item.day)}</p><h2 class="section-title ima-reader-title">${escapeHtml(item.name)}</h2><p class="section-meta">${fmtCacheBytes(item.size)} · ${Number(item.chars || 0).toLocaleString()} 字</p></div>
           <div class="toolbar ima-reader-actions"><button type="button" class="btn-normal" onclick="loadImaPdf('${escapeHtml(mediaId)}')">${FILE_TEXT_ICON}<span>查看 PDF</span></button><button type="button" class="btn-ghost" onclick="downloadImaPdf('${escapeHtml(mediaId)}')">${DOWNLOAD_ICON}<span>下载</span></button></div>
         </header>
         <div id="ima-pdf-panel" class="ima-pdf-panel" hidden><iframe id="ima-pdf-frame" title="PDF 预览"></iframe></div>

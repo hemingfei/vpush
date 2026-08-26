@@ -1685,7 +1685,7 @@ def test_ima_document_reader_preserves_group_context_and_metadata():
     """阅读页标题显示接口返回的群组和日期，并从当前 URL 保留列表筛选上下文。"""
     src = APP_JS.read_text()
     reader = _fn_body("renderImaDocument")
-    assert "const backRoute = imaDocumentsRoute(" in reader
+    assert "let backRoute = imaDocumentsRoute(" in reader
     assert 'currentQuery.get("group")' in reader
     assert 'currentQuery.get("q")' in reader
     assert 'currentQuery.get("day")' in reader
@@ -1699,6 +1699,39 @@ def test_ima_document_reader_preserves_group_context_and_metadata():
     assert "查看 PDF" in reader and "下载" in reader
     assert "item.name" in reader and "item.size" in reader and "item.chars" in reader
     assert "go(backRoute)" in reader
+
+
+def test_ima_document_reader_route_preserves_list_filters_without_inline_query_injection():
+    """文档行通过 handler 打开，并把当前列表 group/q/day 安全带入阅读 URL。"""
+    src = APP_JS.read_text()
+    row = _fn_body("imaDocumentRow")
+    route = _fn_body("imaDocumentReaderRoute")
+    opener = _fn_body("openImaDocument")
+    assert "function imaDocumentReaderRoute(mediaId)" in src
+    assert "imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay)" in route
+    assert "data-media-id=" in row
+    assert 'onclick="openImaDocument(this.dataset.mediaId)"' in row
+    assert "_imaDocumentRoute(item.media_id)" not in row
+    assert "go(imaDocumentReaderRoute(mediaId))" in opener
+
+
+def test_ima_document_reader_backroute_uses_detail_group_when_url_has_none():
+    """直接打开阅读页时，详情返回的群组 ID 也能恢复筛选列表。"""
+    reader = _fn_body("renderImaDocument")
+    assert "let backRoute = imaDocumentsRoute(group, query, day)" in reader
+    assert "item.group_id" in reader
+    assert "backRoute = imaDocumentsRoute(item.group_id, query, day)" in reader
+    assert reader.index("const item = await api") < reader.index("backRoute = imaDocumentsRoute(item.group_id, query, day)")
+    assert reader.index("backRoute = imaDocumentsRoute(item.group_id, query, day)") < reader.index("const text = await")
+
+
+def test_ima_document_reader_omits_empty_group_context():
+    """群组名称为空时不输出空的阅读页群组标记。"""
+    reader = _fn_body("renderImaDocument")
+    assert "const groupContext = item.group_name" in reader
+    assert "? `<p class=\"ima-reader-group\">${escapeHtml(item.group_name)}</p>`" in reader
+    assert "${groupContext}" in reader
+    assert 'class="ima-reader-group">${escapeHtml(item.group_name || "")}' not in reader
 
 
 def test_frontend_asset_urls_bust_browser_cache():
