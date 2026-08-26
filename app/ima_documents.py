@@ -1009,6 +1009,8 @@ class ImaDocumentService:
 
     def _schedule_loop(self) -> None:
         while not self._stop.wait(30):
+            if self._stop.is_set():
+                break
             cfg = self.config()
             now = time.time()
             with self._state_lock:
@@ -1024,6 +1026,8 @@ class ImaDocumentService:
             return {"status": "not_configured"}
         now = time.time()
         with self._state_lock:
+            if self._stop.is_set():
+                return {"status": "stopped"}
             if self._running:
                 return {"status": "already_running"}
             last = self.db.get_setting(IMA_PURE_LAST_STARTED_KEY) or "0"
@@ -1045,8 +1049,9 @@ class ImaDocumentService:
     def _worker(self) -> None:
         try:
             self.sync_once()
-        except Exception:  # noqa: BLE001 - worker must release its lock
-            logger.exception("IMA document sync failed")
+        except Exception as exc:  # noqa: BLE001 - worker must release its lock
+            error = _safe_error(exc)
+            logger.error("IMA document sync failed error=%s", error)
             self.db.set_setting(
                 IMA_PURE_LAST_RESULT_KEY,
                 json.dumps({"failed": 1, "last_error": "sync failed"}, ensure_ascii=False),

@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 import time
 
 import pytest
@@ -9,6 +10,7 @@ from app.ima_documents import (
     IMA_LEGACY_GROUP_ID,
     IMA_LEGACY_GROUP_NAME,
     IMA_PURE_GROUPS_KEY,
+    IMA_PURE_LAST_RESULT_KEY,
     ImaDocumentConfig,
     ImaDocumentService,
     ImaDocumentStore,
@@ -744,6 +746,69 @@ def test_archive_path_rejects_symlinked_day_directory(tmp_path):
     day.symlink_to(outside, target_is_directory=True)
     with pytest.raises(ValueError, match="symlink"):
         store.pdf_path({"media_id": "file_abc", "name": "report.pdf", "day": "0825"})
+
+
+def test_worker_logs_only_redacted_error(tmp_path, monkeypatch, caplog):
+    db = FakeDB(
+        {
+            "ima_pure_uid": "uid",
+            "ima_pure_refresh_token": "refresh",
+            "ima_pure_knowledge_base_id": "kb",
+            "ima_pure_root_folder_id": "root",
+        }
+    )
+    service = ImaDocumentService(db, tmp_path / "ima")
+
+    def fail():
+        raise RuntimeError("boom https://secret.invalid/file?sign=signature&token=secret")
+
+    monkeypatch.setattr(service, "sync_once", fail)
+    with caplog.at_level(logging.ERROR, logger="app.ima_documents"):
+        service._worker()
+    output = caplog.text
+    assert "secret.invalid" not in output
+    assert "signature" not in output
+    assert "secret" not in output
+    assert json.loads(db.get_setting(IMA_PURE_LAST_RESULT_KEY))["last_error"] == "sync failed"
+
+
+def test_scheduled_trigger_after_stop_does_not_start_worker(tmp_path):
+    db = FakeDB(
+        {
+            "ima_pure_uid": "uid",
+            "ima_pure_refresh_token": "refresh",
+            "ima_pure_knowledge_base_id": "kb",
+            "ima_pure_root_folder_id": "root",
+        }
+    )
+    service = ImaDocumentService(db, tmp_path / "ima")
+    service._stop.set()
+    result = service.trigger(scheduled=True)
+    assert result["status"] == "stopped"
+    assert service._worker_thread is None
+
+
+def test_scheduler_checks_stop_after_wait_before_trigger(tmp_path, monkeypatch):
+    service = ImaDocumentService(FakeDB(), tmp_path / "ima")
+    calls = []
+
+    class StoppedEvent:
+        def __init__(self):
+            self.waits = 0
+
+        def wait(self, timeout):
+            self.waits += 1
+            if self.waits > 1:
+                raise AssertionError("scheduler did not stop")
+            return False
+
+        def is_set(self):
+            return True
+
+    service._stop = StoppedEvent()
+    monkeypatch.setattr(service, "trigger", lambda scheduled=False: calls.append(scheduled))
+    service._schedule_loop()
+    assert calls == []
 
 
 def test_stop_waits_for_worker_without_timeout(tmp_path):
