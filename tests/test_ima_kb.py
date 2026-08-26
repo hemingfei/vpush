@@ -1,7 +1,13 @@
 from fastapi.testclient import TestClient
 
 from app.db import DB
-from app.ima_documents import ImaDocumentConfig, ImaDocumentStore, ImaGroupConfig, ImaPureClient
+from app.ima_documents import (
+    ImaDocumentConfig,
+    ImaDocumentService,
+    ImaDocumentStore,
+    ImaGroupConfig,
+    ImaPureClient,
+)
 from app.ima_kb import catalog, readable_group_ids
 from app.main import create_app
 from app.tagging import tag_text
@@ -232,3 +238,29 @@ def test_manifest_records_include_abstract_and_http_cover():
     records = client.manifest()
     assert records[0]["abstract"] == "排产上修"
     assert records[0]["cover_url"] == "https://example.com/c.jpg"
+
+
+def test_retag_all_writes_tags_from_title_and_txt(tmp_path):
+    db = DB(tmp_path / "tag.sqlite")
+    db.set_tag_vocabulary([{"tag": "新能源", "keywords": ["排产"]}])
+    db.set_stock_names(["宁德时代"])
+    service = ImaDocumentService(db, tmp_path / "ima")
+    record = {"media_id": "file_tag", "name": "宁德时代纪要.pdf", "day": "0826", "abstract": "排产上修"}
+    pdf = service.store.pdf_path(record)
+    txt = service.store.txt_path(record)
+    pdf.parent.mkdir(parents=True, exist_ok=True)
+    pdf.write_bytes(b"%PDF-1.7")
+    txt.write_text("排产上修，宁德时代", encoding="utf-8")
+    service.store.save_manifest([record])
+    service.store.save_state({
+        service.store.state_key(record): {
+            "pdf": str(pdf.relative_to(service.store.root)),
+            "txt": str(txt.relative_to(service.store.root)),
+        }
+    })
+    result = service.retag_all()
+    assert result["tagged"] >= 1
+    state = service.store.load_state()
+    tags = state[service.store.state_key(record)]["tags"]
+    assert "新能源" in tags
+    assert "宁德时代" in tags

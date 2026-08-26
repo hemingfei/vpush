@@ -1218,6 +1218,25 @@ def convert_pdf(pdf: Path, txt: Path) -> int:
     return len(text)
 
 
+def _tag_document(db: Any, record: dict[str, Any], txt: Path | None) -> list[str]:
+    from .stock_universe import aliases_for_tagging, names_for_plain_text_tagging
+    from .tagging import tag_text
+
+    body = str(record.get("abstract") or "")
+    if txt is not None and txt.is_file():
+        try:
+            body = body + "\n" + txt.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            pass
+    return tag_text(
+        str(record.get("name") or ""),
+        body,
+        db.get_tag_vocabulary(),
+        names_for_plain_text_tagging(db.get_stock_names(), db.get_stock_name_exclusions()),
+        aliases_for_tagging(db.get_stock_aliases(), db.get_stock_name_exclusions()),
+    )
+
+
 class ImaDocumentService:
     def __init__(self, db: Any, archive_root: str | Path):
         self.db = db
@@ -1261,6 +1280,10 @@ class ImaDocumentService:
                 logger.info("IMA restored %s original filenames", restored["renamed"])
         except Exception:
             logger.exception("IMA original filename restore failed")
+        try:
+            self.retag_all()
+        except Exception:
+            logger.exception("IMA document retag failed")
         with self._state_lock:
             if self._scheduler_thread and self._scheduler_thread.is_alive():
                 return
@@ -1269,6 +1292,35 @@ class ImaDocumentService:
                 target=self._schedule_loop, name="ima-documents", daemon=True
             )
             self._scheduler_thread.start()
+
+    def retag_all(self) -> dict[str, int]:
+        records = self.store.load_manifest()
+        state = self.store.load_state()
+        processed = 0
+        tagged = 0
+        dirty = False
+        for record in records:
+            try:
+                key = self.store.state_key(record)
+            except ValueError:
+                continue
+            item = state.get(key)
+            if not isinstance(item, dict):
+                continue
+            existing = item.get("tags")
+            if isinstance(existing, list) and existing:
+                continue
+            txt = self.store._state_path(item.get("txt"))
+            tags = _tag_document(self.db, record, txt)
+            item["tags"] = tags
+            state[key] = item
+            processed += 1
+            if tags:
+                tagged += 1
+            dirty = True
+        if dirty:
+            self.store.save_state(state)
+        return {"processed": processed, "tagged": tagged}
 
     def stop(self) -> None:
         self._stop.set()
@@ -1386,7 +1438,8 @@ class ImaDocumentService:
                 else:
                     size, md5 = client._pdf_info(pdf)
                 chars = convert_pdf(pdf, txt)
-                state[self.store.state_key(record)] = {
+                key = self.store.state_key(record)
+                state[key] = {
                     "group_id": group.id,
                     "group_name": group.name,
                     "day": record.get("day") or "unknown",
@@ -1398,6 +1451,10 @@ class ImaDocumentService:
                     "chars": chars,
                     "downloaded_at": datetime.now(UTC).isoformat(),
                 }
+                try:
+                    state[key]["tags"] = _tag_document(self.db, record, txt)
+                except Exception:
+                    logger.exception("IMA document tag failed media=%s", media_id[:32])
                 self.store.save_state(state)
                 downloaded += 1
             except Exception as exc:  # noqa: BLE001 - isolate one bad file
