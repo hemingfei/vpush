@@ -4218,6 +4218,74 @@ function rateBar(rate) {
     </div>`;
 }
 
+function imaGroupRowHtml(group, index) {
+  group = group || {};
+  index = Number.isInteger(index) ? index : 0;
+  const groupId = String(group.id || "");
+  return `
+    <div class="cfg-fields" data-group-row data-group-id="${escapeHtml(groupId)}">
+      <label class="cfg-field"><span>群组名称</span><input type="text" class="form-control" data-field="name" value="${escapeHtml(group.name || "")}" maxlength="100"></label>
+      <label class="cfg-field"><span>知识库 ID</span><input type="text" class="form-control" data-field="knowledge_base_id" value="${escapeHtml(group.knowledge_base_id || "")}" maxlength="64"></label>
+      <label class="cfg-field"><span>根文件夹 ID</span><input type="text" class="form-control" data-field="root_folder_id" value="${escapeHtml(group.root_folder_id || "")}" maxlength="128"></label>
+      <label class="cfg-field cfg-check"><input type="checkbox" data-field="enabled" ${group.enabled !== false ? "checked" : ""}><span class="cfg-check-desc">启用</span></label>
+      <div class="toolbar"><button type="button" class="btn-ghost danger" onclick="removeImaGroupRow(this)" aria-label="移除 IMA 群组">移除</button></div>
+    </div>`;
+}
+
+function renderImaGroupRows(groups) {
+  const rows = Array.isArray(groups) ? groups : [];
+  if (!rows.length) {
+    return '<div class="empty">尚未添加群组 <button type="button" class="btn-normal btn-add" onclick="addImaGroupRow()">添加 IMA 群组</button></div>';
+  }
+  return rows.map((group, index) => imaGroupRowHtml(group, index)).join("");
+}
+
+function addImaGroupRow(group) {
+  group = group || {};
+  const target = $("#ima-groups");
+  if (!target) return;
+  const empty = target.querySelector(".empty");
+  const index = target.querySelectorAll("[data-group-row]").length;
+  const html = imaGroupRowHtml(group, index);
+  if (empty) target.innerHTML = html;
+  else target.insertAdjacentHTML("beforeend", html);
+}
+
+function removeImaGroupRow(button) {
+  const row = button?.closest("[data-group-row]");
+  if (!row) return;
+  const target = $("#ima-groups");
+  row.remove();
+  if (target && !target.querySelector("[data-group-row]")) {
+    target.innerHTML = renderImaGroupRows([]);
+  }
+}
+
+function readImaGroupRows() {
+  return Array.from(document.querySelectorAll("#ima-groups [data-group-row]")).map((row) => {
+    const value = (field) => row.querySelector(`[data-field="${field}"]`)?.value?.trim() || "";
+    return {
+      id: row.dataset.groupId || null,
+      name: value("name"),
+      knowledge_base_id: value("knowledge_base_id"),
+      root_folder_id: value("root_folder_id"),
+      enabled: !!row.querySelector('[data-field="enabled"]')?.checked,
+    };
+  });
+}
+
+function imaGroupDiscoveryStatusText(status) {
+  const result = status?.last_result || {};
+  const discoveryError = String(result.discovery_error || "").trim();
+  if (discoveryError) return `自动发现失败：${escapeHtml(discoveryError)}`;
+  const groups = Array.isArray(status?.config?.groups) ? status.config.groups : [];
+  if (!groups.length) return "尚未发现或添加群组";
+  const synced = Number.isFinite(Number(result.succeeded_groups))
+    ? ` · 最近同步 ${Number(result.succeeded_groups)} 个群组`
+    : " · 等待同步";
+  return `已发现 ${groups.length} 个群组${synced}`;
+}
+
 async function loadAdminStats() {
   stopStatsTimer();
   const s = await api("/api/stats");
@@ -4465,6 +4533,11 @@ async function loadAdminStats() {
           <label class="cfg-field"><span>检查间隔<span class="cfg-unit">分钟</span></span><input id="ima-pure-interval" type="number" class="form-control" min="30" max="10080" value="${Math.round(Number(pure.interval_seconds || 3600) / 60)}"></label>
           <label class="cfg-field cfg-field--wide"><span>Refresh Token</span><input id="ima-pure-token" class="form-control" type="password" autocomplete="off" placeholder="${pure.refresh_token?.set ? "已保存，留空保持不变" : "重新登录 IMA 后粘贴"}"></label>
         </div>
+        <div class="toolbar ima-groups-toolbar">
+          <span id="ima-group-discovery-status" class="muted">${imaGroupDiscoveryStatusText(imaCollector)}</span>
+          <button type="button" class="btn-ghost" onclick="addImaGroupRow()">添加 IMA 群组</button>
+        </div>
+        <div id="ima-groups">${renderImaGroupRows(imaCollector.config && imaCollector.config.groups)}</div>
         <div class="ima-collector-foot">
           <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
           <div class="toolbar"><button type="button" class="btn-normal" onclick="saveImaCollector()">保存采集配置</button><button type="button" class="btn-ghost" onclick="triggerImaCollector()">${REFRESH_ICON}<span>立即同步</span></button></div>
@@ -5195,6 +5268,7 @@ async function saveImaCollector() {
     knowledge_base_id: $("#ima-pure-kb")?.value?.trim() || "",
     root_folder_id: $("#ima-pure-root")?.value?.trim() || "",
     interval_seconds: minutes * 60,
+    groups: readImaGroupRows(),
   };
   const token = $("#ima-pure-token")?.value?.trim() || "";
   if (token) body.refresh_token = token;

@@ -962,6 +962,53 @@ def test_ima_document_collector_lives_in_fetch_settings():
     assert '<h2 class="section-title">IMA 文档采集</h2>' not in src[cookies:]
 
 
+def test_ima_group_render_has_safe_rows_and_recovery_controls():
+    """IMA 设置展示群组行、发现状态和可恢复的增删控件。"""
+    src = APP_JS.read_text()
+    row = _fn_body("imaGroupRowHtml")
+    render = _fn_body("loadAdminStats")
+    assert 'id="ima-groups"' in render
+    assert 'id="ima-group-discovery-status"' in render
+    assert "renderImaGroupRows(imaCollector.config && imaCollector.config.groups" in render
+    assert "addImaGroupRow()" in render
+    assert "removeImaGroupRow(this)" in row
+    assert 'data-group-row' in row and 'data-group-id="${' in row
+    for field in ("name", "knowledge_base_id", "root_folder_id"):
+        assert f'data-field="{field}"' in row
+        assert f"escapeHtml(group.{field}" in row
+    assert 'type="checkbox"' in row and 'data-field="enabled"' in row
+    assert 'aria-label="移除 IMA 群组"' in row
+    assert "尚未添加群组" in src
+
+
+def test_ima_group_save_reads_rows_and_preserves_legacy_token_fields():
+    """采集配置保存同时提交群组，并保留旧 scalar/token 兼容字段。"""
+    save = _fn_body("saveImaCollector")
+    assert "groups: readImaGroupRows()" in save
+    assert "function readImaGroupRows" in APP_JS.read_text()
+    for field in ("uid", "knowledge_base_id", "root_folder_id", "interval_seconds"):
+        assert f"{field}:" in save
+    assert "if (token) body.refresh_token = token" in save
+    assert 'id="ima-pure-token"' in _fn_body("loadAdminStats")
+    token_input = re.search(r'id="ima-pure-token"[^>]*', save + _fn_body("loadAdminStats"))
+    assert token_input and 'type="password"' in token_input.group(0)
+    assert 'autocomplete="off"' in token_input.group(0)
+    assert 'value="${pure.refresh_token' not in APP_JS.read_text()
+
+
+def test_ima_discovery_status_is_safe_and_does_not_render_secrets():
+    """发现错误只输出 escaped 文本，IMA token 不得进入 HTML value/placeholder。"""
+    src = APP_JS.read_text()
+    stats = _fn_body("imaGroupDiscoveryStatusText")
+    assert "discovery_error" in stats
+    assert "escapeHtml" in stats
+    assert "last_result" in stats
+    assert "refresh_token" not in stats
+    assert "imaGroupDiscoveryStatusText" in _fn_body("loadAdminStats")
+    assert 'placeholder="${pure.refresh_token' in src
+    assert 'value="${pure.refresh_token' not in src
+
+
 def test_admin_stats_has_zsxq_cache_settings():
     """抓取设置里有知识星球组；保存带上翻页/间隔/预缓存；清理走独立接口不整页重建。"""
     stats = _fn_body("loadAdminStats")
