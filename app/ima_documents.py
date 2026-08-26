@@ -114,6 +114,20 @@ def _setting(db: Any, key: str, env_key: str, default: str = "") -> str:
     return str(value or os.environ.get(env_key, "") or default).strip()
 
 
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if re.fullmatch(r"-?\d+", text):
+            return int(text)
+    return None
+
+
 def _interval(value: Any) -> int:
     try:
         number = int(value)
@@ -549,10 +563,8 @@ class ImaPureClient:
                 name_value = item.get("name")
                 if name_value is not None and not isinstance(name_value, str):
                     continue
-                file_size = item.get("file_size")
-                if file_size is not None and (
-                    isinstance(file_size, bool) or not isinstance(file_size, int)
-                ):
+                file_size = _optional_int(item.get("file_size"))
+                if file_size is None:
                     continue
                 md5_value = item.get("md5_sum")
                 if md5_value is not None and not isinstance(md5_value, str):
@@ -1015,6 +1027,39 @@ class ImaDocumentStore:
             {"generated_at": datetime.now(UTC).isoformat(), "files": records},
         )
 
+    def rebuild_manifest_from_state(self) -> int:
+        if self.load_manifest():
+            return 0
+        records: list[dict[str, Any]] = []
+        for key, item in self.load_state().items():
+            if not isinstance(item, dict):
+                continue
+            media_id = str(item.get("media_id") or key)
+            if "__" in media_id and not media_id.startswith("pdf_"):
+                media_id = media_id.rsplit("__", 1)[-1]
+            try:
+                media_id = self.validate_media_id(media_id)
+            except ValueError:
+                continue
+            pdf = self._state_path(item.get("pdf"))
+            if pdf is None or not pdf.is_file():
+                continue
+            records.append(
+                {
+                    "media_id": media_id,
+                    "name": str(item.get("name") or media_id),
+                    "day": str(item.get("day") or "unknown"),
+                    "size": item.get("size") or 0,
+                    "md5": str(item.get("md5") or ""),
+                    "ts": "",
+                    "group_id": str(item.get("group_id") or self._legacy_group_id or IMA_LEGACY_GROUP_ID),
+                    "group_name": str(item.get("group_name") or ""),
+                }
+            )
+        if records:
+            self.save_manifest(records)
+        return len(records)
+
     def save_group_manifest(self, group_id: str, records: list[dict[str, Any]]) -> None:
         group_id = str(group_id)
         compatibility_group = group_id == IMA_LEGACY_GROUP_ID or group_id.startswith("legacy:")
@@ -1300,6 +1345,12 @@ class ImaDocumentService:
         except Exception:
             logger.exception("IMA original filename restore failed")
         try:
+            rebuilt = self.store.rebuild_manifest_from_state()
+            if rebuilt:
+                logger.info("IMA rebuilt %s manifest records from state", rebuilt)
+        except Exception:
+            logger.exception("IMA manifest rebuild from state failed")
+        try:
             self.retag_all()
         except Exception:
             logger.exception("IMA document retag failed")
@@ -1425,7 +1476,19 @@ class ImaDocumentService:
             }
             for record in client.manifest()
         ]
-        self.store.save_group_manifest(group.id, records)
+        if not records:
+            existing = [
+                record
+                for record in self.store.load_manifest()
+                if str(record.get("group_id") or IMA_LEGACY_GROUP_ID) == group.id
+            ]
+            if existing:
+                logger.warning("IMA group listing empty, keep existing manifest group=%s", group.id[:64])
+                records = existing
+            else:
+                self.store.save_group_manifest(group.id, records)
+        else:
+            self.store.save_group_manifest(group.id, records)
         self.store.restore_original_filenames()
         state.clear()
         state.update(self.store.load_state())

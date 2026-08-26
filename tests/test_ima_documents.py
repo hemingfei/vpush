@@ -1407,6 +1407,85 @@ def test_manifest_skips_malformed_folders_and_items():
     assert [record["media_id"] for record in records] == ["valid-file"]
 
 
+def test_manifest_accepts_string_file_size():
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    responses = iter(
+        [
+            [{"media_type": 99, "folder_info": {"name": "0825", "folder_id": "day"}}],
+            [
+                {
+                    "media_id": "pdf_abc123",
+                    "title": "伯恩斯坦-优质潜艇三明治.pdf",
+                    "file_size": "16491584",
+                }
+            ],
+        ]
+    )
+    client.list_items = lambda folder_id: next(responses)
+    records = client.manifest()
+    assert records[0]["media_id"] == "pdf_abc123"
+    assert records[0]["size"] == 16491584
+
+
+def test_sync_keeps_existing_manifest_when_listing_empty(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    db = FakeDB(
+        {
+            "ima_pure_uid": "uid",
+            "ima_pure_refresh_token": "refresh",
+            "ima_pure_knowledge_base_id": "kb",
+            "ima_pure_root_folder_id": "root",
+        }
+    )
+    service = ImaDocumentService(db, tmp_path / "ima")
+    service.store.save_manifest(
+        [{"media_id": "pdf_old", "name": "old.pdf", "day": "0801", "group_id": IMA_LEGACY_GROUP_ID}]
+    )
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.group = group
+
+        def discover_groups(self):
+            return ()
+
+        def manifest(self):
+            return []
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    result = service.sync_once()
+    assert result["total"] == 1
+    assert [record["media_id"] for record in service.store.load_manifest()] == ["pdf_old"]
+
+
+def test_rebuild_manifest_from_state_when_index_empty(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima")
+    media_id = "pdf_e3acd95dd822029938ddb48d5e628c06"
+    record = {"media_id": media_id, "name": "高盛-美图新AI产品.pdf", "day": "0801"}
+    pdf = store.pdf_path(record)
+    pdf.parent.mkdir(parents=True)
+    pdf.write_bytes(b"%PDF-1.7")
+    store.save_state(
+        {
+            media_id: {
+                "name": "高盛-美图新AI产品.pdf",
+                "day": "0801",
+                "pdf": str(pdf.relative_to(store.root)),
+                "txt": str(pdf.with_suffix(".txt").relative_to(store.root)),
+                "size": 8,
+            }
+        }
+    )
+    store.save_manifest([])
+    assert store.load_manifest() == []
+    assert store.rebuild_manifest_from_state() == 1
+    restored = store.load_manifest()
+    assert restored[0]["media_id"] == media_id
+    assert restored[0]["name"] == "高盛-美图新AI产品.pdf"
+    assert restored[0]["day"] == "0801"
+
+
 def test_manifest_uses_chinese_title_as_filename():
     client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
     responses = iter(
