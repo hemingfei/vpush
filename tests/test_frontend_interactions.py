@@ -1257,6 +1257,28 @@ def test_ima_documents_filters_round_trip_through_local_url():
     assert "submitImaDocumentsSearch()" in render
 
 
+def test_ima_documents_refresh_and_retry_advance_local_route_seq():
+    """刷新与重试必须递增局部路由序号，避免旧请求覆盖新结果。"""
+    src = APP_JS.read_text()
+    render = _fn_body("renderImaDocuments")
+    refresh = _fn_body("refreshImaDocuments")
+    assert "const seq = ++routeRenderSeq;" in refresh
+    assert "renderImaDocuments(seq)" in refresh
+    assert 'onclick="refreshImaDocuments()"' in render
+    assert "refreshImaDocuments()" in render
+
+
+def test_ima_document_headers_have_desktop_flex_alignment():
+    """文档列表和阅读器标题桌面端使用 flex 横向对齐，移动端继续使用 grid。"""
+    css = STYLE_CSS.read_text()
+    for selector in (".ima-docs-head", ".ima-reader-head"):
+        block = re.search(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", css)
+        assert block, f"缺少 {selector} 样式"
+        for declaration in ("display: flex", "justify-content: space-between", "gap:"):
+            assert declaration in block.group(1), f"{selector} 缺少 {declaration}"
+    assert ".ima-reader-head { display: grid; gap: 12px; }" in css
+
+
 def test_ima_documents_group_switcher_is_responsive_and_touch_friendly():
 
     css = STYLE_CSS.read_text()

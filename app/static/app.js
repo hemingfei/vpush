@@ -575,6 +575,11 @@ function searchImaDocuments() {
   submitImaDocumentsSearch();
 }
 
+function refreshImaDocuments() {
+  const seq = ++routeRenderSeq;
+  renderImaDocuments(seq);
+}
+
 async function renderImaDocuments(seq, encodedMediaId = "") {
   const mediaId = encodedMediaId ? decodeURIComponent(encodedMediaId) : "";
   if (mediaId) {
@@ -593,7 +598,7 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     <section class="section-panel ima-docs-shell">
       <header class="section-head ima-docs-head">
         <div><h2 id="ima-doc-title" class="section-title">IMA 文档</h2><p id="ima-doc-meta" class="section-meta">已归档 PDF 与全文文本</p></div>
-        <button type="button" class="btn-ghost" onclick="renderImaDocuments(routeRenderSeq)">${REFRESH_ICON}<span>刷新</span></button>
+        <button type="button" class="btn-ghost" onclick="refreshImaDocuments()">${REFRESH_ICON}<span>刷新</span></button>
       </header>
       <div id="ima-doc-groups" class="ima-doc-group-switcher"></div>
       <div class="ima-doc-toolbar">
@@ -630,7 +635,7 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
       ? imaDocumentGroups(items, !selectedGroup)
       : emptyState("暂无匹配的 IMA 文档");
   } catch (err) {
-    if (routeStillActive(seq)) $("#ima-docs-body").innerHTML = emptyState(`加载失败：${err.message}`, `<button type="button" class="btn-normal" onclick="renderImaDocuments(routeRenderSeq)">重试</button>`);
+    if (routeStillActive(seq)) $("#ima-docs-body").innerHTML = emptyState(`加载失败：${err.message}`, `<button type="button" class="btn-normal" onclick="refreshImaDocuments()">重试</button>`);
   }
 }
 

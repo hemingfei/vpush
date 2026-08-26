@@ -2573,7 +2573,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .cube-nav-last { font-size: var(--text-xs); font-weight: var(--font-weight-semibold); font-variant-numeric: tabular-nums; }
 
 /* IMA 文档中心 */
-.ima-docs-head { align-items: center; }
+.ima-docs-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .ima-docs-head .btn-ghost,
 .ima-reader-actions button { display: inline-flex; align-items: center; gap: 7px; }
 .ima-docs-head svg,
@@ -2607,7 +2607,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .ima-doc-row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-strong); font-size: var(--text-body); }
 .ima-doc-row-meta { color: var(--color-text-muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 .ima-doc-row-arrow { color: var(--color-text-faint); font-size: 22px; line-height: 1; }
-.ima-reader-head { align-items: flex-start; }
+.ima-reader-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .ima-reader-day { margin: 0 0 4px; color: var(--color-accent-text); font-size: var(--text-xs); }
 .ima-reader-title { overflow-wrap: anywhere; }
 .ima-reader-actions { flex-shrink: 0; }
