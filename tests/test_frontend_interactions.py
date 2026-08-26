@@ -14,6 +14,16 @@ APP_JS = Path(__file__).parent.parent / "app" / "static" / "app.js"
 STYLE_CSS = APP_JS.with_name("style.css")
 
 
+def test_knowledge_row_hides_unused_cover_fallback_icon():
+    """封面成功时隐藏的备用图标不得撑开文档行的缩略图列。"""
+    css = STYLE_CSS.read_text()
+    assert re.search(r"\.ima-doc-row-icon\[hidden\]\s*\{[^}]*display:\s*none", css), (
+        "备用图标带 hidden 时必须明确保持 display:none，避免覆盖浏览器默认隐藏样式"
+    )
+    assert 'class="ima-doc-row-icon" hidden' in APP_JS.read_text()
+
+
+
 def _fn_body(name: str) -> str:
     """提取指定函数（或变量=函数）的函数体。"""
     src = APP_JS.read_text()
@@ -1785,9 +1795,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=191"' in html
-    assert 'src="/app.js?v=270"' in html
-    assert 'dav-shell-v139' in sw
+    assert 'href="/style.css?v=192"' in html
+    assert 'src="/app.js?v=271"' in html
+    assert 'dav-shell-v140' in sw
 
 
 def test_ima_documents_follow_latest_dynamic_navigation():

@@ -2646,6 +2646,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .ima-doc-row:hover { background: var(--color-surface-soft); }
 .ima-doc-row-thumb { grid-column: 1; display: flex; align-items: flex-start; width: 56px; min-height: 20px; }
 .ima-doc-row-icon { grid-column: 1; color: var(--color-accent-text); display: flex; padding-top: 4px; }
+.ima-doc-row-icon[hidden] { display: none; }
 .ima-doc-row-icon svg { width: 20px; height: 20px; }
 .ima-doc-cover { width: 56px; height: 56px; object-fit: cover; border-radius: var(--radius-control); background: var(--color-surface-soft); }
 .ima-doc-row-copy { grid-column: 2; min-width: 0; display: grid; gap: 4px; }
