@@ -962,6 +962,76 @@ def test_ima_document_collector_lives_in_fetch_settings():
     assert '<h2 class="section-title">IMA 文档采集</h2>' not in src[cookies:]
 
 
+def test_ima_group_render_has_safe_rows_and_recovery_controls():
+    """IMA 设置展示群组行、发现状态和可恢复的增删控件。"""
+    src = APP_JS.read_text()
+    row = _fn_body("imaGroupRowHtml")
+    render = _fn_body("loadAdminStats")
+    assert 'id="ima-groups"' in render
+    assert 'id="ima-group-discovery-status"' in render
+    assert "renderImaGroupRows(imaCollector.config && imaCollector.config.groups" in render
+    assert "addImaGroupRow()" in render
+    assert "removeImaGroupRow(this)" in row
+    assert 'data-group-row' in row and 'data-group-id="${' in row
+    assert 'data-group-index="${index}"' in row
+    assert "imaGroupRowHtml(group, index)" in _fn_body("renderImaGroupRows")
+    for field in ("name", "knowledge_base_id", "root_folder_id"):
+        assert f'data-field="{field}"' in row
+        assert f"escapeHtml(group.{field}" in row
+    assert 'type="checkbox"' in row and 'data-field="enabled"' in row
+    assert 'aria-label="移除 IMA 群组"' in row
+    assert "尚未添加群组" in src
+
+
+def test_ima_group_add_uses_max_index_after_middle_row_removal():
+    """新增群组不能复用当前行数量，删除中间行后仍须保持唯一索引。"""
+    add = _fn_body("addImaGroupRow")
+    assert "row.dataset.groupIndex" in add
+    assert "Math.max(...indexes) + 1" in add
+    assert "indexes.length ?" in add
+    assert " : 0" in add
+
+
+def test_ima_discovery_error_redacts_url_and_secret_key_values_before_escape():
+    """发现错误中的 URL、token、sign 等敏感内容必须先脱敏再 escapeHtml。"""
+    sample = "自动发现失败：https://ima.qq.com/api?token=secret&sign=signature"
+    assert "https://ima.qq.com" in sample and "token=secret" in sample and "sign=signature" in sample
+    safe = _fn_body("imaSafeError")
+    for pattern in ("https?:", "token", "refresh_token", "authorization", "sign", "q-sign", "Bearer", "<redacted>"):
+        assert pattern in safe
+    stats = _fn_body("imaGroupDiscoveryStatusText")
+    assert "imaSafeError(discoveryError)" in stats
+    assert "escapeHtml(safeError)" in stats
+
+
+def test_ima_group_save_reads_rows_and_preserves_legacy_token_fields():
+    """采集配置保存同时提交群组，并保留旧 scalar/token 兼容字段。"""
+    save = _fn_body("saveImaCollector")
+    assert "groups: readImaGroupRows()" in save
+    assert "function readImaGroupRows" in APP_JS.read_text()
+    for field in ("uid", "knowledge_base_id", "root_folder_id", "interval_seconds"):
+        assert f"{field}:" in save
+    assert "if (token) body.refresh_token = token" in save
+    assert 'id="ima-pure-token"' in _fn_body("loadAdminStats")
+    token_input = re.search(r'id="ima-pure-token"[^>]*', save + _fn_body("loadAdminStats"))
+    assert token_input and 'type="password"' in token_input.group(0)
+    assert 'autocomplete="off"' in token_input.group(0)
+    assert 'value="${pure.refresh_token' not in APP_JS.read_text()
+
+
+def test_ima_discovery_status_is_safe_and_does_not_render_secrets():
+    """发现错误只输出 escaped 文本，IMA token 不得进入 HTML value/placeholder。"""
+    src = APP_JS.read_text()
+    stats = _fn_body("imaGroupDiscoveryStatusText")
+    assert "discovery_error" in stats
+    assert "escapeHtml" in stats
+    assert "last_result" in stats
+    assert "refresh_token" not in stats
+    assert "imaGroupDiscoveryStatusText" in _fn_body("loadAdminStats")
+    assert 'placeholder="${pure.refresh_token' in src
+    assert 'value="${pure.refresh_token' not in src
+
+
 def test_admin_stats_has_zsxq_cache_settings():
     """抓取设置里有知识星球组；保存带上翻页/间隔/预缓存；清理走独立接口不整页重建。"""
     stats = _fn_body("loadAdminStats")
@@ -1107,6 +1177,118 @@ def test_timeline_new_badge_pins_to_sticky_filterbar():
     assert badge, "缺少 .tl-new-badge"
     assert "position: absolute" in badge.group(1)
     assert "top: 100%" in badge.group(1)
+
+
+
+
+def test_ima_documents_group_switching_contract():
+    """文档列表必须按 URL 群组切换，并让两个控件共享安全的选择逻辑。"""
+    src = APP_JS.read_text()
+    render = _fn_body("renderImaDocuments")
+    assert "imaDocumentsGroup" in src
+    assert "imaDocumentsGroupFromRoute" in src
+    assert "imaDocumentsRoute" in src
+    assert 'routeQuery().get("group")' in src
+    assert "group_name" in src
+    assert "params.set(\"group\"" in render
+    assert "imaDocumentGroupControls(groups, selectedGroup)" in render
+    assert 'class="ima-doc-group-switcher' in src
+    assert "全部群组" in src
+    assert 'class="ima-doc-group-label"' in src
+    assert "routeQuery()" in src
+    assert "replaceImaDocumentsRoute(imaDocumentsRoute(value, state.imaDocumentsQuery, \"\"))" in src
+    assert "selectImaDocumentGroup(value)" in src
+    assert "state.imaDocumentsDay = \"\"" in src
+
+
+def test_ima_documents_group_controls_render_response_groups_safely():
+    """群组控件必须依据响应 groups 渲染，值和标签都经过 escapeHtml。"""
+    src = APP_JS.read_text()
+    render = _fn_body("renderImaDocuments")
+    assert "data.groups" in render or "groups =" in render
+    assert "escapeHtml(group.id" in src or "escapeHtml(group.value" in src
+    assert "escapeHtml(group.name" in src
+    assert "ima-doc-group-tabs" in src
+    assert "ima-doc-group-select" in src
+    assert "imaDocumentGroup" in src
+
+
+def test_ima_documents_all_group_labels_and_single_group_title():
+    """全部群组结果显示来源标签，单群组结果不重复显示；标题包含名称和数量。"""
+    src = APP_JS.read_text()
+    assert "item.group_name" in src
+    assert "selectedGroupName" in src or "groupName" in src
+    assert "count" in _fn_body("renderImaDocuments")
+
+
+def test_ima_document_group_switch_refreshes_locally():
+    """群组切换只更新文档局部路由并使旧请求失效，不触发全局 router。"""
+    src = APP_JS.read_text()
+    select = _fn_body("selectImaDocumentGroup")
+    helper = _fn_body("replaceImaDocumentsRoute")
+    assert "replaceRoute(" not in select
+    assert "replaceImaDocumentsRoute(imaDocumentsRoute(value, state.imaDocumentsQuery, \"\"))" in select
+    assert "state.imaDocumentsGroup" in select
+    assert "state.imaDocumentsDay = \"\"" in select
+    assert "state.imaDocumentsQuery" in select
+    assert "const seq = ++routeRenderSeq;" in select
+    assert "renderImaDocuments(seq)" in select
+    assert "normalizeRoute" in helper
+    assert "history.replaceState" in helper
+    assert "router(" not in helper
+
+
+def test_ima_documents_filters_round_trip_through_local_url():
+    """文档列表从 URL 恢复 q/day，搜索和日期变化通过专用 handler 更新局部 URL。"""
+    src = APP_JS.read_text()
+    render = _fn_body("renderImaDocuments")
+    route = _fn_body("imaDocumentsRoute")
+    assert 'routeQuery().get("q")' in render
+    assert 'routeQuery().get("day")' in render
+    assert "function imaDocumentsRoute(group, query, day)" in src
+    assert 'params.set("group", group)' in route
+    assert 'params.set("q", query)' in route
+    assert 'params.set("day", day)' in route
+    assert "submitImaDocumentsSearch" in src
+    assert "selectImaDocumentsDay" in src
+    assert "replaceImaDocumentsRoute(imaDocumentsRoute(" in src
+    assert "state.imaDocumentsDay = \"\"" in _fn_body("selectImaDocumentGroup")
+    assert 'onchange="selectImaDocumentsDay(this.value)"' in render
+    assert "submitImaDocumentsSearch()" in render
+
+
+def test_ima_documents_refresh_and_retry_advance_local_route_seq():
+    """刷新与重试必须递增局部路由序号，避免旧请求覆盖新结果。"""
+    src = APP_JS.read_text()
+    render = _fn_body("renderImaDocuments")
+    refresh = _fn_body("refreshImaDocuments")
+    assert "const seq = ++routeRenderSeq;" in refresh
+    assert "renderImaDocuments(seq)" in refresh
+    assert 'onclick="refreshImaDocuments()"' in render
+    assert "refreshImaDocuments()" in render
+
+
+def test_ima_document_headers_have_desktop_flex_alignment():
+    """文档列表和阅读器标题桌面端使用 flex 横向对齐，移动端继续使用 grid。"""
+    css = STYLE_CSS.read_text()
+    for selector in (".ima-docs-head", ".ima-reader-head"):
+        block = re.search(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", css)
+        assert block, f"缺少 {selector} 样式"
+        for declaration in ("display: flex", "justify-content: space-between", "gap:"):
+            assert declaration in block.group(1), f"{selector} 缺少 {declaration}"
+    assert ".ima-reader-head { display: grid; gap: 12px; }" in css
+
+
+def test_ima_documents_group_switcher_is_responsive_and_touch_friendly():
+
+    css = STYLE_CSS.read_text()
+    src = APP_JS.read_text()
+    for selector in (".ima-doc-group-switcher", ".ima-doc-group-tabs", ".ima-doc-group-tab", ".ima-doc-group-select", ".ima-doc-group-label", ".ima-doc-group-switcher:focus-visible"):
+        assert selector in css
+    assert "min-height: 44px" in css
+    assert "overflow-wrap: anywhere" in css or "text-overflow: ellipsis" in css
+    assert "<= 5" in src
+    assert "@media (max-width: 768px)" in css
 
 
 def test_timeline_filterbar_stays_in_main_column():
@@ -1499,11 +1681,81 @@ def test_channel_status_poll_skips_identical_and_restores_focus():
     assert "el.innerHTML = channelStatusHtml" not in refresh
 
 
+def test_ima_document_reader_preserves_group_context_and_metadata():
+    """阅读页标题显示接口返回的群组和日期，并从当前 URL 保留列表筛选上下文。"""
+    src = APP_JS.read_text()
+    reader = _fn_body("renderImaDocument")
+    assert "let backRoute = imaDocumentsRoute(" in reader
+    assert 'currentQuery.get("group")' in reader
+    assert 'currentQuery.get("q")' in reader
+    assert 'currentQuery.get("day")' in reader
+    assert "state.imaDocumentsGroup" in reader
+    assert "state.imaDocumentsQuery" in reader
+    assert "state.imaDocumentsDay" in reader
+    assert "imaDocumentsRoute(group, query, day)" in reader
+    assert "item.group_name" in reader
+    assert "item.day" in reader
+    assert reader.index("ima-reader-group") < reader.index("ima-reader-day")
+    assert "查看 PDF" in reader and "下载" in reader
+    assert "item.name" in reader and "item.size" in reader and "item.chars" in reader
+    assert "go(backRoute)" in reader
+
+
+def test_ima_document_reader_requests_keep_current_group_for_all_endpoints():
+    reader = _fn_body("renderImaDocument")
+    pdf = _fn_body("loadImaPdf")
+    download = _fn_body("downloadImaPdf")
+    assert "const groupQuery = group ?" in reader
+    assert "${encodeURIComponent(mediaId)}${groupQuery}" in reader
+    assert "${encodeURIComponent(mediaId)}/text${groupQuery}" in reader
+    assert "const groupQuery = group ?" in pdf
+    assert "${encodeURIComponent(mediaId)}/pdf${groupQuery}" in pdf
+    assert "const groupQuery = group ?" in download
+    assert "pdf?download=1${groupQuery}" in download
+    assert "${encodeURIComponent(mediaId)}${detailQuery}" in download
+
+
+def test_ima_document_reader_route_preserves_list_filters_without_inline_query_injection():
+    """文档行通过 handler 打开，并把当前列表 group/q/day 安全带入阅读 URL。"""
+
+    src = APP_JS.read_text()
+    row = _fn_body("imaDocumentRow")
+    route = _fn_body("imaDocumentReaderRoute")
+    opener = _fn_body("openImaDocument")
+    assert "function imaDocumentReaderRoute(mediaId)" in src
+    assert "imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay)" in route
+    assert "data-media-id=" in row
+    assert 'onclick="openImaDocument(this.dataset.mediaId)"' in row
+    assert "_imaDocumentRoute(item.media_id)" not in row
+    assert "go(imaDocumentReaderRoute(mediaId))" in opener
+
+
+def test_ima_document_reader_backroute_uses_detail_group_when_url_has_none():
+    """直接打开阅读页时，详情返回的群组 ID 也能恢复筛选列表。"""
+    reader = _fn_body("renderImaDocument")
+    assert "let backRoute = imaDocumentsRoute(group, query, day)" in reader
+    assert "item.group_id" in reader
+    assert "backRoute = imaDocumentsRoute(item.group_id, query, day)" in reader
+    assert reader.index("const item = await api") < reader.index("backRoute = imaDocumentsRoute(item.group_id, query, day)")
+    assert reader.index("backRoute = imaDocumentsRoute(item.group_id, query, day)") < reader.index("const text = await")
+
+
+def test_ima_document_reader_omits_empty_group_context():
+    """群组名称为空时不输出空的阅读页群组标记。"""
+    reader = _fn_body("renderImaDocument")
+    assert "const groupContext = item.group_name" in reader
+    assert "? `<p class=\"ima-reader-group\">${escapeHtml(item.group_name)}</p>`" in reader
+    assert "${groupContext}" in reader
+    assert 'class="ima-reader-group">${escapeHtml(item.group_name || "")}' not in reader
+
+
 def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
-    assert 'href="/style.css?v=184"' in html
+    sw = (APP_JS.parent / "sw.js").read_text()
+    assert 'href="/style.css?v=185"' in html
     assert 'src="/app.js?v=259"' in html
+    assert 'dav-shell-v129' in sw
 
 
 def test_ima_documents_follow_latest_dynamic_navigation():

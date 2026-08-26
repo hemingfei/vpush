@@ -1,6 +1,7 @@
 """REST API：认证、订阅目录、我的动态、KOL/分类管理。"""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -75,6 +76,7 @@ from .fetchers.zsxq import (
     zsxq_cache_stats,
 )
 from .ima_documents import (
+    IMA_PURE_GROUPS_KEY,
     IMA_PURE_INTERVAL_KEY,
     IMA_PURE_INTERVAL_MAX,
     IMA_PURE_INTERVAL_MIN,
@@ -83,6 +85,7 @@ from .ima_documents import (
     IMA_PURE_ROOT_FOLDER_KEY,
     IMA_PURE_UID_KEY,
     ImaDocumentService,
+    ImaGroupConfig,
 )
 from .plaza import (
     filter_plaza_rows,
@@ -513,12 +516,21 @@ class ImaCredentialsIn(BaseModel):
     openapi_apikey: str | None = None
 
 
+class ImaGroupIn(BaseModel):
+    id: str | None = None
+    name: str
+    knowledge_base_id: str
+    root_folder_id: str
+    enabled: bool = True
+
+
 class ImaCollectorIn(BaseModel):
     uid: str | None = None
     refresh_token: str | None = None
     knowledge_base_id: str | None = None
     root_folder_id: str | None = None
     interval_seconds: int | None = None
+    groups: list[ImaGroupIn] | None = None
 
 
 class ProxyPoolIn(BaseModel):
@@ -2363,17 +2375,34 @@ def create_api_router(
     def list_ima_documents(
         q: str = Query("", max_length=200),
         day: str = Query("", max_length=64),
+        group: str = Query("", max_length=128),
         user: dict = Depends(get_current_user),
     ):
         if ima_documents is None:
             raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
-        return {"items": ima_documents.store.documents(q, day)}
+        configured_groups = ima_documents.config().groups
+        enabled_groups = tuple(group_config for group_config in configured_groups if group_config.enabled)
+        group = group.strip()
+        if group and group not in {group_config.id for group_config in enabled_groups}:
+            raise HTTPException(status_code=400, detail="群组不存在或未启用")
+        return {
+            "groups": ima_documents.store.group_summary(enabled_groups),
+            "items": ima_documents.store.documents(q, day, group_id=group, groups=enabled_groups),
+        }
 
-    def _ima_document(media_id: str) -> dict:
+    def _ima_document(media_id: str, group: str = "") -> dict:
         if ima_documents is None:
             raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
+        enabled_groups = tuple(group_config for group_config in ima_documents.config().groups if group_config.enabled)
+        group = group.strip()
+        if group and group not in {group_config.id for group_config in enabled_groups}:
+            raise HTTPException(status_code=404, detail="IMA 文档不存在")
         try:
-            document = ima_documents.store.document(media_id)
+            document = ima_documents.store.document(
+                media_id,
+                group_id=group,
+                groups=enabled_groups,
+            )
         except ValueError:
             document = None
         if document is None:
@@ -2381,8 +2410,12 @@ def create_api_router(
         return document
 
     @router.get("/ima-documents/{media_id}")
-    def get_ima_document(media_id: str, user: dict = Depends(get_current_user)):
-        document = _ima_document(media_id)
+    def get_ima_document(
+        media_id: str,
+        group: str = Query("", max_length=128),
+        user: dict = Depends(get_current_user),
+    ):
+        document = _ima_document(media_id, group)
         return {
             "media_id": document["media_id"],
             "name": document["name"],
@@ -2390,11 +2423,17 @@ def create_api_router(
             "size": document["size"],
             "chars": document["chars"],
             "downloaded_at": document["downloaded_at"],
+            "group_id": document.get("group_id", ""),
+            "group_name": document.get("group_name", ""),
         }
 
     @router.get("/ima-documents/{media_id}/text")
-    def get_ima_document_text(media_id: str, user: dict = Depends(get_current_user)):
-        document = _ima_document(media_id)
+    def get_ima_document_text(
+        media_id: str,
+        group: str = Query("", max_length=128),
+        user: dict = Depends(get_current_user),
+    ):
+        document = _ima_document(media_id, group)
         try:
             content = document["txt"].read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
@@ -2404,10 +2443,11 @@ def create_api_router(
     @router.get("/ima-documents/{media_id}/pdf")
     def get_ima_document_pdf(
         media_id: str,
+        group: str = Query("", max_length=128),
         download: int = Query(0, ge=0, le=1),
         user: dict = Depends(get_current_user),
     ):
-        document = _ima_document(media_id)
+        document = _ima_document(media_id, group)
         from urllib.parse import quote
 
         disposition = "attachment" if download else "inline"
@@ -2429,6 +2469,7 @@ def create_api_router(
         if ima_documents is None:
             raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
         updates: dict[str, str] = {}
+        audit_parts: list[str] = []
         if body.uid is not None:
             value = body.uid.strip()
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value):
@@ -2453,10 +2494,47 @@ def create_api_router(
             if not IMA_PURE_INTERVAL_MIN <= body.interval_seconds <= IMA_PURE_INTERVAL_MAX:
                 raise HTTPException(status_code=400, detail="同步间隔须在 1800–604800 秒")
             updates[IMA_PURE_INTERVAL_KEY] = str(body.interval_seconds)
-        for key, value in updates.items():
-            db.set_setting(key, value)
+        if body.groups is not None:
+            existing = {group.id: group for group in ima_documents.config().groups}
+            groups: list[dict[str, object]] = []
+            group_ids: list[str] = []
+            for group in body.groups:
+                name = group.name.strip()
+                knowledge_base_id = group.knowledge_base_id.strip()
+                root_folder_id = group.root_folder_id.strip()
+                if not name or len(name) > 100:
+                    raise HTTPException(status_code=400, detail="IMA 群组名称不能为空且最多 100 个字符")
+                if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", knowledge_base_id):
+                    raise HTTPException(status_code=400, detail="知识库 ID 格式无效")
+                if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", root_folder_id):
+                    raise HTTPException(status_code=400, detail="根文件夹 ID 格式无效")
+                if group.id is None:
+                    group_id = "manual-" + hashlib.sha256(
+                        f"{knowledge_base_id}\0{root_folder_id}".encode()
+                    ).hexdigest()[:16]
+                else:
+                    group_id = group.id.strip()
+                    if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", group_id):
+                        raise HTTPException(status_code=400, detail="IMA 群组 ID 格式无效")
+                if group_id in group_ids:
+                    raise HTTPException(status_code=400, detail="IMA 群组 ID 不能重复")
+                group_ids.append(group_id)
+                groups.append(
+                    {
+                        "id": group_id,
+                        "name": name,
+                        "knowledge_base_id": knowledge_base_id,
+                        "root_folder_id": root_folder_id,
+                        "enabled": group.enabled,
+                        "source": existing.get(group_id, ImaGroupConfig(group_id, name, knowledge_base_id, root_folder_id)).source,
+                    }
+                )
+            updates[IMA_PURE_GROUPS_KEY] = json.dumps(groups, ensure_ascii=False)
+            audit_parts.append(f"groups_count={len(group_ids)};group_ids={','.join(group_ids)}")
         if updates:
-            _audit(admin, "set_ima_collector", "", ",".join(sorted(updates)))
+            db.set_settings_atomic(updates)
+            audit_parts.extend(sorted(key for key in updates if key != IMA_PURE_GROUPS_KEY))
+            _audit(admin, "set_ima_collector", "", ";".join(audit_parts))
         return ima_documents.status()
 
     @router.post("/admin/ima-collector/sync", dependencies=[Depends(require_admin)])
