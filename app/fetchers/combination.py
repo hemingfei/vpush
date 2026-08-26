@@ -11,7 +11,7 @@ import time
 
 import httpx
 
-from .base import Fetcher, Post, ThreadLocalClient, format_published_at
+from .base import Fetcher, Post, ThreadLocalClient, catchup_pages, format_published_at
 from .xueqiu import (
     XUEQIU_COOKIE_KEY,
     merge_waf_cookie,
@@ -344,17 +344,20 @@ class CombinationFetcher(Fetcher):
         if not cube_symbol:
             raise RuntimeError(f"无效的组合编码: {kol['external_id']}")
         self._apply_cookie()
-        resp = self.client.get(
-            REBALANCING_URL,
-            params={"cube_symbol": cube_symbol, "page": 1, "count": 20},
-        )
-        if resp.status_code in (401, 403):
-            self._refresh_cookie()
-        resp.raise_for_status()
-        try:
-            data = resp.json()
-        except ValueError:
-            raise RuntimeError("雪球组合接口返回异常") from None
+        def get_page(page: int) -> dict:
+            resp = self.client.get(
+                REBALANCING_URL,
+                params={"cube_symbol": cube_symbol, "page": page, "count": 20},
+            )
+            if resp.status_code in (401, 403):
+                self._refresh_cookie()
+            resp.raise_for_status()
+            try:
+                return resp.json()
+            except ValueError:
+                raise RuntimeError("雪球组合接口返回异常") from None
+
+        data = get_page(1)
         # 先刷新快照（TTL 内跳过），调仓卡与详情页引用本次的 quote/持仓/净值数据
         self._refresh_snapshots(kol["id"], cube_symbol)
         name = kol["name"]
@@ -377,88 +380,93 @@ class CombinationFetcher(Fetcher):
             stats_line = " · ".join(parts)
         holdings_snapshot = self.db.get_cube_snapshot(kol["id"], "holdings") or {}
         holdings = (holdings_snapshot.get("payload") or {}).get("holdings") or []
-        for item in (data or {}).get("list") or []:
-            histories = item.get("rebalancing_histories") or []
-            if item.get("status") != "success" or not histories:
-                continue
-            lines = []
-            actions = []
-            for h in histories:
-                prev_w = h.get("prev_weight")
-                target_w = h.get("target_weight")
-                prev_ok = isinstance(prev_w, (int, float))
-                target_ok = isinstance(target_w, (int, float))
-                stock = h.get("stock_name") or ""
-                stock_symbol = h.get("stock_symbol") or ""
-                # 全量快照记录会把未变动持仓也列出来（prev==target），调仓卡只报变化，跳过
-                if prev_ok and target_ok and abs(target_w - prev_w) < 1e-9:
+        def build(page_data):
+            posts = []
+            for item in (page_data or {}).get("list") or []:
+                histories = item.get("rebalancing_histories") or []
+                if item.get("status") != "success" or not histories:
                     continue
-                action = ""
-                prev_s = f"{prev_w:.1f}%" if prev_ok else ""
-                target_s = f"{target_w:.1f}%" if target_ok else ""
-                if not prev_ok and target_ok:
-                    action = "新建"
-                    lines.append(f"🆕 {stock} 新建 {target_s}")
-                elif prev_ok and (not target_ok or target_w <= 0):
-                    action = "清仓"
-                    lines.append(f"🗑 {stock} 清仓 {prev_s}")
-                elif prev_ok and target_ok:
-                    action = "增持" if target_w > prev_w else "减持"
-                    icon = "➕" if target_w > prev_w else "➖"
-                    lines.append(f"{icon} {stock} {prev_s} → {target_s}")
-                action_data = {
-                    "type": action,
-                    "stock": stock,
-                    "symbol": stock_symbol,
-                    "prev": prev_s or "0.0%",
-                    "target": target_s or "0.0%",
-                }
-                price = _format_trade_price(h)
-                if price:
-                    action_data["price"] = price
-                actions.append(action_data)
-            # 接口的 cash 字段对「只列变动」的记录是伪值（100 − Σ变动targets，如新建后显示
-            # 现金 81%，实际 0%）；cash_value 才是组合内真实现金（按净值计），现金占比 = cash_value / 净值。
-            if not lines and not actions:
-                continue
-            cash_value = item.get("cash_value")
-            cube_net = quote.get("net_value")
-            cash_pct = (
-                f"{cash_value / cube_net * 100:.1f}%"
-                if isinstance(cash_value, (int, float)) and cube_net
-                else ""
-            )
-            cash_line = f"现金 {cash_pct}" if cash_pct else ""
-            content = "\n".join(lines)
-            if cash_line:
-                content = f"{content}\n{cash_line}" if content else cash_line
-            if stats_line:
-                content = f"{stats_line}\n{content}" if content else stats_line
-            posts.append(
-                Post(
-                    platform=self.platform,
-                    kol_id=kol["id"],
-                    kol_name=name,
-                    external_id=str(item.get("id") or ""),
-                    title=f"{name} 调仓",
-                    content=content,
-                    url=f"https://xueqiu.com/P/{cube_symbol}",
-                    published_at=format_published_at(str(item.get("updated_at") or "")),
-                    post_type="",
-                    detail={
-                        "stats": [
-                            (k, v)
-                            for k, v in (
-                                ("今日", f"{quote['day_percent_gain']:+.2f}%" if quote.get("day_percent_gain") is not None else ""),
-                                ("年化", f"{quote['annualized_gain']:.1f}%" if quote.get("annualized_gain") is not None else ""),
-                                ("净值", f"{quote['net_value']:.3f}" if quote.get("net_value") is not None else ""),
-                            )
-                            if v
-                        ],
-                        "actions": actions,
-                        "holdings": holdings,
-                        "cash": cash_pct,
-                    },
+                lines = []
+                actions = []
+                for h in histories:
+                    prev_w = h.get("prev_weight")
+                    target_w = h.get("target_weight")
+                    prev_ok = isinstance(prev_w, (int, float))
+                    target_ok = isinstance(target_w, (int, float))
+                    stock = h.get("stock_name") or ""
+                    stock_symbol = h.get("stock_symbol") or ""
+                    # 全量快照记录会把未变动持仓也列出来（prev==target），调仓卡只报变化，跳过
+                    if prev_ok and target_ok and abs(target_w - prev_w) < 1e-9:
+                        continue
+                    action = ""
+                    prev_s = f"{prev_w:.1f}%" if prev_ok else ""
+                    target_s = f"{target_w:.1f}%" if target_ok else ""
+                    if not prev_ok and target_ok:
+                        action = "新建"
+                        lines.append(f"🆕 {stock} 新建 {target_s}")
+                    elif prev_ok and (not target_ok or target_w <= 0):
+                        action = "清仓"
+                        lines.append(f"🗑 {stock} 清仓 {prev_s}")
+                    elif prev_ok and target_ok:
+                        action = "增持" if target_w > prev_w else "减持"
+                        icon = "➕" if target_w > prev_w else "➖"
+                        lines.append(f"{icon} {stock} {prev_s} → {target_s}")
+                    action_data = {
+                        "type": action,
+                        "stock": stock,
+                        "symbol": stock_symbol,
+                        "prev": prev_s or "0.0%",
+                        "target": target_s or "0.0%",
+                    }
+                    price = _format_trade_price(h)
+                    if price:
+                        action_data["price"] = price
+                    actions.append(action_data)
+                # 接口的 cash 字段对「只列变动」的记录是伪值（100 − Σ变动targets，如新建后显示
+                # 现金 81%，实际 0%）；cash_value 才是组合内真实现金（按净值计），现金占比 = cash_value / 净值。
+                if not lines and not actions:
+                    continue
+                cash_value = item.get("cash_value")
+                cube_net = quote.get("net_value")
+                cash_pct = (
+                    f"{cash_value / cube_net * 100:.1f}%"
+                    if isinstance(cash_value, (int, float)) and cube_net
+                    else ""
                 )
-            )
-        return posts
+                cash_line = f"现金 {cash_pct}" if cash_pct else ""
+                content = "\n".join(lines)
+                if cash_line:
+                    content = f"{content}\n{cash_line}" if content else cash_line
+                if stats_line:
+                    content = f"{stats_line}\n{content}" if content else stats_line
+                posts.append(
+                    Post(
+                        platform=self.platform,
+                        kol_id=kol["id"],
+                        kol_name=name,
+                        external_id=str(item.get("id") or ""),
+                        title=f"{name} 调仓",
+                        content=content,
+                        url=f"https://xueqiu.com/P/{cube_symbol}",
+                        published_at=format_published_at(str(item.get("updated_at") or "")),
+                        post_type="",
+                        detail={
+                            "stats": [
+                                (k, v)
+                                for k, v in (
+                                    ("今日", f"{quote['day_percent_gain']:+.2f}%" if quote.get("day_percent_gain") is not None else ""),
+                                    ("年化", f"{quote['annualized_gain']:.1f}%" if quote.get("annualized_gain") is not None else ""),
+                                    ("净值", f"{quote['net_value']:.3f}" if quote.get("net_value") is not None else ""),
+                                )
+                                if v
+                            ],
+                            "actions": actions,
+                            "holdings": holdings,
+                            "cash": cash_pct,
+                        },
+                    )
+                )
+            return posts
+
+        first_posts = build(data)
+        return catchup_pages(self.db, lambda p: build(get_page(p)), first_posts)

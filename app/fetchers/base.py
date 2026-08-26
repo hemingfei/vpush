@@ -3,10 +3,14 @@ from __future__ import annotations
 
 import email.utils
 import html
+import logging
 import re
 import threading
+import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
 
 # 项目面向中文社交平台，发布时间统一按北京时间展示，避免依赖服务器时区
 CN_TZ = timezone(timedelta(hours=8))
@@ -226,3 +230,66 @@ class Fetcher:
 
     def fetch(self, kol: dict) -> list[Post]:
         raise NotImplementedError
+
+
+# ---- 追平翻页：防「大V爆发发帖 / 停机积压时帖子滚出首页被静默漏抓」 ----
+# 常态（首页尾部已是旧帖）零额外请求；只有检测到缺口才向后翻页
+BACKFILL_PAGES = 3
+GAP_WARN_INTERVAL = 6 * 3600
+_gap_warned_at: dict[str, float] = {}
+
+
+def tail_is_unseen(db, posts: list[Post]) -> bool:
+    """时间线（新→旧序）最末一帖是否从未入库。真则首页之后可能还有漏掉的帖。"""
+    if db is None or not posts:
+        return False
+    tail = posts[-1]
+    return not db.existing_post_keys([(tail.platform, tail.external_id)])
+
+
+def warn_timeline_gap(platform: str) -> None:
+    """追平页数用尽仍未撞见旧帖：WARNING 进 error_logs，把漏帖从静默变可感知。"""
+    now = time.monotonic()
+    if now - _gap_warned_at.get(platform, 0.0) < GAP_WARN_INTERVAL:
+        return
+    _gap_warned_at[platform] = now
+    logger.warning(
+        "%s 时间线在第 %d 页仍未见已入库的旧帖，更早的发帖可能没被抓全"
+        "（大V爆发发帖或服务停机积压）；可临时调低轮询间隔观察",
+        PLATFORM_LABELS.get(platform, platform),
+        BACKFILL_PAGES,
+    )
+
+
+def catchup_pages(db, fetch_page, first: list[Post]) -> list[Post]:
+    """首页最末一帖是新的 → 继续向后翻页，直到撞见已知帖或页数封顶。
+
+    fetch_page(page:int)->list[Post] 由各平台提供指定页内容（新→旧）。
+    返回按 external_id 去重合并的完整列表；仅统计已推送类型的帖子，
+    纯转发等被平台过滤的尾巴检测不到（设计取舍）。
+    """
+    if not first or db is None or not tail_is_unseen(db, first):
+        return first
+    platform = first[0].platform
+    merged = {p.external_id for p in first}
+    all_posts = list(first)
+    caught_up = False
+    for page in range(2, BACKFILL_PAGES + 2):
+        try:
+            batch = fetch_page(page) or []
+        except Exception as exc:  # noqa: BLE001 - 追平失败不影响本轮已有结果
+            logger.warning("%s 第 %d 页追平失败 err=%s", platform, page, exc)
+            break
+        if not batch:
+            break
+        seen = db.existing_post_keys([(p.platform, p.external_id) for p in batch])
+        for p in batch:
+            if p.external_id not in merged:
+                merged.add(p.external_id)
+                all_posts.append(p)
+        if (batch[-1].platform, batch[-1].external_id) in seen:
+            caught_up = True
+            break
+    if not caught_up:
+        warn_timeline_gap(platform)
+    return all_posts

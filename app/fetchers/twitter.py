@@ -25,7 +25,14 @@ from curl_cffi import requests as cffi
 from curl_cffi.requests.errors import RequestsError
 
 from ..avatar_cache import cache_avatar
-from .base import Fetcher, Post, ThreadLocalClient, format_published_at
+from .base import (
+    Fetcher,
+    Post,
+    ThreadLocalClient,
+    format_published_at,
+    tail_is_unseen,
+    warn_timeline_gap,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -559,4 +566,8 @@ class TwitterFetcher(Fetcher):
                 self.db.update_kol_avatar(
                     kol["id"], cache_avatar(self.db, kol["id"], user["avatar"])
                 )
+        # GraphQL 分页要跟 cursor 令牌，X 暂不做追平翻页；至少把「首页尾部
+        # 是新帖=可能存在滚出首页的漏帖」从静默变成可感知
+        if tail_is_unseen(self.db, posts):
+            warn_timeline_gap(self.platform)
         return posts

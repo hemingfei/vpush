@@ -14,7 +14,7 @@ import rsa
 
 from ..avatar_cache import cache_avatar
 from ..logging_setup import redact_secrets
-from .base import Fetcher, Post, ThreadLocalClient, format_published_at, strip_html
+from .base import Fetcher, Post, ThreadLocalClient, catchup_pages, format_published_at, strip_html
 
 logger = logging.getLogger(__name__)
 
@@ -327,46 +327,54 @@ class WeiboFetcher(Fetcher):
 
     def fetch(self, kol: dict) -> list[Post]:
         self._apply_cookie()
-        uid = kol["external_id"]
-        params = {"uid": uid, "feature": "1" if kol.get("original_only") else "0"}
-        resp = self.client.get(TIMELINE_URL, params=params)
-        if resp.status_code == 432:
-            raise RuntimeError("微博反爬拦截（HTTP 432），请检查 cookie/账号配置或降低抓取频率后重试")
-        if self._login_required(resp) or self._html_login_redirect(resp):
-            self._login()
-            self._apply_cookie()
+        feature = "1" if kol.get("original_only") else "0"
+
+        def get_page(page: int) -> list:
+            params = {"uid": kol["external_id"], "feature": feature, "page": page}
             resp = self.client.get(TIMELINE_URL, params=params)
-        resp.raise_for_status()
-        try:
-            data = resp.json()
-        except ValueError:
-            raise RuntimeError(f"微博返回非 JSON（登录态失效或反爬）: HTTP {resp.status_code}") from None
-        if data.get("ok") != 1:
-            raise RuntimeError(f"微博接口异常: {(data.get('msg') or data)[:200]}")
-        posts = []
-        mblogs = (data.get("data") or {}).get("list") or []
-        for mblog in mblogs:
-            mid = mblog.get("id")
-            if not mid:
-                continue
-            text = strip_html(mblog.get("text") or "")
-            title = (mblog.get("text_raw") or text)[:80]
-            posts.append(
-                Post(
-                    platform=self.platform,
-                    kol_id=kol["id"],
-                    kol_name=kol["name"],
-                    external_id=str(mid),
-                    title=title,
-                    content=text,
-                    url=f"https://weibo.com/detail/{mid}",
-                    published_at=format_published_at(str(mblog.get("created_at") or "")),
-                    images=extract_weibo_images(mblog),
+            if resp.status_code == 432:
+                raise RuntimeError("微博反爬拦截（HTTP 432），请检查 cookie/账号配置或降低抓取频率后重试")
+            if self._login_required(resp) or self._html_login_redirect(resp):
+                self._login()
+                self._apply_cookie()
+                resp = self.client.get(TIMELINE_URL, params=params)
+            resp.raise_for_status()
+            try:
+                data = resp.json()
+            except ValueError:
+                raise RuntimeError(f"微博返回非 JSON（登录态失效或反爬）: HTTP {resp.status_code}") from None
+            if data.get("ok") != 1:
+                raise RuntimeError(f"微博接口异常: {(data.get('msg') or data)[:200]}")
+            return (data.get("data") or {}).get("list") or []
+
+        def build(mblogs: list) -> list[Post]:
+            posts = []
+            for mblog in mblogs:
+                mid = mblog.get("id")
+                if not mid:
+                    continue
+                text = strip_html(mblog.get("text") or "")
+                title = (mblog.get("text_raw") or text)[:80]
+                posts.append(
+                    Post(
+                        platform=self.platform,
+                        kol_id=kol["id"],
+                        kol_name=kol["name"],
+                        external_id=str(mid),
+                        title=title,
+                        content=text,
+                        url=f"https://weibo.com/detail/{mid}",
+                        published_at=format_published_at(str(mblog.get("created_at") or "")),
+                        images=extract_weibo_images(mblog),
+                    )
                 )
-            )
-        if mblogs:
-            user = (mblogs[0].get("user") or {})
+            return posts
+
+        first_mblogs = get_page(1)
+        posts = build(first_mblogs)
+        if first_mblogs:
+            user = (first_mblogs[0].get("user") or {})
             avatar = user.get("avatar_large") or user.get("profile_image_url") or ""
             if avatar and avatar != (self.db.get_kol(kol["id"]) or {}).get("avatar_url"):
                 self.db.update_kol_avatar(kol["id"], cache_avatar(self.db, kol["id"], avatar))
-        return posts
+        return catchup_pages(self.db, lambda p: build(get_page(p)), posts)

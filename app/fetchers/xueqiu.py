@@ -12,7 +12,14 @@ from pathlib import Path
 import httpx
 
 from ..avatar_cache import cache_avatar
-from .base import Fetcher, Post, ThreadLocalClient, format_published_at, strip_html
+from .base import (
+    Fetcher,
+    Post,
+    ThreadLocalClient,
+    catchup_pages,
+    format_published_at,
+    strip_html,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -291,7 +298,6 @@ class XueqiuFetcher(Fetcher):
         # 使用用户时间线 JSON 接口
         url = XUEQIU_TIMELINE_URL
         uid = normalize_xueqiu_id(kol["external_id"])
-        params = {"user_id": uid, "page": 1, "count": 20}
         self.client.headers.update(
             {
                 "Accept": "application/json, text/plain, */*",
@@ -301,52 +307,58 @@ class XueqiuFetcher(Fetcher):
                 "Referer": f"https://xueqiu.com/u/{uid}",
             }
         )
-        resp = self.client.get(
-            url,
-            params=params,
-        )
-        if resp.status_code in (401, 403):
-            # cookie 失效：续期不可用，进入退避告警链路
-            self._refresh_cookie()
-        resp.raise_for_status()
-        try:
-            data = resp.json()
-        except ValueError:
-            raise RuntimeError(
-                "雪球接口返回异常，请检查 xueqiu cookie 配置后重试"
-            ) from None
-        statuses = (data or {}).get("statuses") or []
-        posts = []
-        for s in statuses:
-            post_type = classify_status(s)
-            if post_type is None:
-                continue  # 纯转发不推送（回复项单独识别并保留）
-            target = s.get("target") or ""
-            url = f"https://xueqiu.com{target}" if target.startswith("/") else target
-            content = strip_html(s.get("description") or "")
-            if content.endswith(("…", "...")):
-                # 时间线长文被截断（尾部 …）：同响应的 text 字段是完整正文，优先使用
-                # （详情接口 statuses/show.json 已被雪球下线，返回 405，不再依赖）
-                full = strip_html(s.get("text") or "")
-                if len(full) > len(content):
-                    content = full
-            posts.append(
-                Post(
-                    platform=self.platform,
-                    kol_id=kol["id"],
-                    kol_name=kol["name"],
-                    external_id=str(s.get("id") or ""),
-                    title=s.get("title") or "",
-                    content=content,
-                    url=url,
-                    published_at=format_published_at(str(s.get("created_at") or "")),
-                    post_type=post_type,
-                    images=_dewatermark_images(_extract_images(s), self.db),
+
+        def get_page(page: int) -> dict:
+            resp = self.client.get(url, params={"user_id": uid, "page": page, "count": 20})
+            if resp.status_code in (401, 403):
+                # cookie 失效：续期不可用，进入退避告警链路
+                self._refresh_cookie()
+            resp.raise_for_status()
+            try:
+                return resp.json()
+            except ValueError:
+                raise RuntimeError(
+                    "雪球接口返回异常，请检查 xueqiu cookie 配置后重试"
+                ) from None
+
+        def build(statuses: list) -> list[Post]:
+            posts = []
+            for s in statuses:
+                post_type = classify_status(s)
+                if post_type is None:
+                    continue  # 纯转发不推送（回复项单独识别并保留）
+                target = s.get("target") or ""
+                url = f"https://xueqiu.com{target}" if target.startswith("/") else target
+                content = strip_html(s.get("description") or "")
+                if content.endswith(("…", "...")):
+                    # 时间线长文被截断（尾部 …）：同响应的 text 字段是完整正文，优先使用
+                    # （详情接口 statuses/show.json 已被雪球下线，返回 405，不再依赖）
+                    full = strip_html(s.get("text") or "")
+                    if len(full) > len(content):
+                        content = full
+                posts.append(
+                    Post(
+                        platform=self.platform,
+                        kol_id=kol["id"],
+                        kol_name=kol["name"],
+                        external_id=str(s.get("id") or ""),
+                        title=s.get("title") or "",
+                        content=content,
+                        url=url,
+                        published_at=format_published_at(str(s.get("created_at") or "")),
+                        post_type=post_type,
+                        images=_dewatermark_images(_extract_images(s), self.db),
+                    )
                 )
-            )
-        if statuses:
-            user = statuses[0].get("user") or {}
+            return posts
+
+        first_statuses = (get_page(1) or {}).get("statuses") or []
+        posts = build(first_statuses)
+        if first_statuses:
+            user = first_statuses[0].get("user") or {}
             avatar = _avatar_url(user)
             if avatar and avatar != (self.db.get_kol(kol["id"]) or {}).get("avatar_url"):
                 self.db.update_kol_avatar(kol["id"], cache_avatar(self.db, kol["id"], avatar))
-        return posts
+        return catchup_pages(
+            self.db, lambda p: build((get_page(p) or {}).get("statuses") or []), posts
+        )

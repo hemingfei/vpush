@@ -950,7 +950,10 @@ def test_weibo_auto_login_and_retry():
     )
     posts = fetcher.fetch({"id": 2, "name": "微博大V", "external_id": "1234567890"})
     assert len(posts) == 1
-    assert timeline_hits["n"] == 2
+    # 登录重试 2 次；内存库全是「未见过」的帖 → 新账号首轮会追加 BACKFILL_PAGES 页追平
+    from app.fetchers.base import BACKFILL_PAGES as _bp
+
+    assert timeline_hits["n"] == 2 + _bp
     assert "SUB=sub123" in db.get_setting("weibo_cookie")
 
 
@@ -999,7 +1002,10 @@ def test_weibo_html_login_redirect_triggers_auto_login():
     fetcher = WeiboFetcher(WeiboConfig(username="u", password="p"), db=db, client=client)
     posts = fetcher.fetch({"id": 2, "name": "微博大V", "external_id": "123"})
     assert len(posts) == 1
-    assert timeline_hits["n"] == 2
+    # 同上：登录重试 2 次 + 全新库首轮追平页
+    from app.fetchers.base import BACKFILL_PAGES as _bp
+
+    assert timeline_hits["n"] == 2 + _bp
     assert "SUB=sub123" in db.get_setting("weibo_cookie")
 
 
