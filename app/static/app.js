@@ -642,6 +642,11 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
 async function renderImaDocument(seq, mediaId) {
   clearImaPdfUrl();
   setPageTitle("IMA 文档", true);
+  const currentQuery = routeQuery();
+  const group = currentQuery.get("group") || state.imaDocumentsGroup || "";
+  const query = currentQuery.get("q") || state.imaDocumentsQuery || "";
+  const day = currentQuery.get("day") || state.imaDocumentsDay || "";
+  const backRoute = imaDocumentsRoute(group, query, day);
   $("#main").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
   try {
     const item = await api(`/api/ima-documents/${encodeURIComponent(mediaId)}`);
@@ -650,7 +655,7 @@ async function renderImaDocument(seq, mediaId) {
     $("#main").innerHTML = `
       <section class="section-panel ima-reader">
         <header class="section-head ima-reader-head">
-          <div><p class="ima-reader-day">${escapeHtml(item.day)}</p><h2 class="section-title ima-reader-title">${escapeHtml(item.name)}</h2><p class="section-meta">${fmtCacheBytes(item.size)} · ${Number(item.chars || 0).toLocaleString()} 字</p></div>
+          <div><p class="ima-reader-group">${escapeHtml(item.group_name || "")}</p><p class="ima-reader-day">${escapeHtml(item.day)}</p><h2 class="section-title ima-reader-title">${escapeHtml(item.name)}</h2><p class="section-meta">${fmtCacheBytes(item.size)} · ${Number(item.chars || 0).toLocaleString()} 字</p></div>
           <div class="toolbar ima-reader-actions"><button type="button" class="btn-normal" onclick="loadImaPdf('${escapeHtml(mediaId)}')">${FILE_TEXT_ICON}<span>查看 PDF</span></button><button type="button" class="btn-ghost" onclick="downloadImaPdf('${escapeHtml(mediaId)}')">${DOWNLOAD_ICON}<span>下载</span></button></div>
         </header>
         <div id="ima-pdf-panel" class="ima-pdf-panel" hidden><iframe id="ima-pdf-frame" title="PDF 预览"></iframe></div>
@@ -658,7 +663,7 @@ async function renderImaDocument(seq, mediaId) {
       </section>`;
     $("#ima-text-view").textContent = text;
   } catch (err) {
-    if (routeStillActive(seq)) $("#main").innerHTML = emptyState(`文档加载失败：${err.message}`, `<button type="button" class="btn-normal" onclick="go('ima-documents')">返回文档列表</button>`);
+    if (routeStillActive(seq)) $("#main").innerHTML = emptyState(`文档加载失败：${err.message}`, `<button type="button" class="btn-normal" onclick="go(backRoute)">返回文档列表</button>`);
   }
 }
 

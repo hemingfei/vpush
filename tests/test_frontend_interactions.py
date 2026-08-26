@@ -1681,11 +1681,33 @@ def test_channel_status_poll_skips_identical_and_restores_focus():
     assert "el.innerHTML = channelStatusHtml" not in refresh
 
 
+def test_ima_document_reader_preserves_group_context_and_metadata():
+    """阅读页标题显示接口返回的群组和日期，并从当前 URL 保留列表筛选上下文。"""
+    src = APP_JS.read_text()
+    reader = _fn_body("renderImaDocument")
+    assert "const backRoute = imaDocumentsRoute(" in reader
+    assert 'currentQuery.get("group")' in reader
+    assert 'currentQuery.get("q")' in reader
+    assert 'currentQuery.get("day")' in reader
+    assert "state.imaDocumentsGroup" in reader
+    assert "state.imaDocumentsQuery" in reader
+    assert "state.imaDocumentsDay" in reader
+    assert "imaDocumentsRoute(group, query, day)" in reader
+    assert "item.group_name" in reader
+    assert "item.day" in reader
+    assert reader.index("ima-reader-group") < reader.index("ima-reader-day")
+    assert "查看 PDF" in reader and "下载" in reader
+    assert "item.name" in reader and "item.size" in reader and "item.chars" in reader
+    assert "go(backRoute)" in reader
+
+
 def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
-    assert 'href="/style.css?v=184"' in html
-    assert 'src="/app.js?v=257"' in html
+    sw = (APP_JS.parent / "sw.js").read_text()
+    assert 'href="/style.css?v=185"' in html
+    assert 'src="/app.js?v=258"' in html
+    assert 'dav-shell-v128' in sw
 
 
 def test_ima_documents_follow_latest_dynamic_navigation():
