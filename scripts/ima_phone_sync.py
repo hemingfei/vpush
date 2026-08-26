@@ -9,9 +9,10 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,26 @@ class ImaPhoneSyncError(RuntimeError):
 class ImaCredentials:
     uid: str
     refresh_token: str
+
+
+@dataclass(frozen=True)
+class SyncOptions:
+    device: str = DEFAULT_ANDROID_SERIAL
+    host: str = ""
+    user: str = "root"
+    ssh_key: str = ""
+    remote_db: str = DEFAULT_REMOTE_DB
+    expected_uid: str = ""
+
+
+_SYNC_FIELDS = {
+    "IMA_ANDROID_SERIAL": "device",
+    "IMA_SYNC_HOST": "host",
+    "IMA_SYNC_USER": "user",
+    "IMA_SYNC_SSH_KEY": "ssh_key",
+    "IMA_SYNC_REMOTE_DB": "remote_db",
+    "IMA_EXPECTED_UID": "expected_uid",
+}
 
 
 def _safe_error(value: Any, secret: str = "") -> str:
@@ -73,6 +94,80 @@ def _validate_refresh_token(value: Any) -> str:
     if any(ord(char) < 32 or ord(char) == 127 for char in token):
         raise ImaPhoneSyncError("IMA Refresh Token 无效")
     return token
+
+
+def load_sync_config(path: str | Path) -> SyncOptions:
+    target = Path(path)
+    try:
+        mode = target.stat().st_mode & 0o777
+    except OSError as exc:
+        raise ImaPhoneSyncError("同步配置无法读取") from exc
+    if mode & 0o077:
+        raise ImaPhoneSyncError("同步配置权限必须为 0600")
+    values = {
+        "device": DEFAULT_ANDROID_SERIAL,
+        "host": "",
+        "user": "root",
+        "ssh_key": "",
+        "remote_db": DEFAULT_REMOTE_DB,
+        "expected_uid": "",
+    }
+    for number, raw_line in enumerate(target.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise ImaPhoneSyncError(f"同步配置第 {number} 行无效")
+        key, value = (part.strip() for part in line.split("=", 1))
+        field = _SYNC_FIELDS.get(key)
+        if field is None:
+            raise ImaPhoneSyncError(f"同步配置项无效: {key}")
+        values[field] = value
+    return SyncOptions(**values)
+
+
+def save_sync_config(path: str | Path, options: SyncOptions) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    content = "".join(
+        f"{key}={getattr(options, field)}\n" for key, field in _SYNC_FIELDS.items()
+    )
+    fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(content)
+        os.replace(temporary, target)
+    except BaseException:
+        if fd >= 0:
+            os.close(fd)
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
+
+def resolve_sync_options(
+    config_path: str | Path,
+    cli_values: dict[str, str] | None = None,
+) -> SyncOptions:
+    path = Path(config_path)
+    options = load_sync_config(path) if path.exists() else SyncOptions(
+        device=os.environ.get("IMA_ANDROID_SERIAL", DEFAULT_ANDROID_SERIAL),
+        host=os.environ.get("IMA_SYNC_HOST", ""),
+        user=os.environ.get("IMA_SYNC_USER", "root"),
+        ssh_key=os.environ.get("IMA_SYNC_SSH_KEY", ""),
+        remote_db=os.environ.get("IMA_SYNC_REMOTE_DB", DEFAULT_REMOTE_DB),
+        expected_uid=os.environ.get("IMA_EXPECTED_UID", ""),
+    )
+    updates = {
+        key: value
+        for key, value in (cli_values or {}).items()
+        if value not in (None, "")
+    }
+    invalid = set(updates) - set(SyncOptions.__dataclass_fields__)
+    if invalid:
+        raise ImaPhoneSyncError(f"同步配置项无效: {min(invalid)}")
+    return replace(options, **updates)
 
 
 def _credential_value(data: dict[str, Any], *names: str) -> Any:

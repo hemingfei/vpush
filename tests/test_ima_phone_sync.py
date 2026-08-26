@@ -239,6 +239,7 @@ def test_sync_config_round_trip_is_allowlisted_and_mode_600(tmp_path):
 def test_sync_config_rejects_unknown_fields(tmp_path):
     path = tmp_path / "ima_phone_sync.env"
     path.write_text("IMA_SYNC_HOST=example.test\nIMA_REFRESH_TOKEN=secret\n")
+    path.chmod(0o600)
 
     with pytest.raises(ImaPhoneSyncError, match="配置项无效"):
         load_sync_config(path)
