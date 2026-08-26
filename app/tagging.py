@@ -257,6 +257,30 @@ def stock_tag_posts(posts, stock_names, aliases=None) -> dict[int, list[str]]:
     return result
 
 
+def tag_text(
+    title: str,
+    content: str,
+    tag_rules,
+    stock_names,
+    aliases=None,
+) -> list[str]:
+    """对任意标题+正文跑现有规则，返回话题标签+股票标签（总上限 5）。"""
+
+    class _Doc:
+        def __init__(self, title: str, content: str):
+            self.title = title
+            self.content = content
+
+    docs = [_Doc(title or "", content or "")]
+    topic = list((rule_tag_posts(docs, tag_rules).get(0) or [])[:TAG_PER_POST_MAX])
+    stocks = list((stock_tag_posts(docs, stock_names, aliases).get(0) or [])[:STOCK_PER_POST_MAX])
+    merged: list[str] = []
+    for tag in topic + stocks:
+        if tag and tag not in merged:
+            merged.append(tag)
+    return merged
+
+
 def extract_alias_candidates(posts, known) -> list[str]:
     """从一批帖子正文提取可能的股票黑话别名候选词。
 
