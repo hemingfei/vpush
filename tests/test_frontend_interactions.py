@@ -1196,7 +1196,7 @@ def test_ima_documents_group_switching_contract():
     assert "全部群组" in src
     assert 'class="ima-doc-group-label"' in src
     assert "routeQuery()" in src
-    assert "replaceRoute(imaDocumentsRoute(value))" in src
+    assert "replaceImaDocumentsRoute(imaDocumentsRoute(value))" in src
     assert "selectImaDocumentGroup(value)" in src
     assert "state.imaDocumentsDay = \"\"" in src
 
@@ -1221,7 +1221,23 @@ def test_ima_documents_all_group_labels_and_single_group_title():
     assert "count" in _fn_body("renderImaDocuments")
 
 
-def test_ima_documents_group_switcher_is_responsive_and_touch_friendly():
+def test_ima_document_group_switch_refreshes_locally():
+    """群组切换只更新文档局部路由并使旧请求失效，不触发全局 router。"""
+    src = APP_JS.read_text()
+    select = _fn_body("selectImaDocumentGroup")
+    helper = _fn_body("replaceImaDocumentsRoute")
+    assert "replaceRoute(" not in select
+    assert "replaceImaDocumentsRoute(imaDocumentsRoute(value))" in select
+    assert "state.imaDocumentsGroup" in select
+    assert "state.imaDocumentsDay = \"\"" in select
+    assert "state.imaDocumentsQuery" in select
+    assert "const seq = ++routeRenderSeq;" in select
+    assert "renderImaDocuments(seq)" in select
+    assert "normalizeRoute" in helper
+    assert "history.replaceState" in helper
+    assert "router(" not in helper
+
+
     """桌面 tabs/select 断点与移动端可触控高度必须存在，长名称不得撑破布局。"""
     css = STYLE_CSS.read_text()
     src = APP_JS.read_text()

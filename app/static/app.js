@@ -528,10 +528,18 @@ function imaDocumentsRoute(value) {
   return `ima-documents${query ? `?${query}` : ""}`;
 }
 
+function replaceImaDocumentsRoute(path) {
+  const url = normalizeRoute(path);
+  if (location.pathname + location.search !== url) history.replaceState(null, "", url);
+}
+
 function selectImaDocumentGroup(value) {
   state.imaDocumentsGroup = String(value || "");
   state.imaDocumentsDay = "";
-  replaceRoute(imaDocumentsRoute(value));
+  state.imaDocumentsQuery = $("#ima-doc-q")?.value?.trim() || state.imaDocumentsQuery || "";
+  replaceImaDocumentsRoute(imaDocumentsRoute(value));
+  const seq = ++routeRenderSeq;
+  renderImaDocuments(seq);
 }
 
 function imaDocumentGroupControls(groups, selectedGroup) {
