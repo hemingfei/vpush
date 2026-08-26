@@ -2469,6 +2469,11 @@ def create_api_router(
             "downloaded_at": document["downloaded_at"],
             "group_id": document.get("group_id", ""),
             "group_name": document.get("group_name", ""),
+            "abstract": document.get("abstract") or "",
+            "cover_url": document.get("cover_url") or "",
+            "tags": document.get("tags") or [],
+            "has_pdf": bool(document.get("has_pdf")),
+            "has_txt": bool(document.get("has_txt")),
         }
 
     @router.get("/ima-documents/{media_id}/text")

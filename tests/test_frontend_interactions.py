@@ -1245,10 +1245,11 @@ def test_ima_documents_filters_round_trip_through_local_url():
     route = _fn_body("imaDocumentsRoute")
     assert 'routeQuery().get("q")' in render
     assert 'routeQuery().get("day")' in render
-    assert "function imaDocumentsRoute(group, query, day)" in src
+    assert "function imaDocumentsRoute(group, query, day, tag)" in src or "function imaDocumentsRoute(group, query, day)" in src
     assert 'params.set("group", group)' in route
     assert 'params.set("q", query)' in route
     assert 'params.set("day", day)' in route
+    assert 'params.set("tag"' in route or 'params.set("tag"' in render
     assert "submitImaDocumentsSearch" in src
     assert "selectImaDocumentsDay" in src
     assert "replaceImaDocumentsRoute(imaDocumentsRoute(" in src
@@ -1809,6 +1810,38 @@ def test_knowledge_catalog_shell_contract():
     css = STYLE_CSS.read_text()
     assert ".kb-tabs" in css
     assert ".kb-card" in css
+
+
+def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
+    """库内卡片展示封面/摘要/标签；阅读页按 has_pdf/has_txt 开门；非管理员没有全部群组。"""
+    src = APP_JS.read_text()
+    row = _fn_body("imaDocumentRow")
+    render = _fn_body("renderImaDocuments")
+    reader = _fn_body("renderImaDocument")
+    groups = _fn_body("imaDocumentGroupControls")
+    select = _fn_body("selectImaDocumentGroup")
+    css = STYLE_CSS.read_text()
+
+    assert 'placeholder="搜索标题或摘要"' in src
+    assert "ima-doc-tag" in src
+    assert 'params.set("tag"' in render
+    assert "item.cover_url" in row
+    assert 'startsWith("http")' in src
+    assert "onerror" in row
+    assert "item.abstract" in row
+    assert "item.tags" in row
+
+    assert "has_pdf" in reader
+    pdf_window = reader[max(0, reader.index("查看 PDF") - 220): reader.index("查看 PDF") + 40]
+    assert "has_pdf" in pdf_window
+    text_at = reader.index("/text")
+    text_window = reader[max(0, text_at - 220): text_at + 20]
+    assert "has_txt" in text_window
+
+    assert "state.user.is_admin" in groups or "state.user?.is_admin" in groups
+    assert "renderKnowledge" in select
+    assert ".ima-doc-cover" in css or ".ima-doc-tag" in css
+    assert "line-clamp" in css or "-webkit-line-clamp" in css
 
 
 def test_register_placeholder_matches_username_min_length():

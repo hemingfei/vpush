@@ -334,3 +334,53 @@ def test_ima_kb_valid_tags_keeps_bundled_universe_name(tmp_path):
     changed = purge_ima_document_tags(store, valid)
     assert changed == 1
     assert store.load_state()[store.state_key(record)]["tags"] == [keep]
+
+
+def test_document_detail_exposes_metadata_and_list_filters_by_tag(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "kb-meta.sqlite"))
+    admin_headers = _headers(client, "kb_meta_admin", "KBMETA1", admin=True)
+    store = client.app.state.ima_documents.store
+    tagged = {
+        "media_id": "file_tagged",
+        "name": "宁德时代纪要.pdf",
+        "day": "0826",
+        "abstract": "排产上修",
+        "cover_url": "https://example.com/c.jpg",
+    }
+    other = {
+        "media_id": "file_other",
+        "name": "宏观点评.pdf",
+        "day": "0826",
+        "abstract": "利率",
+        "cover_url": "https://example.com/m.jpg",
+    }
+    state = {}
+    for record, tags in ((tagged, ["新能源", "宁德时代"]), (other, ["宏观"])):
+        pdf = store.pdf_path(record)
+        txt = store.txt_path(record)
+        pdf.parent.mkdir(parents=True, exist_ok=True)
+        pdf.write_bytes(b"%PDF-1.7")
+        txt.write_text("正文", encoding="utf-8")
+        state[store.state_key(record)] = {
+            "pdf": str(pdf.relative_to(store.root)),
+            "txt": str(txt.relative_to(store.root)),
+            "tags": tags,
+            "has_pdf": True,
+            "has_txt": True,
+        }
+    store.save_manifest([tagged, other])
+    store.save_state(state)
+
+    detail = client.get("/api/ima-documents/file_tagged", headers=admin_headers)
+    assert detail.status_code == 200, detail.text
+    payload = detail.json()
+    assert payload["abstract"] == "排产上修"
+    assert payload["tags"] == ["新能源", "宁德时代"]
+    assert payload["has_pdf"] is True
+
+    listed = client.get("/api/ima-documents?tag=新能源", headers=admin_headers)
+    assert listed.status_code == 200
+    items = listed.json()["items"]
+    assert [item["media_id"] for item in items] == ["file_tagged"]
+    assert items[0]["tags"] == ["新能源", "宁德时代"]
