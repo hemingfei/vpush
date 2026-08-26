@@ -1237,6 +1237,22 @@ def _tag_document(db: Any, record: dict[str, Any], txt: Path | None) -> list[str
     )
 
 
+def purge_ima_document_tags(store: ImaDocumentStore, valid_tags: set[str]) -> int:
+    state = store.load_state()
+    changed = 0
+    for item in state.values():
+        if not isinstance(item, dict):
+            continue
+        tags = [t for t in (item.get("tags") or []) if isinstance(t, str)]
+        kept = [t for t in tags if t in valid_tags]
+        if kept != tags:
+            item["tags"] = kept
+            changed += 1
+    if changed:
+        store.save_state(state)
+    return changed
+
+
 class ImaDocumentService:
     def __init__(self, db: Any, archive_root: str | Path):
         self.db = db

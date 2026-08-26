@@ -86,6 +86,7 @@ from .ima_documents import (
     IMA_PURE_UID_KEY,
     ImaDocumentService,
     ImaGroupConfig,
+    purge_ima_document_tags,
 )
 from .ima_kb import catalog as ima_kb_catalog, readable_group_ids
 from .plaza import (
@@ -3502,11 +3503,19 @@ def create_api_router(
         result = try_run_tag_maintenance(db, llm_cfg)
         if result is None:
             raise HTTPException(status_code=409, detail="标签维护正在进行")
+        purged = 0
+        if ima_documents is not None:
+            valid = {r["tag"] for r in db.get_tag_vocabulary()} | set(db.get_stock_names())
+            for alias in db.get_stock_aliases():
+                if isinstance(alias, dict) and alias.get("stock"):
+                    valid.add(str(alias["stock"]))
+            purged = purge_ima_document_tags(ima_documents.store, valid)
         backfill = None
         if body.backfill != "none":
             backfill = backfill_post_tags(db, body.backfill)
         last = dict(result)
         last["at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        last["purged"] = purged
         if backfill is not None:
             last["backfill"] = {"mode": body.backfill, **backfill}
         db.set_tag_maintain_last(last)
@@ -3517,10 +3526,10 @@ def create_api_router(
             detail=(
                 f"backfill={body.backfill} aliases=+{len(result.get('added_aliases') or [])} "
                 f"names=+{len(result.get('added_stock_names') or [])} "
-                f"cleaned={result.get('cleaned') or 0}"
+                f"cleaned={result.get('cleaned') or 0} purged_kb={purged}"
             ),
         )
-        return {**result, "backfill": backfill, "at": last["at"]}
+        return {**result, "backfill": backfill, "at": last["at"], "purged": purged}
 
     @router.post("/tags/backfill", dependencies=[Depends(require_admin)])
     def backfill_post_tags_api(body: TagBackfillIn, admin: dict = Depends(require_admin)):

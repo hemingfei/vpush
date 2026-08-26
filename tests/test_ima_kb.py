@@ -7,6 +7,7 @@ from app.ima_documents import (
     ImaDocumentStore,
     ImaGroupConfig,
     ImaPureClient,
+    purge_ima_document_tags,
 )
 from app.ima_kb import catalog, readable_group_ids
 from app.main import create_app
@@ -290,3 +291,16 @@ def test_retag_all_skips_empty_tags_on_second_run(tmp_path):
     assert result["processed"] == 0
     assert result["tagged"] == 0
     assert service.store.load_state()[key]["tags"] == []
+
+
+def test_purge_ima_document_tags_keeps_valid_only(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima")
+    record = {"media_id": "file_purge", "name": "纪要.pdf", "day": "0826", "group_id": "banking"}
+    store.save_manifest([record])
+    store.save_state({
+        store.state_key(record): {"tags": ["过期标签", "新能源"]},
+    })
+    changed = purge_ima_document_tags(store, {"新能源"})
+    assert changed == 1
+    assert store.load_state()[store.state_key(record)]["tags"] == ["新能源"]
+    assert purge_ima_document_tags(store, {"新能源"}) == 0
