@@ -14,6 +14,8 @@ from __future__ import annotations
 import logging
 from dataclasses import replace
 
+from .db import user_plain_secret
+
 logger = logging.getLogger(__name__)
 
 # 渠道顺序即推送顺序
@@ -106,7 +108,7 @@ def build_channel_notifier(
             notifiers_config.telegram,
             client=client,
             chat_id=user["telegram_chat_id"],
-            bot_token=user.get("telegram_bot_token") or None,
+            bot_token=user_plain_secret(user, "telegram_bot_token", db) or None,
             favorite=favorite,
             keyword=keyword,
         )
@@ -150,19 +152,19 @@ def build_channel_notifier(
         return WeComNotifier(
             notifiers_config.wecom,
             client=client,
-            webhook_url=user["wecom_webhook"],
+            webhook_url=user_plain_secret(user, "wecom_webhook", db),
             favorite=favorite,
             keyword=keyword,
         )
     if channel == "bark":
         from .notifiers.bark import BarkNotifier
 
-        if not user.get("bark_key"):
+        if not user_plain_secret(user, "bark_key", db):
             raise RuntimeError("用户未绑定 Bark")
         return BarkNotifier(
             getattr(notifiers_config, "bark", None) if notifiers_config is not None else None,
             client=client,
-            bark_key=user["bark_key"],
+            bark_key=user_plain_secret(user, "bark_key", db),
             favorite=favorite,
             keyword=keyword,
         )

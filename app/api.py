@@ -35,7 +35,7 @@ from pydantic import BaseModel
 from . import auth, wechat
 from .avatar_cache import cache_avatar
 from .bot_core import BIND_CODE_TTL
-from .db import _UNSET, ALLOWED_PLATFORMS, DB, days_until_purge
+from .db import _UNSET, ALLOWED_PLATFORMS, DB, days_until_purge, user_plain_secret
 from .fetchers.base import CN_TZ, PLATFORM_LABELS, apply_twitter_feed, strip_html
 from .fetchers.combination import extract_cube_symbol, resolve_combination_profile
 from .fetchers.ima import (
@@ -638,7 +638,8 @@ def _is_masked_secret(value: str | None) -> bool:
     return _SECRET_MASK_GLUE in (value or "")
 
 
-def public_user(user: dict) -> dict:
+def public_user(user: dict, db=None) -> dict:
+    # 凭据列已改密文存储，掩码展示必须先解出明文再取首尾 4 位
     return {
         "id": user["id"],
         "username": user["username"],
@@ -647,8 +648,8 @@ def public_user(user: dict) -> dict:
         "custom_telegram_bot": bool(user.get("telegram_bot_token")),
         "feishu_open_id": user["feishu_open_id"],
         "feishu_chat_id": user["feishu_chat_id"],
-        "wecom_webhook": mask_secret(user.get("wecom_webhook")),
-        "bark_key": mask_secret(user.get("bark_key")),
+        "wecom_webhook": mask_secret(user_plain_secret(user, "wecom_webhook", db)),
+        "bark_key": mask_secret(user_plain_secret(user, "bark_key", db)),
         "notify_enabled": bool(user["notify_enabled"]),
         "daily_report_enabled": bool(user.get("daily_report")),
         "translate_twitter": bool(user.get("translate_twitter", 1)),
@@ -657,7 +658,7 @@ def public_user(user: dict) -> dict:
         "dnd_end": user.get("dnd_end") or "",
         "dnd_allow_favorite": bool(user.get("dnd_allow_favorite")),
         "llm_api_base": user.get("llm_api_base") or "",
-        "llm_api_key": mask_secret(user.get("llm_api_key")),
+        "llm_api_key": mask_secret(user_plain_secret(user, "llm_api_key", db)),
         "llm_model": user.get("llm_model") or "",
         "created_at": user["created_at"],
     }
@@ -1067,7 +1068,7 @@ def _do_approve_kol_request(
             try:
                 notifier = WeComNotifier(
                     notifiers_config.wecom,
-                    webhook_url=requester["wecom_webhook"],
+                    webhook_url=user_plain_secret(requester, "wecom_webhook", db),
                 )
                 notifier.send_text(message)
             except Exception:  # noqa: BLE001
@@ -1422,7 +1423,7 @@ def create_api_router(
         user = db.get_user(uid)
         return {
             "token": auth.create_token(uid, username, secret, user.get("token_version") or 0),
-            "user": public_user(user),
+            "user": public_user(user, db),
         }
 
     @router.post("/auth/login")
@@ -1467,7 +1468,7 @@ def create_api_router(
             "token": auth.create_token(
                 user["id"], user["username"], secret, user.get("token_version") or 0
             ),
-            "user": public_user(user),
+            "user": public_user(user, db),
         }
 
     @router.post("/auth/wechat")
@@ -1497,14 +1498,14 @@ def create_api_router(
             "token": auth.create_token(
                 user["id"], user["username"], secret, user.get("token_version") or 0
             ),
-            "user": public_user(user),
+            "user": public_user(user, db),
         }
 
     # ---- 我的 ----
     @router.get("/me")
     def me(user: dict = Depends(get_current_user)):
         user = db.get_user(user["id"])
-        profile = public_user(user)
+        profile = public_user(user, db)
         profile["subscription_count"] = db.count_subscriptions(user["id"])
         profile["keywords"] = db.get_user_keywords(user["id"])
         if notifiers_config is not None:
@@ -1649,7 +1650,7 @@ def create_api_router(
         if "llm_model" in body.model_fields_set:
             updates["llm_model"] = (body.llm_model or "").strip()
         db.update_user_atomic(user["id"], updates, keywords=keywords)
-        return public_user(db.get_user(user["id"]))
+        return public_user(db.get_user(user["id"]), db)
 
     @router.post("/me/webpush")
     def subscribe_webpush(body: WebPushIn, request: Request, user: dict = Depends(get_current_user)):

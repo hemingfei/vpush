@@ -81,7 +81,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     config = config or load_config()
     if db_path is not None:
         config.db_path = str(db_path)
-    db = DB(config.db_path)
+    db = DB(config.db_path, credential_key=config.notifiers.feishu.credential_key)
     ima_documents = ImaDocumentService(db, Path(config.db_path).parent / "ima")
     # WARNING+ 日志持久化到 error_logs 表（跨重启可查，管理后台错误记录面板）
     register_error_sink(

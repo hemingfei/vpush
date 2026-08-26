@@ -1,7 +1,9 @@
 """SQLite 持久化：KOL、帖子（去重）、推送日志。"""
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import secrets
 import shutil
 import sqlite3
@@ -13,6 +15,56 @@ from pathlib import Path
 from .logging_setup import redact_secrets
 
 _UNSET = object()
+
+# ---- 用户级推送凭据的 at-rest 加密 ----
+# 存储格式：enc1:<Fernet 密文>。无前缀即存量明文（读取时原样返回），
+# 配置了凭据密钥后由 _migrate 一次性加密收编，幂等。
+SECRET_PREFIX = "enc1:"
+# users 表中以密文落库的凭证列；feed_token 刻意除外（本身随 RSS URL 公开）
+SECRET_COLUMNS = ("telegram_bot_token", "wecom_webhook", "bark_key", "llm_api_key")
+# 需要维护明文哈希列做唯一性查找的凭证（Fernet 非确定性，密文不能当查询条件）
+SECRET_HASH_COLUMNS = {"wecom_webhook": "wecom_webhook_hash", "bark_key": "bark_key_hash"}
+
+
+def _secret_hash(plain: str) -> str:
+    """明文凭据的唯一性指纹（sha256）；空值返回空串不参与查找。"""
+    plain = (plain or "").strip()
+    return hashlib.sha256(plain.encode()).hexdigest() if plain else ""
+
+
+def decrypt_stored_secret(value: str | None, credential_key: str) -> str:
+    """解出 enc1: 前缀的列值；无前缀视为存量明文原样返回。
+
+    解不开（密钥缺失/换环境）返回空串并只告警一次——表现为该渠道需要
+    重新绑定，而不是把密文当配置发出去。
+    """
+    value = (value or "").strip()
+    if not value.startswith(SECRET_PREFIX):
+        return value
+    from .feishu_personal import decrypt_secret
+
+    try:
+        return decrypt_secret(credential_key, value[len(SECRET_PREFIX):])
+    except Exception:
+        global _decrypt_warned
+        if not _decrypt_warned:
+            _decrypt_warned = True
+            logging.getLogger(__name__).warning(
+                "推送凭据解密失败（FEISHU_CREDENTIAL_KEY 未配置或已更换？），"
+                "受影响渠道需重新绑定"
+            )
+        return ""
+
+
+_decrypt_warned = False
+
+
+def user_plain_secret(user: dict, field: str, db=None) -> str:
+    """从 user 行取凭证明文；enc1: 前缀值借 db.credential_key 解密。"""
+    value = (user.get(field) or "").strip()
+    if value.startswith(SECRET_PREFIX):
+        return decrypt_stored_secret(value, getattr(db, "credential_key", "") if db else "")
+    return value
 
 
 def _merge_sub_types(a: str, b: str) -> str:
@@ -286,6 +338,9 @@ CREATE TABLE IF NOT EXISTS users (
     feishu_open_id TEXT NOT NULL DEFAULT '',
     feishu_chat_id TEXT NOT NULL DEFAULT '',
     wecom_webhook TEXT NOT NULL DEFAULT '',
+    wecom_webhook_hash TEXT NOT NULL DEFAULT '',
+    bark_key TEXT NOT NULL DEFAULT '',
+    bark_key_hash TEXT NOT NULL DEFAULT '',
     notify_enabled INTEGER NOT NULL DEFAULT 1,
     daily_report INTEGER NOT NULL DEFAULT 0,
     translate_twitter INTEGER NOT NULL DEFAULT 1,
@@ -465,8 +520,11 @@ ALLOWED_PLATFORMS = {"xueqiu", "combination", "weibo", "twitter", "ima", "zsxq"}
 
 
 class DB:
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, credential_key: str = ""):
         self.path = str(path)
+        # 凭据加密密钥（Fernet 兼容 Base64）：来自 FEISHU_CREDENTIAL_KEY /
+        # config.notifiers.feishu.credential_key，与飞书个人机器人共用一把
+        self.credential_key = credential_key or ""
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         # RLock：_migrate 等内部路径会在持锁状态下调用 _rows/_execute，
         # 非重入锁会自死锁
@@ -629,6 +687,10 @@ class DB:
             self._conn.execute("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0")
         if "last_login_at" not in user_cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN last_login_at TEXT")
+        if "wecom_webhook_hash" not in user_cols:
+            self._conn.execute("ALTER TABLE users ADD COLUMN wecom_webhook_hash TEXT NOT NULL DEFAULT ''")
+        if "bark_key_hash" not in user_cols:
+            self._conn.execute("ALTER TABLE users ADD COLUMN bark_key_hash TEXT NOT NULL DEFAULT ''")
         self._conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_feed_token "
             "ON users(feed_token) WHERE feed_token != ''"
@@ -637,6 +699,44 @@ class DB:
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_bark_key "
             "ON users(bark_key) WHERE bark_key != ''"
         )
+        # 凭据加密迁移：配了凭据密钥才把明文收编成 enc1: 密文，并补齐
+        # 唯一性哈希列；全部幂等（已是密文且哈希正确的行直接跳过）
+        if self.credential_key:
+            from .feishu_personal import decrypt_secret, encrypt_secret
+
+            for col in SECRET_COLUMNS:
+                hash_col = SECRET_HASH_COLUMNS.get(col)
+                rows = self._rows(f"SELECT id, {col} AS v FROM users WHERE {col} != ''")
+                for row in rows:
+                    stored = row["v"]
+                    if stored.startswith(SECRET_PREFIX):
+                        try:
+                            plain = decrypt_secret(self.credential_key, stored[len(SECRET_PREFIX):])
+                        except Exception:
+                            continue  # 密钥对不上：保持现状，配置正确后下轮再收编
+                        target_cipher = stored  # 已是密文，无需重写
+                    else:
+                        plain = stored
+                        target_cipher = SECRET_PREFIX + encrypt_secret(self.credential_key, plain)
+                    digest = _secret_hash(plain)
+                    need_write = target_cipher != stored
+                    if hash_col:
+                        current_hash = self._rows(
+                            f"SELECT {hash_col} AS h FROM users WHERE id = ?", (row["id"],)
+                        )[0]["h"]
+                        need_write = need_write or current_hash != digest
+                    if not need_write:
+                        continue
+                    if hash_col:
+                        self._conn.execute(
+                            f"UPDATE users SET {col} = ?, {hash_col} = ? WHERE id = ?",
+                            (target_cipher, digest, row["id"]),
+                        )
+                    else:
+                        self._conn.execute(
+                            f"UPDATE users SET {col} = ? WHERE id = ?",
+                            (target_cipher, row["id"]),
+                        )
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS webpush_subscriptions ("
             "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -855,6 +955,15 @@ class DB:
     def close(self):
         with self._lock:
             self._conn.close()
+
+    def _encrypt_secret(self, value: str) -> str:
+        """有密钥时存 enc1:<Fernet 密文>；无密钥保持原样（功能不退化）。"""
+        value = (value or "").strip()
+        if not value or not self.credential_key or value.startswith(SECRET_PREFIX):
+            return value
+        from .feishu_personal import encrypt_secret
+
+        return SECRET_PREFIX + encrypt_secret(self.credential_key, value)
 
     def _rows(self, sql, params=()):
         with self._lock:
@@ -1465,11 +1574,20 @@ class DB:
         return rows[0] if rows else None
 
     def get_user_by_wecom_webhook(self, webhook: str) -> dict | None:
-        rows = self._rows("SELECT * FROM users WHERE wecom_webhook = ?", (webhook,))
+        # 凭据列存的是密文，唯一性查找走明文哈希影子列
+        digest = _secret_hash(webhook)
+        if not digest:
+            return None
+        rows = self._rows(
+            "SELECT * FROM users WHERE wecom_webhook_hash = ?", (digest,)
+        )
         return rows[0] if rows else None
 
     def get_user_by_bark_key(self, bark_key: str) -> dict | None:
-        rows = self._rows("SELECT * FROM users WHERE bark_key = ?", (bark_key,))
+        digest = _secret_hash(bark_key)
+        if not digest:
+            return None
+        rows = self._rows("SELECT * FROM users WHERE bark_key_hash = ?", (digest,))
         return rows[0] if rows else None
 
     def list_webpush_subscriptions(self, user_id: int) -> list[dict]:
@@ -1556,16 +1674,27 @@ class DB:
         "token_version", "last_login_at",
     })
 
-    def update_user(self, user_id: int, **kwargs) -> None:
+    def _build_user_sets(self, updates: dict) -> tuple[list, list]:
+        """把字段更新字典归一化为 SET 子句；凭证列在此统一加密并维护哈希。"""
         sets, params = [], []
-        for key, value in kwargs.items():
+        for key, value in updates.items():
             if key not in self._UPDATE_USER_COLUMNS:
                 raise ValueError(f"非法用户字段: {key}")
-            # 布尔字段统一归一化为 0/1，避免字符串 "false"/"0" 误判为真
             if key in ("is_admin", "notify_enabled", "daily_report", "translate_twitter", "dnd_allow_favorite"):
                 value = _to_bool(value)
+            if key in SECRET_COLUMNS:
+                plain = (value or "").strip()
+                hash_col = SECRET_HASH_COLUMNS.get(key)
+                if hash_col:
+                    sets.append(f"{hash_col} = ?")
+                    params.append(_secret_hash(plain))
+                value = self._encrypt_secret(plain)
             sets.append(f"{key} = ?")
             params.append(value)
+        return sets, params
+
+    def update_user(self, user_id: int, **kwargs) -> None:
+        sets, params = self._build_user_sets(kwargs)
         if not sets:
             return
         params.append(user_id)
@@ -1593,14 +1722,7 @@ class DB:
         revoke_tokens: bool = False,
     ) -> None:
         """一次提交用户字段与关键词；密码变更可同时撤销既有 token。"""
-        sets, params = [], []
-        for key, value in updates.items():
-            if key not in self._UPDATE_USER_COLUMNS:
-                raise ValueError(f"非法用户字段: {key}")
-            if key in ("is_admin", "notify_enabled", "daily_report", "translate_twitter", "dnd_allow_favorite"):
-                value = _to_bool(value)
-            sets.append(f"{key} = ?")
-            params.append(value)
+        sets, params = self._build_user_sets(updates)
         if revoke_tokens:
             sets.append("token_version = token_version + 1")
         with self._lock:

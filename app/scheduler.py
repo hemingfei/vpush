@@ -1188,9 +1188,14 @@ def _buffer_secondary_subscribers(db, kol_id: int, post: Post, secondary_buffer)
             secondary_buffer.setdefault(user["id"], []).append(post)
 
 
-def _user_llm_config(user: dict, fallback=None):
+def _user_llm_config(user: dict, fallback=None, db: DB | None = None):
     """用户自配 LLM 优先；没配或地址不安全时回退站点 Grok。"""
+    from .db import user_plain_secret
+
     if not user.get("llm_api_key"):
+        return fallback
+    api_key = user_plain_secret(user, "llm_api_key", db)
+    if not api_key:
         return fallback
     from types import SimpleNamespace
 
@@ -1203,7 +1208,7 @@ def _user_llm_config(user: dict, fallback=None):
         return fallback
     return SimpleNamespace(
         api_base=api_base,
-        api_key=user["llm_api_key"],
+        api_key=api_key,
         model=(user.get("llm_model") or "").strip()
         or (getattr(fallback, "model", "") if fallback else "")
         or "grok-4.6",
@@ -1215,7 +1220,7 @@ def _system_llm_config(db: DB, fallback=None):
     """站点 LLM：管理员推送设置（Grok）优先，没有再退环境变量。"""
     for user in db.list_users():
         if user.get("is_admin"):
-            cfg = _user_llm_config(user)
+            cfg = _user_llm_config(user, db=db)
             if cfg is not None:
                 return cfg
     if fallback and getattr(fallback, "api_key", ""):
@@ -1333,7 +1338,7 @@ def notify_digest_subscribers(
                 with_twitter_display(p, twitter_translate_enabled(user)) for p in matched
             ]
             summary = None
-            llm_cfg = _user_llm_config(user, site_llm)
+            llm_cfg = _user_llm_config(user, site_llm, db=db)
             if llm_cfg is not None:
                 try:
                     from .llm import summarize_posts
@@ -2227,7 +2232,9 @@ class Scheduler:
             from .llm import summarize_posts
 
             llm_cfg = _user_llm_config(
-                user, _system_llm_config(self.db, getattr(self, "llm_config", None))
+                user,
+                _system_llm_config(self.db, getattr(self, "llm_config", None)),
+                db=self.db,
             )
             if llm_cfg is not None:
                 try:
@@ -2432,7 +2439,9 @@ class Scheduler:
             ]
             summary = None
             llm_cfg = _user_llm_config(
-                user, _system_llm_config(self.db, getattr(self, "llm_config", None))
+                user,
+                _system_llm_config(self.db, getattr(self, "llm_config", None)),
+                db=self.db,
             )
             if llm_cfg is not None:
                 try:

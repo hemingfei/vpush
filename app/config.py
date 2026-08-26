@@ -14,8 +14,11 @@ class FeishuConfig:
     app_id: str = ""
     app_secret: str = ""
     bot_name: str = ""
-    # 飞书个人机器人凭据加密密钥（Fernet 兼容的 32 字节 Base64）。
-    # 只从环境变量读取，不写入 SQLite；缺失时个人机器人功能不可用，共享机器人照常。
+    # 凭据加密密钥（Fernet 兼容的 32 字节 Base64）。
+    # 用途：1) 飞书个人机器人凭据；2) users 表推送凭据列（bot token /
+    # webhook / bark key / llm key）的 at-rest 加密。
+    # 只从环境变量读取，不写入 SQLite；缺失时个人机器人不可用、凭据按旧方式
+    # 明文存储，其余功能照常；配置后启动会自动把存量明文加密收编。
     credential_key: str = ""
 
 
