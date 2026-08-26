@@ -87,6 +87,7 @@ from .ima_documents import (
     ImaDocumentService,
     ImaGroupConfig,
 )
+from .ima_kb import catalog as ima_kb_catalog, readable_group_ids
 from .plaza import (
     filter_plaza_rows,
     is_plaza_hidden,
@@ -531,6 +532,10 @@ class ImaCollectorIn(BaseModel):
     root_folder_id: str | None = None
     interval_seconds: int | None = None
     groups: list[ImaGroupIn] | None = None
+
+
+class ImaKbAclIn(BaseModel):
+    usernames: list[str]
 
 
 class ProxyPoolIn(BaseModel):
@@ -2371,37 +2376,47 @@ def create_api_router(
             )
         raise HTTPException(status_code=502, detail="附件下载失败")
 
+    def _configured_groups():
+        if ima_documents is None:
+            raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
+        return ima_documents.config().groups
+
+    def _readable_groups(user: dict):
+        groups = _configured_groups()
+        allowed = readable_group_ids(db, user, groups)
+        return tuple(group for group in groups if group.id in allowed)
+
+    def _require_readable_group(user: dict, group_id: str):
+        readable = _readable_groups(user)
+        if group_id and group_id not in {group.id for group in readable}:
+            raise HTTPException(status_code=404, detail="知识库不存在")
+        return readable
+
     @router.get("/ima-documents")
     def list_ima_documents(
         q: str = Query("", max_length=200),
         day: str = Query("", max_length=64),
         group: str = Query("", max_length=128),
+        tag: str = Query("", max_length=64),
         user: dict = Depends(get_current_user),
     ):
-        if ima_documents is None:
-            raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
-        configured_groups = ima_documents.config().groups
-        enabled_groups = tuple(group_config for group_config in configured_groups if group_config.enabled)
+        groups = _readable_groups(user)
         group = group.strip()
-        if group and group not in {group_config.id for group_config in enabled_groups}:
-            raise HTTPException(status_code=400, detail="群组不存在或未启用")
+        if group and group not in {group_config.id for group_config in groups}:
+            raise HTTPException(status_code=404, detail="知识库不存在")
         return {
-            "groups": ima_documents.store.group_summary(enabled_groups),
-            "items": ima_documents.store.documents(q, day, group_id=group, groups=enabled_groups),
+            "groups": ima_documents.store.group_summary(groups),
+            "items": ima_documents.store.documents(q, day, group_id=group, groups=groups, tag=tag),
         }
 
-    def _ima_document(media_id: str, group: str = "") -> dict:
-        if ima_documents is None:
-            raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
-        enabled_groups = tuple(group_config for group_config in ima_documents.config().groups if group_config.enabled)
+    def _ima_document(user: dict, media_id: str, group: str = "") -> dict:
         group = group.strip()
-        if group and group not in {group_config.id for group_config in enabled_groups}:
-            raise HTTPException(status_code=404, detail="IMA 文档不存在")
+        groups = _require_readable_group(user, group)
         try:
             document = ima_documents.store.document(
                 media_id,
                 group_id=group,
-                groups=enabled_groups,
+                groups=groups,
             )
         except ValueError:
             document = None
@@ -2409,13 +2424,40 @@ def create_api_router(
             raise HTTPException(status_code=404, detail="IMA 文档不存在")
         return document
 
+    @router.get("/ima-documents/catalog")
+    def ima_documents_catalog(user: dict = Depends(get_current_user)):
+        return ima_kb_catalog(db, user, _configured_groups())
+
+    @router.post("/ima-documents/groups/{group_id}/subscribe")
+    def subscribe_ima_kb(group_id: str, user: dict = Depends(get_current_user)):
+        if ima_documents is None:
+            raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
+        if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", group_id):
+            raise HTTPException(status_code=404, detail="知识库不存在")
+        if group_id not in {g.id for g in _configured_groups()}:
+            raise HTTPException(status_code=404, detail="知识库不存在")
+        if user.get("is_admin"):
+            db.ima_kb_subscribe(user["id"], group_id)
+            return {"ok": True}
+        if not db.ima_kb_can_subscribe(user["id"], group_id):
+            raise HTTPException(status_code=404, detail="知识库不存在")
+        db.ima_kb_subscribe(user["id"], group_id)
+        _audit(user, "subscribe_ima_kb", group_id)
+        return {"ok": True}
+
+    @router.delete("/ima-documents/groups/{group_id}/subscribe")
+    def unsubscribe_ima_kb(group_id: str, user: dict = Depends(get_current_user)):
+        db.ima_kb_unsubscribe(user["id"], group_id)
+        _audit(user, "unsubscribe_ima_kb", group_id)
+        return {"ok": True}
+
     @router.get("/ima-documents/{media_id}")
     def get_ima_document(
         media_id: str,
         group: str = Query("", max_length=128),
         user: dict = Depends(get_current_user),
     ):
-        document = _ima_document(media_id, group)
+        document = _ima_document(user, media_id, group)
         return {
             "media_id": document["media_id"],
             "name": document["name"],
@@ -2433,7 +2475,7 @@ def create_api_router(
         group: str = Query("", max_length=128),
         user: dict = Depends(get_current_user),
     ):
-        document = _ima_document(media_id, group)
+        document = _ima_document(user, media_id, group)
         try:
             content = document["txt"].read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
@@ -2447,7 +2489,7 @@ def create_api_router(
         download: int = Query(0, ge=0, le=1),
         user: dict = Depends(get_current_user),
     ):
-        document = _ima_document(media_id, group)
+        document = _ima_document(user, media_id, group)
         from urllib.parse import quote
 
         disposition = "attachment" if download else "inline"
@@ -2462,7 +2504,24 @@ def create_api_router(
     def get_ima_collector():
         if ima_documents is None:
             raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
-        return ima_documents.status()
+        payload = ima_documents.status()
+        for group in payload.get("config", {}).get("groups", []):
+            group["acl_usernames"] = db.ima_kb_acl_usernames(group["id"])
+        return payload
+
+    @router.put("/admin/ima-collector/groups/{group_id}/acl", dependencies=[Depends(require_admin)])
+    def set_ima_kb_acl(group_id: str, body: ImaKbAclIn, admin: dict = Depends(require_admin)):
+        if group_id not in {g.id for g in _configured_groups()}:
+            raise HTTPException(status_code=404, detail="知识库不存在")
+        user_ids = []
+        for username in body.usernames:
+            target = db.get_user_by_username_ci(username.strip())
+            if target is None:
+                raise HTTPException(status_code=400, detail=f"用户不存在: {username}")
+            user_ids.append(target["id"])
+        db.set_ima_kb_acl(group_id, user_ids)
+        _audit(admin, "set_ima_kb_acl", group_id, ",".join(body.usernames))
+        return {"ok": True, "acl_usernames": db.ima_kb_acl_usernames(group_id)}
 
     @router.put("/admin/ima-collector", dependencies=[Depends(require_admin)])
     def set_ima_collector(body: ImaCollectorIn, admin: dict = Depends(require_admin)):

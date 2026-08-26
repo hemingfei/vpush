@@ -989,19 +989,40 @@ def test_document_api_auth_file_access_and_admin_config(tmp_path, monkeypatch):
     assert client.get("/api/ima-documents").status_code == 401
     listed = client.get("/api/ima-documents", headers=user_headers)
     assert listed.status_code == 200
+    assert listed.json()["items"] == []
+    assert client.get("/api/ima-documents/file_abc", headers=user_headers).status_code == 404
+    assert client.get("/api/ima-documents/file_abc/text", headers=user_headers).status_code == 404
+    assert client.get("/api/ima-documents/file_abc/pdf", headers=user_headers).status_code == 404
+
+    listed = client.get("/api/ima-documents", headers=admin_headers)
+    assert listed.status_code == 200
     assert listed.json()["items"][0]["media_id"] == "file_abc"
-    text_response = client.get("/api/ima-documents/file_abc/text", headers=user_headers)
+    text_response = client.get("/api/ima-documents/file_abc/text", headers=admin_headers)
     assert text_response.text == "text"
     assert text_response.headers["content-type"].startswith("text/plain")
-    pdf_response = client.get("/api/ima-documents/file_abc/pdf", headers=user_headers)
+    pdf_response = client.get("/api/ima-documents/file_abc/pdf", headers=admin_headers)
     assert pdf_response.status_code == 200
     assert pdf_response.headers["content-type"].startswith("application/pdf")
-    download_response = client.get("/api/ima-documents/file_abc/pdf?download=1", headers=user_headers)
+    download_response = client.get("/api/ima-documents/file_abc/pdf?download=1", headers=admin_headers)
     disposition = download_response.headers["content-disposition"]
     assert "attachment" in disposition
     assert "Report.pdf" in disposition
-    assert client.get("/api/ima-documents/missing/text", headers=user_headers).status_code == 404
-    assert client.get("/api/ima-documents/../outside/text", headers=user_headers).status_code in (404, 400)
+    assert client.get("/api/ima-documents/missing/text", headers=admin_headers).status_code == 404
+    assert client.get("/api/ima-documents/../outside/text", headers=admin_headers).status_code in (404, 400)
+
+    group_id = client.get("/api/admin/ima-collector", headers=admin_headers).json()["config"]["groups"][0]["id"]
+    granted = client.put(
+        f"/api/admin/ima-collector/groups/{group_id}/acl",
+        headers=admin_headers,
+        json={"usernames": ["ima_reader"]},
+    )
+    assert granted.status_code == 200, granted.text
+    subscribed = client.post(
+        f"/api/ima-documents/groups/{group_id}/subscribe",
+        headers=user_headers,
+    )
+    assert subscribed.status_code == 200, subscribed.text
+    assert client.get("/api/ima-documents/file_abc", headers=user_headers).status_code == 200
 
     assert client.get("/api/admin/ima-collector", headers=user_headers).status_code == 403
     saved = client.put(
@@ -1021,7 +1042,7 @@ def test_document_api_auth_file_access_and_admin_config(tmp_path, monkeypatch):
 def test_group_aware_document_api_returns_summary_and_filters_items(tmp_path, monkeypatch):
     monkeypatch.setenv("DAV_UI_ONLY", "1")
     client = TestClient(create_app(db_path=tmp_path / "db.sqlite"))
-    headers = _headers(client, "group_reader", "GROUP001")
+    headers = _headers(client, "group_reader", "GROUP001", admin=True)
     db = client.app.state.db
     db.set_setting(
         IMA_PURE_GROUPS_KEY,
@@ -1082,8 +1103,8 @@ def test_group_aware_document_api_returns_summary_and_filters_items(tmp_path, mo
     assert "pdf" not in detail.json()
     assert "txt" not in detail.json()
     assert client.get("/api/ima-documents/disabled-doc", headers=headers).status_code == 404
-    assert client.get("/api/ima-documents?group=unknown", headers=headers).status_code == 400
-    assert client.get("/api/ima-documents?group=disabled", headers=headers).status_code == 400
+    assert client.get("/api/ima-documents?group=unknown", headers=headers).status_code == 404
+    assert client.get("/api/ima-documents?group=disabled", headers=headers).status_code == 404
     assert client.get("/api/ima-documents").status_code == 401
 
     all_groups = client.get("/api/ima-documents", headers=headers)
@@ -1096,7 +1117,7 @@ def test_group_aware_document_api_returns_summary_and_filters_items(tmp_path, mo
 def test_document_api_rejects_ambiguous_media_id_without_group(tmp_path, monkeypatch):
     monkeypatch.setenv("DAV_UI_ONLY", "1")
     client = TestClient(create_app(db_path=tmp_path / "db.sqlite"))
-    headers = _headers(client, "ima_ambiguous_reader", "IMAAMB01")
+    headers = _headers(client, "ima_ambiguous_reader", "IMAAMB01", admin=True)
     db = client.app.state.db
     db.set_setting(IMA_PURE_GROUPS_KEY, json.dumps([
         {"id": "group-a", "name": "一组资料", "knowledge_base_id": "kb-a", "root_folder_id": "root-a", "enabled": True},
@@ -1174,7 +1195,7 @@ def test_legacy_state_and_archive_paths_remain_compatible(tmp_path):
 def test_document_api_restricts_details_text_and_pdf_to_enabled_group(tmp_path, monkeypatch):
     monkeypatch.setenv("DAV_UI_ONLY", "1")
     client = TestClient(create_app(db_path=tmp_path / "db.sqlite"))
-    headers = _headers(client, "ima_acl_reader", "IMAACL01")
+    headers = _headers(client, "ima_acl_reader", "IMAACL01", admin=True)
     db = client.app.state.db
     db.set_setting(IMA_PURE_GROUPS_KEY, json.dumps([
         {"id": "enabled", "name": "启用资料", "knowledge_base_id": "kb-e", "root_folder_id": "root-e", "enabled": True},

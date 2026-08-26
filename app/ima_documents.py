@@ -1077,6 +1077,7 @@ class ImaDocumentStore:
         group_id: str = "",
         group_name: str = "",
         groups: tuple[ImaGroupConfig, ...] | None = None,
+        tag: str = "",
     ) -> list[dict[str, Any]]:
         self._remember_groups(groups)
         state = self.load_state()
