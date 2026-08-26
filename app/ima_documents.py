@@ -409,10 +409,36 @@ def item_display_name(item: dict[str, Any], media_id: str) -> str:
     return media_id
 
 
-def safe_filename(name: str, fallback: str) -> str:
+MAX_FILENAME_BYTES = 240
+
+
+def _fit_utf8(value: str, max_bytes: int) -> str:
+    if len(value.encode("utf-8")) <= max_bytes:
+        return value
+    while value and len(value.encode("utf-8")) > max_bytes:
+        value = value[:-1]
+    return value.rstrip(" .")
+
+
+def safe_filename(
+    name: str,
+    fallback: str,
+    *,
+    max_chars: int | None = None,
+    max_bytes: int = MAX_FILENAME_BYTES,
+) -> str:
     value = (name or fallback).replace("/", "_").replace("\\", "_").replace("\x00", "")
-    value = re.sub(r"^[.]+", "_", value).strip()[:180] or fallback
-    return value if value.lower().endswith(".pdf") else value + ".pdf"
+    value = re.sub(r"^[.]+", "_", value).strip() or fallback
+    if max_chars is not None:
+        value = value[:max_chars] or fallback
+    if value.lower().endswith(".pdf"):
+        stem, suffix = value[:-4], ".pdf"
+    else:
+        stem, suffix = value, ".pdf"
+    stem = _fit_utf8(stem, max_bytes)
+    if not stem:
+        stem = _fit_utf8(str(fallback), max_bytes) or "document"
+    return f"{stem}{suffix}"
 
 
 def _safe_component(value: str, fallback: str = "unknown") -> str:
@@ -468,12 +494,58 @@ class ImaDocumentStore:
         relative = f"{day}/{filename}"
         if occupied and relative in occupied:
             path = Path(filename)
-            filename = f"{path.stem}__{self._collision_token(media_id)}{path.suffix or '.pdf'}"
+            token = self._collision_token(media_id)
+            stem = _fit_utf8(path.stem, MAX_FILENAME_BYTES - len(token) - 2)
+            filename = f"{stem}__{token}{path.suffix or '.pdf'}"
             relative = f"{day}/{filename}"
         return self._archive_path(relative)
 
     def txt_path(self, record: dict[str, Any], *, occupied: set[str] | None = None) -> Path:
         return self.pdf_path(record, occupied=occupied).with_suffix(".txt")
+
+    @staticmethod
+    def _path_is_file(path: Path | None) -> bool:
+        if path is None:
+            return False
+        try:
+            return path.is_file()
+        except OSError:
+            return False
+
+    def _find_existing_pdf(
+        self,
+        record: dict[str, Any],
+        item: dict[str, Any],
+        media_id: str,
+        occupied: set[str],
+    ) -> Path | None:
+        day = _safe_component(str(record.get("day") or item.get("day") or "unknown"))
+        candidates: list[Path] = []
+        current = self._state_path(item.get("pdf"))
+        if current is not None:
+            candidates.append(current)
+        try:
+            candidates.append(self.pdf_path(record, occupied=occupied))
+        except ValueError:
+            pass
+        for filename in (
+            safe_filename(str(record.get("name") or media_id), media_id, max_chars=180, max_bytes=10_000),
+            safe_filename(str(item.get("name") or media_id), media_id),
+            safe_filename(media_id, media_id),
+        ):
+            try:
+                candidates.append(self._archive_path(f"{day}/{filename}"))
+            except ValueError:
+                continue
+        seen: set[str] = set()
+        for path in candidates:
+            key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            if self._path_is_file(path):
+                return path
+        return None
 
     def _occupied_pdfs(self, state: dict[str, dict[str, Any]], skip_media_id: str = "") -> set[str]:
         occupied: set[str] = set()
@@ -503,21 +575,27 @@ class ImaDocumentStore:
             record.setdefault("name", item.get("name") or media_id)
             record.setdefault("day", item.get("day") or "unknown")
             current_rel = item.get("pdf")
-            current_pdf = self._state_path(current_rel)
-            if not current_pdf or not current_pdf.is_file():
-                continue
             others = occupied - ({current_rel} if isinstance(current_rel, str) else set())
+            current_pdf = self._find_existing_pdf(record, item, media_id, others)
+            if current_pdf is None:
+                continue
             try:
                 desired = self.pdf_path(record, occupied=others)
             except ValueError:
                 continue
+            new_name = str(record.get("name") or item.get("name") or media_id)
             if desired == current_pdf:
-                new_name = str(record.get("name") or item.get("name") or media_id)
-                if str(item.get("name") or "") != new_name:
+                new_pdf = str(desired.relative_to(self.root))
+                new_txt = str(desired.with_suffix(".txt").relative_to(self.root))
+                if item.get("pdf") != new_pdf or item.get("txt") != new_txt or item.get("name") != new_name:
+                    occupied.discard(str(current_rel or ""))
+                    occupied.add(new_pdf)
+                    item["pdf"] = new_pdf
+                    item["txt"] = new_txt
                     item["name"] = new_name
                     changed = True
                 continue
-            if desired.exists():
+            if self._path_is_file(desired):
                 continue
             current_txt = self._state_path(item.get("txt")) or current_pdf.with_suffix(".txt")
             desired_txt = desired.with_suffix(".txt")
@@ -532,9 +610,11 @@ class ImaDocumentStore:
             occupied.add(new_pdf)
             item["pdf"] = new_pdf
             item["txt"] = str(desired_txt.relative_to(self.root))
-            item["name"] = str(record.get("name") or item.get("name") or media_id)
+            item["name"] = new_name
             renamed += 1
             changed = True
+            if renamed % 25 == 0:
+                self.save_state(state)
         if changed:
             self.save_state(state)
         return {"renamed": renamed}

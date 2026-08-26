@@ -1503,7 +1503,7 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     assert 'href="/style.css?v=184"' in html
-    assert 'src="/app.js?v=257"' in html
+    assert 'src="/app.js?v=258"' in html
 
 
 def test_ima_documents_follow_latest_dynamic_navigation():

@@ -13,6 +13,7 @@ from app.ima_documents import (
     _safe_error,
     decrypt_body,
     encrypt_body,
+    safe_filename,
 )
 from app.main import create_app
 
@@ -50,6 +51,39 @@ def test_archive_paths_are_relative_and_confined(tmp_path):
     assert path.parent == (tmp_path / "ima" / "0825").resolve()
     assert path.is_relative_to((tmp_path / "ima").resolve())
     assert ".." not in path.name
+
+
+def test_safe_filename_fits_linux_name_max():
+    title = "花旗-中国汽车制造：" + ("订单疲软预计资金流向切换" * 12) + ".pdf"
+    name = safe_filename(title, "fallback")
+    assert name.endswith(".pdf")
+    assert len(name.encode("utf-8")) <= 255
+
+
+def test_restore_recovers_state_when_title_file_already_moved(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima")
+    media_id = "pdf_e3acd95dd822029938ddb48d5e628c06"
+    record = {"media_id": media_id, "name": "高盛-美图新AI产品.pdf", "day": "0801"}
+    moved = store.pdf_path(record)
+    moved.parent.mkdir(parents=True)
+    moved.write_bytes(b"%PDF-1.7")
+    moved.with_suffix(".txt").write_text("text", encoding="utf-8")
+    store.save_manifest([record])
+    store.save_state(
+        {
+            media_id: {
+                "name": media_id,
+                "day": "0801",
+                "pdf": f"0801/{media_id}.pdf",
+                "txt": f"0801/{media_id}.txt",
+            }
+        }
+    )
+    assert store.restore_original_filenames()["renamed"] == 0
+    state = store.load_state()
+    assert state[media_id]["pdf"] == "0801/高盛-美图新AI产品.pdf"
+    assert state[media_id]["name"] == "高盛-美图新AI产品.pdf"
+    assert moved.is_file()
 
 
 def test_archive_uses_original_filename_when_unique(tmp_path):
