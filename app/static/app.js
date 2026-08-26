@@ -3028,13 +3028,11 @@ function postCard(post) {
           ${post.images.length > 4 ? `<span class="post-images-more">+${post.images.length - 4}</span>` : ""}
         </div>` : ""}
       ${postFiles(post).map((f) => {
-        // 已本地缓存（url=/zsxq-files/...）直接访问；否则走认证代理拉取并落盘
-        const local = (f.url || "").startsWith("/zsxq-files/") ? f.url : "";
-        const href = local
-          ? local
-          : (f.file_id
-              ? `/api/media/zsxq-file/${encodeURIComponent(f.file_id)}?token=${encodeURIComponent(state.token || "")}`
-              : (f.url || ""));
+        // 附件一律走鉴权路由（服务端校验订阅可见性，命中本地缓存时直接下发）；
+        // 历史详情里缓存的 /zsxq-files/ 静态链接已随挂载移除，不再直连
+        const href = f.file_id
+          ? `/api/media/zsxq-file/${encodeURIComponent(f.file_id)}?token=${encodeURIComponent(state.token || "")}`
+          : (f.url || "");
         return href
           ? `<a class="p-file" href="${escapeHtml(href)}" target="_blank" rel="noopener">📎 ${escapeHtml(f.name || "附件")}</a>`
           : `<span class="p-file">📎 ${escapeHtml(f.name || "附件")}</span>`;

@@ -284,10 +284,8 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     zsxq_images_dir = Path(config.db_path).parent / "zsxq_images"
     zsxq_images_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/zsxq-images", StaticFiles(directory=zsxq_images_dir), name="zsxq-images")
-    # 知识星球附件本地缓存：一次拉齐，永久可用，不依赖 zsxq 每日下载配额/签名 URL 过期
-    zsxq_files_dir = Path(config.db_path).parent / "zsxq_files"
-    zsxq_files_dir.mkdir(parents=True, exist_ok=True)
-    app.mount("/zsxq-files", StaticFiles(directory=zsxq_files_dir), name="zsxq-files")
+    # 知识星球附件不设静态挂载：附件可能是私有大V的付费内容，
+    # 一律走鉴权路由 /api/media/zsxq-file/{id}（命中本地缓存时直接下发）
     app.mount(
         "/",
         _NoCacheStaticFiles(directory=Path(__file__).parent / "static", html=True),
