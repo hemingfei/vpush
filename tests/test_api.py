@@ -1442,12 +1442,12 @@ def test_admin_user_list_hides_credentials():
     for secret in ("feed_token", "bark_key", "wecom_webhook", "llm_api_key"):
         assert secret not in resp.json(), f"管理员更新响应不应返回 {secret}"
 
-    # 当前用户自己的 /api/me 仍返回设置页面需要的字段
+    # 当前用户自己的 /api/me 仍返回设置页面需要的字段，但凭证一律掩码
     me = client.get("/api/me", headers={"Authorization": f"Bearer {reg.json()['token']}"}).json()
-    assert me["bark_key"] == "AaBbCcDdEeFf1234567890"
+    assert me["bark_key"] == "AaBb……7890"
     assert "feed_token" not in me
-    assert me["wecom_webhook"] == "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=wc1"
-    assert me["llm_api_key"] == "sk-llmsecret123"
+    assert me["wecom_webhook"] == "http……=wc1"  # 首尾各留 4 位供辨认
+    assert me["llm_api_key"] == me["llm_api_key"][:4] + "……" + me["llm_api_key"][-4:]
 
 
 def test_admin_test_push(monkeypatch):
@@ -3614,21 +3614,25 @@ def test_bark_key_bind_api():
     assert resp.status_code == 400
     assert "Bark key 无效" in resp.json()["detail"]
 
-    # 合法 key → 绑定成功
+    # 合法 key → 绑定成功；/me 回掩码而非明文
     resp = client.put(
         "/api/me", headers=headers,
         json={"bark_key": "AaBbCcDdEeFf1234567890"},
     )
     assert resp.status_code == 200
-    assert client.get("/api/me", headers=headers).json()["bark_key"] == "AaBbCcDdEeFf1234567890"
+    masked = client.get("/api/me", headers=headers).json()["bark_key"]
+    assert masked != "AaBbCcDdEeFf1234567890" and "AaBb" in masked and "7890" in masked
 
     # 普通用户只允许设备 key，不能提供服务端目标 URL。
+    # （先原样回填掩码验证不覆盖真值，再提交非法 URL）
+    assert client.put("/api/me", headers=headers, json={"bark_key": masked}).status_code == 200
+    assert client.get("/api/me", headers=headers).json()["bark_key"] == masked
     resp = client.put(
         "/api/me", headers=headers,
         json={"bark_key": "https://api.day.app/AaBbCcDdEeFf1234567890"},
     )
     assert resp.status_code == 400
-    assert client.get("/api/me", headers=headers).json()["bark_key"] == "AaBbCcDdEeFf1234567890"
+    assert client.get("/api/me", headers=headers).json()["bark_key"] == masked
 
 
 def test_bark_key_duplicate_rejected():
@@ -3639,8 +3643,11 @@ def test_bark_key_duplicate_rejected():
     resp = client.put("/api/me", headers=h2, json={"bark_key": "AaBbCcDdEeFf1234567890"})
     assert resp.status_code == 400
     assert "已绑定其他账号" in resp.json()["detail"]
-    # 原绑定者不受影响
-    assert client.get("/api/me", headers=h1).json()["bark_key"] == "AaBbCcDdEeFf1234567890"
+    # 原绑定者不受影响；掩码提交不清除真实 key
+    masked = client.get("/api/me", headers=h1).json()["bark_key"]
+    assert masked != "AaBbCcDdEeFf1234567890"
+    assert client.put("/api/me", headers=h1, json={"bark_key": masked}).status_code == 200
+    assert client.get("/api/me", headers=h1).json()["bark_key"] == masked
 
 
 # ---- 账号级失败锁定（防 IP 轮换爆破）----

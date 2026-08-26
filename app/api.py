@@ -616,6 +616,27 @@ class TestPushIn(BaseModel):
     message: str = "这是一条测试推送 ✅"
 
 
+_SECRET_MASK_GLUE = "……"
+
+
+def mask_secret(value: str | None) -> str:
+    """凭据脱敏展示：首尾各留 4 位，短值整体打码。"""
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if len(value) <= 8:
+        return _SECRET_MASK_GLUE * 2
+    return f"{value[:4]}{_SECRET_MASK_GLUE}{value[-4:]}"
+
+
+def _is_masked_secret(value: str | None) -> bool:
+    """用户把回填的掩码原样提交回来时视为「未修改」，不得覆盖真实凭据。
+
+    真实 webhook URL / API key 不会含中文省略号。
+    """
+    return _SECRET_MASK_GLUE in (value or "")
+
+
 def public_user(user: dict) -> dict:
     return {
         "id": user["id"],
@@ -625,8 +646,8 @@ def public_user(user: dict) -> dict:
         "custom_telegram_bot": bool(user.get("telegram_bot_token")),
         "feishu_open_id": user["feishu_open_id"],
         "feishu_chat_id": user["feishu_chat_id"],
-        "wecom_webhook": user["wecom_webhook"],
-        "bark_key": user.get("bark_key") or "",
+        "wecom_webhook": mask_secret(user.get("wecom_webhook")),
+        "bark_key": mask_secret(user.get("bark_key")),
         "notify_enabled": bool(user["notify_enabled"]),
         "daily_report_enabled": bool(user.get("daily_report")),
         "translate_twitter": bool(user.get("translate_twitter", 1)),
@@ -635,7 +656,7 @@ def public_user(user: dict) -> dict:
         "dnd_end": user.get("dnd_end") or "",
         "dnd_allow_favorite": bool(user.get("dnd_allow_favorite")),
         "llm_api_base": user.get("llm_api_base") or "",
-        "llm_api_key": user.get("llm_api_key") or "",
+        "llm_api_key": mask_secret(user.get("llm_api_key")),
         "llm_model": user.get("llm_model") or "",
         "created_at": user["created_at"],
     }
@@ -1517,32 +1538,38 @@ def create_api_router(
                 updates[field] = value
         if "wecom_webhook" in body.model_fields_set:
             value = (body.wecom_webhook or "").strip()
-            if value:
-                from .notifiers.wecom import is_valid_wecom_webhook
+            if _is_masked_secret(value):
+                pass  # 掩码原样提交 = 未修改，保留旧值
+            else:
+                if value:
+                    from .notifiers.wecom import is_valid_wecom_webhook
 
-                if not is_valid_wecom_webhook(value):
-                    raise HTTPException(
-                        status_code=400,
-                        detail="企业微信 webhook 地址无效，应为 https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=... 格式",
-                    )
-                owner = db.get_user_by_wecom_webhook(value)
-                if owner is not None and owner["id"] != user["id"]:
-                    raise HTTPException(status_code=400, detail="该企业微信群机器人已绑定其他账号")
-            updates["wecom_webhook"] = value
+                    if not is_valid_wecom_webhook(value):
+                        raise HTTPException(
+                            status_code=400,
+                            detail="企业微信 webhook 地址无效，应为 https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=... 格式",
+                        )
+                    owner = db.get_user_by_wecom_webhook(value)
+                    if owner is not None and owner["id"] != user["id"]:
+                        raise HTTPException(status_code=400, detail="该企业微信群机器人已绑定其他账号")
+                updates["wecom_webhook"] = value
         if "bark_key" in body.model_fields_set:
             value = (body.bark_key or "").strip()
-            if value:
-                from .notifiers.bark import is_valid_bark_key
+            if _is_masked_secret(value):
+                pass
+            else:
+                if value:
+                    from .notifiers.bark import is_valid_bark_key
 
-                if not is_valid_bark_key(value):
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Bark key 无效：应为手机 Bark App 里的推送 key（形如 AaBbCcDdEeFf...）",
-                    )
-                owner = db.get_user_by_bark_key(value)
-                if owner is not None and owner["id"] != user["id"]:
-                    raise HTTPException(status_code=400, detail="该 Bark key 已绑定其他账号")
-            updates["bark_key"] = value
+                    if not is_valid_bark_key(value):
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Bark key 无效：应为手机 Bark App 里的推送 key（形如 AaBbCcDdEeFf...）",
+                        )
+                    owner = db.get_user_by_bark_key(value)
+                    if owner is not None and owner["id"] != user["id"]:
+                        raise HTTPException(status_code=400, detail="该 Bark key 已绑定其他账号")
+                updates["bark_key"] = value
         if "keywords" in body.model_fields_set:
             keywords = [k.strip() for k in (body.keywords or []) if k.strip()]
             if len(keywords) > KEYWORDS_MAX_COUNT:
@@ -1578,7 +1605,9 @@ def create_api_router(
         if "dnd_allow_favorite" in body.model_fields_set:
             updates["dnd_allow_favorite"] = body.dnd_allow_favorite
         if "llm_api_key" in body.model_fields_set:
-            updates["llm_api_key"] = (body.llm_api_key or "").strip()
+            value = (body.llm_api_key or "").strip()
+            if not _is_masked_secret(value):  # 掩码原样提交 = 未修改
+                updates["llm_api_key"] = value
         if "llm_api_base" in body.model_fields_set:
             value = (body.llm_api_base or "").strip()
             if value:
