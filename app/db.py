@@ -442,6 +442,19 @@ CREATE INDEX IF NOT EXISTS idx_posts_kol_id_id ON posts(kol_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_push_logs_created_at ON push_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_push_logs_post_id ON push_logs(post_id);
 CREATE INDEX IF NOT EXISTS idx_kol_acl_user ON kol_acl(user_id);
+CREATE TABLE IF NOT EXISTS ima_kb_acl (
+    group_id TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    PRIMARY KEY (group_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS ima_kb_subscriptions (
+    user_id INTEGER NOT NULL,
+    group_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, group_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ima_kb_acl_user ON ima_kb_acl(user_id);
+CREATE INDEX IF NOT EXISTS idx_ima_kb_sub_group ON ima_kb_subscriptions(group_id);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_kol_id ON subscriptions(kol_id);
 CREATE INDEX IF NOT EXISTS idx_source_events_platform ON source_events(platform, created_at);
 """
@@ -633,6 +646,27 @@ class DB:
         )
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_webpush_user ON webpush_subscriptions(user_id)"
+        )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS ima_kb_acl ("
+            "  group_id TEXT NOT NULL,"
+            "  user_id INTEGER NOT NULL,"
+            "  PRIMARY KEY (group_id, user_id)"
+            ")"
+        )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS ima_kb_subscriptions ("
+            "  user_id INTEGER NOT NULL,"
+            "  group_id TEXT NOT NULL,"
+            "  created_at INTEGER NOT NULL,"
+            "  PRIMARY KEY (user_id, group_id)"
+            ")"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ima_kb_acl_user ON ima_kb_acl(user_id)"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ima_kb_sub_group ON ima_kb_subscriptions(group_id)"
         )
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS user_keywords ("
@@ -1140,6 +1174,90 @@ class DB:
 
     def acl_user_ids(self, kol_id: int) -> list[int]:
         return [r["user_id"] for r in self._rows("SELECT user_id FROM kol_acl WHERE kol_id = ?", (kol_id,))]
+
+    def set_ima_kb_acl(self, group_id: str, user_ids: list[int]) -> None:
+        group_id = str(group_id or "").strip()
+        allowed = {int(uid) for uid in user_ids}
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                self._conn.execute("DELETE FROM ima_kb_acl WHERE group_id = ?", (group_id,))
+                for uid in allowed:
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO ima_kb_acl (group_id, user_id) VALUES (?, ?)",
+                        (group_id, uid),
+                    )
+                rows = self._conn.execute(
+                    "SELECT user_id FROM ima_kb_subscriptions WHERE group_id = ?",
+                    (group_id,),
+                ).fetchall()
+                for row in rows:
+                    if int(row["user_id"]) not in allowed:
+                        self._conn.execute(
+                            "DELETE FROM ima_kb_subscriptions WHERE group_id = ? AND user_id = ?",
+                            (group_id, row["user_id"]),
+                        )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def ima_kb_acl_usernames(self, group_id: str) -> list[str]:
+        return [
+            r["username"]
+            for r in self._rows(
+                "SELECT u.username FROM ima_kb_acl a JOIN users u ON u.id = a.user_id "
+                "WHERE a.group_id = ? ORDER BY u.username",
+                (group_id,),
+            )
+        ]
+
+    def ima_kb_acl_user_ids(self, group_id: str) -> list[int]:
+        return [
+            r["user_id"]
+            for r in self._rows(
+                "SELECT user_id FROM ima_kb_acl WHERE group_id = ?",
+                (group_id,),
+            )
+        ]
+
+    def ima_kb_can_subscribe(self, user_id: int, group_id: str) -> bool:
+        return bool(
+            self._rows(
+                "SELECT 1 FROM ima_kb_acl WHERE group_id = ? AND user_id = ?",
+                (group_id, user_id),
+            )
+        )
+
+    def ima_kb_subscribe(self, user_id: int, group_id: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO ima_kb_subscriptions (user_id, group_id, created_at) "
+                "VALUES (?, ?, ?)",
+                (user_id, group_id, int(time.time())),
+            )
+            self._conn.commit()
+
+    def ima_kb_unsubscribe(self, user_id: int, group_id: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM ima_kb_subscriptions WHERE user_id = ? AND group_id = ?",
+                (user_id, group_id),
+            )
+            self._conn.commit()
+
+    def ima_kb_is_subscribed(self, user_id: int, group_id: str) -> bool:
+        return bool(
+            self._rows(
+                "SELECT 1 FROM ima_kb_subscriptions WHERE user_id = ? AND group_id = ?",
+                (user_id, group_id),
+            )
+        )
+
+    def ima_kb_can_read(self, user_id: int, group_id: str) -> bool:
+        return self.ima_kb_can_subscribe(user_id, group_id) and self.ima_kb_is_subscribed(
+            user_id, group_id
+        )
 
     def visible_kol_ids(self, user_id: int) -> set[int]:
         """用户可见的大V：公开大V + 白名单里的私有大V。"""
@@ -2018,6 +2136,10 @@ class DB:
                 self._conn.execute("DELETE FROM subscriptions WHERE user_id = ?", (user_id,))
                 self._conn.execute("DELETE FROM push_logs WHERE user_id = ?", (user_id,))
                 self._conn.execute("DELETE FROM kol_acl WHERE user_id = ?", (user_id,))
+                self._conn.execute("DELETE FROM ima_kb_acl WHERE user_id = ?", (user_id,))
+                self._conn.execute(
+                    "DELETE FROM ima_kb_subscriptions WHERE user_id = ?", (user_id,)
+                )
                 self._conn.execute("DELETE FROM webpush_subscriptions WHERE user_id = ?", (user_id,))
                 self._conn.execute("DELETE FROM user_keywords WHERE user_id = ?", (user_id,))
                 self._conn.execute(
