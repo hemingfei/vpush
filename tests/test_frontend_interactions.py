@@ -1701,8 +1701,23 @@ def test_ima_document_reader_preserves_group_context_and_metadata():
     assert "go(backRoute)" in reader
 
 
+def test_ima_document_reader_requests_keep_current_group_for_all_endpoints():
+    reader = _fn_body("renderImaDocument")
+    pdf = _fn_body("loadImaPdf")
+    download = _fn_body("downloadImaPdf")
+    assert "const groupQuery = group ?" in reader
+    assert "${encodeURIComponent(mediaId)}${groupQuery}" in reader
+    assert "${encodeURIComponent(mediaId)}/text${groupQuery}" in reader
+    assert "const groupQuery = group ?" in pdf
+    assert "${encodeURIComponent(mediaId)}/pdf${groupQuery}" in pdf
+    assert "const groupQuery = group ?" in download
+    assert "pdf?download=1${groupQuery}" in download
+    assert "${encodeURIComponent(mediaId)}${detailQuery}" in download
+
+
 def test_ima_document_reader_route_preserves_list_filters_without_inline_query_injection():
     """文档行通过 handler 打开，并把当前列表 group/q/day 安全带入阅读 URL。"""
+
     src = APP_JS.read_text()
     row = _fn_body("imaDocumentRow")
     route = _fn_body("imaDocumentReaderRoute")

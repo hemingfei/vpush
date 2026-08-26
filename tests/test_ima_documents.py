@@ -390,7 +390,7 @@ def test_legacy_manifest_normalization_preserves_group_metadata(tmp_path):
         pdf.parent.mkdir(parents=True, exist_ok=True)
         pdf.write_bytes(b"%PDF-1.7")
         txt.write_text("text", encoding="utf-8")
-        state[record["media_id"]] = {
+        state[store.state_key(record)] = {
             "pdf": str(pdf.relative_to(store.root)),
             "txt": str(txt.relative_to(store.root)),
         }
@@ -412,7 +412,7 @@ def test_legacy_manifest_normalization_preserves_group_metadata(tmp_path):
         pdf.parent.mkdir(parents=True, exist_ok=True)
         pdf.write_bytes(b"%PDF-1.7")
         txt.write_text("text", encoding="utf-8")
-        state[record["media_id"]] = {
+        state[store.state_key(record)] = {
             "pdf": str(pdf.relative_to(store.root)),
             "txt": str(txt.relative_to(store.root)),
         }
@@ -953,7 +953,7 @@ def test_group_aware_document_api_returns_summary_and_filters_items(tmp_path, mo
         pdf.parent.mkdir(parents=True, exist_ok=True)
         pdf.write_bytes(b"%PDF-1.7")
         txt.write_text("text", encoding="utf-8")
-        state[record["media_id"]] = {
+        state[store.state_key(record)] = {
             "pdf": str(pdf.relative_to(store.root)),
             "txt": str(txt.relative_to(store.root)),
         }
@@ -984,6 +984,82 @@ def test_group_aware_document_api_returns_summary_and_filters_items(tmp_path, mo
     assert {item["group_id"] for item in all_groups.json()["items"]} == {"banking"}
     assert client.get("/api/ima-documents?q=银行", headers=headers).json()["items"][0]["media_id"] == "banking-doc"
     assert client.get("/api/ima-documents?day=not-found", headers=headers).json()["items"] == []
+
+
+def test_document_store_namespaces_same_media_id_by_group(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima")
+    first = {"media_id": "shared", "name": "first.pdf", "day": "0825", "group_id": "group-a", "group_name": "一组"}
+    second = {"media_id": "shared", "name": "second.pdf", "day": "0825", "group_id": "group-b", "group_name": "二组"}
+    state = {}
+    for record in (first, second):
+        pdf, txt = store.pdf_path(record), store.txt_path(record)
+        pdf.parent.mkdir(parents=True, exist_ok=True)
+        pdf.write_bytes(b"%PDF-1.7")
+        txt.write_text(record["group_id"], encoding="utf-8")
+        state[store.state_key(record)] = {
+            "group_id": record["group_id"],
+            "pdf": str(pdf.relative_to(store.root)),
+            "txt": str(txt.relative_to(store.root)),
+            "size": 8,
+            "chars": 7,
+        }
+    store.save_manifest([first, second])
+    store.save_state(state)
+
+    assert store.pdf_path(first) != store.pdf_path(second)
+    assert store.is_complete(first, state) and store.is_complete(second, state)
+    assert [item["group_id"] for item in store.documents(groups=(
+        ImaGroupConfig("group-a", "一组", "kb-a", "root-a"),
+        ImaGroupConfig("group-b", "二组", "kb-b", "root-b"),
+    ))] == ["group-b", "group-a"]
+    assert store.document("shared", group_id="group-a")["txt"].read_text(encoding="utf-8") == "group-a"
+    assert store.document("shared", group_id="group-b")["txt"].read_text(encoding="utf-8") == "group-b"
+
+
+def test_legacy_state_and_archive_paths_remain_compatible(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima")
+    record = {"media_id": "legacy-shared", "name": "legacy.pdf", "day": "0825", "group_id": IMA_LEGACY_GROUP_ID}
+    pdf = store.pdf_path(record)
+    txt = pdf.with_suffix(".txt")
+    pdf.parent.mkdir(parents=True)
+    pdf.write_bytes(b"%PDF-1.7")
+    txt.write_text("legacy", encoding="utf-8")
+    store.save_manifest([record])
+    store.save_state({"legacy-shared": {"pdf": str(pdf.relative_to(store.root)), "txt": str(txt.relative_to(store.root))}})
+
+    assert store.is_complete(record)
+    assert store.document("legacy-shared")["txt"].read_text(encoding="utf-8") == "legacy"
+
+
+def test_document_api_restricts_details_text_and_pdf_to_enabled_group(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "db.sqlite"))
+    headers = _headers(client, "ima_acl_reader", "IMAACL01")
+    db = client.app.state.db
+    db.set_setting(IMA_PURE_GROUPS_KEY, json.dumps([
+        {"id": "enabled", "name": "启用资料", "knowledge_base_id": "kb-e", "root_folder_id": "root-e", "enabled": True},
+        {"id": "disabled", "name": "停用资料", "knowledge_base_id": "kb-d", "root_folder_id": "root-d", "enabled": False},
+    ], ensure_ascii=False))
+    store = client.app.state.ima_documents.store
+    records = [
+        {"media_id": "enabled-doc", "name": "enabled.pdf", "day": "0825", "group_id": "enabled"},
+        {"media_id": "disabled-doc", "name": "disabled.pdf", "day": "0825", "group_id": "disabled"},
+    ]
+    state = {}
+    for record in records:
+        pdf, txt = store.pdf_path(record), store.txt_path(record)
+        pdf.parent.mkdir(parents=True, exist_ok=True)
+        pdf.write_bytes(b"%PDF-1.7")
+        txt.write_text(record["group_id"], encoding="utf-8")
+        state[store.state_key(record)] = {"group_id": record["group_id"], "pdf": str(pdf.relative_to(store.root)), "txt": str(txt.relative_to(store.root))}
+    store.save_manifest(records)
+    store.save_state(state)
+
+    for suffix in ("", "/text", "/pdf"):
+        assert client.get(f"/api/ima-documents/disabled-doc{suffix}?group=disabled", headers=headers).status_code == 404
+        assert client.get(f"/api/ima-documents/enabled-doc{suffix}?group=enabled", headers=headers).status_code == 200
+    assert client.get("/api/ima-documents/enabled-doc?group=disabled", headers=headers).status_code == 404
+    assert client.get("/api/ima-documents/enabled-doc?group=unknown", headers=headers).status_code == 404
 
 
 def test_admin_groups_put_validates_persists_and_keeps_secret(tmp_path, monkeypatch):

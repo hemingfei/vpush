@@ -724,6 +724,26 @@ class ImaDocumentStore:
             raise ValueError("invalid media id")
         return value
 
+    def _is_legacy_group(self, group_id: str) -> bool:
+        return not group_id or group_id == IMA_LEGACY_GROUP_ID or group_id.startswith("legacy:")
+
+    def _record_group_id(self, record: dict[str, Any]) -> str:
+        return str(record.get("group_id") or self._legacy_group_id or IMA_LEGACY_GROUP_ID)
+
+    def _group_namespace(self, group_id: str) -> str:
+        digest = hashlib.sha256(group_id.encode("utf-8")).hexdigest()[:16]
+        return f"{_safe_component(group_id)}__{digest}"
+
+    def state_key(self, record: dict[str, Any]) -> str:
+        media_id = self.validate_media_id(record.get("media_id", ""))
+        group_id = self._record_group_id(record)
+        if self._is_legacy_group(group_id):
+            return media_id
+        return f"{self._group_namespace(group_id)}__{media_id}"
+
+    def _state_item(self, state: dict[str, dict[str, Any]], record: dict[str, Any]) -> dict[str, Any]:
+        return state.get(self.state_key(record)) or {}
+
     def _safe_path(self, relative: str) -> Path | None:
         candidate = (self.root / relative).resolve()
         if candidate == self.root or not candidate.is_relative_to(self.root):
@@ -740,6 +760,9 @@ class ImaDocumentStore:
         unique_id = hashlib.sha256(media_id.encode("utf-8")).hexdigest()[:16]
         filename = f"{path.stem[:150]}__{unique_id}{path.suffix or '.pdf'}"
         relative = Path(_safe_component(str(record.get("day") or "unknown"))) / filename
+        group_id = self._record_group_id(record)
+        if not self._is_legacy_group(group_id):
+            relative = Path(self._group_namespace(group_id)) / relative
         day_path = self.root / relative.parent
         if day_path.is_symlink():
             raise ValueError("archive directory must not be a symlink")
@@ -851,7 +874,7 @@ class ImaDocumentStore:
         state: dict[str, dict[str, Any]] | None = None,
     ) -> bool:
         state = state if state is not None else self.load_state()
-        item = state.get(str(record.get("media_id") or "")) or {}
+        item = self._state_item(state, record)
         pdf = self._state_path(item.get("pdf"))
         txt = self._state_path(item.get("txt"))
         return bool(pdf and txt and pdf.is_file() and txt.is_file())
@@ -889,7 +912,7 @@ class ImaDocumentStore:
                 media_id = self.validate_media_id(media_id)
             except ValueError:
                 continue
-            state_item = state.get(media_id) or {}
+            state_item = self._state_item(state, record)
             pdf = self._state_path(state_item.get("pdf"))
             txt = self._state_path(state_item.get("txt"))
             if not media_id or not pdf or not txt or not pdf.is_file() or not txt.is_file():
@@ -898,7 +921,7 @@ class ImaDocumentStore:
                 continue
             if query and query not in f"{record.get('name', '')} {record.get('day', '')}".casefold():
                 continue
-            actual_group_id = str(record.get("group_id") or state_item.get("group_id") or "")
+            actual_group_id = str(record.get("group_id") or state_item.get("group_id") or self._legacy_group_id or IMA_LEGACY_GROUP_ID)
             if allowed_groups is not None and actual_group_id not in allowed_groups:
                 continue
             if requested_group and actual_group_id != requested_group:
@@ -934,7 +957,12 @@ class ImaDocumentStore:
         for record in self.load_manifest(groups):
             if str(record.get("media_id") or "") != media_id:
                 continue
-            state_item = state.get(media_id) or {}
+            state_item = self._state_item(state, record)
+            actual_group_id = str(record.get("group_id") or state_item.get("group_id") or self._legacy_group_id or IMA_LEGACY_GROUP_ID)
+            if group_id and actual_group_id != group_id:
+                continue
+            if not group_id and not self._is_legacy_group(actual_group_id):
+                continue
             pdf = self._state_path(state_item.get("pdf"))
             txt = self._state_path(state_item.get("txt"))
             if not pdf or not txt or not pdf.is_file() or not txt.is_file():
@@ -1092,7 +1120,14 @@ class ImaDocumentService:
             if "group" not in str(exc):
                 raise
             client = ImaPureClient(cfg)
-        records = client.manifest()
+        records = [
+            {
+                **record,
+                "group_id": str(record.get("group_id") or group.id),
+                "group_name": str(record.get("group_name") or group.name),
+            }
+            for record in client.manifest()
+        ]
         self.store.save_group_manifest(group.id, records)
         pending = [record for record in records if not self.store.is_complete(record, state)]
         downloaded = 0
@@ -1119,7 +1154,7 @@ class ImaDocumentService:
                 else:
                     size, md5 = client._pdf_info(pdf)
                 chars = convert_pdf(pdf, txt)
-                state[media_id] = {
+                state[self.store.state_key(record)] = {
                     "group_id": group.id,
                     "group_name": group.name,
                     "day": record.get("day") or "unknown",

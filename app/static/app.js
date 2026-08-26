@@ -657,14 +657,15 @@ async function renderImaDocument(seq, mediaId) {
   const group = currentQuery.get("group") || state.imaDocumentsGroup || "";
   const query = currentQuery.get("q") || state.imaDocumentsQuery || "";
   const day = currentQuery.get("day") || state.imaDocumentsDay || "";
+  const groupQuery = group ? `?group=${encodeURIComponent(group)}` : "";
   let backRoute = imaDocumentsRoute(group, query, day);
   $("#main").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
   try {
-    const item = await api(`/api/ima-documents/${encodeURIComponent(mediaId)}`);
+    const item = await api(`/api/ima-documents/${encodeURIComponent(mediaId)}${groupQuery}`);
     if (!currentQuery.has("group") && item.group_id) {
       backRoute = imaDocumentsRoute(item.group_id, query, day);
     }
-    const text = await (await apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/text`)).text();
+    const text = await (await apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/text${groupQuery}`)).text();
     if (!routeStillActive(seq)) return;
     const groupContext = item.group_name
       ? `<p class="ima-reader-group">${escapeHtml(item.group_name)}</p>`
@@ -686,10 +687,12 @@ async function renderImaDocument(seq, mediaId) {
 
 async function loadImaPdf(mediaId) {
   const seq = routeRenderSeq;
+  const group = routeQuery().get("group") || state.imaDocumentsGroup || "";
+  const groupQuery = group ? `?group=${encodeURIComponent(group)}` : "";
   const button = document.querySelector(".ima-reader-actions .btn-normal");
   if (button) button.disabled = true;
   try {
-    const blob = await apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/pdf`);
+    const blob = await apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/pdf${groupQuery}`);
     if (!routeStillActive(seq)) return;
     clearImaPdfUrl();
     window._imaPdfUrl = URL.createObjectURL(blob);
@@ -707,10 +710,13 @@ async function loadImaPdf(mediaId) {
 }
 
 async function downloadImaPdf(mediaId) {
+  const group = routeQuery().get("group") || state.imaDocumentsGroup || "";
+  const groupQuery = group ? `&group=${encodeURIComponent(group)}` : "";
+  const detailQuery = group ? `?group=${encodeURIComponent(group)}` : "";
   try {
     const [blob, item] = await Promise.all([
-      apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/pdf?download=1`),
-      api(`/api/ima-documents/${encodeURIComponent(mediaId)}`),
+      apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/pdf?download=1${groupQuery}`),
+      api(`/api/ima-documents/${encodeURIComponent(mediaId)}${detailQuery}`),
     ]);
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");

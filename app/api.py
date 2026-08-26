@@ -2390,13 +2390,18 @@ def create_api_router(
             "items": ima_documents.store.documents(q, day, group_id=group, groups=enabled_groups),
         }
 
-    def _ima_document(media_id: str) -> dict:
+    def _ima_document(media_id: str, group: str = "") -> dict:
         if ima_documents is None:
             raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
+        enabled_groups = tuple(group_config for group_config in ima_documents.config().groups if group_config.enabled)
+        group = group.strip()
+        if group and group not in {group_config.id for group_config in enabled_groups}:
+            raise HTTPException(status_code=404, detail="IMA 文档不存在")
         try:
             document = ima_documents.store.document(
                 media_id,
-                groups=ima_documents.config().groups,
+                group_id=group,
+                groups=enabled_groups,
             )
         except ValueError:
             document = None
@@ -2405,8 +2410,12 @@ def create_api_router(
         return document
 
     @router.get("/ima-documents/{media_id}")
-    def get_ima_document(media_id: str, user: dict = Depends(get_current_user)):
-        document = _ima_document(media_id)
+    def get_ima_document(
+        media_id: str,
+        group: str = Query("", max_length=128),
+        user: dict = Depends(get_current_user),
+    ):
+        document = _ima_document(media_id, group)
         return {
             "media_id": document["media_id"],
             "name": document["name"],
@@ -2419,8 +2428,12 @@ def create_api_router(
         }
 
     @router.get("/ima-documents/{media_id}/text")
-    def get_ima_document_text(media_id: str, user: dict = Depends(get_current_user)):
-        document = _ima_document(media_id)
+    def get_ima_document_text(
+        media_id: str,
+        group: str = Query("", max_length=128),
+        user: dict = Depends(get_current_user),
+    ):
+        document = _ima_document(media_id, group)
         try:
             content = document["txt"].read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
@@ -2430,10 +2443,11 @@ def create_api_router(
     @router.get("/ima-documents/{media_id}/pdf")
     def get_ima_document_pdf(
         media_id: str,
+        group: str = Query("", max_length=128),
         download: int = Query(0, ge=0, le=1),
         user: dict = Depends(get_current_user),
     ):
-        document = _ima_document(media_id)
+        document = _ima_document(media_id, group)
         from urllib.parse import quote
 
         disposition = "attachment" if download else "inline"
