@@ -828,3 +828,106 @@ def test_twitter_display_pref_swaps_stored_src():
     assert with_twitter_display_row(row, True)["title"] == "中文标题"
     swapped = apply_twitter_feed([row], {"translate_twitter": 0})
     assert swapped[0]["title"] == "Hello title" and swapped[0]["content"] == "Hello original"
+
+    junk = {
+        "platform": "twitter",
+        "title": "…",
+        "content": "…",
+        "title_src": 'RT @implausibleblog: Journalist, "You\'re against vaccines?"',
+        "content_src": 'RT @implausibleblog: Journalist, "You\'re against vaccines?"\n\nTrump supporter, "Absolutely, 100%"',
+    }
+    recovered = with_twitter_display_row(junk, True)
+    assert recovered["content"] == junk["content_src"]
+    assert recovered["title"] == junk["title_src"]
+
+
+def test_twitter_fetch_unwraps_retweet_original(monkeypatch):
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
+
+    def handler(request):
+        if "UserByScreenName" in str(request.url):
+            return httpx.Response(200, json=_user_response())
+        if "UserTweets" in str(request.url):
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "user": {
+                            "result": {
+                                "__typename": "User",
+                                "timeline": {
+                                    "timeline": {
+                                        "instructions": [
+                                            {
+                                                "type": "TimelineAddEntries",
+                                                "entries": [
+                                                    {
+                                                        "content": {
+                                                            "__typename": "TimelineTimelineItem",
+                                                            "itemContent": {
+                                                                "tweet_results": {
+                                                                    "result": {
+                                                                        "rest_id": "2092578336669384890",
+                                                                        "legacy": {
+                                                                            "full_text": "RT @implausibleblog: Journalist, \"You're against vaccines?\"\n\nTrump suppor…",
+                                                                            "created_at": "Wed Aug 26 11:42:00 +0000 2026",
+                                                                            "id_str": "2092578336669384890",
+                                                                            "retweeted_status_result": {
+                                                                                "result": {
+                                                                                    "rest_id": "orig1",
+                                                                                    "legacy": {
+                                                                                        "full_text": (
+                                                                                            'Journalist, "You\'re against vaccines?"\n\n'
+                                                                                            'Trump supporter, "Absolutely, 100%"\n\n'
+                                                                                            'Journalist, "All vaccines?"\n\n'
+                                                                                            'Trump supporter, "Well no, just the new ones."'
+                                                                                        ),
+                                                                                        "created_at": "Wed Aug 26 10:00:00 +0000 2026",
+                                                                                        "extended_entities": {
+                                                                                            "media": [
+                                                                                                {
+                                                                                                    "type": "photo",
+                                                                                                    "media_url_https": "https://pbs.twimg.com/rt.jpg",
+                                                                                                }
+                                                                                            ]
+                                                                                        },
+                                                                                    },
+                                                                                    "core": {
+                                                                                        "user_results": {
+                                                                                            "result": {
+                                                                                                "legacy": {
+                                                                                                    "screen_name": "implausibleblog"
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                    },
+                                                                                }
+                                                                            },
+                                                                        },
+                                                                    }
+                                                                }
+                                                            },
+                                                        }
+                                                    }
+                                                ],
+                                            }
+                                        ]
+                                    }
+                                },
+                            }
+                        }
+                    }
+                },
+            )
+        return httpx.Response(404)
+
+    db = DB(":memory:")
+    kid = db.add_kol("twitter", "RamenPanda", "https://x.com/IamRamenPanda")
+    fetcher = _make_fetcher(handler, db)
+    posts = fetcher.fetch(db.get_kol(kid))
+    assert len(posts) == 1
+    assert posts[0].external_id == "2092578336669384890"
+    assert posts[0].post_type == "retweet"
+    assert "Absolutely, 100%" in posts[0].content
+    assert posts[0].content.startswith("RT @implausibleblog:")
+    assert posts[0].images == ["https://pbs.twimg.com/rt.jpg"]

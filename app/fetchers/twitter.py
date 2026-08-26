@@ -183,6 +183,49 @@ def extract_screen_name(external_id: str) -> str:
     return ""
 
 
+def _visibility_tweet(tweet: dict) -> dict:
+    if (
+        tweet.get("__typename") == "TweetWithVisibilityResults"
+        and isinstance(tweet.get("tweet"), dict)
+    ):
+        return tweet["tweet"]
+    return tweet
+
+
+def _retweeted_tweet(tweet: dict) -> dict | None:
+    legacy = tweet.get("legacy") or {}
+    nested = (
+        (legacy.get("retweeted_status_result") or {}).get("result")
+        or (tweet.get("retweeted_status_result") or {}).get("result")
+    )
+    if isinstance(nested, dict):
+        return _visibility_tweet(nested)
+    return None
+
+
+def _tweet_screen_name(tweet: dict) -> str:
+    core = tweet.get("core") or {}
+    user = (core.get("user_results") or {}).get("result") or {}
+    return str(
+        (user.get("core") or {}).get("screen_name")
+        or (user.get("legacy") or {}).get("screen_name")
+        or ""
+    ).strip()
+
+
+def _tweet_text_and_images(tweet: dict) -> tuple[str, list[str], bool]:
+    legacy = tweet.get("legacy") or {}
+    text = (legacy.get("full_text") or legacy.get("text") or "").strip()
+    images = extract_twitter_images(legacy)
+    media = (legacy.get("extended_entities") or {}).get("media") or []
+    has_video = any((item.get("type") or "") in ("video", "animated_gif") for item in media)
+    note = (((tweet.get("note_tweet") or {}).get("note_tweet_results") or {}).get("result") or {})
+    note_text = (note.get("text") or "").strip()
+    if note_text and len(note_text) > len(text):
+        text = note_text
+    return text, images, has_video
+
+
 def extract_twitter_images(legacy: dict) -> list[str]:
     """X 推文图片：extended_entities.media 里的照片 URL（最多 4 张）。"""
     out: list[str] = []
@@ -270,13 +313,7 @@ def _append_tweet(node, out: list[dict]) -> None:
         return
     tweet = (node.get("tweet_results") or {}).get("result")
     if isinstance(tweet, dict):
-        # 受限可见性推文包一层 TweetWithVisibilityResults，真实内容在 .tweet 里
-        if (
-            tweet.get("__typename") == "TweetWithVisibilityResults"
-            and isinstance(tweet.get("tweet"), dict)
-        ):
-            tweet = tweet["tweet"]
-        out.append(tweet)
+        out.append(_visibility_tweet(tweet))
         return
     item_content = node.get("itemContent")
     if isinstance(item_content, dict):
@@ -485,12 +522,13 @@ class TwitterFetcher(Fetcher):
             tweet_id = tweet.get("rest_id") or legacy.get("id_str") or ""
             if not tweet_id:
                 continue
-            text = (legacy.get("full_text") or legacy.get("text") or "").strip()
-            images = extract_twitter_images(legacy)
-            media = (legacy.get("extended_entities") or {}).get("media") or []
-            has_video = any(
-                (m.get("type") or "") in ("video", "animated_gif") for m in media
-            )
+            original = _retweeted_tweet(tweet)
+            source = original or tweet
+            text, images, has_video = _tweet_text_and_images(source)
+            if original:
+                screen = _tweet_screen_name(original)
+                if screen and not text.startswith(f"RT @{screen}"):
+                    text = f"RT @{screen}:\n{text}" if text else f"RT @{screen}"
             if not text:
                 if images:
                     text = "图片"
@@ -498,16 +536,7 @@ class TwitterFetcher(Fetcher):
                     text = "视频"
                 else:
                     continue
-            # 长文帖（NoteTweet/article）：legacy.full_text 只是摘要（实测 200 字截断），
-            # 完整正文在 note_tweet.note_tweet_results.result.text（同响应，最长 2500+ 字）
-            note = (
-                ((tweet.get("note_tweet") or {}).get("note_tweet_results") or {})
-                .get("result") or {}
-            )
-            note_text = (note.get("text") or "").strip()
-            if note_text and len(note_text) > len(text):
-                text = note_text
-            post_type = "reply" if legacy.get("in_reply_to_status_id_str") else ""
+            post_type = "retweet" if original else ("reply" if legacy.get("in_reply_to_status_id_str") else "")
             posts.append(
                 Post(
                     platform=self.platform,

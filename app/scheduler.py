@@ -21,6 +21,7 @@ from .fetchers.base import (
     PLATFORM_LABELS,
     Fetcher,
     Post,
+    is_collapsed_translation,
     twitter_translate_enabled,
     with_twitter_display,
 )
@@ -306,7 +307,7 @@ def translate_text(
                 )
                 resp.raise_for_status()
                 translated = _parse_x_translation_body(resp.text)
-                if translated:
+                if translated and not is_collapsed_translation(translated, text):
                     return translated
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"x_translate: {exc}")
@@ -323,7 +324,7 @@ def translate_text(
                 return text
             resp.raise_for_status()
             translated = ((resp.json() or {}).get("responseData") or {}).get("translatedText") or ""
-            if translated:
+            if translated and not is_collapsed_translation(translated, text):
                 return translated
         except Exception as exc:  # noqa: BLE001
             errors.append(f"mymemory: {exc}")

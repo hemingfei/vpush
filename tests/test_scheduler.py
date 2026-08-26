@@ -2827,6 +2827,25 @@ def test_translate_text_uses_x_official_translation():
     assert len(calls) == 1  # 不走 google/mymemory 降级
 
 
+def test_translate_text_rejects_collapsed_ellipsis():
+    def handler(request):
+        if "grok/translation.json" in str(request.url):
+            return httpx.Response(200, json={"result": {"text": "…"}})
+        return httpx.Response(200, json={"responseData": {"translatedText": "。"}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    src = 'RT @implausibleblog: Journalist, "You\'re against vaccines?"\n\nTrump supporter, "Absolutely, 100%"'
+    assert (
+        translate_text(
+            src,
+            client=client,
+            tweet_id="2092578336669384890",
+            twitter_cookie="auth_token=a; ct0=b",
+        )
+        == src
+    )
+
+
 def test_translate_text_x_official_missing_cookie_falls_back():
     calls = []
 

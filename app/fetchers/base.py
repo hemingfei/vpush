@@ -46,6 +46,22 @@ class Post:
     content_src: str = ""
 
 
+_COLLAPSED_TRANSLATION_RE = re.compile(r"^[\s\W_]+$", re.UNICODE)
+
+
+def is_collapsed_translation(translated: str, source: str) -> bool:
+    """X 转帖/带链接帖的官方翻译常收成省略号或单个标点，这种译文不能覆盖原文。"""
+    text = (translated or "").strip()
+    original = (source or "").strip()
+    if not original or text == original:
+        return False
+    if not text:
+        return True
+    if _COLLAPSED_TRANSLATION_RE.fullmatch(text) and len(original) > 3:
+        return True
+    return len(text) <= 4 and len(original) >= 20
+
+
 def twitter_translate_enabled(user: dict | None) -> bool:
     """默认看中文译文；显式关掉才回原文。"""
     if not user or user.get("translate_twitter") is None:
@@ -54,7 +70,15 @@ def twitter_translate_enabled(user: dict | None) -> bool:
 
 
 def with_twitter_display(post: Post, translate: bool) -> Post:
-    if post.platform != "twitter" or translate:
+    if post.platform != "twitter":
+        return post
+    if translate:
+        if post.content_src and is_collapsed_translation(post.content, post.content_src):
+            return replace(
+                post,
+                title=post.title_src or post.title,
+                content=post.content_src,
+            )
         return post
     title = post.title_src or post.title
     content = post.content_src or post.content
@@ -64,10 +88,18 @@ def with_twitter_display(post: Post, translate: bool) -> Post:
 
 
 def with_twitter_display_row(row: dict, translate: bool) -> dict:
-    if (row.get("platform") or "") != "twitter" or translate:
+    if (row.get("platform") or "") != "twitter":
         return row
     src_t = row.get("title_src") or ""
     src_c = row.get("content_src") or ""
+    if translate:
+        if src_c and is_collapsed_translation(row.get("content") or "", src_c):
+            out = dict(row)
+            out["content"] = src_c
+            if src_t:
+                out["title"] = src_t
+            return out
+        return row
     if not src_t and not src_c:
         return row
     out = dict(row)
