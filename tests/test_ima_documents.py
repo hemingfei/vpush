@@ -239,6 +239,76 @@ def test_disabled_or_incomplete_groups_do_not_configure_account():
     assert cfg.configured is False
 
 
+def test_client_uses_first_enabled_group_when_legacy_scalars_are_empty(monkeypatch):
+    from app import ima_documents
+
+    group = ImaGroupConfig(
+        id="group-1",
+        name="团队资料",
+        knowledge_base_id="group-kb",
+        root_folder_id="group-root",
+    )
+    config = ImaDocumentConfig(
+        uid="uid",
+        refresh_token="refresh",
+        knowledge_base_id="",
+        root_folder_id="",
+        groups=(group,),
+    )
+    client = ImaPureClient(config)
+    assert client.effective_knowledge_base_id == "group-kb"
+    assert client.effective_root_folder_id == "group-root"
+
+    requests = []
+    client._token = lambda: "access"
+
+    def open_json(request):
+        requests.append(request)
+        return {"code": 0, "knowledge_list": [], "is_end": True}, {}
+
+    client._open_json = open_json
+    client.list_items("child-folder")
+    assert json.loads(requests[0].data)["knowledge_base_id"] == "group-kb"
+
+    seen_folders = []
+
+    def list_items(folder_id):
+        seen_folders.append(folder_id)
+        return []
+
+    client.list_items = list_items
+    client.manifest()
+    assert seen_folders == ["group-root"]
+
+    encrypted_plaintexts = []
+    monkeypatch.setattr(
+        ima_documents,
+        "encrypt_body",
+        lambda plain: (encrypted_plaintexts.append(plain) or (b"key", "encrypted", "wrapped")),
+    )
+    monkeypatch.setattr(
+        ima_documents,
+        "decrypt_body",
+        lambda raw, key: b'{"code": 0, "jump_url": "https://example.invalid/media"}',
+    )
+
+    class Response:
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def read(self):
+            return b"response"
+
+    monkeypatch.setattr(ima_documents.urllib.request, "urlopen", lambda request, timeout: Response())
+    client.get_media("media-1")
+    assert json.loads(encrypted_plaintexts[0].decode())["source_knowledge_base_id"] == "group-kb"
+
+
 def test_archive_paths_are_relative_and_confined(tmp_path):
     store = ImaDocumentStore(tmp_path / "ima")
     record = {"media_id": "file_abc", "name": "../report.pdf", "day": "0825"}

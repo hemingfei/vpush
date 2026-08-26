@@ -245,6 +245,20 @@ class ImaPureClient:
         self.ctk = ""
         self.ctk_expire = 0
 
+    @property
+    def effective_knowledge_base_id(self) -> str:
+        for group in self.config.groups:
+            if group.enabled and group.knowledge_base_id and group.root_folder_id:
+                return group.knowledge_base_id
+        return self.config.knowledge_base_id
+
+    @property
+    def effective_root_folder_id(self) -> str:
+        for group in self.config.groups:
+            if group.enabled and group.knowledge_base_id and group.root_folder_id:
+                return group.root_folder_id
+        return self.config.root_folder_id
+
     @staticmethod
     def _cookie(token: str, uid: str) -> str:
         return (
@@ -317,7 +331,7 @@ class ImaPureClient:
         cursor = ""
         while True:
             body: dict[str, Any] = {
-                "knowledge_base_id": self.config.knowledge_base_id,
+                "knowledge_base_id": self.effective_knowledge_base_id,
                 "folder_id": folder_id,
                 "limit": "50",
             }
@@ -341,7 +355,7 @@ class ImaPureClient:
 
     def manifest(self) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
-        for folder in self.list_items(self.config.root_folder_id):
+        for folder in self.list_items(self.effective_root_folder_id):
             if folder.get("media_type") != 99:
                 continue
             folder_info = folder.get("folder_info") or {}
@@ -379,7 +393,7 @@ class ImaPureClient:
         plain = json.dumps(
             {
                 "media_id": media_id,
-                "source_knowledge_base_id": self.config.knowledge_base_id,
+                "source_knowledge_base_id": self.effective_knowledge_base_id,
             },
             ensure_ascii=False,
             indent=2,
