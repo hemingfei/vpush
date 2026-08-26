@@ -66,6 +66,44 @@ def test_config_migrates_legacy_single_group():
     assert cfg.groups[0].source == "manual"
 
 
+def test_persisted_legacy_group_tracks_updated_scalar_paths():
+    db = FakeDB(
+        {
+            IMA_PURE_GROUPS_KEY: json.dumps(
+                [
+                    {
+                        "id": IMA_LEGACY_GROUP_ID,
+                        "name": "IMA 文档",
+                        "knowledge_base_id": "old-kb",
+                        "root_folder_id": "old-root",
+                        "enabled": True,
+                        "source": "manual",
+                    },
+                    {
+                        "id": "manual-other",
+                        "name": "其他群组",
+                        "knowledge_base_id": "other-kb",
+                        "root_folder_id": "other-root",
+                        "enabled": True,
+                        "source": "manual",
+                    },
+                ],
+                ensure_ascii=False,
+            ),
+            "ima_pure_knowledge_base_id": "new-kb",
+            "ima_pure_root_folder_id": "new-root",
+        }
+    )
+    cfg = ImaDocumentConfig.from_db(db)
+    assert [(group.id, group.knowledge_base_id, group.root_folder_id) for group in cfg.groups] == [
+        (IMA_LEGACY_GROUP_ID, "new-kb", "new-root"),
+        ("manual-other", "other-kb", "other-root"),
+    ]
+    client = ImaPureClient(cfg)
+    assert client.effective_knowledge_base_id == "new-kb"
+    assert client.effective_root_folder_id == "new-root"
+
+
 def test_config_reads_group_registry_without_exposing_token():
     db = FakeDB(
         {
@@ -472,6 +510,63 @@ def test_discover_groups_paginates_and_resolves_missing_root(monkeypatch):
     assert requests == [{"cursor": ""}, {"cursor": "next"}]
 
 
+def test_discovery_error_is_preserved_when_group_also_fails(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    db = FakeDB(
+        {
+            "ima_pure_uid": "uid",
+            "ima_pure_refresh_token": "refresh",
+            "ima_pure_knowledge_base_id": "legacy-kb",
+            "ima_pure_root_folder_id": "legacy-root",
+            IMA_PURE_GROUPS_KEY: json.dumps(
+                [
+                    {
+                        "id": "first",
+                        "name": "一组",
+                        "knowledge_base_id": "kb-1",
+                        "root_folder_id": "root-1",
+                        "enabled": True,
+                        "source": "manual",
+                    },
+                    {
+                        "id": "second",
+                        "name": "二组",
+                        "knowledge_base_id": "kb-2",
+                        "root_folder_id": "root-2",
+                        "enabled": True,
+                        "source": "manual",
+                    },
+                ],
+                ensure_ascii=False,
+            ),
+        }
+    )
+    calls = []
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.group = group
+
+        def discover_groups(self):
+            raise RuntimeError("discovery https://secret.invalid/token=secret")
+
+        def manifest(self):
+            calls.append(self.group.id)
+            if self.group.id == "first":
+                raise RuntimeError("group failed https://group.invalid/sign=secret")
+            return []
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    result = ImaDocumentService(db, tmp_path / "ima").sync_once()
+    assert calls == ["first", "second"]
+    assert result["failed_groups"] == ["first"]
+    assert result["discovery_error"]
+    assert result["last_error"] == result["discovery_error"]
+    assert "secret.invalid" not in result["discovery_error"]
+    assert "group.invalid" not in result["group_errors"]["first"]
+
+
 def test_failed_group_does_not_block_later_group(tmp_path, monkeypatch):
     from app import ima_documents
 
@@ -503,6 +598,42 @@ def test_failed_group_does_not_block_later_group(tmp_path, monkeypatch):
     assert result["failed_groups"] == ["first"]
     assert result["succeeded_groups"] == 1
     assert "secret.invalid" not in result["last_error"]
+
+
+def test_list_items_rejects_repeated_cursor(monkeypatch):
+    client = ImaPureClient(
+        ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
+    )
+    requests = []
+    client._token = lambda: "access"
+
+    def open_json(request):
+        requests.append(json.loads(request.data))
+        if len(requests) > 2:
+            raise RuntimeError("test guard")
+        return {"code": 0, "knowledge_list": [], "is_end": False, "next_cursor": "repeat"}, {}
+
+    client._open_json = open_json
+    with pytest.raises(RuntimeError, match="cursor"):
+        client.list_items("root")
+    assert len(requests) == 2
+
+
+def test_discover_groups_rejects_repeated_cursor(monkeypatch):
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    requests = []
+    client._token = lambda: "access"
+
+    def open_json(request):
+        requests.append(json.loads(request.data))
+        if len(requests) > 2:
+            raise RuntimeError("test guard")
+        return {"code": 0, "data": {"knowledge_base_list": [], "is_end": False, "next_cursor": "repeat"}}, {}
+
+    client._open_json = open_json
+    with pytest.raises(RuntimeError, match="cursor"):
+        client.discover_groups()
+    assert len(requests) == 2
 
 
 def test_archive_paths_are_relative_and_confined(tmp_path):
@@ -727,6 +858,30 @@ def test_manifest_excludes_non_pdf_media():
     )
     client.list_items = lambda folder_id: next(responses)
     assert [item["media_id"] for item in client.manifest()] == ["file_report", "pdf_report"]
+
+
+def test_manifest_skips_malformed_folders_and_items():
+    client = ImaPureClient(
+        ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
+    )
+    responses = {
+        "root": [
+            None,
+            {"media_type": 99, "folder_info": None},
+            {"media_type": 99, "folder_info": "invalid"},
+            {"media_type": 99, "folder_info": {"folder_id": 123, "name": "bad"}},
+            {"media_type": 99, "folder_info": {"folder_id": "day", "name": "0825"}},
+        ],
+        "day": [
+            None,
+            {"media_id": 123, "name": "wrong.pdf"},
+            {"media_id": "bad-name", "name": {"invalid": True}},
+            {"media_id": "valid-file", "name": "valid.pdf", "file_size": 8},
+        ],
+    }
+    client.list_items = lambda folder_id: responses[folder_id]
+    records = client.manifest()
+    assert [record["media_id"] for record in records] == ["valid-file"]
 
 
 def test_service_sync_is_incremental(tmp_path, monkeypatch):

@@ -239,7 +239,19 @@ def _read_groups(db: Any, kb: str, root: str) -> tuple[ImaGroupConfig, ...]:
                 )
             )
         if groups:
-            return tuple(groups)
+            normalized_groups = []
+            for group in groups:
+                if group.id == IMA_LEGACY_GROUP_ID:
+                    group = ImaGroupConfig(
+                        id=group.id,
+                        name=group.name,
+                        knowledge_base_id=kb,
+                        root_folder_id=root,
+                        enabled=group.enabled,
+                        source=group.source,
+                    )
+                normalized_groups.append(group)
+            return tuple(normalized_groups)
     return (_legacy_group(kb, root),)
 
 
@@ -388,8 +400,12 @@ class ImaPureClient:
     def discover_groups(self) -> tuple[ImaGroupConfig, ...]:
         raw_items: list[dict[str, Any]] = []
         cursor = ""
+        seen_cursors: set[str] = set()
         resolved_roots: dict[str, str] = {}
         while True:
+            if cursor in seen_cursors:
+                raise RuntimeError("IMA group discovery pagination repeated cursor")
+            seen_cursors.add(cursor)
             token = self._token()
             request = urllib.request.Request(
                 BASE + "/knowledge_tab_reader/list_knowledge_bases",
@@ -413,7 +429,10 @@ class ImaPureClient:
             raw_items.extend(item for item in page_items if isinstance(item, dict))
             if payload.get("is_end") is True or not payload.get("next_cursor"):
                 break
-            cursor = str(payload["next_cursor"])
+            next_cursor = str(payload["next_cursor"])
+            if next_cursor in seen_cursors:
+                raise RuntimeError("IMA group discovery pagination repeated cursor")
+            cursor = next_cursor
 
         for item in raw_items:
             group_id_value = item.get("id") or item.get("knowledge_base_id")
@@ -456,7 +475,11 @@ class ImaPureClient:
     def list_items(self, folder_id: str) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         cursor = ""
+        seen_cursors: set[str] = set()
         while True:
+            if cursor in seen_cursors:
+                raise RuntimeError("IMA list pagination repeated cursor")
+            seen_cursors.add(cursor)
             body: dict[str, Any] = {
                 "knowledge_base_id": getattr(
                     self, "_discovery_knowledge_base_id", self.effective_knowledge_base_id
@@ -477,40 +500,81 @@ class ImaPureClient:
             if data.get("code") not in (0, None):
                 raise RuntimeError(f"IMA list failed code={data.get('code')}")
             payload = self._payload(data)
-            items.extend(payload.get("knowledge_list") or [])
-            if payload.get("is_end", True) or not payload.get("next_cursor"):
+            if not isinstance(payload, dict):
                 return items
-            cursor = str(payload["next_cursor"])
+            page_items = payload.get("knowledge_list")
+            if isinstance(page_items, list):
+                items.extend(page_items)
+            if payload.get("is_end") is True or not payload.get("next_cursor"):
+                return items
+            next_cursor = str(payload["next_cursor"])
+            if next_cursor in seen_cursors:
+                raise RuntimeError("IMA list pagination repeated cursor")
+            cursor = next_cursor
 
     def manifest(self) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
         for folder in self.list_items(self.effective_root_folder_id):
-            if folder.get("media_type") != 99:
+            if not isinstance(folder, dict) or folder.get("media_type") != 99:
                 continue
-            folder_info = folder.get("folder_info") or {}
-            day = str(folder_info.get("name") or folder.get("name") or "unknown")
-            folder_id = str(folder_info.get("folder_id") or "")
-            if not folder_id:
+            folder_info = folder.get("folder_info")
+            if not isinstance(folder_info, dict):
                 continue
+            folder_id = folder_info.get("folder_id")
+            if not isinstance(folder_id, str) or not folder_id.strip():
+                continue
+            day_value = folder_info.get("name")
+            if day_value is None:
+                day_value = folder.get("name")
+            if day_value is not None and not isinstance(day_value, str):
+                continue
+            day = (day_value or "unknown").strip() if isinstance(day_value, str) else "unknown"
             for item in self.list_items(folder_id):
-                media_id = str(item.get("media_id") or "")
+                if not isinstance(item, dict):
+                    continue
+                media_type = item.get("media_type")
+                if media_type is not None and (
+                    isinstance(media_type, bool) or not isinstance(media_type, int)
+                ):
+                    continue
+                if media_type == 99:
+                    continue
+                media_id_value = item.get("media_id")
+                if not isinstance(media_id_value, str) or not media_id_value.strip():
+                    continue
+                media_id = media_id_value.strip()
                 try:
                     media_id = ImaDocumentStore.validate_media_id(media_id)
                 except ValueError:
                     logger.warning("IMA ignored invalid media id")
                     continue
-                if item.get("media_type") == 99:
+                name_value = item.get("name")
+                if name_value is not None and not isinstance(name_value, str):
                     continue
-                name = str(item.get("name") or media_id)
+                file_size = item.get("file_size")
+                if file_size is not None and (
+                    isinstance(file_size, bool) or not isinstance(file_size, int)
+                ):
+                    continue
+                md5_value = item.get("md5_sum")
+                if md5_value is not None and not isinstance(md5_value, str):
+                    continue
+                ts_value = item.get("create_time")
+                if ts_value is not None and (
+                    isinstance(ts_value, bool)
+                    or not isinstance(ts_value, (str, int, float))
+                ):
+                    continue
+                name = name_value or media_id
                 if not (name.lower().endswith(".pdf") or media_id.lower().startswith("pdf_")):
                     continue
                 record = {
                     "media_id": media_id,
                     "name": name,
                     "day": day,
-                    "size": int(item.get("file_size") or 0),
-                    "md5": str(item.get("md5_sum") or ""),
-                    "ts": str(item.get("create_time") or ""),
+                    "size": file_size or 0,
+                    "md5": md5_value or "",
+                    "ts": str(ts_value or ""),
                 }
                 if self.group is not None:
                     record["group_id"] = self.group.id
@@ -1086,6 +1150,7 @@ class ImaDocumentService:
             enabled_groups = [group for group in merged_groups if group.enabled]
             total = pending = downloaded = failures = 0
             failed_groups: list[str] = []
+            group_errors: dict[str, str] = {}
             last_error = discovery_error
             succeeded_groups = 0
             for group in enabled_groups:
@@ -1097,16 +1162,23 @@ class ImaDocumentService:
                     downloaded += group_result["downloaded"]
                     failures += group_result["failed"]
                     if group_result["last_error"]:
-                        last_error = group_result["last_error"]
+                        group_errors[group.id] = group_result["last_error"]
+                        if not last_error:
+                            last_error = group_result["last_error"]
                 except Exception as exc:  # noqa: BLE001 - isolate one group
                     failed_groups.append(group.id)
                     failures += 1
-                    last_error = _safe_error(exc)
-                    logger.warning("IMA group failed group=%s error=%s", group.id[:64], last_error)
+                    group_error = _safe_error(exc)
+                    group_errors[group.id] = group_error
+                    if not last_error:
+                        last_error = group_error
+                    logger.warning("IMA group failed group=%s error=%s", group.id[:64], group_error)
             result = {
                 "groups": len(enabled_groups),
                 "succeeded_groups": succeeded_groups,
                 "failed_groups": failed_groups,
+                "discovery_error": discovery_error,
+                "group_errors": group_errors,
                 "total": total,
                 "pending": pending,
                 "downloaded": downloaded,
