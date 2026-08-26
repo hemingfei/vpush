@@ -209,18 +209,20 @@ def deliver_post(
 
     成功写成功日志；失败写失败日志 + 进重试队列 + 调 alert_cb 通知管理员。
     调用方负责先做 channel_enabled / channel_bound 过滤。
+    构造 notifier 也纳入 try：飞书解密失败、VAPID 密钥生成出错等
+    绑定态异常必须走失败日志+重试，不能打断整轮分发让其余用户静默丢消息。
     """
-    notifier = build_channel_notifier(
-        channel,
-        user,
-        notifiers_config,
-        client=client,
-        favorite=favorite,
-        keyword=keyword,
-        db=db,
-    )
     delivery_post = replace(post, images=[]) if user.get("hide_images") else post
     try:
+        notifier = build_channel_notifier(
+            channel,
+            user,
+            notifiers_config,
+            client=client,
+            favorite=favorite,
+            keyword=keyword,
+            db=db,
+        )
         notifier.notify(delivery_post)
         db.add_push_log(post_id, channel, "success", user_id=user["id"])
     except Exception as exc:  # noqa: BLE001 - 单渠道失败不影响其他渠道/用户
