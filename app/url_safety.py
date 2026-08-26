@@ -35,6 +35,9 @@ _BLOCKED_NETWORKS = [
     ipaddress.ip_network("ff00::/8"),
 ]
 
+# 嵌入 IPv4 的 IPv6 前缀（NAT64）；v4 映射用 addr.ipv4_mapped 判定，无需网段常量
+_NAT64_NETWORK = ipaddress.ip_network("64:ff9b::/96")
+
 
 def _blocked_ip(ip: str) -> bool:
     """单个 IP（含 IPv6 作用域后缀）是否命中拒绝网段；非法 IP 一律拒绝。"""
@@ -42,6 +45,13 @@ def _blocked_ip(ip: str) -> bool:
         addr = ipaddress.ip_address(ip.split("%", 1)[0])
     except ValueError:
         return True
+    # 解包嵌 IPv4 的 IPv6 字面量（::ffff:10.0.0.1 等）：不展开则对所有
+    # v4 网段做 `in` 判断恒为 False，内网防护被映射写法整个绕过
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped:
+            addr = addr.ipv4_mapped
+        elif addr in _NAT64_NETWORK:
+            addr = ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)
     return any(addr in net for net in _BLOCKED_NETWORKS)
 
 

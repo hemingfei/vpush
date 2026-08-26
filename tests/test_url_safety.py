@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from app.url_safety import is_allowed_user_llm_base, is_safe_http_url, safe_get
+from app.url_safety import _blocked_ip, is_allowed_user_llm_base, is_safe_http_url, safe_get
 
 
 def test_rejects_non_http_and_empty():
@@ -24,6 +24,17 @@ def test_rejects_internal_bare_ips():
         "http://[fc00::1]/",
     ):
         assert is_safe_http_url(url) is False, url
+
+
+def test_blocked_ip_unwraps_ipv4_embedded_in_ipv6():
+    # IPv4 映射/NAT64 字面量是 IPv6Address 类型，不解包则全部 v4 黑名单失效
+    assert _blocked_ip("::ffff:10.0.0.1")
+    assert _blocked_ip("::ffff:127.0.0.1")
+    assert _blocked_ip("::FFFF:169.254.169.254")
+    assert _blocked_ip("::ffff:192.168.1.1")
+    assert _blocked_ip("64:ff9b::a00:1")  # NAT64 封装的 10.0.0.1
+    assert not _blocked_ip("::ffff:8.8.8.8")  # 公网映射放行
+    assert not _blocked_ip("2001:4860:4860::8888")  # 纯公网 v6 放行
 
 
 def test_allows_public_bare_ips():
