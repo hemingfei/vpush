@@ -2476,8 +2476,11 @@ def create_api_router(
         user: dict = Depends(get_current_user),
     ):
         document = _ima_document(user, media_id, group)
+        txt = document.get("txt")
+        if txt is None or not txt.is_file():
+            raise HTTPException(status_code=404, detail="TXT 文件不存在")
         try:
-            content = document["txt"].read_text(encoding="utf-8", errors="replace")
+            content = txt.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
             raise HTTPException(status_code=404, detail="TXT 文件不存在") from exc
         return Response(content=content, media_type="text/plain")
@@ -2490,12 +2493,15 @@ def create_api_router(
         user: dict = Depends(get_current_user),
     ):
         document = _ima_document(user, media_id, group)
+        pdf = document.get("pdf")
+        if pdf is None or not pdf.is_file():
+            raise HTTPException(status_code=404, detail="PDF 文件不存在")
         from urllib.parse import quote
 
         disposition = "attachment" if download else "inline"
         filename = quote(str(document["name"] or "document.pdf"))
         return FileResponse(
-            str(document["pdf"]),
+            str(pdf),
             media_type="application/pdf",
             headers={"Content-Disposition": f"{disposition}; filename*=UTF-8''{filename}"},
         )

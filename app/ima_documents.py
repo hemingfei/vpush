@@ -21,6 +21,8 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from .fetchers.ima_inspect import item_cover, item_text
+
 logger = logging.getLogger(__name__)
 
 BASE = os.environ.get("IMA_BASE", "https://ima.qq.com/cgi-bin")
@@ -575,6 +577,8 @@ class ImaPureClient:
                     "size": file_size or 0,
                     "md5": md5_value or "",
                     "ts": str(ts_value or ""),
+                    "abstract": item_text(item)[:2000],
+                    "cover_url": item_cover(item)[:2000],
                 }
                 if self.group is not None:
                     record["group_id"] = self.group.id
@@ -1047,6 +1051,18 @@ class ImaDocumentStore:
             return None
         return self._safe_path(relative)
 
+    @staticmethod
+    def _tags(state_item: dict[str, Any]) -> list[str]:
+        tags = state_item.get("tags")
+        if isinstance(tags, list) and all(isinstance(tag, str) for tag in tags):
+            return list(tags)
+        return []
+
+    @staticmethod
+    def _file_size(state_item: dict[str, Any], record: dict[str, Any], pdf: Path | None) -> int:
+        fallback = pdf.stat().st_size if pdf is not None and pdf.is_file() else 0
+        return int(state_item.get("size") or record.get("size") or fallback)
+
     def is_complete(
         self,
         record: dict[str, Any],
@@ -1083,6 +1099,7 @@ class ImaDocumentStore:
         state = self.load_state()
         query = str(query or "").strip().casefold()
         day = str(day or "").strip()
+        requested_tag = str(tag or "").strip()
         requested_group = str(group_id or "").strip()
         allowed_groups = {group.id for group in groups} if groups is not None else None
         output: list[dict[str, Any]] = []
@@ -1095,11 +1112,15 @@ class ImaDocumentStore:
             state_item = self._state_item(state, record)
             pdf = self._state_path(state_item.get("pdf"))
             txt = self._state_path(state_item.get("txt"))
-            if not media_id or not pdf or not txt or not pdf.is_file() or not txt.is_file():
+            if not media_id:
                 continue
             if day and str(record.get("day") or "") != day:
                 continue
-            if query and query not in f"{record.get('name', '')} {record.get('day', '')}".casefold():
+            haystack = f"{record.get('name', '')} {record.get('day', '')} {record.get('abstract', '')}".casefold()
+            if query and query not in haystack:
+                continue
+            tags = self._tags(state_item)
+            if requested_tag and requested_tag not in tags:
                 continue
             actual_group_id = str(record.get("group_id") or state_item.get("group_id") or self._legacy_group_id or IMA_LEGACY_GROUP_ID)
             if allowed_groups is not None and actual_group_id not in allowed_groups:
@@ -1110,9 +1131,14 @@ class ImaDocumentStore:
                 "media_id": media_id,
                 "name": str(record.get("name") or media_id),
                 "day": str(record.get("day") or "unknown"),
-                "size": int(state_item.get("size") or record.get("size") or pdf.stat().st_size),
+                "size": self._file_size(state_item, record, pdf),
                 "chars": int(state_item.get("chars") or 0),
                 "downloaded_at": str(state_item.get("downloaded_at") or ""),
+                "abstract": str(record.get("abstract") or ""),
+                "cover_url": str(record.get("cover_url") or ""),
+                "tags": tags,
+                "has_pdf": bool(pdf and pdf.is_file()),
+                "has_txt": bool(txt and txt.is_file()),
             }
             metadata_id = actual_group_id
             metadata_name = str(group_name or record.get("group_name") or state_item.get("group_name") or "")
@@ -1154,17 +1180,20 @@ class ImaDocumentStore:
                 continue
             pdf = self._state_path(state_item.get("pdf"))
             txt = self._state_path(state_item.get("txt"))
-            if not pdf or not txt or not pdf.is_file() or not txt.is_file():
-                continue
             result = {
                 "media_id": media_id,
                 "name": str(record.get("name") or media_id),
                 "day": str(record.get("day") or "unknown"),
                 "pdf": pdf,
                 "txt": txt,
-                "size": int(state_item.get("size") or record.get("size") or pdf.stat().st_size),
+                "size": self._file_size(state_item, record, pdf),
                 "chars": int(state_item.get("chars") or 0),
                 "downloaded_at": str(state_item.get("downloaded_at") or ""),
+                "abstract": str(record.get("abstract") or ""),
+                "cover_url": str(record.get("cover_url") or ""),
+                "tags": self._tags(state_item),
+                "has_pdf": bool(pdf and pdf.is_file()),
+                "has_txt": bool(txt and txt.is_file()),
             }
             metadata_id = str(requested_group or record.get("group_id") or state_item.get("group_id") or "")
             metadata_name = str(group_name or record.get("group_name") or state_item.get("group_name") or "")

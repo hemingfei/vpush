@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.db import DB
-from app.ima_documents import ImaGroupConfig
+from app.ima_documents import ImaDocumentConfig, ImaDocumentStore, ImaGroupConfig, ImaPureClient
 from app.ima_kb import catalog, readable_group_ids
 from app.main import create_app
 from app.tagging import tag_text
@@ -150,3 +150,85 @@ def test_user_cannot_see_kb_until_granted_and_subscribed(tmp_path, monkeypatch):
     )
     assert revoked.status_code == 200, revoked.text
     assert client.get("/api/ima-documents/file_abc", headers=user_headers).status_code == 404
+
+
+def test_documents_include_metadata_and_tag_filter(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima")
+    record = {
+        "media_id": "file_meta",
+        "name": "宁德时代纪要.pdf",
+        "day": "0826",
+        "abstract": "排产上修",
+        "cover_url": "https://example.com/c.jpg",
+        "group_id": "banking",
+    }
+    pdf = store.pdf_path(record)
+    txt = store.txt_path(record)
+    pdf.parent.mkdir(parents=True, exist_ok=True)
+    pdf.write_bytes(b"%PDF-1.7")
+    txt.write_text("正文", encoding="utf-8")
+    store.save_manifest([record])
+    store.save_state({
+        store.state_key(record): {
+            "pdf": str(pdf.relative_to(store.root)),
+            "txt": str(txt.relative_to(store.root)),
+            "tags": ["新能源", "宁德时代"],
+            "has_pdf": True,
+            "has_txt": True,
+        }
+    })
+    banking = ImaGroupConfig("banking", "投行", "kb", "root")
+    items = store.documents(groups=(banking,))
+    assert items[0]["abstract"] == "排产上修"
+    assert items[0]["cover_url"] == "https://example.com/c.jpg"
+    assert items[0]["tags"] == ["新能源", "宁德时代"]
+    assert items[0]["has_pdf"] is True
+    assert store.documents(tag="新能源", groups=(banking,))[0]["media_id"] == "file_meta"
+    assert store.documents(tag="宏观", groups=(banking,)) == []
+    assert store.documents(query="排产", groups=(banking,))[0]["media_id"] == "file_meta"
+    detail = store.document("file_meta", group_id="banking", groups=(banking,))
+    assert detail["abstract"] == "排产上修"
+    assert detail["cover_url"] == "https://example.com/c.jpg"
+    assert detail["tags"] == ["新能源", "宁德时代"]
+    assert detail["has_pdf"] is True
+    assert detail["has_txt"] is True
+
+
+def test_documents_can_list_metadata_without_files(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima2")
+    record = {"media_id": "file_bare", "name": "只有摘要.pdf", "day": "0826", "abstract": "摘要", "group_id": "banking"}
+    store.save_manifest([record])
+    store.save_state({store.state_key(record): {"tags": []}})
+    banking = ImaGroupConfig("banking", "投行", "kb", "root")
+    items = store.documents(groups=(banking,))
+    assert items[0]["media_id"] == "file_bare"
+    assert items[0]["has_pdf"] is False
+    assert items[0]["has_txt"] is False
+    detail = store.document("file_bare", group_id="banking", groups=(banking,))
+    assert detail["pdf"] is None
+    assert detail["txt"] is None
+    assert detail["abstract"] == "摘要"
+    assert detail["has_pdf"] is False
+    assert detail["has_txt"] is False
+    other = ImaGroupConfig("macro", "宏观", "kb2", "root2")
+    assert store.documents(groups=(other,)) == []
+    assert store.document("file_bare", group_id="banking", groups=(other,)) is None
+
+
+def test_manifest_records_include_abstract_and_http_cover():
+    group = ImaGroupConfig("banking", "投行研报", "kb-1", "folder-1")
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    client.list_items = lambda folder_id: [
+        {"media_type": 99, "folder_info": {"name": "0825", "folder_id": "day-1"}}
+    ] if folder_id == "folder-1" else [
+        {
+            "media_id": "pdf_1",
+            "name": "report.pdf",
+            "file_size": 4,
+            "abstract": "排产上修",
+            "cover_urls": ["/local/c.jpg", "https://example.com/c.jpg"],
+        }
+    ]
+    records = client.manifest()
+    assert records[0]["abstract"] == "排产上修"
+    assert records[0]["cover_url"] == "https://example.com/c.jpg"
