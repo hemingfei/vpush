@@ -1819,14 +1819,10 @@ class Scheduler:
             # 推送失败重试（每 60 秒检查一次）
             if now_mono - self._last_retry >= 60:
                 self._last_retry = now_mono
-                for item in self.retry_queue.due():
-                    try:
-                        self._retry_push(item)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("重试推送失败 channel=%s err=%s", item["channel"], exc)
-                        self.retry_queue.fail(item)
-            # 把待重试数量落库，供后台「数据源」页展示
-            self.db.set_setting("stats_retry_pending", str(self.retry_queue.pending()))
+                try:
+                    await asyncio.to_thread(self._retry_due_pushes)
+                except Exception:  # noqa: BLE001
+                    logger.exception("重试推送异常")
             # 合并摘要到点统一推送（普通大V，优先大V保持实时）
             if (
                 digest_interval > 0
@@ -1860,7 +1856,7 @@ class Scheduler:
                     logger.exception("次要大V合并摘要推送失败")
             # 免打扰时段结束：补推汇总
             try:
-                self._flush_dnd_buffers()
+                await asyncio.to_thread(self._flush_dnd_buffers)
             except Exception:  # noqa: BLE001
                 logger.exception("免打扰汇总推送失败")
             # 雪球 cookie 主动探测
@@ -1954,7 +1950,7 @@ class Scheduler:
                 if ran:
                     self.db.set_setting("stock_alias_last_date", time.strftime("%Y-%m-%d"))
             try:
-                removed_users = self.db.purge_inactive_users_if_due()
+                removed_users = await asyncio.to_thread(self.db.purge_inactive_users_if_due)
                 if removed_users:
                     logger.info("清理未激活用户 %d 人", removed_users)
             except Exception:  # noqa: BLE001
@@ -1965,7 +1961,9 @@ class Scheduler:
                 retention = self.polling_config.posts_retention_days
                 if retention > 0:
                     try:
-                        removed = self.db.delete_posts_older_than(retention)
+                        removed = await asyncio.to_thread(
+                            self.db.delete_posts_older_than, retention
+                        )
                         if removed:
                             logger.info("清理过期帖子 %d 条（保留 %d 天）", removed, retention)
                     except Exception:  # noqa: BLE001
@@ -1973,7 +1971,9 @@ class Scheduler:
                 log_retention = self.polling_config.push_logs_retention_days
                 if log_retention > 0:
                     try:
-                        removed_logs = self.db.delete_push_logs_older_than(log_retention)
+                        removed_logs = await asyncio.to_thread(
+                            self.db.delete_push_logs_older_than, log_retention
+                        )
                         if removed_logs:
                             logger.info("清理推送日志 %d 条（保留 %d 天）", removed_logs, log_retention)
                     except Exception:  # noqa: BLE001
@@ -2055,6 +2055,17 @@ class Scheduler:
             recovered += 1
         if recovered:
             logger.info("重启恢复待重试推送 %d 条", recovered)
+
+    def _retry_due_pushes(self) -> None:
+        """到点的失败推送补发；含同步网络与 DB 写，只能在 to_thread 里跑。"""
+        for item in self.retry_queue.due():
+            try:
+                self._retry_push(item)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("重试推送失败 channel=%s err=%s", item["channel"], exc)
+                self.retry_queue.fail(item)
+        # 把待重试数量落库，供后台「数据源」页展示
+        self.db.set_setting("stats_retry_pending", str(self.retry_queue.pending()))
 
     def _retry_push(self, item: dict) -> None:
         post = item["post"]
