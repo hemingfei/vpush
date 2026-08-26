@@ -1,13 +1,16 @@
 import base64
+import json
 import time
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.ima_documents import (
+    IMA_PURE_GROUPS_KEY,
     ImaDocumentConfig,
     ImaDocumentService,
     ImaDocumentStore,
+    ImaGroupConfig,
     ImaPureClient,
     _safe_error,
     decrypt_body,
@@ -40,6 +43,111 @@ def test_public_config_never_returns_refresh_token():
     public = cfg.public()
     assert public["refresh_token"]["set"] is True
     assert "secret-token" not in str(public)
+
+
+def test_config_migrates_legacy_single_group():
+    db = FakeDB(
+        {
+            "ima_pure_uid": "uid",
+            "ima_pure_refresh_token": "refresh",
+            "ima_pure_knowledge_base_id": "kb-old",
+            "ima_pure_root_folder_id": "folder-old",
+        }
+    )
+    cfg = ImaDocumentConfig.from_db(db)
+    assert len(cfg.groups) == 1
+    assert cfg.groups[0].name == "IMA 文档"
+    assert cfg.groups[0].knowledge_base_id == "kb-old"
+    assert cfg.groups[0].root_folder_id == "folder-old"
+    assert cfg.groups[0].source == "manual"
+
+
+def test_config_reads_group_registry_without_exposing_token():
+    db = FakeDB(
+        {
+            "ima_pure_refresh_token": "refresh-secret",
+            IMA_PURE_GROUPS_KEY: json.dumps(
+                [
+                    {
+                        "id": "banking",
+                        "name": "投行研报",
+                        "knowledge_base_id": "kb-1",
+                        "root_folder_id": "folder-1",
+                        "enabled": True,
+                        "source": "discovered",
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+        }
+    )
+    public = ImaDocumentConfig.from_db(db).public()
+    assert public["groups"] == [
+        {
+            "id": "banking",
+            "name": "投行研报",
+            "knowledge_base_id": "kb-1",
+            "root_folder_id": "folder-1",
+            "enabled": True,
+            "source": "discovered",
+        }
+    ]
+    assert "refresh-secret" not in json.dumps(public)
+
+
+def test_config_ignores_malformed_group_registry_and_uses_legacy_group():
+    db = FakeDB(
+        {
+            IMA_PURE_GROUPS_KEY: "not-json",
+            "ima_pure_knowledge_base_id": "kb-old",
+            "ima_pure_root_folder_id": "folder-old",
+        }
+    )
+    cfg = ImaDocumentConfig.from_db(db)
+    assert [group.knowledge_base_id for group in cfg.groups] == ["kb-old"]
+
+
+def test_configured_uses_enabled_groups_even_when_legacy_scalars_are_missing():
+    cfg = ImaDocumentConfig(
+        uid="uid",
+        refresh_token="refresh",
+        knowledge_base_id="",
+        root_folder_id="",
+        groups=(
+            ImaGroupConfig(
+                id="group-1",
+                name="团队资料",
+                knowledge_base_id="kb-1",
+                root_folder_id="root-1",
+            ),
+        ),
+    )
+    assert cfg.configured is True
+
+
+def test_disabled_or_incomplete_groups_do_not_configure_account():
+    cfg = ImaDocumentConfig(
+        uid="uid",
+        refresh_token="refresh",
+        knowledge_base_id="",
+        root_folder_id="",
+        groups=(
+            ImaGroupConfig(
+                id="disabled",
+                name="禁用",
+                knowledge_base_id="kb",
+                root_folder_id="root",
+                enabled=False,
+            ),
+            ImaGroupConfig(
+                id="incomplete",
+                name="不完整",
+                knowledge_base_id="kb",
+                root_folder_id="",
+            ),
+        ),
+    )
+    assert cfg.configured is False
 
 
 def test_archive_paths_are_relative_and_confined(tmp_path):

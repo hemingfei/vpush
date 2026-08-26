@@ -40,6 +40,7 @@ IMA_PURE_UID_KEY = "ima_pure_uid"
 IMA_PURE_REFRESH_TOKEN_KEY = "ima_pure_refresh_token"
 IMA_PURE_KB_ID_KEY = "ima_pure_knowledge_base_id"
 IMA_PURE_ROOT_FOLDER_KEY = "ima_pure_root_folder_id"
+IMA_PURE_GROUPS_KEY = "ima_pure_groups"
 IMA_PURE_INTERVAL_KEY = "ima_pure_interval_seconds"
 IMA_PURE_LAST_STARTED_KEY = "ima_pure_last_started_at"
 IMA_PURE_LAST_FINISHED_KEY = "ima_pure_last_finished_at"
@@ -122,27 +123,100 @@ def _secret_status(value: str) -> dict[str, Any]:
 
 
 @dataclass(frozen=True)
+class ImaGroupConfig:
+    id: str
+    name: str
+    knowledge_base_id: str
+    root_folder_id: str
+    enabled: bool = True
+    source: str = "manual"
+
+    def public(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "knowledge_base_id": self.knowledge_base_id,
+            "root_folder_id": self.root_folder_id,
+            "enabled": self.enabled,
+            "source": self.source,
+        }
+
+
+def _legacy_group(kb: str, root: str) -> ImaGroupConfig:
+    return ImaGroupConfig(
+        id=f"legacy:{kb}:{root}",
+        name="IMA 文档",
+        knowledge_base_id=kb,
+        root_folder_id=root,
+    )
+
+
+def _read_groups(db: Any, kb: str, root: str) -> tuple[ImaGroupConfig, ...]:
+    raw = db.get_setting(IMA_PURE_GROUPS_KEY) if db is not None else None
+    if raw:
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            payload = []
+        groups = []
+        for item in payload if isinstance(payload, list) else []:
+            if not isinstance(item, dict):
+                continue
+            group_id = str(item.get("id") or "").strip()
+            group_kb = str(item.get("knowledge_base_id") or "").strip()
+            group_root = str(item.get("root_folder_id") or "").strip()
+            if not group_id or not group_kb or not group_root:
+                continue
+            groups.append(
+                ImaGroupConfig(
+                    id=group_id,
+                    name=str(item.get("name") or group_id).strip()[:100],
+                    knowledge_base_id=group_kb,
+                    root_folder_id=group_root,
+                    enabled=bool(item.get("enabled", True)),
+                    source="discovered" if item.get("source") == "discovered" else "manual",
+                )
+            )
+        if groups:
+            return tuple(groups)
+    return (_legacy_group(kb, root),)
+
+
+@dataclass(frozen=True)
 class ImaDocumentConfig:
     uid: str = IMA_PURE_UID_DEFAULT
     refresh_token: str = ""
     knowledge_base_id: str = IMA_PURE_KB_ID_DEFAULT
     root_folder_id: str = IMA_PURE_ROOT_FOLDER_DEFAULT
     interval_seconds: int = IMA_PURE_INTERVAL_DEFAULT
+    groups: tuple[ImaGroupConfig, ...] = ()
 
     @classmethod
     def from_db(cls, db: Any = None) -> ImaDocumentConfig:
         raw_interval = _setting(db, IMA_PURE_INTERVAL_KEY, "IMA_INTERVAL_SECONDS", str(IMA_PURE_INTERVAL_DEFAULT))
+        uid = _setting(db, IMA_PURE_UID_KEY, "IMA_UID", IMA_PURE_UID_DEFAULT)
+        refresh_token = _setting(db, IMA_PURE_REFRESH_TOKEN_KEY, "IMA_REFRESH_TOKEN")
+        knowledge_base_id = _setting(db, IMA_PURE_KB_ID_KEY, "IMA_KB_ID", IMA_PURE_KB_ID_DEFAULT)
+        root_folder_id = _setting(db, IMA_PURE_ROOT_FOLDER_KEY, "IMA_ROOT_FOLDER_ID", IMA_PURE_ROOT_FOLDER_DEFAULT)
         return cls(
-            uid=_setting(db, IMA_PURE_UID_KEY, "IMA_UID", IMA_PURE_UID_DEFAULT),
-            refresh_token=_setting(db, IMA_PURE_REFRESH_TOKEN_KEY, "IMA_REFRESH_TOKEN"),
-            knowledge_base_id=_setting(db, IMA_PURE_KB_ID_KEY, "IMA_KB_ID", IMA_PURE_KB_ID_DEFAULT),
-            root_folder_id=_setting(db, IMA_PURE_ROOT_FOLDER_KEY, "IMA_ROOT_FOLDER_ID", IMA_PURE_ROOT_FOLDER_DEFAULT),
+            uid=uid,
+            refresh_token=refresh_token,
+            knowledge_base_id=knowledge_base_id,
+            root_folder_id=root_folder_id,
             interval_seconds=_interval(raw_interval),
+            groups=_read_groups(db, knowledge_base_id, root_folder_id),
         )
 
     @property
     def configured(self) -> bool:
-        return bool(self.uid and self.refresh_token and self.knowledge_base_id and self.root_folder_id)
+        return bool(
+            self.uid
+            and self.refresh_token
+            and any(
+                group.enabled and group.knowledge_base_id and group.root_folder_id
+                for group in self.groups
+            )
+        )
 
     def public(self) -> dict[str, Any]:
         return {
@@ -151,6 +225,7 @@ class ImaDocumentConfig:
             "root_folder_id": self.root_folder_id,
             "interval_seconds": self.interval_seconds,
             "refresh_token": _secret_status(self.refresh_token),
+            "groups": [group.public() for group in self.groups],
             "configured": self.configured,
         }
 
