@@ -1179,6 +1179,60 @@ def test_timeline_new_badge_pins_to_sticky_filterbar():
     assert "top: 100%" in badge.group(1)
 
 
+
+
+def test_ima_documents_group_switching_contract():
+    """文档列表必须按 URL 群组切换，并让两个控件共享安全的选择逻辑。"""
+    src = APP_JS.read_text()
+    render = _fn_body("renderImaDocuments")
+    assert "imaDocumentsGroup" in src
+    assert "imaDocumentsGroupFromRoute" in src
+    assert "imaDocumentsRoute" in src
+    assert 'routeQuery().get("group")' in src
+    assert "group_name" in src
+    assert "params.set(\"group\"" in render
+    assert "imaDocumentGroupControls(groups, selectedGroup)" in render
+    assert 'class="ima-doc-group-switcher' in src
+    assert "全部群组" in src
+    assert 'class="ima-doc-group-label"' in src
+    assert "routeQuery()" in src
+    assert "replaceRoute(imaDocumentsRoute(value))" in src
+    assert "selectImaDocumentGroup(value)" in src
+    assert "state.imaDocumentsDay = \"\"" in src
+
+
+def test_ima_documents_group_controls_render_response_groups_safely():
+    """群组控件必须依据响应 groups 渲染，值和标签都经过 escapeHtml。"""
+    src = APP_JS.read_text()
+    render = _fn_body("renderImaDocuments")
+    assert "data.groups" in render or "groups =" in render
+    assert "escapeHtml(group.id" in src or "escapeHtml(group.value" in src
+    assert "escapeHtml(group.name" in src
+    assert "ima-doc-group-tabs" in src
+    assert "ima-doc-group-select" in src
+    assert "imaDocumentGroup" in src
+
+
+def test_ima_documents_all_group_labels_and_single_group_title():
+    """全部群组结果显示来源标签，单群组结果不重复显示；标题包含名称和数量。"""
+    src = APP_JS.read_text()
+    assert "item.group_name" in src
+    assert "selectedGroupName" in src or "groupName" in src
+    assert "count" in _fn_body("renderImaDocuments")
+
+
+def test_ima_documents_group_switcher_is_responsive_and_touch_friendly():
+    """桌面 tabs/select 断点与移动端可触控高度必须存在，长名称不得撑破布局。"""
+    css = STYLE_CSS.read_text()
+    src = APP_JS.read_text()
+    for selector in (".ima-doc-group-switcher", ".ima-doc-group-tabs", ".ima-doc-group-tab", ".ima-doc-group-select", ".ima-doc-group-label", ".ima-doc-group-switcher:focus-visible"):
+        assert selector in css
+    assert "min-height: 44px" in css
+    assert "overflow-wrap: anywhere" in css or "text-overflow: ellipsis" in css
+    assert "<= 5" in src
+    assert "@media (max-width: 768px)" in css
+
+
 def test_timeline_filterbar_stays_in_main_column():
     """筛选条只占主列，不横跨右侧栏留下空走廊；不居中、不收窄整页。"""
     render = _fn_body("renderTimeline")

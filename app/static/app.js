@@ -104,6 +104,7 @@ const state = {
   })(),
   imaDocumentsQuery: "",
   imaDocumentsDay: "",
+  imaDocumentsGroup: "",
 };
 
 function escapeHtml(text) {
@@ -487,19 +488,22 @@ async function renderMore(seq) {
     </section>`;
 }
 
-function imaDocumentRow(item) {
+function imaDocumentRow(item, showGroupLabel = false) {
+  const groupLabel = showGroupLabel && item.group_name
+    ? `<span class="ima-doc-group-label">${escapeHtml(item.group_name)}</span>` : "";
   return `
     <button type="button" class="ima-doc-row" onclick="go('${_imaDocumentRoute(item.media_id)}')">
       <span class="ima-doc-row-icon">${FILE_TEXT_ICON}</span>
       <span class="ima-doc-row-copy">
         <span class="ima-doc-row-name">${escapeHtml(item.name)}</span>
+        ${groupLabel}
         <span class="ima-doc-row-meta">${fmtCacheBytes(item.size)} · ${Number(item.chars || 0).toLocaleString()} 字</span>
       </span>
       <span class="ima-doc-row-arrow" aria-hidden="true">›</span>
     </button>`;
 }
 
-function imaDocumentGroups(items) {
+function imaDocumentGroups(items, showGroupLabel = false) {
   const groups = new Map();
   for (const item of items || []) {
     if (!groups.has(item.day)) groups.set(item.day, []);
@@ -508,8 +512,38 @@ function imaDocumentGroups(items) {
   return [...groups.entries()].map(([day, rows]) => `
     <section class="ima-doc-day">
       <header class="ima-doc-day-head"><h2>${escapeHtml(day)}</h2><span>${rows.length} 份</span></header>
-      <div class="ima-doc-list">${rows.map(imaDocumentRow).join("")}</div>
+      <div class="ima-doc-list">${rows.map((item) => imaDocumentRow(item, showGroupLabel)).join("")}</div>
     </section>`).join("");
+}
+
+function imaDocumentsGroupFromRoute() {
+  return routeQuery().get("group") || "";
+}
+
+function imaDocumentsRoute(value) {
+  const params = routeQuery();
+  if (value) params.set("group", value);
+  else params.delete("group");
+  const query = params.toString();
+  return `ima-documents${query ? `?${query}` : ""}`;
+}
+
+function selectImaDocumentGroup(value) {
+  state.imaDocumentsGroup = String(value || "");
+  state.imaDocumentsDay = "";
+  replaceRoute(imaDocumentsRoute(value));
+}
+
+function imaDocumentGroupControls(groups, selectedGroup) {
+  const options = [{ id: "", name: "全部群组" }, ...(groups || [])];
+  const useTabs = groups.length <= 5;
+  const selected = String(selectedGroup || "");
+  return `<div class="ima-doc-group-switcher ${useTabs ? "is-tabs" : "is-select"}">
+    <div class="ima-doc-group-tabs" role="tablist" aria-label="IMA 文档群组">
+      ${options.map((group) => `<button type="button" class="ima-doc-group-tab${group.id === selected ? " is-selected" : ""}" role="tab" aria-selected="${group.id === selected}" data-group="${escapeHtml(group.id)}" onclick="selectImaDocumentGroup(this.dataset.group)">${escapeHtml(group.name)}</button>`).join("")}
+    </div>
+    <label class="ima-doc-group-select"><span class="sr-only">选择 IMA 文档群组</span><select class="form-control" aria-label="选择 IMA 文档群组" onchange="selectImaDocumentGroup(this.value)">${options.map((group) => `<option value="${escapeHtml(group.id)}"${group.id === selected ? " selected" : ""}>${escapeHtml(group.name)}</option>`).join("")}</select></label>
+  </div>`;
 }
 
 function searchImaDocuments() {
@@ -525,14 +559,17 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
   }
   clearImaPdfUrl();
   setPageTitle("IMA 文档");
+  const selectedGroup = imaDocumentsGroupFromRoute();
+  state.imaDocumentsGroup = selectedGroup;
   const query = state.imaDocumentsQuery || "";
   const day = state.imaDocumentsDay || "";
   $("#main").innerHTML = `
     <section class="section-panel ima-docs-shell">
       <header class="section-head ima-docs-head">
-        <div><h2 class="section-title">IMA 文档</h2><p class="section-meta">已归档 PDF 与全文文本</p></div>
+        <div><h2 id="ima-doc-title" class="section-title">IMA 文档</h2><p id="ima-doc-meta" class="section-meta">已归档 PDF 与全文文本</p></div>
         <button type="button" class="btn-ghost" onclick="renderImaDocuments(routeRenderSeq)">${REFRESH_ICON}<span>刷新</span></button>
       </header>
+      <div id="ima-doc-groups" class="ima-doc-group-switcher"></div>
       <div class="ima-doc-toolbar">
         <label class="search-bar ima-doc-search">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜索文档标题" aria-label="搜索 IMA 文档" onkeydown="if(event.key==='Enter'){state.imaDocumentsQuery=this.value.trim();renderImaDocuments(routeRenderSeq)}"></label>
         <select id="ima-doc-day" class="form-control ima-doc-day-filter" aria-label="按日期筛选" onchange="state.imaDocumentsDay=this.value;renderImaDocuments(routeRenderSeq)"><option value="">全部日期</option></select>
@@ -544,15 +581,28 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     const params = new URLSearchParams();
     if (query) params.set("q", query);
     if (day) params.set("day", day);
+    if (selectedGroup) params.set("group", selectedGroup);
     const data = await api(`/api/ima-documents?${params.toString()}`);
     if (!routeStillActive(seq)) return;
-    const items = data.items || [];
+    const groups = Array.isArray(data.groups) ? data.groups : [];
+    const items = Array.isArray(data.items) ? data.items : [];
+    const selectedGroupInfo = groups.find((group) => String(group.id || "") === selectedGroup);
+    const selectedGroupName = selectedGroupInfo?.name || (selectedGroup ? selectedGroup : "全部群组");
+    const count = items.length;
+    const title = $("#ima-doc-title");
+    const meta = $("#ima-doc-meta");
+    if (title) title.textContent = `IMA 文档 · ${selectedGroupName} · ${count} 份`;
+    if (meta) meta.textContent = "已归档 PDF 与全文文本";
+    const groupSwitch = $("#ima-doc-groups");
+    if (groupSwitch) groupSwitch.innerHTML = imaDocumentGroupControls(groups, selectedGroup);
     const days = [...new Set(items.map((item) => item.day))];
     const daySelect = $("#ima-doc-day");
     if (daySelect) {
       daySelect.innerHTML = `<option value="">全部日期</option>${days.map((value) => `<option value="${escapeHtml(value)}" ${value === day ? "selected" : ""}>${escapeHtml(value)}</option>`).join("")}`;
     }
-    $("#ima-docs-body").innerHTML = items.length ? imaDocumentGroups(items) : emptyState("暂无匹配的 IMA 文档");
+    $("#ima-docs-body").innerHTML = items.length
+      ? imaDocumentGroups(items, !selectedGroup)
+      : emptyState("暂无匹配的 IMA 文档");
   } catch (err) {
     if (routeStillActive(seq)) $("#ima-docs-body").innerHTML = emptyState(`加载失败：${err.message}`, `<button type="button" class="btn-normal" onclick="renderImaDocuments(routeRenderSeq)">重试</button>`);
   }
