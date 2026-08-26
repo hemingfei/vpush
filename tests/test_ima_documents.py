@@ -104,7 +104,40 @@ def test_config_ignores_malformed_group_registry_and_uses_legacy_group():
         }
     )
     cfg = ImaDocumentConfig.from_db(db)
+    assert IMA_PURE_GROUPS_KEY == "ima_pure_groups"
     assert [group.knowledge_base_id for group in cfg.groups] == ["kb-old"]
+
+
+def test_config_ignores_invalid_json_group_entries_and_falls_back():
+    db = FakeDB(
+        {
+            IMA_PURE_GROUPS_KEY: json.dumps(
+                [
+                    None,
+                    "not-a-group",
+                    {"id": 123, "name": "数字 ID", "knowledge_base_id": "kb", "root_folder_id": "root"},
+                    {"id": "numeric-kb", "name": "数字 KB", "knowledge_base_id": 123, "root_folder_id": "root"},
+                    {"id": "numeric-root", "name": "数字目录", "knowledge_base_id": "kb", "root_folder_id": 123},
+                    {"id": "string-enabled", "name": "字符串开关", "knowledge_base_id": "kb", "root_folder_id": "root", "enabled": "false"},
+                    {"id": "numeric-name", "name": 123, "knowledge_base_id": "kb", "root_folder_id": "root"},
+                    {"id": "missing-name", "knowledge_base_id": "kb", "root_folder_id": "root"},
+                    {"id": "missing-kb", "name": "缺少 KB", "root_folder_id": "root"},
+                    {"id": "missing-root", "name": "缺少目录", "knowledge_base_id": "kb"},
+                ]
+            ),
+            "ima_pure_knowledge_base_id": "legacy-kb",
+            "ima_pure_root_folder_id": "legacy-root",
+        }
+    )
+    cfg = ImaDocumentConfig.from_db(db)
+    assert cfg.groups == (
+        ImaGroupConfig(
+            id="legacy:legacy-kb:legacy-root",
+            name="IMA 文档",
+            knowledge_base_id="legacy-kb",
+            root_folder_id="legacy-root",
+        ),
+    )
 
 
 def test_configured_uses_enabled_groups_even_when_legacy_scalars_are_missing():

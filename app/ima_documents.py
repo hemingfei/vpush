@@ -162,18 +162,22 @@ def _read_groups(db: Any, kb: str, root: str) -> tuple[ImaGroupConfig, ...]:
         for item in payload if isinstance(payload, list) else []:
             if not isinstance(item, dict):
                 continue
-            group_id = str(item.get("id") or "").strip()
-            group_kb = str(item.get("knowledge_base_id") or "").strip()
-            group_root = str(item.get("root_folder_id") or "").strip()
-            if not group_id or not group_kb or not group_root:
+            required_fields = ("id", "name", "knowledge_base_id", "root_folder_id")
+            if any(
+                not isinstance(item.get(field), str) or not item[field].strip()
+                for field in required_fields
+            ):
+                continue
+            enabled = item.get("enabled", True)
+            if not isinstance(enabled, bool):
                 continue
             groups.append(
                 ImaGroupConfig(
-                    id=group_id,
-                    name=str(item.get("name") or group_id).strip()[:100],
-                    knowledge_base_id=group_kb,
-                    root_folder_id=group_root,
-                    enabled=bool(item.get("enabled", True)),
+                    id=item["id"].strip(),
+                    name=item["name"].strip()[:100],
+                    knowledge_base_id=item["knowledge_base_id"].strip(),
+                    root_folder_id=item["root_folder_id"].strip(),
+                    enabled=enabled,
                     source="discovered" if item.get("source") == "discovered" else "manual",
                 )
             )
