@@ -520,12 +520,13 @@ function imaDocumentsGroupFromRoute() {
   return routeQuery().get("group") || "";
 }
 
-function imaDocumentsRoute(value) {
-  const params = routeQuery();
-  if (value) params.set("group", value);
-  else params.delete("group");
-  const query = params.toString();
-  return `ima-documents${query ? `?${query}` : ""}`;
+function imaDocumentsRoute(group, query, day) {
+  const params = new URLSearchParams();
+  if (group) params.set("group", group);
+  if (query) params.set("q", query);
+  if (day) params.set("day", day);
+  const routeQueryString = params.toString();
+  return `ima-documents${routeQueryString ? `?${routeQueryString}` : ""}`;
 }
 
 function replaceImaDocumentsRoute(path) {
@@ -537,9 +538,25 @@ function selectImaDocumentGroup(value) {
   state.imaDocumentsGroup = String(value || "");
   state.imaDocumentsDay = "";
   state.imaDocumentsQuery = $("#ima-doc-q")?.value?.trim() || state.imaDocumentsQuery || "";
-  replaceImaDocumentsRoute(imaDocumentsRoute(value));
+  replaceImaDocumentsRoute(imaDocumentsRoute(value, state.imaDocumentsQuery, ""));
   const seq = ++routeRenderSeq;
   renderImaDocuments(seq);
+}
+
+function updateImaDocumentsFilters(query, day) {
+  state.imaDocumentsQuery = String(query || "").trim();
+  state.imaDocumentsDay = String(day || "");
+  replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay));
+  const seq = ++routeRenderSeq;
+  renderImaDocuments(seq);
+}
+
+function submitImaDocumentsSearch() {
+  updateImaDocumentsFilters($("#ima-doc-q")?.value || "", state.imaDocumentsDay);
+}
+
+function selectImaDocumentsDay(value) {
+  updateImaDocumentsFilters(state.imaDocumentsQuery, value);
 }
 
 function imaDocumentGroupControls(groups, selectedGroup) {
@@ -555,8 +572,7 @@ function imaDocumentGroupControls(groups, selectedGroup) {
 }
 
 function searchImaDocuments() {
-  state.imaDocumentsQuery = $("#ima-doc-q")?.value?.trim() || "";
-  renderImaDocuments(routeRenderSeq);
+  submitImaDocumentsSearch();
 }
 
 async function renderImaDocuments(seq, encodedMediaId = "") {
@@ -568,9 +584,11 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
   clearImaPdfUrl();
   setPageTitle("IMA 文档");
   const selectedGroup = imaDocumentsGroupFromRoute();
+  const query = routeQuery().get("q") || "";
+  const day = routeQuery().get("day") || "";
   state.imaDocumentsGroup = selectedGroup;
-  const query = state.imaDocumentsQuery || "";
-  const day = state.imaDocumentsDay || "";
+  state.imaDocumentsQuery = query;
+  state.imaDocumentsDay = day;
   $("#main").innerHTML = `
     <section class="section-panel ima-docs-shell">
       <header class="section-head ima-docs-head">
@@ -579,9 +597,9 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
       </header>
       <div id="ima-doc-groups" class="ima-doc-group-switcher"></div>
       <div class="ima-doc-toolbar">
-        <label class="search-bar ima-doc-search">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜索文档标题" aria-label="搜索 IMA 文档" onkeydown="if(event.key==='Enter'){state.imaDocumentsQuery=this.value.trim();renderImaDocuments(routeRenderSeq)}"></label>
-        <select id="ima-doc-day" class="form-control ima-doc-day-filter" aria-label="按日期筛选" onchange="state.imaDocumentsDay=this.value;renderImaDocuments(routeRenderSeq)"><option value="">全部日期</option></select>
-        <button type="button" class="btn-normal" onclick="searchImaDocuments()">搜索</button>
+        <label class="search-bar ima-doc-search">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜索文档标题" aria-label="搜索 IMA 文档" onkeydown="if(event.key==='Enter'){submitImaDocumentsSearch()}"></label>
+        <select id="ima-doc-day" class="form-control ima-doc-day-filter" aria-label="按日期筛选" onchange="selectImaDocumentsDay(this.value)"><option value="">全部日期</option></select>
+        <button type="button" class="btn-normal" onclick="submitImaDocumentsSearch()">搜索</button>
       </div>
       <div id="ima-docs-body" class="ima-docs-body"><div class="admin-skeleton" aria-hidden="true"></div></div>
     </section>`;

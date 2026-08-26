@@ -1196,7 +1196,7 @@ def test_ima_documents_group_switching_contract():
     assert "全部群组" in src
     assert 'class="ima-doc-group-label"' in src
     assert "routeQuery()" in src
-    assert "replaceImaDocumentsRoute(imaDocumentsRoute(value))" in src
+    assert "replaceImaDocumentsRoute(imaDocumentsRoute(value, state.imaDocumentsQuery, \"\"))" in src
     assert "selectImaDocumentGroup(value)" in src
     assert "state.imaDocumentsDay = \"\"" in src
 
@@ -1227,7 +1227,7 @@ def test_ima_document_group_switch_refreshes_locally():
     select = _fn_body("selectImaDocumentGroup")
     helper = _fn_body("replaceImaDocumentsRoute")
     assert "replaceRoute(" not in select
-    assert "replaceImaDocumentsRoute(imaDocumentsRoute(value))" in select
+    assert "replaceImaDocumentsRoute(imaDocumentsRoute(value, state.imaDocumentsQuery, \"\"))" in select
     assert "state.imaDocumentsGroup" in select
     assert "state.imaDocumentsDay = \"\"" in select
     assert "state.imaDocumentsQuery" in select
@@ -1238,7 +1238,27 @@ def test_ima_document_group_switch_refreshes_locally():
     assert "router(" not in helper
 
 
-    """桌面 tabs/select 断点与移动端可触控高度必须存在，长名称不得撑破布局。"""
+def test_ima_documents_filters_round_trip_through_local_url():
+    """文档列表从 URL 恢复 q/day，搜索和日期变化通过专用 handler 更新局部 URL。"""
+    src = APP_JS.read_text()
+    render = _fn_body("renderImaDocuments")
+    route = _fn_body("imaDocumentsRoute")
+    assert 'routeQuery().get("q")' in render
+    assert 'routeQuery().get("day")' in render
+    assert "function imaDocumentsRoute(group, query, day)" in src
+    assert 'params.set("group", group)' in route
+    assert 'params.set("q", query)' in route
+    assert 'params.set("day", day)' in route
+    assert "submitImaDocumentsSearch" in src
+    assert "selectImaDocumentsDay" in src
+    assert "replaceImaDocumentsRoute(imaDocumentsRoute(" in src
+    assert "state.imaDocumentsDay = \"\"" in _fn_body("selectImaDocumentGroup")
+    assert 'onchange="selectImaDocumentsDay(this.value)"' in render
+    assert "submitImaDocumentsSearch()" in render
+
+
+def test_ima_documents_group_switcher_is_responsive_and_touch_friendly():
+
     css = STYLE_CSS.read_text()
     src = APP_JS.read_text()
     for selector in (".ima-doc-group-switcher", ".ima-doc-group-tabs", ".ima-doc-group-tab", ".ima-doc-group-select", ".ima-doc-group-label", ".ima-doc-group-switcher:focus-visible"):
