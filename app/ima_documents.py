@@ -1307,8 +1307,7 @@ class ImaDocumentService:
             item = state.get(key)
             if not isinstance(item, dict):
                 continue
-            existing = item.get("tags")
-            if isinstance(existing, list) and existing:
+            if isinstance(item.get("tags"), list):
                 continue
             txt = self.store._state_path(item.get("txt"))
             tags = _tag_document(self.db, record, txt)
