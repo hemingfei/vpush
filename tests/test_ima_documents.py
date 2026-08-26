@@ -1149,3 +1149,49 @@ def test_service_sync_is_incremental(tmp_path, monkeypatch):
     assert service.sync_once()["downloaded"] == 1
     assert service.sync_once()["downloaded"] == 0
     assert calls == ["file_abc"]
+
+
+def test_admin_ima_put_uses_one_atomic_settings_write(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "db.sqlite"))
+    headers = _headers(client, "atomic_admin", "ATOMIC001", admin=True)
+    db = client.app.state.db
+    original_set_setting = db.set_setting
+    calls = []
+
+    def atomic_write(values):
+        calls.append(dict(values))
+        for key, value in values.items():
+            original_set_setting(key, value)
+
+    monkeypatch.setattr(db, "set_settings_atomic", atomic_write, raising=False)
+    monkeypatch.setattr(
+        db,
+        "set_setting",
+        lambda key, value: pytest.fail("IMA PUT must use set_settings_atomic"),
+    )
+    response = client.put(
+        "/api/admin/ima-collector",
+        headers=headers,
+        json={
+            "uid": "atomic-uid",
+            "knowledge_base_id": "atomic-kb",
+            "root_folder_id": "atomic-root",
+            "groups": [
+                {
+                    "id": "atomic-group",
+                    "name": "原子群组",
+                    "knowledge_base_id": "group-kb",
+                    "root_folder_id": "group-root",
+                }
+            ],
+        },
+    )
+    assert response.status_code == 200
+    assert len(calls) == 1
+    assert set(calls[0]) == {
+        "ima_pure_uid",
+        "ima_pure_knowledge_base_id",
+        "ima_pure_root_folder_id",
+        IMA_PURE_GROUPS_KEY,
+    }

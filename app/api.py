@@ -2517,9 +2517,8 @@ def create_api_router(
                 )
             updates[IMA_PURE_GROUPS_KEY] = json.dumps(groups, ensure_ascii=False)
             audit_parts.append(f"groups_count={len(group_ids)};group_ids={','.join(group_ids)}")
-        for key, value in updates.items():
-            db.set_setting(key, value)
         if updates:
+            db.set_settings_atomic(updates)
             audit_parts.extend(sorted(key for key in updates if key != IMA_PURE_GROUPS_KEY))
             _audit(admin, "set_ima_collector", "", ";".join(audit_parts))
         return ima_documents.status()

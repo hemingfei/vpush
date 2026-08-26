@@ -6,6 +6,51 @@ import pytest
 from app.db import DB
 
 
+
+
+def test_set_settings_atomic_writes_multiple_values(tmp_path):
+    db = DB(str(tmp_path / "settings.db"))
+    db.set_settings_atomic({"ima_one": "value-one", "ima_two": "value-two"})
+    assert db.get_setting("ima_one") == "value-one"
+    assert db.get_setting("ima_two") == "value-two"
+
+
+def test_set_settings_atomic_rolls_back_all_values_on_sql_error(tmp_path):
+    db = DB(str(tmp_path / "settings-rollback.db"))
+    db.set_setting("ima_one", "old-one")
+    db.set_setting("ima_two", "old-two")
+    real_connection = db._conn
+
+    class FailingConnection:
+        def __init__(self, connection):
+            self.connection = connection
+            self.setting_writes = 0
+
+        def execute(self, sql, params=()):
+            if sql.startswith("INSERT INTO settings"):
+                self.setting_writes += 1
+                if self.setting_writes == 2:
+                    raise sqlite3.OperationalError("controlled settings failure")
+            return self.connection.execute(sql, params)
+
+        def commit(self):
+            return self.connection.commit()
+
+        def rollback(self):
+            return self.connection.rollback()
+
+    failing = FailingConnection(real_connection)
+    db._conn = failing
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="controlled settings failure"):
+            db.set_settings_atomic({"ima_one": "new-one", "ima_two": "new-two"})
+    finally:
+        db._conn = real_connection
+
+    assert db.get_setting("ima_one") == "old-one"
+    assert db.get_setting("ima_two") == "old-two"
+
+
 def test_db_migrates_secondary_column(tmp_path):
     db = DB(str(tmp_path / "t.db"))
     cols = {r["name"] for r in db._rows("PRAGMA table_info(kols)")}

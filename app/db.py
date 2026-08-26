@@ -2622,6 +2622,23 @@ class DB:
             (key, value),
         )
 
+    def set_settings_atomic(self, values: dict[str, str]) -> None:
+        if not values:
+            return
+        sql = (
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        )
+        with self._lock:
+            self._conn.execute("BEGIN")
+            try:
+                for key, value in values.items():
+                    self._conn.execute(sql, (key, value))
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
     # ---- 抓取代理池 ----
     def create_proxy_pool(
         self,
