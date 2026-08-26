@@ -1785,9 +1785,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=190"' in html
-    assert 'src="/app.js?v=269"' in html
-    assert 'dav-shell-v138' in sw
+    assert 'href="/style.css?v=191"' in html
+    assert 'src="/app.js?v=270"' in html
+    assert 'dav-shell-v139' in sw
 
 
 def test_ima_documents_follow_latest_dynamic_navigation():
@@ -1887,6 +1887,8 @@ def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
     assert "item.cover_url" in row
     assert 'startsWith("http")' in src
     assert "onerror" in row
+    assert "ima-doc-row-thumb" in row
+    assert "nextElementSibling" in row
     assert "item.abstract" in row
     assert "item.tags" in row
 
@@ -1901,6 +1903,8 @@ def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
     assert "renderKnowledge" in select
     assert ".ima-doc-cover" in css or ".ima-doc-tag" in css
     assert "line-clamp" in css or "-webkit-line-clamp" in css
+    assert "grid-column: 2" in css
+    assert "grid-column: 3" in css
 
 
 def test_register_placeholder_matches_username_min_length():

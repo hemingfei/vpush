@@ -567,8 +567,8 @@ function imaDocumentRow(item, showGroupLabel = false) {
     ? `<span class="ima-doc-group-label">${escapeHtml(item.group_name)}</span>` : "";
   const cover = imaSafeCoverUrl(item.cover_url);
   const thumb = cover
-    ? `<img class="ima-doc-cover" src="${escapeHtml(cover)}" alt="" onerror="this.hidden=true">`
-    : `<span class="ima-doc-row-icon">${FILE_TEXT_ICON}</span>`;
+    ? `<span class="ima-doc-row-thumb"><img class="ima-doc-cover" src="${escapeHtml(cover)}" alt="" onerror="this.hidden=true;var fb=this.nextElementSibling;if(fb)fb.hidden=false"><span class="ima-doc-row-icon" hidden>${FILE_TEXT_ICON}</span></span>`
+    : `<span class="ima-doc-row-thumb"><span class="ima-doc-row-icon">${FILE_TEXT_ICON}</span></span>`;
   const abstract = String(item.abstract || "").trim();
   const abstractHtml = abstract ? `<span class="ima-doc-abstract">${escapeHtml(abstract)}</span>` : "";
   const meta = [fmtImaDay(item.day), fmtDocSize(item.size)].filter(Boolean).join(" · ");
