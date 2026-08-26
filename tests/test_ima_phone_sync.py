@@ -12,9 +12,11 @@ from scripts.ima_phone_sync import (
     ImaCredentials,
     ImaPhoneSyncError,
     SyncOptions,
+    _prompt_sync_options,
     build_adb_command,
     build_ssh_command,
     load_sync_config,
+    main,
     parse_login_preferences,
     read_phone_preferences,
     resolve_sync_options,
@@ -261,6 +263,41 @@ def test_resolve_sync_options_prefers_cli_values(tmp_path):
     assert resolved.ssh_key == "/new-key"
     assert resolved.device == "phone"
     assert resolved.remote_db == "/old.db"
+
+
+def test_first_run_prompt_saves_non_secret_config(tmp_path, monkeypatch):
+    answers = iter(
+        [
+            "381a2bca",
+            "example.test",
+            "root",
+            "/tmp/id_rsa",
+            "/opt/vpush/data/dav.db",
+            "uid_123",
+        ]
+    )
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    path = tmp_path / "ima_phone_sync.env"
+
+    options = _prompt_sync_options(path)
+
+    assert options == SyncOptions(
+        "381a2bca",
+        "example.test",
+        "root",
+        "/tmp/id_rsa",
+        "/opt/vpush/data/dav.db",
+        "uid_123",
+    )
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert "refresh" not in path.read_text().lower()
+
+
+def test_one_click_returns_error_for_missing_host(tmp_path, monkeypatch):
+    answers = iter(["381a2bca", "", "root", "", "/opt/vpush/data/dav.db", "uid_123"])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+
+    assert main(["--one-click", "--config-file", str(tmp_path / "missing.env")]) == 1
 
 
 def test_one_click_launcher_uses_repo_root_and_virtualenv():

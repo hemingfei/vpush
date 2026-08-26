@@ -421,34 +421,98 @@ def sync_once(
     return credentials
 
 
+def _prompt_sync_options(path: str | Path) -> SyncOptions:
+    defaults = SyncOptions(
+        device=os.environ.get("IMA_ANDROID_SERIAL", DEFAULT_ANDROID_SERIAL),
+        host=os.environ.get("IMA_SYNC_HOST", ""),
+        user=os.environ.get("IMA_SYNC_USER", "root"),
+        ssh_key=os.environ.get("IMA_SYNC_SSH_KEY", ""),
+        remote_db=os.environ.get("IMA_SYNC_REMOTE_DB", DEFAULT_REMOTE_DB),
+        expected_uid=os.environ.get("IMA_EXPECTED_UID", ""),
+    )
+
+    def ask(label: str, default: str, *, required: bool = False) -> str:
+        suffix = f" [{default}]" if default else ""
+        try:
+            value = input(f"{label}{suffix}: ").strip()
+        except EOFError as exc:
+            raise ImaPhoneSyncError("无法读取交互配置") from exc
+        value = value or default
+        if required and not value:
+            raise ImaPhoneSyncError(f"{label}不能为空")
+        return value
+
+    options = SyncOptions(
+        device=ask("Android 设备序列号", defaults.device, required=True),
+        host=ask("VPS 地址", defaults.host, required=True),
+        user=ask("SSH 用户", defaults.user, required=True),
+        ssh_key=ask("SSH 私钥路径", defaults.ssh_key),
+        remote_db=ask("远端数据库路径", defaults.remote_db, required=True),
+        expected_uid=ask("期望的 IMA UID", defaults.expected_uid, required=True),
+    )
+    _validate_sync_options(options)
+    save_sync_config(path, options)
+    return options
+
+
+def _validate_sync_options(options: SyncOptions) -> None:
+    build_adb_command(options.device)
+    build_ssh_command(
+        host=options.host,
+        user=options.user,
+        ssh_key=options.ssh_key or None,
+        remote_db=options.remote_db,
+    )
+    if options.expected_uid:
+        _validate_uid(options.expected_uid)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="同步 rooted Android 上的 IMA Refresh Token 到 VPS")
+    parser.add_argument("--device", default=None, help="ADB 设备序列号")
+    parser.add_argument("--host", default=None, help="VPS 地址")
+    parser.add_argument("--user", default=None, help="SSH 用户")
+    parser.add_argument("--ssh-key", default=None, help="SSH 私钥路径")
+    parser.add_argument("--remote-db", default=None, help="远端数据库路径")
+    parser.add_argument("--expected-uid", default=None, help="期望的 IMA UID")
+    parser.add_argument("--one-click", action="store_true")
     parser.add_argument(
-        "--device",
-        default=os.environ.get("IMA_ANDROID_SERIAL", DEFAULT_ANDROID_SERIAL),
-        help="ADB 设备序列号（默认读取 IMA_ANDROID_SERIAL）",
+        "--config-file",
+        type=Path,
+        default=ROOT / "data" / "ima_phone_sync.env",
     )
-    parser.add_argument("--host", default=os.environ.get("IMA_SYNC_HOST", ""), required=False)
-    parser.add_argument("--user", default=os.environ.get("IMA_SYNC_USER", "root"))
-    parser.add_argument("--ssh-key", default=os.environ.get("IMA_SYNC_SSH_KEY", ""))
-    parser.add_argument("--remote-db", default=os.environ.get("IMA_SYNC_REMOTE_DB", DEFAULT_REMOTE_DB))
-    parser.add_argument("--expected-uid", default=os.environ.get("IMA_EXPECTED_UID", ""))
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    if not args.host:
-        print("缺少 --host 或 IMA_SYNC_HOST", file=sys.stderr)
-        return 2
     try:
+        if args.one_click:
+            options = (
+                _prompt_sync_options(args.config_file)
+                if not args.config_file.exists()
+                else load_sync_config(args.config_file)
+            )
+        else:
+            options = resolve_sync_options(
+                args.config_file,
+                {
+                    "device": args.device,
+                    "host": args.host,
+                    "user": args.user,
+                    "ssh_key": args.ssh_key,
+                    "remote_db": args.remote_db,
+                    "expected_uid": args.expected_uid,
+                },
+            )
+        _validate_sync_options(options)
         credentials = sync_once(
-            device=args.device,
-            host=args.host,
-            user=args.user,
-            ssh_key=args.ssh_key or None,
-            remote_db=args.remote_db,
-            expected_uid=args.expected_uid,
+            device=options.device,
+            host=options.host,
+            user=options.user,
+            ssh_key=options.ssh_key or None,
+            remote_db=options.remote_db,
+            expected_uid=options.expected_uid,
         )
     except ImaPhoneSyncError as exc:
         print(f"IMA 凭据同步失败: {exc}", file=sys.stderr)
