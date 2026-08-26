@@ -1019,6 +1019,18 @@ def test_ima_group_save_reads_rows_and_preserves_legacy_token_fields():
     assert 'value="${pure.refresh_token' not in APP_JS.read_text()
 
 
+def test_ima_collector_acl_granted_via_separate_put():
+    """采集群组行含授权用户；保存时 ACL 独立 PUT，不塞进 collector groups。"""
+    row = _fn_body("imaGroupRowHtml")
+    save = _fn_body("saveImaCollector")
+    read = _fn_body("readImaGroupRows")
+    assert "授权用户" in row
+    assert "ima-kb-acl" in row
+    assert "/api/admin/ima-collector/groups/" in save
+    assert "acl_usernames" not in save
+    assert "acl_usernames" not in read
+
+
 def test_ima_discovery_status_is_safe_and_does_not_render_secrets():
     """发现错误只输出 escaped 文本，IMA token 不得进入 HTML value/placeholder。"""
     src = APP_JS.read_text()
@@ -1754,8 +1766,8 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=185"' in html
-    assert 'src="/app.js?v=260"' in html
+    assert 'href="/style.css?v=186"' in html
+    assert 'src="/app.js?v=261"' in html
     assert 'dav-shell-v130' in sw
 
 

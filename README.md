@@ -240,7 +240,7 @@ docker compose up -d --build
 - **雪球**：后台「数据源 → Cookie 管理」粘贴 Cookie，保存即时生效；配置 `WEIBO_USERNAME/PASSWORD` 可自动登录续期微博 Cookie，微博也支持网页扫码登录
 - **X**：配置 `TWITTER_COOKIE` 或在「数据源 → Cookie 管理」粘贴后直抓 X 官方接口并把内容翻译成中文；直抓失败会告警并放慢采集，不再走备用内容通道
 - **ima**：知识库条目在后台按平台 `ima` 添加，`external_id` 填知识库 ID（OpenAPI 模式）或 wiki URL 的 `knowledgeBaseId`（Cookie 模式）；Cookie 用 `scripts/ima_qr_login.py` 扫码捕获；OpenAPI 凭证取全文，订阅库全文受 ima 客户端限制时自动降级为摘要（`detail.full_text` 标记是否拿到全文）
-- **IMA 文档中心**：后台「数据源 → Cookie 管理 → IMA 文档采集」会预填 UID、知识库 ID 和根文件夹 ID。管理员在 rooted Android 的 IMA 中完成 Google 登录后，双击 `scripts/ima_phone_sync.command` 即可同步；首次运行会询问 VPS 地址、SSH 私钥和 IMA UID，配置保存到 `data/ima_phone_sync.env`（`0600`，不含 Refresh Token）。手动排障仍可运行 `python scripts/ima_phone_sync.py`；脚本从 `pref_login_response` 读取凭据，用 IMA refresh 接口验证，再通过 SSH stdin 原子更新 VPS，只输出 UID。VPUSH 每小时检查一次，只下载新增 PDF 并生成 TXT；所有登录用户从侧栏「IMA 文档」浏览，PDF 不进入动态推送。
+- **知识库**：后台「数据源 → IMA 文档采集」会预填 UID、知识库 ID 和根文件夹 ID。管理员在 rooted Android 的 IMA 中完成 Google 登录后，双击 `scripts/ima_phone_sync.command` 即可同步；首次运行会询问 VPS 地址、SSH 私钥和 IMA UID，配置保存到 `data/ima_phone_sync.env`（`0600`，不含 Refresh Token）。手动排障仍可运行 `python scripts/ima_phone_sync.py`；脚本从 `pref_login_response` 读取凭据，用 IMA refresh 接口验证，再通过 SSH stdin 原子更新 VPS，只输出 UID。VPUSH 每小时检查一次，只下载新增 PDF 并生成 TXT。用户从侧栏「知识库」浏览已授权并自行订阅的库；须先由管理员在采集群组里填写授权用户，再由用户自己订阅。PDF 采集仍在后台，不进入动态推送。
 - **Cookie sidecar**：`waf-bot` 定期刷新共享 cookie 文件，主服务抓取时读取；容器只读根文件系统、禁止提权。Cookie 失效时到后台更新，详见下方「常见问题」
 - **抓取频率**：后台「数据源」页可实时调整轮询间隔、优先大V间隔、次要大V间隔/封顶/推送周期/**合并推送最低条数**（积压不足此条数不推送、继续攒，够数才发）、合并推送周期等，即时生效
 

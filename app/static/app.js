@@ -4509,6 +4509,10 @@ function imaGroupRowHtml(group, index) {
       <label class="cfg-field"><span>知识库 ID</span><input type="text" class="form-control" data-field="knowledge_base_id" value="${escapeHtml(group.knowledge_base_id || "")}" maxlength="64"></label>
       <label class="cfg-field"><span>根文件夹 ID</span><input type="text" class="form-control" data-field="root_folder_id" value="${escapeHtml(group.root_folder_id || "")}" maxlength="128"></label>
       <label class="cfg-field cfg-check"><input type="checkbox" data-field="enabled" ${group.enabled !== false ? "checked" : ""}><span class="cfg-check-desc">启用</span></label>
+      <label class="cfg-field cfg-field--wide"><span>授权用户</span>
+        <input class="form-control ima-kb-acl" data-group="${escapeHtml(groupId)}"
+          value="${escapeHtml((group.acl_usernames || []).join(", "))}"
+          placeholder="逗号分隔用户名，空则仅管理员"></label>
       <div class="toolbar"><button type="button" class="btn-ghost danger" onclick="removeImaGroupRow(this)" aria-label="移除 IMA 群组">移除</button></div>
     </div>`;
 }
@@ -5558,6 +5562,10 @@ async function saveImaCollector() {
     flash("检查间隔须在 30–10080 分钟", "error");
     return;
   }
+  const aclSnapshots = Array.from(document.querySelectorAll("#ima-groups .ima-kb-acl")).map((input) => ({
+    groupId: String(input.dataset.group || "").trim(),
+    usernames: String(input.value || ""),
+  }));
   const body = {
     uid: $("#ima-pure-uid")?.value?.trim() || "",
     knowledge_base_id: $("#ima-pure-kb")?.value?.trim() || "",
@@ -5568,9 +5576,21 @@ async function saveImaCollector() {
   const token = $("#ima-pure-token")?.value?.trim() || "";
   if (token) body.refresh_token = token;
   try {
-    await api("/api/admin/ima-collector", { method: "PUT", body: JSON.stringify(body) });
+    const saved = await api("/api/admin/ima-collector", { method: "PUT", body: JSON.stringify(body) });
     const tokenInput = $("#ima-pure-token");
     if (tokenInput) tokenInput.value = "";
+    const savedGroups = Array.isArray(saved?.config?.groups) ? saved.config.groups : [];
+    for (let i = 0; i < aclSnapshots.length; i++) {
+      const snap = aclSnapshots[i];
+      const matched = snap.groupId && savedGroups.some((group) => String(group.id) === snap.groupId);
+      const groupId = matched ? snap.groupId : String(savedGroups[i]?.id || "").trim();
+      if (!groupId) continue;
+      const usernames = snap.usernames.split(",").map((name) => name.trim()).filter(Boolean);
+      await api(`/api/admin/ima-collector/groups/${groupId}/acl`, {
+        method: "PUT",
+        body: JSON.stringify({ usernames }),
+      });
+    }
     flash("IMA 文档采集配置已保存");
     await loadAdminStats();
   } catch (err) {
