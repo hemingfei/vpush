@@ -140,7 +140,62 @@ def test_config_ignores_invalid_json_group_entries_and_falls_back():
     )
 
 
-def test_configured_uses_enabled_groups_even_when_legacy_scalars_are_missing():
+@pytest.mark.parametrize("malformed_source", [123, []])
+def test_config_ignores_non_string_source_in_mixed_registry(malformed_source):
+    db = FakeDB(
+        {
+            IMA_PURE_GROUPS_KEY: json.dumps(
+                [
+                    {
+                        "id": "valid",
+                        "name": "有效群组",
+                        "knowledge_base_id": "kb-valid",
+                        "root_folder_id": "root-valid",
+                    },
+                    {
+                        "id": "malformed-source",
+                        "name": "错误来源",
+                        "knowledge_base_id": "kb-invalid",
+                        "root_folder_id": "root-invalid",
+                        "source": malformed_source,
+                    },
+                ]
+            )
+        }
+    )
+    cfg = ImaDocumentConfig.from_db(db)
+    assert [(group.id, group.source) for group in cfg.groups] == [("valid", "manual")]
+
+
+def test_config_falls_back_when_registry_has_only_non_string_source():
+    db = FakeDB(
+        {
+            IMA_PURE_GROUPS_KEY: json.dumps(
+                [
+                    {
+                        "id": "malformed-source",
+                        "name": "错误来源",
+                        "knowledge_base_id": "kb-invalid",
+                        "root_folder_id": "root-invalid",
+                        "source": {"value": "manual"},
+                    }
+                ]
+            ),
+            "ima_pure_knowledge_base_id": "legacy-kb",
+            "ima_pure_root_folder_id": "legacy-root",
+        }
+    )
+    cfg = ImaDocumentConfig.from_db(db)
+    assert cfg.groups == (
+        ImaGroupConfig(
+            id="legacy:legacy-kb:legacy-root",
+            name="IMA 文档",
+            knowledge_base_id="legacy-kb",
+            root_folder_id="legacy-root",
+        ),
+    )
+
+
     cfg = ImaDocumentConfig(
         uid="uid",
         refresh_token="refresh",

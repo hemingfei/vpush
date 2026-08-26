@@ -171,6 +171,9 @@ def _read_groups(db: Any, kb: str, root: str) -> tuple[ImaGroupConfig, ...]:
             enabled = item.get("enabled", True)
             if not isinstance(enabled, bool):
                 continue
+            source = item.get("source", "manual")
+            if not isinstance(source, str):
+                continue
             groups.append(
                 ImaGroupConfig(
                     id=item["id"].strip(),
@@ -178,7 +181,7 @@ def _read_groups(db: Any, kb: str, root: str) -> tuple[ImaGroupConfig, ...]:
                     knowledge_base_id=item["knowledge_base_id"].strip(),
                     root_folder_id=item["root_folder_id"].strip(),
                     enabled=enabled,
-                    source="discovered" if item.get("source") == "discovered" else "manual",
+                    source="discovered" if source == "discovered" else "manual",
                 )
             )
         if groups:
