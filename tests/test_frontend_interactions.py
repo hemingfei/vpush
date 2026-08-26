@@ -1029,6 +1029,10 @@ def test_ima_collector_acl_granted_via_separate_put():
     assert "/api/admin/ima-collector/groups/" in save
     assert "acl_usernames" not in save
     assert "acl_usernames" not in read
+    stats = _fn_body("loadAdminStats")
+    assert "s.ima_collector" in stats
+    assert "renderImaGroupRows" in stats
+    assert "acl_usernames" in row
 
 
 def test_ima_discovery_status_is_safe_and_does_not_render_secrets():

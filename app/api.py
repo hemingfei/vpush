@@ -2513,13 +2513,19 @@ def create_api_router(
             headers={"Content-Disposition": f"{disposition}; filename*=UTF-8''{filename}"},
         )
 
-    @router.get("/admin/ima-collector", dependencies=[Depends(require_admin)])
-    def get_ima_collector():
+    def _ima_collector_status():
         if ima_documents is None:
-            raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
+            return None
         payload = ima_documents.status()
         for group in payload.get("config", {}).get("groups", []):
             group["acl_usernames"] = db.ima_kb_acl_usernames(group["id"])
+        return payload
+
+    @router.get("/admin/ima-collector", dependencies=[Depends(require_admin)])
+    def get_ima_collector():
+        payload = _ima_collector_status()
+        if payload is None:
+            raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
         return payload
 
     @router.put("/admin/ima-collector/groups/{group_id}/acl", dependencies=[Depends(require_admin)])
@@ -3783,7 +3789,7 @@ def create_api_router(
                     "preview": _cred_preview(db.get_setting(IMA_CLIENT_ID_KEY) or os.environ.get("IMA_OPENAPI_CLIENTID", "")),
                 },
             },
-            "ima_collector": ima_documents.status() if ima_documents is not None else None,
+            "ima_collector": _ima_collector_status(),
             "polling_config": _effective_polling(),
             "plaza_sources": plaza_source_rows(db),
             "zsxq_cache": zsxq_cache_stats(db),

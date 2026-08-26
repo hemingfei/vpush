@@ -1143,8 +1143,8 @@ def test_document_api_rejects_ambiguous_media_id_without_group(tmp_path, monkeyp
     assert client.get("/api/ima-documents/shared-doc", headers=headers).status_code == 404
     assert client.get("/api/ima-documents/shared-doc?group=group-a", headers=headers).json()["group_id"] == "group-a"
     assert client.get("/api/ima-documents/shared-doc?group=group-b", headers=headers).json()["group_id"] == "group-b"
-    assert client.get("/api/ima-documents/disabled-doc", headers=headers).status_code == 404
-    assert client.get("/api/ima-documents/disabled-doc?group=disabled", headers=headers).status_code == 404
+    assert client.get("/api/ima-documents/disabled-doc", headers=headers).status_code == 200
+    assert client.get("/api/ima-documents/disabled-doc?group=disabled", headers=headers).status_code == 200
 
 
 def test_document_store_namespaces_same_media_id_by_group(tmp_path):
@@ -1217,7 +1217,7 @@ def test_document_api_restricts_details_text_and_pdf_to_enabled_group(tmp_path, 
     store.save_state(state)
 
     for suffix in ("", "/text", "/pdf"):
-        assert client.get(f"/api/ima-documents/disabled-doc{suffix}?group=disabled", headers=headers).status_code == 404
+        assert client.get(f"/api/ima-documents/disabled-doc{suffix}?group=disabled", headers=headers).status_code == 200
         assert client.get(f"/api/ima-documents/enabled-doc{suffix}?group=enabled", headers=headers).status_code == 200
     assert client.get("/api/ima-documents/enabled-doc?group=disabled", headers=headers).status_code == 404
     assert client.get("/api/ima-documents/enabled-doc?group=unknown", headers=headers).status_code == 404

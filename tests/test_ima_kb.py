@@ -161,6 +161,26 @@ def test_user_cannot_see_kb_until_granted_and_subscribed(tmp_path, monkeypatch):
     assert client.get("/api/ima-documents/file_abc", headers=user_headers).status_code == 404
 
 
+def test_admin_stats_includes_ima_kb_acl_usernames(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "stats-acl.sqlite"))
+    _headers(client, "reader", "KBSTAT1")
+    admin_headers = _headers(client, "kb_stats_admin", "KBSTAT2", admin=True)
+    group_id = client.get("/api/admin/ima-collector", headers=admin_headers).json()["config"]["groups"][0]["id"]
+    granted = client.put(
+        f"/api/admin/ima-collector/groups/{group_id}/acl",
+        headers=admin_headers,
+        json={"usernames": ["reader"]},
+    )
+    assert granted.status_code == 200, granted.text
+    stats = client.get("/api/stats", headers=admin_headers)
+    assert stats.status_code == 200, stats.text
+    payload = stats.json()["ima_collector"]["config"]["groups"][0]
+    assert "acl_usernames" in payload
+    assert "reader" in payload["acl_usernames"]
+    assert "refresh_token" not in payload
+
+
 def test_documents_include_metadata_and_tag_filter(tmp_path):
     store = ImaDocumentStore(tmp_path / "ima")
     record = {

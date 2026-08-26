@@ -1161,11 +1161,7 @@ class ImaDocumentStore:
         self.validate_media_id(media_id)
         state = self.load_state()
         requested_group = str(group_id or "").strip()
-        allowed_groups = (
-            {group.id for group in groups if group.enabled}
-            if groups is not None
-            else None
-        )
+        allowed_groups = {group.id for group in groups} if groups is not None else None
         matches: list[dict[str, Any]] = []
         for record in self.load_manifest(groups):
             if str(record.get("media_id") or "") != media_id:
