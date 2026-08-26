@@ -4223,7 +4223,7 @@ function imaGroupRowHtml(group, index) {
   index = Number.isInteger(index) ? index : 0;
   const groupId = String(group.id || "");
   return `
-    <div class="cfg-fields" data-group-row data-group-id="${escapeHtml(groupId)}">
+    <div class="cfg-fields" data-group-row data-group-index="${index}" data-group-id="${escapeHtml(groupId)}">
       <label class="cfg-field"><span>群组名称</span><input type="text" class="form-control" data-field="name" value="${escapeHtml(group.name || "")}" maxlength="100"></label>
       <label class="cfg-field"><span>知识库 ID</span><input type="text" class="form-control" data-field="knowledge_base_id" value="${escapeHtml(group.knowledge_base_id || "")}" maxlength="64"></label>
       <label class="cfg-field"><span>根文件夹 ID</span><input type="text" class="form-control" data-field="root_folder_id" value="${escapeHtml(group.root_folder_id || "")}" maxlength="128"></label>

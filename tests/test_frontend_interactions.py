@@ -973,6 +973,8 @@ def test_ima_group_render_has_safe_rows_and_recovery_controls():
     assert "addImaGroupRow()" in render
     assert "removeImaGroupRow(this)" in row
     assert 'data-group-row' in row and 'data-group-id="${' in row
+    assert 'data-group-index="${index}"' in row
+    assert "imaGroupRowHtml(group, index)" in _fn_body("renderImaGroupRows")
     for field in ("name", "knowledge_base_id", "root_folder_id"):
         assert f'data-field="{field}"' in row
         assert f"escapeHtml(group.{field}" in row
