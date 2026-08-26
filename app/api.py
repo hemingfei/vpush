@@ -86,6 +86,7 @@ from .ima_documents import (
     IMA_PURE_UID_KEY,
     ImaDocumentService,
     ImaGroupConfig,
+    ima_kb_valid_tags,
     purge_ima_document_tags,
 )
 from .ima_kb import catalog as ima_kb_catalog, readable_group_ids
@@ -3505,11 +3506,7 @@ def create_api_router(
             raise HTTPException(status_code=409, detail="标签维护正在进行")
         purged = 0
         if ima_documents is not None:
-            valid = {r["tag"] for r in db.get_tag_vocabulary()} | set(db.get_stock_names())
-            for alias in db.get_stock_aliases():
-                if isinstance(alias, dict) and alias.get("stock"):
-                    valid.add(str(alias["stock"]))
-            purged = purge_ima_document_tags(ima_documents.store, valid)
+            purged = purge_ima_document_tags(ima_documents.store, ima_kb_valid_tags(db))
         backfill = None
         if body.backfill != "none":
             backfill = backfill_post_tags(db, body.backfill)

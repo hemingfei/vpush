@@ -7,8 +7,10 @@ from app.ima_documents import (
     ImaDocumentStore,
     ImaGroupConfig,
     ImaPureClient,
+    ima_kb_valid_tags,
     purge_ima_document_tags,
 )
+from app.stock_universe import bundled_plain_names
 from app.ima_kb import catalog, readable_group_ids
 from app.main import create_app
 from app.tagging import tag_text
@@ -304,3 +306,31 @@ def test_purge_ima_document_tags_keeps_valid_only(tmp_path):
     assert changed == 1
     assert store.load_state()[store.state_key(record)]["tags"] == ["新能源"]
     assert purge_ima_document_tags(store, {"新能源"}) == 0
+
+
+def test_ima_kb_valid_tags_keeps_bundled_universe_name(tmp_path):
+    db = DB(tmp_path / "kb-universe.sqlite")
+    db.set_tag_vocabulary([{"tag": "新能源", "keywords": ["排产"]}])
+    db.set_stock_names(["茅台"])
+    curated = set(db.get_stock_names())
+    universe_name = next(
+        (n for n in bundled_plain_names() if len(n) >= 3 and n not in curated),
+        None,
+    )
+    valid = ima_kb_valid_tags(db)
+    if universe_name is None:
+        # bundled universe empty: fall back to curated/vocab only
+        keep = "茅台"
+        assert keep in valid
+    else:
+        assert universe_name not in curated
+        assert universe_name in valid
+        keep = universe_name
+
+    store = ImaDocumentStore(tmp_path / "ima-universe")
+    record = {"media_id": "file_universe", "name": "纪要.pdf", "day": "0826"}
+    store.save_manifest([record])
+    store.save_state({store.state_key(record): {"tags": [keep, "过期标签"]}})
+    changed = purge_ima_document_tags(store, valid)
+    assert changed == 1
+    assert store.load_state()[store.state_key(record)]["tags"] == [keep]

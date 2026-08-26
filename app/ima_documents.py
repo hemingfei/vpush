@@ -1237,6 +1237,17 @@ def _tag_document(db: Any, record: dict[str, Any], txt: Path | None) -> list[str
     )
 
 
+def ima_kb_valid_tags(db: Any) -> set[str]:
+    from .stock_universe import names_for_plain_text_tagging
+
+    valid = {r["tag"] for r in db.get_tag_vocabulary()}
+    valid.update(names_for_plain_text_tagging(db.get_stock_names(), db.get_stock_name_exclusions()))
+    for alias in db.get_stock_aliases():
+        if isinstance(alias, dict) and alias.get("stock"):
+            valid.add(str(alias["stock"]))
+    return valid
+
+
 def purge_ima_document_tags(store: ImaDocumentStore, valid_tags: set[str]) -> int:
     state = store.load_state()
     changed = 0
