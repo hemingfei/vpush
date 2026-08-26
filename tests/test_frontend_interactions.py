@@ -1754,8 +1754,8 @@ def test_frontend_asset_urls_bust_browser_cache():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=185"' in html
-    assert 'src="/app.js?v=259"' in html
-    assert 'dav-shell-v129' in sw
+    assert 'src="/app.js?v=260"' in html
+    assert 'dav-shell-v130' in sw
 
 
 def test_ima_documents_follow_latest_dynamic_navigation():
