@@ -2514,7 +2514,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 /* iOS Safari 适配：横向可滚动胶囊行（平台/分类/设置分栏）点击会被手势吞掉。
    touch-action: manipulation 让点按立即触发（去掉双击缩放延迟），同时保留横向滑动与页面纵向滚动；
    -webkit-overflow-scrolling 已废弃（iOS 16+ 原生滚动），其旧的动量滚动层是 iOS 点击失效的根因之一。 */
-.settings-tabs, .platform-tabs, .home-filter-content .home-cats { touch-action: manipulation; }
+.settings-tabs, .platform-tabs, .home-filter-content .home-cats, .kb-tabs { touch-action: manipulation; }
 
 /* 设置页分段导航 */
 .settings-tabs { display: flex; gap: var(--space-2); margin-bottom: var(--space-4); flex-wrap: wrap; }
@@ -2614,11 +2614,28 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .ima-pdf-panel { margin-top: 16px; border-top: var(--border-default); padding-top: 16px; }
 .ima-pdf-panel iframe { display: block; width: 100%; min-height: 72vh; border: var(--border-default); background: var(--color-surface-soft); }
 .ima-text-view { margin: 16px 0 0; padding: 18px; max-height: 70vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border: var(--border-default); border-radius: var(--radius-control); background: var(--color-surface-soft); color: var(--color-text); font: inherit; line-height: 1.7; }
+.kb-tabs { margin-bottom: var(--space-4); }
+.kb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.kb-card {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 14px; min-height: 52px; text-align: left;
+  border: var(--border-default); border-radius: var(--radius-card);
+  background: var(--color-surface); cursor: default;
+}
+.kb-card.is-openable { cursor: pointer; }
+.kb-card:hover { border-color: var(--color-accent); background: var(--color-surface-hover); }
+.kb-card-name { color: var(--color-text-strong); font-weight: var(--font-weight-semibold); }
+.kb-card .btn-normal, .kb-card .btn-ghost { flex-shrink: 0; min-height: 44px; }
+
 .ima-collector-grid { margin-top: 4px; }
 .ima-collector-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
 .ima-collector-foot .toolbar { margin-top: 0; }
 
 @media (max-width: 768px) {
+  .kb-tabs .settings-tab,
+  .kb-card,
+  .kb-card .btn-normal,
+  .kb-card .btn-ghost { min-height: 44px; }
   .ima-doc-group-tabs { display: none !important; }
   .ima-doc-group-select { display: block !important; }
   .ima-doc-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; }

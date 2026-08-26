@@ -15,7 +15,7 @@ def make_client(name="test.db"):
 
 def test_spa_prefixes_serve_index_html():
     client = make_client("spa.db")
-    for path in ("/timeline", "/home", "/admin/kols", "/kol/123", "/search", "/zsxq", "/ima-documents"):
+    for path in ("/timeline", "/home", "/admin/kols", "/kol/123", "/search", "/zsxq", "/ima-documents", "/knowledge"):
         resp = client.get(path)
         assert resp.status_code == 200, path
         assert "text/html" in resp.headers.get("content-type", "")

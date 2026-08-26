@@ -290,7 +290,7 @@ function clearImaPdfUrl() {
 }
 
 function _imaDocumentRoute(mediaId) {
-  return `ima-documents/${encodeURIComponent(mediaId).replace(/'/g, "%27")}`;
+  return `knowledge/${encodeURIComponent(mediaId).replace(/'/g, "%27")}`;
 }
 
 function imaDocumentReaderRoute(mediaId) {
@@ -378,7 +378,7 @@ function avatarHtml(name, url) {
 const NAV = [
   { group: "订阅", items: [
     { route: "timeline", icon: LIST_ICON, label: "最新动态" },
-    { route: "ima-documents", icon: BOOK_ICON, label: "IMA 文档" },
+    { route: "knowledge", icon: BOOK_ICON, label: "知识库" },
     { route: "home", icon: GRID_ICON, label: "订阅广场" },
     { route: "combinations", icon: TRENDING_ICON, label: "组合订阅" },
     { route: "mysubs", icon: BOOKMARK_ICON, label: "我的订阅" },
@@ -537,7 +537,7 @@ function imaDocumentsRoute(group, query, day) {
   if (query) params.set("q", query);
   if (day) params.set("day", day);
   const routeQueryString = params.toString();
-  return `ima-documents${routeQueryString ? `?${routeQueryString}` : ""}`;
+  return `knowledge${routeQueryString ? `?${routeQueryString}` : ""}`;
 }
 
 function replaceImaDocumentsRoute(path) {
@@ -589,6 +589,111 @@ function searchImaDocuments() {
 function refreshImaDocuments() {
   const seq = ++routeRenderSeq;
   renderImaDocuments(seq);
+}
+
+function knowledgeCardHtml(group, mode) {
+  const id = String(group.id || "");
+  const name = group.name || id;
+  const openable = mode === "subscribed";
+  const action = mode === "available"
+    ? `<button type="button" class="btn-normal" data-group="${escapeHtml(id)}" onclick="event.stopPropagation();subscribeKnowledge(this.dataset.group)">订阅</button>`
+    : `<button type="button" class="btn-ghost" data-group="${escapeHtml(id)}" onclick="event.stopPropagation();unsubscribeKnowledge(this.dataset.group)">退订</button>`;
+  return `<div class="kb-card${openable ? " is-openable" : ""}"${openable ? ` data-group="${escapeHtml(id)}" onclick="openKnowledgeGroup(this.dataset.group)"` : ""}>
+    <div class="kb-card-copy"><strong class="kb-card-name">${escapeHtml(name)}</strong></div>
+    ${action}
+  </div>`;
+}
+
+function knowledgeCardsHtml(groups, mode) {
+  return `<div class="kb-grid">${(groups || []).map((group) => knowledgeCardHtml(group, mode)).join("")}</div>`;
+}
+
+function openKnowledgeGroup(groupId) {
+  go(imaDocumentsRoute(groupId, "", ""));
+}
+
+function switchKnowledgeTab(name) {
+  const tab = name === "available" ? "available" : "subscribed";
+  document.querySelectorAll(".kb-tabs .settings-tab").forEach((b) => {
+    const on = b.dataset.tab === tab;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", String(on));
+  });
+  const subscribed = $("#kb-subscribed");
+  const available = $("#kb-available");
+  if (subscribed) subscribed.hidden = tab !== "subscribed";
+  if (available) available.hidden = tab !== "available";
+}
+
+function refreshKnowledge() {
+  const seq = ++routeRenderSeq;
+  renderKnowledge(seq);
+}
+
+async function subscribeKnowledge(groupId) {
+  try {
+    await api(`/api/ima-documents/groups/${encodeURIComponent(groupId)}/subscribe`, { method: "POST" });
+    flash("已订阅");
+    refreshKnowledge();
+  } catch (err) {
+    flash(err.message || "订阅失败", "error");
+  }
+}
+
+async function unsubscribeKnowledge(groupId) {
+  try {
+    await api(`/api/ima-documents/groups/${encodeURIComponent(groupId)}/subscribe`, { method: "DELETE" });
+    flash("已退订");
+    refreshKnowledge();
+  } catch (err) {
+    flash(err.message || "退订失败", "error");
+  }
+}
+
+async function renderKnowledge(seq, encodedMediaId = "") {
+  if (encodedMediaId) {
+    await renderImaDocuments(seq, encodedMediaId);
+    return;
+  }
+  setPageTitle("知识库");
+  const selectedGroup = imaDocumentsGroupFromRoute();
+  $("#main").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
+  try {
+    const data = await api("/api/ima-documents/catalog");
+    if (!routeStillActive(seq)) return;
+    const subscribed = Array.isArray(data.subscribed) ? data.subscribed : [];
+    const available = Array.isArray(data.available) ? data.available : [];
+    if (selectedGroup) {
+      if (subscribed.some((group) => String(group.id) === selectedGroup)) {
+        await renderImaDocuments(seq);
+        return;
+      }
+      $("#main").innerHTML = emptyState("没有这个知识库");
+      return;
+    }
+    const subscribedHtml = subscribed.length
+      ? knowledgeCardsHtml(subscribed, "subscribed")
+      : emptyState("还没有订阅知识库");
+    const availableHtml = available.length
+      ? knowledgeCardsHtml(available, "available")
+      : emptyState("暂无可订阅的知识库");
+    $("#main").innerHTML = `
+      <section class="section-panel ima-docs-shell">
+        <header class="section-head ima-docs-head">
+          <div><h2 class="section-title">知识库</h2><p class="section-meta">查看已订阅知识库</p></div>
+        </header>
+        <div class="settings-tabs kb-tabs" role="tablist" aria-label="知识库">
+          <button type="button" class="settings-tab active" role="tab" aria-selected="true" data-tab="subscribed" onclick="switchKnowledgeTab('subscribed')">已订阅</button>
+          <button type="button" class="settings-tab" role="tab" aria-selected="false" data-tab="available" onclick="switchKnowledgeTab('available')">可订阅</button>
+        </div>
+        <div id="kb-subscribed" class="kb-tab-panel">${subscribedHtml}</div>
+        <div id="kb-available" class="kb-tab-panel" hidden>${availableHtml}</div>
+      </section>`;
+  } catch (err) {
+    if (routeStillActive(seq)) {
+      $("#main").innerHTML = emptyState(`加载失败：${err.message}`, `<button type="button" class="btn-normal" onclick="refreshKnowledge()">重试</button>`);
+    }
+  }
 }
 
 async function renderImaDocuments(seq, encodedMediaId = "") {
@@ -1733,9 +1838,9 @@ async function renderTimeline(seq) {
     </div>
     <div id="tl-active-chips-wrap"${live ? ' class="is-hidden"' : ""}>${live ? "" : tlActiveChipsHtml()}</div>
     <div class="tl-ima-entry">
-      <button type="button" class="tl-ima-entry-btn" onclick="go('ima-documents')">
+      <button type="button" class="tl-ima-entry-btn" onclick="go('knowledge')">
         <span class="tl-ima-entry-icon">${BOOK_ICON}</span>
-        <span><strong>IMA 文档</strong><small>查看已归档研报 PDF 与全文</small></span>
+        <span><strong>知识库</strong><small>查看已订阅知识库</small></span>
       </button>
     </div>
     <section class="section-panel tl-feed-panel" id="tl-feed-panel">
@@ -8272,7 +8377,7 @@ if (window.matchMedia) {
 let routeRenderSeq = 0; // 每次路由切换递增；异步渲染完成后凭此丢弃过期响应
 const SPA_PREFIXES = new Set([
   "timeline", "home", "combinations", "mysubs", "settings",
-  "search", "kol", "more", "admin", "zsxq", "ima-documents",
+  "search", "kol", "more", "admin", "zsxq", "ima-documents", "knowledge",
 ]);
 
 function routeStillActive(seq) {
@@ -8357,11 +8462,12 @@ async function router() {
   renderTopbar(state.user);
   renderBottomNav(state.user);
   prefetchLiveFeed();
+  const navPage = page === "ima-documents" ? "knowledge" : page;
   document.querySelectorAll(".nav-item").forEach((b) =>
-    b.classList.toggle("active", b.dataset.route === page || b.dataset.route === `${page}/${param}`)
+    b.classList.toggle("active", b.dataset.route === navPage || b.dataset.route === `${navPage}/${param}`)
   );
   // 底部栏高亮：管理员进后台页时高亮「更多」
-  const activeBottom = page === "admin" ? "more" : page;
+  const activeBottom = navPage === "admin" ? "more" : navPage;
   document.querySelectorAll(".bnav-item").forEach((b) =>
     b.classList.toggle("active", b.dataset.route === activeBottom)
   );
@@ -8379,7 +8485,12 @@ async function router() {
     else if (page === "more") await renderMore(renderSeq);
     else if (page === "search") await renderSearch(renderSeq);
     else if (page === "kol") await renderKolPage(Number(param), renderSeq);
-    else if (page === "ima-documents") await renderImaDocuments(renderSeq, param);
+    else if (page === "ima-documents") {
+      const next = `${location.pathname.replace(/^\/ima-documents\b/, "/knowledge")}${location.search}`;
+      if (location.pathname + location.search !== next) history.replaceState(null, "", next);
+      await renderKnowledge(renderSeq, param);
+    }
+    else if (page === "knowledge") await renderKnowledge(renderSeq, param);
     else if (page === "admin") {
       if (!state.user.is_admin) { replaceRoute("timeline"); return; }
       // 分类管理/标签管理已合并为 admin/vocab：旧书签自动跳转

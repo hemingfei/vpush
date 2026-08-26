@@ -1763,14 +1763,52 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     nav = src[src.index("const NAV ="):src.index("const SIDEBAR_SLIM_KEY")]
     mobile = src[src.index("const MOBILE_NAV ="):src.index("function renderBottomNav")]
     timeline = src[src.index("async function renderTimeline"):src.index("function startTimelinePoll")]
-    assert nav.index('route: "timeline"') < nav.index('route: "ima-documents"')
+    assert nav.index('route: "timeline"') < nav.index('route: "knowledge"')
+    assert 'route: "ima-documents"' not in nav
+    assert "IMA 文档" not in nav
+    assert 'label: "知识库"' in nav
     assert 'group: "资料"' not in nav
     assert 'route: "ima-documents"' not in mobile
     assert 'class="tl-ima-entry"' in timeline
-    assert "go('ima-documents')" in timeline
+    assert "go('knowledge')" in timeline
+    assert "知识库" in timeline
+    assert "查看已订阅知识库" in timeline
     css = STYLE_CSS.read_text()
     assert ".tl-ima-entry { display: none; }" in css
     assert ".tl-ima-entry { display: block;" in css
+
+
+def test_knowledge_catalog_shell_contract():
+    """知识库目录：页签、卡片、订阅接口、旧 /ima-documents 回写到 /knowledge。"""
+    src = APP_JS.read_text()
+    render = _fn_body("renderKnowledge")
+    router = _fn_body("router")
+    route = _fn_body("imaDocumentsRoute")
+    assert "/api/ima-documents/catalog" in render
+    assert "kb-tabs" in src or 'class="kb-tabs"' in src
+    assert "kb-card" in src
+    assert "没有这个知识库" in render
+    assert "暂无可订阅的知识库" in render
+    assert "还没有订阅知识库" in render
+    assert "/api/ima-documents/groups/" in src
+    assert re.search(
+        r'/api/ima-documents/groups/.{0,80}subscribe[\s\S]{0,160}method:\s*"POST"|'
+        r'method:\s*"POST"[\s\S]{0,160}/api/ima-documents/groups/.{0,80}subscribe',
+        src,
+    )
+    assert re.search(
+        r'/api/ima-documents/groups/.{0,80}subscribe[\s\S]{0,160}method:\s*"DELETE"|'
+        r'method:\s*"DELETE"[\s\S]{0,160}/api/ima-documents/groups/.{0,80}subscribe',
+        src,
+    )
+    assert 'page === "ima-documents"' in router
+    assert "history.replaceState" in router
+    assert "knowledge" in router
+    assert "renderKnowledge" in router
+    assert "knowledge" in route
+    css = STYLE_CSS.read_text()
+    assert ".kb-tabs" in css
+    assert ".kb-card" in css
 
 
 def test_register_placeholder_matches_username_min_length():
