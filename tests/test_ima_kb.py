@@ -11,7 +11,7 @@ from app.ima_documents import (
     purge_ima_document_tags,
 )
 from app.stock_universe import bundled_plain_names
-from app.ima_kb import catalog, readable_group_ids
+from app.ima_kb import attach_catalog_stats, catalog, readable_group_ids
 from app.main import create_app
 from app.tagging import tag_text
 from tests.test_ima_documents import _headers
@@ -48,6 +48,12 @@ def test_ima_kb_acl_and_subscribe_roundtrip(tmp_path):
     db.set_ima_kb_acl("banking", [])
     assert db.ima_kb_can_read(user_id, "banking") is False
     assert db.ima_kb_is_subscribed(user_id, "banking") is False
+    db.set_ima_kb_acl("banking", [user_id])
+    db.ima_kb_subscribe(user_id, "banking")
+    db.set_ima_kb_acl_for_user(user_id, ["macro"])
+    assert db.ima_kb_group_ids_for_user(user_id) == ["macro"]
+    assert db.ima_kb_subscribed_group_ids_for_user(user_id) == []
+    assert db.ima_kb_can_subscribe(user_id, "banking") is False
 
 
 def test_delete_user_clears_ima_kb_rows(tmp_path):
@@ -84,6 +90,27 @@ def test_catalog_hides_ungranted_groups_from_users(tmp_path):
     assert {g["id"] for g in catalog(db, admin, _groups())["subscribed"] + catalog(db, admin, _groups())["available"]} >= {"banking", "macro"}
     assert readable_group_ids(db, user, _groups()) == {"banking"}
     assert readable_group_ids(db, admin, _groups()) == {"banking", "macro"}
+
+
+def test_attach_catalog_stats_uses_latest_mmdd_title():
+    listed = {
+        "subscribed": [{"id": "banking", "name": "投行研报", "enabled": True}],
+        "available": [{"id": "macro", "name": "宏观", "enabled": True}],
+    }
+    attach_catalog_stats(
+        listed,
+        [
+            {"group_id": "banking", "day": "unknown", "name": "坏日期", "media_id": "bad"},
+            {"group_id": "banking", "day": "0810", "name": "旧稿", "media_id": "old"},
+            {"group_id": "banking", "day": "0826", "name": "新稿.pdf", "media_id": "new"},
+            {"group_id": "macro", "day": "0101", "name": "宏观一", "media_id": "m1"},
+        ],
+    )
+    assert listed["subscribed"][0]["document_count"] == 3
+    assert listed["subscribed"][0]["latest_day"] == "0826"
+    assert listed["subscribed"][0]["latest_title"] == "新稿.pdf"
+    assert listed["subscribed"][0]["latest_media_id"] == "new"
+    assert listed["available"][0]["document_count"] == 1
 
 
 def test_user_cannot_see_kb_until_granted_and_subscribed(tmp_path, monkeypatch):
@@ -126,6 +153,10 @@ def test_user_cannot_see_kb_until_granted_and_subscribed(tmp_path, monkeypatch):
     assert granted.status_code == 200, granted.text
     catalog_payload = client.get("/api/ima-documents/catalog", headers=user_headers).json()
     assert [g["id"] for g in catalog_payload["available"]]
+    assert "acl_usernames" not in catalog_payload["available"][0]
+    admin_catalog = client.get("/api/ima-documents/catalog", headers=admin_headers).json()
+    admin_group = next(g for g in admin_catalog["subscribed"] if g["id"] == group_id)
+    assert "reader" in admin_group["acl_usernames"]
     assert client.get("/api/ima-documents/file_abc", headers=user_headers).status_code == 404
     assert client.post(
         f"/api/ima-documents/groups/{group_id}/subscribe", headers=user_headers
@@ -159,6 +190,66 @@ def test_user_cannot_see_kb_until_granted_and_subscribed(tmp_path, monkeypatch):
     )
     assert revoked.status_code == 200, revoked.text
     assert client.get("/api/ima-documents/file_abc", headers=user_headers).status_code == 404
+
+
+def test_admin_sets_user_ima_kb_groups(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "user-kb.sqlite"))
+    user_headers = _headers(client, "reader", "KBUSER2")
+    admin_headers = _headers(client, "kb_owner2", "KBADM2", admin=True)
+    group_id = client.get("/api/admin/ima-collector", headers=admin_headers).json()["config"]["groups"][0]["id"]
+    users = {u["username"]: u for u in client.get("/api/users", headers=admin_headers).json()}
+    reader = users["reader"]
+    owner = users["kb_owner2"]
+    assert reader["ima_kb_groups"] == []
+    granted = client.put(
+        f"/api/admin/users/{reader['id']}/ima-kb",
+        headers=admin_headers,
+        json={"group_ids": [group_id]},
+    )
+    assert granted.status_code == 200, granted.text
+    assert granted.json()["ima_kb_groups"] == [group_id]
+    reader = next(u for u in client.get("/api/users", headers=admin_headers).json() if u["username"] == "reader")
+    assert group_id in reader["ima_kb_groups"]
+    catalog = client.get("/api/ima-documents/catalog", headers=user_headers).json()
+    assert any(g["id"] == group_id for g in catalog["available"])
+    assert client.post(
+        f"/api/ima-documents/groups/{group_id}/subscribe", headers=user_headers
+    ).status_code == 200
+    reader = next(u for u in client.get("/api/users", headers=admin_headers).json() if u["username"] == "reader")
+    assert group_id in reader["ima_kb_subscribed"]
+    updated = client.put(
+        f"/api/users/{reader['id']}",
+        headers=admin_headers,
+        json={"username": "reader"},
+    )
+    assert updated.status_code == 200
+    assert group_id in updated.json()["ima_kb_groups"]
+    assert group_id in updated.json()["ima_kb_subscribed"]
+    revoked = client.put(
+        f"/api/admin/users/{reader['id']}/ima-kb",
+        headers=admin_headers,
+        json={"group_ids": []},
+    )
+    assert revoked.status_code == 200
+    assert revoked.json()["ima_kb_groups"] == []
+    assert revoked.json()["ima_kb_subscribed"] == []
+    assert client.get("/api/ima-documents/catalog", headers=user_headers).json()["available"] == []
+    assert client.put(
+        f"/api/admin/users/{owner['id']}/ima-kb",
+        headers=admin_headers,
+        json={"group_ids": [group_id]},
+    ).status_code == 400
+    assert client.put(
+        "/api/admin/users/999999/ima-kb",
+        headers=admin_headers,
+        json={"group_ids": [group_id]},
+    ).status_code == 404
+    assert client.put(
+        f"/api/admin/users/{reader['id']}/ima-kb",
+        headers=admin_headers,
+        json={"group_ids": ["not-a-real-group"]},
+    ).status_code == 404
 
 
 def test_admin_stats_includes_ima_kb_acl_usernames(tmp_path, monkeypatch):
@@ -371,7 +462,7 @@ def test_document_detail_exposes_metadata_and_list_filters_by_tag(tmp_path, monk
     other = {
         "media_id": "file_other",
         "name": "宏观点评.pdf",
-        "day": "0826",
+        "day": "0810",
         "abstract": "利率",
         "cover_url": "https://example.com/m.jpg",
     }
@@ -404,3 +495,9 @@ def test_document_detail_exposes_metadata_and_list_filters_by_tag(tmp_path, monk
     items = listed.json()["items"]
     assert [item["media_id"] for item in items] == ["file_tagged"]
     assert items[0]["tags"] == ["新能源", "宁德时代"]
+    assert "新能源" in listed.json()["tags"]
+    assert "宏观" in listed.json()["tags"]
+    by_day = client.get("/api/ima-documents?day=0826", headers=admin_headers)
+    assert by_day.status_code == 200
+    assert [item["media_id"] for item in by_day.json()["items"]] == ["file_tagged"]
+    assert set(by_day.json()["days"]) == {"0826", "0810"}

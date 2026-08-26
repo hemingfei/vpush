@@ -1,7 +1,10 @@
 """IMA 知识库产品层：授权、订阅、可读集合。不负责采集或文件。"""
 from __future__ import annotations
 
+import re
 from typing import Any, Iterable
+
+_DAY_KEY = re.compile(r"^\d{4}$")
 
 
 def is_admin(user: dict[str, Any]) -> bool:
@@ -32,3 +35,41 @@ def catalog(db: Any, user: dict[str, Any], groups: Iterable[Any]) -> dict[str, l
         elif db.ima_kb_can_subscribe(uid, group_id):
             available.append(item)
     return {"subscribed": subscribed, "available": available}
+
+
+def attach_catalog_stats(
+    listed: dict[str, list[dict[str, Any]]],
+    documents: Iterable[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    stats: dict[str, dict[str, Any]] = {}
+    for item in documents:
+        group_id = str(item.get("group_id") or "")
+        if not group_id:
+            continue
+        bucket = stats.setdefault(
+            group_id,
+            {"document_count": 0, "latest_day": "", "latest_title": "", "latest_media_id": ""},
+        )
+        bucket["document_count"] += 1
+        day = str(item.get("day") or "")
+        if _DAY_KEY.fullmatch(day) and day >= str(bucket["latest_day"] or ""):
+            bucket["latest_day"] = day
+            bucket["latest_title"] = str(item.get("name") or "")
+            bucket["latest_media_id"] = str(item.get("media_id") or "")
+    for key in ("subscribed", "available"):
+        for group in listed.get(key, []):
+            extra = stats.get(str(group.get("id") or ""), {})
+            group["document_count"] = int(extra.get("document_count") or 0)
+            group["latest_day"] = str(extra.get("latest_day") or "")
+            group["latest_title"] = str(extra.get("latest_title") or "")
+            group["latest_media_id"] = str(extra.get("latest_media_id") or "")
+    return listed
+
+
+def attach_catalog_acl(listed: dict[str, list[dict[str, Any]]], db: Any, user: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    if not is_admin(user):
+        return listed
+    for key in ("subscribed", "available"):
+        for group in listed.get(key, []):
+            group["acl_usernames"] = db.ima_kb_acl_usernames(str(group.get("id") or ""))
+    return listed

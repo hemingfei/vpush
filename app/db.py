@@ -1221,6 +1221,68 @@ class DB:
             )
         ]
 
+    def ima_kb_group_ids_for_user(self, user_id: int) -> list[str]:
+        return [
+            str(row["group_id"])
+            for row in self._rows(
+                "SELECT group_id FROM ima_kb_acl WHERE user_id = ? ORDER BY group_id",
+                (int(user_id),),
+            )
+        ]
+
+    def ima_kb_subscribed_group_ids_for_user(self, user_id: int) -> list[str]:
+        return [
+            str(row["group_id"])
+            for row in self._rows(
+                "SELECT group_id FROM ima_kb_subscriptions WHERE user_id = ? ORDER BY group_id",
+                (int(user_id),),
+            )
+        ]
+
+    def ima_kb_acl_map(self) -> dict[int, list[str]]:
+        mapped: dict[int, list[str]] = {}
+        for row in self._rows("SELECT user_id, group_id FROM ima_kb_acl"):
+            mapped.setdefault(int(row["user_id"]), []).append(str(row["group_id"]))
+        return mapped
+
+    def ima_kb_sub_map(self) -> dict[int, list[str]]:
+        mapped: dict[int, list[str]] = {}
+        for row in self._rows("SELECT user_id, group_id FROM ima_kb_subscriptions"):
+            mapped.setdefault(int(row["user_id"]), []).append(str(row["group_id"]))
+        return mapped
+
+    def set_ima_kb_acl_for_user(self, user_id: int, group_ids: list[str]) -> None:
+        uid = int(user_id)
+        allowed = {str(group_id).strip() for group_id in group_ids if str(group_id).strip()}
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                existing = {
+                    str(row["group_id"])
+                    for row in self._conn.execute(
+                        "SELECT group_id FROM ima_kb_acl WHERE user_id = ?",
+                        (uid,),
+                    ).fetchall()
+                }
+                for group_id in allowed - existing:
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO ima_kb_acl (group_id, user_id) VALUES (?, ?)",
+                        (group_id, uid),
+                    )
+                for group_id in existing - allowed:
+                    self._conn.execute(
+                        "DELETE FROM ima_kb_acl WHERE group_id = ? AND user_id = ?",
+                        (group_id, uid),
+                    )
+                    self._conn.execute(
+                        "DELETE FROM ima_kb_subscriptions WHERE group_id = ? AND user_id = ?",
+                        (group_id, uid),
+                    )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
     def ima_kb_can_subscribe(self, user_id: int, group_id: str) -> bool:
         return bool(
             self._rows(

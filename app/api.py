@@ -89,7 +89,7 @@ from .ima_documents import (
     ima_kb_valid_tags,
     purge_ima_document_tags,
 )
-from .ima_kb import catalog as ima_kb_catalog, readable_group_ids
+from .ima_kb import attach_catalog_acl, attach_catalog_stats, catalog as ima_kb_catalog, readable_group_ids
 from .plaza import (
     filter_plaza_rows,
     is_plaza_hidden,
@@ -540,6 +540,10 @@ class ImaKbAclIn(BaseModel):
     usernames: list[str]
 
 
+class ImaKbUserAclIn(BaseModel):
+    group_ids: list[str]
+
+
 class ProxyPoolIn(BaseModel):
     name: str
     kind: str = "static"
@@ -692,6 +696,8 @@ def admin_user_summary(
     subscription_count: int = 0,
     inactive: bool = False,
     days_until_purge: int | None = None,
+    ima_kb_groups: list[str] | None = None,
+    ima_kb_subscribed: list[str] | None = None,
 ) -> dict:
     """管理员用户列表摘要：只暴露管理所需字段，不含 feed_token/bark_key/wecom_webhook/llm_api_key 等凭证。"""
     invite = invite or {}
@@ -721,6 +727,8 @@ def admin_user_summary(
         "has_password": bool(user.get("password_hash")),
         "last_login_at": user.get("last_login_at") or "",
         "username_valid": auth.is_valid_username(user.get("username") or ""),
+        "ima_kb_groups": list(ima_kb_groups or []),
+        "ima_kb_subscribed": list(ima_kb_subscribed or []),
     }
 
 
@@ -2406,9 +2414,13 @@ def create_api_router(
         group = group.strip()
         if group and group not in {group_config.id for group_config in groups}:
             raise HTTPException(status_code=404, detail="知识库不存在")
+        items = ima_documents.store.documents(q, day, group_id=group, groups=groups, tag=tag)
+        facets = ima_documents.store.document_facets(q, group_id=group, groups=groups)
         return {
             "groups": ima_documents.store.group_summary(groups),
-            "items": ima_documents.store.documents(q, day, group_id=group, groups=groups, tag=tag),
+            "items": items,
+            "days": facets["days"],
+            "tags": facets["tags"],
         }
 
     def _ima_document(user: dict, media_id: str, group: str = "") -> dict:
@@ -2423,12 +2435,14 @@ def create_api_router(
         except ValueError:
             document = None
         if document is None:
-            raise HTTPException(status_code=404, detail="IMA 文档不存在")
+            raise HTTPException(status_code=404, detail="文档不存在")
         return document
 
     @router.get("/ima-documents/catalog")
     def ima_documents_catalog(user: dict = Depends(get_current_user)):
-        return ima_kb_catalog(db, user, _configured_groups())
+        listed = ima_kb_catalog(db, user, _configured_groups())
+        documents = ima_documents.store.documents(groups=_configured_groups())
+        return attach_catalog_acl(attach_catalog_stats(listed, documents), db, user)
 
     @router.post("/ima-documents/groups/{group_id}/subscribe")
     def subscribe_ima_kb(group_id: str, user: dict = Depends(get_current_user)):
@@ -2541,6 +2555,32 @@ def create_api_router(
         db.set_ima_kb_acl(group_id, user_ids)
         _audit(admin, "set_ima_kb_acl", group_id, ",".join(body.usernames))
         return {"ok": True, "acl_usernames": db.ima_kb_acl_usernames(group_id)}
+
+    @router.put("/admin/users/{user_id}/ima-kb", dependencies=[Depends(require_admin)])
+    def set_user_ima_kb(user_id: int, body: ImaKbUserAclIn, admin: dict = Depends(require_admin)):
+        target = db.get_user(user_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        if target.get("is_admin"):
+            raise HTTPException(status_code=400, detail="管理员可直接打开全部知识库")
+        known = {group.id for group in _configured_groups()}
+        group_ids = []
+        seen: set[str] = set()
+        for group_id in body.group_ids:
+            value = str(group_id or "").strip()
+            if not value or value in seen:
+                continue
+            if value not in known:
+                raise HTTPException(status_code=404, detail="知识库不存在")
+            seen.add(value)
+            group_ids.append(value)
+        db.set_ima_kb_acl_for_user(user_id, group_ids)
+        _audit(admin, "set_user_ima_kb", str(user_id), ",".join(group_ids))
+        return {
+            "ok": True,
+            "ima_kb_groups": db.ima_kb_group_ids_for_user(user_id),
+            "ima_kb_subscribed": db.ima_kb_subscribed_group_ids_for_user(user_id),
+        }
 
     @router.put("/admin/ima-collector", dependencies=[Depends(require_admin)])
     def set_ima_collector(body: ImaCollectorIn, admin: dict = Depends(require_admin)):
@@ -3583,6 +3623,8 @@ def create_api_router(
         counts = db.subscription_counts()
         n_days, m_days = db.get_inactive_policy()
         inactive_ids = {r["id"] for r in db.list_inactive_user_rows(n_days)}
+        ima_kb_acl = db.ima_kb_acl_map()
+        ima_kb_subs = db.ima_kb_sub_map()
         return [
             admin_user_summary(
                 u,
@@ -3596,6 +3638,8 @@ def create_api_router(
                     if u["id"] in inactive_ids
                     else None
                 ),
+                ima_kb_groups=ima_kb_acl.get(u["id"], []),
+                ima_kb_subscribed=ima_kb_subs.get(u["id"], []),
             )
             for u in db.list_users()
         ]
@@ -3847,6 +3891,8 @@ def create_api_router(
             feishu_personal_active=bool(bot and bot["status"] == "active" and bot.get("chat_id")),
             webpush_bound=db.count_webpush_subscriptions(user_id) > 0,
             subscription_count=db.count_subscriptions(user_id),
+            ima_kb_groups=db.ima_kb_group_ids_for_user(user_id),
+            ima_kb_subscribed=db.ima_kb_subscribed_group_ids_for_user(user_id),
         )
 
     @router.delete("/users/{user_id}", dependencies=[Depends(require_admin)])

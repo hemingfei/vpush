@@ -1020,19 +1020,33 @@ def test_ima_group_save_reads_rows_and_preserves_legacy_token_fields():
 
 
 def test_ima_collector_acl_granted_via_separate_put():
-    """采集群组行含授权用户；保存时 ACL 独立 PUT，不塞进 collector groups。"""
+    """知识库权限在用户管理；ACL 不塞进 collector groups，也不出现在知识库目录。"""
+    src = APP_JS.read_text()
     row = _fn_body("imaGroupRowHtml")
     save = _fn_body("saveImaCollector")
     read = _fn_body("readImaGroupRows")
-    assert "授权用户" in row
-    assert "ima-kb-acl" in row
-    assert "/api/admin/ima-collector/groups/" in save
+    catalog = _fn_body("renderKnowledge")
+    open_user = _fn_body("adminOpenUser")
+    persist = _fn_body("adminSaveUserKnowledge")
+    load_users = _fn_body("loadAdminUsers")
+    assert "<h4>知识库</h4>" in open_user
+    assert 'id="um-kb"' in open_user
+    assert "data-kb-group" in open_user
+    assert "勾选后可自行订阅，取消立即失效。" in open_user
+    assert "谁能订" not in src
+    assert "谁能定" not in src
+    assert "knowledgeAclPanelHtml" not in catalog
+    assert "knowledgeAclPanelHtml" not in src
+    assert "谁能订" not in row
+    assert "/api/admin/users/" in persist
+    assert "ima-kb" in persist
+    assert "group_ids" in persist
+    assert "/api/admin/ima-collector" in load_users
     assert "acl_usernames" not in save
     assert "acl_usernames" not in read
     stats = _fn_body("loadAdminStats")
     assert "s.ima_collector" in stats
     assert "renderImaGroupRows" in stats
-    assert "acl_usernames" in row
 
 
 def test_ima_discovery_status_is_safe_and_does_not_render_secrets():
@@ -1209,10 +1223,10 @@ def test_ima_documents_group_switching_contract():
     assert "params.set(\"group\"" in render
     assert "imaDocumentGroupControls(groups, selectedGroup)" in render
     assert 'class="ima-doc-group-switcher' in src
-    assert "全部群组" in src
+    assert "全部知识库" in src
     assert 'class="ima-doc-group-label"' in src
     assert "routeQuery()" in src
-    assert "replaceImaDocumentsRoute(imaDocumentsRoute(value, state.imaDocumentsQuery, \"\"))" in src
+    assert "replaceImaDocumentsRoute(imaDocumentsRoute(value, state.imaDocumentsQuery, \"\", \"\"))" in src
     assert "selectImaDocumentGroup(value)" in src
     assert "state.imaDocumentsDay = \"\"" in src
 
@@ -1230,7 +1244,7 @@ def test_ima_documents_group_controls_render_response_groups_safely():
 
 
 def test_ima_documents_all_group_labels_and_single_group_title():
-    """全部群组结果显示来源标签，单群组结果不重复显示；标题包含名称和数量。"""
+    """全部知识库结果显示来源标签，单群组结果不重复显示；标题包含名称和数量。"""
     src = APP_JS.read_text()
     assert "item.group_name" in src
     assert "selectedGroupName" in src or "groupName" in src
@@ -1243,7 +1257,8 @@ def test_ima_document_group_switch_refreshes_locally():
     select = _fn_body("selectImaDocumentGroup")
     helper = _fn_body("replaceImaDocumentsRoute")
     assert "replaceRoute(" not in select
-    assert "replaceImaDocumentsRoute(imaDocumentsRoute(value, state.imaDocumentsQuery, \"\"))" in select
+    assert "replaceImaDocumentsRoute(imaDocumentsRoute(value, state.imaDocumentsQuery, \"\", \"\"))" in select
+    assert "state.imaDocumentsTag = \"\"" in select
     assert "state.imaDocumentsGroup" in select
     assert "state.imaDocumentsDay = \"\"" in select
     assert "state.imaDocumentsQuery" in select
@@ -1709,7 +1724,7 @@ def test_ima_document_reader_preserves_group_context_and_metadata():
     assert "state.imaDocumentsGroup" in reader
     assert "state.imaDocumentsQuery" in reader
     assert "state.imaDocumentsDay" in reader
-    assert "imaDocumentsRoute(group, query, day)" in reader
+    assert "imaDocumentsRoute(group, query, day, tag)" in reader
     assert "item.group_name" in reader
     assert "item.day" in reader
     assert reader.index("ima-reader-group") < reader.index("ima-reader-day")
@@ -1733,14 +1748,14 @@ def test_ima_document_reader_requests_keep_current_group_for_all_endpoints():
 
 
 def test_ima_document_reader_route_preserves_list_filters_without_inline_query_injection():
-    """文档行通过 handler 打开，并把当前列表 group/q/day 安全带入阅读 URL。"""
+    """文档行通过 handler 打开，并把当前列表 group/q/day/tag 安全带入阅读 URL。"""
 
     src = APP_JS.read_text()
     row = _fn_body("imaDocumentRow")
     route = _fn_body("imaDocumentReaderRoute")
     opener = _fn_body("openImaDocument")
     assert "function imaDocumentReaderRoute(mediaId)" in src
-    assert "imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay)" in route
+    assert "state.imaDocumentsTag" in route
     assert "data-media-id=" in row
     assert 'onclick="openImaDocument(this.dataset.mediaId)"' in row
     assert "_imaDocumentRoute(item.media_id)" not in row
@@ -1750,11 +1765,11 @@ def test_ima_document_reader_route_preserves_list_filters_without_inline_query_i
 def test_ima_document_reader_backroute_uses_detail_group_when_url_has_none():
     """直接打开阅读页时，详情返回的群组 ID 也能恢复筛选列表。"""
     reader = _fn_body("renderImaDocument")
-    assert "let backRoute = imaDocumentsRoute(group, query, day)" in reader
+    assert "let backRoute = imaDocumentsRoute(group, query, day, tag)" in reader
     assert "item.group_id" in reader
-    assert "backRoute = imaDocumentsRoute(item.group_id, query, day)" in reader
-    assert reader.index("const item = await api") < reader.index("backRoute = imaDocumentsRoute(item.group_id, query, day)")
-    assert reader.index("backRoute = imaDocumentsRoute(item.group_id, query, day)") < reader.index("const text = await")
+    assert "backRoute = imaDocumentsRoute(item.group_id, query, day, tag)" in reader
+    assert reader.index("const item = await api") < reader.index("backRoute = imaDocumentsRoute(item.group_id, query, day, tag)")
+    assert reader.index("backRoute = imaDocumentsRoute(item.group_id, query, day, tag)") < reader.index("const text = await")
 
 
 def test_ima_document_reader_omits_empty_group_context():
@@ -1770,9 +1785,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=186"' in html
-    assert 'src="/app.js?v=261"' in html
-    assert 'dav-shell-v130' in sw
+    assert 'href="/style.css?v=190"' in html
+    assert 'src="/app.js?v=268"' in html
+    assert 'dav-shell-v137' in sw
 
 
 def test_ima_documents_follow_latest_dynamic_navigation():
@@ -1786,13 +1801,16 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     assert 'label: "知识库"' in nav
     assert 'group: "资料"' not in nav
     assert 'route: "ima-documents"' not in mobile
+    assert 'route: "knowledge"' not in mobile
+    assert "isPhoneShell" in src
+    assert "知识库请在电脑上打开" in src
     assert 'class="tl-ima-entry"' in timeline
     assert "go('knowledge')" in timeline
     assert "知识库" in timeline
-    assert "查看已订阅知识库" in timeline
+    assert "打开知识库" in timeline
     css = STYLE_CSS.read_text()
     assert ".tl-ima-entry { display: none; }" in css
-    assert ".tl-ima-entry { display: block;" in css
+    assert "(min-width: 769px) and (max-width: 900px)" in css
 
 
 def test_knowledge_catalog_shell_contract():
@@ -1804,9 +1822,25 @@ def test_knowledge_catalog_shell_contract():
     assert "/api/ima-documents/catalog" in render
     assert "kb-tabs" in src or 'class="kb-tabs"' in src
     assert "kb-card" in src
-    assert "没有这个知识库" in render
+    assert "没有访问权限" in render
     assert "暂无可订阅的知识库" in render
     assert "还没有订阅知识库" in render
+    assert "去可订阅看看" in render
+    assert "回知识库" in render
+    assert "不会推送到频道" in render
+    assert "openKnowledgeLatest" in APP_JS.read_text()
+    assert "ima-doc-filter-toggle" in APP_JS.read_text()
+    assert "has-filter" in APP_JS.read_text()
+    assert "isPhoneShell" in src
+    assert "知识库请在电脑上打开" in src
+    assert "ima-doc-filter-chips" in APP_JS.read_text()
+    assert "knowledgeAclPanelHtml" not in render
+    assert "谁能订" not in render
+    assert "谁能定" not in render
+    card = _fn_body("knowledgeCardHtml")
+    assert 'mode === "subscribed"' in card
+    assert "kb-card-latest" in card
+    assert 'mode === "available"' in card
     assert "/api/ima-documents/groups/" in src
     assert re.search(
         r'/api/ima-documents/groups/.{0,80}subscribe[\s\S]{0,160}method:\s*"POST"|'
@@ -1840,7 +1874,16 @@ def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
 
     assert 'placeholder="搜索标题或摘要"' in src
     assert "ima-doc-tag" in src
+    assert "submitImaDocumentsSearch" in src
+    assert ">搜索</button>" in src
+    assert "ima-doc-filter-chips" in src
+    assert "has-filter" in src
     assert 'params.set("tag"' in render
+    assert "data.days" in render
+    assert "data.tags" in render
+    assert "imaDocumentsRoute(group, query, day, tag)" in reader or "imaDocumentsRoute(item.group_id, query, day, tag)" in reader
+    assert "closeImaPdf" in src
+    assert "loadImaPdf(mediaId)" in reader
     assert "item.cover_url" in row
     assert 'startsWith("http")' in src
     assert "onerror" in row
@@ -1945,7 +1988,7 @@ def test_admin_users_page_uses_modal_not_prompt():
     assert "无密码，不能网页登录" in open_user
     assert "登录名不合规" in open_user
     assert "下划线或连字符" in open_user
-    for name in ("adminSaveUsername", "adminSavePassword", "adminSendTestPush", "adminDeleteUser", "adminToggleAdmin"):
+    for name in ("adminSaveUsername", "adminSavePassword", "adminSendTestPush", "adminDeleteUser", "adminToggleAdmin", "adminSaveUserKnowledge"):
         fn = _fn_body(name)
         assert "flash(" in fn, f"{name} 应使用 flash toast"
         assert "prompt(" not in fn

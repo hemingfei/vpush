@@ -1191,6 +1191,29 @@ class ImaDocumentStore:
         output.sort(key=lambda item: (item["day"], item["name"]), reverse=True)
         return output
 
+    def document_facets(
+        self,
+        query: str = "",
+        group_id: str = "",
+        groups: tuple[ImaGroupConfig, ...] | None = None,
+    ) -> dict[str, list[str]]:
+        items = self.documents(query, "", group_id=group_id, groups=groups, tag="")
+        days: list[str] = []
+        tags: list[str] = []
+        seen_days: set[str] = set()
+        seen_tags: set[str] = set()
+        for item in items:
+            day = str(item.get("day") or "")
+            if day and day not in seen_days:
+                seen_days.add(day)
+                days.append(day)
+            for tag in item.get("tags") or []:
+                name = str(tag or "").strip()
+                if name and name not in seen_tags:
+                    seen_tags.add(name)
+                    tags.append(name)
+        return {"days": days, "tags": tags}
+
     def document(
         self,
         media_id: str,

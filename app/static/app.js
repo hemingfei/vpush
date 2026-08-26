@@ -106,6 +106,7 @@ const state = {
   imaDocumentsDay: "",
   imaDocumentsGroup: "",
   imaDocumentsTag: "",
+  pageBackRoute: "",
 };
 
 function escapeHtml(text) {
@@ -295,7 +296,12 @@ function _imaDocumentRoute(mediaId) {
 }
 
 function imaDocumentReaderRoute(mediaId) {
-  const listRoute = imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay);
+  const listRoute = imaDocumentsRoute(
+    state.imaDocumentsGroup,
+    state.imaDocumentsQuery,
+    state.imaDocumentsDay,
+    state.imaDocumentsTag
+  );
   const queryStart = listRoute.indexOf("?");
   const query = queryStart >= 0 ? listRoute.slice(queryStart) : "";
   return `${_imaDocumentRoute(mediaId)}${query}`;
@@ -469,6 +475,27 @@ const MOBILE_NAV = [
   { route: "settings", icon: GEAR_ICON, label: "设置" },
 ];
 
+function isPhoneShell() {
+  return window.matchMedia("(max-width: 768px)").matches;
+}
+
+function renderKnowledgePhoneBlocked() {
+  setPageTitle("知识库");
+  $("#main").innerHTML = emptyState(
+    "知识库请在电脑上打开",
+    `<div><p class="section-meta">研报和 PDF 适合在电脑上读，手机不再放这个入口。</p><div><button type="button" class="btn-normal" onclick="go('timeline')">回动态</button></div></div>`
+  );
+}
+
+function ensureKnowledgePhoneWatch() {
+  if (window._kbPhoneWatch || !window.matchMedia) return;
+  window._kbPhoneWatch = true;
+  window.matchMedia("(max-width: 768px)").addEventListener("change", () => {
+    const page = String(routePath() || "").split("/")[0];
+    if (page === "knowledge" || page === "ima-documents") router();
+  });
+}
+
 function renderBottomNav(user) {
   const tabs = [...MOBILE_NAV];
   if (user.is_admin) tabs.push({ route: "more", icon: PLUS_ICON, label: "更多" });
@@ -505,10 +532,34 @@ function imaSafeCoverUrl(url) {
   return cover.startsWith("http") ? cover : "";
 }
 
-function imaDocumentTagsHtml(tags) {
+function fmtImaDay(day) {
+  const raw = String(day || "").trim();
+  const match = /^(\d{2})(\d{2})$/.exec(raw);
+  if (!match) return raw;
+  return `${Number(match[1])}月${Number(match[2])}日`;
+}
+
+function fmtDocSize(bytes) {
+  const n = Number(bytes) || 0;
+  return n > 0 ? fmtCacheBytes(n) : "";
+}
+
+function imaDocKindLabel(item) {
+  if (item?.has_pdf) return "PDF";
+  if (item?.has_txt) return "全文";
+  return "仅摘要";
+}
+
+function imaDocumentTagsHtml(tags, interactive = false) {
   const list = Array.isArray(tags) ? tags.filter(Boolean) : [];
   if (!list.length) return "";
-  return `<span class="ima-doc-tags">${list.map((tag) => `<span class="ima-doc-tag">${escapeHtml(tag)}</span>`).join("")}</span>`;
+  const chips = list.map((tag) => {
+    const label = escapeHtml(tag);
+    return interactive
+      ? `<button type="button" class="ima-doc-tag is-action" data-tag="${label}" onclick="event.stopPropagation();selectImaDocumentsTag(this.dataset.tag)">${label}</button>`
+      : `<span class="ima-doc-tag">${label}</span>`;
+  });
+  return `<span class="ima-doc-tags">${chips.join("")}</span>`;
 }
 
 function imaDocumentRow(item, showGroupLabel = false) {
@@ -520,18 +571,19 @@ function imaDocumentRow(item, showGroupLabel = false) {
     : `<span class="ima-doc-row-icon">${FILE_TEXT_ICON}</span>`;
   const abstract = String(item.abstract || "").trim();
   const abstractHtml = abstract ? `<span class="ima-doc-abstract">${escapeHtml(abstract)}</span>` : "";
+  const meta = [fmtImaDay(item.day), fmtDocSize(item.size)].filter(Boolean).join(" · ");
   return `
-    <button type="button" class="ima-doc-row" data-media-id="${escapeHtml(item.media_id)}" onclick="openImaDocument(this.dataset.mediaId)">
+    <div class="ima-doc-row" role="button" tabindex="0" data-media-id="${escapeHtml(item.media_id)}" onclick="openImaDocument(this.dataset.mediaId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openImaDocument(this.dataset.mediaId)}">
       ${thumb}
       <span class="ima-doc-row-copy">
         <span class="ima-doc-row-name">${escapeHtml(item.name)}</span>
         ${abstractHtml}
-        ${imaDocumentTagsHtml(item.tags)}
+        ${imaDocumentTagsHtml(item.tags, true)}
         ${groupLabel}
-        <span class="ima-doc-row-meta">${escapeHtml(item.day || "")} · ${fmtCacheBytes(item.size)}</span>
+        <span class="ima-doc-row-meta">${meta ? `${escapeHtml(meta)} · ` : ""}<span class="ima-doc-kind">${escapeHtml(imaDocKindLabel(item))}</span></span>
       </span>
       <span class="ima-doc-row-arrow" aria-hidden="true">›</span>
-    </button>`;
+    </div>`;
 }
 
 function imaDocumentGroups(items, showGroupLabel = false) {
@@ -542,7 +594,7 @@ function imaDocumentGroups(items, showGroupLabel = false) {
   }
   return [...groups.entries()].map(([day, rows]) => `
     <section class="ima-doc-day">
-      <header class="ima-doc-day-head"><h2>${escapeHtml(day)}</h2><span>${rows.length} 份</span></header>
+      <header class="ima-doc-day-head"><h2>${escapeHtml(fmtImaDay(day) || day)}</h2><span>${rows.length} 份</span></header>
       <div class="ima-doc-list">${rows.map((item) => imaDocumentRow(item, showGroupLabel)).join("")}</div>
     </section>`).join("");
 }
@@ -577,8 +629,9 @@ function selectImaDocumentGroup(value) {
   }
   state.imaDocumentsGroup = String(value || "");
   state.imaDocumentsDay = "";
+  state.imaDocumentsTag = "";
   state.imaDocumentsQuery = $("#ima-doc-q")?.value?.trim() || state.imaDocumentsQuery || "";
-  replaceImaDocumentsRoute(imaDocumentsRoute(value, state.imaDocumentsQuery, ""));
+  replaceImaDocumentsRoute(imaDocumentsRoute(value, state.imaDocumentsQuery, "", ""));
   const seq = ++routeRenderSeq;
   renderImaDocuments(seq);
 }
@@ -608,15 +661,15 @@ function selectImaDocumentsTag(value) {
 
 function imaDocumentGroupControls(groups, selectedGroup) {
   const options = state.user?.is_admin
-    ? [{ id: "", name: "全部群组" }, ...(groups || [])]
+    ? [{ id: "", name: "全部知识库" }, ...(groups || [])]
     : [...(groups || [])];
   const useTabs = (groups || []).length <= 5;
   const selected = String(selectedGroup || "");
   return `<div class="ima-doc-group-switcher ${useTabs ? "is-tabs" : "is-select"}">
-    <div class="ima-doc-group-tabs" role="tablist" aria-label="IMA 文档群组">
+    <div class="ima-doc-group-tabs" role="tablist" aria-label="知识库">
       ${options.map((group) => `<button type="button" class="ima-doc-group-tab${group.id === selected ? " is-selected" : ""}" role="tab" aria-selected="${group.id === selected}" data-group="${escapeHtml(group.id)}" onclick="selectImaDocumentGroup(this.dataset.group)">${escapeHtml(group.name)}</button>`).join("")}
     </div>
-    <label class="ima-doc-group-select"><span class="sr-only">选择 IMA 文档群组</span><select class="form-control" aria-label="选择 IMA 文档群组" onchange="selectImaDocumentGroup(this.value)">${options.map((group) => `<option value="${escapeHtml(group.id)}"${group.id === selected ? " selected" : ""}>${escapeHtml(group.name)}</option>`).join("")}</select></label>
+    <label class="ima-doc-group-select"><span class="sr-only">选择知识库</span><select class="form-control" aria-label="选择知识库" onchange="selectImaDocumentGroup(this.value)">${options.map((group) => `<option value="${escapeHtml(group.id)}"${group.id === selected ? " selected" : ""}>${escapeHtml(group.name)}</option>`).join("")}</select></label>
   </div>`;
 }
 
@@ -629,16 +682,45 @@ function refreshImaDocuments() {
   renderImaDocuments(seq);
 }
 
+function openKnowledgeLatest(groupId, mediaId) {
+  const group = String(groupId || "");
+  const media = String(mediaId || "");
+  if (!media) {
+    openKnowledgeGroup(group);
+    return;
+  }
+  state.imaDocumentsGroup = group;
+  const query = group ? `?group=${encodeURIComponent(group)}` : "";
+  go(`${_imaDocumentRoute(media)}${query}`);
+}
+
+function knowledgeCardSummary(group) {
+  const count = Number(group.document_count || 0);
+  const day = fmtImaDay(group.latest_day);
+  return count ? `${count} 份${day ? ` · ${day}` : ""}` : "还没有文档";
+}
+
 function knowledgeCardHtml(group, mode) {
   const id = String(group.id || "");
   const name = group.name || id;
   const openable = mode === "subscribed";
+  const isAdmin = !!state.user?.is_admin;
+  const title = String(group.latest_title || "").trim();
+  const mediaId = String(group.latest_media_id || "").trim();
   const action = mode === "available"
-    ? `<button type="button" class="btn-normal" data-group="${escapeHtml(id)}" onclick="event.stopPropagation();subscribeKnowledge(this.dataset.group)">订阅</button>`
-    : `<button type="button" class="btn-ghost" data-group="${escapeHtml(id)}" onclick="event.stopPropagation();unsubscribeKnowledge(this.dataset.group)">退订</button>`;
-  return `<div class="kb-card${openable ? " is-openable" : ""}"${openable ? ` data-group="${escapeHtml(id)}" onclick="openKnowledgeGroup(this.dataset.group)"` : ""}>
-    <div class="kb-card-copy"><strong class="kb-card-name">${escapeHtml(name)}</strong></div>
-    ${action}
+    ? `<button type="button" class="btn-normal" data-group="${escapeHtml(id)}" onclick="subscribeKnowledge(this.dataset.group, this)">订阅</button>`
+    : (isAdmin
+      ? `<span class="kb-card-pass">管理员直通</span>`
+      : `<button type="button" class="btn-ghost" data-group="${escapeHtml(id)}" onclick="unsubscribeKnowledge(this.dataset.group, this)">退订</button>`);
+  const copy = openable
+    ? `<button type="button" class="kb-card-open" data-group="${escapeHtml(id)}" onclick="openKnowledgeGroup(this.dataset.group)"><strong class="kb-card-name">${escapeHtml(name)}</strong><span class="kb-card-meta">${escapeHtml(knowledgeCardSummary(group))}</span></button>`
+    : `<div class="kb-card-copy"><strong class="kb-card-name">${escapeHtml(name)}</strong><span class="kb-card-meta">${escapeHtml(knowledgeCardSummary(group))}</span></div>`;
+  const latest = openable && title
+    ? `<button type="button" class="kb-card-latest" data-group="${escapeHtml(id)}" data-media-id="${escapeHtml(mediaId)}" onclick="openKnowledgeLatest(this.dataset.group, this.dataset.mediaId)">最新 ${escapeHtml(title)}</button>`
+    : "";
+  return `<div class="kb-card${openable ? " is-openable" : ""}">
+    <div class="kb-card-main">${copy}${action}</div>
+    ${latest}
   </div>`;
 }
 
@@ -669,84 +751,112 @@ function refreshKnowledge() {
   renderKnowledge(seq);
 }
 
-async function subscribeKnowledge(groupId) {
+async function subscribeKnowledge(groupId, btn) {
+  if (btn) btn.disabled = true;
   try {
     await api(`/api/ima-documents/groups/${encodeURIComponent(groupId)}/subscribe`, { method: "POST" });
     flash("已订阅");
     refreshKnowledge();
   } catch (err) {
     flash(err.message || "订阅失败", "error");
+    if (btn) btn.disabled = false;
   }
 }
 
-async function unsubscribeKnowledge(groupId) {
+async function unsubscribeKnowledge(groupId, btn) {
+  if (btn) btn.disabled = true;
   try {
     await api(`/api/ima-documents/groups/${encodeURIComponent(groupId)}/subscribe`, { method: "DELETE" });
     flash("已退订");
     refreshKnowledge();
   } catch (err) {
     flash(err.message || "退订失败", "error");
+    if (btn) btn.disabled = false;
   }
 }
 
 async function renderKnowledge(seq, encodedMediaId = "") {
+  ensureKnowledgePhoneWatch();
+  if (isPhoneShell()) {
+    renderKnowledgePhoneBlocked();
+    return;
+  }
   if (encodedMediaId) {
     await renderImaDocuments(seq, encodedMediaId);
     return;
   }
-  setPageTitle("知识库");
   const selectedGroup = imaDocumentsGroupFromRoute();
+  setPageTitle("知识库");
   $("#main").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
   try {
     const data = await api("/api/ima-documents/catalog");
     if (!routeStillActive(seq)) return;
     const subscribed = Array.isArray(data.subscribed) ? data.subscribed : [];
     const available = Array.isArray(data.available) ? data.available : [];
+    const isAdmin = !!state.user?.is_admin;
     if (selectedGroup) {
       if (subscribed.some((group) => String(group.id) === selectedGroup)) {
         await renderImaDocuments(seq);
         return;
       }
-      $("#main").innerHTML = emptyState("没有这个知识库");
+      setPageTitle("知识库", true, "knowledge", "回知识库");
+      $("#main").innerHTML = emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回知识库</button></div>`);
       return;
     }
+    const subscribedEmpty = isAdmin
+      ? emptyState("还没有配置知识库")
+      : emptyState(
+          "还没有订阅知识库",
+          available.length
+            ? `<div><button type="button" class="btn-normal" onclick="switchKnowledgeTab('available')">去可订阅看看</button></div>`
+            : `<div><p class="section-meta">找管理员在用户设置里勾选知识库后再来订阅</p></div>`
+        );
     const subscribedHtml = subscribed.length
       ? knowledgeCardsHtml(subscribed, "subscribed")
-      : emptyState("还没有订阅知识库");
+      : subscribedEmpty;
     const availableHtml = available.length
       ? knowledgeCardsHtml(available, "available")
-      : emptyState("暂无可订阅的知识库");
-    $("#main").innerHTML = `
-      <section class="section-panel ima-docs-shell">
-        <header class="section-head ima-docs-head">
-          <div><h2 class="section-title">知识库</h2><p class="section-meta">查看已订阅知识库</p></div>
-        </header>
+      : emptyState("暂无可订阅的知识库", `<div><p class="section-meta">找管理员在用户设置里勾选知识库后再来</p></div>`);
+    const tabs = isAdmin ? "" : `
         <div class="settings-tabs kb-tabs" role="tablist" aria-label="知识库">
           <button type="button" class="settings-tab active" role="tab" aria-selected="true" data-tab="subscribed" onclick="switchKnowledgeTab('subscribed')">已订阅</button>
           <button type="button" class="settings-tab" role="tab" aria-selected="false" data-tab="available" onclick="switchKnowledgeTab('available')">可订阅</button>
-        </div>
-        <div id="kb-subscribed" class="kb-tab-panel">${subscribedHtml}</div>
-        <div id="kb-available" class="kb-tab-panel" hidden>${availableHtml}</div>
+        </div>`;
+    const availablePanel = isAdmin ? "" : `<div id="kb-available" class="kb-tab-panel" hidden>${availableHtml}</div>`;
+    $("#main").innerHTML = `
+      <section class="section-panel ima-docs-shell">
+        <header class="section-head ima-docs-head">
+          <div><h2 class="section-title">知识库</h2><p class="section-meta">${isAdmin ? "管理员可直接打开全部知识库" : "只在这里读，不会推送到频道"}</p></div>
+        </header>
+        ${tabs}
+        <div id="kb-subscribed" class="kb-tab-panel" aria-live="polite">${subscribedHtml}</div>
+        ${availablePanel}
       </section>`;
   } catch (err) {
     if (routeStillActive(seq)) {
-      $("#main").innerHTML = emptyState(`加载失败：${err.message}`, `<button type="button" class="btn-normal" onclick="refreshKnowledge()">重试</button>`);
+      $("#main").innerHTML = emptyState(`加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="refreshKnowledge()">重试</button></div>`);
     }
   }
 }
 
 async function renderImaDocuments(seq, encodedMediaId = "") {
+  ensureKnowledgePhoneWatch();
+  if (isPhoneShell()) {
+    renderKnowledgePhoneBlocked();
+    return;
+  }
   const mediaId = encodedMediaId ? decodeURIComponent(encodedMediaId) : "";
   if (mediaId) {
     await renderImaDocument(seq, mediaId);
     return;
   }
   clearImaPdfUrl();
-  setPageTitle("IMA 文档");
+  setPageTitle("知识库", true, "knowledge", "回知识库");
   const selectedGroup = imaDocumentsGroupFromRoute();
   const query = routeQuery().get("q") || "";
   const day = routeQuery().get("day") || "";
   const tag = routeQuery().get("tag") || "";
+  const filtersOpen = !!(day || tag);
   state.imaDocumentsGroup = selectedGroup;
   state.imaDocumentsQuery = query;
   state.imaDocumentsDay = day;
@@ -754,16 +864,22 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
   $("#main").innerHTML = `
     <section class="section-panel ima-docs-shell">
       <header class="section-head ima-docs-head">
-        <div><h2 id="ima-doc-title" class="section-title">IMA 文档</h2><p id="ima-doc-meta" class="section-meta">已归档 PDF 与全文文本</p></div>
+        <div><h2 id="ima-doc-title" class="section-title">知识库</h2><p id="ima-doc-meta" class="section-meta">按日期浏览已订阅的文档</p></div>
         <button type="button" class="btn-ghost" onclick="refreshImaDocuments()">${REFRESH_ICON}<span>刷新</span></button>
       </header>
       <div id="ima-doc-groups" class="ima-doc-group-switcher"></div>
       <div class="ima-doc-toolbar">
-        <label class="search-bar ima-doc-search">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜索标题或摘要" aria-label="搜索 IMA 文档" onkeydown="if(event.key==='Enter'){submitImaDocumentsSearch()}"></label>
+        <form class="ima-doc-search-form" onsubmit="event.preventDefault();submitImaDocumentsSearch()">
+          <label class="search-bar ima-doc-search">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜索标题或摘要" aria-label="搜索知识库"></label>
+          <button type="submit" class="btn-ghost">搜索</button>
+        </form>
+        <button type="button" class="btn-ghost${day || tag ? " has-filter" : ""}" id="ima-doc-filter-toggle" aria-expanded="${filtersOpen}" aria-controls="ima-doc-filters" onclick="toggleImaDocumentsFilters()">${FILTER_ICON}<span>筛选</span></button>
+      </div>
+      <div id="ima-doc-filters" class="ima-doc-filters"${filtersOpen ? "" : " hidden"}>
         <select id="ima-doc-day" class="form-control ima-doc-day-filter" aria-label="按日期筛选" onchange="selectImaDocumentsDay(this.value)"><option value="">全部日期</option></select>
         <select id="ima-doc-tag" class="form-control ima-doc-tag-filter" aria-label="按标签筛选" onchange="selectImaDocumentsTag(this.value)"><option value="">全部标签</option></select>
-        <button type="button" class="btn-normal" onclick="submitImaDocumentsSearch()">搜索</button>
       </div>
+      <div id="ima-doc-filter-chips" class="ima-doc-filter-chips"></div>
       <div id="ima-docs-body" class="ima-docs-body"><div class="admin-skeleton" aria-hidden="true"></div></div>
     </section>`;
   try {
@@ -777,36 +893,105 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     const groups = Array.isArray(data.groups) ? data.groups : [];
     const items = Array.isArray(data.items) ? data.items : [];
     const selectedGroupInfo = groups.find((group) => String(group.id || "") === selectedGroup);
-    const selectedGroupName = selectedGroupInfo?.name || (selectedGroup ? selectedGroup : "全部群组");
+    const selectedGroupName = selectedGroupInfo?.name || (selectedGroup ? selectedGroup : "全部知识库");
     const count = items.length;
     const title = $("#ima-doc-title");
     const meta = $("#ima-doc-meta");
-    if (title) title.textContent = `IMA 文档 · ${selectedGroupName} · ${count} 份`;
-    if (meta) meta.textContent = "已归档 PDF 与全文文本";
+    if (title) title.textContent = selectedGroupName;
+    if (meta) meta.textContent = `${count} 份`;
+    setPageTitle(selectedGroupName, true, "knowledge", "回知识库");
     const groupSwitch = $("#ima-doc-groups");
-    if (groupSwitch) groupSwitch.innerHTML = imaDocumentGroupControls(groups, selectedGroup);
-    const days = [...new Set(items.map((item) => item.day))];
+    if (groupSwitch) {
+      const hideSwitcher = !state.user?.is_admin && (groups || []).length <= 1;
+      groupSwitch.innerHTML = hideSwitcher ? "" : imaDocumentGroupControls(groups, selectedGroup);
+    }
+    const days = Array.isArray(data.days)
+      ? data.days.filter(Boolean)
+      : [...new Set(items.map((item) => item.day))];
+    if (day && !days.includes(day)) days.unshift(day);
     const daySelect = $("#ima-doc-day");
     if (daySelect) {
-      daySelect.innerHTML = `<option value="">全部日期</option>${days.map((value) => `<option value="${escapeHtml(value)}" ${value === day ? "selected" : ""}>${escapeHtml(value)}</option>`).join("")}`;
+      daySelect.innerHTML = `<option value="">全部日期</option>${days.map((value) => `<option value="${escapeHtml(value)}" ${value === day ? "selected" : ""}>${escapeHtml(fmtImaDay(value) || value)}</option>`).join("")}`;
     }
     const tagSelect = $("#ima-doc-tag");
     if (tagSelect) {
-      const uniqueTags = [...new Set(items.flatMap((item) => (Array.isArray(item.tags) ? item.tags : [])).filter(Boolean))];
+      const uniqueTags = Array.isArray(data.tags)
+        ? data.tags.filter(Boolean)
+        : [...new Set(items.flatMap((item) => (Array.isArray(item.tags) ? item.tags : [])).filter(Boolean))];
       if (tag && !uniqueTags.includes(tag)) uniqueTags.unshift(tag);
       tagSelect.innerHTML = `<option value="">全部标签</option>${uniqueTags.map((value) => `<option value="${escapeHtml(value)}" ${value === tag ? "selected" : ""}>${escapeHtml(value)}</option>`).join("")}`;
     }
+    const hasFilter = !!(query || day || tag);
+    syncImaDocumentsFilterStatus();
     $("#ima-docs-body").innerHTML = items.length
       ? imaDocumentGroups(items, !selectedGroup)
-      : emptyState("暂无匹配的 IMA 文档");
+      : emptyState(
+          "暂无匹配的文档",
+          hasFilter ? `<div><button type="button" class="btn-normal" onclick="clearImaDocumentsFilters()">清除筛选</button></div>` : ""
+        );
   } catch (err) {
-    if (routeStillActive(seq)) $("#ima-docs-body").innerHTML = emptyState(`加载失败：${err.message}`, `<button type="button" class="btn-normal" onclick="refreshImaDocuments()">重试</button>`);
+    if (!routeStillActive(seq)) return;
+    const denied = String(err.message || "").includes("知识库不存在");
+    $("#ima-docs-body").innerHTML = denied
+      ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回知识库</button></div>`)
+      : emptyState(`加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="refreshImaDocuments()">重试</button></div>`);
   }
+}
+
+function toggleImaDocumentsFilters() {
+  const extra = $("#ima-doc-filters");
+  const btn = $("#ima-doc-filter-toggle");
+  if (!extra || !btn) return;
+  const open = extra.hasAttribute("hidden");
+  extra.toggleAttribute("hidden", !open);
+  btn.setAttribute("aria-expanded", String(open));
+}
+
+function imaDocumentsFilterChipsHtml() {
+  const chips = [];
+  if (state.imaDocumentsQuery) {
+    chips.push(`<span class="ima-doc-filter-chip">搜索 ${escapeHtml(state.imaDocumentsQuery)}<button type="button" onclick="clearImaDocumentsFilter('q')" aria-label="清除搜索">${X_ICON}</button></span>`);
+  }
+  if (state.imaDocumentsDay) {
+    chips.push(`<span class="ima-doc-filter-chip">${escapeHtml(fmtImaDay(state.imaDocumentsDay) || state.imaDocumentsDay)}<button type="button" onclick="clearImaDocumentsFilter('day')" aria-label="清除日期">${X_ICON}</button></span>`);
+  }
+  if (state.imaDocumentsTag) {
+    chips.push(`<span class="ima-doc-filter-chip">${escapeHtml(state.imaDocumentsTag)}<button type="button" onclick="clearImaDocumentsFilter('tag')" aria-label="清除标签">${X_ICON}</button></span>`);
+  }
+  if (!chips.length) return "";
+  chips.push(`<button type="button" class="btn-ghost" onclick="clearImaDocumentsFilters()">清除筛选</button>`);
+  return chips.join("");
+}
+
+function syncImaDocumentsFilterStatus() {
+  const btn = $("#ima-doc-filter-toggle");
+  const chips = $("#ima-doc-filter-chips");
+  const hasFacet = !!(state.imaDocumentsDay || state.imaDocumentsTag);
+  if (btn) {
+    btn.classList.toggle("has-filter", hasFacet);
+    btn.setAttribute("aria-expanded", String(!$("#ima-doc-filters")?.hasAttribute("hidden")));
+  }
+  if (chips) chips.innerHTML = imaDocumentsFilterChipsHtml();
+}
+
+function clearImaDocumentsFilter(kind) {
+  if (kind === "q") state.imaDocumentsQuery = "";
+  if (kind === "day") state.imaDocumentsDay = "";
+  if (kind === "tag") state.imaDocumentsTag = "";
+  replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay, state.imaDocumentsTag));
+  renderImaDocuments(++routeRenderSeq);
+}
+
+function clearImaDocumentsFilters() {
+  state.imaDocumentsQuery = "";
+  state.imaDocumentsDay = "";
+  state.imaDocumentsTag = "";
+  replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, "", "", ""));
+  renderImaDocuments(++routeRenderSeq);
 }
 
 async function renderImaDocument(seq, mediaId) {
   clearImaPdfUrl();
-  setPageTitle("IMA 文档", true);
   const currentQuery = routeQuery();
   const group = currentQuery.get("group") || state.imaDocumentsGroup || "";
   const query = currentQuery.get("q") || state.imaDocumentsQuery || "";
@@ -814,17 +999,20 @@ async function renderImaDocument(seq, mediaId) {
   const tag = currentQuery.get("tag") || state.imaDocumentsTag || "";
   state.imaDocumentsTag = tag;
   const groupQuery = group ? `?group=${encodeURIComponent(group)}` : "";
-  let backRoute = imaDocumentsRoute(group, query, day);
+  let backRoute = imaDocumentsRoute(group, query, day, tag);
+  setPageTitle("知识库", true, backRoute, "回列表");
   $("#main").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
   try {
     const item = await api(`/api/ima-documents/${encodeURIComponent(mediaId)}${groupQuery}`);
     if (!currentQuery.has("group") && item.group_id) {
-      backRoute = imaDocumentsRoute(item.group_id, query, day);
+      backRoute = imaDocumentsRoute(item.group_id, query, day, tag);
+      setPageTitle(item.name || "知识库", true, backRoute, "回列表");
     }
     const text = await (item.has_txt
       ? (await apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/text${groupQuery}`)).text()
       : Promise.resolve(""));
     if (!routeStillActive(seq)) return;
+    setPageTitle(item.name || "知识库", true, backRoute, "回列表");
     const groupContext = item.group_name
       ? `<p class="ima-reader-group">${escapeHtml(item.group_name)}</p>`
       : "";
@@ -836,24 +1024,34 @@ async function renderImaDocument(seq, mediaId) {
       ? `<p class="ima-reader-abstract">${escapeHtml(item.abstract)}</p>`
       : "";
     const pdfActions = item.has_pdf
-      ? `<div class="toolbar ima-reader-actions"><button type="button" class="btn-normal" onclick="loadImaPdf('${escapeHtml(mediaId)}')">${FILE_TEXT_ICON}<span>查看 PDF</span></button><button type="button" class="btn-ghost" onclick="downloadImaPdf('${escapeHtml(mediaId)}')">${DOWNLOAD_ICON}<span>下载</span></button></div>`
+      ? `<div class="toolbar ima-reader-actions"><button type="button" class="btn-normal" id="ima-pdf-toggle" hidden onclick="loadImaPdf('${escapeHtml(mediaId)}')">${FILE_TEXT_ICON}<span>查看 PDF</span></button><button type="button" class="btn-ghost" onclick="downloadImaPdf('${escapeHtml(mediaId)}')">${DOWNLOAD_ICON}<span>下载</span></button></div>`
       : "";
     const pdfPanel = item.has_pdf
-      ? `<div id="ima-pdf-panel" class="ima-pdf-panel" hidden><iframe id="ima-pdf-frame" title="PDF 预览"></iframe></div>`
+      ? `<div id="ima-pdf-panel" class="ima-pdf-panel"><iframe id="ima-pdf-frame" title="PDF 预览"></iframe><button type="button" class="btn-ghost ima-pdf-close" onclick="closeImaPdf()">收起 PDF</button></div>`
       : "";
     const textView = item.has_txt ? `<pre class="ima-text-view" id="ima-text-view"></pre>` : "";
+    const chars = Number(item.chars || 0);
+    const sizeLine = [fmtDocSize(item.size), chars > 0 ? `${chars.toLocaleString()} 字` : ""].filter(Boolean).join(" · ");
+    const emptyFile = !item.has_pdf && !item.has_txt
+      ? `<p class="section-meta">这份还没有 PDF 或全文，列表里仍看得到摘要。</p><div><button type="button" class="btn-normal" onclick="go(state.pageBackRoute || 'knowledge')">回列表</button></div>`
+      : "";
     $("#main").innerHTML = `
       <section class="section-panel ima-reader">
         <header class="section-head ima-reader-head">
-          <div>${groupContext}<p class="ima-reader-day">${escapeHtml(item.day)}</p><h2 class="section-title ima-reader-title">${escapeHtml(item.name)}</h2>${coverHtml}${abstractHtml}${imaDocumentTagsHtml(item.tags)}<p class="section-meta">${fmtCacheBytes(item.size)} · ${Number(item.chars || 0).toLocaleString()} 字</p></div>
+          <div>${groupContext}<p class="ima-reader-day">${escapeHtml(fmtImaDay(item.day))}</p><h2 class="section-title ima-reader-title">${escapeHtml(item.name)}</h2>${coverHtml}${abstractHtml}${imaDocumentTagsHtml(item.tags, true)}<p class="section-meta">${escapeHtml(sizeLine)}</p>${emptyFile}</div>
           ${pdfActions}
         </header>
         ${pdfPanel}
         ${textView}
       </section>`;
     if (item.has_txt) $("#ima-text-view").textContent = text;
+    if (item.has_pdf) loadImaPdf(mediaId);
   } catch (err) {
-    if (routeStillActive(seq)) $("#main").innerHTML = emptyState(`文档加载失败：${err.message}`, `<button type="button" class="btn-normal" onclick="go(backRoute)">返回文档列表</button>`);
+    if (!routeStillActive(seq)) return;
+    const denied = String(err.message || "").includes("知识库不存在");
+    $("#main").innerHTML = denied
+      ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回知识库</button></div>`)
+      : emptyState(`文档加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="go(backRoute)">返回文档列表</button></div>`);
   }
 }
 
@@ -861,7 +1059,7 @@ async function loadImaPdf(mediaId) {
   const seq = routeRenderSeq;
   const group = routeQuery().get("group") || state.imaDocumentsGroup || "";
   const groupQuery = group ? `?group=${encodeURIComponent(group)}` : "";
-  const button = document.querySelector(".ima-reader-actions .btn-normal");
+  const button = $("#ima-pdf-toggle") || document.querySelector(".ima-reader-actions .btn-normal");
   if (button) button.disabled = true;
   try {
     const blob = await apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/pdf${groupQuery}`);
@@ -874,10 +1072,29 @@ async function loadImaPdf(mediaId) {
       frame.src = window._imaPdfUrl;
       panel.hidden = false;
     }
+    if (button) button.hidden = true;
   } catch (err) {
-    if (routeStillActive(seq)) flash(`PDF 打开失败：${err.message}`, "error");
+    if (routeStillActive(seq)) {
+      flash(`PDF 打开失败：${err.message}`, "error");
+      const panel = $("#ima-pdf-panel");
+      if (panel) panel.hidden = true;
+      if (button) button.hidden = false;
+    }
   } finally {
     if (button) button.disabled = false;
+  }
+}
+
+function closeImaPdf() {
+  clearImaPdfUrl();
+  const frame = $("#ima-pdf-frame");
+  const panel = $("#ima-pdf-panel");
+  const button = $("#ima-pdf-toggle");
+  if (frame) frame.src = "";
+  if (panel) panel.hidden = true;
+  if (button) {
+    button.hidden = false;
+    button.disabled = false;
   }
 }
 
@@ -934,9 +1151,11 @@ function renderTopbar(user) {
   updateThemeToggleIcon();
 }
 
-function setPageTitle(title, back = false) {
+function setPageTitle(title, back = false, backRoute = "", backLabel = "") {
   $("#page-title").textContent = title;
   $("#btn-back").classList.toggle("hidden", !back);
+  $("#btn-back").setAttribute("aria-label", backLabel || "返回上一页");
+  state.pageBackRoute = back && backRoute ? String(backRoute) : "";
 }
 
 function emptyState(text, actionHtml = "") {
@@ -1907,7 +2126,7 @@ async function renderTimeline(seq) {
     <div class="tl-ima-entry">
       <button type="button" class="tl-ima-entry-btn" onclick="go('knowledge')">
         <span class="tl-ima-entry-icon">${BOOK_ICON}</span>
-        <span><strong>知识库</strong><small>查看已订阅知识库</small></span>
+        <span><strong>知识库</strong><small>打开知识库</small></span>
       </button>
     </div>
     <section class="section-panel tl-feed-panel" id="tl-feed-panel">
@@ -4509,10 +4728,6 @@ function imaGroupRowHtml(group, index) {
       <label class="cfg-field"><span>知识库 ID</span><input type="text" class="form-control" data-field="knowledge_base_id" value="${escapeHtml(group.knowledge_base_id || "")}" maxlength="64"></label>
       <label class="cfg-field"><span>根文件夹 ID</span><input type="text" class="form-control" data-field="root_folder_id" value="${escapeHtml(group.root_folder_id || "")}" maxlength="128"></label>
       <label class="cfg-field cfg-check"><input type="checkbox" data-field="enabled" ${group.enabled !== false ? "checked" : ""}><span class="cfg-check-desc">启用</span></label>
-      <label class="cfg-field cfg-field--wide"><span>授权用户</span>
-        <input class="form-control ima-kb-acl" data-group="${escapeHtml(groupId)}"
-          value="${escapeHtml((group.acl_usernames || []).join(", "))}"
-          placeholder="逗号分隔用户名，空则仅管理员"></label>
       <div class="toolbar"><button type="button" class="btn-ghost danger" onclick="removeImaGroupRow(this)" aria-label="移除 IMA 群组">移除</button></div>
     </div>`;
 }
@@ -5562,10 +5777,6 @@ async function saveImaCollector() {
     flash("检查间隔须在 30–10080 分钟", "error");
     return;
   }
-  const aclSnapshots = Array.from(document.querySelectorAll("#ima-groups .ima-kb-acl")).map((input) => ({
-    groupId: String(input.dataset.group || "").trim(),
-    usernames: String(input.value || ""),
-  }));
   const body = {
     uid: $("#ima-pure-uid")?.value?.trim() || "",
     knowledge_base_id: $("#ima-pure-kb")?.value?.trim() || "",
@@ -5576,21 +5787,9 @@ async function saveImaCollector() {
   const token = $("#ima-pure-token")?.value?.trim() || "";
   if (token) body.refresh_token = token;
   try {
-    const saved = await api("/api/admin/ima-collector", { method: "PUT", body: JSON.stringify(body) });
+    await api("/api/admin/ima-collector", { method: "PUT", body: JSON.stringify(body) });
     const tokenInput = $("#ima-pure-token");
     if (tokenInput) tokenInput.value = "";
-    const savedGroups = Array.isArray(saved?.config?.groups) ? saved.config.groups : [];
-    for (let i = 0; i < aclSnapshots.length; i++) {
-      const snap = aclSnapshots[i];
-      const matched = snap.groupId && savedGroups.some((group) => String(group.id) === snap.groupId);
-      const groupId = matched ? snap.groupId : String(savedGroups[i]?.id || "").trim();
-      if (!groupId) continue;
-      const usernames = snap.usernames.split(",").map((name) => name.trim()).filter(Boolean);
-      await api(`/api/admin/ima-collector/groups/${groupId}/acl`, {
-        method: "PUT",
-        body: JSON.stringify({ usernames }),
-      });
-    }
     flash("IMA 文档采集配置已保存");
     await loadAdminStats();
   } catch (err) {
@@ -7968,10 +8167,12 @@ async function adminUsersBatch(action) {
 async function loadAdminUsers() {
   let users;
   let policy;
+  let collector;
   try {
-    [users, policy] = await Promise.all([
+    [users, policy, collector] = await Promise.all([
       api("/api/users"),
       api("/api/admin/inactive-users-policy"),
+      api("/api/admin/ima-collector").catch(() => null),
     ]);
   } catch (err) {
     if (!routeStillActive(_adminRenderSeq)) return;
@@ -7979,6 +8180,8 @@ async function loadAdminUsers() {
     return;
   }
   state.adminUsers = users;
+  state.imaKbGroups = ((collector && collector.config && collector.config.groups) || [])
+    .filter((group) => group && group.id && group.enabled !== false);
   if (policy) {
     state.inactivePolicy = policy;
     _inactivePreview = {
@@ -8188,6 +8391,24 @@ function adminOpenUser(userId, focus) {
   const origin = escapeHtml(u.origin_label || "网页");
   const loginHint = u.has_password ? "可网页登录" : "无密码，不能网页登录";
   const lastSeen = u.last_login_at ? escapeHtml(fmtDbTime(u.last_login_at)) : "从未登录";
+  const kbGroups = state.imaKbGroups || [];
+  const kbGranted = new Set(u.ima_kb_groups || []);
+  const kbSubscribed = new Set(u.ima_kb_subscribed || []);
+  const kbList = kbGroups.length
+    ? `<div id="um-kb" class="um-kb-list">${kbGroups.map((group) => {
+        const id = String(group.id || "");
+        const name = group.name || id;
+        const isSub = kbSubscribed.has(id);
+        return `<label class="um-kb-item" data-kb-name="${escapeHtml(name)}"${isSub ? ` data-kb-subscribed="1"` : ""}>
+          <input type="checkbox" data-kb-group="${escapeHtml(id)}"${kbGranted.has(id) ? " checked" : ""}>
+          <span>${escapeHtml(name)}</span>
+          ${isSub ? `<span class="muted">已订阅</span>` : ""}
+        </label>`;
+      }).join("")}</div>
+      <div class="toolbar">
+        <button class="btn-sm" onclick="adminSaveUserKnowledge(${u.id})">保存</button>
+      </div>`
+    : `<p class="muted">还没有配置知识库。</p>`;
   closeAdminModal();
   const mask = document.createElement("div");
   mask.className = "modal-mask";
@@ -8220,6 +8441,11 @@ function adminOpenUser(userId, focus) {
         <div class="toolbar">
           <button class="btn-sm" onclick="adminToggleAdmin(${u.id}, ${!u.is_admin})">${u.is_admin ? "取消管理员" : "设为管理员"}</button>
         </div>
+      </section>`}
+      ${u.is_admin ? "" : `<section class="um-block">
+        <h4>知识库</h4>
+        <p class="muted">勾选后可自行订阅，取消立即失效。</p>
+        ${kbList}
       </section>`}
       <section class="um-block">
         <h4>测试推送</h4>
@@ -8257,6 +8483,33 @@ function adminOpenUser(userId, focus) {
     }
   });
   observer.observe(document.body, { childList: true });
+}
+
+async function adminSaveUserKnowledge(userId) {
+  const items = Array.from(document.querySelectorAll("#um-kb .um-kb-item"));
+  const groupIds = [];
+  const revoked = [];
+  for (const item of items) {
+    const input = item.querySelector("[data-kb-group]");
+    const groupId = String(input?.dataset.kbGroup || "").trim();
+    if (!groupId) continue;
+    if (input.checked) groupIds.push(groupId);
+    else if (item.dataset.kbSubscribed === "1") {
+      revoked.push(String(item.dataset.kbName || groupId).trim());
+    }
+  }
+  if (revoked.length && !confirm(`取消勾选后，对方会立刻看不到这些知识库：${revoked.join("、")}。确定保存？`)) return;
+  try {
+    await api(`/api/admin/users/${userId}/ima-kb`, {
+      method: "PUT",
+      body: JSON.stringify({ group_ids: groupIds }),
+    });
+    closeAdminModal();
+    flash("已保存");
+    loadAdminUsers();
+  } catch (err) {
+    flash(err.message, "error");
+  }
 }
 
 async function adminSaveUsername(userId) {
@@ -8681,7 +8934,10 @@ $("#register-form").addEventListener("submit", doRegister);
 document.querySelectorAll(".switch-btn").forEach((btn) =>
   btn.addEventListener("click", () => switchAuthMode(btn.dataset.mode))
 );
-$("#btn-back").addEventListener("click", () => history.back());
+$("#btn-back").addEventListener("click", () => {
+  if (state.pageBackRoute) go(state.pageBackRoute);
+  else history.back();
+});
 document.addEventListener("click", (e) => {
   const a = e.target.closest("a[href]");
   if (!a || a.target === "_blank" || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
