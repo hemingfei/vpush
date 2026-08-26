@@ -5,7 +5,7 @@ const SHELL = [
   "/app.js",
   "/style.css",
   "/vendor/design-tokens.css",
-  "/logo.svg",
+  "/logo-mark.svg",
   "/icon-192.png",
   "/icon-512.png",
   "/icon-192-dark.png",
@@ -88,16 +88,22 @@ async function networkFirstNavigate(req) {
 }
 
 async function networkFirst(req) {
+  let fresh;
   try {
-    const fresh = await fetch(req);
-    if (fresh && fresh.ok) {
-      const cache = await caches.open(CACHE);
-      // 用裸路径作缓存键，避免 ?v= 版本号 query 撑爆缓存
-      cache.put(new Request(new URL(req.url).pathname), fresh.clone());
-    }
-    return fresh;
-  } catch (err) {
+    fresh = await fetch(req);
+  } catch {
     const cached = await caches.match(req, { ignoreSearch: true });
     return cached || Response.error();
   }
+  if (fresh && fresh.ok && fresh.type === "basic") {
+    // 后台写缓存：Cache.put 对 206（大文件 Range）等响应会抛错，
+    // 绝不能影响已经拿到的网络响应
+    caches.open(CACHE)
+      .then((cache) =>
+        // 用裸路径作缓存键，避免 ?v= 版本号 query 撑爆缓存
+        cache.put(new Request(new URL(req.url).pathname), fresh.clone())
+      )
+      .catch(() => {});
+  }
+  return fresh;
 }

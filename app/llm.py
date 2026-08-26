@@ -95,9 +95,13 @@ def _chat(
                 if resp.status_code == 429 or resp.status_code >= 500:
                     raise _RetryableError(f"LLM HTTP {resp.status_code}")
                 resp.raise_for_status()
-                text = _message_text(
-                    ((resp.json().get("choices") or [{}])[0].get("message")) or {}
-                )
+                try:
+                    choices = resp.json().get("choices")
+                except ValueError:
+                    # 网关返回非 JSON（HTML 错误页等）：按瞬时错误走重试
+                    raise _RetryableError(f"LLM 响应非 JSON: {resp.text[:120]}") from None
+                message = ((choices or [{}])[0].get("message")) or {}
+                text = _message_text(message)
                 if not text:
                     raise _RetryableError("LLM 返回空")
                 return text

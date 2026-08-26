@@ -535,6 +535,29 @@ def test_telegram_429_retry_once():
     assert calls["n"] == 2
 
 
+def test_telegram_429_http_status_retry_once(monkeypatch):
+    """标准 Bot API 的限流响应本身就是 HTTP 429 状态码，同样要重试。"""
+    monkeypatch.setattr("app.notifiers.telegram.time.sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(
+                429,
+                json={"ok": False, "error_code": 429, "parameters": {"retry_after": 1}},
+            )
+        return httpx.Response(200, json={"ok": True})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    notifier = TelegramNotifier(
+        TelegramConfig(bot_token="123:abc", chat_id="456"),
+        client=client,
+    )
+    notifier.send_text("hi")
+    assert calls["n"] == 2
+
+
 def test_tg_limiter_is_shared_singleton():
     # 全局限速器是进程级单例，所有 TG 发送共享额度
     assert _tg_rate_limiter is not None and isinstance(_tg_rate_limiter, _RateLimiter)

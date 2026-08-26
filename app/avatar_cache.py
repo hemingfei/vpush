@@ -37,15 +37,13 @@ def cache_image_file(db, url: str, folder: str, url_prefix: str, client: httpx.C
     db_path = str(getattr(db, "path", "") or "")
     if not db_path or db_path == ":memory:":
         return url
-    from urllib.parse import urlparse
-
     dest = Path(db_path).parent / folder
     dest.mkdir(parents=True, exist_ok=True)
-    key = Path(urlparse(url).path).name
-    if not key or any(ch in key for ch in "/\\"):
-        import hashlib
+    # 键必须是完整 URL 的函数：CDN 常用顺序/短文件名，取远程文件名会让
+    # 不同帖子同名图片互相覆盖，引用旧内容的帖子永久显示错图
+    import hashlib
 
-        key = hashlib.sha1(url.encode()).hexdigest()[:16]
+    key = hashlib.sha1(url.encode()).hexdigest()[:16]
     for ext in ALLOWED_TYPES.values():
         existing = dest / f"{key}.{ext}"
         if existing.exists() and existing.stat().st_size > 2048:

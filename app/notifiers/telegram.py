@@ -128,7 +128,7 @@ def build_combination_text(post: Post) -> str:
     if valid_holdings:
         lines.append("现有持仓")
         lines.extend(
-            f"{h['name']}（{h.get('symbol') or ''}） {h['weight']}%"
+            f"{escape(h['name'])}（{escape(h.get('symbol') or '')}） {h['weight']}%"
             for h in valid_holdings
         )
     if post.published_at:
@@ -264,18 +264,24 @@ class TelegramNotifier(Notifier):
         _tg_rate_limiter.wait()
         url = f"https://api.telegram.org/bot{self.bot_token}/{method}"
         resp = self._post(url, data=data)
-        resp.raise_for_status()
-        result = resp.json()
-        # 429 限流：按 Telegram 给出的 retry_after 等待后重试一次
-        if not result.get("ok") and result.get("error_code") == 429:
-            retry_after = int(
-                (result.get("parameters") or {}).get("retry_after") or 1
-            )
-            time.sleep(retry_after)
+        result = {}
+        try:
+            result = resp.json()
+        except ValueError:
+            pass
+        # 限流有两副面孔：标准 Bot API 返回 HTTP 429 + parameters.retry_after；
+        # 走代理/网关时可能被归一化成 HTTP 200 + error_code=429。两者都要等。
+        if resp.status_code == 429 or (
+            not result.get("ok") and result.get("error_code") == 429
+        ):
+            time.sleep(int((result.get("parameters") or {}).get("retry_after") or 1))
             _tg_rate_limiter.wait()
             resp = self._post(url, data=data)
-            resp.raise_for_status()
-            result = resp.json()
+            try:
+                result = resp.json()
+            except ValueError:
+                pass
+        resp.raise_for_status()
         if not result.get("ok"):
             raise RuntimeError(f"Telegram 返回错误: {result}")
 

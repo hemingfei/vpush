@@ -1410,12 +1410,19 @@ def probe_xueqiu(db: DB, notifiers: list[Notifier], source_config) -> None:
     """主动探测雪球抓取接口可用性（与抓取同路径，不用首页）。"""
     import httpx
 
-    from .fetchers.xueqiu import XUEQIU_COOKIE_KEY, XUEQIU_TIMELINE_URL, _is_waf_html
+    from .fetchers.xueqiu import (
+        XUEQIU_COOKIE_KEY,
+        XUEQIU_TIMELINE_URL,
+        _is_waf_html,
+        normalize_xueqiu_id,
+    )
 
     cookie = db.get_setting(XUEQIU_COOKIE_KEY) or source_config.cookie
     target = next((k for k in db.list_kols(platform="xueqiu") if k["enabled"]), None)
     if target is None:
         return  # 没有启用的雪球大V，无从探测
+    # UID 可能被录成主页链接，直接拼进请求会 400 造成误报
+    xueqiu_uid = normalize_xueqiu_id(target["external_id"])
     from .proxy import ProxyUnavailable, acquire_client_proxy
 
     try:
@@ -1430,14 +1437,14 @@ def probe_xueqiu(db: DB, notifiers: list[Notifier], source_config) -> None:
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
             "Accept": "application/json, text/plain, */*",
             "X-Requested-With": "XMLHttpRequest",
-            "Referer": f"https://xueqiu.com/u/{target['external_id']}",
+            "Referer": f"https://xueqiu.com/u/{xueqiu_uid}",
             **({"Cookie": cookie} if cookie else {}),
         },
     )
     try:
         resp = client.get(
             XUEQIU_TIMELINE_URL,
-            params={"user_id": target["external_id"], "page": 1, "count": 1},
+            params={"user_id": xueqiu_uid, "page": 1, "count": 1},
         )
         blocked = (
             _is_waf_html(resp)
@@ -1498,6 +1505,7 @@ def keepalive_xueqiu_cookie(
         XUEQIU_COOKIE_TIME_KEY,
         XUEQIU_TIMELINE_URL,
         merge_cookie_strings,
+        normalize_xueqiu_id,
     )
 
     cookie = db.get_setting(XUEQIU_COOKIE_KEY) or source_config.cookie
@@ -1507,6 +1515,8 @@ def keepalive_xueqiu_cookie(
     target = next((k for k in db.list_kols(platform="xueqiu") if k["enabled"]), None)
     if target is None:
         return
+    # UID 可能被录成主页链接，直接拼进请求会 400 造成误判 cookie 失效
+    xueqiu_uid = normalize_xueqiu_id(target["external_id"])
     import httpx
 
     owns_client = client is None
@@ -1526,14 +1536,14 @@ def keepalive_xueqiu_cookie(
                 "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
                 "Accept": "application/json, text/plain, */*",
                 "X-Requested-With": "XMLHttpRequest",
-                "Referer": f"https://xueqiu.com/u/{target['external_id']}",
+                "Referer": f"https://xueqiu.com/u/{xueqiu_uid}",
                 "Cookie": cookie,
             },
         )
     try:
         resp = client.get(
             XUEQIU_TIMELINE_URL,
-            params={"user_id": target["external_id"], "page": 1, "count": 1},
+            params={"user_id": xueqiu_uid, "page": 1, "count": 1},
         )
         status = resp.status_code
         if status == 200:
@@ -1635,9 +1645,14 @@ def _start_weibo_qr_renewal(db: DB, notifiers: list[Notifier]) -> bool:
         return False
     try:
         client, qrid, image_url = create_qr(db=db)
-        image = client.get(image_url).content
     except Exception as exc:  # noqa: BLE001
         logger.warning("微博续期二维码生成失败: %s", exc)
+        return False
+    try:
+        image = client.get(image_url).content
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("微博续期二维码下载失败: %s", exc)
+        client.close()
         return False
     db.set_setting(WEIBO_QR_RENEWAL_KEY, str(now))
     try:

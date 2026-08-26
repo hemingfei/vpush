@@ -3967,6 +3967,9 @@ def create_api_router(
         if status == "scanned":
             return {"status": "scanned"}
         if status == "expired":
+            # 二维码已作废：会话客户端无人再轮询，就地回收
+            client.close()
+            weibo_qr_sessions.pop(qrid, None)
             raise HTTPException(status_code=400, detail="二维码已失效，请重新生成")
         if status == "ok" and result.get("cookie"):
             cookie = result["cookie"]

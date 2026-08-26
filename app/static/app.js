@@ -5006,7 +5006,7 @@ async function loadAdminStats() {
               </label>
               <label class="cfg-field cfg-field--wide" title="App 通道 UA 里的设备标识：Android 版本 + 品牌_型号，空格自动压成下划线">
                 <span>设备标识<span class="cfg-unit">RELEASE BRAND_MODEL</span></span>
-                <input id="pc-zq-app-device" type="text" class="form-control" maxlength="64" value="${s.polling_config.zsxq_app_device ?? "16 OnePlus_PJD110"}">
+                <input id="pc-zq-app-device" type="text" class="form-control" maxlength="64" value="${escapeHtml(s.polling_config.zsxq_app_device ?? "16 OnePlus_PJD110")}">
               </label>
             </div>
             <div class="cfg-foot">
