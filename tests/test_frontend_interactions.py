@@ -983,6 +983,27 @@ def test_ima_group_render_has_safe_rows_and_recovery_controls():
     assert "尚未添加群组" in src
 
 
+def test_ima_group_add_uses_max_index_after_middle_row_removal():
+    """新增群组不能复用当前行数量，删除中间行后仍须保持唯一索引。"""
+    add = _fn_body("addImaGroupRow")
+    assert "row.dataset.groupIndex" in add
+    assert "Math.max(...indexes) + 1" in add
+    assert "indexes.length ?" in add
+    assert " : 0" in add
+
+
+def test_ima_discovery_error_redacts_url_and_secret_key_values_before_escape():
+    """发现错误中的 URL、token、sign 等敏感内容必须先脱敏再 escapeHtml。"""
+    sample = "自动发现失败：https://ima.qq.com/api?token=secret&sign=signature"
+    assert "https://ima.qq.com" in sample and "token=secret" in sample and "sign=signature" in sample
+    safe = _fn_body("imaSafeError")
+    for pattern in ("https?:", "token", "refresh_token", "authorization", "sign", "q-sign", "Bearer", "<redacted>"):
+        assert pattern in safe
+    stats = _fn_body("imaGroupDiscoveryStatusText")
+    assert "imaSafeError(discoveryError)" in stats
+    assert "escapeHtml(safeError)" in stats
+
+
 def test_ima_group_save_reads_rows_and_preserves_legacy_token_fields():
     """采集配置保存同时提交群组，并保留旧 scalar/token 兼容字段。"""
     save = _fn_body("saveImaCollector")

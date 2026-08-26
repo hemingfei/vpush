@@ -4245,7 +4245,10 @@ function addImaGroupRow(group) {
   const target = $("#ima-groups");
   if (!target) return;
   const empty = target.querySelector(".empty");
-  const index = target.querySelectorAll("[data-group-row]").length;
+  const indexes = Array.from(target.querySelectorAll("[data-group-row]"))
+    .map((row) => Number(row.dataset.groupIndex))
+    .filter((index) => Number.isInteger(index) && index >= 0);
+  const index = indexes.length ? Math.max(...indexes) + 1 : 0;
   const html = imaGroupRowHtml(group, index);
   if (empty) target.innerHTML = html;
   else target.insertAdjacentHTML("beforeend", html);
@@ -4274,10 +4277,21 @@ function readImaGroupRows() {
   });
 }
 
+function imaSafeError(value) {
+  let text = String(value ?? "").split(/\r?\n/, 1)[0].slice(0, 240);
+  text = text.replace(/https?:\/\/\S+/gi, "<url>");
+  text = text.replace(/\bBearer\s+\S+/gi, "Bearer <redacted>");
+  text = text.replace(/(^|[?&\s])((?:token|refresh_token|authorization|sign|q-sign)\b(?:\s*[=:]\s*|\s+))[^\s&]+/gi, "$1$2<redacted>");
+  return text;
+}
+
 function imaGroupDiscoveryStatusText(status) {
   const result = status?.last_result || {};
   const discoveryError = String(result.discovery_error || "").trim();
-  if (discoveryError) return `自动发现失败：${escapeHtml(discoveryError)}`;
+  if (discoveryError) {
+    const safeError = imaSafeError(discoveryError);
+    return `自动发现失败：${escapeHtml(safeError)}`;
+  }
   const groups = Array.isArray(status?.config?.groups) ? status.config.groups : [];
   if (!groups.length) return "尚未发现或添加群组";
   const synced = Number.isFinite(Number(result.succeeded_groups))
