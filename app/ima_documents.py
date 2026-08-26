@@ -151,6 +151,55 @@ def _legacy_group(kb: str, root: str) -> ImaGroupConfig:
     )
 
 
+def normalize_discovered_groups(payload: Any) -> tuple[ImaGroupConfig, ...]:
+    data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else payload
+    if not isinstance(data, dict):
+        return ()
+    raw: Any = []
+    for field in ("knowledge_base_list", "knowledge_list", "info_list"):
+        candidate = data.get(field)
+        if candidate:
+            raw = candidate
+            break
+    groups: list[ImaGroupConfig] = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        group_id = str(item.get("id") or item.get("knowledge_base_id") or "").strip()
+        root = str(item.get("root_folder_id") or item.get("folder_id") or "").strip()
+        if not group_id or not root:
+            continue
+        groups.append(
+            ImaGroupConfig(
+                id=group_id,
+                name=str(item.get("name") or item.get("kb_name") or group_id).strip()[:100],
+                knowledge_base_id=group_id,
+                root_folder_id=root,
+                source="discovered",
+            )
+        )
+    return tuple(groups)
+
+
+def merge_groups(
+    existing: tuple[ImaGroupConfig, ...],
+    discovered: tuple[ImaGroupConfig, ...],
+) -> tuple[ImaGroupConfig, ...]:
+    by_id = {group.id: group for group in existing}
+    for group in discovered:
+        previous = by_id.get(group.id)
+        manual = previous and previous.source == "manual"
+        by_id[group.id] = ImaGroupConfig(
+            id=group.id,
+            name=previous.name if manual else group.name,
+            knowledge_base_id=group.knowledge_base_id,
+            root_folder_id=group.root_folder_id,
+            enabled=previous.enabled if previous else True,
+            source=previous.source if manual else "discovered",
+        )
+    return tuple(by_id.values())
+
+
 def _read_groups(db: Any, kb: str, root: str) -> tuple[ImaGroupConfig, ...]:
     raw = db.get_setting(IMA_PURE_GROUPS_KEY) if db is not None else None
     if raw:
@@ -238,8 +287,9 @@ class ImaDocumentConfig:
 
 
 class ImaPureClient:
-    def __init__(self, config: ImaDocumentConfig):
+    def __init__(self, config: ImaDocumentConfig, group: ImaGroupConfig | None = None):
         self.config = config
+        self.group = group
         self.token = ""
         self.token_at = 0.0
         self.ctk = ""
@@ -247,6 +297,8 @@ class ImaPureClient:
 
     @property
     def effective_knowledge_base_id(self) -> str:
+        if self.group is not None:
+            return self.group.knowledge_base_id
         for group in self.config.groups:
             if group.enabled and group.knowledge_base_id and group.root_folder_id:
                 return group.knowledge_base_id
@@ -254,6 +306,8 @@ class ImaPureClient:
 
     @property
     def effective_root_folder_id(self) -> str:
+        if self.group is not None:
+            return self.group.root_folder_id
         for group in self.config.groups:
             if group.enabled and group.knowledge_base_id and group.root_folder_id:
                 return group.root_folder_id
@@ -326,12 +380,72 @@ class ImaPureClient:
             return payload
         return data
 
+    def discover_groups(self) -> tuple[ImaGroupConfig, ...]:
+        raw_items: list[dict[str, Any]] = []
+        cursor = ""
+        resolved_roots: dict[str, str] = {}
+        while True:
+            token = self._token()
+            request = urllib.request.Request(
+                BASE + "/knowledge_tab_reader/list_knowledge_bases",
+                data=json.dumps({"cursor": cursor}, ensure_ascii=False).encode(),
+                method="POST",
+                headers=self._headers(token),
+            )
+            data, _ = self._open_json(request)
+            code = data.get("code", data.get("retcode"))
+            if code not in (0, None):
+                raise RuntimeError(f"IMA group discovery failed code={code}")
+            payload = data.get("data") if isinstance(data.get("data"), dict) else data
+            if not isinstance(payload, dict):
+                payload = {}
+            page_items: Any = []
+            for field in ("knowledge_base_list", "knowledge_list", "info_list"):
+                candidate = payload.get(field)
+                if candidate:
+                    page_items = candidate
+                    break
+            raw_items.extend(item for item in page_items if isinstance(item, dict))
+            if payload.get("is_end") is True or not payload.get("next_cursor"):
+                break
+            cursor = str(payload["next_cursor"])
+
+        for item in raw_items:
+            group_id = str(item.get("id") or item.get("knowledge_base_id") or "").strip()
+            root = str(item.get("root_folder_id") or item.get("folder_id") or "").strip()
+            if group_id and not root and group_id not in resolved_roots:
+                root = ""
+                previous_kb = getattr(self, "_discovery_knowledge_base_id", None)
+                self._discovery_knowledge_base_id = group_id
+                try:
+                    folders = self.list_items(group_id)
+                finally:
+                    if previous_kb is None:
+                        del self._discovery_knowledge_base_id
+                    else:
+                        self._discovery_knowledge_base_id = previous_kb
+                for folder in folders:
+                    if not isinstance(folder, dict):
+                        continue
+                    folder_info = folder.get("folder_info") or {}
+                    root = str(folder_info.get("folder_id") or "").strip()
+                    if root:
+                        break
+                resolved_roots[group_id] = root
+            if not root and group_id:
+                root = resolved_roots.get(group_id, "")
+            if root and group_id:
+                item["root_folder_id"] = root
+        return normalize_discovered_groups({"knowledge_base_list": raw_items})
+
     def list_items(self, folder_id: str) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         cursor = ""
         while True:
             body: dict[str, Any] = {
-                "knowledge_base_id": self.effective_knowledge_base_id,
+                "knowledge_base_id": getattr(
+                    self, "_discovery_knowledge_base_id", self.effective_knowledge_base_id
+                ),
                 "folder_id": folder_id,
                 "limit": "50",
             }
@@ -375,16 +489,18 @@ class ImaPureClient:
                 name = str(item.get("name") or media_id)
                 if not (name.lower().endswith(".pdf") or media_id.lower().startswith("pdf_")):
                     continue
-                records.append(
-                    {
-                        "media_id": media_id,
-                        "name": name,
-                        "day": day,
-                        "size": int(item.get("file_size") or 0),
-                        "md5": str(item.get("md5_sum") or ""),
-                        "ts": str(item.get("create_time") or ""),
-                    }
-                )
+                record = {
+                    "media_id": media_id,
+                    "name": name,
+                    "day": day,
+                    "size": int(item.get("file_size") or 0),
+                    "md5": str(item.get("md5_sum") or ""),
+                    "ts": str(item.get("create_time") or ""),
+                }
+                if self.group is not None:
+                    record["group_id"] = self.group.id
+                    record["group_name"] = self.group.name
+                records.append(record)
         records.sort(key=lambda item: (item["day"], item["media_id"]))
         return records
 
@@ -581,6 +697,23 @@ class ImaDocumentStore:
             {"generated_at": datetime.now(UTC).isoformat(), "files": records},
         )
 
+    def save_group_manifest(self, group_id: str, records: list[dict[str, Any]]) -> None:
+        group_id = str(group_id)
+        compatibility_group = group_id.startswith("legacy:")
+        current = self.load_manifest()
+        kept = []
+        for record in current:
+            record_group = str(record.get("group_id") or "")
+            if record_group == group_id or (compatibility_group and not record_group):
+                continue
+            kept.append(record)
+        normalized = []
+        for record in records:
+            item = dict(record)
+            item.setdefault("group_id", group_id)
+            normalized.append(item)
+        self.save_manifest(kept + normalized)
+
     def save_state(self, state: dict[str, dict[str, Any]]) -> None:
         self._save(self.state_path, state)
 
@@ -600,7 +733,13 @@ class ImaDocumentStore:
         txt = self._state_path(item.get("txt"))
         return bool(pdf and txt and pdf.is_file() and txt.is_file())
 
-    def documents(self, query: str = "", day: str = "") -> list[dict[str, Any]]:
+    def documents(
+        self,
+        query: str = "",
+        day: str = "",
+        group_id: str = "",
+        group_name: str = "",
+    ) -> list[dict[str, Any]]:
         state = self.load_state()
         query = str(query or "").strip().casefold()
         day = str(day or "").strip()
@@ -611,49 +750,66 @@ class ImaDocumentStore:
                 media_id = self.validate_media_id(media_id)
             except ValueError:
                 continue
-            item = state.get(media_id) or {}
-            pdf = self._state_path(item.get("pdf"))
-            txt = self._state_path(item.get("txt"))
+            state_item = state.get(media_id) or {}
+            pdf = self._state_path(state_item.get("pdf"))
+            txt = self._state_path(state_item.get("txt"))
             if not media_id or not pdf or not txt or not pdf.is_file() or not txt.is_file():
                 continue
             if day and str(record.get("day") or "") != day:
                 continue
             if query and query not in f"{record.get('name', '')} {record.get('day', '')}".casefold():
                 continue
-            output.append(
-                {
-                    "media_id": media_id,
-                    "name": str(record.get("name") or media_id),
-                    "day": str(record.get("day") or "unknown"),
-                    "size": int(item.get("size") or record.get("size") or pdf.stat().st_size),
-                    "chars": int(item.get("chars") or 0),
-                    "downloaded_at": str(item.get("downloaded_at") or ""),
-                }
-            )
+            item = {
+                "media_id": media_id,
+                "name": str(record.get("name") or media_id),
+                "day": str(record.get("day") or "unknown"),
+                "size": int(state_item.get("size") or record.get("size") or pdf.stat().st_size),
+                "chars": int(state_item.get("chars") or 0),
+                "downloaded_at": str(state_item.get("downloaded_at") or ""),
+            }
+            metadata_id = str(group_id or record.get("group_id") or state_item.get("group_id") or "")
+            metadata_name = str(group_name or record.get("group_name") or state_item.get("group_name") or "")
+            if metadata_id:
+                item["group_id"] = metadata_id
+            if metadata_name:
+                item["group_name"] = metadata_name
+            output.append(item)
         output.sort(key=lambda item: (item["day"], item["name"]), reverse=True)
         return output
 
-    def document(self, media_id: str) -> dict[str, Any] | None:
+    def document(
+        self,
+        media_id: str,
+        group_id: str = "",
+        group_name: str = "",
+    ) -> dict[str, Any] | None:
         self.validate_media_id(media_id)
         state = self.load_state()
         for record in self.load_manifest():
             if str(record.get("media_id") or "") != media_id:
                 continue
-            item = state.get(media_id) or {}
-            pdf = self._state_path(item.get("pdf"))
-            txt = self._state_path(item.get("txt"))
+            state_item = state.get(media_id) or {}
+            pdf = self._state_path(state_item.get("pdf"))
+            txt = self._state_path(state_item.get("txt"))
             if not pdf or not txt or not pdf.is_file() or not txt.is_file():
                 return None
-            return {
+            result = {
                 "media_id": media_id,
                 "name": str(record.get("name") or media_id),
                 "day": str(record.get("day") or "unknown"),
                 "pdf": pdf,
                 "txt": txt,
-                "size": int(item.get("size") or record.get("size") or pdf.stat().st_size),
-                "chars": int(item.get("chars") or 0),
-                "downloaded_at": str(item.get("downloaded_at") or ""),
+                "size": int(state_item.get("size") or record.get("size") or pdf.stat().st_size),
+                "chars": int(state_item.get("chars") or 0),
+                "downloaded_at": str(state_item.get("downloaded_at") or ""),
             }
+            metadata_id = str(group_id or record.get("group_id") or state_item.get("group_id") or "")
+            metadata_name = str(group_name or record.get("group_name") or state_item.get("group_name") or "")
+            if metadata_id:
+                result["group_id"] = metadata_id
+            if metadata_name:
+                result["group_name"] = metadata_name
+            return result
         return None
 
 
@@ -772,6 +928,74 @@ class ImaDocumentService:
             with self._state_lock:
                 self._running = False
 
+    def _sync_group(
+        self,
+        cfg: ImaDocumentConfig,
+        group: ImaGroupConfig,
+        state: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        try:
+            client = ImaPureClient(cfg, group=group)
+        except TypeError as exc:
+            # Keep third-party/test clients with the original constructor usable.
+            if "group" not in str(exc):
+                raise
+            client = ImaPureClient(cfg)
+        records = client.manifest()
+        self.store.save_group_manifest(group.id, records)
+        pending = [record for record in records if not self.store.is_complete(record, state)]
+        downloaded = 0
+        failures = 0
+        last_error = ""
+        for record in pending:
+            if self._cancel_requested:
+                break
+            media_id = str(record["media_id"])
+            pdf = self.store.pdf_path(record)
+            txt = self.store.txt_path(record)
+            try:
+                pdf.parent.mkdir(parents=True, exist_ok=True)
+                if pdf.parent.is_symlink():
+                    raise ValueError("archive directory must not be a symlink")
+                if pdf.is_file():
+                    size, md5 = client._pdf_info(pdf)
+                    if record.get("size") and size != int(record["size"]):
+                        pdf.unlink(missing_ok=True)
+                if not pdf.is_file():
+                    media = client.get_media(media_id)
+                    result = client.download(media, pdf, int(record.get("size") or 0))
+                    size, md5 = result["size"], result["md5"]
+                else:
+                    size, md5 = client._pdf_info(pdf)
+                chars = convert_pdf(pdf, txt)
+                state[media_id] = {
+                    "group_id": group.id,
+                    "group_name": group.name,
+                    "day": record.get("day") or "unknown",
+                    "name": record.get("name") or media_id,
+                    "pdf": str(pdf.relative_to(self.store.root)),
+                    "txt": str(txt.relative_to(self.store.root)),
+                    "size": size,
+                    "md5": md5,
+                    "chars": chars,
+                    "downloaded_at": datetime.now(UTC).isoformat(),
+                }
+                self.store.save_state(state)
+                downloaded += 1
+            except Exception as exc:  # noqa: BLE001 - isolate one bad file
+                failures += 1
+                last_error = _safe_error(exc)
+                logger.warning("IMA document failed media=%s error=%s", media_id[:32], last_error)
+        return {
+            "group_id": group.id,
+            "group_name": group.name,
+            "total": len(records),
+            "pending": len(pending),
+            "downloaded": downloaded,
+            "failed": failures,
+            "last_error": last_error,
+        }
+
     def sync_once(self) -> dict[str, Any]:
         if not self._sync_lock.acquire(blocking=False):
             return {"status": "already_running"}
@@ -781,56 +1005,47 @@ class ImaDocumentService:
                 return {"status": "not_configured"}
             started = time.time()
             self.db.set_setting(IMA_PURE_LAST_STARTED_KEY, str(int(started)))
-            client = ImaPureClient(cfg)
-            records = client.manifest()
-            self.store.save_manifest(records)
+            discovery_error = ""
+            discovery_client = ImaPureClient(cfg)
+            try:
+                discover = getattr(discovery_client, "discover_groups", None)
+                discovered = tuple(discover()) if discover else ()
+            except Exception as exc:  # noqa: BLE001 - discovery is optional
+                discovered = ()
+                discovery_error = _safe_error(exc)
+                logger.warning("IMA group discovery failed error=%s", discovery_error)
+            merged_groups = merge_groups(cfg.groups, discovered)
+            self.db.set_setting(
+                IMA_PURE_GROUPS_KEY,
+                json.dumps([group.public() for group in merged_groups], ensure_ascii=False),
+            )
             state = self.store.load_state()
-            pending = [
-                record for record in records if not self.store.is_complete(record, state)
-            ]
-            downloaded = 0
-            failures = 0
-            last_error = ""
-            for record in pending:
-                if self._cancel_requested:
-                    break
-                media_id = str(record["media_id"])
-                pdf = self.store.pdf_path(record)
-                txt = self.store.txt_path(record)
+            enabled_groups = [group for group in merged_groups if group.enabled]
+            total = pending = downloaded = failures = 0
+            failed_groups: list[str] = []
+            last_error = discovery_error
+            succeeded_groups = 0
+            for group in enabled_groups:
                 try:
-                    pdf.parent.mkdir(parents=True, exist_ok=True)
-                    if pdf.parent.is_symlink():
-                        raise ValueError("archive directory must not be a symlink")
-                    if pdf.is_file():
-                        size, md5 = client._pdf_info(pdf)
-                        if record.get("size") and size != int(record["size"]):
-                            pdf.unlink(missing_ok=True)
-                    if not pdf.is_file():
-                        media = client.get_media(media_id)
-                        result = client.download(media, pdf, int(record.get("size") or 0))
-                        size, md5 = result["size"], result["md5"]
-                    else:
-                        size, md5 = client._pdf_info(pdf)
-                    chars = convert_pdf(pdf, txt)
-                    state[media_id] = {
-                        "day": record.get("day") or "unknown",
-                        "name": record.get("name") or media_id,
-                        "pdf": str(pdf.relative_to(self.store.root)),
-                        "txt": str(txt.relative_to(self.store.root)),
-                        "size": size,
-                        "md5": md5,
-                        "chars": chars,
-                        "downloaded_at": datetime.now(UTC).isoformat(),
-                    }
-                    self.store.save_state(state)
-                    downloaded += 1
-                except Exception as exc:  # noqa: BLE001 - isolate one bad file
+                    group_result = self._sync_group(cfg, group, state)
+                    succeeded_groups += 1
+                    total += group_result["total"]
+                    pending += group_result["pending"]
+                    downloaded += group_result["downloaded"]
+                    failures += group_result["failed"]
+                    if group_result["last_error"]:
+                        last_error = group_result["last_error"]
+                except Exception as exc:  # noqa: BLE001 - isolate one group
+                    failed_groups.append(group.id)
                     failures += 1
                     last_error = _safe_error(exc)
-                    logger.warning("IMA document failed media=%s error=%s", media_id[:32], last_error)
+                    logger.warning("IMA group failed group=%s error=%s", group.id[:64], last_error)
             result = {
-                "total": len(records),
-                "pending": len(pending),
+                "groups": len(enabled_groups),
+                "succeeded_groups": succeeded_groups,
+                "failed_groups": failed_groups,
+                "total": total,
+                "pending": pending,
                 "downloaded": downloaded,
                 "failed": failures,
                 "last_error": last_error,

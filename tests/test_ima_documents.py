@@ -12,6 +12,8 @@ from app.ima_documents import (
     ImaDocumentStore,
     ImaGroupConfig,
     ImaPureClient,
+    merge_groups,
+    normalize_discovered_groups,
     _safe_error,
     decrypt_body,
     encrypt_body,
@@ -307,6 +309,114 @@ def test_client_uses_first_enabled_group_when_legacy_scalars_are_empty(monkeypat
     monkeypatch.setattr(ima_documents.urllib.request, "urlopen", lambda request, timeout: Response())
     client.get_media("media-1")
     assert json.loads(encrypted_plaintexts[0].decode())["source_knowledge_base_id"] == "group-kb"
+
+
+def test_discover_groups_normalizes_knowledge_base_payload():
+    payload = {
+        "data": {
+            "knowledge_base_list": [
+                {"knowledge_base_id": "kb-1", "name": "投行研报", "root_folder_id": "folder-1"},
+                {"id": "kb-2", "kb_name": "宏观策略", "folder_id": "folder-2"},
+                {"id": "missing-root"},
+                "invalid",
+            ]
+        }
+    }
+    groups = normalize_discovered_groups(payload)
+    assert [(g.id, g.name, g.knowledge_base_id, g.root_folder_id) for g in groups] == [
+        ("kb-1", "投行研报", "kb-1", "folder-1"),
+        ("kb-2", "宏观策略", "kb-2", "folder-2"),
+    ]
+    assert all(group.source == "discovered" for group in groups)
+
+
+def test_merge_groups_updates_discovered_without_deleting_manual():
+    existing = (
+        ImaGroupConfig("manual-1", "手动群", "kb-manual", "folder-manual", source="manual"),
+        ImaGroupConfig("kb-1", "旧名称", "kb-1", "folder-old", source="discovered"),
+    )
+    discovered = (
+        ImaGroupConfig("kb-1", "新名称", "kb-1", "folder-new", source="discovered"),
+    )
+    merged = merge_groups(existing, discovered)
+    assert [(g.id, g.name, g.root_folder_id) for g in merged] == [
+        ("manual-1", "手动群", "folder-manual"),
+        ("kb-1", "新名称", "folder-new"),
+    ]
+
+
+def test_manifest_records_include_group_context():
+    group = ImaGroupConfig("banking", "投行研报", "kb-1", "folder-1")
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    client.list_items = lambda folder_id: [
+        {"media_type": 99, "folder_info": {"name": "0825", "folder_id": "day-1"}}
+    ] if folder_id == "folder-1" else [
+        {"media_id": "pdf_1", "name": "report.pdf", "file_size": 4}
+    ]
+    records = client.manifest()
+    assert records[0]["group_id"] == "banking"
+    assert records[0]["group_name"] == "投行研报"
+
+
+def test_group_manifest_replaces_only_target_and_legacy_records(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima")
+    store.save_manifest([
+        {"media_id": "legacy", "name": "legacy.pdf"},
+        {"media_id": "first", "group_id": "first", "group_name": "一组"},
+        {"media_id": "second", "group_id": "second", "group_name": "二组"},
+    ])
+    store.save_group_manifest("legacy:kb:root", [{"media_id": "new", "group_id": "legacy:kb:root"}])
+    assert {item["media_id"] for item in store.load_manifest()} == {"new", "first", "second"}
+    store.save_group_manifest("first", [{"media_id": "first-new", "group_id": "first"}])
+    assert {item["media_id"] for item in store.load_manifest()} == {"new", "first-new", "second"}
+
+
+def test_discover_groups_paginates_and_resolves_missing_root(monkeypatch):
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    requests = []
+    pages = iter([
+        {"code": 0, "data": {"knowledge_base_list": [{"id": "kb-1", "name": "一组"}], "next_cursor": "next", "is_end": False}},
+        {"code": 0, "data": {"knowledge_list": [{"id": "kb-2", "name": "二组", "folder_id": "root-2"}], "is_end": True}},
+    ])
+    client._token = lambda: "access"
+    client._open_json = lambda request: (requests.append(json.loads(request.data)) or (next(pages), {}))
+    client.list_items = lambda folder_id: [{"media_type": 99, "folder_info": {"folder_id": "root-1"}}]
+    groups = client.discover_groups()
+    assert [group.root_folder_id for group in groups] == ["root-1", "root-2"]
+    assert requests == [{"cursor": ""}, {"cursor": "next"}]
+
+
+def test_failed_group_does_not_block_later_group(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    db = FakeDB({
+        "ima_pure_uid": "uid", "ima_pure_refresh_token": "refresh",
+        "ima_pure_knowledge_base_id": "kb", "ima_pure_root_folder_id": "root",
+    })
+    groups = (
+        ImaGroupConfig("first", "一组", "kb-1", "root-1"),
+        ImaGroupConfig("second", "二组", "kb-2", "root-2"),
+    )
+    db.values[IMA_PURE_GROUPS_KEY] = json.dumps([group.public() for group in groups], ensure_ascii=False)
+    calls = []
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.group = group
+        def manifest(self):
+            calls.append(self.group.id)
+            if self.group.id == "first":
+                raise RuntimeError("boom https://secret.invalid/token")
+            return []
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    service = ImaDocumentService(db, tmp_path / "ima")
+    result = service.sync_once()
+    assert result["status"] == "finished"
+    assert calls == ["first", "second"]
+    assert result["failed_groups"] == ["first"]
+    assert result["succeeded_groups"] == 1
+    assert "secret.invalid" not in result["last_error"]
 
 
 def test_archive_paths_are_relative_and_confined(tmp_path):
