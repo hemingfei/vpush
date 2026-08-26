@@ -646,6 +646,8 @@ class ImaDocumentStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self.manifest_path = self.root / "manifest.json"
         self.state_path = self.root / "state.json"
+        self._legacy_group_id = ""
+        self._group_metadata: dict[str, tuple[str, str]] = {}
 
     @staticmethod
     def validate_media_id(media_id: str) -> str:
@@ -689,11 +691,42 @@ class ImaDocumentStore:
         except (FileNotFoundError, OSError, json.JSONDecodeError):
             return default
 
-    def load_manifest(self) -> list[dict[str, Any]]:
+    def _remember_groups(self, groups: tuple[ImaGroupConfig, ...] | None) -> None:
+        for group in groups or ():
+            self._group_metadata[group.id] = (group.name, group.id)
+            if group.id.startswith("legacy:"):
+                self._legacy_group_id = group.id
+
+    def _normalize_manifest_records(
+        self,
+        records: list[dict[str, Any]],
+        groups: tuple[ImaGroupConfig, ...] | None = None,
+    ) -> list[dict[str, Any]]:
+        self._remember_groups(groups)
+        metadata = dict(self._group_metadata)
+        for group in groups or ():
+            metadata[group.id] = (group.name, group.id)
+        output = []
+        for record in records:
+            item = dict(record)
+            group_id = str(item.get("group_id") or "")
+            if not group_id and self._legacy_group_id:
+                group_id = self._legacy_group_id
+                item["group_id"] = group_id
+            if group_id.startswith("legacy:") and not item.get("group_name"):
+                item["group_name"] = metadata.get(group_id, ("IMA 文档", group_id))[0]
+            elif group_id in metadata and not item.get("group_name"):
+                item["group_name"] = metadata[group_id][0]
+            output.append(item)
+        return output
+
+    def load_manifest(self, groups: tuple[ImaGroupConfig, ...] | None = None) -> list[dict[str, Any]]:
         value = self._load(self.manifest_path, {})
         if isinstance(value, dict) and isinstance(value.get("files"), list):
-            return [item for item in value["files"] if isinstance(item, dict)]
-        return value if isinstance(value, list) else []
+            records = [item for item in value["files"] if isinstance(item, dict)]
+        else:
+            records = value if isinstance(value, list) else []
+        return self._normalize_manifest_records(records, groups)
 
     def load_state(self) -> dict[str, dict[str, Any]]:
         value = self._load(self.state_path, {})
@@ -713,6 +746,8 @@ class ImaDocumentStore:
     def save_group_manifest(self, group_id: str, records: list[dict[str, Any]]) -> None:
         group_id = str(group_id)
         compatibility_group = group_id.startswith("legacy:")
+        if compatibility_group:
+            self._legacy_group_id = group_id
         current = self.load_manifest()
         kept = []
         for record in current:
@@ -723,7 +758,10 @@ class ImaDocumentStore:
         normalized = []
         for record in records:
             item = dict(record)
-            item.setdefault("group_id", group_id)
+            if not item.get("group_id"):
+                item["group_id"] = group_id
+            if compatibility_group and not item.get("group_name"):
+                item["group_name"] = self._group_metadata.get(group_id, ("IMA 文档", group_id))[0]
             normalized.append(item)
         self.save_manifest(kept + normalized)
 
@@ -752,12 +790,14 @@ class ImaDocumentStore:
         day: str = "",
         group_id: str = "",
         group_name: str = "",
+        groups: tuple[ImaGroupConfig, ...] | None = None,
     ) -> list[dict[str, Any]]:
+        self._remember_groups(groups)
         state = self.load_state()
         query = str(query or "").strip().casefold()
         day = str(day or "").strip()
         output: list[dict[str, Any]] = []
-        for record in self.load_manifest():
+        for record in self.load_manifest(groups):
             media_id = str(record.get("media_id") or "")
             try:
                 media_id = self.validate_media_id(media_id)
@@ -795,10 +835,12 @@ class ImaDocumentStore:
         media_id: str,
         group_id: str = "",
         group_name: str = "",
+        groups: tuple[ImaGroupConfig, ...] | None = None,
     ) -> dict[str, Any] | None:
+        self._remember_groups(groups)
         self.validate_media_id(media_id)
         state = self.load_state()
-        for record in self.load_manifest():
+        for record in self.load_manifest(groups):
             if str(record.get("media_id") or "") != media_id:
                 continue
             state_item = state.get(media_id) or {}

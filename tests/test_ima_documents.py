@@ -330,6 +330,38 @@ def test_discover_groups_normalizes_knowledge_base_payload():
     assert all(group.source == "discovered" for group in groups)
 
 
+def test_legacy_manifest_normalization_preserves_group_metadata(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima")
+    legacy = ImaGroupConfig("legacy:kb:root", "IMA 文档", "kb", "root")
+    other = ImaGroupConfig("other", "其他群组", "kb-other", "root-other")
+    store.save_manifest([
+        {"media_id": "legacy-old", "name": "old.pdf", "day": "0825"},
+        {"media_id": "other-file", "name": "other.pdf", "day": "0825", "group_id": other.id},
+    ])
+    store.save_group_manifest(legacy.id, [{"media_id": "legacy-new", "name": "new.pdf", "day": "0826"}])
+    records = store.load_manifest()
+    assert {record["media_id"] for record in records} == {"legacy-new", "other-file"}
+    state = {}
+    for record in records:
+        pdf, txt = store.pdf_path(record), store.txt_path(record)
+        pdf.parent.mkdir(parents=True, exist_ok=True)
+        pdf.write_bytes(b"%PDF-1.7")
+        txt.write_text("text", encoding="utf-8")
+        state[record["media_id"]] = {
+            "pdf": str(pdf.relative_to(store.root)),
+            "txt": str(txt.relative_to(store.root)),
+        }
+    store.save_state(state)
+    items = store.documents(groups=(legacy, other))
+    assert {item["media_id"] for item in items} == {"legacy-new", "other-file"}
+    legacy_item = next(item for item in items if item["media_id"] == "legacy-new")
+    assert legacy_item["group_id"] == legacy.id
+    assert legacy_item["group_name"] == legacy.name
+    detail = store.document("legacy-new")
+    assert detail["group_id"] == legacy.id
+    assert detail["group_name"] == legacy.name
+
+
 def test_discovery_rejects_non_string_ids_and_roots():
     groups = normalize_discovered_groups(
         {
