@@ -276,7 +276,7 @@ class ImaPureClient:
                     continue
                 if item.get("media_type") == 99:
                     continue
-                name = str(item.get("name") or media_id)
+                name = item_display_name(item, media_id)
                 if not (name.lower().endswith(".pdf") or media_id.lower().startswith("pdf_")):
                     continue
                 records.append(
@@ -401,6 +401,14 @@ class ImaPureClient:
         return {"size": size, "md5": digest.hexdigest(), "path": str(destination)}
 
 
+def item_display_name(item: dict[str, Any], media_id: str) -> str:
+    for key in ("title", "name"):
+        value = str(item.get(key) or "").strip()
+        if value:
+            return value
+    return media_id
+
+
 def safe_filename(name: str, fallback: str) -> str:
     value = (name or fallback).replace("/", "_").replace("\\", "_").replace("\x00", "")
     value = re.sub(r"^[.]+", "_", value).strip()[:180] or fallback
@@ -439,25 +447,8 @@ class ImaDocumentStore:
         return self.root / _safe_component(day)
 
     @staticmethod
-    def _legacy_unique_tokens(media_id: str) -> set[str]:
-        return {
-            hashlib.sha256(media_id.encode("utf-8")).hexdigest()[:16],
-            re.sub(r"[^A-Za-z0-9_-]", "_", media_id[-12:]),
-        }
-
-    @staticmethod
     def _collision_token(media_id: str) -> str:
         return hashlib.sha256(media_id.encode("utf-8")).hexdigest()[:8]
-
-    def _is_legacy_hashed_name(self, filename: str, media_id: str, original_name: str) -> bool:
-        stem = Path(filename).stem
-        if "__" not in stem:
-            return False
-        base, suffix = stem.rsplit("__", 1)
-        if suffix not in self._legacy_unique_tokens(media_id):
-            return False
-        expected = Path(safe_filename(str(original_name or media_id), media_id)).stem[:150]
-        return base == expected
 
     def _archive_path(self, relative: str) -> Path:
         day_path = self.root / Path(relative).parent
@@ -499,6 +490,7 @@ class ImaDocumentStore:
         state = self.load_state()
         occupied = self._occupied_pdfs(state)
         renamed = 0
+        changed = False
         for media_id, item in list(state.items()):
             if not isinstance(item, dict):
                 continue
@@ -514,16 +506,18 @@ class ImaDocumentStore:
             current_pdf = self._state_path(current_rel)
             if not current_pdf or not current_pdf.is_file():
                 continue
-            if not self._is_legacy_hashed_name(
-                current_pdf.name, media_id, str(record.get("name") or "")
-            ):
-                continue
             others = occupied - ({current_rel} if isinstance(current_rel, str) else set())
             try:
                 desired = self.pdf_path(record, occupied=others)
             except ValueError:
                 continue
-            if desired == current_pdf or desired.exists():
+            if desired == current_pdf:
+                new_name = str(record.get("name") or item.get("name") or media_id)
+                if str(item.get("name") or "") != new_name:
+                    item["name"] = new_name
+                    changed = True
+                continue
+            if desired.exists():
                 continue
             current_txt = self._state_path(item.get("txt")) or current_pdf.with_suffix(".txt")
             desired_txt = desired.with_suffix(".txt")
@@ -538,8 +532,10 @@ class ImaDocumentStore:
             occupied.add(new_pdf)
             item["pdf"] = new_pdf
             item["txt"] = str(desired_txt.relative_to(self.root))
+            item["name"] = str(record.get("name") or item.get("name") or media_id)
             renamed += 1
-        if renamed:
+            changed = True
+        if changed:
             self.save_state(state)
         return {"renamed": renamed}
 

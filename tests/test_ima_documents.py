@@ -338,6 +338,54 @@ def test_manifest_excludes_non_pdf_media():
     assert [item["media_id"] for item in client.manifest()] == ["file_report", "pdf_report"]
 
 
+def test_manifest_uses_chinese_title_as_filename():
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    responses = iter(
+        [
+            [{"media_type": 99, "folder_info": {"name": "0825", "folder_id": "day"}}],
+            [
+                {
+                    "media_id": "pdf_abc123",
+                    "title": "伯恩斯坦-优质潜艇三明治.pdf",
+                    "file_size": 8,
+                }
+            ],
+        ]
+    )
+    client.list_items = lambda folder_id: next(responses)
+    records = client.manifest()
+    assert records[0]["media_id"] == "pdf_abc123"
+    assert records[0]["name"] == "伯恩斯坦-优质潜艇三明治.pdf"
+
+
+def test_restore_renames_media_id_archive_to_chinese_title(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima")
+    media_id = "pdf_e3acd95dd822029938ddb48d5e628c06"
+    unique = hashlib.sha256(media_id.encode("utf-8")).hexdigest()[:16]
+    hashed = store.root / "0801" / f"{media_id}__{unique}.pdf"
+    hashed.parent.mkdir(parents=True)
+    hashed.write_bytes(b"%PDF-1.7")
+    hashed.with_suffix(".txt").write_text("text", encoding="utf-8")
+    record = {"media_id": media_id, "name": "高盛-美图新AI产品.pdf", "day": "0801"}
+    store.save_manifest([record])
+    store.save_state(
+        {
+            media_id: {
+                "name": media_id,
+                "day": "0801",
+                "pdf": f"0801/{media_id}__{unique}.pdf",
+                "txt": f"0801/{media_id}__{unique}.txt",
+            }
+        }
+    )
+    assert store.restore_original_filenames()["renamed"] == 1
+    assert (store.root / "0801" / "高盛-美图新AI产品.pdf").is_file()
+    assert not hashed.exists()
+    state = store.load_state()
+    assert state[media_id]["pdf"] == "0801/高盛-美图新AI产品.pdf"
+    assert state[media_id]["name"] == "高盛-美图新AI产品.pdf"
+
+
 def test_service_sync_is_incremental(tmp_path, monkeypatch):
     from app import ima_documents
 
