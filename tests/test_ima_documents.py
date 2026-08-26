@@ -6,6 +6,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.ima_documents import (
+    IMA_LEGACY_GROUP_ID,
+    IMA_LEGACY_GROUP_NAME,
     IMA_PURE_GROUPS_KEY,
     ImaDocumentConfig,
     ImaDocumentService,
@@ -134,7 +136,7 @@ def test_config_ignores_invalid_json_group_entries_and_falls_back():
     cfg = ImaDocumentConfig.from_db(db)
     assert cfg.groups == (
         ImaGroupConfig(
-            id="legacy:legacy-kb:legacy-root",
+            id=IMA_LEGACY_GROUP_ID,
             name="IMA 文档",
             knowledge_base_id="legacy-kb",
             root_folder_id="legacy-root",
@@ -190,7 +192,7 @@ def test_config_falls_back_when_registry_has_only_non_string_source():
     cfg = ImaDocumentConfig.from_db(db)
     assert cfg.groups == (
         ImaGroupConfig(
-            id="legacy:legacy-kb:legacy-root",
+            id=IMA_LEGACY_GROUP_ID,
             name="IMA 文档",
             knowledge_base_id="legacy-kb",
             root_folder_id="legacy-root",
@@ -332,12 +334,34 @@ def test_discover_groups_normalizes_knowledge_base_payload():
 
 def test_legacy_manifest_normalization_preserves_group_metadata(tmp_path):
     store = ImaDocumentStore(tmp_path / "ima")
-    legacy = ImaGroupConfig("legacy:kb:root", "IMA 文档", "kb", "root")
+    legacy = ImaGroupConfig(IMA_LEGACY_GROUP_ID, "IMA 文档", "kb", "root")
     other = ImaGroupConfig("other", "其他群组", "kb-other", "root-other")
     store.save_manifest([
         {"media_id": "legacy-old", "name": "old.pdf", "day": "0825"},
         {"media_id": "other-file", "name": "other.pdf", "day": "0825", "group_id": other.id},
     ])
+    initial_records = store.load_manifest()
+    assert initial_records[0]["group_id"] == IMA_LEGACY_GROUP_ID
+    assert initial_records[0]["group_name"] == IMA_LEGACY_GROUP_NAME
+    state = {}
+    for record in initial_records:
+        pdf, txt = store.pdf_path(record), store.txt_path(record)
+        pdf.parent.mkdir(parents=True, exist_ok=True)
+        pdf.write_bytes(b"%PDF-1.7")
+        txt.write_text("text", encoding="utf-8")
+        state[record["media_id"]] = {
+            "pdf": str(pdf.relative_to(store.root)),
+            "txt": str(txt.relative_to(store.root)),
+        }
+    store.save_state(state)
+    direct_items = store.documents()
+    old_item = next(item for item in direct_items if item["media_id"] == "legacy-old")
+    assert old_item["group_id"] == legacy.id
+    assert old_item["group_name"] == legacy.name
+    old_detail = store.document("legacy-old")
+    assert old_detail["group_id"] == legacy.id
+    assert old_detail["group_name"] == legacy.name
+
     store.save_group_manifest(legacy.id, [{"media_id": "legacy-new", "name": "new.pdf", "day": "0826"}])
     records = store.load_manifest()
     assert {record["media_id"] for record in records} == {"legacy-new", "other-file"}
@@ -426,7 +450,8 @@ def test_group_manifest_replaces_only_target_and_legacy_records(tmp_path):
         {"media_id": "first", "group_id": "first", "group_name": "一组"},
         {"media_id": "second", "group_id": "second", "group_name": "二组"},
     ])
-    store.save_group_manifest("legacy:kb:root", [{"media_id": "new", "group_id": "legacy:kb:root"}])
+    store.save_group_manifest(IMA_LEGACY_GROUP_ID, [{"media_id": "new", "group_id": IMA_LEGACY_GROUP_ID}])
+
     assert {item["media_id"] for item in store.load_manifest()} == {"new", "first", "second"}
     store.save_group_manifest("first", [{"media_id": "first-new", "group_id": "first"}])
     assert {item["media_id"] for item in store.load_manifest()} == {"new", "first-new", "second"}

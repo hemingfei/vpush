@@ -45,6 +45,8 @@ IMA_PURE_INTERVAL_KEY = "ima_pure_interval_seconds"
 IMA_PURE_LAST_STARTED_KEY = "ima_pure_last_started_at"
 IMA_PURE_LAST_FINISHED_KEY = "ima_pure_last_finished_at"
 IMA_PURE_LAST_RESULT_KEY = "ima_pure_last_result"
+IMA_LEGACY_GROUP_ID = "legacy"
+IMA_LEGACY_GROUP_NAME = "IMA 文档"
 IMA_PURE_UID_DEFAULT = "001aa361168019ef"
 IMA_PURE_KB_ID_DEFAULT = "7464369361259867"
 IMA_PURE_ROOT_FOLDER_DEFAULT = "folder_7489327974078249"
@@ -144,8 +146,8 @@ class ImaGroupConfig:
 
 def _legacy_group(kb: str, root: str) -> ImaGroupConfig:
     return ImaGroupConfig(
-        id=f"legacy:{kb}:{root}",
-        name="IMA 文档",
+        id=IMA_LEGACY_GROUP_ID,
+        name=IMA_LEGACY_GROUP_NAME,
         knowledge_base_id=kb,
         root_folder_id=root,
     )
@@ -646,8 +648,10 @@ class ImaDocumentStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self.manifest_path = self.root / "manifest.json"
         self.state_path = self.root / "state.json"
-        self._legacy_group_id = ""
-        self._group_metadata: dict[str, tuple[str, str]] = {}
+        self._legacy_group_id = IMA_LEGACY_GROUP_ID
+        self._group_metadata: dict[str, tuple[str, str]] = {
+            IMA_LEGACY_GROUP_ID: (IMA_LEGACY_GROUP_NAME, IMA_LEGACY_GROUP_ID)
+        }
 
     @staticmethod
     def validate_media_id(media_id: str) -> str:
@@ -694,7 +698,7 @@ class ImaDocumentStore:
     def _remember_groups(self, groups: tuple[ImaGroupConfig, ...] | None) -> None:
         for group in groups or ():
             self._group_metadata[group.id] = (group.name, group.id)
-            if group.id.startswith("legacy:"):
+            if group.id == IMA_LEGACY_GROUP_ID or group.id.startswith("legacy:"):
                 self._legacy_group_id = group.id
 
     def _normalize_manifest_records(
@@ -713,8 +717,10 @@ class ImaDocumentStore:
             if not group_id and self._legacy_group_id:
                 group_id = self._legacy_group_id
                 item["group_id"] = group_id
-            if group_id.startswith("legacy:") and not item.get("group_name"):
-                item["group_name"] = metadata.get(group_id, ("IMA 文档", group_id))[0]
+            if (
+                group_id == IMA_LEGACY_GROUP_ID or group_id.startswith("legacy:")
+            ) and not item.get("group_name"):
+                item["group_name"] = metadata.get(group_id, (IMA_LEGACY_GROUP_NAME, group_id))[0]
             elif group_id in metadata and not item.get("group_name"):
                 item["group_name"] = metadata[group_id][0]
             output.append(item)
@@ -745,7 +751,7 @@ class ImaDocumentStore:
 
     def save_group_manifest(self, group_id: str, records: list[dict[str, Any]]) -> None:
         group_id = str(group_id)
-        compatibility_group = group_id.startswith("legacy:")
+        compatibility_group = group_id == IMA_LEGACY_GROUP_ID or group_id.startswith("legacy:")
         if compatibility_group:
             self._legacy_group_id = group_id
         current = self.load_manifest()
@@ -761,7 +767,9 @@ class ImaDocumentStore:
             if not item.get("group_id"):
                 item["group_id"] = group_id
             if compatibility_group and not item.get("group_name"):
-                item["group_name"] = self._group_metadata.get(group_id, ("IMA 文档", group_id))[0]
+                item["group_name"] = self._group_metadata.get(
+                    group_id, (IMA_LEGACY_GROUP_NAME, group_id)
+                )[0]
             normalized.append(item)
         self.save_manifest(kept + normalized)
 
