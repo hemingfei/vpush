@@ -2,6 +2,7 @@ import json
 import sqlite3
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -10,13 +11,19 @@ from scripts.ima_phone_sync import (
     _REMOTE_UPDATE_SCRIPT,
     ImaCredentials,
     ImaPhoneSyncError,
+    SyncOptions,
     build_adb_command,
     build_ssh_command,
+    load_sync_config,
     parse_login_preferences,
     read_phone_preferences,
+    resolve_sync_options,
+    save_sync_config,
     update_remote_settings,
     validate_ima_credentials,
 )
+
+ROOT = Path(__file__).resolve().parents[1]
 
 PREFS_XML = b"""\
 <map>
@@ -209,6 +216,59 @@ def test_remote_update_script_rejects_uid_change_without_writing(tmp_path):
     conn.close()
     assert values["ima_pure_uid"] == "uid_123"
     assert values["ima_pure_refresh_token"] == "old-secret"
+
+
+def test_sync_config_round_trip_is_allowlisted_and_mode_600(tmp_path):
+    path = tmp_path / "ima_phone_sync.env"
+    options = SyncOptions(
+        device="381a2bca",
+        host="179.255.150.134",
+        user="root",
+        ssh_key="/tmp/dmit-ssh/id_rsa.pem",
+        remote_db="/opt/vpush/data/dav.db",
+        expected_uid="001aa361168019ef",
+    )
+
+    save_sync_config(path, options)
+
+    assert load_sync_config(path) == options
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert "refresh_token" not in path.read_text().lower()
+
+
+def test_sync_config_rejects_unknown_fields(tmp_path):
+    path = tmp_path / "ima_phone_sync.env"
+    path.write_text("IMA_SYNC_HOST=example.test\nIMA_REFRESH_TOKEN=secret\n")
+
+    with pytest.raises(ImaPhoneSyncError, match="配置项无效"):
+        load_sync_config(path)
+
+
+def test_resolve_sync_options_prefers_cli_values(tmp_path):
+    path = tmp_path / "ima_phone_sync.env"
+    save_sync_config(
+        path,
+        SyncOptions("phone", "old.example", "root", "old-key", "/old.db", "uid"),
+    )
+
+    resolved = resolve_sync_options(
+        config_path=path,
+        cli_values={"host": "new.example", "ssh_key": "/new-key"},
+    )
+
+    assert resolved.host == "new.example"
+    assert resolved.ssh_key == "/new-key"
+    assert resolved.device == "phone"
+    assert resolved.remote_db == "/old.db"
+
+
+def test_one_click_launcher_uses_repo_root_and_virtualenv():
+    launcher = (ROOT / "scripts" / "ima_phone_sync.command").read_text()
+
+    assert "dirname" in launcher
+    assert ".venv/bin/python" in launcher
+    assert "--one-click" in launcher
+    assert "source " not in launcher
 
 
 def test_ssh_update_rejects_remote_path_injection(tmp_path):
