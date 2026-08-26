@@ -196,6 +196,7 @@ def test_config_falls_back_when_registry_has_only_non_string_source():
     )
 
 
+def test_configured_uses_enabled_groups_even_when_legacy_scalars_are_missing():
     cfg = ImaDocumentConfig(
         uid="uid",
         refresh_token="refresh",
