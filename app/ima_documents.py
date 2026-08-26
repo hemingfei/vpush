@@ -954,19 +954,28 @@ class ImaDocumentStore:
         self._remember_groups(groups)
         self.validate_media_id(media_id)
         state = self.load_state()
+        requested_group = str(group_id or "").strip()
+        allowed_groups = (
+            {group.id for group in groups if group.enabled}
+            if groups is not None
+            else None
+        )
+        matches: list[dict[str, Any]] = []
         for record in self.load_manifest(groups):
             if str(record.get("media_id") or "") != media_id:
                 continue
             state_item = self._state_item(state, record)
             actual_group_id = str(record.get("group_id") or state_item.get("group_id") or self._legacy_group_id or IMA_LEGACY_GROUP_ID)
-            if group_id and actual_group_id != group_id:
+            if allowed_groups is not None and actual_group_id not in allowed_groups:
                 continue
-            if not group_id and not self._is_legacy_group(actual_group_id):
+            if requested_group and actual_group_id != requested_group:
+                continue
+            if not requested_group and allowed_groups is None and not self._is_legacy_group(actual_group_id):
                 continue
             pdf = self._state_path(state_item.get("pdf"))
             txt = self._state_path(state_item.get("txt"))
             if not pdf or not txt or not pdf.is_file() or not txt.is_file():
-                return None
+                continue
             result = {
                 "media_id": media_id,
                 "name": str(record.get("name") or media_id),
@@ -977,14 +986,17 @@ class ImaDocumentStore:
                 "chars": int(state_item.get("chars") or 0),
                 "downloaded_at": str(state_item.get("downloaded_at") or ""),
             }
-            metadata_id = str(group_id or record.get("group_id") or state_item.get("group_id") or "")
+            metadata_id = str(requested_group or record.get("group_id") or state_item.get("group_id") or "")
             metadata_name = str(group_name or record.get("group_name") or state_item.get("group_name") or "")
             if metadata_id:
                 result["group_id"] = metadata_id
             if metadata_name:
                 result["group_name"] = metadata_name
-            return result
-        return None
+            if requested_group:
+                return result
+            matches.append(result)
+        return matches[0] if len(matches) == 1 else None
+
 
 
 def convert_pdf(pdf: Path, txt: Path) -> int:

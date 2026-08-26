@@ -975,6 +975,7 @@ def test_group_aware_document_api_returns_summary_and_filters_items(tmp_path, mo
     assert detail.json()["group_name"] == "投行研报"
     assert "pdf" not in detail.json()
     assert "txt" not in detail.json()
+    assert client.get("/api/ima-documents/disabled-doc", headers=headers).status_code == 404
     assert client.get("/api/ima-documents?group=unknown", headers=headers).status_code == 400
     assert client.get("/api/ima-documents?group=disabled", headers=headers).status_code == 400
     assert client.get("/api/ima-documents").status_code == 401
@@ -984,6 +985,39 @@ def test_group_aware_document_api_returns_summary_and_filters_items(tmp_path, mo
     assert {item["group_id"] for item in all_groups.json()["items"]} == {"banking"}
     assert client.get("/api/ima-documents?q=银行", headers=headers).json()["items"][0]["media_id"] == "banking-doc"
     assert client.get("/api/ima-documents?day=not-found", headers=headers).json()["items"] == []
+
+
+def test_document_api_rejects_ambiguous_media_id_without_group(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "db.sqlite"))
+    headers = _headers(client, "ima_ambiguous_reader", "IMAAMB01")
+    db = client.app.state.db
+    db.set_setting(IMA_PURE_GROUPS_KEY, json.dumps([
+        {"id": "group-a", "name": "一组资料", "knowledge_base_id": "kb-a", "root_folder_id": "root-a", "enabled": True},
+        {"id": "group-b", "name": "二组资料", "knowledge_base_id": "kb-b", "root_folder_id": "root-b", "enabled": True},
+        {"id": "disabled", "name": "停用资料", "knowledge_base_id": "kb-d", "root_folder_id": "root-d", "enabled": False},
+    ], ensure_ascii=False))
+    store = client.app.state.ima_documents.store
+    records = [
+        {"media_id": "shared-doc", "name": "一组.pdf", "day": "0825", "group_id": "group-a"},
+        {"media_id": "shared-doc", "name": "二组.pdf", "day": "0825", "group_id": "group-b"},
+        {"media_id": "disabled-doc", "name": "停用.pdf", "day": "0825", "group_id": "disabled"},
+    ]
+    state = {}
+    for record in records:
+        pdf, txt = store.pdf_path(record), store.txt_path(record)
+        pdf.parent.mkdir(parents=True, exist_ok=True)
+        pdf.write_bytes(b"%PDF-1.7")
+        txt.write_text(record["group_id"], encoding="utf-8")
+        state[store.state_key(record)] = {"group_id": record["group_id"], "pdf": str(pdf.relative_to(store.root)), "txt": str(txt.relative_to(store.root))}
+    store.save_manifest(records)
+    store.save_state(state)
+
+    assert client.get("/api/ima-documents/shared-doc", headers=headers).status_code == 404
+    assert client.get("/api/ima-documents/shared-doc?group=group-a", headers=headers).json()["group_id"] == "group-a"
+    assert client.get("/api/ima-documents/shared-doc?group=group-b", headers=headers).json()["group_id"] == "group-b"
+    assert client.get("/api/ima-documents/disabled-doc", headers=headers).status_code == 404
+    assert client.get("/api/ima-documents/disabled-doc?group=disabled", headers=headers).status_code == 404
 
 
 def test_document_store_namespaces_same_media_id_by_group(tmp_path):
