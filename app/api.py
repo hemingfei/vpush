@@ -76,13 +76,13 @@ from .fetchers.zsxq import (
     zsxq_cache_stats,
 )
 from .ima_documents import (
+    IMA_PURE_GROUPS_KEY,
     IMA_PURE_INTERVAL_KEY,
     IMA_PURE_INTERVAL_MAX,
     IMA_PURE_INTERVAL_MIN,
     IMA_PURE_KB_ID_KEY,
     IMA_PURE_REFRESH_TOKEN_KEY,
     IMA_PURE_ROOT_FOLDER_KEY,
-    IMA_PURE_GROUPS_KEY,
     IMA_PURE_UID_KEY,
     ImaDocumentService,
     ImaGroupConfig,
