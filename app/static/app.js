@@ -4455,6 +4455,21 @@ async function loadAdminStats() {
           </div>
         </div>
       </section>
+      <section class="section-panel">
+        <header class="section-head"><div><h2 class="section-title">IMA 文档采集</h2>
+        <p class="section-meta">默认每小时检查一次，只下载新增 PDF；Refresh Token 留空表示保持已保存值。</p></div></header>
+        <div class="cfg-grid ima-collector-grid">
+          <label class="cfg-field"><span>IMA UID</span><input id="ima-pure-uid" class="form-control" value="${escapeHtml(pure.uid || "001aa361168019ef")}" maxlength="64"></label>
+          <label class="cfg-field"><span>知识库 ID</span><input id="ima-pure-kb" class="form-control" value="${escapeHtml(pure.knowledge_base_id || "7464369361259867")}" maxlength="64"></label>
+          <label class="cfg-field"><span>根文件夹 ID</span><input id="ima-pure-root" class="form-control" value="${escapeHtml(pure.root_folder_id || "folder_7489327974078249")}" maxlength="128"></label>
+          <label class="cfg-field"><span>检查间隔<span class="cfg-unit">分钟</span></span><input id="ima-pure-interval" type="number" class="form-control" min="30" max="10080" value="${Math.round(Number(pure.interval_seconds || 3600) / 60)}"></label>
+          <label class="cfg-field cfg-field--wide"><span>Refresh Token</span><input id="ima-pure-token" class="form-control" type="password" autocomplete="off" placeholder="${pure.refresh_token?.set ? "已保存，留空保持不变" : "重新登录 IMA 后粘贴"}"></label>
+        </div>
+        <div class="ima-collector-foot">
+          <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
+          <div class="toolbar"><button type="button" class="btn-normal" onclick="saveImaCollector()">保存采集配置</button><button type="button" class="btn-ghost" onclick="triggerImaCollector()">${REFRESH_ICON}<span>立即同步</span></button></div>
+        </div>
+      </section>
     </div>
     <div id="st-cookies" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-cookies" style="display:none">
       <div id="cookie-repair-inline"></div>
@@ -4506,21 +4521,6 @@ async function loadAdminStats() {
           <button type="button" class="btn-normal" onclick="saveImaCredentials()">保存 ima 凭证</button>
           <button type="button" class="btn-ghost" onclick="pasteCookieField('ima-cookie')">从剪贴板填入 Cookie</button>
           ${ima.cookie?.set && !ima.cookie.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('ima','ima')" aria-label="清除 ima Cookie">清除 Cookie</button>` : ""}
-        </div>
-      </section>
-      <section class="section-panel">
-        <header class="section-head"><div><h2 class="section-title">IMA 文档采集</h2>
-        <p class="section-meta">默认每小时检查一次，只下载新增 PDF；Refresh Token 留空表示保持已保存值。</p></div></header>
-        <div class="cfg-grid ima-collector-grid">
-          <label class="cfg-field"><span>IMA UID</span><input id="ima-pure-uid" class="form-control" value="${escapeHtml(pure.uid || "001aa361168019ef")}" maxlength="64"></label>
-          <label class="cfg-field"><span>知识库 ID</span><input id="ima-pure-kb" class="form-control" value="${escapeHtml(pure.knowledge_base_id || "7464369361259867")}" maxlength="64"></label>
-          <label class="cfg-field"><span>根文件夹 ID</span><input id="ima-pure-root" class="form-control" value="${escapeHtml(pure.root_folder_id || "folder_7489327974078249")}" maxlength="128"></label>
-          <label class="cfg-field"><span>检查间隔<span class="cfg-unit">分钟</span></span><input id="ima-pure-interval" type="number" class="form-control" min="30" max="10080" value="${Math.round(Number(pure.interval_seconds || 3600) / 60)}"></label>
-          <label class="cfg-field cfg-field--wide"><span>Refresh Token</span><input id="ima-pure-token" class="form-control" type="password" autocomplete="off" placeholder="${pure.refresh_token?.set ? "已保存，留空保持不变" : "重新登录 IMA 后粘贴"}"></label>
-        </div>
-        <div class="ima-collector-foot">
-          <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
-          <div class="toolbar"><button type="button" class="btn-normal" onclick="saveImaCollector()">保存采集配置</button><button type="button" class="btn-ghost" onclick="triggerImaCollector()">${REFRESH_ICON}<span>立即同步</span></button></div>
         </div>
       </section>
       <section class="section-panel">

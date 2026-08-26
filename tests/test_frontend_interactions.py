@@ -950,6 +950,18 @@ def test_dark_danger_token_meets_cookie_clear_contrast():
     assert "--color-danger-strong: #fca5a5" in dark.group(0)
 
 
+def test_ima_document_collector_lives_in_fetch_settings():
+    """IMA 文档采集属于抓取设置，不应混入 Cookie 管理。"""
+    src = APP_JS.read_text()
+    config = src.index('<div id="st-config"')
+    cookies = src.index('<div id="st-cookies"')
+    ima = src.index("IMA 文档采集")
+
+    assert config < ima < cookies
+    assert "saveImaCollector()" in src[config:cookies]
+    assert '<h2 class="section-title">IMA 文档采集</h2>' not in src[cookies:]
+
+
 def test_admin_stats_has_zsxq_cache_settings():
     """抓取设置里有知识星球组；保存带上翻页/间隔/预缓存；清理走独立接口不整页重建。"""
     stats = _fn_body("loadAdminStats")
@@ -1491,7 +1503,7 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     assert 'href="/style.css?v=184"' in html
-    assert 'src="/app.js?v=256"' in html
+    assert 'src="/app.js?v=257"' in html
 
 
 def test_ima_documents_follow_latest_dynamic_navigation():
