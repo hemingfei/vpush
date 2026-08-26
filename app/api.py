@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     File,
     Header,
@@ -2039,7 +2040,11 @@ def create_api_router(
         return _cube_nav_response(snap)
 
     @router.post("/kol-requests")
-    def create_kol_request(body: KolRequestIn, user: dict = Depends(get_current_user)):
+    def create_kol_request(
+        body: KolRequestIn,
+        background_tasks: BackgroundTasks,
+        user: dict = Depends(get_current_user),
+    ):
         """用户申请添加大V，管理员审批后入库。"""
         if body.platform not in ALLOWED_PLATFORMS:
             raise HTTPException(status_code=400, detail=f"不支持的平台: {body.platform}")
@@ -2054,11 +2059,17 @@ def create_api_router(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
-        # 通知管理员有新申请（通知失败不影响申请提交）
-        try:
-            _notify_admins_new_request(body.platform, body.name or external_id, user, request_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("大V申请通知管理员失败 err=%s", exc)
+        # 通知管理员有新申请：放后台执行（多管理员×多渠道串行可达数十秒，
+        # 不能让申请人干等）；响应发出后仍在线程池里跑，不影响用户侧延迟
+        def _notify_bg():
+            try:
+                _notify_admins_new_request(
+                    body.platform, body.name or external_id, user, request_id
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("大V申请通知管理员失败 err=%s", exc)
+
+        background_tasks.add_task(_notify_bg)
         return {"ok": True}
 
     @router.get("/my/kol-requests")

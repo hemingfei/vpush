@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -249,6 +250,8 @@ def _ext_for(name: str, content_type: str) -> str:
 
 
 MAX_ZSXQ_FILE_BYTES = 80 * 1024 * 1024
+# 附件下载并发上限：80MB 流式下载很占线程池与内存，防止大量并发请求把它当放大器
+_ZSXQ_DL_SLOTS = threading.Semaphore(4)
 
 
 def cache_zsxq_file(db, file_id: str, name: str, url: str, client=None) -> str:
@@ -270,28 +273,29 @@ def cache_zsxq_file(db, file_id: str, name: str, url: str, client=None) -> str:
     if not url:
         return ""
     owns = client is None
-    client = client or httpx.Client(timeout=90, follow_redirects=True, headers=headers_for(url))
+    client = client or httpx.Client(timeout=30, follow_redirects=True, headers=headers_for(url))
     tmp = None
     try:
-        with client.stream("GET", url, follow_redirects=True) as resp:
-            if resp.status_code != 200:
-                return ""
-            ext = _ext_for(name, resp.headers.get("content-type", ""))
-            target = dest / f"{file_id}.{ext}"
-            tmp = dest / f"{file_id}.{ext}.part"
-            written = 0
-            with tmp.open("wb") as out:
-                for chunk in resp.iter_bytes(65536):
-                    if not chunk:
-                        continue
-                    written += len(chunk)
-                    if written > MAX_ZSXQ_FILE_BYTES:
-                        return ""
-                    out.write(chunk)
-            if written == 0:
-                return ""
-            tmp.replace(target)
-            return f"/zsxq-files/{target.name}"
+        with _ZSXQ_DL_SLOTS:
+            with client.stream("GET", url, follow_redirects=True) as resp:
+                if resp.status_code != 200:
+                    return ""
+                ext = _ext_for(name, resp.headers.get("content-type", ""))
+                target = dest / f"{file_id}.{ext}"
+                tmp = dest / f"{file_id}.{ext}.part"
+                written = 0
+                with tmp.open("wb") as out:
+                    for chunk in resp.iter_bytes(65536):
+                        if not chunk:
+                            continue
+                        written += len(chunk)
+                        if written > MAX_ZSXQ_FILE_BYTES:
+                            return ""
+                        out.write(chunk)
+                if written == 0:
+                    return ""
+                tmp.replace(target)
+                return f"/zsxq-files/{target.name}"
     except Exception:
         return ""
     finally:
