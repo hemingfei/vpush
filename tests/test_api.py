@@ -5018,6 +5018,27 @@ def test_wscn_live_returns_normalized_items(monkeypatch):
     assert resp3.json()["items"] == []
 
 
+def test_wscn_live_rejects_freeform_cursor():
+    """cursor 进缓存键与上游查询串，必须限定为短数字串（非法请求到不了取数层）。"""
+    from app.api import _wscn_evict_locked, _WSCN_CACHE, _WSCN_LOCK
+    import time as _time
+
+    client = make_client("wscn_cursor.db")
+    headers = auth_headers(client, "wscncur", "secret123")
+    for bad in ("abc", "1;drop", "x" * 17):
+        resp = client.get(f"/api/live/wscn?cursor={bad}", headers=headers)
+        assert resp.status_code == 400, bad
+
+    # 淘汰：超上限按写入时间丢最旧（时间戳越小越旧）
+    with _WSCN_LOCK:
+        _WSCN_CACHE.clear()
+        for i in range(70):
+            _WSCN_CACHE[f"k{i}"] = (_time.time() - i, {})
+        _wscn_evict_locked()
+        assert len(_WSCN_CACHE) == 64
+        assert "k0" in _WSCN_CACHE and "k69" not in _WSCN_CACHE
+
+
 def test_wscn_fetch_reuses_cache_and_http_client(monkeypatch):
     from app import api as api_mod
 

@@ -765,10 +765,20 @@ def bounded_limit(value: int, default: int = 100) -> int:
 _WSCN_LIVES_URL = "https://api-one-wscn.awtmt.com/apiv1/content/lives"
 _WSCN_CACHE: dict[str, tuple[float, dict]] = {}
 _WSCN_CACHE_TTL = 15
+_WSCN_CACHE_MAX = 64
 _WSCN_LOCK = threading.Lock()
 _WSCN_REFRESHING: set[str] = set()
 _WSCN_CLIENT: httpx.Client | None = None
 _WSCN_HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+
+
+def _wscn_evict_locked() -> None:
+    """缓存条目超上限时按写入时间淘汰最旧（cursor 键空间经路由校验已有界）。"""
+    if len(_WSCN_CACHE) <= _WSCN_CACHE_MAX:
+        return
+    overflow = len(_WSCN_CACHE) - _WSCN_CACHE_MAX
+    for key, _ in sorted(_WSCN_CACHE.items(), key=lambda kv: kv[1][0])[:overflow]:
+        _WSCN_CACHE.pop(key, None)
 
 
 def warmup_wscn_live() -> None:
@@ -836,6 +846,7 @@ def _wscn_refresh(cursor: str, limit: int, cache_key: str) -> None:
         result = _wscn_load(cursor, limit)
         with _WSCN_LOCK:
             _WSCN_CACHE[cache_key] = (time.time(), result)
+            _wscn_evict_locked()
     except Exception:
         logger.warning("wscn live refresh failed", exc_info=True)
     finally:
@@ -866,31 +877,49 @@ def _fetch_wscn_lives(*, cursor: str = "", limit: int = 30) -> dict:
     cursor = (cursor or "").strip()
     cache_key = f"{cursor}:{limit}"
     now = time.time()
-    start_refresh = False
     with _WSCN_LOCK:
         cached = _WSCN_CACHE.get(cache_key)
         if cached and now - cached[0] <= _WSCN_CACHE_TTL:
             return cached[1]
-        if cached:
+    if cached is not None:
+        # 过期值：后台刷新（_wscn_refresh 在锁外加载），请求立即拿旧值
+        with _WSCN_LOCK:
             if cache_key not in _WSCN_REFRESHING:
                 _WSCN_REFRESHING.add(cache_key)
                 start_refresh = True
-            stale = cached[1]
-        else:
-            stale = None
-    if stale is not None:
+            else:
+                start_refresh = False
         if start_refresh:
             threading.Thread(
                 target=_wscn_refresh, args=(cursor, limit, cache_key), daemon=True
             ).start()
-        return stale
+        return cached[1]
+    # 冷 key：先占位再在锁外加载——外网请求持全局锁会把所有 wscn 请求
+    # 串行化在一个线程上；并发同 key 的后来者短暂等待首个线程的结果
     with _WSCN_LOCK:
         cached = _WSCN_CACHE.get(cache_key)
         if cached:
             return cached[1]
+        busy = cache_key in _WSCN_REFRESHING
+        if not busy:
+            _WSCN_REFRESHING.add(cache_key)
+    if busy:
+        for _ in range(90):
+            time.sleep(0.1)
+            with _WSCN_LOCK:
+                filled = _WSCN_CACHE.get(cache_key)
+                if filled:
+                    return filled[1]
+        raise RuntimeError("快讯源刷新超时")
+    try:
         result = _wscn_load(cursor, limit)
-        _WSCN_CACHE[cache_key] = (time.time(), result)
+        with _WSCN_LOCK:
+            _WSCN_CACHE[cache_key] = (time.time(), result)
+            _wscn_evict_locked()
         return result
+    finally:
+        with _WSCN_LOCK:
+            _WSCN_REFRESHING.discard(cache_key)
 
 
 def _prune_window_dict(
@@ -1943,6 +1972,9 @@ def create_api_router(
     ):
         """华尔街见闻 7x24 全球直播快讯（代理 + 短缓存，不入库）。"""
         del user  # 仅要求登录，不做 per-user 状态
+        # cursor 进缓存键与上游查询串：不校验的话可被任意字符串撑爆缓存
+        if cursor and (not cursor.isdigit() or len(cursor) > 16):
+            raise HTTPException(status_code=400, detail="无效的 cursor")
         try:
             data = _fetch_wscn_lives(cursor=cursor, limit=bounded_limit(limit, default=30))
         except httpx.HTTPError as exc:
