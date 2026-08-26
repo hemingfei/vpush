@@ -856,6 +856,18 @@ class ImaDocumentStore:
         txt = self._state_path(item.get("txt"))
         return bool(pdf and txt and pdf.is_file() and txt.is_file())
 
+    def group_summary(self, groups: tuple[ImaGroupConfig, ...]) -> list[dict[str, Any]]:
+        counts = {group.id: 0 for group in groups if group.enabled}
+        for item in self.documents(groups=groups):
+            group_id = str(item.get("group_id") or "")
+            if group_id in counts:
+                counts[group_id] += 1
+        return [
+            {"id": group.id, "name": group.name, "count": counts[group.id]}
+            for group in groups
+            if group.enabled
+        ]
+
     def documents(
         self,
         query: str = "",
@@ -868,6 +880,8 @@ class ImaDocumentStore:
         state = self.load_state()
         query = str(query or "").strip().casefold()
         day = str(day or "").strip()
+        requested_group = str(group_id or "").strip()
+        allowed_groups = {group.id for group in groups} if groups is not None else None
         output: list[dict[str, Any]] = []
         for record in self.load_manifest(groups):
             media_id = str(record.get("media_id") or "")
@@ -884,6 +898,11 @@ class ImaDocumentStore:
                 continue
             if query and query not in f"{record.get('name', '')} {record.get('day', '')}".casefold():
                 continue
+            actual_group_id = str(record.get("group_id") or state_item.get("group_id") or "")
+            if allowed_groups is not None and actual_group_id not in allowed_groups:
+                continue
+            if requested_group and actual_group_id != requested_group:
+                continue
             item = {
                 "media_id": media_id,
                 "name": str(record.get("name") or media_id),
@@ -892,7 +911,7 @@ class ImaDocumentStore:
                 "chars": int(state_item.get("chars") or 0),
                 "downloaded_at": str(state_item.get("downloaded_at") or ""),
             }
-            metadata_id = str(group_id or record.get("group_id") or state_item.get("group_id") or "")
+            metadata_id = actual_group_id
             metadata_name = str(group_name or record.get("group_name") or state_item.get("group_name") or "")
             if metadata_id:
                 item["group_id"] = metadata_id

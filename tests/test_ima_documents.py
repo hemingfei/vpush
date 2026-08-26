@@ -11,6 +11,7 @@ from app.ima_documents import (
     IMA_LEGACY_GROUP_NAME,
     IMA_PURE_GROUPS_KEY,
     IMA_PURE_LAST_RESULT_KEY,
+    IMA_PURE_REFRESH_TOKEN_KEY,
     ImaDocumentConfig,
     ImaDocumentService,
     ImaDocumentStore,
@@ -907,6 +908,167 @@ def test_document_api_auth_file_access_and_admin_config(tmp_path, monkeypatch):
     assert status["config"]["refresh_token"]["set"] is True
     assert "secret-token" not in saved.text
     assert "secret-token" not in str(status)
+
+
+
+
+def test_group_aware_document_api_returns_summary_and_filters_items(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "db.sqlite"))
+    headers = _headers(client, "group_reader", "GROUP001")
+    db = client.app.state.db
+    db.set_setting(
+        IMA_PURE_GROUPS_KEY,
+        json.dumps(
+            [
+                {
+                    "id": "banking",
+                    "name": "投行研报",
+                    "knowledge_base_id": "kb-banking",
+                    "root_folder_id": "root-banking",
+                    "enabled": True,
+                    "source": "manual",
+                },
+                {
+                    "id": "empty",
+                    "name": "空群组",
+                    "knowledge_base_id": "kb-empty",
+                    "root_folder_id": "root-empty",
+                    "enabled": True,
+                    "source": "manual",
+                },
+            ],
+            ensure_ascii=False,
+        ),
+    )
+    store = client.app.state.ima_documents.store
+    records = [
+        {"media_id": "banking-doc", "name": "银行报告.pdf", "day": "2026-08-25", "group_id": "banking", "group_name": "投行研报"},
+        {"media_id": "disabled-doc", "name": "停用报告.pdf", "day": "2026-08-25", "group_id": "disabled", "group_name": "停用资料"},
+    ]
+    state = {}
+    for record in records:
+        pdf = store.pdf_path(record)
+        txt = store.txt_path(record)
+        pdf.parent.mkdir(parents=True, exist_ok=True)
+        pdf.write_bytes(b"%PDF-1.7")
+        txt.write_text("text", encoding="utf-8")
+        state[record["media_id"]] = {
+            "pdf": str(pdf.relative_to(store.root)),
+            "txt": str(txt.relative_to(store.root)),
+        }
+    store.save_manifest(records)
+    store.save_state(state)
+
+    response = client.get("/api/ima-documents?group=banking", headers=headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["groups"] == [
+        {"id": "banking", "name": "投行研报", "count": 1},
+        {"id": "empty", "name": "空群组", "count": 0},
+    ]
+    assert [item["group_id"] for item in payload["items"]] == ["banking"]
+    assert payload["items"][0]["group_name"] == "投行研报"
+    detail = client.get("/api/ima-documents/banking-doc", headers=headers)
+    assert detail.status_code == 200
+    assert detail.json()["group_id"] == "banking"
+    assert detail.json()["group_name"] == "投行研报"
+    assert "pdf" not in detail.json()
+    assert "txt" not in detail.json()
+    assert client.get("/api/ima-documents?group=unknown", headers=headers).status_code == 400
+    assert client.get("/api/ima-documents?group=disabled", headers=headers).status_code == 400
+    assert client.get("/api/ima-documents").status_code == 401
+
+    all_groups = client.get("/api/ima-documents", headers=headers)
+    assert all_groups.status_code == 200
+    assert {item["group_id"] for item in all_groups.json()["items"]} == {"banking"}
+    assert client.get("/api/ima-documents?q=银行", headers=headers).json()["items"][0]["media_id"] == "banking-doc"
+    assert client.get("/api/ima-documents?day=not-found", headers=headers).json()["items"] == []
+
+
+def test_admin_groups_put_validates_persists_and_keeps_secret(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "db.sqlite"))
+    headers = _headers(client, "group_admin", "GROUP002", admin=True)
+    db = client.app.state.db
+    db.set_setting(IMA_PURE_REFRESH_TOKEN_KEY, "refresh-secret")
+    db.set_setting(
+        IMA_PURE_GROUPS_KEY,
+        json.dumps(
+            [{
+                "id": "banking",
+                "name": "旧名称",
+                "knowledge_base_id": "old-kb",
+                "root_folder_id": "old-root",
+                "enabled": True,
+                "source": "discovered",
+            }],
+            ensure_ascii=False,
+        ),
+    )
+
+    response = client.put(
+        "/api/admin/ima-collector",
+        headers=headers,
+        json={
+            "groups": [
+                {
+                    "id": "banking",
+                    "name": "投行研报",
+                    "knowledge_base_id": "new-kb",
+                    "root_folder_id": "new-root",
+                    "enabled": False,
+                },
+                {
+                    "name": "手工资料",
+                    "knowledge_base_id": "manual-kb",
+                    "root_folder_id": "manual-root",
+                },
+            ]
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert "refresh-secret" not in response.text
+    saved = json.loads(db.get_setting(IMA_PURE_GROUPS_KEY))
+    assert saved[0]["source"] == "discovered"
+    assert saved[0]["name"] == "投行研报"
+    assert saved[0]["enabled"] is False
+    assert saved[1]["id"].startswith("manual-")
+    assert db.get_setting(IMA_PURE_REFRESH_TOKEN_KEY) == "refresh-secret"
+    audit = db.list_admin_logs(10)[0]["detail"]
+    assert "banking" in audit and "groups_count=2" in audit
+    assert "refresh-secret" not in audit
+    assert "new-root" not in audit
+
+    scalar = client.put(
+        "/api/admin/ima-collector",
+        headers=headers,
+        json={"knowledge_base_id": "legacy-kb", "root_folder_id": "legacy-root"},
+    )
+    assert scalar.status_code == 200
+    assert json.loads(db.get_setting(IMA_PURE_GROUPS_KEY)) == saved
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"groups": [{"name": "", "knowledge_base_id": "kb", "root_folder_id": "root"}]},
+        {"groups": [{"name": "x" * 101, "knowledge_base_id": "kb", "root_folder_id": "root"}]},
+        {"groups": [{"name": "有效", "knowledge_base_id": "bad.kb", "root_folder_id": "root"}]},
+        {"groups": [{"name": "有效", "knowledge_base_id": "kb", "root_folder_id": "bad/root"}]},
+        {"groups": [{"id": "bad/id", "name": "有效", "knowledge_base_id": "kb", "root_folder_id": "root"}]},
+        {"groups": [
+            {"id": "same", "name": "一", "knowledge_base_id": "kb1", "root_folder_id": "root1"},
+            {"id": "same", "name": "二", "knowledge_base_id": "kb2", "root_folder_id": "root2"},
+        ]},
+    ],
+)
+def test_admin_groups_put_rejects_invalid_values(tmp_path, monkeypatch, payload):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "db.sqlite"))
+    headers = _headers(client, "invalid_group_admin", "GROUP003", admin=True)
+    response = client.put("/api/admin/ima-collector", headers=headers, json=payload)
+    assert response.status_code == 400, response.text
 
 
 def test_manifest_excludes_non_pdf_media():
