@@ -17,6 +17,7 @@ from datetime import datetime
 from .backup import run_scheduled
 from .channels import channel_bound, channel_enabled
 from .db import ALLOWED_PLATFORMS, DB
+from .logging_setup import redact_secrets
 from .fetchers.base import (
     PLATFORM_LABELS,
     Fetcher,
@@ -521,6 +522,8 @@ def _alerts_enabled() -> bool:
 
 
 def _send_admin_text(notifiers: list[Notifier], message: str, what: str) -> None:
+    # 告警正文常含上游异常原文（bot token/webhook key 等 URL 凭据），发出前脱敏
+    message = redact_secrets(message)
     for notifier in notifiers:
         try:
             notifier.send_text(message)

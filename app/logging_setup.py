@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import logging.handlers
 import os
+import re
 import threading
 from collections import deque
 from pathlib import Path
@@ -11,6 +12,36 @@ from pathlib import Path
 LOG_FORMAT = "%(asctime)s.%(msecs)03d %(levelname)s %(name)s [%(threadName)s] %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 RING_SIZE = 2000
+
+MAX_REDACTED_LEN = 2000
+
+# 错误文本里的常见凭据形态：异常字符串会原样进 push_logs/error_logs，
+# 而 httpx 异常的 __str__ 含完整请求 URL（自建 bot token / webhook key / Bark key）
+_REDACT_PATTERNS = [
+    (re.compile(r"(bot\d+:)[A-Za-z0-9_-]{20,}"), r"\1<redacted>"),
+    (
+        re.compile(
+            r"\b((?:key|token|secret|password|access_token|ticket)=)[^&\s'\"<>]+",
+            re.IGNORECASE,
+        ),
+        r"\1<redacted>",
+    ),
+    (re.compile(r"(api\.day\.app/)[A-Za-z0-9]{8,}", re.IGNORECASE), r"\1<redacted>"),
+    (re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]{16,}", re.IGNORECASE), r"\1<redacted>"),
+    # 微博登录 META 响应：su 是 base64 用户名，其余为 SSO 会话 cookie 名
+    (re.compile(r"(\bsu=)[^&\s'\"<>]+", re.IGNORECASE), r"\1<redacted>"),
+    (re.compile(r"(\b(?:SUB|SUE|SUP|SCF|SSOLoginState)=)[^;\s'\"<>]+"), r"\1<redacted>"),
+]
+
+
+def redact_secrets(text) -> str:
+    """抹掉文本中的常见明文凭据并截断；用于任何入库/持久化的错误描述。"""
+    if not text:
+        return ""
+    result = str(text)
+    for pattern, repl in _REDACT_PATTERNS:
+        result = pattern.sub(repl, result)
+    return result[:MAX_REDACTED_LEN]
 
 _ring: deque[str] = deque(maxlen=RING_SIZE)
 _ring_lock = threading.Lock()

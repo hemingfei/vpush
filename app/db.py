@@ -10,6 +10,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .logging_setup import redact_secrets
+
 _UNSET = object()
 
 
@@ -2684,7 +2686,7 @@ class DB:
     def add_push_log(self, post_id: int, channel: str, status: str, error: str = "", user_id: int | None = None) -> int:
         return self._execute(
             "INSERT INTO push_logs (post_id, channel, status, error, user_id) VALUES (?, ?, ?, ?, ?)",
-            (post_id, channel, status, error, user_id),
+            (post_id, channel, status, redact_secrets(error), user_id),
         )
 
     # ---- 持久化错误日志（WARNING+，跨重启可查） ----
@@ -2693,7 +2695,7 @@ class DB:
     def record_error_log(self, level: str, logger: str, message: str) -> None:
         rowid = self._execute(
             "INSERT INTO error_logs (level, logger, message) VALUES (?, ?, ?)",
-            (level.upper(), logger, message),
+            (level.upper(), logger, redact_secrets(message)),
         )
         if rowid and rowid % 50 == 0:
             self._execute(

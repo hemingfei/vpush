@@ -13,6 +13,7 @@ import httpx
 import rsa
 
 from ..avatar_cache import cache_avatar
+from ..logging_setup import redact_secrets
 from .base import Fetcher, Post, ThreadLocalClient, format_published_at, strip_html
 
 logger = logging.getLogger(__name__)
@@ -287,7 +288,11 @@ class WeiboFetcher(Fetcher):
         resp.raise_for_status()
         text = resp.text
         if "retcode=0" not in text:
-            raise RuntimeError(f"微博登录失败（可能需要验证码或凭据错误）: {text[:200]}")
+            # META 响应含 su（base64 用户名）等账号线索，脱敏后再进异常链
+            # （异常文本会进告警、错误日志与 source_err 设置）
+            raise RuntimeError(
+                f"微博登录失败（可能需要验证码或凭据错误）: {redact_secrets(text[:200])}"
+            )
         # returntype=META 的响应里带 meta refresh 跳转（ticket 交换），
         # httpx 不会自动跟随 meta refresh，需手动 GET 才能拿到 SUB 等会话 cookie。
         if not any(c.name == "SUB" for c in self.client.cookies.jar):
