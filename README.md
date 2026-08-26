@@ -110,7 +110,7 @@ cp .env.example .env
 | `IMA_UID` / `IMA_REFRESH_TOKEN` | 可选 | IMA 纯 VPS 文档中心凭证；Refresh Token 只在服务端运行时使用，不要提交到仓库或镜像 |
 | `IMA_KB_ID` / `IMA_ROOT_FOLDER_ID` | 可选 | 纯 VPS 文档中心的知识库与根文件夹，后台已预填目标库值 |
 | `IMA_INTERVAL_SECONDS` | 可选 | 纯 VPS 清单检查间隔，默认 3600，最小 1800；只下载新增文件，不进入推送流 |
-| `IMA_ANDROID_SERIAL` / `IMA_SYNC_HOST` / `IMA_SYNC_SSH_KEY` | 可选 | 本地手机凭据同步工具配置；手机完成 IMA 登录后运行 `scripts/ima_phone_sync.py`，Refresh Token 通过 SSH stdin 传输 |
+| `IMA_ANDROID_SERIAL` / `IMA_SYNC_HOST` / `IMA_SYNC_SSH_KEY` | 可选 | 本地手机凭据同步工具配置；复制 `data/ima_phone_sync.env.example` 后，手机完成 IMA 登录时双击 `scripts/ima_phone_sync.command`，Refresh Token 通过 SSH stdin 传输 |
 | `IMA_EXPECTED_UID` / `IMA_SYNC_REMOTE_DB` | 可选 | 限制同步到指定 IMA UID 和 VPS 数据库路径，默认数据库为 `/opt/vpush/data/dav.db` |
 | `LOG_LEVEL` | 可选 | 日志级别 `INFO`/`DEBUG`（DEBUG 记录每次 API 请求与慢请求告警，便于排查） |
 | `LOG_FILE` | 可选 | 日志文件，默认 `/data/logs/app.log`（随数据卷持久化，滚动 5MB×3，重启不丢） |
@@ -240,7 +240,7 @@ docker compose up -d --build
 - **雪球**：后台「数据源 → Cookie 管理」粘贴 Cookie，保存即时生效；配置 `WEIBO_USERNAME/PASSWORD` 可自动登录续期微博 Cookie，微博也支持网页扫码登录
 - **X**：配置 `TWITTER_COOKIE` 或在「数据源 → Cookie 管理」粘贴后直抓 X 官方接口并把内容翻译成中文；直抓失败会告警并放慢采集，不再走备用内容通道
 - **ima**：知识库条目在后台按平台 `ima` 添加，`external_id` 填知识库 ID（OpenAPI 模式）或 wiki URL 的 `knowledgeBaseId`（Cookie 模式）；Cookie 用 `scripts/ima_qr_login.py` 扫码捕获；OpenAPI 凭证取全文，订阅库全文受 ima 客户端限制时自动降级为摘要（`detail.full_text` 标记是否拿到全文）
-- **IMA 文档中心**：后台「数据源 → Cookie 管理 → IMA 文档采集」会预填 UID、知识库 ID 和根文件夹 ID。管理员在 rooted Android 的 IMA 中完成 Google 登录后，在仓库根目录运行 `python scripts/ima_phone_sync.py --host <VPS 地址> --ssh-key <SSH 私钥> --expected-uid <IMA UID>`；脚本从 `pref_login_response` 读取凭据，用 IMA refresh 接口验证，再通过 SSH stdin 原子更新 VPS，只输出 UID，不需要手工复制 Refresh Token。VPUSH 每小时检查一次，只下载新增 PDF 并生成 TXT；所有登录用户从侧栏「IMA 文档」浏览，PDF 不进入动态推送。
+- **IMA 文档中心**：后台「数据源 → Cookie 管理 → IMA 文档采集」会预填 UID、知识库 ID 和根文件夹 ID。管理员在 rooted Android 的 IMA 中完成 Google 登录后，双击 `scripts/ima_phone_sync.command` 即可同步；首次运行会询问 VPS 地址、SSH 私钥和 IMA UID，配置保存到 `data/ima_phone_sync.env`（`0600`，不含 Refresh Token）。手动排障仍可运行 `python scripts/ima_phone_sync.py`；脚本从 `pref_login_response` 读取凭据，用 IMA refresh 接口验证，再通过 SSH stdin 原子更新 VPS，只输出 UID。VPUSH 每小时检查一次，只下载新增 PDF 并生成 TXT；所有登录用户从侧栏「IMA 文档」浏览，PDF 不进入动态推送。
 - **Cookie sidecar**：`waf-bot` 定期刷新共享 cookie 文件，主服务抓取时读取；容器只读根文件系统、禁止提权。Cookie 失效时到后台更新，详见下方「常见问题」
 - **抓取频率**：后台「数据源」页可实时调整轮询间隔、优先大V间隔、次要大V间隔/封顶/推送周期/**合并推送最低条数**（积压不足此条数不推送、继续攒，够数才发）、合并推送周期等，即时生效
 
