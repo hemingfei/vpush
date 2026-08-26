@@ -468,7 +468,9 @@ class DB:
     def __init__(self, path: str | Path):
         self.path = str(path)
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
+        # RLock：_migrate 等内部路径会在持锁状态下调用 _rows/_execute，
+        # 非重入锁会自死锁
+        self._lock = threading.RLock()
         self._open_unlocked()
         self._migrate()
         self._conn.commit()
@@ -503,8 +505,9 @@ class DB:
             except sqlite3.Error:
                 pass
             self._open_unlocked()
-        self._migrate()
-        with self._lock:
+            # migrate 直接写连接，必须与在线线程共用一把锁：
+            # 否则并行写入会把迁移的隐式事务提前 commit 成半迁移
+            self._migrate()
             self._conn.commit()
 
     def replace_database(self, candidate: str | Path) -> None:
@@ -519,8 +522,7 @@ class DB:
             Path(str(path) + "-wal").unlink(missing_ok=True)
             Path(str(path) + "-shm").unlink(missing_ok=True)
             self._open_unlocked()
-        self._migrate()
-        with self._lock:
+            self._migrate()
             self._conn.commit()
 
     def _migrate(self):
@@ -1416,8 +1418,18 @@ class DB:
             raise ValueError(f"分类已存在: {name}") from None
 
     def delete_category(self, category_id: int) -> None:
-        self._execute("UPDATE kols SET category_id = NULL WHERE category_id = ?", (category_id,))
-        self._execute("DELETE FROM categories WHERE id = ?", (category_id,))
+        # 两步落库必须原子：半提交会让 KOL 挂到已删除的分组上
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                self._conn.execute(
+                    "UPDATE kols SET category_id = NULL WHERE category_id = ?", (category_id,)
+                )
+                self._conn.execute("DELETE FROM categories WHERE id = ?", (category_id,))
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
     # ---- User ----
     def get_user(self, user_id: int) -> dict | None:
@@ -1600,6 +1612,7 @@ class DB:
                         (*params, user_id),
                     )
                 if keywords is not _UNSET:
+                    keywords = list(dict.fromkeys(keywords))
                     self._conn.execute("DELETE FROM user_keywords WHERE user_id = ?", (user_id,))
                     for keyword in keywords:
                         self._conn.execute(
@@ -2105,14 +2118,22 @@ class DB:
         return self.get_users_keywords([user_id]).get(int(user_id), [])
 
     def set_user_keywords(self, user_id: int, keywords: list[str]) -> None:
+        # 先去重保序：user_keywords 有 UNIQUE(user_id, keyword)，重复值会让
+        # 中途 INSERT 失败留下悬空事务
+        keywords = list(dict.fromkeys(keywords))
         with self._lock:
-            self._conn.execute("DELETE FROM user_keywords WHERE user_id = ?", (user_id,))
-            for keyword in keywords:
-                self._conn.execute(
-                    "INSERT INTO user_keywords (user_id, keyword) VALUES (?, ?)",
-                    (user_id, keyword),
-                )
-            self._conn.commit()
+            try:
+                self._conn.execute("BEGIN")
+                self._conn.execute("DELETE FROM user_keywords WHERE user_id = ?", (user_id,))
+                for keyword in keywords:
+                    self._conn.execute(
+                        "INSERT INTO user_keywords (user_id, keyword) VALUES (?, ?)",
+                        (user_id, keyword),
+                    )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
     # ---- 绑定码 ----
     def create_bind_code(self, code: str, user_id: int, expires_at: int) -> None:
@@ -2896,8 +2917,15 @@ class DB:
         )
 
     def delete_proxy_pool(self, pool_id: int) -> None:
-        self._execute("DELETE FROM proxies WHERE pool_id = ?", (pool_id,))
-        self._execute("DELETE FROM proxy_pools WHERE id = ?", (pool_id,))
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                self._conn.execute("DELETE FROM proxies WHERE pool_id = ?", (pool_id,))
+                self._conn.execute("DELETE FROM proxy_pools WHERE id = ?", (pool_id,))
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def upsert_proxy(
         self,
