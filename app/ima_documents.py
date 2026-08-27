@@ -777,6 +777,7 @@ class ImaDocumentStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self.manifest_path = self.root / "manifest.json"
         self.state_path = self.root / "state.json"
+        self._state_lock = threading.Lock()
         self._legacy_group_id = IMA_LEGACY_GROUP_ID
         self._group_metadata: dict[str, tuple[str, str]] = {
             IMA_LEGACY_GROUP_ID: (IMA_LEGACY_GROUP_NAME, IMA_LEGACY_GROUP_ID)
@@ -1104,7 +1105,23 @@ class ImaDocumentStore:
         self.save_manifest(kept + normalized)
 
     def save_state(self, state: dict[str, dict[str, Any]]) -> None:
-        self._save(self.state_path, state)
+        with self._state_lock:
+            disk = self._load(self.state_path, {})
+            if not isinstance(disk, dict):
+                disk = {}
+            outgoing: dict[str, dict[str, Any]] = {}
+            for key, item in state.items():
+                merged = dict(item) if isinstance(item, dict) else {}
+                existing = disk.get(key)
+                if (
+                    isinstance(existing, dict)
+                    and not merged.get("abstract_zh")
+                    and existing.get("abstract_zh")
+                ):
+                    merged["abstract_zh"] = existing["abstract_zh"]
+                    merged["abstract_src_hash"] = existing.get("abstract_src_hash") or ""
+                outgoing[key] = merged
+            self._save(self.state_path, outgoing)
 
     def _state_path(self, relative: Any) -> Path | None:
         if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
@@ -1358,11 +1375,14 @@ class ImaDocumentStore:
             raise ValueError("document not found")
         record = matches[0]
         key = self.state_key(record)
-        item = dict(state.get(key) or {})
-        item["abstract_zh"] = text_zh
-        item["abstract_src_hash"] = abstract_src_hash(str(record.get("abstract") or ""))
-        state[key] = item
-        self.save_state(state)
+        src_hash = abstract_src_hash(str(record.get("abstract") or ""))
+        with self._state_lock:
+            latest = self.load_state()
+            item = dict(latest.get(key) or {})
+            item["abstract_zh"] = text_zh
+            item["abstract_src_hash"] = src_hash
+            latest[key] = item
+            self._save(self.state_path, latest)
 
 
 def convert_pdf(pdf: Path, txt: Path) -> int:

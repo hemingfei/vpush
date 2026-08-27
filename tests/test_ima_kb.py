@@ -641,3 +641,89 @@ def test_document_detail_and_translate_cache(tmp_path, monkeypatch):
     state = store.load_state()[store.state_key(en)]
     assert state["abstract_zh"] == "宁德时代固态时间表"
     assert state["abstract_src_hash"]
+
+
+def test_save_state_preserves_disk_abstract_zh(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima-tr-lock")
+    record = {"media_id": "file_en", "name": "English.pdf", "day": "0826"}
+    key = store.state_key(record)
+    store.save_state(
+        {
+            key: {
+                "pdf": "0826/a.pdf",
+                "abstract_zh": "宁德时代固态时间表",
+                "abstract_src_hash": "abc",
+            }
+        }
+    )
+    store.save_state({key: {"pdf": "0826/a.pdf", "txt": "0826/a.txt", "tags": ["新能源"]}})
+    saved = store.load_state()[key]
+    assert saved["pdf"] == "0826/a.pdf"
+    assert saved["txt"] == "0826/a.txt"
+    assert saved["tags"] == ["新能源"]
+    assert saved["abstract_zh"] == "宁德时代固态时间表"
+    assert saved["abstract_src_hash"] == "abc"
+
+
+def test_write_abstract_zh_merges_without_wiping_fields(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima-tr-merge")
+    record = {
+        "media_id": "file_en",
+        "name": "English.pdf",
+        "day": "0826",
+        "abstract": "CATL solid-state timeline",
+    }
+    key = store.state_key(record)
+    store.save_manifest([record])
+    store.save_state({key: {"pdf": "0826/a.pdf", "tags": ["新能源"]}})
+    store.write_abstract_zh("file_en", text_zh="宁德时代固态时间表")
+    saved = store.load_state()[key]
+    assert saved["pdf"] == "0826/a.pdf"
+    assert saved["tags"] == ["新能源"]
+    assert saved["abstract_zh"] == "宁德时代固态时间表"
+    assert saved["abstract_src_hash"]
+
+
+def test_translate_acl_failures_and_stale_hash(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "kb-tr-acl.sqlite"))
+    admin_headers = _headers(client, "kb_tr_acl_admin", "KBTRACL", admin=True)
+    guest_headers = _headers(client, "kb_tr_guest", "KBTRGST")
+    store = client.app.state.ima_documents.store
+    zh = {"media_id": "file_zh", "name": "中文.pdf", "day": "0826", "abstract": "宁德时代排产上修，产业链需求回暖。"}
+    en = {"media_id": "file_en", "name": "English.pdf", "day": "0826", "abstract": "CATL solid-state timeline"}
+    store.save_manifest([zh, en])
+    store.save_state({store.state_key(zh): {}, store.state_key(en): {}})
+
+    def boom(*args, **kwargs):
+        raise AssertionError("translate_text should not be called")
+
+    monkeypatch.setattr("app.scheduler.translate_text", boom)
+    denied = client.post("/api/ima-documents/file_en/translate", headers=guest_headers)
+    assert denied.status_code == 404
+
+    chinese = client.post("/api/ima-documents/file_zh/translate", headers=admin_headers)
+    assert chinese.status_code == 200
+    assert chinese.json()["abstract_zh"] == "宁德时代排产上修，产业链需求回暖。"
+
+    def fail_translate(*args, **kwargs):
+        raise RuntimeError("x down")
+
+    monkeypatch.setattr("app.scheduler.translate_text", fail_translate)
+    failed = client.post("/api/ima-documents/file_en/translate", headers=admin_headers)
+    assert failed.status_code == 200
+    assert failed.json()["abstract_zh"] == "CATL solid-state timeline"
+    en_state = store.load_state()[store.state_key(en)]
+    assert not en_state.get("abstract_zh")
+
+    store.save_state(
+        {
+            store.state_key(en): {
+                "abstract_zh": "旧译文",
+                "abstract_src_hash": "deadbeef",
+            }
+        }
+    )
+    stale = client.get("/api/ima-documents/file_en", headers=admin_headers).json()
+    assert stale["needs_translation"] is True
+    assert stale["abstract_zh"] == ""
