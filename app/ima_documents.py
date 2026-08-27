@@ -47,6 +47,7 @@ IMA_PURE_INTERVAL_KEY = "ima_pure_interval_seconds"
 IMA_PURE_LAST_STARTED_KEY = "ima_pure_last_started_at"
 IMA_PURE_LAST_FINISHED_KEY = "ima_pure_last_finished_at"
 IMA_PURE_LAST_RESULT_KEY = "ima_pure_last_result"
+IMA_PURE_DISCOVERY_KEY = "ima_pure_discovery"
 IMA_LEGACY_GROUP_ID = "legacy"
 IMA_LEGACY_GROUP_NAME = "IMA 文档"
 IMA_PURE_UID_DEFAULT = "001aa361168019ef"
@@ -468,6 +469,10 @@ class ImaDocumentConfig:
             interval_seconds=_interval(raw_interval),
             groups=_read_groups(db, knowledge_base_id, root_folder_id),
         )
+
+    @property
+    def credentials_configured(self) -> bool:
+        return bool(self.uid and self.refresh_token)
 
     @property
     def configured(self) -> bool:
@@ -1635,6 +1640,7 @@ class ImaDocumentService:
         self._stop = threading.Event()
         self._state_lock = threading.Lock()
         self._sync_lock = threading.Lock()
+        self._discovery_lock = threading.Lock()
         self._scheduler_thread: threading.Thread | None = None
         self._worker_thread: threading.Thread | None = None
         self._running = False
@@ -1643,6 +1649,92 @@ class ImaDocumentService:
 
     def config(self) -> ImaDocumentConfig:
         return ImaDocumentConfig.from_db(self.db)
+
+    @staticmethod
+    def _discovery_default() -> dict[str, str]:
+        return {"status": "never", "at": "", "error": ""}
+
+    def _discovery_status(self) -> dict[str, str]:
+        raw = self.db.get_setting(IMA_PURE_DISCOVERY_KEY) or ""
+        try:
+            value = json.loads(raw) if raw else {}
+        except (TypeError, json.JSONDecodeError):
+            value = {}
+        if not isinstance(value, dict):
+            value = {}
+        default = self._discovery_default()
+        return {
+            "status": str(value.get("status") or default["status"]),
+            "at": str(value.get("at") or ""),
+            "error": str(value.get("error") or ""),
+        }
+
+    def _set_settings_atomic(self, values: dict[str, str]) -> None:
+        setter = getattr(self.db, "set_settings_atomic", None)
+        if callable(setter):
+            setter(values)
+            return
+        for key, value in values.items():
+            self.db.set_setting(key, value)
+
+    def discover(self) -> dict[str, Any]:
+        cfg = self.config()
+        if not cfg.credentials_configured:
+            return {
+                "ok": False,
+                "status": "not_configured",
+                "config": cfg.public(),
+                "discovery": self._discovery_status(),
+            }
+        with self._discovery_lock:
+            cfg = self.config()
+            try:
+                client = ImaPureClient(cfg)
+                discover = getattr(client, "discover_groups", None)
+                discovery_complete = callable(discover)
+                discovered = tuple(discover()) if discovery_complete else ()
+            except Exception as exc:  # noqa: BLE001 - preserve the last good registry
+                error = _safe_error(exc)
+                discovery = {
+                    "status": "failed",
+                    "at": datetime.now(UTC).isoformat(),
+                    "error": error,
+                }
+                self.db.set_setting(
+                    IMA_PURE_DISCOVERY_KEY,
+                    json.dumps(discovery, ensure_ascii=False),
+                )
+                return {
+                    "ok": False,
+                    "status": "failed",
+                    "config": self.config().public(),
+                    "discovery": discovery,
+                }
+            current = self.config()
+            merged = merge_groups(
+                current.groups,
+                discovered,
+                discovery_complete=discovery_complete,
+            )
+            discovery = {
+                "status": "ok",
+                "at": datetime.now(UTC).isoformat(),
+                "error": "",
+            }
+            self._set_settings_atomic(
+                {
+                    IMA_PURE_GROUPS_KEY: json.dumps(
+                        [group.public() for group in merged], ensure_ascii=False
+                    ),
+                    IMA_PURE_DISCOVERY_KEY: json.dumps(discovery, ensure_ascii=False),
+                }
+            )
+            return {
+                "ok": True,
+                "status": "finished",
+                "config": self.config().public(),
+                "discovery": discovery,
+            }
 
     def status(self) -> dict[str, Any]:
         cfg = self.config()
@@ -1661,6 +1753,7 @@ class ImaDocumentService:
             "last_started_at": self.db.get_setting(IMA_PURE_LAST_STARTED_KEY) or "",
             "last_finished_at": self.db.get_setting(IMA_PURE_LAST_FINISHED_KEY) or "",
             "last_result": last_result,
+            "discovery": self._discovery_status(),
             "documents": len(self.store.documents()),
         }
 
@@ -1744,7 +1837,7 @@ class ImaDocumentService:
 
     def trigger(self, scheduled: bool = False) -> dict[str, Any]:
         cfg = self.config()
-        if not cfg.configured:
+        if not cfg.credentials_configured:
             return {"status": "not_configured"}
         now = time.time()
         with self._state_lock:
@@ -1884,26 +1977,19 @@ class ImaDocumentService:
             return {"status": "already_running"}
         try:
             cfg = self.config()
-            if not cfg.configured:
+            if not cfg.credentials_configured:
                 return {"status": "not_configured"}
             started = time.time()
             self.db.set_setting(IMA_PURE_LAST_STARTED_KEY, str(int(started)))
-            discovery_error = ""
-            discovery_client = ImaPureClient(cfg)
-            try:
-                discover = getattr(discovery_client, "discover_groups", None)
-                discovered = tuple(discover()) if discover else ()
-            except Exception as exc:  # noqa: BLE001 - discovery is optional
-                discovered = ()
-                discovery_error = _safe_error(exc)
-                logger.warning("IMA group discovery failed error=%s", discovery_error)
-            merged_groups = merge_groups(cfg.groups, discovered)
-            self.db.set_setting(
-                IMA_PURE_GROUPS_KEY,
-                json.dumps([group.public() for group in merged_groups], ensure_ascii=False),
-            )
+            discovery_result = self.discover()
+            discovery = discovery_result.get("discovery") or {}
+            discovery_error = str(discovery.get("error") or "")
+            cfg = self.config()
             state = self.store.load_state()
-            enabled_groups = [group for group in merged_groups if group.enabled]
+            enabled_groups = [
+                group for group in cfg.groups if group.enabled and group.mount_folder_ids
+            ]
+            skipped_groups = [group.id for group in cfg.groups if group not in enabled_groups]
             total = pending = downloaded = failures = 0
             failed_groups: list[str] = []
             group_errors: dict[str, str] = {}
@@ -1931,6 +2017,7 @@ class ImaDocumentService:
                     logger.warning("IMA group failed group=%s error=%s", group.id[:64], group_error)
             result = {
                 "groups": len(enabled_groups),
+                "skipped_groups": skipped_groups,
                 "succeeded_groups": succeeded_groups,
                 "failed_groups": failed_groups,
                 "discovery_error": discovery_error,

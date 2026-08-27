@@ -11,8 +11,11 @@ from app.ima_documents import (
     IMA_LEGACY_GROUP_ID,
     IMA_LEGACY_GROUP_NAME,
     IMA_PURE_GROUPS_KEY,
+    IMA_PURE_KB_ID_KEY,
     IMA_PURE_LAST_RESULT_KEY,
     IMA_PURE_REFRESH_TOKEN_KEY,
+    IMA_PURE_ROOT_FOLDER_KEY,
+    IMA_PURE_UID_KEY,
     ImaDocumentConfig,
     ImaDocumentService,
     ImaDocumentStore,
@@ -37,6 +40,9 @@ class FakeDB:
 
     def set_setting(self, key, value):
         self.values[key] = value
+
+    def set_settings_atomic(self, values):
+        self.values.update(values)
 
 
 def test_default_config_targets_august_folder():
@@ -1673,6 +1679,83 @@ def test_sync_restores_legacy_hashed_files_without_redownload(tmp_path, monkeypa
     assert (root / "0825" / "Report.pdf").is_file()
     assert not hashed.exists()
     assert store.load_state()["file_abc"]["pdf"] == "0825/Report.pdf"
+
+
+def test_service_discover_success_persists_new_unmounted_groups_and_failure_keeps_config(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    db = FakeDB({
+        IMA_PURE_UID_KEY: "uid",
+        IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+        IMA_PURE_KB_ID_KEY: "kb-old",
+        IMA_PURE_ROOT_FOLDER_KEY: "root-old",
+        IMA_PURE_GROUPS_KEY: json.dumps([{
+            "id": "old", "name": "旧库", "knowledge_base_id": "kb-old",
+            "root_folder_id": "root-old", "folder_ids": ["keep"],
+            "enabled": True, "source": "discovered",
+        }]),
+    })
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.config = config
+
+        def discover_groups(self):
+            return (ImaGroupConfig("new", "新库", "kb-new", "root-new"),)
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    service = ImaDocumentService(db, tmp_path / "ima")
+    result = service.discover()
+    assert result["status"] == "finished"
+    saved = json.loads(db.get_setting(IMA_PURE_GROUPS_KEY))
+    assert [row["id"] for row in saved] == ["new"]
+    assert saved[0]["folder_ids"] == []
+    assert saved[0]["enabled"] is False
+
+    class BrokenClient(FakeClient):
+        def discover_groups(self):
+            raise RuntimeError("https://ima.invalid/?token=secret")
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", BrokenClient)
+    before = db.get_setting(IMA_PURE_GROUPS_KEY)
+    failed = service.discover()
+    assert failed["status"] == "failed"
+    assert db.get_setting(IMA_PURE_GROUPS_KEY) == before
+    assert "secret" not in json.dumps(failed)
+
+
+def test_service_skips_unmounted_group_without_sync_client(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    db = FakeDB({
+        IMA_PURE_UID_KEY: "uid", IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+        IMA_PURE_KB_ID_KEY: "kb", IMA_PURE_ROOT_FOLDER_KEY: "root",
+        IMA_PURE_GROUPS_KEY: json.dumps([{
+            "id": "empty", "name": "空库", "knowledge_base_id": "kb",
+            "root_folder_id": "root", "folder_ids": [], "enabled": False,
+        }]),
+    })
+    calls = {"manifest": 0}
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.group = group
+
+        def discover_groups(self):
+            return ()
+
+        def manifest(self):
+            calls["manifest"] += 1
+            raise AssertionError("unmounted group must not scan")
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    service = ImaDocumentService(db, tmp_path / "ima")
+    service.store.save_manifest([{"media_id": "old", "group_id": "empty", "name": "old.pdf"}])
+    result = service.sync_once()
+    assert result["groups"] == 0
+    assert result["skipped_groups"] == ["empty"]
+    assert calls["manifest"] == 0
+    assert service.store.load_manifest()[0]["media_id"] == "old"
 
 
 def test_manifest_recurses_selected_folders_and_keeps_folder_metadata():
