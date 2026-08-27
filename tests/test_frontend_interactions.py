@@ -1842,8 +1842,8 @@ def test_frontend_asset_urls_bust_browser_cache():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=196"' in html
-    assert 'src="/app.js?v=277"' in html
-    assert 'dav-shell-v146' in sw
+    assert 'src="/app.js?v=278"' in html
+    assert 'dav-shell-v147' in sw
 
 
 def test_ima_documents_follow_latest_dynamic_navigation():
@@ -1867,6 +1867,34 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     css = STYLE_CSS.read_text()
     assert ".tl-ima-entry { display: none; }" in css
     assert "(min-width: 769px) and (max-width: 900px)" in css
+
+
+def test_knowledge_single_subscribed_library_skips_catalog():
+    """非管理员只订了一个库时，打开 /knowledge 直达该库；catalog=1 留在目录。"""
+    src = APP_JS.read_text()
+    render = _fn_body("renderKnowledge")
+    list_render = _fn_body("renderImaDocuments")
+    select = _fn_body("selectImaDocumentGroup")
+    subscribe = _fn_body("subscribeKnowledge")
+    unsubscribe = _fn_body("unsubscribeKnowledge")
+    empty = _fn_body("imaDocumentsEmptyHtml")
+    catalog = _fn_body("imaKnowledgeCatalogRoute")
+    stay = _fn_body("imaKnowledgeStayOnCatalog")
+    assert "knowledge?catalog=1" in catalog
+    assert 'get("catalog")' in stay
+    assert "=== \"1\"" in stay
+    assert "subscribed.length === 1" in render
+    assert "imaKnowledgeStayOnCatalog" in render
+    assert "!isAdmin" in render
+    assert "replaceImaDocumentsRoute(imaDocumentsRoute(" in render
+    assert "renderImaDocuments(seq)" in render
+    assert "imaKnowledgeCatalogRoute()" in list_render
+    assert "imaKnowledgeCatalogRoute()" in select
+    assert "imaKnowledgeCatalogRoute()" in subscribe
+    assert "imaKnowledgeCatalogRoute()" in unsubscribe
+    assert "imaKnowledgeCatalogRoute()" in empty
+    assert "function imaKnowledgeCatalogRoute" in src
+    assert "function imaKnowledgeStayOnCatalog" in src
 
 
 def test_knowledge_catalog_shell_contract():

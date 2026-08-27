@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.71";
+const APP_VERSION = "1.12.72";
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"];
@@ -600,7 +600,7 @@ function imaDocumentsEmptyHtml(hasFilter, days) {
   if (!list.length) {
     return emptyState(
       "这个库还没有文档",
-      `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回知识库</button></div>`
+      `<div><button type="button" class="btn-normal" onclick="go('${imaKnowledgeCatalogRoute()}')">回知识库</button></div>`
     );
   }
   return emptyState(
@@ -637,6 +637,14 @@ function imaDocumentsRoute(group, query, day, tag) {
   return `knowledge${routeQueryString ? `?${routeQueryString}` : ""}`;
 }
 
+function imaKnowledgeCatalogRoute() {
+  return "knowledge?catalog=1";
+}
+
+function imaKnowledgeStayOnCatalog() {
+  return routeQuery().get("catalog") === "1";
+}
+
 function replaceImaDocumentsRoute(path) {
   const url = normalizeRoute(path);
   if (location.pathname + location.search !== url) history.replaceState(null, "", url);
@@ -645,7 +653,7 @@ function replaceImaDocumentsRoute(path) {
 function selectImaDocumentGroup(value) {
   if (!String(value || "") && !state.user?.is_admin) {
     state.imaDocumentsGroup = "";
-    replaceImaDocumentsRoute("knowledge");
+    replaceImaDocumentsRoute(imaKnowledgeCatalogRoute());
     const seq = ++routeRenderSeq;
     renderKnowledge(seq);
     return;
@@ -832,6 +840,7 @@ async function subscribeKnowledge(groupId, btn) {
   try {
     await api(`/api/ima-documents/groups/${encodeURIComponent(groupId)}/subscribe`, { method: "POST" });
     flash("已订阅");
+    replaceImaDocumentsRoute(imaKnowledgeCatalogRoute());
     refreshKnowledge();
   } catch (err) {
     flash(err.message || "订阅失败", "error");
@@ -844,6 +853,7 @@ async function unsubscribeKnowledge(groupId, btn) {
   try {
     await api(`/api/ima-documents/groups/${encodeURIComponent(groupId)}/subscribe`, { method: "DELETE" });
     flash("已退订");
+    replaceImaDocumentsRoute(imaKnowledgeCatalogRoute());
     refreshKnowledge();
   } catch (err) {
     flash(err.message || "退订失败", "error");
@@ -871,6 +881,17 @@ async function renderKnowledge(seq, encodedMediaId = "") {
     const subscribed = Array.isArray(data.subscribed) ? data.subscribed : [];
     const available = Array.isArray(data.available) ? data.available : [];
     const isAdmin = !!state.user?.is_admin;
+    const browsing = !!(routeQuery().get("q") || routeQuery().get("day") || routeQuery().get("tag"));
+    if (!selectedGroup && !isAdmin && subscribed.length === 1 && !imaKnowledgeStayOnCatalog() && !browsing) {
+      const onlyId = String(subscribed[0].id || "");
+      if (onlyId) {
+        state.imaDocumentsTag = "";
+        state.imaDocumentsLastDay = "";
+        replaceImaDocumentsRoute(imaDocumentsRoute(onlyId, "", "", ""));
+        await renderImaDocuments(seq);
+        return;
+      }
+    }
     if (selectedGroup) {
       if (subscribed.some((group) => String(group.id) === selectedGroup)) {
         await renderImaDocuments(seq);
@@ -934,7 +955,7 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
   state.imaDocumentsHasMore = false;
   _imaLoadingMore = false;
   clearImaPdfUrl();
-  setPageTitle("知识库", true, "knowledge", "回知识库");
+  setPageTitle("知识库", true, imaKnowledgeCatalogRoute(), "回知识库");
   const selectedGroup = imaDocumentsGroupFromRoute();
   const query = routeQuery().get("q") || "";
   const day = routeQuery().get("day") || "";
@@ -988,7 +1009,7 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     const meta = $("#ima-doc-meta");
     if (title) title.textContent = selectedGroupName;
     if (meta) meta.textContent = `${count} 份`;
-    setPageTitle(selectedGroupName, true, "knowledge", "回知识库");
+    setPageTitle(selectedGroupName, true, imaKnowledgeCatalogRoute(), "回知识库");
     const groupSwitch = $("#ima-doc-groups");
     if (groupSwitch) {
       const hideSwitcher = !state.user?.is_admin && (groups || []).length <= 1;
