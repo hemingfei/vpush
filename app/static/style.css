@@ -2982,7 +2982,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .ima-groups-list { display: grid; gap: var(--space-3); margin-top: var(--space-3); }
 .ima-mount-layout {
   display: grid;
-  grid-template-columns: minmax(220px, 0.38fr) minmax(0, 0.62fr);
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
   gap: var(--space-4);
   min-width: 0;
   margin-top: var(--space-3);
@@ -3188,6 +3188,9 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   .ima-collector-fields .ima-field--wide,
   .ima-group-enabled,
   .ima-credential-field--wide { grid-column: auto; }
+  .ima-mount-layout { grid-template-columns: 1fr; }
+  .ima-kb-list,
+  .ima-folder-tree { max-height: 360px; }
 }
 
 @media (max-width: 768px) {

@@ -607,7 +607,7 @@ const imaMountState = {
 ```css
 .ima-mount-layout {
   display: grid;
-  grid-template-columns: minmax(220px, 0.38fr) minmax(0, 0.62fr);
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
   gap: var(--space-4);
   min-width: 0;
 }
