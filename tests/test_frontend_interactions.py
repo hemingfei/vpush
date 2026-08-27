@@ -1738,8 +1738,12 @@ def test_ima_document_reader_preserves_group_context_and_metadata():
     assert "item.group_name" in reader
     assert "item.day" in reader
     assert reader.index("ima-reader-group") < reader.index("ima-reader-day")
-    assert "查看 PDF" in reader and "下载" in reader
-    assert "item.name" in reader and "item.size" in reader and "item.chars" in reader
+    assert "查看 PDF" not in reader
+    assert "下载" in reader
+    assert "item.name" in reader and "item.size" in reader
+    assert "ima-reader-abstract" in reader
+    assert "needs_translation" in reader
+    assert "/translate" in reader
     assert "go(backRoute)" in reader
 
 
@@ -1749,7 +1753,8 @@ def test_ima_document_reader_requests_keep_current_group_for_all_endpoints():
     download = _fn_body("downloadImaPdf")
     assert "const groupQuery = group ?" in reader
     assert "${encodeURIComponent(mediaId)}${groupQuery}" in reader
-    assert "${encodeURIComponent(mediaId)}/text${groupQuery}" in reader
+    assert "${encodeURIComponent(mediaId)}/translate${groupQuery}" in reader
+    assert 'method: "POST"' in reader
     assert "const groupQuery = group ?" in pdf
     assert "${encodeURIComponent(mediaId)}/pdf${groupQuery}" in pdf
     assert "const groupQuery = group ?" in download
@@ -1779,7 +1784,8 @@ def test_ima_document_reader_backroute_uses_detail_group_when_url_has_none():
     assert "item.group_id" in reader
     assert "backRoute = imaDocumentsRoute(item.group_id, query, day, tag)" in reader
     assert reader.index("const item = await api") < reader.index("backRoute = imaDocumentsRoute(item.group_id, query, day, tag)")
-    assert reader.index("backRoute = imaDocumentsRoute(item.group_id, query, day, tag)") < reader.index("const text = await")
+    assert reader.index("backRoute = imaDocumentsRoute(item.group_id, query, day, tag)") < reader.index("ima-reader-abstract")
+    assert reader.index("backRoute = imaDocumentsRoute(item.group_id, query, day, tag)") < reader.index("loadImaPdf")
 
 
 def test_ima_document_reader_omits_empty_group_context():
@@ -1795,9 +1801,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=192"' in html
-    assert 'src="/app.js?v=272"' in html
-    assert 'dav-shell-v141' in sw
+    assert 'href="/style.css?v=193"' in html
+    assert 'src="/app.js?v=273"' in html
+    assert 'dav-shell-v142' in sw
 
 
 def test_ima_documents_follow_latest_dynamic_navigation():
@@ -1873,7 +1879,7 @@ def test_knowledge_catalog_shell_contract():
 
 
 def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
-    """库内瘦行按日浏览；搜索/标签出日并分页；阅读页按 has_pdf/has_txt 开门。"""
+    """库内瘦行按日浏览；搜索/标签出日并分页；阅读页摘要 + PDF。"""
     src = APP_JS.read_text()
     row = _fn_body("imaDocumentRow")
     render = _fn_body("renderImaDocuments")
@@ -1908,11 +1914,9 @@ def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
     assert "data.has_more" in render
 
     assert "has_pdf" in reader
-    pdf_window = reader[max(0, reader.index("查看 PDF") - 220): reader.index("查看 PDF") + 40]
-    assert "has_pdf" in pdf_window
-    text_at = reader.index("/text")
-    text_window = reader[max(0, text_at - 220): text_at + 20]
-    assert "has_txt" in text_window
+    assert "/text" not in reader
+    assert "ima-text-view" not in reader
+    assert "查看 PDF" not in reader
 
     assert "state.user.is_admin" in groups or "state.user?.is_admin" in groups
     assert "renderKnowledge" in select

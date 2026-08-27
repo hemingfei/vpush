@@ -2673,7 +2673,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .ima-reader-actions { flex-shrink: 0; }
 .ima-pdf-panel { margin-top: 16px; border-top: var(--border-default); padding-top: 16px; }
 .ima-pdf-close { margin-top: 8px; min-height: 44px; }
-.ima-pdf-panel iframe { display: block; width: 100%; min-height: 72vh; border: var(--border-default); background: var(--color-surface-soft); }
+.ima-pdf-panel iframe { display: block; width: 100%; min-height: calc(100vh - 220px); border: var(--border-default); background: var(--color-surface-soft); }
 .ima-text-view { margin: 16px 0 0; padding: 18px; max-height: 70vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border: var(--border-default); border-radius: var(--radius-control); background: var(--color-surface-soft); color: var(--color-text); font: inherit; line-height: 1.7; }
 .kb-tabs { margin-bottom: var(--space-4); }
 .kb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
@@ -2726,7 +2726,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   .ima-reader-head { display: grid; gap: 12px; }
   .ima-reader-actions { width: 100%; }
   .ima-reader-actions button { flex: 1; justify-content: center; min-height: 44px; }
-  .ima-pdf-panel iframe { min-height: 68vh; }
+  .ima-pdf-panel iframe { min-height: calc(100vh - 220px); }
   .ima-text-view { max-height: none; }
   .ima-collector-foot { align-items: stretch; }
   .ima-collector-foot .toolbar { width: 100%; }

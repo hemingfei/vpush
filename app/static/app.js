@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.67";
+const APP_VERSION = "1.12.68";
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"];
@@ -1174,9 +1174,6 @@ async function renderImaDocument(seq, mediaId) {
       backRoute = imaDocumentsRoute(item.group_id, query, day, tag);
       setPageTitle(item.name || "知识库", true, backRoute, "回列表");
     }
-    const text = await (item.has_txt
-      ? (await apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/text${groupQuery}`)).text()
-      : Promise.resolve(""));
     if (!routeStillActive(seq)) return;
     setPageTitle(item.name || "知识库", true, backRoute, "回列表");
     const groupContext = item.group_name
@@ -1186,32 +1183,37 @@ async function renderImaDocument(seq, mediaId) {
     const coverHtml = cover
       ? `<img class="ima-reader-cover" src="${escapeHtml(cover)}" alt="" onerror="this.hidden=true">`
       : "";
-    const abstractHtml = item.abstract
-      ? `<p class="ima-reader-abstract">${escapeHtml(item.abstract)}</p>`
+    const abstractText = item.abstract_zh || item.abstract || "";
+    const abstractHtml = abstractText
+      ? `<p class="ima-reader-abstract" id="ima-reader-abstract">${escapeHtml(abstractText)}</p>`
       : "";
     const pdfActions = item.has_pdf
-      ? `<div class="toolbar ima-reader-actions"><button type="button" class="btn-normal" id="ima-pdf-toggle" hidden onclick="loadImaPdf('${escapeHtml(mediaId)}')">${FILE_TEXT_ICON}<span>查看 PDF</span></button><button type="button" class="btn-ghost" onclick="downloadImaPdf('${escapeHtml(mediaId)}')">${DOWNLOAD_ICON}<span>下载</span></button></div>`
+      ? `<div class="toolbar ima-reader-actions"><button type="button" class="btn-ghost" onclick="downloadImaPdf('${escapeHtml(mediaId)}')">${DOWNLOAD_ICON}<span>下载 PDF</span></button></div>`
       : "";
     const pdfPanel = item.has_pdf
-      ? `<div id="ima-pdf-panel" class="ima-pdf-panel"><iframe id="ima-pdf-frame" title="PDF 预览"></iframe><button type="button" class="btn-ghost ima-pdf-close" onclick="closeImaPdf()">收起 PDF</button></div>`
-      : "";
-    const textView = item.has_txt ? `<pre class="ima-text-view" id="ima-text-view"></pre>` : "";
-    const chars = Number(item.chars || 0);
-    const sizeLine = [fmtDocSize(item.size), chars > 0 ? `${chars.toLocaleString()} 字` : ""].filter(Boolean).join(" · ");
-    const emptyFile = !item.has_pdf && !item.has_txt
-      ? `<p class="section-meta">这份还没有 PDF 或全文，列表里仍看得到摘要。</p><div><button type="button" class="btn-normal" onclick="go(state.pageBackRoute || 'knowledge')">回列表</button></div>`
-      : "";
+      ? `<div id="ima-pdf-panel" class="ima-pdf-panel"><iframe id="ima-pdf-frame" title="PDF 预览"></iframe></div>`
+      : `<p class="section-meta">还没有 PDF 预览</p>`;
+    const sizeLine = fmtDocSize(item.size);
     $("#main").innerHTML = `
       <section class="section-panel ima-reader">
         <header class="section-head ima-reader-head">
-          <div>${groupContext}<p class="ima-reader-day">${escapeHtml(fmtImaDay(item.day))}</p><h2 class="section-title ima-reader-title">${escapeHtml(item.name)}</h2>${coverHtml}${abstractHtml}${imaDocumentTagsHtml(item.tags, true)}<p class="section-meta">${escapeHtml(sizeLine)}</p>${emptyFile}</div>
+          <div>${groupContext}<p class="ima-reader-day">${escapeHtml(fmtImaDay(item.day))}</p><h2 class="section-title ima-reader-title">${escapeHtml(item.name)}</h2>${coverHtml}${imaDocumentTagsHtml(item.tags, true)}${abstractHtml}<p class="section-meta">${escapeHtml(sizeLine)}</p></div>
           ${pdfActions}
         </header>
         ${pdfPanel}
-        ${textView}
       </section>`;
-    if (item.has_txt) $("#ima-text-view").textContent = text;
     if (item.has_pdf) loadImaPdf(mediaId);
+    if (item.needs_translation) {
+      try {
+        const translated = await api(`/api/ima-documents/${encodeURIComponent(mediaId)}/translate${groupQuery}`, { method: "POST" });
+        if (!routeStillActive(seq)) return;
+        const zh = translated && translated.abstract_zh;
+        const el = $("#ima-reader-abstract");
+        if (el && zh) el.textContent = zh;
+      } catch {
+        /* keep original abstract */
+      }
+    }
   } catch (err) {
     if (!routeStillActive(seq)) return;
     const denied = String(err.message || "").includes("知识库不存在");
@@ -1225,8 +1227,6 @@ async function loadImaPdf(mediaId) {
   const seq = routeRenderSeq;
   const group = routeQuery().get("group") || state.imaDocumentsGroup || "";
   const groupQuery = group ? `?group=${encodeURIComponent(group)}` : "";
-  const button = $("#ima-pdf-toggle") || document.querySelector(".ima-reader-actions .btn-normal");
-  if (button) button.disabled = true;
   try {
     const blob = await apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/pdf${groupQuery}`);
     if (!routeStillActive(seq)) return;
@@ -1238,16 +1238,10 @@ async function loadImaPdf(mediaId) {
       frame.src = window._imaPdfUrl;
       panel.hidden = false;
     }
-    if (button) button.hidden = true;
   } catch (err) {
     if (routeStillActive(seq)) {
       flash(`PDF 打开失败：${err.message}`, "error");
-      const panel = $("#ima-pdf-panel");
-      if (panel) panel.hidden = true;
-      if (button) button.hidden = false;
     }
-  } finally {
-    if (button) button.disabled = false;
   }
 }
 
