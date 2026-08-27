@@ -14,9 +14,9 @@ from app.ima_documents import (
     ima_kb_valid_tags,
     purge_ima_document_tags,
 )
-from app.stock_universe import bundled_plain_names
 from app.ima_kb import attach_catalog_stats, catalog, readable_group_ids
 from app.main import create_app
+from app.stock_universe import bundled_plain_names
 from app.tagging import tag_text
 from tests.test_ima_documents import _headers
 

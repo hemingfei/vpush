@@ -10,14 +10,13 @@ from fastapi.testclient import TestClient
 from app.ima_documents import (
     IMA_LEGACY_GROUP_ID,
     IMA_LEGACY_GROUP_NAME,
+    IMA_MAX_FOLDER_DEPTH,
     IMA_PURE_GROUPS_KEY,
     IMA_PURE_KB_ID_KEY,
     IMA_PURE_LAST_RESULT_KEY,
     IMA_PURE_REFRESH_TOKEN_KEY,
     IMA_PURE_ROOT_FOLDER_KEY,
     IMA_PURE_UID_KEY,
-    IMA_MAX_FOLDER_DEPTH,
-    IMA_MAX_FOLDER_NODES,
     ImaDocumentConfig,
     ImaDocumentService,
     ImaDocumentStore,
@@ -1914,8 +1913,6 @@ def test_discovery_rejects_invalid_string_ids():
 
 
 def test_manifest_rejects_folder_tree_depth_limit(monkeypatch):
-    from app import ima_documents
-
     group = ImaGroupConfig("deep", "深目录", "kb", "root", True, "discovered", ("folder_0",))
     client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
     responses = {

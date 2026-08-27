@@ -87,7 +87,6 @@ from .ima_documents import (
     IMA_PURE_ROOT_FOLDER_KEY,
     IMA_PURE_UID_KEY,
     ImaDocumentService,
-    ImaGroupConfig,
     ImaPureClient,
     _safe_error,
     ima_kb_valid_tags,
