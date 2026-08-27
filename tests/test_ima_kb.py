@@ -1,7 +1,11 @@
+import json
+
+import pytest
 from fastapi.testclient import TestClient
 
 from app.db import DB
 from app.ima_documents import (
+    IMA_PURE_GROUPS_KEY,
     ImaDocumentConfig,
     ImaDocumentService,
     ImaDocumentStore,
@@ -731,3 +735,137 @@ def test_translate_acl_failures_and_stale_hash(tmp_path, monkeypatch):
     stale = client.get("/api/ima-documents/file_en", headers=admin_headers).json()
     assert stale["needs_translation"] is True
     assert stale["abstract_zh"] == ""
+
+
+def test_admin_ima_discover_and_folder_listing(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "ima-api.sqlite"))
+    headers = _headers(client, "mount_admin", "MOUNT01", admin=True)
+    db = client.app.state.db
+    db.set_setting("ima_pure_uid", "uid")
+    db.set_setting("ima_pure_refresh_token", "refresh")
+    db.set_setting(
+        IMA_PURE_GROUPS_KEY,
+        json.dumps([{
+            "id": "old", "name": "旧库", "knowledge_base_id": "kb-old",
+            "root_folder_id": "root-old", "folder_ids": [], "enabled": False,
+            "source": "manual",
+        }], ensure_ascii=False),
+    )
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.group = group
+
+        def discover_groups(self):
+            return (ImaGroupConfig("kb-new", "新知识库", "kb-new", "root-new"),)
+
+        def list_items(self, folder_id):
+            assert self.group.knowledge_base_id == "kb-new"
+            return [{
+                "media_type": 99,
+                "folder_info": {"folder_id": "folder-a", "name": "周报"},
+                "folder_number": 2,
+            }]
+
+    monkeypatch.setattr("app.ima_documents.ImaPureClient", FakeClient)
+    import app.api as api_module
+    monkeypatch.setattr(api_module, "ImaPureClient", FakeClient, raising=False)
+
+    discovered = client.post("/api/admin/ima-collector/discover", headers=headers)
+    assert discovered.status_code == 200, discovered.text
+    group = next(
+        item for item in discovered.json()["config"]["groups"] if item["id"] == "kb-new"
+    )
+    assert group["folder_ids"] == []
+    assert group["enabled"] is False
+
+    listed = client.get(
+        "/api/admin/ima-collector/groups/kb-new/folders",
+        headers=headers,
+    )
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["items"] == [{
+        "id": "folder-a", "name": "周报", "parent_id": "root-new",
+        "has_children": True, "folder_count": 2,
+    }]
+    assert client.get(
+        "/api/admin/ima-collector/groups/kb-new/folders?parent_id=bad/id",
+        headers=headers,
+    ).status_code == 400
+    assert client.get(
+        "/api/admin/ima-collector/groups/kb-new/folders",
+    ).status_code == 401
+
+
+def test_admin_ima_put_folder_ids_validates_and_keeps_old_client_compat(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "ima-put.sqlite"))
+    headers = _headers(client, "mount_put_admin", "MOUNTPUT", admin=True)
+    body = {
+        "groups": [{
+            "id": "group-a", "name": "资料", "knowledge_base_id": "kb-a",
+            "root_folder_id": "root-a", "folder_ids": ["f1", "f1", "f2"],
+            "enabled": True,
+        }]
+    }
+    response = client.put("/api/admin/ima-collector", headers=headers, json=body)
+    assert response.status_code == 200, response.text
+    saved = json.loads(client.app.state.db.get_setting(IMA_PURE_GROUPS_KEY))
+    assert saved[0]["folder_ids"] == ["f1", "f2"]
+    assert saved[0]["enabled"] is True
+
+    old = client.put("/api/admin/ima-collector", headers=headers, json={
+        "groups": [{
+            "id": "group-a", "name": "资料", "knowledge_base_id": "kb-a",
+            "root_folder_id": "root-a", "enabled": True,
+        }]
+    })
+    assert old.status_code == 200, old.text
+    assert json.loads(client.app.state.db.get_setting(IMA_PURE_GROUPS_KEY))[0]["folder_ids"] == ["f1", "f2"]
+
+
+@pytest.mark.parametrize("folder_ids", [
+    ["bad/id"], [""], [123], ["f"] * 257,
+])
+def test_admin_ima_put_rejects_invalid_folder_ids(tmp_path, monkeypatch, folder_ids):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "ima-invalid.sqlite"))
+    headers = _headers(client, "mount_invalid_admin", "MOUNTINV", admin=True)
+    response = client.put("/api/admin/ima-collector", headers=headers, json={
+        "groups": [{
+            "id": "group-a", "name": "资料", "knowledge_base_id": "kb-a",
+            "root_folder_id": "root-a", "folder_ids": folder_ids,
+        }]
+    })
+    assert response.status_code == 400, response.text
+
+
+def test_admin_ima_discover_failure_keeps_previous_groups(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "ima-discover-fail.sqlite"))
+    headers = _headers(client, "mount_fail_admin", "MOUNTFAIL", admin=True)
+    db = client.app.state.db
+    db.set_setting("ima_pure_uid", "uid")
+    db.set_setting("ima_pure_refresh_token", "refresh")
+    original = [{
+        "id": "old", "name": "旧库", "knowledge_base_id": "kb-old",
+        "root_folder_id": "root-old", "folder_ids": ["keep"],
+        "enabled": True, "source": "discovered",
+    }]
+    db.set_setting(IMA_PURE_GROUPS_KEY, json.dumps(original, ensure_ascii=False))
+
+    class BrokenClient:
+        def __init__(self, config, group=None):
+            pass
+
+        def discover_groups(self):
+            raise RuntimeError("https://ima.invalid/?token=secret")
+
+    monkeypatch.setattr("app.ima_documents.ImaPureClient", BrokenClient)
+    response = client.post("/api/admin/ima-collector/discover", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["ok"] is False
+    assert response.json()["discovery"]["status"] == "failed"
+    assert "secret" not in response.text
+    assert json.loads(db.get_setting(IMA_PURE_GROUPS_KEY)) == original
