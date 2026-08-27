@@ -289,6 +289,14 @@ def _discovery_payload(payload: Any) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _discovery_has_known_shape(payload: Any) -> bool:
+    data = _discovery_payload(payload)
+    return any(
+        field in data and isinstance(data.get(field), list)
+        for field in ("searched_knowledge_bases", "knowledge_base_list", "knowledge_list", "info_list")
+    ) or isinstance(data.get("results"), list)
+
+
 def _discovery_page_items(payload: Any) -> list[dict[str, Any]]:
     data = _discovery_payload(payload)
     items: list[dict[str, Any]] = []
@@ -314,10 +322,16 @@ def _prepare_discovery_item(item: dict[str, Any]) -> dict[str, Any] | None:
     group_id_value = item.get("id") or item.get("knowledge_base_id")
     if not isinstance(group_id_value, str) or not group_id_value.strip():
         return None
+    group_id_value = group_id_value.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", group_id_value):
+        return None
     basic = item.get("basic_info") if isinstance(item.get("basic_info"), dict) else {}
     name_value = item.get("name") or item.get("kb_name") or basic.get("name") or group_id_value
     root_value = item.get("root_folder_id") or item.get("folder_id") or group_id_value
     if not all(isinstance(value, str) and value.strip() for value in (name_value, root_value)):
+        return None
+    root_value = root_value.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", root_value):
         return None
     prepared = dict(item)
     prepared["id"] = group_id_value.strip()
@@ -627,10 +641,12 @@ class ImaPureClient:
                 headers=self._headers(token),
             )
             data, _ = self._open_json(request)
-            code = data.get("code", data.get("retcode"))
-            if code not in (0, None):
+            code = data.get("code") if "code" in data else data.get("retcode")
+            if code not in (0, "0"):
                 raise RuntimeError(f"IMA group discovery failed code={code}")
             payload = _discovery_payload(data)
+            if not _discovery_has_known_shape(payload):
+                raise RuntimeError("IMA group discovery returned invalid response")
             raw_items.extend(_discovery_page_items(payload))
             if payload.get("is_end") is True or not payload.get("next_cursor"):
                 break

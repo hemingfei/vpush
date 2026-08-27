@@ -16,6 +16,8 @@ from app.ima_documents import (
     IMA_PURE_REFRESH_TOKEN_KEY,
     IMA_PURE_ROOT_FOLDER_KEY,
     IMA_PURE_UID_KEY,
+    IMA_MAX_FOLDER_DEPTH,
+    IMA_MAX_FOLDER_NODES,
     ImaDocumentConfig,
     ImaDocumentService,
     ImaDocumentStore,
@@ -1892,3 +1894,52 @@ def test_manifest_uses_ima_current_path_for_selected_root_day():
     record = client.manifest()[0]
     assert record["folder_path"] == ["0806"]
     assert record["day"] == "0806"
+
+
+def test_discover_groups_rejects_success_payload_without_known_shape():
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    client._token = lambda: "access"
+    client._open_json = lambda request: ({"code": 0, "data": {}}, {})
+    with pytest.raises(RuntimeError, match="invalid response"):
+        client.discover_groups()
+
+
+def test_discovery_rejects_invalid_string_ids():
+    groups = normalize_discovered_groups({
+        "knowledge_list": [{
+            "id": "kb/bad", "name": "坏库", "root_folder_id": "root/bad",
+        }]
+    })
+    assert groups == ()
+
+
+def test_manifest_rejects_folder_tree_depth_limit(monkeypatch):
+    from app import ima_documents
+
+    group = ImaGroupConfig("deep", "深目录", "kb", "root", True, "discovered", ("folder_0",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    responses = {
+        f"folder_{index}": [{
+            "media_type": 99,
+            "folder_info": {"folder_id": f"folder_{index + 1}", "name": f"目录{index}"},
+        }]
+        for index in range(IMA_MAX_FOLDER_DEPTH + 2)
+    }
+    client.list_items = lambda folder_id: responses.get(folder_id, [])
+    with pytest.raises(RuntimeError, match="maximum depth"):
+        client.manifest()
+
+
+def test_manifest_rejects_folder_tree_node_limit(monkeypatch):
+    from app import ima_documents
+
+    monkeypatch.setattr(ima_documents, "IMA_MAX_FOLDER_NODES", 2)
+    group = ImaGroupConfig("wide", "宽目录", "kb", "root", True, "discovered", ("root",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    client.list_items = lambda folder_id: (
+        [{"media_type": 99, "folder_info": {"folder_id": "child-a", "name": "甲"}},
+         {"media_type": 99, "folder_info": {"folder_id": "child-b", "name": "乙"}}]
+        if folder_id == "root" else []
+    )
+    with pytest.raises(RuntimeError, match="maximum size"):
+        client.manifest()
