@@ -501,3 +501,63 @@ def test_document_detail_exposes_metadata_and_list_filters_by_tag(tmp_path, monk
     assert by_day.status_code == 200
     assert [item["media_id"] for item in by_day.json()["items"]] == ["file_tagged"]
     assert set(by_day.json()["days"]) == {"0826", "0810"}
+
+
+def test_catalog_entries_and_facets_do_not_need_files(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima-cheap")
+    banking = ImaGroupConfig("banking", "投行", "kb", "root")
+    older = {
+        "media_id": "file_old",
+        "name": "旧稿.pdf",
+        "day": "0810",
+        "abstract": "旧摘要很长" * 20,
+        "cover_url": "https://example.com/old.jpg",
+        "group_id": "banking",
+    }
+    newer = {
+        "media_id": "file_new",
+        "name": "新稿.pdf",
+        "day": "0826",
+        "abstract": "新摘要",
+        "cover_url": "https://example.com/new.jpg",
+        "group_id": "banking",
+    }
+    store.save_manifest([older, newer])
+    store.save_state({
+        store.state_key(older): {"tags": ["宏观"], "pdf": "missing/old.pdf", "size": 12},
+        store.state_key(newer): {"tags": ["新能源"], "txt": "missing/new.txt"},
+    })
+    entries = store.catalog_entries(groups=(banking,))
+    assert {(item["media_id"], item["day"], item["name"]) for item in entries} == {
+        ("file_old", "0810", "旧稿.pdf"),
+        ("file_new", "0826", "新稿.pdf"),
+    }
+    facets = store.document_facets(group_id="banking", groups=(banking,))
+    assert facets["days"] == ["0826", "0810"]
+    assert set(facets["tags"]) == {"宏观", "新能源"}
+    listed = store.documents(groups=(banking,), include_body=False)
+    assert listed[0]["media_id"] == "file_new"
+    assert listed[0]["has_pdf"] is False
+    assert listed[0]["has_txt"] is True
+    assert listed[0]["size"] == 0
+    assert "abstract" not in listed[0]
+    assert "cover_url" not in listed[0]
+    missing_pdf = store.documents(day="0810", groups=(banking,), include_body=False)
+    assert missing_pdf[0]["has_pdf"] is True
+    assert missing_pdf[0]["size"] == 12
+    summary = store.group_summary((banking,))
+    assert summary == [{"id": "banking", "name": "投行", "count": 2}]
+
+
+def test_documents_page_slices_search_hits(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima-page")
+    banking = ImaGroupConfig("banking", "投行", "kb", "root")
+    records = [
+        {"media_id": f"file_{idx}", "name": f"研报{idx}.pdf", "day": "0826", "abstract": "锂电", "group_id": "banking"}
+        for idx in range(3)
+    ]
+    store.save_manifest(records)
+    store.save_state({store.state_key(record): {"tags": ["新能源"]} for record in records})
+    page = store.documents(query="研报", groups=(banking,), include_body=False, limit=2, offset=0)
+    assert [item["media_id"] for item in page] == ["file_2", "file_1"]
+    assert store.documents(query="研报", groups=(banking,), include_body=False, limit=2, offset=2)[0]["media_id"] == "file_0"

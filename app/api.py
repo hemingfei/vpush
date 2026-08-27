@@ -2514,7 +2514,7 @@ def create_api_router(
     @router.get("/ima-documents/catalog")
     def ima_documents_catalog(user: dict = Depends(get_current_user)):
         listed = ima_kb_catalog(db, user, _configured_groups())
-        documents = ima_documents.store.documents(groups=_configured_groups())
+        documents = ima_documents.store.catalog_entries(groups=_configured_groups())
         return attach_catalog_acl(attach_catalog_stats(listed, documents), db, user)
 
     @router.post("/ima-documents/groups/{group_id}/subscribe")

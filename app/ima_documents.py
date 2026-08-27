@@ -1101,8 +1101,8 @@ class ImaDocumentStore:
 
     @staticmethod
     def _file_size(state_item: dict[str, Any], record: dict[str, Any], pdf: Path | None) -> int:
-        fallback = pdf.stat().st_size if pdf is not None and pdf.is_file() else 0
-        return int(state_item.get("size") or record.get("size") or fallback)
+        del pdf
+        return int(state_item.get("size") or record.get("size") or 0)
 
     def is_complete(
         self,
@@ -1115,9 +1115,41 @@ class ImaDocumentStore:
         txt = self._state_path(item.get("txt"))
         return bool(pdf and txt and pdf.is_file() and txt.is_file())
 
+    def catalog_entries(
+        self,
+        group_id: str = "",
+        groups: tuple[ImaGroupConfig, ...] | None = None,
+    ) -> list[dict[str, Any]]:
+        self._remember_groups(groups)
+        requested_group = str(group_id or "").strip()
+        allowed_groups = {group.id for group in groups} if groups is not None else None
+        output: list[dict[str, Any]] = []
+        for record in self.load_manifest(groups):
+            media_id = str(record.get("media_id") or "")
+            try:
+                media_id = self.validate_media_id(media_id)
+            except ValueError:
+                continue
+            if not media_id:
+                continue
+            actual_group_id = self._record_group_id(record)
+            if allowed_groups is not None and actual_group_id not in allowed_groups:
+                continue
+            if requested_group and actual_group_id != requested_group:
+                continue
+            output.append(
+                {
+                    "media_id": media_id,
+                    "name": str(record.get("name") or media_id),
+                    "day": str(record.get("day") or "unknown"),
+                    "group_id": actual_group_id,
+                }
+            )
+        return output
+
     def group_summary(self, groups: tuple[ImaGroupConfig, ...]) -> list[dict[str, Any]]:
         counts = {group.id: 0 for group in groups if group.enabled}
-        for item in self.documents(groups=groups):
+        for item in self.catalog_entries(groups=groups):
             group_id = str(item.get("group_id") or "")
             if group_id in counts:
                 counts[group_id] += 1
@@ -1135,6 +1167,9 @@ class ImaDocumentStore:
         group_name: str = "",
         groups: tuple[ImaGroupConfig, ...] | None = None,
         tag: str = "",
+        include_body: bool = True,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         self._remember_groups(groups)
         state = self.load_state()
@@ -1151,8 +1186,6 @@ class ImaDocumentStore:
             except ValueError:
                 continue
             state_item = self._state_item(state, record)
-            pdf = self._state_path(state_item.get("pdf"))
-            txt = self._state_path(state_item.get("txt"))
             if not media_id:
                 continue
             if day and str(record.get("day") or "") != day:
@@ -1172,15 +1205,16 @@ class ImaDocumentStore:
                 "media_id": media_id,
                 "name": str(record.get("name") or media_id),
                 "day": str(record.get("day") or "unknown"),
-                "size": self._file_size(state_item, record, pdf),
+                "size": self._file_size(state_item, record, None),
                 "chars": int(state_item.get("chars") or 0),
                 "downloaded_at": str(state_item.get("downloaded_at") or ""),
-                "abstract": str(record.get("abstract") or ""),
-                "cover_url": str(record.get("cover_url") or ""),
                 "tags": tags,
-                "has_pdf": bool(pdf and pdf.is_file()),
-                "has_txt": bool(txt and txt.is_file()),
+                "has_pdf": bool(state_item.get("pdf")),
+                "has_txt": bool(state_item.get("txt")),
             }
+            if include_body:
+                item["abstract"] = str(record.get("abstract") or "")
+                item["cover_url"] = str(record.get("cover_url") or "")
             metadata_id = actual_group_id
             metadata_name = str(group_name or record.get("group_name") or state_item.get("group_name") or "")
             if metadata_id:
@@ -1189,6 +1223,8 @@ class ImaDocumentStore:
                 item["group_name"] = metadata_name
             output.append(item)
         output.sort(key=lambda item: (item["day"], item["name"]), reverse=True)
+        if limit is not None:
+            return output[offset:offset + limit]
         return output
 
     def document_facets(
@@ -1197,21 +1233,38 @@ class ImaDocumentStore:
         group_id: str = "",
         groups: tuple[ImaGroupConfig, ...] | None = None,
     ) -> dict[str, list[str]]:
-        items = self.documents(query, "", group_id=group_id, groups=groups, tag="")
+        del query
+        self._remember_groups(groups)
+        state = self.load_state()
         days: list[str] = []
         tags: list[str] = []
         seen_days: set[str] = set()
         seen_tags: set[str] = set()
-        for item in items:
-            day = str(item.get("day") or "")
+        requested_group = str(group_id or "").strip()
+        allowed_groups = {group.id for group in groups} if groups is not None else None
+        for record in self.load_manifest(groups):
+            media_id = str(record.get("media_id") or "")
+            try:
+                self.validate_media_id(media_id)
+            except ValueError:
+                continue
+            if not media_id:
+                continue
+            actual_group_id = self._record_group_id(record)
+            if allowed_groups is not None and actual_group_id not in allowed_groups:
+                continue
+            if requested_group and actual_group_id != requested_group:
+                continue
+            day = str(record.get("day") or "")
             if day and day not in seen_days:
                 seen_days.add(day)
                 days.append(day)
-            for tag in item.get("tags") or []:
+            for tag in self._tags(self._state_item(state, record)):
                 name = str(tag or "").strip()
                 if name and name not in seen_tags:
                     seen_tags.add(name)
                     tags.append(name)
+        days.sort(reverse=True)
         return {"days": days, "tags": tags}
 
     def document(
