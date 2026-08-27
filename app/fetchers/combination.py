@@ -201,6 +201,47 @@ def parse_holdings(data) -> list[dict]:
     return holdings
 
 
+def apply_rebalancing_holdings(holdings: list[dict], histories: list) -> list[dict]:
+    """把一笔调仓应用到现有持仓：清仓删除，新建/调仓按 target 覆盖。"""
+    index: dict[str, dict] = {}
+    order: list[str] = []
+
+    def key_of(symbol: str, name: str) -> str:
+        return (symbol or "").strip() or (name or "").strip()
+
+    for h in holdings:
+        if not isinstance(h, dict):
+            continue
+        k = key_of(str(h.get("symbol") or ""), str(h.get("name") or ""))
+        if not k:
+            continue
+        if k not in index:
+            order.append(k)
+        index[k] = {
+            "name": h.get("name") or "",
+            "symbol": h.get("symbol") or "",
+            "weight": h.get("weight"),
+        }
+    for row in histories:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("stock_name") or ""
+        symbol = row.get("stock_symbol") or ""
+        k = key_of(str(symbol), str(name))
+        if not k:
+            continue
+        target = row.get("target_weight")
+        if not isinstance(target, (int, float)):
+            target = row.get("weight")
+        if not isinstance(target, (int, float)) or target <= 0:
+            index.pop(k, None)
+            continue
+        if k not in index:
+            order.append(k)
+        index[k] = {"name": name, "symbol": symbol, "weight": round(float(target), 2)}
+    return [index[k] for k in order if k in index]
+
+
 def parse_cash(data) -> float | None:
     """从 current.json 取现金占比。只信 last_rb.cash，不读调仓历史顶层伪 cash。"""
     if not isinstance(data, dict):
@@ -298,10 +339,10 @@ class CombinationFetcher(Fetcher):
             "请到后台「数据源 → Cookie 管理」手动更新后重试"
         )
 
-    def _snapshot(self, kol_id: int, cube_symbol: str, kind: str, url: str, params: dict) -> None:
+    def _snapshot(self, kol_id: int, cube_symbol: str, kind: str, url: str, params: dict, force: bool = False) -> None:
         """抓取并写入一种组合快照；TTL 内跳过，失败仅记日志（不阻断调仓推送）。"""
         ttl = SNAPSHOT_TTL.get(kind, 300)
-        if self.db.cube_snapshot_fresh(kol_id, kind, ttl):
+        if not force and self.db.cube_snapshot_fresh(kol_id, kind, ttl):
             return
         self._apply_cookie()
         try:
@@ -333,10 +374,13 @@ class CombinationFetcher(Fetcher):
             return
         self.db.set_cube_snapshot(kol_id, kind, payload)
 
-    def _refresh_snapshots(self, kol_id: int, cube_symbol: str) -> None:
+    def _refresh_snapshots(self, kol_id: int, cube_symbol: str, force_holdings: bool = False) -> None:
         """刷新三种组合快照（各带 TTL，独立失败互不影响）。"""
         self._snapshot(kol_id, cube_symbol, "quote", CUBE_QUOTE_URL, {"code": cube_symbol, "cube_symbol": cube_symbol})
-        self._snapshot(kol_id, cube_symbol, "holdings", CUBE_CURRENT_URL, {"cube_symbol": cube_symbol})
+        self._snapshot(
+            kol_id, cube_symbol, "holdings", CUBE_CURRENT_URL, {"cube_symbol": cube_symbol},
+            force=force_holdings,
+        )
         self._snapshot(kol_id, cube_symbol, "nav", CUBE_NAV_URL, {"cube_symbol": cube_symbol})
 
     def fetch(self, kol: dict) -> list[Post]:
@@ -358,10 +402,16 @@ class CombinationFetcher(Fetcher):
                 raise RuntimeError("雪球组合接口返回异常") from None
 
         data = get_page(1)
-        # 先刷新快照（TTL 内跳过），调仓卡与详情页引用本次的 quote/持仓/净值数据
-        self._refresh_snapshots(kol["id"], cube_symbol)
+        new_rb = [
+            item for item in (data.get("list") or [])
+            if isinstance(item, dict)
+            and item.get("status") == "success"
+            and item.get("id")
+            and not self.db.post_exists(self.platform, str(item["id"]))
+        ]
+        # 新调仓必须重抓持仓；TTL 内旧仓会让清仓标的留在「现有持仓」、新建标的缺失
+        self._refresh_snapshots(kol["id"], cube_symbol, force_holdings=bool(new_rb))
         name = kol["name"]
-        posts = []
         # 今日/年化/净值只信 quote.json；搜索接口盘中会滞后，不能用来填调仓卡
         quote = parse_quote(
             (self.db.get_cube_snapshot(kol["id"], "quote") or {}).get("payload") or {}
@@ -379,7 +429,15 @@ class CombinationFetcher(Fetcher):
         if parts:
             stats_line = " · ".join(parts)
         holdings_snapshot = self.db.get_cube_snapshot(kol["id"], "holdings") or {}
-        holdings = (holdings_snapshot.get("payload") or {}).get("holdings") or []
+        holdings = list((holdings_snapshot.get("payload") or {}).get("holdings") or [])
+        if new_rb:
+            for item in reversed(new_rb):
+                holdings = apply_rebalancing_holdings(
+                    holdings, item.get("rebalancing_histories") or []
+                )
+            payload = dict(holdings_snapshot.get("payload") or {})
+            payload["holdings"] = holdings
+            self.db.set_cube_snapshot(kol["id"], "holdings", payload)
         def build(page_data):
             posts = []
             for item in (page_data or {}).get("list") or []:

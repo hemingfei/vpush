@@ -519,6 +519,135 @@ def test_combination_trade_price_missing_is_omitted():
     assert counts == {"quote": 1, "current": 1, "nav": 1}
 
 
+def test_combination_new_rebalancing_refreshes_stale_holdings():
+    """TTL 内的持仓快照不得贴到新调仓卡上。"""
+    counts = {"current": 0}
+    history = {
+        "list": [{
+            "id": 3001,
+            "status": "success",
+            "cash_value": 0.453,
+            "updated_at": 1787825000000,
+            "rebalancing_histories": [{
+                "stock_name": "英特尔",
+                "stock_symbol": "INTC",
+                "prev_weight": 0.0,
+                "target_weight": 10.0,
+                "price": 89.49,
+            }],
+        }]
+    }
+    current = {
+        "last_rb": {
+            "cash": 10.6,
+            "holdings": [
+                {"stock_name": "亚马逊", "stock_symbol": "AMZN", "weight": 9.43},
+                {"stock_name": "英特尔", "stock_symbol": "INTC", "weight": 10.0},
+            ],
+        }
+    }
+
+    def handler(request):
+        path = request.url.path
+        if path == "/cubes/rebalancing/history.json":
+            if request.url.params.get("page", "1") != "1":
+                return httpx.Response(200, json={"list": []})
+            return httpx.Response(200, json=history)
+        if path == "/cubes/quote.json":
+            return httpx.Response(200, json={"data": {"net_value": 4.280, "day_percent_gain": 2.17}})
+        if path == "/cubes/rebalancing/current.json":
+            counts["current"] += 1
+            return httpx.Response(200, json=current)
+        if path == "/cubes/nav_daily/all.json":
+            return httpx.Response(200, json=[{"symbol": "ZH1", "list": [{"date": "2026-08-27", "value": 4.28}]}])
+        return httpx.Response(404)
+
+    db = DB(":memory:")
+    db.set_cube_snapshot(8, "holdings", {
+        "holdings": [
+            {"name": "亚马逊", "symbol": "AMZN", "weight": 9.43},
+            {"name": "半导体3X多-Direxion", "symbol": "SOXL", "weight": 19.49},
+        ],
+        "cash": 0.6,
+    })
+    fetcher = CombinationFetcher(
+        XueqiuConfig(cookie="xq_a_token=abc"), db=db,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    posts = fetcher.fetch({"id": 8, "name": "伯言-美股", "external_id": "ZH000008"})
+    names = {h["symbol"]: h["weight"] for h in posts[0].detail["holdings"]}
+    assert counts["current"] == 1
+    assert names["INTC"] == 10.0
+    assert "SOXL" not in names
+
+
+def test_combination_applies_rebalancing_when_current_lags():
+    """current.json 仍是上一笔持仓时，用本次调仓记录改持仓。"""
+    history = {
+        "list": [{
+            "id": 3002,
+            "status": "success",
+            "cash_value": 0.453,
+            "updated_at": 1787825000000,
+            "rebalancing_histories": [
+                {
+                    "stock_name": "半导体3X多-Direxion",
+                    "stock_symbol": "SOXL",
+                    "prev_weight": 19.49,
+                    "target_weight": 0.0,
+                },
+                {
+                    "stock_name": "英特尔",
+                    "stock_symbol": "INTC",
+                    "prev_weight": 0.0,
+                    "target_weight": 10.0,
+                },
+            ],
+        }]
+    }
+    stale_current = {
+        "last_rb": {
+            "cash": 0.6,
+            "holdings": [
+                {"stock_name": "亚马逊", "stock_symbol": "AMZN", "weight": 9.43},
+                {"stock_name": "半导体3X多-Direxion", "stock_symbol": "SOXL", "weight": 19.49},
+            ],
+        }
+    }
+
+    def handler(request):
+        path = request.url.path
+        if path == "/cubes/rebalancing/history.json":
+            if request.url.params.get("page", "1") != "1":
+                return httpx.Response(200, json={"list": []})
+            return httpx.Response(200, json=history)
+        if path == "/cubes/quote.json":
+            return httpx.Response(200, json={"data": {"net_value": 4.280, "day_percent_gain": 2.17}})
+        if path == "/cubes/rebalancing/current.json":
+            return httpx.Response(200, json=stale_current)
+        if path == "/cubes/nav_daily/all.json":
+            return httpx.Response(200, json=[{"symbol": "ZH1", "list": [{"date": "2026-08-27", "value": 4.28}]}])
+        return httpx.Response(404)
+
+    db = DB(":memory:")
+    db.set_cube_snapshot(9, "holdings", {
+        "holdings": [
+            {"name": "亚马逊", "symbol": "AMZN", "weight": 9.43},
+            {"name": "半导体3X多-Direxion", "symbol": "SOXL", "weight": 19.49},
+        ],
+        "cash": 0.6,
+    })
+    fetcher = CombinationFetcher(
+        XueqiuConfig(cookie="xq_a_token=abc"), db=db,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    posts = fetcher.fetch({"id": 9, "name": "伯言-美股", "external_id": "ZH000009"})
+    names = {h["symbol"]: h["weight"] for h in posts[0].detail["holdings"]}
+    assert names["INTC"] == 10.0
+    assert names["AMZN"] == 9.43
+    assert "SOXL" not in names
+
+
 def test_cube_snapshot_fresh_uses_real_timestamps():
     """回归：strftime 返回文本，与整数比较恒真导致快照永不刷新（见 2026-08 生产事故）。"""
     db = DB(":memory:")
