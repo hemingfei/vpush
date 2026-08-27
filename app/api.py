@@ -2598,11 +2598,40 @@ def create_api_router(
             "group_id": document.get("group_id", ""),
             "group_name": document.get("group_name", ""),
             "abstract": document.get("abstract") or "",
+            "abstract_zh": document.get("abstract_zh") or "",
+            "needs_translation": bool(document.get("needs_translation")),
             "cover_url": document.get("cover_url") or "",
             "tags": document.get("tags") or [],
             "has_pdf": bool(document.get("has_pdf")),
             "has_txt": bool(document.get("has_txt")),
         }
+
+    @router.post("/ima-documents/{media_id}/translate")
+    def translate_ima_document(
+        media_id: str,
+        group: str = Query("", max_length=128),
+        user: dict = Depends(get_current_user),
+    ):
+        document = _ima_document(user, media_id, group)
+        if not document.get("needs_translation"):
+            return {"abstract_zh": document.get("abstract_zh") or document.get("abstract") or ""}
+        from .scheduler import translate_text
+        source = document.get("abstract") or ""
+        try:
+            zh = translate_text(source)
+        except Exception:
+            zh = source
+        if zh and zh != source:
+            try:
+                ima_documents.store.write_abstract_zh(
+                    media_id,
+                    group,
+                    groups=_require_readable_group(user, group),
+                    text_zh=zh,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail="文档不存在") from exc
+        return {"abstract_zh": zh}
 
     @router.get("/ima-documents/{media_id}/text")
     def get_ima_document_text(

@@ -298,8 +298,21 @@ def translate_text(
     errors = []
     try:
         x_cookie = parse_twitter_cookie(twitter_cookie)
-        if tweet_id and x_cookie.get("auth_token") and x_cookie.get("ct0"):
+        if x_cookie.get("auth_token") and x_cookie.get("ct0"):
             try:
+                if tweet_id:
+                    payload = {
+                        "content_type": "POST",
+                        "id": tweet_id,
+                        "dst_lang": "zh-cn",
+                        "include_polls": True,
+                    }
+                else:
+                    payload = {
+                        "content_type": "TEXT",
+                        "text": text[:2000],
+                        "dst_lang": "zh-cn",
+                    }
                 resp = client.post(
                     "https://api.x.com/2/grok/translation.json",
                     headers={
@@ -315,12 +328,7 @@ def translate_text(
                             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
                         ),
                     },
-                    json={
-                        "content_type": "POST",
-                        "id": tweet_id,
-                        "dst_lang": "zh-cn",
-                        "include_polls": True,
-                    },
+                    json=payload,
                 )
                 resp.raise_for_status()
                 translated = _parse_x_translation_body(resp.text)
@@ -328,6 +336,8 @@ def translate_text(
                     return translated
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"x_translate: {exc}")
+            if len(text) > 500:
+                return text
         if time.monotonic() < _mymemory_skip_until:
             return text
         try:

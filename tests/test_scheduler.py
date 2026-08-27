@@ -2894,6 +2894,40 @@ def test_translate_text_uses_x_official_translation():
     assert len(calls) == 1  # 不走 google/mymemory 降级
 
 
+def test_translate_text_uses_x_text_body_without_tweet_id():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert "api.x.com/2/grok/translation.json" in str(request.url)
+        body = json.loads(request.content)
+        assert body["content_type"] == "TEXT"
+        assert "id" not in body
+        assert body["text"] == "CATL solid-state timeline"
+        assert body["dst_lang"] == "zh-cn"
+        return httpx.Response(200, json={"result": {"text": "宁德时代固态时间表"}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    result = translate_text(
+        "CATL solid-state timeline",
+        client=client,
+        twitter_cookie="auth_token=my-auth-token; ct0=ct0-token",
+    )
+    assert result == "宁德时代固态时间表"
+    assert len(calls) == 1
+
+
+def test_translate_text_skips_mymemory_when_long_text_and_x_fails():
+    def handler(request):
+        if "grok/translation.json" in str(request.url):
+            return httpx.Response(400, text="no")
+        raise AssertionError("MyMemory should not be called")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    src = "word " * 200  # >500 chars, English
+    assert translate_text(src, client=client, twitter_cookie="auth_token=a; ct0=b") == src.strip()
+
+
 def test_translate_text_rejects_collapsed_ellipsis():
     def handler(request):
         if "grok/translation.json" in str(request.url):

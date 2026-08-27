@@ -749,6 +749,25 @@ def _safe_component(value: str, fallback: str = "unknown") -> str:
     return value or fallback
 
 
+def abstract_src_hash(text: str) -> str:
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+
+def translation_fields(abstract: str, state_item: dict[str, Any]) -> dict[str, Any]:
+    from .scheduler import _already_chinese
+
+    text = str(abstract or "")
+    cached = str(state_item.get("abstract_zh") or "")
+    src_hash = str(state_item.get("abstract_src_hash") or "")
+    fresh = bool(cached) and src_hash == abstract_src_hash(text)
+    already = _already_chinese(text)
+    return {
+        "abstract": text,
+        "abstract_zh": cached if fresh else "",
+        "needs_translation": bool(text) and (not already) and (not fresh),
+    }
+
+
 class ImaDocumentStore:
     def __init__(self, root: str | Path):
         raw_root = Path(root).expanduser()
@@ -1293,6 +1312,7 @@ class ImaDocumentStore:
                 "has_pdf": bool(pdf and pdf.is_file()),
                 "has_txt": bool(txt and txt.is_file()),
             }
+            result.update(translation_fields(result["abstract"], state_item))
             metadata_id = str(requested_group or record.get("group_id") or state_item.get("group_id") or "")
             metadata_name = str(group_name or record.get("group_name") or state_item.get("group_name") or "")
             if metadata_id:
@@ -1304,6 +1324,45 @@ class ImaDocumentStore:
             matches.append(result)
         return matches[0] if len(matches) == 1 else None
 
+    def write_abstract_zh(
+        self,
+        media_id: str,
+        group_id: str = "",
+        groups: tuple[ImaGroupConfig, ...] | None = None,
+        text_zh: str = "",
+    ) -> None:
+        self._remember_groups(groups)
+        self.validate_media_id(media_id)
+        state = self.load_state()
+        requested_group = str(group_id or "").strip()
+        allowed_groups = {group.id for group in groups} if groups is not None else None
+        matches: list[dict[str, Any]] = []
+        for record in self.load_manifest(groups):
+            if str(record.get("media_id") or "") != media_id:
+                continue
+            state_item = self._state_item(state, record)
+            actual_group_id = str(
+                record.get("group_id") or state_item.get("group_id") or self._legacy_group_id or IMA_LEGACY_GROUP_ID
+            )
+            if allowed_groups is not None and actual_group_id not in allowed_groups:
+                continue
+            if requested_group and actual_group_id != requested_group:
+                continue
+            if not requested_group and allowed_groups is None and not self._is_legacy_group(actual_group_id):
+                continue
+            if requested_group:
+                matches = [record]
+                break
+            matches.append(record)
+        if len(matches) != 1:
+            raise ValueError("document not found")
+        record = matches[0]
+        key = self.state_key(record)
+        item = dict(state.get(key) or {})
+        item["abstract_zh"] = text_zh
+        item["abstract_src_hash"] = abstract_src_hash(str(record.get("abstract") or ""))
+        state[key] = item
+        self.save_state(state)
 
 
 def convert_pdf(pdf: Path, txt: Path) -> int:

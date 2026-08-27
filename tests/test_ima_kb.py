@@ -608,3 +608,36 @@ def test_list_ima_documents_defaults_to_latest_day_and_pages_search(tmp_path, mo
     assert search_body["items"][0]["media_id"] != page2["items"][0]["media_id"]
     page3 = client.get("/api/ima-documents?q=摘要&limit=1&offset=2", headers=admin_headers).json()
     assert page3["has_more"] is False
+
+
+def test_document_detail_and_translate_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "kb-tr.sqlite"))
+    admin_headers = _headers(client, "kb_tr_admin", "KBTR001", admin=True)
+    store = client.app.state.ima_documents.store
+    zh = {"media_id": "file_zh", "name": "中文.pdf", "day": "0826", "abstract": "宁德时代排产上修，产业链需求回暖。"}
+    en = {"media_id": "file_en", "name": "English.pdf", "day": "0826", "abstract": "CATL solid-state timeline"}
+    store.save_manifest([zh, en])
+    store.save_state({store.state_key(zh): {}, store.state_key(en): {}})
+
+    zh_detail = client.get("/api/ima-documents/file_zh", headers=admin_headers).json()
+    assert zh_detail["needs_translation"] is False
+    assert zh_detail["abstract_zh"] == ""
+
+    en_detail = client.get("/api/ima-documents/file_en", headers=admin_headers).json()
+    assert en_detail["needs_translation"] is True
+    assert en_detail["abstract"] == "CATL solid-state timeline"
+
+    monkeypatch.setattr(
+        "app.scheduler.translate_text",
+        lambda text, **kwargs: "宁德时代固态时间表",
+    )
+    translated = client.post("/api/ima-documents/file_en/translate", headers=admin_headers)
+    assert translated.status_code == 200
+    assert translated.json()["abstract_zh"] == "宁德时代固态时间表"
+    again = client.get("/api/ima-documents/file_en", headers=admin_headers).json()
+    assert again["needs_translation"] is False
+    assert again["abstract_zh"] == "宁德时代固态时间表"
+    state = store.load_state()[store.state_key(en)]
+    assert state["abstract_zh"] == "宁德时代固态时间表"
+    assert state["abstract_src_hash"]
