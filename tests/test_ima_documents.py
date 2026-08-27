@@ -1675,6 +1675,76 @@ def test_sync_restores_legacy_hashed_files_without_redownload(tmp_path, monkeypa
     assert store.load_state()["file_abc"]["pdf"] == "0825/Report.pdf"
 
 
+def test_manifest_recurses_selected_folders_and_keeps_folder_metadata():
+    group = ImaGroupConfig(
+        "research", "研究", "kb", "root", True, "discovered", ("mount-a", "child-a")
+    )
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    responses = {
+        "mount-a": [
+            {"media_id": "pdf_direct", "name": "直接.pdf", "file_size": 8},
+            {"media_type": 99, "folder_info": {"folder_id": "child-a", "name": "0826"}},
+        ],
+        "child-a": [
+            {"media_type": 99, "folder_info": {"folder_id": "child-b", "name": "研报"}},
+        ],
+        "child-b": [
+            {"media_id": "pdf_nested", "name": "嵌套.pdf", "file_size": "9"},
+        ],
+    }
+    calls = []
+
+    def list_items(folder_id):
+        calls.append(folder_id)
+        return responses[folder_id]
+
+    client.list_items = list_items
+
+    records = client.manifest()
+    assert {r["media_id"] for r in records} == {"pdf_direct", "pdf_nested"}
+    direct = next(r for r in records if r["media_id"] == "pdf_direct")
+    nested = next(r for r in records if r["media_id"] == "pdf_nested")
+    assert direct["source_folder_id"] == "mount-a"
+    assert nested["source_folder_id"] == "child-b"
+    assert nested["source_root_folder_id"] == "mount-a"
+    assert nested["folder_path"] == ["0826", "研报"]
+    assert nested["day"] == "0826"
+    assert calls.count("child-a") == 1
+    assert calls.count("mount-a") == 1
+
+
+def test_manifest_deduplicates_overlapping_roots_and_stops_folder_cycles():
+    group = ImaGroupConfig(
+        "research", "研究", "kb", "root", True, "discovered", ("root-a", "root-b")
+    )
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    responses = {
+        "root-a": [
+            {"media_type": 99, "folder_info": {"folder_id": "root-b", "name": "A"}},
+            {"media_id": "pdf_same", "name": "同一份.pdf", "file_size": 8},
+        ],
+        "root-b": [
+            {"media_type": 99, "folder_info": {"folder_id": "root-a", "name": "B"}},
+            {"media_id": "pdf_same", "name": "同一份.pdf", "file_size": 8},
+        ],
+    }
+    calls = []
+    client.list_items = lambda folder_id: calls.append(folder_id) or responses[folder_id]
+    records = client.manifest()
+    assert [r["media_id"] for r in records] == ["pdf_same"]
+    assert calls.count("root-a") == 1
+    assert calls.count("root-b") == 1
+
+
+def test_manifest_uses_unknown_day_for_non_date_folder_path():
+    group = ImaGroupConfig("research", "研究", "kb", "root", True, "discovered", ("mount",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    client.list_items = lambda folder_id: [{"media_id": "pdf_x", "name": "x.pdf", "file_size": 8}]
+    record = client.manifest()[0]
+    assert record["day"] == "unknown"
+    assert record["folder_path"] == []
+
+
 def test_group_folder_ids_distinguish_legacy_fallback_from_explicit_empty():
     legacy_db = FakeDB({
         IMA_PURE_GROUPS_KEY: json.dumps([{

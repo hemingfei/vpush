@@ -56,6 +56,8 @@ IMA_PURE_INTERVAL_DEFAULT = 3600
 IMA_PURE_INTERVAL_MIN = 1800
 IMA_PURE_INTERVAL_MAX = 604800
 IMA_MOUNT_FOLDER_ID_MAX = 256
+IMA_MAX_FOLDER_DEPTH = 32
+IMA_MAX_FOLDER_NODES = 10000
 
 PUB_PEM = b"""-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAx9h6SY1LO88wRVKdOC5U
@@ -187,6 +189,89 @@ def _normalize_stored_folder_ids(value: Any) -> tuple[str, ...] | None:
             seen.add(folder_id)
             output.append(folder_id)
     return tuple(output)
+
+
+_FOLDER_ID_RE = re.compile(r"[A-Za-z0-9_:-]{1,128}")
+
+
+def _folder_id_value(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    return text if _FOLDER_ID_RE.fullmatch(text) else ""
+
+
+def ima_folder_id(item: dict[str, Any]) -> str:
+    info = item.get("folder_info")
+    candidates = (
+        info.get("folder_id") if isinstance(info, dict) else None,
+        item.get("folder_id"),
+        item.get("media_id") if str(item.get("media_id") or "").startswith("folder_") else None,
+    )
+    for candidate in candidates:
+        folder_id = _folder_id_value(candidate)
+        if folder_id:
+            return folder_id
+    return ""
+
+
+def ima_folder_name(item: dict[str, Any], folder_id: str) -> str:
+    info = item.get("folder_info")
+    candidates = (
+        info.get("name") if isinstance(info, dict) else None,
+        item.get("name"),
+        item.get("title"),
+    )
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()[:200]
+    return folder_id
+
+
+def is_ima_folder_item(item: dict[str, Any]) -> bool:
+    if not isinstance(item, dict):
+        return False
+    if item.get("media_type") == 99:
+        return bool(ima_folder_id(item))
+    media_id = item.get("media_id")
+    if isinstance(media_id, str) and media_id.startswith("folder_"):
+        return bool(ima_folder_id(item))
+    info = item.get("folder_info")
+    return bool(ima_folder_id(item)) and not media_id and isinstance(info, (dict, type(None)))
+
+
+def _count_value(item: dict[str, Any], keys: tuple[str, ...]) -> int | None:
+    for key in keys:
+        if key not in item:
+            continue
+        value = _optional_int(item.get(key))
+        if value is not None:
+            return max(0, value)
+    return None
+
+
+def ima_folder_children_hint(item: dict[str, Any]) -> bool | None:
+    count = _count_value(item, ("folder_number", "sub_folder_count", "children_count", "child_count"))
+    return None if count is None else count > 0
+
+
+def normalize_ima_folder_item(item: dict[str, Any], parent_id: str) -> dict[str, Any] | None:
+    folder_id = ima_folder_id(item)
+    if not folder_id:
+        return None
+    normalized: dict[str, Any] = {
+        "id": folder_id,
+        "name": ima_folder_name(item, folder_id),
+        "parent_id": parent_id,
+        "has_children": ima_folder_children_hint(item),
+    }
+    folder_count = _count_value(item, ("folder_number", "sub_folder_count"))
+    file_count = _count_value(item, ("file_number", "file_count"))
+    if folder_count is not None:
+        normalized["folder_count"] = folder_count
+    if file_count is not None:
+        normalized["file_count"] = file_count
+    return normalized
 
 
 def _legacy_group(kb: str, root: str) -> ImaGroupConfig:
@@ -575,72 +660,124 @@ class ImaPureClient:
 
     def manifest(self) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
-        for folder in self.list_items(self.effective_root_folder_id):
-            if not isinstance(folder, dict) or folder.get("media_type") != 99:
+        roots = (
+            self.group.mount_folder_ids
+            if self.group is not None
+            else ((self.effective_root_folder_id,) if self.effective_root_folder_id else ())
+        )
+        queue: list[str] = []
+        selected_root_ids = {folder_id for folder_id in roots if folder_id}
+        root_by_folder: dict[str, str] = {}
+        path_by_folder: dict[str, list[str]] = {}
+        depth_by_folder: dict[str, int] = {}
+        for folder_id in roots:
+            if folder_id and folder_id not in root_by_folder:
+                root_by_folder[folder_id] = folder_id
+                path_by_folder[folder_id] = []
+                depth_by_folder[folder_id] = 0
+                queue.append(folder_id)
+        visited_folder_ids: set[str] = set()
+        queued_folder_ids = set(queue)
+        seen_media_ids: set[str] = set()
+        queue_index = 0
+
+        def append_file(
+            item: dict[str, Any],
+            source_folder_id: str,
+            source_root_folder_id: str,
+            folder_path: list[str],
+        ) -> None:
+            if is_ima_folder_item(item):
+                return
+            media_type = item.get("media_type")
+            if media_type is not None and (
+                isinstance(media_type, bool) or not isinstance(media_type, int)
+            ):
+                return
+            if media_type == 99:
+                return
+            media_id_value = item.get("media_id")
+            if not isinstance(media_id_value, str) or not media_id_value.strip():
+                return
+            media_id = media_id_value.strip()
+            try:
+                media_id = ImaDocumentStore.validate_media_id(media_id)
+            except ValueError:
+                logger.warning("IMA ignored invalid media id")
+                return
+            if media_id in seen_media_ids:
+                return
+            name_value = item.get("name")
+            if name_value is not None and not isinstance(name_value, str):
+                return
+            file_size = _optional_int(item.get("file_size"))
+            if file_size is None:
+                return
+            md5_value = item.get("md5_sum")
+            if md5_value is not None and not isinstance(md5_value, str):
+                return
+            ts_value = item.get("create_time")
+            if ts_value is not None and (
+                isinstance(ts_value, bool)
+                or not isinstance(ts_value, (str, int, float))
+            ):
+                return
+            name = item_display_name(item, media_id)
+            if not (name.lower().endswith(".pdf") or media_id.lower().startswith("pdf_")):
+                return
+            seen_media_ids.add(media_id)
+            day = next(
+                (value for value in reversed(folder_path) if re.fullmatch(r"\d{4}", value)),
+                "unknown",
+            )
+            record = {
+                "media_id": media_id,
+                "name": name,
+                "day": day,
+                "size": file_size or 0,
+                "md5": md5_value or "",
+                "ts": str(ts_value or ""),
+                "abstract": item_text(item)[:2000],
+                "cover_url": item_cover(item)[:2000],
+                "source_folder_id": source_folder_id,
+                "source_root_folder_id": source_root_folder_id,
+                "folder_path": list(folder_path),
+            }
+            if self.group is not None:
+                record["group_id"] = self.group.id
+                record["group_name"] = self.group.name
+            records.append(record)
+
+        while queue_index < len(queue):
+            folder_id = queue[queue_index]
+            queue_index += 1
+            root_folder_id = root_by_folder[folder_id]
+            folder_path = path_by_folder[folder_id]
+            depth = depth_by_folder[folder_id]
+            if folder_id in visited_folder_ids:
                 continue
-            folder_info = folder.get("folder_info")
-            if not isinstance(folder_info, dict):
-                continue
-            folder_id = folder_info.get("folder_id")
-            if not isinstance(folder_id, str) or not folder_id.strip():
-                continue
-            day_value = folder_info.get("name")
-            if day_value is None:
-                day_value = folder.get("name")
-            if day_value is not None and not isinstance(day_value, str):
-                continue
-            day = (day_value or "unknown").strip() if isinstance(day_value, str) else "unknown"
+            if depth > IMA_MAX_FOLDER_DEPTH:
+                raise RuntimeError("IMA folder tree exceeds maximum depth")
+            visited_folder_ids.add(folder_id)
+            if len(visited_folder_ids) > IMA_MAX_FOLDER_NODES:
+                raise RuntimeError("IMA folder tree exceeds maximum size")
             for item in self.list_items(folder_id):
                 if not isinstance(item, dict):
                     continue
-                media_type = item.get("media_type")
-                if media_type is not None and (
-                    isinstance(media_type, bool) or not isinstance(media_type, int)
-                ):
+                if is_ima_folder_item(item):
+                    child_id = ima_folder_id(item)
+                    if child_id and child_id not in visited_folder_ids:
+                        child_path = folder_path + [ima_folder_name(item, child_id)]
+                        if child_id not in root_by_folder or child_id in selected_root_ids:
+                            root_by_folder[child_id] = root_folder_id
+                            path_by_folder[child_id] = child_path
+                            depth_by_folder[child_id] = depth + 1
+                            selected_root_ids.discard(child_id)
+                        if child_id not in queued_folder_ids:
+                            queued_folder_ids.add(child_id)
+                            queue.append(child_id)
                     continue
-                if media_type == 99:
-                    continue
-                media_id_value = item.get("media_id")
-                if not isinstance(media_id_value, str) or not media_id_value.strip():
-                    continue
-                media_id = media_id_value.strip()
-                try:
-                    media_id = ImaDocumentStore.validate_media_id(media_id)
-                except ValueError:
-                    logger.warning("IMA ignored invalid media id")
-                    continue
-                name_value = item.get("name")
-                if name_value is not None and not isinstance(name_value, str):
-                    continue
-                file_size = _optional_int(item.get("file_size"))
-                if file_size is None:
-                    continue
-                md5_value = item.get("md5_sum")
-                if md5_value is not None and not isinstance(md5_value, str):
-                    continue
-                ts_value = item.get("create_time")
-                if ts_value is not None and (
-                    isinstance(ts_value, bool)
-                    or not isinstance(ts_value, (str, int, float))
-                ):
-                    continue
-                name = item_display_name(item, media_id)
-                if not (name.lower().endswith(".pdf") or media_id.lower().startswith("pdf_")):
-                    continue
-                record = {
-                    "media_id": media_id,
-                    "name": name,
-                    "day": day,
-                    "size": file_size or 0,
-                    "md5": md5_value or "",
-                    "ts": str(ts_value or ""),
-                    "abstract": item_text(item)[:2000],
-                    "cover_url": item_cover(item)[:2000],
-                }
-                if self.group is not None:
-                    record["group_id"] = self.group.id
-                    record["group_name"] = self.group.name
-                records.append(record)
+                append_file(item, folder_id, root_folder_id, folder_path)
         records.sort(key=lambda item: (item["day"], item["media_id"]))
         return records
 
