@@ -563,3 +563,43 @@ def test_documents_page_slices_search_hits(tmp_path):
     assert [item["media_id"] for item in page] == ["file_2", "file_1"]
     assert store.documents(query="研报", groups=(banking,), include_body=False, limit=2, offset=2)[0]["media_id"] == "file_0"
     assert [item["media_id"] for item in store.documents(query="锂电", groups=(banking,), include_body=False)] == ["file_2", "file_1", "file_0"]
+
+
+def test_list_ima_documents_defaults_to_latest_day_and_pages_search(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "kb-day.sqlite"))
+    admin_headers = _headers(client, "kb_day_admin", "KBDAY01", admin=True)
+    store = client.app.state.ima_documents.store
+    records = [
+        {"media_id": "file_old", "name": "旧稿.pdf", "day": "0810", "abstract": "旧摘要"},
+        {"media_id": "file_new", "name": "新稿.pdf", "day": "0826", "abstract": "新摘要"},
+        {"media_id": "file_hit", "name": "锂电跟踪.pdf", "day": "0810", "abstract": "新摘要也在旧日"},
+    ]
+    store.save_manifest(records)
+    store.save_state({store.state_key(record): {"tags": ["新能源"]} for record in records})
+
+    latest = client.get("/api/ima-documents", headers=admin_headers)
+    assert latest.status_code == 200
+    body = latest.json()
+    assert body["day"] == "0826"
+    assert [item["media_id"] for item in body["items"]] == ["file_new"]
+    assert "abstract" not in body["items"][0]
+    assert "cover_url" not in body["items"][0]
+    assert body["has_more"] is False
+    assert body["days"] == ["0826", "0810"]
+
+    missing = client.get("/api/ima-documents?day=0101", headers=admin_headers)
+    assert missing.json()["items"] == []
+    assert missing.json()["day"] == "0101"
+    assert missing.json()["days"] == ["0826", "0810"]
+
+    search = client.get("/api/ima-documents?q=摘要&limit=1&offset=0", headers=admin_headers)
+    assert search.status_code == 200
+    search_body = search.json()
+    assert search_body["day"] == ""
+    assert search_body["has_more"] is True
+    assert len(search_body["items"]) == 1
+    page2 = client.get("/api/ima-documents?q=摘要&limit=1&offset=1", headers=admin_headers).json()
+    assert page2["has_more"] is True
+    ids = {search_body["items"][0]["media_id"], page2["items"][0]["media_id"]}
+    assert "file_new" in ids

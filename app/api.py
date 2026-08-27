@@ -2481,19 +2481,46 @@ def create_api_router(
         day: str = Query("", max_length=64),
         group: str = Query("", max_length=128),
         tag: str = Query("", max_length=64),
+        limit: int = 50,
+        offset: int = 0,
         user: dict = Depends(get_current_user),
     ):
         groups = _readable_groups(user)
         group = group.strip()
         if group and group not in {group_config.id for group_config in groups}:
             raise HTTPException(status_code=404, detail="知识库不存在")
-        items = ima_documents.store.documents(q, day, group_id=group, groups=groups, tag=tag)
-        facets = ima_documents.store.document_facets(q, group_id=group, groups=groups)
+        facets = ima_documents.store.document_facets(group_id=group, groups=groups)
+        query = q.strip()
+        tag = tag.strip()
+        search_mode = bool(query or tag)
+        if search_mode:
+            effective_day = ""
+            matched = ima_documents.store.documents(
+                query, "", group_id=group, groups=groups, tag=tag, include_body=False
+            )
+            page_limit = bounded_limit(limit, default=50)
+            page_offset = max(offset, 0)
+            has_more = page_offset + page_limit < len(matched)
+            items = matched[page_offset:page_offset + page_limit]
+        else:
+            effective_day = day.strip() or next(iter(facets["days"]), "")
+            items = (
+                ima_documents.store.documents(
+                    "", effective_day, group_id=group, groups=groups, include_body=False
+                )
+                if effective_day
+                else []
+            )
+            has_more = False
+            page_offset = 0
         return {
             "groups": ima_documents.store.group_summary(groups),
             "items": items,
             "days": facets["days"],
             "tags": facets["tags"],
+            "day": effective_day,
+            "has_more": has_more,
+            "offset": page_offset,
         }
 
     def _ima_document(user: dict, media_id: str, group: str = "") -> dict:
