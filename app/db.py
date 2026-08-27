@@ -516,7 +516,7 @@ CREATE INDEX IF NOT EXISTS idx_subscriptions_kol_id ON subscriptions(kol_id);
 CREATE INDEX IF NOT EXISTS idx_source_events_platform ON source_events(platform, created_at);
 """
 
-ALLOWED_PLATFORMS = {"xueqiu", "combination", "weibo", "twitter", "ima", "zsxq"}
+ALLOWED_PLATFORMS = {"xueqiu", "combination", "weibo", "twitter", "ima", "zsxq", "mx"}
 
 
 class DB:
@@ -1202,6 +1202,7 @@ class DB:
         secondary=_UNSET,
         is_private=_UNSET,
         silent=_UNSET,
+        extra_data=None,
     ):
         sets, params = [], []
         if name is not None:
@@ -1235,6 +1236,9 @@ class DB:
         if silent is not _UNSET:
             sets.append("silent = ?")
             params.append(1 if silent else 0)
+        if extra_data is not None:
+            sets.append("extra_data = ?")
+            params.append(extra_data)
         if not sets:
             return
         params.append(kol_id)

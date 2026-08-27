@@ -38,6 +38,16 @@ sources:
     token: ""         # 可选：x-xsrf-token
     username: ""      # 可选：微博账号（配置后自动登录续期 cookie）
     password: ""      # 可选：微博密码
+  mx:
+    enabled: false     # 是否启用 MX 平台
+    token: ""         # MX API 访问 token
+    api_base: "https://mx.2026.naaifu.cn/business-api/5"  # MX API 基础地址
+    ws_url: "wss://mx.2026.naaifu.cn/msg"  # MX WebSocket 地址
+    ws_path: "/socket.io"  # MX WebSocket 路径
+    ws_enabled: true   # 是否启用 WebSocket 实时推送
+    page_size: 50      # 历史消息分页大小
+    max_history_pages: 100  # 最大历史消息页数
+    sync_interval_hours: 1  # 房间同步间隔（小时）
 
 polling:
   interval_seconds: 180

@@ -21,6 +21,7 @@ PLATFORM_LABELS = {
     "twitter": "X",
     "ima": "ima",
     "zsxq": "知识星球",
+    "mx": "MX",
 }
 
 

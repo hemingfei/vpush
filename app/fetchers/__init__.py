@@ -11,7 +11,7 @@ from .zsxq import ZsxqFetcher
 
 def build_fetchers(config, db) -> dict[str, Fetcher]:
     """根据全局配置构造各平台抓取器。"""
-    return {
+    fetchers = {
         "xueqiu": XueqiuFetcher(config.sources.xueqiu, db),
         "combination": CombinationFetcher(config.sources.xueqiu, db),
         "weibo": WeiboFetcher(config.sources.weibo, db),
@@ -19,3 +19,10 @@ def build_fetchers(config, db) -> dict[str, Fetcher]:
         "ima": ImaFetcher(config.sources.ima, db),
         "zsxq": ZsxqFetcher(db=db),
     }
+    if config.sources.mx.enabled:
+        try:
+            from .mx.fetcher import MxFetcher
+            fetchers["mx"] = MxFetcher(config.sources.mx, db)
+        except Exception as e:
+            logger.warning("Failed to initialize MxFetcher: %s", e)
+    return fetchers

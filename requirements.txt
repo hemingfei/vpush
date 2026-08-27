@@ -10,3 +10,5 @@ qrcode==8.0
 pypng==0.20220715.0
 curl_cffi==0.16.0
 python-multipart==0.0.20
+python-socketio[asyncio-client]==5.11.0
+lzstring==1.0.4

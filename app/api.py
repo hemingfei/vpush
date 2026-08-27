@@ -3181,6 +3181,207 @@ def create_api_router(
             )
         }
 
+    # ---- MX 平台管理 ----
+    # 暂时直接使用原始 dict，避免 Pydantic 验证问题
+
+    @router.get("/admin/sources/mx", dependencies=[Depends(require_admin)])
+    def get_mx_config():
+        """获取 MX 平台配置。"""
+        from .config import load_config
+        try:
+            config = load_config()
+            mx_config = config.sources.mx if hasattr(config.sources, "mx") else None
+            if mx_config is None:
+                return {
+                    "enabled": False,
+                    "token": "",
+                    "api_base": "https://mx.2026.naaifu.cn/business-api/5",
+                    "ws_url": "wss://mx.2026.naaifu.cn/msg",
+                    "ws_path": "/socket.io",
+                    "ws_enabled": True,
+                    "page_size": 50,
+                    "max_history_pages": 100,
+                    "sync_interval_hours": 1,
+                }
+            return {
+                "enabled": bool(getattr(mx_config, "enabled", False)),
+                "token": getattr(mx_config, "token", ""),
+                "api_base": getattr(mx_config, "api_base", "https://mx.2026.naaifu.cn/business-api/5"),
+                "ws_url": getattr(mx_config, "ws_url", "wss://mx.2026.naaifu.cn/msg"),
+                "ws_path": getattr(mx_config, "ws_path", "/socket.io"),
+                "ws_enabled": bool(getattr(mx_config, "ws_enabled", True)),
+                "page_size": int(getattr(mx_config, "page_size", 50)),
+                "max_history_pages": int(getattr(mx_config, "max_history_pages", 100)),
+                "sync_interval_hours": int(getattr(mx_config, "sync_interval_hours", 1)),
+            }
+        except Exception:
+            return {
+                "enabled": False,
+                "token": "",
+                "api_base": "https://mx.2026.naaifu.cn/business-api/5",
+                "ws_url": "wss://mx.2026.naaifu.cn/msg",
+                "ws_path": "/socket.io",
+                "ws_enabled": True,
+                "page_size": 50,
+                "max_history_pages": 100,
+                "sync_interval_hours": 1,
+            }
+
+
+    @router.post("/admin/sources/mx/test", dependencies=[Depends(require_admin)])
+    async def test_mx_connection(request: Request):
+        """测试 MX 平台连接。"""
+        try:
+            import json
+            raw_body = await request.json()
+            logger.info(f"Received MX test connection: {raw_body}")
+            
+            from .fetchers.mx.client import MXClient
+            api_base = str(raw_body.get("api_base") or "https://mx.2026.naaifu.cn/business-api/5")
+            token = str(raw_body.get("token") or "")
+            client = MXClient(api_base, token)
+            rooms = client.get_rooms()
+            return {"ok": True, "room_count": len(rooms)}
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"连接失败: {exc}") from exc
+
+    @router.put("/admin/sources/mx", dependencies=[Depends(require_admin)])
+    async def update_mx_config(request: Request, admin: dict = Depends(require_admin)):
+        """更新 MX 平台配置。"""
+        import json
+        try:
+            from .config import load_config, save_config
+            raw_body = await request.json()
+            logger.info(f"Received MX config update: {raw_body}")
+            
+            config = load_config()
+            
+            # 直接从原始字典更新配置
+            if "enabled" in raw_body:
+                config.sources.mx.enabled = bool(raw_body["enabled"])
+            if "token" in raw_body:
+                config.sources.mx.token = str(raw_body["token"] or "")
+            if "api_base" in raw_body:
+                config.sources.mx.api_base = str(raw_body["api_base"] or "https://mx.2026.naaifu.cn/business-api/5")
+            if "ws_url" in raw_body:
+                config.sources.mx.ws_url = str(raw_body["ws_url"] or "wss://mx.2026.naaifu.cn/msg")
+            if "ws_path" in raw_body:
+                config.sources.mx.ws_path = str(raw_body["ws_path"] or "/socket.io")
+            if "ws_enabled" in raw_body:
+                config.sources.mx.ws_enabled = bool(raw_body["ws_enabled"])
+            if "page_size" in raw_body:
+                config.sources.mx.page_size = max(1, int(raw_body["page_size"] or 50))
+            if "max_history_pages" in raw_body:
+                config.sources.mx.max_history_pages = max(1, int(raw_body["max_history_pages"] or 100))
+            if "sync_interval_hours" in raw_body:
+                config.sources.mx.sync_interval_hours = max(1, int(raw_body["sync_interval_hours"] or 1))
+            
+            # 保存配置
+            save_config(config)
+            
+            _audit(admin, "update_mx_config", "", f"enabled={raw_body.get('enabled', False)}")
+            return {"ok": True}
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"保存配置失败: {exc}") from exc
+
+    @router.post("/admin/sources/mx/rooms/sync", dependencies=[Depends(require_admin)])
+    async def sync_mx_rooms(admin: dict = Depends(require_admin)):
+        """立即同步 MX 房间。"""
+        try:
+            from .config import load_config
+            from .services.mx_sync import MXRoomSyncService
+            config = load_config()
+            mx_config = config.sources.mx if hasattr(config.sources, "mx") else None
+            if not mx_config or not mx_config.enabled:
+                raise HTTPException(status_code=400, detail="MX 平台未启用")
+            
+            sync_service = MXRoomSyncService(mx_config, db)
+            await sync_service.sync_rooms()
+            _audit(admin, "sync_mx_rooms", "", "")
+            return {"ok": True}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"同步失败: {exc}") from exc
+
+    @router.get("/admin/sources/mx/rooms", dependencies=[Depends(require_admin)])
+    def get_mx_rooms(search: str = "", enabled_only: bool = False):
+        """获取 MX 房间列表。"""
+        kols = db.list_kols(platform="mx")
+        rooms = []
+        for kol in kols:
+            extra = {}
+            try:
+                extra_str = kol.get("extra_data", "")
+                if extra_str:
+                    extra = json.loads(extra_str) if isinstance(extra_str, str) else extra_str
+            except Exception:
+                pass
+            room = {
+                "id": int(kol["external_id"]) if str(kol["external_id"]).isdigit() else 0,
+                "title": kol["name"],
+                "avatar": kol.get("avatar_url", ""),
+                "teaname": extra.get("teaname", ""),
+                "introduce": kol.get("bio", ""),
+                "message_today": int(extra.get("message_today", 0)),
+                "msgtime": extra.get("msgtime", ""),
+                "createtime": extra.get("createtime", ""),
+                "star": bool(extra.get("star", False)),
+                "enabled": bool(extra.get("enabled", True)),
+                "show_in_plaza": bool(extra.get("show_in_plaza", True)),
+                "subscriber_count": int(kol.get("subscriber_count", 0)),
+                "kol_id": kol["id"],
+            }
+            rooms.append(room)
+        
+        if search:
+            search_lower = search.lower()
+            rooms = [r for r in rooms if search_lower in r["title"].lower()]
+        
+        if enabled_only:
+            rooms = [r for r in rooms if r["enabled"]]
+        
+        return {"rooms": rooms}
+
+    @router.put("/admin/sources/mx/rooms/{room_id}", dependencies=[Depends(require_admin)])
+    async def update_mx_room(room_id: int, request: Request, admin: dict = Depends(require_admin)):
+        """更新 MX 房间状态。"""
+        kol = db.get_kol_by_external("mx", str(room_id))
+        if not kol:
+            raise HTTPException(status_code=404, detail="房间不存在")
+        
+        raw_body = await request.json()
+        
+        extra = {}
+        try:
+            extra_str = kol.get("extra_data", "")
+            if extra_str:
+                extra = json.loads(extra_str) if isinstance(extra_str, str) else extra_str
+        except Exception:
+            pass
+        
+        enabled = raw_body.get("enabled")
+        show_in_plaza = raw_body.get("show_in_plaza")
+        
+        if enabled is not None:
+            extra["enabled"] = bool(enabled)
+        if show_in_plaza is not None:
+            extra["show_in_plaza"] = bool(show_in_plaza)
+        
+        new_extra = json.dumps(extra, ensure_ascii=False)
+        db.update_kol(kol["id"], extra_data=new_extra)
+        _audit(admin, "update_mx_room", str(room_id), f"enabled={enabled}, show_in_plaza={show_in_plaza}")
+        return {"ok": True}
+
+    @router.get("/admin/sources/mx/ws-status", dependencies=[Depends(require_admin)])
+    def get_mx_ws_status():
+        """获取 MX WebSocket 连接状态。"""
+        try:
+            from .scheduler import get_mx_ws_status
+            return get_mx_ws_status()
+        except Exception:
+            return {"connected": False, "last_message_at": None}
+
     @router.get("/admin/system-logs", dependencies=[Depends(require_admin)])
     def list_system_logs(
         limit: int = 200,

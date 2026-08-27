@@ -16,7 +16,7 @@ from datetime import datetime
 
 from .backup import run_scheduled
 from .channels import channel_bound, channel_enabled
-from .db import ALLOWED_PLATFORMS, DB
+from .db import _UNSET, ALLOWED_PLATFORMS, DB, days_until_purge, user_plain_secret
 from .logging_setup import redact_secrets
 from .fetchers.base import (
     PLATFORM_LABELS,
@@ -28,6 +28,25 @@ from .fetchers.base import (
 )
 from .notifiers.base import Notifier
 from .proxy import note_fetch_proxy, tick_proxy_pools
+
+# MX 相关导入
+try:
+    from .services.mx_sync import MXRoomSyncService
+    MX_AVAILABLE = True
+except Exception as e:
+    MX_AVAILABLE = False
+    logger.warning("MX modules not available: %s", e)
+
+# 全局 MX 相关变量
+_mx_fetcher = None
+_mx_sync_service = None
+
+
+def get_mx_ws_status() -> dict:
+    """获取 MX WebSocket 连接状态。"""
+    if _mx_fetcher and hasattr(_mx_fetcher, "get_ws_status"):
+        return _mx_fetcher.get_ws_status()
+    return {"connected": False, "last_message_at": None}
 
 logger = logging.getLogger(__name__)
 
@@ -1771,6 +1790,7 @@ class Scheduler:
         xueqiu_config=None,
         weibo_config=None,
         llm_config=None,
+        mx_config=None,
     ):
         self.db = db
         self.fetchers = fetchers
@@ -1780,6 +1800,7 @@ class Scheduler:
         self.xueqiu_config = xueqiu_config
         self.weibo_config = weibo_config
         self.llm_config = llm_config
+        self.mx_config = mx_config
         self.states: dict[str, PlatformState] = {}
         self._digest: dict[int, list[Post]] = {}
         self._dnd_buffer: dict[int, list[Post]] = {}
@@ -1794,9 +1815,16 @@ class Scheduler:
         self._last_retry = 0.0
         self._last_health_check = time.monotonic()
         self._last_proxy_tick = 0.0
+        self._mx_sync_service = None
+        self._mx_ws_task = None
 
     def stop(self):
         self._stop.set()
+        
+        # 停止 MX 相关任务
+        if self._mx_ws_task:
+            self._mx_ws_task.cancel()
+        
         # 尽力把缓冲中未推送的合并摘要发出去，避免重启/关闭丢消息
         try:
             flush_digest(
@@ -1816,7 +1844,7 @@ class Scheduler:
             self._flush_secondary_buffers()
         except Exception:  # noqa: BLE001
             logger.exception("关闭时个人次要缓冲推送失败")
-
+    
     async def _send_startup_message(self):
         """启动提示只推送给管理员（走管理员各自绑定的渠道），普通用户不推送。"""
         if self.notifiers_config is None:
@@ -1851,10 +1879,58 @@ class Scheduler:
         if not sent_any:
             logger.info("没有可接收启动提示的管理员绑定渠道")
 
+    async def _init_mx(self):
+        """初始化 MX 平台功能：房间同步、WebSocket 连接等。"""
+        try:
+            logger.info("Initializing MX platform...")
+            
+            # 创建并启动房间同步服务
+            self._mx_sync_service = MXRoomSyncService(self.mx_config, self.db)
+            
+            # 立即同步一次房间
+            await self._mx_sync_service.sync_rooms()
+            
+            # 启动定时同步
+            await self._mx_sync_service.start_periodic_sync()
+            
+            # 启动 WebSocket（如果启用）
+            if self.mx_config.ws_enabled and "mx" in self.fetchers:
+                mx_fetcher = self.fetchers["mx"]
+                
+                async def on_mx_message(post: Post):
+                    """处理 MX 实时消息，直接推送。"""
+                    try:
+                        post_id = self.db.save_post(post)
+                        if post_id:
+                            await asyncio.to_thread(
+                                notify_subscribers,
+                                self.db,
+                                post_id,
+                                post,
+                                self.notifiers_config,
+                                self.notifiers,
+                                self.retry_queue,
+                                dnd_buffer=self._dnd_buffer,
+                                secondary_buffer=self._secondary_buffer,
+                            )
+                    except Exception as e:
+                        logger.error(f"Failed to process MX real-time message: {e}", exc_info=True)
+                
+                self._mx_ws_task = asyncio.create_task(mx_fetcher.start_ws(on_mx_message))
+            
+            logger.info("MX platform initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize MX platform: {e}", exc_info=True)
+
     async def run(self):
         if self.polling_config.notify_on_start:
             await self._send_startup_message()
         self._recover_failed_pushes()
+        
+        # 初始化 MX 功能
+        if MX_AVAILABLE and self.mx_config and self.mx_config.enabled:
+            await self._init_mx()
+        
         while not self._stop.is_set():
             started = time.monotonic()
             interval_seconds = _polling_setting(

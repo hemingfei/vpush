@@ -100,10 +100,24 @@ class ImaConfig:
 
 
 @dataclass
+class MxConfig:
+    enabled: bool = False
+    token: str = ""
+    api_base: str = "https://mx.2026.naaifu.cn/business-api/5"
+    ws_url: str = "wss://mx.2026.naaifu.cn/msg"
+    ws_path: str = "/socket.io"
+    ws_enabled: bool = True
+    page_size: int = 50
+    max_history_pages: int = 100
+    sync_interval_hours: int = 1
+
+
+@dataclass
 class SourcesConfig:
     xueqiu: XueqiuConfig = field(default_factory=XueqiuConfig)
     weibo: WeiboConfig = field(default_factory=WeiboConfig)
     ima: ImaConfig = field(default_factory=ImaConfig)
+    mx: MxConfig = field(default_factory=MxConfig)
 
 
 @dataclass
@@ -178,6 +192,15 @@ _ENV_MAP = {
     "WEIBO_TOKEN": ("sources", "weibo", "token"),
     "WEIBO_USERNAME": ("sources", "weibo", "username"),
     "WEIBO_PASSWORD": ("sources", "weibo", "password"),
+    "MX_ENABLED": ("sources", "mx", "enabled"),
+    "MX_TOKEN": ("sources", "mx", "token"),
+    "MX_API_BASE": ("sources", "mx", "api_base"),
+    "MX_WS_URL": ("sources", "mx", "ws_url"),
+    "MX_WS_PATH": ("sources", "mx", "ws_path"),
+    "MX_WS_ENABLED": ("sources", "mx", "ws_enabled"),
+    "MX_PAGE_SIZE": ("sources", "mx", "page_size"),
+    "MX_MAX_HISTORY_PAGES": ("sources", "mx", "max_history_pages"),
+    "MX_SYNC_INTERVAL_HOURS": ("sources", "mx", "sync_interval_hours"),
     "POLLING_INTERVAL_SECONDS": ("polling", "interval_seconds"),
     "POLLING_PRIORITY_INTERVAL_SECONDS": ("polling", "priority_interval_seconds"),
     "POLLING_JITTER_SECONDS": ("polling", "jitter_seconds"),
@@ -284,6 +307,29 @@ def _validate(config: Config) -> None:
         raise ValueError("配置项 polling.cookie_keepalive_interval_seconds 必须 >= 0")
     if not 0 <= config.polling.daily_report_hour <= 23:
         raise ValueError("配置项 polling.daily_report_hour 需在 0-23 之间")
+
+
+def _to_dict(obj):
+    """将 dataclass 转换为嵌套 dict。"""
+    if is_dataclass(obj):
+        result = {}
+        for f in fields(obj):
+            value = getattr(obj, f.name)
+            if value is not None and (not isinstance(value, (str, int, float, bool)) or value):
+                result[f.name] = _to_dict(value)
+        return result
+    elif isinstance(obj, (list, tuple)):
+        return [_to_dict(x) for x in obj]
+    else:
+        return obj
+
+
+def save_config(config: Config, path: str | Path | None = None) -> None:
+    """保存配置到 config.yaml。"""
+    path = Path(path or os.environ.get("CONFIG_PATH") or "config.yaml")
+    raw = _to_dict(config)
+    yaml_str = yaml.dump(raw, allow_unicode=True, default_flow_style=False, sort_keys=False)
+    path.write_text(yaml_str, encoding="utf-8")
 
 
 def load_config(path: str | Path | None = None) -> Config:

@@ -1,7 +1,7 @@
 const $ = (sel) => document.querySelector(sel);
 
-const PLATFORM_LABELS = { xueqiu: "雪球", combination: "雪球组合", weibo: "微博", twitter: "X", ima: "ima", zsxq: "知识星球" };
-const PLATFORM_SHORT_LABELS = { xueqiu: "雪球", combination: "组合", weibo: "微博", twitter: "X", ima: "ima", zsxq: "星球" };
+const PLATFORM_LABELS = { xueqiu: "雪球", combination: "雪球组合", weibo: "微博", twitter: "X", ima: "ima", zsxq: "知识星球", mx: "MX平台" };
+const PLATFORM_SHORT_LABELS = { xueqiu: "雪球", combination: "组合", weibo: "微博", twitter: "X", ima: "ima", zsxq: "星球", mx: "MX" };
 function platformShortLabel(p) {
   return p ? (PLATFORM_SHORT_LABELS[p] || PLATFORM_LABELS[p]) : "全部";
 }
@@ -12,6 +12,7 @@ const PLATFORM_ICONS = {
   weibo: `<svg class="pt-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10.098 20.323c-3.977.391-7.414-1.406-7.672-4.02-.259-2.609 2.759-5.047 6.74-5.441 3.979-.394 7.413 1.404 7.671 4.018.259 2.6-2.759 5.049-6.737 5.439l-.002.004zM9.05 17.219c-.384.616-1.208.884-1.829.602-.612-.279-.793-.991-.406-1.593.379-.595 1.176-.861 1.793-.601.622.263.82.972.442 1.592zm1.27-1.627c-.141.237-.449.353-.689.253-.236-.09-.313-.361-.177-.586.138-.227.436-.346.672-.24.239.09.315.36.18.601l.014-.028zm.176-2.719c-1.893-.493-4.033.45-4.857 2.118-.836 1.704-.026 3.591 1.886 4.21 1.983.64 4.318-.341 5.132-2.179.8-1.793-.201-3.642-2.161-4.149zm7.563-1.224c-.346-.105-.57-.18-.405-.615.375-.977.42-1.804 0-2.404-.781-1.112-2.915-1.053-5.364-.03 0 0-.766.331-.571-.271.376-1.217.315-2.224-.27-2.809-1.338-1.337-4.869.045-7.888 3.08C1.309 10.87 0 13.273 0 15.348c0 3.981 5.099 6.395 10.086 6.395 6.536 0 10.888-3.801 10.888-6.82 0-1.822-1.547-2.854-2.915-3.284v.01zm1.908-5.092c-.766-.856-1.908-1.187-2.96-.962-.436.09-.706.511-.616.932.09.42.511.691.932.602.511-.105 1.067.044 1.442.465.376.421.466.977.316 1.473-.136.406.089.856.51.992.405.119.857-.105.992-.512.33-1.021.12-2.178-.646-3.035l.03.045zm2.418-2.195c-1.576-1.757-3.905-2.419-6.054-1.968-.496.104-.812.587-.706 1.081.104.496.586.813 1.082.707 1.532-.331 3.185.15 4.296 1.383 1.112 1.246 1.429 2.943.947 4.416-.165.48.106 1.007.586 1.157.479.165.991-.104 1.157-.586.675-2.088.241-4.478-1.338-6.235l.03.045z"/></svg>`,
   twitter: `<svg class="pt-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M14.234 10.162 22.977 0h-2.072l-7.591 8.824L7.251 0H.258l9.168 13.343L.258 24H2.33l8.016-9.318L16.749 24h6.993zm-2.837 3.299-.929-1.329L3.076 1.56h3.182l5.965 8.532.929 1.329 7.754 11.09h-3.182z"/></svg>`,
   zsxq: `<svg class="pt-icon" viewBox="0 0 26 26" fill="currentColor" fill-rule="evenodd" aria-hidden="true"><path d="M13.012 0c.874 0 1.582.708 1.582 1.581 0 .873-.708 1.58-1.582 1.58C7.582 3.161 3.164 7.575 3.164 13c0 5.425 4.418 9.839 9.848 9.839 5.43 0 9.848-4.414 9.848-9.839 0-.873.708-1.58 1.582-1.58S26 12.127 26 13c0 7.168-5.837 13-13 13S0 20.168 0 13 5.837 0 13.012 0zm7.989 2.015a3.003 3.003 0 1 1 0 6.006 3.003 3.003 0 0 1 0-6.006z"/></svg>`,
+  mx: `<svg class="pt-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 12l7-7 2 2 3-3 6 6-6 6-3-3-2 2-7-7z"/></svg>`,
 };
 const CHANNEL_ICONS = {
   telegram: `<svg class="ch-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>`,
@@ -25,7 +26,7 @@ const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
 const APP_VERSION = "1.12.73";
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
-const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"];
+const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "mx", "proxies"];
 const TL_PLATFORMS = PLATFORM_TABS.map((p) => [p, p ? PLATFORM_LABELS[p] : "全部"]);
 const STAR_SVG = `<svg class="star-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.95 5.98 6.6.96-4.78 4.66 1.13 6.58L12 17.6l-5.9 3.1 1.13-6.58L2.45 9.44l6.6-.96L12 2.5z"/></svg>`;
 // 次要（降频）铃铛图标：线性风格，与 TRASH_ICON 一致（stroke=currentColor）
@@ -4258,6 +4259,7 @@ function switchStatsTab(name) {
   if (location.pathname + location.search !== next) history.replaceState(null, "", next);
   document.getElementById(`tab-${name}`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
   if (name === "proxies") loadProxyAdmin();
+  if (name === "mx") loadMxAdmin();
 }
 
 function cookieRepairItems(s) {
@@ -5030,6 +5032,7 @@ async function loadAdminStats() {
       <button type="button" class="settings-tab" role="tab" id="tab-plaza" aria-selected="false" aria-controls="st-plaza" data-tab="plaza" onclick="switchStatsTab('plaza')">广场显示</button>
       <button type="button" class="settings-tab" role="tab" id="tab-config" aria-selected="false" aria-controls="st-config" data-tab="config" onclick="switchStatsTab('config')">抓取设置</button>
       <button type="button" class="settings-tab" role="tab" id="tab-cookies" aria-selected="false" aria-controls="st-cookies" data-tab="cookies" onclick="switchStatsTab('cookies')">Cookie 管理</button>
+      <button type="button" class="settings-tab" role="tab" id="tab-mx" aria-selected="false" aria-controls="st-mx" data-tab="mx" onclick="switchStatsTab('mx')">MX平台</button>
       <button type="button" class="settings-tab" role="tab" id="tab-proxies" aria-selected="false" aria-controls="st-proxies" data-tab="proxies" onclick="switchStatsTab('proxies')">代理</button>
     </div>
     <div id="st-overview" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-overview">
@@ -5358,6 +5361,89 @@ async function loadAdminStats() {
         </div>
       </section>
     </div>
+    <div id="st-mx" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-mx" style="display:none">
+      <section class="section-panel">
+        <header class="section-head">
+          <div><h2 class="section-title">MX平台配置</h2>
+          <p class="section-meta">配置 MX 平台的 API Token、同步和 WebSocket 推送。</p></div>
+        </header>
+        <div class="cfg-grid">
+          <div class="cfg-group">
+            <p class="cfg-group-title">基础设置</p>
+            <div class="cfg-fields">
+              <label class="cfg-field cfg-check">
+                <input id="mx-enabled" type="checkbox">
+                <span class="cfg-flag-text">启用 MX 平台</span>
+              </label>
+              <label class="cfg-field">
+                <span>API Token</span>
+                <input id="mx-token" type="text" class="form-control" placeholder="输入 MX API Token">
+              </label>
+              <label class="cfg-field">
+                <span>API 地址</span>
+                <input id="mx-api-base" type="text" class="form-control" placeholder="https://mx.2026.naaifu.cn/business-api/5">
+              </label>
+            </div>
+          </div>
+          <div class="cfg-group">
+            <p class="cfg-group-title">WebSocket 推送</p>
+            <div class="cfg-fields">
+              <label class="cfg-field cfg-check">
+                <input id="mx-ws-enabled" type="checkbox">
+                <span class="cfg-flag-text">启用实时推送</span>
+              </label>
+              <label class="cfg-field">
+                <span>WebSocket 地址</span>
+                <input id="mx-ws-url" type="text" class="form-control" placeholder="wss://mx.2026.naaifu.cn/msg">
+              </label>
+              <label class="cfg-field">
+                <span>WebSocket 路径</span>
+                <input id="mx-ws-path" type="text" class="form-control" placeholder="/socket.io">
+              </label>
+            </div>
+          </div>
+          <div class="cfg-group">
+            <p class="cfg-group-title">同步与抓取</p>
+            <div class="cfg-fields">
+              <label class="cfg-field">
+                <span>房间同步间隔<span class="cfg-unit">小时</span></span>
+                <input id="mx-sync-hours" type="number" class="form-control" min="1" max="168">
+              </label>
+              <label class="cfg-field">
+                <span>单页房间消息数</span>
+                <input id="mx-page-size" type="number" class="form-control" min="1" max="100">
+              </label>
+              <label class="cfg-field">
+                <span>最大历史页数</span>
+                <input id="mx-max-pages" type="number" class="form-control" min="1" max="100">
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="toolbar" style="margin-top:16px">
+          <button type="button" class="btn-normal" id="mx-save-btn" onclick="saveMxConfig()">保存配置</button>
+          <button type="button" class="btn-ghost" id="mx-test-btn" onclick="testMxConnection()">测试连接</button>
+          <button type="button" class="btn-ghost" id="mx-sync-btn" onclick="syncMxRooms()">立即同步房间</button>
+        </div>
+      </section>
+      <section class="section-panel">
+        <header class="section-head">
+          <div><h2 class="section-title">房间管理</h2>
+          <p class="section-meta">管理从 MX 平台同步的房间，控制是否启用和广场显示。</p></div>
+          <div class="toolbar" style="margin-top:12px">
+            <button class="btn-ghost" onclick="loadMxRooms()">刷新</button>
+          </div>
+        </header>
+        <div class="toolbar">
+          <input id="mx-rooms-q" type="search" class="form-control" placeholder="搜索房间..." style="max-width:320px">
+          <label class="cfg-field cfg-check" style="margin-left:8px">
+            <input id="mx-rooms-enabled-only" type="checkbox">
+            <span class="cfg-flag-text">只显示已启用</span>
+          </label>
+        </div>
+        <div id="mx-rooms-list" style="margin-top:16px"></div>
+      </section>
+    </div>
     <div id="st-proxies" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-proxies" style="display:none"></div>`;
   renderStatsData(s);
   switchStatsTab(statsTabFromHash());
@@ -5537,6 +5623,9 @@ function renderStatsData(s) {
   if (imaGroupDiscoveryStatus && s.ima_collector) {
     imaGroupDiscoveryStatus.innerHTML = imaGroupDiscoveryStatusText(s.ima_collector);
   }
+  
+  // Switch to tab from URL query
+  switchStatsTab(statsTabFromHash());
 }
 
 async function savePollingConfig() {
@@ -5636,6 +5725,190 @@ function proxyBusy(btn, on) {
   if (on && btn.disabled) return true;
   btn.disabled = on;
   return false;
+}
+
+// MX Platform functions
+async function loadMxAdmin() {
+  const box = $("#st-mx");
+  if (!box) return;
+  try {
+    // Load MX config
+    const config = await api("/api/admin/sources/mx");
+    $("#mx-enabled").checked = config.enabled;
+    $("#mx-token").value = config.token || "";
+    $("#mx-api-base").value = config.api_base || "https://mx.2026.naaifu.cn/business-api/5";
+    $("#mx-ws-url").value = config.ws_url || "wss://mx.2026.naaifu.cn/msg";
+    $("#mx-ws-path").value = config.ws_path || "/socket.io";
+    $("#mx-ws-enabled").checked = config.ws_enabled;
+    $("#mx-sync-hours").value = config.sync_interval_hours || 1;
+    $("#mx-page-size").value = config.page_size || 50;
+    $("#mx-max-pages").value = config.max_history_pages || 100;
+    
+    // Load rooms
+    loadMxRooms();
+    
+    // Add event listeners for search/filter
+    const qInput = $("#mx-rooms-q");
+    const enabledOnly = $("#mx-rooms-enabled-only");
+    if (qInput) {
+      let searchTimeout = null;
+      qInput.oninput = () => {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(() => loadMxRooms(), 300);
+      };
+    }
+    if (enabledOnly) enabledOnly.onchange = () => loadMxRooms();
+    
+  } catch (err) {
+    box.innerHTML = `<p class="muted">${escapeHtml(err.message || "加载 MX 配置失败")}</p>
+      <div class="toolbar"><button type="button" class="btn-ghost" onclick="loadMxAdmin()">重试</button></div>`;
+  }
+}
+
+async function saveMxConfig() {
+  const btn = $("#mx-save-btn");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    // Parse numbers with defaults, ensure minimum values
+    const page_size = Math.max(1, Number($("#mx-page-size").value) || 50);
+    const max_history_pages = Math.max(1, Number($("#mx-max-pages").value) || 100);
+    const sync_interval_hours = Math.max(1, Number($("#mx-sync-hours").value) || 1);
+    
+    const payload = {
+      enabled: $("#mx-enabled").checked,
+      token: $("#mx-token").value.trim(),
+      api_base: $("#mx-api-base").value.trim() || "https://mx.2026.naaifu.cn/business-api/5",
+      ws_url: $("#mx-ws-url").value.trim() || "wss://mx.2026.naaifu.cn/msg",
+      ws_path: $("#mx-ws-path").value.trim() || "/socket.io",
+      ws_enabled: $("#mx-ws-enabled").checked,
+      page_size,
+      max_history_pages,
+      sync_interval_hours,
+    };
+    console.log("Saving MX config payload:", payload);
+    
+    await api("/api/admin/sources/mx", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    flash("MX配置已保存");
+  } catch (err) {
+    flash(err.message || "保存失败", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function testMxConnection() {
+  const btn = $("#mx-test-btn");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    // Parse numbers with defaults, ensure minimum values
+    const page_size = Math.max(1, Number($("#mx-page-size").value) || 50);
+    const max_history_pages = Math.max(1, Number($("#mx-max-pages").value) || 100);
+    const sync_interval_hours = Math.max(1, Number($("#mx-sync-hours").value) || 1);
+    
+    const payload = {
+      enabled: $("#mx-enabled").checked,
+      token: $("#mx-token").value.trim(),
+      api_base: $("#mx-api-base").value.trim() || "https://mx.2026.naaifu.cn/business-api/5",
+      ws_url: $("#mx-ws-url").value.trim() || "wss://mx.2026.naaifu.cn/msg",
+      ws_path: $("#mx-ws-path").value.trim() || "/socket.io",
+      ws_enabled: $("#mx-ws-enabled").checked,
+      page_size,
+      max_history_pages,
+      sync_interval_hours,
+    };
+    console.log("Testing MX connection with payload:", payload);
+    
+    const result = await api("/api/admin/sources/mx/test", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    flash(`连接成功！发现 ${result.room_count} 个房间`, "success");
+  } catch (err) {
+    flash(err.message || "连接失败", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function syncMxRooms() {
+  const btn = $("#mx-sync-btn");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    await api("/api/admin/sources/mx/rooms/sync", { method: "POST" });
+    flash("房间同步已触发");
+    loadMxRooms();
+  } catch (err) {
+    flash(err.message || "同步失败", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function loadMxRooms() {
+  const listBox = $("#mx-rooms-list");
+  if (!listBox) return;
+  try {
+    const q = ($("#mx-rooms-q")?.value || "").toLowerCase();
+    const enabledOnly = $("#mx-rooms-enabled-only")?.checked;
+    const result = await api(`/api/admin/sources/mx/rooms?search=${encodeURIComponent(q)}&enabled_only=${enabledOnly ? "1" : "0"}`);
+    const rooms = result.rooms || [];
+    if (!rooms.length) {
+      listBox.innerHTML = `<p class="muted">暂无房间，请先同步</p>`;
+      return;
+    }
+    listBox.innerHTML = `<div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">房间</th><th scope="col">今日消息</th><th scope="col">最近更新</th><th scope="col">已启用</th><th scope="col">广场显示</th><th scope="col">订阅数</th><th scope="col">操作</th></tr></thead>
+        <tbody>
+          ${rooms.map((r) => `<tr>
+            <td>
+              <div class="kol-row-main">
+                ${r.avatar ? `<img class="kol-avatar" src="${escapeHtml(r.avatar)}" alt="" loading="lazy">` : `<div class="kol-avatar">${avatarText(r.title)}</div>`}
+                </div>
+                <div>
+                  <div class="kol-name">${escapeHtml(r.title)}</div>
+                  ${r.teaname ? `<div class="muted" style="font-size:12px">${escapeHtml(r.teaname)}</div>` : ""}
+                </div>
+              </div>
+            </td>
+            <td>${Number(r.message_today) || 0}</td>
+            <td>${r.msgtime ? escapeHtml(r.msgtime) : "-"}</td>
+            <td>${r.enabled ? "✅" : "❌"}</td>
+            <td>${r.show_in_plaza ? "✅" : "❌"}</td>
+            <td>${Number(r.subscriber_count) || 0}</td>
+            <td>
+              <div class="toolbar">
+                <button type="button" class="btn-ghost" onclick="updateMxRoom(${r.id}, { enabled: !${r.enabled} })">${r.enabled ? "禁用" : "启用"}</button>
+                <button type="button" class="btn-ghost" onclick="updateMxRoom(${r.id}, { show_in_plaza: !${r.show_in_plaza} })">${r.show_in_plaza ? "隐藏广场" : "显示广场"}</button>
+              </div>
+            </td>
+          </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+  } catch (err) {
+    listBox.innerHTML = `<p class="muted">${escapeHtml(err.message || "加载房间失败")}</p>
+      <div class="toolbar"><button type="button" class="btn-ghost" onclick="loadMxRooms()">重试</button></div>`;
+  }
+}
+
+async function updateMxRoom(roomId, body) {
+  try {
+    await api(`/api/admin/sources/mx/rooms/${roomId}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+    flash("房间已更新");
+    loadMxRooms();
+  } catch (err) {
+    flash(err.message || "更新失败", "error");
+  }
 }
 
 async function loadProxyAdmin() {
