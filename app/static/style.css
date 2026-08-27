@@ -507,6 +507,14 @@ textarea.form-control {
 }
 .ak-filters { margin-top: 12px; }
 .ak-platform-tabs { margin-top: 12px; }
+.ak-add-lines {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  margin-bottom: 0;
+}
+.ak-add-bar { margin-top: 12px; }
+.ak-add-bar .form-control { width: auto; }
+.ak-add-result { white-space: pre-line; }
 
 /* 抓取设置：频率两列 → 通道 → 知识星球通栏 → 保活与保存。
    不用 masonry 两列，避免知识星球把左列撑出空洞。 */
@@ -2358,6 +2366,13 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
     height: 44px;
     min-height: 44px;
     margin: 0;
+  }
+  .ak-add-bar { align-items: stretch; }
+  .ak-add-bar label { width: 100%; }
+  .ak-add-bar .form-control,
+  .ak-add-bar .btn-normal {
+    width: 100%;
+    min-height: 44px;
   }
   .ak-platform-tabs { align-items: stretch; }
   .ak-platform-tabs .platform-tab {

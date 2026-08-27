@@ -1902,9 +1902,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=197"' in html
-    assert 'src="/app.js?v=280"' in html
-    assert 'dav-shell-v149' in sw
+    assert 'href="/style.css?v=198"' in html
+    assert 'src="/app.js?v=281"' in html
+    assert 'dav-shell-v150' in sw
 
 
 def test_ima_documents_follow_latest_dynamic_navigation():
@@ -2362,18 +2362,30 @@ def test_admin_kols_keeps_selection_against_filter_ids():
 
 
 def test_admin_kols_add_keeps_filters_and_marks_row():
-    """添加/导入不得改写筛选；新行在当前筛选里就标出，否则说明看不到。"""
-    add = _fn_body("adminAddKol")
-    batch = _fn_body("adminBatchAddKols")
+    """添加不得改写筛选；新行在当前筛选里就标出，否则说明看不到。"""
+    add = _fn_body("adminBatchAddKols")
     load = _fn_body("loadAdminKols")
-    for body in (add, batch):
-        assert "state.adminKolsPlatform" not in body
-        assert "state.adminKolsCategory" not in body
-        assert "goToLast" not in body
-        assert "focusIds" in body
-        assert "不在当前筛选" in body
+    assert "state.adminKolsPlatform" not in add
+    assert "state.adminKolsCategory" not in add
+    assert "goToLast" not in add
+    assert "focusIds" in add
+    assert "不在当前筛选" in add
     assert "focusIds" in load
     assert "ak-row-flash" in load
+
+
+def test_admin_kols_add_is_one_form():
+    """添加大V与批量导入合为一块：多行输入同时覆盖单条和批量。"""
+    src = APP_JS.read_text()
+    load = _fn_body("loadAdminKols")
+    assert "添加大V" in load
+    assert "批量导入大V" not in load
+    assert "adminAddKol" not in src
+    assert 'id="ad-name"' not in load
+    assert 'id="ad-external"' not in load
+    assert 'id="ad-batch-lines"' in load
+    assert 'onclick="adminBatchAddKols()"' in load
+    assert ">添加<" in load
 
 
 def test_admin_kols_mobile_table_uses_data_labels():
@@ -2443,17 +2455,19 @@ def test_admin_kols_mobile_filters_and_actions_align():
 def test_admin_kols_add_fields_have_accessible_names():
     """添加区控件要有可达名称，不能只靠 placeholder。"""
     body = _fn_body("loadAdminKols")
-    assert 'aria-label="平台"' in body
-    assert 'aria-label="昵称"' in body
-    assert "aria-label=" in body and "外部ID" in body
+    assert 'aria-label="默认平台（未识别的行）"' in body
+    assert 'aria-label="分类"' in body
+    assert 'aria-label="大V链接或UID，每行一个"' in body
 
 
 def test_admin_kols_import_result_preserves_lines():
     """导入失败明细按行展示，不能塞进 inline span 把换行挤掉。"""
     body = _fn_body("loadAdminKols")
+    css = STYLE_CSS.read_text()
     assert '<span id="ad-batch-result"' not in body
     assert "ad-batch-result" in body
-    assert "pre-line" in body or "<pre" in body
+    assert "ak-add-result" in body
+    assert re.search(r"\.ak-add-result\s*\{[^}]*white-space:\s*pre-line", css)
 
 
 def test_type_emphasis_stays_on_ramp():
@@ -2465,13 +2479,15 @@ def test_type_emphasis_stays_on_ramp():
     assert 'resultEl.style.fontWeight = "600"' in _fn_body("adminBatchAddKols")
     paste = re.search(r"^\.cookie-paste\s*\{([^}]*)\}", css, re.M)
     bind = re.search(r"^\.bind-code\s*\{([^}]*)\}", css, re.M)
+    add_lines = re.search(r"^\.ak-add-lines\s*\{([^}]*)\}", css, re.M)
     assert paste and "var(--font-mono)" in paste.group(1) and "var(--text-sm)" in paste.group(1)
     assert bind and "var(--font-mono)" in bind.group(1) and "var(--text-body)" in bind.group(1)
+    assert add_lines and "var(--font-mono)" in add_lines.group(1) and "var(--text-sm)" in add_lines.group(1)
 
 
 def test_admin_kols_mutations_disable_while_in_flight():
     """添加/导入/保存/批量进行中要禁用，防连点。"""
-    for name in ("adminAddKol", "adminBatchAddKols", "adminKolBatch", "saveKolEdit"):
+    for name in ("adminBatchAddKols", "adminKolBatch", "saveKolEdit"):
         body = _fn_body(name)
         assert "disabled" in body, f"{name} 无进行中禁用"
 
@@ -2508,7 +2524,6 @@ def test_admin_kols_tier_and_private_copy():
 def test_admin_kols_errors_use_flash_not_alert():
     """大V管理失败走 flash error，不弹 alert。"""
     for name in (
-        "adminAddKol",
         "adminBatchAddKols",
         "adminKolBatch",
         "adminToggleKol",

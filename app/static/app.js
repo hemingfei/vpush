@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.72";
+const APP_VERSION = "1.12.73";
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"];
@@ -6375,40 +6375,22 @@ async function loadAdminKols(opts) {
   $("#admin-body").innerHTML = `
     <section class="section-panel">
       <header class="section-head">
-        <div><h2 class="section-title">添加大V</h2></div>
-        <div class="toolbar" style="margin-top:12px">
-          <select id="ad-platform" class="form-control" style="margin:0;width:auto" aria-label="平台" onchange="adminPlatformDefaultCat(this)">
-            <option value="xueqiu">雪球</option>
-            <option value="combination">雪球组合</option>
-            <option value="weibo">微博</option>
-            <option value="twitter">X</option>
-            <option value="zsxq">知识星球</option>
-          </select>
-          <select id="ad-category" class="form-control" style="margin:0;width:auto" aria-label="分类"><option value="">未分类</option>${catOptions}</select>
-          <input id="ad-name" class="form-control" style="margin:0;width:200px" placeholder="昵称" aria-label="昵称">
-          <input id="ad-external" class="form-control" style="margin:0;width:300px" placeholder="user_id / uid / 主页或星球链接" aria-label="外部ID或主页链接">
-          <button class="btn-normal" id="ad-add-btn" onclick="adminAddKol()">添加</button>
-        </div>
+        <div><h2 class="section-title">添加大V</h2>
+        <p class="section-meta">每行一个：昵称 + 主页链接/UID（昵称可省略）。链接自动识别平台；纯 UID 用下方默认平台。</p></div>
       </header>
-    </section>
-    <section class="section-panel">
-      <header class="section-head">
-        <div><h2 class="section-title">批量导入大V</h2>
-        <p class="section-meta">每行一个：昵称 + 主页链接/UID（昵称可省略）。自动识别平台：雪球主页→雪球、雪球组合页→雪球组合、微博主页→微博、X 主页→X；纯 UID 等无法识别的行使用下方默认平台。如：<code>段永平 https://xueqiu.com/u/12345</code></p></div>
-      </header>
-      <textarea id="ad-batch-lines" class="form-control" rows="8" style="font-family:monospace;min-height:180px;resize:vertical" placeholder="https://xueqiu.com/u/12345&#10;段永平 12345&#10;https://weibo.com/u/1642591402&#10;https://x.com/elonmusk&#10;https://xueqiu.com/P/ZH123456"></textarea>
-      <div class="toolbar" style="margin-top:12px">
+      <textarea id="ad-batch-lines" class="form-control ak-add-lines" rows="6" placeholder="https://xueqiu.com/u/12345&#10;段永平 12345&#10;https://weibo.com/u/1642591402&#10;https://x.com/elonmusk&#10;https://xueqiu.com/P/ZH123456" aria-label="大V链接或UID，每行一个"></textarea>
+      <div class="toolbar ak-add-bar">
         <label class="muted" for="ad-batch-platform">默认平台（未识别的行）</label>
-        <select id="ad-batch-platform" class="form-control" style="margin:0;width:auto" aria-label="默认平台（未识别的行）" onchange="adminPlatformDefaultCat(this, '#ad-batch-category')">
+        <select id="ad-batch-platform" class="form-control" aria-label="默认平台（未识别的行）" onchange="adminPlatformDefaultCat(this)">
           <option value="xueqiu">雪球</option>
           <option value="combination">雪球组合</option>
           <option value="weibo">微博</option>
           <option value="twitter">X</option>
           <option value="zsxq">知识星球</option>
         </select>
-        <select id="ad-batch-category" class="form-control" style="margin:0;width:auto" aria-label="导入分类"><option value="">未分类</option>${catOptions}</select>
-        <button class="btn-normal" id="ad-batch-btn" onclick="adminBatchAddKols()">批量导入</button>
-        <div id="ad-batch-result" class="muted" style="white-space:pre-line"></div>
+        <select id="ad-batch-category" class="form-control" aria-label="分类"><option value="">未分类</option>${catOptions}</select>
+        <button class="btn-normal" id="ad-batch-btn" onclick="adminBatchAddKols()">添加</button>
+        <div id="ad-batch-result" class="muted ak-add-result"></div>
       </div>
     </section>
     <section class="section-panel">
@@ -6571,7 +6553,7 @@ async function adminKolBatchCategory() {
 async function adminBatchAddKols() {
   const lines = $("#ad-batch-lines").value;
   if (!lines.trim()) {
-    flash("请先粘贴要导入的大V链接/ID", "error");
+    flash("请先填写要添加的大V链接/ID", "error");
     return;
   }
   const platform = $("#ad-batch-platform").value;
@@ -6599,12 +6581,12 @@ async function adminBatchAddKols() {
     }
     const hidden = view && view.hiddenFocus && data.ok;
     flash(data.failed.length
-      ? `导入完成：成功 ${data.ok}/${data.total}，失败 ${data.failed.length} 条${hidden ? "，不在当前筛选里" : ""}`
+      ? `添加完成：成功 ${data.ok}/${data.total}，失败 ${data.failed.length} 条${hidden ? "，不在当前筛选里" : ""}`
       : hidden
-        ? `导入成功：${data.ok} 个，不在当前筛选里`
-        : `导入成功：${data.ok} 个`);
+        ? `添加成功：${data.ok} 个，不在当前筛选里`
+        : `添加成功：${data.ok} 个`);
   } catch (err) {
-    flash("批量导入失败: " + err.message, "error");
+    flash("添加失败: " + err.message, "error");
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -6613,41 +6595,10 @@ async function adminBatchAddKols() {
 // 雪球组合默认分类：实盘（选平台后自动填写）
 function adminPlatformDefaultCat(sel, catSel) {
   if (sel.value !== "combination") return;
-  const cat = $(catSel || "#ad-category");
+  const cat = $(catSel || "#ad-batch-category");
   if (!cat) return;
   for (const opt of cat.options) {
     if (opt.textContent.trim() === "实盘") { cat.value = opt.value; break; }
-  }
-}
-
-async function adminAddKol() {
-  const name = $("#ad-name").value.trim();
-  const platform = $("#ad-platform").value;
-  const category = $("#ad-category").value;
-  const external = $("#ad-external").value.trim();
-  if (!external) {
-    flash("请填写外部ID或主页链接", "error");
-    return;
-  }
-  const btn = $("#ad-add-btn");
-  if (btn) btn.disabled = true;
-  try {
-    const created = await api("/api/kols", {
-      method: "POST",
-      body: JSON.stringify({
-        platform,
-        name,
-        external_id: external,
-        category_id: category ? Number(category) : null,
-      }),
-    });
-    const view = await loadAdminKols({ focusIds: created.id ? [created.id] : [] });
-    const label = created.name || name || "未命名";
-    flash(view && view.hiddenFocus ? `已添加「${label}」，不在当前筛选里` : `已添加「${label}」`);
-  } catch (err) {
-    flash("添加失败: " + err.message, "error");
-  } finally {
-    if (btn) btn.disabled = false;
   }
 }
 
