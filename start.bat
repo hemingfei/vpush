@@ -47,7 +47,7 @@ echo.
 echo ========================================
 echo       Starting V Push Service...
 echo ========================================
-echo [INFO] Service URL: http://127.0.0.1:8000
+echo [INFO] Service URL: http://127.0.0.1:8888
 echo [TIP] Press Ctrl+C to stop the service
 echo.
 
