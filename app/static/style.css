@@ -597,7 +597,7 @@ textarea.form-control {
 .cfg-field .cfg-unit { margin-left: 0.25em; }
 @media (max-width: 800px) {
   .cfg-grid { grid-template-columns: 1fr; }
-  .cfg-group--zsxq .cfg-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cfg-group--zsxq .cfg-fields { grid-template-columns: 1fr; }
 }
 @media (max-width: 720px) {
   .cfg-flags { grid-template-columns: 1fr; }
@@ -2741,6 +2741,21 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   font-size: var(--text-xs); font-weight: var(--font-weight-medium);
 }
 
+.ima-source-stack { display: grid; gap: var(--space-5); }
+.ima-source-block { min-width: 0; }
+.ima-source-block + .ima-source-block {
+  border-top: var(--border-default);
+  padding-top: var(--space-5);
+}
+.ima-source-block-head { margin-bottom: var(--space-3); }
+.ima-source-title {
+  margin: 0;
+  color: var(--color-text-strong);
+  font-size: var(--text-title);
+  font-weight: var(--font-weight-semibold);
+}
+.ima-source-block-head .section-meta { margin-top: 4px; }
+.ima-polling-save-row { justify-content: flex-end; margin-top: var(--space-4); }
 .ima-collector-stack { display: grid; gap: var(--space-4); }
 .ima-collector-connection,
 .ima-groups-block,
@@ -2827,6 +2842,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   .ima-reader-actions button { flex: 1; justify-content: center; min-height: 44px; }
   .ima-pdf-panel iframe { min-height: calc(100vh - 220px); }
   .ima-text-view { max-height: none; }
+  .ima-polling-save-row .btn-normal { width: 100%; }
   .ima-collector-foot { align-items: stretch; }
   .ima-collector-foot .toolbar,
   .ima-credential-actions { width: 100%; }

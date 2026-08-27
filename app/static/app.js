@@ -4256,6 +4256,7 @@ function switchStatsTab(name) {
   });
   const next = name === "overview" ? "/admin/stats" : `/admin/stats?tab=${name}`;
   if (location.pathname + location.search !== next) history.replaceState(null, "", next);
+  document.getElementById(`tab-${name}`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
   if (name === "proxies") loadProxyAdmin();
 }
 
@@ -5169,112 +5170,118 @@ async function loadAdminStats() {
               </label>
             </div>
           </div>
-          <div class="cfg-group cfg-group--zsxq">
-            <p class="cfg-group-title">知识星球</p>
+          <div class="cfg-group">
+            <p class="cfg-group-title">保活与定时</p>
             <div class="cfg-fields">
-              <label class="cfg-field" title="每星球每轮最多翻几页，每页 20 条">
-                <span>单轮翻页<span class="cfg-unit">页</span></span>
-                <input id="pc-zq-pages" type="number" class="form-control" min="1" max="20" value="${s.polling_config.zsxq_max_pages ?? 3}">
+              <label class="cfg-field" title="雪球保活探测间隔；0 = 关闭自动保活">
+                <span>雪球探测<span class="cfg-unit">秒</span></span>
+                <input id="pc-probe" type="number" class="form-control" min="0" max="86400" value="${s.polling_config.source_probe_interval_seconds}">
               </label>
-              <label class="cfg-field" title="列表/详情请求间隔，过短容易触发 1059">
-                <span>请求间隔<span class="cfg-unit">秒</span></span>
-                <input id="pc-zq-delay" type="number" class="form-control" min="0.2" max="10" step="0.1" value="${s.polling_config.zsxq_fetch_delay_seconds ?? 1}">
+              <label class="cfg-field" title="登录态自动保活间隔；0 = 关闭">
+                <span>cookie保活<span class="cfg-unit">秒</span></span>
+                <input id="pc-keepalive" type="number" class="form-control" min="0" max="86400" value="${s.polling_config.cookie_keepalive_interval_seconds}">
               </label>
-              <label class="cfg-field" title="附件 download_url 请求间隔，过短容易撞日限">
-                <span>附件间隔<span class="cfg-unit">秒</span></span>
-                <input id="pc-zq-file-delay" type="number" class="form-control" min="0.2" max="10" step="0.1" value="${s.polling_config.zsxq_file_delay_seconds ?? 1}">
+              <label class="cfg-field" title="每日精选推送的小时（0-23，北京时间）">
+                <span>每日精选<span class="cfg-unit">时</span></span>
+                <input id="pc-daily" type="number" class="form-control" min="0" max="23" value="${s.polling_config.daily_report_hour}">
               </label>
-              <label class="cfg-field cfg-check" title="抓到新帖时就把 PDF 拉到本地；默认关闭，点开再下，省日限">
-                <input id="pc-zq-prefetch" type="checkbox" ${s.polling_config.zsxq_prefetch_files ? "checked" : ""}>
-                <span class="cfg-flag-text">
-                  <span>抓取时预缓存附件</span>
-                  <span class="cfg-check-desc">打开后新帖 PDF 会立刻落到本地，费配额；默认点开再下</span>
-                </span>
-              </label>
-              <label class="cfg-field cfg-check" title="新帖自动抓评论入库（可一并推送）；旧帖不动">
-                <input id="pc-zq-comments" type="checkbox" ${s.polling_config.zsxq_fetch_comments ? "checked" : ""}>
-                <span class="cfg-flag-text">
-                  <span>抓取评论</span>
-                  <span class="cfg-check-desc">新主题的评论在抓帖时一并入库</span>
-                </span>
-              </label>
-              <label class="cfg-field" title="单主题评论最多翻几页（每页 20 条）">
-                <span>评论翻页<span class="cfg-unit">页</span></span>
-                <input id="pc-zq-comment-pages" type="number" class="form-control" min="1" max="10" value="${s.polling_config.zsxq_max_comment_pages ?? 3}">
-              </label>
-              <label class="cfg-field" title="每轮最多发起的评论请求数，保护限流">
-                <span>评论预算<span class="cfg-unit">次/轮</span></span>
-                <input id="pc-zq-comment-budget" type="number" class="form-control" min="1" max="200" value="${s.polling_config.zsxq_comment_budget ?? 30}">
-              </label>
-              <label class="cfg-field cfg-check" title="用 App 通道请求头（xiaomiquan UA + X-Request-Id/X-Version）代替浏览器头；默认关，等你复测日限差异确认有收益再开">
-                <input id="pc-zq-app" type="checkbox" ${s.polling_config.zsxq_app_channel ? "checked" : ""}>
-                <span class="cfg-flag-text">
-                  <span>App 通道头</span>
-                  <span class="cfg-check-desc">伪称 Android 客户端请求；与 web 通道共用账号配额</span>
-                </span>
-              </label>
-              <label class="cfg-field cfg-field--wide" title="App 通道 UA 里的设备标识：Android 版本 + 品牌_型号，空格自动压成下划线">
-                <span>设备标识<span class="cfg-unit">RELEASE BRAND_MODEL</span></span>
-                <input id="pc-zq-app-device" type="text" class="form-control" maxlength="64" value="${escapeHtml(s.polling_config.zsxq_app_device ?? "16 OnePlus_PJD110")}">
-              </label>
-            </div>
-            <div class="cfg-foot">
-              <p class="muted" id="zq-cache-stat">附件缓存 ${zcSize} / ${zc.files || 0} 个文件</p>
-              <button type="button" class="btn-ghost" onclick="purgeZsxqCache()">清理未引用</button>
-            </div>
-          </div>
-          <div class="cfg-ops">
-            <div class="cfg-group">
-              <p class="cfg-group-title">保活与定时</p>
-              <div class="cfg-fields">
-                <label class="cfg-field" title="雪球保活探测间隔；0 = 关闭自动保活">
-                  <span>雪球探测<span class="cfg-unit">秒</span></span>
-                  <input id="pc-probe" type="number" class="form-control" min="0" max="86400" value="${s.polling_config.source_probe_interval_seconds}">
-                </label>
-                <label class="cfg-field" title="登录态自动保活间隔；0 = 关闭">
-                  <span>cookie保活<span class="cfg-unit">秒</span></span>
-                  <input id="pc-keepalive" type="number" class="form-control" min="0" max="86400" value="${s.polling_config.cookie_keepalive_interval_seconds}">
-                </label>
-                <label class="cfg-field" title="每日精选推送的小时（0-23，北京时间）">
-                  <span>每日精选<span class="cfg-unit">时</span></span>
-                  <input id="pc-daily" type="number" class="form-control" min="0" max="23" value="${s.polling_config.daily_report_hour}">
-                </label>
-              </div>
-            </div>
-            <div class="cfg-save-row">
-              <button type="button" class="btn-normal" id="pc-save" onclick="savePollingConfig()">保存抓取设置</button>
             </div>
           </div>
         </div>
       </section>
-      <section class="section-panel">
-        <header class="section-head"><div><h2 class="section-title">IMA 文档采集</h2>
-        <p class="section-meta">默认每小时检查一次，只下载新增 PDF；Refresh Token 留空表示保持已保存值。</p></div></header>
-        <div class="cfg-stack ima-collector-stack">
-          <div class="cfg-group ima-collector-connection">
-            <p class="cfg-group-title">连接与同步</p>
-            <div class="ima-collector-fields cfg-fields">
-              <label class="cfg-field ima-code-field"><span>IMA UID</span><input id="ima-pure-uid" type="text" class="form-control" value="${escapeHtml(pure.uid || "001aa361168019ef")}" maxlength="64"></label>
-              <label class="cfg-field ima-code-field"><span>知识库 ID</span><input id="ima-pure-kb" type="text" class="form-control" value="${escapeHtml(pure.knowledge_base_id || "7464369361259867")}" maxlength="64"></label>
-              <label class="cfg-field ima-code-field"><span>根文件夹 ID</span><input id="ima-pure-root" type="text" class="form-control" value="${escapeHtml(pure.root_folder_id || "folder_7489327974078249")}" maxlength="128"></label>
-              <label class="cfg-field"><span>检查间隔<span class="cfg-unit">分钟</span></span><input id="ima-pure-interval" type="number" class="form-control" min="30" max="10080" value="${Math.round(Number(pure.interval_seconds || 3600) / 60)}"></label>
-              <label class="cfg-field ima-code-field ima-field--wide"><span>Refresh Token</span><input id="ima-pure-token" class="form-control" type="password" autocomplete="off" placeholder="${pure.refresh_token?.set ? "已保存，留空保持不变" : "重新登录 IMA 后粘贴"}"></label>
-            </div>
-          </div>
-          <div class="cfg-group ima-groups-block">
-            <div class="ima-groups-head">
-              <p class="cfg-group-title">知识库群组</p>
-              <div class="toolbar ima-groups-toolbar">
-                <span id="ima-group-discovery-status" class="muted">${imaGroupDiscoveryStatusText(imaCollector)}</span>
-                <button type="button" class="btn-ghost" onclick="addImaGroupRow()">添加 IMA 群组</button>
+      <section class="section-panel ima-source-panel">
+        <header class="section-head"><div><h2 class="section-title">IMA</h2>
+        <p class="section-meta">文档采集和知识星球采集配置；保存后即时生效。</p></div></header>
+        <div class="ima-source-stack">
+          <div class="ima-source-block">
+            <header class="ima-source-block-head"><div><h3 class="ima-source-title">IMA 文档采集</h3>
+            <p class="section-meta">默认每小时检查一次，只下载新增 PDF；Refresh Token 留空表示保持已保存值。</p></div></header>
+            <div class="cfg-stack ima-collector-stack">
+              <div class="cfg-group ima-collector-connection">
+                <p class="cfg-group-title">连接与同步</p>
+                <div class="ima-collector-fields cfg-fields">
+                  <label class="cfg-field ima-code-field"><span>IMA UID</span><input id="ima-pure-uid" type="text" class="form-control" value="${escapeHtml(pure.uid || "001aa361168019ef")}" maxlength="64"></label>
+                  <label class="cfg-field ima-code-field"><span>知识库 ID</span><input id="ima-pure-kb" type="text" class="form-control" value="${escapeHtml(pure.knowledge_base_id || "7464369361259867")}" maxlength="64"></label>
+                  <label class="cfg-field ima-code-field"><span>根文件夹 ID</span><input id="ima-pure-root" type="text" class="form-control" value="${escapeHtml(pure.root_folder_id || "folder_7489327974078249")}" maxlength="128"></label>
+                  <label class="cfg-field"><span>检查间隔<span class="cfg-unit">分钟</span></span><input id="ima-pure-interval" type="number" class="form-control" min="30" max="10080" value="${Math.round(Number(pure.interval_seconds || 3600) / 60)}"></label>
+                  <label class="cfg-field ima-code-field ima-field--wide"><span>Refresh Token</span><input id="ima-pure-token" class="form-control" type="password" autocomplete="off" placeholder="${pure.refresh_token?.set ? "已保存，留空保持不变" : "重新登录 IMA 后粘贴"}"></label>
+                </div>
+              </div>
+              <div class="cfg-group ima-groups-block">
+                <div class="ima-groups-head">
+                  <p class="cfg-group-title">知识库群组</p>
+                  <div class="toolbar ima-groups-toolbar">
+                    <span id="ima-group-discovery-status" class="muted">${imaGroupDiscoveryStatusText(imaCollector)}</span>
+                    <button type="button" class="btn-ghost" onclick="addImaGroupRow()">添加 IMA 群组</button>
+                  </div>
+                </div>
+                <div id="ima-groups" class="ima-groups-list">${renderImaGroupRows(imaCollector.config && imaCollector.config.groups)}</div>
               </div>
             </div>
-            <div id="ima-groups" class="ima-groups-list">${renderImaGroupRows(imaCollector.config && imaCollector.config.groups)}</div>
+            <div class="cfg-foot ima-collector-foot">
+              <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
+              <div class="toolbar"><button type="button" class="btn-normal" id="ima-collector-save" onclick="saveImaCollector()">保存采集配置</button><button type="button" class="btn-ghost" id="ima-sync-btn" onclick="triggerImaCollector()">${REFRESH_ICON}<span>立即同步</span></button></div>
+            </div>
+          </div>
+          <div class="ima-source-block">
+            <header class="ima-source-block-head"><div><h3 class="ima-source-title">知识星球</h3></div></header>
+            <div class="cfg-group cfg-group--zsxq">
+              <div class="cfg-fields">
+                <label class="cfg-field" title="每星球每轮最多翻几页，每页 20 条">
+                  <span>单轮翻页<span class="cfg-unit">页</span></span>
+                  <input id="pc-zq-pages" type="number" class="form-control" min="1" max="20" value="${s.polling_config.zsxq_max_pages ?? 3}">
+                </label>
+                <label class="cfg-field" title="列表/详情请求间隔，过短容易触发 1059">
+                  <span>请求间隔<span class="cfg-unit">秒</span></span>
+                  <input id="pc-zq-delay" type="number" class="form-control" min="0.2" max="10" step="0.1" value="${s.polling_config.zsxq_fetch_delay_seconds ?? 1}">
+                </label>
+                <label class="cfg-field" title="附件 download_url 请求间隔，过短容易撞日限">
+                  <span>附件间隔<span class="cfg-unit">秒</span></span>
+                  <input id="pc-zq-file-delay" type="number" class="form-control" min="0.2" max="10" step="0.1" value="${s.polling_config.zsxq_file_delay_seconds ?? 1}">
+                </label>
+                <label class="cfg-field cfg-check" title="抓到新帖时就把 PDF 拉到本地；默认关闭，点开再下，省日限">
+                  <input id="pc-zq-prefetch" type="checkbox" ${s.polling_config.zsxq_prefetch_files ? "checked" : ""}>
+                  <span class="cfg-flag-text">
+                    <span>抓取时预缓存附件</span>
+                    <span class="cfg-check-desc">打开后新帖 PDF 会立刻落到本地，费配额；默认点开再下</span>
+                  </span>
+                </label>
+                <label class="cfg-field cfg-check" title="新帖自动抓评论入库（可一并推送）；旧帖不动">
+                  <input id="pc-zq-comments" type="checkbox" ${s.polling_config.zsxq_fetch_comments ? "checked" : ""}>
+                  <span class="cfg-flag-text">
+                    <span>抓取评论</span>
+                    <span class="cfg-check-desc">新主题的评论在抓帖时一并入库</span>
+                  </span>
+                </label>
+                <label class="cfg-field" title="单主题评论最多翻几页（每页 20 条）">
+                  <span>评论翻页<span class="cfg-unit">页</span></span>
+                  <input id="pc-zq-comment-pages" type="number" class="form-control" min="1" max="10" value="${s.polling_config.zsxq_max_comment_pages ?? 3}">
+                </label>
+                <label class="cfg-field" title="每轮最多发起的评论请求数，保护限流">
+                  <span>评论预算<span class="cfg-unit">次/轮</span></span>
+                  <input id="pc-zq-comment-budget" type="number" class="form-control" min="1" max="200" value="${s.polling_config.zsxq_comment_budget ?? 30}">
+                </label>
+                <label class="cfg-field cfg-check" title="用 App 通道请求头（xiaomiquan UA + X-Request-Id/X-Version）代替浏览器头；默认关，等你复测日限差异确认有收益再开">
+                  <input id="pc-zq-app" type="checkbox" ${s.polling_config.zsxq_app_channel ? "checked" : ""}>
+                  <span class="cfg-flag-text">
+                    <span>App 通道头</span>
+                    <span class="cfg-check-desc">伪称 Android 客户端请求；与 web 通道共用账号配额</span>
+                  </span>
+                </label>
+                <label class="cfg-field cfg-field--wide" title="App 通道 UA 里的设备标识：Android 版本 + 品牌_型号，空格自动压成下划线">
+                  <span>设备标识<span class="cfg-unit">RELEASE BRAND_MODEL</span></span>
+                  <input id="pc-zq-app-device" type="text" class="form-control" maxlength="64" value="${escapeHtml(s.polling_config.zsxq_app_device ?? "16 OnePlus_PJD110")}">
+                </label>
+              </div>
+              <div class="cfg-foot">
+                <p class="muted" id="zq-cache-stat">附件缓存 ${zcSize} / ${zc.files || 0} 个文件</p>
+                <button type="button" class="btn-ghost" onclick="purgeZsxqCache()">清理未引用</button>
+              </div>
+            </div>
           </div>
         </div>
-        <div class="cfg-foot ima-collector-foot">
-          <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
-          <div class="toolbar"><button type="button" class="btn-normal" onclick="saveImaCollector()">保存采集配置</button><button type="button" class="btn-ghost" onclick="triggerImaCollector()">${REFRESH_ICON}<span>立即同步</span></button></div>
+        <div class="cfg-save-row ima-polling-save-row">
+          <button type="button" class="btn-normal" id="pc-save" onclick="savePollingConfig()">保存抓取设置</button>
         </div>
       </section>
     </div>
@@ -5335,7 +5342,7 @@ async function loadAdminStats() {
         <div class="ima-credential-actions toolbar">
           <button type="button" class="btn-normal" onclick="saveImaCredentials()">保存 IMA 凭证</button>
           <button type="button" class="btn-ghost" onclick="pasteCookieField('ima-cookie')">从剪贴板填入 Cookie</button>
-          ${ima.cookie?.set && !ima.cookie.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('ima','ima')" aria-label="清除 ima Cookie">清除 Cookie</button>` : ""}
+          ${ima.cookie?.set && !ima.cookie.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('ima','ima')" aria-label="清除 IMA Cookie">清除 Cookie</button>` : ""}
         </div>
       </section>
       <section class="section-panel">
@@ -5526,6 +5533,10 @@ function renderStatsData(s) {
   if (refreshAt) refreshAt.textContent = `更新于 ${new Date().toLocaleTimeString()}`;
   const imaCollectorStatus = $("#ima-collector-status");
   if (imaCollectorStatus && s.ima_collector) imaCollectorStatus.textContent = imaCollectorStatusText(s.ima_collector);
+  const imaGroupDiscoveryStatus = $("#ima-group-discovery-status");
+  if (imaGroupDiscoveryStatus && s.ima_collector) {
+    imaGroupDiscoveryStatus.innerHTML = imaGroupDiscoveryStatusText(s.ima_collector);
+  }
 }
 
 async function savePollingConfig() {
@@ -6000,6 +6011,7 @@ function imaCollectorStatusText(status) {
 }
 
 async function saveImaCollector() {
+  const focusId = document.activeElement?.id || "";
   const minutes = Number($("#ima-pure-interval")?.value || 60);
   if (!Number.isInteger(minutes) || minutes < 30 || minutes > 10080) {
     flash("检查间隔须在 30–10080 分钟", "error");
@@ -6020,20 +6032,28 @@ async function saveImaCollector() {
     if (tokenInput) tokenInput.value = "";
     flash("IMA 文档采集配置已保存");
     await loadAdminStats();
+    if (focusId) document.getElementById(focusId)?.focus();
   } catch (err) {
     flash(err.message || "保存失败", "error");
   }
 }
 
 async function triggerImaCollector() {
+  const btn = $("#ima-sync-btn");
+  if (btn?.disabled) return;
+  if (btn) btn.disabled = true;
   try {
-    await api("/api/admin/ima-collector/sync", { method: "POST" });
-    flash("IMA 文档同步已启动");
+    const result = await api("/api/admin/ima-collector/sync", { method: "POST" });
+    flash(result.status === "already_running" ? "IMA 文档同步正在进行中" : "IMA 文档同步已启动");
     const status = await api("/api/admin/ima-collector");
     const target = $("#ima-collector-status");
     if (target) target.textContent = imaCollectorStatusText(status);
+    const discovery = $("#ima-group-discovery-status");
+    if (discovery) discovery.innerHTML = imaGroupDiscoveryStatusText(status);
   } catch (err) {
     flash(err.message || "同步启动失败", "error");
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
