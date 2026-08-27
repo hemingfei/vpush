@@ -15,12 +15,12 @@ STYLE_CSS = APP_JS.with_name("style.css")
 
 
 def test_knowledge_row_hides_unused_cover_fallback_icon():
-    """封面成功时隐藏的备用图标不得撑开文档行的缩略图列。"""
+    """瘦行不再预留封面列，备用图标不得再撑开行高。"""
+    row = _fn_body("imaDocumentRow")
     css = STYLE_CSS.read_text()
-    assert re.search(r"\.ima-doc-row-icon\[hidden\]\s*\{[^}]*display:\s*none", css), (
-        "备用图标带 hidden 时必须明确保持 display:none，避免覆盖浏览器默认隐藏样式"
-    )
-    assert 'class="ima-doc-row-icon" hidden' in APP_JS.read_text()
+    assert "ima-doc-row-icon" not in row
+    assert "ima-doc-row-thumb" not in row
+    assert "grid-template-columns: minmax(0, 1fr) 20px" in css
 
 
 
@@ -1873,7 +1873,7 @@ def test_knowledge_catalog_shell_contract():
 
 
 def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
-    """库内卡片展示封面/摘要/标签；阅读页按 has_pdf/has_txt 开门；非管理员没有全部群组。"""
+    """库内瘦行按日浏览；搜索/标签出日并分页；阅读页按 has_pdf/has_txt 开门。"""
     src = APP_JS.read_text()
     row = _fn_body("imaDocumentRow")
     render = _fn_body("renderImaDocuments")
@@ -1894,13 +1894,18 @@ def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
     assert "imaDocumentsRoute(group, query, day, tag)" in reader or "imaDocumentsRoute(item.group_id, query, day, tag)" in reader
     assert "closeImaPdf" in src
     assert "loadImaPdf(mediaId)" in reader
-    assert "item.cover_url" in row
-    assert 'startsWith("http")' in src
-    assert "onerror" in row
-    assert "ima-doc-row-thumb" in row
-    assert "nextElementSibling" in row
-    assert "item.abstract" in row
-    assert "item.tags" in row
+    assert "ima-doc-abstract" not in row
+    assert "item.abstract" not in row
+    assert "ima-doc-row-thumb" not in row
+    assert "item.cover_url" not in row
+    assert "item.tags" not in row
+    assert "imaDocKindLabel" in row
+    assert "fmtImaDay(item.day)" in row
+    assert "stepImaDocumentsDay" in src
+    assert "ima-doc-day-nav" in src
+    assert "loadImaDocumentsMore" in src
+    assert 'params.set("limit"' in render
+    assert "data.has_more" in render
 
     assert "has_pdf" in reader
     pdf_window = reader[max(0, reader.index("查看 PDF") - 220): reader.index("查看 PDF") + 40]
@@ -1912,9 +1917,22 @@ def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
     assert "state.user.is_admin" in groups or "state.user?.is_admin" in groups
     assert "renderKnowledge" in select
     assert ".ima-doc-cover" in css or ".ima-doc-tag" in css
-    assert "line-clamp" in css or "-webkit-line-clamp" in css
+    assert "grid-column: 1" in css
     assert "grid-column: 2" in css
-    assert "grid-column: 3" in css
+    assert "grid-column: 3" not in css
+
+
+def test_ima_documents_search_leaves_day_view():
+    src = APP_JS.read_text()
+    submit = _fn_body("submitImaDocumentsSearch")
+    tag = _fn_body("selectImaDocumentsTag")
+    day = _fn_body("selectImaDocumentsDay")
+    clear = _fn_body("clearImaDocumentsFilters")
+    assert "state.imaDocumentsDay = \"\"" in submit
+    assert "state.imaDocumentsDay = \"\"" in tag
+    assert "state.imaDocumentsQuery = \"\"" in day
+    assert "state.imaDocumentsTag = \"\"" in day
+    assert "imaDocumentsLastDay" in clear
 
 
 def test_register_placeholder_matches_username_min_length():

@@ -104,6 +104,9 @@ const state = {
   })(),
   imaDocumentsQuery: "",
   imaDocumentsDay: "",
+  imaDocumentsLastDay: "",
+  imaDocumentsDays: [],
+  imaDocumentsHasMore: false,
   imaDocumentsGroup: "",
   imaDocumentsTag: "",
   pageBackRoute: "",
@@ -530,6 +533,12 @@ async function renderMore(seq) {
     </section>`;
 }
 
+const _imaItems = [];
+let _imaOffset = 0;
+let _imaLoadingMore = false;
+let _imaLoadObserver = null;
+let _imaLoadFallback = null;
+
 function imaSafeCoverUrl(url) {
   const cover = String(url || "");
   return cover.startsWith("http") ? cover : "";
@@ -568,22 +577,12 @@ function imaDocumentTagsHtml(tags, interactive = false) {
 function imaDocumentRow(item, showGroupLabel = false) {
   const groupLabel = showGroupLabel && item.group_name
     ? `<span class="ima-doc-group-label">${escapeHtml(item.group_name)}</span>` : "";
-  const cover = imaSafeCoverUrl(item.cover_url);
-  const thumb = cover
-    ? `<span class="ima-doc-row-thumb"><img class="ima-doc-cover" src="${escapeHtml(cover)}" alt="" onerror="this.hidden=true;var fb=this.nextElementSibling;if(fb)fb.hidden=false"><span class="ima-doc-row-icon" hidden>${FILE_TEXT_ICON}</span></span>`
-    : `<span class="ima-doc-row-thumb"><span class="ima-doc-row-icon">${FILE_TEXT_ICON}</span></span>`;
-  const abstract = String(item.abstract || "").trim();
-  const abstractHtml = abstract ? `<span class="ima-doc-abstract">${escapeHtml(abstract)}</span>` : "";
-  const meta = [fmtImaDay(item.day), fmtDocSize(item.size)].filter(Boolean).join(" · ");
   return `
     <div class="ima-doc-row" role="button" tabindex="0" data-media-id="${escapeHtml(item.media_id)}" onclick="openImaDocument(this.dataset.mediaId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openImaDocument(this.dataset.mediaId)}">
-      ${thumb}
       <span class="ima-doc-row-copy">
         <span class="ima-doc-row-name">${escapeHtml(item.name)}</span>
-        ${abstractHtml}
-        ${imaDocumentTagsHtml(item.tags, true)}
         ${groupLabel}
-        <span class="ima-doc-row-meta">${meta ? `${escapeHtml(meta)} · ` : ""}<span class="ima-doc-kind">${escapeHtml(imaDocKindLabel(item))}</span></span>
+        <span class="ima-doc-row-meta">${escapeHtml(fmtImaDay(item.day) || "")} · <span class="ima-doc-kind">${escapeHtml(imaDocKindLabel(item))}</span></span>
       </span>
       <span class="ima-doc-row-arrow" aria-hidden="true">›</span>
     </div>`;
@@ -632,6 +631,7 @@ function selectImaDocumentGroup(value) {
   }
   state.imaDocumentsGroup = String(value || "");
   state.imaDocumentsDay = "";
+  state.imaDocumentsLastDay = "";
   state.imaDocumentsTag = "";
   state.imaDocumentsQuery = $("#ima-doc-q")?.value?.trim() || state.imaDocumentsQuery || "";
   replaceImaDocumentsRoute(imaDocumentsRoute(value, state.imaDocumentsQuery, "", ""));
@@ -639,27 +639,62 @@ function selectImaDocumentGroup(value) {
   renderImaDocuments(seq);
 }
 
-function updateImaDocumentsFilters(query, day) {
-  state.imaDocumentsQuery = String(query || "").trim();
-  state.imaDocumentsDay = String(day || "");
-  replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay));
+function submitImaDocumentsSearch() {
+  state.imaDocumentsQuery = ($("#ima-doc-q")?.value || "").trim();
+  if (state.imaDocumentsQuery || state.imaDocumentsTag) {
+    state.imaDocumentsDay = "";
+  } else {
+    state.imaDocumentsDay = state.imaDocumentsLastDay || "";
+  }
+  replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay, state.imaDocumentsTag));
   const seq = ++routeRenderSeq;
   renderImaDocuments(seq);
 }
 
-function submitImaDocumentsSearch() {
-  updateImaDocumentsFilters($("#ima-doc-q")?.value || "", state.imaDocumentsDay);
-}
-
 function selectImaDocumentsDay(value) {
-  updateImaDocumentsFilters(state.imaDocumentsQuery, value);
+  state.imaDocumentsQuery = "";
+  state.imaDocumentsTag = "";
+  state.imaDocumentsDay = String(value || "");
+  const input = $("#ima-doc-q");
+  if (input) input.value = "";
+  replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, "", state.imaDocumentsDay, ""));
+  const seq = ++routeRenderSeq;
+  renderImaDocuments(seq);
 }
 
 function selectImaDocumentsTag(value) {
   state.imaDocumentsTag = String(value || "");
+  if (state.imaDocumentsQuery || state.imaDocumentsTag) {
+    state.imaDocumentsDay = "";
+  } else {
+    state.imaDocumentsDay = state.imaDocumentsLastDay || "";
+  }
   replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay, state.imaDocumentsTag));
   const seq = ++routeRenderSeq;
   renderImaDocuments(seq);
+}
+
+function stepImaDocumentsDay(delta) {
+  const days = Array.isArray(state.imaDocumentsDays) ? state.imaDocumentsDays : [];
+  if (!days.length) return;
+  const idx = days.indexOf(state.imaDocumentsDay || "");
+  const nextIdx = idx < 0 ? (delta < 0 ? days.length - 1 : 0) : idx - Number(delta);
+  if (nextIdx < 0 || nextIdx >= days.length) return;
+  selectImaDocumentsDay(days[nextIdx]);
+}
+
+function imaDocumentsDayNavHtml(day, days) {
+  const list = Array.isArray(days) ? days.filter(Boolean) : [];
+  if (!list.length) return "";
+  const current = String(day || "");
+  const idx = list.indexOf(current);
+  const prevDisabled = idx >= 0 && idx >= list.length - 1 ? "disabled" : "";
+  const nextDisabled = idx >= 0 && idx <= 0 ? "disabled" : "";
+  return `<nav class="ima-doc-day-nav" aria-label="日期">
+    <button type="button" class="btn-ghost" ${prevDisabled} onclick="stepImaDocumentsDay(-1)" aria-label="前一天">‹</button>
+    <span>${escapeHtml(fmtImaDay(current) || current)}</span>
+    <button type="button" class="btn-ghost" ${nextDisabled} onclick="stepImaDocumentsDay(1)" aria-label="后一天">›</button>
+  </nav>`;
 }
 
 function imaDocumentGroupControls(groups, selectedGroup) {
@@ -843,6 +878,8 @@ async function renderKnowledge(seq, encodedMediaId = "") {
 }
 
 async function renderImaDocuments(seq, encodedMediaId = "") {
+  stopImaDocumentsAutoLoad();
+  _imaLoadingMore = false;
   ensureKnowledgePhoneWatch();
   if (isPhoneShell()) {
     renderKnowledgePhoneBlocked();
@@ -859,7 +896,8 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
   const query = routeQuery().get("q") || "";
   const day = routeQuery().get("day") || "";
   const tag = routeQuery().get("tag") || "";
-  const filtersOpen = !!(day || tag);
+  const searchMode = !!(query || tag);
+  const filtersOpen = !!tag;
   state.imaDocumentsGroup = selectedGroup;
   state.imaDocumentsQuery = query;
   state.imaDocumentsDay = day;
@@ -876,7 +914,8 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
           <label class="search-bar ima-doc-search">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜索标题或摘要" aria-label="搜索知识库"></label>
           <button type="submit" class="btn-ghost">搜索</button>
         </form>
-        <button type="button" class="btn-ghost${day || tag ? " has-filter" : ""}" id="ima-doc-filter-toggle" aria-expanded="${filtersOpen}" aria-controls="ima-doc-filters" onclick="toggleImaDocumentsFilters()">${FILTER_ICON}<span>筛选</span></button>
+        <div id="ima-doc-day-nav-slot"></div>
+        <button type="button" class="btn-ghost${tag ? " has-filter" : ""}" id="ima-doc-filter-toggle" aria-expanded="${filtersOpen}" aria-controls="ima-doc-filters" onclick="toggleImaDocumentsFilters()">${FILTER_ICON}<span>筛选</span></button>
       </div>
       <div id="ima-doc-filters" class="ima-doc-filters"${filtersOpen ? "" : " hidden"}>
         <select id="ima-doc-day" class="form-control ima-doc-day-filter" aria-label="按日期筛选" onchange="selectImaDocumentsDay(this.value)"><option value="">全部日期</option></select>
@@ -888,9 +927,14 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
   try {
     const params = new URLSearchParams();
     if (query) params.set("q", query);
-    if (day) params.set("day", day);
-    if (selectedGroup) params.set("group", selectedGroup);
     if (tag) params.set("tag", tag);
+    if (selectedGroup) params.set("group", selectedGroup);
+    if (searchMode) {
+      params.set("limit", "50");
+      params.set("offset", "0");
+    } else if (day) {
+      params.set("day", day);
+    }
     const data = await api(`/api/ima-documents?${params.toString()}`);
     if (!routeStillActive(seq)) return;
     const groups = Array.isArray(data.groups) ? data.groups : [];
@@ -910,11 +954,19 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     }
     const days = Array.isArray(data.days)
       ? data.days.filter(Boolean)
-      : [...new Set(items.map((item) => item.day))];
-    if (day && !days.includes(day)) days.unshift(day);
+      : [...new Set(items.map((item) => item.day).filter(Boolean))];
+    state.imaDocumentsDays = days;
+    if (!searchMode && data.day) {
+      state.imaDocumentsDay = data.day;
+      state.imaDocumentsLastDay = data.day;
+      replaceImaDocumentsRoute(imaDocumentsRoute(selectedGroup, query, data.day, tag));
+    }
+    const dropdownDays = [...days];
+    const selectedDay = searchMode ? "" : (state.imaDocumentsDay || day || "");
+    if (selectedDay && !dropdownDays.includes(selectedDay)) dropdownDays.unshift(selectedDay);
     const daySelect = $("#ima-doc-day");
     if (daySelect) {
-      daySelect.innerHTML = `<option value="">全部日期</option>${days.map((value) => `<option value="${escapeHtml(value)}" ${value === day ? "selected" : ""}>${escapeHtml(fmtImaDay(value) || value)}</option>`).join("")}`;
+      daySelect.innerHTML = `<option value="">全部日期</option>${dropdownDays.map((value) => `<option value="${escapeHtml(value)}" ${value === selectedDay ? "selected" : ""}>${escapeHtml(fmtImaDay(value) || value)}</option>`).join("")}`;
     }
     const tagSelect = $("#ima-doc-tag");
     if (tagSelect) {
@@ -924,14 +976,28 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
       if (tag && !uniqueTags.includes(tag)) uniqueTags.unshift(tag);
       tagSelect.innerHTML = `<option value="">全部标签</option>${uniqueTags.map((value) => `<option value="${escapeHtml(value)}" ${value === tag ? "selected" : ""}>${escapeHtml(value)}</option>`).join("")}`;
     }
-    const hasFilter = !!(query || day || tag);
+    const navSlot = $("#ima-doc-day-nav-slot");
+    if (navSlot) navSlot.innerHTML = searchMode ? "" : imaDocumentsDayNavHtml(state.imaDocumentsDay || data.day, days);
+    const hasFilter = !!(query || tag);
     syncImaDocumentsFilterStatus();
-    $("#ima-docs-body").innerHTML = items.length
-      ? imaDocumentGroups(items, !selectedGroup)
-      : emptyState(
-          "暂无匹配的文档",
-          hasFilter ? `<div><button type="button" class="btn-normal" onclick="clearImaDocumentsFilters()">清除筛选</button></div>` : ""
-        );
+    _imaItems.length = 0;
+    _imaItems.push(...items);
+    _imaOffset = items.length;
+    state.imaDocumentsHasMore = !!(searchMode && data.has_more);
+    const body = $("#ima-docs-body");
+    if (!items.length) {
+      body.innerHTML = emptyState(
+        "暂无匹配的文档",
+        hasFilter ? `<div><button type="button" class="btn-normal" onclick="clearImaDocumentsFilters()">清除筛选</button></div>` : ""
+      );
+      return;
+    }
+    const showGroupLabel = !selectedGroup;
+    const sentinel = state.imaDocumentsHasMore
+      ? `<div id="ima-docs-sentinel" class="ima-docs-more" role="status" aria-live="polite"></div>`
+      : "";
+    body.innerHTML = `<div class="ima-doc-list">${items.map((item) => imaDocumentRow(item, showGroupLabel)).join("")}</div>${sentinel}`;
+    if (state.imaDocumentsHasMore) startImaDocumentsAutoLoad();
   } catch (err) {
     if (!routeStillActive(seq)) return;
     const denied = String(err.message || "").includes("知识库不存在");
@@ -955,9 +1021,6 @@ function imaDocumentsFilterChipsHtml() {
   if (state.imaDocumentsQuery) {
     chips.push(`<span class="ima-doc-filter-chip">搜索 ${escapeHtml(state.imaDocumentsQuery)}<button type="button" onclick="clearImaDocumentsFilter('q')" aria-label="清除搜索">${X_ICON}</button></span>`);
   }
-  if (state.imaDocumentsDay) {
-    chips.push(`<span class="ima-doc-filter-chip">${escapeHtml(fmtImaDay(state.imaDocumentsDay) || state.imaDocumentsDay)}<button type="button" onclick="clearImaDocumentsFilter('day')" aria-label="清除日期">${X_ICON}</button></span>`);
-  }
   if (state.imaDocumentsTag) {
     chips.push(`<span class="ima-doc-filter-chip">${escapeHtml(state.imaDocumentsTag)}<button type="button" onclick="clearImaDocumentsFilter('tag')" aria-label="清除标签">${X_ICON}</button></span>`);
   }
@@ -969,7 +1032,7 @@ function imaDocumentsFilterChipsHtml() {
 function syncImaDocumentsFilterStatus() {
   const btn = $("#ima-doc-filter-toggle");
   const chips = $("#ima-doc-filter-chips");
-  const hasFacet = !!(state.imaDocumentsDay || state.imaDocumentsTag);
+  const hasFacet = !!state.imaDocumentsTag;
   if (btn) {
     btn.classList.toggle("has-filter", hasFacet);
     btn.setAttribute("aria-expanded", String(!$("#ima-doc-filters")?.hasAttribute("hidden")));
@@ -978,19 +1041,110 @@ function syncImaDocumentsFilterStatus() {
 }
 
 function clearImaDocumentsFilter(kind) {
-  if (kind === "q") state.imaDocumentsQuery = "";
+  if (kind === "q") {
+    state.imaDocumentsQuery = "";
+    const input = $("#ima-doc-q");
+    if (input) input.value = "";
+  }
   if (kind === "day") state.imaDocumentsDay = "";
   if (kind === "tag") state.imaDocumentsTag = "";
+  if (!state.imaDocumentsQuery && !state.imaDocumentsTag) {
+    state.imaDocumentsDay = state.imaDocumentsLastDay || "";
+  } else {
+    state.imaDocumentsDay = "";
+  }
   replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay, state.imaDocumentsTag));
   renderImaDocuments(++routeRenderSeq);
 }
 
 function clearImaDocumentsFilters() {
   state.imaDocumentsQuery = "";
-  state.imaDocumentsDay = "";
   state.imaDocumentsTag = "";
-  replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, "", "", ""));
+  state.imaDocumentsDay = state.imaDocumentsLastDay || "";
+  const input = $("#ima-doc-q");
+  if (input) input.value = "";
+  replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, "", state.imaDocumentsDay, ""));
   renderImaDocuments(++routeRenderSeq);
+}
+
+function stopImaDocumentsAutoLoad() {
+  _imaLoadObserver?.disconnect();
+  _imaLoadObserver = null;
+  if (_imaLoadFallback) {
+    window.removeEventListener("scroll", _imaLoadFallback);
+    _imaLoadFallback = null;
+  }
+}
+
+function startImaDocumentsAutoLoad() {
+  stopImaDocumentsAutoLoad();
+  const sentinel = $("#ima-docs-sentinel");
+  if (!sentinel || !state.imaDocumentsHasMore) return;
+  const load = () => loadImaDocumentsMore();
+  if ("IntersectionObserver" in window) {
+    _imaLoadObserver = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) load();
+    }, { rootMargin: "400px 0px" });
+    _imaLoadObserver.observe(sentinel);
+    return;
+  }
+  _imaLoadFallback = () => {
+    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 400) load();
+  };
+  window.addEventListener("scroll", _imaLoadFallback, { passive: true });
+  _imaLoadFallback();
+}
+
+async function loadImaDocumentsMore() {
+  if (_imaLoadingMore || !state.imaDocumentsHasMore) return;
+  if (!state.imaDocumentsQuery && !state.imaDocumentsTag) return;
+  _imaLoadingMore = true;
+  stopImaDocumentsAutoLoad();
+  const sentinel = $("#ima-docs-sentinel");
+  if (sentinel) {
+    sentinel.classList.add("is-loading");
+    sentinel.setAttribute("aria-busy", "true");
+    sentinel.innerHTML = `<span class="feed-load-spinner" aria-hidden="true"></span><span>正在加载更多…</span>`;
+  }
+  const seq = routeRenderSeq;
+  try {
+    const params = new URLSearchParams();
+    if (state.imaDocumentsQuery) params.set("q", state.imaDocumentsQuery);
+    if (state.imaDocumentsTag) params.set("tag", state.imaDocumentsTag);
+    if (state.imaDocumentsGroup) params.set("group", state.imaDocumentsGroup);
+    params.set("limit", "50");
+    params.set("offset", String(_imaItems.length));
+    const data = await api(`/api/ima-documents?${params.toString()}`);
+    if (!routeStillActive(seq)) return;
+    const incoming = Array.isArray(data.items) ? data.items : [];
+    _imaItems.push(...incoming);
+    _imaOffset = _imaItems.length;
+    state.imaDocumentsHasMore = !!data.has_more && incoming.length > 0;
+    const showGroupLabel = !state.imaDocumentsGroup;
+    const body = $("#ima-docs-body");
+    const list = body?.querySelector(".ima-doc-list");
+    if (list && incoming.length) {
+      list.insertAdjacentHTML("beforeend", incoming.map((item) => imaDocumentRow(item, showGroupLabel)).join(""));
+    }
+    const oldSentinel = $("#ima-docs-sentinel");
+    if (oldSentinel) oldSentinel.remove();
+    if (state.imaDocumentsHasMore && body) {
+      body.insertAdjacentHTML("beforeend", `<div id="ima-docs-sentinel" class="ima-docs-more" role="status" aria-live="polite"></div>`);
+      startImaDocumentsAutoLoad();
+    }
+    const meta = $("#ima-doc-meta");
+    if (meta) meta.textContent = `${_imaItems.length} 份`;
+  } catch (err) {
+    if (!routeStillActive(seq)) return;
+    const failed = $("#ima-docs-sentinel");
+    if (failed) {
+      failed.classList.remove("is-loading");
+      failed.removeAttribute("aria-busy");
+      failed.innerHTML = `<button type="button" class="btn-ghost" onclick="loadImaDocumentsMore()">加载失败，重试</button>`;
+    }
+  } finally {
+    _imaLoadingMore = false;
+  }
 }
 
 async function renderImaDocument(seq, mediaId) {
