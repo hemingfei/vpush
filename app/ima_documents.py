@@ -1234,32 +1234,17 @@ class ImaDocumentStore:
         groups: tuple[ImaGroupConfig, ...] | None = None,
     ) -> dict[str, list[str]]:
         del query
-        self._remember_groups(groups)
         state = self.load_state()
         days: list[str] = []
         tags: list[str] = []
         seen_days: set[str] = set()
         seen_tags: set[str] = set()
-        requested_group = str(group_id or "").strip()
-        allowed_groups = {group.id for group in groups} if groups is not None else None
-        for record in self.load_manifest(groups):
-            media_id = str(record.get("media_id") or "")
-            try:
-                self.validate_media_id(media_id)
-            except ValueError:
-                continue
-            if not media_id:
-                continue
-            actual_group_id = self._record_group_id(record)
-            if allowed_groups is not None and actual_group_id not in allowed_groups:
-                continue
-            if requested_group and actual_group_id != requested_group:
-                continue
-            day = str(record.get("day") or "")
+        for item in self.catalog_entries(group_id=group_id, groups=groups):
+            day = str(item.get("day") or "")
             if day and day not in seen_days:
                 seen_days.add(day)
                 days.append(day)
-            for tag in self._tags(self._state_item(state, record)):
+            for tag in self._tags(self._state_item(state, item)):
                 name = str(tag or "").strip()
                 if name and name not in seen_tags:
                     seen_tags.add(name)

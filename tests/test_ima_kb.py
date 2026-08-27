@@ -535,6 +535,7 @@ def test_catalog_entries_and_facets_do_not_need_files(tmp_path):
     facets = store.document_facets(group_id="banking", groups=(banking,))
     assert facets["days"] == ["0826", "0810"]
     assert set(facets["tags"]) == {"宏观", "新能源"}
+    assert store.document_facets("不存在", group_id="banking", groups=(banking,)) == facets
     listed = store.documents(groups=(banking,), include_body=False)
     assert listed[0]["media_id"] == "file_new"
     assert listed[0]["has_pdf"] is False
@@ -561,3 +562,4 @@ def test_documents_page_slices_search_hits(tmp_path):
     page = store.documents(query="研报", groups=(banking,), include_body=False, limit=2, offset=0)
     assert [item["media_id"] for item in page] == ["file_2", "file_1"]
     assert store.documents(query="研报", groups=(banking,), include_body=False, limit=2, offset=2)[0]["media_id"] == "file_0"
+    assert [item["media_id"] for item in store.documents(query="锂电", groups=(banking,), include_body=False)] == ["file_2", "file_1", "file_0"]
