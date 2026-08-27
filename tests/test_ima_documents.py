@@ -1875,3 +1875,20 @@ def test_merge_groups_preserves_mounts_and_new_discovered_group_is_unmounted():
 def test_merge_groups_failed_discovery_keeps_stale_discovered_groups():
     existing = (ImaGroupConfig("gone", "旧库", "kb-gone", "root", True, "discovered", ("f",)),)
     assert merge_groups(existing, (), discovery_complete=False) == existing
+
+
+def test_manifest_uses_ima_current_path_for_selected_root_day():
+    group = ImaGroupConfig("research", "研究", "kb", "root", True, "discovered", ("mount",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    client._token = lambda: "access"
+    client._open_json = lambda request: ({
+        "code": 0,
+        "data": {
+            "knowledge_list": [{"media_id": "pdf_x", "name": "x.pdf", "file_size": 8}],
+            "current_path": [{"folder_id": "mount", "name": "0806"}],
+            "is_end": True,
+        },
+    }, {})
+    record = client.manifest()[0]
+    assert record["folder_path"] == ["0806"]
+    assert record["day"] == "0806"

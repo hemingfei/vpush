@@ -505,6 +505,7 @@ class ImaPureClient:
         self.token_at = 0.0
         self.ctk = ""
         self.ctk_expire = 0
+        self._folder_paths: dict[str, list[str]] = {}
 
     @property
     def effective_knowledge_base_id(self) -> str:
@@ -591,6 +592,22 @@ class ImaPureClient:
             return payload
         return data
 
+    def _remember_folder_path(self, folder_id: str, payload: dict[str, Any]) -> None:
+        current_path = payload.get("current_path")
+        if not isinstance(current_path, list):
+            return
+        names: list[str] = []
+        for item in current_path:
+            if not isinstance(item, dict):
+                continue
+            path_folder_id = ima_folder_id(item)
+            if not path_folder_id:
+                continue
+            names.append(ima_folder_name(item, path_folder_id))
+            if path_folder_id == folder_id:
+                self._folder_paths[folder_id] = names
+                return
+
     def discover_groups(self) -> tuple[ImaGroupConfig, ...]:
         raw_items: list[dict[str, Any]] = []
         cursor = ""
@@ -653,6 +670,7 @@ class ImaPureClient:
             payload = self._payload(data)
             if not isinstance(payload, dict):
                 return items
+            self._remember_folder_path(folder_id, payload)
             page_items = payload.get("knowledge_list")
             if isinstance(page_items, list):
                 items.extend(page_items)
@@ -766,7 +784,10 @@ class ImaPureClient:
             visited_folder_ids.add(folder_id)
             if len(visited_folder_ids) > IMA_MAX_FOLDER_NODES:
                 raise RuntimeError("IMA folder tree exceeds maximum size")
-            for item in self.list_items(folder_id):
+            items = self.list_items(folder_id)
+            if not folder_path:
+                folder_path = list(self._folder_paths.get(folder_id, folder_path))
+            for item in items:
                 if not isinstance(item, dict):
                     continue
                 if is_ima_folder_item(item):
