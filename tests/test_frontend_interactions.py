@@ -972,6 +972,40 @@ def test_ima_document_collector_lives_in_fetch_settings():
     assert '<h2 class="section-title">IMA 文档采集</h2>' not in src[cookies:]
 
 
+def test_ima_config_blocks_use_shared_layout_and_no_inline_spacing():
+    stats = _fn_body("loadAdminStats")
+    row = _fn_body("imaGroupRowHtml")
+    config_start = stats.index('<div id="st-config"')
+    cookies_start = stats.index('<div id="st-cookies"')
+    config = stats[config_start:cookies_start]
+    cookies = stats[cookies_start:]
+    ima_start = cookies.index("<h2 class=\"section-title\">IMA 凭证</h2>")
+    ima_end = cookies.index("<h2 class=\"section-title\">知识星球 Cookie</h2>")
+    ima_credentials = cookies[ima_start:ima_end]
+    css = STYLE_CSS.read_text()
+
+    assert 'class="cfg-group ima-group-row"' in row
+    assert 'class="ima-group-fields cfg-fields"' in row
+    assert 'class="ima-collector-fields cfg-fields"' in config
+    assert 'class="ima-credential-fields"' in ima_credentials
+    assert 'class="ima-credential-actions toolbar"' in ima_credentials
+    assert 'style="margin-top:' not in ima_credentials
+    assert 'style="margin:6px' not in ima_credentials
+    assert ".ima-code-field .form-control" in css
+    assert ".ima-credential-fields" in css
+
+
+def test_ima_config_uses_small_sync_icon_and_consistent_brand_case():
+    stats = _fn_body("loadAdminStats")
+    css = STYLE_CSS.read_text()
+
+    assert '<h2 class="section-title">IMA 凭证</h2>' in stats
+    assert "保存 IMA 凭证" in stats
+    assert ".ima-collector-foot .refresh-icon" in css
+    assert "width: 16px" in css
+    assert "height: 16px" in css
+
+
 def test_ima_group_render_has_safe_rows_and_recovery_controls():
     """IMA 设置展示群组行、发现状态和可恢复的增删控件。"""
     src = APP_JS.read_text()
@@ -1742,6 +1776,10 @@ def test_ima_document_reader_preserves_group_context_and_metadata():
     assert "下载" in reader
     assert "item.name" in reader and "item.size" in reader
     assert "ima-reader-abstract" in reader
+    assert "ima-reader-copy" in reader
+    assert "ima-reader-empty" in reader
+    assert "还没有预览文件" in reader
+    assert "ima-reader-filemeta" in reader
     assert "needs_translation" in reader
     assert "/translate" in reader
     assert "go(backRoute)" in reader
@@ -1801,9 +1839,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=193"' in html
-    assert 'src="/app.js?v=273"' in html
-    assert 'dav-shell-v142' in sw
+    assert 'href="/style.css?v=195"' in html
+    assert 'src="/app.js?v=275"' in html
+    assert 'dav-shell-v144' in sw
 
 
 def test_ima_documents_follow_latest_dynamic_navigation():
@@ -1857,6 +1895,8 @@ def test_knowledge_catalog_shell_contract():
     assert 'mode === "subscribed"' in card
     assert "kb-card-latest" in card
     assert 'mode === "available"' in card
+    assert "is-available" in card
+    assert "is-openable" in card
     assert "/api/ima-documents/groups/" in src
     assert re.search(
         r'/api/ima-documents/groups/.{0,80}subscribe[\s\S]{0,160}method:\s*"POST"|'
@@ -1876,6 +1916,9 @@ def test_knowledge_catalog_shell_contract():
     css = STYLE_CSS.read_text()
     assert ".kb-tabs" in css
     assert ".kb-card" in css
+    assert ".kb-card.is-openable:hover" in css
+    assert ".kb-card-latest" in css
+    assert "border-top: var(--border-default)" in css
 
 
 def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
@@ -1906,7 +1949,12 @@ def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
     assert "item.cover_url" not in row
     assert "item.tags" not in row
     assert "imaDocKindLabel" in row
+    assert "ima-doc-row-day" in row
     assert "fmtImaDay(item.day)" in row
+    assert "imaDocumentsEmptyHtml" in src
+    assert "没有匹配的文档" in src
+    assert "这个库还没有文档" in src
+    assert "这一天没有文档" in src
     assert "stepImaDocumentsDay" in src
     assert "ima-doc-day-nav" in src
     assert "loadImaDocumentsMore" in src
@@ -1924,6 +1972,10 @@ def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
     assert "grid-column: 1" in css
     assert "grid-column: 2" in css
     assert "grid-column: 3" not in css
+    assert ".ima-doc-kind" in css
+    assert "border-radius: var(--radius-pill)" in css
+    assert ".ima-reader-abstract { max-width: 72ch;" in css
+    assert ".ima-reader-empty" in css
 
 
 def test_ima_documents_search_leaves_day_view():

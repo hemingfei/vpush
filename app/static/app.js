@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.68";
+const APP_VERSION = "1.12.69";
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"];
@@ -583,10 +583,26 @@ function imaDocumentRow(item, showGroupLabel = false) {
       <span class="ima-doc-row-copy">
         <span class="ima-doc-row-name">${escapeHtml(item.name)}</span>
         ${groupLabel}
-        <span class="ima-doc-row-meta">${escapeHtml(fmtImaDay(item.day) || "")} · <span class="ima-doc-kind">${escapeHtml(imaDocKindLabel(item))}</span></span>
+        <span class="ima-doc-row-meta"><span class="ima-doc-row-day">${escapeHtml(fmtImaDay(item.day) || "")}</span><span class="ima-doc-kind">${escapeHtml(imaDocKindLabel(item))}</span></span>
       </span>
       <span class="ima-doc-row-arrow" aria-hidden="true">›</span>
     </div>`;
+}
+
+function imaDocumentsEmptyHtml(hasFilter, dayCount) {
+  if (hasFilter) {
+    return emptyState(
+      "没有匹配的文档",
+      `<div><button type="button" class="btn-normal" onclick="clearImaDocumentsFilters()">清除筛选</button></div>`
+    );
+  }
+  if (!dayCount) {
+    return emptyState(
+      "这个库还没有文档",
+      `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回知识库</button></div>`
+    );
+  }
+  return emptyState("这一天没有文档");
 }
 
 function imaDocumentGroups(items, showGroupLabel = false) {
@@ -757,7 +773,7 @@ function knowledgeCardHtml(group, mode) {
   const latest = openable && title
     ? `<button type="button" class="kb-card-latest" data-group="${escapeHtml(id)}" data-media-id="${escapeHtml(mediaId)}" onclick="openKnowledgeLatest(this.dataset.group, this.dataset.mediaId)">最新 ${escapeHtml(title)}</button>`
     : "";
-  return `<div class="kb-card${openable ? " is-openable" : ""}">
+  return `<div class="kb-card${openable ? " is-openable" : ""}${mode === "available" ? " is-available" : ""}">
     <div class="kb-card-main">${copy}${action}</div>
     ${latest}
   </div>`;
@@ -994,10 +1010,7 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     state.imaDocumentsHasMore = !!(searchMode && data.has_more);
     const body = $("#ima-docs-body");
     if (!items.length) {
-      body.innerHTML = emptyState(
-        "暂无匹配的文档",
-        hasFilter ? `<div><button type="button" class="btn-normal" onclick="clearImaDocumentsFilters()">清除筛选</button></div>` : ""
-      );
+      body.innerHTML = imaDocumentsEmptyHtml(hasFilter, days.length);
       return;
     }
     const showGroupLabel = !selectedGroup;
@@ -1192,12 +1205,13 @@ async function renderImaDocument(seq, mediaId) {
       : "";
     const pdfPanel = item.has_pdf
       ? `<div id="ima-pdf-panel" class="ima-pdf-panel"><iframe id="ima-pdf-frame" title="PDF 预览"></iframe></div>`
-      : `<p class="section-meta">还没有 PDF 预览</p>`;
+      : `<p class="ima-reader-empty">还没有预览文件</p>`;
     const sizeLine = fmtDocSize(item.size);
+    const fileMetaHtml = `<p class="section-meta ima-reader-filemeta"><span class="ima-doc-kind">${escapeHtml(imaDocKindLabel(item))}</span>${sizeLine ? `<span>${escapeHtml(sizeLine)}</span>` : ""}</p>`;
     $("#main").innerHTML = `
       <section class="section-panel ima-reader">
         <header class="section-head ima-reader-head">
-          <div>${groupContext}<p class="ima-reader-day">${escapeHtml(fmtImaDay(item.day))}</p><h2 class="section-title ima-reader-title">${escapeHtml(item.name)}</h2>${coverHtml}${imaDocumentTagsHtml(item.tags, true)}${abstractHtml}<p class="section-meta">${escapeHtml(sizeLine)}</p></div>
+          <div class="ima-reader-copy">${groupContext}<p class="ima-reader-day">${escapeHtml(fmtImaDay(item.day))}</p><h2 class="section-title ima-reader-title">${escapeHtml(item.name)}</h2>${coverHtml}${imaDocumentTagsHtml(item.tags, true)}${abstractHtml}${fileMetaHtml}</div>
           ${pdfActions}
         </header>
         ${pdfPanel}
@@ -4881,12 +4895,17 @@ function imaGroupRowHtml(group, index) {
   index = Number.isInteger(index) ? index : 0;
   const groupId = String(group.id || "");
   return `
-    <div class="cfg-fields" data-group-row data-group-index="${index}" data-group-id="${escapeHtml(groupId)}">
-      <label class="cfg-field"><span>群组名称</span><input type="text" class="form-control" data-field="name" value="${escapeHtml(group.name || "")}" maxlength="100"></label>
-      <label class="cfg-field"><span>知识库 ID</span><input type="text" class="form-control" data-field="knowledge_base_id" value="${escapeHtml(group.knowledge_base_id || "")}" maxlength="64"></label>
-      <label class="cfg-field"><span>根文件夹 ID</span><input type="text" class="form-control" data-field="root_folder_id" value="${escapeHtml(group.root_folder_id || "")}" maxlength="128"></label>
-      <label class="cfg-field cfg-check"><input type="checkbox" data-field="enabled" ${group.enabled !== false ? "checked" : ""}><span class="cfg-check-desc">启用</span></label>
-      <div class="toolbar"><button type="button" class="btn-ghost danger" onclick="removeImaGroupRow(this)" aria-label="移除 IMA 群组">移除</button></div>
+    <div class="cfg-group ima-group-row" data-group-row data-group-index="${index}" data-group-id="${escapeHtml(groupId)}">
+      <div class="ima-group-row-head">
+        <p class="cfg-group-title">IMA 群组</p>
+        <button type="button" class="btn-ghost danger" onclick="removeImaGroupRow(this)" aria-label="移除 IMA 群组">移除</button>
+      </div>
+      <div class="ima-group-fields cfg-fields">
+        <label class="cfg-field"><span>群组名称</span><input type="text" class="form-control" data-field="name" value="${escapeHtml(group.name || "")}" maxlength="100"></label>
+        <label class="cfg-field ima-code-field"><span>知识库 ID</span><input type="text" class="form-control" data-field="knowledge_base_id" value="${escapeHtml(group.knowledge_base_id || "")}" maxlength="64"></label>
+        <label class="cfg-field ima-code-field"><span>根文件夹 ID</span><input type="text" class="form-control" data-field="root_folder_id" value="${escapeHtml(group.root_folder_id || "")}" maxlength="128"></label>
+        <label class="cfg-field cfg-check ima-group-enabled"><input type="checkbox" data-field="enabled" ${group.enabled !== false ? "checked" : ""}><span class="cfg-check-desc">启用</span></label>
+      </div>
     </div>`;
 }
 
@@ -5198,19 +5217,29 @@ async function loadAdminStats() {
       <section class="section-panel">
         <header class="section-head"><div><h2 class="section-title">IMA 文档采集</h2>
         <p class="section-meta">默认每小时检查一次，只下载新增 PDF；Refresh Token 留空表示保持已保存值。</p></div></header>
-        <div class="cfg-grid ima-collector-grid">
-          <label class="cfg-field"><span>IMA UID</span><input id="ima-pure-uid" class="form-control" value="${escapeHtml(pure.uid || "001aa361168019ef")}" maxlength="64"></label>
-          <label class="cfg-field"><span>知识库 ID</span><input id="ima-pure-kb" class="form-control" value="${escapeHtml(pure.knowledge_base_id || "7464369361259867")}" maxlength="64"></label>
-          <label class="cfg-field"><span>根文件夹 ID</span><input id="ima-pure-root" class="form-control" value="${escapeHtml(pure.root_folder_id || "folder_7489327974078249")}" maxlength="128"></label>
-          <label class="cfg-field"><span>检查间隔<span class="cfg-unit">分钟</span></span><input id="ima-pure-interval" type="number" class="form-control" min="30" max="10080" value="${Math.round(Number(pure.interval_seconds || 3600) / 60)}"></label>
-          <label class="cfg-field cfg-field--wide"><span>Refresh Token</span><input id="ima-pure-token" class="form-control" type="password" autocomplete="off" placeholder="${pure.refresh_token?.set ? "已保存，留空保持不变" : "重新登录 IMA 后粘贴"}"></label>
+        <div class="cfg-stack ima-collector-stack">
+          <div class="cfg-group ima-collector-connection">
+            <p class="cfg-group-title">连接与同步</p>
+            <div class="ima-collector-fields cfg-fields">
+              <label class="cfg-field ima-code-field"><span>IMA UID</span><input id="ima-pure-uid" type="text" class="form-control" value="${escapeHtml(pure.uid || "001aa361168019ef")}" maxlength="64"></label>
+              <label class="cfg-field ima-code-field"><span>知识库 ID</span><input id="ima-pure-kb" type="text" class="form-control" value="${escapeHtml(pure.knowledge_base_id || "7464369361259867")}" maxlength="64"></label>
+              <label class="cfg-field ima-code-field"><span>根文件夹 ID</span><input id="ima-pure-root" type="text" class="form-control" value="${escapeHtml(pure.root_folder_id || "folder_7489327974078249")}" maxlength="128"></label>
+              <label class="cfg-field"><span>检查间隔<span class="cfg-unit">分钟</span></span><input id="ima-pure-interval" type="number" class="form-control" min="30" max="10080" value="${Math.round(Number(pure.interval_seconds || 3600) / 60)}"></label>
+              <label class="cfg-field ima-code-field ima-field--wide"><span>Refresh Token</span><input id="ima-pure-token" class="form-control" type="password" autocomplete="off" placeholder="${pure.refresh_token?.set ? "已保存，留空保持不变" : "重新登录 IMA 后粘贴"}"></label>
+            </div>
+          </div>
+          <div class="cfg-group ima-groups-block">
+            <div class="ima-groups-head">
+              <p class="cfg-group-title">知识库群组</p>
+              <div class="toolbar ima-groups-toolbar">
+                <span id="ima-group-discovery-status" class="muted">${imaGroupDiscoveryStatusText(imaCollector)}</span>
+                <button type="button" class="btn-ghost" onclick="addImaGroupRow()">添加 IMA 群组</button>
+              </div>
+            </div>
+            <div id="ima-groups" class="ima-groups-list">${renderImaGroupRows(imaCollector.config && imaCollector.config.groups)}</div>
+          </div>
         </div>
-        <div class="toolbar ima-groups-toolbar">
-          <span id="ima-group-discovery-status" class="muted">${imaGroupDiscoveryStatusText(imaCollector)}</span>
-          <button type="button" class="btn-ghost" onclick="addImaGroupRow()">添加 IMA 群组</button>
-        </div>
-        <div id="ima-groups">${renderImaGroupRows(imaCollector.config && imaCollector.config.groups)}</div>
-        <div class="ima-collector-foot">
+        <div class="cfg-foot ima-collector-foot">
           <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
           <div class="toolbar"><button type="button" class="btn-normal" onclick="saveImaCollector()">保存采集配置</button><button type="button" class="btn-ghost" onclick="triggerImaCollector()">${REFRESH_ICON}<span>立即同步</span></button></div>
         </div>
@@ -5254,16 +5283,24 @@ async function loadAdminStats() {
         </div>
       </section>
       <section class="section-panel">
-        <header class="section-head"><div><h2 class="section-title">ima 凭证</h2>
+        <header class="section-head"><div><h2 class="section-title">IMA 凭证</h2>
         <p class="section-meta">模式：${ima.mode || "未配置"}${ima.openapi_clientid?.set ? ` · clientid ${escapeHtml(ima.openapi_clientid.preview || "")}` : ""}。Cookie 用 scripts/ima_qr_login.py 扫码捕获（x-ima-cookie）；OpenAPI 凭证登录 ima.qq.com/agent-interface 生成，取全文必须。</p></div></header>
-        <label class="field-label" for="ima-cookie">网页 Cookie（x-ima-cookie）</label>
-        <textarea id="ima-cookie" class="form-control cookie-paste" rows="3" placeholder="IMA-TOKEN=...; IMA-UID=..."></textarea>
-        <label class="field-label" for="ima-cid" style="margin-top:8px;display:block">OpenAPI Client ID</label>
-        <input id="ima-cid" class="form-control" placeholder="Client ID" style="margin-top:6px">
-        <label class="field-label" for="ima-key" style="margin-top:8px;display:block">OpenAPI API Key</label>
-        <input id="ima-key" class="form-control" placeholder="API Key" style="margin-top:6px" type="password">
-        <div class="toolbar" style="margin-top:12px">
-          <button type="button" class="btn-normal" onclick="saveImaCredentials()">保存 ima 凭证</button>
+        <div class="ima-credential-fields">
+          <label class="ima-credential-field ima-credential-field--wide" for="ima-cookie">
+            <span>网页 Cookie（x-ima-cookie）</span>
+            <textarea id="ima-cookie" class="form-control cookie-paste" rows="3" placeholder="IMA-TOKEN=...; IMA-UID=..."></textarea>
+          </label>
+          <label class="ima-credential-field ima-code-field" for="ima-cid">
+            <span>OpenAPI Client ID</span>
+            <input id="ima-cid" class="form-control" placeholder="Client ID">
+          </label>
+          <label class="ima-credential-field ima-code-field" for="ima-key">
+            <span>OpenAPI API Key</span>
+            <input id="ima-key" class="form-control" placeholder="API Key" type="password">
+          </label>
+        </div>
+        <div class="ima-credential-actions toolbar">
+          <button type="button" class="btn-normal" onclick="saveImaCredentials()">保存 IMA 凭证</button>
           <button type="button" class="btn-ghost" onclick="pasteCookieField('ima-cookie')">从剪贴板填入 Cookie</button>
           ${ima.cookie?.set && !ima.cookie.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('ima','ima')" aria-label="清除 ima Cookie">清除 Cookie</button>` : ""}
         </div>
@@ -5980,7 +6017,7 @@ async function saveImaCredentials() {
       method: "POST",
       body: JSON.stringify({ cookie, openapi_clientid: cid, openapi_apikey: key }),
     });
-    flash("ima 凭证已保存");
+    flash("IMA 凭证已保存");
     history.replaceState(null, "", "/admin/stats?tab=cookies");
     await loadAdminStats();
     focusCookieField("ima");

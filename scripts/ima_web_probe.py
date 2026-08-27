@@ -143,10 +143,12 @@ def _list_payload(numeric_id: str, headers: dict[str, str], client: httpx.Client
 def _resolve_numeric_id(client: httpx.Client) -> tuple[str, dict[str, Any]]:
     wanted_id = _env("IMA_KB_ID") or _env("IMA_KB_NUMERIC_ID")
     wanted_name = _env("IMA_KB_NAME") or "Z哥策略"
+    # 网页端 knowledgeBaseId 是纯数字；OpenAPI 的 kb_id 是另一套。
+    # env 里两者经常同时存在，数字 ID 必须直接用，不能拿去跟 OpenAPI id 比对。
+    if wanted_id and wanted_id.isdigit():
+        return wanted_id, {"source": "IMA_KB_NUMERIC_ID"}
     headers = _openapi_headers()
     if headers is None:
-        if wanted_id and wanted_id.isdigit():
-            return wanted_id, {"source": "IMA_KB_ID"}
         raise ValueError("需要 OpenAPI 凭证来把订阅库换成网页端数字 ID，或直接设 IMA_KB_ID")
     _sleep()
     listed_resp = client.post(
