@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.68";
+const APP_VERSION = "1.12.73";
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"];
@@ -583,10 +583,30 @@ function imaDocumentRow(item, showGroupLabel = false) {
       <span class="ima-doc-row-copy">
         <span class="ima-doc-row-name">${escapeHtml(item.name)}</span>
         ${groupLabel}
-        <span class="ima-doc-row-meta">${escapeHtml(fmtImaDay(item.day) || "")} · <span class="ima-doc-kind">${escapeHtml(imaDocKindLabel(item))}</span></span>
+        <span class="ima-doc-row-meta"><span class="ima-doc-row-day">${escapeHtml(fmtImaDay(item.day) || "")}</span><span class="ima-doc-kind">${escapeHtml(imaDocKindLabel(item))}</span></span>
       </span>
       <span class="ima-doc-row-arrow" aria-hidden="true">›</span>
     </div>`;
+}
+
+function imaDocumentsEmptyHtml(hasFilter, days) {
+  const list = Array.isArray(days) ? days.filter(Boolean) : [];
+  if (hasFilter) {
+    return emptyState(
+      "没有匹配的文档",
+      `<div><button type="button" class="btn-normal" onclick="clearImaDocumentsFilters()">清除筛选</button></div>`
+    );
+  }
+  if (!list.length) {
+    return emptyState(
+      "这个库还没有文档",
+      `<div><button type="button" class="btn-normal" onclick="go('${imaKnowledgeCatalogRoute()}')">回知识库</button></div>`
+    );
+  }
+  return emptyState(
+    "这一天没有文档",
+    `<div><button type="button" class="btn-normal" onclick="selectImaDocumentsDay('${escapeHtml(list[0])}')">回最新一天</button></div>`
+  );
 }
 
 function imaDocumentGroups(items, showGroupLabel = false) {
@@ -617,6 +637,14 @@ function imaDocumentsRoute(group, query, day, tag) {
   return `knowledge${routeQueryString ? `?${routeQueryString}` : ""}`;
 }
 
+function imaKnowledgeCatalogRoute() {
+  return "knowledge?catalog=1";
+}
+
+function imaKnowledgeStayOnCatalog() {
+  return routeQuery().get("catalog") === "1";
+}
+
 function replaceImaDocumentsRoute(path) {
   const url = normalizeRoute(path);
   if (location.pathname + location.search !== url) history.replaceState(null, "", url);
@@ -625,7 +653,7 @@ function replaceImaDocumentsRoute(path) {
 function selectImaDocumentGroup(value) {
   if (!String(value || "") && !state.user?.is_admin) {
     state.imaDocumentsGroup = "";
-    replaceImaDocumentsRoute("knowledge");
+    replaceImaDocumentsRoute(imaKnowledgeCatalogRoute());
     const seq = ++routeRenderSeq;
     renderKnowledge(seq);
     return;
@@ -653,9 +681,11 @@ function submitImaDocumentsSearch() {
 }
 
 function selectImaDocumentsDay(value) {
+  const day = String(value || "");
+  if (!day) return;
   state.imaDocumentsQuery = "";
   state.imaDocumentsTag = "";
-  state.imaDocumentsDay = String(value || "");
+  state.imaDocumentsDay = day;
   const input = $("#ima-doc-q");
   if (input) input.value = "";
   replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, "", state.imaDocumentsDay, ""));
@@ -689,11 +719,25 @@ function imaDocumentsDayNavHtml(day, days) {
   if (!list.length) return "";
   const current = String(day || "");
   const idx = list.indexOf(current);
-  const prevDisabled = idx >= 0 && idx >= list.length - 1 ? "disabled" : "";
-  const nextDisabled = idx >= 0 && idx <= 0 ? "disabled" : "";
+  const inSearch = !current;
+  const onDay = idx >= 0;
+  const prevDisabled = inSearch || (onDay && idx >= list.length - 1) ? "disabled" : "";
+  const nextDisabled = inSearch || (onDay && idx <= 0) ? "disabled" : "";
+  const options = [];
+  if (!current || !list.includes(current)) {
+    options.push(`<option value=""${current ? "" : " selected"} disabled>跳到日期</option>`);
+  }
+  if (current && !list.includes(current)) {
+    options.push(`<option value="${escapeHtml(current)}" selected>${escapeHtml(fmtImaDay(current) || current)}</option>`);
+  }
+  for (const value of list) {
+    options.push(`<option value="${escapeHtml(value)}"${value === current ? " selected" : ""}>${escapeHtml(fmtImaDay(value) || value)}</option>`);
+  }
   return `<nav class="ima-doc-day-nav" aria-label="日期">
     <button type="button" class="btn-ghost" ${prevDisabled} onclick="stepImaDocumentsDay(-1)" aria-label="前一天">‹</button>
-    <span>${escapeHtml(fmtImaDay(current) || current)}</span>
+    <label class="ima-doc-day-jump">
+      <select id="ima-doc-day" class="form-control" aria-label="跳到日期" onchange="selectImaDocumentsDay(this.value)">${options.join("")}</select>
+    </label>
     <button type="button" class="btn-ghost" ${nextDisabled} onclick="stepImaDocumentsDay(1)" aria-label="后一天">›</button>
   </nav>`;
 }
@@ -757,7 +801,7 @@ function knowledgeCardHtml(group, mode) {
   const latest = openable && title
     ? `<button type="button" class="kb-card-latest" data-group="${escapeHtml(id)}" data-media-id="${escapeHtml(mediaId)}" onclick="openKnowledgeLatest(this.dataset.group, this.dataset.mediaId)">最新 ${escapeHtml(title)}</button>`
     : "";
-  return `<div class="kb-card${openable ? " is-openable" : ""}">
+  return `<div class="kb-card${openable ? " is-openable" : ""}${mode === "available" ? " is-available" : ""}">
     <div class="kb-card-main">${copy}${action}</div>
     ${latest}
   </div>`;
@@ -796,6 +840,7 @@ async function subscribeKnowledge(groupId, btn) {
   try {
     await api(`/api/ima-documents/groups/${encodeURIComponent(groupId)}/subscribe`, { method: "POST" });
     flash("已订阅");
+    replaceImaDocumentsRoute(imaKnowledgeCatalogRoute());
     refreshKnowledge();
   } catch (err) {
     flash(err.message || "订阅失败", "error");
@@ -808,6 +853,7 @@ async function unsubscribeKnowledge(groupId, btn) {
   try {
     await api(`/api/ima-documents/groups/${encodeURIComponent(groupId)}/subscribe`, { method: "DELETE" });
     flash("已退订");
+    replaceImaDocumentsRoute(imaKnowledgeCatalogRoute());
     refreshKnowledge();
   } catch (err) {
     flash(err.message || "退订失败", "error");
@@ -835,6 +881,17 @@ async function renderKnowledge(seq, encodedMediaId = "") {
     const subscribed = Array.isArray(data.subscribed) ? data.subscribed : [];
     const available = Array.isArray(data.available) ? data.available : [];
     const isAdmin = !!state.user?.is_admin;
+    const browsing = !!(routeQuery().get("q") || routeQuery().get("day") || routeQuery().get("tag"));
+    if (!selectedGroup && !isAdmin && subscribed.length === 1 && !imaKnowledgeStayOnCatalog() && !browsing) {
+      const onlyId = String(subscribed[0].id || "");
+      if (onlyId) {
+        state.imaDocumentsTag = "";
+        state.imaDocumentsLastDay = "";
+        replaceImaDocumentsRoute(imaDocumentsRoute(onlyId, "", "", ""));
+        await renderImaDocuments(seq);
+        return;
+      }
+    }
     if (selectedGroup) {
       if (subscribed.some((group) => String(group.id) === selectedGroup)) {
         await renderImaDocuments(seq);
@@ -845,7 +902,7 @@ async function renderKnowledge(seq, encodedMediaId = "") {
       return;
     }
     const subscribedEmpty = isAdmin
-      ? emptyState("还没有配置知识库")
+      ? emptyState("还没有配置知识库", `<div><button type="button" class="btn-normal" onclick="go('admin/stats?tab=config')">去配置采集</button></div>`)
       : emptyState(
           "还没有订阅知识库",
           available.length
@@ -898,7 +955,7 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
   state.imaDocumentsHasMore = false;
   _imaLoadingMore = false;
   clearImaPdfUrl();
-  setPageTitle("知识库", true, "knowledge", "回知识库");
+  setPageTitle("知识库", true, imaKnowledgeCatalogRoute(), "回知识库");
   const selectedGroup = imaDocumentsGroupFromRoute();
   const query = routeQuery().get("q") || "";
   const day = routeQuery().get("day") || "";
@@ -925,7 +982,6 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
         <button type="button" class="btn-ghost${tag ? " has-filter" : ""}" id="ima-doc-filter-toggle" aria-expanded="${filtersOpen}" aria-controls="ima-doc-filters" onclick="toggleImaDocumentsFilters()">${FILTER_ICON}<span>筛选</span></button>
       </div>
       <div id="ima-doc-filters" class="ima-doc-filters"${filtersOpen ? "" : " hidden"}>
-        <select id="ima-doc-day" class="form-control ima-doc-day-filter" aria-label="按日期筛选" onchange="selectImaDocumentsDay(this.value)"><option value="">全部日期</option></select>
         <select id="ima-doc-tag" class="form-control ima-doc-tag-filter" aria-label="按标签筛选" onchange="selectImaDocumentsTag(this.value)"><option value="">全部标签</option></select>
       </div>
       <div id="ima-doc-filter-chips" class="ima-doc-filter-chips"></div>
@@ -953,7 +1009,7 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     const meta = $("#ima-doc-meta");
     if (title) title.textContent = selectedGroupName;
     if (meta) meta.textContent = `${count} 份`;
-    setPageTitle(selectedGroupName, true, "knowledge", "回知识库");
+    setPageTitle(selectedGroupName, true, imaKnowledgeCatalogRoute(), "回知识库");
     const groupSwitch = $("#ima-doc-groups");
     if (groupSwitch) {
       const hideSwitcher = !state.user?.is_admin && (groups || []).length <= 1;
@@ -970,13 +1026,6 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     } else if (!searchMode) {
       state.imaDocumentsLastDay = "";
     }
-    const dropdownDays = [...days];
-    const selectedDay = searchMode ? "" : (state.imaDocumentsDay || day || "");
-    if (selectedDay && !dropdownDays.includes(selectedDay)) dropdownDays.unshift(selectedDay);
-    const daySelect = $("#ima-doc-day");
-    if (daySelect) {
-      daySelect.innerHTML = `<option value="">全部日期</option>${dropdownDays.map((value) => `<option value="${escapeHtml(value)}" ${value === selectedDay ? "selected" : ""}>${escapeHtml(fmtImaDay(value) || value)}</option>`).join("")}`;
-    }
     const tagSelect = $("#ima-doc-tag");
     if (tagSelect) {
       const uniqueTags = Array.isArray(data.tags)
@@ -986,7 +1035,7 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
       tagSelect.innerHTML = `<option value="">全部标签</option>${uniqueTags.map((value) => `<option value="${escapeHtml(value)}" ${value === tag ? "selected" : ""}>${escapeHtml(value)}</option>`).join("")}`;
     }
     const navSlot = $("#ima-doc-day-nav-slot");
-    if (navSlot) navSlot.innerHTML = searchMode ? "" : imaDocumentsDayNavHtml(state.imaDocumentsDay || data.day, days);
+    if (navSlot) navSlot.innerHTML = imaDocumentsDayNavHtml(searchMode ? "" : (state.imaDocumentsDay || data.day), days);
     const hasFilter = !!(query || tag);
     syncImaDocumentsFilterStatus();
     _imaItems.push(...items);
@@ -994,10 +1043,7 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     state.imaDocumentsHasMore = !!(searchMode && data.has_more);
     const body = $("#ima-docs-body");
     if (!items.length) {
-      body.innerHTML = emptyState(
-        "暂无匹配的文档",
-        hasFilter ? `<div><button type="button" class="btn-normal" onclick="clearImaDocumentsFilters()">清除筛选</button></div>` : ""
-      );
+      body.innerHTML = imaDocumentsEmptyHtml(hasFilter, days);
       return;
     }
     const showGroupLabel = !selectedGroup;
@@ -1192,12 +1238,13 @@ async function renderImaDocument(seq, mediaId) {
       : "";
     const pdfPanel = item.has_pdf
       ? `<div id="ima-pdf-panel" class="ima-pdf-panel"><iframe id="ima-pdf-frame" title="PDF 预览"></iframe></div>`
-      : `<p class="section-meta">还没有 PDF 预览</p>`;
+      : `<div class="ima-reader-empty"><p>还没有预览文件</p><button type="button" class="btn-normal" onclick="go('${escapeHtml(backRoute)}')">回列表</button></div>`;
     const sizeLine = fmtDocSize(item.size);
+    const fileMetaHtml = `<p class="section-meta ima-reader-filemeta"><span class="ima-doc-kind">${escapeHtml(imaDocKindLabel(item))}</span>${sizeLine ? `<span>${escapeHtml(sizeLine)}</span>` : ""}</p>`;
     $("#main").innerHTML = `
       <section class="section-panel ima-reader">
         <header class="section-head ima-reader-head">
-          <div>${groupContext}<p class="ima-reader-day">${escapeHtml(fmtImaDay(item.day))}</p><h2 class="section-title ima-reader-title">${escapeHtml(item.name)}</h2>${coverHtml}${imaDocumentTagsHtml(item.tags, true)}${abstractHtml}<p class="section-meta">${escapeHtml(sizeLine)}</p></div>
+          <div class="ima-reader-copy">${groupContext}<p class="ima-reader-day">${escapeHtml(fmtImaDay(item.day))}</p><h2 class="section-title ima-reader-title">${escapeHtml(item.name)}</h2>${coverHtml}${imaDocumentTagsHtml(item.tags, true)}${abstractHtml}${fileMetaHtml}</div>
           ${pdfActions}
         </header>
         ${pdfPanel}
@@ -1219,7 +1266,7 @@ async function renderImaDocument(seq, mediaId) {
     const denied = String(err.message || "").includes("知识库不存在");
     $("#main").innerHTML = denied
       ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回知识库</button></div>`)
-      : emptyState(`文档加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="go(backRoute)">返回文档列表</button></div>`);
+      : emptyState(`文档加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="go('${escapeHtml(backRoute)}')">返回文档列表</button></div>`);
   }
 }
 
@@ -4209,6 +4256,7 @@ function switchStatsTab(name) {
   });
   const next = name === "overview" ? "/admin/stats" : `/admin/stats?tab=${name}`;
   if (location.pathname + location.search !== next) history.replaceState(null, "", next);
+  document.getElementById(`tab-${name}`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
   if (name === "proxies") loadProxyAdmin();
 }
 
@@ -4881,12 +4929,17 @@ function imaGroupRowHtml(group, index) {
   index = Number.isInteger(index) ? index : 0;
   const groupId = String(group.id || "");
   return `
-    <div class="cfg-fields" data-group-row data-group-index="${index}" data-group-id="${escapeHtml(groupId)}">
-      <label class="cfg-field"><span>群组名称</span><input type="text" class="form-control" data-field="name" value="${escapeHtml(group.name || "")}" maxlength="100"></label>
-      <label class="cfg-field"><span>知识库 ID</span><input type="text" class="form-control" data-field="knowledge_base_id" value="${escapeHtml(group.knowledge_base_id || "")}" maxlength="64"></label>
-      <label class="cfg-field"><span>根文件夹 ID</span><input type="text" class="form-control" data-field="root_folder_id" value="${escapeHtml(group.root_folder_id || "")}" maxlength="128"></label>
-      <label class="cfg-field cfg-check"><input type="checkbox" data-field="enabled" ${group.enabled !== false ? "checked" : ""}><span class="cfg-check-desc">启用</span></label>
-      <div class="toolbar"><button type="button" class="btn-ghost danger" onclick="removeImaGroupRow(this)" aria-label="移除 IMA 群组">移除</button></div>
+    <div class="cfg-group ima-group-row" data-group-row data-group-index="${index}" data-group-id="${escapeHtml(groupId)}">
+      <div class="ima-group-row-head">
+        <p class="cfg-group-title">IMA 群组</p>
+        <button type="button" class="btn-ghost danger" onclick="removeImaGroupRow(this)" aria-label="移除 IMA 群组">移除</button>
+      </div>
+      <div class="ima-group-fields cfg-fields">
+        <label class="cfg-field"><span>群组名称</span><input type="text" class="form-control" data-field="name" value="${escapeHtml(group.name || "")}" maxlength="100"></label>
+        <label class="cfg-field ima-code-field"><span>知识库 ID</span><input type="text" class="form-control" data-field="knowledge_base_id" value="${escapeHtml(group.knowledge_base_id || "")}" maxlength="64"></label>
+        <label class="cfg-field ima-code-field"><span>根文件夹 ID</span><input type="text" class="form-control" data-field="root_folder_id" value="${escapeHtml(group.root_folder_id || "")}" maxlength="128"></label>
+        <label class="cfg-field cfg-check ima-group-enabled"><input type="checkbox" data-field="enabled" ${group.enabled !== false ? "checked" : ""}><span class="cfg-check-desc">启用</span></label>
+      </div>
     </div>`;
 }
 
@@ -5117,102 +5170,118 @@ async function loadAdminStats() {
               </label>
             </div>
           </div>
-          <div class="cfg-group cfg-group--zsxq">
-            <p class="cfg-group-title">知识星球</p>
+          <div class="cfg-group">
+            <p class="cfg-group-title">保活与定时</p>
             <div class="cfg-fields">
-              <label class="cfg-field" title="每星球每轮最多翻几页，每页 20 条">
-                <span>单轮翻页<span class="cfg-unit">页</span></span>
-                <input id="pc-zq-pages" type="number" class="form-control" min="1" max="20" value="${s.polling_config.zsxq_max_pages ?? 3}">
+              <label class="cfg-field" title="雪球保活探测间隔；0 = 关闭自动保活">
+                <span>雪球探测<span class="cfg-unit">秒</span></span>
+                <input id="pc-probe" type="number" class="form-control" min="0" max="86400" value="${s.polling_config.source_probe_interval_seconds}">
               </label>
-              <label class="cfg-field" title="列表/详情请求间隔，过短容易触发 1059">
-                <span>请求间隔<span class="cfg-unit">秒</span></span>
-                <input id="pc-zq-delay" type="number" class="form-control" min="0.2" max="10" step="0.1" value="${s.polling_config.zsxq_fetch_delay_seconds ?? 1}">
+              <label class="cfg-field" title="登录态自动保活间隔；0 = 关闭">
+                <span>cookie保活<span class="cfg-unit">秒</span></span>
+                <input id="pc-keepalive" type="number" class="form-control" min="0" max="86400" value="${s.polling_config.cookie_keepalive_interval_seconds}">
               </label>
-              <label class="cfg-field" title="附件 download_url 请求间隔，过短容易撞日限">
-                <span>附件间隔<span class="cfg-unit">秒</span></span>
-                <input id="pc-zq-file-delay" type="number" class="form-control" min="0.2" max="10" step="0.1" value="${s.polling_config.zsxq_file_delay_seconds ?? 1}">
+              <label class="cfg-field" title="每日精选推送的小时（0-23，北京时间）">
+                <span>每日精选<span class="cfg-unit">时</span></span>
+                <input id="pc-daily" type="number" class="form-control" min="0" max="23" value="${s.polling_config.daily_report_hour}">
               </label>
-              <label class="cfg-field cfg-check" title="抓到新帖时就把 PDF 拉到本地；默认关闭，点开再下，省日限">
-                <input id="pc-zq-prefetch" type="checkbox" ${s.polling_config.zsxq_prefetch_files ? "checked" : ""}>
-                <span class="cfg-flag-text">
-                  <span>抓取时预缓存附件</span>
-                  <span class="cfg-check-desc">打开后新帖 PDF 会立刻落到本地，费配额；默认点开再下</span>
-                </span>
-              </label>
-              <label class="cfg-field cfg-check" title="新帖自动抓评论入库（可一并推送）；旧帖不动">
-                <input id="pc-zq-comments" type="checkbox" ${s.polling_config.zsxq_fetch_comments ? "checked" : ""}>
-                <span class="cfg-flag-text">
-                  <span>抓取评论</span>
-                  <span class="cfg-check-desc">新主题的评论在抓帖时一并入库</span>
-                </span>
-              </label>
-              <label class="cfg-field" title="单主题评论最多翻几页（每页 20 条）">
-                <span>评论翻页<span class="cfg-unit">页</span></span>
-                <input id="pc-zq-comment-pages" type="number" class="form-control" min="1" max="10" value="${s.polling_config.zsxq_max_comment_pages ?? 3}">
-              </label>
-              <label class="cfg-field" title="每轮最多发起的评论请求数，保护限流">
-                <span>评论预算<span class="cfg-unit">次/轮</span></span>
-                <input id="pc-zq-comment-budget" type="number" class="form-control" min="1" max="200" value="${s.polling_config.zsxq_comment_budget ?? 30}">
-              </label>
-              <label class="cfg-field cfg-check" title="用 App 通道请求头（xiaomiquan UA + X-Request-Id/X-Version）代替浏览器头；默认关，等你复测日限差异确认有收益再开">
-                <input id="pc-zq-app" type="checkbox" ${s.polling_config.zsxq_app_channel ? "checked" : ""}>
-                <span class="cfg-flag-text">
-                  <span>App 通道头</span>
-                  <span class="cfg-check-desc">伪称 Android 客户端请求；与 web 通道共用账号配额</span>
-                </span>
-              </label>
-              <label class="cfg-field cfg-field--wide" title="App 通道 UA 里的设备标识：Android 版本 + 品牌_型号，空格自动压成下划线">
-                <span>设备标识<span class="cfg-unit">RELEASE BRAND_MODEL</span></span>
-                <input id="pc-zq-app-device" type="text" class="form-control" maxlength="64" value="${escapeHtml(s.polling_config.zsxq_app_device ?? "16 OnePlus_PJD110")}">
-              </label>
-            </div>
-            <div class="cfg-foot">
-              <p class="muted" id="zq-cache-stat">附件缓存 ${zcSize} / ${zc.files || 0} 个文件</p>
-              <button type="button" class="btn-ghost" onclick="purgeZsxqCache()">清理未引用</button>
-            </div>
-          </div>
-          <div class="cfg-ops">
-            <div class="cfg-group">
-              <p class="cfg-group-title">保活与定时</p>
-              <div class="cfg-fields">
-                <label class="cfg-field" title="雪球保活探测间隔；0 = 关闭自动保活">
-                  <span>雪球探测<span class="cfg-unit">秒</span></span>
-                  <input id="pc-probe" type="number" class="form-control" min="0" max="86400" value="${s.polling_config.source_probe_interval_seconds}">
-                </label>
-                <label class="cfg-field" title="登录态自动保活间隔；0 = 关闭">
-                  <span>cookie保活<span class="cfg-unit">秒</span></span>
-                  <input id="pc-keepalive" type="number" class="form-control" min="0" max="86400" value="${s.polling_config.cookie_keepalive_interval_seconds}">
-                </label>
-                <label class="cfg-field" title="每日精选推送的小时（0-23，北京时间）">
-                  <span>每日精选<span class="cfg-unit">时</span></span>
-                  <input id="pc-daily" type="number" class="form-control" min="0" max="23" value="${s.polling_config.daily_report_hour}">
-                </label>
-              </div>
-            </div>
-            <div class="cfg-save-row">
-              <button type="button" class="btn-normal" id="pc-save" onclick="savePollingConfig()">保存抓取设置</button>
             </div>
           </div>
         </div>
       </section>
-      <section class="section-panel">
-        <header class="section-head"><div><h2 class="section-title">IMA 文档采集</h2>
-        <p class="section-meta">默认每小时检查一次，只下载新增 PDF；Refresh Token 留空表示保持已保存值。</p></div></header>
-        <div class="cfg-grid ima-collector-grid">
-          <label class="cfg-field"><span>IMA UID</span><input id="ima-pure-uid" class="form-control" value="${escapeHtml(pure.uid || "001aa361168019ef")}" maxlength="64"></label>
-          <label class="cfg-field"><span>知识库 ID</span><input id="ima-pure-kb" class="form-control" value="${escapeHtml(pure.knowledge_base_id || "7464369361259867")}" maxlength="64"></label>
-          <label class="cfg-field"><span>根文件夹 ID</span><input id="ima-pure-root" class="form-control" value="${escapeHtml(pure.root_folder_id || "folder_7489327974078249")}" maxlength="128"></label>
-          <label class="cfg-field"><span>检查间隔<span class="cfg-unit">分钟</span></span><input id="ima-pure-interval" type="number" class="form-control" min="30" max="10080" value="${Math.round(Number(pure.interval_seconds || 3600) / 60)}"></label>
-          <label class="cfg-field cfg-field--wide"><span>Refresh Token</span><input id="ima-pure-token" class="form-control" type="password" autocomplete="off" placeholder="${pure.refresh_token?.set ? "已保存，留空保持不变" : "重新登录 IMA 后粘贴"}"></label>
+      <section class="section-panel ima-source-panel">
+        <header class="section-head"><div><h2 class="section-title">IMA</h2>
+        <p class="section-meta">文档采集和知识星球采集配置；保存后即时生效。</p></div></header>
+        <div class="ima-source-stack">
+          <div class="ima-source-block">
+            <header class="ima-source-block-head"><div><h3 class="ima-source-title">IMA 文档采集</h3>
+            <p class="section-meta">默认每小时检查一次，只下载新增 PDF；Refresh Token 留空表示保持已保存值。</p></div></header>
+            <div class="cfg-stack ima-collector-stack">
+              <div class="cfg-group ima-collector-connection">
+                <p class="cfg-group-title">连接与同步</p>
+                <div class="ima-collector-fields cfg-fields">
+                  <label class="cfg-field ima-code-field"><span>IMA UID</span><input id="ima-pure-uid" type="text" class="form-control" value="${escapeHtml(pure.uid || "001aa361168019ef")}" maxlength="64"></label>
+                  <label class="cfg-field ima-code-field"><span>知识库 ID</span><input id="ima-pure-kb" type="text" class="form-control" value="${escapeHtml(pure.knowledge_base_id || "7464369361259867")}" maxlength="64"></label>
+                  <label class="cfg-field ima-code-field"><span>根文件夹 ID</span><input id="ima-pure-root" type="text" class="form-control" value="${escapeHtml(pure.root_folder_id || "folder_7489327974078249")}" maxlength="128"></label>
+                  <label class="cfg-field"><span>检查间隔<span class="cfg-unit">分钟</span></span><input id="ima-pure-interval" type="number" class="form-control" min="30" max="10080" value="${Math.round(Number(pure.interval_seconds || 3600) / 60)}"></label>
+                  <label class="cfg-field ima-code-field ima-field--wide"><span>Refresh Token</span><input id="ima-pure-token" class="form-control" type="password" autocomplete="off" placeholder="${pure.refresh_token?.set ? "已保存，留空保持不变" : "重新登录 IMA 后粘贴"}"></label>
+                </div>
+              </div>
+              <div class="cfg-group ima-groups-block">
+                <div class="ima-groups-head">
+                  <p class="cfg-group-title">知识库群组</p>
+                  <div class="toolbar ima-groups-toolbar">
+                    <span id="ima-group-discovery-status" class="muted">${imaGroupDiscoveryStatusText(imaCollector)}</span>
+                    <button type="button" class="btn-ghost" onclick="addImaGroupRow()">添加 IMA 群组</button>
+                  </div>
+                </div>
+                <div id="ima-groups" class="ima-groups-list">${renderImaGroupRows(imaCollector.config && imaCollector.config.groups)}</div>
+              </div>
+            </div>
+            <div class="cfg-foot ima-collector-foot">
+              <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
+              <div class="toolbar"><button type="button" class="btn-normal" id="ima-collector-save" onclick="saveImaCollector()">保存采集配置</button><button type="button" class="btn-ghost" id="ima-sync-btn" onclick="triggerImaCollector()">${REFRESH_ICON}<span>立即同步</span></button></div>
+            </div>
+          </div>
+          <div class="ima-source-block">
+            <header class="ima-source-block-head"><div><h3 class="ima-source-title">知识星球</h3></div></header>
+            <div class="cfg-group cfg-group--zsxq">
+              <div class="cfg-fields">
+                <label class="cfg-field" title="每星球每轮最多翻几页，每页 20 条">
+                  <span>单轮翻页<span class="cfg-unit">页</span></span>
+                  <input id="pc-zq-pages" type="number" class="form-control" min="1" max="20" value="${s.polling_config.zsxq_max_pages ?? 3}">
+                </label>
+                <label class="cfg-field" title="列表/详情请求间隔，过短容易触发 1059">
+                  <span>请求间隔<span class="cfg-unit">秒</span></span>
+                  <input id="pc-zq-delay" type="number" class="form-control" min="0.2" max="10" step="0.1" value="${s.polling_config.zsxq_fetch_delay_seconds ?? 1}">
+                </label>
+                <label class="cfg-field" title="附件 download_url 请求间隔，过短容易撞日限">
+                  <span>附件间隔<span class="cfg-unit">秒</span></span>
+                  <input id="pc-zq-file-delay" type="number" class="form-control" min="0.2" max="10" step="0.1" value="${s.polling_config.zsxq_file_delay_seconds ?? 1}">
+                </label>
+                <label class="cfg-field cfg-check" title="抓到新帖时就把 PDF 拉到本地；默认关闭，点开再下，省日限">
+                  <input id="pc-zq-prefetch" type="checkbox" ${s.polling_config.zsxq_prefetch_files ? "checked" : ""}>
+                  <span class="cfg-flag-text">
+                    <span>抓取时预缓存附件</span>
+                    <span class="cfg-check-desc">打开后新帖 PDF 会立刻落到本地，费配额；默认点开再下</span>
+                  </span>
+                </label>
+                <label class="cfg-field cfg-check" title="新帖自动抓评论入库（可一并推送）；旧帖不动">
+                  <input id="pc-zq-comments" type="checkbox" ${s.polling_config.zsxq_fetch_comments ? "checked" : ""}>
+                  <span class="cfg-flag-text">
+                    <span>抓取评论</span>
+                    <span class="cfg-check-desc">新主题的评论在抓帖时一并入库</span>
+                  </span>
+                </label>
+                <label class="cfg-field" title="单主题评论最多翻几页（每页 20 条）">
+                  <span>评论翻页<span class="cfg-unit">页</span></span>
+                  <input id="pc-zq-comment-pages" type="number" class="form-control" min="1" max="10" value="${s.polling_config.zsxq_max_comment_pages ?? 3}">
+                </label>
+                <label class="cfg-field" title="每轮最多发起的评论请求数，保护限流">
+                  <span>评论预算<span class="cfg-unit">次/轮</span></span>
+                  <input id="pc-zq-comment-budget" type="number" class="form-control" min="1" max="200" value="${s.polling_config.zsxq_comment_budget ?? 30}">
+                </label>
+                <label class="cfg-field cfg-check" title="用 App 通道请求头（xiaomiquan UA + X-Request-Id/X-Version）代替浏览器头；默认关，等你复测日限差异确认有收益再开">
+                  <input id="pc-zq-app" type="checkbox" ${s.polling_config.zsxq_app_channel ? "checked" : ""}>
+                  <span class="cfg-flag-text">
+                    <span>App 通道头</span>
+                    <span class="cfg-check-desc">伪称 Android 客户端请求；与 web 通道共用账号配额</span>
+                  </span>
+                </label>
+                <label class="cfg-field cfg-field--wide" title="App 通道 UA 里的设备标识：Android 版本 + 品牌_型号，空格自动压成下划线">
+                  <span>设备标识<span class="cfg-unit">RELEASE BRAND_MODEL</span></span>
+                  <input id="pc-zq-app-device" type="text" class="form-control" maxlength="64" value="${escapeHtml(s.polling_config.zsxq_app_device ?? "16 OnePlus_PJD110")}">
+                </label>
+              </div>
+              <div class="cfg-foot">
+                <p class="muted" id="zq-cache-stat">附件缓存 ${zcSize} / ${zc.files || 0} 个文件</p>
+                <button type="button" class="btn-ghost" onclick="purgeZsxqCache()">清理未引用</button>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="toolbar ima-groups-toolbar">
-          <span id="ima-group-discovery-status" class="muted">${imaGroupDiscoveryStatusText(imaCollector)}</span>
-          <button type="button" class="btn-ghost" onclick="addImaGroupRow()">添加 IMA 群组</button>
-        </div>
-        <div id="ima-groups">${renderImaGroupRows(imaCollector.config && imaCollector.config.groups)}</div>
-        <div class="ima-collector-foot">
-          <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
-          <div class="toolbar"><button type="button" class="btn-normal" onclick="saveImaCollector()">保存采集配置</button><button type="button" class="btn-ghost" onclick="triggerImaCollector()">${REFRESH_ICON}<span>立即同步</span></button></div>
+        <div class="cfg-save-row ima-polling-save-row">
+          <button type="button" class="btn-normal" id="pc-save" onclick="savePollingConfig()">保存抓取设置</button>
         </div>
       </section>
     </div>
@@ -5254,18 +5323,26 @@ async function loadAdminStats() {
         </div>
       </section>
       <section class="section-panel">
-        <header class="section-head"><div><h2 class="section-title">ima 凭证</h2>
+        <header class="section-head"><div><h2 class="section-title">IMA 凭证</h2>
         <p class="section-meta">模式：${ima.mode || "未配置"}${ima.openapi_clientid?.set ? ` · clientid ${escapeHtml(ima.openapi_clientid.preview || "")}` : ""}。Cookie 用 scripts/ima_qr_login.py 扫码捕获（x-ima-cookie）；OpenAPI 凭证登录 ima.qq.com/agent-interface 生成，取全文必须。</p></div></header>
-        <label class="field-label" for="ima-cookie">网页 Cookie（x-ima-cookie）</label>
-        <textarea id="ima-cookie" class="form-control cookie-paste" rows="3" placeholder="IMA-TOKEN=...; IMA-UID=..."></textarea>
-        <label class="field-label" for="ima-cid" style="margin-top:8px;display:block">OpenAPI Client ID</label>
-        <input id="ima-cid" class="form-control" placeholder="Client ID" style="margin-top:6px">
-        <label class="field-label" for="ima-key" style="margin-top:8px;display:block">OpenAPI API Key</label>
-        <input id="ima-key" class="form-control" placeholder="API Key" style="margin-top:6px" type="password">
-        <div class="toolbar" style="margin-top:12px">
-          <button type="button" class="btn-normal" onclick="saveImaCredentials()">保存 ima 凭证</button>
+        <div class="ima-credential-fields">
+          <label class="ima-credential-field ima-credential-field--wide" for="ima-cookie">
+            <span>网页 Cookie（x-ima-cookie）</span>
+            <textarea id="ima-cookie" class="form-control cookie-paste" rows="3" placeholder="IMA-TOKEN=...; IMA-UID=..."></textarea>
+          </label>
+          <label class="ima-credential-field ima-code-field" for="ima-cid">
+            <span>OpenAPI Client ID</span>
+            <input id="ima-cid" class="form-control" placeholder="Client ID">
+          </label>
+          <label class="ima-credential-field ima-code-field" for="ima-key">
+            <span>OpenAPI API Key</span>
+            <input id="ima-key" class="form-control" placeholder="API Key" type="password">
+          </label>
+        </div>
+        <div class="ima-credential-actions toolbar">
+          <button type="button" class="btn-normal" onclick="saveImaCredentials()">保存 IMA 凭证</button>
           <button type="button" class="btn-ghost" onclick="pasteCookieField('ima-cookie')">从剪贴板填入 Cookie</button>
-          ${ima.cookie?.set && !ima.cookie.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('ima','ima')" aria-label="清除 ima Cookie">清除 Cookie</button>` : ""}
+          ${ima.cookie?.set && !ima.cookie.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('ima','ima')" aria-label="清除 IMA Cookie">清除 Cookie</button>` : ""}
         </div>
       </section>
       <section class="section-panel">
@@ -5456,6 +5533,10 @@ function renderStatsData(s) {
   if (refreshAt) refreshAt.textContent = `更新于 ${new Date().toLocaleTimeString()}`;
   const imaCollectorStatus = $("#ima-collector-status");
   if (imaCollectorStatus && s.ima_collector) imaCollectorStatus.textContent = imaCollectorStatusText(s.ima_collector);
+  const imaGroupDiscoveryStatus = $("#ima-group-discovery-status");
+  if (imaGroupDiscoveryStatus && s.ima_collector) {
+    imaGroupDiscoveryStatus.innerHTML = imaGroupDiscoveryStatusText(s.ima_collector);
+  }
 }
 
 async function savePollingConfig() {
@@ -5930,6 +6011,7 @@ function imaCollectorStatusText(status) {
 }
 
 async function saveImaCollector() {
+  const focusId = document.activeElement?.id || "";
   const minutes = Number($("#ima-pure-interval")?.value || 60);
   if (!Number.isInteger(minutes) || minutes < 30 || minutes > 10080) {
     flash("检查间隔须在 30–10080 分钟", "error");
@@ -5950,20 +6032,28 @@ async function saveImaCollector() {
     if (tokenInput) tokenInput.value = "";
     flash("IMA 文档采集配置已保存");
     await loadAdminStats();
+    if (focusId) document.getElementById(focusId)?.focus();
   } catch (err) {
     flash(err.message || "保存失败", "error");
   }
 }
 
 async function triggerImaCollector() {
+  const btn = $("#ima-sync-btn");
+  if (btn?.disabled) return;
+  if (btn) btn.disabled = true;
   try {
-    await api("/api/admin/ima-collector/sync", { method: "POST" });
-    flash("IMA 文档同步已启动");
+    const result = await api("/api/admin/ima-collector/sync", { method: "POST" });
+    flash(result.status === "already_running" ? "IMA 文档同步正在进行中" : "IMA 文档同步已启动");
     const status = await api("/api/admin/ima-collector");
     const target = $("#ima-collector-status");
     if (target) target.textContent = imaCollectorStatusText(status);
+    const discovery = $("#ima-group-discovery-status");
+    if (discovery) discovery.innerHTML = imaGroupDiscoveryStatusText(status);
   } catch (err) {
     flash(err.message || "同步启动失败", "error");
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -5980,7 +6070,7 @@ async function saveImaCredentials() {
       method: "POST",
       body: JSON.stringify({ cookie, openapi_clientid: cid, openapi_apikey: key }),
     });
-    flash("ima 凭证已保存");
+    flash("IMA 凭证已保存");
     history.replaceState(null, "", "/admin/stats?tab=cookies");
     await loadAdminStats();
     focusCookieField("ima");
@@ -6285,40 +6375,22 @@ async function loadAdminKols(opts) {
   $("#admin-body").innerHTML = `
     <section class="section-panel">
       <header class="section-head">
-        <div><h2 class="section-title">添加大V</h2></div>
-        <div class="toolbar" style="margin-top:12px">
-          <select id="ad-platform" class="form-control" style="margin:0;width:auto" aria-label="平台" onchange="adminPlatformDefaultCat(this)">
-            <option value="xueqiu">雪球</option>
-            <option value="combination">雪球组合</option>
-            <option value="weibo">微博</option>
-            <option value="twitter">X</option>
-            <option value="zsxq">知识星球</option>
-          </select>
-          <select id="ad-category" class="form-control" style="margin:0;width:auto" aria-label="分类"><option value="">未分类</option>${catOptions}</select>
-          <input id="ad-name" class="form-control" style="margin:0;width:200px" placeholder="昵称" aria-label="昵称">
-          <input id="ad-external" class="form-control" style="margin:0;width:300px" placeholder="user_id / uid / 主页或星球链接" aria-label="外部ID或主页链接">
-          <button class="btn-normal" id="ad-add-btn" onclick="adminAddKol()">添加</button>
-        </div>
+        <div><h2 class="section-title">添加大V</h2>
+        <p class="section-meta">每行一个：昵称 + 主页链接/UID（昵称可省略）。链接自动识别平台；纯 UID 用下方默认平台。</p></div>
       </header>
-    </section>
-    <section class="section-panel">
-      <header class="section-head">
-        <div><h2 class="section-title">批量导入大V</h2>
-        <p class="section-meta">每行一个：昵称 + 主页链接/UID（昵称可省略）。自动识别平台：雪球主页→雪球、雪球组合页→雪球组合、微博主页→微博、X 主页→X；纯 UID 等无法识别的行使用下方默认平台。如：<code>段永平 https://xueqiu.com/u/12345</code></p></div>
-      </header>
-      <textarea id="ad-batch-lines" class="form-control" rows="8" style="font-family:monospace;min-height:180px;resize:vertical" placeholder="https://xueqiu.com/u/12345&#10;段永平 12345&#10;https://weibo.com/u/1642591402&#10;https://x.com/elonmusk&#10;https://xueqiu.com/P/ZH123456"></textarea>
-      <div class="toolbar" style="margin-top:12px">
+      <textarea id="ad-batch-lines" class="form-control ak-add-lines" rows="6" placeholder="https://xueqiu.com/u/12345&#10;段永平 12345&#10;https://weibo.com/u/1642591402&#10;https://x.com/elonmusk&#10;https://xueqiu.com/P/ZH123456" aria-label="大V链接或UID，每行一个"></textarea>
+      <div class="toolbar ak-add-bar">
         <label class="muted" for="ad-batch-platform">默认平台（未识别的行）</label>
-        <select id="ad-batch-platform" class="form-control" style="margin:0;width:auto" aria-label="默认平台（未识别的行）" onchange="adminPlatformDefaultCat(this, '#ad-batch-category')">
+        <select id="ad-batch-platform" class="form-control" aria-label="默认平台（未识别的行）" onchange="adminPlatformDefaultCat(this)">
           <option value="xueqiu">雪球</option>
           <option value="combination">雪球组合</option>
           <option value="weibo">微博</option>
           <option value="twitter">X</option>
           <option value="zsxq">知识星球</option>
         </select>
-        <select id="ad-batch-category" class="form-control" style="margin:0;width:auto" aria-label="导入分类"><option value="">未分类</option>${catOptions}</select>
-        <button class="btn-normal" id="ad-batch-btn" onclick="adminBatchAddKols()">批量导入</button>
-        <div id="ad-batch-result" class="muted" style="white-space:pre-line"></div>
+        <select id="ad-batch-category" class="form-control" aria-label="分类"><option value="">未分类</option>${catOptions}</select>
+        <button class="btn-normal" id="ad-batch-btn" onclick="adminBatchAddKols()">添加</button>
+        <div id="ad-batch-result" class="muted ak-add-result"></div>
       </div>
     </section>
     <section class="section-panel">
@@ -6481,7 +6553,7 @@ async function adminKolBatchCategory() {
 async function adminBatchAddKols() {
   const lines = $("#ad-batch-lines").value;
   if (!lines.trim()) {
-    flash("请先粘贴要导入的大V链接/ID", "error");
+    flash("请先填写要添加的大V链接/ID", "error");
     return;
   }
   const platform = $("#ad-batch-platform").value;
@@ -6509,12 +6581,12 @@ async function adminBatchAddKols() {
     }
     const hidden = view && view.hiddenFocus && data.ok;
     flash(data.failed.length
-      ? `导入完成：成功 ${data.ok}/${data.total}，失败 ${data.failed.length} 条${hidden ? "，不在当前筛选里" : ""}`
+      ? `添加完成：成功 ${data.ok}/${data.total}，失败 ${data.failed.length} 条${hidden ? "，不在当前筛选里" : ""}`
       : hidden
-        ? `导入成功：${data.ok} 个，不在当前筛选里`
-        : `导入成功：${data.ok} 个`);
+        ? `添加成功：${data.ok} 个，不在当前筛选里`
+        : `添加成功：${data.ok} 个`);
   } catch (err) {
-    flash("批量导入失败: " + err.message, "error");
+    flash("添加失败: " + err.message, "error");
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -6523,41 +6595,10 @@ async function adminBatchAddKols() {
 // 雪球组合默认分类：实盘（选平台后自动填写）
 function adminPlatformDefaultCat(sel, catSel) {
   if (sel.value !== "combination") return;
-  const cat = $(catSel || "#ad-category");
+  const cat = $(catSel || "#ad-batch-category");
   if (!cat) return;
   for (const opt of cat.options) {
     if (opt.textContent.trim() === "实盘") { cat.value = opt.value; break; }
-  }
-}
-
-async function adminAddKol() {
-  const name = $("#ad-name").value.trim();
-  const platform = $("#ad-platform").value;
-  const category = $("#ad-category").value;
-  const external = $("#ad-external").value.trim();
-  if (!external) {
-    flash("请填写外部ID或主页链接", "error");
-    return;
-  }
-  const btn = $("#ad-add-btn");
-  if (btn) btn.disabled = true;
-  try {
-    const created = await api("/api/kols", {
-      method: "POST",
-      body: JSON.stringify({
-        platform,
-        name,
-        external_id: external,
-        category_id: category ? Number(category) : null,
-      }),
-    });
-    const view = await loadAdminKols({ focusIds: created.id ? [created.id] : [] });
-    const label = created.name || name || "未命名";
-    flash(view && view.hiddenFocus ? `已添加「${label}」，不在当前筛选里` : `已添加「${label}」`);
-  } catch (err) {
-    flash("添加失败: " + err.message, "error");
-  } finally {
-    if (btn) btn.disabled = false;
   }
 }
 

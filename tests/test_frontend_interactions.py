@@ -820,6 +820,14 @@ def test_stats_tabs_expose_tab_aria():
     assert 'setAttribute("aria-selected"' in switch
 
 
+def test_stats_tabs_scroll_active_tab_into_view():
+    """手机横向 tab 深链接后，活动 tab 必须进入可视区域。"""
+    switch = _fn_body("switchStatsTab")
+    assert "scrollIntoView" in switch
+    assert 'block: "nearest"' in switch
+    assert 'inline: "nearest"' in switch
+
+
 def test_proxy_admin_labels_and_mobile_table():
     """出口下拉各有标签；导入有可见 label；节点表走大V表的手机卡片约定。"""
     render = _fn_body("renderProxyAdmin")
@@ -891,7 +899,7 @@ def test_cookie_clear_is_confirmed_delete_and_hidden_when_unset():
     assert 'aria-label="清除雪球 Cookie"' in render
     assert 'aria-label="清除微博 Cookie"' in render
     assert 'aria-label="清除 X Cookie"' in render
-    assert 'aria-label="清除 ima Cookie"' in render
+    assert 'aria-label="清除 IMA Cookie"' in render
     assert 'aria-label="清除知识星球 Cookie"' in render
     assert ">清除 Cookie<" in render
 
@@ -970,6 +978,93 @@ def test_ima_document_collector_lives_in_fetch_settings():
     assert config < ima < cookies
     assert "saveImaCollector()" in src[config:cookies]
     assert '<h2 class="section-title">IMA 文档采集</h2>' not in src[cookies:]
+
+
+def test_ima_settings_have_one_parent_and_keep_zsxq_under_ima():
+    """抓取设置内 IMA 是父级，文档采集和知识星球连续展示。"""
+    stats = _fn_body("loadAdminStats")
+    config_start = stats.index('<div id="st-config"')
+    cookies_start = stats.index('<div id="st-cookies"')
+    config = stats[config_start:cookies_start]
+
+    ima = config.index('<h2 class="section-title">IMA</h2>')
+    documents = config.index('<h3 class="ima-source-title">IMA 文档采集</h3>')
+    zsxq = config.index('<h3 class="ima-source-title">知识星球</h3>')
+
+    assert 'class="section-panel ima-source-panel"' in config
+    assert ima < documents < zsxq
+    assert 'class="cfg-group cfg-group--zsxq"' in config[ima:]
+    assert 'id="pc-zq-pages"' in config[ima:]
+    assert config.index('id="pc-save"') > zsxq
+
+
+def test_zsxq_settings_use_one_column_on_narrow_layout():
+    """知识星球配置在 800px 及以下不能继续用双列挤压字段。"""
+    css = STYLE_CSS.read_text()
+    narrow = _media_block(css, "@media (max-width: 800px)")
+    assert re.search(r"\.cfg-group--zsxq \.cfg-fields\s*\{[^}]*grid-template-columns:\s*1fr", narrow)
+
+
+def test_ima_discovery_status_refreshes_without_replacing_group_inputs():
+    """定时刷新只更新发现状态，不重绘可能含未保存编辑的群组输入。"""
+    body = _fn_body("renderStatsData")
+    assert 'ima-group-discovery-status' in body
+    assert 'imaGroupDiscoveryStatus.innerHTML = imaGroupDiscoveryStatusText(s.ima_collector)' in body
+    assert 'renderImaGroupRows' not in body
+
+
+def test_ima_sync_feedback_guards_duplicate_requests():
+    """立即同步请求期间禁用按钮，并区分已启动和已在运行。"""
+    body = _fn_body("triggerImaCollector")
+    assert 'const btn = $("#ima-sync-btn")' in body
+    assert 'if (btn?.disabled) return' in body
+    assert 'btn.disabled = true' in body
+    assert 'btn.disabled = false' in body
+    assert 'already_running' in body
+
+
+def test_ima_collector_save_restores_focus_after_rebuild():
+    """保存重建设置页后恢复原控件或保存按钮焦点。"""
+    body = _fn_body("saveImaCollector")
+    render = _fn_body("loadAdminStats")
+    assert 'document.activeElement' in body
+    assert 'getElementById(focusId)' in body
+    assert '.focus()' in body
+    assert 'id="ima-collector-save"' in render
+
+
+def test_ima_config_blocks_use_shared_layout_and_no_inline_spacing():
+    stats = _fn_body("loadAdminStats")
+    row = _fn_body("imaGroupRowHtml")
+    config_start = stats.index('<div id="st-config"')
+    cookies_start = stats.index('<div id="st-cookies"')
+    config = stats[config_start:cookies_start]
+    cookies = stats[cookies_start:]
+    ima_start = cookies.index("<h2 class=\"section-title\">IMA 凭证</h2>")
+    ima_end = cookies.index("<h2 class=\"section-title\">知识星球 Cookie</h2>")
+    ima_credentials = cookies[ima_start:ima_end]
+    css = STYLE_CSS.read_text()
+
+    assert 'class="cfg-group ima-group-row"' in row
+    assert 'class="ima-group-fields cfg-fields"' in row
+    assert 'class="ima-collector-fields cfg-fields"' in config
+    assert 'class="ima-credential-fields"' in ima_credentials
+    assert 'class="ima-credential-actions toolbar"' in ima_credentials
+    assert 'style="margin-top:' not in ima_credentials
+    assert 'style="margin:6px' not in ima_credentials
+    assert ".ima-code-field .form-control" in css
+    assert ".ima-credential-fields" in css
+
+
+def test_ima_config_uses_small_sync_icon_and_consistent_brand_case():
+    stats = _fn_body("loadAdminStats")
+    css = STYLE_CSS.read_text()
+
+    assert '<h2 class="section-title">IMA 凭证</h2>' in stats
+    assert "保存 IMA 凭证" in stats
+    assert ".ima-collector-foot .refresh-icon" in css
+    assert "width: 16px" in css
+    assert "height: 16px" in css
 
 
 def test_ima_group_render_has_safe_rows_and_recovery_controls():
@@ -1295,7 +1390,8 @@ def test_ima_documents_filters_round_trip_through_local_url():
     assert "selectImaDocumentsDay" in src
     assert "replaceImaDocumentsRoute(imaDocumentsRoute(" in src
     assert "state.imaDocumentsDay = \"\"" in _fn_body("selectImaDocumentGroup")
-    assert 'onchange="selectImaDocumentsDay(this.value)"' in render
+    assert 'onchange="selectImaDocumentsDay(this.value)"' in _fn_body("imaDocumentsDayNavHtml")
+    assert "imaDocumentsDayNavHtml(" in render
     assert "submitImaDocumentsSearch()" in render
 
 
@@ -1742,9 +1838,14 @@ def test_ima_document_reader_preserves_group_context_and_metadata():
     assert "下载" in reader
     assert "item.name" in reader and "item.size" in reader
     assert "ima-reader-abstract" in reader
+    assert "ima-reader-copy" in reader
+    assert "ima-reader-empty" in reader
+    assert "还没有预览文件" in reader
+    assert "回列表" in reader
+    assert "ima-reader-filemeta" in reader
     assert "needs_translation" in reader
     assert "/translate" in reader
-    assert "go(backRoute)" in reader
+    assert "onclick=\"go('${escapeHtml(backRoute)}')\"" in reader
 
 
 def test_ima_document_reader_requests_keep_current_group_for_all_endpoints():
@@ -1801,9 +1902,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=193"' in html
-    assert 'src="/app.js?v=273"' in html
-    assert 'dav-shell-v142' in sw
+    assert 'href="/style.css?v=198"' in html
+    assert 'src="/app.js?v=281"' in html
+    assert 'dav-shell-v150' in sw
 
 
 def test_ima_documents_follow_latest_dynamic_navigation():
@@ -1827,6 +1928,34 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     css = STYLE_CSS.read_text()
     assert ".tl-ima-entry { display: none; }" in css
     assert "(min-width: 769px) and (max-width: 900px)" in css
+
+
+def test_knowledge_single_subscribed_library_skips_catalog():
+    """非管理员只订了一个库时，打开 /knowledge 直达该库；catalog=1 留在目录。"""
+    src = APP_JS.read_text()
+    render = _fn_body("renderKnowledge")
+    list_render = _fn_body("renderImaDocuments")
+    select = _fn_body("selectImaDocumentGroup")
+    subscribe = _fn_body("subscribeKnowledge")
+    unsubscribe = _fn_body("unsubscribeKnowledge")
+    empty = _fn_body("imaDocumentsEmptyHtml")
+    catalog = _fn_body("imaKnowledgeCatalogRoute")
+    stay = _fn_body("imaKnowledgeStayOnCatalog")
+    assert "knowledge?catalog=1" in catalog
+    assert 'get("catalog")' in stay
+    assert "=== \"1\"" in stay
+    assert "subscribed.length === 1" in render
+    assert "imaKnowledgeStayOnCatalog" in render
+    assert "!isAdmin" in render
+    assert "replaceImaDocumentsRoute(imaDocumentsRoute(" in render
+    assert "renderImaDocuments(seq)" in render
+    assert "imaKnowledgeCatalogRoute()" in list_render
+    assert "imaKnowledgeCatalogRoute()" in select
+    assert "imaKnowledgeCatalogRoute()" in subscribe
+    assert "imaKnowledgeCatalogRoute()" in unsubscribe
+    assert "imaKnowledgeCatalogRoute()" in empty
+    assert "function imaKnowledgeCatalogRoute" in src
+    assert "function imaKnowledgeStayOnCatalog" in src
 
 
 def test_knowledge_catalog_shell_contract():
@@ -1857,6 +1986,8 @@ def test_knowledge_catalog_shell_contract():
     assert 'mode === "subscribed"' in card
     assert "kb-card-latest" in card
     assert 'mode === "available"' in card
+    assert "is-available" in card
+    assert "is-openable" in card
     assert "/api/ima-documents/groups/" in src
     assert re.search(
         r'/api/ima-documents/groups/.{0,80}subscribe[\s\S]{0,160}method:\s*"POST"|'
@@ -1876,6 +2007,9 @@ def test_knowledge_catalog_shell_contract():
     css = STYLE_CSS.read_text()
     assert ".kb-tabs" in css
     assert ".kb-card" in css
+    assert ".kb-card.is-openable:hover" in css
+    assert ".kb-card-latest" in css
+    assert "border-top: var(--border-default)" in css
 
 
 def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
@@ -1906,7 +2040,17 @@ def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
     assert "item.cover_url" not in row
     assert "item.tags" not in row
     assert "imaDocKindLabel" in row
+    assert "ima-doc-row-day" in row
     assert "fmtImaDay(item.day)" in row
+    assert "imaDocumentsEmptyHtml" in src
+    assert "没有匹配的文档" in src
+    assert "这个库还没有文档" in src
+    assert "这一天没有文档" in src
+    assert "回最新一天" in src
+    assert "去配置采集" in src
+    assert "全部日期" not in render
+    assert "全部日期" not in _fn_body("imaDocumentsDayNavHtml")
+    assert "跳到日期" in _fn_body("imaDocumentsDayNavHtml")
     assert "stepImaDocumentsDay" in src
     assert "ima-doc-day-nav" in src
     assert "loadImaDocumentsMore" in src
@@ -1924,6 +2068,10 @@ def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
     assert "grid-column: 1" in css
     assert "grid-column: 2" in css
     assert "grid-column: 3" not in css
+    assert ".ima-doc-kind" in css
+    assert "border-radius: var(--radius-pill)" in css
+    assert ".ima-reader-abstract { max-width: 72ch;" in css
+    assert ".ima-reader-empty" in css
 
 
 def test_ima_documents_search_leaves_day_view():
@@ -1939,6 +2087,7 @@ def test_ima_documents_search_leaves_day_view():
     assert "state.imaDocumentsDay = \"\"" in tag
     assert "state.imaDocumentsQuery = \"\"" in day
     assert "state.imaDocumentsTag = \"\"" in day
+    assert "if (!day) return" in day
     assert "imaDocumentsLastDay" in clear
     assert "_imaListSeq" in render
     assert "_imaListSeq" in more
@@ -2213,18 +2362,30 @@ def test_admin_kols_keeps_selection_against_filter_ids():
 
 
 def test_admin_kols_add_keeps_filters_and_marks_row():
-    """添加/导入不得改写筛选；新行在当前筛选里就标出，否则说明看不到。"""
-    add = _fn_body("adminAddKol")
-    batch = _fn_body("adminBatchAddKols")
+    """添加不得改写筛选；新行在当前筛选里就标出，否则说明看不到。"""
+    add = _fn_body("adminBatchAddKols")
     load = _fn_body("loadAdminKols")
-    for body in (add, batch):
-        assert "state.adminKolsPlatform" not in body
-        assert "state.adminKolsCategory" not in body
-        assert "goToLast" not in body
-        assert "focusIds" in body
-        assert "不在当前筛选" in body
+    assert "state.adminKolsPlatform" not in add
+    assert "state.adminKolsCategory" not in add
+    assert "goToLast" not in add
+    assert "focusIds" in add
+    assert "不在当前筛选" in add
     assert "focusIds" in load
     assert "ak-row-flash" in load
+
+
+def test_admin_kols_add_is_one_form():
+    """添加大V与批量导入合为一块：多行输入同时覆盖单条和批量。"""
+    src = APP_JS.read_text()
+    load = _fn_body("loadAdminKols")
+    assert "添加大V" in load
+    assert "批量导入大V" not in load
+    assert "adminAddKol" not in src
+    assert 'id="ad-name"' not in load
+    assert 'id="ad-external"' not in load
+    assert 'id="ad-batch-lines"' in load
+    assert 'onclick="adminBatchAddKols()"' in load
+    assert ">添加<" in load
 
 
 def test_admin_kols_mobile_table_uses_data_labels():
@@ -2294,17 +2455,19 @@ def test_admin_kols_mobile_filters_and_actions_align():
 def test_admin_kols_add_fields_have_accessible_names():
     """添加区控件要有可达名称，不能只靠 placeholder。"""
     body = _fn_body("loadAdminKols")
-    assert 'aria-label="平台"' in body
-    assert 'aria-label="昵称"' in body
-    assert "aria-label=" in body and "外部ID" in body
+    assert 'aria-label="默认平台（未识别的行）"' in body
+    assert 'aria-label="分类"' in body
+    assert 'aria-label="大V链接或UID，每行一个"' in body
 
 
 def test_admin_kols_import_result_preserves_lines():
     """导入失败明细按行展示，不能塞进 inline span 把换行挤掉。"""
     body = _fn_body("loadAdminKols")
+    css = STYLE_CSS.read_text()
     assert '<span id="ad-batch-result"' not in body
     assert "ad-batch-result" in body
-    assert "pre-line" in body or "<pre" in body
+    assert "ak-add-result" in body
+    assert re.search(r"\.ak-add-result\s*\{[^}]*white-space:\s*pre-line", css)
 
 
 def test_type_emphasis_stays_on_ramp():
@@ -2316,13 +2479,15 @@ def test_type_emphasis_stays_on_ramp():
     assert 'resultEl.style.fontWeight = "600"' in _fn_body("adminBatchAddKols")
     paste = re.search(r"^\.cookie-paste\s*\{([^}]*)\}", css, re.M)
     bind = re.search(r"^\.bind-code\s*\{([^}]*)\}", css, re.M)
+    add_lines = re.search(r"^\.ak-add-lines\s*\{([^}]*)\}", css, re.M)
     assert paste and "var(--font-mono)" in paste.group(1) and "var(--text-sm)" in paste.group(1)
     assert bind and "var(--font-mono)" in bind.group(1) and "var(--text-body)" in bind.group(1)
+    assert add_lines and "var(--font-mono)" in add_lines.group(1) and "var(--text-sm)" in add_lines.group(1)
 
 
 def test_admin_kols_mutations_disable_while_in_flight():
     """添加/导入/保存/批量进行中要禁用，防连点。"""
-    for name in ("adminAddKol", "adminBatchAddKols", "adminKolBatch", "saveKolEdit"):
+    for name in ("adminBatchAddKols", "adminKolBatch", "saveKolEdit"):
         body = _fn_body(name)
         assert "disabled" in body, f"{name} 无进行中禁用"
 
@@ -2359,7 +2524,6 @@ def test_admin_kols_tier_and_private_copy():
 def test_admin_kols_errors_use_flash_not_alert():
     """大V管理失败走 flash error，不弹 alert。"""
     for name in (
-        "adminAddKol",
         "adminBatchAddKols",
         "adminKolBatch",
         "adminToggleKol",
