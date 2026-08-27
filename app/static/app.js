@@ -535,6 +535,7 @@ async function renderMore(seq) {
 
 const _imaItems = [];
 let _imaOffset = 0;
+let _imaListSeq = 0;
 let _imaLoadingMore = false;
 let _imaLoadObserver = null;
 let _imaLoadFallback = null;
@@ -768,6 +769,7 @@ function knowledgeCardsHtml(groups, mode) {
 
 function openKnowledgeGroup(groupId) {
   state.imaDocumentsTag = "";
+  state.imaDocumentsLastDay = "";
   go(imaDocumentsRoute(groupId, "", "", ""));
 }
 
@@ -823,6 +825,7 @@ async function renderKnowledge(seq, encodedMediaId = "") {
     await renderImaDocuments(seq, encodedMediaId);
     return;
   }
+  stopImaDocumentsAutoLoad();
   const selectedGroup = imaDocumentsGroupFromRoute();
   setPageTitle("知识库");
   $("#main").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
@@ -879,7 +882,6 @@ async function renderKnowledge(seq, encodedMediaId = "") {
 
 async function renderImaDocuments(seq, encodedMediaId = "") {
   stopImaDocumentsAutoLoad();
-  _imaLoadingMore = false;
   ensureKnowledgePhoneWatch();
   if (isPhoneShell()) {
     renderKnowledgePhoneBlocked();
@@ -890,6 +892,11 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     await renderImaDocument(seq, mediaId);
     return;
   }
+  _imaListSeq += 1;
+  _imaItems.length = 0;
+  _imaOffset = 0;
+  state.imaDocumentsHasMore = false;
+  _imaLoadingMore = false;
   clearImaPdfUrl();
   setPageTitle("知识库", true, "knowledge", "回知识库");
   const selectedGroup = imaDocumentsGroupFromRoute();
@@ -914,7 +921,7 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
           <label class="search-bar ima-doc-search">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜索标题或摘要" aria-label="搜索知识库"></label>
           <button type="submit" class="btn-ghost">搜索</button>
         </form>
-        <div id="ima-doc-day-nav-slot"></div>
+        <div id="ima-doc-day-nav-slot" class="ima-doc-day-nav-slot"></div>
         <button type="button" class="btn-ghost${tag ? " has-filter" : ""}" id="ima-doc-filter-toggle" aria-expanded="${filtersOpen}" aria-controls="ima-doc-filters" onclick="toggleImaDocumentsFilters()">${FILTER_ICON}<span>筛选</span></button>
       </div>
       <div id="ima-doc-filters" class="ima-doc-filters"${filtersOpen ? "" : " hidden"}>
@@ -960,6 +967,8 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
       state.imaDocumentsDay = data.day;
       state.imaDocumentsLastDay = data.day;
       replaceImaDocumentsRoute(imaDocumentsRoute(selectedGroup, query, data.day, tag));
+    } else if (!searchMode) {
+      state.imaDocumentsLastDay = "";
     }
     const dropdownDays = [...days];
     const selectedDay = searchMode ? "" : (state.imaDocumentsDay || day || "");
@@ -980,7 +989,6 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     if (navSlot) navSlot.innerHTML = searchMode ? "" : imaDocumentsDayNavHtml(state.imaDocumentsDay || data.day, days);
     const hasFilter = !!(query || tag);
     syncImaDocumentsFilterStatus();
-    _imaItems.length = 0;
     _imaItems.push(...items);
     _imaOffset = items.length;
     state.imaDocumentsHasMore = !!(searchMode && data.has_more);
@@ -1107,6 +1115,7 @@ async function loadImaDocumentsMore() {
     sentinel.innerHTML = `<span class="feed-load-spinner" aria-hidden="true"></span><span>正在加载更多…</span>`;
   }
   const seq = routeRenderSeq;
+  const listSeq = _imaListSeq;
   try {
     const params = new URLSearchParams();
     if (state.imaDocumentsQuery) params.set("q", state.imaDocumentsQuery);
@@ -1115,7 +1124,7 @@ async function loadImaDocumentsMore() {
     params.set("limit", "50");
     params.set("offset", String(_imaItems.length));
     const data = await api(`/api/ima-documents?${params.toString()}`);
-    if (!routeStillActive(seq)) return;
+    if (listSeq !== _imaListSeq || !routeStillActive(seq)) return;
     const incoming = Array.isArray(data.items) ? data.items : [];
     _imaItems.push(...incoming);
     _imaOffset = _imaItems.length;
@@ -1135,7 +1144,7 @@ async function loadImaDocumentsMore() {
     const meta = $("#ima-doc-meta");
     if (meta) meta.textContent = `${_imaItems.length} 份`;
   } catch (err) {
-    if (!routeStillActive(seq)) return;
+    if (listSeq !== _imaListSeq || !routeStillActive(seq)) return;
     const failed = $("#ima-docs-sentinel");
     if (failed) {
       failed.classList.remove("is-loading");
@@ -1143,7 +1152,7 @@ async function loadImaDocumentsMore() {
       failed.innerHTML = `<button type="button" class="btn-ghost" onclick="loadImaDocumentsMore()">加载失败，重试</button>`;
     }
   } finally {
-    _imaLoadingMore = false;
+    if (listSeq === _imaListSeq) _imaLoadingMore = false;
   }
 }
 

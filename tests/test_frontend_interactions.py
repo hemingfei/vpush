@@ -1928,11 +1928,17 @@ def test_ima_documents_search_leaves_day_view():
     tag = _fn_body("selectImaDocumentsTag")
     day = _fn_body("selectImaDocumentsDay")
     clear = _fn_body("clearImaDocumentsFilters")
+    render = _fn_body("renderImaDocuments")
+    more = _fn_body("loadImaDocumentsMore")
+    open_group = _fn_body("openKnowledgeGroup")
     assert "state.imaDocumentsDay = \"\"" in submit
     assert "state.imaDocumentsDay = \"\"" in tag
     assert "state.imaDocumentsQuery = \"\"" in day
     assert "state.imaDocumentsTag = \"\"" in day
     assert "imaDocumentsLastDay" in clear
+    assert "_imaListSeq" in render
+    assert "_imaListSeq" in more
+    assert "imaDocumentsLastDay" in open_group
 
 
 def test_register_placeholder_matches_username_min_length():
