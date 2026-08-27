@@ -7,8 +7,9 @@ on:
 
 env:
   IMAGE_NAME: vpush
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/vpush
 
-# 供应链加固：CI 无写仓库权限；最小权限原则，发布作业单独放开 packages:write
+# 供应链加固：CI 无写仓库权限；发布作业单独放开 packages:write / actions:write
 permissions:
   contents: read
 
@@ -39,17 +40,21 @@ jobs:
           npm ci --ignore-scripts
           npm test
 
-  publish:
+  # VPS 只拉 amd64。tag 先推单架构版本 tag / latest，不必等 arm64。
+  publish-amd64:
     needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+      actions: write
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: 设置 QEMU（arm64 交叉构建）
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
-      - name: 设置 Buildx（多架构构建）
+      - name: 设置 Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       - name: 登录 GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
@@ -57,20 +62,44 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: 构建并推送
+      - name: 登录 Docker Hub
+        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: 镜像 tags
+        id: meta
+        run: |
+          {
+            echo "tags<<EOF"
+            echo "${GHCR_IMAGE}:${GITHUB_REF_NAME}"
+            echo "${GHCR_IMAGE}:latest"
+            if [ -n "${DOCKERHUB_USERNAME}" ]; then
+              echo "${DOCKERHUB_USERNAME}/${IMAGE_NAME}:${GITHUB_REF_NAME}"
+              echo "${DOCKERHUB_USERNAME}/${IMAGE_NAME}:latest"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: 构建并推送 amd64
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
-            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha,scope=amd64
+          cache-to: type=gha,mode=max,scope=amd64
 
-  publish-dockerhub:
-    # 配置 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN 仓库密钥后自动启用
-    needs: test
+  # arm64 后台交叉编译，合并进同一 version / latest 清单。失败不影响已上线的 amd64。
+  publish-arm64:
+    needs: publish-amd64
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      actions: write
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -78,21 +107,52 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: 设置 QEMU（arm64 交叉构建）
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
-      - name: 设置 Buildx（多架构构建）
+      - name: 设置 Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - name: 登录 GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: 登录 Docker Hub
         if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: 构建并推送 Docker Hub
-        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
+      - name: 镜像 tags
+        id: meta
+        run: |
+          {
+            echo "tags<<EOF"
+            echo "${GHCR_IMAGE}:${GITHUB_REF_NAME}-arm64"
+            if [ -n "${DOCKERHUB_USERNAME}" ]; then
+              echo "${DOCKERHUB_USERNAME}/${IMAGE_NAME}:${GITHUB_REF_NAME}-arm64"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: 构建并推送 arm64
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/arm64
           push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/vpush:${{ github.ref_name }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/vpush:latest
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha,scope=arm64
+          cache-to: type=gha,mode=max,scope=arm64
+      - name: 合并多架构清单
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            -t "${GHCR_IMAGE}:${GITHUB_REF_NAME}" \
+            -t "${GHCR_IMAGE}:latest" \
+            "${GHCR_IMAGE}:${GITHUB_REF_NAME}" \
+            "${GHCR_IMAGE}:${GITHUB_REF_NAME}-arm64"
+          if [ -n "${DOCKERHUB_USERNAME}" ]; then
+            docker buildx imagetools create \
+              -t "${DOCKERHUB_USERNAME}/${IMAGE_NAME}:${GITHUB_REF_NAME}" \
+              -t "${DOCKERHUB_USERNAME}/${IMAGE_NAME}:latest" \
+              "${DOCKERHUB_USERNAME}/${IMAGE_NAME}:${GITHUB_REF_NAME}" \
+              "${DOCKERHUB_USERNAME}/${IMAGE_NAME}:${GITHUB_REF_NAME}-arm64"
+          fi
