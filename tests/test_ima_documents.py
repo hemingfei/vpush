@@ -135,6 +135,8 @@ def test_config_reads_group_registry_without_exposing_token():
             "name": "投行研报",
             "knowledge_base_id": "kb-1",
             "root_folder_id": "folder-1",
+            "folder_ids": ["folder-1"],
+            "mounted_folder_count": 1,
             "enabled": True,
             "source": "discovered",
         }
@@ -1671,3 +1673,52 @@ def test_sync_restores_legacy_hashed_files_without_redownload(tmp_path, monkeypa
     assert (root / "0825" / "Report.pdf").is_file()
     assert not hashed.exists()
     assert store.load_state()["file_abc"]["pdf"] == "0825/Report.pdf"
+
+
+def test_group_folder_ids_distinguish_legacy_fallback_from_explicit_empty():
+    legacy_db = FakeDB({
+        IMA_PURE_GROUPS_KEY: json.dumps([{
+            "id": "old", "name": "旧库", "knowledge_base_id": "kb",
+            "root_folder_id": "root", "enabled": True,
+        }])
+    })
+    legacy = ImaDocumentConfig.from_db(legacy_db).groups[0]
+    assert legacy.folder_ids is None
+    assert legacy.mount_folder_ids == ("root",)
+    assert legacy.public()["folder_ids"] == ["root"]
+
+    empty_db = FakeDB({
+        IMA_PURE_GROUPS_KEY: json.dumps([{
+            "id": "new", "name": "新库", "knowledge_base_id": "kb",
+            "root_folder_id": "root", "folder_ids": [], "enabled": False,
+        }])
+    })
+    empty = ImaDocumentConfig.from_db(empty_db).groups[0]
+    assert empty.folder_ids == ()
+    assert empty.mount_folder_ids == ()
+    assert empty.public()["folder_ids"] == []
+    assert empty.public()["mounted_folder_count"] == 0
+
+
+def test_merge_groups_preserves_mounts_and_new_discovered_group_is_unmounted():
+    existing = (
+        ImaGroupConfig(
+            "old", "旧名称", "kb-old", "root-old", True, "discovered",
+            ("folder-kept",),
+        ),
+    )
+    discovered = (
+        ImaGroupConfig("old", "新名称", "kb-old", "root-new"),
+        ImaGroupConfig("new", "新库", "kb-new", "root-new"),
+    )
+    merged = merge_groups(existing, discovered, discovery_complete=True)
+    assert [(g.id, g.name, g.root_folder_id, g.mount_folder_ids) for g in merged] == [
+        ("old", "新名称", "root-new", ("folder-kept",)),
+        ("new", "新库", "root-new", ()),
+    ]
+    assert merged[1].enabled is False
+
+
+def test_merge_groups_failed_discovery_keeps_stale_discovered_groups():
+    existing = (ImaGroupConfig("gone", "旧库", "kb-gone", "root", True, "discovered", ("f",)),)
+    assert merge_groups(existing, (), discovery_complete=False) == existing

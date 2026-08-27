@@ -55,6 +55,7 @@ IMA_PURE_ROOT_FOLDER_DEFAULT = "folder_7489327974078249"
 IMA_PURE_INTERVAL_DEFAULT = 3600
 IMA_PURE_INTERVAL_MIN = 1800
 IMA_PURE_INTERVAL_MAX = 604800
+IMA_MOUNT_FOLDER_ID_MAX = 256
 
 PUB_PEM = b"""-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAx9h6SY1LO88wRVKdOC5U
@@ -148,16 +149,44 @@ class ImaGroupConfig:
     root_folder_id: str
     enabled: bool = True
     source: str = "manual"
+    # None means the pre-folder_ids configuration and falls back to root_folder_id.
+    folder_ids: tuple[str, ...] | None = None
+
+    @property
+    def mount_folder_ids(self) -> tuple[str, ...]:
+        if self.folder_ids is None:
+            return (self.root_folder_id,) if self.enabled and self.root_folder_id else ()
+        return self.folder_ids
 
     def public(self) -> dict[str, Any]:
+        folder_ids = list(self.mount_folder_ids)
         return {
             "id": self.id,
             "name": self.name,
             "knowledge_base_id": self.knowledge_base_id,
             "root_folder_id": self.root_folder_id,
-            "enabled": self.enabled,
+            "folder_ids": folder_ids,
+            "mounted_folder_count": len(folder_ids),
+            "enabled": bool(self.enabled and folder_ids),
             "source": self.source,
         }
+
+
+def _normalize_stored_folder_ids(value: Any) -> tuple[str, ...] | None:
+    if not isinstance(value, list) or len(value) > IMA_MOUNT_FOLDER_ID_MAX:
+        return None
+    output: list[str] = []
+    seen: set[str] = set()
+    for folder_id in value:
+        if not isinstance(folder_id, str):
+            return None
+        folder_id = folder_id.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", folder_id):
+            return None
+        if folder_id not in seen:
+            seen.add(folder_id)
+            output.append(folder_id)
+    return tuple(output)
 
 
 def _legacy_group(kb: str, root: str) -> ImaGroupConfig:
@@ -239,24 +268,35 @@ def normalize_discovered_groups(payload: Any) -> tuple[ImaGroupConfig, ...]:
 def merge_groups(
     existing: tuple[ImaGroupConfig, ...],
     discovered: tuple[ImaGroupConfig, ...],
+    *,
+    discovery_complete: bool = False,
 ) -> tuple[ImaGroupConfig, ...]:
     by_id = {group.id: group for group in existing}
     kb_to_id = {group.knowledge_base_id: group.id for group in existing}
+    discovered_ids: set[str] = set()
     for group in discovered:
         previous = by_id.get(group.id)
         if previous is None:
             previous = by_id.get(kb_to_id.get(group.knowledge_base_id, ""))
-        manual = previous and previous.source == "manual"
+        manual = previous is not None and previous.source == "manual"
         target_id = previous.id if previous else group.id
         by_id[target_id] = ImaGroupConfig(
             id=target_id,
             name=previous.name if manual else group.name,
             knowledge_base_id=group.knowledge_base_id,
             root_folder_id=previous.root_folder_id if manual else group.root_folder_id,
-            enabled=previous.enabled if previous else True,
+            enabled=previous.enabled if previous else False,
             source=previous.source if manual else "discovered",
+            folder_ids=previous.folder_ids if previous else (),
         )
+        discovered_ids.add(target_id)
         kb_to_id[group.knowledge_base_id] = target_id
+    if discovery_complete:
+        return tuple(
+            group
+            for group in by_id.values()
+            if group.source == "manual" or group.id in discovered_ids
+        )
     return tuple(by_id.values())
 
 
@@ -283,6 +323,13 @@ def _read_groups(db: Any, kb: str, root: str) -> tuple[ImaGroupConfig, ...]:
             source = item.get("source", "manual")
             if not isinstance(source, str):
                 continue
+            folder_ids = None
+            if "folder_ids" in item:
+                folder_ids = _normalize_stored_folder_ids(item["folder_ids"])
+                if folder_ids is None:
+                    continue
+                if not enabled:
+                    folder_ids = ()
             groups.append(
                 ImaGroupConfig(
                     id=item["id"].strip(),
@@ -291,6 +338,7 @@ def _read_groups(db: Any, kb: str, root: str) -> tuple[ImaGroupConfig, ...]:
                     root_folder_id=item["root_folder_id"].strip(),
                     enabled=enabled,
                     source="discovered" if source == "discovered" else "manual",
+                    folder_ids=folder_ids,
                 )
             )
         if groups:
@@ -304,6 +352,7 @@ def _read_groups(db: Any, kb: str, root: str) -> tuple[ImaGroupConfig, ...]:
                         root_folder_id=root,
                         enabled=group.enabled,
                         source=group.source,
+                        folder_ids=group.folder_ids,
                     )
                 normalized_groups.append(group)
             return tuple(normalized_groups)
@@ -341,7 +390,7 @@ class ImaDocumentConfig:
             self.uid
             and self.refresh_token
             and any(
-                group.enabled and group.knowledge_base_id and group.root_folder_id
+                group.enabled and group.knowledge_base_id and group.mount_folder_ids
                 for group in self.groups
             )
         )
@@ -372,7 +421,7 @@ class ImaPureClient:
         if self.group is not None:
             return self.group.knowledge_base_id
         for group in self.config.groups:
-            if group.enabled and group.knowledge_base_id and group.root_folder_id:
+            if group.enabled and group.knowledge_base_id and group.mount_folder_ids:
                 return group.knowledge_base_id
         return self.config.knowledge_base_id
 
@@ -381,7 +430,7 @@ class ImaPureClient:
         if self.group is not None:
             return self.group.root_folder_id
         for group in self.config.groups:
-            if group.enabled and group.knowledge_base_id and group.root_folder_id:
+            if group.enabled and group.knowledge_base_id and group.mount_folder_ids:
                 return group.root_folder_id
         return self.config.root_folder_id
 
