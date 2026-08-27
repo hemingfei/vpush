@@ -666,11 +666,6 @@ let _imaTagCounts = {};
 let _imaDocumentCount = 0;
 const IMA_TAG_COMMON_RATIO = 0.5;
 
-function imaSafeCoverUrl(url) {
-  const cover = String(url || "");
-  return cover.startsWith("http") ? cover : "";
-}
-
 function fmtImaDay(day) {
   const raw = String(day || "").trim();
   const match = /^(\d{2})(\d{2})$/.exec(raw);
@@ -1195,12 +1190,11 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
   }
   listRoot.innerHTML = `
       <header class="section-head ima-docs-head">
-        <div><h2 id="ima-doc-title" class="section-title">知识库</h2><p id="ima-doc-meta" class="section-meta"></p></div>
+        <div class="ima-docs-head-main"><div><h2 id="ima-doc-title" class="section-title">知识库</h2><p id="ima-doc-meta" class="section-meta"></p></div><div id="ima-doc-day-nav-slot" class="ima-doc-day-nav-slot"></div></div>
         <button type="button" class="btn-ghost ima-docs-refresh" onclick="refreshImaDocuments()" aria-label="刷新">${REFRESH_ICON}</button>
       </header>
       <div id="ima-doc-groups" class="ima-doc-group-switcher"></div>
       <div class="ima-doc-toolbar">
-        <div id="ima-doc-day-nav-slot" class="ima-doc-day-nav-slot"></div>
         <form class="ima-doc-search-form" onsubmit="event.preventDefault();submitImaDocumentsSearch()">
           <label class="search-bar ima-doc-search">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜索标题或摘要" aria-label="搜索知识库"></label>
         </form>
@@ -1478,11 +1472,10 @@ async function renderImaDocument(seq, mediaId) {
     if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
     setPageTitle(item.name || "知识库");
     const groupContext = item.group_name
-      ? `<p class="ima-reader-group">${escapeHtml(item.group_name)}</p>`
+      ? `<span class="ima-reader-group ima-reader-meta-item">来源：${escapeHtml(item.group_name)}</span>`
       : "";
-    const cover = imaSafeCoverUrl(item.cover_url);
-    const coverHtml = cover
-      ? `<img class="ima-reader-cover" src="${escapeHtml(cover)}" alt="" onerror="this.hidden=true">`
+    const dayContext = item.day
+      ? `<span class="ima-reader-day ima-reader-meta-item">日期：${escapeHtml(fmtImaDay(item.day))}</span>`
       : "";
     const abstractText = item.abstract_zh || item.abstract || "";
     const abstractHtml = abstractText
@@ -1495,11 +1488,13 @@ async function renderImaDocument(seq, mediaId) {
       ? `<div id="ima-pdf-panel" class="ima-pdf-panel"><iframe id="ima-pdf-frame" title="PDF 预览"></iframe></div>`
       : `<div class="ima-reader-empty"><p>还没有预览文件</p><button type="button" class="btn-normal" onclick="closeKnowledgeReader()">回列表</button></div>`;
     const sizeLine = fmtDocSize(item.size);
-    const fileMetaHtml = `<p class="section-meta ima-reader-filemeta"><span class="ima-doc-kind">${escapeHtml(imaDocKindLabel(item))}</span>${sizeLine ? `<span>${escapeHtml(sizeLine)}</span>` : ""}</p>`;
+    const kindMeta = `<span class="ima-reader-meta-item">类型：${escapeHtml(imaDocKindLabel(item))}</span>`;
+    const sizeMeta = sizeLine ? `<span class="ima-reader-meta-item">${escapeHtml(sizeLine)}</span>` : "";
+    const fileMetaHtml = `<div class="section-meta ima-reader-filemeta">${groupContext}${dayContext}${kindMeta}${sizeMeta}</div>`;
     $("#kb-reader").innerHTML = `
       <section class="ima-reader">
         <header class="section-head ima-reader-head">
-          <div class="ima-reader-copy">${groupContext}<p class="ima-reader-day">${escapeHtml(fmtImaDay(item.day))}</p><h2 class="section-title ima-reader-title">${escapeHtml(item.name)}</h2>${coverHtml}${imaDocumentTagsHtml(item.tags, true)}${abstractHtml}${fileMetaHtml}</div>
+          <div class="ima-reader-copy"><h2 class="section-title ima-reader-title">${escapeHtml(item.name)}</h2>${fileMetaHtml}${imaDocumentTagsHtml(item.tags, true)}${abstractHtml}</div>
           ${pdfActions}
         </header>
         ${pdfPanel}

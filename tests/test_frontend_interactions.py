@@ -1892,20 +1892,58 @@ def test_ima_document_reader_backroute_uses_detail_group_when_url_has_none():
     assert reader.index("backRoute = imaDocumentsRoute(item.group_id, query, day, tag)") < reader.index("loadImaPdf")
 
 
-def test_ima_document_reader_omits_empty_group_context():
-    """群组名称为空时不输出空的阅读页群组标记。"""
+def test_ima_document_reader_omits_empty_source_metadata():
+    """群组名称为空时不输出空的阅读页来源标记。"""
     reader = _fn_body("renderImaDocument")
     assert "const groupContext = item.group_name" in reader
-    assert "? `<p class=\"ima-reader-group\">${escapeHtml(item.group_name)}</p>`" in reader
+    assert "? `<span class=\"ima-reader-group ima-reader-meta-item\">来源：${escapeHtml(item.group_name)}</span>`" in reader
     assert "${groupContext}" in reader
-    assert 'class="ima-reader-group">${escapeHtml(item.group_name || "")}' not in reader
+    assert 'class="ima-reader-group ima-reader-meta-item">来源：${escapeHtml(item.group_name || "")}' not in reader
+
+
+def test_ima_document_reader_removes_covers_and_labels_text_metadata():
+    """阅读页不再渲染缩略图，并明确输出来源和文件类型文字。"""
+    src = APP_JS.read_text()
+    reader = _fn_body("renderImaDocument")
+    css = STYLE_CSS.read_text()
+    for value in ("imaSafeCoverUrl", "coverHtml", "item.cover_url", "ima-reader-cover"):
+        assert value not in reader, f"阅读页仍包含 {value}"
+    assert "function imaSafeCoverUrl" not in src
+    assert ".ima-reader-cover" not in css
+    assert "来源：" in reader
+    assert "类型：" in reader
+    assert "imaDocKindLabel(item)" in reader
+
+
+def test_ima_document_day_nav_lives_in_title_header_and_stays_compact():
+    """日期导航属于列表标题上下文，不再在工具栏中独占一整行。"""
+    render = _fn_body("renderImaDocuments")
+    head_start = render.index('<header class="section-head ima-docs-head">')
+    head_end = render.index("</header>", head_start)
+    slot = render.index('id="ima-doc-day-nav-slot"')
+    toolbar = render.index('<div class="ima-doc-toolbar">')
+    assert head_start < slot < head_end < toolbar
+    assert 'class="ima-docs-head-main"' in render[head_start:head_end]
+
+    css = STYLE_CSS.read_text()
+    head_main = re.search(r"\.ima-docs-head-main\s*\{([^}]*)\}", css)
+    slot_css = re.search(r"\.kb-list \.ima-doc-day-nav-slot\s*\{([^}]*)\}", css)
+    date_css = re.search(r"\.kb-list \.ima-doc-day-jump \.form-control\s*\{([^}]*)\}", css)
+    assert head_main and "display: flex" in head_main.group(1)
+    assert "flex-wrap: wrap" in head_main.group(1)
+    assert slot_css and "flex: 0 0 auto" in slot_css.group(1)
+    assert "100%" not in slot_css.group(1)
+    assert date_css and "min-height: 32px" in date_css.group(1)
+    mobile = css[css.rfind("@media (max-width: 768px)"):]
+    assert ".kb-list .ima-doc-day-nav > button" in mobile
+    assert "min-height: 44px" in mobile
 
 
 def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=202"' in html
+    assert 'href="/style.css?v=203"' in html
     assert 'src="/app.js?v=285"' in html
     assert 'dav-shell-v154' in sw
 
