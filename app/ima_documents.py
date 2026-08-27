@@ -1272,21 +1272,22 @@ class ImaDocumentStore:
         del query
         state = self.load_state()
         days: list[str] = []
-        tags: list[str] = []
         seen_days: set[str] = set()
-        seen_tags: set[str] = set()
+        tag_counts: dict[str, int] = {}
+        document_count = 0
         for item in self.catalog_entries(group_id=group_id, groups=groups):
+            document_count += 1
             day = str(item.get("day") or "")
             if day and day not in seen_days:
                 seen_days.add(day)
                 days.append(day)
             for tag in self._tags(self._state_item(state, item)):
                 name = str(tag or "").strip()
-                if name and name not in seen_tags:
-                    seen_tags.add(name)
-                    tags.append(name)
+                if name:
+                    tag_counts[name] = tag_counts.get(name, 0) + 1
         days.sort(reverse=True)
-        return {"days": days, "tags": tags}
+        tags = sorted(tag_counts, key=lambda name: (-tag_counts[name], name))
+        return {"days": days, "tags": tags, "tag_counts": tag_counts, "document_count": document_count}
 
     def document(
         self,

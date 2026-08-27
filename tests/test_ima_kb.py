@@ -497,6 +497,8 @@ def test_document_detail_exposes_metadata_and_list_filters_by_tag(tmp_path, monk
     assert items[0]["tags"] == ["新能源", "宁德时代"]
     assert "新能源" in listed.json()["tags"]
     assert "宏观" in listed.json()["tags"]
+    assert listed.json()["tag_counts"]["新能源"] == 1
+    assert listed.json()["tag_counts"]["宏观"] == 1
     by_day = client.get("/api/ima-documents?day=0826", headers=admin_headers)
     assert by_day.status_code == 200
     assert [item["media_id"] for item in by_day.json()["items"]] == ["file_tagged"]
@@ -535,6 +537,8 @@ def test_catalog_entries_and_facets_do_not_need_files(tmp_path):
     facets = store.document_facets(group_id="banking", groups=(banking,))
     assert facets["days"] == ["0826", "0810"]
     assert set(facets["tags"]) == {"宏观", "新能源"}
+    assert facets["tag_counts"] == {"宏观": 1, "新能源": 1}
+    assert facets["document_count"] == 2
     assert store.document_facets("不存在", group_id="banking", groups=(banking,)) == facets
     listed = store.documents(groups=(banking,), include_body=False)
     assert listed[0]["media_id"] == "file_new"
