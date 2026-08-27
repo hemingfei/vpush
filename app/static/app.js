@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.70";
+const APP_VERSION = "1.12.71";
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"];
@@ -589,20 +589,24 @@ function imaDocumentRow(item, showGroupLabel = false) {
     </div>`;
 }
 
-function imaDocumentsEmptyHtml(hasFilter, dayCount) {
+function imaDocumentsEmptyHtml(hasFilter, days) {
+  const list = Array.isArray(days) ? days.filter(Boolean) : [];
   if (hasFilter) {
     return emptyState(
       "没有匹配的文档",
       `<div><button type="button" class="btn-normal" onclick="clearImaDocumentsFilters()">清除筛选</button></div>`
     );
   }
-  if (!dayCount) {
+  if (!list.length) {
     return emptyState(
       "这个库还没有文档",
       `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回知识库</button></div>`
     );
   }
-  return emptyState("这一天没有文档");
+  return emptyState(
+    "这一天没有文档",
+    `<div><button type="button" class="btn-normal" onclick="selectImaDocumentsDay('${escapeHtml(list[0])}')">回最新一天</button></div>`
+  );
 }
 
 function imaDocumentGroups(items, showGroupLabel = false) {
@@ -669,9 +673,11 @@ function submitImaDocumentsSearch() {
 }
 
 function selectImaDocumentsDay(value) {
+  const day = String(value || "");
+  if (!day) return;
   state.imaDocumentsQuery = "";
   state.imaDocumentsTag = "";
-  state.imaDocumentsDay = String(value || "");
+  state.imaDocumentsDay = day;
   const input = $("#ima-doc-q");
   if (input) input.value = "";
   replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, "", state.imaDocumentsDay, ""));
@@ -705,11 +711,25 @@ function imaDocumentsDayNavHtml(day, days) {
   if (!list.length) return "";
   const current = String(day || "");
   const idx = list.indexOf(current);
-  const prevDisabled = idx >= 0 && idx >= list.length - 1 ? "disabled" : "";
-  const nextDisabled = idx >= 0 && idx <= 0 ? "disabled" : "";
+  const inSearch = !current;
+  const onDay = idx >= 0;
+  const prevDisabled = inSearch || (onDay && idx >= list.length - 1) ? "disabled" : "";
+  const nextDisabled = inSearch || (onDay && idx <= 0) ? "disabled" : "";
+  const options = [];
+  if (!current || !list.includes(current)) {
+    options.push(`<option value=""${current ? "" : " selected"} disabled>跳到日期</option>`);
+  }
+  if (current && !list.includes(current)) {
+    options.push(`<option value="${escapeHtml(current)}" selected>${escapeHtml(fmtImaDay(current) || current)}</option>`);
+  }
+  for (const value of list) {
+    options.push(`<option value="${escapeHtml(value)}"${value === current ? " selected" : ""}>${escapeHtml(fmtImaDay(value) || value)}</option>`);
+  }
   return `<nav class="ima-doc-day-nav" aria-label="日期">
     <button type="button" class="btn-ghost" ${prevDisabled} onclick="stepImaDocumentsDay(-1)" aria-label="前一天">‹</button>
-    <span>${escapeHtml(fmtImaDay(current) || current)}</span>
+    <label class="ima-doc-day-jump">
+      <select id="ima-doc-day" class="form-control" aria-label="跳到日期" onchange="selectImaDocumentsDay(this.value)">${options.join("")}</select>
+    </label>
     <button type="button" class="btn-ghost" ${nextDisabled} onclick="stepImaDocumentsDay(1)" aria-label="后一天">›</button>
   </nav>`;
 }
@@ -861,7 +881,7 @@ async function renderKnowledge(seq, encodedMediaId = "") {
       return;
     }
     const subscribedEmpty = isAdmin
-      ? emptyState("还没有配置知识库")
+      ? emptyState("还没有配置知识库", `<div><button type="button" class="btn-normal" onclick="go('admin/stats?tab=config')">去配置采集</button></div>`)
       : emptyState(
           "还没有订阅知识库",
           available.length
@@ -941,7 +961,6 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
         <button type="button" class="btn-ghost${tag ? " has-filter" : ""}" id="ima-doc-filter-toggle" aria-expanded="${filtersOpen}" aria-controls="ima-doc-filters" onclick="toggleImaDocumentsFilters()">${FILTER_ICON}<span>筛选</span></button>
       </div>
       <div id="ima-doc-filters" class="ima-doc-filters"${filtersOpen ? "" : " hidden"}>
-        <select id="ima-doc-day" class="form-control ima-doc-day-filter" aria-label="按日期筛选" onchange="selectImaDocumentsDay(this.value)"><option value="">全部日期</option></select>
         <select id="ima-doc-tag" class="form-control ima-doc-tag-filter" aria-label="按标签筛选" onchange="selectImaDocumentsTag(this.value)"><option value="">全部标签</option></select>
       </div>
       <div id="ima-doc-filter-chips" class="ima-doc-filter-chips"></div>
@@ -986,13 +1005,6 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     } else if (!searchMode) {
       state.imaDocumentsLastDay = "";
     }
-    const dropdownDays = [...days];
-    const selectedDay = searchMode ? "" : (state.imaDocumentsDay || day || "");
-    if (selectedDay && !dropdownDays.includes(selectedDay)) dropdownDays.unshift(selectedDay);
-    const daySelect = $("#ima-doc-day");
-    if (daySelect) {
-      daySelect.innerHTML = `<option value="">全部日期</option>${dropdownDays.map((value) => `<option value="${escapeHtml(value)}" ${value === selectedDay ? "selected" : ""}>${escapeHtml(fmtImaDay(value) || value)}</option>`).join("")}`;
-    }
     const tagSelect = $("#ima-doc-tag");
     if (tagSelect) {
       const uniqueTags = Array.isArray(data.tags)
@@ -1002,7 +1014,7 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
       tagSelect.innerHTML = `<option value="">全部标签</option>${uniqueTags.map((value) => `<option value="${escapeHtml(value)}" ${value === tag ? "selected" : ""}>${escapeHtml(value)}</option>`).join("")}`;
     }
     const navSlot = $("#ima-doc-day-nav-slot");
-    if (navSlot) navSlot.innerHTML = searchMode ? "" : imaDocumentsDayNavHtml(state.imaDocumentsDay || data.day, days);
+    if (navSlot) navSlot.innerHTML = imaDocumentsDayNavHtml(searchMode ? "" : (state.imaDocumentsDay || data.day), days);
     const hasFilter = !!(query || tag);
     syncImaDocumentsFilterStatus();
     _imaItems.push(...items);
@@ -1010,7 +1022,7 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     state.imaDocumentsHasMore = !!(searchMode && data.has_more);
     const body = $("#ima-docs-body");
     if (!items.length) {
-      body.innerHTML = imaDocumentsEmptyHtml(hasFilter, days.length);
+      body.innerHTML = imaDocumentsEmptyHtml(hasFilter, days);
       return;
     }
     const showGroupLabel = !selectedGroup;
@@ -1205,7 +1217,7 @@ async function renderImaDocument(seq, mediaId) {
       : "";
     const pdfPanel = item.has_pdf
       ? `<div id="ima-pdf-panel" class="ima-pdf-panel"><iframe id="ima-pdf-frame" title="PDF 预览"></iframe></div>`
-      : `<p class="ima-reader-empty">还没有预览文件</p>`;
+      : `<div class="ima-reader-empty"><p>还没有预览文件</p><button type="button" class="btn-normal" onclick="go('${escapeHtml(backRoute)}')">回列表</button></div>`;
     const sizeLine = fmtDocSize(item.size);
     const fileMetaHtml = `<p class="section-meta ima-reader-filemeta"><span class="ima-doc-kind">${escapeHtml(imaDocKindLabel(item))}</span>${sizeLine ? `<span>${escapeHtml(sizeLine)}</span>` : ""}</p>`;
     $("#main").innerHTML = `
@@ -1233,7 +1245,7 @@ async function renderImaDocument(seq, mediaId) {
     const denied = String(err.message || "").includes("知识库不存在");
     $("#main").innerHTML = denied
       ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回知识库</button></div>`)
-      : emptyState(`文档加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="go(backRoute)">返回文档列表</button></div>`);
+      : emptyState(`文档加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="go('${escapeHtml(backRoute)}')">返回文档列表</button></div>`);
   }
 }
 

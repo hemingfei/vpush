@@ -1329,7 +1329,8 @@ def test_ima_documents_filters_round_trip_through_local_url():
     assert "selectImaDocumentsDay" in src
     assert "replaceImaDocumentsRoute(imaDocumentsRoute(" in src
     assert "state.imaDocumentsDay = \"\"" in _fn_body("selectImaDocumentGroup")
-    assert 'onchange="selectImaDocumentsDay(this.value)"' in render
+    assert 'onchange="selectImaDocumentsDay(this.value)"' in _fn_body("imaDocumentsDayNavHtml")
+    assert "imaDocumentsDayNavHtml(" in render
     assert "submitImaDocumentsSearch()" in render
 
 
@@ -1779,10 +1780,11 @@ def test_ima_document_reader_preserves_group_context_and_metadata():
     assert "ima-reader-copy" in reader
     assert "ima-reader-empty" in reader
     assert "还没有预览文件" in reader
+    assert "回列表" in reader
     assert "ima-reader-filemeta" in reader
     assert "needs_translation" in reader
     assert "/translate" in reader
-    assert "go(backRoute)" in reader
+    assert "onclick=\"go('${escapeHtml(backRoute)}')\"" in reader
 
 
 def test_ima_document_reader_requests_keep_current_group_for_all_endpoints():
@@ -1839,9 +1841,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=195"' in html
-    assert 'src="/app.js?v=276"' in html
-    assert 'dav-shell-v145' in sw
+    assert 'href="/style.css?v=196"' in html
+    assert 'src="/app.js?v=277"' in html
+    assert 'dav-shell-v146' in sw
 
 
 def test_ima_documents_follow_latest_dynamic_navigation():
@@ -1955,6 +1957,11 @@ def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
     assert "没有匹配的文档" in src
     assert "这个库还没有文档" in src
     assert "这一天没有文档" in src
+    assert "回最新一天" in src
+    assert "去配置采集" in src
+    assert "全部日期" not in render
+    assert "全部日期" not in _fn_body("imaDocumentsDayNavHtml")
+    assert "跳到日期" in _fn_body("imaDocumentsDayNavHtml")
     assert "stepImaDocumentsDay" in src
     assert "ima-doc-day-nav" in src
     assert "loadImaDocumentsMore" in src
@@ -1991,6 +1998,7 @@ def test_ima_documents_search_leaves_day_view():
     assert "state.imaDocumentsDay = \"\"" in tag
     assert "state.imaDocumentsQuery = \"\"" in day
     assert "state.imaDocumentsTag = \"\"" in day
+    assert "if (!day) return" in day
     assert "imaDocumentsLastDay" in clear
     assert "_imaListSeq" in render
     assert "_imaListSeq" in more
