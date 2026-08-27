@@ -1029,13 +1029,14 @@ def test_ima_collector_save_restores_focus_after_rebuild():
     render = _fn_body("loadAdminStats")
     assert 'document.activeElement' in body
     assert 'getElementById(focusId)' in body
-    assert '.focus()' in body
+    assert '.focus({' in body
     assert 'id="ima-collector-save"' in render
 
 
 def test_ima_config_blocks_use_shared_layout_and_no_inline_spacing():
     stats = _fn_body("loadAdminStats")
-    row = _fn_body("imaGroupRowHtml")
+    mount_group = _fn_body("imaMountGroupRowHtml")
+    folder = _fn_body("imaFolderRowHtml")
     config_start = stats.index('<div id="st-config"')
     cookies_start = stats.index('<div id="st-cookies"')
     config = stats[config_start:cookies_start]
@@ -1045,8 +1046,11 @@ def test_ima_config_blocks_use_shared_layout_and_no_inline_spacing():
     ima_credentials = cookies[ima_start:ima_end]
     css = STYLE_CSS.read_text()
 
-    assert 'class="cfg-group ima-group-row"' in row
-    assert 'class="ima-group-fields cfg-fields"' in row
+    assert 'class="ima-mount-kb-row' in mount_group
+    assert 'role="option"' in mount_group
+    assert 'class="ima-folder-row"' in folder
+    assert 'type="checkbox"' in folder
+    assert 'aria-expanded=' in folder
     assert 'class="ima-collector-fields cfg-fields"' in config
     assert 'class="ima-credential-fields"' in ima_credentials
     assert 'class="ima-credential-actions toolbar"' in ima_credentials
@@ -1054,6 +1058,7 @@ def test_ima_config_blocks_use_shared_layout_and_no_inline_spacing():
     assert 'style="margin:6px' not in ima_credentials
     assert ".ima-code-field .form-control" in css
     assert ".ima-credential-fields" in css
+    assert ".ima-mount-layout" in css
 
 
 def test_ima_config_uses_small_sync_icon_and_consistent_brand_case():
@@ -1067,34 +1072,39 @@ def test_ima_config_uses_small_sync_icon_and_consistent_brand_case():
     assert "height: 16px" in css
 
 
-def test_ima_group_render_has_safe_rows_and_recovery_controls():
-    """IMA 设置展示群组行、发现状态和可恢复的增删控件。"""
+def test_ima_group_render_has_safe_mount_rows_and_recovery_controls():
+    """IMA 设置展示知识库列表、文件夹树和可恢复的目录加载控件。"""
     src = APP_JS.read_text()
-    row = _fn_body("imaGroupRowHtml")
+    kb_row = _fn_body("imaMountGroupRowHtml")
+    folder_row = _fn_body("imaFolderRowHtml")
     render = _fn_body("loadAdminStats")
-    assert 'id="ima-groups"' in render
+    assert 'id="ima-kb-list"' in render
+    assert 'id="ima-folder-tree"' in render
     assert 'id="ima-group-discovery-status"' in render
-    assert "renderImaGroupRows(imaCollector.config && imaCollector.config.groups" in render
-    assert "addImaGroupRow()" in render
-    assert "removeImaGroupRow(this)" in row
-    assert 'data-group-row' in row and 'data-group-id="${' in row
-    assert 'data-group-index="${index}"' in row
-    assert "imaGroupRowHtml(group, index)" in _fn_body("renderImaGroupRows")
-    for field in ("name", "knowledge_base_id", "root_folder_id"):
-        assert f'data-field="{field}"' in row
-        assert f"escapeHtml(group.{field}" in row
-    assert 'type="checkbox"' in row and 'data-field="enabled"' in row
-    assert 'aria-label="移除 IMA 群组"' in row
-    assert "尚未添加群组" in src
+    assert 'id="ima-discover-btn"' in render
+    assert 'data-group-id="${escapeHtml(groupId)}"' in kb_row
+    assert 'role="option"' in kb_row
+    assert 'escapeHtml(group?.name || groupId)' in kb_row
+    assert 'data-folder-id="${escapeHtml(folderId)}"' in folder_row
+    assert 'aria-expanded="${expanded}"' in folder_row
+    assert 'onchange="toggleImaFolder(this)"' in folder_row
+    assert 'onclick="retryImaFolderLoad(this)"' in src
+    assert "尚未发现共享知识库" in src
 
 
-def test_ima_group_add_uses_max_index_after_middle_row_removal():
-    """新增群组不能复用当前行数量，删除中间行后仍须保持唯一索引。"""
-    add = _fn_body("addImaGroupRow")
-    assert "row.dataset.groupIndex" in add
-    assert "Math.max(...indexes) + 1" in add
-    assert "indexes.length ?" in add
-    assert " : 0" in add
+def test_ima_mount_expand_uses_stable_cache_and_parent_inheritance():
+    """目录展开按知识库/父目录缓存，选择父目录后子项继承且不可重复选择。"""
+    expand = _fn_body("toggleImaFolderExpand")
+    load = _fn_body("loadImaFolderChildren")
+    toggle = _fn_body("toggleImaFolder")
+    assert "imaMountCacheKey(groupId, folderId)" in expand
+    assert "imaMountState.folders.has(key)" in expand
+    assert "encodeURIComponent(groupId)" in load
+    assert "encodeURIComponent(parentId)" in load
+    assert "imaMountState.parents" in toggle
+    assert "selected.delete(selectedId)" in toggle
+    assert "input.disabled" in toggle
+    assert "imaMountState.dirty = true" in toggle
 
 
 def test_ima_discovery_error_redacts_url_and_secret_key_values_before_escape():
@@ -1112,8 +1122,9 @@ def test_ima_discovery_error_redacts_url_and_secret_key_values_before_escape():
 def test_ima_group_save_reads_rows_and_preserves_legacy_token_fields():
     """采集配置保存同时提交群组，并保留旧 scalar/token 兼容字段。"""
     save = _fn_body("saveImaCollector")
-    assert "groups: readImaGroupRows()" in save
-    assert "function readImaGroupRows" in APP_JS.read_text()
+    assert "groups: readImaMountGroups()" in save
+    assert "function readImaMountGroups" in APP_JS.read_text()
+    assert "folder_ids" in _fn_body("readImaMountGroups")
     for field in ("uid", "knowledge_base_id", "root_folder_id", "interval_seconds"):
         assert f"{field}:" in save
     assert "if (token) body.refresh_token = token" in save
@@ -1127,9 +1138,8 @@ def test_ima_group_save_reads_rows_and_preserves_legacy_token_fields():
 def test_ima_collector_acl_granted_via_separate_put():
     """知识库权限在用户管理；ACL 不塞进 collector groups，也不出现在知识库目录。"""
     src = APP_JS.read_text()
-    row = _fn_body("imaGroupRowHtml")
     save = _fn_body("saveImaCollector")
-    read = _fn_body("readImaGroupRows")
+    read = _fn_body("readImaMountGroups")
     catalog = _fn_body("renderKnowledge")
     open_user = _fn_body("adminOpenUser")
     persist = _fn_body("adminSaveUserKnowledge")
@@ -1142,7 +1152,6 @@ def test_ima_collector_acl_granted_via_separate_put():
     assert "谁能定" not in src
     assert "knowledgeAclPanelHtml" not in catalog
     assert "knowledgeAclPanelHtml" not in src
-    assert "谁能订" not in row
     assert "/api/admin/users/" in persist
     assert "ima-kb" in persist
     assert "group_ids" in persist
@@ -1151,7 +1160,7 @@ def test_ima_collector_acl_granted_via_separate_put():
     assert "acl_usernames" not in read
     stats = _fn_body("loadAdminStats")
     assert "s.ima_collector" in stats
-    assert "renderImaGroupRows" in stats
+    assert "initImaMountState" in stats
 
 
 def test_ima_discovery_status_is_safe_and_does_not_render_secrets():
@@ -2733,3 +2742,42 @@ def test_sidebar_has_slim_toggle_matching_rail():
     assert "pointer-events: none" in rail
     assert "@media (max-width: 768px)" in css
     assert ".sidebar { display: none; }" in _media_block(css, "@media (max-width: 768px)")
+
+
+def test_ima_mount_settings_use_two_panes_and_lazy_folder_api():
+    src = APP_JS.read_text()
+    stats = _fn_body("loadAdminStats")
+    assert 'class="ima-mount-layout"' in stats
+    assert 'id="ima-kb-list"' in stats
+    assert 'id="ima-folder-tree"' in stats
+    assert "loadImaFolderChildren" in src
+    assert "/api/admin/ima-collector/groups/" in src
+    assert "/folders?parent_id=" in src
+    assert "readImaMountGroups" in _fn_body("saveImaCollector")
+    assert "folder_ids" in _fn_body("readImaMountGroups")
+    assert "addImaGroupRow" not in stats
+    assert "root_folder_id" not in _fn_body("imaMountGroupRowHtml")
+
+
+def test_ima_mount_ui_preserves_draft_and_uses_safe_dynamic_text():
+    src = APP_JS.read_text()
+    for name in (
+        "imaMountState", "renderImaMountGroups", "renderImaFolderTree",
+        "toggleImaFolder", "imaSafeError", "focusId",
+    ):
+        assert name in src
+    for fn in ("imaMountGroupRowHtml", "imaFolderRowHtml", "imaGroupDiscoveryStatusText"):
+        body = _fn_body(fn)
+        assert "escapeHtml" in body
+    render = _fn_body("renderStatsData")
+    assert "renderImaMountGroups" not in render
+
+
+def test_ima_mount_css_stacks_at_800px_and_keeps_touch_targets():
+    css = STYLE_CSS.read_text()
+    assert ".ima-mount-layout" in css
+    assert ".ima-folder-tree" in css
+    narrow = _media_block(css, "@media (max-width: 800px)")
+    assert re.search(r"\.ima-mount-layout\s*\{[^}]*grid-template-columns:\s*1fr", narrow)
+    assert re.search(r"\.ima-mount-kb-row[^}]*min-height:\s*44px", css)
+    assert re.search(r"\.ima-folder-row[^}]*min-height:\s*44px", css)
