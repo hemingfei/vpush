@@ -1929,8 +1929,10 @@ def test_ima_document_day_nav_lives_in_title_header_and_stays_compact():
     head_main = re.search(r"\.ima-docs-head-main\s*\{([^}]*)\}", css)
     slot_css = re.search(r"\.kb-list \.ima-doc-day-nav-slot\s*\{([^}]*)\}", css)
     date_css = re.search(r"\.kb-list \.ima-doc-day-jump \.form-control\s*\{([^}]*)\}", css)
-    assert head_main and "display: flex" in head_main.group(1)
-    assert "flex-wrap: wrap" in head_main.group(1)
+    assert head_main and "display: grid" in head_main.group(1)
+    assert "grid-template-columns" in head_main.group(1)
+    head = re.search(r"\.kb-list \.ima-docs-head\s*\{([^}]*)\}", css)
+    assert head and "align-items: flex-start" in head.group(1)
     assert slot_css and "flex: 0 0 auto" in slot_css.group(1)
     assert "100%" not in slot_css.group(1)
     assert date_css and "min-height: 32px" in date_css.group(1)
@@ -1939,13 +1941,27 @@ def test_ima_document_day_nav_lives_in_title_header_and_stays_compact():
     assert "min-height: 44px" in mobile
 
 
+def test_ima_document_list_hides_tag_rail_but_keeps_tag_filtering():
+    """列表移除顶部常用标签条，但漏斗下拉和行内标签仍保留。"""
+    src = APP_JS.read_text()
+    render = _fn_body("renderImaDocuments")
+    row = _fn_body("imaDocumentRow")
+    css = STYLE_CSS.read_text()
+    assert 'id="ima-doc-tag-rail"' not in render
+    assert "imaDocTagRailHtml" not in src
+    assert ".ima-doc-tag-rail" not in css
+    assert 'id="ima-doc-filter-toggle"' in render
+    assert 'id="ima-doc-tag"' in render
+    assert "imaDocumentTagsHtml(rowTags, true)" in row
+
+
 def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=203"' in html
-    assert 'src="/app.js?v=286"' in html
-    assert 'dav-shell-v155' in sw
+    assert 'href="/style.css?v=204"' in html
+    assert 'src="/app.js?v=287"' in html
+    assert 'dav-shell-v156' in sw
 
 
 def test_ima_documents_follow_latest_dynamic_navigation():
@@ -2080,7 +2096,7 @@ def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
     assert "data.tags" in render
     assert "imaTagCountsFromData" in render
     assert "imaDistinctiveTags" in src
-    assert "ima-doc-tag-rail" in src
+    assert "ima-doc-tag-rail" not in src
     assert "IMA_TAG_COMMON_RATIO" in src
     assert "imaDocumentsRoute(group, query, day, tag)" in reader or "imaDocumentsRoute(item.group_id, query, day, tag)" in reader
     assert "closeImaPdf" in src

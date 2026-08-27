@@ -738,29 +738,6 @@ function imaDistinctiveTags(tags, counts = _imaTagCounts, documentCount = _imaDo
   return rare.slice(0, 2).map((item) => item.tag);
 }
 
-function imaQuickFilterTags(tags, counts = _imaTagCounts, documentCount = _imaDocumentCount) {
-  const freq = counts && typeof counts === "object" ? counts : {};
-  const total = imaTagCoverageBase(freq, documentCount);
-  const names = Array.isArray(tags) && tags.length
-    ? tags.map((tag) => String(tag || "").trim()).filter(Boolean)
-    : Object.keys(freq);
-  return names.filter((tag) => {
-    const n = Number(freq[tag]) || 0;
-    return n > 0 && (!total || n / total <= IMA_TAG_COMMON_RATIO);
-  }).slice(0, 8);
-}
-
-function imaDocTagRailHtml(tags, counts, selected) {
-  const quick = imaQuickFilterTags(tags, counts);
-  if (!quick.length) return "";
-  const current = String(selected || "");
-  return quick.map((tag) => {
-    const on = tag === current;
-    const n = Number(counts[tag]) || 0;
-    return `<button type="button" class="ima-doc-tag is-action${on ? " is-selected" : ""}" data-tag="${escapeHtml(tag)}" aria-pressed="${on}" onclick="selectImaDocumentsTag(this.dataset.tag === state.imaDocumentsTag ? '' : this.dataset.tag)">${escapeHtml(tag)}${n ? `<span class="ima-doc-tag-count">${n}</span>` : ""}</button>`;
-  }).join("");
-}
-
 function imaDocumentRow(item, showGroupLabel = false) {
   const groupLabel = showGroupLabel && item.group_name
     ? `<span class="ima-doc-group-label">${escapeHtml(item.group_name)}</span>` : "";
@@ -1200,7 +1177,6 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
         </form>
         <button type="button" class="btn-ghost ima-doc-filter-toggle${tag ? " has-filter" : ""}" id="ima-doc-filter-toggle" aria-expanded="${filtersOpen}" aria-controls="ima-doc-filters" onclick="toggleImaDocumentsFilters()">${FILTER_ICON}<span class="sr-only">筛选</span></button>
       </div>
-      <div id="ima-doc-tag-rail" class="ima-doc-tag-rail" aria-label="常用标签"></div>
       <div id="ima-doc-filters" class="ima-doc-filters"${filtersOpen ? "" : " hidden"}>
         <select id="ima-doc-tag" class="form-control ima-doc-tag-filter" aria-label="按标签筛选" onchange="selectImaDocumentsTag(this.value)"><option value="">全部标签</option></select>
       </div>
@@ -1260,8 +1236,6 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
         return `<option value="${escapeHtml(value)}" ${value === tag ? "selected" : ""}>${escapeHtml(value)}${n ? `（${n}）` : ""}</option>`;
       }).join("")}`;
     }
-    const rail = $("#ima-doc-tag-rail");
-    if (rail) rail.innerHTML = imaDocTagRailHtml(uniqueTags, _imaTagCounts, tag);
     const navSlot = $("#ima-doc-day-nav-slot");
     if (navSlot) navSlot.innerHTML = imaDocumentsDayNavHtml(searchMode ? "" : (state.imaDocumentsDay || data.day), days);
     const hasFilter = !!(query || tag);
@@ -1297,11 +1271,9 @@ function syncImaListChrome({ emptyLib, hasTags }) {
   const toolbar = document.querySelector("#kb-list .ima-doc-toolbar");
   const filterBtn = $("#ima-doc-filter-toggle");
   const filters = $("#ima-doc-filters");
-  const rail = $("#ima-doc-tag-rail");
   if (toolbar) toolbar.hidden = !!emptyLib;
   if (filterBtn) filterBtn.hidden = !hasTags;
   if (filters && !hasTags) filters.hidden = true;
-  if (rail) rail.hidden = !!emptyLib || !rail.innerHTML.trim();
 }
 
 function toggleImaDocumentsFilters() {

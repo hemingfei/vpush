@@ -2627,8 +2627,8 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 
 /* IMA 文档中心 */
 .ima-docs-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.ima-docs-head-main { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; min-width: 0; flex: 1 1 auto; }
-.ima-docs-head-main > div:first-child { min-width: 0; }
+.ima-docs-head-main { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 4px; min-width: 0; flex: 1 1 auto; }
+.ima-docs-head-main > div:first-child { min-width: 0; display: flex; align-items: baseline; gap: 4px; }
 .ima-docs-head .btn-ghost,
 .ima-reader-actions button { display: inline-flex; align-items: center; gap: 7px; }
 .ima-docs-head svg,
@@ -2705,21 +2705,6 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   background: var(--color-accent-soft);
   font-weight: var(--font-weight-semibold);
 }
-.ima-doc-tag-count {
-  margin-left: 4px;
-  font-variant-numeric: tabular-nums;
-  opacity: 0.72;
-}
-.ima-doc-tag-rail {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0 0 12px;
-}
-.ima-doc-tag-rail:empty,
-.ima-doc-tag-rail[hidden] { display: none; }
-.ima-doc-row-meta { display: inline-flex; align-items: center; gap: 8px; min-width: 0; color: var(--color-text-muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
-.ima-doc-row-meta .ima-doc-tags { flex-wrap: nowrap; min-width: 0; overflow: hidden; }
 .ima-docs-more {
   display: flex;
   justify-content: center;
@@ -2840,13 +2825,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   font-size: var(--text-xs);
 }
 .kb-list { padding: 14px 14px 16px; border-right: var(--border-default); }
-.kb-list .ima-docs-head { margin-bottom: 12px; }
-.kb-list .ima-docs-head-main { column-gap: 2px; }
-.kb-list .ima-docs-head-main > div:first-child {
-  display: flex;
-  align-items: baseline;
-  gap: 4px;
-}
+.kb-list .ima-docs-head { margin-bottom: 12px; align-items: flex-start; }
 .kb-list .ima-docs-head-main > div:first-child .section-title,
 .kb-list .ima-docs-head-main > div:first-child .section-meta {
   margin-top: 0;
@@ -2885,6 +2864,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .kb-list .ima-doc-toolbar > .btn-ghost[hidden] { display: none; }
 .kb-list .ima-doc-day-nav-slot {
   display: inline-flex;
+  justify-self: start;
   flex: 0 0 auto;
   margin-left: 0;
 }
