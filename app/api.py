@@ -2532,6 +2532,8 @@ def create_api_router(
             "items": items,
             "days": facets["days"],
             "tags": facets["tags"],
+            "tag_counts": facets.get("tag_counts") or {},
+            "document_count": int(facets.get("document_count") or 0),
             "day": effective_day,
             "has_more": has_more,
             "offset": page_offset,
