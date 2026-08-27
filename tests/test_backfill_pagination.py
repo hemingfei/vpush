@@ -7,6 +7,7 @@ from app.fetchers.base import (
     _gap_warned_at,
     catchup_pages,
     tail_is_unseen,
+    warn_timeline_gap,
 )
 
 
@@ -94,6 +95,20 @@ def test_trailing_gap_warns_once_per_window(monkeypatch):
     catchup_pages(db, fetch_page, post_list([6]))
     assert len(records) == 1  # 冷却期内不再刷屏
     assert f"第 {BACKFILL_PAGES} 页" in records[0]
+
+
+def test_first_gap_warning_is_not_suppressed_on_short_uptime(monkeypatch):
+    _gap_warned_at.clear()
+    records = []
+    monkeypatch.setattr("app.fetchers.base.time.monotonic", lambda: 1.0)
+    monkeypatch.setattr(
+        "app.fetchers.base.logger.warning",
+        lambda msg, *a: records.append(msg % a if a else msg),
+    )
+
+    warn_timeline_gap("xueqiu")
+
+    assert len(records) == 1
 
 
 def test_backfill_page_error_keeps_first_page():

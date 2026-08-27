@@ -250,7 +250,8 @@ def tail_is_unseen(db, posts: list[Post]) -> bool:
 def warn_timeline_gap(platform: str) -> None:
     """追平页数用尽仍未撞见旧帖：WARNING 进 error_logs，把漏帖从静默变可感知。"""
     now = time.monotonic()
-    if now - _gap_warned_at.get(platform, 0.0) < GAP_WARN_INTERVAL:
+    last_warned = _gap_warned_at.get(platform)
+    if last_warned is not None and now - last_warned < GAP_WARN_INTERVAL:
         return
     _gap_warned_at[platform] = now
     logger.warning(
