@@ -230,6 +230,7 @@ textarea.form-control {
 .btn-ghost:hover { border-color: var(--color-text-muted); }
 .btn-ghost:active { background: var(--color-surface-button-active); }
 .btn-ghost:disabled { opacity: 0.65; cursor: default; }
+.refresh-icon { width: 16px; height: 16px; flex: 0 0 auto; }
 .btn-ghost.danger { color: var(--color-danger); border-color: var(--color-line-danger); }
 .btn-ghost.danger:hover { border-color: var(--color-danger); color: var(--color-danger-strong); }
 
@@ -3230,6 +3231,6 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   .ima-collector-foot .toolbar button,
   .ima-credential-actions button { flex: 1 1 160px; min-height: 44px; }
   .ima-groups-head { align-items: flex-start; flex-direction: column; }
-  .ima-groups-toolbar { width: 100%; }
-  .ima-groups-toolbar button { width: 100%; }
+  .ima-groups-toolbar { width: auto; }
+  .ima-groups-toolbar button { width: auto; }
 }

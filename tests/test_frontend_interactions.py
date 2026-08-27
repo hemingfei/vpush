@@ -1968,9 +1968,16 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=206"' in html
+    assert 'href="/style.css?v=207"' in html
     assert 'src="/app.js?v=290"' in html
     assert 'dav-shell-v159' in sw
+
+
+def test_ima_discovery_button_stays_compact_on_mobile():
+    css = STYLE_CSS.read_text()
+    assert ".refresh-icon { width: 16px; height: 16px; flex: 0 0 auto; }" in css
+    assert ".ima-groups-toolbar { width: auto; }" in css
+    assert ".ima-groups-toolbar button { width: auto; }" in css
 
 
 def test_ima_documents_follow_latest_dynamic_navigation():
