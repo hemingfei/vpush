@@ -38,6 +38,8 @@ PUSH_ALERT_KEY = "push_alert_last_at"
 PUSH_ALERT_INTERVAL = 3600
 SOURCE_ALERT_INTERVAL = 6 * 3600
 SOURCE_FAIL_THRESHOLD = 3
+# 账号已不存在/已停用：确认几次后停用，避免一直重试（如 X「未找到用户」上百次）。
+SOURCE_GONE_DISABLE_THRESHOLD = 5
 X_DIRECT_ALERT_KEY = "x_direct_alert_at"
 X_DIRECT_ALERT_INTERVAL = 6 * 3600
 SOURCE_OK_KEY = "source_ok_{platform}"
@@ -143,6 +145,20 @@ def _is_platform_wide_error(exc: BaseException) -> bool:
     if any(token in text for token in ("cookie", "WAF", "反爬", "登录")):
         return True
     return "login" in text.lower()
+
+
+def _is_terminal_kol_error(exc: BaseException) -> bool:
+    """单大V已确定抓不到：账号没了、停用、或外部 ID 本身无效。"""
+    text = str(exc)
+    return any(
+        token in text
+        for token in (
+            "未找到用户",
+            "用户不存在或已停用",
+            "UserUnavailable",
+            "无法识别 X 用户名",
+        )
+    )
 
 
 def _load_poll_tuning(
@@ -567,6 +583,24 @@ def maybe_alert_source_failure(
     return True
 
 
+def maybe_alert_kol_auto_disabled(
+    notifiers: list[Notifier], platform: str, kol_name: str, detail: str, fail_count: int
+) -> None:
+    """自动停用大V后通知管理员（不受平台告警冷却限制，只发一次）。"""
+    if not _alerts_enabled():
+        return
+    label = PLATFORM_LABELS.get(platform, platform)
+    _send_admin_text(
+        notifiers,
+        (
+            f"⏸️ 已自动停用：{label}「{kol_name}」连续失败 {fail_count} 次，已暂停抓取。\n"
+            f"错误：{detail[:200]}\n"
+            "可在大V管理里重新启用。"
+        ),
+        "数据源自动停用",
+    )
+
+
 def maybe_alert_source_recovered(
     db: DB, notifiers: list[Notifier], platform: str, kol_name: str
 ) -> None:
@@ -979,6 +1013,7 @@ def _fetch_kol_once(
         if isinstance(exc, (httpx.TransportError, RequestsError, ProxyUnavailable)):
             note_fetch_proxy(fetcher, False, str(exc))
         should_alert = False
+        should_disable = False
         with state_lock:
             state.fail_count += 1
             delay = min(30 * (2 ** (state.fail_count - 1)), 600)
@@ -996,7 +1031,27 @@ def _fetch_kol_once(
             kol_fail = state.kol_fails.get(kol["id"], 0) + 1
             state.kol_fails[kol["id"]] = kol_fail
             should_alert = kol_fail == SOURCE_FAIL_THRESHOLD or kol_fail % 10 == 0
-        if should_alert:
+            if (
+                kol_fail >= SOURCE_GONE_DISABLE_THRESHOLD
+                and _is_terminal_kol_error(exc)
+                and not _is_platform_wide_error(exc)
+            ):
+                should_disable = True
+                state.kol_fails[kol["id"]] = 0
+                state.alerted_kols.discard(kol["id"])
+        if should_disable:
+            db.update_kol(kol["id"], enabled=False)
+            logger.warning(
+                "自动停用大V platform=%s kol=%s fails=%s err=%s",
+                kol["platform"],
+                kol["name"],
+                kol_fail,
+                exc,
+            )
+            maybe_alert_kol_auto_disabled(
+                notifiers, kol["platform"], kol["name"], str(exc), kol_fail
+            )
+        elif should_alert:
             if maybe_alert_source_failure(
                 db, notifiers, kol["platform"], kol["name"], str(exc), kol_fail
             ):

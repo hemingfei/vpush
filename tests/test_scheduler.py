@@ -53,8 +53,11 @@ class KolScopedFetcher:
 
 
 class FakeFetcherError:
+    def __init__(self, message="boom"):
+        self.message = message
+
     def fetch(self, kol):
-        raise RuntimeError("boom")
+        raise RuntimeError(self.message)
 
 
 class SelectiveFetcher:
@@ -912,6 +915,70 @@ def test_source_failure_alert_and_recovery(monkeypatch):
     clock["t"] += 3600
     poll_once(db, {"xueqiu": FakeFetcher([make_post(kid)])}, [notifier], states, interval_seconds=0)
     assert any("数据源已恢复" in t for t in notifier.texts)
+
+
+def test_gone_account_consecutive_failures_disable_kol(monkeypatch):
+    """账号已不存在时，连续失败几次后停用，避免像 PandaTouZi 那样重试上百次。"""
+    from app.scheduler import SOURCE_GONE_DISABLE_THRESHOLD
+
+    db = make_db()
+    kid = add_kol_subscribed(db, "twitter", "PandaTouZi", "PandaTouZi")
+    notifier = FakeNotifier()
+    states = {}
+    clock = {"t": 0.0}
+    monkeypatch.setattr("app.scheduler.time.monotonic", lambda: clock["t"])
+    fetcher = FakeFetcherError("X 未找到用户 PandaTouZi")
+
+    for _ in range(SOURCE_GONE_DISABLE_THRESHOLD - 1):
+        clock["t"] += 3600
+        poll_once(db, {"twitter": fetcher}, [notifier], states, interval_seconds=0)
+    assert db.get_kol(kid)["enabled"]
+    assert not any("已自动停用" in t for t in notifier.texts)
+
+    clock["t"] += 3600
+    poll_once(db, {"twitter": fetcher}, [notifier], states, interval_seconds=0)
+    assert not db.get_kol(kid)["enabled"]
+    assert any("已自动停用" in t and "PandaTouZi" in t for t in notifier.texts)
+
+    before = list(notifier.texts)
+    clock["t"] += 3600
+    poll_once(db, {"twitter": fetcher}, [notifier], states, interval_seconds=0)
+    assert notifier.texts == before
+    assert not db.get_kol(kid)["enabled"]
+
+
+def test_platform_wide_errors_do_not_auto_disable_kol(monkeypatch):
+    """Cookie / WAF 是整平台问题，不能把单个大V停掉。"""
+    from app.scheduler import SOURCE_GONE_DISABLE_THRESHOLD
+
+    db = make_db()
+    kid = add_kol_subscribed(db, "twitter", "keep", "keep")
+    notifier = FakeNotifier()
+    states = {}
+    clock = {"t": 0.0}
+    monkeypatch.setattr("app.scheduler.time.monotonic", lambda: clock["t"])
+    fetcher = FakeFetcherError("X cookie 失效，触发 WAF")
+
+    for _ in range(SOURCE_GONE_DISABLE_THRESHOLD + 2):
+        clock["t"] += 3600
+        poll_once(db, {"twitter": fetcher}, [notifier], states, interval_seconds=0)
+    assert db.get_kol(kid)["enabled"]
+    assert not any("已自动停用" in t for t in notifier.texts)
+
+
+def test_generic_failures_do_not_auto_disable_at_alert_threshold(monkeypatch):
+    """普通 boom 只告警，不在第 3 次就停用。"""
+    db = make_db()
+    kid = add_kol_subscribed(db, "xueqiu", "A", "1")
+    notifier = FakeNotifier()
+    states = {}
+    clock = {"t": 0.0}
+    monkeypatch.setattr("app.scheduler.time.monotonic", lambda: clock["t"])
+    for _ in range(3):
+        clock["t"] += 3600
+        poll_once(db, {"xueqiu": FakeFetcherError()}, [notifier], states, interval_seconds=0)
+    assert db.get_kol(kid)["enabled"]
+    assert not any("已自动停用" in t for t in notifier.texts)
 
 
 def test_three_different_kols_failing_once_does_not_alert(monkeypatch):
