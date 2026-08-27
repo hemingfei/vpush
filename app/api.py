@@ -90,7 +90,13 @@ from .ima_documents import (
     ima_kb_valid_tags,
     purge_ima_document_tags,
 )
-from .ima_kb import attach_catalog_acl, attach_catalog_stats, catalog as ima_kb_catalog, readable_group_ids
+from .ima_kb import (
+    _DAY_KEY,
+    attach_catalog_acl,
+    attach_catalog_stats,
+    catalog as ima_kb_catalog,
+    readable_group_ids,
+)
 from .plaza import (
     filter_plaza_rows,
     is_plaza_hidden,
@@ -2503,7 +2509,15 @@ def create_api_router(
             has_more = page_offset + page_limit < len(matched)
             items = matched[page_offset:page_offset + page_limit]
         else:
-            effective_day = day.strip() or next(iter(facets["days"]), "")
+            requested = day.strip()
+            days = facets["days"]
+            if requested:
+                effective_day = requested
+            else:
+                effective_day = next(
+                    (item for item in days if _DAY_KEY.fullmatch(item)),
+                    next(iter(days), ""),
+                )
             items = (
                 ima_documents.store.documents(
                     "", effective_day, group_id=group, groups=groups, include_body=False

@@ -574,6 +574,7 @@ def test_list_ima_documents_defaults_to_latest_day_and_pages_search(tmp_path, mo
         {"media_id": "file_old", "name": "旧稿.pdf", "day": "0810", "abstract": "旧摘要"},
         {"media_id": "file_new", "name": "新稿.pdf", "day": "0826", "abstract": "新摘要"},
         {"media_id": "file_hit", "name": "锂电跟踪.pdf", "day": "0810", "abstract": "新摘要也在旧日"},
+        {"media_id": "file_unknown", "name": "杂项.pdf", "day": "unknown", "abstract": "无日期"},
     ]
     store.save_manifest(records)
     store.save_state({store.state_key(record): {"tags": ["新能源"]} for record in records})
@@ -586,12 +587,13 @@ def test_list_ima_documents_defaults_to_latest_day_and_pages_search(tmp_path, mo
     assert "abstract" not in body["items"][0]
     assert "cover_url" not in body["items"][0]
     assert body["has_more"] is False
-    assert body["days"] == ["0826", "0810"]
+    assert body["days"] == ["unknown", "0826", "0810"]
+    assert "unknown" in body["days"]
 
     missing = client.get("/api/ima-documents?day=0101", headers=admin_headers)
     assert missing.json()["items"] == []
     assert missing.json()["day"] == "0101"
-    assert missing.json()["days"] == ["0826", "0810"]
+    assert missing.json()["days"] == ["unknown", "0826", "0810"]
 
     search = client.get("/api/ima-documents?q=摘要&limit=1&offset=0", headers=admin_headers)
     assert search.status_code == 200
@@ -603,3 +605,6 @@ def test_list_ima_documents_defaults_to_latest_day_and_pages_search(tmp_path, mo
     assert page2["has_more"] is True
     ids = {search_body["items"][0]["media_id"], page2["items"][0]["media_id"]}
     assert "file_new" in ids
+    assert search_body["items"][0]["media_id"] != page2["items"][0]["media_id"]
+    page3 = client.get("/api/ima-documents?q=摘要&limit=1&offset=2", headers=admin_headers).json()
+    assert page3["has_more"] is False
