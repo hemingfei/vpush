@@ -45,21 +45,17 @@ class MXClient:
         url = f"{self.base_url}{path}"
         headers = self._headers()
         body = json.dumps(json_data) if json_data else None
-        logger.info(f"Request to {method} {url}, data: {json_data}")
         response = self._http.request(method, url, headers=headers, content=body)
         response.raise_for_status()
         result = response.json()
-        logger.info(f"Response from MX: {json.dumps(result, ensure_ascii=False)}")
 
         if self._check_token_expired(result):
             raise RuntimeError("MX token expired")
 
         if isinstance(result, dict) and "data" in result:
             encrypted_data = result["data"]
-            logger.info(f"Encrypted data: {encrypted_data}")
             if isinstance(encrypted_data, str) and encrypted_data:
                 decrypted = decrypt_api_data(encrypted_data)
-                logger.info(f"Decrypted data: {decrypted}")
                 if decrypted is not None:
                     return decrypted
 

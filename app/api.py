@@ -3396,17 +3396,6 @@ def create_api_router(
                 logger.info(f"开始拉取 MX 房间 {room_id} 历史消息")
                 fetcher = MxFetcher(mx_config, db)
                 
-                # 先直接调用 mx_client 来看看原始响应
-                import json
-                test_messages = fetcher.mx_client.get_room_history(room_id, 0, 5)
-                logger.info(f"直接 mx_client 调用获取到 {len(test_messages)} 条消息")
-                for i, msg in enumerate(test_messages):
-                    logger.info(f"原始消息 {i}: {json.dumps(msg, ensure_ascii=False, default=str)}")
-                
-                # 首先，先调用一次 fetch() 看看是否能正常获取消息
-                initial_posts = fetcher.fetch(kol)
-                logger.info(f"初始 fetch 调用获取到 {len(initial_posts)} 条帖子")
-                
                 # 获取更多历史消息
                 max_pages = getattr(mx_config, "max_history_pages", 100)
                 page_size = getattr(mx_config, "page_size", 50)
@@ -3424,10 +3413,6 @@ def create_api_router(
                         if not messages:
                             logger.info("没有更多消息了")
                             break
-                        
-                        # 记录几条消息的样本以便调试
-                        for i, msg in enumerate(messages[:3]):
-                            logger.info(f"消息 {i} 样本：{json.dumps(msg, ensure_ascii=False, default=str)}")
                         
                         all_messages.extend(messages)
                         
@@ -3459,12 +3444,13 @@ def create_api_router(
                 posts = fetcher._build_posts(kol, all_messages)
                 logger.info(f"解析后得到 {len(posts)} 条帖子")
                 
-                # 记录解析后的帖子信息
-                for i, post in enumerate(posts[:5]):
-                    logger.info(f"解析后的帖子 {i}: {post.__dict__}")
-                
                 # 按发布时间升序处理
-                posts = sorted(posts, key=lambda p: int(getattr(p, 'published_at', 0) or 0))
+                from ..fetchers.base import parse_published_at
+                def get_sort_key(p):
+                    dt = parse_published_at(getattr(p, 'published_at', ''))
+                    return int(dt.timestamp() * 1000) if dt else 0
+                        
+                posts = sorted(posts, key=get_sort_key)
                 post_ids = db.insert_posts_batch(posts)
                 
                 # 标记基线（如果还没有）
