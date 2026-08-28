@@ -385,6 +385,32 @@ function clearSessionCaches() {
     _livePendingLatestId = 0;
     _liveInflight = null;
   }
+  imaMountState.groups = [];
+  imaMountState.selectedGroupId = "";
+  imaMountState.drafts = new Map();
+  imaMountState.folders = new Map();
+  imaMountState.parents = new Map();
+  imaMountState.expanded = new Set();
+  imaMountState.loading = new Set();
+  imaMountState.errors = new Map();
+  imaMountState.folderRequests = new Map();
+  imaMountState.discoveryBusy = false;
+  imaMountState.discoverySeq += 1;
+  imaMountState.discoveryOwner = null;
+  imaMountState.discoveryEntered = false;
+  imaMountState.dirty = false;
+  imaMountState.revision += 1;
+  imaMountState.collectorDraft = null;
+  imaMountState.collectorDraftRevision = "";
+  imaMountState.collectorDirty = false;
+  imaMountState.collectorRevision = 0;
+  imaMountState.collectorConfirmedRevision = "";
+  imaMountState.collectorConfirmedLiveRevision = -1;
+  imaMountState.collectorConfirmedMountRevision = -1;
+  imaMountState.saveOwner = null;
+  imaMountState.requestSeq += 1;
+  imaMountState.generation += 1;
+  _lastAdminStatsSnapshot = null;
 }
 
 function logout() {
@@ -5659,6 +5685,7 @@ function imaGroupDiscoveryStatusText(status) {
 
 async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = null) {
   if (!routeStillActive(seq)) return;
+  const generation = imaMountState.generation;
   const pendingOwner = imaMountState.saveOwner;
   if (pendingOwner && !pendingOwner.putCompleted && $("#ima-pure-uid")) {
     pendingOwner.liveSnapshot = imaCollectorFormSnapshot();
@@ -5669,10 +5696,13 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
   let statsLoadError = null;
   try {
     const stats = await api("/api/stats");
+    if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq
+      || generation !== imaMountState.generation) return;
     s = authoritativeImaStatus ? { ...stats, ima_collector: authoritativeImaStatus } : stats;
     _lastAdminStatsSnapshot = s;
   } catch (err) {
-    if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq) return;
+    if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq
+      || generation !== imaMountState.generation) return;
     const message = `加载失败: ${err.message || "请求失败"}`;
     const fallbackStats = _lastAdminStatsSnapshot;
     if (fallbackStats && authoritativeImaStatus) {
@@ -5690,7 +5720,8 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
       return;
     }
   }
-  if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq) return;
+  if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq
+    || generation !== imaMountState.generation) return;
   stopStatsTimer();
   const owner = imaMountState.saveOwner;
   const ownerIsCurrent = owner && owner === pendingOwner;
@@ -6100,9 +6131,12 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
   statsTimer = setInterval(async () => {
     const timerSeq = _adminRenderSeq;
     const timerStatsSeq = _adminStatsLoadSeq;
+    const timerGeneration = imaMountState.generation;
     try {
       const fresh = await api("/api/stats");
-      if (!routeStillActive(timerSeq) || _adminStatsLoadSeq !== timerStatsSeq) return;
+      if (!routeStillActive(timerSeq) || _adminStatsLoadSeq !== timerStatsSeq
+        || timerGeneration !== imaMountState.generation) return;
+      _lastAdminStatsSnapshot = fresh;
       renderStatsData(fresh);
     } catch {
       /* 后台刷新失败不打扰，等下一轮 */
@@ -6758,6 +6792,7 @@ async function saveImaCollector() {
   const saveButton = $("#ima-collector-save");
   if (imaMountState.saveOwner) return;
   if (saveButton?.disabled) return;
+  const generation = imaMountState.generation;
   const mountRevision = imaMountState.revision;
   const collectorRevision = imaMountState.collectorRevision;
   const focusElement = document.activeElement;
@@ -6791,6 +6826,7 @@ async function saveImaCollector() {
     snapshot,
   };
   const onDraftChange = () => {
+    if (imaMountState.saveOwner !== saveOwner) return;
     const liveSnapshot = rememberImaCollectorDraft();
     if (imaMountState.saveOwner === saveOwner) saveOwner.liveSnapshot = liveSnapshot;
   };
@@ -6801,6 +6837,7 @@ async function saveImaCollector() {
   document.addEventListener("focusin", onFocusIn);
   try {
     const savedImaStatus = await api("/api/admin/ima-collector", { method: "PUT", body: JSON.stringify(body) });
+    if (generation !== imaMountState.generation || imaMountState.saveOwner !== saveOwner) return;
     saveOwner.savedImaStatus = savedImaStatus;
     saveOwner.putCompleted = true;
     const submittedLiveRevision = saveOwner.liveSnapshot
@@ -6820,10 +6857,12 @@ async function saveImaCollector() {
     if (currentSnapshot && currentFormRevision !== saveOwner.formRevision) {
       saveOwner.liveSnapshot = rememberImaCollectorDraft(currentSnapshot);
     }
+    if (generation !== imaMountState.generation || imaMountState.saveOwner !== saveOwner) return;
     if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats") {
       return;
     }
     await loadAdminStats(routeSeq, savedImaStatus);
+    if (generation !== imaMountState.generation || imaMountState.saveOwner !== saveOwner) return;
     if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats") return;
     const reloadedSnapshot = imaCollectorFormSnapshot();
     const reloadedRevision = imaCollectorFormRevision(reloadedSnapshot);
@@ -6848,6 +6887,7 @@ async function saveImaCollector() {
     }
     flash("IMA 文档采集配置已保存");
   } catch (err) {
+    if (generation !== imaMountState.generation || imaMountState.saveOwner !== saveOwner) return;
     if (routeStillActive(routeSeq) && location.pathname === "/admin/stats") {
       flash(err.message || "保存失败", "error");
     }

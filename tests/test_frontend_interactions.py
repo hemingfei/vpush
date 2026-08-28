@@ -2749,6 +2749,57 @@ def test_logout_clears_timeline_and_bind_cache():
     assert "state.timelineSecondary = false" in clear
 
 
+def test_logout_clears_ima_account_state_and_invalidates_inflight_requests():
+    """登出必须清掉 IMA 账号状态，并使旧请求无法继续拥有当前会话。"""
+    clear = _fn_body("clearSessionCaches")
+    for statement in (
+        "imaMountState.groups = []",
+        "imaMountState.drafts = new Map()",
+        "imaMountState.folders = new Map()",
+        "imaMountState.parents = new Map()",
+        "imaMountState.folderRequests = new Map()",
+        "imaMountState.discoveryOwner = null",
+        "imaMountState.saveOwner = null",
+        "imaMountState.collectorDraft = null",
+        "imaMountState.collectorConfirmedRevision = \"\"",
+        "imaMountState.collectorConfirmedLiveRevision = -1",
+        "imaMountState.collectorConfirmedMountRevision = -1",
+        "_lastAdminStatsSnapshot = null",
+    ):
+        assert statement in clear
+    assert "imaMountState.generation += 1" in clear
+    assert clear.index("imaMountState.saveOwner = null") < clear.index("imaMountState.generation += 1")
+
+
+def test_ima_old_save_listener_returns_before_observing_new_account_input():
+    """旧保存闭包收到新账号输入时，必须先确认仍拥有 saveOwner。"""
+    save = _fn_body("saveImaCollector")
+    start = save.index("const onDraftChange =")
+    end = save.index("imaMountState.saveOwner = saveOwner", start)
+    listener = save[start:end]
+    assert "if (imaMountState.saveOwner !== saveOwner) return;" in listener
+    assert listener.index("imaMountState.saveOwner !== saveOwner") < listener.index("rememberImaCollectorDraft()")
+
+
+def test_ima_save_response_requires_current_generation_and_owner_before_mutation():
+    """登出后旧 PUT 响应不得写入新账号的 IMA 状态或界面。"""
+    save = _fn_body("saveImaCollector")
+    put = save.index('const savedImaStatus = await api("/api/admin/ima-collector"')
+    mutation = save.index("saveOwner.savedImaStatus = savedImaStatus", put)
+    assert "const generation = imaMountState.generation" in save
+    guard = save.index("generation !== imaMountState.generation", put)
+    assert guard < mutation
+    assert "imaMountState.saveOwner !== saveOwner" in save[guard:mutation]
+
+
+def test_ima_stats_timer_caches_fresh_snapshot_before_render():
+    """定时 stats 成功后必须先缓存完整快照，再更新可见状态。"""
+    load = _fn_body("loadAdminStats")
+    render_index = load.index("renderStatsData(fresh)")
+    assert "_lastAdminStatsSnapshot = fresh" in load
+    assert load.index("_lastAdminStatsSnapshot = fresh") < render_index
+
+
 def test_sticky_chrome_is_opaque_canvas_not_glass():
     """壳层（顶栏/筛选条/侧栏/底栏）用不透明画布色，禁止半透明+saturate 放大色块。"""
     tokens = (APP_JS.parent / "vendor" / "design-tokens.css").read_text()
