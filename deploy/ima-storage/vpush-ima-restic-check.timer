@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly V Push IMA archive Restic check
+
+[Timer]
+OnCalendar=Sun *-*-* 05:30:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=vpush-ima-restic-check.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=V Push IMA archive Restic subset check
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/vpush-ima/restic-maintain.sh check /etc/vpush/ima-storage.env
+UMask=0077
+NoNewPrivileges=true
+TimeoutStartSec=7200
+
+[Install]
+WantedBy=multi-user.target

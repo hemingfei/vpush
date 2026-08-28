@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly candidate for V Push IMA archive monthly prune (script date guard)
+
+[Timer]
+OnCalendar=Sun *-*-* 06:30:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=vpush-ima-restic-prune.service
+
+[Install]
+WantedBy=timers.target

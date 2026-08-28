@@ -1,0 +1,14 @@
+[Unit]
+Description=V Push IMA storage VPS health probe
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/vpush-ima/storage-health.sh
+UMask=0077
+NoNewPrivileges=true
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target
