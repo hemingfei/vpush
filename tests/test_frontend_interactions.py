@@ -1047,6 +1047,40 @@ def test_ima_collector_pending_save_snapshots_full_form_and_secret_state():
     assert 'document.removeEventListener("input", onDraftChange)' in save
 
 
+def test_ima_collector_save_rechecks_form_revision_after_stats_reload_before_clearing_token():
+    """stats GET 期间输入新 token 后，完成回调不得清除新值。"""
+    save = _fn_body("saveImaCollector")
+    reload_index = save.index("await loadAdminStats(routeSeq)")
+    clear_index = save.index('tokenInput.value = ""')
+    assert "const formStillCurrentAfterReload" in save
+    assert save.index("const formStillCurrentAfterReload") > reload_index
+    assert clear_index > save.index("const formStillCurrentAfterReload")
+    assert "if (formStillCurrentAfterReload)" in save[reload_index:]
+
+
+def test_ima_collector_full_form_draft_survives_owner_cleanup_and_stats_rebuild():
+    """保存 owner 清理后，UID/间隔/知识库/根目录脏编辑仍由后续 stats 重建恢复。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    load = _fn_body("loadAdminStats")
+    save = _fn_body("saveImaCollector")
+    assert "collectorDraft" in src
+    assert "rememberImaCollectorDraft" in src
+    assert "const pendingCollectorDraft" in load
+    assert "const collector = collectorDraft || pure" in load
+    assert "collectorDraft?.groups" in load
+    for field in ("uid", "interval_seconds", "knowledge_base_id", "root_folder_id"):
+        assert f"collector.{field}" in load
+    assert "restoreImaCollectorOwnerToken(owner, seq, pendingCollectorDraft)" in load
+    assert 'value="${collector.refresh_token' not in src
+    assert 'value="${pendingCollectorDraft' not in src
+    assert "collectorDraftRevision" in src
+    assert "clearImaCollectorDraft" in save
+    reload_index = save.index("await loadAdminStats(routeSeq)")
+    assert save.index("clearImaCollectorDraft", reload_index) > reload_index
+    assert 'document.addEventListener("input", imaCollectorDraftChanged)' in src
+    assert 'document.addEventListener("change", imaCollectorDraftChanged)' in src
+
+
 def test_ima_stats_failure_keeps_polling_and_exposes_route_owned_retry():
     """stats 首次/手动失败要留在当前页并可重试，不能丢掉原轮询。"""
     load = _fn_body("loadAdminStats")

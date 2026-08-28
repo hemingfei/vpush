@@ -131,6 +131,9 @@ const imaMountState = {
   discoveryEntered: false,
   dirty: false,
   revision: 0,
+  collectorDraft: null,
+  collectorDraftRevision: "",
+  collectorDirty: false,
   saveOwner: null,
   requestSeq: 0,
   generation: 0,
@@ -5450,6 +5453,7 @@ function toggleImaFolder(input) {
   }
   imaMountState.revision += 1;
   imaMountState.dirty = true;
+  rememberImaCollectorDraft();
   renderImaMountGroups();
   imaRestoreFocus(focus);
 }
@@ -5578,9 +5582,33 @@ function imaCollectorFormRevision(snapshot) {
   return JSON.stringify(snapshot);
 }
 
-function restoreImaCollectorOwnerToken(owner, seq) {
-  if (!owner || owner.routeSeq !== seq) return;
-  const pendingToken = owner.liveSnapshot ? owner.liveSnapshot.refresh_token : owner.snapshot?.refresh_token;
+function rememberImaCollectorDraft(snapshot = imaCollectorFormSnapshot()) {
+  imaMountState.collectorDraft = snapshot;
+  imaMountState.collectorDraftRevision = imaCollectorFormRevision(snapshot);
+  imaMountState.collectorDirty = true;
+  return snapshot;
+}
+
+function clearImaCollectorDraft(revision) {
+  if (imaMountState.collectorDraftRevision !== revision) return;
+  imaMountState.collectorDraft = null;
+  imaMountState.collectorDraftRevision = "";
+  imaMountState.collectorDirty = false;
+}
+
+function imaCollectorDraftChanged(event) {
+  const id = event.target?.id || "";
+  if (!["ima-pure-uid", "ima-pure-kb", "ima-pure-root", "ima-pure-interval", "ima-pure-token"].includes(id)) return;
+  const snapshot = rememberImaCollectorDraft();
+  if (imaMountState.saveOwner) imaMountState.saveOwner.liveSnapshot = snapshot;
+}
+
+document.addEventListener("input", imaCollectorDraftChanged);
+document.addEventListener("change", imaCollectorDraftChanged);
+
+function restoreImaCollectorOwnerToken(owner, seq, draft = null) {
+  if (owner && owner.routeSeq !== seq) return;
+  const pendingToken = owner?.liveSnapshot?.refresh_token || owner?.snapshot?.refresh_token || draft?.refresh_token;
   if (!pendingToken) return;
   const tokenInput = $("#ima-pure-token");
   if (tokenInput && !tokenInput.value) tokenInput.value = pendingToken;
@@ -5618,6 +5646,7 @@ async function loadAdminStats(seq = _adminRenderSeq) {
   const pendingOwner = imaMountState.saveOwner;
   if (pendingOwner?.routeSeq === seq && $("#ima-pure-uid")) {
     pendingOwner.liveSnapshot = imaCollectorFormSnapshot();
+    rememberImaCollectorDraft(pendingOwner.liveSnapshot);
   }
   const statsLoadSeq = ++_adminStatsLoadSeq;
   let s;
@@ -5641,14 +5670,16 @@ async function loadAdminStats(seq = _adminRenderSeq) {
   const owner = imaMountState.saveOwner;
   const ownerSnapshot = owner && owner.routeSeq === seq
     ? (owner.liveSnapshot || owner.snapshot) : null;
+  const pendingCollectorDraft = imaMountState.collectorDraft;
   const preserveMountDraft = imaMountState.dirty;
   const xq = s.xueqiu_cookie || {};
   const tw = s.twitter_cookie || {};
   const ima = s.ima_credentials || {};
   const imaCollector = s.ima_collector || {};
   const pure = imaCollector.config || {};
-  const collector = ownerSnapshot || pure;
-  const collectorGroups = ownerSnapshot?.groups || pure.groups || [];
+  const collectorDraft = ownerSnapshot || pendingCollectorDraft;
+  const collector = collectorDraft || pure;
+  const collectorGroups = collectorDraft?.groups || pure.groups || [];
   const zq = s.zsxq_cookie || {};
   const zc = s.zsxq_cache || { files: 0, bytes: 0 };
   const zcSize = fmtCacheBytes(zc.bytes);
@@ -6000,10 +6031,10 @@ async function loadAdminStats(seq = _adminRenderSeq) {
     </div>
     <div id="st-proxies" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-proxies" style="display:none"></div>`;
   renderStatsData(s);
-  if (ownerSnapshot) initImaMountState(collectorGroups, true);
+  if (collectorDraft) initImaMountState(collectorGroups, true);
   else initImaMountState(pure.groups || [], preserveMountDraft);
   renderImaMountGroups();
-  restoreImaCollectorOwnerToken(owner, seq);
+  restoreImaCollectorOwnerToken(owner, seq, pendingCollectorDraft);
   switchStatsTab(statsTabFromHash());
   statsTimer = setInterval(async () => {
     const timerSeq = _adminRenderSeq;
@@ -6680,6 +6711,7 @@ async function saveImaCollector() {
     return;
   }
   const snapshot = imaCollectorFormSnapshot();
+  rememberImaCollectorDraft(snapshot);
   const body = {
     uid: snapshot.uid,
     knowledge_base_id: snapshot.knowledge_base_id,
@@ -6696,7 +6728,8 @@ async function saveImaCollector() {
     snapshot,
   };
   const onDraftChange = () => {
-    if (imaMountState.saveOwner === saveOwner) saveOwner.liveSnapshot = imaCollectorFormSnapshot();
+    const liveSnapshot = rememberImaCollectorDraft();
+    if (imaMountState.saveOwner === saveOwner) saveOwner.liveSnapshot = liveSnapshot;
   };
   imaMountState.saveOwner = saveOwner;
   if (saveButton) saveButton.disabled = true;
@@ -6705,16 +6738,24 @@ async function saveImaCollector() {
   document.addEventListener("focusin", onFocusIn);
   try {
     await api("/api/admin/ima-collector", { method: "PUT", body: JSON.stringify(body) });
-    const formStillCurrent = imaCollectorFormRevision(imaCollectorFormSnapshot()) === saveOwner.formRevision;
-    if (!formStillCurrent) saveOwner.liveSnapshot = imaCollectorFormSnapshot();
+    const currentSnapshot = imaCollectorFormSnapshot();
+    const formStillCurrent = imaCollectorFormRevision(currentSnapshot) === saveOwner.formRevision;
+    if (!formStillCurrent) {
+      saveOwner.liveSnapshot = rememberImaCollectorDraft(currentSnapshot);
+    }
     if (routeStillActive(routeSeq) && location.pathname === "/admin/stats"
       && imaMountState.revision === mountRevision && formStillCurrent) {
       imaMountState.dirty = false;
     }
-    if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats") return;
+    if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats") {
+      if (formStillCurrent) clearImaCollectorDraft(saveOwner.formRevision);
+      return;
+    }
     await loadAdminStats(routeSeq);
     if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats") return;
-    if (formStillCurrent) {
+    const formStillCurrentAfterReload = imaCollectorFormRevision(imaCollectorFormSnapshot()) === saveOwner.formRevision;
+    if (formStillCurrentAfterReload) {
+      clearImaCollectorDraft(saveOwner.formRevision);
       const tokenInput = $("#ima-pure-token");
       if (tokenInput) tokenInput.value = "";
     }
