@@ -907,7 +907,7 @@ def test_admin_ima_discover_and_folder_listing(tmp_path, monkeypatch):
         def list_items(self, folder_id):
             assert self.group.knowledge_base_id == "kb-new"
             if self.fail_listing:
-                raise RuntimeError("IMA list failed")
+                raise RuntimeError('Cookie: SID=folder-cookie-secret; Path=/; {"access_token":"folder-json-secret"}')
             return [{
                 "media_type": 99,
                 "folder_info": {"folder_id": "folder-a", "name": "周报"},
@@ -941,6 +941,9 @@ def test_admin_ima_discover_and_folder_listing(tmp_path, monkeypatch):
         headers=headers,
     )
     assert failed.status_code == 502
+    assert "folder-cookie-secret" not in failed.text
+    assert "folder-json-secret" not in failed.text
+    assert "<redacted>" in failed.text
     assert client.get(
         "/api/admin/ima-collector/groups/kb-new/folders?parent_id=bad/id",
         headers=headers,

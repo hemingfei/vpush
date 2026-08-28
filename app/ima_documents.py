@@ -103,14 +103,25 @@ def decrypt_body(cipher_b64: str, key: bytes) -> bytes:
 
 
 def _safe_error(exc: BaseException) -> str:
-    text = str(exc).splitlines()[0][:240]
+    text = str(exc).splitlines()[0]
+    text = re.sub(r"(?i)\b(set-cookie|cookie)(\s*:\s*)[^\r\n]*", r"\1\2<redacted>", text)
     text = re.sub(r"https?://\S+", "<url>", text)
-    text = re.sub(r"(?i)((?:bearer|token|access_token|refresh_token|signature|sig)\s+)[^\s]+", r"\1<redacted>", text)
-    return re.sub(
-        r"(?i)((?:ima-token|token|access_token|refresh_token|authorization|signature|sig|sign|q-sign|x-ima-cookie)\s*[=:]\s*)[^&;,\s]+",
+    text = re.sub(
+        r"(?i)(\bauthorization\s*[:=]\s*(?:basic|bearer)\s+)[^\s,;&]+",
         r"\1<redacted>",
         text,
     )
+    text = re.sub(
+        r"(?i)([\"']?\b(?:ima-token|token|refresh_token|access_token|authorization|signature|sig|sign|q-sign|x-ima-cookie)[\"']?\s*[:=]\s*)(?:\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|[^\s,;&]+)",
+        r"\1<redacted>",
+        text,
+    )
+    text = re.sub(
+        r"(?i)((?:\bbearer|\btoken|\baccess_token|\brefresh_token|\bsignature|\bsig|\bsign|\bq-sign|\bx-ima-cookie)\s+)[^\s,;&]+",
+        r"\1<redacted>",
+        text,
+    )
+    return text[:240]
 
 
 def _setting(db: Any, key: str, env_key: str, default: str = "") -> str:

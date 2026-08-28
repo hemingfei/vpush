@@ -14,6 +14,7 @@ from app.ima_documents import (
     IMA_MAX_FOLDER_DEPTH,
     IMA_PURE_GROUPS_KEY,
     IMA_PURE_KB_ID_KEY,
+    IMA_PURE_DISCOVERY_KEY,
     IMA_PURE_LAST_RESULT_KEY,
     IMA_PURE_REFRESH_TOKEN_KEY,
     IMA_PURE_ROOT_FOLDER_KEY,
@@ -1378,6 +1379,30 @@ def test_invalid_media_ids_are_not_accepted(tmp_path, value):
         store.validate_media_id(value)
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        'upstream {"refresh_token":"json-refresh-secret"}',
+        "refresh_token=equals-refresh-secret",
+        "access_token: colon-access-secret",
+        "authorization: Basic basic-auth-secret",
+        "signature=signature-secret",
+        '"sig":"json-sig-secret"',
+        "sign=sign-secret",
+        '"q-sign":"q-sign-secret"',
+        "x-ima-cookie=x-ima-cookie-secret",
+        "Cookie: SID=cookie-secret; Path=/",
+        "Set-Cookie: IMA-TOKEN=set-cookie-secret; Path=/",
+        "Bearer bearer-secret",
+        "failed https://res-skb.ima.qq.com/a.pdf?sign=url-secret",
+    ],
+)
+def test_safe_error_redacts_credential_shapes(message):
+    text = _safe_error(RuntimeError(message))
+    assert not any(secret in text for secret in message.split() if "secret" in secret)
+    assert "<redacted>" in text or "<url>" in text
+
+
 def test_error_summary_redacts_urls_and_credentials():
     text = _safe_error(RuntimeError("failed https://res-skb.ima.qq.com/a.pdf?sign=secret"))
     assert "res-skb.ima.qq.com" not in text
@@ -2260,14 +2285,17 @@ def test_service_discover_success_persists_new_unmounted_groups_and_failure_keep
 
     class BrokenClient(FakeClient):
         def discover_groups(self):
-            raise RuntimeError("https://ima.invalid/?token=secret")
+            raise RuntimeError('upstream {"refresh_token":"discovery-json-secret"}')
 
     monkeypatch.setattr(ima_documents, "ImaPureClient", BrokenClient)
     before = db.get_setting(IMA_PURE_GROUPS_KEY)
     failed = service.discover()
     assert failed["status"] == "failed"
     assert db.get_setting(IMA_PURE_GROUPS_KEY) == before
-    assert "secret" not in json.dumps(failed)
+    discovery = json.loads(db.get_setting(IMA_PURE_DISCOVERY_KEY))
+    assert discovery["error"] == failed["discovery"]["error"]
+    assert "discovery-json-secret" not in discovery["error"]
+    assert "<redacted>" in discovery["error"]
 
 
 def test_service_skips_unmounted_group_without_sync_client(tmp_path, monkeypatch):
