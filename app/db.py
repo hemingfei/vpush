@@ -3668,52 +3668,51 @@ class DB:
     # ---- AI Analysis Tasks ----
 
     def create_ai_task(self, name: str, description: str | None, target_kol_id: int,
-                       time_range_start_days_offset: int, time_range_start_time: str,
-                       time_range_end_days_offset: int, time_range_end_time: str,
-                       selected_kol_ids: list[int], prompt_template: str,
-                       schedule_day_of_week: str, schedule_time: str) -> int:
-        """创建AI分析任务"""
-        cursor = self._conn.execute(
-            """INSERT INTO ai_analysis_tasks
-               (name, description, target_kol_id,
-                time_range_start_days_offset, time_range_start_time,
-                time_range_end_days_offset, time_range_end_time,
-                selected_kol_ids, prompt_template, schedule_day_of_week, schedule_time)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (name, description or "", target_kol_id,
-             time_range_start_days_offset, time_range_start_time,
-             time_range_end_days_offset, time_range_end_time,
-             json.dumps(selected_kol_ids), prompt_template,
-             schedule_day_of_week, schedule_time)
-        )
-        self._conn.commit()
-        return cursor.lastrowid
+                                 time_range_start_days_offset: int, time_range_start_time: str,
+                                 time_range_end_days_offset: int, time_range_end_time: str,
+                                 selected_kol_ids: list[int], prompt_template: str,
+                                 schedule_day_of_week: str, schedule_time: str) -> int:
+            """创建AI分析任务"""
+            return self._execute(
+                """INSERT INTO ai_analysis_tasks
+                   (name, description, target_kol_id,
+                    time_range_start_days_offset, time_range_start_time,
+                    time_range_end_days_offset, time_range_end_time,
+                    selected_kol_ids, prompt_template, schedule_day_of_week, schedule_time)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (name, description or "", target_kol_id,
+                 time_range_start_days_offset, time_range_start_time,
+                 time_range_end_days_offset, time_range_end_time,
+                 json.dumps(selected_kol_ids), prompt_template,
+                 schedule_day_of_week, schedule_time),
+            )
 
     def update_ai_task(self, task_id: int, **kwargs) -> None:
-        """更新AI分析任务"""
-        allowed_fields = ["name", "description", "enabled", "target_kol_id",
-                          "time_range_start_days_offset", "time_range_start_time",
-                          "time_range_end_days_offset", "time_range_end_time",
-                          "selected_kol_ids", "prompt_template",
-                          "schedule_day_of_week", "schedule_time",
-                          "last_run_at", "last_run_status", "next_run_at"]
-        updates = []
-        params = []
-        for key, value in kwargs.items():
-            if key in allowed_fields:
-                updates.append(f"{key} = ?")
-                if key == "selected_kol_ids" and isinstance(value, list):
-                    params.append(json.dumps(value))
-                else:
-                    params.append(value)
-        if updates:
-            updates.append("updated_at = datetime('now')")
-            params.append(task_id)
-            self._conn.execute(
-                f"UPDATE ai_analysis_tasks SET {', '.join(updates)} WHERE id = ?",
-                params
-            )
-            self._conn.commit()
+            """更新AI分析任务"""
+            allowed_fields = ["name", "description", "enabled", "target_kol_id",
+                              "time_range_start_days_offset", "time_range_start_time",
+                              "time_range_end_days_offset", "time_range_end_time",
+                              "selected_kol_ids", "prompt_template",
+                              "schedule_day_of_week", "schedule_time",
+                              "last_run_at", "last_run_status", "next_run_at"]
+            updates = []
+            params = []
+            for key, value in kwargs.items():
+                if key in allowed_fields:
+                    updates.append(f"{key} = ?")
+                    if key == "selected_kol_ids" and isinstance(value, list):
+                        params.append(json.dumps(value))
+                    else:
+                        params.append(value)
+            if updates:
+                updates.append("updated_at = datetime('now')")
+                params.append(task_id)
+                with self._lock:
+                    self._conn.execute(
+                        f"UPDATE ai_analysis_tasks SET {', '.join(updates)} WHERE id = ?",
+                        params
+                    )
+                    self._conn.commit()
 
     def get_ai_task(self, task_id: int) -> dict | None:
         """获取单个AI分析任务"""
@@ -3740,9 +3739,8 @@ class DB:
         return tasks
 
     def delete_ai_task(self, task_id: int) -> None:
-        """删除AI分析任务"""
-        self._conn.execute("DELETE FROM ai_analysis_tasks WHERE id = ?", (task_id,))
-        self._conn.commit()
+            """删除AI分析任务"""
+            self._execute("DELETE FROM ai_analysis_tasks WHERE id = ?", (task_id,))
 
     def get_due_ai_tasks(self, now_str: str) -> list[dict]:
         """获取到期需要运行的任务（用于调度器）"""
@@ -3761,32 +3759,31 @@ class DB:
     # ---- AI Analysis Logs ----
 
     def create_ai_log(self, task_id: int, started_at: str, status: str = "pending") -> int:
-        """创建AI分析日志"""
-        cursor = self._conn.execute(
-            """INSERT INTO ai_analysis_logs
-               (task_id, started_at, status) VALUES (?, ?, ?)""",
-            (task_id, started_at, status)
-        )
-        self._conn.commit()
-        return cursor.lastrowid
+            """创建AI分析日志"""
+            return self._execute(
+                """INSERT INTO ai_analysis_logs
+                   (task_id, started_at, status) VALUES (?, ?, ?)""",
+                (task_id, started_at, status),
+            )
 
     def update_ai_log(self, log_id: int, **kwargs) -> None:
-        """更新AI分析日志"""
-        allowed_fields = ["completed_at", "status", "message",
-                          "prompt_tokens", "completion_tokens", "total_tokens", "output_post_id"]
-        updates = []
-        params = []
-        for key, value in kwargs.items():
-            if key in allowed_fields:
-                updates.append(f"{key} = ?")
-                params.append(value)
-        if updates:
-            params.append(log_id)
-            self._conn.execute(
-                f"UPDATE ai_analysis_logs SET {', '.join(updates)} WHERE id = ?",
-                params
-            )
-            self._conn.commit()
+            """更新AI分析日志"""
+            allowed_fields = ["completed_at", "status", "message",
+                              "prompt_tokens", "completion_tokens", "total_tokens", "output_post_id"]
+            updates = []
+            params = []
+            for key, value in kwargs.items():
+                if key in allowed_fields:
+                    updates.append(f"{key} = ?")
+                    params.append(value)
+            if updates:
+                params.append(log_id)
+                with self._lock:
+                    self._conn.execute(
+                        f"UPDATE ai_analysis_logs SET {', '.join(updates)} WHERE id = ?",
+                        params
+                    )
+                    self._conn.commit()
 
     def get_ai_logs_for_task(self, task_id: int, limit: int = 50) -> list[dict]:
         """获取任务的执行日志"""
@@ -3798,11 +3795,14 @@ class DB:
         return [dict(row) for row in rows]
 
     def delete_old_ai_logs(self, older_than_days: int = 30) -> int:
-        """删除旧日志，返回删除数量"""
-        cursor = self._conn.execute(
-            """DELETE FROM ai_analysis_logs
-               WHERE created_at < datetime('now', ?)""",
-            (f"-{older_than_days} days",)
-        )
-        self._conn.commit()
-        return cursor.rowcount
+            """删除旧日志，返回删除数量"""
+            if older_than_days <= 0:
+                return 0
+            with self._lock:
+                cursor = self._conn.execute(
+                    """DELETE FROM ai_analysis_logs
+                       WHERE created_at < datetime('now', ?)""",
+                    (f"-{older_than_days} days",),
+                )
+                self._conn.commit()
+                return cursor.rowcount
