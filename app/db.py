@@ -2730,7 +2730,7 @@ class DB:
             params.append(below_id)
         if conds:
             sql += " WHERE " + " AND ".join(conds)
-        sql += " ORDER BY p.id DESC LIMIT ? OFFSET ?"
+        sql += " ORDER BY p.published_at DESC, p.id DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         return _sanitize_post_detail(
             _normalize_post_tags(_normalize_post_images(self._rows(sql, params)))
@@ -2851,7 +2851,7 @@ class DB:
             "JOIN kols k ON k.id = p.kol_id "
             "LEFT JOIN categories c ON c.id = k.category_id "
             "LEFT JOIN subscriptions s ON s.kol_id = p.kol_id AND s.user_id = ? "
-            f"WHERE {' AND '.join(conds)} ORDER BY p.id DESC LIMIT ? OFFSET ?",
+            f"WHERE {' AND '.join(conds)} ORDER BY p.published_at DESC, p.id DESC LIMIT ? OFFSET ?",
             (*params, limit, offset),
         ))))
         for row in rows:
@@ -2874,7 +2874,7 @@ class DB:
             "LEFT JOIN subscriptions s ON s.kol_id = p.kol_id AND s.user_id = ? "
             f"WHERE p.kol_id IN ({placeholders}) AND strftime('%s', p.fetched_at) >= ? "
             "AND COALESCE(k.silent, 0) = 0 "
-            "ORDER BY p.id DESC LIMIT ?",
+            "ORDER BY p.published_at DESC, p.id DESC LIMIT ?",
             (user_id, *kol_ids, since_ts, limit),
         ))))
 
