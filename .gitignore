@@ -7,6 +7,7 @@ config.yaml
 *.pyc
 backups/
 .superpowers/
+.mimosa/
 
 .DS_Store
 .pi-subagents/

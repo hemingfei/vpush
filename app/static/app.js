@@ -1,7 +1,7 @@
 const $ = (sel) => document.querySelector(sel);
 
-const PLATFORM_LABELS = { xueqiu: "雪球", combination: "雪球组合", weibo: "微博", twitter: "X", ima: "ima", zsxq: "知识星球", mx: "MX平台" };
-const PLATFORM_SHORT_LABELS = { xueqiu: "雪球", combination: "组合", weibo: "微博", twitter: "X", ima: "ima", zsxq: "星球", mx: "MX" };
+const PLATFORM_LABELS = { xueqiu: "雪球", combination: "雪球组合", weibo: "微博", twitter: "X", ima: "ima", zsxq: "知识星球", mx: "MX平台", system: "系统" };
+const PLATFORM_SHORT_LABELS = { xueqiu: "雪球", combination: "组合", weibo: "微博", twitter: "X", ima: "ima", zsxq: "星球", mx: "MX", system: "系统" };
 function platformShortLabel(p) {
   return p ? (PLATFORM_SHORT_LABELS[p] || PLATFORM_LABELS[p]) : "全部";
 }
@@ -10061,65 +10061,134 @@ function renderAdminAiAnalysis() {
   const enabledCount = tasks.filter(t => t.enabled).length;
 
   body.innerHTML = `
-    <section class="section-panel">
-      <header class="section-head">
-        <div>
-          <h2 class="section-title">AI 分析任务</h2>
-          <p class="section-meta">${tasks.length} 个任务 · ${enabledCount} 个已启用</p>
-        </div>
-        <button class="btn-normal" onclick="openAiTaskModal()">${PLUS_ICON} 新建任务</button>
-      </header>
+    <div class="ai-analysis-page">
+      <section class="section-panel">
+        <header class="section-head">
+          <div>
+            <h2 class="section-title">AI 分析任务</h2>
+            <p class="section-meta">${tasks.length} 个任务 · ${enabledCount} 个已启用</p>
+          </div>
+        </header>
+      </section>
 
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">任务</th>
-              <th scope="col">目标 KOL</th>
-              <th scope="col">调度</th>
-              <th scope="col">状态</th>
-              <th scope="col">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${tasks.length ? tasks.map(task => {
-              const scheduleDays = task.schedule_day_of_week ? task.schedule_day_of_week.split(',').map(d => {
-                const days = ['日', '一', '二', '三', '四', '五', '六'];
-                return `周${days[Number(d)]}`;
-              }).join(', ') : '';
-              const statusBadge = task.last_run_status ? 
-                `<span class="${task.last_run_status === 'success' ? 'status-ok' : 'status-warn'}">${task.last_run_status === 'success' ? '成功' : '失败'}</span>` : 
-                '<span class="muted">未运行</span>';
-              return `
-                <tr>
-                  <td>
-                    <div>
-                      <strong>${escapeHtml(task.name)}</strong>
-                      ${task.description ? `<p class="muted">${escapeHtml(task.description)}</p>` : ''}
+      <div class="ai-tasks-grid">
+        ${tasks.map(task => {
+            const scheduleDays = task.schedule_day_of_week ? task.schedule_day_of_week.split(',').map(d => {
+              const days = ['日', '一', '二', '三', '四', '五', '六'];
+              return `周${days[Number(d)]}`;
+            }).sort((a, b) => {
+              // 排序：周一到周日
+              const order = { '周一': 0, '周二': 1, '周三': 2, '周四': 3, '周五': 4, '周六': 5, '周日': 6 };
+              return order[a] - order[b];
+            }).join(', ') : '';
+            const lastRunStatus = task.last_run_status;
+            const lastRunStatusClass = lastRunStatus === 'success' ? 'success' : lastRunStatus === 'failed' ? 'error' : 'neutral';
+            const lastRunStatusText = lastRunStatus === 'success' ? '成功' : lastRunStatus === 'failed' ? '失败' : '未运行';
+            
+            return `
+              <div class="ai-task-card">
+                <div class="ai-task-header">
+                  <div class="ai-task-title">
+                    <div class="ai-task-name">${escapeHtml(task.name)}</div>
+                    ${task.description ? `<div class="ai-task-desc">${escapeHtml(task.description)}</div>` : ''}
+                  </div>
+                  <div class="ai-task-status-badge ${task.enabled ? 'enabled' : 'disabled'}">
+                    ${task.enabled ? '已启用' : '已禁用'}
+                  </div>
+                </div>
+                
+                <div class="ai-task-details">
+                  <div class="ai-task-detail-item">
+                    <div class="ai-task-detail-label">目标 KOL</div>
+                    <div class="ai-task-detail-value">ID: ${task.target_kol_id}</div>
+                  </div>
+                  
+                  <div class="ai-task-detail-item">
+                    <div class="ai-task-detail-label">调度设置</div>
+                    <div class="ai-task-detail-value">
+                      <div>${scheduleDays ? escapeHtml(scheduleDays) : ''}</div>
+                      ${task.schedule_time ? `<div>${escapeHtml(task.schedule_time)}</div>` : ''}
                     </div>
-                  </td>
-                  <td>目标 KOL ID: ${task.target_kol_id}</td>
-                  <td>
-                    ${scheduleDays ? escapeHtml(scheduleDays) : ''} ${task.schedule_time ? escapeHtml(task.schedule_time) : ''}
-                  </td>
-                  <td>
-                    ${task.enabled ? '<span class="status-ok">已启用</span>' : '<span class="muted">已禁用</span>'}
-                    ${statusBadge}
-                    ${task.last_run_at ? `<p class="muted">上次: ${escapeHtml(fmtDbTime(task.last_run_at))}</p>` : ''}
-                  </td>
-                  <td>
-                    <button class="btn-sm" onclick="openAiTaskModal(${task.id})">编辑</button>
-                    <button class="btn-sm" onclick="runAiTask(${task.id})">立即运行</button>
-                    <button class="btn-sm" onclick="viewAiTaskLogs(${task.id})">日志</button>
-                    <button class="btn-sm danger" onclick="deleteAiTask(${task.id})">删除</button>
-                  </td>
-                </tr>
+                  </div>
+                  
+                  <div class="ai-task-detail-item">
+                    <div class="ai-task-detail-label">分析 KOL</div>
+                    <div class="ai-task-detail-value">
+                      ${(() => {
+                        try {
+                          const kols = typeof task.selected_kol_ids === 'string' 
+                            ? task.selected_kol_ids.split(',').map(s => s.trim()).filter(Boolean)
+                            : (task.selected_kol_ids || []);
+                          return `${kols.length} 个 KOL`;
+                        } catch {
+                          return '未知';
+                        }
+                      })()}
+                    </div>
+                  </div>
+                  
+                  <div class="ai-task-detail-item">
+                    <div class="ai-task-detail-label">上次运行</div>
+                    <div class="ai-task-detail-value">
+                      <span class="ai-task-run-status ${lastRunStatusClass}">${lastRunStatusText}</span>
+                      ${task.last_run_at ? `<div class="ai-task-run-time">${escapeHtml(fmtDbTime(task.last_run_at))}</div>` : ''}
+                    </div>
+                  </div>
+                </div>
+                
+                <div class="ai-task-actions">
+                  <button class="ai-task-action-btn" onclick="openAiTaskModal(${task.id})" title="编辑">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                    </svg>
+                    编辑
+                  </button>
+                  <button class="ai-task-action-btn primary" onclick="runAiTask(${task.id})" title="立即运行">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <polygon points="5 3 19 12 5 21 5 3"/>
+                    </svg>
+                    运行
+                  </button>
+                  <button class="ai-task-action-btn" onclick="viewAiTaskLogs(${task.id})" title="查看日志">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                      <polyline points="14 2 14 8 20 8"/>
+                      <line x1="16" y1="13" x2="8" y2="13"/>
+                      <line x1="16" y1="17" x2="8" y2="17"/>
+                    </svg>
+                    日志
+                  </button>
+                  <button class="ai-task-action-btn danger" onclick="deleteAiTask(${task.id})" title="删除">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="3 6 5 6 21 6"/>
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                    </svg>
+                    删除
+                  </button>
+                </div>
+              </div>
               `;
-            }).join('') : `<tr><td colspan="5" class="muted">还没有任务。点击「新建任务」开始创建。</td></tr>`}
-          </tbody>
-        </table>
+            }).join('')}
+        
+        <!-- 新建任务卡片 -->
+        <div class="ai-task-card ai-new-task-card" onclick="openAiTaskModal()">
+          <div class="ai-new-task-content">
+            <div class="ai-new-task-icon">${PLUS_ICON}</div>
+            <div class="ai-new-task-title">创建新任务</div>
+            <div class="ai-new-task-desc">设置 AI 分析任务，自动分析 KOL 内容</div>
+          </div>
+        </div>
       </div>
-    </section>
+      
+      ${!tasks.length ? `
+        <div class="ai-analysis-empty">
+          <div class="empty-state-icon">${BRAIN_ICON}</div>
+          <h3>开始使用 AI 分析</h3>
+          <p>点击上方的「创建新任务」卡片来设置你的第一个 AI 分析任务</p>
+        </div>
+      ` : ''}
+    </div>
   `;
 }
 
@@ -10127,12 +10196,25 @@ function openAiTaskModal(taskId = null) {
   const task = taskId ? (state.aiTasks || []).find(t => t.id === taskId) : null;
   const isEdit = !!task;
   
-  const daysOptions = ['日', '一', '二', '三', '四', '五', '六'].map((d, i) => 
-    `<label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-      <input type="checkbox" data-day="${i}" ${task && task.schedule_day_of_week && task.schedule_day_of_week.split(',').includes(String(i)) ? 'checked' : ''}>
-      周${d}
-    </label>`
-  ).join('');
+  // 顺序：周一到周日，对应的数字值是 1,2,3,4,5,6,0
+  const daysOrder = [
+    { num: 1, label: '一' },
+    { num: 2, label: '二' },
+    { num: 3, label: '三' },
+    { num: 4, label: '四' },
+    { num: 5, label: '五' },
+    { num: 6, label: '六' },
+    { num: 0, label: '日' }
+  ];
+  
+  const daysOptions = daysOrder.map(({ num, label }) => {
+    const isChecked = task && task.schedule_day_of_week && task.schedule_day_of_week.split(',').includes(String(num));
+    return `
+      <div class="ai-day-checkbox ${isChecked ? 'checked' : ''}" data-day="${num}">
+        <span class="ai-day-label">周${label}</span>
+      </div>
+    `;
+  }).join('');
 
   // selected_kol_ids 在数据库中是字符串，需要先解析
   const selectedKols = task ? (
@@ -10144,92 +10226,162 @@ function openAiTaskModal(taskId = null) {
   const mask = document.createElement("div");
   mask.className = "modal-mask";
   mask.innerHTML = `
-    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="ai-task-title">
-      <h3 id="ai-task-title">${isEdit ? '编辑任务' : '新建任务'}</h3>
+    <div class="ai-task-modal modal-card" role="dialog" aria-modal="true" aria-labelledby="ai-task-title">
+      <div class="ai-modal-header">
+        <h3 id="ai-task-title">${isEdit ? '编辑 AI 分析任务' : '新建 AI 分析任务'}</h3>
+        <button class="ai-modal-close" onclick="closeAdminModal()" aria-label="关闭">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
       
-      <div class="rc-generate" style="margin-top:16px;">
-        <label class="rc-field">
-          <span>任务名称 *</span>
-          <input id="ai-task-name" class="form-control" type="text" value="${task ? escapeHtml(task.name) : ''}" placeholder="例如：每日市场分析">
-        </label>
-
-        <label class="rc-field">
-          <span>描述</span>
-          <textarea id="ai-task-desc" class="form-control" rows="2" placeholder="可选的任务描述">${task ? escapeHtml(task.description || '') : ''}</textarea>
-        </label>
-
-        <label class="rc-field">
-          <span>目标 KOL ID *</span>
-          <input id="ai-task-target-kol" class="form-control" type="number" value="${task ? task.target_kol_id : ''}" placeholder="分析结果将发布到此 KOL">
-        </label>
-
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <label class="rc-field">
-            <span>时间范围开始: 天数偏移 *</span>
-            <input id="ai-task-start-offset" class="form-control" type="number" value="${task ? task.time_range_start_days_offset : '-1'}" placeholder="-1 表示昨天">
-          </label>
-          <label class="rc-field">
-            <span>时间范围开始: 时间 *</span>
-            <input id="ai-task-start-time" class="form-control" type="time" value="${task ? task.time_range_start_time : '21:00'}">
-          </label>
-        </div>
-
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <label class="rc-field">
-            <span>时间范围结束: 天数偏移 *</span>
-            <input id="ai-task-end-offset" class="form-control" type="number" value="${task ? task.time_range_end_days_offset : '0'}" placeholder="0 表示今天">
-          </label>
-          <label class="rc-field">
-            <span>时间范围结束: 时间 *</span>
-            <input id="ai-task-end-time" class="form-control" type="time" value="${task ? task.time_range_end_time : '08:00'}">
-          </label>
-        </div>
-
-        <label class="rc-field">
-          <span>分析 KOL ID (逗号分隔) *</span>
-          <textarea id="ai-task-kols" class="form-control" rows="2" placeholder="例如：1, 3, 5">${escapeHtml(selectedKols)}</textarea>
-        </label>
-
-        <label class="rc-field">
-          <span>Prompt 模板</span>
-          <textarea id="ai-task-prompt" class="form-control" rows="8" placeholder="默认模板将被使用">${task ? escapeHtml(task.prompt_template || '') : ''}</textarea>
-          <button type="button" class="btn-sm" onclick="restoreDefaultPrompt()" style="margin-top:8px;">恢复默认模板</button>
-        </label>
-
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <label class="rc-field">
-            <span>调度时间 *</span>
-            <input id="ai-task-schedule-time" class="form-control" type="time" value="${task ? task.schedule_time : '09:00'}">
-          </label>
-        </div>
-
-        <label class="rc-field">
-          <span>调度星期</span>
-          <div style="display:flex;flex-wrap:wrap;gap:16px;">
-            ${daysOptions}
+      <div class="ai-modal-body">
+        <div class="ai-form-section">
+          <div class="ai-form-section-title">基本信息</div>
+          
+          <div class="ai-form-group">
+            <label class="ai-form-label">
+              <span>任务名称 <span class="required">*</span></span>
+              <input id="ai-task-name" class="ai-form-input" type="text" value="${task ? escapeHtml(task.name) : ''}" placeholder="例如：每日市场热点分析">
+            </label>
+            
+            <label class="ai-form-label">
+              <span>任务描述</span>
+              <textarea id="ai-task-desc" class="ai-form-textarea" rows="2" placeholder="简单描述这个任务的用途">${task ? escapeHtml(task.description || '') : ''}</textarea>
+            </label>
           </div>
-        </label>
+        </div>
+
+        <div class="ai-form-section">
+          <div class="ai-form-section-title">目标设置</div>
+          
+          <div class="ai-form-group">
+            <label class="ai-form-label">
+              <span>目标 KOL ID <span class="required">*</span></span>
+              <input id="ai-task-target-kol" class="ai-form-input" type="number" value="${task ? task.target_kol_id : ''}" placeholder="分析结果将发布到此 KOL">
+            </label>
+          </div>
+        </div>
+
+        <div class="ai-form-section">
+          <div class="ai-form-section-title">时间范围</div>
+          
+          <div class="ai-form-row">
+            <label class="ai-form-label ai-form-label-half">
+              <span>开始: 天数偏移 <span class="required">*</span></span>
+              <input id="ai-task-start-offset" class="ai-form-input" type="number" value="${task ? task.time_range_start_days_offset : '-1'}" placeholder="-1 表示昨天">
+            </label>
+            
+            <label class="ai-form-label ai-form-label-half">
+              <span>开始: 时间点 <span class="required">*</span></span>
+              <input id="ai-task-start-time" class="ai-form-input" type="time" value="${task ? task.time_range_start_time : '21:00'}">
+            </label>
+          </div>
+          
+          <div class="ai-form-row">
+            <label class="ai-form-label ai-form-label-half">
+              <span>结束: 天数偏移 <span class="required">*</span></span>
+              <input id="ai-task-end-offset" class="ai-form-input" type="number" value="${task ? task.time_range_end_days_offset : '0'}" placeholder="0 表示今天">
+            </label>
+            
+            <label class="ai-form-label ai-form-label-half">
+              <span>结束: 时间点 <span class="required">*</span></span>
+              <input id="ai-task-end-time" class="ai-form-input" type="time" value="${task ? task.time_range_end_time : '08:00'}">
+            </label>
+          </div>
+          
+          <div class="ai-form-hint">
+            例如：从昨天 21:00 到今天 08:00，将分析这段时间内的内容
+          </div>
+        </div>
+
+        <div class="ai-form-section">
+          <div class="ai-form-section-title">分析范围</div>
+          
+          <div class="ai-form-group">
+            <label class="ai-form-label">
+              <span>分析 KOL ID <span class="required">*</span></span>
+              <textarea id="ai-task-kols" class="ai-form-textarea" rows="2" placeholder="用逗号分隔，例如：1, 3, 5, 8">${escapeHtml(selectedKols)}</textarea>
+            </label>
+          </div>
+        </div>
+
+        <div class="ai-form-section">
+          <div class="ai-form-section-title">Prompt 模板</div>
+          
+          <div class="ai-form-group">
+            <label class="ai-form-label">
+              <span>自定义 Prompt</span>
+              <textarea id="ai-task-prompt" class="ai-form-textarea ai-prompt-textarea" rows="8" placeholder="留空则使用默认模板">${task ? escapeHtml(task.prompt_template || '') : ''}</textarea>
+            </label>
+            <button type="button" class="ai-form-btn-secondary" onclick="restoreDefaultPrompt()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="1 4 1 10 7 10"/>
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+              </svg>
+              恢复默认模板
+            </button>
+          </div>
+        </div>
+
+        <div class="ai-form-section">
+          <div class="ai-form-section-title">调度设置</div>
+          
+          <div class="ai-form-row">
+            <label class="ai-form-label ai-form-label-half">
+              <span>调度时间 <span class="required">*</span></span>
+              <input id="ai-task-schedule-time" class="ai-form-input" type="time" value="${task ? task.schedule_time : '09:00'}">
+            </label>
+          </div>
+          
+          <div class="ai-form-group">
+            <label class="ai-form-label">
+              <span>调度星期 <span class="required">*</span></span>
+              <div class="ai-days-container">
+                ${daysOptions}
+              </div>
+            </label>
+          </div>
+        </div>
 
         ${isEdit ? `
-          <label class="rc-field">
-            <span>状态</span>
-            <select id="ai-task-enabled" class="form-control">
-              <option value="1" ${task.enabled ? 'selected' : ''}>已启用</option>
-              <option value="0" ${!task.enabled ? 'selected' : ''}>已禁用</option>
-            </select>
-          </label>
+          <div class="ai-form-section">
+            <div class="ai-form-section-title">任务状态</div>
+            
+            <div class="ai-form-group">
+              <label class="ai-form-label">
+                <span>状态</span>
+                <select id="ai-task-enabled" class="ai-form-select">
+                  <option value="1" ${task.enabled ? 'selected' : ''}>已启用 - 任务将按计划运行</option>
+                  <option value="0" ${!task.enabled ? 'selected' : ''}>已禁用 - 任务暂停运行</option>
+                </select>
+              </label>
+            </div>
+          </div>
         ` : ''}
       </div>
 
-      <div class="toolbar" style="margin-top:24px;justify-content:flex-end;">
-        <button type="button" class="btn-outline" onclick="closeAdminModal()">取消</button>
-        <button type="button" class="btn-normal" onclick="saveAiTask(${taskId || 'null'})">保存</button>
+      <div class="ai-modal-footer">
+        <button type="button" class="ai-modal-btn ai-modal-btn-cancel" onclick="closeAdminModal()">取消</button>
+        <button type="button" class="ai-modal-btn ai-modal-btn-primary" onclick="saveAiTask(${taskId || 'null'})">${isEdit ? '保存修改' : '创建任务'}</button>
       </div>
     </div>
   `;
 
   closeAdminModal();
   document.body.appendChild(mask);
+  
+  // 添加星期选择的交互效果
+  setTimeout(() => {
+    const dayCheckboxes = document.querySelectorAll('.ai-day-checkbox');
+    dayCheckboxes.forEach(checkbox => {
+      checkbox.addEventListener('click', () => {
+        checkbox.classList.toggle('checked');
+      });
+    });
+  }, 50);
 }
 
 function restoreDefaultPrompt() {
@@ -10260,8 +10412,7 @@ async function saveAiTask(taskId = null) {
     return;
   }
 
-  const scheduleDays = Array.from(document.querySelectorAll('input[data-day]'))
-    .filter(el => el.checked)
+  const scheduleDays = Array.from(document.querySelectorAll('.ai-day-checkbox.checked'))
     .map(el => el.dataset.day)
     .join(',');
 
@@ -10334,35 +10485,87 @@ async function viewAiTaskLogs(taskId) {
     state.aiTaskLogs = logs;
     state.aiTaskLogsTaskId = taskId;
     
+    const task = (state.aiTasks || []).find(t => t.id === taskId);
+    const taskName = task ? task.name : '未知任务';
+    
     const mask = document.createElement("div");
     mask.className = "modal-mask";
     
-    const logsHtml = logs.length ? logs.map(log => `
-      <div style="padding:12px;border-bottom:1px solid var(--border-color);">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-          <strong style="${log.status === 'success' ? 'color:var(--success-color)' : 'color:var(--warning-color)'}">
-            ${log.status === 'success' ? '成功' : log.status === 'failed' ? '失败' : log.status}
-          </strong>
-          <span class="muted">${escapeHtml(fmtDbTime(log.started_at))}</span>
+    const logsHtml = logs.length ? logs.map(log => {
+      const statusClass = log.status === 'success' ? 'success' : log.status === 'failed' ? 'error' : 'neutral';
+      const statusText = log.status === 'success' ? '成功' : log.status === 'failed' ? '失败' : log.status || '未知';
+      
+      return `
+        <div class="ai-log-item">
+          <div class="ai-log-header">
+            <div class="ai-log-status ${statusClass}">
+              <span class="ai-log-status-dot"></span>
+              ${statusText}
+            </div>
+            <div class="ai-log-time">${escapeHtml(fmtDbTime(log.started_at))}</div>
+          </div>
+          ${log.message ? `<div class="ai-log-message">${escapeHtml(log.message)}</div>` : ''}
+          ${log.prompt_tokens != null || log.completion_tokens != null || log.total_tokens != null ? `
+            <div class="ai-log-tokens">
+              <div class="ai-log-token-item">
+                <span class="ai-log-token-label">提示</span>
+                <span class="ai-log-token-value">${log.prompt_tokens || 0}</span>
+              </div>
+              <div class="ai-log-token-item">
+                <span class="ai-log-token-label">完成</span>
+                <span class="ai-log-token-value">${log.completion_tokens || 0}</span>
+              </div>
+              <div class="ai-log-token-item ai-log-token-total">
+                <span class="ai-log-token-label">总计</span>
+                <span class="ai-log-token-value">${log.total_tokens || 0}</span>
+              </div>
+            </div>
+          ` : ''}
+          ${log.output_post_id ? `
+            <div class="ai-log-link">
+              <a href="/kol/${log.output_post_id}" target="_blank" class="ai-log-post-link">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                  <polyline points="15 3 21 3 21 9"/>
+                  <line x1="10" y1="14" x2="21" y2="3"/>
+                </svg>
+                查看输出帖子
+              </a>
+            </div>
+          ` : ''}
         </div>
-        ${log.message ? `<p class="muted">${escapeHtml(log.message)}</p>` : ''}
-        ${log.prompt_tokens != null || log.completion_tokens != null || log.total_tokens != null ? `
-          <p style="margin-top:8px;font-size:12px;color:var(--muted-color);">
-            Token 消耗: ${log.prompt_tokens || 0} (提示) + ${log.completion_tokens || 0} (完成) = ${log.total_tokens || 0}
-          </p>
-        ` : ''}
-        ${log.output_post_id ? `<p style="margin-top:4px;font-size:12px;"><a href="/kol/${log.output_post_id}" target="_blank">查看输出帖子</a></p>` : ''}
+      `;
+    }).join('') : `
+      <div class="ai-logs-empty">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="16" y1="13" x2="8" y2="13"/>
+          <line x1="16" y1="17" x2="8" y2="17"/>
+        </svg>
+        <p>暂无运行日志</p>
       </div>
-    `).join('') : '<p class="muted" style="padding:16px;">暂无运行日志</p>';
+    `;
 
     mask.innerHTML = `
-      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="ai-logs-title" style="max-width:600px;">
-        <h3 id="ai-logs-title">任务运行日志</h3>
-        <div style="max-height:400px;overflow-y:auto;margin-top:16px;border:1px solid var(--border-color);border-radius:8px;">
+      <div class="ai-logs-modal modal-card" role="dialog" aria-modal="true" aria-labelledby="ai-logs-title">
+        <div class="ai-logs-header">
+          <div>
+            <h3 id="ai-logs-title">运行日志</h3>
+            <p class="ai-logs-subtitle">${escapeHtml(taskName)}</p>
+          </div>
+          <button class="ai-modal-close" onclick="closeAdminModal()" aria-label="关闭">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        <div class="ai-logs-content">
           ${logsHtml}
         </div>
-        <div class="toolbar" style="margin-top:16px;justify-content:flex-end;">
-          <button type="button" class="btn-outline" onclick="closeAdminModal()">关闭</button>
+        <div class="ai-logs-footer">
+          <button type="button" class="ai-modal-btn ai-modal-btn-primary" onclick="closeAdminModal()">关闭</button>
         </div>
       </div>
     `;
