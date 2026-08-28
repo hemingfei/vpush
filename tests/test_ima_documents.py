@@ -1406,6 +1406,11 @@ def test_safe_error_redacts_credential_shapes(message):
     assert "<redacted>" in text or "<url>" in text
 
 
+def test_safe_error_leaves_prefixed_ordinary_keys_unchanged():
+    for message in ("my-token=public", "my-signature=public", "my-x-ima-cookie=public"):
+        assert _safe_error(RuntimeError(message)) == message
+
+
 def test_error_summary_redacts_urls_and_credentials():
     text = _safe_error(RuntimeError("failed https://res-skb.ima.qq.com/a.pdf?sign=secret"))
     assert "res-skb.ima.qq.com" not in text
