@@ -1103,6 +1103,17 @@ def test_ima_pdf_download_checks_session_owner_before_every_side_effect():
     assert "const group = routeQuery().get(\"group\") || state.imaDocumentsGroup || \"\";" in body
 
 
+def test_ima_pdf_download_timeout_revoke_rechecks_session_owner():
+    """PDF 延迟释放 URL 时仍须确认下载发起路由和会话拥有者。"""
+    body = _fn_body("downloadImaPdf")
+    timeout = body.index("setTimeout(() =>")
+    callback_end = body.index("}, 1000);", timeout)
+    callback = body[timeout:callback_end]
+    guard = callback.index("sessionOwnerStillActive(routeSeq, token, sessionGeneration)")
+    revoke = callback.index("URL.revokeObjectURL(url)")
+    assert guard < revoke
+
+
 def test_cookie_save_nested_stats_reload_preserves_owner_sequence_and_focus_guard():
     """Cookie 保存及清除的嵌套 stats GET 必须继承原路由令牌，再检查会话后聚焦。"""
     for name in ("clearSavedCookie", "saveXueqiuCookie", "saveZsxqCookie", "saveTwitterCookie", "saveImaCredentials"):

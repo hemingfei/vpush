@@ -1629,7 +1629,9 @@ async function downloadImaPdf(mediaId) {
     document.body.appendChild(link);
     link.click();
     link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setTimeout(() => {
+      if (sessionOwnerStillActive(routeSeq, token, sessionGeneration)) URL.revokeObjectURL(url);
+    }, 1000);
   } catch (err) {
     if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash(`PDF 下载失败：${err.message}`, "error");
