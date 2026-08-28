@@ -196,6 +196,38 @@ def test_render_settings_catch_only_mutates_owned_route_and_session():
     assert render.index("const sessionGeneration = imaMountState.sessionGeneration", 0, fetch) < fetch
 
 
+
+def test_bind_code_callbacks_capture_and_require_current_owner_before_side_effects():
+    """绑定码响应只能由发起请求的路由、token 和会话写入状态或 DOM。"""
+    for name in ("bindChannel", "genBindCode"):
+        body = _fn_body(name)
+        await_api = body.index('await api("/api/me/bind-code"')
+        prefix = body[:await_api]
+        for capture in (
+            "const routeSeq = routeRenderSeq",
+            "const token = state.token",
+            "const sessionGeneration = imaMountState.sessionGeneration",
+        ):
+            assert capture in prefix, f"{name} 必须在请求前捕获会话拥有者"
+
+        guard = body.index("if (!routeStillActive(routeSeq)", await_api)
+        pending_write = body.index("pendingBind =", await_api)
+        assert guard < pending_write
+        owner_check = body[guard:pending_write]
+        assert "token !== state.token" in owner_check
+        assert "sessionGeneration !== imaMountState.sessionGeneration" in owner_check
+        for side_effect in ("renderBindResult(" if name == "bindChannel" else '$(\"#bind-result\").innerHTML',
+                             "startSettingsPoll()"):
+            assert guard < body.index(side_effect, await_api), f"{name} owner guard 必须先于 {side_effect}"
+
+        catch = body.index("} catch (err)", await_api)
+        catch_guard = body.index("if (!routeStillActive(routeSeq)", catch)
+        error_flash = body.index("flash(err.message, \"error\")", catch)
+        assert catch_guard < error_flash
+        catch_owner_check = body[catch_guard:error_flash]
+        assert "token !== state.token" in catch_owner_check
+        assert "sessionGeneration !== imaMountState.sessionGeneration" in catch_owner_check
+
 def test_feishu_personal_async_callbacks_are_owner_guarded_and_logout_resets_all_state():
     """飞书注册、轮询和倒计时不得跨账号停止新计时器或写设置区。"""
     src = APP_JS.read_text(encoding="utf-8")

@@ -5021,8 +5021,13 @@ function renderBindResult(channel, code) {
 }
 
 async function bindChannel(channel) {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   try {
     const data = await api("/api/me/bind-code", { method: "POST" });
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     pendingBind = {
       channel,
       code: data.code,
@@ -5031,6 +5036,8 @@ async function bindChannel(channel) {
     renderBindResult(channel, data.code);
     startSettingsPoll();
   } catch (err) {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(err.message, "error");
   }
 }
@@ -5311,8 +5318,13 @@ async function savePassword() {
 }
 
 async function genBindCode() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   try {
     const data = await api("/api/me/bind-code", { method: "POST" });
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     pendingBind = {
       channel: "any",
       code: data.code,
@@ -5324,6 +5336,8 @@ async function genBindCode() {
       `发给机器人：<code>/bind ${escapeHtml(data.code)}</code>`;
     startSettingsPoll();
   } catch (err) {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(err.message, "error");
   }
 }
