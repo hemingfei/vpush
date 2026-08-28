@@ -2157,7 +2157,7 @@ def create_api_router(
         return {
             "set": bool(cookie),
             "updated_at": db.get_setting(time_key) or "",
-            "preview": (cookie[:40] + "…") if len(cookie) > 40 else cookie,
+            "preview": "已配置" if cookie else "",
         }
 
     @router.get("/admin/xueqiu-cookie", dependencies=[Depends(require_admin)])
@@ -2173,7 +2173,7 @@ def create_api_router(
                 status = {
                     "set": True,
                     "updated_at": "",
-                    "preview": (env[:40] + "…") if len(env) > 40 else env,
+                    "preview": "已配置",
                     "from_env": True,
                 }
         return status
@@ -2306,7 +2306,7 @@ def create_api_router(
                 status = {
                     "set": True,
                     "updated_at": "",
-                    "preview": (env[:40] + "…") if len(env) > 40 else env,
+                    "preview": "已配置",
                     "from_env": True,
                 }
         return status
@@ -2916,7 +2916,7 @@ def create_api_router(
             "cookie": {
                 "set": bool(cookie),
                 "updated_at": db.get_setting(IMA_COOKIE_TIME_KEY) or "",
-                "preview": (cookie[:40] + "…") if len(cookie) > 40 else cookie,
+                "preview": "已配置" if cookie else "",
                 "from_env": bool(cookie) and not db.get_setting(IMA_COOKIE_KEY),
             },
             "openapi_clientid": {"set": bool(client_id), "preview": (client_id[:12] + "…") if len(client_id) > 12 else client_id},
@@ -4013,7 +4013,7 @@ def create_api_router(
                 twitter_status = {
                     "set": True,
                     "updated_at": "",
-                    "preview": (env_tw[:40] + "…") if len(env_tw) > 40 else env_tw,
+                    "preview": "已配置",
                     "from_env": True,
                 }
         zsxq_status = _cookie_status(ZSXQ_COOKIE_KEY, ZSXQ_COOKIE_TIME_KEY)
@@ -4023,7 +4023,7 @@ def create_api_router(
                 zsxq_status = {
                     "set": True,
                     "updated_at": "",
-                    "preview": (env_zq[:40] + "…") if len(env_zq) > 40 else env_zq,
+                    "preview": "已配置",
                     "from_env": True,
                 }
         last_post_at = db.last_post_time_by_kol()
@@ -4056,12 +4056,12 @@ def create_api_router(
             "xueqiu_cookie": {
                 "set": bool(xueqiu_cookie),
                 "updated_at": xueqiu_updated,
-                "preview": (xueqiu_cookie[:40] + "…") if len(xueqiu_cookie) > 40 else xueqiu_cookie,
+                "preview": "已配置" if xueqiu_cookie else "",
             },
             "weibo_cookie": {
                 "set": bool(weibo_cookie),
                 "updated_at": weibo_updated,
-                "preview": (weibo_cookie[:40] + "…") if len(weibo_cookie) > 40 else weibo_cookie,
+                "preview": "已配置" if weibo_cookie else "",
             },
             "twitter_cookie": twitter_status,
             "zsxq_cookie": zsxq_status,

@@ -93,6 +93,51 @@ def test_parse_bind_code():
 
 # ---- 注册会话状态机 ----
 
+def test_begin_session_stops_old_listener_before_cancellation(monkeypatch):
+    db = make_db()
+    manager = make_manager(db)
+    uid = create_session(db, manager, status="awaiting_bind")
+
+    class FakeListener:
+        def __init__(self):
+            self.stopped = False
+
+        def stop(self):
+            self.stopped = True
+
+    listener = FakeListener()
+    manager._listeners["sess1"] = listener
+    monkeypatch.setattr("app.feishu_personal.begin_registration", lambda base_url="https://accounts.feishu.cn": (begin_payload(), base_url))
+    monkeypatch.setattr(manager, "_start_poller", lambda session_id: None)
+
+    manager.begin_session(uid)
+
+    assert listener.stopped
+    assert db.get_feishu_registration_session("sess1")["status"] == "cancelled"
+
+
+def test_expire_stale_stops_expired_listeners():
+    db = make_db()
+    manager = make_manager(db)
+    create_session(db, manager, status="awaiting_bind")
+    db.update_feishu_registration_session("sess1", session_expires_at=int(time.time()) - 1)
+
+    class FakeListener:
+        def __init__(self):
+            self.stopped = False
+
+        def stop(self):
+            self.stopped = True
+
+    listener = FakeListener()
+    manager._listeners["sess1"] = listener
+
+    assert manager.expire_stale() == 1
+    assert listener.stopped
+    assert db.get_feishu_registration_session("sess1")["status"] == "expired"
+
+
+
 def test_begin_session_creates_pending(monkeypatch):
     db = make_db()
     manager = make_manager(db)

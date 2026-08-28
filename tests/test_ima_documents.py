@@ -52,6 +52,28 @@ class FakeDB:
 
 
 
+def test_status_counts_only_complete_manifest_entries(tmp_path):
+    service = ImaDocumentService(FakeDB(), tmp_path / "ima")
+    complete = {"media_id": "complete", "name": "complete.pdf", "day": "0825"}
+    incomplete = {"media_id": "incomplete", "name": "incomplete.pdf", "day": "0825"}
+    service.store.save_manifest([complete, incomplete])
+
+    pdf = service.store.pdf_path(complete)
+    txt = service.store.txt_path(complete)
+    pdf.parent.mkdir(parents=True, exist_ok=True)
+    pdf.write_bytes(b"%PDF-1.7")
+    txt.write_text("complete", encoding="utf-8")
+    service.store.save_state({
+        service.store.state_key(complete): {
+            "pdf": str(pdf.relative_to(service.store.root)),
+            "txt": str(txt.relative_to(service.store.root)),
+        },
+        service.store.state_key(incomplete): {"pdf": "0825/incomplete.pdf"},
+    })
+
+    assert service.status()["documents"] == 1
+
+
 def test_discovery_commit_reloads_config_after_admin_update(tmp_path, monkeypatch):
     from app import ima_documents
 

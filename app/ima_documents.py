@@ -1884,6 +1884,9 @@ class ImaDocumentService:
             last_result = json.loads(result) if result else None
         except json.JSONDecodeError:
             last_result = None
+        records = self.store.load_manifest()
+        state = self.store.load_state()
+        document_count = sum(1 for record in records if self.store.is_complete(record, state))
         return {
             "config": cfg.public(),
             "running": running,
@@ -1892,7 +1895,7 @@ class ImaDocumentService:
             "last_finished_at": self.db.get_setting(IMA_PURE_LAST_FINISHED_KEY) or "",
             "last_result": last_result,
             "discovery": self._discovery_status(),
-            "documents": len(self.store.documents()),
+            "documents": document_count,
         }
 
     def start(self) -> None:
