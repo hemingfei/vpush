@@ -6615,6 +6615,10 @@ async function saveImaCollector() {
   if (saveButton) saveButton.disabled = true;
   const focusElement = document.activeElement;
   const focusId = focusElement?.id || "";
+  let focusMoved = false;
+  const onFocusIn = (event) => {
+    if (event.target !== focusElement && event.target !== document.body) focusMoved = true;
+  };
   const minutes = Number($("#ima-pure-interval")?.value || 60);
   if (!Number.isInteger(minutes) || minutes < 30 || minutes > 10080) {
     flash("检查间隔须在 30–10080 分钟", "error");
@@ -6630,23 +6634,25 @@ async function saveImaCollector() {
   };
   const token = $("#ima-pure-token")?.value?.trim() || "";
   if (token) body.refresh_token = token;
+  document.addEventListener("focusin", onFocusIn);
   try {
     await api("/api/admin/ima-collector", { method: "PUT", body: JSON.stringify(body) });
     imaMountState.dirty = false;
     if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats") return;
-    const restoreFocus = document.activeElement === focusElement || document.activeElement === document.body;
     const tokenInput = $("#ima-pure-token");
     if (tokenInput) tokenInput.value = "";
     flash("IMA 文档采集配置已保存");
     await loadAdminStats(routeSeq);
     if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats") return;
-    if (restoreFocus) {
+    const restoreFocus = document.activeElement === focusElement || document.activeElement === document.body;
+    if (!focusMoved && restoreFocus) {
       const focusTarget = document.getElementById(focusId) || document.getElementById("ima-collector-save");
       focusTarget?.focus({ preventScroll: true });
     }
   } catch (err) {
     flash(err.message || "保存失败", "error");
   } finally {
+    document.removeEventListener("focusin", onFocusIn);
     if (saveButton && document.body.contains(saveButton)) saveButton.disabled = false;
   }
 }

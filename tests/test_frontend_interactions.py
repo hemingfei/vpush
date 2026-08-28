@@ -2901,5 +2901,19 @@ def test_ima_collector_save_restores_focus_only_when_original_focus_survives():
     assert "|| document.activeElement === document.body" in save
     focus_start = save.index("const restoreFocus =")
     focus_index = save.index("focusTarget?.focus({ preventScroll: true })")
-    assert "if (restoreFocus)" in save[focus_start:focus_index]
+    assert "if (!focusMoved && restoreFocus)" in save[focus_start:focus_index]
     assert focus_index > focus_start
+
+
+def test_ima_collector_save_tracks_focus_moves_through_stats_reload():
+    """焦点在 stats reload await 期间移动时，完成回调不得抢焦点。"""
+    save = _fn_body("saveImaCollector")
+    assert "let focusMoved = false" in save
+    assert "const onFocusIn" in save
+    assert "event.target !== document.body" in save
+    assert 'document.addEventListener("focusin", onFocusIn)' in save
+    assert 'document.removeEventListener("focusin", onFocusIn)' in save
+    reload_index = save.index("await loadAdminStats(routeSeq)")
+    post_reload_guard = save.index("!focusMoved", reload_index)
+    assert post_reload_guard > reload_index
+    assert "if (!focusMoved" in save[reload_index:]
