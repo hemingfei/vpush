@@ -1,5 +1,6 @@
 import json
 import threading
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,7 +20,7 @@ from app.ima_kb import attach_catalog_stats, catalog, readable_group_ids
 from app.main import create_app
 from app.stock_universe import bundled_plain_names
 from app.tagging import tag_text
-from tests.test_ima_documents import _headers
+from tests.test_ima_documents import _headers, _write_available_status
 
 
 def test_admin_ima_put_shares_service_config_lock(tmp_path, monkeypatch):
@@ -1113,3 +1114,150 @@ def test_admin_ima_discover_failure_keeps_previous_groups(tmp_path, monkeypatch)
     assert response.json()["discovery"]["status"] == "failed"
     assert "secret" not in response.text
     assert json.loads(db.get_setting(IMA_PURE_GROUPS_KEY)) == original
+
+
+def _remote_storage_client(tmp_path, monkeypatch, *, available=True, writable=True, **status_overrides):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir(exist_ok=True)
+    (archive_root / ".vpush-ima-root").touch()
+    status_path = tmp_path / "status.json"
+    _write_available_status(
+        status_path,
+        available=available,
+        writable=writable,
+        **status_overrides,
+    )
+    monkeypatch.setenv("IMA_ARCHIVE_ROOT", str(archive_root))
+    monkeypatch.setenv("IMA_STORAGE_STATUS_PATH", str(status_path))
+    client = TestClient(create_app(db_path=tmp_path / "ima-storage.sqlite"))
+    return client, archive_root, status_path
+
+
+def _seed_remote_document(client, archive_root, *, pdf_bytes=b"%PDF-1.7", txt="hello"):
+    store = client.app.state.ima_documents.store
+    admin_headers = _headers(client, "storage_admin", "STORADM1", admin=True)
+    group_id = client.get("/api/admin/ima-collector", headers=admin_headers).json()["config"]["groups"][0]["id"]
+    record = {
+        "media_id": "file_storage",
+        "name": "Report.pdf",
+        "day": "0827",
+        "group_id": group_id,
+        "size": len(pdf_bytes),
+    }
+    pdf = store.pdf_path(record)
+    txt_path = store.txt_path(record)
+    pdf.parent.mkdir(parents=True, exist_ok=True)
+    pdf.write_bytes(pdf_bytes)
+    txt_path.write_text(txt, encoding="utf-8")
+    relative_pdf = str(pdf.relative_to(store.archive_root))
+    relative_txt = str(txt_path.relative_to(store.archive_root))
+    store.save_manifest([record])
+    store.save_state(
+        {
+            store.state_key(record): {
+                "pdf": relative_pdf,
+                "txt": relative_txt,
+                "size": len(pdf_bytes),
+                "chars": len(txt),
+                "name": "Report.pdf",
+                "day": "0827",
+                "group_id": group_id,
+            }
+        }
+    )
+    return admin_headers, group_id, relative_pdf, relative_txt
+
+
+def test_admin_ima_collector_includes_storage(tmp_path, monkeypatch):
+    client, _, _ = _remote_storage_client(tmp_path, monkeypatch)
+    headers = _headers(client, "collector_storage", "COLSTOR1", admin=True)
+    payload = client.get("/api/admin/ima-collector", headers=headers).json()
+    assert "storage" in payload
+    assert payload["storage"]["status"] == "available"
+    assert payload["storage"]["available"] is True
+    assert "capacity_blocked" not in payload["storage"]
+
+
+def test_list_catalog_detail_ok_during_storage_outage(tmp_path, monkeypatch):
+    client, archive_root, status_path = _remote_storage_client(
+        tmp_path, monkeypatch, available=False, writable=False
+    )
+    admin_headers, group_id, _, _ = _seed_remote_document(client, archive_root)
+    store = client.app.state.ima_documents.store
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("document detail must not resolve or stat archive paths")
+
+    monkeypatch.setattr(store, "_state_path", boom)
+    monkeypatch.setattr(store, "authorized_archive_file", boom)
+
+    listed = client.get("/api/ima-documents", headers=admin_headers)
+    assert listed.status_code == 200
+    assert listed.json()["items"]
+    catalog_payload = client.get("/api/ima-documents/catalog", headers=admin_headers)
+    assert catalog_payload.status_code == 200
+    detail = client.get("/api/ima-documents/file_storage", headers=admin_headers)
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["has_pdf"] is True
+    assert body["has_txt"] is True
+    assert status_path.is_file()
+    assert group_id
+
+
+def test_pdf_txt_return_503_when_storage_unavailable(tmp_path, monkeypatch):
+    client, archive_root, _ = _remote_storage_client(
+        tmp_path, monkeypatch, available=False, writable=False
+    )
+    admin_headers, _, _, _ = _seed_remote_document(client, archive_root)
+    pdf = client.get("/api/ima-documents/file_storage/pdf", headers=admin_headers)
+    txt = client.get("/api/ima-documents/file_storage/text", headers=admin_headers)
+    assert pdf.status_code == 503
+    assert pdf.json()["detail"] == "知识库存储暂不可用"
+    assert txt.status_code == 503
+    assert txt.json()["detail"] == "知识库存储暂不可用"
+
+
+def test_pdf_range_request_returns_partial_content(tmp_path, monkeypatch):
+    client, archive_root, _ = _remote_storage_client(tmp_path, monkeypatch)
+    admin_headers, _, _, _ = _seed_remote_document(
+        client, archive_root, pdf_bytes=b"A" * 4096
+    )
+    resp = client.get(
+        "/api/ima-documents/file_storage/pdf",
+        headers={**admin_headers, "Range": "bytes=0-1023"},
+    )
+    assert resp.status_code == 206
+    assert resp.headers["content-range"] == "bytes 0-1023/4096"
+    assert len(resp.content) == 1024
+
+
+@pytest.mark.parametrize(
+    ("status_overrides", "expected_detail"),
+    [
+        ({"available": False, "writable": False}, "知识库存储暂不可用"),
+        (
+            {"checked_at": int(time.time()) - 10_000, "available": True, "writable": True},
+            "知识库存储状态已过期",
+        ),
+        ({"available": True, "writable": False, "capacity_blocked": False}, "知识库存储当前只读"),
+        (
+            {"available": True, "writable": True, "capacity_blocked": True},
+            "知识库存储空间已达限制",
+        ),
+    ],
+)
+def test_manual_sync_maps_blocked_storage_to_503(
+    tmp_path, monkeypatch, status_overrides, expected_detail
+):
+    client, archive_root, status_path = _remote_storage_client(tmp_path, monkeypatch)
+    _write_available_status(status_path, **status_overrides)
+    headers = _headers(client, "sync_block_admin", "SYNCBLOCK", admin=True)
+    db = client.app.state.db
+    db.set_setting("ima_pure_uid", "uid")
+    db.set_setting("ima_pure_refresh_token", "refresh")
+    assert archive_root.is_dir()
+    resp = client.post("/api/admin/ima-collector/sync", headers=headers)
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == expected_detail

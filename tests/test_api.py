@@ -3138,6 +3138,68 @@ def test_healthz():
     assert client.get("/healthz").json() == {"status": "ok"}
 
 
+def test_healthz_ok_when_ima_storage_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    archive_root = tmp_path / "archive"
+    status_path = tmp_path / "missing-status.json"
+    monkeypatch.setenv("IMA_ARCHIVE_ROOT", str(archive_root))
+    monkeypatch.setenv("IMA_STORAGE_STATUS_PATH", str(status_path))
+    client = TestClient(create_app(db_path=tmp_path / "healthz-storage.sqlite"))
+    assert client.get("/healthz").json() == {"status": "ok"}
+    resp = client.get("/healthz/ima-storage")
+    assert resp.status_code == 503
+    payload = resp.json()
+    assert set(payload) == {
+        "status",
+        "available",
+        "writable",
+        "checked_at",
+        "used_percent",
+        "inode_percent",
+        "monthly_tx_bytes",
+        "reason",
+    }
+    assert payload["available"] is False
+    assert "capacity_blocked" not in payload
+    assert "path" not in payload
+
+
+def test_healthz_ima_storage_available(tmp_path, monkeypatch):
+    import json
+    import time
+
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    (archive_root / ".vpush-ima-root").touch()
+    status_path = tmp_path / "status.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "checked_at": int(time.time()),
+                "available": True,
+                "writable": True,
+                "used_percent": 12,
+                "inode_percent": 3,
+                "monthly_tx_bytes": 99,
+                "capacity_blocked": False,
+                "reason": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("IMA_ARCHIVE_ROOT", str(archive_root))
+    monkeypatch.setenv("IMA_STORAGE_STATUS_PATH", str(status_path))
+    client = TestClient(create_app(db_path=tmp_path / "healthz-ok.sqlite"))
+    resp = client.get("/healthz/ima-storage")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "available"
+    assert payload["available"] is True
+    assert payload["writable"] is True
+    assert "capacity_blocked" not in payload
+
+
 def test_update_kol_duplicate_external_id_rejected():
     client = make_client()
     headers = auth_headers(client)

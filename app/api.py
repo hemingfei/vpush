@@ -2641,6 +2641,18 @@ def create_api_router(
                 raise HTTPException(status_code=404, detail="文档不存在") from exc
         return {"abstract_zh": zh}
 
+    def _ima_archive_file(document: dict, field: str):
+        if not ima_documents.store.archive_readable():
+            raise HTTPException(status_code=503, detail="知识库存储暂不可用")
+        key = ima_documents.store.state_key(
+            {
+                "media_id": document["media_id"],
+                "group_id": document.get("group_id") or "",
+            }
+        )
+        relative = (ima_documents.store.load_state().get(key) or {}).get(field)
+        return ima_documents.store.authorized_archive_file(relative)
+
     @router.get("/ima-documents/{media_id}/text")
     def get_ima_document_text(
         media_id: str,
@@ -2648,7 +2660,7 @@ def create_api_router(
         user: dict = Depends(get_current_user),
     ):
         document = _ima_document(user, media_id, group)
-        txt = document.get("txt")
+        txt = _ima_archive_file(document, "txt")
         if txt is None or not txt.is_file():
             raise HTTPException(status_code=404, detail="TXT 文件不存在")
         try:
@@ -2665,7 +2677,7 @@ def create_api_router(
         user: dict = Depends(get_current_user),
     ):
         document = _ima_document(user, media_id, group)
-        pdf = document.get("pdf")
+        pdf = _ima_archive_file(document, "pdf")
         if pdf is None or not pdf.is_file():
             raise HTTPException(status_code=404, detail="PDF 文件不存在")
         from urllib.parse import quote
@@ -2682,6 +2694,7 @@ def create_api_router(
         if ima_documents is None:
             return None
         payload = ima_documents.status()
+        payload["storage"] = ima_documents.storage_status.public()
         for group in payload.get("config", {}).get("groups", []):
             group["acl_usernames"] = db.ima_kb_acl_usernames(group["id"])
         return payload
@@ -2902,6 +2915,15 @@ def create_api_router(
         result = ima_documents.trigger()
         if result["status"] == "not_configured":
             raise HTTPException(status_code=400, detail="请先配置 IMA UID 和 Refresh Token")
+        storage_messages = {
+            "storage_unavailable": "知识库存储暂不可用",
+            "storage_stale": "知识库存储状态已过期",
+            "storage_readonly": "知识库存储当前只读",
+            "capacity_blocked": "知识库存储空间已达限制",
+        }
+        blocked_detail = storage_messages.get(result["status"])
+        if blocked_detail:
+            raise HTTPException(status_code=503, detail=blocked_detail)
         if result["status"] == "too_soon":
             raise HTTPException(status_code=429, detail="距离上次同步时间太短，请稍后再试")
         _audit(admin, "trigger_ima_collector", "", result["status"])
