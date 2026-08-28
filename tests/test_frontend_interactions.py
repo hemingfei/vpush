@@ -2625,6 +2625,15 @@ def test_ima_document_reader_backroute_uses_detail_group_when_url_has_none():
     assert reader.index("backRoute = imaDocumentsRoute(item.group_id, query, day, tag)") < reader.index("loadImaPdf")
 
 
+def test_ima_document_reader_error_actions_use_scoped_backroute():
+    """详情加载失败时，权限和普通错误都必须返回当前列表筛选上下文。"""
+    reader = _fn_body("renderImaDocument")
+    error = reader[reader.index("  } catch (err) {"):]
+    assert error.count('onclick="go(\'${escapeHtml(backRoute)}\')"') == 2
+    assert 'onclick="go(\'knowledge\')"' not in error
+    assert 'onclick="closeKnowledgeReader()"' not in error
+
+
 def test_ima_document_reader_omits_empty_source_metadata():
     """群组名称为空时不输出空的阅读页来源标记。"""
     reader = _fn_body("renderImaDocument")

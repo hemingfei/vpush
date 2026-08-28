@@ -1557,8 +1557,8 @@ async function renderImaDocument(seq, mediaId) {
     if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
     const denied = String(err.message || "").includes("知识库不存在");
     $("#kb-reader").innerHTML = denied
-      ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回知识库</button></div>`)
-      : emptyState(`文档加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="closeKnowledgeReader()">返回文档列表</button></div>`);
+      ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('${escapeHtml(backRoute)}')">回知识库</button></div>`)
+      : emptyState(`文档加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="go('${escapeHtml(backRoute)}')">返回文档列表</button></div>`);
   }
 }
 
