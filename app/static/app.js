@@ -50,6 +50,7 @@ const BOOKMARK_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stro
 const GEAR_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
 const DASHBOARD_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>`;
 const FOLDER_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+const BRAIN_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5a3 3 0 0 1 3 3c0 1.1-.5 2.1-1.3 2.8.8.7 1.3 1.7 1.3 2.8 0 2.2-1.8 4-4 4s-4-1.8-4-4c0-1.1.5-2.1 1.3-2.8A3 3 0 0 1 9 8a3 3 0 0 1 3-3z"/><path d="M9 9c-.7 0-1.3.6-1.3 1.3v.2c0 .4.2.8.5 1.1.3.3.3.7.3 1.1v.4c0 1.1.9 2 2 2s2-.9 2-2v-.4c0-.4 0-.8.3-1.1.3-.3.5-.7.5-1.1v-.2C16.3 9.6 15.7 9 15 9"/><path d="M7 8c-.7 0-1.3.6-1.3 1.3v.2c0 .4.2.8.5 1.1.3.3.3.7.3 1.1v.4c0 1.1.9 2 2 2s2-.9 2-2v-.4c0-.4 0-.8.3-1.1.3-.3.5-.7.5-1.1v-.2C11.3 8.6 10.7 8 10 8"/><path d="M5 7c-.7 0-1.3.6-1.3 1.3v.2c0 .4.2.8.5 1.1.3.3.3.7.3 1.1v.4c0 1.1.9 2 2 2s2-.9 2-2v-.4c0-.4 0-.8.3-1.1.3-.3.5-.7.5-1.1v-.2C8.3 7.6 7.7 7 7 7"/><path d="M3 6c-.7 0-1.3.6-1.3 1.3v.2c0 .4.2.8.5 1.1.3.3.3.7.3 1.1v.4c0 1.1.9 2 2 2s2-.9 2-2v-.4c0-.4 0-.8.3-1.1.3-.3.5-.7.5-1.1v-.2C6.3 6.6 5.7 6 5 6"/></svg>`;
 const USER_PLUS_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>`;
 const FILE_TEXT_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8M16 17H8"/></svg>`;
 const SEND_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg>`;
@@ -114,6 +115,10 @@ const state = {
   imaCatalogSubscribed: [],
   imaCatalogAvailable: [],
   pageBackRoute: "",
+  aiTasks: [],
+  aiTaskEditing: null,
+  aiTaskLogs: [],
+  aiTaskLogsTaskId: null,
 };
 
 const imaMountState = {
@@ -433,6 +438,7 @@ const NAV = [
         label: "内容管理", items: [
           { route: "admin/dashboard", icon: DASHBOARD_ICON, label: "全景概览" },
           { route: "admin/kols", icon: V_ICON, label: "大V管理" },
+          { route: "admin/ai-analysis", icon: BRAIN_ICON, label: "AI分析" },
           { route: "admin/vocab", icon: FOLDER_ICON, label: "标签分类" },
           { route: "admin/requests", icon: USER_PLUS_ICON, label: "添加审批" },
         ]
@@ -5182,7 +5188,7 @@ async function renderAdmin(tab, seq) {
         <div class="admin-sk-table-row"><div class="admin-sk-line"></div><div class="admin-sk-line"></div><div class="admin-sk-line"></div></div>
       </div>`).join("")}
     </div>`;
-  const loaders = { dashboard: loadAdminDashboard, stats: loadAdminStats, kols: loadAdminKols, requests: loadAdminRequests, codes: loadAdminCodes, vocab: loadAdminVocab, posts: loadAdminPosts, logs: loadAdminLogs, audit: loadAdminAudit, backup: loadAdminBackup, users: loadAdminUsers };
+    const loaders = { dashboard: loadAdminDashboard, stats: loadAdminStats, kols: loadAdminKols, "ai-analysis": loadAdminAiAnalysis, requests: loadAdminRequests, codes: loadAdminCodes, vocab: loadAdminVocab, posts: loadAdminPosts, logs: loadAdminLogs, audit: loadAdminAudit, backup: loadAdminBackup, users: loadAdminUsers };
   try {
     await loaders[tab]();
   } catch (err) {
@@ -10027,6 +10033,340 @@ window.addEventListener("hashchange", () => {
   migrateHashRoute();
   router();
 });
+
+// ---------- AI 分析任务管理 ----------
+async function loadAdminAiAnalysis() {
+  let tasks, defaultPrompt;
+  try {
+    [tasks, defaultPrompt] = await Promise.all([
+      api("/api/admin/ai-tasks"),
+      api("/api/admin/ai-tasks/default-prompt").catch(() => "")
+    ]);
+  } catch (err) {
+    if (!routeStillActive(_adminRenderSeq)) return;
+    $("#admin-body").innerHTML = emptyState("加载失败: " + err.message);
+    return;
+  }
+  state.aiTasks = tasks;
+  state.aiDefaultPrompt = defaultPrompt;
+  renderAdminAiAnalysis();
+}
+
+function renderAdminAiAnalysis() {
+  if (!routeStillActive(_adminRenderSeq)) return;
+  const body = $("#admin-body");
+  if (!body) return;
+  const tasks = state.aiTasks || [];
+  const enabledCount = tasks.filter(t => t.enabled).length;
+
+  body.innerHTML = `
+    <section class="section-panel">
+      <header class="section-head">
+        <div>
+          <h2 class="section-title">AI 分析任务</h2>
+          <p class="section-meta">${tasks.length} 个任务 · ${enabledCount} 个已启用</p>
+        </div>
+        <button class="btn-normal" onclick="openAiTaskModal()">${PLUS_ICON} 新建任务</button>
+      </header>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">任务</th>
+              <th scope="col">目标 KOL</th>
+              <th scope="col">调度</th>
+              <th scope="col">状态</th>
+              <th scope="col">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tasks.length ? tasks.map(task => {
+              const scheduleDays = task.schedule_day_of_week ? task.schedule_day_of_week.split(',').map(d => {
+                const days = ['日', '一', '二', '三', '四', '五', '六'];
+                return `周${days[Number(d)]}`;
+              }).join(', ') : '';
+              const statusBadge = task.last_run_status ? 
+                `<span class="${task.last_run_status === 'success' ? 'status-ok' : 'status-warn'}">${task.last_run_status === 'success' ? '成功' : '失败'}</span>` : 
+                '<span class="muted">未运行</span>';
+              return `
+                <tr>
+                  <td>
+                    <div>
+                      <strong>${escapeHtml(task.name)}</strong>
+                      ${task.description ? `<p class="muted">${escapeHtml(task.description)}</p>` : ''}
+                    </div>
+                  </td>
+                  <td>目标 KOL ID: ${task.target_kol_id}</td>
+                  <td>
+                    ${scheduleDays ? escapeHtml(scheduleDays) : ''} ${task.schedule_time ? escapeHtml(task.schedule_time) : ''}
+                  </td>
+                  <td>
+                    ${task.enabled ? '<span class="status-ok">已启用</span>' : '<span class="muted">已禁用</span>'}
+                    ${statusBadge}
+                    ${task.last_run_at ? `<p class="muted">上次: ${escapeHtml(fmtDbTime(task.last_run_at))}</p>` : ''}
+                  </td>
+                  <td>
+                    <button class="btn-sm" onclick="openAiTaskModal(${task.id})">编辑</button>
+                    <button class="btn-sm" onclick="runAiTask(${task.id})">立即运行</button>
+                    <button class="btn-sm" onclick="viewAiTaskLogs(${task.id})">日志</button>
+                    <button class="btn-sm danger" onclick="deleteAiTask(${task.id})">删除</button>
+                  </td>
+                </tr>
+              `;
+            }).join('') : `<tr><td colspan="5" class="muted">还没有任务。点击「新建任务」开始创建。</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function openAiTaskModal(taskId = null) {
+  const task = taskId ? (state.aiTasks || []).find(t => t.id === taskId) : null;
+  const isEdit = !!task;
+  
+  const daysOptions = ['日', '一', '二', '三', '四', '五', '六'].map((d, i) => 
+    `<label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+      <input type="checkbox" data-day="${i}" ${task && task.schedule_day_of_week && task.schedule_day_of_week.split(',').includes(String(i)) ? 'checked' : ''}>
+      周${d}
+    </label>`
+  ).join('');
+
+  const selectedKols = task ? (task.selected_kol_ids || []).join(', ') : '';
+
+  const mask = document.createElement("div");
+  mask.className = "modal-mask";
+  mask.innerHTML = `
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="ai-task-title">
+      <h3 id="ai-task-title">${isEdit ? '编辑任务' : '新建任务'}</h3>
+      
+      <div class="rc-generate" style="margin-top:16px;">
+        <label class="rc-field">
+          <span>任务名称 *</span>
+          <input id="ai-task-name" class="form-control" type="text" value="${task ? escapeHtml(task.name) : ''}" placeholder="例如：每日市场分析">
+        </label>
+
+        <label class="rc-field">
+          <span>描述</span>
+          <textarea id="ai-task-desc" class="form-control" rows="2" placeholder="可选的任务描述">${task ? escapeHtml(task.description || '') : ''}</textarea>
+        </label>
+
+        <label class="rc-field">
+          <span>目标 KOL ID *</span>
+          <input id="ai-task-target-kol" class="form-control" type="number" value="${task ? task.target_kol_id : ''}" placeholder="分析结果将发布到此 KOL">
+        </label>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <label class="rc-field">
+            <span>时间范围开始: 天数偏移 *</span>
+            <input id="ai-task-start-offset" class="form-control" type="number" value="${task ? task.time_range_start_days_offset : '-1'}" placeholder="-1 表示昨天">
+          </label>
+          <label class="rc-field">
+            <span>时间范围开始: 时间 *</span>
+            <input id="ai-task-start-time" class="form-control" type="time" value="${task ? task.time_range_start_time : '21:00'}">
+          </label>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <label class="rc-field">
+            <span>时间范围结束: 天数偏移 *</span>
+            <input id="ai-task-end-offset" class="form-control" type="number" value="${task ? task.time_range_end_days_offset : '0'}" placeholder="0 表示今天">
+          </label>
+          <label class="rc-field">
+            <span>时间范围结束: 时间 *</span>
+            <input id="ai-task-end-time" class="form-control" type="time" value="${task ? task.time_range_end_time : '08:00'}">
+          </label>
+        </div>
+
+        <label class="rc-field">
+          <span>分析 KOL ID (逗号分隔) *</span>
+          <textarea id="ai-task-kols" class="form-control" rows="2" placeholder="例如：1, 3, 5">${escapeHtml(selectedKols)}</textarea>
+        </label>
+
+        <label class="rc-field">
+          <span>Prompt 模板</span>
+          <textarea id="ai-task-prompt" class="form-control" rows="8" placeholder="默认模板将被使用">${task ? escapeHtml(task.prompt_template || '') : ''}</textarea>
+          <button type="button" class="btn-sm" onclick="restoreDefaultPrompt()" style="margin-top:8px;">恢复默认模板</button>
+        </label>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <label class="rc-field">
+            <span>调度时间 *</span>
+            <input id="ai-task-schedule-time" class="form-control" type="time" value="${task ? task.schedule_time : '09:00'}">
+          </label>
+        </div>
+
+        <label class="rc-field">
+          <span>调度星期</span>
+          <div style="display:flex;flex-wrap:wrap;gap:16px;">
+            ${daysOptions}
+          </div>
+        </label>
+
+        ${isEdit ? `
+          <label class="rc-field">
+            <span>状态</span>
+            <select id="ai-task-enabled" class="form-control">
+              <option value="1" ${task.enabled ? 'selected' : ''}>已启用</option>
+              <option value="0" ${!task.enabled ? 'selected' : ''}>已禁用</option>
+            </select>
+          </label>
+        ` : ''}
+      </div>
+
+      <div class="toolbar" style="margin-top:24px;justify-content:flex-end;">
+        <button type="button" class="btn-outline" onclick="closeAdminModal()">取消</button>
+        <button type="button" class="btn-normal" onclick="saveAiTask(${taskId || 'null'})">保存</button>
+      </div>
+    </div>
+  `;
+
+  closeAdminModal();
+  document.body.appendChild(mask);
+}
+
+function restoreDefaultPrompt() {
+  const input = document.getElementById("ai-task-prompt");
+  if (input && state.aiDefaultPrompt) {
+    input.value = state.aiDefaultPrompt;
+  }
+}
+
+async function saveAiTask(taskId = null) {
+  const name = document.getElementById("ai-task-name").value.trim();
+  const desc = document.getElementById("ai-task-desc").value.trim();
+  const targetKolId = Number(document.getElementById("ai-task-target-kol").value);
+  const startOffset = Number(document.getElementById("ai-task-start-offset").value);
+  const startTime = document.getElementById("ai-task-start-time").value;
+  const endOffset = Number(document.getElementById("ai-task-end-offset").value);
+  const endTime = document.getElementById("ai-task-end-time").value;
+  const kolIdsText = document.getElementById("ai-task-kols").value.trim();
+  const prompt = document.getElementById("ai-task-prompt").value.trim();
+  const scheduleTime = document.getElementById("ai-task-schedule-time").value;
+  const enabledEl = document.getElementById("ai-task-enabled");
+  const enabled = enabledEl ? enabledEl.value === "1" : true;
+
+  const kolIds = kolIdsText.split(',').map(s => s.trim()).filter(Boolean).map(Number);
+
+  if (!name || !targetKolId || !startTime || !endTime || !kolIds.length || !scheduleTime) {
+    flash("请填写所有必填项", "error");
+    return;
+  }
+
+  const scheduleDays = Array.from(document.querySelectorAll('input[data-day]'))
+    .filter(el => el.checked)
+    .map(el => el.dataset.day)
+    .join(',');
+
+  if (!scheduleDays) {
+    flash("请至少选择一个调度星期", "error");
+    return;
+  }
+
+  try {
+    const body = {
+      name,
+      description: desc || null,
+      target_kol_id: targetKolId,
+      time_range_start_days_offset: startOffset,
+      time_range_start_time: startTime,
+      time_range_end_days_offset: endOffset,
+      time_range_end_time: endTime,
+      selected_kol_ids: kolIds,
+      prompt_template: prompt || null,
+      schedule_day_of_week: scheduleDays,
+      schedule_time: scheduleTime
+    };
+
+    if (taskId) {
+      body.enabled = enabled;
+      await api(`/api/admin/ai-tasks/${taskId}`, {
+        method: "PUT",
+        body: JSON.stringify(body)
+      });
+      flash("任务已更新");
+    } else {
+      await api("/api/admin/ai-tasks", {
+        method: "POST",
+        body: JSON.stringify(body)
+      });
+      flash("任务已创建");
+    }
+
+    closeAdminModal();
+    await loadAdminAiAnalysis();
+  } catch (err) {
+    flash(err.message, "error");
+  }
+}
+
+async function runAiTask(taskId) {
+  if (!confirm("确定要立即运行此任务吗？")) return;
+  try {
+    await api(`/api/admin/ai-tasks/${taskId}/run`, { method: "POST" });
+    flash("任务已开始运行，请稍后查看日志");
+  } catch (err) {
+    flash(err.message, "error");
+  }
+}
+
+async function deleteAiTask(taskId) {
+  if (!confirm("确定要删除此任务吗？此操作不可恢复。")) return;
+  try {
+    await api(`/api/admin/ai-tasks/${taskId}`, { method: "DELETE" });
+    flash("任务已删除");
+    await loadAdminAiAnalysis();
+  } catch (err) {
+    flash(err.message, "error");
+  }
+}
+
+async function viewAiTaskLogs(taskId) {
+  try {
+    const logs = await api(`/api/admin/ai-tasks/${taskId}/logs`);
+    state.aiTaskLogs = logs;
+    state.aiTaskLogsTaskId = taskId;
+    
+    const mask = document.createElement("div");
+    mask.className = "modal-mask";
+    
+    const logsHtml = logs.length ? logs.map(log => `
+      <div style="padding:12px;border-bottom:1px solid var(--border-color);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <strong style="${log.status === 'success' ? 'color:var(--success-color)' : 'color:var(--warning-color)'}">
+            ${log.status === 'success' ? '成功' : log.status === 'failed' ? '失败' : log.status}
+          </strong>
+          <span class="muted">${escapeHtml(fmtDbTime(log.started_at))}</span>
+        </div>
+        ${log.message ? `<p class="muted">${escapeHtml(log.message)}</p>` : ''}
+        ${log.prompt_tokens != null || log.completion_tokens != null || log.total_tokens != null ? `
+          <p style="margin-top:8px;font-size:12px;color:var(--muted-color);">
+            Token 消耗: ${log.prompt_tokens || 0} (提示) + ${log.completion_tokens || 0} (完成) = ${log.total_tokens || 0}
+          </p>
+        ` : ''}
+        ${log.output_post_id ? `<p style="margin-top:4px;font-size:12px;"><a href="/kol/${log.output_post_id}" target="_blank">查看输出帖子</a></p>` : ''}
+      </div>
+    `).join('') : '<p class="muted" style="padding:16px;">暂无运行日志</p>';
+
+    mask.innerHTML = `
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="ai-logs-title" style="max-width:600px;">
+        <h3 id="ai-logs-title">任务运行日志</h3>
+        <div style="max-height:400px;overflow-y:auto;margin-top:16px;border:1px solid var(--border-color);border-radius:8px;">
+          ${logsHtml}
+        </div>
+        <div class="toolbar" style="margin-top:16px;justify-content:flex-end;">
+          <button type="button" class="btn-outline" onclick="closeAdminModal()">关闭</button>
+        </div>
+      </div>
+    `;
+    
+    closeAdminModal();
+    document.body.appendChild(mask);
+  } catch (err) {
+    flash(err.message, "error");
+  }
+}
 
 // PWA：注册 Service Worker（HTTP 或私有模式下失败静默，不影响功能）
 if ("serviceWorker" in navigator) {

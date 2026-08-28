@@ -117,6 +117,7 @@ from .proxy import (
     public_proxy,
 )
 from .weibo_qr import create_qr, poll_qr
+from . import ai_analysis
 
 # 关键词提醒规则上限（每个用户）与单关键词长度上限
 KEYWORDS_MAX_COUNT = 20
@@ -595,6 +596,35 @@ class BackupWebDAVIn(BaseModel):
     keep: int | None = None
 
 
+class AiTaskIn(BaseModel):
+    name: str
+    description: str | None = None
+    target_kol_id: int
+    time_range_start_days_offset: int
+    time_range_start_time: str
+    time_range_end_days_offset: int
+    time_range_end_time: str
+    selected_kol_ids: list[int]
+    prompt_template: str
+    schedule_day_of_week: str
+    schedule_time: str
+
+
+class AiTaskUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    enabled: bool | None = None
+    target_kol_id: int | None = None
+    time_range_start_days_offset: int | None = None
+    time_range_start_time: str | None = None
+    time_range_end_days_offset: int | None = None
+    time_range_end_time: str | None = None
+    selected_kol_ids: list[int] | None = None
+    prompt_template: str | None = None
+    schedule_day_of_week: str | None = None
+    schedule_time: str | None = None
+
+
 class SubscriptionIn(BaseModel):
     kol_id: int
     type: str = "post"
@@ -625,6 +655,35 @@ class UserUpdate(BaseModel):
 class TestPushIn(BaseModel):
     user_id: int
     message: str = "这是一条测试推送 ✅"
+
+
+class AiTaskIn(BaseModel):
+    name: str
+    description: str | None = None
+    target_kol_id: int
+    time_range_start_days_offset: int
+    time_range_start_time: str
+    time_range_end_days_offset: int
+    time_range_end_time: str
+    selected_kol_ids: list[int]
+    prompt_template: str
+    schedule_day_of_week: str
+    schedule_time: str
+
+
+class AiTaskUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    enabled: bool | None = None
+    target_kol_id: int | None = None
+    time_range_start_days_offset: int | None = None
+    time_range_start_time: str | None = None
+    time_range_end_days_offset: int | None = None
+    time_range_end_time: str | None = None
+    selected_kol_ids: list[int] | None = None
+    prompt_template: str | None = None
+    schedule_day_of_week: str | None = None
+    schedule_time: str | None = None
 
 
 _SECRET_MASK_GLUE = "……"
@@ -3564,6 +3623,135 @@ def create_api_router(
         except Exception:
             return {"connected": False, "last_message_at": None}
 
+    # ---- AI 分析任务管理 ----
+    @router.get("/admin/ai-analysis/tasks", dependencies=[Depends(require_admin)])
+    def list_ai_tasks(include_disabled: bool = True):
+        """列出所有 AI 分析任务。"""
+        return {"tasks": db.list_ai_tasks(include_disabled=include_disabled)}
+
+    @router.post("/admin/ai-analysis/tasks", dependencies=[Depends(require_admin)])
+    def create_ai_task(body: AiTaskIn, admin: dict = Depends(require_admin)):
+        """创建 AI 分析任务。"""
+        # 验证目标 KOL 存在
+        target_kol = db.get_kol(body.target_kol_id)
+        if not target_kol:
+            raise HTTPException(status_code=400, detail="目标 KOL 不存在")
+        
+        # 验证选中的 KOL 都存在
+        for kol_id in body.selected_kol_ids:
+            if not db.get_kol(kol_id):
+                raise HTTPException(status_code=400, detail=f"选中的 KOL {kol_id} 不存在")
+        
+        # 验证时间格式
+        for time_str in [body.time_range_start_time, body.time_range_end_time, body.schedule_time]:
+            if not re.match(r"^\d{1,2}:\d{2}$", time_str):
+                raise HTTPException(status_code=400, detail=f"时间格式错误: {time_str}，应为 HH:MM")
+        
+        task_id = db.create_ai_task(
+            name=body.name,
+            description=body.description,
+            target_kol_id=body.target_kol_id,
+            time_range_start_days_offset=body.time_range_start_days_offset,
+            time_range_start_time=body.time_range_start_time,
+            time_range_end_days_offset=body.time_range_end_days_offset,
+            time_range_end_time=body.time_range_end_time,
+            selected_kol_ids=body.selected_kol_ids,
+            prompt_template=body.prompt_template,
+            schedule_day_of_week=body.schedule_day_of_week,
+            schedule_time=body.schedule_time
+        )
+        _audit(admin, "create_ai_task", str(task_id), body.name)
+        return {"id": task_id}
+
+    @router.get("/admin/ai-analysis/tasks/{task_id}", dependencies=[Depends(require_admin)])
+    def get_ai_task(task_id: int):
+        """获取单个 AI 分析任务。"""
+        task = db.get_ai_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        return task
+
+    @router.put("/admin/ai-analysis/tasks/{task_id}", dependencies=[Depends(require_admin)])
+    def update_ai_task(task_id: int, body: AiTaskUpdate, admin: dict = Depends(require_admin)):
+        """更新 AI 分析任务。"""
+        existing = db.get_ai_task(task_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        
+        update_kwargs = {}
+        for field in body.model_fields_set:
+            update_kwargs[field] = getattr(body, field)
+        
+        # 验证如果更新了目标 KOL
+        if "target_kol_id" in update_kwargs:
+            target_kol = db.get_kol(update_kwargs["target_kol_id"])
+            if not target_kol:
+                raise HTTPException(status_code=400, detail="目标 KOL 不存在")
+        
+        # 验证如果更新了选中的 KOL
+        if "selected_kol_ids" in update_kwargs:
+            for kol_id in update_kwargs["selected_kol_ids"]:
+                if not db.get_kol(kol_id):
+                    raise HTTPException(status_code=400, detail=f"选中的 KOL {kol_id} 不存在")
+        
+        db.update_ai_task(task_id, **update_kwargs)
+        _audit(admin, "update_ai_task", str(task_id), f"fields={', '.join(body.model_fields_set)}")
+        return {"ok": True}
+
+    @router.delete("/admin/ai-analysis/tasks/{task_id}", dependencies=[Depends(require_admin)])
+    def delete_ai_task(task_id: int, admin: dict = Depends(require_admin)):
+        """删除 AI 分析任务。"""
+        existing = db.get_ai_task(task_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        db.delete_ai_task(task_id)
+        _audit(admin, "delete_ai_task", str(task_id), existing["name"])
+        return {"ok": True}
+
+    @router.post("/admin/ai-analysis/tasks/{task_id}/enable", dependencies=[Depends(require_admin)])
+    def enable_ai_task(task_id: int, admin: dict = Depends(require_admin)):
+        """启用 AI 分析任务。"""
+        existing = db.get_ai_task(task_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        db.update_ai_task(task_id, enabled=True)
+        _audit(admin, "enable_ai_task", str(task_id), existing["name"])
+        return {"ok": True}
+
+    @router.post("/admin/ai-analysis/tasks/{task_id}/disable", dependencies=[Depends(require_admin)])
+    def disable_ai_task(task_id: int, admin: dict = Depends(require_admin)):
+        """禁用 AI 分析任务。"""
+        existing = db.get_ai_task(task_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        db.update_ai_task(task_id, enabled=False)
+        _audit(admin, "disable_ai_task", str(task_id), existing["name"])
+        return {"ok": True}
+
+    @router.post("/admin/ai-analysis/tasks/{task_id}/run", dependencies=[Depends(require_admin)])
+    async def run_ai_task(task_id: int, admin: dict = Depends(require_admin)):
+        """手动触发 AI 分析任务。"""
+        existing = db.get_ai_task(task_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        result = await ai_analysis.run_analysis_task(task_id, db)
+        _audit(admin, "run_ai_task", str(task_id), f"success={result['success']}")
+        return result
+
+    @router.get("/admin/ai-analysis/tasks/{task_id}/logs", dependencies=[Depends(require_admin)])
+    def get_ai_task_logs(task_id: int, limit: int = 50):
+        """获取 AI 分析任务的执行日志。"""
+        existing = db.get_ai_task(task_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        logs = db.get_ai_logs_for_task(task_id, limit=limit)
+        return {"logs": logs}
+
+    @router.get("/admin/ai-analysis/default-prompt", dependencies=[Depends(require_admin)])
+    def get_default_prompt():
+        """获取默认提示词模板。"""
+        return {"prompt": ai_analysis.DEFAULT_PROMPT_TEMPLATE}
+
     @router.get("/admin/system-logs", dependencies=[Depends(require_admin)])
     def list_system_logs(
         limit: int = 200,
@@ -4228,6 +4416,103 @@ def create_api_router(
             _audit(admin, "batch_delete_users", str(count), f"ids={body.ids[:20]} skipped={skipped}")
             return {"ok": True, "count": count, "skipped": skipped}
         raise HTTPException(status_code=400, detail=f"不支持的操作: {action}")
+
+    # ---- AI 分析任务管理 ----
+    @router.get("/admin/ai-tasks", dependencies=[Depends(require_admin)])
+    def list_ai_tasks():
+        tasks = db.list_ai_tasks()
+        return {"tasks": tasks}
+
+    @router.get("/admin/ai-tasks/default-prompt", dependencies=[Depends(require_admin)])
+    def get_default_prompt():
+        return {"prompt": ai_analysis.DEFAULT_PROMPT_TEMPLATE}
+
+    @router.post("/admin/ai-tasks", dependencies=[Depends(require_admin)])
+    def create_ai_task(body: AiTaskIn, admin: dict = Depends(require_admin)):
+        target_kol = db.get_kol(body.target_kol_id)
+        if not target_kol:
+            raise HTTPException(status_code=404, detail="目标 KOL 不存在")
+        
+        for kol_id in body.selected_kol_ids:
+            kol = db.get_kol(kol_id)
+            if not kol:
+                raise HTTPException(status_code=404, detail=f"所选 KOL {kol_id} 不存在")
+        
+        task_id = db.create_ai_task(
+            name=body.name,
+            description=body.description,
+            target_kol_id=body.target_kol_id,
+            time_range_start_days_offset=body.time_range_start_days_offset,
+            time_range_start_time=body.time_range_start_time,
+            time_range_end_days_offset=body.time_range_end_days_offset,
+            time_range_end_time=body.time_range_end_time,
+            selected_kol_ids=body.selected_kol_ids,
+            prompt_template=body.prompt_template,
+            schedule_day_of_week=body.schedule_day_of_week,
+            schedule_time=body.schedule_time,
+        )
+        _audit(admin, "create_ai_task", str(task_id), body.name)
+        task = db.get_ai_task(task_id)
+        return {"task": task, "ok": True}
+
+    @router.get("/admin/ai-tasks/{task_id}", dependencies=[Depends(require_admin)])
+    def get_ai_task(task_id: int):
+        task = db.get_ai_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="AI 分析任务不存在")
+        return {"task": task}
+
+    @router.put("/admin/ai-tasks/{task_id}", dependencies=[Depends(require_admin)])
+    def update_ai_task(task_id: int, body: AiTaskUpdate, admin: dict = Depends(require_admin)):
+        task = db.get_ai_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="AI 分析任务不存在")
+        
+        if body.target_kol_id is not None:
+            target_kol = db.get_kol(body.target_kol_id)
+            if not target_kol:
+                raise HTTPException(status_code=404, detail="目标 KOL 不存在")
+        
+        if body.selected_kol_ids is not None:
+            for kol_id in body.selected_kol_ids:
+                kol = db.get_kol(kol_id)
+                if not kol:
+                    raise HTTPException(status_code=404, detail=f"所选 KOL {kol_id} 不存在")
+        
+        db.update_ai_task(task_id, **body.dict(exclude_none=True))
+        _audit(admin, "update_ai_task", str(task_id), task["name"])
+        task = db.get_ai_task(task_id)
+        return {"task": task, "ok": True}
+
+    @router.post("/admin/ai-tasks/{task_id}/run", dependencies=[Depends(require_admin)])
+    def run_ai_task(task_id: int, background_tasks: BackgroundTasks, admin: dict = Depends(require_admin)):
+        task = db.get_ai_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="AI 分析任务不存在")
+        
+        def run_task():
+            ai_analysis.run_analysis_task(task_id, db)
+        
+        background_tasks.add_task(run_task)
+        _audit(admin, "run_ai_task", str(task_id), task["name"])
+        return {"ok": True, "message": "分析任务已开始运行"}
+
+    @router.delete("/admin/ai-tasks/{task_id}", dependencies=[Depends(require_admin)])
+    def delete_ai_task(task_id: int, admin: dict = Depends(require_admin)):
+        task = db.get_ai_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="AI 分析任务不存在")
+        db.delete_ai_task(task_id)
+        _audit(admin, "delete_ai_task", str(task_id), task["name"])
+        return {"ok": True}
+
+    @router.get("/admin/ai-tasks/{task_id}/logs", dependencies=[Depends(require_admin)])
+    def get_ai_task_logs(task_id: int, limit: int = 50):
+        task = db.get_ai_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="AI 分析任务不存在")
+        logs = db.get_ai_logs_for_task(task_id, limit=limit)
+        return {"logs": logs, "task": task}
 
     @router.get("/stats", dependencies=[Depends(require_admin)])
     def stats():

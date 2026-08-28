@@ -17,6 +17,12 @@ from datetime import datetime
 from .backup import run_scheduled
 from .channels import channel_bound, channel_enabled
 from .db import _UNSET, ALLOWED_PLATFORMS, DB, days_until_purge, user_plain_secret
+from . import ai_analysis
+
+# AI分析任务并发控制
+_ai_task_semaphore = None
+_ai_task_max_concurrent = 3  # 最多同时3个任务
+_ai_task_running = set()  # 正在运行的任务ID
 from .logging_setup import redact_secrets
 from .fetchers.base import (
     PLATFORM_LABELS,
@@ -2090,6 +2096,50 @@ class Scheduler:
                     )
                 except Exception:  # noqa: BLE001
                     logger.exception("备份失败告警异常")
+
+            # --- AI分析任务检查 ---
+            try:
+                from datetime import timezone
+                now = datetime.now(timezone.utc)
+                now_str = now.isoformat()
+                due_tasks = self.db.get_due_ai_tasks(now_str)
+                for task in due_tasks:
+                    task_id = task["id"]
+                    # 检查是否已在运行
+                    if task_id in _ai_task_running:
+                        continue
+                    # 初始化信号量（懒加载）
+                    global _ai_task_semaphore
+                    if _ai_task_semaphore is None:
+                        _ai_task_semaphore = asyncio.Semaphore(_ai_task_max_concurrent)
+
+                    # 异步运行任务
+                    async def run_task_wrapper(tid):
+                        if tid in _ai_task_running:
+                            return
+                        _ai_task_running.add(tid)
+                        try:
+                            async with _ai_task_semaphore:
+                                await asyncio.to_thread(ai_analysis.run_analysis_task, tid, self.db)
+                        finally:
+                            _ai_task_running.discard(tid)
+
+                    # 在事件循环中运行
+                    asyncio.create_task(run_task_wrapper(task_id))
+            except Exception:  # noqa: BLE001
+                logger.exception("AI分析任务检查异常")
+
+            # --- 清理旧日志（每小时一次） ---
+            try:
+                if not hasattr(self.db, "_last_ai_log_cleanup") or \
+                   (time.time() - getattr(self.db, "_last_ai_log_cleanup", 0)) > 3600:
+                    clean_days = int(self.db.get_setting("ai_log_retention_days") or "30")
+                    removed = self.db.delete_old_ai_logs(clean_days)
+                    if removed > 0:
+                        logger.info("清理了 %d 条旧AI分析日志", removed)
+                    self.db._last_ai_log_cleanup = time.time()
+            except Exception:  # noqa: BLE001
+                pass
             # 平台级健康阈值检查（每 10 分钟一次，轻量 SQL）：成功率过低/整体静默告警
             if now_mono - self._last_health_check >= SOURCE_HEALTH_CHECK_INTERVAL:
                 self._last_health_check = now_mono
