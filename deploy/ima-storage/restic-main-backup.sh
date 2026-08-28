@@ -26,7 +26,19 @@ if [ "$OWNER_GROUP" != "root:root" ] || { [ "$MODE" != "600" ] && [ "$MODE" != "
 fi
 
 # Online SQLite backup first; never copy an open dav.db directly.
-python3 /opt/vpush/src/scripts/backup.py \
+BACKUP_SCRIPT=""
+if [ -n "${BACKUP_PY:-}" ] && [ -f "$BACKUP_PY" ]; then
+  BACKUP_SCRIPT="$BACKUP_PY"
+elif [ -f /opt/vpush/scripts/backup.py ]; then
+  BACKUP_SCRIPT=/opt/vpush/scripts/backup.py
+elif [ -f /opt/vpush/src/scripts/backup.py ]; then
+  BACKUP_SCRIPT=/opt/vpush/src/scripts/backup.py
+else
+  echo "backup.py not found (set BACKUP_PY or install under /opt/vpush)" >&2
+  exit 1
+fi
+
+python3 "$BACKUP_SCRIPT" \
   /opt/vpush/data/dav.db /opt/vpush/data/backups 30
 
 PATHS=(

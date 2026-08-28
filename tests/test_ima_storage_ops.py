@@ -39,7 +39,8 @@ TIMERS = [
 ]
 
 SECRET_PATTERNS = [
-    re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
+    # Allow loopback used by in-container health probes; still catch real endpoints.
+    re.compile(r"\b(?!127\.0\.0\.1\b)(?:\d{1,3}\.){3}\d{1,3}\b"),
     re.compile(r"BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY"),
     re.compile(r"(?i)password\s*="),
     re.compile(r"(?i)secret[_-]?access[_-]?key\s*="),
@@ -132,6 +133,10 @@ def test_archive_backup_uses_low_priority_and_upload_limit():
 def test_main_backup_uses_online_sqlite_helper_and_fails_closed_on_env_mode():
     text = _read("restic-main-backup.sh")
     assert "scripts/backup.py" in text
+    assert "BACKUP_PY" in text
+    assert "/opt/vpush/scripts/backup.py" in text
+    assert "/opt/vpush/src/scripts/backup.py" in text
+    assert "backup.py not found" in text
     assert "/opt/vpush/data/dav.db" in text
     assert "--tag ima-control" in text
     assert MAIN_ENV in text
@@ -198,7 +203,13 @@ def test_main_health_logs_one_transition_event():
     assert "logger -p daemon.warning" in text
     assert "main-health-last" in text
     assert "/run/vpush-ima-placeholder" in text
-    assert "docker compose up -d --no-deps --force-recreate vpush" in text
+    assert "docker compose -f \"$COMPOSE_FILE\" up -d --no-deps --force-recreate vpush" in text
+    assert "COMPOSE_FILE" in text
+    assert "/opt/vpush/docker-compose.prod.yml" in text
+    assert "/opt/vpush/docker-compose.yml" in text
+    assert "urllib.request" in text
+    assert "127.0.0.1:8000/healthz/ima-storage" in text
+    assert "wget" not in text
     assert "mount " in text
     assert ".vpush-ima-root" in text
     assert "nc -z" in text or "nc -z" in text.replace('"', "")

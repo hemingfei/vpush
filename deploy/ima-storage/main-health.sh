@@ -16,6 +16,17 @@ fi
 : "${STATUS_OUTPUT:?STATUS_OUTPUT required}"
 : "${COMPOSE_DIR:?COMPOSE_DIR required}"
 
+if [ -z "${COMPOSE_FILE:-}" ]; then
+  if [ -f /opt/vpush/docker-compose.prod.yml ]; then
+    COMPOSE_FILE=/opt/vpush/docker-compose.prod.yml
+  elif [ -f /opt/vpush/docker-compose.yml ]; then
+    COMPOSE_FILE=/opt/vpush/docker-compose.yml
+  else
+    echo "no docker compose file found under /opt/vpush (set COMPOSE_FILE)" >&2
+    exit 1
+  fi
+fi
+
 STATE_FILE=/var/lib/vpush-ima/main-health-last
 PLACEHOLDER=/run/vpush-ima-placeholder
 REMOTE_MARKER="${ARCHIVE_MOUNT}/.vpush-ima-root"
@@ -55,12 +66,14 @@ nfs_port_ok() {
 }
 
 container_running() {
-  docker compose -f "${COMPOSE_DIR}/docker-compose.yml" ps --status running vpush 2>/dev/null | grep -q vpush
+  docker compose -f "$COMPOSE_FILE" ps --status running vpush 2>/dev/null | grep -q vpush
 }
 
 healthz_ok() {
-  docker compose -f "${COMPOSE_DIR}/docker-compose.yml" exec -T vpush \
-    wget -q -O- http://localhost:8000/healthz/ima-storage >/dev/null 2>&1
+  # python:3.12-slim image probe; mirror Dockerfile HEALTHCHECK style.
+  docker compose -f "$COMPOSE_FILE" exec -T vpush \
+    python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz/ima-storage')" \
+    >/dev/null 2>&1
 }
 
 maybe_recover_mount() {
@@ -75,7 +88,7 @@ maybe_recover_mount() {
     if [ -f "$PLACEHOLDER" ]; then
       (
         cd "$COMPOSE_DIR"
-        docker compose up -d --no-deps --force-recreate vpush
+        docker compose -f "$COMPOSE_FILE" up -d --no-deps --force-recreate vpush
       ) || return 1
       if healthz_ok; then
         rm -f "$PLACEHOLDER"
