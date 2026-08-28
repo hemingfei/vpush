@@ -3897,9 +3897,10 @@ function settingsTargetBound(user) {
   return !!(user && (user.telegram_chat_id || feishuChannelBound(user)));
 }
 
-async function reloadSettings() {
+async function reloadSettings(routeSeq) {
+  if (!routeStillActive(routeSeq)) return;
   stopSettingsPoll();
-  await renderSettings(routeRenderSeq);
+  await renderSettings(routeSeq);
 }
 
 function feishuChannelBound(user) {
@@ -4898,25 +4899,39 @@ async function savePushChannels() {
 }
 
 async function saveNotify() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   try {
     await api("/api/me", {
       method: "PUT",
       body: JSON.stringify({ notify_enabled: $("#set-notify").value === "1" }),
     });
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash("已保存");
   } catch (err) {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(err.message, "error");
   }
 }
 
 async function saveDailyReport() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   try {
     await api("/api/me", {
       method: "PUT",
       body: JSON.stringify({ daily_report_enabled: $("#set-daily").value === "1" }),
     });
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash("已保存");
   } catch (err) {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(err.message, "error");
   }
 }
@@ -5021,21 +5036,31 @@ async function bindChannel(channel) {
 }
 
 async function saveCustomTgBot() {
-  const token = ($("#set-custom-tg").value || "").trim();
-  if (!token) {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
+  const botToken = ($("#set-custom-tg").value || "").trim();
+  if (!botToken) {
     flash("请先粘贴你的 bot token", "error");
     return;
   }
   try {
-    await api("/api/me", { method: "PUT", body: JSON.stringify({ telegram_bot_token: token }) });
+    await api("/api/me", { method: "PUT", body: JSON.stringify({ telegram_bot_token: botToken }) });
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash("自建机器人已绑定");
-    await reloadSettings();
+    await reloadSettings(routeSeq);
   } catch (err) {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(err.message, "error");
   }
 }
 
 async function unbindChannel(channel) {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   const label = channel === "telegram_chat_id" ? "Telegram"
     : channel === "telegram_bot_token" ? "Telegram（自建机器人）"
     : channel === "feishu_personal" ? "飞书个人机器人"
@@ -5047,8 +5072,10 @@ async function unbindChannel(channel) {
       stopFeishuPersonalPoll();
       fsPersonalState.sessionId = "";
       await api("/api/me/feishu-personal", { method: "DELETE" });
+      if (!routeStillActive(routeSeq) || token !== state.token
+        || sessionGeneration !== imaMountState.sessionGeneration) return;
       flash(`已解绑 ${label}`);
-      await reloadSettings();
+      await reloadSettings(routeSeq);
       return;
     }
     const body = channel === "feishu"
@@ -5061,14 +5088,21 @@ async function unbindChannel(channel) {
           ? { telegram_bot_token: "", telegram_chat_id: "" }
         : { telegram_chat_id: "" };
     await api("/api/me", { method: "PUT", body: JSON.stringify(body) });
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(`已解绑 ${label}`);
-    await reloadSettings();
+    await reloadSettings(routeSeq);
   } catch (err) {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(err.message, "error");
   }
 }
 
 async function saveWecomWebhook() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   const webhook = ($("#set-wecom-webhook").value || "").trim();
   if (webhook && !/^https:\/\/qyapi\.weixin\.qq\.com\/cgi-bin\/webhook\/send\?key=/.test(webhook)) {
     flash("webhook 地址无效，应为 https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=... 格式", "error");
@@ -5079,23 +5113,34 @@ async function saveWecomWebhook() {
       method: "PUT",
       body: JSON.stringify({ wecom_webhook: webhook }),
     });
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(webhook ? "企业微信已绑定" : "企业微信已解绑");
-    await reloadSettings();
+    await reloadSettings(routeSeq);
   } catch (err) {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(err.message, "error");
   }
 }
 
 async function saveBarkKey() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   const key = ($("#set-bark-key").value || "").trim();
   try {
     await api("/api/me", {
       method: "PUT",
       body: JSON.stringify({ bark_key: key }),
     });
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(key ? "Bark 已绑定" : "Bark 已解绑");
-    await reloadSettings();
+    await reloadSettings(routeSeq);
   } catch (err) {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(err.message, "error");
   }
 }
@@ -5114,6 +5159,9 @@ function urlBase64ToUint8Array(b64) {
 }
 
 async function enableWebPush() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   if (!webPushSupported()) {
     flash("当前环境不支持浏览器通知，请用 Chrome 或 Edge，并打开 HTTPS", "error");
     return;
@@ -5122,6 +5170,8 @@ async function enableWebPush() {
   btns.forEach((b) => { b.disabled = true; });
   try {
     const perm = await Notification.requestPermission();
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     if (perm !== "granted") {
       flash("未授予通知权限，请在浏览器设置里允许本站通知", "error");
       return;
@@ -5132,41 +5182,69 @@ async function enableWebPush() {
       return;
     }
     const reg = await navigator.serviceWorker.ready;
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     const sub = await reg.pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: urlBase64ToUint8Array(key),
     });
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     const json = sub.toJSON();
     await api("/api/me/webpush", {
       method: "POST",
       body: JSON.stringify({ endpoint: json.endpoint, keys: json.keys }),
     });
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash("浏览器通知已开启");
-    await reloadSettings();
+    await reloadSettings(routeSeq);
   } catch (err) {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(err.message || "开启失败", "error");
   } finally {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     btns.forEach((b) => { b.disabled = false; });
   }
 }
 
 async function disableWebPush() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   if (!confirm("关闭后，所有已开启的 Chrome / Edge 都不再弹出通知。")) return;
   try {
     const reg = await navigator.serviceWorker.ready;
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     const sub = await reg.pushManager.getSubscription();
     if (sub) await sub.unsubscribe();
-  } catch { /* 本地订阅清不掉也不挡服务端关闭 */ }
+  } catch {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
+    /* 本地订阅清不掉也不挡服务端关闭 */
+  }
+  if (!routeStillActive(routeSeq) || token !== state.token
+    || sessionGeneration !== imaMountState.sessionGeneration) return;
   try {
     await api("/api/me/webpush", { method: "DELETE" });
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash("浏览器通知已关闭");
-    await reloadSettings();
+    await reloadSettings(routeSeq);
   } catch (err) {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(err.message, "error");
   }
 }
 
 async function saveKeywords() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   const keywords = ($("#set-keywords").value || "")
     .split(/[\n,]/)
     .map((k) => k.trim())
@@ -5176,13 +5254,20 @@ async function saveKeywords() {
       method: "PUT",
       body: JSON.stringify({ keywords }),
     });
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(`已保存 ${keywords.length} 个关键词`);
   } catch (err) {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(err.message, "error");
   }
 }
 
 async function saveLlm() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   const payload = {
     llm_api_base: ($("#set-llm-base").value || "").trim(),
     llm_api_key: ($("#set-llm-key").value || "").trim(),
@@ -5190,9 +5275,13 @@ async function saveLlm() {
   };
   try {
     await api("/api/me", { method: "PUT", body: JSON.stringify(payload) });
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(payload.llm_api_key ? "已保存，将用你的模型" : "已保存，将用站点 Grok");
-    await reloadSettings();
+    await reloadSettings(routeSeq);
   } catch (err) {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(err.message, "error");
   }
 }

@@ -1334,6 +1334,45 @@ def test_push_setting_saves_require_same_route_token_and_session_before_mutation
         assert body.index("flash(", catch_guard) > catch_guard
 
 
+def test_settings_save_callbacks_require_same_route_token_and_session_before_all_side_effects():
+    """所有设置保存回调的异步收尾都必须仍属于发起路由和会话。"""
+    for name in (
+        "saveNotify", "saveDailyReport", "saveCustomTgBot", "saveWecomWebhook",
+        "saveBarkKey", "enableWebPush", "disableWebPush", "saveKeywords", "saveLlm",
+    ):
+        body = _fn_body(name)
+        await_api = body.index("await api(")
+        for capture in (
+            "const routeSeq = routeRenderSeq",
+            "const token = state.token",
+            "const sessionGeneration = imaMountState.sessionGeneration",
+        ):
+            assert capture in body[:await_api], f"{name} 必须在异步请求前捕获会话拥有者"
+        guard = body.index("routeStillActive(routeSeq)", await_api)
+        assert "token !== state.token" in body[guard:guard + 150]
+        assert "sessionGeneration !== imaMountState.sessionGeneration" in body[guard:guard + 180]
+        side_effects = ["flash("]
+        if name in ("saveCustomTgBot", "saveWecomWebhook", "saveBarkKey", "enableWebPush", "disableWebPush", "saveLlm"):
+            side_effects.append("reloadSettings(routeSeq)")
+        for side_effect in side_effects:
+            assert body.index(side_effect, await_api) > guard, f"{name} 的 {side_effect} 未受响应守卫保护"
+        catch = body.index("} catch", await_api)
+        catch_guard = body.index("routeStillActive(routeSeq)", catch)
+        assert body.index("flash(", catch_guard) > catch_guard, f"{name} 的错误提示未受响应守卫保护"
+
+
+def test_settings_reload_passes_original_route_sequence():
+    """设置异步回调重载时必须继续使用发起请求的路由令牌。"""
+    reload = _fn_body("reloadSettings")
+    assert "async function reloadSettings(routeSeq)" in APP_JS.read_text()
+    assert "if (!routeStillActive(routeSeq)) return;" in reload
+    assert "renderSettings(routeSeq)" in reload
+    for name in ("saveCustomTgBot", "saveWecomWebhook", "saveBarkKey", "enableWebPush", "disableWebPush", "saveLlm"):
+        assert "reloadSettings(routeSeq)" in _fn_body(name), f"{name} 未传递原始路由令牌"
+
+
+
+
 def test_admin_credential_saves_require_same_route_token_and_session_before_side_effects():
     """旧路由或旧账号的凭证回调不得导航、重绘或恢复当前页面焦点。"""
     for name in ("saveImaCredentials", "saveTwitterCookie"):
