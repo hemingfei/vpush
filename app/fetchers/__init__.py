@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import logging
+
 from .base import Fetcher
+
+logger = logging.getLogger(__name__)
 from .combination import CombinationFetcher
 from .ima import ImaFetcher
 from .twitter import TwitterFetcher

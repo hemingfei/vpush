@@ -264,6 +264,7 @@ CREATE TABLE IF NOT EXISTS kols (
     original_only INTEGER NOT NULL DEFAULT 0,
     category_id INTEGER,
     priority INTEGER NOT NULL DEFAULT 0,
+    extra_data TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS kol_acl (
@@ -802,6 +803,8 @@ class DB:
                 "UPDATE kols SET last_post_at = COALESCE(("
                 "SELECT MAX(fetched_at) FROM posts WHERE posts.kol_id = kols.id), '')"
             )
+        if "extra_data" not in kol_cols:
+            self._conn.execute("ALTER TABLE kols ADD COLUMN extra_data TEXT NOT NULL DEFAULT ''")
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_posts_kol_id_id ON posts(kol_id, id DESC)"
         )
@@ -2565,10 +2568,28 @@ class DB:
                 if cur.rowcount == 0:
                     return None  # 唯一约束命中，帖子已存在
                 return cur.lastrowid
-        except sqlite3.IntegrityError:
-            # 并发下重复插入，视为已存在；回滚关闭隐式事务，避免悬空事务污染后续 BEGIN
-            self._conn.rollback()
-            return None
+            except sqlite3.IntegrityError:
+                # 并发下重复插入，视为已存在；回滚关闭隐式事务，避免悬空事务污染后续 BEGIN
+                self._conn.rollback()
+                return None
+
+    def save_post(self, post) -> int | None:
+        """保存单个 Post 对象，返回 post_id 或 None（已存在）。"""
+        return self.insert_post(
+            platform=post.platform,
+            kol_id=post.kol_id,
+            external_id=post.external_id,
+            title=post.title,
+            content=post.content,
+            url=post.url,
+            published_at=post.published_at,
+            post_type=post.post_type,
+            detail=post.detail,
+            images=post.images,
+            tags=post.tags,
+            title_src=post.title_src,
+            content_src=post.content_src,
+        )
 
     def insert_posts_batch(self, posts) -> list[int | None]:
         """一个事务批量插入帖子，返回与入参对齐的 id 列表（已存在为 None）。"""
