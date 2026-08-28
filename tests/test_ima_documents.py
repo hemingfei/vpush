@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import logging
+import threading
 import time
 
 import pytest
@@ -46,6 +47,127 @@ class FakeDB:
 
     def set_settings_atomic(self, values):
         self.values.update(values)
+
+
+
+
+def test_discovery_commit_reloads_config_after_admin_update(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    db = FakeDB({
+        IMA_PURE_UID_KEY: "uid",
+        IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+        IMA_PURE_GROUPS_KEY: json.dumps([{
+            "id": "group-a", "name": "资料", "knowledge_base_id": "kb-a",
+            "root_folder_id": "root-a", "folder_ids": ["old"], "enabled": True,
+            "source": "manual",
+        }]),
+    })
+    remote_done = threading.Event()
+    resume = threading.Event()
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            pass
+
+        def discover_groups(self):
+            remote_done.set()
+            assert resume.wait(5)
+            return (ImaGroupConfig("group-a", "远端资料", "kb-a", "root-a"),)
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    service = ImaDocumentService(db, tmp_path / "ima")
+    worker = threading.Thread(target=service.discover)
+    worker.start()
+    assert remote_done.wait(5)
+    with service.config_lock:
+        db.set_setting(IMA_PURE_GROUPS_KEY, json.dumps([{
+            "id": "group-a", "name": "资料", "knowledge_base_id": "kb-a",
+            "root_folder_id": "root-a", "folder_ids": ["new"], "enabled": True,
+            "source": "manual",
+        }]))
+    resume.set()
+    worker.join(5)
+    assert not worker.is_alive()
+    saved = json.loads(db.get_setting(IMA_PURE_GROUPS_KEY))
+    assert saved[0]["folder_ids"] == ["new"]
+
+
+def test_sync_skips_stale_manifest_after_unmount(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    group = ImaGroupConfig("group-a", "资料", "kb-a", "root-a", True, "manual", ("root-a",))
+    db = FakeDB({
+        IMA_PURE_UID_KEY: "uid",
+        IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+        IMA_PURE_GROUPS_KEY: json.dumps([group.public()]),
+    })
+    manifest_started = threading.Event()
+    resume = threading.Event()
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.group = group
+
+        def discover_groups(self):
+            return ()
+
+        def manifest(self):
+            manifest_started.set()
+            assert resume.wait(5)
+            return [{"media_id": "stale", "name": "stale.pdf", "day": "0825"}]
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    service = ImaDocumentService(db, tmp_path / "ima")
+    result_holder = {}
+
+    def run_sync():
+        result_holder["result"] = service.sync_once()
+
+    worker = threading.Thread(target=run_sync)
+    worker.start()
+    assert manifest_started.wait(5)
+    with service.config_lock:
+        db.set_setting(IMA_PURE_GROUPS_KEY, json.dumps([{**group.public(), "folder_ids": [], "enabled": False}]))
+        service.store.save_group_manifest(group.id, [])
+    resume.set()
+    worker.join(5)
+    assert not worker.is_alive()
+    result = result_holder["result"]
+    assert result["skipped_groups"] == [group.id]
+    assert result["succeeded_groups"] == 0
+    assert service.store.load_manifest() == []
+    assert list((tmp_path / "ima").glob("*.tmp")) == []
+
+
+def test_concurrent_group_manifest_writes_retain_both_groups(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima")
+    start = threading.Barrier(3)
+    original_save = store._save
+    errors = []
+
+    def slowed_save(path, value):
+        if path == store.manifest_path:
+            time.sleep(0.01)
+        original_save(path, value)
+
+    store._save = slowed_save
+
+    def save(group_id):
+        try:
+            start.wait(5)
+            store.save_group_manifest(group_id, [{"media_id": group_id, "name": group_id}])
+        except Exception as exc:  # pragma: no cover - regression captures old race
+            errors.append(exc)
+
+    threads = [threading.Thread(target=save, args=(group_id,)) for group_id in ("first", "second")]
+    for thread in threads:
+        thread.start()
+    start.wait(5)
+    for thread in threads:
+        thread.join(5)
+    assert not errors
+    assert {item["group_id"] for item in store.load_manifest()} == {"first", "second"}
 
 
 def test_default_config_targets_august_folder():

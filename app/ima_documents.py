@@ -1052,6 +1052,7 @@ class ImaDocumentStore:
         self.manifest_path = self.root / "manifest.json"
         self.state_path = self.root / "state.json"
         self._state_lock = threading.Lock()
+        self._manifest_lock = threading.RLock()
         self._legacy_group_id = IMA_LEGACY_GROUP_ID
         self._group_metadata: dict[str, tuple[str, str]] = {
             IMA_LEGACY_GROUP_ID: (IMA_LEGACY_GROUP_NAME, IMA_LEGACY_GROUP_ID)
@@ -1316,10 +1317,11 @@ class ImaDocumentStore:
         os.replace(temp, path)
 
     def save_manifest(self, records: list[dict[str, Any]]) -> None:
-        self._save(
-            self.manifest_path,
-            {"generated_at": datetime.now(UTC).isoformat(), "files": records},
-        )
+        with self._manifest_lock:
+            self._save(
+                self.manifest_path,
+                {"generated_at": datetime.now(UTC).isoformat(), "files": records},
+            )
 
     def rebuild_manifest_from_state(self) -> int:
         if self.load_manifest():
@@ -1355,28 +1357,29 @@ class ImaDocumentStore:
         return len(records)
 
     def save_group_manifest(self, group_id: str, records: list[dict[str, Any]]) -> None:
-        group_id = str(group_id)
-        compatibility_group = group_id == IMA_LEGACY_GROUP_ID or group_id.startswith("legacy:")
-        if compatibility_group:
-            self._legacy_group_id = group_id
-        current = self.load_manifest()
-        kept = []
-        for record in current:
-            record_group = str(record.get("group_id") or "")
-            if record_group == group_id or (compatibility_group and not record_group):
-                continue
-            kept.append(record)
-        normalized = []
-        for record in records:
-            item = dict(record)
-            if not item.get("group_id"):
-                item["group_id"] = group_id
-            if compatibility_group and not item.get("group_name"):
-                item["group_name"] = self._group_metadata.get(
-                    group_id, (IMA_LEGACY_GROUP_NAME, group_id)
-                )[0]
-            normalized.append(item)
-        self.save_manifest(kept + normalized)
+        with self._manifest_lock:
+            group_id = str(group_id)
+            compatibility_group = group_id == IMA_LEGACY_GROUP_ID or group_id.startswith("legacy:")
+            if compatibility_group:
+                self._legacy_group_id = group_id
+            current = self.load_manifest()
+            kept = []
+            for record in current:
+                record_group = str(record.get("group_id") or "")
+                if record_group == group_id or (compatibility_group and not record_group):
+                    continue
+                kept.append(record)
+            normalized = []
+            for record in records:
+                item = dict(record)
+                if not item.get("group_id"):
+                    item["group_id"] = group_id
+                if compatibility_group and not item.get("group_name"):
+                    item["group_name"] = self._group_metadata.get(
+                        group_id, (IMA_LEGACY_GROUP_NAME, group_id)
+                    )[0]
+                normalized.append(item)
+            self.save_manifest(kept + normalized)
 
     def save_state(self, state: dict[str, dict[str, Any]]) -> None:
         with self._state_lock:
@@ -1722,6 +1725,7 @@ class ImaDocumentService:
         self.store = ImaDocumentStore(archive_root)
         self._stop = threading.Event()
         self._state_lock = threading.Lock()
+        self._config_lock = threading.RLock()
         self._sync_lock = threading.Lock()
         self._discovery_lock = threading.Lock()
         self._scheduler_thread: threading.Thread | None = None
@@ -1729,6 +1733,10 @@ class ImaDocumentService:
         self._running = False
         self._next_run_at = 0.0
         self._cancel_requested = False
+
+    @property
+    def config_lock(self) -> threading.RLock:
+        return self._config_lock
 
     def config(self) -> ImaDocumentConfig:
         return ImaDocumentConfig.from_db(self.db)
@@ -1783,35 +1791,37 @@ class ImaDocumentService:
                     "at": datetime.now(UTC).isoformat(),
                     "error": error,
                 }
-                self.db.set_setting(
-                    IMA_PURE_DISCOVERY_KEY,
-                    json.dumps(discovery, ensure_ascii=False),
-                )
+                with self._config_lock:
+                    self.db.set_setting(
+                        IMA_PURE_DISCOVERY_KEY,
+                        json.dumps(discovery, ensure_ascii=False),
+                    )
                 return {
                     "ok": False,
                     "status": "failed",
                     "config": self.config().public(),
                     "discovery": discovery,
                 }
-            current = self.config()
-            merged = merge_groups(
-                current.groups,
-                discovered,
-                discovery_complete=discovery_complete,
-            )
-            discovery = {
-                "status": "ok",
-                "at": datetime.now(UTC).isoformat(),
-                "error": "",
-            }
-            self._set_settings_atomic(
-                {
-                    IMA_PURE_GROUPS_KEY: json.dumps(
-                        [group.public() for group in merged], ensure_ascii=False
-                    ),
-                    IMA_PURE_DISCOVERY_KEY: json.dumps(discovery, ensure_ascii=False),
+            with self._config_lock:
+                current = self.config()
+                merged = merge_groups(
+                    current.groups,
+                    discovered,
+                    discovery_complete=discovery_complete,
+                )
+                discovery = {
+                    "status": "ok",
+                    "at": datetime.now(UTC).isoformat(),
+                    "error": "",
                 }
-            )
+                self._set_settings_atomic(
+                    {
+                        IMA_PURE_GROUPS_KEY: json.dumps(
+                            [group.public() for group in merged], ensure_ascii=False
+                        ),
+                        IMA_PURE_DISCOVERY_KEY: json.dumps(discovery, ensure_ascii=False),
+                    }
+                )
             return {
                 "ok": True,
                 "status": "finished",
@@ -1979,19 +1989,47 @@ class ImaDocumentService:
             }
             for record in client.manifest()
         ]
-        if not records:
-            existing = [
-                record
-                for record in self.store.load_manifest()
-                if str(record.get("group_id") or IMA_LEGACY_GROUP_ID) == group.id
-            ]
-            if existing:
-                logger.warning("IMA group listing empty, keep existing manifest group=%s", group.id[:64])
-                records = existing
+        with self._config_lock:
+            current_group = next(
+                (item for item in self.config().groups if item.id == group.id),
+                None,
+            )
+            if current_group is None or (
+                current_group.id,
+                current_group.enabled,
+                current_group.knowledge_base_id,
+                current_group.root_folder_id,
+                current_group.mount_folder_ids,
+            ) != (
+                group.id,
+                group.enabled,
+                group.knowledge_base_id,
+                group.root_folder_id,
+                group.mount_folder_ids,
+            ):
+                return {
+                    "group_id": group.id,
+                    "group_name": group.name,
+                    "total": 0,
+                    "pending": 0,
+                    "downloaded": 0,
+                    "failed": 0,
+                    "last_error": "",
+                    "skipped": True,
+                }
+            if not records:
+                existing = [
+                    record
+                    for record in self.store.load_manifest()
+                    if str(record.get("group_id") or IMA_LEGACY_GROUP_ID) == group.id
+                ]
+                if existing:
+                    logger.warning("IMA group listing empty, keep existing manifest group=%s", group.id[:64])
+                    records = existing
+                else:
+                    self.store.save_group_manifest(group.id, records)
             else:
                 self.store.save_group_manifest(group.id, records)
-        else:
-            self.store.save_group_manifest(group.id, records)
         self.store.restore_original_filenames()
         state.clear()
         state.update(self.store.load_state())
@@ -2081,6 +2119,9 @@ class ImaDocumentService:
             for group in enabled_groups:
                 try:
                     group_result = self._sync_group(cfg, group, state)
+                    if group_result.get("skipped"):
+                        skipped_groups.append(group.id)
+                        continue
                     succeeded_groups += 1
                     total += group_result["total"]
                     pending += group_result["pending"]

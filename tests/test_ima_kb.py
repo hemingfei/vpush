@@ -1,4 +1,5 @@
 import json
+import threading
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,6 +20,50 @@ from app.main import create_app
 from app.stock_universe import bundled_plain_names
 from app.tagging import tag_text
 from tests.test_ima_documents import _headers
+
+
+def test_admin_ima_put_shares_service_config_lock(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "ima-lock.sqlite"))
+    headers = _headers(client, "mount_lock_admin", "MOUNTLOCK", admin=True)
+    service = client.app.state.ima_documents
+    service.config_lock.acquire()
+    response_holder = {}
+    started = threading.Event()
+    finished = threading.Event()
+
+    def update():
+        started.set()
+        try:
+            response_holder["response"] = client.put(
+                "/api/admin/ima-collector",
+                headers=headers,
+                json={
+                    "groups": [{
+                        "id": "group-a",
+                        "name": "资料",
+                        "knowledge_base_id": "kb-a",
+                        "root_folder_id": "root-a",
+                        "folder_ids": ["new"],
+                        "enabled": True,
+                    }],
+                },
+            )
+        finally:
+            finished.set()
+
+    worker = threading.Thread(target=update)
+    worker.start()
+    try:
+        assert started.wait(5)
+        assert not finished.wait(0.1)
+    finally:
+        service.config_lock.release()
+    worker.join(5)
+    assert not worker.is_alive()
+    assert response_holder["response"].status_code == 200
+    saved = json.loads(client.app.state.db.get_setting(IMA_PURE_GROUPS_KEY))
+    assert saved[0]["folder_ids"] == ["new"]
 
 
 def test_tag_text_uses_vocab_and_stock_names():

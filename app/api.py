@@ -2808,78 +2808,81 @@ def create_api_router(
                 raise HTTPException(status_code=400, detail="同步间隔须在 1800–604800 秒")
             updates[IMA_PURE_INTERVAL_KEY] = str(body.interval_seconds)
         if body.groups is not None:
-            existing = {group.id: group for group in ima_documents.config().groups}
-            groups: list[dict[str, object]] = []
-            group_ids: list[str] = []
-            clear_group_ids: list[str] = []
-            for group in body.groups:
-                name = group.name.strip()
-                knowledge_base_id = group.knowledge_base_id.strip()
-                root_folder_id = group.root_folder_id.strip()
-                if not name or len(name) > 100:
-                    raise HTTPException(status_code=400, detail="IMA 群组名称不能为空且最多 100 个字符")
-                if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", knowledge_base_id):
-                    raise HTTPException(status_code=400, detail="知识库 ID 格式无效")
-                if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", root_folder_id):
-                    raise HTTPException(status_code=400, detail="根文件夹 ID 格式无效")
-                if group.id is None:
-                    group_id = "manual-" + hashlib.sha256(
-                        f"{knowledge_base_id}\0{root_folder_id}".encode()
-                    ).hexdigest()[:16]
-                else:
-                    group_id = group.id.strip()
-                    if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", group_id):
-                        raise HTTPException(status_code=400, detail="IMA 群组 ID 格式无效")
-                if group_id in group_ids:
-                    raise HTTPException(status_code=400, detail="IMA 群组 ID 不能重复")
-                group_ids.append(group_id)
-                previous = existing.get(group_id)
-                if group.folder_ids is None:
-                    folder_ids = list(
-                        previous.mount_folder_ids
-                        if previous is not None
-                        else ((root_folder_id,) if group.enabled else ())
-                    )
-                else:
-                    if len(group.folder_ids) > IMA_MOUNT_FOLDER_ID_MAX:
-                        raise HTTPException(status_code=400, detail="每个 IMA 群组最多挂载 256 个文件夹")
-                    folder_ids = []
-                    seen_folder_ids: set[str] = set()
-                    for raw_folder_id in group.folder_ids:
-                        if not isinstance(raw_folder_id, str):
-                            raise HTTPException(status_code=400, detail="文件夹 ID 格式无效")
-                        folder_id = raw_folder_id.strip()
-                        if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", folder_id):
-                            raise HTTPException(status_code=400, detail="文件夹 ID 格式无效")
-                        if folder_id not in seen_folder_ids:
-                            seen_folder_ids.add(folder_id)
-                            folder_ids.append(folder_id)
-                enabled = bool(group.enabled and folder_ids)
-                if not enabled:
-                    if previous is not None and previous.mount_folder_ids:
+            with ima_documents.config_lock:
+                existing = {group.id: group for group in ima_documents.config().groups}
+                groups: list[dict[str, object]] = []
+                group_ids: list[str] = []
+                clear_group_ids: list[str] = []
+                for group in body.groups:
+                    name = group.name.strip()
+                    knowledge_base_id = group.knowledge_base_id.strip()
+                    root_folder_id = group.root_folder_id.strip()
+                    if not name or len(name) > 100:
+                        raise HTTPException(status_code=400, detail="IMA 群组名称不能为空且最多 100 个字符")
+                    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", knowledge_base_id):
+                        raise HTTPException(status_code=400, detail="知识库 ID 格式无效")
+                    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", root_folder_id):
+                        raise HTTPException(status_code=400, detail="根文件夹 ID 格式无效")
+                    if group.id is None:
+                        group_id = "manual-" + hashlib.sha256(
+                            f"{knowledge_base_id}\0{root_folder_id}".encode()
+                        ).hexdigest()[:16]
+                    else:
+                        group_id = group.id.strip()
+                        if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", group_id):
+                            raise HTTPException(status_code=400, detail="IMA 群组 ID 格式无效")
+                    if group_id in group_ids:
+                        raise HTTPException(status_code=400, detail="IMA 群组 ID 不能重复")
+                    group_ids.append(group_id)
+                    previous = existing.get(group_id)
+                    if group.folder_ids is None:
+                        folder_ids = list(
+                            previous.mount_folder_ids
+                            if previous is not None
+                            else ((root_folder_id,) if group.enabled else ())
+                        )
+                    else:
+                        if len(group.folder_ids) > IMA_MOUNT_FOLDER_ID_MAX:
+                            raise HTTPException(status_code=400, detail="每个 IMA 群组最多挂载 256 个文件夹")
+                        folder_ids = []
+                        seen_folder_ids: set[str] = set()
+                        for raw_folder_id in group.folder_ids:
+                            if not isinstance(raw_folder_id, str):
+                                raise HTTPException(status_code=400, detail="文件夹 ID 格式无效")
+                            folder_id = raw_folder_id.strip()
+                            if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", folder_id):
+                                raise HTTPException(status_code=400, detail="文件夹 ID 格式无效")
+                            if folder_id not in seen_folder_ids:
+                                seen_folder_ids.add(folder_id)
+                                folder_ids.append(folder_id)
+                    enabled = bool(group.enabled and folder_ids)
+                    if not enabled:
+                        if previous is not None and previous.mount_folder_ids:
+                            clear_group_ids.append(group_id)
+                        folder_ids = []
+                    elif group.folder_ids is not None and not folder_ids:
                         clear_group_ids.append(group_id)
-                    folder_ids = []
-                elif group.folder_ids is not None and not folder_ids:
-                    clear_group_ids.append(group_id)
-                groups.append(
-                    {
-                        "id": group_id,
-                        "name": name,
-                        "knowledge_base_id": knowledge_base_id,
-                        "root_folder_id": root_folder_id,
-                        "folder_ids": folder_ids,
-                        "enabled": enabled,
-                        "source": previous.source if previous else "manual",
-                    }
-                )
-            updates[IMA_PURE_GROUPS_KEY] = json.dumps(groups, ensure_ascii=False)
-            audit_parts.append(f"groups_count={len(group_ids)};group_ids={','.join(group_ids)}")
-        else:
-            clear_group_ids = []
-        if updates:
+                    groups.append(
+                        {
+                            "id": group_id,
+                            "name": name,
+                            "knowledge_base_id": knowledge_base_id,
+                            "root_folder_id": root_folder_id,
+                            "folder_ids": folder_ids,
+                            "enabled": enabled,
+                            "source": previous.source if previous else "manual",
+                        }
+                    )
+                updates[IMA_PURE_GROUPS_KEY] = json.dumps(groups, ensure_ascii=False)
+                audit_parts.append(f"groups_count={len(group_ids)};group_ids={','.join(group_ids)}")
+                if updates:
+                    db.set_settings_atomic(updates)
+                    for group_id in clear_group_ids:
+                        ima_documents.store.save_group_manifest(group_id, [])
+                    audit_parts.extend(sorted(key for key in updates if key != IMA_PURE_GROUPS_KEY))
+                    _audit(admin, "set_ima_collector", "", ";".join(audit_parts))
+        elif updates:
             db.set_settings_atomic(updates)
-            for group_id in clear_group_ids:
-                ima_documents.store.save_group_manifest(group_id, [])
             audit_parts.extend(sorted(key for key in updates if key != IMA_PURE_GROUPS_KEY))
             _audit(admin, "set_ima_collector", "", ";".join(audit_parts))
         return ima_documents.status()
