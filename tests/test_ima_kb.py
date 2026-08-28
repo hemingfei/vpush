@@ -194,6 +194,22 @@ def test_catalog_endpoint_reads_config_once(tmp_path, monkeypatch):
     assert calls == 1
 
 
+def test_catalog_endpoint_does_not_dispatch_to_dynamic_detail(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "catalog-route.sqlite"))
+    headers = _headers(client, "catalog_route_admin", "CATALOGROUTE", admin=True)
+    store = client.app.state.ima_documents.store
+
+    def unexpected_detail_lookup(*args, **kwargs):
+        raise AssertionError("catalog request dispatched to dynamic detail")
+
+    monkeypatch.setattr(store, "document", unexpected_detail_lookup)
+    response = client.get("/api/ima-documents/catalog", headers=headers)
+
+    assert response.status_code == 200, response.text
+    assert set(response.json()) >= {"subscribed", "available"}
+
+
 def test_attach_catalog_stats_uses_latest_mmdd_title():
     listed = {
         "subscribed": [{"id": "banking", "name": "投行研报", "enabled": True}],

@@ -2543,6 +2543,14 @@ def create_api_router(
             "offset": page_offset,
         }
 
+    @router.get("/ima-documents/catalog")
+    def ima_documents_catalog(user: dict = Depends(get_current_user)):
+        with ima_documents.config_lock:
+            groups = _configured_groups()
+        listed = ima_kb_catalog(db, user, groups)
+        documents = ima_documents.store.catalog_entries(groups=groups)
+        return attach_catalog_acl(attach_catalog_stats(listed, documents), db, user)
+
     def _ima_document(user: dict, media_id: str, group: str = "") -> dict:
         group = group.strip()
         groups = _require_readable_group(user, group)
@@ -2557,14 +2565,6 @@ def create_api_router(
         if document is None:
             raise HTTPException(status_code=404, detail="文档不存在")
         return document
-
-    @router.get("/ima-documents/catalog")
-    def ima_documents_catalog(user: dict = Depends(get_current_user)):
-        with ima_documents.config_lock:
-            groups = _configured_groups()
-        listed = ima_kb_catalog(db, user, groups)
-        documents = ima_documents.store.catalog_entries(groups=groups)
-        return attach_catalog_acl(attach_catalog_stats(listed, documents), db, user)
 
     @router.post("/ima-documents/groups/{group_id}/subscribe")
     def subscribe_ima_kb(group_id: str, user: dict = Depends(get_current_user)):
