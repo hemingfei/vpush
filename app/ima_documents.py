@@ -1974,28 +1974,37 @@ class ImaDocumentService:
         }
 
     def start(self) -> None:
-        if self.store.archive_writable():
-            try:
-                restored = self.store.restore_original_filenames()
-                if restored.get("renamed"):
-                    logger.info("IMA restored %s original filenames", restored["renamed"])
-            except Exception:
-                logger.exception("IMA original filename restore failed")
-        elif self.storage_status.remote:
-            logger.warning("IMA archive unavailable; skip filename restore")
-        if self.store.archive_readable():
-            try:
-                rebuilt = self.store.rebuild_manifest_from_state()
-                if rebuilt:
-                    logger.info("IMA rebuilt %s manifest records from state", rebuilt)
-            except Exception:
-                logger.exception("IMA manifest rebuild from state failed")
-            try:
-                self.retag_all()
-            except Exception:
-                logger.exception("IMA document retag failed")
-        elif self.storage_status.remote:
-            logger.warning("IMA archive unavailable; skip manifest rebuild and retag")
+        def _archive_maintenance() -> None:
+            if self.store.archive_writable():
+                try:
+                    restored = self.store.restore_original_filenames()
+                    if restored.get("renamed"):
+                        logger.info("IMA restored %s original filenames", restored["renamed"])
+                except Exception:
+                    logger.exception("IMA original filename restore failed")
+            elif self.storage_status.remote:
+                logger.warning("IMA archive unavailable; skip filename restore")
+            if self.store.archive_readable():
+                try:
+                    rebuilt = self.store.rebuild_manifest_from_state()
+                    if rebuilt:
+                        logger.info("IMA rebuilt %s manifest records from state", rebuilt)
+                except Exception:
+                    logger.exception("IMA manifest rebuild from state failed")
+                try:
+                    self.retag_all()
+                except Exception:
+                    logger.exception("IMA document retag failed")
+            elif self.storage_status.remote:
+                logger.warning("IMA archive unavailable; skip manifest rebuild and retag")
+
+        # Remote NFS restore/retag can take minutes; do not block /healthz.
+        if self.storage_status.remote:
+            threading.Thread(
+                target=_archive_maintenance, name="ima-archive-maintenance", daemon=True
+            ).start()
+        else:
+            _archive_maintenance()
         with self._state_lock:
             if self._scheduler_thread and self._scheduler_thread.is_alive():
                 return
