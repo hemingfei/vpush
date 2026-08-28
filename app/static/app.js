@@ -2689,32 +2689,30 @@ function ensureTimelineVisibilityPoll() {
 function playNotificationSound() {
   try {
     const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const osc1 = audioContext.createOscillator();
+    const osc2 = audioContext.createOscillator();
+    const gain1 = audioContext.createGain();
+    const gain2 = audioContext.createGain();
     
-    // 第一个音符
-    const oscillator1 = audioContext.createOscillator();
-    const gainNode1 = audioContext.createGain();
-    oscillator1.type = "sine";
-    oscillator1.frequency.setValueAtTime(880, audioContext.currentTime);
-    gainNode1.gain.setValueAtTime(0.25, audioContext.currentTime);
-    gainNode1.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.15);
-    oscillator1.connect(gainNode1);
-    gainNode1.connect(audioContext.destination);
-    oscillator1.start(audioContext.currentTime);
-    oscillator1.stop(audioContext.currentTime + 0.15);
+    osc1.type = "sine";
+    osc1.frequency.setValueAtTime(1200, audioContext.currentTime);
+    gain1.gain.setValueAtTime(0.2, audioContext.currentTime);
+    gain1.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.25);
     
-    // 第二个音符（稍晚一点）
-    setTimeout(() => {
-      const oscillator2 = audioContext.createOscillator();
-      const gainNode2 = audioContext.createGain();
-      oscillator2.type = "sine";
-      oscillator2.frequency.setValueAtTime(1100, audioContext.currentTime);
-      gainNode2.gain.setValueAtTime(0.2, audioContext.currentTime);
-      gainNode2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
-      oscillator2.connect(gainNode2);
-      gainNode2.connect(audioContext.destination);
-      oscillator2.start(audioContext.currentTime);
-      oscillator2.stop(audioContext.currentTime + 0.2);
-    }, 80);
+    osc2.type = "sine";
+    osc2.frequency.setValueAtTime(1800, audioContext.currentTime + 0.15);
+    gain2.gain.setValueAtTime(0.15, audioContext.currentTime + 0.15);
+    gain2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.35);
+    
+    osc1.connect(gain1);
+    gain1.connect(audioContext.destination);
+    osc2.connect(gain2);
+    gain2.connect(audioContext.destination);
+    
+    osc1.start(audioContext.currentTime);
+    osc1.stop(audioContext.currentTime + 0.25);
+    osc2.start(audioContext.currentTime + 0.15);
+    osc2.stop(audioContext.currentTime + 0.35);
   } catch {
     // 如果播放失败，静默处理
   }
