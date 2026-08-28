@@ -10047,8 +10047,9 @@ async function loadAdminAiAnalysis() {
     $("#admin-body").innerHTML = emptyState("加载失败: " + err.message);
     return;
   }
-  state.aiTasks = tasks;
-  state.aiDefaultPrompt = defaultPrompt;
+  // API返回的是 { tasks: [...] } 对象，提取数组
+  state.aiTasks = tasks && tasks.tasks ? tasks.tasks : [];
+  state.aiDefaultPrompt = defaultPrompt && defaultPrompt.prompt ? defaultPrompt.prompt : "";
   renderAdminAiAnalysis();
 }
 
@@ -10133,7 +10134,12 @@ function openAiTaskModal(taskId = null) {
     </label>`
   ).join('');
 
-  const selectedKols = task ? (task.selected_kol_ids || []).join(', ') : '';
+  // selected_kol_ids 在数据库中是字符串，需要先解析
+  const selectedKols = task ? (
+    typeof task.selected_kol_ids === 'string' 
+      ? task.selected_kol_ids 
+      : (task.selected_kol_ids || []).join(', ')
+  ) : '';
 
   const mask = document.createElement("div");
   mask.className = "modal-mask";

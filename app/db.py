@@ -3719,12 +3719,29 @@ class DB:
                     )
                     self._conn.commit()
 
+    def _parse_selected_kol_ids(self, value):
+        """安全解析 selected_kol_ids，兼容多种格式"""
+        if not value:
+            return []
+        if isinstance(value, list):
+            return value
+        # 尝试JSON解析
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        # 尝试逗号分隔解析
+        try:
+            return [int(x.strip()) for x in value.split(',') if x.strip()]
+        except (ValueError, TypeError):
+            return []
+
     def get_ai_task(self, task_id: int) -> dict | None:
         """获取单个AI分析任务"""
         rows = self._rows("SELECT * FROM ai_analysis_tasks WHERE id = ?", (task_id,))
         if rows:
             task = dict(rows[0])
-            task["selected_kol_ids"] = json.loads(task["selected_kol_ids"])
+            task["selected_kol_ids"] = self._parse_selected_kol_ids(task["selected_kol_ids"])
             return task
         return None
 
@@ -3739,7 +3756,7 @@ class DB:
         tasks = []
         for row in rows:
             task = dict(row)
-            task["selected_kol_ids"] = json.loads(task["selected_kol_ids"])
+            task["selected_kol_ids"] = self._parse_selected_kol_ids(task["selected_kol_ids"])
             tasks.append(task)
         return tasks
 
@@ -3757,7 +3774,7 @@ class DB:
         tasks = []
         for row in rows:
             task = dict(row)
-            task["selected_kol_ids"] = json.loads(task["selected_kol_ids"])
+            task["selected_kol_ids"] = self._parse_selected_kol_ids(task["selected_kol_ids"])
             tasks.append(task)
         return tasks
 
