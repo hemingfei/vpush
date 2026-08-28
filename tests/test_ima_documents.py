@@ -78,6 +78,60 @@ def test_config_migrates_legacy_single_group():
     assert cfg.groups[0].source == "manual"
 
 
+def test_empty_group_registry_disables_legacy_fallback():
+    db = FakeDB(
+        {
+            IMA_PURE_GROUPS_KEY: "[]",
+            IMA_PURE_UID_KEY: "uid",
+            IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+            IMA_PURE_KB_ID_KEY: "legacy-kb",
+            IMA_PURE_ROOT_FOLDER_KEY: "legacy-root",
+        }
+    )
+    cfg = ImaDocumentConfig.from_db(db)
+    assert cfg.groups == ()
+    assert cfg.configured is False
+
+    missing = ImaDocumentConfig.from_db(
+        FakeDB(
+            {
+                IMA_PURE_UID_KEY: "uid",
+                IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+                IMA_PURE_KB_ID_KEY: "legacy-kb",
+                IMA_PURE_ROOT_FOLDER_KEY: "legacy-root",
+            }
+        )
+    )
+    assert [group.id for group in missing.groups] == [IMA_LEGACY_GROUP_ID]
+
+
+def test_valid_old_group_rows_preserve_missing_and_null_folder_ids():
+    db = FakeDB(
+        {
+            IMA_PURE_GROUPS_KEY: json.dumps(
+                [
+                    {
+                        "id": "missing-folders",
+                        "name": "缺省目录列表",
+                        "knowledge_base_id": "kb-1",
+                        "root_folder_id": "root-1",
+                    },
+                    {
+                        "id": "null-folders",
+                        "name": "空目录列表",
+                        "knowledge_base_id": "kb-2",
+                        "root_folder_id": "root-2",
+                        "folder_ids": None,
+                    },
+                ],
+                ensure_ascii=False,
+            )
+        }
+    )
+    groups = ImaDocumentConfig.from_db(db).groups
+    assert [group.mount_folder_ids for group in groups] == [("root-1",), ("root-2",)]
+
+
 def test_persisted_legacy_group_tracks_updated_scalar_paths():
     db = FakeDB(
         {
@@ -161,7 +215,7 @@ def test_config_ignores_malformed_group_registry_and_uses_legacy_group():
     )
     cfg = ImaDocumentConfig.from_db(db)
     assert IMA_PURE_GROUPS_KEY == "ima_pure_groups"
-    assert [group.knowledge_base_id for group in cfg.groups] == ["kb-old"]
+    assert cfg.groups == ()
 
 
 def test_config_ignores_invalid_json_group_entries_and_falls_back():
@@ -186,14 +240,7 @@ def test_config_ignores_invalid_json_group_entries_and_falls_back():
         }
     )
     cfg = ImaDocumentConfig.from_db(db)
-    assert cfg.groups == (
-        ImaGroupConfig(
-            id=IMA_LEGACY_GROUP_ID,
-            name="IMA 文档",
-            knowledge_base_id="legacy-kb",
-            root_folder_id="legacy-root",
-        ),
-    )
+    assert cfg.groups == ()
 
 
 @pytest.mark.parametrize("malformed_source", [123, []])
@@ -220,7 +267,7 @@ def test_config_ignores_non_string_source_in_mixed_registry(malformed_source):
         }
     )
     cfg = ImaDocumentConfig.from_db(db)
-    assert [(group.id, group.source) for group in cfg.groups] == [("valid", "manual")]
+    assert cfg.groups == ()
 
 
 def test_config_falls_back_when_registry_has_only_non_string_source():
@@ -242,14 +289,7 @@ def test_config_falls_back_when_registry_has_only_non_string_source():
         }
     )
     cfg = ImaDocumentConfig.from_db(db)
-    assert cfg.groups == (
-        ImaGroupConfig(
-            id=IMA_LEGACY_GROUP_ID,
-            name="IMA 文档",
-            knowledge_base_id="legacy-kb",
-            root_folder_id="legacy-root",
-        ),
-    )
+    assert cfg.groups == ()
 
 
 def test_configured_uses_enabled_groups_even_when_legacy_scalars_are_missing():
@@ -373,7 +413,6 @@ def test_discover_groups_normalizes_knowledge_base_payload():
                 {"id": "kb-2", "kb_name": "宏观策略", "folder_id": "folder-2"},
                 {"id": "missing-root"},
                 {"id": "uid-personal", "name": "个人知识库", "type": 1, "root_folder_id": "root-personal"},
-                "invalid",
             ]
         }
     }
@@ -441,16 +480,71 @@ def test_legacy_manifest_normalization_preserves_group_metadata(tmp_path):
 
 
 def test_discovery_rejects_non_string_ids_and_roots():
-    groups = normalize_discovered_groups(
-        {
-            "knowledge_list": [
-                {"id": 123, "root_folder_id": "root-bad"},
-                {"id": "kb-bad", "root_folder_id": 456},
-                {"id": "kb-good", "root_folder_id": "root-good", "name": "有效"},
-            ]
-        }
+    with pytest.raises(RuntimeError, match="invalid"):
+        normalize_discovered_groups(
+            {
+                "knowledge_list": [
+                    {"id": 123, "root_folder_id": "root-bad"},
+                    {"id": "kb-bad", "root_folder_id": 456},
+                    {"id": "kb-good", "root_folder_id": "root-good", "name": "有效"},
+                ]
+            }
+        )
+
+
+def test_discover_groups_accepts_valid_empty_list(monkeypatch):
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    client._token = lambda: "access"
+    client._open_json = lambda request: (
+        {"code": 0, "knowledge_base_list": [], "is_end": True},
+        {},
     )
-    assert [(group.id, group.root_folder_id) for group in groups] == [("kb-good", "root-good")]
+    assert client.discover_groups() == ()
+
+
+def test_discover_groups_accepts_successful_retcode(monkeypatch):
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    client._token = lambda: "access"
+    client._open_json = lambda request: (
+        {"retcode": "0", "knowledge_base_list": [], "is_end": True},
+        {},
+    )
+    assert client.discover_groups() == ()
+
+
+@pytest.mark.parametrize("response", [
+    {"knowledge_base_list": [], "is_end": True},
+    {"code": None, "knowledge_base_list": [], "is_end": True},
+])
+def test_discover_groups_requires_successful_code(monkeypatch, response):
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    client._token = lambda: "access"
+    client._open_json = lambda request: (response, {})
+    with pytest.raises(RuntimeError, match="IMA group discovery"):
+        client.discover_groups()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"code": 0, "data": {"results": [{"knowledge_base_list": {"id": "kb"}}]}},
+        {"code": 0, "results": ["bad-section"]},
+        {"code": 0, "knowledge_base_list": [None]},
+        {"code": 0, "knowledge_base_list": {"id": "kb"}},
+        {
+            "code": 0,
+            "knowledge_base_list": [
+                {"id": "not valid", "name": "坏群组", "root_folder_id": "root"}
+            ],
+        },
+    ],
+)
+def test_discover_groups_rejects_malformed_or_all_invalid_rows(monkeypatch, payload):
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    client._token = lambda: "access"
+    client._open_json = lambda request: (payload, {})
+    with pytest.raises(RuntimeError, match="invalid"):
+        client.discover_groups()
 
 
 def test_discover_groups_uses_search_knowledge_base(monkeypatch):
@@ -638,6 +732,68 @@ def test_discovery_error_is_preserved_when_group_also_fails(tmp_path, monkeypatc
     assert result["last_error"] == result["discovery_error"]
     assert "secret.invalid" not in result["discovery_error"]
     assert "group.invalid" not in result["group_errors"]["first"]
+
+
+def test_service_malformed_discovery_preserves_group_registry(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    old_raw = '[{"id":"old","name":"旧群组","knowledge_base_id":"kb-old","root_folder_id":"root-old"}]'
+    db = FakeDB(
+        {
+            IMA_PURE_UID_KEY: "uid",
+            IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+            IMA_PURE_KB_ID_KEY: "legacy-kb",
+            IMA_PURE_ROOT_FOLDER_KEY: "legacy-root",
+            IMA_PURE_GROUPS_KEY: old_raw,
+        }
+    )
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.group = group
+
+        def discover_groups(self):
+            return normalize_discovered_groups(
+                {"code": 0, "results": [{"knowledge_base_list": {"id": "bad"}}]}
+            )
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    result = ImaDocumentService(db, tmp_path / "ima").discover()
+    assert result["ok"] is False
+    assert result["status"] == "failed"
+    assert db.values[IMA_PURE_GROUPS_KEY] == old_raw
+
+
+def test_sync_with_empty_registry_processes_no_groups(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    db = FakeDB(
+        {
+            IMA_PURE_UID_KEY: "uid",
+            IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+            IMA_PURE_KB_ID_KEY: "legacy-kb",
+            IMA_PURE_ROOT_FOLDER_KEY: "legacy-root",
+            IMA_PURE_GROUPS_KEY: "[]",
+        }
+    )
+    clients = []
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            clients.append(group)
+
+        def discover_groups(self):
+            return ()
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    service = ImaDocumentService(db, tmp_path / "ima")
+    result = service.sync_once()
+    assert service.config().groups == ()
+    assert result["status"] == "finished"
+    assert result["groups"] == 0
+    assert result["succeeded_groups"] == 0
+    assert clients == [None]
+    assert db.values[IMA_PURE_GROUPS_KEY] == "[]"
 
 
 def test_failed_group_does_not_block_later_group(tmp_path, monkeypatch):
@@ -1904,12 +2060,12 @@ def test_discover_groups_rejects_success_payload_without_known_shape():
 
 
 def test_discovery_rejects_invalid_string_ids():
-    groups = normalize_discovered_groups({
-        "knowledge_list": [{
-            "id": "kb/bad", "name": "坏库", "root_folder_id": "root/bad",
-        }]
-    })
-    assert groups == ()
+    with pytest.raises(RuntimeError, match="invalid"):
+        normalize_discovered_groups({
+            "knowledge_list": [{
+                "id": "kb/bad", "name": "坏库", "root_folder_id": "root/bad",
+            }]
+        })
 
 
 def test_manifest_rejects_folder_tree_depth_limit(monkeypatch):

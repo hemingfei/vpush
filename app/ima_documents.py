@@ -289,50 +289,77 @@ def _discovery_payload(payload: Any) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+_DISCOVERY_LIST_FIELDS = (
+    "searched_knowledge_bases",
+    "knowledge_base_list",
+    "knowledge_list",
+    "info_list",
+)
+
+
 def _discovery_has_known_shape(payload: Any) -> bool:
     data = _discovery_payload(payload)
-    return any(
-        field in data and isinstance(data.get(field), list)
-        for field in ("searched_knowledge_bases", "knowledge_base_list", "knowledge_list", "info_list")
-    ) or isinstance(data.get("results"), list)
+    known = False
+    for field in _DISCOVERY_LIST_FIELDS:
+        if field not in data:
+            continue
+        known = True
+        candidate = data[field]
+        if not isinstance(candidate, list) or any(
+            not isinstance(item, dict) for item in candidate
+        ):
+            return False
+    if "results" in data:
+        known = True
+        results = data["results"]
+        if not isinstance(results, list):
+            return False
+        if any(not isinstance(section, dict) for section in results):
+            return False
+        for section in results:
+            if "knowledge_base_list" not in section:
+                continue
+            items = section["knowledge_base_list"]
+            if not isinstance(items, list) or any(
+                not isinstance(item, dict) for item in items
+            ):
+                return False
+    return known
 
 
 def _discovery_page_items(payload: Any) -> list[dict[str, Any]]:
     data = _discovery_payload(payload)
     items: list[dict[str, Any]] = []
-    for field in ("searched_knowledge_bases", "knowledge_base_list", "knowledge_list", "info_list"):
+    for field in _DISCOVERY_LIST_FIELDS:
         candidate = data.get(field)
         if isinstance(candidate, list) and candidate:
-            items.extend(item for item in candidate if isinstance(item, dict))
+            items.extend(candidate)
             break
     if items:
         return items
     for section in data.get("results") or []:
-        if not isinstance(section, dict):
-            continue
-        for item in section.get("knowledge_base_list") or []:
-            if isinstance(item, dict):
-                items.append(item)
+        items.extend(section.get("knowledge_base_list") or [])
     return items
 
 
 def _prepare_discovery_item(item: dict[str, Any]) -> dict[str, Any] | None:
-    if item.get("type") == 1:
+    item_type = item.get("type")
+    if item_type == 1 and not isinstance(item_type, bool):
         return None
     group_id_value = item.get("id") or item.get("knowledge_base_id")
     if not isinstance(group_id_value, str) or not group_id_value.strip():
-        return None
+        raise RuntimeError("IMA group discovery returned invalid item")
     group_id_value = group_id_value.strip()
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", group_id_value):
-        return None
+        raise RuntimeError("IMA group discovery returned invalid item")
     basic = item.get("basic_info") if isinstance(item.get("basic_info"), dict) else {}
     name_value = item.get("name") or item.get("kb_name") or basic.get("name") or group_id_value
     root_value = item.get("root_folder_id") or item.get("folder_id") or group_id_value
     if not all(isinstance(value, str) and value.strip() for value in (name_value, root_value)):
-        return None
+        raise RuntimeError("IMA group discovery returned invalid item")
     root_value = root_value.strip()
     if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", root_value):
-        return None
+        raise RuntimeError("IMA group discovery returned invalid item")
     prepared = dict(item)
     prepared["id"] = group_id_value.strip()
     prepared["name"] = name_value.strip()
@@ -341,24 +368,22 @@ def _prepare_discovery_item(item: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def normalize_discovered_groups(payload: Any) -> tuple[ImaGroupConfig, ...]:
+    if not _discovery_has_known_shape(payload):
+        raise RuntimeError("IMA group discovery returned invalid response")
     groups: list[ImaGroupConfig] = []
     for item in _discovery_page_items(payload):
         prepared = _prepare_discovery_item(item)
         if prepared is None:
             continue
-        root_value = prepared.get("root_folder_id")
-        name_value = prepared.get("name")
+        root_value = prepared["root_folder_id"]
+        name_value = prepared["name"]
         group_id = prepared["id"]
-        if not isinstance(root_value, str) or not root_value.strip():
-            continue
-        if not isinstance(name_value, str) or not name_value.strip():
-            continue
         groups.append(
             ImaGroupConfig(
                 id=group_id,
-                name=name_value.strip()[:100],
+                name=name_value[:100],
                 knowledge_base_id=group_id,
-                root_folder_id=root_value.strip(),
+                root_folder_id=root_value,
                 source="discovered",
             )
         )
@@ -402,61 +427,62 @@ def merge_groups(
 
 def _read_groups(db: Any, kb: str, root: str) -> tuple[ImaGroupConfig, ...]:
     raw = db.get_setting(IMA_PURE_GROUPS_KEY) if db is not None else None
-    if raw:
-        try:
-            payload = json.loads(raw)
-        except (TypeError, ValueError):
-            payload = []
-        groups = []
-        for item in payload if isinstance(payload, list) else []:
-            if not isinstance(item, dict):
-                continue
-            required_fields = ("id", "name", "knowledge_base_id", "root_folder_id")
-            if any(
-                not isinstance(item.get(field), str) or not item[field].strip()
-                for field in required_fields
-            ):
-                continue
-            enabled = item.get("enabled", True)
-            if not isinstance(enabled, bool):
-                continue
-            source = item.get("source", "manual")
-            if not isinstance(source, str):
-                continue
-            folder_ids = None
-            if "folder_ids" in item:
-                folder_ids = _normalize_stored_folder_ids(item["folder_ids"])
-                if folder_ids is None:
-                    continue
-                if not enabled:
-                    folder_ids = ()
-            groups.append(
-                ImaGroupConfig(
-                    id=item["id"].strip(),
-                    name=item["name"].strip()[:100],
-                    knowledge_base_id=item["knowledge_base_id"].strip(),
-                    root_folder_id=item["root_folder_id"].strip(),
-                    enabled=enabled,
-                    source="discovered" if source == "discovered" else "manual",
-                    folder_ids=folder_ids,
-                )
+    if raw is None:
+        return (_legacy_group(kb, root),)
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return ()
+    if not isinstance(payload, list):
+        return ()
+    groups: list[ImaGroupConfig] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            return ()
+        required_fields = ("id", "name", "knowledge_base_id", "root_folder_id")
+        if any(
+            not isinstance(item.get(field), str) or not item[field].strip()
+            for field in required_fields
+        ):
+            return ()
+        enabled = item.get("enabled", True)
+        if not isinstance(enabled, bool):
+            return ()
+        source = item.get("source", "manual")
+        if not isinstance(source, str):
+            return ()
+        folder_ids = None
+        if "folder_ids" in item and item["folder_ids"] is not None:
+            folder_ids = _normalize_stored_folder_ids(item["folder_ids"])
+            if folder_ids is None:
+                return ()
+            if not enabled:
+                folder_ids = ()
+        groups.append(
+            ImaGroupConfig(
+                id=item["id"].strip(),
+                name=item["name"].strip()[:100],
+                knowledge_base_id=item["knowledge_base_id"].strip(),
+                root_folder_id=item["root_folder_id"].strip(),
+                enabled=enabled,
+                source="discovered" if source == "discovered" else "manual",
+                folder_ids=folder_ids,
             )
-        if groups:
-            normalized_groups = []
-            for group in groups:
-                if group.id == IMA_LEGACY_GROUP_ID:
-                    group = ImaGroupConfig(
-                        id=group.id,
-                        name=group.name,
-                        knowledge_base_id=kb,
-                        root_folder_id=root,
-                        enabled=group.enabled,
-                        source=group.source,
-                        folder_ids=group.folder_ids,
-                    )
-                normalized_groups.append(group)
-            return tuple(normalized_groups)
-    return (_legacy_group(kb, root),)
+        )
+    normalized_groups = []
+    for group in groups:
+        if group.id == IMA_LEGACY_GROUP_ID:
+            group = ImaGroupConfig(
+                id=group.id,
+                name=group.name,
+                knowledge_base_id=kb,
+                root_folder_id=root,
+                enabled=group.enabled,
+                source=group.source,
+                folder_ids=group.folder_ids,
+            )
+        normalized_groups.append(group)
+    return tuple(normalized_groups)
 
 
 @dataclass(frozen=True)
@@ -641,7 +667,14 @@ class ImaPureClient:
                 headers=self._headers(token),
             )
             data, _ = self._open_json(request)
-            code = data.get("code") if "code" in data else data.get("retcode")
+            if not isinstance(data, dict):
+                raise RuntimeError("IMA group discovery returned invalid response")
+            if "code" in data:
+                code = data["code"]
+            elif "retcode" in data:
+                code = data["retcode"]
+            else:
+                raise RuntimeError("IMA group discovery returned invalid response")
             if code not in (0, "0"):
                 raise RuntimeError(f"IMA group discovery failed code={code}")
             payload = _discovery_payload(data)
