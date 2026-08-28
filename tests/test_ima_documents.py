@@ -904,6 +904,40 @@ def test_list_items_rejects_malformed_later_page_status_or_payload(monkeypatch, 
         client.list_items("root")
 
 
+def test_knowledge_tab_reader_status_prefers_code_on_success(monkeypatch):
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh", root_folder_id="root"))
+    client._token = lambda: "access"
+    client._open_json = lambda request: (
+        {"code": "0", "retcode": 401, "knowledge_list": []},
+        {},
+    )
+    assert client.list_items("root") == []
+
+    client._open_json = lambda request: (
+        {"code": "0", "retcode": 401, "knowledge_base_list": [], "is_end": True},
+        {},
+    )
+    assert client.discover_groups() == ()
+
+
+def test_knowledge_tab_reader_status_prefers_code_on_failure(monkeypatch):
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh", root_folder_id="root"))
+    client._token = lambda: "access"
+    client._open_json = lambda request: (
+        {"code": 401, "retcode": "0", "knowledge_list": []},
+        {},
+    )
+    with pytest.raises(RuntimeError, match="IMA list failed"):
+        client.list_items("root")
+
+    client._open_json = lambda request: (
+        {"code": 401, "retcode": "0", "knowledge_base_list": [], "is_end": True},
+        {},
+    )
+    with pytest.raises(RuntimeError, match="IMA group discovery failed"):
+        client.discover_groups()
+
+
 @pytest.mark.parametrize(
     "first_status, second_status",
     [("code", "retcode"), ("retcode", "code")],

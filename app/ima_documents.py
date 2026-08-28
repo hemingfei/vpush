@@ -284,6 +284,16 @@ def _legacy_group(kb: str, root: str) -> ImaGroupConfig:
     )
 
 
+def _ima_response_status(data: Any, context: str) -> Any:
+    if not isinstance(data, dict):
+        raise RuntimeError(f"{context} returned invalid response")
+    if "code" in data:
+        return data["code"]
+    if "retcode" in data:
+        return data["retcode"]
+    raise RuntimeError(f"{context} returned invalid response")
+
+
 def _ima_success_status(value: Any) -> bool:
     return (isinstance(value, int) and not isinstance(value, bool) and value == 0) or value == "0"
 
@@ -669,14 +679,7 @@ class ImaPureClient:
                 headers=self._headers(token),
             )
             data, _ = self._open_json(request)
-            if not isinstance(data, dict):
-                raise RuntimeError("IMA group discovery returned invalid response")
-            if "code" in data:
-                code = data["code"]
-            elif "retcode" in data:
-                code = data["retcode"]
-            else:
-                raise RuntimeError("IMA group discovery returned invalid response")
+            code = _ima_response_status(data, "IMA group discovery")
             if not _ima_success_status(code):
                 raise RuntimeError(f"IMA group discovery failed code={code}")
             payload = _discovery_payload(data)
@@ -716,9 +719,7 @@ class ImaPureClient:
                 headers=self._headers(token),
             )
             data, _ = self._open_json(request)
-            if not isinstance(data, dict):
-                raise RuntimeError("IMA list returned invalid response")
-            status = data["code"] if "code" in data else data.get("retcode")
+            status = _ima_response_status(data, "IMA list")
             if not _ima_success_status(status):
                 raise RuntimeError(f"IMA list failed code={status}")
             payload = self._payload(data)
