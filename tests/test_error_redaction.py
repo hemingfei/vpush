@@ -18,6 +18,23 @@ def test_redact_secrets_patterns():
     assert redact_secrets(None) == ""
 
 
+def test_redact_secrets_cookie_and_api_key_names():
+    short = "short8"
+    long = "long-secret-value-1234567890"
+    text = (
+        f"Cookie: auth_token={short}; ct0={long}; "
+        f"ima-openapi-apikey={short}; api_key={long}"
+    )
+    out = redact_secrets(text)
+    assert short not in out and long not in out
+    assert out.count("<redacted>") == 4
+
+
+def test_redact_secrets_does_not_match_prefixed_key_names():
+    text = "my_api_key=ordinary-value api_key_suffix=ordinary-value"
+    assert redact_secrets(text) == text
+
+
 def test_db_persisted_errors_are_redacted(tmp_path):
     db = DB(str(tmp_path / "db.sqlite"))
     try:

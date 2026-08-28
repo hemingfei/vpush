@@ -26,6 +26,13 @@ _REDACT_PATTERNS = [
         ),
         r"\1<redacted>",
     ),
+    (
+        re.compile(
+            r"(?<![A-Za-z0-9_-])((?:auth_token|ct0|ima-openapi-apikey|api_key)=)[^&;\s'\"<>]+",
+            re.IGNORECASE,
+        ),
+        r"\1<redacted>",
+    ),
     (re.compile(r"(api\.day\.app/)[A-Za-z0-9]{8,}", re.IGNORECASE), r"\1<redacted>"),
     (re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]{16,}", re.IGNORECASE), r"\1<redacted>"),
     # 微博登录 META 响应：su 是 base64 用户名，其余为 SSO 会话 cookie 名
