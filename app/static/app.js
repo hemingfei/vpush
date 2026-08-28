@@ -10053,6 +10053,7 @@ async function loadAdminAiAnalysis() {
 	  // API返回的是 { tasks: [...] } 对象，提取数组
 	  state.aiTasks = tasks && tasks.tasks ? tasks.tasks : [];
 	  state.aiDefaultPrompt = defaultPrompt && defaultPrompt.prompt ? defaultPrompt.prompt : "";
+	  state.kols = kols || [];
 	  // 创建 KOL ID 到名称的映射
 	  state.kolIdToName = {};
 	  for (const k of kols) {
@@ -10206,61 +10207,53 @@ function renderAdminAiAnalysis() {
 }
 
 async function openAiTaskModal(taskId = null) {
-	  const task = taskId ? (state.aiTasks || []).find(t => t.id === taskId) : null;
-	  const isEdit = !!task;
-  
-  // 顺序：周一到周日，对应的数字值是 1,2,3,4,5,6,0
-  const daysOrder = [
-    { num: 1, label: '一' },
-    { num: 2, label: '二' },
-    { num: 3, label: '三' },
-    { num: 4, label: '四' },
-    { num: 5, label: '五' },
-    { num: 6, label: '六' },
-    { num: 0, label: '日' }
-  ];
-  
-  const daysOptions = daysOrder.map(({ num, label }) => {
-    const isChecked = task && task.schedule_day_of_week && task.schedule_day_of_week.split(',').includes(String(num));
-    return `
-      <div class="ai-day-checkbox ${isChecked ? 'checked' : ''}" data-day="${num}">
-        <span class="ai-day-label">周${label}</span>
-      </div>
-    `;
-  }).join('');
-
-	// selected_kol_ids 在数据库中是字符串，需要先解析
-	const selectedKols = task ? (
-	  typeof task.selected_kol_ids === 'string' 
-	    ? task.selected_kol_ids 
-	    : (task.selected_kol_ids || []).join(', ')
-	) : '';
-	
-		// 加载 KOL 列表用于选择
-		let kolSelectHtml = '<option value="">加载中...</option>';
-		try {
-		  const kols = await api("/api/kols");
-		  const groups = {};
-		  for (const k of kols) {
-		    const g = PLATFORM_LABELS[k.platform] || k.platform || "其他";
-		    (groups[g] = groups[g] || []).push(k);
-		  }
-		  // 排序：系统平台排在最前面，其他按字母顺序
-		  const sortedGroupEntries = Object.entries(groups).sort(([a], [b]) => {
-		    if (a === "系统") return -1;
-		    if (b === "系统") return 1;
-		    return a.localeCompare(b, "zh-CN");
-		  });
-		  kolSelectHtml = sortedGroupEntries
-		    .map(([g, list]) => `<optgroup label="${escapeHtml(g)}">${list.map((k) => {
-		      const isSystem = k.platform === 'system';
-		      const label = isSystem ? `⭐ ${k.name}` : k.name;
-		      return `<option value="${k.id}" ${task && task.target_kol_id == k.id ? 'selected' : ''}>${escapeHtml(label)}</option>`;
-		    }).join("")}</optgroup>`)
-		    .join("");
-		} catch {
-		  kolSelectHtml = '<option value="">加载失败，请手动输入 KOL ID</option>';
-		}
+		  const task = taskId ? (state.aiTasks || []).find(t => t.id === taskId) : null;
+		  const isEdit = !!taskId;
+	  
+	  // 确保 KOL 数据已加载
+	  if (!state.kols || !state.kols.length) {
+	    try {
+	      state.kols = await api("/api/kols");
+	    } catch {
+	      state.kols = [];
+	    }
+	  }
+	  
+	  // 顺序：周一到周日，对应的数字值是 1,2,3,4,5,6,0
+	  const daysOrder = [
+	    { num: 1, label: '一' },
+	    { num: 2, label: '二' },
+	    { num: 3, label: '三' },
+	    { num: 4, label: '四' },
+	    { num: 5, label: '五' },
+	    { num: 6, label: '六' },
+	    { num: 0, label: '日' }
+	  ];
+	  
+	  const daysOptions = daysOrder.map(({ num, label }) => {
+	    const isChecked = task && task.schedule_day_of_week && task.schedule_day_of_week.split(',').includes(String(num));
+	    return `
+	      <div class="ai-day-checkbox ${isChecked ? 'checked' : ''}" data-day="${num}">
+	        <span class="ai-day-label">周${label}</span>
+	      </div>
+	    `;
+	  }).join('');
+		  
+			// 加载 KOL 列表用于选择目标 KOL
+			let kolSelectHtml = '<option value="">加载中...</option>';
+			try {
+			  const kols = state.kols || await api("/api/kols");
+			  // 仅显示系统平台的 KOL
+			  const systemKols = kols.filter((k) => k.platform === 'system');
+			  kolSelectHtml = systemKols
+			    .map((k) => `<option value="${k.id}" ${task && task.target_kol_id == k.id ? 'selected' : ''}>${escapeHtml(k.name)}</option>`)
+			    .join("");
+			  if (!systemKols.length) {
+			    kolSelectHtml = '<option value="">暂无系统 KOL</option>';
+			  }
+			} catch {
+			  kolSelectHtml = '<option value="">加载失败，请手动输入 KOL ID</option>';
+			}
 
 	const mask = document.createElement("div");
 	mask.className = "modal-mask";
@@ -10304,9 +10297,6 @@ async function openAiTaskModal(taskId = null) {
 	                ${kolSelectHtml}
 	              </select>
 	            </label>
-	            <div class="ai-form-hint">
-	              ⭐ 标记的是专门用于 AI 分析的系统 KOL，推荐选择
-	            </div>
 	          </div>
 	        </div>
 
@@ -10342,16 +10332,53 @@ async function openAiTaskModal(taskId = null) {
           </div>
         </div>
 
-        <div class="ai-form-section">
-          <div class="ai-form-section-title">分析范围</div>
-          
-          <div class="ai-form-group">
-            <label class="ai-form-label">
-              <span>分析 KOL ID <span class="required">*</span></span>
-              <textarea id="ai-task-kols" class="ai-form-textarea" rows="2" placeholder="用逗号分隔，例如：1, 3, 5, 8">${escapeHtml(selectedKols)}</textarea>
-            </label>
-          </div>
-        </div>
+	        <div class="ai-form-section">
+	          <div class="ai-form-section-title">分析范围</div>
+	          
+	          <div class="ai-form-group">
+	            <label class="ai-form-label">
+	              <span>选择要分析的 KOL <span class="required">*</span></span>
+	            </label>
+	            <div class="ai-kol-dropdown">
+	              <div id="ai-kol-dropdown-trigger" class="ai-kol-dropdown-trigger">
+	                <span id="ai-kol-selected-text" class="ai-kol-selected-text">点击选择 KOL</span>
+	                <svg class="ai-kol-dropdown-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+	                  <polyline points="6 9 12 15 18 9"/>
+	                </svg>
+	              </div>
+	            <div id="ai-kol-dropdown-menu" class="ai-kol-dropdown-menu">
+	                ${(() => {
+	                  const selectedIds = task && task.selected_kol_ids 
+	                    ? (Array.isArray(task.selected_kol_ids) ? task.selected_kol_ids : JSON.parse(task.selected_kol_ids || '[]'))
+	                    : [];
+	                  
+	                  // 已选的KOL排在前面
+	                  const sortedKols = [...(state.kols || [])].sort((a, b) => {
+	                    const aSelected = selectedIds.includes(a.id);
+	                    const bSelected = selectedIds.includes(b.id);
+	                    if (aSelected && !bSelected) return -1;
+	                    if (!aSelected && bSelected) return 1;
+	                    return 0; // 保持原有顺序
+	                  });
+	                  
+		                  return sortedKols.map(kol => {
+		                    const isSelected = selectedIds.includes(kol.id);
+		                    return `
+		                  <div class="ai-kol-item ${isSelected ? 'checked' : ''}" 
+		                       data-kol-id="${kol.id}">
+		                    <input type="checkbox" class="ai-kol-checkbox" id="ai-kol-${kol.id}" value="${kol.id}" 
+		                           ${isSelected ? 'checked' : ''}>
+		                    <div class="ai-kol-content">
+		                      <span class="ai-kol-name">${escapeHtml(kol.name)}</span>
+		                      <span class="ai-kol-platform">${escapeHtml(kol.platform || '未知平台')}</span>
+		                    </div>
+		                  </div>
+		                `}).join('');
+	                })()}
+	            </div>
+	            </div>
+	          </div>
+	        </div>
 
         <div class="ai-form-section">
           <div class="ai-form-section-title">Prompt 模板</div>
@@ -10418,15 +10445,81 @@ async function openAiTaskModal(taskId = null) {
   closeAdminModal();
   document.body.appendChild(mask);
   
-  // 添加星期选择的交互效果
-  setTimeout(() => {
-    const dayCheckboxes = document.querySelectorAll('.ai-day-checkbox');
-    dayCheckboxes.forEach(checkbox => {
-      checkbox.addEventListener('click', () => {
-        checkbox.classList.toggle('checked');
-      });
-    });
-  }, 50);
+	  // 添加星期选择和 KOL 选择的交互效果
+	  setTimeout(() => {
+	    // 星期选择
+	    const dayCheckboxes = document.querySelectorAll('.ai-day-checkbox');
+	    dayCheckboxes.forEach(checkbox => {
+	      checkbox.addEventListener('click', () => {
+	        checkbox.classList.toggle('checked');
+	      });
+	    });
+	    
+	    // KOL 下拉框
+	    const dropdownTrigger = document.getElementById('ai-kol-dropdown-trigger');
+	    const dropdownMenu = document.getElementById('ai-kol-dropdown-menu');
+	    const selectedText = document.getElementById('ai-kol-selected-text');
+	    
+	    // 更新已选 KOL 显示
+	    function updateSelectedKolsDisplay() {
+	      const checkedBoxes = document.querySelectorAll('.ai-kol-checkbox:checked');
+	      if (checkedBoxes.length === 0) {
+	        selectedText.textContent = '点击选择 KOL';
+	        selectedText.classList.add('placeholder');
+	      } else if (checkedBoxes.length <= 3) {
+	        const names = Array.from(checkedBoxes).map(cb => {
+	          const kol = state.kols.find(k => k.id === Number(cb.value));
+	          return kol ? kol.name : '';
+	        }).filter(Boolean);
+	        selectedText.textContent = names.join(', ');
+	        selectedText.classList.remove('placeholder');
+	      } else {
+	        selectedText.textContent = `已选择 ${checkedBoxes.length} 个 KOL`;
+	        selectedText.classList.remove('placeholder');
+	      }
+	    }
+	    
+	    // 初始化显示
+	    updateSelectedKolsDisplay();
+	    
+	    // 下拉框切换
+	    dropdownTrigger.addEventListener('click', (e) => {
+	      e.stopPropagation();
+	      dropdownMenu.classList.toggle('open');
+	      dropdownTrigger.classList.toggle('open');
+	    });
+	    
+	    // 点击外部关闭下拉框
+	    document.addEventListener('click', (e) => {
+	      if (!e.target.closest('.ai-kol-dropdown')) {
+	        dropdownMenu.classList.remove('open');
+	        dropdownTrigger.classList.remove('open');
+	      }
+	    });
+	    
+		    // KOL 选择
+		    const kolItems = document.querySelectorAll('.ai-kol-item');
+		    kolItems.forEach(item => {
+		      const checkbox = item.querySelector('.ai-kol-checkbox');
+		      
+		      // 点击整个item区域时切换选中状态
+		      item.addEventListener('click', (e) => {
+		        // 不阻止input的默认行为
+		        if (e.target !== checkbox) {
+		          e.preventDefault();
+		          checkbox.checked = !checkbox.checked;
+		          // 触发change事件
+		          checkbox.dispatchEvent(new Event('change'));
+		        }
+		      });
+		      
+		      // 监听checkbox的change事件
+		      checkbox.addEventListener('change', () => {
+		        item.classList.toggle('checked', checkbox.checked);
+		        updateSelectedKolsDisplay();
+		      });
+		    });
+	  }, 50);
 }
 
 function restoreDefaultPrompt() {
@@ -10437,20 +10530,19 @@ function restoreDefaultPrompt() {
 }
 
 async function saveAiTask(taskId = null) {
-  const name = document.getElementById("ai-task-name").value.trim();
-  const desc = document.getElementById("ai-task-desc").value.trim();
-  const targetKolId = Number(document.getElementById("ai-task-target-kol").value);
-  const startOffset = Number(document.getElementById("ai-task-start-offset").value);
-  const startTime = document.getElementById("ai-task-start-time").value;
-  const endOffset = Number(document.getElementById("ai-task-end-offset").value);
-  const endTime = document.getElementById("ai-task-end-time").value;
-  const kolIdsText = document.getElementById("ai-task-kols").value.trim();
-  const prompt = document.getElementById("ai-task-prompt").value.trim();
-  const scheduleTime = document.getElementById("ai-task-schedule-time").value;
-  const enabledEl = document.getElementById("ai-task-enabled");
-  const enabled = enabledEl ? enabledEl.value === "1" : true;
+	  const name = document.getElementById("ai-task-name").value.trim();
+	  const desc = document.getElementById("ai-task-desc").value.trim();
+	  const targetKolId = Number(document.getElementById("ai-task-target-kol").value);
+	  const startOffset = Number(document.getElementById("ai-task-start-offset").value);
+	  const startTime = document.getElementById("ai-task-start-time").value;
+	  const endOffset = Number(document.getElementById("ai-task-end-offset").value);
+	  const endTime = document.getElementById("ai-task-end-time").value;
+	  const prompt = document.getElementById("ai-task-prompt").value.trim();
+	  const scheduleTime = document.getElementById("ai-task-schedule-time").value;
+	  const enabledEl = document.getElementById("ai-task-enabled");
+	  const enabled = enabledEl ? enabledEl.value === "1" : true;
 
-  const kolIds = kolIdsText.split(',').map(s => s.trim()).filter(Boolean).map(Number);
+	  const kolIds = Array.from(document.querySelectorAll('.ai-kol-checkbox:checked')).map(cb => Number(cb.value));
 
   if (!name || !targetKolId || !startTime || !endTime || !kolIds.length || !scheduleTime) {
     flash("请填写所有必填项", "error");
@@ -10476,7 +10568,7 @@ async function saveAiTask(taskId = null) {
       time_range_end_days_offset: endOffset,
       time_range_end_time: endTime,
       selected_kol_ids: kolIds,
-      prompt_template: prompt || null,
+      prompt_template: prompt || state.aiDefaultPrompt,
       schedule_day_of_week: scheduleDays,
       schedule_time: scheduleTime
     };

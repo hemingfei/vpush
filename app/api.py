@@ -4465,7 +4465,7 @@ def create_api_router(
             time_range_end_days_offset=body.time_range_end_days_offset,
             time_range_end_time=body.time_range_end_time,
             selected_kol_ids=body.selected_kol_ids,
-            prompt_template=body.prompt_template,
+            prompt_template=body.prompt_template.strip() or ai_analysis.DEFAULT_PROMPT_TEMPLATE,
             schedule_day_of_week=body.schedule_day_of_week,
             schedule_time=body.schedule_time,
         )

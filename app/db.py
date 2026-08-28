@@ -3684,7 +3684,7 @@ class DB:
                     time_range_start_days_offset, time_range_start_time,
                     time_range_end_days_offset, time_range_end_time,
                     selected_kol_ids, prompt_template, schedule_day_of_week, schedule_time)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (name, description or "", target_kol_id,
                  time_range_start_days_offset, time_range_start_time,
                  time_range_end_days_offset, time_range_end_time,

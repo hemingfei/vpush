@@ -4037,7 +4037,132 @@ html:not(.theme-dark) .ai-form-select option {
   }
   
   .ai-day-label {
-    min-width: 56px;
-    padding: 10px 14px;
-  }
-}
+	    min-width: 56px;
+	    padding: 10px 14px;
+	  }
+	}
+
+	/* KOL 下拉框样式 */
+	.ai-kol-dropdown {
+	  position: relative;
+	  width: 100%;
+	}
+
+	.ai-kol-dropdown-trigger {
+	  display: flex;
+	  align-items: center;
+	  justify-content: space-between;
+	  gap: 12px;
+	  width: 100%;
+	  padding: 12px 14px;
+	  border: 1px solid var(--border-color);
+	  border-radius: 10px;
+	  font-size: 15px;
+	  color: var(--text-color);
+	  background: var(--card-bg);
+	  cursor: pointer;
+	  transition: all 0.2s ease;
+	}
+
+	.ai-kol-dropdown-trigger:hover {
+	  border-color: var(--accent-color);
+	}
+
+	.ai-kol-dropdown-trigger.open {
+	  outline: none;
+	  border-color: var(--accent-color);
+	  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+	}
+
+	.ai-kol-selected-text {
+	  flex: 1;
+	  font-size: var(--text-body);
+	  color: var(--color-text);
+	  overflow: hidden;
+	  text-overflow: ellipsis;
+	  white-space: nowrap;
+	}
+
+	.ai-kol-selected-text.placeholder {
+	  color: var(--color-text-muted);
+	}
+
+	.ai-kol-dropdown-arrow {
+	  width: 20px;
+	  height: 20px;
+	  flex-shrink: 0;
+	  color: var(--color-text-muted);
+	  transition: transform 0.15s ease;
+	}
+
+	.ai-kol-dropdown-trigger.open .ai-kol-dropdown-arrow {
+	  transform: rotate(180deg);
+	}
+
+		.ai-kol-dropdown-menu {
+		  position: absolute;
+		  top: calc(100% + 4px);
+		  left: 0;
+		  right: 0;
+		  z-index: 1000;
+		  display: none;
+		  grid-template-columns: repeat(3, 1fr);
+		  gap: 8px;
+		  max-height: 400px;
+		  overflow-y: auto;
+		  padding: 12px;
+		  background: var(--color-surface);
+		  border: 1px solid var(--color-line);
+		  border-radius: var(--radius-sm);
+		  box-shadow: var(--shadow-lg);
+		}
+
+		.ai-kol-dropdown-menu.open {
+		  display: grid;
+		}
+
+	.ai-kol-item {
+	  display: flex;
+	  align-items: center;
+	  gap: 8px;
+	  padding: 10px 12px;
+	  border-radius: 8px;
+	  cursor: pointer;
+	  transition: background 0.15s ease;
+	  border: 1px solid transparent;
+	}
+
+	.ai-kol-item:hover {
+	  background: var(--color-surface-hover);
+	}
+
+	.ai-kol-item.checked {
+	  background: var(--color-accent-soft);
+	}
+
+	.ai-kol-checkbox {
+	  width: 18px;
+	  height: 18px;
+	  accent-color: var(--color-accent);
+	  flex-shrink: 0;
+	}
+
+	.ai-kol-content {
+	  display: flex;
+	  flex-direction: column;
+	  gap: 2px;
+	  cursor: pointer;
+	  flex: 1;
+	  pointer-events: none;
+	}
+
+	.ai-kol-name {
+	  font-size: var(--text-body);
+	  font-weight: var(--font-weight-medium);
+	  color: var(--color-text);
+	}
+
+	.ai-kol-platform {
+	  font-size: var(--text-sm);
+	  color: var(--color-text-muted);
+	}
