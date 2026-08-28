@@ -1610,6 +1610,9 @@ function closeImaPdf() {
 }
 
 async function downloadImaPdf(mediaId) {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   const group = routeQuery().get("group") || state.imaDocumentsGroup || "";
   const groupQuery = group ? `&group=${encodeURIComponent(group)}` : "";
   const detailQuery = group ? `?group=${encodeURIComponent(group)}` : "";
@@ -1618,6 +1621,7 @@ async function downloadImaPdf(mediaId) {
       apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/pdf?download=1${groupQuery}`),
       api(`/api/ima-documents/${encodeURIComponent(mediaId)}${detailQuery}`),
     ]);
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -1627,6 +1631,7 @@ async function downloadImaPdf(mediaId) {
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   } catch (err) {
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash(`PDF 下载失败：${err.message}`, "error");
   }
 }
@@ -7186,7 +7191,7 @@ async function saveImaCredentials() {
       || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash("IMA 凭证已保存");
     history.replaceState(null, "", "/admin/stats?tab=cookies");
-    await loadAdminStats();
+    await loadAdminStats(routeSeq);
     if (!routeStillActive(routeSeq) || token !== state.token
       || sessionGeneration !== imaMountState.sessionGeneration) return;
     focusCookieField("ima");
@@ -7215,7 +7220,7 @@ async function saveTwitterCookie() {
       || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash("X Cookie 已保存，即时生效");
     history.replaceState(null, "", "/admin/stats?tab=cookies");
-    await loadAdminStats();
+    await loadAdminStats(routeSeq);
     if (!routeStillActive(routeSeq) || token !== state.token
       || sessionGeneration !== imaMountState.sessionGeneration) return;
     focusCookieField("twitter");
@@ -10130,6 +10135,8 @@ function migrateHashRoute() {
 
 async function router() {
   const renderSeq = ++routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   stopSettingsPoll();
   stopSysLogsTimer();
   stopStatsTimer();
@@ -10148,15 +10155,17 @@ async function router() {
     $("#auth-view").classList.remove("hidden");
     return;
   }
-  $("#auth-view").classList.add("hidden");
-  $("#app-view").classList.remove("hidden");
+  let user;
   try {
-    state.user = await api("/api/me");
-    // /api/me 挂起期间若已切走路由，旧响应不能覆盖新路由的 state.user
-    if (!routeStillActive(renderSeq)) return;
+    user = await api("/api/me");
   } catch {
+    if (!sessionOwnerStillActive(renderSeq, token, sessionGeneration)) return;
     return;
   }
+  if (!sessionOwnerStillActive(renderSeq, token, sessionGeneration)) return;
+  $("#app-view").classList.remove("hidden");
+  $("#auth-view").classList.add("hidden");
+  state.user = user;
   renderSidebar(state.user);
   renderTopbar(state.user);
   renderBottomNav(state.user);

@@ -1058,16 +1058,64 @@ def test_cookie_save_restores_focus_after_rebuild():
     assert "ima-cookie" in focus
     assert "zq-cookie" in focus
     assert ".focus()" in focus
-    for name in ("saveXueqiuCookie", "saveZsxqCookie"):
+    for name in ("saveXueqiuCookie", "saveZsxqCookie", "saveTwitterCookie", "saveImaCredentials"):
         body = _fn_body(name)
         assert "loadAdminStats(routeSeq)" in body
         assert "focusCookieField(" in body
         assert body.index("loadAdminStats(routeSeq)") < body.index("focusCookieField(")
-    for name in ("saveTwitterCookie", "saveImaCredentials"):
+
+
+def test_router_me_response_is_session_owned_before_shell_or_state_mutation():
+    """router 的 /api/me 成功/失败响应只能由发起路由和会话更新 shell。"""
+    body = _fn_body("router")
+    fetch = body.index('user = await api("/api/me")')
+    owner_guard = body.index("sessionOwnerStillActive(renderSeq, token, sessionGeneration)", fetch)
+    state_write = body.index("state.user = user", fetch)
+    shell_write = body.index('$("#auth-view").classList.add("hidden")', fetch)
+
+    assert "const token = state.token" in body[:fetch]
+    assert "const sessionGeneration = imaMountState.sessionGeneration" in body[:fetch]
+    assert "let user" in body[:fetch]
+    assert owner_guard < state_write
+    assert owner_guard < shell_write
+    catch = body.index("} catch", fetch)
+    assert "sessionOwnerStillActive(renderSeq, token, sessionGeneration)" in body[catch:]
+
+
+def test_ima_pdf_download_checks_session_owner_before_every_side_effect():
+    """旧会话 PDF 完成后不得创建 URL、插入链接、点击、撤销或提示错误。"""
+    body = _fn_body("downloadImaPdf")
+    fetch = body.index("await Promise.all")
+    owner_guard = body.index("sessionOwnerStillActive(routeSeq, token, sessionGeneration)", fetch)
+    side_effects = [
+        "URL.createObjectURL(blob)",
+        'document.createElement("a")',
+        "document.body.appendChild(link)",
+        "link.click()",
+        "URL.revokeObjectURL(url)",
+        'flash(`PDF 下载失败：${err.message}`, "error")',
+    ]
+    assert "const routeSeq = routeRenderSeq" in body[:fetch]
+    assert "const token = state.token" in body[:fetch]
+    assert "const sessionGeneration = imaMountState.sessionGeneration" in body[:fetch]
+    for side_effect in side_effects:
+        assert owner_guard < body.index(side_effect, fetch), side_effect
+    assert "const group = routeQuery().get(\"group\") || state.imaDocumentsGroup || \"\";" in body
+
+
+def test_cookie_save_nested_stats_reload_preserves_owner_sequence_and_focus_guard():
+    """Cookie 保存及清除的嵌套 stats GET 必须继承原路由令牌，再检查会话后聚焦。"""
+    for name in ("clearSavedCookie", "saveXueqiuCookie", "saveZsxqCookie", "saveTwitterCookie", "saveImaCredentials"):
         body = _fn_body(name)
-        assert "loadAdminStats()" in body
-        assert "focusCookieField(" in body
-        assert body.index("loadAdminStats()") < body.index("focusCookieField(")
+        reload_call = body.index("loadAdminStats(routeSeq)")
+        focus = body.index("focusCookieField(", reload_call)
+        assert "loadAdminStats()" not in body
+        assert "sessionGeneration" in body
+        owner_guard = body.rfind("sessionOwnerStillActive(routeSeq, token, sessionGeneration)", reload_call, focus)
+        route_guard = body.rfind("routeStillActive(routeSeq)", reload_call, focus)
+        assert max(owner_guard, route_guard) < focus
+
+
 
 
 def test_cookie_tab_primary_buttons_are_44px():
@@ -1422,11 +1470,11 @@ def test_admin_credential_saves_require_same_route_token_and_session_before_side
         ):
             assert capture in body[:post]
         guard = body.index("routeStillActive(routeSeq)", post)
-        for side_effect in ("flash(", "history.replaceState", "await loadAdminStats()", "focusCookieField"):
+        for side_effect in ("flash(", "history.replaceState", "await loadAdminStats(routeSeq)", "focusCookieField"):
             assert guard < body.index(side_effect, post)
         catch = body.index("} catch", post)
         assert body.index("routeStillActive(routeSeq)", catch) < body.index("flash(", catch)
-        reload = body.index("await loadAdminStats()", post)
+        reload = body.index("await loadAdminStats(routeSeq)", post)
         assert body.index("routeStillActive(routeSeq)", reload) < body.index("focusCookieField", reload)
 
 
