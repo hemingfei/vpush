@@ -8,6 +8,7 @@ renderHomeList()，在非首页会因找不到 #kol-list 抛异常并落入 catc
   2. refreshKolsView 覆盖所有会出现订阅卡片的页面路由
 """
 import re
+import subprocess
 from pathlib import Path
 
 APP_JS = Path(__file__).parent.parent / "app" / "static" / "app.js"
@@ -1347,10 +1348,8 @@ def test_ima_documents_group_switching_contract():
     assert 'routeQuery().get("group")' in src
     assert "group_name" in src
     assert "params.set(\"group\"" in render
-    assert "imaDocumentGroupControls(groups, selectedGroup)" in render
-    assert 'class="ima-doc-group-switcher' in src
-    assert "全部知识库" in src
-    assert 'class="ima-doc-group-label"' in src
+    assert "kb-desk-lib" in src
+    assert "selectImaDocumentGroup" in src
     assert "routeQuery()" in src
     assert "replaceImaDocumentsRoute(imaDocumentsRoute(value, state.imaDocumentsQuery, \"\", \"\"))" in src
     assert "selectImaDocumentGroup(value)" in src
@@ -1364,9 +1363,8 @@ def test_ima_documents_group_controls_render_response_groups_safely():
     assert "data.groups" in render or "groups =" in render
     assert "escapeHtml(group.id" in src or "escapeHtml(group.value" in src
     assert "escapeHtml(group.name" in src
-    assert "ima-doc-group-tabs" in src
-    assert "ima-doc-group-select" in src
-    assert "imaDocumentGroup" in src
+    assert "kb-desk-lib" in src
+    assert "escapeHtml(group.name" in src
 
 
 def test_ima_documents_all_group_labels_and_single_group_title():
@@ -1854,10 +1852,10 @@ def test_ima_document_reader_preserves_group_context_and_metadata():
     assert "imaDocumentsRoute(group, query, day, tag)" in reader
     assert "item.group_name" in reader
     assert "item.day" in reader
-    assert reader.index("ima-reader-group") < reader.index("ima-reader-day")
+    assert "ima-reader-day" in reader
     assert "查看 PDF" not in reader
     assert "下载" in reader
-    assert "item.name" in reader and "item.size" in reader
+    assert "imaDisplayTitle" in reader and "item.size" in reader
     assert "ima-reader-abstract" in reader
     assert "ima-reader-copy" in reader
     assert "ima-reader-empty" in reader
@@ -1914,16 +1912,15 @@ def test_ima_document_reader_backroute_uses_detail_group_when_url_has_none():
 
 
 def test_ima_document_reader_omits_empty_source_metadata():
-    """群组名称为空时不输出空的阅读页来源标记。"""
+    """没有代码时不输出空的阅读页代码标记。"""
     reader = _fn_body("renderImaDocument")
-    assert "const groupContext = item.group_name" in reader
-    assert "? `<span class=\"ima-reader-group ima-reader-meta-item\">来源：${escapeHtml(item.group_name)}</span>`" in reader
-    assert "${groupContext}" in reader
-    assert 'class="ima-reader-group ima-reader-meta-item">来源：${escapeHtml(item.group_name || "")}' not in reader
+    assert "const ticker = imaDocTicker(item.name)" in reader
+    assert "ticker ?" in reader
+    assert "${tickerMeta}" in reader
 
 
 def test_ima_document_reader_removes_covers_and_labels_text_metadata():
-    """阅读页不再渲染缩略图，并明确输出来源和文件类型文字。"""
+    """阅读页不再渲染缩略图。"""
     src = APP_JS.read_text()
     reader = _fn_body("renderImaDocument")
     css = STYLE_CSS.read_text()
@@ -1931,39 +1928,26 @@ def test_ima_document_reader_removes_covers_and_labels_text_metadata():
         assert value not in reader, f"阅读页仍包含 {value}"
     assert "function imaSafeCoverUrl" not in src
     assert ".ima-reader-cover" not in css
-    assert "来源：" in reader
-    assert "类型：" in reader
-    assert "imaDocKindLabel(item)" in reader
+    assert "imaDisplayTitle(item.name)" in reader
 
 
 def test_ima_document_day_nav_lives_in_title_header_and_stays_compact():
-    """日期导航属于列表标题上下文，不再在工具栏中独占一整行。"""
+    """日期导航放在研究桌列表头里，触控高度 44px。"""
     render = _fn_body("renderImaDocuments")
-    head_start = render.index('<header class="section-head ima-docs-head">')
+    head_start = render.index('<header class="kb-desk-head">')
     head_end = render.index("</header>", head_start)
     slot = render.index('id="ima-doc-day-nav-slot"')
-    toolbar = render.index('<div class="ima-doc-toolbar">')
-    assert head_start < slot < head_end < toolbar
-    assert 'class="ima-docs-head-main"' in render[head_start:head_end]
-
+    body = render.index('id="ima-docs-body"')
+    assert head_start < slot < head_end < body
     css = STYLE_CSS.read_text()
-    head_main = re.search(r"\.ima-docs-head-main\s*\{([^}]*)\}", css)
-    slot_css = re.search(r"\.kb-list \.ima-doc-day-nav-slot\s*\{([^}]*)\}", css)
     date_css = re.search(r"\.kb-list \.ima-doc-day-jump \.form-control\s*\{([^}]*)\}", css)
-    assert head_main and "display: grid" in head_main.group(1)
-    assert "grid-template-columns" in head_main.group(1)
-    head = re.search(r"\.kb-list \.ima-docs-head\s*\{([^}]*)\}", css)
-    assert head and "align-items: flex-start" in head.group(1)
-    assert slot_css and "flex: 0 0 auto" in slot_css.group(1)
-    assert "100%" not in slot_css.group(1)
-    assert date_css and "min-height: 32px" in date_css.group(1)
-    mobile = css[css.rfind("@media (max-width: 768px)"):]
-    assert ".kb-list .ima-doc-day-nav > button" in mobile
-    assert "min-height: 44px" in mobile
+    assert date_css and "min-height: 44px" in date_css.group(1)
+    btn = re.search(r"\.kb-list \.ima-doc-day-nav > button\s*\{([^}]*)\}", css)
+    assert btn and "min-height: 44px" in btn.group(1)
 
 
 def test_ima_document_list_hides_tag_rail_but_keeps_tag_filtering():
-    """列表移除顶部常用标签条，但漏斗下拉和行内标签仍保留。"""
+    """列表去掉标签条和行内标签；URL 标签筛选仍可用。"""
     src = APP_JS.read_text()
     render = _fn_body("renderImaDocuments")
     row = _fn_body("imaDocumentRow")
@@ -1971,18 +1955,17 @@ def test_ima_document_list_hides_tag_rail_but_keeps_tag_filtering():
     assert 'id="ima-doc-tag-rail"' not in render
     assert "imaDocTagRailHtml" not in src
     assert ".ima-doc-tag-rail" not in css
-    assert 'id="ima-doc-filter-toggle"' in render
     assert 'id="ima-doc-tag"' in render
-    assert "imaDocumentTagsHtml(rowTags, true)" in row
+    assert "item.tags" not in row
 
 
 def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=207"' in html
-    assert 'src="/app.js?v=292"' in html
-    assert 'dav-shell-v161' in sw
+    assert 'href="/style.css?v=208"' in html
+    assert 'src="/app.js?v=293"' in html
+    assert 'dav-shell-v162' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -2005,7 +1988,8 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     assert 'route: "ima-documents"' not in mobile
     assert 'route: "knowledge"' not in mobile
     assert "isPhoneShell" in src
-    assert "知识库请在电脑上打开" in src
+    assert "知识库在电脑上读" in src
+    assert "知识库请在电脑上打开" not in src
     assert 'class="tl-ima-entry"' in timeline
     assert "go('knowledge')" in timeline
     assert "知识库" in timeline
@@ -2033,12 +2017,12 @@ def test_knowledge_single_subscribed_library_skips_catalog():
     assert "imaKnowledgeCatalogRoute()" in select
     assert "function imaKnowledgeCatalogRoute" in src
     assert "function imaKnowledgeStayOnCatalog" in src
-    assert "kb-workspace" in render or "mountKnowledgeShell" in render
-    assert "选一份研报" in src
+    assert "kb-desk" in render or "mountKnowledgeShell" in render
+    assert "ensureKnowledgeReaderOpen" in src
 
 
 def test_knowledge_catalog_shell_contract():
-    """知识库三栏：选库 / 按日目录 / 阅读；订阅接口；旧 /ima-documents 回写到 /knowledge。"""
+    """知识库研究桌：库选择 + 列表 + 阅读；订阅接口；旧 /ima-documents 回写到 /knowledge。"""
     src = APP_JS.read_text()
     render = _fn_body("renderKnowledge")
     router = _fn_body("router")
@@ -2046,19 +2030,15 @@ def test_knowledge_catalog_shell_contract():
     open_doc = _fn_body("openImaDocument")
     reader = _fn_body("renderImaDocument")
     assert "/api/ima-documents/catalog" in render
-    assert "kb-workspace" in src
-    assert "kb-libs" in src
+    assert "kb-desk" in src
     assert "kb-list" in src
     assert "kb-reader" in src
-    assert "选一份研报" in src
+    assert "kb-desk-lib" in src
     assert "没有访问权限" in render
     assert "暂无可订阅的知识库" in render
     assert "还没有订阅知识库" in render
     assert "回知识库" in render
-    assert "不会推送到频道" in src
     assert "openKnowledgeLatest" in src
-    assert "ima-doc-filter-toggle" in src
-    assert "has-filter" in src
     assert "onKnowledgeListKey" in src
     assert 'e.key !== "j"' in src
     assert "showImaPdfFail" in src
@@ -2066,17 +2046,13 @@ def test_knowledge_catalog_shell_contract():
     unsub = _fn_body("unsubscribeKnowledge")
     assert "confirm(" in unsub
     assert "isPhoneShell" in src
-    assert "知识库请在电脑上打开" in src
-    assert "ima-doc-filter-chips" in src
+    assert "知识库在电脑上读" in src
+    assert "知识库请在电脑上打开" not in src
     assert "knowledgeAclPanelHtml" not in render
     assert "谁能订" not in render
     assert "谁能定" not in render
-    lib = _fn_body("knowledgeLibRowHtml")
-    assert 'mode === "available"' in lib
-    assert "is-available" in lib
-    assert "kb-lib-row" in lib
     assert "history.pushState" in open_doc
-    assert "$(\"#kb-workspace\")" in open_doc
+    assert "$(\"#kb-desk\")" in open_doc or "$(\"#kb-workspace\")" in open_doc
     assert "$(\"#kb-reader\")" in reader
     assert "/api/ima-documents/groups/" in src
     assert re.search(
@@ -2095,11 +2071,40 @@ def test_knowledge_catalog_shell_contract():
     assert "renderKnowledge" in router
     assert "knowledge" in route
     css = STYLE_CSS.read_text()
-    assert ".kb-workspace" in css
-    assert ".kb-lib-row" in css
-    assert ".kb-reader-empty" in css
-    assert "grid-template-columns: 200px 320px minmax(0, 1fr)" in css
+    assert ".kb-desk" in css
+    assert "grid-template-columns: 400px minmax(0, 1fr)" in css
+    assert "max-height: calc(100vh - 56px)" in css
     assert "border-top: var(--border-default)" in css
+
+
+def test_ima_display_title_strips_pdf_and_english_duplicate():
+    body = _fn_body("imaDisplayTitle")
+    js = (
+        "function imaDisplayTitle(name) " + body + "\n"
+        "const samples = ["
+        "  ['x.pdf', 'x'],"
+        "  ['高盛-蒙牛乳业（2319.HK）1H26速评：营收全面复苏 Mengniu Dairy （2319.HK）： First Take.pdf',"
+        "   '高盛-蒙牛乳业（2319.HK）1H26速评：营收全面复苏'],"
+        "  ['笔记-副本', '笔记']"
+        "];"
+        "for (const [raw, want] of samples) {"
+        "  const got = imaDisplayTitle(raw);"
+        "  if (got !== want) { console.error(JSON.stringify({raw, got, want})); process.exit(1); }"
+        "}"
+    )
+    subprocess.run(["node", "-e", js], check=True)
+
+
+def test_knowledge_desk_auto_opens_first_and_hides_empty_libs():
+    src = APP_JS.read_text()
+    render = _fn_body("renderImaDocuments")
+    open_doc = _fn_body("openImaDocument")
+    reader = _fn_body("renderImaDocument")
+    libs = _fn_body("knowledgeDeskGroups")
+    assert "ensureKnowledgeReaderOpen" in render
+    assert "replaceState" in open_doc
+    assert "setPageTitle(item.name" not in reader
+    assert "document_count" in libs
 
 
 def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
@@ -2108,24 +2113,15 @@ def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
     row = _fn_body("imaDocumentRow")
     render = _fn_body("renderImaDocuments")
     reader = _fn_body("renderImaDocument")
-    groups = _fn_body("imaDocumentGroupControls")
     select = _fn_body("selectImaDocumentGroup")
     css = STYLE_CSS.read_text()
 
-    assert 'placeholder="搜索标题或摘要"' in src
-    assert "ima-doc-tag" in src
+    assert 'placeholder="搜公司、代码或标题"' in src
     assert "submitImaDocumentsSearch" in src
     assert ">搜索</button>" not in render
-    assert "syncImaListChrome" in src
-    assert "ima-doc-filter-chips" in src
-    assert "has-filter" in src
+    assert "kb-desk-lib" in render or "kb-desk-lib" in src
     assert 'params.set("tag"' in render
     assert "data.days" in render
-    assert "data.tags" in render
-    assert "imaTagCountsFromData" in render
-    assert "imaDistinctiveTags" in src
-    assert "ima-doc-tag-rail" not in src
-    assert "IMA_TAG_COMMON_RATIO" in src
     assert "imaDocumentsRoute(group, query, day, tag)" in reader or "imaDocumentsRoute(item.group_id, query, day, tag)" in reader
     assert "closeImaPdf" in src
     assert "loadImaPdf(mediaId)" in reader
@@ -2133,9 +2129,10 @@ def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
     assert "item.abstract" not in row
     assert "ima-doc-row-thumb" not in row
     assert "item.cover_url" not in row
-    assert "item.tags" in row
-    assert "imaDocKindLabel" in row
-    assert "ima-doc-row-day" not in row
+    assert "imaDisplayTitle" in row
+    assert "imaDocTicker" in row
+    assert "item.tags" not in row
+    assert "imaDocKindLabel" not in row
     assert "ima-doc-row-arrow" not in row
     assert "imaDocumentsEmptyHtml" in src
     assert "没有匹配的文档" in src
@@ -2157,16 +2154,9 @@ def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
     assert "ima-text-view" not in reader
     assert "查看 PDF" not in reader
 
-    assert "state.user.is_admin" in groups or "state.user?.is_admin" in groups
     assert "renderKnowledge" in select
-    assert ".ima-doc-cover" in css or ".ima-doc-tag" in css
-    assert "grid-column: 1" in css
-    assert "grid-column: 2" in css
-    assert "grid-column: 3" not in css
-    assert ".ima-doc-kind" in css
-    assert "border-radius: var(--radius-pill)" in css
+    assert ".kb-desk" in css
     assert ".ima-reader-abstract { max-width: 72ch;" in css
-    assert ".ima-reader-empty" in css
 
 
 def test_ima_documents_search_leaves_day_view():

@@ -330,16 +330,24 @@ function imaDocumentReaderRoute(mediaId) {
   return `${_imaDocumentRoute(mediaId)}${query}`;
 }
 
-function openImaDocument(mediaId) {
+function openImaDocument(mediaId, replace = false) {
   const id = String(mediaId || "");
   if (!id) return;
   const url = normalizeRoute(imaDocumentReaderRoute(id));
-  if (location.pathname + location.search !== url) history.pushState(null, "", url);
-  if ($("#kb-workspace")) {
+  if (location.pathname + location.search !== url) {
+    if (replace) history.replaceState(null, "", url);
+    else history.pushState(null, "", url);
+  }
+  if ($("#kb-desk")) {
     renderImaDocument(routeRenderSeq, id);
     return;
   }
   router();
+}
+
+function ensureKnowledgeReaderOpen(mediaId) {
+  if (knowledgeMediaIdFromPath() || isPhoneShell()) return;
+  openImaDocument(mediaId, true);
 }
 
 function clearSessionCaches() {
@@ -549,10 +557,9 @@ function ensureKnowledgeKeys() {
 
 function mountKnowledgeShell() {
   ensureKnowledgeKeys();
-  if ($("#kb-workspace")) return;
+  if ($("#kb-desk")) return;
   $("#main").innerHTML = `
-    <section class="section-panel kb-workspace" id="kb-workspace">
-      <aside class="kb-libs" id="kb-libs" aria-label="知识库"></aside>
+    <section class="section-panel kb-desk" id="kb-desk">
       <div class="kb-list" id="kb-list" tabindex="-1"></div>
       <div class="kb-reader" id="kb-reader"><div class="kb-reader-empty" role="status"></div></div>
     </section>`;
@@ -626,8 +633,8 @@ function isPhoneShell() {
 function renderKnowledgePhoneBlocked() {
   setPageTitle("知识库");
   $("#main").innerHTML = emptyState(
-    "知识库请在电脑上打开",
-    `<div><p class="section-meta">研报和 PDF 适合在电脑上读，手机不再放这个入口。</p><div><button type="button" class="btn-normal" onclick="go('timeline')">回动态</button></div></div>`
+    "知识库在电脑上读",
+    `<div><p class="section-meta">研报 PDF 按桌面阅读台设计，请在电脑打开。</p><div><button type="button" class="btn-normal" onclick="go('timeline')">回动态</button></div></div>`
   );
 }
 
@@ -687,6 +694,31 @@ function fmtImaDay(day) {
   const match = /^(\d{2})(\d{2})$/.exec(raw);
   if (!match) return raw;
   return `${Number(match[1])}月${Number(match[2])}日`;
+}
+
+function imaDisplayTitle(name) {
+  let s = String(name || "").replace(/\.pdf$/i, "").replace(/-副本$/u, "").trim();
+  let lastCjk = -1;
+  for (let i = 0; i < s.length; i += 1) {
+    if (/[\u4e00-\u9fff]/.test(s[i])) lastCjk = i;
+  }
+  if (lastCjk >= 0) {
+    const rest = s.slice(lastCjk + 1);
+    const cut = rest.search(/\s+[A-Za-z]/);
+    if (cut >= 0) s = s.slice(0, lastCjk + 1 + cut).trim();
+  }
+  return s;
+}
+
+function imaDocTicker(name) {
+  const m = String(name || "").match(/[（(]([A-Z0-9][A-Z0-9.\-]*)[）)]/);
+  return m ? m[1] : "";
+}
+
+function imaDocBroker(name) {
+  const title = imaDisplayTitle(name);
+  const m = title.match(/^([^\-–—]{1,8})[-–—]/);
+  return m ? m[1].trim() : "";
 }
 
 function fmtDocSize(bytes) {
@@ -755,16 +787,16 @@ function imaDistinctiveTags(tags, counts = _imaTagCounts, documentCount = _imaDo
 }
 
 function imaDocumentRow(item, showGroupLabel = false) {
-  const groupLabel = showGroupLabel && item.group_name
-    ? `<span class="ima-doc-group-label">${escapeHtml(item.group_name)}</span>` : "";
-  const rowTags = imaDistinctiveTags(item.tags);
-  const tags = imaDocumentTagsHtml(rowTags, true);
+  const title = imaDisplayTitle(item.name);
+  const ticker = imaDocTicker(item.name);
+  const day = fmtImaDay(item.day);
+  const broker = imaDocBroker(item.name);
+  const bits = [ticker, day, showGroupLabel ? item.group_name : "", broker].filter(Boolean);
   return `
     <div class="ima-doc-row" role="button" tabindex="0" data-media-id="${escapeHtml(item.media_id)}" onclick="openImaDocument(this.dataset.mediaId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openImaDocument(this.dataset.mediaId)}">
       <span class="ima-doc-row-copy">
-        <span class="ima-doc-row-name">${escapeHtml(item.name)}</span>
-        ${groupLabel}
-        <span class="ima-doc-row-meta"><span class="ima-doc-kind">${escapeHtml(imaDocKindLabel(item))}</span>${tags}</span>
+        <span class="ima-doc-row-name">${escapeHtml(title)}</span>
+        <span class="ima-doc-row-meta">${escapeHtml(bits.join(" · "))}</span>
       </span>
     </div>`;
 }
@@ -989,6 +1021,29 @@ function knowledgeLibRowHtml(group, selected, mode) {
   </div>`;
 }
 
+function knowledgeDeskGroups() {
+  const subscribed = (state.imaCatalogSubscribed || []).filter((group) => Number(group.document_count) > 0);
+  const available = state.imaCatalogAvailable || [];
+  return { subscribed, available };
+}
+
+function knowledgeDeskLibHtml(selectedGroup) {
+  const selected = String(selectedGroup ?? "");
+  const { subscribed, available } = knowledgeDeskGroups();
+  const isAdmin = !!state.user?.is_admin;
+  const options = [];
+  if (isAdmin) options.push({ id: "", name: "全部" });
+  for (const group of subscribed) options.push({ id: String(group.id || ""), name: group.name || group.id });
+  const select = `<label><span class="sr-only">知识库</span><select class="kb-desk-lib" aria-label="知识库" onchange="selectImaDocumentGroup(this.value)">${options.map((group) => `<option value="${escapeHtml(group.id)}"${group.id === selected ? " selected" : ""}>${escapeHtml(group.name)}</option>`).join("")}</select></label>`;
+  const unsub = !isAdmin && selected && subscribed.some((group) => String(group.id) === selected)
+    ? `<button type="button" class="btn-ghost kb-lib-unsub" data-group="${escapeHtml(selected)}" data-name="${escapeHtml((subscribed.find((group) => String(group.id) === selected) || {}).name || "")}" onclick="unsubscribeKnowledge(this.dataset.group, this)">退订</button>`
+    : "";
+  const availableHtml = available.length
+    ? `<div class="kb-desk-available"><p class="kb-libs-label">可订阅</p>${available.map((group) => knowledgeLibRowHtml(group, selected, "available")).join("")}</div>`
+    : "";
+  return { select, unsub, availableHtml, count: subscribed.find((group) => String(group.id) === selected)?.document_count };
+}
+
 function renderKnowledgeLibs(selectedGroup) {
   const el = $("#kb-libs");
   if (!el) return;
@@ -1062,7 +1117,7 @@ async function renderKnowledge(seq, encodedMediaId = "") {
   stopImaDocumentsAutoLoad();
   const mediaId = encodedMediaId ? decodeURIComponent(encodedMediaId) : "";
   setPageTitle("知识库");
-  if (!$("#kb-workspace")) {
+  if (!$("#kb-desk")) {
     $("#main").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
   }
   try {
@@ -1088,10 +1143,12 @@ async function renderKnowledge(seq, encodedMediaId = "") {
     }
     if (!selectedGroup && !imaKnowledgeStayOnCatalog() && subscribed.length) {
       const remembered = rememberedKnowledgeGroup();
-      if (remembered && subscribed.some((group) => String(group.id) === remembered)) {
+      const readable = subscribed.filter((group) => Number(group.document_count) > 0);
+      const pool = readable.length ? readable : subscribed;
+      if (remembered && pool.some((group) => String(group.id) === remembered)) {
         selectedGroup = remembered;
       } else {
-        selectedGroup = String(subscribed[0].id || "");
+        selectedGroup = String(pool[0].id || "");
       }
       const query = routeQuery().get("q") || "";
       const day = routeQuery().get("day") || "";
@@ -1118,7 +1175,7 @@ async function renderKnowledge(seq, encodedMediaId = "") {
         list.innerHTML = emptyState(
           "还没有订阅知识库",
           available.length
-            ? `<div><p class="section-meta">从左侧可订阅里点订阅</p></div>`
+            ? `<div><p class="section-meta">在上方可订阅里点订阅</p></div>`
             : `<div><p class="section-meta">找管理员在用户设置里勾选知识库后再来订阅</p></div>`
         );
         if (!available.length) {
@@ -1136,7 +1193,6 @@ async function renderKnowledge(seq, encodedMediaId = "") {
     await renderImaDocuments(seq);
     if (!routeStillActive(seq)) return;
     if (mediaId) await renderImaDocument(seq, mediaId);
-    else syncKnowledgeReaderEmpty();
   } catch (err) {
     if (routeStillActive(seq)) {
       $("#main").innerHTML = emptyState(`加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="refreshKnowledge()">重试</button></div>`);
@@ -1152,7 +1208,7 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     return;
   }
   const mediaId = encodedMediaId ? decodeURIComponent(encodedMediaId) : "";
-  if (!$("#kb-workspace")) {
+  if (!$("#kb-desk")) {
     await renderKnowledge(seq, encodedMediaId);
     return;
   }
@@ -1170,7 +1226,6 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
   const day = routeQuery().get("day") || "";
   const tag = routeQuery().get("tag") || "";
   const searchMode = !!(query || tag);
-  const filtersOpen = false;
   state.imaDocumentsGroup = selectedGroup;
   state.imaDocumentsQuery = query;
   state.imaDocumentsDay = day;
@@ -1181,23 +1236,22 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     await renderKnowledge(seq);
     return;
   }
+  const deskLib = knowledgeDeskLibHtml(selectedGroup);
   listRoot.innerHTML = `
-      <header class="section-head ima-docs-head">
-        <div class="ima-docs-head-main"><div><h2 id="ima-doc-title" class="section-title">知识库</h2><p id="ima-doc-meta" class="section-meta"></p></div><div id="ima-doc-day-nav-slot" class="ima-doc-day-nav-slot"></div></div>
-        <button type="button" class="btn-ghost ima-docs-refresh" onclick="refreshImaDocuments()" aria-label="刷新">${REFRESH_ICON}</button>
-      </header>
-      <div id="ima-doc-groups" class="ima-doc-group-switcher"></div>
-      <div class="ima-doc-toolbar">
+      <header class="kb-desk-head">
+        <div class="kb-desk-head-row">
+          ${deskLib.select}${deskLib.unsub}
+          <span class="kb-desk-count" id="ima-doc-meta"></span>
+        </div>
+        <h2 id="ima-doc-title" class="sr-only">知识库</h2>
         <form class="ima-doc-search-form" onsubmit="event.preventDefault();submitImaDocumentsSearch()">
-          <label class="search-bar ima-doc-search">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜索标题或摘要" aria-label="搜索知识库"></label>
+          <label class="kb-desk-search">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜公司、代码或标题" aria-label="搜索知识库"></label>
         </form>
-        <button type="button" class="btn-ghost ima-doc-filter-toggle${tag ? " has-filter" : ""}" id="ima-doc-filter-toggle" aria-expanded="${filtersOpen}" aria-controls="ima-doc-filters" onclick="toggleImaDocumentsFilters()">${FILTER_ICON}<span class="sr-only">筛选</span></button>
-      </div>
-      <div id="ima-doc-filters" class="ima-doc-filters"${filtersOpen ? "" : " hidden"}>
-        <select id="ima-doc-tag" class="form-control ima-doc-tag-filter" aria-label="按标签筛选" onchange="selectImaDocumentsTag(this.value)"><option value="">全部标签</option></select>
-      </div>
-      <div id="ima-doc-filter-chips" class="ima-doc-filter-chips"></div>
-      <div id="ima-docs-body" class="ima-docs-body"><div class="admin-skeleton" aria-hidden="true"></div></div>`;
+        <div class="kb-desk-facets" id="ima-doc-day-nav-slot"></div>
+        ${deskLib.availableHtml}
+        <select id="ima-doc-tag" class="hidden" aria-hidden="true" onchange="selectImaDocumentsTag(this.value)"><option value="">全部标签</option></select>
+      </header>
+      <div id="ima-docs-body" class="kb-desk-rows"><div class="admin-skeleton" aria-hidden="true"></div></div>`;
   try {
     const params = new URLSearchParams();
     if (query) params.set("q", query);
@@ -1221,11 +1275,6 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     if (title) title.textContent = selectedGroupName;
     if (meta) meta.textContent = `${count} 份`;
     if (!knowledgeMediaIdFromPath()) setPageTitle(selectedGroupName);
-    const groupSwitch = $("#ima-doc-groups");
-    if (groupSwitch) {
-      const hideSwitcher = !state.user?.is_admin && (groups || []).length <= 1;
-      groupSwitch.innerHTML = hideSwitcher ? "" : imaDocumentGroupControls(groups, selectedGroup);
-    }
     const days = Array.isArray(data.days)
       ? data.days.filter(Boolean)
       : [...new Set(items.map((item) => item.day).filter(Boolean))];
@@ -1272,7 +1321,8 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
       : "";
     body.innerHTML = `<div class="ima-doc-list">${items.map((item) => imaDocumentRow(item, showGroupLabel)).join("")}</div>${sentinel}`;
     syncKnowledgeDocSelection();
-    syncKnowledgeReaderEmpty();
+    if (items[0]?.media_id) ensureKnowledgeReaderOpen(items[0].media_id);
+    else syncKnowledgeReaderEmpty();
     if (state.imaDocumentsHasMore) startImaDocumentsAutoLoad();
   } catch (err) {
     if (!routeStillActive(seq)) return;
@@ -1458,12 +1508,11 @@ async function renderImaDocument(seq, mediaId) {
       backRoute = imaDocumentsRoute(item.group_id, query, day, tag);
     }
     if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
-    setPageTitle(item.name || "知识库");
-    const groupContext = item.group_name
-      ? `<span class="ima-reader-group ima-reader-meta-item">来源：${escapeHtml(item.group_name)}</span>`
-      : "";
+    setPageTitle(item.group_name || $("#ima-doc-title")?.textContent || "知识库");
+    const ticker = imaDocTicker(item.name);
+    const tickerMeta = ticker ? `<span class="ima-reader-meta-item">${escapeHtml(ticker)}</span>` : "";
     const dayContext = item.day
-      ? `<span class="ima-reader-day ima-reader-meta-item">日期：${escapeHtml(fmtImaDay(item.day))}</span>`
+      ? `<span class="ima-reader-day ima-reader-meta-item">${escapeHtml(fmtImaDay(item.day))}</span>`
       : "";
     const abstractText = item.abstract_zh || item.abstract || "";
     const abstractHtml = abstractText
@@ -1476,13 +1525,12 @@ async function renderImaDocument(seq, mediaId) {
       ? `<div id="ima-pdf-panel" class="ima-pdf-panel"><iframe id="ima-pdf-frame" title="PDF 预览"></iframe></div>`
       : `<div class="ima-reader-empty"><p>还没有预览文件</p><button type="button" class="btn-normal" onclick="closeKnowledgeReader()">回列表</button></div>`;
     const sizeLine = fmtDocSize(item.size);
-    const kindMeta = `<span class="ima-reader-meta-item">类型：${escapeHtml(imaDocKindLabel(item))}</span>`;
     const sizeMeta = sizeLine ? `<span class="ima-reader-meta-item">${escapeHtml(sizeLine)}</span>` : "";
-    const fileMetaHtml = `<div class="section-meta ima-reader-filemeta">${groupContext}${dayContext}${kindMeta}${sizeMeta}</div>`;
+    const fileMetaHtml = `<div class="section-meta ima-reader-filemeta">${tickerMeta}${dayContext}${sizeMeta}</div>`;
     $("#kb-reader").innerHTML = `
       <section class="ima-reader">
         <header class="section-head ima-reader-head">
-          <div class="ima-reader-copy"><h2 class="section-title ima-reader-title">${escapeHtml(item.name)}</h2>${fileMetaHtml}${imaDocumentTagsHtml(item.tags, true)}${abstractHtml}</div>
+          <div class="ima-reader-copy"><h2 class="section-title ima-reader-title">${escapeHtml(imaDisplayTitle(item.name))}</h2>${fileMetaHtml}${abstractHtml}</div>
           ${pdfActions}
         </header>
         ${pdfPanel}
