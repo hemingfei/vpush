@@ -1179,6 +1179,15 @@ def test_admin_ima_collector_includes_storage(tmp_path, monkeypatch):
     assert "capacity_blocked" not in payload["storage"]
 
 
+def test_admin_ima_collector_put_includes_storage(tmp_path, monkeypatch):
+    client, _, _ = _remote_storage_client(tmp_path, monkeypatch)
+    headers = _headers(client, "collector_put_storage", "COLPUTST", admin=True)
+    payload = client.put("/api/admin/ima-collector", headers=headers, json={}).json()
+    assert "storage" in payload
+    assert payload["storage"]["status"] == "available"
+    assert payload["storage"]["available"] is True
+
+
 def test_list_catalog_detail_ok_during_storage_outage(tmp_path, monkeypatch):
     client, archive_root, status_path = _remote_storage_client(
         tmp_path, monkeypatch, available=False, writable=False

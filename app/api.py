@@ -2906,7 +2906,7 @@ def create_api_router(
                 db.set_settings_atomic(updates)
                 audit_parts.extend(sorted(key for key in updates if key != IMA_PURE_GROUPS_KEY))
                 _audit(admin, "set_ima_collector", "", ";".join(audit_parts))
-        return ima_documents.status()
+        return _ima_collector_status()
 
     @router.post("/admin/ima-collector/sync", dependencies=[Depends(require_admin)])
     def trigger_ima_collector(admin: dict = Depends(require_admin)):
