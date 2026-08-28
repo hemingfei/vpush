@@ -230,6 +230,7 @@ textarea.form-control {
 .btn-ghost:hover { border-color: var(--color-text-muted); }
 .btn-ghost:active { background: var(--color-surface-button-active); }
 .btn-ghost:disabled { opacity: 0.65; cursor: default; }
+.refresh-icon { width: 16px; height: 16px; flex: 0 0 auto; }
 .btn-ghost.danger { color: var(--color-danger); border-color: var(--color-line-danger); }
 .btn-ghost.danger:hover { border-color: var(--color-danger); color: var(--color-danger-strong); }
 
@@ -613,6 +614,9 @@ textarea.form-control {
 @media (max-width: 800px) {
   .cfg-grid { grid-template-columns: 1fr; }
   .cfg-group--zsxq .cfg-fields { grid-template-columns: 1fr; }
+  .ima-mount-layout { grid-template-columns: 1fr; }
+  .ima-kb-list,
+  .ima-folder-tree { max-height: 360px; }
 }
 @media (max-width: 720px) {
   .cfg-flags { grid-template-columns: 1fr; }
@@ -2977,6 +2981,175 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .ima-group-row-head .cfg-group-title { margin: 0; }
 .ima-groups-toolbar { margin: 0; }
 .ima-groups-list { display: grid; gap: var(--space-3); margin-top: var(--space-3); }
+.ima-mount-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  gap: var(--space-4);
+  min-width: 0;
+  margin-top: var(--space-3);
+}
+.ima-mount-pane {
+  min-width: 0;
+  border: var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+.ima-mount-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 52px;
+  padding: 8px 12px;
+}
+.ima-mount-pane-head > * { min-width: 0; }
+.ima-mount-pane-head strong { overflow-wrap: anywhere; }
+.ima-mount-pane-head .muted {
+  flex: 0 0 auto;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.ima-kb-list,
+.ima-folder-tree {
+  max-height: 460px;
+  overflow: auto;
+  min-width: 0;
+}
+.ima-mount-empty { margin: 12px; }
+.ima-mount-kb-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 0;
+  border-top: var(--border-default);
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+}
+.ima-mount-kb-row:hover { background: var(--color-surface-soft); }
+.ima-mount-kb-row.is-selected {
+  background: var(--color-accent-soft);
+  color: var(--color-text-strong);
+}
+.ima-mount-kb-copy { display: grid; gap: 2px; min-width: 0; }
+.ima-mount-kb-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-strong);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.35;
+}
+.ima-mount-kb-meta {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+}
+.ima-mount-kb-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0 6px;
+  border: var(--border-default);
+  border-radius: var(--radius-pill);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.ima-folder-node { min-width: 0; }
+.ima-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 10px 0 var(--ima-folder-indent, 8px);
+  border-top: var(--border-default);
+}
+.ima-folder-row:hover { background: var(--color-surface-soft); }
+.ima-folder-expand,
+.ima-folder-expand-placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 44px;
+  width: 44px;
+  min-height: 44px;
+}
+.ima-folder-expand {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 22px;
+  line-height: 1;
+}
+.ima-folder-expand:hover { color: var(--color-text-strong); background: var(--color-bg-muted); }
+.ima-folder-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  cursor: pointer;
+}
+.ima-folder-choice input,
+.ima-folder-orphan input {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+.ima-folder-icon { display: inline-flex; flex: 0 0 auto; color: var(--color-accent-text); }
+.ima-folder-icon svg { width: 17px; height: 17px; }
+.ima-folder-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-strong);
+  line-height: 1.35;
+}
+.ima-folder-choice input:disabled + .ima-folder-icon,
+.ima-folder-choice input:disabled ~ .ima-folder-name { color: var(--color-text-muted); }
+.ima-folder-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 44px;
+  padding: 12px;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+.ima-folder-state-title {
+  margin: 0;
+  padding: 10px 12px 4px;
+  color: var(--color-warning-strong);
+  font-size: var(--text-xs);
+}
+.ima-folder-error { color: var(--color-danger); }
+.ima-folder-error .btn-sm { flex: 0 0 auto; min-height: 44px; }
+.ima-folder-orphans { border-top: var(--border-default); }
+.ima-folder-orphan {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 6px 12px;
+  color: var(--color-warning-strong);
+  font-size: var(--text-xs);
+}
 .ima-group-fields {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3016,6 +3189,9 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   .ima-collector-fields .ima-field--wide,
   .ima-group-enabled,
   .ima-credential-field--wide { grid-column: auto; }
+  .ima-mount-layout { grid-template-columns: 1fr; }
+  .ima-kb-list,
+  .ima-folder-tree { max-height: 360px; }
 }
 
 @media (max-width: 768px) {
@@ -3055,6 +3231,6 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   .ima-collector-foot .toolbar button,
   .ima-credential-actions button { flex: 1 1 160px; min-height: 44px; }
   .ima-groups-head { align-items: flex-start; flex-direction: column; }
-  .ima-groups-toolbar { width: 100%; }
-  .ima-groups-toolbar button { width: 100%; }
+  .ima-groups-toolbar { width: auto; }
+  .ima-groups-toolbar button { width: auto; }
 }

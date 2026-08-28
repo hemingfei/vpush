@@ -77,6 +77,7 @@ from .fetchers.zsxq import (
     zsxq_cache_stats,
 )
 from .ima_documents import (
+    IMA_MOUNT_FOLDER_ID_MAX,
     IMA_PURE_GROUPS_KEY,
     IMA_PURE_INTERVAL_KEY,
     IMA_PURE_INTERVAL_MAX,
@@ -86,8 +87,10 @@ from .ima_documents import (
     IMA_PURE_ROOT_FOLDER_KEY,
     IMA_PURE_UID_KEY,
     ImaDocumentService,
-    ImaGroupConfig,
+    ImaPureClient,
+    _safe_error,
     ima_kb_valid_tags,
+    normalize_ima_folder_item,
     purge_ima_document_tags,
 )
 from .ima_kb import (
@@ -532,6 +535,7 @@ class ImaGroupIn(BaseModel):
     knowledge_base_id: str
     root_folder_id: str
     enabled: bool = True
+    folder_ids: list[object] | None = None
 
 
 class ImaCollectorIn(BaseModel):
@@ -2687,6 +2691,52 @@ def create_api_router(
             raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
         return payload
 
+    @router.post("/admin/ima-collector/discover", dependencies=[Depends(require_admin)])
+    def discover_ima_groups(admin: dict = Depends(require_admin)):
+        if ima_documents is None:
+            raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
+        result = ima_documents.discover()
+        if result.get("status") == "not_configured":
+            raise HTTPException(status_code=400, detail="请先配置 IMA UID 和 Refresh Token")
+        _audit(admin, "discover_ima_groups", "", str(result.get("status") or ""))
+        return result
+
+    @router.get("/admin/ima-collector/groups/{group_id}/folders", dependencies=[Depends(require_admin)])
+    def list_ima_group_folders(
+        group_id: str,
+        parent_id: str = Query("", max_length=128),
+    ):
+        if ima_documents is None:
+            raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
+        if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", group_id):
+            raise HTTPException(status_code=404, detail="知识库不存在")
+        parent_id = parent_id.strip()
+        if parent_id and not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", parent_id):
+            raise HTTPException(status_code=400, detail="父文件夹 ID 格式无效")
+        group = next((item for item in _configured_groups() if item.id == group_id), None)
+        if group is None:
+            raise HTTPException(status_code=404, detail="知识库不存在")
+        actual_parent_id = parent_id or group.root_folder_id.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", actual_parent_id):
+            raise HTTPException(status_code=400, detail="根文件夹 ID 格式无效")
+        try:
+            client = ImaPureClient(ima_documents.config(), group=group)
+            raw_items = client.list_items(actual_parent_id)
+        except Exception as exc:  # noqa: BLE001 - folder endpoint must return a safe error
+            detail = _safe_error(exc)
+            raise HTTPException(status_code=502, detail=f"IMA 文件夹读取失败: {detail}") from None
+        items = []
+        seen: set[str] = set()
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                continue
+            item = normalize_ima_folder_item(raw_item, actual_parent_id)
+            if item is None or item["id"] in seen:
+                continue
+            seen.add(item["id"])
+            items.append(item)
+        return {"group_id": group_id, "parent_id": actual_parent_id, "items": items}
+
     @router.put("/admin/ima-collector/groups/{group_id}/acl", dependencies=[Depends(require_admin)])
     def set_ima_kb_acl(group_id: str, body: ImaKbAclIn, admin: dict = Depends(require_admin)):
         if group_id not in {g.id for g in _configured_groups()}:
@@ -2761,6 +2811,7 @@ def create_api_router(
             existing = {group.id: group for group in ima_documents.config().groups}
             groups: list[dict[str, object]] = []
             group_ids: list[str] = []
+            clear_group_ids: list[str] = []
             for group in body.groups:
                 name = group.name.strip()
                 knowledge_base_id = group.knowledge_base_id.strip()
@@ -2782,20 +2833,53 @@ def create_api_router(
                 if group_id in group_ids:
                     raise HTTPException(status_code=400, detail="IMA 群组 ID 不能重复")
                 group_ids.append(group_id)
+                previous = existing.get(group_id)
+                if group.folder_ids is None:
+                    folder_ids = list(
+                        previous.mount_folder_ids
+                        if previous is not None
+                        else ((root_folder_id,) if group.enabled else ())
+                    )
+                else:
+                    if len(group.folder_ids) > IMA_MOUNT_FOLDER_ID_MAX:
+                        raise HTTPException(status_code=400, detail="每个 IMA 群组最多挂载 256 个文件夹")
+                    folder_ids = []
+                    seen_folder_ids: set[str] = set()
+                    for raw_folder_id in group.folder_ids:
+                        if not isinstance(raw_folder_id, str):
+                            raise HTTPException(status_code=400, detail="文件夹 ID 格式无效")
+                        folder_id = raw_folder_id.strip()
+                        if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", folder_id):
+                            raise HTTPException(status_code=400, detail="文件夹 ID 格式无效")
+                        if folder_id not in seen_folder_ids:
+                            seen_folder_ids.add(folder_id)
+                            folder_ids.append(folder_id)
+                enabled = bool(group.enabled and folder_ids)
+                if not enabled:
+                    if previous is not None and previous.mount_folder_ids:
+                        clear_group_ids.append(group_id)
+                    folder_ids = []
+                elif group.folder_ids is not None and not folder_ids:
+                    clear_group_ids.append(group_id)
                 groups.append(
                     {
                         "id": group_id,
                         "name": name,
                         "knowledge_base_id": knowledge_base_id,
                         "root_folder_id": root_folder_id,
-                        "enabled": group.enabled,
-                        "source": existing.get(group_id, ImaGroupConfig(group_id, name, knowledge_base_id, root_folder_id)).source,
+                        "folder_ids": folder_ids,
+                        "enabled": enabled,
+                        "source": previous.source if previous else "manual",
                     }
                 )
             updates[IMA_PURE_GROUPS_KEY] = json.dumps(groups, ensure_ascii=False)
             audit_parts.append(f"groups_count={len(group_ids)};group_ids={','.join(group_ids)}")
+        else:
+            clear_group_ids = []
         if updates:
             db.set_settings_atomic(updates)
+            for group_id in clear_group_ids:
+                ima_documents.store.save_group_manifest(group_id, [])
             audit_parts.extend(sorted(key for key in updates if key != IMA_PURE_GROUPS_KEY))
             _audit(admin, "set_ima_collector", "", ";".join(audit_parts))
         return ima_documents.status()
@@ -2806,7 +2890,7 @@ def create_api_router(
             raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
         result = ima_documents.trigger()
         if result["status"] == "not_configured":
-            raise HTTPException(status_code=400, detail="请先配置 IMA UID、Refresh Token、知识库和根文件夹")
+            raise HTTPException(status_code=400, detail="请先配置 IMA UID 和 Refresh Token")
         if result["status"] == "too_soon":
             raise HTTPException(status_code=429, detail="距离上次同步时间太短，请稍后再试")
         _audit(admin, "trigger_ima_collector", "", result["status"])

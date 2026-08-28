@@ -23,7 +23,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.79";
+const APP_VERSION = "1.12.83";
 const TL_SOURCE_KEY = "timelineSource";
 const KB_LAST_GROUP_KEY = "kb-last-group";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq", "mx"];
@@ -114,6 +114,22 @@ const state = {
   imaCatalogSubscribed: [],
   imaCatalogAvailable: [],
   pageBackRoute: "",
+};
+
+const imaMountState = {
+  groups: [],
+  selectedGroupId: "",
+  drafts: new Map(),
+  folders: new Map(),
+  parents: new Map(),
+  expanded: new Set(),
+  loading: new Set(),
+  errors: new Map(),
+  discoveryBusy: false,
+  discoveryEntered: false,
+  dirty: false,
+  requestSeq: 0,
+  generation: 0,
 };
 
 function escapeHtml(text) {
@@ -401,33 +417,43 @@ function avatarHtml(name, url) {
 
 // ---------- 壳 ----------
 const NAV = [
-  { group: "订阅", items: [
-    { route: "timeline", icon: LIST_ICON, label: "最新动态" },
-    { route: "knowledge", icon: BOOK_ICON, label: "知识库" },
-    { route: "home", icon: GRID_ICON, label: "订阅广场" },
-    { route: "combinations", icon: TRENDING_ICON, label: "组合订阅" },
-    { route: "mysubs", icon: BOOKMARK_ICON, label: "我的订阅" },
-    { route: "settings", icon: GEAR_ICON, label: "推送设置" },
-  ]},
-  { group: "", admin: true, subs: [
-    { label: "内容管理", items: [
-      { route: "admin/dashboard", icon: DASHBOARD_ICON, label: "全景概览" },
-      { route: "admin/kols", icon: V_ICON, label: "大V管理" },
-      { route: "admin/vocab", icon: FOLDER_ICON, label: "标签分类" },
-      { route: "admin/requests", icon: USER_PLUS_ICON, label: "添加审批" },
-    ]},
-    { label: "数据与日志", items: [
-      { route: "admin/stats", icon: BOOK_ICON, label: "数据源" },
-      { route: "admin/posts", icon: FILE_TEXT_ICON, label: "帖子" },
-      { route: "admin/logs", icon: SEND_ICON, label: "推送记录" },
-      { route: "admin/audit", icon: HISTORY_ICON, label: "操作日志" },
-      { route: "admin/backup", icon: DATABASE_ICON, label: "备份" },
-    ]},
-    { label: "用户与注册", items: [
-      { route: "admin/users", icon: USERS_ICON, label: "用户" },
-      { route: "admin/codes", icon: KEY_ICON, label: "注册码" },
-    ]},
-  ]},
+  {
+    group: "订阅", items: [
+      { route: "timeline", icon: LIST_ICON, label: "最新动态" },
+      { route: "knowledge", icon: BOOK_ICON, label: "知识库" },
+      { route: "home", icon: GRID_ICON, label: "订阅广场" },
+      { route: "combinations", icon: TRENDING_ICON, label: "组合订阅" },
+      { route: "mysubs", icon: BOOKMARK_ICON, label: "我的订阅" },
+      { route: "settings", icon: GEAR_ICON, label: "推送设置" },
+    ]
+  },
+  {
+    group: "", admin: true, subs: [
+      {
+        label: "内容管理", items: [
+          { route: "admin/dashboard", icon: DASHBOARD_ICON, label: "全景概览" },
+          { route: "admin/kols", icon: V_ICON, label: "大V管理" },
+          { route: "admin/vocab", icon: FOLDER_ICON, label: "标签分类" },
+          { route: "admin/requests", icon: USER_PLUS_ICON, label: "添加审批" },
+        ]
+      },
+      {
+        label: "数据与日志", items: [
+          { route: "admin/stats", icon: BOOK_ICON, label: "数据源" },
+          { route: "admin/posts", icon: FILE_TEXT_ICON, label: "帖子" },
+          { route: "admin/logs", icon: SEND_ICON, label: "推送记录" },
+          { route: "admin/audit", icon: HISTORY_ICON, label: "操作日志" },
+          { route: "admin/backup", icon: DATABASE_ICON, label: "备份" },
+        ]
+      },
+      {
+        label: "用户与注册", items: [
+          { route: "admin/users", icon: USERS_ICON, label: "用户" },
+          { route: "admin/codes", icon: KEY_ICON, label: "注册码" },
+        ]
+      },
+    ]
+  },
 ];
 
 const SIDEBAR_SLIM_KEY = "sidebar-slim";
@@ -2097,11 +2123,11 @@ async function renderCombinations(seq) {
     $("#combo-list").innerHTML = kols.length
       ? kols.map((k) => kolCard(k, { hidePlatform: true })).join("")
       : emptyState(
-          "还没有添加雪球组合",
-          state.user?.is_admin
-            ? `<div><button class="btn-normal btn-add" onclick="go('admin/kols')">去管理后台添加</button></div>`
-            : `<div><button class="btn-normal btn-add" onclick="go('search')">申请添加 →</button></div>`
-        );
+        "还没有添加雪球组合",
+        state.user?.is_admin
+          ? `<div><button class="btn-normal btn-add" onclick="go('admin/kols')">去管理后台添加</button></div>`
+          : `<div><button class="btn-normal btn-add" onclick="go('search')">申请添加 →</button></div>`
+      );
   } catch (err) {
     if (!routeStillActive(seq)) return;
     $("#combo-list").innerHTML = emptyState(err.message);
@@ -3303,8 +3329,8 @@ function renderTimelineFeed() {
   const emptyMsg = state.timelinePlatform === "zsxq"
     ? "星球动态不混入「全部」，订阅后会出现在这里"
     : state.timelineFavorite && !hasFilter
-    ? "还没有特别关注大V的动态"
-    : (hasFilter ? "没有符合条件的动态" : "还没有订阅任何大V");
+      ? "还没有特别关注大V的动态"
+      : (hasFilter ? "没有符合条件的动态" : "还没有订阅任何大V");
   const emptyAction = hasFilter
     ? `<div><button class="btn-normal" onclick="tlResetFilters()">清除筛选</button></div>`
     : `<div><button class="btn-normal btn-add" onclick="go('home')">去订阅</button></div>`;
@@ -3471,21 +3497,21 @@ function postCard(post) {
           ${post.images.length > 4 ? `<span class="post-images-more">+${post.images.length - 4}</span>` : ""}
         </div>` : ""}
       ${postFiles(post).map((f) => {
-        // 附件一律走鉴权路由（服务端校验订阅可见性，命中本地缓存时直接下发）；
-        // 历史详情里缓存的 /zsxq-files/ 静态链接已随挂载移除，不再直连
-        const href = f.file_id
-          ? `/api/media/zsxq-file/${encodeURIComponent(f.file_id)}?token=${encodeURIComponent(state.token || "")}`
-          : (f.url || "");
-        return href
-          ? `<a class="p-file" href="${escapeHtml(href)}" target="_blank" rel="noopener">📎 ${escapeHtml(f.name || "附件")}</a>`
-          : `<span class="p-file">📎 ${escapeHtml(f.name || "附件")}</span>`;
-      }).join("")}
+          // 附件一律走鉴权路由（服务端校验订阅可见性，命中本地缓存时直接下发）；
+          // 历史详情里缓存的 /zsxq-files/ 静态链接已随挂载移除，不再直连
+          const href = f.file_id
+            ? `/api/media/zsxq-file/${encodeURIComponent(f.file_id)}?token=${encodeURIComponent(state.token || "")}`
+            : (f.url || "");
+          return href
+            ? `<a class="p-file" href="${escapeHtml(href)}" target="_blank" rel="noopener">📎 ${escapeHtml(f.name || "附件")}</a>`
+            : `<span class="p-file">📎 ${escapeHtml(f.name || "附件")}</span>`;
+        }).join("")}
       <div class="p-meta">
         ${post.category_name ? `<span class="cat">${escapeHtml(post.category_name)}</span>` : ""}
         ${post.post_type === "reply" ? `<span class="cat">回复</span>` : ""}
         ${Array.isArray(post.tags) && post.tags.length
-          ? post.tags.map((t) => `<button type="button" class="cat cat-tag post-tag-filter" data-tag="${escapeHtml(t)}" onclick="tlPickTag(this.dataset.tag)">${escapeHtml(t)}</button>`).join("")
-          : ""}
+      ? post.tags.map((t) => `<button type="button" class="cat cat-tag post-tag-filter" data-tag="${escapeHtml(t)}" onclick="tlPickTag(this.dataset.tag)">${escapeHtml(t)}</button>`).join("")
+      : ""}
         ${post.platform === "zsxq" ? "" : `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener">查看原文 →</a>`}
       </div>
     </div>`;
@@ -3636,9 +3662,9 @@ async function doSearch(routeSeq) {
     const available = kols.filter((k) => !k.subscribed);
     const hits = keyword
       ? available.filter(
-          (k) => (k.name || "").toLowerCase().includes(keyword)
-            || (k.external_id || "").toLowerCase().includes(keyword)
-        )
+        (k) => (k.name || "").toLowerCase().includes(keyword)
+          || (k.external_id || "").toLowerCase().includes(keyword)
+      )
       : available;
     const target = $("#search-result");
     if (!target) return;
@@ -3863,33 +3889,33 @@ function channelStatusHtml(user) {
         <div class="channel-actions">
           ${tg ? "" : `<div id="bind-result-telegram"></div>`}
           ${tg
-            ? `<button class="channel-btn secondary" onclick="unbindChannel('${tgCustom ? "telegram_bot_token" : "telegram_chat_id"}')">解绑</button>`
-            : `<button class="channel-btn primary" onclick="openBindGuide('custom-bots-bind')">去绑定</button>`}
+      ? `<button class="channel-btn secondary" onclick="unbindChannel('${tgCustom ? "telegram_bot_token" : "telegram_chat_id"}')">解绑</button>`
+      : `<button class="channel-btn primary" onclick="openBindGuide('custom-bots-bind')">去绑定</button>`}
         </div>
       </div>
       <div class="channel-card" data-channel="feishu">
         <div class="channel-head">
           <span class="channel-title">${CHANNEL_ICONS.feishu}<b>飞书${fsPersonalActive ? ' <span class="tag">个人</span>' : (fsOk ? ' <span class="tag">共享</span>' : "")}</b></span>
           ${fsPersonalActive ? statusPill("status-ok", "已绑定")
-            : fsOk ? statusPill("status-ok", "已绑定")
-            : fsPersonal?.status === "degraded" || fsPersonal?.status === "disabled"
-              ? statusPill("status-warn", fsPersonal.status === "degraded" ? "已降级" : "已停用")
-            : fsOpen ? statusPill("status-warn", "未完成")
+      : fsOk ? statusPill("status-ok", "已绑定")
+        : fsPersonal?.status === "degraded" || fsPersonal?.status === "disabled"
+          ? statusPill("status-warn", fsPersonal.status === "degraded" ? "已降级" : "已停用")
+          : fsOpen ? statusPill("status-warn", "未完成")
             : statusPill("status-fail", "未绑定")}
         </div>
         <p class="muted channel-desc">
           ${fsPersonalActive ? `个人机器人推送已启用（免共享限频）${fsPersonal.app_id_masked ? " · " + escapeHtml(fsPersonal.app_id_masked) : ""}`
-            : fsOk ? "共享机器人推送（不推荐，受限频影响）；建议升级个人机器人"
-            : (fsOpen ? "已关联账号，请先在飞书私聊机器人发一条消息"
-            : "推荐个人机器人：扫码自动创建，免共享限频")}
+      : fsOk ? "共享机器人推送（不推荐，受限频影响）；建议升级个人机器人"
+        : (fsOpen ? "已关联账号，请先在飞书私聊机器人发一条消息"
+          : "推荐个人机器人：扫码自动创建，免共享限频")}
         </p>
         <div class="channel-actions">
           ${fsOpen || fsPersonalActive ? "" : `<div id="bind-result-feishu"></div>`}
           ${fsPersonalActive
-            ? `<button class="channel-btn secondary" onclick="unbindChannel('feishu_personal')">解绑</button>`
-            : fsOpen
-              ? `<button class="channel-btn secondary" onclick="unbindChannel('feishu')">解绑</button>`
-              : `<button class="channel-btn primary" onclick="openBindGuide('custom-bots-bind')">去绑定</button>`}
+      ? `<button class="channel-btn secondary" onclick="unbindChannel('feishu_personal')">解绑</button>`
+      : fsOpen
+        ? `<button class="channel-btn secondary" onclick="unbindChannel('feishu')">解绑</button>`
+        : `<button class="channel-btn primary" onclick="openBindGuide('custom-bots-bind')">去绑定</button>`}
         </div>
       </div>
       <div class="channel-card" data-channel="wecom">
@@ -3900,8 +3926,8 @@ function channelStatusHtml(user) {
         <p class="muted channel-desc">${wc ? "群机器人推送已启用" : "在企业微信群添加群机器人，把 webhook 粘贴到下方输入框即可"}</p>
         <div class="channel-actions">
           ${wc
-            ? `<button class="channel-btn secondary" onclick="unbindChannel('wecom')">解绑</button>`
-            : `<button class="channel-btn primary" onclick="openBindGuide('wecom-bind')">去绑定</button>`}
+      ? `<button class="channel-btn secondary" onclick="unbindChannel('wecom')">解绑</button>`
+      : `<button class="channel-btn primary" onclick="openBindGuide('wecom-bind')">去绑定</button>`}
         </div>
       </div>
       <div class="channel-card" data-channel="bark">
@@ -3912,30 +3938,30 @@ function channelStatusHtml(user) {
         <p class="muted channel-desc">${bk ? "iOS 推送已启用" : "iPhone 装 Bark App，把推送 key 粘贴到下方输入框即可"}</p>
         <div class="channel-actions">
           ${bk
-            ? `<button class="channel-btn secondary" onclick="unbindChannel('bark')">解绑</button>`
-            : `<button class="channel-btn primary" onclick="openBindGuide('bark-bind')">去绑定</button>`}
+      ? `<button class="channel-btn secondary" onclick="unbindChannel('bark')">解绑</button>`
+      : `<button class="channel-btn primary" onclick="openBindGuide('bark-bind')">去绑定</button>`}
         </div>
       </div>
       <div class="channel-card" data-channel="webpush">
         <div class="channel-head">
           <span class="channel-title">${CHANNEL_ICONS.webpush}<b>浏览器通知</b></span>
           ${!wpOk
-            ? statusPill("status-fail", "当前环境不可用")
-            : wp ? statusPill("status-ok", wpCount > 1 ? `已开启 · ${wpCount} 台设备` : "已开启")
-            : statusPill("status-fail", "未开启")}
+      ? statusPill("status-fail", "当前环境不可用")
+      : wp ? statusPill("status-ok", wpCount > 1 ? `已开启 · ${wpCount} 台设备` : "已开启")
+        : statusPill("status-fail", "未开启")}
         </div>
         <p class="muted channel-desc">${!wpOk
-          ? "请用 Chrome 或 Edge，并打开 HTTPS（本机 localhost 也可以）"
-          : wp
-            ? "Chrome / Edge 系统通知已启用，关掉标签页也能收到"
-            : "在本页一键开启；Chrome / Edge 关掉标签页也能弹系统通知（需 HTTPS）"}</p>
+      ? "请用 Chrome 或 Edge，并打开 HTTPS（本机 localhost 也可以）"
+      : wp
+        ? "Chrome / Edge 系统通知已启用，关掉标签页也能收到"
+        : "在本页一键开启；Chrome / Edge 关掉标签页也能弹系统通知（需 HTTPS）"}</p>
         <div class="channel-actions">
           ${!wpOk
-            ? `<button type="button" class="channel-btn primary" disabled>开启</button>`
-            : wp
-              ? `<button type="button" class="channel-btn primary" onclick="enableWebPush()">在此浏览器开启</button>
+      ? `<button type="button" class="channel-btn primary" disabled>开启</button>`
+      : wp
+        ? `<button type="button" class="channel-btn primary" onclick="enableWebPush()">在此浏览器开启</button>
                  <button type="button" class="channel-btn secondary" onclick="disableWebPush()">关闭</button>`
-              : `<button type="button" class="channel-btn primary" onclick="enableWebPush()">开启</button>`}
+        : `<button type="button" class="channel-btn primary" onclick="enableWebPush()">开启</button>`}
         </div>
       </div>
     </div>`;
@@ -4110,7 +4136,7 @@ async function renderSettings(seq) {
         <div id="push-status">${channelStatusHtml(state.user)}</div>
         <div class="channel-picks" id="push-channels-box" style="margin-top:18px;padding-top:18px;border-top:var(--border-default)">${pushChannelsHtml(state.user)}</div>
         ${(state.user.telegram_chat_id || feishuChannelBound(state.user) || state.user.wecom_webhook || state.user.bark_key || state.user.webpush_bound)
-          ? `<div class="toolbar" style="margin-top:14px">
+        ? `<div class="toolbar" style="margin-top:14px">
                <button class="btn-normal" onclick="savePushChannels()">保存推送通道</button>
              </div>` : ""}
       </section>
@@ -4370,10 +4396,10 @@ function filterKolImageSettings() {
   const query = ($("#kol-images-search")?.value || "").trim().toLowerCase();
   const filtered = query
     ? _kolImageSubscriptions.filter((kol) => {
-        const platform = PLATFORM_LABELS[kol.platform] || kol.platform || "";
-        return [kol.name, kol.external_id, platform]
-          .some((value) => String(value || "").toLowerCase().includes(query));
-      })
+      const platform = PLATFORM_LABELS[kol.platform] || kol.platform || "";
+      return [kol.name, kol.external_id, platform]
+        .some((value) => String(value || "").toLowerCase().includes(query));
+    })
     : _kolImageSubscriptions;
   list.innerHTML = filtered.length
     ? filtered.map(kolImageSettingsRowHtml).join("")
@@ -4495,6 +4521,10 @@ function switchStatsTab(name) {
   document.getElementById(`tab-${name}`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
   if (name === "proxies") loadProxyAdmin();
   if (name === "mx") loadMxAdmin();
+  if (name === "config" && !imaMountState.discoveryEntered) {
+    imaMountState.discoveryEntered = true;
+    discoverImaGroups();
+  }
 }
 
 function cookieRepairItems(s) {
@@ -4899,9 +4929,9 @@ async function saveCustomTgBot() {
 async function unbindChannel(channel) {
   const label = channel === "telegram_chat_id" ? "Telegram"
     : channel === "telegram_bot_token" ? "Telegram（自建机器人）"
-    : channel === "feishu_personal" ? "飞书个人机器人"
-    : channel === "wecom" ? "企业微信"
-    : channel === "bark" ? "Bark" : "飞书";
+      : channel === "feishu_personal" ? "飞书个人机器人"
+        : channel === "wecom" ? "企业微信"
+          : channel === "bark" ? "Bark" : "飞书";
   if (!confirm(`确认解绑 ${label}？解绑后将不再通过该方式推送（共享机器人绑定不受影响）。`)) return;
   try {
     if (channel === "feishu_personal") {
@@ -4918,9 +4948,9 @@ async function unbindChannel(channel) {
         ? { wecom_webhook: "" }
         : channel === "bark"
           ? { bark_key: "" }
-        : channel === "telegram_bot_token"
-          ? { telegram_bot_token: "", telegram_chat_id: "" }
-        : { telegram_chat_id: "" };
+          : channel === "telegram_bot_token"
+            ? { telegram_bot_token: "", telegram_chat_id: "" }
+            : { telegram_chat_id: "" };
     await api("/api/me", { method: "PUT", body: JSON.stringify(body) });
     flash(`已解绑 ${label}`);
     await reloadSettings();
@@ -5161,66 +5191,323 @@ function rateBar(rate) {
     </div>`;
 }
 
-function imaGroupRowHtml(group, index) {
-  group = group || {};
-  index = Number.isInteger(index) ? index : 0;
-  const groupId = String(group.id || "");
+function imaMountCacheKey(groupId, parentId) {
+  return `${groupId}\0${parentId}`;
+}
+
+function imaMountGroup(groupId) {
+  return imaMountState.groups.find((group) => String(group.id || "") === String(groupId || "")) || null;
+}
+
+function imaMountDraft(groupId) {
+  let draft = imaMountState.drafts.get(groupId);
+  if (!draft) {
+    draft = new Set();
+    imaMountState.drafts.set(groupId, draft);
+  }
+  return draft;
+}
+
+function initImaMountState(groups, preserve = false) {
+  const oldDrafts = imaMountState.drafts;
+  const oldSelected = imaMountState.selectedGroupId;
+  const oldDirty = imaMountState.dirty;
+  imaMountState.groups = Array.isArray(groups) ? groups.filter((group) => group && group.id) : [];
+  imaMountState.selectedGroupId = oldSelected;
+  imaMountState.drafts = new Map();
+  imaMountState.folders = new Map();
+  imaMountState.parents = new Map();
+  imaMountState.expanded = new Set();
+  imaMountState.loading = new Set();
+  imaMountState.errors = new Map();
+  imaMountState.generation += 1;
+  imaMountState.dirty = preserve ? oldDirty : false;
+  if (!preserve) imaMountState.discoveryEntered = false;
+  const available = new Set(imaMountState.groups.map((group) => String(group.id)));
+  for (const group of imaMountState.groups) {
+    const previous = preserve ? oldDrafts.get(String(group.id)) : null;
+    const values = previous
+      ? [...previous]
+      : (Array.isArray(group.folder_ids) ? group.folder_ids : []);
+    imaMountState.drafts.set(
+      String(group.id),
+      new Set(values.filter((folderId) => typeof folderId === "string" && folderId.trim())),
+    );
+  }
+  if (!available.has(String(imaMountState.selectedGroupId || ""))) {
+    imaMountState.selectedGroupId = imaMountState.groups[0] ? String(imaMountState.groups[0].id) : "";
+  }
+}
+
+function imaMountGroupRowHtml(group) {
+  const groupId = String(group?.id || "");
+  const draft = imaMountState.drafts.get(groupId) || new Set();
+  const selected = groupId === String(imaMountState.selectedGroupId || "");
+  const source = group?.source === "discovered" ? "自动发现" : "旧配置";
+  const count = draft.size;
+  const mountText = count ? `已选择 ${count} 个文件夹` : "未挂载";
   return `
-    <div class="cfg-group ima-group-row" data-group-row data-group-index="${index}" data-group-id="${escapeHtml(groupId)}">
-      <div class="ima-group-row-head">
-        <p class="cfg-group-title">IMA 群组</p>
-        <button type="button" class="btn-ghost danger" onclick="removeImaGroupRow(this)" aria-label="移除 IMA 群组">移除</button>
+    <button type="button" class="ima-mount-kb-row${selected ? " is-selected" : ""}" role="option"
+      aria-selected="${selected}" data-group-id="${escapeHtml(groupId)}"
+      onclick="selectImaMountGroup(this.dataset.groupId)">
+      <span class="ima-mount-kb-copy">
+        <span class="ima-mount-kb-name" title="${escapeHtml(group?.name || groupId)}">${escapeHtml(group?.name || groupId)}</span>
+        <span class="ima-mount-kb-meta">${escapeHtml(source)} · ${escapeHtml(mountText)}</span>
+      </span>
+      <span class="ima-mount-kb-count" aria-hidden="true">${count}</span>
+    </button>`;
+}
+
+function renderImaMountGroups() {
+  const list = $("#ima-kb-list");
+  if (!list) return;
+  const groups = imaMountState.groups;
+  list.innerHTML = groups.length
+    ? groups.map((group) => imaMountGroupRowHtml(group)).join("")
+    : '<div class="empty ima-mount-empty">尚未发现共享知识库</div>';
+  const count = $("#ima-kb-count");
+  if (count) count.textContent = `${groups.length} 个`;
+  renderImaFolderTree(imaMountState.selectedGroupId);
+}
+
+function imaFolderAncestorSelected(groupId, folderId) {
+  const selected = imaMountDraft(groupId);
+  const seen = new Set();
+  let parentId = imaMountState.parents.get(imaMountCacheKey(groupId, folderId)) || "";
+  while (parentId && !seen.has(parentId)) {
+    if (selected.has(parentId)) return true;
+    seen.add(parentId);
+    parentId = imaMountState.parents.get(imaMountCacheKey(groupId, parentId)) || "";
+  }
+  return false;
+}
+
+function imaFolderDescendantSelected(groupId, folderId) {
+  const selected = imaMountDraft(groupId);
+  for (const selectedId of selected) {
+    if (selectedId === folderId) continue;
+    const seen = new Set();
+    let parentId = imaMountState.parents.get(imaMountCacheKey(groupId, selectedId)) || "";
+    while (parentId && !seen.has(parentId)) {
+      if (parentId === folderId) return true;
+      seen.add(parentId);
+      parentId = imaMountState.parents.get(imaMountCacheKey(groupId, parentId)) || "";
+    }
+  }
+  return false;
+}
+
+function imaFolderSelectionState(groupId, folderId) {
+  const selected = imaMountDraft(groupId).has(folderId);
+  const inherited = !selected && imaFolderAncestorSelected(groupId, folderId);
+  return {
+    checked: selected || inherited,
+    disabled: inherited,
+    indeterminate: !selected && !inherited && imaFolderDescendantSelected(groupId, folderId),
+  };
+}
+
+function imaFolderRowHtml(groupId, item, depth) {
+  const folderId = String(item?.id || "");
+  const name = String(item?.name || folderId);
+  if (!folderId) return "";
+  imaMountState.parents.set(imaMountCacheKey(groupId, folderId), String(item?.parent_id || ""));
+  const childKey = imaMountCacheKey(groupId, folderId);
+  const hasChildren = item?.has_children !== false || imaMountState.folders.has(childKey);
+  const expanded = imaMountState.expanded.has(childKey);
+  const selection = imaFolderSelectionState(groupId, folderId);
+  const inputId = `ima-folder-${groupId}-${folderId}`;
+  const expand = hasChildren
+    ? `<button type="button" class="ima-folder-expand" data-group-id="${escapeHtml(groupId)}" data-folder-id="${escapeHtml(folderId)}" aria-expanded="${expanded}" aria-label="${expanded ? "收起" : "展开"} ${escapeHtml(name)}" title="${expanded ? "收起" : "展开"}" onclick="toggleImaFolderExpand(this)"><span aria-hidden="true">${expanded ? "⌄" : "›"}</span></button>`
+    : '<span class="ima-folder-expand-placeholder" aria-hidden="true"></span>';
+  const nested = expanded ? imaRenderFolderBranch(groupId, folderId, depth + 1) : "";
+  return `
+    <div class="ima-folder-node" style="--ima-folder-indent:${8 + Math.min(depth, 12) * 18}px">
+      <div class="ima-folder-row">
+        ${expand}
+        <label class="ima-folder-choice" for="${escapeHtml(inputId)}">
+          <input id="${escapeHtml(inputId)}" type="checkbox" data-group-id="${escapeHtml(groupId)}" data-folder-id="${escapeHtml(folderId)}"
+            ${selection.checked ? "checked" : ""}${selection.disabled ? " disabled" : ""}${selection.indeterminate ? ' data-indeterminate="true"' : ""}
+            onchange="toggleImaFolder(this)">
+          <span class="ima-folder-icon" aria-hidden="true">${FOLDER_ICON}</span>
+          <span class="ima-folder-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
+        </label>
       </div>
-      <div class="ima-group-fields cfg-fields">
-        <label class="cfg-field"><span>群组名称</span><input type="text" class="form-control" data-field="name" value="${escapeHtml(group.name || "")}" maxlength="100"></label>
-        <label class="cfg-field ima-code-field"><span>知识库 ID</span><input type="text" class="form-control" data-field="knowledge_base_id" value="${escapeHtml(group.knowledge_base_id || "")}" maxlength="64"></label>
-        <label class="cfg-field ima-code-field"><span>根文件夹 ID</span><input type="text" class="form-control" data-field="root_folder_id" value="${escapeHtml(group.root_folder_id || "")}" maxlength="128"></label>
-        <label class="cfg-field cfg-check ima-group-enabled"><input type="checkbox" data-field="enabled" ${group.enabled !== false ? "checked" : ""}><span class="cfg-check-desc">启用</span></label>
-      </div>
+      ${nested}
     </div>`;
 }
 
-function renderImaGroupRows(groups) {
-  const rows = Array.isArray(groups) ? groups : [];
-  if (!rows.length) {
-    return '<div class="empty">尚未添加群组 <button type="button" class="btn-normal btn-add" onclick="addImaGroupRow()">添加 IMA 群组</button></div>';
+function imaFolderErrorHtml(groupId, parentId, error) {
+  return `<div class="ima-folder-state ima-folder-error" role="alert"><span>${escapeHtml(error || "文件夹加载失败")}</span><button type="button" class="btn-ghost btn-sm" data-group-id="${escapeHtml(groupId)}" data-parent-id="${escapeHtml(parentId)}" onclick="retryImaFolderLoad(this)">重试</button></div>`;
+}
+
+function imaRenderFolderBranch(groupId, parentId, depth) {
+  const key = imaMountCacheKey(groupId, parentId);
+  if (!imaMountState.folders.has(key)) {
+    if (imaMountState.loading.has(key)) return '<div class="ima-folder-state">正在加载文件夹…</div>';
+    const error = imaMountState.errors.get(key);
+    if (error) return imaFolderErrorHtml(groupId, parentId, error);
+    return '<div class="ima-folder-state">展开后加载文件夹</div>';
   }
-  return rows.map((group, index) => imaGroupRowHtml(group, index)).join("");
+  const items = imaMountState.folders.get(key) || [];
+  if (!items.length) return '<div class="ima-folder-state">没有可挂载的子文件夹</div>';
+  return items.map((item) => imaFolderRowHtml(groupId, item, depth)).join("");
 }
 
-function addImaGroupRow(group) {
-  group = group || {};
-  const target = $("#ima-groups");
-  if (!target) return;
-  const empty = target.querySelector(".empty");
-  const indexes = Array.from(target.querySelectorAll("[data-group-row]"))
-    .map((row) => Number(row.dataset.groupIndex))
-    .filter((index) => Number.isInteger(index) && index >= 0);
-  const index = indexes.length ? Math.max(...indexes) + 1 : 0;
-  const html = imaGroupRowHtml(group, index);
-  if (empty) target.innerHTML = html;
-  else target.insertAdjacentHTML("beforeend", html);
+function imaFolderOrphansHtml(groupId, rootId) {
+  const rootKey = imaMountCacheKey(groupId, rootId);
+  if (!imaMountState.folders.has(rootKey)) return "";
+  const known = new Set();
+  for (const [key, items] of imaMountState.folders) {
+    if (!key.startsWith(`${groupId}\0`)) continue;
+    for (const item of items || []) known.add(String(item.id || ""));
+  }
+  const orphanIds = [...imaMountDraft(groupId)].filter((folderId) => !known.has(folderId));
+  if (!orphanIds.length) return "";
+  return `<div class="ima-folder-orphans"><p class="ima-folder-state-title">已选择但当前目录中不可见</p>${orphanIds.map((folderId) => `
+    <label class="ima-folder-orphan" for="ima-orphan-${escapeHtml(groupId)}-${escapeHtml(folderId)}">
+      <input id="ima-orphan-${escapeHtml(groupId)}-${escapeHtml(folderId)}" type="checkbox" checked data-group-id="${escapeHtml(groupId)}" data-folder-id="${escapeHtml(folderId)}" onchange="toggleImaFolder(this)">
+      <span class="ima-folder-name" title="${escapeHtml(folderId)}">${escapeHtml(folderId)}</span>
+    </label>`).join("")}</div>`;
 }
 
-function removeImaGroupRow(button) {
-  const row = button?.closest("[data-group-row]");
-  if (!row) return;
-  const target = $("#ima-groups");
-  row.remove();
-  if (target && !target.querySelector("[data-group-row]")) {
-    target.innerHTML = renderImaGroupRows([]);
+function renderImaFolderTree(groupId) {
+  const tree = $("#ima-folder-tree");
+  if (!tree) return;
+  const group = imaMountGroup(groupId);
+  const title = $("#ima-folder-title");
+  const count = $("#ima-folder-count");
+  if (!group) {
+    if (title) title.textContent = "选择知识库";
+    if (count) count.textContent = "";
+    tree.innerHTML = '<div class="ima-folder-state">先选择一个知识库</div>';
+    return;
+  }
+  const groupKey = String(group.id);
+  const rootId = String(group.root_folder_id || "");
+  const selectedCount = imaMountDraft(groupKey).size;
+  if (title) title.textContent = group.name || groupKey;
+  if (count) count.textContent = `${selectedCount} 个文件夹`;
+  tree.setAttribute("aria-busy", String(imaMountState.loading.has(imaMountCacheKey(groupKey, rootId))));
+  tree.innerHTML = imaRenderFolderBranch(groupKey, rootId, 0) + imaFolderOrphansHtml(groupKey, rootId);
+  tree.querySelectorAll('input[data-indeterminate="true"]').forEach((input) => {
+    input.indeterminate = true;
+  });
+}
+
+function selectImaMountGroup(groupId) {
+  const group = imaMountGroup(groupId);
+  if (!group) return;
+  imaMountState.selectedGroupId = String(group.id);
+  renderImaMountGroups();
+  loadImaFolderChildren(String(group.id), String(group.root_folder_id || ""));
+}
+
+function toggleImaFolderExpand(button) {
+  const groupId = button?.dataset.groupId || "";
+  const folderId = button?.dataset.folderId || "";
+  if (!groupId || !folderId) return;
+  const key = imaMountCacheKey(groupId, folderId);
+  const opening = !imaMountState.expanded.has(key);
+  if (opening) imaMountState.expanded.add(key);
+  else imaMountState.expanded.delete(key);
+  renderImaFolderTree(imaMountState.selectedGroupId);
+  if (opening && !imaMountState.folders.has(key)) loadImaFolderChildren(groupId, folderId);
+}
+
+function toggleImaFolder(input) {
+  const groupId = input?.dataset.groupId || "";
+  const folderId = input?.dataset.folderId || "";
+  if (!groupId || !folderId || input.disabled) return;
+  const focusId = input.id;
+  const selected = imaMountDraft(groupId);
+  if (input.checked) {
+    selected.delete(folderId);
+    for (const selectedId of [...selected]) {
+      const seen = new Set();
+      let parentId = imaMountState.parents.get(imaMountCacheKey(groupId, selectedId)) || "";
+      while (parentId && !seen.has(parentId)) {
+        if (parentId === folderId) selected.delete(selectedId);
+        seen.add(parentId);
+        parentId = imaMountState.parents.get(imaMountCacheKey(groupId, parentId)) || "";
+      }
+    }
+    selected.add(folderId);
+  } else {
+    selected.delete(folderId);
+  }
+  imaMountState.dirty = true;
+  renderImaMountGroups();
+  document.getElementById(focusId)?.focus({ preventScroll: true });
+}
+
+async function loadImaFolderChildren(groupId, parentId, force = false) {
+  const key = imaMountCacheKey(groupId, parentId);
+  if (!force && imaMountState.folders.has(key)) return;
+  if (imaMountState.loading.has(key)) return;
+  const generation = imaMountState.generation;
+  if (force) imaMountState.folders.delete(key);
+  imaMountState.errors.delete(key);
+  imaMountState.loading.add(key);
+  if (String(imaMountState.selectedGroupId) === String(groupId)) renderImaFolderTree(groupId);
+  try {
+    const path = `/api/admin/ima-collector/groups/${encodeURIComponent(groupId)}/folders?parent_id=${encodeURIComponent(parentId)}`;
+    const data = await api(path);
+    if (generation !== imaMountState.generation) return;
+    const items = Array.isArray(data.items) ? data.items : [];
+    imaMountState.folders.set(key, items);
+    items.forEach((item) => {
+      if (item?.id) imaMountState.parents.set(imaMountCacheKey(groupId, String(item.id)), String(item.parent_id || parentId));
+    });
+  } catch (err) {
+    if (generation === imaMountState.generation) imaMountState.errors.set(key, imaSafeError(err.message || "文件夹加载失败"));
+  } finally {
+    imaMountState.loading.delete(key);
+    if (String(imaMountState.selectedGroupId) === String(groupId)) renderImaFolderTree(groupId);
   }
 }
 
-function readImaGroupRows() {
-  return Array.from(document.querySelectorAll("#ima-groups [data-group-row]")).map((row) => {
-    const value = (field) => row.querySelector(`[data-field="${field}"]`)?.value?.trim() || "";
+function retryImaFolderLoad(button) {
+  loadImaFolderChildren(button?.dataset.groupId || "", button?.dataset.parentId || "", true);
+}
+
+async function discoverImaGroups() {
+  if (imaMountState.discoveryBusy) return;
+  const button = $("#ima-discover-btn");
+  const status = $("#ima-group-discovery-status");
+  imaMountState.discoveryBusy = true;
+  if (button) button.disabled = true;
+  if (status) status.textContent = "正在发现共享知识库…";
+  try {
+    const result = await api("/api/admin/ima-collector/discover", { method: "POST" });
+    if (result.ok && result.config) {
+      initImaMountState(result.config.groups, true);
+      renderImaMountGroups();
+      if (status) status.innerHTML = imaGroupDiscoveryStatusText(result);
+      const group = imaMountGroup(imaMountState.selectedGroupId);
+      if (group) loadImaFolderChildren(String(group.id), String(group.root_folder_id || ""));
+    } else if (status) {
+      const error = result.discovery?.error || "自动发现失败";
+      status.innerHTML = `自动发现失败：${escapeHtml(imaSafeError(error))}（已保留上次结果）`;
+    }
+  } catch (err) {
+    if (status) status.innerHTML = `自动发现失败：${escapeHtml(imaSafeError(err.message || "请求失败"))}（已保留上次结果）`;
+  } finally {
+    imaMountState.discoveryBusy = false;
+    if (button) button.disabled = false;
+  }
+}
+
+function readImaMountGroups() {
+  return imaMountState.groups.map((group) => {
+    const folderIds = [...imaMountDraft(String(group.id))];
     return {
-      id: row.dataset.groupId || null,
-      name: value("name"),
-      knowledge_base_id: value("knowledge_base_id"),
-      root_folder_id: value("root_folder_id"),
-      enabled: !!row.querySelector('[data-field="enabled"]')?.checked,
+      id: String(group.id || "") || null,
+      name: String(group.name || "").trim(),
+      knowledge_base_id: String(group.knowledge_base_id || "").trim(),
+      root_folder_id: String(group.root_folder_id || "").trim(),
+      folder_ids: folderIds,
+      enabled: folderIds.length > 0,
     };
   });
 }
@@ -5235,17 +5522,21 @@ function imaSafeError(value) {
 
 function imaGroupDiscoveryStatusText(status) {
   const result = status?.last_result || {};
-  const discoveryError = String(result.discovery_error || "").trim();
+  const discovery = status?.discovery || {};
+  const discoveryError = String(discovery.error || result.discovery_error || "").trim();
   if (discoveryError) {
     const safeError = imaSafeError(discoveryError);
-    return `自动发现失败：${escapeHtml(safeError)}`;
+    return `自动发现失败：${escapeHtml(safeError)}（已保留上次结果）`;
   }
   const groups = Array.isArray(status?.config?.groups) ? status.config.groups : [];
-  if (!groups.length) return "尚未发现或添加群组";
+  if (!groups.length) {
+    return discovery.status === "ok" ? "未发现可用共享知识库" : "尚未发现共享知识库";
+  }
+  const mounted = groups.filter((group) => Array.isArray(group.folder_ids) && group.folder_ids.length).length;
   const synced = Number.isFinite(Number(result.succeeded_groups))
-    ? ` · 最近同步 ${Number(result.succeeded_groups)} 个群组`
+    ? ` · 最近同步 ${Number(result.succeeded_groups)} 个知识库`
     : " · 等待同步";
-  return `已发现 ${groups.length} 个群组${synced}`;
+  return `已发现 ${groups.length} 个知识库 · 已挂载 ${mounted} 个${synced}`;
 }
 
 async function loadAdminStats() {
@@ -5439,21 +5730,32 @@ async function loadAdminStats() {
                 <p class="cfg-group-title">连接与同步</p>
                 <div class="ima-collector-fields cfg-fields">
                   <label class="cfg-field ima-code-field"><span>IMA UID</span><input id="ima-pure-uid" type="text" class="form-control" value="${escapeHtml(pure.uid || "001aa361168019ef")}" maxlength="64"></label>
-                  <label class="cfg-field ima-code-field"><span>知识库 ID</span><input id="ima-pure-kb" type="text" class="form-control" value="${escapeHtml(pure.knowledge_base_id || "7464369361259867")}" maxlength="64"></label>
-                  <label class="cfg-field ima-code-field"><span>根文件夹 ID</span><input id="ima-pure-root" type="text" class="form-control" value="${escapeHtml(pure.root_folder_id || "folder_7489327974078249")}" maxlength="128"></label>
                   <label class="cfg-field"><span>检查间隔<span class="cfg-unit">分钟</span></span><input id="ima-pure-interval" type="number" class="form-control" min="30" max="10080" value="${Math.round(Number(pure.interval_seconds || 3600) / 60)}"></label>
                   <label class="cfg-field ima-code-field ima-field--wide"><span>Refresh Token</span><input id="ima-pure-token" class="form-control" type="password" autocomplete="off" placeholder="${pure.refresh_token?.set ? "已保存，留空保持不变" : "重新登录 IMA 后粘贴"}"></label>
+                  <input id="ima-pure-kb" type="hidden" value="${escapeHtml(pure.knowledge_base_id || "7464369361259867")}">
+                  <input id="ima-pure-root" type="hidden" value="${escapeHtml(pure.root_folder_id || "folder_7489327974078249")}">
                 </div>
               </div>
               <div class="cfg-group ima-groups-block">
                 <div class="ima-groups-head">
-                  <p class="cfg-group-title">知识库群组</p>
+                  <div>
+                    <p class="cfg-group-title">共享知识库与文件夹</p>
+                    <span id="ima-group-discovery-status" class="muted" aria-live="polite">${imaGroupDiscoveryStatusText(imaCollector)}</span>
+                  </div>
                   <div class="toolbar ima-groups-toolbar">
-                    <span id="ima-group-discovery-status" class="muted">${imaGroupDiscoveryStatusText(imaCollector)}</span>
-                    <button type="button" class="btn-ghost" onclick="addImaGroupRow()">添加 IMA 群组</button>
+                    <button type="button" class="btn-ghost" id="ima-discover-btn" onclick="discoverImaGroups()">${REFRESH_ICON}<span>重新发现</span></button>
                   </div>
                 </div>
-                <div id="ima-groups" class="ima-groups-list">${renderImaGroupRows(imaCollector.config && imaCollector.config.groups)}</div>
+                <div class="ima-mount-layout" id="ima-mount-layout">
+                  <section class="ima-mount-pane" aria-labelledby="ima-kb-pane-title">
+                    <header class="ima-mount-pane-head"><strong id="ima-kb-pane-title">知识库</strong><span id="ima-kb-count" class="muted"></span></header>
+                    <div id="ima-kb-list" class="ima-kb-list" role="listbox" aria-label="共享知识库"></div>
+                  </section>
+                  <section class="ima-mount-pane" aria-labelledby="ima-folder-title">
+                    <header class="ima-mount-pane-head"><strong id="ima-folder-title">选择知识库</strong><span id="ima-folder-count" class="muted"></span></header>
+                    <div id="ima-folder-tree" class="ima-folder-tree" role="tree" aria-label="知识库文件夹" aria-live="polite"></div>
+                  </section>
+                </div>
               </div>
             </div>
             <div class="cfg-foot ima-collector-foot">
@@ -5681,6 +5983,8 @@ async function loadAdminStats() {
     </div>
     <div id="st-proxies" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-proxies" style="display:none"></div>`;
   renderStatsData(s);
+  initImaMountState(pure.groups || []);
+  renderImaMountGroups();
   switchStatsTab(statsTabFromHash());
   statsTimer = setInterval(async () => {
     try {
@@ -5791,10 +6095,10 @@ function renderStatsData(s) {
     tbody.innerHTML = (s.sources || []).map((src) => {
       const channel = src.platform === "twitter"
         ? (src.direct_mode === "direct"
-            ? '<span class="status-ok">直抓</span>'
-            : src.direct_mode === "fallback"
-              ? '<span class="status-warn" title="' + escapeHtml(src.direct_fallback_reason || "") + '">直抓失败</span>'
-              : '<span class="muted">-</span>')
+          ? '<span class="status-ok">直抓</span>'
+          : src.direct_mode === "fallback"
+            ? '<span class="status-warn" title="' + escapeHtml(src.direct_fallback_reason || "") + '">直抓失败</span>'
+            : '<span class="muted">-</span>')
         : '<span class="muted">-</span>';
       return `
         <tr>
@@ -5821,10 +6125,10 @@ function renderStatsData(s) {
               <td class="muted">${escapeHtml(fmtDbTime(e.created_at))}</td>
               <td>${PLATFORM_LABELS[e.platform] || escapeHtml(e.platform)}</td>
               <td>${e.status === "ok"
-                ? '<span class="status-ok">正常</span>'
-                : e.status === "warn"
-                  ? '<span class="status-warn">警告</span>'
-                  : '<span class="status-fail">失败</span>'}</td>
+          ? '<span class="status-ok">正常</span>'
+          : e.status === "warn"
+            ? '<span class="status-warn">警告</span>'
+            : '<span class="status-fail">失败</span>'}</td>
               <td class="muted">${escapeHtml(e.detail)}</td>
             </tr>`).join("")}</tbody>
         </table></div>`
@@ -5841,10 +6145,10 @@ function renderStatsData(s) {
               <td>${escapeHtml(h.name)}</td>
               <td>${PLATFORM_LABELS[h.platform] || escapeHtml(h.platform)}</td>
               <td>${h.enabled
-                ? (h.last_post_at
-                    ? '<span class="status-ok">正常</span>'
-                    : '<span class="status-warn">从未抓到</span>')
-                : '<span class="status-fail">已停用</span>'}</td>
+          ? (h.last_post_at
+            ? '<span class="status-ok">正常</span>'
+            : '<span class="status-warn">从未抓到</span>')
+          : '<span class="status-fail">已停用</span>'}</td>
               <td class="muted">${h.last_post_at ? escapeHtml(fmtDbTime(h.last_post_at)) : "-"}</td>
             </tr>`).join("")}</tbody>
         </table></div>`
@@ -5858,7 +6162,7 @@ function renderStatsData(s) {
   if (imaGroupDiscoveryStatus && s.ima_collector) {
     imaGroupDiscoveryStatus.innerHTML = imaGroupDiscoveryStatusText(s.ima_collector);
   }
-  
+
   // Switch to tab from URL query
   switchStatsTab(statsTabFromHash());
 }
@@ -5978,10 +6282,10 @@ async function loadMxAdmin() {
     $("#mx-sync-hours").value = config.sync_interval_hours || 1;
     $("#mx-page-size").value = config.page_size || 50;
     $("#mx-max-pages").value = config.max_history_pages || 100;
-    
+
     // Load rooms
     loadMxRooms();
-    
+
     // Add event listeners for search/filter
     const qInput = $("#mx-rooms-q");
     const enabledOnly = $("#mx-rooms-enabled-only");
@@ -5993,7 +6297,7 @@ async function loadMxAdmin() {
       };
     }
     if (enabledOnly) enabledOnly.onchange = () => loadMxRooms();
-    
+
   } catch (err) {
     box.innerHTML = `<p class="muted">${escapeHtml(err.message || "加载 MX 配置失败")}</p>
       <div class="toolbar"><button type="button" class="btn-ghost" onclick="loadMxAdmin()">重试</button></div>`;
@@ -6009,7 +6313,7 @@ async function saveMxConfig() {
     const page_size = Math.max(1, Number($("#mx-page-size").value) || 50);
     const max_history_pages = Math.max(1, Number($("#mx-max-pages").value) || 100);
     const sync_interval_hours = Math.max(1, Number($("#mx-sync-hours").value) || 1);
-    
+
     const payload = {
       enabled: $("#mx-enabled").checked,
       token: $("#mx-token").value.trim(),
@@ -6022,7 +6326,7 @@ async function saveMxConfig() {
       sync_interval_hours,
     };
     console.log("Saving MX config payload:", payload);
-    
+
     await api("/api/admin/sources/mx", {
       method: "PUT",
       body: JSON.stringify(payload),
@@ -6044,7 +6348,7 @@ async function testMxConnection() {
     const page_size = Math.max(1, Number($("#mx-page-size").value) || 50);
     const max_history_pages = Math.max(1, Number($("#mx-max-pages").value) || 100);
     const sync_interval_hours = Math.max(1, Number($("#mx-sync-hours").value) || 1);
-    
+
     const payload = {
       enabled: $("#mx-enabled").checked,
       token: $("#mx-token").value.trim(),
@@ -6057,7 +6361,7 @@ async function testMxConnection() {
       sync_interval_hours,
     };
     console.log("Testing MX connection with payload:", payload);
-    
+
     const result = await api("/api/admin/sources/mx/test", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -6135,28 +6439,28 @@ async function loadMxRooms() {
 }
 
 async function updateMxRoom(roomId, body) {
-	  try {
-	    await api(`/api/admin/sources/mx/rooms/${roomId}`, {
-	      method: "PUT",
-	      body: JSON.stringify(body),
-	    });
-	    flash("房间已更新");
-	    loadMxRooms();
-	  } catch (err) {
-	    flash(err.message || "更新失败", "error");
-	  }
-	}
+  try {
+    await api(`/api/admin/sources/mx/rooms/${roomId}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+    flash("房间已更新");
+    loadMxRooms();
+  } catch (err) {
+    flash(err.message || "更新失败", "error");
+  }
+}
 
 async function pullMxRoomHistory(roomId) {
-	  try {
-	    await api(`/api/admin/sources/mx/rooms/${roomId}/pull-history`, {
-	      method: "POST",
-	    });
-	    flash("历史消息拉取已触发");
-	  } catch (err) {
-	    flash(err.message || "拉取历史消息失败", "error");
-	  }
-	}
+  try {
+    await api(`/api/admin/sources/mx/rooms/${roomId}/pull-history`, {
+      method: "POST",
+    });
+    flash("历史消息拉取已触发");
+  } catch (err) {
+    flash(err.message || "拉取历史消息失败", "error");
+  }
+}
 
 async function loadProxyAdmin() {
   const box = $("#st-proxies");
@@ -6520,14 +6824,18 @@ async function saveZsxqCookie() {
 
 function imaCollectorStatusText(status) {
   const result = status.last_result || {};
-  if (!status.config?.configured) return "未配置 Refresh Token";
+  const config = status.config || {};
+  if (!config.refresh_token?.set) return "未配置 Refresh Token";
   if (status.running) return "同步中…";
+  const groups = Array.isArray(config.groups) ? config.groups : [];
+  const mounted = groups.filter((group) => Array.isArray(group.folder_ids) && group.folder_ids.length).length;
+  if (!mounted) return "已连接 · 尚未挂载知识库";
   if (status.last_finished_at) {
     const ok = Number(result.downloaded || 0);
     const failed = Number(result.failed || 0);
     return `已归档 ${Number(status.documents || 0).toLocaleString()} 份 · 上次新增 ${ok} 份${failed ? ` · 失败 ${failed} 份` : ""}`;
   }
-  return `已配置 · 每 ${Math.round(Number(status.config.interval_seconds || 3600) / 60)} 分钟检查`;
+  return `已配置 · 每 ${Math.round(Number(config.interval_seconds || 3600) / 60)} 分钟检查`;
 }
 
 async function saveImaCollector() {
@@ -6542,7 +6850,7 @@ async function saveImaCollector() {
     knowledge_base_id: $("#ima-pure-kb")?.value?.trim() || "",
     root_folder_id: $("#ima-pure-root")?.value?.trim() || "",
     interval_seconds: minutes * 60,
-    groups: readImaGroupRows(),
+    groups: readImaMountGroups(),
   };
   const token = $("#ima-pure-token")?.value?.trim() || "";
   if (token) body.refresh_token = token;
@@ -6552,7 +6860,8 @@ async function saveImaCollector() {
     if (tokenInput) tokenInput.value = "";
     flash("IMA 文档采集配置已保存");
     await loadAdminStats();
-    if (focusId) document.getElementById(focusId)?.focus();
+    const focusTarget = document.getElementById(focusId) || document.getElementById("ima-collector-save");
+    focusTarget?.focus({ preventScroll: true });
   } catch (err) {
     flash(err.message || "保存失败", "error");
   }
@@ -6692,19 +7001,19 @@ async function loadAdminDashboard() {
     const maxPushed = Math.max(1, ...trend.map((t) => t.pushed));
     const trendHtml = trend.length
       ? `<div class="dash-trend" role="list" aria-label="近 14 天推送趋势">${trend.map((t) => {
-          const fail = Math.max(0, t.pushed - t.ok);
-          // 红/绿分别按失败数/成功数相对最大值定高，二者之和 = 总推送量高度，不会溢出
-          const failPct = Math.floor((fail / maxPushed) * 100);
-          const okPct = Math.floor((t.ok / maxPushed) * 100);
-          const tip = `${t.date}：推送 ${t.pushed} 条，成功 ${t.ok}，失败 ${fail}`;
-          return `<div class="dash-trend-col" role="listitem" title="${escapeHtml(tip)}" aria-label="${escapeHtml(tip)}">
+        const fail = Math.max(0, t.pushed - t.ok);
+        // 红/绿分别按失败数/成功数相对最大值定高，二者之和 = 总推送量高度，不会溢出
+        const failPct = Math.floor((fail / maxPushed) * 100);
+        const okPct = Math.floor((t.ok / maxPushed) * 100);
+        const tip = `${t.date}：推送 ${t.pushed} 条，成功 ${t.ok}，失败 ${fail}`;
+        return `<div class="dash-trend-col" role="listitem" title="${escapeHtml(tip)}" aria-label="${escapeHtml(tip)}">
             <div class="dash-trend-bar">
               <div class="dash-trend-fail" style="height:${failPct}%"></div>
               <div class="dash-trend-ok" style="height:${okPct}%"></div>
             </div>
             <div class="dash-trend-date">${escapeHtml(t.date.slice(5))}</div>
           </div>`;
-        }).join("")}</div>`
+      }).join("")}</div>`
       : `<p class="muted">近 14 天暂无推送记录</p>`;
 
     // 平台来源分布
@@ -6732,17 +7041,17 @@ async function loadAdminDashboard() {
     const sources = st.sources || [];
     const srcRows = sources.length
       ? sources.map((src) => {
-          const statusCls = src.ok ? "status-ok" : "status-fail";
-          const statusText = src.ok ? "正常" : src.consecutive_fails >= 3 ? "持续失败" : "无成功记录";
-          const channel =
-            src.platform === "twitter"
-              ? src.direct_mode === "direct"
-                ? '<span class="status-ok">直抓</span>'
-                : src.direct_mode === "fallback"
-                  ? `<span class="status-warn" title="${escapeHtml(src.direct_fallback_reason || "")}">直抓失败</span>`
-                  : '<span class="muted">-</span>'
-              : '<span class="muted">-</span>';
-          return `<tr>
+        const statusCls = src.ok ? "status-ok" : "status-fail";
+        const statusText = src.ok ? "正常" : src.consecutive_fails >= 3 ? "持续失败" : "无成功记录";
+        const channel =
+          src.platform === "twitter"
+            ? src.direct_mode === "direct"
+              ? '<span class="status-ok">直抓</span>'
+              : src.direct_mode === "fallback"
+                ? `<span class="status-warn" title="${escapeHtml(src.direct_fallback_reason || "")}">直抓失败</span>`
+                : '<span class="muted">-</span>'
+            : '<span class="muted">-</span>';
+        return `<tr>
             <td>${PLATFORM_LABELS[src.platform] || escapeHtml(src.platform)}</td>
             <td class="${statusCls}">${statusText}</td>
             <td>${channel}</td>
@@ -6750,7 +7059,7 @@ async function loadAdminDashboard() {
             <td class="${src.consecutive_fails >= 3 ? "status-fail" : ""}">${src.consecutive_fails}</td>
             <td class="muted" title="${escapeHtml(src.last_error || "")}">${src.last_error ? escapeHtml(src.last_error.slice(0, 34)) : "-"}</td>
           </tr>`;
-        }).join("")
+      }).join("")
       : '<tr><td colspan="6" class="muted">暂无数据源</td></tr>';
     const events = (st.recent_source_events || []).slice(0, 6);
     const eventRows = events.length
@@ -7729,8 +8038,8 @@ function renderCodesResult(result) {
       </div>
     </div>
     <div class="rc-result-codes">${result.codes.map((code) =>
-      `<div class="rc-result-row"><code>${escapeHtml(code)}</code><button class="btn-sm" data-code="${escapeHtml(code)}" onclick="copyText(this.dataset.code, '已复制')">复制</button></div>`
-    ).join("")}</div>
+    `<div class="rc-result-row"><code>${escapeHtml(code)}</code><button class="btn-sm" data-code="${escapeHtml(code)}" onclick="copyText(this.dataset.code, '已复制')">复制</button></div>`
+  ).join("")}</div>
   </div>`;
 }
 
@@ -8188,8 +8497,8 @@ function renderAdminPosts() {
         </table>
       </div>
       ${_adminPostsHasMore
-        ? `<div class="toolbar" style="margin-top:14px;justify-content:center"><button class="btn-normal" onclick="adminPostsLoadMore()">加载更多</button></div>`
-        : `<p class="muted" style="text-align:center;margin-top:14px">已加载全部</p>`}
+      ? `<div class="toolbar" style="margin-top:14px;justify-content:center"><button class="btn-normal" onclick="adminPostsLoadMore()">加载更多</button></div>`
+      : `<p class="muted" style="text-align:center;margin-top:14px">已加载全部</p>`}
     </section>`;
 }
 
@@ -8645,11 +8954,10 @@ function userChannelIconsHtml(u) {
   };
   const names = USER_CHANNEL_KEYS.filter((ch) => bound[ch]).map((ch) => CHANNEL_LABELS[ch]);
   const aria = names.length ? `已绑定 ${names.join("、")}` : "未绑定推送渠道";
-  return `<span class="user-channels" title="${escapeHtml(aria)}" aria-label="${escapeHtml(aria)}">${
-    USER_CHANNEL_KEYS.map((ch) =>
-      `<span class="user-ch ${bound[ch] ? "on" : "off"}" data-channel="${ch}">${CHANNEL_ICONS[ch]}</span>`
-    ).join("")
-  }</span>`;
+  return `<span class="user-channels" title="${escapeHtml(aria)}" aria-label="${escapeHtml(aria)}">${USER_CHANNEL_KEYS.map((ch) =>
+    `<span class="user-ch ${bound[ch] ? "on" : "off"}" data-channel="${ch}">${CHANNEL_ICONS[ch]}</span>`
+  ).join("")
+    }</span>`;
 }
 
 function adminUsersFiltered() {
@@ -9000,8 +9308,8 @@ function renderAdminUsers() {
         ? `<span class="status-warn">未激活</span>`
         : `<span class="status-warn">未激活</span><span class="muted"> · ${Number(u.days_until_purge)} 天后删除</span>`)
       : u.notify_enabled
-      ? `<span class="status-ok">开启</span>${u.dnd_enabled ? `<span class="muted"> · 免打扰</span>` : ""}`
-      : `<span class="status-fail">关闭</span>`;
+        ? `<span class="status-ok">开启</span>${u.dnd_enabled ? `<span class="muted"> · 免打扰</span>` : ""}`
+        : `<span class="status-fail">关闭</span>`;
     return `<tr>
       <td><input type="checkbox" class="au-check" data-id="${u.id}" ${_adminUsersSelected.has(u.id) ? "checked" : ""} onchange="adminUserToggleSelect(this)" aria-label="选择用户"></td>
       <td>
@@ -9115,15 +9423,15 @@ function adminOpenUser(userId, focus) {
   const kbSubscribed = new Set(u.ima_kb_subscribed || []);
   const kbList = kbGroups.length
     ? `<div id="um-kb" class="um-kb-list">${kbGroups.map((group) => {
-        const id = String(group.id || "");
-        const name = group.name || id;
-        const isSub = kbSubscribed.has(id);
-        return `<label class="um-kb-item" data-kb-name="${escapeHtml(name)}"${isSub ? ` data-kb-subscribed="1"` : ""}>
+      const id = String(group.id || "");
+      const name = group.name || id;
+      const isSub = kbSubscribed.has(id);
+      return `<label class="um-kb-item" data-kb-name="${escapeHtml(name)}"${isSub ? ` data-kb-subscribed="1"` : ""}>
           <input type="checkbox" data-kb-group="${escapeHtml(id)}"${kbGranted.has(id) ? " checked" : ""}>
           <span>${escapeHtml(name)}</span>
           ${isSub ? `<span class="muted">已订阅</span>` : ""}
         </label>`;
-      }).join("")}</div>
+    }).join("")}</div>
       <div class="toolbar">
         <button class="btn-sm" onclick="adminSaveUserKnowledge(${u.id})">保存</button>
       </div>`
@@ -9678,7 +9986,7 @@ window.addEventListener("hashchange", () => {
 
 // PWA：注册 Service Worker（HTTP 或私有模式下失败静默，不影响功能）
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js").catch(() => {});
+  navigator.serviceWorker.register("/sw.js").catch(() => { });
 }
 
 applyTheme(); // 与 index.html 防闪脚本同一逻辑，兜底 + 同步 meta theme-color

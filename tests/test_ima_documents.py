@@ -10,9 +10,13 @@ from fastapi.testclient import TestClient
 from app.ima_documents import (
     IMA_LEGACY_GROUP_ID,
     IMA_LEGACY_GROUP_NAME,
+    IMA_MAX_FOLDER_DEPTH,
     IMA_PURE_GROUPS_KEY,
+    IMA_PURE_KB_ID_KEY,
     IMA_PURE_LAST_RESULT_KEY,
     IMA_PURE_REFRESH_TOKEN_KEY,
+    IMA_PURE_ROOT_FOLDER_KEY,
+    IMA_PURE_UID_KEY,
     ImaDocumentConfig,
     ImaDocumentService,
     ImaDocumentStore,
@@ -37,6 +41,9 @@ class FakeDB:
 
     def set_setting(self, key, value):
         self.values[key] = value
+
+    def set_settings_atomic(self, values):
+        self.values.update(values)
 
 
 def test_default_config_targets_august_folder():
@@ -135,6 +142,8 @@ def test_config_reads_group_registry_without_exposing_token():
             "name": "投行研报",
             "knowledge_base_id": "kb-1",
             "root_folder_id": "folder-1",
+            "folder_ids": ["folder-1"],
+            "mounted_folder_count": 1,
             "enabled": True,
             "source": "discovered",
         }
@@ -1671,3 +1680,263 @@ def test_sync_restores_legacy_hashed_files_without_redownload(tmp_path, monkeypa
     assert (root / "0825" / "Report.pdf").is_file()
     assert not hashed.exists()
     assert store.load_state()["file_abc"]["pdf"] == "0825/Report.pdf"
+
+
+def test_service_discover_success_persists_new_unmounted_groups_and_failure_keeps_config(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    db = FakeDB({
+        IMA_PURE_UID_KEY: "uid",
+        IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+        IMA_PURE_KB_ID_KEY: "kb-old",
+        IMA_PURE_ROOT_FOLDER_KEY: "root-old",
+        IMA_PURE_GROUPS_KEY: json.dumps([{
+            "id": "old", "name": "旧库", "knowledge_base_id": "kb-old",
+            "root_folder_id": "root-old", "folder_ids": ["keep"],
+            "enabled": True, "source": "discovered",
+        }]),
+    })
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.config = config
+
+        def discover_groups(self):
+            return (ImaGroupConfig("new", "新库", "kb-new", "root-new"),)
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    service = ImaDocumentService(db, tmp_path / "ima")
+    result = service.discover()
+    assert result["status"] == "finished"
+    saved = json.loads(db.get_setting(IMA_PURE_GROUPS_KEY))
+    assert [row["id"] for row in saved] == ["new"]
+    assert saved[0]["folder_ids"] == []
+    assert saved[0]["enabled"] is False
+
+    class BrokenClient(FakeClient):
+        def discover_groups(self):
+            raise RuntimeError("https://ima.invalid/?token=secret")
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", BrokenClient)
+    before = db.get_setting(IMA_PURE_GROUPS_KEY)
+    failed = service.discover()
+    assert failed["status"] == "failed"
+    assert db.get_setting(IMA_PURE_GROUPS_KEY) == before
+    assert "secret" not in json.dumps(failed)
+
+
+def test_service_skips_unmounted_group_without_sync_client(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    db = FakeDB({
+        IMA_PURE_UID_KEY: "uid", IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+        IMA_PURE_KB_ID_KEY: "kb", IMA_PURE_ROOT_FOLDER_KEY: "root",
+        IMA_PURE_GROUPS_KEY: json.dumps([{
+            "id": "empty", "name": "空库", "knowledge_base_id": "kb",
+            "root_folder_id": "root", "folder_ids": [], "enabled": False,
+        }]),
+    })
+    calls = {"manifest": 0}
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.group = group
+
+        def discover_groups(self):
+            return ()
+
+        def manifest(self):
+            calls["manifest"] += 1
+            raise AssertionError("unmounted group must not scan")
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    service = ImaDocumentService(db, tmp_path / "ima")
+    service.store.save_manifest([{"media_id": "old", "group_id": "empty", "name": "old.pdf"}])
+    result = service.sync_once()
+    assert result["groups"] == 0
+    assert result["skipped_groups"] == ["empty"]
+    assert calls["manifest"] == 0
+    assert service.store.load_manifest()[0]["media_id"] == "old"
+
+
+def test_manifest_recurses_selected_folders_and_keeps_folder_metadata():
+    group = ImaGroupConfig(
+        "research", "研究", "kb", "root", True, "discovered", ("mount-a", "child-a")
+    )
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    responses = {
+        "mount-a": [
+            {"media_id": "pdf_direct", "name": "直接.pdf", "file_size": 8},
+            {"media_type": 99, "folder_info": {"folder_id": "child-a", "name": "0826"}},
+        ],
+        "child-a": [
+            {"media_type": 99, "folder_info": {"folder_id": "child-b", "name": "研报"}},
+        ],
+        "child-b": [
+            {"media_id": "pdf_nested", "name": "嵌套.pdf", "file_size": "9"},
+        ],
+    }
+    calls = []
+
+    def list_items(folder_id):
+        calls.append(folder_id)
+        return responses[folder_id]
+
+    client.list_items = list_items
+
+    records = client.manifest()
+    assert {r["media_id"] for r in records} == {"pdf_direct", "pdf_nested"}
+    direct = next(r for r in records if r["media_id"] == "pdf_direct")
+    nested = next(r for r in records if r["media_id"] == "pdf_nested")
+    assert direct["source_folder_id"] == "mount-a"
+    assert nested["source_folder_id"] == "child-b"
+    assert nested["source_root_folder_id"] == "mount-a"
+    assert nested["folder_path"] == ["0826", "研报"]
+    assert nested["day"] == "0826"
+    assert calls.count("child-a") == 1
+    assert calls.count("mount-a") == 1
+
+
+def test_manifest_deduplicates_overlapping_roots_and_stops_folder_cycles():
+    group = ImaGroupConfig(
+        "research", "研究", "kb", "root", True, "discovered", ("root-a", "root-b")
+    )
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    responses = {
+        "root-a": [
+            {"media_type": 99, "folder_info": {"folder_id": "root-b", "name": "A"}},
+            {"media_id": "pdf_same", "name": "同一份.pdf", "file_size": 8},
+        ],
+        "root-b": [
+            {"media_type": 99, "folder_info": {"folder_id": "root-a", "name": "B"}},
+            {"media_id": "pdf_same", "name": "同一份.pdf", "file_size": 8},
+        ],
+    }
+    calls = []
+    client.list_items = lambda folder_id: calls.append(folder_id) or responses[folder_id]
+    records = client.manifest()
+    assert [r["media_id"] for r in records] == ["pdf_same"]
+    assert calls.count("root-a") == 1
+    assert calls.count("root-b") == 1
+
+
+def test_manifest_uses_unknown_day_for_non_date_folder_path():
+    group = ImaGroupConfig("research", "研究", "kb", "root", True, "discovered", ("mount",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    client.list_items = lambda folder_id: [{"media_id": "pdf_x", "name": "x.pdf", "file_size": 8}]
+    record = client.manifest()[0]
+    assert record["day"] == "unknown"
+    assert record["folder_path"] == []
+
+
+def test_group_folder_ids_distinguish_legacy_fallback_from_explicit_empty():
+    legacy_db = FakeDB({
+        IMA_PURE_GROUPS_KEY: json.dumps([{
+            "id": "old", "name": "旧库", "knowledge_base_id": "kb",
+            "root_folder_id": "root", "enabled": True,
+        }])
+    })
+    legacy = ImaDocumentConfig.from_db(legacy_db).groups[0]
+    assert legacy.folder_ids is None
+    assert legacy.mount_folder_ids == ("root",)
+    assert legacy.public()["folder_ids"] == ["root"]
+
+    empty_db = FakeDB({
+        IMA_PURE_GROUPS_KEY: json.dumps([{
+            "id": "new", "name": "新库", "knowledge_base_id": "kb",
+            "root_folder_id": "root", "folder_ids": [], "enabled": False,
+        }])
+    })
+    empty = ImaDocumentConfig.from_db(empty_db).groups[0]
+    assert empty.folder_ids == ()
+    assert empty.mount_folder_ids == ()
+    assert empty.public()["folder_ids"] == []
+    assert empty.public()["mounted_folder_count"] == 0
+
+
+def test_merge_groups_preserves_mounts_and_new_discovered_group_is_unmounted():
+    existing = (
+        ImaGroupConfig(
+            "old", "旧名称", "kb-old", "root-old", True, "discovered",
+            ("folder-kept",),
+        ),
+    )
+    discovered = (
+        ImaGroupConfig("old", "新名称", "kb-old", "root-new"),
+        ImaGroupConfig("new", "新库", "kb-new", "root-new"),
+    )
+    merged = merge_groups(existing, discovered, discovery_complete=True)
+    assert [(g.id, g.name, g.root_folder_id, g.mount_folder_ids) for g in merged] == [
+        ("old", "新名称", "root-new", ("folder-kept",)),
+        ("new", "新库", "root-new", ()),
+    ]
+    assert merged[1].enabled is False
+
+
+def test_merge_groups_failed_discovery_keeps_stale_discovered_groups():
+    existing = (ImaGroupConfig("gone", "旧库", "kb-gone", "root", True, "discovered", ("f",)),)
+    assert merge_groups(existing, (), discovery_complete=False) == existing
+
+
+def test_manifest_uses_ima_current_path_for_selected_root_day():
+    group = ImaGroupConfig("research", "研究", "kb", "root", True, "discovered", ("mount",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    client._token = lambda: "access"
+    client._open_json = lambda request: ({
+        "code": 0,
+        "data": {
+            "knowledge_list": [{"media_id": "pdf_x", "name": "x.pdf", "file_size": 8}],
+            "current_path": [{"folder_id": "mount", "name": "0806"}],
+            "is_end": True,
+        },
+    }, {})
+    record = client.manifest()[0]
+    assert record["folder_path"] == ["0806"]
+    assert record["day"] == "0806"
+
+
+def test_discover_groups_rejects_success_payload_without_known_shape():
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    client._token = lambda: "access"
+    client._open_json = lambda request: ({"code": 0, "data": {}}, {})
+    with pytest.raises(RuntimeError, match="invalid response"):
+        client.discover_groups()
+
+
+def test_discovery_rejects_invalid_string_ids():
+    groups = normalize_discovered_groups({
+        "knowledge_list": [{
+            "id": "kb/bad", "name": "坏库", "root_folder_id": "root/bad",
+        }]
+    })
+    assert groups == ()
+
+
+def test_manifest_rejects_folder_tree_depth_limit(monkeypatch):
+    group = ImaGroupConfig("deep", "深目录", "kb", "root", True, "discovered", ("folder_0",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    responses = {
+        f"folder_{index}": [{
+            "media_type": 99,
+            "folder_info": {"folder_id": f"folder_{index + 1}", "name": f"目录{index}"},
+        }]
+        for index in range(IMA_MAX_FOLDER_DEPTH + 2)
+    }
+    client.list_items = lambda folder_id: responses.get(folder_id, [])
+    with pytest.raises(RuntimeError, match="maximum depth"):
+        client.manifest()
+
+
+def test_manifest_rejects_folder_tree_node_limit(monkeypatch):
+    from app import ima_documents
+
+    monkeypatch.setattr(ima_documents, "IMA_MAX_FOLDER_NODES", 2)
+    group = ImaGroupConfig("wide", "宽目录", "kb", "root", True, "discovered", ("root",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    client.list_items = lambda folder_id: (
+        [{"media_type": 99, "folder_info": {"folder_id": "child-a", "name": "甲"}},
+         {"media_type": 99, "folder_info": {"folder_id": "child-b", "name": "乙"}}]
+        if folder_id == "root" else []
+    )
+    with pytest.raises(RuntimeError, match="maximum size"):
+        client.manifest()

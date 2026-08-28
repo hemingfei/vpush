@@ -47,6 +47,7 @@ IMA_PURE_INTERVAL_KEY = "ima_pure_interval_seconds"
 IMA_PURE_LAST_STARTED_KEY = "ima_pure_last_started_at"
 IMA_PURE_LAST_FINISHED_KEY = "ima_pure_last_finished_at"
 IMA_PURE_LAST_RESULT_KEY = "ima_pure_last_result"
+IMA_PURE_DISCOVERY_KEY = "ima_pure_discovery"
 IMA_LEGACY_GROUP_ID = "legacy"
 IMA_LEGACY_GROUP_NAME = "IMA 文档"
 IMA_PURE_UID_DEFAULT = "001aa361168019ef"
@@ -55,6 +56,9 @@ IMA_PURE_ROOT_FOLDER_DEFAULT = "folder_7489327974078249"
 IMA_PURE_INTERVAL_DEFAULT = 3600
 IMA_PURE_INTERVAL_MIN = 1800
 IMA_PURE_INTERVAL_MAX = 604800
+IMA_MOUNT_FOLDER_ID_MAX = 256
+IMA_MAX_FOLDER_DEPTH = 32
+IMA_MAX_FOLDER_NODES = 10000
 
 PUB_PEM = b"""-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAx9h6SY1LO88wRVKdOC5U
@@ -148,16 +152,127 @@ class ImaGroupConfig:
     root_folder_id: str
     enabled: bool = True
     source: str = "manual"
+    # None means the pre-folder_ids configuration and falls back to root_folder_id.
+    folder_ids: tuple[str, ...] | None = None
+
+    @property
+    def mount_folder_ids(self) -> tuple[str, ...]:
+        if self.folder_ids is None:
+            return (self.root_folder_id,) if self.enabled and self.root_folder_id else ()
+        return self.folder_ids
 
     def public(self) -> dict[str, Any]:
+        folder_ids = list(self.mount_folder_ids)
         return {
             "id": self.id,
             "name": self.name,
             "knowledge_base_id": self.knowledge_base_id,
             "root_folder_id": self.root_folder_id,
-            "enabled": self.enabled,
+            "folder_ids": folder_ids,
+            "mounted_folder_count": len(folder_ids),
+            "enabled": bool(self.enabled and folder_ids),
             "source": self.source,
         }
+
+
+def _normalize_stored_folder_ids(value: Any) -> tuple[str, ...] | None:
+    if not isinstance(value, list) or len(value) > IMA_MOUNT_FOLDER_ID_MAX:
+        return None
+    output: list[str] = []
+    seen: set[str] = set()
+    for folder_id in value:
+        if not isinstance(folder_id, str):
+            return None
+        folder_id = folder_id.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", folder_id):
+            return None
+        if folder_id not in seen:
+            seen.add(folder_id)
+            output.append(folder_id)
+    return tuple(output)
+
+
+_FOLDER_ID_RE = re.compile(r"[A-Za-z0-9_:-]{1,128}")
+
+
+def _folder_id_value(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    return text if _FOLDER_ID_RE.fullmatch(text) else ""
+
+
+def ima_folder_id(item: dict[str, Any]) -> str:
+    info = item.get("folder_info")
+    candidates = (
+        info.get("folder_id") if isinstance(info, dict) else None,
+        item.get("folder_id"),
+        item.get("media_id") if str(item.get("media_id") or "").startswith("folder_") else None,
+    )
+    for candidate in candidates:
+        folder_id = _folder_id_value(candidate)
+        if folder_id:
+            return folder_id
+    return ""
+
+
+def ima_folder_name(item: dict[str, Any], folder_id: str) -> str:
+    info = item.get("folder_info")
+    candidates = (
+        info.get("name") if isinstance(info, dict) else None,
+        item.get("name"),
+        item.get("title"),
+    )
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()[:200]
+    return folder_id
+
+
+def is_ima_folder_item(item: dict[str, Any]) -> bool:
+    if not isinstance(item, dict):
+        return False
+    if item.get("media_type") == 99:
+        return bool(ima_folder_id(item))
+    media_id = item.get("media_id")
+    if isinstance(media_id, str) and media_id.startswith("folder_"):
+        return bool(ima_folder_id(item))
+    info = item.get("folder_info")
+    return bool(ima_folder_id(item)) and not media_id and isinstance(info, (dict, type(None)))
+
+
+def _count_value(item: dict[str, Any], keys: tuple[str, ...]) -> int | None:
+    for key in keys:
+        if key not in item:
+            continue
+        value = _optional_int(item.get(key))
+        if value is not None:
+            return max(0, value)
+    return None
+
+
+def ima_folder_children_hint(item: dict[str, Any]) -> bool | None:
+    count = _count_value(item, ("folder_number", "sub_folder_count", "children_count", "child_count"))
+    return None if count is None else count > 0
+
+
+def normalize_ima_folder_item(item: dict[str, Any], parent_id: str) -> dict[str, Any] | None:
+    folder_id = ima_folder_id(item)
+    if not folder_id:
+        return None
+    normalized: dict[str, Any] = {
+        "id": folder_id,
+        "name": ima_folder_name(item, folder_id),
+        "parent_id": parent_id,
+        "has_children": ima_folder_children_hint(item),
+    }
+    folder_count = _count_value(item, ("folder_number", "sub_folder_count"))
+    file_count = _count_value(item, ("file_number", "file_count"))
+    if folder_count is not None:
+        normalized["folder_count"] = folder_count
+    if file_count is not None:
+        normalized["file_count"] = file_count
+    return normalized
 
 
 def _legacy_group(kb: str, root: str) -> ImaGroupConfig:
@@ -172,6 +287,14 @@ def _legacy_group(kb: str, root: str) -> ImaGroupConfig:
 def _discovery_payload(payload: Any) -> dict[str, Any]:
     data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else payload
     return data if isinstance(data, dict) else {}
+
+
+def _discovery_has_known_shape(payload: Any) -> bool:
+    data = _discovery_payload(payload)
+    return any(
+        field in data and isinstance(data.get(field), list)
+        for field in ("searched_knowledge_bases", "knowledge_base_list", "knowledge_list", "info_list")
+    ) or isinstance(data.get("results"), list)
 
 
 def _discovery_page_items(payload: Any) -> list[dict[str, Any]]:
@@ -199,10 +322,16 @@ def _prepare_discovery_item(item: dict[str, Any]) -> dict[str, Any] | None:
     group_id_value = item.get("id") or item.get("knowledge_base_id")
     if not isinstance(group_id_value, str) or not group_id_value.strip():
         return None
+    group_id_value = group_id_value.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", group_id_value):
+        return None
     basic = item.get("basic_info") if isinstance(item.get("basic_info"), dict) else {}
     name_value = item.get("name") or item.get("kb_name") or basic.get("name") or group_id_value
     root_value = item.get("root_folder_id") or item.get("folder_id") or group_id_value
     if not all(isinstance(value, str) and value.strip() for value in (name_value, root_value)):
+        return None
+    root_value = root_value.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", root_value):
         return None
     prepared = dict(item)
     prepared["id"] = group_id_value.strip()
@@ -239,24 +368,35 @@ def normalize_discovered_groups(payload: Any) -> tuple[ImaGroupConfig, ...]:
 def merge_groups(
     existing: tuple[ImaGroupConfig, ...],
     discovered: tuple[ImaGroupConfig, ...],
+    *,
+    discovery_complete: bool = False,
 ) -> tuple[ImaGroupConfig, ...]:
     by_id = {group.id: group for group in existing}
     kb_to_id = {group.knowledge_base_id: group.id for group in existing}
+    discovered_ids: set[str] = set()
     for group in discovered:
         previous = by_id.get(group.id)
         if previous is None:
             previous = by_id.get(kb_to_id.get(group.knowledge_base_id, ""))
-        manual = previous and previous.source == "manual"
+        manual = previous is not None and previous.source == "manual"
         target_id = previous.id if previous else group.id
         by_id[target_id] = ImaGroupConfig(
             id=target_id,
             name=previous.name if manual else group.name,
             knowledge_base_id=group.knowledge_base_id,
             root_folder_id=previous.root_folder_id if manual else group.root_folder_id,
-            enabled=previous.enabled if previous else True,
+            enabled=previous.enabled if previous else False,
             source=previous.source if manual else "discovered",
+            folder_ids=previous.folder_ids if previous else (),
         )
+        discovered_ids.add(target_id)
         kb_to_id[group.knowledge_base_id] = target_id
+    if discovery_complete:
+        return tuple(
+            group
+            for group in by_id.values()
+            if group.source == "manual" or group.id in discovered_ids
+        )
     return tuple(by_id.values())
 
 
@@ -283,6 +423,13 @@ def _read_groups(db: Any, kb: str, root: str) -> tuple[ImaGroupConfig, ...]:
             source = item.get("source", "manual")
             if not isinstance(source, str):
                 continue
+            folder_ids = None
+            if "folder_ids" in item:
+                folder_ids = _normalize_stored_folder_ids(item["folder_ids"])
+                if folder_ids is None:
+                    continue
+                if not enabled:
+                    folder_ids = ()
             groups.append(
                 ImaGroupConfig(
                     id=item["id"].strip(),
@@ -291,6 +438,7 @@ def _read_groups(db: Any, kb: str, root: str) -> tuple[ImaGroupConfig, ...]:
                     root_folder_id=item["root_folder_id"].strip(),
                     enabled=enabled,
                     source="discovered" if source == "discovered" else "manual",
+                    folder_ids=folder_ids,
                 )
             )
         if groups:
@@ -304,6 +452,7 @@ def _read_groups(db: Any, kb: str, root: str) -> tuple[ImaGroupConfig, ...]:
                         root_folder_id=root,
                         enabled=group.enabled,
                         source=group.source,
+                        folder_ids=group.folder_ids,
                     )
                 normalized_groups.append(group)
             return tuple(normalized_groups)
@@ -336,12 +485,16 @@ class ImaDocumentConfig:
         )
 
     @property
+    def credentials_configured(self) -> bool:
+        return bool(self.uid and self.refresh_token)
+
+    @property
     def configured(self) -> bool:
         return bool(
             self.uid
             and self.refresh_token
             and any(
-                group.enabled and group.knowledge_base_id and group.root_folder_id
+                group.enabled and group.knowledge_base_id and group.mount_folder_ids
                 for group in self.groups
             )
         )
@@ -366,13 +519,14 @@ class ImaPureClient:
         self.token_at = 0.0
         self.ctk = ""
         self.ctk_expire = 0
+        self._folder_paths: dict[str, list[str]] = {}
 
     @property
     def effective_knowledge_base_id(self) -> str:
         if self.group is not None:
             return self.group.knowledge_base_id
         for group in self.config.groups:
-            if group.enabled and group.knowledge_base_id and group.root_folder_id:
+            if group.enabled and group.knowledge_base_id and group.mount_folder_ids:
                 return group.knowledge_base_id
         return self.config.knowledge_base_id
 
@@ -381,7 +535,7 @@ class ImaPureClient:
         if self.group is not None:
             return self.group.root_folder_id
         for group in self.config.groups:
-            if group.enabled and group.knowledge_base_id and group.root_folder_id:
+            if group.enabled and group.knowledge_base_id and group.mount_folder_ids:
                 return group.root_folder_id
         return self.config.root_folder_id
 
@@ -452,6 +606,22 @@ class ImaPureClient:
             return payload
         return data
 
+    def _remember_folder_path(self, folder_id: str, payload: dict[str, Any]) -> None:
+        current_path = payload.get("current_path")
+        if not isinstance(current_path, list):
+            return
+        names: list[str] = []
+        for item in current_path:
+            if not isinstance(item, dict):
+                continue
+            path_folder_id = ima_folder_id(item)
+            if not path_folder_id:
+                continue
+            names.append(ima_folder_name(item, path_folder_id))
+            if path_folder_id == folder_id:
+                self._folder_paths[folder_id] = names
+                return
+
     def discover_groups(self) -> tuple[ImaGroupConfig, ...]:
         raw_items: list[dict[str, Any]] = []
         cursor = ""
@@ -471,10 +641,12 @@ class ImaPureClient:
                 headers=self._headers(token),
             )
             data, _ = self._open_json(request)
-            code = data.get("code", data.get("retcode"))
-            if code not in (0, None):
+            code = data.get("code") if "code" in data else data.get("retcode")
+            if code not in (0, "0"):
                 raise RuntimeError(f"IMA group discovery failed code={code}")
             payload = _discovery_payload(data)
+            if not _discovery_has_known_shape(payload):
+                raise RuntimeError("IMA group discovery returned invalid response")
             raw_items.extend(_discovery_page_items(payload))
             if payload.get("is_end") is True or not payload.get("next_cursor"):
                 break
@@ -514,6 +686,7 @@ class ImaPureClient:
             payload = self._payload(data)
             if not isinstance(payload, dict):
                 return items
+            self._remember_folder_path(folder_id, payload)
             page_items = payload.get("knowledge_list")
             if isinstance(page_items, list):
                 items.extend(page_items)
@@ -526,72 +699,127 @@ class ImaPureClient:
 
     def manifest(self) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
-        for folder in self.list_items(self.effective_root_folder_id):
-            if not isinstance(folder, dict) or folder.get("media_type") != 99:
+        roots = (
+            self.group.mount_folder_ids
+            if self.group is not None
+            else ((self.effective_root_folder_id,) if self.effective_root_folder_id else ())
+        )
+        queue: list[str] = []
+        selected_root_ids = {folder_id for folder_id in roots if folder_id}
+        root_by_folder: dict[str, str] = {}
+        path_by_folder: dict[str, list[str]] = {}
+        depth_by_folder: dict[str, int] = {}
+        for folder_id in roots:
+            if folder_id and folder_id not in root_by_folder:
+                root_by_folder[folder_id] = folder_id
+                path_by_folder[folder_id] = []
+                depth_by_folder[folder_id] = 0
+                queue.append(folder_id)
+        visited_folder_ids: set[str] = set()
+        queued_folder_ids = set(queue)
+        seen_media_ids: set[str] = set()
+        queue_index = 0
+
+        def append_file(
+            item: dict[str, Any],
+            source_folder_id: str,
+            source_root_folder_id: str,
+            folder_path: list[str],
+        ) -> None:
+            if is_ima_folder_item(item):
+                return
+            media_type = item.get("media_type")
+            if media_type is not None and (
+                isinstance(media_type, bool) or not isinstance(media_type, int)
+            ):
+                return
+            if media_type == 99:
+                return
+            media_id_value = item.get("media_id")
+            if not isinstance(media_id_value, str) or not media_id_value.strip():
+                return
+            media_id = media_id_value.strip()
+            try:
+                media_id = ImaDocumentStore.validate_media_id(media_id)
+            except ValueError:
+                logger.warning("IMA ignored invalid media id")
+                return
+            if media_id in seen_media_ids:
+                return
+            name_value = item.get("name")
+            if name_value is not None and not isinstance(name_value, str):
+                return
+            file_size = _optional_int(item.get("file_size"))
+            if file_size is None:
+                return
+            md5_value = item.get("md5_sum")
+            if md5_value is not None and not isinstance(md5_value, str):
+                return
+            ts_value = item.get("create_time")
+            if ts_value is not None and (
+                isinstance(ts_value, bool)
+                or not isinstance(ts_value, (str, int, float))
+            ):
+                return
+            name = item_display_name(item, media_id)
+            if not (name.lower().endswith(".pdf") or media_id.lower().startswith("pdf_")):
+                return
+            seen_media_ids.add(media_id)
+            day = next(
+                (value for value in reversed(folder_path) if re.fullmatch(r"\d{4}", value)),
+                "unknown",
+            )
+            record = {
+                "media_id": media_id,
+                "name": name,
+                "day": day,
+                "size": file_size or 0,
+                "md5": md5_value or "",
+                "ts": str(ts_value or ""),
+                "abstract": item_text(item)[:2000],
+                "cover_url": item_cover(item)[:2000],
+                "source_folder_id": source_folder_id,
+                "source_root_folder_id": source_root_folder_id,
+                "folder_path": list(folder_path),
+            }
+            if self.group is not None:
+                record["group_id"] = self.group.id
+                record["group_name"] = self.group.name
+            records.append(record)
+
+        while queue_index < len(queue):
+            folder_id = queue[queue_index]
+            queue_index += 1
+            root_folder_id = root_by_folder[folder_id]
+            folder_path = path_by_folder[folder_id]
+            depth = depth_by_folder[folder_id]
+            if folder_id in visited_folder_ids:
                 continue
-            folder_info = folder.get("folder_info")
-            if not isinstance(folder_info, dict):
-                continue
-            folder_id = folder_info.get("folder_id")
-            if not isinstance(folder_id, str) or not folder_id.strip():
-                continue
-            day_value = folder_info.get("name")
-            if day_value is None:
-                day_value = folder.get("name")
-            if day_value is not None and not isinstance(day_value, str):
-                continue
-            day = (day_value or "unknown").strip() if isinstance(day_value, str) else "unknown"
-            for item in self.list_items(folder_id):
+            if depth > IMA_MAX_FOLDER_DEPTH:
+                raise RuntimeError("IMA folder tree exceeds maximum depth")
+            visited_folder_ids.add(folder_id)
+            if len(visited_folder_ids) > IMA_MAX_FOLDER_NODES:
+                raise RuntimeError("IMA folder tree exceeds maximum size")
+            items = self.list_items(folder_id)
+            if not folder_path:
+                folder_path = list(self._folder_paths.get(folder_id, folder_path))
+            for item in items:
                 if not isinstance(item, dict):
                     continue
-                media_type = item.get("media_type")
-                if media_type is not None and (
-                    isinstance(media_type, bool) or not isinstance(media_type, int)
-                ):
+                if is_ima_folder_item(item):
+                    child_id = ima_folder_id(item)
+                    if child_id and child_id not in visited_folder_ids:
+                        child_path = folder_path + [ima_folder_name(item, child_id)]
+                        if child_id not in root_by_folder or child_id in selected_root_ids:
+                            root_by_folder[child_id] = root_folder_id
+                            path_by_folder[child_id] = child_path
+                            depth_by_folder[child_id] = depth + 1
+                            selected_root_ids.discard(child_id)
+                        if child_id not in queued_folder_ids:
+                            queued_folder_ids.add(child_id)
+                            queue.append(child_id)
                     continue
-                if media_type == 99:
-                    continue
-                media_id_value = item.get("media_id")
-                if not isinstance(media_id_value, str) or not media_id_value.strip():
-                    continue
-                media_id = media_id_value.strip()
-                try:
-                    media_id = ImaDocumentStore.validate_media_id(media_id)
-                except ValueError:
-                    logger.warning("IMA ignored invalid media id")
-                    continue
-                name_value = item.get("name")
-                if name_value is not None and not isinstance(name_value, str):
-                    continue
-                file_size = _optional_int(item.get("file_size"))
-                if file_size is None:
-                    continue
-                md5_value = item.get("md5_sum")
-                if md5_value is not None and not isinstance(md5_value, str):
-                    continue
-                ts_value = item.get("create_time")
-                if ts_value is not None and (
-                    isinstance(ts_value, bool)
-                    or not isinstance(ts_value, (str, int, float))
-                ):
-                    continue
-                name = item_display_name(item, media_id)
-                if not (name.lower().endswith(".pdf") or media_id.lower().startswith("pdf_")):
-                    continue
-                record = {
-                    "media_id": media_id,
-                    "name": name,
-                    "day": day,
-                    "size": file_size or 0,
-                    "md5": md5_value or "",
-                    "ts": str(ts_value or ""),
-                    "abstract": item_text(item)[:2000],
-                    "cover_url": item_cover(item)[:2000],
-                }
-                if self.group is not None:
-                    record["group_id"] = self.group.id
-                    record["group_name"] = self.group.name
-                records.append(record)
+                append_file(item, folder_id, root_folder_id, folder_path)
         records.sort(key=lambda item: (item["day"], item["media_id"]))
         return records
 
@@ -1449,6 +1677,7 @@ class ImaDocumentService:
         self._stop = threading.Event()
         self._state_lock = threading.Lock()
         self._sync_lock = threading.Lock()
+        self._discovery_lock = threading.Lock()
         self._scheduler_thread: threading.Thread | None = None
         self._worker_thread: threading.Thread | None = None
         self._running = False
@@ -1457,6 +1686,92 @@ class ImaDocumentService:
 
     def config(self) -> ImaDocumentConfig:
         return ImaDocumentConfig.from_db(self.db)
+
+    @staticmethod
+    def _discovery_default() -> dict[str, str]:
+        return {"status": "never", "at": "", "error": ""}
+
+    def _discovery_status(self) -> dict[str, str]:
+        raw = self.db.get_setting(IMA_PURE_DISCOVERY_KEY) or ""
+        try:
+            value = json.loads(raw) if raw else {}
+        except (TypeError, json.JSONDecodeError):
+            value = {}
+        if not isinstance(value, dict):
+            value = {}
+        default = self._discovery_default()
+        return {
+            "status": str(value.get("status") or default["status"]),
+            "at": str(value.get("at") or ""),
+            "error": str(value.get("error") or ""),
+        }
+
+    def _set_settings_atomic(self, values: dict[str, str]) -> None:
+        setter = getattr(self.db, "set_settings_atomic", None)
+        if callable(setter):
+            setter(values)
+            return
+        for key, value in values.items():
+            self.db.set_setting(key, value)
+
+    def discover(self) -> dict[str, Any]:
+        cfg = self.config()
+        if not cfg.credentials_configured:
+            return {
+                "ok": False,
+                "status": "not_configured",
+                "config": cfg.public(),
+                "discovery": self._discovery_status(),
+            }
+        with self._discovery_lock:
+            cfg = self.config()
+            try:
+                client = ImaPureClient(cfg)
+                discover = getattr(client, "discover_groups", None)
+                discovery_complete = callable(discover)
+                discovered = tuple(discover()) if discovery_complete else ()
+            except Exception as exc:  # noqa: BLE001 - preserve the last good registry
+                error = _safe_error(exc)
+                discovery = {
+                    "status": "failed",
+                    "at": datetime.now(UTC).isoformat(),
+                    "error": error,
+                }
+                self.db.set_setting(
+                    IMA_PURE_DISCOVERY_KEY,
+                    json.dumps(discovery, ensure_ascii=False),
+                )
+                return {
+                    "ok": False,
+                    "status": "failed",
+                    "config": self.config().public(),
+                    "discovery": discovery,
+                }
+            current = self.config()
+            merged = merge_groups(
+                current.groups,
+                discovered,
+                discovery_complete=discovery_complete,
+            )
+            discovery = {
+                "status": "ok",
+                "at": datetime.now(UTC).isoformat(),
+                "error": "",
+            }
+            self._set_settings_atomic(
+                {
+                    IMA_PURE_GROUPS_KEY: json.dumps(
+                        [group.public() for group in merged], ensure_ascii=False
+                    ),
+                    IMA_PURE_DISCOVERY_KEY: json.dumps(discovery, ensure_ascii=False),
+                }
+            )
+            return {
+                "ok": True,
+                "status": "finished",
+                "config": self.config().public(),
+                "discovery": discovery,
+            }
 
     def status(self) -> dict[str, Any]:
         cfg = self.config()
@@ -1475,6 +1790,7 @@ class ImaDocumentService:
             "last_started_at": self.db.get_setting(IMA_PURE_LAST_STARTED_KEY) or "",
             "last_finished_at": self.db.get_setting(IMA_PURE_LAST_FINISHED_KEY) or "",
             "last_result": last_result,
+            "discovery": self._discovery_status(),
             "documents": len(self.store.documents()),
         }
 
@@ -1558,7 +1874,7 @@ class ImaDocumentService:
 
     def trigger(self, scheduled: bool = False) -> dict[str, Any]:
         cfg = self.config()
-        if not cfg.configured:
+        if not cfg.credentials_configured:
             return {"status": "not_configured"}
         now = time.time()
         with self._state_lock:
@@ -1698,26 +2014,19 @@ class ImaDocumentService:
             return {"status": "already_running"}
         try:
             cfg = self.config()
-            if not cfg.configured:
+            if not cfg.credentials_configured:
                 return {"status": "not_configured"}
             started = time.time()
             self.db.set_setting(IMA_PURE_LAST_STARTED_KEY, str(int(started)))
-            discovery_error = ""
-            discovery_client = ImaPureClient(cfg)
-            try:
-                discover = getattr(discovery_client, "discover_groups", None)
-                discovered = tuple(discover()) if discover else ()
-            except Exception as exc:  # noqa: BLE001 - discovery is optional
-                discovered = ()
-                discovery_error = _safe_error(exc)
-                logger.warning("IMA group discovery failed error=%s", discovery_error)
-            merged_groups = merge_groups(cfg.groups, discovered)
-            self.db.set_setting(
-                IMA_PURE_GROUPS_KEY,
-                json.dumps([group.public() for group in merged_groups], ensure_ascii=False),
-            )
+            discovery_result = self.discover()
+            discovery = discovery_result.get("discovery") or {}
+            discovery_error = str(discovery.get("error") or "")
+            cfg = self.config()
             state = self.store.load_state()
-            enabled_groups = [group for group in merged_groups if group.enabled]
+            enabled_groups = [
+                group for group in cfg.groups if group.enabled and group.mount_folder_ids
+            ]
+            skipped_groups = [group.id for group in cfg.groups if group not in enabled_groups]
             total = pending = downloaded = failures = 0
             failed_groups: list[str] = []
             group_errors: dict[str, str] = {}
@@ -1745,6 +2054,7 @@ class ImaDocumentService:
                     logger.warning("IMA group failed group=%s error=%s", group.id[:64], group_error)
             result = {
                 "groups": len(enabled_groups),
+                "skipped_groups": skipped_groups,
                 "succeeded_groups": succeeded_groups,
                 "failed_groups": failed_groups,
                 "discovery_error": discovery_error,
