@@ -127,6 +127,7 @@ const imaMountState = {
   folderRequests: new Map(),
   discoveryBusy: false,
   discoverySeq: 0,
+  discoveryOwner: null,
   discoveryEntered: false,
   dirty: false,
   requestSeq: 0,
@@ -5213,6 +5214,7 @@ function initImaMountState(groups, preserve = false) {
   imaMountState.errors = new Map();
   imaMountState.folderRequests = new Map();
   imaMountState.discoveryBusy = false;
+  imaMountState.discoveryOwner = null;
   imaMountState.generation += 1;
   imaMountState.dirty = preserve ? oldDirty : false;
   if (!preserve) imaMountState.discoveryEntered = false;
@@ -5499,6 +5501,8 @@ async function discoverImaGroups() {
   const routeSeq = routeRenderSeq;
   const generation = imaMountState.generation;
   const discoverySeq = ++imaMountState.discoverySeq;
+  const request = { generation, routeSeq, seq: discoverySeq };
+  imaMountState.discoveryOwner = request;
   imaMountState.discoveryBusy = true;
   const button = $("#ima-discover-btn");
   const status = $("#ima-group-discovery-status");
@@ -5508,9 +5512,12 @@ async function discoverImaGroups() {
     const result = await api("/api/admin/ima-collector/discover", { method: "POST" });
     if (generation !== imaMountState.generation
       || imaMountState.discoverySeq !== discoverySeq
+      || imaMountState.discoveryOwner !== request
       || !routeStillActive(routeSeq)) return;
     if (result.ok && result.config) {
       initImaMountState(result.config.groups, true);
+      imaMountState.discoveryOwner = request;
+      imaMountState.discoveryBusy = true;
       renderImaMountGroups();
       const currentStatus = $("#ima-group-discovery-status");
       if (currentStatus) currentStatus.innerHTML = imaGroupDiscoveryStatusText(result);
@@ -5524,18 +5531,17 @@ async function discoverImaGroups() {
   } catch (err) {
     if (generation === imaMountState.generation
       && imaMountState.discoverySeq === discoverySeq
+      && imaMountState.discoveryOwner === request
       && routeStillActive(routeSeq)) {
       const currentStatus = $("#ima-group-discovery-status");
       if (currentStatus) currentStatus.innerHTML = `自动发现失败：${escapeHtml(imaSafeError(err.message || "请求失败"))}（已保留上次结果）`;
     }
   } finally {
-    if (generation === imaMountState.generation
-      && imaMountState.discoverySeq === discoverySeq
-      && routeStillActive(routeSeq)) {
-      imaMountState.discoveryBusy = false;
-      const currentButton = $("#ima-discover-btn");
-      if (currentButton && document.body.contains(currentButton)) currentButton.disabled = false;
-    }
+    if (imaMountState.discoveryOwner !== request || !routeStillActive(routeSeq)) return;
+    imaMountState.discoveryBusy = false;
+    imaMountState.discoveryOwner = null;
+    const currentButton = $("#ima-discover-btn");
+    if (currentButton && document.body.contains(currentButton)) currentButton.disabled = false;
   }
 }
 
@@ -6607,7 +6613,8 @@ async function saveImaCollector() {
   const saveButton = $("#ima-collector-save");
   if (saveButton?.disabled) return;
   if (saveButton) saveButton.disabled = true;
-  const focusId = document.activeElement?.id || "";
+  const focusElement = document.activeElement;
+  const focusId = focusElement?.id || "";
   const minutes = Number($("#ima-pure-interval")?.value || 60);
   if (!Number.isInteger(minutes) || minutes < 30 || minutes > 10080) {
     flash("检查间隔须在 30–10080 分钟", "error");
@@ -6627,13 +6634,16 @@ async function saveImaCollector() {
     await api("/api/admin/ima-collector", { method: "PUT", body: JSON.stringify(body) });
     imaMountState.dirty = false;
     if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats") return;
+    const restoreFocus = document.activeElement === focusElement || document.activeElement === document.body;
     const tokenInput = $("#ima-pure-token");
     if (tokenInput) tokenInput.value = "";
     flash("IMA 文档采集配置已保存");
     await loadAdminStats(routeSeq);
     if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats") return;
-    const focusTarget = document.getElementById(focusId) || document.getElementById("ima-collector-save");
-    focusTarget?.focus({ preventScroll: true });
+    if (restoreFocus) {
+      const focusTarget = document.getElementById(focusId) || document.getElementById("ima-collector-save");
+      focusTarget?.focus({ preventScroll: true });
+    }
   } catch (err) {
     flash(err.message || "保存失败", "error");
   } finally {

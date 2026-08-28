@@ -1127,9 +1127,9 @@ def test_ima_discovery_catch_and_finally_require_generation_owner():
     assert "generation === imaMountState.generation" in catch
     assert "imaMountState.discoverySeq === discoverySeq" in catch
     assert "routeStillActive(routeSeq)" in catch
-    assert "generation === imaMountState.generation" in finally_block
-    assert "imaMountState.discoverySeq === discoverySeq" in finally_block
+    assert "imaMountState.discoveryOwner !== request" in finally_block
     assert "routeStillActive(routeSeq)" in finally_block
+    assert "generation === imaMountState.generation" not in finally_block
 
 
 def test_ima_force_folder_retry_supersedes_inflight_owner():
@@ -2877,3 +2877,29 @@ def test_ima_mount_css_stacks_at_800px_and_keeps_touch_targets():
     assert re.search(r"\.ima-mount-layout\s*\{[^}]*grid-template-columns:\s*1fr", narrow)
     assert re.search(r"\.ima-mount-kb-row[^}]*min-height:\s*44px", css)
     assert re.search(r"\.ima-folder-row[^}]*min-height:\s*44px", css)
+
+
+def test_ima_discovery_success_releases_only_its_owned_button():
+    """发现成功安装新 state 后仍应由原请求释放当前按钮，旧请求不能释放它。"""
+    discover = _fn_body("discoverImaGroups")
+    success_start = discover.index('if (result.ok && result.config)')
+    else_start = discover.index("} else {", success_start)
+    success = discover[success_start:else_start]
+    finally_block = discover[discover.index("} finally"):]
+    assert "imaMountState.discoveryOwner = request" in success
+    assert "imaMountState.discoveryBusy = true" in success
+    assert "imaMountState.discoveryOwner !== request" in finally_block
+    assert "generation === imaMountState.generation" not in finally_block
+    assert "const currentButton = $(\"#ima-discover-btn\")" in finally_block
+
+
+def test_ima_collector_save_restores_focus_only_when_original_focus_survives():
+    """保存期间用户切换到其他控件后，旧保存回调不得抢回焦点。"""
+    save = _fn_body("saveImaCollector")
+    assert "const focusElement = document.activeElement" in save
+    assert "const restoreFocus = document.activeElement === focusElement" in save
+    assert "|| document.activeElement === document.body" in save
+    focus_start = save.index("const restoreFocus =")
+    focus_index = save.index("focusTarget?.focus({ preventScroll: true })")
+    assert "if (restoreFocus)" in save[focus_start:focus_index]
+    assert focus_index > focus_start
