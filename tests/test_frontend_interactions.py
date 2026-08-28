@@ -1162,6 +1162,46 @@ def test_ima_collector_save_is_owned_by_initiating_route_and_preserves_drafts():
     assert "document.body.contains(saveButton)" in save
 
 
+def test_ima_collector_save_has_shared_busy_owner_for_rebuilt_buttons():
+    """首次 PUT 期间 stats 重建出的保存按钮也必须由共享 owner 禁用。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    load = _fn_body("loadAdminStats")
+    save = _fn_body("saveImaCollector")
+    assert "saveOwner: null" in src
+    assert 'imaMountState.saveOwner ? " disabled" : ""' in load
+    assert "if (imaMountState.saveOwner) return;" in save
+    assert "imaMountState.saveOwner = saveOwner" in save
+    assert "imaMountState.saveOwner === saveOwner" in save
+    assert save.index("imaMountState.saveOwner = saveOwner") < save.index("await api(")
+
+
+def test_ima_collector_save_clears_only_matching_mount_revision():
+    """PUT 完成时，离开路由或编辑新 draft 都不得清掉新 dirty 状态。"""
+    init = _fn_body("initImaMountState")
+    toggle = _fn_body("toggleImaFolder")
+    save = _fn_body("saveImaCollector")
+    assert "revision: 0" in APP_JS.read_text(encoding="utf-8")
+    assert "if (!preserve) imaMountState.revision += 1" in init
+    assert "imaMountState.revision += 1" in toggle
+    assert "const mountRevision = imaMountState.revision" in save
+    clear = "imaMountState.dirty = false"
+    assert f"routeStillActive(routeSeq) && location.pathname === \"/admin/stats\"" in save
+    assert "imaMountState.revision === mountRevision" in save
+    assert save.index("imaMountState.revision === mountRevision") < save.index(clear)
+
+
+def test_ima_collector_save_failure_flash_is_route_owned():
+    """离开 stats 后返回的旧 PUT 失败不得把错误 toast 显示到当前页面。"""
+    save = _fn_body("saveImaCollector")
+    catch_start = save.index("} catch")
+    finally_start = save.index("} finally")
+    catch = save[catch_start:finally_start]
+    assert re.search(
+        r"if \(routeStillActive\(routeSeq\) && location\.pathname === \"/admin/stats\"\)\s*\{\s*flash",
+        catch,
+    )
+
+
 def test_ima_discovery_ignores_stale_responses_and_releases_current_button():
     """发现请求跨 stats 重建时只能更新当前状态和当前 DOM。"""
     src = APP_JS.read_text(encoding="utf-8")

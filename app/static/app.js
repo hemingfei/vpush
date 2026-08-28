@@ -130,6 +130,8 @@ const imaMountState = {
   discoveryOwner: null,
   discoveryEntered: false,
   dirty: false,
+  revision: 0,
+  saveOwner: null,
   requestSeq: 0,
   generation: 0,
 };
@@ -5216,6 +5218,7 @@ function initImaMountState(groups, preserve = false) {
   imaMountState.discoveryBusy = false;
   imaMountState.discoveryOwner = null;
   imaMountState.generation += 1;
+  if (!preserve) imaMountState.revision += 1;
   imaMountState.dirty = preserve ? oldDirty : false;
   if (!preserve) imaMountState.discoveryEntered = false;
   const available = new Set(imaMountState.groups.map((group) => String(group.id)));
@@ -5445,6 +5448,7 @@ function toggleImaFolder(input) {
   } else {
     selected.delete(folderId);
   }
+  imaMountState.revision += 1;
   imaMountState.dirty = true;
   renderImaMountGroups();
   imaRestoreFocus(focus);
@@ -5809,7 +5813,7 @@ async function loadAdminStats(seq = _adminRenderSeq) {
             </div>
             <div class="cfg-foot ima-collector-foot">
               <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
-              <div class="toolbar"><button type="button" class="btn-normal" id="ima-collector-save" onclick="saveImaCollector()">保存采集配置</button><button type="button" class="btn-ghost" id="ima-sync-btn" onclick="triggerImaCollector()">${REFRESH_ICON}<span>立即同步</span></button></div>
+              <div class="toolbar"><button type="button" class="btn-normal" id="ima-collector-save"${imaMountState.saveOwner ? " disabled" : ""} onclick="saveImaCollector()">保存采集配置</button><button type="button" class="btn-ghost" id="ima-sync-btn" onclick="triggerImaCollector()">${REFRESH_ICON}<span>立即同步</span></button></div>
             </div>
           </div>
           <div class="ima-source-block">
@@ -6611,8 +6615,9 @@ function imaCollectorStatusText(status) {
 async function saveImaCollector() {
   const routeSeq = routeRenderSeq;
   const saveButton = $("#ima-collector-save");
+  if (imaMountState.saveOwner) return;
   if (saveButton?.disabled) return;
-  if (saveButton) saveButton.disabled = true;
+  const mountRevision = imaMountState.revision;
   const focusElement = document.activeElement;
   const focusId = focusElement?.id || "";
   let focusMoved = false;
@@ -6634,10 +6639,16 @@ async function saveImaCollector() {
   };
   const token = $("#ima-pure-token")?.value?.trim() || "";
   if (token) body.refresh_token = token;
+  const saveOwner = { routeSeq, mountRevision };
+  imaMountState.saveOwner = saveOwner;
+  if (saveButton) saveButton.disabled = true;
   document.addEventListener("focusin", onFocusIn);
   try {
     await api("/api/admin/ima-collector", { method: "PUT", body: JSON.stringify(body) });
-    imaMountState.dirty = false;
+    if (routeStillActive(routeSeq) && location.pathname === "/admin/stats"
+      && imaMountState.revision === mountRevision) {
+      imaMountState.dirty = false;
+    }
     if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats") return;
     const tokenInput = $("#ima-pure-token");
     if (tokenInput) tokenInput.value = "";
@@ -6650,10 +6661,17 @@ async function saveImaCollector() {
       focusTarget?.focus({ preventScroll: true });
     }
   } catch (err) {
-    flash(err.message || "保存失败", "error");
+    if (routeStillActive(routeSeq) && location.pathname === "/admin/stats") {
+      flash(err.message || "保存失败", "error");
+    }
   } finally {
     document.removeEventListener("focusin", onFocusIn);
-    if (saveButton && document.body.contains(saveButton)) saveButton.disabled = false;
+    if (imaMountState.saveOwner === saveOwner) {
+      imaMountState.saveOwner = null;
+      if (saveButton && document.body.contains(saveButton)) saveButton.disabled = false;
+      const currentSaveButton = $("#ima-collector-save");
+      if (currentSaveButton) currentSaveButton.disabled = false;
+    }
   }
 }
 
