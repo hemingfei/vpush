@@ -112,6 +112,7 @@ cp .env.example .env
 | `IMA_INTERVAL_SECONDS` | 可选 | 纯 VPS 清单检查间隔，默认 3600，最小 1800；只下载新增文件，不进入推送流 |
 | `IMA_ANDROID_SERIAL` / `IMA_SYNC_HOST` / `IMA_SYNC_SSH_KEY` | 可选 | 本地手机凭据同步工具配置；复制 `data/ima_phone_sync.env.example` 后，手机完成 IMA 登录时双击 `scripts/ima_phone_sync.command`，Refresh Token 通过 SSH stdin 传输 |
 | `IMA_EXPECTED_UID` / `IMA_SYNC_REMOTE_DB` | 可选 | 限制同步到指定 IMA UID 和 VPS 数据库路径，默认数据库为 `/opt/vpush/data/dav.db` |
+| `IMA_ARCHIVE_ROOT` / `IMA_STORAGE_STATUS_PATH` / `IMA_ARCHIVE_HOST_PATH` | 可选 | 外置 IMA 归档：容器内归档根、宿主机写入的状态 JSON、宿主机挂载路径；均留空则本地开发不依赖 NFS |
 | `LOG_LEVEL` | 可选 | 日志级别 `INFO`/`DEBUG`（DEBUG 记录每次 API 请求与慢请求告警，便于排查） |
 | `LOG_FILE` | 可选 | 日志文件，默认 `/data/logs/app.log`（随数据卷持久化，滚动 5MB×3，重启不丢） |
 
@@ -185,6 +186,14 @@ docker compose -f docker-compose.prod.yml up -d --build
 ```
 
 Caddy 会自动申请并续期 Let's Encrypt 证书，无需额外配置。需要把域名 A 记录指向服务器，并开放 80/443 端口。
+
+可选外置 IMA 归档（默认不启用）：
+
+- 单独归档根可选；不设 `IMA_ARCHIVE_ROOT` 时 PDF/TXT 仍与索引同目录
+- SQLite 与索引始终留在 `/data`（不随外置盘迁移）
+- 外置归档目录须含标记文件 `.vpush-ima-root`
+- 远端存储需宿主机持续写入本地状态 JSON（`IMA_STORAGE_STATUS_PATH`），过期则降级只读/不可用
+- NFS / WireGuard / Restic 等远端密钥不要写进 Compose 或 Git
 
 ## Unraid 部署
 

@@ -1,7 +1,15 @@
 import json
 import time
+from pathlib import Path
 
 from app.ima_storage import ImaStorageStatus
+
+ROOT = Path(__file__).resolve().parents[1]
+COMPOSE_MARKERS = (
+    "IMA_ARCHIVE_ROOT=${IMA_ARCHIVE_ROOT:-}",
+    "IMA_STORAGE_STATUS_PATH=${IMA_STORAGE_STATUS_PATH:-}",
+    "${IMA_ARCHIVE_HOST_PATH:-./data/ima}:/data/ima-archive",
+)
 
 
 PUBLIC_KEYS = {
@@ -171,3 +179,10 @@ def test_public_never_includes_sensitive_fields(tmp_path):
     assert "wireguard" not in blob
     assert "password" not in blob
     assert "endpoint" not in blob
+
+
+def test_compose_files_expose_optional_ima_archive_mount():
+    for name in ("docker-compose.yml", "docker-compose.prod.yml"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        for marker in COMPOSE_MARKERS:
+            assert marker in text, f"{name} missing {marker}"
