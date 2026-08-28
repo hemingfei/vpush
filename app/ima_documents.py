@@ -259,6 +259,8 @@ def ima_folder_children_hint(item: dict[str, Any]) -> bool | None:
 
 
 def normalize_ima_folder_item(item: dict[str, Any], parent_id: str) -> dict[str, Any] | None:
+    if not is_ima_folder_item(item):
+        return None
     folder_id = ima_folder_id(item)
     if not folder_id:
         return None

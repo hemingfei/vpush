@@ -1770,6 +1770,22 @@ def test_folder_info_classifies_mixed_metadata_as_folder():
     }
 
 
+def test_normalize_ima_folder_item_matches_folder_classification():
+    assert normalize_ima_folder_item(
+        {"folder_id": "metadata-folder", "media_id": "pdf_file", "name": "file.pdf"},
+        "root",
+    ) is None
+    normalized = normalize_ima_folder_item(
+        {
+            "folder_info": {"folder_id": "child", "name": "子目录"},
+            "media_id": "metadata_1",
+        },
+        "root",
+    )
+    assert normalized is not None
+    assert normalized["id"] == "child"
+
+
 def test_manifest_recurses_mixed_folder_metadata():
     client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh", root_folder_id="root"))
     responses = {
