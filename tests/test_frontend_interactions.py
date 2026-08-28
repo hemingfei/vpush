@@ -1969,8 +1969,8 @@ def test_frontend_asset_urls_bust_browser_cache():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=207"' in html
-    assert 'src="/app.js?v=290"' in html
-    assert 'dav-shell-v159' in sw
+    assert 'src="/app.js?v=291"' in html
+    assert 'dav-shell-v160' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
