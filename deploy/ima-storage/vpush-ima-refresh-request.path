@@ -1,0 +1,9 @@
+[Unit]
+Description=V Push IMA refresh request
+
+[Path]
+PathChanged=/opt/vpush/data/.vpush-ima-refresh-request
+Unit=vpush-ima-main-health.service
+
+[Install]
+WantedBy=multi-user.target

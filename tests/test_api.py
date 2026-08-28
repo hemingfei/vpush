@@ -5345,3 +5345,13 @@ def test_start_wscn_live_refresh_warms_then_loops(monkeypatch):
     monkeypatch.setattr(api_mod.threading, "Thread", FakeThread)
     api_mod.start_wscn_live_refresh()
     assert started == ["warm", api_mod._wscn_home_loop, "start"]
+
+
+def test_ima_storage_admin_actions_conflict_when_local():
+    client = make_client()
+    headers = auth_headers(client)
+    refresh = client.post("/api/admin/ima-storage/refresh", headers=headers)
+    backup = client.post("/api/admin/ima-storage/backup", headers=headers)
+    assert refresh.status_code == 409
+    assert backup.status_code == 409
+    assert "未启用远程归档" in refresh.json()["detail"]

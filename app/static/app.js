@@ -497,6 +497,7 @@ const NAV = [
     ]},
     { label: "数据与日志", items: [
       { route: "admin/stats", icon: BOOK_ICON, label: "数据源" },
+      { route: "admin/knowledge", icon: BOOK_ICON, label: "知识库设置" },
       { route: "admin/posts", icon: FILE_TEXT_ICON, label: "帖子" },
       { route: "admin/logs", icon: SEND_ICON, label: "推送记录" },
       { route: "admin/audit", icon: HISTORY_ICON, label: "操作日志" },
@@ -1236,7 +1237,7 @@ async function renderKnowledge(seq, encodedMediaId = "") {
     if (!subscribed.length) {
       const list = $("#kb-list");
       if (isAdmin) {
-        list.innerHTML = emptyState("还没有配置知识库", `<div><button type="button" class="btn-normal" onclick="go('admin/stats?tab=config')">去配置采集</button></div>`);
+        list.innerHTML = emptyState("还没有配置知识库", `<div><button type="button" class="btn-normal" onclick="go('admin/knowledge')">去配置采集</button></div>`);
       } else {
         list.innerHTML = emptyState(
           "还没有订阅知识库",
@@ -5440,7 +5441,7 @@ async function renderAdmin(tab, seq) {
         <div class="admin-sk-table-row"><div class="admin-sk-line"></div><div class="admin-sk-line"></div><div class="admin-sk-line"></div></div>
       </div>`).join("")}
     </div>`;
-  const loaders = { dashboard: loadAdminDashboard, stats: loadAdminStats, kols: loadAdminKols, requests: loadAdminRequests, codes: loadAdminCodes, vocab: loadAdminVocab, posts: loadAdminPosts, logs: loadAdminLogs, audit: loadAdminAudit, backup: loadAdminBackup, users: loadAdminUsers };
+  const loaders = { dashboard: loadAdminDashboard, stats: loadAdminStats, knowledge: loadAdminKnowledge, kols: loadAdminKols, requests: loadAdminRequests, codes: loadAdminCodes, vocab: loadAdminVocab, posts: loadAdminPosts, logs: loadAdminLogs, audit: loadAdminAudit, backup: loadAdminBackup, users: loadAdminUsers };
   try {
     await loaders[tab]();
   } catch (err) {
@@ -5997,6 +5998,47 @@ function imaGroupDiscoveryStatusText(status) {
   return `已发现 ${groups.length} 个知识库 · 已挂载 ${mounted} 个${synced}`;
 }
 
+
+function isAdminSettingsPath() {
+  const path = location.pathname;
+  return path === "/admin/stats" || path === "/admin/knowledge";
+}
+
+async function reloadAdminSettingsPage(seq, authoritativeImaStatus = null) {
+  if (location.pathname === "/admin/knowledge") {
+    return loadAdminKnowledge(seq, authoritativeImaStatus);
+  }
+  return loadAdminStats(seq, authoritativeImaStatus);
+}
+
+function imaStoragePanelHtml(storage) {
+  const st = storage || {};
+  const status = st.status || "local";
+  const used = Number.isFinite(Number(st.used_percent)) ? `${st.used_percent}%` : "—";
+  const resticOk = st.restic_last_check_ok === true ? "通过" : (st.restic_last_check_at ? "未通过" : "无记录");
+  const resticAt = st.restic_last_success ? fmtTs(st.restic_last_success) : "无";
+  const checkAt = st.restic_last_check_at ? fmtTs(st.restic_last_check_at) : "无";
+  const labels = {
+    local: "本地归档",
+    available: "可用",
+    stale: "状态过期",
+    unavailable: "暂不可用",
+    readonly: "只读",
+    capacity_blocked: "容量已限制",
+    missing: "未配置",
+    invalid: "状态无效",
+  };
+  return `<section class="section-panel" id="ima-storage-panel">
+    <header class="section-head"><div><h2 class="section-title">存储</h2>
+    <p class="section-meta">只读状态。刷新会重跑探测；备份只请求归档 Restic，密钥不进网页。</p></div></header>
+    <p class="muted" id="ima-storage-status">${escapeHtml(labels[status] || status)} · 用量 ${escapeHtml(used)} · 上次备份 ${escapeHtml(resticAt)} · 检查 ${escapeHtml(resticOk)}（${escapeHtml(checkAt)}）</p>
+    <div class="toolbar ima-storage-toolbar">
+      <button type="button" class="btn-ghost" id="ima-storage-refresh" onclick="refreshImaStorage()">刷新状态</button>
+      <button type="button" class="btn-normal" id="ima-storage-backup" onclick="backupImaStorage()">立即备份</button>
+    </div>
+  </section>`;
+}
+
 async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = null) {
   if (!routeStillActive(seq)) return false;
   const tab = statsTabFromHash();
@@ -6207,11 +6249,160 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
           </div>
         </div>
       </section>
-      <section class="section-panel ima-source-panel">
-        <header class="section-head"><div><h2 class="section-title">IMA</h2>
-        <p class="section-meta">文档采集和知识星球采集配置；保存后即时生效。</p></div></header>
-        <div class="ima-source-stack">
-          <div class="ima-source-block">
+      <section class="section-panel">
+        <div class="cfg-save-row">
+          <button type="button" class="btn-normal" id="pc-save" onclick="savePollingConfig()">保存抓取设置</button>
+        </div>
+        <p class="section-meta"><a href="/admin/knowledge" onclick="event.preventDefault();go('admin/knowledge')">IMA 与知识星球设置已移至知识库设置</a></p>
+      </section>
+    </div>
+    <div id="st-cookies" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-cookies" style="display:none">
+      <div id="cookie-repair-inline"></div>
+      <section class="section-panel">
+        <header class="section-head">
+          <div><h2 class="section-title">雪球 Cookie</h2>
+          <p class="section-meta">${cookieUpdatedLabel(xq)}${xq.preview ? ` · 预览 ${escapeHtml(xq.preview)}` : ""}${s.keepalive_interval_seconds > 0 ? ` · 每 ${Math.round(s.keepalive_interval_seconds / 3600)} 小时探测` : ""}。登录 xueqiu.com → F12 → Application → Cookies，复制整串后保存，即时生效。</p></div>
+        </header>
+        <label class="field-label" for="xq-cookie">雪球 Cookie</label>
+        <textarea id="xq-cookie" class="form-control cookie-paste" rows="4" placeholder="xq_a_token=...; u=..."></textarea>
+        <div class="toolbar" style="margin-top:12px">
+          <button type="button" class="btn-normal" onclick="saveXueqiuCookie()">保存雪球 Cookie</button>
+          <button type="button" class="btn-ghost" onclick="pasteCookieField('xq-cookie')">从剪贴板填入</button>
+          ${xq.set && !xq.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('xueqiu','雪球')" aria-label="清除雪球 Cookie">清除</button>` : ""}
+        </div>
+      </section>
+      <section class="section-panel">
+        <header class="section-head"><div><h2 class="section-title">微博 Cookie</h2>
+        <p class="section-meta">${cookieUpdatedLabel(s.weibo_cookie)}。用微博 App 扫码后自动保存，无需复制。</p></div></header>
+        <div class="toolbar">
+          <button type="button" class="btn-normal" id="wb-qr-start" onclick="startWeiboQr()">微博扫码登录</button>
+          ${s.weibo_cookie?.set && !s.weibo_cookie.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('weibo','微博')" aria-label="清除微博 Cookie">清除</button>` : ""}
+        </div>
+        <div id="wb-qr-box" class="qr-box"></div>
+      </section>
+      <section class="section-panel">
+        <header class="section-head">
+          <div><h2 class="section-title">X Cookie</h2>
+          <p class="section-meta">${cookieUpdatedLabel(tw)}${tw.preview ? ` · 预览 ${escapeHtml(tw.preview)}` : ""}。登录 x.com → F12 → Application → Cookies，复制整串（需含 auth_token 与 ct0），保存即时生效。</p></div>
+        </header>
+        <label class="field-label" for="tw-cookie">X Cookie</label>
+        <textarea id="tw-cookie" class="form-control cookie-paste" rows="4" placeholder="auth_token=...; ct0=..."></textarea>
+        <div class="toolbar" style="margin-top:12px">
+          <button type="button" class="btn-normal" onclick="saveTwitterCookie()">保存 X Cookie</button>
+          <button type="button" class="btn-ghost" onclick="pasteCookieField('tw-cookie')">从剪贴板填入</button>
+          ${tw.set && !tw.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('twitter','X')" aria-label="清除 X Cookie">清除</button>` : ""}
+        </div>
+      </section>
+      <p class="section-meta"><a href="/admin/knowledge" onclick="event.preventDefault();go('admin/knowledge')">IMA 与知识星球设置已移至知识库设置</a></p>
+    </div>
+    <div id="st-proxies" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-proxies" style="display:none"></div>`;
+  renderStatsData(s);
+  if (statsLoadError) {
+    const error = $("#stats-poll-error");
+    const retry = `<div><button type="button" class="btn-normal" onclick="loadAdminStats(${seq})">重试</button></div>`;
+    if (error) error.innerHTML = `<div class="ima-folder-state ima-folder-error" role="alert">${escapeHtml(statsLoadError)}${retry}</div>`;
+  }
+  switchStatsTab(statsTabFromHash());
+  return true;
+}
+
+
+async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus = null) {
+  if (!routeStillActive(seq)) return false;
+  const generation = imaMountState.generation;
+  const pendingOwner = imaMountState.saveOwner;
+  if (pendingOwner && !pendingOwner.putCompleted && $("#ima-pure-uid")) {
+    pendingOwner.liveSnapshot = imaCollectorFormSnapshot();
+    rememberImaCollectorDraft(pendingOwner.liveSnapshot);
+  }
+  const statsLoadSeq = ++_adminStatsLoadSeq;
+  let s;
+  let statsLoadError = null;
+  try {
+    const stats = await api("/api/stats");
+    if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq
+      || generation !== imaMountState.generation) return false;
+    s = authoritativeImaStatus ? { ...stats, ima_collector: authoritativeImaStatus } : stats;
+    _lastAdminStatsSnapshot = s;
+  } catch (err) {
+    if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq
+      || generation !== imaMountState.generation) return false;
+    const message = `加载失败: ${err.message || "请求失败"}`;
+    const fallbackStats = _lastAdminStatsSnapshot;
+    if (fallbackStats && authoritativeImaStatus) {
+      s = { ...fallbackStats, ima_collector: authoritativeImaStatus };
+      statsLoadError = message;
+    } else {
+      const retry = `<div><button type="button" class="btn-normal" onclick="loadAdminKnowledge(${seq})">重试</button></div>`;
+      const body = $("#admin-body");
+      if (body) body.innerHTML = emptyState(message, retry);
+      return false;
+    }
+  }
+  if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq
+    || generation !== imaMountState.generation) return false;
+  stopStatsTimer();
+  const owner = imaMountState.saveOwner;
+  const ownerIsCurrent = owner && owner === pendingOwner;
+  const ownerLiveSnapshot = ownerIsCurrent ? owner.liveSnapshot : null;
+  const ownerHasNewerEdits = !!ownerLiveSnapshot
+    && imaCollectorFormRevision(ownerLiveSnapshot) !== owner.formRevision;
+  const ownerSnapshot = ownerIsCurrent
+    ? (owner.putCompleted
+      ? (ownerHasNewerEdits ? ownerLiveSnapshot : null)
+      : (ownerLiveSnapshot || owner.snapshot))
+    : null;
+  const pendingCollectorDraft = imaMountState.collectorDraft;
+  const confirmedCollectorDraft = pendingCollectorDraft
+    && imaMountState.collectorDraftRevision === imaMountState.collectorConfirmedRevision
+    && imaMountState.collectorRevision === imaMountState.collectorConfirmedLiveRevision
+    && imaMountState.revision === imaMountState.collectorConfirmedMountRevision;
+  const preserveMountDraft = imaMountState.dirty
+    && !confirmedCollectorDraft
+    && !(ownerIsCurrent && owner.putCompleted && !ownerHasNewerEdits);
+  const mountRevisionChangedDuringSave = ownerIsCurrent
+    && imaMountState.revision !== owner.mountRevision;
+  const preserveMountDraftForReload = preserveMountDraft || mountRevisionChangedDuringSave;
+  const ima = s.ima_credentials || {};
+  const imaCollector = s.ima_collector || {};
+  const pure = imaCollector.config || {};
+  const collectorDraft = confirmedCollectorDraft ? null
+    : (ownerSnapshot || (ownerIsCurrent && owner.putCompleted ? null : pendingCollectorDraft));
+  const collector = collectorDraft || pure;
+  const collectorGroups = collectorDraft?.groups || pure.groups || [];
+  const zq = s.zsxq_cookie || {};
+  const zc = s.zsxq_cache || { files: 0, bytes: 0 };
+  const zcSize = fmtCacheBytes(zc.bytes);
+  const tokenSet = pure.refresh_token?.set;
+  $("#admin-body").innerHTML = `
+    <div id="stats-poll-error"></div>
+    <section class="section-panel ima-source-panel">
+      <header class="section-head"><div><h2 class="section-title">IMA</h2>
+      <p class="section-meta">凭证、采集和本机同步说明。保存后即时生效。</p></div></header>
+      <div class="ima-source-block">
+        <header class="section-head"><div><h3 class="ima-source-title">IMA 凭证</h3>
+        <p class="section-meta">模式：${ima.mode || "未配置"}${ima.openapi_clientid?.set ? ` · clientid ${escapeHtml(ima.openapi_clientid.preview || "")}` : ""}。Cookie 用 scripts/ima_qr_login.py 扫码捕获（x-ima-cookie）；OpenAPI 凭证登录 ima.qq.com/agent-interface 生成，取全文必须。</p></div></header>
+        <div class="ima-credential-fields">
+          <label class="ima-credential-field ima-credential-field--wide" for="ima-cookie">
+            <span>网页 Cookie（x-ima-cookie）</span>
+            <textarea id="ima-cookie" class="form-control cookie-paste" rows="3" placeholder="IMA-TOKEN=...; IMA-UID=..."></textarea>
+          </label>
+          <label class="ima-credential-field ima-code-field" for="ima-cid">
+            <span>OpenAPI Client ID</span>
+            <input id="ima-cid" class="form-control" placeholder="Client ID">
+          </label>
+          <label class="ima-credential-field ima-code-field" for="ima-key">
+            <span>OpenAPI API Key</span>
+            <input id="ima-key" class="form-control" placeholder="API Key" type="password">
+          </label>
+        </div>
+        <div class="ima-credential-actions toolbar">
+          <button type="button" class="btn-normal" onclick="saveImaCredentials()">保存 IMA 凭证</button>
+          <button type="button" class="btn-ghost" onclick="pasteCookieField('ima-cookie')">从剪贴板填入 Cookie</button>
+          ${ima.cookie?.set && !ima.cookie.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('ima','ima')" aria-label="清除 IMA Cookie">清除 Cookie</button>` : ""}
+        </div>
+      </div>
+<div class="ima-source-block">
             <header class="ima-source-block-head"><div><h3 class="ima-source-title">IMA 文档采集</h3>
             <p class="section-meta">默认每小时检查一次，只下载新增 PDF；Refresh Token 留空表示保持已保存值。</p></div></header>
             <div class="cfg-stack ima-collector-stack">
@@ -6252,8 +6443,28 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
               <div class="toolbar"><button type="button" class="btn-normal" id="ima-collector-save"${imaMountState.saveOwner ? " disabled" : ""} onclick="saveImaCollector()">保存采集配置</button><button type="button" class="btn-ghost" id="ima-sync-btn" onclick="triggerImaCollector()">${REFRESH_ICON}<span>立即同步</span></button></div>
             </div>
           </div>
-          <div class="ima-source-block">
-            <header class="ima-source-block-head"><div><h3 class="ima-source-title">知识星球</h3></div></header>
+                <div class="ima-source-block">
+        <header class="ima-source-block-head"><div><h3 class="ima-source-title">手机同步</h3>
+        <p class="section-meta">在已 root 的 Android 完成 IMA Google 登录后，本机双击 <code>scripts/ima_phone_sync.command</code>。网页不跑脚本。Refresh Token：${tokenSet ? "已保存" : "未保存"}。</p></div></header>
+      </div>
+    </section>
+    <section class="section-panel">
+      <header class="section-head"><div><h2 class="section-title">知识星球</h2>
+      <p class="section-meta">Cookie 与抓取参数。保存星球设置只改这些字段。</p></div></header>
+      <div class="ima-source-block">
+        <header class="section-head"><div><h3 class="ima-source-title">知识星球 Cookie</h3>
+          <p class="section-meta">${cookieUpdatedLabel(zq)}${zq.preview ? ` · 预览 ${escapeHtml(zq.preview)}` : ""}。登录 wx.zsxq.com → F12 → Application → Cookies，复制整串（需含 zsxq_access_token），保存即时生效。</p></div>
+        </header>
+        <label class="field-label" for="zq-cookie">知识星球 Cookie</label>
+        <textarea id="zq-cookie" class="form-control cookie-paste" rows="3" placeholder="zsxq_access_token=..."></textarea>
+        <div class="toolbar" style="margin-top:12px">
+          <button type="button" class="btn-normal" onclick="saveZsxqCookie()">保存知识星球 Cookie</button>
+          <button type="button" class="btn-ghost" onclick="pasteCookieField('zq-cookie')">从剪贴板填入</button>
+          ${zq.set && !zq.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('zsxq','知识星球')" aria-label="清除知识星球 Cookie">清除</button>` : ""}
+        </div>
+      </div>
+<div class="ima-source-block">
+            <header class="ima-source-block-head"><div><h3 class="ima-source-title">抓取参数</h3></div></header>
             <div class="cfg-group cfg-group--zsxq">
               <div class="cfg-fields">
                 <label class="cfg-field" title="每星球每轮最多翻几页，每页 20 条">
@@ -6309,96 +6520,21 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
             </div>
           </div>
         </div>
-        <div class="cfg-save-row ima-polling-save-row">
-          <button type="button" class="btn-normal" id="pc-save" onclick="savePollingConfig()">保存抓取设置</button>
-        </div>
-      </section>
-    </div>
-    <div id="st-cookies" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-cookies" style="display:none">
-      <div id="cookie-repair-inline"></div>
-      <section class="section-panel">
-        <header class="section-head">
-          <div><h2 class="section-title">雪球 Cookie</h2>
-          <p class="section-meta">${cookieUpdatedLabel(xq)}${xq.preview ? ` · 预览 ${escapeHtml(xq.preview)}` : ""}${s.keepalive_interval_seconds > 0 ? ` · 每 ${Math.round(s.keepalive_interval_seconds / 3600)} 小时探测` : ""}。登录 xueqiu.com → F12 → Application → Cookies，复制整串后保存，即时生效。</p></div>
-        </header>
-        <label class="field-label" for="xq-cookie">雪球 Cookie</label>
-        <textarea id="xq-cookie" class="form-control cookie-paste" rows="4" placeholder="xq_a_token=...; u=..."></textarea>
-        <div class="toolbar" style="margin-top:12px">
-          <button type="button" class="btn-normal" onclick="saveXueqiuCookie()">保存雪球 Cookie</button>
-          <button type="button" class="btn-ghost" onclick="pasteCookieField('xq-cookie')">从剪贴板填入</button>
-          ${xq.set && !xq.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('xueqiu','雪球')" aria-label="清除雪球 Cookie">清除</button>` : ""}
-        </div>
-      </section>
-      <section class="section-panel">
-        <header class="section-head"><div><h2 class="section-title">微博 Cookie</h2>
-        <p class="section-meta">${cookieUpdatedLabel(s.weibo_cookie)}。用微博 App 扫码后自动保存，无需复制。</p></div></header>
-        <div class="toolbar">
-          <button type="button" class="btn-normal" id="wb-qr-start" onclick="startWeiboQr()">微博扫码登录</button>
-          ${s.weibo_cookie?.set && !s.weibo_cookie.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('weibo','微博')" aria-label="清除微博 Cookie">清除</button>` : ""}
-        </div>
-        <div id="wb-qr-box" class="qr-box"></div>
-      </section>
-      <section class="section-panel">
-        <header class="section-head">
-          <div><h2 class="section-title">X Cookie</h2>
-          <p class="section-meta">${cookieUpdatedLabel(tw)}${tw.preview ? ` · 预览 ${escapeHtml(tw.preview)}` : ""}。登录 x.com → F12 → Application → Cookies，复制整串（需含 auth_token 与 ct0），保存即时生效。</p></div>
-        </header>
-        <label class="field-label" for="tw-cookie">X Cookie</label>
-        <textarea id="tw-cookie" class="form-control cookie-paste" rows="4" placeholder="auth_token=...; ct0=..."></textarea>
-        <div class="toolbar" style="margin-top:12px">
-          <button type="button" class="btn-normal" onclick="saveTwitterCookie()">保存 X Cookie</button>
-          <button type="button" class="btn-ghost" onclick="pasteCookieField('tw-cookie')">从剪贴板填入</button>
-          ${tw.set && !tw.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('twitter','X')" aria-label="清除 X Cookie">清除</button>` : ""}
-        </div>
-      </section>
-      <section class="section-panel">
-        <header class="section-head"><div><h2 class="section-title">IMA 凭证</h2>
-        <p class="section-meta">模式：${ima.mode || "未配置"}${ima.openapi_clientid?.set ? ` · clientid ${escapeHtml(ima.openapi_clientid.preview || "")}` : ""}。Cookie 用 scripts/ima_qr_login.py 扫码捕获（x-ima-cookie）；OpenAPI 凭证登录 ima.qq.com/agent-interface 生成，取全文必须。</p></div></header>
-        <div class="ima-credential-fields">
-          <label class="ima-credential-field ima-credential-field--wide" for="ima-cookie">
-            <span>网页 Cookie（x-ima-cookie）</span>
-            <textarea id="ima-cookie" class="form-control cookie-paste" rows="3" placeholder="IMA-TOKEN=...; IMA-UID=..."></textarea>
-          </label>
-          <label class="ima-credential-field ima-code-field" for="ima-cid">
-            <span>OpenAPI Client ID</span>
-            <input id="ima-cid" class="form-control" placeholder="Client ID">
-          </label>
-          <label class="ima-credential-field ima-code-field" for="ima-key">
-            <span>OpenAPI API Key</span>
-            <input id="ima-key" class="form-control" placeholder="API Key" type="password">
-          </label>
-        </div>
-        <div class="ima-credential-actions toolbar">
-          <button type="button" class="btn-normal" onclick="saveImaCredentials()">保存 IMA 凭证</button>
-          <button type="button" class="btn-ghost" onclick="pasteCookieField('ima-cookie')">从剪贴板填入 Cookie</button>
-          ${ima.cookie?.set && !ima.cookie.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('ima','ima')" aria-label="清除 IMA Cookie">清除 Cookie</button>` : ""}
-        </div>
-      </section>
-      <section class="section-panel">
-        <header class="section-head"><div><h2 class="section-title">知识星球 Cookie</h2>
-          <p class="section-meta">${cookieUpdatedLabel(zq)}${zq.preview ? ` · 预览 ${escapeHtml(zq.preview)}` : ""}。登录 wx.zsxq.com → F12 → Application → Cookies，复制整串（需含 zsxq_access_token），保存即时生效。</p></div>
-        </header>
-        <label class="field-label" for="zq-cookie">知识星球 Cookie</label>
-        <textarea id="zq-cookie" class="form-control cookie-paste" rows="3" placeholder="zsxq_access_token=..."></textarea>
-        <div class="toolbar" style="margin-top:12px">
-          <button type="button" class="btn-normal" onclick="saveZsxqCookie()">保存知识星球 Cookie</button>
-          <button type="button" class="btn-ghost" onclick="pasteCookieField('zq-cookie')">从剪贴板填入</button>
-          ${zq.set && !zq.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('zsxq','知识星球')" aria-label="清除知识星球 Cookie">清除</button>` : ""}
-        </div>
-      </section>
-    </div>
-    <div id="st-proxies" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-proxies" style="display:none"></div>`;
+              <div class="cfg-save-row">
+        <button type="button" class="btn-normal" id="pc-zq-save" onclick="saveZsxqPollingConfig()">保存星球设置</button>
+      </div>
+    </section>
+    ${imaStoragePanelHtml(imaCollector.storage)}`;
   renderStatsData(s);
   if (statsLoadError) {
     const error = $("#stats-poll-error");
-    const retry = `<div><button type="button" class="btn-normal" onclick="loadAdminStats(${seq})">重试</button></div>`;
+    const retry = `<div><button type="button" class="btn-normal" onclick="loadAdminKnowledge(${seq})">重试</button></div>`;
     if (error) error.innerHTML = `<div class="ima-folder-state ima-folder-error" role="alert">${escapeHtml(statsLoadError)}${retry}</div>`;
   }
   if (collectorDraft) initImaMountState(collectorGroups, true);
   else initImaMountState(pure.groups || [], preserveMountDraftForReload);
   renderImaMountGroups();
   restoreImaCollectorOwnerToken(owner, seq, pendingCollectorDraft);
-  switchStatsTab(statsTabFromHash());
   if (confirmedCollectorDraft) {
     const confirmedRevision = imaMountState.collectorConfirmedRevision;
     const confirmedLiveRevision = imaMountState.collectorConfirmedLiveRevision;
@@ -6413,6 +6549,7 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
       if (tokenInput) tokenInput.value = "";
     }
   }
+  startDashboardLiveTimer();
   return true;
 }
 
@@ -6691,6 +6828,27 @@ async function savePollingConfig() {
     secondary_idle_cap_seconds: Number($("#pc-sc").value),
     secondary_digest_interval_seconds: Number($("#pc-sd").value),
     secondary_min_digest_count: Number($("#pc-sd-min").value),
+  };
+  const btn = $("#pc-save");
+  if (btn) btn.disabled = true;
+  try {
+    await api("/api/admin/polling-config", { method: "PUT", body: JSON.stringify(body) });
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    // 标准操作反馈 toast；不重建页面（loadAdminStats 会整页重建）
+    flash("抓取设置已保存，即时生效");
+  } catch (err) {
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    flash(err.message, "error");
+  } finally {
+    if (btn && document.body.contains(btn)) btn.disabled = false;
+  }
+}
+
+async function saveZsxqPollingConfig() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
+  const body = {
     zsxq_max_pages: Number($("#pc-zq-pages").value),
     zsxq_fetch_delay_seconds: Number($("#pc-zq-delay").value),
     zsxq_file_delay_seconds: Number($("#pc-zq-file-delay").value),
@@ -6701,13 +6859,52 @@ async function savePollingConfig() {
     zsxq_app_channel: $("#pc-zq-app").checked,
     zsxq_app_device: $("#pc-zq-app-device").value.trim(),
   };
-  const btn = $("#pc-save");
+  const btn = $("#pc-zq-save");
   if (btn) btn.disabled = true;
   try {
     await api("/api/admin/polling-config", { method: "PUT", body: JSON.stringify(body) });
     if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    // 标准操作反馈 toast；不重建页面（loadAdminStats 会整页重建）
-    flash("抓取设置已保存，即时生效");
+    flash("星球设置已保存，即时生效");
+  } catch (err) {
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    flash(err.message, "error");
+  } finally {
+    if (btn && document.body.contains(btn)) btn.disabled = false;
+  }
+}
+
+async function refreshImaStorage() {
+  const btn = $("#ima-storage-refresh");
+  if (btn?.disabled) return;
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
+  if (btn) btn.disabled = true;
+  try {
+    const data = await api("/api/admin/ima-storage/refresh", { method: "POST" });
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    const slot = $("#ima-storage-panel");
+    if (slot) slot.outerHTML = imaStoragePanelHtml(data);
+    flash("存储状态已刷新");
+  } catch (err) {
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    flash(err.message, "error");
+  } finally {
+    if (btn && document.body.contains(btn)) btn.disabled = false;
+  }
+}
+
+async function backupImaStorage() {
+  const btn = $("#ima-storage-backup");
+  if (btn?.disabled) return;
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
+  if (btn) btn.disabled = true;
+  try {
+    const data = await api("/api/admin/ima-storage/backup", { method: "POST" });
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    flash(data.status === "already_running" ? "备份已在进行" : "已请求归档备份");
   } catch (err) {
     if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash(err.message, "error");
@@ -7092,9 +7289,14 @@ async function clearSavedCookie(kind, label) {
     await api(`/api/admin/cookies/${kind}`, { method: "DELETE" });
     if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash(`已清除「${label}」Cookie`);
-    history.replaceState(null, "", "/admin/stats?tab=cookies");
-    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    await loadAdminStats(routeSeq);
+    if (kind === "ima" || kind === "zsxq") {
+      if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+      await reloadAdminSettingsPage(routeSeq);
+    } else {
+      history.replaceState(null, "", "/admin/stats?tab=cookies");
+      if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+      await loadAdminStats(routeSeq);
+    }
     if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     focusCookieField(kind);
   } catch (err) {
@@ -7148,9 +7350,8 @@ async function saveZsxqCookie() {
     });
     if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash("知识星球 Cookie 已保存，即时生效");
-    history.replaceState(null, "", "/admin/stats?tab=cookies");
     if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    await loadAdminStats(routeSeq);
+    await reloadAdminSettingsPage(routeSeq);
     if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     focusCookieField("zsxq");
   } catch (err) {
@@ -7258,7 +7459,7 @@ async function saveImaCollector() {
       imaMountState.collectorConfirmedLiveRevision = saveOwner.collectorRevision;
       imaMountState.collectorConfirmedMountRevision = saveOwner.mountRevision;
     }
-    const currentSnapshot = routeStillActive(routeSeq) && location.pathname === "/admin/stats"
+    const currentSnapshot = routeStillActive(routeSeq) && isAdminSettingsPath()
       && $("#ima-pure-uid") ? imaCollectorFormSnapshot() : null;
     const currentFormRevision = currentSnapshot
       ? imaCollectorFormRevision(currentSnapshot) : submittedLiveRevision;
@@ -7266,17 +7467,17 @@ async function saveImaCollector() {
       saveOwner.liveSnapshot = rememberImaCollectorDraft(currentSnapshot);
     }
     if (sessionGeneration !== imaMountState.sessionGeneration || imaMountState.saveOwner !== saveOwner) return;
-    if (!routeStillActive(routeSeq) && location.pathname !== "/admin/stats") return;
+    if (!routeStillActive(routeSeq) && !isAdminSettingsPath()) return;
     const statsReloadSeq = routeStillActive(routeSeq) ? routeSeq : routeRenderSeq;
     let statsReloadAccepted;
     if (statsReloadSeq === routeSeq) {
-      statsReloadAccepted = await loadAdminStats(routeSeq, savedImaStatus);
+      statsReloadAccepted = await reloadAdminSettingsPage(routeSeq, savedImaStatus);
     } else {
-      statsReloadAccepted = await loadAdminStats(routeRenderSeq, savedImaStatus);
+      statsReloadAccepted = await reloadAdminSettingsPage(routeRenderSeq, savedImaStatus);
     }
     if (!statsReloadAccepted || sessionGeneration !== imaMountState.sessionGeneration
       || imaMountState.saveOwner !== saveOwner) return;
-    if (!routeStillActive(statsReloadSeq) || location.pathname !== "/admin/stats") return;
+    if (!routeStillActive(statsReloadSeq) || !isAdminSettingsPath()) return;
     const reloadedSnapshot = imaCollectorFormSnapshot();
     const reloadedRevision = imaCollectorFormRevision(reloadedSnapshot);
     const liveRevision = saveOwner.liveSnapshot
@@ -7301,7 +7502,7 @@ async function saveImaCollector() {
     flash("IMA 文档采集配置已保存");
   } catch (err) {
     if (sessionGeneration !== imaMountState.sessionGeneration || imaMountState.saveOwner !== saveOwner) return;
-    if (routeStillActive(routeSeq) && location.pathname === "/admin/stats") {
+    if (routeStillActive(routeSeq) && isAdminSettingsPath()) {
       flash(err.message || "保存失败", "error");
     }
   } finally {
@@ -7355,17 +7556,14 @@ async function saveImaCredentials() {
       method: "POST",
       body: JSON.stringify({ cookie, openapi_clientid: cid, openapi_apikey: key }),
     });
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash("IMA 凭证已保存");
-    history.replaceState(null, "", "/admin/stats?tab=cookies");
-    await loadAdminStats(routeSeq);
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    await reloadAdminSettingsPage(routeSeq);
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     focusCookieField("ima");
   } catch (e) {
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash(e.message || "保存失败", "error");
   }
 }

@@ -2929,6 +2929,44 @@ def create_api_router(
         _audit(admin, "trigger_ima_collector", "", result["status"])
         return result
 
+    def _ima_storage_public():
+        if ima_documents is None:
+            raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
+        return ima_documents.storage_status.public()
+
+    def _require_remote_archive():
+        if ima_documents is None or not ima_documents.storage_status.remote:
+            raise HTTPException(status_code=409, detail="当前部署未启用远程归档")
+
+    @router.post("/admin/ima-storage/refresh", dependencies=[Depends(require_admin)])
+    def refresh_ima_storage(admin: dict = Depends(require_admin)):
+        from .ima_storage import write_request_file
+
+        _require_remote_archive()
+        path = os.environ.get("IMA_STORAGE_REFRESH_REQUEST", "/data/.vpush-ima-refresh-request")
+        write_request_file(path)
+        _audit(admin, "ima_storage_refresh", "", "requested")
+        return _ima_storage_public()
+
+    @router.post("/admin/ima-storage/backup", dependencies=[Depends(require_admin)])
+    def backup_ima_storage(admin: dict = Depends(require_admin)):
+        from pathlib import Path
+
+        from .ima_storage import request_pending, write_request_file
+
+        _require_remote_archive()
+        status = ima_documents.storage_status
+        public = status.public()
+        if not status.can_write():
+            raise HTTPException(status_code=503, detail="知识库存储暂不可用")
+        archive = os.environ.get("IMA_ARCHIVE_ROOT", "").strip()
+        request_path = Path(archive) / ".vpush-backup-request"
+        if request_pending(request_path, public.get("restic_last_success", 0)):
+            return {"status": "already_running", **public}
+        write_request_file(request_path)
+        _audit(admin, "ima_storage_backup", "", "requested")
+        return {"status": "started", **public}
+
     @router.get("/admin/ima-credentials", dependencies=[Depends(require_admin)])
     def get_ima_credentials():
         cookie = db.get_setting(IMA_COOKIE_KEY) or os.environ.get("IMA_COOKIE", "")

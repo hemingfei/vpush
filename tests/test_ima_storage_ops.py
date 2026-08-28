@@ -28,6 +28,11 @@ SERVICES = [
     "vpush-ima-restic-prune.service",
 ]
 
+PATH_UNITS = [
+    "vpush-ima-refresh-request.path",
+    "vpush-ima-backup-request.path",
+]
+
 TIMERS = [
     "vpush-ima-storage-health.timer",
     "vpush-ima-main-health.timer",
@@ -59,7 +64,7 @@ def _read(name: str) -> str:
 
 
 def test_required_ops_files_exist():
-    required = SCRIPTS + SERVICES + TIMERS + ["README.md"]
+    required = SCRIPTS + SERVICES + TIMERS + PATH_UNITS + ["README.md"]
     missing = [name for name in required if not (OPS / name).is_file()]
     assert missing == [], f"missing deploy artifacts: {missing}"
 

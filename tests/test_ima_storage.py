@@ -21,6 +21,9 @@ PUBLIC_KEYS = {
     "inode_percent",
     "monthly_tx_bytes",
     "reason",
+    "restic_last_success",
+    "restic_last_check_at",
+    "restic_last_check_ok",
 }
 
 
@@ -186,3 +189,26 @@ def test_compose_files_expose_optional_ima_archive_mount():
         text = (ROOT / name).read_text(encoding="utf-8")
         for marker in COMPOSE_MARKERS:
             assert marker in text, f"{name} missing {marker}"
+
+
+def test_public_includes_restic_allowlist(tmp_path):
+    path = _write_status(
+        tmp_path / "status.json",
+        restic_last_success=100,
+        restic_last_check_at=90,
+        restic_last_check_ok=True,
+    )
+    public = ImaStorageStatus(path, remote=True).public()
+    assert public["restic_last_success"] == 100
+    assert public["restic_last_check_at"] == 90
+    assert public["restic_last_check_ok"] is True
+
+
+def test_write_request_file_and_pending(tmp_path):
+    from app.ima_storage import request_pending, write_request_file
+
+    path = tmp_path / ".vpush-backup-request"
+    write_request_file(path)
+    assert path.is_file()
+    assert request_pending(path, 0) is True
+    assert request_pending(path, int(time.time()) + 10) is False

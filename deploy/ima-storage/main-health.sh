@@ -188,11 +188,21 @@ out={
  "monthly_tx_bytes": int(float(sys.argv[6] or 0)),
  "capacity_blocked": sys.argv[7]=="true",
  "reason": sys.argv[8],
+ "restic_last_success": 0,
+ "restic_last_check_at": 0,
+ "restic_last_check_ok": False,
 }
+try:
+ d=json.load(open(sys.argv[10],encoding="utf-8"))
+ out["restic_last_success"]=int(d.get("restic_last_success") or 0)
+ out["restic_last_check_at"]=int(d.get("restic_last_check_at") or 0)
+ out["restic_last_check_ok"]=d.get("restic_last_check_ok") is True
+except Exception:
+ pass
 with open(sys.argv[9],"w",encoding="utf-8") as fh:
  json.dump(out, fh, separators=(",",":"))
 ' "$CHECKED_AT" "$AVAILABLE" "$WRITABLE" "$USED_PERCENT" "$INODE_PERCENT" \
-  "$MONTHLY_TX_BYTES" "$CAPACITY_BLOCKED" "$BOUNDED_REASON" "$TMP_FILE"
+  "$MONTHLY_TX_BYTES" "$CAPACITY_BLOCKED" "$BOUNDED_REASON" "$TMP_FILE" "$REMOTE_HEALTH"
 
 chown 99:100 "$TMP_FILE"
 chmod 0640 "$TMP_FILE"

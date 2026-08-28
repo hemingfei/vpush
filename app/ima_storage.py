@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -15,6 +16,25 @@ _REASON_ALLOWLIST = frozenset({
     "capacity",
 })
 _FUTURE_SKEW_SECONDS = 300
+BACKUP_REQUEST_WINDOW = 3600
+
+
+def write_request_file(path: str | Path) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(str(int(time.time())), encoding="utf-8")
+    try:
+        os.chmod(target, 0o640)
+    except OSError:
+        pass
+
+
+def request_pending(path: str | Path, last_success: object, *, window: int = BACKUP_REQUEST_WINDOW) -> bool:
+    target = Path(path)
+    if not target.is_file():
+        return False
+    requested = int(target.stat().st_mtime)
+    return requested > int(last_success or 0) and (int(time.time()) - requested) < window
 
 
 def _clamp_percent(value: object) -> int:
@@ -145,6 +165,9 @@ class ImaStorageStatus:
             "monthly_tx_bytes": monthly_tx_bytes,
             "reason": reason,
             "capacity_blocked": False,
+            "restic_last_success": _clamp_bytes(raw.get("restic_last_success", 0)),
+            "restic_last_check_at": _clamp_bytes(raw.get("restic_last_check_at", 0)),
+            "restic_last_check_ok": raw.get("restic_last_check_ok") is True,
         }
 
     def can_read(self) -> bool:
@@ -170,6 +193,9 @@ class ImaStorageStatus:
             "inode_percent": data["inode_percent"],
             "monthly_tx_bytes": data["monthly_tx_bytes"],
             "reason": data["reason"],
+            "restic_last_success": _clamp_bytes(data.get("restic_last_success", 0)),
+            "restic_last_check_at": _clamp_bytes(data.get("restic_last_check_at", 0)),
+            "restic_last_check_ok": data.get("restic_last_check_ok") is True,
         }
 
     def _unavailable(

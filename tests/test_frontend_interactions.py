@@ -1004,7 +1004,7 @@ def test_stats_cookie_repair_deep_link():
     assert "/admin/stats?tab=" in _fn_body("switchStatsTab")
     assert "statsTabFromHash()" in _fn_body("loadAdminStats")
     assert "saveTwitterCookie()" in _fn_body("loadAdminStats")
-    assert "saveZsxqCookie()" in _fn_body("loadAdminStats")
+    assert "saveZsxqCookie()" in _fn_body("loadAdminKnowledge")
     assert "pasteCookieField('xq-cookie')" in _fn_body("loadAdminStats")
     banner = _fn_body("cookieRepairBanner")
     assert "go('admin/stats?tab=cookies')" in banner
@@ -1134,21 +1134,22 @@ def test_dashboard_live_refresh_does_not_rebuild_trends():
 def test_cookie_clear_is_confirmed_delete_and_hidden_when_unset():
     """已保存 Cookie 才显示清除；确认后走 DELETE，不用 alert。"""
     render = _fn_body("loadAdminStats")
+    knowledge = _fn_body("loadAdminKnowledge")
     clear = _fn_body("clearSavedCookie")
 
     assert "clearSavedCookie('xueqiu'" in render
     assert "clearSavedCookie('weibo'" in render
     assert "clearSavedCookie('twitter'" in render
-    assert "clearSavedCookie('ima'" in render
-    assert "clearSavedCookie('zsxq'" in render
+    assert "clearSavedCookie('ima'" in knowledge
+    assert "clearSavedCookie('zsxq'" in knowledge
     assert "from_env" in render
     assert "btn-ghost danger" in render
     assert 'aria-label="清除雪球 Cookie"' in render
     assert 'aria-label="清除微博 Cookie"' in render
     assert 'aria-label="清除 X Cookie"' in render
-    assert 'aria-label="清除 IMA Cookie"' in render
-    assert 'aria-label="清除知识星球 Cookie"' in render
-    assert ">清除 Cookie<" in render
+    assert 'aria-label="清除 IMA Cookie"' in knowledge
+    assert 'aria-label="清除知识星球 Cookie"' in knowledge
+    assert ">清除 Cookie<" in knowledge
 
     assert "confirm(" in clear
     assert "停止抓取" in clear
@@ -1162,10 +1163,10 @@ def test_cookie_clear_is_confirmed_delete_and_hidden_when_unset():
     assert "focusCookieField(" in clear
     assert 'for="xq-cookie"' in render
     assert 'for="tw-cookie"' in render
-    assert 'for="zq-cookie"' in render
-    assert 'for="ima-cookie"' in render
-    assert 'for="ima-cid"' in render
-    assert 'for="ima-key"' in render
+    assert 'for="zq-cookie"' in knowledge
+    assert 'for="ima-cookie"' in knowledge
+    assert 'for="ima-cid"' in knowledge
+    assert 'for="ima-key"' in knowledge
     assert 'id="wb-qr-start"' in render
 
 
@@ -1178,11 +1179,16 @@ def test_cookie_save_restores_focus_after_rebuild():
     assert "ima-cookie" in focus
     assert "zq-cookie" in focus
     assert ".focus()" in focus
-    for name in ("saveXueqiuCookie", "saveZsxqCookie", "saveTwitterCookie", "saveImaCredentials"):
+    for name in ("saveXueqiuCookie", "saveTwitterCookie"):
         body = _fn_body(name)
         assert "loadAdminStats(routeSeq)" in body
         assert "focusCookieField(" in body
         assert body.index("loadAdminStats(routeSeq)") < body.index("focusCookieField(")
+    for name in ("saveZsxqCookie", "saveImaCredentials"):
+        body = _fn_body(name)
+        assert "reloadAdminSettingsPage(routeSeq)" in body
+        assert "focusCookieField(" in body
+        assert body.index("reloadAdminSettingsPage(routeSeq)") < body.index("focusCookieField(")
 
 
 def test_router_me_response_is_session_owned_before_shell_or_state_mutation():
@@ -1266,9 +1272,15 @@ def test_ima_pdf_load_is_owned_by_route_and_reader_generation_before_load_or_fai
 
 def test_cookie_save_nested_stats_reload_preserves_owner_sequence_and_focus_guard():
     """Cookie 保存及清除的嵌套 stats GET 必须继承原路由令牌，再检查会话后聚焦。"""
-    for name in ("clearSavedCookie", "saveXueqiuCookie", "saveZsxqCookie", "saveTwitterCookie", "saveImaCredentials"):
+    for name, reload in (
+        ("clearSavedCookie", "loadAdminStats(routeSeq)"),
+        ("saveXueqiuCookie", "loadAdminStats(routeSeq)"),
+        ("saveTwitterCookie", "loadAdminStats(routeSeq)"),
+        ("saveZsxqCookie", "reloadAdminSettingsPage(routeSeq)"),
+        ("saveImaCredentials", "reloadAdminSettingsPage(routeSeq)"),
+    ):
         body = _fn_body(name)
-        reload_call = body.index("loadAdminStats(routeSeq)")
+        reload_call = body.index(reload)
         focus = body.index("focusCookieField(", reload_call)
         assert "loadAdminStats()" not in body
         assert "sessionGeneration" in body
@@ -1309,34 +1321,27 @@ def test_dark_danger_token_meets_cookie_clear_contrast():
     assert "--color-danger-strong: #fca5a5" in dark.group(0)
 
 
-def test_ima_document_collector_lives_in_fetch_settings():
-    """IMA 文档采集属于抓取设置，不应混入 Cookie 管理。"""
-    src = APP_JS.read_text()
-    config = src.index('<div id="st-config"')
-    cookies = src.index('<div id="st-cookies"')
-    ima = src.index("IMA 文档采集")
-
-    assert config < ima < cookies
-    assert "saveImaCollector()" in src[config:cookies]
-    assert '<h2 class="section-title">IMA 文档采集</h2>' not in src[cookies:]
+def test_ima_document_collector_lives_in_knowledge_settings():
+    """IMA 文档采集在知识库设置页，不再出现在数据源抓取/Cookie。"""
+    stats = _fn_body("loadAdminStats")
+    knowledge = _fn_body("loadAdminKnowledge")
+    assert "IMA 文档采集" in knowledge
+    assert "saveImaCollector()" in knowledge
+    assert "IMA 文档采集" not in stats
+    assert "saveImaCollector()" not in stats
 
 
 def test_ima_settings_have_one_parent_and_keep_zsxq_under_ima():
-    """抓取设置内 IMA 是父级，文档采集和知识星球连续展示。"""
-    stats = _fn_body("loadAdminStats")
-    config_start = stats.index('<div id="st-config"')
-    cookies_start = stats.index('<div id="st-cookies"')
-    config = stats[config_start:cookies_start]
-
-    ima = config.index('<h2 class="section-title">IMA</h2>')
-    documents = config.index('<h3 class="ima-source-title">IMA 文档采集</h3>')
-    zsxq = config.index('<h3 class="ima-source-title">知识星球</h3>')
-
-    assert 'class="section-panel ima-source-panel"' in config
+    """知识库设置页 IMA 在前，知识星球随后，存储在后。"""
+    knowledge = _fn_body("loadAdminKnowledge")
+    ima = knowledge.index('<h2 class="section-title">IMA</h2>')
+    documents = knowledge.index('<h3 class="ima-source-title">IMA 文档采集</h3>')
+    zsxq = knowledge.index('<h2 class="section-title">知识星球</h2>')
     assert ima < documents < zsxq
-    assert 'class="cfg-group cfg-group--zsxq"' in config[ima:]
-    assert 'id="pc-zq-pages"' in config[ima:]
-    assert config.index('id="pc-save"') > zsxq
+    assert '<h2 class="section-title">存储</h2>' in _fn_body("imaStoragePanelHtml")
+    assert 'class="cfg-group cfg-group--zsxq"' in knowledge[zsxq:]
+    assert 'id="pc-zq-pages"' in knowledge
+    assert 'id="pc-zq-save"' in knowledge
 
 
 def test_zsxq_settings_use_one_column_on_narrow_layout():
@@ -1375,8 +1380,8 @@ def test_ima_save_reloads_with_authoritative_put_status_override():
     put = 'const savedImaStatus = await api("/api/admin/ima-collector"'
     assert put in save
     assert "saveOwner.savedImaStatus = savedImaStatus" in save
-    assert "await loadAdminStats(routeSeq, savedImaStatus)" in save
-    assert save.index(put) < save.index("saveOwner.putCompleted = true") < save.index("await loadAdminStats(routeSeq, savedImaStatus)")
+    assert "await reloadAdminSettingsPage(routeSeq, savedImaStatus)" in save
+    assert save.index(put) < save.index("saveOwner.putCompleted = true") < save.index("await reloadAdminSettingsPage(routeSeq, savedImaStatus)")
     assert "ima_collector: authoritativeImaStatus" in load
     assert load.index("authoritativeImaStatus") < load.index('$("#admin-body").innerHTML = `')
 
@@ -1401,7 +1406,7 @@ def test_ima_stats_failure_after_save_renders_cached_stats_with_retry():
 def test_ima_collector_pending_save_snapshots_full_form_and_secret_state():
     """stats 重建期间必须使用提交快照，token 只能由 JS 恢复，不能进入 HTML。"""
     src = APP_JS.read_text(encoding="utf-8")
-    load = _fn_body("loadAdminStats")
+    load = _fn_body("loadAdminKnowledge")
     save = _fn_body("saveImaCollector")
     assert "function imaCollectorFormSnapshot" in src
     assert "function imaCollectorFormRevision" in src
@@ -1424,7 +1429,7 @@ def test_ima_collector_pending_save_snapshots_full_form_and_secret_state():
 def test_ima_collector_save_rechecks_form_revision_after_stats_reload_before_clearing_token():
     """stats GET 期间输入新 token 后，完成回调不得清除新值。"""
     save = _fn_body("saveImaCollector")
-    reload_index = save.index("await loadAdminStats(routeSeq, savedImaStatus)")
+    reload_index = save.index("await reloadAdminSettingsPage(routeSeq, savedImaStatus)")
     clear_index = save.index('tokenInput.value = ""')
     assert "const noNewerEditsAfterReload" in save
     assert save.index("const noNewerEditsAfterReload") > reload_index
@@ -1434,7 +1439,7 @@ def test_ima_collector_save_rechecks_form_revision_after_stats_reload_before_cle
 def test_ima_collector_full_form_draft_survives_owner_cleanup_and_stats_rebuild():
     """保存 owner 清理后，UID/间隔/知识库/根目录脏编辑仍由后续 stats 重建恢复。"""
     src = APP_JS.read_text(encoding="utf-8")
-    load = _fn_body("loadAdminStats")
+    load = _fn_body("loadAdminKnowledge")
     save = _fn_body("saveImaCollector")
     assert "collectorDraft" in src
     assert "rememberImaCollectorDraft" in src
@@ -1448,7 +1453,7 @@ def test_ima_collector_full_form_draft_survives_owner_cleanup_and_stats_rebuild(
     assert 'value="${pendingCollectorDraft' not in src
     assert "collectorDraftRevision" in src
     assert "clearImaCollectorDraft" in save
-    reload_index = save.index("await loadAdminStats(routeSeq, savedImaStatus)")
+    reload_index = save.index("await reloadAdminSettingsPage(routeSeq, savedImaStatus)")
     assert save.index("clearImaCollectorDraft", reload_index) > reload_index
     assert 'document.addEventListener("input", imaCollectorDraftChanged)' in src
     assert 'document.addEventListener("change", imaCollectorDraftChanged)' in src
@@ -1457,7 +1462,7 @@ def test_ima_collector_full_form_draft_survives_owner_cleanup_and_stats_rebuild(
 def test_ima_confirmed_departed_save_reconciles_server_state_on_next_stats_load():
     """离路成功保存的快照只等待下一次 stats 重建确认，服务端规范化值必须胜出。"""
     src = APP_JS.read_text(encoding="utf-8")
-    load = _fn_body("loadAdminStats")
+    load = _fn_body("loadAdminKnowledge")
     save = _fn_body("saveImaCollector")
 
     assert "collectorConfirmedRevision" in src
@@ -1482,7 +1487,7 @@ def test_ima_confirmed_departed_save_reconciles_server_state_on_next_stats_load(
 def test_ima_save_reload_owns_mount_generation_bump_and_preserves_stale_guards():
     """同路由 reload 自身的 mount generation bump 不得阻断清理；外部失效仍须中止。"""
     src = APP_JS.read_text(encoding="utf-8")
-    load = _fn_body("loadAdminStats")
+    load = _fn_body("loadAdminKnowledge")
     save = _fn_body("saveImaCollector")
 
     assert "return false;" in load
@@ -1490,16 +1495,16 @@ def test_ima_save_reload_owns_mount_generation_bump_and_preserves_stale_guards()
     assert load.index("return true;") > load.index("initImaMountState(pure.groups || [], preserveMountDraftForReload)")
     assert "setInterval" not in load
     assert "let statsReloadAccepted;" in save
-    assert "loadAdminStats(routeSeq, savedImaStatus)" in save
-    assert "loadAdminStats(routeRenderSeq, savedImaStatus)" in save
-    reload = save.index("statsReloadAccepted = await loadAdminStats(routeSeq, savedImaStatus);")
+    assert "reloadAdminSettingsPage(routeSeq, savedImaStatus)" in save
+    assert "reloadAdminSettingsPage(routeRenderSeq, savedImaStatus)" in save
+    reload = save.index("statsReloadAccepted = await reloadAdminSettingsPage(routeSeq, savedImaStatus);")
     cleanup_guard = save.index("if (!statsReloadAccepted", reload)
     assert save.index("sessionGeneration !== imaMountState.sessionGeneration", 0, reload) < reload
     assert cleanup_guard > reload
     assert "!routeStillActive(statsReloadSeq)" in save[cleanup_guard:]
     assert "imaMountState.saveOwner !== saveOwner" in save[cleanup_guard:]
     assert "generation !== imaMountState.generation" not in save[reload:cleanup_guard]
-    assert load.index("initImaMountState(pure.groups || [], preserveMountDraftForReload)") < load.index("switchStatsTab(statsTabFromHash())")
+    assert load.index("initImaMountState(pure.groups || [], preserveMountDraftForReload)") < load.index("startDashboardLiveTimer()")
 
 
 def test_ima_stats_failure_keeps_polling_and_exposes_route_owned_retry():
@@ -1538,7 +1543,7 @@ def test_ima_folder_error_retry_has_stable_focus_id():
 def test_ima_collector_save_restores_focus_after_rebuild():
     """保存重建设置页后恢复原控件或保存按钮焦点。"""
     body = _fn_body("saveImaCollector")
-    render = _fn_body("loadAdminStats")
+    render = _fn_body("loadAdminKnowledge")
     assert 'document.activeElement' in body
     assert 'getElementById(focusId)' in body
     assert '.focus({' in body
@@ -1624,22 +1629,34 @@ def test_settings_reload_passes_original_route_sequence():
 
 def test_admin_credential_saves_require_same_route_token_and_session_before_side_effects():
     """旧路由或旧账号的凭证回调不得导航、重绘或恢复当前页面焦点。"""
-    for name in ("saveImaCredentials", "saveTwitterCookie"):
-        body = _fn_body(name)
-        post = body.index('await api("/api/admin/')
-        for capture in (
-            "const routeSeq = routeRenderSeq",
-            "const token = state.token",
-            "const sessionGeneration = imaMountState.sessionGeneration",
-        ):
-            assert capture in body[:post]
-        guard = body.index("routeStillActive(routeSeq)", post)
-        for side_effect in ("flash(", "history.replaceState", "await loadAdminStats(routeSeq)", "focusCookieField"):
-            assert guard < body.index(side_effect, post)
-        catch = body.index("} catch", post)
-        assert body.index("routeStillActive(routeSeq)", catch) < body.index("flash(", catch)
-        reload = body.index("await loadAdminStats(routeSeq)", post)
-        assert body.index("routeStillActive(routeSeq)", reload) < body.index("focusCookieField", reload)
+    twitter = _fn_body("saveTwitterCookie")
+    post = twitter.index('await api("/api/admin/')
+    for capture in (
+        "const routeSeq = routeRenderSeq",
+        "const token = state.token",
+        "const sessionGeneration = imaMountState.sessionGeneration",
+    ):
+        assert capture in twitter[:post]
+    guard = twitter.index("routeStillActive(routeSeq)", post)
+    for side_effect in ("flash(", "history.replaceState", "await loadAdminStats(routeSeq)", "focusCookieField"):
+        assert guard < twitter.index(side_effect, post)
+    catch = twitter.index("} catch", post)
+    assert twitter.index("routeStillActive(routeSeq)", catch) < twitter.index("flash(", catch)
+    reload = twitter.index("await loadAdminStats(routeSeq)", post)
+    assert twitter.index("routeStillActive(routeSeq)", reload) < twitter.index("focusCookieField", reload)
+    ima = _fn_body("saveImaCredentials")
+    post = ima.index('await api("/api/admin/')
+    for capture in (
+        "const routeSeq = routeRenderSeq",
+        "const token = state.token",
+        "const sessionGeneration = imaMountState.sessionGeneration",
+    ):
+        assert capture in ima[:post]
+    guard = ima.index("sessionOwnerStillActive(routeSeq, token, sessionGeneration)", post)
+    for side_effect in ("flash(", "await reloadAdminSettingsPage(routeSeq)", "focusCookieField"):
+        assert guard < ima.index(side_effect, post)
+    catch = ima.index("} catch", post)
+    assert ima.index("sessionOwnerStillActive(routeSeq, token, sessionGeneration)", catch) < ima.index("flash(", catch)
 
 
 def test_admin_target_callbacks_require_route_token_session_and_owned_side_effects():
@@ -1663,12 +1680,16 @@ def test_admin_target_callbacks_require_route_token_session_and_owned_side_effec
         catch_guard = body.index("sessionOwnerStillActive(routeSeq, token, sessionGeneration)", catch)
         assert body.index("flash(", catch_guard) > catch_guard, f"{name} 错误提示未受守卫保护"
 
-    for name in ("clearSavedCookie", "saveXueqiuCookie", "saveZsxqCookie"):
+    for name in ("clearSavedCookie", "saveXueqiuCookie"):
         body = _fn_body(name)
         reload = body.index("await loadAdminStats(")
         assert "await loadAdminStats(routeSeq)" in body
         reload_guard = body.index("sessionOwnerStillActive(routeSeq, token, sessionGeneration)", reload)
         assert reload_guard < body.index("focusCookieField", reload)
+    zsxq = _fn_body("saveZsxqCookie")
+    reload = zsxq.index("await reloadAdminSettingsPage(")
+    reload_guard = zsxq.index("sessionOwnerStillActive(routeSeq, token, sessionGeneration)", reload)
+    assert reload_guard < zsxq.index("focusCookieField", reload)
 
     polling = _fn_body("savePollingConfig")
     assert "if (btn && document.body.contains(btn)) btn.disabled = false" in polling
@@ -1689,16 +1710,13 @@ def test_ima_save_listener_checks_owner_before_ima_field_ids():
 
 
 def test_ima_config_blocks_use_shared_layout_and_no_inline_spacing():
-    stats = _fn_body("loadAdminStats")
+    stats = _fn_body("loadAdminKnowledge")
     mount_group = _fn_body("imaMountGroupRowHtml")
     folder = _fn_body("imaFolderRowHtml")
-    config_start = stats.index('<div id="st-config"')
-    cookies_start = stats.index('<div id="st-cookies"')
-    config = stats[config_start:cookies_start]
-    cookies = stats[cookies_start:]
-    ima_start = cookies.index("<h2 class=\"section-title\">IMA 凭证</h2>")
-    ima_end = cookies.index("<h2 class=\"section-title\">知识星球 Cookie</h2>")
-    ima_credentials = cookies[ima_start:ima_end]
+    config = stats
+    ima_start = stats.index("<h3 class=\"ima-source-title\">IMA 凭证</h3>")
+    ima_end = stats.index("<h2 class=\"section-title\">知识星球</h2>")
+    ima_credentials = stats[ima_start:ima_end]
     css = STYLE_CSS.read_text()
 
     assert 'class="ima-mount-kb-row' in mount_group
@@ -1717,10 +1735,10 @@ def test_ima_config_blocks_use_shared_layout_and_no_inline_spacing():
 
 
 def test_ima_config_uses_small_sync_icon_and_consistent_brand_case():
-    stats = _fn_body("loadAdminStats")
+    stats = _fn_body("loadAdminKnowledge")
     css = STYLE_CSS.read_text()
 
-    assert '<h2 class="section-title">IMA 凭证</h2>' in stats
+    assert '<h3 class="ima-source-title">IMA 凭证</h3>' in stats
     assert "保存 IMA 凭证" in stats
     assert ".ima-collector-foot .refresh-icon" in css
     assert "width: 16px" in css
@@ -1732,7 +1750,7 @@ def test_ima_group_render_has_safe_mount_rows_and_recovery_controls():
     src = APP_JS.read_text()
     kb_row = _fn_body("imaMountGroupRowHtml")
     folder_row = _fn_body("imaFolderRowHtml")
-    render = _fn_body("loadAdminStats")
+    render = _fn_body("loadAdminKnowledge")
     assert 'id="ima-kb-list"' in render
     assert 'id="ima-folder-tree"' in render
     assert 'id="ima-group-discovery-status"' in render
@@ -1823,10 +1841,10 @@ def test_ima_force_folder_retry_supersedes_inflight_owner():
 
 
 def test_ima_pending_token_restores_across_current_stats_route_not_owner_route():
-    """重进 stats 时，当前共享 owner 的 token/表单仍可恢复，不能按发起路由丢弃。"""
+    """重进知识库设置时，当前共享 owner 的 token/表单仍可恢复，不能按发起路由丢弃。"""
     src = APP_JS.read_text(encoding="utf-8")
     restore = _fn_body("restoreImaCollectorOwnerToken")
-    load = _fn_body("loadAdminStats")
+    load = _fn_body("loadAdminKnowledge")
     assert "if (owner && owner !== imaMountState.saveOwner) return;" in restore
     assert "owner.routeSeq !== seq" not in restore
     owner_start = load.index("const ownerIsCurrent =")
@@ -1852,11 +1870,11 @@ def test_ima_folder_edit_updates_live_save_owner_snapshot_and_stays_dirty():
 def test_ima_departed_save_does_not_clear_until_current_reload_reconciles():
     """离开发起路由后的成功回调不得清 draft；同路由须 reload 后再按新编辑判定清理。"""
     save = _fn_body("saveImaCollector")
-    departed = save.index('if (!routeStillActive(routeSeq) && location.pathname !== "/admin/stats")')
-    departed_end = save.index("loadAdminStats(routeSeq, savedImaStatus)", departed)
+    departed = save.index('if (!routeStillActive(routeSeq) && !isAdminSettingsPath())')
+    departed_end = save.index("reloadAdminSettingsPage(routeSeq, savedImaStatus)", departed)
     assert "clearImaCollectorDraft" not in save[departed:departed_end]
     assert "saveOwner.putCompleted = true" in save
-    assert save.index("await loadAdminStats(routeSeq, savedImaStatus)") < save.index("imaMountState.dirty = false")
+    assert save.index("await reloadAdminSettingsPage(routeSeq, savedImaStatus)") < save.index("imaMountState.dirty = false")
     assert "const noNewerEditsAfterReload =" in save
     assert "if (noNewerEditsAfterReload)" in save
 
@@ -1864,19 +1882,19 @@ def test_ima_departed_save_does_not_clear_until_current_reload_reconciles():
 def test_ima_collector_save_is_owned_by_initiating_route_and_preserves_drafts():
     """旧的 collector 保存回调不得重绘新路由，stats 重建不得丢失脏挂载 draft。"""
     src = APP_JS.read_text(encoding="utf-8")
-    load = _fn_body("loadAdminStats")
+    load = _fn_body("loadAdminKnowledge")
     save = _fn_body("saveImaCollector")
 
-    assert re.search(r"async function loadAdminStats\(seq = _adminRenderSeq, authoritativeImaStatus = null\)", src)
+    assert re.search(r"async function loadAdminKnowledge\(seq = _adminRenderSeq, authoritativeImaStatus = null\)", src)
     assert "routeStillActive(seq)" in load
     assert "const preserveMountDraft = imaMountState.dirty" in load
     assert "initImaMountState(pure.groups || [], preserveMountDraftForReload)" in load
     assert "const routeSeq = routeRenderSeq" in save
     assert "const saveButton = $(\"#ima-collector-save\")" in save
     assert "saveButton.disabled = true" in save
-    assert 'location.pathname !== "/admin/stats"' in save
+    assert "!isAdminSettingsPath()" in save
     assert "routeStillActive(routeSeq)" in save
-    assert "loadAdminStats(routeSeq, savedImaStatus)" in save
+    assert "reloadAdminSettingsPage(routeSeq, savedImaStatus)" in save
     assert "imaMountState.dirty = false" in save
     assert "document.body.contains(saveButton)" in save
 
@@ -1884,7 +1902,7 @@ def test_ima_collector_save_is_owned_by_initiating_route_and_preserves_drafts():
 def test_ima_collector_save_has_shared_busy_owner_for_rebuilt_buttons():
     """首次 PUT 期间 stats 重建出的保存按钮也必须由共享 owner 禁用。"""
     src = APP_JS.read_text(encoding="utf-8")
-    load = _fn_body("loadAdminStats")
+    load = _fn_body("loadAdminKnowledge")
     save = _fn_body("saveImaCollector")
     assert "saveOwner: null" in src
     assert 'imaMountState.saveOwner ? " disabled" : ""' in load
@@ -1907,13 +1925,13 @@ def test_ima_collector_save_clears_only_matching_mount_revision():
     assert "imaMountState.saveOwner = saveOwner" in save
     assert "saveOwner.liveSnapshot =" in save
     assert "imaMountState.dirty = false" in save
-    assert save.index("await loadAdminStats(routeSeq, savedImaStatus)") < save.index("imaMountState.dirty = false")
+    assert save.index("await reloadAdminSettingsPage(routeSeq, savedImaStatus)") < save.index("imaMountState.dirty = false")
 
 
 def test_ima_collector_save_cleanup_requires_current_form_and_mount_revision():
     """表单回到原值但目录版本已变化时，不得清理保存草稿、dirty 或 token。"""
     save = _fn_body("saveImaCollector")
-    reload_index = save.index("await loadAdminStats(routeSeq, savedImaStatus)")
+    reload_index = save.index("await reloadAdminSettingsPage(routeSeq, savedImaStatus)")
     guard_index = save.index("const noNewerEditsAfterReload")
     clear_index = save.index("clearImaCollectorDraft(saveOwner.formRevision)")
     assert guard_index > reload_index
@@ -1925,7 +1943,7 @@ def test_ima_collector_save_cleanup_requires_current_form_and_mount_revision():
 
 def test_ima_stats_preserves_newer_mount_revision_before_mount_state_init():
     """目录改动后即使表单回到原值，stats 重建也必须先按新版 revision 保留 draft。"""
-    load = _fn_body("loadAdminStats")
+    load = _fn_body("loadAdminKnowledge")
     preserve_index = load.index("const preserveMountDraft")
     init_index = load.index("initImaMountState(pure.groups || [], preserveMountDraftForReload)")
     preserve_decision = load[preserve_index:init_index]
@@ -1940,7 +1958,7 @@ def test_ima_collector_save_failure_flash_is_route_owned():
     finally_start = save.index("} finally")
     catch = save[catch_start:finally_start]
     assert re.search(
-        r"if \(routeStillActive\(routeSeq\) && location\.pathname === \"/admin/stats\"\)\s*\{\s*flash",
+        r"if \(routeStillActive\(routeSeq\) && isAdminSettingsPath\(\)\)\s*\{\s*flash",
         catch,
     )
 
@@ -2000,8 +2018,8 @@ def test_ima_group_save_reads_rows_and_preserves_legacy_token_fields():
     for field in ("uid", "knowledge_base_id", "root_folder_id", "interval_seconds"):
         assert f"{field}:" in save
     assert "if (token) body.refresh_token = token" in save
-    assert 'id="ima-pure-token"' in _fn_body("loadAdminStats")
-    token_input = re.search(r'id="ima-pure-token"[^>]*', save + _fn_body("loadAdminStats"))
+    assert 'id="ima-pure-token"' in _fn_body("loadAdminKnowledge")
+    token_input = re.search(r'id="ima-pure-token"[^>]*', save + _fn_body("loadAdminKnowledge"))
     assert token_input and 'type="password"' in token_input.group(0)
     assert 'autocomplete="off"' in token_input.group(0)
     assert 'value="${pure.refresh_token' not in APP_JS.read_text()
@@ -2030,7 +2048,7 @@ def test_ima_collector_acl_granted_via_separate_put():
     assert "/api/admin/ima-collector" in load_users
     assert "acl_usernames" not in save
     assert "acl_usernames" not in read
-    stats = _fn_body("loadAdminStats")
+    stats = _fn_body("loadAdminKnowledge")
     assert "s.ima_collector" in stats
     assert "initImaMountState" in stats
 
@@ -2043,33 +2061,36 @@ def test_ima_discovery_status_is_safe_and_does_not_render_secrets():
     assert "escapeHtml" in stats
     assert "last_result" in stats
     assert "refresh_token" not in stats
-    assert "imaGroupDiscoveryStatusText" in _fn_body("loadAdminStats")
+    assert "imaGroupDiscoveryStatusText" in _fn_body("loadAdminKnowledge")
     assert 'placeholder="${pure.refresh_token' in src
     assert 'value="${pure.refresh_token' not in src
 
 
 def test_admin_stats_has_zsxq_cache_settings():
-    """抓取设置里有知识星球组；保存带上翻页/间隔/预缓存；清理走独立接口不整页重建。"""
+    """知识库设置页有知识星球组；星球保存带翻页/间隔；数据源保存不再带 zsxq_*。"""
     stats = _fn_body("loadAdminStats")
-    assert "知识星球" in stats
-    assert "pc-zq-pages" in stats
-    assert "pc-zq-delay" in stats
-    assert "pc-zq-file-delay" in stats
-    assert "pc-zq-prefetch" in stats
-    assert "zq-cache-stat" in stats
-    assert "purgeZsxqCache()" in stats
-    save = _fn_body("savePollingConfig")
-    assert "zsxq_max_pages" in save
-    assert "zsxq_fetch_delay_seconds" in save
-    assert "zsxq_file_delay_seconds" in save
-    assert "zsxq_prefetch_files" in save
+    knowledge = _fn_body("loadAdminKnowledge")
+    assert "pc-zq-pages" not in stats
+    assert "pc-zq-pages" in knowledge
+    assert "pc-zq-delay" in knowledge
+    assert "pc-zq-file-delay" in knowledge
+    assert "pc-zq-prefetch" in knowledge
+    assert "zq-cache-stat" in knowledge
+    assert "purgeZsxqCache()" in knowledge
+    polling = _fn_body("savePollingConfig")
+    assert "zsxq_max_pages" not in polling
+    zsxq = _fn_body("saveZsxqPollingConfig")
+    assert "zsxq_max_pages" in zsxq
+    assert "zsxq_fetch_delay_seconds" in zsxq
+    assert "zsxq_file_delay_seconds" in zsxq
+    assert "zsxq_prefetch_files" in zsxq
     purge = _fn_body("purgeZsxqCache")
     assert "/api/admin/zsxq-cache/purge" in purge
     assert "loadAdminStats" not in purge
     fmt = _fn_body("fmtCacheBytes")
     assert 'return "0 MB"' in fmt
     assert "KB" in fmt
-    assert "fmtCacheBytes(" in stats
+    assert "fmtCacheBytes(" in knowledge
     assert "fmtCacheBytes(" in purge
 
 
@@ -2877,9 +2898,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=211"' in html
-    assert 'src="/app.js?v=299"' in html
-    assert 'dav-shell-v168' in sw
+    assert 'href="/style.css?v=212"' in html
+    assert 'src="/app.js?v=300"' in html
+    assert 'dav-shell-v169' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -3410,7 +3431,7 @@ def test_ima_pending_save_uses_session_owner_across_stats_reentry_but_logout_inv
     assert guard < mutation
     post_put = save[put:save.index("} catch", put)]
     assert "generation !== imaMountState.generation" not in post_put
-    assert "loadAdminStats(routeRenderSeq, savedImaStatus)" in post_put
+    assert "reloadAdminSettingsPage(routeRenderSeq, savedImaStatus)" in post_put
     assert clear.index("imaMountState.saveOwner = null") < clear.index("imaMountState.sessionGeneration += 1")
 
 
@@ -3776,7 +3797,7 @@ def test_sidebar_has_slim_toggle_matching_rail():
 
 def test_ima_mount_settings_use_two_panes_and_lazy_folder_api():
     src = APP_JS.read_text()
-    stats = _fn_body("loadAdminStats")
+    stats = _fn_body("loadAdminKnowledge")
     assert 'class="ima-mount-layout"' in stats
     assert 'id="ima-kb-list"' in stats
     assert 'id="ima-folder-tree"' in stats
@@ -3847,7 +3868,7 @@ def test_ima_collector_save_tracks_focus_moves_through_stats_reload():
     assert "event.target !== document.body" in save
     assert 'document.addEventListener("focusin", onFocusIn)' in save
     assert 'document.removeEventListener("focusin", onFocusIn)' in save
-    reload_index = save.index("await loadAdminStats(routeSeq, savedImaStatus)")
+    reload_index = save.index("await reloadAdminSettingsPage(routeSeq, savedImaStatus)")
     post_reload_guard = save.index("!focusMoved", reload_index)
     assert post_reload_guard > reload_index
     assert "if (!focusMoved" in save[reload_index:]
@@ -3856,7 +3877,7 @@ def test_ima_collector_save_tracks_focus_moves_through_stats_reload():
 def test_ima_collector_save_decides_focus_after_stats_reload_await():
     """restoreFocus 判定必须发生在 stats reload 完成后，而非 reload 前。"""
     save = _fn_body("saveImaCollector")
-    reload_index = save.index("await loadAdminStats(routeSeq, savedImaStatus)")
+    reload_index = save.index("await reloadAdminSettingsPage(routeSeq, savedImaStatus)")
     restore_index = save.index("const restoreFocus =")
     assert restore_index > reload_index
     assert "const restoreFocus =" not in save[:reload_index]
@@ -3888,3 +3909,37 @@ def test_ima_collector_storage_status_text_contract():
         "}"
     )
     subprocess.run(["node", "-e", js], check=True)
+
+
+def test_knowledge_settings_nav_and_empty_state():
+    src = APP_JS.read_text()
+    assert '{ route: "admin/knowledge"' in src
+    assert 'label: "知识库设置"' in src
+    assert "knowledge: loadAdminKnowledge" in _fn_body("renderAdmin")
+    assert "go('admin/knowledge')" in _fn_body("renderKnowledge")
+    assert "admin/stats?tab=config" not in _fn_body("renderKnowledge")
+    stats = _fn_body("loadAdminStats")
+    assert "知识库设置" in stats
+    assert "go('admin/knowledge')" in stats
+    assert "IMA 与知识星球设置已移至" in stats
+
+
+def test_knowledge_settings_storage_and_phone_sync_blocks():
+    knowledge = _fn_body("loadAdminKnowledge")
+    assert "ima_phone_sync.command" in knowledge
+    assert "Refresh Token" in knowledge
+    assert 'id="ima-storage-status"' in _fn_body("imaStoragePanelHtml")
+    assert "refreshImaStorage()" in _fn_body("imaStoragePanelHtml")
+    assert "backupImaStorage()" in _fn_body("imaStoragePanelHtml")
+    assert "立即备份" in _fn_body("imaStoragePanelHtml")
+    assert "刷新状态" in _fn_body("imaStoragePanelHtml")
+
+
+def test_save_polling_splits_zsxq_fields():
+    polling = _fn_body("savePollingConfig")
+    zsxq = _fn_body("saveZsxqPollingConfig")
+    for key in ("zsxq_max_pages", "zsxq_fetch_delay_seconds", "zsxq_file_delay_seconds",
+                "zsxq_prefetch_files", "zsxq_fetch_comments", "zsxq_app_channel"):
+        assert key not in polling
+        assert key in zsxq
+    assert 'id="pc-zq-save"' in _fn_body("loadAdminKnowledge")
