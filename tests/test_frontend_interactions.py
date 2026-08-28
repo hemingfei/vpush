@@ -1307,7 +1307,7 @@ def test_ima_collector_save_clears_only_matching_mount_revision():
     toggle = _fn_body("toggleImaFolder")
     save = _fn_body("saveImaCollector")
     assert "revision: 0" in APP_JS.read_text(encoding="utf-8")
-    assert "if (!preserve) imaMountState.revision += 1" in init
+    assert "if (!preserve && !imaMountState.saveOwner) imaMountState.revision += 1" in init
     assert "imaMountState.revision += 1" in toggle
     assert "const mountRevision = imaMountState.revision" in save
     assert "const mountRevision = imaMountState.revision" in save
@@ -1316,6 +1316,18 @@ def test_ima_collector_save_clears_only_matching_mount_revision():
     assert "imaMountState.dirty = false" in save
     assert save.index("await loadAdminStats(routeSeq)") < save.index("imaMountState.dirty = false")
 
+
+def test_ima_collector_save_cleanup_requires_current_form_and_mount_revision():
+    """表单回到原值但目录版本已变化时，不得清理保存草稿、dirty 或 token。"""
+    save = _fn_body("saveImaCollector")
+    reload_index = save.index("await loadAdminStats(routeSeq)")
+    guard_index = save.index("const noNewerEditsAfterReload")
+    clear_index = save.index("clearImaCollectorDraft(saveOwner.formRevision)")
+    assert guard_index > reload_index
+    assert "const mountStillCurrentAfterReload = imaMountState.revision === saveOwner.mountRevision;" in save
+    assert "const noNewerEditsAfterReload = formStillCurrentAfterReload && mountStillCurrentAfterReload && liveRevision === saveOwner.formRevision;" in save
+    assert guard_index < clear_index
+    assert save.index("mountStillCurrentAfterReload", guard_index) < clear_index
 
 def test_ima_collector_save_failure_flash_is_route_owned():
     """离开 stats 后返回的旧 PUT 失败不得把错误 toast 显示到当前页面。"""

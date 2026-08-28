@@ -5221,7 +5221,7 @@ function initImaMountState(groups, preserve = false) {
   imaMountState.discoveryBusy = false;
   imaMountState.discoveryOwner = null;
   imaMountState.generation += 1;
-  if (!preserve) imaMountState.revision += 1;
+  if (!preserve && !imaMountState.saveOwner) imaMountState.revision += 1;
   imaMountState.dirty = preserve ? oldDirty : false;
   if (!preserve) imaMountState.discoveryEntered = false;
   const available = new Set(imaMountState.groups.map((group) => String(group.id)));
@@ -6765,7 +6765,8 @@ async function saveImaCollector() {
     const liveRevision = saveOwner.liveSnapshot
       ? imaCollectorFormRevision(saveOwner.liveSnapshot) : saveOwner.formRevision;
     const formStillCurrentAfterReload = !saveOwner.liveSnapshot || reloadedRevision === liveRevision;
-    const noNewerEditsAfterReload = formStillCurrentAfterReload && liveRevision === saveOwner.formRevision;
+    const mountStillCurrentAfterReload = imaMountState.revision === saveOwner.mountRevision;
+    const noNewerEditsAfterReload = formStillCurrentAfterReload && mountStillCurrentAfterReload && liveRevision === saveOwner.formRevision;
     if (noNewerEditsAfterReload) {
       clearImaCollectorDraft(saveOwner.formRevision);
       imaMountState.dirty = false;
