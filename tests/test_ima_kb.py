@@ -1030,6 +1030,42 @@ def test_admin_ima_put_clears_manifest_for_omitted_groups(tmp_path, monkeypatch)
     assert [record["media_id"] for record in service.store.load_manifest()] == ["file-b"]
 
 
+def test_admin_ima_put_clears_stale_manifest_for_omitted_disabled_group(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "ima-omitted-disabled.sqlite"))
+    headers = _headers(client, "omitted_disabled_admin", "OMITTEDDIS", admin=True)
+    db = client.app.state.db
+    service = client.app.state.ima_documents
+    db.set_setting(IMA_PURE_GROUPS_KEY, json.dumps([
+        {
+            "id": "group-a", "name": "资料 A", "knowledge_base_id": "kb-a",
+            "root_folder_id": "root-a", "folder_ids": [], "enabled": False,
+            "source": "manual",
+        },
+        {
+            "id": "group-b", "name": "资料 B", "knowledge_base_id": "kb-b",
+            "root_folder_id": "root-b", "folder_ids": ["folder-b"], "enabled": True,
+            "source": "manual",
+        },
+    ], ensure_ascii=False))
+    service.store.save_manifest([
+        {"media_id": "stale-a", "name": "a.pdf", "group_id": "group-a"},
+    ])
+
+    response = client.put(
+        "/api/admin/ima-collector",
+        headers=headers,
+        json={"groups": [{
+            "id": "group-b", "name": "资料 B", "knowledge_base_id": "kb-b",
+            "root_folder_id": "root-b", "folder_ids": ["folder-b"], "enabled": True,
+        }]},
+    )
+    assert response.status_code == 200, response.text
+    saved = json.loads(db.get_setting(IMA_PURE_GROUPS_KEY))
+    assert [group["id"] for group in saved] == ["group-b"]
+    assert service.store.load_manifest() == []
+
+
 def test_admin_ima_discover_failure_keeps_previous_groups(tmp_path, monkeypatch):
     monkeypatch.setenv("DAV_UI_ONLY", "1")
     client = TestClient(create_app(db_path=tmp_path / "ima-discover-fail.sqlite"))

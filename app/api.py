@@ -2878,7 +2878,7 @@ def create_api_router(
                 clear_group_ids.extend(
                     group_id
                     for group_id, previous in existing.items()
-                    if group_id not in group_ids and previous.mount_folder_ids
+                    if group_id not in group_ids
                 )
                 updates[IMA_PURE_GROUPS_KEY] = json.dumps(groups, ensure_ascii=False)
                 audit_parts.append(f"groups_count={len(group_ids)};group_ids={','.join(group_ids)}")
