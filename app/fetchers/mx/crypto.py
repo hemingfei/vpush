@@ -110,6 +110,8 @@ def try_decrypt_with_keys(
     Returns:
         解密后的数据（JSON解析后），失败返回 None
     """
+    import base64
+    
     if key_offsets is None:
         key_offsets = [0, -1, 1]
     
@@ -123,7 +125,8 @@ def try_decrypt_with_keys(
             if not decompressed:
                 continue
             
-            ciphertext = decompressed.encode("utf-8")
+            # The decompressed string is Base64-encoded, decode it!
+            ciphertext = base64.b64decode(decompressed)
             plaintext = aes_decrypt(ciphertext, key, iv)
             result = json.loads(plaintext.decode("utf-8"))
             logger.debug(f"Successfully decrypted with offset {offset}")
