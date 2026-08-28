@@ -175,6 +175,25 @@ def test_catalog_hides_ungranted_groups_from_users(tmp_path):
     assert readable_group_ids(db, admin, _groups()) == {"banking", "macro"}
 
 
+def test_catalog_endpoint_reads_config_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "catalog-snapshot.sqlite"))
+    headers = _headers(client, "catalog_snapshot_admin", "CATALOGSNAP", admin=True)
+    service = client.app.state.ima_documents
+    original_config = service.config
+    calls = 0
+
+    def config():
+        nonlocal calls
+        calls += 1
+        return original_config()
+
+    monkeypatch.setattr(service, "config", config)
+    response = client.get("/api/ima-documents/catalog", headers=headers)
+    assert response.status_code == 200, response.text
+    assert calls == 1
+
+
 def test_attach_catalog_stats_uses_latest_mmdd_title():
     listed = {
         "subscribed": [{"id": "banking", "name": "投行研报", "enabled": True}],
@@ -972,6 +991,43 @@ def test_admin_ima_put_rejects_invalid_folder_ids(tmp_path, monkeypatch, folder_
         }]
     })
     assert response.status_code == 400, response.text
+
+
+def test_admin_ima_put_clears_manifest_for_omitted_groups(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "ima-omitted.sqlite"))
+    headers = _headers(client, "omitted_group_admin", "OMITTED1", admin=True)
+    db = client.app.state.db
+    service = client.app.state.ima_documents
+    db.set_setting(IMA_PURE_GROUPS_KEY, json.dumps([
+        {
+            "id": "group-a", "name": "资料 A", "knowledge_base_id": "kb-a",
+            "root_folder_id": "root-a", "folder_ids": ["folder-a"], "enabled": True,
+            "source": "manual",
+        },
+        {
+            "id": "group-b", "name": "资料 B", "knowledge_base_id": "kb-b",
+            "root_folder_id": "root-b", "folder_ids": ["folder-b"], "enabled": True,
+            "source": "manual",
+        },
+    ], ensure_ascii=False))
+    service.store.save_manifest([
+        {"media_id": "file-a", "name": "a.pdf", "group_id": "group-a"},
+        {"media_id": "file-b", "name": "b.pdf", "group_id": "group-b"},
+    ])
+
+    response = client.put(
+        "/api/admin/ima-collector",
+        headers=headers,
+        json={"groups": [{
+            "id": "group-b", "name": "资料 B", "knowledge_base_id": "kb-b",
+            "root_folder_id": "root-b", "folder_ids": ["folder-b"], "enabled": True,
+        }]},
+    )
+    assert response.status_code == 200, response.text
+    saved = json.loads(db.get_setting(IMA_PURE_GROUPS_KEY))
+    assert [group["id"] for group in saved] == ["group-b"]
+    assert [record["media_id"] for record in service.store.load_manifest()] == ["file-b"]
 
 
 def test_admin_ima_discover_failure_keeps_previous_groups(tmp_path, monkeypatch):

@@ -2560,8 +2560,10 @@ def create_api_router(
 
     @router.get("/ima-documents/catalog")
     def ima_documents_catalog(user: dict = Depends(get_current_user)):
-        listed = ima_kb_catalog(db, user, _configured_groups())
-        documents = ima_documents.store.catalog_entries(groups=_configured_groups())
+        with ima_documents.config_lock:
+            groups = _configured_groups()
+        listed = ima_kb_catalog(db, user, groups)
+        documents = ima_documents.store.catalog_entries(groups=groups)
         return attach_catalog_acl(attach_catalog_stats(listed, documents), db, user)
 
     @router.post("/ima-documents/groups/{group_id}/subscribe")
@@ -2873,6 +2875,11 @@ def create_api_router(
                             "source": previous.source if previous else "manual",
                         }
                     )
+                clear_group_ids.extend(
+                    group_id
+                    for group_id, previous in existing.items()
+                    if group_id not in group_ids and previous.mount_folder_ids
+                )
                 updates[IMA_PURE_GROUPS_KEY] = json.dumps(groups, ensure_ascii=False)
                 audit_parts.append(f"groups_count={len(group_ids)};group_ids={','.join(group_ids)}")
                 if updates:
