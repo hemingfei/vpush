@@ -1,6 +1,7 @@
 """MX platform fetcher."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -88,21 +89,29 @@ class MxFetcher(Fetcher):
         启动 WebSocket 连接并监听实时消息。
         
         Args:
-            on_message: 回调函数，当收到新消息时调用
+            on_message: 回调函数，当收到新消息时调用（可以是异步函数）
         """
         if not self._ws_enabled:
             logger.info("MX WebSocket is disabled")
             return
 
-        def on_raw_message(raw_msg):
+        async def on_raw_message(raw_msg):
             try:
                 post = self._parse_message_to_post(raw_msg)
                 if post:
-                    on_message(post)
+                    if asyncio.iscoroutinefunction(on_message):
+                        await on_message(post)
+                    else:
+                        on_message(post)
             except Exception as e:
                 logger.error(f"Failed to process MX WebSocket message: {e}", exc_info=True)
 
-        self.ws_client = MxWsClient(self.config, on_raw_message)
+        # 为了让 ws.py 能调用异步回调，我们需要一个包装器
+        def _on_raw_message(raw_msg):
+            # 在新的任务中运行异步回调，避免阻塞事件循环
+            asyncio.create_task(on_raw_message(raw_msg))
+
+        self.ws_client = MxWsClient(self.config, _on_raw_message)
         await self.ws_client.run_forever()
 
     async def stop_ws(self):
@@ -122,9 +131,10 @@ class MxFetcher(Fetcher):
             Post 对象或 None
         """
         try:
-            room_id = raw_msg.get("rid")
+            # 尝试多种方式获取 room_id
+            room_id = raw_msg.get("rid") or raw_msg.get("room_id")
             if not room_id:
-                logger.warning("MX message missing room id")
+                logger.warning(f"MX message missing room id: {raw_msg}")
                 return None
 
             # 获取 KOL 信息
@@ -134,23 +144,32 @@ class MxFetcher(Fetcher):
                 logger.warning(f"MX room {room_id} not found")
                 return None
 
-            # 解析消息内容
-            content, images = self._parse_msg_content(raw_msg.get("msg", ""))
+            # 尝试多种方式获取 msg 字段
+            msg_field = raw_msg.get("msg") or raw_msg.get("message") or ""
+            content, images = self._parse_msg_content(msg_field)
+            
+            # 如果没有内容，尝试从其他字段获取
             if not content and not images:
-                # 尝试从其他字段获取内容
+                # 尝试直接解密内容
                 content = decrypt_content(raw_msg) or ""
                 if not content and not images:
-                    return None
+                    # 还是没内容，尝试把整个消息的 JSON 作为内容
+                    content = json.dumps(raw_msg, ensure_ascii=False)
+
+            # 尝试多种方式获取消息 ID
+            msg_id = raw_msg.get("id") or raw_msg.get("msgid") or raw_msg.get("msg_id")
+            # 尝试多种方式获取创建时间
+            createtime = raw_msg.get("createtime") or raw_msg.get("created_at") or raw_msg.get("ts")
 
             return Post(
                 platform=self.platform,
                 kol_id=kol["id"],
                 kol_name=kol["name"],
-                external_id=str(raw_msg.get("id", "")),
+                external_id=str(msg_id) if msg_id else "",
                 title="",
                 content=content,
                 url="",
-                published_at=self._format_published_at(raw_msg.get("createtime")),
+                published_at=self._format_published_at(createtime),
                 post_type="post",
                 images=images,
                 detail=raw_msg,
@@ -174,7 +193,7 @@ class MxFetcher(Fetcher):
 
         # 从数据库查询
         if self.db:
-            kol = self.db.get_kol_by_platform("mx", str(room_id))
+            kol = self.db.get_kol_by_external("mx", str(room_id))
             if kol:
                 self._room_cache[room_id] = kol
                 return kol

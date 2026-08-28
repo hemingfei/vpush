@@ -16,10 +16,12 @@ logger = logging.getLogger(__name__)
 class MxWsClient:
     """MX Socket.IO WebSocket client."""
 
+    NAMESPACE = "/msg"
+
     def __init__(self, config: Any, on_message_callback: Callable[[dict], None]):
         """
         Initialize MX WebSocket client.
-        
+
         Args:
             config: MX configuration object
             on_message_callback: Callback function when a new message is received
@@ -37,25 +39,39 @@ class MxWsClient:
         try:
             import socketio
 
-            self._sio = socketio.AsyncClient(logger=logger, engineio_logger=logger)
+            # 使用与 chat-monitor 一致的配置
+            self._sio = socketio.AsyncClient(
+                logger=logger,
+                engineio_logger=logger,
+                reconnection=True,
+                reconnection_delay=1000,
+                reconnection_delay_max=5000
+            )
 
-            @self._sio.event
+            @self._sio.event(namespace=self.NAMESPACE)
             async def connect():
                 logger.info("MX WebSocket connected")
                 self.connected = True
 
-            @self._sio.event
+            @self._sio.event(namespace=self.NAMESPACE)
             async def disconnect():
                 logger.info("MX WebSocket disconnected")
                 self.connected = False
 
-            @self._sio.event
+            @self._sio.event(namespace=self.NAMESPACE)
             async def connect_error(data):
-                logger.error(f"MX WebSocket connection error: {data}")
+                logger.error(f"MX WebSocket connect_error: {data}")
 
-            @self._sio.on('room_msg')
+            @self._sio.on('room_msg', namespace=self.NAMESPACE)
             async def on_room_msg(data):
                 await self._handle_message(data)
+
+            # 添加兜底捕获所有事件
+            @self._sio.on('*', namespace=self.NAMESPACE)
+            async def catch_all(event, data):
+                if event not in ['connect', 'disconnect', 'connect_error', 'room_msg']:
+                    logger.debug(f"Received MX WebSocket event {self.NAMESPACE}: {event}")
+                    await self._handle_message(data)
 
             auth = {
                 "tt": int(time.time() * 1000),
@@ -63,17 +79,21 @@ class MxWsClient:
                 "version": "web",
             }
 
-            logger.info(f"Connecting to MX WebSocket at {self.config.ws_url}, path={self.config.ws_path}")
+            logger.info(
+                f"Connecting to MX WebSocket at {self.config.ws_url}, "
+                f"path={self.config.ws_path}, namespace={self.NAMESPACE}"
+            )
             await self._sio.connect(
                 self.config.ws_url,
                 socketio_path=self.config.ws_path,
-                transports=["websocket", "polling"],  # Allow both transports for better compatibility
+                transports=["websocket"],  # 与 chat-monitor 一致，仅使用 websocket
                 auth=auth,
-                wait_timeout=30
+                wait_timeout=60,
+                namespaces=[self.NAMESPACE]
             )
 
         except Exception as e:
-            logger.error(f"Failed to connect to MX WebSocket: {e}")
+            logger.error(f"Failed to connect to MX WebSocket: {e}", exc_info=True)
             raise
 
     async def disconnect(self):
@@ -85,7 +105,7 @@ class MxWsClient:
     async def _handle_message(self, data):
         """
         Handle incoming WebSocket message.
-        
+
         Args:
             data: Message data (could be encrypted or plain JSON)
         """
@@ -97,49 +117,63 @@ class MxWsClient:
             if message:
                 self.on_message(message)
         except Exception as e:
-            logger.error(f"Failed to handle MX WebSocket message: {e}")
+            logger.error(f"Failed to handle MX WebSocket message: {e}", exc_info=True)
 
     def _parse_message(self, data) -> dict | None:
         """
-        Parse incoming WebSocket message.
+        Parse incoming WebSocket message, following chat-monitor's logic.
 
-        Handles various message formats:
-        - Plain JSON object (case A)
-        - Encrypted string (case B)
-        - Wrapped object with content field (case C)
-        
         Args:
             data: Raw message data
-            
+
         Returns:
             Parsed message object or None if parsing failed
         """
-        if isinstance(data, dict):
-            if "content" in data:
-                # Case C: Wrapped object
-                encrypted = data["content"]
-                decrypted = decrypt_ws_data(encrypted)
-                if decrypted and isinstance(decrypted, dict):
-                    return decrypted
-                return None
-            else:
-                # Case A: Direct JSON
-                return data
+        parsed = None
 
         if isinstance(data, str):
-            # Case B: Encrypted string
-            decrypted = decrypt_ws_data(data)
-            if decrypted and isinstance(decrypted, dict):
-                return decrypted
-            # Try to parse as plain JSON string
+            # Try to parse directly as JSON first
             try:
-                return json.loads(data)
+                parsed = json.loads(data)
             except json.JSONDecodeError:
-                logger.warning(f"Failed to parse MX message as JSON: {data}")
-                return None
+                # If that fails, try to decrypt with WebSocket key
+                decrypted = decrypt_ws_data(data)
+                if decrypted:
+                    if isinstance(decrypted, dict):
+                        parsed = decrypted
+                    else:
+                        try:
+                            parsed = json.loads(decrypted)
+                        except json.JSONDecodeError:
+                            parsed = {"raw": data, "decrypted": decrypted}
+                else:
+                    logger.warning(f"Failed to parse or decrypt MX string message: {data[:100]}")
 
-        logger.warning(f"Unexpected MX message type: {type(data)}")
-        return None
+        elif isinstance(data, dict):
+            # Check for encrypted content or data field
+            if "content" in data and isinstance(data["content"], str) and len(data["content"]) > 50:
+                decrypted = decrypt_ws_data(data["content"])
+                if decrypted:
+                    try:
+                        parsed = json.loads(decrypted)
+                    except json.JSONDecodeError:
+                        parsed = {**data, "decryptedContent": decrypted}
+            elif "data" in data and isinstance(data["data"], str):
+                decrypted = decrypt_ws_data(data["data"])
+                if decrypted:
+                    try:
+                        parsed = json.loads(decrypted)
+                    except json.JSONDecodeError:
+                        parsed = {**data, "decryptedData": decrypted}
+            else:
+                parsed = data
+
+        if parsed is None:
+            parsed = {"raw": data}
+
+        # Add received timestamp
+        parsed["_receivedAt"] = datetime.now().isoformat()
+        return parsed
 
     async def run_forever(self):
         """
@@ -155,11 +189,11 @@ class MxWsClient:
                 # Sleep and let the Socket.IO client handle events
                 await self._sio.wait()
             except Exception as e:
-                logger.error(f"MX WebSocket error: {e}, reconnecting in 5 seconds...")
+                logger.error(f"MX WebSocket error: {e}, reconnecting in 5 seconds...", exc_info=True)
                 self.connected = False
 
                 if not self._should_stop:
-                    await asyncio.sleep(5)  # Use asyncio.sleep instead of time.sleep!
+                    await asyncio.sleep(5)
 
     async def stop(self):
         """Stop the WebSocket client."""

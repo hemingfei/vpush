@@ -1900,19 +1900,21 @@ class Scheduler:
                 async def on_mx_message(post: Post):
                     """处理 MX 实时消息，直接推送。"""
                     try:
-                        post_id = self.db.save_post(post)
-                        if post_id:
-                            await asyncio.to_thread(
-                                notify_subscribers,
-                                self.db,
-                                post_id,
-                                post,
-                                self.notifiers_config,
-                                self.notifiers,
-                                self.retry_queue,
-                                dnd_buffer=self._dnd_buffer,
-                                secondary_buffer=self._secondary_buffer,
-                            )
+                        # 把数据库操作放在单独线程中，避免事务冲突
+                        def _save_and_notify():
+                            post_id = self.db.save_post(post)
+                            if post_id:
+                                notify_subscribers(
+                                    self.db,
+                                    post_id,
+                                    post,
+                                    self.notifiers_config,
+                                    self.notifiers,
+                                    self.retry_queue,
+                                    dnd_buffer=self._dnd_buffer,
+                                    secondary_buffer=self._secondary_buffer,
+                                )
+                        await asyncio.to_thread(_save_and_notify)
                     except Exception as e:
                         logger.error(f"Failed to process MX real-time message: {e}", exc_info=True)
                 
