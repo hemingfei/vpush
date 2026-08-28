@@ -1,7 +1,7 @@
 # IMA 远程 HDD 存储设计
 
 日期：2026-08-28
-状态：已确认，待书面规格复核
+状态：已确认，待用户审核
 
 ## 1. 目标与范围
 
@@ -148,16 +148,23 @@ IMA_STORAGE_STATUS_PATH=/data/ima_storage_status.json
 
 ### 6.1 状态探测
 
-主 VPS 的 systemd timer 每 60 秒执行独立探测：
+存储 VPS 的 systemd timer 每 5 分钟生成 `/srv/vpush-ima/.vpush-storage-health.json`，内容包括：
 
-- WireGuard peer 最近握手时间。
-- NFS TCP 2049 可达。
-- 挂载点和 `.vpush-ima-root` 可读。
-- NFS 文件系统不是只读。
 - HDD 使用率和 inode 使用率。
+- NFS 导出目录是否可写。
 - `vnstat` 当月出站流量。
+- 最近一次 Restic 成功时间和最近一次 Restic check 结果。
+- 可获得时的 SMART 状态；否则记录内核块设备 I/O、ext4 和只读重挂载错误。
 
-探测结果原子写入本地：
+主 VPS 的 systemd timer 每 60 秒执行：
+
+- 检查 WireGuard peer 最近握手时间。
+- 检查 NFS TCP 2049 可达。
+- 检查挂载点和 `.vpush-ima-root` 可读。
+- 读取远端 `.vpush-storage-health.json` 并确认不超过 10 分钟。
+- 根据远端容量、inode、流量和备份值计算告警及下载阻断状态。
+
+主 VPS 将汇总结果原子写入本地：
 
 ```json
 {
@@ -167,6 +174,7 @@ IMA_STORAGE_STATUS_PATH=/data/ima_storage_status.json
   "used_percent": 23,
   "inode_percent": 4,
   "monthly_tx_bytes": 123456789,
+  "capacity_blocked": false,
   "reason": ""
 }
 ```
@@ -180,7 +188,7 @@ IMA_STORAGE_STATUS_PATH=/data/ima_storage_status.json
 - IMA 同步在不可用、只读或容量阻断状态下跳过本轮，不清 manifest/state，不落到主 VPS 的空目录。
 - `restore_original_filenames`、`rebuild_manifest_from_state`、全量 retag 等会访问归档的启动任务，在归档不可用时跳过并记录一次脱敏警告。
 - `/healthz` 继续反映核心 V Push 健康，不因知识库存储失败而失败。
-- 增加独立 IMA 存储状态到管理员采集状态；可提供无敏感信息的独立健康检查供外部监控使用。
+- 增加独立 IMA 存储状态到管理员采集状态；`GET /healthz/ima-storage` 仅返回状态、检查时间和非敏感原因，供外部监控使用。
 - 状态从失败恢复后，读请求和下一轮同步自动恢复。
 
 ### 6.3 NFS 挂载语义
@@ -194,7 +202,7 @@ rsize=1048576,wsize=1048576,noatime,_netdev,nofail
 
 `soft` 是针对可恢复归档的明确取舍，不得复用于数据库、manifest/state 或其他不可重建数据。写入失败时 `.part` 不登记为完成；读取中断只使当次请求失败。
 
-主 VPS 开机时 NFS 不可用，V Push 仍可绑定一个无标记、不可写的本地占位目录启动。挂载恢复后由 host watcher 必要时重启一次 V Push，使 Docker bind mount 看到真实 NFS；正常运行中短暂断线恢复不要求重启。
+主 VPS 开机时 NFS 不可用，V Push 绑定一个无标记、不可写的本地占位目录启动。host watcher 记录容器是以占位目录启动；随后检测到 NFS 首次从不可用变为可用时，自动执行一次 `docker compose restart vpush`，成功后清除该标记。正常运行中短暂断线并在原挂载上恢复时不重启。
 
 ## 7. 存储 VPS 配置
 
