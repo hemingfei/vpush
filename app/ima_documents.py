@@ -1381,24 +1381,27 @@ class ImaDocumentStore:
                 normalized.append(item)
             self.save_manifest(kept + normalized)
 
+    def _save_state_locked(self, state: dict[str, dict[str, Any]]) -> None:
+        disk = self._load(self.state_path, {})
+        if not isinstance(disk, dict):
+            disk = {}
+        outgoing: dict[str, dict[str, Any]] = {}
+        for key, item in state.items():
+            merged = dict(item) if isinstance(item, dict) else {}
+            existing = disk.get(key)
+            if (
+                isinstance(existing, dict)
+                and not merged.get("abstract_zh")
+                and existing.get("abstract_zh")
+            ):
+                merged["abstract_zh"] = existing["abstract_zh"]
+                merged["abstract_src_hash"] = existing.get("abstract_src_hash") or ""
+            outgoing[key] = merged
+        self._save(self.state_path, outgoing)
+
     def save_state(self, state: dict[str, dict[str, Any]]) -> None:
         with self._state_lock:
-            disk = self._load(self.state_path, {})
-            if not isinstance(disk, dict):
-                disk = {}
-            outgoing: dict[str, dict[str, Any]] = {}
-            for key, item in state.items():
-                merged = dict(item) if isinstance(item, dict) else {}
-                existing = disk.get(key)
-                if (
-                    isinstance(existing, dict)
-                    and not merged.get("abstract_zh")
-                    and existing.get("abstract_zh")
-                ):
-                    merged["abstract_zh"] = existing["abstract_zh"]
-                    merged["abstract_src_hash"] = existing.get("abstract_src_hash") or ""
-                outgoing[key] = merged
-            self._save(self.state_path, outgoing)
+            self._save_state_locked(state)
 
     def _state_path(self, relative: Any) -> Path | None:
         if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
@@ -1704,18 +1707,19 @@ def ima_kb_valid_tags(db: Any) -> set[str]:
 
 
 def purge_ima_document_tags(store: ImaDocumentStore, valid_tags: set[str]) -> int:
-    state = store.load_state()
-    changed = 0
-    for item in state.values():
-        if not isinstance(item, dict):
-            continue
-        tags = [t for t in (item.get("tags") or []) if isinstance(t, str)]
-        kept = [t for t in tags if t in valid_tags]
-        if kept != tags:
-            item["tags"] = kept
-            changed += 1
-    if changed:
-        store.save_state(state)
+    with store._state_lock:
+        state = store.load_state()
+        changed = 0
+        for item in state.values():
+            if not isinstance(item, dict):
+                continue
+            tags = [t for t in (item.get("tags") or []) if isinstance(t, str)]
+            kept = [t for t in tags if t in valid_tags]
+            if kept != tags:
+                item["tags"] = kept
+                changed += 1
+        if changed:
+            store._save_state_locked(state)
     return changed
 
 

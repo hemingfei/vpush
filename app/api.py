@@ -2882,9 +2882,10 @@ def create_api_router(
                     audit_parts.extend(sorted(key for key in updates if key != IMA_PURE_GROUPS_KEY))
                     _audit(admin, "set_ima_collector", "", ";".join(audit_parts))
         elif updates:
-            db.set_settings_atomic(updates)
-            audit_parts.extend(sorted(key for key in updates if key != IMA_PURE_GROUPS_KEY))
-            _audit(admin, "set_ima_collector", "", ";".join(audit_parts))
+            with ima_documents.config_lock:
+                db.set_settings_atomic(updates)
+                audit_parts.extend(sorted(key for key in updates if key != IMA_PURE_GROUPS_KEY))
+                _audit(admin, "set_ima_collector", "", ";".join(audit_parts))
         return ima_documents.status()
 
     @router.post("/admin/ima-collector/sync", dependencies=[Depends(require_admin)])

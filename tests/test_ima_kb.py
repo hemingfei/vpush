@@ -66,6 +66,40 @@ def test_admin_ima_put_shares_service_config_lock(tmp_path, monkeypatch):
     assert saved[0]["folder_ids"] == ["new"]
 
 
+def test_admin_ima_scalar_put_shares_service_config_lock(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "ima-scalar-lock.sqlite"))
+    headers = _headers(client, "scalar_lock_admin", "SCALARLOCK", admin=True)
+    service = client.app.state.ima_documents
+    service.config_lock.acquire()
+    response_holder = {}
+    started = threading.Event()
+    finished = threading.Event()
+
+    def update():
+        started.set()
+        try:
+            response_holder["response"] = client.put(
+                "/api/admin/ima-collector",
+                headers=headers,
+                json={"uid": "new-uid"},
+            )
+        finally:
+            finished.set()
+
+    worker = threading.Thread(target=update)
+    worker.start()
+    try:
+        assert started.wait(5)
+        assert not finished.wait(0.1)
+    finally:
+        service.config_lock.release()
+    worker.join(5)
+    assert not worker.is_alive()
+    assert response_holder["response"].status_code == 200
+    assert client.app.state.db.get_setting("ima_pure_uid") == "new-uid"
+
+
 def test_tag_text_uses_vocab_and_stock_names():
     tags = tag_text(
         "宁德时代产业链点评",
@@ -466,6 +500,50 @@ def test_purge_ima_document_tags_keeps_valid_only(tmp_path):
     assert changed == 1
     assert store.load_state()[store.state_key(record)]["tags"] == ["新能源"]
     assert purge_ima_document_tags(store, {"新能源"}) == 0
+
+
+def test_purge_ima_document_tags_keeps_concurrent_state_write(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima-purge-race")
+    existing_key = "existing"
+    store.save_state({existing_key: {"tags": ["keep", "obsolete"]}})
+    read = threading.Event()
+    resume = threading.Event()
+    original_load_state = store.load_state
+
+    def paused_load_state():
+        read.set()
+        assert resume.wait(5)
+        return original_load_state()
+
+    store.load_state = paused_load_state
+    purge_result = {}
+    writer_done = threading.Event()
+
+    def purge():
+        purge_result["changed"] = purge_ima_document_tags(store, {"keep"})
+
+    def sync_write():
+        store.save_state({
+            existing_key: {"tags": ["keep", "obsolete"]},
+            "sync-entry": {"tags": ["keep"]},
+        })
+        writer_done.set()
+
+    purge_thread = threading.Thread(target=purge)
+    purge_thread.start()
+    assert read.wait(5)
+    writer_thread = threading.Thread(target=sync_write)
+    writer_thread.start()
+    assert not writer_done.wait(0.1)
+    resume.set()
+    purge_thread.join(5)
+    writer_thread.join(5)
+    assert not purge_thread.is_alive()
+    assert not writer_thread.is_alive()
+    assert purge_result["changed"] == 1
+    state = store.load_state()
+    assert state[existing_key]["tags"] == ["keep", "obsolete"]
+    assert state["sync-entry"]["tags"] == ["keep"]
 
 
 def test_ima_kb_valid_tags_keeps_bundled_universe_name(tmp_path):
