@@ -333,9 +333,10 @@ function _imaDocumentRoute(mediaId) {
   return `knowledge/${encodeURIComponent(mediaId).replace(/'/g, "%27")}`;
 }
 
-function imaDocumentReaderRoute(mediaId) {
+function imaDocumentReaderRoute(mediaId, groupId = "") {
+  const group = groupId || routeQuery().get("group") || state.imaDocumentsGroup || "";
   const listRoute = imaDocumentsRoute(
-    state.imaDocumentsGroup,
+    group,
     state.imaDocumentsQuery,
     state.imaDocumentsDay,
     state.imaDocumentsTag
@@ -345,10 +346,10 @@ function imaDocumentReaderRoute(mediaId) {
   return `${_imaDocumentRoute(mediaId)}${query}`;
 }
 
-function openImaDocument(mediaId) {
+function openImaDocument(mediaId, groupId = "") {
   const id = String(mediaId || "");
   if (!id) return;
-  const url = normalizeRoute(imaDocumentReaderRoute(id));
+  const url = normalizeRoute(imaDocumentReaderRoute(id, groupId));
   if (location.pathname + location.search !== url) history.pushState(null, "", url);
   if ($("#kb-workspace")) {
     renderImaDocument(routeRenderSeq, id);
@@ -591,7 +592,7 @@ function onKnowledgeListKey(e) {
   e.preventDefault();
   const row = rows[idx];
   row.focus();
-  openImaDocument(row.dataset.mediaId);
+  openImaDocument(row.dataset.mediaId, row.dataset.groupId);
 }
 
 function ensureKnowledgeKeys() {
@@ -813,7 +814,7 @@ function imaDocumentRow(item, showGroupLabel = false) {
   const rowTags = imaDistinctiveTags(item.tags);
   const tags = imaDocumentTagsHtml(rowTags, true);
   return `
-    <div class="ima-doc-row" role="button" tabindex="0" data-media-id="${escapeHtml(item.media_id)}" onclick="openImaDocument(this.dataset.mediaId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openImaDocument(this.dataset.mediaId)}">
+    <div class="ima-doc-row" role="button" tabindex="0" data-media-id="${escapeHtml(item.media_id)}" data-group-id="${escapeHtml(item.group_id || "")}" onclick="openImaDocument(this.dataset.mediaId, this.dataset.groupId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openImaDocument(this.dataset.mediaId, this.dataset.groupId)}">
       <span class="ima-doc-row-copy">
         <span class="ima-doc-row-name">${escapeHtml(item.name)}</span>
         ${groupLabel}
@@ -1077,14 +1078,19 @@ function refreshKnowledge() {
 }
 
 async function subscribeKnowledge(groupId, btn) {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   if (btn) btn.disabled = true;
   try {
     await api(`/api/ima-documents/groups/${encodeURIComponent(groupId)}/subscribe`, { method: "POST" });
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash("已订阅");
     rememberKnowledgeGroup(groupId);
     replaceImaDocumentsRoute(imaDocumentsRoute(groupId, "", "", ""));
     refreshKnowledge();
   } catch (err) {
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash(err.message || "订阅失败", "error");
     if (btn) btn.disabled = false;
   }
@@ -1093,14 +1099,19 @@ async function subscribeKnowledge(groupId, btn) {
 async function unsubscribeKnowledge(groupId, btn) {
   const name = btn?.dataset?.name || "这个知识库";
   if (!confirm(`退订后将无法打开「${name}」。确定退订？`)) return;
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   if (btn) btn.disabled = true;
   try {
     await api(`/api/ima-documents/groups/${encodeURIComponent(groupId)}/subscribe`, { method: "DELETE" });
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash("已退订");
     rememberKnowledgeGroup("");
     replaceImaDocumentsRoute(imaDocumentsRoute("", "", "", ""));
     refreshKnowledge();
   } catch (err) {
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash(err.message || "退订失败", "error");
     if (btn) btn.disabled = false;
   }

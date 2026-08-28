@@ -2603,15 +2603,61 @@ def test_ima_document_reader_route_preserves_list_filters_without_inline_query_i
     row = _fn_body("imaDocumentRow")
     route = _fn_body("imaDocumentReaderRoute")
     opener = _fn_body("openImaDocument")
-    assert "function imaDocumentReaderRoute(mediaId)" in src
+    assert "function imaDocumentReaderRoute(mediaId, groupId = \"\")" in src
     assert "state.imaDocumentsTag" in route
     assert "data-media-id=" in row
-    assert 'onclick="openImaDocument(this.dataset.mediaId)"' in row
+    assert "data-group-id=\"${escapeHtml(item.group_id || \"\")}\"" in row
+    assert 'onclick="openImaDocument(this.dataset.mediaId, this.dataset.groupId)"' in row
+    assert "openImaDocument(this.dataset.mediaId, this.dataset.groupId)" in row
     assert "_imaDocumentRoute(item.media_id)" not in row
-    assert "imaDocumentReaderRoute(id)" in opener
+    assert "imaDocumentReaderRoute(id, groupId)" in opener
     assert "history.pushState" in opener
     assert "renderImaDocument(routeRenderSeq, id)" in opener
     assert "++routeRenderSeq" not in opener
+
+
+def test_ima_document_row_group_scope_is_escaped_and_reaches_reader_route():
+    """全库列表的同名文档必须把所属库安全传给阅读路由。"""
+    src = APP_JS.read_text()
+    row = _fn_body("imaDocumentRow")
+    route = _fn_body("imaDocumentReaderRoute")
+    opener = _fn_body("openImaDocument")
+
+    assert 'data-group-id="${escapeHtml(item.group_id || "")}"' in row
+    assert row.count("this.dataset.groupId") >= 2
+    assert "function imaDocumentReaderRoute(mediaId, groupId = \"\")" in src
+    assert 'const group = groupId || routeQuery().get("group") || state.imaDocumentsGroup || "";' in route
+    assert "imaDocumentsRoute(" in route
+    assert route.index("group,") < route.index("state.imaDocumentsQuery")
+    assert "function openImaDocument(mediaId, groupId = \"\")" in src
+    assert "imaDocumentReaderRoute(id, groupId)" in opener
+
+
+def test_ima_knowledge_subscription_callbacks_require_current_session_owner():
+    """订阅异步响应在成功/失败副作用前都必须仍属于原路由和会话。"""
+    for name, success in (("subscribeKnowledge", "已订阅"), ("unsubscribeKnowledge", "已退订")):
+        body = _fn_body(name)
+        request = body.index("await api(")
+        prefix = body[:request]
+        for capture in (
+            "const routeSeq = routeRenderSeq",
+            "const token = state.token",
+            "const sessionGeneration = imaMountState.sessionGeneration",
+        ):
+            assert capture in prefix
+        owner_guard = "sessionOwnerStillActive(routeSeq, token, sessionGeneration)"
+        success_guard = body.index(owner_guard, request)
+        for side_effect in (
+            f'flash("{success}")',
+            "rememberKnowledgeGroup(",
+            "replaceImaDocumentsRoute(",
+            "refreshKnowledge()",
+        ):
+            assert success_guard < body.index(side_effect, request)
+        catch = body.index("} catch (err)", request)
+        error_guard = body.index(owner_guard, catch)
+        assert error_guard < body.index('flash(err.message ||', catch)
+        assert error_guard < body.index("btn.disabled = false", catch)
 
 
 def test_ima_document_reader_backroute_uses_detail_group_when_url_has_none():
