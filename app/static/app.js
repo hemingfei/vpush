@@ -5681,6 +5681,9 @@ async function loadAdminStats(seq = _adminRenderSeq) {
   const pendingCollectorDraft = imaMountState.collectorDraft;
   const preserveMountDraft = imaMountState.dirty
     && !(ownerIsCurrent && owner.putCompleted && !ownerHasNewerEdits);
+  const mountRevisionChangedDuringSave = ownerIsCurrent
+    && imaMountState.revision !== owner.mountRevision;
+  const preserveMountDraftForReload = preserveMountDraft || mountRevisionChangedDuringSave;
   const xq = s.xueqiu_cookie || {};
   const tw = s.twitter_cookie || {};
   const ima = s.ima_credentials || {};
@@ -6041,7 +6044,7 @@ async function loadAdminStats(seq = _adminRenderSeq) {
     <div id="st-proxies" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-proxies" style="display:none"></div>`;
   renderStatsData(s);
   if (collectorDraft) initImaMountState(collectorGroups, true);
-  else initImaMountState(pure.groups || [], preserveMountDraft);
+  else initImaMountState(pure.groups || [], preserveMountDraftForReload);
   renderImaMountGroups();
   restoreImaCollectorOwnerToken(owner, seq, pendingCollectorDraft);
   switchStatsTab(statsTabFromHash());

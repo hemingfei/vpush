@@ -1277,7 +1277,7 @@ def test_ima_collector_save_is_owned_by_initiating_route_and_preserves_drafts():
     assert re.search(r"async function loadAdminStats\(seq = _adminRenderSeq\)", src)
     assert "routeStillActive(seq)" in load
     assert "const preserveMountDraft = imaMountState.dirty" in load
-    assert "initImaMountState(pure.groups || [], preserveMountDraft)" in load
+    assert "initImaMountState(pure.groups || [], preserveMountDraftForReload)" in load
     assert "const routeSeq = routeRenderSeq" in save
     assert "const saveButton = $(\"#ima-collector-save\")" in save
     assert "saveButton.disabled = true" in save
@@ -1328,6 +1328,17 @@ def test_ima_collector_save_cleanup_requires_current_form_and_mount_revision():
     assert "const noNewerEditsAfterReload = formStillCurrentAfterReload && mountStillCurrentAfterReload && liveRevision === saveOwner.formRevision;" in save
     assert guard_index < clear_index
     assert save.index("mountStillCurrentAfterReload", guard_index) < clear_index
+
+
+def test_ima_stats_preserves_newer_mount_revision_before_mount_state_init():
+    """目录改动后即使表单回到原值，stats 重建也必须先按新版 revision 保留 draft。"""
+    load = _fn_body("loadAdminStats")
+    preserve_index = load.index("const preserveMountDraft")
+    init_index = load.index("initImaMountState(pure.groups || [], preserveMountDraftForReload)")
+    preserve_decision = load[preserve_index:init_index]
+    assert "imaMountState.revision !== owner.mountRevision" in preserve_decision
+    assert preserve_index < init_index
+
 
 def test_ima_collector_save_failure_flash_is_route_owned():
     """离开 stats 后返回的旧 PUT 失败不得把错误 toast 显示到当前页面。"""
