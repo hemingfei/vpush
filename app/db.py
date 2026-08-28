@@ -2568,10 +2568,10 @@ class DB:
                 if cur.rowcount == 0:
                     return None  # 唯一约束命中，帖子已存在
                 return cur.lastrowid
-            except sqlite3.IntegrityError:
-                # 并发下重复插入，视为已存在；回滚关闭隐式事务，避免悬空事务污染后续 BEGIN
-                self._conn.rollback()
-                return None
+        except sqlite3.IntegrityError:
+            # 并发下重复插入，视为已存在；回滚关闭隐式事务，避免悬空事务污染后续 BEGIN
+            self._conn.rollback()
+            return None
 
     def save_post(self, post) -> int | None:
         """保存单个 Post 对象，返回 post_id 或 None（已存在）。"""
