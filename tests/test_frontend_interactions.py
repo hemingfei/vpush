@@ -1080,6 +1080,31 @@ def test_ima_collector_full_form_draft_survives_owner_cleanup_and_stats_rebuild(
     assert 'document.addEventListener("change", imaCollectorDraftChanged)' in src
 
 
+def test_ima_confirmed_departed_save_reconciles_server_state_on_next_stats_load():
+    """离路成功保存的快照只等待下一次 stats 重建确认，服务端规范化值必须胜出。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    load = _fn_body("loadAdminStats")
+    save = _fn_body("saveImaCollector")
+
+    assert "collectorConfirmedRevision" in src
+    assert "collectorConfirmedRevision = saveOwner.formRevision" in save
+    mark = save.index("collectorConfirmedRevision = saveOwner.formRevision")
+    assert save.index("const formStillCurrent =", save.index("await api(")) < mark
+    assert save.index("const mountStillCurrent =", save.index("await api(")) < mark
+    confirmed = load.index("collectorConfirmedRevision")
+    render = load.index('$("#admin-body").innerHTML = `')
+    assert confirmed < render
+    assert "const confirmedCollectorDraft" in load
+    assert "const collectorDraft = confirmedCollectorDraft ? null" in load
+    assert "const collector = collectorDraft || pure" in load
+    cleanup = load.index("clearImaCollectorDraft", render)
+    assert cleanup > render
+    assert "collectorDraftRevision === imaMountState.collectorConfirmedRevision" in load
+    assert "imaMountState.collectorConfirmedRevision = \"\"" in load
+    assert "collectorRevision" in save
+    assert "imaMountState.revision === saveOwner.mountRevision" in save
+
+
 def test_ima_stats_failure_keeps_polling_and_exposes_route_owned_retry():
     """stats 首次/手动失败要留在当前页并可重试，不能丢掉原轮询。"""
     load = _fn_body("loadAdminStats")
