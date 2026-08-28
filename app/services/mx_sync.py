@@ -131,8 +131,19 @@ class MXRoomSyncService:
             except (json.JSONDecodeError, ValueError):
                 current_dict = {}
             
+            # Preserve existing enabled and show_in_plaza settings
+            preserved_enabled = current_dict.get("enabled")
+            preserved_show_in_plaza = current_dict.get("show_in_plaza")
+            
             # Merge
             current_dict.update(extra_data)
+            
+            # Restore preserved settings
+            if preserved_enabled is not None:
+                current_dict["enabled"] = preserved_enabled
+            if preserved_show_in_plaza is not None:
+                current_dict["show_in_plaza"] = preserved_show_in_plaza
+            
             new_extra = json.dumps(current_dict, ensure_ascii=False)
             
             # Update

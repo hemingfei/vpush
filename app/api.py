@@ -3329,7 +3329,7 @@ def create_api_router(
                 "msgtime": extra.get("msgtime", ""),
                 "createtime": extra.get("createtime", ""),
                 "star": bool(extra.get("star", False)),
-                "enabled": bool(extra.get("enabled", True)),
+                "enabled": bool(kol.get("enabled", True)),
                 "show_in_plaza": bool(extra.get("show_in_plaza", True)),
                 "subscriber_count": int(kol.get("subscriber_count", 0)),
                 "kol_id": kol["id"],
@@ -3367,6 +3367,7 @@ def create_api_router(
         
         if enabled is not None:
             extra["enabled"] = bool(enabled)
+            db.update_kol(kol["id"], enabled=bool(enabled))
         if show_in_plaza is not None:
             extra["show_in_plaza"] = bool(show_in_plaza)
         
