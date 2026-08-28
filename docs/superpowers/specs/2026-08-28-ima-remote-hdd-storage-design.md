@@ -1,7 +1,7 @@
 # IMA 远程 HDD 存储设计
 
 日期：2026-08-28
-状态：已确认，待用户审核
+状态：已确认，待实施
 
 ## 1. 目标与范围
 
@@ -183,8 +183,8 @@ IMA_STORAGE_STATUS_PATH=/data/ima_storage_status.json
 
 ### 6.2 应用行为
 
-- 普通知识库列表继续从本地 manifest/state 返回。
-- PDF/TXT 读取前检查归档状态；不可用时返回 HTTP 503 `知识库存储暂不可用`。
+- 普通知识库列表和文档详情元数据继续从本地 manifest/state 返回；`has_pdf`/`has_txt` 在元数据接口中只表示 state 存在相对路径，不对远端文件执行 `stat`。
+- PDF/TXT 读取路由先完成鉴权，再检查本地存储状态；只有状态可读时才解析远端路径并执行文件检查，不可用时返回 HTTP 503 `知识库存储暂不可用`。
 - IMA 同步在不可用、只读或容量阻断状态下跳过本轮，不清 manifest/state，不落到主 VPS 的空目录。
 - `restore_original_filenames`、`rebuild_manifest_from_state`、全量 retag 等会访问归档的启动任务，在归档不可用时跳过并记录一次脱敏警告。
 - `/healthz` 继续反映核心 V Push 健康，不因知识库存储失败而失败。
@@ -202,7 +202,7 @@ rsize=1048576,wsize=1048576,noatime,_netdev,nofail
 
 `soft` 是针对可恢复归档的明确取舍，不得复用于数据库、manifest/state 或其他不可重建数据。写入失败时 `.part` 不登记为完成；读取中断只使当次请求失败。
 
-主 VPS 开机时 NFS 不可用，V Push 绑定一个无标记、不可写的本地占位目录启动。host watcher 记录容器是以占位目录启动；随后检测到 NFS 首次从不可用变为可用时，自动执行一次 `docker compose restart vpush`，成功后清除该标记。正常运行中短暂断线并在原挂载上恢复时不重启。
+主 VPS 开机时 NFS 不可用，Docker 可以把现有空目录绑定到容器，V Push 以知识库不可用状态启动。main health watcher 发现“容器运行但宿主机不是 NFS mountpoint”时写入 `/run/vpush-ima-placeholder`；NFS 首次恢复后先完成真实挂载，再执行 `docker compose up -d --no-deps --force-recreate vpush` 重新建立 bind mount，验证容器存储健康后清除标记。正常运行中原 NFS mount 短暂断线并原地恢复时不重建容器。客户端不使用 systemd automount 或 idle unmount，避免与占位目录状态冲突。
 
 ## 7. 存储 VPS 配置
 
@@ -229,10 +229,12 @@ rsize=1048576,wsize=1048576,noatime,_netdev,nofail
 
 ### 7.2 NFS 权限
 
-- `/srv/vpush-ima` 属主为 UID 99、GID 100。
+- `/srv/vpush-ima` 属主为 UID 99、GID 100，目录 mode `0750`。
+- `.vpush-ima-root` 和 `.vpush-storage-health.json` 属主为 `99:100`、mode `0640`。
+- 主 VPS 本地 `ima_storage_status.json` 属主为 `99:100`、mode `0640`，保证 UID 99 的容器可读。
 - NFSv4 仅监听 WireGuard 地址。
 - 仅允许主 VPS `10.80.0.1`。
-- 导出使用 `rw,sync,root_squash,no_subtree_check`。
+- 导出使用 `rw,sync,all_squash,anonuid=99,anongid=100,no_subtree_check`，所有 NFS 数据操作统一映射到容器归档身份。
 - 公网防火墙不开放 TCP/UDP 2049。
 - SSH 只允许密钥登录；管理端口由防火墙限制。
 
@@ -249,7 +251,7 @@ rsize=1048576,wsize=1048576,noatime,_netdev,nofail
 - Restic 仓库密码、S3 key 使用 root-only `0600` 文件。
 - 默认压缩，上传限速约 20 MB/s，避免影响 NFS 阅读。
 - 保留 30 个每日快照。
-- 每周执行 `restic check --read-data-subset=5%`。
+- 主 VPS 与存储 VPS 的两个 Restic 仓库都每周执行 `restic check --read-data-subset=5%`；每次尝试都原子记录 `checked_at` 和 `ok=true/false`，保留 Restic 原始退出码，失败状态不得沿用上次成功结果。
 - 每月执行 `forget --keep-daily 30 --prune`，不每天 prune HDD。
 
 ### 8.2 主 VPS 备份
@@ -258,7 +260,7 @@ rsize=1048576,wsize=1048576,noatime,_netdev,nofail
 
 - SQLite 在线备份产物，不直接复制打开中的 `dav.db`。
 - `manifest.json`、`state.json`。
-- Compose、systemd 单元、WireGuard/NFS 配置和必要的部署配置。
+- Compose、生产 `.env`、生效中的 `config.yaml`、systemd 单元、WireGuard/NFS 配置和必要的部署配置。生产 `.env` 必须为 `root:root 0600`，控制备份在权限漂移时失败关闭；`.env` 与 WireGuard 配置只进入 Restic 客户端加密仓库，恢复抽检只校验文件存在、权限和 `FEISHU_CREDENTIAL_KEY` 非空，不输出值。
 
 主 VPS 与存储 VPS 使用独立 Restic snapshot 标签或 prefix，避免误删另一侧快照。
 
@@ -266,7 +268,7 @@ rsize=1048576,wsize=1048576,noatime,_netdev,nofail
 
 ### 8.3 恢复演练
 
-- 首次上线必须恢复随机 10 份 PDF/TXT 和一份索引快照，并校验哈希。
+- 首次上线必须恢复随机 10 份 PDF/TXT、一份索引快照和主 VPS 控制配置；校验文件哈希、权限，并确认恢复出的 `FEISHU_CREDENTIAL_KEY` 非空但不输出其值。
 - 每季度重复随机恢复抽检。
 - 每次迁移、扩容或 Restic 仓库变更后立即做恢复抽检。
 - 未通过恢复抽检前，不删除主 VPS 迁移前归档副本。
@@ -292,7 +294,7 @@ rsize=1048576,wsize=1048576,noatime,_netdev,nofail
 1. 停止 IMA 同步并停止 V Push。
 2. 创建 SQLite 在线备份和 manifest/state 副本。
 3. 执行第二轮增量 rsync。
-4. 使用 checksum dry-run 验证源和目标归档零差异。
+4. 验证 `/mnt/vpush-ima` 是真实 NFS mountpoint 且 `.vpush-ima-root` 属主/权限正确后，在停机状态执行一次带 `--delete` 的最终 rsync；排除两个存储标记文件，再用 checksum dry-run 验证源与目标归档零差异。
 5. 主 VPS 原目录整体保留为带时间戳的回滚副本；新建本地索引目录并放回 manifest/state。
 6. 挂载 NFS，设置 `IMA_ARCHIVE_ROOT=/data/ima-archive`，启动 V Push。
 
@@ -303,7 +305,7 @@ rsize=1048576,wsize=1048576,noatime,_netdev,nofail
 - `/healthz` 正常。
 - IMA 存储状态正常、可写、容量和流量数据有效。
 - 知识库列表、日期、标签和 ACL 与迁移前一致。
-- 随机 10 份 TXT/PDF 可读，支持 PDF Range 请求。
+- 随机 10 份 TXT/PDF 可读；认证后的 `Range: bytes=0-1023` PDF 请求必须返回 HTTP 206、正确 `Content-Range` 和恰好 1,024 字节。
 - 10 路并发读取无 5xx，记录首字节和完整下载时间。
 - 触发一个小范围 IMA 增量同步，文件只出现在远端归档，本地主 VPS归档不增长。
 - 阻断存储 VPS 后，IMA 文件接口在 NFS 有界重试后返回 503，核心 health、推送和其他 API 正常。
@@ -315,10 +317,13 @@ rsize=1048576,wsize=1048576,noatime,_netdev,nofail
 切换后 7 天内保留主 VPS 原归档。回滚：
 
 1. 停止 V Push 和 IMA 同步。
-2. 把远端新增文件增量 rsync 回本地回滚目录。
-3. 取消 `IMA_ARCHIVE_ROOT` 和远端 bind mount。
-4. 恢复本地单根目录并启动。
-5. 验证 health、文档读取和增量同步。
+2. 备份当前本地 `manifest.json`、`state.json` 和 SQLite；这些索引是切换后持续更新的权威版本。
+3. 使用显式 `--chown=99:100` 把远端新增文件增量 rsync 回本地回滚目录，并验证重建目录树全部归属 `99:100`。
+4. 用当前本地 manifest/state 覆盖回滚目录中的旧索引，并验证至少一条切换后新增记录仍能解析到已复制文件。
+5. 把当前 index-only `/opt/vpush/data/ima` 暂存到独立时间戳目录，把已重建的回滚目录原子移动为 `/opt/vpush/data/ima`。
+6. 取消 `IMA_ARCHIVE_ROOT` 和远端 bind mount，force-recreate V Push 并验证本地单根目录。
+7. 返回远端模式时停止 V Push，把单根目录移回原回滚路径，把暂存的 index-only 目录恢复为 `/opt/vpush/data/ima`，重新设置远端环境并 force-recreate。
+8. 验证 core/storage health、文档读取和增量同步。
 
 稳定运行 7 天且对象备份恢复抽检通过后，才删除主 VPS 大文件回滚副本。
 
