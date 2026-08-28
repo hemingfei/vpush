@@ -3,12 +3,14 @@ import logging
 
 from app.db import DB
 from app.logging_setup import (
+    ErrorDbHandler,
     RedactingFormatter,
     RingBufferHandler,
     _ring,
     _ring_lock,
     recent_logs,
     redact_secrets,
+    register_error_sink,
 )
 
 
@@ -42,6 +44,39 @@ def test_redact_secrets_cookie_and_api_key_names():
 def test_redact_secrets_does_not_match_prefixed_key_names():
     text = "my_api_key=ordinary-value api_key_suffix=ordinary-value"
     assert redact_secrets(text) == text
+
+
+def test_redact_secrets_cookie_header_forms():
+    text = "Cookie: SID=cookie-secret; Path=/ Set-Cookie: SID=set-cookie-secret; Path=/"
+
+    out = redact_secrets(text)
+
+    assert "cookie-secret" not in out
+    assert "set-cookie-secret" not in out
+    assert "Cookie: SID=<redacted>" in out
+    assert "Set-Cookie: SID=<redacted>" in out
+
+
+def test_error_db_handler_passes_redacted_copy_to_sink():
+    captured = []
+    register_error_sink(lambda record: captured.append(record))
+    handler = ErrorDbHandler()
+    secret = "Cookie: SID=cookie-secret Bearer bearer-secret-123456 api_key=api-secret"
+    record = logging.LogRecord("test.sink", logging.WARNING, __file__, 1, "%s", (secret,), None)
+
+    try:
+        handler.emit(record)
+    finally:
+        register_error_sink(None)
+
+    assert len(captured) == 1
+    safe_record = captured[0]
+    assert safe_record.levelno == logging.WARNING
+    assert safe_record.name == "test.sink"
+    assert safe_record.getMessage() != secret
+    for value in ("cookie-secret", "bearer-secret-123456", "api-secret"):
+        assert value not in safe_record.getMessage()
+    assert record.getMessage() == secret
 
 
 def test_redacting_formatter_removes_credentials_and_preserves_ordinary_text():

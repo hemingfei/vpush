@@ -1,6 +1,7 @@
 """统一日志配置：级别可控、内存环形缓冲（网页查看）、可选文件轮转。"""
 from __future__ import annotations
 
+import copy
 import logging
 import logging.handlers
 import os
@@ -29,6 +30,13 @@ _REDACT_PATTERNS = [
     (
         re.compile(
             r"(?<![A-Za-z0-9_-])((?:auth_token|ct0|ima-openapi-apikey|api_key)=)[^&;\s'\"<>]+",
+            re.IGNORECASE,
+        ),
+        r"\1<redacted>",
+    ),
+    (
+        re.compile(
+            r"(\b(?:Cookie|Set-Cookie):\s*(?:[^;\r\n]*;\s*)*(?<![A-Za-z0-9_-])SID=)[^;,\s'\"<>]+",
             re.IGNORECASE,
         ),
         r"\1<redacted>",
@@ -108,7 +116,10 @@ class ErrorDbHandler(logging.Handler):
         if sink is None:
             return
         try:
-            sink(record)
+            safe_record = copy.copy(record)
+            safe_record.msg = redact_secrets(record.getMessage())
+            safe_record.args = ()
+            sink(safe_record)
         except Exception:  # noqa: BLE001, S110 - 错误日志落库失败不影响业务
             pass
 
