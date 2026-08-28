@@ -232,12 +232,14 @@ def ima_folder_name(item: dict[str, Any], folder_id: str) -> str:
 def is_ima_folder_item(item: dict[str, Any]) -> bool:
     if not isinstance(item, dict):
         return False
+    info = item.get("folder_info")
+    if isinstance(info, dict) and _folder_id_value(info.get("folder_id")):
+        return True
     if item.get("media_type") == 99:
         return bool(ima_folder_id(item))
     media_id = item.get("media_id")
     if isinstance(media_id, str) and media_id.startswith("folder_"):
         return bool(ima_folder_id(item))
-    info = item.get("folder_info")
     return bool(ima_folder_id(item)) and not media_id and isinstance(info, (dict, type(None)))
 
 

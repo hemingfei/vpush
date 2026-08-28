@@ -22,8 +22,10 @@ from app.ima_documents import (
     ImaDocumentStore,
     ImaGroupConfig,
     ImaPureClient,
+    is_ima_folder_item,
     merge_groups,
     normalize_discovered_groups,
+    normalize_ima_folder_item,
     _safe_error,
     decrypt_body,
     encrypt_body,
@@ -1751,6 +1753,50 @@ def test_manifest_excludes_non_pdf_media():
     )
     client.list_items = lambda folder_id: next(responses)
     assert [item["media_id"] for item in client.manifest()] == ["file_report", "pdf_report"]
+
+
+def test_folder_info_classifies_mixed_metadata_as_folder():
+    item = {
+        "folder_info": {"folder_id": "child", "name": "子目录"},
+        "media_id": "metadata_1",
+        "media_type": 1,
+    }
+    assert is_ima_folder_item(item)
+    assert normalize_ima_folder_item(item, "root") == {
+        "id": "child",
+        "name": "子目录",
+        "parent_id": "root",
+        "has_children": None,
+    }
+
+
+def test_manifest_recurses_mixed_folder_metadata():
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh", root_folder_id="root"))
+    responses = {
+        "root": [
+            {
+                "folder_info": {"folder_id": "child", "name": "子目录"},
+                "media_id": "metadata_1",
+                "media_type": 1,
+            }
+        ],
+        "child": [{"media_id": "pdf_child", "name": "child.pdf", "file_size": 8}],
+    }
+    calls = []
+    client.list_items = lambda folder_id: calls.append(folder_id) or responses[folder_id]
+
+    records = client.manifest()
+    assert calls == ["root", "child"]
+    assert [record["media_id"] for record in records] == ["pdf_child"]
+
+
+def test_manifest_keeps_media_file_with_bare_folder_id():
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh", root_folder_id="root"))
+    client.list_items = lambda folder_id: [
+        {"media_id": "pdf_file", "folder_id": "metadata-folder", "name": "file.pdf", "file_size": 8}
+    ]
+
+    assert [record["media_id"] for record in client.manifest()] == ["pdf_file"]
 
 
 def test_manifest_skips_malformed_folders_and_items():
