@@ -6030,11 +6030,13 @@ function imaStoragePanelHtml(storage) {
   };
   return `<section class="section-panel" id="ima-storage-panel">
     <header class="section-head"><div><h2 class="section-title">存储</h2>
-    <p class="section-meta">只读状态。刷新会重跑探测；备份只请求归档 Restic，密钥不进网页。</p></div></header>
-    <p class="muted" id="ima-storage-status">${escapeHtml(labels[status] || status)} · 用量 ${escapeHtml(used)} · 上次备份 ${escapeHtml(resticAt)} · 检查 ${escapeHtml(resticOk)}（${escapeHtml(checkAt)}）</p>
-    <div class="toolbar ima-storage-toolbar">
-      <button type="button" class="btn-ghost" id="ima-storage-refresh" onclick="refreshImaStorage()">刷新状态</button>
-      <button type="button" class="btn-normal" id="ima-storage-backup" onclick="backupImaStorage()">立即备份</button>
+    <p class="section-meta">刷新探测，备份归档。密钥不进网页。</p></div></header>
+    <div class="cfg-foot">
+      <p class="muted" id="ima-storage-status">${escapeHtml(labels[status] || status)} · 用量 ${escapeHtml(used)} · 上次备份 ${escapeHtml(resticAt)} · 检查 ${escapeHtml(resticOk)}（${escapeHtml(checkAt)}）</p>
+      <div class="toolbar ima-storage-toolbar">
+        <button type="button" class="btn-ghost" id="ima-storage-refresh" onclick="refreshImaStorage()">刷新状态</button>
+        <button type="button" class="btn-normal" id="ima-storage-backup" onclick="backupImaStorage()">立即备份</button>
+      </div>
     </div>
   </section>`;
 }
@@ -6248,8 +6250,6 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
             </div>
           </div>
         </div>
-      </section>
-      <section class="section-panel">
         <div class="cfg-save-row">
           <button type="button" class="btn-normal" id="pc-save" onclick="savePollingConfig()">保存抓取设置</button>
         </div>
@@ -6374,14 +6374,17 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
   const zc = s.zsxq_cache || { files: 0, bytes: 0 };
   const zcSize = fmtCacheBytes(zc.bytes);
   const tokenSet = pure.refresh_token?.set;
+  setPageTitle("知识库设置");
   $("#admin-body").innerHTML = `
     <div id="stats-poll-error"></div>
+    <div class="knowledge-settings">
     <section class="section-panel ima-source-panel">
       <header class="section-head"><div><h2 class="section-title">IMA</h2>
-      <p class="section-meta">凭证、采集和本机同步说明。保存后即时生效。</p></div></header>
+      <p class="section-meta">凭证、采集、本机同步。保存后即时生效。</p></div></header>
+      <div class="ima-source-stack">
       <div class="ima-source-block">
-        <header class="section-head"><div><h3 class="ima-source-title">IMA 凭证</h3>
-        <p class="section-meta">模式：${ima.mode || "未配置"}${ima.openapi_clientid?.set ? ` · clientid ${escapeHtml(ima.openapi_clientid.preview || "")}` : ""}。Cookie 用 scripts/ima_qr_login.py 扫码捕获（x-ima-cookie）；OpenAPI 凭证登录 ima.qq.com/agent-interface 生成，取全文必须。</p></div></header>
+        <header class="ima-source-block-head"><div><h3 class="ima-source-title">IMA 凭证</h3>
+        <p class="section-meta">模式：${ima.mode || "未配置"}${ima.openapi_clientid?.set ? ` · clientid ${escapeHtml(ima.openapi_clientid.preview || "")}` : ""}。网页 Cookie 用扫码脚本；OpenAPI 在 ima.qq.com 生成。</p></div></header>
         <div class="ima-credential-fields">
           <label class="ima-credential-field ima-credential-field--wide" for="ima-cookie">
             <span>网页 Cookie（x-ima-cookie）</span>
@@ -6402,129 +6405,131 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
           ${ima.cookie?.set && !ima.cookie.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('ima','ima')" aria-label="清除 IMA Cookie">清除 Cookie</button>` : ""}
         </div>
       </div>
-<div class="ima-source-block">
-            <header class="ima-source-block-head"><div><h3 class="ima-source-title">IMA 文档采集</h3>
-            <p class="section-meta">默认每小时检查一次，只下载新增 PDF；Refresh Token 留空表示保持已保存值。</p></div></header>
-            <div class="cfg-stack ima-collector-stack">
-              <div class="cfg-group ima-collector-connection">
-                <p class="cfg-group-title">连接与同步</p>
-                <div class="ima-collector-fields cfg-fields">
-                  <label class="cfg-field ima-code-field"><span>IMA UID</span><input id="ima-pure-uid" type="text" class="form-control" value="${escapeHtml(collector.uid || "001aa361168019ef")}" maxlength="64"></label>
-                  <label class="cfg-field"><span>检查间隔<span class="cfg-unit">分钟</span></span><input id="ima-pure-interval" type="number" class="form-control" min="30" max="10080" value="${Math.round(Number(collector.interval_seconds || 3600) / 60)}"></label>
-                  <label class="cfg-field ima-code-field ima-field--wide"><span>Refresh Token</span><input id="ima-pure-token" class="form-control" type="password" autocomplete="off" placeholder="${pure.refresh_token?.set ? "已保存，留空保持不变" : "重新登录 IMA 后粘贴"}"></label>
-                  <input id="ima-pure-kb" type="hidden" value="${escapeHtml(collector.knowledge_base_id || "7464369361259867")}">
-                  <input id="ima-pure-root" type="hidden" value="${escapeHtml(collector.root_folder_id || "folder_7489327974078249")}">
-                </div>
-              </div>
-              <div class="cfg-group ima-groups-block">
-                <div class="ima-groups-head">
-                  <div>
-                    <p class="cfg-group-title">共享知识库与文件夹</p>
-                    <span id="ima-group-discovery-status" class="muted" aria-live="polite">${imaGroupDiscoveryStatusText(imaCollector)}</span>
-                  </div>
-                  <div class="toolbar ima-groups-toolbar">
-                    <button type="button" class="btn-ghost" id="ima-discover-btn" onclick="discoverImaGroups()">${REFRESH_ICON}<span>重新发现</span></button>
-                  </div>
-                </div>
-                <div class="ima-mount-layout" id="ima-mount-layout">
-                  <section class="ima-mount-pane" aria-labelledby="ima-kb-pane-title">
-                    <header class="ima-mount-pane-head"><strong id="ima-kb-pane-title">知识库</strong><span id="ima-kb-count" class="muted"></span></header>
-                    <div id="ima-kb-list" class="ima-kb-list" role="listbox" aria-label="共享知识库"></div>
-                  </section>
-                  <section class="ima-mount-pane" aria-labelledby="ima-folder-title">
-                    <header class="ima-mount-pane-head"><strong id="ima-folder-title">选择知识库</strong><span id="ima-folder-count" class="muted"></span></header>
-                    <div id="ima-folder-tree" class="ima-folder-tree" role="tree" aria-label="知识库文件夹" aria-live="polite"></div>
-                  </section>
-                </div>
-              </div>
-            </div>
-            <div class="cfg-foot ima-collector-foot">
-              <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
-              <div class="toolbar"><button type="button" class="btn-normal" id="ima-collector-save"${imaMountState.saveOwner ? " disabled" : ""} onclick="saveImaCollector()">保存采集配置</button><button type="button" class="btn-ghost" id="ima-sync-btn" onclick="triggerImaCollector()">${REFRESH_ICON}<span>立即同步</span></button></div>
+      <div class="ima-source-block">
+        <header class="ima-source-block-head"><div><h3 class="ima-source-title">IMA 文档采集</h3>
+        <p class="section-meta">默认每小时检查一次，只下载新增 PDF；Refresh Token 留空表示保持已保存值。</p></div></header>
+        <div class="cfg-stack ima-collector-stack">
+          <div class="cfg-group ima-collector-connection">
+            <p class="cfg-group-title">连接与同步</p>
+            <div class="ima-collector-fields cfg-fields">
+              <label class="cfg-field ima-code-field"><span>IMA UID</span><input id="ima-pure-uid" type="text" class="form-control" value="${escapeHtml(collector.uid || "001aa361168019ef")}" maxlength="64"></label>
+              <label class="cfg-field"><span>检查间隔<span class="cfg-unit">分钟</span></span><input id="ima-pure-interval" type="number" class="form-control" min="30" max="10080" value="${Math.round(Number(collector.interval_seconds || 3600) / 60)}"></label>
+              <label class="cfg-field ima-code-field ima-field--wide"><span>Refresh Token</span><input id="ima-pure-token" class="form-control" type="password" autocomplete="off" placeholder="${pure.refresh_token?.set ? "已保存，留空保持不变" : "重新登录 IMA 后粘贴"}"></label>
+              <input id="ima-pure-kb" type="hidden" value="${escapeHtml(collector.knowledge_base_id || "7464369361259867")}">
+              <input id="ima-pure-root" type="hidden" value="${escapeHtml(collector.root_folder_id || "folder_7489327974078249")}">
             </div>
           </div>
-                <div class="ima-source-block">
+          <div class="cfg-group ima-groups-block">
+            <div class="ima-groups-head">
+              <div>
+                <p class="cfg-group-title">共享知识库与文件夹</p>
+                <span id="ima-group-discovery-status" class="muted" aria-live="polite">${imaGroupDiscoveryStatusText(imaCollector)}</span>
+              </div>
+              <div class="toolbar ima-groups-toolbar">
+                <button type="button" class="btn-ghost" id="ima-discover-btn" onclick="discoverImaGroups()">${REFRESH_ICON}<span>重新发现</span></button>
+              </div>
+            </div>
+            <div class="ima-mount-layout" id="ima-mount-layout">
+              <section class="ima-mount-pane" aria-labelledby="ima-kb-pane-title">
+                <header class="ima-mount-pane-head"><strong id="ima-kb-pane-title">知识库</strong><span id="ima-kb-count" class="muted"></span></header>
+                <div id="ima-kb-list" class="ima-kb-list" role="listbox" aria-label="共享知识库"></div>
+              </section>
+              <section class="ima-mount-pane" aria-labelledby="ima-folder-title">
+                <header class="ima-mount-pane-head"><strong id="ima-folder-title">选择知识库</strong><span id="ima-folder-count" class="muted"></span></header>
+                <div id="ima-folder-tree" class="ima-folder-tree" role="tree" aria-label="知识库文件夹" aria-live="polite"></div>
+              </section>
+            </div>
+          </div>
+        </div>
+        <div class="cfg-foot ima-collector-foot">
+          <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
+          <div class="toolbar"><button type="button" class="btn-normal" id="ima-collector-save"${imaMountState.saveOwner ? " disabled" : ""} onclick="saveImaCollector()">保存采集配置</button><button type="button" class="btn-ghost" id="ima-sync-btn" onclick="triggerImaCollector()">${REFRESH_ICON}<span>立即同步</span></button></div>
+        </div>
+      </div>
+      <div class="ima-source-block">
         <header class="ima-source-block-head"><div><h3 class="ima-source-title">手机同步</h3>
-        <p class="section-meta">在已 root 的 Android 完成 IMA Google 登录后，本机双击 <code>scripts/ima_phone_sync.command</code>。网页不跑脚本。Refresh Token：${tokenSet ? "已保存" : "未保存"}。</p></div></header>
+        <p class="section-meta">本机双击 <code>scripts/ima_phone_sync.command</code> 写入 Token。当前：${tokenSet ? "已保存" : "未保存"}。</p></div></header>
+      </div>
       </div>
     </section>
     <section class="section-panel">
       <header class="section-head"><div><h2 class="section-title">知识星球</h2>
-      <p class="section-meta">Cookie 与抓取参数。保存星球设置只改这些字段。</p></div></header>
+      <p class="section-meta">Cookie 与抓取分开保存，互不覆盖。</p></div></header>
+      <div class="ima-source-stack">
       <div class="ima-source-block">
-        <header class="section-head"><div><h3 class="ima-source-title">知识星球 Cookie</h3>
-          <p class="section-meta">${cookieUpdatedLabel(zq)}${zq.preview ? ` · 预览 ${escapeHtml(zq.preview)}` : ""}。登录 wx.zsxq.com → F12 → Application → Cookies，复制整串（需含 zsxq_access_token），保存即时生效。</p></div>
-        </header>
+        <header class="ima-source-block-head"><div><h3 class="ima-source-title">Cookie</h3>
+        <p class="section-meta">${cookieUpdatedLabel(zq)}${zq.preview ? ` · 预览 ${escapeHtml(zq.preview)}` : ""}。登录 wx.zsxq.com 复制整串（含 zsxq_access_token）。</p></div></header>
         <label class="field-label" for="zq-cookie">知识星球 Cookie</label>
         <textarea id="zq-cookie" class="form-control cookie-paste" rows="3" placeholder="zsxq_access_token=..."></textarea>
-        <div class="toolbar" style="margin-top:12px">
+        <div class="ima-credential-actions toolbar">
           <button type="button" class="btn-normal" onclick="saveZsxqCookie()">保存知识星球 Cookie</button>
           <button type="button" class="btn-ghost" onclick="pasteCookieField('zq-cookie')">从剪贴板填入</button>
           ${zq.set && !zq.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('zsxq','知识星球')" aria-label="清除知识星球 Cookie">清除</button>` : ""}
         </div>
       </div>
-<div class="ima-source-block">
-            <header class="ima-source-block-head"><div><h3 class="ima-source-title">抓取参数</h3></div></header>
-            <div class="cfg-group cfg-group--zsxq">
-              <div class="cfg-fields">
-                <label class="cfg-field" title="每星球每轮最多翻几页，每页 20 条">
-                  <span>单轮翻页<span class="cfg-unit">页</span></span>
-                  <input id="pc-zq-pages" type="number" class="form-control" min="1" max="20" value="${s.polling_config.zsxq_max_pages ?? 3}">
-                </label>
-                <label class="cfg-field" title="列表/详情请求间隔，过短容易触发 1059">
-                  <span>请求间隔<span class="cfg-unit">秒</span></span>
-                  <input id="pc-zq-delay" type="number" class="form-control" min="0.2" max="10" step="0.1" value="${s.polling_config.zsxq_fetch_delay_seconds ?? 1}">
-                </label>
-                <label class="cfg-field" title="附件 download_url 请求间隔，过短容易撞日限">
-                  <span>附件间隔<span class="cfg-unit">秒</span></span>
-                  <input id="pc-zq-file-delay" type="number" class="form-control" min="0.2" max="10" step="0.1" value="${s.polling_config.zsxq_file_delay_seconds ?? 1}">
-                </label>
-                <label class="cfg-field cfg-check" title="抓到新帖时就把 PDF 拉到本地；默认关闭，点开再下，省日限">
-                  <input id="pc-zq-prefetch" type="checkbox" ${s.polling_config.zsxq_prefetch_files ? "checked" : ""}>
-                  <span class="cfg-flag-text">
-                    <span>抓取时预缓存附件</span>
-                    <span class="cfg-check-desc">打开后新帖 PDF 会立刻落到本地，费配额；默认点开再下</span>
-                  </span>
-                </label>
-                <label class="cfg-field cfg-check" title="新帖自动抓评论入库（可一并推送）；旧帖不动">
-                  <input id="pc-zq-comments" type="checkbox" ${s.polling_config.zsxq_fetch_comments ? "checked" : ""}>
-                  <span class="cfg-flag-text">
-                    <span>抓取评论</span>
-                    <span class="cfg-check-desc">新主题的评论在抓帖时一并入库</span>
-                  </span>
-                </label>
-                <label class="cfg-field" title="单主题评论最多翻几页（每页 20 条）">
-                  <span>评论翻页<span class="cfg-unit">页</span></span>
-                  <input id="pc-zq-comment-pages" type="number" class="form-control" min="1" max="10" value="${s.polling_config.zsxq_max_comment_pages ?? 3}">
-                </label>
-                <label class="cfg-field" title="每轮最多发起的评论请求数，保护限流">
-                  <span>评论预算<span class="cfg-unit">次/轮</span></span>
-                  <input id="pc-zq-comment-budget" type="number" class="form-control" min="1" max="200" value="${s.polling_config.zsxq_comment_budget ?? 30}">
-                </label>
-                <label class="cfg-field cfg-check" title="用 App 通道请求头（xiaomiquan UA + X-Request-Id/X-Version）代替浏览器头；默认关，等你复测日限差异确认有收益再开">
-                  <input id="pc-zq-app" type="checkbox" ${s.polling_config.zsxq_app_channel ? "checked" : ""}>
-                  <span class="cfg-flag-text">
-                    <span>App 通道头</span>
-                    <span class="cfg-check-desc">伪称 Android 客户端请求；与 web 通道共用账号配额</span>
-                  </span>
-                </label>
-                <label class="cfg-field cfg-field--wide" title="App 通道 UA 里的设备标识：Android 版本 + 品牌_型号，空格自动压成下划线">
-                  <span>设备标识<span class="cfg-unit">RELEASE BRAND_MODEL</span></span>
-                  <input id="pc-zq-app-device" type="text" class="form-control" maxlength="64" value="${escapeHtml(s.polling_config.zsxq_app_device ?? "16 OnePlus_PJD110")}">
-                </label>
-              </div>
-              <div class="cfg-foot">
-                <p class="muted" id="zq-cache-stat">附件缓存 ${zcSize} / ${zc.files || 0} 个文件</p>
-                <button type="button" class="btn-ghost" onclick="purgeZsxqCache()">清理未引用</button>
-              </div>
+      <div class="ima-source-block">
+        <header class="ima-source-block-head"><div><h3 class="ima-source-title">抓取参数</h3></div></header>
+        <div class="cfg-group cfg-group--zsxq">
+          <div class="cfg-fields">
+            <label class="cfg-field" title="每星球每轮最多翻几页，每页 20 条">
+              <span>单轮翻页<span class="cfg-unit">页</span></span>
+              <input id="pc-zq-pages" type="number" class="form-control" min="1" max="20" value="${s.polling_config.zsxq_max_pages ?? 3}">
+            </label>
+            <label class="cfg-field" title="列表/详情请求间隔，过短容易触发 1059">
+              <span>请求间隔<span class="cfg-unit">秒</span></span>
+              <input id="pc-zq-delay" type="number" class="form-control" min="0.2" max="10" step="0.1" value="${s.polling_config.zsxq_fetch_delay_seconds ?? 1}">
+            </label>
+            <label class="cfg-field" title="附件 download_url 请求间隔，过短容易撞日限">
+              <span>附件间隔<span class="cfg-unit">秒</span></span>
+              <input id="pc-zq-file-delay" type="number" class="form-control" min="0.2" max="10" step="0.1" value="${s.polling_config.zsxq_file_delay_seconds ?? 1}">
+            </label>
+            <label class="cfg-field cfg-check" title="抓到新帖时就把 PDF 拉到本地；默认关闭，点开再下，省日限">
+              <input id="pc-zq-prefetch" type="checkbox" ${s.polling_config.zsxq_prefetch_files ? "checked" : ""}>
+              <span class="cfg-flag-text">
+                <span>抓取时预缓存附件</span>
+                <span class="cfg-check-desc">打开后新帖 PDF 会立刻落到本地，费配额；默认点开再下</span>
+              </span>
+            </label>
+            <label class="cfg-field cfg-check" title="新帖自动抓评论入库（可一并推送）；旧帖不动">
+              <input id="pc-zq-comments" type="checkbox" ${s.polling_config.zsxq_fetch_comments ? "checked" : ""}>
+              <span class="cfg-flag-text">
+                <span>抓取评论</span>
+                <span class="cfg-check-desc">新主题的评论在抓帖时一并入库</span>
+              </span>
+            </label>
+            <label class="cfg-field" title="单主题评论最多翻几页（每页 20 条）">
+              <span>评论翻页<span class="cfg-unit">页</span></span>
+              <input id="pc-zq-comment-pages" type="number" class="form-control" min="1" max="10" value="${s.polling_config.zsxq_max_comment_pages ?? 3}">
+            </label>
+            <label class="cfg-field" title="每轮最多发起的评论请求数，保护限流">
+              <span>评论预算<span class="cfg-unit">次/轮</span></span>
+              <input id="pc-zq-comment-budget" type="number" class="form-control" min="1" max="200" value="${s.polling_config.zsxq_comment_budget ?? 30}">
+            </label>
+            <label class="cfg-field cfg-check" title="用 App 通道请求头（xiaomiquan UA + X-Request-Id/X-Version）代替浏览器头；默认关，等你复测日限差异确认有收益再开">
+              <input id="pc-zq-app" type="checkbox" ${s.polling_config.zsxq_app_channel ? "checked" : ""}>
+              <span class="cfg-flag-text">
+                <span>App 通道头</span>
+                <span class="cfg-check-desc">伪称 Android 客户端请求；与 web 通道共用账号配额</span>
+              </span>
+            </label>
+            <label class="cfg-field cfg-field--wide" title="App 通道 UA 里的设备标识：Android 版本 + 品牌_型号，空格自动压成下划线">
+              <span>设备标识<span class="cfg-unit">RELEASE BRAND_MODEL</span></span>
+              <input id="pc-zq-app-device" type="text" class="form-control" maxlength="64" value="${escapeHtml(s.polling_config.zsxq_app_device ?? "16 OnePlus_PJD110")}">
+            </label>
+          </div>
+          <div class="cfg-foot">
+            <p class="muted" id="zq-cache-stat">附件缓存 ${zcSize} / ${zc.files || 0} 个文件</p>
+            <div class="toolbar">
+              <button type="button" class="btn-ghost" onclick="purgeZsxqCache()">清理未引用</button>
+              <button type="button" class="btn-normal" id="pc-zq-save" onclick="saveZsxqPollingConfig()">保存星球设置</button>
             </div>
           </div>
         </div>
-              <div class="cfg-save-row">
-        <button type="button" class="btn-normal" id="pc-zq-save" onclick="saveZsxqPollingConfig()">保存星球设置</button>
+      </div>
       </div>
     </section>
-    ${imaStoragePanelHtml(imaCollector.storage)}`;
+    ${imaStoragePanelHtml(imaCollector.storage)}
+    </div>`;
   renderStatsData(s);
   if (statsLoadError) {
     const error = $("#stats-poll-error");

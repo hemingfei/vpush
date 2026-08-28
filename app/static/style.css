@@ -3095,6 +3095,26 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   font-weight: var(--font-weight-semibold);
 }
 .ima-source-block-head .section-meta { margin-top: 4px; }
+.knowledge-settings {
+  display: grid;
+  gap: 18px;
+}
+.knowledge-settings .ima-credential-actions {
+  margin-top: var(--space-3);
+}
+@media (max-width: 800px) {
+  .knowledge-settings .ima-credential-actions,
+  .knowledge-settings .ima-collector-foot .toolbar,
+  .knowledge-settings .ima-storage-toolbar {
+    width: 100%;
+  }
+  .knowledge-settings .ima-credential-actions .btn-normal,
+  .knowledge-settings .ima-collector-foot .btn-normal,
+  .knowledge-settings #pc-zq-save,
+  .knowledge-settings #ima-storage-backup {
+    flex: 1 1 100%;
+  }
+}
 .ima-polling-save-row { justify-content: flex-end; margin-top: var(--space-4); }
 .ima-collector-stack { display: grid; gap: var(--space-4); }
 .ima-collector-connection,
