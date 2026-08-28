@@ -3445,7 +3445,7 @@ def create_api_router(
                 logger.info(f"解析后得到 {len(posts)} 条帖子")
                 
                 # 按发布时间升序处理
-                from ..fetchers.base import parse_published_at
+                from app.fetchers.base import parse_published_at
                 def get_sort_key(p):
                     dt = parse_published_at(getattr(p, 'published_at', ''))
                     return int(dt.timestamp() * 1000) if dt else 0
