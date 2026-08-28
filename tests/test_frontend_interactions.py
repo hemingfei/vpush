@@ -1023,6 +1023,60 @@ def test_ima_sync_feedback_guards_duplicate_requests():
     assert 'already_running' in body
 
 
+
+def test_ima_collector_pending_save_snapshots_full_form_and_secret_state():
+    """stats 重建期间必须使用提交快照，token 只能由 JS 恢复，不能进入 HTML。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    load = _fn_body("loadAdminStats")
+    save = _fn_body("saveImaCollector")
+    assert "function imaCollectorFormSnapshot" in src
+    assert "function imaCollectorFormRevision" in src
+    assert "const snapshot = imaCollectorFormSnapshot()" in save
+    assert "formRevision: imaCollectorFormRevision(snapshot)" in save
+    assert "const ownerSnapshot =" in load
+    for field in ("uid", "interval_seconds", "knowledge_base_id", "root_folder_id"):
+        assert f"collector.{field}" in load
+    assert "collectorGroups" in load
+    assert "restoreImaCollectorOwnerToken" in load
+    assert "const pendingToken =" in src
+    assert "tokenInput.value = pendingToken" in src
+    assert 'value="${ownerSnapshot?.refresh_token' not in src
+    assert save.index("imaMountState.saveOwner = saveOwner") < save.index("await api(")
+    assert "const onDraftChange =" in save
+    assert 'document.addEventListener("input", onDraftChange)' in save
+    assert 'document.removeEventListener("input", onDraftChange)' in save
+
+
+def test_ima_stats_failure_keeps_polling_and_exposes_route_owned_retry():
+    """stats 首次/手动失败要留在当前页并可重试，不能丢掉原轮询。"""
+    load = _fn_body("loadAdminStats")
+    assert load.index("await api(\"/api/stats\")") < load.index("stopStatsTimer()")
+    assert "stats-poll-error" in load
+    assert "role=\"alert\"" in load
+    assert 'onclick="loadAdminStats(${seq})"' in load
+    assert "routeStillActive(seq)" in load[load.index("} catch"):]
+    assert "timerSeq" in load and "routeStillActive(timerSeq)" in load
+
+
+def test_ima_sync_responses_and_cleanup_are_owned_by_initiating_route():
+    """同步 POST/status 的旧响应不得闪现或重绘新路由。"""
+    body = _fn_body("triggerImaCollector")
+    assert "const routeSeq = routeRenderSeq" in body
+    post = body.index("await api(\"/api/admin/ima-collector/sync\"")
+    assert body.index("if (!routeStillActive(routeSeq)) return", post) < body.index("flash(", post)
+    status = body.index("await api(\"/api/admin/ima-collector\"")
+    assert body.index("if (!routeStillActive(routeSeq)) return", status) < body.index('const target = $("#ima-collector-status")', status)
+    assert "if (routeStillActive(routeSeq)" in body[body.index("} catch"):]
+    assert "if (routeStillActive(routeSeq)" in body[body.index("} finally"):]
+
+
+def test_ima_folder_error_retry_has_stable_focus_id():
+    """目录失败重试替换分支时，焦点快照能定位新的重试按钮。"""
+    error = _fn_body("imaFolderErrorHtml")
+    assert 'id="ima-folder-retry-${escapeHtml(groupId)}-${escapeHtml(parentId)}"' in error
+    assert "imaFocusSnapshot" in _fn_body("loadImaFolderChildren")
+    assert "imaRestoreFocus(focus)" in _fn_body("loadImaFolderChildren")
+
 def test_ima_collector_save_restores_focus_after_rebuild():
     """保存重建设置页后恢复原控件或保存按钮焦点。"""
     body = _fn_body("saveImaCollector")

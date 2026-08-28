@@ -5336,7 +5336,7 @@ function imaFolderRowHtml(groupId, item, depth) {
 }
 
 function imaFolderErrorHtml(groupId, parentId, error) {
-  return `<div class="ima-folder-state ima-folder-error" role="alert"><span>${escapeHtml(error || "文件夹加载失败")}</span><button type="button" class="btn-ghost btn-sm" data-group-id="${escapeHtml(groupId)}" data-parent-id="${escapeHtml(parentId)}" onclick="retryImaFolderLoad(this)">重试</button></div>`;
+  return `<div class="ima-folder-state ima-folder-error" role="alert"><span>${escapeHtml(error || "文件夹加载失败")}</span><button type="button" class="btn-ghost btn-sm" id="ima-folder-retry-${escapeHtml(groupId)}-${escapeHtml(parentId)}" data-group-id="${escapeHtml(groupId)}" data-parent-id="${escapeHtml(parentId)}" onclick="retryImaFolderLoad(this)">重试</button></div>`;
 }
 
 function imaRenderFolderBranch(groupId, parentId, depth) {
@@ -5563,6 +5563,29 @@ function readImaMountGroups() {
   });
 }
 
+function imaCollectorFormSnapshot() {
+  return {
+    uid: $("#ima-pure-uid")?.value?.trim() || "",
+    knowledge_base_id: $("#ima-pure-kb")?.value?.trim() || "",
+    root_folder_id: $("#ima-pure-root")?.value?.trim() || "",
+    interval_seconds: Number($("#ima-pure-interval")?.value || 60) * 60,
+    groups: readImaMountGroups(),
+    refresh_token: $("#ima-pure-token")?.value?.trim() || "",
+  };
+}
+
+function imaCollectorFormRevision(snapshot) {
+  return JSON.stringify(snapshot);
+}
+
+function restoreImaCollectorOwnerToken(owner, seq) {
+  if (!owner || owner.routeSeq !== seq) return;
+  const pendingToken = owner.liveSnapshot ? owner.liveSnapshot.refresh_token : owner.snapshot?.refresh_token;
+  if (!pendingToken) return;
+  const tokenInput = $("#ima-pure-token");
+  if (tokenInput && !tokenInput.value) tokenInput.value = pendingToken;
+}
+
 function imaSafeError(value) {
   let text = String(value ?? "").split(/\r?\n/, 1)[0].slice(0, 240);
   text = text.replace(/https?:\/\/\S+/gi, "<url>");
@@ -5592,16 +5615,40 @@ function imaGroupDiscoveryStatusText(status) {
 
 async function loadAdminStats(seq = _adminRenderSeq) {
   if (!routeStillActive(seq)) return;
+  const pendingOwner = imaMountState.saveOwner;
+  if (pendingOwner?.routeSeq === seq && $("#ima-pure-uid")) {
+    pendingOwner.liveSnapshot = imaCollectorFormSnapshot();
+  }
   const statsLoadSeq = ++_adminStatsLoadSeq;
-  stopStatsTimer();
-  const s = await api("/api/stats");
+  let s;
+  try {
+    s = await api("/api/stats");
+  } catch (err) {
+    if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq) return;
+    const message = `加载失败: ${err.message || "请求失败"}`;
+    const retry = `<div><button type="button" class="btn-normal" onclick="loadAdminStats(${seq})">重试</button></div>`;
+    const error = $("#stats-poll-error");
+    if (error && document.body.contains(error)) {
+      error.innerHTML = `<div class="ima-folder-state ima-folder-error" role="alert">${escapeHtml(message)}${retry}</div>`;
+    } else {
+      const body = $("#admin-body");
+      if (body) body.innerHTML = emptyState(message, retry);
+    }
+    return;
+  }
   if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq) return;
+  stopStatsTimer();
+  const owner = imaMountState.saveOwner;
+  const ownerSnapshot = owner && owner.routeSeq === seq
+    ? (owner.liveSnapshot || owner.snapshot) : null;
   const preserveMountDraft = imaMountState.dirty;
   const xq = s.xueqiu_cookie || {};
   const tw = s.twitter_cookie || {};
   const ima = s.ima_credentials || {};
   const imaCollector = s.ima_collector || {};
   const pure = imaCollector.config || {};
+  const collector = ownerSnapshot || pure;
+  const collectorGroups = ownerSnapshot?.groups || pure.groups || [];
   const zq = s.zsxq_cookie || {};
   const zc = s.zsxq_cache || { files: 0, bytes: 0 };
   const zcSize = fmtCacheBytes(zc.bytes);
@@ -5782,11 +5829,11 @@ async function loadAdminStats(seq = _adminRenderSeq) {
               <div class="cfg-group ima-collector-connection">
                 <p class="cfg-group-title">连接与同步</p>
                 <div class="ima-collector-fields cfg-fields">
-                  <label class="cfg-field ima-code-field"><span>IMA UID</span><input id="ima-pure-uid" type="text" class="form-control" value="${escapeHtml(pure.uid || "001aa361168019ef")}" maxlength="64"></label>
-                  <label class="cfg-field"><span>检查间隔<span class="cfg-unit">分钟</span></span><input id="ima-pure-interval" type="number" class="form-control" min="30" max="10080" value="${Math.round(Number(pure.interval_seconds || 3600) / 60)}"></label>
+                  <label class="cfg-field ima-code-field"><span>IMA UID</span><input id="ima-pure-uid" type="text" class="form-control" value="${escapeHtml(collector.uid || "001aa361168019ef")}" maxlength="64"></label>
+                  <label class="cfg-field"><span>检查间隔<span class="cfg-unit">分钟</span></span><input id="ima-pure-interval" type="number" class="form-control" min="30" max="10080" value="${Math.round(Number(collector.interval_seconds || 3600) / 60)}"></label>
                   <label class="cfg-field ima-code-field ima-field--wide"><span>Refresh Token</span><input id="ima-pure-token" class="form-control" type="password" autocomplete="off" placeholder="${pure.refresh_token?.set ? "已保存，留空保持不变" : "重新登录 IMA 后粘贴"}"></label>
-                  <input id="ima-pure-kb" type="hidden" value="${escapeHtml(pure.knowledge_base_id || "7464369361259867")}">
-                  <input id="ima-pure-root" type="hidden" value="${escapeHtml(pure.root_folder_id || "folder_7489327974078249")}">
+                  <input id="ima-pure-kb" type="hidden" value="${escapeHtml(collector.knowledge_base_id || "7464369361259867")}">
+                  <input id="ima-pure-root" type="hidden" value="${escapeHtml(collector.root_folder_id || "folder_7489327974078249")}">
                 </div>
               </div>
               <div class="cfg-group ima-groups-block">
@@ -5953,8 +6000,10 @@ async function loadAdminStats(seq = _adminRenderSeq) {
     </div>
     <div id="st-proxies" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-proxies" style="display:none"></div>`;
   renderStatsData(s);
-  initImaMountState(pure.groups || [], preserveMountDraft);
+  if (ownerSnapshot) initImaMountState(collectorGroups, true);
+  else initImaMountState(pure.groups || [], preserveMountDraft);
   renderImaMountGroups();
+  restoreImaCollectorOwnerToken(owner, seq);
   switchStatsTab(statsTabFromHash());
   statsTimer = setInterval(async () => {
     const timerSeq = _adminRenderSeq;
@@ -6630,41 +6679,58 @@ async function saveImaCollector() {
     if (saveButton && document.body.contains(saveButton)) saveButton.disabled = false;
     return;
   }
+  const snapshot = imaCollectorFormSnapshot();
   const body = {
-    uid: $("#ima-pure-uid")?.value?.trim() || "",
-    knowledge_base_id: $("#ima-pure-kb")?.value?.trim() || "",
-    root_folder_id: $("#ima-pure-root")?.value?.trim() || "",
-    interval_seconds: minutes * 60,
+    uid: snapshot.uid,
+    knowledge_base_id: snapshot.knowledge_base_id,
+    root_folder_id: snapshot.root_folder_id,
+    interval_seconds: snapshot.interval_seconds,
     groups: readImaMountGroups(),
   };
-  const token = $("#ima-pure-token")?.value?.trim() || "";
+  const token = snapshot.refresh_token;
   if (token) body.refresh_token = token;
-  const saveOwner = { routeSeq, mountRevision };
+  const saveOwner = {
+    routeSeq,
+    mountRevision,
+    formRevision: imaCollectorFormRevision(snapshot),
+    snapshot,
+  };
+  const onDraftChange = () => {
+    if (imaMountState.saveOwner === saveOwner) saveOwner.liveSnapshot = imaCollectorFormSnapshot();
+  };
   imaMountState.saveOwner = saveOwner;
   if (saveButton) saveButton.disabled = true;
+  document.addEventListener("input", onDraftChange);
+  document.addEventListener("change", onDraftChange);
   document.addEventListener("focusin", onFocusIn);
   try {
     await api("/api/admin/ima-collector", { method: "PUT", body: JSON.stringify(body) });
+    const formStillCurrent = imaCollectorFormRevision(imaCollectorFormSnapshot()) === saveOwner.formRevision;
+    if (!formStillCurrent) saveOwner.liveSnapshot = imaCollectorFormSnapshot();
     if (routeStillActive(routeSeq) && location.pathname === "/admin/stats"
-      && imaMountState.revision === mountRevision) {
+      && imaMountState.revision === mountRevision && formStillCurrent) {
       imaMountState.dirty = false;
     }
     if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats") return;
-    const tokenInput = $("#ima-pure-token");
-    if (tokenInput) tokenInput.value = "";
-    flash("IMA 文档采集配置已保存");
     await loadAdminStats(routeSeq);
     if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats") return;
+    if (formStillCurrent) {
+      const tokenInput = $("#ima-pure-token");
+      if (tokenInput) tokenInput.value = "";
+    }
     const restoreFocus = document.activeElement === focusElement || document.activeElement === document.body;
     if (!focusMoved && restoreFocus) {
       const focusTarget = document.getElementById(focusId) || document.getElementById("ima-collector-save");
       focusTarget?.focus({ preventScroll: true });
     }
+    flash("IMA 文档采集配置已保存");
   } catch (err) {
     if (routeStillActive(routeSeq) && location.pathname === "/admin/stats") {
       flash(err.message || "保存失败", "error");
     }
   } finally {
+    document.removeEventListener("input", onDraftChange);
+    document.removeEventListener("change", onDraftChange);
     document.removeEventListener("focusin", onFocusIn);
     if (imaMountState.saveOwner === saveOwner) {
       imaMountState.saveOwner = null;
@@ -6676,21 +6742,24 @@ async function saveImaCollector() {
 }
 
 async function triggerImaCollector() {
+  const routeSeq = routeRenderSeq;
   const btn = $("#ima-sync-btn");
   if (btn?.disabled) return;
   if (btn) btn.disabled = true;
   try {
     const result = await api("/api/admin/ima-collector/sync", { method: "POST" });
+    if (!routeStillActive(routeSeq)) return;
     flash(result.status === "already_running" ? "IMA 文档同步正在进行中" : "IMA 文档同步已启动");
     const status = await api("/api/admin/ima-collector");
+    if (!routeStillActive(routeSeq)) return;
     const target = $("#ima-collector-status");
     if (target) target.textContent = imaCollectorStatusText(status);
     const discovery = $("#ima-group-discovery-status");
     if (discovery) discovery.innerHTML = imaGroupDiscoveryStatusText(status);
   } catch (err) {
-    flash(err.message || "同步启动失败", "error");
+    if (routeStillActive(routeSeq)) flash(err.message || "同步启动失败", "error");
   } finally {
-    if (btn) btn.disabled = false;
+    if (routeStillActive(routeSeq) && btn && document.body.contains(btn)) btn.disabled = false;
   }
 }
 
