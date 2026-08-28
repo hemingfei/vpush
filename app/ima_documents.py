@@ -675,7 +675,10 @@ class ImaPureClient:
                 code = data["retcode"]
             else:
                 raise RuntimeError("IMA group discovery returned invalid response")
-            if code not in (0, "0"):
+            if not (
+                (isinstance(code, int) and not isinstance(code, bool) and code == 0)
+                or code == "0"
+            ):
                 raise RuntimeError(f"IMA group discovery failed code={code}")
             payload = _discovery_payload(data)
             if not _discovery_has_known_shape(payload):

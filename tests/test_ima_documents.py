@@ -502,14 +502,28 @@ def test_discover_groups_accepts_valid_empty_list(monkeypatch):
     assert client.discover_groups() == ()
 
 
-def test_discover_groups_accepts_successful_retcode(monkeypatch):
+@pytest.mark.parametrize("value", [0, "0"])
+def test_discover_groups_accepts_successful_retcode(monkeypatch, value):
     client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
     client._token = lambda: "access"
     client._open_json = lambda request: (
-        {"retcode": "0", "knowledge_base_list": [], "is_end": True},
+        {"retcode": value, "knowledge_base_list": [], "is_end": True},
         {},
     )
     assert client.discover_groups() == ()
+
+
+@pytest.mark.parametrize("field", ["code", "retcode"])
+@pytest.mark.parametrize("value", [False, True])
+def test_discover_groups_rejects_boolean_status(monkeypatch, field, value):
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    client._token = lambda: "access"
+    client._open_json = lambda request: (
+        {field: value, "knowledge_base_list": [], "is_end": True},
+        {},
+    )
+    with pytest.raises(RuntimeError, match="IMA group discovery"):
+        client.discover_groups()
 
 
 @pytest.mark.parametrize("response", [
@@ -755,6 +769,42 @@ def test_service_malformed_discovery_preserves_group_registry(tmp_path, monkeypa
         def discover_groups(self):
             return normalize_discovered_groups(
                 {"code": 0, "results": [{"knowledge_base_list": {"id": "bad"}}]}
+            )
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    result = ImaDocumentService(db, tmp_path / "ima").discover()
+    assert result["ok"] is False
+    assert result["status"] == "failed"
+    assert db.values[IMA_PURE_GROUPS_KEY] == old_raw
+
+
+@pytest.mark.parametrize("field", ["code", "retcode"])
+@pytest.mark.parametrize("value", [False, True])
+def test_service_boolean_discovery_status_preserves_group_registry(
+    tmp_path, monkeypatch, field, value
+):
+    from app import ima_documents
+
+    old_raw = '[{"id":"old","name":"旧群组","knowledge_base_id":"kb-old","root_folder_id":"root-old"}]'
+    db = FakeDB(
+        {
+            IMA_PURE_UID_KEY: "uid",
+            IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+            IMA_PURE_KB_ID_KEY: "legacy-kb",
+            IMA_PURE_ROOT_FOLDER_KEY: "legacy-root",
+            IMA_PURE_GROUPS_KEY: old_raw,
+        }
+    )
+    real_client = ima_documents.ImaPureClient
+
+    class FakeClient(real_client):
+        def _token(self):
+            return "access"
+
+        def _open_json(self, request):
+            return (
+                {field: value, "knowledge_base_list": [], "is_end": True},
+                {},
             )
 
     monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
