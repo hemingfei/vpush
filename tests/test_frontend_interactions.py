@@ -171,8 +171,29 @@ def test_settings_async_responses_are_owned_by_route_and_session_before_mutation
     render = _fn_body("renderSettings")
     fetch = render.index('await api("/api/me")')
     assignment = render.index("state.user = user", fetch)
+    prefetch = render[:fetch]
+    guard = render.index("routeStillActive(seq)", fetch)
+    assert "const token = state.token" in prefetch
+    assert "const sessionGeneration = imaMountState.sessionGeneration" in prefetch
     assert "const user = await api(\"/api/me\")" in render[fetch - 40:fetch + 50]
-    assert render.index("routeStillActive(seq)", fetch) < assignment
+    assert guard < assignment
+    assert "token !== state.token" in render[guard:assignment]
+    assert "sessionGeneration !== imaMountState.sessionGeneration" in render[guard:assignment]
+
+
+def test_render_settings_catch_only_mutates_owned_route_and_session():
+    """设置页请求失败时，错误 DOM 也必须由发起请求的路由和会话拥有。"""
+    render = _fn_body("renderSettings")
+    fetch = render.index('await api("/api/me")')
+    error_dom = render.index('$("#main").innerHTML = emptyState(err.message)', fetch)
+    catch = render.rindex("} catch (err)", fetch, error_dom + 1)
+    guard = render.index("routeStillActive(seq)", catch, error_dom)
+
+    assert "token !== state.token" in render[guard:error_dom]
+    assert "sessionGeneration !== imaMountState.sessionGeneration" in render[guard:error_dom]
+    assert guard < error_dom
+    assert render.index("const token = state.token", 0, fetch) < fetch
+    assert render.index("const sessionGeneration = imaMountState.sessionGeneration", 0, fetch) < fetch
 
 
 def test_feishu_personal_async_callbacks_are_owner_guarded_and_logout_resets_all_state():

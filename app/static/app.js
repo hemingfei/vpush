@@ -4062,10 +4062,13 @@ async function refreshSettingsStatus() {
 }
 
 async function renderSettings(seq) {
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   setPageTitle("推送设置");
   try {
     const user = await api("/api/me");
-    if (!routeStillActive(seq)) return; // 已切走：不覆盖新路由的 state.user
+    if (!routeStillActive(seq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     state.user = user;
     stopSettingsPoll();
     const guide = state.user.push_guide || {};
@@ -4367,6 +4370,8 @@ async function renderSettings(seq) {
     toggleDnd(); // 根据开关初始状态同步时段输入框的禁用/置灰
     loadKolImageSettings(seq);
   } catch (err) {
+    if (!routeStillActive(seq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     $("#main").innerHTML = emptyState(err.message);
   }
 }
