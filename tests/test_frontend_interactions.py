@@ -1057,8 +1057,10 @@ def test_dashboard_is_duty_console():
     assert "数据源健康" in dash
     assert "停更" in dash or "kol-health" in dash
     assert dash.count("数据源健康") == 1
-    assert dash.find("数据源健康") < dash.find("停更")
-    assert dash.find("停更") < dash.find("核心指标")
+    assert dash.find("dash-duty-strip-slot") < dash.find("停更")
+    assert dash.find("停更") < dash.find("数据源健康")
+    assert dash.find("数据源健康") < dash.find("核心指标")
+    assert "setPageTitle(\"全景概览\")" in dash
     assert 'id="dash-duty-strip-slot"' in dash
     assert "dutyStripHtml" in live
     assert 'id="sources-table"' in dash
@@ -1084,6 +1086,9 @@ def test_source_status_splits_cold_start_and_credentials():
     assert "未开始" in cell
     assert "凭据缺失" in cell
     assert "持续失败" in cell
+    assert "暂无成功" in cell
+    assert "无成功记录" not in cell
+    assert "status-warn" in cell
     assert "sourceNeverStarted" in cell
     assert "sourceCredentialGap" in cell
     assert "last_ok_at" in never
@@ -2898,9 +2903,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=213"' in html
-    assert 'src="/app.js?v=301"' in html
-    assert 'dav-shell-v170' in sw
+    assert 'href="/style.css?v=214"' in html
+    assert 'src="/app.js?v=302"' in html
+    assert 'dav-shell-v171' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

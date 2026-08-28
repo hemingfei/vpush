@@ -2410,13 +2410,17 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
 /* ---------- 全景概览 ---------- */
 .dash-fetch-meta { margin-top: 4px; }
 .dash-source-table { width: 100%; }
+#dash-duty-strip-slot:not(:empty) { margin-bottom: 18px; }
 .dash-duty-strip {
   display: flex;
   flex-wrap: wrap;
   gap: 8px 20px;
   list-style: none;
-  margin: 0 0 14px;
-  padding: 0;
+  margin: 0;
+  padding: 14px 18px;
+  background: var(--color-surface);
+  border: var(--border-default);
+  border-radius: var(--radius-card);
 }
 .dash-duty-strip li {
   margin: 0;
@@ -2496,6 +2500,8 @@ button.linkish:hover { text-decoration: underline; }
   }
   .dash-source-table tbody tr {
     grid-template-columns: minmax(0, 1fr) auto;
+    min-height: 44px;
+    align-items: center;
   }
   .dash-source-table td.dash-source-cause { grid-column: 1 / -1; }
   .dash-stale-table tbody tr {

@@ -6661,8 +6661,10 @@ function sourceStatusCell(src, cookieItems) {
   if (sourceNeverStarted(src)) {
     return '<td class="muted" data-label="状态">未开始</td>';
   }
-  const text = src.consecutive_fails >= 3 ? "持续失败" : "无成功记录";
-  return `<td class="status-fail" data-label="状态">${text}</td>`;
+  if (src.consecutive_fails >= 3) {
+    return '<td class="status-fail" data-label="状态">持续失败</td>';
+  }
+  return '<td class="status-warn" data-label="状态">暂无成功</td>';
 }
 
 function sourceChannelCell(src) {
@@ -7765,15 +7767,21 @@ async function loadAdminDashboard() {
       : "";
 
     if (!routeStillActive(_adminRenderSeq)) return;
+    setPageTitle("全景概览");
     $("#admin-body").innerHTML = `
       <div id="dash-cookie-slot"></div>
+      <div id="dash-duty-strip-slot"></div>
+      <section class="section-panel">
+        <header class="section-head"><div><h2 class="section-title">停更大V</h2>
+        <p class="section-meta">点名字进大V管理。</p></div></header>
+        <div id="kol-health"></div>
+      </section>
       <section class="section-panel">
         <header class="section-head">
           <div><h2 class="section-title">数据源健康</h2>
           ${dashboardFetchMetaHtml(st)}</div>
           <div class="toolbar"><button type="button" class="btn-ghost" onclick="refreshDashboardLive()">立即刷新</button></div>
         </header>
-        <div id="dash-duty-strip-slot"></div>
         <div id="stats-poll-error"></div>
         <div class="table-wrap">
           <table class="ak-table dash-source-table">
@@ -7791,11 +7799,6 @@ async function loadAdminDashboard() {
           </table>
         </div>
         <div id="dash-source-events"></div>
-      </section>
-      <section class="section-panel">
-        <header class="section-head"><div><h2 class="section-title">停更大V</h2>
-        <p class="section-meta">点名字进大V管理。</p></div></header>
-        <div id="kol-health"></div>
       </section>
       <section class="section-panel">
         <header class="section-head"><div><h2 class="section-title">核心指标</h2>
