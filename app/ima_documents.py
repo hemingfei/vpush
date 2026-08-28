@@ -128,10 +128,10 @@ def _truncate_safe_error(text: str) -> str:
 
 def _safe_error(exc: BaseException) -> str:
     text = (str(exc).splitlines() or [""])[0]
-    text = re.sub(r"(?i)\b(set-cookie|cookie)(\s*:\s*)[^\r\n]*", r"\1\2<redacted>", text)
+    text = re.sub(r"(?i)(?<![A-Za-z0-9_.-])(set-cookie|cookie)(\s*:\s*)[^\r\n]*", r"\1\2<redacted>", text)
     text = re.sub(r"https?://\S+", "<url>", text)
     text = re.sub(
-        r"(?i)(\bauthorization\s*[:=]\s*(?:basic|bearer)\s+)[^\s,;&]+",
+        r"(?i)(?<![A-Za-z0-9_.-])(authorization\s*[:=]\s*(?:basic|bearer)\s+)[^\s,;&]+",
         r"\1<redacted>",
         text,
     )
@@ -140,9 +140,15 @@ def _safe_error(exc: BaseException) -> str:
         r"\1<redacted>",
         text,
     )
+    def redact_scheme(match: re.Match[str]) -> str:
+        prefix = text[: match.start()]
+        if re.search(r"(?i)authorization\s*:\s*$", prefix):
+            return match.group(0)
+        return f"{match.group(1)}<redacted>"
+
     text = re.sub(
         r"(?i)((?:\bbasic|\bbearer)\s+)[^\s,;&]+",
-        r"\1<redacted>",
+        redact_scheme,
         text,
     )
     return _truncate_safe_error(text)
