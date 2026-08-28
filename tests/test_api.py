@@ -1763,6 +1763,28 @@ def test_cookie_status_never_returns_credential_bytes(monkeypatch):
     assert "ima-ENV-SYNTHETIC-SECRET" not in str(ima_env)
 
 
+
+def test_ima_api_key_status_never_returns_credential_bytes():
+    client = make_client()
+    headers = auth_headers(client)
+    db = client.app.state.db
+    db.set_setting("ima_openapi_clientid", "client-id-preview")
+
+    for api_key in ("ima-OPENAPI-SYNTHETIC-SECRET", "short"):
+        db.set_setting("ima_openapi_apikey", api_key)
+        response = client.get("/api/admin/ima-credentials", headers=headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["openapi_apikey"] == {"set": True}
+        assert api_key not in str(data)
+        assert data["openapi_clientid"]["set"] is True
+        assert data["openapi_clientid"]["preview"] == "client-id-pr…"
+
+    db.set_setting("ima_openapi_apikey", "")
+    data = client.get("/api/admin/ima-credentials", headers=headers).json()
+    assert data["openapi_apikey"] == {"set": False}
+
+
 def test_admin_can_clear_saved_cookies(monkeypatch):
     """管理员可清除已保存 Cookie；未知源拒绝，空清除可重复。"""
     seed = {}

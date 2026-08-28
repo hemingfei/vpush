@@ -2920,7 +2920,7 @@ def create_api_router(
                 "from_env": bool(cookie) and not db.get_setting(IMA_COOKIE_KEY),
             },
             "openapi_clientid": {"set": bool(client_id), "preview": (client_id[:12] + "…") if len(client_id) > 12 else client_id},
-            "openapi_apikey": {"set": bool(api_key), "preview": (api_key[:8] + "…") if len(api_key) > 8 else api_key},
+            "openapi_apikey": {"set": bool(api_key)},
             "mode": "openapi" if (client_id and api_key) else ("cookie" if cookie else "none"),
         }
 
