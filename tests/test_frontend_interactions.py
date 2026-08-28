@@ -1107,6 +1107,62 @@ def test_ima_mount_expand_uses_stable_cache_and_parent_inheritance():
     assert "imaMountState.dirty = true" in toggle
 
 
+
+
+def test_ima_collector_save_is_owned_by_initiating_route_and_preserves_drafts():
+    """旧的 collector 保存回调不得重绘新路由，stats 重建不得丢失脏挂载 draft。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    load = _fn_body("loadAdminStats")
+    save = _fn_body("saveImaCollector")
+
+    assert re.search(r"async function loadAdminStats\(seq = _adminRenderSeq\)", src)
+    assert "routeStillActive(seq)" in load
+    assert "const preserveMountDraft = imaMountState.dirty" in load
+    assert "initImaMountState(pure.groups || [], preserveMountDraft)" in load
+    assert "const routeSeq = routeRenderSeq" in save
+    assert "const saveButton = $(\"#ima-collector-save\")" in save
+    assert "saveButton.disabled = true" in save
+    assert 'location.pathname !== "/admin/stats"' in save
+    assert "routeStillActive(routeSeq)" in save
+    assert "loadAdminStats(routeSeq)" in save
+    assert "imaMountState.dirty = false" in save
+    assert "document.body.contains(saveButton)" in save
+
+
+def test_ima_discovery_ignores_stale_responses_and_releases_current_button():
+    """发现请求跨 stats 重建时只能更新当前状态和当前 DOM。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    discover = _fn_body("discoverImaGroups")
+    assert "discoverySeq" in discover
+    assert "imaMountState.discoverySeq" in src
+    assert "imaMountState.discoverySeq === discoverySeq" in discover
+    assert "imaMountState.generation" in discover
+    assert '$("#ima-discover-btn")' in discover
+    assert '$("#ima-group-discovery-status")' in discover
+    assert "if (currentButton && document.body.contains(currentButton))" in discover
+
+
+def test_ima_folder_requests_have_per_key_ownership_and_focus_guards():
+    """同 key 目录请求不得互相清理，异步重绘只恢复仍然有效的焦点。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    load = _fn_body("loadImaFolderChildren")
+    select = _fn_body("selectImaMountGroup")
+    expand = _fn_body("toggleImaFolderExpand")
+    toggle = _fn_body("toggleImaFolder")
+    assert "imaMountState.folderRequests" in src
+    assert "const request =" in load
+    assert "request.generation === imaMountState.generation" in load
+    assert "imaMountState.folderRequests.get(key) === request" in load
+    assert "imaMountState.folderRequests.delete(key)" in load
+    assert "imaFocusSnapshot" in select and "imaFocusSnapshot" in expand and "imaFocusSnapshot" in load
+    assert "imaRestoreFocus(focus)" in select
+    assert "imaRestoreFocus(focus)" in expand
+    assert "imaRestoreFocus(focus)" in toggle
+    focus = _fn_body("imaRestoreFocus")
+    assert "document.activeElement" in focus
+    assert "focus({ preventScroll: true })" in focus
+
+
 def test_ima_discovery_error_redacts_url_and_secret_key_values_before_escape():
     """发现错误中的 URL、token、sign 等敏感内容必须先脱敏再 escapeHtml。"""
     sample = "自动发现失败：https://ima.qq.com/api?token=secret&sign=signature"

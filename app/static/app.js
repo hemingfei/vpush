@@ -124,7 +124,9 @@ const imaMountState = {
   expanded: new Set(),
   loading: new Set(),
   errors: new Map(),
+  folderRequests: new Map(),
   discoveryBusy: false,
+  discoverySeq: 0,
   discoveryEntered: false,
   dirty: false,
   requestSeq: 0,
@@ -5208,6 +5210,8 @@ function initImaMountState(groups, preserve = false) {
   imaMountState.expanded = new Set();
   imaMountState.loading = new Set();
   imaMountState.errors = new Map();
+  imaMountState.folderRequests = new Map();
+  imaMountState.discoveryBusy = false;
   imaMountState.generation += 1;
   imaMountState.dirty = preserve ? oldDirty : false;
   if (!preserve) imaMountState.discoveryEntered = false;
@@ -5235,7 +5239,7 @@ function imaMountGroupRowHtml(group) {
   const count = draft.size;
   const mountText = count ? `已选择 ${count} 个文件夹` : "未挂载";
   return `
-    <button type="button" class="ima-mount-kb-row${selected ? " is-selected" : ""}" role="option"
+    <button type="button" class="ima-mount-kb-row${selected ? " is-selected" : ""}" id="ima-kb-row-${escapeHtml(groupId)}" role="option"
       aria-selected="${selected}" data-group-id="${escapeHtml(groupId)}"
       onclick="selectImaMountGroup(this.dataset.groupId)">
       <span class="ima-mount-kb-copy">
@@ -5306,7 +5310,7 @@ function imaFolderRowHtml(groupId, item, depth) {
   const selection = imaFolderSelectionState(groupId, folderId);
   const inputId = `ima-folder-${groupId}-${folderId}`;
   const expand = hasChildren
-    ? `<button type="button" class="ima-folder-expand" data-group-id="${escapeHtml(groupId)}" data-folder-id="${escapeHtml(folderId)}" aria-expanded="${expanded}" aria-label="${expanded ? "收起" : "展开"} ${escapeHtml(name)}" title="${expanded ? "收起" : "展开"}" onclick="toggleImaFolderExpand(this)"><span aria-hidden="true">${expanded ? "⌄" : "›"}</span></button>`
+    ? `<button type="button" class="ima-folder-expand" id="ima-folder-expand-${escapeHtml(groupId)}-${escapeHtml(folderId)}" data-group-id="${escapeHtml(groupId)}" data-folder-id="${escapeHtml(folderId)}" aria-expanded="${expanded}" aria-label="${expanded ? "收起" : "展开"} ${escapeHtml(name)}" title="${expanded ? "收起" : "展开"}" onclick="toggleImaFolderExpand(this)"><span aria-hidden="true">${expanded ? "⌄" : "›"}</span></button>`
     : '<span class="ima-folder-expand-placeholder" aria-hidden="true"></span>';
   const nested = expanded ? imaRenderFolderBranch(groupId, folderId, depth + 1) : "";
   return `
@@ -5383,11 +5387,23 @@ function renderImaFolderTree(groupId) {
   });
 }
 
+function imaRestoreFocus(focus) {
+  if (!focus || (document.activeElement !== focus.element && document.activeElement !== document.body)) return;
+  const target = focus.id ? document.getElementById(focus.id) : null;
+  target?.focus({ preventScroll: true });
+}
+
+function imaFocusSnapshot(element = document.activeElement) {
+  return { element, id: element?.id || "" };
+}
+
 function selectImaMountGroup(groupId) {
   const group = imaMountGroup(groupId);
   if (!group) return;
+  const focus = imaFocusSnapshot();
   imaMountState.selectedGroupId = String(group.id);
   renderImaMountGroups();
+  imaRestoreFocus(focus);
   loadImaFolderChildren(String(group.id), String(group.root_folder_id || ""));
 }
 
@@ -5395,11 +5411,13 @@ function toggleImaFolderExpand(button) {
   const groupId = button?.dataset.groupId || "";
   const folderId = button?.dataset.folderId || "";
   if (!groupId || !folderId) return;
+  const focus = imaFocusSnapshot(button);
   const key = imaMountCacheKey(groupId, folderId);
   const opening = !imaMountState.expanded.has(key);
   if (opening) imaMountState.expanded.add(key);
   else imaMountState.expanded.delete(key);
   renderImaFolderTree(imaMountState.selectedGroupId);
+  imaRestoreFocus(focus);
   if (opening && !imaMountState.folders.has(key)) loadImaFolderChildren(groupId, folderId);
 }
 
@@ -5407,7 +5425,7 @@ function toggleImaFolder(input) {
   const groupId = input?.dataset.groupId || "";
   const folderId = input?.dataset.folderId || "";
   if (!groupId || !folderId || input.disabled) return;
-  const focusId = input.id;
+  const focus = imaFocusSnapshot(input);
   const selected = imaMountDraft(groupId);
   if (input.checked) {
     selected.delete(folderId);
@@ -5426,32 +5444,48 @@ function toggleImaFolder(input) {
   }
   imaMountState.dirty = true;
   renderImaMountGroups();
-  document.getElementById(focusId)?.focus({ preventScroll: true });
+  imaRestoreFocus(focus);
 }
 
 async function loadImaFolderChildren(groupId, parentId, force = false) {
   const key = imaMountCacheKey(groupId, parentId);
   if (!force && imaMountState.folders.has(key)) return;
   if (imaMountState.loading.has(key)) return;
-  const generation = imaMountState.generation;
+  const focus = imaFocusSnapshot();
+  const request = { generation: imaMountState.generation, id: ++imaMountState.requestSeq };
   if (force) imaMountState.folders.delete(key);
   imaMountState.errors.delete(key);
   imaMountState.loading.add(key);
-  if (String(imaMountState.selectedGroupId) === String(groupId)) renderImaFolderTree(groupId);
+  imaMountState.folderRequests.set(key, request);
+  if (String(imaMountState.selectedGroupId) === String(groupId)) {
+    renderImaFolderTree(groupId);
+    imaRestoreFocus(focus);
+  }
   try {
     const path = `/api/admin/ima-collector/groups/${encodeURIComponent(groupId)}/folders?parent_id=${encodeURIComponent(parentId)}`;
     const data = await api(path);
-    if (generation !== imaMountState.generation) return;
+    const current = request.generation === imaMountState.generation
+      && imaMountState.folderRequests.get(key) === request;
+    if (!current) return;
     const items = Array.isArray(data.items) ? data.items : [];
     imaMountState.folders.set(key, items);
     items.forEach((item) => {
       if (item?.id) imaMountState.parents.set(imaMountCacheKey(groupId, String(item.id)), String(item.parent_id || parentId));
     });
   } catch (err) {
-    if (generation === imaMountState.generation) imaMountState.errors.set(key, imaSafeError(err.message || "文件夹加载失败"));
+    const current = request.generation === imaMountState.generation
+      && imaMountState.folderRequests.get(key) === request;
+    if (current) imaMountState.errors.set(key, imaSafeError(err.message || "文件夹加载失败"));
   } finally {
+    const current = request.generation === imaMountState.generation
+      && imaMountState.folderRequests.get(key) === request;
+    if (!current) return;
+    imaMountState.folderRequests.delete(key);
     imaMountState.loading.delete(key);
-    if (String(imaMountState.selectedGroupId) === String(groupId)) renderImaFolderTree(groupId);
+    if (String(imaMountState.selectedGroupId) === String(groupId)) {
+      renderImaFolderTree(groupId);
+      imaRestoreFocus(focus);
+    }
   }
 }
 
@@ -5461,28 +5495,41 @@ function retryImaFolderLoad(button) {
 
 async function discoverImaGroups() {
   if (imaMountState.discoveryBusy) return;
+  const routeSeq = routeRenderSeq;
+  const generation = imaMountState.generation;
+  const discoverySeq = ++imaMountState.discoverySeq;
+  imaMountState.discoveryBusy = true;
   const button = $("#ima-discover-btn");
   const status = $("#ima-group-discovery-status");
-  imaMountState.discoveryBusy = true;
   if (button) button.disabled = true;
   if (status) status.textContent = "正在发现共享知识库…";
   try {
     const result = await api("/api/admin/ima-collector/discover", { method: "POST" });
+    if (generation !== imaMountState.generation
+      || imaMountState.discoverySeq !== discoverySeq
+      || !routeStillActive(routeSeq)) return;
     if (result.ok && result.config) {
       initImaMountState(result.config.groups, true);
       renderImaMountGroups();
-      if (status) status.innerHTML = imaGroupDiscoveryStatusText(result);
+      const currentStatus = $("#ima-group-discovery-status");
+      if (currentStatus) currentStatus.innerHTML = imaGroupDiscoveryStatusText(result);
       const group = imaMountGroup(imaMountState.selectedGroupId);
       if (group) loadImaFolderChildren(String(group.id), String(group.root_folder_id || ""));
-    } else if (status) {
+    } else {
       const error = result.discovery?.error || "自动发现失败";
-      status.innerHTML = `自动发现失败：${escapeHtml(imaSafeError(error))}（已保留上次结果）`;
+      const currentStatus = $("#ima-group-discovery-status");
+      if (currentStatus) currentStatus.innerHTML = `自动发现失败：${escapeHtml(imaSafeError(error))}（已保留上次结果）`;
     }
   } catch (err) {
-    if (status) status.innerHTML = `自动发现失败：${escapeHtml(imaSafeError(err.message || "请求失败"))}（已保留上次结果）`;
+    if (imaMountState.discoverySeq === discoverySeq && routeStillActive(routeSeq)) {
+      const currentStatus = $("#ima-group-discovery-status");
+      if (currentStatus) currentStatus.innerHTML = `自动发现失败：${escapeHtml(imaSafeError(err.message || "请求失败"))}（已保留上次结果）`;
+    }
   } finally {
+    if (imaMountState.discoverySeq !== discoverySeq || !routeStillActive(routeSeq)) return;
     imaMountState.discoveryBusy = false;
-    if (button) button.disabled = false;
+    const currentButton = $("#ima-discover-btn");
+    if (currentButton && document.body.contains(currentButton)) currentButton.disabled = false;
   }
 }
 
@@ -5527,10 +5574,12 @@ function imaGroupDiscoveryStatusText(status) {
   return `已发现 ${groups.length} 个知识库 · 已挂载 ${mounted} 个${synced}`;
 }
 
-async function loadAdminStats() {
+async function loadAdminStats(seq = _adminRenderSeq) {
+  if (!routeStillActive(seq)) return;
   stopStatsTimer();
   const s = await api("/api/stats");
-  if (!routeStillActive(_adminRenderSeq)) return;
+  if (!routeStillActive(seq)) return;
+  const preserveMountDraft = imaMountState.dirty;
   const xq = s.xueqiu_cookie || {};
   const tw = s.twitter_cookie || {};
   const ima = s.ima_credentials || {};
@@ -5887,7 +5936,7 @@ async function loadAdminStats() {
     </div>
     <div id="st-proxies" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-proxies" style="display:none"></div>`;
   renderStatsData(s);
-  initImaMountState(pure.groups || []);
+  initImaMountState(pure.groups || [], preserveMountDraft);
   renderImaMountGroups();
   switchStatsTab(statsTabFromHash());
   statsTimer = setInterval(async () => {
@@ -6544,10 +6593,15 @@ function imaCollectorStatusText(status) {
 }
 
 async function saveImaCollector() {
+  const routeSeq = routeRenderSeq;
+  const saveButton = $("#ima-collector-save");
+  if (saveButton?.disabled) return;
+  if (saveButton) saveButton.disabled = true;
   const focusId = document.activeElement?.id || "";
   const minutes = Number($("#ima-pure-interval")?.value || 60);
   if (!Number.isInteger(minutes) || minutes < 30 || minutes > 10080) {
     flash("检查间隔须在 30–10080 分钟", "error");
+    if (saveButton && document.body.contains(saveButton)) saveButton.disabled = false;
     return;
   }
   const body = {
@@ -6561,14 +6615,19 @@ async function saveImaCollector() {
   if (token) body.refresh_token = token;
   try {
     await api("/api/admin/ima-collector", { method: "PUT", body: JSON.stringify(body) });
+    imaMountState.dirty = false;
+    if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats") return;
     const tokenInput = $("#ima-pure-token");
     if (tokenInput) tokenInput.value = "";
     flash("IMA 文档采集配置已保存");
-    await loadAdminStats();
+    await loadAdminStats(routeSeq);
+    if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats") return;
     const focusTarget = document.getElementById(focusId) || document.getElementById("ima-collector-save");
     focusTarget?.focus({ preventScroll: true });
   } catch (err) {
     flash(err.message || "保存失败", "error");
+  } finally {
+    if (saveButton && document.body.contains(saveButton)) saveButton.disabled = false;
   }
 }
 
