@@ -142,12 +142,12 @@ def _safe_error(exc: BaseException) -> str:
     )
     def redact_scheme(match: re.Match[str]) -> str:
         prefix = text[: match.start()]
-        if re.search(r"(?i)authorization\s*:\s*$", prefix):
+        if re.search(r"(?i)authorization\s*[:=]\s*$", prefix):
             return match.group(0)
         return f"{match.group(1)}<redacted>"
 
     text = re.sub(
-        r"(?i)((?:\bbasic|\bbearer)\s+)[^\s,;&]+",
+        r"(?i)((?<![A-Za-z0-9_.-])(?:\bbasic|\bbearer)\s+)[^\s,;&]+",
         redact_scheme,
         text,
     )

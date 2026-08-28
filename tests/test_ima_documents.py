@@ -1409,8 +1409,11 @@ def test_safe_error_redacts_credential_shapes(message):
 def test_safe_error_leaves_prefixed_header_names_unchanged():
     for message in (
         "my-cookie: public",
+        "my-cookie=public",
         "my-set-cookie: public",
+        "my-set-cookie=public",
         "my-authorization: Bearer public",
+        "my-authorization=Bearer public",
     ):
         assert _safe_error(RuntimeError(message)) == message
 
@@ -1432,6 +1435,9 @@ def test_error_summary_redacts_urls_and_credentials():
 def test_safe_error_redacts_standalone_basic_credential():
     text = _safe_error(RuntimeError("Basic dXNlcjpwYXNz"))
     assert "dXNlcjpwYXNz" not in text
+    assert "<redacted>" in text
+    text = _safe_error(RuntimeError("Authorization=Bearer authorization-secret"))
+    assert "authorization-secret" not in text
     assert "<redacted>" in text
 
 
