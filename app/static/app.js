@@ -24,7 +24,6 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.83";
 const TL_SOURCE_KEY = "timelineSource";
 const KB_LAST_GROUP_KEY = "kb-last-group";
 const PLATFORM_TABS = ["", "system", "xueqiu", "combination", "weibo", "twitter", "zsxq", "mx"];
@@ -65,7 +64,7 @@ const ARROW_UP_ICON = `<svg class="tl-badge-arrow" viewBox="0 0 24 24" fill="cur
 const REFRESH_ICON = `<svg class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 5v4h4"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 19v-4h-4"/></svg>`;
 const DOWNLOAD_ICON = `<svg class="download-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>`;
 const SEARCH_ICON = `<svg class="search-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`;
-const GITHUB_ICON = `<svg class="sidebar-gh-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.55 0-.27-.01-1.17-.02-2.12-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.75 2.69 1.25 3.35.95.1-.74.4-1.25.72-1.54-2.55-.29-5.23-1.28-5.23-5.68 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.05 0 0 .96-.31 3.15 1.18a10.9 10.9 0 0 1 5.74 0c2.19-1.49 3.15-1.18 3.15-1.18.62 1.59.23 2.76.11 3.05.73.81 1.18 1.83 1.18 3.09 0 4.41-2.69 5.38-5.25 5.67.41.35.77 1.05.77 2.12 0 1.53-.01 2.76-.01 3.14 0 .3.2.66.8.55A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></svg>`;
+
 // 主题切换图标：线性风格，与 TRASH_ICON 一致（stroke=currentColor）
 const THEME_SUN_ICON = `<svg class="theme-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>`;
 const THEME_MOON_ICON = `<svg class="theme-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
@@ -619,14 +618,9 @@ function renderSidebar(user) {
   $("#sidebar-nav").innerHTML = html;
   $("#sidebar-user").innerHTML = `
     <div class="theme-switcher" id="theme-switcher"></div>
-    <div class="sidebar-foot-links">
-      <a id="sidebar-gh-link" class="sidebar-gh-link" href="https://github.com/icekale/vpush" target="_blank" rel="noopener" title="GitHub 项目">${GITHUB_ICON}</a>
-      <span class="sidebar-user-meta" id="sidebar-version">v${APP_VERSION}</span>
-    </div>
   `;
   renderThemeSwitcher();
   syncSidebarToggle();
-  checkUpdate();
 }
 
 const MOBILE_NAV = [
@@ -1593,23 +1587,6 @@ async function downloadImaPdf(mediaId) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   } catch (err) {
     flash(`PDF 下载失败：${err.message}`, "error");
-  }
-}
-
-async function checkUpdate() {
-  try {
-    const v = await api("/api/version");
-    const link = $("#sidebar-gh-link");
-    const meta = $("#sidebar-version");
-    if (!link || !meta) return;
-    // 始终显示服务端返回的当前版本，避免本地硬编码版本过期
-    meta.innerHTML = `v${escapeHtml(v.current)}`;
-    if (v.update_available && v.latest) {
-      link.classList.add("has-update");
-      meta.innerHTML += ` <a class="sidebar-update" href="${escapeHtml(v.url)}" target="_blank" rel="noopener" title="有新版本">↑ ${escapeHtml(v.latest)}</a>`;
-    }
-  } catch {
-    /* 更新检查失败不打扰，保留本地硬编码版本兜底 */
   }
 }
 
@@ -9760,12 +9737,22 @@ function themeLabelFor(mode) {
   return { light: "浅色", dark: "深色", auto: "跟随系统" }[mode] || "跟随系统";
 }
 
+function toggleLightDarkTheme() {
+  // 浅色/深色互切按钮：auto 时按当前生效主题取反，落回显式主题
+  const dark = document.documentElement.classList.contains("theme-dark");
+  setTheme(dark ? "light" : "dark");
+}
+
 function renderThemeSwitcher() {
   const el = $("#theme-switcher");
   if (!el) return;
   const mode = themeMode();
-  el.innerHTML = ["light", "dark", "auto"].map((m) => `
-    <button class="theme-mode ${mode === m ? "selected" : ""}" data-mode="${m}" title="${themeLabelFor(m)}" aria-label="${themeLabelFor(m)}" aria-pressed="${mode === m}" onclick="setTheme('${m}')">${themeIconFor(m)}</button>`).join("");
+  // 浅色/深色合成一个互切按钮（图标显示当前生效主题），跟随系统独立保留
+  const effective = document.documentElement.classList.contains("theme-dark") ? "dark" : "light";
+  const toggleLabel = effective === "dark" ? "切换为浅色" : "切换为深色";
+  el.innerHTML = `
+    <button class="theme-mode ${mode !== "auto" ? "selected" : ""}" data-mode="${effective}" title="${toggleLabel}" aria-label="${toggleLabel}" aria-pressed="${mode !== "auto"}" onclick="toggleLightDarkTheme()">${themeIconFor(effective)}</button>
+    <button class="theme-mode ${mode === "auto" ? "selected" : ""}" data-mode="auto" title="${themeLabelFor("auto")}" aria-label="${themeLabelFor("auto")}" aria-pressed="${mode === "auto"}" onclick="setTheme('auto')">${themeIconFor("auto")}</button>`;
 }
 
 function updateThemeToggleIcon() {
