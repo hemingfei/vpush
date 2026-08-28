@@ -1114,6 +1114,36 @@ def test_ima_pdf_download_timeout_revoke_rechecks_session_owner():
     assert guard < revoke
 
 
+def test_ima_pdf_load_is_owned_by_route_and_reader_generation_before_load_or_fail_side_effects():
+    """旧阅读器的 PDF 完成、校验失败和 iframe 错误不得污染当前阅读器。"""
+    src = APP_JS.read_text()
+    reader = _fn_body("renderImaDocument")
+    load = _fn_body("loadImaPdf")
+    fail = _fn_body("showImaPdfFail")
+
+    assert "const readerSeq = ++_imaReaderSeq" in reader
+    assert "loadImaPdf(mediaId, readerSeq)" in reader
+    assert re.search(r"async function loadImaPdf\(mediaId, readerSeq\)", src)
+    assert re.search(r"function showImaPdfFail\(mediaId, seq, readerSeq\)", src)
+
+    owner_guard = "if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;"
+    assert load.count(owner_guard) >= 2
+    head_read = "await blob.slice(0, 5).text()"
+    assert load.index(owner_guard) < load.index(head_read)
+    assert load.index(owner_guard, load.index(head_read)) < load.index("showImaPdfFail(mediaId, seq, readerSeq)")
+    assert "showImaPdfFail(mediaId, seq, readerSeq)" in load
+    assert "() => showImaPdfFail(mediaId, seq, readerSeq)" in load
+    assert owner_guard in fail
+    fail_guard = fail.index(owner_guard)
+    for side_effect in ("clearImaPdfUrl()", "panel.hidden = false", "panel.innerHTML"):
+        assert fail_guard < fail.index(side_effect)
+    validation = load.index("if (blob.size < 64 || head !== \"%PDF-\")")
+    assert validation < load.index("showImaPdfFail(mediaId, seq, readerSeq)")
+    success_guard = load.index(owner_guard, load.index(head_read))
+    for side_effect in ("clearImaPdfUrl()", "URL.createObjectURL(blob)", "frame.src", "panel.hidden = false", "frame.addEventListener"):
+        assert success_guard < load.index(side_effect)
+
+
 def test_cookie_save_nested_stats_reload_preserves_owner_sequence_and_focus_guard():
     """Cookie 保存及清除的嵌套 stats GET 必须继承原路由令牌，再检查会话后聚焦。"""
     for name in ("clearSavedCookie", "saveXueqiuCookie", "saveZsxqCookie", "saveTwitterCookie", "saveImaCredentials"):
@@ -2810,7 +2840,7 @@ def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
     assert "IMA_TAG_COMMON_RATIO" in src
     assert "imaDocumentsRoute(group, query, day, tag)" in reader or "imaDocumentsRoute(item.group_id, query, day, tag)" in reader
     assert "closeImaPdf" in src
-    assert "loadImaPdf(mediaId)" in reader
+    assert "loadImaPdf(mediaId, readerSeq)" in reader
     assert "ima-doc-abstract" not in row
     assert "item.abstract" not in row
     assert "ima-doc-row-thumb" not in row

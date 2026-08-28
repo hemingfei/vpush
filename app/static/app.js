@@ -1541,7 +1541,7 @@ async function renderImaDocument(seq, mediaId) {
         ${pdfPanel}
       </section>`;
     syncKnowledgeDocSelection();
-    if (item.has_pdf) loadImaPdf(mediaId);
+    if (item.has_pdf) loadImaPdf(mediaId, readerSeq);
     if (item.needs_translation) {
       try {
         const translated = await api(`/api/ima-documents/${encodeURIComponent(mediaId)}/translate${groupQuery}`, { method: "POST" });
@@ -1562,7 +1562,8 @@ async function renderImaDocument(seq, mediaId) {
   }
 }
 
-function showImaPdfFail(mediaId) {
+function showImaPdfFail(mediaId, seq, readerSeq) {
+  if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
   const panel = $("#ima-pdf-panel");
   if (!panel) return;
   clearImaPdfUrl();
@@ -1570,16 +1571,17 @@ function showImaPdfFail(mediaId) {
   panel.innerHTML = `<div class="ima-reader-empty" role="status"><p>预览打不开</p><button type="button" class="btn-normal" onclick="downloadImaPdf('${escapeHtml(mediaId)}')">下载 PDF</button></div>`;
 }
 
-async function loadImaPdf(mediaId) {
+async function loadImaPdf(mediaId, readerSeq) {
   const seq = routeRenderSeq;
   const group = routeQuery().get("group") || state.imaDocumentsGroup || "";
   const groupQuery = group ? `?group=${encodeURIComponent(group)}` : "";
   try {
     const blob = await apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/pdf${groupQuery}`);
-    if (!routeStillActive(seq)) return;
+    if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
     const head = blob.size ? await blob.slice(0, 5).text() : "";
+    if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
     if (blob.size < 64 || head !== "%PDF-") {
-      showImaPdfFail(mediaId);
+      showImaPdfFail(mediaId, seq, readerSeq);
       return;
     }
     clearImaPdfUrl();
@@ -1589,10 +1591,10 @@ async function loadImaPdf(mediaId) {
     if (frame && panel) {
       frame.src = window._imaPdfUrl;
       panel.hidden = false;
-      frame.addEventListener("error", () => showImaPdfFail(mediaId), { once: true });
+      frame.addEventListener("error", () => showImaPdfFail(mediaId, seq, readerSeq), { once: true });
     }
   } catch {
-    if (routeStillActive(seq)) showImaPdfFail(mediaId);
+    if (routeStillActive(seq) && readerSeq === _imaReaderSeq) showImaPdfFail(mediaId, seq, readerSeq);
   }
 }
 
