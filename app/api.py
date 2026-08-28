@@ -3376,6 +3376,110 @@ def create_api_router(
         _audit(admin, "update_mx_room", str(room_id), f"enabled={enabled}, show_in_plaza={show_in_plaza}")
         return {"ok": True}
 
+    @router.post("/admin/sources/mx/rooms/{room_id}/pull-history", dependencies=[Depends(require_admin)])
+    async def pull_mx_room_history(room_id: int, background_tasks: BackgroundTasks, admin: dict = Depends(require_admin)):
+        """拉取 MX 房间历史消息。"""
+        kol = db.get_kol_by_external("mx", str(room_id))
+        if not kol:
+            raise HTTPException(status_code=404, detail="房间不存在")
+        
+        from .config import load_config
+        from .fetchers.mx.fetcher import MxFetcher
+        
+        config = load_config()
+        mx_config = config.sources.mx if hasattr(config.sources, "mx") else None
+        if not mx_config or not mx_config.enabled:
+            raise HTTPException(status_code=400, detail="MX 平台未启用")
+        
+        def pull_history_task():
+            try:
+                logger.info(f"开始拉取 MX 房间 {room_id} 历史消息")
+                fetcher = MxFetcher(mx_config, db)
+                
+                # 先直接调用 mx_client 来看看原始响应
+                import json
+                test_messages = fetcher.mx_client.get_room_history(room_id, 0, 5)
+                logger.info(f"直接 mx_client 调用获取到 {len(test_messages)} 条消息")
+                for i, msg in enumerate(test_messages):
+                    logger.info(f"原始消息 {i}: {json.dumps(msg, ensure_ascii=False, default=str)}")
+                
+                # 首先，先调用一次 fetch() 看看是否能正常获取消息
+                initial_posts = fetcher.fetch(kol)
+                logger.info(f"初始 fetch 调用获取到 {len(initial_posts)} 条帖子")
+                
+                # 获取更多历史消息
+                max_pages = getattr(mx_config, "max_history_pages", 100)
+                page_size = getattr(mx_config, "page_size", 50)
+                
+                all_messages = []
+                current_msg_id = 0
+                pages_fetched = 0
+                
+                while pages_fetched < max_pages:
+                    try:
+                        logger.info(f"正在获取第 {pages_fetched + 1} 页，游标 {current_msg_id}")
+                        messages = fetcher.mx_client.get_room_history(room_id, current_msg_id, page_size)
+                        logger.info(f"获取到 {len(messages)} 条消息")
+                        
+                        if not messages:
+                            logger.info("没有更多消息了")
+                            break
+                        
+                        # 记录几条消息的样本以便调试
+                        for i, msg in enumerate(messages[:3]):
+                            logger.info(f"消息 {i} 样本：{json.dumps(msg, ensure_ascii=False, default=str)}")
+                        
+                        all_messages.extend(messages)
+                        
+                        # 找到最旧的消息 id 作为下一页的游标
+                        if len(messages) > 0:
+                            msg_ids = [msg.get("id", 0) for msg in messages if msg.get("id")]
+                            if msg_ids:
+                                current_msg_id = min(msg_ids)
+                                logger.info(f"下一页游标：{current_msg_id}")
+                            else:
+                                logger.info("没有找到消息 id，停止分页")
+                                break
+                        
+                        pages_fetched += 1
+                        
+                        # 如果返回的消息少于 page_size，说明是最后一页
+                        if len(messages) < page_size:
+                            logger.info("消息数量少于页面大小，已经是最后一页")
+                            break
+                        
+                        time.sleep(0.1)  # 避免请求过快
+                    except Exception as page_e:
+                        logger.error(f"获取第 {pages_fetched + 1} 页时出错：{page_e}", exc_info=True)
+                        break
+                
+                logger.info(f"总共获取到 {len(all_messages)} 条原始消息")
+                
+                # 解析并保存帖子
+                posts = fetcher._build_posts(kol, all_messages)
+                logger.info(f"解析后得到 {len(posts)} 条帖子")
+                
+                # 记录解析后的帖子信息
+                for i, post in enumerate(posts[:5]):
+                    logger.info(f"解析后的帖子 {i}: {post.__dict__}")
+                
+                # 按发布时间升序处理
+                posts = sorted(posts, key=lambda p: int(getattr(p, 'published_at', 0) or 0))
+                post_ids = db.insert_posts_batch(posts)
+                
+                # 标记基线（如果还没有）
+                if not kol.get("baseline_ready"):
+                    db.mark_kol_baseline(kol["id"])
+                
+                new_count = sum(1 for pid in post_ids if pid is not None)
+                logger.info(f"完成拉取 MX 房间 {room_id} 历史消息：共 {len(posts)} 条，新增 {new_count} 条")
+            except Exception as e:
+                logger.error(f"拉取 MX 房间 {room_id} 历史消息失败：{e}", exc_info=True)
+        
+        background_tasks.add_task(pull_history_task)
+        _audit(admin, "pull_mx_room_history", str(room_id), "")
+        return {"ok": True, "message": "历史消息拉取已开始"}
+
     @router.get("/admin/sources/mx/ws-status", dependencies=[Depends(require_admin)])
     def get_mx_ws_status():
         """获取 MX WebSocket 连接状态。"""

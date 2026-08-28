@@ -6117,12 +6117,13 @@ async function loadMxRooms() {
             <td>${r.enabled ? "✅" : "❌"}</td>
             <td>${r.show_in_plaza ? "✅" : "❌"}</td>
             <td>${Number(r.subscriber_count) || 0}</td>
-            <td>
-              <div class="toolbar">
-                <button type="button" class="btn-ghost" onclick="updateMxRoom(${r.id}, { enabled: !${r.enabled} })">${r.enabled ? "禁用" : "启用"}</button>
-                <button type="button" class="btn-ghost" onclick="updateMxRoom(${r.id}, { show_in_plaza: !${r.show_in_plaza} })">${r.show_in_plaza ? "隐藏广场" : "显示广场"}</button>
-              </div>
-            </td>
+	            <td>
+	              <div class="toolbar">
+	                <button type="button" class="btn-ghost" onclick="updateMxRoom(${r.id}, { enabled: !${r.enabled} })">${r.enabled ? "禁用" : "启用"}</button>
+	                <button type="button" class="btn-ghost" onclick="updateMxRoom(${r.id}, { show_in_plaza: !${r.show_in_plaza} })">${r.show_in_plaza ? "隐藏广场" : "显示广场"}</button>
+	                <button type="button" class="btn-ghost" onclick="pullMxRoomHistory(${r.id})">拉取历史消息</button>
+	              </div>
+	            </td>
           </tr>`).join("")}
         </tbody>
       </table>
@@ -6134,17 +6135,28 @@ async function loadMxRooms() {
 }
 
 async function updateMxRoom(roomId, body) {
-  try {
-    await api(`/api/admin/sources/mx/rooms/${roomId}`, {
-      method: "PUT",
-      body: JSON.stringify(body),
-    });
-    flash("房间已更新");
-    loadMxRooms();
-  } catch (err) {
-    flash(err.message || "更新失败", "error");
-  }
-}
+	  try {
+	    await api(`/api/admin/sources/mx/rooms/${roomId}`, {
+	      method: "PUT",
+	      body: JSON.stringify(body),
+	    });
+	    flash("房间已更新");
+	    loadMxRooms();
+	  } catch (err) {
+	    flash(err.message || "更新失败", "error");
+	  }
+	}
+
+async function pullMxRoomHistory(roomId) {
+	  try {
+	    await api(`/api/admin/sources/mx/rooms/${roomId}/pull-history`, {
+	      method: "POST",
+	    });
+	    flash("历史消息拉取已触发");
+	  } catch (err) {
+	    flash(err.message || "拉取历史消息失败", "error");
+	  }
+	}
 
 async function loadProxyAdmin() {
   const box = $("#st-proxies");

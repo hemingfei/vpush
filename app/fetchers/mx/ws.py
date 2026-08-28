@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+import asyncio
 from datetime import datetime
 from typing import Any, Callable
 
@@ -36,7 +37,7 @@ class MxWsClient:
         try:
             import socketio
 
-            self._sio = socketio.AsyncClient()
+            self._sio = socketio.AsyncClient(logger=logger, engineio_logger=logger)
 
             @self._sio.event
             async def connect():
@@ -59,14 +60,16 @@ class MxWsClient:
             auth = {
                 "tt": int(time.time() * 1000),
                 "token": self.config.token,
-                "version": "web"
+                "version": "web",
             }
 
+            logger.info(f"Connecting to MX WebSocket at {self.config.ws_url}, path={self.config.ws_path}")
             await self._sio.connect(
                 self.config.ws_url,
                 socketio_path=self.config.ws_path,
-                transports=["websocket"],
-                auth=auth
+                transports=["websocket", "polling"],  # Allow both transports for better compatibility
+                auth=auth,
+                wait_timeout=30
             )
 
         except Exception as e:
@@ -99,7 +102,7 @@ class MxWsClient:
     def _parse_message(self, data) -> dict | None:
         """
         Parse incoming WebSocket message.
-        
+
         Handles various message formats:
         - Plain JSON object (case A)
         - Encrypted string (case B)
@@ -156,7 +159,7 @@ class MxWsClient:
                 self.connected = False
 
                 if not self._should_stop:
-                    time.sleep(5)
+                    await asyncio.sleep(5)  # Use asyncio.sleep instead of time.sleep!
 
     async def stop(self):
         """Stop the WebSocket client."""
