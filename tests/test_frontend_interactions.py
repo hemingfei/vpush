@@ -2917,3 +2917,13 @@ def test_ima_collector_save_tracks_focus_moves_through_stats_reload():
     post_reload_guard = save.index("!focusMoved", reload_index)
     assert post_reload_guard > reload_index
     assert "if (!focusMoved" in save[reload_index:]
+
+
+def test_ima_collector_save_decides_focus_after_stats_reload_await():
+    """restoreFocus 判定必须发生在 stats reload 完成后，而非 reload 前。"""
+    save = _fn_body("saveImaCollector")
+    reload_index = save.index("await loadAdminStats(routeSeq)")
+    restore_index = save.index("const restoreFocus =")
+    assert restore_index > reload_index
+    assert "const restoreFocus =" not in save[:reload_index]
+    assert "if (!focusMoved && restoreFocus)" in save[restore_index:]
