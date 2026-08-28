@@ -42,7 +42,7 @@ sources:
     enabled: false     # 是否启用 MX 平台
     token: ""         # MX API 访问 token
     api_base: "https://mx.2026.naaifu.cn/business-api/5"  # MX API 基础地址
-    ws_url: "wss://mx.2026.naaifu.cn"  # MX WebSocket 地址（注意：/msg 是 namespace，不是 URL 部分）
+    ws_url: "wss://mx.2026.naaifu.cn/msg"  # MX WebSocket 地址
     ws_path: "/socket.io"  # MX WebSocket 路径
     ws_enabled: true   # 是否启用 WebSocket 实时推送
     page_size: 50      # 历史消息分页大小

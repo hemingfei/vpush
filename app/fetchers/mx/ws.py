@@ -38,39 +38,46 @@ class MxWsClient:
         """Connect to MX WebSocket server."""
         try:
             import socketio
+            from urllib.parse import urlparse
 
-            # 使用与 chat-monitor 一致的配置
+            # 解析 URL，分离基础 URL 和 namespace
+            parsed_url = urlparse(self.config.ws_url)
+            base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+            # 使用 URL 中的路径作为 namespace，如果为空则用默认的 /msg
+            namespace = parsed_url.path if parsed_url.path else self.NAMESPACE
+
+            # 使用与 chat-monitor 一致的配置，但关闭底层 Engine.IO 的详细日志
             self._sio = socketio.AsyncClient(
                 logger=logger,
-                engineio_logger=logger,
+                engineio_logger=False,  # 关闭 Engine.IO 底层详细日志，避免刷屏
                 reconnection=True,
-                reconnection_delay=1000,
-                reconnection_delay_max=5000
+                reconnection_delay=3000,  # 增加重连延迟到 3 秒，避免立即重连
+                reconnection_delay_max=10000  # 最大延迟 10 秒
             )
 
-            @self._sio.event(namespace=self.NAMESPACE)
+            @self._sio.event(namespace=namespace)
             async def connect():
                 logger.info("MX WebSocket connected")
                 self.connected = True
 
-            @self._sio.event(namespace=self.NAMESPACE)
+            @self._sio.event(namespace=namespace)
             async def disconnect():
                 logger.info("MX WebSocket disconnected")
                 self.connected = False
 
-            @self._sio.event(namespace=self.NAMESPACE)
+            @self._sio.event(namespace=namespace)
             async def connect_error(data):
                 logger.error(f"MX WebSocket connect_error: {data}")
 
-            @self._sio.on('room_msg', namespace=self.NAMESPACE)
+            @self._sio.on('room_msg', namespace=namespace)
             async def on_room_msg(data):
                 await self._handle_message(data)
 
             # 添加兜底捕获所有事件
-            @self._sio.on('*', namespace=self.NAMESPACE)
+            @self._sio.on('*', namespace=namespace)
             async def catch_all(event, data):
                 if event not in ['connect', 'disconnect', 'connect_error', 'room_msg']:
-                    logger.debug(f"Received MX WebSocket event {self.NAMESPACE}: {event}")
+                    logger.debug(f"Received MX WebSocket event {namespace}: {event}")
                     await self._handle_message(data)
 
             auth = {
@@ -80,16 +87,16 @@ class MxWsClient:
             }
 
             logger.info(
-                f"Connecting to MX WebSocket at {self.config.ws_url}, "
-                f"path={self.config.ws_path}, namespace={self.NAMESPACE}"
+                f"Connecting to MX WebSocket at {base_url}, "
+                f"path={self.config.ws_path}, namespace={namespace}"
             )
             await self._sio.connect(
-                self.config.ws_url,
+                base_url,
                 socketio_path=self.config.ws_path,
                 transports=["websocket"],  # 与 chat-monitor 一致，仅使用 websocket
                 auth=auth,
                 wait_timeout=60,
-                namespaces=[self.NAMESPACE]
+                namespaces=[namespace]
             )
 
         except Exception as e:
