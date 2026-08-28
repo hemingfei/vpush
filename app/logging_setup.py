@@ -50,6 +50,13 @@ def redact_secrets(text) -> str:
         result = pattern.sub(repl, result)
     return result[:MAX_REDACTED_LEN]
 
+class RedactingFormatter(logging.Formatter):
+    """格式化完整日志行后脱敏，避免日志 sink 保存明文凭据。"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return redact_secrets(super().format(record))
+
+
 _ring: deque[str] = deque(maxlen=RING_SIZE)
 _ring_lock = threading.Lock()
 _configured_lock = threading.Lock()
@@ -148,7 +155,7 @@ def setup_logging(level: str | None = None, log_file: str | None = None) -> None
         root.setLevel(level.upper())
         # 幂等：避免 create_app 多次调用时重复挂 handler
         if not any(isinstance(h, RingBufferHandler) for h in root.handlers):
-            formatter = logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT)
+            formatter = RedactingFormatter(LOG_FORMAT, datefmt=DATE_FORMAT)
             console = logging.StreamHandler()
             console.setFormatter(formatter)
             root.addHandler(console)

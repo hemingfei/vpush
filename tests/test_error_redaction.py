@@ -1,6 +1,15 @@
 """错误文本脱敏：凭据不得随异常原文进 push_logs / error_logs。"""
+import logging
+
 from app.db import DB
-from app.logging_setup import redact_secrets
+from app.logging_setup import (
+    RedactingFormatter,
+    RingBufferHandler,
+    _ring,
+    _ring_lock,
+    recent_logs,
+    redact_secrets,
+)
 
 
 def test_redact_secrets_patterns():
@@ -33,6 +42,42 @@ def test_redact_secrets_cookie_and_api_key_names():
 def test_redact_secrets_does_not_match_prefixed_key_names():
     text = "my_api_key=ordinary-value api_key_suffix=ordinary-value"
     assert redact_secrets(text) == text
+
+
+def test_redacting_formatter_removes_credentials_and_preserves_ordinary_text():
+    formatter = RedactingFormatter("%(levelname)s %(message)s")
+    secret = "Cookie: auth_token=short8; api_key=long-secret-value-1234567890 Bearer abcdefghijklmnop"
+    record = logging.LogRecord("test", logging.WARNING, __file__, 1, "%s", (secret,), None)
+
+    output = formatter.format(record)
+
+    assert "short8" not in output
+    assert "long-secret-value-1234567890" not in output
+    assert "abcdefghijklmnop" not in output
+    ordinary = logging.LogRecord("test", logging.INFO, __file__, 1, "ordinary text", (), None)
+    assert formatter.format(ordinary) == "INFO ordinary text"
+
+
+def test_ring_buffer_redacts_logged_credentials():
+    with _ring_lock:
+        _ring.clear()
+    logger = logging.getLogger("test.redacting-ring")
+    handler = RingBufferHandler()
+    handler.setFormatter(RedactingFormatter("%(levelname)s %(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.WARNING)
+    logger.propagate = False
+    try:
+        logger.warning("Cookie: auth_token=short8 api_key=long-secret-value-1234567890 Bearer abcdefghijklmnop")
+        lines = recent_logs(limit=1)
+    finally:
+        logger.removeHandler(handler)
+
+    assert len(lines) == 1
+    assert "short8" not in lines[0]
+    assert "long-secret-value-1234567890" not in lines[0]
+    assert "abcdefghijklmnop" not in lines[0]
+    assert "WARNING" in lines[0]
 
 
 def test_db_persisted_errors_are_redacted(tmp_path):
