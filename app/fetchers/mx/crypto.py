@@ -92,7 +92,7 @@ def lzstring_decompress(compressed: str) -> str:
     Returns:
         解压后的字符串
     """
-    return lzstring.LZString.decompressFromBase64(compressed)
+    return lzstring.LZString.decompress(compressed)
 
 
 def try_decrypt_with_keys(
