@@ -3282,8 +3282,9 @@ def create_api_router(
                     "enabled": False,
                     "token": "",
                     "api_base": "https://mx.2026.naaifu.cn/business-api/5",
-                    "ws_url": "wss://mx.2026.naaifu.cn/msg",
+                    "ws_url": "wss://mx.2026.naaifu.cn",
                     "ws_path": "/socket.io",
+                    "ws_namespace": "/msg",
                     "ws_enabled": True,
                     "page_size": 50,
                     "max_history_pages": 100,
@@ -3293,8 +3294,9 @@ def create_api_router(
                 "enabled": bool(getattr(mx_config, "enabled", False)),
                 "token": getattr(mx_config, "token", ""),
                 "api_base": getattr(mx_config, "api_base", "https://mx.2026.naaifu.cn/business-api/5"),
-                "ws_url": getattr(mx_config, "ws_url", "wss://mx.2026.naaifu.cn/msg"),
+                "ws_url": getattr(mx_config, "ws_url", "wss://mx.2026.naaifu.cn"),
                 "ws_path": getattr(mx_config, "ws_path", "/socket.io"),
+                "ws_namespace": getattr(mx_config, "ws_namespace", "/msg"),
                 "ws_enabled": bool(getattr(mx_config, "ws_enabled", True)),
                 "page_size": int(getattr(mx_config, "page_size", 50)),
                 "max_history_pages": int(getattr(mx_config, "max_history_pages", 100)),
@@ -3305,8 +3307,9 @@ def create_api_router(
                 "enabled": False,
                 "token": "",
                 "api_base": "https://mx.2026.naaifu.cn/business-api/5",
-                "ws_url": "wss://mx.2026.naaifu.cn/msg",
+                "ws_url": "wss://mx.2026.naaifu.cn",
                 "ws_path": "/socket.io",
+                "ws_namespace": "/msg",
                 "ws_enabled": True,
                 "page_size": 50,
                 "max_history_pages": 100,
@@ -3350,9 +3353,11 @@ def create_api_router(
             if "api_base" in raw_body:
                 config.sources.mx.api_base = str(raw_body["api_base"] or "https://mx.2026.naaifu.cn/business-api/5")
             if "ws_url" in raw_body:
-                config.sources.mx.ws_url = str(raw_body["ws_url"] or "wss://mx.2026.naaifu.cn/msg")
+                config.sources.mx.ws_url = str(raw_body["ws_url"] or "wss://mx.2026.naaifu.cn")
             if "ws_path" in raw_body:
                 config.sources.mx.ws_path = str(raw_body["ws_path"] or "/socket.io")
+            if "ws_namespace" in raw_body:
+                config.sources.mx.ws_namespace = str(raw_body["ws_namespace"] or "/msg")
             if "ws_enabled" in raw_body:
                 config.sources.mx.ws_enabled = bool(raw_body["ws_enabled"])
             if "page_size" in raw_body:

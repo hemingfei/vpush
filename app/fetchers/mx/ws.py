@@ -38,13 +38,9 @@ class MxWsClient:
         """Connect to MX WebSocket server."""
         try:
             import socketio
-            from urllib.parse import urlparse
 
-            # 解析 URL，分离基础 URL 和 namespace
-            parsed_url = urlparse(self.config.ws_url)
-            base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
-            # 使用 URL 中的路径作为 namespace，如果为空则用默认的 /msg
-            namespace = parsed_url.path if parsed_url.path else self.NAMESPACE
+            # 使用配置的 namespace
+            namespace = getattr(self.config, "ws_namespace", self.NAMESPACE)
 
             # 使用与 chat-monitor 一致的配置，但关闭底层 Engine.IO 的详细日志
             self._sio = socketio.AsyncClient(
@@ -87,11 +83,11 @@ class MxWsClient:
             }
 
             logger.info(
-                f"Connecting to MX WebSocket at {base_url}, "
+                f"Connecting to MX WebSocket at {self.config.ws_url}, "
                 f"path={self.config.ws_path}, namespace={namespace}"
             )
             await self._sio.connect(
-                base_url,
+                self.config.ws_url,
                 socketio_path=self.config.ws_path,
                 transports=["websocket"],  # 与 chat-monitor 一致，仅使用 websocket
                 auth=auth,

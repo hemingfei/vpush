@@ -104,8 +104,9 @@ class MxConfig:
     enabled: bool = False
     token: str = ""
     api_base: str = "https://mx.2026.naaifu.cn/business-api/5"
-    ws_url: str = "wss://mx.2026.naaifu.cn/msg"
+    ws_url: str = "wss://mx.2026.naaifu.cn"
     ws_path: str = "/socket.io"
+    ws_namespace: str = "/msg"
     ws_enabled: bool = True
     page_size: int = 50
     max_history_pages: int = 100

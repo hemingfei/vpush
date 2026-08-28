@@ -5931,11 +5931,15 @@ async function loadAdminStats() {
               </label>
               <label class="cfg-field">
                 <span>WebSocket 地址</span>
-                <input id="mx-ws-url" type="text" class="form-control" placeholder="wss://mx.2026.naaifu.cn/msg">
+                <input id="mx-ws-url" type="text" class="form-control" placeholder="wss://mx.2026.naaifu.cn">
               </label>
               <label class="cfg-field">
                 <span>WebSocket 路径</span>
                 <input id="mx-ws-path" type="text" class="form-control" placeholder="/socket.io">
+              </label>
+              <label class="cfg-field">
+                <span>WebSocket Namespace</span>
+                <input id="mx-ws-namespace" type="text" class="form-control" placeholder="/msg">
               </label>
             </div>
           </div>
@@ -6276,8 +6280,9 @@ async function loadMxAdmin() {
     $("#mx-enabled").checked = config.enabled;
     $("#mx-token").value = config.token || "";
     $("#mx-api-base").value = config.api_base || "https://mx.2026.naaifu.cn/business-api/5";
-    $("#mx-ws-url").value = config.ws_url || "wss://mx.2026.naaifu.cn/msg";
+    $("#mx-ws-url").value = config.ws_url || "wss://mx.2026.naaifu.cn";
     $("#mx-ws-path").value = config.ws_path || "/socket.io";
+    $("#mx-ws-namespace").value = config.ws_namespace || "/msg";
     $("#mx-ws-enabled").checked = config.ws_enabled;
     $("#mx-sync-hours").value = config.sync_interval_hours || 1;
     $("#mx-page-size").value = config.page_size || 50;
@@ -6318,8 +6323,9 @@ async function saveMxConfig() {
       enabled: $("#mx-enabled").checked,
       token: $("#mx-token").value.trim(),
       api_base: $("#mx-api-base").value.trim() || "https://mx.2026.naaifu.cn/business-api/5",
-      ws_url: $("#mx-ws-url").value.trim() || "wss://mx.2026.naaifu.cn/msg",
+      ws_url: $("#mx-ws-url").value.trim() || "wss://mx.2026.naaifu.cn",
       ws_path: $("#mx-ws-path").value.trim() || "/socket.io",
+      ws_namespace: $("#mx-ws-namespace").value.trim() || "/msg",
       ws_enabled: $("#mx-ws-enabled").checked,
       page_size,
       max_history_pages,
@@ -6353,8 +6359,9 @@ async function testMxConnection() {
       enabled: $("#mx-enabled").checked,
       token: $("#mx-token").value.trim(),
       api_base: $("#mx-api-base").value.trim() || "https://mx.2026.naaifu.cn/business-api/5",
-      ws_url: $("#mx-ws-url").value.trim() || "wss://mx.2026.naaifu.cn/msg",
+      ws_url: $("#mx-ws-url").value.trim() || "wss://mx.2026.naaifu.cn",
       ws_path: $("#mx-ws-path").value.trim() || "/socket.io",
+      ws_namespace: $("#mx-ws-namespace").value.trim() || "/msg",
       ws_enabled: $("#mx-ws-enabled").checked,
       page_size,
       max_history_pages,
