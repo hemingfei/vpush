@@ -5133,6 +5133,7 @@ async function genBindCode() {
 // ---------- 管理后台（导航统一走左侧边栏） ----------
 let _adminRenderSeq = 0; // 当前管理后台渲染令牌：loader 写 #admin-body 前凭此丢弃过期响应
 let _adminStatsLoadSeq = 0;
+let _lastAdminStatsSnapshot = null;
 
 async function renderAdmin(tab, seq) {
   _adminRenderSeq = seq;
@@ -5656,7 +5657,7 @@ function imaGroupDiscoveryStatusText(status) {
   return `已发现 ${groups.length} 个知识库 · 已挂载 ${mounted} 个${synced}`;
 }
 
-async function loadAdminStats(seq = _adminRenderSeq) {
+async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = null) {
   if (!routeStillActive(seq)) return;
   const pendingOwner = imaMountState.saveOwner;
   if (pendingOwner && !pendingOwner.putCompleted && $("#ima-pure-uid")) {
@@ -5665,20 +5666,29 @@ async function loadAdminStats(seq = _adminRenderSeq) {
   }
   const statsLoadSeq = ++_adminStatsLoadSeq;
   let s;
+  let statsLoadError = null;
   try {
-    s = await api("/api/stats");
+    const stats = await api("/api/stats");
+    s = authoritativeImaStatus ? { ...stats, ima_collector: authoritativeImaStatus } : stats;
+    _lastAdminStatsSnapshot = s;
   } catch (err) {
     if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq) return;
     const message = `加载失败: ${err.message || "请求失败"}`;
-    const retry = `<div><button type="button" class="btn-normal" onclick="loadAdminStats(${seq})">重试</button></div>`;
-    const error = $("#stats-poll-error");
-    if (error && document.body.contains(error)) {
-      error.innerHTML = `<div class="ima-folder-state ima-folder-error" role="alert">${escapeHtml(message)}${retry}</div>`;
+    const fallbackStats = _lastAdminStatsSnapshot;
+    if (fallbackStats && authoritativeImaStatus) {
+      s = { ...fallbackStats, ima_collector: authoritativeImaStatus };
+      statsLoadError = message;
     } else {
-      const body = $("#admin-body");
-      if (body) body.innerHTML = emptyState(message, retry);
+      const retry = `<div><button type="button" class="btn-normal" onclick="loadAdminStats(${seq})">重试</button></div>`;
+      const error = $("#stats-poll-error");
+      if (error && document.body.contains(error)) {
+        error.innerHTML = `<div class="ima-folder-state ima-folder-error" role="alert">${escapeHtml(message)}${retry}</div>`;
+      } else {
+        const body = $("#admin-body");
+        if (body) body.innerHTML = emptyState(message, retry);
+      }
+      return;
     }
-    return;
   }
   if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq) return;
   stopStatsTimer();
@@ -6063,6 +6073,11 @@ async function loadAdminStats(seq = _adminRenderSeq) {
     </div>
     <div id="st-proxies" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-proxies" style="display:none"></div>`;
   renderStatsData(s);
+  if (statsLoadError) {
+    const error = $("#stats-poll-error");
+    const retry = `<div><button type="button" class="btn-normal" onclick="loadAdminStats(${seq})">重试</button></div>`;
+    if (error) error.innerHTML = `<div class="ima-folder-state ima-folder-error" role="alert">${escapeHtml(statsLoadError)}${retry}</div>`;
+  }
   if (collectorDraft) initImaMountState(collectorGroups, true);
   else initImaMountState(pure.groups || [], preserveMountDraftForReload);
   renderImaMountGroups();
@@ -6785,7 +6800,8 @@ async function saveImaCollector() {
   document.addEventListener("change", onDraftChange);
   document.addEventListener("focusin", onFocusIn);
   try {
-    await api("/api/admin/ima-collector", { method: "PUT", body: JSON.stringify(body) });
+    const savedImaStatus = await api("/api/admin/ima-collector", { method: "PUT", body: JSON.stringify(body) });
+    saveOwner.savedImaStatus = savedImaStatus;
     saveOwner.putCompleted = true;
     const submittedLiveRevision = saveOwner.liveSnapshot
       ? imaCollectorFormRevision(saveOwner.liveSnapshot) : saveOwner.formRevision;
@@ -6807,7 +6823,7 @@ async function saveImaCollector() {
     if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats") {
       return;
     }
-    await loadAdminStats(routeSeq);
+    await loadAdminStats(routeSeq, savedImaStatus);
     if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats") return;
     const reloadedSnapshot = imaCollectorFormSnapshot();
     const reloadedRevision = imaCollectorFormRevision(reloadedSnapshot);

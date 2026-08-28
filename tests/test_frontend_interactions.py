@@ -1024,6 +1024,39 @@ def test_ima_sync_feedback_guards_duplicate_requests():
 
 
 
+def test_ima_save_reloads_with_authoritative_put_status_override():
+    """保存后的 PUT 状态必须在等待完成后传给 stats reload，并覆盖 stale IMA 数据。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    save = _fn_body("saveImaCollector")
+    load = _fn_body("loadAdminStats")
+
+    assert re.search(r"async function loadAdminStats\(seq = _adminRenderSeq, authoritativeImaStatus = null\)", src)
+    put = 'const savedImaStatus = await api("/api/admin/ima-collector"'
+    assert put in save
+    assert "saveOwner.savedImaStatus = savedImaStatus" in save
+    assert "await loadAdminStats(routeSeq, savedImaStatus)" in save
+    assert save.index(put) < save.index("saveOwner.putCompleted = true") < save.index("await loadAdminStats(routeSeq, savedImaStatus)")
+    assert "ima_collector: authoritativeImaStatus" in load
+    assert load.index("authoritativeImaStatus") < load.index('$("#admin-body").innerHTML = `')
+
+
+def test_ima_stats_failure_after_save_renders_cached_stats_with_retry():
+    """保存后 stats GET 失败仍须用完整快照合并 IMA 状态，并保留当前路由重试提示。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    load = _fn_body("loadAdminStats")
+
+    assert "let _lastAdminStatsSnapshot = null" in src
+    assert "_lastAdminStatsSnapshot = s" in load
+    assert "const fallbackStats = _lastAdminStatsSnapshot" in load
+    assert "fallbackStats && authoritativeImaStatus" in load
+    assert "statsLoadError" in load
+    render = load.index('$("#admin-body").innerHTML = `')
+    assert load.index("renderStatsData(s)") > render
+    assert load.index("statsLoadError", render) > load.index("renderStatsData(s)")
+    assert 'onclick="loadAdminStats(${seq})"' in load
+    assert "routeStillActive(seq)" in load[load.index("statsLoadError"):]
+
+
 def test_ima_collector_pending_save_snapshots_full_form_and_secret_state():
     """stats 重建期间必须使用提交快照，token 只能由 JS 恢复，不能进入 HTML。"""
     src = APP_JS.read_text(encoding="utf-8")
@@ -1050,7 +1083,7 @@ def test_ima_collector_pending_save_snapshots_full_form_and_secret_state():
 def test_ima_collector_save_rechecks_form_revision_after_stats_reload_before_clearing_token():
     """stats GET 期间输入新 token 后，完成回调不得清除新值。"""
     save = _fn_body("saveImaCollector")
-    reload_index = save.index("await loadAdminStats(routeSeq)")
+    reload_index = save.index("await loadAdminStats(routeSeq, savedImaStatus)")
     clear_index = save.index('tokenInput.value = ""')
     assert "const noNewerEditsAfterReload" in save
     assert save.index("const noNewerEditsAfterReload") > reload_index
@@ -1074,7 +1107,7 @@ def test_ima_collector_full_form_draft_survives_owner_cleanup_and_stats_rebuild(
     assert 'value="${pendingCollectorDraft' not in src
     assert "collectorDraftRevision" in src
     assert "clearImaCollectorDraft" in save
-    reload_index = save.index("await loadAdminStats(routeSeq)")
+    reload_index = save.index("await loadAdminStats(routeSeq, savedImaStatus)")
     assert save.index("clearImaCollectorDraft", reload_index) > reload_index
     assert 'document.addEventListener("input", imaCollectorDraftChanged)' in src
     assert 'document.addEventListener("change", imaCollectorDraftChanged)' in src
@@ -1285,10 +1318,10 @@ def test_ima_departed_save_does_not_clear_until_current_reload_reconciles():
     """离开发起路由后的成功回调不得清 draft；同路由须 reload 后再按新编辑判定清理。"""
     save = _fn_body("saveImaCollector")
     departed = save.index('if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats")')
-    departed_end = save.index("await loadAdminStats(routeSeq)", departed)
+    departed_end = save.index("await loadAdminStats(routeSeq, savedImaStatus)", departed)
     assert "clearImaCollectorDraft" not in save[departed:departed_end]
     assert "saveOwner.putCompleted = true" in save
-    assert save.index("await loadAdminStats(routeSeq)") < save.index("imaMountState.dirty = false")
+    assert save.index("await loadAdminStats(routeSeq, savedImaStatus)") < save.index("imaMountState.dirty = false")
     assert "const noNewerEditsAfterReload =" in save
     assert "if (noNewerEditsAfterReload)" in save
 
@@ -1299,7 +1332,7 @@ def test_ima_collector_save_is_owned_by_initiating_route_and_preserves_drafts():
     load = _fn_body("loadAdminStats")
     save = _fn_body("saveImaCollector")
 
-    assert re.search(r"async function loadAdminStats\(seq = _adminRenderSeq\)", src)
+    assert re.search(r"async function loadAdminStats\(seq = _adminRenderSeq, authoritativeImaStatus = null\)", src)
     assert "routeStillActive(seq)" in load
     assert "const preserveMountDraft = imaMountState.dirty" in load
     assert "initImaMountState(pure.groups || [], preserveMountDraftForReload)" in load
@@ -1308,7 +1341,7 @@ def test_ima_collector_save_is_owned_by_initiating_route_and_preserves_drafts():
     assert "saveButton.disabled = true" in save
     assert 'location.pathname !== "/admin/stats"' in save
     assert "routeStillActive(routeSeq)" in save
-    assert "loadAdminStats(routeSeq)" in save
+    assert "loadAdminStats(routeSeq, savedImaStatus)" in save
     assert "imaMountState.dirty = false" in save
     assert "document.body.contains(saveButton)" in save
 
@@ -1339,13 +1372,13 @@ def test_ima_collector_save_clears_only_matching_mount_revision():
     assert "imaMountState.saveOwner = saveOwner" in save
     assert "saveOwner.liveSnapshot =" in save
     assert "imaMountState.dirty = false" in save
-    assert save.index("await loadAdminStats(routeSeq)") < save.index("imaMountState.dirty = false")
+    assert save.index("await loadAdminStats(routeSeq, savedImaStatus)") < save.index("imaMountState.dirty = false")
 
 
 def test_ima_collector_save_cleanup_requires_current_form_and_mount_revision():
     """表单回到原值但目录版本已变化时，不得清理保存草稿、dirty 或 token。"""
     save = _fn_body("saveImaCollector")
-    reload_index = save.index("await loadAdminStats(routeSeq)")
+    reload_index = save.index("await loadAdminStats(routeSeq, savedImaStatus)")
     guard_index = save.index("const noNewerEditsAfterReload")
     clear_index = save.index("clearImaCollectorDraft(saveOwner.formRevision)")
     assert guard_index > reload_index
@@ -3128,7 +3161,7 @@ def test_ima_collector_save_tracks_focus_moves_through_stats_reload():
     assert "event.target !== document.body" in save
     assert 'document.addEventListener("focusin", onFocusIn)' in save
     assert 'document.removeEventListener("focusin", onFocusIn)' in save
-    reload_index = save.index("await loadAdminStats(routeSeq)")
+    reload_index = save.index("await loadAdminStats(routeSeq, savedImaStatus)")
     post_reload_guard = save.index("!focusMoved", reload_index)
     assert post_reload_guard > reload_index
     assert "if (!focusMoved" in save[reload_index:]
@@ -3137,7 +3170,7 @@ def test_ima_collector_save_tracks_focus_moves_through_stats_reload():
 def test_ima_collector_save_decides_focus_after_stats_reload_await():
     """restoreFocus 判定必须发生在 stats reload 完成后，而非 reload 前。"""
     save = _fn_body("saveImaCollector")
-    reload_index = save.index("await loadAdminStats(routeSeq)")
+    reload_index = save.index("await loadAdminStats(routeSeq, savedImaStatus)")
     restore_index = save.index("const restoreFocus =")
     assert restore_index > reload_index
     assert "const restoreFocus =" not in save[:reload_index]
