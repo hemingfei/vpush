@@ -140,6 +140,7 @@ const imaMountState = {
   collectorConfirmedMountRevision: -1,
   saveOwner: null,
   requestSeq: 0,
+  sessionGeneration: 0,
   generation: 0,
 };
 
@@ -284,11 +285,12 @@ function flash(message, type = "success") {
 }
 
 async function api(path, options = {}) {
+  const requestToken = state.token;
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
-  if (state.token) headers.Authorization = `Bearer ${state.token}`;
+  if (requestToken) headers.Authorization = `Bearer ${requestToken}`;
   const resp = await fetch(path, { ...options, headers });
   // 登录/注册的 401 是「凭据错误」业务响应：透出后端 detail，不清会话
-  if (resp.status === 401 && !path.startsWith("/api/auth/")) {
+  if (resp.status === 401 && !path.startsWith("/api/auth/") && state.token === requestToken) {
     logout();
     throw new Error("登录已过期，请重新登录");
   }
@@ -303,10 +305,11 @@ async function api(path, options = {}) {
 }
 
 async function apiBlob(path, options = {}) {
+  const requestToken = state.token;
   const headers = { ...(options.headers || {}) };
-  if (state.token) headers.Authorization = `Bearer ${state.token}`;
+  if (requestToken) headers.Authorization = `Bearer ${requestToken}`;
   const resp = await fetch(path, { ...options, headers });
-  if (resp.status === 401 && !path.startsWith("/api/auth/")) {
+  if (resp.status === 401 && !path.startsWith("/api/auth/") && state.token === requestToken) {
     logout();
     throw new Error("登录已过期，请重新登录");
   }
@@ -409,6 +412,7 @@ function clearSessionCaches() {
   imaMountState.collectorConfirmedMountRevision = -1;
   imaMountState.saveOwner = null;
   imaMountState.requestSeq += 1;
+  imaMountState.sessionGeneration += 1;
   imaMountState.generation += 1;
   _lastAdminStatsSnapshot = null;
 }
@@ -5159,6 +5163,7 @@ async function genBindCode() {
 // ---------- 管理后台（导航统一走左侧边栏） ----------
 let _adminRenderSeq = 0; // 当前管理后台渲染令牌：loader 写 #admin-body 前凭此丢弃过期响应
 let _adminStatsLoadSeq = 0;
+let _adminStatsTimerSeq = 0;
 let _lastAdminStatsSnapshot = null;
 
 async function renderAdmin(tab, seq) {
@@ -5185,6 +5190,7 @@ async function renderAdmin(tab, seq) {
 let statsTimer = null;
 
 function stopStatsTimer() {
+  _adminStatsTimerSeq += 1;
   if (statsTimer) {
     clearInterval(statsTimer);
     statsTimer = null;
@@ -6131,10 +6137,12 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
   statsTimer = setInterval(async () => {
     const timerSeq = _adminRenderSeq;
     const timerStatsSeq = _adminStatsLoadSeq;
+    const timerRequestSeq = ++_adminStatsTimerSeq;
     const timerGeneration = imaMountState.generation;
     try {
       const fresh = await api("/api/stats");
       if (!routeStillActive(timerSeq) || _adminStatsLoadSeq !== timerStatsSeq
+        || timerRequestSeq !== _adminStatsTimerSeq
         || timerGeneration !== imaMountState.generation) return;
       _lastAdminStatsSnapshot = fresh;
       renderStatsData(fresh);
@@ -6793,7 +6801,7 @@ async function saveImaCollector() {
   const saveButton = $("#ima-collector-save");
   if (imaMountState.saveOwner) return;
   if (saveButton?.disabled) return;
-  const generation = imaMountState.generation;
+  const sessionGeneration = imaMountState.sessionGeneration;
   const mountRevision = imaMountState.revision;
   const collectorRevision = imaMountState.collectorRevision;
   const focusElement = document.activeElement;
@@ -6821,6 +6829,7 @@ async function saveImaCollector() {
   if (token) body.refresh_token = token;
   const saveOwner = {
     routeSeq,
+    sessionGeneration,
     mountRevision,
     collectorRevision,
     formRevision: imaCollectorFormRevision(snapshot),
@@ -6838,7 +6847,7 @@ async function saveImaCollector() {
   document.addEventListener("focusin", onFocusIn);
   try {
     const savedImaStatus = await api("/api/admin/ima-collector", { method: "PUT", body: JSON.stringify(body) });
-    if (generation !== imaMountState.generation || imaMountState.saveOwner !== saveOwner) return;
+    if (sessionGeneration !== imaMountState.sessionGeneration || imaMountState.saveOwner !== saveOwner) return;
     saveOwner.savedImaStatus = savedImaStatus;
     saveOwner.putCompleted = true;
     const submittedLiveRevision = saveOwner.liveSnapshot
@@ -6858,13 +6867,18 @@ async function saveImaCollector() {
     if (currentSnapshot && currentFormRevision !== saveOwner.formRevision) {
       saveOwner.liveSnapshot = rememberImaCollectorDraft(currentSnapshot);
     }
-    if (generation !== imaMountState.generation || imaMountState.saveOwner !== saveOwner) return;
-    if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats") {
-      return;
+    if (sessionGeneration !== imaMountState.sessionGeneration || imaMountState.saveOwner !== saveOwner) return;
+    if (!routeStillActive(routeSeq) && location.pathname !== "/admin/stats") return;
+    const statsReloadSeq = routeStillActive(routeSeq) ? routeSeq : routeRenderSeq;
+    let statsReloadAccepted;
+    if (statsReloadSeq === routeSeq) {
+      statsReloadAccepted = await loadAdminStats(routeSeq, savedImaStatus);
+    } else {
+      statsReloadAccepted = await loadAdminStats(routeRenderSeq, savedImaStatus);
     }
-    const statsReloadAccepted = await loadAdminStats(routeSeq, savedImaStatus);
-    if (!statsReloadAccepted || imaMountState.saveOwner !== saveOwner) return;
-    if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats") return;
+    if (!statsReloadAccepted || sessionGeneration !== imaMountState.sessionGeneration
+      || imaMountState.saveOwner !== saveOwner) return;
+    if (!routeStillActive(statsReloadSeq) || location.pathname !== "/admin/stats") return;
     const reloadedSnapshot = imaCollectorFormSnapshot();
     const reloadedRevision = imaCollectorFormRevision(reloadedSnapshot);
     const liveRevision = saveOwner.liveSnapshot
@@ -6888,7 +6902,7 @@ async function saveImaCollector() {
     }
     flash("IMA 文档采集配置已保存");
   } catch (err) {
-    if (generation !== imaMountState.generation || imaMountState.saveOwner !== saveOwner) return;
+    if (sessionGeneration !== imaMountState.sessionGeneration || imaMountState.saveOwner !== saveOwner) return;
     if (routeStillActive(routeSeq) && location.pathname === "/admin/stats") {
       flash(err.message || "保存失败", "error");
     }

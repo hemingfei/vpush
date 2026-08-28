@@ -1147,12 +1147,14 @@ def test_ima_save_reload_owns_mount_generation_bump_and_preserves_stale_guards()
     assert "return false;" in load
     assert "return true;" in load
     assert load.index("return true;") > load.index("statsTimer = setInterval")
-    assert "const statsReloadAccepted = await loadAdminStats(routeSeq, savedImaStatus);" in save
-    reload = save.index("const statsReloadAccepted = await loadAdminStats(routeSeq, savedImaStatus);")
+    assert "let statsReloadAccepted;" in save
+    assert "loadAdminStats(routeSeq, savedImaStatus)" in save
+    assert "loadAdminStats(routeRenderSeq, savedImaStatus)" in save
+    reload = save.index("statsReloadAccepted = await loadAdminStats(routeSeq, savedImaStatus);")
     cleanup_guard = save.index("if (!statsReloadAccepted", reload)
-    assert save.index("generation !== imaMountState.generation", 0, reload) < reload
+    assert save.index("sessionGeneration !== imaMountState.sessionGeneration", 0, reload) < reload
     assert cleanup_guard > reload
-    assert "!routeStillActive(routeSeq)" in save[cleanup_guard:]
+    assert "!routeStillActive(statsReloadSeq)" in save[cleanup_guard:]
     assert "imaMountState.saveOwner !== saveOwner" in save[cleanup_guard:]
     assert "generation !== imaMountState.generation" not in save[reload:cleanup_guard]
     assert load.index("initImaMountState(pure.groups || [], preserveMountDraftForReload)") < load.index("statsTimer = setInterval")
@@ -1337,8 +1339,8 @@ def test_ima_folder_edit_updates_live_save_owner_snapshot_and_stays_dirty():
 def test_ima_departed_save_does_not_clear_until_current_reload_reconciles():
     """离开发起路由后的成功回调不得清 draft；同路由须 reload 后再按新编辑判定清理。"""
     save = _fn_body("saveImaCollector")
-    departed = save.index('if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats")')
-    departed_end = save.index("await loadAdminStats(routeSeq, savedImaStatus)", departed)
+    departed = save.index('if (!routeStillActive(routeSeq) && location.pathname !== "/admin/stats")')
+    departed_end = save.index("loadAdminStats(routeSeq, savedImaStatus)", departed)
     assert "clearImaCollectorDraft" not in save[departed:departed_end]
     assert "saveOwner.putCompleted = true" in save
     assert save.index("await loadAdminStats(routeSeq, savedImaStatus)") < save.index("imaMountState.dirty = false")
@@ -2801,13 +2803,13 @@ def test_ima_old_save_listener_returns_before_observing_new_account_input():
     assert listener.index("imaMountState.saveOwner !== saveOwner") < listener.index("rememberImaCollectorDraft()")
 
 
-def test_ima_save_response_requires_current_generation_and_owner_before_mutation():
+def test_ima_save_response_requires_current_session_and_owner_before_mutation():
     """登出后旧 PUT 响应不得写入新账号的 IMA 状态或界面。"""
     save = _fn_body("saveImaCollector")
     put = save.index('const savedImaStatus = await api("/api/admin/ima-collector"')
     mutation = save.index("saveOwner.savedImaStatus = savedImaStatus", put)
-    assert "const generation = imaMountState.generation" in save
-    guard = save.index("generation !== imaMountState.generation", put)
+    assert "const sessionGeneration = imaMountState.sessionGeneration" in save
+    guard = save.index("sessionGeneration !== imaMountState.sessionGeneration", put)
     assert guard < mutation
     assert "imaMountState.saveOwner !== saveOwner" in save[guard:mutation]
 
@@ -2818,6 +2820,62 @@ def test_ima_stats_timer_caches_fresh_snapshot_before_render():
     render_index = load.index("renderStatsData(fresh)")
     assert "_lastAdminStatsSnapshot = fresh" in load
     assert load.index("_lastAdminStatsSnapshot = fresh") < render_index
+
+
+def test_ima_stats_timer_owns_each_overlapping_request_and_stop_invalidates_it():
+    """每次定时 tick 都有独立 owner；后发 tick 或停表不得让旧响应落地。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    load = _fn_body("loadAdminStats")
+    stop = _fn_body("stopStatsTimer")
+    assert "let _adminStatsTimerSeq = 0" in src
+    assert "_adminStatsTimerSeq += 1" in stop
+    timer_start = load.index("const timerSeq = _adminRenderSeq")
+    timer = load[timer_start:]
+    assert "const timerRequestSeq = ++_adminStatsTimerSeq" in timer
+    guard = timer.index("if (!routeStillActive(timerSeq)")
+    assert "timerRequestSeq !== _adminStatsTimerSeq" in timer[guard:]
+    assert timer.index("_lastAdminStatsSnapshot = fresh") > guard
+    assert timer.index("renderStatsData(fresh)") > guard
+
+
+def test_ima_pending_save_uses_session_owner_across_stats_reentry_but_logout_invalidates():
+    """stats 重入只改变 mount generation；登出仍须让旧 PUT 失去 session owner。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    clear = _fn_body("clearSessionCaches")
+    save = _fn_body("saveImaCollector")
+    assert "sessionGeneration: 0" in src
+    assert "imaMountState.sessionGeneration += 1" in clear
+    assert "const sessionGeneration = imaMountState.sessionGeneration" in save
+    assert "sessionGeneration" in save[save.index("const saveOwner ="):save.index("imaMountState.saveOwner = saveOwner")]
+    put = save.index('const savedImaStatus = await api("/api/admin/ima-collector"')
+    mutation = save.index("saveOwner.savedImaStatus = savedImaStatus", put)
+    guard = save.index("sessionGeneration !== imaMountState.sessionGeneration", put)
+    assert guard < mutation
+    post_put = save[put:save.index("} catch", put)]
+    assert "generation !== imaMountState.generation" not in post_put
+    assert "loadAdminStats(routeRenderSeq, savedImaStatus)" in post_put
+    assert clear.index("imaMountState.saveOwner = null") < clear.index("imaMountState.sessionGeneration += 1")
+
+
+def test_api_401_only_logs_out_the_session_that_started_the_request():
+    """账号切换后，旧账号的 api/apiBlob 401 不得登出新账号。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    for name in ("api", "apiBlob"):
+        start = src.index(f"async function {name}")
+        brace = src.index("{", src.index(")", start))
+        depth, end = 1, brace + 1
+        while depth:
+            if src[end] == "{": depth += 1
+            elif src[end] == "}": depth -= 1
+            end += 1
+        body = src[brace:end]
+        token = body.index("const requestToken = state.token")
+        fetch = body.index("await fetch(", token)
+        unauthorized = body.index("resp.status === 401", fetch)
+        assert token < fetch < unauthorized
+        assert "state.token === requestToken" in body[unauthorized:]
+        assert body.index("logout()", unauthorized) > body.index("state.token === requestToken", unauthorized)
+        assert body.index("path.startsWith(\"/api/auth/\")", unauthorized) < body.index("logout()", unauthorized)
 
 
 def test_sticky_chrome_is_opaque_canvas_not_glass():
