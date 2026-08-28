@@ -362,6 +362,17 @@ function clearSessionCaches() {
   if (typeof stopTimelinePoll === "function") stopTimelinePoll();
   // 飞书扫码轮询不能跨会话存活：登出后它会每秒拿旧 token 打 401 循环
   if (typeof stopFeishuPersonalPoll === "function") stopFeishuPersonalPoll();
+  fsPersonalState.owner = null;
+  fsPersonalState.sessionId = "";
+  fsPersonalState.bindCommand = "";
+  fsPersonalState.bindExpiresAt = 0;
+  fsPersonalState.verificationUri = "";
+  fsPersonalState.qrUri = "";
+  if (typeof wbQrTimer !== "undefined") {
+    if (wbQrTimer) clearTimeout(wbQrTimer);
+    wbQrTimer = null;
+    wbQrSeq += 1;
+  }
   _tlPosts.length = 0;
   _tlOffset = 0;
   _tlHasMore = true;
@@ -4024,8 +4035,13 @@ function paintPushStatus(user) {
 }
 
 async function refreshSettingsStatus() {
+  const seq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   try {
     const user = await api("/api/me");
+    if (!routeStillActive(seq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     state.user = user;
     const el = $("#push-status");
     if (!el) {
@@ -4048,8 +4064,9 @@ async function refreshSettingsStatus() {
 async function renderSettings(seq) {
   setPageTitle("推送设置");
   try {
-    state.user = await api("/api/me");
+    const user = await api("/api/me");
     if (!routeStillActive(seq)) return; // 已切走：不覆盖新路由的 state.user
+    state.user = user;
     stopSettingsPoll();
     const guide = state.user.push_guide || {};
     const tgBot = guide.telegram_bot_username || "";
@@ -4620,7 +4637,18 @@ function bindGuideHtml(bound, stepsHtml) {
 }
 
 // ---------- 飞书个人机器人（扫码注册） ----------
-const fsPersonalState = { sessionId: "", bindCommand: "", bindExpiresAt: 0, pollTimer: null, countdownTimer: null };
+const fsPersonalState = {
+  sessionId: "", bindCommand: "", bindExpiresAt: 0, verificationUri: "", qrUri: "",
+  pollTimer: null, countdownTimer: null, owner: null,
+};
+
+function fsPersonalOwnerActive(owner) {
+  return !!owner && fsPersonalState.owner === owner
+    && owner.token === state.token
+    && owner.sessionGeneration === imaMountState.sessionGeneration
+    && routeStillActive(owner.routeSeq);
+}
+
 
 function feishuPersonalHtml(fs) {
   fs = fs || {};
@@ -4675,30 +4703,42 @@ function fsPersonalStateHtml() {
 }
 
 async function startFeishuPersonal() {
+  const owner = {
+    routeSeq: routeRenderSeq,
+    token: state.token,
+    sessionGeneration: imaMountState.sessionGeneration,
+  };
+  fsPersonalState.owner = owner;
+  stopFeishuPersonalPoll(owner);
   try {
     const data = await api("/api/me/feishu-personal/register", { method: "POST" });
+    if (!fsPersonalOwnerActive(owner)) return;
     fsPersonalState.sessionId = data.session_id;
     fsPersonalState.bindCommand = "";
     fsPersonalState.verificationUri = data.verification_uri;
     fsPersonalState.qrUri = data.qr_uri || "";
-    fsPersonalRender();
-    startFeishuPersonalPoll(data.session_id);
+    fsPersonalRender(owner);
+    startFeishuPersonalPoll(data.session_id, owner);
   } catch (err) {
-    flash("发起个人机器人注册失败: " + err.message, "error");
+    if (fsPersonalOwnerActive(owner)) flash("发起个人机器人注册失败: " + err.message, "error");
   }
 }
 
-function fsPersonalRender() {
+function fsPersonalRender(owner = fsPersonalState.owner) {
   // 局部重绘个人机器人区块（不整页重绘：renderSettings 需要路由序号，轮询里拿不到）
+  if (!fsPersonalOwnerActive(owner)) return;
   const el = $("#fs-personal-block");
-  if (el) el.innerHTML = feishuPersonalHtml(state.user.feishu_personal);
+  if (el) el.innerHTML = feishuPersonalHtml(state.user?.feishu_personal);
 }
 
-function startFeishuPersonalPoll(sessionId) {
-  stopFeishuPersonalPoll();
-  fsPersonalState.pollTimer = setInterval(async () => {
+function startFeishuPersonalPoll(sessionId, owner = fsPersonalState.owner) {
+  if (!fsPersonalOwnerActive(owner)) return;
+  stopFeishuPersonalPoll(owner);
+  const timer = setInterval(async () => {
+    if (!fsPersonalOwnerActive(owner) || fsPersonalState.pollTimer !== timer) return;
     try {
       const data = await api(`/api/me/feishu-personal/register/${sessionId}`);
+      if (!fsPersonalOwnerActive(owner) || fsPersonalState.pollTimer !== timer) return;
       fsPersonalState.verificationUri = data.verification_uri;
       fsPersonalState.qrUri = data.qr_uri || fsPersonalState.qrUri;
       // 同步个人机器人展示状态（轮询期间 /api/me 不会刷新）
@@ -4707,35 +4747,38 @@ function startFeishuPersonalPoll(sessionId) {
       if (data.status === "awaiting_bind" && data.bind_command) {
         fsPersonalState.bindCommand = data.bind_command;
         fsPersonalState.bindExpiresAt = (data.bind_code_expires_at || 0) * 1000;
-        stopFeishuPersonalPoll();
-        fsPersonalRender();
-        startFeishuBindCountdown();
+        stopFeishuPersonalPoll(owner);
+        fsPersonalRender(owner);
+        startFeishuBindCountdown(owner);
       } else if (data.status === "active") {
-        stopFeishuPersonalPoll();
+        stopFeishuPersonalPoll(owner);
         fsPersonalState.sessionId = "";
-        fsPersonalRender();
+        fsPersonalRender(owner);
         flash("个人机器人已绑定");
       } else if (["expired", "cancelled", "degraded"].includes(data.status)) {
-        stopFeishuPersonalPoll();
+        stopFeishuPersonalPoll(owner);
         fsPersonalState.sessionId = "";
-        fsPersonalRender();
+        fsPersonalRender(owner);
         if (data.status === "degraded") flash("个人机器人绑定失败：" + (data.last_error || "未知错误"), "error");
       } else {
         // pending / credentials_created：局部刷新等待扫码区域
-        fsPersonalRender();
+        fsPersonalRender(owner);
       }
     } catch (err) {
       // 轮询失败静默，下轮再试；会话不存在则结束
-      if (String(err.message).includes("404")) {
-        stopFeishuPersonalPoll();
+      if (fsPersonalOwnerActive(owner) && fsPersonalState.pollTimer === timer
+        && String(err.message).includes("404")) {
+        stopFeishuPersonalPoll(owner);
         fsPersonalState.sessionId = "";
-        fsPersonalRender();
+        fsPersonalRender(owner);
       }
     }
   }, 1000);  // 绑定轮询：1s 一次，扫码/绑定完成及时反映（状态接口很轻量）
+  fsPersonalState.pollTimer = timer;
 }
 
-function stopFeishuPersonalPoll() {
+function stopFeishuPersonalPoll(owner = null) {
+  if (owner && fsPersonalState.owner !== owner) return;
   if (fsPersonalState.pollTimer) {
     clearInterval(fsPersonalState.pollTimer);
     fsPersonalState.pollTimer = null;
@@ -4746,42 +4789,52 @@ function stopFeishuPersonalPoll() {
   }
 }
 
-function startFeishuBindCountdown() {
+function startFeishuBindCountdown(owner = fsPersonalState.owner) {
+  if (!fsPersonalOwnerActive(owner)) return;
   if (fsPersonalState.countdownTimer) clearInterval(fsPersonalState.countdownTimer);
-  fsPersonalState.countdownTimer = setInterval(() => {
+  const timer = setInterval(() => {
+    if (!fsPersonalOwnerActive(owner) || fsPersonalState.countdownTimer !== timer) return;
     const secs = Math.max(0, Math.ceil((fsPersonalState.bindExpiresAt - Date.now()) / 1000));
     const el = $("#fs-bind-countdown");
     if (el) el.textContent = `${secs}s`;
     if (secs <= 0) {
-      clearInterval(fsPersonalState.countdownTimer);
+      clearInterval(timer);
+      fsPersonalState.countdownTimer = null;
       // 绑定码过期：轮询刷新（服务端 awaiting_bind 状态下重新生成即可）
-      if (fsPersonalState.sessionId) startFeishuPersonalPoll(fsPersonalState.sessionId);
+      if (fsPersonalState.sessionId) startFeishuPersonalPoll(fsPersonalState.sessionId, owner);
     }
   }, 1000);
+  fsPersonalState.countdownTimer = timer;
 }
 
 async function refreshFeishuBindCode() {
-  if (!fsPersonalState.sessionId) return;
+  const owner = fsPersonalState.owner;
+  const sessionId = fsPersonalState.sessionId;
+  if (!sessionId || !fsPersonalOwnerActive(owner)) return;
   try {
-    const data = await api(`/api/me/feishu-personal/register/${fsPersonalState.sessionId}/refresh-code`, { method: "POST" });
+    const data = await api(`/api/me/feishu-personal/register/${sessionId}/refresh-code`, { method: "POST" });
+    if (!fsPersonalOwnerActive(owner) || fsPersonalState.sessionId !== sessionId) return;
     fsPersonalState.bindCommand = data.bind_command;
     fsPersonalState.bindExpiresAt = (data.bind_code_expires_at || 0) * 1000;
-    stopFeishuPersonalPoll();
-    fsPersonalRender();
-    startFeishuBindCountdown();
+    stopFeishuPersonalPoll(owner);
+    fsPersonalRender(owner);
+    startFeishuBindCountdown(owner);
   } catch (err) {
-    flash(err.message, "error");
+    if (fsPersonalOwnerActive(owner)) flash(err.message, "error");
   }
 }
 
 async function cancelFeishuPersonal() {
-  if (!fsPersonalState.sessionId) return;
+  const owner = fsPersonalState.owner;
+  const sessionId = fsPersonalState.sessionId;
+  if (!sessionId || !fsPersonalOwnerActive(owner)) return;
   try {
-    await api(`/api/me/feishu-personal/register/${fsPersonalState.sessionId}/cancel`, { method: "POST" });
+    await api(`/api/me/feishu-personal/register/${sessionId}/cancel`, { method: "POST" });
   } catch { /* 忽略 */ }
-  stopFeishuPersonalPoll();
+  if (!fsPersonalOwnerActive(owner) || fsPersonalState.sessionId !== sessionId) return;
+  stopFeishuPersonalPoll(owner);
   fsPersonalState.sessionId = "";
-  fsPersonalRender();
+  fsPersonalRender(owner);
 }
 
 function openBindGuide(sectionId) {
@@ -6986,31 +7039,58 @@ async function saveTwitterCookie() {
 let wbQrTimer = null;
 let wbQrSeq = 0;
 
+function weiboQrOwnerActive(owner) {
+  return !!owner && owner.seq === wbQrSeq
+    && owner.token === state.token
+    && owner.sessionGeneration === imaMountState.sessionGeneration
+    && routeStillActive(owner.routeSeq);
+}
+
 async function startWeiboQr() {
+  const owner = {
+    routeSeq: routeRenderSeq,
+    token: state.token,
+    sessionGeneration: imaMountState.sessionGeneration,
+    seq: ++wbQrSeq,
+  };
+  if (wbQrTimer) {
+    clearTimeout(wbQrTimer);
+    wbQrTimer = null;
+  }
   try {
     const data = await api("/api/admin/weibo-qr/start", { method: "POST" });
+    if (!weiboQrOwnerActive(owner)) return;
     $("#wb-qr-box").innerHTML = `
       <div class="qr-card">
         <img src="${escapeHtml(data.qrurl)}" alt="微博登录二维码" width="220" height="220">
       </div>
       <p class="muted qr-status" id="wb-qr-status">等待扫码…</p>`;
-    if (wbQrTimer) clearTimeout(wbQrTimer);
-    const seq = ++wbQrSeq;
+    let timer = null;
     const tick = async () => {
-      if (seq !== wbQrSeq) return;
-      const cont = await pollWeiboQr(data.qrid);
-      if (seq !== wbQrSeq || !cont) return;
-      wbQrTimer = setTimeout(tick, 2000);
+      if (!weiboQrOwnerActive(owner) || wbQrTimer !== timer) return;
+      const cont = await pollWeiboQr(data.qrid, owner);
+      if (!weiboQrOwnerActive(owner) || wbQrTimer !== timer || !cont) return;
+      timer = setTimeout(tick, 2000);
+      wbQrTimer = timer;
     };
-    wbQrTimer = setTimeout(tick, 2000);
+    timer = setTimeout(tick, 2000);
+    wbQrTimer = timer;
   } catch (err) {
-    flash(err.message, "error");
+    if (weiboQrOwnerActive(owner)) flash(err.message, "error");
   }
 }
 
-async function pollWeiboQr(qrid) {
+async function pollWeiboQr(qrid, owner) {
+  owner = owner || {
+    routeSeq: routeRenderSeq,
+    token: state.token,
+    sessionGeneration: imaMountState.sessionGeneration,
+    seq: wbQrSeq,
+  };
+  if (!weiboQrOwnerActive(owner)) return false;
   try {
     const data = await api(`/api/admin/weibo-qr/status?qrid=${encodeURIComponent(qrid)}`);
+    if (!weiboQrOwnerActive(owner)) return false;
     const statusEl = $("#wb-qr-status");
     if (!statusEl) return false;
     if (data.status === "pending") {
@@ -7027,6 +7107,7 @@ async function pollWeiboQr(qrid) {
     }
     return false;
   } catch (err) {
+    if (!weiboQrOwnerActive(owner)) return false;
     const statusEl = $("#wb-qr-status");
     if (statusEl) statusEl.textContent = "登录失败：" + err.message;
     return false;

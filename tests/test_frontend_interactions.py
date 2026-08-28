@@ -154,6 +154,80 @@ def test_post_tags_filter_timeline_without_inline_user_string():
     assert "loadTimeline(true, routeRenderSeq, { revert })" in pick_tag
 
 
+def test_settings_async_responses_are_owned_by_route_and_session_before_mutation():
+    """设置页的 /api/me 响应必须在写 state 或 DOM 前确认路由和会话仍是发起者。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    refresh = _fn_body("refreshSettingsStatus")
+    fetch = refresh.index('await api("/api/me")')
+    state_write = refresh.index("state.user = user", fetch)
+    guard = refresh.index("routeStillActive", fetch)
+    assert "const seq = routeRenderSeq" in refresh[:fetch]
+    assert "const token = state.token" in refresh[:fetch]
+    assert "const sessionGeneration = imaMountState.sessionGeneration" in refresh[:fetch]
+    assert guard < state_write
+    assert "token !== state.token" in refresh[guard:state_write]
+    assert "sessionGeneration !== imaMountState.sessionGeneration" in refresh[guard:state_write]
+
+    render = _fn_body("renderSettings")
+    fetch = render.index('await api("/api/me")')
+    assignment = render.index("state.user = user", fetch)
+    assert "const user = await api(\"/api/me\")" in render[fetch - 40:fetch + 50]
+    assert render.index("routeStillActive(seq)", fetch) < assignment
+
+
+def test_feishu_personal_async_callbacks_are_owner_guarded_and_logout_resets_all_state():
+    """飞书注册、轮询和倒计时不得跨账号停止新计时器或写设置区。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    start = _fn_body("startFeishuPersonal")
+    assert "const owner" in start and "sessionGeneration" in start and "routeSeq" in start
+    assert start.index("await api(") < start.index("fsPersonalState.sessionId =", start.index("await api("))
+    assert "fsPersonalOwnerActive(owner)" in start
+
+    poll = _fn_body("startFeishuPersonalPoll")
+    assert "fsPersonalOwnerActive(owner)" in poll
+    response = poll.index("await api(")
+    assert poll.index("fsPersonalOwnerActive(owner)", response) < poll.index("fsPersonalState.verificationUri", response)
+    assert "stopFeishuPersonalPoll(owner)" in poll
+    assert "fsPersonalState.pollTimer !== timer" in poll
+
+    countdown = _fn_body("startFeishuBindCountdown")
+    assert "fsPersonalOwnerActive(owner)" in countdown
+    assert "fsPersonalState.countdownTimer !== timer" in countdown
+    assert "startFeishuPersonalPoll(fsPersonalState.sessionId, owner)" in countdown
+
+    clear = _fn_body("clearSessionCaches")
+    for statement in (
+        "fsPersonalState.owner = null",
+        'fsPersonalState.sessionId = ""',
+        'fsPersonalState.bindCommand = ""',
+        "fsPersonalState.bindExpiresAt = 0",
+        'fsPersonalState.verificationUri = ""',
+        'fsPersonalState.qrUri = ""',
+    ):
+        assert statement in clear
+    assert clear.index("stopFeishuPersonalPoll()") < clear.index("fsPersonalState.owner = null")
+
+
+def test_weibo_qr_callbacks_are_owner_guarded_and_logout_invalidates_timer():
+    """微博二维码请求序列、路由和会话必须共同拥有状态及计时器。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    start = _fn_body("startWeiboQr")
+    assert "const owner" in start and "wbQrSeq" in start and "sessionGeneration" in start
+    assert "clearTimeout(wbQrTimer)" in start
+    response = start.index("await api(")
+    assert start.index("weiboQrOwnerActive(owner)", response) < start.index('$("#wb-qr-box").innerHTML', response)
+    assert "wbQrTimer !== timer" in start
+    poll = _fn_body("pollWeiboQr")
+    response = poll.index("await api(")
+    assert poll.index("weiboQrOwnerActive(owner)", response) < poll.index('const statusEl = $("#wb-qr-status")', response)
+    assert "weiboQrOwnerActive(owner)" in poll[poll.index("} catch", response):]
+
+    clear = _fn_body("clearSessionCaches")
+    assert "clearTimeout(wbQrTimer)" in clear
+    assert "wbQrTimer = null" in clear
+    assert "wbQrSeq += 1" in clear
+
+
 def test_mobile_timeline_filter_keeps_pills_out_of_panel():
     """手机端平台条留在吸顶栏；筛选面板是搜索、视图开关和标签。"""
     render = _fn_body("renderTimeline")
