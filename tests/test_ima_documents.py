@@ -1394,6 +1394,7 @@ def test_invalid_media_ids_are_not_accepted(tmp_path, value):
         "Cookie: SID=cookie-secret; Path=/",
         "Set-Cookie: IMA-TOKEN=set-cookie-secret; Path=/",
         "Bearer bearer-secret",
+        "Basic basic-secret",
         "failed https://res-skb.ima.qq.com/a.pdf?sign=url-secret",
     ],
 )
@@ -1410,6 +1411,20 @@ def test_error_summary_redacts_urls_and_credentials():
     assert "secret" not in _safe_error(RuntimeError("Authorization: Bearer secret"))
     assert "secret" not in _safe_error(RuntimeError("access_token=secret"))
     assert "secret" not in _safe_error(RuntimeError("token secret"))
+
+
+def test_safe_error_redacts_standalone_basic_credential():
+    text = _safe_error(RuntimeError("Basic dXNlcjpwYXNz"))
+    assert "dXNlcjpwYXNz" not in text
+    assert "<redacted>" in text
+
+
+def test_safe_error_handles_empty_exception_messages():
+    for error in (RuntimeError(""), RuntimeError("\nIMA request failed")):
+        text = _safe_error(error)
+        assert text == ""
+        assert "\n" not in text
+        assert len(text) <= 240
 
 
 def test_archive_root_rejects_symlink(tmp_path):

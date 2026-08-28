@@ -103,7 +103,7 @@ def decrypt_body(cipher_b64: str, key: bytes) -> bytes:
 
 
 def _safe_error(exc: BaseException) -> str:
-    text = str(exc).splitlines()[0]
+    text = (str(exc).splitlines() or [""])[0]
     text = re.sub(r"(?i)\b(set-cookie|cookie)(\s*:\s*)[^\r\n]*", r"\1\2<redacted>", text)
     text = re.sub(r"https?://\S+", "<url>", text)
     text = re.sub(
@@ -117,7 +117,7 @@ def _safe_error(exc: BaseException) -> str:
         text,
     )
     text = re.sub(
-        r"(?i)((?:\bbearer|\btoken|\baccess_token|\brefresh_token|\bsignature|\bsig|\bsign|\bq-sign|\bx-ima-cookie)\s+)[^\s,;&]+",
+        r"(?i)((?:\bbasic|\bbearer|\btoken|\baccess_token|\brefresh_token|\bsignature|\bsig|\bsign|\bq-sign|\bx-ima-cookie)\s+)[^\s,;&]+",
         r"\1<redacted>",
         text,
     )
