@@ -284,6 +284,10 @@ def _legacy_group(kb: str, root: str) -> ImaGroupConfig:
     )
 
 
+def _ima_success_status(value: Any) -> bool:
+    return (isinstance(value, int) and not isinstance(value, bool) and value == 0) or value == "0"
+
+
 def _discovery_payload(payload: Any) -> dict[str, Any]:
     data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else payload
     return data if isinstance(data, dict) else {}
@@ -673,10 +677,7 @@ class ImaPureClient:
                 code = data["retcode"]
             else:
                 raise RuntimeError("IMA group discovery returned invalid response")
-            if not (
-                (isinstance(code, int) and not isinstance(code, bool) and code == 0)
-                or code == "0"
-            ):
+            if not _ima_success_status(code):
                 raise RuntimeError(f"IMA group discovery failed code={code}")
             payload = _discovery_payload(data)
             if not _discovery_has_known_shape(payload):
@@ -718,7 +719,7 @@ class ImaPureClient:
             if not isinstance(data, dict):
                 raise RuntimeError("IMA list returned invalid response")
             status = data["code"] if "code" in data else data.get("retcode")
-            if not (isinstance(status, int) and not isinstance(status, bool) and status == 0):
+            if not _ima_success_status(status):
                 raise RuntimeError(f"IMA list failed code={status}")
             payload = self._payload(data)
             if not isinstance(payload, dict):

@@ -904,6 +904,32 @@ def test_list_items_rejects_malformed_later_page_status_or_payload(monkeypatch, 
         client.list_items("root")
 
 
+@pytest.mark.parametrize(
+    "first_status, second_status",
+    [("code", "retcode"), ("retcode", "code")],
+)
+def test_list_items_accepts_string_success_status_on_each_page(
+    monkeypatch, first_status, second_status
+):
+    client = ImaPureClient(
+        ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
+    )
+    pages = iter([
+        {
+            first_status: "0",
+            "knowledge_list": [{"media_id": "first"}],
+            "next_cursor": "next",
+        },
+        {second_status: "0", "knowledge_list": [{"media_id": "second"}]},
+    ])
+    client._token = lambda: "access"
+    client._open_json = lambda request: (next(pages), {})
+
+    assert [item["media_id"] for item in client.list_items("root")] == [
+        "first", "second"
+    ]
+
+
 def test_list_items_accepts_empty_terminal_page(monkeypatch):
     client = ImaPureClient(
         ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
