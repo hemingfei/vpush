@@ -1107,6 +1107,18 @@ def test_ima_mount_expand_uses_stable_cache_and_parent_inheritance():
     assert "imaMountState.dirty = true" in toggle
 
 
+def test_ima_mount_tree_exposes_the_knowledge_base_root():
+    """没有子文件夹的知识库仍可显式挂载整个根目录。"""
+    render = _fn_body("renderImaFolderTree")
+    toggle = _fn_body("toggleImaFolder")
+    orphans = _fn_body("imaFolderOrphansHtml")
+    assert 'name: "整个知识库"' in render
+    assert "imaFolderRowHtml(groupKey" in render
+    assert "folderId === String(group?.root_folder_id || \"\")" in toggle
+    assert "selected.clear()" in toggle
+    assert "new Set([rootId])" in orphans
+
+
 def test_ima_discovery_error_redacts_url_and_secret_key_values_before_escape():
     """发现错误中的 URL、token、sign 等敏感内容必须先脱敏再 escapeHtml。"""
     sample = "自动发现失败：https://ima.qq.com/api?token=secret&sign=signature"
@@ -1969,8 +1981,8 @@ def test_frontend_asset_urls_bust_browser_cache():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=207"' in html
-    assert 'src="/app.js?v=291"' in html
-    assert 'dav-shell-v160' in sw
+    assert 'src="/app.js?v=292"' in html
+    assert 'dav-shell-v161' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

@@ -5345,7 +5345,7 @@ function imaRenderFolderBranch(groupId, parentId, depth) {
 function imaFolderOrphansHtml(groupId, rootId) {
   const rootKey = imaMountCacheKey(groupId, rootId);
   if (!imaMountState.folders.has(rootKey)) return "";
-  const known = new Set();
+  const known = new Set([rootId]);
   for (const [key, items] of imaMountState.folders) {
     if (!key.startsWith(`${groupId}\0`)) continue;
     for (const item of items || []) known.add(String(item.id || ""));
@@ -5377,7 +5377,12 @@ function renderImaFolderTree(groupId) {
   if (title) title.textContent = group.name || groupKey;
   if (count) count.textContent = `${selectedCount} 个文件夹`;
   tree.setAttribute("aria-busy", String(imaMountState.loading.has(imaMountCacheKey(groupKey, rootId))));
-  tree.innerHTML = imaRenderFolderBranch(groupKey, rootId, 0) + imaFolderOrphansHtml(groupKey, rootId);
+  tree.innerHTML = imaFolderRowHtml(groupKey, {
+    id: rootId,
+    name: "整个知识库",
+    parent_id: "",
+    has_children: false,
+  }, 0) + imaRenderFolderBranch(groupKey, rootId, 1) + imaFolderOrphansHtml(groupKey, rootId);
   tree.querySelectorAll('input[data-indeterminate="true"]').forEach((input) => {
     input.indeterminate = true;
   });
@@ -5409,15 +5414,20 @@ function toggleImaFolder(input) {
   if (!groupId || !folderId || input.disabled) return;
   const focusId = input.id;
   const selected = imaMountDraft(groupId);
+  const group = imaMountGroup(groupId);
   if (input.checked) {
-    selected.delete(folderId);
-    for (const selectedId of [...selected]) {
-      const seen = new Set();
-      let parentId = imaMountState.parents.get(imaMountCacheKey(groupId, selectedId)) || "";
-      while (parentId && !seen.has(parentId)) {
-        if (parentId === folderId) selected.delete(selectedId);
-        seen.add(parentId);
-        parentId = imaMountState.parents.get(imaMountCacheKey(groupId, parentId)) || "";
+    if (folderId === String(group?.root_folder_id || "")) {
+      selected.clear();
+    } else {
+      selected.delete(folderId);
+      for (const selectedId of [...selected]) {
+        const seen = new Set();
+        let parentId = imaMountState.parents.get(imaMountCacheKey(groupId, selectedId)) || "";
+        while (parentId && !seen.has(parentId)) {
+          if (parentId === folderId) selected.delete(selectedId);
+          seen.add(parentId);
+          parentId = imaMountState.parents.get(imaMountCacheKey(groupId, parentId)) || "";
+        }
       }
     }
     selected.add(folderId);

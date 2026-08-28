@@ -1829,6 +1829,47 @@ def test_manifest_uses_unknown_day_for_non_date_folder_path():
     assert record["folder_path"] == []
 
 
+def test_manifest_uses_create_time_for_non_date_folder_path():
+    group = ImaGroupConfig("research", "研究", "kb", "root", True, "discovered", ("mount",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    client.list_items = lambda folder_id: [{
+        "media_id": "pdf_x",
+        "name": "x.pdf",
+        "file_size": 8,
+        "create_time": 1787155200000,
+    }]
+    record = client.manifest()[0]
+    assert record["day"] == "0820"
+    assert record["folder_path"] == []
+
+
+def test_manifest_does_not_use_update_time_as_create_day():
+    group = ImaGroupConfig("research", "研究", "kb", "root", True, "discovered", ("mount",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    client.list_items = lambda folder_id: [{
+        "media_id": "pdf_x",
+        "name": "x.pdf",
+        "file_size": 8,
+        "update_time": 1787155200000,
+    }]
+    assert client.manifest()[0]["day"] == "unknown"
+
+
+@pytest.mark.parametrize("create_time", [True, [], {}, "bad", float("inf")])
+def test_manifest_keeps_pdf_with_invalid_create_time(create_time):
+    group = ImaGroupConfig("research", "研究", "kb", "root", True, "discovered", ("mount",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    client.list_items = lambda folder_id: [{
+        "media_id": "pdf_x",
+        "name": "x.pdf",
+        "file_size": 8,
+        "create_time": create_time,
+    }]
+    records = client.manifest()
+    assert len(records) == 1
+    assert records[0]["day"] == "unknown"
+
+
 def test_group_folder_ids_distinguish_legacy_fallback_from_explicit_empty():
     legacy_db = FakeDB({
         IMA_PURE_GROUPS_KEY: json.dumps([{
@@ -1885,7 +1926,12 @@ def test_manifest_uses_ima_current_path_for_selected_root_day():
     client._open_json = lambda request: ({
         "code": 0,
         "data": {
-            "knowledge_list": [{"media_id": "pdf_x", "name": "x.pdf", "file_size": 8}],
+            "knowledge_list": [{
+                "media_id": "pdf_x",
+                "name": "x.pdf",
+                "file_size": 8,
+                "create_time": 1787155200000,
+            }],
             "current_path": [{"folder_id": "mount", "name": "0806"}],
             "is_end": True,
         },

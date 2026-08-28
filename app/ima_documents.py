@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from .fetchers.base import CN_TZ
 from .fetchers.ima_inspect import item_cover, item_text
 
 logger = logging.getLogger(__name__)
@@ -756,26 +757,30 @@ class ImaPureClient:
             if md5_value is not None and not isinstance(md5_value, str):
                 return
             ts_value = item.get("create_time")
-            if ts_value is not None and (
-                isinstance(ts_value, bool)
-                or not isinstance(ts_value, (str, int, float))
-            ):
-                return
+            try:
+                ts_ms = int(ts_value) if not isinstance(ts_value, bool) else 0
+            except (TypeError, ValueError, OverflowError):
+                ts_ms = 0
             name = item_display_name(item, media_id)
             if not (name.lower().endswith(".pdf") or media_id.lower().startswith("pdf_")):
                 return
             seen_media_ids.add(media_id)
             day = next(
                 (value for value in reversed(folder_path) if re.fullmatch(r"\d{4}", value)),
-                "unknown",
+                "",
             )
+            if not day and ts_ms > 0:
+                try:
+                    day = datetime.fromtimestamp(ts_ms / 1000, CN_TZ).strftime("%m%d")
+                except (OSError, OverflowError, ValueError):
+                    pass
             record = {
                 "media_id": media_id,
                 "name": name,
-                "day": day,
+                "day": day or "unknown",
                 "size": file_size or 0,
                 "md5": md5_value or "",
-                "ts": str(ts_value or ""),
+                "ts": str(ts_ms) if ts_ms > 0 else "",
                 "abstract": item_text(item)[:2000],
                 "cover_url": item_cover(item)[:2000],
                 "source_folder_id": source_folder_id,
