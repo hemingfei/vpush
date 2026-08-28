@@ -3739,3 +3739,30 @@ def test_ima_collector_save_decides_focus_after_stats_reload_await():
     assert restore_index > reload_index
     assert "const restoreFocus =" not in save[:reload_index]
     assert "if (!focusMoved && restoreFocus)" in save[restore_index:]
+
+
+def test_ima_collector_storage_status_text_contract():
+    """管理页 collector 状态文案应反映存储健康，且无 storage 时保持原语义。"""
+    body = _fn_body("imaCollectorStatusText")
+    js = (
+        "function imaCollectorStatusText(status) " + body + "\n"
+        "const base = {"
+        "  config: { refresh_token: { set: true }, groups: [{ folder_ids: ['f1'] }], interval_seconds: 3600 },"
+        "  documents: 12,"
+        "  last_finished_at: '2026-08-28T00:00:00Z',"
+        "  last_result: { downloaded: 3, failed: 0 }"
+        "};\n"
+        "const cases = ["
+        "  [{ ...base, storage: { status: 'unavailable' } }, '知识库存储暂不可用'],"
+        "  [{ ...base, storage: { status: 'stale' } }, '知识库存储状态过期'],"
+        "  [{ ...base, storage: { status: 'readonly' } }, '知识库存储当前只读'],"
+        "  [{ ...base, storage: { status: 'capacity_blocked' } }, '知识库存储空间已达限制'],"
+        "  [{ ...base, storage: { status: 'available', used_percent: 23 } }, '已归档 12 份 · 上次新增 3 份 · 存储 23%'],"
+        "  [base, '已归档 12 份 · 上次新增 3 份']"
+        "];\n"
+        "for (const [status, want] of cases) {"
+        "  const got = imaCollectorStatusText(status);"
+        "  if (got !== want) { console.error(JSON.stringify({got, want})); process.exit(1); }"
+        "}"
+    )
+    subprocess.run(["node", "-e", js], check=True)

@@ -7092,17 +7092,34 @@ async function saveZsxqCookie() {
 function imaCollectorStatusText(status) {
   const result = status.last_result || {};
   const config = status.config || {};
-  if (!config.refresh_token?.set) return "未配置 Refresh Token";
-  if (status.running) return "同步中…";
-  const groups = Array.isArray(config.groups) ? config.groups : [];
-  const mounted = groups.filter((group) => Array.isArray(group.folder_ids) && group.folder_ids.length).length;
-  if (!mounted) return "已连接 · 尚未挂载知识库";
-  if (status.last_finished_at) {
-    const ok = Number(result.downloaded || 0);
-    const failed = Number(result.failed || 0);
-    return `已归档 ${Number(status.documents || 0).toLocaleString()} 份 · 上次新增 ${ok} 份${failed ? ` · 失败 ${failed} 份` : ""}`;
+  const storage = status.storage;
+  const storageMessages = {
+    unavailable: "知识库存储暂不可用",
+    stale: "知识库存储状态过期",
+    readonly: "知识库存储当前只读",
+    capacity_blocked: "知识库存储空间已达限制",
+  };
+  if (storageMessages[storage?.status]) return storageMessages[storage.status];
+  let text;
+  if (!config.refresh_token?.set) text = "未配置 Refresh Token";
+  else if (status.running) text = "同步中…";
+  else {
+    const groups = Array.isArray(config.groups) ? config.groups : [];
+    const mounted = groups.filter((group) => Array.isArray(group.folder_ids) && group.folder_ids.length).length;
+    if (!mounted) text = "已连接 · 尚未挂载知识库";
+    else if (status.last_finished_at) {
+      const ok = Number(result.downloaded || 0);
+      const failed = Number(result.failed || 0);
+      text = `已归档 ${Number(status.documents || 0).toLocaleString()} 份 · 上次新增 ${ok} 份${failed ? ` · 失败 ${failed} 份` : ""}`;
+    } else {
+      text = `已配置 · 每 ${Math.round(Number(config.interval_seconds || 3600) / 60)} 分钟检查`;
+    }
   }
-  return `已配置 · 每 ${Math.round(Number(config.interval_seconds || 3600) / 60)} 分钟检查`;
+  if (storage?.status === "available") {
+    const used = Math.max(0, Math.min(100, Number(storage.used_percent) || 0));
+    text += ` · 存储 ${used}%`;
+  }
+  return text;
 }
 
 async function saveImaCollector() {
