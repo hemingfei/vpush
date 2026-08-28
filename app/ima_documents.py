@@ -102,6 +102,30 @@ def decrypt_body(cipher_b64: str, key: bytes) -> bytes:
     return AESGCM(key).decrypt(raw[:12], raw[12:], None)
 
 
+def _truncate_safe_error(text: str) -> str:
+    limit = 240
+    markers = list(re.finditer(r"<(?:redacted|url)>", text))
+    for marker_match in markers:
+        start, end = marker_match.span()
+        if start <= limit < end:
+            marker = marker_match.group()
+            prefix_end = limit - len(marker)
+            while True:
+                partial = next(
+                    (
+                        candidate
+                        for candidate in markers
+                        if candidate.start() < prefix_end < candidate.end()
+                    ),
+                    None,
+                )
+                if partial is None:
+                    break
+                prefix_end = partial.start()
+            return text[:prefix_end] + marker
+    return text[:limit]
+
+
 def _safe_error(exc: BaseException) -> str:
     text = (str(exc).splitlines() or [""])[0]
     text = re.sub(r"(?i)\b(set-cookie|cookie)(\s*:\s*)[^\r\n]*", r"\1\2<redacted>", text)
@@ -121,7 +145,7 @@ def _safe_error(exc: BaseException) -> str:
         r"\1<redacted>",
         text,
     )
-    return text[:240]
+    return _truncate_safe_error(text)
 
 
 def _setting(db: Any, key: str, env_key: str, default: str = "") -> str:

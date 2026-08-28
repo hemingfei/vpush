@@ -1427,6 +1427,20 @@ def test_safe_error_handles_empty_exception_messages():
         assert len(text) <= 240
 
 
+def test_safe_error_keeps_redaction_marker_whole_at_limit():
+    text = _safe_error(RuntimeError("x" * 220 + " access_token=secret"))
+    assert len(text) <= 240
+    assert "secret" not in text
+    assert "<redacted>" in text
+
+
+def test_safe_error_keeps_url_marker_whole_at_limit():
+    text = _safe_error(RuntimeError("x" * 235 + " https://secret.invalid/path"))
+    assert len(text) <= 240
+    assert "secret.invalid" not in text
+    assert "<url>" in text
+
+
 def test_archive_root_rejects_symlink(tmp_path):
     real_root = tmp_path / "real-ima"
     real_root.mkdir()
