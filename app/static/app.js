@@ -2685,6 +2685,41 @@ function ensureTimelineVisibilityPoll() {
   });
 }
 
+// 播放新消息提示音
+function playNotificationSound() {
+  try {
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    
+    // 第一个音符
+    const oscillator1 = audioContext.createOscillator();
+    const gainNode1 = audioContext.createGain();
+    oscillator1.type = "sine";
+    oscillator1.frequency.setValueAtTime(880, audioContext.currentTime);
+    gainNode1.gain.setValueAtTime(0.25, audioContext.currentTime);
+    gainNode1.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.15);
+    oscillator1.connect(gainNode1);
+    gainNode1.connect(audioContext.destination);
+    oscillator1.start(audioContext.currentTime);
+    oscillator1.stop(audioContext.currentTime + 0.15);
+    
+    // 第二个音符（稍晚一点）
+    setTimeout(() => {
+      const oscillator2 = audioContext.createOscillator();
+      const gainNode2 = audioContext.createGain();
+      oscillator2.type = "sine";
+      oscillator2.frequency.setValueAtTime(1100, audioContext.currentTime);
+      gainNode2.gain.setValueAtTime(0.2, audioContext.currentTime);
+      gainNode2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
+      oscillator2.connect(gainNode2);
+      gainNode2.connect(audioContext.destination);
+      oscillator2.start(audioContext.currentTime);
+      oscillator2.stop(audioContext.currentTime + 0.2);
+    }, 80);
+  } catch {
+    // 如果播放失败，静默处理
+  }
+}
+
 async function pollFeedUpdates() {
   if (document.visibilityState === "hidden") return;
   const live = isLiveTimeline();
@@ -2738,6 +2773,10 @@ async function pollFeedUpdates() {
     }
     $("#tl-new-badge")?.classList.add("show");
     $("#tl-feed-panel")?.classList.add("has-new");
+    
+    // 自动刷新显示新消息并播放提示音
+    playNotificationSound();
+    refreshTimeline();
   } catch { /* 轮询失败静默 */ }
 }
 
