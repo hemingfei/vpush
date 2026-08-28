@@ -136,12 +136,12 @@ def _safe_error(exc: BaseException) -> str:
         text,
     )
     text = re.sub(
-        r"(?i)([\"']?\b(?:ima-token|token|refresh_token|access_token|authorization|signature|sig|sign|q-sign|x-ima-cookie)[\"']?\s*[:=]\s*)(?:\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|[^\s,;&]+)",
+        r"(?i)([\"']?\b(?:ima-token|token|refresh_token|access_token|authorization|signature|sig|sign|q-sign|x-ima-cookie|set-cookie|cookie)[\"']?\s*[:=]\s*)(?:\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|[^\s,;&]+)",
         r"\1<redacted>",
         text,
     )
     text = re.sub(
-        r"(?i)((?:\bbasic|\bbearer|\btoken|\baccess_token|\brefresh_token|\bsignature|\bsig|\bsign|\bq-sign|\bx-ima-cookie)\s+)[^\s,;&]+",
+        r"(?i)((?:\bbasic|\bbearer)\s+)[^\s,;&]+",
         r"\1<redacted>",
         text,
     )

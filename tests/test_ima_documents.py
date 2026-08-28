@@ -1393,6 +1393,8 @@ def test_invalid_media_ids_are_not_accepted(tmp_path, value):
         "x-ima-cookie=x-ima-cookie-secret",
         "Cookie: SID=cookie-secret; Path=/",
         "Set-Cookie: IMA-TOKEN=set-cookie-secret; Path=/",
+        'upstream {"Cookie":"SID=cookie-json-secret"}',
+        'upstream {"Set-Cookie":"IMA-TOKEN=set-cookie-json-secret"}',
         "Bearer bearer-secret",
         "Basic basic-secret",
         "failed https://res-skb.ima.qq.com/a.pdf?sign=url-secret",
@@ -1410,7 +1412,7 @@ def test_error_summary_redacts_urls_and_credentials():
     assert "sign=secret" not in text
     assert "secret" not in _safe_error(RuntimeError("Authorization: Bearer secret"))
     assert "secret" not in _safe_error(RuntimeError("access_token=secret"))
-    assert "secret" not in _safe_error(RuntimeError("token secret"))
+    assert _safe_error(RuntimeError("token expired")) == "token expired"
 
 
 def test_safe_error_redacts_standalone_basic_credential():
@@ -1425,6 +1427,12 @@ def test_safe_error_handles_empty_exception_messages():
         assert text == ""
         assert "\n" not in text
         assert len(text) <= 240
+
+
+def test_safe_error_consumes_escaped_json_value():
+    text = _safe_error(RuntimeError(r'{"access_token":"abc\\" private-secret"}'))
+    assert "private-secret" not in text
+    assert "<redacted>" in text
 
 
 def test_safe_error_keeps_redaction_marker_whole_at_limit():
