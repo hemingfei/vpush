@@ -1107,6 +1107,39 @@ def test_ima_mount_expand_uses_stable_cache_and_parent_inheritance():
     assert "imaMountState.dirty = true" in toggle
 
 
+def test_ima_stats_timer_uses_the_render_token_before_repainting():
+    """旧 stats 定时请求完成后不得覆盖更新的后台渲染。"""
+    load = _fn_body("loadAdminStats")
+    assert "const timerSeq = _adminRenderSeq" in load
+    assert "routeStillActive(timerSeq)" in load
+    timer_start = load.index("const timerSeq = _adminRenderSeq")
+    render_index = load.index("renderStatsData(fresh)")
+    assert load.index("routeStillActive(timerSeq)", timer_start) < render_index
+
+
+def test_ima_discovery_catch_and_finally_require_generation_owner():
+    """stats 重建或保存后，旧 discovery 的异常和收尾都不得碰当前控件。"""
+    discover = _fn_body("discoverImaGroups")
+    catch_start = discover.index("} catch")
+    finally_start = discover.index("} finally")
+    catch = discover[catch_start:finally_start]
+    finally_block = discover[finally_start:]
+    assert "generation === imaMountState.generation" in catch
+    assert "imaMountState.discoverySeq === discoverySeq" in catch
+    assert "routeStillActive(routeSeq)" in catch
+    assert "generation === imaMountState.generation" in finally_block
+    assert "imaMountState.discoverySeq === discoverySeq" in finally_block
+    assert "routeStillActive(routeSeq)" in finally_block
+
+
+def test_ima_force_folder_retry_supersedes_inflight_owner():
+    """force retry 必须替换同 key 的旧 owner，普通请求仍保持 loading 去重。"""
+    load = _fn_body("loadImaFolderChildren")
+    assert "if (!force && imaMountState.loading.has(key)) return" in load
+    assert "const request =" in load
+    assert load.index("if (!force && imaMountState.loading.has(key)) return") < load.index("const request =")
+    assert "imaMountState.folderRequests.set(key, request)" in load
+    assert "imaMountState.folderRequests.get(key) === request" in load
 
 
 def test_ima_collector_save_is_owned_by_initiating_route_and_preserves_drafts():

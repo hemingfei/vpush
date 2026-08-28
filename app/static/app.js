@@ -5122,6 +5122,7 @@ async function genBindCode() {
 
 // ---------- 管理后台（导航统一走左侧边栏） ----------
 let _adminRenderSeq = 0; // 当前管理后台渲染令牌：loader 写 #admin-body 前凭此丢弃过期响应
+let _adminStatsLoadSeq = 0;
 
 async function renderAdmin(tab, seq) {
   _adminRenderSeq = seq;
@@ -5450,7 +5451,7 @@ function toggleImaFolder(input) {
 async function loadImaFolderChildren(groupId, parentId, force = false) {
   const key = imaMountCacheKey(groupId, parentId);
   if (!force && imaMountState.folders.has(key)) return;
-  if (imaMountState.loading.has(key)) return;
+  if (!force && imaMountState.loading.has(key)) return;
   const focus = imaFocusSnapshot();
   const request = { generation: imaMountState.generation, id: ++imaMountState.requestSeq };
   if (force) imaMountState.folders.delete(key);
@@ -5521,15 +5522,20 @@ async function discoverImaGroups() {
       if (currentStatus) currentStatus.innerHTML = `自动发现失败：${escapeHtml(imaSafeError(error))}（已保留上次结果）`;
     }
   } catch (err) {
-    if (imaMountState.discoverySeq === discoverySeq && routeStillActive(routeSeq)) {
+    if (generation === imaMountState.generation
+      && imaMountState.discoverySeq === discoverySeq
+      && routeStillActive(routeSeq)) {
       const currentStatus = $("#ima-group-discovery-status");
       if (currentStatus) currentStatus.innerHTML = `自动发现失败：${escapeHtml(imaSafeError(err.message || "请求失败"))}（已保留上次结果）`;
     }
   } finally {
-    if (imaMountState.discoverySeq !== discoverySeq || !routeStillActive(routeSeq)) return;
-    imaMountState.discoveryBusy = false;
-    const currentButton = $("#ima-discover-btn");
-    if (currentButton && document.body.contains(currentButton)) currentButton.disabled = false;
+    if (generation === imaMountState.generation
+      && imaMountState.discoverySeq === discoverySeq
+      && routeStillActive(routeSeq)) {
+      imaMountState.discoveryBusy = false;
+      const currentButton = $("#ima-discover-btn");
+      if (currentButton && document.body.contains(currentButton)) currentButton.disabled = false;
+    }
   }
 }
 
@@ -5576,9 +5582,10 @@ function imaGroupDiscoveryStatusText(status) {
 
 async function loadAdminStats(seq = _adminRenderSeq) {
   if (!routeStillActive(seq)) return;
+  const statsLoadSeq = ++_adminStatsLoadSeq;
   stopStatsTimer();
   const s = await api("/api/stats");
-  if (!routeStillActive(seq)) return;
+  if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq) return;
   const preserveMountDraft = imaMountState.dirty;
   const xq = s.xueqiu_cookie || {};
   const tw = s.twitter_cookie || {};
@@ -5940,8 +5947,11 @@ async function loadAdminStats(seq = _adminRenderSeq) {
   renderImaMountGroups();
   switchStatsTab(statsTabFromHash());
   statsTimer = setInterval(async () => {
+    const timerSeq = _adminRenderSeq;
+    const timerStatsSeq = _adminStatsLoadSeq;
     try {
       const fresh = await api("/api/stats");
+      if (!routeStillActive(timerSeq) || _adminStatsLoadSeq !== timerStatsSeq) return;
       renderStatsData(fresh);
     } catch {
       /* 后台刷新失败不打扰，等下一轮 */
