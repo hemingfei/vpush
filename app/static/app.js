@@ -5575,6 +5575,13 @@ function imaFolderAncestorSelected(groupId, folderId) {
   return false;
 }
 
+function normalizeImaMountDraft(groupId) {
+  const selected = imaMountDraft(groupId);
+  for (const folderId of [...selected]) {
+    if (imaFolderAncestorSelected(groupId, folderId)) selected.delete(folderId);
+  }
+}
+
 function imaFolderDescendantSelected(groupId, folderId) {
   const selected = imaMountDraft(groupId);
   for (const selectedId of selected) {
@@ -5591,8 +5598,8 @@ function imaFolderDescendantSelected(groupId, folderId) {
 }
 
 function imaFolderSelectionState(groupId, folderId) {
+  const inherited = imaFolderAncestorSelected(groupId, folderId);
   const selected = imaMountDraft(groupId).has(folderId);
-  const inherited = !selected && imaFolderAncestorSelected(groupId, folderId);
   return {
     checked: selected || inherited,
     disabled: inherited,
@@ -5787,6 +5794,7 @@ async function loadImaFolderChildren(groupId, parentId, force = false) {
     items.forEach((item) => {
       if (item?.id) imaMountState.parents.set(imaMountCacheKey(groupId, String(item.id)), String(item.parent_id || parentId));
     });
+    normalizeImaMountDraft(groupId);
   } catch (err) {
     const current = request.generation === imaMountState.generation
       && imaMountState.folderRequests.get(key) === request;
@@ -5798,7 +5806,7 @@ async function loadImaFolderChildren(groupId, parentId, force = false) {
     imaMountState.folderRequests.delete(key);
     imaMountState.loading.delete(key);
     if (String(imaMountState.selectedGroupId) === String(groupId)) {
-      renderImaFolderTree(groupId);
+      renderImaMountGroups();
       imaRestoreFocus(focus);
     }
   }

@@ -1640,6 +1640,20 @@ def test_ima_mount_expand_uses_stable_cache_and_parent_inheritance():
     assert "imaMountState.dirty = true" in toggle
 
 
+def test_ima_mount_normalizes_inherited_descendants_after_parent_links_arrive():
+    """新学到父子关系后，去掉已被祖先覆盖的精确子选择，且不因此标 dirty。"""
+    normalize = _fn_body("normalizeImaMountDraft")
+    load = _fn_body("loadImaFolderChildren")
+    selection = _fn_body("imaFolderSelectionState")
+    assert "imaFolderAncestorSelected" in normalize
+    assert "selected.delete" in normalize
+    assert "imaMountState.dirty" not in normalize
+    assert "normalizeImaMountDraft(groupId)" in load
+    assert load.index("imaMountState.parents.set") < load.index("normalizeImaMountDraft(groupId)")
+    assert "renderImaMountGroups()" in load
+    assert "const inherited = imaFolderAncestorSelected" in selection
+
+
 def test_ima_mount_tree_exposes_the_knowledge_base_root():
     """没有子文件夹的知识库仍可显式挂载整个根目录。"""
     render = _fn_body("renderImaFolderTree")
@@ -2742,8 +2756,8 @@ def test_frontend_asset_urls_bust_browser_cache():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=209"' in html
-    assert 'src="/app.js?v=294"' in html
-    assert 'dav-shell-v163' in sw
+    assert 'src="/app.js?v=295"' in html
+    assert 'dav-shell-v164' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
