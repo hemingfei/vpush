@@ -1138,6 +1138,26 @@ def test_ima_confirmed_departed_save_reconciles_server_state_on_next_stats_load(
     assert "imaMountState.revision === saveOwner.mountRevision" in save
 
 
+def test_ima_save_reload_owns_mount_generation_bump_and_preserves_stale_guards():
+    """同路由 reload 自身的 mount generation bump 不得阻断清理；外部失效仍须中止。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    load = _fn_body("loadAdminStats")
+    save = _fn_body("saveImaCollector")
+
+    assert "return false;" in load
+    assert "return true;" in load
+    assert load.index("return true;") > load.index("statsTimer = setInterval")
+    assert "const statsReloadAccepted = await loadAdminStats(routeSeq, savedImaStatus);" in save
+    reload = save.index("const statsReloadAccepted = await loadAdminStats(routeSeq, savedImaStatus);")
+    cleanup_guard = save.index("if (!statsReloadAccepted", reload)
+    assert save.index("generation !== imaMountState.generation", 0, reload) < reload
+    assert cleanup_guard > reload
+    assert "!routeStillActive(routeSeq)" in save[cleanup_guard:]
+    assert "imaMountState.saveOwner !== saveOwner" in save[cleanup_guard:]
+    assert "generation !== imaMountState.generation" not in save[reload:cleanup_guard]
+    assert load.index("initImaMountState(pure.groups || [], preserveMountDraftForReload)") < load.index("statsTimer = setInterval")
+
+
 def test_ima_stats_failure_keeps_polling_and_exposes_route_owned_retry():
     """stats 首次/手动失败要留在当前页并可重试，不能丢掉原轮询。"""
     load = _fn_body("loadAdminStats")

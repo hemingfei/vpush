@@ -5684,7 +5684,7 @@ function imaGroupDiscoveryStatusText(status) {
 }
 
 async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = null) {
-  if (!routeStillActive(seq)) return;
+  if (!routeStillActive(seq)) return false;
   const generation = imaMountState.generation;
   const pendingOwner = imaMountState.saveOwner;
   if (pendingOwner && !pendingOwner.putCompleted && $("#ima-pure-uid")) {
@@ -5697,12 +5697,12 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
   try {
     const stats = await api("/api/stats");
     if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq
-      || generation !== imaMountState.generation) return;
+      || generation !== imaMountState.generation) return false;
     s = authoritativeImaStatus ? { ...stats, ima_collector: authoritativeImaStatus } : stats;
     _lastAdminStatsSnapshot = s;
   } catch (err) {
     if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq
-      || generation !== imaMountState.generation) return;
+      || generation !== imaMountState.generation) return false;
     const message = `加载失败: ${err.message || "请求失败"}`;
     const fallbackStats = _lastAdminStatsSnapshot;
     if (fallbackStats && authoritativeImaStatus) {
@@ -5717,11 +5717,11 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
         const body = $("#admin-body");
         if (body) body.innerHTML = emptyState(message, retry);
       }
-      return;
+      return false;
     }
   }
   if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq
-    || generation !== imaMountState.generation) return;
+    || generation !== imaMountState.generation) return false;
   stopStatsTimer();
   const owner = imaMountState.saveOwner;
   const ownerIsCurrent = owner && owner === pendingOwner;
@@ -6142,6 +6142,7 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
       /* 后台刷新失败不打扰，等下一轮 */
     }
   }, 30000);
+  return true;
 }
 
 function plazaSourceEffect(row) {
@@ -6861,8 +6862,8 @@ async function saveImaCollector() {
     if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats") {
       return;
     }
-    await loadAdminStats(routeSeq, savedImaStatus);
-    if (generation !== imaMountState.generation || imaMountState.saveOwner !== saveOwner) return;
+    const statsReloadAccepted = await loadAdminStats(routeSeq, savedImaStatus);
+    if (!statsReloadAccepted || imaMountState.saveOwner !== saveOwner) return;
     if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats") return;
     const reloadedSnapshot = imaCollectorFormSnapshot();
     const reloadedRevision = imaCollectorFormRevision(reloadedSnapshot);
