@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from .fetchers.base import CN_TZ
 from .fetchers.ima_inspect import item_cover, item_text
+from .ima_storage import ImaStorageStatus
 
 logger = logging.getLogger(__name__)
 
@@ -1089,12 +1090,25 @@ def translation_fields(abstract: str, state_item: dict[str, Any]) -> dict[str, A
 
 
 class ImaDocumentStore:
-    def __init__(self, root: str | Path):
-        raw_root = Path(root).expanduser()
-        if raw_root.exists() and raw_root.is_symlink():
+    _ARCHIVE_MARKER = ".vpush-ima-root"
+
+    def __init__(
+        self,
+        root: str | Path,
+        *,
+        archive_root: str | Path | None = None,
+        storage_status: ImaStorageStatus | None = None,
+    ):
+        raw_index = Path(root).expanduser()
+        raw_archive = Path(archive_root).expanduser() if archive_root is not None else raw_index
+        if raw_archive.exists() and raw_archive.is_symlink():
             raise ValueError("archive root must not be a symlink")
-        self.root = raw_root.resolve()
+        self.root = raw_index.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
+        self.storage_status = storage_status or ImaStorageStatus(None, remote=False)
+        self.archive_root = raw_archive.resolve()
+        if not self.storage_status.remote:
+            self.archive_root.mkdir(parents=True, exist_ok=True)
         self.manifest_path = self.root / "manifest.json"
         self.state_path = self.root / "state.json"
         self._state_lock = threading.Lock()
@@ -1132,20 +1146,40 @@ class ImaDocumentStore:
         return state.get(self.state_key(record)) or {}
 
     def _safe_path(self, relative: str) -> Path | None:
-        candidate = (self.root / relative).resolve()
-        if candidate == self.root or not candidate.is_relative_to(self.root):
+        candidate = (self.archive_root / relative).resolve()
+        if candidate == self.archive_root or not candidate.is_relative_to(self.archive_root):
             return None
         return candidate
 
     def _day_dir(self, day: str) -> Path:
-        return self.root / _safe_component(day)
+        return self.archive_root / _safe_component(day)
 
     @staticmethod
     def _collision_token(media_id: str) -> str:
         return hashlib.sha256(media_id.encode("utf-8")).hexdigest()[:8]
 
+    def _marker_present(self) -> bool:
+        try:
+            return (self.archive_root / self._ARCHIVE_MARKER).is_file()
+        except OSError:
+            return False
+
+    def archive_readable(self) -> bool:
+        if not self.storage_status.remote:
+            return True
+        return self.storage_status.can_read() and self._marker_present()
+
+    def archive_writable(self) -> bool:
+        if not self.storage_status.remote:
+            return True
+        return self.storage_status.can_write() and self._marker_present()
+
+    def authorized_archive_file(self, relative: Any) -> Path | None:
+        """Resolve a stored archive-relative path. Caller must gate on archive_readable()."""
+        return self._state_path(relative)
+
     def _archive_path(self, relative: str) -> Path:
-        day_path = self.root / Path(relative).parent
+        day_path = self.archive_root / Path(relative).parent
         if day_path.is_symlink():
             raise ValueError("archive directory must not be a symlink")
         candidate = self._safe_path(relative)
@@ -1274,8 +1308,8 @@ class ImaDocumentStore:
                 continue
             new_name = str(record.get("name") or item.get("name") or media_id)
             if desired == current_pdf:
-                new_pdf = str(desired.relative_to(self.root))
-                new_txt = str(desired.with_suffix(".txt").relative_to(self.root))
+                new_pdf = str(desired.relative_to(self.archive_root))
+                new_txt = str(desired.with_suffix(".txt").relative_to(self.archive_root))
                 if item.get("pdf") != new_pdf or item.get("txt") != new_txt or item.get("name") != new_name:
                     occupied.discard(str(current_rel or ""))
                     occupied.add(new_pdf)
@@ -1294,11 +1328,11 @@ class ImaDocumentStore:
             os.replace(current_pdf, desired)
             if current_txt.is_file() and current_txt != desired_txt:
                 os.replace(current_txt, desired_txt)
-            new_pdf = str(desired.relative_to(self.root))
+            new_pdf = str(desired.relative_to(self.archive_root))
             occupied.discard(str(current_rel or ""))
             occupied.add(new_pdf)
             item["pdf"] = new_pdf
-            item["txt"] = str(desired_txt.relative_to(self.root))
+            item["txt"] = str(desired_txt.relative_to(self.archive_root))
             item["name"] = new_name
             renamed += 1
             changed = True
@@ -1473,8 +1507,14 @@ class ImaDocumentStore:
     ) -> bool:
         state = state if state is not None else self.load_state()
         item = self._state_item(state, record)
-        pdf = self._state_path(item.get("pdf"))
-        txt = self._state_path(item.get("txt"))
+        pdf_rel = item.get("pdf")
+        txt_rel = item.get("txt")
+        if not (isinstance(pdf_rel, str) and pdf_rel and isinstance(txt_rel, str) and txt_rel):
+            return False
+        if not self.archive_readable():
+            return True
+        pdf = self._state_path(pdf_rel)
+        txt = self._state_path(txt_rel)
         return bool(pdf and txt and pdf.is_file() and txt.is_file())
 
     def catalog_entries(
@@ -1639,8 +1679,13 @@ class ImaDocumentStore:
                 continue
             if not requested_group and allowed_groups is None and not self._is_legacy_group(actual_group_id):
                 continue
-            pdf = self._state_path(state_item.get("pdf"))
-            txt = self._state_path(state_item.get("txt"))
+            # Remote archives must not be resolved/stat'd for metadata; local keeps Path for callers.
+            if self.storage_status.remote:
+                pdf = None
+                txt = None
+            else:
+                pdf = self._state_path(state_item.get("pdf"))
+                txt = self._state_path(state_item.get("txt"))
             result = {
                 "media_id": media_id,
                 "name": str(record.get("name") or media_id),
@@ -1653,8 +1698,8 @@ class ImaDocumentStore:
                 "abstract": str(record.get("abstract") or ""),
                 "cover_url": str(record.get("cover_url") or ""),
                 "tags": self._tags(state_item),
-                "has_pdf": bool(pdf and pdf.is_file()),
-                "has_txt": bool(txt and txt.is_file()),
+                "has_pdf": bool(state_item.get("pdf")),
+                "has_txt": bool(state_item.get("txt")),
             }
             result.update(translation_fields(result["abstract"], state_item))
             metadata_id = str(requested_group or record.get("group_id") or state_item.get("group_id") or "")
@@ -1770,9 +1815,21 @@ def purge_ima_document_tags(store: ImaDocumentStore, valid_tags: set[str]) -> in
 
 
 class ImaDocumentService:
-    def __init__(self, db: Any, archive_root: str | Path):
+    def __init__(
+        self,
+        db: Any,
+        index_root: str | Path,
+        *,
+        archive_root: str | Path | None = None,
+        storage_status: ImaStorageStatus | None = None,
+    ):
         self.db = db
-        self.store = ImaDocumentStore(archive_root)
+        self.storage_status = storage_status or ImaStorageStatus(None, remote=False)
+        self.store = ImaDocumentStore(
+            index_root,
+            archive_root=archive_root,
+            storage_status=self.storage_status,
+        )
         self._stop = threading.Event()
         self._state_lock = threading.Lock()
         self._config_lock = threading.RLock()
@@ -1783,6 +1840,19 @@ class ImaDocumentService:
         self._running = False
         self._next_run_at = 0.0
         self._cancel_requested = False
+
+    def _storage_block_status(self) -> str | None:
+        if self.store.archive_writable():
+            return None
+        data = self.storage_status.load()
+        status = str(data.get("status") or "")
+        if status == "stale":
+            return "storage_stale"
+        if status == "readonly":
+            return "storage_readonly"
+        if status == "capacity_blocked":
+            return "capacity_blocked"
+        return "storage_unavailable"
 
     @property
     def config_lock(self) -> threading.RLock:
@@ -1904,22 +1974,28 @@ class ImaDocumentService:
         }
 
     def start(self) -> None:
-        try:
-            restored = self.store.restore_original_filenames()
-            if restored.get("renamed"):
-                logger.info("IMA restored %s original filenames", restored["renamed"])
-        except Exception:
-            logger.exception("IMA original filename restore failed")
-        try:
-            rebuilt = self.store.rebuild_manifest_from_state()
-            if rebuilt:
-                logger.info("IMA rebuilt %s manifest records from state", rebuilt)
-        except Exception:
-            logger.exception("IMA manifest rebuild from state failed")
-        try:
-            self.retag_all()
-        except Exception:
-            logger.exception("IMA document retag failed")
+        if self.store.archive_writable():
+            try:
+                restored = self.store.restore_original_filenames()
+                if restored.get("renamed"):
+                    logger.info("IMA restored %s original filenames", restored["renamed"])
+            except Exception:
+                logger.exception("IMA original filename restore failed")
+        elif self.storage_status.remote:
+            logger.warning("IMA archive unavailable; skip filename restore")
+        if self.store.archive_readable():
+            try:
+                rebuilt = self.store.rebuild_manifest_from_state()
+                if rebuilt:
+                    logger.info("IMA rebuilt %s manifest records from state", rebuilt)
+            except Exception:
+                logger.exception("IMA manifest rebuild from state failed")
+            try:
+                self.retag_all()
+            except Exception:
+                logger.exception("IMA document retag failed")
+        elif self.storage_status.remote:
+            logger.warning("IMA archive unavailable; skip manifest rebuild and retag")
         with self._state_lock:
             if self._scheduler_thread and self._scheduler_thread.is_alive():
                 return
@@ -1985,6 +2061,9 @@ class ImaDocumentService:
         cfg = self.config()
         if not cfg.credentials_configured:
             return {"status": "not_configured"}
+        blocked = self._storage_block_status()
+        if blocked:
+            return {"status": blocked}
         now = time.time()
         with self._state_lock:
             if self._stop.is_set():
@@ -2093,6 +2172,10 @@ class ImaDocumentService:
         for record in pending:
             if self._cancel_requested:
                 break
+            blocked = self._storage_block_status()
+            if blocked:
+                last_error = blocked
+                break
             media_id = str(record["media_id"])
             state_key = self.store.state_key(record)
             occupied = self.store._occupied_pdfs(state, skip_media_id=state_key)
@@ -2119,8 +2202,8 @@ class ImaDocumentService:
                     "group_name": group.name,
                     "day": record.get("day") or "unknown",
                     "name": record.get("name") or media_id,
-                    "pdf": str(pdf.relative_to(self.store.root)),
-                    "txt": str(txt.relative_to(self.store.root)),
+                    "pdf": str(pdf.relative_to(self.store.archive_root)),
+                    "txt": str(txt.relative_to(self.store.archive_root)),
                     "size": size,
                     "md5": md5,
                     "chars": chars,
@@ -2153,6 +2236,9 @@ class ImaDocumentService:
             cfg = self.config()
             if not cfg.credentials_configured:
                 return {"status": "not_configured"}
+            blocked = self._storage_block_status()
+            if blocked:
+                return {"status": blocked}
             started = time.time()
             self.db.set_setting(IMA_PURE_LAST_STARTED_KEY, str(int(started)))
             discovery_result = self.discover()

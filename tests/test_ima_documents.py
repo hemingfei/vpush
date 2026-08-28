@@ -8,6 +8,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+from app.ima_storage import ImaStorageStatus
 from app.ima_documents import (
     IMA_LEGACY_GROUP_ID,
     IMA_LEGACY_GROUP_NAME,
@@ -1496,6 +1497,22 @@ def test_safe_error_keeps_url_marker_whole_at_limit():
     assert "<url>" in text
 
 
+def _write_available_status(path, **overrides):
+    payload = {
+        "checked_at": int(time.time()),
+        "available": True,
+        "writable": True,
+        "used_percent": 10,
+        "inode_percent": 1,
+        "monthly_tx_bytes": 10,
+        "capacity_blocked": False,
+        "reason": "",
+    }
+    payload.update(overrides)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
 def test_archive_root_rejects_symlink(tmp_path):
     real_root = tmp_path / "real-ima"
     real_root.mkdir()
@@ -1503,6 +1520,234 @@ def test_archive_root_rejects_symlink(tmp_path):
     link_root.symlink_to(real_root, target_is_directory=True)
     with pytest.raises(ValueError, match="root.*symlink"):
         ImaDocumentStore(link_root)
+
+
+def test_separate_root_keeps_indexes_local_and_files_remote(tmp_path):
+    index_root = tmp_path / "index"
+    archive_root = tmp_path / "archive"
+    marker = archive_root / ".vpush-ima-root"
+    archive_root.mkdir()
+    marker.touch()
+    status_path = tmp_path / "status.json"
+    _write_available_status(status_path)
+
+    status = ImaStorageStatus(status_path, remote=True)
+    store = ImaDocumentStore(index_root, archive_root=archive_root, storage_status=status)
+
+    assert store.manifest_path == index_root.resolve() / "manifest.json"
+    assert store.state_path == index_root.resolve() / "state.json"
+    assert store.root == index_root.resolve()
+    assert store.archive_root == archive_root.resolve()
+    assert not (archive_root / "manifest.json").exists()
+    assert not (archive_root / "state.json").exists()
+
+    record = {
+        "media_id": "file_abc",
+        "name": "Report.pdf",
+        "day": "0827",
+        "group_id": "7476629605476515",
+    }
+    pdf = store.pdf_path(record)
+    txt = store.txt_path(record)
+    assert pdf.is_relative_to(archive_root.resolve())
+    assert txt.is_relative_to(archive_root.resolve())
+    assert not pdf.is_relative_to(index_root.resolve())
+
+    relative_pdf = str(pdf.relative_to(store.archive_root))
+    relative_txt = str(txt.relative_to(store.archive_root))
+    assert not relative_pdf.startswith("/")
+    assert relative_pdf.endswith("0827/Report.pdf") or relative_pdf.endswith("unknown/Report.pdf") or "/0827/Report.pdf" in relative_pdf
+    store.save_manifest([record])
+    store.save_state(
+        {
+            store.state_key(record): {
+                "pdf": relative_pdf,
+                "txt": relative_txt,
+                "name": "Report.pdf",
+                "day": "0827",
+            }
+        }
+    )
+    state = store.load_state()
+    saved = state[store.state_key(record)]
+    assert saved["pdf"] == relative_pdf
+    assert saved["txt"] == relative_txt
+    assert not saved["pdf"].startswith("/")
+    assert store._state_path(saved["pdf"]) == pdf
+
+    detail = store.document("file_abc", group_id="7476629605476515", groups=(
+        ImaGroupConfig("7476629605476515", "远端", "kb", "root"),
+    ))
+    assert detail["has_pdf"] is True
+    assert detail["has_txt"] is True
+    assert detail["pdf"] is None
+    assert detail["txt"] is None
+    assert store.authorized_archive_file(saved["pdf"]) == pdf
+
+
+def test_separate_root_symlink_archive_raises(tmp_path):
+    index_root = tmp_path / "index"
+    real_archive = tmp_path / "real-archive"
+    real_archive.mkdir()
+    (real_archive / ".vpush-ima-root").touch()
+    archive_root = tmp_path / "archive"
+    archive_root.symlink_to(real_archive, target_is_directory=True)
+    status_path = tmp_path / "status.json"
+    _write_available_status(status_path)
+    status = ImaStorageStatus(status_path, remote=True)
+    with pytest.raises(ValueError, match="root.*symlink"):
+        ImaDocumentStore(index_root, archive_root=archive_root, storage_status=status)
+
+
+def test_separate_root_missing_marker_blocks_without_mkdir(tmp_path):
+    index_root = tmp_path / "index"
+    archive_root = tmp_path / "archive"
+    status_path = tmp_path / "status.json"
+    _write_available_status(status_path)
+    status = ImaStorageStatus(status_path, remote=True)
+    store = ImaDocumentStore(index_root, archive_root=archive_root, storage_status=status)
+
+    assert store.archive_readable() is False
+    assert store.archive_writable() is False
+    assert not archive_root.exists()
+    assert index_root.exists()
+    store.save_manifest([{"media_id": "file_abc", "name": "Report.pdf", "day": "0827"}])
+    assert (index_root / "manifest.json").is_file()
+    assert not archive_root.exists()
+
+
+def test_local_single_root_construction_unchanged(tmp_path):
+    root = tmp_path / "ima"
+    store = ImaDocumentStore(root)
+    assert store.root == root.resolve()
+    assert store.archive_root == store.root
+    assert store.archive_readable() is True
+    assert store.archive_writable() is True
+    record = {"media_id": "file_abc", "name": "Report.pdf", "day": "0827"}
+    pdf = store.pdf_path(record)
+    assert pdf.parent == (root / "0827").resolve()
+    assert store.manifest_path.parent == store.root
+
+
+def test_separate_root_partial_write_failure_and_recovery(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    index_root = tmp_path / "index"
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    (archive_root / ".vpush-ima-root").touch()
+    status_path = tmp_path / "status.json"
+    _write_available_status(status_path)
+    status = ImaStorageStatus(status_path, remote=True)
+
+    db = FakeDB(
+        {
+            "ima_pure_uid": "uid",
+            "ima_pure_refresh_token": "refresh",
+            "ima_pure_knowledge_base_id": "kb",
+            "ima_pure_root_folder_id": "root",
+        }
+    )
+    service = ImaDocumentService(
+        db,
+        index_root,
+        archive_root=archive_root,
+        storage_status=status,
+    )
+    relative_holder = {}
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.config = config
+
+        def discover_groups(self):
+            return ()
+
+        def manifest(self):
+            return [{"media_id": "file_abc", "name": "Report.pdf", "day": "0827", "size": 8}]
+
+        def get_media(self, media_id):
+            return {"jump_url_info": {"url": "https://download.invalid/report.pdf"}}
+
+        def download(self, media, destination, expected_size=0):
+            import os
+            import tempfile
+            from pathlib import Path
+
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            fd, temp_name = tempfile.mkstemp(
+                prefix=destination.name + ".", suffix=".part", dir=destination.parent
+            )
+            os.close(fd)
+            temp = Path(temp_name)
+            relative_holder["pdf"] = str(destination.relative_to(archive_root.resolve()))
+            try:
+                temp.write_bytes(b"%PDF-1.")
+                raise OSError("disk full")
+            except Exception:
+                temp.unlink(missing_ok=True)
+                raise
+
+        @staticmethod
+        def _pdf_info(path):
+            return 8, "md5"
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    monkeypatch.setattr(
+        ima_documents,
+        "convert_pdf",
+        lambda pdf, txt: (txt.write_text("text", encoding="utf-8") or 4),
+    )
+
+    first = service.sync_once()
+    assert first["downloaded"] == 0
+    assert first["failed"] >= 1
+    pdf = archive_root / "0827" / "Report.pdf"
+    assert not pdf.exists()
+    assert list(archive_root.rglob("*.part")) == []
+    assert service.store.is_complete({"media_id": "file_abc", "name": "Report.pdf", "day": "0827"}) is False
+
+    class GoodClient(FakeClient):
+        def download(self, media, destination, expected_size=0):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"%PDF-1.7")
+            relative_holder["pdf"] = str(destination.relative_to(archive_root.resolve()))
+            return {"size": 8, "md5": "md5"}
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", GoodClient)
+    second = service.sync_once()
+    assert second["downloaded"] == 1
+    assert pdf.is_file()
+    state = service.store.load_state()
+    assert state["file_abc"]["pdf"] == "0827/Report.pdf"
+    assert state["file_abc"]["pdf"] == relative_holder["pdf"]
+    assert not state["file_abc"]["pdf"].startswith("/")
+
+
+def test_sync_blocked_when_archive_not_writable(tmp_path):
+    index_root = tmp_path / "index"
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    (archive_root / ".vpush-ima-root").touch()
+    status_path = tmp_path / "status.json"
+    _write_available_status(status_path, available=False, writable=False)
+    status = ImaStorageStatus(status_path, remote=True)
+    db = FakeDB(
+        {
+            "ima_pure_uid": "uid",
+            "ima_pure_refresh_token": "refresh",
+            "ima_pure_knowledge_base_id": "kb",
+            "ima_pure_root_folder_id": "root",
+        }
+    )
+    service = ImaDocumentService(
+        db,
+        index_root,
+        archive_root=archive_root,
+        storage_status=status,
+    )
+    assert service.trigger()["status"] == "storage_unavailable"
+    assert service.sync_once()["status"] == "storage_unavailable"
 
 
 def test_archive_path_rejects_symlinked_day_directory(tmp_path):
