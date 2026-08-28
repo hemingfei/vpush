@@ -1204,6 +1204,11 @@ class DB:
             (category_id, *ids),
         )
 
+    def get_kol(self, kol_id: int) -> dict | None:
+        """获取单个大V"""
+        rows = self._rows("SELECT * FROM kols WHERE id = ?", (kol_id,))
+        return rows[0] if rows else None
+
     def get_kol_by_external(self, platform: str, external_id: str) -> dict | None:
         """按平台 + 外部ID 查大V（更新 external_id 时的唯一性校验用）。"""
         rows = self._rows(

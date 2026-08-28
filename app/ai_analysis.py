@@ -2,7 +2,6 @@
 from __future__ import annotations
 import json
 import logging
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -97,10 +96,12 @@ def format_messages_for_llm(posts: list[dict]) -> str:
         platform = post.get("platform", "")
         kol_name = post.get("kol_name", "未知")
         published_at = post.get("published_at", "")
+        fetched_at = post.get("fetched_at", "")
         title = (post.get("title") or "").strip()
         content = (post.get("content") or "").strip()
         
-        lines.append(f"--- [{platform}] {kol_name} @ {published_at} ---")
+        time_str = published_at or fetched_at
+        lines.append(f"--- [{platform}] {kol_name} @ {time_str} ---")
         if title:
             lines.append(f"标题: {title}")
         if content:
@@ -152,7 +153,7 @@ def extract_token_usage(llm_result: dict | None) -> tuple[int, int, int]:
     return prompt_tokens, completion_tokens, total_tokens
 
 
-async def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
+def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
     """执行一次分析任务
     
     Returns:
@@ -204,8 +205,8 @@ async def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
                 f"""SELECT p.*, k.name as kol_name FROM posts p
                    JOIN kols k ON p.kol_id = k.id
                    WHERE p.kol_id IN ({placeholders})
-                   AND p.published_at >= ? AND p.published_at <= ?
-                   ORDER BY p.published_at ASC""",
+                   AND p.fetched_at >= ? AND p.fetched_at <= ?
+                   ORDER BY p.fetched_at ASC""",
                 (*selected_kol_ids, start_time.isoformat(), end_time.isoformat())
             )
             posts = [dict(row) for row in rows]
@@ -272,22 +273,16 @@ async def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
             post_id = existing[0]["id"]
         else:
             # 创建帖子
-            cursor = db._conn.execute(
-                """INSERT INTO posts
-                   (platform, kol_id, external_id, title, content, published_at, fetched_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    target_kol["platform"],
-                    task["target_kol_id"],
-                    external_id,
-                    f"AI分析报告 - {task['name']}",
-                    analysis_content,
-                    now.isoformat(),
-                    now.isoformat()
-                )
+            post_id = db.insert_post(
+                platform=target_kol["platform"],
+                kol_id=task["target_kol_id"],
+                external_id=external_id,
+                title=f"AI分析报告 - {task['name']}",
+                content=analysis_content,
+                url="",
+                published_at=now.isoformat(),
+                post_type="ai_analysis"
             )
-            post_id = cursor.lastrowid
-            db._conn.commit()
         
         # 6. 更新日志和任务
         db.update_ai_log(
@@ -342,3 +337,12 @@ async def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
             "completion_tokens": 0,
             "total_tokens": 0,
         }
+
+
+def run_due_analysis_tasks(db: DB) -> None:
+    """运行所有到期的AI分析任务"""
+    now = datetime.now(timezone.utc)
+    tasks = db.get_due_ai_tasks(now.isoformat())
+    for task in tasks:
+        if task["enabled"]:
+            run_analysis_task(task["id"], db)
