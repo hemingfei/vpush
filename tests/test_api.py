@@ -1750,8 +1750,15 @@ def test_cookie_status_never_returns_credential_bytes(monkeypatch):
     env_stats = client.get("/api/stats", headers=headers).json()
     assert env_stats["twitter_cookie"]["preview"] == "已配置"
     assert env_stats["zsxq_cookie"]["preview"] == "已配置"
+    assert env_stats["ima_credentials"]["cookie"] == {
+        "set": True,
+        "updated_at": "",
+        "preview": "已配置",
+        "from_env": True,
+    }
     assert "twitter-ENV-SYNTHETIC-SECRET" not in str(env_stats)
     assert "zsxq-ENV-SYNTHETIC-SECRET" not in str(env_stats)
+    assert "ima-ENV-SYNTHETIC-SECRET" not in str(env_stats)
     zsxq_env = client.get("/api/admin/zsxq-cookie", headers=headers).json()
     twitter_env = client.get("/api/admin/twitter-cookie", headers=headers).json()
     ima_env = client.get("/api/admin/ima-credentials", headers=headers).json()["cookie"]

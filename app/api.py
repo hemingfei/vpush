@@ -4026,6 +4026,16 @@ def create_api_router(
                     "preview": "已配置",
                     "from_env": True,
                 }
+        ima_cookie_status = _cookie_status(IMA_COOKIE_KEY, IMA_COOKIE_TIME_KEY)
+        if not ima_cookie_status["set"]:
+            env_ima = os.environ.get("IMA_COOKIE", "")
+            if env_ima:
+                ima_cookie_status = {
+                    "set": True,
+                    "updated_at": "",
+                    "preview": "已配置",
+                    "from_env": True,
+                }
         last_post_at = db.last_post_time_by_kol()
         kol_health = [
             {
@@ -4067,7 +4077,7 @@ def create_api_router(
             "zsxq_cookie": zsxq_status,
             "ima_credentials": {
                 "mode": ("openapi" if (db.get_setting(IMA_CLIENT_ID_KEY) or os.environ.get("IMA_OPENAPI_CLIENTID", "")) and (db.get_setting(IMA_API_KEY_KEY) or os.environ.get("IMA_OPENAPI_APIKEY", "")) else ("cookie" if db.get_setting(IMA_COOKIE_KEY) or os.environ.get("IMA_COOKIE", "") else "none")),
-                "cookie": _cookie_status(IMA_COOKIE_KEY, IMA_COOKIE_TIME_KEY),
+                "cookie": ima_cookie_status,
                 "openapi_clientid": {
                     "set": bool(db.get_setting(IMA_CLIENT_ID_KEY) or os.environ.get("IMA_OPENAPI_CLIENTID", "")),
                     "preview": _cred_preview(db.get_setting(IMA_CLIENT_ID_KEY) or os.environ.get("IMA_OPENAPI_CLIENTID", "")),
