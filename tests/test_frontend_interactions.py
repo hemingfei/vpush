@@ -570,7 +570,7 @@ def test_plaza_source_visibility_admin_and_pills():
     """管理员可设广场数据源自动/显示/隐藏；角标和旧 #/zsxq 都认可见列表。"""
     src = APP_JS.read_text()
     css = STYLE_CSS.read_text()
-    assert 'STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"]' in src
+    assert 'STATS_TABS = ["config", "cookies", "proxies", "plaza"]' in src
     assert 'data-tab="plaza"' in _fn_body("loadAdminStats")
     assert "动态广场显示" in _fn_body("loadAdminStats")
     assert "plazaSourceRowsHtml(s.plaza_sources)" in _fn_body("loadAdminStats")
@@ -941,7 +941,9 @@ def test_stats_proxies_tab():
 def test_stats_tabs_expose_tab_aria():
     """数据源分段导航与注册码页同一套 tab 语义。"""
     src = APP_JS.read_text()
-    assert 'role="tab" id="tab-overview" aria-selected="true" aria-controls="st-overview"' in src
+    assert 'role="tab" id="tab-config" aria-selected="true" aria-controls="st-config"' in src
+    assert 'id="tab-overview"' not in src
+    assert 'id="tab-health"' not in src
     assert 'aria-controls="st-proxies"' in src
     assert 'role="tabpanel" aria-labelledby="tab-proxies"' in src
     switch = _fn_body("switchStatsTab")
@@ -1005,11 +1007,128 @@ def test_stats_cookie_repair_deep_link():
     assert "saveZsxqCookie()" in _fn_body("loadAdminStats")
     assert "pasteCookieField('xq-cookie')" in _fn_body("loadAdminStats")
     banner = _fn_body("cookieRepairBanner")
-    assert "switchStatsTab('cookies')" in banner
+    assert "go('admin/stats?tab=cookies')" in banner
+    assert "switchStatsTab('cookies')" not in banner
     assert "Cookie 需要更新" in banner
     repair = _fn_body("cookieRepairItems")
     assert "xueqiu_probe_alert_at" not in repair
     assert "src.xueqiu && !src.xueqiu.ok" in repair
+
+
+def test_stats_default_tab_is_config():
+    switch = _fn_body("switchStatsTab")
+    assert 'name === "config" ? "/admin/stats"' in switch
+    hash_fn = _fn_body("statsTabFromHash")
+    assert 'routeQuery().get("tab") || "config"' in hash_fn
+
+
+def test_stats_tabs_are_config_workshop_only():
+    """数据源页只改管线，不再承担监控总览 / 大V健康。"""
+    src = APP_JS.read_text()
+    load = _fn_body("loadAdminStats")
+    assert "监控总览" not in load
+    assert "大V健康" not in load
+    assert "大V抓取健康" not in load
+    assert 'id="st-overview"' not in load
+    assert 'id="st-health"' not in load
+    assert 'id="sources-table"' not in load
+    assert 'id="kol-health"' not in load
+    assert "statsTimer =" not in load
+    assert "setInterval" not in load
+    assert 'data-tab="config"' in load
+    assert 'data-tab="cookies"' in load
+    assert 'data-tab="proxies"' in load
+    assert 'data-tab="plaza"' in load
+    hash_fn = _fn_body("statsTabFromHash")
+    switch = _fn_body("switchStatsTab")
+    assert 'tab === "overview"' in hash_fn or '"overview"' in hash_fn
+    assert '"health"' in hash_fn
+    assert 'replaceRoute("admin/dashboard")' in load or 'replaceRoute("admin/dashboard")' in switch
+
+
+def test_dashboard_is_duty_console():
+    """全景一屏：值班先于普查；平台表只出现一次。"""
+    dash = _fn_body("loadAdminDashboard")
+    live = _fn_body("renderStatsData")
+    rows = _fn_body("sourceRowsHtml")
+    src = APP_JS.read_text()
+    assert "核心指标" in dash
+    assert "近 14 天推送趋势" in dash
+    assert "数据源健康" in dash
+    assert "停更" in dash or "kol-health" in dash
+    assert dash.count("数据源健康") == 1
+    assert dash.find("数据源健康") < dash.find("停更")
+    assert dash.find("停更") < dash.find("核心指标")
+    assert 'id="dash-duty-strip-slot"' in dash
+    assert "dutyStripHtml" in live
+    assert 'id="sources-table"' in dash
+    assert "sourceRowsHtml" in live
+    assert "ok_24h" in rows
+    assert "fail_24h" in rows
+    assert "consecutive_fails" in rows
+    assert "next_retry_at" in rows
+    assert "staleEnabledKols" in src
+    assert "openAdminKolFromHealth" in src
+    assert "startDashboardLiveTimer" in src
+    assert "cookieRepairBanner" in dash or "cookieRepairBanner" in live
+    assert "trend.length" in dash
+    assert "platformRows" in dash
+    assert "channelRows" in dash
+
+
+def test_source_status_splits_cold_start_and_credentials():
+    """未开始不画危险红；凭据缺失绑 Cookie；连续失败才是持续失败。"""
+    cell = _fn_body("sourceStatusCell")
+    never = _fn_body("sourceNeverStarted")
+    gap = _fn_body("sourceCredentialGap")
+    assert "未开始" in cell
+    assert "凭据缺失" in cell
+    assert "持续失败" in cell
+    assert "sourceNeverStarted" in cell
+    assert "sourceCredentialGap" in cell
+    assert "last_ok_at" in never
+    assert "ok_24h" in never
+    assert "fail_24h" in never
+    assert "xq-missing" in gap
+    assert "xq-bad" in gap
+    assert "xueqiu" in gap
+    assert "combination" in gap
+    cause = _fn_body("sourceCauseCell")
+    assert "去更新 Cookie" in cause
+    assert "admin/stats?tab=cookies" in cause
+    assert "还没跑过" in cause
+
+
+def test_stale_kols_are_exceptions_not_inventory():
+    """停更名单：只启用、从未抓到或超过 48h、最多 10 个。"""
+    src = APP_JS.read_text()
+    assert "STALE_KOL_HOURS = 48" in src
+    assert "STALE_KOL_LIMIT = 10" in src
+    rows = _fn_body("staleEnabledKolRows")
+    body = _fn_body("staleEnabledKols")
+    html = _fn_body("staleKolsHtml")
+    assert "enabled" in rows
+    assert "STALE_KOL_HOURS" in rows
+    assert "STALE_KOL_LIMIT" in body
+    assert "kol-health-verdict" in html
+    open_fn = _fn_body("openAdminKolFromHealth")
+    assert "adminKolsQ" in open_fn
+    assert "admin/kols" in open_fn
+
+
+def test_dashboard_live_refresh_does_not_rebuild_trends():
+    """30 秒只打 /api/stats 补活块，不重拉 dashboard、不重建趋势。"""
+    src = APP_JS.read_text()
+    assert "function stopStatsTimer" in src
+    timer = _fn_body("startDashboardLiveTimer")
+    assert "/api/stats" in timer
+    assert "/api/admin/dashboard" not in timer
+    assert "renderStatsData" in timer
+    assert "30000" in timer
+    refresh = _fn_body("refreshDashboardLive")
+    assert "/api/stats" in refresh
+    assert "/api/admin/dashboard" not in refresh
+    assert refresh.index("_lastAdminStatsSnapshot = st") < refresh.index("renderStatsData(st)")
 
 
 def test_cookie_clear_is_confirmed_delete_and_hidden_when_unset():
@@ -1368,7 +1487,8 @@ def test_ima_save_reload_owns_mount_generation_bump_and_preserves_stale_guards()
 
     assert "return false;" in load
     assert "return true;" in load
-    assert load.index("return true;") > load.index("statsTimer = setInterval")
+    assert load.index("return true;") > load.index("initImaMountState(pure.groups || [], preserveMountDraftForReload)")
+    assert "setInterval" not in load
     assert "let statsReloadAccepted;" in save
     assert "loadAdminStats(routeSeq, savedImaStatus)" in save
     assert "loadAdminStats(routeRenderSeq, savedImaStatus)" in save
@@ -1379,7 +1499,7 @@ def test_ima_save_reload_owns_mount_generation_bump_and_preserves_stale_guards()
     assert "!routeStillActive(statsReloadSeq)" in save[cleanup_guard:]
     assert "imaMountState.saveOwner !== saveOwner" in save[cleanup_guard:]
     assert "generation !== imaMountState.generation" not in save[reload:cleanup_guard]
-    assert load.index("initImaMountState(pure.groups || [], preserveMountDraftForReload)") < load.index("statsTimer = setInterval")
+    assert load.index("initImaMountState(pure.groups || [], preserveMountDraftForReload)") < load.index("switchStatsTab(statsTabFromHash())")
 
 
 def test_ima_stats_failure_keeps_polling_and_exposes_route_owned_retry():
@@ -1387,10 +1507,12 @@ def test_ima_stats_failure_keeps_polling_and_exposes_route_owned_retry():
     load = _fn_body("loadAdminStats")
     assert load.index("await api(\"/api/stats\")") < load.index("stopStatsTimer()")
     assert "stats-poll-error" in load
+    assert 'id="stats-poll-error"' in load
     assert "role=\"alert\"" in load
     assert 'onclick="loadAdminStats(${seq})"' in load
     assert "routeStillActive(seq)" in load[load.index("} catch"):]
-    assert "timerSeq" in load and "routeStillActive(timerSeq)" in load
+    timer = _fn_body("startDashboardLiveTimer")
+    assert "routeStillActive" in timer
 
 
 def test_ima_sync_responses_and_cleanup_are_owned_by_initiating_route():
@@ -1667,12 +1789,12 @@ def test_ima_mount_tree_exposes_the_knowledge_base_root():
 
 def test_ima_stats_timer_uses_the_render_token_before_repainting():
     """旧 stats 定时请求完成后不得覆盖更新的后台渲染。"""
-    load = _fn_body("loadAdminStats")
-    assert "const timerSeq = _adminRenderSeq" in load
-    assert "routeStillActive(timerSeq)" in load
-    timer_start = load.index("const timerSeq = _adminRenderSeq")
-    render_index = load.index("renderStatsData(fresh)")
-    assert load.index("routeStillActive(timerSeq)", timer_start) < render_index
+    timer = _fn_body("startDashboardLiveTimer")
+    assert "const timerSeq = _adminRenderSeq" in timer
+    assert "routeStillActive(timerSeq)" in timer
+    timer_start = timer.index("const timerSeq = _adminRenderSeq")
+    render_index = timer.index("renderStatsData(fresh)")
+    assert timer.index("routeStillActive(timerSeq)", timer_start) < render_index
 
 
 def test_ima_discovery_catch_and_finally_require_generation_owner():
@@ -2755,9 +2877,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=209"' in html
-    assert 'src="/app.js?v=296"' in html
-    assert 'dav-shell-v165' in sw
+    assert 'href="/style.css?v=211"' in html
+    assert 'src="/app.js?v=299"' in html
+    assert 'dav-shell-v168' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -3251,26 +3373,26 @@ def test_ima_save_response_requires_current_session_and_owner_before_mutation():
 
 def test_ima_stats_timer_caches_fresh_snapshot_before_render():
     """定时 stats 成功后必须先缓存完整快照，再更新可见状态。"""
-    load = _fn_body("loadAdminStats")
-    render_index = load.index("renderStatsData(fresh)")
-    assert "_lastAdminStatsSnapshot = fresh" in load
-    assert load.index("_lastAdminStatsSnapshot = fresh") < render_index
+    timer = _fn_body("startDashboardLiveTimer")
+    render_index = timer.index("renderStatsData(fresh)")
+    assert "_lastAdminStatsSnapshot = fresh" in timer
+    assert timer.index("_lastAdminStatsSnapshot = fresh") < render_index
 
 
 def test_ima_stats_timer_owns_each_overlapping_request_and_stop_invalidates_it():
     """每次定时 tick 都有独立 owner；后发 tick 或停表不得让旧响应落地。"""
     src = APP_JS.read_text(encoding="utf-8")
-    load = _fn_body("loadAdminStats")
+    timer = _fn_body("startDashboardLiveTimer")
     stop = _fn_body("stopStatsTimer")
     assert "let _adminStatsTimerSeq = 0" in src
     assert "_adminStatsTimerSeq += 1" in stop
-    timer_start = load.index("const timerSeq = _adminRenderSeq")
-    timer = load[timer_start:]
-    assert "const timerRequestSeq = ++_adminStatsTimerSeq" in timer
-    guard = timer.index("if (!routeStillActive(timerSeq)")
-    assert "timerRequestSeq !== _adminStatsTimerSeq" in timer[guard:]
-    assert timer.index("_lastAdminStatsSnapshot = fresh") > guard
-    assert timer.index("renderStatsData(fresh)") > guard
+    timer_start = timer.index("const timerSeq = _adminRenderSeq")
+    body = timer[timer_start:]
+    assert "const timerRequestSeq = ++_adminStatsTimerSeq" in body
+    guard = body.index("if (!routeStillActive(timerSeq)")
+    assert "timerRequestSeq !== _adminStatsTimerSeq" in body[guard:]
+    assert body.index("_lastAdminStatsSnapshot = fresh") > guard
+    assert body.index("renderStatsData(fresh)") > guard
 
 
 def test_ima_pending_save_uses_session_owner_across_stats_reentry_but_logout_invalidates():

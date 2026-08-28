@@ -26,7 +26,9 @@ const APP_VERSION = "1.12.86";
 const TL_SOURCE_KEY = "timelineSource";
 const KB_LAST_GROUP_KEY = "kb-last-group";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
-const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"];
+const STATS_TABS = ["config", "cookies", "proxies", "plaza"];
+const STALE_KOL_LIMIT = 10;
+const STALE_KOL_HOURS = 48;
 const TL_PLATFORMS = PLATFORM_TABS.map((p) => [p, p ? PLATFORM_LABELS[p] : "全部"]);
 const STAR_SVG = `<svg class="star-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.95 5.98 6.6.96-4.78 4.66 1.13 6.58L12 17.6l-5.9 3.1 1.13-6.58L2.45 9.44l6.6-.96L12 2.5z"/></svg>`;
 // 次要（降频）铃铛图标：线性风格，与 TRASH_ICON 一致（stroke=currentColor）
@@ -4619,13 +4621,18 @@ function switchSettingsTab(name) {
 }
 
 function statsTabFromHash() {
-  const tab = routeQuery().get("tab") || "overview";
-  return STATS_TABS.includes(tab) ? tab : "overview";
+  const tab = routeQuery().get("tab") || "config";
+  if (tab === "overview" || tab === "health") return "legacy-dashboard";
+  return STATS_TABS.includes(tab) ? tab : "config";
 }
 
 function switchStatsTab(name) {
-  // 数据源页分段导航：监控总览 / 大V健康 / 广场显示 / 抓取设置 / Cookie 管理 / 代理
-  if (!STATS_TABS.includes(name)) name = "overview";
+  // 数据源页分段导航：抓取设置 / Cookie 管理 / 代理 / 广场显示
+  if (name === "legacy-dashboard" || name === "overview" || name === "health") {
+    replaceRoute("admin/dashboard");
+    return;
+  }
+  if (!STATS_TABS.includes(name)) name = "config";
   document.querySelectorAll(".settings-tab[data-tab]").forEach((b) => {
     const on = b.dataset.tab === name;
     b.classList.toggle("active", on);
@@ -4638,7 +4645,7 @@ function switchStatsTab(name) {
     el.style.display = on ? "" : "none";
     el.hidden = !on;
   });
-  const next = name === "overview" ? "/admin/stats" : `/admin/stats?tab=${name}`;
+  const next = name === "config" ? "/admin/stats" : `/admin/stats?tab=${name}`;
   if (location.pathname + location.search !== next) history.replaceState(null, "", next);
   document.getElementById(`tab-${name}`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
   if (name === "proxies") loadProxyAdmin();
@@ -4692,7 +4699,7 @@ function cookieRepairBanner(s) {
       <strong>Cookie 需要更新</strong>
       <p>${items.map((i) => escapeHtml(i.label)).join("；")}。保存后即时生效，不用改配置文件、不用重启。</p>
     </div>
-    <button type="button" class="btn-normal" onclick="switchStatsTab('cookies')">去更新</button>
+    <button type="button" class="btn-normal" onclick="go('admin/stats?tab=cookies')">去更新</button>
   </div>`;
 }
 
@@ -5452,6 +5459,34 @@ function stopStatsTimer() {
   }
 }
 
+function startDashboardLiveTimer() {
+  stopStatsTimer();
+  statsTimer = setInterval(async () => {
+    const timerSeq = _adminRenderSeq;
+    const timerRequestSeq = ++_adminStatsTimerSeq;
+    try {
+      const fresh = await api("/api/stats");
+      if (!routeStillActive(timerSeq) || timerRequestSeq !== _adminStatsTimerSeq) return;
+      _lastAdminStatsSnapshot = fresh;
+      renderStatsData(fresh);
+    } catch {
+      /* 后台刷新失败不打扰 */
+    }
+  }, 30000);
+}
+
+async function refreshDashboardLive() {
+  try {
+    const st = await api("/api/stats");
+    if (!routeStillActive(_adminRenderSeq)) return;
+    _lastAdminStatsSnapshot = st;
+    renderStatsData(st);
+  } catch (err) {
+    if (!routeStillActive(_adminRenderSeq)) return;
+    flash("刷新失败: " + err.message, "error");
+  }
+}
+
 function fmtTs(ts) {
   return ts ? new Date(Number(ts) * 1000).toLocaleString() : "-";
 }
@@ -5964,6 +5999,11 @@ function imaGroupDiscoveryStatusText(status) {
 
 async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = null) {
   if (!routeStillActive(seq)) return false;
+  const tab = statsTabFromHash();
+  if (tab === "legacy-dashboard") {
+    replaceRoute("admin/dashboard");
+    return false;
+  }
   const generation = imaMountState.generation;
   const pendingOwner = imaMountState.saveOwner;
   if (pendingOwner && !pendingOwner.putCompleted && $("#ima-pure-uid")) {
@@ -6036,46 +6076,12 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
   const zc = s.zsxq_cache || { files: 0, bytes: 0 };
   const zcSize = fmtCacheBytes(zc.bytes);
   $("#admin-body").innerHTML = `
+    <div id="stats-poll-error"></div>
     <div class="settings-tabs" role="tablist" aria-label="数据源管理">
-      <button type="button" class="settings-tab active" role="tab" id="tab-overview" aria-selected="true" aria-controls="st-overview" data-tab="overview" onclick="switchStatsTab('overview')">监控总览</button>
-      <button type="button" class="settings-tab" role="tab" id="tab-health" aria-selected="false" aria-controls="st-health" data-tab="health" onclick="switchStatsTab('health')">大V健康</button>
-      <button type="button" class="settings-tab" role="tab" id="tab-plaza" aria-selected="false" aria-controls="st-plaza" data-tab="plaza" onclick="switchStatsTab('plaza')">广场显示</button>
-      <button type="button" class="settings-tab" role="tab" id="tab-config" aria-selected="false" aria-controls="st-config" data-tab="config" onclick="switchStatsTab('config')">抓取设置</button>
+      <button type="button" class="settings-tab active" role="tab" id="tab-config" aria-selected="true" aria-controls="st-config" data-tab="config" onclick="switchStatsTab('config')">抓取设置</button>
       <button type="button" class="settings-tab" role="tab" id="tab-cookies" aria-selected="false" aria-controls="st-cookies" data-tab="cookies" onclick="switchStatsTab('cookies')">Cookie 管理</button>
       <button type="button" class="settings-tab" role="tab" id="tab-proxies" aria-selected="false" aria-controls="st-proxies" data-tab="proxies" onclick="switchStatsTab('proxies')">代理</button>
-    </div>
-    <div id="st-overview" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-overview">
-      <section class="section-panel">
-        <header class="section-head">
-          <div><h2 class="section-title">数据源稳定性</h2>
-          <p class="section-meta">抓取健康、24h 成功率与事件流；页面每 30 秒自动刷新。</p></div>
-          <div class="toolbar" style="margin-top:12px">
-            <span id="stats-refresh-at" class="muted"></span>
-            <button class="btn-ghost" onclick="loadAdminStats()">立即刷新</button>
-          </div>
-        </header>
-        <div id="stats-cards"></div>
-        <div id="stats-poll-error"></div>
-        <div id="stats-ops" style="margin-top:16px"></div>
-        <div class="table-wrap" style="margin-top:16px">
-          <table>
-            <thead><tr><th scope="col">平台</th><th scope="col">状态</th><th scope="col">通道</th><th scope="col">24h 成功率</th><th scope="col">成功 / 失败</th><th scope="col">连续失败</th><th scope="col">最近成功</th><th scope="col">下次重试</th><th scope="col">最近错误</th></tr></thead>
-            <tbody id="sources-table"></tbody>
-          </table>
-        </div>
-      </section>
-      <section class="section-panel">
-        <header class="section-head"><div><h2 class="section-title">数据源事件</h2>
-        <p class="section-meta">最近 30 条抓取成功 / 失败 / 降级记录（保留 7 天）。</p></div></header>
-        <div id="source-events"></div>
-      </section>
-    </div>
-    <div id="st-health" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-health" style="display:none">
-      <section class="section-panel">
-        <header class="section-head"><div><h2 class="section-title">大V抓取健康</h2>
-        <p class="section-meta">按「最近抓到新帖时间」从旧到新排列，顶部即长期无更新的候选排查对象。</p></div></header>
-        <div id="kol-health"></div>
-      </section>
+      <button type="button" class="settings-tab" role="tab" id="tab-plaza" aria-selected="false" aria-controls="st-plaza" data-tab="plaza" onclick="switchStatsTab('plaza')">广场显示</button>
     </div>
     <div id="st-plaza" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-plaza" style="display:none">
       <section class="section-panel">
@@ -6086,7 +6092,7 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
         <div id="plaza-sources">${plazaSourceRowsHtml(s.plaza_sources)}</div>
       </section>
     </div>
-    <div id="st-config" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-config" style="display:none">
+    <div id="st-config" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-config">
       <section class="section-panel">
         <header class="section-head">
           <div><h2 class="section-title">抓取设置</h2>
@@ -6407,22 +6413,6 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
       if (tokenInput) tokenInput.value = "";
     }
   }
-  statsTimer = setInterval(async () => {
-    const timerSeq = _adminRenderSeq;
-    const timerStatsSeq = _adminStatsLoadSeq;
-    const timerRequestSeq = ++_adminStatsTimerSeq;
-    const timerGeneration = imaMountState.generation;
-    try {
-      const fresh = await api("/api/stats");
-      if (!routeStillActive(timerSeq) || _adminStatsLoadSeq !== timerStatsSeq
-        || timerRequestSeq !== _adminStatsTimerSeq
-        || timerGeneration !== imaMountState.generation) return;
-      _lastAdminStatsSnapshot = fresh;
-      renderStatsData(fresh);
-    } catch {
-      /* 后台刷新失败不打扰，等下一轮 */
-    }
-  }, 30000);
   return true;
 }
 
@@ -6481,116 +6471,196 @@ async function setPlazaSourceMode(platform, mode) {
   }
 }
 
+function staleEnabledKolRows(rows, nowMs) {
+  const cutoff = (nowMs || Date.now()) - STALE_KOL_HOURS * 3600 * 1000;
+  const live = (rows || []).filter((k) => k.enabled);
+  const stale = live.filter((k) => {
+    if (!k.last_post_at) return true;
+    const ts = parseDbUtcMs(k.last_post_at);
+    return ts == null || ts < cutoff;
+  });
+  stale.sort((a, b) => String(a.last_post_at || "").localeCompare(String(b.last_post_at || "")));
+  return stale;
+}
+
+function staleEnabledKols(rows, nowMs) {
+  return staleEnabledKolRows(rows, nowMs).slice(0, STALE_KOL_LIMIT);
+}
+
+function openAdminKolFromHealth(name) {
+  state.adminKolsQ = String(name || "").trim();
+  state.adminKolsPage = 0;
+  go("admin/kols");
+}
+
+function sourceNeverStarted(src) {
+  return !src.ok
+    && !src.last_ok_at
+    && !(Number(src.ok_24h) || 0)
+    && !(Number(src.fail_24h) || 0)
+    && !(Number(src.consecutive_fails) || 0);
+}
+
+function sourceCredentialGap(src, cookieItems) {
+  const keys = new Set((cookieItems || []).map((item) => item.key));
+  const plat = src.platform;
+  if ((plat === "xueqiu" || plat === "combination") && (keys.has("xq-missing") || keys.has("xq-bad"))) return true;
+  if (plat === "weibo" && keys.has("wb-bad")) return true;
+  if (plat === "twitter" && (keys.has("x-bad") || keys.has("x-missing"))) return true;
+  if (plat === "zsxq" && (keys.has("zq-missing") || keys.has("zq-bad"))) return true;
+  return false;
+}
+
+function sourceStatusCell(src, cookieItems) {
+  if (src.ok) return '<td class="status-ok" data-label="状态">正常</td>';
+  if (sourceCredentialGap(src, cookieItems)) {
+    return '<td class="dash-status-cred" data-label="状态">凭据缺失</td>';
+  }
+  if (sourceNeverStarted(src)) {
+    return '<td class="muted" data-label="状态">未开始</td>';
+  }
+  const text = src.consecutive_fails >= 3 ? "持续失败" : "无成功记录";
+  return `<td class="status-fail" data-label="状态">${text}</td>`;
+}
+
+function sourceChannelCell(src) {
+  if (src.platform !== "twitter") return '<td class="muted ak-hide-mobile" data-label="通道">—</td>';
+  if (src.direct_mode === "direct") return '<td class="ak-hide-mobile" data-label="通道"><span class="status-ok">直抓</span></td>';
+  if (src.direct_mode === "fallback") {
+    return `<td class="ak-hide-mobile" data-label="通道"><span class="status-warn" title="${escapeHtml(src.direct_fallback_reason || "")}">直抓失败</span></td>`;
+  }
+  return '<td class="muted ak-hide-mobile" data-label="通道">—</td>';
+}
+
+function sourceRowsHtml(sources, cookieItems) {
+  const rows = sources || [];
+  if (!rows.length) return '<tr class="ak-empty"><td colspan="9" class="muted">暂无数据源</td></tr>';
+  return rows.map((src) => `
+    <tr>
+      <td data-label="平台">${PLATFORM_LABELS[src.platform] || escapeHtml(src.platform)}</td>
+      ${sourceStatusCell(src, cookieItems)}
+      ${sourceChannelCell(src)}
+      <td class="ak-hide-mobile" data-label="24h 成功率">${rateBar(src.success_rate_24h)}</td>
+      <td class="ak-hide-mobile" data-label="成功 / 失败">${src.ok_24h} / ${src.fail_24h}${src.warn_24h ? ` <span class="status-warn">⚠${src.warn_24h}</span>` : ""}</td>
+      <td class="ak-hide-mobile${src.consecutive_fails >= 3 ? " status-fail" : ""}" data-label="连续失败">${src.consecutive_fails}</td>
+      <td class="ak-hide-mobile" data-label="最近成功">${fmtTs(src.last_ok_at)}</td>
+      <td class="ak-hide-mobile" data-label="下次重试">${src.next_retry_at ? fmtTs(src.next_retry_at) : "—"}</td>
+      ${sourceCauseCell(src, cookieItems)}
+    </tr>`).join("");
+}
+
+function sourceCauseCell(src, cookieItems) {
+  if (src.last_error) {
+    return `<td class="muted dash-source-cause" data-label="最近错误" title="${escapeHtml(src.last_error)}">${escapeHtml(src.last_error.slice(0, 40))}</td>`;
+  }
+  if (sourceCredentialGap(src, cookieItems)) {
+    return `<td class="dash-source-cause" data-label="最近错误"><button type="button" class="linkish" onclick="go('admin/stats?tab=cookies')">去更新 Cookie</button></td>`;
+  }
+  if (sourceNeverStarted(src)) {
+    return `<td class="muted dash-source-cause ak-hide-mobile" data-label="最近错误">还没跑过</td>`;
+  }
+  return `<td class="muted dash-source-cause" data-label="最近错误">—</td>`;
+}
+
+function abnormalSourceEvents(events, limit) {
+  return (events || []).filter((e) => e.status !== "ok").slice(0, limit || 8);
+}
+
+function sourceEventRowsHtml(events) {
+  const rows = abnormalSourceEvents(events);
+  if (!rows.length) return `<p class="muted">近 24 小时无异常事件</p>`;
+  return `<div class="dash-events">${rows.map((e) => `<div class="dash-event">
+    <span class="dash-event-dot ${escapeHtml(e.status)}"></span>
+    <span class="muted dash-event-time">${escapeHtml(fmtDbTime(e.created_at))}</span>
+    <span class="dash-event-platform">${PLATFORM_LABELS[e.platform] || escapeHtml(e.platform)}</span>
+    <span class="${e.status === "warn" ? "status-warn" : "status-fail"}">${e.status === "warn" ? "警告" : "失败"}</span>
+    <span class="muted dash-event-detail" title="${escapeHtml(e.detail || "")}">${escapeHtml(e.detail || "")}</span>
+  </div>`).join("")}</div>`;
+}
+
+function dashboardFetchMetaHtml(s) {
+  const retry = s.retry_pending
+    ? `<span class="status-warn">待重试 ${s.retry_pending} 条</span>`
+    : `<span class="status-ok">重试队列空闲</span>`;
+  const pollBit = s.last_poll_at ? `最近抓取 ${fmtTs(s.last_poll_at)}` : "尚未轮询";
+  const durBit = s.last_poll_duration_ms
+    ? ` · 耗时 ${(Number(s.last_poll_duration_ms) / 1000).toFixed(1)} 秒`
+    : "";
+  const alerts = s.alerts || {};
+  const chips = [];
+  if (alerts.push_alert_last_at) chips.push(`推送告警 ${fmtTs(alerts.push_alert_last_at)}`);
+  if (alerts.x_direct_alert_at) chips.push(`X失败告警 ${fmtTs(alerts.x_direct_alert_at)}`);
+  if (alerts.cookie_keepalive_alert_at) chips.push(`cookie保活告警 ${fmtTs(alerts.cookie_keepalive_alert_at)}`);
+  if (alerts.xueqiu_probe_alert_at) chips.push(`雪球探测告警 ${fmtTs(alerts.xueqiu_probe_alert_at)}`);
+  return `<p class="section-meta dash-fetch-meta" id="dash-fetch-meta">
+    ${pollBit}${durBit} · 轮询 ${s.polling_interval_seconds || "—"} 秒 · ${retry}${chips.length ? ` · ${chips.map((c) => escapeHtml(c)).join(" · ")}` : ""}
+  </p>`;
+}
+
+function staleKolsHtml(rows) {
+  const all = staleEnabledKolRows(rows);
+  const stale = all.slice(0, STALE_KOL_LIMIT);
+  if (!all.length) {
+    return `<p class="muted" id="kol-health-empty">启用中的大V 在 ${STALE_KOL_HOURS} 小时内都抓到过新帖</p>`;
+  }
+  const extra = all.length > stale.length ? `，列出 ${stale.length} 个` : "";
+  return `<p class="dash-stale-verdict" id="kol-health-verdict">启用中 ${all.length} 个超过 ${STALE_KOL_HOURS} 小时没抓到新帖${extra}</p>
+    <div class="table-wrap"><table class="ak-table dash-stale-table">
+    <thead><tr><th scope="col">大V</th><th class="ak-hide-mobile" scope="col">平台</th><th scope="col">最近抓到新帖</th></tr></thead>
+    <tbody>${stale.map((h) => `
+      <tr>
+        <td data-label="大V"><button type="button" class="linkish" data-name="${escapeHtml(h.name)}" onclick="openAdminKolFromHealth(this.dataset.name)">${escapeHtml(h.name)}</button></td>
+        <td class="ak-hide-mobile" data-label="平台">${PLATFORM_LABELS[h.platform] || escapeHtml(h.platform)}</td>
+        <td class="muted" data-label="最近抓到新帖">${h.last_post_at ? escapeHtml(fmtDbTime(h.last_post_at)) : "从未抓到"}</td>
+      </tr>`).join("")}</tbody>
+  </table></div>`;
+}
+
+function dutyStripHtml(s) {
+  const sources = s.sources || [];
+  const cookies = cookieRepairItems(s);
+  let never = 0;
+  let cred = 0;
+  let failing = 0;
+  sources.forEach((src) => {
+    if (src.ok) return;
+    if (sourceCredentialGap(src, cookies)) cred += 1;
+    else if (sourceNeverStarted(src)) never += 1;
+    else failing += 1;
+  });
+  const staleAll = staleEnabledKolRows(s.kol_health).length;
+  const bits = [];
+  if (failing) bits.push(`<li class="is-fail">${failing} 条管线持续失败</li>`);
+  if (cred) bits.push(`<li class="is-warn">${cred} 条凭据缺失</li>`);
+  if (never) bits.push(`<li class="is-idle">${never} 条尚未开始抓取</li>`);
+  if (staleAll) bits.push(`<li class="is-fail">${staleAll} 个启用大V停更</li>`);
+  if (!bits.length) bits.push(`<li class="is-ok">管线正常，没有停更例外</li>`);
+  return `<ul class="dash-duty-strip" id="dash-duty-strip">${bits.join("")}</ul>`;
+}
+
 function renderStatsData(s) {
   const banner = cookieRepairBanner(s);
-  const cards = $("#stats-cards");
-  if (cards) {
-    const existing = cards.previousElementSibling;
-    if (existing && existing.classList.contains("notice-warn")) existing.remove();
-    if (banner) cards.insertAdjacentHTML("beforebegin", banner);
-  }
+  const dashCookie = $("#dash-cookie-slot");
+  if (dashCookie) dashCookie.innerHTML = banner;
   const cookieInline = $("#cookie-repair-inline");
   if (cookieInline) cookieInline.innerHTML = banner;
-  if (cards) {
-    cards.innerHTML = `
-      <div class="dash-stats">
-        ${statCard("轮询间隔", `${s.polling_interval_seconds} 秒`)}
-        ${statCard("最近抓取", fmtTs(s.last_poll_at))}
-        ${statCard("抓取耗时", s.last_poll_duration_ms ? `${(Number(s.last_poll_duration_ms) / 1000).toFixed(1)} 秒` : "-")}
-        ${statCard("大V / 启用", `${s.kols} / ${s.enabled_kols}`)}
-        ${statCard("活跃抓取", s.active_kols ?? "-")}
-        ${statCard("优先大V", s.priority_kols)}
-        ${statCard("次要大V", s.secondary_kols)}
-        ${statCard("用户 / 帖子", `${s.users} / ${s.posts}`)}
-      </div>`;
-  }
+  const meta = $("#dash-fetch-meta");
+  if (meta) meta.outerHTML = dashboardFetchMetaHtml(s);
   const pollErr = $("#stats-poll-error");
   if (pollErr) {
     pollErr.innerHTML = s.last_poll_error
-      ? `<div class="notice" style="margin-top:16px">最近轮询异常：${escapeHtml(s.last_poll_error)}</div>`
+      ? `<div class="notice">最近轮询异常：${escapeHtml(s.last_poll_error)}</div>`
       : "";
   }
-  const ops = $("#stats-ops");
-  if (ops) {
-    const alerts = s.alerts || {};
-    const chips = [
-      s.retry_pending
-        ? `<span class="channel-status status-warn"><i class="dot"></i>待重试推送 ${s.retry_pending} 条</span>`
-        : `<span class="channel-status status-ok"><i class="dot"></i>重试队列空闲</span>`,
-    ];
-    if (alerts.push_alert_last_at) chips.push(`<span class="channel-status status-warn"><i class="dot"></i>推送告警 ${fmtTs(alerts.push_alert_last_at)}</span>`);
-    if (alerts.x_direct_alert_at) chips.push(`<span class="channel-status status-warn"><i class="dot"></i>X失败告警 ${fmtTs(alerts.x_direct_alert_at)}</span>`);
-    if (alerts.cookie_keepalive_alert_at) chips.push(`<span class="channel-status status-warn"><i class="dot"></i>cookie保活告警 ${fmtTs(alerts.cookie_keepalive_alert_at)}</span>`);
-    if (alerts.xueqiu_probe_alert_at) chips.push(`<span class="channel-status status-warn"><i class="dot"></i>雪球探测告警 ${fmtTs(alerts.xueqiu_probe_alert_at)}</span>`);
-    ops.innerHTML = `<div class="row" style="gap:10px;flex-wrap:wrap">${chips.join("")}</div>`;
-  }
   if (s.plaza_sources) applyPlazaSources(s.plaza_sources);
+  const dutySlot = $("#dash-duty-strip-slot");
+  if (dutySlot) dutySlot.innerHTML = dutyStripHtml(s);
   const tbody = $("#sources-table");
-  if (tbody) {
-    tbody.innerHTML = (s.sources || []).map((src) => {
-      const channel = src.platform === "twitter"
-        ? (src.direct_mode === "direct"
-            ? '<span class="status-ok">直抓</span>'
-            : src.direct_mode === "fallback"
-              ? '<span class="status-warn" title="' + escapeHtml(src.direct_fallback_reason || "") + '">直抓失败</span>'
-              : '<span class="muted">-</span>')
-        : '<span class="muted">-</span>';
-      return `
-        <tr>
-          <td>${PLATFORM_LABELS[src.platform] || escapeHtml(src.platform)}</td>
-          <td class="${src.ok ? "status-ok" : "status-fail"}">${src.ok ? "正常" : "无成功记录"}</td>
-          <td>${channel}</td>
-          <td>${rateBar(src.success_rate_24h)}</td>
-          <td>${src.ok_24h} / ${src.fail_24h}${src.warn_24h ? ` <span class="status-warn">⚠${src.warn_24h}</span>` : ""}</td>
-          <td class="${src.consecutive_fails >= 3 ? "status-fail" : ""}">${src.consecutive_fails}</td>
-          <td>${fmtTs(src.last_ok_at)}</td>
-          <td>${src.next_retry_at ? fmtTs(src.next_retry_at) : "-"}</td>
-          <td class="muted" title="${escapeHtml(src.last_error || "")}">${src.last_error ? escapeHtml(src.last_error.slice(0, 40)) : "-"}</td>
-        </tr>`;
-    }).join("");
-  }
-  const events = $("#source-events");
-  if (events) {
-    const rows = s.recent_source_events || [];
-    events.innerHTML = rows.length
-      ? `<div class="table-wrap"><table>
-          <thead><tr><th scope="col">时间</th><th scope="col">平台</th><th scope="col">状态</th><th scope="col">详情</th></tr></thead>
-          <tbody>${rows.map((e) => `
-            <tr>
-              <td class="muted">${escapeHtml(fmtDbTime(e.created_at))}</td>
-              <td>${PLATFORM_LABELS[e.platform] || escapeHtml(e.platform)}</td>
-              <td>${e.status === "ok"
-                ? '<span class="status-ok">正常</span>'
-                : e.status === "warn"
-                  ? '<span class="status-warn">警告</span>'
-                  : '<span class="status-fail">失败</span>'}</td>
-              <td class="muted">${escapeHtml(e.detail)}</td>
-            </tr>`).join("")}</tbody>
-        </table></div>`
-      : emptyState("暂无事件，抓取正常运行中");
-  }
+  if (tbody) tbody.innerHTML = sourceRowsHtml(s.sources, cookieRepairItems(s));
+  const events = $("#dash-source-events");
+  if (events) events.innerHTML = sourceEventRowsHtml(s.recent_source_events);
   const kh = $("#kol-health");
-  if (kh) {
-    const rows = s.kol_health || [];
-    kh.innerHTML = rows.length
-      ? `<div class="table-wrap"><table>
-          <thead><tr><th scope="col">大V</th><th scope="col">平台</th><th scope="col">状态</th><th scope="col">最近抓到新帖</th></tr></thead>
-          <tbody>${rows.map((h) => `
-            <tr>
-              <td>${escapeHtml(h.name)}</td>
-              <td>${PLATFORM_LABELS[h.platform] || escapeHtml(h.platform)}</td>
-              <td>${h.enabled
-                ? (h.last_post_at
-                    ? '<span class="status-ok">正常</span>'
-                    : '<span class="status-warn">从未抓到</span>')
-                : '<span class="status-fail">已停用</span>'}</td>
-              <td class="muted">${h.last_post_at ? escapeHtml(fmtDbTime(h.last_post_at)) : "-"}</td>
-            </tr>`).join("")}</tbody>
-        </table></div>`
-      : emptyState("还没有添加大V");
-  }
-  const refreshAt = $("#stats-refresh-at");
-  if (refreshAt) refreshAt.textContent = `更新于 ${new Date().toLocaleTimeString()}`;
+  if (kh) kh.innerHTML = staleKolsHtml(s.kol_health);
   const imaCollectorStatus = $("#ima-collector-status");
   if (imaCollectorStatus && s.ima_collector) imaCollectorStatus.textContent = imaCollectorStatusText(s.ima_collector);
   const imaGroupDiscoveryStatus = $("#ima-group-discovery-status");
@@ -6636,7 +6706,7 @@ async function savePollingConfig() {
   try {
     await api("/api/admin/polling-config", { method: "PUT", body: JSON.stringify(body) });
     if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    // 标准操作反馈 toast；不重建页面（loadAdminStats 会整页重建并跳回监控总览）
+    // 标准操作反馈 toast；不重建页面（loadAdminStats 会整页重建）
     flash("抓取设置已保存，即时生效");
   } catch (err) {
     if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
@@ -7443,7 +7513,7 @@ async function loadAdminDashboard() {
             <div class="dash-trend-date">${escapeHtml(t.date.slice(5))}</div>
           </div>`;
         }).join("")}</div>`
-      : `<p class="muted">近 14 天暂无推送记录</p>`;
+      : "";
 
     // 平台来源分布
     const platformRows = Object.entries(p.by_platform || {}).map(([k, v]) => {
@@ -7466,43 +7536,64 @@ async function loadAdminDashboard() {
       </div>`;
     }).join("");
 
-    // 数据源健康：各平台状态表 + 24h 事件流（复用 /api/stats 的实时指标）
-    const sources = st.sources || [];
-    const srcRows = sources.length
-      ? sources.map((src) => {
-          const statusCls = src.ok ? "status-ok" : "status-fail";
-          const statusText = src.ok ? "正常" : src.consecutive_fails >= 3 ? "持续失败" : "无成功记录";
-          const channel =
-            src.platform === "twitter"
-              ? src.direct_mode === "direct"
-                ? '<span class="status-ok">直抓</span>'
-                : src.direct_mode === "fallback"
-                  ? `<span class="status-warn" title="${escapeHtml(src.direct_fallback_reason || "")}">直抓失败</span>`
-                  : '<span class="muted">-</span>'
-              : '<span class="muted">-</span>';
-          return `<tr>
-            <td>${PLATFORM_LABELS[src.platform] || escapeHtml(src.platform)}</td>
-            <td class="${statusCls}">${statusText}</td>
-            <td>${channel}</td>
-            <td>${rateBar(src.success_rate_24h)}</td>
-            <td class="${src.consecutive_fails >= 3 ? "status-fail" : ""}">${src.consecutive_fails}</td>
-            <td class="muted" title="${escapeHtml(src.last_error || "")}">${src.last_error ? escapeHtml(src.last_error.slice(0, 34)) : "-"}</td>
-          </tr>`;
-        }).join("")
-      : '<tr><td colspan="6" class="muted">暂无数据源</td></tr>';
-    const events = (st.recent_source_events || []).slice(0, 6);
-    const eventRows = events.length
-      ? events.map((e) => `<div class="dash-event">
-          <span class="dash-event-dot ${escapeHtml(e.status)}"></span>
-          <span class="muted dash-event-time">${escapeHtml(fmtDbTime(e.created_at))}</span>
-          <span class="dash-event-platform">${PLATFORM_LABELS[e.platform] || escapeHtml(e.platform)}</span>
-          <span class="${e.status === "ok" ? "status-ok" : e.status === "warn" ? "status-warn" : "status-fail"}">${e.status === "ok" ? "正常" : e.status === "warn" ? "警告" : "失败"}</span>
-          <span class="muted dash-event-detail" title="${escapeHtml(e.detail || "")}">${escapeHtml(e.detail || "")}</span>
-        </div>`).join("")
-      : `<p class="muted">近 24 小时无异常事件</p>`;
+    const trendSection = trend.length
+      ? `<section class="section-panel">
+        <header class="section-head"><div><h2 class="section-title">近 14 天推送趋势</h2>
+        <p class="section-meta">每日推送条数（绿色=成功，红色=失败）。</p></div></header>
+        ${trendHtml}
+      </section>`
+      : "";
+    const platformSection = platformRows
+      ? `<section class="section-panel">
+          <header class="section-head"><div><h2 class="section-title">帖子来源分布</h2>
+          <p class="section-meta">累计抓取帖子按平台。</p></div></header>
+          ${platformRows}
+        </section>`
+      : "";
+    const channelSection = channelRows
+      ? `<section class="section-panel">
+          <header class="section-head"><div><h2 class="section-title">渠道推送成功率（7 天）</h2>
+          <p class="section-meta">各渠道成功/总数与成功率。</p></div></header>
+          ${channelRows}
+        </section>`
+      : "";
+    const splitSection = (platformSection || channelSection)
+      ? `<div class="dash-split">${platformSection}${channelSection}</div>`
+      : "";
 
     if (!routeStillActive(_adminRenderSeq)) return;
     $("#admin-body").innerHTML = `
+      <div id="dash-cookie-slot"></div>
+      <section class="section-panel">
+        <header class="section-head">
+          <div><h2 class="section-title">数据源健康</h2>
+          ${dashboardFetchMetaHtml(st)}</div>
+          <div class="toolbar"><button type="button" class="btn-ghost" onclick="refreshDashboardLive()">立即刷新</button></div>
+        </header>
+        <div id="dash-duty-strip-slot"></div>
+        <div id="stats-poll-error"></div>
+        <div class="table-wrap">
+          <table class="ak-table dash-source-table">
+            <thead><tr>
+              <th scope="col">平台</th><th scope="col">状态</th>
+              <th class="ak-hide-mobile" scope="col">通道</th>
+              <th class="ak-hide-mobile" scope="col">24h 成功率</th>
+              <th class="ak-hide-mobile" scope="col">成功 / 失败</th>
+              <th class="ak-hide-mobile" scope="col">连续失败</th>
+              <th class="ak-hide-mobile" scope="col">最近成功</th>
+              <th class="ak-hide-mobile" scope="col">下次重试</th>
+              <th scope="col">最近错误</th>
+            </tr></thead>
+            <tbody id="sources-table"></tbody>
+          </table>
+        </div>
+        <div id="dash-source-events"></div>
+      </section>
+      <section class="section-panel">
+        <header class="section-head"><div><h2 class="section-title">停更大V</h2>
+        <p class="section-meta">点名字进大V管理。</p></div></header>
+        <div id="kol-health"></div>
+      </section>
       <section class="section-panel">
         <header class="section-head"><div><h2 class="section-title">核心指标</h2>
         <p class="section-meta">用户、订阅与推送的业务总览（推送统计为近 7 天）。</p></div></header>
@@ -7515,34 +7606,10 @@ async function loadAdminDashboard() {
           ${statCard("帖子总量", p.total || 0)}
         </div>
       </section>
-      <section class="section-panel">
-        <header class="section-head"><div><h2 class="section-title">近 14 天推送趋势</h2>
-        <p class="section-meta">每日推送条数（绿色=成功，红色=失败）。</p></div></header>
-        ${trendHtml}
-      </section>
-      <div class="dash-split">
-        <section class="section-panel">
-          <header class="section-head"><div><h2 class="section-title">帖子来源分布</h2>
-          <p class="section-meta">累计抓取帖子按平台。</p></div></header>
-          ${platformRows || `<p class="muted">暂无帖子</p>`}
-        </section>
-        <section class="section-panel">
-          <header class="section-head"><div><h2 class="section-title">渠道推送成功率（7 天）</h2>
-          <p class="section-meta">各渠道成功/总数与成功率。</p></div></header>
-          ${channelRows || `<p class="muted">近 7 天暂无推送</p>`}
-        </section>
-      </div>
-      <section class="section-panel">
-        <header class="section-head"><div><h2 class="section-title">数据源健康</h2>
-        <p class="section-meta">各平台抓取状态与 24h 成功率，以及最近事件流。</p></div></header>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th scope="col">平台</th><th scope="col">状态</th><th scope="col">通道</th><th scope="col">24h 成功率</th><th scope="col">连续失败</th><th scope="col">最近错误</th></tr></thead>
-            <tbody>${srcRows}</tbody>
-          </table>
-        </div>
-        ${eventRows ? `<div class="dash-events">${eventRows}</div>` : ""}
-      </section>`;
+      ${trendSection}
+      ${splitSection}`;
+    renderStatsData(st);
+    startDashboardLiveTimer();
   } catch (err) {
     if (!routeStillActive(_adminRenderSeq)) return;
     $("#admin-body").innerHTML = emptyState("加载失败: " + err.message,
