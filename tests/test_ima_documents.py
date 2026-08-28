@@ -1429,9 +1429,14 @@ def test_safe_error_handles_empty_exception_messages():
         assert len(text) <= 240
 
 
-def test_safe_error_consumes_escaped_json_value():
-    text = _safe_error(RuntimeError(r'{"access_token":"abc\\" private-secret"}'))
-    assert "private-secret" not in text
+@pytest.mark.parametrize(
+    ("slash_count", "secret"),
+    [(1, "private-secret"), (3, "odd-private-secret")],
+)
+def test_safe_error_consumes_escaped_json_value(slash_count, secret):
+    value = '{"access_token":"abc' + chr(92) * slash_count + f'" {secret}"}}'
+    text = _safe_error(RuntimeError(value))
+    assert secret not in text
     assert "<redacted>" in text
 
 
