@@ -1285,6 +1285,7 @@ def test_ima_folder_error_retry_has_stable_focus_id():
     assert "imaFocusSnapshot" in _fn_body("loadImaFolderChildren")
     assert "imaRestoreFocus(focus)" in _fn_body("loadImaFolderChildren")
 
+
 def test_ima_collector_save_restores_focus_after_rebuild():
     """保存重建设置页后恢复原控件或保存按钮焦点。"""
     body = _fn_body("saveImaCollector")
@@ -1293,6 +1294,64 @@ def test_ima_collector_save_restores_focus_after_rebuild():
     assert 'getElementById(focusId)' in body
     assert '.focus({' in body
     assert 'id="ima-collector-save"' in render
+
+
+def test_ima_save_listener_filters_unrelated_document_events_before_snapshot():
+    """临时保存监听器只能观察 IMA 字段，避免其它控件污染共享 draft。"""
+    save = _fn_body("saveImaCollector")
+    start = save.index("const onDraftChange =")
+    end = save.index("imaMountState.saveOwner = saveOwner", start)
+    listener = save[start:end]
+    owner_guard = listener.index("imaMountState.saveOwner !== saveOwner")
+    field_guard = listener.index("event.target?.id")
+    snapshot = listener.index("rememberImaCollectorDraft()")
+    assert owner_guard < field_guard < snapshot
+    for field_id in (
+        "ima-pure-uid", "ima-pure-kb", "ima-pure-root",
+        "ima-pure-interval", "ima-pure-token",
+    ):
+        assert field_id in listener
+
+
+def test_push_setting_saves_require_same_route_token_and_session_before_mutation():
+    """旧账号的设置 PUT 回调不得修改新账号状态或闪现结果。"""
+    for name in ("savePushChannels", "saveTranslateTwitter", "saveDnd"):
+        body = _fn_body(name)
+        put = body.index('await api("/api/me"')
+        for capture in (
+            "const routeSeq = routeRenderSeq",
+            "const token = state.token",
+            "const sessionGeneration = imaMountState.sessionGeneration",
+        ):
+            assert capture in body[:put]
+        guard = body.index("routeStillActive(routeSeq)", put)
+        mutation = body.index("state.user", put)
+        assert guard < mutation
+        assert body.index("token !== state.token", guard) < mutation
+        assert body.index("sessionGeneration !== imaMountState.sessionGeneration", guard) < mutation
+        catch = body.index("} catch", put)
+        catch_guard = body.index("routeStillActive(routeSeq)", catch)
+        assert body.index("flash(", catch_guard) > catch_guard
+
+
+def test_admin_credential_saves_require_same_route_token_and_session_before_side_effects():
+    """旧路由或旧账号的凭证回调不得导航、重绘或恢复当前页面焦点。"""
+    for name in ("saveImaCredentials", "saveTwitterCookie"):
+        body = _fn_body(name)
+        post = body.index('await api("/api/admin/')
+        for capture in (
+            "const routeSeq = routeRenderSeq",
+            "const token = state.token",
+            "const sessionGeneration = imaMountState.sessionGeneration",
+        ):
+            assert capture in body[:post]
+        guard = body.index("routeStillActive(routeSeq)", post)
+        for side_effect in ("flash(", "history.replaceState", "await loadAdminStats()", "focusCookieField"):
+            assert guard < body.index(side_effect, post)
+        catch = body.index("} catch", post)
+        assert body.index("routeStillActive(routeSeq)", catch) < body.index("flash(", catch)
+        reload = body.index("await loadAdminStats()", post)
+        assert body.index("routeStillActive(routeSeq)", reload) < body.index("focusCookieField", reload)
 
 
 def test_ima_config_blocks_use_shared_layout_and_no_inline_spacing():

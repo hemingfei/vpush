@@ -4874,6 +4874,9 @@ function pushChannelsHtml(user) {
 }
 
 async function savePushChannels() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   const boxes = [...document.querySelectorAll("#push-channels-box input[type=checkbox]")];
   if (!boxes.length) return;
   const channels = boxes.filter((b) => b.checked).map((b) => b.value);
@@ -4883,9 +4886,13 @@ async function savePushChannels() {
   }
   try {
     await api("/api/me", { method: "PUT", body: JSON.stringify({ push_channels: channels.join(",") }) });
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     state.user.push_channels = channels.join(",");
     flash("已保存");
   } catch (err) {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(err.message, "error");
   }
 }
@@ -4915,15 +4922,22 @@ async function saveDailyReport() {
 }
 
 async function saveTranslateTwitter() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   try {
     const on = $("#set-x-translate").value === "1";
     await api("/api/me", {
       method: "PUT",
       body: JSON.stringify({ translate_twitter: on }),
     });
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     state.user.translate_twitter = on;
     flash("已保存");
   } catch (err) {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(err.message, "error");
   }
 }
@@ -4938,6 +4952,9 @@ function toggleDnd() {
 }
 
 async function saveDnd() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   const enabled = $("#dnd-enabled").checked;
   const start = $("#dnd-start").value;
   const end = $("#dnd-end").value;
@@ -4955,11 +4972,15 @@ async function saveDnd() {
         dnd_allow_favorite: allowFav,
       }),
     });
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     state.user.dnd_start = enabled ? start : "";
     state.user.dnd_end = enabled ? end : "";
     state.user.dnd_allow_favorite = allowFav;
     flash("已保存");
   } catch (err) {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(err.message, "error");
   }
 }
@@ -6893,8 +6914,10 @@ async function saveImaCollector() {
     formRevision: imaCollectorFormRevision(snapshot),
     snapshot,
   };
-  const onDraftChange = () => {
+  const onDraftChange = (event) => {
     if (imaMountState.saveOwner !== saveOwner) return;
+    const id = event.target?.id || "";
+    if (!["ima-pure-uid", "ima-pure-kb", "ima-pure-root", "ima-pure-interval", "ima-pure-token"].includes(id)) return;
     const liveSnapshot = rememberImaCollectorDraft();
     if (imaMountState.saveOwner === saveOwner) saveOwner.liveSnapshot = liveSnapshot;
   };
@@ -7000,6 +7023,9 @@ async function triggerImaCollector() {
 }
 
 async function saveImaCredentials() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   const cookie = $("#ima-cookie")?.value?.trim() || "";
   const cid = $("#ima-cid")?.value?.trim() || "";
   const key = $("#ima-key")?.value?.trim() || "";
@@ -7012,16 +7038,25 @@ async function saveImaCredentials() {
       method: "POST",
       body: JSON.stringify({ cookie, openapi_clientid: cid, openapi_apikey: key }),
     });
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash("IMA 凭证已保存");
     history.replaceState(null, "", "/admin/stats?tab=cookies");
     await loadAdminStats();
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     focusCookieField("ima");
   } catch (e) {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(e.message || "保存失败", "error");
   }
 }
 
 async function saveTwitterCookie() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   const cookie = $("#tw-cookie").value.trim();
   if (!cookie) {
     flash("请先粘贴 X Cookie", "error");
@@ -7032,11 +7067,17 @@ async function saveTwitterCookie() {
       method: "POST",
       body: JSON.stringify({ cookie }),
     });
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash("X Cookie 已保存，即时生效");
     history.replaceState(null, "", "/admin/stats?tab=cookies");
     await loadAdminStats();
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     focusCookieField("twitter");
   } catch (err) {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(err.message, "error");
   }
 }
