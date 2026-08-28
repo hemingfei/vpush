@@ -1052,10 +1052,9 @@ def test_ima_collector_save_rechecks_form_revision_after_stats_reload_before_cle
     save = _fn_body("saveImaCollector")
     reload_index = save.index("await loadAdminStats(routeSeq)")
     clear_index = save.index('tokenInput.value = ""')
-    assert "const formStillCurrentAfterReload" in save
-    assert save.index("const formStillCurrentAfterReload") > reload_index
-    assert clear_index > save.index("const formStillCurrentAfterReload")
-    assert "if (formStillCurrentAfterReload)" in save[reload_index:]
+    assert "const noNewerEditsAfterReload" in save
+    assert save.index("const noNewerEditsAfterReload") > reload_index
+    assert "if (noNewerEditsAfterReload)" in save[reload_index:]
 
 
 def test_ima_collector_full_form_draft_survives_owner_cleanup_and_stats_rebuild():
@@ -1230,6 +1229,45 @@ def test_ima_force_folder_retry_supersedes_inflight_owner():
     assert "imaMountState.folderRequests.get(key) === request" in load
 
 
+def test_ima_pending_token_restores_across_current_stats_route_not_owner_route():
+    """重进 stats 时，当前共享 owner 的 token/表单仍可恢复，不能按发起路由丢弃。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    restore = _fn_body("restoreImaCollectorOwnerToken")
+    load = _fn_body("loadAdminStats")
+    assert "if (owner && owner !== imaMountState.saveOwner) return;" in restore
+    assert "owner.routeSeq !== seq" not in restore
+    owner_start = load.index("const ownerIsCurrent =")
+    owner_end = load.index("const pendingCollectorDraft =", owner_start)
+    owner_logic = load[owner_start:owner_end]
+    assert "const ownerIsCurrent = owner && owner === pendingOwner" in owner_logic
+    assert "owner.routeSeq === seq" not in owner_logic
+    assert "restoreImaCollectorOwnerToken(owner, seq, pendingCollectorDraft)" in load
+
+
+def test_ima_folder_edit_updates_live_save_owner_snapshot_and_stays_dirty():
+    """PUT 后 reload 等待期间改目录，必须推进 owner 快照并保留 dirty。"""
+    toggle = _fn_body("toggleImaFolder")
+    dirty = toggle.index("imaMountState.dirty = true")
+    assert "const draft = rememberImaCollectorDraft()" in toggle
+    remember = toggle.index("const draft = rememberImaCollectorDraft()")
+    assert "imaMountState.saveOwner.liveSnapshot = draft" in toggle
+    owner = toggle.index("imaMountState.saveOwner.liveSnapshot = draft")
+    assert dirty < remember < owner
+    assert "if (imaMountState.saveOwner)" in toggle
+
+
+def test_ima_departed_save_does_not_clear_until_current_reload_reconciles():
+    """离开发起路由后的成功回调不得清 draft；同路由须 reload 后再按新编辑判定清理。"""
+    save = _fn_body("saveImaCollector")
+    departed = save.index('if (!routeStillActive(routeSeq) || location.pathname !== "/admin/stats")')
+    departed_end = save.index("await loadAdminStats(routeSeq)", departed)
+    assert "clearImaCollectorDraft" not in save[departed:departed_end]
+    assert "saveOwner.putCompleted = true" in save
+    assert save.index("await loadAdminStats(routeSeq)") < save.index("imaMountState.dirty = false")
+    assert "const noNewerEditsAfterReload =" in save
+    assert "if (noNewerEditsAfterReload)" in save
+
+
 def test_ima_collector_save_is_owned_by_initiating_route_and_preserves_drafts():
     """旧的 collector 保存回调不得重绘新路由，stats 重建不得丢失脏挂载 draft。"""
     src = APP_JS.read_text(encoding="utf-8")
@@ -1272,10 +1310,11 @@ def test_ima_collector_save_clears_only_matching_mount_revision():
     assert "if (!preserve) imaMountState.revision += 1" in init
     assert "imaMountState.revision += 1" in toggle
     assert "const mountRevision = imaMountState.revision" in save
-    clear = "imaMountState.dirty = false"
-    assert f"routeStillActive(routeSeq) && location.pathname === \"/admin/stats\"" in save
-    assert "imaMountState.revision === mountRevision" in save
-    assert save.index("imaMountState.revision === mountRevision") < save.index(clear)
+    assert "const mountRevision = imaMountState.revision" in save
+    assert "imaMountState.saveOwner = saveOwner" in save
+    assert "saveOwner.liveSnapshot =" in save
+    assert "imaMountState.dirty = false" in save
+    assert save.index("await loadAdminStats(routeSeq)") < save.index("imaMountState.dirty = false")
 
 
 def test_ima_collector_save_failure_flash_is_route_owned():
