@@ -628,9 +628,7 @@ class ImaPureClient:
     @staticmethod
     def _payload(data: dict[str, Any]) -> dict[str, Any]:
         payload = data.get("data")
-        if isinstance(payload, dict) and "knowledge_list" in payload:
-            return payload
-        return data
+        return payload if isinstance(payload, dict) else data
 
     def _remember_folder_path(self, folder_id: str, payload: dict[str, Any]) -> None:
         current_path = payload.get("current_path")
@@ -717,16 +715,22 @@ class ImaPureClient:
                 headers=self._headers(token),
             )
             data, _ = self._open_json(request)
-            if data.get("code") not in (0, None):
-                raise RuntimeError(f"IMA list failed code={data.get('code')}")
+            if not isinstance(data, dict):
+                raise RuntimeError("IMA list returned invalid response")
+            status = data["code"] if "code" in data else data.get("retcode")
+            if not (isinstance(status, int) and not isinstance(status, bool) and status == 0):
+                raise RuntimeError(f"IMA list failed code={status}")
             payload = self._payload(data)
             if not isinstance(payload, dict):
-                return items
-            self._remember_folder_path(folder_id, payload)
+                raise RuntimeError("IMA list returned invalid response")
             page_items = payload.get("knowledge_list")
-            if isinstance(page_items, list):
-                items.extend(page_items)
-            if payload.get("is_end") is True or not payload.get("next_cursor"):
+            if not isinstance(page_items, list) or any(
+                not isinstance(item, dict) for item in page_items
+            ):
+                raise RuntimeError("IMA list returned invalid response")
+            self._remember_folder_path(folder_id, payload)
+            items.extend(page_items)
+            if not payload.get("next_cursor"):
                 return items
             next_cursor = str(payload["next_cursor"])
             if next_cursor in seen_cursors:

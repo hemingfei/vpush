@@ -754,6 +754,8 @@ def test_admin_ima_discover_and_folder_listing(tmp_path, monkeypatch):
     )
 
     class FakeClient:
+        fail_listing = False
+
         def __init__(self, config, group=None):
             self.group = group
 
@@ -762,6 +764,8 @@ def test_admin_ima_discover_and_folder_listing(tmp_path, monkeypatch):
 
         def list_items(self, folder_id):
             assert self.group.knowledge_base_id == "kb-new"
+            if self.fail_listing:
+                raise RuntimeError("IMA list failed")
             return [{
                 "media_type": 99,
                 "folder_info": {"folder_id": "folder-a", "name": "周报"},
@@ -789,6 +793,12 @@ def test_admin_ima_discover_and_folder_listing(tmp_path, monkeypatch):
         "id": "folder-a", "name": "周报", "parent_id": "root-new",
         "has_children": True, "folder_count": 2,
     }]
+    FakeClient.fail_listing = True
+    failed = client.get(
+        "/api/admin/ima-collector/groups/kb-new/folders",
+        headers=headers,
+    )
+    assert failed.status_code == 502
     assert client.get(
         "/api/admin/ima-collector/groups/kb-new/folders?parent_id=bad/id",
         headers=headers,

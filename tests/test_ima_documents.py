@@ -879,6 +879,101 @@ def test_failed_group_does_not_block_later_group(tmp_path, monkeypatch):
     assert "secret.invalid" not in result["last_error"]
 
 
+@pytest.mark.parametrize(
+    "page_two",
+    [
+        {"retcode": 401},
+        {"code": 0},
+        {"code": 0, "knowledge_list": None},
+        {"code": 0, "knowledge_list": {"media_id": "not-a-list"}},
+        {"code": 0, "knowledge_list": [None]},
+    ],
+)
+def test_list_items_rejects_malformed_later_page_status_or_payload(monkeypatch, page_two):
+    client = ImaPureClient(
+        ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
+    )
+    pages = iter([
+        {"code": 0, "knowledge_list": [{"media_id": "first"}], "next_cursor": "next"},
+        page_two,
+    ])
+    client._token = lambda: "access"
+    client._open_json = lambda request: (next(pages), {})
+
+    with pytest.raises(RuntimeError, match="IMA list"):
+        client.list_items("root")
+
+
+def test_list_items_accepts_empty_terminal_page(monkeypatch):
+    client = ImaPureClient(
+        ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
+    )
+    client._token = lambda: "access"
+    client._open_json = lambda request: (
+        {"code": 0, "knowledge_list": []},
+        {},
+    )
+
+    assert client.list_items("root") == []
+
+
+def test_service_keeps_manifest_when_later_folder_page_is_malformed(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    group = ImaGroupConfig(
+        "group-a", "资料", "kb-a", "root-a", folder_ids=("root-a",), enabled=True
+    )
+    old_manifest = [{
+        "media_id": "old-file",
+        "name": "old.pdf",
+        "day": "0825",
+        "group_id": group.id,
+    }]
+    db = FakeDB({
+        IMA_PURE_UID_KEY: "uid",
+        IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+        IMA_PURE_KB_ID_KEY: "kb-a",
+        IMA_PURE_ROOT_FOLDER_KEY: "root-a",
+        IMA_PURE_GROUPS_KEY: json.dumps([group.public()], ensure_ascii=False),
+    })
+
+    class FakeClient(ima_documents.ImaPureClient):
+        def discover_groups(self):
+            return ()
+
+        def _token(self):
+            return "access"
+
+        def _open_json(self, request):
+            if json.loads(request.data).get("cursor"):
+                return {"retcode": 401}, {}
+            return {
+                "code": 0,
+                "knowledge_list": [{"media_id": "new-file"}],
+                "next_cursor": "next",
+            }, {}
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    service = ImaDocumentService(db, tmp_path / "ima")
+    service.store.save_manifest(old_manifest)
+    old_pdf = service.store.pdf_path(old_manifest[0])
+    old_txt = service.store.txt_path(old_manifest[0])
+    old_pdf.parent.mkdir(parents=True)
+    old_pdf.write_bytes(b"%PDF-1.7")
+    old_txt.write_text("old", encoding="utf-8")
+    service.store.save_state({
+        service.store.state_key(old_manifest[0]): {
+            "pdf": str(old_pdf.relative_to(service.store.root)),
+            "txt": str(old_txt.relative_to(service.store.root)),
+        }
+    })
+
+    result = service.sync_once()
+
+    assert result["failed_groups"] == [group.id]
+    assert service.store.load_manifest() == old_manifest
+
+
 def test_list_items_rejects_repeated_cursor(monkeypatch):
     client = ImaPureClient(
         ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
