@@ -2157,7 +2157,7 @@ def create_api_router(
         return {
             "set": bool(cookie),
             "updated_at": db.get_setting(time_key) or "",
-            "preview": (cookie[:40] + "…") if len(cookie) > 40 else cookie,
+            "preview": "已配置" if cookie else "",
         }
 
     @router.get("/admin/xueqiu-cookie", dependencies=[Depends(require_admin)])
@@ -2173,7 +2173,7 @@ def create_api_router(
                 status = {
                     "set": True,
                     "updated_at": "",
-                    "preview": (env[:40] + "…") if len(env) > 40 else env,
+                    "preview": "已配置",
                     "from_env": True,
                 }
         return status
@@ -2306,7 +2306,7 @@ def create_api_router(
                 status = {
                     "set": True,
                     "updated_at": "",
-                    "preview": (env[:40] + "…") if len(env) > 40 else env,
+                    "preview": "已配置",
                     "from_env": True,
                 }
         return status
@@ -2543,6 +2543,14 @@ def create_api_router(
             "offset": page_offset,
         }
 
+    @router.get("/ima-documents/catalog")
+    def ima_documents_catalog(user: dict = Depends(get_current_user)):
+        with ima_documents.config_lock:
+            groups = _configured_groups()
+        listed = ima_kb_catalog(db, user, groups)
+        documents = ima_documents.store.catalog_entries(groups=groups)
+        return attach_catalog_acl(attach_catalog_stats(listed, documents), db, user)
+
     def _ima_document(user: dict, media_id: str, group: str = "") -> dict:
         group = group.strip()
         groups = _require_readable_group(user, group)
@@ -2557,12 +2565,6 @@ def create_api_router(
         if document is None:
             raise HTTPException(status_code=404, detail="文档不存在")
         return document
-
-    @router.get("/ima-documents/catalog")
-    def ima_documents_catalog(user: dict = Depends(get_current_user)):
-        listed = ima_kb_catalog(db, user, _configured_groups())
-        documents = ima_documents.store.catalog_entries(groups=_configured_groups())
-        return attach_catalog_acl(attach_catalog_stats(listed, documents), db, user)
 
     @router.post("/ima-documents/groups/{group_id}/subscribe")
     def subscribe_ima_kb(group_id: str, user: dict = Depends(get_current_user)):
@@ -2808,80 +2810,89 @@ def create_api_router(
                 raise HTTPException(status_code=400, detail="同步间隔须在 1800–604800 秒")
             updates[IMA_PURE_INTERVAL_KEY] = str(body.interval_seconds)
         if body.groups is not None:
-            existing = {group.id: group for group in ima_documents.config().groups}
-            groups: list[dict[str, object]] = []
-            group_ids: list[str] = []
-            clear_group_ids: list[str] = []
-            for group in body.groups:
-                name = group.name.strip()
-                knowledge_base_id = group.knowledge_base_id.strip()
-                root_folder_id = group.root_folder_id.strip()
-                if not name or len(name) > 100:
-                    raise HTTPException(status_code=400, detail="IMA 群组名称不能为空且最多 100 个字符")
-                if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", knowledge_base_id):
-                    raise HTTPException(status_code=400, detail="知识库 ID 格式无效")
-                if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", root_folder_id):
-                    raise HTTPException(status_code=400, detail="根文件夹 ID 格式无效")
-                if group.id is None:
-                    group_id = "manual-" + hashlib.sha256(
-                        f"{knowledge_base_id}\0{root_folder_id}".encode()
-                    ).hexdigest()[:16]
-                else:
-                    group_id = group.id.strip()
-                    if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", group_id):
-                        raise HTTPException(status_code=400, detail="IMA 群组 ID 格式无效")
-                if group_id in group_ids:
-                    raise HTTPException(status_code=400, detail="IMA 群组 ID 不能重复")
-                group_ids.append(group_id)
-                previous = existing.get(group_id)
-                if group.folder_ids is None:
-                    folder_ids = list(
-                        previous.mount_folder_ids
-                        if previous is not None
-                        else ((root_folder_id,) if group.enabled else ())
-                    )
-                else:
-                    if len(group.folder_ids) > IMA_MOUNT_FOLDER_ID_MAX:
-                        raise HTTPException(status_code=400, detail="每个 IMA 群组最多挂载 256 个文件夹")
-                    folder_ids = []
-                    seen_folder_ids: set[str] = set()
-                    for raw_folder_id in group.folder_ids:
-                        if not isinstance(raw_folder_id, str):
-                            raise HTTPException(status_code=400, detail="文件夹 ID 格式无效")
-                        folder_id = raw_folder_id.strip()
-                        if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", folder_id):
-                            raise HTTPException(status_code=400, detail="文件夹 ID 格式无效")
-                        if folder_id not in seen_folder_ids:
-                            seen_folder_ids.add(folder_id)
-                            folder_ids.append(folder_id)
-                enabled = bool(group.enabled and folder_ids)
-                if not enabled:
-                    if previous is not None and previous.mount_folder_ids:
+            with ima_documents.config_lock:
+                existing = {group.id: group for group in ima_documents.config().groups}
+                groups: list[dict[str, object]] = []
+                group_ids: list[str] = []
+                clear_group_ids: list[str] = []
+                for group in body.groups:
+                    name = group.name.strip()
+                    knowledge_base_id = group.knowledge_base_id.strip()
+                    root_folder_id = group.root_folder_id.strip()
+                    if not name or len(name) > 100:
+                        raise HTTPException(status_code=400, detail="IMA 群组名称不能为空且最多 100 个字符")
+                    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", knowledge_base_id):
+                        raise HTTPException(status_code=400, detail="知识库 ID 格式无效")
+                    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", root_folder_id):
+                        raise HTTPException(status_code=400, detail="根文件夹 ID 格式无效")
+                    if group.id is None:
+                        group_id = "manual-" + hashlib.sha256(
+                            f"{knowledge_base_id}\0{root_folder_id}".encode()
+                        ).hexdigest()[:16]
+                    else:
+                        group_id = group.id.strip()
+                        if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", group_id):
+                            raise HTTPException(status_code=400, detail="IMA 群组 ID 格式无效")
+                    if group_id in group_ids:
+                        raise HTTPException(status_code=400, detail="IMA 群组 ID 不能重复")
+                    group_ids.append(group_id)
+                    previous = existing.get(group_id)
+                    if group.folder_ids is None:
+                        folder_ids = list(
+                            previous.mount_folder_ids
+                            if previous is not None
+                            else ((root_folder_id,) if group.enabled else ())
+                        )
+                    else:
+                        if len(group.folder_ids) > IMA_MOUNT_FOLDER_ID_MAX:
+                            raise HTTPException(status_code=400, detail="每个 IMA 群组最多挂载 256 个文件夹")
+                        folder_ids = []
+                        seen_folder_ids: set[str] = set()
+                        for raw_folder_id in group.folder_ids:
+                            if not isinstance(raw_folder_id, str):
+                                raise HTTPException(status_code=400, detail="文件夹 ID 格式无效")
+                            folder_id = raw_folder_id.strip()
+                            if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", folder_id):
+                                raise HTTPException(status_code=400, detail="文件夹 ID 格式无效")
+                            if folder_id not in seen_folder_ids:
+                                seen_folder_ids.add(folder_id)
+                                folder_ids.append(folder_id)
+                    enabled = bool(group.enabled and folder_ids)
+                    if not enabled:
+                        if previous is not None and previous.mount_folder_ids:
+                            clear_group_ids.append(group_id)
+                        folder_ids = []
+                    elif group.folder_ids is not None and not folder_ids:
                         clear_group_ids.append(group_id)
-                    folder_ids = []
-                elif group.folder_ids is not None and not folder_ids:
-                    clear_group_ids.append(group_id)
-                groups.append(
-                    {
-                        "id": group_id,
-                        "name": name,
-                        "knowledge_base_id": knowledge_base_id,
-                        "root_folder_id": root_folder_id,
-                        "folder_ids": folder_ids,
-                        "enabled": enabled,
-                        "source": previous.source if previous else "manual",
-                    }
+                    groups.append(
+                        {
+                            "id": group_id,
+                            "name": name,
+                            "knowledge_base_id": knowledge_base_id,
+                            "root_folder_id": root_folder_id,
+                            "folder_ids": folder_ids,
+                            "enabled": enabled,
+                            "source": previous.source if previous else "manual",
+                        }
+                    )
+                clear_group_ids.extend(
+                    group_id
+                    for group_id, previous in existing.items()
+                    if group_id not in group_ids
                 )
-            updates[IMA_PURE_GROUPS_KEY] = json.dumps(groups, ensure_ascii=False)
-            audit_parts.append(f"groups_count={len(group_ids)};group_ids={','.join(group_ids)}")
-        else:
-            clear_group_ids = []
-        if updates:
-            db.set_settings_atomic(updates)
-            for group_id in clear_group_ids:
-                ima_documents.store.save_group_manifest(group_id, [])
-            audit_parts.extend(sorted(key for key in updates if key != IMA_PURE_GROUPS_KEY))
-            _audit(admin, "set_ima_collector", "", ";".join(audit_parts))
+                updates[IMA_PURE_GROUPS_KEY] = json.dumps(groups, ensure_ascii=False)
+                audit_parts.append(f"groups_count={len(group_ids)};group_ids={','.join(group_ids)}")
+                if updates:
+                    db.set_settings_atomic(updates)
+                    for group_id in clear_group_ids:
+                        ima_documents.store.save_group_manifest(group_id, [])
+                    audit_parts.extend(sorted(key for key in updates if key != IMA_PURE_GROUPS_KEY))
+                    _audit(admin, "set_ima_collector", "", ";".join(audit_parts))
+        elif updates:
+            with ima_documents.config_lock:
+                db.set_settings_atomic(updates)
+                audit_parts.extend(sorted(key for key in updates if key != IMA_PURE_GROUPS_KEY))
+                _audit(admin, "set_ima_collector", "", ";".join(audit_parts))
         return ima_documents.status()
 
     @router.post("/admin/ima-collector/sync", dependencies=[Depends(require_admin)])
@@ -2905,11 +2916,11 @@ def create_api_router(
             "cookie": {
                 "set": bool(cookie),
                 "updated_at": db.get_setting(IMA_COOKIE_TIME_KEY) or "",
-                "preview": (cookie[:40] + "…") if len(cookie) > 40 else cookie,
+                "preview": "已配置" if cookie else "",
                 "from_env": bool(cookie) and not db.get_setting(IMA_COOKIE_KEY),
             },
             "openapi_clientid": {"set": bool(client_id), "preview": (client_id[:12] + "…") if len(client_id) > 12 else client_id},
-            "openapi_apikey": {"set": bool(api_key), "preview": (api_key[:8] + "…") if len(api_key) > 8 else api_key},
+            "openapi_apikey": {"set": bool(api_key)},
             "mode": "openapi" if (client_id and api_key) else ("cookie" if cookie else "none"),
         }
 
@@ -4002,7 +4013,7 @@ def create_api_router(
                 twitter_status = {
                     "set": True,
                     "updated_at": "",
-                    "preview": (env_tw[:40] + "…") if len(env_tw) > 40 else env_tw,
+                    "preview": "已配置",
                     "from_env": True,
                 }
         zsxq_status = _cookie_status(ZSXQ_COOKIE_KEY, ZSXQ_COOKIE_TIME_KEY)
@@ -4012,7 +4023,17 @@ def create_api_router(
                 zsxq_status = {
                     "set": True,
                     "updated_at": "",
-                    "preview": (env_zq[:40] + "…") if len(env_zq) > 40 else env_zq,
+                    "preview": "已配置",
+                    "from_env": True,
+                }
+        ima_cookie_status = _cookie_status(IMA_COOKIE_KEY, IMA_COOKIE_TIME_KEY)
+        if not ima_cookie_status["set"]:
+            env_ima = os.environ.get("IMA_COOKIE", "")
+            if env_ima:
+                ima_cookie_status = {
+                    "set": True,
+                    "updated_at": "",
+                    "preview": "已配置",
                     "from_env": True,
                 }
         last_post_at = db.last_post_time_by_kol()
@@ -4045,18 +4066,18 @@ def create_api_router(
             "xueqiu_cookie": {
                 "set": bool(xueqiu_cookie),
                 "updated_at": xueqiu_updated,
-                "preview": (xueqiu_cookie[:40] + "…") if len(xueqiu_cookie) > 40 else xueqiu_cookie,
+                "preview": "已配置" if xueqiu_cookie else "",
             },
             "weibo_cookie": {
                 "set": bool(weibo_cookie),
                 "updated_at": weibo_updated,
-                "preview": (weibo_cookie[:40] + "…") if len(weibo_cookie) > 40 else weibo_cookie,
+                "preview": "已配置" if weibo_cookie else "",
             },
             "twitter_cookie": twitter_status,
             "zsxq_cookie": zsxq_status,
             "ima_credentials": {
                 "mode": ("openapi" if (db.get_setting(IMA_CLIENT_ID_KEY) or os.environ.get("IMA_OPENAPI_CLIENTID", "")) and (db.get_setting(IMA_API_KEY_KEY) or os.environ.get("IMA_OPENAPI_APIKEY", "")) else ("cookie" if db.get_setting(IMA_COOKIE_KEY) or os.environ.get("IMA_COOKIE", "") else "none")),
-                "cookie": _cookie_status(IMA_COOKIE_KEY, IMA_COOKIE_TIME_KEY),
+                "cookie": ima_cookie_status,
                 "openapi_clientid": {
                     "set": bool(db.get_setting(IMA_CLIENT_ID_KEY) or os.environ.get("IMA_OPENAPI_CLIENTID", "")),
                     "preview": _cred_preview(db.get_setting(IMA_CLIENT_ID_KEY) or os.environ.get("IMA_OPENAPI_CLIENTID", "")),

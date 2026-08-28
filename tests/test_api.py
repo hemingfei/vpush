@@ -1670,7 +1670,7 @@ def test_xueqiu_cookie_write_and_batch_rss_url(monkeypatch, tmp_path):
     assert resp.status_code == 200
     assert seed == {"cookie": "xq_a_token=abc; u=123"}
     status = client.get("/api/admin/xueqiu-cookie", headers=headers).json()
-    assert status["set"] is True and status["preview"].startswith("xq_a_token=abc")
+    assert status["set"] is True and status["preview"] == "已配置"
 
     assert (
         client.post("/api/admin/xueqiu-cookie", headers=headers, json={"cookie": "  "}).status_code
@@ -1693,7 +1693,7 @@ def test_xueqiu_cookie_write_and_batch_rss_url(monkeypatch, tmp_path):
         json={"cookie": "auth_token=a; ct0=b; lang=zh-CN"},
     ).status_code == 200
     tw = client.get("/api/admin/twitter-cookie", headers=headers).json()
-    assert tw["set"] is True and "auth_token=a" in tw["preview"]
+    assert tw["set"] is True and tw["preview"] == "已配置"
     stats = client.get("/api/stats", headers=headers).json()
     assert stats["twitter_cookie"]["set"] is True
 
@@ -1707,6 +1707,89 @@ def test_xueqiu_cookie_write_and_batch_rss_url(monkeypatch, tmp_path):
     assert resp.json()["failed"] == []
     kols = client.get("/api/kols", headers=headers).json()
     assert any(k["external_id"] == "elonmusk" for k in kols)
+
+
+def test_cookie_status_never_returns_credential_bytes(monkeypatch):
+    client = make_client()
+    headers = auth_headers(client)
+    db = client.app.state.db
+    secrets = {
+        "xueqiu_cookie": "xueqiu-SYNTHETIC-SECRET",
+        "weibo_cookie": "weibo-SYNTHETIC-SECRET",
+        "twitter_cookie": "auth_token=twitter-SYNTHETIC-SECRET; ct0=token",
+        "zsxq_cookie": "zsxq-SYNTHETIC-SECRET",
+        "ima_cookie": "ima-SYNTHETIC-SECRET",
+    }
+    for key, value in secrets.items():
+        db.set_setting(key, value)
+
+    responses = [
+        client.get("/api/admin/xueqiu-cookie", headers=headers).json(),
+        client.get("/api/admin/twitter-cookie", headers=headers).json(),
+        client.get("/api/admin/zsxq-cookie", headers=headers).json(),
+        client.get("/api/admin/ima-credentials", headers=headers).json()["cookie"],
+    ]
+    stats = client.get("/api/stats", headers=headers).json()
+    responses.extend([
+        stats["xueqiu_cookie"],
+        stats["weibo_cookie"],
+        stats["twitter_cookie"],
+        stats["zsxq_cookie"],
+        stats["ima_credentials"]["cookie"],
+    ])
+    for response in responses:
+        assert response["preview"] == "已配置"
+        assert all(secret not in str(response) for secret in secrets.values())
+
+    db.set_setting("twitter_cookie", "")
+    db.set_setting("zsxq_cookie", "")
+    db.set_setting("ima_cookie", "")
+    monkeypatch.setenv("TWITTER_COOKIE", "twitter-ENV-SYNTHETIC-SECRET")
+    monkeypatch.setenv("ZSXQ_COOKIE", "zsxq-ENV-SYNTHETIC-SECRET")
+    monkeypatch.setenv("IMA_COOKIE", "ima-ENV-SYNTHETIC-SECRET")
+    env_stats = client.get("/api/stats", headers=headers).json()
+    assert env_stats["twitter_cookie"]["preview"] == "已配置"
+    assert env_stats["zsxq_cookie"]["preview"] == "已配置"
+    assert env_stats["ima_credentials"]["cookie"] == {
+        "set": True,
+        "updated_at": "",
+        "preview": "已配置",
+        "from_env": True,
+    }
+    assert "twitter-ENV-SYNTHETIC-SECRET" not in str(env_stats)
+    assert "zsxq-ENV-SYNTHETIC-SECRET" not in str(env_stats)
+    assert "ima-ENV-SYNTHETIC-SECRET" not in str(env_stats)
+    zsxq_env = client.get("/api/admin/zsxq-cookie", headers=headers).json()
+    twitter_env = client.get("/api/admin/twitter-cookie", headers=headers).json()
+    ima_env = client.get("/api/admin/ima-credentials", headers=headers).json()["cookie"]
+    assert zsxq_env["preview"] == "已配置" and zsxq_env["from_env"] is True
+    assert twitter_env["preview"] == "已配置" and twitter_env["from_env"] is True
+    assert ima_env["preview"] == "已配置" and ima_env["from_env"] is True
+    assert "zsxq-ENV-SYNTHETIC-SECRET" not in str(zsxq_env)
+    assert "twitter-ENV-SYNTHETIC-SECRET" not in str(twitter_env)
+    assert "ima-ENV-SYNTHETIC-SECRET" not in str(ima_env)
+
+
+
+def test_ima_api_key_status_never_returns_credential_bytes():
+    client = make_client()
+    headers = auth_headers(client)
+    db = client.app.state.db
+    db.set_setting("ima_openapi_clientid", "client-id-preview")
+
+    for api_key in ("ima-OPENAPI-SYNTHETIC-SECRET", "short"):
+        db.set_setting("ima_openapi_apikey", api_key)
+        response = client.get("/api/admin/ima-credentials", headers=headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["openapi_apikey"] == {"set": True}
+        assert api_key not in str(data)
+        assert data["openapi_clientid"]["set"] is True
+        assert data["openapi_clientid"]["preview"] == "client-id-pr…"
+
+    db.set_setting("ima_openapi_apikey", "")
+    data = client.get("/api/admin/ima-credentials", headers=headers).json()
+    assert data["openapi_apikey"] == {"set": False}
 
 
 def test_admin_can_clear_saved_cookies(monkeypatch):

@@ -1,6 +1,7 @@
 """统一日志配置：级别可控、内存环形缓冲（网页查看）、可选文件轮转。"""
 from __future__ import annotations
 
+import copy
 import logging
 import logging.handlers
 import os
@@ -26,6 +27,20 @@ _REDACT_PATTERNS = [
         ),
         r"\1<redacted>",
     ),
+    (
+        re.compile(
+            r"(?<![A-Za-z0-9_-])((?:auth_token|ct0|ima-openapi-apikey|api_key)=)[^&;\s'\"<>]+",
+            re.IGNORECASE,
+        ),
+        r"\1<redacted>",
+    ),
+    (
+        re.compile(
+            r"(\b(?:Cookie|Set-Cookie):\s*(?:[^;\r\n]*;\s*)*(?<![A-Za-z0-9_-])SID=)[^;,\s'\"<>]+",
+            re.IGNORECASE,
+        ),
+        r"\1<redacted>",
+    ),
     (re.compile(r"(api\.day\.app/)[A-Za-z0-9]{8,}", re.IGNORECASE), r"\1<redacted>"),
     (re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]{16,}", re.IGNORECASE), r"\1<redacted>"),
     # 微博登录 META 响应：su 是 base64 用户名，其余为 SSO 会话 cookie 名
@@ -42,6 +57,13 @@ def redact_secrets(text) -> str:
     for pattern, repl in _REDACT_PATTERNS:
         result = pattern.sub(repl, result)
     return result[:MAX_REDACTED_LEN]
+
+class RedactingFormatter(logging.Formatter):
+    """格式化完整日志行后脱敏，避免日志 sink 保存明文凭据。"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return redact_secrets(super().format(record))
+
 
 _ring: deque[str] = deque(maxlen=RING_SIZE)
 _ring_lock = threading.Lock()
@@ -94,7 +116,10 @@ class ErrorDbHandler(logging.Handler):
         if sink is None:
             return
         try:
-            sink(record)
+            safe_record = copy.copy(record)
+            safe_record.msg = redact_secrets(record.getMessage())
+            safe_record.args = ()
+            sink(safe_record)
         except Exception:  # noqa: BLE001, S110 - 错误日志落库失败不影响业务
             pass
 
@@ -141,7 +166,7 @@ def setup_logging(level: str | None = None, log_file: str | None = None) -> None
         root.setLevel(level.upper())
         # 幂等：避免 create_app 多次调用时重复挂 handler
         if not any(isinstance(h, RingBufferHandler) for h in root.handlers):
-            formatter = logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT)
+            formatter = RedactingFormatter(LOG_FORMAT, datefmt=DATE_FORMAT)
             console = logging.StreamHandler()
             console.setFormatter(formatter)
             root.addHandler(console)

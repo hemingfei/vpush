@@ -1,8 +1,9 @@
 """飞书个人机器人：注册协议、绑定码、临时监听消费、推送路由回退、API。"""
+import sys
 import tempfile
 import time
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import httpx
 import pytest
@@ -12,6 +13,8 @@ from app.channels import channel_bound
 from app.config import Config, FeishuConfig
 from app.db import DB
 from app.feishu_personal import (
+    POLL_MAX_ACTIVE,
+    FeishuBindListener,
     FeishuPersonalManager,
     _parse_bind_code,
     build_personal_feishu_kwargs,
@@ -68,6 +71,121 @@ def create_session(db, manager, status="pending"):
 
 # ---- 加密与绑定码 ----
 
+@pytest.mark.parametrize("raises", [False, True])
+def test_listener_run_removes_itself_when_ws_stops(monkeypatch, raises):
+    db = make_db()
+    manager = make_manager(db)
+    create_session(db, manager, status="awaiting_bind")
+    listener = FeishuBindListener(db, manager, "sess1", "app", "secret", "ou_p")
+    manager._listeners["sess1"] = listener
+
+    class FakeDispatcher:
+        @classmethod
+        def builder(cls, *args):
+            return cls()
+
+        def register_p2_im_message_receive_v1(self, callback):
+            return self
+
+        def register_p2_im_message_message_read_v1(self, callback):
+            return self
+
+        def build(self):
+            return object()
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            if raises:
+                raise RuntimeError("stopped")
+
+    lark = ModuleType("lark_oapi")
+    lark.LogLevel = SimpleNamespace(INFO=1)
+    lark.ws = SimpleNamespace(Client=FakeClient)
+    dispatcher = ModuleType("lark_oapi.event.dispatcher_handler")
+    dispatcher.EventDispatcherHandler = FakeDispatcher
+    event = ModuleType("lark_oapi.event")
+    monkeypatch.setitem(sys.modules, "lark_oapi", lark)
+    monkeypatch.setitem(sys.modules, "lark_oapi.event", event)
+    monkeypatch.setitem(sys.modules, "lark_oapi.event.dispatcher_handler", dispatcher)
+
+    if raises:
+        with pytest.raises(RuntimeError, match="stopped"):
+            listener._run()
+    else:
+        listener._run()
+    assert manager._listeners == {}
+
+
+def test_listener_finish_does_not_remove_replacement():
+    db = make_db()
+    manager = make_manager(db)
+    create_session(db, manager, status="awaiting_bind")
+    old = FeishuBindListener(db, manager, "sess1", "app", "secret", "ou_p")
+    replacement = FeishuBindListener(db, manager, "sess1", "app", "secret", "ou_p")
+    manager._listeners["sess1"] = replacement
+
+    manager._listener_finished(old)
+
+    assert manager._listeners["sess1"] is replacement
+
+
+def test_listener_finish_removes_current_listener():
+    db = make_db()
+    manager = make_manager(db)
+    create_session(db, manager, status="awaiting_bind")
+    listener = FeishuBindListener(db, manager, "sess1", "app", "secret", "ou_p")
+    manager._listeners["sess1"] = listener
+
+    manager._listener_finished(listener)
+
+    assert manager._listeners == {}
+
+
+def test_bind_decrypt_failure_degrades_and_stops_listener(monkeypatch):
+    db = make_db()
+    manager = make_manager(db)
+    uid = create_session(db, manager)
+    monkeypatch.setattr(manager, "_ensure_listener", lambda session_id: None)
+    manager._handle_poll_success("sess1", poll_success_payload(), "https://accounts.feishu.cn")
+    code = manager.issue_bind_code("sess1")["bind_command"].split()[1]
+
+    class FakeListener:
+        stopped = False
+
+        def stop(self):
+            self.stopped = True
+
+    listener = FakeListener()
+    manager._listeners["sess1"] = listener
+    monkeypatch.setattr("app.feishu_personal.decrypt_secret", lambda *args: (_ for _ in ()).throw(ValueError("bad ciphertext")))
+
+    manager.handle_bind_message("sess1", code, "ou_p", "oc_p")
+
+    session = db.get_feishu_registration_session("sess1")
+    assert session["status"] == "degraded"
+    assert listener.stopped
+    assert "sess1" not in manager._listeners
+    assert db.get_feishu_personal_bot(uid) is None
+
+
+def test_poller_capacity_degrades_new_session_without_displacing_existing():
+    db = make_db()
+    manager = make_manager(db)
+    create_session(db, manager)
+    existing = {f"existing-{index}": object() for index in range(POLL_MAX_ACTIVE)}
+    manager._pollers.update(existing)
+
+    manager._start_poller("sess1")
+
+    session = db.get_feishu_registration_session("sess1")
+    assert session["status"] == "degraded"
+    assert session["last_error"] == "注册轮询达到并发上限"
+    assert manager._pollers == existing
+
+
 def test_encrypt_decrypt_secret():
     ct = encrypt_secret(KEY, "top-secret")
     assert ct != "top-secret"
@@ -92,6 +210,51 @@ def test_parse_bind_code():
 
 
 # ---- 注册会话状态机 ----
+
+def test_begin_session_stops_old_listener_before_cancellation(monkeypatch):
+    db = make_db()
+    manager = make_manager(db)
+    uid = create_session(db, manager, status="awaiting_bind")
+
+    class FakeListener:
+        def __init__(self):
+            self.stopped = False
+
+        def stop(self):
+            self.stopped = True
+
+    listener = FakeListener()
+    manager._listeners["sess1"] = listener
+    monkeypatch.setattr("app.feishu_personal.begin_registration", lambda base_url="https://accounts.feishu.cn": (begin_payload(), base_url))
+    monkeypatch.setattr(manager, "_start_poller", lambda session_id: None)
+
+    manager.begin_session(uid)
+
+    assert listener.stopped
+    assert db.get_feishu_registration_session("sess1")["status"] == "cancelled"
+
+
+def test_expire_stale_stops_expired_listeners():
+    db = make_db()
+    manager = make_manager(db)
+    create_session(db, manager, status="awaiting_bind")
+    db.update_feishu_registration_session("sess1", session_expires_at=int(time.time()) - 1)
+
+    class FakeListener:
+        def __init__(self):
+            self.stopped = False
+
+        def stop(self):
+            self.stopped = True
+
+    listener = FakeListener()
+    manager._listeners["sess1"] = listener
+
+    assert manager.expire_stale() == 1
+    assert listener.stopped
+    assert db.get_feishu_registration_session("sess1")["status"] == "expired"
+
+
 
 def test_begin_session_creates_pending(monkeypatch):
     db = make_db()

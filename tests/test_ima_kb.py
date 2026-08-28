@@ -1,4 +1,5 @@
 import json
+import threading
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,6 +20,84 @@ from app.main import create_app
 from app.stock_universe import bundled_plain_names
 from app.tagging import tag_text
 from tests.test_ima_documents import _headers
+
+
+def test_admin_ima_put_shares_service_config_lock(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "ima-lock.sqlite"))
+    headers = _headers(client, "mount_lock_admin", "MOUNTLOCK", admin=True)
+    service = client.app.state.ima_documents
+    service.config_lock.acquire()
+    response_holder = {}
+    started = threading.Event()
+    finished = threading.Event()
+
+    def update():
+        started.set()
+        try:
+            response_holder["response"] = client.put(
+                "/api/admin/ima-collector",
+                headers=headers,
+                json={
+                    "groups": [{
+                        "id": "group-a",
+                        "name": "资料",
+                        "knowledge_base_id": "kb-a",
+                        "root_folder_id": "root-a",
+                        "folder_ids": ["new"],
+                        "enabled": True,
+                    }],
+                },
+            )
+        finally:
+            finished.set()
+
+    worker = threading.Thread(target=update)
+    worker.start()
+    try:
+        assert started.wait(5)
+        assert not finished.wait(0.1)
+    finally:
+        service.config_lock.release()
+    worker.join(5)
+    assert not worker.is_alive()
+    assert response_holder["response"].status_code == 200
+    saved = json.loads(client.app.state.db.get_setting(IMA_PURE_GROUPS_KEY))
+    assert saved[0]["folder_ids"] == ["new"]
+
+
+def test_admin_ima_scalar_put_shares_service_config_lock(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "ima-scalar-lock.sqlite"))
+    headers = _headers(client, "scalar_lock_admin", "SCALARLOCK", admin=True)
+    service = client.app.state.ima_documents
+    service.config_lock.acquire()
+    response_holder = {}
+    started = threading.Event()
+    finished = threading.Event()
+
+    def update():
+        started.set()
+        try:
+            response_holder["response"] = client.put(
+                "/api/admin/ima-collector",
+                headers=headers,
+                json={"uid": "new-uid"},
+            )
+        finally:
+            finished.set()
+
+    worker = threading.Thread(target=update)
+    worker.start()
+    try:
+        assert started.wait(5)
+        assert not finished.wait(0.1)
+    finally:
+        service.config_lock.release()
+    worker.join(5)
+    assert not worker.is_alive()
+    assert response_holder["response"].status_code == 200
+    assert client.app.state.db.get_setting("ima_pure_uid") == "new-uid"
 
 
 def test_tag_text_uses_vocab_and_stock_names():
@@ -94,6 +173,41 @@ def test_catalog_hides_ungranted_groups_from_users(tmp_path):
     assert {g["id"] for g in catalog(db, admin, _groups())["subscribed"] + catalog(db, admin, _groups())["available"]} >= {"banking", "macro"}
     assert readable_group_ids(db, user, _groups()) == {"banking"}
     assert readable_group_ids(db, admin, _groups()) == {"banking", "macro"}
+
+
+def test_catalog_endpoint_reads_config_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "catalog-snapshot.sqlite"))
+    headers = _headers(client, "catalog_snapshot_admin", "CATALOGSNAP", admin=True)
+    service = client.app.state.ima_documents
+    original_config = service.config
+    calls = 0
+
+    def config():
+        nonlocal calls
+        calls += 1
+        return original_config()
+
+    monkeypatch.setattr(service, "config", config)
+    response = client.get("/api/ima-documents/catalog", headers=headers)
+    assert response.status_code == 200, response.text
+    assert calls == 1
+
+
+def test_catalog_endpoint_does_not_dispatch_to_dynamic_detail(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "catalog-route.sqlite"))
+    headers = _headers(client, "catalog_route_admin", "CATALOGROUTE", admin=True)
+    store = client.app.state.ima_documents.store
+
+    def unexpected_detail_lookup(*args, **kwargs):
+        raise AssertionError("catalog request dispatched to dynamic detail")
+
+    monkeypatch.setattr(store, "document", unexpected_detail_lookup)
+    response = client.get("/api/ima-documents/catalog", headers=headers)
+
+    assert response.status_code == 200, response.text
+    assert set(response.json()) >= {"subscribed", "available"}
 
 
 def test_attach_catalog_stats_uses_latest_mmdd_title():
@@ -421,6 +535,50 @@ def test_purge_ima_document_tags_keeps_valid_only(tmp_path):
     assert changed == 1
     assert store.load_state()[store.state_key(record)]["tags"] == ["新能源"]
     assert purge_ima_document_tags(store, {"新能源"}) == 0
+
+
+def test_purge_ima_document_tags_keeps_concurrent_state_write(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima-purge-race")
+    existing_key = "existing"
+    store.save_state({existing_key: {"tags": ["keep", "obsolete"]}})
+    read = threading.Event()
+    resume = threading.Event()
+    original_load_state = store.load_state
+
+    def paused_load_state():
+        read.set()
+        assert resume.wait(5)
+        return original_load_state()
+
+    store.load_state = paused_load_state
+    purge_result = {}
+    writer_done = threading.Event()
+
+    def purge():
+        purge_result["changed"] = purge_ima_document_tags(store, {"keep"})
+
+    def sync_write():
+        store.save_state({
+            existing_key: {"tags": ["keep", "obsolete"]},
+            "sync-entry": {"tags": ["keep"]},
+        })
+        writer_done.set()
+
+    purge_thread = threading.Thread(target=purge)
+    purge_thread.start()
+    assert read.wait(5)
+    writer_thread = threading.Thread(target=sync_write)
+    writer_thread.start()
+    assert not writer_done.wait(0.1)
+    resume.set()
+    purge_thread.join(5)
+    writer_thread.join(5)
+    assert not purge_thread.is_alive()
+    assert not writer_thread.is_alive()
+    assert purge_result["changed"] == 1
+    state = store.load_state()
+    assert state[existing_key]["tags"] == ["keep", "obsolete"]
+    assert state["sync-entry"]["tags"] == ["keep"]
 
 
 def test_ima_kb_valid_tags_keeps_bundled_universe_name(tmp_path):
@@ -754,6 +912,8 @@ def test_admin_ima_discover_and_folder_listing(tmp_path, monkeypatch):
     )
 
     class FakeClient:
+        fail_listing = False
+
         def __init__(self, config, group=None):
             self.group = group
 
@@ -762,6 +922,8 @@ def test_admin_ima_discover_and_folder_listing(tmp_path, monkeypatch):
 
         def list_items(self, folder_id):
             assert self.group.knowledge_base_id == "kb-new"
+            if self.fail_listing:
+                raise RuntimeError('Cookie: SID=folder-cookie-secret; Path=/; {"access_token":"folder-json-secret"}')
             return [{
                 "media_type": 99,
                 "folder_info": {"folder_id": "folder-a", "name": "周报"},
@@ -789,6 +951,15 @@ def test_admin_ima_discover_and_folder_listing(tmp_path, monkeypatch):
         "id": "folder-a", "name": "周报", "parent_id": "root-new",
         "has_children": True, "folder_count": 2,
     }]
+    FakeClient.fail_listing = True
+    failed = client.get(
+        "/api/admin/ima-collector/groups/kb-new/folders",
+        headers=headers,
+    )
+    assert failed.status_code == 502
+    assert "folder-cookie-secret" not in failed.text
+    assert "folder-json-secret" not in failed.text
+    assert "<redacted>" in failed.text
     assert client.get(
         "/api/admin/ima-collector/groups/kb-new/folders?parent_id=bad/id",
         headers=headers,
@@ -839,6 +1010,79 @@ def test_admin_ima_put_rejects_invalid_folder_ids(tmp_path, monkeypatch, folder_
         }]
     })
     assert response.status_code == 400, response.text
+
+
+def test_admin_ima_put_clears_manifest_for_omitted_groups(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "ima-omitted.sqlite"))
+    headers = _headers(client, "omitted_group_admin", "OMITTED1", admin=True)
+    db = client.app.state.db
+    service = client.app.state.ima_documents
+    db.set_setting(IMA_PURE_GROUPS_KEY, json.dumps([
+        {
+            "id": "group-a", "name": "资料 A", "knowledge_base_id": "kb-a",
+            "root_folder_id": "root-a", "folder_ids": ["folder-a"], "enabled": True,
+            "source": "manual",
+        },
+        {
+            "id": "group-b", "name": "资料 B", "knowledge_base_id": "kb-b",
+            "root_folder_id": "root-b", "folder_ids": ["folder-b"], "enabled": True,
+            "source": "manual",
+        },
+    ], ensure_ascii=False))
+    service.store.save_manifest([
+        {"media_id": "file-a", "name": "a.pdf", "group_id": "group-a"},
+        {"media_id": "file-b", "name": "b.pdf", "group_id": "group-b"},
+    ])
+
+    response = client.put(
+        "/api/admin/ima-collector",
+        headers=headers,
+        json={"groups": [{
+            "id": "group-b", "name": "资料 B", "knowledge_base_id": "kb-b",
+            "root_folder_id": "root-b", "folder_ids": ["folder-b"], "enabled": True,
+        }]},
+    )
+    assert response.status_code == 200, response.text
+    saved = json.loads(db.get_setting(IMA_PURE_GROUPS_KEY))
+    assert [group["id"] for group in saved] == ["group-b"]
+    assert [record["media_id"] for record in service.store.load_manifest()] == ["file-b"]
+
+
+def test_admin_ima_put_clears_stale_manifest_for_omitted_disabled_group(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "ima-omitted-disabled.sqlite"))
+    headers = _headers(client, "omitted_disabled_admin", "OMITTEDDIS", admin=True)
+    db = client.app.state.db
+    service = client.app.state.ima_documents
+    db.set_setting(IMA_PURE_GROUPS_KEY, json.dumps([
+        {
+            "id": "group-a", "name": "资料 A", "knowledge_base_id": "kb-a",
+            "root_folder_id": "root-a", "folder_ids": [], "enabled": False,
+            "source": "manual",
+        },
+        {
+            "id": "group-b", "name": "资料 B", "knowledge_base_id": "kb-b",
+            "root_folder_id": "root-b", "folder_ids": ["folder-b"], "enabled": True,
+            "source": "manual",
+        },
+    ], ensure_ascii=False))
+    service.store.save_manifest([
+        {"media_id": "stale-a", "name": "a.pdf", "group_id": "group-a"},
+    ])
+
+    response = client.put(
+        "/api/admin/ima-collector",
+        headers=headers,
+        json={"groups": [{
+            "id": "group-b", "name": "资料 B", "knowledge_base_id": "kb-b",
+            "root_folder_id": "root-b", "folder_ids": ["folder-b"], "enabled": True,
+        }]},
+    )
+    assert response.status_code == 200, response.text
+    saved = json.loads(db.get_setting(IMA_PURE_GROUPS_KEY))
+    assert [group["id"] for group in saved] == ["group-b"]
+    assert service.store.load_manifest() == []
 
 
 def test_admin_ima_discover_failure_keeps_previous_groups(tmp_path, monkeypatch):

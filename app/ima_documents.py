@@ -103,15 +103,56 @@ def decrypt_body(cipher_b64: str, key: bytes) -> bytes:
     return AESGCM(key).decrypt(raw[:12], raw[12:], None)
 
 
+def _truncate_safe_error(text: str) -> str:
+    limit = 240
+    markers = list(re.finditer(r"<(?:redacted|url)>", text))
+    for marker_match in markers:
+        start, end = marker_match.span()
+        if start <= limit < end:
+            marker = marker_match.group()
+            prefix_end = limit - len(marker)
+            while True:
+                partial = next(
+                    (
+                        candidate
+                        for candidate in markers
+                        if candidate.start() < prefix_end < candidate.end()
+                    ),
+                    None,
+                )
+                if partial is None:
+                    break
+                prefix_end = partial.start()
+            return text[:prefix_end] + marker
+    return text[:limit]
+
+
 def _safe_error(exc: BaseException) -> str:
-    text = str(exc).splitlines()[0][:240]
+    text = (str(exc).splitlines() or [""])[0]
+    text = re.sub(r"(?i)(?<![A-Za-z0-9_.-])(set-cookie|cookie)(\s*:\s*)[^\r\n]*", r"\1\2<redacted>", text)
     text = re.sub(r"https?://\S+", "<url>", text)
-    text = re.sub(r"(?i)((?:bearer|token|access_token|refresh_token|signature|sig)\s+)[^\s]+", r"\1<redacted>", text)
-    return re.sub(
-        r"(?i)((?:ima-token|token|access_token|refresh_token|authorization|signature|sig|sign|q-sign|x-ima-cookie)\s*[=:]\s*)[^&;,\s]+",
+    text = re.sub(
+        r"(?i)(?<![A-Za-z0-9_.-])(authorization\s*[:=]\s*(?:basic|bearer)\s+)[^\s,;&]+",
         r"\1<redacted>",
         text,
     )
+    text = re.sub(
+        r"""(?i)((?<![A-Za-z0-9_.-])(?P<key_quote>["'])?(?:ima-token|token|refresh_token|access_token|authorization|signature|sig|sign|q-sign|x-ima-cookie|set-cookie|cookie)(?(key_quote)(?P=key_quote))\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;&]+)""",
+        r"\1<redacted>",
+        text,
+    )
+    def redact_scheme(match: re.Match[str]) -> str:
+        prefix = text[: match.start()]
+        if re.search(r"(?i)authorization\s*[:=]\s*$", prefix):
+            return match.group(0)
+        return f"{match.group(1)}<redacted>"
+
+    text = re.sub(
+        r"(?i)((?<![A-Za-z0-9_.-])(?:\bbasic|\bbearer)\s+)[^\s,;&]+",
+        redact_scheme,
+        text,
+    )
+    return _truncate_safe_error(text)
 
 
 def _setting(db: Any, key: str, env_key: str, default: str = "") -> str:
@@ -233,12 +274,14 @@ def ima_folder_name(item: dict[str, Any], folder_id: str) -> str:
 def is_ima_folder_item(item: dict[str, Any]) -> bool:
     if not isinstance(item, dict):
         return False
+    info = item.get("folder_info")
+    if isinstance(info, dict) and _folder_id_value(info.get("folder_id")):
+        return True
     if item.get("media_type") == 99:
         return bool(ima_folder_id(item))
     media_id = item.get("media_id")
     if isinstance(media_id, str) and media_id.startswith("folder_"):
         return bool(ima_folder_id(item))
-    info = item.get("folder_info")
     return bool(ima_folder_id(item)) and not media_id and isinstance(info, (dict, type(None)))
 
 
@@ -258,6 +301,8 @@ def ima_folder_children_hint(item: dict[str, Any]) -> bool | None:
 
 
 def normalize_ima_folder_item(item: dict[str, Any], parent_id: str) -> dict[str, Any] | None:
+    if not is_ima_folder_item(item):
+        return None
     folder_id = ima_folder_id(item)
     if not folder_id:
         return None
@@ -285,55 +330,96 @@ def _legacy_group(kb: str, root: str) -> ImaGroupConfig:
     )
 
 
+def _ima_response_status(data: Any, context: str) -> Any:
+    if not isinstance(data, dict):
+        raise RuntimeError(f"{context} returned invalid response")
+    if "code" in data:
+        return data["code"]
+    if "retcode" in data:
+        return data["retcode"]
+    raise RuntimeError(f"{context} returned invalid response")
+
+
+def _ima_success_status(value: Any) -> bool:
+    return (isinstance(value, int) and not isinstance(value, bool) and value == 0) or value == "0"
+
+
 def _discovery_payload(payload: Any) -> dict[str, Any]:
     data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else payload
     return data if isinstance(data, dict) else {}
 
 
+_DISCOVERY_LIST_FIELDS = (
+    "searched_knowledge_bases",
+    "knowledge_base_list",
+    "knowledge_list",
+    "info_list",
+)
+
+
 def _discovery_has_known_shape(payload: Any) -> bool:
     data = _discovery_payload(payload)
-    return any(
-        field in data and isinstance(data.get(field), list)
-        for field in ("searched_knowledge_bases", "knowledge_base_list", "knowledge_list", "info_list")
-    ) or isinstance(data.get("results"), list)
+    known = False
+    for field in _DISCOVERY_LIST_FIELDS:
+        if field not in data:
+            continue
+        known = True
+        candidate = data[field]
+        if not isinstance(candidate, list) or any(
+            not isinstance(item, dict) for item in candidate
+        ):
+            return False
+    if "results" in data:
+        known = True
+        results = data["results"]
+        if not isinstance(results, list):
+            return False
+        if any(not isinstance(section, dict) for section in results):
+            return False
+        for section in results:
+            if "knowledge_base_list" not in section:
+                continue
+            items = section["knowledge_base_list"]
+            if not isinstance(items, list) or any(
+                not isinstance(item, dict) for item in items
+            ):
+                return False
+    return known
 
 
 def _discovery_page_items(payload: Any) -> list[dict[str, Any]]:
     data = _discovery_payload(payload)
     items: list[dict[str, Any]] = []
-    for field in ("searched_knowledge_bases", "knowledge_base_list", "knowledge_list", "info_list"):
+    for field in _DISCOVERY_LIST_FIELDS:
         candidate = data.get(field)
         if isinstance(candidate, list) and candidate:
-            items.extend(item for item in candidate if isinstance(item, dict))
+            items.extend(candidate)
             break
     if items:
         return items
     for section in data.get("results") or []:
-        if not isinstance(section, dict):
-            continue
-        for item in section.get("knowledge_base_list") or []:
-            if isinstance(item, dict):
-                items.append(item)
+        items.extend(section.get("knowledge_base_list") or [])
     return items
 
 
 def _prepare_discovery_item(item: dict[str, Any]) -> dict[str, Any] | None:
-    if item.get("type") == 1:
+    item_type = item.get("type")
+    if item_type == 1 and not isinstance(item_type, bool):
         return None
     group_id_value = item.get("id") or item.get("knowledge_base_id")
     if not isinstance(group_id_value, str) or not group_id_value.strip():
-        return None
+        raise RuntimeError("IMA group discovery returned invalid item")
     group_id_value = group_id_value.strip()
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", group_id_value):
-        return None
+        raise RuntimeError("IMA group discovery returned invalid item")
     basic = item.get("basic_info") if isinstance(item.get("basic_info"), dict) else {}
     name_value = item.get("name") or item.get("kb_name") or basic.get("name") or group_id_value
     root_value = item.get("root_folder_id") or item.get("folder_id") or group_id_value
     if not all(isinstance(value, str) and value.strip() for value in (name_value, root_value)):
-        return None
+        raise RuntimeError("IMA group discovery returned invalid item")
     root_value = root_value.strip()
     if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", root_value):
-        return None
+        raise RuntimeError("IMA group discovery returned invalid item")
     prepared = dict(item)
     prepared["id"] = group_id_value.strip()
     prepared["name"] = name_value.strip()
@@ -342,24 +428,22 @@ def _prepare_discovery_item(item: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def normalize_discovered_groups(payload: Any) -> tuple[ImaGroupConfig, ...]:
+    if not _discovery_has_known_shape(payload):
+        raise RuntimeError("IMA group discovery returned invalid response")
     groups: list[ImaGroupConfig] = []
     for item in _discovery_page_items(payload):
         prepared = _prepare_discovery_item(item)
         if prepared is None:
             continue
-        root_value = prepared.get("root_folder_id")
-        name_value = prepared.get("name")
+        root_value = prepared["root_folder_id"]
+        name_value = prepared["name"]
         group_id = prepared["id"]
-        if not isinstance(root_value, str) or not root_value.strip():
-            continue
-        if not isinstance(name_value, str) or not name_value.strip():
-            continue
         groups.append(
             ImaGroupConfig(
                 id=group_id,
-                name=name_value.strip()[:100],
+                name=name_value[:100],
                 knowledge_base_id=group_id,
-                root_folder_id=root_value.strip(),
+                root_folder_id=root_value,
                 source="discovered",
             )
         )
@@ -403,61 +487,62 @@ def merge_groups(
 
 def _read_groups(db: Any, kb: str, root: str) -> tuple[ImaGroupConfig, ...]:
     raw = db.get_setting(IMA_PURE_GROUPS_KEY) if db is not None else None
-    if raw:
-        try:
-            payload = json.loads(raw)
-        except (TypeError, ValueError):
-            payload = []
-        groups = []
-        for item in payload if isinstance(payload, list) else []:
-            if not isinstance(item, dict):
-                continue
-            required_fields = ("id", "name", "knowledge_base_id", "root_folder_id")
-            if any(
-                not isinstance(item.get(field), str) or not item[field].strip()
-                for field in required_fields
-            ):
-                continue
-            enabled = item.get("enabled", True)
-            if not isinstance(enabled, bool):
-                continue
-            source = item.get("source", "manual")
-            if not isinstance(source, str):
-                continue
-            folder_ids = None
-            if "folder_ids" in item:
-                folder_ids = _normalize_stored_folder_ids(item["folder_ids"])
-                if folder_ids is None:
-                    continue
-                if not enabled:
-                    folder_ids = ()
-            groups.append(
-                ImaGroupConfig(
-                    id=item["id"].strip(),
-                    name=item["name"].strip()[:100],
-                    knowledge_base_id=item["knowledge_base_id"].strip(),
-                    root_folder_id=item["root_folder_id"].strip(),
-                    enabled=enabled,
-                    source="discovered" if source == "discovered" else "manual",
-                    folder_ids=folder_ids,
-                )
+    if raw is None:
+        return (_legacy_group(kb, root),)
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return ()
+    if not isinstance(payload, list):
+        return ()
+    groups: list[ImaGroupConfig] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            return ()
+        required_fields = ("id", "name", "knowledge_base_id", "root_folder_id")
+        if any(
+            not isinstance(item.get(field), str) or not item[field].strip()
+            for field in required_fields
+        ):
+            return ()
+        enabled = item.get("enabled", True)
+        if not isinstance(enabled, bool):
+            return ()
+        source = item.get("source", "manual")
+        if not isinstance(source, str):
+            return ()
+        folder_ids = None
+        if "folder_ids" in item and item["folder_ids"] is not None:
+            folder_ids = _normalize_stored_folder_ids(item["folder_ids"])
+            if folder_ids is None:
+                return ()
+            if not enabled:
+                folder_ids = ()
+        groups.append(
+            ImaGroupConfig(
+                id=item["id"].strip(),
+                name=item["name"].strip()[:100],
+                knowledge_base_id=item["knowledge_base_id"].strip(),
+                root_folder_id=item["root_folder_id"].strip(),
+                enabled=enabled,
+                source="discovered" if source == "discovered" else "manual",
+                folder_ids=folder_ids,
             )
-        if groups:
-            normalized_groups = []
-            for group in groups:
-                if group.id == IMA_LEGACY_GROUP_ID:
-                    group = ImaGroupConfig(
-                        id=group.id,
-                        name=group.name,
-                        knowledge_base_id=kb,
-                        root_folder_id=root,
-                        enabled=group.enabled,
-                        source=group.source,
-                        folder_ids=group.folder_ids,
-                    )
-                normalized_groups.append(group)
-            return tuple(normalized_groups)
-    return (_legacy_group(kb, root),)
+        )
+    normalized_groups = []
+    for group in groups:
+        if group.id == IMA_LEGACY_GROUP_ID:
+            group = ImaGroupConfig(
+                id=group.id,
+                name=group.name,
+                knowledge_base_id=kb,
+                root_folder_id=root,
+                enabled=group.enabled,
+                source=group.source,
+                folder_ids=group.folder_ids,
+            )
+        normalized_groups.append(group)
+    return tuple(normalized_groups)
 
 
 @dataclass(frozen=True)
@@ -603,9 +688,7 @@ class ImaPureClient:
     @staticmethod
     def _payload(data: dict[str, Any]) -> dict[str, Any]:
         payload = data.get("data")
-        if isinstance(payload, dict) and "knowledge_list" in payload:
-            return payload
-        return data
+        return payload if isinstance(payload, dict) else data
 
     def _remember_folder_path(self, folder_id: str, payload: dict[str, Any]) -> None:
         current_path = payload.get("current_path")
@@ -642,8 +725,8 @@ class ImaPureClient:
                 headers=self._headers(token),
             )
             data, _ = self._open_json(request)
-            code = data.get("code") if "code" in data else data.get("retcode")
-            if code not in (0, "0"):
+            code = _ima_response_status(data, "IMA group discovery")
+            if not _ima_success_status(code):
                 raise RuntimeError(f"IMA group discovery failed code={code}")
             payload = _discovery_payload(data)
             if not _discovery_has_known_shape(payload):
@@ -682,16 +765,20 @@ class ImaPureClient:
                 headers=self._headers(token),
             )
             data, _ = self._open_json(request)
-            if data.get("code") not in (0, None):
-                raise RuntimeError(f"IMA list failed code={data.get('code')}")
+            status = _ima_response_status(data, "IMA list")
+            if not _ima_success_status(status):
+                raise RuntimeError(f"IMA list failed code={status}")
             payload = self._payload(data)
             if not isinstance(payload, dict):
-                return items
-            self._remember_folder_path(folder_id, payload)
+                raise RuntimeError("IMA list returned invalid response")
             page_items = payload.get("knowledge_list")
-            if isinstance(page_items, list):
-                items.extend(page_items)
-            if payload.get("is_end") is True or not payload.get("next_cursor"):
+            if not isinstance(page_items, list) or any(
+                not isinstance(item, dict) for item in page_items
+            ):
+                raise RuntimeError("IMA list returned invalid response")
+            self._remember_folder_path(folder_id, payload)
+            items.extend(page_items)
+            if not payload.get("next_cursor"):
                 return items
             next_cursor = str(payload["next_cursor"])
             if next_cursor in seen_cursors:
@@ -1011,6 +1098,7 @@ class ImaDocumentStore:
         self.manifest_path = self.root / "manifest.json"
         self.state_path = self.root / "state.json"
         self._state_lock = threading.Lock()
+        self._manifest_lock = threading.RLock()
         self._legacy_group_id = IMA_LEGACY_GROUP_ID
         self._group_metadata: dict[str, tuple[str, str]] = {
             IMA_LEGACY_GROUP_ID: (IMA_LEGACY_GROUP_NAME, IMA_LEGACY_GROUP_ID)
@@ -1275,10 +1363,11 @@ class ImaDocumentStore:
         os.replace(temp, path)
 
     def save_manifest(self, records: list[dict[str, Any]]) -> None:
-        self._save(
-            self.manifest_path,
-            {"generated_at": datetime.now(UTC).isoformat(), "files": records},
-        )
+        with self._manifest_lock:
+            self._save(
+                self.manifest_path,
+                {"generated_at": datetime.now(UTC).isoformat(), "files": records},
+            )
 
     def rebuild_manifest_from_state(self) -> int:
         if self.load_manifest():
@@ -1314,47 +1403,51 @@ class ImaDocumentStore:
         return len(records)
 
     def save_group_manifest(self, group_id: str, records: list[dict[str, Any]]) -> None:
-        group_id = str(group_id)
-        compatibility_group = group_id == IMA_LEGACY_GROUP_ID or group_id.startswith("legacy:")
-        if compatibility_group:
-            self._legacy_group_id = group_id
-        current = self.load_manifest()
-        kept = []
-        for record in current:
-            record_group = str(record.get("group_id") or "")
-            if record_group == group_id or (compatibility_group and not record_group):
-                continue
-            kept.append(record)
-        normalized = []
-        for record in records:
-            item = dict(record)
-            if not item.get("group_id"):
-                item["group_id"] = group_id
-            if compatibility_group and not item.get("group_name"):
-                item["group_name"] = self._group_metadata.get(
-                    group_id, (IMA_LEGACY_GROUP_NAME, group_id)
-                )[0]
-            normalized.append(item)
-        self.save_manifest(kept + normalized)
+        with self._manifest_lock:
+            group_id = str(group_id)
+            compatibility_group = group_id == IMA_LEGACY_GROUP_ID or group_id.startswith("legacy:")
+            if compatibility_group:
+                self._legacy_group_id = group_id
+            current = self.load_manifest()
+            kept = []
+            for record in current:
+                record_group = str(record.get("group_id") or "")
+                if record_group == group_id or (compatibility_group and not record_group):
+                    continue
+                kept.append(record)
+            normalized = []
+            for record in records:
+                item = dict(record)
+                if not item.get("group_id"):
+                    item["group_id"] = group_id
+                if compatibility_group and not item.get("group_name"):
+                    item["group_name"] = self._group_metadata.get(
+                        group_id, (IMA_LEGACY_GROUP_NAME, group_id)
+                    )[0]
+                normalized.append(item)
+            self.save_manifest(kept + normalized)
+
+    def _save_state_locked(self, state: dict[str, dict[str, Any]]) -> None:
+        disk = self._load(self.state_path, {})
+        if not isinstance(disk, dict):
+            disk = {}
+        outgoing: dict[str, dict[str, Any]] = {}
+        for key, item in state.items():
+            merged = dict(item) if isinstance(item, dict) else {}
+            existing = disk.get(key)
+            if (
+                isinstance(existing, dict)
+                and not merged.get("abstract_zh")
+                and existing.get("abstract_zh")
+            ):
+                merged["abstract_zh"] = existing["abstract_zh"]
+                merged["abstract_src_hash"] = existing.get("abstract_src_hash") or ""
+            outgoing[key] = merged
+        self._save(self.state_path, outgoing)
 
     def save_state(self, state: dict[str, dict[str, Any]]) -> None:
         with self._state_lock:
-            disk = self._load(self.state_path, {})
-            if not isinstance(disk, dict):
-                disk = {}
-            outgoing: dict[str, dict[str, Any]] = {}
-            for key, item in state.items():
-                merged = dict(item) if isinstance(item, dict) else {}
-                existing = disk.get(key)
-                if (
-                    isinstance(existing, dict)
-                    and not merged.get("abstract_zh")
-                    and existing.get("abstract_zh")
-                ):
-                    merged["abstract_zh"] = existing["abstract_zh"]
-                    merged["abstract_src_hash"] = existing.get("abstract_src_hash") or ""
-                outgoing[key] = merged
-            self._save(self.state_path, outgoing)
+            self._save_state_locked(state)
 
     def _state_path(self, relative: Any) -> Path | None:
         if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
@@ -1660,18 +1753,19 @@ def ima_kb_valid_tags(db: Any) -> set[str]:
 
 
 def purge_ima_document_tags(store: ImaDocumentStore, valid_tags: set[str]) -> int:
-    state = store.load_state()
-    changed = 0
-    for item in state.values():
-        if not isinstance(item, dict):
-            continue
-        tags = [t for t in (item.get("tags") or []) if isinstance(t, str)]
-        kept = [t for t in tags if t in valid_tags]
-        if kept != tags:
-            item["tags"] = kept
-            changed += 1
-    if changed:
-        store.save_state(state)
+    with store._state_lock:
+        state = store.load_state()
+        changed = 0
+        for item in state.values():
+            if not isinstance(item, dict):
+                continue
+            tags = [t for t in (item.get("tags") or []) if isinstance(t, str)]
+            kept = [t for t in tags if t in valid_tags]
+            if kept != tags:
+                item["tags"] = kept
+                changed += 1
+        if changed:
+            store._save_state_locked(state)
     return changed
 
 
@@ -1681,6 +1775,7 @@ class ImaDocumentService:
         self.store = ImaDocumentStore(archive_root)
         self._stop = threading.Event()
         self._state_lock = threading.Lock()
+        self._config_lock = threading.RLock()
         self._sync_lock = threading.Lock()
         self._discovery_lock = threading.Lock()
         self._scheduler_thread: threading.Thread | None = None
@@ -1688,6 +1783,10 @@ class ImaDocumentService:
         self._running = False
         self._next_run_at = 0.0
         self._cancel_requested = False
+
+    @property
+    def config_lock(self) -> threading.RLock:
+        return self._config_lock
 
     def config(self) -> ImaDocumentConfig:
         return ImaDocumentConfig.from_db(self.db)
@@ -1742,35 +1841,37 @@ class ImaDocumentService:
                     "at": datetime.now(UTC).isoformat(),
                     "error": error,
                 }
-                self.db.set_setting(
-                    IMA_PURE_DISCOVERY_KEY,
-                    json.dumps(discovery, ensure_ascii=False),
-                )
+                with self._config_lock:
+                    self.db.set_setting(
+                        IMA_PURE_DISCOVERY_KEY,
+                        json.dumps(discovery, ensure_ascii=False),
+                    )
                 return {
                     "ok": False,
                     "status": "failed",
                     "config": self.config().public(),
                     "discovery": discovery,
                 }
-            current = self.config()
-            merged = merge_groups(
-                current.groups,
-                discovered,
-                discovery_complete=discovery_complete,
-            )
-            discovery = {
-                "status": "ok",
-                "at": datetime.now(UTC).isoformat(),
-                "error": "",
-            }
-            self._set_settings_atomic(
-                {
-                    IMA_PURE_GROUPS_KEY: json.dumps(
-                        [group.public() for group in merged], ensure_ascii=False
-                    ),
-                    IMA_PURE_DISCOVERY_KEY: json.dumps(discovery, ensure_ascii=False),
+            with self._config_lock:
+                current = self.config()
+                merged = merge_groups(
+                    current.groups,
+                    discovered,
+                    discovery_complete=discovery_complete,
+                )
+                discovery = {
+                    "status": "ok",
+                    "at": datetime.now(UTC).isoformat(),
+                    "error": "",
                 }
-            )
+                self._set_settings_atomic(
+                    {
+                        IMA_PURE_GROUPS_KEY: json.dumps(
+                            [group.public() for group in merged], ensure_ascii=False
+                        ),
+                        IMA_PURE_DISCOVERY_KEY: json.dumps(discovery, ensure_ascii=False),
+                    }
+                )
             return {
                 "ok": True,
                 "status": "finished",
@@ -1788,6 +1889,9 @@ class ImaDocumentService:
             last_result = json.loads(result) if result else None
         except json.JSONDecodeError:
             last_result = None
+        records = self.store.load_manifest()
+        state = self.store.load_state()
+        document_count = sum(1 for record in records if self.store.is_complete(record, state))
         return {
             "config": cfg.public(),
             "running": running,
@@ -1796,7 +1900,7 @@ class ImaDocumentService:
             "last_finished_at": self.db.get_setting(IMA_PURE_LAST_FINISHED_KEY) or "",
             "last_result": last_result,
             "discovery": self._discovery_status(),
-            "documents": len(self.store.documents()),
+            "documents": document_count,
         }
 
     def start(self) -> None:
@@ -1938,19 +2042,47 @@ class ImaDocumentService:
             }
             for record in client.manifest()
         ]
-        if not records:
-            existing = [
-                record
-                for record in self.store.load_manifest()
-                if str(record.get("group_id") or IMA_LEGACY_GROUP_ID) == group.id
-            ]
-            if existing:
-                logger.warning("IMA group listing empty, keep existing manifest group=%s", group.id[:64])
-                records = existing
+        with self._config_lock:
+            current_group = next(
+                (item for item in self.config().groups if item.id == group.id),
+                None,
+            )
+            if current_group is None or (
+                current_group.id,
+                current_group.enabled,
+                current_group.knowledge_base_id,
+                current_group.root_folder_id,
+                current_group.mount_folder_ids,
+            ) != (
+                group.id,
+                group.enabled,
+                group.knowledge_base_id,
+                group.root_folder_id,
+                group.mount_folder_ids,
+            ):
+                return {
+                    "group_id": group.id,
+                    "group_name": group.name,
+                    "total": 0,
+                    "pending": 0,
+                    "downloaded": 0,
+                    "failed": 0,
+                    "last_error": "",
+                    "skipped": True,
+                }
+            if not records:
+                existing = [
+                    record
+                    for record in self.store.load_manifest()
+                    if str(record.get("group_id") or IMA_LEGACY_GROUP_ID) == group.id
+                ]
+                if existing:
+                    logger.warning("IMA group listing empty, keep existing manifest group=%s", group.id[:64])
+                    records = existing
+                else:
+                    self.store.save_group_manifest(group.id, records)
             else:
                 self.store.save_group_manifest(group.id, records)
-        else:
-            self.store.save_group_manifest(group.id, records)
         self.store.restore_original_filenames()
         state.clear()
         state.update(self.store.load_state())
@@ -2040,6 +2172,9 @@ class ImaDocumentService:
             for group in enabled_groups:
                 try:
                     group_result = self._sync_group(cfg, group, state)
+                    if group_result.get("skipped"):
+                        skipped_groups.append(group.id)
+                        continue
                     succeeded_groups += 1
                     total += group_result["total"]
                     pending += group_result["pending"]

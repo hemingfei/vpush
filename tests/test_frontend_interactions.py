@@ -155,6 +155,133 @@ def test_post_tags_filter_timeline_without_inline_user_string():
     assert "loadTimeline(true, routeRenderSeq, { revert })" in pick_tag
 
 
+def test_settings_async_responses_are_owned_by_route_and_session_before_mutation():
+    """设置页的 /api/me 响应必须在写 state 或 DOM 前确认路由和会话仍是发起者。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    refresh = _fn_body("refreshSettingsStatus")
+    fetch = refresh.index('await api("/api/me")')
+    state_write = refresh.index("state.user = user", fetch)
+    guard = refresh.index("routeStillActive", fetch)
+    assert "const seq = routeRenderSeq" in refresh[:fetch]
+    assert "const token = state.token" in refresh[:fetch]
+    assert "const sessionGeneration = imaMountState.sessionGeneration" in refresh[:fetch]
+    assert guard < state_write
+    assert "token !== state.token" in refresh[guard:state_write]
+    assert "sessionGeneration !== imaMountState.sessionGeneration" in refresh[guard:state_write]
+
+    render = _fn_body("renderSettings")
+    fetch = render.index('await api("/api/me")')
+    assignment = render.index("state.user = user", fetch)
+    prefetch = render[:fetch]
+    guard = render.index("routeStillActive(seq)", fetch)
+    assert "const token = state.token" in prefetch
+    assert "const sessionGeneration = imaMountState.sessionGeneration" in prefetch
+    assert "const user = await api(\"/api/me\")" in render[fetch - 40:fetch + 50]
+    assert guard < assignment
+    assert "token !== state.token" in render[guard:assignment]
+    assert "sessionGeneration !== imaMountState.sessionGeneration" in render[guard:assignment]
+
+
+def test_render_settings_catch_only_mutates_owned_route_and_session():
+    """设置页请求失败时，错误 DOM 也必须由发起请求的路由和会话拥有。"""
+    render = _fn_body("renderSettings")
+    fetch = render.index('await api("/api/me")')
+    error_dom = render.index('$("#main").innerHTML = emptyState(err.message)', fetch)
+    catch = render.rindex("} catch (err)", fetch, error_dom + 1)
+    guard = render.index("routeStillActive(seq)", catch, error_dom)
+
+    assert "token !== state.token" in render[guard:error_dom]
+    assert "sessionGeneration !== imaMountState.sessionGeneration" in render[guard:error_dom]
+    assert guard < error_dom
+    assert render.index("const token = state.token", 0, fetch) < fetch
+    assert render.index("const sessionGeneration = imaMountState.sessionGeneration", 0, fetch) < fetch
+
+
+
+def test_bind_code_callbacks_capture_and_require_current_owner_before_side_effects():
+    """绑定码响应只能由发起请求的路由、token 和会话写入状态或 DOM。"""
+    for name in ("bindChannel", "genBindCode"):
+        body = _fn_body(name)
+        await_api = body.index('await api("/api/me/bind-code"')
+        prefix = body[:await_api]
+        for capture in (
+            "const routeSeq = routeRenderSeq",
+            "const token = state.token",
+            "const sessionGeneration = imaMountState.sessionGeneration",
+        ):
+            assert capture in prefix, f"{name} 必须在请求前捕获会话拥有者"
+
+        guard = body.index("if (!routeStillActive(routeSeq)", await_api)
+        pending_write = body.index("pendingBind =", await_api)
+        assert guard < pending_write
+        owner_check = body[guard:pending_write]
+        assert "token !== state.token" in owner_check
+        assert "sessionGeneration !== imaMountState.sessionGeneration" in owner_check
+        for side_effect in ("renderBindResult(" if name == "bindChannel" else '$(\"#bind-result\").innerHTML',
+                             "startSettingsPoll()"):
+            assert guard < body.index(side_effect, await_api), f"{name} owner guard 必须先于 {side_effect}"
+
+        catch = body.index("} catch (err)", await_api)
+        catch_guard = body.index("if (!routeStillActive(routeSeq)", catch)
+        error_flash = body.index("flash(err.message, \"error\")", catch)
+        assert catch_guard < error_flash
+        catch_owner_check = body[catch_guard:error_flash]
+        assert "token !== state.token" in catch_owner_check
+        assert "sessionGeneration !== imaMountState.sessionGeneration" in catch_owner_check
+
+def test_feishu_personal_async_callbacks_are_owner_guarded_and_logout_resets_all_state():
+    """飞书注册、轮询和倒计时不得跨账号停止新计时器或写设置区。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    start = _fn_body("startFeishuPersonal")
+    assert "const owner" in start and "sessionGeneration" in start and "routeSeq" in start
+    assert start.index("await api(") < start.index("fsPersonalState.sessionId =", start.index("await api("))
+    assert "fsPersonalOwnerActive(owner)" in start
+
+    poll = _fn_body("startFeishuPersonalPoll")
+    assert "fsPersonalOwnerActive(owner)" in poll
+    response = poll.index("await api(")
+    assert poll.index("fsPersonalOwnerActive(owner)", response) < poll.index("fsPersonalState.verificationUri", response)
+    assert "stopFeishuPersonalPoll(owner)" in poll
+    assert "fsPersonalState.pollTimer !== timer" in poll
+
+    countdown = _fn_body("startFeishuBindCountdown")
+    assert "fsPersonalOwnerActive(owner)" in countdown
+    assert "fsPersonalState.countdownTimer !== timer" in countdown
+    assert "startFeishuPersonalPoll(fsPersonalState.sessionId, owner)" in countdown
+
+    clear = _fn_body("clearSessionCaches")
+    for statement in (
+        "fsPersonalState.owner = null",
+        'fsPersonalState.sessionId = ""',
+        'fsPersonalState.bindCommand = ""',
+        "fsPersonalState.bindExpiresAt = 0",
+        'fsPersonalState.verificationUri = ""',
+        'fsPersonalState.qrUri = ""',
+    ):
+        assert statement in clear
+    assert clear.index("stopFeishuPersonalPoll()") < clear.index("fsPersonalState.owner = null")
+
+
+def test_weibo_qr_callbacks_are_owner_guarded_and_logout_invalidates_timer():
+    """微博二维码请求序列、路由和会话必须共同拥有状态及计时器。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    start = _fn_body("startWeiboQr")
+    assert "const owner" in start and "wbQrSeq" in start and "sessionGeneration" in start
+    assert "clearTimeout(wbQrTimer)" in start
+    response = start.index("await api(")
+    assert start.index("weiboQrOwnerActive(owner)", response) < start.index('$("#wb-qr-box").innerHTML', response)
+    assert "wbQrTimer !== timer" in start
+    poll = _fn_body("pollWeiboQr")
+    response = poll.index("await api(")
+    assert poll.index("weiboQrOwnerActive(owner)", response) < poll.index('const statusEl = $("#wb-qr-status")', response)
+    assert "weiboQrOwnerActive(owner)" in poll[poll.index("} catch", response):]
+
+    clear = _fn_body("clearSessionCaches")
+    assert "clearTimeout(wbQrTimer)" in clear
+    assert "wbQrTimer = null" in clear
+    assert "wbQrSeq += 1" in clear
+
+
 def test_mobile_timeline_filter_keeps_pills_out_of_panel():
     """手机端平台条留在吸顶栏；筛选面板是搜索、视图开关和标签。"""
     render = _fn_body("renderTimeline")
@@ -911,7 +1038,7 @@ def test_cookie_clear_is_confirmed_delete_and_hidden_when_unset():
     assert "/api/admin/cookies/" in clear
     assert "flash(" in clear
     assert "alert(" not in clear
-    assert "loadAdminStats()" in clear
+    assert "loadAdminStats(routeSeq)" in clear
     assert "_cookieClearPending" in clear
     assert "focusCookieField(" in clear
     assert 'for="xq-cookie"' in render
@@ -932,11 +1059,105 @@ def test_cookie_save_restores_focus_after_rebuild():
     assert "ima-cookie" in focus
     assert "zq-cookie" in focus
     assert ".focus()" in focus
-    for name in ("saveXueqiuCookie", "saveTwitterCookie", "saveZsxqCookie", "saveImaCredentials"):
+    for name in ("saveXueqiuCookie", "saveZsxqCookie", "saveTwitterCookie", "saveImaCredentials"):
         body = _fn_body(name)
-        assert "loadAdminStats()" in body
+        assert "loadAdminStats(routeSeq)" in body
         assert "focusCookieField(" in body
-        assert body.index("loadAdminStats()") < body.index("focusCookieField(")
+        assert body.index("loadAdminStats(routeSeq)") < body.index("focusCookieField(")
+
+
+def test_router_me_response_is_session_owned_before_shell_or_state_mutation():
+    """router 的 /api/me 成功/失败响应只能由发起路由和会话更新 shell。"""
+    body = _fn_body("router")
+    fetch = body.index('user = await api("/api/me")')
+    owner_guard = body.index("sessionOwnerStillActive(renderSeq, token, sessionGeneration)", fetch)
+    state_write = body.index("state.user = user", fetch)
+    shell_write = body.index('$("#auth-view").classList.add("hidden")', fetch)
+
+    assert "const token = state.token" in body[:fetch]
+    assert "const sessionGeneration = imaMountState.sessionGeneration" in body[:fetch]
+    assert "let user" in body[:fetch]
+    assert owner_guard < state_write
+    assert owner_guard < shell_write
+    catch = body.index("} catch", fetch)
+    assert "sessionOwnerStillActive(renderSeq, token, sessionGeneration)" in body[catch:]
+
+
+def test_ima_pdf_download_checks_session_owner_before_every_side_effect():
+    """旧会话 PDF 完成后不得创建 URL、插入链接、点击、撤销或提示错误。"""
+    body = _fn_body("downloadImaPdf")
+    fetch = body.index("await Promise.all")
+    owner_guard = body.index("sessionOwnerStillActive(routeSeq, token, sessionGeneration)", fetch)
+    side_effects = [
+        "URL.createObjectURL(blob)",
+        'document.createElement("a")',
+        "document.body.appendChild(link)",
+        "link.click()",
+        "URL.revokeObjectURL(url)",
+        'flash(`PDF 下载失败：${err.message}`, "error")',
+    ]
+    assert "const routeSeq = routeRenderSeq" in body[:fetch]
+    assert "const token = state.token" in body[:fetch]
+    assert "const sessionGeneration = imaMountState.sessionGeneration" in body[:fetch]
+    for side_effect in side_effects:
+        assert owner_guard < body.index(side_effect, fetch), side_effect
+    assert "const group = routeQuery().get(\"group\") || state.imaDocumentsGroup || \"\";" in body
+
+
+def test_ima_pdf_download_timeout_revoke_rechecks_session_owner():
+    """PDF 延迟释放 URL 时仍须确认下载发起路由和会话拥有者。"""
+    body = _fn_body("downloadImaPdf")
+    timeout = body.index("setTimeout(() =>")
+    callback_end = body.index("}, 1000);", timeout)
+    callback = body[timeout:callback_end]
+    guard = callback.index("sessionOwnerStillActive(routeSeq, token, sessionGeneration)")
+    revoke = callback.index("URL.revokeObjectURL(url)")
+    assert guard < revoke
+
+
+def test_ima_pdf_load_is_owned_by_route_and_reader_generation_before_load_or_fail_side_effects():
+    """旧阅读器的 PDF 完成、校验失败和 iframe 错误不得污染当前阅读器。"""
+    src = APP_JS.read_text()
+    reader = _fn_body("renderImaDocument")
+    load = _fn_body("loadImaPdf")
+    fail = _fn_body("showImaPdfFail")
+
+    assert "const readerSeq = ++_imaReaderSeq" in reader
+    assert "loadImaPdf(mediaId, readerSeq)" in reader
+    assert re.search(r"async function loadImaPdf\(mediaId, readerSeq\)", src)
+    assert re.search(r"function showImaPdfFail\(mediaId, seq, readerSeq\)", src)
+
+    owner_guard = "if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;"
+    assert load.count(owner_guard) >= 2
+    head_read = "await blob.slice(0, 5).text()"
+    assert load.index(owner_guard) < load.index(head_read)
+    assert load.index(owner_guard, load.index(head_read)) < load.index("showImaPdfFail(mediaId, seq, readerSeq)")
+    assert "showImaPdfFail(mediaId, seq, readerSeq)" in load
+    assert "() => showImaPdfFail(mediaId, seq, readerSeq)" in load
+    assert owner_guard in fail
+    fail_guard = fail.index(owner_guard)
+    for side_effect in ("clearImaPdfUrl()", "panel.hidden = false", "panel.innerHTML"):
+        assert fail_guard < fail.index(side_effect)
+    validation = load.index("if (blob.size < 64 || head !== \"%PDF-\")")
+    assert validation < load.index("showImaPdfFail(mediaId, seq, readerSeq)")
+    success_guard = load.index(owner_guard, load.index(head_read))
+    for side_effect in ("clearImaPdfUrl()", "URL.createObjectURL(blob)", "frame.src", "panel.hidden = false", "frame.addEventListener"):
+        assert success_guard < load.index(side_effect)
+
+
+def test_cookie_save_nested_stats_reload_preserves_owner_sequence_and_focus_guard():
+    """Cookie 保存及清除的嵌套 stats GET 必须继承原路由令牌，再检查会话后聚焦。"""
+    for name in ("clearSavedCookie", "saveXueqiuCookie", "saveZsxqCookie", "saveTwitterCookie", "saveImaCredentials"):
+        body = _fn_body(name)
+        reload_call = body.index("loadAdminStats(routeSeq)")
+        focus = body.index("focusCookieField(", reload_call)
+        assert "loadAdminStats()" not in body
+        assert "sessionGeneration" in body
+        owner_guard = body.rfind("sessionOwnerStillActive(routeSeq, token, sessionGeneration)", reload_call, focus)
+        route_guard = body.rfind("routeStillActive(routeSeq)", reload_call, focus)
+        assert max(owner_guard, route_guard) < focus
+
+
 
 
 def test_cookie_tab_primary_buttons_are_44px():
@@ -1024,6 +1245,174 @@ def test_ima_sync_feedback_guards_duplicate_requests():
     assert 'already_running' in body
 
 
+
+def test_ima_save_reloads_with_authoritative_put_status_override():
+    """保存后的 PUT 状态必须在等待完成后传给 stats reload，并覆盖 stale IMA 数据。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    save = _fn_body("saveImaCollector")
+    load = _fn_body("loadAdminStats")
+
+    assert re.search(r"async function loadAdminStats\(seq = _adminRenderSeq, authoritativeImaStatus = null\)", src)
+    put = 'const savedImaStatus = await api("/api/admin/ima-collector"'
+    assert put in save
+    assert "saveOwner.savedImaStatus = savedImaStatus" in save
+    assert "await loadAdminStats(routeSeq, savedImaStatus)" in save
+    assert save.index(put) < save.index("saveOwner.putCompleted = true") < save.index("await loadAdminStats(routeSeq, savedImaStatus)")
+    assert "ima_collector: authoritativeImaStatus" in load
+    assert load.index("authoritativeImaStatus") < load.index('$("#admin-body").innerHTML = `')
+
+
+def test_ima_stats_failure_after_save_renders_cached_stats_with_retry():
+    """保存后 stats GET 失败仍须用完整快照合并 IMA 状态，并保留当前路由重试提示。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    load = _fn_body("loadAdminStats")
+
+    assert "let _lastAdminStatsSnapshot = null" in src
+    assert "_lastAdminStatsSnapshot = s" in load
+    assert "const fallbackStats = _lastAdminStatsSnapshot" in load
+    assert "fallbackStats && authoritativeImaStatus" in load
+    assert "statsLoadError" in load
+    render = load.index('$("#admin-body").innerHTML = `')
+    assert load.index("renderStatsData(s)") > render
+    assert load.index("statsLoadError", render) > load.index("renderStatsData(s)")
+    assert 'onclick="loadAdminStats(${seq})"' in load
+    assert "routeStillActive(seq)" in load[load.index("statsLoadError"):]
+
+
+def test_ima_collector_pending_save_snapshots_full_form_and_secret_state():
+    """stats 重建期间必须使用提交快照，token 只能由 JS 恢复，不能进入 HTML。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    load = _fn_body("loadAdminStats")
+    save = _fn_body("saveImaCollector")
+    assert "function imaCollectorFormSnapshot" in src
+    assert "function imaCollectorFormRevision" in src
+    assert "const snapshot = imaCollectorFormSnapshot()" in save
+    assert "formRevision: imaCollectorFormRevision(snapshot)" in save
+    assert "const ownerSnapshot =" in load
+    for field in ("uid", "interval_seconds", "knowledge_base_id", "root_folder_id"):
+        assert f"collector.{field}" in load
+    assert "collectorGroups" in load
+    assert "restoreImaCollectorOwnerToken" in load
+    assert "const pendingToken =" in src
+    assert "tokenInput.value = pendingToken" in src
+    assert 'value="${ownerSnapshot?.refresh_token' not in src
+    assert save.index("imaMountState.saveOwner = saveOwner") < save.index("await api(")
+    assert "const onDraftChange =" in save
+    assert 'document.addEventListener("input", onDraftChange)' in save
+    assert 'document.removeEventListener("input", onDraftChange)' in save
+
+
+def test_ima_collector_save_rechecks_form_revision_after_stats_reload_before_clearing_token():
+    """stats GET 期间输入新 token 后，完成回调不得清除新值。"""
+    save = _fn_body("saveImaCollector")
+    reload_index = save.index("await loadAdminStats(routeSeq, savedImaStatus)")
+    clear_index = save.index('tokenInput.value = ""')
+    assert "const noNewerEditsAfterReload" in save
+    assert save.index("const noNewerEditsAfterReload") > reload_index
+    assert "if (noNewerEditsAfterReload)" in save[reload_index:]
+
+
+def test_ima_collector_full_form_draft_survives_owner_cleanup_and_stats_rebuild():
+    """保存 owner 清理后，UID/间隔/知识库/根目录脏编辑仍由后续 stats 重建恢复。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    load = _fn_body("loadAdminStats")
+    save = _fn_body("saveImaCollector")
+    assert "collectorDraft" in src
+    assert "rememberImaCollectorDraft" in src
+    assert "const pendingCollectorDraft" in load
+    assert "const collector = collectorDraft || pure" in load
+    assert "collectorDraft?.groups" in load
+    for field in ("uid", "interval_seconds", "knowledge_base_id", "root_folder_id"):
+        assert f"collector.{field}" in load
+    assert "restoreImaCollectorOwnerToken(owner, seq, pendingCollectorDraft)" in load
+    assert 'value="${collector.refresh_token' not in src
+    assert 'value="${pendingCollectorDraft' not in src
+    assert "collectorDraftRevision" in src
+    assert "clearImaCollectorDraft" in save
+    reload_index = save.index("await loadAdminStats(routeSeq, savedImaStatus)")
+    assert save.index("clearImaCollectorDraft", reload_index) > reload_index
+    assert 'document.addEventListener("input", imaCollectorDraftChanged)' in src
+    assert 'document.addEventListener("change", imaCollectorDraftChanged)' in src
+
+
+def test_ima_confirmed_departed_save_reconciles_server_state_on_next_stats_load():
+    """离路成功保存的快照只等待下一次 stats 重建确认，服务端规范化值必须胜出。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    load = _fn_body("loadAdminStats")
+    save = _fn_body("saveImaCollector")
+
+    assert "collectorConfirmedRevision" in src
+    assert "collectorConfirmedRevision = saveOwner.formRevision" in save
+    mark = save.index("collectorConfirmedRevision = saveOwner.formRevision")
+    assert save.index("const formStillCurrent =", save.index("await api(")) < mark
+    assert save.index("const mountStillCurrent =", save.index("await api(")) < mark
+    confirmed = load.index("collectorConfirmedRevision")
+    render = load.index('$("#admin-body").innerHTML = `')
+    assert confirmed < render
+    assert "const confirmedCollectorDraft" in load
+    assert "const collectorDraft = confirmedCollectorDraft ? null" in load
+    assert "const collector = collectorDraft || pure" in load
+    cleanup = load.index("clearImaCollectorDraft", render)
+    assert cleanup > render
+    assert "collectorDraftRevision === imaMountState.collectorConfirmedRevision" in load
+    assert "imaMountState.collectorConfirmedRevision = \"\"" in load
+    assert "collectorRevision" in save
+    assert "imaMountState.revision === saveOwner.mountRevision" in save
+
+
+def test_ima_save_reload_owns_mount_generation_bump_and_preserves_stale_guards():
+    """同路由 reload 自身的 mount generation bump 不得阻断清理；外部失效仍须中止。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    load = _fn_body("loadAdminStats")
+    save = _fn_body("saveImaCollector")
+
+    assert "return false;" in load
+    assert "return true;" in load
+    assert load.index("return true;") > load.index("statsTimer = setInterval")
+    assert "let statsReloadAccepted;" in save
+    assert "loadAdminStats(routeSeq, savedImaStatus)" in save
+    assert "loadAdminStats(routeRenderSeq, savedImaStatus)" in save
+    reload = save.index("statsReloadAccepted = await loadAdminStats(routeSeq, savedImaStatus);")
+    cleanup_guard = save.index("if (!statsReloadAccepted", reload)
+    assert save.index("sessionGeneration !== imaMountState.sessionGeneration", 0, reload) < reload
+    assert cleanup_guard > reload
+    assert "!routeStillActive(statsReloadSeq)" in save[cleanup_guard:]
+    assert "imaMountState.saveOwner !== saveOwner" in save[cleanup_guard:]
+    assert "generation !== imaMountState.generation" not in save[reload:cleanup_guard]
+    assert load.index("initImaMountState(pure.groups || [], preserveMountDraftForReload)") < load.index("statsTimer = setInterval")
+
+
+def test_ima_stats_failure_keeps_polling_and_exposes_route_owned_retry():
+    """stats 首次/手动失败要留在当前页并可重试，不能丢掉原轮询。"""
+    load = _fn_body("loadAdminStats")
+    assert load.index("await api(\"/api/stats\")") < load.index("stopStatsTimer()")
+    assert "stats-poll-error" in load
+    assert "role=\"alert\"" in load
+    assert 'onclick="loadAdminStats(${seq})"' in load
+    assert "routeStillActive(seq)" in load[load.index("} catch"):]
+    assert "timerSeq" in load and "routeStillActive(timerSeq)" in load
+
+
+def test_ima_sync_responses_and_cleanup_are_owned_by_initiating_route():
+    """同步 POST/status 的旧响应不得闪现或重绘新路由。"""
+    body = _fn_body("triggerImaCollector")
+    assert "const routeSeq = routeRenderSeq" in body
+    post = body.index("await api(\"/api/admin/ima-collector/sync\"")
+    assert body.index("if (!routeStillActive(routeSeq)) return", post) < body.index("flash(", post)
+    status = body.index("await api(\"/api/admin/ima-collector\"")
+    assert body.index("if (!routeStillActive(routeSeq)) return", status) < body.index('const target = $("#ima-collector-status")', status)
+    assert "if (routeStillActive(routeSeq)" in body[body.index("} catch"):]
+    assert "if (routeStillActive(routeSeq)" in body[body.index("} finally"):]
+
+
+def test_ima_folder_error_retry_has_stable_focus_id():
+    """目录失败重试替换分支时，焦点快照能定位新的重试按钮。"""
+    error = _fn_body("imaFolderErrorHtml")
+    assert 'id="ima-folder-retry-${escapeHtml(groupId)}-${escapeHtml(parentId)}"' in error
+    assert "imaFocusSnapshot" in _fn_body("loadImaFolderChildren")
+    assert "imaRestoreFocus(focus)" in _fn_body("loadImaFolderChildren")
+
+
 def test_ima_collector_save_restores_focus_after_rebuild():
     """保存重建设置页后恢复原控件或保存按钮焦点。"""
     body = _fn_body("saveImaCollector")
@@ -1032,6 +1421,149 @@ def test_ima_collector_save_restores_focus_after_rebuild():
     assert 'getElementById(focusId)' in body
     assert '.focus({' in body
     assert 'id="ima-collector-save"' in render
+
+
+def test_ima_save_listener_filters_unrelated_document_events_before_snapshot():
+    """临时保存监听器只能观察 IMA 字段，避免其它控件污染共享 draft。"""
+    save = _fn_body("saveImaCollector")
+    start = save.index("const onDraftChange =")
+    end = save.index("imaMountState.saveOwner = saveOwner", start)
+    listener = save[start:end]
+    owner_guard = listener.index("imaMountState.saveOwner !== saveOwner")
+    field_guard = listener.index("event.target?.id")
+    snapshot = listener.index("rememberImaCollectorDraft()")
+    assert owner_guard < field_guard < snapshot
+    for field_id in (
+        "ima-pure-uid", "ima-pure-kb", "ima-pure-root",
+        "ima-pure-interval", "ima-pure-token",
+    ):
+        assert field_id in listener
+
+
+def test_push_setting_saves_require_same_route_token_and_session_before_mutation():
+    """旧账号的设置 PUT 回调不得修改新账号状态或闪现结果。"""
+    for name in ("savePushChannels", "saveTranslateTwitter", "saveDnd"):
+        body = _fn_body(name)
+        put = body.index('await api("/api/me"')
+        for capture in (
+            "const routeSeq = routeRenderSeq",
+            "const token = state.token",
+            "const sessionGeneration = imaMountState.sessionGeneration",
+        ):
+            assert capture in body[:put]
+        guard = body.index("routeStillActive(routeSeq)", put)
+        mutation = body.index("state.user", put)
+        assert guard < mutation
+        assert body.index("token !== state.token", guard) < mutation
+        assert body.index("sessionGeneration !== imaMountState.sessionGeneration", guard) < mutation
+        catch = body.index("} catch", put)
+        catch_guard = body.index("routeStillActive(routeSeq)", catch)
+        assert body.index("flash(", catch_guard) > catch_guard
+
+
+def test_settings_save_callbacks_require_same_route_token_and_session_before_all_side_effects():
+    """所有设置保存回调的异步收尾都必须仍属于发起路由和会话。"""
+    for name in (
+        "saveNotify", "saveDailyReport", "saveCustomTgBot", "saveWecomWebhook",
+        "saveBarkKey", "enableWebPush", "disableWebPush", "saveKeywords", "saveLlm",
+    ):
+        body = _fn_body(name)
+        await_api = body.index("await api(")
+        for capture in (
+            "const routeSeq = routeRenderSeq",
+            "const token = state.token",
+            "const sessionGeneration = imaMountState.sessionGeneration",
+        ):
+            assert capture in body[:await_api], f"{name} 必须在异步请求前捕获会话拥有者"
+        guard = body.index("routeStillActive(routeSeq)", await_api)
+        assert "token !== state.token" in body[guard:guard + 150]
+        assert "sessionGeneration !== imaMountState.sessionGeneration" in body[guard:guard + 180]
+        side_effects = ["flash("]
+        if name in ("saveCustomTgBot", "saveWecomWebhook", "saveBarkKey", "enableWebPush", "disableWebPush", "saveLlm"):
+            side_effects.append("reloadSettings(routeSeq)")
+        for side_effect in side_effects:
+            assert body.index(side_effect, await_api) > guard, f"{name} 的 {side_effect} 未受响应守卫保护"
+        catch = body.index("} catch", await_api)
+        catch_guard = body.index("routeStillActive(routeSeq)", catch)
+        assert body.index("flash(", catch_guard) > catch_guard, f"{name} 的错误提示未受响应守卫保护"
+
+
+def test_settings_reload_passes_original_route_sequence():
+    """设置异步回调重载时必须继续使用发起请求的路由令牌。"""
+    reload = _fn_body("reloadSettings")
+    assert "async function reloadSettings(routeSeq)" in APP_JS.read_text()
+    assert "if (!routeStillActive(routeSeq)) return;" in reload
+    assert "renderSettings(routeSeq)" in reload
+    for name in ("saveCustomTgBot", "saveWecomWebhook", "saveBarkKey", "enableWebPush", "disableWebPush", "saveLlm"):
+        assert "reloadSettings(routeSeq)" in _fn_body(name), f"{name} 未传递原始路由令牌"
+
+
+
+
+def test_admin_credential_saves_require_same_route_token_and_session_before_side_effects():
+    """旧路由或旧账号的凭证回调不得导航、重绘或恢复当前页面焦点。"""
+    for name in ("saveImaCredentials", "saveTwitterCookie"):
+        body = _fn_body(name)
+        post = body.index('await api("/api/admin/')
+        for capture in (
+            "const routeSeq = routeRenderSeq",
+            "const token = state.token",
+            "const sessionGeneration = imaMountState.sessionGeneration",
+        ):
+            assert capture in body[:post]
+        guard = body.index("routeStillActive(routeSeq)", post)
+        for side_effect in ("flash(", "history.replaceState", "await loadAdminStats(routeSeq)", "focusCookieField"):
+            assert guard < body.index(side_effect, post)
+        catch = body.index("} catch", post)
+        assert body.index("routeStillActive(routeSeq)", catch) < body.index("flash(", catch)
+        reload = body.index("await loadAdminStats(routeSeq)", post)
+        assert body.index("routeStillActive(routeSeq)", reload) < body.index("focusCookieField", reload)
+
+
+def test_admin_target_callbacks_require_route_token_session_and_owned_side_effects():
+    """剩余设置/后台异步回调必须只影响发起路由和账号。"""
+    for name in (
+        "savePassword", "clearSavedCookie", "saveXueqiuCookie", "saveZsxqCookie",
+        "savePollingConfig", "setPlazaSourceMode", "purgeZsxqCache",
+    ):
+        body = _fn_body(name)
+        await_api = body.index("await api(")
+        for capture in (
+            "const routeSeq = routeRenderSeq",
+            "const token = state.token",
+            "const sessionGeneration = imaMountState.sessionGeneration",
+        ):
+            assert capture in body[:await_api], f"{name} 必须在请求前捕获会话 owner"
+        guard = body.index("sessionOwnerStillActive(routeSeq, token, sessionGeneration)", await_api)
+        assert "token" in body[guard:guard + 100], f"{name} 缺少 token 守卫"
+        assert "sessionGeneration" in body[guard:guard + 140], f"{name} 缺少 session 守卫"
+        catch = body.index("} catch", await_api)
+        catch_guard = body.index("sessionOwnerStillActive(routeSeq, token, sessionGeneration)", catch)
+        assert body.index("flash(", catch_guard) > catch_guard, f"{name} 错误提示未受守卫保护"
+
+    for name in ("clearSavedCookie", "saveXueqiuCookie", "saveZsxqCookie"):
+        body = _fn_body(name)
+        reload = body.index("await loadAdminStats(")
+        assert "await loadAdminStats(routeSeq)" in body
+        reload_guard = body.index("sessionOwnerStillActive(routeSeq, token, sessionGeneration)", reload)
+        assert reload_guard < body.index("focusCookieField", reload)
+
+    polling = _fn_body("savePollingConfig")
+    assert "if (btn && document.body.contains(btn)) btn.disabled = false" in polling
+
+
+def test_ima_save_listener_checks_owner_before_ima_field_ids():
+    """IMA 临时监听器先确认保存 owner，再读取事件字段。"""
+    save = _fn_body("saveImaCollector")
+    start = save.index("const onDraftChange =")
+    end = save.index("imaMountState.saveOwner = saveOwner", start)
+    listener = save[start:end]
+    owner = listener.index("imaMountState.saveOwner !== saveOwner")
+    fields = listener.index("ima-pure-uid")
+    snapshot = listener.index("rememberImaCollectorDraft()")
+    assert owner < fields < snapshot
+    assert "event.target?.id" in listener
+    assert "imaMountState.saveOwner === saveOwner" in listener
 
 
 def test_ima_config_blocks_use_shared_layout_and_no_inline_spacing():
@@ -1118,6 +1650,197 @@ def test_ima_mount_tree_exposes_the_knowledge_base_root():
     assert "folderId === String(group?.root_folder_id || \"\")" in toggle
     assert "selected.clear()" in toggle
     assert "new Set([rootId])" in orphans
+
+def test_ima_stats_timer_uses_the_render_token_before_repainting():
+    """旧 stats 定时请求完成后不得覆盖更新的后台渲染。"""
+    load = _fn_body("loadAdminStats")
+    assert "const timerSeq = _adminRenderSeq" in load
+    assert "routeStillActive(timerSeq)" in load
+    timer_start = load.index("const timerSeq = _adminRenderSeq")
+    render_index = load.index("renderStatsData(fresh)")
+    assert load.index("routeStillActive(timerSeq)", timer_start) < render_index
+
+
+def test_ima_discovery_catch_and_finally_require_generation_owner():
+    """stats 重建或保存后，旧 discovery 的异常和收尾都不得碰当前控件。"""
+    discover = _fn_body("discoverImaGroups")
+    catch_start = discover.index("} catch")
+    finally_start = discover.index("} finally")
+    catch = discover[catch_start:finally_start]
+    finally_block = discover[finally_start:]
+    assert "generation === imaMountState.generation" in catch
+    assert "imaMountState.discoverySeq === discoverySeq" in catch
+    assert "routeStillActive(routeSeq)" in catch
+    assert "imaMountState.discoveryOwner !== request" in finally_block
+    assert "routeStillActive(routeSeq)" in finally_block
+    assert "generation === imaMountState.generation" not in finally_block
+
+
+def test_ima_force_folder_retry_supersedes_inflight_owner():
+    """force retry 必须替换同 key 的旧 owner，普通请求仍保持 loading 去重。"""
+    load = _fn_body("loadImaFolderChildren")
+    assert "if (!force && imaMountState.loading.has(key)) return" in load
+    assert "const request =" in load
+    assert load.index("if (!force && imaMountState.loading.has(key)) return") < load.index("const request =")
+    assert "imaMountState.folderRequests.set(key, request)" in load
+    assert "imaMountState.folderRequests.get(key) === request" in load
+
+
+def test_ima_pending_token_restores_across_current_stats_route_not_owner_route():
+    """重进 stats 时，当前共享 owner 的 token/表单仍可恢复，不能按发起路由丢弃。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    restore = _fn_body("restoreImaCollectorOwnerToken")
+    load = _fn_body("loadAdminStats")
+    assert "if (owner && owner !== imaMountState.saveOwner) return;" in restore
+    assert "owner.routeSeq !== seq" not in restore
+    owner_start = load.index("const ownerIsCurrent =")
+    owner_end = load.index("const pendingCollectorDraft =", owner_start)
+    owner_logic = load[owner_start:owner_end]
+    assert "const ownerIsCurrent = owner && owner === pendingOwner" in owner_logic
+    assert "owner.routeSeq === seq" not in owner_logic
+    assert "restoreImaCollectorOwnerToken(owner, seq, pendingCollectorDraft)" in load
+
+
+def test_ima_folder_edit_updates_live_save_owner_snapshot_and_stays_dirty():
+    """PUT 后 reload 等待期间改目录，必须推进 owner 快照并保留 dirty。"""
+    toggle = _fn_body("toggleImaFolder")
+    dirty = toggle.index("imaMountState.dirty = true")
+    assert "const draft = rememberImaCollectorDraft()" in toggle
+    remember = toggle.index("const draft = rememberImaCollectorDraft()")
+    assert "imaMountState.saveOwner.liveSnapshot = draft" in toggle
+    owner = toggle.index("imaMountState.saveOwner.liveSnapshot = draft")
+    assert dirty < remember < owner
+    assert "if (imaMountState.saveOwner)" in toggle
+
+
+def test_ima_departed_save_does_not_clear_until_current_reload_reconciles():
+    """离开发起路由后的成功回调不得清 draft；同路由须 reload 后再按新编辑判定清理。"""
+    save = _fn_body("saveImaCollector")
+    departed = save.index('if (!routeStillActive(routeSeq) && location.pathname !== "/admin/stats")')
+    departed_end = save.index("loadAdminStats(routeSeq, savedImaStatus)", departed)
+    assert "clearImaCollectorDraft" not in save[departed:departed_end]
+    assert "saveOwner.putCompleted = true" in save
+    assert save.index("await loadAdminStats(routeSeq, savedImaStatus)") < save.index("imaMountState.dirty = false")
+    assert "const noNewerEditsAfterReload =" in save
+    assert "if (noNewerEditsAfterReload)" in save
+
+
+def test_ima_collector_save_is_owned_by_initiating_route_and_preserves_drafts():
+    """旧的 collector 保存回调不得重绘新路由，stats 重建不得丢失脏挂载 draft。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    load = _fn_body("loadAdminStats")
+    save = _fn_body("saveImaCollector")
+
+    assert re.search(r"async function loadAdminStats\(seq = _adminRenderSeq, authoritativeImaStatus = null\)", src)
+    assert "routeStillActive(seq)" in load
+    assert "const preserveMountDraft = imaMountState.dirty" in load
+    assert "initImaMountState(pure.groups || [], preserveMountDraftForReload)" in load
+    assert "const routeSeq = routeRenderSeq" in save
+    assert "const saveButton = $(\"#ima-collector-save\")" in save
+    assert "saveButton.disabled = true" in save
+    assert 'location.pathname !== "/admin/stats"' in save
+    assert "routeStillActive(routeSeq)" in save
+    assert "loadAdminStats(routeSeq, savedImaStatus)" in save
+    assert "imaMountState.dirty = false" in save
+    assert "document.body.contains(saveButton)" in save
+
+
+def test_ima_collector_save_has_shared_busy_owner_for_rebuilt_buttons():
+    """首次 PUT 期间 stats 重建出的保存按钮也必须由共享 owner 禁用。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    load = _fn_body("loadAdminStats")
+    save = _fn_body("saveImaCollector")
+    assert "saveOwner: null" in src
+    assert 'imaMountState.saveOwner ? " disabled" : ""' in load
+    assert "if (imaMountState.saveOwner) return;" in save
+    assert "imaMountState.saveOwner = saveOwner" in save
+    assert "imaMountState.saveOwner === saveOwner" in save
+    assert save.index("imaMountState.saveOwner = saveOwner") < save.index("await api(")
+
+
+def test_ima_collector_save_clears_only_matching_mount_revision():
+    """PUT 完成时，离开路由或编辑新 draft 都不得清掉新 dirty 状态。"""
+    init = _fn_body("initImaMountState")
+    toggle = _fn_body("toggleImaFolder")
+    save = _fn_body("saveImaCollector")
+    assert "revision: 0" in APP_JS.read_text(encoding="utf-8")
+    assert "if (!preserve && !imaMountState.saveOwner) imaMountState.revision += 1" in init
+    assert "imaMountState.revision += 1" in toggle
+    assert "const mountRevision = imaMountState.revision" in save
+    assert "const mountRevision = imaMountState.revision" in save
+    assert "imaMountState.saveOwner = saveOwner" in save
+    assert "saveOwner.liveSnapshot =" in save
+    assert "imaMountState.dirty = false" in save
+    assert save.index("await loadAdminStats(routeSeq, savedImaStatus)") < save.index("imaMountState.dirty = false")
+
+
+def test_ima_collector_save_cleanup_requires_current_form_and_mount_revision():
+    """表单回到原值但目录版本已变化时，不得清理保存草稿、dirty 或 token。"""
+    save = _fn_body("saveImaCollector")
+    reload_index = save.index("await loadAdminStats(routeSeq, savedImaStatus)")
+    guard_index = save.index("const noNewerEditsAfterReload")
+    clear_index = save.index("clearImaCollectorDraft(saveOwner.formRevision)")
+    assert guard_index > reload_index
+    assert "const mountStillCurrentAfterReload = imaMountState.revision === saveOwner.mountRevision;" in save
+    assert "const noNewerEditsAfterReload = formStillCurrentAfterReload && mountStillCurrentAfterReload && liveRevision === saveOwner.formRevision;" in save
+    assert guard_index < clear_index
+    assert save.index("mountStillCurrentAfterReload", guard_index) < clear_index
+
+
+def test_ima_stats_preserves_newer_mount_revision_before_mount_state_init():
+    """目录改动后即使表单回到原值，stats 重建也必须先按新版 revision 保留 draft。"""
+    load = _fn_body("loadAdminStats")
+    preserve_index = load.index("const preserveMountDraft")
+    init_index = load.index("initImaMountState(pure.groups || [], preserveMountDraftForReload)")
+    preserve_decision = load[preserve_index:init_index]
+    assert "imaMountState.revision !== owner.mountRevision" in preserve_decision
+    assert preserve_index < init_index
+
+
+def test_ima_collector_save_failure_flash_is_route_owned():
+    """离开 stats 后返回的旧 PUT 失败不得把错误 toast 显示到当前页面。"""
+    save = _fn_body("saveImaCollector")
+    catch_start = save.index("} catch")
+    finally_start = save.index("} finally")
+    catch = save[catch_start:finally_start]
+    assert re.search(
+        r"if \(routeStillActive\(routeSeq\) && location\.pathname === \"/admin/stats\"\)\s*\{\s*flash",
+        catch,
+    )
+
+
+def test_ima_discovery_ignores_stale_responses_and_releases_current_button():
+    """发现请求跨 stats 重建时只能更新当前状态和当前 DOM。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    discover = _fn_body("discoverImaGroups")
+    assert "discoverySeq" in discover
+    assert "imaMountState.discoverySeq" in src
+    assert "imaMountState.discoverySeq === discoverySeq" in discover
+    assert "imaMountState.generation" in discover
+    assert '$("#ima-discover-btn")' in discover
+    assert '$("#ima-group-discovery-status")' in discover
+    assert "if (currentButton && document.body.contains(currentButton))" in discover
+
+
+def test_ima_folder_requests_have_per_key_ownership_and_focus_guards():
+    """同 key 目录请求不得互相清理，异步重绘只恢复仍然有效的焦点。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    load = _fn_body("loadImaFolderChildren")
+    select = _fn_body("selectImaMountGroup")
+    expand = _fn_body("toggleImaFolderExpand")
+    toggle = _fn_body("toggleImaFolder")
+    assert "imaMountState.folderRequests" in src
+    assert "const request =" in load
+    assert "request.generation === imaMountState.generation" in load
+    assert "imaMountState.folderRequests.get(key) === request" in load
+    assert "imaMountState.folderRequests.delete(key)" in load
+    assert "imaFocusSnapshot" in select and "imaFocusSnapshot" in expand and "imaFocusSnapshot" in load
+    assert "imaRestoreFocus(focus)" in select
+    assert "imaRestoreFocus(focus)" in expand
+    assert "imaRestoreFocus(focus)" in toggle
+    focus = _fn_body("imaRestoreFocus")
+    assert "document.activeElement" in focus
+    assert "focus({ preventScroll: true })" in focus
 
 
 def test_ima_discovery_error_redacts_url_and_secret_key_values_before_escape():
@@ -1889,15 +2612,61 @@ def test_ima_document_reader_route_preserves_list_filters_without_inline_query_i
     row = _fn_body("imaDocumentRow")
     route = _fn_body("imaDocumentReaderRoute")
     opener = _fn_body("openImaDocument")
-    assert "function imaDocumentReaderRoute(mediaId)" in src
+    assert "function imaDocumentReaderRoute(mediaId, groupId = \"\")" in src
     assert "state.imaDocumentsTag" in route
     assert "data-media-id=" in row
-    assert 'onclick="openImaDocument(this.dataset.mediaId)"' in row
+    assert "data-group-id=\"${escapeHtml(item.group_id || \"\")}\"" in row
+    assert 'onclick="openImaDocument(this.dataset.mediaId, this.dataset.groupId)"' in row
+    assert "openImaDocument(this.dataset.mediaId, this.dataset.groupId)" in row
     assert "_imaDocumentRoute(item.media_id)" not in row
-    assert "imaDocumentReaderRoute(id)" in opener
+    assert "imaDocumentReaderRoute(id, groupId)" in opener
     assert "history.pushState" in opener
     assert "renderImaDocument(routeRenderSeq, id)" in opener
     assert "++routeRenderSeq" not in opener
+
+
+def test_ima_document_row_group_scope_is_escaped_and_reaches_reader_route():
+    """全库列表的同名文档必须把所属库安全传给阅读路由。"""
+    src = APP_JS.read_text()
+    row = _fn_body("imaDocumentRow")
+    route = _fn_body("imaDocumentReaderRoute")
+    opener = _fn_body("openImaDocument")
+
+    assert 'data-group-id="${escapeHtml(item.group_id || "")}"' in row
+    assert row.count("this.dataset.groupId") >= 2
+    assert "function imaDocumentReaderRoute(mediaId, groupId = \"\")" in src
+    assert 'const group = groupId || routeQuery().get("group") || state.imaDocumentsGroup || "";' in route
+    assert "imaDocumentsRoute(" in route
+    assert route.index("group,") < route.index("state.imaDocumentsQuery")
+    assert "function openImaDocument(mediaId, groupId = \"\", replace = false)" in src
+    assert "imaDocumentReaderRoute(id, groupId)" in opener
+
+
+def test_ima_knowledge_subscription_callbacks_require_current_session_owner():
+    """订阅异步响应在成功/失败副作用前都必须仍属于原路由和会话。"""
+    for name, success in (("subscribeKnowledge", "已订阅"), ("unsubscribeKnowledge", "已退订")):
+        body = _fn_body(name)
+        request = body.index("await api(")
+        prefix = body[:request]
+        for capture in (
+            "const routeSeq = routeRenderSeq",
+            "const token = state.token",
+            "const sessionGeneration = imaMountState.sessionGeneration",
+        ):
+            assert capture in prefix
+        owner_guard = "sessionOwnerStillActive(routeSeq, token, sessionGeneration)"
+        success_guard = body.index(owner_guard, request)
+        for side_effect in (
+            f'flash("{success}")',
+            "rememberKnowledgeGroup(",
+            "replaceImaDocumentsRoute(",
+            "refreshKnowledge()",
+        ):
+            assert success_guard < body.index(side_effect, request)
+        catch = body.index("} catch (err)", request)
+        error_guard = body.index(owner_guard, catch)
+        assert error_guard < body.index('flash(err.message ||', catch)
+        assert error_guard < body.index("btn.disabled = false", catch)
 
 
 def test_ima_document_reader_backroute_uses_detail_group_when_url_has_none():
@@ -1909,6 +2678,15 @@ def test_ima_document_reader_backroute_uses_detail_group_when_url_has_none():
     assert reader.index("const item = await api") < reader.index("backRoute = imaDocumentsRoute(item.group_id, query, day, tag)")
     assert reader.index("backRoute = imaDocumentsRoute(item.group_id, query, day, tag)") < reader.index("ima-reader-abstract")
     assert reader.index("backRoute = imaDocumentsRoute(item.group_id, query, day, tag)") < reader.index("loadImaPdf")
+
+
+def test_ima_document_reader_error_actions_use_scoped_backroute():
+    """详情加载失败时，权限和普通错误都必须返回当前列表筛选上下文。"""
+    reader = _fn_body("renderImaDocument")
+    error = reader[reader.index("  } catch (err) {"):]
+    assert error.count('onclick="go(\'${escapeHtml(backRoute)}\')"') == 2
+    assert 'onclick="go(\'knowledge\')"' not in error
+    assert 'onclick="closeKnowledgeReader()"' not in error
 
 
 def test_ima_document_reader_omits_empty_source_metadata():
@@ -1963,9 +2741,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=208"' in html
-    assert 'src="/app.js?v=293"' in html
-    assert 'dav-shell-v162' in sw
+    assert 'href="/style.css?v=209"' in html
+    assert 'src="/app.js?v=294"' in html
+    assert 'dav-shell-v163' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -2124,7 +2902,7 @@ def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
     assert "data.days" in render
     assert "imaDocumentsRoute(group, query, day, tag)" in reader or "imaDocumentsRoute(item.group_id, query, day, tag)" in reader
     assert "closeImaPdf" in src
-    assert "loadImaPdf(mediaId)" in reader
+    assert "loadImaPdf(mediaId, readerSeq)" in reader
     assert "ima-doc-abstract" not in row
     assert "item.abstract" not in row
     assert "ima-doc-row-thumb" not in row
@@ -2412,6 +3190,113 @@ def test_logout_clears_timeline_and_bind_cache():
     assert "pendingBind = null" in clear
     assert "state.timelineFavorite = false" in clear
     assert "state.timelineSecondary = false" in clear
+
+
+def test_logout_clears_ima_account_state_and_invalidates_inflight_requests():
+    """登出必须清掉 IMA 账号状态，并使旧请求无法继续拥有当前会话。"""
+    clear = _fn_body("clearSessionCaches")
+    for statement in (
+        "imaMountState.groups = []",
+        "imaMountState.drafts = new Map()",
+        "imaMountState.folders = new Map()",
+        "imaMountState.parents = new Map()",
+        "imaMountState.folderRequests = new Map()",
+        "imaMountState.discoveryOwner = null",
+        "imaMountState.saveOwner = null",
+        "imaMountState.collectorDraft = null",
+        "imaMountState.collectorConfirmedRevision = \"\"",
+        "imaMountState.collectorConfirmedLiveRevision = -1",
+        "imaMountState.collectorConfirmedMountRevision = -1",
+        "_lastAdminStatsSnapshot = null",
+    ):
+        assert statement in clear
+    assert "imaMountState.generation += 1" in clear
+    assert clear.index("imaMountState.saveOwner = null") < clear.index("imaMountState.generation += 1")
+
+
+def test_ima_old_save_listener_returns_before_observing_new_account_input():
+    """旧保存闭包收到新账号输入时，必须先确认仍拥有 saveOwner。"""
+    save = _fn_body("saveImaCollector")
+    start = save.index("const onDraftChange =")
+    end = save.index("imaMountState.saveOwner = saveOwner", start)
+    listener = save[start:end]
+    assert "if (imaMountState.saveOwner !== saveOwner) return;" in listener
+    assert listener.index("imaMountState.saveOwner !== saveOwner") < listener.index("rememberImaCollectorDraft()")
+
+
+def test_ima_save_response_requires_current_session_and_owner_before_mutation():
+    """登出后旧 PUT 响应不得写入新账号的 IMA 状态或界面。"""
+    save = _fn_body("saveImaCollector")
+    put = save.index('const savedImaStatus = await api("/api/admin/ima-collector"')
+    mutation = save.index("saveOwner.savedImaStatus = savedImaStatus", put)
+    assert "const sessionGeneration = imaMountState.sessionGeneration" in save
+    guard = save.index("sessionGeneration !== imaMountState.sessionGeneration", put)
+    assert guard < mutation
+    assert "imaMountState.saveOwner !== saveOwner" in save[guard:mutation]
+
+
+def test_ima_stats_timer_caches_fresh_snapshot_before_render():
+    """定时 stats 成功后必须先缓存完整快照，再更新可见状态。"""
+    load = _fn_body("loadAdminStats")
+    render_index = load.index("renderStatsData(fresh)")
+    assert "_lastAdminStatsSnapshot = fresh" in load
+    assert load.index("_lastAdminStatsSnapshot = fresh") < render_index
+
+
+def test_ima_stats_timer_owns_each_overlapping_request_and_stop_invalidates_it():
+    """每次定时 tick 都有独立 owner；后发 tick 或停表不得让旧响应落地。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    load = _fn_body("loadAdminStats")
+    stop = _fn_body("stopStatsTimer")
+    assert "let _adminStatsTimerSeq = 0" in src
+    assert "_adminStatsTimerSeq += 1" in stop
+    timer_start = load.index("const timerSeq = _adminRenderSeq")
+    timer = load[timer_start:]
+    assert "const timerRequestSeq = ++_adminStatsTimerSeq" in timer
+    guard = timer.index("if (!routeStillActive(timerSeq)")
+    assert "timerRequestSeq !== _adminStatsTimerSeq" in timer[guard:]
+    assert timer.index("_lastAdminStatsSnapshot = fresh") > guard
+    assert timer.index("renderStatsData(fresh)") > guard
+
+
+def test_ima_pending_save_uses_session_owner_across_stats_reentry_but_logout_invalidates():
+    """stats 重入只改变 mount generation；登出仍须让旧 PUT 失去 session owner。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    clear = _fn_body("clearSessionCaches")
+    save = _fn_body("saveImaCollector")
+    assert "sessionGeneration: 0" in src
+    assert "imaMountState.sessionGeneration += 1" in clear
+    assert "const sessionGeneration = imaMountState.sessionGeneration" in save
+    assert "sessionGeneration" in save[save.index("const saveOwner ="):save.index("imaMountState.saveOwner = saveOwner")]
+    put = save.index('const savedImaStatus = await api("/api/admin/ima-collector"')
+    mutation = save.index("saveOwner.savedImaStatus = savedImaStatus", put)
+    guard = save.index("sessionGeneration !== imaMountState.sessionGeneration", put)
+    assert guard < mutation
+    post_put = save[put:save.index("} catch", put)]
+    assert "generation !== imaMountState.generation" not in post_put
+    assert "loadAdminStats(routeRenderSeq, savedImaStatus)" in post_put
+    assert clear.index("imaMountState.saveOwner = null") < clear.index("imaMountState.sessionGeneration += 1")
+
+
+def test_api_401_only_logs_out_the_session_that_started_the_request():
+    """账号切换后，旧账号的 api/apiBlob 401 不得登出新账号。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    for name in ("api", "apiBlob"):
+        start = src.index(f"async function {name}")
+        brace = src.index("{", src.index(")", start))
+        depth, end = 1, brace + 1
+        while depth:
+            if src[end] == "{": depth += 1
+            elif src[end] == "}": depth -= 1
+            end += 1
+        body = src[brace:end]
+        token = body.index("const requestToken = state.token")
+        fetch = body.index("await fetch(", token)
+        unauthorized = body.index("resp.status === 401", fetch)
+        assert token < fetch < unauthorized
+        assert "state.token === requestToken" in body[unauthorized:]
+        assert body.index("logout()", unauthorized) > body.index("state.token === requestToken", unauthorized)
+        assert body.index("path.startsWith(\"/api/auth/\")", unauthorized) < body.index("logout()", unauthorized)
 
 
 def test_sticky_chrome_is_opaque_canvas_not_glass():
@@ -2790,3 +3675,53 @@ def test_ima_mount_css_stacks_at_800px_and_keeps_touch_targets():
     assert re.search(r"\.ima-mount-layout\s*\{[^}]*grid-template-columns:\s*1fr", narrow)
     assert re.search(r"\.ima-mount-kb-row[^}]*min-height:\s*44px", css)
     assert re.search(r"\.ima-folder-row[^}]*min-height:\s*44px", css)
+
+
+def test_ima_discovery_success_releases_only_its_owned_button():
+    """发现成功安装新 state 后仍应由原请求释放当前按钮，旧请求不能释放它。"""
+    discover = _fn_body("discoverImaGroups")
+    success_start = discover.index('if (result.ok && result.config)')
+    else_start = discover.index("} else {", success_start)
+    success = discover[success_start:else_start]
+    finally_block = discover[discover.index("} finally"):]
+    assert "imaMountState.discoveryOwner = request" in success
+    assert "imaMountState.discoveryBusy = true" in success
+    assert "imaMountState.discoveryOwner !== request" in finally_block
+    assert "generation === imaMountState.generation" not in finally_block
+    assert "const currentButton = $(\"#ima-discover-btn\")" in finally_block
+
+
+def test_ima_collector_save_restores_focus_only_when_original_focus_survives():
+    """保存期间用户切换到其他控件后，旧保存回调不得抢回焦点。"""
+    save = _fn_body("saveImaCollector")
+    assert "const focusElement = document.activeElement" in save
+    assert "const restoreFocus = document.activeElement === focusElement" in save
+    assert "|| document.activeElement === document.body" in save
+    focus_start = save.index("const restoreFocus =")
+    focus_index = save.index("focusTarget?.focus({ preventScroll: true })")
+    assert "if (!focusMoved && restoreFocus)" in save[focus_start:focus_index]
+    assert focus_index > focus_start
+
+
+def test_ima_collector_save_tracks_focus_moves_through_stats_reload():
+    """焦点在 stats reload await 期间移动时，完成回调不得抢焦点。"""
+    save = _fn_body("saveImaCollector")
+    assert "let focusMoved = false" in save
+    assert "const onFocusIn" in save
+    assert "event.target !== document.body" in save
+    assert 'document.addEventListener("focusin", onFocusIn)' in save
+    assert 'document.removeEventListener("focusin", onFocusIn)' in save
+    reload_index = save.index("await loadAdminStats(routeSeq, savedImaStatus)")
+    post_reload_guard = save.index("!focusMoved", reload_index)
+    assert post_reload_guard > reload_index
+    assert "if (!focusMoved" in save[reload_index:]
+
+
+def test_ima_collector_save_decides_focus_after_stats_reload_await():
+    """restoreFocus 判定必须发生在 stats reload 完成后，而非 reload 前。"""
+    save = _fn_body("saveImaCollector")
+    reload_index = save.index("await loadAdminStats(routeSeq, savedImaStatus)")
+    restore_index = save.index("const restoreFocus =")
+    assert restore_index > reload_index
+    assert "const restoreFocus =" not in save[:reload_index]
+    assert "if (!focusMoved && restoreFocus)" in save[restore_index:]
