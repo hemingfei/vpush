@@ -5294,6 +5294,9 @@ async function saveLlm() {
 }
 
 async function savePassword() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   const oldPw = $("#pw-old").value;
   const newPw = $("#pw-new").value;
   const confirmPw = $("#pw-confirm").value;
@@ -5310,9 +5313,11 @@ async function savePassword() {
       method: "POST",
       body: JSON.stringify({ old_password: oldPw, new_password: newPw }),
     });
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     $("#pw-old").value = $("#pw-new").value = $("#pw-confirm").value = "";
     flash("密码已修改");
   } catch (err) {
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash(err.message, "error");
   }
 }
@@ -6371,6 +6376,9 @@ function applyPlazaSources(sources) {
 }
 
 async function setPlazaSourceMode(platform, mode) {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   const current = document.querySelector(`.plaza-src[data-platform="${CSS.escape(platform)}"] .plaza-src-mode.selected`);
   if (current && current.dataset.mode === mode) return;
   try {
@@ -6378,9 +6386,11 @@ async function setPlazaSourceMode(platform, mode) {
       method: "PUT",
       body: JSON.stringify({ visibility: { [platform]: mode } }),
     });
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     applyPlazaSources(data.sources);
     flash("广场显示已更新");
   } catch (err) {
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash(err.message, "error");
   }
 }
@@ -6504,6 +6514,9 @@ function renderStatsData(s) {
 }
 
 async function savePollingConfig() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   const body = {
     interval_seconds: Number($("#pc-interval").value),
     priority_interval_seconds: Number($("#pc-priority").value),
@@ -6536,12 +6549,14 @@ async function savePollingConfig() {
   if (btn) btn.disabled = true;
   try {
     await api("/api/admin/polling-config", { method: "PUT", body: JSON.stringify(body) });
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     // 标准操作反馈 toast；不重建页面（loadAdminStats 会整页重建并跳回监控总览）
     flash("抓取设置已保存，即时生效");
   } catch (err) {
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash(err.message, "error");
   } finally {
-    if (btn) btn.disabled = false;
+    if (btn && document.body.contains(btn)) btn.disabled = false;
   }
 }
 
@@ -6553,14 +6568,19 @@ function fmtCacheBytes(bytes) {
 }
 
 async function purgeZsxqCache() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   try {
     const r = await api("/api/admin/zsxq-cache/purge", { method: "POST" });
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     const el = $("#zq-cache-stat");
     if (el) {
       el.textContent = `附件缓存 ${fmtCacheBytes(r.bytes)} / ${r.files || 0} 个文件`;
     }
     flash(r.deleted ? `已清理 ${r.deleted} 个未引用附件` : "没有可清理的附件");
   } catch (err) {
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash(err.message, "error");
   }
 }
@@ -6908,14 +6928,21 @@ let _cookieClearPending = false;
 async function clearSavedCookie(kind, label) {
   if (_cookieClearPending) return;
   if (!confirm(`清除「${label}」Cookie？清除后该数据源会停止抓取，直到重新保存。`)) return;
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   _cookieClearPending = true;
   try {
     await api(`/api/admin/cookies/${kind}`, { method: "DELETE" });
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash(`已清除「${label}」Cookie`);
     history.replaceState(null, "", "/admin/stats?tab=cookies");
-    await loadAdminStats();
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    await loadAdminStats(routeSeq);
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     focusCookieField(kind);
   } catch (err) {
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash(err.message, "error");
   } finally {
     _cookieClearPending = false;
@@ -6923,6 +6950,9 @@ async function clearSavedCookie(kind, label) {
 }
 
 async function saveXueqiuCookie() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   const cookie = $("#xq-cookie").value.trim();
   if (!cookie) {
     flash("请先粘贴雪球 Cookie", "error");
@@ -6933,16 +6963,23 @@ async function saveXueqiuCookie() {
       method: "POST",
       body: JSON.stringify({ cookie }),
     });
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash("雪球 Cookie 已保存，即时生效");
     history.replaceState(null, "", "/admin/stats?tab=cookies");
-    await loadAdminStats();
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    await loadAdminStats(routeSeq);
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     focusCookieField("xueqiu");
   } catch (err) {
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash(err.message, "error");
   }
 }
 
 async function saveZsxqCookie() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
   const cookie = $("#zq-cookie").value.trim();
   if (!cookie) {
     flash("请先粘贴知识星球 Cookie", "error");
@@ -6953,11 +6990,15 @@ async function saveZsxqCookie() {
       method: "POST",
       body: JSON.stringify({ cookie }),
     });
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash("知识星球 Cookie 已保存，即时生效");
     history.replaceState(null, "", "/admin/stats?tab=cookies");
-    await loadAdminStats();
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    await loadAdminStats(routeSeq);
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     focusCookieField("zsxq");
   } catch (err) {
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash(err.message, "error");
   }
 }
@@ -10036,6 +10077,11 @@ const SPA_PREFIXES = new Set([
 function routeStillActive(seq) {
   // 令牌必须是整数且等于当前路由序号；局部刷新必须在发起请求前捕获 routeRenderSeq 并回传
   return Number.isInteger(seq) && seq === routeRenderSeq;
+}
+
+function sessionOwnerStillActive(routeSeq, token, sessionGeneration) {
+  return routeStillActive(routeSeq) && token === state.token
+    && sessionGeneration === imaMountState.sessionGeneration;
 }
 
 function normalizeRoute(path) {

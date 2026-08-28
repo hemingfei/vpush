@@ -1037,7 +1037,7 @@ def test_cookie_clear_is_confirmed_delete_and_hidden_when_unset():
     assert "/api/admin/cookies/" in clear
     assert "flash(" in clear
     assert "alert(" not in clear
-    assert "loadAdminStats()" in clear
+    assert "loadAdminStats(routeSeq)" in clear
     assert "_cookieClearPending" in clear
     assert "focusCookieField(" in clear
     assert 'for="xq-cookie"' in render
@@ -1058,7 +1058,12 @@ def test_cookie_save_restores_focus_after_rebuild():
     assert "ima-cookie" in focus
     assert "zq-cookie" in focus
     assert ".focus()" in focus
-    for name in ("saveXueqiuCookie", "saveTwitterCookie", "saveZsxqCookie", "saveImaCredentials"):
+    for name in ("saveXueqiuCookie", "saveZsxqCookie"):
+        body = _fn_body(name)
+        assert "loadAdminStats(routeSeq)" in body
+        assert "focusCookieField(" in body
+        assert body.index("loadAdminStats(routeSeq)") < body.index("focusCookieField(")
+    for name in ("saveTwitterCookie", "saveImaCredentials"):
         body = _fn_body(name)
         assert "loadAdminStats()" in body
         assert "focusCookieField(" in body
@@ -1423,6 +1428,52 @@ def test_admin_credential_saves_require_same_route_token_and_session_before_side
         assert body.index("routeStillActive(routeSeq)", catch) < body.index("flash(", catch)
         reload = body.index("await loadAdminStats()", post)
         assert body.index("routeStillActive(routeSeq)", reload) < body.index("focusCookieField", reload)
+
+
+def test_admin_target_callbacks_require_route_token_session_and_owned_side_effects():
+    """剩余设置/后台异步回调必须只影响发起路由和账号。"""
+    for name in (
+        "savePassword", "clearSavedCookie", "saveXueqiuCookie", "saveZsxqCookie",
+        "savePollingConfig", "setPlazaSourceMode", "purgeZsxqCache",
+    ):
+        body = _fn_body(name)
+        await_api = body.index("await api(")
+        for capture in (
+            "const routeSeq = routeRenderSeq",
+            "const token = state.token",
+            "const sessionGeneration = imaMountState.sessionGeneration",
+        ):
+            assert capture in body[:await_api], f"{name} 必须在请求前捕获会话 owner"
+        guard = body.index("sessionOwnerStillActive(routeSeq, token, sessionGeneration)", await_api)
+        assert "token" in body[guard:guard + 100], f"{name} 缺少 token 守卫"
+        assert "sessionGeneration" in body[guard:guard + 140], f"{name} 缺少 session 守卫"
+        catch = body.index("} catch", await_api)
+        catch_guard = body.index("sessionOwnerStillActive(routeSeq, token, sessionGeneration)", catch)
+        assert body.index("flash(", catch_guard) > catch_guard, f"{name} 错误提示未受守卫保护"
+
+    for name in ("clearSavedCookie", "saveXueqiuCookie", "saveZsxqCookie"):
+        body = _fn_body(name)
+        reload = body.index("await loadAdminStats(")
+        assert "await loadAdminStats(routeSeq)" in body
+        reload_guard = body.index("sessionOwnerStillActive(routeSeq, token, sessionGeneration)", reload)
+        assert reload_guard < body.index("focusCookieField", reload)
+
+    polling = _fn_body("savePollingConfig")
+    assert "if (btn && document.body.contains(btn)) btn.disabled = false" in polling
+
+
+def test_ima_save_listener_checks_owner_before_ima_field_ids():
+    """IMA 临时监听器先确认保存 owner，再读取事件字段。"""
+    save = _fn_body("saveImaCollector")
+    start = save.index("const onDraftChange =")
+    end = save.index("imaMountState.saveOwner = saveOwner", start)
+    listener = save[start:end]
+    owner = listener.index("imaMountState.saveOwner !== saveOwner")
+    fields = listener.index("ima-pure-uid")
+    snapshot = listener.index("rememberImaCollectorDraft()")
+    assert owner < fields < snapshot
+    assert "event.target?.id" in listener
+    assert "imaMountState.saveOwner === saveOwner" in listener
 
 
 def test_ima_config_blocks_use_shared_layout_and_no_inline_spacing():
