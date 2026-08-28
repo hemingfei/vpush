@@ -8,11 +8,12 @@ function platformShortLabel(p) {
 const PLATFORM_ICONS = {
   "": `<svg class="pt-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg>`,
   xueqiu: `<svg class="pt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><circle cx="9.3" cy="13.7" r="7.2"/><circle cx="14.7" cy="10.3" r="7.2"/></svg>`,
-  combination: `<svg class="pt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>`,
+  combination: `<svg class="pt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>`,
   weibo: `<svg class="pt-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10.098 20.323c-3.977.391-7.414-1.406-7.672-4.02-.259-2.609 2.759-5.047 6.74-5.441 3.979-.394 7.413 1.404 7.671 4.018.259 2.6-2.759 5.049-6.737 5.439l-.002.004zM9.05 17.219c-.384.616-1.208.884-1.829.602-.612-.279-.793-.991-.406-1.593.379-.595 1.176-.861 1.793-.601.622.263.82.972.442 1.592zm1.27-1.627c-.141.237-.449.353-.689.253-.236-.09-.313-.361-.177-.586.138-.227.436-.346.672-.24.239.09.315.36.18.601l.014-.028zm.176-2.719c-1.893-.493-4.033.45-4.857 2.118-.836 1.704-.026 3.591 1.886 4.21 1.983.64 4.318-.341 5.132-2.179.8-1.793-.201-3.642-2.161-4.149zm7.563-1.224c-.346-.105-.57-.18-.405-.615.375-.977.42-1.804 0-2.404-.781-1.112-2.915-1.053-5.364-.03 0 0-.766.331-.571-.271.376-1.217.315-2.224-.27-2.809-1.338-1.337-4.869.045-7.888 3.08C1.309 10.87 0 13.273 0 15.348c0 3.981 5.099 6.395 10.086 6.395 6.536 0 10.888-3.801 10.888-6.82 0-1.822-1.547-2.854-2.915-3.284v.01zm1.908-5.092c-.766-.856-1.908-1.187-2.96-.962-.436.09-.706.511-.616.932.09.42.511.691.932.602.511-.105 1.067.044 1.442.465.376.421.466.977.316 1.473-.136.406.089.856.51.992.405.119.857-.105.992-.512.33-1.021.12-2.178-.646-3.035l.03.045zm2.418-2.195c-1.576-1.757-3.905-2.419-6.054-1.968-.496.104-.812.587-.706 1.081.104.496.586.813 1.082.707 1.532-.331 3.185.15 4.296 1.383 1.112 1.246 1.429 2.943.947 4.416-.165.48.106 1.007.586 1.157.479.165.991-.104 1.157-.586.675-2.088.241-4.478-1.338-6.235l.03.045z"/></svg>`,
   twitter: `<svg class="pt-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M14.234 10.162 22.977 0h-2.072l-7.591 8.824L7.251 0H.258l9.168 13.343L.258 24H2.33l8.016-9.318L16.749 24h6.993zm-2.837 3.299-.929-1.329L3.076 1.56h3.182l5.965 8.532.929 1.329 7.754 11.09h-3.182z"/></svg>`,
   zsxq: `<svg class="pt-icon" viewBox="0 0 26 26" fill="currentColor" fill-rule="evenodd" aria-hidden="true"><path d="M13.012 0c.874 0 1.582.708 1.582 1.581 0 .873-.708 1.58-1.582 1.58C7.582 3.161 3.164 7.575 3.164 13c0 5.425 4.418 9.839 9.848 9.839 5.43 0 9.848-4.414 9.848-9.839 0-.873.708-1.58 1.582-1.58S26 12.127 26 13c0 7.168-5.837 13-13 13S0 20.168 0 13 5.837 0 13.012 0zm7.989 2.015a3.003 3.003 0 1 1 0 6.006 3.003 3.003 0 0 1 0-6.006z"/></svg>`,
   mx: `<svg class="pt-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 12l7-7 2 2 3-3 6 6-6 6-3-3-2 2-7-7z"/></svg>`,
+  system: `<svg class="pt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></svg>`,
 };
 const CHANNEL_ICONS = {
   telegram: `<svg class="ch-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>`,
@@ -26,7 +27,7 @@ const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
 const APP_VERSION = "1.12.83";
 const TL_SOURCE_KEY = "timelineSource";
 const KB_LAST_GROUP_KEY = "kb-last-group";
-const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq", "mx"];
+const PLATFORM_TABS = ["", "system", "xueqiu", "combination", "weibo", "twitter", "zsxq", "mx"];
 const STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "mx", "proxies"];
 const TL_PLATFORMS = PLATFORM_TABS.map((p) => [p, p ? PLATFORM_LABELS[p] : "全部"]);
 const STAR_SVG = `<svg class="star-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.95 5.98 6.6.96-4.78 4.66 1.13 6.58L12 17.6l-5.9 3.1 1.13-6.58L2.45 9.44l6.6-.96L12 2.5z"/></svg>`;
@@ -7260,13 +7261,14 @@ async function loadAdminKols(opts) {
       <textarea id="ad-batch-lines" class="form-control ak-add-lines" rows="6" placeholder="https://xueqiu.com/u/12345&#10;段永平 12345&#10;https://weibo.com/u/1642591402&#10;https://x.com/elonmusk&#10;https://xueqiu.com/P/ZH123456" aria-label="大V链接或UID，每行一个"></textarea>
       <div class="toolbar ak-add-bar">
         <label class="muted" for="ad-batch-platform">默认平台（未识别的行）</label>
-        <select id="ad-batch-platform" class="form-control" aria-label="默认平台（未识别的行）" onchange="adminPlatformDefaultCat(this)">
-          <option value="xueqiu">雪球</option>
-          <option value="combination">雪球组合</option>
-          <option value="weibo">微博</option>
-          <option value="twitter">X</option>
-          <option value="zsxq">知识星球</option>
-        </select>
+	        <select id="ad-batch-platform" class="form-control" aria-label="默认平台（未识别的行）" onchange="adminPlatformDefaultCat(this)">
+	          <option value="system">系统（用于 AI 分析）</option>
+	          <option value="xueqiu">雪球</option>
+	          <option value="combination">雪球组合</option>
+	          <option value="weibo">微博</option>
+	          <option value="twitter">X</option>
+	          <option value="zsxq">知识星球</option>
+	        </select>
         <select id="ad-batch-category" class="form-control" aria-label="分类"><option value="">未分类</option>${catOptions}</select>
         <button class="btn-normal" id="ad-batch-btn" onclick="adminBatchAddKols()">添加</button>
         <div id="ad-batch-result" class="muted ak-add-result"></div>
@@ -10036,22 +10038,28 @@ window.addEventListener("hashchange", () => {
 
 // ---------- AI 分析任务管理 ----------
 async function loadAdminAiAnalysis() {
-  let tasks, defaultPrompt;
-  try {
-    [tasks, defaultPrompt] = await Promise.all([
-      api("/api/admin/ai-tasks"),
-      api("/api/admin/ai-tasks/default-prompt").catch(() => "")
-    ]);
-  } catch (err) {
-    if (!routeStillActive(_adminRenderSeq)) return;
-    $("#admin-body").innerHTML = emptyState("加载失败: " + err.message);
-    return;
-  }
-  // API返回的是 { tasks: [...] } 对象，提取数组
-  state.aiTasks = tasks && tasks.tasks ? tasks.tasks : [];
-  state.aiDefaultPrompt = defaultPrompt && defaultPrompt.prompt ? defaultPrompt.prompt : "";
-  renderAdminAiAnalysis();
-}
+	  let tasks, defaultPrompt, kols;
+	  try {
+	    [tasks, defaultPrompt, kols] = await Promise.all([
+	      api("/api/admin/ai-tasks"),
+	      api("/api/admin/ai-tasks/default-prompt").catch(() => ""),
+	      api("/api/kols")
+	    ]);
+	  } catch (err) {
+	    if (!routeStillActive(_adminRenderSeq)) return;
+	    $("#admin-body").innerHTML = emptyState("加载失败: " + err.message);
+	    return;
+	  }
+	  // API返回的是 { tasks: [...] } 对象，提取数组
+	  state.aiTasks = tasks && tasks.tasks ? tasks.tasks : [];
+	  state.aiDefaultPrompt = defaultPrompt && defaultPrompt.prompt ? defaultPrompt.prompt : "";
+	  // 创建 KOL ID 到名称的映射
+	  state.kolIdToName = {};
+	  for (const k of kols) {
+	    state.kolIdToName[k.id] = k.name;
+	  }
+	  renderAdminAiAnalysis();
+	}
 
 function renderAdminAiAnalysis() {
   if (!routeStillActive(_adminRenderSeq)) return;
@@ -10097,11 +10105,16 @@ function renderAdminAiAnalysis() {
                   </div>
                 </div>
                 
-                <div class="ai-task-details">
-                  <div class="ai-task-detail-item">
-                    <div class="ai-task-detail-label">目标 KOL</div>
-                    <div class="ai-task-detail-value">ID: ${task.target_kol_id}</div>
-                  </div>
+	                <div class="ai-task-details">
+	                  <div class="ai-task-detail-item">
+	                    <div class="ai-task-detail-label">目标 KOL</div>
+	                    <div class="ai-task-detail-value">
+	                      ${(() => {
+	                        const kolName = state.kolIdToName ? state.kolIdToName[task.target_kol_id] : null;
+	                        return kolName ? `${escapeHtml(kolName)} (ID: ${task.target_kol_id})` : `ID: ${task.target_kol_id}`;
+	                      })()}
+	                    </div>
+	                  </div>
                   
                   <div class="ai-task-detail-item">
                     <div class="ai-task-detail-label">调度设置</div>
@@ -10192,9 +10205,9 @@ function renderAdminAiAnalysis() {
   `;
 }
 
-function openAiTaskModal(taskId = null) {
-  const task = taskId ? (state.aiTasks || []).find(t => t.id === taskId) : null;
-  const isEdit = !!task;
+async function openAiTaskModal(taskId = null) {
+	  const task = taskId ? (state.aiTasks || []).find(t => t.id === taskId) : null;
+	  const isEdit = !!task;
   
   // 顺序：周一到周日，对应的数字值是 1,2,3,4,5,6,0
   const daysOrder = [
@@ -10216,54 +10229,86 @@ function openAiTaskModal(taskId = null) {
     `;
   }).join('');
 
-  // selected_kol_ids 在数据库中是字符串，需要先解析
-  const selectedKols = task ? (
-    typeof task.selected_kol_ids === 'string' 
-      ? task.selected_kol_ids 
-      : (task.selected_kol_ids || []).join(', ')
-  ) : '';
+	// selected_kol_ids 在数据库中是字符串，需要先解析
+	const selectedKols = task ? (
+	  typeof task.selected_kol_ids === 'string' 
+	    ? task.selected_kol_ids 
+	    : (task.selected_kol_ids || []).join(', ')
+	) : '';
+	
+		// 加载 KOL 列表用于选择
+		let kolSelectHtml = '<option value="">加载中...</option>';
+		try {
+		  const kols = await api("/api/kols");
+		  const groups = {};
+		  for (const k of kols) {
+		    const g = PLATFORM_LABELS[k.platform] || k.platform || "其他";
+		    (groups[g] = groups[g] || []).push(k);
+		  }
+		  // 排序：系统平台排在最前面，其他按字母顺序
+		  const sortedGroupEntries = Object.entries(groups).sort(([a], [b]) => {
+		    if (a === "系统") return -1;
+		    if (b === "系统") return 1;
+		    return a.localeCompare(b, "zh-CN");
+		  });
+		  kolSelectHtml = sortedGroupEntries
+		    .map(([g, list]) => `<optgroup label="${escapeHtml(g)}">${list.map((k) => {
+		      const isSystem = k.platform === 'system';
+		      const label = isSystem ? `⭐ ${k.name}` : k.name;
+		      return `<option value="${k.id}" ${task && task.target_kol_id == k.id ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+		    }).join("")}</optgroup>`)
+		    .join("");
+		} catch {
+		  kolSelectHtml = '<option value="">加载失败，请手动输入 KOL ID</option>';
+		}
 
-  const mask = document.createElement("div");
-  mask.className = "modal-mask";
-  mask.innerHTML = `
-    <div class="ai-task-modal modal-card" role="dialog" aria-modal="true" aria-labelledby="ai-task-title">
-      <div class="ai-modal-header">
-        <h3 id="ai-task-title">${isEdit ? '编辑 AI 分析任务' : '新建 AI 分析任务'}</h3>
-        <button class="ai-modal-close" onclick="closeAdminModal()" aria-label="关闭">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18"/>
-            <line x1="6" y1="6" x2="18" y2="18"/>
-          </svg>
-        </button>
-      </div>
-      
-      <div class="ai-modal-body">
-        <div class="ai-form-section">
-          <div class="ai-form-section-title">基本信息</div>
-          
-          <div class="ai-form-group">
-            <label class="ai-form-label">
-              <span>任务名称 <span class="required">*</span></span>
-              <input id="ai-task-name" class="ai-form-input" type="text" value="${task ? escapeHtml(task.name) : ''}" placeholder="例如：每日市场热点分析">
-            </label>
-            
-            <label class="ai-form-label">
-              <span>任务描述</span>
-              <textarea id="ai-task-desc" class="ai-form-textarea" rows="2" placeholder="简单描述这个任务的用途">${task ? escapeHtml(task.description || '') : ''}</textarea>
-            </label>
-          </div>
-        </div>
+	const mask = document.createElement("div");
+	mask.className = "modal-mask";
+	mask.innerHTML = `
+	    <div class="ai-task-modal modal-card" role="dialog" aria-modal="true" aria-labelledby="ai-task-title">
+	      <div class="ai-modal-header">
+	        <h3 id="ai-task-title">${isEdit ? '编辑 AI 分析任务' : '新建 AI 分析任务'}</h3>
+	        <button class="ai-modal-close" onclick="closeAdminModal()" aria-label="关闭">
+	          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+	            <line x1="18" y1="6" x2="6" y2="18"/>
+	            <line x1="6" y1="6" x2="18" y2="18"/>
+	          </svg>
+	        </button>
+	      </div>
+	      
+	      <div class="ai-modal-body">
+	        <div class="ai-form-section">
+	          <div class="ai-form-section-title">基本信息</div>
+	          
+	          <div class="ai-form-group">
+	            <label class="ai-form-label">
+	              <span>任务名称 <span class="required">*</span></span>
+	              <input id="ai-task-name" class="ai-form-input" type="text" value="${task ? escapeHtml(task.name) : ''}" placeholder="例如：每日市场热点分析">
+	            </label>
+	            
+	            <label class="ai-form-label">
+	              <span>任务描述</span>
+	              <textarea id="ai-task-desc" class="ai-form-textarea" rows="2" placeholder="简单描述这个任务的用途">${task ? escapeHtml(task.description || '') : ''}</textarea>
+	            </label>
+	          </div>
+	        </div>
 
-        <div class="ai-form-section">
-          <div class="ai-form-section-title">目标设置</div>
-          
-          <div class="ai-form-group">
-            <label class="ai-form-label">
-              <span>目标 KOL ID <span class="required">*</span></span>
-              <input id="ai-task-target-kol" class="ai-form-input" type="number" value="${task ? task.target_kol_id : ''}" placeholder="分析结果将发布到此 KOL">
-            </label>
-          </div>
-        </div>
+	        <div class="ai-form-section">
+	          <div class="ai-form-section-title">目标设置</div>
+	          
+	          <div class="ai-form-group">
+	            <label class="ai-form-label">
+	              <span>目标 KOL <span class="required">*</span></span>
+	              <select id="ai-task-target-kol" class="ai-form-select">
+	                <option value="">请选择 KOL（分析结果将发布到此 KOL）</option>
+	                ${kolSelectHtml}
+	              </select>
+	            </label>
+	            <div class="ai-form-hint">
+	              ⭐ 标记的是专门用于 AI 分析的系统 KOL，推荐选择
+	            </div>
+	          </div>
+	        </div>
 
         <div class="ai-form-section">
           <div class="ai-form-section-title">时间范围</div>

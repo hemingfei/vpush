@@ -136,6 +136,28 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
             db.set_setting(key, str(value))
     db.merge_default_tag_vocabulary()
     db.merge_default_stock_aliases()
+    
+    # 创建或更新系统 KOL（专门用于 AI 分析报告输出）
+    system_kol = db.get_kol_by_external("system", "ai_analysis_output")
+    if system_kol is None:
+        try:
+            system_kol_id = db.add_kol(
+                platform="system",
+                name="AI 分析报告",
+                external_id="ai_analysis_output",
+                category_id=None,
+                priority=False,
+                secondary=False,
+                original_only=False,
+            )
+            logger.info(f"已创建系统 KOL：AI 分析报告 (ID={system_kol_id})")
+            # 更新 KOL 为启用状态
+            db.update_kol(system_kol_id, enabled=True, silent=False)
+        except Exception as e:
+            logger.warning(f"创建系统 KOL 失败：{e}")
+    else:
+        logger.info(f"系统 KOL 已存在：AI 分析报告 (ID={system_kol['id']})")
+    
     secret = auth.get_or_create_secret(db, config.web.token_secret)
 
     if config.web.admin_password:

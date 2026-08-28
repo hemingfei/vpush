@@ -22,6 +22,7 @@ PLATFORM_LABELS = {
     "ima": "ima",
     "zsxq": "知识星球",
     "mx": "MX",
+    "system": "系统",
 }
 
 

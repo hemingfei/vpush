@@ -556,7 +556,7 @@ CREATE INDEX IF NOT EXISTS idx_ai_logs_task ON ai_analysis_logs(task_id);
 CREATE INDEX IF NOT EXISTS idx_ai_logs_status ON ai_analysis_logs(status);
 """
 
-ALLOWED_PLATFORMS = {"xueqiu", "combination", "weibo", "twitter", "ima", "zsxq", "mx"}
+ALLOWED_PLATFORMS = {"xueqiu", "combination", "weibo", "twitter", "ima", "zsxq", "mx", "system"}
 
 
 class DB:

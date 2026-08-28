@@ -243,6 +243,11 @@ def _normalize_kol_request_input(platform: str, raw: str) -> tuple[str, str | No
         if re.fullmatch(r"@?[A-Za-z0-9_]{1,15}", text):
             return text.lstrip("@"), None
         return "", "无法识别的 X 用户名，请使用 x.com/<用户名> 链接或 @用户名"
+    if platform == "system":
+        # 系统平台：接受任意非空字符串作为 external_id
+        if not text:
+            return "", "请输入系统 KOL 的外部 ID"
+        return text, None
     return "", f"不支持的平台: {platform}"
 
 
@@ -274,10 +279,17 @@ def _parse_batch_kol_line(line: str, default_platform: str) -> tuple[str, str, s
             continue
         nickname = f"{nickname} {token}".strip()
     if not external_id:
+        if default_platform == "system":
+            # 系统平台：如果没有检测到 external_id，把整个 line（或者 nickname）作为 external_id
+            if nickname:
+                return default_platform, nickname, "", None
+            else:
+                return default_platform, "", nickname, "未识别到链接或ID，请至少输入一个 ID 或昵称"
         return default_platform, "", nickname, parse_error or "未识别到链接或ID"
     platform = platform or default_platform
-    # 非 x.com/twitter.com 的 http(s) 地址原样保留（历史导入）；其余走归一化
-    # （X 主页链接存 screen name，系统页/推文链接报错）
+    # 对于系统平台，或者非 x.com/twitter.com 的 http(s) 地址原样保留；其余走归一化
+    if platform == "system":
+        return platform, external_id, nickname, None
     if external_id.startswith(("http://", "https://")) and not re.search(
         r"(?:x|twitter)\.com", external_id
     ):
@@ -3859,29 +3871,32 @@ def create_api_router(
                 if err:
                     raise HTTPException(status_code=400, detail=err)
                 external_id = ext
-        if not external_id:
-            raise HTTPException(status_code=400, detail="昵称与外部ID不能为空")
-        if not name:
-            if body.platform == "combination":
-                # 没填昵称时自动查组合名称（失败退回占位名）
-                cookie = db.get_setting(XUEQIU_COOKIE_KEY) or os.environ.get("XUEQIU_COOKIE", "")
-                profile = resolve_combination_profile(external_id, cookie, db=db)
-                name = profile.get("name") or f"combination_{external_id}"
-            elif body.platform == "weibo":
-                # 没填昵称时自动查微博昵称（公开接口，失败退回占位名）
-                profile = resolve_weibo_profile(
-                    external_id,
-                    db.get_setting(WEIBO_COOKIE_KEY) or os.environ.get("WEIBO_COOKIE", ""),
-                    db=db,
-                )
-                name = profile.get("name") or f"weibo_{external_id}"
-            elif body.platform == "twitter":
-                # 没填昵称时自动查 X 显示名（需 TWITTER_COOKIE，失败退回占位名）
-                profile = resolve_x_profile(external_id, db=db)
-                name = profile.get("name") or f"twitter_{external_id}"
-            elif body.platform == "zsxq":
-                profile = resolve_zsxq_profile(external_id, db=db)
-                name = profile.get("name") or f"zsxq_{external_id}"
+            if not external_id:
+                raise HTTPException(status_code=400, detail="昵称与外部ID不能为空")
+            if not name:
+                if body.platform == "system":
+                    # 系统平台：使用 external_id 作为默认名称
+                    name = external_id
+                elif body.platform == "combination":
+                    # 没填昵称时自动查组合名称（失败退回占位名）
+                    cookie = db.get_setting(XUEQIU_COOKIE_KEY) or os.environ.get("XUEQIU_COOKIE", "")
+                    profile = resolve_combination_profile(external_id, cookie, db=db)
+                    name = profile.get("name") or f"combination_{external_id}"
+                elif body.platform == "weibo":
+                    # 没填昵称时自动查微博昵称（公开接口，失败退回占位名）
+                    profile = resolve_weibo_profile(
+                        external_id,
+                        db.get_setting(WEIBO_COOKIE_KEY) or os.environ.get("WEIBO_COOKIE", ""),
+                        db=db,
+                    )
+                    name = profile.get("name") or f"weibo_{external_id}"
+                elif body.platform == "twitter":
+                    # 没填昵称时自动查 X 显示名（需 TWITTER_COOKIE，失败退回占位名）
+                    profile = resolve_x_profile(external_id, db=db)
+                    name = profile.get("name") or f"twitter_{external_id}"
+                elif body.platform == "zsxq":
+                    profile = resolve_zsxq_profile(external_id, db=db)
+                    name = profile.get("name") or f"zsxq_{external_id}"
         if body.category_id is not None and db.get_category(body.category_id) is None:
             raise HTTPException(status_code=400, detail="分类不存在")
         kid = db.add_kol(
@@ -3939,7 +3954,10 @@ def create_api_router(
                 continue
             name = nickname or f"{platform}_{external_id}"
             avatar_url = ""
-            if not nickname and platform == "xueqiu" and external_id.isdigit():
+            if platform == "system":
+                # 系统平台：不尝试拉取头像和昵称
+                pass
+            elif not nickname and platform == "xueqiu" and external_id.isdigit():
                 # 没填昵称时自动查雪球昵称与头像（失败则退回 xueqiu_uid）
                 cookie = db.get_setting(XUEQIU_COOKIE_KEY) or os.environ.get("XUEQIU_COOKIE", "")
                 profile = resolve_profile(external_id, cookie, db=db)
