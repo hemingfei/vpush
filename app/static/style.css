@@ -2879,6 +2879,8 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .ima-report-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 0 16px 12px; }
 .ima-report-searchbox { display: flex; align-items: center; gap: 8px; min-height: 42px; padding: 0 12px; border: var(--border-strong); border-radius: var(--radius-control); background: var(--color-surface); }
 .ima-report-searchbox:focus-within { border-color: var(--color-accent-text); box-shadow: var(--shadow-focus-ring); }
+.ima-report-searchbox svg,
+.ima-report-searchbox .search-ic { width: 16px; height: 16px; flex: 0 0 auto; color: var(--color-text-muted); }
 .ima-report-searchbox input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--color-text); font-size: var(--text-body); }
 .ima-report-filters { display: flex; align-items: center; gap: 8px; }
 .ima-report-source select,

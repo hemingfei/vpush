@@ -1618,7 +1618,7 @@ async function renderImaDocument(seq, mediaId) {
     const abstractHtml = abstractText
       ? `<details open class="ima-reader-abstract"><summary>摘要</summary><p id="ima-reader-abstract">${escapeHtml(abstractText)}</p></details>`
       : "";
-    const backLabel = _imaListSnapshot ? `返回${_imaListSnapshot.items.length}${_imaListSnapshot.hasMore ? "+" : ""}条结果` : "返回研报列表";
+    const backLabel = _imaListSnapshot ? `${_imaListSnapshot.items.length}${_imaListSnapshot.hasMore ? "+" : ""}条结果` : "研报列表";
     const download = item.has_pdf
       ? `<button type="button" class="btn-normal ima-reader-download" onclick="downloadImaPdf('${escapeHtml(mediaId)}')">${DOWNLOAD_ICON}<span>下载 PDF</span></button>`
       : "";

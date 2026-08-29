@@ -2390,6 +2390,7 @@ def test_ima_report_first_layout_is_flat_dense_and_full_width():
     assert ".ima-report-title" in css
     assert ".ima-report-source" in css
     assert "grid-template-columns: 64px minmax(0, 1fr) 132px" in css
+    assert re.search(r"\.ima-report-searchbox svg[\s\S]{0,80}width:\s*16px", css)
     assert re.search(r"\.ima-doc-row\s*\{[^}]*min-height:\s*50px", css)
     assert "box-shadow: none" in css
     assert not re.search(r"\.kb-desk\s*\{", css)
@@ -3132,9 +3133,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=223"' in html
-    assert 'src="/app.js?v=309"' in html
-    assert 'dav-shell-v180' in sw
+    assert 'href="/style.css?v=224"' in html
+    assert 'src="/app.js?v=310"' in html
+    assert 'dav-shell-v181' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
