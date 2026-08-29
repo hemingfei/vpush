@@ -27,7 +27,7 @@ from .fetchers.ima_inspect import item_cover, item_text
 from .ima_storage import ImaStorageStatus
 
 logger = logging.getLogger(__name__)
-IMA_DOWNLOAD_WORKERS = 4
+IMA_DOWNLOAD_WORKERS = 8
 
 BASE = os.environ.get("IMA_BASE", "https://ima.qq.com/cgi-bin")
 GUID = os.environ.get("IMA_GUID", "7497986728819336")
