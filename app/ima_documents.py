@@ -1106,6 +1106,41 @@ class ImaPureClient:
         if not url:
             raise RuntimeError("IMA signed URL missing")
         headers = {str(k): str(v) for k, v in (info.get("headers") or {}).items()}
+        pull_url = os.environ.get("IMA_PULL_URL", "").strip()
+        if pull_url:
+            archive_root_text = os.environ.get("IMA_ARCHIVE_ROOT", "").strip()
+            if not archive_root_text:
+                raise RuntimeError("IMA_ARCHIVE_ROOT required when IMA_PULL_URL is set")
+            archive_root = Path(archive_root_text).expanduser()
+            dest = str(destination.resolve().relative_to(archive_root.resolve()))
+            payload = json.dumps(
+                {
+                    "dest": dest,
+                    "url": str(url),
+                    "headers": headers,
+                    "expected_size": int(expected_size or 0),
+                },
+                ensure_ascii=False,
+            ).encode()
+            request = urllib.request.Request(
+                pull_url,
+                data=payload,
+                method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": "Bearer " + os.environ.get("IMA_PULL_TOKEN", "").strip(),
+                },
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=120) as response:
+                    body = json.loads(response.read().decode())
+            except urllib.error.HTTPError as exc:
+                raise RuntimeError(f"IMA PDF HTTP {exc.code}") from exc
+            return {
+                "size": int(body.get("size") or 0),
+                "md5": str(body.get("md5") or ""),
+                "path": str(destination),
+            }
         headers["User-Agent"] = "okhttp/4.12.0"
         destination.parent.mkdir(parents=True, exist_ok=True)
         fd, temp_name = tempfile.mkstemp(

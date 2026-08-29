@@ -8,6 +8,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+import app.ima_documents as ima_documents
 from app.ima_storage import ImaStorageStatus
 from app.ima_documents import (
     IMA_LEGACY_GROUP_ID,
@@ -3029,3 +3030,48 @@ def test_manifest_rejects_folder_tree_node_limit(monkeypatch):
     )
     with pytest.raises(RuntimeError, match="maximum size"):
         client.manifest()
+
+
+def test_download_posts_to_puller_when_url_configured(tmp_path, monkeypatch):
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    seen = {}
+
+    class FakeResponse:
+        def read(self):
+            return json.dumps({"size": 8, "md5": "d" * 32}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(req, timeout=120):
+        seen["url"] = req.full_url
+        seen["auth"] = req.headers.get("Authorization")
+        seen["body"] = json.loads(req.data.decode())
+        return FakeResponse()
+
+    monkeypatch.setenv("IMA_PULL_URL", "http://10.80.0.2:8743/pull")
+    monkeypatch.setenv("IMA_PULL_TOKEN", "tok")
+    monkeypatch.setenv("IMA_ARCHIVE_ROOT", str(archive))
+    monkeypatch.setattr(ima_documents.urllib.request, "urlopen", fake_urlopen)
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    dest = archive / "g" / "a.pdf"
+    result = client.download(
+        {
+            "jump_url_info": {
+                "url": "https://res-skb.ima.qq.com/file.pdf?sign=1",
+                "headers": {"X-IMA-Sign": "sig"},
+            }
+        },
+        dest,
+        expected_size=8,
+    )
+    assert seen["url"] == "http://10.80.0.2:8743/pull"
+    assert seen["auth"] == "Bearer tok"
+    assert seen["body"]["dest"] == "g/a.pdf"
+    assert seen["body"]["headers"]["X-IMA-Sign"] == "sig"
+    assert result["size"] == 8
+    assert result["md5"] == "d" * 32
