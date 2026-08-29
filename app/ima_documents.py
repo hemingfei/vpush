@@ -32,6 +32,7 @@ IMA_DOWNLOAD_WORKERS = 4
 IMA_LIST_WORKERS = 3
 IMA_FOLDER_LIST_MAX_PAGES = 20
 IMA_DOWNLOAD_RETRY_DELAYS = (2, 8)
+IMA_INDEX_VERSION = 1
 
 BASE = os.environ.get("IMA_BASE", "https://ima.qq.com/cgi-bin")
 GUID = os.environ.get("IMA_GUID", "7497986728819336")
@@ -2203,6 +2204,328 @@ class ImaDocumentService:
                 "discovery": discovery,
             }
 
+    def _source_fingerprint(self) -> str:
+        parts = []
+        for path in (self.store.manifest_path, self.store.state_path):
+            try:
+                stat = path.stat()
+                parts.append((stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                parts.append((0, 0))
+        return json.dumps(
+            {"version": IMA_INDEX_VERSION, "files": parts},
+            separators=(",", ":"),
+        )
+
+    def _read_source_json(self, path: Path) -> Any:
+        try:
+            exists = path.is_file()
+        except OSError as exc:
+            raise RuntimeError(f"unreadable IMA source {path.name}") from exc
+        if not exists:
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"unreadable IMA source {path.name}") from exc
+
+    def _load_rebuild_sources(
+        self, groups: tuple[ImaGroupConfig, ...] | None
+    ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+        manifest_value = self._read_source_json(self.store.manifest_path)
+        state_value = self._read_source_json(self.store.state_path)
+        if isinstance(manifest_value, dict) and isinstance(manifest_value.get("files"), list):
+            records = [item for item in manifest_value["files"] if isinstance(item, dict)]
+        elif isinstance(manifest_value, list):
+            records = [item for item in manifest_value if isinstance(item, dict)]
+        else:
+            records = []
+        state = state_value if isinstance(state_value, dict) else {}
+        return self.store._normalize_manifest_records(records, groups), state
+
+    def _index_row(
+        self, record: dict[str, Any], state: dict[str, dict[str, Any]]
+    ) -> dict[str, Any]:
+        media_id = self.store.validate_media_id(str(record.get("media_id") or ""))
+        state_item = self.store._state_item(state, record)
+        group_id = self.store._record_group_id(record)
+        group_name = str(
+            record.get("group_name")
+            or state_item.get("group_name")
+            or self.store._group_metadata.get(group_id, ("", group_id))[0]
+        )
+        name = str(record.get("name") or media_id)
+        day = str(record.get("day") or "unknown").strip() or "unknown"
+        tags = self.store._tags(state_item)
+        abstract = str(record.get("abstract") or "")
+        pdf_path = str(state_item.get("pdf") or "")
+        txt_path = str(state_item.get("txt") or "")
+        return {
+            "group_id": group_id,
+            "media_id": media_id,
+            "day": day,
+            "valid_day": int(day.isdigit() and len(day) == 4),
+            "name": name,
+            "group_name": group_name,
+            "name_folded": name.casefold(),
+            "metadata_folded": f"{group_name} {' '.join(tags)}".casefold(),
+            "abstract": abstract,
+            "abstract_folded": abstract.casefold(),
+            "abstract_zh": str(state_item.get("abstract_zh") or ""),
+            "abstract_src_hash": str(state_item.get("abstract_src_hash") or ""),
+            "cover_url": str(record.get("cover_url") or ""),
+            "tags": tags,
+            "size": self.store._file_size(state_item, record, None),
+            "chars": int(state_item.get("chars") or 0),
+            "has_pdf": int(bool(pdf_path)),
+            "has_txt": int(bool(txt_path)),
+            "pdf_path": pdf_path,
+            "txt_path": txt_path,
+            "downloaded_at": str(state_item.get("downloaded_at") or ""),
+        }
+
+    def read_index_status(self) -> dict[str, Any]:
+        getter = getattr(self.db, "ima_document_index_meta", None)
+        if not callable(getter):
+            return {
+                "status": "fallback",
+                "documents": 0,
+                "rebuilt_at": "",
+                "duration_ms": 0,
+                "error": "",
+            }
+        meta = getter()
+        return {
+            "status": str(meta.get("status") or "fallback"),
+            "documents": int(meta.get("document_count") or 0),
+            "rebuilt_at": str(meta.get("rebuilt_at") or ""),
+            "duration_ms": int(meta.get("duration_ms") or 0),
+            "error": str(meta.get("error") or ""),
+        }
+
+    def _index_usable(self) -> bool:
+        page = getattr(self.db, "ima_document_page", None)
+        if not callable(page):
+            return False
+        status = self.read_index_status()
+        if status["status"] == "ready":
+            return True
+        if status["status"] in {"rebuilding", "failed"}:
+            counter = getattr(self.db, "ima_document_index_count", None)
+            return callable(counter) and int(counter()) > 0
+        return False
+
+    def rebuild_read_index(
+        self, groups: tuple[ImaGroupConfig, ...] | None = None
+    ) -> dict[str, object]:
+        started = time.perf_counter()
+        marker = getattr(self.db, "mark_ima_document_index", None)
+        replacer = getattr(self.db, "replace_ima_document_index", None)
+        if not callable(replacer):
+            return {
+                "status": "fallback",
+                "documents": 0,
+                "duration_ms": 0,
+                "error": "",
+            }
+        try:
+            if groups is not None:
+                self.store._remember_groups(groups)
+            records, state = self._load_rebuild_sources(groups)
+            prepared: dict[tuple[str, str], dict[str, Any]] = {}
+            for record in records:
+                try:
+                    row = self._index_row(record, state)
+                except ValueError:
+                    continue
+                prepared[(row["group_id"], row["media_id"])] = row
+            rows = list(prepared.values())
+            if callable(marker):
+                marker("rebuilding")
+            duration_ms = max(int((time.perf_counter() - started) * 1000), 0)
+            replacer(rows, self._source_fingerprint(), duration_ms)
+            status = self.read_index_status()
+            return {
+                "status": "ready",
+                "documents": status["documents"],
+                "duration_ms": status["duration_ms"],
+                "error": "",
+            }
+        except Exception as exc:  # noqa: BLE001 - keep serving the last good index
+            error = _safe_error(exc)
+            logger.warning("IMA index rebuild failed error=%s", error)
+            if callable(marker):
+                try:
+                    marker("failed", error=error)
+                except Exception as mark_exc:  # noqa: BLE001
+                    logger.warning(
+                        "IMA index failed status write error=%s",
+                        _safe_error(mark_exc),
+                    )
+            return {
+                "status": "failed",
+                "documents": self.read_index_status()["documents"],
+                "duration_ms": max(int((time.perf_counter() - started) * 1000), 0),
+                "error": error,
+            }
+
+    def _rebuild_index_if_needed(self) -> None:
+        getter = getattr(self.db, "ima_document_index_meta", None)
+        if not callable(getter):
+            return
+        meta = getter()
+        if (
+            str(meta.get("status") or "") == "ready"
+            and str(meta.get("fingerprint") or "") == self._source_fingerprint()
+        ):
+            return
+        self.rebuild_read_index()
+
+    def _document_from_index_row(
+        self, row: dict[str, Any], group_name: str = ""
+    ) -> dict[str, Any]:
+        pdf = None
+        txt = None
+        if not self.storage_status.remote:
+            pdf = self.store.authorized_archive_file(row.get("pdf_path"))
+            txt = self.store.authorized_archive_file(row.get("txt_path"))
+        result = {
+            "media_id": row["media_id"],
+            "name": row["name"],
+            "day": row["day"],
+            "pdf": pdf,
+            "txt": txt,
+            "size": row["size"],
+            "chars": row["chars"],
+            "downloaded_at": row["downloaded_at"],
+            "abstract": row.get("abstract") or "",
+            "cover_url": row.get("cover_url") or "",
+            "tags": list(row.get("tags") or []),
+            "has_pdf": bool(row.get("has_pdf")),
+            "has_txt": bool(row.get("has_txt")),
+            "group_id": row.get("group_id") or "",
+            "group_name": group_name or row.get("group_name") or "",
+            "pdf_path": row.get("pdf_path") or "",
+            "txt_path": row.get("txt_path") or "",
+        }
+        result.update(
+            translation_fields(
+                result["abstract"],
+                {
+                    "abstract_zh": row.get("abstract_zh") or "",
+                    "abstract_src_hash": row.get("abstract_src_hash") or "",
+                },
+            )
+        )
+        return result
+
+    def list_documents(
+        self,
+        groups: tuple[ImaGroupConfig, ...],
+        *,
+        query: str = "",
+        day: str = "",
+        group: str = "",
+        tag: str = "",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        if self._index_usable():
+            page = self.db.ima_document_page(
+                [item.id for item in groups],
+                group=group,
+                query=query,
+                day=day,
+                tag=tag,
+                limit=limit,
+                offset=offset,
+            )
+            counts = page.get("group_counts") or {}
+            page["groups"] = [
+                {
+                    "id": item.id,
+                    "name": item.name,
+                    "count": int(counts.get(item.id) or 0),
+                }
+                for item in groups
+            ]
+            return page
+        page_limit = max(int(limit), 1)
+        page_offset = max(int(offset), 0)
+        items = self.store.documents(
+            query=query,
+            day=day,
+            group_id=group,
+            groups=groups,
+            tag=tag,
+            include_body=False,
+            limit=page_limit + 1,
+            offset=page_offset,
+        )
+        has_more = len(items) > page_limit
+        items = items[:page_limit]
+        facets = self.store.document_facets(group_id=group, groups=groups)
+        summaries = self.store.group_summary(groups)
+        return {
+            "items": items,
+            "days": facets["days"],
+            "tags": facets["tags"],
+            "tag_counts": facets["tag_counts"],
+            "document_count": facets["document_count"],
+            "day": str(day or "").strip(),
+            "has_more": has_more,
+            "offset": page_offset,
+            "group_counts": {item["id"]: int(item["count"]) for item in summaries},
+            "groups": summaries,
+        }
+
+    def catalog_stats(self, groups: tuple[ImaGroupConfig, ...]) -> dict[str, dict]:
+        stats_fn = getattr(self.db, "ima_document_catalog_stats", None)
+        if self._index_usable() and callable(stats_fn):
+            return stats_fn([item.id for item in groups])
+        stats: dict[str, dict] = {}
+        for item in self.store.catalog_entries(groups=groups):
+            group_id = str(item.get("group_id") or "")
+            if not group_id:
+                continue
+            bucket = stats.setdefault(
+                group_id,
+                {
+                    "document_count": 0,
+                    "latest_day": "",
+                    "latest_title": "",
+                    "latest_media_id": "",
+                },
+            )
+            bucket["document_count"] += 1
+            day = str(item.get("day") or "")
+            if day != "unknown" and day >= str(bucket["latest_day"] or ""):
+                bucket["latest_day"] = day
+                bucket["latest_title"] = str(item.get("name") or "")
+                bucket["latest_media_id"] = str(item.get("media_id") or "")
+        return stats
+
+    def document(
+        self,
+        media_id: str,
+        groups: tuple[ImaGroupConfig, ...],
+        group: str = "",
+        group_name: str = "",
+    ) -> dict[str, Any] | None:
+        if self._index_usable():
+            row = self.db.ima_document_from_index(
+                media_id, [item.id for item in groups], group
+            )
+            if row is None:
+                return None
+            return self._document_from_index_row(row, group_name)
+        return self.store.document(
+            media_id,
+            group_id=group,
+            group_name=group_name,
+            groups=groups,
+        )
+
     def status(self) -> dict[str, Any]:
         cfg = self.config()
         with self._state_lock:
@@ -2214,18 +2537,24 @@ class ImaDocumentService:
             last_result = json.loads(result) if result else None
         except json.JSONDecodeError:
             last_result = None
-        records = self.store.load_manifest()
-        state = self.store.load_state()
-        # Remote NFS is_file() over the whole archive blocks the single uvicorn
-        # worker (and thus /api/stats, /admin/dashboard, /admin/stats). Trust
-        # state paths there; local installs still verify files on disk.
-        document_count = sum(
-            1
-            for record in records
-            if self.store.is_complete(
-                record, state, verify_archive=not self.storage_status.remote
+        index = self.read_index_status()
+        counter = getattr(self.db, "ima_document_index_count", None)
+        indexed = int(counter()) if callable(counter) else 0
+        if indexed:
+            document_count = indexed
+        else:
+            records = self.store.load_manifest()
+            state = self.store.load_state()
+            # Remote NFS is_file() over the whole archive blocks the single uvicorn
+            # worker (and thus /api/stats, /admin/dashboard, /admin/stats). Trust
+            # state paths there; local installs still verify files on disk.
+            document_count = sum(
+                1
+                for record in records
+                if self.store.is_complete(
+                    record, state, verify_archive=not self.storage_status.remote
+                )
             )
-        )
         return {
             "config": cfg.public(),
             "running": running,
@@ -2236,6 +2565,7 @@ class ImaDocumentService:
             "discovery": self._discovery_status(),
             "documents": document_count,
             "progress": progress,
+            "index": index,
         }
 
     def start(self) -> None:
@@ -2262,6 +2592,10 @@ class ImaDocumentService:
                     logger.exception("IMA document retag failed")
             elif self.storage_status.remote:
                 logger.warning("IMA archive unavailable; skip manifest rebuild and retag")
+            try:
+                self._rebuild_index_if_needed()
+            except Exception:
+                logger.exception("IMA document index rebuild failed")
 
         # Remote NFS restore/retag can take minutes; do not block /healthz.
         if self.storage_status.remote:
