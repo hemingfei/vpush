@@ -2669,6 +2669,10 @@ class ImaDocumentService:
 
     def start(self) -> None:
         def _archive_maintenance() -> None:
+            try:
+                self._rebuild_index_if_needed()
+            except Exception:
+                logger.exception("IMA document index rebuild failed")
             if self.store.archive_writable():
                 try:
                     restored = self.store.restore_original_filenames()
