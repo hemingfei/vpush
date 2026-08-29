@@ -2304,10 +2304,17 @@ class ImaDocumentService:
                     self.store.save_group_manifest(group.id, records)
             else:
                 self.store.save_group_manifest(group.id, records)
-        self.store.restore_original_filenames()
+        if not self.storage_status.remote:
+            self.store.restore_original_filenames()
         state.clear()
         state.update(self.store.load_state())
-        pending = [record for record in records if not self.store.is_complete(record, state)]
+        pending = [
+            record
+            for record in records
+            if not self.store.is_complete(
+                record, state, verify_archive=not self.storage_status.remote
+            )
+        ]
         downloaded = 0
         failures = 0
         last_error = ""
