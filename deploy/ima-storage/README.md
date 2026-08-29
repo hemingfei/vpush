@@ -163,3 +163,28 @@ systemctl daemon-reload
 # Keep env files until credentials are rotated; then: shred -u /etc/vpush/ima-storage.env /etc/vpush/ima-main-backup.env
 # Application rollback: unset IMA_ARCHIVE_ROOT and remount local archive data.
 ```
+
+## Storage PDF puller
+
+Install the stdlib server (no pip):
+
+```bash
+install -m 755 app/ima_puller.py /usr/local/lib/vpush-ima/ima-puller.py
+install -m 644 deploy/ima-storage/vpush-ima-puller.service /etc/systemd/system/
+install -m 640 /dev/null /etc/vpush/ima-pull.token
+chown 99:100 /etc/vpush/ima-pull.token
+```
+
+Put the same random token in `/etc/vpush/ima-pull.token` (storage) and `/opt/vpush/.env` as `IMA_PULL_TOKEN` (DMIT). Set `IMA_PULL_URL=http://10.80.0.2:8743/pull`. Values never go on the shell command line or into Git.
+
+Do not copy IMA refresh tokens onto the storage VPS.
+
+```bash
+systemctl daemon-reload
+systemctl enable --now vpush-ima-puller.service
+curl -sS --interface 10.80.0.2 http://10.80.0.2:8743/healthz
+```
+
+Expected: `ok`. `ss -tlnp | grep 8743` must show `10.80.0.2:8743` only, not `0.0.0.0` or the public IP.
+
+On DMIT, recreate `vpush` after editing `.env`. Rollback: delete `IMA_PULL_URL` / `IMA_PULL_TOKEN` from `.env`, recreate `vpush`; optionally `systemctl stop vpush-ima-puller`.
