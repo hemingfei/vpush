@@ -781,6 +781,50 @@ def test_list_ima_documents_defaults_to_latest_stream_and_pages_search(tmp_path,
     assert page3["has_more"] is False
 
 
+def test_documents_searches_tags_and_group_name_and_ranks_title_hits_first(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima-report-search")
+    semi = ImaGroupConfig("semi", "SemiAnalysis", "kb-semi", "root")
+    records = [
+        {
+            "media_id": "body-hit",
+            "name": "数据中心周报.pdf",
+            "day": "0829",
+            "abstract": "AI 算力需求继续增长",
+            "group_id": "semi",
+        },
+        {
+            "media_id": "title-hit",
+            "name": "全球 AI 资本开支展望.pdf",
+            "day": "0828",
+            "abstract": "云厂商资本开支",
+            "group_id": "semi",
+        },
+        {
+            "media_id": "tag-hit",
+            "name": "电力基础设施框架.pdf",
+            "day": "0827",
+            "abstract": "公用事业",
+            "group_id": "semi",
+        },
+    ]
+    store.save_manifest(records)
+    store.save_state({
+        store.state_key(records[0]): {},
+        store.state_key(records[1]): {},
+        store.state_key(records[2]): {"tags": ["AI"]},
+    })
+
+    matches = store.documents(query="ai", groups=(semi,), include_body=False)
+
+    assert [item["media_id"] for item in matches] == [
+        "title-hit",
+        "tag-hit",
+        "body-hit",
+    ]
+    assert all("_match_rank" not in item for item in matches)
+    assert store.documents(query="semianalysis", groups=(semi,), include_body=False)
+
+
 def test_document_detail_and_translate_cache(tmp_path, monkeypatch):
     monkeypatch.setenv("DAV_UI_ONLY", "1")
     client = TestClient(create_app(db_path=tmp_path / "kb-tr.sqlite"))
