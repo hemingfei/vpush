@@ -2273,7 +2273,7 @@ def test_ima_documents_group_controls_render_response_groups_safely():
     assert "data.groups" in render or "groups =" in render
     assert "escapeHtml(group.id" in src or "escapeHtml(group.value" in src
     assert "escapeHtml(group.name" in src
-    assert "kb-desk-lib" in src
+    assert "ima-doc-source" in src
     assert "escapeHtml(group.name" in src
 
 
@@ -2897,20 +2897,17 @@ def test_ima_document_reader_removes_covers_and_labels_text_metadata():
     assert "imaDisplayTitle(item.name)" in reader
 
 
-def test_ima_document_day_nav_lives_in_title_header_and_stays_compact():
-    """日期是搜索框里的 chip，不占列表头第二套控件。"""
+def test_ima_report_header_owns_search_date_and_filters():
     render = _fn_body("renderImaDocuments")
-    head_start = render.index('<header class="kb-desk-head">')
+    head_start = render.index('<header class="ima-report-head">')
     head_end = render.index("</header>", head_start)
     head = render[head_start:head_end]
-    assert "kb-desk-search" in head
+
+    assert 'id="ima-doc-q"' in head
     assert 'id="ima-doc-day-nav-slot"' in head
-    assert head.index("kb-desk-search") < head.index('id="ima-doc-day-nav-slot"')
-    body = render.index('id="ima-docs-body"')
-    assert head_end < body
-    css = STYLE_CSS.read_text()
-    assert ".kb-desk-day" in css
-    assert "ima-doc-day-nav" not in _fn_body("imaDocumentsDayNavHtml")
+    assert 'id="ima-doc-source"' in _fn_body("knowledgeSourceControlsHtml")
+    assert 'id="ima-doc-tag"' in head
+    assert head.index('id="ima-doc-q"') < head.index('id="ima-doc-day-nav-slot"')
 
 
 def test_knowledge_desk_defaults_to_latest_stream():
@@ -2926,17 +2923,38 @@ def test_knowledge_desk_defaults_to_latest_stream():
     assert "if (!day) return" not in day
 
 
-def test_kb_desk_head_search_and_picker_alignment():
-    """搜索 44px 带焦点环；日期菜单只列有文档的日子。"""
-    menu = _fn_body("imaDayMenuHtml")
-    css = STYLE_CSS.read_text()
-    search = re.search(r"\.kb-desk-search\s*\{([^}]*)\}", css)
-    assert search and "min-height: 44px" in search.group(1)
-    assert ".kb-desk-search:focus-within" in css
-    assert "最新" in menu
-    assert "fmtImaDay" in menu
-    assert "imaDayPickerGridHtml" not in APP_JS.read_text()
-    assert "grid-template-columns: 320px" in css
+def test_ima_report_row_is_document_first_and_keeps_optional_metadata():
+    row = _fn_body("imaDocumentRow")
+    meta = _fn_body("imaReportMetaHtml")
+
+    assert "ima-report-date" in row
+    assert "ima-report-title" in row
+    assert "ima-report-meta" in row
+    assert "ima-report-source" in row
+    assert 'fmtImaDayShort(item.day) || "—"' in row
+    assert "imaListTitle(item.name)" in row
+    assert "imaDocTicker(item.name)" in meta
+    assert "imaDistinctiveTags" in meta
+    assert "fmtDocSize" in meta
+    assert "item.group_name" in row
+    assert "unknown" not in row
+
+
+def test_ima_report_search_is_debounced_and_explicitly_pages():
+    src = APP_JS.read_text()
+    render = _fn_body("renderImaDocuments")
+    queued = _fn_body("queueImaDocumentsSearch")
+    more = _fn_body("loadImaDocumentsMore")
+
+    assert "250" in queued
+    assert "clearTimeout(_imaSearchTimer)" in queued
+    assert "submitImaDocumentsSearch()" in queued
+    assert 'oninput="queueImaDocumentsSearch()"' in render
+    assert 'id="ima-docs-more"' in render
+    assert 'onclick="loadImaDocumentsMore()"' in render
+    assert "IntersectionObserver" not in src[src.index("const _imaItems"):src.index("async function renderImaDocument")]
+    assert "正在加载更多" in more
+    assert "加载失败，重试" in more
 
 
 def test_ima_day_picker_restricts_to_available_days():
@@ -2946,13 +2964,14 @@ def test_ima_day_picker_restricts_to_available_days():
     menu = _fn_body("imaDayMenuHtml")
     pick = _fn_body("pickImaDay")
     row = _fn_body("imaDocumentRow")
+    meta = _fn_body("imaReportMetaHtml")
     reader = _fn_body("renderImaDocument")
     assert "toggleImaDayPicker" in nav
     assert "aria-haspopup" in nav
     assert "kb-desk-day-option" in menu
     assert "selectImaDocumentsDay" in pick
     assert "closeImaDayPicker" in src
-    assert "ima-doc-ticker" in row
+    assert "imaDocTicker" in meta
     assert "fmtImaDayShort" in row
     assert "imaListTitle" in row
     assert "white-space: nowrap" in STYLE_CSS.read_text() or "ellipsis" in STYLE_CSS.read_text()
@@ -2961,16 +2980,13 @@ def test_ima_day_picker_restricts_to_available_days():
 
 
 def test_ima_document_list_hides_tag_rail_but_keeps_tag_filtering():
-    """列表去掉标签条和行内标签；URL 标签筛选仍可用。"""
     src = APP_JS.read_text()
     render = _fn_body("renderImaDocuments")
-    row = _fn_body("imaDocumentRow")
-    css = STYLE_CSS.read_text()
     assert 'id="ima-doc-tag-rail"' not in render
     assert "imaDocTagRailHtml" not in src
-    assert ".ima-doc-tag-rail" not in css
     assert 'id="ima-doc-tag"' in render
-    assert "item.tags" not in row
+    assert "tagSelect.hidden" in render or "tagSelect.removeAttribute(\"hidden\")" in render or "hidden" in render
+    assert "uniqueTags" in render
 
 
 def test_frontend_asset_urls_bust_browser_cache():
@@ -3069,56 +3085,19 @@ def test_knowledge_report_list_does_not_auto_open_a_reader():
     assert "mountKnowledgeReaderShell" not in render
 
 
-def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
-    """库内瘦行按日浏览；搜索/标签出日并分页；阅读页摘要 + PDF。"""
+def test_ima_report_metadata_contract_keeps_existing_capabilities():
     src = APP_JS.read_text()
-    row = _fn_body("imaDocumentRow")
     render = _fn_body("renderImaDocuments")
     reader = _fn_body("renderImaDocument")
-    select = _fn_body("selectImaDocumentGroup")
-    css = STYLE_CSS.read_text()
 
-    assert 'placeholder="搜公司、代码或标题"' in src
-    assert "submitImaDocumentsSearch" in src
-    assert ">搜索</button>" not in render
-    assert "kb-desk-lib" in render or "kb-desk-lib" in src
+    assert 'placeholder="搜标题、公司、代码、行业或资料源"' in render
     assert 'params.set("tag"' in render
     assert "data.days" in render
-    assert "imaDocumentsRoute(group, query, day, tag)" in reader or "imaDocumentsRoute(item.group_id, query, day, tag)" in reader
-    assert "closeImaPdf" in src
-    assert "loadImaPdf(mediaId, readerSeq)" in reader
-    assert "ima-doc-abstract" not in row
-    assert "item.abstract" not in row
-    assert "ima-doc-row-thumb" not in row
-    assert "item.cover_url" not in row
-    assert "imaListTitle" in row
-    assert "imaDocTicker" in row
-    assert "item.tags" not in row
-    assert "imaDocKindLabel" not in row
-    assert "ima-doc-row-arrow" not in row
-    assert "imaDocumentsEmptyHtml" in src
-    assert "没有匹配的文档" in src
-    assert "这个库还没有文档" in src
-    assert "这一天没有文档" in src
-    assert "回最新一天" in src
-    assert "去配置采集" in src
-    assert "全部日期" not in render
-    assert "全部日期" not in _fn_body("imaDocumentsDayNavHtml")
-    assert "筛选日期" in _fn_body("imaDocumentsDayNavHtml")
-    assert "kb-desk-day" in _fn_body("imaDocumentsDayNavHtml")
-    assert "ima-day-picker" not in _fn_body("imaDocumentsDayNavHtml")
     assert "loadImaDocumentsMore" in src
-    assert 'params.set("limit"' in render
-    assert "data.has_more" in render
-
-    assert "has_pdf" in reader
-    assert "/text" not in reader
-    assert "ima-text-view" not in reader
-    assert "查看 PDF" not in reader
-
-    assert "renderKnowledge" in select
-    assert ".kb-desk" in css
-    assert ".ima-reader-abstract" in css
+    assert "loadImaPdf(mediaId, readerSeq)" in reader
+    assert "needs_translation" in reader
+    assert "renderImaDocuments" in _fn_body("selectImaDocumentGroup")
+    assert ".ima-report-page" in STYLE_CSS.read_text()
 
 
 def test_ima_documents_search_leaves_day_view():

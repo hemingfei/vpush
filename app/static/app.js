@@ -690,8 +690,7 @@ let _imaOffset = 0;
 let _imaListSeq = 0;
 let _imaReaderSeq = 0;
 let _imaLoadingMore = false;
-let _imaLoadObserver = null;
-let _imaLoadFallback = null;
+let _imaSearchTimer = null;
 let _imaTagCounts = {};
 let _imaDocumentCount = 0;
 const IMA_TAG_COMMON_RATIO = 0.5;
@@ -799,33 +798,47 @@ function imaDistinctiveTags(tags, counts = _imaTagCounts, documentCount = _imaDo
   return rare.slice(0, 2).map((item) => item.tag);
 }
 
-function imaDocumentRow(item, showGroupLabel = false) {
-  const title = imaListTitle(item.name);
-  const ticker = imaDocTicker(item.name) || (showGroupLabel ? (item.group_name || "") : "");
-  const day = fmtImaDayShort(item.day);
-  return `
-    <div class="ima-doc-row" role="button" tabindex="0" data-media-id="${escapeHtml(item.media_id)}" data-group-id="${escapeHtml(item.group_id || "")}" onclick="openImaDocument(this.dataset.mediaId, this.dataset.groupId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openImaDocument(this.dataset.mediaId, this.dataset.groupId)}">
-      <span class="ima-doc-ticker">${escapeHtml(ticker)}</span>
-      <span class="ima-doc-row-name">${escapeHtml(title)}</span>
-      <span class="ima-doc-row-day">${escapeHtml(day)}</span>
-    </div>`;
+function imaReportMetaHtml(item) {
+  const parts = [];
+  const ticker = imaDocTicker(item.name);
+  if (ticker) parts.push(ticker);
+  parts.push(...imaDistinctiveTags(item?.tags));
+  const size = fmtDocSize(item?.size);
+  if (size) parts.push(size);
+  return parts.length
+    ? `<span class="ima-report-meta">${parts.map((part) => `<span>${escapeHtml(part)}</span>`).join("")}</span>`
+    : "";
 }
 
-function imaDocumentsEmptyHtml(hasFilter, days) {
-  const list = Array.isArray(days) ? days.filter(Boolean) : [];
+function imaDocumentRow(item) {
+  const day = fmtImaDayShort(item.day) || "—";
+  const source = String(item.group_name || "");
+  const meta = imaReportMetaHtml(item); // .ima-report-meta
+  return `
+    <article class="ima-doc-row" role="button" tabindex="0" data-media-id="${escapeHtml(item.media_id)}" data-group-id="${escapeHtml(item.group_id || "")}" onclick="openImaDocument(this.dataset.mediaId, this.dataset.groupId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openImaDocument(this.dataset.mediaId, this.dataset.groupId)}">
+      <time class="ima-report-date">${escapeHtml(day)}</time>
+      <span class="ima-report-copy"><strong class="ima-report-title">${escapeHtml(imaListTitle(item.name))}</strong>${meta}</span>
+      <span class="ima-report-source">${escapeHtml(source)}</span>
+    </article>`;
+}
+
+function imaReportSkeletonHtml() {
+  return Array.from({ length: 6 }, () => `
+    <div class="ima-report-skeleton-row" aria-hidden="true">
+      <span class="ima-report-date"></span>
+      <span class="ima-report-copy"></span>
+      <span class="ima-report-source"></span>
+    </div>`).join("");
+}
+
+function imaDocumentsEmptyHtml(hasFilter) {
   if (hasFilter) {
     return emptyState(
-      "没有匹配的文档",
-      `<div><button type="button" class="btn-normal" onclick="clearImaDocumentsFilters()">清除筛选</button></div>`
+      "没有找到相关研报",
+      `<div><p class="section-meta">换个公司、代码或主题试试</p><button type="button" class="btn-normal" onclick="clearImaDocumentsFilters()">清除筛选</button></div>`
     );
   }
-  if (!list.length) {
-    return emptyState("这个库还没有文档");
-  }
-  return emptyState(
-    "这一天没有文档",
-    `<div><button type="button" class="btn-normal" onclick="selectImaDocumentsDay('${escapeHtml(list[0])}')">回最新一天</button></div>`
-  );
+  return emptyState("这里还没有研报");
 }
 
 function imaDocumentGroups(items, showGroupLabel = false) {
@@ -837,7 +850,7 @@ function imaDocumentGroups(items, showGroupLabel = false) {
   return [...groups.entries()].map(([day, rows]) => `
     <section class="ima-doc-day">
       <header class="ima-doc-day-head"><h2>${escapeHtml(fmtImaDay(day) || day)}</h2><span>${rows.length} 份</span></header>
-      <div class="ima-doc-list">${rows.map((item) => imaDocumentRow(item, showGroupLabel)).join("")}</div>
+      <div class="ima-doc-list">${rows.map((item) => imaDocumentRow(item)).join("")}</div>
     </section>`).join("");
 }
 
@@ -873,7 +886,13 @@ function selectImaDocumentGroup(value) {
   renderImaDocuments(seq);
 }
 
+function queueImaDocumentsSearch() {
+  clearTimeout(_imaSearchTimer);
+  _imaSearchTimer = setTimeout(() => submitImaDocumentsSearch(), 250);
+}
+
 function submitImaDocumentsSearch() {
+  clearTimeout(_imaSearchTimer);
   state.imaDocumentsQuery = ($("#ima-doc-q")?.value || "").trim();
   state.imaDocumentsDay = "";
   replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay, state.imaDocumentsTag));
@@ -939,7 +958,7 @@ function closeImaDayPicker() {
 
 function renderImaDayMenu() {
   const trigger = $("#ima-doc-day");
-  const host = trigger?.closest(".kb-desk-search") || trigger?.parentElement;
+  const host = trigger?.closest(".ima-report-searchbox") || trigger?.closest(".kb-desk-search") || trigger?.parentElement;
   if (!trigger || !host) return;
   host.querySelector(".kb-desk-day-menu")?.remove();
   host.insertAdjacentHTML("beforeend", imaDayMenuHtml(state.imaDocumentsDay || "", state.imaDocumentsDays));
@@ -1194,18 +1213,18 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     await renderKnowledge(seq);
     return;
   }
+  const sourceControls = knowledgeSourceControlsHtml(selectedGroup);
   listRoot.innerHTML = `
-      <header class="kb-desk-head">
-        <div class="kb-desk-head-row">
-          <div class="kb-desk-id">${knowledgeSourceControlsHtml(selectedGroup)}<span class="kb-desk-count" id="ima-doc-meta"></span></div>
-        </div>
-        <h2 id="ima-doc-title" class="sr-only">知识库</h2>
-        <form class="ima-doc-search-form" onsubmit="event.preventDefault();submitImaDocumentsSearch()">
-          <label class="kb-desk-search">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜公司、代码或标题" aria-label="搜索知识库"><span id="ima-doc-day-nav-slot"></span></label>
-        </form>
-        <select id="ima-doc-tag" class="hidden" aria-hidden="true" onchange="selectImaDocumentsTag(this.value)"><option value="">全部标签</option></select>
-      </header>
-      <div id="ima-docs-body" class="kb-desk-rows"><div class="admin-skeleton" aria-hidden="true"></div></div>`;
+  <header class="ima-report-head">
+    <div class="ima-report-heading"><div><h2 id="ima-doc-title">最新研报</h2><p id="ima-doc-meta" class="section-meta"></p></div><button type="button" class="icon-btn" aria-label="刷新研报" title="刷新研报" onclick="refreshImaDocuments()">${REFRESH_ICON}</button></div>
+    <form class="ima-report-search" onsubmit="event.preventDefault();submitImaDocumentsSearch()">
+      <label class="ima-report-searchbox">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜标题、公司、代码、行业或资料源" aria-label="搜索研报" oninput="queueImaDocumentsSearch()"><span id="ima-doc-day-nav-slot"></span></label>
+      <div class="ima-report-filters">${sourceControls}<label class="ima-report-tag"><span class="sr-only">标签</span><select id="ima-doc-tag" aria-label="标签" onchange="selectImaDocumentsTag(this.value)" hidden><option value="">全部标签</option></select></label></div>
+    </form>
+    <div id="ima-doc-filter-chips" class="ima-doc-filter-chips"></div>
+    <div class="ima-report-columns" aria-hidden="true"><span>日期</span><span>标题</span><span>资料源</span></div>
+  </header>
+  <div id="ima-docs-body" class="ima-report-body">${imaReportSkeletonHtml()}</div>`;
   try {
     const params = new URLSearchParams();
     if (query) params.set("q", query);
@@ -1223,14 +1242,13 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     const items = Array.isArray(data.items) ? data.items : [];
     const selectedGroupInfo = groups.find((group) => String(group.id || "") === selectedGroup);
     const selectedGroupName = selectedGroupInfo?.name || (selectedGroup ? selectedGroup : "全部");
-    const count = items.length;
     const title = $("#ima-doc-title");
     const meta = $("#ima-doc-meta");
-    if (title) title.textContent = selectedGroupName;
-    if (meta) {
-      const total = Number(data.document_count) || count;
-      meta.textContent = `${paged ? total : count} 份`;
-    }
+    if (title) title.textContent = "最新研报";
+    const resultCount = query || tag
+      ? `${items.length}${data.has_more ? "+" : ""} 条结果`
+      : `${Number(data.document_count) || items.length} 份`;
+    if (meta) meta.textContent = resultCount;
     if (!knowledgeMediaIdFromPath()) setPageTitle(selectedGroupName);
     const days = Array.isArray(data.days)
       ? data.days.filter(Boolean)
@@ -1249,6 +1267,8 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
         const n = _imaTagCounts[value];
         return `<option value="${escapeHtml(value)}" ${value === tag ? "selected" : ""}>${escapeHtml(value)}${n ? `（${n}）` : ""}</option>`;
       }).join("")}`;
+      if (uniqueTags.length || tag) tagSelect.removeAttribute("hidden");
+      else tagSelect.hidden = true;
     }
     const navSlot = $("#ima-doc-day-nav-slot");
     if (navSlot) {
@@ -1263,15 +1283,13 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     state.imaDocumentsHasMore = !!(paged && data.has_more);
     const body = $("#ima-docs-body");
     if (!items.length) {
-      body.innerHTML = imaDocumentsEmptyHtml(hasFilter, days);
+      body.innerHTML = imaDocumentsEmptyHtml(hasFilter);
       return;
     }
-    const showGroupLabel = !selectedGroup;
-    const sentinel = state.imaDocumentsHasMore
-      ? `<div id="ima-docs-sentinel" class="ima-docs-more" role="status" aria-live="polite"></div>`
+    const more = state.imaDocumentsHasMore
+      ? `<div class="ima-docs-more"><button id="ima-docs-more" type="button" class="btn-ghost" onclick="loadImaDocumentsMore()">加载更多</button></div>`
       : "";
-    body.innerHTML = `<div class="ima-doc-list">${items.map((item) => imaDocumentRow(item, showGroupLabel)).join("")}</div>${sentinel}`;
-    if (state.imaDocumentsHasMore) startImaDocumentsAutoLoad();
+    body.innerHTML = `<div class="ima-doc-list">${items.map((item) => imaDocumentRow(item)).join("")}</div>${more}`;
   } catch (err) {
     if (!routeStillActive(seq)) return;
     const denied = String(err.message || "").includes("知识库不存在");
@@ -1347,43 +1365,17 @@ function clearImaDocumentsFilters() {
 }
 
 function stopImaDocumentsAutoLoad() {
-  _imaLoadObserver?.disconnect();
-  _imaLoadObserver = null;
-  if (_imaLoadFallback) {
-    window.removeEventListener("scroll", _imaLoadFallback);
-    _imaLoadFallback = null;
-  }
-}
-
-function startImaDocumentsAutoLoad() {
-  stopImaDocumentsAutoLoad();
-  const sentinel = $("#ima-docs-sentinel");
-  if (!sentinel || !state.imaDocumentsHasMore) return;
-  const load = () => loadImaDocumentsMore();
-  if ("IntersectionObserver" in window) {
-    _imaLoadObserver = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) load();
-    }, { rootMargin: "400px 0px" });
-    _imaLoadObserver.observe(sentinel);
-    return;
-  }
-  _imaLoadFallback = () => {
-    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 400) load();
-  };
-  window.addEventListener("scroll", _imaLoadFallback, { passive: true });
-  _imaLoadFallback();
+  _imaLoadingMore = false;
 }
 
 async function loadImaDocumentsMore() {
   if (_imaLoadingMore || !state.imaDocumentsHasMore) return;
   if (state.imaDocumentsDay && !state.imaDocumentsQuery && !state.imaDocumentsTag) return;
   _imaLoadingMore = true;
-  stopImaDocumentsAutoLoad();
-  const sentinel = $("#ima-docs-sentinel");
-  if (sentinel) {
-    sentinel.classList.add("is-loading");
-    sentinel.setAttribute("aria-busy", "true");
-    sentinel.innerHTML = `<span class="feed-load-spinner" aria-hidden="true"></span><span>正在加载更多…</span>`;
+  const moreBtn = $("#ima-docs-more");
+  if (moreBtn) {
+    moreBtn.disabled = true;
+    moreBtn.textContent = "正在加载更多…";
   }
   const seq = routeRenderSeq;
   const listSeq = _imaListSeq;
@@ -1400,27 +1392,32 @@ async function loadImaDocumentsMore() {
     _imaItems.push(...incoming);
     _imaOffset = _imaItems.length;
     state.imaDocumentsHasMore = !!data.has_more && incoming.length > 0;
-    const showGroupLabel = !state.imaDocumentsGroup;
     const body = $("#ima-docs-body");
     const list = body?.querySelector(".ima-doc-list");
     if (list && incoming.length) {
-      list.insertAdjacentHTML("beforeend", incoming.map((item) => imaDocumentRow(item, showGroupLabel)).join(""));
+      list.insertAdjacentHTML("beforeend", incoming.map((item) => imaDocumentRow(item)).join(""));
     }
-    const oldSentinel = $("#ima-docs-sentinel");
-    if (oldSentinel) oldSentinel.remove();
-    if (state.imaDocumentsHasMore && body) {
-      body.insertAdjacentHTML("beforeend", `<div id="ima-docs-sentinel" class="ima-docs-more" role="status" aria-live="polite"></div>`);
-      startImaDocumentsAutoLoad();
+    const btn = $("#ima-docs-more");
+    const wrap = btn?.closest(".ima-docs-more");
+    if (!state.imaDocumentsHasMore) {
+      (wrap || btn)?.remove();
+    } else if (btn) {
+      btn.disabled = false;
+      btn.textContent = "加载更多";
     }
     const meta = $("#ima-doc-meta");
-    if (meta) meta.textContent = `${_imaItems.length} 份`;
+    if (meta) {
+      const filtered = !!(state.imaDocumentsQuery || state.imaDocumentsTag);
+      meta.textContent = filtered
+        ? `${_imaItems.length}${state.imaDocumentsHasMore ? "+" : ""} 条结果`
+        : `${Number(_imaDocumentCount) || _imaItems.length} 份`;
+    }
   } catch (err) {
     if (listSeq !== _imaListSeq || !routeStillActive(seq)) return;
-    const failed = $("#ima-docs-sentinel");
+    const failed = $("#ima-docs-more");
     if (failed) {
-      failed.classList.remove("is-loading");
-      failed.removeAttribute("aria-busy");
-      failed.innerHTML = `<button type="button" class="btn-ghost" onclick="loadImaDocumentsMore()">加载失败，重试</button>`;
+      failed.disabled = false;
+      failed.textContent = "加载失败，重试";
     }
   } finally {
     if (listSeq === _imaListSeq) _imaLoadingMore = false;

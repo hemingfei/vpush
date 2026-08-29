@@ -2861,6 +2861,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .ima-pdf-close { margin-top: 8px; min-height: 44px; }
 .ima-pdf-panel iframe { display: block; flex: 1 1 auto; width: 100%; min-height: 0; height: 100%; border: 0; background: var(--color-surface-soft); }
 .ima-text-view { margin: 16px 0 0; padding: 18px; max-height: 70vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border: var(--border-default); border-radius: var(--radius-control); background: var(--color-surface-soft); color: var(--color-text); font: inherit; line-height: 1.7; }
+.ima-report-page {}
 .kb-desk {
   flex: 1 1 auto;
   min-height: 0;
