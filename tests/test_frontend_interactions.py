@@ -1157,16 +1157,16 @@ def test_cookie_clear_is_confirmed_delete_and_hidden_when_unset():
     assert "clearSavedCookie('xueqiu'" in render
     assert "clearSavedCookie('weibo'" in render
     assert "clearSavedCookie('twitter'" in render
-    assert "clearSavedCookie('ima'" in knowledge
+    assert "clearSavedCookie('ima'" not in knowledge
     assert "clearSavedCookie('zsxq'" in knowledge
     assert "from_env" in render
     assert "btn-ghost danger" in render
     assert 'aria-label="清除雪球 Cookie"' in render
     assert 'aria-label="清除微博 Cookie"' in render
     assert 'aria-label="清除 X Cookie"' in render
-    assert 'aria-label="清除 IMA Cookie"' in knowledge
+    assert 'aria-label="清除 IMA Cookie"' not in knowledge
     assert 'aria-label="清除知识星球 Cookie"' in knowledge
-    assert ">清除 Cookie<" in knowledge
+    assert ">清除 Cookie<" not in knowledge
 
     assert "confirm(" in clear
     assert "停止抓取" in clear
@@ -1181,9 +1181,12 @@ def test_cookie_clear_is_confirmed_delete_and_hidden_when_unset():
     assert 'for="xq-cookie"' in render
     assert 'for="tw-cookie"' in render
     assert 'for="zq-cookie"' in knowledge
-    assert 'for="ima-cookie"' in knowledge
-    assert 'for="ima-cid"' in knowledge
-    assert 'for="ima-key"' in knowledge
+    assert 'for="ima-cookie"' not in knowledge
+    assert 'for="ima-cid"' not in knowledge
+    assert 'for="ima-key"' not in knowledge
+    assert 'id="ima-pure-token"' not in knowledge
+    assert 'id="ima-pure-interval"' not in knowledge
+    assert 'id="ima-pure-uid"' not in knowledge
     assert 'id="wb-qr-start"' in render
 
 
@@ -1196,6 +1199,8 @@ def test_cookie_save_restores_focus_after_rebuild():
     assert "ima-cookie" in focus
     assert "zq-cookie" in focus
     assert ".focus()" in focus
+    knowledge = _fn_body("loadAdminKnowledge")
+    assert "saveImaCredentials()" not in knowledge
     for name in ("saveXueqiuCookie", "saveTwitterCookie"):
         body = _fn_body(name)
         assert "loadAdminStats(routeSeq)" in body
@@ -1364,14 +1369,14 @@ def test_ima_document_collector_lives_in_knowledge_settings():
 
 
 def test_ima_settings_have_one_parent_and_keep_zsxq_under_ima():
-    """知识库设置页 IMA 在前，知识星球随后，存储在后。"""
+    """知识库设置页采集在前，知识星球随后，存储在后。"""
     knowledge = _fn_body("loadAdminKnowledge")
-    ima = knowledge.index('<h2 class="section-title">IMA</h2>')
-    documents = knowledge.index('<h3 class="ima-source-title">IMA 文档采集</h3>')
-    zsxq = knowledge.index('<h2 class="section-title">知识星球</h2>')
-    assert ima < documents < zsxq
+    collect = knowledge.index('data-tab="collect"')
+    zsxq = knowledge.index('data-tab="zsxq"')
+    storage = knowledge.index('data-tab="storage"')
+    assert collect < zsxq < storage
     assert '<h2 class="section-title">存储</h2>' in _fn_body("imaStoragePanelHtml")
-    assert 'class="cfg-group cfg-group--zsxq"' in knowledge[zsxq:]
+    assert 'class="cfg-group cfg-group--zsxq"' in knowledge
     assert 'id="pc-zq-pages"' in knowledge
     assert 'id="pc-zq-save"' in knowledge
 
@@ -1589,14 +1594,15 @@ def test_ima_save_listener_filters_unrelated_document_events_before_snapshot():
     end = save.index("imaMountState.saveOwner = saveOwner", start)
     listener = save[start:end]
     owner_guard = listener.index("imaMountState.saveOwner !== saveOwner")
-    field_guard = listener.index("event.target?.id")
+    field_guard = listener.index("event.target")
     snapshot = listener.index("rememberImaCollectorDraft()")
     assert owner_guard < field_guard < snapshot
     for field_id in (
         "ima-pure-uid", "ima-pure-kb", "ima-pure-root",
         "ima-pure-interval", "ima-pure-token",
     ):
-        assert field_id in listener
+        assert field_id not in listener
+    assert "interval_seconds" in _fn_body("readImaMountGroups")
 
 
 def test_push_setting_saves_require_same_route_token_and_session_before_mutation():
@@ -1734,11 +1740,15 @@ def test_ima_save_listener_checks_owner_before_ima_field_ids():
     end = save.index("imaMountState.saveOwner = saveOwner", start)
     listener = save[start:end]
     owner = listener.index("imaMountState.saveOwner !== saveOwner")
-    fields = listener.index("ima-pure-uid")
+    fields = listener.index("event.target")
     snapshot = listener.index("rememberImaCollectorDraft()")
     assert owner < fields < snapshot
-    assert "event.target?.id" in listener
+    assert "event.target" in listener
+    assert "ima-pure-uid" not in listener
+    assert "ima-pure-interval" not in listener
+    assert "ima-pure-token" not in listener
     assert "imaMountState.saveOwner === saveOwner" in listener
+    assert "interval_seconds" in _fn_body("readImaMountGroups")
 
 
 def test_ima_config_blocks_use_shared_layout_and_no_inline_spacing():
@@ -1746,9 +1756,6 @@ def test_ima_config_blocks_use_shared_layout_and_no_inline_spacing():
     mount_group = _fn_body("imaMountGroupRowHtml")
     folder = _fn_body("imaFolderRowHtml")
     config = stats
-    ima_start = stats.index("<h3 class=\"ima-source-title\">IMA 凭证</h3>")
-    ima_end = stats.index("<h2 class=\"section-title\">知识星球</h2>")
-    ima_credentials = stats[ima_start:ima_end]
     css = STYLE_CSS.read_text()
 
     assert 'class="ima-mount-kb-row' in mount_group
@@ -1756,13 +1763,12 @@ def test_ima_config_blocks_use_shared_layout_and_no_inline_spacing():
     assert 'class="ima-folder-row"' in folder
     assert 'type="checkbox"' in folder
     assert 'aria-expanded=' in folder
-    assert 'class="ima-collector-fields cfg-fields"' in config
-    assert 'class="ima-credential-fields"' in ima_credentials
-    assert 'class="ima-credential-actions toolbar"' in ima_credentials
-    assert 'style="margin-top:' not in ima_credentials
-    assert 'style="margin:6px' not in ima_credentials
+    assert '<h3 class="ima-source-title">IMA 凭证</h3>' not in config
+    assert 'class="ima-credential-fields"' not in config
+    assert "saveImaCredentials()" not in config
+    assert 'style="margin-top:' not in config
+    assert 'style="margin:6px' not in config
     assert ".ima-code-field .form-control" in css
-    assert ".ima-credential-fields" in css
     assert ".ima-mount-layout" in css
 
 
@@ -1770,8 +1776,9 @@ def test_ima_config_uses_small_sync_icon_and_consistent_brand_case():
     stats = _fn_body("loadAdminKnowledge")
     css = STYLE_CSS.read_text()
 
-    assert '<h3 class="ima-source-title">IMA 凭证</h3>' in stats
-    assert "保存 IMA 凭证" in stats
+    assert '<h3 class="ima-source-title">IMA 凭证</h3>' not in stats
+    assert "保存 IMA 凭证" not in stats
+    assert "saveImaCredentials()" not in stats
     assert ".ima-collector-foot .refresh-icon" in css
     assert "width: 16px" in css
     assert "height: 16px" in css
@@ -2056,10 +2063,11 @@ def test_ima_group_save_reads_rows_and_preserves_legacy_token_fields():
     for field in ("uid", "knowledge_base_id", "root_folder_id", "interval_seconds"):
         assert f"{field}:" in save
     assert "if (token) body.refresh_token = token" in save
-    assert 'id="ima-pure-token"' in _fn_body("loadAdminKnowledge")
-    token_input = re.search(r'id="ima-pure-token"[^>]*', save + _fn_body("loadAdminKnowledge"))
-    assert token_input and 'type="password"' in token_input.group(0)
-    assert 'autocomplete="off"' in token_input.group(0)
+    knowledge = _fn_body("loadAdminKnowledge")
+    assert 'id="ima-pure-token"' not in knowledge
+    assert 'id="ima-pure-interval"' not in knowledge
+    assert 'id="ima-pure-uid"' not in knowledge
+    assert re.search(r'id="ima-pure-token"[^>]*', knowledge) is None
     assert 'value="${pure.refresh_token' not in APP_JS.read_text()
 
 
@@ -2100,7 +2108,8 @@ def test_ima_discovery_status_is_safe_and_does_not_render_secrets():
     assert "last_result" in stats
     assert "refresh_token" not in stats
     assert "imaGroupDiscoveryStatusText" in _fn_body("loadAdminKnowledge")
-    assert 'placeholder="${pure.refresh_token' in src
+    assert 'id="ima-pure-token"' not in _fn_body("loadAdminKnowledge")
+    assert 'placeholder="${pure.refresh_token' not in _fn_body("loadAdminKnowledge")
     assert 'value="${pure.refresh_token' not in src
 
 
@@ -3133,9 +3142,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=224"' in html
-    assert 'src="/app.js?v=310"' in html
-    assert 'dav-shell-v181' in sw
+    assert 'href="/style.css?v=225"' in html
+    assert 'src="/app.js?v=311"' in html
+    assert 'dav-shell-v182' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -4073,12 +4082,27 @@ def test_knowledge_settings_nav_and_empty_state():
 def test_knowledge_settings_storage_and_phone_sync_blocks():
     knowledge = _fn_body("loadAdminKnowledge")
     assert "ima_phone_sync.command" in knowledge
-    assert "Refresh Token" in knowledge
+    assert "Refresh Token" not in knowledge
+    assert 'id="ima-pure-token"' not in knowledge
     assert 'id="ima-storage-status"' in _fn_body("imaStoragePanelHtml")
     assert "refreshImaStorage()" in _fn_body("imaStoragePanelHtml")
     assert "backupImaStorage()" in _fn_body("imaStoragePanelHtml")
     assert "立即备份" in _fn_body("imaStoragePanelHtml")
     assert "刷新状态" in _fn_body("imaStoragePanelHtml")
+
+
+def test_knowledge_settings_uses_collect_tabs_and_interval_chips():
+    knowledge = _fn_body("loadAdminKnowledge")
+    assert 'data-tab="collect"' in knowledge
+    assert 'data-tab="zsxq"' in knowledge
+    assert 'data-tab="storage"' in knowledge
+    assert "ima-interval-seg" in knowledge
+    assert "imaCollectorProgressHtml" in knowledge or "ima-sync-progress" in knowledge
+    assert "saveImaCredentials()" not in knowledge
+    save = _fn_body("saveImaCollector")
+    assert "ima-pure-interval" not in save
+    trigger = _fn_body("triggerImaCollector")
+    assert "group_id" in trigger
 
 
 def test_save_polling_splits_zsxq_fields():

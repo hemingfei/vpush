@@ -618,6 +618,7 @@ textarea.form-control {
   .cfg-grid { grid-template-columns: 1fr; }
   .cfg-group--zsxq .cfg-fields { grid-template-columns: 1fr; }
   .ima-mount-layout { grid-template-columns: 1fr; }
+  .ima-mount-kb-item { grid-template-columns: 1fr; }
   .ima-kb-list,
   .ima-folder-tree { max-height: 360px; }
 }
@@ -3060,10 +3061,37 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   display: grid;
   gap: 18px;
 }
+.ks-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ks-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 6px 14px;
+  border: var(--border-default);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.ks-tab.is-on {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-white);
+}
+.ks-panel { display: none; }
+.ks-panel.is-on { display: grid; gap: 16px; }
+.ks-panel[data-panel="storage"].is-on { display: block; }
 .knowledge-settings .ima-credential-actions {
   margin-top: var(--space-3);
 }
 @media (max-width: 800px) {
+  .ks-tab { min-height: 44px; }
   .knowledge-settings .ima-credential-actions,
   .knowledge-settings .ima-collector-foot .toolbar,
   .knowledge-settings .ima-storage-toolbar {
@@ -3136,6 +3164,14 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   min-width: 0;
 }
 .ima-mount-empty { margin: 12px; }
+.ima-mount-kb-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 8px;
+  border-top: var(--border-default);
+}
+.ima-mount-kb-item.is-selected { background: var(--color-accent-soft); }
 .ima-mount-kb-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -3146,7 +3182,6 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   min-height: 44px;
   padding: 8px 12px;
   border: 0;
-  border-top: var(--border-default);
   background: transparent;
   color: var(--color-text);
   text-align: left;
@@ -3184,6 +3219,44 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   color: var(--color-text-muted);
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
+}
+.ima-interval-seg {
+  display: inline-flex;
+  align-items: center;
+  margin: 6px 10px 6px 0;
+  padding: 2px;
+  border: var(--border-default);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+}
+.ima-interval-seg button {
+  min-height: 32px;
+  min-width: 36px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--color-text);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.ima-interval-seg button.is-on {
+  background: var(--color-accent);
+  color: var(--color-white);
+}
+.ima-collector-foot-main { display: grid; gap: 6px; min-width: 0; flex: 1 1 220px; }
+.ima-progress { display: grid; gap: 6px; min-width: 0; }
+.ima-progress-label { color: var(--color-text); font-size: var(--text-sm); }
+.ima-progress-bar {
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-soft);
+  overflow: hidden;
+}
+.ima-progress-bar span {
+  display: block;
+  height: 100%;
+  background: var(--color-accent);
 }
 .ima-folder-node {
   min-width: 0;
@@ -3313,6 +3386,9 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   .ima-group-enabled,
   .ima-credential-field--wide { grid-column: auto; }
   .ima-mount-layout { grid-template-columns: 1fr; }
+  .ima-mount-kb-item { grid-template-columns: 1fr; }
+  .ima-interval-seg { margin: 0 12px 10px; }
+  .ima-interval-seg button { min-height: 44px; min-width: 44px; }
   .ima-kb-list,
   .ima-folder-tree { max-height: 360px; }
 }

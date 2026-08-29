@@ -145,6 +145,16 @@ const imaMountState = {
   generation: 0,
 };
 
+const KS_TAB_KEY = "ks-tab";
+let imaCollectorPureCache = {
+  uid: "",
+  knowledge_base_id: "",
+  root_folder_id: "",
+  interval_seconds: 3600,
+};
+let imaProgressTimer = null;
+let imaProgressPollSeq = 0;
+
 function escapeHtml(text) {
   return String(text ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -5577,11 +5587,29 @@ function imaMountDraft(groupId) {
   return draft;
 }
 
+function imaGroupIntervalSeconds(group) {
+  const sec = Number(group?.interval_seconds || 3600);
+  if (sec < 10800) return 3600;
+  if (sec < 43200) return 21600;
+  return 86400;
+}
+
 function initImaMountState(groups, preserve = false) {
   const oldDrafts = imaMountState.drafts;
   const oldSelected = imaMountState.selectedGroupId;
   const oldDirty = imaMountState.dirty;
-  imaMountState.groups = Array.isArray(groups) ? groups.filter((group) => group && group.id) : [];
+  const oldGroupsById = new Map(
+    imaMountState.groups.map((group) => [String(group.id), group]),
+  );
+  imaMountState.groups = (Array.isArray(groups) ? groups.filter((group) => group && group.id) : []).map((group) => {
+    const previous = oldGroupsById.get(String(group.id));
+    const incoming = Number(group.interval_seconds);
+    const fallback = previous ? Number(previous.interval_seconds) || 3600 : 3600;
+    return {
+      ...group,
+      interval_seconds: Number.isFinite(incoming) && incoming > 0 ? incoming : fallback,
+    };
+  });
   imaMountState.selectedGroupId = oldSelected;
   imaMountState.drafts = new Map();
   imaMountState.folders = new Map();
@@ -5612,6 +5640,16 @@ function initImaMountState(groups, preserve = false) {
   }
 }
 
+function imaIntervalSegHtml(group) {
+  const groupId = String(group?.id || "");
+  const current = imaGroupIntervalSeconds(group);
+  return `<span class="ima-interval-seg" data-group-id="${escapeHtml(groupId)}">${
+    [[3600, "1h"], [21600, "6h"], [86400, "24h"]].map(([sec, label]) =>
+      `<button type="button" data-sec="${sec}" class="${current === sec ? "is-on" : ""}" onclick="setImaGroupInterval(event, this)">${label}</button>`
+    ).join("")
+  }</span>`;
+}
+
 function imaMountGroupRowHtml(group) {
   const groupId = String(group?.id || "");
   const draft = imaMountState.drafts.get(groupId) || new Set();
@@ -5620,6 +5658,7 @@ function imaMountGroupRowHtml(group) {
   const count = draft.size;
   const mountText = count ? `已选择 ${count} 个文件夹` : "未挂载";
   return `
+    <div class="ima-mount-kb-item${selected ? " is-selected" : ""}">
     <button type="button" class="ima-mount-kb-row${selected ? " is-selected" : ""}" id="ima-kb-row-${escapeHtml(groupId)}" role="option"
       aria-selected="${selected}" data-group-id="${escapeHtml(groupId)}"
       onclick="selectImaMountGroup(this.dataset.groupId)">
@@ -5628,7 +5667,27 @@ function imaMountGroupRowHtml(group) {
         <span class="ima-mount-kb-meta">${escapeHtml(source)} · ${escapeHtml(mountText)}</span>
       </span>
       <span class="ima-mount-kb-count" aria-hidden="true">${count}</span>
-    </button>`;
+    </button>
+    ${imaIntervalSegHtml(group)}
+    </div>`;
+}
+
+function setImaGroupInterval(event, button) {
+  event?.stopPropagation?.();
+  const seg = button?.closest?.(".ima-interval-seg");
+  const groupId = seg?.dataset.groupId || "";
+  const seconds = Number(button?.dataset.sec || 0);
+  const group = imaMountGroup(groupId);
+  if (!group || ![3600, 21600, 86400].includes(seconds)) return;
+  group.interval_seconds = seconds;
+  imaMountState.revision += 1;
+  imaMountState.collectorRevision += 1;
+  imaMountState.dirty = true;
+  const draft = rememberImaCollectorDraft();
+  if (imaMountState.saveOwner) imaMountState.saveOwner.liveSnapshot = draft;
+  const focus = imaFocusSnapshot(button);
+  renderImaMountGroups();
+  imaRestoreFocus(focus);
 }
 
 function renderImaMountGroups() {
@@ -5955,18 +6014,19 @@ function readImaMountGroups() {
       root_folder_id: String(group.root_folder_id || "").trim(),
       folder_ids: folderIds,
       enabled: folderIds.length > 0,
+      interval_seconds: imaGroupIntervalSeconds(group),
     };
   });
 }
 
 function imaCollectorFormSnapshot() {
   return {
-    uid: $("#ima-pure-uid")?.value?.trim() || "",
-    knowledge_base_id: $("#ima-pure-kb")?.value?.trim() || "",
-    root_folder_id: $("#ima-pure-root")?.value?.trim() || "",
-    interval_seconds: Number($("#ima-pure-interval")?.value || 60) * 60,
+    uid: imaCollectorPureCache.uid || "",
+    knowledge_base_id: imaCollectorPureCache.knowledge_base_id || "",
+    root_folder_id: imaCollectorPureCache.root_folder_id || "",
+    interval_seconds: Number(imaCollectorPureCache.interval_seconds || 3600),
     groups: readImaMountGroups(),
-    refresh_token: $("#ima-pure-token")?.value?.trim() || "",
+    refresh_token: String(imaMountState.collectorDraft?.refresh_token || ""),
   };
 }
 
@@ -5994,8 +6054,9 @@ function clearImaCollectorDraft(revision) {
 }
 
 function imaCollectorDraftChanged(event) {
-  const id = event.target?.id || "";
-  if (!["ima-pure-uid", "ima-pure-kb", "ima-pure-root", "ima-pure-interval", "ima-pure-token"].includes(id)) return;
+  const target = event.target;
+  if (!target?.closest?.(".ima-interval-seg")) return;
+  if (event.type === "click") return;
   const snapshot = rememberImaCollectorDraft();
   imaMountState.collectorRevision += 1;
   if (imaMountState.saveOwner) imaMountState.saveOwner.liveSnapshot = snapshot;
@@ -6055,6 +6116,20 @@ async function reloadAdminSettingsPage(seq, authoritativeImaStatus = null) {
   return loadAdminStats(seq, authoritativeImaStatus);
 }
 
+function switchKnowledgeSettingsTab(tab) {
+  const allowed = ["collect", "zsxq", "storage"];
+  const next = allowed.includes(tab) ? tab : "collect";
+  try { sessionStorage.setItem(KS_TAB_KEY, next); } catch { /* ignore */ }
+  document.querySelectorAll(".ks-tab").forEach((btn) => {
+    const on = btn.dataset.tab === next;
+    btn.classList.toggle("is-on", on);
+    btn.setAttribute("aria-selected", String(on));
+  });
+  document.querySelectorAll(".ks-panel").forEach((panel) => {
+    panel.classList.toggle("is-on", panel.dataset.panel === next);
+  });
+}
+
 function imaStoragePanelHtml(storage) {
   const st = storage || {};
   const status = st.status || "local";
@@ -6072,7 +6147,7 @@ function imaStoragePanelHtml(storage) {
     missing: "未配置",
     invalid: "状态无效",
   };
-  return `<section class="section-panel" id="ima-storage-panel">
+  return `<section class="section-panel ks-panel" data-panel="storage" id="ima-storage-panel">
     <header class="section-head"><div><h2 class="section-title">存储</h2>
     <p class="section-meta">刷新探测，备份归档。密钥不进网页。</p></div></header>
     <div class="cfg-foot">
@@ -6094,7 +6169,7 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
   }
   const generation = imaMountState.generation;
   const pendingOwner = imaMountState.saveOwner;
-  if (pendingOwner && !pendingOwner.putCompleted && $("#ima-pure-uid")) {
+  if (pendingOwner && !pendingOwner.putCompleted && $("#ima-mount-layout")) {
     pendingOwner.liveSnapshot = imaCollectorFormSnapshot();
     rememberImaCollectorDraft(pendingOwner.liveSnapshot);
   }
@@ -6355,7 +6430,7 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
   if (!routeStillActive(seq)) return false;
   const generation = imaMountState.generation;
   const pendingOwner = imaMountState.saveOwner;
-  if (pendingOwner && !pendingOwner.putCompleted && $("#ima-pure-uid")) {
+  if (pendingOwner && !pendingOwner.putCompleted && $("#ima-mount-layout")) {
     pendingOwner.liveSnapshot = imaCollectorFormSnapshot();
     rememberImaCollectorDraft(pendingOwner.liveSnapshot);
   }
@@ -6407,13 +6482,18 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
   const mountRevisionChangedDuringSave = ownerIsCurrent
     && imaMountState.revision !== owner.mountRevision;
   const preserveMountDraftForReload = preserveMountDraft || mountRevisionChangedDuringSave;
-  const ima = s.ima_credentials || {};
   const imaCollector = s.ima_collector || {};
   const pure = imaCollector.config || {};
   const collectorDraft = confirmedCollectorDraft ? null
     : (ownerSnapshot || (ownerIsCurrent && owner.putCompleted ? null : pendingCollectorDraft));
   const collector = collectorDraft || pure;
   const collectorGroups = collectorDraft?.groups || pure.groups || [];
+  imaCollectorPureCache = {
+    uid: collector.uid || "",
+    interval_seconds: Number(collector.interval_seconds || 3600),
+    knowledge_base_id: collector.knowledge_base_id || "",
+    root_folder_id: collector.root_folder_id || "",
+  };
   const zq = s.zsxq_cookie || {};
   const zc = s.zsxq_cache || { files: 0, bytes: 0 };
   const zcSize = fmtCacheBytes(zc.bytes);
@@ -6422,47 +6502,15 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
   $("#admin-body").innerHTML = `
     <div id="stats-poll-error"></div>
     <div class="knowledge-settings">
-    <section class="section-panel ima-source-panel">
-      <header class="section-head"><div><h2 class="section-title">IMA</h2>
-      <p class="section-meta">凭证、采集、本机同步。保存后即时生效。</p></div></header>
-      <div class="ima-source-stack">
-      <div class="ima-source-block">
-        <header class="ima-source-block-head"><div><h3 class="ima-source-title">IMA 凭证</h3>
-        <p class="section-meta">模式：${ima.mode || "未配置"}${ima.openapi_clientid?.set ? ` · clientid ${escapeHtml(ima.openapi_clientid.preview || "")}` : ""}。网页 Cookie 用扫码脚本；OpenAPI 在 ima.qq.com 生成。</p></div></header>
-        <div class="ima-credential-fields">
-          <label class="ima-credential-field ima-credential-field--wide" for="ima-cookie">
-            <span>网页 Cookie（x-ima-cookie）</span>
-            <textarea id="ima-cookie" class="form-control cookie-paste" rows="3" placeholder="IMA-TOKEN=...; IMA-UID=..."></textarea>
-          </label>
-          <label class="ima-credential-field ima-code-field" for="ima-cid">
-            <span>OpenAPI Client ID</span>
-            <input id="ima-cid" class="form-control" placeholder="Client ID">
-          </label>
-          <label class="ima-credential-field ima-code-field" for="ima-key">
-            <span>OpenAPI API Key</span>
-            <input id="ima-key" class="form-control" placeholder="API Key" type="password">
-          </label>
-        </div>
-        <div class="ima-credential-actions toolbar">
-          <button type="button" class="btn-normal" onclick="saveImaCredentials()">保存 IMA 凭证</button>
-          <button type="button" class="btn-ghost" onclick="pasteCookieField('ima-cookie')">从剪贴板填入 Cookie</button>
-          ${ima.cookie?.set && !ima.cookie.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('ima','ima')" aria-label="清除 IMA Cookie">清除 Cookie</button>` : ""}
-        </div>
+      <div class="ks-tabs" role="tablist">
+        <button type="button" class="ks-tab is-on" data-tab="collect" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">采集</button>
+        <button type="button" class="ks-tab" data-tab="zsxq" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">星球</button>
+        <button type="button" class="ks-tab" data-tab="storage" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">存储</button>
       </div>
-      <div class="ima-source-block">
-        <header class="ima-source-block-head"><div><h3 class="ima-source-title">IMA 文档采集</h3>
-        <p class="section-meta">默认每小时检查一次，只下载新增 PDF；Refresh Token 留空表示保持已保存值。</p></div></header>
+      <section class="section-panel ks-panel is-on" data-panel="collect">
+        <header class="section-head"><div><h2 class="section-title">IMA 文档采集</h2>
+        <p class="section-meta">勾选文件夹后同步其中新增 PDF。父目录包含以后新建的子目录。</p></div></header>
         <div class="cfg-stack ima-collector-stack">
-          <div class="cfg-group ima-collector-connection">
-            <p class="cfg-group-title">连接与同步</p>
-            <div class="ima-collector-fields cfg-fields">
-              <label class="cfg-field ima-code-field"><span>IMA UID</span><input id="ima-pure-uid" type="text" class="form-control" value="${escapeHtml(collector.uid || "001aa361168019ef")}" maxlength="64"></label>
-              <label class="cfg-field"><span>检查间隔<span class="cfg-unit">分钟</span></span><input id="ima-pure-interval" type="number" class="form-control" min="30" max="10080" value="${Math.round(Number(collector.interval_seconds || 3600) / 60)}"></label>
-              <label class="cfg-field ima-code-field ima-field--wide"><span>Refresh Token</span><input id="ima-pure-token" class="form-control" type="password" autocomplete="off" placeholder="${pure.refresh_token?.set ? "已保存，留空保持不变" : "重新登录 IMA 后粘贴"}"></label>
-              <input id="ima-pure-kb" type="hidden" value="${escapeHtml(collector.knowledge_base_id || "7464369361259867")}">
-              <input id="ima-pure-root" type="hidden" value="${escapeHtml(collector.root_folder_id || "folder_7489327974078249")}">
-            </div>
-          </div>
           <div class="cfg-group ima-groups-block">
             <div class="ima-groups-head">
               <div>
@@ -6486,17 +6534,18 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
           </div>
         </div>
         <div class="cfg-foot ima-collector-foot">
-          <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
+          <div class="ima-collector-foot-main">
+            <div id="ima-sync-progress">${imaCollectorProgressHtml(imaCollector)}</div>
+            <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
+          </div>
           <div class="toolbar"><button type="button" class="btn-normal" id="ima-collector-save"${imaMountState.saveOwner ? " disabled" : ""} onclick="saveImaCollector()">保存采集配置</button><button type="button" class="btn-ghost" id="ima-sync-btn" onclick="triggerImaCollector()">${REFRESH_ICON}<span>立即同步</span></button></div>
         </div>
-      </div>
-      <div class="ima-source-block">
-        <header class="ima-source-block-head"><div><h3 class="ima-source-title">手机同步</h3>
-        <p class="section-meta">本机双击 <code>scripts/ima_phone_sync.command</code> 写入 Token。当前：${tokenSet ? "已保存" : "未保存"}。</p></div></header>
-      </div>
-      </div>
-    </section>
-    <section class="section-panel">
+        <div class="ima-source-block">
+          <header class="ima-source-block-head"><div><h3 class="ima-source-title">手机同步</h3>
+          <p class="section-meta">本机双击 <code>scripts/ima_phone_sync.command</code> 写入 Token。当前：${tokenSet ? "已保存" : "未保存"}。</p></div></header>
+        </div>
+      </section>
+      <section class="section-panel ks-panel" data-panel="zsxq">
       <header class="section-head"><div><h2 class="section-title">知识星球</h2>
       <p class="section-meta">Cookie 与抓取分开保存，互不覆盖。</p></div></header>
       <div class="ima-source-stack">
@@ -6583,6 +6632,12 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
   if (collectorDraft) initImaMountState(collectorGroups, true);
   else initImaMountState(pure.groups || [], preserveMountDraftForReload);
   renderImaMountGroups();
+  document.querySelectorAll(".ima-interval-seg").forEach((seg) => {
+    const current = imaGroupIntervalSeconds(imaMountGroup(seg.dataset.groupId));
+    seg.querySelectorAll("button[data-sec]").forEach((btn) => {
+      btn.classList.toggle("is-on", Number(btn.dataset.sec) === current);
+    });
+  });
   restoreImaCollectorOwnerToken(owner, seq, pendingCollectorDraft);
   if (confirmedCollectorDraft) {
     const confirmedRevision = imaMountState.collectorConfirmedRevision;
@@ -6598,6 +6653,11 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
       if (tokenInput) tokenInput.value = "";
     }
   }
+  let savedTab = "collect";
+  try { savedTab = sessionStorage.getItem(KS_TAB_KEY) || "collect"; } catch { /* ignore */ }
+  switchKnowledgeSettingsTab(savedTab);
+  if (imaCollector.running) startImaProgressPoll();
+  else applyImaCollectorProgress(imaCollector);
   startDashboardLiveTimer();
   return true;
 }
@@ -7458,12 +7518,6 @@ async function saveImaCollector() {
   const onFocusIn = (event) => {
     if (event.target !== focusElement && event.target !== document.body) focusMoved = true;
   };
-  const minutes = Number($("#ima-pure-interval")?.value || 60);
-  if (!Number.isInteger(minutes) || minutes < 30 || minutes > 10080) {
-    flash("检查间隔须在 30–10080 分钟", "error");
-    if (saveButton && document.body.contains(saveButton)) saveButton.disabled = false;
-    return;
-  }
   const snapshot = imaCollectorFormSnapshot();
   rememberImaCollectorDraft(snapshot);
   const body = {
@@ -7485,8 +7539,8 @@ async function saveImaCollector() {
   };
   const onDraftChange = (event) => {
     if (imaMountState.saveOwner !== saveOwner) return;
-    const id = event.target?.id || "";
-    if (!["ima-pure-uid", "ima-pure-kb", "ima-pure-root", "ima-pure-interval", "ima-pure-token"].includes(id)) return;
+    const target = event.target;
+    if (!target?.closest?.(".ima-interval-seg") && !target.closest?.("#ima-mount-layout")) return;
     const liveSnapshot = rememberImaCollectorDraft();
     if (imaMountState.saveOwner === saveOwner) saveOwner.liveSnapshot = liveSnapshot;
   };
@@ -7494,6 +7548,7 @@ async function saveImaCollector() {
   if (saveButton) saveButton.disabled = true;
   document.addEventListener("input", onDraftChange);
   document.addEventListener("change", onDraftChange);
+  document.addEventListener("click", onDraftChange);
   document.addEventListener("focusin", onFocusIn);
   try {
     const savedImaStatus = await api("/api/admin/ima-collector", { method: "PUT", body: JSON.stringify(body) });
@@ -7511,7 +7566,7 @@ async function saveImaCollector() {
       imaMountState.collectorConfirmedMountRevision = saveOwner.mountRevision;
     }
     const currentSnapshot = routeStillActive(routeSeq) && isAdminSettingsPath()
-      && $("#ima-pure-uid") ? imaCollectorFormSnapshot() : null;
+      && $("#ima-mount-layout") ? imaCollectorFormSnapshot() : null;
     const currentFormRevision = currentSnapshot
       ? imaCollectorFormRevision(currentSnapshot) : submittedLiveRevision;
     if (currentSnapshot && currentFormRevision !== saveOwner.formRevision) {
@@ -7559,6 +7614,7 @@ async function saveImaCollector() {
   } finally {
     document.removeEventListener("input", onDraftChange);
     document.removeEventListener("change", onDraftChange);
+    document.removeEventListener("click", onDraftChange);
     document.removeEventListener("focusin", onFocusIn);
     if (imaMountState.saveOwner === saveOwner) {
       imaMountState.saveOwner = null;
@@ -7569,13 +7625,65 @@ async function saveImaCollector() {
   }
 }
 
+function imaCollectorProgressHtml(status) {
+  const p = status.progress;
+  if (!status.running || !p) return "";
+  if (p.phase === "listing") {
+    return `<div class="ima-progress"><div class="ima-progress-label">${escapeHtml(p.group_name || "")} · 列目录 ${Number(p.listed||0)}</div><div class="ima-progress-bar"><span style="width:15%"></span></div></div>`;
+  }
+  const total = Math.max(1, Number(p.pending || 0));
+  const done = Number(p.downloaded || 0);
+  const pct = Math.max(0, Math.min(100, Math.round(done * 100 / total)));
+  return `<div class="ima-progress"><div class="ima-progress-label">${escapeHtml(p.group_name || "")} · 下载 ${done} / ${Number(p.pending||0)}</div><div class="ima-progress-bar"><span style="width:${pct}%"></span></div></div>`;
+}
+
+function stopImaProgressPoll() {
+  imaProgressPollSeq += 1;
+  if (imaProgressTimer) {
+    clearInterval(imaProgressTimer);
+    imaProgressTimer = null;
+  }
+}
+
+function applyImaCollectorProgress(status) {
+  const progress = $("#ima-sync-progress");
+  if (progress) progress.innerHTML = imaCollectorProgressHtml(status);
+  const btn = $("#ima-sync-btn");
+  if (btn && document.body.contains(btn)) btn.disabled = !!status?.running;
+  const target = $("#ima-collector-status");
+  if (target) target.textContent = imaCollectorStatusText(status);
+}
+
+function startImaProgressPoll() {
+  stopImaProgressPoll();
+  const routeSeq = routeRenderSeq;
+  const pollSeq = imaProgressPollSeq;
+  const tick = async () => {
+    try {
+      const status = await api("/api/admin/ima-collector");
+      if (pollSeq !== imaProgressPollSeq || !routeStillActive(routeSeq)) return;
+      applyImaCollectorProgress(status);
+      if (!status.running) stopImaProgressPoll();
+    } catch {
+      if (pollSeq !== imaProgressPollSeq || !routeStillActive(routeSeq)) return;
+    }
+  };
+  imaProgressTimer = setInterval(tick, 2000);
+  tick();
+}
+
 async function triggerImaCollector() {
   const routeSeq = routeRenderSeq;
   const btn = $("#ima-sync-btn");
   if (btn?.disabled) return;
+  const groupId = imaMountState.selectedGroupId;
+  if (!groupId) {
+    flash("请先选择知识库", "error");
+    return;
+  }
   if (btn) btn.disabled = true;
   try {
-    const result = await api("/api/admin/ima-collector/sync", { method: "POST" });
+    const result = await api("/api/admin/ima-collector/sync", { method: "POST", body: JSON.stringify({ group_id: groupId }) });
     if (!routeStillActive(routeSeq)) return;
     flash(result.status === "already_running" ? "IMA 文档同步正在进行中" : "IMA 文档同步已启动");
     const status = await api("/api/admin/ima-collector");
@@ -7584,6 +7692,8 @@ async function triggerImaCollector() {
     if (target) target.textContent = imaCollectorStatusText(status);
     const discovery = $("#ima-group-discovery-status");
     if (discovery) discovery.innerHTML = imaGroupDiscoveryStatusText(status);
+    applyImaCollectorProgress(status);
+    startImaProgressPoll();
   } catch (err) {
     if (routeStillActive(routeSeq)) flash(err.message || "同步启动失败", "error");
   } finally {
@@ -10555,6 +10665,7 @@ async function router() {
   stopSettingsPoll();
   stopSysLogsTimer();
   stopStatsTimer();
+  stopImaProgressPoll();
   stopTimelinePoll();
   // 离开动态页前记录滚动位置，切回时恢复阅读位置
   if (document.querySelector("#feed")) {

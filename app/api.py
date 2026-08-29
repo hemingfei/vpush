@@ -90,6 +90,7 @@ from .ima_documents import (
     IMA_PURE_UID_KEY,
     ImaDocumentService,
     ImaPureClient,
+    _clamp_group_interval,
     _safe_error,
     ima_kb_valid_tags,
     normalize_ima_folder_item,
@@ -537,6 +538,7 @@ class ImaGroupIn(BaseModel):
     root_folder_id: str
     enabled: bool = True
     folder_ids: list[object] | None = None
+    interval_seconds: int | None = None
 
 
 class ImaCollectorIn(BaseModel):
@@ -2884,6 +2886,11 @@ def create_api_router(
                             "folder_ids": folder_ids,
                             "enabled": enabled,
                             "source": previous.source if previous else "manual",
+                            "interval_seconds": _clamp_group_interval(
+                                group.interval_seconds if group.interval_seconds is not None else (
+                                    previous.interval_seconds if previous else 3600
+                                )
+                            ),
                         }
                     )
                 clear_group_ids.extend(
