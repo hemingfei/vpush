@@ -1269,8 +1269,7 @@ def test_knowledge_reader_pdf_fail_uses_header_download_only():
     assert "正在打开预览" in reader
     assert "aria-busy" in reader
     assert "ima-reader-status" in load
-    assert re.search(r"\.kb-reader\s*\{[^}]*overflow:\s*hidden", css)
-    assert ".kb-reader .ima-pdf-panel iframe" in css
+    assert ".ima-reader-page .ima-pdf-panel iframe" in css
 
 
 def test_ima_pdf_load_is_owned_by_route_and_reader_generation_before_load_or_fail_side_effects():
@@ -2381,15 +2380,32 @@ def test_ima_report_states_do_not_drop_incomplete_documents():
     assert "btn-normal" not in fail
 
 
-def test_ima_document_headers_have_desktop_flex_alignment():
-    """文档列表和阅读器标题桌面端使用 flex 横向对齐，移动端继续使用 grid。"""
+def test_ima_report_first_layout_is_flat_dense_and_full_width():
     css = STYLE_CSS.read_text()
-    for selector in (".ima-docs-head", ".ima-reader-head"):
-        block = re.search(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", css)
-        assert block, f"缺少 {selector} 样式"
-        for declaration in ("display: flex", "justify-content: space-between", "gap:"):
-            assert declaration in block.group(1), f"{selector} 缺少 {declaration}"
-    assert ".ima-reader-head { display: grid; gap: 12px; }" in css
+
+    assert ".ima-report-page" in css
+    assert ".ima-report-head" in css
+    assert ".ima-report-columns" in css
+    assert ".ima-report-body" in css
+    assert ".ima-report-title" in css
+    assert ".ima-report-source" in css
+    assert "grid-template-columns: 64px minmax(0, 1fr) 132px" in css
+    assert re.search(r"\.ima-doc-row\s*\{[^}]*min-height:\s*50px", css)
+    assert "box-shadow: none" in css
+    assert not re.search(r"\.kb-desk\s*\{", css)
+    assert ".kb-reader" not in css
+
+
+def test_ima_dedicated_reader_fills_the_desktop_surface():
+    css = STYLE_CSS.read_text()
+
+    assert ".ima-reader-page" in css
+    assert ".ima-reader-toolbar" in css
+    assert ".ima-reader-info" in css
+    assert ".ima-reader-nav" in css
+    assert re.search(r"\.ima-reader-page \.ima-pdf-panel\s*\{[^}]*flex:\s*1", css)
+    assert "clip-path" not in css[css.index(".ima-reader-page"):]
+    assert "color-scheme: light" not in css[css.index(".ima-reader-page"):]
 
 
 def test_ima_source_filter_is_compact_and_subscription_management_survives():
