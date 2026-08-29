@@ -6,12 +6,15 @@ import os
 import tempfile
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
 MAX_PDF_BYTES = 200 * 1024 * 1024
 MAX_JSON_BYTES = 1_000_000
+RANGE_MIN_BYTES = 8 * 1024 * 1024
+RANGE_PARTS = 4
 
 
 class AllowedRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -45,6 +48,55 @@ def safe_dest(root: Path, dest: str) -> Path:
     return candidate
 
 
+def _http_open(request: urllib.request.Request):
+    try:
+        opener = urllib.request.build_opener(AllowedRedirectHandler())
+        return opener.open(request, timeout=120)
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"IMA PDF HTTP {exc.code}") from exc
+
+
+def _read_limited(response) -> bytes:
+    chunks: list[bytes] = []
+    size = 0
+    while True:
+        chunk = response.read(1024 * 1024)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > MAX_PDF_BYTES:
+            raise RuntimeError("IMA PDF too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _download_ranged(url: str, headers: dict[str, str], expected_size: int) -> bytes:
+    chunk = (expected_size + RANGE_PARTS - 1) // RANGE_PARTS
+    spans = []
+    for index in range(RANGE_PARTS):
+        start = index * chunk
+        end = min(expected_size - 1, (index + 1) * chunk - 1)
+        if start <= end:
+            spans.append((start, end))
+
+    def fetch(span: tuple[int, int]) -> tuple[int, bytes]:
+        start, end = span
+        part_headers = dict(headers)
+        part_headers["Range"] = f"bytes={start}-{end}"
+        request = urllib.request.Request(url, headers=part_headers)
+        with _http_open(request) as response:
+            data = _read_limited(response)
+        expect = end - start + 1
+        if len(data) != expect:
+            raise RuntimeError(f"IMA PDF HTTP range length got={len(data)} expected={expect}")
+        return start, data
+
+    with ThreadPoolExecutor(max_workers=len(spans)) as pool:
+        parts = list(pool.map(fetch, spans))
+    parts.sort(key=lambda item: item[0])
+    return b"".join(data for _, data in parts)
+
+
 def save_pdf(
     root: Path,
     dest: str,
@@ -58,7 +110,6 @@ def save_pdf(
     destination.parent.mkdir(parents=True, exist_ok=True)
     request_headers = {str(k): str(v) for k, v in headers.items()}
     request_headers["User-Agent"] = "okhttp/4.12.0"
-    request = urllib.request.Request(url, headers=request_headers)
     fd, temp_name = tempfile.mkstemp(
         prefix=destination.name + ".", suffix=".part", dir=destination.parent
     )
@@ -68,27 +119,35 @@ def save_pdf(
     size = 0
     first = b""
     try:
-        try:
-            opener = urllib.request.build_opener(AllowedRedirectHandler())
-            response = opener.open(request, timeout=120)
-        except urllib.error.HTTPError as exc:
-            raise RuntimeError(f"IMA PDF HTTP {exc.code}") from exc
-        with response, temp.open("wb") as output:
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                if size + len(chunk) > MAX_PDF_BYTES:
-                    raise RuntimeError("IMA PDF too large")
-                if not first:
-                    first = chunk[:8]
-                output.write(chunk)
-                digest.update(chunk)
-                size += len(chunk)
-        if not first.startswith(b"%PDF-1."):
-            raise RuntimeError("IMA download is not a PDF")
-        if expected_size and size != int(expected_size):
-            raise RuntimeError(f"IMA PDF size mismatch got={size} expected={expected_size}")
+        if int(expected_size or 0) >= RANGE_MIN_BYTES:
+            data = _download_ranged(url, request_headers, int(expected_size))
+            first = data[:8]
+            size = len(data)
+            if not first.startswith(b"%PDF-1."):
+                raise RuntimeError("IMA download is not a PDF")
+            if expected_size and size != int(expected_size):
+                raise RuntimeError(f"IMA PDF size mismatch got={size} expected={expected_size}")
+            digest.update(data)
+            temp.write_bytes(data)
+        else:
+            request = urllib.request.Request(url, headers=request_headers)
+            response = _http_open(request)
+            with response, temp.open("wb") as output:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    if size + len(chunk) > MAX_PDF_BYTES:
+                        raise RuntimeError("IMA PDF too large")
+                    if not first:
+                        first = chunk[:8]
+                    output.write(chunk)
+                    digest.update(chunk)
+                    size += len(chunk)
+            if not first.startswith(b"%PDF-1."):
+                raise RuntimeError("IMA download is not a PDF")
+            if expected_size and size != int(expected_size):
+                raise RuntimeError(f"IMA PDF size mismatch got={size} expected={expected_size}")
         os.replace(temp, destination)
     except Exception:
         temp.unlink(missing_ok=True)

@@ -175,6 +175,52 @@ def test_save_pdf_rejects_oversize_and_cleans_part(tmp_path, monkeypatch):
     assert not list(dest_path.parent.glob("*.part"))
 
 
+def test_save_pdf_uses_range_for_large_files(tmp_path, monkeypatch):
+    import app.ima_puller as puller
+
+    body = b"%PDF-1.7" + b"x" * 32
+    monkeypatch.setattr(puller, "RANGE_MIN_BYTES", 20)
+    monkeypatch.setattr(puller, "RANGE_PARTS", 4)
+    seen: list[str] = []
+
+    class Resp:
+        def __init__(self, data):
+            self._data = data
+            self.status = 206
+
+        def read(self, n):
+            data = self._data
+            self._data = b""
+            return data[:n]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    class FakeOpener:
+        def open(self, req, data=None, timeout=120):
+            rng = req.headers.get("Range") or req.get_header("Range") or ""
+            seen.append(rng)
+            assert rng.startswith("bytes=")
+            start, end = rng.split("=", 1)[1].split("-")
+            return Resp(body[int(start) : int(end) + 1])
+
+    monkeypatch.setattr(puller.urllib.request, "build_opener", lambda *handlers: FakeOpener())
+    result = save_pdf(
+        tmp_path,
+        "g/a.pdf",
+        "https://res-skb.ima.qq.com/a.pdf",
+        {"X-IMA-Sign": "sig"},
+        expected_size=len(body),
+    )
+    assert (tmp_path / "g" / "a.pdf").read_bytes() == body
+    assert result["size"] == len(body)
+    assert len(seen) == 4
+    assert not list((tmp_path / "g").glob("*.part"))
+
+
 def _start(tmp_path, monkeypatch, token="secret"):
     import app.ima_puller as puller
 
