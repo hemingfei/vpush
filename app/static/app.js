@@ -147,14 +147,156 @@ function imgProxyUrl(url) {
   return `/api/img-proxy?url=${encodeURIComponent(url)}`;
 }
 
+// 轻量 Markdown 渲染（安全：先整体 escapeHtml 再解析，输出内不会出现未转义的用户 HTML）。
+// 支持：# 标题、**粗体**、*斜体*、`行内代码`、``` 代码块、[链接](url)、裸链接、
+// - / 1. 列表、> 引用、--- 分隔线；段落内换行保留为 <br>。不支持的语法原样展示。
+function mdInline(s) {
+  return s.replace(
+    /(`[^`\n]+`)|(\[[^\]\n]+\]\(https?:\/\/[^\s)]+\))|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|(https?:\/\/[^\s<>"\u3000-\u303f\uff00-\uffef\u4e00-\u9fff]+)/g,
+    (m, code, mdLink, bold, em, url) => {
+      if (code) return `<code>${code.slice(1, -1)}</code>`;
+      if (mdLink) {
+        const mm = mdLink.match(/^\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)$/);
+        return `<a href="${mm[2]}" target="_blank" rel="noopener">${mm[1]}</a>`;
+      }
+      if (bold) return `<strong>${bold.slice(2, -2)}</strong>`;
+      if (em) return `<em>${em.slice(1, -1)}</em>`;
+      if (url) {
+        // 去掉句尾跟着的标点，避免链接把逗号句号一起吃进去
+        const trimmed = url.replace(/[.,;:!?)\]}、，。；：）】]+$/, "");
+        const rest = url.slice(trimmed.length);
+        return `<a href="${trimmed}" target="_blank" rel="noopener">${trimmed}</a>${rest}`;
+      }
+      return m;
+    });
+}
+
+function mdToHtml(text) {
+  const src = escapeHtml(String(text ?? ""));
+  if (!src.trim()) return escapeHtml(text ?? "");
+  const lines = src.split("\n");
+  const out = [];
+  let para = [];
+  const flushPara = () => {
+    if (para.length) out.push(`<p>${mdInline(para.join("<br>"))}</p>`);
+    para = [];
+  };
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^\s*```/.test(line)) {
+      flushPara();
+      const code = [];
+      i++;
+      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) { code.push(lines[i]); i++; }
+      i++; // 跳过收尾 ```（缺失时自然结束）
+      out.push(`<pre><code>${code.join("\n")}</code></pre>`);
+      continue;
+    }
+    const h = line.match(/^(#{1,4})\s+(.+?)\s*#*$/);
+    if (h) {
+      flushPara();
+      out.push(`<div class="md-h md-h${h[1].length}">${mdInline(h[2])}</div>`);
+      i++;
+      continue;
+    }
+    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      flushPara();
+      out.push("<hr>");
+      i++;
+      continue;
+    }
+    if (/^\s*&gt;\s?/.test(line)) {
+      // escapeHtml 已把 > 转成 &gt;，这里按转义后的形态识别引用
+      flushPara();
+      const quote = [];
+      while (i < lines.length && /^\s*&gt;\s?/.test(lines[i])) {
+        quote.push(lines[i].replace(/^\s*&gt;\s?/, ""));
+        i++;
+      }
+      out.push(`<blockquote>${mdInline(quote.join("<br>"))}</blockquote>`);
+      continue;
+    }
+    if (/^\s*[-*+]\s+/.test(line) || /^\s*\d+[.)]\s+/.test(line) || /^\s*\d+、/.test(line)) {
+      flushPara();
+      const ordered = /^\s*\d+[.、)]/.test(line);
+      const items = [];
+      // 「1. xxx」要求跟空格（避免把「1.5 倍」当列表）；「1、xxx」是中文习惯，不要求空格
+      const re = /^\s*\d+、\s*/.test(line) ? /^\s*\d+、\s*/ : (ordered ? /^\s*\d+[.)]\s+/ : /^\s*[-*+]\s+/);
+      while (i < lines.length && re.test(lines[i])) {
+        items.push(`<li>${mdInline(lines[i].replace(re, ""))}</li>`);
+        i++;
+      }
+      out.push(ordered ? `<ol>${items.join("")}</ol>` : `<ul>${items.join("")}</ul>`);
+      continue;
+    }
+    if (!line.trim()) {
+      flushPara();
+      i++;
+      continue;
+    }
+    para.push(line);
+    i++;
+  }
+  flushPara();
+  return out.join("");
+}
+
+// 本会话内确认失效的图片 URL（直连 + 代理都失败）。feed 重渲染是全量重建 <img> 的，
+// 不记名单的话同一张死图每次重渲染都会重新请求一遍，控制台 404 刷屏
+const _deadImgUrls = new Set();
+
+function rememberDeadUrl(url) {
+  if (url) _deadImgUrls.add(url);
+}
+
+// 代理地址还原出原始图片 URL；非代理地址原样返回
+function originalUrlFromProxySrc(src) {
+  if (!src.startsWith("/api/img-proxy")) return src;
+  try {
+    return new URL(src, location.origin).searchParams.get("url") || src;
+  } catch {
+    return src;
+  }
+}
+
+// 图片彻底失效的收尾：记入失效名单并摘除元素。信息流缩略图整块移除；
+// 灯箱的 img 是导航结构的一部分，改为隐藏并展示「图片已失效」提示
+function markImgDead(img) {
+  if (!img) return;
+  rememberDeadUrl(originalUrlFromProxySrc(img.getAttribute("src") || ""));
+  img.dataset.dead = "1";
+  if (img.classList.contains("lightbox-img")) {
+    img.style.display = "none";
+    const box = img.parentElement;
+    if (box && !box.querySelector(".lightbox-dead")) {
+      const tip = document.createElement("div");
+      tip.className = "lightbox-dead";
+      tip.setAttribute("role", "alert");
+      tip.textContent = "图片已失效";
+      box.appendChild(tip);
+    }
+    return;
+  }
+  const link = img.closest(".post-img-link");
+  if (link) link.remove();
+  else img.remove();
+}
+
 function imgOnError(img) {
-  // 第三方图床直连失败（大陆访问 X 图床被墙等）→ 经服务端代理转发
-  if (!img || img.dataset.proxied) return;
+  // 第三方图床直连失败（大陆访问 X 图床被墙等）→ 经服务端代理转发；
+  // 代理也失败说明图彻底挂了，标记失效避免后续重渲染反复请求。
+  // onerror 必须保持绑定：原先失败即置 null，代理这一步永远没有第二次回调
+  if (!img) return;
   const src = img.getAttribute("src") || "";
-  if (src.startsWith("/api/img-proxy")) return;
+  if (src.startsWith("/api/img-proxy")) {
+    markImgDead(img);
+    return;
+  }
+  if (img.dataset.proxied) return;
   img.dataset.proxied = "1";
   img.src = imgProxyUrl(src);
-  img.onerror = null;
+  img.onerror = imgOnError;
 }
 
 // ---------- 图片灯箱（点击放大原图，背景变暗，多图可左右切换） ----------
@@ -167,6 +309,7 @@ function openLightbox(img) {
   const container = img.closest(".post-images");
   if (container) {
     _lightboxImages = [...container.querySelectorAll("img")]
+      .filter((im) => !im.dataset.dead) // 已失效被隐藏的图不再进入灯箱
       .map((im) => im.currentSrc || im.src || "")
       .filter(Boolean);
   } else {
@@ -233,7 +376,9 @@ function lightboxStep(dir) {
   setTimeout(() => {
     img.src = _lightboxImages[_lightboxIndex];
     img.style.opacity = "";
+    img.style.display = ""; // 上一张若已失效被隐藏，切图时恢复
     img.onerror = imgOnError;
+    $(".lightbox-dead")?.remove();
     const count = document.querySelector(".lightbox-count");
     if (count) count.textContent = `${_lightboxIndex + 1} / ${_lightboxImages.length}`;
   }, 120); // 与淡出过渡衔接
@@ -415,8 +560,10 @@ function avatarText(name) {
   return (name || "?").trim().slice(0, 1).toUpperCase();
 }
 
-// 头像图挂了就换成首字色块占位，避免破图；name 由 data-av-name 带入
+// 头像图挂了就换成首字色块占位，避免破图；name 由 data-av-name 带入。
+// 失效 URL 记入名单：重渲染重建 <img> 时直接出色块，不再重复请求死链
 function avatarImgError(img) {
+  rememberDeadUrl(originalUrlFromProxySrc(img.getAttribute("src") || ""));
   const ph = document.createElement("div");
   ph.className = img.dataset.avClass || img.className || "kol-avatar";
   ph.textContent = avatarText(img.dataset.avName);
@@ -424,7 +571,7 @@ function avatarImgError(img) {
 }
 
 function avatarHtml(name, url) {
-  if (url) return `<img class="kol-avatar" src="${escapeHtml(url)}" alt="" loading="lazy" data-av-name="${escapeHtml(name)}" onerror="avatarImgError(this)">`;
+  if (url && !_deadImgUrls.has(url)) return `<img class="kol-avatar" src="${escapeHtml(url)}" alt="" loading="lazy" data-av-name="${escapeHtml(name)}" onerror="avatarImgError(this)">`;
   return `<div class="kol-avatar">${escapeHtml(avatarText(name))}</div>`;
 }
 
@@ -2779,7 +2926,7 @@ function tlBadgeAvatarsHtml(posts, max = 3) {
     if (seen.has(key)) continue;
     seen.add(key);
     if (avs.length >= max) break;
-    avs.push(p.avatar_url
+    avs.push(p.avatar_url && !_deadImgUrls.has(p.avatar_url)
       ? `<img src="${escapeHtml(p.avatar_url)}" alt="" data-av-name="${escapeHtml(p.kol_name)}" data-av-class="ph" onerror="avatarImgError(this)">`
       : `<span class="ph">${escapeHtml(avatarText(p.kol_name))}</span>`);
   }
@@ -3291,7 +3438,7 @@ function liveFeedItem(item) {
   const title = item.highlight_title
     ? `<div class="live-title">${escapeHtml(item.highlight_title)}</div>`
     : "";
-  const body = escapeHtml(item.body || "").replace(/\n/g, "<br>");
+  const body = mdToHtml(item.body || "");
   return `
     <article class="live-item" data-score="${score}">
       <time class="live-time" datetime="${escapeHtml(item.published_at || "")}">${fmtPublished(item.published_at, true)}</time>
@@ -3492,6 +3639,8 @@ function combinationDetailHtml(post) {
 
 function postCard(post) {
   const safeUrl = /^https?:\/\//i.test(post.url || "") ? post.url : "#";
+  // 本会话已确认失效的配图直接过滤，重渲染不再为死链重建 <img>
+  const images = (Array.isArray(post.images) ? post.images : []).filter((u) => u && !_deadImgUrls.has(u));
   const comboHtml = post.platform === "combination" ? combinationDetailHtml(post) : "";
   const isCombination = !!comboHtml;
   const body = post.content || "（无正文）";
@@ -3516,14 +3665,14 @@ function postCard(post) {
         </div>
       </div>
       ${isCombination ? `<div class="combo-post">${comboHtml}</div>` : `${!titleDup && post.title ? `<div class="p-title">${escapeHtml(post.title)}</div>` : ""}
-      <div class="p-content">${escapeHtml(shown)}${body.length > 200
+      <div class="p-content md-body">${mdToHtml(shown)}${body.length > 200
         ? `<button class="post-expand-btn" onclick="tlTogglePost(${post.id})" aria-expanded="${expanded}">${expanded ? "收起 ▲" : "展开全文 ▼"}</button>`
         : ""}</div>`}
-      ${Array.isArray(post.images) && post.images.length ? `
+      ${images.length ? `
         <div class="post-images">
-          ${post.images.slice(0, 4).map((img) => `
+          ${images.slice(0, 4).map((img) => `
             <a class="post-img-link" href="#" onclick="event.preventDefault();openLightbox(this.querySelector('img'))" aria-label="查看${escapeHtml(post.kol_name)}的配图"><img src="${escapeHtml(img)}" loading="lazy" alt="${escapeHtml(post.kol_name)} 的配图" onerror="imgOnError(this)"></a>`).join("")}
-          ${post.images.length > 4 ? `<span class="post-images-more">+${post.images.length - 4}</span>` : ""}
+          ${images.length > 4 ? `<span class="post-images-more">+${images.length - 4}</span>` : ""}
         </div>` : ""}
       ${postFiles(post).map((f) => {
           // 附件一律走鉴权路由（服务端校验订阅可见性，命中本地缓存时直接下发）；

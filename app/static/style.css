@@ -1042,6 +1042,30 @@ textarea.proxy-import { min-height: 96px; }
 /* 正文限行宽：外壳铺满后保持舒适阅读行长（65-75ch），超宽屏不整行读不动 */
 .post-item .p-content { color: var(--color-text); margin-top: 8px; line-height: 1.65; overflow-wrap: break-word; word-break: normal; font-size: var(--text-body); max-width: 75ch; white-space: pre-line; }
 :root.theme-dark .post-item .p-content { line-height: 1.7; }
+/* Markdown 正文：块级元素自己控制换行，关掉外壳的 pre-line，避免出现双倍空行 */
+.md-body { white-space: normal; }
+.md-body p { margin: 0 0 8px; }
+.md-body p:last-child { margin-bottom: 0; }
+.md-body .md-h { font-weight: var(--font-weight-semibold); color: var(--color-text-strong); margin: 10px 0 6px; line-height: 1.4; }
+.md-body .md-h:first-child { margin-top: 0; }
+.md-body .md-h1 { font-size: 1.2em; }
+.md-body .md-h2 { font-size: 1.12em; }
+.md-body .md-h3 { font-size: 1.05em; }
+.md-body .md-h4 { font-size: 1em; }
+.md-body ul, .md-body ol { margin: 0 0 8px; padding-left: 22px; }
+.md-body li { margin: 2px 0; }
+.md-body li:last-child { margin-bottom: 0; }
+.md-body blockquote { margin: 0 0 8px; padding: 4px 12px; border-left: 3px solid var(--color-accent-soft, var(--color-bg-muted)); color: var(--color-text-muted); }
+.md-body blockquote:last-child { margin-bottom: 0; }
+.md-body pre { margin: 0 0 8px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--color-bg-muted); overflow-x: auto; }
+.md-body pre:last-child { margin-bottom: 0; }
+.md-body code { font-family: ui-monospace, SFMono-Regular, Consolas, Menlo, monospace; font-size: 0.9em; }
+.md-body :not(pre) > code { background: var(--color-bg-muted); border-radius: var(--radius-2xs); padding: 1px 5px; }
+.md-body pre > code { display: block; white-space: pre; }
+.md-body hr { border: 0; border-top: var(--border-soft); margin: 10px 0; }
+.md-body a { word-break: break-all; }
+/* 快讯正文：md 输出替换原来的 \n→<br>，段落间距交给 p */
+.live-body.md-body p { margin: 0 0 8px; }
 .post-images { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .post-images img {
   width: 120px; height: 120px; object-fit: cover;
@@ -1127,6 +1151,13 @@ textarea.proxy-import { min-height: 96px; }
   font-size: var(--text-sm);
   background: rgba(0, 0, 0, 0.4);
   padding: 4px 12px; border-radius: var(--radius-pill);
+}
+/* 图片彻底失效（直连+代理都 404）时灯箱内的占位提示 */
+.lightbox-dead {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: var(--text-sm);
+  pointer-events: none; /* 点击穿透到遮罩，保持「点空白关闭」的手感 */
 }
 .lightbox-img { transition: opacity 0.12s ease-out; }
 body.lightbox-open { overflow: hidden; }
