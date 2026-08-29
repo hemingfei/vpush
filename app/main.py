@@ -289,12 +289,14 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     app.include_router(
         create_api_router(
             db,
-            secret,
+            secret=secret,
             allow_register=config.web.allow_register,
             wechat_config=config.wechat,
             notifiers_config=config.notifiers,
             trust_proxy=config.web.trust_proxy,
             ima_documents=ima_documents,
+            # MX 配置保存后热应用到调度器；纯 UI 调试模式无后台任务，不做热应用
+            on_mx_config_changed=scheduler.apply_mx_config if background_workers_enabled() else None,
         )
     )
     # 本地头像缓存（数据目录/avatars），避免第三方图床过期/外链失效
@@ -308,6 +310,10 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     zsxq_images_dir = Path(config.db_path).parent / "zsxq_images"
     zsxq_images_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/zsxq-images", StaticFiles(directory=zsxq_images_dir), name="zsxq-images")
+    # MX 房间图片本地缓存（数据目录/mx_images），与 fetchers/mx 的 /mx-images 前缀对应
+    mx_images_dir = Path(config.db_path).parent / "mx_images"
+    mx_images_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/mx-images", StaticFiles(directory=mx_images_dir), name="mx-images")
     # 知识星球附件不设静态挂载：附件可能是私有大V的付费内容，
     # 一律走鉴权路由 /api/media/zsxq-file/{id}（命中本地缓存时直接下发）
     app.mount(

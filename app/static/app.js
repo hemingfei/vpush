@@ -6154,6 +6154,7 @@ async function loadAdminStats() {
           <button type="button" class="btn-ghost" id="mx-test-btn" onclick="testMxConnection()">测试连接</button>
           <button type="button" class="btn-ghost" id="mx-sync-btn" onclick="syncMxRooms()">立即同步房间</button>
         </div>
+        <p class="section-meta" id="mx-ws-status" style="margin-top:12px">WebSocket 状态：加载中...</p>
       </section>
       <section class="section-panel">
         <header class="section-head">
@@ -6459,6 +6460,18 @@ function proxyBusy(btn, on) {
 }
 
 // MX Platform functions
+async function refreshMxWsStatus() {
+  const el = $("#mx-ws-status");
+  if (!el) return;
+  try {
+    const s = await api("/api/admin/sources/mx/ws-status");
+    const last = s.last_message_at ? new Date(s.last_message_at).toLocaleString() : "从未收到";
+    el.textContent = `WebSocket 状态：${s.connected ? "✅ 已连接" : "❌ 未连接"}，最近收到消息：${last}`;
+  } catch (err) {
+    el.textContent = `WebSocket 状态：获取失败（${err.message || "未知错误"}）`;
+  }
+}
+
 async function loadMxAdmin() {
   const box = $("#st-mx");
   if (!box) return;
@@ -6478,6 +6491,7 @@ async function loadMxAdmin() {
 
     // Load rooms
     loadMxRooms();
+    refreshMxWsStatus();
 
     // Add event listeners for search/filter
     const qInput = $("#mx-rooms-q");
@@ -6526,6 +6540,7 @@ async function saveMxConfig() {
       body: JSON.stringify(payload),
     });
     flash("MX配置已保存");
+    refreshMxWsStatus();
   } catch (err) {
     flash(err.message || "保存失败", "error");
   } finally {
@@ -6604,7 +6619,6 @@ async function loadMxRooms() {
             <td>
               <div class="kol-row-main">
                 ${avatarHtml(r.title, r.avatar)}
-                </div>
                 <div>
                   <div class="kol-name">${escapeHtml(r.title)}</div>
                   ${r.teaname ? `<div class="muted" style="font-size:12px">${escapeHtml(r.teaname)}</div>` : ""}

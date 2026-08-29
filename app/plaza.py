@@ -6,7 +6,7 @@ import json
 from .db import DB
 
 # 与前端 PLATFORM_TABS 对齐（不含 ima：广场没有 ima 角标）
-PLAZA_PLATFORMS = ("xueqiu", "combination", "weibo", "twitter", "zsxq", "mx")
+PLAZA_PLATFORMS = ("system", "xueqiu", "combination", "weibo", "twitter", "zsxq", "mx")
 PLAZA_MODES = ("auto", "show", "hide")
 PLAZA_VISIBILITY_KEY = "plaza_source_visibility"
 
@@ -64,6 +64,36 @@ def filter_plaza_rows(db: DB, rows: list[dict], key: str = "platform") -> list[d
     if not hidden:
         return list(rows)
     return [row for row in rows if row.get(key) not in hidden]
+
+
+def _kol_extra(kol: dict) -> dict:
+    raw = kol.get("extra_data") or ""
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw) if raw else {}
+        return parsed if isinstance(parsed, dict) else {}
+    except (TypeError, ValueError):
+        return {}
+
+
+def kol_plaza_hidden(db: DB, kol: dict | None) -> bool:
+    """平台整体被隐藏，或（MX）房间被管理员设为不在广场显示。
+
+    MX 房间的 extra_data.show_in_plaza 仅在显式 False 时隐藏（缺省视为显示）。
+    """
+    if not kol:
+        return True
+    if is_plaza_hidden(db, kol.get("platform")):
+        return True
+    if kol.get("platform") == "mx":
+        return _kol_extra(kol).get("show_in_plaza") is False
+    return False
+
+
+def filter_plaza_kol_rows(db: DB, rows: list[dict]) -> list[dict]:
+    """大V行的广场可见性过滤：平台隐藏 + MX 房间级 show_in_plaza。"""
+    return [row for row in rows if not kol_plaza_hidden(db, row)]
 
 
 def set_plaza_visibility(db: DB, updates: dict[str, str]) -> list[dict]:

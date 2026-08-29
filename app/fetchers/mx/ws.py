@@ -71,10 +71,14 @@ class MxWsClient:
 
             # 添加兜底捕获所有事件
             @self._sio.on('*', namespace=namespace)
-            async def catch_all(event, data):
+            async def catch_all(event, *args):
                 if event not in ['connect', 'disconnect', 'connect_error', 'room_msg']:
                     logger.debug(f"Received MX WebSocket event {namespace}: {event}")
-                    await self._handle_message(data)
+                    # 部分事件不带 payload：单参透传，多参/无参归一成列表再走解析
+                    if len(args) == 1:
+                        await self._handle_message(args[0])
+                    else:
+                        await self._handle_message(list(args))
 
             auth = {
                 "tt": int(time.time() * 1000),
@@ -117,7 +121,13 @@ class MxWsClient:
             logger.debug(f"Received MX WebSocket message: {data}")
 
             message = self._parse_message(data)
-            if message:
+            if isinstance(message, list):
+                # 事件一次送达一批消息：逐条分发给回调
+                for item in message:
+                    if isinstance(item, dict):
+                        item["_receivedAt"] = datetime.now().isoformat()
+                        self.on_message(item)
+            elif message is not None:
                 self.on_message(message)
         except Exception as e:
             logger.error(f"Failed to handle MX WebSocket message: {e}", exc_info=True)
@@ -134,6 +144,19 @@ class MxWsClient:
         """
         parsed = None
 
+        def _use_decrypted(decrypted):
+            """解密结果可能是已解析的 dict/list，也可能是字符串；统一安全处理。"""
+            nonlocal parsed
+            if isinstance(decrypted, (dict, list)):
+                parsed = decrypted
+                return
+            try:
+                parsed = json.loads(decrypted)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                # 保留原始字段（dict 时），绝不能把 rid/msg 埋进 raw 键导致消息被丢弃
+                parsed = dict(data) if isinstance(data, dict) else {"raw": data}
+                parsed["decrypted"] = decrypted
+
         if isinstance(data, str):
             # Try to parse directly as JSON first
             try:
@@ -142,13 +165,7 @@ class MxWsClient:
                 # If that fails, try to decrypt with WebSocket key
                 decrypted = decrypt_ws_data(data)
                 if decrypted:
-                    if isinstance(decrypted, dict):
-                        parsed = decrypted
-                    else:
-                        try:
-                            parsed = json.loads(decrypted)
-                        except json.JSONDecodeError:
-                            parsed = {"raw": data, "decrypted": decrypted}
+                    _use_decrypted(decrypted)
                 else:
                     logger.warning(f"Failed to parse or decrypt MX string message: {data[:100]}")
 
@@ -157,25 +174,26 @@ class MxWsClient:
             if "content" in data and isinstance(data["content"], str) and len(data["content"]) > 50:
                 decrypted = decrypt_ws_data(data["content"])
                 if decrypted:
-                    try:
-                        parsed = json.loads(decrypted)
-                    except json.JSONDecodeError:
-                        parsed = {**data, "decryptedContent": decrypted}
+                    _use_decrypted(decrypted)
+                else:
+                    # 解密失败（可能是明文长文本）：保留原始字段，绝不能包成
+                    # {"raw": data} 把 rid/msg 埋进去导致消息被下游丢弃
+                    parsed = data
             elif "data" in data and isinstance(data["data"], str):
                 decrypted = decrypt_ws_data(data["data"])
                 if decrypted:
-                    try:
-                        parsed = json.loads(decrypted)
-                    except json.JSONDecodeError:
-                        parsed = {**data, "decryptedData": decrypted}
+                    _use_decrypted(decrypted)
+                else:
+                    parsed = data
             else:
                 parsed = data
 
         if parsed is None:
             parsed = {"raw": data}
 
-        # Add received timestamp
-        parsed["_receivedAt"] = datetime.now().isoformat()
+        # Add received timestamp（list 表示一批消息，时间戳在 _handle_message 里逐条补）
+        if isinstance(parsed, dict):
+            parsed["_receivedAt"] = datetime.now().isoformat()
         return parsed
 
     async def run_forever(self):

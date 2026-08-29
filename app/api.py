@@ -101,8 +101,10 @@ from .ima_kb import (
     readable_group_ids,
 )
 from .plaza import (
+    filter_plaza_kol_rows,
     filter_plaza_rows,
     is_plaza_hidden,
+    kol_plaza_hidden,
     plaza_hidden_platforms,
     plaza_source_rows,
     plaza_visible_platforms,
@@ -1177,6 +1179,7 @@ def create_api_router(
     notifiers_config=None,
     trust_proxy: bool = False,
     ima_documents: ImaDocumentService | None = None,
+    on_mx_config_changed=None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api")
     # 登录/注册限流（内存版，单实例够用）：每 IP 窗口内失败次数超限后 429
@@ -1889,14 +1892,14 @@ def create_api_router(
             return True
         if kol["id"] not in db.visible_kol_ids(user["id"]):
             return False
-        return not is_plaza_hidden(db, kol["platform"])
+        return not kol_plaza_hidden(db, kol)
 
     # ---- 目录与订阅 ----
     @router.get("/catalog")
     def catalog(platform: str | None = None, category_id: int | None = None, user: dict = Depends(get_current_user)):
         if is_plaza_hidden(db, platform):
             return []
-        kols = filter_plaza_rows(db, db.list_kols(platform, category_id, status=1))
+        kols = filter_plaza_kol_rows(db, db.list_kols(platform, category_id, status=1))
         if not user["is_admin"]:
             visible = db.visible_kol_ids(user["id"])
             kols = [k for k in kols if k["id"] in visible]
@@ -1933,7 +1936,7 @@ def create_api_router(
     @router.get("/recommendations")
     def recommendations(user: dict = Depends(get_current_user), unsubscribed: bool = False):
         """按订阅人数推荐大V。unsubscribed=1 供动态页右侧栏，排除已订。"""
-        rows = filter_plaza_rows(db, db.recommended_kols(user["id"], 16 if unsubscribed else 4))
+        rows = filter_plaza_kol_rows(db, db.recommended_kols(user["id"], 16 if unsubscribed else 4))
         if unsubscribed:
             rows = [k for k in rows if not k["subscribed"]][:4]
         return [
@@ -1956,7 +1959,7 @@ def create_api_router(
             not user["is_admin"]
             and (
                 kol["id"] not in db.visible_kol_ids(user["id"])
-                or is_plaza_hidden(db, kol["platform"])
+                or kol_plaza_hidden(db, kol)
             )
         ):
             raise HTTPException(status_code=404, detail="大V不存在")
@@ -3400,31 +3403,39 @@ def create_api_router(
     async def test_mx_connection(request: Request):
         """测试 MX 平台连接。"""
         try:
-            import json
+            import asyncio
+
             raw_body = await request.json()
             logger.info(f"Received MX test connection: {raw_body}")
-            
+
             from .fetchers.mx.client import MXClient
             api_base = str(raw_body.get("api_base") or "https://mx.2026.naaifu.cn/business-api/5")
             token = str(raw_body.get("token") or "")
-            client = MXClient(api_base, token)
-            rooms = client.get_rooms()
-            return {"ok": True, "room_count": len(rooms)}
+
+            def _probe() -> int:
+                client = MXClient(api_base, token)
+                try:
+                    return len(client.get_rooms())
+                finally:
+                    client.close()
+
+            # 同步 HTTP 放线程池，避免 30s 超时内阻塞整个事件循环
+            room_count = await asyncio.to_thread(_probe)
+            return {"ok": True, "room_count": room_count}
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"连接失败: {exc}") from exc
 
     @router.put("/admin/sources/mx", dependencies=[Depends(require_admin)])
     async def update_mx_config(request: Request, admin: dict = Depends(require_admin)):
         """更新 MX 平台配置。"""
-        import json
         try:
             from .config import load_config, save_config
             raw_body = await request.json()
             logger.info(f"Received MX config update: {raw_body}")
-            
+
             config = load_config()
             logger.info(f"Loaded config, mx.enabled={config.sources.mx.enabled}")
-            
+
             # 直接从原始字典更新配置
             if "enabled" in raw_body:
                 config.sources.mx.enabled = bool(raw_body["enabled"])
@@ -3446,12 +3457,19 @@ def create_api_router(
                 config.sources.mx.max_history_pages = max(1, int(raw_body["max_history_pages"] or 100))
             if "sync_interval_hours" in raw_body:
                 config.sources.mx.sync_interval_hours = max(1, int(raw_body["sync_interval_hours"] or 1))
-            
+
             logger.info("Attempting to save config...")
             # 保存配置
             save_config(config)
             logger.info("Config saved successfully")
-            
+
+            # 热应用到运行中的调度器：重建抓取器、重启房间同步与 WebSocket
+            if on_mx_config_changed is not None:
+                try:
+                    await on_mx_config_changed(config.sources.mx)
+                except Exception:
+                    logger.exception("MX 配置热应用失败（配置已保存，重启后生效）")
+
             _audit(admin, "update_mx_config", "", f"enabled={raw_body.get('enabled', False)}")
             return {"ok": True}
         except Exception as exc:
@@ -3481,7 +3499,7 @@ def create_api_router(
     @router.get("/admin/sources/mx/rooms", dependencies=[Depends(require_admin)])
     def get_mx_rooms(search: str = "", enabled_only: bool = False):
         """获取 MX 房间列表。"""
-        kols = db.list_kols(platform="mx")
+        kols = db.list_kols(platform="mx", with_subscriber_count=True)
         rooms = []
         for kol in kols:
             extra = {}
@@ -3496,14 +3514,14 @@ def create_api_router(
                 "title": kol["name"],
                 "avatar": kol.get("avatar_url", ""),
                 "teaname": extra.get("teaname", ""),
-                "introduce": kol.get("bio", ""),
+                "introduce": extra.get("introduce", ""),
                 "message_today": int(extra.get("message_today", 0)),
                 "msgtime": extra.get("msgtime", ""),
                 "createtime": extra.get("createtime", ""),
                 "star": bool(extra.get("star", False)),
                 "enabled": bool(kol.get("enabled", True)),
                 "show_in_plaza": bool(extra.get("show_in_plaza", True)),
-                "subscriber_count": int(kol.get("subscriber_count", 0)),
+                "subscriber_count": int(kol.get("subscriber_count", 0) or 0),
                 "kol_id": kol["id"],
             }
             rooms.append(room)
@@ -3564,6 +3582,7 @@ def create_api_router(
             raise HTTPException(status_code=400, detail="MX 平台未启用")
         
         def pull_history_task():
+            fetcher = None
             try:
                 logger.info(f"开始拉取 MX 房间 {room_id} 历史消息")
                 fetcher = MxFetcher(mx_config, db)
@@ -3633,6 +3652,9 @@ def create_api_router(
                 logger.info(f"完成拉取 MX 房间 {room_id} 历史消息：共 {len(posts)} 条，新增 {new_count} 条")
             except Exception as e:
                 logger.error(f"拉取 MX 房间 {room_id} 历史消息失败：{e}", exc_info=True)
+            finally:
+                if fetcher is not None:
+                    fetcher.mx_client.close()
         
         background_tasks.add_task(pull_history_task)
         _audit(admin, "pull_mx_room_history", str(room_id), "")

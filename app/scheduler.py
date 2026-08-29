@@ -1826,10 +1826,16 @@ class Scheduler:
 
     def stop(self):
         self._stop.set()
-        
+
         # 停止 MX 相关任务
         if self._mx_ws_task:
             self._mx_ws_task.cancel()
+            self._mx_ws_task = None
+        if self._mx_sync_service:
+            self._mx_sync_service.stop()
+            self._mx_sync_service = None
+        global _mx_fetcher
+        _mx_fetcher = None
         
         # 尽力把缓冲中未推送的合并摘要发出去，避免重启/关闭丢消息
         try:
@@ -1889,20 +1895,22 @@ class Scheduler:
         """初始化 MX 平台功能：房间同步、WebSocket 连接等。"""
         try:
             logger.info("Initializing MX platform...")
-            
+
             # 创建并启动房间同步服务
             self._mx_sync_service = MXRoomSyncService(self.mx_config, self.db)
-            
+
             # 立即同步一次房间
             await self._mx_sync_service.sync_rooms()
-            
+
             # 启动定时同步
             await self._mx_sync_service.start_periodic_sync()
-            
+
             # 启动 WebSocket（如果启用）
             if self.mx_config.ws_enabled and "mx" in self.fetchers:
                 mx_fetcher = self.fetchers["mx"]
-                
+                global _mx_fetcher
+                _mx_fetcher = mx_fetcher  # 供 get_mx_ws_status 读取连接状态
+
                 async def on_mx_message(post: Post):
                     """处理 MX 实时消息，直接推送。"""
                     try:
@@ -1923,20 +1931,54 @@ class Scheduler:
                         await asyncio.to_thread(_save_and_notify)
                     except Exception as e:
                         logger.error(f"Failed to process MX real-time message: {e}", exc_info=True)
-                
+
                 self._mx_ws_task = asyncio.create_task(mx_fetcher.start_ws(on_mx_message))
-            
+
             logger.info("MX platform initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize MX platform: {e}", exc_info=True)
+
+    async def _stop_mx(self):
+        """停止 MX 房间同步与 WebSocket，并移除 mx 抓取器（禁用/重配时调用）。"""
+        global _mx_fetcher
+        if self._mx_ws_task:
+            self._mx_ws_task.cancel()
+            self._mx_ws_task = None
+        _mx_fetcher = None
+        if self._mx_sync_service:
+            self._mx_sync_service.stop()
+            self._mx_sync_service = None
+        mx_fetcher = self.fetchers.pop("mx", None)
+        if mx_fetcher is not None:
+            try:
+                await mx_fetcher.stop_ws()
+            except Exception:  # noqa: BLE001 - 任务已被 cancel，尽力断开即可
+                logger.warning("停止 MX WebSocket 失败", exc_info=True)
+
+    async def apply_mx_config(self, mx_config) -> None:
+        """MX 配置变更后热应用：停掉旧任务，按需重建抓取器并重启同步/WS。"""
+        await self._stop_mx()
+        self.mx_config = mx_config
+        if not (MX_AVAILABLE and mx_config and mx_config.enabled):
+            logger.info("MX platform disabled, hot-reload skipped")
+            return
+        from .fetchers.mx.fetcher import MxFetcher
+
+        self.fetchers["mx"] = MxFetcher(mx_config, self.db)
+        await self._init_mx()
 
     async def run(self):
         if self.polling_config.notify_on_start:
             await self._send_startup_message()
         self._recover_failed_pushes()
         
-        # 初始化 MX 功能
-        if MX_AVAILABLE and self.mx_config and self.mx_config.enabled:
+        # 初始化 MX 功能（若配置热加载已提前初始化过则跳过，避免重复启动同步/WS）
+        if (
+            MX_AVAILABLE
+            and self.mx_config
+            and self.mx_config.enabled
+            and self._mx_sync_service is None
+        ):
             await self._init_mx()
         
         while not self._stop.is_set():

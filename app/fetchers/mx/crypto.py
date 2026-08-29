@@ -163,19 +163,3 @@ def decrypt_ws_data(encrypted_data: str) -> dict | None:
     if result is None:
         result = try_decrypt_with_keys(encrypted_data, get_beijing_date)
     return result
-
-
-def decrypt_content(msg: dict) -> str:
-    """从 MX 消息中获取内容。
-
-    Args:
-        msg: MX 消息字典
-
-    Returns:
-        内容字符串
-    """
-    content = msg.get("message", "") or msg.get("msg", "")
-    if content:
-        return content
-    # 如果没有直接内容，尝试从其他字段获取
-    return ""

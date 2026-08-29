@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from ..avatar_cache import cache_avatar
 from ..config import MxConfig
 from ..fetchers.mx.client import MXClient
 
@@ -18,16 +19,21 @@ class MXRoomSyncService:
         self.config = config
         self.db = db
         self._last_sync: datetime | None = None
+        self._sync_task: asyncio.Task | None = None
+        self._stopped = False
 
     async def sync_rooms(self):
-        """Sync all MX rooms to KOLs."""
+        """Sync all MX rooms to KOLs（同步 HTTP/DB 走线程池，不阻塞事件循环）。"""
+        await asyncio.to_thread(self._sync_rooms_blocking)
+
+    def _sync_rooms_blocking(self):
         if not self.config.token:
             logger.warning("MX token not configured, skipping room sync")
             return
 
         logger.info("Starting MX room sync")
+        client = MXClient(self.config.api_base, self.config.token)
         try:
-            client = MXClient(self.config.api_base, self.config.token)
             rooms = client.get_rooms()
             logger.info(f"Fetched {len(rooms)} MX rooms")
 
@@ -39,6 +45,8 @@ class MXRoomSyncService:
         except Exception as e:
             logger.error(f"MX room sync failed: {e}", exc_info=True)
             raise
+        finally:
+            client.close()
 
     def _sync_room(self, room: dict):
         """Sync a single room to KOL."""
@@ -49,6 +57,7 @@ class MXRoomSyncService:
         # Get extra data
         extra_data = {
             "teaname": room.get("teaname", ""),
+            "introduce": room.get("introduce", ""),
             "message_today": room.get("message_today", 0),
             "msgtime": room.get("msgtime", ""),
             "createtime": room.get("createtime", ""),
@@ -73,9 +82,8 @@ class MXRoomSyncService:
             return
         try:
             room_id = str(room.get("id", ""))
-            name = room.get("title", f"MX Room {room_id}")
+            name = room.get("title") or f"MX Room {room_id}"
             avatar = room.get("avatar", "")
-            intro = room.get("introduce", "")
 
             kol_id = self.db.add_kol(
                 platform="mx",
@@ -85,10 +93,10 @@ class MXRoomSyncService:
                 secondary=False,
             )
 
-            # Update avatar and extra data
+            # 下载头像到本地缓存，避免第三方图床过期后头像挂掉
             if avatar:
-                self.db.update_kol_avatar(kol_id, avatar)
-            
+                cache_avatar(self.db, kol_id, avatar)
+
             self._update_kol_extra(kol_id, extra_data)
             logger.info(f"Created MX KOL: {name} (id: {kol_id})")
         except Exception as e:
@@ -101,16 +109,16 @@ class MXRoomSyncService:
         try:
             name = room.get("title")
             avatar = room.get("avatar", "")
-            
+
             updates = {}
             if name:
                 updates["name"] = name
             if updates:
                 self.db.update_kol(kol_id, **updates)
-            
+
             if avatar:
-                self.db.update_kol_avatar(kol_id, avatar)
-            
+                cache_avatar(self.db, kol_id, avatar)
+
             self._update_kol_extra(kol_id, extra_data)
             logger.debug(f"Updated MX KOL id: {kol_id}")
         except Exception as e:
@@ -130,22 +138,22 @@ class MXRoomSyncService:
                 current_dict = json.loads(current) if current else {}
             except (json.JSONDecodeError, ValueError):
                 current_dict = {}
-            
+
             # Preserve existing enabled and show_in_plaza settings
             preserved_enabled = current_dict.get("enabled")
             preserved_show_in_plaza = current_dict.get("show_in_plaza")
-            
+
             # Merge
             current_dict.update(extra_data)
-            
+
             # Restore preserved settings
             if preserved_enabled is not None:
                 current_dict["enabled"] = preserved_enabled
             if preserved_show_in_plaza is not None:
                 current_dict["show_in_plaza"] = preserved_show_in_plaza
-            
+
             new_extra = json.dumps(current_dict, ensure_ascii=False)
-            
+
             # Update
             self.db._execute(
                 "UPDATE kols SET extra_data = ? WHERE id = ?",
@@ -156,17 +164,28 @@ class MXRoomSyncService:
 
     async def start_periodic_sync(self):
         """Start periodic room sync."""
+        if self._sync_task is not None and not self._sync_task.done():
+            return
+        self._stopped = False
         interval_hours = self.config.sync_interval_hours or 1
         interval = interval_hours * 3600
 
         async def sync_loop():
-            while True:
+            while not self._stopped:
                 try:
                     await asyncio.sleep(interval)
-                    if self.config.enabled:
+                    if self.config.enabled and not self._stopped:
                         await self.sync_rooms()
                 except Exception as e:
                     logger.error(f"MX periodic sync error: {e}", exc_info=True)
 
-        asyncio.create_task(sync_loop())
+        # 持有任务引用：事件循环只持弱引用，不保存可能被 GC 中途取消
+        self._sync_task = asyncio.create_task(sync_loop())
         logger.info(f"MX periodic sync started, interval: {interval_hours}h")
+
+    def stop(self):
+        """停止定时同步任务（同步方法，可在非事件循环上下文调用）。"""
+        self._stopped = True
+        if self._sync_task is not None and not self._sync_task.done():
+            self._sync_task.cancel()
+        self._sync_task = None
