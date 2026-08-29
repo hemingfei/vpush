@@ -7581,14 +7581,7 @@ async function loadAdminKols(opts) {
     const kwCell = (kwList.length || blockedCnt)
       ? `<button type="button" class="btn-sm ak-kw-view${blockedCnt ? " status-warn" : ""}" title="${kwList.length ? escapeHtml(kwList.join("、")) : "未设置屏蔽词"}" onclick="adminViewKolBlock(${k.id})">${kwList.length ? `${kwList.length} 个词` : "无屏蔽词"}${blockedCnt ? ` · 拦 ${blockedCnt}` : ""}</button>`
       : '<span class="muted">—</span>';
-    const tierBtns = k.priority
-      ? `<button class="btn-sm" onclick="adminTogglePriority(${k.id}, false)">改普通</button>
-                <button class="btn-sm" onclick="adminToggleSecondary(${k.id}, true)">设次要</button>`
-      : k.secondary
-        ? `<button class="btn-sm" onclick="adminToggleSecondary(${k.id}, false)">改普通</button>
-                <button class="btn-sm" onclick="adminTogglePriority(${k.id}, true)">设优先</button>`
-        : `<button class="btn-sm" onclick="adminTogglePriority(${k.id}, true)">设优先</button>
-                <button class="btn-sm" onclick="adminToggleSecondary(${k.id}, true)">设次要</button>`;
+    const tierSel = `<select class="form-control btn-sm ak-tier-select" aria-label="档位" onchange="adminSetTier(${k.id}, this.value)"><option value="normal" ${!k.priority && !k.secondary ? "selected" : ""}>普通档</option><option value="priority" ${k.priority ? "selected" : ""}>优先档</option><option value="secondary" ${k.secondary ? "selected" : ""}>次要档</option></select>`;
     return `
             <tr class="${highlightIds.has(k.id) ? "ak-row-flash" : ""}">
               <td class="ak-check"><input type="checkbox" class="kol-check" data-id="${k.id}" ${_adminKolsSelected.has(k.id) ? "checked" : ""} onchange="adminKolToggleSelect(this)" aria-label="选择 ${escapeHtml(k.name)}"></td>
@@ -7603,7 +7596,7 @@ async function loadAdminKols(opts) {
               <td class="ak-hide-mobile" data-label="屏蔽词">${kwCell}</td>
               <td data-label="状态" class="${k.enabled ? "status-ok" : "status-fail"}">${k.enabled ? "启用" : "停用"}</td>
               <td class="ak-actions" data-label="操作">
-                ${tierBtns}
+                ${tierSel}
                 <button class="btn-sm" onclick="adminToggleKol(${k.id}, ${k.enabled ? 0 : 1})">${k.enabled ? "停用" : "启用"}</button>
                 <button class="btn-sm" onclick="adminEditKolKeywords(${k.id})">屏蔽词</button>
                 <button class="btn-sm" onclick="adminEditKol(${k.id})">编辑</button>
@@ -7847,6 +7840,19 @@ async function adminToggleKol(id, enabled) {
   try {
     await api(`/api/kols/${id}`, { method: "PUT", body: JSON.stringify({ enabled: !!enabled }) });
     flash(`已${enabled ? "启用" : "停用"}「${kol ? kol.name : "该大V"}」`);
+    loadAdminKols();
+  } catch (err) {
+    flash("操作失败: " + err.message, "error");
+  }
+}
+
+async function adminSetTier(id, tier) {
+  if (tier === "priority") return adminTogglePriority(id, true);
+  if (tier === "secondary") return adminToggleSecondary(id, true);
+  const kol = state.adminKols.find((k) => k.id === id);
+  try {
+    await api(`/api/kols/${id}`, { method: "PUT", body: JSON.stringify({ priority: false, secondary: false }) });
+    flash(`已改为普通档「${kol ? kol.name : "该大V"}」`);
     loadAdminKols();
   } catch (err) {
     flash("操作失败: " + err.message, "error");
