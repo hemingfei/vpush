@@ -98,10 +98,10 @@ from .ima_documents import (
 )
 from .ima_kb import (
     attach_catalog_acl,
-    attach_catalog_stats,
-    catalog as ima_kb_catalog,
+    attach_catalog_summary,
     readable_group_ids,
 )
+from .ima_kb import catalog as ima_kb_catalog
 from .plaza import (
     filter_plaza_rows,
     is_plaza_hidden,
@@ -2506,37 +2506,30 @@ def create_api_router(
         group = group.strip()
         if group and group not in {group_config.id for group_config in groups}:
             raise HTTPException(status_code=404, detail="知识库不存在")
-        facets = ima_documents.store.document_facets(group_id=group, groups=groups)
         query = q.strip()
         tag = tag.strip()
-        search_mode = bool(query or tag)
         requested = day.strip()
-        if search_mode or not requested:
-            effective_day = ""
-            matched = ima_documents.store.documents(
-                query, "", group_id=group, groups=groups, tag=tag, include_body=False
-            )
-            page_limit = bounded_limit(limit, default=50)
-            page_offset = max(offset, 0)
-            has_more = page_offset + page_limit < len(matched)
-            items = matched[page_offset:page_offset + page_limit]
-        else:
-            effective_day = requested
-            items = ima_documents.store.documents(
-                "", effective_day, group_id=group, groups=groups, include_body=False
-            )
-            has_more = False
-            page_offset = 0
+        search_mode = bool(query or tag)
+        effective_day = "" if search_mode or not requested else requested
+        payload = ima_documents.list_documents(
+            groups=groups,
+            query=query,
+            day=effective_day,
+            group=group,
+            tag=tag,
+            limit=bounded_limit(limit, default=50),
+            offset=max(offset, 0),
+        )
         return {
-            "groups": ima_documents.store.group_summary(groups),
-            "items": items,
-            "days": facets["days"],
-            "tags": facets["tags"],
-            "tag_counts": facets.get("tag_counts") or {},
-            "document_count": int(facets.get("document_count") or 0),
-            "day": effective_day,
-            "has_more": has_more,
-            "offset": page_offset,
+            "groups": payload.get("groups") if payload.get("groups") is not None else [],
+            "items": payload["items"],
+            "days": payload["days"],
+            "tags": payload["tags"],
+            "tag_counts": payload.get("tag_counts") or {},
+            "document_count": int(payload.get("document_count") or 0),
+            "day": payload.get("day") or effective_day,
+            "has_more": bool(payload.get("has_more")),
+            "offset": int(payload.get("offset") or 0),
         }
 
     @router.get("/ima-documents/catalog")
@@ -2544,18 +2537,14 @@ def create_api_router(
         with ima_documents.config_lock:
             groups = _configured_groups()
         listed = ima_kb_catalog(db, user, groups)
-        documents = ima_documents.store.catalog_entries(groups=groups)
-        return attach_catalog_acl(attach_catalog_stats(listed, documents), db, user)
+        listed = attach_catalog_summary(listed, ima_documents.catalog_stats(groups))
+        return attach_catalog_acl(listed, db, user)
 
     def _ima_document(user: dict, media_id: str, group: str = "") -> dict:
         group = group.strip()
         groups = _require_readable_group(user, group)
         try:
-            document = ima_documents.store.document(
-                media_id,
-                group_id=group,
-                groups=groups,
-            )
+            document = ima_documents.document(media_id, groups, group=group)
         except ValueError:
             document = None
         if document is None:
@@ -2640,14 +2629,7 @@ def create_api_router(
     def _ima_archive_file(document: dict, field: str):
         if not ima_documents.store.archive_readable():
             raise HTTPException(status_code=503, detail="知识库存储暂不可用")
-        key = ima_documents.store.state_key(
-            {
-                "media_id": document["media_id"],
-                "group_id": document.get("group_id") or "",
-            }
-        )
-        relative = (ima_documents.store.load_state().get(key) or {}).get(field)
-        return ima_documents.store.authorized_archive_file(relative)
+        return ima_documents.store.authorized_archive_file(document.get(f"{field}_path"))
 
     @router.get("/ima-documents/{media_id}/text")
     def get_ima_document_text(

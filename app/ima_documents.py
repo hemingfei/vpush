@@ -1949,6 +1949,8 @@ class ImaDocumentStore:
                 "tags": self._tags(state_item),
                 "has_pdf": bool(state_item.get("pdf")),
                 "has_txt": bool(state_item.get("txt")),
+                "pdf_path": str(state_item.get("pdf") or ""),
+                "txt_path": str(state_item.get("txt") or ""),
             }
             result.update(translation_fields(result["abstract"], state_item))
             metadata_id = str(requested_group or record.get("group_id") or state_item.get("group_id") or "")
@@ -2375,11 +2377,18 @@ class ImaDocumentService:
         if not callable(page):
             return False
         status = self.read_index_status()
+        counter = getattr(self.db, "ima_document_index_count", None)
+        count = int(counter()) if callable(counter) else 0
         if status["status"] == "ready":
-            return True
+            if count > 0:
+                return True
+            getter = getattr(self.db, "ima_document_index_meta", None)
+            fingerprint = ""
+            if callable(getter):
+                fingerprint = str(getter().get("fingerprint") or "")
+            return fingerprint == self._source_fingerprint()
         if status["status"] in {"rebuilding", "failed"}:
-            counter = getattr(self.db, "ima_document_index_count", None)
-            return callable(counter) and int(counter()) > 0
+            return count > 0
         return False
 
     def rebuild_read_index(
@@ -2486,6 +2495,25 @@ class ImaDocumentService:
         )
         return result
 
+    @staticmethod
+    def _public_list_item(item: dict[str, Any]) -> dict[str, Any]:
+        public = {
+            "media_id": item.get("media_id") or "",
+            "name": item.get("name") or "",
+            "day": item.get("day") or "unknown",
+            "size": item.get("size") or 0,
+            "chars": item.get("chars") or 0,
+            "downloaded_at": item.get("downloaded_at") or "",
+            "tags": list(item.get("tags") or []),
+            "has_pdf": bool(item.get("has_pdf")),
+            "has_txt": bool(item.get("has_txt")),
+        }
+        if item.get("group_id"):
+            public["group_id"] = item["group_id"]
+        if item.get("group_name"):
+            public["group_name"] = item["group_name"]
+        return public
+
     def list_documents(
         self,
         groups: tuple[ImaGroupConfig, ...],
@@ -2516,6 +2544,7 @@ class ImaDocumentService:
                 }
                 for item in groups
             ]
+            page["items"] = [self._public_list_item(item) for item in page.get("items") or []]
             return page
         page_limit = max(int(limit), 1)
         page_offset = max(int(offset), 0)
@@ -2530,7 +2559,7 @@ class ImaDocumentService:
             offset=page_offset,
         )
         has_more = len(items) > page_limit
-        items = items[:page_limit]
+        items = [self._public_list_item(item) for item in items[:page_limit]]
         facets = self.store.document_facets(group_id=group, groups=groups)
         summaries = self.store.group_summary(groups)
         return {

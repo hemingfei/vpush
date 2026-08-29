@@ -3895,3 +3895,22 @@ def test_write_abstract_zh_updates_index_after_state(tmp_path):
     )
     row = db.ima_document_from_index("file_en", ["semi"], "semi")
     assert row["abstract_zh"] == "你好"
+
+
+def test_empty_ready_index_falls_back_when_sources_change(tmp_path):
+    db = DB(str(tmp_path / "empty-ready.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    result = service.rebuild_read_index()
+    assert result["status"] == "ready"
+    assert db.ima_document_index_count() == 0
+    assert service._index_usable() is True
+    record = {
+        "group_id": "semi",
+        "media_id": "file_a",
+        "name": "a.pdf",
+        "day": "0829",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state({service.store.state_key(record): {"pdf": "semi/a.pdf"}})
+    assert service._index_usable() is False
+
