@@ -30,7 +30,19 @@ def _fn_body(name: str) -> str:
     src = APP_JS.read_text()
     m = re.search(rf"async\s+function\s+{name}\b|function\s+{name}\b", src)
     assert m, f"未找到函数 {name}"
-    start = src.index("{", m.end())
+    i = m.end()
+    while i < len(src) and src[i] != "(":
+        i += 1
+    assert i < len(src), f"{name} 无参数列表"
+    depth = 1
+    i += 1
+    while i < len(src) and depth:
+        if src[i] == "(":
+            depth += 1
+        elif src[i] == ")":
+            depth -= 1
+        i += 1
+    start = src.index("{", i)
     depth, i = 1, start + 1
     while depth:
         if src[i] == "{":
@@ -1231,7 +1243,7 @@ def test_ima_pdf_download_checks_session_owner_before_every_side_effect():
     assert "const sessionGeneration = imaMountState.sessionGeneration" in body[:fetch]
     for side_effect in side_effects:
         assert owner_guard < body.index(side_effect, fetch), side_effect
-    assert "const group = routeQuery().get(\"group\") || state.imaDocumentsGroup || \"\";" in body
+    assert "imaReaderDocumentGroup()" in body
 
 
 def test_ima_pdf_download_timeout_revoke_rechecks_session_owner():
@@ -1257,8 +1269,7 @@ def test_knowledge_reader_pdf_fail_uses_header_download_only():
     assert "正在打开预览" in reader
     assert "aria-busy" in reader
     assert "ima-reader-status" in load
-    assert re.search(r"\.kb-reader\s*\{[^}]*overflow:\s*hidden", css)
-    assert ".kb-reader .ima-pdf-panel iframe" in css
+    assert ".ima-reader-page .ima-pdf-panel iframe" in css
 
 
 def test_ima_pdf_load_is_owned_by_route_and_reader_generation_before_load_or_fail_side_effects():
@@ -2255,12 +2266,15 @@ def test_ima_documents_group_switching_contract():
     assert 'routeQuery().get("group")' in src
     assert "group_name" in src
     assert "params.set(\"group\"" in render
-    assert "kb-desk-lib" in src
+    assert "ima-doc-source" in src
     assert "selectImaDocumentGroup" in src
     assert "routeQuery()" in src
     assert "replaceImaDocumentsRoute(imaDocumentsRoute(value, state.imaDocumentsQuery, \"\", \"\"))" in src
     assert "selectImaDocumentGroup(value)" in src
     assert "state.imaDocumentsDay = \"\"" in src
+    assert "escapeHtml(group.id" in src or "escapeHtml(group.value" in src
+    assert "escapeHtml(group.name" in src
+    assert "没有访问权限" in src
 
 
 def test_ima_documents_group_controls_render_response_groups_safely():
@@ -2270,7 +2284,7 @@ def test_ima_documents_group_controls_render_response_groups_safely():
     assert "data.groups" in render or "groups =" in render
     assert "escapeHtml(group.id" in src or "escapeHtml(group.value" in src
     assert "escapeHtml(group.name" in src
-    assert "kb-desk-lib" in src
+    assert "ima-doc-source" in src
     assert "escapeHtml(group.name" in src
 
 
@@ -2328,32 +2342,85 @@ def test_ima_documents_refresh_and_retry_advance_local_route_seq():
     render = _fn_body("renderImaDocuments")
     refresh = _fn_body("refreshImaDocuments")
     assert "const seq = ++routeRenderSeq;" in refresh
-    assert "renderImaDocuments(seq)" in refresh
+    assert "renderImaDocuments(seq, { keepOld: true })" in refresh
     assert 'onclick="refreshImaDocuments()"' in render
     assert "refreshImaDocuments()" in render
 
 
-def test_ima_document_headers_have_desktop_flex_alignment():
-    """文档列表和阅读器标题桌面端使用 flex 横向对齐，移动端继续使用 grid。"""
+def test_ima_refresh_keeps_old_reports_and_uses_inline_retry():
+    refresh = _fn_body("refreshImaDocuments")
+    render = _fn_body("renderImaDocuments")
+    error = _fn_body("imaReportRefreshErrorHtml")
+
+    assert "keepOld: true" in refresh
+    assert "const oldHtml" in render
+    assert "ima-report-refresh-error" in error
+    assert "最新研报暂时无法更新" in error
+    assert "refreshImaDocuments()" in error
+    assert "body.innerHTML = oldHtml" in render
+    assert "if (!keepOld)" in render
+    before_request = render[render.index("if (!keepOld)"):render.index("await api(")]
+    assert "_imaItems.length = 0" in before_request
+    assert "_imaOffset = 0" in before_request
+    assert "state.imaDocumentsHasMore = false" in before_request
+    success = render[render.index("await api("):]
+    assert success.index("_imaItems.length = 0") < success.index("_imaItems.push(...items)")
+
+
+def test_ima_report_states_do_not_drop_incomplete_documents():
+    empty = _fn_body("imaDocumentsEmptyHtml")
+    row = _fn_body("imaDocumentRow")
+    fail = _fn_body("showImaPdfFail")
+
+    assert "没有找到相关研报" in empty
+    assert "换个公司、代码或主题试试" in empty
+    assert 'fmtImaDayShort(item.day) || "—"' in row
+    assert "预览打不开" in fail
+    assert "downloadImaPdf" not in fail
+    assert "btn-normal" not in fail
+
+
+def test_ima_report_first_layout_is_flat_dense_and_full_width():
     css = STYLE_CSS.read_text()
-    for selector in (".ima-docs-head", ".ima-reader-head"):
-        block = re.search(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", css)
-        assert block, f"缺少 {selector} 样式"
-        for declaration in ("display: flex", "justify-content: space-between", "gap:"):
-            assert declaration in block.group(1), f"{selector} 缺少 {declaration}"
-    assert ".ima-reader-head { display: grid; gap: 12px; }" in css
+
+    assert ".ima-report-page" in css
+    assert ".ima-report-head" in css
+    assert ".ima-report-columns" in css
+    assert ".ima-report-body" in css
+    assert ".ima-report-title" in css
+    assert ".ima-report-source" in css
+    assert "grid-template-columns: 64px minmax(0, 1fr) 132px" in css
+    assert re.search(r"\.ima-report-searchbox svg[\s\S]{0,80}width:\s*16px", css)
+    assert re.search(r"\.ima-doc-row\s*\{[^}]*min-height:\s*50px", css)
+    assert "box-shadow: none" in css
+    assert not re.search(r"\.kb-desk\s*\{", css)
+    assert ".kb-reader" not in css
 
 
-def test_ima_documents_group_switcher_is_responsive_and_touch_friendly():
-
+def test_ima_dedicated_reader_fills_the_desktop_surface():
     css = STYLE_CSS.read_text()
+
+    assert ".ima-reader-page" in css
+    assert ".ima-reader-toolbar" in css
+    assert ".ima-reader-info" in css
+    assert ".ima-reader-nav" in css
+    assert re.search(r"\.ima-reader-page \.ima-pdf-panel\s*\{[^}]*flex:\s*1", css)
+    assert "clip-path" not in css[css.index(".ima-reader-page"):]
+    assert "color-scheme: light" not in css[css.index(".ima-reader-page"):]
+
+
+def test_ima_source_filter_is_compact_and_subscription_management_survives():
     src = APP_JS.read_text()
-    for selector in (".ima-doc-group-switcher", ".ima-doc-group-tabs", ".ima-doc-group-tab", ".ima-doc-group-select", ".ima-doc-group-label", ".ima-doc-group-switcher:focus-visible"):
-        assert selector in css
-    assert "min-height: 44px" in css
-    assert "overflow-wrap: anywhere" in css or "text-overflow: ellipsis" in css
-    assert "<= 5" in src
-    assert "@media (max-width: 768px)" in css
+    controls = _fn_body("knowledgeSourceControlsHtml")
+
+    assert 'id="ima-doc-source"' in controls
+    assert 'aria-label="资料源"' in controls
+    assert "selectImaDocumentGroup(this.value)" in controls
+    assert "ima-source-manage" in controls
+    assert "knowledgeLibRowHtml" in controls
+    assert 'knowledgeLibRowHtml(group, selected, "subscribed")' in controls
+    assert "subscribeKnowledge" in src
+    assert "unsubscribeKnowledge" in src
 
 
 def test_timeline_filterbar_stays_in_main_column():
@@ -2757,15 +2824,18 @@ def test_ima_document_reader_preserves_group_context_and_metadata():
     assert "state.imaDocumentsGroup" in reader
     assert "state.imaDocumentsQuery" in reader
     assert "state.imaDocumentsDay" in reader
-    assert "imaDocumentsRoute(group, query, day, tag)" in reader
+    assert "imaDocumentsRoute(listGroup, query, day, tag)" in reader
     assert "item.group_name" in reader
     assert "item.day" in reader
     assert "ima-reader-day" in reader
+    assert "ima-reader-toolbar" in reader
+    assert "ima-reader-info" in reader
+    assert "<details open" in reader
     assert "查看 PDF" not in reader
     assert "下载" in reader
+    assert "btn-normal ima-reader-download" in reader
     assert "imaDisplayTitle" in reader and "item.size" in reader
     assert "ima-reader-abstract" in reader
-    assert "ima-reader-copy" in reader
     assert "ima-reader-empty" in reader
     assert "还没有预览文件" in reader
     assert "回列表" not in reader
@@ -2778,12 +2848,14 @@ def test_ima_document_reader_requests_keep_current_group_for_all_endpoints():
     reader = _fn_body("renderImaDocument")
     pdf = _fn_body("loadImaPdf")
     download = _fn_body("downloadImaPdf")
-    assert "const groupQuery = group ?" in reader
+    assert "const groupQuery = documentGroup ?" in reader
     assert "${encodeURIComponent(mediaId)}${groupQuery}" in reader
     assert "${encodeURIComponent(mediaId)}/translate${groupQuery}" in reader
     assert 'method: "POST"' in reader
+    assert "imaReaderDocumentGroup()" in pdf
     assert "const groupQuery = group ?" in pdf
     assert "${encodeURIComponent(mediaId)}/pdf${groupQuery}" in pdf
+    assert "imaReaderDocumentGroup()" in download
     assert "const groupQuery = group ?" in download
     assert "pdf?download=1${groupQuery}" in download
     assert "${encodeURIComponent(mediaId)}${detailQuery}" in download
@@ -2805,8 +2877,9 @@ def test_ima_document_reader_route_preserves_list_filters_without_inline_query_i
     assert "_imaDocumentRoute(item.media_id)" not in row
     assert "imaDocumentReaderRoute(id, groupId)" in opener
     assert "history.pushState" in opener
-    assert "renderImaDocument(routeRenderSeq, id)" in opener
-    assert "++routeRenderSeq" not in opener
+    assert "++routeRenderSeq" in opener
+    assert "mountKnowledgeReaderShell" in opener
+    assert "renderImaDocument(seq, id)" in opener
 
 
 def test_ima_document_row_group_scope_is_escaped_and_reaches_reader_route():
@@ -2819,9 +2892,9 @@ def test_ima_document_row_group_scope_is_escaped_and_reaches_reader_route():
     assert 'data-group-id="${escapeHtml(item.group_id || "")}"' in row
     assert row.count("this.dataset.groupId") >= 2
     assert "function imaDocumentReaderRoute(mediaId, groupId = \"\")" in src
-    assert 'const group = groupId || routeQuery().get("group") || state.imaDocumentsGroup || "";' in route
+    assert 'params.set("doc_group", groupId)' in route
     assert "imaDocumentsRoute(" in route
-    assert route.index("group,") < route.index("state.imaDocumentsQuery")
+    assert route.index("listGroup") < route.index("state.imaDocumentsQuery")
     assert "function openImaDocument(mediaId, groupId = \"\", replace = false)" in src
     assert "imaDocumentReaderRoute(id, groupId)" in opener
 
@@ -2842,7 +2915,6 @@ def test_ima_knowledge_subscription_callbacks_require_current_session_owner():
         success_guard = body.index(owner_guard, request)
         for side_effect in (
             f'flash("{success}")',
-            "rememberKnowledgeGroup(",
             "replaceImaDocumentsRoute(",
             "refreshKnowledge()",
         ):
@@ -2856,7 +2928,7 @@ def test_ima_knowledge_subscription_callbacks_require_current_session_owner():
 def test_ima_document_reader_backroute_uses_detail_group_when_url_has_none():
     """直接打开阅读页时，详情返回的群组 ID 也能恢复筛选列表。"""
     reader = _fn_body("renderImaDocument")
-    assert "let backRoute = imaDocumentsRoute(group, query, day, tag)" in reader
+    assert "let backRoute = imaDocumentsRoute(listGroup, query, day, tag)" in reader
     assert "item.group_id" in reader
     assert "backRoute = imaDocumentsRoute(item.group_id, query, day, tag)" in reader
     assert reader.index("const item = await api") < reader.index("backRoute = imaDocumentsRoute(item.group_id, query, day, tag)")
@@ -2893,20 +2965,17 @@ def test_ima_document_reader_removes_covers_and_labels_text_metadata():
     assert "imaDisplayTitle(item.name)" in reader
 
 
-def test_ima_document_day_nav_lives_in_title_header_and_stays_compact():
-    """日期是搜索框里的 chip，不占列表头第二套控件。"""
+def test_ima_report_header_owns_search_date_and_filters():
     render = _fn_body("renderImaDocuments")
-    head_start = render.index('<header class="kb-desk-head">')
+    head_start = render.index('<header class="ima-report-head">')
     head_end = render.index("</header>", head_start)
     head = render[head_start:head_end]
-    assert "kb-desk-search" in head
+
+    assert 'id="ima-doc-q"' in head
     assert 'id="ima-doc-day-nav-slot"' in head
-    assert head.index("kb-desk-search") < head.index('id="ima-doc-day-nav-slot"')
-    body = render.index('id="ima-docs-body"')
-    assert head_end < body
-    css = STYLE_CSS.read_text()
-    assert ".kb-desk-day" in css
-    assert "ima-doc-day-nav" not in _fn_body("imaDocumentsDayNavHtml")
+    assert 'id="ima-doc-source"' in _fn_body("knowledgeSourceControlsHtml")
+    assert 'id="ima-doc-tag"' in head
+    assert head.index('id="ima-doc-q"') < head.index('id="ima-doc-day-nav-slot"')
 
 
 def test_knowledge_desk_defaults_to_latest_stream():
@@ -2922,17 +2991,110 @@ def test_knowledge_desk_defaults_to_latest_stream():
     assert "if (!day) return" not in day
 
 
-def test_kb_desk_head_search_and_picker_alignment():
-    """搜索 44px 带焦点环；日期菜单只列有文档的日子。"""
-    menu = _fn_body("imaDayMenuHtml")
-    css = STYLE_CSS.read_text()
-    search = re.search(r"\.kb-desk-search\s*\{([^}]*)\}", css)
-    assert search and "min-height: 44px" in search.group(1)
-    assert ".kb-desk-search:focus-within" in css
-    assert "最新" in menu
-    assert "fmtImaDay" in menu
-    assert "imaDayPickerGridHtml" not in APP_JS.read_text()
-    assert "grid-template-columns: 320px" in css
+def test_ima_report_row_is_document_first_and_keeps_optional_metadata():
+    row = _fn_body("imaDocumentRow")
+    meta = _fn_body("imaReportMetaHtml")
+
+    assert "ima-report-date" in row
+    assert "ima-report-title" in row
+    assert "ima-report-meta" in row
+    assert "ima-report-source" in row
+    assert 'fmtImaDayShort(item.day) || "—"' in row
+    assert "imaListTitle(item.name)" in row
+    assert "imaDocTicker(item.name)" in meta
+    assert "imaDistinctiveTags" in meta
+    assert "fmtDocSize" in meta
+    assert "item.group_name" in row
+    assert "unknown" not in row
+
+
+def test_ima_report_search_is_debounced_and_explicitly_pages():
+    src = APP_JS.read_text()
+    render = _fn_body("renderImaDocuments")
+    queued = _fn_body("queueImaDocumentsSearch")
+    more = _fn_body("loadImaDocumentsMore")
+
+    assert "250" in queued
+    assert "clearTimeout(_imaSearchTimer)" in queued
+    assert "submitImaDocumentsSearch()" in queued
+    assert 'oninput="queueImaDocumentsSearch()"' in render
+    assert 'id="ima-docs-more"' in render
+    assert 'onclick="loadImaDocumentsMore()"' in render
+    assert "IntersectionObserver" not in src[src.index("const _imaItems"):src.index("async function renderImaDocument")]
+    assert "正在加载更多" in more
+    assert "加载失败，重试" in more
+
+
+def test_ima_report_render_reuses_mounted_header_and_cancels_stale_search():
+    render = _fn_body("renderImaDocuments")
+    submit = _fn_body("submitImaDocumentsSearch")
+    stop = _fn_body("stopImaDocumentsAutoLoad")
+    queued = _fn_body("queueImaDocumentsSearch")
+
+    assert render.index('querySelector(".ima-report-head")') < render.index("listRoot.innerHTML")
+    assert "document.activeElement" in render
+    assert '$("#ima-doc-source")' in render
+    assert '$("#ima-report-page")' in submit
+    assert "return" in submit
+    assert "clearTimeout(_imaSearchTimer)" in stop
+    assert "_imaSearchTimer = null" in stop
+    assert "_imaSearchComposing" in queued or "isComposing" in queued
+
+
+def test_ima_reader_captures_and_restores_the_loaded_result_set():
+    src = APP_JS.read_text()
+    capture = _fn_body("captureImaListSnapshot")
+    current = _fn_body("currentImaListSnapshot")
+    restore = _fn_body("restoreImaListSnapshot")
+    opener = _fn_body("openImaDocument")
+    refresh = _fn_body("refreshImaDocuments")
+
+    assert "_imaItems.map" in capture
+    assert "scrollTop" in capture
+    assert "state.imaDocumentsHasMore" in capture
+    assert "location.pathname + location.search" in capture
+    assert "captureImaListSnapshot" in opener
+    assert "snapshot.route" in current
+    assert "location.pathname + location.search" in current
+    assert "requestAnimationFrame" in restore
+    assert "scrollTop" in restore
+    assert "api(" not in restore
+    assert "consumed" in capture or "consumed" in restore
+    assert "consumed" in current
+    assert "renderImaDocuments" in refresh
+
+
+def test_ima_reader_has_one_app_download_and_result_neighbors():
+    reader = _fn_body("renderImaDocument")
+    nav = _fn_body("imaReaderNavHtml")
+    back = _fn_body("backFromImaReader")
+
+    assert "ima-reader-toolbar" in reader
+    assert "backFromImaReader" in reader
+    assert "btn-normal ima-reader-download" in reader
+    assert "<details open" in reader
+    assert "imaReaderNavHtml" in reader
+    assert "openImaDocument" in nav
+    assert ", true)" in nav
+    assert "this.dataset.mediaId" in nav
+    assert "data-media-id=" in nav
+    assert "history.back()" in back
+    assert "go(fallbackRoute)" in back
+    assert "downloadImaPdf" not in _fn_body("showImaPdfFail")
+
+
+def test_ima_reader_separates_document_group_from_list_source_filter():
+    route = _fn_body("imaDocumentReaderRoute")
+    reader = _fn_body("renderImaDocument")
+    group = _fn_body("imaReaderDocumentGroup")
+
+    assert 'params.set("doc_group", groupId)' in route
+    assert 'currentQuery.get("group")' in reader
+    assert 'currentQuery.get("doc_group")' in reader
+    assert "imaDocumentsRoute(listGroup, query, day, tag)" in reader
+    assert 'routeQuery().get("doc_group")' in group
+    assert "imaReaderDocumentGroup()" in _fn_body("loadImaPdf")
+    assert "imaReaderDocumentGroup()" in _fn_body("downloadImaPdf")
 
 
 def test_ima_day_picker_restricts_to_available_days():
@@ -2942,40 +3104,38 @@ def test_ima_day_picker_restricts_to_available_days():
     menu = _fn_body("imaDayMenuHtml")
     pick = _fn_body("pickImaDay")
     row = _fn_body("imaDocumentRow")
+    meta = _fn_body("imaReportMetaHtml")
     reader = _fn_body("renderImaDocument")
     assert "toggleImaDayPicker" in nav
     assert "aria-haspopup" in nav
     assert "kb-desk-day-option" in menu
     assert "selectImaDocumentsDay" in pick
     assert "closeImaDayPicker" in src
-    assert "ima-doc-ticker" in row
+    assert "imaDocTicker" in meta
     assert "fmtImaDayShort" in row
     assert "imaListTitle" in row
     assert "white-space: nowrap" in STYLE_CSS.read_text() or "ellipsis" in STYLE_CSS.read_text()
     assert "<details" in reader
-    assert "navpanes=0" in _fn_body("loadImaPdf")
+    assert "navpanes=0" not in _fn_body("loadImaPdf")
 
 
 def test_ima_document_list_hides_tag_rail_but_keeps_tag_filtering():
-    """列表去掉标签条和行内标签；URL 标签筛选仍可用。"""
     src = APP_JS.read_text()
     render = _fn_body("renderImaDocuments")
-    row = _fn_body("imaDocumentRow")
-    css = STYLE_CSS.read_text()
     assert 'id="ima-doc-tag-rail"' not in render
     assert "imaDocTagRailHtml" not in src
-    assert ".ima-doc-tag-rail" not in css
     assert 'id="ima-doc-tag"' in render
-    assert "item.tags" not in row
+    assert "tagSelect.hidden" in render or "tagSelect.removeAttribute(\"hidden\")" in render or "hidden" in render
+    assert "uniqueTags" in render
 
 
 def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=223"' in html
-    assert 'src="/app.js?v=310"' in html
-    assert 'dav-shell-v181' in sw
+    assert 'href="/style.css?v=224"' in html
+    assert 'src="/app.js?v=311"' in html
+    assert 'dav-shell-v182' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -3009,82 +3169,35 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     assert "(min-width: 769px) and (max-width: 900px)" in css
 
 
-def test_knowledge_single_subscribed_library_skips_catalog():
-    """非管理员只订了一个库时，打开 /knowledge 自动选中该库；catalog=1 不自动选。"""
+def test_knowledge_report_first_shell_uses_one_surface_per_route():
     src = APP_JS.read_text()
+    list_shell = _fn_body("mountKnowledgeListShell")
+    reader_shell = _fn_body("mountKnowledgeReaderShell")
     render = _fn_body("renderKnowledge")
-    select = _fn_body("selectImaDocumentGroup")
-    catalog = _fn_body("imaKnowledgeCatalogRoute")
-    stay = _fn_body("imaKnowledgeStayOnCatalog")
-    assert "knowledge?catalog=1" in catalog
-    assert 'get("catalog")' in stay
-    assert "=== \"1\"" in stay
-    assert "subscribed.length === 1" in render
-    assert "imaKnowledgeStayOnCatalog" in render
-    assert "!isAdmin" in render
-    assert "replaceImaDocumentsRoute(imaDocumentsRoute(" in render
-    assert "renderImaDocuments(seq)" in render
-    assert "imaKnowledgeCatalogRoute()" in select
-    assert "function imaKnowledgeCatalogRoute" in src
-    assert "function imaKnowledgeStayOnCatalog" in src
-    assert "kb-desk" in render or "mountKnowledgeShell" in render
-    assert "ensureKnowledgeReaderOpen" in src
+
+    assert 'id="ima-report-page"' in list_shell
+    assert 'id="kb-list"' in list_shell
+    assert 'id="kb-reader"' not in list_shell
+    assert 'id="ima-reader-page"' in reader_shell
+    assert 'id="kb-reader"' in reader_shell
+    assert 'id="kb-list"' not in reader_shell
+    assert "mediaId" in render
+    assert "mountKnowledgeReaderShell()" in render
+    assert "mountKnowledgeListShell()" in render
 
 
-def test_knowledge_catalog_shell_contract():
-    """知识库研究桌：库选择 + 列表 + 阅读；订阅接口；旧 /ima-documents 回写到 /knowledge。"""
-    src = APP_JS.read_text()
+def test_knowledge_defaults_to_all_readable_sources():
     render = _fn_body("renderKnowledge")
-    router = _fn_body("router")
-    route = _fn_body("imaDocumentsRoute")
-    open_doc = _fn_body("openImaDocument")
-    reader = _fn_body("renderImaDocument")
-    assert "/api/ima-documents/catalog" in render
-    assert "kb-desk" in src
-    assert "kb-list" in src
-    assert "kb-reader" in src
-    assert "kb-desk-lib" in src
-    assert "没有访问权限" in render
-    assert "暂无可订阅的知识库" in render
-    assert "还没有订阅知识库" in render
-    assert "回知识库" in render
-    assert "openKnowledgeLatest" in src
-    assert "onKnowledgeListKey" in src
-    assert 'e.key !== "j"' in src
-    assert "showImaPdfFail" in src
-    assert "预览打不开" in src
-    unsub = _fn_body("unsubscribeKnowledge")
-    assert "confirm(" in unsub
-    assert "isPhoneShell" in src
-    assert "知识库在电脑上读" in src
-    assert "知识库请在电脑上打开" not in src
-    assert "knowledgeAclPanelHtml" not in render
-    assert "谁能订" not in render
-    assert "谁能定" not in render
-    assert "history.pushState" in open_doc
-    assert "$(\"#kb-desk\")" in open_doc or "$(\"#kb-workspace\")" in open_doc
-    assert "$(\"#kb-reader\")" in reader
-    assert "/api/ima-documents/groups/" in src
-    assert re.search(
-        r'/api/ima-documents/groups/.{0,80}subscribe[\s\S]{0,160}method:\s*"POST"|'
-        r'method:\s*"POST"[\s\S]{0,160}/api/ima-documents/groups/.{0,80}subscribe',
-        src,
-    )
-    assert re.search(
-        r'/api/ima-documents/groups/.{0,80}subscribe[\s\S]{0,160}method:\s*"DELETE"|'
-        r'method:\s*"DELETE"[\s\S]{0,160}/api/ima-documents/groups/.{0,80}subscribe',
-        src,
-    )
-    assert 'page === "ima-documents"' in router
-    assert "history.replaceState" in router
-    assert "knowledge" in router
-    assert "renderKnowledge" in router
-    assert "knowledge" in route
-    css = STYLE_CSS.read_text()
-    assert ".kb-desk" in css
-    assert "grid-template-columns: 320px minmax(0, 1fr)" in css
-    assert "max-height: calc(100vh - 56px)" in css
-    assert "border-top: var(--border-default)" in css
+    controls = _fn_body("knowledgeSourceControlsHtml")
+
+    assert "subscribed.length === 1" not in render
+    assert "rememberedKnowledgeGroup" not in APP_JS.read_text()
+    assert 'id="ima-doc-source"' in controls
+    assert '>全部研报<' in controls
+    assert "state.imaCatalogSubscribed" in controls
+    assert "available" in controls
+    assert "knowledgeLibRowHtml" in controls
+    assert "subscribeKnowledge" in APP_JS.read_text()
 
 
 def test_ima_display_title_strips_pdf_and_english_duplicate():
@@ -3105,68 +3218,26 @@ def test_ima_display_title_strips_pdf_and_english_duplicate():
     subprocess.run(["node", "-e", js], check=True)
 
 
-def test_knowledge_desk_auto_opens_first_and_hides_empty_libs():
+def test_knowledge_report_list_does_not_auto_open_a_reader():
+    render = _fn_body("renderImaDocuments")
+    assert "ensureKnowledgeReaderOpen" not in APP_JS.read_text()
+    assert "openImaDocument(items[0]" not in render
+    assert "mountKnowledgeReaderShell" not in render
+
+
+def test_ima_report_metadata_contract_keeps_existing_capabilities():
     src = APP_JS.read_text()
     render = _fn_body("renderImaDocuments")
-    open_doc = _fn_body("openImaDocument")
     reader = _fn_body("renderImaDocument")
-    libs = _fn_body("knowledgeDeskGroups")
-    assert "ensureKnowledgeReaderOpen" in render
-    assert "replaceState" in open_doc
-    assert "setPageTitle(item.name" not in reader
-    assert "document_count" in libs
 
-
-def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
-    """库内瘦行按日浏览；搜索/标签出日并分页；阅读页摘要 + PDF。"""
-    src = APP_JS.read_text()
-    row = _fn_body("imaDocumentRow")
-    render = _fn_body("renderImaDocuments")
-    reader = _fn_body("renderImaDocument")
-    select = _fn_body("selectImaDocumentGroup")
-    css = STYLE_CSS.read_text()
-
-    assert 'placeholder="搜公司、代码或标题"' in src
-    assert "submitImaDocumentsSearch" in src
-    assert ">搜索</button>" not in render
-    assert "kb-desk-lib" in render or "kb-desk-lib" in src
+    assert 'placeholder="搜标题、公司、代码、行业或资料源"' in render
     assert 'params.set("tag"' in render
     assert "data.days" in render
-    assert "imaDocumentsRoute(group, query, day, tag)" in reader or "imaDocumentsRoute(item.group_id, query, day, tag)" in reader
-    assert "closeImaPdf" in src
-    assert "loadImaPdf(mediaId, readerSeq)" in reader
-    assert "ima-doc-abstract" not in row
-    assert "item.abstract" not in row
-    assert "ima-doc-row-thumb" not in row
-    assert "item.cover_url" not in row
-    assert "imaListTitle" in row
-    assert "imaDocTicker" in row
-    assert "item.tags" not in row
-    assert "imaDocKindLabel" not in row
-    assert "ima-doc-row-arrow" not in row
-    assert "imaDocumentsEmptyHtml" in src
-    assert "没有匹配的文档" in src
-    assert "这个库还没有文档" in src
-    assert "这一天没有文档" in src
-    assert "回最新一天" in src
-    assert "去配置采集" in src
-    assert "全部日期" not in render
-    assert "全部日期" not in _fn_body("imaDocumentsDayNavHtml")
-    assert "筛选日期" in _fn_body("imaDocumentsDayNavHtml")
-    assert "kb-desk-day" in _fn_body("imaDocumentsDayNavHtml")
-    assert "ima-day-picker" not in _fn_body("imaDocumentsDayNavHtml")
     assert "loadImaDocumentsMore" in src
-    assert 'params.set("limit"' in render
-    assert "data.has_more" in render
-
-    assert "has_pdf" in reader
-    assert "/text" not in reader
-    assert "ima-text-view" not in reader
-    assert "查看 PDF" not in reader
-
-    assert "renderKnowledge" in select
-    assert ".kb-desk" in css
-    assert ".ima-reader-abstract" in css
+    assert "loadImaPdf(mediaId, readerSeq)" in reader
+    assert "needs_translation" in reader
+    assert "renderImaDocuments" in _fn_body("selectImaDocumentGroup")
+    assert ".ima-report-page" in STYLE_CSS.read_text()
 
 
 def test_ima_documents_search_leaves_day_view():

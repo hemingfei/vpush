@@ -1781,20 +1781,45 @@ class ImaDocumentStore:
                 continue
             if day and str(record.get("day") or "") != day:
                 continue
-            haystack = f"{record.get('name', '')} {record.get('day', '')} {record.get('abstract', '')}".casefold()
+            name = str(record.get("name") or media_id)
+            abstract = str(record.get("abstract") or "")
+            tags = self._tags(state_item)
+            actual_group_id = str(
+                record.get("group_id")
+                or state_item.get("group_id")
+                or self._legacy_group_id
+                or IMA_LEGACY_GROUP_ID
+            )
+            metadata_name = str(
+                group_name
+                or record.get("group_name")
+                or state_item.get("group_name")
+                or self._group_metadata.get(actual_group_id, ("", actual_group_id))[0]
+            )
+            name_folded = name.casefold()
+            tag_text = " ".join(tags).casefold()
+            metadata_folded = metadata_name.casefold()
+            abstract_folded = abstract.casefold()
+            haystack = " ".join((name_folded, str(record.get("day") or ""), tag_text, metadata_folded, abstract_folded))
             if query and query not in haystack:
                 continue
-            tags = self._tags(state_item)
+            match_rank = 0
+            if query:
+                if query in name_folded:
+                    match_rank = 3
+                elif query in tag_text or query in metadata_folded:
+                    match_rank = 2
+                else:
+                    match_rank = 1
             if requested_tag and requested_tag not in tags:
                 continue
-            actual_group_id = str(record.get("group_id") or state_item.get("group_id") or self._legacy_group_id or IMA_LEGACY_GROUP_ID)
             if allowed_groups is not None and actual_group_id not in allowed_groups:
                 continue
             if requested_group and actual_group_id != requested_group:
                 continue
             item = {
                 "media_id": media_id,
-                "name": str(record.get("name") or media_id),
+                "name": name,
                 "day": str(record.get("day") or "unknown"),
                 "size": self._file_size(state_item, record, None),
                 "chars": int(state_item.get("chars") or 0),
@@ -1802,21 +1827,28 @@ class ImaDocumentStore:
                 "tags": tags,
                 "has_pdf": bool(state_item.get("pdf")),
                 "has_txt": bool(state_item.get("txt")),
+                "_match_rank": match_rank,
             }
             if include_body:
-                item["abstract"] = str(record.get("abstract") or "")
+                item["abstract"] = abstract
                 item["cover_url"] = str(record.get("cover_url") or "")
             metadata_id = actual_group_id
-            metadata_name = str(group_name or record.get("group_name") or state_item.get("group_name") or "")
             if metadata_id:
                 item["group_id"] = metadata_id
             if metadata_name:
                 item["group_name"] = metadata_name
             output.append(item)
         output.sort(
-            key=lambda item: (item["day"] != "unknown", item["day"], item["name"]),
+            key=lambda item: (
+                int(item.get("_match_rank") or 0),
+                item["day"] != "unknown",
+                item["day"],
+                item["name"],
+            ),
             reverse=True,
         )
+        for item in output:
+            item.pop("_match_rank", None)
         if limit is not None:
             return output[offset:offset + limit]
         return output
