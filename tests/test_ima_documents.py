@@ -75,6 +75,43 @@ def test_status_counts_only_complete_manifest_entries(tmp_path):
     assert service.status()["documents"] == 1
 
 
+def test_remote_status_counts_state_without_statting_archive(tmp_path, monkeypatch):
+    index_root = tmp_path / "index"
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    (archive_root / ".vpush-ima-root").touch()
+    status_path = tmp_path / "status.json"
+    _write_available_status(status_path)
+    status = ImaStorageStatus(status_path, remote=True)
+    service = ImaDocumentService(
+        FakeDB(),
+        index_root,
+        archive_root=archive_root,
+        storage_status=status,
+    )
+    records = []
+    state = {}
+    for index in range(20):
+        record = {
+            "media_id": f"file_{index}",
+            "name": f"{index}.pdf",
+            "day": "0829",
+            "group_id": "banking",
+        }
+        records.append(record)
+        state[service.store.state_key(record)] = {"pdf": f"banking/{index}.pdf"}
+    service.store.save_manifest(records)
+    service.store.save_state(state)
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("remote status must not probe archive files")
+
+    monkeypatch.setattr(service.store, "_state_path", boom)
+    monkeypatch.setattr(service.store, "archive_readable", boom)
+
+    assert service.status()["documents"] == 20
+
+
 def test_discovery_commit_reloads_config_after_admin_update(tmp_path, monkeypatch):
     from app import ima_documents
 
