@@ -2255,12 +2255,15 @@ def test_ima_documents_group_switching_contract():
     assert 'routeQuery().get("group")' in src
     assert "group_name" in src
     assert "params.set(\"group\"" in render
-    assert "kb-desk-lib" in src
+    assert "ima-doc-source" in src
     assert "selectImaDocumentGroup" in src
     assert "routeQuery()" in src
     assert "replaceImaDocumentsRoute(imaDocumentsRoute(value, state.imaDocumentsQuery, \"\", \"\"))" in src
     assert "selectImaDocumentGroup(value)" in src
     assert "state.imaDocumentsDay = \"\"" in src
+    assert "escapeHtml(group.id" in src or "escapeHtml(group.value" in src
+    assert "escapeHtml(group.name" in src
+    assert "没有访问权限" in src
 
 
 def test_ima_documents_group_controls_render_response_groups_safely():
@@ -2344,16 +2347,17 @@ def test_ima_document_headers_have_desktop_flex_alignment():
     assert ".ima-reader-head { display: grid; gap: 12px; }" in css
 
 
-def test_ima_documents_group_switcher_is_responsive_and_touch_friendly():
-
-    css = STYLE_CSS.read_text()
+def test_ima_source_filter_is_compact_and_subscription_management_survives():
     src = APP_JS.read_text()
-    for selector in (".ima-doc-group-switcher", ".ima-doc-group-tabs", ".ima-doc-group-tab", ".ima-doc-group-select", ".ima-doc-group-label", ".ima-doc-group-switcher:focus-visible"):
-        assert selector in css
-    assert "min-height: 44px" in css
-    assert "overflow-wrap: anywhere" in css or "text-overflow: ellipsis" in css
-    assert "<= 5" in src
-    assert "@media (max-width: 768px)" in css
+    controls = _fn_body("knowledgeSourceControlsHtml")
+
+    assert 'id="ima-doc-source"' in controls
+    assert 'aria-label="资料源"' in controls
+    assert "selectImaDocumentGroup(this.value)" in controls
+    assert "ima-source-manage" in controls
+    assert "knowledgeLibRowHtml" in controls
+    assert "subscribeKnowledge" in src
+    assert "unsubscribeKnowledge" in src
 
 
 def test_timeline_filterbar_stays_in_main_column():
@@ -2842,7 +2846,6 @@ def test_ima_knowledge_subscription_callbacks_require_current_session_owner():
         success_guard = body.index(owner_guard, request)
         for side_effect in (
             f'flash("{success}")',
-            "rememberKnowledgeGroup(",
             "replaceImaDocumentsRoute(",
             "refreshKnowledge()",
         ):
@@ -3009,82 +3012,35 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     assert "(min-width: 769px) and (max-width: 900px)" in css
 
 
-def test_knowledge_single_subscribed_library_skips_catalog():
-    """非管理员只订了一个库时，打开 /knowledge 自动选中该库；catalog=1 不自动选。"""
+def test_knowledge_report_first_shell_uses_one_surface_per_route():
     src = APP_JS.read_text()
+    list_shell = _fn_body("mountKnowledgeListShell")
+    reader_shell = _fn_body("mountKnowledgeReaderShell")
     render = _fn_body("renderKnowledge")
-    select = _fn_body("selectImaDocumentGroup")
-    catalog = _fn_body("imaKnowledgeCatalogRoute")
-    stay = _fn_body("imaKnowledgeStayOnCatalog")
-    assert "knowledge?catalog=1" in catalog
-    assert 'get("catalog")' in stay
-    assert "=== \"1\"" in stay
-    assert "subscribed.length === 1" in render
-    assert "imaKnowledgeStayOnCatalog" in render
-    assert "!isAdmin" in render
-    assert "replaceImaDocumentsRoute(imaDocumentsRoute(" in render
-    assert "renderImaDocuments(seq)" in render
-    assert "imaKnowledgeCatalogRoute()" in select
-    assert "function imaKnowledgeCatalogRoute" in src
-    assert "function imaKnowledgeStayOnCatalog" in src
-    assert "kb-desk" in render or "mountKnowledgeShell" in render
-    assert "ensureKnowledgeReaderOpen" in src
+
+    assert 'id="ima-report-page"' in list_shell
+    assert 'id="kb-list"' in list_shell
+    assert 'id="kb-reader"' not in list_shell
+    assert 'id="ima-reader-page"' in reader_shell
+    assert 'id="kb-reader"' in reader_shell
+    assert 'id="kb-list"' not in reader_shell
+    assert "mediaId" in render
+    assert "mountKnowledgeReaderShell()" in render
+    assert "mountKnowledgeListShell()" in render
 
 
-def test_knowledge_catalog_shell_contract():
-    """知识库研究桌：库选择 + 列表 + 阅读；订阅接口；旧 /ima-documents 回写到 /knowledge。"""
-    src = APP_JS.read_text()
+def test_knowledge_defaults_to_all_readable_sources():
     render = _fn_body("renderKnowledge")
-    router = _fn_body("router")
-    route = _fn_body("imaDocumentsRoute")
-    open_doc = _fn_body("openImaDocument")
-    reader = _fn_body("renderImaDocument")
-    assert "/api/ima-documents/catalog" in render
-    assert "kb-desk" in src
-    assert "kb-list" in src
-    assert "kb-reader" in src
-    assert "kb-desk-lib" in src
-    assert "没有访问权限" in render
-    assert "暂无可订阅的知识库" in render
-    assert "还没有订阅知识库" in render
-    assert "回知识库" in render
-    assert "openKnowledgeLatest" in src
-    assert "onKnowledgeListKey" in src
-    assert 'e.key !== "j"' in src
-    assert "showImaPdfFail" in src
-    assert "预览打不开" in src
-    unsub = _fn_body("unsubscribeKnowledge")
-    assert "confirm(" in unsub
-    assert "isPhoneShell" in src
-    assert "知识库在电脑上读" in src
-    assert "知识库请在电脑上打开" not in src
-    assert "knowledgeAclPanelHtml" not in render
-    assert "谁能订" not in render
-    assert "谁能定" not in render
-    assert "history.pushState" in open_doc
-    assert "$(\"#kb-desk\")" in open_doc or "$(\"#kb-workspace\")" in open_doc
-    assert "$(\"#kb-reader\")" in reader
-    assert "/api/ima-documents/groups/" in src
-    assert re.search(
-        r'/api/ima-documents/groups/.{0,80}subscribe[\s\S]{0,160}method:\s*"POST"|'
-        r'method:\s*"POST"[\s\S]{0,160}/api/ima-documents/groups/.{0,80}subscribe',
-        src,
-    )
-    assert re.search(
-        r'/api/ima-documents/groups/.{0,80}subscribe[\s\S]{0,160}method:\s*"DELETE"|'
-        r'method:\s*"DELETE"[\s\S]{0,160}/api/ima-documents/groups/.{0,80}subscribe',
-        src,
-    )
-    assert 'page === "ima-documents"' in router
-    assert "history.replaceState" in router
-    assert "knowledge" in router
-    assert "renderKnowledge" in router
-    assert "knowledge" in route
-    css = STYLE_CSS.read_text()
-    assert ".kb-desk" in css
-    assert "grid-template-columns: 320px minmax(0, 1fr)" in css
-    assert "max-height: calc(100vh - 56px)" in css
-    assert "border-top: var(--border-default)" in css
+    controls = _fn_body("knowledgeSourceControlsHtml")
+
+    assert "subscribed.length === 1" not in render
+    assert "rememberedKnowledgeGroup" not in APP_JS.read_text()
+    assert 'id="ima-doc-source"' in controls
+    assert '>全部研报<' in controls
+    assert "state.imaCatalogSubscribed" in controls
+    assert "available" in controls
+    assert "knowledgeLibRowHtml" in controls
+    assert "subscribeKnowledge" in APP_JS.read_text()
 
 
 def test_ima_display_title_strips_pdf_and_english_duplicate():
@@ -3105,16 +3061,11 @@ def test_ima_display_title_strips_pdf_and_english_duplicate():
     subprocess.run(["node", "-e", js], check=True)
 
 
-def test_knowledge_desk_auto_opens_first_and_hides_empty_libs():
-    src = APP_JS.read_text()
+def test_knowledge_report_list_does_not_auto_open_a_reader():
     render = _fn_body("renderImaDocuments")
-    open_doc = _fn_body("openImaDocument")
-    reader = _fn_body("renderImaDocument")
-    libs = _fn_body("knowledgeDeskGroups")
-    assert "ensureKnowledgeReaderOpen" in render
-    assert "replaceState" in open_doc
-    assert "setPageTitle(item.name" not in reader
-    assert "document_count" in libs
+    assert "ensureKnowledgeReaderOpen" not in APP_JS.read_text()
+    assert "openImaDocument(items[0]" not in render
+    assert "mountKnowledgeReaderShell" not in render
 
 
 def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
