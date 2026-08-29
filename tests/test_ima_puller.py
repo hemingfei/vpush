@@ -67,6 +67,18 @@ def test_safe_dest_rejects_symlink_parent(tmp_path):
         safe_dest(tmp_path, "group__abc/Report.pdf")
 
 
+def test_safe_dest_rejects_symlink_ancestor(tmp_path):
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    real = archive / "realgroup"
+    real.mkdir()
+    (real / "0829").mkdir()
+    link = archive / "group"
+    link.symlink_to(real)
+    with pytest.raises(ValueError):
+        safe_dest(archive, "group/0829/Report.pdf")
+
+
 def test_save_pdf_writes_atomically(tmp_path, monkeypatch):
     import app.ima_puller as puller
 

@@ -3118,3 +3118,97 @@ def test_download_posts_to_puller_when_url_configured(tmp_path, monkeypatch):
     assert seen["body"]["headers"]["X-IMA-Sign"] == "sig"
     assert result["size"] == 8
     assert result["md5"] == "d" * 32
+
+
+def test_download_uses_cdn_when_pull_url_unset(tmp_path, monkeypatch):
+    seen = {}
+
+    class FakeResponse:
+        def __init__(self):
+            self._data = b"%PDF-1.7xxxx"
+
+        def read(self, n):
+            chunk = self._data[:n]
+            self._data = self._data[n:]
+            return chunk
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(req, timeout=120):
+        seen["url"] = req.full_url
+        return FakeResponse()
+
+    monkeypatch.setenv("IMA_PULL_URL", "")
+    monkeypatch.setattr(ima_documents.urllib.request, "urlopen", fake_urlopen)
+    dest = tmp_path / "g" / "a.pdf"
+    ImaPureClient(ImaDocumentConfig(refresh_token="refresh")).download(
+        {
+            "jump_url_info": {
+                "url": "https://res-skb.ima.qq.com/file.pdf?sign=1",
+                "headers": {"X-IMA-Sign": "sig"},
+            }
+        },
+        dest,
+    )
+    assert seen["url"] == "https://res-skb.ima.qq.com/file.pdf?sign=1"
+    assert "/pull" not in seen["url"]
+    assert dest.read_bytes().startswith(b"%PDF-1.7")
+
+
+def test_sync_redownloads_when_pull_url_set_even_if_file_exists(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    db = FakeDB(
+        {
+            "ima_pure_uid": "uid",
+            "ima_pure_refresh_token": "refresh",
+            "ima_pure_knowledge_base_id": "kb",
+            "ima_pure_root_folder_id": "root",
+        }
+    )
+    calls = {"get_media": 0, "download": 0}
+    record = {"media_id": "file_new", "name": "n.pdf", "day": "0829", "size": 8}
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.config = config
+
+        def manifest(self, listing_cache=None):
+            return [dict(record)]
+
+        def get_media(self, media_id):
+            calls["get_media"] += 1
+            return {"jump_url_info": {"url": "https://res-skb.ima.qq.com/n.pdf", "headers": {}}}
+
+        def download(self, media, destination, expected_size=0):
+            calls["download"] += 1
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"%PDF-1.7xxxx")
+            return {"size": 12, "md5": "d" * 32, "path": str(destination)}
+
+        def _pdf_info(self, path):
+            return 8, "d" * 32
+
+    archive = tmp_path / "ima"
+    monkeypatch.setenv("IMA_PULL_URL", "http://10.80.0.2:8743/pull")
+    monkeypatch.setenv("IMA_PULL_TOKEN", "tok")
+    monkeypatch.setenv("IMA_ARCHIVE_ROOT", str(archive))
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    monkeypatch.setattr(
+        ima_documents,
+        "convert_pdf",
+        lambda pdf, txt: (txt.write_text("text", encoding="utf-8") or 4),
+    )
+    service = ImaDocumentService(db, archive)
+    planted = service.store.pdf_path(record)
+    planted.parent.mkdir(parents=True, exist_ok=True)
+    planted.write_bytes(b"%PDF-1.7old!")
+    assert planted.is_file()
+    result = service.sync_once()
+    assert calls["get_media"] >= 1
+    assert calls["download"] >= 1
+    assert result["downloaded"] == 1

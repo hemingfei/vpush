@@ -32,9 +32,11 @@ def safe_dest(root: Path, dest: str) -> Path:
     if not text.endswith(".pdf") or text.endswith("/.pdf"):
         raise ValueError("dest must be a .pdf path")
     root = root.resolve()
-    day_path = root / Path(text).parent
-    if day_path.is_symlink():
-        raise ValueError("archive directory must not be a symlink")
+    current = root
+    for part in Path(text).parts[:-1]:
+        current = current / part
+        if current.exists() and current.is_symlink():
+            raise ValueError("archive directory must not be a symlink")
     candidate = (root / text).resolve()
     if candidate == root or not candidate.is_relative_to(root):
         raise ValueError("dest escapes archive root")
