@@ -1136,15 +1136,16 @@ async function renderKnowledge(seq, encodedMediaId = "") {
     mountKnowledgeListShell();
     if (!subscribed.length) {
       const list = $("#kb-list");
+      const controls = knowledgeSourceControlsHtml("");
       if (isAdmin) {
-        list.innerHTML = emptyState("还没有配置知识库", `<div><button type="button" class="btn-normal" onclick="go('admin/knowledge')">去配置采集</button></div>`);
+        list.innerHTML = `${controls}${emptyState("还没有配置知识库", `<div><button type="button" class="btn-normal" onclick="go('admin/knowledge')">去配置采集</button></div>`)}`;
       } else {
-        list.innerHTML = emptyState(
+        list.innerHTML = `${controls}${emptyState(
           "还没有订阅知识库",
           available.length
             ? `<div><p class="section-meta">在上方可订阅里点订阅</p></div>`
             : `<div><p class="section-meta">找管理员在用户设置里勾选知识库后再来订阅</p></div>`
-        );
+        )}`;
         if (!available.length) {
           list.innerHTML += emptyState("暂无可订阅的知识库", `<div><p class="section-meta">找管理员在用户设置里勾选知识库后再来</p></div>`);
         }
