@@ -30,6 +30,7 @@ from app.ima_documents import (
     merge_groups,
     normalize_discovered_groups,
     normalize_ima_folder_item,
+    _clamp_group_interval,
     _safe_error,
     decrypt_body,
     encrypt_body,
@@ -386,6 +387,7 @@ def test_config_reads_group_registry_without_exposing_token():
             "mounted_folder_count": 1,
             "enabled": True,
             "source": "discovered",
+            "interval_seconds": 3600,
         }
     ]
     assert "refresh-secret" not in json.dumps(public)
@@ -3004,6 +3006,28 @@ def test_merge_groups_preserves_mounts_and_new_discovered_group_is_unmounted():
 def test_merge_groups_failed_discovery_keeps_stale_discovered_groups():
     existing = (ImaGroupConfig("gone", "旧库", "kb-gone", "root", True, "discovered", ("f",)),)
     assert merge_groups(existing, (), discovery_complete=False) == existing
+
+
+def test_clamp_group_interval_to_three_buckets():
+    assert _clamp_group_interval(None) == 3600
+    assert _clamp_group_interval(100) == 3600
+    assert _clamp_group_interval(10799) == 3600
+    assert _clamp_group_interval(10800) == 21600
+    assert _clamp_group_interval(43199) == 21600
+    assert _clamp_group_interval(43200) == 86400
+
+
+def test_group_public_includes_interval(tmp_path):
+    group = ImaGroupConfig("g", "库", "kb", "root", True, "discovered", (), 21600)
+    assert group.public()["interval_seconds"] == 21600
+
+
+def test_merge_groups_keeps_interval():
+    existing = (ImaGroupConfig("g", "旧", "kb", "root", True, "discovered", ("f",), 86400),)
+    discovered = (ImaGroupConfig("g", "新", "kb", "root", False, "discovered", ()),)
+    merged = merge_groups(existing, discovered)
+    assert merged[0].interval_seconds == 86400
+    assert merged[0].name == "新"
 
 
 def test_manifest_uses_ima_current_path_for_selected_root_day():

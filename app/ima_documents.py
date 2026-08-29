@@ -187,6 +187,21 @@ def _interval(value: Any) -> int:
     return max(IMA_PURE_INTERVAL_MIN, min(IMA_PURE_INTERVAL_MAX, number))
 
 
+IMA_GROUP_INTERVALS = (3600, 21600, 86400)
+
+
+def _clamp_group_interval(value: Any) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 3600
+    if number < 10800:
+        return 3600
+    if number < 43200:
+        return 21600
+    return 86400
+
+
 def _secret_status(value: str) -> dict[str, Any]:
     return {"set": bool(value), "preview": "已保存" if value else ""}
 
@@ -201,6 +216,7 @@ class ImaGroupConfig:
     source: str = "manual"
     # None means the pre-folder_ids configuration and falls back to root_folder_id.
     folder_ids: tuple[str, ...] | None = None
+    interval_seconds: int = 3600
 
     @property
     def mount_folder_ids(self) -> tuple[str, ...]:
@@ -219,6 +235,7 @@ class ImaGroupConfig:
             "mounted_folder_count": len(folder_ids),
             "enabled": bool(self.enabled and folder_ids),
             "source": self.source,
+            "interval_seconds": self.interval_seconds,
         }
 
 
@@ -496,6 +513,7 @@ def merge_groups(
             enabled=previous.enabled if previous else False,
             source=previous.source if manual else "discovered",
             folder_ids=previous.folder_ids if previous else (),
+            interval_seconds=previous.interval_seconds if previous else 3600,
         )
         discovered_ids.add(target_id)
         kb_to_id[group.knowledge_base_id] = target_id
@@ -550,6 +568,7 @@ def _read_groups(db: Any, kb: str, root: str) -> tuple[ImaGroupConfig, ...]:
                 enabled=enabled,
                 source="discovered" if source == "discovered" else "manual",
                 folder_ids=folder_ids,
+                interval_seconds=_clamp_group_interval(item.get("interval_seconds")),
             )
         )
     normalized_groups = []
@@ -563,6 +582,7 @@ def _read_groups(db: Any, kb: str, root: str) -> tuple[ImaGroupConfig, ...]:
                 enabled=group.enabled,
                 source=group.source,
                 folder_ids=group.folder_ids,
+                interval_seconds=group.interval_seconds,
             )
         normalized_groups.append(group)
     return tuple(normalized_groups)
