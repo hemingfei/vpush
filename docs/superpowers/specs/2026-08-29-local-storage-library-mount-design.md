@@ -218,3 +218,15 @@ ssh -i "/Volumes/main/存储VPS-SSH/id_ed25519_ima-storage" -p 22 root@198.12.12
 - 不把存储机变成通用网盘。
 - 不在 `/knowledge` 暴露原始 POSIX 树。
 - 不因为本地库去引入 FTS5、对象存储或新搜索服务。
+
+## 11. 附录：摘要与标签 sidecar（2026-08-30 增补，用户已确认）
+
+用户要求本地库文档与 IMA 文档有同等的摘要、标签体验。中金列表 API 自带官方摘要与分类标签，
+采集侧把元数据落成 sidecar 文件，扫描入库时读取：
+
+- sidecar 路径：`local/<slug>/.vpush-local-meta.jsonl`（`.` 开头，扫描器不当作文档，与标记文件同样只读不删）
+- 每行一个 JSON：`{"id","title","summary","tags":[...],"day","authors"}`，`id` 为字符串报告 id
+- 匹配规则：PDF 文件名 `*_<id>.pdf` 尾缀的 `<id>` 对应 sidecar 行
+- 摘要：`summary` 写入该文档 `abstract`；无对应行则摘要为空（回退原 §6 行为）
+- 标签：sidecar `tags`（≤5，来自 reportType + documentLabels + 行业名）与标记文件库级 `tags` 合并去重
+- `day`/`title` 仅作 MMDD 目录与文件名的兜底，不覆盖现有磁盘事实
