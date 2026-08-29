@@ -12,7 +12,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from http.client import IncompleteRead
@@ -33,6 +33,8 @@ IMA_LIST_WORKERS = 3
 IMA_FOLDER_LIST_MAX_PAGES = 20
 IMA_DOWNLOAD_RETRY_DELAYS = (2, 8)
 IMA_INDEX_VERSION = 1
+IMA_STATE_FLUSH_COUNT = 20
+IMA_STATE_FLUSH_SECONDS = 2.0
 
 BASE = os.environ.get("IMA_BASE", "https://ima.qq.com/cgi-bin")
 GUID = os.environ.get("IMA_GUID", "7497986728819336")
@@ -1315,6 +1317,7 @@ class ImaDocumentStore:
         self._group_metadata: dict[str, tuple[str, str]] = {
             IMA_LEGACY_GROUP_ID: (IMA_LEGACY_GROUP_NAME, IMA_LEGACY_GROUP_ID)
         }
+        self._on_records_changed = None
 
     @staticmethod
     def validate_media_id(media_id: str) -> str:
@@ -2001,6 +2004,9 @@ class ImaDocumentStore:
             item["abstract_src_hash"] = src_hash
             latest[key] = item
             self._save(self.state_path, latest)
+        hook = getattr(self, "_on_records_changed", None)
+        if callable(hook):
+            hook([record], latest)
 
 
 def convert_pdf(pdf: Path, txt: Path) -> int:
@@ -2047,7 +2053,8 @@ def purge_ima_document_tags(store: ImaDocumentStore, valid_tags: set[str]) -> in
     with store._state_lock:
         state = store.load_state()
         changed = 0
-        for item in state.values():
+        changed_keys: list[str] = []
+        for key, item in state.items():
             if not isinstance(item, dict):
                 continue
             tags = [t for t in (item.get("tags") or []) if isinstance(t, str)]
@@ -2055,8 +2062,17 @@ def purge_ima_document_tags(store: ImaDocumentStore, valid_tags: set[str]) -> in
             if kept != tags:
                 item["tags"] = kept
                 changed += 1
+                changed_keys.append(str(key))
         if changed:
             store._save_state_locked(state)
+            hook = getattr(store, "_on_records_changed", None)
+            if callable(hook):
+                records = [
+                    record
+                    for record in store.load_manifest()
+                    if store.state_key(record) in set(changed_keys)
+                ]
+                hook(records, state)
     return changed
 
 
@@ -2076,6 +2092,7 @@ class ImaDocumentService:
             archive_root=archive_root,
             storage_status=self.storage_status,
         )
+        self.store._on_records_changed = self._update_index_rows
         self._stop = threading.Event()
         self._state_lock = threading.Lock()
         self._config_lock = threading.RLock()
@@ -2283,6 +2300,56 @@ class ImaDocumentService:
             "txt_path": txt_path,
             "downloaded_at": str(state_item.get("downloaded_at") or ""),
         }
+
+    def _update_index_rows(
+        self,
+        records: list[dict[str, Any]],
+        state: dict[str, dict[str, Any]],
+    ) -> None:
+        updater = getattr(self.db, "update_ima_document_batch", None)
+        if not callable(updater) or not records:
+            return
+        rows = []
+        for record in records:
+            try:
+                rows.append(self._index_row(record, state))
+            except ValueError:
+                continue
+        if not rows:
+            return
+        try:
+            updater(rows, self._source_fingerprint())
+        except Exception as exc:  # noqa: BLE001
+            marker = getattr(self.db, "mark_ima_document_index", None)
+            if callable(marker):
+                try:
+                    marker("failed", error=_safe_error(exc))
+                except Exception as mark_exc:  # noqa: BLE001
+                    logger.warning(
+                        "IMA index failed status write error=%s",
+                        _safe_error(mark_exc),
+                    )
+            logger.warning("IMA index batch update failed error=%s", _safe_error(exc))
+
+    def _replace_group_index(
+        self,
+        group_id: str,
+        records: list[dict[str, Any]],
+        state: dict[str, dict[str, Any]],
+    ) -> None:
+        replacer = getattr(self.db, "replace_ima_document_group", None)
+        if not callable(replacer):
+            return
+        rows = []
+        for record in records:
+            try:
+                rows.append(self._index_row(record, state))
+            except ValueError:
+                continue
+        try:
+            replacer(group_id, rows)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("IMA index group replace failed error=%s", _safe_error(exc))
 
     def read_index_status(self) -> dict[str, Any]:
         getter = getattr(self.db, "ima_document_index_meta", None)
@@ -2619,6 +2686,7 @@ class ImaDocumentService:
         processed = 0
         tagged = 0
         dirty = False
+        changed_records: list[dict[str, Any]] = []
         for record in records:
             try:
                 key = self.store.state_key(record)
@@ -2637,8 +2705,10 @@ class ImaDocumentService:
             if tags:
                 tagged += 1
             dirty = True
+            changed_records.append(record)
         if dirty:
             self.store.save_state(state)
+            self._update_index_rows(changed_records, state)
         return {"processed": processed, "tagged": tagged}
 
     def stop(self) -> None:
@@ -2856,6 +2926,7 @@ class ImaDocumentService:
             self.store.restore_original_filenames()
         state.clear()
         state.update(self.store.load_state())
+        self._replace_group_index(group.id, records, state)
         pending = [
             record
             for record in records
@@ -2921,38 +2992,80 @@ class ImaDocumentService:
             raise last_error  # pragma: no cover - loop either returns or raises
 
         workers = 1 if len(jobs) < 2 else IMA_DOWNLOAD_WORKERS
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = [pool.submit(_fetch, record, pdf) for record, pdf in jobs]
-            for future in as_completed(futures):
-                if self._cancel_requested:
-                    break
-                try:
-                    record, pdf, size, md5 = future.result()
-                    media_id = str(record["media_id"])
-                    key = self.store.state_key(record)
-                    state[key] = {
-                        "group_id": group.id,
-                        "group_name": group.name,
-                        "day": record.get("day") or "unknown",
-                        "name": record.get("name") or media_id,
-                        "pdf": str(pdf.relative_to(self.store.archive_root)),
-                        "txt": "",
-                        "size": size,
-                        "md5": md5,
-                        "chars": 0,
-                        "downloaded_at": datetime.now(UTC).isoformat(),
-                    }
-                    try:
-                        state[key]["tags"] = _tag_document(self.db, record, None)
-                    except Exception:
-                        logger.exception("IMA document tag failed media=%s", media_id[:32])
-                    self.store.save_state(state)
-                    downloaded += 1
-                    self._set_progress(downloaded=downloaded)
-                except Exception as exc:  # noqa: BLE001 - isolate one bad file
-                    failures += 1
-                    self._set_progress(failed=failures)
-                    last_error = _safe_error(exc)
+        dirty_records: dict[str, dict[str, Any]] = {}
+        last_flush = time.monotonic()
+
+        def flush() -> None:
+            nonlocal last_flush
+            if not dirty_records:
+                return
+            self.store.save_state(state)
+            self._update_index_rows(list(dirty_records.values()), state)
+            dirty_records.clear()
+            last_flush = time.monotonic()
+
+        def should_flush() -> bool:
+            return len(dirty_records) >= IMA_STATE_FLUSH_COUNT or (
+                time.monotonic() - last_flush
+            ) >= IMA_STATE_FLUSH_SECONDS
+
+        try:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                pending_futures = {
+                    pool.submit(_fetch, record, pdf) for record, pdf in jobs
+                }
+                while pending_futures:
+                    if self._cancel_requested:
+                        break
+                    remaining = max(
+                        0.0,
+                        IMA_STATE_FLUSH_SECONDS - (time.monotonic() - last_flush),
+                    )
+                    done, pending_futures = wait(
+                        pending_futures,
+                        timeout=remaining,
+                        return_when=FIRST_COMPLETED,
+                    )
+                    if not done:
+                        if dirty_records:
+                            flush()
+                        else:
+                            last_flush = time.monotonic()
+                        continue
+                    for future in done:
+                        try:
+                            record, pdf, size, md5 = future.result()
+                            media_id = str(record["media_id"])
+                            key = self.store.state_key(record)
+                            state[key] = {
+                                "group_id": group.id,
+                                "group_name": group.name,
+                                "day": record.get("day") or "unknown",
+                                "name": record.get("name") or media_id,
+                                "pdf": str(pdf.relative_to(self.store.archive_root)),
+                                "txt": "",
+                                "size": size,
+                                "md5": md5,
+                                "chars": 0,
+                                "downloaded_at": datetime.now(UTC).isoformat(),
+                            }
+                            try:
+                                state[key]["tags"] = _tag_document(self.db, record, None)
+                            except Exception:
+                                logger.exception(
+                                    "IMA document tag failed media=%s", media_id[:32]
+                                )
+                            dirty_records[key] = record
+                            downloaded += 1
+                            self._set_progress(downloaded=downloaded)
+                            if should_flush():
+                                flush()
+                        except Exception as exc:  # noqa: BLE001 - isolate one bad file
+                            failures += 1
+                            self._set_progress(failed=failures)
+                            last_error = _safe_error(exc)
+        finally:
+            flush()
         return {
             "group_id": group.id,
             "group_name": group.name,

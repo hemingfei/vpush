@@ -24,6 +24,7 @@ from app.ima_documents import (
     IMA_PURE_REFRESH_TOKEN_KEY,
     IMA_PURE_ROOT_FOLDER_KEY,
     IMA_PURE_UID_KEY,
+    IMA_STATE_FLUSH_SECONDS,
     ImaDocumentConfig,
     ImaDocumentService,
     ImaDocumentStore,
@@ -3727,3 +3728,170 @@ def test_service_falls_back_to_json_when_index_unavailable(tmp_path):
     page = service.list_documents((group,))
     assert page["items"][0]["media_id"] == "file_a"
     assert service.read_index_status()["status"] == "fallback"
+
+
+def _sync_ready_service(tmp_path, monkeypatch, records):
+    db = DB(str(tmp_path / "dav.sqlite"))
+    db.set_setting(IMA_PURE_UID_KEY, "uid")
+    db.set_setting(IMA_PURE_REFRESH_TOKEN_KEY, "refresh")
+    db.set_setting(IMA_PURE_KB_ID_KEY, "kb")
+    db.set_setting(IMA_PURE_ROOT_FOLDER_KEY, "root")
+    db.set_setting(
+        IMA_PURE_GROUPS_KEY,
+        json.dumps(
+            [
+                {
+                    "id": "semi",
+                    "name": "Semi",
+                    "knowledge_base_id": "kb",
+                    "root_folder_id": "root",
+                    "folder_ids": ["root"],
+                    "enabled": True,
+                }
+            ]
+        ),
+    )
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.config = config
+
+        def manifest(self, listing_cache=None):
+            return [dict(item) for item in records]
+
+        def get_media(self, media_id):
+            return {"jump_url_info": {"url": "https://res.invalid/" + media_id, "headers": {}}}
+
+        def download(self, media, destination, expected_size=0):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"%PDF-1.7xxxx")
+            return {"size": 12, "md5": "d" * 32, "path": str(destination)}
+
+        def _pdf_info(self, path):
+            return 12, "d" * 32
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    monkeypatch.setattr(ima_documents, "_tag_document", lambda *_args, **_kwargs: ["AI"])
+    service = ImaDocumentService(db, tmp_path / "ima")
+    return service, db
+
+
+def test_sync_batches_state_and_writes_state_before_index(tmp_path, monkeypatch):
+    records = [
+        {"media_id": f"file_{index:02d}", "name": f"{index}.pdf", "day": "0829", "size": 8}
+        for index in range(21)
+    ]
+    service, db = _sync_ready_service(tmp_path, monkeypatch, records)
+    events = []
+    real_save = service.store.save_state
+    real_update = db.update_ima_document_batch
+
+    def save(state):
+        events.append("state")
+        return real_save(state)
+
+    def update(rows, fingerprint):
+        events.append("index")
+        return real_update(rows, fingerprint)
+
+    monkeypatch.setattr(service.store, "save_state", save)
+    monkeypatch.setattr(db, "update_ima_document_batch", update)
+    result = service._sync_group(service.config(), service.config().groups[0], {})
+    assert result["downloaded"] == 21
+    assert events.count("state") == 2
+    assert events.count("index") == 2
+    assert events == ["state", "index", "state", "index"]
+    assert db.ima_document_index_count() == 21
+
+
+def test_sync_flushes_state_immediately_when_timer_is_zero(tmp_path, monkeypatch):
+    records = [
+        {"media_id": "file_one", "name": "one.pdf", "day": "0829", "size": 8}
+    ]
+    service, db = _sync_ready_service(tmp_path, monkeypatch, records)
+    monkeypatch.setattr(ima_documents, "IMA_STATE_FLUSH_SECONDS", 0)
+    events = []
+    real_save = service.store.save_state
+    real_update = db.update_ima_document_batch
+    monkeypatch.setattr(
+        service.store,
+        "save_state",
+        lambda state: events.append("state") or real_save(state),
+    )
+    monkeypatch.setattr(
+        db,
+        "update_ima_document_batch",
+        lambda rows, fingerprint: events.append("index") or real_update(rows, fingerprint),
+    )
+    service._sync_group(service.config(), service.config().groups[0], {})
+    assert events[:2] == ["state", "index"]
+    assert db.ima_document_from_index("file_one", ["semi"], "semi")["has_pdf"] is True
+    assert IMA_STATE_FLUSH_SECONDS == 2.0
+
+
+def test_sync_flushes_state_on_cancel(tmp_path, monkeypatch):
+    records = [
+        {"media_id": f"file_{index}", "name": f"{index}.pdf", "day": "0829", "size": 8}
+        for index in range(3)
+    ]
+    service, db = _sync_ready_service(tmp_path, monkeypatch, records)
+    original_download = ima_documents.ImaPureClient.download
+
+    def download_and_cancel(self, media, destination, expected_size=0):
+        result = original_download(self, media, destination, expected_size)
+        service._cancel_requested = True
+        return result
+
+    monkeypatch.setattr(ima_documents.ImaPureClient, "download", download_and_cancel)
+    result = service._sync_group(service.config(), service.config().groups[0], {})
+    assert result["downloaded"] >= 1
+    downloaded = db._rows(
+        "SELECT media_id FROM ima_document_index WHERE has_pdf = 1"
+    )
+    assert downloaded
+
+
+def test_failed_listing_keeps_old_group_index(tmp_path, monkeypatch):
+    service, db = _sync_ready_service(
+        tmp_path,
+        monkeypatch,
+        [{"media_id": "keep", "name": "keep.pdf", "day": "0828", "size": 8}],
+    )
+    service._sync_group(service.config(), service.config().groups[0], {})
+    assert db.ima_document_from_index("keep", ["semi"], "semi")["name"] == "keep.pdf"
+
+    class BoomClient:
+        def __init__(self, config, group=None):
+            pass
+
+        def manifest(self, listing_cache=None):
+            raise RuntimeError("listing failed")
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", BoomClient)
+    with pytest.raises(RuntimeError, match="listing failed"):
+        service._sync_group(service.config(), service.config().groups[0], {})
+    assert db.ima_document_from_index("keep", ["semi"], "semi")["name"] == "keep.pdf"
+
+
+def test_write_abstract_zh_updates_index_after_state(tmp_path):
+    db = DB(str(tmp_path / "zh.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    group = ImaGroupConfig("semi", "Semi", "kb", "root")
+    record = {
+        "group_id": "semi",
+        "media_id": "file_en",
+        "name": "en.pdf",
+        "day": "0829",
+        "abstract": "hello",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state({service.store.state_key(record): {"pdf": "semi/a.pdf"}})
+    service.rebuild_read_index((group,))
+    service.store.write_abstract_zh(
+        "file_en",
+        "semi",
+        groups=(group,),
+        text_zh="你好",
+    )
+    row = db.ima_document_from_index("file_en", ["semi"], "semi")
+    assert row["abstract_zh"] == "你好"
