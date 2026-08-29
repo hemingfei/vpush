@@ -35,7 +35,14 @@ from pydantic import BaseModel
 from . import auth, wechat
 from .avatar_cache import cache_avatar
 from .bot_core import BIND_CODE_TTL
-from .db import _UNSET, ALLOWED_PLATFORMS, DB, days_until_purge, user_plain_secret
+from .db import (
+    _UNSET,
+    ALLOWED_PLATFORMS,
+    DB,
+    days_until_purge,
+    parse_block_keywords,
+    user_plain_secret,
+)
 from .fetchers.base import CN_TZ, PLATFORM_LABELS, apply_twitter_feed, strip_html
 from .fetchers.combination import extract_cube_symbol, resolve_combination_profile
 from .fetchers.ima import (
@@ -429,6 +436,7 @@ class KolUpdate(BaseModel):
     visible_users: list[str] | None = None
     original_only: bool | None = None
     silent: bool | None = None
+    block_keywords: list[str] | None = None
 
 
 class KolBatchAction(BaseModel):
@@ -2085,6 +2093,10 @@ def create_api_router(
         kol["secondary"] = bool(sub and sub.get("secondary"))
         if user["is_admin"]:
             kol["visible_users"] = db.acl_usernames(kol_id)
+            # 库里存 JSON 文本，接口统一出数组（前端直接渲染）
+            kol["block_keywords"] = parse_block_keywords(kol.get("block_keywords"))
+        else:
+            kol.pop("block_keywords", None)  # 屏蔽词是管理端配置，普通用户不可见
         # 组合详情附带实时净值/涨跌快照（抓取端定时写入，无则前端隐藏）
         if kol["platform"] == "combination":
             snap = db.get_cube_snapshot(kol_id, "quote")
@@ -2110,7 +2122,11 @@ def create_api_router(
     def post_detail(post_id: int, user: dict = Depends(get_current_user)):
         """单帖详情（AI 分析日志「查看输出帖子」等场景）；可见性规则与 KOL 帖子列表一致。"""
         post = db.get_post(post_id)
-        if not post or not _plaza_kol_visible(user, db.get_kol(post["kol_id"])):
+        if (
+            not post
+            or post.get("blocked")
+            or not _plaza_kol_visible(user, db.get_kol(post["kol_id"]))
+        ):
             raise HTTPException(status_code=404, detail="帖子不存在")
         return post
 
@@ -3843,17 +3859,22 @@ def create_api_router(
         if status is not None and status not in (0, 1):
             raise HTTPException(status_code=400, detail="status 需为 0 或 1")
         q = (q or "").strip() or None
+        items = db.list_kols(
+            platform=platform,
+            category_id=category_id,
+            q=q,
+            status=status,
+            limit=bounded_limit(limit, default=50),
+            offset=max(offset, 0),
+            with_subscriber_count=True,
+            with_blocked_count=True,
+        )
+        for item in items:
+            # 库里存 JSON 文本，接口统一出数组（前端直接渲染）
+            item["block_keywords"] = parse_block_keywords(item.get("block_keywords"))
         return {
             "total": db.count_kols(platform=platform, category_id=category_id, q=q, status=status),
-            "items": db.list_kols(
-                platform=platform,
-                category_id=category_id,
-                q=q,
-                status=status,
-                limit=bounded_limit(limit, default=50),
-                offset=max(offset, 0),
-                with_subscriber_count=True,
-            ),
+            "items": items,
             "ids": db.list_kol_ids(platform=platform, category_id=category_id, q=q, status=status),
         }
 
@@ -4099,6 +4120,17 @@ def create_api_router(
             db.update_kol(kol_id, silent=body.silent)
         if "original_only" in body.model_fields_set and body.original_only is not None:
             db.update_kol(kol_id, original_only=body.original_only)
+        if "block_keywords" in body.model_fields_set and body.block_keywords is not None:
+            # 入参归一化：去空白、去空、去重（大小写不敏感）；空列表 = 清空屏蔽词
+            keywords = parse_block_keywords(json.dumps(body.block_keywords, ensure_ascii=False))
+            if len(keywords) > 100:
+                raise HTTPException(status_code=400, detail="屏蔽词最多 100 个")
+            db.update_kol(
+                kol_id,
+                block_keywords=json.dumps(keywords, ensure_ascii=False) if keywords else "",
+            )
+            # 对已有帖子按新关键词重算拦截标记（新拦截/解除拦截立即生效）
+            db.apply_kol_block_keywords(kol_id)
         if "visible_users" in body.model_fields_set and body.visible_users is not None:
             user_ids = []
             for username in body.visible_users:
@@ -4108,7 +4140,9 @@ def create_api_router(
                 user_ids.append(target["id"])
             db.set_kol_acl(kol_id, user_ids)
         _audit(admin, "update_kol", str(kol_id), f"name={name} enabled={body.enabled}")
-        return db.get_kol(kol_id)
+        kol = db.get_kol(kol_id)
+        kol["block_keywords"] = parse_block_keywords(kol.get("block_keywords"))
+        return kol
 
     @router.delete("/kols/{kol_id}", dependencies=[Depends(require_admin)])
     def delete_kol(kol_id: int, admin: dict = Depends(require_admin)):

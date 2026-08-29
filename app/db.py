@@ -32,6 +32,41 @@ def _secret_hash(plain: str) -> str:
     return hashlib.sha256(plain.encode()).hexdigest() if plain else ""
 
 
+# ---- 大V 关键词屏蔽 ----
+def parse_block_keywords(raw: str | None) -> list[str]:
+    """解析 kols.block_keywords（JSON 数组文本），去空去重保序。"""
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(data, list):
+        return []
+    seen, out = set(), []
+    for kw in data:
+        if not isinstance(kw, str):
+            continue
+        kw = kw.strip()
+        if kw and kw.lower() not in seen:
+            seen.add(kw.lower())
+            out.append(kw)
+    return out
+
+
+def block_hit_keyword(keywords: list[str], *texts: str) -> str:
+    """返回命中的第一个关键词（大小写不敏感），未命中返回空串。"""
+    if not keywords:
+        return ""
+    haystack = "\n".join(t for t in texts if t).lower()
+    if not haystack:
+        return ""
+    for kw in keywords:
+        if kw.lower() in haystack:
+            return kw
+    return ""
+
+
 def decrypt_stored_secret(value: str | None, credential_key: str) -> str:
     """解出 enc1: 前缀的列值；无前缀视为存量明文原样返回。
 
@@ -265,6 +300,7 @@ CREATE TABLE IF NOT EXISTS kols (
     category_id INTEGER,
     priority INTEGER NOT NULL DEFAULT 0,
     extra_data TEXT NOT NULL DEFAULT '',
+    block_keywords TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS kol_acl (
@@ -297,6 +333,8 @@ CREATE TABLE IF NOT EXISTS posts (
     url TEXT NOT NULL DEFAULT '',
     published_at TEXT NOT NULL DEFAULT '',
     fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+    blocked INTEGER NOT NULL DEFAULT 0,
+    block_hit TEXT NOT NULL DEFAULT '',
     UNIQUE (platform, external_id)
 );
 CREATE TABLE IF NOT EXISTS push_logs (
@@ -650,6 +688,19 @@ class DB:
         if "content_src" not in post_cols:
             self._conn.execute(
                 "ALTER TABLE posts ADD COLUMN content_src TEXT NOT NULL DEFAULT ''"
+            )
+        if "blocked" not in post_cols:
+            self._conn.execute(
+                "ALTER TABLE posts ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0"
+            )
+        if "block_hit" not in post_cols:
+            self._conn.execute(
+                "ALTER TABLE posts ADD COLUMN block_hit TEXT NOT NULL DEFAULT ''"
+            )
+        kol_cols = {row["name"] for row in self._rows("PRAGMA table_info(kols)")}
+        if "block_keywords" not in kol_cols:
+            self._conn.execute(
+                "ALTER TABLE kols ADD COLUMN block_keywords TEXT NOT NULL DEFAULT ''"
             )
         sub_cols = {row["name"] for row in self._rows("PRAGMA table_info(subscriptions)")}
         if "type" not in sub_cols:
@@ -1181,6 +1232,7 @@ class DB:
         limit: int | None = None,
         offset: int = 0,
         with_subscriber_count: bool = False,
+        with_blocked_count: bool = False,
     ) -> list[dict]:
         """大V列表：可选平台/分类/关键词/启用状态筛选 + 分页（管理列表用）。"""
         extra = (
@@ -1194,6 +1246,12 @@ class DB:
             if with_subscriber_count
             else ""
         )
+        if with_blocked_count:
+            extra += ", COALESCE(bc.n, 0) AS blocked_count"
+            join_counts += (
+                " LEFT JOIN (SELECT kol_id, COUNT(*) AS n FROM posts "
+                "WHERE blocked = 1 GROUP BY kol_id) bc ON bc.kol_id = k.id"
+            )
         sql = (
             f"SELECT k.*, c.name AS category_name{extra} FROM kols k "
             f"LEFT JOIN categories c ON c.id = k.category_id{join_counts}"
@@ -1318,6 +1376,7 @@ class DB:
         is_private=_UNSET,
         silent=_UNSET,
         extra_data=None,
+        block_keywords=_UNSET,
     ):
         sets, params = [], []
         if name is not None:
@@ -1354,6 +1413,9 @@ class DB:
         if extra_data is not None:
             sets.append("extra_data = ?")
             params.append(extra_data)
+        if block_keywords is not _UNSET:
+            sets.append("block_keywords = ?")
+            params.append(block_keywords)
         if not sets:
             return
         params.append(kol_id)
@@ -2628,6 +2690,61 @@ class DB:
         )
         return rows[0] if rows else None
 
+    # ---- 大V 关键词屏蔽 ----
+    def is_post_blocked(self, post_id: int) -> bool:
+        """单帖是否已被关键词拦截（推送端跳过用）。"""
+        rows = self._rows("SELECT blocked FROM posts WHERE id = ?", (post_id,))
+        return bool(rows and rows[0]["blocked"])
+
+    def blocked_post_ids(self, post_ids: list[int]) -> set[int]:
+        """返回入参中已被关键词拦截的帖 id 集合（推送端批量跳过用）。"""
+        if not post_ids:
+            return set()
+        placeholders = ", ".join("?" * len(post_ids))
+        rows = self._rows(
+            f"SELECT id FROM posts WHERE id IN ({placeholders}) AND blocked = 1",
+            post_ids,
+        )
+        return {row["id"] for row in rows}
+
+    def apply_kol_block_keywords(self, kol_id: int) -> tuple[int, int]:
+        """按该大V当前屏蔽词重算其全部帖子的拦截标记，返回 (新拦截, 解除) 数。
+
+        拦截状态始终反映当前关键词配置：命中任意关键词即拦截；配置变化后
+        不再命中的旧帖随之解除拦截（block_hit 记录命中词，便于按词回溯）。
+        """
+        keywords = self._kol_block_keywords(kol_id)
+        rows = self._rows(
+            "SELECT id, title, content, title_src, content_src, blocked, block_hit "
+            "FROM posts WHERE kol_id = ?",
+            (kol_id,),
+        )
+        newly_blocked, unblocked = 0, 0
+        with self._lock:
+            for row in rows:
+                hit = block_hit_keyword(
+                    keywords, row["content"], row["title"], row["content_src"], row["title_src"]
+                )
+                blocked = 1 if hit else 0
+                if blocked == row["blocked"] and hit == row["block_hit"]:
+                    continue
+                self._conn.execute(
+                    "UPDATE posts SET blocked = ?, block_hit = ? WHERE id = ?",
+                    (blocked, hit, row["id"]),
+                )
+                if blocked:
+                    newly_blocked += 1
+                else:
+                    unblocked += 1
+            self._conn.commit()
+        return newly_blocked, unblocked
+
+    def _kol_block_keywords(self, kol_id: int) -> list[str]:
+        rows = self._rows(
+            "SELECT block_keywords FROM kols WHERE id = ?", (kol_id,)
+        )
+        return parse_block_keywords(rows[0]["block_keywords"]) if rows else []
+
     def insert_post(
         self,
         platform,
@@ -2648,11 +2765,15 @@ class DB:
         images_json = json.dumps(images, ensure_ascii=False) if images else ""
         # None=未打标（pending，待回填）；[]=已处理但零命中（也持久化为 '[]'，避免重复回填）
         tags_json = json.dumps(tags, ensure_ascii=False) if tags is not None else ""
+        # 关键词屏蔽：命中即入库时打上拦截标记（前端不展示、推送跳过）
+        hit = block_hit_keyword(
+            self._kol_block_keywords(kol_id), content, title, content_src, title_src
+        )
         try:
             with self._lock:
                 cur = self._conn.execute(
-                    "INSERT OR IGNORE INTO posts (platform, kol_id, external_id, title, content, title_src, content_src, post_type, images, url, published_at, detail, tags) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT OR IGNORE INTO posts (platform, kol_id, external_id, title, content, title_src, content_src, post_type, images, url, published_at, detail, tags, blocked, block_hit) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         platform,
                         kol_id,
@@ -2667,6 +2788,8 @@ class DB:
                         published_at,
                         detail_json,
                         tags_json,
+                        1 if hit else 0,
+                        hit,
                     ),
                 )
                 # 无论是否命中唯一约束都提交：忽略插入同样会打开隐式事务，
@@ -2711,6 +2834,7 @@ class DB:
             try:
                 self._conn.execute("BEGIN")
                 ids: list[int | None] = []
+                kw_cache: dict[int, list[str]] = {}
                 for p in posts:
                     detail_json = _detail_json(p.detail)
                     images_json = json.dumps(p.images, ensure_ascii=False) if p.images else ""
@@ -2719,9 +2843,14 @@ class DB:
                         if p.tags is not None
                         else ""
                     )
+                    if p.kol_id not in kw_cache:
+                        kw_cache[p.kol_id] = self._kol_block_keywords(p.kol_id)
+                    hit = block_hit_keyword(
+                        kw_cache[p.kol_id], p.content, p.title, p.content_src, p.title_src
+                    )
                     cur = self._conn.execute(
-                        "INSERT OR IGNORE INTO posts (platform, kol_id, external_id, title, content, title_src, content_src, post_type, images, url, published_at, detail, tags) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT OR IGNORE INTO posts (platform, kol_id, external_id, title, content, title_src, content_src, post_type, images, url, published_at, detail, tags, blocked, block_hit) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             p.platform,
                             p.kol_id,
@@ -2736,6 +2865,8 @@ class DB:
                             p.published_at,
                             detail_json,
                             tags_json,
+                            1 if hit else 0,
+                            hit,
                         ),
                     )
                     if cur.rowcount:
@@ -2769,6 +2900,7 @@ class DB:
         offset: int = 0,
         untagged_only: bool = False,
         below_id: int | None = None,
+        include_blocked: bool = False,
     ) -> list[dict]:
         sql = (
             "SELECT p.*, k.name AS kol_name, k.category_id AS category_id, "
@@ -2777,6 +2909,9 @@ class DB:
             "LEFT JOIN categories c ON c.id = k.category_id"
         )
         conds, params = [], []
+        if not include_blocked:
+            # 关键词拦截的帖：入库保留（可回溯），但任何列表/时间线都不展示
+            conds.append("COALESCE(p.blocked, 0) = 0")
         if platform:
             conds.append("p.platform = ?")
             params.append(platform)
@@ -2875,7 +3010,7 @@ class DB:
         if platform and hidden and platform in hidden:
             return []
         placeholders = ", ".join("?" * len(kol_ids))
-        conds = [f"p.kol_id IN ({placeholders})"]
+        conds = [f"p.kol_id IN ({placeholders})", "COALESCE(p.blocked, 0) = 0"]
         params: list = [user_id, *kol_ids]
         if not include_secondary and not platform:
             # 默认隐藏次要大V的动态（全局 kols.secondary 或个人订阅 secondary）：
@@ -2942,6 +3077,7 @@ class DB:
             "LEFT JOIN subscriptions s ON s.kol_id = p.kol_id AND s.user_id = ? "
             f"WHERE p.kol_id IN ({placeholders}) AND strftime('%s', p.fetched_at) >= ? "
             "AND COALESCE(k.silent, 0) = 0 "
+            "AND COALESCE(p.blocked, 0) = 0 "
             "ORDER BY p.published_at DESC, p.id DESC LIMIT ?",
             (user_id, *kol_ids, since_ts, limit),
         ))))

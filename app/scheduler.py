@@ -52,7 +52,11 @@ def get_mx_ws_status() -> dict:
     """获取 MX WebSocket 连接状态。"""
     if _mx_fetcher and hasattr(_mx_fetcher, "get_ws_status"):
         return _mx_fetcher.get_ws_status()
-    return {"connected": False, "last_message_at": None}
+    return {
+        "connected": False,
+        "last_message_at": None,
+        "detail": "MX 未启用或 WS 尚未初始化",
+    }
 
 logger = logging.getLogger(__name__)
 
@@ -1200,8 +1204,16 @@ def _fetch_kol_once(
     new_count = sum(1 for pid in post_ids if pid is not None)
     with state_lock:
         state.empty_rounds[kol["id"]] = 0 if new_count else state.empty_rounds.get(kol["id"], 0) + 1
+    # 大V 屏蔽词命中的帖在入库时已标记拦截：只留档，不进任何推送链路
+    blocked_ids = db.blocked_post_ids([pid for pid in post_ids if pid is not None])
     for post, post_id in zip(posts, post_ids):
         if post_id is None:
+            continue
+        if post_id in blocked_ids:
+            logger.info(
+                "关键词拦截不推送 platform=%s kol=%s id=%s",
+                post.platform, post.kol_name, post.external_id,
+            )
             continue
         if first_fetch:
             logger.info("基线入库 platform=%s kol=%s id=%s", post.platform, post.kol_name, post.external_id)
@@ -1917,17 +1929,25 @@ class Scheduler:
                         # 把数据库操作放在单独线程中，避免事务冲突
                         def _save_and_notify():
                             post_id = self.db.save_post(post)
-                            if post_id:
-                                notify_subscribers(
-                                    self.db,
-                                    post_id,
-                                    post,
-                                    self.notifiers_config,
-                                    self.notifiers,
-                                    self.retry_queue,
-                                    dnd_buffer=self._dnd_buffer,
-                                    secondary_buffer=self._secondary_buffer,
+                            if not post_id:
+                                return
+                            # 大V 屏蔽词命中的消息：入库留档但不推送
+                            if self.db.is_post_blocked(post_id):
+                                logger.info(
+                                    "关键词拦截不推送 platform=%s kol=%s id=%s",
+                                    post.platform, post.kol_name, post.external_id,
                                 )
+                                return
+                            notify_subscribers(
+                                self.db,
+                                post_id,
+                                post,
+                                self.notifiers_config,
+                                self.notifiers,
+                                self.retry_queue,
+                                dnd_buffer=self._dnd_buffer,
+                                secondary_buffer=self._secondary_buffer,
+                            )
                         await asyncio.to_thread(_save_and_notify)
                     except Exception as e:
                         logger.error(f"Failed to process MX real-time message: {e}", exc_info=True)

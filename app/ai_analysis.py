@@ -213,6 +213,7 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
                    JOIN kols k ON p.kol_id = k.id
                    WHERE p.kol_id IN ({placeholders})
                    AND p.post_type != 'ai_analysis'
+                   AND COALESCE(p.blocked, 0) = 0
                    AND p.published_at >= ? AND p.published_at <= ?
                    ORDER BY p.published_at ASC""",
                 (*selected_kol_ids,

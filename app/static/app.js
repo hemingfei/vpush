@@ -6659,7 +6659,8 @@ async function refreshMxWsStatus() {
   try {
     const s = await api("/api/admin/sources/mx/ws-status");
     const last = s.last_message_at ? new Date(s.last_message_at).toLocaleString() : "从未收到";
-    el.textContent = `WebSocket 状态：${s.connected ? "✅ 已连接" : "❌ 未连接"}，最近收到消息：${last}`;
+    const detail = s.detail ? `（${s.detail}）` : "";
+    el.textContent = `WebSocket 状态：${s.connected ? "✅ 已连接" : "❌ 未连接"}，最近收到消息：${last}${detail}`;
   } catch (err) {
     el.textContent = `WebSocket 状态：获取失败（${err.message || "未知错误"}）`;
   }
@@ -7575,6 +7576,11 @@ async function loadAdminKols(opts) {
     const orig = k.platform === "weibo"
       ? (k.original_only ? '<span class="status-ok">是</span>' : "否")
       : "—";
+    const kwList = k.block_keywords || [];
+    const blockedCnt = Number(k.blocked_count) || 0;
+    const kwCell = kwList.length
+      ? `<span class="${blockedCnt ? "status-warn" : ""}" title="${escapeHtml(kwList.join("、"))}">${kwList.length} 个词${blockedCnt ? ` · 拦 ${blockedCnt}` : ""}</span>`
+      : '<span class="muted">—</span>';
     const tierBtns = k.priority
       ? `<button class="btn-sm" onclick="adminTogglePriority(${k.id}, false)">改普通</button>
                 <button class="btn-sm" onclick="adminToggleSecondary(${k.id}, true)">设次要</button>`
@@ -7594,10 +7600,12 @@ async function loadAdminKols(opts) {
               <td data-label="档位">${tier}</td>
               <td class="ak-hide-mobile" data-label="原创">${orig}</td>
               <td data-label="可见性">${k.is_private ? '<span class="status-warn">私有</span>' : "公开"}</td>
+              <td class="ak-hide-mobile" data-label="屏蔽词">${kwCell}</td>
               <td data-label="状态" class="${k.enabled ? "status-ok" : "status-fail"}">${k.enabled ? "启用" : "停用"}</td>
               <td class="ak-actions" data-label="操作">
                 ${tierBtns}
                 <button class="btn-sm" onclick="adminToggleKol(${k.id}, ${k.enabled ? 0 : 1})">${k.enabled ? "停用" : "启用"}</button>
+                <button class="btn-sm" onclick="adminEditKolKeywords(${k.id})">屏蔽词</button>
                 <button class="btn-sm" onclick="adminEditKol(${k.id})">编辑</button>
                 <button class="btn-sm danger" onclick="adminDeleteKol(${k.id})">删除</button>
               </td>
@@ -7656,8 +7664,8 @@ async function loadAdminKols(opts) {
       </div>
       <div class="table-wrap">
         <table class="ak-table">
-          <thead><tr><th scope="col" style="width:32px"><input type="checkbox" id="ak-checkall" onchange="adminKolTogglePage(this)" aria-label="全选当前页"></th><th scope="col">ID</th><th scope="col">平台</th><th scope="col">昵称</th><th scope="col">分类</th><th scope="col">外部ID</th><th scope="col">档位</th><th scope="col">原创</th><th scope="col">可见性</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead>
-          <tbody>${rows || `<tr class="ak-empty"><td colspan="11" class="muted">${state.adminKolsQ || state.adminKolsCategory || state.adminKolsStatus !== "" || state.adminKolsPlatform ? "没有匹配的大V" : "还没有大V，先用上方表单添加"}</td></tr>`}</tbody>
+          <thead><tr><th scope="col" style="width:32px"><input type="checkbox" id="ak-checkall" onchange="adminKolTogglePage(this)" aria-label="全选当前页"></th><th scope="col">ID</th><th scope="col">平台</th><th scope="col">昵称</th><th scope="col">分类</th><th scope="col">外部ID</th><th scope="col">档位</th><th scope="col">原创</th><th scope="col">可见性</th><th scope="col" class="ak-hide-mobile">屏蔽词</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead>
+          <tbody>${rows || `<tr class="ak-empty"><td colspan="12" class="muted">${state.adminKolsQ || state.adminKolsCategory || state.adminKolsStatus !== "" || state.adminKolsPlatform ? "没有匹配的大V" : "还没有大V，先用上方表单添加"}</td></tr>`}</tbody>
         </table>
       </div>
       <div class="toolbar" style="margin-top:12px;justify-content:center;gap:12px;align-items:center">
@@ -7993,6 +8001,77 @@ async function saveKolEdit(id) {
     });
     if (mask) mask.remove();
     flash(`已保存「${name}」`);
+    loadAdminKols();
+  } catch (err) {
+    flash("保存失败: " + err.message, "error");
+    if (btn) btn.disabled = false;
+  }
+}
+
+// ---- 大V 屏蔽词（关键词拦截）----
+function kolKeywordsSnapshot() {
+  return $("#ek-keywords").value;
+}
+
+async function adminEditKolKeywords(id) {
+  let kol;
+  try {
+    kol = await api(`/api/kols/${id}`);
+  } catch (err) {
+    flash("加载失败: " + err.message, "error");
+    return;
+  }
+  const keywords = kol.block_keywords || [];
+  const row = state.adminKols.find((k) => k.id === id);
+  const blockedCnt = Number(row && row.blocked_count) || 0;
+  const mask = document.createElement("div");
+  mask.className = "modal-mask";
+  mask.innerHTML = `
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="ek-keywords-title">
+      <h3 id="ek-keywords-title" style="margin-bottom:12px">屏蔽词：${escapeHtml(kol.name)}</h3>
+      <label class="form-label">关键词（每行一个，不区分大小写）
+        <textarea id="ek-keywords" class="form-control" rows="6" placeholder="广告&#10;加微信&#10;开户"></textarea>
+      </label>
+      <p class="muted" style="margin:8px 0 0">该大V的消息标题或正文包含任一关键词即被拦截：动态页不再显示，也不再推送给订阅用户。保存后立即对已抓取的历史消息生效。</p>
+      ${blockedCnt ? `<p class="muted" style="margin:8px 0 0">当前已拦截 ${blockedCnt} 条消息。</p>` : ""}
+      <div class="toolbar" style="margin-top:16px">
+        <button class="btn-normal" id="ek-keywords-save" onclick="saveKolKeywords(${kol.id})">保存</button>
+        <button type="button" class="btn-sm" data-close>取消</button>
+      </div>
+    </div>`;
+  document.body.appendChild(mask);
+  $("#ek-keywords").value = keywords.join("\n");
+  const initial = kolKeywordsSnapshot();
+  const tryClose = async () => {
+    if (kolKeywordsSnapshot() !== initial && !(await showConfirm("有未保存的修改，确定关闭？"))) return;
+    mask.remove();
+  };
+  mask.addEventListener("click", (e) => {
+    if (e.target === mask) tryClose();
+  });
+  mask.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      tryClose();
+    }
+  });
+  mask.querySelector("[data-close]").addEventListener("click", tryClose);
+  const firstInput = mask.querySelector("textarea");
+  if (firstInput) firstInput.focus();
+}
+
+async function saveKolKeywords(id) {
+  const keywords = $("#ek-keywords").value.split(/\n+/).map((s) => s.trim()).filter(Boolean);
+  const btn = $("#ek-keywords-save");
+  if (btn) btn.disabled = true;
+  try {
+    await api(`/api/kols/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({ block_keywords: keywords }),
+    });
+    const mask = btn && btn.closest(".modal-mask");
+    if (mask) mask.remove();
+    flash(keywords.length ? `已保存屏蔽词（${keywords.length} 个），命中消息将被拦截` : "已清空屏蔽词");
     loadAdminKols();
   } catch (err) {
     flash("保存失败: " + err.message, "error");
