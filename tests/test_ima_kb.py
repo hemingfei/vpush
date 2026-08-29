@@ -1702,3 +1702,46 @@ def test_indexed_pdf_and_txt_use_index_paths(tmp_path, monkeypatch):
     assert txt.status_code == 200, txt.text
     assert txt.text == "indexed text"
 
+
+def test_indexed_api_no_json_read_stays_stable_across_repeated_queries(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "indexed-repeat.sqlite"))
+    admin_headers = _headers(client, "idx_repeat_admin", "IDXREP01", admin=True)
+    group_a, _group_b = _configure_two_groups(client, admin_headers)
+    service = client.app.state.ima_documents
+    store = service.store
+    records = [
+        {
+            "media_id": "file_repeat_ai",
+            "name": "AI 展望.pdf",
+            "day": "0829",
+            "group_id": group_a,
+            "abstract": "算力需求",
+        },
+        {
+            "media_id": "file_repeat_energy",
+            "name": "新能源跟踪.pdf",
+            "day": "0828",
+            "group_id": group_a,
+            "abstract": "排产",
+        },
+    ]
+    state = {}
+    for record, tags in ((records[0], ["AI"]), (records[1], ["新能源"])):
+        state.update(_seed_indexed_record(store, record, tags=tags))
+    store.save_manifest(records)
+    store.save_state(state)
+    assert service.rebuild_read_index(service.config().groups)["status"] == "ready"
+    _block_json_readers(store, monkeypatch)
+    routes = (
+        "/api/ima-documents/catalog",
+        "/api/ima-documents?limit=50&offset=0",
+        "/api/ima-documents?q=新能源&limit=50&offset=0",
+        "/api/ima-documents?q=AI&limit=50&offset=0",
+        f"/api/ima-documents?group={group_a}&limit=50&offset=0",
+    )
+    for _ in range(20):
+        for route in routes:
+            response = client.get(route, headers=admin_headers)
+            assert response.status_code == 200, response.text
+
