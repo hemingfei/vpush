@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 import logging
@@ -26,6 +27,7 @@ from .fetchers.ima_inspect import item_cover, item_text
 from .ima_storage import ImaStorageStatus
 
 logger = logging.getLogger(__name__)
+IMA_DOWNLOAD_WORKERS = 4
 
 BASE = os.environ.get("IMA_BASE", "https://ima.qq.com/cgi-bin")
 GUID = os.environ.get("IMA_GUID", "7497986728819336")
@@ -682,9 +684,13 @@ class ImaPureClient:
         return token
 
     def _token(self) -> str:
-        if self.token and time.time() - self.token_at < TOKEN_TTL:
-            return self.token
-        return self.refresh()
+        lock = getattr(self, "_token_lock", None)
+        if lock is None:
+            lock = self._token_lock = threading.Lock()
+        with lock:
+            if self.token and time.time() - self.token_at < TOKEN_TTL:
+                return self.token
+            return self.refresh()
 
     @staticmethod
     def _payload(data: dict[str, Any]) -> dict[str, Any]:
@@ -2176,54 +2182,66 @@ class ImaDocumentService:
         downloaded = 0
         failures = 0
         last_error = ""
+        occupied = self.store._occupied_pdfs(state)
+        jobs: list[tuple[dict[str, Any], Path]] = []
         for record in pending:
+            pdf = self.store.pdf_path(record, occupied=occupied)
+            jobs.append((record, pdf))
+            occupied.add(str(pdf.relative_to(self.store.archive_root)))
+
+        def _fetch(record: dict[str, Any], pdf: Path) -> tuple[dict[str, Any], Path, int, str]:
             if self._cancel_requested:
-                break
+                raise RuntimeError("cancelled")
             blocked = self._storage_block_status()
             if blocked:
-                last_error = blocked
-                break
+                raise RuntimeError(blocked)
             media_id = str(record["media_id"])
-            state_key = self.store.state_key(record)
-            occupied = self.store._occupied_pdfs(state, skip_media_id=state_key)
-            pdf = self.store.pdf_path(record, occupied=occupied)
-            try:
-                pdf.parent.mkdir(parents=True, exist_ok=True)
-                if pdf.parent.is_symlink():
-                    raise ValueError("archive directory must not be a symlink")
-                if pdf.is_file():
-                    size, md5 = client._pdf_info(pdf)
-                    if record.get("size") and size != int(record["size"]):
-                        pdf.unlink(missing_ok=True)
-                if not pdf.is_file():
-                    media = client.get_media(media_id)
-                    result = client.download(media, pdf, int(record.get("size") or 0))
-                    size, md5 = result["size"], result["md5"]
-                else:
-                    size, md5 = client._pdf_info(pdf)
-                key = self.store.state_key(record)
-                state[key] = {
-                    "group_id": group.id,
-                    "group_name": group.name,
-                    "day": record.get("day") or "unknown",
-                    "name": record.get("name") or media_id,
-                    "pdf": str(pdf.relative_to(self.store.archive_root)),
-                    "txt": "",
-                    "size": size,
-                    "md5": md5,
-                    "chars": 0,
-                    "downloaded_at": datetime.now(UTC).isoformat(),
-                }
+            pdf.parent.mkdir(parents=True, exist_ok=True)
+            if pdf.parent.is_symlink():
+                raise ValueError("archive directory must not be a symlink")
+            if pdf.is_file():
+                size, md5 = client._pdf_info(pdf)
+                if record.get("size") and size != int(record["size"]):
+                    pdf.unlink(missing_ok=True)
+            if not pdf.is_file():
+                media = client.get_media(media_id)
+                result = client.download(media, pdf, int(record.get("size") or 0))
+                return record, pdf, int(result["size"]), str(result["md5"])
+            size, md5 = client._pdf_info(pdf)
+            return record, pdf, int(size), str(md5)
+
+        workers = 1 if len(jobs) < 2 else IMA_DOWNLOAD_WORKERS
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_fetch, record, pdf) for record, pdf in jobs]
+            for future in as_completed(futures):
+                if self._cancel_requested:
+                    break
                 try:
-                    state[key]["tags"] = _tag_document(self.db, record, None)
-                except Exception:
-                    logger.exception("IMA document tag failed media=%s", media_id[:32])
-                self.store.save_state(state)
-                downloaded += 1
-            except Exception as exc:  # noqa: BLE001 - isolate one bad file
-                failures += 1
-                last_error = _safe_error(exc)
-                logger.warning("IMA document failed media=%s error=%s", media_id[:32], last_error)
+                    record, pdf, size, md5 = future.result()
+                    media_id = str(record["media_id"])
+                    key = self.store.state_key(record)
+                    state[key] = {
+                        "group_id": group.id,
+                        "group_name": group.name,
+                        "day": record.get("day") or "unknown",
+                        "name": record.get("name") or media_id,
+                        "pdf": str(pdf.relative_to(self.store.archive_root)),
+                        "txt": "",
+                        "size": size,
+                        "md5": md5,
+                        "chars": 0,
+                        "downloaded_at": datetime.now(UTC).isoformat(),
+                    }
+                    try:
+                        state[key]["tags"] = _tag_document(self.db, record, None)
+                    except Exception:
+                        logger.exception("IMA document tag failed media=%s", media_id[:32])
+                    self.store.save_state(state)
+                    downloaded += 1
+                except Exception as exc:  # noqa: BLE001 - isolate one bad file
+                    failures += 1
+                    last_error = _safe_error(exc)
+                    logger.warning("IMA document failed error=%s", last_error)
         return {
             "group_id": group.id,
             "group_name": group.name,
