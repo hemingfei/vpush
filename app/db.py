@@ -272,6 +272,237 @@ IMA_DOCUMENT_INDEX_COLUMNS = (
 # 允许空索引以降级到 manifest/state；写入时只接受这些状态。
 IMA_DOCUMENT_INDEX_STATUSES = {"ready", "rebuilding", "fallback", "failed"}
 
+IMA_DOCUMENT_INDEX_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS ima_document_index (
+    group_id TEXT NOT NULL,
+    media_id TEXT NOT NULL,
+    day TEXT NOT NULL DEFAULT 'unknown',
+    valid_day INTEGER NOT NULL DEFAULT 0,
+    name TEXT NOT NULL DEFAULT '',
+    group_name TEXT NOT NULL DEFAULT '',
+    name_folded TEXT NOT NULL DEFAULT '',
+    metadata_folded TEXT NOT NULL DEFAULT '',
+    abstract TEXT NOT NULL DEFAULT '',
+    abstract_folded TEXT NOT NULL DEFAULT '',
+    abstract_zh TEXT NOT NULL DEFAULT '',
+    abstract_src_hash TEXT NOT NULL DEFAULT '',
+    cover_url TEXT NOT NULL DEFAULT '',
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    size INTEGER NOT NULL DEFAULT 0,
+    chars INTEGER NOT NULL DEFAULT 0,
+    has_pdf INTEGER NOT NULL DEFAULT 0,
+    has_txt INTEGER NOT NULL DEFAULT 0,
+    pdf_path TEXT NOT NULL DEFAULT '',
+    txt_path TEXT NOT NULL DEFAULT '',
+    downloaded_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (group_id, media_id)
+);
+"""
+IMA_DOCUMENT_TAGS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS ima_document_tags (
+    group_id TEXT NOT NULL,
+    media_id TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    PRIMARY KEY (group_id, media_id, tag)
+);
+"""
+IMA_DOCUMENT_INDEX_META_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS ima_document_index_meta (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    version INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'fallback',
+    fingerprint TEXT NOT NULL DEFAULT '',
+    rebuilt_at TEXT NOT NULL DEFAULT '',
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    document_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT ''
+);
+"""
+
+# PRAGMA table_info: name, declared type, notnull, dflt_value, pk ordinal.
+_IMA_DOC_COLUMN_SPEC = (
+    ("group_id", "TEXT", 1, None, 1),
+    ("media_id", "TEXT", 1, None, 2),
+    ("day", "TEXT", 1, "'unknown'", 0),
+    ("valid_day", "INTEGER", 1, "0", 0),
+    ("name", "TEXT", 1, "''", 0),
+    ("group_name", "TEXT", 1, "''", 0),
+    ("name_folded", "TEXT", 1, "''", 0),
+    ("metadata_folded", "TEXT", 1, "''", 0),
+    ("abstract", "TEXT", 1, "''", 0),
+    ("abstract_folded", "TEXT", 1, "''", 0),
+    ("abstract_zh", "TEXT", 1, "''", 0),
+    ("abstract_src_hash", "TEXT", 1, "''", 0),
+    ("cover_url", "TEXT", 1, "''", 0),
+    ("tags_json", "TEXT", 1, "'[]'", 0),
+    ("size", "INTEGER", 1, "0", 0),
+    ("chars", "INTEGER", 1, "0", 0),
+    ("has_pdf", "INTEGER", 1, "0", 0),
+    ("has_txt", "INTEGER", 1, "0", 0),
+    ("pdf_path", "TEXT", 1, "''", 0),
+    ("txt_path", "TEXT", 1, "''", 0),
+    ("downloaded_at", "TEXT", 1, "''", 0),
+)
+_IMA_TAG_COLUMN_SPEC = (
+    ("group_id", "TEXT", 1, None, 1),
+    ("media_id", "TEXT", 1, None, 2),
+    ("tag", "TEXT", 1, None, 3),
+)
+_IMA_META_COLUMN_SPEC = (
+    ("id", "INTEGER", 0, None, 1),
+    ("version", "INTEGER", 1, "1", 0),
+    ("status", "TEXT", 1, "'fallback'", 0),
+    ("fingerprint", "TEXT", 1, "''", 0),
+    ("rebuilt_at", "TEXT", 1, "''", 0),
+    ("duration_ms", "INTEGER", 1, "0", 0),
+    ("document_count", "INTEGER", 1, "0", 0),
+    ("error", "TEXT", 1, "''", 0),
+)
+_IMA_DOC_INT_COLUMNS = frozenset({"size", "chars", "has_pdf", "has_txt"})
+_IMA_INDEX_SPECS = (
+    (
+        "idx_ima_doc_latest",
+        "ima_document_index(valid_day DESC, day DESC, name DESC)",
+        (("valid_day", 1), ("day", 1), ("name", 1)),
+    ),
+    (
+        "idx_ima_doc_group_latest",
+        "ima_document_index(group_id, valid_day DESC, day DESC, name DESC)",
+        (("group_id", 0), ("valid_day", 1), ("day", 1), ("name", 1)),
+    ),
+    (
+        "idx_ima_doc_tag_group",
+        "ima_document_tags(tag, group_id)",
+        (("tag", 0), ("group_id", 0)),
+    ),
+    (
+        "idx_ima_doc_group_tag",
+        "ima_document_tags(group_id, tag)",
+        (("group_id", 0), ("tag", 0)),
+    ),
+)
+
+
+def _ima_pragma_matches(rows, expected) -> bool:
+    if len(rows) != len(expected):
+        return False
+    for row, (name, column_type, notnull, default, pk) in zip(rows, expected):
+        if (
+            row["name"] != name
+            or str(row["type"] or "").upper() != column_type
+            or int(row["notnull"]) != notnull
+            or row["dflt_value"] != default
+            or int(row["pk"]) != pk
+        ):
+            return False
+    return True
+
+
+def _ima_meta_has_id_check(sql: str) -> bool:
+    compact = "".join((sql or "").upper().split())
+    token = "CHECK(ID="
+    start = 0
+    while True:
+        pos = compact.find(token, start)
+        if pos < 0:
+            return False
+        rest = compact[pos + len(token):]
+        if rest.startswith("1)"):
+            return True
+        start = pos + 1
+
+
+def _ima_create_table_sql(if_not_exists_sql: str) -> str:
+    return if_not_exists_sql.replace("CREATE TABLE IF NOT EXISTS ", "CREATE TABLE ", 1)
+
+
+def _ima_doc_select_expr(column: str, old_columns: set[str]) -> str:
+    if column == "group_id":
+        return (
+            "COALESCE(NULLIF(CAST(group_id AS TEXT), ''), 'legacy')"
+            if "group_id" in old_columns
+            else "'legacy'"
+        )
+    if column == "media_id":
+        return (
+            "COALESCE(NULLIF(CAST(media_id AS TEXT), ''), "
+            "'legacy:' || CAST(rowid AS TEXT))"
+            if "media_id" in old_columns
+            else "'legacy:' || CAST(rowid AS TEXT)"
+        )
+    if column == "day":
+        return (
+            "COALESCE(NULLIF(TRIM(day), ''), 'unknown')"
+            if "day" in old_columns
+            else "'unknown'"
+        )
+    if column == "valid_day":
+        if "valid_day" in old_columns:
+            return (
+                "CASE WHEN CAST(valid_day AS INTEGER) != 0 THEN 1 ELSE 0 END"
+            )
+        if "day" in old_columns:
+            return (
+                "CASE WHEN TRIM(day) GLOB '[0-9][0-9][0-9][0-9]' "
+                "THEN 1 ELSE 0 END"
+            )
+        return "0"
+    if column == "tags_json":
+        return (
+            "COALESCE(CAST(tags_json AS TEXT), '[]')"
+            if "tags_json" in old_columns
+            else "'[]'"
+        )
+    if column in old_columns:
+        if column in _IMA_DOC_INT_COLUMNS:
+            return f"COALESCE(CAST({column} AS INTEGER), 0)"
+        return f"COALESCE(CAST({column} AS TEXT), '')"
+    return "0" if column in _IMA_DOC_INT_COLUMNS else "''"
+
+
+def _ima_tag_select_expr(column: str, old_columns: set[str]) -> str:
+    if column == "group_id":
+        return (
+            "COALESCE(NULLIF(CAST(group_id AS TEXT), ''), 'legacy')"
+            if "group_id" in old_columns
+            else "'legacy'"
+        )
+    if column == "media_id":
+        return (
+            "COALESCE(NULLIF(CAST(media_id AS TEXT), ''), "
+            "'legacy:' || CAST(rowid AS TEXT))"
+            if "media_id" in old_columns
+            else "'legacy:' || CAST(rowid AS TEXT)"
+        )
+    return "COALESCE(CAST(tag AS TEXT), '')" if "tag" in old_columns else "''"
+
+
+def _ima_meta_select_expr(column: str, old_columns: set[str]) -> str:
+    if column == "id":
+        return "1"
+    if column == "version":
+        return (
+            "CASE WHEN COALESCE(CAST(version AS INTEGER), 0) = 0 "
+            "THEN 1 ELSE CAST(version AS INTEGER) END"
+            if "version" in old_columns
+            else "1"
+        )
+    if column in {"duration_ms", "document_count"}:
+        return (
+            f"COALESCE(CAST({column} AS INTEGER), 0)"
+            if column in old_columns
+            else "0"
+        )
+    if column == "status":
+        return (
+            "COALESCE(NULLIF(CAST(status AS TEXT), ''), 'fallback')"
+            if "status" in old_columns
+            else "'fallback'"
+        )
+    if column in old_columns:
+        return f"COALESCE(CAST({column} AS TEXT), '')"
+    return "''"
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS categories (
@@ -539,55 +770,6 @@ CREATE TABLE IF NOT EXISTS ima_kb_subscriptions (
 );
 CREATE INDEX IF NOT EXISTS idx_ima_kb_acl_user ON ima_kb_acl(user_id);
 CREATE INDEX IF NOT EXISTS idx_ima_kb_sub_group ON ima_kb_subscriptions(group_id);
-CREATE TABLE IF NOT EXISTS ima_document_index (
-    group_id TEXT NOT NULL,
-    media_id TEXT NOT NULL,
-    day TEXT NOT NULL DEFAULT 'unknown',
-    valid_day INTEGER NOT NULL DEFAULT 0,
-    name TEXT NOT NULL DEFAULT '',
-    group_name TEXT NOT NULL DEFAULT '',
-    name_folded TEXT NOT NULL DEFAULT '',
-    metadata_folded TEXT NOT NULL DEFAULT '',
-    abstract TEXT NOT NULL DEFAULT '',
-    abstract_folded TEXT NOT NULL DEFAULT '',
-    abstract_zh TEXT NOT NULL DEFAULT '',
-    abstract_src_hash TEXT NOT NULL DEFAULT '',
-    cover_url TEXT NOT NULL DEFAULT '',
-    tags_json TEXT NOT NULL DEFAULT '[]',
-    size INTEGER NOT NULL DEFAULT 0,
-    chars INTEGER NOT NULL DEFAULT 0,
-    has_pdf INTEGER NOT NULL DEFAULT 0,
-    has_txt INTEGER NOT NULL DEFAULT 0,
-    pdf_path TEXT NOT NULL DEFAULT '',
-    txt_path TEXT NOT NULL DEFAULT '',
-    downloaded_at TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (group_id, media_id)
-);
-CREATE TABLE IF NOT EXISTS ima_document_tags (
-    group_id TEXT NOT NULL,
-    media_id TEXT NOT NULL,
-    tag TEXT NOT NULL,
-    PRIMARY KEY (group_id, media_id, tag)
-);
-CREATE TABLE IF NOT EXISTS ima_document_index_meta (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    version INTEGER NOT NULL DEFAULT 1,
-    status TEXT NOT NULL DEFAULT 'fallback',
-    fingerprint TEXT NOT NULL DEFAULT '',
-    rebuilt_at TEXT NOT NULL DEFAULT '',
-    duration_ms INTEGER NOT NULL DEFAULT 0,
-    document_count INTEGER NOT NULL DEFAULT 0,
-    error TEXT NOT NULL DEFAULT ''
-);
-INSERT OR IGNORE INTO ima_document_index_meta (id) VALUES (1);
-CREATE INDEX IF NOT EXISTS idx_ima_doc_latest
-    ON ima_document_index(valid_day DESC, day DESC, name DESC);
-CREATE INDEX IF NOT EXISTS idx_ima_doc_group_latest
-    ON ima_document_index(group_id, valid_day DESC, day DESC, name DESC);
-CREATE INDEX IF NOT EXISTS idx_ima_doc_tag_group
-    ON ima_document_tags(tag, group_id, media_id);
-CREATE INDEX IF NOT EXISTS idx_ima_doc_group_tag
-    ON ima_document_tags(group_id, tag, media_id);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_kol_id ON subscriptions(kol_id);
 CREATE INDEX IF NOT EXISTS idx_source_events_platform ON source_events(platform, created_at);
 """
@@ -848,6 +1030,7 @@ class DB:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_ima_kb_sub_group ON ima_kb_subscriptions(group_id)"
         )
+        self._ensure_ima_document_tables()
         self._migrate_ima_document_index()
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS user_keywords ("
@@ -1029,114 +1212,128 @@ class DB:
                 f"ON users({column}) WHERE {column} != ''"
             )
 
+    def _ensure_ima_document_tables(self) -> None:
+        # CREATE IF NOT EXISTS only. Do not insert meta here: a malformed table
+        # without a unique id would gain an extra empty row before validation.
+        # Use execute(), not executescript(): the latter issues COMMIT first.
+        for sql in (
+            IMA_DOCUMENT_INDEX_TABLE_SQL,
+            IMA_DOCUMENT_TAGS_TABLE_SQL,
+            IMA_DOCUMENT_INDEX_META_TABLE_SQL,
+        ):
+            self._conn.execute(sql)
+
+    def _ima_index_key_columns(self, name: str) -> list[tuple[str, int]]:
+        return [
+            (row["name"], int(row["desc"]))
+            for row in self._rows(f"PRAGMA index_xinfo({name})")
+            if row["key"]
+        ]
+
+    def _rebuild_ima_document_table(self, old_columns: set[str]) -> None:
+        self._conn.execute(
+            "ALTER TABLE ima_document_index RENAME TO ima_document_index_legacy"
+        )
+        self._conn.execute(_ima_create_table_sql(IMA_DOCUMENT_INDEX_TABLE_SQL))
+        columns = ", ".join(IMA_DOCUMENT_INDEX_COLUMNS)
+        expressions = ", ".join(
+            _ima_doc_select_expr(column, old_columns)
+            for column in IMA_DOCUMENT_INDEX_COLUMNS
+        )
+        self._conn.execute(
+            f"INSERT OR IGNORE INTO ima_document_index ({columns}) "
+            f"SELECT {expressions} FROM ima_document_index_legacy "
+            "ORDER BY rowid"
+        )
+        self._conn.execute("DROP TABLE ima_document_index_legacy")
+
+    def _rebuild_ima_document_tags(self, old_columns: set[str]) -> None:
+        self._conn.execute(
+            "ALTER TABLE ima_document_tags RENAME TO ima_document_tags_legacy"
+        )
+        self._conn.execute(_ima_create_table_sql(IMA_DOCUMENT_TAGS_TABLE_SQL))
+        columns = ", ".join(item[0] for item in _IMA_TAG_COLUMN_SPEC)
+        expressions = ", ".join(
+            _ima_tag_select_expr(column, old_columns)
+            for column, *_ in _IMA_TAG_COLUMN_SPEC
+        )
+        self._conn.execute(
+            f"INSERT OR IGNORE INTO ima_document_tags ({columns}) "
+            f"SELECT {expressions} FROM ima_document_tags_legacy "
+            "ORDER BY rowid"
+        )
+        self._conn.execute("DROP TABLE ima_document_tags_legacy")
+
+    def _rebuild_ima_document_index_meta(self, old_columns: set[str]) -> None:
+        self._conn.execute(
+            "ALTER TABLE ima_document_index_meta "
+            "RENAME TO ima_document_index_meta_legacy"
+        )
+        self._conn.execute(_ima_create_table_sql(IMA_DOCUMENT_INDEX_META_TABLE_SQL))
+        columns = ", ".join(item[0] for item in _IMA_META_COLUMN_SPEC)
+        expressions = ", ".join(
+            _ima_meta_select_expr(column, old_columns)
+            for column, *_ in _IMA_META_COLUMN_SPEC
+        )
+        order_expression = (
+            "CASE WHEN CAST(id AS TEXT) = '1' THEN 0 ELSE 1 END"
+            if "id" in old_columns
+            else "rowid"
+        )
+        self._conn.execute(
+            f"INSERT OR IGNORE INTO ima_document_index_meta ({columns}) "
+            f"SELECT {expressions} FROM ima_document_index_meta_legacy "
+            f"ORDER BY {order_expression}, rowid LIMIT 1"
+        )
+        self._conn.execute("DROP TABLE ima_document_index_meta_legacy")
+
+    def _sync_ima_document_indexes(self) -> None:
+        expected = {name: list(columns) for name, _, columns in _IMA_INDEX_SPECS}
+        current = {
+            name: self._ima_index_key_columns(name) for name in expected
+        }
+        if current == expected:
+            return
+        for name in expected:
+            self._conn.execute(f"DROP INDEX IF EXISTS {name}")
+        for name, target, _columns in _IMA_INDEX_SPECS:
+            self._conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {target}")
+
     def _migrate_ima_document_index(self) -> None:
-        """Upgrade the first read-model schema while keeping its data intact."""
-        doc_columns = {
-            row["name"]: row
-            for row in self._rows("PRAGMA table_info(ima_document_index)")
-        }
-        needs_doc_rebuild = (
-            doc_columns["day"]["dflt_value"] != "'unknown'"
-            or doc_columns["valid_day"]["type"].upper() != "INTEGER"
-        )
-        index_names = (
-            "idx_ima_doc_latest",
-            "idx_ima_doc_group_latest",
-            "idx_ima_doc_tag_group",
-            "idx_ima_doc_group_tag",
-        )
-        for index_name in index_names:
-            self._conn.execute(f"DROP INDEX IF EXISTS {index_name}")
+        """Upgrade malformed read-model tables before creating dependent indexes."""
+        # sqlite3 only auto-BEGINs DML. Rebuild uses DDL, so start a transaction
+        # explicitly; otherwise a failed CREATE would leave the renamed legacy table.
+        if not self._conn.in_transaction:
+            self._conn.execute("BEGIN")
+        try:
+            doc_info = self._rows("PRAGMA table_info(ima_document_index)")
+            tags_info = self._rows("PRAGMA table_info(ima_document_tags)")
+            meta_info = self._rows("PRAGMA table_info(ima_document_index_meta)")
+            meta_sql_rows = self._rows(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'ima_document_index_meta'"
+            )
+            meta_sql = meta_sql_rows[0]["sql"] if meta_sql_rows else ""
 
-        if needs_doc_rebuild:
+            if not _ima_pragma_matches(doc_info, _IMA_DOC_COLUMN_SPEC):
+                self._rebuild_ima_document_table({row["name"] for row in doc_info})
+            if not _ima_pragma_matches(tags_info, _IMA_TAG_COLUMN_SPEC):
+                self._rebuild_ima_document_tags({row["name"] for row in tags_info})
+            if (
+                not _ima_pragma_matches(meta_info, _IMA_META_COLUMN_SPEC)
+                or not _ima_meta_has_id_check(meta_sql)
+                or len(self._rows("SELECT rowid FROM ima_document_index_meta")) > 1
+            ):
+                self._rebuild_ima_document_index_meta(
+                    {row["name"] for row in meta_info}
+                )
             self._conn.execute(
-                "ALTER TABLE ima_document_index RENAME TO ima_document_index_legacy"
+                "INSERT OR IGNORE INTO ima_document_index_meta (id) VALUES (1)"
             )
-            self._conn.execute(
-                "CREATE TABLE ima_document_index ("
-                " group_id TEXT NOT NULL, media_id TEXT NOT NULL,"
-                " day TEXT NOT NULL DEFAULT 'unknown',"
-                " valid_day INTEGER NOT NULL DEFAULT 0,"
-                " name TEXT NOT NULL DEFAULT '', group_name TEXT NOT NULL DEFAULT '',"
-                " name_folded TEXT NOT NULL DEFAULT '', metadata_folded TEXT NOT NULL DEFAULT '',"
-                " abstract TEXT NOT NULL DEFAULT '', abstract_folded TEXT NOT NULL DEFAULT '',"
-                " abstract_zh TEXT NOT NULL DEFAULT '', abstract_src_hash TEXT NOT NULL DEFAULT '',"
-                " cover_url TEXT NOT NULL DEFAULT '', tags_json TEXT NOT NULL DEFAULT '[]',"
-                " size INTEGER NOT NULL DEFAULT 0, chars INTEGER NOT NULL DEFAULT 0,"
-                " has_pdf INTEGER NOT NULL DEFAULT 0, has_txt INTEGER NOT NULL DEFAULT 0,"
-                " pdf_path TEXT NOT NULL DEFAULT '', txt_path TEXT NOT NULL DEFAULT '',"
-                " downloaded_at TEXT NOT NULL DEFAULT '',"
-                " PRIMARY KEY (group_id, media_id)"
-                ")"
-            )
-            columns = ", ".join(IMA_DOCUMENT_INDEX_COLUMNS)
-            select_columns = ", ".join(
-                [
-                    "group_id",
-                    "media_id",
-                    "COALESCE(NULLIF(TRIM(day), ''), 'unknown')",
-                    "CASE WHEN TRIM(day) GLOB '[0-9][0-9][0-9][0-9]' THEN 1 ELSE 0 END",
-                    *IMA_DOCUMENT_INDEX_COLUMNS[4:],
-                ]
-            )
-            self._conn.execute(
-                f"INSERT INTO ima_document_index ({columns}) "
-                f"SELECT {select_columns} FROM ima_document_index_legacy"
-            )
-            self._conn.execute("DROP TABLE ima_document_index_legacy")
-
-        meta_columns = {
-            row["name"]: row
-            for row in self._rows("PRAGMA table_info(ima_document_index_meta)")
-        }
-        if meta_columns["version"]["dflt_value"] != "1":
-            self._conn.execute(
-                "ALTER TABLE ima_document_index_meta "
-                "RENAME TO ima_document_index_meta_legacy"
-            )
-            self._conn.execute(
-                "CREATE TABLE ima_document_index_meta ("
-                " id INTEGER PRIMARY KEY CHECK (id = 1),"
-                " version INTEGER NOT NULL DEFAULT 1,"
-                " status TEXT NOT NULL DEFAULT 'fallback',"
-                " fingerprint TEXT NOT NULL DEFAULT '',"
-                " rebuilt_at TEXT NOT NULL DEFAULT '',"
-                " duration_ms INTEGER NOT NULL DEFAULT 0,"
-                " document_count INTEGER NOT NULL DEFAULT 0,"
-                " error TEXT NOT NULL DEFAULT ''"
-                ")"
-            )
-            self._conn.execute(
-                "INSERT INTO ima_document_index_meta "
-                "(id, version, status, fingerprint, rebuilt_at, duration_ms, "
-                "document_count, error) "
-                "SELECT id, CASE WHEN COALESCE(version, 0) = 0 THEN 1 ELSE version END, "
-                "status, fingerprint, rebuilt_at, duration_ms, document_count, error "
-                "FROM ima_document_index_meta_legacy"
-            )
-            self._conn.execute("DROP TABLE ima_document_index_meta_legacy")
-        else:
-            self._conn.execute(
-                "UPDATE ima_document_index_meta SET version = 1 "
-                "WHERE version IS NULL OR version = 0"
-            )
-
-        self._conn.execute(
-            "CREATE INDEX idx_ima_doc_latest "
-            "ON ima_document_index(valid_day DESC, day DESC, name DESC)"
-        )
-        self._conn.execute(
-            "CREATE INDEX idx_ima_doc_group_latest "
-            "ON ima_document_index(group_id, valid_day DESC, day DESC, name DESC)"
-        )
-        self._conn.execute(
-            "CREATE INDEX idx_ima_doc_tag_group "
-            "ON ima_document_tags(tag, group_id, media_id)"
-        )
-        self._conn.execute(
-            "CREATE INDEX idx_ima_doc_group_tag "
-            "ON ima_document_tags(group_id, tag, media_id)"
-        )
+            self._sync_ima_document_indexes()
+        except Exception:
+            self._conn.rollback()
+            raise
 
     def close(self):
         with self._lock:
