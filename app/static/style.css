@@ -2914,7 +2914,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .ima-source-menu .kb-lib-row { min-height: 42px; }
 .ima-report-columns,
 .ima-doc-row,
-.ima-report-skeleton-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) 132px; gap: 12px; align-items: start; padding: 8px 16px; }
+.ima-report-skeleton-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) 132px; gap: 12px; align-items: center; padding: 8px 16px; }
 .ima-report-columns {
   align-items: center;
   min-height: 32px;
@@ -2935,7 +2935,6 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .ima-report-date,
 .ima-doc-row .ima-report-source {
   overflow: hidden;
-  padding-top: 2px;
   color: var(--color-text-muted);
   font-size: var(--text-sm);
   font-weight: var(--font-weight-medium);
