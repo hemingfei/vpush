@@ -504,6 +504,62 @@ def _ima_meta_select_expr(column: str, old_columns: set[str]) -> str:
     return "''"
 
 
+def _like_pattern(value: str) -> str:
+    folded = str(value or "").strip().casefold()
+    escaped = folded.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _ima_authorized_groups(readable_group_ids, group: str = "") -> list[str]:
+    allowed = [str(item) for item in readable_group_ids if str(item)]
+    requested = str(group or "").strip()
+    if requested:
+        return [item for item in allowed if item == requested]
+    return allowed
+
+
+def _ima_public_document(row: dict) -> dict:
+    try:
+        tags = json.loads(str(row.get("tags_json") or "[]"))
+    except (TypeError, ValueError):
+        tags = []
+    if not isinstance(tags, list):
+        tags = []
+    return {
+        "group_id": row["group_id"],
+        "media_id": row["media_id"],
+        "day": row["day"],
+        "name": row["name"],
+        "group_name": row.get("group_name") or "",
+        "abstract": row.get("abstract") or "",
+        "abstract_zh": row.get("abstract_zh") or "",
+        "abstract_src_hash": row.get("abstract_src_hash") or "",
+        "cover_url": row.get("cover_url") or "",
+        "tags": [str(tag) for tag in tags if str(tag)],
+        "size": _to_int(row.get("size")),
+        "chars": _to_int(row.get("chars")),
+        "has_pdf": bool(row.get("has_pdf")),
+        "has_txt": bool(row.get("has_txt")),
+        "pdf_path": str(row.get("pdf_path") or ""),
+        "txt_path": str(row.get("txt_path") or ""),
+        "downloaded_at": str(row.get("downloaded_at") or ""),
+    }
+
+
+def _ima_empty_page(day: str, offset: int) -> dict:
+    return {
+        "items": [],
+        "days": [],
+        "tags": [],
+        "tag_counts": {},
+        "document_count": 0,
+        "day": day,
+        "has_more": False,
+        "offset": offset,
+        "group_counts": {},
+    }
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS categories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3754,6 +3810,163 @@ class DB:
             except Exception:
                 self._conn.rollback()
                 raise
+
+    def _ima_page_filters(
+        self, groups: list[str], query: str, day: str, tag: str
+    ) -> tuple[str, list, str, str | None]:
+        clauses = [f"d.group_id IN ({', '.join('?' for _ in groups)})"]
+        params: list = list(groups)
+        if day:
+            clauses.append("d.day = ?")
+            params.append(day)
+        if tag:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM ima_document_tags t "
+                "WHERE t.group_id = d.group_id AND t.media_id = d.media_id "
+                "AND t.tag = ?)"
+            )
+            params.append(tag)
+        like = "LIKE ? ESCAPE '\\'"
+        rank_sql = "0"
+        pattern = None
+        if query:
+            pattern = _like_pattern(query)
+            clauses.append(
+                f"(d.name_folded {like} OR d.metadata_folded {like} "
+                f"OR d.abstract_folded {like})"
+            )
+            params.extend([pattern, pattern, pattern])
+            rank_sql = (
+                f"CASE WHEN d.name_folded {like} THEN 3 "
+                f"WHEN d.metadata_folded {like} THEN 2 "
+                f"ELSE 1 END"
+            )
+        return " AND ".join(clauses), params, rank_sql, pattern
+
+    def ima_document_page(
+        self,
+        readable_group_ids: list[str],
+        *,
+        group: str = "",
+        query: str = "",
+        day: str = "",
+        tag: str = "",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict:
+        requested_day = str(day or "").strip()
+        requested_tag = str(tag or "").strip()
+        requested_query = str(query or "").strip()
+        page_limit = max(int(limit), 1)
+        page_offset = max(int(offset), 0)
+        groups = _ima_authorized_groups(readable_group_ids, group)
+        if not groups:
+            return _ima_empty_page(requested_day, page_offset)
+
+        where_sql, where_params, rank_sql, pattern = self._ima_page_filters(
+            groups, requested_query, requested_day, requested_tag
+        )
+        item_params = list(where_params)
+        if pattern is not None:
+            item_params = [pattern, pattern, *where_params]
+        rows = self._rows(
+            f"SELECT d.*, {rank_sql} AS match_rank FROM ima_document_index d "
+            f"WHERE {where_sql} "
+            "ORDER BY match_rank DESC, d.valid_day DESC, d.day DESC, d.name DESC "
+            "LIMIT ? OFFSET ?",
+            (*item_params, page_limit + 1, page_offset),
+        )
+        has_more = len(rows) > page_limit
+        items = [_ima_public_document(row) for row in rows[:page_limit]]
+
+        count_row = self._rows(
+            f"SELECT COUNT(*) AS n FROM ima_document_index d WHERE {where_sql}",
+            where_params,
+        )
+        days = [
+            row["day"]
+            for row in self._rows(
+                f"SELECT DISTINCT d.day FROM ima_document_index d "
+                f"WHERE {where_sql} ORDER BY d.valid_day DESC, d.day DESC",
+                where_params,
+            )
+        ]
+        tag_rows = self._rows(
+            "SELECT t.tag AS tag, COUNT(*) AS n FROM ima_document_tags t "
+            "JOIN ima_document_index d "
+            "ON d.group_id = t.group_id AND d.media_id = t.media_id "
+            f"WHERE {where_sql} GROUP BY t.tag ORDER BY n DESC, t.tag",
+            where_params,
+        )
+        tag_counts = {row["tag"]: int(row["n"]) for row in tag_rows}
+        group_rows = self._rows(
+            f"SELECT d.group_id AS group_id, COUNT(*) AS n "
+            f"FROM ima_document_index d WHERE {where_sql} GROUP BY d.group_id",
+            where_params,
+        )
+        return {
+            "items": items,
+            "days": days,
+            "tags": list(tag_counts),
+            "tag_counts": tag_counts,
+            "document_count": int(count_row[0]["n"] if count_row else 0),
+            "day": requested_day,
+            "has_more": has_more,
+            "offset": page_offset,
+            "group_counts": {row["group_id"]: int(row["n"]) for row in group_rows},
+        }
+
+    def ima_document_catalog_stats(self, group_ids: list[str]) -> dict[str, dict]:
+        groups = _ima_authorized_groups(group_ids)
+        if not groups:
+            return {}
+        placeholders = ", ".join("?" for _ in groups)
+        rows = self._rows(
+            "SELECT group_id, day AS latest_day, name AS latest_title, "
+            "media_id AS latest_media_id, document_count FROM ("
+            "SELECT group_id, day, name, media_id, "
+            "COUNT(*) OVER (PARTITION BY group_id) AS document_count, "
+            "ROW_NUMBER() OVER ("
+            "PARTITION BY group_id "
+            "ORDER BY valid_day DESC, day DESC, name DESC"
+            ") AS rn FROM ima_document_index "
+            f"WHERE group_id IN ({placeholders})"
+            ") ranked WHERE rn = 1",
+            groups,
+        )
+        return {
+            row["group_id"]: {
+                "document_count": int(row["document_count"]),
+                "latest_day": row["latest_day"],
+                "latest_title": row["latest_title"],
+                "latest_media_id": row["latest_media_id"],
+            }
+            for row in rows
+        }
+
+    def ima_document_from_index(
+        self,
+        media_id: str,
+        readable_group_ids: list[str],
+        group: str = "",
+    ) -> dict | None:
+        media_id = str(media_id or "").strip()
+        groups = _ima_authorized_groups(readable_group_ids, group)
+        if not media_id or not groups:
+            return None
+        rows = self._rows(
+            "SELECT * FROM ima_document_index WHERE media_id = ? "
+            f"AND group_id IN ({', '.join('?' for _ in groups)}) "
+            "ORDER BY valid_day DESC, day DESC, name DESC",
+            (media_id, *groups),
+        )
+        if len(rows) != 1:
+            return None
+        return _ima_public_document(rows[0])
+
+    def ima_document_index_count(self) -> int:
+        rows = self._rows("SELECT COUNT(*) AS n FROM ima_document_index")
+        return int(rows[0]["n"] if rows else 0)
 
     def get_tag_vocabulary(self) -> list[dict]:
         """读贴文打标词表（settings 持久化），返回「标签 + 关键词」对象数组。

@@ -521,6 +521,33 @@ def _ima_row(group_id, media_id, *, name=None, tags=None, **kwargs):
     return row
 
 
+def _index_row(group_id, media_id, day, *, name="研报.pdf", tags=None, abstract=""):
+    tags = tags or []
+    return {
+        "group_id": group_id,
+        "media_id": media_id,
+        "day": day,
+        "valid_day": int(str(day).isdigit() and len(str(day)) == 4),
+        "name": name,
+        "group_name": group_id,
+        "name_folded": name.casefold(),
+        "metadata_folded": f"{group_id} {' '.join(tags)}".casefold(),
+        "abstract": abstract,
+        "abstract_folded": abstract.casefold(),
+        "abstract_zh": "",
+        "abstract_src_hash": "",
+        "cover_url": "",
+        "tags": tags,
+        "size": 0,
+        "chars": 0,
+        "has_pdf": 0,
+        "has_txt": 0,
+        "pdf_path": "",
+        "txt_path": "",
+        "downloaded_at": "",
+    }
+
+
 def _write_sqlite_script(path, script: str) -> None:
     conn = sqlite3.connect(path)
     conn.executescript(script)
@@ -1155,6 +1182,94 @@ def test_ima_document_index_meta_status_and_rollback(tmp_path):
     assert meta["status"] == "rebuilding"
     assert meta["fingerprint"] == "stable"
     assert meta["document_count"] == 1
+
+
+def test_ima_document_index_search_ranking_and_literal_wildcards(tmp_path):
+    db = DB(str(tmp_path / "search.sqlite"))
+    db.replace_ima_document_index(
+        [
+            _index_row("semi", "title", "0828", name="全球 AI 展望.pdf"),
+            _index_row("semi", "tag", "0829", tags=["AI"]),
+            _index_row("semi", "body", "0830", abstract="AI 算力继续增长"),
+            _index_row("semi", "literal", "0827", name="100%_覆盖.pdf"),
+            _index_row("semi", "unknown", "unknown", name="无日期.pdf"),
+            _index_row("other", "hidden", "0831", name="全球 AI 展望.pdf"),
+        ],
+        "fp",
+        1,
+    )
+
+    page = db.ima_document_page(["semi"], query="ai", limit=50, offset=0)
+    assert [item["media_id"] for item in page["items"][:3]] == ["title", "tag", "body"]
+    assert page["document_count"] == 3
+    assert page["items"][0]["tags"] == []
+    assert page["items"][1]["tags"] == ["AI"]
+    assert isinstance(page["items"][0]["has_pdf"], bool)
+    assert db.ima_document_page(["semi"], query="100%_", limit=50, offset=0)["items"][0][
+        "media_id"
+    ] == "literal"
+    assert db.ima_document_page(["semi"], query="AI", limit=50, offset=0)[
+        "document_count"
+    ] == 3
+    latest = db.ima_document_page(["semi"], limit=50, offset=0)
+    assert latest["items"][-1]["media_id"] == "unknown"
+    assert latest["items"][0]["media_id"] == "body"
+    assert latest["group_counts"]["semi"] == 5
+    assert "other" not in latest["group_counts"]
+    assert latest["has_more"] is False
+    assert latest["offset"] == 0
+    assert latest["day"] == ""
+
+    paged = db.ima_document_page(["semi"], limit=2, offset=0)
+    assert [item["media_id"] for item in paged["items"]] == ["body", "tag"]
+    assert paged["has_more"] is True
+    assert paged["document_count"] == 5
+    next_page = db.ima_document_page(["semi"], limit=2, offset=2)
+    assert [item["media_id"] for item in next_page["items"]] == ["title", "literal"]
+    assert next_page["has_more"] is True
+
+    tagged = db.ima_document_page(["semi"], tag="AI")
+    assert [item["media_id"] for item in tagged["items"]] == ["tag"]
+    assert tagged["tag_counts"] == {"AI": 1}
+    assert tagged["tags"] == ["AI"]
+
+    dated = db.ima_document_page(["semi"], day="0828")
+    assert [item["media_id"] for item in dated["items"]] == ["title"]
+    assert dated["day"] == "0828"
+    assert dated["days"] == ["0828"]
+
+    assert db.ima_document_page(["semi"], group="other")["items"] == []
+    assert db.ima_document_page([], query="ai")["document_count"] == 0
+
+
+def test_ima_document_catalog_stats_and_detail_ambiguity(tmp_path):
+    db = DB(str(tmp_path / "catalog.sqlite"))
+    db.replace_ima_document_index(
+        [
+            _index_row("semi", "shared", "0829", name="后发.pdf", tags=["AI"]),
+            _index_row("semi", "older", "0828", name="先发.pdf"),
+            _index_row("macro", "shared", "0830", name="宏观.pdf"),
+        ],
+        "fp",
+        2,
+    )
+    stats = db.ima_document_catalog_stats(["semi", "macro", "empty"])
+    assert stats["semi"]["document_count"] == 2
+    assert stats["semi"]["latest_day"] == "0829"
+    assert stats["semi"]["latest_title"] == "后发.pdf"
+    assert stats["semi"]["latest_media_id"] == "shared"
+    assert stats["macro"]["latest_media_id"] == "shared"
+    assert "empty" not in stats
+    assert db.ima_document_index_count() == 3
+
+    found = db.ima_document_from_index("shared", ["semi", "macro"], "semi")
+    assert found["group_id"] == "semi"
+    assert found["name"] == "后发.pdf"
+    assert found["tags"] == ["AI"]
+    assert found["has_pdf"] is False
+    assert db.ima_document_from_index("shared", ["semi", "macro"]) is None
+    assert db.ima_document_from_index("shared", ["semi"])["group_id"] == "semi"
+    assert db.ima_document_from_index("missing", ["semi"]) is None
 
 
 def test_default_tag_rules_cover_market_topics():
