@@ -115,6 +115,84 @@ def test_remote_status_counts_state_without_statting_archive(tmp_path, monkeypat
     assert service.status()["documents"] == 20
 
 
+def test_status_exposes_download_progress_while_running(tmp_path, monkeypatch):
+    gate = threading.Event()
+    db = FakeDB(
+        {
+            IMA_PURE_UID_KEY: "uid",
+            IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+            IMA_PURE_GROUPS_KEY: json.dumps(
+                [
+                    {
+                        "id": "g1",
+                        "name": "资料",
+                        "knowledge_base_id": "kb-1",
+                        "root_folder_id": "root-1",
+                        "folder_ids": ["root-1"],
+                        "enabled": True,
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+        }
+    )
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.config = config
+            self.group = group
+
+        def manifest(self, listing_cache=None):
+            return [
+                {"media_id": "file_a", "name": "a.pdf", "day": "0829", "size": 8},
+                {"media_id": "file_b", "name": "b.pdf", "day": "0829", "size": 8},
+            ]
+
+        def get_media(self, media_id):
+            return {"media_id": media_id, "jump_url_info": {"url": f"https://download.invalid/{media_id}.pdf"}}
+
+        def download(self, media, destination, expected_size=0):
+            if str(media.get("media_id") or "") == "file_a":
+                gate.wait(timeout=5)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"%PDF-1.7")
+            return {"size": 8, "md5": "d" * 32}
+
+        def _pdf_info(self, path):
+            return 8, "d" * 32
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    service = ImaDocumentService(db, tmp_path / "ima")
+    monkeypatch.setattr(service, "discover", lambda: {"discovery": {}})
+    assert service.trigger()["status"] == "started"
+
+    deadline = time.time() + 5
+    progress = None
+    while time.time() < deadline:
+        progress = service.status().get("progress")
+        if isinstance(progress, dict) and progress.get("phase") == "download":
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError(f"download phase not reached: {service.status()!r}")
+
+    assert progress["phase"] == "download"
+    assert progress["pending"] == 2
+    assert progress.get("group_id") == "g1"
+
+    moved_deadline = time.time() + 2
+    while time.time() < moved_deadline:
+        progress = service.status().get("progress") or {}
+        if int(progress.get("downloaded") or 0) >= 1:
+            break
+        time.sleep(0.01)
+    assert int((service.status().get("progress") or {}).get("downloaded") or 0) >= 1
+
+    gate.set()
+    service._worker_thread.join(timeout=10)
+    assert service.status()["progress"] is None
+
+
 def test_discovery_commit_reloads_config_after_admin_update(tmp_path, monkeypatch):
     from app import ima_documents
 

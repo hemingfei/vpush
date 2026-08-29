@@ -2064,6 +2064,13 @@ class ImaDocumentService:
         self._cancel_requested = False
         self._sync_group_id = ""
         self._sync_scheduled = False
+        self._progress: dict[str, Any] | None = None
+
+    def _set_progress(self, **fields: Any) -> None:
+        with self._state_lock:
+            current = dict(self._progress or {})
+            current.update(fields)
+            self._progress = current
 
     def _storage_block_status(self) -> str | None:
         if self.store.archive_writable():
@@ -2178,6 +2185,7 @@ class ImaDocumentService:
         with self._state_lock:
             running = self._running
             next_run_at = self._next_run_at
+            progress = None if not running else dict(self._progress or {})
         result = self.db.get_setting(IMA_PURE_LAST_RESULT_KEY) or ""
         try:
             last_result = json.loads(result) if result else None
@@ -2204,6 +2212,7 @@ class ImaDocumentService:
             "last_result": last_result,
             "discovery": self._discovery_status(),
             "documents": document_count,
+            "progress": progress,
         }
 
     def start(self) -> None:
@@ -2393,6 +2402,7 @@ class ImaDocumentService:
                 self._running = False
                 self._sync_group_id = ""
                 self._sync_scheduled = False
+                self._progress = None
 
     def _sync_group(
         self,
@@ -2467,6 +2477,15 @@ class ImaDocumentService:
                     self.store.save_group_manifest(group.id, records)
             else:
                 self.store.save_group_manifest(group.id, records)
+        self._set_progress(
+            group_id=group.id,
+            group_name=group.name,
+            phase="listing",
+            listed=len(records),
+            pending=0,
+            downloaded=0,
+            failed=0,
+        )
         if not self.storage_status.remote:
             self.store.restore_original_filenames()
         state.clear()
@@ -2478,6 +2497,7 @@ class ImaDocumentService:
                 record, state, verify_archive=not self.storage_status.remote
             )
         ]
+        self._set_progress(phase="download", pending=len(pending), downloaded=0, failed=0)
         downloaded = 0
         failures = 0
         last_error = ""
@@ -2547,8 +2567,10 @@ class ImaDocumentService:
                         logger.exception("IMA document tag failed media=%s", media_id[:32])
                     self.store.save_state(state)
                     downloaded += 1
+                    self._set_progress(downloaded=downloaded)
                 except Exception as exc:  # noqa: BLE001 - isolate one bad file
                     failures += 1
+                    self._set_progress(failed=failures)
                     last_error = _safe_error(exc)
                     logger.warning("IMA document failed error=%s", last_error)
         return {
@@ -2643,4 +2665,6 @@ class ImaDocumentService:
             self.db.set_setting(IMA_PURE_LAST_RESULT_KEY, json.dumps(result, ensure_ascii=False))
             return {"status": "finished", **result}
         finally:
+            with self._state_lock:
+                self._progress = None
             self._sync_lock.release()
