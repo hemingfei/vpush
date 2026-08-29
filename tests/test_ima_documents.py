@@ -15,6 +15,7 @@ from app.ima_documents import (
     IMA_LEGACY_GROUP_NAME,
     IMA_MAX_FOLDER_DEPTH,
     IMA_PURE_GROUPS_KEY,
+    IMA_PURE_GROUP_RUNTIME_KEY,
     IMA_PURE_KB_ID_KEY,
     IMA_PURE_DISCOVERY_KEY,
     IMA_PURE_LAST_RESULT_KEY,
@@ -1954,6 +1955,101 @@ def test_manual_trigger_respects_lock_and_interval(tmp_path):
     service._running = True
     db.values["ima_pure_last_started_at"] = "0"
     assert service.trigger()["status"] == "already_running"
+
+
+def _two_mounted_groups_db(*, runtime=None):
+    return FakeDB(
+        {
+            IMA_PURE_UID_KEY: "uid",
+            IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+            IMA_PURE_GROUPS_KEY: json.dumps(
+                [
+                    {
+                        "id": "a",
+                        "name": "库A",
+                        "knowledge_base_id": "kb-a",
+                        "root_folder_id": "folder-a",
+                        "folder_ids": ["folder-a"],
+                        "enabled": True,
+                        "interval_seconds": 3600,
+                    },
+                    {
+                        "id": "b",
+                        "name": "库B",
+                        "knowledge_base_id": "kb-b",
+                        "root_folder_id": "folder-b",
+                        "folder_ids": ["folder-b"],
+                        "enabled": True,
+                        "interval_seconds": 86400,
+                    },
+                ],
+                ensure_ascii=False,
+            ),
+            IMA_PURE_GROUP_RUNTIME_KEY: json.dumps(runtime or {}, ensure_ascii=False),
+        }
+    )
+
+
+def _listing_client(listed):
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.group = group
+
+        def manifest(self, listing_cache=None):
+            listed.append(self.group.id if self.group is not None else "")
+            return []
+
+    return FakeClient
+
+
+def test_scheduled_sync_skips_group_that_is_not_due(tmp_path, monkeypatch):
+    now = time.time()
+    db = _two_mounted_groups_db(runtime={"b": {"last_started_at": int(now - 3600)}})
+    listed = []
+    monkeypatch.setattr(ima_documents, "ImaPureClient", _listing_client(listed))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    monkeypatch.setattr(service, "discover", lambda: {"discovery": {}})
+    assert service.trigger(scheduled=True)["status"] == "started"
+    service._worker_thread.join(timeout=10)
+    assert listed == ["a"]
+
+
+def test_manual_sync_one_group_ignores_due_window(tmp_path, monkeypatch):
+    started = int(time.time() - 60)
+    db = _two_mounted_groups_db(
+        runtime={
+            "a": {"last_started_at": started},
+            "b": {"last_started_at": started},
+        }
+    )
+    listed = []
+    monkeypatch.setattr(ima_documents, "ImaPureClient", _listing_client(listed))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    monkeypatch.setattr(service, "discover", lambda: {"discovery": {}})
+    assert service.trigger(group_id="b")["status"] == "started"
+    service._worker_thread.join(timeout=10)
+    assert listed == ["b"]
+
+
+def test_from_db_preserves_stored_group_interval():
+    db = FakeDB(
+        {
+            IMA_PURE_GROUPS_KEY: json.dumps(
+                [
+                    {
+                        "id": "g",
+                        "name": "库",
+                        "knowledge_base_id": "kb",
+                        "root_folder_id": "root",
+                        "folder_ids": ["root"],
+                        "enabled": True,
+                        "interval_seconds": 86400,
+                    }
+                ]
+            ),
+        }
+    )
+    assert ImaDocumentConfig.from_db(db).groups[0].interval_seconds == 86400
 
 
 def _headers(client, username, code, *, admin=False):

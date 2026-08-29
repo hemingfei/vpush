@@ -54,6 +54,7 @@ IMA_PURE_LAST_STARTED_KEY = "ima_pure_last_started_at"
 IMA_PURE_LAST_FINISHED_KEY = "ima_pure_last_finished_at"
 IMA_PURE_LAST_RESULT_KEY = "ima_pure_last_result"
 IMA_PURE_DISCOVERY_KEY = "ima_pure_discovery"
+IMA_PURE_GROUP_RUNTIME_KEY = "ima_pure_group_runtime"
 IMA_LEGACY_GROUP_ID = "legacy"
 IMA_LEGACY_GROUP_NAME = "IMA 文档"
 IMA_PURE_UID_DEFAULT = "001aa361168019ef"
@@ -2061,6 +2062,8 @@ class ImaDocumentService:
         self._running = False
         self._next_run_at = 0.0
         self._cancel_requested = False
+        self._sync_group_id = ""
+        self._sync_scheduled = False
 
     def _storage_block_status(self) -> str | None:
         if self.store.archive_writable():
@@ -2296,7 +2299,37 @@ class ImaDocumentService:
             if due:
                 self.trigger(scheduled=True)
 
-    def trigger(self, scheduled: bool = False) -> dict[str, Any]:
+    def _group_runtime(self) -> dict[str, Any]:
+        raw = self.db.get_setting(IMA_PURE_GROUP_RUNTIME_KEY) or "{}"
+        try:
+            data = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _mark_group_runtime(self, group_id: str, *, started: bool) -> None:
+        data = self._group_runtime()
+        raw_item = data.get(group_id)
+        item = dict(raw_item) if isinstance(raw_item, dict) else {}
+        now = int(time.time())
+        if started:
+            item["last_started_at"] = now
+        else:
+            item["last_finished_at"] = now
+        data[group_id] = item
+        self.db.set_setting(IMA_PURE_GROUP_RUNTIME_KEY, json.dumps(data, ensure_ascii=False))
+
+    def _group_due(self, group: ImaGroupConfig, now: float) -> bool:
+        item = self._group_runtime().get(group.id) or {}
+        if not isinstance(item, dict):
+            item = {}
+        try:
+            last = float(item.get("last_started_at") or 0)
+        except (TypeError, ValueError):
+            last = 0.0
+        return (now - last) >= _clamp_group_interval(group.interval_seconds)
+
+    def trigger(self, scheduled: bool = False, group_id: str = "") -> dict[str, Any]:
         cfg = self.config()
         if not cfg.credentials_configured:
             return {"status": "not_configured"}
@@ -2314,11 +2347,26 @@ class ImaDocumentService:
                 last_started = float(last)
             except ValueError:
                 last_started = 0.0
-            if not scheduled and last_started and now - last_started < cfg.interval_seconds:
+            if (
+                not group_id
+                and not scheduled
+                and last_started
+                and now - last_started < cfg.interval_seconds
+            ):
                 return {"status": "too_soon", "retry_at": int(last_started + cfg.interval_seconds)}
             self._running = True
             self._cancel_requested = False
-            self._next_run_at = now + cfg.interval_seconds
+            self._sync_group_id = group_id
+            self._sync_scheduled = scheduled
+            if scheduled:
+                mounted = (
+                    group.interval_seconds
+                    for group in cfg.groups
+                    if group.enabled and group.mount_folder_ids
+                )
+                self._next_run_at = now + max(1800, min(mounted, default=3600))
+            else:
+                self._next_run_at = now + cfg.interval_seconds
             self._worker_thread = threading.Thread(
                 target=self._worker, name="ima-document-sync", daemon=True
             )
@@ -2338,6 +2386,8 @@ class ImaDocumentService:
         finally:
             with self._state_lock:
                 self._running = False
+                self._sync_group_id = ""
+                self._sync_scheduled = False
 
     def _sync_group(
         self,
@@ -2510,6 +2560,13 @@ class ImaDocumentService:
         if not self._sync_lock.acquire(blocking=False):
             return {"status": "already_running"}
         try:
+            requested = ""
+            scheduled_flag = False
+            with self._state_lock:
+                requested = self._sync_group_id
+                self._sync_group_id = ""
+                scheduled_flag = self._sync_scheduled
+                self._sync_scheduled = False
             cfg = self.config()
             if not cfg.credentials_configured:
                 return {"status": "not_configured"}
@@ -2526,6 +2583,11 @@ class ImaDocumentService:
             enabled_groups = [
                 group for group in cfg.groups if group.enabled and group.mount_folder_ids
             ]
+            if requested:
+                enabled_groups = [group for group in enabled_groups if group.id == requested]
+            elif scheduled_flag:
+                now = time.time()
+                enabled_groups = [group for group in enabled_groups if self._group_due(group, now)]
             skipped_groups = [group.id for group in cfg.groups if group not in enabled_groups]
             total = pending = downloaded = failures = 0
             failed_groups: list[str] = []
@@ -2534,7 +2596,11 @@ class ImaDocumentService:
             succeeded_groups = 0
             for group in enabled_groups:
                 try:
-                    group_result = self._sync_group(cfg, group, state)
+                    self._mark_group_runtime(group.id, started=True)
+                    try:
+                        group_result = self._sync_group(cfg, group, state)
+                    finally:
+                        self._mark_group_runtime(group.id, started=False)
                     if group_result.get("skipped"):
                         skipped_groups.append(group.id)
                         continue
