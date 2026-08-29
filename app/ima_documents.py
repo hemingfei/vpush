@@ -760,7 +760,7 @@ class ImaPureClient:
                     self, "_discovery_knowledge_base_id", self.effective_knowledge_base_id
                 ),
                 "folder_id": folder_id,
-                "limit": "50",
+                "limit": "200",
             }
             if cursor:
                 body["cursor"] = cursor
@@ -886,39 +886,52 @@ class ImaPureClient:
                 record["group_name"] = self.group.name
             records.append(record)
 
-        while queue_index < len(queue):
-            folder_id = queue[queue_index]
-            queue_index += 1
+        def _ingest(folder_id: str, items: list[dict[str, Any]]) -> None:
             root_folder_id = root_by_folder[folder_id]
             folder_path = path_by_folder[folder_id]
-            depth = depth_by_folder[folder_id]
-            if folder_id in visited_folder_ids:
-                continue
-            if depth > IMA_MAX_FOLDER_DEPTH:
-                raise RuntimeError("IMA folder tree exceeds maximum depth")
-            visited_folder_ids.add(folder_id)
-            if len(visited_folder_ids) > IMA_MAX_FOLDER_NODES:
-                raise RuntimeError("IMA folder tree exceeds maximum size")
-            items = self.list_items(folder_id)
             if not folder_path:
                 folder_path = list(self._folder_paths.get(folder_id, folder_path))
+                path_by_folder[folder_id] = folder_path
             for item in items:
                 if not isinstance(item, dict):
                     continue
                 if is_ima_folder_item(item):
                     child_id = ima_folder_id(item)
-                    if child_id and child_id not in visited_folder_ids:
+                    if child_id:
                         child_path = folder_path + [ima_folder_name(item, child_id)]
                         if child_id not in root_by_folder or child_id in selected_root_ids:
                             root_by_folder[child_id] = root_folder_id
                             path_by_folder[child_id] = child_path
-                            depth_by_folder[child_id] = depth + 1
+                            depth_by_folder[child_id] = depth_by_folder[folder_id] + 1
                             selected_root_ids.discard(child_id)
-                        if child_id not in queued_folder_ids:
+                        if child_id not in visited_folder_ids and child_id not in queued_folder_ids:
                             queued_folder_ids.add(child_id)
                             queue.append(child_id)
                     continue
                 append_file(item, folder_id, root_folder_id, folder_path)
+
+        while queue_index < len(queue):
+            batch: list[str] = []
+            while queue_index < len(queue) and len(batch) < IMA_DOWNLOAD_WORKERS:
+                folder_id = queue[queue_index]
+                queue_index += 1
+                if folder_id in visited_folder_ids:
+                    continue
+                if depth_by_folder[folder_id] > IMA_MAX_FOLDER_DEPTH:
+                    raise RuntimeError("IMA folder tree exceeds maximum depth")
+                visited_folder_ids.add(folder_id)
+                if len(visited_folder_ids) > IMA_MAX_FOLDER_NODES:
+                    raise RuntimeError("IMA folder tree exceeds maximum size")
+                batch.append(folder_id)
+            if not batch:
+                continue
+            if len(batch) == 1:
+                _ingest(batch[0], self.list_items(batch[0]))
+                continue
+            with ThreadPoolExecutor(max_workers=len(batch)) as pool:
+                listed = list(pool.map(self.list_items, batch))
+            for folder_id, items in zip(batch, listed):
+                _ingest(folder_id, items)
         records.sort(key=lambda item: (item["day"], item["media_id"]))
         return records
 
