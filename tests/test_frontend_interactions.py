@@ -3146,9 +3146,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=225"' in html
-    assert 'src="/app.js?v=311"' in html
-    assert 'dav-shell-v182' in sw
+    assert 'href="/style.css?v=226"' in html
+    assert 'src="/app.js?v=313"' in html
+    assert 'dav-shell-v184' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

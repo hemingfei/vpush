@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import base64
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 import logging
@@ -13,8 +12,10 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from http.client import IncompleteRead
 from pathlib import Path
 from typing import Any
 
@@ -27,9 +28,10 @@ from .fetchers.ima_inspect import item_cover, item_text
 from .ima_storage import ImaStorageStatus
 
 logger = logging.getLogger(__name__)
-IMA_DOWNLOAD_WORKERS = 8
+IMA_DOWNLOAD_WORKERS = 4
 IMA_LIST_WORKERS = 3
 IMA_FOLDER_LIST_MAX_PAGES = 20
+IMA_DOWNLOAD_RETRY_DELAYS = (2, 8)
 
 BASE = os.environ.get("IMA_BASE", "https://ima.qq.com/cgi-bin")
 GUID = os.environ.get("IMA_GUID", "7497986728819336")
@@ -826,7 +828,7 @@ class ImaPureClient:
                 status = _ima_response_status(data, "IMA list")
                 if _ima_success_status(status):
                     break
-                if status not in (51, 429) or attempt == 3:
+                if status not in (51, 429, 30005) or attempt == 3:
                     raise RuntimeError(f"IMA list failed code={status}")
                 time.sleep(1.5 * (attempt + 1))
                 request = urllib.request.Request(
@@ -1197,6 +1199,27 @@ class ImaPureClient:
             temp.unlink(missing_ok=True)
             raise
         return {"size": size, "md5": digest.hexdigest(), "path": str(destination)}
+
+
+def _retryable_download_error(exc: Exception) -> bool:
+    if isinstance(
+        exc,
+        (TimeoutError, ConnectionError, IncompleteRead, urllib.error.URLError),
+    ):
+        return True
+    text = str(exc)
+    if any(
+        marker in text
+        for marker in (
+            "size mismatch",
+            "network response failed",
+            "returned no signed URL",
+            "signed URL missing",
+        )
+    ):
+        return True
+    match = re.search(r"HTTP (\d{3})", text)
+    return bool(match and (int(match.group(1)) in (403, 408, 409, 425, 429) or int(match.group(1)) >= 500))
 
 
 def item_display_name(item: dict[str, Any], media_id: str) -> str:
@@ -2531,22 +2554,37 @@ class ImaDocumentService:
                 raise ValueError("archive directory must not be a symlink")
             if (not pull_url) and pdf.is_file():
                 size, md5 = client._pdf_info(pdf)
-                if record.get("size") and size != int(record["size"]):
-                    pdf.unlink(missing_ok=True)
-            if pull_url or not pdf.is_file():
-                last_error: Exception | None = None
-                for _ in range(2):
+                if not record.get("size") or size == int(record["size"]):
+                    return record, pdf, int(size), str(md5)
+                pdf.unlink(missing_ok=True)
+            last_error: Exception | None = None
+            for attempt in range(3):
+                try:
                     media = client.get_media(media_id)
-                    try:
-                        result = client.download(media, pdf, int(record.get("size") or 0))
-                        return record, pdf, int(result["size"]), str(result["md5"])
-                    except Exception as exc:  # noqa: BLE001
-                        last_error = exc
-                        if "HTTP 403" not in str(exc):
-                            raise
-                raise last_error
-            size, md5 = client._pdf_info(pdf)
-            return record, pdf, int(size), str(md5)
+                    result = client.download(media, pdf, int(record.get("size") or 0))
+                    return record, pdf, int(result["size"]), str(result["md5"])
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    retryable = _retryable_download_error(exc)
+                    if not retryable or attempt == 2:
+                        logger.warning(
+                            "IMA PDF failed media=%s group=%s attempt=%s/3 retryable=%s error=%s",
+                            media_id[:64],
+                            group.id[:64],
+                            attempt + 1,
+                            retryable,
+                            _safe_error(exc),
+                        )
+                        raise
+                    logger.warning(
+                        "IMA PDF retry media=%s group=%s attempt=%s/3 error=%s",
+                        media_id[:64],
+                        group.id[:64],
+                        attempt + 1,
+                        _safe_error(exc),
+                    )
+                    time.sleep(IMA_DOWNLOAD_RETRY_DELAYS[attempt])
+            raise last_error  # pragma: no cover - loop either returns or raises
 
         workers = 1 if len(jobs) < 2 else IMA_DOWNLOAD_WORKERS
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -2581,7 +2619,6 @@ class ImaDocumentService:
                     failures += 1
                     self._set_progress(failed=failures)
                     last_error = _safe_error(exc)
-                    logger.warning("IMA document failed error=%s", last_error)
         return {
             "group_id": group.id,
             "group_name": group.name,

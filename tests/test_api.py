@@ -3158,6 +3158,9 @@ def test_healthz_ok_when_ima_storage_missing(tmp_path, monkeypatch):
         "inode_percent",
         "monthly_tx_bytes",
         "reason",
+        "restic_last_success",
+        "restic_last_check_at",
+        "restic_last_check_ok",
     }
     assert payload["available"] is False
     assert "capacity_blocked" not in payload
