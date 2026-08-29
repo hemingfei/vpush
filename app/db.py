@@ -2901,6 +2901,7 @@ class DB:
         untagged_only: bool = False,
         below_id: int | None = None,
         include_blocked: bool = False,
+        blocked_only: bool = False,
     ) -> list[dict]:
         sql = (
             "SELECT p.*, k.name AS kol_name, k.category_id AS category_id, "
@@ -2909,7 +2910,10 @@ class DB:
             "LEFT JOIN categories c ON c.id = k.category_id"
         )
         conds, params = [], []
-        if not include_blocked:
+        if blocked_only:
+            # 只看被关键词拦截的帖（管理端「拦截详情」用）
+            conds.append("COALESCE(p.blocked, 0) = 1")
+        elif not include_blocked:
             # 关键词拦截的帖：入库保留（可回溯），但任何列表/时间线都不展示
             conds.append("COALESCE(p.blocked, 0) = 0")
         if platform:

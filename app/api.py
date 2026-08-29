@@ -4410,8 +4410,12 @@ def create_api_router(
         return result
 
     @router.get("/posts", dependencies=[Depends(require_admin)])
-    def list_posts(limit: int = 100, platform: str | None = None, kol_id: int | None = None, q: str | None = None, offset: int = 0):
-        return db.list_posts(limit=bounded_limit(limit), platform=platform, kol_id=kol_id, q=q, offset=offset)
+    def list_posts(limit: int = 100, platform: str | None = None, kol_id: int | None = None, q: str | None = None, offset: int = 0, blocked: int = 0):
+        """管理端帖子列表；blocked=1 时只返回被关键词拦截的帖（拦截详情用）。"""
+        return db.list_posts(
+            limit=bounded_limit(limit), platform=platform, kol_id=kol_id,
+            q=q, offset=offset, blocked_only=bool(blocked),
+        )
 
     @router.get("/push-logs", dependencies=[Depends(require_admin)])
     def list_push_logs(

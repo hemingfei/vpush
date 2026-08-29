@@ -7578,8 +7578,8 @@ async function loadAdminKols(opts) {
       : "—";
     const kwList = k.block_keywords || [];
     const blockedCnt = Number(k.blocked_count) || 0;
-    const kwCell = kwList.length
-      ? `<span class="${blockedCnt ? "status-warn" : ""}" title="${escapeHtml(kwList.join("、"))}">${kwList.length} 个词${blockedCnt ? ` · 拦 ${blockedCnt}` : ""}</span>`
+    const kwCell = (kwList.length || blockedCnt)
+      ? `<button type="button" class="btn-sm ak-kw-view${blockedCnt ? " status-warn" : ""}" title="${kwList.length ? escapeHtml(kwList.join("、")) : "未设置屏蔽词"}" onclick="adminViewKolBlock(${k.id})">${kwList.length ? `${kwList.length} 个词` : "无屏蔽词"}${blockedCnt ? ` · 拦 ${blockedCnt}` : ""}</button>`
       : '<span class="muted">—</span>';
     const tierBtns = k.priority
       ? `<button class="btn-sm" onclick="adminTogglePriority(${k.id}, false)">改普通</button>
@@ -8011,6 +8011,60 @@ async function saveKolEdit(id) {
 // ---- 大V 屏蔽词（关键词拦截）----
 function kolKeywordsSnapshot() {
   return $("#ek-keywords").value;
+}
+
+async function adminViewKolBlock(id) {
+  const row = state.adminKols.find((k) => k.id === id);
+  if (!row) return;
+  const keywords = row.block_keywords || [];
+  const mask = document.createElement("div");
+  mask.className = "modal-mask";
+  mask.innerHTML = `
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="ak-block-title">
+      <h3 id="ak-block-title" style="margin-bottom:12px">拦截详情：${escapeHtml(row.name)}</h3>
+      <div style="margin-bottom:12px">
+        <div class="form-label" style="margin-bottom:6px">屏蔽词</div>
+        <div id="ak-block-kws">${keywords.length
+          ? keywords.map((kw) => `<span class="ak-kw-chip">${escapeHtml(kw)}</span>`).join(" ")
+          : '<span class="muted">未设置屏蔽词</span>'}</div>
+      </div>
+      <div>
+        <div class="form-label" style="margin-bottom:6px">拦截的内容</div>
+        <div id="ak-block-posts" class="ak-block-list"><p class="muted">加载中…</p></div>
+      </div>
+      <div class="toolbar" style="margin-top:16px">
+        <button class="btn-normal" onclick="this.closest('.modal-mask').remove(); adminEditKolKeywords(${id})">修改屏蔽词</button>
+        <button type="button" class="btn-sm" data-close>关闭</button>
+      </div>
+    </div>`;
+  document.body.appendChild(mask);
+  mask.addEventListener("click", (e) => {
+    if (e.target === mask) mask.remove();
+  });
+  mask.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") mask.remove();
+  });
+  mask.querySelector("[data-close]").addEventListener("click", () => mask.remove());
+  const listEl = mask.querySelector("#ak-block-posts");
+  try {
+    const posts = await api(`/api/posts?kol_id=${id}&blocked=1&limit=200`);
+    if (!posts.length) {
+      listEl.innerHTML = '<p class="muted">暂无被拦截的消息</p>';
+    } else {
+      listEl.innerHTML = posts.map((p) => `
+        <div class="ak-block-item">
+          <div class="muted ak-block-meta">${escapeHtml(fmtDbTime(p.published_at))}${p.block_hit ? ` · 命中「${escapeHtml(p.block_hit)}」` : ""}</div>
+          ${p.title ? `<div class="ak-block-title">${escapeHtml(p.title)}</div>` : ""}
+          <div class="ak-block-content">${escapeHtml(p.content || "")}</div>
+        </div>`).join("");
+      const total = Number(row.blocked_count) || 0;
+      if (total > posts.length) {
+        listEl.insertAdjacentHTML("beforeend", `<p class="muted" style="margin:8px 0 0">共拦截 ${total} 条，当前显示最近 ${posts.length} 条</p>`);
+      }
+    }
+  } catch (err) {
+    listEl.innerHTML = `<p class="muted">加载失败: ${escapeHtml(err.message)}</p>`;
+  }
 }
 
 async function adminEditKolKeywords(id) {

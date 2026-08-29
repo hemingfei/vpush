@@ -4053,3 +4053,37 @@ html:not(.theme-dark) .ai-form-select option {
 	  font-size: var(--text-sm);
 	  color: var(--color-text-muted);
 	}
+
+/* 大V 屏蔽词：查看拦截详情 */
+.ak-kw-view {
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.ak-kw-chip {
+  display: inline-block;
+  padding: 2px 12px;
+  margin: 0 6px 6px 0;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  font-size: var(--text-sm);
+  background: var(--color-bg-muted);
+}
+.ak-block-list {
+  max-height: 46vh;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 4px 14px;
+}
+.ak-block-item { padding: 10px 0; border-bottom: 1px solid var(--color-border); }
+.ak-block-item:last-child { border-bottom: none; }
+.ak-block-meta { font-size: var(--text-sm); margin-bottom: 2px; }
+.ak-block-title { font-weight: var(--font-weight-medium); margin: 2px 0; }
+.ak-block-content {
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
