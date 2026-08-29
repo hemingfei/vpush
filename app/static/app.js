@@ -591,6 +591,12 @@ function knowledgeTypingTarget(el) {
 function onKnowledgeListKey(e) {
   if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
   if (!isRoute("knowledge") && !isRoute("ima-documents")) return;
+  if (e.key === "Escape" && _imaDayPicker.open) {
+    e.preventDefault();
+    closeImaDayPicker();
+    return;
+  }
+  if (_imaDayPicker.open) return;
   if (knowledgeTypingTarget(e.target)) return;
   if (e.key !== "j" && e.key !== "k") return;
   const rows = [...document.querySelectorAll("#kb-list .ima-doc-row")];
@@ -610,6 +616,7 @@ function ensureKnowledgeKeys() {
   if (window._kbKeysBound) return;
   window._kbKeysBound = true;
   document.addEventListener("keydown", onKnowledgeListKey);
+  document.addEventListener("pointerdown", onImaDayPickerDocDown);
 }
 
 function mountKnowledgeShell() {
@@ -753,6 +760,12 @@ function fmtImaDay(day) {
   return `${Number(match[1])}月${Number(match[2])}日`;
 }
 
+function fmtImaDayShort(day) {
+  const match = /^(\d{2})(\d{2})$/.exec(String(day || "").trim());
+  if (!match) return "";
+  return `${Number(match[1])}/${Number(match[2])}`;
+}
+
 function imaDisplayTitle(name) {
   let s = String(name || "").replace(/\.pdf$/i, "").replace(/-副本$/u, "").trim();
   let lastCjk = -1;
@@ -772,10 +785,10 @@ function imaDocTicker(name) {
   return m ? m[1] : "";
 }
 
-function imaDocBroker(name) {
-  const title = imaDisplayTitle(name);
-  const m = title.match(/^([^\-–—]{1,8})[-–—]/);
-  return m ? m[1].trim() : "";
+function imaListTitle(name) {
+  let s = imaDisplayTitle(name).replace(/[（(][A-Z0-9][A-Z0-9.\-]*[）)]/g, "");
+  s = s.replace(/^[^\-–—]{1,8}[-–—]/, "");
+  return s.replace(/\s+/g, " ").trim() || imaDisplayTitle(name);
 }
 
 function fmtDocSize(bytes) {
@@ -844,17 +857,14 @@ function imaDistinctiveTags(tags, counts = _imaTagCounts, documentCount = _imaDo
 }
 
 function imaDocumentRow(item, showGroupLabel = false) {
-  const title = imaDisplayTitle(item.name);
-  const ticker = imaDocTicker(item.name);
-  const day = fmtImaDay(item.day);
-  const broker = imaDocBroker(item.name);
-  const bits = [ticker, day, showGroupLabel ? item.group_name : "", broker].filter(Boolean);
+  const title = imaListTitle(item.name);
+  const ticker = imaDocTicker(item.name) || (showGroupLabel ? (item.group_name || "") : "");
+  const day = fmtImaDayShort(item.day);
   return `
     <div class="ima-doc-row" role="button" tabindex="0" data-media-id="${escapeHtml(item.media_id)}" data-group-id="${escapeHtml(item.group_id || "")}" onclick="openImaDocument(this.dataset.mediaId, this.dataset.groupId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openImaDocument(this.dataset.mediaId, this.dataset.groupId)}">
-      <span class="ima-doc-row-copy">
-        <span class="ima-doc-row-name">${escapeHtml(title)}</span>
-        <span class="ima-doc-row-meta">${escapeHtml(bits.join(" · "))}</span>
-      </span>
+      <span class="ima-doc-ticker">${escapeHtml(ticker)}</span>
+      <span class="ima-doc-row-name">${escapeHtml(title)}</span>
+      <span class="ima-doc-row-day">${escapeHtml(day)}</span>
     </div>`;
 }
 
@@ -942,11 +952,7 @@ function selectImaDocumentGroup(value) {
 
 function submitImaDocumentsSearch() {
   state.imaDocumentsQuery = ($("#ima-doc-q")?.value || "").trim();
-  if (state.imaDocumentsQuery || state.imaDocumentsTag) {
-    state.imaDocumentsDay = "";
-  } else {
-    state.imaDocumentsDay = state.imaDocumentsLastDay || "";
-  }
+  state.imaDocumentsDay = "";
   replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay, state.imaDocumentsTag));
   showKnowledgeReaderEmpty();
   const seq = ++routeRenderSeq;
@@ -955,7 +961,6 @@ function submitImaDocumentsSearch() {
 
 function selectImaDocumentsDay(value) {
   const day = String(value || "");
-  if (!day) return;
   state.imaDocumentsQuery = "";
   state.imaDocumentsTag = "";
   state.imaDocumentsDay = day;
@@ -968,52 +973,87 @@ function selectImaDocumentsDay(value) {
 
 function selectImaDocumentsTag(value) {
   state.imaDocumentsTag = String(value || "");
-  if (state.imaDocumentsQuery || state.imaDocumentsTag) {
-    state.imaDocumentsDay = "";
-  } else {
-    state.imaDocumentsDay = state.imaDocumentsLastDay || "";
-  }
+  state.imaDocumentsDay = "";
   replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay, state.imaDocumentsTag));
   showKnowledgeReaderEmpty();
   const seq = ++routeRenderSeq;
   renderImaDocuments(seq);
 }
 
-function stepImaDocumentsDay(delta) {
-  const days = Array.isArray(state.imaDocumentsDays) ? state.imaDocumentsDays : [];
-  if (!days.length) return;
-  const idx = days.indexOf(state.imaDocumentsDay || "");
-  const nextIdx = idx < 0 ? (delta < 0 ? days.length - 1 : 0) : idx - Number(delta);
-  if (nextIdx < 0 || nextIdx >= days.length) return;
-  selectImaDocumentsDay(days[nextIdx]);
+let _imaDayPicker = { open: false };
+
+function imaDayMenuDays(days) {
+  return (Array.isArray(days) ? days : []).filter((day) => /^\d{4}$/.test(day));
+}
+
+function imaDayMenuHtml(day, days) {
+  const current = String(day || "");
+  const items = [`<button type="button" role="option" class="kb-desk-day-option${current ? "" : " is-selected"}" aria-selected="${!current}" onclick="pickImaDay('')">最新</button>`];
+  for (const key of imaDayMenuDays(days)) {
+    const on = key === current;
+    items.push(`<button type="button" role="option" class="kb-desk-day-option${on ? " is-selected" : ""}" aria-selected="${on}" onclick="pickImaDay('${escapeHtml(key)}')">${escapeHtml(fmtImaDay(key))}</button>`);
+  }
+  return `<div class="kb-desk-day-menu" role="listbox" aria-label="日期">${items.join("")}</div>`;
+}
+
+function placeImaDayMenu(menu, trigger) {
+  const box = trigger.getBoundingClientRect();
+  const list = $("#kb-list")?.getBoundingClientRect();
+  const width = Math.max(140, box.width);
+  const minL = list ? list.left + 8 : 8;
+  const maxL = (list ? list.right : window.innerWidth) - width - 8;
+  const left = Math.min(Math.max(minL, box.right - width), Math.max(minL, maxL));
+  menu.style.position = "fixed";
+  menu.style.left = `${left}px`;
+  menu.style.top = `${box.bottom + 4}px`;
+  menu.style.minWidth = `${width}px`;
+}
+
+function closeImaDayPicker() {
+  _imaDayPicker.open = false;
+  document.querySelectorAll(".kb-desk-day-menu").forEach((el) => el.remove());
+  const trigger = $("#ima-doc-day");
+  if (trigger) trigger.setAttribute("aria-expanded", "false");
+}
+
+function renderImaDayMenu() {
+  const trigger = $("#ima-doc-day");
+  const host = trigger?.closest(".kb-desk-search") || trigger?.parentElement;
+  if (!trigger || !host) return;
+  host.querySelector(".kb-desk-day-menu")?.remove();
+  host.insertAdjacentHTML("beforeend", imaDayMenuHtml(state.imaDocumentsDay || "", state.imaDocumentsDays));
+  const menu = host.querySelector(".kb-desk-day-menu");
+  if (menu) placeImaDayMenu(menu, trigger);
+  trigger.setAttribute("aria-expanded", "true");
+}
+
+function toggleImaDayPicker(event) {
+  event?.stopPropagation();
+  if (_imaDayPicker.open) {
+    closeImaDayPicker();
+    return;
+  }
+  _imaDayPicker.open = true;
+  renderImaDayMenu();
+}
+
+function pickImaDay(value) {
+  closeImaDayPicker();
+  selectImaDocumentsDay(value);
+}
+
+function onImaDayPickerDocDown(event) {
+  if (!_imaDayPicker.open) return;
+  if (event.target?.closest?.(".kb-desk-day, .kb-desk-day-menu")) return;
+  closeImaDayPicker();
 }
 
 function imaDocumentsDayNavHtml(day, days) {
-  const list = Array.isArray(days) ? days.filter(Boolean) : [];
-  if (!list.length) return "";
+  const list = imaDayMenuDays(days);
+  if (!list.length && !(Array.isArray(days) && days.length)) return "";
   const current = String(day || "");
-  const idx = list.indexOf(current);
-  const inSearch = !current;
-  const onDay = idx >= 0;
-  const prevDisabled = inSearch || (onDay && idx >= list.length - 1) ? "disabled" : "";
-  const nextDisabled = inSearch || (onDay && idx <= 0) ? "disabled" : "";
-  const options = [];
-  if (!current || !list.includes(current)) {
-    options.push(`<option value=""${current ? "" : " selected"} disabled>跳到日期</option>`);
-  }
-  if (current && !list.includes(current)) {
-    options.push(`<option value="${escapeHtml(current)}" selected>${escapeHtml(fmtImaDay(current) || current)}</option>`);
-  }
-  for (const value of list) {
-    options.push(`<option value="${escapeHtml(value)}"${value === current ? " selected" : ""}>${escapeHtml(fmtImaDay(value) || value)}</option>`);
-  }
-  return `<nav class="ima-doc-day-nav" aria-label="日期">
-    <button type="button" class="btn-ghost" ${prevDisabled} onclick="stepImaDocumentsDay(-1)" aria-label="前一天">‹</button>
-    <label class="ima-doc-day-jump">
-      <select id="ima-doc-day" class="form-control" aria-label="跳到日期" onchange="selectImaDocumentsDay(this.value)">${options.join("")}</select>
-    </label>
-    <button type="button" class="btn-ghost" ${nextDisabled} onclick="stepImaDocumentsDay(1)" aria-label="后一天">›</button>
-  </nav>`;
+  const label = current ? (fmtImaDay(current) || current) : "最新";
+  return `<button type="button" class="kb-desk-day" id="ima-doc-day" aria-label="筛选日期" aria-haspopup="listbox" aria-expanded="false" onclick="toggleImaDayPicker(event)">${escapeHtml(label)}</button>`;
 }
 
 function imaDocumentGroupControls(groups, selectedGroup) {
@@ -1293,6 +1333,8 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
   const day = routeQuery().get("day") || "";
   const tag = routeQuery().get("tag") || "";
   const searchMode = !!(query || tag);
+  const streamMode = !day && !searchMode;
+  const paged = searchMode || streamMode;
   state.imaDocumentsGroup = selectedGroup;
   state.imaDocumentsQuery = query;
   state.imaDocumentsDay = day;
@@ -1307,14 +1349,12 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
   listRoot.innerHTML = `
       <header class="kb-desk-head">
         <div class="kb-desk-head-row">
-          ${deskLib.select}${deskLib.unsub}
-          <span class="kb-desk-count" id="ima-doc-meta"></span>
+          <div class="kb-desk-id">${deskLib.select}${deskLib.unsub}<span class="kb-desk-count" id="ima-doc-meta"></span></div>
         </div>
         <h2 id="ima-doc-title" class="sr-only">知识库</h2>
         <form class="ima-doc-search-form" onsubmit="event.preventDefault();submitImaDocumentsSearch()">
-          <label class="kb-desk-search">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜公司、代码或标题" aria-label="搜索知识库"></label>
+          <label class="kb-desk-search">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜公司、代码或标题" aria-label="搜索知识库"><span id="ima-doc-day-nav-slot"></span></label>
         </form>
-        <div class="kb-desk-facets" id="ima-doc-day-nav-slot"></div>
         ${deskLib.availableHtml}
         <select id="ima-doc-tag" class="hidden" aria-hidden="true" onchange="selectImaDocumentsTag(this.value)"><option value="">全部标签</option></select>
       </header>
@@ -1324,7 +1364,7 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     if (query) params.set("q", query);
     if (tag) params.set("tag", tag);
     if (selectedGroup) params.set("group", selectedGroup);
-    if (searchMode) {
+    if (paged) {
       params.set("limit", "50");
       params.set("offset", "0");
     } else if (day) {
@@ -1340,21 +1380,16 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     const title = $("#ima-doc-title");
     const meta = $("#ima-doc-meta");
     if (title) title.textContent = selectedGroupName;
-    if (meta) meta.textContent = `${count} 份`;
+    if (meta) {
+      const total = Number(data.document_count) || count;
+      meta.textContent = `${paged ? total : count} 份`;
+    }
     if (!knowledgeMediaIdFromPath()) setPageTitle(selectedGroupName);
     const days = Array.isArray(data.days)
       ? data.days.filter(Boolean)
       : [...new Set(items.map((item) => item.day).filter(Boolean))];
     state.imaDocumentsDays = days;
-    if (!searchMode && data.day) {
-      state.imaDocumentsDay = data.day;
-      state.imaDocumentsLastDay = data.day;
-      const openId = knowledgeMediaIdFromPath();
-      if (openId) replaceImaDocumentsRoute(imaDocumentReaderRoute(openId));
-      else replaceImaDocumentsRoute(imaDocumentsRoute(selectedGroup, query, data.day, tag));
-    } else if (!searchMode) {
-      state.imaDocumentsLastDay = "";
-    }
+    if (day) state.imaDocumentsLastDay = day;
     const tagSelect = $("#ima-doc-tag");
     _imaTagCounts = imaTagCountsFromData(data);
     _imaDocumentCount = Number(data.document_count) || imaTagCoverageBase(_imaTagCounts, 0);
@@ -1369,13 +1404,16 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
       }).join("")}`;
     }
     const navSlot = $("#ima-doc-day-nav-slot");
-    if (navSlot) navSlot.innerHTML = imaDocumentsDayNavHtml(searchMode ? "" : (state.imaDocumentsDay || data.day), days);
+    if (navSlot) {
+      closeImaDayPicker();
+      navSlot.innerHTML = imaDocumentsDayNavHtml(searchMode ? "" : day, days);
+    }
     const hasFilter = !!(query || tag);
     syncImaListChrome({ emptyLib: !days.length && !searchMode, hasTags: uniqueTags.length > 0 || !!tag });
     syncImaDocumentsFilterStatus();
     _imaItems.push(...items);
     _imaOffset = items.length;
-    state.imaDocumentsHasMore = !!(searchMode && data.has_more);
+    state.imaDocumentsHasMore = !!(paged && data.has_more);
     const body = $("#ima-docs-body");
     if (!items.length) {
       body.innerHTML = imaDocumentsEmptyHtml(hasFilter, days);
@@ -1450,11 +1488,7 @@ function clearImaDocumentsFilter(kind) {
   }
   if (kind === "day") state.imaDocumentsDay = "";
   if (kind === "tag") state.imaDocumentsTag = "";
-  if (!state.imaDocumentsQuery && !state.imaDocumentsTag) {
-    state.imaDocumentsDay = state.imaDocumentsLastDay || "";
-  } else {
-    state.imaDocumentsDay = "";
-  }
+  if (kind !== "day") state.imaDocumentsDay = "";
   replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay, state.imaDocumentsTag));
   showKnowledgeReaderEmpty();
   renderImaDocuments(++routeRenderSeq);
@@ -1463,7 +1497,7 @@ function clearImaDocumentsFilter(kind) {
 function clearImaDocumentsFilters() {
   state.imaDocumentsQuery = "";
   state.imaDocumentsTag = "";
-  state.imaDocumentsDay = state.imaDocumentsLastDay || "";
+  state.imaDocumentsDay = "";
   const input = $("#ima-doc-q");
   if (input) input.value = "";
   replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, "", state.imaDocumentsDay, ""));
@@ -1501,7 +1535,7 @@ function startImaDocumentsAutoLoad() {
 
 async function loadImaDocumentsMore() {
   if (_imaLoadingMore || !state.imaDocumentsHasMore) return;
-  if (!state.imaDocumentsQuery && !state.imaDocumentsTag) return;
+  if (state.imaDocumentsDay && !state.imaDocumentsQuery && !state.imaDocumentsTag) return;
   _imaLoadingMore = true;
   stopImaDocumentsAutoLoad();
   const sentinel = $("#ima-docs-sentinel");
@@ -1583,14 +1617,14 @@ async function renderImaDocument(seq, mediaId) {
       : "";
     const abstractText = item.abstract_zh || item.abstract || "";
     const abstractHtml = abstractText
-      ? `<p class="ima-reader-abstract" id="ima-reader-abstract">${escapeHtml(abstractText)}</p>`
+      ? `<details class="ima-reader-abstract"><summary>摘要</summary><p id="ima-reader-abstract">${escapeHtml(abstractText)}</p></details>`
       : "";
     const pdfActions = item.has_pdf
       ? `<div class="toolbar ima-reader-actions"><button type="button" class="btn-ghost" onclick="downloadImaPdf('${escapeHtml(mediaId)}')">${DOWNLOAD_ICON}<span>下载 PDF</span></button></div>`
       : "";
     const pdfPanel = item.has_pdf
-      ? `<div id="ima-pdf-panel" class="ima-pdf-panel"><iframe id="ima-pdf-frame" title="PDF 预览"></iframe></div>`
-      : `<div class="ima-reader-empty"><p>还没有预览文件</p><button type="button" class="btn-normal" onclick="closeKnowledgeReader()">回列表</button></div>`;
+      ? `<div id="ima-pdf-panel" class="ima-pdf-panel" aria-busy="true"><p class="ima-reader-status" role="status">正在打开预览…</p><iframe id="ima-pdf-frame" title="PDF 预览" hidden></iframe></div>`
+      : `<div class="ima-pdf-panel"><div class="ima-reader-empty" role="status"><p>还没有预览文件</p></div></div>`;
     const sizeLine = fmtDocSize(item.size);
     const sizeMeta = sizeLine ? `<span class="ima-reader-meta-item">${escapeHtml(sizeLine)}</span>` : "";
     const fileMetaHtml = `<div class="section-meta ima-reader-filemeta">${tickerMeta}${dayContext}${sizeMeta}</div>`;
@@ -1630,7 +1664,8 @@ function showImaPdfFail(mediaId, seq, readerSeq) {
   if (!panel) return;
   clearImaPdfUrl();
   panel.hidden = false;
-  panel.innerHTML = `<div class="ima-reader-empty" role="status"><p>预览打不开</p><button type="button" class="btn-normal" onclick="downloadImaPdf('${escapeHtml(mediaId)}')">下载 PDF</button></div>`;
+  panel.removeAttribute("aria-busy");
+  panel.innerHTML = `<div class="ima-reader-empty" role="status"><p>预览打不开，请用右上角下载</p></div>`;
 }
 
 async function loadImaPdf(mediaId, readerSeq) {
@@ -1651,8 +1686,12 @@ async function loadImaPdf(mediaId, readerSeq) {
     const frame = $("#ima-pdf-frame");
     const panel = $("#ima-pdf-panel");
     if (frame && panel) {
-      frame.src = window._imaPdfUrl;
+      const status = panel.querySelector(".ima-reader-status");
+      if (status) status.remove();
+      frame.src = `${window._imaPdfUrl}#navpanes=0&toolbar=0`;
+      frame.hidden = false;
       panel.hidden = false;
+      panel.removeAttribute("aria-busy");
       frame.addEventListener("error", () => showImaPdfFail(mediaId, seq, readerSeq), { once: true });
     }
   } catch {
@@ -5724,16 +5763,19 @@ function renderImaFolderTree(groupId) {
   const selectedCount = imaMountDraft(groupKey).size;
   if (title) title.textContent = group.name || groupKey;
   if (count) count.textContent = `${selectedCount} 个文件夹`;
-  tree.setAttribute("aria-busy", String(imaMountState.loading.has(imaMountCacheKey(groupKey, rootId))));
+  const rootKey = imaMountCacheKey(groupKey, rootId);
+  const scrollTop = tree.scrollTop;
+  tree.setAttribute("aria-busy", String(imaMountState.loading.has(rootKey)));
   tree.innerHTML = imaFolderRowHtml(groupKey, {
     id: rootId,
     name: "整个知识库",
     parent_id: "",
-    has_children: false,
-  }, 0) + imaRenderFolderBranch(groupKey, rootId, 1) + imaFolderOrphansHtml(groupKey, rootId);
+    has_children: true,
+  }, 0) + (imaMountState.expanded.has(rootKey) ? imaRenderFolderBranch(groupKey, rootId, 1) : "") + imaFolderOrphansHtml(groupKey, rootId);
   tree.querySelectorAll('input[data-indeterminate="true"]').forEach((input) => {
     input.indeterminate = true;
   });
+  tree.scrollTop = scrollTop;
 }
 
 function imaRestoreFocus(focus) {
@@ -5753,7 +5795,6 @@ function selectImaMountGroup(groupId) {
   imaMountState.selectedGroupId = String(group.id);
   renderImaMountGroups();
   imaRestoreFocus(focus);
-  loadImaFolderChildren(String(group.id), String(group.root_folder_id || ""));
 }
 
 function toggleImaFolderExpand(button) {
@@ -5842,7 +5883,7 @@ async function loadImaFolderChildren(groupId, parentId, force = false) {
     imaMountState.folderRequests.delete(key);
     imaMountState.loading.delete(key);
     if (String(imaMountState.selectedGroupId) === String(groupId)) {
-      renderImaMountGroups();
+      renderImaFolderTree(groupId);
       imaRestoreFocus(focus);
     }
   }
@@ -5877,8 +5918,6 @@ async function discoverImaGroups() {
       renderImaMountGroups();
       const currentStatus = $("#ima-group-discovery-status");
       if (currentStatus) currentStatus.innerHTML = imaGroupDiscoveryStatusText(result);
-      const group = imaMountGroup(imaMountState.selectedGroupId);
-      if (group) loadImaFolderChildren(String(group.id), String(group.root_folder_id || ""));
     } else {
       const error = result.discovery?.error || "自动发现失败";
       const currentStatus = $("#ima-group-discovery-status");

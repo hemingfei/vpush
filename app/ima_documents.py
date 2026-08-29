@@ -29,6 +29,7 @@ from .ima_storage import ImaStorageStatus
 logger = logging.getLogger(__name__)
 IMA_DOWNLOAD_WORKERS = 8
 IMA_LIST_WORKERS = 3
+IMA_FOLDER_LIST_MAX_PAGES = 20
 
 BASE = os.environ.get("IMA_BASE", "https://ima.qq.com/cgi-bin")
 GUID = os.environ.get("IMA_GUID", "7497986728819336")
@@ -766,10 +767,17 @@ class ImaPureClient:
             cursor = next_cursor
         return normalize_discovered_groups({"knowledge_base_list": raw_items})
 
-    def list_items(self, folder_id: str) -> list[dict[str, Any]]:
+    def list_items(
+        self,
+        folder_id: str,
+        *,
+        folders_only: bool = False,
+        max_pages: int | None = None,
+    ) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         cursor = ""
         seen_cursors: set[str] = set()
+        pages = 0
         while True:
             if cursor in seen_cursors:
                 raise RuntimeError("IMA list pagination repeated cursor")
@@ -815,7 +823,17 @@ class ImaPureClient:
             ):
                 raise RuntimeError("IMA list returned invalid response")
             self._remember_folder_path(folder_id, payload)
-            items.extend(page_items)
+            if folders_only:
+                page_folders = [item for item in page_items if is_ima_folder_item(item)]
+                items.extend(page_folders)
+                pages += 1
+                if not page_folders:
+                    return items
+            else:
+                items.extend(page_items)
+                pages += 1
+            if max_pages is not None and pages >= max_pages:
+                return items
             if not payload.get("next_cursor"):
                 return items
             next_cursor = str(payload["next_cursor"])
@@ -1737,7 +1755,10 @@ class ImaDocumentStore:
             if metadata_name:
                 item["group_name"] = metadata_name
             output.append(item)
-        output.sort(key=lambda item: (item["day"], item["name"]), reverse=True)
+        output.sort(
+            key=lambda item: (item["day"] != "unknown", item["day"], item["name"]),
+            reverse=True,
+        )
         if limit is not None:
             return output[offset:offset + limit]
         return output

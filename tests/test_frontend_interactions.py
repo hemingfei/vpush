@@ -1245,6 +1245,22 @@ def test_ima_pdf_download_timeout_revoke_rechecks_session_owner():
     assert guard < revoke
 
 
+def test_knowledge_reader_pdf_fail_uses_header_download_only():
+    """预览失败只留一句说明，下载只走右上角那一个按钮。"""
+    fail = _fn_body("showImaPdfFail")
+    reader = _fn_body("renderImaDocument")
+    load = _fn_body("loadImaPdf")
+    css = STYLE_CSS.read_text()
+    assert "预览打不开" in fail
+    assert "downloadImaPdf" not in fail
+    assert "btn-normal" not in fail
+    assert "正在打开预览" in reader
+    assert "aria-busy" in reader
+    assert "ima-reader-status" in load
+    assert re.search(r"\.kb-reader\s*\{[^}]*overflow:\s*hidden", css)
+    assert ".kb-reader .ima-pdf-panel iframe" in css
+
+
 def test_ima_pdf_load_is_owned_by_route_and_reader_generation_before_load_or_fail_side_effects():
     """旧阅读器的 PDF 完成、校验失败和 iframe 错误不得污染当前阅读器。"""
     src = APP_JS.read_text()
@@ -1795,7 +1811,8 @@ def test_ima_mount_normalizes_inherited_descendants_after_parent_links_arrive():
     assert "imaMountState.dirty" not in normalize
     assert "normalizeImaMountDraft(groupId)" in load
     assert load.index("imaMountState.parents.set") < load.index("normalizeImaMountDraft(groupId)")
-    assert "renderImaMountGroups()" in load
+    assert "renderImaFolderTree(groupId)" in load
+    assert "renderImaMountGroups()" not in load
     assert "const inherited = imaFolderAncestorSelected" in selection
 
 
@@ -1806,9 +1823,14 @@ def test_ima_mount_tree_exposes_the_knowledge_base_root():
     orphans = _fn_body("imaFolderOrphansHtml")
     assert 'name: "整个知识库"' in render
     assert "imaFolderRowHtml(groupKey" in render
+    assert "has_children: true" in render
+    assert "tree.scrollTop" in render
+    assert "imaMountState.expanded.has(rootKey)" in render
     assert "folderId === String(group?.root_folder_id || \"\")" in toggle
     assert "selected.clear()" in toggle
     assert "new Set([rootId])" in orphans
+    select = _fn_body("selectImaMountGroup")
+    assert "loadImaFolderChildren" not in select
 
 def test_ima_stats_timer_uses_the_render_token_before_repainting():
     """旧 stats 定时请求完成后不得覆盖更新的后台渲染。"""
@@ -2294,7 +2316,8 @@ def test_ima_documents_filters_round_trip_through_local_url():
     assert "selectImaDocumentsDay" in src
     assert "replaceImaDocumentsRoute(imaDocumentsRoute(" in src
     assert "state.imaDocumentsDay = \"\"" in _fn_body("selectImaDocumentGroup")
-    assert 'onchange="selectImaDocumentsDay(this.value)"' in _fn_body("imaDocumentsDayNavHtml")
+    assert "toggleImaDayPicker" in _fn_body("imaDocumentsDayNavHtml")
+    assert "kb-desk-day" in _fn_body("imaDocumentsDayNavHtml")
     assert "imaDocumentsDayNavHtml(" in render
     assert "submitImaDocumentsSearch()" in render
 
@@ -2745,11 +2768,10 @@ def test_ima_document_reader_preserves_group_context_and_metadata():
     assert "ima-reader-copy" in reader
     assert "ima-reader-empty" in reader
     assert "还没有预览文件" in reader
-    assert "回列表" in reader
+    assert "回列表" not in reader
     assert "ima-reader-filemeta" in reader
     assert "needs_translation" in reader
     assert "/translate" in reader
-    assert "closeKnowledgeReader()" in reader
 
 
 def test_ima_document_reader_requests_keep_current_group_for_all_endpoints():
@@ -2872,18 +2894,66 @@ def test_ima_document_reader_removes_covers_and_labels_text_metadata():
 
 
 def test_ima_document_day_nav_lives_in_title_header_and_stays_compact():
-    """日期导航放在研究桌列表头里，触控高度 44px。"""
+    """日期是搜索框里的 chip，不占列表头第二套控件。"""
     render = _fn_body("renderImaDocuments")
     head_start = render.index('<header class="kb-desk-head">')
     head_end = render.index("</header>", head_start)
-    slot = render.index('id="ima-doc-day-nav-slot"')
+    head = render[head_start:head_end]
+    assert "kb-desk-search" in head
+    assert 'id="ima-doc-day-nav-slot"' in head
+    assert head.index("kb-desk-search") < head.index('id="ima-doc-day-nav-slot"')
     body = render.index('id="ima-docs-body"')
-    assert head_start < slot < head_end < body
+    assert head_end < body
     css = STYLE_CSS.read_text()
-    date_css = re.search(r"\.kb-list \.ima-doc-day-jump \.form-control\s*\{([^}]*)\}", css)
-    assert date_css and "min-height: 44px" in date_css.group(1)
-    btn = re.search(r"\.kb-list \.ima-doc-day-nav > button\s*\{([^}]*)\}", css)
-    assert btn and "min-height: 44px" in btn.group(1)
+    assert ".kb-desk-day" in css
+    assert "ima-doc-day-nav" not in _fn_body("imaDocumentsDayNavHtml")
+
+
+def test_knowledge_desk_defaults_to_latest_stream():
+    """无日期时拉最新流并分页，不把 URL 写成某一天。"""
+    render = _fn_body("renderImaDocuments")
+    nav = _fn_body("imaDocumentsDayNavHtml")
+    day = _fn_body("selectImaDocumentsDay")
+    assert "streamMode" in render
+    assert "paged" in render
+    assert 'params.set("limit"' in render
+    assert "replaceImaDocumentsRoute(imaDocumentsRoute(selectedGroup, query, data.day, tag))" not in render
+    assert "最新" in nav
+    assert "if (!day) return" not in day
+
+
+def test_kb_desk_head_search_and_picker_alignment():
+    """搜索 44px 带焦点环；日期菜单只列有文档的日子。"""
+    menu = _fn_body("imaDayMenuHtml")
+    css = STYLE_CSS.read_text()
+    search = re.search(r"\.kb-desk-search\s*\{([^}]*)\}", css)
+    assert search and "min-height: 44px" in search.group(1)
+    assert ".kb-desk-search:focus-within" in css
+    assert "最新" in menu
+    assert "fmtImaDay" in menu
+    assert "imaDayPickerGridHtml" not in APP_JS.read_text()
+    assert "grid-template-columns: 320px" in css
+
+
+def test_ima_day_picker_restricts_to_available_days():
+    """日期菜单只列出有文档的 MMDD，点选走 selectImaDocumentsDay。"""
+    src = APP_JS.read_text()
+    nav = _fn_body("imaDocumentsDayNavHtml")
+    menu = _fn_body("imaDayMenuHtml")
+    pick = _fn_body("pickImaDay")
+    row = _fn_body("imaDocumentRow")
+    reader = _fn_body("renderImaDocument")
+    assert "toggleImaDayPicker" in nav
+    assert "aria-haspopup" in nav
+    assert "kb-desk-day-option" in menu
+    assert "selectImaDocumentsDay" in pick
+    assert "closeImaDayPicker" in src
+    assert "ima-doc-ticker" in row
+    assert "fmtImaDayShort" in row
+    assert "imaListTitle" in row
+    assert "white-space: nowrap" in STYLE_CSS.read_text() or "ellipsis" in STYLE_CSS.read_text()
+    assert "<details" in reader
+    assert "navpanes=0" in _fn_body("loadImaPdf")
 
 
 def test_ima_document_list_hides_tag_rail_but_keeps_tag_filtering():
@@ -2903,9 +2973,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=214"' in html
-    assert 'src="/app.js?v=302"' in html
-    assert 'dav-shell-v171' in sw
+    assert 'href="/style.css?v=223"' in html
+    assert 'src="/app.js?v=309"' in html
+    assert 'dav-shell-v180' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -3012,7 +3082,7 @@ def test_knowledge_catalog_shell_contract():
     assert "knowledge" in route
     css = STYLE_CSS.read_text()
     assert ".kb-desk" in css
-    assert "grid-template-columns: 400px minmax(0, 1fr)" in css
+    assert "grid-template-columns: 320px minmax(0, 1fr)" in css
     assert "max-height: calc(100vh - 56px)" in css
     assert "border-top: var(--border-default)" in css
 
@@ -3069,7 +3139,7 @@ def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
     assert "item.abstract" not in row
     assert "ima-doc-row-thumb" not in row
     assert "item.cover_url" not in row
-    assert "imaDisplayTitle" in row
+    assert "imaListTitle" in row
     assert "imaDocTicker" in row
     assert "item.tags" not in row
     assert "imaDocKindLabel" not in row
@@ -3082,9 +3152,9 @@ def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
     assert "去配置采集" in src
     assert "全部日期" not in render
     assert "全部日期" not in _fn_body("imaDocumentsDayNavHtml")
-    assert "跳到日期" in _fn_body("imaDocumentsDayNavHtml")
-    assert "stepImaDocumentsDay" in src
-    assert "ima-doc-day-nav" in src
+    assert "筛选日期" in _fn_body("imaDocumentsDayNavHtml")
+    assert "kb-desk-day" in _fn_body("imaDocumentsDayNavHtml")
+    assert "ima-day-picker" not in _fn_body("imaDocumentsDayNavHtml")
     assert "loadImaDocumentsMore" in src
     assert 'params.set("limit"' in render
     assert "data.has_more" in render
@@ -3096,7 +3166,7 @@ def test_ima_kb_metadata_list_tag_filter_and_reader_contracts():
 
     assert "renderKnowledge" in select
     assert ".kb-desk" in css
-    assert ".ima-reader-abstract { max-width: 72ch;" in css
+    assert ".ima-reader-abstract" in css
 
 
 def test_ima_documents_search_leaves_day_view():
@@ -3112,8 +3182,8 @@ def test_ima_documents_search_leaves_day_view():
     assert "state.imaDocumentsDay = \"\"" in tag
     assert "state.imaDocumentsQuery = \"\"" in day
     assert "state.imaDocumentsTag = \"\"" in day
-    assert "if (!day) return" in day
-    assert "imaDocumentsLastDay" in clear
+    assert "if (!day) return" not in day
+    assert "state.imaDocumentsDay = \"\"" in clear
     assert "_imaListSeq" in render
     assert "_imaListSeq" in more
     assert "imaDocumentsLastDay" in open_group

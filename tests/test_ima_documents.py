@@ -1162,6 +1162,68 @@ def test_list_items_accepts_empty_terminal_page(monkeypatch):
     assert client.list_items("root") == []
 
 
+def test_list_items_folders_only_stops_after_file_page():
+    client = ImaPureClient(
+        ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
+    )
+    client._token = lambda: "access"
+    pages = iter([
+        {
+            "code": 0,
+            "knowledge_list": [
+                {"media_type": 99, "folder_info": {"folder_id": "folder-a", "name": "A"}},
+                {"media_id": "pdf_one"},
+            ],
+            "next_cursor": "p2",
+        },
+        {
+            "code": 0,
+            "knowledge_list": [{"media_id": "pdf_two"}],
+            "next_cursor": "p3",
+        },
+        {
+            "code": 0,
+            "knowledge_list": [
+                {"media_type": 99, "folder_info": {"folder_id": "folder-b", "name": "B"}},
+            ],
+        },
+    ])
+    seen = []
+
+    def open_json(request):
+        seen.append(json.loads(request.data))
+        return next(pages), {}
+
+    client._open_json = open_json
+    items = client.list_items("root", folders_only=True)
+    assert [item["folder_info"]["folder_id"] for item in items] == ["folder-a"]
+    assert len(seen) == 2
+
+
+def test_list_items_folders_only_respects_max_pages():
+    client = ImaPureClient(
+        ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
+    )
+    client._token = lambda: "access"
+    pages = 0
+
+    def open_json(request):
+        nonlocal pages
+        pages += 1
+        return {
+            "code": 0,
+            "knowledge_list": [
+                {"media_type": 99, "folder_info": {"folder_id": f"folder-{pages}", "name": str(pages)}},
+            ],
+            "next_cursor": f"p{pages}",
+        }, {}
+
+    client._open_json = open_json
+    items = client.list_items("root", folders_only=True, max_pages=2)
+    assert len(items) == 2
+    assert pages == 2
+
+
 def test_service_keeps_manifest_when_later_folder_page_is_malformed(tmp_path, monkeypatch):
     from app import ima_documents
 

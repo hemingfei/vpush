@@ -732,7 +732,7 @@ def test_documents_page_slices_search_hits(tmp_path):
     assert [item["media_id"] for item in store.documents(query="锂电", groups=(banking,), include_body=False)] == ["file_2", "file_1", "file_0"]
 
 
-def test_list_ima_documents_defaults_to_latest_day_and_pages_search(tmp_path, monkeypatch):
+def test_list_ima_documents_defaults_to_latest_stream_and_pages_search(tmp_path, monkeypatch):
     monkeypatch.setenv("DAV_UI_ONLY", "1")
     client = TestClient(create_app(db_path=tmp_path / "kb-day.sqlite"))
     admin_headers = _headers(client, "kb_day_admin", "KBDAY01", admin=True)
@@ -749,11 +749,15 @@ def test_list_ima_documents_defaults_to_latest_day_and_pages_search(tmp_path, mo
     latest = client.get("/api/ima-documents", headers=admin_headers)
     assert latest.status_code == 200
     body = latest.json()
-    assert body["day"] == "0826"
-    assert [item["media_id"] for item in body["items"]] == ["file_new"]
+    assert body["day"] == ""
+    assert {item["media_id"] for item in body["items"]} == {"file_old", "file_new", "file_hit", "file_unknown"}
+    assert body["items"][0]["media_id"] == "file_new"
     assert "abstract" not in body["items"][0]
     assert "cover_url" not in body["items"][0]
     assert body["has_more"] is False
+    paged = client.get("/api/ima-documents?limit=2&offset=0", headers=admin_headers).json()
+    assert paged["has_more"] is True
+    assert len(paged["items"]) == 2
     assert body["days"] == ["unknown", "0826", "0810"]
     assert "unknown" in body["days"]
 
@@ -921,7 +925,7 @@ def test_admin_ima_discover_and_folder_listing(tmp_path, monkeypatch):
         def discover_groups(self):
             return (ImaGroupConfig("kb-new", "新知识库", "kb-new", "root-new"),)
 
-        def list_items(self, folder_id):
+        def list_items(self, folder_id, **_kwargs):
             assert self.group.knowledge_base_id == "kb-new"
             if self.fail_listing:
                 raise RuntimeError('Cookie: SID=folder-cookie-secret; Path=/; {"access_token":"folder-json-secret"}')

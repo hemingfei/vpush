@@ -77,6 +77,7 @@ from .fetchers.zsxq import (
     zsxq_cache_stats,
 )
 from .ima_documents import (
+    IMA_FOLDER_LIST_MAX_PAGES,
     IMA_MOUNT_FOLDER_ID_MAX,
     IMA_PURE_GROUPS_KEY,
     IMA_PURE_INTERVAL_KEY,
@@ -94,7 +95,6 @@ from .ima_documents import (
     purge_ima_document_tags,
 )
 from .ima_kb import (
-    _DAY_KEY,
     attach_catalog_acl,
     attach_catalog_stats,
     catalog as ima_kb_catalog,
@@ -2503,7 +2503,8 @@ def create_api_router(
         query = q.strip()
         tag = tag.strip()
         search_mode = bool(query or tag)
-        if search_mode:
+        requested = day.strip()
+        if search_mode or not requested:
             effective_day = ""
             matched = ima_documents.store.documents(
                 query, "", group_id=group, groups=groups, tag=tag, include_body=False
@@ -2513,21 +2514,9 @@ def create_api_router(
             has_more = page_offset + page_limit < len(matched)
             items = matched[page_offset:page_offset + page_limit]
         else:
-            requested = day.strip()
-            days = facets["days"]
-            if requested:
-                effective_day = requested
-            else:
-                effective_day = next(
-                    (item for item in days if _DAY_KEY.fullmatch(item)),
-                    next(iter(days), ""),
-                )
-            items = (
-                ima_documents.store.documents(
-                    "", effective_day, group_id=group, groups=groups, include_body=False
-                )
-                if effective_day
-                else []
+            effective_day = requested
+            items = ima_documents.store.documents(
+                "", effective_day, group_id=group, groups=groups, include_body=False
             )
             has_more = False
             page_offset = 0
@@ -2736,7 +2725,11 @@ def create_api_router(
             raise HTTPException(status_code=400, detail="根文件夹 ID 格式无效")
         try:
             client = ImaPureClient(ima_documents.config(), group=group)
-            raw_items = client.list_items(actual_parent_id)
+            raw_items = client.list_items(
+                actual_parent_id,
+                folders_only=True,
+                max_pages=IMA_FOLDER_LIST_MAX_PAGES,
+            )
         except Exception as exc:  # noqa: BLE001 - folder endpoint must return a safe error
             detail = _safe_error(exc)
             raise HTTPException(status_code=502, detail=f"IMA 文件夹读取失败: {detail}") from None
