@@ -1029,7 +1029,7 @@ function knowledgeLibRowHtml(group, selected, mode) {
     </div>`;
   }
   const on = id === String(selected || "");
-  const unsub = !state.user?.is_admin && on
+  const unsub = !state.user?.is_admin
     ? `<button type="button" class="btn-ghost kb-lib-unsub" data-group="${escapeHtml(id)}" data-name="${escapeHtml(name)}" onclick="event.stopPropagation();unsubscribeKnowledge(this.dataset.group, this)">退订</button>`
     : "";
   return `<div class="kb-lib-row${on ? " is-selected" : ""}${unsub ? " has-unsub" : ""}">
@@ -1046,10 +1046,11 @@ function knowledgeSourceControlsHtml(selectedGroup = "") {
     id: String(group.id || ""),
     name: group.name || group.id,
   }))];
-  const availableHtml = available.length
-    ? `<details class="ima-source-manage"><summary>管理订阅</summary><div class="ima-source-menu">${available.map((group) => knowledgeLibRowHtml(group, selected, "available")).join("")}</div></details>`
+  const canManage = available.length || (!state.user?.is_admin && subscribed.length);
+  const manageHtml = canManage
+    ? `<details class="ima-source-manage"><summary>管理订阅</summary><div class="ima-source-menu">${subscribed.map((group) => knowledgeLibRowHtml(group, selected, "subscribed")).join("")}${available.map((group) => knowledgeLibRowHtml(group, selected, "available")).join("")}</div></details>`
     : "";
-  return `<label class="ima-report-source"><span class="sr-only">资料源</span><select id="ima-doc-source" aria-label="资料源" onchange="selectImaDocumentGroup(this.value)"><option value=""${selected ? "" : " selected"}>全部研报</option>${options.filter((group) => group.id).map((group) => `<option value="${escapeHtml(group.id)}"${group.id === selected ? " selected" : ""}>${escapeHtml(group.name)}</option>`).join("")}</select></label>${availableHtml}`;
+  return `<label class="ima-report-source"><span class="sr-only">资料源</span><select id="ima-doc-source" aria-label="资料源" onchange="selectImaDocumentGroup(this.value)"><option value=""${selected ? "" : " selected"}>全部研报</option>${options.filter((group) => group.id).map((group) => `<option value="${escapeHtml(group.id)}"${group.id === selected ? " selected" : ""}>${escapeHtml(group.name)}</option>`).join("")}</select></label>${manageHtml}`;
 }
 
 function openKnowledgeGroup(groupId) {
@@ -1143,7 +1144,7 @@ async function renderKnowledge(seq, encodedMediaId = "") {
         list.innerHTML = `${controls}${emptyState(
           "还没有订阅知识库",
           available.length
-            ? `<div><p class="section-meta">在上方可订阅里点订阅</p></div>`
+            ? `<div><p class="section-meta">在管理订阅里点订阅</p></div>`
             : `<div><p class="section-meta">找管理员在用户设置里勾选知识库后再来订阅</p></div>`
         )}`;
         if (!available.length) {

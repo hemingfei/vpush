@@ -2356,6 +2356,7 @@ def test_ima_source_filter_is_compact_and_subscription_management_survives():
     assert "selectImaDocumentGroup(this.value)" in controls
     assert "ima-source-manage" in controls
     assert "knowledgeLibRowHtml" in controls
+    assert 'knowledgeLibRowHtml(group, selected, "subscribed")' in controls
     assert "subscribeKnowledge" in src
     assert "unsubscribeKnowledge" in src
 
