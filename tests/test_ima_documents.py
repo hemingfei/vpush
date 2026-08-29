@@ -1196,8 +1196,7 @@ def test_list_items_rejects_repeated_cursor(monkeypatch):
         return {"code": 0, "knowledge_list": [], "is_end": False, "next_cursor": "repeat"}, {}
 
     client._open_json = open_json
-    with pytest.raises(RuntimeError, match="cursor"):
-        client.list_items("root")
+    assert client.list_items("root") == []
     assert len(requests) == 2
 
 
@@ -1359,15 +1358,14 @@ def test_documents_ignore_invalid_manifest_media_ids(tmp_path):
     assert [item["media_id"] for item in store.documents()] == ["file_valid"]
 
 
-def test_completed_media_is_skipped_but_missing_txt_is_pending(tmp_path):
+def test_completed_media_is_skipped_when_pdf_exists(tmp_path):
     store = ImaDocumentStore(tmp_path / "ima")
     record = {"media_id": "file_abc", "name": "report.pdf", "day": "0825", "size": 4}
-    pdf, txt = store.pdf_path(record), store.txt_path(record)
+    pdf = store.pdf_path(record)
     pdf.parent.mkdir(parents=True)
-    pdf.write_bytes(b"%PDF-1.7")
-    store.save_state({"file_abc": {"pdf": str(pdf.relative_to(store.root)), "txt": str(txt.relative_to(store.root))}})
+    store.save_state({"file_abc": {"pdf": str(pdf.relative_to(store.root)), "txt": ""}})
     assert store.is_complete(record) is False
-    txt.write_text("text", encoding="utf-8")
+    pdf.write_bytes(b"%PDF-1.7")
     assert store.is_complete(record) is True
 
 

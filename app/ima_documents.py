@@ -1508,14 +1508,12 @@ class ImaDocumentStore:
         state = state if state is not None else self.load_state()
         item = self._state_item(state, record)
         pdf_rel = item.get("pdf")
-        txt_rel = item.get("txt")
-        if not (isinstance(pdf_rel, str) and pdf_rel and isinstance(txt_rel, str) and txt_rel):
+        if not (isinstance(pdf_rel, str) and pdf_rel):
             return False
         if not self.archive_readable():
             return True
         pdf = self._state_path(pdf_rel)
-        txt = self._state_path(txt_rel)
-        return bool(pdf and txt and pdf.is_file() and txt.is_file())
+        return bool(pdf and pdf.is_file())
 
     def catalog_entries(
         self,
@@ -2189,7 +2187,6 @@ class ImaDocumentService:
             state_key = self.store.state_key(record)
             occupied = self.store._occupied_pdfs(state, skip_media_id=state_key)
             pdf = self.store.pdf_path(record, occupied=occupied)
-            txt = self.store.txt_path(record, occupied=occupied)
             try:
                 pdf.parent.mkdir(parents=True, exist_ok=True)
                 if pdf.parent.is_symlink():
@@ -2204,7 +2201,6 @@ class ImaDocumentService:
                     size, md5 = result["size"], result["md5"]
                 else:
                     size, md5 = client._pdf_info(pdf)
-                chars = convert_pdf(pdf, txt)
                 key = self.store.state_key(record)
                 state[key] = {
                     "group_id": group.id,
@@ -2212,14 +2208,14 @@ class ImaDocumentService:
                     "day": record.get("day") or "unknown",
                     "name": record.get("name") or media_id,
                     "pdf": str(pdf.relative_to(self.store.archive_root)),
-                    "txt": str(txt.relative_to(self.store.archive_root)),
+                    "txt": "",
                     "size": size,
                     "md5": md5,
-                    "chars": chars,
+                    "chars": 0,
                     "downloaded_at": datetime.now(UTC).isoformat(),
                 }
                 try:
-                    state[key]["tags"] = _tag_document(self.db, record, txt)
+                    state[key]["tags"] = _tag_document(self.db, record, None)
                 except Exception:
                     logger.exception("IMA document tag failed media=%s", media_id[:32])
                 self.store.save_state(state)
