@@ -1231,7 +1231,7 @@ def test_ima_pdf_download_checks_session_owner_before_every_side_effect():
     assert "const sessionGeneration = imaMountState.sessionGeneration" in body[:fetch]
     for side_effect in side_effects:
         assert owner_guard < body.index(side_effect, fetch), side_effect
-    assert "const group = routeQuery().get(\"group\") || state.imaDocumentsGroup || \"\";" in body
+    assert "imaReaderDocumentGroup()" in body
 
 
 def test_ima_pdf_download_timeout_revoke_rechecks_session_owner():
@@ -2762,15 +2762,18 @@ def test_ima_document_reader_preserves_group_context_and_metadata():
     assert "state.imaDocumentsGroup" in reader
     assert "state.imaDocumentsQuery" in reader
     assert "state.imaDocumentsDay" in reader
-    assert "imaDocumentsRoute(group, query, day, tag)" in reader
+    assert "imaDocumentsRoute(listGroup, query, day, tag)" in reader
     assert "item.group_name" in reader
     assert "item.day" in reader
     assert "ima-reader-day" in reader
+    assert "ima-reader-toolbar" in reader
+    assert "ima-reader-info" in reader
+    assert "<details open" in reader
     assert "查看 PDF" not in reader
     assert "下载" in reader
+    assert "btn-normal ima-reader-download" in reader
     assert "imaDisplayTitle" in reader and "item.size" in reader
     assert "ima-reader-abstract" in reader
-    assert "ima-reader-copy" in reader
     assert "ima-reader-empty" in reader
     assert "还没有预览文件" in reader
     assert "回列表" not in reader
@@ -2783,12 +2786,14 @@ def test_ima_document_reader_requests_keep_current_group_for_all_endpoints():
     reader = _fn_body("renderImaDocument")
     pdf = _fn_body("loadImaPdf")
     download = _fn_body("downloadImaPdf")
-    assert "const groupQuery = group ?" in reader
+    assert "const groupQuery = documentGroup ?" in reader
     assert "${encodeURIComponent(mediaId)}${groupQuery}" in reader
     assert "${encodeURIComponent(mediaId)}/translate${groupQuery}" in reader
     assert 'method: "POST"' in reader
+    assert "imaReaderDocumentGroup()" in pdf
     assert "const groupQuery = group ?" in pdf
     assert "${encodeURIComponent(mediaId)}/pdf${groupQuery}" in pdf
+    assert "imaReaderDocumentGroup()" in download
     assert "const groupQuery = group ?" in download
     assert "pdf?download=1${groupQuery}" in download
     assert "${encodeURIComponent(mediaId)}${detailQuery}" in download
@@ -2810,8 +2815,9 @@ def test_ima_document_reader_route_preserves_list_filters_without_inline_query_i
     assert "_imaDocumentRoute(item.media_id)" not in row
     assert "imaDocumentReaderRoute(id, groupId)" in opener
     assert "history.pushState" in opener
-    assert "renderImaDocument(routeRenderSeq, id)" in opener
-    assert "++routeRenderSeq" not in opener
+    assert "++routeRenderSeq" in opener
+    assert "mountKnowledgeReaderShell" in opener
+    assert "renderImaDocument(seq, id)" in opener
 
 
 def test_ima_document_row_group_scope_is_escaped_and_reaches_reader_route():
@@ -2824,9 +2830,9 @@ def test_ima_document_row_group_scope_is_escaped_and_reaches_reader_route():
     assert 'data-group-id="${escapeHtml(item.group_id || "")}"' in row
     assert row.count("this.dataset.groupId") >= 2
     assert "function imaDocumentReaderRoute(mediaId, groupId = \"\")" in src
-    assert 'const group = groupId || routeQuery().get("group") || state.imaDocumentsGroup || "";' in route
+    assert 'params.set("doc_group", groupId)' in route
     assert "imaDocumentsRoute(" in route
-    assert route.index("group,") < route.index("state.imaDocumentsQuery")
+    assert route.index("listGroup") < route.index("state.imaDocumentsQuery")
     assert "function openImaDocument(mediaId, groupId = \"\", replace = false)" in src
     assert "imaDocumentReaderRoute(id, groupId)" in opener
 
@@ -2860,7 +2866,7 @@ def test_ima_knowledge_subscription_callbacks_require_current_session_owner():
 def test_ima_document_reader_backroute_uses_detail_group_when_url_has_none():
     """直接打开阅读页时，详情返回的群组 ID 也能恢复筛选列表。"""
     reader = _fn_body("renderImaDocument")
-    assert "let backRoute = imaDocumentsRoute(group, query, day, tag)" in reader
+    assert "let backRoute = imaDocumentsRoute(listGroup, query, day, tag)" in reader
     assert "item.group_id" in reader
     assert "backRoute = imaDocumentsRoute(item.group_id, query, day, tag)" in reader
     assert reader.index("const item = await api") < reader.index("backRoute = imaDocumentsRoute(item.group_id, query, day, tag)")
@@ -2973,6 +2979,56 @@ def test_ima_report_render_reuses_mounted_header_and_cancels_stale_search():
     assert "_imaSearchComposing" in queued or "isComposing" in queued
 
 
+def test_ima_reader_captures_and_restores_the_loaded_result_set():
+    src = APP_JS.read_text()
+    capture = _fn_body("captureImaListSnapshot")
+    current = _fn_body("currentImaListSnapshot")
+    restore = _fn_body("restoreImaListSnapshot")
+    opener = _fn_body("openImaDocument")
+
+    assert "_imaItems.map" in capture
+    assert "scrollTop" in capture
+    assert "state.imaDocumentsHasMore" in capture
+    assert "location.pathname + location.search" in capture
+    assert "captureImaListSnapshot" in opener
+    assert "snapshot.route" in current
+    assert "location.pathname + location.search" in current
+    assert "requestAnimationFrame" in restore
+    assert "scrollTop" in restore
+    assert "api(" not in restore
+
+
+def test_ima_reader_has_one_app_download_and_result_neighbors():
+    reader = _fn_body("renderImaDocument")
+    nav = _fn_body("imaReaderNavHtml")
+    back = _fn_body("backFromImaReader")
+
+    assert "ima-reader-toolbar" in reader
+    assert "backFromImaReader" in reader
+    assert "btn-normal ima-reader-download" in reader
+    assert "<details open" in reader
+    assert "imaReaderNavHtml" in reader
+    assert "openImaDocument" in nav
+    assert ", true)" in nav
+    assert "history.back()" in back
+    assert "go(fallbackRoute)" in back
+    assert "downloadImaPdf" not in _fn_body("showImaPdfFail")
+
+
+def test_ima_reader_separates_document_group_from_list_source_filter():
+    route = _fn_body("imaDocumentReaderRoute")
+    reader = _fn_body("renderImaDocument")
+    group = _fn_body("imaReaderDocumentGroup")
+
+    assert 'params.set("doc_group", groupId)' in route
+    assert 'currentQuery.get("group")' in reader
+    assert 'currentQuery.get("doc_group")' in reader
+    assert "imaDocumentsRoute(listGroup, query, day, tag)" in reader
+    assert 'routeQuery().get("doc_group")' in group
+    assert "imaReaderDocumentGroup()" in _fn_body("loadImaPdf")
+    assert "imaReaderDocumentGroup()" in _fn_body("downloadImaPdf")
+
+
 def test_ima_day_picker_restricts_to_available_days():
     """日期菜单只列出有文档的 MMDD，点选走 selectImaDocumentsDay。"""
     src = APP_JS.read_text()
@@ -2992,7 +3048,7 @@ def test_ima_day_picker_restricts_to_available_days():
     assert "imaListTitle" in row
     assert "white-space: nowrap" in STYLE_CSS.read_text() or "ellipsis" in STYLE_CSS.read_text()
     assert "<details" in reader
-    assert "navpanes=0" in _fn_body("loadImaPdf")
+    assert "navpanes=0" not in _fn_body("loadImaPdf")
 
 
 def test_ima_document_list_hides_tag_rail_but_keeps_tag_filtering():

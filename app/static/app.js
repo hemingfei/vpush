@@ -335,31 +335,39 @@ function _imaDocumentRoute(mediaId) {
 }
 
 function imaDocumentReaderRoute(mediaId, groupId = "") {
-  const group = groupId || routeQuery().get("group") || state.imaDocumentsGroup || "";
-  const listRoute = imaDocumentsRoute(
-    group,
+  const listGroup = routeQuery().get("group") || state.imaDocumentsGroup || "";
+  const listRoute = normalizeRoute(imaDocumentsRoute(
+    listGroup,
     state.imaDocumentsQuery,
     state.imaDocumentsDay,
     state.imaDocumentsTag
-  );
-  const queryStart = listRoute.indexOf("?");
-  const query = queryStart >= 0 ? listRoute.slice(queryStart) : "";
-  return `${_imaDocumentRoute(mediaId)}${query}`;
+  ));
+  const params = new URLSearchParams(listRoute.split("?")[1] || "");
+  if (groupId) params.set("doc_group", groupId);
+  const query = params.toString();
+  return `${_imaDocumentRoute(mediaId)}${query ? `?${query}` : ""}`;
+}
+
+function imaReaderDocumentGroup() {
+  return routeQuery().get("doc_group")
+    || routeQuery().get("group")
+    || state.imaDocumentsGroup
+    || "";
 }
 
 function openImaDocument(mediaId, groupId = "", replace = false) {
   const id = String(mediaId || "");
   if (!id) return;
+  const listWasOpen = !!$("#ima-report-page");
+  if (listWasOpen) captureImaListSnapshot(id, groupId);
   const url = normalizeRoute(imaDocumentReaderRoute(id, groupId));
   if (location.pathname + location.search !== url) {
     if (replace) history.replaceState(null, "", url);
     else history.pushState(null, "", url);
   }
-  if ($("#kb-desk")) {
-    renderImaDocument(routeRenderSeq, id);
-    return;
-  }
-  router();
+  mountKnowledgeReaderShell();
+  const seq = ++routeRenderSeq;
+  renderImaDocument(seq, id);
 }
 
 function clearSessionCaches() {
@@ -686,6 +694,7 @@ async function renderMore(seq) {
 }
 
 const _imaItems = [];
+let _imaListSnapshot = null;
 let _imaOffset = 0;
 let _imaListSeq = 0;
 let _imaReaderSeq = 0;
@@ -868,6 +877,59 @@ function imaDocumentsRoute(group, query, day, tag) {
   if (selectedTag) params.set("tag", selectedTag);
   const routeQueryString = params.toString();
   return `knowledge${routeQueryString ? `?${routeQueryString}` : ""}`;
+}
+
+function imaDocumentKey(mediaId, groupId = "") {
+  return `${String(groupId || "")}\u0000${String(mediaId || "")}`;
+}
+
+function captureImaListSnapshot(selectedMediaId = "", selectedGroupId = "") {
+  const body = $("#ima-docs-body");
+  if (!body) return;
+  _imaListSnapshot = {
+    route: location.pathname + location.search,
+    items: _imaItems.map((item) => ({ ...item, tags: [...(item.tags || [])] })),
+    hasMore: !!state.imaDocumentsHasMore,
+    days: [...(state.imaDocumentsDays || [])],
+    tagCounts: { ..._imaTagCounts },
+    documentCount: _imaDocumentCount,
+    scrollTop: body.scrollTop,
+    selectedKey: imaDocumentKey(selectedMediaId, selectedGroupId),
+  };
+}
+
+function currentImaListSnapshot() {
+  const snapshot = _imaListSnapshot;
+  return snapshot && snapshot.route === location.pathname + location.search
+    ? snapshot
+    : null;
+}
+
+function restoreImaListSnapshot(snapshot, body) {
+  if (!snapshot || !body) return false;
+  _imaItems.length = 0;
+  _imaItems.push(...snapshot.items.map((item) => ({ ...item, tags: [...(item.tags || [])] })));
+  state.imaDocumentsHasMore = snapshot.hasMore;
+  state.imaDocumentsDays = [...snapshot.days];
+  _imaTagCounts = { ...snapshot.tagCounts };
+  _imaDocumentCount = snapshot.documentCount;
+  const more = snapshot.hasMore
+    ? `<div class="ima-docs-more"><button id="ima-docs-more" type="button" class="btn-ghost" onclick="loadImaDocumentsMore()">加载更多</button></div>`
+    : "";
+  body.innerHTML = `<div class="ima-doc-list">${snapshot.items.map((item) => imaDocumentRow(item)).join("")}</div>${more}`;
+  requestAnimationFrame(() => {
+    body.scrollTop = snapshot.scrollTop;
+    const row = [...body.querySelectorAll(".ima-doc-row")].find((item) => imaDocumentKey(item.dataset.mediaId, item.dataset.groupId) === snapshot.selectedKey);
+    if (row) {
+      row.classList.add("is-selected");
+      row.setAttribute("aria-current", "true");
+    }
+    if (snapshot.focusSearch) {
+      snapshot.focusSearch = false;
+      $("#ima-doc-q")?.focus();
+    }
+  });
+  return true;
 }
 
 function replaceImaDocumentsRoute(path) {
@@ -1243,6 +1305,39 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
   </header>
   <div id="ima-docs-body" class="ima-report-body">${imaReportSkeletonHtml()}</div>`;
   }
+  const body = $("#ima-docs-body");
+  const snapshot = currentImaListSnapshot();
+  if (snapshot && body) {
+    const tagSelect = $("#ima-doc-tag");
+    const uniqueTags = Object.keys(snapshot.tagCounts || {});
+    if (tag && !uniqueTags.includes(tag)) uniqueTags.unshift(tag);
+    if (tagSelect) {
+      tagSelect.innerHTML = `<option value="">全部标签</option>${uniqueTags.map((value) => {
+        const n = snapshot.tagCounts[value];
+        return `<option value="${escapeHtml(value)}" ${value === tag ? "selected" : ""}>${escapeHtml(value)}${n ? `（${n}）` : ""}</option>`;
+      }).join("")}`;
+      if (uniqueTags.length || tag) tagSelect.removeAttribute("hidden");
+      else tagSelect.hidden = true;
+    }
+    const navSlot = $("#ima-doc-day-nav-slot");
+    if (navSlot) {
+      closeImaDayPicker();
+      navSlot.innerHTML = imaDocumentsDayNavHtml(searchMode ? "" : day, snapshot.days);
+    }
+    restoreImaListSnapshot(snapshot, body);
+    _imaOffset = _imaItems.length;
+    const title = $("#ima-doc-title");
+    const meta = $("#ima-doc-meta");
+    if (title) title.textContent = "最新研报";
+    if (meta) {
+      meta.textContent = query || tag
+        ? `${snapshot.items.length}${snapshot.hasMore ? "+" : ""} 条结果`
+        : `${Number(snapshot.documentCount) || snapshot.items.length} 份`;
+    }
+    syncImaListChrome({ emptyLib: !snapshot.days.length && !searchMode, hasTags: uniqueTags.length > 0 || !!tag });
+    syncImaDocumentsFilterStatus();
+    return;
+  }
   try {
     const params = new URLSearchParams();
     if (query) params.set("q", query);
@@ -1444,6 +1539,30 @@ async function loadImaDocumentsMore() {
   }
 }
 
+function backFromImaReader(fallbackRoute, focusSearch = false) {
+  const snapshot = _imaListSnapshot;
+  if (snapshot && snapshot.route === normalizeRoute(fallbackRoute)) {
+    if (focusSearch) snapshot.focusSearch = true;
+    history.back();
+    return;
+  }
+  go(fallbackRoute);
+}
+
+function imaReaderNavHtml(mediaId, groupId = "") {
+  const snapshot = _imaListSnapshot;
+  if (!snapshot || snapshot.items.length < 2) return "";
+  const current = imaDocumentKey(mediaId, groupId);
+  const index = snapshot.items.findIndex((item) => imaDocumentKey(item.media_id, item.group_id) === current);
+  if (index < 0) return "";
+  const prev = snapshot.items[index - 1];
+  const next = snapshot.items[index + 1];
+  const button = (item, className, label) => item
+    ? `<button type="button" class="${className}" onclick="openImaDocument('${escapeHtml(item.media_id)}', '${escapeHtml(item.group_id || "")}', true)">${label} <span>${escapeHtml(imaListTitle(item.name))}</span></button>`
+    : "";
+  return `<nav class="ima-reader-nav" aria-label="同一结果集">${button(prev, "ima-reader-prev", "上一份")}${button(next, "ima-reader-next", "下一份")}</nav>`;
+}
+
 async function renderImaDocument(seq, mediaId) {
   if (!$("#kb-reader")) {
     await renderKnowledge(seq, encodeURIComponent(mediaId));
@@ -1452,18 +1571,19 @@ async function renderImaDocument(seq, mediaId) {
   const readerSeq = ++_imaReaderSeq;
   clearImaPdfUrl();
   const currentQuery = routeQuery();
-  const group = currentQuery.get("group") || state.imaDocumentsGroup || "";
+  const listGroup = currentQuery.get("group") || state.imaDocumentsGroup || "";
+  const documentGroup = currentQuery.get("doc_group") || listGroup;
   const query = currentQuery.get("q") || state.imaDocumentsQuery || "";
   const day = currentQuery.get("day") || state.imaDocumentsDay || "";
   const tag = currentQuery.get("tag") || state.imaDocumentsTag || "";
   state.imaDocumentsTag = tag;
-  const groupQuery = group ? `?group=${encodeURIComponent(group)}` : "";
-  let backRoute = imaDocumentsRoute(group, query, day, tag);
+  const groupQuery = documentGroup ? `?group=${encodeURIComponent(documentGroup)}` : "";
+  let backRoute = imaDocumentsRoute(listGroup, query, day, tag);
   setPageTitle("知识库");
   $("#kb-reader").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
   try {
     const item = await api(`/api/ima-documents/${encodeURIComponent(mediaId)}${groupQuery}`);
-    if (!currentQuery.has("group") && item.group_id) {
+    if (!currentQuery.has("group") && !currentQuery.has("doc_group") && item.group_id) {
       backRoute = imaDocumentsRoute(item.group_id, query, day, tag);
     }
     if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
@@ -1475,10 +1595,11 @@ async function renderImaDocument(seq, mediaId) {
       : "";
     const abstractText = item.abstract_zh || item.abstract || "";
     const abstractHtml = abstractText
-      ? `<details class="ima-reader-abstract"><summary>摘要</summary><p id="ima-reader-abstract">${escapeHtml(abstractText)}</p></details>`
+      ? `<details open class="ima-reader-abstract"><summary>摘要</summary><p id="ima-reader-abstract">${escapeHtml(abstractText)}</p></details>`
       : "";
-    const pdfActions = item.has_pdf
-      ? `<div class="toolbar ima-reader-actions"><button type="button" class="btn-ghost" onclick="downloadImaPdf('${escapeHtml(mediaId)}')">${DOWNLOAD_ICON}<span>下载 PDF</span></button></div>`
+    const backLabel = _imaListSnapshot ? `返回${_imaListSnapshot.items.length}${_imaListSnapshot.hasMore ? "+" : ""}条结果` : "返回研报列表";
+    const download = item.has_pdf
+      ? `<button type="button" class="btn-normal ima-reader-download" onclick="downloadImaPdf('${escapeHtml(mediaId)}')">${DOWNLOAD_ICON}<span>下载 PDF</span></button>`
       : "";
     const pdfPanel = item.has_pdf
       ? `<div id="ima-pdf-panel" class="ima-pdf-panel" aria-busy="true"><p class="ima-reader-status" role="status">正在打开预览…</p><iframe id="ima-pdf-frame" title="PDF 预览" hidden></iframe></div>`
@@ -1487,13 +1608,19 @@ async function renderImaDocument(seq, mediaId) {
     const sizeMeta = sizeLine ? `<span class="ima-reader-meta-item">${escapeHtml(sizeLine)}</span>` : "";
     const fileMetaHtml = `<div class="section-meta ima-reader-filemeta">${tickerMeta}${dayContext}${sizeMeta}</div>`;
     $("#kb-reader").innerHTML = `
-      <section class="ima-reader">
-        <header class="section-head ima-reader-head">
-          <div class="ima-reader-copy"><h2 class="section-title ima-reader-title">${escapeHtml(imaDisplayTitle(item.name))}</h2>${fileMetaHtml}${abstractHtml}</div>
-          ${pdfActions}
+      <article class="ima-reader">
+        <header class="ima-reader-toolbar">
+          <button type="button" class="btn-ghost ima-reader-back" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back)">返回 <span>${escapeHtml(backLabel)}</span></button>
+          <div class="ima-reader-actions"><button type="button" class="icon-btn" aria-label="返回搜索" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back, true)">${SEARCH_ICON}</button>${download}</div>
         </header>
+        <section class="ima-reader-info">
+          <h2 class="ima-reader-title">${escapeHtml(imaDisplayTitle(item.name))}</h2>
+          ${fileMetaHtml}
+          ${abstractHtml}
+        </section>
         ${pdfPanel}
-      </section>`;
+        ${imaReaderNavHtml(mediaId, item.group_id || documentGroup)}
+      </article>`;
     if (item.has_pdf) loadImaPdf(mediaId, readerSeq);
     if (item.needs_translation) {
       try {
@@ -1527,7 +1654,7 @@ function showImaPdfFail(mediaId, seq, readerSeq) {
 
 async function loadImaPdf(mediaId, readerSeq) {
   const seq = routeRenderSeq;
-  const group = routeQuery().get("group") || state.imaDocumentsGroup || "";
+  const group = imaReaderDocumentGroup();
   const groupQuery = group ? `?group=${encodeURIComponent(group)}` : "";
   try {
     const blob = await apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/pdf${groupQuery}`);
@@ -1545,7 +1672,7 @@ async function loadImaPdf(mediaId, readerSeq) {
     if (frame && panel) {
       const status = panel.querySelector(".ima-reader-status");
       if (status) status.remove();
-      frame.src = `${window._imaPdfUrl}#navpanes=0&toolbar=0`;
+      frame.src = window._imaPdfUrl;
       frame.hidden = false;
       panel.hidden = false;
       panel.removeAttribute("aria-busy");
@@ -1573,7 +1700,7 @@ async function downloadImaPdf(mediaId) {
   const routeSeq = routeRenderSeq;
   const token = state.token;
   const sessionGeneration = imaMountState.sessionGeneration;
-  const group = routeQuery().get("group") || state.imaDocumentsGroup || "";
+  const group = imaReaderDocumentGroup();
   const groupQuery = group ? `&group=${encodeURIComponent(group)}` : "";
   const detailQuery = group ? `?group=${encodeURIComponent(group)}` : "";
   try {
