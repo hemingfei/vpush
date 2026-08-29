@@ -1332,7 +1332,8 @@ def test_ima_collector_sync_unknown_group_404(tmp_path, monkeypatch):
         headers=headers,
         json={"group_id": "missing"},
     )
-    assert response.status_code in (404, 409, 400)
+    assert response.status_code == 404
+    assert response.json()["detail"] == "知识库不存在"
 
 
 def test_ima_collector_sync_unmounted_group_409(tmp_path, monkeypatch):
