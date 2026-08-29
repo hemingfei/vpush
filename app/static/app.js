@@ -1087,7 +1087,11 @@ function searchImaDocuments() {
 
 function refreshImaDocuments() {
   const seq = ++routeRenderSeq;
-  renderImaDocuments(seq);
+  renderImaDocuments(seq, { keepOld: true });
+}
+
+function imaReportRefreshErrorHtml(message) {
+  return `<div class="ima-report-refresh-error" role="alert"><span>最新研报暂时无法更新：${escapeHtml(message)}</span><button type="button" class="btn-ghost" onclick="refreshImaDocuments()">重试</button></div>`;
 }
 
 function openKnowledgeLatest(groupId, mediaId) {
@@ -1251,7 +1255,7 @@ async function renderKnowledge(seq, encodedMediaId = "") {
   }
 }
 
-async function renderImaDocuments(seq, encodedMediaId = "") {
+async function renderImaDocuments(seq, { keepOld = false } = {}) {
   stopImaDocumentsAutoLoad();
   ensureKnowledgePhoneWatch();
   if (isPhoneShell()) {
@@ -1259,9 +1263,11 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     return;
   }
   if (!$("#ima-report-page")) {
-    await renderKnowledge(seq, encodedMediaId);
+    await renderKnowledge(seq);
     return;
   }
+  const previousBody = $("#ima-docs-body");
+  const oldHtml = keepOld ? previousBody?.innerHTML || "" : "";
   _imaListSeq += 1;
   _imaItems.length = 0;
   _imaOffset = 0;
@@ -1291,7 +1297,7 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     const source = $("#ima-doc-source");
     if (source) source.value = selectedGroup;
     const body = $("#ima-docs-body");
-    if (body) body.innerHTML = imaReportSkeletonHtml();
+    if (body && !keepOld) body.innerHTML = imaReportSkeletonHtml();
   } else {
     _imaSearchComposing = false;
     const sourceControls = knowledgeSourceControlsHtml(selectedGroup);
@@ -1305,7 +1311,7 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     <div id="ima-doc-filter-chips" class="ima-doc-filter-chips"></div>
     <div class="ima-report-columns" aria-hidden="true"><span>日期</span><span>标题</span><span>资料源</span></div>
   </header>
-  <div id="ima-docs-body" class="ima-report-body">${imaReportSkeletonHtml()}</div>`;
+  <div id="ima-docs-body" class="ima-report-body">${keepOld && oldHtml ? oldHtml : imaReportSkeletonHtml()}</div>`;
   }
   const body = $("#ima-docs-body");
   const snapshot = currentImaListSnapshot();
@@ -1338,8 +1344,10 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     }
     syncImaListChrome({ emptyLib: !snapshot.days.length && !searchMode, hasTags: uniqueTags.length > 0 || !!tag });
     syncImaDocumentsFilterStatus();
+    $("#ima-report-page")?.removeAttribute("aria-busy");
     return;
   }
+  $("#ima-report-page")?.setAttribute("aria-busy", "true");
   try {
     const params = new URLSearchParams();
     if (query) params.set("q", query);
@@ -1353,6 +1361,7 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     }
     const data = await api(`/api/ima-documents?${params.toString()}`);
     if (!routeStillActive(seq)) return;
+    $("#ima-report-page")?.removeAttribute("aria-busy");
     const groups = Array.isArray(data.groups) ? data.groups : [];
     const items = Array.isArray(data.items) ? data.items : [];
     const selectedGroupInfo = groups.find((group) => String(group.id || "") === selectedGroup);
@@ -1407,8 +1416,15 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     body.innerHTML = `<div class="ima-doc-list">${items.map((item) => imaDocumentRow(item)).join("")}</div>${more}`;
   } catch (err) {
     if (!routeStillActive(seq)) return;
+    const body = $("#ima-docs-body");
+    $("#ima-report-page")?.removeAttribute("aria-busy");
+    if (keepOld && oldHtml && body) {
+      body.innerHTML = oldHtml;
+      body.insertAdjacentHTML("afterbegin", imaReportRefreshErrorHtml(err.message || "请求失败"));
+      return;
+    }
     const denied = String(err.message || "").includes("知识库不存在");
-    $("#ima-docs-body").innerHTML = denied
+    body.innerHTML = denied
       ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回知识库</button></div>`)
       : emptyState(`加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="refreshImaDocuments()">重试</button></div>`);
   }
@@ -1651,7 +1667,7 @@ function showImaPdfFail(mediaId, seq, readerSeq) {
   clearImaPdfUrl();
   panel.hidden = false;
   panel.removeAttribute("aria-busy");
-  panel.innerHTML = `<div class="ima-reader-empty" role="status"><p>预览打不开，请用右上角下载</p></div>`;
+  panel.innerHTML = `<div class="ima-reader-empty" role="status"><p>预览打不开，请使用上方下载 PDF</p></div>`;
 }
 
 async function loadImaPdf(mediaId, readerSeq) {

@@ -30,7 +30,19 @@ def _fn_body(name: str) -> str:
     src = APP_JS.read_text()
     m = re.search(rf"async\s+function\s+{name}\b|function\s+{name}\b", src)
     assert m, f"未找到函数 {name}"
-    start = src.index("{", m.end())
+    i = m.end()
+    while i < len(src) and src[i] != "(":
+        i += 1
+    assert i < len(src), f"{name} 无参数列表"
+    depth = 1
+    i += 1
+    while i < len(src) and depth:
+        if src[i] == "(":
+            depth += 1
+        elif src[i] == ")":
+            depth -= 1
+        i += 1
+    start = src.index("{", i)
     depth, i = 1, start + 1
     while depth:
         if src[i] == "{":
@@ -2331,9 +2343,35 @@ def test_ima_documents_refresh_and_retry_advance_local_route_seq():
     render = _fn_body("renderImaDocuments")
     refresh = _fn_body("refreshImaDocuments")
     assert "const seq = ++routeRenderSeq;" in refresh
-    assert "renderImaDocuments(seq)" in refresh
+    assert "renderImaDocuments(seq, { keepOld: true })" in refresh
     assert 'onclick="refreshImaDocuments()"' in render
     assert "refreshImaDocuments()" in render
+
+
+def test_ima_refresh_keeps_old_reports_and_uses_inline_retry():
+    refresh = _fn_body("refreshImaDocuments")
+    render = _fn_body("renderImaDocuments")
+    error = _fn_body("imaReportRefreshErrorHtml")
+
+    assert "keepOld: true" in refresh
+    assert "const oldHtml" in render
+    assert "ima-report-refresh-error" in error
+    assert "最新研报暂时无法更新" in error
+    assert "refreshImaDocuments()" in error
+    assert "body.innerHTML = oldHtml" in render
+
+
+def test_ima_report_states_do_not_drop_incomplete_documents():
+    empty = _fn_body("imaDocumentsEmptyHtml")
+    row = _fn_body("imaDocumentRow")
+    fail = _fn_body("showImaPdfFail")
+
+    assert "没有找到相关研报" in empty
+    assert "换个公司、代码或主题试试" in empty
+    assert 'fmtImaDayShort(item.day) || "—"' in row
+    assert "预览打不开" in fail
+    assert "downloadImaPdf" not in fail
+    assert "btn-normal" not in fail
 
 
 def test_ima_document_headers_have_desktop_flex_alignment():
