@@ -1106,6 +1106,41 @@ class ImaPureClient:
         if not url:
             raise RuntimeError("IMA signed URL missing")
         headers = {str(k): str(v) for k, v in (info.get("headers") or {}).items()}
+        pull_url = os.environ.get("IMA_PULL_URL", "").strip()
+        if pull_url:
+            archive_root_text = os.environ.get("IMA_ARCHIVE_ROOT", "").strip()
+            if not archive_root_text:
+                raise RuntimeError("IMA_ARCHIVE_ROOT required when IMA_PULL_URL is set")
+            archive_root = Path(archive_root_text).expanduser()
+            dest = str(destination.resolve().relative_to(archive_root.resolve()))
+            payload = json.dumps(
+                {
+                    "dest": dest,
+                    "url": str(url),
+                    "headers": headers,
+                    "expected_size": int(expected_size or 0),
+                },
+                ensure_ascii=False,
+            ).encode()
+            request = urllib.request.Request(
+                pull_url,
+                data=payload,
+                method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": "Bearer " + os.environ.get("IMA_PULL_TOKEN", "").strip(),
+                },
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=120) as response:
+                    body = json.loads(response.read().decode())
+            except urllib.error.HTTPError as exc:
+                raise RuntimeError(f"IMA PDF HTTP {exc.code}") from exc
+            return {
+                "size": int(body.get("size") or 0),
+                "md5": str(body.get("md5") or ""),
+                "path": str(destination),
+            }
         headers["User-Agent"] = "okhttp/4.12.0"
         destination.parent.mkdir(parents=True, exist_ok=True)
         fd, temp_name = tempfile.mkstemp(
@@ -2353,17 +2388,27 @@ class ImaDocumentService:
             if blocked:
                 raise RuntimeError(blocked)
             media_id = str(record["media_id"])
-            pdf.parent.mkdir(parents=True, exist_ok=True)
+            pull_url = os.environ.get("IMA_PULL_URL", "").strip()
+            if not pull_url:
+                pdf.parent.mkdir(parents=True, exist_ok=True)
             if pdf.parent.is_symlink():
                 raise ValueError("archive directory must not be a symlink")
-            if pdf.is_file():
+            if (not pull_url) and pdf.is_file():
                 size, md5 = client._pdf_info(pdf)
                 if record.get("size") and size != int(record["size"]):
                     pdf.unlink(missing_ok=True)
-            if not pdf.is_file():
-                media = client.get_media(media_id)
-                result = client.download(media, pdf, int(record.get("size") or 0))
-                return record, pdf, int(result["size"]), str(result["md5"])
+            if pull_url or not pdf.is_file():
+                last_error: Exception | None = None
+                for _ in range(2):
+                    media = client.get_media(media_id)
+                    try:
+                        result = client.download(media, pdf, int(record.get("size") or 0))
+                        return record, pdf, int(result["size"]), str(result["md5"])
+                    except Exception as exc:  # noqa: BLE001
+                        last_error = exc
+                        if "HTTP 403" not in str(exc):
+                            raise
+                raise last_error
             size, md5 = client._pdf_info(pdf)
             return record, pdf, int(size), str(md5)
 

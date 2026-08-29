@@ -1,0 +1,17 @@
+[Unit]
+Description=V Push IMA storage PDF puller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=99
+Group=100
+UMask=0077
+NoNewPrivileges=true
+ExecStart=/usr/bin/python3 /usr/local/lib/vpush-ima/ima-puller.py --root /srv/vpush-ima --bind 10.80.0.2 --port 8743 --token-file /etc/vpush/ima-pull.token
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
