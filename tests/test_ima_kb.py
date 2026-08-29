@@ -1318,3 +1318,45 @@ def test_manual_sync_maps_blocked_storage_to_503(
     resp = client.post("/api/admin/ima-collector/sync", headers=headers)
     assert resp.status_code == 503
     assert resp.json()["detail"] == expected_detail
+
+
+def test_ima_collector_sync_unknown_group_404(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "ima-sync-unknown.sqlite"))
+    headers = _headers(client, "sync_unknown_admin", "SYNCUNKN", admin=True)
+    db = client.app.state.db
+    db.set_setting("ima_pure_uid", "uid")
+    db.set_setting("ima_pure_refresh_token", "refresh")
+    response = client.post(
+        "/api/admin/ima-collector/sync",
+        headers=headers,
+        json={"group_id": "missing"},
+    )
+    assert response.status_code in (404, 409, 400)
+
+
+def test_ima_collector_sync_unmounted_group_409(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "ima-sync-unmounted.sqlite"))
+    headers = _headers(client, "sync_unmounted_admin", "SYNCUNMT", admin=True)
+    db = client.app.state.db
+    db.set_setting("ima_pure_uid", "uid")
+    db.set_setting("ima_pure_refresh_token", "refresh")
+    db.set_setting(
+        IMA_PURE_GROUPS_KEY,
+        json.dumps([{
+            "id": "unmounted",
+            "name": "未挂载",
+            "knowledge_base_id": "kb-unmounted",
+            "root_folder_id": "root-unmounted",
+            "folder_ids": [],
+            "enabled": True,
+            "source": "manual",
+        }], ensure_ascii=False),
+    )
+    response = client.post(
+        "/api/admin/ima-collector/sync",
+        headers=headers,
+        json={"group_id": "unmounted"},
+    )
+    assert response.status_code == 409

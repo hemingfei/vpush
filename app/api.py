@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 from fastapi import (
     APIRouter,
     BackgroundTasks,
+    Body,
     Depends,
     File,
     Header,
@@ -545,6 +546,10 @@ class ImaCollectorIn(BaseModel):
     root_folder_id: str | None = None
     interval_seconds: int | None = None
     groups: list[ImaGroupIn] | None = None
+
+
+class ImaCollectorSyncIn(BaseModel):
+    group_id: str = ""
 
 
 class ImaKbAclIn(BaseModel):
@@ -2902,10 +2907,20 @@ def create_api_router(
         return _ima_collector_status()
 
     @router.post("/admin/ima-collector/sync", dependencies=[Depends(require_admin)])
-    def trigger_ima_collector(admin: dict = Depends(require_admin)):
+    def trigger_ima_collector(
+        body: ImaCollectorSyncIn = Body(default_factory=ImaCollectorSyncIn),
+        admin: dict = Depends(require_admin),
+    ):
         if ima_documents is None:
             raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
-        result = ima_documents.trigger()
+        group_id = (body.group_id if body else "").strip()
+        if group_id:
+            group = next((item for item in _configured_groups() if item.id == group_id), None)
+            if group is None:
+                raise HTTPException(status_code=404, detail="知识库不存在")
+            if not group.mount_folder_ids:
+                raise HTTPException(status_code=409, detail="请先挂载该知识库")
+        result = ima_documents.trigger(group_id=group_id)
         if result["status"] == "not_configured":
             raise HTTPException(status_code=400, detail="请先配置 IMA UID 和 Refresh Token")
         storage_messages = {
