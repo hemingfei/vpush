@@ -2388,17 +2388,27 @@ class ImaDocumentService:
             if blocked:
                 raise RuntimeError(blocked)
             media_id = str(record["media_id"])
-            pdf.parent.mkdir(parents=True, exist_ok=True)
+            pull_url = os.environ.get("IMA_PULL_URL", "").strip()
+            if not pull_url:
+                pdf.parent.mkdir(parents=True, exist_ok=True)
             if pdf.parent.is_symlink():
                 raise ValueError("archive directory must not be a symlink")
-            if pdf.is_file():
+            if (not pull_url) and pdf.is_file():
                 size, md5 = client._pdf_info(pdf)
                 if record.get("size") and size != int(record["size"]):
                     pdf.unlink(missing_ok=True)
-            if not pdf.is_file():
-                media = client.get_media(media_id)
-                result = client.download(media, pdf, int(record.get("size") or 0))
-                return record, pdf, int(result["size"]), str(result["md5"])
+            if pull_url or not pdf.is_file():
+                last_error: Exception | None = None
+                for _ in range(2):
+                    media = client.get_media(media_id)
+                    try:
+                        result = client.download(media, pdf, int(record.get("size") or 0))
+                        return record, pdf, int(result["size"]), str(result["md5"])
+                    except Exception as exc:  # noqa: BLE001
+                        last_error = exc
+                        if "HTTP 403" not in str(exc):
+                            raise
+                raise last_error
             size, md5 = client._pdf_info(pdf)
             return record, pdf, int(size), str(md5)
 

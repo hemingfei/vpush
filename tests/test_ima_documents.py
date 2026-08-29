@@ -2582,6 +2582,49 @@ def test_service_sync_is_incremental(tmp_path, monkeypatch):
     assert calls == ["file_abc"]
 
 
+def test_sync_retries_get_media_after_pdf_http_403(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    db = FakeDB(
+        {
+            "ima_pure_uid": "uid",
+            "ima_pure_refresh_token": "refresh",
+            "ima_pure_knowledge_base_id": "kb",
+            "ima_pure_root_folder_id": "root",
+        }
+    )
+    calls = {"get_media": 0, "download": 0}
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.config = config
+
+        def manifest(self, listing_cache=None):
+            return [{"media_id": "file_new", "name": "n.pdf", "day": "0829", "size": 8}]
+
+        def get_media(self, media_id):
+            calls["get_media"] += 1
+            return {"jump_url_info": {"url": "https://res-skb.ima.qq.com/n.pdf", "headers": {}}}
+
+        def download(self, media, destination, expected_size=0):
+            calls["download"] += 1
+            if calls["download"] == 1:
+                raise RuntimeError("IMA PDF HTTP 403")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"%PDF-1.7")
+            return {"size": 8, "md5": "d" * 32, "path": str(destination)}
+
+        def _pdf_info(self, path):
+            return 8, "d" * 32
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    service = ImaDocumentService(db, tmp_path / "ima")
+    result = service.sync_once()
+    assert calls["get_media"] == 2
+    assert calls["download"] == 2
+    assert result["downloaded"] == 1
+
+
 def test_admin_ima_put_uses_one_atomic_settings_write(tmp_path, monkeypatch):
     monkeypatch.setenv("DAV_UI_ONLY", "1")
     client = TestClient(create_app(db_path=tmp_path / "db.sqlite"))
