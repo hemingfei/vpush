@@ -12,6 +12,13 @@ MAX_PDF_BYTES = 200 * 1024 * 1024
 MAX_JSON_BYTES = 1_000_000
 
 
+class AllowedRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not allowed_url(newurl):
+            raise PermissionError("redirect url host not allowed")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def allowed_url(url: str) -> bool:
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
@@ -23,6 +30,9 @@ def safe_dest(root: Path, dest: str) -> Path:
     if not text.endswith(".pdf") or text.endswith("/.pdf"):
         raise ValueError("dest must be a .pdf path")
     root = root.resolve()
+    day_path = root / Path(text).parent
+    if day_path.is_symlink():
+        raise ValueError("archive directory must not be a symlink")
     candidate = (root / text).resolve()
     if candidate == root or not candidate.is_relative_to(root):
         raise ValueError("dest escapes archive root")
@@ -55,7 +65,8 @@ def save_pdf(
     first = b""
     try:
         try:
-            response = urllib.request.urlopen(request, timeout=120)
+            opener = urllib.request.build_opener(AllowedRedirectHandler())
+            response = opener.open(request, timeout=120)
         except urllib.error.HTTPError as exc:
             raise RuntimeError(f"IMA PDF HTTP {exc.code}") from exc
         with response, temp.open("wb") as output:
