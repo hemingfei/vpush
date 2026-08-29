@@ -1090,6 +1090,23 @@ def test_list_items_rejects_malformed_later_page_status_or_payload(monkeypatch, 
         client.list_items("root")
 
 
+def test_list_items_retries_transient_code_30005(monkeypatch):
+    client = ImaPureClient(
+        ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
+    )
+    responses = iter([
+        {"code": 30005},
+        {"code": 0, "knowledge_list": []},
+    ])
+    sleeps = []
+    client._token = lambda: "access"
+    client._open_json = lambda request: (next(responses), {})
+    monkeypatch.setattr("app.ima_documents.time.sleep", sleeps.append)
+
+    assert client.list_items("root") == []
+    assert sleeps == [1.5]
+
+
 def test_knowledge_tab_reader_status_prefers_code_on_success(monkeypatch):
     client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh", root_folder_id="root"))
     client._token = lambda: "access"
@@ -2582,6 +2599,87 @@ def test_service_sync_is_incremental(tmp_path, monkeypatch):
     assert calls == ["file_abc"]
 
 
+def test_sync_retries_transient_pdf_failure_three_times(tmp_path, monkeypatch, caplog):
+    from app import ima_documents
+
+    db = FakeDB(
+        {
+            "ima_pure_uid": "uid",
+            "ima_pure_refresh_token": "refresh",
+            "ima_pure_knowledge_base_id": "kb",
+            "ima_pure_root_folder_id": "root",
+        }
+    )
+    calls = {"get_media": 0, "download": 0}
+    sleeps = []
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.config = config
+
+        def manifest(self, listing_cache=None):
+            return [{"media_id": "file_retry", "name": "retry.pdf", "day": "0829", "size": 8}]
+
+        def get_media(self, media_id):
+            calls["get_media"] += 1
+            return {"jump_url_info": {"url": "https://res-skb.ima.qq.com/retry.pdf"}}
+
+        def download(self, media, destination, expected_size=0):
+            calls["download"] += 1
+            if calls["download"] == 1:
+                raise ConnectionResetError("connection reset while reading PDF")
+            if calls["download"] == 2:
+                raise RuntimeError("IMA PDF size mismatch got=7 expected=8")
+            return {"size": 8, "md5": "d" * 32, "path": str(destination)}
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    monkeypatch.setattr(ima_documents.time, "sleep", sleeps.append)
+    caplog.set_level("WARNING")
+    result = ImaDocumentService(db, tmp_path / "ima").sync_once()
+
+    assert calls == {"get_media": 3, "download": 3}
+    assert sleeps == [2, 8]
+    assert result["downloaded"] == 1
+    assert "media=file_retry" in caplog.text
+    assert "attempt=1/3" in caplog.text
+
+
+def test_sync_does_not_retry_permanent_pdf_failure(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    db = FakeDB(
+        {
+            "ima_pure_uid": "uid",
+            "ima_pure_refresh_token": "refresh",
+            "ima_pure_knowledge_base_id": "kb",
+            "ima_pure_root_folder_id": "root",
+        }
+    )
+    calls = {"get_media": 0, "download": 0}
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.config = config
+
+        def manifest(self, listing_cache=None):
+            return [{"media_id": "file_html", "name": "bad.pdf", "day": "0829", "size": 8}]
+
+        def get_media(self, media_id):
+            calls["get_media"] += 1
+            return {"jump_url_info": {"url": "https://res-skb.ima.qq.com/bad.pdf"}}
+
+        def download(self, media, destination, expected_size=0):
+            calls["download"] += 1
+            raise RuntimeError("IMA download is not a PDF")
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    result = ImaDocumentService(db, tmp_path / "ima").sync_once()
+
+    assert calls == {"get_media": 1, "download": 1}
+    assert result["downloaded"] == 0
+    assert result["failed"] == 1
+
+
 def test_sync_retries_get_media_after_pdf_http_403(tmp_path, monkeypatch):
     from app import ima_documents
 
@@ -2623,6 +2721,12 @@ def test_sync_retries_get_media_after_pdf_http_403(tmp_path, monkeypatch):
     assert calls["get_media"] == 2
     assert calls["download"] == 2
     assert result["downloaded"] == 1
+
+
+def test_download_worker_count_is_four():
+    from app import ima_documents
+
+    assert ima_documents.IMA_DOWNLOAD_WORKERS == 4
 
 
 def test_admin_ima_put_uses_one_atomic_settings_write(tmp_path, monkeypatch):
