@@ -2359,6 +2359,13 @@ def test_ima_refresh_keeps_old_reports_and_uses_inline_retry():
     assert "最新研报暂时无法更新" in error
     assert "refreshImaDocuments()" in error
     assert "body.innerHTML = oldHtml" in render
+    assert "if (!keepOld)" in render
+    before_request = render[render.index("if (!keepOld)"):render.index("await api(")]
+    assert "_imaItems.length = 0" in before_request
+    assert "_imaOffset = 0" in before_request
+    assert "state.imaDocumentsHasMore = false" in before_request
+    success = render[render.index("await api("):]
+    assert success.index("_imaItems.length = 0") < success.index("_imaItems.push(...items)")
 
 
 def test_ima_report_states_do_not_drop_incomplete_documents():

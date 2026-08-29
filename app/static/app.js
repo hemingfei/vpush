@@ -1269,10 +1269,12 @@ async function renderImaDocuments(seq, { keepOld = false } = {}) {
   const previousBody = $("#ima-docs-body");
   const oldHtml = keepOld ? previousBody?.innerHTML || "" : "";
   _imaListSeq += 1;
-  _imaItems.length = 0;
-  _imaOffset = 0;
-  state.imaDocumentsHasMore = false;
   _imaLoadingMore = false;
+  if (!keepOld) {
+    _imaItems.length = 0;
+    _imaOffset = 0;
+    state.imaDocumentsHasMore = false;
+  }
   const selectedGroup = imaDocumentsGroupFromRoute() || state.imaDocumentsGroup || "";
   const query = routeQuery().get("q") || "";
   const day = routeQuery().get("day") || "";
@@ -1402,6 +1404,7 @@ async function renderImaDocuments(seq, { keepOld = false } = {}) {
     const hasFilter = !!(query || tag);
     syncImaListChrome({ emptyLib: !days.length && !searchMode, hasTags: uniqueTags.length > 0 || !!tag });
     syncImaDocumentsFilterStatus();
+    _imaItems.length = 0;
     _imaItems.push(...items);
     _imaOffset = items.length;
     state.imaDocumentsHasMore = !!(paged && data.has_more);
