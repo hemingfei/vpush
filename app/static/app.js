@@ -6162,9 +6162,10 @@ async function reloadAdminSettingsPage(seq, authoritativeImaStatus = null) {
 }
 
 function switchKnowledgeSettingsTab(tab) {
-  const allowed = ["collect", "zsxq", "storage", "cicc"];
+  const allowed = ["collect", "zsxq", "storage", "cicc", "local"];
   const next = allowed.includes(tab) ? tab : "collect";
   if (next === "cicc") { loadCiccStatus(); startCiccPoll(); } else { stopCiccPoll(); }
+  if (next === "local") loadLocalLibraries();
   try { sessionStorage.setItem(KS_TAB_KEY, next); } catch { /* ignore */ }
   document.querySelectorAll(".ks-tab").forEach((btn) => {
     const on = btn.dataset.tab === next;
@@ -6553,6 +6554,7 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
         <button type="button" class="ks-tab" data-tab="zsxq" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">星球</button>
         <button type="button" class="ks-tab" data-tab="storage" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">存储</button>
         <button type="button" class="ks-tab" data-tab="cicc" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">中金</button>
+        <button type="button" class="ks-tab" data-tab="local" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">本地库</button>
       </div>
       <section class="section-panel ks-panel is-on" data-panel="collect">
         <header class="section-head"><div><h2 class="section-title">IMA 文档采集</h2>
@@ -6673,6 +6675,11 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
       <header class="section-head"><div><h2 class="section-title">中金研报采集</h2>
       <p class="section-meta">存储机上的采集与压缩任务。文件落盘后可在知识库本地库中启用。</p></div></header>
       <div id="cicc-body"><p class="muted">加载中…</p></div>
+    </section>
+    <section class="section-panel ks-panel" data-panel="local" id="local-libs-panel">
+      <header class="section-head"><div><h2 class="section-title">本地库</h2>
+      <p class="section-meta">存储机 <code>local/&lt;slug&gt;/</code> 下的文件夹知识库，扫描后启用并授权用户即可在知识库中阅读。</p></div></header>
+      <div id="local-libs-body"><p class="muted">加载中…</p></div>
     </section>
     </div>`;
   renderStatsData(s);
@@ -7171,6 +7178,74 @@ async function toggleCiccSchedule() {
     });
     flash(r.schedule_enabled ? "每日增量已开启（每天 03:00）" : "每日增量已关闭");
     loadCiccStatus(true);
+  } catch (err) {
+    flash(err.message, "error");
+  }
+}
+
+function localLibraryRowHtml(lib) {
+  const meta = lib.error
+    ? `异常：${escapeHtml(lib.error)}`
+    : `${lib.pdf_count ?? 0} 个 PDF`;
+  return `<div class="ima-source-block" data-slug="${escapeHtml(lib.slug)}">
+    <header class="ima-source-block-head"><div><h3 class="ima-source-title">${escapeHtml(lib.name)}</h3>
+    <p class="section-meta"><code>${escapeHtml(lib.slug)}</code> · ${meta} · ${lib.enabled ? "已启用" : "未启用"}</p></div>
+    <div class="toolbar">
+      <button type="button" class="btn-ghost" onclick="toggleLocalLibrary('${escapeHtml(lib.slug)}', ${lib.enabled ? "false" : "true"})">${lib.enabled ? "停用" : "启用"}</button>
+    </div></header>
+  </div>`;
+}
+
+function renderLocalLibraries(data) {
+  const slot = $("#local-libs-body");
+  if (!slot) return;
+  const libs = data.libraries || [];
+  slot.innerHTML = `
+    <div class="toolbar" style="margin:12px 0">
+      <button type="button" class="btn-normal" onclick="scanLocalLibraries()">扫描本地库</button>
+      <span class="muted" aria-live="polite">${data.scanned_at ? `上次扫描 ${fmtTs(data.scanned_at)}` : "从未扫描"}</span>
+    </div>
+    ${libs.length
+      ? libs.map(localLibraryRowHtml).join("")
+      : '<p class="muted">尚未发现本地库。在存储机 local/&lt;slug&gt;/ 放入 .vpush-local-library.json 标记与 PDF 后点「扫描本地库」。</p>'}`;
+}
+
+async function loadLocalLibraries(quiet = false) {
+  const routeSeq = routeRenderSeq;
+  try {
+    const data = await api("/api/admin/ima-local-libraries");
+    if (!routeStillActive(routeSeq)) return;
+    renderLocalLibraries(data);
+  } catch (err) {
+    if (!routeStillActive(routeSeq)) return;
+    if (!quiet) flash(err.message, "error");
+    const slot = $("#local-libs-body");
+    if (slot) slot.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function scanLocalLibraries() {
+  const btn = $("#local-libs-body button");
+  if (btn) btn.disabled = true;
+  try {
+    const data = await api("/api/admin/ima-local-libraries/scan", { method: "POST" });
+    flash(data.status === "scan_failed" ? "扫描失败：存储归档不可读" : "扫描完成");
+    renderLocalLibraries(data);
+  } catch (err) {
+    flash(err.message, "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function toggleLocalLibrary(slug, enabled) {
+  try {
+    const data = await api(`/api/admin/ima-local-libraries/${encodeURIComponent(slug)}/enabled`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    });
+    flash(enabled ? "本地库已启用" : "本地库已停用");
+    renderLocalLibraries(data);
   } catch (err) {
     flash(err.message, "error");
   }

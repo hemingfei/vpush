@@ -71,6 +71,11 @@ IMA_PURE_INTERVAL_MAX = 604800
 IMA_MOUNT_FOLDER_ID_MAX = 256
 IMA_MAX_FOLDER_DEPTH = 32
 IMA_MAX_FOLDER_NODES = 10000
+IMA_LOCAL_LIBRARIES_KEY = "ima_local_libraries"
+LOCAL_LIBRARY_PREFIX = "local-"
+LOCAL_LIBRARY_MARKER = ".vpush-local-library.json"
+LOCAL_LIBRARY_SIDECAR = ".vpush-local-meta.jsonl"
+LOCAL_LIBRARY_SLUG_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,46}")
 
 PUB_PEM = b"""-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAx9h6SY1LO88wRVKdOC5U
@@ -206,6 +211,11 @@ def _clamp_group_interval(value: Any) -> int:
     if number < 43200:
         return 21600
     return 86400
+
+
+def is_local_library_group(group_id: Any) -> bool:
+    """`local-` 前缀专供本地库；IMA 采集/下载不得把它当作 knowledge_base_id。"""
+    return str(group_id or "").startswith(LOCAL_LIBRARY_PREFIX)
 
 
 def _secret_status(value: str) -> dict[str, Any]:
@@ -456,6 +466,9 @@ def _prepare_discovery_item(item: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(group_id_value, str) or not group_id_value.strip():
         raise RuntimeError("IMA group discovery returned invalid item")
     group_id_value = group_id_value.strip()
+    if is_local_library_group(group_id_value):
+        # local- 前缀专供本地库，IMA 发现结果一律跳过
+        return None
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", group_id_value):
         raise RuntimeError("IMA group discovery returned invalid item")
     basic = item.get("basic_info") if isinstance(item.get("basic_info"), dict) else {}
@@ -579,6 +592,9 @@ def _read_groups(db: Any, kb: str, root: str) -> tuple[ImaGroupConfig, ...]:
         )
     normalized_groups = []
     for group in groups:
+        if is_local_library_group(group.id):
+            logger.warning("IMA groups ignore reserved local- group id=%s", group.id[:64])
+            continue
         if group.id == IMA_LEGACY_GROUP_ID:
             group = ImaGroupConfig(
                 id=group.id,
@@ -1484,6 +1500,9 @@ class ImaDocumentStore:
         for state_key, item in list(state.items()):
             if not isinstance(item, dict):
                 continue
+            if is_local_library_group(item.get("group_id")):
+                # 本地库文件就在 local/<slug>/ 原位，不得搬进 IMA 命名空间
+                continue
             record = dict(records_by_key.get(state_key) or {})
             if not record:
                 try:
@@ -1621,6 +1640,8 @@ class ImaDocumentStore:
         records: list[dict[str, Any]] = []
         for key, item in self.load_state().items():
             if not isinstance(item, dict):
+                continue
+            if is_local_library_group(item.get("group_id")):
                 continue
             media_id = str(item.get("media_id") or key)
             if "__" in media_id and not media_id.startswith("pdf_"):
@@ -2010,6 +2031,227 @@ class ImaDocumentStore:
         if callable(hook):
             hook([record], latest)
 
+    # ------------------------------------------------------------------
+    # 本地库（archive_root/local/<slug>/）：只读磁盘与标记文件，不调 IMA API。
+    # ------------------------------------------------------------------
+
+    @property
+    def local_root(self) -> Path:
+        return self.archive_root / "local"
+
+    def local_library_marker_path(self, slug: str) -> Path:
+        return self.local_root / slug / LOCAL_LIBRARY_MARKER
+
+    def scan_local_libraries(self, existing_group_ids: Any = ()) -> dict[str, Any]:
+        """扫描 local/ 下所有本地库，返回每个库的 manifest 记录与 state 项。
+
+        无标记文件的目录忽略；标记损坏/slug 非法/组冲突的目录带 error 返回；
+        local/ 根不可读时整体放弃（ok=False），保留上次扫描结果。
+        """
+        try:
+            entries = sorted(
+                path
+                for path in self.local_root.iterdir()
+                if path.is_dir() and not path.is_symlink()
+            )
+        except OSError as exc:
+            logger.warning(
+                "Local library root unreadable, keep previous scan error=%s",
+                _safe_error(exc),
+            )
+            return {"ok": False, "libraries": []}
+        known_groups = {str(group_id) for group_id in existing_group_ids}
+        libraries = []
+        for path in entries:
+            entry = self._scan_local_library(path, known_groups)
+            if entry is not None:
+                libraries.append(entry)
+        return {"ok": True, "libraries": libraries}
+
+    def _scan_local_library(
+        self, path: Path, known_groups: set[str]
+    ) -> dict[str, Any] | None:
+        slug = path.name
+        entry: dict[str, Any] = {
+            "slug": slug,
+            "group_id": LOCAL_LIBRARY_PREFIX + slug,
+            "name": slug,
+            "enabled": False,
+            "pdf_count": 0,
+            "error": "",
+            "transient": False,
+            "records": [],
+            "state": {},
+        }
+        if not LOCAL_LIBRARY_SLUG_RE.fullmatch(slug):
+            entry["error"] = "目录名不符合本地库 slug 规则（小写字母/数字/短横线，1-47 位）"
+            return entry
+        try:
+            raw_marker = (path / LOCAL_LIBRARY_MARKER).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None  # 无标记文件：不是本地库，忽略
+        except (OSError, UnicodeError) as exc:
+            entry["error"] = f"标记文件不可读：{_safe_error(exc)}"
+            entry["transient"] = True
+            return entry
+        try:
+            marker = json.loads(raw_marker)
+        except json.JSONDecodeError:
+            logger.warning("Local library marker ignored (invalid JSON) dir=%s", slug[:64])
+            return None
+        if not isinstance(marker, dict):
+            entry["error"] = "标记文件格式无效"
+            return entry
+        name = str(marker.get("name") or "").strip()
+        if not name or len(name) > 80:
+            entry["error"] = "标记文件 name 需为 1-80 字"
+            return entry
+        if entry["group_id"] in known_groups:
+            entry["error"] = "组 ID 与现有 IMA 知识库冲突"
+            return entry
+        entry["name"] = name
+        entry["enabled"] = marker.get("enabled") is True
+        lib_tags = [
+            tag.strip() for tag in marker.get("tags") or [] if isinstance(tag, str) and tag.strip()
+        ]
+        sidecar = self._load_local_sidecar(path)
+        now_iso = datetime.now(UTC).isoformat()
+        for dirpath, dirnames, filenames in os.walk(path, followlinks=False):
+            # 隐藏目录不进入，符号链接（文件/目录）一律跳过，防止越界
+            dirnames[:] = sorted(
+                child
+                for child in dirnames
+                if not child.startswith(".") and not (Path(dirpath) / child).is_symlink()
+            )
+            for filename in sorted(filenames):
+                if filename.startswith(".") or not filename.lower().endswith(".pdf"):
+                    continue
+                full = Path(dirpath) / filename
+                if full.is_symlink():
+                    continue
+                try:
+                    size = full.stat().st_size
+                except OSError as exc:
+                    logger.warning(
+                        "Local library PDF unreadable, skipped path=%s/%s error=%s",
+                        slug,
+                        filename[:80],
+                        _safe_error(exc),
+                    )
+                    continue
+                record, state_item = self._local_document(
+                    path, slug, full.relative_to(path), int(size), name, lib_tags, sidecar, now_iso
+                )
+                entry["records"].append(record)
+                entry["state"][self.state_key(record)] = state_item
+        entry["pdf_count"] = len(entry["records"])
+        return entry
+
+    @staticmethod
+    def _load_local_sidecar(lib_dir: Path) -> dict[str, dict[str, Any]]:
+        """可选 sidecar `.vpush-local-meta.jsonl`：按报告 id 索引摘要与标签。"""
+        try:
+            raw = (lib_dir / LOCAL_LIBRARY_SIDECAR).read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return {}
+        meta: dict[str, dict[str, Any]] = {}
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                logger.warning("Local library sidecar line ignored (invalid JSON)")
+                continue
+            sidecar_id = str(item.get("id") or "").strip() if isinstance(item, dict) else ""
+            if sidecar_id:
+                meta[sidecar_id] = item
+        return meta
+
+    def _local_document(
+        self,
+        lib_dir: Path,
+        slug: str,
+        rel: Path,
+        size: int,
+        lib_name: str,
+        lib_tags: list[str],
+        sidecar: dict[str, dict[str, Any]],
+        now_iso: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        parts = rel.parts
+        stem = parts[-1][:-4]
+        pdf_rel = f"local/{slug}/{'/'.join(parts)}"
+        media_id = "loc" + hashlib.sha256(pdf_rel.encode("utf-8")).hexdigest()[:20]
+        day = next(
+            (part for part in reversed(parts[:-1]) if re.fullmatch(r"\d{4}", part)), ""
+        )
+        meta = None
+        id_match = re.search(r"_([0-9]+)$", stem)
+        if id_match:
+            meta = sidecar.get(id_match.group(1))
+        abstract = str((meta or {}).get("summary") or "")[:2000]
+        tags: list[str] = []
+        for tag in list((meta or {}).get("tags") or []) + lib_tags:
+            if isinstance(tag, str) and tag.strip() and tag not in tags:
+                tags.append(tag.strip())
+        txt_rel = str(Path(pdf_rel).with_suffix(".txt")) if (lib_dir / rel).with_suffix(".txt").is_file() else ""
+        group_id = LOCAL_LIBRARY_PREFIX + slug
+        record = {
+            "media_id": media_id,
+            "name": stem,
+            "day": day or "unknown",
+            "size": int(size),
+            "md5": "",
+            "ts": "",
+            "abstract": abstract,
+            "cover_url": "",
+            "group_id": group_id,
+            "group_name": lib_name,
+        }
+        state_item = {
+            "group_id": group_id,
+            "group_name": lib_name,
+            "day": day or "unknown",
+            "name": stem,
+            "pdf": pdf_rel,
+            "txt": txt_rel,
+            "size": int(size),
+            "md5": "",
+            "chars": 0,
+            "downloaded_at": now_iso,
+            "tags": tags,
+        }
+        return record, state_item
+
+    def local_group_state_keys(
+        self, state: dict[str, dict[str, Any]], group_id: str
+    ) -> list[str]:
+        prefix = self._group_namespace(group_id) + "__"
+        return [key for key in state if str(key).startswith(prefix)]
+
+    def set_local_library_enabled(self, slug: str, enabled: bool) -> None:
+        """写回标记文件 enabled 字段（原子替换）。写失败抛 OSError 由调用方报错；
+        属主 99:100 由存储侧（NFS all_squash）保证。"""
+        if not LOCAL_LIBRARY_SLUG_RE.fullmatch(slug):
+            raise ValueError("invalid local library slug")
+        marker_path = self.local_library_marker_path(slug)
+        try:
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            raise ValueError("本地库不存在或标记文件已移除") from exc
+        except (json.JSONDecodeError, UnicodeError) as exc:
+            raise ValueError("invalid local library marker") from exc
+        if not isinstance(marker, dict):
+            raise ValueError("invalid local library marker")
+        marker["enabled"] = bool(enabled)
+        self._save(marker_path, marker)
+        try:
+            marker_path.chmod(0o640)
+        except OSError:
+            logger.warning("Local library marker chmod failed path=%s", marker_path.name)
+
 
 def convert_pdf(pdf: Path, txt: Path) -> int:
     from pypdf import PdfReader
@@ -2058,6 +2300,9 @@ def purge_ima_document_tags(store: ImaDocumentStore, valid_tags: set[str]) -> in
         changed_keys: list[str] = []
         for key, item in state.items():
             if not isinstance(item, dict):
+                continue
+            if is_local_library_group(item.get("group_id")):
+                # 本地库标签来自 sidecar/库标记，不归词表清洗管
                 continue
             tags = [t for t in (item.get("tags") or []) if isinstance(t, str)]
             kept = [t for t in tags if t in valid_tags]
@@ -2747,6 +2992,147 @@ class ImaDocumentService:
             self._update_index_rows(changed_records, state)
         return {"processed": processed, "tagged": tagged}
 
+    # ------------------------------------------------------------------
+    # 本地库：扫 archive_root/local/ 并与 manifest/state/读模型对齐。
+    # ------------------------------------------------------------------
+
+    def local_scan_status(self) -> dict[str, Any]:
+        raw = self.db.get_setting(IMA_LOCAL_LIBRARIES_KEY) or ""
+        try:
+            value = json.loads(raw) if raw else {}
+        except (TypeError, json.JSONDecodeError):
+            value = {}
+        if not isinstance(value, dict):
+            value = {}
+        libraries = [item for item in value.get("libraries") or [] if isinstance(item, dict)]
+        return {"scanned_at": str(value.get("scanned_at") or ""), "libraries": libraries}
+
+    def product_groups(self) -> tuple[ImaGroupConfig, ...]:
+        """用户侧组：IMA 组 + 已启用的本地库；停用/报错的本地库不出现。"""
+        local = tuple(
+            ImaGroupConfig(
+                id=group_id,
+                name=name,
+                knowledge_base_id="",
+                root_folder_id="",
+            )
+            for group_id, name in (
+                (str(item.get("group_id") or ""), str(item.get("name") or ""))
+                for item in self.local_scan_status()["libraries"]
+                if item.get("enabled") and not item.get("error")
+            )
+            if group_id and name
+        )
+        return self.config().groups + local
+
+    def scan_local_libraries(self) -> dict[str, Any]:
+        """管理员手动扫描；与 IMA 同步互斥，避免 manifest/state 互相覆盖。"""
+        if not self._sync_lock.acquire(blocking=False):
+            return {"status": "already_running"}
+        try:
+            return self._scan_local_libraries_locked()
+        finally:
+            self._sync_lock.release()
+
+    def _scan_local_libraries_locked(self) -> dict[str, Any]:
+        result = self.store.scan_local_libraries(
+            existing_group_ids={group.id for group in self.config().groups}
+        )
+        if not result.get("ok"):
+            # local/ 根不可读：跳过扫描，保留上次结果
+            return {"status": "scan_failed", **self.local_scan_status()}
+        previous = {
+            str(item.get("slug") or ""): item
+            for item in self.local_scan_status()["libraries"]
+        }
+        state = self.store.load_state()
+        summaries: list[dict[str, Any]] = []
+        applied: set[str] = set()
+        for entry in result["libraries"]:
+            slug = str(entry.get("slug") or "")
+            group_id = str(entry["group_id"])
+            applied.add(group_id)
+            old = previous.get(slug) or {}
+            summary = {
+                "slug": slug,
+                "group_id": group_id,
+                "name": entry["name"],
+                "enabled": entry["enabled"],
+                "pdf_count": entry["pdf_count"],
+                "error": entry["error"],
+            }
+            if entry["error"]:
+                # 该库保留上次成功数据，只刷新展示状态
+                summary["name"] = str(old.get("name") or summary["name"])
+                summary["pdf_count"] = int(old.get("pdf_count") or 0)
+                summary["enabled"] = bool(old.get("enabled"))
+                summaries.append(summary)
+                continue
+            try:
+                # 先 manifest/state（各自原子写），再 SQLite 单库事务替换
+                self.store.save_group_manifest(group_id, entry["records"])
+                for key in self.store.local_group_state_keys(state, group_id):
+                    state.pop(key, None)
+                state.update(entry["state"])
+                self.store.save_state(state)
+                self._replace_group_index(group_id, entry["records"], state)
+            except Exception as exc:  # noqa: BLE001 - 单库失败保留旧数据
+                logger.warning(
+                    "Local library apply failed slug=%s error=%s", slug[:64], _safe_error(exc)
+                )
+                summary["error"] = f"写入失败：{_safe_error(exc)}"
+                summary["name"] = str(old.get("name") or summary["name"])
+                summary["pdf_count"] = int(old.get("pdf_count") or 0)
+                summary["enabled"] = bool(old.get("enabled"))
+            summaries.append(summary)
+        self._prune_removed_local_libraries(state, applied, result["libraries"])
+        payload = {"scanned_at": datetime.now(UTC).isoformat(), "libraries": summaries}
+        self.db.set_setting(IMA_LOCAL_LIBRARIES_KEY, json.dumps(payload, ensure_ascii=False))
+        return {"status": "finished", **payload}
+
+    def _prune_removed_local_libraries(
+        self,
+        state: dict[str, dict[str, Any]],
+        applied: set[str],
+        libraries: list[dict[str, Any]],
+    ) -> None:
+        """整库目录或标记消失：索引行清掉，ACL 留在 ima_kb_acl 不动。"""
+        keep = applied | {
+            str(entry.get("group_id") or "")
+            for entry in libraries
+            if entry.get("error")
+        }
+        existing = {
+            str(record.get("group_id") or "")
+            for record in self.store.load_manifest()
+            if is_local_library_group(record.get("group_id"))
+        }
+        removed = sorted(existing - keep)
+        for group_id in removed:
+            try:
+                self.store.save_group_manifest(group_id, [])
+                for key in self.store.local_group_state_keys(state, group_id):
+                    state.pop(key, None)
+                self._replace_group_index(group_id, [], state)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Local library removal failed group=%s error=%s",
+                    group_id[:64],
+                    _safe_error(exc),
+                )
+        if removed:
+            self.store.save_state(state)
+
+    def set_local_library_enabled(self, slug: str, enabled: bool) -> dict[str, Any]:
+        """写标记文件 enabled 字段；磁盘写失败抛 OSError 由路由层报错。"""
+        self.store.set_local_library_enabled(slug, enabled)
+        status = self.local_scan_status()
+        for item in status["libraries"]:
+            if str(item.get("slug") or "") == slug:
+                item["enabled"] = bool(enabled)
+        self.db.set_setting(IMA_LOCAL_LIBRARIES_KEY, json.dumps(status, ensure_ascii=False))
+        return status
+
     def stop(self) -> None:
         self._stop.set()
         self._cancel_requested = True
@@ -3123,6 +3509,11 @@ class ImaDocumentService:
                 self._sync_group_id = ""
                 scheduled_flag = self._sync_scheduled
                 self._sync_scheduled = False
+            try:
+                # 本地库廉价遍历搭 IMA 同步周期一次；失败只记日志不挡 IMA
+                self._scan_local_libraries_locked()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Local library scan failed error=%s", _safe_error(exc))
             cfg = self.config()
             if not cfg.credentials_configured:
                 return {"status": "not_configured"}
