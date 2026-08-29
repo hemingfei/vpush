@@ -1,0 +1,12 @@
+[Unit]
+Description=V Push CICC collector status writer
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/vpush-ima/cicc-status.py
+UMask=0077
+NoNewPrivileges=true
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=V Push CICC collector command file
+
+[Path]
+PathModified=/srv/vpush-ima/local/.cicc/commands
+Unit=vpush-cicc-dispatch.service
+
+[Install]
+WantedBy=multi-user.target

@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.92";
+const APP_VERSION = "1.12.93";
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["config", "cookies", "proxies", "plaza"];
@@ -6162,8 +6162,9 @@ async function reloadAdminSettingsPage(seq, authoritativeImaStatus = null) {
 }
 
 function switchKnowledgeSettingsTab(tab) {
-  const allowed = ["collect", "zsxq", "storage"];
+  const allowed = ["collect", "zsxq", "storage", "cicc"];
   const next = allowed.includes(tab) ? tab : "collect";
+  if (next === "cicc") { loadCiccStatus(); startCiccPoll(); } else { stopCiccPoll(); }
   try { sessionStorage.setItem(KS_TAB_KEY, next); } catch { /* ignore */ }
   document.querySelectorAll(".ks-tab").forEach((btn) => {
     const on = btn.dataset.tab === next;
@@ -6551,6 +6552,7 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
         <button type="button" class="ks-tab is-on" data-tab="collect" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">采集</button>
         <button type="button" class="ks-tab" data-tab="zsxq" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">星球</button>
         <button type="button" class="ks-tab" data-tab="storage" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">存储</button>
+        <button type="button" class="ks-tab" data-tab="cicc" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">中金</button>
       </div>
       <section class="section-panel ks-panel is-on" data-panel="collect">
         <header class="section-head"><div><h2 class="section-title">IMA 文档采集</h2>
@@ -6667,6 +6669,11 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
       </div>
     </section>
     ${imaStoragePanelHtml(imaCollector.storage)}
+    <section class="section-panel ks-panel" data-panel="cicc" id="cicc-panel">
+      <header class="section-head"><div><h2 class="section-title">中金研报采集</h2>
+      <p class="section-meta">存储机上的采集与压缩任务。文件落盘后可在知识库本地库中启用。</p></div></header>
+      <div id="cicc-body"><p class="muted">加载中…</p></div>
+    </section>
     </div>`;
   renderStatsData(s);
   if (statsLoadError) {
@@ -7069,6 +7076,103 @@ async function backupImaStorage() {
     flash(err.message, "error");
   } finally {
     if (btn && document.body.contains(btn)) btn.disabled = false;
+  }
+}
+
+let _ciccPollTimer = null;
+let _ciccLastStatus = null;
+
+function startCiccPoll() {
+  stopCiccPoll();
+  _ciccPollTimer = setInterval(() => {
+    if (location.pathname !== "/admin/knowledge") { stopCiccPoll(); return; }
+    loadCiccStatus(true);
+  }, 15000);
+}
+
+function stopCiccPoll() {
+  if (_ciccPollTimer) { clearInterval(_ciccPollTimer); _ciccPollTimer = null; }
+}
+
+function ciccRunningText(data) {
+  if (!data.available) return "不可用（未挂载存储归档）";
+  if (data.stale) return "状态过期（存储机未刷新）";
+  const parts = [];
+  if (data.running > 0) parts.push(`采集中（${data.running} 路）`);
+  if (data.compress_running > 0) parts.push("压缩回刷中");
+  if (!parts.length) parts.push("空闲");
+  parts.push(`库存 ${data.files_total ?? "—"} 篇`);
+  parts.push(`每日增量：${data.schedule_enabled ? "开" : "关"}`);
+  if (data.last_incremental?.ts) {
+    parts.push(`上次自动增量 ${fmtTs(data.last_incremental.ts)}（${data.last_incremental.note === "launched" ? "已启动" : data.last_incremental.note || ""}）`);
+  }
+  return parts.join(" · ");
+}
+
+function renderCiccPanel(data) {
+  const slot = $("#cicc-body");
+  if (!slot) return;
+  const logs = Object.entries(data.logs || {})
+    .filter(([, line]) => line)
+    .map(([name, line]) => `<p class="muted" style="margin:2px 0"><strong>${escapeHtml(name)}</strong>：${escapeHtml(line)}</p>`)
+    .join("") || '<p class="muted">暂无日志</p>';
+  const cmds = (data.commands || []).slice(-5).reverse()
+    .map((c) => `<p class="muted" style="margin:2px 0">${fmtTs(c.ts)} · ${escapeHtml(c.mode || "?")} · ${c.ok ? "已执行" : `失败（${escapeHtml(c.error || "")}）`}</p>`)
+    .join("") || '<p class="muted">暂无操作记录</p>';
+  slot.innerHTML = `
+    <p class="muted" aria-live="polite">${escapeHtml(ciccRunningText(data))} · 更新于 ${fmtTs(data.ts)}</p>
+    <div class="toolbar" style="margin:12px 0">
+      <button type="button" class="btn-normal" onclick="triggerCicc('incr')">增量采集（近3天）</button>
+      <button type="button" class="btn-normal" onclick="triggerCicc('year')">今年回补</button>
+      <button type="button" class="btn-ghost" onclick="triggerCicc('compress')">压缩回刷</button>
+      <button type="button" class="btn-ghost" onclick="triggerCicc('all')">全量回补</button>
+      <button type="button" class="btn-ghost danger" onclick="triggerCicc('stop')">停止采集</button>
+    </div>
+    <div class="toolbar" style="margin:0 0 12px">
+      <button type="button" class="btn-ghost" onclick="toggleCiccSchedule()">${data.schedule_enabled ? "关闭每日增量" : "开启每日增量"}（03:00）</button>
+      <button type="button" class="btn-ghost" onclick="loadCiccStatus()">${REFRESH_ICON}<span>刷新</span></button>
+    </div>
+    <details open><summary class="cfg-group-title">采集日志（最新一行）</summary>${logs}</details>
+    <details><summary class="cfg-group-title">最近操作</summary>${cmds}</details>`;
+}
+
+async function loadCiccStatus(quiet = false) {
+  const routeSeq = routeRenderSeq;
+  try {
+    const data = await api("/api/admin/cicc/status");
+    if (!routeStillActive(routeSeq)) return;
+    _ciccLastStatus = data;
+    renderCiccPanel(data);
+  } catch (err) {
+    if (!routeStillActive(routeSeq)) return;
+    if (!quiet) flash(err.message, "error");
+    const slot = $("#cicc-body");
+    if (slot) slot.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function triggerCicc(mode) {
+  if (mode === "all" && !confirm("全量回补会拉取历史全部研报（数万篇，需数天），确定？")) return;
+  if (mode === "stop" && !confirm("确定停止当前采集？已下载文件保留，下次触发自动续传。")) return;
+  try {
+    await api("/api/admin/cicc/trigger", { method: "POST", body: JSON.stringify({ mode }) });
+    flash(mode === "stop" ? "已发送停止命令" : "已触发，稍候刷新看进度");
+    setTimeout(() => loadCiccStatus(true), 3000);
+  } catch (err) {
+    flash(err.message, "error");
+  }
+}
+
+async function toggleCiccSchedule() {
+  try {
+    const enabled = !(_ciccLastStatus && _ciccLastStatus.schedule_enabled);
+    const r = await api("/api/admin/cicc/schedule", {
+      method: "PUT", body: JSON.stringify({ enabled }),
+    });
+    flash(r.schedule_enabled ? "每日增量已开启（每天 03:00）" : "每日增量已关闭");
+    loadCiccStatus(true);
+  } catch (err) {
+    flash(err.message, "error");
   }
 }
 

@@ -554,6 +554,14 @@ class ImaCollectorSyncIn(BaseModel):
     group_id: str = ""
 
 
+class CiccTriggerIn(BaseModel):
+    mode: str
+
+
+class CiccScheduleIn(BaseModel):
+    enabled: bool
+
+
 class ImaKbAclIn(BaseModel):
     usernames: list[str]
 
@@ -2963,6 +2971,40 @@ def create_api_router(
         write_request_file(request_path)
         _audit(admin, "ima_storage_backup", "", "requested")
         return {"status": "started", **public}
+
+    @router.get("/admin/cicc/status", dependencies=[Depends(require_admin)])
+    def cicc_status(admin: dict = Depends(require_admin)):
+        from .cicc_collector import from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        return ctl.status()
+
+    @router.post("/admin/cicc/trigger", dependencies=[Depends(require_admin)])
+    def cicc_trigger(body: CiccTriggerIn, admin: dict = Depends(require_admin)):
+        from .cicc_collector import from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        try:
+            result = ctl.trigger(body.mode, admin["username"])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        _audit(admin, "cicc_trigger", "", body.mode)
+        return result
+
+    @router.put("/admin/cicc/schedule", dependencies=[Depends(require_admin)])
+    def cicc_set_schedule(body: CiccScheduleIn, admin: dict = Depends(require_admin)):
+        from .cicc_collector import from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        result = ctl.set_schedule(body.enabled)
+        _audit(admin, "cicc_schedule", "", "enabled" if body.enabled else "disabled")
+        return result
 
     @router.get("/admin/ima-credentials", dependencies=[Depends(require_admin)])
     def get_ima_credentials():
