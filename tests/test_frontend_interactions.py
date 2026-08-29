@@ -2957,6 +2957,22 @@ def test_ima_report_search_is_debounced_and_explicitly_pages():
     assert "加载失败，重试" in more
 
 
+def test_ima_report_render_reuses_mounted_header_and_cancels_stale_search():
+    render = _fn_body("renderImaDocuments")
+    submit = _fn_body("submitImaDocumentsSearch")
+    stop = _fn_body("stopImaDocumentsAutoLoad")
+    queued = _fn_body("queueImaDocumentsSearch")
+
+    assert render.index('querySelector(".ima-report-head")') < render.index("listRoot.innerHTML")
+    assert "document.activeElement" in render
+    assert '$("#ima-doc-source")' in render
+    assert '$("#ima-report-page")' in submit
+    assert "return" in submit
+    assert "clearTimeout(_imaSearchTimer)" in stop
+    assert "_imaSearchTimer = null" in stop
+    assert "_imaSearchComposing" in queued or "isComposing" in queued
+
+
 def test_ima_day_picker_restricts_to_available_days():
     """日期菜单只列出有文档的 MMDD，点选走 selectImaDocumentsDay。"""
     src = APP_JS.read_text()

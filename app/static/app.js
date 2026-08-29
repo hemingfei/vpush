@@ -691,6 +691,7 @@ let _imaListSeq = 0;
 let _imaReaderSeq = 0;
 let _imaLoadingMore = false;
 let _imaSearchTimer = null;
+let _imaSearchComposing = false;
 let _imaTagCounts = {};
 let _imaDocumentCount = 0;
 const IMA_TAG_COMMON_RATIO = 0.5;
@@ -887,12 +888,18 @@ function selectImaDocumentGroup(value) {
 }
 
 function queueImaDocumentsSearch() {
+  if (_imaSearchComposing) return;
   clearTimeout(_imaSearchTimer);
   _imaSearchTimer = setTimeout(() => submitImaDocumentsSearch(), 250);
 }
 
 function submitImaDocumentsSearch() {
   clearTimeout(_imaSearchTimer);
+  _imaSearchTimer = null;
+  if (!$("#ima-report-page") || !$("#ima-doc-q")) {
+    _imaSearchComposing = false;
+    return;
+  }
   state.imaDocumentsQuery = ($("#ima-doc-q")?.value || "").trim();
   state.imaDocumentsDay = "";
   replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay, state.imaDocumentsTag));
@@ -1213,18 +1220,29 @@ async function renderImaDocuments(seq, encodedMediaId = "") {
     await renderKnowledge(seq);
     return;
   }
-  const sourceControls = knowledgeSourceControlsHtml(selectedGroup);
-  listRoot.innerHTML = `
+  const existingHead = listRoot.querySelector(".ima-report-head");
+  if (existingHead) {
+    const input = $("#ima-doc-q");
+    if (input && document.activeElement !== input) input.value = query;
+    const source = $("#ima-doc-source");
+    if (source) source.value = selectedGroup;
+    const body = $("#ima-docs-body");
+    if (body) body.innerHTML = imaReportSkeletonHtml();
+  } else {
+    _imaSearchComposing = false;
+    const sourceControls = knowledgeSourceControlsHtml(selectedGroup);
+    listRoot.innerHTML = `
   <header class="ima-report-head">
     <div class="ima-report-heading"><div><h2 id="ima-doc-title">最新研报</h2><p id="ima-doc-meta" class="section-meta"></p></div><button type="button" class="icon-btn" aria-label="刷新研报" title="刷新研报" onclick="refreshImaDocuments()">${REFRESH_ICON}</button></div>
     <form class="ima-report-search" onsubmit="event.preventDefault();submitImaDocumentsSearch()">
-      <label class="ima-report-searchbox">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜标题、公司、代码、行业或资料源" aria-label="搜索研报" oninput="queueImaDocumentsSearch()"><span id="ima-doc-day-nav-slot"></span></label>
+      <label class="ima-report-searchbox">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜标题、公司、代码、行业或资料源" aria-label="搜索研报" oninput="queueImaDocumentsSearch()" oncompositionstart="_imaSearchComposing=true" oncompositionend="_imaSearchComposing=false;queueImaDocumentsSearch()"><span id="ima-doc-day-nav-slot"></span></label>
       <div class="ima-report-filters">${sourceControls}<label class="ima-report-tag"><span class="sr-only">标签</span><select id="ima-doc-tag" aria-label="标签" onchange="selectImaDocumentsTag(this.value)" hidden><option value="">全部标签</option></select></label></div>
     </form>
     <div id="ima-doc-filter-chips" class="ima-doc-filter-chips"></div>
     <div class="ima-report-columns" aria-hidden="true"><span>日期</span><span>标题</span><span>资料源</span></div>
   </header>
   <div id="ima-docs-body" class="ima-report-body">${imaReportSkeletonHtml()}</div>`;
+  }
   try {
     const params = new URLSearchParams();
     if (query) params.set("q", query);
@@ -1365,6 +1383,8 @@ function clearImaDocumentsFilters() {
 }
 
 function stopImaDocumentsAutoLoad() {
+  clearTimeout(_imaSearchTimer);
+  _imaSearchTimer = null;
   _imaLoadingMore = false;
 }
 
