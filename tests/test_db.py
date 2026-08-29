@@ -6,8 +6,6 @@ import pytest
 from app.db import DB
 
 
-
-
 def test_set_settings_atomic_writes_multiple_values(tmp_path):
     db = DB(str(tmp_path / "settings.db"))
     db.set_settings_atomic({"ima_one": "value-one", "ima_two": "value-two"})
@@ -493,6 +491,171 @@ def test_revoke_and_update_register_code_note(tmp_path):
     db.close()
 
 
+def _ima_row(group_id, media_id, *, name=None, tags=None, **kwargs):
+    row = {
+        "group_id": group_id,
+        "media_id": media_id,
+        "day": "20260826",
+        "valid_day": "20260826",
+        "name": name or media_id,
+        "group_name": group_id,
+        "name_folded": (name or media_id).casefold(),
+        "metadata_folded": group_id.casefold(),
+        "abstract": "abstract",
+        "abstract_folded": "abstract",
+        "abstract_zh": "",
+        "abstract_src_hash": "hash",
+        "cover_url": "",
+        "tags_json": "[]",
+        "size": 0,
+        "chars": 8,
+        "has_pdf": 1,
+        "has_txt": 0,
+        "pdf_path": f"{media_id}.pdf",
+        "txt_path": "",
+        "downloaded_at": "2026-08-26T00:00:00+00:00",
+        "tags": tags or [],
+    }
+    row.update(kwargs)
+    return row
+
+
+def test_ima_document_index_schema_and_migration(tmp_path):
+    db = DB(str(tmp_path / "ima-index.db"))
+    tables = {
+        row["name"]
+        for row in db._rows(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+    assert {
+        "ima_document_index",
+        "ima_document_tags",
+        "ima_document_index_meta",
+    } <= tables
+    assert {
+        "idx_ima_doc_latest",
+        "idx_ima_doc_group_latest",
+        "idx_ima_doc_tag_group",
+        "idx_ima_doc_group_tag",
+    } <= {
+        row["name"]
+        for table in (
+            "ima_document_index",
+            "ima_document_tags",
+        )
+        for row in db._rows(f"PRAGMA index_list({table})")
+    }
+    columns = {row["name"] for row in db._rows("PRAGMA table_info(ima_document_index)")}
+    assert {
+        "group_id",
+        "media_id",
+        "day",
+        "valid_day",
+        "name",
+        "group_name",
+        "name_folded",
+        "metadata_folded",
+        "abstract",
+        "abstract_folded",
+        "abstract_zh",
+        "abstract_src_hash",
+        "cover_url",
+        "tags_json",
+        "size",
+        "chars",
+        "has_pdf",
+        "has_txt",
+        "pdf_path",
+        "txt_path",
+        "downloaded_at",
+    } <= columns
+    assert db.ima_document_index_meta()["status"] == "fallback"
+    db.reopen()
+    assert db.ima_document_index_meta()["status"] == "fallback"
+
+
+def test_ima_document_group_replace_is_scoped_and_atomic(tmp_path):
+    db = DB(str(tmp_path / "ima-group.db"))
+    db.replace_ima_document_index(
+        [_ima_row("one", "old"), _ima_row("two", "keep")], "before", 10
+    )
+    db.replace_ima_document_group("one", [_ima_row("one", "new", tags=["new-tag"])])
+    assert db._rows("SELECT media_id FROM ima_document_index WHERE group_id = 'one'") == [
+        {"media_id": "new"}
+    ]
+    assert db._rows("SELECT media_id FROM ima_document_index WHERE group_id = 'two'") == [
+        {"media_id": "keep"}
+    ]
+    assert db._rows("SELECT tag FROM ima_document_tags WHERE group_id = 'one'") == [
+        {"tag": "new-tag"}
+    ]
+
+    db._execute(
+        "CREATE TRIGGER ima_fail_group BEFORE INSERT ON ima_document_index "
+        "WHEN NEW.media_id = 'bad' BEGIN SELECT RAISE(ABORT, 'controlled failure'); END"
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="controlled failure"):
+        db.replace_ima_document_group(
+            "one", [_ima_row("one", "replacement"), _ima_row("one", "bad")]
+        )
+    assert db._rows("SELECT media_id FROM ima_document_index WHERE group_id = 'one'") == [
+        {"media_id": "new"}
+    ]
+    assert db._rows("SELECT media_id FROM ima_document_index WHERE group_id = 'two'") == [
+        {"media_id": "keep"}
+    ]
+
+
+def test_ima_document_index_replace_and_batch_upsert(tmp_path):
+    db = DB(str(tmp_path / "ima-batch.db"))
+    first = _ima_row("one", "one", tags=["old"])
+    db.replace_ima_document_index([first], "fp-1", 12)
+    meta = db.ima_document_index_meta()
+    assert meta["status"] == "ready"
+    assert meta["version"] == 1
+    assert meta["fingerprint"] == "fp-1"
+    assert meta["duration_ms"] == 12
+    assert meta["document_count"] == 1
+
+    changed = _ima_row("one", "one", name="changed", tags=["new", "second"])
+    added = _ima_row("two", "two", tags=["new"])
+    assert db.update_ima_document_batch([changed, added], "fp-2") == 2
+    assert db._rows(
+        "SELECT name FROM ima_document_index WHERE group_id = 'one' AND media_id = 'one'"
+    )[0]["name"] == "changed"
+    assert db._rows("SELECT tag FROM ima_document_tags WHERE group_id = 'one'") == [
+        {"tag": "new"},
+        {"tag": "second"},
+    ]
+    assert db.ima_document_index_meta()["fingerprint"] == "fp-2"
+    assert db.update_ima_document_batch([], "ignored") == 0
+    assert db.ima_document_index_meta()["fingerprint"] == "fp-2"
+
+
+def test_ima_document_index_meta_status_and_rollback(tmp_path):
+    db = DB(str(tmp_path / "ima-meta.db"))
+    db.replace_ima_document_index([_ima_row("one", "old")], "stable", 3)
+    db.mark_ima_document_index("rebuilding")
+    assert db.ima_document_index_meta()["status"] == "rebuilding"
+    with pytest.raises(ValueError, match="invalid"):
+        db.mark_ima_document_index("invalid")
+
+    db._execute(
+        "CREATE TRIGGER ima_fail_all BEFORE INSERT ON ima_document_index "
+        "WHEN NEW.media_id = 'bad' BEGIN SELECT RAISE(ABORT, 'controlled failure'); END"
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="controlled failure"):
+        db.replace_ima_document_index(
+            [_ima_row("one", "new"), _ima_row("one", "bad")], "broken", 99
+        )
+    assert db._rows("SELECT media_id FROM ima_document_index") == [{"media_id": "old"}]
+    meta = db.ima_document_index_meta()
+    assert meta["status"] == "rebuilding"
+    assert meta["fingerprint"] == "stable"
+    assert meta["document_count"] == 1
+
+
 def test_default_tag_rules_cover_market_topics():
     from app.db import DEFAULT_TAG_RULES
     from app.tagging import TAG_VOCABULARY_MAX
@@ -526,7 +689,7 @@ def test_merge_default_stock_aliases_seeds_and_purges(tmp_path):
 
 
 def test_merge_default_tag_vocabulary_adds_missing_keeps_custom(tmp_path):
-    from app.db import DEFAULT_TAG_RULES, DB
+    from app.db import DB, DEFAULT_TAG_RULES
 
     db = DB(str(tmp_path / "t.db"))
     db.set_tag_vocabulary([{"tag": "宏观", "keywords": ["只留央行"]}])
