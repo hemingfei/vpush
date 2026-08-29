@@ -495,8 +495,8 @@ def _ima_row(group_id, media_id, *, name=None, tags=None, **kwargs):
     row = {
         "group_id": group_id,
         "media_id": media_id,
-        "day": "20260826",
-        "valid_day": "20260826",
+        "day": "0826",
+        "valid_day": "0826",
         "name": name or media_id,
         "group_name": group_id,
         "name_folded": (name or media_id).casefold(),
@@ -546,7 +546,7 @@ def test_ima_document_index_schema_and_migration(tmp_path):
         )
         for row in db._rows(f"PRAGMA index_list({table})")
     }
-    columns = {row["name"] for row in db._rows("PRAGMA table_info(ima_document_index)")}
+    columns = {row["name"]: row for row in db._rows("PRAGMA table_info(ima_document_index)")}
     assert {
         "group_id",
         "media_id",
@@ -569,8 +569,49 @@ def test_ima_document_index_schema_and_migration(tmp_path):
         "pdf_path",
         "txt_path",
         "downloaded_at",
-    } <= columns
+    } <= columns.keys()
+    assert columns["day"]["dflt_value"] == "'unknown'"
+    assert columns["valid_day"]["type"] == "INTEGER"
+    meta_columns = {
+        row["name"]: row
+        for row in db._rows("PRAGMA table_info(ima_document_index_meta)")
+    }
+    assert meta_columns["version"]["dflt_value"] == "1"
+
+    def index_columns(name):
+        return [
+            row["name"]
+            for row in db._rows(f"PRAGMA index_info({name})")
+        ]
+
+    assert index_columns("idx_ima_doc_latest") == ["valid_day", "day", "name"]
+    assert index_columns("idx_ima_doc_group_latest") == [
+        "group_id",
+        "valid_day",
+        "day",
+        "name",
+    ]
+    assert {
+        "idx_ima_doc_latest",
+        "idx_ima_doc_group_latest",
+        "idx_ima_doc_tag_group",
+        "idx_ima_doc_group_tag",
+    } <= {
+        row["name"]
+        for table in (
+            "ima_document_index",
+            "ima_document_tags",
+        )
+        for row in db._rows(f"PRAGMA index_list({table})")
+    }
     assert db.ima_document_index_meta()["status"] == "fallback"
+    assert db.ima_document_index_meta()["version"] == 1
+    assert isinstance(db.ima_document_index_meta()["duration_ms"], int)
+    db._execute("DELETE FROM ima_document_index_meta")
+    fallback = db.ima_document_index_meta()
+    assert fallback["status"] == "fallback"
+    assert fallback["version"] == 1
+    assert isinstance(fallback["document_count"], int)
     db.reopen()
     assert db.ima_document_index_meta()["status"] == "fallback"
 
@@ -590,6 +631,17 @@ def test_ima_document_group_replace_is_scoped_and_atomic(tmp_path):
     assert db._rows("SELECT tag FROM ima_document_tags WHERE group_id = 'one'") == [
         {"tag": "new-tag"}
     ]
+    db.replace_ima_document_group(
+        "one",
+        [
+            _ima_row("one", "valid", name="valid", day="0826"),
+            _ima_row("one", "unknown", name="unknown", day="unknown"),
+        ],
+    )
+    assert db._rows(
+        "SELECT day FROM ima_document_index WHERE group_id = 'one' "
+        "ORDER BY valid_day DESC, day DESC, name DESC"
+    ) == [{"day": "0826"}, {"day": "unknown"}]
 
     db._execute(
         "CREATE TRIGGER ima_fail_group BEFORE INSERT ON ima_document_index "
@@ -600,7 +652,8 @@ def test_ima_document_group_replace_is_scoped_and_atomic(tmp_path):
             "one", [_ima_row("one", "replacement"), _ima_row("one", "bad")]
         )
     assert db._rows("SELECT media_id FROM ima_document_index WHERE group_id = 'one'") == [
-        {"media_id": "new"}
+        {"media_id": "unknown"},
+        {"media_id": "valid"},
     ]
     assert db._rows("SELECT media_id FROM ima_document_index WHERE group_id = 'two'") == [
         {"media_id": "keep"}
@@ -628,9 +681,39 @@ def test_ima_document_index_replace_and_batch_upsert(tmp_path):
         {"tag": "new"},
         {"tag": "second"},
     ]
-    assert db.ima_document_index_meta()["fingerprint"] == "fp-2"
     assert db.update_ima_document_batch([], "ignored") == 0
     assert db.ima_document_index_meta()["fingerprint"] == "fp-2"
+
+    db._execute(
+        "CREATE TRIGGER ima_fail_batch BEFORE INSERT ON ima_document_index "
+        "WHEN NEW.media_id = 'bad' BEGIN SELECT RAISE(ABORT, 'batch failure'); END"
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="batch failure"):
+        db.update_ima_document_batch(
+            [_ima_row("one", "one", name="rollback", tags=["rollback"]),
+             _ima_row("two", "bad", tags=["bad"])],
+            "should-not-persist",
+        )
+    assert db._rows(
+        "SELECT name FROM ima_document_index WHERE group_id = 'one' AND media_id = 'one'"
+    )[0]["name"] == "changed"
+    assert db._rows("SELECT tag FROM ima_document_tags WHERE group_id = 'one'") == [
+        {"tag": "new"},
+        {"tag": "second"},
+    ]
+    assert db.ima_document_index_meta()["fingerprint"] == "fp-2"
+
+    assert db.update_ima_document_batch(
+        [_ima_row("three", "same", name="first", tags=["first"]),
+         _ima_row("three", "same", name="last", tags=["last"])],
+        "fp-3",
+    ) == 1
+    assert db._rows(
+        "SELECT name FROM ima_document_index WHERE group_id = 'three' AND media_id = 'same'"
+    ) == [{"name": "last"}]
+    assert db._rows("SELECT tag FROM ima_document_tags WHERE group_id = 'three'") == [
+        {"tag": "last"}
+    ]
 
 
 def test_ima_document_index_meta_status_and_rollback(tmp_path):

@@ -542,8 +542,8 @@ CREATE INDEX IF NOT EXISTS idx_ima_kb_sub_group ON ima_kb_subscriptions(group_id
 CREATE TABLE IF NOT EXISTS ima_document_index (
     group_id TEXT NOT NULL,
     media_id TEXT NOT NULL,
-    day TEXT NOT NULL DEFAULT '',
-    valid_day TEXT NOT NULL DEFAULT '',
+    day TEXT NOT NULL DEFAULT 'unknown',
+    valid_day INTEGER NOT NULL DEFAULT 0,
     name TEXT NOT NULL DEFAULT '',
     group_name TEXT NOT NULL DEFAULT '',
     name_folded TEXT NOT NULL DEFAULT '',
@@ -571,7 +571,7 @@ CREATE TABLE IF NOT EXISTS ima_document_tags (
 );
 CREATE TABLE IF NOT EXISTS ima_document_index_meta (
     id INTEGER PRIMARY KEY CHECK (id = 1),
-    version INTEGER NOT NULL DEFAULT 0,
+    version INTEGER NOT NULL DEFAULT 1,
     status TEXT NOT NULL DEFAULT 'fallback',
     fingerprint TEXT NOT NULL DEFAULT '',
     rebuilt_at TEXT NOT NULL DEFAULT '',
@@ -581,9 +581,9 @@ CREATE TABLE IF NOT EXISTS ima_document_index_meta (
 );
 INSERT OR IGNORE INTO ima_document_index_meta (id) VALUES (1);
 CREATE INDEX IF NOT EXISTS idx_ima_doc_latest
-    ON ima_document_index(valid_day DESC, name_folded, media_id);
+    ON ima_document_index(valid_day DESC, day DESC, name DESC);
 CREATE INDEX IF NOT EXISTS idx_ima_doc_group_latest
-    ON ima_document_index(group_id, valid_day DESC, name_folded, media_id);
+    ON ima_document_index(group_id, valid_day DESC, day DESC, name DESC);
 CREATE INDEX IF NOT EXISTS idx_ima_doc_tag_group
     ON ima_document_tags(tag, group_id, media_id);
 CREATE INDEX IF NOT EXISTS idx_ima_doc_group_tag
@@ -848,6 +848,7 @@ class DB:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_ima_kb_sub_group ON ima_kb_subscriptions(group_id)"
         )
+        self._migrate_ima_document_index()
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS user_keywords ("
             "  user_id INTEGER NOT NULL,"
@@ -1027,6 +1028,115 @@ class DB:
                 f"CREATE UNIQUE INDEX IF NOT EXISTS uq_users_{column} "
                 f"ON users({column}) WHERE {column} != ''"
             )
+
+    def _migrate_ima_document_index(self) -> None:
+        """Upgrade the first read-model schema while keeping its data intact."""
+        doc_columns = {
+            row["name"]: row
+            for row in self._rows("PRAGMA table_info(ima_document_index)")
+        }
+        needs_doc_rebuild = (
+            doc_columns["day"]["dflt_value"] != "'unknown'"
+            or doc_columns["valid_day"]["type"].upper() != "INTEGER"
+        )
+        index_names = (
+            "idx_ima_doc_latest",
+            "idx_ima_doc_group_latest",
+            "idx_ima_doc_tag_group",
+            "idx_ima_doc_group_tag",
+        )
+        for index_name in index_names:
+            self._conn.execute(f"DROP INDEX IF EXISTS {index_name}")
+
+        if needs_doc_rebuild:
+            self._conn.execute(
+                "ALTER TABLE ima_document_index RENAME TO ima_document_index_legacy"
+            )
+            self._conn.execute(
+                "CREATE TABLE ima_document_index ("
+                " group_id TEXT NOT NULL, media_id TEXT NOT NULL,"
+                " day TEXT NOT NULL DEFAULT 'unknown',"
+                " valid_day INTEGER NOT NULL DEFAULT 0,"
+                " name TEXT NOT NULL DEFAULT '', group_name TEXT NOT NULL DEFAULT '',"
+                " name_folded TEXT NOT NULL DEFAULT '', metadata_folded TEXT NOT NULL DEFAULT '',"
+                " abstract TEXT NOT NULL DEFAULT '', abstract_folded TEXT NOT NULL DEFAULT '',"
+                " abstract_zh TEXT NOT NULL DEFAULT '', abstract_src_hash TEXT NOT NULL DEFAULT '',"
+                " cover_url TEXT NOT NULL DEFAULT '', tags_json TEXT NOT NULL DEFAULT '[]',"
+                " size INTEGER NOT NULL DEFAULT 0, chars INTEGER NOT NULL DEFAULT 0,"
+                " has_pdf INTEGER NOT NULL DEFAULT 0, has_txt INTEGER NOT NULL DEFAULT 0,"
+                " pdf_path TEXT NOT NULL DEFAULT '', txt_path TEXT NOT NULL DEFAULT '',"
+                " downloaded_at TEXT NOT NULL DEFAULT '',"
+                " PRIMARY KEY (group_id, media_id)"
+                ")"
+            )
+            columns = ", ".join(IMA_DOCUMENT_INDEX_COLUMNS)
+            select_columns = ", ".join(
+                [
+                    "group_id",
+                    "media_id",
+                    "COALESCE(NULLIF(TRIM(day), ''), 'unknown')",
+                    "CASE WHEN TRIM(day) GLOB '[0-9][0-9][0-9][0-9]' THEN 1 ELSE 0 END",
+                    *IMA_DOCUMENT_INDEX_COLUMNS[4:],
+                ]
+            )
+            self._conn.execute(
+                f"INSERT INTO ima_document_index ({columns}) "
+                f"SELECT {select_columns} FROM ima_document_index_legacy"
+            )
+            self._conn.execute("DROP TABLE ima_document_index_legacy")
+
+        meta_columns = {
+            row["name"]: row
+            for row in self._rows("PRAGMA table_info(ima_document_index_meta)")
+        }
+        if meta_columns["version"]["dflt_value"] != "1":
+            self._conn.execute(
+                "ALTER TABLE ima_document_index_meta "
+                "RENAME TO ima_document_index_meta_legacy"
+            )
+            self._conn.execute(
+                "CREATE TABLE ima_document_index_meta ("
+                " id INTEGER PRIMARY KEY CHECK (id = 1),"
+                " version INTEGER NOT NULL DEFAULT 1,"
+                " status TEXT NOT NULL DEFAULT 'fallback',"
+                " fingerprint TEXT NOT NULL DEFAULT '',"
+                " rebuilt_at TEXT NOT NULL DEFAULT '',"
+                " duration_ms INTEGER NOT NULL DEFAULT 0,"
+                " document_count INTEGER NOT NULL DEFAULT 0,"
+                " error TEXT NOT NULL DEFAULT ''"
+                ")"
+            )
+            self._conn.execute(
+                "INSERT INTO ima_document_index_meta "
+                "(id, version, status, fingerprint, rebuilt_at, duration_ms, "
+                "document_count, error) "
+                "SELECT id, CASE WHEN COALESCE(version, 0) = 0 THEN 1 ELSE version END, "
+                "status, fingerprint, rebuilt_at, duration_ms, document_count, error "
+                "FROM ima_document_index_meta_legacy"
+            )
+            self._conn.execute("DROP TABLE ima_document_index_meta_legacy")
+        else:
+            self._conn.execute(
+                "UPDATE ima_document_index_meta SET version = 1 "
+                "WHERE version IS NULL OR version = 0"
+            )
+
+        self._conn.execute(
+            "CREATE INDEX idx_ima_doc_latest "
+            "ON ima_document_index(valid_day DESC, day DESC, name DESC)"
+        )
+        self._conn.execute(
+            "CREATE INDEX idx_ima_doc_group_latest "
+            "ON ima_document_index(group_id, valid_day DESC, day DESC, name DESC)"
+        )
+        self._conn.execute(
+            "CREATE INDEX idx_ima_doc_tag_group "
+            "ON ima_document_tags(tag, group_id, media_id)"
+        )
+        self._conn.execute(
+            "CREATE INDEX idx_ima_doc_group_tag "
+            "ON ima_document_tags(group_id, tag, media_id)"
+        )
 
     def close(self):
         with self._lock:
@@ -3247,11 +3357,12 @@ class DB:
         if not isinstance(raw_tags, (list, tuple, set)):
             raw_tags = []
         tags = list(dict.fromkeys(str(tag) for tag in raw_tags if str(tag)))
+        day = str(source.get("day") or "unknown").strip() or "unknown"
         values = {
             "group_id": actual_group_id,
             "media_id": media_id,
-            "day": str(source.get("day") or ""),
-            "valid_day": str(source.get("valid_day") or source.get("day") or ""),
+            "day": day,
+            "valid_day": int(day.isascii() and len(day) == 4 and day.isdigit()),
             "name": str(source.get("name") or ""),
             "group_name": str(source.get("group_name") or ""),
             "name_folded": str(
@@ -3327,7 +3438,7 @@ class DB:
     def _ima_meta_fallback() -> dict:
         return {
             "id": 1,
-            "version": 0,
+            "version": 1,
             "status": "fallback",
             "fingerprint": "",
             "rebuilt_at": "",
