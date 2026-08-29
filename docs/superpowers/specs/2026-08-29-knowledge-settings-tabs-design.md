@@ -40,7 +40,7 @@
 - 两栏挂载（父目录递归规则不变）
 - 保存挂载：写入各库 `folder_ids` 与 `interval_seconds`
 - 立即同步：只同步**当前选中**且已挂载的库
-- 页脚：`Token 已保存` 或 `Token 未保存`（只读，来自现有 `refresh_token.set`）
+- 页脚：未在跑时显示 `Token 已保存/未保存`；同步中显示当前库 + 阶段 + 进度条（见第 4.1 节）
 
 间隔控件：每行分段按钮，值只能是 3600 / 21600 / 86400 秒，默认 3600。未挂载的库也可以先改间隔，保存时一起写入。
 
@@ -61,6 +61,26 @@
 
 `PUT /api/admin/ima-collector` 保存 groups 时写入每库 `interval_seconds`。不再要求本页提交 uid/token/interval。
 
+## 4.1 实时进度
+
+现在同步中只显示「同步中…」，`last_result` 要等整轮结束才更新。改为内存进度，挂在 `GET /api/admin/ima-collector` 的 `progress` 上，不写库、不加 WebSocket。
+
+```json
+{
+  "group_id": "7479082602225992",
+  "group_name": "全球顶级投行研报库",
+  "phase": "download",
+  "listed": 11449,
+  "pending": 9600,
+  "downloaded": 1858,
+  "failed": 2
+}
+```
+
+`phase` 为 `listing` 或 `download`。列目录时 `listed` 为已扫到的文件数；下载时条为 `downloaded / pending`。每完成一份 PDF 更新内存；`status()` 读取该快照。未在跑时 `progress` 为 `null`。
+
+采集页在 `running` 时每 2 秒只刷新页脚进度，不重绘挂载树。立即同步按钮显示「同步中」并禁用。空闲后恢复上次结果文案。
+
 `/api/admin/ima-credentials` 暂留，本页不再调用。IMA 时间线抓取器代码不删。
 
 ## 5. 对现网三库的默认
@@ -72,6 +92,7 @@
 - 桌面 1440 与手机 390：采集首屏无 Cookie/OpenAPI/UID/Token 表单；三页签可切；间隔档可点
 - 保存后刷新，各库间隔仍在
 - 立即同步只让选中库出现在本次 `last_result` 的 succeeded/failed 里
+- 同步中页脚显示库名、`下载 x / y` 或 `列目录 n`，进度条约每 2 秒变；不重绘文件夹树
 - 定时：1h 库到期会跑，24h 库未到期不跑
 - `tests/test_frontend_interactions.py` 覆盖页签与间隔控件；`tests/test_ima_documents.py` 覆盖分库到期与 `group_id` 同步
 - 不提交 `.cursor/`、`work/`、密钥
