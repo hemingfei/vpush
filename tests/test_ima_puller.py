@@ -1,9 +1,13 @@
 import hashlib
+import json
+import threading
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
 
-from app.ima_puller import MAX_PDF_BYTES, allowed_url, save_pdf, safe_dest
+from app.ima_puller import MAX_PDF_BYTES, allowed_url, save_pdf, safe_dest, serve_puller
 
 
 def test_safe_dest_rejects_escape(tmp_path):
@@ -157,3 +161,93 @@ def test_save_pdf_rejects_oversize_and_cleans_part(tmp_path, monkeypatch):
         )
     assert not dest_path.exists()
     assert not list(dest_path.parent.glob("*.part"))
+
+
+def _start(tmp_path, monkeypatch, token="secret"):
+    import app.ima_puller as puller
+
+    # save_pdf uses build_opener(...).open(...), not bare urlopen.
+    # Patching urllib.request.build_opener is process-wide, so FakeOpener
+    # must only intercept IMA CDN GETs and let localhost /pull through.
+    real_build_opener = urllib.request.build_opener
+    body = b"%PDF-1.7abcd"
+
+    class Resp:
+        def read(self, n):
+            data = getattr(self, "_data", body)
+            self._data = b""
+            return data[:n]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    class FakeOpener:
+        def open(self, req, data=None, timeout=120):
+            url = req.get_full_url() if hasattr(req, "get_full_url") else str(req)
+            if allowed_url(url):
+                return Resp()
+            return real_build_opener().open(req, data, timeout)
+
+    monkeypatch.setattr(
+        puller.urllib.request,
+        "build_opener",
+        lambda *handlers: FakeOpener(),
+    )
+    server = serve_puller(tmp_path, token, host="127.0.0.1", port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    return server, f"http://127.0.0.1:{port}"
+
+
+def test_pull_requires_token(tmp_path, monkeypatch):
+    server, base = _start(tmp_path, monkeypatch)
+    try:
+        req = urllib.request.Request(
+            base + "/pull",
+            data=json.dumps({
+                "dest": "g/a.pdf",
+                "url": "https://res-skb.ima.qq.com/a.pdf",
+                "headers": {},
+                "expected_size": 12,
+            }).encode(),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            urllib.request.urlopen(req, timeout=5)
+            raise AssertionError("should 401")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 401
+    finally:
+        server.shutdown()
+
+
+def test_pull_writes_pdf(tmp_path, monkeypatch):
+    server, base = _start(tmp_path, monkeypatch)
+    try:
+        req = urllib.request.Request(
+            base + "/pull",
+            data=json.dumps({
+                "dest": "g/a.pdf",
+                "url": "https://res-skb.ima.qq.com/a.pdf",
+                "headers": {"X-IMA-Sign": "sig"},
+                "expected_size": 12,
+            }).encode(),
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer secret",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            body = json.loads(resp.read().decode())
+        assert body["size"] == 12
+        assert (tmp_path / "g" / "a.pdf").read_bytes().startswith(b"%PDF-1.7")
+        health = urllib.request.urlopen(base + "/healthz", timeout=5).read()
+        assert health == b"ok"
+    finally:
+        server.shutdown()
