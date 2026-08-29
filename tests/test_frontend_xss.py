@@ -72,8 +72,9 @@ def test_innerhtml_templates_escape_user_fields():
     for i, line in enumerate(APP_JS.read_text().splitlines(), 1):
         if "${" not in line:
             continue
-        # JS 字符串上下文（非 HTML 渲染）：flash 用 textContent，confirm/alert/prompt 直接弹文本
-        if re.search(r"confirm\(|alert\(|prompt\(|flash\(|textContent\s*=", line):
+        # JS 字符串上下文（非 HTML 渲染）：flash 用 textContent，confirm/alert/prompt
+        # 与应用内弹窗 showConfirm/showAlert/showPrompt 都直接按文本渲染
+        if re.search(r"show(?:Confirm|Alert|Prompt)\(|confirm\(|alert\(|prompt\(|flash\(|textContent\s*=", line):
             continue
         # emptyState 内部自行 escapeHtml，传入的参数无需再转义
         if re.search(r"emptyState\(", line):

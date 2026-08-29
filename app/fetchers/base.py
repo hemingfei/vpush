@@ -192,10 +192,14 @@ def attachment_lines(post: Post, note: str = "（链接可能过期）") -> list
 
 
 def format_published_at(raw: str) -> str:
-    """把时间戳（毫秒/秒）或 RFC2822（X/微博）格式化为可读时间，其他格式原样返回。"""
+    """把时间戳（毫秒/秒）或 RFC2822（X/微博）格式化为可读时间，其他格式原样返回。
+
+    保留秒位：同分钟多条消息（MX 快讯刷屏等）在前端时间线按 published_at 排序时，
+    分钟截断会打乱真实次序，秒位是排稳定序的关键。
+    """
     raw = (raw or "").strip()
     dt = parse_published_at(raw)
-    return dt.strftime("%Y-%m-%d %H:%M") if dt else raw
+    return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else raw
 
 
 class ThreadLocalClient:

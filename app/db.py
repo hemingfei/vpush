@@ -707,8 +707,55 @@ class DB:
                 continue
             self._conn.execute(
                 "UPDATE posts SET published_at = ? WHERE id = ?",
-                (dt.strftime("%Y-%m-%d %H:%M"), row["id"]),
+                (dt.strftime("%Y-%m-%d %H:%M:%S"), row["id"]),
             )
+        # MX 帖的 published_at 曾被截断到分钟，同分钟消息在时间线失去次序依据；
+        # detail.createtime 存有毫秒时间戳，一次性回填真实秒位。
+        # published_at 只有 1 个冒号即分钟精度（带秒的是 2 个），以此保持幂等；
+        # 回填值的分钟位与现值不吻合视为 detail 错位，宁缺毋滥跳过
+        cn_tz = timezone(timedelta(hours=8))
+        for row in self._rows(
+            "SELECT id, published_at, detail FROM posts "
+            "WHERE platform = 'mx' AND detail != '' "
+            "AND length(published_at) - length(replace(published_at, ':', '')) = 1"
+        ):
+            try:
+                detail = json.loads(row["detail"]) if isinstance(row["detail"], str) else row["detail"]
+                raw_ct = detail.get("createtime")
+                ts = int(raw_ct) if raw_ct is not None and not isinstance(raw_ct, bool) else 0
+            except (TypeError, ValueError):
+                ts = 0
+            if ts > 0:
+                ts = ts / 1000 if ts > 1e12 else ts
+                try:
+                    formatted = datetime.fromtimestamp(ts, tz=cn_tz).strftime("%Y-%m-%d %H:%M:%S")
+                except (ValueError, OSError, OverflowError):
+                    continue
+            elif isinstance(raw_ct, str) and len(raw_ct) >= 19 and raw_ct[16] == ":":
+                # createtime 本就是带秒的北京时间串（"YYYY-MM-DD HH:MM:SS"），直接采用
+                formatted = raw_ct[:19]
+            else:
+                continue
+            if not row["published_at"].startswith(formatted[:16]):
+                continue
+            self._conn.execute(
+                "UPDATE posts SET published_at = ? WHERE id = ?", (formatted, row["id"])
+            )
+        # MX 正文换行曾因服务端双重转义混入字面量「反斜杠+n/r」，与真实 CR 混杂，
+        # 页面显示成 "\n" 文本或空行：统一还原成真实换行并折叠连续换行（与新抓取
+        # 走同一归一化函数）。按内容含反斜杠/CR 筛选保持幂等，干净库不产生写入。
+        from .fetchers.mx.fetcher import normalize_mx_text
+
+        for row in self._rows(
+            "SELECT id, content FROM posts "
+            "WHERE platform = 'mx' "
+            "AND (instr(content, char(92)) > 0 OR instr(content, char(13)) > 0)"
+        ):
+            cleaned = normalize_mx_text(row["content"])
+            if cleaned != row["content"]:
+                self._conn.execute(
+                    "UPDATE posts SET content = ? WHERE id = ?", (cleaned, row["id"])
+                )
         user_cols = {row["name"] for row in self._rows("PRAGMA table_info(users)")}
         if "wechat_openid" not in user_cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN wechat_openid TEXT NOT NULL DEFAULT ''")

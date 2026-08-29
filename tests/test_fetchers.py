@@ -884,9 +884,10 @@ from app.fetchers.weibo import WeiboFetcher, resolve_weibo_profile
 
 
 def test_format_published_at():
-    assert format_published_at("1785840071000") == "2026-08-04 18:41"
-    assert format_published_at("1785840071") == "2026-08-04 18:41"
-    assert format_published_at("Tue Aug 04 21:00:00 +0800 2026") == "2026-08-04 21:00"
+    # 保留秒位：时间线按 published_at 排序，同分钟多条消息需要秒位分辨先后
+    assert format_published_at("1785840071000") == "2026-08-04 18:41:11"
+    assert format_published_at("1785840071") == "2026-08-04 18:41:11"
+    assert format_published_at("Tue Aug 04 21:00:00 +0800 2026") == "2026-08-04 21:00:00"
     assert format_published_at("") == ""
 
 
@@ -978,7 +979,7 @@ def test_weibo_parse_fixture():
     assert posts[0].external_id == "M1"
     assert posts[0].url == "https://weibo.com/detail/M1"
     assert "行情" in posts[0].content
-    assert posts[0].published_at == "2026-08-04 21:00"
+    assert posts[0].published_at == "2026-08-04 21:00:00"
 
 
 def test_resolve_weibo_profile(monkeypatch):

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from app.config import MxConfig
 from app.db import DB
 from app.fetchers.base import Post
-from app.fetchers.mx.fetcher import MxFetcher
+from app.fetchers.mx.fetcher import MxFetcher, normalize_mx_text
 from app.fetchers.mx.ws import MxWsClient
 from app.plaza import filter_plaza_kol_rows, kol_plaza_hidden
 from app.services.mx_sync import MXRoomSyncService
@@ -87,6 +87,84 @@ def test_pic_message_keeps_images_and_text():
     assert post.external_id == "9"
 
 
+def test_file_message_with_image_url_treated_as_pic():
+    """file 消息 URL 是图片格式（png/jpg 等）时按图片处理，不能整条丢掉。"""
+    db = make_db()
+    fetcher = make_fetcher(db)
+    kol = make_kol(db)
+    raw = {
+        "id": 11,
+        "rid": 101,
+        "msg": '[{"type": "text", "msg": ""}, {"type": "file", "url": "https://img.test/a.png?bizType=im", "name": "清北"}]',
+        "createtime": 1700000000000,
+    }
+    post = fetcher._parse_message_to_post(raw, kol)
+    assert post is not None
+    assert post.images and ".png" in post.images[0]
+
+
+def test_file_message_image_detected_by_name_extension():
+    """URL 没有扩展名但文件名带图片扩展名时同样按图片处理。"""
+    db = make_db()
+    fetcher = make_fetcher(db)
+    kol = make_kol(db)
+    raw = {
+        "id": 12,
+        "rid": 101,
+        "msg": '[{"type": "file", "url": "https://img.test/download?id=1", "name": "清北.JPG"}]',
+        "createtime": 1700000000000,
+    }
+    post = fetcher._parse_message_to_post(raw, kol)
+    assert post is not None
+    assert len(post.images) == 1
+
+
+def test_file_message_without_extension_treated_as_pic():
+    """URL 没有任何扩展名时也按图片处理（平台转存图常不带格式后缀）。"""
+    db = make_db()
+    fetcher = make_fetcher(db)
+    kol = make_kol(db)
+    raw = {
+        "id": 14,
+        "rid": 101,
+        "msg": '[{"type": "file", "url": "https://static.dingtalk.com/media/lALPM25nMDmpznskzQED_0A0A0A", "name": "清北"}]',
+        "createtime": 1700000000000,
+    }
+    post = fetcher._parse_message_to_post(raw, kol)
+    assert post is not None
+    assert len(post.images) == 1
+
+
+def test_file_message_no_url_ext_file_name_ext_respected():
+    """URL 无后缀但文件名带非图片扩展名（如 .pdf）时仍是文件，不按图片处理。"""
+    db = make_db()
+    fetcher = make_fetcher(db)
+    kol = make_kol(db)
+    raw = {
+        "id": 15,
+        "rid": 101,
+        "msg": '[{"type": "file", "url": "https://img.test/download?id=1", "name": "报告.pdf"}]',
+        "createtime": 1700000000000,
+    }
+    post = fetcher._parse_message_to_post(raw, kol)
+    assert post is None
+
+
+def test_file_message_non_image_still_dropped():
+    """file 消息不是图片格式（如 pdf）时维持原行为：解析不出内容则丢弃。"""
+    db = make_db()
+    fetcher = make_fetcher(db)
+    kol = make_kol(db)
+    raw = {
+        "id": 13,
+        "rid": 101,
+        "msg": '[{"type": "file", "url": "https://img.test/doc.pdf", "name": "文档"}]',
+        "createtime": 1700000000000,
+    }
+    post = fetcher._parse_message_to_post(raw, kol)
+    assert post is None
+
+
 def test_json_encoded_plain_string_msg():
     db = make_db()
     fetcher = make_fetcher(db)
@@ -94,6 +172,102 @@ def test_json_encoded_plain_string_msg():
     raw = {"id": 10, "rid": 101, "msg": '"纯文本"', "createtime": 1700000000000}
     post = fetcher._parse_message_to_post(raw, kol)
     assert post is not None and post.content == "纯文本"
+
+
+# ---- 正文换行归一化 ----
+
+def test_normalize_mx_text_unescapes_and_collapses():
+    """字面量「反斜杠+n/r」与真实 CR/CRLF 统一还原成单个换行；连续换行压成一个。"""
+    assert normalize_mx_text("第一段\\n\\n第二段") == "第一段\n第二段"
+    assert normalize_mx_text("第一段\\r\\n第二段") == "第一段\n第二段"
+    assert normalize_mx_text("A\r\n\r\nB\r\nC") == "A\nB\nC"
+    assert normalize_mx_text("A\rB") == "A\nB"
+    # 真实 CR 后跟字面量 \n（编辑前缀场景）→ 归并成一个换行
+    assert normalize_mx_text("前缀\r\\n正文") == "前缀\n正文"
+    # 只有空白字符（含全角空格）的行按空行处理
+    u3000 = "\u3000"
+    assert normalize_mx_text(f"A{u3000}\n{u3000}\nB") == f"A{u3000}\nB"
+    assert normalize_mx_text("A\n   \nB") == "A\nB"
+    # 无换行内容原样保留，结果幂等
+    assert normalize_mx_text("普通文本") == "普通文本"
+    once = normalize_mx_text("A\n\n\\nB")
+    assert normalize_mx_text(once) == once
+
+
+def test_message_newlines_normalized_in_post():
+    """入库正文：服务端双重转义的字面量换行还原，跨 text 片段的连续换行也折叠。"""
+    db = make_db()
+    fetcher = make_fetcher(db)
+    kol = make_kol(db)
+    raw = {
+        "id": 21,
+        "rid": 101,
+        "msg": '[{"type": "text", "msg": "第一段\\\\n\\\\n第二段"}, {"type": "text", "msg": "\\\\n\\\\n第三段"}]',
+        "createtime": 1700000000000,
+    }
+    post = fetcher._parse_message_to_post(raw, kol)
+    assert post.content == "第一段\n第二段\n第三段"
+
+
+def test_real_crlf_message_normalized():
+    """服务端正常转义（单层 \r\n）的消息解码后是真实 CRLF，同样折叠为单个换行。"""
+    db = make_db()
+    fetcher = make_fetcher(db)
+    kol = make_kol(db)
+    raw = {
+        "id": 23,
+        "rid": 101,
+        "msg": '[{"type": "text", "msg": "A\\r\\n\\r\\nB"}]',
+        "createtime": 1700000000000,
+    }
+    post = fetcher._parse_message_to_post(raw, kol)
+    assert post.content == "A\nB"
+
+
+def test_blank_only_message_dropped():
+    """整条消息只剩换行时归一化为空正文 → 无内容无图直接丢弃，不推空帖。"""
+    db = make_db()
+    fetcher = make_fetcher(db)
+    kol = make_kol(db)
+    raw = {
+        "id": 22,
+        "rid": 101,
+        "msg": '[{"type": "text", "msg": "\\\\n\\\\n"}]',
+        "createtime": 1700000000000,
+    }
+    assert fetcher._parse_message_to_post(raw, kol) is None
+
+
+def test_mx_content_newline_backfill_migration():
+    """历史 MX 帖的脏换行在启动迁移时修复；其他平台正文不受影响。"""
+    tmp = tempfile.mkdtemp()
+    path = Path(tmp) / "mx.db"
+    db = DB(path)
+    kid = db.add_kol("mx", "房间A", "101")
+    dirty_id = db.insert_post(
+        platform="mx",
+        kol_id=kid,
+        external_id="m1",
+        title="",
+        content="第一行\r\n第二行\\n\\n第三行",
+        url="",
+        published_at="2026-08-28 10:00:00",
+    )
+    sys_id = db.insert_post(
+        platform="system",
+        kol_id=kid,
+        external_id="s1",
+        title="",
+        content="A\n\nB",
+        url="",
+        published_at="2026-08-28 10:00:00",
+    )
+    db.close()
+
+    db = DB(path)  # 重新打开触发 _migrate
+    assert db.get_post(dirty_id)["content"] == "第一行\n第二行\n第三行"
+    assert db.get_post(sys_id)["content"] == "A\n\nB"
+    db.close()
 
 
 # ---- WS 消息解析回退 ----

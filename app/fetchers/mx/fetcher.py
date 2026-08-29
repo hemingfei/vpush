@@ -5,8 +5,10 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 from typing import Callable
+from urllib.parse import urlparse
 
 from ...avatar_cache import cache_image_file
 from ..base import (
@@ -25,6 +27,51 @@ logger = logging.getLogger(__name__)
 # 避免房间改名/禁用后长期使用旧信息
 ROOM_CACHE_TTL_SECONDS = 300
 ROOM_CACHE_MISS_TTL_SECONDS = 60
+
+# file 消息可能是平台把截图/图片当文件发送（如钉钉转存图），按图片处理的判定：
+# URL 带图片扩展名，或 URL 完全没有扩展名（转存图常不带格式后缀，此时参考文件名
+# 扩展名兜底）；URL 带其他扩展名（.pdf/.zip 等）视为真实文件，忽略
+IMAGE_FILE_EXT_RE = re.compile(r"\.(png|jpe?g|gif|webp|bmp|avif)$", re.IGNORECASE)
+# 任意文件扩展名（2-5 位，避免把「v1.2」这类版本号尾巴当成扩展名）
+ANY_FILE_EXT_RE = re.compile(r"\.[A-Za-z0-9]{2,5}$")
+
+
+def looks_like_image_url(url: str, name: str = "") -> bool:
+    """判断 file 消息是否按图片处理：URL 带图片扩展名，或 URL 没有任何扩展名。"""
+    url_path = urlparse(str(url or "")).path
+    name_path = urlparse(str(name or "")).path
+    if IMAGE_FILE_EXT_RE.search(url_path):
+        return True
+    if ANY_FILE_EXT_RE.search(url_path):
+        # URL 明确带非图片扩展名（.pdf/.zip 等）→ 真实文件
+        return False
+    # URL 没有后缀：文件名带扩展名时以文件名为准（如「报告.pdf」仍是文件），
+    # 否则视为图片
+    if ANY_FILE_EXT_RE.search(name_path):
+        return bool(IMAGE_FILE_EXT_RE.search(name_path))
+    return True
+
+
+def normalize_mx_text(text: str) -> str:
+    """归一化 MX 消息正文的换行：还原转义序列，折叠连续换行（不允许空行）。
+
+    MX 服务端对正文换行做了双重转义：msg 文本 JSON 解码一次后仍会剩字面量
+    「反斜杠+n/r」（与真实 CR、CRLF 混杂，如编辑前缀「xx [编辑]\r\n正文」）。
+    统一还原成真实换行，再把连续换行压成单个换行；只有空白字符（含全角空格）
+    的行按空行处理。
+    """
+    if not text:
+        return ""
+    # 先处理字面量转义序列（反斜杠开头），再归并真实 CR/CRLF，顺序不能反
+    s = (
+        str(text)
+        .replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\r", "\n")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+    )
+    return "\n".join(line for line in s.split("\n") if line.strip())
 
 
 class MxFetcher(Fetcher):
@@ -315,11 +362,11 @@ class MxFetcher(Fetcher):
                         elif item_type == "pic":
                             url = item.get("url", "")
                             if url:
-                                if self.db:
-                                    cached_url = cache_image_file(self.db, url, "mx_images", "/mx-images")
-                                    images.append(cached_url)
-                                else:
-                                    images.append(url)
+                                self._append_image(images, url)
+                        elif item_type == "file":
+                            url = (item.get("url") or "").strip()
+                            if url and looks_like_image_url(url, item.get("name") or ""):
+                                self._append_image(images, url)
             elif isinstance(msg_list, str):
                 # msg 字段是 JSON 编码的纯字符串
                 content_parts.append(msg_list)
@@ -328,7 +375,14 @@ class MxFetcher(Fetcher):
             content_parts.append(msg_str)
 
         content = "\n".join(content_parts)
-        return content, images[:4]
+        return normalize_mx_text(content), images[:4]
+
+    def _append_image(self, images, url):
+        """图片统一走本地缓存，下载失败或内存库时保留原 URL。"""
+        if self.db:
+            images.append(cache_image_file(self.db, url, "mx_images", "/mx-images"))
+        else:
+            images.append(url)
 
     def get_ws_status(self):
         """

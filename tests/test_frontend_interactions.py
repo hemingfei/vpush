@@ -442,7 +442,7 @@ def test_plaza_source_visibility_admin_and_pills():
     """管理员可设广场数据源自动/显示/隐藏；角标和旧 #/zsxq 都认可见列表。"""
     src = APP_JS.read_text()
     css = STYLE_CSS.read_text()
-    assert 'STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "proxies"]' in src
+    assert 'STATS_TABS = ["overview", "health", "plaza", "config", "cookies", "mx", "proxies"]' in src
     assert 'data-tab="plaza"' in _fn_body("loadAdminStats")
     assert "动态广场显示" in _fn_body("loadAdminStats")
     assert "plazaSourceRowsHtml(s.plaza_sources)" in _fn_body("loadAdminStats")
@@ -484,6 +484,32 @@ def test_zsxq_is_plaza_badge_not_sidebar_page():
     assert 'option value="zsxq"' in _fn_body("renderSearch")
     assert "saveZsxqCookie()" in src
     assert "星球动态不混入" in _fn_body("renderTimelineFeed")
+
+
+def test_mx_post_view_original_opens_raw_message_modal():
+    """MX 消息没有外部原文链接：「查看原文」必须弹窗展示入库的原始解密消息（detail），不能开空页。"""
+    src = APP_JS.read_text()
+    post_card = _fn_body("postCard")
+    assert 'post.platform === "mx"' in post_card
+    assert "openMxRawModal(" in post_card
+    modal = _fn_body("openMxRawModal")
+    assert "_tlPosts.find" in modal
+    assert "JSON.stringify(detail, null, 2)" in modal
+    assert "escapeHtml(text)" in modal
+    assert "closeMxRawModal()" in modal
+    assert "function closeMxRawModal" in src
+    css = STYLE_CSS.read_text()
+    assert ".mx-raw-pre" in css
+    assert ".mx-raw-card" in css
+
+
+def test_timeline_time_shows_seconds():
+    """时间线时间必须精确到秒：同分钟多条消息的次序只能靠秒位分辨；后端 published_at 同样保留秒。"""
+    fmt = _fn_body("fmtPublished")
+    assert '${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}' in fmt
+    assert '今天 ${clock}' in fmt
+    base = (APP_JS.parent.parent / "fetchers" / "base.py").read_text()
+    assert 'strftime("%Y-%m-%d %H:%M:%S")' in base
 
 
 # ---- 设置页保存按钮对齐 ----
@@ -858,7 +884,7 @@ def test_proxy_admin_hardens_write_paths():
     assert "请先创建代理池" in save
     assert "请先导入或提取代理" in save
     delete_node = _fn_body("deleteProxyNode")
-    assert "confirm(" in delete_node
+    assert "showConfirm(" in delete_node
     create = _fn_body("createProxyPool")
     assert "请填写代理池名称" in create
     load = _fn_body("loadProxyAdmin")
@@ -903,7 +929,7 @@ def test_cookie_clear_is_confirmed_delete_and_hidden_when_unset():
     assert 'aria-label="清除知识星球 Cookie"' in render
     assert ">清除 Cookie<" in render
 
-    assert "confirm(" in clear
+    assert "showConfirm(" in clear
     assert "停止抓取" in clear
     assert "直到重新保存" in clear
     assert 'method: "DELETE"' in clear
@@ -1634,6 +1660,33 @@ def test_timeline_new_badge_shows_posted_not_count():
     assert "pollFeedUpdates()" in vis
 
 
+def test_feed_new_post_detection_is_time_anchored_not_id_only():
+    """新帖判定必须以发布时间为锚点，不能只按 id。
+
+    背景：补历史/修复脚本会给旧消息插入新 id（id 顺序≠时间顺序），轮询按
+    since_id（id）过滤会把它们当成新帖，refreshTimeline 再整批 unshift 到
+    列表顶部，时间线就乱了——只有切换平台触发整表重载才会恢复有序。
+    """
+    poll = _fn_body("pollFeedUpdates")
+    assert "feedNewestPost(feedPosts())" in poll, "新帖判定应以列表内时间最新帖为锚点"
+    assert "feedTimeAsc(p, anchor) > 0" in poll, "比锚点新的才算新帖"
+    assert "p.id > pendingLatestId" not in poll, "不得只按 id 判定新帖"
+    merge = _fn_body("refreshTimeline")
+    assert "feedTimeAsc(b, a)" in merge, "新帖批次内部按发布时间排序"
+    assert "posts.findIndex((q) => feedTimeAsc(q, p) < 0)" in merge, "按发布时间归位插入"
+    # 快讯 id 与时间同序（上游保证），保留 id 置顶路径
+    assert "posts.unshift(...incoming)" in merge
+
+
+def test_feed_time_comparator_keeps_seconds_tiebreak():
+    """时间比较器：published_at 为主序，id 只作同秒 tie-break。"""
+    cmp_body = _fn_body("feedTimeAsc")
+    assert "feedPubTimeMs(a) - feedPubTimeMs(b)" in cmp_body
+    assert "a.id - b.id" in cmp_body
+    newest = _fn_body("feedNewestPost")
+    assert "feedTimeAsc(acc, p) < 0" in newest
+
+
 def test_timeline_live_source_is_platform_pill():
     """快讯作为平台条第二项：移除独立动态按钮，保留快讯模式与平台条。"""
     render = _fn_body("renderTimeline")
@@ -1968,9 +2021,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=207"' in html
-    assert 'src="/app.js?v=291"' in html
-    assert 'dav-shell-v160' in sw
+    assert 'href="/style.css?v=211"' in html
+    assert 'src="/app.js?v=302"' in html
+    assert 'dav-shell-v163' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -2052,7 +2105,7 @@ def test_knowledge_catalog_shell_contract():
     assert "showImaPdfFail" in src
     assert "预览打不开" in src
     unsub = _fn_body("unsubscribeKnowledge")
-    assert "confirm(" in unsub
+    assert "showConfirm(" in unsub
     assert "isPhoneShell" in src
     assert "知识库请在电脑上打开" in src
     assert "ima-doc-filter-chips" in src
@@ -2232,7 +2285,7 @@ def test_admin_backup_page_three_panels_download_skips_webdav():
     assert "/api/admin/backup/webdav" not in download
     assert "restore" not in download
     restore = _fn_body("backupRestoreWebDAV")
-    assert "confirm(" in restore
+    assert "showConfirm(" in restore
     assert "/api/admin/backup/restore/webdav" in restore
     assert "cfg-unit" not in body
     assert "backup-grid" in body
@@ -2283,7 +2336,7 @@ def test_admin_users_page_has_batch_bar():
     src = APP_JS.read_text()
     assert "let _adminUsersSelected" in src
     delete_fn = _fn_body("adminUsersBatch")
-    assert "confirm(" in delete_fn
+    assert "showConfirm(" in delete_fn
     assert "adminDeleteImpact" in delete_fn
     assert "enable_notify" in delete_fn
     assert "disable_notify" in delete_fn
@@ -2346,7 +2399,7 @@ def test_admin_codes_page_has_batch_bar():
     assert "adminCodesBatch" in APP_JS.read_text()
     batch = _fn_body("adminCodesBatch")
     assert "/api/admin/register-codes/batch" in batch
-    assert "confirm(" in batch
+    assert "showConfirm(" in batch
     assert "copyText(" in _fn_body("adminCodesCopySelected")
     src = APP_JS.read_text()
     assert "adminCodesTogglePage" in src

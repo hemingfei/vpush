@@ -422,6 +422,107 @@ function flash(message, type = "success") {
   }, 2600);
 }
 
+// 原生 confirm/alert/prompt 由浏览器渲染，固定在窗口顶部、样式不受控，统一换成应用内居中弹窗。
+// showConfirm resolve(true/false)；showAlert 只作提示；showPrompt resolve(输入值/null)。
+let _dialogOpen = false; // 一次只弹一个，避免连点导致弹窗叠加
+function showDialog({ title, message = null, input = null, okText, cancelText = null, danger = false }) {
+  const cancelled = input ? null : false;
+  if (_dialogOpen) return Promise.resolve(cancelled);
+  _dialogOpen = true;
+  return new Promise((resolve) => {
+    const mask = document.createElement("div");
+    mask.className = "modal-mask dialog-mask";
+    const card = document.createElement("div");
+    card.className = "modal-card dialog-card";
+    card.setAttribute("role", "alertdialog");
+    card.setAttribute("aria-modal", "true");
+    card.setAttribute("aria-label", title);
+    const h = document.createElement("h3");
+    h.className = "dialog-title";
+    h.textContent = title;
+    card.appendChild(h);
+    if (message != null) {
+      const p = document.createElement("p");
+      p.className = "dialog-message"; // pre-line 保留换行；textContent 防止拼进消息的外部内容被当 HTML
+      p.textContent = message;
+      card.appendChild(p);
+    }
+    let inputEl = null;
+    if (input) {
+      inputEl = document.createElement("input");
+      inputEl.className = "form-control dialog-input";
+      inputEl.value = input.value || "";
+      inputEl.placeholder = input.placeholder || "";
+      card.appendChild(inputEl);
+    }
+    const actions = document.createElement("div");
+    actions.className = "dialog-actions";
+    let cancelBtn = null;
+    if (cancelText) {
+      cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.className = "btn-ghost dialog-btn";
+      cancelBtn.textContent = cancelText;
+      actions.appendChild(cancelBtn);
+    }
+    const okBtn = document.createElement("button");
+    okBtn.type = "button";
+    okBtn.className = "btn-normal dialog-btn" + (danger ? " dialog-btn-danger" : "");
+    okBtn.textContent = okText;
+    actions.appendChild(okBtn);
+    card.appendChild(actions);
+    mask.appendChild(card);
+
+    const close = (result) => {
+      document.removeEventListener("keydown", onKey, true);
+      mask.remove();
+      _dialogOpen = false;
+      resolve(result);
+    };
+    const submit = () => close(inputEl ? inputEl.value : true);
+    const cancel = () => close(cancelled);
+    const focusables = [inputEl, cancelBtn, okBtn].filter(Boolean);
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation(); // 弹窗在上层时，避免连带触发底下弹窗/灯箱的 Esc 逻辑
+        cancel();
+      } else if (e.key === "Tab") {
+        e.preventDefault(); // 可聚焦元素只有一两个，Tab 在弹窗内循环，避免焦点跑到页面背后
+        e.stopPropagation(); // 避免与底下弹窗的 Tab 焦点陷阱双重处理
+        const idx = focusables.indexOf(document.activeElement);
+        const dir = e.shiftKey ? -1 : 1;
+        focusables[(idx + dir + focusables.length) % focusables.length].focus();
+      } else if (e.key === "Enter" && !document.activeElement.classList.contains("dialog-btn")) {
+        e.preventDefault(); // 焦点在按钮上时交给浏览器原生 click，避免双重触发
+        submit();
+      }
+    };
+    if (cancelBtn) cancelBtn.addEventListener("click", cancel);
+    okBtn.addEventListener("click", submit);
+    mask.addEventListener("click", (e) => {
+      if (e.target === mask) cancel(); // 点遮罩视为取消
+    });
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(mask);
+    if (inputEl) {
+      inputEl.focus();
+      inputEl.select();
+    } else {
+      okBtn.focus();
+    }
+  });
+}
+function showConfirm(message, { title = "确认操作", okText = "确定", cancelText = "取消", danger = false } = {}) {
+  return showDialog({ title, message, okText, cancelText, danger });
+}
+function showAlert(message, { title = "提示", okText = "知道了" } = {}) {
+  return showDialog({ title, message, okText });
+}
+function showPrompt(message, { title = "请输入", okText = "确定", value = "", placeholder = "" } = {}) {
+  return showDialog({ title, message, okText, cancelText: "取消", input: { value, placeholder } });
+}
+
 async function api(path, options = {}) {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
@@ -1206,7 +1307,7 @@ async function subscribeKnowledge(groupId, btn) {
 
 async function unsubscribeKnowledge(groupId, btn) {
   const name = btn?.dataset?.name || "这个知识库";
-  if (!confirm(`退订后将无法打开「${name}」。确定退订？`)) return;
+  if (!(await showConfirm(`退订后将无法打开「${name}」。确定退订？`))) return;
   if (btn) btn.disabled = true;
   try {
     await api(`/api/ima-documents/groups/${encodeURIComponent(groupId)}/subscribe`, { method: "DELETE" });
@@ -2027,19 +2128,19 @@ function kolCard(kol, opts) {
 
 async function adminDeleteKolFromHome(kolId) {
   const kol = state.catalog.find((k) => k.id === kolId);
-  if (!confirm(`确认删除该大V${kol ? `「${kol.name}」` : ""}？其订阅关系会一并移除。`)) return;
+  if (!(await showConfirm(`确认删除该大V${kol ? `「${kol.name}」` : ""}？其订阅关系会一并移除。`))) return;
   try {
     await api(`/api/kols/${kolId}`, { method: "DELETE" });
     flash(`已删除「${kol ? kol.name : "该大V"}」`);
     await refreshKolsView(); // 按当前路由刷新，删除期间切走不会污染新页面
   } catch (err) {
-    alert("删除失败: " + err.message);
+    flash("删除失败: " + err.message, "error");
   }
 }
 
 async function toggleSubscribe(kolId, btn) {
   const kol = state.catalog.find((k) => k.id === kolId);
-  if (kol?.subscribed && !confirm(`取消订阅「${kol.name}」？将不再推送其新动态。`)) return;
+  if (kol?.subscribed && !(await showConfirm(`取消订阅「${kol.name}」？将不再推送其新动态。`))) return;
   try {
     const wasSubscribed = kol ? kol.subscribed : btn.classList.contains("subscribed");
     if (wasSubscribed) {
@@ -2051,7 +2152,7 @@ async function toggleSubscribe(kolId, btn) {
     if (kol) kol.subscribed = !wasSubscribed;
     await refreshKolsView();
   } catch (err) {
-    alert("操作失败: " + err.message);
+    flash("操作失败: " + err.message, "error");
   }
 }
 
@@ -2069,7 +2170,7 @@ async function toggleFavorite(kolId, btn) {
     if (isRoute("home")) renderHomeList();
     else if (isRoute("mysubs")) renderMySubsList();
   } catch (err) {
-    alert("操作失败: " + err.message);
+    flash("操作失败: " + err.message, "error");
   }
 }
 
@@ -2087,7 +2188,7 @@ async function toggleSecondary(kolId, btn) {
     if (isRoute("home")) renderHomeList();
     else if (isRoute("mysubs")) renderMySubsList();
   } catch (err) {
-    alert("操作失败: " + err.message);
+    flash("操作失败: " + err.message, "error");
   }
 }
 
@@ -2100,7 +2201,7 @@ async function quickSubscribe(kolId, btn) {
     state.user.subscription_count = (state.user.subscription_count || 0) + 1;
     loadHomeKols(routeRenderSeq); // 订阅后重拉 catalog，已订阅置顶即时生效
   } catch (err) {
-    alert("订阅失败: " + err.message);
+    flash("订阅失败: " + err.message, "error");
   }
 }
 
@@ -2138,7 +2239,7 @@ async function setSubscribeType(kolId, input) {
   const replyOn = boxes[1].checked;
   if (!postOn && !replyOn) {
     input.checked = true; // 至少保留一种类型；取消订阅请点「已订阅」主按钮
-    alert("请至少保留一种订阅类型；取消订阅请点「已订阅」按钮");
+    flash("请至少保留一种订阅类型；取消订阅请点「已订阅」按钮", "error");
     return;
   }
   const type = postOn && replyOn ? "both" : postOn ? "post" : "reply";
@@ -2150,7 +2251,7 @@ async function setSubscribeType(kolId, input) {
       kol.subscribe_type = type;
     }
   } catch (err) {
-    alert("切换订阅类型失败: " + err.message);
+    flash("切换订阅类型失败: " + err.message, "error");
     refreshKolsView();
   }
 }
@@ -2319,6 +2420,23 @@ function feedPosts() {
 
 function feedPendingNew() {
   return isLiveTimeline() ? _livePendingNew : _tlPendingNew;
+}
+
+// 按发布时间比较（旧 → 新），id 只作同秒 tie-break。
+// 补历史/并发入库会让 id 顺序≠时间顺序：新帖判定与合并必须以 published_at 为准，
+// 否则旧消息（新 id）会被当成新帖顶到时间线最上面。
+function feedPubTimeMs(p) {
+  const d = parsePublished(p.published_at);
+  const t = d ? d.getTime() : NaN;
+  return Number.isNaN(t) ? 0 : t;
+}
+
+function feedTimeAsc(a, b) {
+  return feedPubTimeMs(a) - feedPubTimeMs(b) || a.id - b.id;
+}
+
+function feedNewestPost(posts) {
+  return posts.reduce((acc, p) => (!acc || feedTimeAsc(acc, p) < 0 ? p : acc), null);
 }
 
 function renderFeed() {
@@ -2885,7 +3003,11 @@ async function pollFeedUpdates() {
       if (state.timelineSecondary) params.set("include_secondary", "1");
       const posts = await api(`/api/my/feed?${params}`);
       if (!routeStillActive(seq) || !$("#feed") || isLiveTimeline()) return;
-      newer = posts.filter((p) => p.id > pendingLatestId);
+      // 「新帖」以发布时间为准（锚点=列表里时间最新的一条），不能只按 id 过滤：
+      // 补历史会给旧消息发新 id，按 id 过滤会把它们当成新帖顶到时间线最上面。
+      // 能走到这里列表必非空（空列表 latestId=0 已提前返回），锚点必存在
+      const anchor = feedNewestPost(feedPosts());
+      newer = posts.filter((p) => feedTimeAsc(p, anchor) > 0);
     }
     if (!newer.length) return;
     const have = new Set(pendingNew.map((p) => p.id));
@@ -2947,9 +3069,22 @@ async function refreshTimeline() {
     }
     await pollFeedUpdates();
     const seen = new Set(posts.map((p) => p.id));
-    const incoming = pending.filter((p) => !seen.has(p.id)).sort((a, b) => b.id - a.id);
+    const incoming = pending.filter((p) => !seen.has(p.id));
     if (incoming.length) {
-      posts.unshift(...incoming);
+      if (live) {
+        // 快讯 id 与时间同序（上游保证），按 id 降序整批置顶
+        incoming.sort((a, b) => b.id - a.id);
+        posts.unshift(...incoming);
+      } else {
+        // id 顺序≠时间顺序（补历史/并发入库）：按发布时间逐条归位插入，
+        // 新帖内部也严格按时间排，避免旧消息或同批乱序顶在最上面
+        incoming.sort((a, b) => feedTimeAsc(b, a));
+        for (const p of incoming) {
+          const idx = posts.findIndex((q) => feedTimeAsc(q, p) < 0);
+          if (idx < 0) posts.push(p);
+          else posts.splice(idx, 0, p);
+        }
+      }
       if (live) {
         _liveLatestId = Math.max(_liveLatestId, _livePendingLatestId, ...incoming.map((p) => p.id));
         _livePendingNew.length = 0;
@@ -3568,13 +3703,15 @@ function fmtPublished(s, clockOnly = false) {
   if (!d) return escapeHtml(s || "");
   const now = new Date();
   const p = (n) => String(n).padStart(2, "0");
-  if (clockOnly) return `${p(d.getHours())}:${p(d.getMinutes())}`;
+  // 统一精确到秒：时间线消息次序存疑时（同分钟多条），秒位是唯一可信依据
+  const clock = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  if (clockOnly) return clock;
   const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-  if (sameDay(d, now)) return `今天 ${p(d.getHours())}:${p(d.getMinutes())}`;
+  if (sameDay(d, now)) return `今天 ${clock}`;
   const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-  if (sameDay(d, yesterday)) return `昨天 ${p(d.getHours())}:${p(d.getMinutes())}`;
-  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}月${d.getDate()}日`;
-  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+  if (sameDay(d, yesterday)) return `昨天 ${clock}`;
+  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}月${d.getDate()}日 ${clock}`;
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${clock}`;
 }
 
 function feedDateBucket(s) {
@@ -3690,9 +3827,65 @@ function postCard(post) {
         ${Array.isArray(post.tags) && post.tags.length
       ? post.tags.map((t) => `<button type="button" class="cat cat-tag post-tag-filter" data-tag="${escapeHtml(t)}" onclick="tlPickTag(this.dataset.tag)">${escapeHtml(t)}</button>`).join("")
       : ""}
-        ${post.platform === "zsxq" ? "" : `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener">查看原文 →</a>`}
+        ${post.platform === "zsxq" ? "" : post.platform === "mx"
+          ? `<a href="#" onclick="event.preventDefault();openMxRawModal(${post.id})" title="查看 MX 原始消息">查看原文 →</a>`
+          : `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener">查看原文 →</a>`}
       </div>
     </div>`;
+}
+
+// MX 消息没有外部原文链接，「查看原文」弹窗展示入库时保存的原始解密消息（posts.detail = MX 推送原始 JSON）
+function openMxRawModal(postId) {
+  const post = _tlPosts.find((p) => p.id === postId);
+  if (!post) return;
+  closeMxRawModal(); // 防连点叠开
+  let detail = post.detail;
+  if (typeof detail === "string" && detail) {
+    try { detail = JSON.parse(detail); } catch { /* 非 JSON 字符串按原样展示 */ }
+  }
+  const hasRaw = typeof detail === "object" && detail !== null
+    ? Object.keys(detail).length > 0
+    : String(detail ?? "").trim().length > 0;
+  const text = hasRaw && typeof detail === "object" ? JSON.stringify(detail, null, 2) : String(detail ?? "");
+  const who = post.kol_name ? `${escapeHtml(post.kol_name)} · ` : "";
+  const mask = document.createElement("div");
+  mask.className = "modal-mask mx-raw-mask";
+  mask.setAttribute("role", "dialog");
+  mask.setAttribute("aria-modal", "true");
+  mask.setAttribute("aria-label", "MX 原始消息");
+  mask.innerHTML = `
+    <div class="modal-card mx-raw-card">
+      <h3 class="mx-raw-title">MX 原始消息</h3>
+      <p class="mx-raw-meta">${who}${fmtPublished(post.published_at, true)}</p>
+      ${text
+        ? `<button type="button" class="btn-ghost mx-raw-copy" onclick="copyText(mxRawModalText(), '已复制原始消息')">复制 JSON</button>
+           <pre class="mx-raw-pre">${escapeHtml(text)}</pre>`
+        : `<p class="mx-raw-empty muted">该消息没有保存原始数据</p>`}
+    </div>`;
+  mask._rawText = text;
+  mask.addEventListener("click", (e) => {
+    if (e.target === mask) closeMxRawModal();
+  });
+  mask._onKey = (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeMxRawModal();
+    }
+  };
+  document.addEventListener("keydown", mask._onKey, true);
+  document.body.appendChild(mask);
+}
+
+// 复制按钮取当前弹窗内存的原文（避免从 DOM 读 pre 文本时转义还原出错）
+function mxRawModalText() {
+  return document.querySelector(".mx-raw-mask")?._rawText || "";
+}
+
+function closeMxRawModal() {
+  const mask = document.querySelector(".mx-raw-mask");
+  if (!mask) return;
+  document.removeEventListener("keydown", mask._onKey, true);
+  mask.remove();
 }
 
 // ---------- 搜索 ----------
@@ -5110,7 +5303,7 @@ async function unbindChannel(channel) {
       : channel === "feishu_personal" ? "飞书个人机器人"
         : channel === "wecom" ? "企业微信"
           : channel === "bark" ? "Bark" : "飞书";
-  if (!confirm(`确认解绑 ${label}？解绑后将不再通过该方式推送（共享机器人绑定不受影响）。`)) return;
+  if (!(await showConfirm(`确认解绑 ${label}？解绑后将不再通过该方式推送（共享机器人绑定不受影响）。`))) return;
   try {
     if (channel === "feishu_personal") {
       stopFeishuPersonalPoll();
@@ -5220,7 +5413,7 @@ async function enableWebPush() {
 }
 
 async function disableWebPush() {
-  if (!confirm("关闭后，所有已开启的 Chrome / Edge 都不再弹出通知。")) return;
+  if (!(await showConfirm("关闭后，所有已开启的 Chrome / Edge 都不再弹出通知。"))) return;
   try {
     const reg = await navigator.serviceWorker.ready;
     const sub = await reg.pushManager.getSubscription();
@@ -6933,7 +7126,7 @@ async function extractProxyPool(poolId) {
 }
 
 async function deleteProxyPool(poolId) {
-  if (!confirm("删除这个代理池及其节点？")) return;
+  if (!(await showConfirm("删除这个代理池及其节点？"))) return;
   try {
     await api(`/api/admin/proxy-pools/${poolId}`, { method: "DELETE" });
     flash("已删除");
@@ -6944,7 +7137,7 @@ async function deleteProxyPool(poolId) {
 }
 
 async function deleteProxyNode(proxyId) {
-  if (!confirm("删除后需要重新导入。确定删除这个节点？")) return;
+  if (!(await showConfirm("删除后需要重新导入。确定删除这个节点？"))) return;
   try {
     await api(`/api/admin/proxies/${proxyId}`, { method: "DELETE" });
     flash("已删除");
@@ -6976,7 +7169,7 @@ let _cookieClearPending = false;
 
 async function clearSavedCookie(kind, label) {
   if (_cookieClearPending) return;
-  if (!confirm(`清除「${label}」Cookie？清除后该数据源会停止抓取，直到重新保存。`)) return;
+  if (!(await showConfirm(`清除「${label}」Cookie？清除后该数据源会停止抓取，直到重新保存。`))) return;
   _cookieClearPending = true;
   try {
     await api(`/api/admin/cookies/${kind}`, { method: "DELETE" });
@@ -7565,7 +7758,7 @@ function adminKolClearSelect() {
 async function adminKolBatch(action, value) {
   const ids = [..._adminKolsSelected];
   if (!ids.length) return;
-  if (action === "delete" && !confirm(`确认删除选中的 ${ids.length} 个大V？（将同时清理其订阅/帖子/推送记录）`)) return;
+  if (action === "delete" && !(await showConfirm(`确认删除选中的 ${ids.length} 个大V？（将同时清理其订阅/帖子/推送记录）`))) return;
   const bar = $("#ak-batch-bar");
   const buttons = bar ? [...bar.querySelectorAll("button")] : [];
   buttons.forEach((b) => { b.disabled = true; });
@@ -7677,7 +7870,7 @@ async function adminToggleSecondary(id, secondary) {
 async function adminDeleteKol(id) {
   const kol = state.adminKols.find((k) => k.id === id);
   const subs = Number(kol && kol.subscriber_count) || 0;
-  if (!confirm(`确认删除该大V${kol ? `「${kol.name}」` : ""}？将同时清理 ${subs} 个订阅及其帖子/推送记录。`)) return;
+  if (!(await showConfirm(`确认删除该大V${kol ? `「${kol.name}」` : ""}？将同时清理 ${subs} 个订阅及其帖子/推送记录。`))) return;
   try {
     await api(`/api/kols/${id}`, { method: "DELETE" });
     flash(`已删除「${kol ? kol.name : "该大V"}」`);
@@ -7735,8 +7928,8 @@ async function adminEditKol(id) {
     document.body.appendChild(mask);
     return adminKolEditSnapshot();
   })();
-  const tryClose = () => {
-    if (adminKolEditSnapshot() !== initial && !confirm("有未保存的修改，确定关闭？")) return;
+  const tryClose = async () => {
+    if (adminKolEditSnapshot() !== initial && !(await showConfirm("有未保存的修改，确定关闭？"))) return;
     mask.remove();
   };
   mask.addEventListener("click", (e) => {
@@ -7782,7 +7975,7 @@ async function saveKolEdit(id) {
   const isPrivate = $("#ek-private").checked;
   const visibleUsers = $("#ek-users").value.split(",").map((s) => s.trim()).filter(Boolean);
   if (isPrivate && !visibleUsers.length) {
-    if (!confirm("白名单为空，该大V将对所有人隐藏。仍要保存？")) return;
+    if (!(await showConfirm("白名单为空，该大V将对所有人隐藏。仍要保存？"))) return;
   }
   const body = {
     name,
@@ -7873,18 +8066,18 @@ async function adminApproveRequest(id) {
     flash("已通过申请，大V已进入订阅广场");
     loadAdminRequests();
   } catch (err) {
-    alert("操作失败: " + err.message);
+    flash("操作失败: " + err.message, "error");
   }
 }
 
 async function adminRejectRequest(id) {
-  if (!confirm("确认拒绝该申请？")) return;
+  if (!(await showConfirm("确认拒绝该申请？"))) return;
   try {
     await api(`/api/admin/kol-requests/${id}/reject`, { method: "POST" });
     flash("已拒绝该申请");
     loadAdminRequests();
   } catch (err) {
-    alert("操作失败: " + err.message);
+    flash("操作失败: " + err.message, "error");
   }
 }
 
@@ -7947,10 +8140,10 @@ function copyText(text, okMsg) {
   if (navigator.clipboard?.writeText) {
     navigator.clipboard.writeText(text).then(
       () => flash(okMsg || "已复制"),
-      () => alert("请手动复制：\n" + text),
+      () => showAlert("请手动复制：\n" + text),
     );
   } else {
-    alert("请手动复制：\n" + text);
+    showAlert("请手动复制：\n" + text);
   }
 }
 
@@ -8064,8 +8257,8 @@ async function adminCodesBatch(action) {
   const skipped = selected.length - codes.length;
   const skipTip = skipped ? `（另有 ${skipped} 个${action === "revoke" ? "不可作废" : "不可删除"}，已跳过）` : "";
   const ok = action === "revoke"
-    ? confirm(`将作废选中的 ${codes.length} 个未使用邀请码${skipTip}，确认？`)
-    : confirm(`将从列表删除选中的 ${codes.length} 个已用/已作废/已过期邀请码${skipTip}，不可恢复。确认？`);
+    ? await showConfirm(`将作废选中的 ${codes.length} 个未使用邀请码${skipTip}，确认？`)
+    : await showConfirm(`将从列表删除选中的 ${codes.length} 个已用/已作废/已过期邀请码${skipTip}，不可恢复。确认？`);
   if (!ok) return;
   try {
     const data = await api("/api/admin/register-codes/batch", {
@@ -8316,25 +8509,25 @@ function renderCodeRow(c) {
 }
 
 async function adminRevokeCode(code) {
-  if (!confirm(`确认作废注册码 ${code}？作废后无法再使用。`)) return;
+  if (!(await showConfirm(`确认作废注册码 ${code}？作废后无法再使用。`))) return;
   try {
     await api(`/api/admin/register-codes/${encodeURIComponent(code)}/revoke`, { method: "POST" });
     flash(`已作废邀请码 ${code}`);
     loadAdminCodes();
   } catch (err) {
-    alert("作废失败: " + err.message);
+    flash("作废失败: " + err.message, "error");
   }
 }
 
 async function adminRevokeBatch(batchId, fromResult) {
-  if (!confirm("将作废本批所有未使用的邀请码，确认？")) return;
+  if (!(await showConfirm("将作废本批所有未使用的邀请码，确认？"))) return;
   try {
     await api(`/api/admin/register-code-batches/${encodeURIComponent(batchId)}/revoke-unused`, { method: "POST" });
     flash("已作废本批未用码");
     if (fromResult) _codesUi.result = null;
     loadAdminCodes();
   } catch (err) {
-    alert("作废失败: " + err.message);
+    flash("作废失败: " + err.message, "error");
   }
 }
 
@@ -8356,7 +8549,7 @@ async function adminGenerateCodes() {
     flash(`已生成 ${data.count} 个邀请码`);
     loadAdminCodes();
   } catch (err) {
-    alert("生成失败: " + err.message);
+    flash("生成失败: " + err.message, "error");
   }
 }
 
@@ -8419,7 +8612,7 @@ async function loadAdminCategoriesTab() {
 async function adminAddCategory() {
   const name = $("#cat-name").value.trim();
   if (!name) {
-    alert("请输入分类名");
+    flash("请输入分类名", "error");
     return;
   }
   try {
@@ -8427,30 +8620,30 @@ async function adminAddCategory() {
     flash(`已添加分类「${name}」`);
     loadAdminVocabTab("categories");
   } catch (err) {
-    alert("添加失败: " + err.message);
+    flash("添加失败: " + err.message, "error");
   }
 }
 
 async function adminRenameCategory(id) {
-  const name = prompt("新的分类名：");
+  const name = await showPrompt("新的分类名：");
   if (name === null || !name.trim()) return;
   try {
     await api(`/api/categories/${id}`, { method: "PUT", body: JSON.stringify({ name: name.trim() }) });
     flash("已重命名分类");
     loadAdminVocabTab("categories");
   } catch (err) {
-    alert("重命名失败: " + err.message);
+    flash("重命名失败: " + err.message, "error");
   }
 }
 
 async function adminDeleteCategory(id) {
-  if (!confirm("确认删除该分类？其下大V将变为未分类")) return;
+  if (!(await showConfirm("确认删除该分类？其下大V将变为未分类"))) return;
   try {
     await api(`/api/categories/${id}`, { method: "DELETE" });
     flash("已删除分类");
     loadAdminVocabTab("categories");
   } catch (err) {
-    alert("删除失败: " + err.message);
+    flash("删除失败: " + err.message, "error");
   }
 }
 
@@ -8543,7 +8736,7 @@ async function adminSaveStockNames() {
       : `已保存 ${data.stock_names.length} 只股票`);
     loadAdminVocabTab("tags");
   } catch (err) {
-    alert("保存失败: " + err.message);
+    flash("保存失败: " + err.message, "error");
   }
 }
 
@@ -8565,7 +8758,7 @@ async function adminSaveTags() {
     flash(`已保存词表（${data.tags.length} 个标签，${data.stock_names.length} 只股票，${data.stock_aliases.length} 个别名）`);
     loadAdminVocabTab("tags");
   } catch (err) {
-    alert("保存失败: " + err.message);
+    flash("保存失败: " + err.message, "error");
   }
 }
 
@@ -8614,7 +8807,7 @@ function formatMaintainResult(data) {
 }
 
 async function adminMaintainTags(backfill = "pending") {
-  if (backfill === "all" && !confirm("将覆盖全部历史贴文标签，确定继续？")) return;
+  if (backfill === "all" && !(await showConfirm("将覆盖全部历史贴文标签，确定继续？"))) return;
   const buttons = document.querySelectorAll("[onclick^='adminMaintainTags']");
   buttons.forEach((button) => { button.disabled = true; });
   const result = $("#tag-maintain-result");
@@ -8629,14 +8822,14 @@ async function adminMaintainTags(backfill = "pending") {
     loadAdminVocabTab("tags");
   } catch (err) {
     if (result) result.textContent = "";
-    alert("维护失败: " + err.message);
+    flash("维护失败: " + err.message, "error");
   } finally {
     buttons.forEach((button) => { button.disabled = false; });
   }
 }
 
 async function adminBackfillTags(mode = "pending") {
-  if (mode === "all" && !confirm("将覆盖全部历史贴文标签，确定继续？")) return;
+  if (mode === "all" && !(await showConfirm("将覆盖全部历史贴文标签，确定继续？"))) return;
   const buttons = document.querySelectorAll("[onclick^='adminBackfillTags']");
   buttons.forEach((button) => { button.disabled = true; });
   const result = $("#tag-backfill-result");
@@ -8651,7 +8844,7 @@ async function adminBackfillTags(mode = "pending") {
     loadAdminVocabTab("tags");
   } catch (err) {
     if (result) result.textContent = "";
-    alert("处理失败: " + err.message);
+    flash("处理失败: " + err.message, "error");
   } finally {
     buttons.forEach((button) => { button.disabled = false; });
   }
@@ -9101,7 +9294,7 @@ async function backupDownload() {
 }
 
 async function backupRestoreWebDAV() {
-  if (!confirm("确认用备份覆盖当前数据库？当前账号、订阅和帖子都会被替换。")) return;
+  if (!(await showConfirm("确认用备份覆盖当前数据库？当前账号、订阅和帖子都会被替换。"))) return;
   const btn = $("#bk-restore-webdav");
   if (btn) btn.disabled = true;
   try {
@@ -9116,7 +9309,7 @@ async function backupRestoreWebDAV() {
 }
 
 async function backupRestoreUpload() {
-  if (!confirm("确认用备份覆盖当前数据库？当前账号、订阅和帖子都会被替换。")) return;
+  if (!(await showConfirm("确认用备份覆盖当前数据库？当前账号、订阅和帖子都会被替换。"))) return;
   const input = $("#bk-file");
   if (!input?.files?.[0]) {
     flash("请选择 .db 备份文件", "error");
@@ -9377,7 +9570,7 @@ async function adminUsersBatch(action) {
       return;
     }
     const extra = blocked ? `\n将跳过 ${blocked} 个管理员。` : "";
-    if (!confirm(`确认删除选中的 ${doomed.length} 个用户？${extra}\n${adminDeleteImpact(doomed)}\n删除后不可恢复。`)) return;
+    if (!(await showConfirm(`确认删除选中的 ${doomed.length} 个用户？${extra}\n${adminDeleteImpact(doomed)}\n删除后不可恢复。`))) return;
     payloadIds = doomed.map((u) => u.id);
   }
   try {
@@ -9468,7 +9661,7 @@ async function adminSaveInactivePolicy() {
     paintInactivePolicyHint();
     if (
       _inactivePreview.purge_count > 0 &&
-      !confirm(`下次扫描将删除 ${_inactivePreview.purge_count} 个未激活账号。确认按 ${n}+${m} 天保存？`)
+      !(await showConfirm(`下次扫描将删除 ${_inactivePreview.purge_count} 个未激活账号。确认按 ${n}+${m} 天保存？`))
     ) {
       return;
     }
@@ -9735,7 +9928,7 @@ async function adminSaveUserKnowledge(userId) {
       revoked.push(String(item.dataset.kbName || groupId).trim());
     }
   }
-  if (revoked.length && !confirm(`取消勾选后，对方会立刻看不到这些知识库：${revoked.join("、")}。确定保存？`)) return;
+  if (revoked.length && !(await showConfirm(`取消勾选后，对方会立刻看不到这些知识库：${revoked.join("、")}。确定保存？`))) return;
   try {
     await api(`/api/admin/users/${userId}/ima-kb`, {
       method: "PUT",
@@ -9837,7 +10030,7 @@ async function adminDeleteUser(userId) {
     flash("不能删除管理员", "error");
     return;
   }
-  if (!confirm(`确认删除用户「${user.username}」？\n${adminDeleteImpact([user])}\n删除后不可恢复。`)) return;
+  if (!(await showConfirm(`确认删除用户「${user.username}」？\n${adminDeleteImpact([user])}\n删除后不可恢复。`))) return;
   try {
     await api(`/api/users/${userId}`, { method: "DELETE" });
     closeAdminModal();
@@ -9851,7 +10044,7 @@ async function adminDeleteUser(userId) {
 async function adminToggleAdmin(userId, makeAdmin) {
   const user = (state.adminUsers || []).find((u) => u.id === userId);
   const name = user ? user.username : String(userId);
-  if (!confirm(makeAdmin ? `确认把「${name}」设为管理员？` : `确认取消「${name}」的管理员权限？`)) return;
+  if (!(await showConfirm(makeAdmin ? `确认把「${name}」设为管理员？` : `确认取消「${name}」的管理员权限？`))) return;
   try {
     await api(`/api/users/${userId}`, {
       method: "PUT",
@@ -10237,139 +10430,88 @@ function renderAdminAiAnalysis() {
   const tasks = state.aiTasks || [];
   const enabledCount = tasks.filter(t => t.enabled).length;
 
+  const rows = tasks.map(task => {
+    const scheduleDays = task.schedule_day_of_week ? task.schedule_day_of_week.split(',').map(d => {
+      const days = ['日', '一', '二', '三', '四', '五', '六'];
+      return `周${days[Number(d)]}`;
+    }).sort((a, b) => {
+      // 排序：周一到周日
+      const order = { '周一': 0, '周二': 1, '周三': 2, '周四': 3, '周五': 4, '周六': 5, '周日': 6 };
+      return order[a] - order[b];
+    }).join(', ') : '';
+    const lastRunStatus = task.last_run_status;
+    const lastRunStatusClass = lastRunStatus === 'success' ? 'success' : lastRunStatus === 'failed' ? 'error' : 'neutral';
+    const lastRunStatusText = lastRunStatus === 'success' ? '成功' : lastRunStatus === 'failed' ? '失败' : '未运行';
+    const targetKol = (state.kolIdToName && state.kolIdToName[task.target_kol_id]) || `ID: ${task.target_kol_id}`;
+    const analyzedCount = (() => {
+      try {
+        const kols = typeof task.selected_kol_ids === 'string'
+          ? task.selected_kol_ids.split(',').map(s => s.trim()).filter(Boolean)
+          : (task.selected_kol_ids || []);
+        return `${kols.length} 个`;
+      } catch {
+        return '未知';
+      }
+    })();
+    const schedule = [scheduleDays, task.schedule_time].filter(Boolean).map(escapeHtml).join(' ') || '—';
+
+    return `
+      <tr>
+        <td>
+          <div class="ai-task-cell-main">${escapeHtml(task.name)}</div>
+          ${task.description ? `<div class="ai-task-cell-sub">${escapeHtml(task.description)}</div>` : ''}
+        </td>
+        <td><span class="ai-task-status-badge ${task.enabled ? 'enabled' : 'disabled'}">${task.enabled ? '已启用' : '已禁用'}</span></td>
+        <td>${escapeHtml(targetKol)}</td>
+        <td>${schedule}</td>
+        <td>${analyzedCount}</td>
+        <td>
+          <span class="ai-task-run-status ${lastRunStatusClass}">${lastRunStatusText}</span>
+          ${task.last_run_at ? `<div class="ai-task-run-time">${escapeHtml(fmtDbTime(task.last_run_at))}</div>` : ''}
+        </td>
+        <td>
+          <button type="button" class="btn-sm" onclick="runAiTask(${task.id})">运行</button>
+          <button type="button" class="btn-sm" onclick="openAiTaskModal(${task.id})">编辑</button>
+          <button type="button" class="btn-sm" onclick="viewAiTaskLogs(${task.id})">日志</button>
+          <button type="button" class="btn-sm danger" onclick="deleteAiTask(${task.id})">删除</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
   body.innerHTML = `
     <div class="ai-analysis-page">
       <section class="section-panel">
-        <header class="section-head">
+        <header class="section-head ai-head-row">
           <div>
             <h2 class="section-title">AI 分析任务</h2>
             <p class="section-meta">${tasks.length} 个任务 · ${enabledCount} 个已启用</p>
           </div>
+          <button type="button" class="btn-normal ai-new-task-btn" onclick="openAiTaskModal()">＋ 新建任务</button>
         </header>
-      </section>
-
-      <div class="ai-tasks-grid">
-        ${tasks.map(task => {
-            const scheduleDays = task.schedule_day_of_week ? task.schedule_day_of_week.split(',').map(d => {
-              const days = ['日', '一', '二', '三', '四', '五', '六'];
-              return `周${days[Number(d)]}`;
-            }).sort((a, b) => {
-              // 排序：周一到周日
-              const order = { '周一': 0, '周二': 1, '周三': 2, '周四': 3, '周五': 4, '周六': 5, '周日': 6 };
-              return order[a] - order[b];
-            }).join(', ') : '';
-            const lastRunStatus = task.last_run_status;
-            const lastRunStatusClass = lastRunStatus === 'success' ? 'success' : lastRunStatus === 'failed' ? 'error' : 'neutral';
-            const lastRunStatusText = lastRunStatus === 'success' ? '成功' : lastRunStatus === 'failed' ? '失败' : '未运行';
-            
-            return `
-              <div class="ai-task-card">
-                <div class="ai-task-header">
-                  <div class="ai-task-title">
-                    <div class="ai-task-name">${escapeHtml(task.name)}</div>
-                    ${task.description ? `<div class="ai-task-desc">${escapeHtml(task.description)}</div>` : ''}
-                  </div>
-                  <div class="ai-task-status-badge ${task.enabled ? 'enabled' : 'disabled'}">
-                    ${task.enabled ? '已启用' : '已禁用'}
-                  </div>
-                </div>
-                
-	                <div class="ai-task-details">
-	                  <div class="ai-task-detail-item">
-	                    <div class="ai-task-detail-label">目标 KOL</div>
-	                    <div class="ai-task-detail-value">
-	                      ${(() => {
-	                        const kolName = state.kolIdToName ? state.kolIdToName[task.target_kol_id] : null;
-	                        return kolName ? `${escapeHtml(kolName)} (ID: ${task.target_kol_id})` : `ID: ${task.target_kol_id}`;
-	                      })()}
-	                    </div>
-	                  </div>
-                  
-                  <div class="ai-task-detail-item">
-                    <div class="ai-task-detail-label">调度设置</div>
-                    <div class="ai-task-detail-value">
-                      <div>${scheduleDays ? escapeHtml(scheduleDays) : ''}</div>
-                      ${task.schedule_time ? `<div>${escapeHtml(task.schedule_time)}</div>` : ''}
-                    </div>
-                  </div>
-                  
-                  <div class="ai-task-detail-item">
-                    <div class="ai-task-detail-label">分析 KOL</div>
-                    <div class="ai-task-detail-value">
-                      ${(() => {
-                        try {
-                          const kols = typeof task.selected_kol_ids === 'string' 
-                            ? task.selected_kol_ids.split(',').map(s => s.trim()).filter(Boolean)
-                            : (task.selected_kol_ids || []);
-                          return `${kols.length} 个 KOL`;
-                        } catch {
-                          return '未知';
-                        }
-                      })()}
-                    </div>
-                  </div>
-                  
-                  <div class="ai-task-detail-item">
-                    <div class="ai-task-detail-label">上次运行</div>
-                    <div class="ai-task-detail-value">
-                      <span class="ai-task-run-status ${lastRunStatusClass}">${lastRunStatusText}</span>
-                      ${task.last_run_at ? `<div class="ai-task-run-time">${escapeHtml(fmtDbTime(task.last_run_at))}</div>` : ''}
-                    </div>
-                  </div>
-                </div>
-                
-                <div class="ai-task-actions">
-                  <button class="ai-task-action-btn" onclick="openAiTaskModal(${task.id})" title="编辑">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                    </svg>
-                    编辑
-                  </button>
-                  <button class="ai-task-action-btn primary" onclick="runAiTask(${task.id})" title="立即运行">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <polygon points="5 3 19 12 5 21 5 3"/>
-                    </svg>
-                    运行
-                  </button>
-                  <button class="ai-task-action-btn" onclick="viewAiTaskLogs(${task.id})" title="查看日志">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                      <polyline points="14 2 14 8 20 8"/>
-                      <line x1="16" y1="13" x2="8" y2="13"/>
-                      <line x1="16" y1="17" x2="8" y2="17"/>
-                    </svg>
-                    日志
-                  </button>
-                  <button class="ai-task-action-btn danger" onclick="deleteAiTask(${task.id})" title="删除">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <polyline points="3 6 5 6 21 6"/>
-                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                    </svg>
-                    删除
-                  </button>
-                </div>
-              </div>
-              `;
-            }).join('')}
-        
-        <!-- 新建任务卡片 -->
-        <div class="ai-task-card ai-new-task-card" onclick="openAiTaskModal()">
-          <div class="ai-new-task-content">
-            <div class="ai-new-task-icon">${PLUS_ICON}</div>
-            <div class="ai-new-task-title">创建新任务</div>
-            <div class="ai-new-task-desc">设置 AI 分析任务，自动分析 KOL 内容</div>
-          </div>
-        </div>
-      </div>
-      
-      ${!tasks.length ? `
+        ${tasks.length ? `
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">任务</th>
+                <th scope="col">状态</th>
+                <th scope="col">目标 KOL</th>
+                <th scope="col">调度</th>
+                <th scope="col">分析范围</th>
+                <th scope="col">上次运行</th>
+                <th scope="col">操作</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>` : `
         <div class="ai-analysis-empty">
           <div class="empty-state-icon">${BRAIN_ICON}</div>
           <h3>开始使用 AI 分析</h3>
-          <p>点击上方的「创建新任务」卡片来设置你的第一个 AI 分析任务</p>
-        </div>
-      ` : ''}
+          <p>点击右上角「新建任务」来设置你的第一个 AI 分析任务</p>
+        </div>`}
+      </section>
     </div>
   `;
 }
@@ -10764,7 +10906,7 @@ async function saveAiTask(taskId = null) {
 }
 
 async function runAiTask(taskId) {
-  if (!confirm("确定要立即运行此任务吗？")) return;
+  if (!(await showConfirm("确定要立即运行此任务吗？"))) return;
   try {
     await api(`/api/admin/ai-tasks/${taskId}/run`, { method: "POST" });
     flash("任务已开始运行，请稍后查看日志");
@@ -10774,7 +10916,7 @@ async function runAiTask(taskId) {
 }
 
 async function deleteAiTask(taskId) {
-  if (!confirm("确定要删除此任务吗？此操作不可恢复。")) return;
+  if (!(await showConfirm("确定要删除此任务吗？此操作不可恢复。"))) return;
   try {
     await api(`/api/admin/ai-tasks/${taskId}`, { method: "DELETE" });
     flash("任务已删除");
@@ -10931,6 +11073,7 @@ async function viewAiTaskLogs(taskId) {
 async function viewAiReportPost(postId) {
   try {
     const post = await api(`/api/posts/${postId}`);
+    const who = post.kol_name ? `${escapeHtml(post.kol_name)} · ` : "";
     const mask = document.createElement("div");
     mask.className = "modal-mask";
     mask.innerHTML = `
@@ -10938,7 +11081,7 @@ async function viewAiReportPost(postId) {
         <div class="ai-logs-header">
           <div>
             <h3 id="ai-report-title">${escapeHtml(post.title || "AI 分析报告")}</h3>
-            <p class="ai-logs-subtitle">${escapeHtml(post.kol_name || "")}${post.kol_name ? " · " : ""}${fmtPublished(post.published_at)}</p>
+            <p class="ai-logs-subtitle">${who}${fmtPublished(post.published_at)}</p>
           </div>
           <button class="ai-modal-close" onclick="closeAdminModal()" aria-label="关闭">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

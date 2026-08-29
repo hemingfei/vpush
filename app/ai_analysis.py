@@ -301,8 +301,9 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
                 title=f"AI分析报告 - {task['name']}",
                 content=analysis_content,
                 url="",
-                # published_at 约定为北京时间裸字符串（与其余帖子一致），前端按墙钟展示
-                published_at=now.astimezone().strftime("%Y-%m-%d %H:%M"),
+                # published_at 约定为北京时间裸字符串（与其余帖子一致），前端按墙钟展示；
+                # 带秒位：时间线按 published_at 排序，同分钟消息需要秒位保序
+                published_at=now.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
                 post_type="ai_analysis"
             )
         
