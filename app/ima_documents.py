@@ -2294,10 +2294,18 @@ class ImaDocumentService:
             now = time.time()
             with self._state_lock:
                 if not self._next_run_at:
-                    self._next_run_at = now + cfg.interval_seconds
+                    self._next_run_at = now + self._scheduled_delay(cfg)
                 due = now >= self._next_run_at
             if due:
                 self.trigger(scheduled=True)
+
+    def _mounted_groups(self, cfg: ImaDocumentConfig | None = None) -> list[ImaGroupConfig]:
+        groups = (cfg or self.config()).groups
+        return [group for group in groups if group.enabled and group.mount_folder_ids]
+
+    def _scheduled_delay(self, cfg: ImaDocumentConfig | None = None) -> int:
+        mounted = self._mounted_groups(cfg)
+        return max(1800, min((group.interval_seconds for group in mounted), default=3600))
 
     def _group_runtime(self) -> dict[str, Any]:
         raw = self.db.get_setting(IMA_PURE_GROUP_RUNTIME_KEY) or "{}"
@@ -2354,19 +2362,16 @@ class ImaDocumentService:
                 and now - last_started < cfg.interval_seconds
             ):
                 return {"status": "too_soon", "retry_at": int(last_started + cfg.interval_seconds)}
+            if scheduled:
+                self._next_run_at = now + self._scheduled_delay(cfg)
+                if not any(self._group_due(group, now) for group in self._mounted_groups(cfg)):
+                    return {"status": "not_due"}
+            else:
+                self._next_run_at = now + cfg.interval_seconds
             self._running = True
             self._cancel_requested = False
             self._sync_group_id = group_id
             self._sync_scheduled = scheduled
-            if scheduled:
-                mounted = (
-                    group.interval_seconds
-                    for group in cfg.groups
-                    if group.enabled and group.mount_folder_ids
-                )
-                self._next_run_at = now + max(1800, min(mounted, default=3600))
-            else:
-                self._next_run_at = now + cfg.interval_seconds
             self._worker_thread = threading.Thread(
                 target=self._worker, name="ima-document-sync", daemon=True
             )

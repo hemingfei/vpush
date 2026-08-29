@@ -2031,6 +2031,28 @@ def test_manual_sync_one_group_ignores_due_window(tmp_path, monkeypatch):
     assert listed == ["b"]
 
 
+def test_scheduled_sync_skips_when_no_group_is_due(tmp_path, monkeypatch):
+    started = int(time.time() - 60)
+    existing = json.dumps({"groups": 2, "total": 3}, ensure_ascii=False)
+    db = _two_mounted_groups_db(
+        runtime={
+            "a": {"last_started_at": started},
+            "b": {"last_started_at": started},
+        }
+    )
+    db.set_setting(IMA_PURE_LAST_RESULT_KEY, existing)
+    listed = []
+    monkeypatch.setattr(ima_documents, "ImaPureClient", _listing_client(listed))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    monkeypatch.setattr(service, "discover", lambda: {"discovery": {}})
+    result = service.trigger(scheduled=True)
+    if service._worker_thread is not None:
+        service._worker_thread.join(timeout=10)
+    assert result["status"] == "not_due"
+    assert listed == []
+    assert db.get_setting(IMA_PURE_LAST_RESULT_KEY) == existing
+
+
 def test_from_db_preserves_stored_group_interval():
     db = FakeDB(
         {
