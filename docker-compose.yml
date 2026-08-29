@@ -15,6 +15,11 @@ services:
       - TZ=Asia/Shanghai
       - CONFIG_PATH=/app/config.yaml
       - DB_PATH=/data/dav.db
+      - IMA_ARCHIVE_ROOT=${IMA_ARCHIVE_ROOT:-}
+      - IMA_PULL_URL=${IMA_PULL_URL:-}
+      - IMA_PULL_TOKEN=${IMA_PULL_TOKEN:-}
+      - IMA_STORAGE_STATUS_PATH=${IMA_STORAGE_STATUS_PATH:-}
     volumes:
       - ./config.yaml:/app/config.yaml
       - ./data:/data
+      - ${IMA_ARCHIVE_HOST_PATH:-./data/ima}:/data/ima-archive

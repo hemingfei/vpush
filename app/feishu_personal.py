@@ -204,7 +204,10 @@ class FeishuBindListener:
             event_handler=handler,
             log_level=lark_oapi.LogLevel.INFO,
         )
-        ws_client.start()  # 阻塞；daemon 线程随进程退出
+        try:
+            ws_client.start()  # 阻塞；daemon 线程随进程退出
+        finally:
+            self.manager._listener_finished(self)
 
 
 class FeishuPersonalManager:
@@ -233,6 +236,9 @@ class FeishuPersonalManager:
     # ---- 注册会话 ----
     def begin_session(self, user_id: int) -> dict:
         """开始扫码注册：取消旧会话 → begin → 存会话 → 起后台轮询。"""
+        active = self.db.get_active_feishu_registration_session(user_id)
+        if active is not None:
+            self._stop_listener(active["session_id"])
         self.db.cancel_feishu_registration_sessions_by_user(user_id)
         body, base = begin_registration()
         session_id = secrets.token_urlsafe(16)
@@ -267,7 +273,14 @@ class FeishuPersonalManager:
         self.db.cancel_feishu_registration_sessions_by_user(user_id)
 
     def expire_stale(self) -> int:
-        return self.db.expire_stale_feishu_registration_sessions()
+        result = self.db.expire_stale_feishu_registration_sessions()
+        with self._lock:
+            listener_session_ids = tuple(self._listeners)
+        for session_id in listener_session_ids:
+            session = self.db.get_feishu_registration_session(session_id)
+            if session is not None and session["status"] in ("expired", "cancelled", "active"):
+                self._stop_listener(session_id)
+        return result
 
     # ---- 轮询 ----
     def _start_poller(self, session_id: str) -> None:
@@ -276,6 +289,9 @@ class FeishuPersonalManager:
                 return
             if len(self._pollers) >= POLL_MAX_ACTIVE:
                 logger.warning("飞书个人注册轮询已达上限 %s", POLL_MAX_ACTIVE)
+                self.db.update_feishu_registration_session(
+                    session_id, status="degraded", last_error="注册轮询达到并发上限"
+                )
                 return
             t = threading.Thread(target=self._poll_loop, args=(session_id,), daemon=True, name=f"fs-poll-{session_id[:8]}")
             self._pollers[session_id] = t
@@ -408,6 +424,12 @@ class FeishuPersonalManager:
             self._listeners[session_id] = listener
             listener.start()
 
+    def _listener_finished(self, listener: FeishuBindListener) -> None:
+        """只移除仍登记着的同一个监听器，避免删掉刷新后新建的实例。"""
+        with self._lock:
+            if self._listeners.get(listener.session_id) is listener:
+                self._listeners.pop(listener.session_id)
+
     def _stop_listener(self, session_id: str) -> None:
         with self._lock:
             listener = self._listeners.pop(session_id, None)
@@ -436,8 +458,9 @@ class FeishuPersonalManager:
         app_id = session["candidate_app_id"]
         try:
             app_secret = decrypt_secret(self._key(), session["candidate_app_secret_ciphertext"])
-        except Exception as exc:  # noqa: BLE001
-            self.db.update_feishu_registration_session(session_id, status="degraded", last_error=f"解密失败: {exc}")
+        except Exception:  # noqa: BLE001
+            self.db.update_feishu_registration_session(session_id, status="degraded", last_error="候选凭据解密失败")
+            self._stop_listener(session_id)
             return
         from .notifiers.feishu import FeishuNotifier
 

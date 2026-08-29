@@ -1,0 +1,11 @@
+[Unit]
+Description=Run V Push IMA storage health every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+RandomizedDelaySec=30
+Unit=vpush-ima-storage-health.service
+
+[Install]
+WantedBy=timers.target

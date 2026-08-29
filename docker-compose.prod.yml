@@ -52,8 +52,13 @@ services:
       - LOG_FILE=${LOG_FILE:-/data/logs/app.log}
       - WAF_COOKIE_FILE=/data/waf_cookies.json
       - XUEQIU_SEED_COOKIE_FILE=/data/xueqiu_seed_cookie.txt
+      - IMA_ARCHIVE_ROOT=${IMA_ARCHIVE_ROOT:-}
+      - IMA_PULL_URL=${IMA_PULL_URL:-}
+      - IMA_PULL_TOKEN=${IMA_PULL_TOKEN:-}
+      - IMA_STORAGE_STATUS_PATH=${IMA_STORAGE_STATUS_PATH:-}
     volumes:
       - ./data:/data
+      - ${IMA_ARCHIVE_HOST_PATH:-./data/ima}:/data/ima-archive
     expose:
       - "8000"
     networks: [dav]

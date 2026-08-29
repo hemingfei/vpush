@@ -1,0 +1,11 @@
+[Unit]
+Description=Run V Push IMA main health every minute
+
+[Timer]
+OnCalendar=*:*:0
+Persistent=true
+RandomizedDelaySec=10
+Unit=vpush-ima-main-health.service
+
+[Install]
+WantedBy=timers.target

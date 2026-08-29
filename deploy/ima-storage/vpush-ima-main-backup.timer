@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily V Push IMA main control-data backup
+
+[Timer]
+OnCalendar=*-*-* 03:45:00
+Persistent=true
+RandomizedDelaySec=900
+Unit=vpush-ima-main-backup.service
+
+[Install]
+WantedBy=timers.target

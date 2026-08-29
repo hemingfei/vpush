@@ -9,7 +9,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException
 
@@ -19,6 +19,7 @@ from .config import load_config
 from .db import DB
 from .fetchers import build_fetchers
 from .ima_documents import ImaDocumentService
+from .ima_storage import ImaStorageStatus
 from .logging_setup import register_error_sink, setup_logging
 from .notifiers import build_notifiers
 from .scheduler import Scheduler, set_alerts_enabled
@@ -83,7 +84,17 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         config.db_path = str(db_path)
     db = DB(config.db_path, credential_key=config.notifiers.feishu.credential_key)
     logger.info(f"数据库文件: {Path(config.db_path).resolve()}（启动目录 {Path.cwd()}）")
-    ima_documents = ImaDocumentService(db, Path(config.db_path).parent / "ima")
+    index_root = Path(config.db_path).parent / "ima"
+    archive_env = os.environ.get("IMA_ARCHIVE_ROOT", "").strip()
+    archive_root = Path(archive_env) if archive_env else index_root
+    status_env = os.environ.get("IMA_STORAGE_STATUS_PATH", "").strip()
+    storage_status = ImaStorageStatus(status_env or None, remote=bool(archive_env))
+    ima_documents = ImaDocumentService(
+        db,
+        index_root,
+        archive_root=archive_root,
+        storage_status=storage_status,
+    )
     # WARNING+ 日志持久化到 error_logs 表（跨重启可查，管理后台错误记录面板）
     register_error_sink(
         lambda record: db.record_error_log(record.levelname, record.name, record.getMessage())
@@ -285,6 +296,13 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     @app.get("/healthz")
     def healthz():
         return {"status": "ok"}
+
+    @app.get("/healthz/ima-storage")
+    def ima_storage_health(response: Response):
+        payload = ima_documents.storage_status.public()
+        if not ima_documents.store.archive_readable():
+            response.status_code = 503
+        return payload
 
     app.include_router(
         create_api_router(

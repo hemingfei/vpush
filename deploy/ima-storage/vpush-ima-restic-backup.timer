@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily V Push IMA archive Restic backup
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+RandomizedDelaySec=1200
+Unit=vpush-ima-restic-backup.service
+
+[Install]
+WantedBy=timers.target

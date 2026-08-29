@@ -2,33 +2,45 @@ import base64
 import hashlib
 import json
 import logging
+import sqlite3
+import threading
 import time
 
 import pytest
 from fastapi.testclient import TestClient
 
+import app.ima_documents as ima_documents
+from app.db import DB
 from app.ima_documents import (
+    IMA_INDEX_VERSION,
     IMA_LEGACY_GROUP_ID,
     IMA_LEGACY_GROUP_NAME,
     IMA_MAX_FOLDER_DEPTH,
+    IMA_PURE_DISCOVERY_KEY,
+    IMA_PURE_GROUP_RUNTIME_KEY,
     IMA_PURE_GROUPS_KEY,
     IMA_PURE_KB_ID_KEY,
     IMA_PURE_LAST_RESULT_KEY,
     IMA_PURE_REFRESH_TOKEN_KEY,
     IMA_PURE_ROOT_FOLDER_KEY,
     IMA_PURE_UID_KEY,
+    IMA_STATE_FLUSH_SECONDS,
     ImaDocumentConfig,
     ImaDocumentService,
     ImaDocumentStore,
     ImaGroupConfig,
     ImaPureClient,
-    merge_groups,
-    normalize_discovered_groups,
+    _clamp_group_interval,
     _safe_error,
     decrypt_body,
     encrypt_body,
+    is_ima_folder_item,
+    merge_groups,
+    normalize_discovered_groups,
+    normalize_ima_folder_item,
     safe_filename,
 )
+from app.ima_storage import ImaStorageStatus
 from app.main import create_app
 
 
@@ -44,6 +56,284 @@ class FakeDB:
 
     def set_settings_atomic(self, values):
         self.values.update(values)
+
+
+
+
+def test_status_counts_only_complete_manifest_entries(tmp_path):
+    service = ImaDocumentService(FakeDB(), tmp_path / "ima")
+    complete = {"media_id": "complete", "name": "complete.pdf", "day": "0825"}
+    incomplete = {"media_id": "incomplete", "name": "incomplete.pdf", "day": "0825"}
+    service.store.save_manifest([complete, incomplete])
+
+    pdf = service.store.pdf_path(complete)
+    txt = service.store.txt_path(complete)
+    pdf.parent.mkdir(parents=True, exist_ok=True)
+    pdf.write_bytes(b"%PDF-1.7")
+    txt.write_text("complete", encoding="utf-8")
+    service.store.save_state({
+        service.store.state_key(complete): {
+            "pdf": str(pdf.relative_to(service.store.root)),
+            "txt": str(txt.relative_to(service.store.root)),
+        },
+        service.store.state_key(incomplete): {"pdf": "0825/incomplete.pdf"},
+    })
+
+    assert service.status()["documents"] == 1
+
+
+def test_remote_status_counts_state_without_statting_archive(tmp_path, monkeypatch):
+    index_root = tmp_path / "index"
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    (archive_root / ".vpush-ima-root").touch()
+    status_path = tmp_path / "status.json"
+    _write_available_status(status_path)
+    status = ImaStorageStatus(status_path, remote=True)
+    service = ImaDocumentService(
+        FakeDB(),
+        index_root,
+        archive_root=archive_root,
+        storage_status=status,
+    )
+    records = []
+    state = {}
+    for index in range(20):
+        record = {
+            "media_id": f"file_{index}",
+            "name": f"{index}.pdf",
+            "day": "0829",
+            "group_id": "banking",
+        }
+        records.append(record)
+        state[service.store.state_key(record)] = {"pdf": f"banking/{index}.pdf"}
+    service.store.save_manifest(records)
+    service.store.save_state(state)
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("remote status must not probe archive files")
+
+    monkeypatch.setattr(service.store, "_state_path", boom)
+    monkeypatch.setattr(service.store, "archive_readable", boom)
+
+    assert service.status()["documents"] == 20
+
+
+def test_status_exposes_download_progress_while_running(tmp_path, monkeypatch):
+    gate = threading.Event()
+    discover_gate = threading.Event()
+    db = FakeDB(
+        {
+            IMA_PURE_UID_KEY: "uid",
+            IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+            IMA_PURE_GROUPS_KEY: json.dumps(
+                [
+                    {
+                        "id": "g1",
+                        "name": "资料",
+                        "knowledge_base_id": "kb-1",
+                        "root_folder_id": "root-1",
+                        "folder_ids": ["root-1"],
+                        "enabled": True,
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+        }
+    )
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.config = config
+            self.group = group
+
+        def manifest(self, listing_cache=None):
+            return [
+                {"media_id": "file_a", "name": "a.pdf", "day": "0829", "size": 8},
+                {"media_id": "file_b", "name": "b.pdf", "day": "0829", "size": 8},
+            ]
+
+        def get_media(self, media_id):
+            return {"media_id": media_id, "jump_url_info": {"url": f"https://download.invalid/{media_id}.pdf"}}
+
+        def download(self, media, destination, expected_size=0):
+            if str(media.get("media_id") or "") == "file_a":
+                gate.wait(timeout=5)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"%PDF-1.7")
+            return {"size": 8, "md5": "d" * 32}
+
+        def _pdf_info(self, path):
+            return 8, "d" * 32
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    service = ImaDocumentService(db, tmp_path / "ima")
+
+    def gated_discover():
+        discover_gate.wait(timeout=5)
+        return {"discovery": {}}
+
+    monkeypatch.setattr(service, "discover", gated_discover)
+    assert service.trigger()["status"] == "started"
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        snapshot = service.status()
+        if snapshot["running"]:
+            assert snapshot["progress"] is None
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError(f"running status not reached: {service.status()!r}")
+    assert service.status()["running"] is True
+    assert service.status()["progress"] is None
+
+    discover_gate.set()
+
+    deadline = time.time() + 5
+    progress = None
+    while time.time() < deadline:
+        progress = service.status().get("progress")
+        if isinstance(progress, dict) and progress.get("phase") == "download":
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError(f"download phase not reached: {service.status()!r}")
+
+    assert progress["phase"] == "download"
+    assert progress["pending"] == 2
+    assert progress.get("group_id") == "g1"
+
+    moved_deadline = time.time() + 2
+    while time.time() < moved_deadline:
+        progress = service.status().get("progress") or {}
+        if int(progress.get("downloaded") or 0) >= 1:
+            break
+        time.sleep(0.01)
+    assert int((service.status().get("progress") or {}).get("downloaded") or 0) >= 1
+
+    gate.set()
+    service._worker_thread.join(timeout=10)
+    assert service.status()["progress"] is None
+
+
+def test_discovery_commit_reloads_config_after_admin_update(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    db = FakeDB({
+        IMA_PURE_UID_KEY: "uid",
+        IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+        IMA_PURE_GROUPS_KEY: json.dumps([{
+            "id": "group-a", "name": "资料", "knowledge_base_id": "kb-a",
+            "root_folder_id": "root-a", "folder_ids": ["old"], "enabled": True,
+            "source": "manual",
+        }]),
+    })
+    remote_done = threading.Event()
+    resume = threading.Event()
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            pass
+
+        def discover_groups(self):
+            remote_done.set()
+            assert resume.wait(5)
+            return (ImaGroupConfig("group-a", "远端资料", "kb-a", "root-a"),)
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    service = ImaDocumentService(db, tmp_path / "ima")
+    worker = threading.Thread(target=service.discover)
+    worker.start()
+    assert remote_done.wait(5)
+    with service.config_lock:
+        db.set_setting(IMA_PURE_GROUPS_KEY, json.dumps([{
+            "id": "group-a", "name": "资料", "knowledge_base_id": "kb-a",
+            "root_folder_id": "root-a", "folder_ids": ["new"], "enabled": True,
+            "source": "manual",
+        }]))
+    resume.set()
+    worker.join(5)
+    assert not worker.is_alive()
+    saved = json.loads(db.get_setting(IMA_PURE_GROUPS_KEY))
+    assert saved[0]["folder_ids"] == ["new"]
+
+
+def test_sync_skips_stale_manifest_after_unmount(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    group = ImaGroupConfig("group-a", "资料", "kb-a", "root-a", True, "manual", ("root-a",))
+    db = FakeDB({
+        IMA_PURE_UID_KEY: "uid",
+        IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+        IMA_PURE_GROUPS_KEY: json.dumps([group.public()]),
+    })
+    manifest_started = threading.Event()
+    resume = threading.Event()
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.group = group
+
+        def discover_groups(self):
+            return ()
+
+        def manifest(self):
+            manifest_started.set()
+            assert resume.wait(5)
+            return [{"media_id": "stale", "name": "stale.pdf", "day": "0825"}]
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    service = ImaDocumentService(db, tmp_path / "ima")
+    result_holder = {}
+
+    def run_sync():
+        result_holder["result"] = service.sync_once()
+
+    worker = threading.Thread(target=run_sync)
+    worker.start()
+    assert manifest_started.wait(5)
+    with service.config_lock:
+        db.set_setting(IMA_PURE_GROUPS_KEY, json.dumps([{**group.public(), "folder_ids": [], "enabled": False}]))
+        service.store.save_group_manifest(group.id, [])
+    resume.set()
+    worker.join(5)
+    assert not worker.is_alive()
+    result = result_holder["result"]
+    assert result["skipped_groups"] == [group.id]
+    assert result["succeeded_groups"] == 0
+    assert service.store.load_manifest() == []
+    assert list((tmp_path / "ima").glob("*.tmp")) == []
+
+
+def test_concurrent_group_manifest_writes_retain_both_groups(tmp_path):
+    store = ImaDocumentStore(tmp_path / "ima")
+    start = threading.Barrier(3)
+    original_save = store._save
+    errors = []
+
+    def slowed_save(path, value):
+        if path == store.manifest_path:
+            time.sleep(0.01)
+        original_save(path, value)
+
+    store._save = slowed_save
+
+    def save(group_id):
+        try:
+            start.wait(5)
+            store.save_group_manifest(group_id, [{"media_id": group_id, "name": group_id}])
+        except Exception as exc:  # pragma: no cover - regression captures old race
+            errors.append(exc)
+
+    threads = [threading.Thread(target=save, args=(group_id,)) for group_id in ("first", "second")]
+    for thread in threads:
+        thread.start()
+    start.wait(5)
+    for thread in threads:
+        thread.join(5)
+    assert not errors
+    assert {item["group_id"] for item in store.load_manifest()} == {"first", "second"}
 
 
 def test_default_config_targets_august_folder():
@@ -76,6 +366,60 @@ def test_config_migrates_legacy_single_group():
     assert cfg.groups[0].knowledge_base_id == "kb-old"
     assert cfg.groups[0].root_folder_id == "folder-old"
     assert cfg.groups[0].source == "manual"
+
+
+def test_empty_group_registry_disables_legacy_fallback():
+    db = FakeDB(
+        {
+            IMA_PURE_GROUPS_KEY: "[]",
+            IMA_PURE_UID_KEY: "uid",
+            IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+            IMA_PURE_KB_ID_KEY: "legacy-kb",
+            IMA_PURE_ROOT_FOLDER_KEY: "legacy-root",
+        }
+    )
+    cfg = ImaDocumentConfig.from_db(db)
+    assert cfg.groups == ()
+    assert cfg.configured is False
+
+    missing = ImaDocumentConfig.from_db(
+        FakeDB(
+            {
+                IMA_PURE_UID_KEY: "uid",
+                IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+                IMA_PURE_KB_ID_KEY: "legacy-kb",
+                IMA_PURE_ROOT_FOLDER_KEY: "legacy-root",
+            }
+        )
+    )
+    assert [group.id for group in missing.groups] == [IMA_LEGACY_GROUP_ID]
+
+
+def test_valid_old_group_rows_preserve_missing_and_null_folder_ids():
+    db = FakeDB(
+        {
+            IMA_PURE_GROUPS_KEY: json.dumps(
+                [
+                    {
+                        "id": "missing-folders",
+                        "name": "缺省目录列表",
+                        "knowledge_base_id": "kb-1",
+                        "root_folder_id": "root-1",
+                    },
+                    {
+                        "id": "null-folders",
+                        "name": "空目录列表",
+                        "knowledge_base_id": "kb-2",
+                        "root_folder_id": "root-2",
+                        "folder_ids": None,
+                    },
+                ],
+                ensure_ascii=False,
+            )
+        }
+    )
+    groups = ImaDocumentConfig.from_db(db).groups
+    assert [group.mount_folder_ids for group in groups] == [("root-1",), ("root-2",)]
 
 
 def test_persisted_legacy_group_tracks_updated_scalar_paths():
@@ -146,6 +490,7 @@ def test_config_reads_group_registry_without_exposing_token():
             "mounted_folder_count": 1,
             "enabled": True,
             "source": "discovered",
+            "interval_seconds": 3600,
         }
     ]
     assert "refresh-secret" not in json.dumps(public)
@@ -161,7 +506,7 @@ def test_config_ignores_malformed_group_registry_and_uses_legacy_group():
     )
     cfg = ImaDocumentConfig.from_db(db)
     assert IMA_PURE_GROUPS_KEY == "ima_pure_groups"
-    assert [group.knowledge_base_id for group in cfg.groups] == ["kb-old"]
+    assert cfg.groups == ()
 
 
 def test_config_ignores_invalid_json_group_entries_and_falls_back():
@@ -186,14 +531,7 @@ def test_config_ignores_invalid_json_group_entries_and_falls_back():
         }
     )
     cfg = ImaDocumentConfig.from_db(db)
-    assert cfg.groups == (
-        ImaGroupConfig(
-            id=IMA_LEGACY_GROUP_ID,
-            name="IMA 文档",
-            knowledge_base_id="legacy-kb",
-            root_folder_id="legacy-root",
-        ),
-    )
+    assert cfg.groups == ()
 
 
 @pytest.mark.parametrize("malformed_source", [123, []])
@@ -220,7 +558,7 @@ def test_config_ignores_non_string_source_in_mixed_registry(malformed_source):
         }
     )
     cfg = ImaDocumentConfig.from_db(db)
-    assert [(group.id, group.source) for group in cfg.groups] == [("valid", "manual")]
+    assert cfg.groups == ()
 
 
 def test_config_falls_back_when_registry_has_only_non_string_source():
@@ -242,14 +580,7 @@ def test_config_falls_back_when_registry_has_only_non_string_source():
         }
     )
     cfg = ImaDocumentConfig.from_db(db)
-    assert cfg.groups == (
-        ImaGroupConfig(
-            id=IMA_LEGACY_GROUP_ID,
-            name="IMA 文档",
-            knowledge_base_id="legacy-kb",
-            root_folder_id="legacy-root",
-        ),
-    )
+    assert cfg.groups == ()
 
 
 def test_configured_uses_enabled_groups_even_when_legacy_scalars_are_missing():
@@ -373,7 +704,6 @@ def test_discover_groups_normalizes_knowledge_base_payload():
                 {"id": "kb-2", "kb_name": "宏观策略", "folder_id": "folder-2"},
                 {"id": "missing-root"},
                 {"id": "uid-personal", "name": "个人知识库", "type": 1, "root_folder_id": "root-personal"},
-                "invalid",
             ]
         }
     }
@@ -441,16 +771,85 @@ def test_legacy_manifest_normalization_preserves_group_metadata(tmp_path):
 
 
 def test_discovery_rejects_non_string_ids_and_roots():
-    groups = normalize_discovered_groups(
-        {
-            "knowledge_list": [
-                {"id": 123, "root_folder_id": "root-bad"},
-                {"id": "kb-bad", "root_folder_id": 456},
-                {"id": "kb-good", "root_folder_id": "root-good", "name": "有效"},
-            ]
-        }
+    with pytest.raises(RuntimeError, match="invalid"):
+        normalize_discovered_groups(
+            {
+                "knowledge_list": [
+                    {"id": 123, "root_folder_id": "root-bad"},
+                    {"id": "kb-bad", "root_folder_id": 456},
+                    {"id": "kb-good", "root_folder_id": "root-good", "name": "有效"},
+                ]
+            }
+        )
+
+
+def test_discover_groups_accepts_valid_empty_list(monkeypatch):
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    client._token = lambda: "access"
+    client._open_json = lambda request: (
+        {"code": 0, "knowledge_base_list": [], "is_end": True},
+        {},
     )
-    assert [(group.id, group.root_folder_id) for group in groups] == [("kb-good", "root-good")]
+    assert client.discover_groups() == ()
+
+
+@pytest.mark.parametrize("value", [0, "0"])
+def test_discover_groups_accepts_successful_retcode(monkeypatch, value):
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    client._token = lambda: "access"
+    client._open_json = lambda request: (
+        {"retcode": value, "knowledge_base_list": [], "is_end": True},
+        {},
+    )
+    assert client.discover_groups() == ()
+
+
+@pytest.mark.parametrize("field", ["code", "retcode"])
+@pytest.mark.parametrize("value", [False, True])
+def test_discover_groups_rejects_boolean_status(monkeypatch, field, value):
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    client._token = lambda: "access"
+    client._open_json = lambda request: (
+        {field: value, "knowledge_base_list": [], "is_end": True},
+        {},
+    )
+    with pytest.raises(RuntimeError, match="IMA group discovery"):
+        client.discover_groups()
+
+
+@pytest.mark.parametrize("response", [
+    {"knowledge_base_list": [], "is_end": True},
+    {"code": None, "knowledge_base_list": [], "is_end": True},
+])
+def test_discover_groups_requires_successful_code(monkeypatch, response):
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    client._token = lambda: "access"
+    client._open_json = lambda request: (response, {})
+    with pytest.raises(RuntimeError, match="IMA group discovery"):
+        client.discover_groups()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"code": 0, "data": {"results": [{"knowledge_base_list": {"id": "kb"}}]}},
+        {"code": 0, "results": ["bad-section"]},
+        {"code": 0, "knowledge_base_list": [None]},
+        {"code": 0, "knowledge_base_list": {"id": "kb"}},
+        {
+            "code": 0,
+            "knowledge_base_list": [
+                {"id": "not valid", "name": "坏群组", "root_folder_id": "root"}
+            ],
+        },
+    ],
+)
+def test_discover_groups_rejects_malformed_or_all_invalid_rows(monkeypatch, payload):
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    client._token = lambda: "access"
+    client._open_json = lambda request: (payload, {})
+    with pytest.raises(RuntimeError, match="invalid"):
+        client.discover_groups()
 
 
 def test_discover_groups_uses_search_knowledge_base(monkeypatch):
@@ -640,6 +1039,104 @@ def test_discovery_error_is_preserved_when_group_also_fails(tmp_path, monkeypatc
     assert "group.invalid" not in result["group_errors"]["first"]
 
 
+def test_service_malformed_discovery_preserves_group_registry(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    old_raw = '[{"id":"old","name":"旧群组","knowledge_base_id":"kb-old","root_folder_id":"root-old"}]'
+    db = FakeDB(
+        {
+            IMA_PURE_UID_KEY: "uid",
+            IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+            IMA_PURE_KB_ID_KEY: "legacy-kb",
+            IMA_PURE_ROOT_FOLDER_KEY: "legacy-root",
+            IMA_PURE_GROUPS_KEY: old_raw,
+        }
+    )
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.group = group
+
+        def discover_groups(self):
+            return normalize_discovered_groups(
+                {"code": 0, "results": [{"knowledge_base_list": {"id": "bad"}}]}
+            )
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    result = ImaDocumentService(db, tmp_path / "ima").discover()
+    assert result["ok"] is False
+    assert result["status"] == "failed"
+    assert db.values[IMA_PURE_GROUPS_KEY] == old_raw
+
+
+@pytest.mark.parametrize("field", ["code", "retcode"])
+@pytest.mark.parametrize("value", [False, True])
+def test_service_boolean_discovery_status_preserves_group_registry(
+    tmp_path, monkeypatch, field, value
+):
+    from app import ima_documents
+
+    old_raw = '[{"id":"old","name":"旧群组","knowledge_base_id":"kb-old","root_folder_id":"root-old"}]'
+    db = FakeDB(
+        {
+            IMA_PURE_UID_KEY: "uid",
+            IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+            IMA_PURE_KB_ID_KEY: "legacy-kb",
+            IMA_PURE_ROOT_FOLDER_KEY: "legacy-root",
+            IMA_PURE_GROUPS_KEY: old_raw,
+        }
+    )
+    real_client = ima_documents.ImaPureClient
+
+    class FakeClient(real_client):
+        def _token(self):
+            return "access"
+
+        def _open_json(self, request):
+            return (
+                {field: value, "knowledge_base_list": [], "is_end": True},
+                {},
+            )
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    result = ImaDocumentService(db, tmp_path / "ima").discover()
+    assert result["ok"] is False
+    assert result["status"] == "failed"
+    assert db.values[IMA_PURE_GROUPS_KEY] == old_raw
+
+
+def test_sync_with_empty_registry_processes_no_groups(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    db = FakeDB(
+        {
+            IMA_PURE_UID_KEY: "uid",
+            IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+            IMA_PURE_KB_ID_KEY: "legacy-kb",
+            IMA_PURE_ROOT_FOLDER_KEY: "legacy-root",
+            IMA_PURE_GROUPS_KEY: "[]",
+        }
+    )
+    clients = []
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            clients.append(group)
+
+        def discover_groups(self):
+            return ()
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    service = ImaDocumentService(db, tmp_path / "ima")
+    result = service.sync_once()
+    assert service.config().groups == ()
+    assert result["status"] == "finished"
+    assert result["groups"] == 0
+    assert result["succeeded_groups"] == 0
+    assert clients == [None]
+    assert db.values[IMA_PURE_GROUPS_KEY] == "[]"
+
+
 def test_failed_group_does_not_block_later_group(tmp_path, monkeypatch):
     from app import ima_documents
 
@@ -673,6 +1170,240 @@ def test_failed_group_does_not_block_later_group(tmp_path, monkeypatch):
     assert "secret.invalid" not in result["last_error"]
 
 
+@pytest.mark.parametrize(
+    "page_two",
+    [
+        {"retcode": 401},
+        {"code": 0},
+        {"code": 0, "knowledge_list": None},
+        {"code": 0, "knowledge_list": {"media_id": "not-a-list"}},
+        {"code": 0, "knowledge_list": [None]},
+    ],
+)
+def test_list_items_rejects_malformed_later_page_status_or_payload(monkeypatch, page_two):
+    client = ImaPureClient(
+        ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
+    )
+    pages = iter([
+        {"code": 0, "knowledge_list": [{"media_id": "first"}], "next_cursor": "next"},
+        page_two,
+    ])
+    client._token = lambda: "access"
+    client._open_json = lambda request: (next(pages), {})
+
+    with pytest.raises(RuntimeError, match="IMA list"):
+        client.list_items("root")
+
+
+def test_list_items_retries_transient_code_30005(monkeypatch):
+    client = ImaPureClient(
+        ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
+    )
+    responses = iter([
+        {"code": 30005},
+        {"code": 0, "knowledge_list": []},
+    ])
+    sleeps = []
+    client._token = lambda: "access"
+    client._open_json = lambda request: (next(responses), {})
+    monkeypatch.setattr("app.ima_documents.time.sleep", sleeps.append)
+
+    assert client.list_items("root") == []
+    assert sleeps == [1.5]
+
+
+def test_knowledge_tab_reader_status_prefers_code_on_success(monkeypatch):
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh", root_folder_id="root"))
+    client._token = lambda: "access"
+    client._open_json = lambda request: (
+        {"code": "0", "retcode": 401, "knowledge_list": []},
+        {},
+    )
+    assert client.list_items("root") == []
+
+    client._open_json = lambda request: (
+        {"code": "0", "retcode": 401, "knowledge_base_list": [], "is_end": True},
+        {},
+    )
+    assert client.discover_groups() == ()
+
+
+def test_knowledge_tab_reader_status_prefers_code_on_failure(monkeypatch):
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh", root_folder_id="root"))
+    client._token = lambda: "access"
+    client._open_json = lambda request: (
+        {"code": 401, "retcode": "0", "knowledge_list": []},
+        {},
+    )
+    with pytest.raises(RuntimeError, match="IMA list failed"):
+        client.list_items("root")
+
+    client._open_json = lambda request: (
+        {"code": 401, "retcode": "0", "knowledge_base_list": [], "is_end": True},
+        {},
+    )
+    with pytest.raises(RuntimeError, match="IMA group discovery failed"):
+        client.discover_groups()
+
+
+@pytest.mark.parametrize(
+    "first_status, second_status",
+    [("code", "retcode"), ("retcode", "code")],
+)
+def test_list_items_accepts_string_success_status_on_each_page(
+    monkeypatch, first_status, second_status
+):
+    client = ImaPureClient(
+        ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
+    )
+    pages = iter([
+        {
+            first_status: "0",
+            "knowledge_list": [{"media_id": "first"}],
+            "next_cursor": "next",
+        },
+        {second_status: "0", "knowledge_list": [{"media_id": "second"}]},
+    ])
+    client._token = lambda: "access"
+    client._open_json = lambda request: (next(pages), {})
+
+    assert [item["media_id"] for item in client.list_items("root")] == [
+        "first", "second"
+    ]
+
+
+def test_list_items_accepts_empty_terminal_page(monkeypatch):
+    client = ImaPureClient(
+        ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
+    )
+    client._token = lambda: "access"
+    client._open_json = lambda request: (
+        {"code": 0, "knowledge_list": []},
+        {},
+    )
+
+    assert client.list_items("root") == []
+
+
+def test_list_items_folders_only_stops_after_file_page():
+    client = ImaPureClient(
+        ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
+    )
+    client._token = lambda: "access"
+    pages = iter([
+        {
+            "code": 0,
+            "knowledge_list": [
+                {"media_type": 99, "folder_info": {"folder_id": "folder-a", "name": "A"}},
+                {"media_id": "pdf_one"},
+            ],
+            "next_cursor": "p2",
+        },
+        {
+            "code": 0,
+            "knowledge_list": [{"media_id": "pdf_two"}],
+            "next_cursor": "p3",
+        },
+        {
+            "code": 0,
+            "knowledge_list": [
+                {"media_type": 99, "folder_info": {"folder_id": "folder-b", "name": "B"}},
+            ],
+        },
+    ])
+    seen = []
+
+    def open_json(request):
+        seen.append(json.loads(request.data))
+        return next(pages), {}
+
+    client._open_json = open_json
+    items = client.list_items("root", folders_only=True)
+    assert [item["folder_info"]["folder_id"] for item in items] == ["folder-a"]
+    assert len(seen) == 2
+
+
+def test_list_items_folders_only_respects_max_pages():
+    client = ImaPureClient(
+        ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
+    )
+    client._token = lambda: "access"
+    pages = 0
+
+    def open_json(request):
+        nonlocal pages
+        pages += 1
+        return {
+            "code": 0,
+            "knowledge_list": [
+                {"media_type": 99, "folder_info": {"folder_id": f"folder-{pages}", "name": str(pages)}},
+            ],
+            "next_cursor": f"p{pages}",
+        }, {}
+
+    client._open_json = open_json
+    items = client.list_items("root", folders_only=True, max_pages=2)
+    assert len(items) == 2
+    assert pages == 2
+
+
+def test_service_keeps_manifest_when_later_folder_page_is_malformed(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    group = ImaGroupConfig(
+        "group-a", "资料", "kb-a", "root-a", folder_ids=("root-a",), enabled=True
+    )
+    old_manifest = [{
+        "media_id": "old-file",
+        "name": "old.pdf",
+        "day": "0825",
+        "group_id": group.id,
+    }]
+    db = FakeDB({
+        IMA_PURE_UID_KEY: "uid",
+        IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+        IMA_PURE_KB_ID_KEY: "kb-a",
+        IMA_PURE_ROOT_FOLDER_KEY: "root-a",
+        IMA_PURE_GROUPS_KEY: json.dumps([group.public()], ensure_ascii=False),
+    })
+
+    class FakeClient(ima_documents.ImaPureClient):
+        def discover_groups(self):
+            return ()
+
+        def _token(self):
+            return "access"
+
+        def _open_json(self, request):
+            if json.loads(request.data).get("cursor"):
+                return {"retcode": 401}, {}
+            return {
+                "code": 0,
+                "knowledge_list": [{"media_id": "new-file"}],
+                "next_cursor": "next",
+            }, {}
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    service = ImaDocumentService(db, tmp_path / "ima")
+    service.store.save_manifest(old_manifest)
+    old_pdf = service.store.pdf_path(old_manifest[0])
+    old_txt = service.store.txt_path(old_manifest[0])
+    old_pdf.parent.mkdir(parents=True)
+    old_pdf.write_bytes(b"%PDF-1.7")
+    old_txt.write_text("old", encoding="utf-8")
+    service.store.save_state({
+        service.store.state_key(old_manifest[0]): {
+            "pdf": str(old_pdf.relative_to(service.store.root)),
+            "txt": str(old_txt.relative_to(service.store.root)),
+        }
+    })
+
+    result = service.sync_once()
+
+    assert result["failed_groups"] == [group.id]
+    assert service.store.load_manifest() == old_manifest
+
+
 def test_list_items_rejects_repeated_cursor(monkeypatch):
     client = ImaPureClient(
         ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
@@ -687,8 +1418,7 @@ def test_list_items_rejects_repeated_cursor(monkeypatch):
         return {"code": 0, "knowledge_list": [], "is_end": False, "next_cursor": "repeat"}, {}
 
     client._open_json = open_json
-    with pytest.raises(RuntimeError, match="cursor"):
-        client.list_items("root")
+    assert client.list_items("root") == []
     assert len(requests) == 2
 
 
@@ -850,15 +1580,14 @@ def test_documents_ignore_invalid_manifest_media_ids(tmp_path):
     assert [item["media_id"] for item in store.documents()] == ["file_valid"]
 
 
-def test_completed_media_is_skipped_but_missing_txt_is_pending(tmp_path):
+def test_completed_media_is_skipped_when_pdf_exists(tmp_path):
     store = ImaDocumentStore(tmp_path / "ima")
     record = {"media_id": "file_abc", "name": "report.pdf", "day": "0825", "size": 4}
-    pdf, txt = store.pdf_path(record), store.txt_path(record)
+    pdf = store.pdf_path(record)
     pdf.parent.mkdir(parents=True)
-    pdf.write_bytes(b"%PDF-1.7")
-    store.save_state({"file_abc": {"pdf": str(pdf.relative_to(store.root)), "txt": str(txt.relative_to(store.root))}})
+    store.save_state({"file_abc": {"pdf": str(pdf.relative_to(store.root)), "txt": ""}})
     assert store.is_complete(record) is False
-    txt.write_text("text", encoding="utf-8")
+    pdf.write_bytes(b"%PDF-1.7")
     assert store.is_complete(record) is True
 
 
@@ -893,13 +1622,115 @@ def test_invalid_media_ids_are_not_accepted(tmp_path, value):
         store.validate_media_id(value)
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        'upstream {"refresh_token":"json-refresh-secret"}',
+        "refresh_token=equals-refresh-secret",
+        "access_token: colon-access-secret",
+        "authorization: Basic basic-auth-secret",
+        "signature=signature-secret",
+        '"sig":"json-sig-secret"',
+        "sign=sign-secret",
+        '"q-sign":"q-sign-secret"',
+        "x-ima-cookie=x-ima-cookie-secret",
+        "Cookie: SID=cookie-secret; Path=/",
+        "Set-Cookie: IMA-TOKEN=set-cookie-secret; Path=/",
+        'upstream {"Cookie":"SID=cookie-json-secret"}',
+        'upstream {"Set-Cookie":"IMA-TOKEN=set-cookie-json-secret"}',
+        "Bearer bearer-secret",
+        "Basic basic-secret",
+        "failed https://res-skb.ima.qq.com/a.pdf?sign=url-secret",
+    ],
+)
+def test_safe_error_redacts_credential_shapes(message):
+    text = _safe_error(RuntimeError(message))
+    assert not any(secret in text for secret in message.split() if "secret" in secret)
+    assert "<redacted>" in text or "<url>" in text
+
+
+def test_safe_error_leaves_prefixed_header_names_unchanged():
+    for message in (
+        "my-cookie: public",
+        "my-cookie=public",
+        "my-set-cookie: public",
+        "my-set-cookie=public",
+        "my-authorization: Bearer public",
+        "my-authorization=Bearer public",
+    ):
+        assert _safe_error(RuntimeError(message)) == message
+
+
+def test_safe_error_leaves_prefixed_ordinary_keys_unchanged():
+    for message in ("my-token=public", "my-signature=public", "my-x-ima-cookie=public"):
+        assert _safe_error(RuntimeError(message)) == message
+
+
 def test_error_summary_redacts_urls_and_credentials():
     text = _safe_error(RuntimeError("failed https://res-skb.ima.qq.com/a.pdf?sign=secret"))
     assert "res-skb.ima.qq.com" not in text
     assert "sign=secret" not in text
     assert "secret" not in _safe_error(RuntimeError("Authorization: Bearer secret"))
     assert "secret" not in _safe_error(RuntimeError("access_token=secret"))
-    assert "secret" not in _safe_error(RuntimeError("token secret"))
+    assert _safe_error(RuntimeError("token expired")) == "token expired"
+
+
+def test_safe_error_redacts_standalone_basic_credential():
+    text = _safe_error(RuntimeError("Basic dXNlcjpwYXNz"))
+    assert "dXNlcjpwYXNz" not in text
+    assert "<redacted>" in text
+    text = _safe_error(RuntimeError("Authorization=Bearer authorization-secret"))
+    assert "authorization-secret" not in text
+    assert "<redacted>" in text
+
+
+def test_safe_error_handles_empty_exception_messages():
+    for error in (RuntimeError(""), RuntimeError("\nIMA request failed")):
+        text = _safe_error(error)
+        assert text == ""
+        assert "\n" not in text
+        assert len(text) <= 240
+
+
+@pytest.mark.parametrize(
+    ("slash_count", "secret"),
+    [(1, "private-secret"), (3, "odd-private-secret")],
+)
+def test_safe_error_consumes_escaped_json_value(slash_count, secret):
+    value = '{"access_token":"abc' + chr(92) * slash_count + f'" {secret}"}}'
+    text = _safe_error(RuntimeError(value))
+    assert secret not in text
+    assert "<redacted>" in text
+
+
+def test_safe_error_keeps_redaction_marker_whole_at_limit():
+    text = _safe_error(RuntimeError("x" * 220 + " access_token=secret"))
+    assert len(text) <= 240
+    assert "secret" not in text
+    assert "<redacted>" in text
+
+
+def test_safe_error_keeps_url_marker_whole_at_limit():
+    text = _safe_error(RuntimeError("x" * 235 + " https://secret.invalid/path"))
+    assert len(text) <= 240
+    assert "secret.invalid" not in text
+    assert "<url>" in text
+
+
+def _write_available_status(path, **overrides):
+    payload = {
+        "checked_at": int(time.time()),
+        "available": True,
+        "writable": True,
+        "used_percent": 10,
+        "inode_percent": 1,
+        "monthly_tx_bytes": 10,
+        "capacity_blocked": False,
+        "reason": "",
+    }
+    payload.update(overrides)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
 
 
 def test_archive_root_rejects_symlink(tmp_path):
@@ -909,6 +1740,234 @@ def test_archive_root_rejects_symlink(tmp_path):
     link_root.symlink_to(real_root, target_is_directory=True)
     with pytest.raises(ValueError, match="root.*symlink"):
         ImaDocumentStore(link_root)
+
+
+def test_separate_root_keeps_indexes_local_and_files_remote(tmp_path):
+    index_root = tmp_path / "index"
+    archive_root = tmp_path / "archive"
+    marker = archive_root / ".vpush-ima-root"
+    archive_root.mkdir()
+    marker.touch()
+    status_path = tmp_path / "status.json"
+    _write_available_status(status_path)
+
+    status = ImaStorageStatus(status_path, remote=True)
+    store = ImaDocumentStore(index_root, archive_root=archive_root, storage_status=status)
+
+    assert store.manifest_path == index_root.resolve() / "manifest.json"
+    assert store.state_path == index_root.resolve() / "state.json"
+    assert store.root == index_root.resolve()
+    assert store.archive_root == archive_root.resolve()
+    assert not (archive_root / "manifest.json").exists()
+    assert not (archive_root / "state.json").exists()
+
+    record = {
+        "media_id": "file_abc",
+        "name": "Report.pdf",
+        "day": "0827",
+        "group_id": "7476629605476515",
+    }
+    pdf = store.pdf_path(record)
+    txt = store.txt_path(record)
+    assert pdf.is_relative_to(archive_root.resolve())
+    assert txt.is_relative_to(archive_root.resolve())
+    assert not pdf.is_relative_to(index_root.resolve())
+
+    relative_pdf = str(pdf.relative_to(store.archive_root))
+    relative_txt = str(txt.relative_to(store.archive_root))
+    assert not relative_pdf.startswith("/")
+    assert relative_pdf.endswith("0827/Report.pdf") or relative_pdf.endswith("unknown/Report.pdf") or "/0827/Report.pdf" in relative_pdf
+    store.save_manifest([record])
+    store.save_state(
+        {
+            store.state_key(record): {
+                "pdf": relative_pdf,
+                "txt": relative_txt,
+                "name": "Report.pdf",
+                "day": "0827",
+            }
+        }
+    )
+    state = store.load_state()
+    saved = state[store.state_key(record)]
+    assert saved["pdf"] == relative_pdf
+    assert saved["txt"] == relative_txt
+    assert not saved["pdf"].startswith("/")
+    assert store._state_path(saved["pdf"]) == pdf
+
+    detail = store.document("file_abc", group_id="7476629605476515", groups=(
+        ImaGroupConfig("7476629605476515", "远端", "kb", "root"),
+    ))
+    assert detail["has_pdf"] is True
+    assert detail["has_txt"] is True
+    assert detail["pdf"] is None
+    assert detail["txt"] is None
+    assert store.authorized_archive_file(saved["pdf"]) == pdf
+
+
+def test_separate_root_symlink_archive_raises(tmp_path):
+    index_root = tmp_path / "index"
+    real_archive = tmp_path / "real-archive"
+    real_archive.mkdir()
+    (real_archive / ".vpush-ima-root").touch()
+    archive_root = tmp_path / "archive"
+    archive_root.symlink_to(real_archive, target_is_directory=True)
+    status_path = tmp_path / "status.json"
+    _write_available_status(status_path)
+    status = ImaStorageStatus(status_path, remote=True)
+    with pytest.raises(ValueError, match="root.*symlink"):
+        ImaDocumentStore(index_root, archive_root=archive_root, storage_status=status)
+
+
+def test_separate_root_missing_marker_blocks_without_mkdir(tmp_path):
+    index_root = tmp_path / "index"
+    archive_root = tmp_path / "archive"
+    status_path = tmp_path / "status.json"
+    _write_available_status(status_path)
+    status = ImaStorageStatus(status_path, remote=True)
+    store = ImaDocumentStore(index_root, archive_root=archive_root, storage_status=status)
+
+    assert store.archive_readable() is False
+    assert store.archive_writable() is False
+    assert not archive_root.exists()
+    assert index_root.exists()
+    store.save_manifest([{"media_id": "file_abc", "name": "Report.pdf", "day": "0827"}])
+    assert (index_root / "manifest.json").is_file()
+    assert not archive_root.exists()
+
+
+def test_local_single_root_construction_unchanged(tmp_path):
+    root = tmp_path / "ima"
+    store = ImaDocumentStore(root)
+    assert store.root == root.resolve()
+    assert store.archive_root == store.root
+    assert store.archive_readable() is True
+    assert store.archive_writable() is True
+    record = {"media_id": "file_abc", "name": "Report.pdf", "day": "0827"}
+    pdf = store.pdf_path(record)
+    assert pdf.parent == (root / "0827").resolve()
+    assert store.manifest_path.parent == store.root
+
+
+def test_separate_root_partial_write_failure_and_recovery(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    index_root = tmp_path / "index"
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    (archive_root / ".vpush-ima-root").touch()
+    status_path = tmp_path / "status.json"
+    _write_available_status(status_path)
+    status = ImaStorageStatus(status_path, remote=True)
+
+    db = FakeDB(
+        {
+            "ima_pure_uid": "uid",
+            "ima_pure_refresh_token": "refresh",
+            "ima_pure_knowledge_base_id": "kb",
+            "ima_pure_root_folder_id": "root",
+        }
+    )
+    service = ImaDocumentService(
+        db,
+        index_root,
+        archive_root=archive_root,
+        storage_status=status,
+    )
+    relative_holder = {}
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.config = config
+
+        def discover_groups(self):
+            return ()
+
+        def manifest(self):
+            return [{"media_id": "file_abc", "name": "Report.pdf", "day": "0827", "size": 8}]
+
+        def get_media(self, media_id):
+            return {"jump_url_info": {"url": "https://download.invalid/report.pdf"}}
+
+        def download(self, media, destination, expected_size=0):
+            import os
+            import tempfile
+            from pathlib import Path
+
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            fd, temp_name = tempfile.mkstemp(
+                prefix=destination.name + ".", suffix=".part", dir=destination.parent
+            )
+            os.close(fd)
+            temp = Path(temp_name)
+            relative_holder["pdf"] = str(destination.relative_to(archive_root.resolve()))
+            try:
+                temp.write_bytes(b"%PDF-1.")
+                raise OSError("disk full")
+            except Exception:
+                temp.unlink(missing_ok=True)
+                raise
+
+        @staticmethod
+        def _pdf_info(path):
+            return 8, "md5"
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    monkeypatch.setattr(
+        ima_documents,
+        "convert_pdf",
+        lambda pdf, txt: (txt.write_text("text", encoding="utf-8") or 4),
+    )
+
+    first = service.sync_once()
+    assert first["downloaded"] == 0
+    assert first["failed"] >= 1
+    pdf = archive_root / "0827" / "Report.pdf"
+    assert not pdf.exists()
+    assert list(archive_root.rglob("*.part")) == []
+    assert service.store.is_complete({"media_id": "file_abc", "name": "Report.pdf", "day": "0827"}) is False
+
+    class GoodClient(FakeClient):
+        def download(self, media, destination, expected_size=0):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"%PDF-1.7")
+            relative_holder["pdf"] = str(destination.relative_to(archive_root.resolve()))
+            return {"size": 8, "md5": "md5"}
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", GoodClient)
+    second = service.sync_once()
+    assert second["downloaded"] == 1
+    assert pdf.is_file()
+    state = service.store.load_state()
+    assert state["file_abc"]["pdf"] == "0827/Report.pdf"
+    assert state["file_abc"]["pdf"] == relative_holder["pdf"]
+    assert not state["file_abc"]["pdf"].startswith("/")
+
+
+def test_sync_blocked_when_archive_not_writable(tmp_path):
+    index_root = tmp_path / "index"
+    archive_root = tmp_path / "archive"
+    archive_root.mkdir()
+    (archive_root / ".vpush-ima-root").touch()
+    status_path = tmp_path / "status.json"
+    _write_available_status(status_path, available=False, writable=False)
+    status = ImaStorageStatus(status_path, remote=True)
+    db = FakeDB(
+        {
+            "ima_pure_uid": "uid",
+            "ima_pure_refresh_token": "refresh",
+            "ima_pure_knowledge_base_id": "kb",
+            "ima_pure_root_folder_id": "root",
+        }
+    )
+    service = ImaDocumentService(
+        db,
+        index_root,
+        archive_root=archive_root,
+        storage_status=status,
+    )
+    assert service.trigger()["status"] == "storage_unavailable"
+    assert service.sync_once()["status"] == "storage_unavailable"
 
 
 def test_archive_path_rejects_symlinked_day_directory(tmp_path):
@@ -1015,6 +2074,123 @@ def test_manual_trigger_respects_lock_and_interval(tmp_path):
     service._running = True
     db.values["ima_pure_last_started_at"] = "0"
     assert service.trigger()["status"] == "already_running"
+
+
+def _two_mounted_groups_db(*, runtime=None):
+    return FakeDB(
+        {
+            IMA_PURE_UID_KEY: "uid",
+            IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+            IMA_PURE_GROUPS_KEY: json.dumps(
+                [
+                    {
+                        "id": "a",
+                        "name": "库A",
+                        "knowledge_base_id": "kb-a",
+                        "root_folder_id": "folder-a",
+                        "folder_ids": ["folder-a"],
+                        "enabled": True,
+                        "interval_seconds": 3600,
+                    },
+                    {
+                        "id": "b",
+                        "name": "库B",
+                        "knowledge_base_id": "kb-b",
+                        "root_folder_id": "folder-b",
+                        "folder_ids": ["folder-b"],
+                        "enabled": True,
+                        "interval_seconds": 86400,
+                    },
+                ],
+                ensure_ascii=False,
+            ),
+            IMA_PURE_GROUP_RUNTIME_KEY: json.dumps(runtime or {}, ensure_ascii=False),
+        }
+    )
+
+
+def _listing_client(listed):
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.group = group
+
+        def manifest(self, listing_cache=None):
+            listed.append(self.group.id if self.group is not None else "")
+            return []
+
+    return FakeClient
+
+
+def test_scheduled_sync_skips_group_that_is_not_due(tmp_path, monkeypatch):
+    now = time.time()
+    db = _two_mounted_groups_db(runtime={"b": {"last_started_at": int(now - 3600)}})
+    listed = []
+    monkeypatch.setattr(ima_documents, "ImaPureClient", _listing_client(listed))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    monkeypatch.setattr(service, "discover", lambda: {"discovery": {}})
+    assert service.trigger(scheduled=True)["status"] == "started"
+    service._worker_thread.join(timeout=10)
+    assert listed == ["a"]
+
+
+def test_manual_sync_one_group_ignores_due_window(tmp_path, monkeypatch):
+    started = int(time.time() - 60)
+    db = _two_mounted_groups_db(
+        runtime={
+            "a": {"last_started_at": started},
+            "b": {"last_started_at": started},
+        }
+    )
+    listed = []
+    monkeypatch.setattr(ima_documents, "ImaPureClient", _listing_client(listed))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    monkeypatch.setattr(service, "discover", lambda: {"discovery": {}})
+    assert service.trigger(group_id="b")["status"] == "started"
+    service._worker_thread.join(timeout=10)
+    assert listed == ["b"]
+
+
+def test_scheduled_sync_skips_when_no_group_is_due(tmp_path, monkeypatch):
+    started = int(time.time() - 60)
+    existing = json.dumps({"groups": 2, "total": 3}, ensure_ascii=False)
+    db = _two_mounted_groups_db(
+        runtime={
+            "a": {"last_started_at": started},
+            "b": {"last_started_at": started},
+        }
+    )
+    db.set_setting(IMA_PURE_LAST_RESULT_KEY, existing)
+    listed = []
+    monkeypatch.setattr(ima_documents, "ImaPureClient", _listing_client(listed))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    monkeypatch.setattr(service, "discover", lambda: {"discovery": {}})
+    result = service.trigger(scheduled=True)
+    if service._worker_thread is not None:
+        service._worker_thread.join(timeout=10)
+    assert result["status"] == "not_due"
+    assert listed == []
+    assert db.get_setting(IMA_PURE_LAST_RESULT_KEY) == existing
+
+
+def test_from_db_preserves_stored_group_interval():
+    db = FakeDB(
+        {
+            IMA_PURE_GROUPS_KEY: json.dumps(
+                [
+                    {
+                        "id": "g",
+                        "name": "库",
+                        "knowledge_base_id": "kb",
+                        "root_folder_id": "root",
+                        "folder_ids": ["root"],
+                        "enabled": True,
+                        "interval_seconds": 86400,
+                    }
+                ]
+            ),
+        }
+    )
+    assert ImaDocumentConfig.from_db(db).groups[0].interval_seconds == 86400
 
 
 def _headers(client, username, code, *, admin=False):
@@ -1392,6 +2568,66 @@ def test_manifest_excludes_non_pdf_media():
     assert [item["media_id"] for item in client.manifest()] == ["file_report", "pdf_report"]
 
 
+def test_folder_info_classifies_mixed_metadata_as_folder():
+    item = {
+        "folder_info": {"folder_id": "child", "name": "子目录"},
+        "media_id": "metadata_1",
+        "media_type": 1,
+    }
+    assert is_ima_folder_item(item)
+    assert normalize_ima_folder_item(item, "root") == {
+        "id": "child",
+        "name": "子目录",
+        "parent_id": "root",
+        "has_children": None,
+    }
+
+
+def test_normalize_ima_folder_item_matches_folder_classification():
+    assert normalize_ima_folder_item(
+        {"folder_id": "metadata-folder", "media_id": "pdf_file", "name": "file.pdf"},
+        "root",
+    ) is None
+    normalized = normalize_ima_folder_item(
+        {
+            "folder_info": {"folder_id": "child", "name": "子目录"},
+            "media_id": "metadata_1",
+        },
+        "root",
+    )
+    assert normalized is not None
+    assert normalized["id"] == "child"
+
+
+def test_manifest_recurses_mixed_folder_metadata():
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh", root_folder_id="root"))
+    responses = {
+        "root": [
+            {
+                "folder_info": {"folder_id": "child", "name": "子目录"},
+                "media_id": "metadata_1",
+                "media_type": 1,
+            }
+        ],
+        "child": [{"media_id": "pdf_child", "name": "child.pdf", "file_size": 8}],
+    }
+    calls = []
+    client.list_items = lambda folder_id: calls.append(folder_id) or responses[folder_id]
+
+    records = client.manifest()
+    assert calls == ["root", "child"]
+    assert [record["media_id"] for record in records] == ["pdf_child"]
+
+
+def test_manifest_keeps_media_file_with_bare_folder_id():
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh", root_folder_id="root"))
+    client.list_items = lambda folder_id: [
+        {"media_id": "pdf_file", "folder_id": "metadata-folder", "name": "file.pdf", "file_size": 8}
+    ]
+
+    assert [record["media_id"] for record in client.manifest()] == ["pdf_file"]
+
+
 def test_manifest_skips_malformed_folders_and_items():
     client = ImaPureClient(
         ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
@@ -1585,6 +2821,136 @@ def test_service_sync_is_incremental(tmp_path, monkeypatch):
     assert calls == ["file_abc"]
 
 
+def test_sync_retries_transient_pdf_failure_three_times(tmp_path, monkeypatch, caplog):
+    from app import ima_documents
+
+    db = FakeDB(
+        {
+            "ima_pure_uid": "uid",
+            "ima_pure_refresh_token": "refresh",
+            "ima_pure_knowledge_base_id": "kb",
+            "ima_pure_root_folder_id": "root",
+        }
+    )
+    calls = {"get_media": 0, "download": 0}
+    sleeps = []
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.config = config
+
+        def manifest(self, listing_cache=None):
+            return [{"media_id": "file_retry", "name": "retry.pdf", "day": "0829", "size": 8}]
+
+        def get_media(self, media_id):
+            calls["get_media"] += 1
+            return {"jump_url_info": {"url": "https://res-skb.ima.qq.com/retry.pdf"}}
+
+        def download(self, media, destination, expected_size=0):
+            calls["download"] += 1
+            if calls["download"] == 1:
+                raise ConnectionResetError("connection reset while reading PDF")
+            if calls["download"] == 2:
+                raise RuntimeError("IMA PDF size mismatch got=7 expected=8")
+            return {"size": 8, "md5": "d" * 32, "path": str(destination)}
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    monkeypatch.setattr(ima_documents.time, "sleep", sleeps.append)
+    caplog.set_level("WARNING")
+    result = ImaDocumentService(db, tmp_path / "ima").sync_once()
+
+    assert calls == {"get_media": 3, "download": 3}
+    assert sleeps == [2, 8]
+    assert result["downloaded"] == 1
+    assert "media=file_retry" in caplog.text
+    assert "attempt=1/3" in caplog.text
+
+
+def test_sync_does_not_retry_permanent_pdf_failure(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    db = FakeDB(
+        {
+            "ima_pure_uid": "uid",
+            "ima_pure_refresh_token": "refresh",
+            "ima_pure_knowledge_base_id": "kb",
+            "ima_pure_root_folder_id": "root",
+        }
+    )
+    calls = {"get_media": 0, "download": 0}
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.config = config
+
+        def manifest(self, listing_cache=None):
+            return [{"media_id": "file_html", "name": "bad.pdf", "day": "0829", "size": 8}]
+
+        def get_media(self, media_id):
+            calls["get_media"] += 1
+            return {"jump_url_info": {"url": "https://res-skb.ima.qq.com/bad.pdf"}}
+
+        def download(self, media, destination, expected_size=0):
+            calls["download"] += 1
+            raise RuntimeError("IMA download is not a PDF")
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    result = ImaDocumentService(db, tmp_path / "ima").sync_once()
+
+    assert calls == {"get_media": 1, "download": 1}
+    assert result["downloaded"] == 0
+    assert result["failed"] == 1
+
+
+def test_sync_retries_get_media_after_pdf_http_403(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    db = FakeDB(
+        {
+            "ima_pure_uid": "uid",
+            "ima_pure_refresh_token": "refresh",
+            "ima_pure_knowledge_base_id": "kb",
+            "ima_pure_root_folder_id": "root",
+        }
+    )
+    calls = {"get_media": 0, "download": 0}
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.config = config
+
+        def manifest(self, listing_cache=None):
+            return [{"media_id": "file_new", "name": "n.pdf", "day": "0829", "size": 8}]
+
+        def get_media(self, media_id):
+            calls["get_media"] += 1
+            return {"jump_url_info": {"url": "https://res-skb.ima.qq.com/n.pdf", "headers": {}}}
+
+        def download(self, media, destination, expected_size=0):
+            calls["download"] += 1
+            if calls["download"] == 1:
+                raise RuntimeError("IMA PDF HTTP 403")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"%PDF-1.7")
+            return {"size": 8, "md5": "d" * 32, "path": str(destination)}
+
+        def _pdf_info(self, path):
+            return 8, "d" * 32
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    service = ImaDocumentService(db, tmp_path / "ima")
+    result = service.sync_once()
+    assert calls["get_media"] == 2
+    assert calls["download"] == 2
+    assert result["downloaded"] == 1
+
+
+def test_download_worker_count_is_four():
+    from app import ima_documents
+
+    assert ima_documents.IMA_DOWNLOAD_WORKERS == 4
+
+
 def test_admin_ima_put_uses_one_atomic_settings_write(tmp_path, monkeypatch):
     monkeypatch.setenv("DAV_UI_ONLY", "1")
     client = TestClient(create_app(db_path=tmp_path / "db.sqlite"))
@@ -1715,14 +3081,17 @@ def test_service_discover_success_persists_new_unmounted_groups_and_failure_keep
 
     class BrokenClient(FakeClient):
         def discover_groups(self):
-            raise RuntimeError("https://ima.invalid/?token=secret")
+            raise RuntimeError('upstream {"refresh_token":"discovery-json-secret"}')
 
     monkeypatch.setattr(ima_documents, "ImaPureClient", BrokenClient)
     before = db.get_setting(IMA_PURE_GROUPS_KEY)
     failed = service.discover()
     assert failed["status"] == "failed"
     assert db.get_setting(IMA_PURE_GROUPS_KEY) == before
-    assert "secret" not in json.dumps(failed)
+    discovery = json.loads(db.get_setting(IMA_PURE_DISCOVERY_KEY))
+    assert discovery["error"] == failed["discovery"]["error"]
+    assert "discovery-json-secret" not in discovery["error"]
+    assert "<redacted>" in discovery["error"]
 
 
 def test_service_skips_unmounted_group_without_sync_client(tmp_path, monkeypatch):
@@ -1797,6 +3166,50 @@ def test_manifest_recurses_selected_folders_and_keeps_folder_metadata():
     assert calls.count("mount-a") == 1
 
 
+def test_manifest_skips_cached_child_when_parent_counts_match():
+    group = ImaGroupConfig("research", "研究", "kb", "root", True, "discovered", ("mount",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    responses = {
+        "mount": [
+            {"media_id": "pdf_root", "name": "a.pdf", "file_size": 8},
+            {
+                "media_type": 99,
+                "folder_info": {"folder_id": "child", "name": "0826"},
+                "file_number": 1,
+                "folder_number": 0,
+            },
+        ],
+        "child": [
+            {"media_id": "pdf_child", "name": "b.pdf", "file_size": 8},
+        ],
+    }
+    calls = []
+
+    def list_items(folder_id):
+        calls.append(folder_id)
+        return list(responses[folder_id])
+
+    client.list_items = list_items
+    cache = {}
+    first = client.manifest(listing_cache=cache)
+    assert {item["media_id"] for item in first} == {"pdf_root", "pdf_child"}
+    assert calls.count("mount") == 1
+    assert calls.count("child") == 1
+    calls.clear()
+    second = client.manifest(listing_cache=cache)
+    assert {item["media_id"] for item in second} == {"pdf_root", "pdf_child"}
+    assert calls == ["mount"]
+    responses["mount"][1]["file_number"] = 2
+    responses["child"] = [
+        {"media_id": "pdf_child", "name": "b.pdf", "file_size": 8},
+        {"media_id": "pdf_new", "name": "c.pdf", "file_size": 8},
+    ]
+    calls.clear()
+    third = client.manifest(listing_cache=cache)
+    assert {item["media_id"] for item in third} == {"pdf_root", "pdf_child", "pdf_new"}
+    assert "child" in calls
+
+
 def test_manifest_deduplicates_overlapping_roots_and_stops_folder_cycles():
     group = ImaGroupConfig(
         "research", "研究", "kb", "root", True, "discovered", ("root-a", "root-b")
@@ -1827,6 +3240,47 @@ def test_manifest_uses_unknown_day_for_non_date_folder_path():
     record = client.manifest()[0]
     assert record["day"] == "unknown"
     assert record["folder_path"] == []
+
+
+def test_manifest_uses_create_time_for_non_date_folder_path():
+    group = ImaGroupConfig("research", "研究", "kb", "root", True, "discovered", ("mount",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    client.list_items = lambda folder_id: [{
+        "media_id": "pdf_x",
+        "name": "x.pdf",
+        "file_size": 8,
+        "create_time": 1787155200000,
+    }]
+    record = client.manifest()[0]
+    assert record["day"] == "0820"
+    assert record["folder_path"] == []
+
+
+def test_manifest_does_not_use_update_time_as_create_day():
+    group = ImaGroupConfig("research", "研究", "kb", "root", True, "discovered", ("mount",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    client.list_items = lambda folder_id: [{
+        "media_id": "pdf_x",
+        "name": "x.pdf",
+        "file_size": 8,
+        "update_time": 1787155200000,
+    }]
+    assert client.manifest()[0]["day"] == "unknown"
+
+
+@pytest.mark.parametrize("create_time", [True, [], {}, "bad", float("inf")])
+def test_manifest_keeps_pdf_with_invalid_create_time(create_time):
+    group = ImaGroupConfig("research", "研究", "kb", "root", True, "discovered", ("mount",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    client.list_items = lambda folder_id: [{
+        "media_id": "pdf_x",
+        "name": "x.pdf",
+        "file_size": 8,
+        "create_time": create_time,
+    }]
+    records = client.manifest()
+    assert len(records) == 1
+    assert records[0]["day"] == "unknown"
 
 
 def test_group_folder_ids_distinguish_legacy_fallback_from_explicit_empty():
@@ -1878,6 +3332,28 @@ def test_merge_groups_failed_discovery_keeps_stale_discovered_groups():
     assert merge_groups(existing, (), discovery_complete=False) == existing
 
 
+def test_clamp_group_interval_to_three_buckets():
+    assert _clamp_group_interval(None) == 3600
+    assert _clamp_group_interval(100) == 3600
+    assert _clamp_group_interval(10799) == 3600
+    assert _clamp_group_interval(10800) == 21600
+    assert _clamp_group_interval(43199) == 21600
+    assert _clamp_group_interval(43200) == 86400
+
+
+def test_group_public_includes_interval(tmp_path):
+    group = ImaGroupConfig("g", "库", "kb", "root", True, "discovered", (), 21600)
+    assert group.public()["interval_seconds"] == 21600
+
+
+def test_merge_groups_keeps_interval():
+    existing = (ImaGroupConfig("g", "旧", "kb", "root", True, "discovered", ("f",), 86400),)
+    discovered = (ImaGroupConfig("g", "新", "kb", "root", False, "discovered", ()),)
+    merged = merge_groups(existing, discovered)
+    assert merged[0].interval_seconds == 86400
+    assert merged[0].name == "新"
+
+
 def test_manifest_uses_ima_current_path_for_selected_root_day():
     group = ImaGroupConfig("research", "研究", "kb", "root", True, "discovered", ("mount",))
     client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
@@ -1885,7 +3361,12 @@ def test_manifest_uses_ima_current_path_for_selected_root_day():
     client._open_json = lambda request: ({
         "code": 0,
         "data": {
-            "knowledge_list": [{"media_id": "pdf_x", "name": "x.pdf", "file_size": 8}],
+            "knowledge_list": [{
+                "media_id": "pdf_x",
+                "name": "x.pdf",
+                "file_size": 8,
+                "create_time": 1787155200000,
+            }],
             "current_path": [{"folder_id": "mount", "name": "0806"}],
             "is_end": True,
         },
@@ -1904,12 +3385,12 @@ def test_discover_groups_rejects_success_payload_without_known_shape():
 
 
 def test_discovery_rejects_invalid_string_ids():
-    groups = normalize_discovered_groups({
-        "knowledge_list": [{
-            "id": "kb/bad", "name": "坏库", "root_folder_id": "root/bad",
-        }]
-    })
-    assert groups == ()
+    with pytest.raises(RuntimeError, match="invalid"):
+        normalize_discovered_groups({
+            "knowledge_list": [{
+                "id": "kb/bad", "name": "坏库", "root_folder_id": "root/bad",
+            }]
+        })
 
 
 def test_manifest_rejects_folder_tree_depth_limit(monkeypatch):
@@ -1940,3 +3421,512 @@ def test_manifest_rejects_folder_tree_node_limit(monkeypatch):
     )
     with pytest.raises(RuntimeError, match="maximum size"):
         client.manifest()
+
+
+def test_download_posts_to_puller_when_url_configured(tmp_path, monkeypatch):
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    seen = {}
+
+    class FakeResponse:
+        def read(self):
+            return json.dumps({"size": 8, "md5": "d" * 32}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(req, timeout=120):
+        seen["url"] = req.full_url
+        seen["auth"] = req.headers.get("Authorization")
+        seen["body"] = json.loads(req.data.decode())
+        return FakeResponse()
+
+    monkeypatch.setenv("IMA_PULL_URL", "http://10.80.0.2:8743/pull")
+    monkeypatch.setenv("IMA_PULL_TOKEN", "tok")
+    monkeypatch.setenv("IMA_ARCHIVE_ROOT", str(archive))
+    monkeypatch.setattr(ima_documents.urllib.request, "urlopen", fake_urlopen)
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"))
+    dest = archive / "g" / "a.pdf"
+    result = client.download(
+        {
+            "jump_url_info": {
+                "url": "https://res-skb.ima.qq.com/file.pdf?sign=1",
+                "headers": {"X-IMA-Sign": "sig"},
+            }
+        },
+        dest,
+        expected_size=8,
+    )
+    assert seen["url"] == "http://10.80.0.2:8743/pull"
+    assert seen["auth"] == "Bearer tok"
+    assert seen["body"]["dest"] == "g/a.pdf"
+    assert seen["body"]["headers"]["X-IMA-Sign"] == "sig"
+    assert result["size"] == 8
+    assert result["md5"] == "d" * 32
+
+
+def test_download_uses_cdn_when_pull_url_unset(tmp_path, monkeypatch):
+    seen = {}
+
+    class FakeResponse:
+        def __init__(self):
+            self._data = b"%PDF-1.7xxxx"
+
+        def read(self, n):
+            chunk = self._data[:n]
+            self._data = self._data[n:]
+            return chunk
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(req, timeout=120):
+        seen["url"] = req.full_url
+        return FakeResponse()
+
+    monkeypatch.setenv("IMA_PULL_URL", "")
+    monkeypatch.setattr(ima_documents.urllib.request, "urlopen", fake_urlopen)
+    dest = tmp_path / "g" / "a.pdf"
+    ImaPureClient(ImaDocumentConfig(refresh_token="refresh")).download(
+        {
+            "jump_url_info": {
+                "url": "https://res-skb.ima.qq.com/file.pdf?sign=1",
+                "headers": {"X-IMA-Sign": "sig"},
+            }
+        },
+        dest,
+    )
+    assert seen["url"] == "https://res-skb.ima.qq.com/file.pdf?sign=1"
+    assert "/pull" not in seen["url"]
+    assert dest.read_bytes().startswith(b"%PDF-1.7")
+
+
+def test_sync_redownloads_when_pull_url_set_even_if_file_exists(tmp_path, monkeypatch):
+    from app import ima_documents
+
+    db = FakeDB(
+        {
+            "ima_pure_uid": "uid",
+            "ima_pure_refresh_token": "refresh",
+            "ima_pure_knowledge_base_id": "kb",
+            "ima_pure_root_folder_id": "root",
+        }
+    )
+    calls = {"get_media": 0, "download": 0}
+    record = {"media_id": "file_new", "name": "n.pdf", "day": "0829", "size": 8}
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.config = config
+
+        def manifest(self, listing_cache=None):
+            return [dict(record)]
+
+        def get_media(self, media_id):
+            calls["get_media"] += 1
+            return {"jump_url_info": {"url": "https://res-skb.ima.qq.com/n.pdf", "headers": {}}}
+
+        def download(self, media, destination, expected_size=0):
+            calls["download"] += 1
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"%PDF-1.7xxxx")
+            return {"size": 12, "md5": "d" * 32, "path": str(destination)}
+
+        def _pdf_info(self, path):
+            return 8, "d" * 32
+
+    archive = tmp_path / "ima"
+    monkeypatch.setenv("IMA_PULL_URL", "http://10.80.0.2:8743/pull")
+    monkeypatch.setenv("IMA_PULL_TOKEN", "tok")
+    monkeypatch.setenv("IMA_ARCHIVE_ROOT", str(archive))
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    monkeypatch.setattr(
+        ima_documents,
+        "convert_pdf",
+        lambda pdf, txt: (txt.write_text("text", encoding="utf-8") or 4),
+    )
+    service = ImaDocumentService(db, archive)
+    planted = service.store.pdf_path(record)
+    planted.parent.mkdir(parents=True, exist_ok=True)
+    planted.write_bytes(b"%PDF-1.7old!")
+    assert planted.is_file()
+    result = service.sync_once()
+    assert calls["get_media"] >= 1
+    assert calls["download"] >= 1
+    assert result["downloaded"] == 1
+
+
+def test_service_rebuilds_ima_read_model_from_manifest_and_state(tmp_path):
+    db = DB(str(tmp_path / "dav.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    group = ImaGroupConfig("semi", "SemiAnalysis", "kb", "root")
+    record = {
+        "group_id": "semi",
+        "group_name": "SemiAnalysis",
+        "media_id": "file_a",
+        "name": "AI 展望.pdf",
+        "day": "0829",
+        "abstract": "算力需求",
+        "cover_url": "https://img.invalid/a",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state(
+        {
+            service.store.state_key(record): {
+                "tags": ["AI"],
+                "pdf": "semi/a.pdf",
+                "size": 8,
+                "downloaded_at": "2026-08-29T00:00:00+00:00",
+            }
+        }
+    )
+
+    result = service.rebuild_read_index((group,))
+
+    assert result["status"] == "ready"
+    indexed = db.ima_document_from_index("file_a", ["semi"], "semi")
+    assert indexed["abstract"] == "算力需求"
+    assert indexed["tags"] == ["AI"]
+    assert indexed["has_pdf"] is True
+    assert indexed["name"] == "AI 展望.pdf"
+    assert db._rows(
+        "SELECT name_folded, metadata_folded FROM ima_document_index"
+    ) == [
+        {
+            "name_folded": "ai 展望.pdf",
+            "metadata_folded": "semianalysis ai",
+        }
+    ]
+
+
+def test_service_index_fingerprint_stable_then_rebuilds_when_stale(tmp_path):
+    db = DB(str(tmp_path / "fp.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    record = {
+        "group_id": "semi",
+        "media_id": "file_a",
+        "name": "first.pdf",
+        "day": "0829",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state({service.store.state_key(record): {"pdf": "semi/a.pdf"}})
+    first = service._source_fingerprint()
+    assert json.loads(first)["version"] == IMA_INDEX_VERSION
+    service.rebuild_read_index()
+    assert db.ima_document_index_meta()["fingerprint"] == first
+    service._rebuild_index_if_needed()
+    assert db.ima_document_index_meta()["fingerprint"] == first
+
+    record["name"] = "changed.pdf"
+    service.store.save_manifest([record])
+    second = service._source_fingerprint()
+    assert second != first
+    service._rebuild_index_if_needed()
+    assert db.ima_document_from_index("file_a", ["semi"], "semi")["name"] == "changed.pdf"
+    assert db.ima_document_index_meta()["fingerprint"] == second
+
+
+def test_service_index_rebuild_keeps_old_rows_on_db_error(tmp_path, monkeypatch):
+    db = DB(str(tmp_path / "keep.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    record = {
+        "group_id": "semi",
+        "media_id": "file_a",
+        "name": "keep.pdf",
+        "day": "0829",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state({service.store.state_key(record): {"pdf": "semi/a.pdf"}})
+    service.rebuild_read_index()
+
+    def boom(*_args, **_kwargs):
+        raise sqlite3.IntegrityError("injected rebuild failure")
+
+    monkeypatch.setattr(db, "replace_ima_document_index", boom)
+    result = service.rebuild_read_index()
+    assert result["status"] == "failed"
+    assert "injected" in result["error"]
+    assert db.ima_document_from_index("file_a", ["semi"], "semi")["name"] == "keep.pdf"
+    assert db.ima_document_index_meta()["status"] == "failed"
+
+
+def test_service_index_rebuild_keeps_old_rows_when_source_json_is_unreadable(tmp_path):
+    db = DB(str(tmp_path / "bad-json.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    record = {
+        "group_id": "semi",
+        "media_id": "file_a",
+        "name": "keep.pdf",
+        "day": "0829",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state({service.store.state_key(record): {"pdf": "semi/a.pdf"}})
+    service.rebuild_read_index()
+    service.store.manifest_path.write_text("{not-json", encoding="utf-8")
+    result = service.rebuild_read_index()
+    assert result["status"] == "failed"
+    assert "unreadable" in result["error"]
+    assert db.ima_document_from_index("file_a", ["semi"], "semi")["name"] == "keep.pdf"
+    assert db.ima_document_index_count() == 1
+
+
+def test_service_list_documents_uses_index_without_json(tmp_path, monkeypatch):
+    db = DB(str(tmp_path / "list.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    group = ImaGroupConfig("semi", "SemiAnalysis", "kb", "root")
+    record = {
+        "group_id": "semi",
+        "group_name": "SemiAnalysis",
+        "media_id": "file_a",
+        "name": "AI 展望.pdf",
+        "day": "0829",
+        "abstract": "算力需求",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state(
+        {service.store.state_key(record): {"tags": ["AI"], "pdf": "semi/a.pdf"}}
+    )
+    service.rebuild_read_index((group,))
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("indexed reads must not parse JSON")
+
+    monkeypatch.setattr(service.store, "load_manifest", boom)
+    monkeypatch.setattr(service.store, "load_state", boom)
+    page = service.list_documents((group,), query="ai")
+    assert page["items"][0]["media_id"] == "file_a"
+    assert page["groups"][0]["id"] == "semi"
+    found = service.document("file_a", (group,), "semi")
+    assert found["abstract"] == "算力需求"
+    assert found["has_pdf"] is True
+    assert service.catalog_stats((group,))["semi"]["document_count"] == 1
+    status = service.status()
+    assert status["documents"] == 1
+    assert status["index"]["status"] == "ready"
+    assert status["index"]["documents"] == 1
+
+
+def test_service_falls_back_to_json_when_index_unavailable(tmp_path):
+    service = ImaDocumentService(FakeDB(), tmp_path / "ima")
+    group = ImaGroupConfig("semi", "SemiAnalysis", "kb", "root")
+    record = {
+        "group_id": "semi",
+        "media_id": "file_a",
+        "name": "fallback.pdf",
+        "day": "0829",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state({service.store.state_key(record): {"pdf": "semi/a.pdf"}})
+    result = service.rebuild_read_index((group,))
+    assert result["status"] == "fallback"
+    page = service.list_documents((group,))
+    assert page["items"][0]["media_id"] == "file_a"
+    assert service.read_index_status()["status"] == "fallback"
+
+
+def _sync_ready_service(tmp_path, monkeypatch, records):
+    db = DB(str(tmp_path / "dav.sqlite"))
+    db.set_setting(IMA_PURE_UID_KEY, "uid")
+    db.set_setting(IMA_PURE_REFRESH_TOKEN_KEY, "refresh")
+    db.set_setting(IMA_PURE_KB_ID_KEY, "kb")
+    db.set_setting(IMA_PURE_ROOT_FOLDER_KEY, "root")
+    db.set_setting(
+        IMA_PURE_GROUPS_KEY,
+        json.dumps(
+            [
+                {
+                    "id": "semi",
+                    "name": "Semi",
+                    "knowledge_base_id": "kb",
+                    "root_folder_id": "root",
+                    "folder_ids": ["root"],
+                    "enabled": True,
+                }
+            ]
+        ),
+    )
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.config = config
+
+        def manifest(self, listing_cache=None):
+            return [dict(item) for item in records]
+
+        def get_media(self, media_id):
+            return {"jump_url_info": {"url": "https://res.invalid/" + media_id, "headers": {}}}
+
+        def download(self, media, destination, expected_size=0):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"%PDF-1.7xxxx")
+            return {"size": 12, "md5": "d" * 32, "path": str(destination)}
+
+        def _pdf_info(self, path):
+            return 12, "d" * 32
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    monkeypatch.setattr(ima_documents, "_tag_document", lambda *_args, **_kwargs: ["AI"])
+    service = ImaDocumentService(db, tmp_path / "ima")
+    return service, db
+
+
+def test_sync_batches_state_and_writes_state_before_index(tmp_path, monkeypatch):
+    records = [
+        {"media_id": f"file_{index:02d}", "name": f"{index}.pdf", "day": "0829", "size": 8}
+        for index in range(21)
+    ]
+    service, db = _sync_ready_service(tmp_path, monkeypatch, records)
+    events = []
+    real_save = service.store.save_state
+    real_update = db.update_ima_document_batch
+
+    def save(state):
+        events.append("state")
+        return real_save(state)
+
+    def update(rows, fingerprint):
+        events.append("index")
+        return real_update(rows, fingerprint)
+
+    monkeypatch.setattr(service.store, "save_state", save)
+    monkeypatch.setattr(db, "update_ima_document_batch", update)
+    result = service._sync_group(service.config(), service.config().groups[0], {})
+    assert result["downloaded"] == 21
+    assert events.count("state") == 2
+    assert events.count("index") == 2
+    assert events == ["state", "index", "state", "index"]
+    assert db.ima_document_index_count() == 21
+
+
+def test_sync_flushes_state_immediately_when_timer_is_zero(tmp_path, monkeypatch):
+    records = [
+        {"media_id": "file_one", "name": "one.pdf", "day": "0829", "size": 8}
+    ]
+    service, db = _sync_ready_service(tmp_path, monkeypatch, records)
+    monkeypatch.setattr(ima_documents, "IMA_STATE_FLUSH_SECONDS", 0)
+    events = []
+    real_save = service.store.save_state
+    real_update = db.update_ima_document_batch
+    monkeypatch.setattr(
+        service.store,
+        "save_state",
+        lambda state: events.append("state") or real_save(state),
+    )
+    monkeypatch.setattr(
+        db,
+        "update_ima_document_batch",
+        lambda rows, fingerprint: events.append("index") or real_update(rows, fingerprint),
+    )
+    service._sync_group(service.config(), service.config().groups[0], {})
+    assert events[:2] == ["state", "index"]
+    assert db.ima_document_from_index("file_one", ["semi"], "semi")["has_pdf"] is True
+    assert IMA_STATE_FLUSH_SECONDS == 2.0
+
+
+def test_sync_flushes_state_on_cancel(tmp_path, monkeypatch):
+    records = [
+        {"media_id": f"file_{index}", "name": f"{index}.pdf", "day": "0829", "size": 8}
+        for index in range(3)
+    ]
+    service, db = _sync_ready_service(tmp_path, monkeypatch, records)
+    original_download = ima_documents.ImaPureClient.download
+
+    def download_and_cancel(self, media, destination, expected_size=0):
+        result = original_download(self, media, destination, expected_size)
+        service._cancel_requested = True
+        return result
+
+    monkeypatch.setattr(ima_documents.ImaPureClient, "download", download_and_cancel)
+    result = service._sync_group(service.config(), service.config().groups[0], {})
+    assert result["downloaded"] >= 1
+    downloaded = db._rows(
+        "SELECT media_id FROM ima_document_index WHERE has_pdf = 1"
+    )
+    assert downloaded
+
+
+def test_failed_listing_keeps_old_group_index(tmp_path, monkeypatch):
+    service, db = _sync_ready_service(
+        tmp_path,
+        monkeypatch,
+        [{"media_id": "keep", "name": "keep.pdf", "day": "0828", "size": 8}],
+    )
+    service._sync_group(service.config(), service.config().groups[0], {})
+    assert db.ima_document_from_index("keep", ["semi"], "semi")["name"] == "keep.pdf"
+
+    class BoomClient:
+        def __init__(self, config, group=None):
+            pass
+
+        def manifest(self, listing_cache=None):
+            raise RuntimeError("listing failed")
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", BoomClient)
+    with pytest.raises(RuntimeError, match="listing failed"):
+        service._sync_group(service.config(), service.config().groups[0], {})
+    assert db.ima_document_from_index("keep", ["semi"], "semi")["name"] == "keep.pdf"
+
+
+def test_write_abstract_zh_updates_index_after_state(tmp_path):
+    db = DB(str(tmp_path / "zh.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    group = ImaGroupConfig("semi", "Semi", "kb", "root")
+    record = {
+        "group_id": "semi",
+        "media_id": "file_en",
+        "name": "en.pdf",
+        "day": "0829",
+        "abstract": "hello",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state({service.store.state_key(record): {"pdf": "semi/a.pdf"}})
+    service.rebuild_read_index((group,))
+    service.store.write_abstract_zh(
+        "file_en",
+        "semi",
+        groups=(group,),
+        text_zh="你好",
+    )
+    row = db.ima_document_from_index("file_en", ["semi"], "semi")
+    assert row["abstract_zh"] == "你好"
+
+
+def test_empty_ready_index_falls_back_when_sources_change(tmp_path):
+    db = DB(str(tmp_path / "empty-ready.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    result = service.rebuild_read_index()
+    assert result["status"] == "ready"
+    assert db.ima_document_index_count() == 0
+    assert service._index_usable() is True
+    record = {
+        "group_id": "semi",
+        "media_id": "file_a",
+        "name": "a.pdf",
+        "day": "0829",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state({service.store.state_key(record): {"pdf": "semi/a.pdf"}})
+    assert service._index_usable() is False
+
+
+def test_rebuild_read_index_holds_sync_lock(tmp_path, monkeypatch):
+    db = DB(str(tmp_path / "rebuild-lock.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    held = []
+
+    def load(*_args, **_kwargs):
+        held.append(service._sync_lock.locked())
+        return [], {}
+
+    monkeypatch.setattr(service, "_load_rebuild_sources", load)
+    result = service.rebuild_read_index()
+    assert result["status"] == "ready"
+    assert held == [True]
+    assert service._sync_lock.locked() is False
+

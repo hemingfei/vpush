@@ -1,0 +1,14 @@
+[Unit]
+Description=V Push IMA main control-data Restic backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/vpush-ima/restic-main-backup.sh
+UMask=0077
+NoNewPrivileges=true
+TimeoutStartSec=7200
+
+[Install]
+WantedBy=multi-user.target

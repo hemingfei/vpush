@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 from fastapi import (
     APIRouter,
     BackgroundTasks,
+    Body,
     Depends,
     File,
     Header,
@@ -84,6 +85,7 @@ from .fetchers.zsxq import (
     zsxq_cache_stats,
 )
 from .ima_documents import (
+    IMA_FOLDER_LIST_MAX_PAGES,
     IMA_MOUNT_FOLDER_ID_MAX,
     IMA_PURE_GROUPS_KEY,
     IMA_PURE_INTERVAL_KEY,
@@ -95,18 +97,18 @@ from .ima_documents import (
     IMA_PURE_UID_KEY,
     ImaDocumentService,
     ImaPureClient,
+    _clamp_group_interval,
     _safe_error,
     ima_kb_valid_tags,
     normalize_ima_folder_item,
     purge_ima_document_tags,
 )
 from .ima_kb import (
-    _DAY_KEY,
     attach_catalog_acl,
-    attach_catalog_stats,
-    catalog as ima_kb_catalog,
+    attach_catalog_summary,
     readable_group_ids,
 )
+from .ima_kb import catalog as ima_kb_catalog
 from .plaza import (
     filter_plaza_kol_rows,
     filter_plaza_rows,
@@ -559,6 +561,7 @@ class ImaGroupIn(BaseModel):
     root_folder_id: str
     enabled: bool = True
     folder_ids: list[object] | None = None
+    interval_seconds: int | None = None
 
 
 class ImaCollectorIn(BaseModel):
@@ -568,6 +571,10 @@ class ImaCollectorIn(BaseModel):
     root_folder_id: str | None = None
     interval_seconds: int | None = None
     groups: list[ImaGroupIn] | None = None
+
+
+class ImaCollectorSyncIn(BaseModel):
+    group_id: str = ""
 
 
 class ImaKbAclIn(BaseModel):
@@ -2255,7 +2262,7 @@ def create_api_router(
         return {
             "set": bool(cookie),
             "updated_at": db.get_setting(time_key) or "",
-            "preview": (cookie[:40] + "…") if len(cookie) > 40 else cookie,
+            "preview": "已配置" if cookie else "",
         }
 
     @router.get("/admin/xueqiu-cookie", dependencies=[Depends(require_admin)])
@@ -2271,7 +2278,7 @@ def create_api_router(
                 status = {
                     "set": True,
                     "updated_at": "",
-                    "preview": (env[:40] + "…") if len(env) > 40 else env,
+                    "preview": "已配置",
                     "from_env": True,
                 }
         return status
@@ -2404,7 +2411,7 @@ def create_api_router(
                 status = {
                     "set": True,
                     "updated_at": "",
-                    "preview": (env[:40] + "…") if len(env) > 40 else env,
+                    "preview": "已配置",
                     "from_env": True,
                 }
         return status
@@ -2597,70 +2604,50 @@ def create_api_router(
         group = group.strip()
         if group and group not in {group_config.id for group_config in groups}:
             raise HTTPException(status_code=404, detail="知识库不存在")
-        facets = ima_documents.store.document_facets(group_id=group, groups=groups)
         query = q.strip()
         tag = tag.strip()
+        requested = day.strip()
         search_mode = bool(query or tag)
-        if search_mode:
-            effective_day = ""
-            matched = ima_documents.store.documents(
-                query, "", group_id=group, groups=groups, tag=tag, include_body=False
-            )
-            page_limit = bounded_limit(limit, default=50)
-            page_offset = max(offset, 0)
-            has_more = page_offset + page_limit < len(matched)
-            items = matched[page_offset:page_offset + page_limit]
-        else:
-            requested = day.strip()
-            days = facets["days"]
-            if requested:
-                effective_day = requested
-            else:
-                effective_day = next(
-                    (item for item in days if _DAY_KEY.fullmatch(item)),
-                    next(iter(days), ""),
-                )
-            items = (
-                ima_documents.store.documents(
-                    "", effective_day, group_id=group, groups=groups, include_body=False
-                )
-                if effective_day
-                else []
-            )
-            has_more = False
-            page_offset = 0
+        effective_day = "" if search_mode or not requested else requested
+        payload = ima_documents.list_documents(
+            groups=groups,
+            query=query,
+            day=effective_day,
+            group=group,
+            tag=tag,
+            limit=bounded_limit(limit, default=50),
+            offset=max(offset, 0),
+        )
         return {
-            "groups": ima_documents.store.group_summary(groups),
-            "items": items,
-            "days": facets["days"],
-            "tags": facets["tags"],
-            "tag_counts": facets.get("tag_counts") or {},
-            "document_count": int(facets.get("document_count") or 0),
-            "day": effective_day,
-            "has_more": has_more,
-            "offset": page_offset,
+            "groups": payload.get("groups") if payload.get("groups") is not None else [],
+            "items": payload["items"],
+            "days": payload["days"],
+            "tags": payload["tags"],
+            "tag_counts": payload.get("tag_counts") or {},
+            "document_count": int(payload.get("document_count") or 0),
+            "day": payload.get("day") or effective_day,
+            "has_more": bool(payload.get("has_more")),
+            "offset": int(payload.get("offset") or 0),
         }
+
+    @router.get("/ima-documents/catalog")
+    def ima_documents_catalog(user: dict = Depends(get_current_user)):
+        with ima_documents.config_lock:
+            groups = _configured_groups()
+        listed = ima_kb_catalog(db, user, groups)
+        listed = attach_catalog_summary(listed, ima_documents.catalog_stats(groups))
+        return attach_catalog_acl(listed, db, user)
 
     def _ima_document(user: dict, media_id: str, group: str = "") -> dict:
         group = group.strip()
         groups = _require_readable_group(user, group)
         try:
-            document = ima_documents.store.document(
-                media_id,
-                group_id=group,
-                groups=groups,
-            )
+            document = ima_documents.document(media_id, groups, group=group)
         except ValueError:
             document = None
         if document is None:
             raise HTTPException(status_code=404, detail="文档不存在")
         return document
-
-    @router.get("/ima-documents/catalog")
-    def ima_documents_catalog(user: dict = Depends(get_current_user)):
-        listed = ima_kb_catalog(db, user, _configured_groups())
-        documents = ima_documents.store.catalog_entries(groups=_configured_groups())
-        return attach_catalog_acl(attach_catalog_stats(listed, documents), db, user)
 
     @router.post("/ima-documents/groups/{group_id}/subscribe")
     def subscribe_ima_kb(group_id: str, user: dict = Depends(get_current_user)):
@@ -2737,6 +2724,11 @@ def create_api_router(
                 raise HTTPException(status_code=404, detail="文档不存在") from exc
         return {"abstract_zh": zh}
 
+    def _ima_archive_file(document: dict, field: str):
+        if not ima_documents.store.archive_readable():
+            raise HTTPException(status_code=503, detail="知识库存储暂不可用")
+        return ima_documents.store.authorized_archive_file(document.get(f"{field}_path"))
+
     @router.get("/ima-documents/{media_id}/text")
     def get_ima_document_text(
         media_id: str,
@@ -2744,7 +2736,7 @@ def create_api_router(
         user: dict = Depends(get_current_user),
     ):
         document = _ima_document(user, media_id, group)
-        txt = document.get("txt")
+        txt = _ima_archive_file(document, "txt")
         if txt is None or not txt.is_file():
             raise HTTPException(status_code=404, detail="TXT 文件不存在")
         try:
@@ -2761,7 +2753,7 @@ def create_api_router(
         user: dict = Depends(get_current_user),
     ):
         document = _ima_document(user, media_id, group)
-        pdf = document.get("pdf")
+        pdf = _ima_archive_file(document, "pdf")
         if pdf is None or not pdf.is_file():
             raise HTTPException(status_code=404, detail="PDF 文件不存在")
         from urllib.parse import quote
@@ -2778,6 +2770,7 @@ def create_api_router(
         if ima_documents is None:
             return None
         payload = ima_documents.status()
+        payload["storage"] = ima_documents.storage_status.public()
         for group in payload.get("config", {}).get("groups", []):
             group["acl_usernames"] = db.ima_kb_acl_usernames(group["id"])
         return payload
@@ -2819,7 +2812,11 @@ def create_api_router(
             raise HTTPException(status_code=400, detail="根文件夹 ID 格式无效")
         try:
             client = ImaPureClient(ima_documents.config(), group=group)
-            raw_items = client.list_items(actual_parent_id)
+            raw_items = client.list_items(
+                actual_parent_id,
+                folders_only=True,
+                max_pages=IMA_FOLDER_LIST_MAX_PAGES,
+            )
         except Exception as exc:  # noqa: BLE001 - folder endpoint must return a safe error
             detail = _safe_error(exc)
             raise HTTPException(status_code=502, detail=f"IMA 文件夹读取失败: {detail}") from None
@@ -2906,93 +2903,164 @@ def create_api_router(
                 raise HTTPException(status_code=400, detail="同步间隔须在 1800–604800 秒")
             updates[IMA_PURE_INTERVAL_KEY] = str(body.interval_seconds)
         if body.groups is not None:
-            existing = {group.id: group for group in ima_documents.config().groups}
-            groups: list[dict[str, object]] = []
-            group_ids: list[str] = []
-            clear_group_ids: list[str] = []
-            for group in body.groups:
-                name = group.name.strip()
-                knowledge_base_id = group.knowledge_base_id.strip()
-                root_folder_id = group.root_folder_id.strip()
-                if not name or len(name) > 100:
-                    raise HTTPException(status_code=400, detail="IMA 群组名称不能为空且最多 100 个字符")
-                if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", knowledge_base_id):
-                    raise HTTPException(status_code=400, detail="知识库 ID 格式无效")
-                if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", root_folder_id):
-                    raise HTTPException(status_code=400, detail="根文件夹 ID 格式无效")
-                if group.id is None:
-                    group_id = "manual-" + hashlib.sha256(
-                        f"{knowledge_base_id}\0{root_folder_id}".encode()
-                    ).hexdigest()[:16]
-                else:
-                    group_id = group.id.strip()
-                    if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", group_id):
-                        raise HTTPException(status_code=400, detail="IMA 群组 ID 格式无效")
-                if group_id in group_ids:
-                    raise HTTPException(status_code=400, detail="IMA 群组 ID 不能重复")
-                group_ids.append(group_id)
-                previous = existing.get(group_id)
-                if group.folder_ids is None:
-                    folder_ids = list(
-                        previous.mount_folder_ids
-                        if previous is not None
-                        else ((root_folder_id,) if group.enabled else ())
-                    )
-                else:
-                    if len(group.folder_ids) > IMA_MOUNT_FOLDER_ID_MAX:
-                        raise HTTPException(status_code=400, detail="每个 IMA 群组最多挂载 256 个文件夹")
-                    folder_ids = []
-                    seen_folder_ids: set[str] = set()
-                    for raw_folder_id in group.folder_ids:
-                        if not isinstance(raw_folder_id, str):
-                            raise HTTPException(status_code=400, detail="文件夹 ID 格式无效")
-                        folder_id = raw_folder_id.strip()
-                        if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", folder_id):
-                            raise HTTPException(status_code=400, detail="文件夹 ID 格式无效")
-                        if folder_id not in seen_folder_ids:
-                            seen_folder_ids.add(folder_id)
-                            folder_ids.append(folder_id)
-                enabled = bool(group.enabled and folder_ids)
-                if not enabled:
-                    if previous is not None and previous.mount_folder_ids:
+            with ima_documents.config_lock:
+                existing = {group.id: group for group in ima_documents.config().groups}
+                groups: list[dict[str, object]] = []
+                group_ids: list[str] = []
+                clear_group_ids: list[str] = []
+                for group in body.groups:
+                    name = group.name.strip()
+                    knowledge_base_id = group.knowledge_base_id.strip()
+                    root_folder_id = group.root_folder_id.strip()
+                    if not name or len(name) > 100:
+                        raise HTTPException(status_code=400, detail="IMA 群组名称不能为空且最多 100 个字符")
+                    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", knowledge_base_id):
+                        raise HTTPException(status_code=400, detail="知识库 ID 格式无效")
+                    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", root_folder_id):
+                        raise HTTPException(status_code=400, detail="根文件夹 ID 格式无效")
+                    if group.id is None:
+                        group_id = "manual-" + hashlib.sha256(
+                            f"{knowledge_base_id}\0{root_folder_id}".encode()
+                        ).hexdigest()[:16]
+                    else:
+                        group_id = group.id.strip()
+                        if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", group_id):
+                            raise HTTPException(status_code=400, detail="IMA 群组 ID 格式无效")
+                    if group_id in group_ids:
+                        raise HTTPException(status_code=400, detail="IMA 群组 ID 不能重复")
+                    group_ids.append(group_id)
+                    previous = existing.get(group_id)
+                    if group.folder_ids is None:
+                        folder_ids = list(
+                            previous.mount_folder_ids
+                            if previous is not None
+                            else ((root_folder_id,) if group.enabled else ())
+                        )
+                    else:
+                        if len(group.folder_ids) > IMA_MOUNT_FOLDER_ID_MAX:
+                            raise HTTPException(status_code=400, detail="每个 IMA 群组最多挂载 256 个文件夹")
+                        folder_ids = []
+                        seen_folder_ids: set[str] = set()
+                        for raw_folder_id in group.folder_ids:
+                            if not isinstance(raw_folder_id, str):
+                                raise HTTPException(status_code=400, detail="文件夹 ID 格式无效")
+                            folder_id = raw_folder_id.strip()
+                            if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", folder_id):
+                                raise HTTPException(status_code=400, detail="文件夹 ID 格式无效")
+                            if folder_id not in seen_folder_ids:
+                                seen_folder_ids.add(folder_id)
+                                folder_ids.append(folder_id)
+                    enabled = bool(group.enabled and folder_ids)
+                    if not enabled:
+                        if previous is not None and previous.mount_folder_ids:
+                            clear_group_ids.append(group_id)
+                        folder_ids = []
+                    elif group.folder_ids is not None and not folder_ids:
                         clear_group_ids.append(group_id)
-                    folder_ids = []
-                elif group.folder_ids is not None and not folder_ids:
-                    clear_group_ids.append(group_id)
-                groups.append(
-                    {
-                        "id": group_id,
-                        "name": name,
-                        "knowledge_base_id": knowledge_base_id,
-                        "root_folder_id": root_folder_id,
-                        "folder_ids": folder_ids,
-                        "enabled": enabled,
-                        "source": previous.source if previous else "manual",
-                    }
+                    groups.append(
+                        {
+                            "id": group_id,
+                            "name": name,
+                            "knowledge_base_id": knowledge_base_id,
+                            "root_folder_id": root_folder_id,
+                            "folder_ids": folder_ids,
+                            "enabled": enabled,
+                            "source": previous.source if previous else "manual",
+                            "interval_seconds": _clamp_group_interval(
+                                group.interval_seconds if group.interval_seconds is not None else (
+                                    previous.interval_seconds if previous else 3600
+                                )
+                            ),
+                        }
+                    )
+                clear_group_ids.extend(
+                    group_id
+                    for group_id, previous in existing.items()
+                    if group_id not in group_ids
                 )
-            updates[IMA_PURE_GROUPS_KEY] = json.dumps(groups, ensure_ascii=False)
-            audit_parts.append(f"groups_count={len(group_ids)};group_ids={','.join(group_ids)}")
-        else:
-            clear_group_ids = []
-        if updates:
-            db.set_settings_atomic(updates)
-            for group_id in clear_group_ids:
-                ima_documents.store.save_group_manifest(group_id, [])
-            audit_parts.extend(sorted(key for key in updates if key != IMA_PURE_GROUPS_KEY))
-            _audit(admin, "set_ima_collector", "", ";".join(audit_parts))
-        return ima_documents.status()
+                updates[IMA_PURE_GROUPS_KEY] = json.dumps(groups, ensure_ascii=False)
+                audit_parts.append(f"groups_count={len(group_ids)};group_ids={','.join(group_ids)}")
+                if updates:
+                    db.set_settings_atomic(updates)
+                    for group_id in clear_group_ids:
+                        ima_documents.store.save_group_manifest(group_id, [])
+                    audit_parts.extend(sorted(key for key in updates if key != IMA_PURE_GROUPS_KEY))
+                    _audit(admin, "set_ima_collector", "", ";".join(audit_parts))
+        elif updates:
+            with ima_documents.config_lock:
+                db.set_settings_atomic(updates)
+                audit_parts.extend(sorted(key for key in updates if key != IMA_PURE_GROUPS_KEY))
+                _audit(admin, "set_ima_collector", "", ";".join(audit_parts))
+        return _ima_collector_status()
 
     @router.post("/admin/ima-collector/sync", dependencies=[Depends(require_admin)])
-    def trigger_ima_collector(admin: dict = Depends(require_admin)):
+    def trigger_ima_collector(
+        body: ImaCollectorSyncIn = Body(default_factory=ImaCollectorSyncIn),
+        admin: dict = Depends(require_admin),
+    ):
         if ima_documents is None:
             raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
-        result = ima_documents.trigger()
+        group_id = (body.group_id if body else "").strip()
+        if group_id:
+            group = next((item for item in _configured_groups() if item.id == group_id), None)
+            if group is None:
+                raise HTTPException(status_code=404, detail="知识库不存在")
+            if not group.mount_folder_ids:
+                raise HTTPException(status_code=409, detail="请先挂载该知识库")
+        result = ima_documents.trigger(group_id=group_id)
         if result["status"] == "not_configured":
             raise HTTPException(status_code=400, detail="请先配置 IMA UID 和 Refresh Token")
+        storage_messages = {
+            "storage_unavailable": "知识库存储暂不可用",
+            "storage_stale": "知识库存储状态已过期",
+            "storage_readonly": "知识库存储当前只读",
+            "capacity_blocked": "知识库存储空间已达限制",
+        }
+        blocked_detail = storage_messages.get(result["status"])
+        if blocked_detail:
+            raise HTTPException(status_code=503, detail=blocked_detail)
         if result["status"] == "too_soon":
             raise HTTPException(status_code=429, detail="距离上次同步时间太短，请稍后再试")
         _audit(admin, "trigger_ima_collector", "", result["status"])
         return result
+
+    def _ima_storage_public():
+        if ima_documents is None:
+            raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
+        return ima_documents.storage_status.public()
+
+    def _require_remote_archive():
+        if ima_documents is None or not ima_documents.storage_status.remote:
+            raise HTTPException(status_code=409, detail="当前部署未启用远程归档")
+
+    @router.post("/admin/ima-storage/refresh", dependencies=[Depends(require_admin)])
+    def refresh_ima_storage(admin: dict = Depends(require_admin)):
+        from .ima_storage import write_request_file
+
+        _require_remote_archive()
+        path = os.environ.get("IMA_STORAGE_REFRESH_REQUEST", "/data/.vpush-ima-refresh-request")
+        write_request_file(path)
+        _audit(admin, "ima_storage_refresh", "", "requested")
+        return _ima_storage_public()
+
+    @router.post("/admin/ima-storage/backup", dependencies=[Depends(require_admin)])
+    def backup_ima_storage(admin: dict = Depends(require_admin)):
+        from pathlib import Path
+
+        from .ima_storage import request_pending, write_request_file
+
+        _require_remote_archive()
+        status = ima_documents.storage_status
+        public = status.public()
+        if not status.can_write():
+            raise HTTPException(status_code=503, detail="知识库存储暂不可用")
+        archive = os.environ.get("IMA_ARCHIVE_ROOT", "").strip()
+        request_path = Path(archive) / ".vpush-backup-request"
+        if request_pending(request_path, public.get("restic_last_success", 0)):
+            return {"status": "already_running", **public}
+        write_request_file(request_path)
+        _audit(admin, "ima_storage_backup", "", "requested")
+        return {"status": "started", **public}
 
     @router.get("/admin/ima-credentials", dependencies=[Depends(require_admin)])
     def get_ima_credentials():
@@ -3003,11 +3071,11 @@ def create_api_router(
             "cookie": {
                 "set": bool(cookie),
                 "updated_at": db.get_setting(IMA_COOKIE_TIME_KEY) or "",
-                "preview": (cookie[:40] + "…") if len(cookie) > 40 else cookie,
+                "preview": "已配置" if cookie else "",
                 "from_env": bool(cookie) and not db.get_setting(IMA_COOKIE_KEY),
             },
             "openapi_clientid": {"set": bool(client_id), "preview": (client_id[:12] + "…") if len(client_id) > 12 else client_id},
-            "openapi_apikey": {"set": bool(api_key), "preview": (api_key[:8] + "…") if len(api_key) > 8 else api_key},
+            "openapi_apikey": {"set": bool(api_key)},
             "mode": "openapi" if (client_id and api_key) else ("cookie" if cookie else "none"),
         }
 
@@ -4702,7 +4770,7 @@ def create_api_router(
                 twitter_status = {
                     "set": True,
                     "updated_at": "",
-                    "preview": (env_tw[:40] + "…") if len(env_tw) > 40 else env_tw,
+                    "preview": "已配置",
                     "from_env": True,
                 }
         zsxq_status = _cookie_status(ZSXQ_COOKIE_KEY, ZSXQ_COOKIE_TIME_KEY)
@@ -4712,7 +4780,17 @@ def create_api_router(
                 zsxq_status = {
                     "set": True,
                     "updated_at": "",
-                    "preview": (env_zq[:40] + "…") if len(env_zq) > 40 else env_zq,
+                    "preview": "已配置",
+                    "from_env": True,
+                }
+        ima_cookie_status = _cookie_status(IMA_COOKIE_KEY, IMA_COOKIE_TIME_KEY)
+        if not ima_cookie_status["set"]:
+            env_ima = os.environ.get("IMA_COOKIE", "")
+            if env_ima:
+                ima_cookie_status = {
+                    "set": True,
+                    "updated_at": "",
+                    "preview": "已配置",
                     "from_env": True,
                 }
         last_post_at = db.last_post_time_by_kol()
@@ -4745,18 +4823,18 @@ def create_api_router(
             "xueqiu_cookie": {
                 "set": bool(xueqiu_cookie),
                 "updated_at": xueqiu_updated,
-                "preview": (xueqiu_cookie[:40] + "…") if len(xueqiu_cookie) > 40 else xueqiu_cookie,
+                "preview": "已配置" if xueqiu_cookie else "",
             },
             "weibo_cookie": {
                 "set": bool(weibo_cookie),
                 "updated_at": weibo_updated,
-                "preview": (weibo_cookie[:40] + "…") if len(weibo_cookie) > 40 else weibo_cookie,
+                "preview": "已配置" if weibo_cookie else "",
             },
             "twitter_cookie": twitter_status,
             "zsxq_cookie": zsxq_status,
             "ima_credentials": {
                 "mode": ("openapi" if (db.get_setting(IMA_CLIENT_ID_KEY) or os.environ.get("IMA_OPENAPI_CLIENTID", "")) and (db.get_setting(IMA_API_KEY_KEY) or os.environ.get("IMA_OPENAPI_APIKEY", "")) else ("cookie" if db.get_setting(IMA_COOKIE_KEY) or os.environ.get("IMA_COOKIE", "") else "none")),
-                "cookie": _cookie_status(IMA_COOKIE_KEY, IMA_COOKIE_TIME_KEY),
+                "cookie": ima_cookie_status,
                 "openapi_clientid": {
                     "set": bool(db.get_setting(IMA_CLIENT_ID_KEY) or os.environ.get("IMA_OPENAPI_CLIENTID", "")),
                     "preview": _cred_preview(db.get_setting(IMA_CLIENT_ID_KEY) or os.environ.get("IMA_OPENAPI_CLIENTID", "")),
