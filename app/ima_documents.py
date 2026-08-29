@@ -779,7 +779,7 @@ class ImaPureClient:
                     self, "_discovery_knowledge_base_id", self.effective_knowledge_base_id
                 ),
                 "folder_id": folder_id,
-                "limit": "200",
+                "limit": "50",
             }
             if cursor:
                 body["cursor"] = cursor
