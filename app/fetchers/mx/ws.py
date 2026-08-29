@@ -7,10 +7,30 @@ import time
 import asyncio
 from datetime import datetime
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 from .crypto import decrypt_ws_data
 
 logger = logging.getLogger(__name__)
+
+# 与 MX 网页端一致的浏览器形态请求头：服务端/网关会校验 Origin、UA，
+# 缺失时可能拒绝握手或静默不推送
+BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+
+# 断线后由 run_forever 循环负责重连的间隔（秒）
+RECONNECT_INTERVAL_SECONDS = 5
+
+
+def _browser_handshake_headers(config) -> dict:
+    """按配置的 ws 地址派生 Origin，返回握手请求头（与网页端形态一致）。"""
+    host = urlparse(str(getattr(config, "ws_url", ""))).netloc
+    headers = {"User-Agent": BROWSER_UA}
+    if host:
+        headers["Origin"] = f"https://{host}"
+    return headers
 
 
 class MxWsClient:
@@ -42,13 +62,13 @@ class MxWsClient:
             # 使用配置的 namespace
             namespace = getattr(self.config, "ws_namespace", self.NAMESPACE)
 
-            # 使用与 chat-monitor 一致的配置，但关闭底层 Engine.IO 的详细日志
+            # 内部重连必须关闭：python-socketio 的内部重连延迟单位是秒，且
+            # run_forever 的 wait() 会阻塞在内部重连任务上（断线后要等满退避
+            # 时间才能恢复）。统一由 run_forever 以固定间隔自管理重连。
             self._sio = socketio.AsyncClient(
                 logger=logger,
                 engineio_logger=False,  # 关闭 Engine.IO 底层详细日志，避免刷屏
-                reconnection=True,
-                reconnection_delay=3000,  # 增加重连延迟到 3 秒，避免立即重连
-                reconnection_delay_max=10000  # 最大延迟 10 秒
+                reconnection=False,
             )
 
             @self._sio.event(namespace=namespace)
@@ -80,11 +100,15 @@ class MxWsClient:
                     else:
                         await self._handle_message(list(args))
 
-            auth = {
-                "tt": int(time.time() * 1000),
-                "token": self.config.token,
-                "version": "web",
-            }
+            # auth 用 callable：python-socketio 每次建立连接时求值，tt 始终新鲜
+            def _auth():
+                return {
+                    "tt": int(time.time() * 1000),
+                    "token": self.config.token,
+                    "version": "web",
+                }
+
+            headers = _browser_handshake_headers(self.config)
 
             logger.info(
                 f"Connecting to MX WebSocket at {self.config.ws_url}, "
@@ -92,9 +116,10 @@ class MxWsClient:
             )
             await self._sio.connect(
                 self.config.ws_url,
+                headers=headers,
                 socketio_path=self.config.ws_path,
-                transports=["websocket"],  # 与 chat-monitor 一致，仅使用 websocket
-                auth=auth,
+                transports=["websocket"],  # 仅使用 websocket，与网页端一致
+                auth=_auth,
                 wait_timeout=60,
                 namespaces=[namespace]
             )
@@ -105,8 +130,11 @@ class MxWsClient:
 
     async def disconnect(self):
         """Disconnect from MX WebSocket server."""
-        if self._sio and self.connected:
-            await self._sio.disconnect()
+        if self._sio is not None:
+            try:
+                await self._sio.disconnect()
+            except Exception:  # noqa: BLE001 - 尽力断开即可
+                logger.warning("MX WebSocket disconnect failed", exc_info=True)
         self.connected = False
 
     async def _handle_message(self, data):
@@ -209,12 +237,15 @@ class MxWsClient:
 
                 # Sleep and let the Socket.IO client handle events
                 await self._sio.wait()
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
-                logger.error(f"MX WebSocket error: {e}, reconnecting in 5 seconds...", exc_info=True)
+                logger.error(f"MX WebSocket error: {e}, reconnecting in {RECONNECT_INTERVAL_SECONDS} seconds...", exc_info=True)
                 self.connected = False
 
-                if not self._should_stop:
-                    await asyncio.sleep(5)
+            if self._should_stop:
+                break
+            await asyncio.sleep(RECONNECT_INTERVAL_SECONDS)
 
     async def stop(self):
         """Stop the WebSocket client."""

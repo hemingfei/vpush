@@ -20,6 +20,7 @@ class MXRoomSyncService:
         self.db = db
         self._last_sync: datetime | None = None
         self._sync_task: asyncio.Task | None = None
+        self._initial_sync_task: asyncio.Task | None = None
         self._stopped = False
 
     async def sync_rooms(self):
@@ -163,10 +164,26 @@ class MXRoomSyncService:
             logger.error(f"Failed to update MX KOL extra_data id: {kol_id}: {e}", exc_info=True)
 
     async def start_periodic_sync(self):
-        """Start periodic room sync."""
+        """Start periodic room sync.
+
+        初始同步放在后台任务执行：146 个房间逐个处理（含最多 15s 超时的头像
+        下载）可能耗时数分钟，await 它会阻塞 WS 与调度启动——历史上表现为
+        「后端启动后好几分钟连不上 WebSocket」。
+        """
         if self._sync_task is not None and not self._sync_task.done():
             return
         self._stopped = False
+
+        async def run_initial_sync():
+            try:
+                await self.sync_rooms()
+            except Exception as e:  # noqa: BLE001 - 后台任务自行吞错记日志
+                logger.error(f"MX initial room sync error: {e}", exc_info=True)
+
+        if self._initial_sync_task is None or self._initial_sync_task.done():
+            # 持有任务引用：事件循环只持弱引用，不保存可能被 GC 中途取消
+            self._initial_sync_task = asyncio.create_task(run_initial_sync())
+
         interval_hours = self.config.sync_interval_hours or 1
         interval = interval_hours * 3600
 
@@ -186,6 +203,8 @@ class MXRoomSyncService:
     def stop(self):
         """停止定时同步任务（同步方法，可在非事件循环上下文调用）。"""
         self._stopped = True
-        if self._sync_task is not None and not self._sync_task.done():
-            self._sync_task.cancel()
+        for task in (self._sync_task, self._initial_sync_task):
+            if task is not None and not task.done():
+                task.cancel()
         self._sync_task = None
+        self._initial_sync_task = None

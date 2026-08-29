@@ -637,3 +637,67 @@ def test_batch_insert_mixed_new_and_existing():
     ids = db.insert_posts_batch([p1_dup, p2])
     assert ids == [None, ids[1]]
     assert ids[1] is not None
+
+
+# ---- 加密：UTF-16 码元视角（消息含 emoji 时解密失败的历史 bug） ----
+
+def _merge_pairs_like_transport(s: str) -> str:
+    """模拟 JSON/HTTP 传输对服务端字符串的影响：相邻合法代理对合并为单个
+    增补平面字符（Node 把合法代理对按标准 UTF-8 4 字节发出）。"""
+    out = []
+    i = 0
+    while i < len(s):
+        o = ord(s[i])
+        if 0xD800 <= o <= 0xDBFF and i + 1 < len(s) and 0xDC00 <= ord(s[i + 1]) <= 0xDFFF:
+            out.append(chr(0x10000 + ((o - 0xD800) << 10) + (ord(s[i + 1]) - 0xDC00)))
+            i += 2
+        else:
+            out.append(s[i])
+            i += 1
+    return "".join(out)
+
+
+def test_crypto_surrogate_pair_expand_combine_roundtrip():
+    from app.fetchers.mx import crypto
+
+    text = "a\U0001F600b中文🎉"
+    units = crypto._to_utf16_units(text)
+    # 增补平面字符被拆成一对码元
+    assert len(units) == len(text) + 2
+    assert crypto.combine_surrogate_pairs(units) == text
+    # 无增补平面字符的文本必须原样通过
+    assert crypto._to_utf16_units("abc中文") == "abc中文"
+
+
+def test_decrypt_api_data_with_emoji_content():
+    """端到端：服务端按 JS 码元压缩 + 明文含 emoji，解密必须还原原始数据。
+
+    历史 bug：密文经传输后代理对合并成增补平面字符，Python 的解压视角与
+    JS charCodeAt 错位，decrypt_api_data 返回 None，消息列表拿到空数组。
+    """
+    import base64
+    import json as jsonlib
+
+    import lzstring
+    from cryptography.hazmat.primitives import padding
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+    from app.fetchers.mx import crypto
+
+    payload = {
+        "code": 200,
+        "list": [{"id": 1, "msg": '[{"type":"text","msg":"👍开盘🎉拉升"}]'}],
+    }
+    date_str = crypto.get_beijing_date(0).strftime("%Y-%m-%d")
+    key, iv = crypto.generate_key(date_str)
+    plaintext = jsonlib.dumps(payload, ensure_ascii=False).encode("utf-8")
+    # 复刻服务端加密管线：AES-CBC 加密 → base64 → 按 JS UTF-16 码元 LZ-String 压缩
+    padder = padding.PKCS7(128).padder()
+    padded = padder.update(plaintext) + padder.finalize()
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+    ciphertext = encryptor.update(padded) + encryptor.finalize()
+    b64 = base64.b64encode(ciphertext).decode("ascii")
+    compressed = lzstring.LZString.compress(crypto._to_utf16_units(b64))
+    # 传输层合并代理对后的密文（真实客户端收到的形态）
+    transported = _merge_pairs_like_transport(compressed)
+    assert crypto.decrypt_api_data(transported) == payload

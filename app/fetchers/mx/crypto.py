@@ -83,6 +83,46 @@ def aes_decrypt(ciphertext: bytes, key: bytes, iv: bytes) -> bytes:
     return plaintext
 
 
+def _to_utf16_units(text: str) -> str:
+    """把增补平面字符（ord>0xFFFF）还原成 UTF-16 代理对码元。
+
+    服务端按 JS 的 UTF-16 码元（charCodeAt）为单位做 LZ-String 压缩；密文经
+    JSON/HTTP 传输后，相邻的合法代理对会被解码合并成一个增补平面字符，
+    Python 侧的字符视角与 JS 错位（一个字符变半个），比特流随之错位导致
+    解压失败——正文里出现 emoji 等字符时必现。解压前统一还原码元视角。
+    """
+    units = []
+    for ch in text:
+        o = ord(ch)
+        if o >= 0x10000:
+            o -= 0x10000
+            units.append(chr(0xD800 + (o >> 10)))
+            units.append(chr(0xDC00 + (o & 0x3FF)))
+        else:
+            units.append(ch)
+    return "".join(units)
+
+
+def combine_surrogate_pairs(text: str) -> str:
+    """把相邻的 UTF-16 代理对（高代理+低代理）合并成单个增补平面字符。
+
+    解密后的明文若按码元落地，emoji 会变成两个孤立代理字符，这种字符串
+    入库或经 UTF-8 编码推送时会直接报错。
+    """
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        o = ord(text[i])
+        if 0xD800 <= o <= 0xDBFF and i + 1 < n and 0xDC00 <= ord(text[i + 1]) <= 0xDFFF:
+            out.append(chr(0x10000 + ((o - 0xD800) << 10) + (ord(text[i + 1]) - 0xDC00)))
+            i += 2
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+
 def lzstring_decompress(compressed: str) -> str:
     """LZ-String 解压。
 
@@ -92,7 +132,7 @@ def lzstring_decompress(compressed: str) -> str:
     Returns:
         解压后的字符串
     """
-    return lzstring.LZString.decompress(compressed)
+    return lzstring.LZString.decompress(_to_utf16_units(compressed))
 
 
 def try_decrypt_with_keys(
@@ -124,11 +164,11 @@ def try_decrypt_with_keys(
             decompressed = lzstring_decompress(encrypted_data)
             if not decompressed:
                 continue
-            
+
             # The decompressed string is Base64-encoded, decode it!
             ciphertext = base64.b64decode(decompressed)
             plaintext = aes_decrypt(ciphertext, key, iv)
-            result = json.loads(plaintext.decode("utf-8"))
+            result = json.loads(combine_surrogate_pairs(plaintext.decode("utf-8")))
             logger.debug(f"Successfully decrypted with offset {offset}")
             return result
         except Exception as e:

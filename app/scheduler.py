@@ -1908,13 +1908,10 @@ class Scheduler:
         try:
             logger.info("Initializing MX platform...")
 
-            # 创建并启动房间同步服务
+            # 创建并启动房间同步服务（初始同步在后台执行，避免阻塞 WS 上线）
             self._mx_sync_service = MXRoomSyncService(self.mx_config, self.db)
 
-            # 立即同步一次房间
-            await self._mx_sync_service.sync_rooms()
-
-            # 启动定时同步
+            # 启动定时同步（含后台初始同步）
             await self._mx_sync_service.start_periodic_sync()
 
             # 启动 WebSocket（如果启用）

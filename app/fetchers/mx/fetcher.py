@@ -387,13 +387,24 @@ class MxFetcher(Fetcher):
     def get_ws_status(self):
         """
         获取 WebSocket 连接状态。
-        
+
         Returns:
-            状态字典
+            状态字典（detail 用于区分未连接的具体原因）
         """
         if self.ws_client:
             return {
                 "connected": self.ws_client.connected,
                 "last_message_at": self.ws_client.last_message_at,
+                "detail": "",
             }
-        return {"connected": False, "last_message_at": None}
+        if not self._ws_enabled:
+            return {
+                "connected": False,
+                "last_message_at": None,
+                "detail": "WS 未启用（ws_enabled=false）",
+            }
+        return {
+            "connected": False,
+            "last_message_at": None,
+            "detail": "WS 尚未启动",
+        }
