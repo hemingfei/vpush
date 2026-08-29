@@ -6657,7 +6657,10 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
   try { savedTab = sessionStorage.getItem(KS_TAB_KEY) || "collect"; } catch { /* ignore */ }
   switchKnowledgeSettingsTab(savedTab);
   if (imaCollector.running) startImaProgressPoll();
-  else applyImaCollectorProgress(imaCollector);
+  else {
+    stopImaProgressPoll();
+    applyImaCollectorProgress(imaCollector);
+  }
   startDashboardLiveTimer();
   return true;
 }
@@ -7695,9 +7698,13 @@ async function triggerImaCollector() {
     applyImaCollectorProgress(status);
     startImaProgressPoll();
   } catch (err) {
-    if (routeStillActive(routeSeq)) flash(err.message || "同步启动失败", "error");
+    if (routeStillActive(routeSeq)) {
+      flash(err.message || "同步启动失败", "error");
+      if (btn && document.body.contains(btn)) btn.disabled = false;
+    }
   } finally {
-    if (routeStillActive(routeSeq) && btn && document.body.contains(btn)) btn.disabled = false;
+    if (routeStillActive(routeSeq)) return;
+    stopImaProgressPoll();
   }
 }
 

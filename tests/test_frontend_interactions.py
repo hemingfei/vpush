@@ -1404,6 +1404,10 @@ def test_ima_sync_feedback_guards_duplicate_requests():
     assert 'btn.disabled = true' in body
     assert 'btn.disabled = false' in body
     assert 'already_running' in body
+    catch_block = body[body.index("} catch"):body.index("} finally")]
+    finally_block = body[body.index("} finally"):]
+    assert "btn.disabled = false" in catch_block
+    assert "btn.disabled = false" not in finally_block
 
 
 
