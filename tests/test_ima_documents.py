@@ -117,6 +117,7 @@ def test_remote_status_counts_state_without_statting_archive(tmp_path, monkeypat
 
 def test_status_exposes_download_progress_while_running(tmp_path, monkeypatch):
     gate = threading.Event()
+    discover_gate = threading.Event()
     db = FakeDB(
         {
             IMA_PURE_UID_KEY: "uid",
@@ -163,8 +164,27 @@ def test_status_exposes_download_progress_while_running(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
     service = ImaDocumentService(db, tmp_path / "ima")
-    monkeypatch.setattr(service, "discover", lambda: {"discovery": {}})
+
+    def gated_discover():
+        discover_gate.wait(timeout=5)
+        return {"discovery": {}}
+
+    monkeypatch.setattr(service, "discover", gated_discover)
     assert service.trigger()["status"] == "started"
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        snapshot = service.status()
+        if snapshot["running"]:
+            assert snapshot["progress"] is None
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError(f"running status not reached: {service.status()!r}")
+    assert service.status()["running"] is True
+    assert service.status()["progress"] is None
+
+    discover_gate.set()
 
     deadline = time.time() + 5
     progress = None

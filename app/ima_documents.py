@@ -2185,7 +2185,7 @@ class ImaDocumentService:
         with self._state_lock:
             running = self._running
             next_run_at = self._next_run_at
-            progress = None if not running else dict(self._progress or {})
+            progress = dict(self._progress) if running and self._progress else None
         result = self.db.get_setting(IMA_PURE_LAST_RESULT_KEY) or ""
         try:
             last_result = json.loads(result) if result else None
@@ -2419,6 +2419,15 @@ class ImaDocumentService:
             client = ImaPureClient(cfg)
         listing_all = self.store.load_listing_cache()
         listing_cache = dict(listing_all.get(group.id) or {})
+        self._set_progress(
+            group_id=group.id,
+            group_name=group.name,
+            phase="listing",
+            listed=0,
+            pending=0,
+            downloaded=0,
+            failed=0,
+        )
         try:
             listed = client.manifest(listing_cache=listing_cache)
         except TypeError as exc:
@@ -2665,6 +2674,4 @@ class ImaDocumentService:
             self.db.set_setting(IMA_PURE_LAST_RESULT_KEY, json.dumps(result, ensure_ascii=False))
             return {"status": "finished", **result}
         finally:
-            with self._state_lock:
-                self._progress = None
             self._sync_lock.release()
