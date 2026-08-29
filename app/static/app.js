@@ -1245,7 +1245,10 @@ async function renderKnowledge(seq, encodedMediaId = "") {
     if (!routeStillActive(seq)) return;
     const catalogResult = settled[0];
     const documentsResult = documentsPromise ? settled[1] : null;
-    if (catalogResult.status !== "fulfilled" && (!documentsResult || documentsResult.status !== "fulfilled")) {
+    const catalogOk = catalogResult.status === "fulfilled";
+    const documentsOk = documentsResult?.status === "fulfilled";
+    const snapshot = currentImaListSnapshot();
+    if (!catalogOk && !documentsOk && !mediaId && !snapshot) {
       const message = catalogResult.reason?.message || documentsResult?.reason?.message || "请求失败";
       $("#main").innerHTML = emptyState(`加载失败：${message}`, `<div><button type="button" class="btn-normal" onclick="refreshKnowledge()">重试</button></div>`);
       return;
@@ -1253,20 +1256,24 @@ async function renderKnowledge(seq, encodedMediaId = "") {
     let subscribed = [];
     let available = [];
     let catalogWarning = "";
-    if (catalogResult.status === "fulfilled") {
+    if (catalogOk) {
       const data = catalogResult.value;
       subscribed = Array.isArray(data.subscribed) ? data.subscribed : [];
       available = Array.isArray(data.available) ? data.available : [];
-    } else {
+    } else if (documentsOk) {
       const groups = Array.isArray(documentsResult.value.groups) ? documentsResult.value.groups : [];
       subscribed = groups.map((group) => ({ id: group.id, name: group.name, enabled: true }));
+      catalogWarning = "知识库目录加载失败";
+    } else {
+      subscribed = Array.isArray(state.imaCatalogSubscribed) ? state.imaCatalogSubscribed : [];
+      available = Array.isArray(state.imaCatalogAvailable) ? state.imaCatalogAvailable : [];
       catalogWarning = "知识库目录加载失败";
     }
     state.imaCatalogSubscribed = subscribed;
     state.imaCatalogAvailable = available;
     const isAdmin = !!state.user?.is_admin;
     const selectedGroup = imaDocumentsGroupFromRoute();
-    if (selectedGroup && !isAdmin && !subscribed.some((group) => String(group.id) === selectedGroup)) {
+    if (catalogOk && selectedGroup && !isAdmin && !subscribed.some((group) => String(group.id) === selectedGroup)) {
       setPageTitle("知识库", true, "knowledge", "回知识库");
       $("#main").innerHTML = emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回知识库</button></div>`);
       return;
@@ -1278,7 +1285,7 @@ async function renderKnowledge(seq, encodedMediaId = "") {
       return;
     }
     mountKnowledgeListShell();
-    if (!subscribed.length) {
+    if (!subscribed.length && catalogOk) {
       const list = $("#kb-list");
       const controls = knowledgeSourceControlsHtml("");
       if (isAdmin) {

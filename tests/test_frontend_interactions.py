@@ -3206,6 +3206,9 @@ def test_knowledge_parallel_loads_catalog_and_first_page():
     assert 'params.set("q", query)' in path_fn
     assert "currentImaListSnapshot()" in render
     assert "mediaId || currentImaListSnapshot()" in render
+    assert "!mediaId && !snapshot" in render
+    assert "catalogOk && selectedGroup" in render
+    assert "!subscribed.length && catalogOk" in render
 
 
 def test_knowledge_index_status_copy_is_admin_only():

@@ -2404,6 +2404,7 @@ class ImaDocumentService:
                 "duration_ms": 0,
                 "error": "",
             }
+        self._sync_lock.acquire()
         try:
             if groups is not None:
                 self.store._remember_groups(groups)
@@ -2444,6 +2445,8 @@ class ImaDocumentService:
                 "duration_ms": max(int((time.perf_counter() - started) * 1000), 0),
                 "error": error,
             }
+        finally:
+            self._sync_lock.release()
 
     def _rebuild_index_if_needed(self) -> None:
         getter = getattr(self.db, "ima_document_index_meta", None)

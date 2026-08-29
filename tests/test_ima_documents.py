@@ -3914,3 +3914,19 @@ def test_empty_ready_index_falls_back_when_sources_change(tmp_path):
     service.store.save_state({service.store.state_key(record): {"pdf": "semi/a.pdf"}})
     assert service._index_usable() is False
 
+
+def test_rebuild_read_index_holds_sync_lock(tmp_path, monkeypatch):
+    db = DB(str(tmp_path / "rebuild-lock.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    held = []
+
+    def load(*_args, **_kwargs):
+        held.append(service._sync_lock.locked())
+        return [], {}
+
+    monkeypatch.setattr(service, "_load_rebuild_sources", load)
+    result = service.rebuild_read_index()
+    assert result["status"] == "ready"
+    assert held == [True]
+    assert service._sync_lock.locked() is False
+
