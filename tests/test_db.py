@@ -3,9 +3,8 @@ import sqlite3
 
 import pytest
 
+from app import db as db_module
 from app.db import DB
-
-
 
 
 def test_set_settings_atomic_writes_multiple_values(tmp_path):
@@ -493,6 +492,786 @@ def test_revoke_and_update_register_code_note(tmp_path):
     db.close()
 
 
+def _ima_row(group_id, media_id, *, name=None, tags=None, **kwargs):
+    row = {
+        "group_id": group_id,
+        "media_id": media_id,
+        "day": "0826",
+        "valid_day": "0826",
+        "name": name or media_id,
+        "group_name": group_id,
+        "name_folded": (name or media_id).casefold(),
+        "metadata_folded": group_id.casefold(),
+        "abstract": "abstract",
+        "abstract_folded": "abstract",
+        "abstract_zh": "",
+        "abstract_src_hash": "hash",
+        "cover_url": "",
+        "tags_json": "[]",
+        "size": 0,
+        "chars": 8,
+        "has_pdf": 1,
+        "has_txt": 0,
+        "pdf_path": f"{media_id}.pdf",
+        "txt_path": "",
+        "downloaded_at": "2026-08-26T00:00:00+00:00",
+        "tags": tags or [],
+    }
+    row.update(kwargs)
+    return row
+
+
+def _index_row(group_id, media_id, day, *, name="研报.pdf", tags=None, abstract=""):
+    tags = tags or []
+    return {
+        "group_id": group_id,
+        "media_id": media_id,
+        "day": day,
+        "valid_day": int(str(day).isdigit() and len(str(day)) == 4),
+        "name": name,
+        "group_name": group_id,
+        "name_folded": name.casefold(),
+        "metadata_folded": f"{group_id} {' '.join(tags)}".casefold(),
+        "abstract": abstract,
+        "abstract_folded": abstract.casefold(),
+        "abstract_zh": "",
+        "abstract_src_hash": "",
+        "cover_url": "",
+        "tags": tags,
+        "size": 0,
+        "chars": 0,
+        "has_pdf": 0,
+        "has_txt": 0,
+        "pdf_path": "",
+        "txt_path": "",
+        "downloaded_at": "",
+    }
+
+
+def _write_sqlite_script(path, script: str) -> None:
+    conn = sqlite3.connect(path)
+    conn.executescript(script)
+    conn.commit()
+    conn.close()
+
+
+def _ima_index_key_columns(db, name):
+    return [
+        (row["name"], int(row["desc"]))
+        for row in db._rows(f"PRAGMA index_xinfo({name})")
+        if row["key"]
+    ]
+
+
+_IMA_LEGACY_TAGS_AND_META = """
+CREATE TABLE ima_document_tags (
+    group_id TEXT NOT NULL,
+    media_id TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    PRIMARY KEY (group_id, media_id, tag)
+);
+INSERT INTO ima_document_tags (group_id, media_id, tag)
+VALUES ('legacy-group', 'legacy-media', 'legacy-tag');
+CREATE TABLE ima_document_index_meta (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    version INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'fallback',
+    fingerprint TEXT NOT NULL DEFAULT '',
+    rebuilt_at TEXT NOT NULL DEFAULT '',
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    document_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT ''
+);
+INSERT INTO ima_document_index_meta (id, fingerprint) VALUES (1, 'legacy-fp');
+"""
+
+
+def test_ima_document_index_schema_and_migration(tmp_path):
+    db = DB(str(tmp_path / "ima-index.db"))
+    tables = {
+        row["name"]
+        for row in db._rows(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+    assert {
+        "ima_document_index",
+        "ima_document_tags",
+        "ima_document_index_meta",
+    } <= tables
+    assert {
+        "idx_ima_doc_latest",
+        "idx_ima_doc_group_latest",
+        "idx_ima_doc_tag_group",
+        "idx_ima_doc_group_tag",
+    } <= {
+        row["name"]
+        for table in (
+            "ima_document_index",
+            "ima_document_tags",
+        )
+        for row in db._rows(f"PRAGMA index_list({table})")
+    }
+    columns = {row["name"]: row for row in db._rows("PRAGMA table_info(ima_document_index)")}
+    assert {
+        "group_id",
+        "media_id",
+        "day",
+        "valid_day",
+        "name",
+        "group_name",
+        "name_folded",
+        "metadata_folded",
+        "abstract",
+        "abstract_folded",
+        "abstract_zh",
+        "abstract_src_hash",
+        "cover_url",
+        "tags_json",
+        "size",
+        "chars",
+        "has_pdf",
+        "has_txt",
+        "pdf_path",
+        "txt_path",
+        "downloaded_at",
+    } <= columns.keys()
+    assert [row["name"] for row in db._rows("PRAGMA table_info(ima_document_index)")] == [
+        "group_id",
+        "media_id",
+        "day",
+        "valid_day",
+        "name",
+        "group_name",
+        "name_folded",
+        "metadata_folded",
+        "abstract",
+        "abstract_folded",
+        "abstract_zh",
+        "abstract_src_hash",
+        "cover_url",
+        "tags_json",
+        "size",
+        "chars",
+        "has_pdf",
+        "has_txt",
+        "pdf_path",
+        "txt_path",
+        "downloaded_at",
+    ]
+    assert columns["day"]["dflt_value"] == "'unknown'"
+    assert columns["valid_day"]["type"] == "INTEGER"
+    assert columns["group_id"]["pk"] == 1
+    assert columns["media_id"]["pk"] == 2
+    tags_info = db._rows("PRAGMA table_info(ima_document_tags)")
+    assert [row["name"] for row in tags_info] == ["group_id", "media_id", "tag"]
+    assert [int(row["pk"]) for row in tags_info] == [1, 2, 3]
+    meta_columns = {
+        row["name"]: row
+        for row in db._rows("PRAGMA table_info(ima_document_index_meta)")
+    }
+    assert meta_columns["version"]["dflt_value"] == "1"
+    assert meta_columns["id"]["type"] == "INTEGER"
+    assert meta_columns["id"]["pk"] == 1
+
+    def index_columns(name):
+        return [
+            row["name"]
+            for row in db._rows(f"PRAGMA index_info({name})")
+        ]
+
+    assert index_columns("idx_ima_doc_latest") == ["valid_day", "day", "name"]
+    assert index_columns("idx_ima_doc_group_latest") == [
+        "group_id",
+        "valid_day",
+        "day",
+        "name",
+    ]
+    assert index_columns("idx_ima_doc_tag_group") == ["tag", "group_id"]
+    assert index_columns("idx_ima_doc_group_tag") == ["group_id", "tag"]
+    assert {
+        "idx_ima_doc_latest",
+        "idx_ima_doc_group_latest",
+        "idx_ima_doc_tag_group",
+        "idx_ima_doc_group_tag",
+    } <= {
+        row["name"]
+        for table in (
+            "ima_document_index",
+            "ima_document_tags",
+        )
+        for row in db._rows(f"PRAGMA index_list({table})")
+    }
+    assert _ima_index_key_columns(db, "idx_ima_doc_latest") == [
+        ("valid_day", 1),
+        ("day", 1),
+        ("name", 1),
+    ]
+    assert _ima_index_key_columns(db, "idx_ima_doc_group_latest") == [
+        ("group_id", 0),
+        ("valid_day", 1),
+        ("day", 1),
+        ("name", 1),
+    ]
+    assert _ima_index_key_columns(db, "idx_ima_doc_tag_group") == [
+        ("tag", 0),
+        ("group_id", 0),
+    ]
+    assert _ima_index_key_columns(db, "idx_ima_doc_group_tag") == [
+        ("group_id", 0),
+        ("tag", 0),
+    ]
+    assert db.ima_document_index_meta()["status"] == "fallback"
+    assert db.ima_document_index_meta()["version"] == 1
+    assert isinstance(db.ima_document_index_meta()["duration_ms"], int)
+    db._execute("DELETE FROM ima_document_index_meta")
+    fallback = db.ima_document_index_meta()
+    assert fallback["status"] == "fallback"
+    assert fallback["version"] == 1
+    assert isinstance(fallback["document_count"], int)
+    db.reopen()
+    assert db.ima_document_index_meta()["status"] == "fallback"
+
+
+def test_ima_document_index_migrates_missing_valid_day(tmp_path):
+    path = tmp_path / "ima-missing-valid-day.db"
+    _write_sqlite_script(
+        path,
+        """
+        CREATE TABLE ima_document_index (
+            group_id TEXT NOT NULL,
+            media_id TEXT NOT NULL,
+            day TEXT NOT NULL DEFAULT '',
+            name TEXT NOT NULL DEFAULT '',
+            group_name TEXT NOT NULL DEFAULT '',
+            name_folded TEXT NOT NULL DEFAULT '',
+            metadata_folded TEXT NOT NULL DEFAULT '',
+            abstract TEXT NOT NULL DEFAULT '',
+            abstract_folded TEXT NOT NULL DEFAULT '',
+            abstract_zh TEXT NOT NULL DEFAULT '',
+            abstract_src_hash TEXT NOT NULL DEFAULT '',
+            cover_url TEXT NOT NULL DEFAULT '',
+            tags_json TEXT NOT NULL DEFAULT '[]',
+            size INTEGER NOT NULL DEFAULT 0,
+            chars INTEGER NOT NULL DEFAULT 0,
+            has_pdf INTEGER NOT NULL DEFAULT 0,
+            has_txt INTEGER NOT NULL DEFAULT 0,
+            pdf_path TEXT NOT NULL DEFAULT '',
+            txt_path TEXT NOT NULL DEFAULT '',
+            downloaded_at TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (group_id, media_id)
+        );
+        INSERT INTO ima_document_index
+            (group_id, media_id, day, name, group_name)
+        VALUES ('legacy-group', 'legacy-media', '0826', '旧研报', '旧库');
+        """
+        + _IMA_LEGACY_TAGS_AND_META,
+    )
+
+    db = DB(str(path))
+    doc_info = {
+        row["name"]: row for row in db._rows("PRAGMA table_info(ima_document_index)")
+    }
+    assert [row["name"] for row in db._rows("PRAGMA table_info(ima_document_index)")] == [
+        "group_id",
+        "media_id",
+        "day",
+        "valid_day",
+        "name",
+        "group_name",
+        "name_folded",
+        "metadata_folded",
+        "abstract",
+        "abstract_folded",
+        "abstract_zh",
+        "abstract_src_hash",
+        "cover_url",
+        "tags_json",
+        "size",
+        "chars",
+        "has_pdf",
+        "has_txt",
+        "pdf_path",
+        "txt_path",
+        "downloaded_at",
+    ]
+    assert doc_info["valid_day"]["type"] == "INTEGER"
+    assert doc_info["valid_day"]["dflt_value"] == "0"
+    assert doc_info["day"]["dflt_value"] == "'unknown'"
+    assert db._rows(
+        "SELECT group_id, media_id, day, valid_day, name, group_name "
+        "FROM ima_document_index"
+    ) == [{
+        "group_id": "legacy-group",
+        "media_id": "legacy-media",
+        "day": "0826",
+        "valid_day": 1,
+        "name": "旧研报",
+        "group_name": "旧库",
+    }]
+
+
+def test_ima_document_index_migrates_missing_multiple_columns(tmp_path):
+    path = tmp_path / "ima-missing-many.db"
+    _write_sqlite_script(
+        path,
+        """
+        CREATE TABLE ima_document_index (
+            group_id TEXT,
+            media_id TEXT,
+            day TEXT,
+            name TEXT
+        );
+        INSERT INTO ima_document_index (group_id, media_id, day, name)
+        VALUES ('legacy-group', 'legacy-media', '0826', '残缺研报');
+        INSERT INTO ima_document_index (group_id, media_id, day, name)
+        VALUES ('legacy-group', 'legacy-media', '0830', '重复应丢');
+        """
+        + _IMA_LEGACY_TAGS_AND_META,
+    )
+
+    db = DB(str(path))
+    rows = db._rows(
+        "SELECT group_id, media_id, day, valid_day, name, tags_json, size "
+        "FROM ima_document_index"
+    )
+    assert rows == [{
+        "group_id": "legacy-group",
+        "media_id": "legacy-media",
+        "day": "0826",
+        "valid_day": 1,
+        "name": "残缺研报",
+        "tags_json": "[]",
+        "size": 0,
+    }]
+    columns = {
+        row["name"]: row for row in db._rows("PRAGMA table_info(ima_document_index)")
+    }
+    assert columns["abstract"]["dflt_value"] == "''"
+    assert columns["has_pdf"]["type"] == "INTEGER"
+
+
+def test_ima_document_index_repairs_wrong_tag_and_meta_constraints(tmp_path):
+    path = tmp_path / "ima-bad-constraints.db"
+    _write_sqlite_script(
+        path,
+        """
+        CREATE TABLE ima_document_index (
+            group_id TEXT NOT NULL,
+            media_id TEXT NOT NULL,
+            day TEXT NOT NULL DEFAULT 'unknown',
+            valid_day INTEGER NOT NULL DEFAULT 0,
+            name TEXT NOT NULL DEFAULT '',
+            group_name TEXT NOT NULL DEFAULT '',
+            name_folded TEXT NOT NULL DEFAULT '',
+            metadata_folded TEXT NOT NULL DEFAULT '',
+            abstract TEXT NOT NULL DEFAULT '',
+            abstract_folded TEXT NOT NULL DEFAULT '',
+            abstract_zh TEXT NOT NULL DEFAULT '',
+            abstract_src_hash TEXT NOT NULL DEFAULT '',
+            cover_url TEXT NOT NULL DEFAULT '',
+            tags_json TEXT NOT NULL DEFAULT '[]',
+            size INTEGER NOT NULL DEFAULT 0,
+            chars INTEGER NOT NULL DEFAULT 0,
+            has_pdf INTEGER NOT NULL DEFAULT 0,
+            has_txt INTEGER NOT NULL DEFAULT 0,
+            pdf_path TEXT NOT NULL DEFAULT '',
+            txt_path TEXT NOT NULL DEFAULT '',
+            downloaded_at TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (group_id, media_id)
+        );
+        INSERT INTO ima_document_index (group_id, media_id, day, valid_day, name)
+        VALUES ('legacy-group', 'legacy-media', '0826', 1, '约束修复');
+        CREATE TABLE ima_document_tags (
+            group_id TEXT NOT NULL,
+            media_id TEXT NOT NULL,
+            tag TEXT NOT NULL,
+            PRIMARY KEY (group_id, media_id)
+        );
+        INSERT INTO ima_document_tags (group_id, media_id, tag)
+        VALUES ('legacy-group', 'legacy-media', 'legacy-tag');
+        CREATE TABLE ima_document_index_meta (
+            id TEXT,
+            version TEXT,
+            status TEXT,
+            fingerprint TEXT,
+            rebuilt_at TEXT,
+            duration_ms TEXT,
+            document_count TEXT,
+            error TEXT,
+            CHECK (id > 0)
+        );
+        INSERT INTO ima_document_index_meta
+            (id, version, status, fingerprint, rebuilt_at, duration_ms, document_count, error)
+        VALUES ('1', '0', 'ready', 'legacy-fingerprint', 'old', '7', '1', '');
+        """,
+    )
+
+    db = DB(str(path))
+    tags_info = db._rows("PRAGMA table_info(ima_document_tags)")
+    assert [row["name"] for row in tags_info] == ["group_id", "media_id", "tag"]
+    assert [int(row["pk"]) for row in tags_info] == [1, 2, 3]
+    assert db._rows("SELECT group_id, media_id, tag FROM ima_document_tags") == [
+        {"group_id": "legacy-group", "media_id": "legacy-media", "tag": "legacy-tag"}
+    ]
+    meta_info = {
+        row["name"]: row for row in db._rows("PRAGMA table_info(ima_document_index_meta)")
+    }
+    assert meta_info["id"]["type"] == "INTEGER"
+    assert meta_info["version"]["dflt_value"] == "1"
+    meta_sql = db._rows(
+        "SELECT sql FROM sqlite_master WHERE name = 'ima_document_index_meta'"
+    )[0]["sql"]
+    assert "CHECK (id = 1)" in meta_sql
+    assert db._rows(
+        "SELECT id, version, status, fingerprint, duration_ms, document_count "
+        "FROM ima_document_index_meta"
+    ) == [{
+        "id": 1,
+        "version": 1,
+        "status": "ready",
+        "fingerprint": "legacy-fingerprint",
+        "duration_ms": 7,
+        "document_count": 1,
+    }]
+
+
+def test_ima_document_index_collapses_multirow_meta(tmp_path):
+    path = tmp_path / "ima-multirow-meta.db"
+    _write_sqlite_script(
+        path,
+        """
+        CREATE TABLE ima_document_index (
+            group_id TEXT NOT NULL,
+            media_id TEXT NOT NULL,
+            day TEXT NOT NULL DEFAULT 'unknown',
+            valid_day INTEGER NOT NULL DEFAULT 0,
+            name TEXT NOT NULL DEFAULT '',
+            group_name TEXT NOT NULL DEFAULT '',
+            name_folded TEXT NOT NULL DEFAULT '',
+            metadata_folded TEXT NOT NULL DEFAULT '',
+            abstract TEXT NOT NULL DEFAULT '',
+            abstract_folded TEXT NOT NULL DEFAULT '',
+            abstract_zh TEXT NOT NULL DEFAULT '',
+            abstract_src_hash TEXT NOT NULL DEFAULT '',
+            cover_url TEXT NOT NULL DEFAULT '',
+            tags_json TEXT NOT NULL DEFAULT '[]',
+            size INTEGER NOT NULL DEFAULT 0,
+            chars INTEGER NOT NULL DEFAULT 0,
+            has_pdf INTEGER NOT NULL DEFAULT 0,
+            has_txt INTEGER NOT NULL DEFAULT 0,
+            pdf_path TEXT NOT NULL DEFAULT '',
+            txt_path TEXT NOT NULL DEFAULT '',
+            downloaded_at TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (group_id, media_id)
+        );
+        CREATE TABLE ima_document_tags (
+            group_id TEXT NOT NULL,
+            media_id TEXT NOT NULL,
+            tag TEXT NOT NULL,
+            PRIMARY KEY (group_id, media_id, tag)
+        );
+        CREATE TABLE ima_document_index_meta (
+            id TEXT,
+            version TEXT,
+            status TEXT,
+            fingerprint TEXT,
+            rebuilt_at TEXT,
+            duration_ms TEXT,
+            document_count TEXT,
+            error TEXT
+        );
+        INSERT INTO ima_document_index_meta
+            (id, version, status, fingerprint, rebuilt_at, duration_ms, document_count, error)
+        VALUES ('2', '0', 'failed', 'other', 'other', '8', '9', 'other');
+        INSERT INTO ima_document_index_meta
+            (id, version, status, fingerprint, rebuilt_at, duration_ms, document_count, error)
+        VALUES ('1', '0', 'ready', 'keep-id-1', 'old', '7', '1', '');
+        """,
+    )
+
+    db = DB(str(path))
+    assert db._rows("SELECT id, fingerprint FROM ima_document_index_meta") == [
+        {"id": 1, "fingerprint": "keep-id-1"}
+    ]
+
+
+def test_ima_document_index_index_column_order_and_desc(tmp_path):
+    db = DB(str(tmp_path / "ima-index-xinfo.db"))
+    assert _ima_index_key_columns(db, "idx_ima_doc_latest") == [
+        ("valid_day", 1),
+        ("day", 1),
+        ("name", 1),
+    ]
+    assert _ima_index_key_columns(db, "idx_ima_doc_group_latest") == [
+        ("group_id", 0),
+        ("valid_day", 1),
+        ("day", 1),
+        ("name", 1),
+    ]
+    assert _ima_index_key_columns(db, "idx_ima_doc_tag_group") == [
+        ("tag", 0),
+        ("group_id", 0),
+    ]
+    assert _ima_index_key_columns(db, "idx_ima_doc_group_tag") == [
+        ("group_id", 0),
+        ("tag", 0),
+    ]
+
+
+def test_ima_document_index_migration_rolls_back_on_failure(tmp_path, monkeypatch):
+    path = tmp_path / "ima-rollback.db"
+    _write_sqlite_script(
+        path,
+        """
+        CREATE TABLE ima_document_index (
+            group_id TEXT,
+            media_id TEXT,
+            day TEXT
+        );
+        INSERT INTO ima_document_index (group_id, media_id, day)
+        VALUES ('legacy-group', 'legacy-media', '0826');
+        """
+        + _IMA_LEGACY_TAGS_AND_META,
+    )
+
+    def boom(_sql):
+        raise RuntimeError("injected migration failure")
+
+    monkeypatch.setattr(db_module, "_ima_create_table_sql", boom)
+    with pytest.raises(RuntimeError, match="injected migration failure"):
+        DB(str(path))
+
+    raw = sqlite3.connect(path)
+    tables = {
+        row[0]
+        for row in raw.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+    assert "ima_document_index" in tables
+    assert "ima_document_index_legacy" not in tables
+    assert "ima_document_index_meta_legacy" not in tables
+    assert list(raw.execute(
+        "SELECT group_id, media_id, day FROM ima_document_index"
+    )) == [("legacy-group", "legacy-media", "0826")]
+    assert list(raw.execute(
+        "SELECT fingerprint FROM ima_document_index_meta"
+    )) == [("legacy-fp",)]
+    raw.close()
+
+
+def test_ima_document_group_replace_is_scoped_and_atomic(tmp_path):
+    db = DB(str(tmp_path / "ima-group.db"))
+    db.replace_ima_document_index(
+        [_ima_row("one", "old"), _ima_row("two", "keep")], "before", 10
+    )
+    db.replace_ima_document_group("one", [_ima_row("one", "new", tags=["new-tag"])])
+    assert db._rows("SELECT media_id FROM ima_document_index WHERE group_id = 'one'") == [
+        {"media_id": "new"}
+    ]
+    assert db._rows("SELECT media_id FROM ima_document_index WHERE group_id = 'two'") == [
+        {"media_id": "keep"}
+    ]
+    assert db._rows("SELECT tag FROM ima_document_tags WHERE group_id = 'one'") == [
+        {"tag": "new-tag"}
+    ]
+    db.replace_ima_document_group(
+        "one",
+        [
+            _ima_row("one", "valid", name="valid", day="0826"),
+            _ima_row("one", "unknown", name="unknown", day="unknown"),
+        ],
+    )
+    assert db._rows(
+        "SELECT day FROM ima_document_index WHERE group_id = 'one' "
+        "ORDER BY valid_day DESC, day DESC, name DESC"
+    ) == [{"day": "0826"}, {"day": "unknown"}]
+
+    db._execute(
+        "CREATE TRIGGER ima_fail_group BEFORE INSERT ON ima_document_index "
+        "WHEN NEW.media_id = 'bad' BEGIN SELECT RAISE(ABORT, 'controlled failure'); END"
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="controlled failure"):
+        db.replace_ima_document_group(
+            "one", [_ima_row("one", "replacement"), _ima_row("one", "bad")]
+        )
+    assert db._rows("SELECT media_id FROM ima_document_index WHERE group_id = 'one'") == [
+        {"media_id": "unknown"},
+        {"media_id": "valid"},
+    ]
+    assert db._rows("SELECT media_id FROM ima_document_index WHERE group_id = 'two'") == [
+        {"media_id": "keep"}
+    ]
+
+
+def test_ima_document_index_replace_and_batch_upsert(tmp_path):
+    db = DB(str(tmp_path / "ima-batch.db"))
+    first = _ima_row("one", "one", tags=["old"])
+    db.replace_ima_document_index([first], "fp-1", 12)
+    meta = db.ima_document_index_meta()
+    assert meta["status"] == "ready"
+    assert meta["version"] == 1
+    assert meta["fingerprint"] == "fp-1"
+    assert meta["duration_ms"] == 12
+    assert meta["document_count"] == 1
+
+    changed = _ima_row("one", "one", name="changed", tags=["new", "second"])
+    added = _ima_row("two", "two", tags=["new"])
+    assert db.update_ima_document_batch([changed, added], "fp-2") == 2
+    assert db._rows(
+        "SELECT name FROM ima_document_index WHERE group_id = 'one' AND media_id = 'one'"
+    )[0]["name"] == "changed"
+    assert db._rows("SELECT tag FROM ima_document_tags WHERE group_id = 'one'") == [
+        {"tag": "new"},
+        {"tag": "second"},
+    ]
+    assert db.update_ima_document_batch([], "ignored") == 0
+    assert db.ima_document_index_meta()["fingerprint"] == "fp-2"
+
+    db._execute(
+        "CREATE TRIGGER ima_fail_batch BEFORE INSERT ON ima_document_index "
+        "WHEN NEW.media_id = 'bad' BEGIN SELECT RAISE(ABORT, 'batch failure'); END"
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="batch failure"):
+        db.update_ima_document_batch(
+            [_ima_row("one", "one", name="rollback", tags=["rollback"]),
+             _ima_row("two", "bad", tags=["bad"])],
+            "should-not-persist",
+        )
+    assert db._rows(
+        "SELECT name FROM ima_document_index WHERE group_id = 'one' AND media_id = 'one'"
+    )[0]["name"] == "changed"
+    assert db._rows("SELECT tag FROM ima_document_tags WHERE group_id = 'one'") == [
+        {"tag": "new"},
+        {"tag": "second"},
+    ]
+    assert db.ima_document_index_meta()["fingerprint"] == "fp-2"
+
+    assert db.update_ima_document_batch(
+        [_ima_row("three", "same", name="first", tags=["first"]),
+         _ima_row("three", "same", name="last", tags=["last"])],
+        "fp-3",
+    ) == 1
+    assert db._rows(
+        "SELECT name FROM ima_document_index WHERE group_id = 'three' AND media_id = 'same'"
+    ) == [{"name": "last"}]
+    assert db._rows("SELECT tag FROM ima_document_tags WHERE group_id = 'three'") == [
+        {"tag": "last"}
+    ]
+
+
+def test_ima_document_index_meta_status_and_rollback(tmp_path):
+    db = DB(str(tmp_path / "ima-meta.db"))
+    db.replace_ima_document_index([_ima_row("one", "old")], "stable", 3)
+    db.mark_ima_document_index("rebuilding")
+    assert db.ima_document_index_meta()["status"] == "rebuilding"
+    with pytest.raises(ValueError, match="invalid"):
+        db.mark_ima_document_index("invalid")
+
+    db._execute(
+        "CREATE TRIGGER ima_fail_all BEFORE INSERT ON ima_document_index "
+        "WHEN NEW.media_id = 'bad' BEGIN SELECT RAISE(ABORT, 'controlled failure'); END"
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="controlled failure"):
+        db.replace_ima_document_index(
+            [_ima_row("one", "new"), _ima_row("one", "bad")], "broken", 99
+        )
+    assert db._rows("SELECT media_id FROM ima_document_index") == [{"media_id": "old"}]
+    meta = db.ima_document_index_meta()
+    assert meta["status"] == "rebuilding"
+    assert meta["fingerprint"] == "stable"
+    assert meta["document_count"] == 1
+
+
+def test_ima_document_index_search_ranking_and_literal_wildcards(tmp_path):
+    db = DB(str(tmp_path / "search.sqlite"))
+    db.replace_ima_document_index(
+        [
+            _index_row("semi", "title", "0828", name="全球 AI 展望.pdf"),
+            _index_row("semi", "tag", "0829", tags=["AI"]),
+            _index_row("semi", "body", "0830", abstract="AI 算力继续增长"),
+            _index_row("semi", "literal", "0827", name="100%_覆盖.pdf"),
+            _index_row("semi", "unknown", "unknown", name="无日期.pdf"),
+            _index_row("other", "hidden", "0831", name="全球 AI 展望.pdf"),
+        ],
+        "fp",
+        1,
+    )
+
+    page = db.ima_document_page(["semi"], query="ai", limit=50, offset=0)
+    assert [item["media_id"] for item in page["items"][:3]] == ["title", "tag", "body"]
+    assert page["document_count"] == 3
+    assert page["items"][0]["tags"] == []
+    assert page["items"][1]["tags"] == ["AI"]
+    assert isinstance(page["items"][0]["has_pdf"], bool)
+    assert db.ima_document_page(["semi"], query="100%_", limit=50, offset=0)["items"][0][
+        "media_id"
+    ] == "literal"
+    assert db.ima_document_page(["semi"], query="AI", limit=50, offset=0)[
+        "document_count"
+    ] == 3
+    latest = db.ima_document_page(["semi"], limit=50, offset=0)
+    assert latest["items"][-1]["media_id"] == "unknown"
+    assert latest["items"][0]["media_id"] == "body"
+    assert latest["group_counts"]["semi"] == 5
+    assert "other" not in latest["group_counts"]
+    assert latest["has_more"] is False
+    assert latest["offset"] == 0
+    assert latest["day"] == ""
+
+    paged = db.ima_document_page(["semi"], limit=2, offset=0)
+    assert [item["media_id"] for item in paged["items"]] == ["body", "tag"]
+    assert paged["has_more"] is True
+    assert paged["document_count"] == 5
+    next_page = db.ima_document_page(["semi"], limit=2, offset=2)
+    assert [item["media_id"] for item in next_page["items"]] == ["title", "literal"]
+    assert next_page["has_more"] is True
+
+    tagged = db.ima_document_page(["semi"], tag="AI")
+    assert [item["media_id"] for item in tagged["items"]] == ["tag"]
+    assert tagged["tag_counts"] == {"AI": 1}
+    assert tagged["tags"] == ["AI"]
+
+    dated = db.ima_document_page(["semi"], day="0828")
+    assert [item["media_id"] for item in dated["items"]] == ["title"]
+    assert dated["day"] == "0828"
+    assert dated["days"] == ["0828"]
+
+    assert db.ima_document_page(["semi"], group="other")["items"] == []
+    assert db.ima_document_page([], query="ai")["document_count"] == 0
+
+
+def test_ima_document_catalog_stats_and_detail_ambiguity(tmp_path):
+    db = DB(str(tmp_path / "catalog.sqlite"))
+    db.replace_ima_document_index(
+        [
+            _index_row("semi", "shared", "0829", name="后发.pdf", tags=["AI"]),
+            _index_row("semi", "older", "0828", name="先发.pdf"),
+            _index_row("macro", "shared", "0830", name="宏观.pdf"),
+        ],
+        "fp",
+        2,
+    )
+    stats = db.ima_document_catalog_stats(["semi", "macro", "empty"])
+    assert stats["semi"]["document_count"] == 2
+    assert stats["semi"]["latest_day"] == "0829"
+    assert stats["semi"]["latest_title"] == "后发.pdf"
+    assert stats["semi"]["latest_media_id"] == "shared"
+    assert stats["macro"]["latest_media_id"] == "shared"
+    assert "empty" not in stats
+    assert db.ima_document_index_count() == 3
+
+    found = db.ima_document_from_index("shared", ["semi", "macro"], "semi")
+    assert found["group_id"] == "semi"
+    assert found["name"] == "后发.pdf"
+    assert found["tags"] == ["AI"]
+    assert found["has_pdf"] is False
+    assert db.ima_document_from_index("shared", ["semi", "macro"]) is None
+    assert db.ima_document_from_index("shared", ["semi"])["group_id"] == "semi"
+    assert db.ima_document_from_index("missing", ["semi"]) is None
+
+
 def test_default_tag_rules_cover_market_topics():
     from app.db import DEFAULT_TAG_RULES
     from app.tagging import TAG_VOCABULARY_MAX
@@ -526,7 +1305,7 @@ def test_merge_default_stock_aliases_seeds_and_purges(tmp_path):
 
 
 def test_merge_default_tag_vocabulary_adds_missing_keeps_custom(tmp_path):
-    from app.db import DEFAULT_TAG_RULES, DB
+    from app.db import DB, DEFAULT_TAG_RULES
 
     db = DB(str(tmp_path / "t.db"))
     db.set_tag_vocabulary([{"tag": "宏观", "keywords": ["只留央行"]}])

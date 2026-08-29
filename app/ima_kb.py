@@ -37,6 +37,20 @@ def catalog(db: Any, user: dict[str, Any], groups: Iterable[Any]) -> dict[str, l
     return {"subscribed": subscribed, "available": available}
 
 
+def attach_catalog_summary(
+    listed: dict[str, list[dict[str, Any]]],
+    stats_by_group: dict[str, dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    for key in ("subscribed", "available"):
+        for group in listed.get(key, []):
+            extra = stats_by_group.get(str(group.get("id") or ""), {}) or {}
+            group["document_count"] = int(extra.get("document_count") or 0)
+            group["latest_day"] = str(extra.get("latest_day") or "")
+            group["latest_title"] = str(extra.get("latest_title") or "")
+            group["latest_media_id"] = str(extra.get("latest_media_id") or "")
+    return listed
+
+
 def attach_catalog_stats(
     listed: dict[str, list[dict[str, Any]]],
     documents: Iterable[dict[str, Any]],
@@ -56,14 +70,7 @@ def attach_catalog_stats(
             bucket["latest_day"] = day
             bucket["latest_title"] = str(item.get("name") or "")
             bucket["latest_media_id"] = str(item.get("media_id") or "")
-    for key in ("subscribed", "available"):
-        for group in listed.get(key, []):
-            extra = stats.get(str(group.get("id") or ""), {})
-            group["document_count"] = int(extra.get("document_count") or 0)
-            group["latest_day"] = str(extra.get("latest_day") or "")
-            group["latest_title"] = str(extra.get("latest_title") or "")
-            group["latest_media_id"] = str(extra.get("latest_media_id") or "")
-    return listed
+    return attach_catalog_summary(listed, stats)
 
 
 def attach_catalog_acl(listed: dict[str, list[dict[str, Any]]], db: Any, user: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:

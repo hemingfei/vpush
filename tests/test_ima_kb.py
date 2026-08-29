@@ -16,7 +16,7 @@ from app.ima_documents import (
     ima_kb_valid_tags,
     purge_ima_document_tags,
 )
-from app.ima_kb import attach_catalog_stats, catalog, readable_group_ids
+from app.ima_kb import attach_catalog_stats, attach_catalog_summary, catalog, readable_group_ids
 from app.main import create_app
 from app.stock_universe import bundled_plain_names
 from app.tagging import tag_text
@@ -230,6 +230,36 @@ def test_attach_catalog_stats_uses_latest_mmdd_title():
     assert listed["subscribed"][0]["latest_title"] == "新稿.pdf"
     assert listed["subscribed"][0]["latest_media_id"] == "new"
     assert listed["available"][0]["document_count"] == 1
+
+
+def test_attach_catalog_summary_copies_precomputed_stats():
+    listed = {
+        "subscribed": [{"id": "banking", "name": "投行研报", "enabled": True}],
+        "available": [{"id": "macro", "name": "宏观", "enabled": True}],
+    }
+    attach_catalog_summary(
+        listed,
+        {
+            "banking": {
+                "document_count": 3,
+                "latest_day": "0826",
+                "latest_title": "新稿.pdf",
+                "latest_media_id": "new",
+            },
+            "macro": {
+                "document_count": 1,
+                "latest_day": "0101",
+                "latest_title": "宏观一",
+                "latest_media_id": "m1",
+            },
+        },
+    )
+    assert listed["subscribed"][0]["document_count"] == 3
+    assert listed["subscribed"][0]["latest_day"] == "0826"
+    assert listed["subscribed"][0]["latest_title"] == "新稿.pdf"
+    assert listed["subscribed"][0]["latest_media_id"] == "new"
+    assert listed["available"][0]["document_count"] == 1
+    assert listed["available"][0]["latest_media_id"] == "m1"
 
 
 def test_user_cannot_see_kb_until_granted_and_subscribed(tmp_path, monkeypatch):
@@ -1361,3 +1391,357 @@ def test_ima_collector_sync_unmounted_group_409(tmp_path, monkeypatch):
         json={"group_id": "unmounted"},
     )
     assert response.status_code == 409
+
+
+def _configure_two_groups(client, headers):
+    response = client.put(
+        "/api/admin/ima-collector",
+        headers=headers,
+        json={
+            "groups": [
+                {
+                    "id": "group-a",
+                    "name": "SemiAnalysis",
+                    "knowledge_base_id": "kb-a",
+                    "root_folder_id": "root-a",
+                    "folder_ids": ["folder-a"],
+                    "enabled": True,
+                },
+                {
+                    "id": "group-b",
+                    "name": "宏观",
+                    "knowledge_base_id": "kb-b",
+                    "root_folder_id": "root-b",
+                    "folder_ids": ["folder-b"],
+                    "enabled": True,
+                },
+            ]
+        },
+    )
+    assert response.status_code == 200, response.text
+    return ("group-a", "group-b")
+
+
+def _seed_indexed_record(store, record, *, tags=None, txt="hello"):
+    pdf = store.pdf_path(record)
+    txt_path = store.txt_path(record)
+    pdf.parent.mkdir(parents=True, exist_ok=True)
+    pdf.write_bytes(b"%PDF-1.7")
+    txt_path.write_text(txt, encoding="utf-8")
+    return {
+        store.state_key(record): {
+            "pdf": str(pdf.relative_to(store.archive_root)),
+            "txt": str(txt_path.relative_to(store.archive_root)),
+            "size": 8,
+            "chars": len(txt),
+            "name": record["name"],
+            "day": record.get("day") or "unknown",
+            "group_id": record["group_id"],
+            "tags": tags or [],
+        }
+    }
+
+
+def _block_json_readers(store, monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise AssertionError("indexed API must not read JSON")
+
+    monkeypatch.setattr(store, "load_manifest", boom)
+    monkeypatch.setattr(store, "load_state", boom)
+
+
+def test_indexed_api_serves_without_reading_json(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "indexed-api.sqlite"))
+    admin_headers = _headers(client, "idx_admin", "IDXADM01", admin=True)
+    reader_headers = _headers(client, "idx_reader", "IDXREAD1")
+    outsider_headers = _headers(client, "idx_out", "IDXOUT01")
+    group_a, group_b = _configure_two_groups(client, admin_headers)
+    service = client.app.state.ima_documents
+    store = service.store
+    records = [
+        {
+            "media_id": "file_ai",
+            "name": "AI 展望.pdf",
+            "day": "0829",
+            "group_id": group_a,
+            "abstract": "算力需求",
+        },
+        {
+            "media_id": "file_maotai",
+            "name": "调研纪要.pdf",
+            "day": "0828",
+            "group_id": group_a,
+            "abstract": "贵州茅台渠道",
+        },
+        {
+            "media_id": "file_stock",
+            "name": "300750 排产.pdf",
+            "day": "0827",
+            "group_id": group_a,
+            "abstract": "宁德时代",
+        },
+        {
+            "media_id": "file_pct",
+            "name": "100%_增长.pdf",
+            "day": "0826",
+            "group_id": group_a,
+            "abstract": "含%与_",
+        },
+        {
+            "media_id": "file_unknown",
+            "name": "杂项.pdf",
+            "day": "unknown",
+            "group_id": group_a,
+            "abstract": "无日期",
+        },
+        {
+            "media_id": "file_page1",
+            "name": "分页甲.pdf",
+            "day": "0825",
+            "group_id": group_a,
+            "abstract": "分页摘要",
+        },
+        {
+            "media_id": "file_page2",
+            "name": "分页乙.pdf",
+            "day": "0824",
+            "group_id": group_a,
+            "abstract": "分页摘要",
+        },
+        {
+            "media_id": "file_page3",
+            "name": "分页丙.pdf",
+            "day": "0823",
+            "group_id": group_a,
+            "abstract": "分页摘要",
+        },
+        {
+            "media_id": "file_shared",
+            "name": "共享A.pdf",
+            "day": "0822",
+            "group_id": group_a,
+            "abstract": "共享文档A",
+        },
+        {
+            "media_id": "file_shared",
+            "name": "共享B.pdf",
+            "day": "0821",
+            "group_id": group_b,
+            "abstract": "共享文档B",
+        },
+        {
+            "media_id": "file_macro",
+            "name": "宏观周报.pdf",
+            "day": "0820",
+            "group_id": group_b,
+            "abstract": "利率",
+        },
+    ]
+    state = {}
+    tags = {
+        "file_ai": ["AI"],
+        "file_maotai": ["消费"],
+        "file_stock": ["新能源"],
+        "file_pct": ["宏观"],
+        "file_macro": ["宏观"],
+        "file_shared": ["共享"],
+    }
+    for record in records:
+        state.update(_seed_indexed_record(store, record, tags=tags.get(record["media_id"], [])))
+    store.save_manifest(records)
+    store.save_state(state)
+    rebuilt = service.rebuild_read_index(service.config().groups)
+    assert rebuilt["status"] == "ready"
+    assert rebuilt["documents"] == len(records)
+    _block_json_readers(store, monkeypatch)
+
+    listed = client.get("/api/ima-documents", headers=admin_headers)
+    assert listed.status_code == 200, listed.text
+    body = listed.json()
+    assert {item["media_id"] for item in body["items"]} >= {
+        "file_ai",
+        "file_maotai",
+        "file_stock",
+        "file_pct",
+        "file_unknown",
+        "file_macro",
+    }
+    assert body["items"][0]["media_id"] == "file_ai"
+    assert "abstract" not in body["items"][0]
+    assert "cover_url" not in body["items"][0]
+    assert "pdf_path" not in body["items"][0]
+    assert "txt_path" not in body["items"][0]
+    assert "unknown" in body["days"]
+
+    catalog_payload = client.get("/api/ima-documents/catalog", headers=admin_headers)
+    assert catalog_payload.status_code == 200, catalog_payload.text
+    catalog_body = catalog_payload.json()
+    by_id = {group["id"]: group for group in catalog_body["subscribed"]}
+    assert by_id[group_a]["document_count"] == 9
+    assert by_id[group_a]["latest_media_id"] == "file_ai"
+    assert by_id[group_b]["document_count"] == 2
+    assert by_id[group_b]["latest_media_id"] == "file_shared"
+
+    detail = client.get("/api/ima-documents/file_ai", headers=admin_headers)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["name"] == "AI 展望.pdf"
+    assert detail.json()["abstract"] == "算力需求"
+    assert detail.json()["tags"] == ["AI"]
+
+    assert client.get("/api/ima-documents/file_shared", headers=admin_headers).status_code == 404
+    shared_a = client.get(
+        f"/api/ima-documents/file_shared?group={group_a}", headers=admin_headers
+    )
+    assert shared_a.status_code == 200
+    assert shared_a.json()["name"] == "共享A.pdf"
+    shared_b = client.get(
+        f"/api/ima-documents/file_shared?group={group_b}", headers=admin_headers
+    )
+    assert shared_b.status_code == 200
+    assert shared_b.json()["name"] == "共享B.pdf"
+
+    tagged = client.get("/api/ima-documents?tag=新能源", headers=admin_headers)
+    assert [item["media_id"] for item in tagged.json()["items"]] == ["file_stock"]
+    by_day = client.get("/api/ima-documents?day=0829", headers=admin_headers)
+    assert [item["media_id"] for item in by_day.json()["items"]] == ["file_ai"]
+    unknown = client.get("/api/ima-documents?day=unknown", headers=admin_headers)
+    assert [item["media_id"] for item in unknown.json()["items"]] == ["file_unknown"]
+
+    search_ai = client.get("/api/ima-documents?q=AI", headers=admin_headers)
+    assert "file_ai" in {item["media_id"] for item in search_ai.json()["items"]}
+    search_zh = client.get("/api/ima-documents?q=茅台", headers=admin_headers)
+    assert [item["media_id"] for item in search_zh.json()["items"]] == ["file_maotai"]
+    search_code = client.get("/api/ima-documents?q=300750", headers=admin_headers)
+    assert [item["media_id"] for item in search_code.json()["items"]] == ["file_stock"]
+    search_pct = client.get("/api/ima-documents?q=%25", headers=admin_headers)
+    assert "file_pct" in {item["media_id"] for item in search_pct.json()["items"]}
+    search_us = client.get("/api/ima-documents?q=_", headers=admin_headers)
+    assert "file_pct" in {item["media_id"] for item in search_us.json()["items"]}
+
+    page1 = client.get("/api/ima-documents?q=分页摘要&limit=1&offset=0", headers=admin_headers)
+    page2 = client.get("/api/ima-documents?q=分页摘要&limit=1&offset=1", headers=admin_headers)
+    page3 = client.get("/api/ima-documents?q=分页摘要&limit=1&offset=2", headers=admin_headers)
+    assert page1.json()["has_more"] is True
+    assert page2.json()["has_more"] is True
+    assert page3.json()["has_more"] is False
+    page_ids = [
+        page1.json()["items"][0]["media_id"],
+        page2.json()["items"][0]["media_id"],
+        page3.json()["items"][0]["media_id"],
+    ]
+    assert page_ids == ["file_page1", "file_page2", "file_page3"]
+
+    granted = client.put(
+        f"/api/admin/ima-collector/groups/{group_a}/acl",
+        headers=admin_headers,
+        json={"usernames": ["idx_reader"]},
+    )
+    assert granted.status_code == 200, granted.text
+    assert client.get("/api/ima-documents", headers=reader_headers).json()["items"] == []
+    assert client.post(
+        f"/api/ima-documents/groups/{group_a}/subscribe", headers=reader_headers
+    ).status_code == 200
+    reader_list = client.get("/api/ima-documents", headers=reader_headers)
+    assert reader_list.status_code == 200
+    assert {item["media_id"] for item in reader_list.json()["items"]} == {
+        "file_ai",
+        "file_maotai",
+        "file_stock",
+        "file_pct",
+        "file_unknown",
+        "file_page1",
+        "file_page2",
+        "file_page3",
+        "file_shared",
+    }
+    assert client.get("/api/ima-documents/file_macro", headers=reader_headers).status_code == 404
+    assert client.get("/api/ima-documents/file_ai", headers=reader_headers).status_code == 200
+    assert client.post(
+        f"/api/ima-documents/groups/{group_a}/subscribe", headers=outsider_headers
+    ).status_code == 404
+    assert client.get("/api/ima-documents", headers=outsider_headers).json()["items"] == []
+    assert client.get("/api/ima-documents/file_ai", headers=outsider_headers).status_code == 404
+
+    status = client.get("/api/admin/ima-collector", headers=admin_headers)
+    assert status.status_code == 200, status.text
+    index = status.json()["index"]
+    blob = json.dumps(index, ensure_ascii=False)
+    assert index["status"] == "ready"
+    assert "file_ai" not in blob
+    assert "算力需求" not in blob
+    assert "pdf" not in blob.lower()
+    assert "abstract" not in blob
+    assert "token" not in blob.lower()
+    assert "http" not in blob.lower()
+
+
+def test_indexed_pdf_and_txt_use_index_paths(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "indexed-pdf.sqlite"))
+    admin_headers = _headers(client, "idx_pdf_admin", "IDXPDF01", admin=True)
+    group_a, _group_b = _configure_two_groups(client, admin_headers)
+    service = client.app.state.ima_documents
+    store = service.store
+    record = {
+        "media_id": "file_pdf",
+        "name": "Archive.pdf",
+        "day": "0829",
+        "group_id": group_a,
+        "abstract": "正文摘要",
+    }
+    store.save_manifest([record])
+    store.save_state(_seed_indexed_record(store, record, txt="indexed text"))
+    assert service.rebuild_read_index(service.config().groups)["status"] == "ready"
+    _block_json_readers(store, monkeypatch)
+
+    pdf = client.get("/api/ima-documents/file_pdf/pdf", headers=admin_headers)
+    txt = client.get("/api/ima-documents/file_pdf/text", headers=admin_headers)
+    assert pdf.status_code == 200, pdf.text
+    assert pdf.content.startswith(b"%PDF")
+    assert txt.status_code == 200, txt.text
+    assert txt.text == "indexed text"
+
+
+def test_indexed_api_no_json_read_stays_stable_across_repeated_queries(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "indexed-repeat.sqlite"))
+    admin_headers = _headers(client, "idx_repeat_admin", "IDXREP01", admin=True)
+    group_a, _group_b = _configure_two_groups(client, admin_headers)
+    service = client.app.state.ima_documents
+    store = service.store
+    records = [
+        {
+            "media_id": "file_repeat_ai",
+            "name": "AI 展望.pdf",
+            "day": "0829",
+            "group_id": group_a,
+            "abstract": "算力需求",
+        },
+        {
+            "media_id": "file_repeat_energy",
+            "name": "新能源跟踪.pdf",
+            "day": "0828",
+            "group_id": group_a,
+            "abstract": "排产",
+        },
+    ]
+    state = {}
+    for record, tags in ((records[0], ["AI"]), (records[1], ["新能源"])):
+        state.update(_seed_indexed_record(store, record, tags=tags))
+    store.save_manifest(records)
+    store.save_state(state)
+    assert service.rebuild_read_index(service.config().groups)["status"] == "ready"
+    _block_json_readers(store, monkeypatch)
+    routes = (
+        "/api/ima-documents/catalog",
+        "/api/ima-documents?limit=50&offset=0",
+        "/api/ima-documents?q=新能源&limit=50&offset=0",
+        "/api/ima-documents?q=AI&limit=50&offset=0",
+        f"/api/ima-documents?group={group_a}&limit=50&offset=0",
+    )
+    for _ in range(20):
+        for route in routes:
+            response = client.get(route, headers=admin_headers)
+            assert response.status_code == 200, response.text
+

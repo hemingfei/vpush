@@ -12,7 +12,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from http.client import IncompleteRead
@@ -32,6 +32,9 @@ IMA_DOWNLOAD_WORKERS = 4
 IMA_LIST_WORKERS = 3
 IMA_FOLDER_LIST_MAX_PAGES = 20
 IMA_DOWNLOAD_RETRY_DELAYS = (2, 8)
+IMA_INDEX_VERSION = 1
+IMA_STATE_FLUSH_COUNT = 20
+IMA_STATE_FLUSH_SECONDS = 2.0
 
 BASE = os.environ.get("IMA_BASE", "https://ima.qq.com/cgi-bin")
 GUID = os.environ.get("IMA_GUID", "7497986728819336")
@@ -1314,6 +1317,7 @@ class ImaDocumentStore:
         self._group_metadata: dict[str, tuple[str, str]] = {
             IMA_LEGACY_GROUP_ID: (IMA_LEGACY_GROUP_NAME, IMA_LEGACY_GROUP_ID)
         }
+        self._on_records_changed = None
 
     @staticmethod
     def validate_media_id(media_id: str) -> str:
@@ -1945,6 +1949,8 @@ class ImaDocumentStore:
                 "tags": self._tags(state_item),
                 "has_pdf": bool(state_item.get("pdf")),
                 "has_txt": bool(state_item.get("txt")),
+                "pdf_path": str(state_item.get("pdf") or ""),
+                "txt_path": str(state_item.get("txt") or ""),
             }
             result.update(translation_fields(result["abstract"], state_item))
             metadata_id = str(requested_group or record.get("group_id") or state_item.get("group_id") or "")
@@ -2000,6 +2006,9 @@ class ImaDocumentStore:
             item["abstract_src_hash"] = src_hash
             latest[key] = item
             self._save(self.state_path, latest)
+        hook = getattr(self, "_on_records_changed", None)
+        if callable(hook):
+            hook([record], latest)
 
 
 def convert_pdf(pdf: Path, txt: Path) -> int:
@@ -2046,7 +2055,8 @@ def purge_ima_document_tags(store: ImaDocumentStore, valid_tags: set[str]) -> in
     with store._state_lock:
         state = store.load_state()
         changed = 0
-        for item in state.values():
+        changed_keys: list[str] = []
+        for key, item in state.items():
             if not isinstance(item, dict):
                 continue
             tags = [t for t in (item.get("tags") or []) if isinstance(t, str)]
@@ -2054,8 +2064,17 @@ def purge_ima_document_tags(store: ImaDocumentStore, valid_tags: set[str]) -> in
             if kept != tags:
                 item["tags"] = kept
                 changed += 1
+                changed_keys.append(str(key))
         if changed:
             store._save_state_locked(state)
+            hook = getattr(store, "_on_records_changed", None)
+            if callable(hook):
+                records = [
+                    record
+                    for record in store.load_manifest()
+                    if store.state_key(record) in set(changed_keys)
+                ]
+                hook(records, state)
     return changed
 
 
@@ -2075,6 +2094,7 @@ class ImaDocumentService:
             archive_root=archive_root,
             storage_status=self.storage_status,
         )
+        self.store._on_records_changed = self._update_index_rows
         self._stop = threading.Event()
         self._state_lock = threading.Lock()
         self._config_lock = threading.RLock()
@@ -2203,6 +2223,408 @@ class ImaDocumentService:
                 "discovery": discovery,
             }
 
+    def _source_fingerprint(self) -> str:
+        parts = []
+        for path in (self.store.manifest_path, self.store.state_path):
+            try:
+                stat = path.stat()
+                parts.append((stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                parts.append((0, 0))
+        return json.dumps(
+            {"version": IMA_INDEX_VERSION, "files": parts},
+            separators=(",", ":"),
+        )
+
+    def _read_source_json(self, path: Path) -> Any:
+        try:
+            exists = path.is_file()
+        except OSError as exc:
+            raise RuntimeError(f"unreadable IMA source {path.name}") from exc
+        if not exists:
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"unreadable IMA source {path.name}") from exc
+
+    def _load_rebuild_sources(
+        self, groups: tuple[ImaGroupConfig, ...] | None
+    ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+        manifest_value = self._read_source_json(self.store.manifest_path)
+        state_value = self._read_source_json(self.store.state_path)
+        if isinstance(manifest_value, dict) and isinstance(manifest_value.get("files"), list):
+            records = [item for item in manifest_value["files"] if isinstance(item, dict)]
+        elif isinstance(manifest_value, list):
+            records = [item for item in manifest_value if isinstance(item, dict)]
+        else:
+            records = []
+        state = state_value if isinstance(state_value, dict) else {}
+        return self.store._normalize_manifest_records(records, groups), state
+
+    def _index_row(
+        self, record: dict[str, Any], state: dict[str, dict[str, Any]]
+    ) -> dict[str, Any]:
+        media_id = self.store.validate_media_id(str(record.get("media_id") or ""))
+        state_item = self.store._state_item(state, record)
+        group_id = self.store._record_group_id(record)
+        group_name = str(
+            record.get("group_name")
+            or state_item.get("group_name")
+            or self.store._group_metadata.get(group_id, ("", group_id))[0]
+        )
+        name = str(record.get("name") or media_id)
+        day = str(record.get("day") or "unknown").strip() or "unknown"
+        tags = self.store._tags(state_item)
+        abstract = str(record.get("abstract") or "")
+        pdf_path = str(state_item.get("pdf") or "")
+        txt_path = str(state_item.get("txt") or "")
+        return {
+            "group_id": group_id,
+            "media_id": media_id,
+            "day": day,
+            "valid_day": int(day.isdigit() and len(day) == 4),
+            "name": name,
+            "group_name": group_name,
+            "name_folded": name.casefold(),
+            "metadata_folded": f"{group_name} {' '.join(tags)}".casefold(),
+            "abstract": abstract,
+            "abstract_folded": abstract.casefold(),
+            "abstract_zh": str(state_item.get("abstract_zh") or ""),
+            "abstract_src_hash": str(state_item.get("abstract_src_hash") or ""),
+            "cover_url": str(record.get("cover_url") or ""),
+            "tags": tags,
+            "size": self.store._file_size(state_item, record, None),
+            "chars": int(state_item.get("chars") or 0),
+            "has_pdf": int(bool(pdf_path)),
+            "has_txt": int(bool(txt_path)),
+            "pdf_path": pdf_path,
+            "txt_path": txt_path,
+            "downloaded_at": str(state_item.get("downloaded_at") or ""),
+        }
+
+    def _update_index_rows(
+        self,
+        records: list[dict[str, Any]],
+        state: dict[str, dict[str, Any]],
+    ) -> None:
+        updater = getattr(self.db, "update_ima_document_batch", None)
+        if not callable(updater) or not records:
+            return
+        rows = []
+        for record in records:
+            try:
+                rows.append(self._index_row(record, state))
+            except ValueError:
+                continue
+        if not rows:
+            return
+        try:
+            updater(rows, self._source_fingerprint())
+        except Exception as exc:  # noqa: BLE001
+            marker = getattr(self.db, "mark_ima_document_index", None)
+            if callable(marker):
+                try:
+                    marker("failed", error=_safe_error(exc))
+                except Exception as mark_exc:  # noqa: BLE001
+                    logger.warning(
+                        "IMA index failed status write error=%s",
+                        _safe_error(mark_exc),
+                    )
+            logger.warning("IMA index batch update failed error=%s", _safe_error(exc))
+
+    def _replace_group_index(
+        self,
+        group_id: str,
+        records: list[dict[str, Any]],
+        state: dict[str, dict[str, Any]],
+    ) -> None:
+        replacer = getattr(self.db, "replace_ima_document_group", None)
+        if not callable(replacer):
+            return
+        rows = []
+        for record in records:
+            try:
+                rows.append(self._index_row(record, state))
+            except ValueError:
+                continue
+        try:
+            replacer(group_id, rows)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("IMA index group replace failed error=%s", _safe_error(exc))
+
+    def read_index_status(self) -> dict[str, Any]:
+        getter = getattr(self.db, "ima_document_index_meta", None)
+        if not callable(getter):
+            return {
+                "status": "fallback",
+                "documents": 0,
+                "rebuilt_at": "",
+                "duration_ms": 0,
+                "error": "",
+            }
+        meta = getter()
+        return {
+            "status": str(meta.get("status") or "fallback"),
+            "documents": int(meta.get("document_count") or 0),
+            "rebuilt_at": str(meta.get("rebuilt_at") or ""),
+            "duration_ms": int(meta.get("duration_ms") or 0),
+            "error": str(meta.get("error") or ""),
+        }
+
+    def _index_usable(self) -> bool:
+        page = getattr(self.db, "ima_document_page", None)
+        if not callable(page):
+            return False
+        status = self.read_index_status()
+        counter = getattr(self.db, "ima_document_index_count", None)
+        count = int(counter()) if callable(counter) else 0
+        if status["status"] == "ready":
+            if count > 0:
+                return True
+            getter = getattr(self.db, "ima_document_index_meta", None)
+            fingerprint = ""
+            if callable(getter):
+                fingerprint = str(getter().get("fingerprint") or "")
+            return fingerprint == self._source_fingerprint()
+        if status["status"] in {"rebuilding", "failed"}:
+            return count > 0
+        return False
+
+    def rebuild_read_index(
+        self, groups: tuple[ImaGroupConfig, ...] | None = None
+    ) -> dict[str, object]:
+        started = time.perf_counter()
+        marker = getattr(self.db, "mark_ima_document_index", None)
+        replacer = getattr(self.db, "replace_ima_document_index", None)
+        if not callable(replacer):
+            return {
+                "status": "fallback",
+                "documents": 0,
+                "duration_ms": 0,
+                "error": "",
+            }
+        self._sync_lock.acquire()
+        try:
+            if groups is not None:
+                self.store._remember_groups(groups)
+            records, state = self._load_rebuild_sources(groups)
+            prepared: dict[tuple[str, str], dict[str, Any]] = {}
+            for record in records:
+                try:
+                    row = self._index_row(record, state)
+                except ValueError:
+                    continue
+                prepared[(row["group_id"], row["media_id"])] = row
+            rows = list(prepared.values())
+            if callable(marker):
+                marker("rebuilding")
+            duration_ms = max(int((time.perf_counter() - started) * 1000), 0)
+            replacer(rows, self._source_fingerprint(), duration_ms)
+            status = self.read_index_status()
+            return {
+                "status": "ready",
+                "documents": status["documents"],
+                "duration_ms": status["duration_ms"],
+                "error": "",
+            }
+        except Exception as exc:  # noqa: BLE001 - keep serving the last good index
+            error = _safe_error(exc)
+            logger.warning("IMA index rebuild failed error=%s", error)
+            if callable(marker):
+                try:
+                    marker("failed", error=error)
+                except Exception as mark_exc:  # noqa: BLE001
+                    logger.warning(
+                        "IMA index failed status write error=%s",
+                        _safe_error(mark_exc),
+                    )
+            return {
+                "status": "failed",
+                "documents": self.read_index_status()["documents"],
+                "duration_ms": max(int((time.perf_counter() - started) * 1000), 0),
+                "error": error,
+            }
+        finally:
+            self._sync_lock.release()
+
+    def _rebuild_index_if_needed(self) -> None:
+        getter = getattr(self.db, "ima_document_index_meta", None)
+        if not callable(getter):
+            return
+        meta = getter()
+        if (
+            str(meta.get("status") or "") == "ready"
+            and str(meta.get("fingerprint") or "") == self._source_fingerprint()
+        ):
+            return
+        self.rebuild_read_index()
+
+    def _document_from_index_row(
+        self, row: dict[str, Any], group_name: str = ""
+    ) -> dict[str, Any]:
+        pdf = None
+        txt = None
+        if not self.storage_status.remote:
+            pdf = self.store.authorized_archive_file(row.get("pdf_path"))
+            txt = self.store.authorized_archive_file(row.get("txt_path"))
+        result = {
+            "media_id": row["media_id"],
+            "name": row["name"],
+            "day": row["day"],
+            "pdf": pdf,
+            "txt": txt,
+            "size": row["size"],
+            "chars": row["chars"],
+            "downloaded_at": row["downloaded_at"],
+            "abstract": row.get("abstract") or "",
+            "cover_url": row.get("cover_url") or "",
+            "tags": list(row.get("tags") or []),
+            "has_pdf": bool(row.get("has_pdf")),
+            "has_txt": bool(row.get("has_txt")),
+            "group_id": row.get("group_id") or "",
+            "group_name": group_name or row.get("group_name") or "",
+            "pdf_path": row.get("pdf_path") or "",
+            "txt_path": row.get("txt_path") or "",
+        }
+        result.update(
+            translation_fields(
+                result["abstract"],
+                {
+                    "abstract_zh": row.get("abstract_zh") or "",
+                    "abstract_src_hash": row.get("abstract_src_hash") or "",
+                },
+            )
+        )
+        return result
+
+    @staticmethod
+    def _public_list_item(item: dict[str, Any]) -> dict[str, Any]:
+        public = {
+            "media_id": item.get("media_id") or "",
+            "name": item.get("name") or "",
+            "day": item.get("day") or "unknown",
+            "size": item.get("size") or 0,
+            "chars": item.get("chars") or 0,
+            "downloaded_at": item.get("downloaded_at") or "",
+            "tags": list(item.get("tags") or []),
+            "has_pdf": bool(item.get("has_pdf")),
+            "has_txt": bool(item.get("has_txt")),
+        }
+        if item.get("group_id"):
+            public["group_id"] = item["group_id"]
+        if item.get("group_name"):
+            public["group_name"] = item["group_name"]
+        return public
+
+    def list_documents(
+        self,
+        groups: tuple[ImaGroupConfig, ...],
+        *,
+        query: str = "",
+        day: str = "",
+        group: str = "",
+        tag: str = "",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        if self._index_usable():
+            page = self.db.ima_document_page(
+                [item.id for item in groups],
+                group=group,
+                query=query,
+                day=day,
+                tag=tag,
+                limit=limit,
+                offset=offset,
+            )
+            counts = page.get("group_counts") or {}
+            page["groups"] = [
+                {
+                    "id": item.id,
+                    "name": item.name,
+                    "count": int(counts.get(item.id) or 0),
+                }
+                for item in groups
+            ]
+            page["items"] = [self._public_list_item(item) for item in page.get("items") or []]
+            return page
+        page_limit = max(int(limit), 1)
+        page_offset = max(int(offset), 0)
+        items = self.store.documents(
+            query=query,
+            day=day,
+            group_id=group,
+            groups=groups,
+            tag=tag,
+            include_body=False,
+            limit=page_limit + 1,
+            offset=page_offset,
+        )
+        has_more = len(items) > page_limit
+        items = [self._public_list_item(item) for item in items[:page_limit]]
+        facets = self.store.document_facets(group_id=group, groups=groups)
+        summaries = self.store.group_summary(groups)
+        return {
+            "items": items,
+            "days": facets["days"],
+            "tags": facets["tags"],
+            "tag_counts": facets["tag_counts"],
+            "document_count": facets["document_count"],
+            "day": str(day or "").strip(),
+            "has_more": has_more,
+            "offset": page_offset,
+            "group_counts": {item["id"]: int(item["count"]) for item in summaries},
+            "groups": summaries,
+        }
+
+    def catalog_stats(self, groups: tuple[ImaGroupConfig, ...]) -> dict[str, dict]:
+        stats_fn = getattr(self.db, "ima_document_catalog_stats", None)
+        if self._index_usable() and callable(stats_fn):
+            return stats_fn([item.id for item in groups])
+        stats: dict[str, dict] = {}
+        for item in self.store.catalog_entries(groups=groups):
+            group_id = str(item.get("group_id") or "")
+            if not group_id:
+                continue
+            bucket = stats.setdefault(
+                group_id,
+                {
+                    "document_count": 0,
+                    "latest_day": "",
+                    "latest_title": "",
+                    "latest_media_id": "",
+                },
+            )
+            bucket["document_count"] += 1
+            day = str(item.get("day") or "")
+            if day != "unknown" and day >= str(bucket["latest_day"] or ""):
+                bucket["latest_day"] = day
+                bucket["latest_title"] = str(item.get("name") or "")
+                bucket["latest_media_id"] = str(item.get("media_id") or "")
+        return stats
+
+    def document(
+        self,
+        media_id: str,
+        groups: tuple[ImaGroupConfig, ...],
+        group: str = "",
+        group_name: str = "",
+    ) -> dict[str, Any] | None:
+        if self._index_usable():
+            row = self.db.ima_document_from_index(
+                media_id, [item.id for item in groups], group
+            )
+            if row is None:
+                return None
+            return self._document_from_index_row(row, group_name)
+        return self.store.document(
+            media_id,
+            group_id=group,
+            group_name=group_name,
+            groups=groups,
+        )
+
     def status(self) -> dict[str, Any]:
         cfg = self.config()
         with self._state_lock:
@@ -2214,18 +2636,24 @@ class ImaDocumentService:
             last_result = json.loads(result) if result else None
         except json.JSONDecodeError:
             last_result = None
-        records = self.store.load_manifest()
-        state = self.store.load_state()
-        # Remote NFS is_file() over the whole archive blocks the single uvicorn
-        # worker (and thus /api/stats, /admin/dashboard, /admin/stats). Trust
-        # state paths there; local installs still verify files on disk.
-        document_count = sum(
-            1
-            for record in records
-            if self.store.is_complete(
-                record, state, verify_archive=not self.storage_status.remote
+        index = self.read_index_status()
+        counter = getattr(self.db, "ima_document_index_count", None)
+        indexed = int(counter()) if callable(counter) else 0
+        if indexed:
+            document_count = indexed
+        else:
+            records = self.store.load_manifest()
+            state = self.store.load_state()
+            # Remote NFS is_file() over the whole archive blocks the single uvicorn
+            # worker (and thus /api/stats, /admin/dashboard, /admin/stats). Trust
+            # state paths there; local installs still verify files on disk.
+            document_count = sum(
+                1
+                for record in records
+                if self.store.is_complete(
+                    record, state, verify_archive=not self.storage_status.remote
+                )
             )
-        )
         return {
             "config": cfg.public(),
             "running": running,
@@ -2236,6 +2664,7 @@ class ImaDocumentService:
             "discovery": self._discovery_status(),
             "documents": document_count,
             "progress": progress,
+            "index": index,
         }
 
     def start(self) -> None:
@@ -2262,6 +2691,10 @@ class ImaDocumentService:
                     logger.exception("IMA document retag failed")
             elif self.storage_status.remote:
                 logger.warning("IMA archive unavailable; skip manifest rebuild and retag")
+            try:
+                self._rebuild_index_if_needed()
+            except Exception:
+                logger.exception("IMA document index rebuild failed")
 
         # Remote NFS restore/retag can take minutes; do not block /healthz.
         if self.storage_status.remote:
@@ -2285,6 +2718,7 @@ class ImaDocumentService:
         processed = 0
         tagged = 0
         dirty = False
+        changed_records: list[dict[str, Any]] = []
         for record in records:
             try:
                 key = self.store.state_key(record)
@@ -2303,8 +2737,10 @@ class ImaDocumentService:
             if tags:
                 tagged += 1
             dirty = True
+            changed_records.append(record)
         if dirty:
             self.store.save_state(state)
+            self._update_index_rows(changed_records, state)
         return {"processed": processed, "tagged": tagged}
 
     def stop(self) -> None:
@@ -2522,6 +2958,7 @@ class ImaDocumentService:
             self.store.restore_original_filenames()
         state.clear()
         state.update(self.store.load_state())
+        self._replace_group_index(group.id, records, state)
         pending = [
             record
             for record in records
@@ -2587,38 +3024,80 @@ class ImaDocumentService:
             raise last_error  # pragma: no cover - loop either returns or raises
 
         workers = 1 if len(jobs) < 2 else IMA_DOWNLOAD_WORKERS
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = [pool.submit(_fetch, record, pdf) for record, pdf in jobs]
-            for future in as_completed(futures):
-                if self._cancel_requested:
-                    break
-                try:
-                    record, pdf, size, md5 = future.result()
-                    media_id = str(record["media_id"])
-                    key = self.store.state_key(record)
-                    state[key] = {
-                        "group_id": group.id,
-                        "group_name": group.name,
-                        "day": record.get("day") or "unknown",
-                        "name": record.get("name") or media_id,
-                        "pdf": str(pdf.relative_to(self.store.archive_root)),
-                        "txt": "",
-                        "size": size,
-                        "md5": md5,
-                        "chars": 0,
-                        "downloaded_at": datetime.now(UTC).isoformat(),
-                    }
-                    try:
-                        state[key]["tags"] = _tag_document(self.db, record, None)
-                    except Exception:
-                        logger.exception("IMA document tag failed media=%s", media_id[:32])
-                    self.store.save_state(state)
-                    downloaded += 1
-                    self._set_progress(downloaded=downloaded)
-                except Exception as exc:  # noqa: BLE001 - isolate one bad file
-                    failures += 1
-                    self._set_progress(failed=failures)
-                    last_error = _safe_error(exc)
+        dirty_records: dict[str, dict[str, Any]] = {}
+        last_flush = time.monotonic()
+
+        def flush() -> None:
+            nonlocal last_flush
+            if not dirty_records:
+                return
+            self.store.save_state(state)
+            self._update_index_rows(list(dirty_records.values()), state)
+            dirty_records.clear()
+            last_flush = time.monotonic()
+
+        def should_flush() -> bool:
+            return len(dirty_records) >= IMA_STATE_FLUSH_COUNT or (
+                time.monotonic() - last_flush
+            ) >= IMA_STATE_FLUSH_SECONDS
+
+        try:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                pending_futures = {
+                    pool.submit(_fetch, record, pdf) for record, pdf in jobs
+                }
+                while pending_futures:
+                    if self._cancel_requested:
+                        break
+                    remaining = max(
+                        0.0,
+                        IMA_STATE_FLUSH_SECONDS - (time.monotonic() - last_flush),
+                    )
+                    done, pending_futures = wait(
+                        pending_futures,
+                        timeout=remaining,
+                        return_when=FIRST_COMPLETED,
+                    )
+                    if not done:
+                        if dirty_records:
+                            flush()
+                        else:
+                            last_flush = time.monotonic()
+                        continue
+                    for future in done:
+                        try:
+                            record, pdf, size, md5 = future.result()
+                            media_id = str(record["media_id"])
+                            key = self.store.state_key(record)
+                            state[key] = {
+                                "group_id": group.id,
+                                "group_name": group.name,
+                                "day": record.get("day") or "unknown",
+                                "name": record.get("name") or media_id,
+                                "pdf": str(pdf.relative_to(self.store.archive_root)),
+                                "txt": "",
+                                "size": size,
+                                "md5": md5,
+                                "chars": 0,
+                                "downloaded_at": datetime.now(UTC).isoformat(),
+                            }
+                            try:
+                                state[key]["tags"] = _tag_document(self.db, record, None)
+                            except Exception:
+                                logger.exception(
+                                    "IMA document tag failed media=%s", media_id[:32]
+                                )
+                            dirty_records[key] = record
+                            downloaded += 1
+                            self._set_progress(downloaded=downloaded)
+                            if should_flush():
+                                flush()
+                        except Exception as exc:  # noqa: BLE001 - isolate one bad file
+                            failures += 1
+                            self._set_progress(failed=failures)
+                            last_error = _safe_error(exc)
+        finally:
+            flush()
         return {
             "group_id": group.id,
             "group_name": group.name,

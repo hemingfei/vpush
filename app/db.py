@@ -9,7 +9,7 @@ import shutil
 import sqlite3
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .logging_setup import redact_secrets
@@ -131,8 +131,8 @@ def days_until_purge(created_at: str | None, n: int, m: int) -> int | None:
         return None
     created = datetime.strptime(
         str(created_at)[:19].replace("T", " "), "%Y-%m-%d %H:%M:%S"
-    ).replace(tzinfo=timezone.utc)
-    sec = (created + timedelta(days=n + m) - datetime.now(timezone.utc)).total_seconds()
+    ).replace(tzinfo=UTC)
+    sec = (created + timedelta(days=n + m) - datetime.now(UTC)).total_seconds()
     return max(0, int(sec // 86400))
 
 
@@ -244,6 +244,320 @@ DEFAULT_STOCK_ALIASES = [
 STOCK_ALIASES_KEY = "stock_aliases"
 # 最近一次标签维护结果（管理端展示用）
 TAG_MAINTAIN_LAST_KEY = "tag_maintain_last"
+
+IMA_DOCUMENT_INDEX_COLUMNS = (
+    "group_id",
+    "media_id",
+    "day",
+    "valid_day",
+    "name",
+    "group_name",
+    "name_folded",
+    "metadata_folded",
+    "abstract",
+    "abstract_folded",
+    "abstract_zh",
+    "abstract_src_hash",
+    "cover_url",
+    "tags_json",
+    "size",
+    "chars",
+    "has_pdf",
+    "has_txt",
+    "pdf_path",
+    "txt_path",
+    "downloaded_at",
+)
+
+# 允许空索引以降级到 manifest/state；写入时只接受这些状态。
+IMA_DOCUMENT_INDEX_STATUSES = {"ready", "rebuilding", "fallback", "failed"}
+
+IMA_DOCUMENT_INDEX_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS ima_document_index (
+    group_id TEXT NOT NULL,
+    media_id TEXT NOT NULL,
+    day TEXT NOT NULL DEFAULT 'unknown',
+    valid_day INTEGER NOT NULL DEFAULT 0,
+    name TEXT NOT NULL DEFAULT '',
+    group_name TEXT NOT NULL DEFAULT '',
+    name_folded TEXT NOT NULL DEFAULT '',
+    metadata_folded TEXT NOT NULL DEFAULT '',
+    abstract TEXT NOT NULL DEFAULT '',
+    abstract_folded TEXT NOT NULL DEFAULT '',
+    abstract_zh TEXT NOT NULL DEFAULT '',
+    abstract_src_hash TEXT NOT NULL DEFAULT '',
+    cover_url TEXT NOT NULL DEFAULT '',
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    size INTEGER NOT NULL DEFAULT 0,
+    chars INTEGER NOT NULL DEFAULT 0,
+    has_pdf INTEGER NOT NULL DEFAULT 0,
+    has_txt INTEGER NOT NULL DEFAULT 0,
+    pdf_path TEXT NOT NULL DEFAULT '',
+    txt_path TEXT NOT NULL DEFAULT '',
+    downloaded_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (group_id, media_id)
+);
+"""
+IMA_DOCUMENT_TAGS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS ima_document_tags (
+    group_id TEXT NOT NULL,
+    media_id TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    PRIMARY KEY (group_id, media_id, tag)
+);
+"""
+IMA_DOCUMENT_INDEX_META_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS ima_document_index_meta (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    version INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'fallback',
+    fingerprint TEXT NOT NULL DEFAULT '',
+    rebuilt_at TEXT NOT NULL DEFAULT '',
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    document_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT ''
+);
+"""
+
+# PRAGMA table_info: name, declared type, notnull, dflt_value, pk ordinal.
+_IMA_DOC_COLUMN_SPEC = (
+    ("group_id", "TEXT", 1, None, 1),
+    ("media_id", "TEXT", 1, None, 2),
+    ("day", "TEXT", 1, "'unknown'", 0),
+    ("valid_day", "INTEGER", 1, "0", 0),
+    ("name", "TEXT", 1, "''", 0),
+    ("group_name", "TEXT", 1, "''", 0),
+    ("name_folded", "TEXT", 1, "''", 0),
+    ("metadata_folded", "TEXT", 1, "''", 0),
+    ("abstract", "TEXT", 1, "''", 0),
+    ("abstract_folded", "TEXT", 1, "''", 0),
+    ("abstract_zh", "TEXT", 1, "''", 0),
+    ("abstract_src_hash", "TEXT", 1, "''", 0),
+    ("cover_url", "TEXT", 1, "''", 0),
+    ("tags_json", "TEXT", 1, "'[]'", 0),
+    ("size", "INTEGER", 1, "0", 0),
+    ("chars", "INTEGER", 1, "0", 0),
+    ("has_pdf", "INTEGER", 1, "0", 0),
+    ("has_txt", "INTEGER", 1, "0", 0),
+    ("pdf_path", "TEXT", 1, "''", 0),
+    ("txt_path", "TEXT", 1, "''", 0),
+    ("downloaded_at", "TEXT", 1, "''", 0),
+)
+_IMA_TAG_COLUMN_SPEC = (
+    ("group_id", "TEXT", 1, None, 1),
+    ("media_id", "TEXT", 1, None, 2),
+    ("tag", "TEXT", 1, None, 3),
+)
+_IMA_META_COLUMN_SPEC = (
+    ("id", "INTEGER", 0, None, 1),
+    ("version", "INTEGER", 1, "1", 0),
+    ("status", "TEXT", 1, "'fallback'", 0),
+    ("fingerprint", "TEXT", 1, "''", 0),
+    ("rebuilt_at", "TEXT", 1, "''", 0),
+    ("duration_ms", "INTEGER", 1, "0", 0),
+    ("document_count", "INTEGER", 1, "0", 0),
+    ("error", "TEXT", 1, "''", 0),
+)
+_IMA_DOC_INT_COLUMNS = frozenset({"size", "chars", "has_pdf", "has_txt"})
+_IMA_INDEX_SPECS = (
+    (
+        "idx_ima_doc_latest",
+        "ima_document_index(valid_day DESC, day DESC, name DESC)",
+        (("valid_day", 1), ("day", 1), ("name", 1)),
+    ),
+    (
+        "idx_ima_doc_group_latest",
+        "ima_document_index(group_id, valid_day DESC, day DESC, name DESC)",
+        (("group_id", 0), ("valid_day", 1), ("day", 1), ("name", 1)),
+    ),
+    (
+        "idx_ima_doc_tag_group",
+        "ima_document_tags(tag, group_id)",
+        (("tag", 0), ("group_id", 0)),
+    ),
+    (
+        "idx_ima_doc_group_tag",
+        "ima_document_tags(group_id, tag)",
+        (("group_id", 0), ("tag", 0)),
+    ),
+)
+
+
+def _ima_pragma_matches(rows, expected) -> bool:
+    if len(rows) != len(expected):
+        return False
+    for row, (name, column_type, notnull, default, pk) in zip(rows, expected):
+        if (
+            row["name"] != name
+            or str(row["type"] or "").upper() != column_type
+            or int(row["notnull"]) != notnull
+            or row["dflt_value"] != default
+            or int(row["pk"]) != pk
+        ):
+            return False
+    return True
+
+
+def _ima_meta_has_id_check(sql: str) -> bool:
+    compact = "".join((sql or "").upper().split())
+    token = "CHECK(ID="
+    start = 0
+    while True:
+        pos = compact.find(token, start)
+        if pos < 0:
+            return False
+        rest = compact[pos + len(token):]
+        if rest.startswith("1)"):
+            return True
+        start = pos + 1
+
+
+def _ima_create_table_sql(if_not_exists_sql: str) -> str:
+    return if_not_exists_sql.replace("CREATE TABLE IF NOT EXISTS ", "CREATE TABLE ", 1)
+
+
+def _ima_doc_select_expr(column: str, old_columns: set[str]) -> str:
+    if column == "group_id":
+        return (
+            "COALESCE(NULLIF(CAST(group_id AS TEXT), ''), 'legacy')"
+            if "group_id" in old_columns
+            else "'legacy'"
+        )
+    if column == "media_id":
+        return (
+            "COALESCE(NULLIF(CAST(media_id AS TEXT), ''), "
+            "'legacy:' || CAST(rowid AS TEXT))"
+            if "media_id" in old_columns
+            else "'legacy:' || CAST(rowid AS TEXT)"
+        )
+    if column == "day":
+        return (
+            "COALESCE(NULLIF(TRIM(day), ''), 'unknown')"
+            if "day" in old_columns
+            else "'unknown'"
+        )
+    if column == "valid_day":
+        if "valid_day" in old_columns:
+            return (
+                "CASE WHEN CAST(valid_day AS INTEGER) != 0 THEN 1 ELSE 0 END"
+            )
+        if "day" in old_columns:
+            return (
+                "CASE WHEN TRIM(day) GLOB '[0-9][0-9][0-9][0-9]' "
+                "THEN 1 ELSE 0 END"
+            )
+        return "0"
+    if column == "tags_json":
+        return (
+            "COALESCE(CAST(tags_json AS TEXT), '[]')"
+            if "tags_json" in old_columns
+            else "'[]'"
+        )
+    if column in old_columns:
+        if column in _IMA_DOC_INT_COLUMNS:
+            return f"COALESCE(CAST({column} AS INTEGER), 0)"
+        return f"COALESCE(CAST({column} AS TEXT), '')"
+    return "0" if column in _IMA_DOC_INT_COLUMNS else "''"
+
+
+def _ima_tag_select_expr(column: str, old_columns: set[str]) -> str:
+    if column == "group_id":
+        return (
+            "COALESCE(NULLIF(CAST(group_id AS TEXT), ''), 'legacy')"
+            if "group_id" in old_columns
+            else "'legacy'"
+        )
+    if column == "media_id":
+        return (
+            "COALESCE(NULLIF(CAST(media_id AS TEXT), ''), "
+            "'legacy:' || CAST(rowid AS TEXT))"
+            if "media_id" in old_columns
+            else "'legacy:' || CAST(rowid AS TEXT)"
+        )
+    return "COALESCE(CAST(tag AS TEXT), '')" if "tag" in old_columns else "''"
+
+
+def _ima_meta_select_expr(column: str, old_columns: set[str]) -> str:
+    if column == "id":
+        return "1"
+    if column == "version":
+        return (
+            "CASE WHEN COALESCE(CAST(version AS INTEGER), 0) = 0 "
+            "THEN 1 ELSE CAST(version AS INTEGER) END"
+            if "version" in old_columns
+            else "1"
+        )
+    if column in {"duration_ms", "document_count"}:
+        return (
+            f"COALESCE(CAST({column} AS INTEGER), 0)"
+            if column in old_columns
+            else "0"
+        )
+    if column == "status":
+        return (
+            "COALESCE(NULLIF(CAST(status AS TEXT), ''), 'fallback')"
+            if "status" in old_columns
+            else "'fallback'"
+        )
+    if column in old_columns:
+        return f"COALESCE(CAST({column} AS TEXT), '')"
+    return "''"
+
+
+def _like_pattern(value: str) -> str:
+    folded = str(value or "").strip().casefold()
+    escaped = folded.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _ima_authorized_groups(readable_group_ids, group: str = "") -> list[str]:
+    allowed = [str(item) for item in readable_group_ids if str(item)]
+    requested = str(group or "").strip()
+    if requested:
+        return [item for item in allowed if item == requested]
+    return allowed
+
+
+def _ima_public_document(row: dict) -> dict:
+    try:
+        tags = json.loads(str(row.get("tags_json") or "[]"))
+    except (TypeError, ValueError):
+        tags = []
+    if not isinstance(tags, list):
+        tags = []
+    return {
+        "group_id": row["group_id"],
+        "media_id": row["media_id"],
+        "day": row["day"],
+        "name": row["name"],
+        "group_name": row.get("group_name") or "",
+        "abstract": row.get("abstract") or "",
+        "abstract_zh": row.get("abstract_zh") or "",
+        "abstract_src_hash": row.get("abstract_src_hash") or "",
+        "cover_url": row.get("cover_url") or "",
+        "tags": [str(tag) for tag in tags if str(tag)],
+        "size": _to_int(row.get("size")),
+        "chars": _to_int(row.get("chars")),
+        "has_pdf": bool(row.get("has_pdf")),
+        "has_txt": bool(row.get("has_txt")),
+        "pdf_path": str(row.get("pdf_path") or ""),
+        "txt_path": str(row.get("txt_path") or ""),
+        "downloaded_at": str(row.get("downloaded_at") or ""),
+    }
+
+
+def _ima_empty_page(day: str, offset: int) -> dict:
+    return {
+        "items": [],
+        "days": [],
+        "tags": [],
+        "tag_counts": {},
+        "document_count": 0,
+        "day": day,
+        "has_more": False,
+        "offset": offset,
+        "group_counts": {},
+    }
 
 
 SCHEMA = """
@@ -712,7 +1026,7 @@ class DB:
                     if stored.startswith(SECRET_PREFIX):
                         try:
                             plain = decrypt_secret(self.credential_key, stored[len(SECRET_PREFIX):])
-                        except Exception:
+                        except Exception:  # noqa: S112
                             continue  # 密钥对不上：保持现状，配置正确后下轮再收编
                         target_cipher = stored  # 已是密文，无需重写
                     else:
@@ -772,6 +1086,8 @@ class DB:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_ima_kb_sub_group ON ima_kb_subscriptions(group_id)"
         )
+        self._ensure_ima_document_tables()
+        self._migrate_ima_document_index()
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS user_keywords ("
             "  user_id INTEGER NOT NULL,"
@@ -951,6 +1267,129 @@ class DB:
                 f"CREATE UNIQUE INDEX IF NOT EXISTS uq_users_{column} "
                 f"ON users({column}) WHERE {column} != ''"
             )
+
+    def _ensure_ima_document_tables(self) -> None:
+        # CREATE IF NOT EXISTS only. Do not insert meta here: a malformed table
+        # without a unique id would gain an extra empty row before validation.
+        # Use execute(), not executescript(): the latter issues COMMIT first.
+        for sql in (
+            IMA_DOCUMENT_INDEX_TABLE_SQL,
+            IMA_DOCUMENT_TAGS_TABLE_SQL,
+            IMA_DOCUMENT_INDEX_META_TABLE_SQL,
+        ):
+            self._conn.execute(sql)
+
+    def _ima_index_key_columns(self, name: str) -> list[tuple[str, int]]:
+        return [
+            (row["name"], int(row["desc"]))
+            for row in self._rows(f"PRAGMA index_xinfo({name})")
+            if row["key"]
+        ]
+
+    def _rebuild_ima_document_table(self, old_columns: set[str]) -> None:
+        self._conn.execute(
+            "ALTER TABLE ima_document_index RENAME TO ima_document_index_legacy"
+        )
+        self._conn.execute(_ima_create_table_sql(IMA_DOCUMENT_INDEX_TABLE_SQL))
+        columns = ", ".join(IMA_DOCUMENT_INDEX_COLUMNS)
+        expressions = ", ".join(
+            _ima_doc_select_expr(column, old_columns)
+            for column in IMA_DOCUMENT_INDEX_COLUMNS
+        )
+        self._conn.execute(
+            f"INSERT OR IGNORE INTO ima_document_index ({columns}) "
+            f"SELECT {expressions} FROM ima_document_index_legacy "
+            "ORDER BY rowid"
+        )
+        self._conn.execute("DROP TABLE ima_document_index_legacy")
+
+    def _rebuild_ima_document_tags(self, old_columns: set[str]) -> None:
+        self._conn.execute(
+            "ALTER TABLE ima_document_tags RENAME TO ima_document_tags_legacy"
+        )
+        self._conn.execute(_ima_create_table_sql(IMA_DOCUMENT_TAGS_TABLE_SQL))
+        columns = ", ".join(item[0] for item in _IMA_TAG_COLUMN_SPEC)
+        expressions = ", ".join(
+            _ima_tag_select_expr(column, old_columns)
+            for column, *_ in _IMA_TAG_COLUMN_SPEC
+        )
+        self._conn.execute(
+            f"INSERT OR IGNORE INTO ima_document_tags ({columns}) "
+            f"SELECT {expressions} FROM ima_document_tags_legacy "
+            "ORDER BY rowid"
+        )
+        self._conn.execute("DROP TABLE ima_document_tags_legacy")
+
+    def _rebuild_ima_document_index_meta(self, old_columns: set[str]) -> None:
+        self._conn.execute(
+            "ALTER TABLE ima_document_index_meta "
+            "RENAME TO ima_document_index_meta_legacy"
+        )
+        self._conn.execute(_ima_create_table_sql(IMA_DOCUMENT_INDEX_META_TABLE_SQL))
+        columns = ", ".join(item[0] for item in _IMA_META_COLUMN_SPEC)
+        expressions = ", ".join(
+            _ima_meta_select_expr(column, old_columns)
+            for column, *_ in _IMA_META_COLUMN_SPEC
+        )
+        order_expression = (
+            "CASE WHEN CAST(id AS TEXT) = '1' THEN 0 ELSE 1 END"
+            if "id" in old_columns
+            else "rowid"
+        )
+        self._conn.execute(
+            f"INSERT OR IGNORE INTO ima_document_index_meta ({columns}) "
+            f"SELECT {expressions} FROM ima_document_index_meta_legacy "
+            f"ORDER BY {order_expression}, rowid LIMIT 1"
+        )
+        self._conn.execute("DROP TABLE ima_document_index_meta_legacy")
+
+    def _sync_ima_document_indexes(self) -> None:
+        expected = {name: list(columns) for name, _, columns in _IMA_INDEX_SPECS}
+        current = {
+            name: self._ima_index_key_columns(name) for name in expected
+        }
+        if current == expected:
+            return
+        for name in expected:
+            self._conn.execute(f"DROP INDEX IF EXISTS {name}")
+        for name, target, _columns in _IMA_INDEX_SPECS:
+            self._conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {target}")
+
+    def _migrate_ima_document_index(self) -> None:
+        """Upgrade malformed read-model tables before creating dependent indexes."""
+        # sqlite3 only auto-BEGINs DML. Rebuild uses DDL, so start a transaction
+        # explicitly; otherwise a failed CREATE would leave the renamed legacy table.
+        if not self._conn.in_transaction:
+            self._conn.execute("BEGIN")
+        try:
+            doc_info = self._rows("PRAGMA table_info(ima_document_index)")
+            tags_info = self._rows("PRAGMA table_info(ima_document_tags)")
+            meta_info = self._rows("PRAGMA table_info(ima_document_index_meta)")
+            meta_sql_rows = self._rows(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'ima_document_index_meta'"
+            )
+            meta_sql = meta_sql_rows[0]["sql"] if meta_sql_rows else ""
+
+            if not _ima_pragma_matches(doc_info, _IMA_DOC_COLUMN_SPEC):
+                self._rebuild_ima_document_table({row["name"] for row in doc_info})
+            if not _ima_pragma_matches(tags_info, _IMA_TAG_COLUMN_SPEC):
+                self._rebuild_ima_document_tags({row["name"] for row in tags_info})
+            if (
+                not _ima_pragma_matches(meta_info, _IMA_META_COLUMN_SPEC)
+                or not _ima_meta_has_id_check(meta_sql)
+                or len(self._rows("SELECT rowid FROM ima_document_index_meta")) > 1
+            ):
+                self._rebuild_ima_document_index_meta(
+                    {row["name"] for row in meta_info}
+                )
+            self._conn.execute(
+                "INSERT OR IGNORE INTO ima_document_index_meta (id) VALUES (1)"
+            )
+            self._sync_ima_document_indexes()
+        except Exception:
+            self._conn.rollback()
+            raise
 
     def close(self):
         with self._lock:
@@ -3024,9 +3463,10 @@ class DB:
                 continue
             if key == "enabled":
                 value = 1 if value else 0
-            elif key == "name" and isinstance(value, str):
-                value = value.strip()
-            elif key == "extract_url" and isinstance(value, str):
+            elif (
+                key in {"name", "extract_url"}
+                and isinstance(value, str)
+            ):
                 value = value.strip()
             sets.append(f"{key} = ?")
             params.append(value)
@@ -3150,6 +3590,383 @@ class DB:
         """回写单条贴文的标签（回填/纠错用），空列表持久化为 '[]'（已处理零命中）。"""
         tags_json = json.dumps(tags, ensure_ascii=False)
         self._execute("UPDATE posts SET tags = ? WHERE id = ?", (tags_json, post_id))
+
+    @staticmethod
+    def _ima_document_row(row, group_id: str | None = None) -> tuple[dict, list[str]]:
+        source = dict(row)
+        actual_group_id = str(source.get("group_id") or group_id or "")
+        if group_id is not None and actual_group_id != str(group_id):
+            raise ValueError("row group_id does not match group_id")
+        media_id = str(source.get("media_id") or "")
+        if not actual_group_id or not media_id:
+            raise ValueError("IMA document requires group_id and media_id")
+
+        raw_tags = source.get("tags", _UNSET)
+        if raw_tags is _UNSET or raw_tags is None:
+            try:
+                raw_tags = json.loads(str(source.get("tags_json") or "[]"))
+            except (TypeError, ValueError):
+                raw_tags = []
+        if not isinstance(raw_tags, (list, tuple, set)):
+            raw_tags = []
+        tags = list(dict.fromkeys(str(tag) for tag in raw_tags if str(tag)))
+        day = str(source.get("day") or "unknown").strip() or "unknown"
+        values = {
+            "group_id": actual_group_id,
+            "media_id": media_id,
+            "day": day,
+            "valid_day": int(day.isascii() and len(day) == 4 and day.isdigit()),
+            "name": str(source.get("name") or ""),
+            "group_name": str(source.get("group_name") or ""),
+            "name_folded": str(
+                source.get("name_folded") or source.get("name") or ""
+            ).casefold(),
+            "metadata_folded": str(
+                source.get("metadata_folded") or source.get("group_name") or ""
+            ).casefold(),
+            "abstract": str(source.get("abstract") or ""),
+            "abstract_folded": str(
+                source.get("abstract_folded") or source.get("abstract") or ""
+            ).casefold(),
+            "abstract_zh": str(source.get("abstract_zh") or ""),
+            "abstract_src_hash": str(source.get("abstract_src_hash") or ""),
+            "cover_url": str(source.get("cover_url") or ""),
+            "tags_json": json.dumps(tags, ensure_ascii=False),
+            "size": _to_int(source.get("size")),
+            "chars": _to_int(source.get("chars")),
+            "has_pdf": _to_bool(source.get("has_pdf", bool(source.get("pdf_path")))),
+            "has_txt": _to_bool(source.get("has_txt", bool(source.get("txt_path")))),
+            "pdf_path": str(source.get("pdf_path") or ""),
+            "txt_path": str(source.get("txt_path") or ""),
+            "downloaded_at": str(source.get("downloaded_at") or ""),
+        }
+        return values, tags
+
+    @classmethod
+    def _ima_document_insert_sql(cls, upsert: bool = False) -> str:
+        columns = ", ".join(IMA_DOCUMENT_INDEX_COLUMNS)
+        placeholders = ", ".join("?" for _ in IMA_DOCUMENT_INDEX_COLUMNS)
+        sql = f"INSERT INTO ima_document_index ({columns}) VALUES ({placeholders})"
+        if upsert:
+            updates = ", ".join(
+                f"{column} = excluded.{column}"
+                for column in IMA_DOCUMENT_INDEX_COLUMNS[2:]
+            )
+            sql += (
+                " ON CONFLICT(group_id, media_id) DO UPDATE SET "
+                + updates
+            )
+        return sql
+
+    def _insert_ima_document_rows_unlocked(
+        self,
+        prepared: list[tuple[dict, list[str]]],
+        *,
+        upsert: bool = False,
+        tags_first: bool = False,
+    ) -> None:
+        if not prepared:
+            return
+        document_params = [
+            tuple(row[column] for column in IMA_DOCUMENT_INDEX_COLUMNS)
+            for row, _ in prepared
+        ]
+        tag_params = [
+            (row["group_id"], row["media_id"], tag)
+            for row, tags in prepared
+            for tag in tags
+        ]
+        tag_sql = (
+            "INSERT INTO ima_document_tags (group_id, media_id, tag) VALUES (?, ?, ?)"
+        )
+        if tags_first and tag_params:
+            self._conn.executemany(tag_sql, tag_params)
+        self._conn.executemany(
+            self._ima_document_insert_sql(upsert=upsert), document_params
+        )
+        if not tags_first and tag_params:
+            self._conn.executemany(tag_sql, tag_params)
+
+    @staticmethod
+    def _ima_meta_fallback() -> dict:
+        return {
+            "id": 1,
+            "version": 1,
+            "status": "fallback",
+            "fingerprint": "",
+            "rebuilt_at": "",
+            "duration_ms": 0,
+            "document_count": 0,
+            "error": "",
+        }
+
+    def replace_ima_document_group(self, group_id: str, rows) -> None:
+        group_id = str(group_id)
+        prepared = [self._ima_document_row(row, group_id) for row in rows]
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                self._conn.execute(
+                    "DELETE FROM ima_document_tags WHERE group_id = ?", (group_id,)
+                )
+                self._conn.execute(
+                    "DELETE FROM ima_document_index WHERE group_id = ?", (group_id,)
+                )
+                self._insert_ima_document_rows_unlocked(prepared)
+                count = self._conn.execute(
+                    "SELECT COUNT(*) FROM ima_document_index WHERE group_id = ?",
+                    (group_id,),
+                ).fetchone()[0]
+                if int(count) != len(prepared):
+                    raise sqlite3.IntegrityError("IMA document group count mismatch")
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def replace_ima_document_index(
+        self, rows, fingerprint: str, duration_ms: int
+    ) -> None:
+        prepared = [self._ima_document_row(row) for row in rows]
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                self._conn.execute("DELETE FROM ima_document_tags")
+                self._conn.execute("DELETE FROM ima_document_index")
+                self._insert_ima_document_rows_unlocked(prepared)
+                count = self._conn.execute(
+                    "SELECT COUNT(*) FROM ima_document_index"
+                ).fetchone()[0]
+                if int(count) != len(prepared):
+                    raise sqlite3.IntegrityError("IMA document count mismatch")
+                self._conn.execute(
+                    "UPDATE ima_document_index_meta SET version = 1, status = 'ready', "
+                    "fingerprint = ?, rebuilt_at = datetime('now'), duration_ms = ?, "
+                    "document_count = ?, error = '' WHERE id = 1",
+                    (str(fingerprint or ""), _to_int(duration_ms), len(prepared)),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def update_ima_document_batch(self, rows, fingerprint: str) -> int:
+        prepared_by_key = {}
+        for row in rows:
+            prepared, tags = self._ima_document_row(row)
+            prepared_by_key[(prepared["group_id"], prepared["media_id"])] = (
+                prepared,
+                tags,
+            )
+        prepared = list(prepared_by_key.values())
+        if not prepared:
+            return 0
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                self._conn.executemany(
+                    "DELETE FROM ima_document_tags WHERE group_id = ? AND media_id = ?",
+                    [(row["group_id"], row["media_id"]) for row, _ in prepared],
+                )
+                self._insert_ima_document_rows_unlocked(
+                    prepared, upsert=True, tags_first=True
+                )
+                self._conn.execute(
+                    "UPDATE ima_document_index_meta SET fingerprint = ? WHERE id = 1",
+                    (str(fingerprint or ""),),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return len(prepared)
+
+    def ima_document_index_meta(self) -> dict:
+        rows = self._rows("SELECT * FROM ima_document_index_meta WHERE id = 1")
+        if not rows:
+            return self._ima_meta_fallback()
+        meta = self._ima_meta_fallback()
+        meta.update(rows[0])
+        for field in ("id", "version", "duration_ms", "document_count"):
+            meta[field] = _to_int(meta.get(field))
+        for field in ("status", "fingerprint", "rebuilt_at", "error"):
+            meta[field] = str(meta.get(field) or "")
+        return meta
+
+    def mark_ima_document_index(self, status: str, error: str = "") -> None:
+        if status not in IMA_DOCUMENT_INDEX_STATUSES:
+            raise ValueError(f"invalid IMA document index status: {status}")
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO ima_document_index_meta (id) VALUES (1)"
+                )
+                self._conn.execute(
+                    "UPDATE ima_document_index_meta SET status = ?, error = ? WHERE id = 1",
+                    (status, str(error or "")),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def _ima_page_filters(
+        self, groups: list[str], query: str, day: str, tag: str
+    ) -> tuple[str, list, str, str | None]:
+        clauses = [f"d.group_id IN ({', '.join('?' for _ in groups)})"]
+        params: list = list(groups)
+        if day:
+            clauses.append("d.day = ?")
+            params.append(day)
+        if tag:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM ima_document_tags t "
+                "WHERE t.group_id = d.group_id AND t.media_id = d.media_id "
+                "AND t.tag = ?)"
+            )
+            params.append(tag)
+        like = "LIKE ? ESCAPE '\\'"
+        rank_sql = "0"
+        pattern = None
+        if query:
+            pattern = _like_pattern(query)
+            clauses.append(
+                f"(d.name_folded {like} OR d.metadata_folded {like} "
+                f"OR d.abstract_folded {like})"
+            )
+            params.extend([pattern, pattern, pattern])
+            rank_sql = (
+                f"CASE WHEN d.name_folded {like} THEN 3 "
+                f"WHEN d.metadata_folded {like} THEN 2 "
+                f"ELSE 1 END"
+            )
+        return " AND ".join(clauses), params, rank_sql, pattern
+
+    def ima_document_page(
+        self,
+        readable_group_ids: list[str],
+        *,
+        group: str = "",
+        query: str = "",
+        day: str = "",
+        tag: str = "",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict:
+        requested_day = str(day or "").strip()
+        requested_tag = str(tag or "").strip()
+        requested_query = str(query or "").strip()
+        page_limit = max(int(limit), 1)
+        page_offset = max(int(offset), 0)
+        groups = _ima_authorized_groups(readable_group_ids, group)
+        if not groups:
+            return _ima_empty_page(requested_day, page_offset)
+
+        where_sql, where_params, rank_sql, pattern = self._ima_page_filters(
+            groups, requested_query, requested_day, requested_tag
+        )
+        item_params = list(where_params)
+        if pattern is not None:
+            item_params = [pattern, pattern, *where_params]
+        rows = self._rows(
+            f"SELECT d.*, {rank_sql} AS match_rank FROM ima_document_index d "
+            f"WHERE {where_sql} "
+            "ORDER BY match_rank DESC, d.valid_day DESC, d.day DESC, d.name DESC "
+            "LIMIT ? OFFSET ?",
+            (*item_params, page_limit + 1, page_offset),
+        )
+        has_more = len(rows) > page_limit
+        items = [_ima_public_document(row) for row in rows[:page_limit]]
+
+        count_row = self._rows(
+            f"SELECT COUNT(*) AS n FROM ima_document_index d WHERE {where_sql}",
+            where_params,
+        )
+        days = [
+            row["day"]
+            for row in self._rows(
+                f"SELECT DISTINCT d.day FROM ima_document_index d "
+                f"WHERE {where_sql} ORDER BY d.valid_day DESC, d.day DESC",
+                where_params,
+            )
+        ]
+        tag_rows = self._rows(
+            "SELECT t.tag AS tag, COUNT(*) AS n FROM ima_document_tags t "
+            "JOIN ima_document_index d "
+            "ON d.group_id = t.group_id AND d.media_id = t.media_id "
+            f"WHERE {where_sql} GROUP BY t.tag ORDER BY n DESC, t.tag",
+            where_params,
+        )
+        tag_counts = {row["tag"]: int(row["n"]) for row in tag_rows}
+        group_rows = self._rows(
+            f"SELECT d.group_id AS group_id, COUNT(*) AS n "
+            f"FROM ima_document_index d WHERE {where_sql} GROUP BY d.group_id",
+            where_params,
+        )
+        return {
+            "items": items,
+            "days": days,
+            "tags": list(tag_counts),
+            "tag_counts": tag_counts,
+            "document_count": int(count_row[0]["n"] if count_row else 0),
+            "day": requested_day,
+            "has_more": has_more,
+            "offset": page_offset,
+            "group_counts": {row["group_id"]: int(row["n"]) for row in group_rows},
+        }
+
+    def ima_document_catalog_stats(self, group_ids: list[str]) -> dict[str, dict]:
+        groups = _ima_authorized_groups(group_ids)
+        if not groups:
+            return {}
+        placeholders = ", ".join("?" for _ in groups)
+        rows = self._rows(
+            "SELECT group_id, day AS latest_day, name AS latest_title, "
+            "media_id AS latest_media_id, document_count FROM ("
+            "SELECT group_id, day, name, media_id, "
+            "COUNT(*) OVER (PARTITION BY group_id) AS document_count, "
+            "ROW_NUMBER() OVER ("
+            "PARTITION BY group_id "
+            "ORDER BY valid_day DESC, day DESC, name DESC"
+            ") AS rn FROM ima_document_index "
+            f"WHERE group_id IN ({placeholders})"
+            ") ranked WHERE rn = 1",
+            groups,
+        )
+        return {
+            row["group_id"]: {
+                "document_count": int(row["document_count"]),
+                "latest_day": row["latest_day"],
+                "latest_title": row["latest_title"],
+                "latest_media_id": row["latest_media_id"],
+            }
+            for row in rows
+        }
+
+    def ima_document_from_index(
+        self,
+        media_id: str,
+        readable_group_ids: list[str],
+        group: str = "",
+    ) -> dict | None:
+        media_id = str(media_id or "").strip()
+        groups = _ima_authorized_groups(readable_group_ids, group)
+        if not media_id or not groups:
+            return None
+        rows = self._rows(
+            "SELECT * FROM ima_document_index WHERE media_id = ? "
+            f"AND group_id IN ({', '.join('?' for _ in groups)}) "
+            "ORDER BY valid_day DESC, day DESC, name DESC",
+            (media_id, *groups),
+        )
+        if len(rows) != 1:
+            return None
+        return _ima_public_document(rows[0])
+
+    def ima_document_index_count(self) -> int:
+        rows = self._rows("SELECT COUNT(*) AS n FROM ima_document_index")
+        return int(rows[0]["n"] if rows else 0)
 
     def get_tag_vocabulary(self) -> list[dict]:
         """读贴文打标词表（settings 持久化），返回「标签 + 关键词」对象数组。

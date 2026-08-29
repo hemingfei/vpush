@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import logging
+import sqlite3
 import threading
 import time
 
@@ -9,34 +10,37 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.ima_documents as ima_documents
-from app.ima_storage import ImaStorageStatus
+from app.db import DB
 from app.ima_documents import (
+    IMA_INDEX_VERSION,
     IMA_LEGACY_GROUP_ID,
     IMA_LEGACY_GROUP_NAME,
     IMA_MAX_FOLDER_DEPTH,
-    IMA_PURE_GROUPS_KEY,
-    IMA_PURE_GROUP_RUNTIME_KEY,
-    IMA_PURE_KB_ID_KEY,
     IMA_PURE_DISCOVERY_KEY,
+    IMA_PURE_GROUP_RUNTIME_KEY,
+    IMA_PURE_GROUPS_KEY,
+    IMA_PURE_KB_ID_KEY,
     IMA_PURE_LAST_RESULT_KEY,
     IMA_PURE_REFRESH_TOKEN_KEY,
     IMA_PURE_ROOT_FOLDER_KEY,
     IMA_PURE_UID_KEY,
+    IMA_STATE_FLUSH_SECONDS,
     ImaDocumentConfig,
     ImaDocumentService,
     ImaDocumentStore,
     ImaGroupConfig,
     ImaPureClient,
-    is_ima_folder_item,
-    merge_groups,
-    normalize_discovered_groups,
-    normalize_ima_folder_item,
     _clamp_group_interval,
     _safe_error,
     decrypt_body,
     encrypt_body,
+    is_ima_folder_item,
+    merge_groups,
+    normalize_discovered_groups,
+    normalize_ima_folder_item,
     safe_filename,
 )
+from app.ima_storage import ImaStorageStatus
 from app.main import create_app
 
 
@@ -3556,3 +3560,373 @@ def test_sync_redownloads_when_pull_url_set_even_if_file_exists(tmp_path, monkey
     assert calls["get_media"] >= 1
     assert calls["download"] >= 1
     assert result["downloaded"] == 1
+
+
+def test_service_rebuilds_ima_read_model_from_manifest_and_state(tmp_path):
+    db = DB(str(tmp_path / "dav.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    group = ImaGroupConfig("semi", "SemiAnalysis", "kb", "root")
+    record = {
+        "group_id": "semi",
+        "group_name": "SemiAnalysis",
+        "media_id": "file_a",
+        "name": "AI 展望.pdf",
+        "day": "0829",
+        "abstract": "算力需求",
+        "cover_url": "https://img.invalid/a",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state(
+        {
+            service.store.state_key(record): {
+                "tags": ["AI"],
+                "pdf": "semi/a.pdf",
+                "size": 8,
+                "downloaded_at": "2026-08-29T00:00:00+00:00",
+            }
+        }
+    )
+
+    result = service.rebuild_read_index((group,))
+
+    assert result["status"] == "ready"
+    indexed = db.ima_document_from_index("file_a", ["semi"], "semi")
+    assert indexed["abstract"] == "算力需求"
+    assert indexed["tags"] == ["AI"]
+    assert indexed["has_pdf"] is True
+    assert indexed["name"] == "AI 展望.pdf"
+    assert db._rows(
+        "SELECT name_folded, metadata_folded FROM ima_document_index"
+    ) == [
+        {
+            "name_folded": "ai 展望.pdf",
+            "metadata_folded": "semianalysis ai",
+        }
+    ]
+
+
+def test_service_index_fingerprint_stable_then_rebuilds_when_stale(tmp_path):
+    db = DB(str(tmp_path / "fp.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    record = {
+        "group_id": "semi",
+        "media_id": "file_a",
+        "name": "first.pdf",
+        "day": "0829",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state({service.store.state_key(record): {"pdf": "semi/a.pdf"}})
+    first = service._source_fingerprint()
+    assert json.loads(first)["version"] == IMA_INDEX_VERSION
+    service.rebuild_read_index()
+    assert db.ima_document_index_meta()["fingerprint"] == first
+    service._rebuild_index_if_needed()
+    assert db.ima_document_index_meta()["fingerprint"] == first
+
+    record["name"] = "changed.pdf"
+    service.store.save_manifest([record])
+    second = service._source_fingerprint()
+    assert second != first
+    service._rebuild_index_if_needed()
+    assert db.ima_document_from_index("file_a", ["semi"], "semi")["name"] == "changed.pdf"
+    assert db.ima_document_index_meta()["fingerprint"] == second
+
+
+def test_service_index_rebuild_keeps_old_rows_on_db_error(tmp_path, monkeypatch):
+    db = DB(str(tmp_path / "keep.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    record = {
+        "group_id": "semi",
+        "media_id": "file_a",
+        "name": "keep.pdf",
+        "day": "0829",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state({service.store.state_key(record): {"pdf": "semi/a.pdf"}})
+    service.rebuild_read_index()
+
+    def boom(*_args, **_kwargs):
+        raise sqlite3.IntegrityError("injected rebuild failure")
+
+    monkeypatch.setattr(db, "replace_ima_document_index", boom)
+    result = service.rebuild_read_index()
+    assert result["status"] == "failed"
+    assert "injected" in result["error"]
+    assert db.ima_document_from_index("file_a", ["semi"], "semi")["name"] == "keep.pdf"
+    assert db.ima_document_index_meta()["status"] == "failed"
+
+
+def test_service_index_rebuild_keeps_old_rows_when_source_json_is_unreadable(tmp_path):
+    db = DB(str(tmp_path / "bad-json.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    record = {
+        "group_id": "semi",
+        "media_id": "file_a",
+        "name": "keep.pdf",
+        "day": "0829",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state({service.store.state_key(record): {"pdf": "semi/a.pdf"}})
+    service.rebuild_read_index()
+    service.store.manifest_path.write_text("{not-json", encoding="utf-8")
+    result = service.rebuild_read_index()
+    assert result["status"] == "failed"
+    assert "unreadable" in result["error"]
+    assert db.ima_document_from_index("file_a", ["semi"], "semi")["name"] == "keep.pdf"
+    assert db.ima_document_index_count() == 1
+
+
+def test_service_list_documents_uses_index_without_json(tmp_path, monkeypatch):
+    db = DB(str(tmp_path / "list.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    group = ImaGroupConfig("semi", "SemiAnalysis", "kb", "root")
+    record = {
+        "group_id": "semi",
+        "group_name": "SemiAnalysis",
+        "media_id": "file_a",
+        "name": "AI 展望.pdf",
+        "day": "0829",
+        "abstract": "算力需求",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state(
+        {service.store.state_key(record): {"tags": ["AI"], "pdf": "semi/a.pdf"}}
+    )
+    service.rebuild_read_index((group,))
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("indexed reads must not parse JSON")
+
+    monkeypatch.setattr(service.store, "load_manifest", boom)
+    monkeypatch.setattr(service.store, "load_state", boom)
+    page = service.list_documents((group,), query="ai")
+    assert page["items"][0]["media_id"] == "file_a"
+    assert page["groups"][0]["id"] == "semi"
+    found = service.document("file_a", (group,), "semi")
+    assert found["abstract"] == "算力需求"
+    assert found["has_pdf"] is True
+    assert service.catalog_stats((group,))["semi"]["document_count"] == 1
+    status = service.status()
+    assert status["documents"] == 1
+    assert status["index"]["status"] == "ready"
+    assert status["index"]["documents"] == 1
+
+
+def test_service_falls_back_to_json_when_index_unavailable(tmp_path):
+    service = ImaDocumentService(FakeDB(), tmp_path / "ima")
+    group = ImaGroupConfig("semi", "SemiAnalysis", "kb", "root")
+    record = {
+        "group_id": "semi",
+        "media_id": "file_a",
+        "name": "fallback.pdf",
+        "day": "0829",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state({service.store.state_key(record): {"pdf": "semi/a.pdf"}})
+    result = service.rebuild_read_index((group,))
+    assert result["status"] == "fallback"
+    page = service.list_documents((group,))
+    assert page["items"][0]["media_id"] == "file_a"
+    assert service.read_index_status()["status"] == "fallback"
+
+
+def _sync_ready_service(tmp_path, monkeypatch, records):
+    db = DB(str(tmp_path / "dav.sqlite"))
+    db.set_setting(IMA_PURE_UID_KEY, "uid")
+    db.set_setting(IMA_PURE_REFRESH_TOKEN_KEY, "refresh")
+    db.set_setting(IMA_PURE_KB_ID_KEY, "kb")
+    db.set_setting(IMA_PURE_ROOT_FOLDER_KEY, "root")
+    db.set_setting(
+        IMA_PURE_GROUPS_KEY,
+        json.dumps(
+            [
+                {
+                    "id": "semi",
+                    "name": "Semi",
+                    "knowledge_base_id": "kb",
+                    "root_folder_id": "root",
+                    "folder_ids": ["root"],
+                    "enabled": True,
+                }
+            ]
+        ),
+    )
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.config = config
+
+        def manifest(self, listing_cache=None):
+            return [dict(item) for item in records]
+
+        def get_media(self, media_id):
+            return {"jump_url_info": {"url": "https://res.invalid/" + media_id, "headers": {}}}
+
+        def download(self, media, destination, expected_size=0):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"%PDF-1.7xxxx")
+            return {"size": 12, "md5": "d" * 32, "path": str(destination)}
+
+        def _pdf_info(self, path):
+            return 12, "d" * 32
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    monkeypatch.setattr(ima_documents, "_tag_document", lambda *_args, **_kwargs: ["AI"])
+    service = ImaDocumentService(db, tmp_path / "ima")
+    return service, db
+
+
+def test_sync_batches_state_and_writes_state_before_index(tmp_path, monkeypatch):
+    records = [
+        {"media_id": f"file_{index:02d}", "name": f"{index}.pdf", "day": "0829", "size": 8}
+        for index in range(21)
+    ]
+    service, db = _sync_ready_service(tmp_path, monkeypatch, records)
+    events = []
+    real_save = service.store.save_state
+    real_update = db.update_ima_document_batch
+
+    def save(state):
+        events.append("state")
+        return real_save(state)
+
+    def update(rows, fingerprint):
+        events.append("index")
+        return real_update(rows, fingerprint)
+
+    monkeypatch.setattr(service.store, "save_state", save)
+    monkeypatch.setattr(db, "update_ima_document_batch", update)
+    result = service._sync_group(service.config(), service.config().groups[0], {})
+    assert result["downloaded"] == 21
+    assert events.count("state") == 2
+    assert events.count("index") == 2
+    assert events == ["state", "index", "state", "index"]
+    assert db.ima_document_index_count() == 21
+
+
+def test_sync_flushes_state_immediately_when_timer_is_zero(tmp_path, monkeypatch):
+    records = [
+        {"media_id": "file_one", "name": "one.pdf", "day": "0829", "size": 8}
+    ]
+    service, db = _sync_ready_service(tmp_path, monkeypatch, records)
+    monkeypatch.setattr(ima_documents, "IMA_STATE_FLUSH_SECONDS", 0)
+    events = []
+    real_save = service.store.save_state
+    real_update = db.update_ima_document_batch
+    monkeypatch.setattr(
+        service.store,
+        "save_state",
+        lambda state: events.append("state") or real_save(state),
+    )
+    monkeypatch.setattr(
+        db,
+        "update_ima_document_batch",
+        lambda rows, fingerprint: events.append("index") or real_update(rows, fingerprint),
+    )
+    service._sync_group(service.config(), service.config().groups[0], {})
+    assert events[:2] == ["state", "index"]
+    assert db.ima_document_from_index("file_one", ["semi"], "semi")["has_pdf"] is True
+    assert IMA_STATE_FLUSH_SECONDS == 2.0
+
+
+def test_sync_flushes_state_on_cancel(tmp_path, monkeypatch):
+    records = [
+        {"media_id": f"file_{index}", "name": f"{index}.pdf", "day": "0829", "size": 8}
+        for index in range(3)
+    ]
+    service, db = _sync_ready_service(tmp_path, monkeypatch, records)
+    original_download = ima_documents.ImaPureClient.download
+
+    def download_and_cancel(self, media, destination, expected_size=0):
+        result = original_download(self, media, destination, expected_size)
+        service._cancel_requested = True
+        return result
+
+    monkeypatch.setattr(ima_documents.ImaPureClient, "download", download_and_cancel)
+    result = service._sync_group(service.config(), service.config().groups[0], {})
+    assert result["downloaded"] >= 1
+    downloaded = db._rows(
+        "SELECT media_id FROM ima_document_index WHERE has_pdf = 1"
+    )
+    assert downloaded
+
+
+def test_failed_listing_keeps_old_group_index(tmp_path, monkeypatch):
+    service, db = _sync_ready_service(
+        tmp_path,
+        monkeypatch,
+        [{"media_id": "keep", "name": "keep.pdf", "day": "0828", "size": 8}],
+    )
+    service._sync_group(service.config(), service.config().groups[0], {})
+    assert db.ima_document_from_index("keep", ["semi"], "semi")["name"] == "keep.pdf"
+
+    class BoomClient:
+        def __init__(self, config, group=None):
+            pass
+
+        def manifest(self, listing_cache=None):
+            raise RuntimeError("listing failed")
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", BoomClient)
+    with pytest.raises(RuntimeError, match="listing failed"):
+        service._sync_group(service.config(), service.config().groups[0], {})
+    assert db.ima_document_from_index("keep", ["semi"], "semi")["name"] == "keep.pdf"
+
+
+def test_write_abstract_zh_updates_index_after_state(tmp_path):
+    db = DB(str(tmp_path / "zh.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    group = ImaGroupConfig("semi", "Semi", "kb", "root")
+    record = {
+        "group_id": "semi",
+        "media_id": "file_en",
+        "name": "en.pdf",
+        "day": "0829",
+        "abstract": "hello",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state({service.store.state_key(record): {"pdf": "semi/a.pdf"}})
+    service.rebuild_read_index((group,))
+    service.store.write_abstract_zh(
+        "file_en",
+        "semi",
+        groups=(group,),
+        text_zh="你好",
+    )
+    row = db.ima_document_from_index("file_en", ["semi"], "semi")
+    assert row["abstract_zh"] == "你好"
+
+
+def test_empty_ready_index_falls_back_when_sources_change(tmp_path):
+    db = DB(str(tmp_path / "empty-ready.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    result = service.rebuild_read_index()
+    assert result["status"] == "ready"
+    assert db.ima_document_index_count() == 0
+    assert service._index_usable() is True
+    record = {
+        "group_id": "semi",
+        "media_id": "file_a",
+        "name": "a.pdf",
+        "day": "0829",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state({service.store.state_key(record): {"pdf": "semi/a.pdf"}})
+    assert service._index_usable() is False
+
+
+def test_rebuild_read_index_holds_sync_lock(tmp_path, monkeypatch):
+    db = DB(str(tmp_path / "rebuild-lock.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    held = []
+
+    def load(*_args, **_kwargs):
+        held.append(service._sync_lock.locked())
+        return [], {}
+
+    monkeypatch.setattr(service, "_load_rebuild_sources", load)
+    result = service.rebuild_read_index()
+    assert result["status"] == "ready"
+    assert held == [True]
+    assert service._sync_lock.locked() is False
+
