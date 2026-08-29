@@ -878,6 +878,24 @@ function imaDocumentsGroupFromRoute() {
   return routeQuery().get("group") || "";
 }
 
+function imaDocumentsRequestPath() {
+  const params = new URLSearchParams();
+  const query = routeQuery().get("q") || "";
+  const day = routeQuery().get("day") || "";
+  const tag = routeQuery().get("tag") || "";
+  const group = imaDocumentsGroupFromRoute() || "";
+  if (query) params.set("q", query);
+  if (tag) params.set("tag", tag);
+  if (group) params.set("group", group);
+  if (query || tag || !day) {
+    params.set("limit", "50");
+    params.set("offset", "0");
+  } else {
+    params.set("day", day);
+  }
+  return `/api/ima-documents?${params.toString()}`;
+}
+
 function imaDocumentsRoute(group, query, day, tag) {
   const params = new URLSearchParams();
   if (group) params.set("group", group);
@@ -1218,11 +1236,32 @@ async function renderKnowledge(seq, encodedMediaId = "") {
   if (!$("#ima-report-page") && !$("#ima-reader-page")) {
     $("#main").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
   }
+  const catalogPromise = api("/api/ima-documents/catalog");
+  const documentsPromise = mediaId || currentImaListSnapshot() ? null : api(imaDocumentsRequestPath());
   try {
-    const data = await api("/api/ima-documents/catalog");
+    const settled = await Promise.allSettled(
+      documentsPromise ? [catalogPromise, documentsPromise] : [catalogPromise]
+    );
     if (!routeStillActive(seq)) return;
-    const subscribed = Array.isArray(data.subscribed) ? data.subscribed : [];
-    const available = Array.isArray(data.available) ? data.available : [];
+    const catalogResult = settled[0];
+    const documentsResult = documentsPromise ? settled[1] : null;
+    if (catalogResult.status !== "fulfilled" && (!documentsResult || documentsResult.status !== "fulfilled")) {
+      const message = catalogResult.reason?.message || documentsResult?.reason?.message || "请求失败";
+      $("#main").innerHTML = emptyState(`加载失败：${message}`, `<div><button type="button" class="btn-normal" onclick="refreshKnowledge()">重试</button></div>`);
+      return;
+    }
+    let subscribed = [];
+    let available = [];
+    let catalogWarning = "";
+    if (catalogResult.status === "fulfilled") {
+      const data = catalogResult.value;
+      subscribed = Array.isArray(data.subscribed) ? data.subscribed : [];
+      available = Array.isArray(data.available) ? data.available : [];
+    } else {
+      const groups = Array.isArray(documentsResult.value.groups) ? documentsResult.value.groups : [];
+      subscribed = groups.map((group) => ({ id: group.id, name: group.name, enabled: true }));
+      catalogWarning = "知识库目录加载失败";
+    }
     state.imaCatalogSubscribed = subscribed;
     state.imaCatalogAvailable = available;
     const isAdmin = !!state.user?.is_admin;
@@ -1255,9 +1294,18 @@ async function renderKnowledge(seq, encodedMediaId = "") {
           list.innerHTML += emptyState("暂无可订阅的知识库", `<div><p class="section-meta">找管理员在用户设置里勾选知识库后再来</p></div>`);
         }
       }
+      if (catalogWarning) {
+        list.insertAdjacentHTML("afterbegin", `<p class="section-meta ima-catalog-warning">${escapeHtml(catalogWarning)}</p>`);
+      }
       return;
     }
-    await renderImaDocuments(seq);
+    await renderImaDocuments(seq, { prefetched: documentsPromise });
+    if (catalogWarning) {
+      const warning = `<p class="section-meta ima-catalog-warning">${escapeHtml(catalogWarning)}</p>`;
+      const head = $("#kb-list .ima-report-head");
+      if (head) head.insertAdjacentHTML("afterend", warning);
+      else $("#kb-list")?.insertAdjacentHTML("afterbegin", warning);
+    }
   } catch (err) {
     if (routeStillActive(seq)) {
       $("#main").innerHTML = emptyState(`加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="refreshKnowledge()">重试</button></div>`);
@@ -1265,7 +1313,7 @@ async function renderKnowledge(seq, encodedMediaId = "") {
   }
 }
 
-async function renderImaDocuments(seq, { keepOld = false } = {}) {
+async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = {}) {
   stopImaDocumentsAutoLoad();
   ensureKnowledgePhoneWatch();
   if (isPhoneShell()) {
@@ -1361,17 +1409,7 @@ async function renderImaDocuments(seq, { keepOld = false } = {}) {
   }
   $("#ima-report-page")?.setAttribute("aria-busy", "true");
   try {
-    const params = new URLSearchParams();
-    if (query) params.set("q", query);
-    if (tag) params.set("tag", tag);
-    if (selectedGroup) params.set("group", selectedGroup);
-    if (paged) {
-      params.set("limit", "50");
-      params.set("offset", "0");
-    } else if (day) {
-      params.set("day", day);
-    }
-    const data = await api(`/api/ima-documents?${params.toString()}`);
+    const data = prefetched != null ? await prefetched : await api(imaDocumentsRequestPath());
     if (!routeStillActive(seq)) return;
     $("#ima-report-page")?.removeAttribute("aria-busy");
     const groups = Array.isArray(data.groups) ? data.groups : [];
@@ -7503,6 +7541,15 @@ function imaCollectorStatusText(status) {
   if (storage?.status === "available") {
     const used = Math.max(0, Math.min(100, Number(storage.used_percent) || 0));
     text += ` · 存储 ${used}%`;
+  }
+  const indexMessages = {
+    rebuilding: "索引重建中",
+    fallback: "索引回退",
+    failed: "索引异常",
+  };
+  const indexStatus = status.index?.status || "ready";
+  if (indexStatus !== "ready" && indexMessages[indexStatus]) {
+    text += ` · ${indexMessages[indexStatus]}`;
   }
   return text;
 }

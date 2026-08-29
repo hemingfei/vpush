@@ -2278,7 +2278,7 @@ def test_ima_documents_group_switching_contract():
     assert "imaDocumentsRoute" in src
     assert 'routeQuery().get("group")' in src
     assert "group_name" in src
-    assert "params.set(\"group\"" in render
+    assert "params.set(\"group\"" in _fn_body("imaDocumentsRequestPath")
     assert "ima-doc-source" in src
     assert "selectImaDocumentGroup" in src
     assert "routeQuery()" in src
@@ -2338,7 +2338,7 @@ def test_ima_documents_filters_round_trip_through_local_url():
     assert 'params.set("group", group)' in route
     assert 'params.set("q", query)' in route
     assert 'params.set("day", day)' in route
-    assert 'params.set("tag"' in route or 'params.set("tag"' in render
+    assert 'params.set("tag"' in route or 'params.set("tag"' in _fn_body("imaDocumentsRequestPath")
     assert "submitImaDocumentsSearch" in src
     assert "selectImaDocumentsDay" in src
     assert "replaceImaDocumentsRoute(imaDocumentsRoute(" in src
@@ -2998,7 +2998,7 @@ def test_knowledge_desk_defaults_to_latest_stream():
     day = _fn_body("selectImaDocumentsDay")
     assert "streamMode" in render
     assert "paged" in render
-    assert 'params.set("limit"' in render
+    assert 'params.set("limit"' in _fn_body("imaDocumentsRequestPath")
     assert "replaceImaDocumentsRoute(imaDocumentsRoute(selectedGroup, query, data.day, tag))" not in render
     assert "最新" in nav
     assert "if (!day) return" not in day
@@ -3147,8 +3147,8 @@ def test_frontend_asset_urls_bust_browser_cache():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=226"' in html
-    assert 'src="/app.js?v=314"' in html
-    assert 'dav-shell-v185' in sw
+    assert 'src="/app.js?v=315"' in html
+    assert 'dav-shell-v186' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -3180,6 +3180,44 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     css = STYLE_CSS.read_text()
     assert ".tl-ima-entry { display: none; }" in css
     assert "(min-width: 769px) and (max-width: 900px)" in css
+
+
+
+def test_knowledge_parallel_loads_catalog_and_first_page():
+    render = _fn_body("renderKnowledge")
+    list_fn = _fn_body("renderImaDocuments")
+    path_fn = _fn_body("imaDocumentsRequestPath")
+    skeleton = render.index("admin-skeleton")
+    catalog = render.index('api("/api/ima-documents/catalog")')
+    documents = render.index("api(imaDocumentsRequestPath())")
+    first_await = render.index("await ")
+    settled = render.index("Promise.allSettled")
+    assert skeleton < catalog < first_await
+    assert skeleton < documents < first_await
+    assert "Promise.allSettled" in render
+    assert settled >= first_await
+    assert "prefetched" in list_fn
+    assert "await prefetched" in list_fn
+    assert "imaDocumentsRequestPath()" in list_fn
+    assert "知识库目录加载失败" in render
+    assert "refreshKnowledge()" in render
+    assert "refreshImaDocuments()" in list_fn
+    assert 'params.set("limit", "50")' in path_fn
+    assert 'params.set("q", query)' in path_fn
+    assert "currentImaListSnapshot()" in render
+    assert "mediaId || currentImaListSnapshot()" in render
+
+
+def test_knowledge_index_status_copy_is_admin_only():
+    status_fn = _fn_body("imaCollectorStatusText")
+    knowledge = _fn_body("renderKnowledge")
+    assert "索引重建中" in status_fn
+    assert "索引回退" in status_fn
+    assert "索引异常" in status_fn
+    assert "status.index" in status_fn
+    assert "索引重建中" not in knowledge
+    assert "索引回退" not in knowledge
+    assert "索引异常" not in knowledge
 
 
 def test_knowledge_report_first_shell_uses_one_surface_per_route():
@@ -3244,7 +3282,7 @@ def test_ima_report_metadata_contract_keeps_existing_capabilities():
     reader = _fn_body("renderImaDocument")
 
     assert 'placeholder="搜标题、公司、代码、行业或资料源"' in render
-    assert 'params.set("tag"' in render
+    assert 'params.set("tag"' in _fn_body("imaDocumentsRequestPath")
     assert "data.days" in render
     assert "loadImaDocumentsMore" in src
     assert "loadImaPdf(mediaId, readerSeq)" in reader
@@ -4060,7 +4098,11 @@ def test_ima_collector_storage_status_text_contract():
         "  [{ ...base, storage: { status: 'readonly' } }, '知识库存储当前只读'],"
         "  [{ ...base, storage: { status: 'capacity_blocked' } }, '知识库存储空间已达限制'],"
         "  [{ ...base, storage: { status: 'available', used_percent: 23 } }, '已归档 12 份 · 上次新增 3 份 · 存储 23%'],"
-        "  [base, '已归档 12 份 · 上次新增 3 份']"
+        "  [base, '已归档 12 份 · 上次新增 3 份'],"
+        "  [{ ...base, index: { status: 'ready' } }, '已归档 12 份 · 上次新增 3 份'],"
+        "  [{ ...base, index: { status: 'rebuilding' } }, '已归档 12 份 · 上次新增 3 份 · 索引重建中'],"
+        "  [{ ...base, index: { status: 'fallback' } }, '已归档 12 份 · 上次新增 3 份 · 索引回退'],"
+        "  [{ ...base, index: { status: 'failed' } }, '已归档 12 份 · 上次新增 3 份 · 索引异常']"
         "];\n"
         "for (const [status, want] of cases) {"
         "  const got = imaCollectorStatusText(status);"
