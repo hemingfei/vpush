@@ -28,6 +28,7 @@ from .ima_storage import ImaStorageStatus
 
 logger = logging.getLogger(__name__)
 IMA_DOWNLOAD_WORKERS = 8
+IMA_LIST_WORKERS = 3
 
 BASE = os.environ.get("IMA_BASE", "https://ima.qq.com/cgi-bin")
 GUID = os.environ.get("IMA_GUID", "7497986728819336")
@@ -789,10 +790,22 @@ class ImaPureClient:
                 method="POST",
                 headers=self._headers(token),
             )
-            data, _ = self._open_json(request)
-            status = _ima_response_status(data, "IMA list")
-            if not _ima_success_status(status):
-                raise RuntimeError(f"IMA list failed code={status}")
+            status = None
+            data = {}
+            for attempt in range(4):
+                data, _ = self._open_json(request)
+                status = _ima_response_status(data, "IMA list")
+                if _ima_success_status(status):
+                    break
+                if status not in (51, 429) or attempt == 3:
+                    raise RuntimeError(f"IMA list failed code={status}")
+                time.sleep(1.5 * (attempt + 1))
+                request = urllib.request.Request(
+                    BASE + "/knowledge_tab_reader/get_knowledge_list",
+                    data=json.dumps(body, ensure_ascii=False).encode(),
+                    method="POST",
+                    headers=self._headers(self._token()),
+                )
             payload = self._payload(data)
             if not isinstance(payload, dict):
                 raise RuntimeError("IMA list returned invalid response")
@@ -970,7 +983,7 @@ class ImaPureClient:
 
         while queue_index < len(queue):
             batch: list[str] = []
-            while queue_index < len(queue) and len(batch) < IMA_DOWNLOAD_WORKERS:
+            while queue_index < len(queue) and len(batch) < IMA_LIST_WORKERS:
                 folder_id = queue[queue_index]
                 queue_index += 1
                 if folder_id in visited_folder_ids:
@@ -1602,12 +1615,16 @@ class ImaDocumentStore:
         self,
         record: dict[str, Any],
         state: dict[str, dict[str, Any]] | None = None,
+        *,
+        verify_archive: bool = True,
     ) -> bool:
         state = state if state is not None else self.load_state()
         item = self._state_item(state, record)
         pdf_rel = item.get("pdf")
         if not (isinstance(pdf_rel, str) and pdf_rel):
             return False
+        if not verify_archive:
+            return True
         if not self.archive_readable():
             return True
         pdf = self._state_path(pdf_rel)
@@ -2057,7 +2074,16 @@ class ImaDocumentService:
             last_result = None
         records = self.store.load_manifest()
         state = self.store.load_state()
-        document_count = sum(1 for record in records if self.store.is_complete(record, state))
+        # Remote NFS is_file() over the whole archive blocks the single uvicorn
+        # worker (and thus /api/stats, /admin/dashboard, /admin/stats). Trust
+        # state paths there; local installs still verify files on disk.
+        document_count = sum(
+            1
+            for record in records
+            if self.store.is_complete(
+                record, state, verify_archive=not self.storage_status.remote
+            )
+        )
         return {
             "config": cfg.public(),
             "running": running,
