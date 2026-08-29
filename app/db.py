@@ -550,6 +550,8 @@ CREATE TABLE IF NOT EXISTS ai_analysis_logs (
     completion_tokens INTEGER,
     total_tokens INTEGER,
     output_post_id INTEGER,
+    prompt_text TEXT,
+    post_count INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_ai_logs_task ON ai_analysis_logs(task_id);
@@ -688,6 +690,25 @@ class DB:
         if "user_id" not in push_cols:
             self._conn.execute("ALTER TABLE push_logs ADD COLUMN user_id INTEGER")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_push_logs_user ON push_logs(user_id)")
+        ai_log_cols = {row["name"] for row in self._rows("PRAGMA table_info(ai_analysis_logs)")}
+        if "prompt_text" not in ai_log_cols:
+            self._conn.execute("ALTER TABLE ai_analysis_logs ADD COLUMN prompt_text TEXT")
+        if "post_count" not in ai_log_cols:
+            self._conn.execute("ALTER TABLE ai_analysis_logs ADD COLUMN post_count INTEGER")
+        # AI 分析报告帖的 published_at 曾存 UTC ISO 串，与其余帖子「北京时间裸字符串」
+        # 的约定不一致，时间线按墙钟解析会偏差 8 小时：一次性换算成北京时间
+        for row in self._rows(
+            "SELECT id, published_at FROM posts "
+            "WHERE post_type = 'ai_analysis' AND published_at LIKE '%+00:00'"
+        ):
+            try:
+                dt = datetime.fromisoformat(row["published_at"]).astimezone()
+            except ValueError:
+                continue
+            self._conn.execute(
+                "UPDATE posts SET published_at = ? WHERE id = ?",
+                (dt.strftime("%Y-%m-%d %H:%M"), row["id"]),
+            )
         user_cols = {row["name"] for row in self._rows("PRAGMA table_info(users)")}
         if "wechat_openid" not in user_cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN wechat_openid TEXT NOT NULL DEFAULT ''")
@@ -3791,7 +3812,8 @@ class DB:
     def update_ai_log(self, log_id: int, **kwargs) -> None:
             """更新AI分析日志"""
             allowed_fields = ["completed_at", "status", "message",
-                              "prompt_tokens", "completion_tokens", "total_tokens", "output_post_id"]
+                              "prompt_tokens", "completion_tokens", "total_tokens", "output_post_id",
+                              "prompt_text", "post_count"]
             updates = []
             params = []
             for key, value in kwargs.items():
@@ -3808,13 +3830,27 @@ class DB:
                     self._conn.commit()
 
     def get_ai_logs_for_task(self, task_id: int, limit: int = 50) -> list[dict]:
-        """获取任务的执行日志"""
+        """获取任务的执行日志（不含 prompt_text 全文，仅返回 has_prompt 标记）"""
         rows = self._rows(
-            """SELECT * FROM ai_analysis_logs WHERE task_id = ?
+            """SELECT id, task_id, started_at, completed_at, status, message,
+                      prompt_tokens, completion_tokens, total_tokens, output_post_id,
+                      post_count, created_at,
+                      (prompt_text IS NOT NULL AND prompt_text != '') AS has_prompt
+               FROM ai_analysis_logs WHERE task_id = ?
                ORDER BY created_at DESC LIMIT ?""",
             (task_id, limit)
         )
         return [dict(row) for row in rows]
+
+    def get_ai_log_prompt(self, log_id: int) -> str | None:
+        """获取单条日志记录的完整提示词"""
+        rows = self._rows(
+            "SELECT prompt_text FROM ai_analysis_logs WHERE id = ?",
+            (log_id,)
+        )
+        if not rows:
+            return None
+        return rows[0]["prompt_text"] or None
 
     def delete_old_ai_logs(self, older_than_days: int = 30) -> int:
             """删除旧日志，返回删除数量"""

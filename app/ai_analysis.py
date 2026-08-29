@@ -42,47 +42,44 @@ def parse_schedule_days(day_of_week_str: str) -> list[int]:
     return days
 
 
+def _local_wall_time(now_utc: datetime, days_offset: int, hhmm: str) -> datetime:
+    """把表单里的「N 天后的 HH:MM」换算为本地墙钟时间。
+
+    部署约定 TZ=Asia/Shanghai（compose 已统一设置），表单时间一律按北京时间理解；
+    返回带本地时区的 aware datetime，由调用方按需转 UTC。
+    """
+    parts = hhmm.split(":")
+    hour = int(parts[0])
+    minute = int(parts[1]) if len(parts) > 1 else 0
+    local = now_utc.astimezone() + timedelta(days=days_offset)
+    return local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
 def calculate_time_range(task: dict, now: datetime) -> tuple[datetime, datetime]:
-    """根据任务配置计算实际的开始/结束时间"""
-    # 计算开始时间
-    start_offset = timedelta(days=task["time_range_start_days_offset"])
-    start_time_parts = task["time_range_start_time"].split(":")
-    start_hour = int(start_time_parts[0])
-    start_minute = int(start_time_parts[1]) if len(start_time_parts) > 1 else 0
-    start = now + start_offset
-    start = start.replace(hour=start_hour, minute=start_minute, second=0, microsecond=0)
-    
-    # 计算结束时间
-    end_offset = timedelta(days=task["time_range_end_days_offset"])
-    end_time_parts = task["time_range_end_time"].split(":")
-    end_hour = int(end_time_parts[0])
-    end_minute = int(end_time_parts[1]) if len(end_time_parts) > 1 else 0
-    end = now + end_offset
-    end = end.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
-    
-    return start, end
+    """根据任务配置计算实际的开始/结束时间。
+
+    表单时间按本地时区理解；posts 表 published_at/fetched_at 存 UTC 或北京时间
+    的裸字符串，调用方以本地墙钟字符串做比较，因此这里返回 aware UTC。
+    """
+    start = _local_wall_time(now, task["time_range_start_days_offset"], task["time_range_start_time"])
+    end = _local_wall_time(now, task["time_range_end_days_offset"], task["time_range_end_time"])
+    return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
 
 
 def calculate_next_run(task: dict, now: datetime) -> datetime | None:
-    """计算任务的下次运行时间"""
+    """计算任务的下次运行时间（schedule_time 按本地时区理解，返回 aware UTC）。"""
     schedule_days = parse_schedule_days(task["schedule_day_of_week"])
     if not schedule_days:
         return None
-    
-    schedule_time_parts = task["schedule_time"].split(":")
-    schedule_hour = int(schedule_time_parts[0])
-    schedule_minute = int(schedule_time_parts[1]) if len(schedule_time_parts) > 1 else 0
-    
+
     # 从明天开始找下一个符合的星期几
-    next_candidate = now + timedelta(days=1)
-    next_candidate = next_candidate.replace(hour=schedule_hour, minute=schedule_minute, 
-                                           second=0, microsecond=0)
-    
+    next_candidate = _local_wall_time(now, 1, task["schedule_time"])
+
     for _ in range(14):  # 最多找两周
         if next_candidate.weekday() in schedule_days:
-            return next_candidate
+            return next_candidate.astimezone(timezone.utc)
         next_candidate += timedelta(days=1)
-    
+
     return None
 
 
@@ -127,8 +124,9 @@ def build_prompt(task: dict, posts: list[dict], start: datetime, end: datetime) 
             seen_kols.add(kol_id)
             kol_names.append(kol_name)
     
-    # 格式化时间范围
-    time_range_str = f"{start.strftime('%Y-%m-%d %H:%M')} ~ {end.strftime('%Y-%m-%d %H:%M')}"
+    # 格式化时间范围（按本地时区展示，与表单理解一致）
+    time_range_str = (f"{start.astimezone().strftime('%Y-%m-%d %H:%M')}"
+                      f" ~ {end.astimezone().strftime('%Y-%m-%d %H:%M')}")
     
     # 格式化消息
     messages_str = format_messages_for_llm(posts)
@@ -142,11 +140,10 @@ def build_prompt(task: dict, posts: list[dict], start: datetime, end: datetime) 
     return prompt
 
 
-def extract_token_usage(llm_result: dict | None) -> tuple[int, int, int]:
-    """从LLM结果中提取token使用情况"""
-    if not llm_result or not isinstance(llm_result, dict):
+def extract_token_usage(usage: dict | None) -> tuple[int, int, int]:
+    """从 LLM 返回的 usage 字典中提取 token 使用情况"""
+    if not usage or not isinstance(usage, dict):
         return 0, 0, 0
-    usage = llm_result.get("usage") or {}
     prompt_tokens = usage.get("prompt_tokens") or 0
     completion_tokens = usage.get("completion_tokens") or 0
     total_tokens = usage.get("total_tokens") or (prompt_tokens + completion_tokens)
@@ -158,15 +155,17 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
     
     Returns:
         dict with keys:
-        - success: bool
-        - message: str
-        - post_id: int | None (if created)
-        - prompt_tokens: int
-        - completion_tokens: int
-        - total_tokens: int
+        success: bool
+        message: str
+        post_id: int | None (if created)
+        prompt_tokens: int
+        completion_tokens: int
+        total_tokens: int
     """
+    logger.info(f"[AI Task] 开始执行任务 {task_id}")
     task = db.get_ai_task(task_id)
     if not task:
+        logger.error(f"[AI Task] 任务 {task_id} 不存在")
         return {
             "success": False,
             "message": f"任务 {task_id} 不存在",
@@ -176,11 +175,16 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
             "total_tokens": 0,
         }
     
+    logger.info(f"[AI Task] 任务详情: {task}")
+    
     now = datetime.now(timezone.utc)
     start_time, end_time = calculate_time_range(task, now)
+    logger.info(f"[AI Task] 时间范围: {start_time} 到 {end_time}")
     
     # 创建日志
+    logger.info(f"[AI Task] 创建运行日志")
     log_id = db.create_ai_log(task_id, now.isoformat(), "running")
+    logger.info(f"[AI Task] 日志 ID: {log_id}")
     
     try:
         # 1. 获取目标KOL信息
@@ -197,6 +201,9 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
             }
         
         # 2. 获取需要分析的帖子
+        # published_at 是发帖时间的北京时间裸字符串（YYYY-MM-DD HH:MM，全表统一），
+        # 用本地墙钟字符串做比较才能取到「对应时间段的消息」；
+        # fetched_at 是抓取时间，会把窗口外发布、启动后才抓到的旧帖混进来。
         selected_kol_ids = task["selected_kol_ids"]
         posts = []
         if selected_kol_ids:
@@ -205,21 +212,34 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
                 f"""SELECT p.*, k.name as kol_name FROM posts p
                    JOIN kols k ON p.kol_id = k.id
                    WHERE p.kol_id IN ({placeholders})
-                   AND p.fetched_at >= ? AND p.fetched_at <= ?
-                   ORDER BY p.fetched_at ASC""",
-                (*selected_kol_ids, start_time.isoformat(), end_time.isoformat())
+                   AND p.post_type != 'ai_analysis'
+                   AND p.published_at >= ? AND p.published_at <= ?
+                   ORDER BY p.published_at ASC""",
+                (*selected_kol_ids,
+                 start_time.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+                 end_time.astimezone().strftime("%Y-%m-%d %H:%M:%S"))
             )
             posts = [dict(row) for row in rows]
+
+        # 记录本窗口内实际拿到的发言条数（0 也记录，便于排查「分析了个啥」）
+        db.update_ai_log(log_id, post_count=len(posts))
         
         # 3. 构建提示词
         prompt = build_prompt(task, posts, start_time, end_time)
+        # 先落库,失败/超时也能在日志里看到当时发给大模型的内容
+        db.update_ai_log(log_id, prompt_text=prompt)
         
         # 4. 调用LLM
+        from .config import load_config
+        config = load_config()
+        
         llm_config = type('', (), {})()
-        llm_config.api_key = db.get_setting("llm_api_key") or ""
-        llm_config.api_base = db.get_setting("llm_api_base") or ""
-        llm_config.model = db.get_setting("llm_model") or "gpt-4o-mini"
+        llm_config.api_key = db.get_setting("llm_api_key") or config.llm.api_key or ""
+        llm_config.api_base = db.get_setting("llm_api_base") or config.llm.api_base or "https://api.openai.com/v1"
+        llm_config.model = db.get_setting("llm_model") or config.llm.model or "gpt-4o-mini"
         llm_config.user_supplied = False
+        
+        logger.info(f"[AI Task] 读取 LLM 配置: api_base={llm_config.api_base}, model={llm_config.model}, api_key_set={bool(llm_config.api_key)}")
         
         if not llm_config.api_key:
             db.update_ai_log(log_id, status="failed", message="LLM未配置", completed_at=now.isoformat())
@@ -232,22 +252,23 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
                 "total_tokens": 0,
             }
         
-        llm_result = llm._chat(
+        llm_result, usage = llm._chat(
             llm_config,
             [
                 {"role": "system", "content": "你是专业的内容分析师，生成简明扼要的报告。"},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=4000
+            max_tokens=4000,
+            return_usage=True
         )
-        
-        prompt_tokens, completion_tokens, total_tokens = extract_token_usage(llm_result)
-        
+
+        prompt_tokens, completion_tokens, total_tokens = extract_token_usage(usage)
+
         if llm_result is None:
             db.update_ai_log(
                 log_id, status="failed", message="LLM调用失败",
                 prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, total_tokens=total_tokens,
-                completed_at=now.isoformat()
+                completed_at=datetime.now(timezone.utc).isoformat()
             )
             return {
                 "success": False,
@@ -280,7 +301,8 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
                 title=f"AI分析报告 - {task['name']}",
                 content=analysis_content,
                 url="",
-                published_at=now.isoformat(),
+                # published_at 约定为北京时间裸字符串（与其余帖子一致），前端按墙钟展示
+                published_at=now.astimezone().strftime("%Y-%m-%d %H:%M"),
                 post_type="ai_analysis"
             )
         
@@ -293,7 +315,7 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
             output_post_id=post_id,
-            completed_at=now.isoformat()
+            completed_at=datetime.now(timezone.utc).isoformat()
         )
         
         next_run = calculate_next_run(task, now)

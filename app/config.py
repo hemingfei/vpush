@@ -7,6 +7,21 @@ from pathlib import Path
 
 import yaml
 
+# 尝试加载 .env 文件（如果存在）
+try:
+    from dotenv import load_dotenv
+
+    # 从项目根目录加载 .env 文件
+    env_path = Path(__file__).parent.parent / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
+        import logging
+
+        logging.getLogger(__name__).info(f"已加载配置文件：{env_path}")
+except ImportError:
+    # python-dotenv 未安装，跳过
+    pass
+
 
 @dataclass
 class FeishuConfig:
@@ -330,16 +345,32 @@ def save_config(config: Config, path: str | Path | None = None) -> None:
     path = Path(path or os.environ.get("CONFIG_PATH") or "config.yaml")
     raw = _to_dict(config)
     yaml_str = yaml.dump(raw, allow_unicode=True, default_flow_style=False, sort_keys=False)
-    path.write_text(yaml_str, encoding="utf-8")
+    try:
+        # 确保父目录存在
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml_str, encoding="utf-8")
+    except (OSError, PermissionError):
+        # 如果目标路径无法写入，降级到当前目录下的 config.yaml
+        fallback_path = Path("config.yaml")
+        fallback_path.write_text(yaml_str, encoding="utf-8")
 
 
 def load_config(path: str | Path | None = None) -> Config:
     """加载 config.yaml（如存在），再用环境变量覆盖。"""
     path = Path(path or os.environ.get("CONFIG_PATH") or "config.yaml")
     config = Config()
+    
+    # 先尝试 CONFIG_PATH，如果不存在，尝试当前目录的 config.yaml
     if path.exists():
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         _fill(config, raw)
+    elif os.environ.get("CONFIG_PATH"):
+        # CONFIG_PATH 指定的文件不存在，尝试当前目录的 config.yaml
+        fallback_path = Path("config.yaml")
+        if fallback_path.exists():
+            raw = yaml.safe_load(fallback_path.read_text(encoding="utf-8")) or {}
+            _fill(config, raw)
+    
     for env_name, attr_path in _ENV_MAP.items():
         value = os.environ.get(env_name)
         if not value:

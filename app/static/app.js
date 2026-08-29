@@ -415,8 +415,16 @@ function avatarText(name) {
   return (name || "?").trim().slice(0, 1).toUpperCase();
 }
 
+// 头像图挂了就换成首字色块占位，避免破图；name 由 data-av-name 带入
+function avatarImgError(img) {
+  const ph = document.createElement("div");
+  ph.className = img.dataset.avClass || img.className || "kol-avatar";
+  ph.textContent = avatarText(img.dataset.avName);
+  img.replaceWith(ph);
+}
+
 function avatarHtml(name, url) {
-  if (url) return `<img class="kol-avatar" src="${escapeHtml(url)}" alt="" loading="lazy">`;
+  if (url) return `<img class="kol-avatar" src="${escapeHtml(url)}" alt="" loading="lazy" data-av-name="${escapeHtml(name)}" onerror="avatarImgError(this)">`;
   return `<div class="kol-avatar">${escapeHtml(avatarText(name))}</div>`;
 }
 
@@ -2772,7 +2780,7 @@ function tlBadgeAvatarsHtml(posts, max = 3) {
     seen.add(key);
     if (avs.length >= max) break;
     avs.push(p.avatar_url
-      ? `<img src="${escapeHtml(p.avatar_url)}" alt="" onerror="this.remove()">`
+      ? `<img src="${escapeHtml(p.avatar_url)}" alt="" data-av-name="${escapeHtml(p.kol_name)}" data-av-class="ph" onerror="avatarImgError(this)">`
       : `<span class="ph">${escapeHtml(avatarText(p.kol_name))}</span>`);
   }
   return avs.join("");
@@ -5192,10 +5200,20 @@ function fmtTs(ts) {
 // 展示时按 UTC 解析并转成浏览器本地时间（北京时间），避免慢 8 小时
 function fmtDbTime(s) {
   if (!s) return "-";
-  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/.exec(String(s));
-  if (!m) return s;
-  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
-  if (Number.isNaN(d.getTime())) return s;
+  const str = String(s);
+  let d;
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/.exec(str);
+  if (m) {
+    // 无时区的库内时间一律按 UTC（与写入端 datetime.now(timezone.utc) 对齐）
+    d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
+  } else if (/(?:z|[+-]\d{2}:?\d{2})$/i.test(str)) {
+    d = new Date(str); // 带时区的 ISO 串（如 AI 分析日志）按其时区换算
+  } else {
+    // 其余截断格式（如带毫秒无时区）仍按 UTC 解析，解析不了原样返回
+    const m2 = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(str);
+    d = m2 ? new Date(Date.UTC(+m2[1], +m2[2] - 1, +m2[3], +m2[4], +m2[5], +m2[6])) : new Date(str);
+  }
+  if (!d || Number.isNaN(d.getTime())) return str;
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
@@ -6436,7 +6454,7 @@ async function loadMxRooms() {
           ${rooms.map((r) => `<tr>
             <td>
               <div class="kol-row-main">
-                ${r.avatar ? `<img class="kol-avatar" src="${escapeHtml(r.avatar)}" alt="" loading="lazy">` : `<div class="kol-avatar">${avatarText(r.title)}</div>`}
+                ${avatarHtml(r.title, r.avatar)}
                 </div>
                 <div>
                   <div class="kol-name">${escapeHtml(r.title)}</div>
@@ -10603,63 +10621,109 @@ async function deleteAiTask(taskId) {
   }
 }
 
+function aiLogStatusMeta(status) {
+  if (status === "success") return { cls: "success", label: "成功" };
+  if (status === "failed") return { cls: "error", label: "失败" };
+  if (status === "running") return { cls: "running", label: "运行中" };
+  return { cls: "running", label: status || "未知" };
+}
+
+function aiLogBrief(log) {
+  if (log.status === "running") return "运行中…";
+  if (log.status === "failed") return log.message || "运行失败";
+  if (log.post_count != null) {
+    return log.post_count > 0 ? `分析了 ${log.post_count} 条发言` : "窗口内没有发言";
+  }
+  return log.message || "分析完成";
+}
+
+function aiLogDuration(log) {
+  if (!log.started_at || !log.completed_at) return "";
+  const t1 = Date.parse(log.started_at);
+  const t2 = Date.parse(log.completed_at);
+  if (Number.isNaN(t1) || Number.isNaN(t2)) return "";
+  const s = Math.round((t2 - t1) / 1000);
+  if (s <= 0) return "";
+  if (s < 60) return `${s} 秒`;
+  return `${Math.floor(s / 60)} 分 ${s % 60} 秒`;
+}
+
+function aiLogRowHtml(log) {
+  const meta = aiLogStatusMeta(log.status);
+  const brief = escapeHtml(aiLogBrief(log));
+  const time = fmtDbTime(log.started_at);
+  const shortTime = time === "-" ? "-" : time.slice(5, 16); // MM-DD HH:MM
+  const dur = aiLogDuration(log);
+  const toks = log.total_tokens > 0 ? `${log.total_tokens} tokens` : "";
+  const rowMeta = [toks, dur].filter(Boolean).map(escapeHtml).join(" · ");
+  return `
+    <div class="ai-log-row ${meta.cls}">
+      <button type="button" class="ai-log-row-main" onclick="toggleAiLogDetail(this)" aria-expanded="false">
+        <span class="ai-log-dot"></span>
+        <span class="ai-log-row-time">${escapeHtml(shortTime)}</span>
+        <span class="ai-log-row-brief" title="${brief}">${brief}</span>
+        ${rowMeta ? `<span class="ai-log-row-meta">${rowMeta}</span>` : ""}
+        <svg class="ai-log-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      <div class="ai-log-detail">
+        <div class="ai-log-facts">
+          <span>状态 <b>${meta.label}</b></span>
+          <span>开始 <b>${escapeHtml(time)}</b></span>
+          ${log.completed_at ? `<span>结束 <b>${escapeHtml(fmtDbTime(log.completed_at))}</b></span>` : ""}
+          ${dur ? `<span>耗时 <b>${escapeHtml(dur)}</b></span>` : ""}
+          ${log.post_count != null ? `<span>发言 <b>${log.post_count} 条</b></span>` : ""}
+          ${log.total_tokens > 0 ? `<span>Tokens <b>提示 ${log.prompt_tokens || 0} · 完成 ${log.completion_tokens || 0} · 总计 ${log.total_tokens}</b></span>` : ""}
+        </div>
+        ${log.message ? `<div class="ai-log-msg">${escapeHtml(log.message)}</div>` : ""}
+        ${log.output_post_id || log.has_prompt ? `
+        <div class="ai-log-detail-actions">
+          ${log.output_post_id ? `
+          <a href="#" onclick="event.preventDefault();viewAiReportPost(${log.output_post_id})">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+              <polyline points="15 3 21 3 21 9"/>
+              <line x1="10" y1="14" x2="21" y2="3"/>
+            </svg>
+            查看输出帖子
+          </a>` : ""}
+          ${log.has_prompt ? `
+          <a href="#" onclick="event.preventDefault();viewAiPrompt(${log.id})">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+            查看发送给大模型的内容
+          </a>` : ""}
+        </div>` : ""}
+      </div>
+    </div>`;
+}
+
+function toggleAiLogDetail(headerEl) {
+  const row = headerEl.closest(".ai-log-row");
+  const wasOpen = row.classList.contains("open");
+  document.querySelectorAll(".ai-log-row.open").forEach((r) => r.classList.remove("open"));
+  if (!wasOpen) {
+    row.classList.add("open");
+    headerEl.setAttribute("aria-expanded", "true");
+  }
+}
+
 async function viewAiTaskLogs(taskId) {
   try {
-    const logs = await api(`/api/admin/ai-tasks/${taskId}/logs`);
+    const resp = await api(`/api/admin/ai-tasks/${taskId}/logs`);
+    const logs = Array.isArray(resp) ? resp : (resp.logs || []);
     state.aiTaskLogs = logs;
     state.aiTaskLogsTaskId = taskId;
-    
-    const task = (state.aiTasks || []).find(t => t.id === taskId);
+
+    const task = (state.aiTasks || []).find(t => t.id === taskId) || resp.task;
     const taskName = task ? task.name : '未知任务';
-    
+
     const mask = document.createElement("div");
     mask.className = "modal-mask";
-    
-    const logsHtml = logs.length ? logs.map(log => {
-      const statusClass = log.status === 'success' ? 'success' : log.status === 'failed' ? 'error' : 'neutral';
-      const statusText = log.status === 'success' ? '成功' : log.status === 'failed' ? '失败' : log.status || '未知';
-      
-      return `
-        <div class="ai-log-item">
-          <div class="ai-log-header">
-            <div class="ai-log-status ${statusClass}">
-              <span class="ai-log-status-dot"></span>
-              ${statusText}
-            </div>
-            <div class="ai-log-time">${escapeHtml(fmtDbTime(log.started_at))}</div>
-          </div>
-          ${log.message ? `<div class="ai-log-message">${escapeHtml(log.message)}</div>` : ''}
-          ${log.prompt_tokens != null || log.completion_tokens != null || log.total_tokens != null ? `
-            <div class="ai-log-tokens">
-              <div class="ai-log-token-item">
-                <span class="ai-log-token-label">提示</span>
-                <span class="ai-log-token-value">${log.prompt_tokens || 0}</span>
-              </div>
-              <div class="ai-log-token-item">
-                <span class="ai-log-token-label">完成</span>
-                <span class="ai-log-token-value">${log.completion_tokens || 0}</span>
-              </div>
-              <div class="ai-log-token-item ai-log-token-total">
-                <span class="ai-log-token-label">总计</span>
-                <span class="ai-log-token-value">${log.total_tokens || 0}</span>
-              </div>
-            </div>
-          ` : ''}
-          ${log.output_post_id ? `
-            <div class="ai-log-link">
-              <a href="/kol/${log.output_post_id}" target="_blank" class="ai-log-post-link">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                  <polyline points="15 3 21 3 21 9"/>
-                  <line x1="10" y1="14" x2="21" y2="3"/>
-                </svg>
-                查看输出帖子
-              </a>
-            </div>
-          ` : ''}
-        </div>
-      `;
-    }).join('') : `
+
+    const logsHtml = logs.length ? logs.map(aiLogRowHtml).join('') : `
       <div class="ai-logs-empty">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
@@ -10676,7 +10740,7 @@ async function viewAiTaskLogs(taskId) {
         <div class="ai-logs-header">
           <div>
             <h3 id="ai-logs-title">运行日志</h3>
-            <p class="ai-logs-subtitle">${escapeHtml(taskName)}</p>
+            <p class="ai-logs-subtitle">${escapeHtml(taskName)}${logs.length ? ` · 最近 ${logs.length} 次` : ""}</p>
           </div>
           <button class="ai-modal-close" onclick="closeAdminModal()" aria-label="关闭">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -10693,7 +10757,79 @@ async function viewAiTaskLogs(taskId) {
         </div>
       </div>
     `;
-    
+
+    closeAdminModal();
+    document.body.appendChild(mask);
+  } catch (err) {
+    flash(err.message, "error");
+  }
+}
+
+async function viewAiReportPost(postId) {
+  try {
+    const post = await api(`/api/posts/${postId}`);
+    const mask = document.createElement("div");
+    mask.className = "modal-mask";
+    mask.innerHTML = `
+      <div class="ai-logs-modal modal-card" role="dialog" aria-modal="true" aria-labelledby="ai-report-title">
+        <div class="ai-logs-header">
+          <div>
+            <h3 id="ai-report-title">${escapeHtml(post.title || "AI 分析报告")}</h3>
+            <p class="ai-logs-subtitle">${escapeHtml(post.kol_name || "")}${post.kol_name ? " · " : ""}${fmtPublished(post.published_at)}</p>
+          </div>
+          <button class="ai-modal-close" onclick="closeAdminModal()" aria-label="关闭">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        <div class="ai-logs-content">
+          <div class="ai-report-content">${escapeHtml(post.content || "（无正文）")}</div>
+        </div>
+        <div class="ai-logs-footer">
+          <a class="ai-modal-btn ai-modal-btn-cancel" style="text-decoration:none;display:inline-block" href="/kol/${post.kol_id}" onclick="closeAdminModal()">前往大V主页</a>
+          <button type="button" class="ai-modal-btn ai-modal-btn-primary" onclick="closeAdminModal()">关闭</button>
+        </div>
+      </div>
+    `;
+    closeAdminModal();
+    document.body.appendChild(mask);
+  } catch (err) {
+    flash(err.message, "error");
+  }
+}
+
+async function viewAiPrompt(logId) {
+  try {
+    const resp = await api(`/api/admin/ai-logs/${logId}/prompt`);
+    const prompt = resp.prompt || "";
+    state.aiPromptText = prompt;
+    const mask = document.createElement("div");
+    mask.className = "modal-mask";
+    mask.innerHTML = `
+      <div class="ai-logs-modal modal-card" role="dialog" aria-modal="true" aria-labelledby="ai-prompt-title">
+        <div class="ai-logs-header">
+          <div>
+            <h3 id="ai-prompt-title">发送给大模型的内容</h3>
+            <p class="ai-logs-subtitle">${prompt.length} 字符</p>
+          </div>
+          <button class="ai-modal-close" onclick="closeAdminModal()" aria-label="关闭">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        <div class="ai-logs-content">
+          <div class="ai-report-content">${escapeHtml(prompt)}</div>
+        </div>
+        <div class="ai-logs-footer">
+          <button type="button" class="ai-modal-btn ai-modal-btn-cancel" onclick="copyText(state.aiPromptText || '', '已复制')">复制</button>
+          <button type="button" class="ai-modal-btn ai-modal-btn-primary" onclick="closeAdminModal()">关闭</button>
+        </div>
+      </div>
+    `;
     closeAdminModal();
     document.body.appendChild(mask);
   } catch (err) {

@@ -2103,6 +2103,14 @@ def create_api_router(
             return [{**post, "images": []} for post in posts]
         return posts
 
+    @router.get("/posts/{post_id}")
+    def post_detail(post_id: int, user: dict = Depends(get_current_user)):
+        """单帖详情（AI 分析日志「查看输出帖子」等场景）；可见性规则与 KOL 帖子列表一致。"""
+        post = db.get_post(post_id)
+        if not post or not _plaza_kol_visible(user, db.get_kol(post["kol_id"])):
+            raise HTTPException(status_code=404, detail="帖子不存在")
+        return post
+
     @router.get("/kols/{kol_id}/holdings")
     def kol_holdings(kol_id: int, user: dict = Depends(get_current_user)):
         """组合当前持仓快照（抓取端定时写入 cube_snapshots，页面不依赖雪球在线）。"""
@@ -3415,6 +3423,7 @@ def create_api_router(
             logger.info(f"Received MX config update: {raw_body}")
             
             config = load_config()
+            logger.info(f"Loaded config, mx.enabled={config.sources.mx.enabled}")
             
             # 直接从原始字典更新配置
             if "enabled" in raw_body:
@@ -3438,12 +3447,15 @@ def create_api_router(
             if "sync_interval_hours" in raw_body:
                 config.sources.mx.sync_interval_hours = max(1, int(raw_body["sync_interval_hours"] or 1))
             
+            logger.info("Attempting to save config...")
             # 保存配置
             save_config(config)
+            logger.info("Config saved successfully")
             
             _audit(admin, "update_mx_config", "", f"enabled={raw_body.get('enabled', False)}")
             return {"ok": True}
         except Exception as exc:
+            logger.exception(f"Failed to save MX config: {exc}")
             raise HTTPException(status_code=400, detail=f"保存配置失败: {exc}") from exc
 
     @router.post("/admin/sources/mx/rooms/sync", dependencies=[Depends(require_admin)])
@@ -3741,14 +3753,26 @@ def create_api_router(
         return {"ok": True}
 
     @router.post("/admin/ai-analysis/tasks/{task_id}/run", dependencies=[Depends(require_admin)])
-    async def run_ai_task(task_id: int, admin: dict = Depends(require_admin)):
+    def run_ai_task(task_id: int, admin: dict = Depends(require_admin)):
         """手动触发 AI 分析任务。"""
+        logger.info(f"===== 收到 AI 任务 {task_id} 运行请求 =====")
         existing = db.get_ai_task(task_id)
         if not existing:
             raise HTTPException(status_code=404, detail="任务不存在")
-        result = await ai_analysis.run_analysis_task(task_id, db)
-        _audit(admin, "run_ai_task", str(task_id), f"success={result['success']}")
-        return result
+        logger.info(f"===== 任务详情: {existing} =====")
+        
+        def run_task():
+            logger.info(f"===== 开始后台运行 AI 任务 {task_id} =====")
+            try:
+                result = ai_analysis.run_analysis_task(task_id, db)
+                logger.info(f"===== AI 任务 {task_id} 运行完成: {result} =====")
+            except Exception as e:
+                logger.exception(f"===== AI 分析任务 {task_id} 运行异常 =====")
+        
+        # 使用后台线程运行任务
+        threading.Thread(target=run_task, daemon=True, name=f"ai-task-{task_id}").start()
+        _audit(admin, "run_ai_task", str(task_id), existing["name"])
+        return {"ok": True, "message": "分析任务已开始运行，请稍后查看日志"}
 
     @router.get("/admin/ai-analysis/tasks/{task_id}/logs", dependencies=[Depends(require_admin)])
     def get_ai_task_logs(task_id: int, limit: int = 50):
@@ -4503,17 +4527,25 @@ def create_api_router(
         return {"task": task, "ok": True}
 
     @router.post("/admin/ai-tasks/{task_id}/run", dependencies=[Depends(require_admin)])
-    def run_ai_task(task_id: int, background_tasks: BackgroundTasks, admin: dict = Depends(require_admin)):
+    def run_ai_task(task_id: int, admin: dict = Depends(require_admin)):
+        logger.info(f"===== 收到 AI 任务 {task_id} 运行请求 =====")
         task = db.get_ai_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="AI 分析任务不存在")
+        logger.info(f"===== 任务详情: {task} =====")
         
         def run_task():
-            ai_analysis.run_analysis_task(task_id, db)
+            logger.info(f"===== 开始后台运行 AI 任务 {task_id} =====")
+            try:
+                result = ai_analysis.run_analysis_task(task_id, db)
+                logger.info(f"===== AI 任务 {task_id} 运行完成: {result} =====")
+            except Exception as e:
+                logger.exception(f"===== AI 分析任务 {task_id} 运行异常 =====")
         
-        background_tasks.add_task(run_task)
+        # 使用后台线程运行任务
+        threading.Thread(target=run_task, daemon=True, name=f"ai-task-{task_id}").start()
         _audit(admin, "run_ai_task", str(task_id), task["name"])
-        return {"ok": True, "message": "分析任务已开始运行"}
+        return {"ok": True, "message": "分析任务已开始运行，请稍后查看日志"}
 
     @router.delete("/admin/ai-tasks/{task_id}", dependencies=[Depends(require_admin)])
     def delete_ai_task(task_id: int, admin: dict = Depends(require_admin)):
@@ -4531,6 +4563,14 @@ def create_api_router(
             raise HTTPException(status_code=404, detail="AI 分析任务不存在")
         logs = db.get_ai_logs_for_task(task_id, limit=limit)
         return {"logs": logs, "task": task}
+
+    @router.get("/admin/ai-logs/{log_id}/prompt", dependencies=[Depends(require_admin)])
+    def get_ai_log_prompt(log_id: int):
+        """查看某条运行日志当时发送给大模型的完整提示词"""
+        prompt = db.get_ai_log_prompt(log_id)
+        if prompt is None:
+            raise HTTPException(status_code=404, detail="日志不存在或未记录提示词")
+        return {"prompt": prompt}
 
     @router.get("/stats", dependencies=[Depends(require_admin)])
     def stats():

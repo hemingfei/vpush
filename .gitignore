@@ -22,3 +22,4 @@ scripts/diag_feishu_push.py
 scripts/manual_feishu_push.py
 scripts/expand_stock_coverage.py
 docs/superpowers/
+.playwright-mcp/

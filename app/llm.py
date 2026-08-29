@@ -61,11 +61,16 @@ def _chat(
     attempts: int = 2,
     response_format=None,
     timeout: float = DEFAULT_CHAT_TIMEOUT,
-) -> str | None:
-    """OpenAI 兼容 chat/completions；未配置或失败返回 None。"""
+    return_usage: bool = False,
+) -> str | tuple[str, dict] | None:
+    """OpenAI 兼容 chat/completions；未配置或失败返回 None。
+
+    return_usage=True 时成功返回 (文本, usage 字典)，失败返回 (None, {})，
+    供需要统计 token 的调用方（如 AI 分析任务）使用。
+    """
     values = _config_values(llm_config)
     if values is None:
-        return None
+        return (None, {}) if return_usage else None
     api_key, api_base, model = values
     import httpx
 
@@ -96,14 +101,16 @@ def _chat(
                     raise _RetryableError(f"LLM HTTP {resp.status_code}")
                 resp.raise_for_status()
                 try:
-                    choices = resp.json().get("choices")
+                    data = resp.json()
                 except ValueError:
                     # 网关返回非 JSON（HTML 错误页等）：按瞬时错误走重试
                     raise _RetryableError(f"LLM 响应非 JSON: {resp.text[:120]}") from None
-                message = ((choices or [{}])[0].get("message")) or {}
+                message = ((data.get("choices") or [{}])[0].get("message")) or {}
                 text = _message_text(message)
                 if not text:
                     raise _RetryableError("LLM 返回空")
+                if return_usage:
+                    return text, (data.get("usage") or {})
                 return text
             except httpx.HTTPStatusError as exc:
                 last_err = exc
@@ -113,7 +120,7 @@ def _chat(
             if attempt + 1 < attempts:
                 time.sleep(2)
         logger.warning("LLM 请求失败: %s", last_err)
-        return None
+        return (None, {}) if return_usage else None
     finally:
         if owns_client:
             client.close()
