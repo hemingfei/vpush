@@ -895,12 +895,13 @@ function captureImaListSnapshot(selectedMediaId = "", selectedGroupId = "") {
     documentCount: _imaDocumentCount,
     scrollTop: body.scrollTop,
     selectedKey: imaDocumentKey(selectedMediaId, selectedGroupId),
+    consumed: false,
   };
 }
 
 function currentImaListSnapshot() {
   const snapshot = _imaListSnapshot;
-  return snapshot && snapshot.route === location.pathname + location.search
+  return snapshot && !snapshot.consumed && snapshot.route === location.pathname + location.search
     ? snapshot
     : null;
 }
@@ -929,6 +930,7 @@ function restoreImaListSnapshot(snapshot, body) {
       $("#ima-doc-q")?.focus();
     }
   });
+  snapshot.consumed = true;
   return true;
 }
 
@@ -1558,7 +1560,7 @@ function imaReaderNavHtml(mediaId, groupId = "") {
   const prev = snapshot.items[index - 1];
   const next = snapshot.items[index + 1];
   const button = (item, className, label) => item
-    ? `<button type="button" class="${className}" onclick="openImaDocument('${escapeHtml(item.media_id)}', '${escapeHtml(item.group_id || "")}', true)">${label} <span>${escapeHtml(imaListTitle(item.name))}</span></button>`
+    ? `<button type="button" class="${className}" data-media-id="${escapeHtml(item.media_id)}" data-group-id="${escapeHtml(item.group_id || "")}" onclick="openImaDocument(this.dataset.mediaId, this.dataset.groupId, true)">${label} <span>${escapeHtml(imaListTitle(item.name))}</span></button>`
     : "";
   return `<nav class="ima-reader-nav" aria-label="同一结果集">${button(prev, "ima-reader-prev", "上一份")}${button(next, "ima-reader-next", "下一份")}</nav>`;
 }

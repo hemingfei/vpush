@@ -2985,6 +2985,7 @@ def test_ima_reader_captures_and_restores_the_loaded_result_set():
     current = _fn_body("currentImaListSnapshot")
     restore = _fn_body("restoreImaListSnapshot")
     opener = _fn_body("openImaDocument")
+    refresh = _fn_body("refreshImaDocuments")
 
     assert "_imaItems.map" in capture
     assert "scrollTop" in capture
@@ -2996,6 +2997,9 @@ def test_ima_reader_captures_and_restores_the_loaded_result_set():
     assert "requestAnimationFrame" in restore
     assert "scrollTop" in restore
     assert "api(" not in restore
+    assert "consumed" in capture or "consumed" in restore
+    assert "consumed" in current
+    assert "renderImaDocuments" in refresh
 
 
 def test_ima_reader_has_one_app_download_and_result_neighbors():
@@ -3010,6 +3014,8 @@ def test_ima_reader_has_one_app_download_and_result_neighbors():
     assert "imaReaderNavHtml" in reader
     assert "openImaDocument" in nav
     assert ", true)" in nav
+    assert "this.dataset.mediaId" in nav
+    assert "data-media-id=" in nav
     assert "history.back()" in back
     assert "go(fallbackRoute)" in back
     assert "downloadImaPdf" not in _fn_body("showImaPdfFail")
