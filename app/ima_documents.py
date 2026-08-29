@@ -298,6 +298,24 @@ def _count_value(item: dict[str, Any], keys: tuple[str, ...]) -> int | None:
     return None
 
 
+
+def ima_folder_listing_hint(item: dict[str, Any]) -> tuple[int | None, int | None, int | None]:
+    info = item.get("folder_info") if isinstance(item.get("folder_info"), dict) else {}
+    merged = {**info, **item}
+    files = _count_value(merged, ("file_number", "file_count"))
+    folders = _count_value(merged, ("folder_number", "sub_folder_count", "children_count", "child_count"))
+    mtime = _optional_int(merged.get("update_time") or merged.get("last_modify_time"))
+    return files, folders, mtime
+
+
+def _listing_cache_hit(node: dict[str, Any], hint: tuple[int | None, int | None, int | None]) -> bool:
+    files, folders, mtime = hint
+    if files is not None and folders is not None:
+        return files == int(node.get("n_files") or 0) and folders == int(node.get("n_folders") or 0)
+    if mtime is not None and node.get("mtime") is not None:
+        return int(mtime) == int(node.get("mtime") or 0)
+    return False
+
 def ima_folder_children_hint(item: dict[str, Any]) -> bool | None:
     count = _count_value(item, ("folder_number", "sub_folder_count", "children_count", "child_count"))
     return None if count is None else count > 0
@@ -792,7 +810,7 @@ class ImaPureClient:
                 return items
             cursor = next_cursor
 
-    def manifest(self) -> list[dict[str, Any]]:
+    def manifest(self, listing_cache: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
         roots = (
             self.group.mount_folder_ids
@@ -814,6 +832,11 @@ class ImaPureClient:
         queued_folder_ids = set(queue)
         seen_media_ids: set[str] = set()
         queue_index = 0
+        listing_cache = listing_cache if listing_cache is not None else {}
+        always_list = {folder_id for folder_id in roots if folder_id}
+        listing_hints: dict[str, tuple[int | None, int | None, int | None]] = {}
+        folder_direct_records: dict[str, list[dict[str, Any]]] = {}
+        folder_children: dict[str, list[str]] = {}
 
         def append_file(
             item: dict[str, Any],
@@ -885,6 +908,7 @@ class ImaPureClient:
                 record["group_id"] = self.group.id
                 record["group_name"] = self.group.name
             records.append(record)
+            folder_direct_records.setdefault(source_folder_id, []).append(record)
 
         def _ingest(folder_id: str, items: list[dict[str, Any]]) -> None:
             root_folder_id = root_by_folder[folder_id]
@@ -899,6 +923,8 @@ class ImaPureClient:
                     child_id = ima_folder_id(item)
                     if child_id:
                         child_path = folder_path + [ima_folder_name(item, child_id)]
+                        listing_hints[child_id] = ima_folder_listing_hint(item)
+                        folder_children.setdefault(folder_id, []).append(child_id)
                         if child_id not in root_by_folder or child_id in selected_root_ids:
                             root_by_folder[child_id] = root_folder_id
                             path_by_folder[child_id] = child_path
@@ -910,6 +936,38 @@ class ImaPureClient:
                     continue
                 append_file(item, folder_id, root_folder_id, folder_path)
 
+        def _reuse_cached(folder_id: str) -> None:
+            pending = [folder_id]
+            while pending:
+                fid = pending.pop()
+                if fid in visited_folder_ids and fid != folder_id:
+                    continue
+                visited_folder_ids.add(fid)
+                node = listing_cache.get(fid) or {}
+                for record in node.get("records") or []:
+                    if not isinstance(record, dict):
+                        continue
+                    media_id = str(record.get("media_id") or "")
+                    if not media_id or media_id in seen_media_ids:
+                        continue
+                    seen_media_ids.add(media_id)
+                    records.append(record)
+                for child in node.get("children") or []:
+                    if child not in visited_folder_ids:
+                        pending.append(str(child))
+
+        def _remember_listing(folder_id: str, items: list[dict[str, Any]]) -> None:
+            n_folders = sum(1 for item in items if isinstance(item, dict) and is_ima_folder_item(item))
+            n_files = sum(1 for item in items if isinstance(item, dict) and not is_ima_folder_item(item))
+            hint = listing_hints.get(folder_id, (None, None, None))
+            listing_cache[folder_id] = {
+                "n_files": n_files,
+                "n_folders": n_folders,
+                "mtime": hint[2],
+                "children": list(folder_children.get(folder_id) or []),
+                "records": list(folder_direct_records.get(folder_id) or []),
+            }
+
         while queue_index < len(queue):
             batch: list[str] = []
             while queue_index < len(queue) and len(batch) < IMA_DOWNLOAD_WORKERS:
@@ -919,6 +977,13 @@ class ImaPureClient:
                     continue
                 if depth_by_folder[folder_id] > IMA_MAX_FOLDER_DEPTH:
                     raise RuntimeError("IMA folder tree exceeds maximum depth")
+                if (
+                    folder_id not in always_list
+                    and folder_id in listing_cache
+                    and _listing_cache_hit(listing_cache[folder_id], listing_hints.get(folder_id, (None, None, None)))
+                ):
+                    _reuse_cached(folder_id)
+                    continue
                 visited_folder_ids.add(folder_id)
                 if len(visited_folder_ids) > IMA_MAX_FOLDER_NODES:
                     raise RuntimeError("IMA folder tree exceeds maximum size")
@@ -926,12 +991,15 @@ class ImaPureClient:
             if not batch:
                 continue
             if len(batch) == 1:
-                _ingest(batch[0], self.list_items(batch[0]))
+                items = self.list_items(batch[0])
+                _ingest(batch[0], items)
+                _remember_listing(batch[0], items)
                 continue
             with ThreadPoolExecutor(max_workers=len(batch)) as pool:
                 listed = list(pool.map(self.list_items, batch))
             for folder_id, items in zip(batch, listed):
                 _ingest(folder_id, items)
+                _remember_listing(folder_id, items)
         records.sort(key=lambda item: (item["day"], item["media_id"]))
         return records
 
@@ -1421,6 +1489,17 @@ class ImaDocumentStore:
                 self.manifest_path,
                 {"generated_at": datetime.now(UTC).isoformat(), "files": records},
             )
+
+    @property
+    def listing_cache_path(self) -> Path:
+        return self.root / "listing-cache.json"
+
+    def load_listing_cache(self) -> dict[str, Any]:
+        value = self._load(self.listing_cache_path, {})
+        return value if isinstance(value, dict) else {}
+
+    def save_listing_cache(self, value: dict[str, Any]) -> None:
+        self._save(self.listing_cache_path, value)
 
     def rebuild_manifest_from_state(self) -> int:
         if self.load_manifest():
@@ -2139,13 +2218,24 @@ class ImaDocumentService:
             if "group" not in str(exc):
                 raise
             client = ImaPureClient(cfg)
+        listing_all = self.store.load_listing_cache()
+        listing_cache = dict(listing_all.get(group.id) or {})
+        try:
+            listed = client.manifest(listing_cache=listing_cache)
+        except TypeError as exc:
+            if "listing_cache" not in str(exc):
+                raise
+            listed = client.manifest()
+        else:
+            listing_all[group.id] = listing_cache
+            self.store.save_listing_cache(listing_all)
         records = [
             {
                 **record,
                 "group_id": str(record.get("group_id") or group.id),
                 "group_name": str(record.get("group_name") or group.name),
             }
-            for record in client.manifest()
+            for record in listed
         ]
         with self._config_lock:
             current_group = next(

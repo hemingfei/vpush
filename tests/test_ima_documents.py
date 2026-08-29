@@ -2697,6 +2697,50 @@ def test_manifest_recurses_selected_folders_and_keeps_folder_metadata():
     assert calls.count("mount-a") == 1
 
 
+def test_manifest_skips_cached_child_when_parent_counts_match():
+    group = ImaGroupConfig("research", "研究", "kb", "root", True, "discovered", ("mount",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    responses = {
+        "mount": [
+            {"media_id": "pdf_root", "name": "a.pdf", "file_size": 8},
+            {
+                "media_type": 99,
+                "folder_info": {"folder_id": "child", "name": "0826"},
+                "file_number": 1,
+                "folder_number": 0,
+            },
+        ],
+        "child": [
+            {"media_id": "pdf_child", "name": "b.pdf", "file_size": 8},
+        ],
+    }
+    calls = []
+
+    def list_items(folder_id):
+        calls.append(folder_id)
+        return list(responses[folder_id])
+
+    client.list_items = list_items
+    cache = {}
+    first = client.manifest(listing_cache=cache)
+    assert {item["media_id"] for item in first} == {"pdf_root", "pdf_child"}
+    assert calls.count("mount") == 1
+    assert calls.count("child") == 1
+    calls.clear()
+    second = client.manifest(listing_cache=cache)
+    assert {item["media_id"] for item in second} == {"pdf_root", "pdf_child"}
+    assert calls == ["mount"]
+    responses["mount"][1]["file_number"] = 2
+    responses["child"] = [
+        {"media_id": "pdf_child", "name": "b.pdf", "file_size": 8},
+        {"media_id": "pdf_new", "name": "c.pdf", "file_size": 8},
+    ]
+    calls.clear()
+    third = client.manifest(listing_cache=cache)
+    assert {item["media_id"] for item in third} == {"pdf_root", "pdf_child", "pdf_new"}
+    assert "child" in calls
+
+
 def test_manifest_deduplicates_overlapping_roots_and_stops_folder_cycles():
     group = ImaGroupConfig(
         "research", "研究", "kb", "root", True, "discovered", ("root-a", "root-b")
