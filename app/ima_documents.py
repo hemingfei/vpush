@@ -1249,6 +1249,17 @@ def item_display_name(item: dict[str, Any], media_id: str) -> str:
     return media_id
 
 
+def _name_stem(name: str) -> str:
+    folded = str(name or "").strip().casefold()
+    return folded[:-4] if folded.endswith(".pdf") else folded
+
+
+def duplicate_base_stem(name: str) -> str:
+    """「X-副本(.pdf)」的去重键 X（stem 形态）；非「-副本」命名返回空串。"""
+    stem = _name_stem(name)
+    return stem[: -len("-副本")] if stem.endswith("-副本") else ""
+
+
 MAX_FILENAME_BYTES = 240
 
 
@@ -1597,7 +1608,18 @@ class ImaDocumentStore:
             elif group_id in metadata and not item.get("group_name"):
                 item["group_name"] = metadata[group_id][0]
             output.append(item)
-        return output
+        # 「-副本」重复只在同组内隐藏（前端标题清洗后两行完全一样）；原始缺席时副本仍可见
+        stems = {
+            (str(item.get("group_id") or ""), _name_stem(item.get("name")))
+            for item in output
+        }
+        kept = []
+        for item in output:
+            base = duplicate_base_stem(item.get("name"))
+            if base and (str(item.get("group_id") or ""), base) in stems:
+                continue
+            kept.append(item)
+        return kept
 
     def load_manifest(self, groups: tuple[ImaGroupConfig, ...] | None = None) -> list[dict[str, Any]]:
         value = self._load(self.manifest_path, {})

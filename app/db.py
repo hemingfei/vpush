@@ -3827,19 +3827,24 @@ class DB:
             )
             params.append(tag)
         like = "LIKE ? ESCAPE '\\'"
+        tag_like = (
+            "EXISTS (SELECT 1 FROM ima_document_tags t "
+            "WHERE t.group_id = d.group_id AND t.media_id = d.media_id "
+            "AND t.tag {like})"
+        )
         rank_sql = "0"
         pattern = None
         if query:
             pattern = _like_pattern(query)
             clauses.append(
                 f"(d.name_folded {like} OR d.metadata_folded {like} "
-                f"OR d.abstract_folded {like})"
+                f"OR d.abstract_folded {like} OR {tag_like.format(like=like)})"
             )
-            params.extend([pattern, pattern, pattern])
+            params.extend([pattern, pattern, pattern, pattern])
             rank_sql = (
                 f"CASE WHEN d.name_folded {like} THEN 3 "
-                f"WHEN d.metadata_folded {like} THEN 2 "
-                f"ELSE 1 END"
+                f"WHEN d.metadata_folded {like} OR {tag_like.format(like=like)} THEN 2 "
+                "ELSE 1 END"
             )
         return " AND ".join(clauses), params, rank_sql, pattern
 
@@ -3868,7 +3873,7 @@ class DB:
         )
         item_params = list(where_params)
         if pattern is not None:
-            item_params = [pattern, pattern, *where_params]
+            item_params = [pattern, pattern, pattern, *where_params]
         rows = self._rows(
             f"SELECT d.*, {rank_sql} AS match_rank FROM ima_document_index d "
             f"WHERE {where_sql} "

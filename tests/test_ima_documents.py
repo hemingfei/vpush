@@ -3713,6 +3713,73 @@ def test_service_list_documents_uses_index_without_json(tmp_path, monkeypatch):
     assert status["index"]["documents"] == 1
 
 
+def test_duplicate_copies_hidden_from_list_and_index(tmp_path):
+    db = DB(str(tmp_path / "dup.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    group = ImaGroupConfig("semi", "SemiAnalysis", "kb", "root")
+    records = [
+        {
+            "group_id": "semi",
+            "group_name": "SemiAnalysis",
+            "media_id": "file_a",
+            "name": "AI 展望.pdf",
+            "day": "0829",
+        },
+        {
+            "group_id": "semi",
+            "group_name": "SemiAnalysis",
+            "media_id": "file_b",
+            "name": "AI 展望-副本.pdf",
+            "day": "0829",
+        },
+        {
+            "group_id": "semi",
+            "group_name": "SemiAnalysis",
+            "media_id": "file_c",
+            "name": "孤本-副本.pdf",
+            "day": "0828",
+        },
+    ]
+    service.store.save_manifest(records)
+    service.store.save_state(
+        {
+            service.store.state_key(record): {"pdf": f"semi/{record['media_id']}.pdf"}
+            for record in records
+        }
+    )
+    service.rebuild_read_index((group,))
+    # 同组「X-副本」在原始在场时隐藏，孤本副本保留；计数同步收敛
+    assert [item["media_id"] for item in service.list_documents((group,))["items"]] == [
+        "file_a",
+        "file_c",
+    ]
+    assert service.catalog_stats((group,))["semi"]["document_count"] == 2
+    assert db.ima_document_page(["semi"])["document_count"] == 2
+
+
+def test_index_search_matches_tags(tmp_path):
+    db = DB(str(tmp_path / "tag.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    group = ImaGroupConfig("semi", "SemiAnalysis", "kb", "root")
+    record = {
+        "group_id": "semi",
+        "group_name": "SemiAnalysis",
+        "media_id": "file_a",
+        "name": "2026 中期展望.pdf",
+        "day": "0829",
+        "abstract": "宏观利率",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state(
+        {service.store.state_key(record): {"tags": ["高盛"], "pdf": "semi/a.pdf"}}
+    )
+    service.rebuild_read_index((group,))
+    # 标签命中参与搜索，排序与资料源命中同级
+    page = service.list_documents((group,), query="高盛")
+    assert [item["media_id"] for item in page["items"]] == ["file_a"]
+    assert page["document_count"] == 1
+
+
 def test_service_falls_back_to_json_when_index_unavailable(tmp_path):
     service = ImaDocumentService(FakeDB(), tmp_path / "ima")
     group = ImaGroupConfig("semi", "SemiAnalysis", "kb", "root")
