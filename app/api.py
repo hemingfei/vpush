@@ -3999,6 +3999,13 @@ def create_api_router(
                 if not db.get_kol(kol_id):
                     raise HTTPException(status_code=400, detail=f"选中的 KOL {kol_id} 不存在")
         
+        # 调度相关字段变化时重算下次运行时间
+        schedule_fields = {"schedule_day_of_week", "schedule_time", "enabled"}
+        if schedule_fields & set(update_kwargs):
+            merged = {**existing, **update_kwargs}
+            next_run = ai_analysis.calculate_next_run(merged, datetime.now(UTC))
+            update_kwargs["next_run_at"] = next_run.isoformat() if next_run else None
+
         db.update_ai_task(task_id, **update_kwargs)
         _audit(admin, "update_ai_task", str(task_id), f"fields={', '.join(body.model_fields_set)}")
         return {"ok": True}
@@ -4824,7 +4831,13 @@ def create_api_router(
                 if not kol:
                     raise HTTPException(status_code=404, detail=f"所选 KOL {kol_id} 不存在")
         
-        db.update_ai_task(task_id, **body.dict(exclude_none=True))
+        update_data = body.dict(exclude_none=True)
+        # 调度相关字段变化时重算下次运行时间
+        if {"schedule_day_of_week", "schedule_time", "enabled"} & set(update_data):
+            merged = {**task, **update_data}
+            next_run = ai_analysis.calculate_next_run(merged, datetime.now(UTC))
+            update_data["next_run_at"] = next_run.isoformat() if next_run else None
+        db.update_ai_task(task_id, **update_data)
         _audit(admin, "update_ai_task", str(task_id), task["name"])
         task = db.get_ai_task(task_id)
         return {"task": task, "ok": True}

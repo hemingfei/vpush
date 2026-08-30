@@ -79,14 +79,19 @@ def _chat(
     try:
         last_err: Exception | None = None
         use_format = response_format
-        for attempt in range(attempts):
+        use_max_tokens = max_tokens is not None
+        attempt = 0
+        while attempt < attempts:
             try:
                 payload = {
                     "model": model,
                     "messages": messages,
                     "temperature": temperature,
-                    "max_tokens": max_tokens,
                 }
+                # 部分服务端（如火山方舟）会校验 max_tokens 并对超限值返回 400，
+                # 触发后降级为不传该字段，由服务端按模型自身的输出上限处理
+                if use_max_tokens:
+                    payload["max_tokens"] = max_tokens
                 if use_format:
                     payload["response_format"] = use_format
                 resp = client.post(
@@ -96,7 +101,14 @@ def _chat(
                 )
                 if resp.status_code == 400 and use_format:
                     use_format = None
+                    # 参数降级不消耗重试次数
+                    attempt -= 1
                     raise _RetryableError("LLM 不支持 response_format")
+                if resp.status_code == 400 and use_max_tokens:
+                    use_max_tokens = False
+                    # 参数降级不消耗重试次数
+                    attempt -= 1
+                    raise _RetryableError(f"LLM 拒绝请求参数（可能 max_tokens 超限）: {resp.text[:200]}")
                 if resp.status_code == 429 or resp.status_code >= 500:
                     raise _RetryableError(f"LLM HTTP {resp.status_code}")
                 resp.raise_for_status()
@@ -105,12 +117,18 @@ def _chat(
                 except ValueError:
                     # 网关返回非 JSON（HTML 错误页等）：按瞬时错误走重试
                     raise _RetryableError(f"LLM 响应非 JSON: {resp.text[:120]}") from None
-                message = ((data.get("choices") or [{}])[0].get("message")) or {}
+                choice = (data.get("choices") or [{}])[0]
+                message = choice.get("message") or {}
+                finish_reason = choice.get("finish_reason")
                 text = _message_text(message)
                 if not text:
                     raise _RetryableError("LLM 返回空")
+                if finish_reason == "length":
+                    logger.warning("LLM 输出因 max_tokens 上限被截断（finish_reason=length），内容不完整")
                 if return_usage:
-                    return text, (data.get("usage") or {})
+                    usage = dict(data.get("usage") or {})
+                    usage["finish_reason"] = finish_reason
+                    return text, usage
                 return text
             except httpx.HTTPStatusError as exc:
                 last_err = exc
@@ -119,6 +137,7 @@ def _chat(
                 last_err = exc
             if attempt + 1 < attempts:
                 time.sleep(2)
+            attempt += 1
         logger.warning("LLM 请求失败: %s", last_err)
         return (None, {}) if return_usage else None
     finally:

@@ -243,6 +243,20 @@ function mdToHtml(text) {
       out.push(`<blockquote>${mdInline(quote.join("<br>"))}</blockquote>`);
       continue;
     }
+    // 表格：当前行以 | 开头，且下一行是 |---|---| 分隔行
+    const isTableSep = (l) => /^\s*\|?\s*:?-{2,}[\s:|-]*\|?\s*$/.test(l) && l.includes("-");
+    if (/^\s*\|/.test(line) && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+      flushPara();
+      const parseRow = (l) => l.trim().replace(/^\|/, "").replace(/\|\s*$/, "").split("|").map((c) => c.trim());
+      const head = parseRow(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && /^\s*\|/.test(lines[i])) { rows.push(parseRow(lines[i])); i++; }
+      const ths = head.map((c) => `<th>${mdInline(c)}</th>`).join("");
+      const trs = rows.map((r) => `<tr>${r.map((c) => `<td>${mdInline(c)}</td>`).join("")}</tr>`).join("");
+      out.push(`<div class="md-table-wrap"><table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table></div>`);
+      continue;
+    }
     if (/^\s*[-*+]\s+/.test(line) || /^\s*\d+[.)]\s+/.test(line) || /^\s*\d+、/.test(line)) {
       flushPara();
       const ordered = /^\s*\d+[.、)]/.test(line);

@@ -28,17 +28,22 @@ DEFAULT_PROMPT_TEMPLATE = """你是专业的财经内容分析师。请根据以
 
 
 def parse_schedule_days(day_of_week_str: str) -> list[int]:
-    """解析星期几配置字符串为整数列表"""
+    """解析星期几配置字符串为 Python weekday() 整数列表（周一=0…周日=6）。
+
+    表单约定是周日=0、周一=1…周六=6，这里做转换。
+    """
     if not day_of_week_str:
         return []
     days = []
     for part in day_of_week_str.split(","):
         try:
             day = int(part.strip())
-            if 0 <= day <= 6:
-                days.append(day)
         except ValueError:
             continue
+        if day == 0:
+            days.append(6)
+        elif 1 <= day <= 6:
+            days.append(day - 1)
     return days
 
 
@@ -72,8 +77,10 @@ def calculate_next_run(task: dict, now: datetime) -> datetime | None:
     if not schedule_days:
         return None
 
-    # 从明天开始找下一个符合的星期几
-    next_candidate = _local_wall_time(now, 1, task["schedule_time"])
+    # 先看今天：今天是调度日且时间未过，今天就是下次运行时间；否则从明天开始找
+    next_candidate = _local_wall_time(now, 0, task["schedule_time"])
+    if next_candidate <= now.astimezone():
+        next_candidate += timedelta(days=1)
 
     for _ in range(14):  # 最多找两周
         if next_candidate.weekday() in schedule_days:
@@ -259,11 +266,16 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
                 {"role": "system", "content": "你是专业的内容分析师，生成简明扼要的报告。"},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=4000,
+            max_tokens=80000,
+            timeout=300.0,
             return_usage=True
         )
 
         prompt_tokens, completion_tokens, total_tokens = extract_token_usage(usage)
+        finish_reason = usage.get("finish_reason") if isinstance(usage, dict) else None
+        truncated = finish_reason == "length"
+        if truncated:
+            logger.warning(f"[AI Task] 任务 {task_id} 输出因 max_tokens 上限被截断（finish_reason=length），报告不完整")
 
         if llm_result is None:
             db.update_ai_log(
@@ -282,10 +294,14 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
         
         # 5. 保存为目标KOL的帖子
         analysis_content = llm._message_text(llm_result) if isinstance(llm_result, dict) else str(llm_result)
-        
+
+        # 发布时间取「大模型返回结果的时刻」而不是任务开始时刻：
+        # LLM 调用可能耗时数分钟，用开始时间会让时间线里的报告出现在实际生成之前
+        completed_at_local = datetime.now(timezone.utc).astimezone()
+
         # 生成一个唯一的external_id
         external_id = f"ai_analysis_{task_id}_{now.strftime('%Y%m%d_%H%M%S')}"
-        
+
         # 先查询是否已存在（幂等）
         existing = db._rows(
             "SELECT id FROM posts WHERE platform = ? AND external_id = ?",
@@ -304,15 +320,16 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
                 url="",
                 # published_at 约定为北京时间裸字符串（与其余帖子一致），前端按墙钟展示；
                 # 带秒位：时间线按 published_at 排序，同分钟消息需要秒位保序
-                published_at=now.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+                published_at=completed_at_local.strftime("%Y-%m-%d %H:%M:%S"),
                 post_type="ai_analysis"
             )
         
         # 6. 更新日志和任务
+        success_msg = "分析完成（输出因 max_tokens 上限被截断，内容不完整）" if truncated else "分析完成"
         db.update_ai_log(
             log_id,
             status="success",
-            message="分析完成",
+            message=success_msg,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
@@ -330,7 +347,7 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
         
         return {
             "success": True,
-            "message": "分析完成",
+            "message": success_msg,
             "post_id": post_id,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
