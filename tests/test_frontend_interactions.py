@@ -2421,7 +2421,7 @@ def test_ima_report_states_do_not_drop_incomplete_documents():
 
     assert "没有找到相关研报" in empty
     assert "换个公司、代码或主题试试" in empty
-    assert 'fmtImaDayShort(item.day) || "—"' in row
+    assert 'fmtImaDayShort(item.sort_date || item.day) || "—"' in row
     assert "预览打不开" in fail
     assert "downloadImaPdf" not in fail
     assert "btn-normal" not in fail
@@ -3048,7 +3048,7 @@ def test_ima_report_row_is_document_first_and_keeps_optional_metadata():
     assert "ima-report-title" in row
     assert "ima-report-meta" in row
     assert "ima-report-source" in row
-    assert 'fmtImaDayShort(item.day) || "—"' in row
+    assert 'fmtImaDayShort(item.sort_date || item.day) || "—"' in row
     assert "imaListTitle(item.name)" in row
     assert "imaDocTicker(item.name)" in meta
     assert "imaDistinctiveTags" in meta
@@ -3184,9 +3184,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=234"' in html
-    assert 'src="/app.js?v=327"' in html
-    assert 'dav-shell-v195' in sw
+    assert 'href="/style.css?v=235"' in html
+    assert 'src="/app.js?v=329"' in html
+    assert 'dav-shell-v197' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

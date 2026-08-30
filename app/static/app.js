@@ -1354,7 +1354,7 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
     if (title) title.textContent = "最新研报";
     if (meta) {
       meta.textContent = query || tag
-        ? `${snapshot.items.length}${snapshot.hasMore ? "+" : ""} 条结果`
+        ? `${Number(snapshot.documentCount) || snapshot.items.length} 条结果`
         : `${Number(snapshot.documentCount) || snapshot.items.length} 份`;
     }
     syncImaDocumentsFilterStatus();
@@ -1593,7 +1593,9 @@ async function renderImaDocument(seq, mediaId) {
       : "";
     // 快照路由校验（与 currentImaListSnapshot 同思路）：与本次应返回的列表路由不匹配的旧快照不用于导航/计数
     const listSnapshot = _imaListSnapshot && _imaListSnapshot.route === normalizeRoute(backRoute) ? _imaListSnapshot : null;
-    const backLabel = listSnapshot ? `${listSnapshot.items.length}${listSnapshot.hasMore ? "+" : ""}条结果` : "研报列表";
+    // 返回标签用过滤后的真实总数（document_count），而非当前页条数；无总数时退回「研报列表」
+    const totalDocs = Number(listSnapshot && listSnapshot.documentCount) || 0;
+    const backLabel = totalDocs ? `${totalDocs.toLocaleString()}条结果` : "研报列表";
     const download = item.has_pdf
       ? `<button type="button" class="btn-normal ima-reader-download" aria-label="下载 PDF" title="下载 PDF" onclick="downloadImaPdf('${escapeHtml(mediaId)}')">${DOWNLOAD_ICON}<span>下载 PDF</span></button>`
       : "";

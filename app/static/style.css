@@ -2844,7 +2844,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   font-size: var(--text-xs);
   font-weight: var(--font-weight-medium);
 }
-.ima-reader-abstract p { margin: 6px 0 0; max-width: 72ch; line-height: 1.7; }
+.ima-reader-abstract p { margin: 6px 0 0; max-width: 72ch; max-height: 12em; overflow-y: auto; padding-right: 4px; line-height: 1.7; }
 .ima-reader-filemeta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
 .ima-reader-meta-item { color: var(--color-text-muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 .ima-reader-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
@@ -2858,7 +2858,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .ima-reader-empty { display: grid; justify-items: start; gap: 12px; margin: 16px 0 0; padding: 16px 0 0; color: var(--color-text-muted); font-size: var(--text-sm); }
 .ima-reader-empty p { margin: 0; }
 .ima-reader-status { margin: 0; padding: 16px; color: var(--color-text-muted); font-size: var(--text-sm); }
-.ima-pdf-panel { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; margin: 10px 0 0; border: 0; border-top: var(--border-default); border-radius: 0; background: var(--color-surface-soft); overflow: hidden; }
+.ima-pdf-panel { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 220px; margin: 10px 0 0; border: 0; border-top: var(--border-default); border-radius: 0; background: var(--color-surface-soft); overflow: hidden; }
 .ima-pdf-panel .ima-reader-empty { margin: 0; padding: 16px; }
 .ima-pdf-panel iframe { display: block; flex: 1 1 auto; width: 100%; min-height: 0; height: 100%; border: 0; background: var(--color-surface-soft); }
 .ima-text-view { margin: 16px 0 0; padding: 18px; max-height: 70vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border: var(--border-default); border-radius: var(--radius-control); background: var(--color-surface-soft); color: var(--color-text); font: inherit; line-height: 1.7; }
