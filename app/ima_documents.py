@@ -32,7 +32,7 @@ IMA_DOWNLOAD_WORKERS = 4
 IMA_LIST_WORKERS = 3
 IMA_FOLDER_LIST_MAX_PAGES = 20
 IMA_DOWNLOAD_RETRY_DELAYS = (2, 8)
-IMA_INDEX_VERSION = 3  # v3：读模型加跨年排序键 sort_date；升位强制下次同步/启动重建
+IMA_INDEX_VERSION = 4  # v4：IMA sort_date 年份取媒体真实创建年（原按当前年补全会跨年排错）；升位强制重建
 IMA_STATE_FLUSH_COUNT = 20
 IMA_STATE_FLUSH_SECONDS = 2.0
 
@@ -225,18 +225,35 @@ def is_local_library_group(group_id: Any) -> bool:
 PUB_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
-def ima_sort_date(group_id: Any, pub_date: Any, day: Any) -> str:
+def _ts_year(ts_ms: Any) -> int:
+    """媒体创建时间（毫秒）→ 年份；无效/缺失返回 0。"""
+    try:
+        value = int(str(ts_ms).strip() or 0)
+    except (TypeError, ValueError):
+        return 0
+    if value <= 0:
+        return 0
+    try:
+        return datetime.fromtimestamp(value / 1000, CN_TZ).year
+    except (OSError, OverflowError, ValueError):
+        return 0
+
+
+def ima_sort_date(group_id: Any, pub_date: Any, day: Any, ts_ms: Any = 0) -> str:
     """跨年排序键（YYYY-MM-DD），无日期返回空串（列表排序沉底）。
 
     本地库文档用真实发布日期 pub_date（sidecar publish，非法/缺失即空）；
-    IMA 文档只有 MMDD，按当前年份补全。空串在 DESC 排序里自然沉底。
+    IMA 文档只有 MMDD，年份取媒体创建时间 ts_ms，缺 ts 才回退当前年份
+    （按当前年补全会把历史文档在新年排错）。
+    空串在 DESC 排序里自然沉底。
     """
     if is_local_library_group(group_id):
         pub = str(pub_date or "").strip()
         return pub if PUB_DATE_RE.fullmatch(pub) else ""
     day = str(day or "")
     if re.fullmatch(r"\d{4}", day):
-        return f"{time.strftime('%Y', time.gmtime())}-{day[:2]}-{day[2:]}"
+        year = _ts_year(ts_ms) or int(time.strftime("%Y", time.gmtime()))
+        return f"{year}-{day[:2]}-{day[2:]}"
     return ""
 
 
@@ -1830,6 +1847,7 @@ class ImaDocumentStore:
                     "name": str(record.get("name") or media_id),
                     "day": str(record.get("day") or "unknown"),
                     "pub_date": str(record.get("pub_date") or ""),
+                    "ts": record.get("ts") or "",
                     "group_id": actual_group_id,
                 }
             )
@@ -1930,6 +1948,7 @@ class ImaDocumentStore:
                     actual_group_id,
                     state_item.get("pub_date") or record.get("pub_date"),
                     record.get("day"),
+                    record.get("ts"),
                 ),
             }
             if include_body:
@@ -1952,7 +1971,8 @@ class ImaDocumentStore:
         )
         for item in output:
             item.pop("_match_rank", None)
-            item.pop("_sort_date", None)
+            # 排序键转为公共字段，前端据此展示真实年份
+            item["sort_date"] = item.pop("_sort_date", None) or ""
         if limit is not None:
             return output[offset:offset + limit]
         return output
@@ -2647,7 +2667,7 @@ class ImaDocumentService:
             "media_id": media_id,
             "day": day,
             "valid_day": int(day.isdigit() and len(day) == 4),
-            "sort_date": ima_sort_date(group_id, pub_date, day),
+            "sort_date": ima_sort_date(group_id, pub_date, day, record.get("ts")),
             "name": name,
             "group_name": group_name,
             "name_folded": name.casefold(),
@@ -2871,6 +2891,7 @@ class ImaDocumentService:
             "media_id": item.get("media_id") or "",
             "name": item.get("name") or "",
             "day": item.get("day") or "unknown",
+            "sort_date": str(item.get("_sort_date") or item.get("sort_date") or ""),
             "size": item.get("size") or 0,
             "chars": item.get("chars") or 0,
             "downloaded_at": item.get("downloaded_at") or "",
@@ -2967,11 +2988,12 @@ class ImaDocumentService:
             bucket["document_count"] += 1
             # 与读模型 catalog 窗口排序同键：跨年按 sort_date 比较，unknown 沉底
             sort_key = ima_sort_date(
-                group_id, item.get("pub_date"), item.get("day")
+                group_id, item.get("pub_date"), item.get("day"), item.get("ts")
             )
             if sort_key and sort_key >= latest_keys.get(group_id, ""):
                 latest_keys[group_id] = sort_key
                 bucket["latest_day"] = str(item.get("day") or "")
+                bucket["latest_sort_date"] = sort_key
                 bucket["latest_title"] = str(item.get("name") or "")
                 bucket["latest_media_id"] = str(item.get("media_id") or "")
         return stats

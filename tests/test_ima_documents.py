@@ -4067,3 +4067,42 @@ def test_archive_maintenance_rebuilds_index_before_nfs_work():
     last = source.rindex("_rebuild_index_if_needed")
     assert first < restore < last
 
+
+
+def test_ima_sort_date_uses_media_create_year_over_current_year():
+    from app.ima_documents import ima_sort_date
+
+    # 媒体创建于 2025-12-31（CN 时区），day=1231：排序键必须是真实年份而非当前年
+    assert ima_sort_date("research", "", "1231", 1767139200000) == "2025-12-31"
+    # 缺 ts 回退当前年份（历史行为）
+    assert ima_sort_date("research", "", "1231", "") == f"{time.strftime('%Y')}-12-31"
+    # 本地库仍优先真实 pub_date
+    assert ima_sort_date("local-cicc", "2025-06-01", "0601") == "2025-06-01"
+
+
+def test_index_and_list_carry_true_year_for_old_documents(tmp_path):
+    service = ImaDocumentService(FakeDB(), tmp_path / "ima")
+    old = {
+        "media_id": "old", "name": "old.pdf", "day": "1231",
+        "ts": "1767139200000", "group_id": "research",
+    }
+    new = {
+        "media_id": "new", "name": "new.pdf", "day": "0830",
+        "ts": "1788000000000", "group_id": "research",
+    }
+    service.store.save_manifest([old, new])
+    service.store.save_state({
+        service.store.state_key(r): {"pdf": f"research/{r['media_id']}.pdf"}
+        for r in (old, new)
+    })
+    service.rebuild_read_index()
+
+    groups = (ImaGroupConfig("research", "研究", "kb", "root", True, "discovered", ("mount",)),)
+    page = service.list_documents(groups)
+    assert [item["media_id"] for item in page["items"]] == ["new", "old"]
+    by_id = {item["media_id"]: item for item in page["items"]}
+    assert by_id["old"]["sort_date"] == "2025-12-31"
+    assert by_id["new"]["sort_date"] == "2026-08-30"
+
+    stats = service.catalog_stats(groups)
+    assert stats["research"]["latest_sort_date"] == "2026-08-30"

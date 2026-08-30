@@ -703,13 +703,26 @@ const IMA_TAG_COMMON_RATIO = 0.5;
 
 function fmtImaDay(day) {
   const raw = String(day || "").trim();
-  const match = /^(\d{2})(\d{2})$/.exec(raw);
-  if (!match) return raw;
+  let match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (match) {
+    const year = Number(match[1]);
+    const base = `${Number(match[2])}月${Number(match[3])}日`;
+    return year === new Date().getFullYear() ? base : `${year}年${base}`;
+  }
+  match = /^(\d{2})(\d{2})$/.exec(raw);
+  if (!match) return raw === "unknown" ? "未知日期" : raw;
   return `${Number(match[1])}月${Number(match[2])}日`;
 }
 
 function fmtImaDayShort(day) {
-  const match = /^(\d{2})(\d{2})$/.exec(String(day || "").trim());
+  const raw = String(day || "").trim();
+  let match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (match) {
+    const year = Number(match[1]);
+    const base = `${Number(match[2])}/${Number(match[3])}`;
+    return year === new Date().getFullYear() ? base : `${String(year).slice(2)}/${base}`;
+  }
+  match = /^(\d{2})(\d{2})$/.exec(raw);
   if (!match) return "";
   return `${Number(match[1])}/${Number(match[2])}`;
 }
@@ -817,7 +830,7 @@ function imaReportMetaHtml(item) {
 }
 
 function imaDocumentRow(item) {
-  const day = fmtImaDayShort(item.day) || "—";
+  const day = fmtImaDayShort(item.sort_date || item.day) || "—";
   const source = String(item.group_name || "");
   const meta = imaReportMetaHtml(item); // .ima-report-meta
   return `
@@ -850,8 +863,9 @@ function imaDocumentsEmptyHtml(hasFilter) {
 function imaDocumentGroups(items, showGroupLabel = false) {
   const groups = new Map();
   for (const item of items || []) {
-    if (!groups.has(item.day)) groups.set(item.day, []);
-    groups.get(item.day).push(item);
+    const key = item.sort_date || item.day;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
   }
   return [...groups.entries()].map(([day, rows]) => `
     <section class="ima-doc-day">
@@ -1091,7 +1105,7 @@ function imaReportRefreshErrorHtml(message) {
 
 function knowledgeCardSummary(group) {
   const count = Number(group.document_count || 0);
-  const day = fmtImaDay(group.latest_day);
+  const day = fmtImaDay(group.latest_sort_date || group.latest_day);
   return count ? `${count} 份${day ? ` · ${day}` : ""}` : "还没有文档";
 }
 
@@ -1570,8 +1584,8 @@ async function renderImaDocument(seq, mediaId) {
     setPageTitle(item.group_name || $("#ima-doc-title")?.textContent || "知识库");
     const ticker = imaDocTicker(item.name);
     const tickerMeta = ticker ? `<span class="ima-reader-meta-item">${escapeHtml(ticker)}</span>` : "";
-    const dayContext = item.day
-      ? `<span class="ima-reader-day ima-reader-meta-item">${escapeHtml(fmtImaDay(item.day))}</span>`
+    const dayContext = (item.sort_date || item.day)
+      ? `<span class="ima-reader-day ima-reader-meta-item">${escapeHtml(fmtImaDay(item.sort_date || item.day))}</span>`
       : "";
     const abstractText = item.abstract_zh || item.abstract || "";
     const abstractHtml = abstractText

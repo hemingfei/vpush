@@ -533,6 +533,7 @@ def _ima_public_document(row: dict) -> dict:
         "group_id": row["group_id"],
         "media_id": row["media_id"],
         "day": row["day"],
+        "sort_date": str(row.get("sort_date") or ""),
         "name": row["name"],
         "group_name": row.get("group_name") or "",
         "abstract": row.get("abstract") or "",
@@ -3946,9 +3947,9 @@ class DB:
             return {}
         placeholders = ", ".join("?" for _ in groups)
         rows = self._rows(
-            "SELECT group_id, day AS latest_day, name AS latest_title, "
-            "media_id AS latest_media_id, document_count FROM ("
-            "SELECT group_id, day, name, media_id, "
+            "SELECT group_id, day AS latest_day, sort_date AS latest_sort_date, "
+            "name AS latest_title, media_id AS latest_media_id, document_count FROM ("
+            "SELECT group_id, day, sort_date, name, media_id, "
             "COUNT(*) OVER (PARTITION BY group_id) AS document_count, "
             "ROW_NUMBER() OVER ("
             "PARTITION BY group_id "
@@ -3962,6 +3963,7 @@ class DB:
             row["group_id"]: {
                 "document_count": int(row["document_count"]),
                 "latest_day": row["latest_day"],
+                "latest_sort_date": row["latest_sort_date"],
                 "latest_title": row["latest_title"],
                 "latest_media_id": row["latest_media_id"],
             }
