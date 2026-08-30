@@ -76,15 +76,68 @@ def test_scan_ignores_directory_without_marker(tmp_path):
     assert service.store.load_manifest()[0]["group_id"] == "local-demo"
 
 
-def test_scan_ignores_broken_marker_json(tmp_path):
+def test_scan_broken_marker_reports_error_and_keeps_old_index(tmp_path):
+    """先成功扫描→标记损坏→重扫：该组保留旧索引行且管理页能看到 error（B1）。"""
     service, archive = _service(tmp_path)
-    _make_library(archive, slug="broken", marker_text="{not json", pdfs=["a.pdf"])
+    _make_library(archive, slug="broken", pdfs=["a.pdf"])
+    service.scan_local_libraries()
+    assert [item["name"] for item in service.store.load_manifest()] == ["a"]
 
+    (archive / "local" / "broken" / MARKER).write_text("{not json", encoding="utf-8")
     result = service.scan_local_libraries()
 
     assert result["status"] == "finished"
-    assert result["libraries"] == []
-    assert service.store.load_manifest() == []
+    assert result["libraries"][0]["slug"] == "broken"
+    assert "JSON" in result["libraries"][0]["error"]
+    # prune keep 集合保住该组，索引/manifest 不再被静默清空
+    assert [item["name"] for item in service.store.load_manifest()] == ["a"]
+    assert service.db.ima_document_index_count() == 1
+    state = service.store.load_state()
+    assert len(service.store.local_group_state_keys(state, "local-broken")) == 1
+
+
+def test_scan_unreadable_directory_keeps_old_index(tmp_path):
+    """库目录不可读：os.walk onerror 记录后带 error 返回，旧组数据保留（与 B1 同语义）。"""
+    service, archive = _service(tmp_path)
+    lib = _make_library(archive, pdfs=["ok.pdf"])
+    service.scan_local_libraries()
+    assert service.db.ima_document_index_count() == 1
+
+    locked = lib / "locked"
+    locked.mkdir()
+    (locked / "hidden.pdf").write_bytes(b"%PDF-1.7")
+    locked.chmod(0o300)  # 无读权限：readdir 失败（root 下无效，跳过断言）
+    try:
+        result = service.scan_local_libraries()
+    finally:
+        locked.chmod(0o755)
+    if not result["libraries"][0]["error"]:
+        pytest.skip("运行环境忽略目录读权限（root）")
+
+    assert "不可读" in result["libraries"][0]["error"]
+    assert [item["name"] for item in service.store.load_manifest()] == ["ok"]
+    assert service.db.ima_document_index_count() == 1
+
+
+def test_scan_rescan_keeps_abstract_zh(tmp_path):
+    """重扫后 state 合并结果原地写回内存，索引行 abstract_zh 不再被清空（B3）。"""
+    service, archive = _service(tmp_path)
+    _make_library(archive, pdfs=["a.pdf"])
+    service.scan_local_libraries()
+
+    state = service.store.load_state()
+    key = next(iter(state))
+    state[key]["abstract_zh"] = "中文摘要"
+    state[key]["abstract_src_hash"] = "hash-1"
+    service.store.save_state(state)
+
+    service.scan_local_libraries()
+
+    assert service.store.load_state()[key]["abstract_zh"] == "中文摘要"
+    media_id = service.store.load_manifest()[0]["media_id"]
+    indexed = service.db.ima_document_from_index(media_id, ["local-demo"], "local-demo")
+    assert indexed["abstract_zh"] == "中文摘要"
+    assert indexed["abstract_src_hash"] == "hash-1"
 
 
 def test_scan_injects_sidecar_abstract_tags_and_day(tmp_path):
@@ -126,6 +179,28 @@ def test_scan_injects_sidecar_abstract_tags_and_day(tmp_path):
     assert tags_hit == ["中金研报", "宏观"]
     assert tags_missing == ["中金研报"]
     assert state[service.store.state_key(hit)]["pdf"].startswith("local/cicc/")
+
+
+def test_sidecar_tags_capped_to_spec_limits(tmp_path):
+    """sidecar tags 裁剪：≤5 个、单条 ≤40 字符；库级 tags 仍在其后合并去重。"""
+    service, archive = _service(tmp_path)
+    _make_library(
+        archive,
+        slug="capped",
+        tags=["库级"],
+        pdfs=["a_1.pdf", "b_2.pdf"],
+        sidecar=[
+            {"id": "1", "tags": [f"标签{i}" for i in range(8)]},
+            {"id": "2", "tags": ["x" * 50, "正常"]},
+        ],
+    )
+
+    service.scan_local_libraries()
+
+    state = service.store.load_state()
+    by_name = {item["name"]: item for item in state.values()}
+    assert by_name["a_1"]["tags"] == ["标签0", "标签1", "标签2", "标签3", "标签4", "库级"]
+    assert by_name["b_2"]["tags"] == ["x" * 40, "正常", "库级"]
 
 
 def test_scan_day_prefers_deepest_mmdd_directory(tmp_path):
@@ -542,6 +617,13 @@ def test_local_library_admin_meta_create_acl_endpoints(tmp_path, monkeypatch):
         json={"name": "任意"},
     )
     assert missing.status_code == 404
+    # name 非法是 400（参数错误），与库不存在的 404 区分
+    invalid_name = client.put(
+        "/api/admin/ima-local-libraries/papers",
+        headers=admin_headers,
+        json={"name": "x" * 81},
+    )
+    assert invalid_name.status_code == 400
 
     # 非管理员不可用新端点
     assert (

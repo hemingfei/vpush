@@ -90,6 +90,7 @@ from .ima_documents import (
     IMA_PURE_UID_KEY,
     ImaDocumentService,
     ImaPureClient,
+    LocalLibraryInvalidMeta,
     _clamp_group_interval,
     _safe_error,
     ima_kb_valid_tags,
@@ -3087,6 +3088,8 @@ def create_api_router(
             raise HTTPException(status_code=400, detail="name 与 tags 至少填一项")
         try:
             result = ima_documents.update_local_library_meta(slug, name=body.name, tags=body.tags)
+        except LocalLibraryInvalidMeta as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except OSError as exc:

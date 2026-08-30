@@ -3757,6 +3757,67 @@ def test_duplicate_copies_hidden_from_list_and_index(tmp_path):
     assert db.ima_document_page(["semi"])["document_count"] == 2
 
 
+def test_sync_group_replace_dedupes_copies_in_index(tmp_path, monkeypatch):
+    """增量同步的组替换路径与 rebuild 一致：读模型不得出现「-副本」重复行。"""
+    db = DB(str(tmp_path / "dup-sync.sqlite"))
+    db.set_setting(IMA_PURE_UID_KEY, "uid")
+    db.set_setting(IMA_PURE_REFRESH_TOKEN_KEY, "refresh")
+    db.set_setting(
+        IMA_PURE_GROUPS_KEY,
+        json.dumps(
+            [
+                {
+                    "id": "semi",
+                    "name": "SemiAnalysis",
+                    "knowledge_base_id": "kb",
+                    "root_folder_id": "root",
+                    "folder_ids": ["root"],
+                    "enabled": True,
+                }
+            ],
+            ensure_ascii=False,
+        ),
+    )
+    service = ImaDocumentService(db, tmp_path / "ima")
+    group = ImaDocumentConfig.from_db(db).groups[0]
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.config = config
+            self.group = group
+
+        def manifest(self, listing_cache=None):
+            return [
+                {"media_id": "file_a", "name": "AI 展望.pdf", "day": "0829", "size": 8},
+                {"media_id": "file_b", "name": "AI 展望-副本.pdf", "day": "0829", "size": 8},
+            ]
+
+        def get_media(self, media_id):
+            return {
+                "media_id": media_id,
+                "jump_url_info": {"url": f"https://download.invalid/{media_id}.pdf"},
+            }
+
+        def download(self, media, destination, expected_size=0):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"%PDF-1.7")
+            return {"size": 8, "md5": "d" * 32}
+
+        def _pdf_info(self, path):
+            return 8, "d" * 32
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    cfg = ImaDocumentConfig.from_db(db)
+    result = service._sync_group(cfg, group, service.store.load_state())
+
+    assert result["total"] == 2
+    # 磁盘 manifest 仍 2 行（读时去重），SQLite 读模型收敛为 1 行且保留原始行
+    raw_files = json.loads(service.store.manifest_path.read_text(encoding="utf-8"))["files"]
+    assert [item["media_id"] for item in raw_files] == ["file_a", "file_b"]
+    assert db.ima_document_index_count() == 1
+    assert db.ima_document_page(["semi"])["items"][0]["media_id"] == "file_a"
+
+
 def test_index_search_matches_tags(tmp_path):
     db = DB(str(tmp_path / "tag.sqlite"))
     service = ImaDocumentService(db, tmp_path / "ima")

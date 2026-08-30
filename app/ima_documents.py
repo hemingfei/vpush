@@ -77,6 +77,10 @@ LOCAL_LIBRARY_MARKER = ".vpush-local-library.json"
 LOCAL_LIBRARY_SIDECAR = ".vpush-local-meta.jsonl"
 LOCAL_LIBRARY_SLUG_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,46}")
 
+
+class LocalLibraryInvalidMeta(ValueError):
+    """本地库标记参数非法（HTTP 400），区别于库不存在（HTTP 404）。"""
+
 PUB_PEM = b"""-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAx9h6SY1LO88wRVKdOC5U
 tjYTXfMpUqCK22FemW9ba4812nVjF4Va+guoHXdBePkhsQmz94PeqqZiSN/YekiV
@@ -1260,6 +1264,21 @@ def duplicate_base_stem(name: str) -> str:
     return stem[: -len("-副本")] if stem.endswith("-副本") else ""
 
 
+def drop_duplicate_copies(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """「-副本」重复只在同组内隐藏（前端标题清洗后两行完全一样）；原始缺席时副本仍可见。"""
+    stems = {
+        (str(item.get("group_id") or ""), _name_stem(item.get("name")))
+        for item in records
+    }
+    kept = []
+    for item in records:
+        base = duplicate_base_stem(item.get("name"))
+        if base and (str(item.get("group_id") or ""), base) in stems:
+            continue
+        kept.append(item)
+    return kept
+
+
 MAX_FILENAME_BYTES = 240
 
 
@@ -1608,18 +1627,7 @@ class ImaDocumentStore:
             elif group_id in metadata and not item.get("group_name"):
                 item["group_name"] = metadata[group_id][0]
             output.append(item)
-        # 「-副本」重复只在同组内隐藏（前端标题清洗后两行完全一样）；原始缺席时副本仍可见
-        stems = {
-            (str(item.get("group_id") or ""), _name_stem(item.get("name")))
-            for item in output
-        }
-        kept = []
-        for item in output:
-            base = duplicate_base_stem(item.get("name"))
-            if base and (str(item.get("group_id") or ""), base) in stems:
-                continue
-            kept.append(item)
-        return kept
+        return drop_duplicate_copies(output)
 
     def load_manifest(self, groups: tuple[ImaGroupConfig, ...] | None = None) -> list[dict[str, Any]]:
         value = self._load(self.manifest_path, {})
@@ -1731,6 +1739,8 @@ class ImaDocumentStore:
             ):
                 merged["abstract_zh"] = existing["abstract_zh"]
                 merged["abstract_src_hash"] = existing.get("abstract_src_hash") or ""
+            # 原地写回调用方的 state：扫描/同步路径复用同一 dict，重扫不丢内存中的 abstract_zh
+            state[key] = merged
             outgoing[key] = merged
         self._save(self.state_path, outgoing)
 
@@ -2120,9 +2130,12 @@ class ImaDocumentStore:
             return entry
         try:
             marker = json.loads(raw_marker)
-        except json.JSONDecodeError:
-            logger.warning("Local library marker ignored (invalid JSON) dir=%s", slug[:64])
-            return None
+        except json.JSONDecodeError as exc:
+            # 与不可读分支同语义：带 error 返回，prune keep 集合才能保住该组，索引不被静默清空
+            logger.warning("Local library marker unreadable (invalid JSON) dir=%s", slug[:64])
+            entry["error"] = f"标记文件不是有效 JSON：{_safe_error(exc)}"
+            entry["transient"] = True
+            return entry
         if not isinstance(marker, dict):
             entry["error"] = "标记文件格式无效"
             return entry
@@ -2141,7 +2154,15 @@ class ImaDocumentStore:
         entry["tags"] = lib_tags
         sidecar = self._load_local_sidecar(path)
         now_iso = datetime.now(UTC).isoformat()
-        for dirpath, dirnames, filenames in os.walk(path, followlinks=False):
+        walk_errors: list[str] = []
+
+        def _on_walk_error(exc: OSError) -> None:
+            # NFS 抖动等导致目录不可读：os.walk 默认静默跳过，这里记下来保住旧数据
+            walk_errors.append(_safe_error(exc))
+
+        for dirpath, dirnames, filenames in os.walk(
+            path, followlinks=False, onerror=_on_walk_error
+        ):
             # 隐藏目录不进入，符号链接（文件/目录）一律跳过，防止越界
             dirnames[:] = sorted(
                 child
@@ -2169,6 +2190,11 @@ class ImaDocumentStore:
                 )
                 entry["records"].append(record)
                 entry["state"][self.state_key(record)] = state_item
+        if walk_errors:
+            # 与标记损坏同语义：目录不可读时扫描结果不完整，带 error 返回保住旧组数据
+            entry["error"] = f"库目录不可读：{walk_errors[0]}"
+            entry["transient"] = True
+            return entry
         entry["pdf_count"] = len(entry["records"])
         return entry
 
@@ -2217,10 +2243,16 @@ class ImaDocumentStore:
         if id_match:
             meta = sidecar.get(id_match.group(1))
         abstract = str((meta or {}).get("summary") or "")[:2000]
+        # 规格 §11：sidecar 标签 ≤5 个、单条 ≤40 字符（与库级 tags 合并去重）
+        meta_tags = [
+            str(tag).strip()[:40]
+            for tag in list((meta or {}).get("tags") or [])[:5]
+            if isinstance(tag, str) and tag.strip()
+        ]
         tags: list[str] = []
-        for tag in list((meta or {}).get("tags") or []) + lib_tags:
-            if isinstance(tag, str) and tag.strip() and tag not in tags:
-                tags.append(tag.strip())
+        for tag in meta_tags + lib_tags:
+            if tag not in tags:
+                tags.append(tag)
         txt_rel = str(Path(pdf_rel).with_suffix(".txt")) if (lib_dir / rel).with_suffix(".txt").is_file() else ""
         group_id = LOCAL_LIBRARY_PREFIX + slug
         record = {
@@ -2292,7 +2324,7 @@ class ImaDocumentStore:
         if name is not None:
             clean_name = str(name).strip()
             if not clean_name or len(clean_name) > 80:
-                raise ValueError("标记文件 name 需为 1-80 字")
+                raise LocalLibraryInvalidMeta("标记文件 name 需为 1-80 字")
             marker["name"] = clean_name
         if tags is not None:
             seen: set[str] = set()
@@ -2609,8 +2641,10 @@ class ImaDocumentService:
         updater = getattr(self.db, "update_ima_document_batch", None)
         if not callable(updater) or not records:
             return
+        # 同一去重口径：下载回填不得复活「-副本」行。跨 flush 批次的残留（副本先落、原始行已在
+        # 组内）要等下次组替换/重建收敛，与既有行为一致，不在此扩大改动。
         rows = []
-        for record in records:
+        for record in drop_duplicate_copies(list(records)):
             try:
                 rows.append(self._index_row(record, state))
             except ValueError:
@@ -2640,8 +2674,9 @@ class ImaDocumentService:
         replacer = getattr(self.db, "replace_ima_document_group", None)
         if not callable(replacer):
             return
+        # 与 _normalize_manifest_records 同一去重：增量写回的读模型不得出现「-副本」重复行
         rows = []
-        for record in records:
+        for record in drop_duplicate_copies(list(records)):
             try:
                 rows.append(self._index_row(record, state))
             except ValueError:
