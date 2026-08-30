@@ -2953,7 +2953,9 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .ima-reader { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .ima-reader-toolbar { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding: 8px 16px; border-bottom: var(--border-default); }
 .ima-reader-actions { display: flex; align-items: center; gap: 8px; }
-.ima-reader-back { display: inline-flex; align-items: center; gap: 0.25em; min-width: 0; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ima-reader-back { flex: 0 1 auto; display: inline-flex; align-items: center; gap: 2px; min-width: 0; min-height: 44px; max-width: 50%; overflow: hidden; padding: 0 8px 0 2px; border: 0; background: transparent; color: var(--color-text); font: inherit; font-size: var(--text-sm); font-weight: var(--font-weight-medium); white-space: nowrap; text-overflow: ellipsis; }
+.ima-reader-back:hover { color: var(--color-accent-text); }
+.ima-back-icon { flex: 0 0 auto; font-size: 24px; line-height: 1; }
 .ima-reader-info { flex: 0 0 auto; padding: 12px 16px; }
 .ima-reader-title { margin: 0; color: var(--color-text-strong); font-size: var(--text-title); font-weight: var(--font-weight-semibold); line-height: 1.35; }
 .ima-reader-info .ima-reader-filemeta { margin-top: 6px; }
@@ -3103,8 +3105,10 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
     padding-left: 12px;
     padding-right: 12px;
   }
-  .ima-reader-back span { display: none; }
+  .ima-reader-back .ima-back-count { display: none; }
   .ima-pdf-open { width: calc(100% - 32px); min-height: 48px; margin: 16px; }
+  .ima-reader-download { width: 44px; min-height: 44px; padding: 0; justify-content: center; }
+  .ima-reader-download span { display: none; }
 }
 
 .ima-source-stack { display: grid; gap: var(--space-5); }

@@ -2881,6 +2881,8 @@ def test_ima_document_reader_preserves_group_context_and_metadata():
     assert "查看 PDF" not in reader
     assert "下载" in reader
     assert "btn-normal ima-reader-download" in reader
+    assert 'class="btn-ghost ima-reader-back"' not in reader
+    assert "ima-back-icon" in reader
     assert "imaDisplayTitle" in reader and "item.size" in reader
     assert "ima-reader-abstract" in reader
     assert "ima-reader-empty" in reader
@@ -3119,6 +3121,8 @@ def test_ima_reader_has_one_app_download_and_result_neighbors():
     assert "ima-reader-toolbar" in reader
     assert "backFromImaReader" in reader
     assert "btn-normal ima-reader-download" in reader
+    assert 'class="btn-ghost ima-reader-back"' not in reader
+    assert "ima-back-icon" in reader
     assert "<details open" in reader
     assert "imaReaderNavHtml" in reader
     assert "openImaDocument" in nav
@@ -3180,8 +3184,8 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=231"' in html
-    assert 'src="/app.js?v=324"' in html
+    assert 'href="/style.css?v=232"' in html
+    assert 'src="/app.js?v=325"' in html
     assert 'dav-shell-v195' in sw
 
 
@@ -4227,4 +4231,5 @@ def test_knowledge_desk_serves_phone_without_refusal():
     # 手机阅读页：iframe 换成 blob 就绪后的「打开 PDF」大按钮，返回按钮省略结果数
     assert "ima-pdf-phone-open" in _fn_body("renderImaDocument")
     assert "ima-pdf-phone-open" in _fn_body("loadImaPdf")
-    assert ".ima-reader-back span { display: none; }" in css
+    assert ".ima-reader-back .ima-back-count { display: none; }" in css
+    assert ".ima-reader-download span { display: none; }" in css

@@ -1581,7 +1581,7 @@ async function renderImaDocument(seq, mediaId) {
     const listSnapshot = _imaListSnapshot && _imaListSnapshot.route === normalizeRoute(backRoute) ? _imaListSnapshot : null;
     const backLabel = listSnapshot ? `${listSnapshot.items.length}${listSnapshot.hasMore ? "+" : ""}条结果` : "研报列表";
     const download = item.has_pdf
-      ? `<button type="button" class="btn-normal ima-reader-download" onclick="downloadImaPdf('${escapeHtml(mediaId)}')">${DOWNLOAD_ICON}<span>下载 PDF</span></button>`
+      ? `<button type="button" class="btn-normal ima-reader-download" aria-label="下载 PDF" title="下载 PDF" onclick="downloadImaPdf('${escapeHtml(mediaId)}')">${DOWNLOAD_ICON}<span>下载 PDF</span></button>`
       : "";
     const openNewTab = item.has_pdf
       ? `<button type="button" class="icon-btn" aria-label="新标签打开 PDF" title="新标签打开 PDF" onclick="openImaPdfNewTab()">${EXTERNAL_LINK_ICON}</button>`
@@ -1600,7 +1600,7 @@ async function renderImaDocument(seq, mediaId) {
     $("#kb-reader").innerHTML = `
       <article class="ima-reader">
         <header class="ima-reader-toolbar">
-          <button type="button" class="btn-ghost ima-reader-back" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back)">返回 <span>${escapeHtml(backLabel)}</span></button>
+          <button type="button" class="ima-reader-back" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back)" aria-label="返回结果列表"><span class="ima-back-icon" aria-hidden="true">‹</span>返回 <span class="ima-back-count">${escapeHtml(backLabel)}</span></button>
           <div class="ima-reader-actions"><button type="button" class="icon-btn" aria-label="返回搜索" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back, true)">${SEARCH_ICON}</button>${openNewTab}${download}</div>
         </header>
         <section class="ima-reader-info">
