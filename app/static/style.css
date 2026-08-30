@@ -3473,9 +3473,6 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   .ima-doc-toolbar > .btn-ghost { grid-column: 2; grid-row: 1; }
   .ima-doc-filters { display: block; }
   .ima-doc-tag-filter { width: 100%; }
-  .ima-reader-head { display: grid; gap: 12px; }
-  .ima-reader-actions { width: 100%; }
-  .ima-reader-actions button { flex: 1; justify-content: center; min-height: 44px; }
   .ima-pdf-panel iframe { min-height: calc(100vh - 220px); }
   .ima-text-view { max-height: none; }
   .ima-polling-save-row .btn-normal { width: 100%; }

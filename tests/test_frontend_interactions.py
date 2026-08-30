@@ -3184,7 +3184,7 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=232"' in html
+    assert 'href="/style.css?v=233"' in html
     assert 'src="/app.js?v=325"' in html
     assert 'dav-shell-v195' in sw
 
@@ -4233,3 +4233,5 @@ def test_knowledge_desk_serves_phone_without_refusal():
     assert "ima-pdf-phone-open" in _fn_body("loadImaPdf")
     assert ".ima-reader-back .ima-back-count { display: none; }" in css
     assert ".ima-reader-download span { display: none; }" in css
+    # 遗留手机块不得再拉伸阅读工具栏按钮（曾把下载钮撑出屏）
+    assert "flex: 1; justify-content: center" not in css
