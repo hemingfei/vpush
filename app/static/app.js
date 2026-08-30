@@ -1231,7 +1231,7 @@ async function renderKnowledge(seq, encodedMediaId = "") {
     mountKnowledgeListShell();
     if (!subscribed.length && catalogOk) {
       const list = $("#kb-list");
-      const controls = knowledgeSourceControlsHtml("");
+      const controls = `<div class="ima-report-head"><div class="ima-report-filters ima-report-filters-row">${knowledgeSourceControlsHtml("")}</div></div>`;
       if (isAdmin) {
         list.innerHTML = `${controls}${emptyState("还没有配置知识库", `<div><button type="button" class="btn-normal" onclick="go('admin/knowledge')">去配置采集</button></div>`)}`;
       } else {

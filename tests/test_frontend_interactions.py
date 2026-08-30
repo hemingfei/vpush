@@ -3184,8 +3184,8 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=233"' in html
-    assert 'src="/app.js?v=326"' in html
+    assert 'href="/style.css?v=234"' in html
+    assert 'src="/app.js?v=327"' in html
     assert 'dav-shell-v195' in sw
 
 
@@ -4244,3 +4244,11 @@ def test_user_modal_kb_grants_include_local_libraries():
     modal = _fn_body("adminOpenUser")
     assert "本地库" in modal
     assert "group.local" in modal
+
+
+def test_knowledge_zero_sub_empty_state_wraps_source_controls():
+    body = _fn_body("renderKnowledge")
+    # 零订阅空态的资料源控件必须套标准容器，裸渲染会错位溢出
+    assert "ima-report-filters-row" in body
+    css = STYLE_CSS.read_text()
+    assert ".ima-report-filters-row { padding: 12px 16px; flex-wrap: wrap; }" in css
