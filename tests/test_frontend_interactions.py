@@ -3147,8 +3147,8 @@ def test_frontend_asset_urls_bust_browser_cache():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=228"' in html
-    assert 'src="/app.js?v=321"' in html
-    assert 'dav-shell-v193' in sw
+    assert 'src="/app.js?v=322"' in html
+    assert 'dav-shell-v194' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -3178,7 +3178,8 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     assert "打开知识库" in timeline
     css = STYLE_CSS.read_text()
     assert ".tl-ima-entry { display: none; }" in css
-    assert "(min-width: 769px) and (max-width: 900px)" in css
+    # 手机（≤768px）也显示入口：知识库已放开移动端
+    assert "@media (max-width: 900px) {\n  .tl-ima-entry { display: block; margin: 0 0 12px; }" in css
 
 
 

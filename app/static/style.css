@@ -1295,7 +1295,7 @@ body.lightbox-open { overflow: hidden; }
 .tl-chip-x .x-icon { width: 12px; height: 12px; }
 .tl-feed-panel { margin-top: 0; }
 .tl-ima-entry { display: none; }
-@media (min-width: 769px) and (max-width: 900px) {
+@media (max-width: 900px) {
   .tl-ima-entry { display: block; margin: 0 0 12px; }
 }
 .tl-ima-entry-btn {
