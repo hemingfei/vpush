@@ -71,6 +71,22 @@ def should_notify(state: dict, key: str, now: int,
     return now - last >= window
 
 
+def paused_alert(status: dict, state: dict) -> tuple[str, str] | None:
+    """纯函数：paused.json 出现且 ts 前进（新一次熔断）→ 告警文案；冷却由 should_notify 统一管。"""
+    paused = status.get("paused")
+    if not paused:
+        return None
+    ts = int(paused.get("ts") or 0)
+    if not ts or ts <= int(state.get("paused_notified_ts") or 0):
+        return None
+    reason = str(paused.get("reason") or "")
+    if reason == "quota":
+        return ("paused", "🔴 中金采集暂停：本月研报配额已满，等月初重置（每日增量会自动重试）。")
+    if reason == "auth":
+        return ("paused", "🔴 中金采集暂停：登录态失效，请在存储机更新 Cookie 文件。")
+    return ("paused", f"🔴 中金采集暂停：{paused.get('detail') or reason or '未知原因'}。")
+
+
 def _load_state(db) -> dict:
     raw = db.get_setting(ALERT_STATE_KEY)
     try:
@@ -96,6 +112,10 @@ def maybe_check_cicc(db, notifiers: list, notifiers_config=None, *, now: int | N
     pending: list[tuple[str, str]] = []
     if settings.get("notify_enabled", True) and status and not status.get("stale"):
         pending += evaluate_alerts(status, settings, now)
+        pa = paused_alert(status, state)
+        if pa:
+            pending.append(pa)
+            state["paused_notified_ts"] = int((status.get("paused") or {}).get("ts") or 0)
         summary = (status.get("storage") or {}).get("last_incr_summary") or {}
         s_ts = int(summary.get("ts") or 0)
         if s_ts > int(state.get("incr_notified_ts") or 0):

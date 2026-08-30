@@ -13,6 +13,8 @@ CTRL = "/srv/vpush-ima/local/.cicc"
 CICC_DIR = "/root/cicc"
 LIB_ROOT = "/srv/vpush-ima/local"
 SCHEDULE_FILE = "/usr/local/lib/vpush-ima/cicc-schedule.json"
+HEALTH_FILE = "/srv/vpush-ima/local/.vpush-storage-health.json"
+BACKUP_ENV = "/etc/vpush/ima-storage.env"
 
 
 def collectors_running() -> int:
@@ -81,6 +83,62 @@ def storage_section() -> dict:
             "last_incr_summary": read_json(os.path.join(CTRL, "last_incr_summary.json"), {}) or {}}
 
 
+def load_env_file(path: str) -> dict[str, str]:
+    """解析 KEY=VALUE 行（去引号），等价 shell source 的变量来源；缺失/异常返回空。"""
+    out: dict[str, str] = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    out[k.strip()] = v.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return out
+
+
+def parse_snapshots(text: str) -> list[dict]:
+    """restic snapshots --json → [{id 前 8 位, time, size}]。"""
+    try:
+        snaps = json.loads(text or "[]")
+    except ValueError:
+        return []
+    if not isinstance(snaps, list):
+        return []
+    return [{"id": str(s.get("short_id") or s.get("id") or "")[:8],
+             "time": str(s.get("time") or ""),
+             "size": int((s.get("summary") or {}).get("total_bytes_processed") or 0)}
+            for s in snaps if isinstance(s, dict)]
+
+
+def backup_section() -> dict:
+    """备份节：诚实呈现——env 没配 RESTIC_REPOSITORY 就直说未生效；配了再试 snapshots。"""
+    health = read_json(HEALTH_FILE, {}) or {}
+    section = {"configured": False,
+               "restic_last_success": int(health.get("restic_last_success") or 0),
+               "restic_last_check_ok": health.get("restic_last_check_ok") is True}
+    env = load_env_file(BACKUP_ENV)
+    if not env.get("RESTIC_REPOSITORY"):
+        section["reason"] = "env 缺 RESTIC_REPOSITORY，需要配置备份目标"
+        return section
+    section["configured"] = True
+    run_env = dict(os.environ)
+    run_env.update(env)
+    try:
+        r = subprocess.run(["restic", "snapshots", "--latest", "5", "--json"],
+                           capture_output=True, text=True, timeout=120,
+                           check=False, env=run_env)
+    except (OSError, subprocess.SubprocessError) as exc:
+        section["reason"] = str(exc)[:200]
+        return section
+    if r.returncode != 0:
+        section["reason"] = ((r.stderr or r.stdout or "restic snapshots 失败").strip())[-200:]
+        return section
+    section["snapshots"] = parse_snapshots(r.stdout)
+    return section
+
+
 def count_pdfs() -> int:
     total = 0
     for dp, _, fs in os.walk(LIB_ROOT):
@@ -104,9 +162,12 @@ def main() -> None:
         "files_total": count_pdfs(),
         "schedule_enabled": os.path.exists(os.path.join(CTRL, "incremental.enabled")),
         "last_incremental": read_json(os.path.join(CTRL, "incremental.last")),
+        "paused": read_json(os.path.join(CTRL, "paused.json")),
+        "cicc_settings": read_json(os.path.join(CTRL, "cicc_settings.json"), {}) or {},
         "logs": log_tails(),
         "commands": (read_json(os.path.join(CTRL, "commands.json"), []) or [])[-20:],
         "storage": storage_section(),
+        "backup": backup_section(),
     }
     os.makedirs(CTRL, exist_ok=True)
     write_json(os.path.join(CTRL, "status.json"), status)

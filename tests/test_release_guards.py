@@ -56,3 +56,17 @@ SENTINELS += [
     ("scripts/vps/cicc-dispatch.py", '"schedule"', "命令通道支持下发采集时间"),
     ("app/static/app.js", "ima-storage-health", "存储页签健康总览面板"),
 ]
+
+# —— 知识库设置增强第二批（feat/kb-settings-batch2，2026-08-30）——
+SENTINELS += [
+    ("scripts/cicc_report_collector.py", "def write_paused", "熔断前写 paused.json（quota/auth）"),
+    ("scripts/vps/cicc-status.py", '"paused"', "status 合并 paused.json 熔断状态"),
+    ("scripts/vps/cicc-status.py", "def backup_section", "status 增加 backup 节（诚实呈现未配置）"),
+    ("scripts/vps/cicc-incremental.py", "def paused_skip", "增量门控：auth 熔断 48h 内跳过"),
+    ("scripts/vps/cicc-dispatch.py", '"settings"', "命令通道支持品类定向 settings"),
+    ("scripts/vps/cicc-dispatch.py", '"backup"', "命令通道支持触发 restic 备份（替换死信请求文件）"),
+    ("app/api.py", "cicc-categories", "品类定向 GET/PUT 端点"),
+    ("app/cicc_alerts.py", "def paused_alert", "熔断告警文案（quota/auth 区分）"),
+    ("app/static/app.js", "saveCiccCategories", "中金页签品类定向多选保存"),
+    ("app/static/app.js", "备份未生效", "存储页签诚实展示备份未配置"),
+]

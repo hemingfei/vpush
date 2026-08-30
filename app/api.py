@@ -562,6 +562,10 @@ class CiccScheduleIn(BaseModel):
     time: str | None = None  # HH:mm，None=不改时间
 
 
+class CiccCategoriesIn(BaseModel):
+    categories: list[str]  # 空数组=采集全部品类
+
+
 class ImaKbAclIn(BaseModel):
     usernames: list[str]
 
@@ -2985,22 +2989,17 @@ def create_api_router(
 
     @router.post("/admin/ima-storage/backup", dependencies=[Depends(require_admin)])
     def backup_ima_storage(admin: dict = Depends(require_admin)):
-        from pathlib import Path
+        from .cicc_collector import from_env
 
-        from .ima_storage import request_pending, write_request_file
-
+        # 旧实现写 .vpush-backup-request 请求文件，但存储机从未有消费者（死信）；
+        # 改走命令通道：dispatch 的 backup 模式直接运行 restic-backup.sh
         _require_remote_archive()
-        status = ima_documents.storage_status
-        public = status.public()
-        if not status.can_write():
-            raise HTTPException(status_code=503, detail="知识库存储暂不可用")
-        archive = os.environ.get("IMA_ARCHIVE_ROOT", "").strip()
-        request_path = Path(archive) / ".vpush-backup-request"
-        if request_pending(request_path, public.get("restic_last_success", 0)):
-            return {"status": "already_running", **public}
-        write_request_file(request_path)
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        result = ctl.trigger("backup", admin["username"])
         _audit(admin, "ima_storage_backup", "", "requested")
-        return {"status": "started", **public}
+        return {"status": "started", **result}
 
     @router.get("/admin/cicc/status", dependencies=[Depends(require_admin)])
     def cicc_status(admin: dict = Depends(require_admin)):
@@ -3051,6 +3050,40 @@ def create_api_router(
         _audit(admin, "cicc_schedule", "",
                f"{'enabled' if body.enabled else 'disabled'} time={body.time or '-'}")
         return result
+
+    CICC_CATEGORIES_KEY = "cicc_category_settings"
+
+    @router.get("/admin/ima-collector/cicc-categories", dependencies=[Depends(require_admin)])
+    def cicc_categories_get(admin: dict = Depends(require_admin)):
+        from .cicc_collector import from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        settings = (ctl.status().get("cicc_settings") or {}).get("categories")
+        if settings is None:  # 存储机还没透传（离线/未刷新）→ 退回 DB 里上次保存的定向
+            raw = db.get_setting(CICC_CATEGORIES_KEY)
+            try:
+                settings = json.loads(raw) if raw else []
+            except ValueError:
+                settings = []
+        return {"categories": settings}
+
+    @router.put("/admin/ima-collector/cicc-categories", dependencies=[Depends(require_admin)])
+    def cicc_categories_put(body: CiccCategoriesIn, admin: dict = Depends(require_admin)):
+        from .cicc_collector import CICC_CATEGORIES, from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        cats = list(dict.fromkeys(c.strip() for c in body.categories if c.strip()))
+        unknown = sorted(set(cats) - set(CICC_CATEGORIES))
+        if unknown:
+            raise HTTPException(status_code=400, detail=f"未知品类：{'、'.join(unknown)}")
+        ctl.set_cicc_settings(cats, admin["username"])
+        db.set_setting(CICC_CATEGORIES_KEY, json.dumps(cats, ensure_ascii=False))
+        _audit(admin, "cicc_categories", "", "全部品类" if not cats else "、".join(cats))
+        return {"categories": cats}
 
     @router.get("/admin/ima-storage/health", dependencies=[Depends(require_admin)])
     def ima_storage_health(admin: dict = Depends(require_admin)):
