@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.93";
+const APP_VERSION = "1.12.94";
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["config", "cookies", "proxies", "plaza"];
@@ -107,7 +107,6 @@ const state = {
   })(),
   imaDocumentsQuery: "",
   imaDocumentsDay: "",
-  imaDocumentsLastDay: "",
   imaDocumentsDays: [],
   imaDocumentsHasMore: false,
   imaDocumentsGroup: "",
@@ -693,7 +692,6 @@ async function renderMore(seq) {
 
 const _imaItems = [];
 let _imaListSnapshot = null;
-let _imaOffset = 0;
 let _imaListSeq = 0;
 let _imaReaderSeq = 0;
 let _imaLoadingMore = false;
@@ -958,7 +956,6 @@ function replaceImaDocumentsRoute(path) {
 function selectImaDocumentGroup(value) {
   state.imaDocumentsGroup = String(value || "");
   state.imaDocumentsDay = "";
-  state.imaDocumentsLastDay = "";
   state.imaDocumentsDays = [];
   state.imaDocumentsTag = "";
   state.imaDocumentsQuery = $("#ima-doc-q")?.value?.trim() || state.imaDocumentsQuery || "";
@@ -1083,24 +1080,6 @@ function imaDocumentsDayNavHtml(day, days) {
   return `<button type="button" class="kb-desk-day" id="ima-doc-day" aria-label="筛选日期" aria-haspopup="listbox" aria-expanded="false" onclick="toggleImaDayPicker(event)">${escapeHtml(label)}</button>`;
 }
 
-function imaDocumentGroupControls(groups, selectedGroup) {
-  const options = state.user?.is_admin
-    ? [{ id: "", name: "全部" }, ...(groups || [])]
-    : [...(groups || [])];
-  const useTabs = (groups || []).length <= 5;
-  const selected = String(selectedGroup || "");
-  return `<div class="ima-doc-group-switcher ${useTabs ? "is-tabs" : "is-select"}">
-    <div class="ima-doc-group-tabs" role="tablist" aria-label="全部知识库">
-      ${options.map((group) => `<button type="button" class="ima-doc-group-tab${group.id === selected ? " is-selected" : ""}" role="tab" aria-selected="${group.id === selected}" data-group="${escapeHtml(group.id)}" onclick="selectImaDocumentGroup(this.dataset.group)">${escapeHtml(group.name)}</button>`).join("")}
-    </div>
-    <label class="ima-doc-group-select"><span class="sr-only">选择知识库</span><select class="form-control" aria-label="选择知识库" onchange="selectImaDocumentGroup(this.value)">${options.map((group) => `<option value="${escapeHtml(group.id)}"${group.id === selected ? " selected" : ""}>${escapeHtml(group.name)}</option>`).join("")}</select></label>
-  </div>`;
-}
-
-function searchImaDocuments() {
-  submitImaDocumentsSearch();
-}
-
 function refreshImaDocuments() {
   const seq = ++routeRenderSeq;
   renderImaDocuments(seq, { keepOld: true });
@@ -1108,18 +1087,6 @@ function refreshImaDocuments() {
 
 function imaReportRefreshErrorHtml(message) {
   return `<div class="ima-report-refresh-error" role="alert"><span>最新研报暂时无法更新：${escapeHtml(message)}</span><button type="button" class="btn-ghost" onclick="refreshImaDocuments()">重试</button></div>`;
-}
-
-function openKnowledgeLatest(groupId, mediaId) {
-  const group = String(groupId || "");
-  const media = String(mediaId || "");
-  if (!media) {
-    openKnowledgeGroup(group);
-    return;
-  }
-  state.imaDocumentsGroup = group;
-  const query = group ? `?group=${encodeURIComponent(group)}` : "";
-  go(`${_imaDocumentRoute(media)}${query}`);
 }
 
 function knowledgeCardSummary(group) {
@@ -1161,12 +1128,6 @@ function knowledgeSourceControlsHtml(selectedGroup = "") {
     ? `<details class="ima-source-manage"><summary>管理订阅</summary><div class="ima-source-menu">${subscribed.map((group) => knowledgeLibRowHtml(group, selected, "subscribed")).join("")}${available.map((group) => knowledgeLibRowHtml(group, selected, "available")).join("")}</div></details>`
     : "";
   return `<label class="ima-report-source"><span class="sr-only">资料源</span><select id="ima-doc-source" aria-label="资料源" onchange="selectImaDocumentGroup(this.value)"><option value=""${selected ? "" : " selected"}>全部研报</option>${options.filter((group) => group.id).map((group) => `<option value="${escapeHtml(group.id)}"${group.id === selected ? " selected" : ""}>${escapeHtml(group.name)}</option>`).join("")}</select></label>${manageHtml}`;
-}
-
-function openKnowledgeGroup(groupId) {
-  state.imaDocumentsTag = "";
-  state.imaDocumentsLastDay = "";
-  go(imaDocumentsRoute(groupId, "", "", ""));
 }
 
 function refreshKnowledge() {
@@ -1278,11 +1239,8 @@ async function renderKnowledge(seq, encodedMediaId = "") {
           "还没有订阅知识库",
           available.length
             ? `<div><p class="section-meta">在管理订阅里点订阅</p></div>`
-            : `<div><p class="section-meta">找管理员在用户设置里勾选知识库后再来订阅</p></div>`
+            : `<div><p class="section-meta">找管理员在用户设置里勾选知识库后再来</p></div>`
         )}`;
-        if (!available.length) {
-          list.innerHTML += emptyState("暂无可订阅的知识库", `<div><p class="section-meta">找管理员在用户设置里勾选知识库后再来</p></div>`);
-        }
       }
       if (catalogWarning) {
         list.insertAdjacentHTML("afterbegin", `<p class="section-meta ima-catalog-warning">${escapeHtml(catalogWarning)}</p>`);
@@ -1315,7 +1273,6 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
   _imaLoadingMore = false;
   if (!keepOld) {
     _imaItems.length = 0;
-    _imaOffset = 0;
     state.imaDocumentsHasMore = false;
   }
   const selectedGroup = imaDocumentsGroupFromRoute() || state.imaDocumentsGroup || "";
@@ -1378,7 +1335,6 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
       navSlot.innerHTML = imaDocumentsDayNavHtml(searchMode ? "" : day, snapshot.days);
     }
     restoreImaListSnapshot(snapshot, body);
-    _imaOffset = _imaItems.length;
     const title = $("#ima-doc-title");
     const meta = $("#ima-doc-meta");
     if (title) title.textContent = "最新研报";
@@ -1387,7 +1343,6 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
         ? `${snapshot.items.length}${snapshot.hasMore ? "+" : ""} 条结果`
         : `${Number(snapshot.documentCount) || snapshot.items.length} 份`;
     }
-    syncImaListChrome({ emptyLib: !snapshot.days.length && !searchMode, hasTags: uniqueTags.length > 0 || !!tag });
     syncImaDocumentsFilterStatus();
     $("#ima-report-page")?.removeAttribute("aria-busy");
     return;
@@ -1413,7 +1368,6 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
       ? data.days.filter(Boolean)
       : [...new Set(items.map((item) => item.day).filter(Boolean))];
     state.imaDocumentsDays = days;
-    if (day) state.imaDocumentsLastDay = day;
     const tagSelect = $("#ima-doc-tag");
     _imaTagCounts = imaTagCountsFromData(data);
     _imaDocumentCount = Number(data.document_count) || imaTagCoverageBase(_imaTagCounts, 0);
@@ -1435,11 +1389,9 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
       navSlot.innerHTML = imaDocumentsDayNavHtml(searchMode ? "" : day, days);
     }
     const hasFilter = !!(query || tag);
-    syncImaListChrome({ emptyLib: !days.length && !searchMode, hasTags: uniqueTags.length > 0 || !!tag });
     syncImaDocumentsFilterStatus();
     _imaItems.length = 0;
     _imaItems.push(...items);
-    _imaOffset = items.length;
     state.imaDocumentsHasMore = !!(paged && data.has_more);
     const body = $("#ima-docs-body");
     if (!items.length) {
@@ -1466,24 +1418,6 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
   }
 }
 
-function syncImaListChrome({ emptyLib, hasTags }) {
-  const toolbar = document.querySelector("#kb-list .ima-doc-toolbar");
-  const filterBtn = $("#ima-doc-filter-toggle");
-  const filters = $("#ima-doc-filters");
-  if (toolbar) toolbar.hidden = !!emptyLib;
-  if (filterBtn) filterBtn.hidden = !hasTags;
-  if (filters && !hasTags) filters.hidden = true;
-}
-
-function toggleImaDocumentsFilters() {
-  const extra = $("#ima-doc-filters");
-  const btn = $("#ima-doc-filter-toggle");
-  if (!extra || !btn) return;
-  const open = extra.hasAttribute("hidden");
-  extra.toggleAttribute("hidden", !open);
-  btn.setAttribute("aria-expanded", String(open));
-}
-
 function imaDocumentsFilterChipsHtml() {
   const chips = [];
   if (state.imaDocumentsQuery) {
@@ -1498,13 +1432,7 @@ function imaDocumentsFilterChipsHtml() {
 }
 
 function syncImaDocumentsFilterStatus() {
-  const btn = $("#ima-doc-filter-toggle");
   const chips = $("#ima-doc-filter-chips");
-  const hasFacet = !!state.imaDocumentsTag;
-  if (btn) {
-    btn.classList.toggle("has-filter", hasFacet);
-    btn.setAttribute("aria-expanded", String(!$("#ima-doc-filters")?.hasAttribute("hidden")));
-  }
   if (chips) chips.innerHTML = imaDocumentsFilterChipsHtml();
 }
 
@@ -1559,7 +1487,6 @@ async function loadImaDocumentsMore() {
     if (listSeq !== _imaListSeq || !routeStillActive(seq)) return;
     const incoming = Array.isArray(data.items) ? data.items : [];
     _imaItems.push(...incoming);
-    _imaOffset = _imaItems.length;
     state.imaDocumentsHasMore = !!data.has_more && incoming.length > 0;
     const body = $("#ima-docs-body");
     const list = body?.querySelector(".ima-doc-list");
@@ -1603,8 +1530,7 @@ function backFromImaReader(fallbackRoute, focusSearch = false) {
   go(fallbackRoute);
 }
 
-function imaReaderNavHtml(mediaId, groupId = "") {
-  const snapshot = _imaListSnapshot;
+function imaReaderNavHtml(mediaId, groupId = "", snapshot = null) {
   if (!snapshot || snapshot.items.length < 2) return "";
   const current = imaDocumentKey(mediaId, groupId);
   const index = snapshot.items.findIndex((item) => imaDocumentKey(item.media_id, item.group_id) === current);
@@ -1651,7 +1577,9 @@ async function renderImaDocument(seq, mediaId) {
     const abstractHtml = abstractText
       ? `<details open class="ima-reader-abstract"><summary>摘要</summary><p id="ima-reader-abstract">${escapeHtml(abstractText)}</p></details>`
       : "";
-    const backLabel = _imaListSnapshot ? `${_imaListSnapshot.items.length}${_imaListSnapshot.hasMore ? "+" : ""}条结果` : "研报列表";
+    // 快照路由校验（与 currentImaListSnapshot 同思路）：与本次应返回的列表路由不匹配的旧快照不用于导航/计数
+    const listSnapshot = _imaListSnapshot && _imaListSnapshot.route === normalizeRoute(backRoute) ? _imaListSnapshot : null;
+    const backLabel = listSnapshot ? `${listSnapshot.items.length}${listSnapshot.hasMore ? "+" : ""}条结果` : "研报列表";
     const download = item.has_pdf
       ? `<button type="button" class="btn-normal ima-reader-download" onclick="downloadImaPdf('${escapeHtml(mediaId)}')">${DOWNLOAD_ICON}<span>下载 PDF</span></button>`
       : "";
@@ -1676,7 +1604,7 @@ async function renderImaDocument(seq, mediaId) {
           ${abstractHtml}
         </section>
         ${pdfPanel}
-        ${imaReaderNavHtml(mediaId, item.group_id || documentGroup)}
+        ${imaReaderNavHtml(mediaId, item.group_id || documentGroup, listSnapshot)}
       </article>`;
     if (item.has_pdf) loadImaPdf(mediaId, readerSeq);
     if (item.needs_translation) {
@@ -1737,19 +1665,6 @@ async function loadImaPdf(mediaId, readerSeq) {
     }
   } catch {
     if (routeStillActive(seq) && readerSeq === _imaReaderSeq) showImaPdfFail(mediaId, seq, readerSeq);
-  }
-}
-
-function closeImaPdf() {
-  clearImaPdfUrl();
-  const frame = $("#ima-pdf-frame");
-  const panel = $("#ima-pdf-panel");
-  const button = $("#ima-pdf-toggle");
-  if (frame) frame.src = "";
-  if (panel) panel.hidden = true;
-  if (button) {
-    button.hidden = false;
-    button.disabled = false;
   }
 }
 
@@ -7078,6 +6993,7 @@ async function backupImaStorage() {
 let _ciccPollTimer = null;
 let _ciccLastStatus = null;
 let _localLibsLast = null;
+let _scanInFlight = false; // 扫描进行中：15s 轮询重渲染时按钮保持禁用，不复活
 
 function startCiccPoll() {
   stopCiccPoll();
@@ -7184,8 +7100,8 @@ function localLibraryCardHtml(lib) {
     <header class="ima-source-block-head"><div><h3 class="ima-source-title">${escapeHtml(lib.name)}</h3>
     <p class="section-meta"><code>${escapeHtml(lib.slug)}</code> · ${meta} · ${lib.enabled ? "已启用" : "未启用"}${tags} · 授权 ${aclCount ? `${aclCount} 人` : "仅管理员"}</p></div>
     <div class="toolbar">
-      <button type="button" class="btn-ghost" onclick="openLocalLibraryModal('${escapeHtml(lib.slug)}')">编辑</button>
-      <button type="button" class="btn-ghost" onclick="toggleLocalLibrary('${escapeHtml(lib.slug)}', ${lib.enabled ? "false" : "true"})">${lib.enabled ? "停用" : "启用"}</button>
+      <button type="button" class="btn-ghost" data-ll-edit="${escapeHtml(lib.slug)}">编辑</button>
+      <button type="button" class="btn-ghost" data-ll-toggle="${escapeHtml(lib.slug)}" data-ll-enabled="${lib.enabled ? "false" : "true"}">${lib.enabled ? "停用" : "启用"}</button>
     </div></header>
     ${ciccInner}
   </div>`;
@@ -7210,7 +7126,7 @@ function renderLocalTab() {
     : "从未扫描";
   slot.innerHTML = `
     <div class="toolbar" style="margin:12px 0">
-      <button type="button" class="btn-normal" id="local-scan-btn" onclick="scanLocalLibraries()">扫描本地库</button>
+      <button type="button" class="btn-normal" id="local-scan-btn" ${_scanInFlight ? "disabled" : ""} onclick="scanLocalLibraries()">${_scanInFlight ? "扫描中…" : "扫描本地库"}</button>
       <button type="button" class="btn-ghost" onclick="openLocalLibraryCreateModal()">新建本地库</button>
       <span class="muted" aria-live="polite">${scannedLabel}</span>
     </div>
@@ -7236,17 +7152,18 @@ async function loadLocalLibraries(quiet = false) {
 }
 
 async function scanLocalLibraries() {
-  const btn = $("#local-scan-btn");
-  if (btn) btn.disabled = true;
+  if (_scanInFlight) return;
+  _scanInFlight = true;
+  renderLocalTab();
   try {
     const data = await api("/api/admin/ima-local-libraries/scan", { method: "POST" });
     flash(data.status === "scan_failed" ? "扫描失败：存储归档不可读" : "扫描完成");
     _localLibsLast = data;
-    renderLocalTab();
   } catch (err) {
     flash(err.message, "error");
   } finally {
-    if (btn) btn.disabled = false;
+    _scanInFlight = false;
+    renderLocalTab();
   }
 }
 
@@ -11204,6 +11121,16 @@ document.querySelectorAll(".switch-btn").forEach((btn) =>
 $("#btn-back").addEventListener("click", () => {
   if (state.pageBackRoute) go(state.pageBackRoute);
   else history.back();
+});
+// 本地库卡片按钮：slug 来自存储机目录名，用 data 属性委托而非内联 onclick（防 JS 注入）
+document.addEventListener("click", (e) => {
+  const edit = e.target.closest("[data-ll-edit]");
+  if (edit) {
+    openLocalLibraryModal(edit.dataset.llEdit);
+    return;
+  }
+  const toggle = e.target.closest("[data-ll-toggle]");
+  if (toggle) toggleLocalLibrary(toggle.dataset.llToggle, toggle.dataset.llEnabled === "true");
 });
 document.addEventListener("click", (e) => {
   const a = e.target.closest("a[href]");

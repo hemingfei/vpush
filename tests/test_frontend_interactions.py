@@ -2349,6 +2349,41 @@ def test_ima_documents_filters_round_trip_through_local_url():
     assert "submitImaDocumentsSearch()" in render
 
 
+def test_local_library_cards_delegate_via_data_attributes():
+    """本地库卡片 slug 来自存储机目录名，不得走内联 onclick 字符串插值（F1）。"""
+    src = APP_JS.read_text()
+    assert "onclick=\"openLocalLibraryModal('" not in src
+    assert "onclick=\"toggleLocalLibrary('" not in src
+    card = _fn_body("localLibraryCardHtml")
+    assert "data-ll-edit" in card and "data-ll-toggle" in card
+    assert 'e.target.closest("[data-ll-edit]")' in src
+    assert 'e.target.closest("[data-ll-toggle]")' in src
+
+
+def test_local_scan_button_driven_by_inflight_flag():
+    """扫描中状态由模块级标志驱动，15s 轮询重渲染不得复活按钮（F2）。"""
+    src = APP_JS.read_text()
+    assert "let _scanInFlight = false" in src
+    scan = _fn_body("scanLocalLibraries")
+    render = _fn_body("renderLocalTab")
+    assert "_scanInFlight = true" in scan
+    assert "_scanInFlight = false" in scan
+    assert "onclick=\"scanLocalLibraries()\"" in render
+    assert "_scanInFlight ? \"disabled\" : \"\"" in render
+    assert '_scanInFlight ? "扫描中…" : "扫描本地库"' in render
+
+
+def test_ima_reader_nav_requires_matching_snapshot_route():
+    """阅读器上一篇/下一篇与结果计数只使用与返回列表路由匹配的快照（F3）。"""
+    src = APP_JS.read_text()
+    nav = _fn_body("imaReaderNavHtml")
+    render = _fn_body("renderImaDocument")
+    assert "snapshot = null" in src  # nav 从入参取快照，不再自取模块级变量
+    assert "_imaListSnapshot" not in nav
+    assert "normalizeRoute(backRoute)" in render
+    assert "imaReaderNavHtml(mediaId, item.group_id || documentGroup, listSnapshot)" in render
+
+
 def test_ima_documents_refresh_and_retry_advance_local_route_seq():
     """刷新与重试必须递增局部路由序号，避免旧请求覆盖新结果。"""
     src = APP_JS.read_text()
@@ -2374,7 +2409,6 @@ def test_ima_refresh_keeps_old_reports_and_uses_inline_retry():
     assert "if (!keepOld)" in render
     before_request = render[render.index("if (!keepOld)"):render.index("await api(")]
     assert "_imaItems.length = 0" in before_request
-    assert "_imaOffset = 0" in before_request
     assert "state.imaDocumentsHasMore = false" in before_request
     success = render[render.index("await api("):]
     assert success.index("_imaItems.length = 0") < success.index("_imaItems.push(...items)")
@@ -3146,9 +3180,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=229"' in html
-    assert 'src="/app.js?v=322"' in html
-    assert 'dav-shell-v194' in sw
+    assert 'href="/style.css?v=230"' in html
+    assert 'src="/app.js?v=323"' in html
+    assert 'dav-shell-v195' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -3302,7 +3336,6 @@ def test_ima_documents_search_leaves_day_view():
     clear = _fn_body("clearImaDocumentsFilters")
     render = _fn_body("renderImaDocuments")
     more = _fn_body("loadImaDocumentsMore")
-    open_group = _fn_body("openKnowledgeGroup")
     assert "state.imaDocumentsDay = \"\"" in submit
     assert "state.imaDocumentsDay = \"\"" in tag
     assert "state.imaDocumentsQuery = \"\"" in day
@@ -3311,7 +3344,6 @@ def test_ima_documents_search_leaves_day_view():
     assert "state.imaDocumentsDay = \"\"" in clear
     assert "_imaListSeq" in render
     assert "_imaListSeq" in more
-    assert "imaDocumentsLastDay" in open_group
 
 
 def test_register_placeholder_matches_username_min_length():

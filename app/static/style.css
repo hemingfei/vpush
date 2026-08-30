@@ -2878,7 +2878,6 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .ima-reader-status { margin: 0; padding: 16px; color: var(--color-text-muted); font-size: var(--text-sm); }
 .ima-pdf-panel { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; margin: 10px 0 0; border: 0; border-top: var(--border-default); border-radius: 0; background: var(--color-surface-soft); overflow: hidden; }
 .ima-pdf-panel .ima-reader-empty { margin: 0; padding: 16px; }
-.ima-pdf-close { margin-top: 8px; min-height: 44px; }
 .ima-pdf-panel iframe { display: block; flex: 1 1 auto; width: 100%; min-height: 0; height: 100%; border: 0; background: var(--color-surface-soft); }
 .ima-text-view { margin: 16px 0 0; padding: 18px; max-height: 70vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border: var(--border-default); border-radius: var(--radius-control); background: var(--color-surface-soft); color: var(--color-text); font: inherit; line-height: 1.7; }
 .ima-report-page,
