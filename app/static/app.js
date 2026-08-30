@@ -6182,10 +6182,16 @@ async function reloadAdminSettingsPage(seq, authoritativeImaStatus = null) {
 }
 
 function switchKnowledgeSettingsTab(tab) {
-  const allowed = ["collect", "zsxq", "storage", "cicc", "local"];
+  if (tab === "cicc") tab = "local"; // 旧页签记忆迁移：中金已并入本地库
+  const allowed = ["collect", "zsxq", "storage", "local"];
   const next = allowed.includes(tab) ? tab : "collect";
-  if (next === "cicc") { loadCiccStatus(); startCiccPoll(); } else { stopCiccPoll(); }
-  if (next === "local") loadLocalLibraries();
+  if (next === "local") {
+    loadLocalLibraries();
+    loadCiccStatus();
+    startCiccPoll();
+  } else {
+    stopCiccPoll();
+  }
   try { sessionStorage.setItem(KS_TAB_KEY, next); } catch { /* ignore */ }
   document.querySelectorAll(".ks-tab").forEach((btn) => {
     const on = btn.dataset.tab === next;
@@ -6573,7 +6579,6 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
         <button type="button" class="ks-tab is-on" data-tab="collect" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">采集</button>
         <button type="button" class="ks-tab" data-tab="zsxq" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">星球</button>
         <button type="button" class="ks-tab" data-tab="storage" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">存储</button>
-        <button type="button" class="ks-tab" data-tab="cicc" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">中金</button>
         <button type="button" class="ks-tab" data-tab="local" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">本地库</button>
       </div>
       <section class="section-panel ks-panel is-on" data-panel="collect">
@@ -6691,14 +6696,9 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
       </div>
     </section>
     ${imaStoragePanelHtml(imaCollector.storage)}
-    <section class="section-panel ks-panel" data-panel="cicc" id="cicc-panel">
-      <header class="section-head"><div><h2 class="section-title">中金研报采集</h2>
-      <p class="section-meta">存储机上的采集与压缩任务。文件落盘后可在知识库本地库中启用。</p></div></header>
-      <div id="cicc-body"><p class="muted">加载中…</p></div>
-    </section>
     <section class="section-panel ks-panel" data-panel="local" id="local-libs-panel">
       <header class="section-head"><div><h2 class="section-title">本地库</h2>
-      <p class="section-meta">存储机 <code>local/&lt;slug&gt;/</code> 下的文件夹知识库，扫描后启用并授权用户即可在知识库中阅读。</p></div></header>
+      <p class="section-meta">存储机 <code>local/&lt;slug&gt;/</code> 下的文件夹知识库；中金研报由存储机采集脚本写入 cicc-research 库。启用并授权用户后即可在知识库中阅读。</p></div></header>
       <div id="local-libs-body"><p class="muted">加载中…</p></div>
     </section>
     </div>`;
@@ -7108,6 +7108,7 @@ async function backupImaStorage() {
 
 let _ciccPollTimer = null;
 let _ciccLastStatus = null;
+let _localLibsLast = null;
 
 function startCiccPoll() {
   stopCiccPoll();
@@ -7136,18 +7137,18 @@ function ciccRunningText(data) {
   return parts.join(" · ");
 }
 
-function renderCiccPanel(data) {
-  const slot = $("#cicc-body");
-  if (!slot) return;
-  const logs = Object.entries(data.logs || {})
+const CICC_RESEARCH_SLUG = "cicc-research";
+
+function ciccControlInnerHtml(cicc) {
+  const logs = Object.entries(cicc.logs || {})
     .filter(([, line]) => line)
     .map(([name, line]) => `<p class="muted" style="margin:2px 0"><strong>${escapeHtml(name)}</strong>：${escapeHtml(line)}</p>`)
     .join("") || '<p class="muted">暂无日志</p>';
-  const cmds = (data.commands || []).slice(-5).reverse()
+  const cmds = (cicc.commands || []).slice(-5).reverse()
     .map((c) => `<p class="muted" style="margin:2px 0">${fmtTs(c.ts)} · ${escapeHtml(c.mode || "?")} · ${c.ok ? "已执行" : `失败（${escapeHtml(c.error || "")}）`}</p>`)
     .join("") || '<p class="muted">暂无操作记录</p>';
-  slot.innerHTML = `
-    <p class="muted" aria-live="polite">${escapeHtml(ciccRunningText(data))} · 更新于 ${fmtTs(data.ts)}</p>
+  return `
+    <p class="muted" aria-live="polite">${escapeHtml(ciccRunningText(cicc))} · 更新于 ${fmtTs(cicc.ts)}</p>
     <div class="toolbar" style="margin:12px 0">
       <button type="button" class="btn-normal" onclick="triggerCicc('incr')">增量采集（近3天）</button>
       <button type="button" class="btn-normal" onclick="triggerCicc('year')">今年回补</button>
@@ -7156,7 +7157,7 @@ function renderCiccPanel(data) {
       <button type="button" class="btn-ghost danger" onclick="triggerCicc('stop')">停止采集</button>
     </div>
     <div class="toolbar" style="margin:0 0 12px">
-      <button type="button" class="btn-ghost" onclick="toggleCiccSchedule()">${data.schedule_enabled ? "关闭每日增量" : "开启每日增量"}（03:00）</button>
+      <button type="button" class="btn-ghost" onclick="toggleCiccSchedule()">${cicc.schedule_enabled ? "关闭每日增量" : "开启每日增量"}（03:00）</button>
       <button type="button" class="btn-ghost" onclick="loadCiccStatus()">${REFRESH_ICON}<span>刷新</span></button>
     </div>
     <details open><summary class="cfg-group-title">采集日志（最新一行）</summary>${logs}</details>
@@ -7169,12 +7170,12 @@ async function loadCiccStatus(quiet = false) {
     const data = await api("/api/admin/cicc/status");
     if (!routeStillActive(routeSeq)) return;
     _ciccLastStatus = data;
-    renderCiccPanel(data);
+    renderLocalTab();
   } catch (err) {
     if (!routeStillActive(routeSeq)) return;
     if (!quiet) flash(err.message, "error");
-    const slot = $("#cicc-body");
-    if (slot) slot.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
+    _ciccLastStatus = null;
+    renderLocalTab();
   }
 }
 
@@ -7203,31 +7204,51 @@ async function toggleCiccSchedule() {
   }
 }
 
-function localLibraryRowHtml(lib) {
-  const meta = lib.error
-    ? `异常：${escapeHtml(lib.error)}`
-    : `${lib.pdf_count ?? 0} 个 PDF`;
+function localLibraryCardHtml(lib) {
+  const meta = lib.error ? `异常：${escapeHtml(lib.error)}` : `${lib.pdf_count ?? 0} 个 PDF`;
+  const aclCount = (lib.acl_usernames || []).length;
+  const tags = (lib.tags || []).length ? ` · 标签 ${escapeHtml(lib.tags.join("、"))}` : "";
+  const ciccInner = lib.slug === CICC_RESEARCH_SLUG && _ciccLastStatus
+    ? `<details open style="margin-top:10px"><summary class="cfg-group-title">研报采集</summary>${ciccControlInnerHtml(_ciccLastStatus)}</details>`
+    : "";
   return `<div class="ima-source-block" data-slug="${escapeHtml(lib.slug)}">
     <header class="ima-source-block-head"><div><h3 class="ima-source-title">${escapeHtml(lib.name)}</h3>
-    <p class="section-meta"><code>${escapeHtml(lib.slug)}</code> · ${meta} · ${lib.enabled ? "已启用" : "未启用"}</p></div>
+    <p class="section-meta"><code>${escapeHtml(lib.slug)}</code> · ${meta} · ${lib.enabled ? "已启用" : "未启用"}${tags} · 授权 ${aclCount ? `${aclCount} 人` : "仅管理员"}</p></div>
     <div class="toolbar">
+      <button type="button" class="btn-ghost" onclick="openLocalLibraryModal('${escapeHtml(lib.slug)}')">编辑</button>
       <button type="button" class="btn-ghost" onclick="toggleLocalLibrary('${escapeHtml(lib.slug)}', ${lib.enabled ? "false" : "true"})">${lib.enabled ? "停用" : "启用"}</button>
     </div></header>
+    ${ciccInner}
   </div>`;
 }
 
-function renderLocalLibraries(data) {
+function renderLocalTab() {
   const slot = $("#local-libs-body");
-  if (!slot) return;
-  const libs = data.libraries || [];
+  if (!slot || !_localLibsLast) return;
+  const libs = _localLibsLast.libraries || [];
+  const hasCiccLib = libs.some((lib) => lib.slug === CICC_RESEARCH_SLUG);
+  const fallbackCicc = !hasCiccLib && _ciccLastStatus
+    ? `<div class="ima-source-block" style="margin:12px 0">
+        <h3 class="ima-source-title">中金研报采集</h3>
+        <p class="section-meta">尚未扫描到 cicc-research 库；采集可先行，文件落盘后扫描即入库。</p>
+        ${ciccControlInnerHtml(_ciccLastStatus)}
+      </div>`
+    : "";
+  // scanned_at 是 ISO 串（fmtTs 只吃 epoch 秒）
+  const scannedAt = _localLibsLast.scanned_at ? new Date(_localLibsLast.scanned_at) : null;
+  const scannedLabel = scannedAt && !Number.isNaN(scannedAt.getTime())
+    ? `上次扫描 ${scannedAt.toLocaleString()}`
+    : "从未扫描";
   slot.innerHTML = `
     <div class="toolbar" style="margin:12px 0">
-      <button type="button" class="btn-normal" onclick="scanLocalLibraries()">扫描本地库</button>
-      <span class="muted" aria-live="polite">${data.scanned_at ? `上次扫描 ${fmtTs(data.scanned_at)}` : "从未扫描"}</span>
+      <button type="button" class="btn-normal" id="local-scan-btn" onclick="scanLocalLibraries()">扫描本地库</button>
+      <button type="button" class="btn-ghost" onclick="openLocalLibraryCreateModal()">新建本地库</button>
+      <span class="muted" aria-live="polite">${scannedLabel}</span>
     </div>
+    ${fallbackCicc}
     ${libs.length
-      ? libs.map(localLibraryRowHtml).join("")
-      : '<p class="muted">尚未发现本地库。在存储机 local/&lt;slug&gt;/ 放入 .vpush-local-library.json 标记与 PDF 后点「扫描本地库」。</p>'}`;
+      ? libs.map(localLibraryCardHtml).join("")
+      : '<p class="muted">尚未发现本地库。点「新建本地库」创建，或在存储机 local/&lt;slug&gt;/ 放入 .vpush-local-library.json 标记与 PDF 后点「扫描本地库」。</p>'}`;
 }
 
 async function loadLocalLibraries(quiet = false) {
@@ -7235,7 +7256,8 @@ async function loadLocalLibraries(quiet = false) {
   try {
     const data = await api("/api/admin/ima-local-libraries");
     if (!routeStillActive(routeSeq)) return;
-    renderLocalLibraries(data);
+    _localLibsLast = data;
+    renderLocalTab();
   } catch (err) {
     if (!routeStillActive(routeSeq)) return;
     if (!quiet) flash(err.message, "error");
@@ -7245,12 +7267,13 @@ async function loadLocalLibraries(quiet = false) {
 }
 
 async function scanLocalLibraries() {
-  const btn = $("#local-libs-body button");
+  const btn = $("#local-scan-btn");
   if (btn) btn.disabled = true;
   try {
     const data = await api("/api/admin/ima-local-libraries/scan", { method: "POST" });
     flash(data.status === "scan_failed" ? "扫描失败：存储归档不可读" : "扫描完成");
-    renderLocalLibraries(data);
+    _localLibsLast = data;
+    renderLocalTab();
   } catch (err) {
     flash(err.message, "error");
   } finally {
@@ -7265,9 +7288,130 @@ async function toggleLocalLibrary(slug, enabled) {
       body: JSON.stringify({ enabled }),
     });
     flash(enabled ? "本地库已启用" : "本地库已停用");
-    renderLocalLibraries(data);
+    _localLibsLast = data;
+    renderLocalTab();
   } catch (err) {
     flash(err.message, "error");
+  }
+}
+
+function splitListCsv(text) {
+  return String(text || "").split(/[,，、]/).map((s) => s.trim()).filter(Boolean);
+}
+
+function localLibraryModalShell(title, innerHtml) {
+  const mask = document.createElement("div");
+  mask.className = "modal-mask";
+  mask.innerHTML = `
+    <div class="modal-card" role="dialog" aria-modal="true" aria-label="${title}">
+      <h3 style="margin-bottom:12px">${title}</h3>
+      ${innerHtml}
+      <div class="toolbar" style="margin-top:16px">
+        <button class="btn-normal" id="ll-save">保存</button>
+        <button type="button" class="btn-sm" data-close>取消</button>
+      </div>
+    </div>`;
+  const close = () => mask.remove();
+  mask.addEventListener("click", (e) => {
+    if (e.target === mask) close();
+  });
+  mask.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      close();
+    }
+  });
+  mask.querySelector("[data-close]").addEventListener("click", close);
+  document.body.appendChild(mask);
+  const first = mask.querySelector("input, select, textarea, button");
+  if (first) first.focus();
+  return mask;
+}
+
+function openLocalLibraryModal(slug) {
+  const lib = ((_localLibsLast && _localLibsLast.libraries) || []).find((l) => l.slug === slug);
+  if (!lib) return;
+  const mask = localLibraryModalShell(`编辑本地库：${escapeHtml(lib.name)}`, `
+    <label class="form-label">库名
+      <input id="ll-name" class="form-control" maxlength="80" value="${escapeHtml(lib.name)}">
+    </label>
+    <label class="form-label">库级标签（逗号分隔，下次扫描后应用到库内文档）
+      <input id="ll-tags" class="form-control" value="${escapeHtml((lib.tags || []).join(", "))}" placeholder="研报, 中金">
+    </label>
+    <label class="form-label">授权用户（逗号分隔用户名，清空则仅管理员可见）
+      <input id="ll-users" class="form-control" value="${escapeHtml((lib.acl_usernames || []).join(", "))}" placeholder="user1, user2">
+    </label>`);
+  mask.querySelector("#ll-save").addEventListener("click", () => saveLocalLibraryModal(slug, mask));
+}
+
+async function saveLocalLibraryModal(slug, mask) {
+  const btn = mask.querySelector("#ll-save");
+  const name = mask.querySelector("#ll-name").value.trim();
+  const tags = splitListCsv(mask.querySelector("#ll-tags").value);
+  const usernames = splitListCsv(mask.querySelector("#ll-users").value);
+  if (!name) {
+    flash("库名不能为空", "error");
+    return;
+  }
+  if (btn) btn.disabled = true;
+  try {
+    const [data] = await Promise.all([
+      api(`/api/admin/ima-local-libraries/${encodeURIComponent(slug)}`, {
+        method: "PUT",
+        body: JSON.stringify({ name, tags }),
+      }),
+      api(`/api/admin/ima-collector/groups/${encodeURIComponent(`local-${slug}`)}/acl`, {
+        method: "PUT",
+        body: JSON.stringify({ usernames }),
+      }),
+    ]);
+    mask.remove();
+    flash("已保存本地库设置");
+    _localLibsLast = data;
+    renderLocalTab();
+  } catch (err) {
+    flash("保存失败: " + err.message, "error");
+    if (btn) btn.disabled = false;
+  }
+}
+
+function openLocalLibraryCreateModal() {
+  const mask = localLibraryModalShell("新建本地库", `
+    <label class="form-label">目录名 slug（小写字母/数字/短横线）
+      <input id="ll-slug" class="form-control" maxlength="47" placeholder="my-papers">
+    </label>
+    <label class="form-label">库名
+      <input id="ll-name" class="form-control" maxlength="80" placeholder="我的论文库">
+    </label>
+    <label class="form-label">库级标签（可选，逗号分隔）
+      <input id="ll-tags" class="form-control" placeholder="研报">
+    </label>
+    <p class="muted" style="margin-top:8px">创建后在存储机 <code>local/&lt;slug&gt;/</code> 放入 PDF，回这里点「扫描本地库」。</p>`);
+  mask.querySelector("#ll-save").addEventListener("click", () => saveLocalLibraryCreate(mask));
+}
+
+async function saveLocalLibraryCreate(mask) {
+  const btn = mask.querySelector("#ll-save");
+  const slug = mask.querySelector("#ll-slug").value.trim().toLowerCase();
+  const name = mask.querySelector("#ll-name").value.trim();
+  const tags = splitListCsv(mask.querySelector("#ll-tags").value);
+  if (!slug || !name) {
+    flash("slug 与库名必填", "error");
+    return;
+  }
+  if (btn) btn.disabled = true;
+  try {
+    const data = await api("/api/admin/ima-local-libraries", {
+      method: "POST",
+      body: JSON.stringify({ slug, name, tags }),
+    });
+    mask.remove();
+    flash(data.status === "scan_failed" ? `已创建「${name}」，但扫描失败：存储归档不可读` : `已创建「${name}」`);
+    _localLibsLast = data;
+    renderLocalTab();
+  } catch (err) {
+    flash("创建失败: " + err.message, "error");
+    if (btn) btn.disabled = false;
   }
 }
 

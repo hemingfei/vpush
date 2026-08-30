@@ -2052,7 +2052,8 @@ class ImaDocumentStore:
             entries = sorted(
                 path
                 for path in self.local_root.iterdir()
-                if path.is_dir() and not path.is_symlink()
+                # 根级隐藏目录（如 .cicc 控制目录）不是本地库
+                if path.is_dir() and not path.is_symlink() and not path.name.startswith(".")
             )
         except OSError as exc:
             logger.warning(
@@ -2078,6 +2079,7 @@ class ImaDocumentStore:
             "name": slug,
             "enabled": False,
             "pdf_count": 0,
+            "tags": [],
             "error": "",
             "transient": False,
             "records": [],
@@ -2114,6 +2116,7 @@ class ImaDocumentStore:
         lib_tags = [
             tag.strip() for tag in marker.get("tags") or [] if isinstance(tag, str) and tag.strip()
         ]
+        entry["tags"] = lib_tags
         sidecar = self._load_local_sidecar(path)
         now_iso = datetime.now(UTC).isoformat()
         for dirpath, dirnames, filenames in os.walk(path, followlinks=False):
@@ -2231,9 +2234,7 @@ class ImaDocumentStore:
         prefix = self._group_namespace(group_id) + "__"
         return [key for key in state if str(key).startswith(prefix)]
 
-    def set_local_library_enabled(self, slug: str, enabled: bool) -> None:
-        """写回标记文件 enabled 字段（原子替换）。写失败抛 OSError 由调用方报错；
-        属主 99:100 由存储侧（NFS all_squash）保证。"""
+    def _local_library_marker(self, slug: str) -> tuple[Path, dict[str, Any]]:
         if not LOCAL_LIBRARY_SLUG_RE.fullmatch(slug):
             raise ValueError("invalid local library slug")
         marker_path = self.local_library_marker_path(slug)
@@ -2245,12 +2246,42 @@ class ImaDocumentStore:
             raise ValueError("invalid local library marker") from exc
         if not isinstance(marker, dict):
             raise ValueError("invalid local library marker")
-        marker["enabled"] = bool(enabled)
+        return marker_path, marker
+
+    def save_local_library_marker(self, marker_path: Path, marker: dict[str, Any]) -> None:
         self._save(marker_path, marker)
         try:
             marker_path.chmod(0o640)
         except OSError:
             logger.warning("Local library marker chmod failed path=%s", marker_path.name)
+
+    def set_local_library_enabled(self, slug: str, enabled: bool) -> None:
+        """写回标记文件 enabled 字段（原子替换）。写失败抛 OSError 由调用方报错；
+        属主 99:100 由存储侧（NFS all_squash）保证。"""
+        marker_path, marker = self._local_library_marker(slug)
+        marker["enabled"] = bool(enabled)
+        self.save_local_library_marker(marker_path, marker)
+
+    def update_local_library_meta(
+        self, slug: str, *, name: str | None = None, tags: list[str] | None = None
+    ) -> None:
+        """写回标记文件 name/tags 字段（原子替换）。错误语义同 set_local_library_enabled。"""
+        marker_path, marker = self._local_library_marker(slug)
+        if name is not None:
+            clean_name = str(name).strip()
+            if not clean_name or len(clean_name) > 80:
+                raise ValueError("标记文件 name 需为 1-80 字")
+            marker["name"] = clean_name
+        if tags is not None:
+            seen: set[str] = set()
+            clean_tags: list[str] = []
+            for tag in tags:
+                value = str(tag).strip()
+                if value and value not in seen:
+                    seen.add(value)
+                    clean_tags.append(value)
+            marker["tags"] = clean_tags
+        self.save_local_library_marker(marker_path, marker)
 
 
 def convert_pdf(pdf: Path, txt: Path) -> int:
@@ -3059,6 +3090,7 @@ class ImaDocumentService:
                 "name": entry["name"],
                 "enabled": entry["enabled"],
                 "pdf_count": entry["pdf_count"],
+                "tags": [str(tag) for tag in entry.get("tags") or []],
                 "error": entry["error"],
             }
             if entry["error"]:
@@ -3066,6 +3098,7 @@ class ImaDocumentService:
                 summary["name"] = str(old.get("name") or summary["name"])
                 summary["pdf_count"] = int(old.get("pdf_count") or 0)
                 summary["enabled"] = bool(old.get("enabled"))
+                summary["tags"] = [str(tag) for tag in old.get("tags") or []]
                 summaries.append(summary)
                 continue
             try:
@@ -3084,6 +3117,7 @@ class ImaDocumentService:
                 summary["name"] = str(old.get("name") or summary["name"])
                 summary["pdf_count"] = int(old.get("pdf_count") or 0)
                 summary["enabled"] = bool(old.get("enabled"))
+                summary["tags"] = [str(tag) for tag in old.get("tags") or []]
             summaries.append(summary)
         self._prune_removed_local_libraries(state, applied, result["libraries"])
         payload = {"scanned_at": datetime.now(UTC).isoformat(), "libraries": summaries}
@@ -3132,6 +3166,57 @@ class ImaDocumentService:
                 item["enabled"] = bool(enabled)
         self.db.set_setting(IMA_LOCAL_LIBRARIES_KEY, json.dumps(status, ensure_ascii=False))
         return status
+
+    def update_local_library_meta(
+        self, slug: str, *, name: str | None = None, tags: list[str] | None = None
+    ) -> dict[str, Any]:
+        """改库名/库级标签：写标记文件并同步 settings 缓存；标签对文档的生效在下次扫描。"""
+        self.store.update_local_library_meta(slug, name=name, tags=tags)
+        status = self.local_scan_status()
+        clean_name = str(name).strip() if name is not None else None
+        clean_tags: list[str] | None = None
+        if tags is not None:
+            clean_tags = []
+            for tag in tags:
+                value = str(tag).strip()
+                if value and value not in clean_tags:
+                    clean_tags.append(value)
+        for item in status["libraries"]:
+            if str(item.get("slug") or "") == slug:
+                if clean_name is not None:
+                    item["name"] = clean_name
+                if clean_tags is not None:
+                    item["tags"] = clean_tags
+        self.db.set_setting(IMA_LOCAL_LIBRARIES_KEY, json.dumps(status, ensure_ascii=False))
+        return status
+
+    def create_local_library(
+        self, slug: str, name: str, tags: list[str] | None = None
+    ) -> dict[str, Any]:
+        """在 local/<slug>/ 建目录并写标记文件（默认未启用），随后扫描一次让库出现在列表。"""
+        clean_slug = str(slug or "").strip()
+        if not LOCAL_LIBRARY_SLUG_RE.fullmatch(clean_slug):
+            raise ValueError("slug 需为小写字母/数字/短横线（1-47 位）")
+        clean_name = str(name or "").strip()
+        if not clean_name or len(clean_name) > 80:
+            raise ValueError("name 需为 1-80 字")
+        clean_tags: list[str] = []
+        for tag in tags or []:
+            value = str(tag).strip()
+            if value and value not in clean_tags:
+                clean_tags.append(value)
+        self.store.local_root.mkdir(parents=True, exist_ok=True)
+        lib_dir = self.store.local_root / clean_slug
+        lib_dir.mkdir(mode=0o750)  # 已存在抛 FileExistsError → 路由层 409
+        self.store.save_local_library_marker(
+            lib_dir / LOCAL_LIBRARY_MARKER,
+            {"name": clean_name, "enabled": False, "tags": clean_tags},
+        )
+        scanned = self.scan_local_libraries()
+        if scanned.get("status") == "already_running":
+            # IMA 同步占用中：目录与标记已落盘，列表稍后随周期扫描出现
+            return {"status": "created", **self.local_scan_status()}
+        return scanned
 
     def stop(self) -> None:
         self._stop.set()

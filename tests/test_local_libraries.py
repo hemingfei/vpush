@@ -64,6 +64,8 @@ def test_scan_ignores_directory_without_marker(tmp_path):
     service, archive = _service(tmp_path)
     (archive / "local" / "no-marker").mkdir(parents=True)
     (archive / "local" / "no-marker" / "a.pdf").write_bytes(b"%PDF")
+    # 根级隐藏目录（如 .cicc 控制目录）不当成异常库
+    (archive / "local" / ".cicc").mkdir(parents=True)
     _make_library(archive, pdfs=["0830/纪要.pdf"])
 
     result = service.scan_local_libraries()
@@ -415,3 +417,138 @@ def test_enabled_toggle_reports_write_failure(tmp_path, monkeypatch):
     ).json()["libraries"][0]
     assert status["enabled"] is False
     assert json.loads(marker.read_text(encoding="utf-8"))["enabled"] is False
+
+
+def test_update_local_library_meta_writes_marker_and_status(tmp_path):
+    service, archive = _service(tmp_path)
+    _make_library(archive, name="旧名", tags=["旧标签"])
+    service.scan_local_libraries()
+
+    status = service.update_local_library_meta(
+        "demo", name=" 新名 ", tags=["研报", " 中金 ", "研报", ""]
+    )
+
+    marker = json.loads((archive / "local" / "demo" / MARKER).read_text(encoding="utf-8"))
+    assert marker["name"] == "新名"
+    # tags 去重、去空白，空项剔除
+    assert marker["tags"] == ["研报", "中金"]
+    item = status["libraries"][0]
+    assert item["name"] == "新名" and item["tags"] == ["研报", "中金"]
+    # settings 缓存同步（下次 local_scan_status 直接可读）
+    cached = service.local_scan_status()["libraries"][0]
+    assert cached["name"] == "新名" and cached["tags"] == ["研报", "中金"]
+
+    with pytest.raises(ValueError):
+        service.update_local_library_meta("missing", name="任意")
+    with pytest.raises(ValueError):
+        service.update_local_library_meta("demo", name="  ")
+    with pytest.raises(ValueError):
+        service.update_local_library_meta("demo", name="x" * 81)
+
+
+def test_create_local_library_makes_dir_marker_and_scans(tmp_path):
+    service, archive = _service(tmp_path)
+
+    result = service.create_local_library("papers", "论文库", tags=["研报"])
+
+    assert result["status"] == "finished"
+    assert result["libraries"][0]["slug"] == "papers"
+    assert result["libraries"][0]["pdf_count"] == 0
+    assert result["libraries"][0]["enabled"] is False
+    marker = json.loads((archive / "local" / "papers" / MARKER).read_text(encoding="utf-8"))
+    assert marker == {"name": "论文库", "enabled": False, "tags": ["研报"]}
+
+    with pytest.raises(FileExistsError):
+        service.create_local_library("papers", "重复")
+    with pytest.raises(ValueError):
+        service.create_local_library("Bad_Slug", "非法 slug")
+    with pytest.raises(ValueError):
+        service.create_local_library("ok-slug", "")
+    # tags 带出扫描 summary
+    listed = service.local_scan_status()["libraries"][0]
+    assert listed["tags"] == ["研报"]
+
+
+def test_local_library_admin_meta_create_acl_endpoints(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "app.sqlite"))
+    admin_headers = _headers(client, "meta_admin", "METADM1", admin=True)
+    user_headers = _headers(client, "meta_user", "METUSR1")
+
+    # 网页建库：建目录 + 写标记 + 扫描出现在列表
+    created = client.post(
+        "/api/admin/ima-local-libraries",
+        headers=admin_headers,
+        json={"slug": "papers", "name": "论文库", "tags": ["研报"]},
+    )
+    assert created.status_code == 200, created.text
+    body = created.json()
+    assert body["libraries"][0]["slug"] == "papers"
+
+    # 列表带 tags 与 acl_usernames
+    listed = client.get("/api/admin/ima-local-libraries", headers=admin_headers)
+    item = listed.json()["libraries"][0]
+    assert item["tags"] == ["研报"]
+    assert item["acl_usernames"] == []
+
+    # 授权 + 改名/改标签
+    granted = client.put(
+        "/api/admin/ima-collector/groups/local-papers/acl",
+        headers=admin_headers,
+        json={"usernames": ["meta_user"]},
+    )
+    assert granted.status_code == 200, granted.text
+    updated = client.put(
+        "/api/admin/ima-local-libraries/papers",
+        headers=admin_headers,
+        json={"name": "论文库二", "tags": ["研报", "论文"]},
+    )
+    assert updated.status_code == 200, updated.text
+    item = updated.json()["libraries"][0]
+    assert item["name"] == "论文库二" and item["tags"] == ["研报", "论文"]
+
+    listed = client.get("/api/admin/ima-local-libraries", headers=admin_headers)
+    item = listed.json()["libraries"][0]
+    assert item["acl_usernames"] == ["meta_user"]
+
+    # 错误路径：重复建库 409；非法 slug/name 400；空更新 400；库不存在 404
+    assert (
+        client.post(
+            "/api/admin/ima-local-libraries",
+            headers=admin_headers,
+            json={"slug": "papers", "name": "重复"},
+        ).status_code
+        == 409
+    )
+    assert (
+        client.post(
+            "/api/admin/ima-local-libraries",
+            headers=admin_headers,
+            json={"slug": "Bad_Slug", "name": "x"},
+        ).status_code
+        == 400
+    )
+    assert (
+        client.put(
+            "/api/admin/ima-local-libraries/papers",
+            headers=admin_headers,
+            json={},
+        ).status_code
+        == 400
+    )
+    missing = client.put(
+        "/api/admin/ima-local-libraries/nope",
+        headers=admin_headers,
+        json={"name": "任意"},
+    )
+    assert missing.status_code == 404
+
+    # 非管理员不可用新端点
+    assert (
+        client.post(
+            "/api/admin/ima-local-libraries",
+            headers=user_headers,
+            json={"slug": "x", "name": "x"},
+        ).status_code
+        == 403
+    )
