@@ -3103,6 +3103,8 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
     padding-left: 12px;
     padding-right: 12px;
   }
+  .ima-reader-back span { display: none; }
+  .ima-pdf-open { width: calc(100% - 32px); min-height: 48px; margin: 16px; }
 }
 
 .ima-source-stack { display: grid; gap: var(--space-5); }

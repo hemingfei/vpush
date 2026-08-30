@@ -1586,8 +1586,13 @@ async function renderImaDocument(seq, mediaId) {
     const openNewTab = item.has_pdf
       ? `<button type="button" class="icon-btn" aria-label="新标签打开 PDF" title="新标签打开 PDF" onclick="openImaPdfNewTab()">${EXTERNAL_LINK_ICON}</button>`
       : "";
+    const phoneReader = window.matchMedia("(max-width: 768px)").matches;
     const pdfPanel = item.has_pdf
-      ? `<div id="ima-pdf-panel" class="ima-pdf-panel" aria-busy="true"><p class="ima-reader-status" role="status">正在打开预览…</p><iframe id="ima-pdf-frame" title="PDF 预览" hidden></iframe></div>`
+      ? `<div id="ima-pdf-panel" class="ima-pdf-panel" aria-busy="true"><p class="ima-reader-status" role="status">正在打开预览…</p>${
+          phoneReader
+            ? `<button id="ima-pdf-phone-open" type="button" class="btn-normal ima-pdf-open" onclick="openImaPdfNewTab()" hidden>打开 PDF</button>`
+            : `<iframe id="ima-pdf-frame" title="PDF 预览" hidden></iframe>`
+        }</div>`
       : `<div class="ima-pdf-panel"><div class="ima-reader-empty" role="status"><p>还没有预览文件</p></div></div>`;
     const sizeLine = fmtDocSize(item.size);
     const sizeMeta = sizeLine ? `<span class="ima-reader-meta-item">${escapeHtml(sizeLine)}</span>` : "";
@@ -1654,14 +1659,19 @@ async function loadImaPdf(mediaId, readerSeq) {
     window._imaPdfUrl = URL.createObjectURL(blob);
     const frame = $("#ima-pdf-frame");
     const panel = $("#ima-pdf-panel");
-    if (frame && panel) {
+    const phoneOpen = $("#ima-pdf-phone-open");
+    if (panel && (frame || phoneOpen)) {
       const status = panel.querySelector(".ima-reader-status");
       if (status) status.remove();
-      frame.src = window._imaPdfUrl;
-      frame.hidden = false;
       panel.hidden = false;
       panel.removeAttribute("aria-busy");
-      frame.addEventListener("error", () => showImaPdfFail(mediaId, seq, readerSeq), { once: true });
+      if (phoneOpen) {
+        phoneOpen.hidden = false;
+      } else if (frame) {
+        frame.src = window._imaPdfUrl;
+        frame.hidden = false;
+        frame.addEventListener("error", () => showImaPdfFail(mediaId, seq, readerSeq), { once: true });
+      }
     }
   } catch {
     if (routeStillActive(seq) && readerSeq === _imaReaderSeq) showImaPdfFail(mediaId, seq, readerSeq);

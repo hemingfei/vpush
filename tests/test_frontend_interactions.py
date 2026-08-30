@@ -3180,8 +3180,8 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=230"' in html
-    assert 'src="/app.js?v=323"' in html
+    assert 'href="/style.css?v=231"' in html
+    assert 'src="/app.js?v=324"' in html
     assert 'dav-shell-v195' in sw
 
 
@@ -4224,3 +4224,7 @@ def test_knowledge_desk_serves_phone_without_refusal():
     assert "grid-template-columns: 44px minmax(0, 1fr) 84px" in css
     # 同优先级后者胜：手机覆盖块必须声明在桌面规则之后，否则被覆盖回桌面网格
     assert css.index("知识库阅读台（手机）") > css.index("grid-template-columns: minmax(0, 1fr) auto")
+    # 手机阅读页：iframe 换成 blob 就绪后的「打开 PDF」大按钮，返回按钮省略结果数
+    assert "ima-pdf-phone-open" in _fn_body("renderImaDocument")
+    assert "ima-pdf-phone-open" in _fn_body("loadImaPdf")
+    assert ".ima-reader-back span { display: none; }" in css
