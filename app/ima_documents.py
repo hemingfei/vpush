@@ -32,7 +32,7 @@ IMA_DOWNLOAD_WORKERS = 4
 IMA_LIST_WORKERS = 3
 IMA_FOLDER_LIST_MAX_PAGES = 20
 IMA_DOWNLOAD_RETRY_DELAYS = (2, 8)
-IMA_INDEX_VERSION = 2  # v2：-副本 同组去重进读模型；升位强制下次同步/启动重建
+IMA_INDEX_VERSION = 3  # v3：读模型加跨年排序键 sort_date；升位强制下次同步/启动重建
 IMA_STATE_FLUSH_COUNT = 20
 IMA_STATE_FLUSH_SECONDS = 2.0
 
@@ -220,6 +220,24 @@ def _clamp_group_interval(value: Any) -> int:
 def is_local_library_group(group_id: Any) -> bool:
     """`local-` 前缀专供本地库；IMA 采集/下载不得把它当作 knowledge_base_id。"""
     return str(group_id or "").startswith(LOCAL_LIBRARY_PREFIX)
+
+
+PUB_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def ima_sort_date(group_id: Any, pub_date: Any, day: Any) -> str:
+    """跨年排序键（YYYY-MM-DD），无日期返回空串（列表排序沉底）。
+
+    本地库文档用真实发布日期 pub_date（sidecar publish，非法/缺失即空）；
+    IMA 文档只有 MMDD，按当前年份补全。空串在 DESC 排序里自然沉底。
+    """
+    if is_local_library_group(group_id):
+        pub = str(pub_date or "").strip()
+        return pub if PUB_DATE_RE.fullmatch(pub) else ""
+    day = str(day or "")
+    if re.fullmatch(r"\d{4}", day):
+        return f"{time.strftime('%Y', time.gmtime())}-{day[:2]}-{day[2:]}"
+    return ""
 
 
 def _secret_status(value: str) -> dict[str, Any]:
@@ -1811,6 +1829,7 @@ class ImaDocumentStore:
                     "media_id": media_id,
                     "name": str(record.get("name") or media_id),
                     "day": str(record.get("day") or "unknown"),
+                    "pub_date": str(record.get("pub_date") or ""),
                     "group_id": actual_group_id,
                 }
             )
@@ -1906,6 +1925,12 @@ class ImaDocumentStore:
                 "has_pdf": bool(state_item.get("pdf")),
                 "has_txt": bool(state_item.get("txt")),
                 "_match_rank": match_rank,
+                # 与 SQLite 读模型同键：pub_date/年份补全后的跨年排序键
+                "_sort_date": ima_sort_date(
+                    actual_group_id,
+                    state_item.get("pub_date") or record.get("pub_date"),
+                    record.get("day"),
+                ),
             }
             if include_body:
                 item["abstract"] = abstract
@@ -1919,14 +1944,15 @@ class ImaDocumentStore:
         output.sort(
             key=lambda item: (
                 int(item.get("_match_rank") or 0),
-                item["day"] != "unknown",
-                item["day"],
+                bool(item.get("_sort_date")),
+                item.get("_sort_date") or "",
                 item["name"],
             ),
             reverse=True,
         )
         for item in output:
             item.pop("_match_rank", None)
+            item.pop("_sort_date", None)
         if limit is not None:
             return output[offset:offset + limit]
         return output
@@ -2255,10 +2281,15 @@ class ImaDocumentStore:
                 tags.append(tag)
         txt_rel = str(Path(pdf_rel).with_suffix(".txt")) if (lib_dir / rel).with_suffix(".txt").is_file() else ""
         group_id = LOCAL_LIBRARY_PREFIX + slug
+        # 规格 §11：sidecar publish（YYYY-MM-DD）→ pub_date，跨年排序键来源；非法/缺失留空
+        pub_date = str((meta or {}).get("publish") or "").strip()
+        if not PUB_DATE_RE.fullmatch(pub_date):
+            pub_date = ""
         record = {
             "media_id": media_id,
             "name": stem,
             "day": day or "unknown",
+            "pub_date": pub_date,
             "size": int(size),
             "md5": "",
             "ts": "",
@@ -2271,6 +2302,7 @@ class ImaDocumentStore:
             "group_id": group_id,
             "group_name": lib_name,
             "day": day or "unknown",
+            "pub_date": pub_date,
             "name": stem,
             "pdf": pdf_rel,
             "txt": txt_rel,
@@ -2609,11 +2641,13 @@ class ImaDocumentService:
         abstract = str(record.get("abstract") or "")
         pdf_path = str(state_item.get("pdf") or "")
         txt_path = str(state_item.get("txt") or "")
+        pub_date = str(state_item.get("pub_date") or record.get("pub_date") or "")
         return {
             "group_id": group_id,
             "media_id": media_id,
             "day": day,
             "valid_day": int(day.isdigit() and len(day) == 4),
+            "sort_date": ima_sort_date(group_id, pub_date, day),
             "name": name,
             "group_name": group_name,
             "name_folded": name.casefold(),
@@ -2916,6 +2950,7 @@ class ImaDocumentService:
         if self._index_usable() and callable(stats_fn):
             return stats_fn([item.id for item in groups])
         stats: dict[str, dict] = {}
+        latest_keys: dict[str, str] = {}
         for item in self.store.catalog_entries(groups=groups):
             group_id = str(item.get("group_id") or "")
             if not group_id:
@@ -2930,9 +2965,13 @@ class ImaDocumentService:
                 },
             )
             bucket["document_count"] += 1
-            day = str(item.get("day") or "")
-            if day != "unknown" and day >= str(bucket["latest_day"] or ""):
-                bucket["latest_day"] = day
+            # 与读模型 catalog 窗口排序同键：跨年按 sort_date 比较，unknown 沉底
+            sort_key = ima_sort_date(
+                group_id, item.get("pub_date"), item.get("day")
+            )
+            if sort_key and sort_key >= latest_keys.get(group_id, ""):
+                latest_keys[group_id] = sort_key
+                bucket["latest_day"] = str(item.get("day") or "")
                 bucket["latest_title"] = str(item.get("name") or "")
                 bucket["latest_media_id"] = str(item.get("media_id") or "")
         return stats
