@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import secrets
 import shutil
 import sqlite3
@@ -285,6 +286,7 @@ IMA_DOCUMENT_INDEX_COLUMNS = (
     "media_id",
     "day",
     "valid_day",
+    "sort_date",
     "name",
     "group_name",
     "name_folded",
@@ -313,6 +315,7 @@ CREATE TABLE IF NOT EXISTS ima_document_index (
     media_id TEXT NOT NULL,
     day TEXT NOT NULL DEFAULT 'unknown',
     valid_day INTEGER NOT NULL DEFAULT 0,
+    sort_date TEXT NOT NULL DEFAULT '',
     name TEXT NOT NULL DEFAULT '',
     group_name TEXT NOT NULL DEFAULT '',
     name_folded TEXT NOT NULL DEFAULT '',
@@ -360,6 +363,7 @@ _IMA_DOC_COLUMN_SPEC = (
     ("media_id", "TEXT", 1, None, 2),
     ("day", "TEXT", 1, "'unknown'", 0),
     ("valid_day", "INTEGER", 1, "0", 0),
+    ("sort_date", "TEXT", 1, "''", 0),
     ("name", "TEXT", 1, "''", 0),
     ("group_name", "TEXT", 1, "''", 0),
     ("name_folded", "TEXT", 1, "''", 0),
@@ -397,13 +401,13 @@ _IMA_DOC_INT_COLUMNS = frozenset({"size", "chars", "has_pdf", "has_txt"})
 _IMA_INDEX_SPECS = (
     (
         "idx_ima_doc_latest",
-        "ima_document_index(valid_day DESC, day DESC, name DESC)",
-        (("valid_day", 1), ("day", 1), ("name", 1)),
+        "ima_document_index(sort_date DESC, name DESC)",
+        (("sort_date", 1), ("name", 1)),
     ),
     (
         "idx_ima_doc_group_latest",
-        "ima_document_index(group_id, valid_day DESC, day DESC, name DESC)",
-        (("group_id", 0), ("valid_day", 1), ("day", 1), ("name", 1)),
+        "ima_document_index(group_id, sort_date DESC, name DESC)",
+        (("group_id", 0), ("sort_date", 1), ("name", 1)),
     ),
     (
         "idx_ima_doc_tag_group",
@@ -564,6 +568,7 @@ def _ima_public_document(row: dict) -> dict:
         "group_id": row["group_id"],
         "media_id": row["media_id"],
         "day": row["day"],
+        "sort_date": str(row.get("sort_date") or ""),
         "name": row["name"],
         "group_name": row.get("group_name") or "",
         "abstract": row.get("abstract") or "",
@@ -3888,11 +3893,25 @@ class DB:
             raw_tags = []
         tags = list(dict.fromkeys(str(tag) for tag in raw_tags if str(tag)))
         day = str(source.get("day") or "unknown").strip() or "unknown"
+        valid_day = int(day.isascii() and len(day) == 4 and day.isdigit())
+        # 跨年排序键 YYYY-MM-DD：上层建行 helper（_index_row → ima_sort_date）总是显式携带；
+        # 裸行（历史数据/直写）缺省按 valid_day 用当前年份补全，unknown 为空（排序沉底）。
+        raw_sort_date = source.get("sort_date", _UNSET)
+        if raw_sort_date is _UNSET:
+            raw_sort_date = (
+                f"{time.strftime('%Y', time.gmtime())}-{day[:2]}-{day[2:]}"
+                if valid_day
+                else ""
+            )
+        sort_date = str(raw_sort_date or "").strip()
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", sort_date):
+            sort_date = ""
         values = {
             "group_id": actual_group_id,
             "media_id": media_id,
             "day": day,
-            "valid_day": int(day.isascii() and len(day) == 4 and day.isdigit()),
+            "valid_day": valid_day,
+            "sort_date": sort_date,
             "name": str(source.get("name") or ""),
             "group_name": str(source.get("group_name") or ""),
             "name_folded": str(
@@ -4104,19 +4123,24 @@ class DB:
             )
             params.append(tag)
         like = "LIKE ? ESCAPE '\\'"
+        tag_like = (
+            "EXISTS (SELECT 1 FROM ima_document_tags t "
+            "WHERE t.group_id = d.group_id AND t.media_id = d.media_id "
+            "AND t.tag {like})"
+        )
         rank_sql = "0"
         pattern = None
         if query:
             pattern = _like_pattern(query)
             clauses.append(
                 f"(d.name_folded {like} OR d.metadata_folded {like} "
-                f"OR d.abstract_folded {like})"
+                f"OR d.abstract_folded {like} OR {tag_like.format(like=like)})"
             )
-            params.extend([pattern, pattern, pattern])
+            params.extend([pattern, pattern, pattern, pattern])
             rank_sql = (
                 f"CASE WHEN d.name_folded {like} THEN 3 "
-                f"WHEN d.metadata_folded {like} THEN 2 "
-                f"ELSE 1 END"
+                f"WHEN d.metadata_folded {like} OR {tag_like.format(like=like)} THEN 2 "
+                "ELSE 1 END"
             )
         return " AND ".join(clauses), params, rank_sql, pattern
 
@@ -4145,11 +4169,12 @@ class DB:
         )
         item_params = list(where_params)
         if pattern is not None:
-            item_params = [pattern, pattern, *where_params]
+            item_params = [pattern, pattern, pattern, *where_params]
         rows = self._rows(
             f"SELECT d.*, {rank_sql} AS match_rank FROM ima_document_index d "
             f"WHERE {where_sql} "
-            "ORDER BY match_rank DESC, d.valid_day DESC, d.day DESC, d.name DESC "
+            # 跨年排序：sort_date（YYYY-MM-DD）DESC，空串（unknown）沉底
+            "ORDER BY match_rank DESC, (d.sort_date = '') ASC, d.sort_date DESC, d.name DESC "
             "LIMIT ? OFFSET ?",
             (*item_params, page_limit + 1, page_offset),
         )
@@ -4199,13 +4224,13 @@ class DB:
             return {}
         placeholders = ", ".join("?" for _ in groups)
         rows = self._rows(
-            "SELECT group_id, day AS latest_day, name AS latest_title, "
-            "media_id AS latest_media_id, document_count FROM ("
-            "SELECT group_id, day, name, media_id, "
+            "SELECT group_id, day AS latest_day, sort_date AS latest_sort_date, "
+            "name AS latest_title, media_id AS latest_media_id, document_count FROM ("
+            "SELECT group_id, day, sort_date, name, media_id, "
             "COUNT(*) OVER (PARTITION BY group_id) AS document_count, "
             "ROW_NUMBER() OVER ("
             "PARTITION BY group_id "
-            "ORDER BY valid_day DESC, day DESC, name DESC"
+            "ORDER BY (sort_date = '') ASC, sort_date DESC, name DESC"
             ") AS rn FROM ima_document_index "
             f"WHERE group_id IN ({placeholders})"
             ") ranked WHERE rn = 1",
@@ -4215,6 +4240,7 @@ class DB:
             row["group_id"]: {
                 "document_count": int(row["document_count"]),
                 "latest_day": row["latest_day"],
+                "latest_sort_date": row["latest_sort_date"],
                 "latest_title": row["latest_title"],
                 "latest_media_id": row["latest_media_id"],
             }

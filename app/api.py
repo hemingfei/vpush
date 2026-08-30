@@ -97,6 +97,7 @@ from .ima_documents import (
     IMA_PURE_UID_KEY,
     ImaDocumentService,
     ImaPureClient,
+    LocalLibraryInvalidMeta,
     _clamp_group_interval,
     _safe_error,
     ima_kb_valid_tags,
@@ -577,12 +578,35 @@ class ImaCollectorSyncIn(BaseModel):
     group_id: str = ""
 
 
+class CiccTriggerIn(BaseModel):
+    mode: str
+
+
+class CiccScheduleIn(BaseModel):
+    enabled: bool
+
+
 class ImaKbAclIn(BaseModel):
     usernames: list[str]
 
 
 class ImaKbUserAclIn(BaseModel):
     group_ids: list[str]
+
+
+class LocalLibraryEnabledIn(BaseModel):
+    enabled: bool
+
+
+class LocalLibraryMetaIn(BaseModel):
+    name: str | None = None
+    tags: list[str] | None = None
+
+
+class LocalLibraryCreateIn(BaseModel):
+    slug: str
+    name: str
+    tags: list[str] = []
 
 
 class ProxyPoolIn(BaseModel):
@@ -2578,7 +2602,20 @@ def create_api_router(
     def _configured_groups():
         if ima_documents is None:
             raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
-        return ima_documents.config().groups
+        # 本地库（local-<slug>，已启用）与 IMA 组共用同一条授权/阅读通路
+        return ima_documents.product_groups()
+
+    def _acl_known_group_ids() -> set[str]:
+        """ACL 可配置的组：可见组 + 全部已扫描本地库。
+
+        本地库未启用/报错时不在 product_groups 里，但仍应能先授权后启用。
+        """
+        ids = {group.id for group in _configured_groups()}
+        ids |= {
+            str(item.get("group_id") or "")
+            for item in ima_documents.local_scan_status()["libraries"]
+        }
+        return ids
 
     def _readable_groups(user: dict):
         groups = _configured_groups()
@@ -2835,7 +2872,7 @@ def create_api_router(
 
     @router.put("/admin/ima-collector/groups/{group_id}/acl", dependencies=[Depends(require_admin)])
     def set_ima_kb_acl(group_id: str, body: ImaKbAclIn, admin: dict = Depends(require_admin)):
-        if group_id not in {g.id for g in _configured_groups()}:
+        if group_id not in _acl_known_group_ids():
             raise HTTPException(status_code=404, detail="知识库不存在")
         user_ids = []
         for username in body.usernames:
@@ -2854,7 +2891,7 @@ def create_api_router(
             raise HTTPException(status_code=404, detail="用户不存在")
         if target.get("is_admin"):
             raise HTTPException(status_code=400, detail="管理员可直接打开全部知识库")
-        known = {group.id for group in _configured_groups()}
+        known = _acl_known_group_ids()
         group_ids = []
         seen: set[str] = set()
         for group_id in body.group_ids:
@@ -2927,6 +2964,8 @@ def create_api_router(
                         group_id = group.id.strip()
                         if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", group_id):
                             raise HTTPException(status_code=400, detail="IMA 群组 ID 格式无效")
+                        if group_id.startswith("local-"):
+                            raise HTTPException(status_code=400, detail="local- 前缀专供本地库，IMA 群组不得使用")
                     if group_id in group_ids:
                         raise HTTPException(status_code=400, detail="IMA 群组 ID 不能重复")
                     group_ids.append(group_id)
@@ -3062,6 +3101,117 @@ def create_api_router(
         write_request_file(request_path)
         _audit(admin, "ima_storage_backup", "", "requested")
         return {"status": "started", **public}
+
+    @router.get("/admin/cicc/status", dependencies=[Depends(require_admin)])
+    def cicc_status(admin: dict = Depends(require_admin)):
+        from .cicc_collector import from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        return ctl.status()
+
+    @router.post("/admin/cicc/trigger", dependencies=[Depends(require_admin)])
+    def cicc_trigger(body: CiccTriggerIn, admin: dict = Depends(require_admin)):
+        from .cicc_collector import from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        try:
+            result = ctl.trigger(body.mode, admin["username"])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        _audit(admin, "cicc_trigger", "", body.mode)
+        return result
+
+    @router.put("/admin/cicc/schedule", dependencies=[Depends(require_admin)])
+    def cicc_set_schedule(body: CiccScheduleIn, admin: dict = Depends(require_admin)):
+        from .cicc_collector import from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        result = ctl.set_schedule(body.enabled)
+        _audit(admin, "cicc_schedule", "", "enabled" if body.enabled else "disabled")
+        return result
+
+    @router.get("/admin/ima-local-libraries", dependencies=[Depends(require_admin)])
+    def get_ima_local_libraries():
+        if ima_documents is None:
+            raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
+        payload = ima_documents.local_scan_status()
+        for item in payload["libraries"]:
+            group_id = str(item.get("group_id") or "")
+            item["acl_usernames"] = db.ima_kb_acl_usernames(group_id) if group_id else []
+        return payload
+
+    @router.post("/admin/ima-local-libraries/scan", dependencies=[Depends(require_admin)])
+    def scan_ima_local_libraries(admin: dict = Depends(require_admin)):
+        if ima_documents is None:
+            raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
+        result = ima_documents.scan_local_libraries()
+        if result.get("status") == "already_running":
+            raise HTTPException(status_code=409, detail="IMA 同步或扫描正在进行，请稍后再试")
+        _audit(admin, "scan_ima_local_libraries", "", str(result.get("status") or ""))
+        return result
+
+    @router.put("/admin/ima-local-libraries/{slug}/enabled", dependencies=[Depends(require_admin)])
+    def set_ima_local_library_enabled(
+        slug: str, body: LocalLibraryEnabledIn, admin: dict = Depends(require_admin)
+    ):
+        if ima_documents is None:
+            raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
+        try:
+            ima_documents.set_local_library_enabled(slug, body.enabled)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except OSError as exc:
+            # 属主/权限不对（须 99:100 可写）时必须报错，不能静默
+            raise HTTPException(status_code=502, detail=f"标记文件写入失败：{_safe_error(exc)}") from exc
+        _audit(
+            admin,
+            "set_ima_local_library_enabled",
+            slug,
+            "enabled" if body.enabled else "disabled",
+        )
+        return ima_documents.local_scan_status()
+
+    @router.put("/admin/ima-local-libraries/{slug}", dependencies=[Depends(require_admin)])
+    def update_ima_local_library(
+        slug: str, body: LocalLibraryMetaIn, admin: dict = Depends(require_admin)
+    ):
+        if ima_documents is None:
+            raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
+        if body.name is None and body.tags is None:
+            raise HTTPException(status_code=400, detail="name 与 tags 至少填一项")
+        try:
+            result = ima_documents.update_local_library_meta(slug, name=body.name, tags=body.tags)
+        except LocalLibraryInvalidMeta as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except OSError as exc:
+            # 属主/权限不对（须 99:100 可写）时必须报错，不能静默
+            raise HTTPException(status_code=502, detail=f"标记文件写入失败：{_safe_error(exc)}") from exc
+        _audit(admin, "update_ima_local_library", slug, "")
+        return result
+
+    @router.post("/admin/ima-local-libraries", dependencies=[Depends(require_admin)])
+    def create_ima_local_library(body: LocalLibraryCreateIn, admin: dict = Depends(require_admin)):
+        if ima_documents is None:
+            raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
+        try:
+            result = ima_documents.create_local_library(body.slug, body.name, body.tags)
+        except FileExistsError as exc:
+            raise HTTPException(status_code=409, detail=f"本地库已存在：{body.slug}") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except OSError as exc:
+            # 存储归档不可写（须 99:100 可写）时必须报错，不能静默
+            raise HTTPException(status_code=502, detail=f"存储归档写入失败：{_safe_error(exc)}") from exc
+        _audit(admin, "create_ima_local_library", body.slug, str(result.get("status") or ""))
+        return result
 
     @router.get("/admin/ima-credentials", dependencies=[Depends(require_admin)])
     def get_ima_credentials():

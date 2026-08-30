@@ -188,3 +188,27 @@ curl -sS --interface 10.80.0.2 http://10.80.0.2:8743/healthz
 Expected: `ok`. `ss -tlnp | grep 8743` must show `10.80.0.2:8743` only, not `0.0.0.0` or the public IP.
 
 On DMIT, recreate `vpush` after editing `.env`. Rollback: delete `IMA_PULL_URL` / `IMA_PULL_TOKEN` from `.env`, recreate `vpush`; optionally `systemctl stop vpush-ima-puller`.
+
+## 中金采集控制单元（vpush-cicc-*）
+
+供 vpush 管理页「知识库设置 → 中金」页签远程控制采集/压缩，并承载每日增量定时。
+
+```bash
+install -m 755 deploy/ima-storage/cicc-dispatch.py deploy/ima-storage/cicc-status.py \
+  deploy/ima-storage/cicc-incremental.py /usr/local/lib/vpush-ima/
+install -m 644 deploy/ima-storage/vpush-cicc-dispatch.path deploy/ima-storage/vpush-cicc-dispatch.service \
+  deploy/ima-storage/vpush-cicc-incremental.service deploy/ima-storage/vpush-cicc-incremental.timer \
+  deploy/ima-storage/vpush-cicc-status.service deploy/ima-storage/vpush-cicc-status.timer \
+  /etc/systemd/system/
+mkdir -p /srv/vpush-ima/local/.cicc/commands
+chown -R 99:100 /srv/vpush-ima/local/.cicc && chmod 770 /srv/vpush-ima/local/.cicc/commands
+echo 1 > /srv/vpush-ima/local/.cicc/incremental.enabled   # 默认开每日增量
+chown 99:100 /srv/vpush-ima/local/.cicc/incremental.enabled
+systemctl daemon-reload
+systemctl enable --now vpush-cicc-dispatch.path vpush-cicc-incremental.timer \
+  vpush-cicc-status.timer vpush-cicc-status.service
+```
+
+Expected: `systemctl list-timers | grep cicc` shows the two timers; status file
+`/srv/vpush-ima/local/.cicc/status.json` refreshed every 60s, owned 99:100.
+Rollback: `systemctl disable --now vpush-cicc-dispatch.path vpush-cicc-incremental.timer vpush-cicc-status.timer`.

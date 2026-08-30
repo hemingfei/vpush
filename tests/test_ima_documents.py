@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import inspect
 import json
 import logging
 import sqlite3
@@ -3712,6 +3713,134 @@ def test_service_list_documents_uses_index_without_json(tmp_path, monkeypatch):
     assert status["index"]["documents"] == 1
 
 
+def test_duplicate_copies_hidden_from_list_and_index(tmp_path):
+    db = DB(str(tmp_path / "dup.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    group = ImaGroupConfig("semi", "SemiAnalysis", "kb", "root")
+    records = [
+        {
+            "group_id": "semi",
+            "group_name": "SemiAnalysis",
+            "media_id": "file_a",
+            "name": "AI 展望.pdf",
+            "day": "0829",
+        },
+        {
+            "group_id": "semi",
+            "group_name": "SemiAnalysis",
+            "media_id": "file_b",
+            "name": "AI 展望-副本.pdf",
+            "day": "0829",
+        },
+        {
+            "group_id": "semi",
+            "group_name": "SemiAnalysis",
+            "media_id": "file_c",
+            "name": "孤本-副本.pdf",
+            "day": "0828",
+        },
+    ]
+    service.store.save_manifest(records)
+    service.store.save_state(
+        {
+            service.store.state_key(record): {"pdf": f"semi/{record['media_id']}.pdf"}
+            for record in records
+        }
+    )
+    service.rebuild_read_index((group,))
+    # 同组「X-副本」在原始在场时隐藏，孤本副本保留；计数同步收敛
+    assert [item["media_id"] for item in service.list_documents((group,))["items"]] == [
+        "file_a",
+        "file_c",
+    ]
+    assert service.catalog_stats((group,))["semi"]["document_count"] == 2
+    assert db.ima_document_page(["semi"])["document_count"] == 2
+
+
+def test_sync_group_replace_dedupes_copies_in_index(tmp_path, monkeypatch):
+    """增量同步的组替换路径与 rebuild 一致：读模型不得出现「-副本」重复行。"""
+    db = DB(str(tmp_path / "dup-sync.sqlite"))
+    db.set_setting(IMA_PURE_UID_KEY, "uid")
+    db.set_setting(IMA_PURE_REFRESH_TOKEN_KEY, "refresh")
+    db.set_setting(
+        IMA_PURE_GROUPS_KEY,
+        json.dumps(
+            [
+                {
+                    "id": "semi",
+                    "name": "SemiAnalysis",
+                    "knowledge_base_id": "kb",
+                    "root_folder_id": "root",
+                    "folder_ids": ["root"],
+                    "enabled": True,
+                }
+            ],
+            ensure_ascii=False,
+        ),
+    )
+    service = ImaDocumentService(db, tmp_path / "ima")
+    group = ImaDocumentConfig.from_db(db).groups[0]
+
+    class FakeClient:
+        def __init__(self, config, group=None):
+            self.config = config
+            self.group = group
+
+        def manifest(self, listing_cache=None):
+            return [
+                {"media_id": "file_a", "name": "AI 展望.pdf", "day": "0829", "size": 8},
+                {"media_id": "file_b", "name": "AI 展望-副本.pdf", "day": "0829", "size": 8},
+            ]
+
+        def get_media(self, media_id):
+            return {
+                "media_id": media_id,
+                "jump_url_info": {"url": f"https://download.invalid/{media_id}.pdf"},
+            }
+
+        def download(self, media, destination, expected_size=0):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"%PDF-1.7")
+            return {"size": 8, "md5": "d" * 32}
+
+        def _pdf_info(self, path):
+            return 8, "d" * 32
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    cfg = ImaDocumentConfig.from_db(db)
+    result = service._sync_group(cfg, group, service.store.load_state())
+
+    assert result["total"] == 2
+    # 磁盘 manifest 仍 2 行（读时去重），SQLite 读模型收敛为 1 行且保留原始行
+    raw_files = json.loads(service.store.manifest_path.read_text(encoding="utf-8"))["files"]
+    assert [item["media_id"] for item in raw_files] == ["file_a", "file_b"]
+    assert db.ima_document_index_count() == 1
+    assert db.ima_document_page(["semi"])["items"][0]["media_id"] == "file_a"
+
+
+def test_index_search_matches_tags(tmp_path):
+    db = DB(str(tmp_path / "tag.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    group = ImaGroupConfig("semi", "SemiAnalysis", "kb", "root")
+    record = {
+        "group_id": "semi",
+        "group_name": "SemiAnalysis",
+        "media_id": "file_a",
+        "name": "2026 中期展望.pdf",
+        "day": "0829",
+        "abstract": "宏观利率",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state(
+        {service.store.state_key(record): {"tags": ["高盛"], "pdf": "semi/a.pdf"}}
+    )
+    service.rebuild_read_index((group,))
+    # 标签命中参与搜索，排序与资料源命中同级
+    page = service.list_documents((group,), query="高盛")
+    assert [item["media_id"] for item in page["items"]] == ["file_a"]
+    assert page["document_count"] == 1
+
+
 def test_service_falls_back_to_json_when_index_unavailable(tmp_path):
     service = ImaDocumentService(FakeDB(), tmp_path / "ima")
     group = ImaGroupConfig("semi", "SemiAnalysis", "kb", "root")
@@ -3930,3 +4059,75 @@ def test_rebuild_read_index_holds_sync_lock(tmp_path, monkeypatch):
     assert held == [True]
     assert service._sync_lock.locked() is False
 
+
+def test_archive_maintenance_rebuilds_index_before_nfs_work():
+    source = inspect.getsource(ImaDocumentService.start)
+    first = source.index("_rebuild_index_if_needed")
+    restore = source.index("restore_original_filenames")
+    last = source.rindex("_rebuild_index_if_needed")
+    assert first < restore < last
+
+
+
+def test_ima_sort_date_uses_media_create_year_over_current_year():
+    from app.ima_documents import ima_sort_date
+
+    # 媒体创建于 2025-12-31（CN 时区），day=1231：排序键必须是真实年份而非当前年
+    assert ima_sort_date("research", "", "1231", 1767139200000) == "2025-12-31"
+    # 缺 ts 回退当前年份（历史行为）
+    assert ima_sort_date("research", "", "1231", "") == f"{time.strftime('%Y')}-12-31"
+    # 本地库仍优先真实 pub_date
+    assert ima_sort_date("local-cicc", "2025-06-01", "0601") == "2025-06-01"
+
+
+def test_index_and_list_carry_true_year_for_old_documents(tmp_path):
+    service = ImaDocumentService(FakeDB(), tmp_path / "ima")
+    old = {
+        "media_id": "old", "name": "old.pdf", "day": "1231",
+        "ts": "1767139200000", "group_id": "research",
+    }
+    new = {
+        "media_id": "new", "name": "new.pdf", "day": "0830",
+        "ts": "1788000000000", "group_id": "research",
+    }
+    service.store.save_manifest([old, new])
+    service.store.save_state({
+        service.store.state_key(r): {"pdf": f"research/{r['media_id']}.pdf"}
+        for r in (old, new)
+    })
+    service.rebuild_read_index()
+
+    groups = (ImaGroupConfig("research", "研究", "kb", "root", True, "discovered", ("mount",)),)
+    page = service.list_documents(groups)
+    assert [item["media_id"] for item in page["items"]] == ["new", "old"]
+    by_id = {item["media_id"]: item for item in page["items"]}
+    assert by_id["old"]["sort_date"] == "2025-12-31"
+    assert by_id["new"]["sort_date"] == "2026-08-30"
+
+    stats = service.catalog_stats(groups)
+    assert stats["research"]["latest_sort_date"] == "2026-08-30"
+
+
+def test_restore_fast_path_skips_probe_for_canonical_names(tmp_path):
+    """命名已规范的文件零 IO 跳过：不再逐文件 NFS realpath/stat。"""
+    store = ImaDocumentStore(tmp_path / "ima")
+    record = {"media_id": "file_ok", "name": "中金-宏观周报.pdf", "day": "0825"}
+    path = store.pdf_path(record)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"%PDF-1.7")
+    store.save_manifest([record])
+    store.save_state({
+        "file_ok": {
+            "name": "中金-宏观周报.pdf",
+            "day": "0825",
+            "pdf": "0825/中金-宏观周报.pdf",
+            "txt": "0825/中金-宏观周报.txt",
+        }
+    })
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("canonical files must not hit the probe path")
+
+    store._find_existing_pdf = boom
+    assert store.restore_original_filenames()["renamed"] == 0
+    assert path.is_file()

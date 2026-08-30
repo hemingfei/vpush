@@ -53,8 +53,8 @@ def _fn_body(name: str) -> str:
     return src[start:i]
 
 
-def _media_block(css: str, query: str) -> str:
-    idx = css.find(query)
+def _media_block(css: str, query: str, last: bool = False) -> str:
+    idx = css.rfind(query) if last else css.find(query)
     assert idx != -1, f"缺少 {query}"
     start = css.find("{", idx)
     depth, i = 1, start + 1
@@ -1329,7 +1329,7 @@ def test_ima_pdf_load_is_owned_by_route_and_reader_generation_before_load_or_fai
     validation = load.index("if (blob.size < 64 || head !== \"%PDF-\")")
     assert validation < load.index("showImaPdfFail(mediaId, seq, readerSeq)")
     success_guard = load.index(owner_guard, load.index(head_read))
-    for side_effect in ("clearImaPdfUrl()", "URL.createObjectURL(blob)", "frame.src", "panel.hidden = false", "frame.addEventListener"):
+    for side_effect in ("URL.revokeObjectURL(window._imaPdfUrl)", "URL.createObjectURL(blob)", "frame.src", "panel.hidden = false", "frame.addEventListener"):
         assert success_guard < load.index(side_effect)
 
 
@@ -2375,6 +2375,41 @@ def test_ima_documents_filters_round_trip_through_local_url():
     assert "submitImaDocumentsSearch()" in render
 
 
+def test_local_library_cards_delegate_via_data_attributes():
+    """本地库卡片 slug 来自存储机目录名，不得走内联 onclick 字符串插值（F1）。"""
+    src = APP_JS.read_text()
+    assert "onclick=\"openLocalLibraryModal('" not in src
+    assert "onclick=\"toggleLocalLibrary('" not in src
+    card = _fn_body("localLibraryCardHtml")
+    assert "data-ll-edit" in card and "data-ll-toggle" in card
+    assert 'e.target.closest("[data-ll-edit]")' in src
+    assert 'e.target.closest("[data-ll-toggle]")' in src
+
+
+def test_local_scan_button_driven_by_inflight_flag():
+    """扫描中状态由模块级标志驱动，15s 轮询重渲染不得复活按钮（F2）。"""
+    src = APP_JS.read_text()
+    assert "let _scanInFlight = false" in src
+    scan = _fn_body("scanLocalLibraries")
+    render = _fn_body("renderLocalTab")
+    assert "_scanInFlight = true" in scan
+    assert "_scanInFlight = false" in scan
+    assert "onclick=\"scanLocalLibraries()\"" in render
+    assert "_scanInFlight ? \"disabled\" : \"\"" in render
+    assert '_scanInFlight ? "扫描中…" : "扫描本地库"' in render
+
+
+def test_ima_reader_nav_requires_matching_snapshot_route():
+    """阅读器上一篇/下一篇与结果计数只使用与返回列表路由匹配的快照（F3）。"""
+    src = APP_JS.read_text()
+    nav = _fn_body("imaReaderNavHtml")
+    render = _fn_body("renderImaDocument")
+    assert "snapshot = null" in src  # nav 从入参取快照，不再自取模块级变量
+    assert "_imaListSnapshot" not in nav
+    assert "normalizeRoute(backRoute)" in render
+    assert "imaReaderNavHtml(mediaId, item.group_id || documentGroup, listSnapshot)" in render
+
+
 def test_ima_documents_refresh_and_retry_advance_local_route_seq():
     """刷新与重试必须递增局部路由序号，避免旧请求覆盖新结果。"""
     src = APP_JS.read_text()
@@ -2400,7 +2435,6 @@ def test_ima_refresh_keeps_old_reports_and_uses_inline_retry():
     assert "if (!keepOld)" in render
     before_request = render[render.index("if (!keepOld)"):render.index("await api(")]
     assert "_imaItems.length = 0" in before_request
-    assert "_imaOffset = 0" in before_request
     assert "state.imaDocumentsHasMore = false" in before_request
     success = render[render.index("await api("):]
     assert success.index("_imaItems.length = 0") < success.index("_imaItems.push(...items)")
@@ -2413,7 +2447,7 @@ def test_ima_report_states_do_not_drop_incomplete_documents():
 
     assert "没有找到相关研报" in empty
     assert "换个公司、代码或主题试试" in empty
-    assert 'fmtImaDayShort(item.day) || "—"' in row
+    assert 'fmtImaDayShort(item.sort_date || item.day) || "—"' in row
     assert "预览打不开" in fail
     assert "downloadImaPdf" not in fail
     assert "btn-normal" not in fail
@@ -2879,6 +2913,56 @@ def test_channel_status_poll_skips_identical_and_restores_focus():
     assert "el.innerHTML = channelStatusHtml" not in refresh
 
 
+def test_ima_document_counts_use_real_total_not_page_plus():
+    """列表/阅读器计数用 document_count，不再用当前页条数拼 50+。"""
+    src = APP_JS.read_text()
+    render = _fn_body("renderImaDocuments")
+    more = _fn_body("loadImaDocumentsMore")
+    reader = _fn_body("renderImaDocument")
+    assert "function imaResolvedCount(" in src
+    assert "function imaDocumentsCountLabel(" in src
+    assert "function imaReaderBackLabel(" in src
+    assert "imaDocumentsCountLabel(" in render
+    assert "snapshot.documentCount" in render
+    assert "data.document_count" in render
+    assert "imaDocumentsCountLabel(" in more
+    assert "imaReaderBackLabel(listSnapshot)" in reader
+    assert "imaSnapshotIsFiltered" in src
+    assert 'has_more ? "+" : ""' not in render
+    assert 'imaDocumentsHasMore ? "+" : ""' not in more
+    assert 'hasMore ? "+" : ""' not in reader
+
+
+def test_ima_local_library_pdf_does_not_embed_chrome_frame():
+    """本地库 PDF（中金等）不内嵌 Chrome PDF 插件，避免同页卡死。"""
+    src = APP_JS.read_text()
+    reader = _fn_body("renderImaDocument")
+    load = _fn_body("loadImaPdf")
+    assert "function imaInlinePdfFrame(" in src
+    assert "imaInlinePdfFrame(item.group_id || documentGroup)" in reader
+    assert 'startsWith("local-")' in src
+    assert "ima-pdf-phone-open" in reader
+    assert "打开预览" in reader
+    assert "signal: abort.signal" in load or "{ signal: abort.signal }" in load
+
+
+def test_ima_reader_clamps_long_abstract_and_keeps_preview_floor():
+    """长摘要默认三行截断，展开后仍限高，预览区保底高度。"""
+    src = APP_JS.read_text()
+    reader = _fn_body("renderImaDocument")
+    css = STYLE_CSS.read_text()
+    assert "IMA_ABSTRACT_CLAMP_CHARS" in src
+    assert "function toggleImaAbstract(" in src
+    assert "is-clamped" in reader
+    assert "ima-abstract-more" in reader
+    assert "toggleImaAbstract(this)" in reader
+    assert ".ima-reader-abstract.is-clamped:not(.is-expanded) p" in css
+    assert "-webkit-line-clamp: 3" in css
+    assert ".ima-reader-page .ima-pdf-panel {" in css
+    assert "min-height: 240px;" in css
+    assert "contain: strict;" in css
+
+
 def test_ima_document_reader_preserves_group_context_and_metadata():
     """阅读页标题显示接口返回的群组和日期，并从当前 URL 保留列表筛选上下文。"""
     src = APP_JS.read_text()
@@ -2900,6 +2984,8 @@ def test_ima_document_reader_preserves_group_context_and_metadata():
     assert "查看 PDF" not in reader
     assert "下载" in reader
     assert "btn-normal ima-reader-download" in reader
+    assert 'class="btn-ghost ima-reader-back"' not in reader
+    assert "ima-back-icon" in reader
     assert "imaDisplayTitle" in reader and "item.size" in reader
     assert "ima-reader-abstract" in reader
     assert "ima-reader-empty" in reader
@@ -3065,7 +3151,7 @@ def test_ima_report_row_is_document_first_and_keeps_optional_metadata():
     assert "ima-report-title" in row
     assert "ima-report-meta" in row
     assert "ima-report-source" in row
-    assert 'fmtImaDayShort(item.day) || "—"' in row
+    assert 'fmtImaDayShort(item.sort_date || item.day) || "—"' in row
     assert "imaListTitle(item.name)" in row
     assert "imaDocTicker(item.name)" in meta
     assert "imaDistinctiveTags" in meta
@@ -3138,6 +3224,8 @@ def test_ima_reader_has_one_app_download_and_result_neighbors():
     assert "ima-reader-toolbar" in reader
     assert "backFromImaReader" in reader
     assert "btn-normal ima-reader-download" in reader
+    assert 'class="btn-ghost ima-reader-back"' not in reader
+    assert "ima-back-icon" in reader
     assert "<details open" in reader
     assert "imaReaderNavHtml" in reader
     assert "openImaDocument" in nav
@@ -3199,9 +3287,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=229"' in html
-    assert 'src="/app.js?v=319"' in html
-    assert 'dav-shell-v190' in sw
+    assert 'href="/style.css?v=238"' in html
+    assert 'src="/app.js?v=332"' in html
+    assert 'dav-shell-v200' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -3223,8 +3311,7 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     assert 'group: "资料"' not in nav
     assert 'route: "ima-documents"' not in mobile
     assert 'route: "knowledge"' not in mobile
-    assert "isPhoneShell" in src
-    assert "知识库在电脑上读" in src
+    assert "renderKnowledgePhoneBlocked" not in src
     assert "知识库请在电脑上打开" not in src
     assert 'class="tl-ima-entry"' in timeline
     assert "go('knowledge')" in timeline
@@ -3232,7 +3319,8 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     assert "打开知识库" in timeline
     css = STYLE_CSS.read_text()
     assert ".tl-ima-entry { display: none; }" in css
-    assert "(min-width: 769px) and (max-width: 900px)" in css
+    # 手机（≤768px）也显示入口：知识库已放开移动端
+    assert "@media (max-width: 900px) {\n  .tl-ima-entry { display: block; margin: 0 0 12px; }" in css
 
 
 
@@ -3355,7 +3443,6 @@ def test_ima_documents_search_leaves_day_view():
     clear = _fn_body("clearImaDocumentsFilters")
     render = _fn_body("renderImaDocuments")
     more = _fn_body("loadImaDocumentsMore")
-    open_group = _fn_body("openKnowledgeGroup")
     assert "state.imaDocumentsDay = \"\"" in submit
     assert "state.imaDocumentsDay = \"\"" in tag
     assert "state.imaDocumentsQuery = \"\"" in day
@@ -3364,7 +3451,6 @@ def test_ima_documents_search_leaves_day_view():
     assert "state.imaDocumentsDay = \"\"" in clear
     assert "_imaListSeq" in render
     assert "_imaListSeq" in more
-    assert "imaDocumentsLastDay" in open_group
 
 
 def test_register_placeholder_matches_username_min_length():
@@ -4041,7 +4127,7 @@ def test_sidebar_has_slim_toggle_matching_rail():
     assert 'localStorage.setItem(SIDEBAR_SLIM_KEY' in _fn_body("toggleSidebarSlim")
     assert "max-width: 900px" in _fn_body("toggleSidebarSlim")
     assert "html.sidebar-slim .sidebar { width: 68px" in css
-    rail = _media_block(css, "@media (max-width: 900px)")
+    rail = _media_block(css, "@media (max-width: 900px)", last=True)  # 2116 行的侧栏轨块，1298 是 tl-ima-entry
     assert ".sidebar { width: 68px" in rail
     assert "pointer-events: none" in rail
     assert "@media (max-width: 768px)" in css
@@ -4215,3 +4301,57 @@ def test_save_polling_splits_zsxq_fields():
         assert key not in polling
         assert key in zsxq
     assert 'id="pc-zq-save"' in _fn_body("loadAdminKnowledge")
+
+
+def test_knowledge_keyboard_walks_rows_without_opening_documents():
+    body = _fn_body("onKnowledgeListKey")
+    # 列表 j/k 只移动焦点，Enter 才打开，避免连按连下载整份 PDF
+    assert "openImaDocument(row.dataset.mediaId" not in body
+    assert "rows[idx].focus()" in body
+    # 阅读页 j/k 沿快照结果集翻上/下一份
+    assert "_imaListSnapshot" in body
+    assert "openImaDocument(next.media_id" in body
+
+
+def test_reader_pdf_has_new_tab_open_helper():
+    body = _fn_body("openImaPdfNewTab")
+    assert "window.open(window._imaPdfUrl" in body
+    assert "flash(" in body
+    assert "openImaPdfNewTab()" in _fn_body("renderImaDocument")
+
+
+def test_knowledge_desk_serves_phone_without_refusal():
+    src = APP_JS.read_text()
+    assert "renderKnowledgePhoneBlocked" not in src
+    assert "isPhoneShell" not in src
+    css = STYLE_CSS.read_text()
+    # 手机壳层给阅读台独立高度，不再整页拒绝
+    assert "知识库阅读台（手机）" in css
+    assert "100dvh - 120px" in css
+    assert "grid-template-columns: 44px minmax(0, 1fr) 84px" in css
+    # 同优先级后者胜：手机覆盖块必须声明在桌面规则之后，否则被覆盖回桌面网格
+    assert css.index("知识库阅读台（手机）") > css.index("grid-template-columns: minmax(0, 1fr) auto")
+    # 手机阅读页：iframe 换成 blob 就绪后的「打开 PDF」大按钮，返回按钮省略结果数
+    assert "ima-pdf-phone-open" in _fn_body("renderImaDocument")
+    assert "ima-pdf-phone-open" in _fn_body("loadImaPdf")
+    assert ".ima-reader-back .ima-back-count { display: none; }" in css
+    assert ".ima-reader-download span { display: none; }" in css
+    # 遗留手机块不得再拉伸阅读工具栏按钮（曾把下载钮撑出屏）
+    assert "flex: 1; justify-content: center" not in css
+
+
+def test_user_modal_kb_grants_include_local_libraries():
+    body = _fn_body("loadAdminUsers")
+    assert "/api/admin/ima-local-libraries" in body
+    assert "state.imaKbGroups = imaGroups.concat(localGroups)" in body
+    modal = _fn_body("adminOpenUser")
+    assert "本地库" in modal
+    assert "group.local" in modal
+
+
+def test_knowledge_zero_sub_empty_state_wraps_source_controls():
+    body = _fn_body("renderKnowledge")
+    # 零订阅空态的资料源控件必须套标准容器，裸渲染会错位溢出
+    assert "ima-report-filters-row" in body
+    css = STYLE_CSS.read_text()
+    assert ".ima-report-filters-row { padding: 12px 16px; flex-wrap: wrap; }" in css

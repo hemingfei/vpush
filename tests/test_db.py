@@ -618,6 +618,7 @@ def test_ima_document_index_schema_and_migration(tmp_path):
         "media_id",
         "day",
         "valid_day",
+        "sort_date",
         "name",
         "group_name",
         "name_folded",
@@ -641,6 +642,7 @@ def test_ima_document_index_schema_and_migration(tmp_path):
         "media_id",
         "day",
         "valid_day",
+        "sort_date",
         "name",
         "group_name",
         "name_folded",
@@ -661,6 +663,8 @@ def test_ima_document_index_schema_and_migration(tmp_path):
     ]
     assert columns["day"]["dflt_value"] == "'unknown'"
     assert columns["valid_day"]["type"] == "INTEGER"
+    assert columns["sort_date"]["type"] == "TEXT"
+    assert columns["sort_date"]["dflt_value"] == "''"
     assert columns["group_id"]["pk"] == 1
     assert columns["media_id"]["pk"] == 2
     tags_info = db._rows("PRAGMA table_info(ima_document_tags)")
@@ -680,11 +684,10 @@ def test_ima_document_index_schema_and_migration(tmp_path):
             for row in db._rows(f"PRAGMA index_info({name})")
         ]
 
-    assert index_columns("idx_ima_doc_latest") == ["valid_day", "day", "name"]
+    assert index_columns("idx_ima_doc_latest") == ["sort_date", "name"]
     assert index_columns("idx_ima_doc_group_latest") == [
         "group_id",
-        "valid_day",
-        "day",
+        "sort_date",
         "name",
     ]
     assert index_columns("idx_ima_doc_tag_group") == ["tag", "group_id"]
@@ -703,14 +706,12 @@ def test_ima_document_index_schema_and_migration(tmp_path):
         for row in db._rows(f"PRAGMA index_list({table})")
     }
     assert _ima_index_key_columns(db, "idx_ima_doc_latest") == [
-        ("valid_day", 1),
-        ("day", 1),
+        ("sort_date", 1),
         ("name", 1),
     ]
     assert _ima_index_key_columns(db, "idx_ima_doc_group_latest") == [
         ("group_id", 0),
-        ("valid_day", 1),
-        ("day", 1),
+        ("sort_date", 1),
         ("name", 1),
     ]
     assert _ima_index_key_columns(db, "idx_ima_doc_tag_group") == [
@@ -777,6 +778,7 @@ def test_ima_document_index_migrates_missing_valid_day(tmp_path):
         "media_id",
         "day",
         "valid_day",
+        "sort_date",
         "name",
         "group_name",
         "name_folded",
@@ -797,6 +799,8 @@ def test_ima_document_index_migrates_missing_valid_day(tmp_path):
     ]
     assert doc_info["valid_day"]["type"] == "INTEGER"
     assert doc_info["valid_day"]["dflt_value"] == "0"
+    assert doc_info["sort_date"]["type"] == "TEXT"
+    assert doc_info["sort_date"]["dflt_value"] == "''"
     assert doc_info["day"]["dflt_value"] == "'unknown'"
     assert db._rows(
         "SELECT group_id, media_id, day, valid_day, name, group_name "
@@ -999,14 +1003,12 @@ def test_ima_document_index_collapses_multirow_meta(tmp_path):
 def test_ima_document_index_index_column_order_and_desc(tmp_path):
     db = DB(str(tmp_path / "ima-index-xinfo.db"))
     assert _ima_index_key_columns(db, "idx_ima_doc_latest") == [
-        ("valid_day", 1),
-        ("day", 1),
+        ("sort_date", 1),
         ("name", 1),
     ]
     assert _ima_index_key_columns(db, "idx_ima_doc_group_latest") == [
         ("group_id", 0),
-        ("valid_day", 1),
-        ("day", 1),
+        ("sort_date", 1),
         ("name", 1),
     ]
     assert _ima_index_key_columns(db, "idx_ima_doc_tag_group") == [
