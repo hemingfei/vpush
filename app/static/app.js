@@ -6855,6 +6855,94 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
       </section>
       <p class="section-meta"><a href="/admin/knowledge" onclick="event.preventDefault();go('admin/knowledge')">IMA 与知识星球设置已移至知识库设置</a></p>
     </div>
+    <div id="st-mx" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-mx" style="display:none">
+      <section class="section-panel">
+        <header class="section-head">
+          <div><h2 class="section-title">MX平台配置</h2>
+          <p class="section-meta">配置 MX 平台的 API Token、同步和 WebSocket 推送。</p></div>
+        </header>
+        <div class="cfg-grid">
+          <div class="cfg-group">
+            <p class="cfg-group-title">基础设置</p>
+            <div class="cfg-fields">
+              <label class="cfg-field cfg-check">
+                <input id="mx-enabled" type="checkbox">
+                <span class="cfg-flag-text">启用 MX 平台</span>
+              </label>
+              <label class="cfg-field">
+                <span>API Token</span>
+                <input id="mx-token" type="text" class="form-control" placeholder="输入 MX API Token">
+              </label>
+              <label class="cfg-field">
+                <span>API 地址</span>
+                <input id="mx-api-base" type="text" class="form-control" placeholder="https://mx.2026.naaifu.cn/business-api/5">
+              </label>
+            </div>
+          </div>
+          <div class="cfg-group">
+            <p class="cfg-group-title">WebSocket 推送</p>
+            <div class="cfg-fields">
+              <label class="cfg-field cfg-check">
+                <input id="mx-ws-enabled" type="checkbox">
+                <span class="cfg-flag-text">启用实时推送</span>
+              </label>
+              <label class="cfg-field">
+                <span>WebSocket 地址</span>
+                <input id="mx-ws-url" type="text" class="form-control" placeholder="wss://mx.2026.naaifu.cn">
+              </label>
+              <label class="cfg-field">
+                <span>WebSocket 路径</span>
+                <input id="mx-ws-path" type="text" class="form-control" placeholder="/socket.io">
+              </label>
+              <label class="cfg-field">
+                <span>WebSocket Namespace</span>
+                <input id="mx-ws-namespace" type="text" class="form-control" placeholder="/msg">
+              </label>
+            </div>
+          </div>
+          <div class="cfg-group">
+            <p class="cfg-group-title">同步与抓取</p>
+            <div class="cfg-fields">
+              <label class="cfg-field">
+                <span>房间同步间隔<span class="cfg-unit">小时</span></span>
+                <input id="mx-sync-hours" type="number" class="form-control" min="1" max="168">
+              </label>
+              <label class="cfg-field">
+                <span>单页房间消息数</span>
+                <input id="mx-page-size" type="number" class="form-control" min="1" max="100">
+              </label>
+              <label class="cfg-field">
+                <span>最大历史页数</span>
+                <input id="mx-max-pages" type="number" class="form-control" min="1" max="100">
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="toolbar mx-config-actions">
+          <button type="button" class="btn-normal" id="mx-save-btn" onclick="saveMxConfig()">保存配置</button>
+          <button type="button" class="btn-ghost" id="mx-test-btn" onclick="testMxConnection()">测试连接</button>
+          <button type="button" class="btn-ghost" id="mx-sync-btn" onclick="syncMxRooms()">立即同步房间</button>
+        </div>
+        <p class="section-meta" id="mx-ws-status">WebSocket 状态：加载中...</p>
+      </section>
+      <section class="section-panel">
+        <header class="section-head">
+          <div><h2 class="section-title">房间管理</h2>
+          <p class="section-meta">管理从 MX 平台同步的房间，控制是否启用和广场显示。</p></div>
+          <div class="toolbar mx-rooms-head-actions">
+            <button class="btn-ghost" onclick="loadMxRooms()">刷新</button>
+          </div>
+        </header>
+        <div class="toolbar">
+          <input id="mx-rooms-q" type="search" class="form-control" placeholder="搜索房间..." style="max-width:320px">
+          <label class="cfg-field cfg-check mx-rooms-enabled-only">
+            <input id="mx-rooms-enabled-only" type="checkbox">
+            <span class="cfg-flag-text">只显示已启用</span>
+          </label>
+        </div>
+        <div id="mx-rooms-list"></div>
+      </section>
+    </div>
     <div id="st-proxies" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-proxies" style="display:none"></div>`;
   renderStatsData(s);
   if (statsLoadError) {
@@ -7063,96 +7151,7 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
       </div>
     </section>
     ${imaStoragePanelHtml(imaCollector.storage)}
-    </div>
-    <div id="st-mx" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-mx" style="display:none">
-      <section class="section-panel">
-        <header class="section-head">
-          <div><h2 class="section-title">MX平台配置</h2>
-          <p class="section-meta">配置 MX 平台的 API Token、同步和 WebSocket 推送。</p></div>
-        </header>
-        <div class="cfg-grid">
-          <div class="cfg-group">
-            <p class="cfg-group-title">基础设置</p>
-            <div class="cfg-fields">
-              <label class="cfg-field cfg-check">
-                <input id="mx-enabled" type="checkbox">
-                <span class="cfg-flag-text">启用 MX 平台</span>
-              </label>
-              <label class="cfg-field">
-                <span>API Token</span>
-                <input id="mx-token" type="text" class="form-control" placeholder="输入 MX API Token">
-              </label>
-              <label class="cfg-field">
-                <span>API 地址</span>
-                <input id="mx-api-base" type="text" class="form-control" placeholder="https://mx.2026.naaifu.cn/business-api/5">
-              </label>
-            </div>
-          </div>
-          <div class="cfg-group">
-            <p class="cfg-group-title">WebSocket 推送</p>
-            <div class="cfg-fields">
-              <label class="cfg-field cfg-check">
-                <input id="mx-ws-enabled" type="checkbox">
-                <span class="cfg-flag-text">启用实时推送</span>
-              </label>
-              <label class="cfg-field">
-                <span>WebSocket 地址</span>
-                <input id="mx-ws-url" type="text" class="form-control" placeholder="wss://mx.2026.naaifu.cn">
-              </label>
-              <label class="cfg-field">
-                <span>WebSocket 路径</span>
-                <input id="mx-ws-path" type="text" class="form-control" placeholder="/socket.io">
-              </label>
-              <label class="cfg-field">
-                <span>WebSocket Namespace</span>
-                <input id="mx-ws-namespace" type="text" class="form-control" placeholder="/msg">
-              </label>
-            </div>
-          </div>
-          <div class="cfg-group">
-            <p class="cfg-group-title">同步与抓取</p>
-            <div class="cfg-fields">
-              <label class="cfg-field">
-                <span>房间同步间隔<span class="cfg-unit">小时</span></span>
-                <input id="mx-sync-hours" type="number" class="form-control" min="1" max="168">
-              </label>
-              <label class="cfg-field">
-                <span>单页房间消息数</span>
-                <input id="mx-page-size" type="number" class="form-control" min="1" max="100">
-              </label>
-              <label class="cfg-field">
-                <span>最大历史页数</span>
-                <input id="mx-max-pages" type="number" class="form-control" min="1" max="100">
-              </label>
-            </div>
-          </div>
-        </div>
-        <div class="toolbar mx-config-actions">
-          <button type="button" class="btn-normal" id="mx-save-btn" onclick="saveMxConfig()">保存配置</button>
-          <button type="button" class="btn-ghost" id="mx-test-btn" onclick="testMxConnection()">测试连接</button>
-          <button type="button" class="btn-ghost" id="mx-sync-btn" onclick="syncMxRooms()">立即同步房间</button>
-        </div>
-        <p class="section-meta" id="mx-ws-status">WebSocket 状态：加载中...</p>
-      </section>
-      <section class="section-panel">
-        <header class="section-head">
-          <div><h2 class="section-title">房间管理</h2>
-          <p class="section-meta">管理从 MX 平台同步的房间，控制是否启用和广场显示。</p></div>
-          <div class="toolbar mx-rooms-head-actions">
-            <button class="btn-ghost" onclick="loadMxRooms()">刷新</button>
-          </div>
-        </header>
-        <div class="toolbar">
-          <input id="mx-rooms-q" type="search" class="form-control" placeholder="搜索房间..." style="max-width:320px">
-          <label class="cfg-field cfg-check mx-rooms-enabled-only">
-            <input id="mx-rooms-enabled-only" type="checkbox">
-            <span class="cfg-flag-text">只显示已启用</span>
-          </label>
-        </div>
-        <div id="mx-rooms-list"></div>
-      </section>
-    </div>
-    <div id="st-proxies" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-proxies" style="display:none"></div>`;
+    </div>`;
   renderStatsData(s);
   if (statsLoadError) {
     const error = $("#stats-poll-error");
