@@ -9,9 +9,13 @@ services:
     security_opt: ["no-new-privileges:true"]
     tmpfs:
       - /tmp:size=64m,mode=1777
+    # 整体注入 .env（LLM_*、MX_*、BARK_*、VAPID_* 等），显式 environment 优先级更高
+    env_file:
+      - .env
     environment:
       - TZ=Asia/Shanghai
-      - CONFIG_PATH=/app/config.yaml
+      # 配置文件挂到可写卷：容器 read_only 且非 root，后台改 MX 配置才能持久化
+      - CONFIG_PATH=/data/config.yaml
       - DB_PATH=/data/dav.db
       - FEISHU_APP_ID=${FEISHU_APP_ID}
       - FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
@@ -39,7 +43,7 @@ services:
       # X 登录 Cookie（完整串）：直抓 X 官方接口 + 官方翻译，免 API key
       - TWITTER_COOKIE=${TWITTER_COOKIE}
       - WEB_ALLOW_REGISTER=${WEB_ALLOW_REGISTER:-true}
-      - WEB_TRUST_PROXY=${WEB_TRUST_PROXY:-true}
+      - WEB_TRUST_PROXY=${WEB_TRUST_PROXY:-false}
       - WEB_ADMIN_PASSWORD=${WEB_ADMIN_PASSWORD}
       - WEB_TOKEN_SECRET=${WEB_TOKEN_SECRET}
       - POLLING_POSTS_RETENTION_DAYS=${POLLING_POSTS_RETENTION_DAYS:-30}
@@ -57,27 +61,11 @@ services:
       - IMA_PULL_TOKEN=${IMA_PULL_TOKEN:-}
       - IMA_STORAGE_STATUS_PATH=${IMA_STORAGE_STATUS_PATH:-}
     volumes:
+      - ./config.yaml:/data/config.yaml
       - ./data:/data
       - ${IMA_ARCHIVE_HOST_PATH:-./data/ima}:/data/ima-archive
-    expose:
-      - "8000"
-    networks: [dav]
-
-  caddy:
-    image: caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
-    container_name: dav-caddy
-    restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      - DOMAIN=${DOMAIN}
-    volumes:
-      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - vpush
+      - "8888:8000"
     networks: [dav]
 
   # sidecar：定期刷新共享 cookie 文件，主容器抓取时读取。
@@ -101,10 +89,6 @@ services:
     volumes:
       - ./data:/data
     networks: [dav]
-
-volumes:
-  caddy_data:
-  caddy_config:
 
 networks:
   dav:
