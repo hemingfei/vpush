@@ -24,7 +24,7 @@ SENTINELS = [
     ("app/ima_documents.py", "def scan_local_libraries", "本地库扫描器存在"),
     ("app/ima_documents.py", "drop_duplicate_copies", "审计B2：增量同步「-副本」去重进读模型"),
     ("app/ima_documents.py", "def ima_sort_date", "跨年排序键（本地库 pub_date / IMA 年份补全）"),
-    ("app/ima_documents.py", "def strip_watermark", "采集管道去水印（Do 置空+清图流）"),
+    ("scripts/cicc_report_collector.py", "def strip_watermark", "采集管道去水印（Do 置空+清图流）——注意在采集脚本而非 app 包"),
     ("app/db.py", "sort_date", "读模型跨年排序列"),
     # —— 中金研报 UI（v1.12.96/97，2026-08-30）——
     ("app/static/app.js", "is-clamped", "摘要超长 3 行钳制 + 展开按钮"),
