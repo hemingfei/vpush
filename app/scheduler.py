@@ -56,6 +56,7 @@ SOURCE_HEALTH_MIN_ATTEMPTS = 10  # 24h 尝试次数门槛，够多才评估成�
 SOURCE_HEALTH_LOW_RATE = 70.0  # 24h 成功率低于此值告警
 SOURCE_HEALTH_SILENT_HOURS = 6  # 超过 N 小时无成功抓取判定「整体静默」
 SOURCE_HEALTH_CHECK_INTERVAL = 600  # 主循环里每 10 分钟检查一次
+CICC_ALERT_CHECK_INTERVAL = 600  # 中金存储告警/通知检查节流
 WEIBO_QR_RENEWAL_COOLDOWN = 15 * 60
 PROXY_TICK_INTERVAL = 60
 
@@ -2021,6 +2022,15 @@ class Scheduler:
                     )
                 except Exception:  # noqa: BLE001
                     logger.exception("数据源健康告警异常")
+            if now_mono - self._last_health_check >= CICC_ALERT_CHECK_INTERVAL:
+                try:
+                    from .cicc_alerts import maybe_check_cicc
+
+                    await asyncio.to_thread(
+                        maybe_check_cicc, self.db, self.notifiers, self.notifiers_config
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception("中金存储告警异常")
             if now_mono - self._last_proxy_tick >= PROXY_TICK_INTERVAL:
                 self._last_proxy_tick = now_mono
                 try:

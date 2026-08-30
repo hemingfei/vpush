@@ -48,3 +48,11 @@ def test_release_sentinels_present():
         "工作副本疑似过期，发版会覆盖以下已上线修复：\n" + "\n".join(missing)
         + "\n如为有意重构，请同步更新 tests/test_release_guards.py 的哨兵标记。"
     )
+# —— 存储健康与采集设置批次（feat/kb-settings-batch1，2026-08-30）——
+SENTINELS += [
+    ("app/cicc_alerts.py", "def evaluate_alerts", "存储磁盘/状态阈值告警评估"),
+    ("app/cicc_alerts.py", "def maybe_check_cicc", "告警与增量通知调度入口"),
+    ("scripts/vps/cicc-incremental.py", "def should_run", "增量门控：计划时间/当日已跑"),
+    ("scripts/vps/cicc-dispatch.py", '"schedule"', "命令通道支持下发采集时间"),
+    ("app/static/app.js", "ima-storage-health", "存储页签健康总览面板"),
+]

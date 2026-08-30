@@ -6152,6 +6152,7 @@ function switchKnowledgeSettingsTab(tab) {
   } else {
     stopCiccPoll();
   }
+  if (next === "storage") loadStorageHealth();
   try { sessionStorage.setItem(KS_TAB_KEY, next); } catch { /* ignore */ }
   document.querySelectorAll(".ks-tab").forEach((btn) => {
     const on = btn.dataset.tab === next;
@@ -6189,6 +6190,7 @@ function imaStoragePanelHtml(storage) {
         <button type="button" class="btn-ghost" id="ima-storage-refresh" onclick="refreshImaStorage()">刷新状态</button>
         <button type="button" class="btn-normal" id="ima-storage-backup" onclick="backupImaStorage()">立即备份</button>
       </div>
+      <div id="ima-storage-health" class="cfg-foot"><p class="muted">存储健康加载中…</p></div>
     </div>
   </section>`;
 }
@@ -7026,6 +7028,54 @@ async function saveZsxqPollingConfig() {
   }
 }
 
+async function loadStorageHealth() {
+  const box = document.getElementById("ima-storage-health");
+  if (!box) return;
+  try {
+    const h = await api("/api/admin/ima-storage/health");
+    const st = h.storage || {};
+    const disk = st.disk || {};
+    const pct = Number(disk.pct) || 0;
+    const color = pct >= 90 ? "var(--color-danger)" : pct >= 80 ? "var(--color-warning)" : "var(--color-success)";
+    const wg = st.wg || {};
+    const nfs = st.nfs || {};
+    const cats = ((st.archive || {}).categories || []).slice(0, 8)
+      .map((c) => `<li>${escapeHtml(c.name)}：${c.files} 篇 / ${(c.bytes / 1073741824).toFixed(2)} GB</li>`).join("");
+    const alertsState = (await api("/api/admin/ima-storage/alerts")) || {};
+    const cfg = alertsState.settings || {};
+    box.innerHTML = `
+      <p class="section-meta">磁盘 <strong style="color:${color}">${disk.used_gb ?? "—"} / ${disk.total_gb ?? "—"} GB（${pct}%）</strong>
+       · 归档 ${(st.archive && st.archive.files) ?? "—"} 个 PDF
+       · 中德链路 ${wg.ok ? `${wg.rtt_ms ?? "—"} ms` : "不通"} · 归档挂载 ${nfs.mounted ? "正常" : "异常"} / 标记 ${nfs.marker_ok ? "正常" : "缺失"}</p>
+      <div style="background:var(--color-surface-soft);height:8px;border-radius:4px;overflow:hidden;margin:6px 0">
+        <div style="width:${Math.min(pct, 100)}%;height:100%;background:${color}"></div></div>
+      ${cats ? `<ul class="muted" style="margin:4px 0 0;padding-left:18px">${cats}</ul>` : ""}
+      <div class="toolbar" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <label>告警阈值 磁盘≥<input id="ima-alert-warn" type="number" value="${cfg.disk_warn ?? 80}" style="width:64px">% /
+        <input id="ima-alert-crit" type="number" value="${cfg.disk_crit ?? 90}" style="width:64px">%</label>
+        <label>状态过期 ≥<input id="ima-alert-stale" type="number" value="${cfg.stale_minutes ?? 30}" style="width:56px"> 分钟</label>
+        <label><input id="ima-alert-notify" type="checkbox" ${cfg.notify_enabled ? "checked" : ""}> 推送通知</label>
+        <button type="button" class="btn-ghost" onclick="saveStorageAlerts()">保存告警设置</button>
+      </div>`;
+  } catch (err) {
+    box.innerHTML = `<p class="muted">存储健康加载失败：${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function saveStorageAlerts() {
+  const body = {
+    disk_warn: Number((document.getElementById("ima-alert-warn") || {}).value) || 80,
+    disk_crit: Number((document.getElementById("ima-alert-crit") || {}).value) || 90,
+    stale_minutes: Number((document.getElementById("ima-alert-stale") || {}).value) || 30,
+    notify_enabled: !!(document.getElementById("ima-alert-notify") || {}).checked,
+  };
+  try {
+    await api("/api/admin/ima-storage/alerts", { method: "PUT", body: JSON.stringify(body) });
+    flash("告警设置已保存");
+    loadStorageHealth();
+  } catch (err) { flash(`保存失败：${err.message}`, "error"); }
+}
+
 async function refreshImaStorage() {
   const btn = $("#ima-storage-refresh");
   if (btn?.disabled) return;
@@ -7091,7 +7141,7 @@ function ciccRunningText(data) {
   if (data.compress_running > 0) parts.push("压缩回刷中");
   if (!parts.length) parts.push("空闲");
   parts.push(`库存 ${data.files_total ?? "—"} 篇`);
-  parts.push(`每日增量：${data.schedule_enabled ? "开" : "关"}`);
+  parts.push(`每日增量：${data.schedule_enabled ? "开" : "关"}（${(data.storage && data.storage.schedule && data.storage.schedule.time) || "03:00"}）`);
   if (data.last_incremental?.ts) {
     parts.push(`上次自动增量 ${fmtTs(data.last_incremental.ts)}（${data.last_incremental.note === "launched" ? "已启动" : data.last_incremental.note || ""}）`);
   }
@@ -7118,6 +7168,8 @@ function ciccControlInnerHtml(cicc) {
       <button type="button" class="btn-ghost danger" onclick="triggerCicc('stop')">停止采集</button>
     </div>
     <div class="toolbar" style="margin:0 0 12px">
+      <input type="time" id="cicc-schedule-time" class="form-control" style="width:120px;display:inline-block;vertical-align:middle" value="${(_ciccLastStatus && _ciccLastStatus.storage && _ciccLastStatus.storage.schedule && _ciccLastStatus.storage.schedule.time) || "03:00"}">
+      <button type="button" class="btn-ghost" onclick="saveCiccScheduleTime()">保存时间</button>
       <button type="button" class="btn-ghost" onclick="toggleCiccSchedule()">${cicc.schedule_enabled ? "关闭每日增量" : "开启每日增量"}（03:00）</button>
       <button type="button" class="btn-ghost" onclick="loadCiccStatus()">${REFRESH_ICON}<span>刷新</span></button>
     </div>
@@ -7152,13 +7204,27 @@ async function triggerCicc(mode) {
   }
 }
 
+async function saveCiccScheduleTime() {
+  const value = (document.getElementById("cicc-schedule-time") || {}).value || "";
+  if (!/^[0-9]{2}:[0-9]{2}$/.test(value)) { flash("时间格式应为 HH:mm", "error"); return; }
+  const enabled = !!(_ciccLastStatus && _ciccLastStatus.schedule_enabled);
+  try {
+    const r = await api("/api/admin/cicc/schedule", {
+      method: "PUT", body: JSON.stringify({ enabled, time: value }),
+    });
+    flash(`采集时间已设为每天 ${r.time}`);
+    loadCiccStatus();
+  } catch (err) { flash(`保存失败：${err.message}`, "error"); }
+}
+
 async function toggleCiccSchedule() {
   try {
     const enabled = !(_ciccLastStatus && _ciccLastStatus.schedule_enabled);
+    const time = (document.getElementById("cicc-schedule-time") || {}).value || "03:00";
     const r = await api("/api/admin/cicc/schedule", {
-      method: "PUT", body: JSON.stringify({ enabled }),
+      method: "PUT", body: JSON.stringify({ enabled, time }),
     });
-    flash(r.schedule_enabled ? "每日增量已开启（每天 03:00）" : "每日增量已关闭");
+    flash(r.schedule_enabled ? `每日增量已开启（每天 ${r.time}）` : "每日增量已关闭");
     loadCiccStatus(true);
   } catch (err) {
     flash(err.message, "error");

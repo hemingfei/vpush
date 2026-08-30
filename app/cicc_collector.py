@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 
-MODES = ("incr", "year", "all", "stop", "compress")
+MODES = ("incr", "year", "all", "stop", "compress", "schedule")
 STATUS_STALE_SECONDS = 300
 
 
@@ -31,20 +32,36 @@ class CiccControl:
             return {"available": True, "stale": True}
         return {"available": True, "stale": stale, **data}
 
-    def trigger(self, mode: str, actor: str) -> dict:
+    def trigger(self, mode: str, actor: str, extra: dict | None = None) -> dict:
         if mode not in MODES:
             raise ValueError(f"未知操作：{mode}")
         cmds = self.ctrl / "commands"
         cmds.mkdir(parents=True, exist_ok=True)
         name = f"{int(time.time() * 1000)}-{mode}.json"
         tmp = cmds / f".tmp.{os.getpid()}"
-        tmp.write_text(json.dumps({"mode": mode, "actor": actor,
-                                   "ts": int(time.time())}), encoding="utf-8")
+        payload = {"mode": mode, "actor": actor, "ts": int(time.time())}
+        if extra:
+            payload.update(extra)
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, cmds / name)  # 原子落名，dispatch 的 inotify 不会读到半截文件
         return {"queued": mode}
 
     def schedule_enabled(self) -> bool:
         return (self.ctrl / "incremental.enabled").exists()
+
+    def read_schedule(self) -> dict:
+        """当前采集时间计划（存储机 cicc-schedule.json，经 status 透传时缺省 03:00）。"""
+        data = json.loads((self.ctrl / "status.json").read_text(encoding="utf-8")) \
+            if (self.ctrl / "status.json").exists() else {}
+        storage = data.get("storage") or {}
+        schedule = storage.get("schedule") or {}
+        t = str(schedule.get("time") or "03:00")
+        return {"time": t if re.fullmatch(r"\d{2}:\d{2}", t) else "03:00",
+                "schedule_enabled": self.schedule_enabled()}
+
+    def set_schedule_time(self, time_of_day: str, actor: str) -> dict:
+        """下发采集时间（HH:mm），存储机 dispatch 写 cicc-schedule.json。"""
+        return self.trigger("schedule", actor, extra={"time": time_of_day})
 
     def set_schedule(self, enabled: bool) -> dict:
         self.ctrl.mkdir(parents=True, exist_ok=True)

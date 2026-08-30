@@ -3035,6 +3035,59 @@ def create_api_router(
         _audit(admin, "cicc_schedule", "", "enabled" if body.enabled else "disabled")
         return result
 
+    @router.get("/admin/cicc/schedule", dependencies=[Depends(require_admin)])
+    def cicc_get_schedule(admin: dict = Depends(require_admin)):
+        from .cicc_collector import from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        return ctl.read_schedule()
+
+    @router.put("/admin/cicc/schedule", dependencies=[Depends(require_admin)])
+    def cicc_set_schedule(body: CiccScheduleIn, admin: dict = Depends(require_admin)):
+        import re as _re
+
+        from .cicc_collector import from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        if body.time is not None and not _re.fullmatch(r"\d{2}:\d{2}", body.time):
+            raise HTTPException(status_code=400, detail="时间格式应为 HH:mm")
+        result = ctl.set_schedule(body.enabled)
+        if body.time is not None:
+            result.update(ctl.set_schedule_time(body.time, admin["username"]))
+        _audit(admin, "cicc_schedule", "",
+               f"{'enabled' if body.enabled else 'disabled'} time={body.time or '-'}")
+        return result
+
+    @router.get("/admin/ima-storage/health", dependencies=[Depends(require_admin)])
+    def ima_storage_health(admin: dict = Depends(require_admin)):
+        from .cicc_collector import from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        return ctl.status()
+
+    @router.get("/admin/ima-storage/alerts", dependencies=[Depends(require_admin)])
+    def ima_storage_alerts_get(admin: dict = Depends(require_admin)):
+        from .cicc_alerts import load_alert_settings
+
+        return {"settings": load_alert_settings(_db)}
+
+    @router.put("/admin/ima-storage/alerts", dependencies=[Depends(require_admin)])
+    def ima_storage_alerts_put(body: dict, admin: dict = Depends(require_admin)):
+        from .cicc_alerts import save_alert_settings
+
+        try:
+            saved = save_alert_settings(db, body or {})
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=f"参数非法：{exc}")
+        _audit(admin, "ima_storage_alerts", "", json.dumps(saved, ensure_ascii=False))
+        return {"settings": saved}
+
     @router.get("/admin/ima-local-libraries", dependencies=[Depends(require_admin)])
     def get_ima_local_libraries():
         if ima_documents is None:
