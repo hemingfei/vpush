@@ -660,27 +660,6 @@ const MOBILE_NAV = [
   { route: "settings", icon: GEAR_ICON, label: "设置" },
 ];
 
-function isPhoneShell() {
-  return window.matchMedia("(max-width: 768px)").matches;
-}
-
-function renderKnowledgePhoneBlocked() {
-  setPageTitle("知识库");
-  $("#main").innerHTML = emptyState(
-    "知识库在电脑上读",
-    `<div><p class="section-meta">研报 PDF 按桌面阅读台设计，请在电脑打开。</p><div><button type="button" class="btn-normal" onclick="go('timeline')">回动态</button></div></div>`
-  );
-}
-
-function ensureKnowledgePhoneWatch() {
-  if (window._kbPhoneWatch || !window.matchMedia) return;
-  window._kbPhoneWatch = true;
-  window.matchMedia("(max-width: 768px)").addEventListener("change", () => {
-    const page = String(routePath() || "").split("/")[0];
-    if (page === "knowledge" || page === "ima-documents") router();
-  });
-}
-
 function renderBottomNav(user) {
   const tabs = [...MOBILE_NAV];
   if (user.is_admin) tabs.push({ route: "more", icon: PLUS_ICON, label: "更多" });
@@ -1234,11 +1213,6 @@ async function unsubscribeKnowledge(groupId, btn) {
 }
 
 async function renderKnowledge(seq, encodedMediaId = "") {
-  ensureKnowledgePhoneWatch();
-  if (isPhoneShell()) {
-    renderKnowledgePhoneBlocked();
-    return;
-  }
   stopImaDocumentsAutoLoad();
   const mediaId = encodedMediaId ? decodeURIComponent(encodedMediaId) : "";
   setPageTitle("知识库");
@@ -1331,11 +1305,6 @@ async function renderKnowledge(seq, encodedMediaId = "") {
 
 async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = {}) {
   stopImaDocumentsAutoLoad();
-  ensureKnowledgePhoneWatch();
-  if (isPhoneShell()) {
-    renderKnowledgePhoneBlocked();
-    return;
-  }
   if (!$("#ima-report-page")) {
     await renderKnowledge(seq);
     return;

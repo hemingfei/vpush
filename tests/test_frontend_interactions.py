@@ -3147,8 +3147,8 @@ def test_frontend_asset_urls_bust_browser_cache():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=228"' in html
-    assert 'src="/app.js?v=320"' in html
-    assert 'dav-shell-v192' in sw
+    assert 'src="/app.js?v=321"' in html
+    assert 'dav-shell-v193' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -3170,8 +3170,7 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     assert 'group: "资料"' not in nav
     assert 'route: "ima-documents"' not in mobile
     assert 'route: "knowledge"' not in mobile
-    assert "isPhoneShell" in src
-    assert "知识库在电脑上读" in src
+    assert "renderKnowledgePhoneBlocked" not in src
     assert "知识库请在电脑上打开" not in src
     assert 'class="tl-ima-entry"' in timeline
     assert "go('knowledge')" in timeline
@@ -4179,3 +4178,14 @@ def test_reader_pdf_has_new_tab_open_helper():
     assert "window.open(window._imaPdfUrl" in body
     assert "flash(" in body
     assert "openImaPdfNewTab()" in _fn_body("renderImaDocument")
+
+
+def test_knowledge_desk_serves_phone_without_refusal():
+    src = APP_JS.read_text()
+    assert "renderKnowledgePhoneBlocked" not in src
+    assert "isPhoneShell" not in src
+    css = STYLE_CSS.read_text()
+    # 手机壳层给阅读台独立高度，不再整页拒绝
+    assert "知识库阅读台（手机）" in css
+    assert "100dvh - 120px" in css
+    assert "grid-template-columns: 44px minmax(0, 1fr) 84px" in css
