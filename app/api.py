@@ -559,6 +559,7 @@ class CiccTriggerIn(BaseModel):
 
 class CiccScheduleIn(BaseModel):
     enabled: bool
+    time: str | None = None  # HH:mm，None=不改时间
 
 
 class ImaKbAclIn(BaseModel):
@@ -3075,7 +3076,7 @@ def create_api_router(
     def ima_storage_alerts_get(admin: dict = Depends(require_admin)):
         from .cicc_alerts import load_alert_settings
 
-        return {"settings": load_alert_settings(_db)}
+        return {"settings": load_alert_settings(db)}
 
     @router.put("/admin/ima-storage/alerts", dependencies=[Depends(require_admin)])
     def ima_storage_alerts_put(body: dict, admin: dict = Depends(require_admin)):
