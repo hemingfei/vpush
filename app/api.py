@@ -248,16 +248,17 @@ def _normalize_kol_request_input(platform: str, raw: str) -> tuple[str, str | No
     return "", f"不支持的平台: {platform}"
 
 
-def _parse_batch_kol_line(line: str, default_platform: str) -> tuple[str, str, str, str | None]:
+def _parse_batch_kol_line(line: str) -> tuple[str, str, str, str | None]:
     """批量导入单行解析：返回 (platform, external_id, nickname, error)。
 
-    error 非空时本行失败。链接能识别出平台（雪球主页/组合/微博/X）则按识别结果
-    归一化；无法识别的 URL 或纯数字 UID 回退 default_platform；X 统一存 screen name。
+    error 非空时本行失败。只认链接/组合码能识别出的平台（雪球主页/组合/微博/X/
+    知识星球/ima）；纯数字 UID 或无法识别的 URL 不再回退默认平台。X 统一存 screen name。
     """
     nickname = ""
     external_id = ""
     platform = ""
     parse_error = None
+    unrecognized = False
     for token in line.split():
         detected = _detect_platform_from_link(token)
         if detected:
@@ -266,24 +267,21 @@ def _parse_batch_kol_line(line: str, default_platform: str) -> tuple[str, str, s
                 parse_error = err
                 continue
             platform, external_id, parse_error = detected, ext, None
+            unrecognized = False
             continue
         if token.startswith(("http://", "https://")):
-            if not external_id:
-                external_id = token  # 无法识别的源地址，回退默认平台
+            unrecognized = True
             continue
-        if token.isdigit() and not external_id:
-            external_id = token
+        if token.isdigit():
+            unrecognized = True
             continue
         nickname = f"{nickname} {token}".strip()
     if not external_id:
-        return default_platform, "", nickname, parse_error or "未识别到链接或ID"
-    platform = platform or default_platform
-    # 非 x.com/twitter.com 的 http(s) 地址原样保留（历史导入）；其余走归一化
-    # （X 主页链接存 screen name，系统页/推文链接报错）
-    if external_id.startswith(("http://", "https://")) and not re.search(
-        r"(?:x|twitter)\.com", external_id
-    ):
-        return platform, external_id, nickname, None
+        if unrecognized:
+            return "", "", nickname, "无法识别平台，请粘贴雪球/微博/X/知识星球主页链接"
+        return "", "", nickname, parse_error or "未识别到链接或ID"
+    if not platform:
+        return "", "", nickname, parse_error or "无法识别平台，请粘贴主页链接"
     ext, err = _normalize_kol_request_input(platform, external_id)
     if err:
         return platform, "", nickname, err
@@ -398,7 +396,7 @@ class KolIn(BaseModel):
 
 
 class KolBatchIn(BaseModel):
-    platform: str = "xueqiu"
+    platform: str | None = None  # 兼容旧客户端；平台只从每行链接识别
     lines: str
     category_id: int | None = None
     priority: bool = False
@@ -3652,13 +3650,11 @@ def create_api_router(
 
     @router.post("/kols/batch", dependencies=[Depends(require_admin)])
     def batch_add_kols(body: KolBatchIn, admin: dict = Depends(require_admin)):
-        """批量导入：每行一个「昵称 链接/UID」或「链接/UID」。
+        """批量导入：每行一个「昵称 链接」或「链接」。
 
-        按链接自动识别平台（雪球主页/雪球组合页/微博主页/X主页），
-        纯 UID 等无法识别的行使用 body.platform 作为默认平台。
+        按链接自动识别平台（雪球主页/雪球组合页/微博主页/X主页/知识星球）。
+        纯 UID 等无法识别的行失败，不再使用默认平台。
         """
-        if body.platform not in ALLOWED_PLATFORMS:
-            raise HTTPException(status_code=400, detail=f"不支持的平台: {body.platform}")
         if body.category_id is not None and db.get_category(body.category_id) is None:
             raise HTTPException(status_code=400, detail="分类不存在")
         results = []
@@ -3666,7 +3662,7 @@ def create_api_router(
             line = raw.strip()
             if not line:
                 continue
-            platform, external_id, nickname, err = _parse_batch_kol_line(line, body.platform)
+            platform, external_id, nickname, err = _parse_batch_kol_line(line)
             if err:
                 results.append({"ok": False, "line": line[:80], "error": err})
                 continue

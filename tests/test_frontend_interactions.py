@@ -3235,8 +3235,8 @@ def test_frontend_asset_urls_bust_browser_cache():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=237"' in html
-    assert 'src="/app.js?v=331"' in html
-    assert 'dav-shell-v199' in sw
+    assert 'src="/app.js?v=332"' in html
+    assert 'dav-shell-v200' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -3868,9 +3868,15 @@ def test_admin_kols_mobile_filters_and_actions_align():
 def test_admin_kols_add_fields_have_accessible_names():
     """添加区控件要有可达名称，不能只靠 placeholder。"""
     body = _fn_body("loadAdminKols")
-    assert 'aria-label="默认平台（未识别的行）"' in body
+    src = APP_JS.read_text()
+    assert 'id="ad-batch-platform"' not in body
+    assert "默认平台" not in body
+    assert "adminPlatformDefaultCat" not in src
     assert 'aria-label="分类"' in body
-    assert 'aria-label="大V链接或UID，每行一个"' in body
+    assert 'aria-label="大V主页链接，每行一个"' in body
+    assert "平台由链接自动识别" in body
+    assert "adminBatchLinesHint()" in body
+    assert "function adminBatchLinesHint(" in src
 
 
 def test_admin_kols_import_result_preserves_lines():
