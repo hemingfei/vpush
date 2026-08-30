@@ -2713,6 +2713,18 @@ def test_live_feed_is_prefetched_and_shares_inflight_request():
     assert "liveWscnRequest(" in _fn_body("prefetchLiveFeed")
 
 
+def test_xueqiu_badge_uses_official_mark():
+    """雪球角标用官方图，盒尺寸仍走 .pt-icon。"""
+    src = APP_JS.read_text()
+    css = STYLE_CSS.read_text()
+    assert 'src="/xueqiu-mark.png"' in src
+    assert (APP_JS.parent / "xueqiu-mark.png").is_file()
+    assert "img.pt-icon { display: block; object-fit: contain; }" in css
+    assert ".pt-icon { width: 16px; height: 16px; flex-shrink: 0; }" in css
+    assert ".icon-badge-bar .tl-pill .pt-icon { width: 20px; height: 20px; }" in css
+    assert ".post-item .p-name-line .p-platform .pt-icon { width: 13px; height: 13px; }" in css
+
+
 def test_live_pill_icon_matches_platform_badge_size():
     """快讯角标与其他平台同尺寸，选中不得反色出白圆。"""
     src = APP_JS.read_text()
@@ -3242,9 +3254,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=239"' in html
-    assert 'src="/app.js?v=334"' in html
-    assert 'dav-shell-v202' in sw
+    assert 'href="/style.css?v=240"' in html
+    assert 'src="/app.js?v=336"' in html
+    assert 'dav-shell-v204' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
