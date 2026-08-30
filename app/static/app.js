@@ -10352,11 +10352,13 @@ async function loadAdminUsers() {
   let users;
   let policy;
   let collector;
+  let localLibs;
   try {
-    [users, policy, collector] = await Promise.all([
+    [users, policy, collector, localLibs] = await Promise.all([
       api("/api/users"),
       api("/api/admin/inactive-users-policy"),
       api("/api/admin/ima-collector").catch(() => null),
+      api("/api/admin/ima-local-libraries").catch(() => null),
     ]);
   } catch (err) {
     if (!routeStillActive(_adminRenderSeq)) return;
@@ -10364,8 +10366,17 @@ async function loadAdminUsers() {
     return;
   }
   state.adminUsers = users;
-  state.imaKbGroups = ((collector && collector.config && collector.config.groups) || [])
+  const imaGroups = ((collector && collector.config && collector.config.groups) || [])
     .filter((group) => group && group.id && group.enabled !== false);
+  const localGroups = (((localLibs && localLibs.libraries) || []) || [])
+    .map((lib) => ({
+      id: String(lib.group_id || ""),
+      name: String(lib.name || lib.slug || lib.group_id || ""),
+      enabled: Boolean(lib.enabled) && !lib.error,
+      local: true,
+    }))
+    .filter((group) => group.id && group.name);
+  state.imaKbGroups = imaGroups.concat(localGroups);
   if (policy) {
     state.inactivePolicy = policy;
     _inactivePreview = {
@@ -10586,6 +10597,7 @@ function adminOpenUser(userId, focus) {
         return `<label class="um-kb-item" data-kb-name="${escapeHtml(name)}"${isSub ? ` data-kb-subscribed="1"` : ""}>
           <input type="checkbox" data-kb-group="${escapeHtml(id)}"${kbGranted.has(id) ? " checked" : ""}>
           <span>${escapeHtml(name)}</span>
+          ${group.local ? `<span class="muted">本地库${group.enabled === false ? " · 未启用" : ""}</span>` : ""}
           ${isSub ? `<span class="muted">已订阅</span>` : ""}
         </label>`;
       }).join("")}</div>

@@ -3185,7 +3185,7 @@ def test_frontend_asset_urls_bust_browser_cache():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=233"' in html
-    assert 'src="/app.js?v=325"' in html
+    assert 'src="/app.js?v=326"' in html
     assert 'dav-shell-v195' in sw
 
 
@@ -4235,3 +4235,12 @@ def test_knowledge_desk_serves_phone_without_refusal():
     assert ".ima-reader-download span { display: none; }" in css
     # 遗留手机块不得再拉伸阅读工具栏按钮（曾把下载钮撑出屏）
     assert "flex: 1; justify-content: center" not in css
+
+
+def test_user_modal_kb_grants_include_local_libraries():
+    body = _fn_body("loadAdminUsers")
+    assert "/api/admin/ima-local-libraries" in body
+    assert "state.imaKbGroups = imaGroups.concat(localGroups)" in body
+    modal = _fn_body("adminOpenUser")
+    assert "本地库" in modal
+    assert "group.local" in modal
