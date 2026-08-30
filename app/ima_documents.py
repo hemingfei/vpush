@@ -1471,7 +1471,8 @@ class ImaDocumentStore:
             raise ValueError("archive directory must not be a symlink")
         return candidate
 
-    def pdf_path(self, record: dict[str, Any], *, occupied: set[str] | None = None) -> Path:
+    def _relative_pdf(self, record: dict[str, Any], occupied: set[str] | None = None) -> Path:
+        """规范 PDF 相对路径——纯字符串计算，不做任何文件系统 IO。"""
         media_id = self.validate_media_id(record.get("media_id", ""))
         filename = safe_filename(str(record.get("name") or media_id), media_id)
         day = _safe_component(str(record.get("day") or "unknown"))
@@ -1487,7 +1488,10 @@ class ImaDocumentStore:
             relative = Path(day) / filename
             if not self._is_legacy_group(group_id):
                 relative = Path(self._group_namespace(group_id)) / relative
-        return self._archive_path(str(relative))
+        return relative
+
+    def pdf_path(self, record: dict[str, Any], *, occupied: set[str] | None = None) -> Path:
+        return self._archive_path(str(self._relative_pdf(record, occupied)))
 
     def txt_path(self, record: dict[str, Any], *, occupied: set[str] | None = None) -> Path:
         return self.pdf_path(record, occupied=occupied).with_suffix(".txt")
@@ -1584,6 +1588,21 @@ class ImaDocumentStore:
             record.setdefault("day", item.get("day") or "unknown")
             current_rel = item.get("pdf")
             others = occupied - ({current_rel} if isinstance(current_rel, str) else set())
+            new_name = str(record.get("name") or item.get("name") or media_id)
+            # 快路径：状态里的相对路径已是规范名（历史轮次处理过）就零 IO 跳过。
+            # 否则每次启动对数万文件逐个 NFS realpath/stat，单核进程会被拖垮、
+            # 全站接口连带变慢；只有命名不规范的少数文件才走下方探测/改名慢路径
+            try:
+                expected_rel = str(self._relative_pdf(record, others))
+            except ValueError:
+                continue
+            if isinstance(current_rel, str) and current_rel == expected_rel:
+                new_txt = str(Path(expected_rel).with_suffix(".txt"))
+                if item.get("txt") != new_txt or item.get("name") != new_name:
+                    item["txt"] = new_txt
+                    item["name"] = new_name
+                    changed = True
+                continue
             current_pdf = self._find_existing_pdf(record, item, media_id, others)
             if current_pdf is None:
                 continue
@@ -1591,7 +1610,6 @@ class ImaDocumentStore:
                 desired = self.pdf_path(record, occupied=others)
             except ValueError:
                 continue
-            new_name = str(record.get("name") or item.get("name") or media_id)
             if desired == current_pdf:
                 new_pdf = str(desired.relative_to(self.archive_root))
                 new_txt = str(desired.with_suffix(".txt").relative_to(self.archive_root))

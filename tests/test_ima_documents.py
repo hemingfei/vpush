@@ -4106,3 +4106,28 @@ def test_index_and_list_carry_true_year_for_old_documents(tmp_path):
 
     stats = service.catalog_stats(groups)
     assert stats["research"]["latest_sort_date"] == "2026-08-30"
+
+
+def test_restore_fast_path_skips_probe_for_canonical_names(tmp_path):
+    """命名已规范的文件零 IO 跳过：不再逐文件 NFS realpath/stat。"""
+    store = ImaDocumentStore(tmp_path / "ima")
+    record = {"media_id": "file_ok", "name": "中金-宏观周报.pdf", "day": "0825"}
+    path = store.pdf_path(record)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"%PDF-1.7")
+    store.save_manifest([record])
+    store.save_state({
+        "file_ok": {
+            "name": "中金-宏观周报.pdf",
+            "day": "0825",
+            "pdf": "0825/中金-宏观周报.pdf",
+            "txt": "0825/中金-宏观周报.txt",
+        }
+    })
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("canonical files must not hit the probe path")
+
+    store._find_existing_pdf = boom
+    assert store.restore_original_filenames()["renamed"] == 0
+    assert path.is_file()
