@@ -6,7 +6,9 @@
   2) 已有采集进程在跑 → skip（下一 tick 重试）
   3) 未到当日计划时间（cicc-schedule.json 的 time，缺省 03:00）→ skip
   4) 今日已成功跑过（last_incr_summary.date == 今天）→ skip
-通过后同步执行 collector --days 3（TimeoutStartSec 需 ≥1800），
+  5) paused.json reason=auth 且 48h 内 → skip（等管理员换 Cookie）；
+     reason=quota 不跳——每日一次的重试正是配额重置后的恢复手段
+通过后同步执行 collector --days 3（品类定向见 cicc_settings.json），
 解析「完成：下载 N，已存在跳过 M，失败 K」写入 .cicc/last_incr_summary.json 供通知与展示。
 """
 from __future__ import annotations
@@ -26,6 +28,7 @@ SCHEDULE_FILE = "/usr/local/lib/vpush-ima/cicc-schedule.json"
 PY = "/usr/bin/python3"
 BJ = timezone(timedelta(hours=8))
 DONE_RE = re.compile(r"完成：下载 (\d+)，已存在跳过 (\d+)，失败 (\d+)")
+PAUSED_AUTH_WINDOW = 48 * 3600  # Cookie 失效后自动重试多久放弃（等管理员介入）
 
 
 def collectors_running() -> int:
@@ -67,6 +70,19 @@ def should_run(now: datetime, schedule_hhmm: str,
     return True, "due"
 
 
+def paused_skip(paused: dict | None, now_ts: int) -> tuple[bool, str]:
+    """熔断门控纯函数：Cookie 失效（auth）48h 内跳过等管理员换 Cookie；
+    配额满（quota）不跳——每日重试就是月初重置后的恢复手段。"""
+    if not paused:
+        return False, ""
+    if paused.get("reason") != "auth":
+        return False, ""
+    ts = int(paused.get("ts") or 0)
+    if ts and 0 <= now_ts - ts < PAUSED_AUTH_WINDOW:
+        return True, "paused_auth"
+    return False, ""
+
+
 def write_json(path: str, obj) -> None:
     tmp = f"{path}.tmp.{os.getpid()}"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -94,8 +110,19 @@ def main() -> None:
         write_json(os.path.join(CTRL, "incremental.last"),
                    {"ts": int(time.time()), "note": "skipped_collector_running"})
         return
+    skip, note = paused_skip(read_json(os.path.join(CTRL, "paused.json")), int(now.timestamp()))
+    if skip:
+        write_json(os.path.join(CTRL, "incremental.last"),
+                   {"ts": int(time.time()), "note": note})
+        return
+    # 品类定向：cicc_settings.json 非空则只采勾选品类（空数组/缺文件=全部）
+    settings = read_json(os.path.join(CTRL, "cicc_settings.json"), {}) or {}
+    cats = [str(c) for c in (settings.get("categories") or []) if str(c).strip()]
+    argv = [PY, "-u", COLLECTOR, "--days", "3"]
+    if cats:
+        argv += ["--categories", ",".join(cats)]
     os.makedirs(CICC_DIR, exist_ok=True)
-    r = subprocess.run([PY, "-u", COLLECTOR, "--days", "3"],
+    r = subprocess.run(argv,
                        capture_output=True, text=True, encoding="utf-8",
                        errors="replace", timeout=1800, check=False)
     with open(os.path.join(CICC_DIR, "auto_incr.log"), "ab") as log:

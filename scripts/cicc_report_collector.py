@@ -37,6 +37,22 @@ TZ_BJ = timezone(timedelta(hours=8))
 PAGE_SIZE = 50
 SLEEP_PAGE, SLEEP_DL = 0.6, 0.25
 MAX_PAGES = 2000
+PAUSED_FILE = "/srv/vpush-ima/local/.cicc/paused.json"
+
+
+def write_paused(reason: str, detail: str) -> None:
+    """熔断前尽力记录原因（quota=配额满 / auth=登录失效），供状态展示与增量门控。
+    脚本可能以非 root 跑（目录属主 99:100），写失败静默忽略，不改变退出行为。"""
+    try:
+        p = Path(PAUSED_FILE)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(f".paused.tmp.{os.getpid()}")
+        tmp.write_text(json.dumps({"reason": reason, "ts": int(time.time()),
+                                   "detail": detail[:200]}, ensure_ascii=False),
+                       encoding="utf-8")
+        os.replace(tmp, p)
+    except OSError:
+        pass
 
 # 网页一级品类 → 库 slug（规格约束 slug 仅小写字母数字连字符）
 SLUG_MAP = {
@@ -100,8 +116,10 @@ class Session:
                 if resp.status != 200:
                     detail = payload[:200].decode("utf-8", "replace")
                     if resp.status in (401, 412) or "40010" in detail:
+                        write_paused("auth", f"HTTP {resp.status} 登录态失效")
                         sys.exit(f"登录态失效（HTTP {resp.status}）：请更新 Cookie 后重跑。")
                     if "400013" in detail:
+                        write_paused("quota", "code 400013 本月配额已满")
                         sys.exit("本月研报下载数量已达上限（code 400013）：等配额重置后重跑即可续传。")
                     raise RuntimeError(f"HTTP {resp.status} {detail}")
                 if raw:
@@ -111,8 +129,10 @@ class Session:
                 if code == 0:
                     return obj
                 if code == 40010:
+                    write_paused("auth", "code 40010 登录态失效")
                     sys.exit("登录态失效（code 40010）：请更新 Cookie 文件后重跑。")
                 if code == 400013:
+                    write_paused("quota", "code 400013 本月配额已满")
                     sys.exit("本月研报下载数量已达上限（code 400013）：等配额重置后重跑即可续传。")
                 raise RuntimeError(f"api code={code} msg={obj.get('msg') or obj.get('desc')}")
             except (http.client.HTTPException, OSError, TimeoutError, json.JSONDecodeError) as e:
@@ -199,6 +219,7 @@ def download_pdf(sess: Session, rid: int) -> bytes:
     if not payload.startswith(b"%PDF"):
         text = payload[:200].decode("utf-8", "replace")
         if b"400013" in payload[:200]:
+            write_paused("quota", "code 400013 本月配额已满")
             sys.exit("本月研报下载数量已达上限（code 400013）：等配额重置后重跑即可续传。")
         raise RuntimeError("非 PDF 响应: " + text)
     return payload
@@ -373,7 +394,11 @@ def main() -> None:
         os.chmod(root, 0o750)
 
     wanted = [c.strip() for c in args.categories.split(",") if c.strip()]
-    cats = fetch_categories(sess)
+    cats = fetch_categories(sess)  # 列表接口是读操作：能成功即登录态有效
+    try:
+        os.remove(PAUSED_FILE)  # 新一轮跑起来了：清掉上次的熔断标记（再熔断会重写）
+    except OSError:
+        pass
     if wanted:
         cats = [c for c in cats if c["name"] in wanted]
         missing = set(wanted) - {c["name"] for c in cats}

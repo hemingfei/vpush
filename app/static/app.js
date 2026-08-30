@@ -7043,6 +7043,17 @@ async function loadStorageHealth() {
       .map((c) => `<li>${escapeHtml(c.name)}：${c.files} 篇 / ${(c.bytes / 1073741824).toFixed(2)} GB</li>`).join("");
     const alertsState = (await api("/api/admin/ima-storage/alerts")) || {};
     const cfg = alertsState.settings || {};
+    const b = h.backup || {};
+    const snapItems = (b.snapshots || []).map((s) => {
+      const d = s.time ? new Date(s.time) : null;
+      const when = d && !Number.isNaN(d.getTime()) ? d.toLocaleString() : escapeHtml(s.time || "未知时间");
+      return `<li>${when} · <code>${escapeHtml(String(s.id || "").slice(0, 8))}</code></li>`;
+    }).join("");
+    const backupHtml = !b.configured
+      ? `<p class="muted" style="color:var(--color-danger)">备份未生效：${escapeHtml(b.reason || "存储机 env 缺 RESTIC_REPOSITORY")}，需要配置备份目标</p>`
+      : snapItems
+        ? `<ul class="muted" style="margin:4px 0 0;padding-left:18px">${snapItems}</ul>`
+        : `<p class="muted">备份目标已配置，但还没有成功快照（${escapeHtml(b.reason || "可点「立即备份」试一次")}）</p>`;
     box.innerHTML = `
       <p class="section-meta">磁盘 <strong style="color:${color}">${disk.used_gb ?? "—"} / ${disk.total_gb ?? "—"} GB（${pct}%）</strong>
        · 归档 ${(st.archive && st.archive.files) ?? "—"} 个 PDF
@@ -7050,6 +7061,8 @@ async function loadStorageHealth() {
       <div style="background:var(--color-surface-soft);height:8px;border-radius:4px;overflow:hidden;margin:6px 0">
         <div style="width:${Math.min(pct, 100)}%;height:100%;background:${color}"></div></div>
       ${cats ? `<ul class="muted" style="margin:4px 0 0;padding-left:18px">${cats}</ul>` : ""}
+      <p class="section-meta" style="margin:10px 0 2px"><strong>备份</strong>（快照 · 上次成功 ${b.restic_last_success ? fmtTs(b.restic_last_success) : "无"}）</p>
+      ${backupHtml}
       <div class="toolbar" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <label>告警阈值 磁盘≥<input id="ima-alert-warn" type="number" value="${cfg.disk_warn ?? 80}" style="width:64px">% /
         <input id="ima-alert-crit" type="number" value="${cfg.disk_crit ?? 90}" style="width:64px">%</label>
@@ -7107,7 +7120,7 @@ async function backupImaStorage() {
   try {
     const data = await api("/api/admin/ima-storage/backup", { method: "POST" });
     if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    flash(data.status === "already_running" ? "备份已在进行" : "已请求归档备份");
+    flash(data.status === "already_running" ? "备份已在进行" : "已发送备份命令，结果稍后看存储页签");
   } catch (err) {
     if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash(err.message, "error");
@@ -7149,6 +7162,39 @@ function ciccRunningText(data) {
 }
 
 const CICC_RESEARCH_SLUG = "cicc-research";
+// 与后端 app/cicc_collector.py 的 CICC_CATEGORIES 保持一致
+const CICC_CATEGORIES = ["宏观经济", "市场策略", "全球研究", "行业研究", "公司研究", "量化及ESG", "大宗商品", "外汇研究", "固定收益", "中金研究院", "其他"];
+
+function ciccPausedLine(cicc) {
+  const p = cicc.paused;
+  if (!p) return "";
+  const why = p.reason === "quota" ? "本月研报配额已满，等月初重置"
+    : p.reason === "auth" ? "登录态失效，请更新存储机 Cookie"
+    : escapeHtml(p.detail || "未知原因");
+  return `<p class="muted" style="color:var(--color-danger)" aria-live="polite">⏸ 采集已熔断：${why}（${fmtTs(p.ts)}）</p>`;
+}
+
+function ciccCategoriesHtml(cicc) {
+  const active = Array.isArray(cicc.cicc_settings && cicc.cicc_settings.categories)
+    ? cicc.cicc_settings.categories : [];
+  const boxes = CICC_CATEGORIES.map((c) =>
+    `<label style="margin-right:12px;white-space:nowrap"><input type="checkbox" class="cicc-cat" value="${escapeHtml(c)}" ${active.includes(c) ? "checked" : ""}> ${escapeHtml(c)}</label>`).join("");
+  return `<details><summary class="cfg-group-title">品类定向（全不勾选 = 采集全部）</summary>
+    <p class="muted">当前：${active.length ? escapeHtml(active.join("、")) : "全部品类"}</p>
+    <div style="display:flex;flex-wrap:wrap;gap:4px 0;margin:6px 0;max-width:560px">${boxes}</div>
+    <button type="button" class="btn-ghost" onclick="saveCiccCategories()">保存品类定向</button></details>`;
+}
+
+async function saveCiccCategories() {
+  const cats = Array.from(document.querySelectorAll(".cicc-cat:checked")).map((el) => el.value);
+  try {
+    const r = await api("/api/admin/ima-collector/cicc-categories", { method: "PUT", body: JSON.stringify({ categories: cats }) });
+    flash(r.categories.length ? `品类定向已保存：${r.categories.join("、")}` : "已设为采集全部品类");
+    loadCiccStatus();
+  } catch (err) {
+    flash(`保存失败：${err.message}`, "error");
+  }
+}
 
 function ciccControlInnerHtml(cicc) {
   const logs = Object.entries(cicc.logs || {})
@@ -7160,6 +7206,7 @@ function ciccControlInnerHtml(cicc) {
     .join("") || '<p class="muted">暂无操作记录</p>';
   return `
     <p class="muted" aria-live="polite">${escapeHtml(ciccRunningText(cicc))} · 更新于 ${fmtTs(cicc.ts)}</p>
+    ${ciccPausedLine(cicc)}
     <div class="toolbar" style="margin:12px 0">
       <button type="button" class="btn-normal" onclick="triggerCicc('incr')">增量采集（近3天）</button>
       <button type="button" class="btn-normal" onclick="triggerCicc('year')">今年回补</button>
@@ -7173,6 +7220,7 @@ function ciccControlInnerHtml(cicc) {
       <button type="button" class="btn-ghost" onclick="toggleCiccSchedule()">${cicc.schedule_enabled ? "关闭每日增量" : "开启每日增量"}（03:00）</button>
       <button type="button" class="btn-ghost" onclick="loadCiccStatus()">${REFRESH_ICON}<span>刷新</span></button>
     </div>
+    ${ciccCategoriesHtml(cicc)}
     <details open><summary class="cfg-group-title">采集日志（最新一行）</summary>${logs}</details>
     <details><summary class="cfg-group-title">最近操作</summary>${cmds}</details>`;
 }

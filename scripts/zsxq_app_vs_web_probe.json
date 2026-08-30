@@ -1,0 +1,87 @@
+{
+  "group_id": "28888112822211",
+  "app_ua": "xiaomiquan/5.27.3 Android/Phone/16_OnePlus_PJD110",
+  "results": [
+    {
+      "http": 200,
+      "succeeded": true,
+      "code": null,
+      "info": "",
+      "resp_keys": [
+        "topics"
+      ],
+      "flavor": "web",
+      "round": 0
+    },
+    {
+      "http": 200,
+      "succeeded": true,
+      "code": null,
+      "info": "",
+      "resp_keys": [
+        "topics"
+      ],
+      "flavor": "app",
+      "round": 0
+    },
+    {
+      "http": 200,
+      "succeeded": true,
+      "code": null,
+      "info": "",
+      "resp_keys": [
+        "topics"
+      ],
+      "flavor": "web",
+      "round": 1
+    },
+    {
+      "http": 200,
+      "succeeded": false,
+      "code": 1059,
+      "info": "不支持非官方工具访问，建议使用官方 Skill 获取内容，稳定可靠。👉 https://garden.zsxq.com/skill/",
+      "resp_keys": [],
+      "flavor": "app",
+      "round": 1
+    },
+    {
+      "http": 200,
+      "succeeded": false,
+      "code": 1059,
+      "info": "不支持非官方工具访问，建议使用官方 Skill 获取内容，稳定可靠。👉 https://garden.zsxq.com/skill/",
+      "resp_keys": [],
+      "flavor": "web",
+      "round": 2
+    },
+    {
+      "http": 200,
+      "succeeded": true,
+      "code": null,
+      "info": "",
+      "resp_keys": [
+        "topics"
+      ],
+      "flavor": "app",
+      "round": 2
+    },
+    {
+      "http": 200,
+      "succeeded": false,
+      "code": 13607,
+      "info": "检测到你的下载量异常，已拒绝下载，下个自然日自动恢复",
+      "resp_keys": [],
+      "flavor": "web",
+      "round": "file-probe"
+    },
+    {
+      "http": 200,
+      "succeeded": false,
+      "code": 13607,
+      "info": "检测到你的下载量异常，已拒绝下载，下个自然日自动恢复",
+      "resp_keys": [],
+      "flavor": "app",
+      "round": "file-probe"
+    }
+  ],
+  "first_file_id": "412841522888588"
+}
