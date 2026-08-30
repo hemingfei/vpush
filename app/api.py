@@ -1195,6 +1195,7 @@ def create_api_router(
     trust_proxy: bool = False,
     ima_documents: ImaDocumentService | None = None,
     on_mx_config_changed=None,
+    on_mx_ws_control=None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api")
     # 登录/注册限流（内存版，单实例够用）：每 IP 窗口内失败次数超限后 429
@@ -3752,6 +3753,30 @@ def create_api_router(
             return get_mx_ws_status()
         except Exception:
             return {"connected": False, "last_message_at": None}
+
+    @router.post("/admin/sources/mx/ws/disconnect")
+    async def disconnect_mx_ws(admin: dict = Depends(require_admin)):
+        """主动断开 MX WebSocket 连接（停止自动重连，可再手动接入）。"""
+        if on_mx_ws_control is None:
+            raise HTTPException(status_code=503, detail="后台任务未启用，无法控制 WebSocket")
+        try:
+            message = await on_mx_ws_control("disconnect")
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _audit(admin, "disconnect_mx_ws", "", "")
+        return {"ok": True, "message": message}
+
+    @router.post("/admin/sources/mx/ws/connect")
+    async def connect_mx_ws(admin: dict = Depends(require_admin)):
+        """主动接入 MX WebSocket 连接。"""
+        if on_mx_ws_control is None:
+            raise HTTPException(status_code=503, detail="后台任务未启用，无法控制 WebSocket")
+        try:
+            message = await on_mx_ws_control("connect")
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _audit(admin, "connect_mx_ws", "", "")
+        return {"ok": True, "message": message}
 
     # ---- AI 分析任务管理 ----
     @router.get("/admin/ai-analysis/tasks", dependencies=[Depends(require_admin)])

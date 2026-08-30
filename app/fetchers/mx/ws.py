@@ -53,6 +53,8 @@ class MxWsClient:
         self._sio: Any = None
         self._task: Any = None
         self._should_stop = False
+        # 管理员主动断开标记：与掉线区分开，供状态接口展示原因
+        self.manually_stopped = False
 
     async def connect(self):
         """Connect to MX WebSocket server."""
@@ -250,4 +252,5 @@ class MxWsClient:
     async def stop(self):
         """Stop the WebSocket client."""
         self._should_stop = True
+        self.manually_stopped = True
         await self.disconnect()

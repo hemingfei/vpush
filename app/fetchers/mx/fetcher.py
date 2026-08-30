@@ -392,10 +392,11 @@ class MxFetcher(Fetcher):
             状态字典（detail 用于区分未连接的具体原因）
         """
         if self.ws_client:
+            detail = "已手动断开" if getattr(self.ws_client, "manually_stopped", False) else ""
             return {
                 "connected": self.ws_client.connected,
                 "last_message_at": self.ws_client.last_message_at,
-                "detail": "",
+                "detail": detail,
             }
         if not self._ws_enabled:
             return {

@@ -1835,6 +1835,7 @@ class Scheduler:
         self._last_proxy_tick = 0.0
         self._mx_sync_service = None
         self._mx_ws_task = None
+        self._mx_ws_on_message = None
 
     def stop(self):
         self._stop.set()
@@ -1949,6 +1950,7 @@ class Scheduler:
                     except Exception as e:
                         logger.error(f"Failed to process MX real-time message: {e}", exc_info=True)
 
+                self._mx_ws_on_message = on_mx_message
                 self._mx_ws_task = asyncio.create_task(mx_fetcher.start_ws(on_mx_message))
 
             logger.info("MX platform initialized successfully")
@@ -1971,6 +1973,45 @@ class Scheduler:
                 await mx_fetcher.stop_ws()
             except Exception:  # noqa: BLE001 - 任务已被 cancel，尽力断开即可
                 logger.warning("停止 MX WebSocket 失败", exc_info=True)
+
+    async def mx_ws_control(self, action: str) -> str:
+        """管理员手动控制 MX WebSocket（connect 接入 / disconnect 断开），返回提示消息。
+
+        与 _stop_mx 不同：手动断开保留 mx 抓取器与房间同步，只停 WS 监听任务，
+        以便随后可手动重新接入。
+        """
+        if action == "disconnect":
+            if self._mx_ws_task:
+                self._mx_ws_task.cancel()
+                self._mx_ws_task = None
+            fetcher = self.fetchers.get("mx")
+            if fetcher is None:
+                raise RuntimeError("MX 平台未启用")
+            try:
+                await fetcher.stop_ws()
+            except Exception as exc:  # noqa: BLE001 - 尽力断开，失败时给出可读错误
+                logger.warning("主动断开 MX WebSocket 失败", exc_info=True)
+                raise RuntimeError("断开 WebSocket 失败，请查看服务端日志") from exc
+            logger.info("MX WebSocket 已由管理员手动断开")
+            return "已断开 MX WebSocket 连接"
+        if action == "connect":
+            if not (MX_AVAILABLE and self.mx_config and self.mx_config.enabled):
+                raise RuntimeError("MX 平台未启用")
+            if not self.mx_config.ws_enabled:
+                raise RuntimeError("实时推送未启用（ws_enabled=false），请先在配置中启用")
+            if "mx" not in self.fetchers:
+                raise RuntimeError("MX 抓取器未初始化")
+            if self._mx_ws_task and not self._mx_ws_task.done():
+                return "MX WebSocket 已在运行"
+            if self._mx_ws_on_message is None:
+                raise RuntimeError("MX 消息回调未初始化，请重启服务后重试")
+            mx_fetcher = self.fetchers["mx"]
+            global _mx_fetcher
+            _mx_fetcher = mx_fetcher  # 供 get_mx_ws_status 读取连接状态
+            self._mx_ws_task = asyncio.create_task(mx_fetcher.start_ws(self._mx_ws_on_message))
+            logger.info("MX WebSocket 已由管理员手动启动")
+            return "已发起 MX WebSocket 连接"
+        raise RuntimeError(f"未知操作：{action}")
 
     async def apply_mx_config(self, mx_config) -> None:
         """MX 配置变更后热应用：停掉旧任务，按需重建抓取器并重启同步/WS。"""

@@ -7629,9 +7629,28 @@ async function refreshMxWsStatus() {
     const s = await api("/api/admin/sources/mx/ws-status");
     const last = s.last_message_at ? new Date(s.last_message_at).toLocaleString() : "从未收到";
     const detail = s.detail ? `（${s.detail}）` : "";
-    el.textContent = `WebSocket 状态：${s.connected ? "✅ 已连接" : "❌ 未连接"}，最近收到消息：${last}${detail}`;
+    // 已连接时提供主动断开，未连接时提供主动接入
+    const action = s.connected
+      ? `<button type="button" class="btn-ghost danger" id="mx-ws-toggle" onclick="toggleMxWs('disconnect')">主动断开</button>`
+      : `<button type="button" class="btn-ghost" id="mx-ws-toggle" onclick="toggleMxWs('connect')">主动连接</button>`;
+    el.innerHTML = `<span>WebSocket 状态：${s.connected ? "✅ 已连接" : "❌ 未连接"}，最近收到消息：${escapeHtml(last)}${escapeHtml(detail)}</span> ${action}`;
   } catch (err) {
     el.textContent = `WebSocket 状态：获取失败（${err.message || "未知错误"}）`;
+  }
+}
+
+async function toggleMxWs(action) {
+  const btn = $("#mx-ws-toggle");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api(`/api/admin/sources/mx/ws/${action}`, { method: "POST" });
+    flash(res.message || (action === "disconnect" ? "已断开 MX WebSocket" : "已发起 MX WebSocket 连接"));
+  } catch (err) {
+    flash(err.message || "操作失败", "error");
+  } finally {
+    refreshMxWsStatus();
+    // 连接握手需要一点时间，稍后再刷一次拿到最终状态
+    setTimeout(refreshMxWsStatus, 2500);
   }
 }
 

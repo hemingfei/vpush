@@ -315,6 +315,8 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
             ima_documents=ima_documents,
             # MX 配置保存后热应用到调度器；纯 UI 调试模式无后台任务，不做热应用
             on_mx_config_changed=scheduler.apply_mx_config if background_workers_enabled() else None,
+            # MX WebSocket 手动接入/断开（设置页按钮），同样仅在后台任务启用时可用
+            on_mx_ws_control=scheduler.mx_ws_control if background_workers_enabled() else None,
         )
     )
     # 本地头像缓存（数据目录/avatars），避免第三方图床过期/外链失效
