@@ -2860,6 +2860,41 @@ def test_channel_status_poll_skips_identical_and_restores_focus():
     assert "el.innerHTML = channelStatusHtml" not in refresh
 
 
+def test_ima_document_counts_use_real_total_not_page_plus():
+    """列表/阅读器计数用 document_count，不再用当前页条数拼 50+。"""
+    src = APP_JS.read_text()
+    render = _fn_body("renderImaDocuments")
+    more = _fn_body("loadImaDocumentsMore")
+    reader = _fn_body("renderImaDocument")
+    assert "function imaResolvedCount(" in src
+    assert "function imaDocumentsCountLabel(" in src
+    assert "function imaReaderBackLabel(" in src
+    assert "imaDocumentsCountLabel(" in render
+    assert "snapshot.documentCount" in render
+    assert "data.document_count" in render
+    assert "imaDocumentsCountLabel(" in more
+    assert "imaReaderBackLabel(listSnapshot)" in reader
+    assert "imaSnapshotIsFiltered" in src
+    assert 'has_more ? "+" : ""' not in render
+    assert 'imaDocumentsHasMore ? "+" : ""' not in more
+    assert 'hasMore ? "+" : ""' not in reader
+
+
+def test_ima_reader_clamps_long_abstract_and_keeps_preview_floor():
+    """长摘要默认三行截断，展开后仍限高，预览区保底高度。"""
+    src = APP_JS.read_text()
+    reader = _fn_body("renderImaDocument")
+    css = STYLE_CSS.read_text()
+    assert "IMA_ABSTRACT_CLAMP_CHARS" in src
+    assert "function toggleImaAbstract(" in src
+    assert "is-clamped" in reader
+    assert "ima-abstract-more" in reader
+    assert "toggleImaAbstract(this)" in reader
+    assert ".ima-reader-abstract.is-clamped:not(.is-expanded) p" in css
+    assert "-webkit-line-clamp: 3" in css
+    assert ".ima-reader-page .ima-pdf-panel { flex: 1 1 auto; min-height: 240px;" in css
+
+
 def test_ima_document_reader_preserves_group_context_and_metadata():
     """阅读页标题显示接口返回的群组和日期，并从当前 URL 保留列表筛选上下文。"""
     src = APP_JS.read_text()
@@ -3184,9 +3219,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=235"' in html
-    assert 'src="/app.js?v=329"' in html
-    assert 'dav-shell-v197' in sw
+    assert 'href="/style.css?v=236"' in html
+    assert 'src="/app.js?v=330"' in html
+    assert 'dav-shell-v198' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

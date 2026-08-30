@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.94";
+const APP_VERSION = "1.12.95";
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["config", "cookies", "proxies", "plaza"];
@@ -700,6 +700,49 @@ let _imaSearchComposing = false;
 let _imaTagCounts = {};
 let _imaDocumentCount = 0;
 const IMA_TAG_COMMON_RATIO = 0.5;
+const IMA_ABSTRACT_CLAMP_CHARS = 120;
+
+function imaCountText(n) {
+  return (Number(n) || 0).toLocaleString("zh-CN");
+}
+
+function imaResolvedCount(filtered, documentCount, itemCount, hasMore) {
+  const loaded = Number(itemCount) || 0;
+  const reported = Number(documentCount) || 0;
+  // 读模型 document_count 是过滤后总数；JSON 回退路径仍可能给整库总量。
+  // 已经一页装下、且上报数大于已加载数时，信已加载条数。
+  if (filtered && !hasMore && loaded > 0 && reported > loaded) return loaded;
+  return reported || loaded;
+}
+
+function imaDocumentsCountLabel(filtered, documentCount, itemCount, hasMore) {
+  const total = imaResolvedCount(filtered, documentCount, itemCount, hasMore);
+  return filtered ? `${imaCountText(total)} 条结果` : `${imaCountText(total)} 份`;
+}
+
+function imaSnapshotIsFiltered(snapshot) {
+  const route = String((snapshot && snapshot.route) || "");
+  return /[?&]q=/.test(route) || /[?&]tag=/.test(route);
+}
+
+function imaReaderBackLabel(snapshot) {
+  if (!snapshot) return "研报列表";
+  const total = imaResolvedCount(
+    imaSnapshotIsFiltered(snapshot),
+    snapshot.documentCount,
+    snapshot.items.length,
+    snapshot.hasMore,
+  );
+  return total ? `${imaCountText(total)}条结果` : "研报列表";
+}
+
+function toggleImaAbstract(btn) {
+  const box = btn && btn.closest(".ima-reader-abstract");
+  if (!box) return;
+  const expanded = box.classList.toggle("is-expanded");
+  btn.textContent = expanded ? "收起" : "展开";
+  btn.setAttribute("aria-expanded", expanded ? "true" : "false");
+}
 
 function fmtImaDay(day) {
   const raw = String(day || "").trim();
@@ -1353,9 +1396,12 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
     const meta = $("#ima-doc-meta");
     if (title) title.textContent = "最新研报";
     if (meta) {
-      meta.textContent = query || tag
-        ? `${Number(snapshot.documentCount) || snapshot.items.length} 条结果`
-        : `${Number(snapshot.documentCount) || snapshot.items.length} 份`;
+      meta.textContent = imaDocumentsCountLabel(
+        !!(query || tag),
+        snapshot.documentCount,
+        snapshot.items.length,
+        snapshot.hasMore,
+      );
     }
     syncImaDocumentsFilterStatus();
     $("#ima-report-page")?.removeAttribute("aria-busy");
@@ -1373,9 +1419,7 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
     const title = $("#ima-doc-title");
     const meta = $("#ima-doc-meta");
     if (title) title.textContent = "最新研报";
-    const resultCount = query || tag
-      ? `${items.length}${data.has_more ? "+" : ""} 条结果`
-      : `${Number(data.document_count) || items.length} 份`;
+    const resultCount = imaDocumentsCountLabel(!!(query || tag), data.document_count, items.length, data.has_more);
     if (meta) meta.textContent = resultCount;
     if (!knowledgeMediaIdFromPath()) setPageTitle(selectedGroupName);
     const days = Array.isArray(data.days)
@@ -1517,10 +1561,12 @@ async function loadImaDocumentsMore() {
     }
     const meta = $("#ima-doc-meta");
     if (meta) {
-      const filtered = !!(state.imaDocumentsQuery || state.imaDocumentsTag);
-      meta.textContent = filtered
-        ? `${_imaItems.length}${state.imaDocumentsHasMore ? "+" : ""} 条结果`
-        : `${Number(_imaDocumentCount) || _imaItems.length} 份`;
+      meta.textContent = imaDocumentsCountLabel(
+        !!(state.imaDocumentsQuery || state.imaDocumentsTag),
+        _imaDocumentCount,
+        _imaItems.length,
+        state.imaDocumentsHasMore,
+      );
     }
   } catch (err) {
     if (listSeq !== _imaListSeq || !routeStillActive(seq)) return;
@@ -1588,14 +1634,17 @@ async function renderImaDocument(seq, mediaId) {
       ? `<span class="ima-reader-day ima-reader-meta-item">${escapeHtml(fmtImaDay(item.sort_date || item.day))}</span>`
       : "";
     const abstractText = item.abstract_zh || item.abstract || "";
+    const abstractLong = abstractText.length > IMA_ABSTRACT_CLAMP_CHARS;
+    const abstractMore = abstractLong
+      ? `<button type="button" class="ima-abstract-more" aria-expanded="false" onclick="toggleImaAbstract(this)">展开</button>`
+      : "";
     const abstractHtml = abstractText
-      ? `<details open class="ima-reader-abstract"><summary>摘要</summary><p id="ima-reader-abstract">${escapeHtml(abstractText)}</p></details>`
+      ? `<details open class="ima-reader-abstract${abstractLong ? " is-clamped" : ""}"><summary>摘要</summary><p id="ima-reader-abstract">${escapeHtml(abstractText)}</p>${abstractMore}</details>`
       : "";
     // 快照路由校验（与 currentImaListSnapshot 同思路）：与本次应返回的列表路由不匹配的旧快照不用于导航/计数
     const listSnapshot = _imaListSnapshot && _imaListSnapshot.route === normalizeRoute(backRoute) ? _imaListSnapshot : null;
     // 返回标签用过滤后的真实总数（document_count），而非当前页条数；无总数时退回「研报列表」
-    const totalDocs = Number(listSnapshot && listSnapshot.documentCount) || 0;
-    const backLabel = totalDocs ? `${totalDocs.toLocaleString()}条结果` : "研报列表";
+    const backLabel = imaReaderBackLabel(listSnapshot);
     const download = item.has_pdf
       ? `<button type="button" class="btn-normal ima-reader-download" aria-label="下载 PDF" title="下载 PDF" onclick="downloadImaPdf('${escapeHtml(mediaId)}')">${DOWNLOAD_ICON}<span>下载 PDF</span></button>`
       : "";
