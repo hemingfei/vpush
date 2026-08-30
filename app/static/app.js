@@ -62,6 +62,7 @@ const X_ICON = `<svg class="x-icon" viewBox="0 0 24 24" fill="none" stroke="curr
 const ARROW_UP_ICON = `<svg class="tl-badge-arrow" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3.59l7.457 7.45-1.414 1.42L13 7.41V21h-2V7.41l-5.043 5.05-1.414-1.42L12 3.59z"/></svg>`;
 const REFRESH_ICON = `<svg class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 5v4h4"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 19v-4h-4"/></svg>`;
 const DOWNLOAD_ICON = `<svg class="download-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>`;
+const EXTERNAL_LINK_ICON = `<svg class="external-link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`;
 const SEARCH_ICON = `<svg class="search-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`;
 const GITHUB_ICON = `<svg class="sidebar-gh-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.55 0-.27-.01-1.17-.02-2.12-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.75 2.69 1.25 3.35.95.1-.74.4-1.25.72-1.54-2.55-.29-5.23-1.28-5.23-5.68 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.05 0 0 .96-.31 3.15 1.18a10.9 10.9 0 0 1 5.74 0c2.19-1.49 3.15-1.18 3.15-1.18.62 1.59.23 2.76.11 3.05.73.81 1.18 1.83 1.18 3.09 0 4.41-2.69 5.38-5.25 5.67.41.35.77 1.05.77 2.12 0 1.53-.01 2.76-.01 3.14 0 .3.2.66.8.55A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></svg>`;
 // 主题切换图标：线性风格，与 TRASH_ICON 一致（stroke=currentColor）
@@ -552,16 +553,24 @@ function onKnowledgeListKey(e) {
   if (knowledgeTypingTarget(e.target)) return;
   if (e.key !== "j" && e.key !== "k") return;
   const rows = [...document.querySelectorAll("#kb-list .ima-doc-row")];
-  if (!rows.length) return;
-  const current = knowledgeMediaIdFromPath();
-  let idx = rows.findIndex((row) => row.dataset.mediaId === current);
-  if (e.key === "j") idx = idx < 0 ? 0 : idx + 1;
-  else idx = idx < 0 ? rows.length - 1 : idx - 1;
-  if (idx < 0 || idx >= rows.length) return;
+  if (rows.length) {
+    const current = knowledgeMediaIdFromPath();
+    let idx = rows.findIndex((row) => row.dataset.mediaId === current);
+    if (e.key === "j") idx = idx < 0 ? 0 : idx + 1;
+    else idx = idx < 0 ? rows.length - 1 : idx - 1;
+    if (idx < 0 || idx >= rows.length) return;
+    e.preventDefault();
+    rows[idx].focus();
+    return;
+  }
+  const snapshot = _imaListSnapshot;
+  if (!snapshot || snapshot.items.length < 2) return;
+  const idx = snapshot.items.findIndex((item) => String(item.media_id) === knowledgeMediaIdFromPath());
+  if (idx < 0) return;
+  const next = snapshot.items[idx + (e.key === "j" ? 1 : -1)];
+  if (!next) return;
   e.preventDefault();
-  const row = rows[idx];
-  row.focus();
-  openImaDocument(row.dataset.mediaId, row.dataset.groupId);
+  openImaDocument(next.media_id, next.group_id || "", true);
 }
 
 function ensureKnowledgeKeys() {
@@ -1677,6 +1686,9 @@ async function renderImaDocument(seq, mediaId) {
     const download = item.has_pdf
       ? `<button type="button" class="btn-normal ima-reader-download" onclick="downloadImaPdf('${escapeHtml(mediaId)}')">${DOWNLOAD_ICON}<span>下载 PDF</span></button>`
       : "";
+    const openNewTab = item.has_pdf
+      ? `<button type="button" class="icon-btn" aria-label="新标签打开 PDF" title="新标签打开 PDF" onclick="openImaPdfNewTab()">${EXTERNAL_LINK_ICON}</button>`
+      : "";
     const pdfPanel = item.has_pdf
       ? `<div id="ima-pdf-panel" class="ima-pdf-panel" aria-busy="true"><p class="ima-reader-status" role="status">正在打开预览…</p><iframe id="ima-pdf-frame" title="PDF 预览" hidden></iframe></div>`
       : `<div class="ima-pdf-panel"><div class="ima-reader-empty" role="status"><p>还没有预览文件</p></div></div>`;
@@ -1687,7 +1699,7 @@ async function renderImaDocument(seq, mediaId) {
       <article class="ima-reader">
         <header class="ima-reader-toolbar">
           <button type="button" class="btn-ghost ima-reader-back" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back)">返回 <span>${escapeHtml(backLabel)}</span></button>
-          <div class="ima-reader-actions"><button type="button" class="icon-btn" aria-label="返回搜索" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back, true)">${SEARCH_ICON}</button>${download}</div>
+          <div class="ima-reader-actions"><button type="button" class="icon-btn" aria-label="返回搜索" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back, true)">${SEARCH_ICON}</button>${openNewTab}${download}</div>
         </header>
         <section class="ima-reader-info">
           <h2 class="ima-reader-title">${escapeHtml(imaDisplayTitle(item.name))}</h2>
@@ -1770,6 +1782,14 @@ function closeImaPdf() {
     button.hidden = false;
     button.disabled = false;
   }
+}
+
+function openImaPdfNewTab() {
+  if (!window._imaPdfUrl) {
+    flash("PDF 还没加载好，稍后再试", "error");
+    return;
+  }
+  window.open(window._imaPdfUrl, "_blank", "noopener");
 }
 
 async function downloadImaPdf(mediaId) {

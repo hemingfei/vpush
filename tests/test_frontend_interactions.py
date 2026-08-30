@@ -4162,3 +4162,20 @@ def test_save_polling_splits_zsxq_fields():
         assert key not in polling
         assert key in zsxq
     assert 'id="pc-zq-save"' in _fn_body("loadAdminKnowledge")
+
+
+def test_knowledge_keyboard_walks_rows_without_opening_documents():
+    body = _fn_body("onKnowledgeListKey")
+    # 列表 j/k 只移动焦点，Enter 才打开，避免连按连下载整份 PDF
+    assert "openImaDocument(row.dataset.mediaId" not in body
+    assert "rows[idx].focus()" in body
+    # 阅读页 j/k 沿快照结果集翻上/下一份
+    assert "_imaListSnapshot" in body
+    assert "openImaDocument(next.media_id" in body
+
+
+def test_reader_pdf_has_new_tab_open_helper():
+    body = _fn_body("openImaPdfNewTab")
+    assert "window.open(window._imaPdfUrl" in body
+    assert "flash(" in body
+    assert "openImaPdfNewTab()" in _fn_body("renderImaDocument")
