@@ -1303,7 +1303,7 @@ def test_ima_pdf_load_is_owned_by_route_and_reader_generation_before_load_or_fai
     validation = load.index("if (blob.size < 64 || head !== \"%PDF-\")")
     assert validation < load.index("showImaPdfFail(mediaId, seq, readerSeq)")
     success_guard = load.index(owner_guard, load.index(head_read))
-    for side_effect in ("clearImaPdfUrl()", "URL.createObjectURL(blob)", "frame.src", "panel.hidden = false", "frame.addEventListener"):
+    for side_effect in ("URL.revokeObjectURL(window._imaPdfUrl)", "URL.createObjectURL(blob)", "frame.src", "panel.hidden = false", "frame.addEventListener"):
         assert success_guard < load.index(side_effect)
 
 
@@ -2880,6 +2880,19 @@ def test_ima_document_counts_use_real_total_not_page_plus():
     assert 'hasMore ? "+" : ""' not in reader
 
 
+def test_ima_local_library_pdf_does_not_embed_chrome_frame():
+    """本地库 PDF（中金等）不内嵌 Chrome PDF 插件，避免同页卡死。"""
+    src = APP_JS.read_text()
+    reader = _fn_body("renderImaDocument")
+    load = _fn_body("loadImaPdf")
+    assert "function imaInlinePdfFrame(" in src
+    assert "imaInlinePdfFrame(item.group_id || documentGroup)" in reader
+    assert 'startsWith("local-")' in src
+    assert "ima-pdf-phone-open" in reader
+    assert "打开预览" in reader
+    assert "signal: abort.signal" in load or "{ signal: abort.signal }" in load
+
+
 def test_ima_reader_clamps_long_abstract_and_keeps_preview_floor():
     """长摘要默认三行截断，展开后仍限高，预览区保底高度。"""
     src = APP_JS.read_text()
@@ -2892,7 +2905,9 @@ def test_ima_reader_clamps_long_abstract_and_keeps_preview_floor():
     assert "toggleImaAbstract(this)" in reader
     assert ".ima-reader-abstract.is-clamped:not(.is-expanded) p" in css
     assert "-webkit-line-clamp: 3" in css
-    assert ".ima-reader-page .ima-pdf-panel { flex: 1 1 auto; min-height: 240px;" in css
+    assert ".ima-reader-page .ima-pdf-panel {" in css
+    assert "min-height: 240px;" in css
+    assert "contain: strict;" in css
 
 
 def test_ima_document_reader_preserves_group_context_and_metadata():
@@ -3219,9 +3234,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=236"' in html
-    assert 'src="/app.js?v=330"' in html
-    assert 'dav-shell-v198' in sw
+    assert 'href="/style.css?v=237"' in html
+    assert 'src="/app.js?v=331"' in html
+    assert 'dav-shell-v199' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

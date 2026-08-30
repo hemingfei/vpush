@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.95";
+const APP_VERSION = "1.12.96";
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["config", "cookies", "proxies", "plaza"];
@@ -334,10 +334,19 @@ async function apiBlob(path, options = {}) {
 }
 
 function clearImaPdfUrl() {
+  if (_imaPdfAbort) {
+    _imaPdfAbort.abort();
+    _imaPdfAbort = null;
+  }
   if (window._imaPdfUrl) {
     URL.revokeObjectURL(window._imaPdfUrl);
     window._imaPdfUrl = "";
   }
+}
+
+function imaInlinePdfFrame(groupId = "") {
+  return !window.matchMedia("(max-width: 768px)").matches
+    && !String(groupId || "").startsWith("local-");
 }
 
 function _imaDocumentRoute(mediaId) {
@@ -694,6 +703,7 @@ const _imaItems = [];
 let _imaListSnapshot = null;
 let _imaListSeq = 0;
 let _imaReaderSeq = 0;
+let _imaPdfAbort = null;
 let _imaLoadingMore = false;
 let _imaSearchTimer = null;
 let _imaSearchComposing = false;
@@ -1651,12 +1661,12 @@ async function renderImaDocument(seq, mediaId) {
     const openNewTab = item.has_pdf
       ? `<button type="button" class="icon-btn" aria-label="新标签打开 PDF" title="新标签打开 PDF" onclick="openImaPdfNewTab()">${EXTERNAL_LINK_ICON}</button>`
       : "";
-    const phoneReader = window.matchMedia("(max-width: 768px)").matches;
+    const inlinePdf = imaInlinePdfFrame(item.group_id || documentGroup);
     const pdfPanel = item.has_pdf
       ? `<div id="ima-pdf-panel" class="ima-pdf-panel" aria-busy="true"><p class="ima-reader-status" role="status">正在打开预览…</p>${
-          phoneReader
-            ? `<button id="ima-pdf-phone-open" type="button" class="btn-normal ima-pdf-open" onclick="openImaPdfNewTab()" hidden>打开 PDF</button>`
-            : `<iframe id="ima-pdf-frame" title="PDF 预览" hidden></iframe>`
+          inlinePdf
+            ? `<iframe id="ima-pdf-frame" title="PDF 预览" hidden style="position:absolute;inset:0;width:100%;height:100%;border:0"></iframe>`
+            : `<button id="ima-pdf-phone-open" type="button" class="btn-normal ima-pdf-open" onclick="openImaPdfNewTab()" hidden>打开预览</button>`
         }</div>`
       : `<div class="ima-pdf-panel"><div class="ima-reader-empty" role="status"><p>还没有预览文件</p></div></div>`;
     const sizeLine = fmtDocSize(item.size);
@@ -1711,16 +1721,21 @@ async function loadImaPdf(mediaId, readerSeq) {
   const seq = routeRenderSeq;
   const group = imaReaderDocumentGroup();
   const groupQuery = group ? `?group=${encodeURIComponent(group)}` : "";
+  if (_imaPdfAbort) _imaPdfAbort.abort();
+  const abort = new AbortController();
+  _imaPdfAbort = abort;
   try {
-    const blob = await apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/pdf${groupQuery}`);
+    const blob = await apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/pdf${groupQuery}`, { signal: abort.signal });
+    if (abort.signal.aborted) return;
     if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
     const head = blob.size ? await blob.slice(0, 5).text() : "";
+    if (abort.signal.aborted) return;
     if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
     if (blob.size < 64 || head !== "%PDF-") {
       showImaPdfFail(mediaId, seq, readerSeq);
       return;
     }
-    clearImaPdfUrl();
+    if (window._imaPdfUrl) URL.revokeObjectURL(window._imaPdfUrl);
     window._imaPdfUrl = URL.createObjectURL(blob);
     const frame = $("#ima-pdf-frame");
     const panel = $("#ima-pdf-panel");
@@ -1738,7 +1753,8 @@ async function loadImaPdf(mediaId, readerSeq) {
         frame.addEventListener("error", () => showImaPdfFail(mediaId, seq, readerSeq), { once: true });
       }
     }
-  } catch {
+  } catch (err) {
+    if (err && err.name === "AbortError") return;
     if (routeStillActive(seq) && readerSeq === _imaReaderSeq) showImaPdfFail(mediaId, seq, readerSeq);
   }
 }
