@@ -4222,3 +4222,5 @@ def test_knowledge_desk_serves_phone_without_refusal():
     assert "知识库阅读台（手机）" in css
     assert "100dvh - 120px" in css
     assert "grid-template-columns: 44px minmax(0, 1fr) 84px" in css
+    # 同优先级后者胜：手机覆盖块必须声明在桌面规则之后，否则被覆盖回桌面网格
+    assert css.index("知识库阅读台（手机）") > css.index("grid-template-columns: minmax(0, 1fr) auto")
