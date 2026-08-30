@@ -2868,12 +2868,14 @@ def test_ima_document_counts_use_real_total_not_page_plus():
     reader = _fn_body("renderImaDocument")
     assert "function imaResolvedCount(" in src
     assert "function imaDocumentsCountLabel(" in src
-    assert "function imaReaderBackLabel(" in src
+    assert "function imaReaderBackLabel(" not in src
     assert "imaDocumentsCountLabel(" in render
     assert "snapshot.documentCount" in render
     assert "data.document_count" in render
     assert "imaDocumentsCountLabel(" in more
-    assert "imaReaderBackLabel(listSnapshot)" in reader
+    assert "imaReaderBackLabel" not in reader
+    assert "ima-back-count" not in reader
+    assert "条结果" not in reader
     assert "imaSnapshotIsFiltered" in src
     assert 'has_more ? "+" : ""' not in render
     assert 'imaDocumentsHasMore ? "+" : ""' not in more
@@ -2908,6 +2910,8 @@ def test_ima_reader_clamps_long_abstract_and_keeps_preview_floor():
     assert ".ima-reader-page .ima-pdf-panel {" in css
     assert "min-height: 240px;" in css
     assert "contain: strict;" in css
+    assert "align-items: baseline;" in css
+    assert ".ima-reader-filemeta {" in css
 
 
 def test_ima_document_reader_preserves_group_context_and_metadata():
@@ -2929,16 +2933,18 @@ def test_ima_document_reader_preserves_group_context_and_metadata():
     assert "ima-reader-info" in reader
     assert "<details open" in reader
     assert "查看 PDF" not in reader
-    assert "下载" in reader
-    assert "btn-normal ima-reader-download" in reader
+    assert "ima-reader-download" not in reader
+    assert "下载 PDF" not in reader
     assert 'class="btn-ghost ima-reader-back"' not in reader
     assert "ima-back-icon" in reader
+    assert ">返回</button>" in reader
     assert "imaDisplayTitle" in reader and "item.size" in reader
     assert "ima-reader-abstract" in reader
     assert "ima-reader-empty" in reader
     assert "还没有预览文件" in reader
     assert "回列表" not in reader
     assert "ima-reader-filemeta" in reader
+    assert "section-meta ima-reader-filemeta" not in reader
     assert "needs_translation" in reader
     assert "/translate" in reader
 
@@ -3170,9 +3176,11 @@ def test_ima_reader_has_one_app_download_and_result_neighbors():
 
     assert "ima-reader-toolbar" in reader
     assert "backFromImaReader" in reader
-    assert "btn-normal ima-reader-download" in reader
+    assert "ima-reader-download" not in reader
+    assert "下载 PDF" not in reader
     assert 'class="btn-ghost ima-reader-back"' not in reader
     assert "ima-back-icon" in reader
+    assert ">返回</button>" in reader
     assert "<details open" in reader
     assert "imaReaderNavHtml" in reader
     assert "openImaDocument" in nav
@@ -3234,9 +3242,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=237"' in html
-    assert 'src="/app.js?v=332"' in html
-    assert 'dav-shell-v200' in sw
+    assert 'href="/style.css?v=238"' in html
+    assert 'src="/app.js?v=333"' in html
+    assert 'dav-shell-v201' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -4284,11 +4292,11 @@ def test_knowledge_desk_serves_phone_without_refusal():
     assert "grid-template-columns: 44px minmax(0, 1fr) 84px" in css
     # 同优先级后者胜：手机覆盖块必须声明在桌面规则之后，否则被覆盖回桌面网格
     assert css.index("知识库阅读台（手机）") > css.index("grid-template-columns: minmax(0, 1fr) auto")
-    # 手机阅读页：iframe 换成 blob 就绪后的「打开 PDF」大按钮，返回按钮省略结果数
+    # 手机阅读页：iframe 换成 blob 就绪后的「打开 PDF」大按钮
     assert "ima-pdf-phone-open" in _fn_body("renderImaDocument")
     assert "ima-pdf-phone-open" in _fn_body("loadImaPdf")
-    assert ".ima-reader-back .ima-back-count { display: none; }" in css
-    assert ".ima-reader-download span { display: none; }" in css
+    assert "ima-back-count" not in _fn_body("renderImaDocument")
+    assert "ima-reader-download" not in _fn_body("renderImaDocument")
     # 遗留手机块不得再拉伸阅读工具栏按钮（曾把下载钮撑出屏）
     assert "flex: 1; justify-content: center" not in css
 
