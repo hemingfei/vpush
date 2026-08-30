@@ -705,6 +705,8 @@ let _imaReaderSeq = 0;
 let _imaPdfAbort = null;
 let _imaLoadingMore = false;
 let _imaSearchTimer = null;
+let _imaDocsLoadObserver = null;
+let _imaDocsLoadFallback = null;
 let _imaSearchComposing = false;
 let _imaTagCounts = {};
 let _imaDocumentCount = 0;
@@ -984,9 +986,10 @@ function restoreImaListSnapshot(snapshot, body) {
   _imaTagCounts = { ...snapshot.tagCounts };
   _imaDocumentCount = snapshot.documentCount;
   const more = snapshot.hasMore
-    ? `<div class="ima-docs-more"><button id="ima-docs-more" type="button" class="btn-ghost" onclick="loadImaDocumentsMore()">加载更多</button></div>`
+    ? `<div id="ima-docs-more" class="ima-docs-more" role="status" aria-live="polite">下滑加载更多</div>`
     : "";
   body.innerHTML = `<div class="ima-doc-list">${snapshot.items.map((item) => imaDocumentRow(item)).join("")}</div>${more}`;
+  startImaDocumentsAutoLoad();
   requestAnimationFrame(() => {
     body.scrollTop = snapshot.scrollTop;
     const row = [...body.querySelectorAll(".ima-doc-row")].find((item) => imaDocumentKey(item.dataset.mediaId, item.dataset.groupId) === snapshot.selectedKey);
@@ -1455,9 +1458,10 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
       return;
     }
     const more = state.imaDocumentsHasMore
-      ? `<div class="ima-docs-more"><button id="ima-docs-more" type="button" class="btn-ghost" onclick="loadImaDocumentsMore()">加载更多</button></div>`
+      ? `<div id="ima-docs-more" class="ima-docs-more" role="status" aria-live="polite">下滑加载更多</div>`
       : "";
     body.innerHTML = `<div class="ima-doc-list">${items.map((item) => imaDocumentRow(item)).join("")}</div>${more}`;
+    startImaDocumentsAutoLoad();
   } catch (err) {
     if (!routeStillActive(seq)) return;
     const body = $("#ima-docs-body");
@@ -1516,9 +1520,36 @@ function clearImaDocumentsFilters() {
 }
 
 function stopImaDocumentsAutoLoad() {
+  _imaDocsLoadObserver?.disconnect();
+  _imaDocsLoadObserver = null;
+  if (_imaDocsLoadFallback) {
+    const body = $("#ima-docs-body");
+    body?.removeEventListener("scroll", _imaDocsLoadFallback);
+    _imaDocsLoadFallback = null;
+  }
   clearTimeout(_imaSearchTimer);
   _imaSearchTimer = null;
   _imaLoadingMore = false;
+}
+
+function startImaDocumentsAutoLoad() {
+  stopImaDocumentsAutoLoad();
+  const body = $("#ima-docs-body");
+  const sentinel = $("#ima-docs-more");
+  if (!body || !sentinel || !state.imaDocumentsHasMore) return;
+  const load = () => loadImaDocumentsMore();
+  if ("IntersectionObserver" in window) {
+    _imaDocsLoadObserver = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) load();
+    }, { root: body, rootMargin: "400px 0px" });
+    _imaDocsLoadObserver.observe(sentinel);
+    return;
+  }
+  _imaDocsLoadFallback = () => {
+    if (body.scrollTop + body.clientHeight >= body.scrollHeight - 400) load();
+  };
+  body.addEventListener("scroll", _imaDocsLoadFallback, { passive: true });
+  _imaDocsLoadFallback();
 }
 
 async function loadImaDocumentsMore() {
@@ -1527,8 +1558,8 @@ async function loadImaDocumentsMore() {
   _imaLoadingMore = true;
   const moreBtn = $("#ima-docs-more");
   if (moreBtn) {
-    moreBtn.disabled = true;
     moreBtn.textContent = "正在加载更多…";
+    moreBtn.setAttribute("aria-busy", "true");
   }
   const seq = routeRenderSeq;
   const listSeq = _imaListSeq;
@@ -1550,13 +1581,13 @@ async function loadImaDocumentsMore() {
       list.insertAdjacentHTML("beforeend", incoming.map((item) => imaDocumentRow(item)).join(""));
     }
     const btn = $("#ima-docs-more");
-    const wrap = btn?.closest(".ima-docs-more");
     if (!state.imaDocumentsHasMore) {
-      (wrap || btn)?.remove();
+      btn?.remove();
     } else if (btn) {
-      btn.disabled = false;
-      btn.textContent = "加载更多";
+      btn.textContent = "下滑加载更多";
+      btn.removeAttribute("aria-busy");
     }
+    startImaDocumentsAutoLoad();
     const meta = $("#ima-doc-meta");
     if (meta) {
       meta.textContent = imaDocumentsCountLabel(
@@ -1570,8 +1601,8 @@ async function loadImaDocumentsMore() {
     if (listSeq !== _imaListSeq || !routeStillActive(seq)) return;
     const failed = $("#ima-docs-more");
     if (failed) {
-      failed.disabled = false;
-      failed.textContent = "加载失败，重试";
+      failed.removeAttribute("aria-busy");
+      failed.innerHTML = `<button type="button" class="btn-ghost" onclick="loadImaDocumentsMore()">加载失败，重试</button>`;
     }
   } finally {
     if (listSeq === _imaListSeq) _imaLoadingMore = false;

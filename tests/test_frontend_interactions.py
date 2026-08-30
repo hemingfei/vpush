@@ -3135,8 +3135,11 @@ def test_ima_report_search_is_debounced_and_explicitly_pages():
     assert "submitImaDocumentsSearch()" in queued
     assert 'oninput="queueImaDocumentsSearch()"' in render
     assert 'id="ima-docs-more"' in render
-    assert 'onclick="loadImaDocumentsMore()"' in render
-    assert "IntersectionObserver" not in src[src.index("const _imaItems"):src.index("async function renderImaDocument")]
+    assert 'role="status"' in render
+    assert 'startImaDocumentsAutoLoad()' in render
+    auto = _fn_body("startImaDocumentsAutoLoad")
+    assert "IntersectionObserver" in auto
+    assert "root: body" in auto
     assert "正在加载更多" in more
     assert "加载失败，重试" in more
 
@@ -4329,3 +4332,5 @@ def test_knowledge_zero_sub_empty_state_wraps_source_controls():
     assert "ima-report-filters-row" in body
     css = STYLE_CSS.read_text()
     assert ".ima-report-filters-row { padding: 12px 16px; flex-wrap: wrap; }" in css
+    assert ".ima-report-filters > .ima-report-source" in css
+    assert "width: 100%;" in css[css.index(".ima-report-source select"):css.index(".ima-report-head .ima-doc-filter-chips")]

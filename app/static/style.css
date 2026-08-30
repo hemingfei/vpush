@@ -2830,12 +2830,14 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .ima-docs-more {
   display: flex;
   justify-content: center;
-  min-height: 34px;
+  min-height: 42px;
+  align-items: center;
   gap: 8px;
   margin-top: 14px;
   color: var(--color-text-muted);
   font-size: var(--text-xs);
 }
+.ima-docs-more[aria-busy="true"] { color: var(--color-text-muted); }
 .ima-reader { display: flex; flex-direction: column; min-height: calc(100vh - 160px); }
 .ima-reader-copy { min-width: 0; display: grid; gap: 4px; }
 .ima-reader-abstract { margin: 8px 0 0; color: var(--color-text); font-size: var(--text-sm); }
@@ -2942,9 +2944,14 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   font-weight: var(--font-weight-medium);
 }
 .ima-report-filters { display: flex; align-items: center; gap: 8px; }
+.ima-report-filters > .ima-report-source,
+.ima-report-filters > .ima-report-tag { flex: 1 1 0; min-width: 0; }
 .ima-report-filters-row { padding: 12px 16px; flex-wrap: wrap; }
 .ima-report-source select,
 .ima-report-tag select {
+  display: block;
+  width: 100%;
+  min-width: 0;
   min-height: 42px;
   border: var(--border-strong);
   border-radius: var(--radius-control);
