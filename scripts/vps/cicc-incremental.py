@@ -118,9 +118,12 @@ def main() -> None:
     # 品类定向：cicc_settings.json 非空则只采勾选品类（空数组/缺文件=全部）
     settings = read_json(os.path.join(CTRL, "cicc_settings.json"), {}) or {}
     cats = [str(c) for c in (settings.get("categories") or []) if str(c).strip()]
+    keywords = [str(k) for k in (settings.get("keywords") or []) if str(k).strip()]
     argv = [PY, "-u", COLLECTOR, "--days", "3"]
     if cats:
         argv += ["--categories", ",".join(cats)]
+    if keywords:
+        argv += ["--keywords", ",".join(keywords)]
     os.makedirs(CICC_DIR, exist_ok=True)
     r = subprocess.run(argv,
                        capture_output=True, text=True, encoding="utf-8",

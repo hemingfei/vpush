@@ -3,7 +3,7 @@
 
 由 vpush-cicc-dispatch.path（PathModified=commands 目录）触发；处理完删除命令文件，
 结果追加进 commands.json 账本。命令文件须为原子写入（vpush 侧 tmp+rename）。
-mode ∈ incr|year|all|stop|compress|schedule|settings|backup：
+mode ∈ incr|year|all|stop|compress|schedule|settings|backup|consistency|dedup：
   incr/year/all  启动 cicc_report_collector.py（已有采集进程在跑则拒绝，避免重复翻页）
   stop           结束所有采集进程
   compress       启动 gs 压缩回刷（低优先级，可与采集并存，回刷自身跳过 120s 内新文件）
@@ -28,6 +28,8 @@ COLLECTOR = os.path.join(CICC_DIR, "cicc_report_collector.py")
 COMPRESSOR = os.path.join(CICC_DIR, "pdf_backfill_compress.py")
 SCHEDULE_FILE = "/usr/local/lib/vpush-ima/cicc-schedule.json"
 BACKUP_SCRIPT = "/usr/local/lib/vpush-ima/restic-backup.sh"
+CONSISTENCY_SCRIPT = "/usr/local/lib/vpush-ima/cicc-consistency.py"
+DEDUP_SCRIPT = "/root/cicc/pdf_dedup_hardlink.py"
 PY = "/usr/bin/python3"
 
 MODE_ARGS = {
@@ -107,6 +109,24 @@ def main() -> None:
                     entry["ok"] = True
                 else:
                     entry["error"] = "invalid_categories"
+            elif mode == "consistency":
+                if not os.path.exists(CONSISTENCY_SCRIPT):
+                    entry["error"] = "consistency_script_missing"
+                else:
+                    r = subprocess.run([PY, CONSISTENCY_SCRIPT], capture_output=True,
+                                       text=True, timeout=600, check=False)
+                    entry["ok"] = r.returncode == 0
+                    if r.returncode != 0:
+                        entry["error"] = (r.stderr or "")[:200]
+            elif mode == "dedup":
+                if not os.path.exists(DEDUP_SCRIPT):
+                    entry["error"] = "dedup_script_missing"
+                else:
+                    subprocess.Popen(["nice", "-n", "19", PY, "-u", DEDUP_SCRIPT, "--apply"],
+                                     stdout=open(os.path.join(CICC_DIR, "ui_dedup.log"), "ab"),
+                                     stderr=subprocess.STDOUT, cwd=CICC_DIR,
+                                     start_new_session=True, close_fds=True)
+                    entry["ok"] = True
             elif mode == "backup":
                 if not os.path.exists(BACKUP_SCRIPT):
                     entry["error"] = "backup_script_missing"

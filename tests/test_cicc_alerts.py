@@ -113,3 +113,16 @@ def test_schedule_command_payload(tmp_path):
     assert len(cmds) == 1
     body = json.loads(cmds[0].read_text(encoding="utf-8"))
     assert body["mode"] == "schedule" and body["time"] == "05:30"
+
+
+def test_collector_keywords_filter():
+    """标题关键词白名单：命中任一保留，空白名单全保留。"""
+    spec = importlib.util.spec_from_file_location(
+        "cicc_collector_kw", ROOT / "scripts/cicc_report_collector.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    items = [{"title": "宁德时代：Q3 业绩点评"}, {"title": "贵州茅台：渠道跟踪"}]
+    assert len(mod.filter_by_keywords(items, [])) == 2
+    assert len(mod.filter_by_keywords(items, ["宁德时代"])) == 1
+    assert len(mod.filter_by_keywords(items, ["宁德时代", "白酒"])) == 1  # 「白酒」不在标题中
+    assert mod.filter_by_keywords(items, ["不存在的词"]) == []

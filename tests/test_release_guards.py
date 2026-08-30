@@ -70,3 +70,11 @@ SENTINELS += [
     ("app/static/app.js", "saveCiccCategories", "中金页签品类定向多选保存"),
     ("app/static/app.js", "备份未生效", "存储页签诚实展示备份未配置"),
 ]
+# —— 知识库设置增强第三批（feat/kb-settings-batch2 后续，2026-08-30）——
+SENTINELS += [
+    ("app/static/app.js", "runStorageConsistency", "存储页签一致性体检入口"),
+    ("app/static/app.js", "runStorageDedup", "去重手动触发入口"),
+    ("app/static/app.js", "cicc-keywords", "标题关键词白名单输入"),
+    ("scripts/vps/cicc-consistency.py", "def main", "本地库一致性体检脚本"),
+    ("scripts/vps/cicc-dispatch.py", "consistency", "一致性命令模式"),
+]

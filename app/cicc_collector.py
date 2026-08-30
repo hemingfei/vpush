@@ -67,9 +67,12 @@ class CiccControl:
         """下发采集时间（HH:mm），存储机 dispatch 写 cicc-schedule.json。"""
         return self.trigger("schedule", actor, extra={"time": time_of_day})
 
-    def set_cicc_settings(self, categories: list[str], actor: str) -> dict:
-        """下发品类定向（空列表=采集全部），存储机 dispatch 写 cicc_settings.json。"""
-        return self.trigger("settings", actor, extra={"categories": categories})
+    def set_cicc_settings(self, categories: list[str], actor: str,
+                          keywords: list[str] | None = None) -> dict:
+        """下发品类定向与标题关键词白名单（空列表=不过滤），存储机写 cicc_settings.json。"""
+        extra = {"categories": categories,
+                 "keywords": [k for k in (keywords or []) if str(k).strip()]}
+        return self.trigger("settings", actor, extra=extra)
 
     def set_schedule(self, enabled: bool) -> dict:
         self.ctrl.mkdir(parents=True, exist_ok=True)

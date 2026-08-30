@@ -563,7 +563,8 @@ class CiccScheduleIn(BaseModel):
 
 
 class CiccCategoriesIn(BaseModel):
-    categories: list[str]  # 空数组=采集全部品类
+    categories: list[str] = []  # 空数组=采集全部品类
+    keywords: list[str] = []    # 标题关键词白名单（空=不过滤）
 
 
 class ImaKbAclIn(BaseModel):
@@ -3060,14 +3061,20 @@ def create_api_router(
         ctl = from_env()
         if ctl is None:
             raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
-        settings = (ctl.status().get("cicc_settings") or {}).get("categories")
+        cicc_settings = (ctl.status().get("cicc_settings") or {})
+        settings = cicc_settings.get("categories")
         if settings is None:  # 存储机还没透传（离线/未刷新）→ 退回 DB 里上次保存的定向
             raw = db.get_setting(CICC_CATEGORIES_KEY)
             try:
                 settings = json.loads(raw) if raw else []
             except ValueError:
                 settings = []
-        return {"categories": settings}
+        raw_kw = db.get_setting("cicc_keywords_key")
+        try:
+            keywords = json.loads(raw_kw) if raw_kw else []
+        except ValueError:
+            keywords = []
+        return {"categories": settings, "keywords": keywords}
 
     @router.put("/admin/ima-collector/cicc-categories", dependencies=[Depends(require_admin)])
     def cicc_categories_put(body: CiccCategoriesIn, admin: dict = Depends(require_admin)):
@@ -3080,10 +3087,15 @@ def create_api_router(
         unknown = sorted(set(cats) - set(CICC_CATEGORIES))
         if unknown:
             raise HTTPException(status_code=400, detail=f"未知品类：{'、'.join(unknown)}")
-        ctl.set_cicc_settings(cats, admin["username"])
+        keywords = list(dict.fromkeys(k.strip() for k in body.keywords if k.strip()))
+        ctl.set_cicc_settings(cats, admin["username"], keywords)
         db.set_setting(CICC_CATEGORIES_KEY, json.dumps(cats, ensure_ascii=False))
-        _audit(admin, "cicc_categories", "", "全部品类" if not cats else "、".join(cats))
-        return {"categories": cats}
+        db.set_setting("cicc_keywords_key", json.dumps(keywords, ensure_ascii=False))
+        note = "全部品类" if not cats else "、".join(cats)
+        if keywords:
+            note += f"｜关键词：{'、'.join(keywords)}"
+        _audit(admin, "cicc_categories", "", note)
+        return {"categories": cats, "keywords": keywords}
 
     @router.get("/admin/ima-storage/health", dependencies=[Depends(require_admin)])
     def ima_storage_health(admin: dict = Depends(require_admin)):
@@ -3093,6 +3105,37 @@ def create_api_router(
         if ctl is None:
             raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
         return ctl.status()
+
+    @router.get("/admin/ima-storage/consistency", dependencies=[Depends(require_admin)])
+    def ima_storage_consistency_get(admin: dict = Depends(require_admin)):
+        from .cicc_collector import from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        return ctl.status().get("consistency") or {}
+
+    @router.post("/admin/ima-storage/consistency/run", dependencies=[Depends(require_admin)])
+    def ima_storage_consistency_run(admin: dict = Depends(require_admin)):
+        from .cicc_collector import from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        result = ctl.trigger("consistency", admin["username"])
+        _audit(admin, "ima_consistency_run", "", "")
+        return result
+
+    @router.post("/admin/ima-storage/dedup", dependencies=[Depends(require_admin)])
+    def ima_storage_dedup(admin: dict = Depends(require_admin)):
+        from .cicc_collector import from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        result = ctl.trigger("dedup", admin["username"])
+        _audit(admin, "ima_dedup", "", "")
+        return result
 
     @router.get("/admin/ima-storage/alerts", dependencies=[Depends(require_admin)])
     def ima_storage_alerts_get(admin: dict = Depends(require_admin)):

@@ -143,6 +143,15 @@ class Session:
         raise last_err
 
 
+def filter_by_keywords(items: list[dict], keywords: list[str]) -> list[dict]:
+    """标题关键词白名单：任一关键词（大小写不敏感）命中即保留；空白名单=全部保留。"""
+    kw = [k.strip().lower() for k in keywords if k and k.strip()]
+    if not kw:
+        return items
+    return [it for it in items
+            if any(k in str(it.get("title") or "").lower() for k in kw)]
+
+
 def sanitize_title(title: str) -> str:
     title = re.sub(r'[\\/:*?"<>|\x00-\x1f]', " ", title)
     title = re.sub(r"\s+", " ", title).strip().strip(".")
@@ -334,6 +343,7 @@ def main() -> None:
     ap.add_argument("--since", default="", help="起始日期 YYYY-MM-DD（如 2026-01-01 采今年），优先于 --days")
     ap.add_argument("--all", action="store_true", help="全量，不按日期过滤")
     ap.add_argument("--categories", default="", help="逗号分隔的一级品类名，默认全部")
+    ap.add_argument("--keywords", default="", help="逗号分隔的标题关键词白名单，默认不过滤")
     ap.add_argument("--limit", type=int, default=0, help="本次最多下载多少个 PDF（调试用）")
     ap.add_argument("--endpoint", choices=["viewer", "download"], default="viewer",
                     help="取 PDF 路径：viewer=在线阅读流 fetchPdf（不计月度配额，默认）；download=旧下载接口（计 300/月配额）")
@@ -419,7 +429,10 @@ def main() -> None:
         page, total_seen = args.page_start, 0
         while True:
             data = list_page(sess, cat["id"], page, start, None if args.all else end)
-            items = data.get("content") or []
+            items = filter_by_keywords(
+                data.get("content") or [],
+                [k for k in (args.keywords or "").split(",") if k.strip()],
+            )
             if page == 1:
                 print(f"[{name}] total={data.get('totalElements')} pages={data.get('totalPages')}")
             if not items:

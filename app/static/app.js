@@ -6191,6 +6191,12 @@ function imaStoragePanelHtml(storage) {
         <button type="button" class="btn-normal" id="ima-storage-backup" onclick="backupImaStorage()">立即备份</button>
       </div>
       <div id="ima-storage-health" class="cfg-foot"><p class="muted">存储健康加载中…</p></div>
+      <div id="ima-consistency" class="cfg-foot"><p class="muted">一致性体检：点「体检」后生成报告。</p></div>
+      <div class="toolbar ima-storage-toolbar">
+        <button type="button" class="btn-ghost" id="ima-consistency-run" onclick="runStorageConsistency()">一致性体检</button>
+        <button type="button" class="btn-ghost" onclick="runStorageDedup()">去重（低优先级）</button>
+        <span class="muted">去重已配置每月 1 日 04:00 自动执行</span>
+      </div>
     </div>
   </section>`;
 }
@@ -7028,6 +7034,38 @@ async function saveZsxqPollingConfig() {
   }
 }
 
+async function runStorageConsistency() {
+  const btn = document.getElementById("ima-consistency-run");
+  const box = document.getElementById("ima-consistency");
+  if (!box) return;
+  if (btn) { btn.disabled = true; btn.textContent = "体检中…"; }
+  try {
+    await api("/api/admin/ima-storage/consistency/run", { method: "POST" });
+    await new Promise((r) => setTimeout(r, 5000));
+    const rep = await api("/api/admin/ima-storage/consistency");
+    const items = [];
+    if ((rep.corrupt_count ?? 0) > 0) items.push(`损坏 PDF ${rep.corrupt_count} 个（${(rep.corrupt || []).slice(0, 3).join("、")}…）`);
+    if ((rep.dup_id_count ?? 0) > 0) items.push(`重复报告 id ${rep.dup_id_count} 个`);
+    if ((rep.bad_name_count ?? 0) > 0) items.push(`命名不规范 ${rep.bad_name_count} 个`);
+    if ((rep.empty_dir_count ?? 0) > 0) items.push(`空目录 ${rep.empty_dir_count} 个`);
+    if ((rep.no_sidecar_count ?? 0) > 0) items.push(`无摘要元数据 ${rep.no_sidecar_count} 篇`);
+    box.innerHTML = items.length
+      ? `<p class="section-meta">体检发现：${items.join("；")}。${rep.files ?? ""} 个 PDF 已扫描。</p>`
+      : `<p class="section-meta">体检通过：未发现异常。</p>`;
+  } catch (err) {
+    box.innerHTML = `<p class="muted">体检失败：${escapeHtml(err.message)}</p>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "一致性体检"; }
+  }
+}
+
+async function runStorageDedup() {
+  try {
+    const r = await api("/api/admin/ima-storage/dedup", { method: "POST" });
+    flash(r.queued ? "去重任务已启动（低优先级，日志见存储机 ui_dedup.log）" : "去重任务下发失败", r.queued ? "ok" : "error");
+  } catch (err) { flash(`下发失败：${err.message}`, "error"); }
+}
+
 async function loadStorageHealth() {
   const box = document.getElementById("ima-storage-health");
   if (!box) return;
@@ -7179,16 +7217,21 @@ function ciccCategoriesHtml(cicc) {
     ? cicc.cicc_settings.categories : [];
   const boxes = CICC_CATEGORIES.map((c) =>
     `<label style="margin-right:12px;white-space:nowrap"><input type="checkbox" class="cicc-cat" value="${escapeHtml(c)}" ${active.includes(c) ? "checked" : ""}> ${escapeHtml(c)}</label>`).join("");
-  return `<details><summary class="cfg-group-title">品类定向（全不勾选 = 采集全部）</summary>
-    <p class="muted">当前：${active.length ? escapeHtml(active.join("、")) : "全部品类"}</p>
+  const activeKw = Array.isArray(cicc.cicc_settings && cicc.cicc_settings.keywords)
+    ? cicc.cicc_settings.keywords : [];
+  return `<details><summary class="cfg-group-title">品类定向与关键词白名单（全不勾选 = 采集全部）</summary>
+    <p class="muted">当前：${active.length ? escapeHtml(active.join("、")) : "全部品类"}${activeKw.length ? ` · 关键词：${escapeHtml(activeKw.join("、"))}` : ""}</p>
     <div style="display:flex;flex-wrap:wrap;gap:4px 0;margin:6px 0;max-width:560px">${boxes}</div>
-    <button type="button" class="btn-ghost" onclick="saveCiccCategories()">保存品类定向</button></details>`;
+    <div style="margin:8px 0">标题关键词白名单（逗号分隔，命中任一即采集）：
+      <input type="text" id="cicc-keywords" class="form-control" style="width:320px;display:inline-block;vertical-align:middle" value="${escapeHtml(activeKw.join(","))}" placeholder="如：宁德时代,半导体"></div>
+    <button type="button" class="btn-ghost" onclick="saveCiccCategories()">保存品类与关键词</button></details>`;
 }
 
 async function saveCiccCategories() {
   const cats = Array.from(document.querySelectorAll(".cicc-cat:checked")).map((el) => el.value);
+  const keywords = (document.getElementById("cicc-keywords") || {}).value || "";
   try {
-    const r = await api("/api/admin/ima-collector/cicc-categories", { method: "PUT", body: JSON.stringify({ categories: cats }) });
+    const r = await api("/api/admin/ima-collector/cicc-categories", { method: "PUT", body: JSON.stringify({ categories: cats, keywords }) });
     flash(r.categories.length ? `品类定向已保存：${r.categories.join("、")}` : "已设为采集全部品类");
     loadCiccStatus();
   } catch (err) {

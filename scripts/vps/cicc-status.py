@@ -80,7 +80,8 @@ def storage_section() -> dict:
     return {"disk": disk, "wg": wg, "nfs": nfs,
             "archive": read_json(os.path.join(CTRL, "stats.json"), {}),
             "schedule": read_json(SCHEDULE_FILE, {"time": "03:00"}),
-            "last_incr_summary": read_json(os.path.join(CTRL, "last_incr_summary.json"), {}) or {}}
+            "last_incr_summary": read_json(os.path.join(CTRL, "last_incr_summary.json"), {}) or {},
+            "consistency": read_json(os.path.join(CTRL, "consistency.json"), {}) or {}}
 
 
 def load_env_file(path: str) -> dict[str, str]:
