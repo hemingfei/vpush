@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from app.db import DB
 from app.ima_documents import (
     ImaDocumentService,
+    ImaGroupConfig,
     _prepare_discovery_item,
 )
 from app.main import create_app
@@ -634,3 +635,123 @@ def test_local_library_admin_meta_create_acl_endpoints(tmp_path, monkeypatch):
         ).status_code
         == 403
     )
+
+
+# ---- 跨年排序键 sort_date（fix/kb-sort-date）----
+
+
+def _make_mixed_stream(service, archive):
+    """一个 IMA 组（day=0830）+ 一个本地库（2026-08-30 与 2025-12-31 各一篇）。"""
+    ima_record = {
+        "group_id": "semi",
+        "group_name": "SemiAnalysis",
+        "media_id": "file_ima",
+        "name": "B_ima",
+        "day": "0830",
+    }
+    service.store.save_group_manifest("semi", [ima_record])
+    service.store.save_state({service.store.state_key(ima_record): {"pdf": "semi/ima.pdf"}})
+    _make_library(
+        archive,
+        slug="cicc",
+        name="中金点睛",
+        pdfs=["宏观/0830/A_local_101.pdf", "宏观/1231/C_dec_102.pdf"],
+        sidecar=[
+            {"id": "101", "publish": "2026-08-30", "day": "0830"},
+            {"id": "102", "publish": "2025-12-31", "day": "1231"},
+        ],
+    )
+    service.scan_local_libraries()
+    service.rebuild_read_index()
+    return (
+        ImaGroupConfig("semi", "SemiAnalysis", "kb", "root"),
+        ImaGroupConfig("local-cicc", "中金点睛", "", ""),
+    )
+
+
+def test_latest_stream_orders_by_pub_date_across_years(tmp_path):
+    """2025-12 尾巴不再压住 2026-08 新研报：按 sort_date（YYYY-MM-DD）排序。"""
+    service, archive = _service(tmp_path)
+    groups = _make_mixed_stream(service, archive)
+
+    page = service.list_documents(groups)
+
+    # 两篇 2026-08-30 同键，按 name DESC；2025-12-31 沉底（关键断言）
+    assert [item["name"] for item in page["items"]] == ["B_ima", "A_local_101", "C_dec_102"]
+    # day 展示仍是 MMDD 桶，接口响应结构不变
+    assert [item["day"] for item in page["items"]] == ["0830", "0830", "1231"]
+    manifest = {item["name"]: item for item in service.store.load_manifest()}
+    assert manifest["A_local_101"]["pub_date"] == "2026-08-30"
+    assert manifest["C_dec_102"]["pub_date"] == "2025-12-31"
+    state = service.store.load_state()
+    assert state[service.store.state_key(manifest["A_local_101"])]["pub_date"] == "2026-08-30"
+
+
+def test_days_facets_keep_mmdd_buckets(tmp_path):
+    """days facets 是 MMDD 桶，不受 sort_date 影响。"""
+    service, archive = _service(tmp_path)
+    groups = _make_mixed_stream(service, archive)
+
+    page = service.list_documents(groups)
+
+    assert page["days"] == ["1231", "0830"]
+
+
+def test_unknown_day_document_sinks_to_bottom(tmp_path):
+    service, archive = _service(tmp_path)
+    _make_library(
+        archive,
+        slug="cicc",
+        name="中金点睛",
+        pdfs=["0830/有日期_201.pdf", "无日期_202.pdf"],
+        sidecar=[{"id": "201", "publish": "2026-08-30", "day": "0830"}],
+    )
+    service.scan_local_libraries()
+    service.rebuild_read_index()
+
+    page = service.list_documents((ImaGroupConfig("local-cicc", "中金点睛", "", ""),))
+
+    assert [item["name"] for item in page["items"]] == ["有日期_201", "无日期_202"]
+    # days 桶维持既有语义：MMDD 在前，unknown 桶沉底
+    assert page["days"] == ["0830", "unknown"]
+
+
+def test_json_fallback_matches_index_order(tmp_path, monkeypatch):
+    """JSON 回退与 SQLite 读模型用同一排序键，顺序一致（性能规格 §10.1）。"""
+    service, archive = _service(tmp_path)
+    groups = _make_mixed_stream(service, archive)
+    indexed = service.list_documents(groups)
+
+    monkeypatch.setattr(service, "_index_usable", lambda: False)
+    fallback = service.list_documents(groups)
+
+    assert [item["name"] for item in fallback["items"]] == [
+        item["name"] for item in indexed["items"]
+    ]
+    assert fallback["days"] == indexed["days"]
+
+
+def test_sidecar_invalid_publish_left_empty_and_sinks(tmp_path):
+    """sidecar publish 非法 → pub_date 留空 → 排序沉底，扫描不抛错。"""
+    service, archive = _service(tmp_path)
+    _make_library(
+        archive,
+        slug="cicc",
+        name="中金点睛",
+        pdfs=["宏观/0830/正常_301.pdf", "宏观/0831/坏日期_302.pdf"],
+        sidecar=[
+            {"id": "301", "publish": "2026-08-30", "day": "0830"},
+            {"id": "302", "publish": "2025/12/31", "day": "0831"},
+        ],
+    )
+    result = service.scan_local_libraries()  # 不抛错
+    assert result["status"] == "finished"
+
+    manifest = {item["name"]: item for item in service.store.load_manifest()}
+    assert manifest["正常_301"]["pub_date"] == "2026-08-30"
+    assert manifest["坏日期_302"]["pub_date"] == ""
+
+    service.rebuild_read_index()
+    page = service.list_documents((ImaGroupConfig("local-cicc", "中金点睛", "", ""),))
+    # 坏日期文档虽有更新的 0831 目录，仍按 pub_date 语义沉底
+    assert [item["name"] for item in page["items"]] == ["正常_301", "坏日期_302"]

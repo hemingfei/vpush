@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import secrets
 import shutil
 import sqlite3
@@ -250,6 +251,7 @@ IMA_DOCUMENT_INDEX_COLUMNS = (
     "media_id",
     "day",
     "valid_day",
+    "sort_date",
     "name",
     "group_name",
     "name_folded",
@@ -278,6 +280,7 @@ CREATE TABLE IF NOT EXISTS ima_document_index (
     media_id TEXT NOT NULL,
     day TEXT NOT NULL DEFAULT 'unknown',
     valid_day INTEGER NOT NULL DEFAULT 0,
+    sort_date TEXT NOT NULL DEFAULT '',
     name TEXT NOT NULL DEFAULT '',
     group_name TEXT NOT NULL DEFAULT '',
     name_folded TEXT NOT NULL DEFAULT '',
@@ -325,6 +328,7 @@ _IMA_DOC_COLUMN_SPEC = (
     ("media_id", "TEXT", 1, None, 2),
     ("day", "TEXT", 1, "'unknown'", 0),
     ("valid_day", "INTEGER", 1, "0", 0),
+    ("sort_date", "TEXT", 1, "''", 0),
     ("name", "TEXT", 1, "''", 0),
     ("group_name", "TEXT", 1, "''", 0),
     ("name_folded", "TEXT", 1, "''", 0),
@@ -362,13 +366,13 @@ _IMA_DOC_INT_COLUMNS = frozenset({"size", "chars", "has_pdf", "has_txt"})
 _IMA_INDEX_SPECS = (
     (
         "idx_ima_doc_latest",
-        "ima_document_index(valid_day DESC, day DESC, name DESC)",
-        (("valid_day", 1), ("day", 1), ("name", 1)),
+        "ima_document_index(sort_date DESC, name DESC)",
+        (("sort_date", 1), ("name", 1)),
     ),
     (
         "idx_ima_doc_group_latest",
-        "ima_document_index(group_id, valid_day DESC, day DESC, name DESC)",
-        (("group_id", 0), ("valid_day", 1), ("day", 1), ("name", 1)),
+        "ima_document_index(group_id, sort_date DESC, name DESC)",
+        (("group_id", 0), ("sort_date", 1), ("name", 1)),
     ),
     (
         "idx_ima_doc_tag_group",
@@ -3611,11 +3615,25 @@ class DB:
             raw_tags = []
         tags = list(dict.fromkeys(str(tag) for tag in raw_tags if str(tag)))
         day = str(source.get("day") or "unknown").strip() or "unknown"
+        valid_day = int(day.isascii() and len(day) == 4 and day.isdigit())
+        # 跨年排序键 YYYY-MM-DD：上层建行 helper（_index_row → ima_sort_date）总是显式携带；
+        # 裸行（历史数据/直写）缺省按 valid_day 用当前年份补全，unknown 为空（排序沉底）。
+        raw_sort_date = source.get("sort_date", _UNSET)
+        if raw_sort_date is _UNSET:
+            raw_sort_date = (
+                f"{time.strftime('%Y', time.gmtime())}-{day[:2]}-{day[2:]}"
+                if valid_day
+                else ""
+            )
+        sort_date = str(raw_sort_date or "").strip()
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", sort_date):
+            sort_date = ""
         values = {
             "group_id": actual_group_id,
             "media_id": media_id,
             "day": day,
-            "valid_day": int(day.isascii() and len(day) == 4 and day.isdigit()),
+            "valid_day": valid_day,
+            "sort_date": sort_date,
             "name": str(source.get("name") or ""),
             "group_name": str(source.get("group_name") or ""),
             "name_folded": str(
@@ -3877,7 +3895,8 @@ class DB:
         rows = self._rows(
             f"SELECT d.*, {rank_sql} AS match_rank FROM ima_document_index d "
             f"WHERE {where_sql} "
-            "ORDER BY match_rank DESC, d.valid_day DESC, d.day DESC, d.name DESC "
+            # 跨年排序：sort_date（YYYY-MM-DD）DESC，空串（unknown）沉底
+            "ORDER BY match_rank DESC, (d.sort_date = '') ASC, d.sort_date DESC, d.name DESC "
             "LIMIT ? OFFSET ?",
             (*item_params, page_limit + 1, page_offset),
         )
@@ -3933,7 +3952,7 @@ class DB:
             "COUNT(*) OVER (PARTITION BY group_id) AS document_count, "
             "ROW_NUMBER() OVER ("
             "PARTITION BY group_id "
-            "ORDER BY valid_day DESC, day DESC, name DESC"
+            "ORDER BY (sort_date = '') ASC, sort_date DESC, name DESC"
             ") AS rn FROM ima_document_index "
             f"WHERE group_id IN ({placeholders})"
             ") ranked WHERE rn = 1",
