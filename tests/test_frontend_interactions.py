@@ -3146,7 +3146,7 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=229"' in html
+    assert 'href="/style.css?v=230"' in html
     assert 'src="/app.js?v=322"' in html
     assert 'dav-shell-v194' in sw
 
@@ -4190,3 +4190,5 @@ def test_knowledge_desk_serves_phone_without_refusal():
     assert "知识库阅读台（手机）" in css
     assert "100dvh - 120px" in css
     assert "grid-template-columns: 44px minmax(0, 1fr) 84px" in css
+    # 同优先级后者胜：手机覆盖块必须声明在桌面规则之后，否则被覆盖回桌面网格
+    assert css.index("知识库阅读台（手机）") > css.index("grid-template-columns: minmax(0, 1fr) auto")

@@ -2219,24 +2219,6 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   .bottom-nav { display: flex; }
   .theme-toggle-btn { display: inline-flex; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; }
   .icon-btn { width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; }
-  /* 知识库阅读台（手机）：顶栏+底栏之间一屏，行密度收紧 */
-  .page-main:has(.ima-report-page),
-  .page-main:has(.ima-reader-page) {
-    height: calc(100vh - 124px);
-    height: calc(100dvh - 120px - env(safe-area-inset-bottom));
-    padding-top: 12px;
-    padding-bottom: 12px;
-  }
-  .ima-report-search { grid-template-columns: minmax(0, 1fr); }
-  .ima-report-filters { flex-wrap: wrap; }
-  .ima-report-columns,
-  .ima-doc-row,
-  .ima-report-skeleton-row {
-    grid-template-columns: 44px minmax(0, 1fr) 84px;
-    gap: 8px;
-    padding-left: 12px;
-    padding-right: 12px;
-  }
   .main-col { min-height: 100vh; }
   .section-panel.home-panel {
     padding: 0;
@@ -3101,6 +3083,27 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   border: var(--border-default); border-radius: var(--radius-pill);
   background: var(--color-surface); color: var(--color-text-muted);
   font-size: var(--text-xs); font-weight: var(--font-weight-medium);
+}
+
+/* 知识库阅读台（手机）：必须在桌面规则之后声明，否则同优先级被后者覆盖 */
+@media (max-width: 768px) {
+  .page-main:has(.ima-report-page),
+  .page-main:has(.ima-reader-page) {
+    height: calc(100vh - 124px);
+    height: calc(100dvh - 120px - env(safe-area-inset-bottom));
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
+  .ima-report-search { grid-template-columns: minmax(0, 1fr); }
+  .ima-report-filters { flex-wrap: wrap; }
+  .ima-report-columns,
+  .ima-doc-row,
+  .ima-report-skeleton-row {
+    grid-template-columns: 44px minmax(0, 1fr) 84px;
+    gap: 8px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
 }
 
 .ima-source-stack { display: grid; gap: var(--space-5); }
