@@ -586,6 +586,11 @@ def test_local_library_admin_meta_create_acl_endpoints(tmp_path, monkeypatch):
     listed = client.get("/api/admin/ima-local-libraries", headers=admin_headers)
     item = listed.json()["libraries"][0]
     assert item["acl_usernames"] == ["meta_user"]
+    # 扫描/改名响应也要带授权，避免保存后立刻扫描把卡片冲成「仅管理员」
+    assert updated.json()["libraries"][0]["acl_usernames"] == ["meta_user"]
+    scanned = client.post("/api/admin/ima-local-libraries/scan", headers=admin_headers)
+    assert scanned.status_code == 200, scanned.text
+    assert scanned.json()["libraries"][0]["acl_usernames"] == ["meta_user"]
 
     # 错误路径：重复建库 409；非法 slug/name 400；空更新 400；库不存在 404
     assert (

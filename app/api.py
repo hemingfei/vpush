@@ -3162,15 +3162,17 @@ def create_api_router(
         _audit(admin, "ima_storage_alerts", "", json.dumps(saved, ensure_ascii=False))
         return {"settings": saved}
 
+    def _with_local_library_acl(payload: dict) -> dict:
+        for item in payload.get("libraries") or []:
+            group_id = str(item.get("group_id") or "")
+            item["acl_usernames"] = db.ima_kb_acl_usernames(group_id) if group_id else []
+        return payload
+
     @router.get("/admin/ima-local-libraries", dependencies=[Depends(require_admin)])
     def get_ima_local_libraries():
         if ima_documents is None:
             raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
-        payload = ima_documents.local_scan_status()
-        for item in payload["libraries"]:
-            group_id = str(item.get("group_id") or "")
-            item["acl_usernames"] = db.ima_kb_acl_usernames(group_id) if group_id else []
-        return payload
+        return _with_local_library_acl(ima_documents.local_scan_status())
 
     @router.post("/admin/ima-local-libraries/scan", dependencies=[Depends(require_admin)])
     def scan_ima_local_libraries(admin: dict = Depends(require_admin)):
@@ -3180,7 +3182,7 @@ def create_api_router(
         if result.get("status") == "already_running":
             raise HTTPException(status_code=409, detail="IMA 同步或扫描正在进行，请稍后再试")
         _audit(admin, "scan_ima_local_libraries", "", str(result.get("status") or ""))
-        return result
+        return _with_local_library_acl(result)
 
     @router.put("/admin/ima-local-libraries/{slug}/enabled", dependencies=[Depends(require_admin)])
     def set_ima_local_library_enabled(
@@ -3201,7 +3203,7 @@ def create_api_router(
             slug,
             "enabled" if body.enabled else "disabled",
         )
-        return ima_documents.local_scan_status()
+        return _with_local_library_acl(ima_documents.local_scan_status())
 
     @router.put("/admin/ima-local-libraries/{slug}", dependencies=[Depends(require_admin)])
     def update_ima_local_library(
@@ -3221,7 +3223,7 @@ def create_api_router(
             # 属主/权限不对（须 99:100 可写）时必须报错，不能静默
             raise HTTPException(status_code=502, detail=f"标记文件写入失败：{_safe_error(exc)}") from exc
         _audit(admin, "update_ima_local_library", slug, "")
-        return result
+        return _with_local_library_acl(result)
 
     @router.post("/admin/ima-local-libraries", dependencies=[Depends(require_admin)])
     def create_ima_local_library(body: LocalLibraryCreateIn, admin: dict = Depends(require_admin)):
@@ -3237,7 +3239,7 @@ def create_api_router(
             # 存储归档不可写（须 99:100 可写）时必须报错，不能静默
             raise HTTPException(status_code=502, detail=f"存储归档写入失败：{_safe_error(exc)}") from exc
         _audit(admin, "create_ima_local_library", body.slug, str(result.get("status") or ""))
-        return result
+        return _with_local_library_acl(result)
 
     @router.get("/admin/ima-credentials", dependencies=[Depends(require_admin)])
     def get_ima_credentials():
