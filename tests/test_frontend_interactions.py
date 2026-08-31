@@ -2118,7 +2118,7 @@ def test_ima_collector_acl_granted_via_separate_put():
     assert "acl_usernames" not in read
     knowledge = _fn_body("loadAdminKnowledge")
     assert "谁能阅读" not in knowledge
-    assert "权限控制" in knowledge
+    assert "查看权限" in knowledge
     assert 'id="ima-group-acl"' in knowledge
     assert "filterAclSuggest" in src
     assert "ima-acl-chip" in src
@@ -4223,6 +4223,27 @@ def test_ima_mount_settings_use_two_panes_and_lazy_folder_api():
     assert "root_folder_id" not in _fn_body("imaMountGroupRowHtml")
 
 
+def test_ima_mount_uses_master_detail_and_selected_group_controls():
+    knowledge = _fn_body("loadAdminKnowledge")
+    row = _fn_body("imaMountGroupRowHtml")
+    interval = _fn_body("imaIntervalSegHtml")
+    render = _fn_body("renderImaMountGroups")
+
+    assert 'class="ima-mount-layout"' in knowledge
+    assert 'id="ima-kb-list"' in knowledge
+    assert 'id="ima-kb-select"' in knowledge
+    assert 'id="ima-selected-group-name"' in knowledge
+    assert 'id="ima-selected-interval"' in knowledge
+    assert 'id="ima-group-acl"' in knowledge
+    assert 'id="ima-folder-panel"' in knowledge
+    assert "imaIntervalSegHtml" not in row
+    assert 'id="ima-interval-${escapeHtml(groupId)}-${sec}"' in interval
+    assert 'aria-pressed="${current === sec}"' in interval
+    assert "renderImaSelectedGroup" in render
+    assert 'role="option"' in row
+    assert 'aria-selected="${selected}"' in row
+
+
 def test_ima_mount_ui_preserves_draft_and_uses_safe_dynamic_text():
     src = APP_JS.read_text()
     for name in (
@@ -4359,7 +4380,7 @@ def test_knowledge_settings_uses_collect_tabs_and_interval_chips():
     assert 'data-tab="collect"' in knowledge
     assert 'data-tab="zsxq"' in knowledge
     assert 'data-tab="storage"' in knowledge
-    assert "ima-interval-seg" in knowledge
+    assert "imaIntervalSegHtml" in _fn_body("renderImaSelectedGroup")
     assert "imaCollectorProgressHtml" in knowledge or "ima-sync-progress" in knowledge
     assert "saveImaCredentials()" not in knowledge
     save = _fn_body("saveImaCollector")

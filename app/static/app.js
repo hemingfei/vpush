@@ -5819,7 +5819,7 @@ function imaIntervalSegHtml(group) {
   const current = imaGroupIntervalSeconds(group);
   return `<span class="ima-interval-seg" data-group-id="${escapeHtml(groupId)}">${
     [[3600, "1h"], [21600, "6h"], [86400, "24h"]].map(([sec, label]) =>
-      `<button type="button" data-sec="${sec}" class="${current === sec ? "is-on" : ""}" onclick="setImaGroupInterval(event, this)">${label}</button>`
+      `<button type="button" id="ima-interval-${escapeHtml(groupId)}-${sec}" data-sec="${sec}" aria-pressed="${current === sec}" class="${current === sec ? "is-on" : ""}" onclick="setImaGroupInterval(event, this)">${label}</button>`
     ).join("")
   }</span>`;
 }
@@ -5831,19 +5831,35 @@ function imaMountGroupRowHtml(group) {
   const source = group?.source === "discovered" ? "自动发现" : "旧配置";
   const count = draft.size;
   const mountText = count ? `已选择 ${count} 个文件夹` : "未挂载";
-  return `
-    <div class="ima-mount-kb-item${selected ? " is-selected" : ""}">
-    <button type="button" class="ima-mount-kb-row${selected ? " is-selected" : ""}" id="ima-kb-row-${escapeHtml(groupId)}" role="option"
-      aria-selected="${selected}" data-group-id="${escapeHtml(groupId)}"
-      onclick="selectImaMountGroup(this.dataset.groupId)">
-      <span class="ima-mount-kb-copy">
-        <span class="ima-mount-kb-name" title="${escapeHtml(group?.name || groupId)}">${escapeHtml(group?.name || groupId)}</span>
-        <span class="ima-mount-kb-meta">${escapeHtml(source)} · ${escapeHtml(mountText)}</span>
-      </span>
-      <span class="ima-mount-kb-count" aria-hidden="true">${count}</span>
-    </button>
-    ${imaIntervalSegHtml(group)}
-    </div>`;
+  return `<button type="button" class="ima-mount-kb-row${selected ? " is-selected" : ""}"
+    id="ima-kb-row-${escapeHtml(groupId)}" role="option" aria-selected="${selected}"
+    data-group-id="${escapeHtml(groupId)}" onclick="selectImaMountGroup(this.dataset.groupId)">
+    <span class="ima-mount-kb-copy">
+      <span class="ima-mount-kb-name" title="${escapeHtml(group?.name || groupId)}">${escapeHtml(group?.name || groupId)}</span>
+      <span class="ima-mount-kb-meta">${escapeHtml(source)} · ${escapeHtml(mountText)}</span>
+    </span>
+    <span class="ima-mount-kb-count" aria-hidden="true">${count}</span>
+  </button>`;
+}
+
+function renderImaSelectedGroup() {
+  const group = imaMountGroup(imaMountState.selectedGroupId);
+  const title = $("#ima-selected-group-name");
+  const interval = $("#ima-selected-interval");
+  const select = $("#ima-kb-select");
+  if (select) {
+    select.innerHTML = imaMountState.groups.map((item) => {
+      const id = String(item.id || "");
+      return `<option value="${escapeHtml(id)}"${id === String(imaMountState.selectedGroupId) ? " selected" : ""}>${escapeHtml(item.name || id)}</option>`;
+    }).join("");
+  }
+  if (!group) {
+    if (title) title.textContent = "选择知识库";
+    if (interval) interval.innerHTML = "";
+    return;
+  }
+  if (title) title.textContent = group.name || String(group.id);
+  if (interval) interval.innerHTML = `${imaIntervalSegHtml(group)}<span class="muted">每 ${Math.round(imaGroupIntervalSeconds(group) / 3600)} 小时检查</span>`;
 }
 
 function setImaGroupInterval(event, button) {
@@ -5873,6 +5889,7 @@ function renderImaMountGroups() {
     : '<div class="empty ima-mount-empty">尚未发现共享知识库</div>';
   const count = $("#ima-kb-count");
   if (count) count.textContent = `${groups.length} 个`;
+  renderImaSelectedGroup();
   renderImaFolderTree(imaMountState.selectedGroupId);
 }
 
@@ -6930,23 +6947,40 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
                 <span id="ima-group-discovery-status" class="muted" aria-live="polite">${imaGroupDiscoveryStatusText(imaCollector)}</span>
               </div>
               <div class="toolbar ima-groups-toolbar">
-                <button type="button" class="btn-ghost" id="ima-discover-btn" onclick="discoverImaGroups()">${REFRESH_ICON}<span>重新发现</span></button>
+                <button type="button" class="btn-ghost" id="ima-discover-btn" onclick="discoverImaGroups()" aria-label="重新发现共享知识库">${REFRESH_ICON}<span>重新发现</span></button>
               </div>
             </div>
             <div class="ima-mount-layout" id="ima-mount-layout">
-              <section class="ima-mount-pane" aria-labelledby="ima-kb-pane-title">
+              <aside class="ima-mount-rail" aria-labelledby="ima-kb-pane-title">
                 <header class="ima-mount-pane-head"><strong id="ima-kb-pane-title">知识库</strong><span id="ima-kb-count" class="muted"></span></header>
+                <select id="ima-kb-select" class="form-control ima-kb-select" aria-label="选择知识库" onchange="selectImaMountGroup(this.value)"></select>
                 <div id="ima-kb-list" class="ima-kb-list" role="listbox" aria-label="共享知识库"></div>
+              </aside>
+              <section class="ima-mount-detail" aria-labelledby="ima-selected-group-name">
+                <header class="ima-selected-head">
+                  <div><strong id="ima-selected-group-name">选择知识库</strong><span id="ima-selected-group-state" class="muted">${imaCollectorStatusText(imaCollector)}</span></div>
+                  <button type="button" class="btn-ghost" id="ima-sync-btn" onclick="triggerImaCollector()" aria-label="同步当前库">${REFRESH_ICON}<span>同步当前库</span></button>
+                </header>
+                <section class="ima-detail-section ima-frequency-section">
+                  <div><h3>同步频率</h3><p class="section-meta">修改后需要保存。</p></div>
+                  <div id="ima-selected-interval" class="ima-selected-interval"></div>
+                </section>
+                <section class="ima-detail-section" id="ima-group-acl-block">
+                  <header><h3>查看权限</h3><p class="section-meta">添加或移除即时生效；管理员始终可看。</p></header>
+                  <div id="ima-group-acl"><p class="muted">加载中…</p></div>
+                </section>
+                <section class="ima-detail-section ima-folder-section">
+                  <button type="button" class="ima-folder-panel-toggle" id="ima-folder-panel-toggle"
+                    aria-expanded="false" aria-controls="ima-folder-panel" onclick="toggleImaFolderPanel(this)">
+                    <span><strong>采集文件夹</strong><span id="ima-folder-summary" class="muted">未选择文件夹</span></span>
+                    <span aria-hidden="true">›</span>
+                  </button>
+                  <div id="ima-folder-panel" hidden>
+                    <header class="ima-mount-pane-head"><strong id="ima-folder-title">选择知识库</strong><span id="ima-folder-count" class="muted"></span></header>
+                    <div id="ima-folder-tree" class="ima-folder-tree" role="tree" aria-label="知识库文件夹" aria-live="polite"></div>
+                  </div>
+                </section>
               </section>
-              <section class="ima-mount-pane" aria-labelledby="ima-folder-title">
-                <header class="ima-mount-pane-head"><strong id="ima-folder-title">选择知识库</strong><span id="ima-folder-count" class="muted"></span></header>
-                <div id="ima-folder-tree" class="ima-folder-tree" role="tree" aria-label="知识库文件夹" aria-live="polite"></div>
-              </section>
-            </div>
-            <div class="ima-source-block" id="ima-group-acl-block">
-              <header class="ima-source-block-head"><div><h3 class="ima-source-title">权限控制</h3>
-              <p class="section-meta">当前库谁能看。管理员始终可看。添加或移除即时生效。</p></div></header>
-              <div id="ima-group-acl"><p class="muted">加载中…</p></div>
             </div>
           </div>
         </div>
@@ -6955,7 +6989,7 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
             <div id="ima-sync-progress">${imaCollectorProgressHtml(imaCollector)}</div>
             <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
           </div>
-          <div class="toolbar"><button type="button" class="btn-normal" id="ima-collector-save"${imaMountState.saveOwner ? " disabled" : ""} onclick="saveImaCollector()">保存采集配置</button><button type="button" class="btn-ghost" id="ima-sync-btn" onclick="triggerImaCollector()">${REFRESH_ICON}<span>同步当前库</span></button></div>
+          <div class="toolbar"><button type="button" class="btn-normal" id="ima-collector-save"${imaMountState.saveOwner ? " disabled" : ""} onclick="saveImaCollector()">保存采集配置</button></div>
         </div>
       </section>
       <section class="section-panel ks-panel" data-panel="zsxq">
