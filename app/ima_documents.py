@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http.client import IncompleteRead
 from pathlib import Path
 from typing import Any
@@ -35,6 +35,7 @@ IMA_DOWNLOAD_RETRY_DELAYS = (2, 8)
 IMA_INDEX_VERSION = 4  # v4：IMA sort_date 年份取媒体真实创建年（原按当前年补全会跨年排错）；升位强制重建
 IMA_STATE_FLUSH_COUNT = 20
 IMA_STATE_FLUSH_SECONDS = 2.0
+IMA_SCHEDULE_HOUR = 1  # 上海时间每日自动同步起点
 
 BASE = os.environ.get("IMA_BASE", "https://ima.qq.com/cgi-bin")
 GUID = os.environ.get("IMA_GUID", "7497986728819336")
@@ -48,6 +49,20 @@ IUA = os.environ.get(
 )
 CLIENT_TYPE = "256001"
 TOKEN_TTL = 7000
+
+
+def next_shanghai_schedule(now: float, hour: int = IMA_SCHEDULE_HOUR) -> float:
+    dt = datetime.fromtimestamp(now, CN_TZ)
+    gate = dt.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if dt >= gate:
+        gate += timedelta(days=1)
+    return gate.timestamp()
+
+
+def shanghai_schedule_gate(now: float, hour: int = IMA_SCHEDULE_HOUR) -> float:
+    dt = datetime.fromtimestamp(now, CN_TZ)
+    return dt.replace(hour=hour, minute=0, second=0, microsecond=0).timestamp()
+
 
 IMA_PURE_UID_KEY = "ima_pure_uid"
 IMA_PURE_REFRESH_TOKEN_KEY = "ima_pure_refresh_token"
@@ -3436,7 +3451,7 @@ class ImaDocumentService:
             now = time.time()
             with self._state_lock:
                 if not self._next_run_at:
-                    self._next_run_at = now + self._scheduled_delay(cfg)
+                    self._next_run_at = next_shanghai_schedule(now)
                 due = now >= self._next_run_at
             if due:
                 self.trigger(scheduled=True)
@@ -3444,10 +3459,6 @@ class ImaDocumentService:
     def _mounted_groups(self, cfg: ImaDocumentConfig | None = None) -> list[ImaGroupConfig]:
         groups = (cfg or self.config()).groups
         return [group for group in groups if group.enabled and group.mount_folder_ids]
-
-    def _scheduled_delay(self, cfg: ImaDocumentConfig | None = None) -> int:
-        mounted = self._mounted_groups(cfg)
-        return max(1800, min((group.interval_seconds for group in mounted), default=3600))
 
     def _group_runtime(self) -> dict[str, Any]:
         raw = self.db.get_setting(IMA_PURE_GROUP_RUNTIME_KEY) or "{}"
@@ -3477,7 +3488,11 @@ class ImaDocumentService:
             last = float(item.get("last_started_at") or 0)
         except (TypeError, ValueError):
             last = 0.0
-        return (now - last) >= _clamp_group_interval(group.interval_seconds)
+        interval = _clamp_group_interval(group.interval_seconds)
+        if interval >= 86400:
+            gate = shanghai_schedule_gate(now)
+            return now >= gate and last < gate
+        return (now - last) >= interval
 
     def trigger(self, scheduled: bool = False, group_id: str = "") -> dict[str, Any]:
         cfg = self.config()
@@ -3505,7 +3520,7 @@ class ImaDocumentService:
             ):
                 return {"status": "too_soon", "retry_at": int(last_started + cfg.interval_seconds)}
             if scheduled:
-                self._next_run_at = now + self._scheduled_delay(cfg)
+                self._next_run_at = next_shanghai_schedule(now)
                 if not any(self._group_due(group, now) for group in self._mounted_groups(cfg)):
                     return {"status": "not_due"}
             else:

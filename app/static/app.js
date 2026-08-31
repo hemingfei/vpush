@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.118";
+const APP_VERSION = "1.12.119";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -5861,7 +5861,11 @@ function renderImaSelectedGroup() {
     return;
   }
   if (title) title.textContent = group.name || String(group.id);
-  if (interval) interval.innerHTML = `${imaIntervalSegHtml(group)}<span class="muted">每 ${Math.round(imaGroupIntervalSeconds(group) / 3600)} 小时检查</span>`;
+  if (interval) {
+    const hours = Math.round(imaGroupIntervalSeconds(group) / 3600);
+    const note = hours >= 24 ? "每日 01:00 后自动同步（上海）" : `每 ${hours} 小时检查`;
+    interval.innerHTML = `${imaIntervalSegHtml(group)}<span class="muted">${note}</span>`;
+  }
 }
 
 function setImaGroupInterval(event, button) {

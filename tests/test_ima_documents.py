@@ -32,6 +32,8 @@ from app.ima_documents import (
     ImaGroupConfig,
     ImaPureClient,
     load_title_overrides,
+    next_shanghai_schedule,
+    shanghai_schedule_gate,
     _clamp_group_interval,
     _safe_error,
     decrypt_body,
@@ -2150,7 +2152,8 @@ def _listing_client(listed):
 
 def test_scheduled_sync_skips_group_that_is_not_due(tmp_path, monkeypatch):
     now = time.time()
-    db = _two_mounted_groups_db(runtime={"b": {"last_started_at": int(now - 3600)}})
+    db = _two_mounted_groups_db(runtime={"b": {"last_started_at": int(now)}})
+
     listed = []
     monkeypatch.setattr(ima_documents, "ImaPureClient", _listing_client(listed))
     service = ImaDocumentService(db, tmp_path / "ima")
@@ -2197,6 +2200,38 @@ def test_scheduled_sync_skips_when_no_group_is_due(tmp_path, monkeypatch):
     assert result["status"] == "not_due"
     assert listed == []
     assert db.get_setting(IMA_PURE_LAST_RESULT_KEY) == existing
+
+
+def test_shanghai_schedule_is_next_0100():
+    from datetime import datetime, timedelta, timezone
+    tz = timezone(timedelta(hours=8))
+    before = datetime(2026, 9, 1, 0, 30, tzinfo=tz).timestamp()
+    after = datetime(2026, 9, 1, 1, 5, tzinfo=tz).timestamp()
+    today = datetime(2026, 9, 1, 1, 0, tzinfo=tz).timestamp()
+    tomorrow = datetime(2026, 9, 2, 1, 0, tzinfo=tz).timestamp()
+    assert shanghai_schedule_gate(before) == today
+    assert next_shanghai_schedule(before) == today
+    assert next_shanghai_schedule(after) == tomorrow
+
+
+def test_24h_group_due_only_after_shanghai_0100(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    tz = timezone(timedelta(hours=8))
+    gate = datetime(2026, 9, 1, 1, 0, tzinfo=tz).timestamp()
+    db = FakeDB({
+        ima_documents.IMA_PURE_GROUPS_KEY: json.dumps([{
+            "id": "g", "name": "库", "knowledge_base_id": "kb",
+            "root_folder_id": "root", "folder_ids": ["root"],
+            "enabled": True, "interval_seconds": 86400,
+        }]),
+        IMA_PURE_GROUP_RUNTIME_KEY: json.dumps({"g": {"last_started_at": int(gate - 3600)}}),
+    })
+    service = ImaDocumentService(db, tmp_path / "ima")
+    group = service.config().groups[0]
+    assert service._group_due(group, gate - 60) is False
+    assert service._group_due(group, gate + 60) is True
+    db.set_setting(IMA_PURE_GROUP_RUNTIME_KEY, json.dumps({"g": {"last_started_at": int(gate + 120)}}))
+    assert service._group_due(group, gate + 180) is False
 
 
 def test_from_db_preserves_stored_group_interval():
