@@ -3383,8 +3383,9 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   color: var(--color-danger);
 }
 .ima-acl-chip:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
+  border-color: var(--color-accent-text);
+  box-shadow: var(--shadow-focus-ring);
+  outline: none;
 }
 .knowledge-settings .ima-acl-search,
 .modal-card .ima-acl-search { margin: 0; }
@@ -3410,10 +3411,16 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   cursor: pointer;
 }
 .ima-acl-suggest-item:hover,
-.ima-acl-suggest-item:focus-visible {
-  background: rgba(22, 119, 255, 0.12);
+.ima-acl-suggest-item:focus-visible,
+.ima-acl-suggest-item.is-on {
+  background: var(--color-accent-soft);
   color: var(--color-accent-text);
 }
+.ima-acl-suggest-item:focus-visible {
+  box-shadow: var(--shadow-focus-ring);
+  outline: none;
+}
+.ima-acl-picker[data-busy] { opacity: 0.72; pointer-events: none; }
 .ima-acl-empty { margin: 0; }
 .knowledge-settings .ima-credential-actions {
   margin-top: var(--space-3);

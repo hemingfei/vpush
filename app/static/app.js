@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.110";
+const APP_VERSION = "1.12.111";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -6059,10 +6059,27 @@ function aclPickerHtml(usernames, listId) {
   return `<div class="ima-acl-picker">
     <div class="ima-acl-chips">${chips}</div>
     <p class="muted ima-acl-status" aria-live="polite">${granted.length ? `${granted.length} 人可看` : "仅管理员"}</p>
-    <input type="search" class="form-control ima-acl-search" placeholder="搜索并添加用户" aria-label="搜索并添加用户" aria-controls="${listId}" autocomplete="off" oninput="filterAclSuggest(this)" onkeydown="onAclSearchKey(event)">
+    <input type="search" class="form-control ima-acl-search" placeholder="搜索并添加用户" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-label="搜索并添加用户" aria-controls="${listId}" autocomplete="off" oninput="filterAclSuggest(this)" onkeydown="onAclSearchKey(event)">
     <div id="${listId}" class="ima-acl-suggest" hidden role="listbox"></div>
     <p class="muted ima-acl-empty" hidden>没有匹配的用户</p>
   </div>`;
+}
+
+function aclSuggestItems(list) {
+  return [...(list?.querySelectorAll("[data-acl-add]") || [])];
+}
+
+function setAclActive(list, index) {
+  const items = aclSuggestItems(list);
+  const input = list?.closest(".ima-acl-picker")?.querySelector(".ima-acl-search");
+  items.forEach((el, i) => {
+    const on = i === index;
+    el.classList.toggle("is-on", on);
+    el.setAttribute("aria-selected", String(on));
+  });
+  const active = items[index];
+  if (input) input.setAttribute("aria-activedescendant", active?.id || "");
+  active?.scrollIntoView({ block: "nearest" });
 }
 
 function filterAclSuggest(input) {
@@ -6072,9 +6089,14 @@ function filterAclSuggest(input) {
   if (!picker || !list) return;
   const needle = input.value.trim().toLowerCase();
   const granted = new Set(aclGrantedNames(picker));
-  if (!needle) {
+  const close = () => {
     list.hidden = true;
     list.innerHTML = "";
+    input.setAttribute("aria-expanded", "false");
+    input.removeAttribute("aria-activedescendant");
+  };
+  if (!needle) {
+    close();
     if (empty) empty.hidden = true;
     return;
   }
@@ -6082,23 +6104,45 @@ function filterAclSuggest(input) {
     .map((u) => String(u.username || ""))
     .filter((name) => name && !granted.has(name) && name.toLowerCase().includes(needle));
   if (!hits.length) {
-    list.hidden = true;
-    list.innerHTML = "";
+    close();
     if (empty) empty.hidden = false;
     return;
   }
   if (empty) empty.hidden = true;
+  const listId = list.id || "ima-acl-list";
   list.hidden = false;
-  list.innerHTML = hits.map((name) =>
-    `<button type="button" class="ima-acl-suggest-item" role="option" data-acl-add="${escapeHtml(name)}">${escapeHtml(name)}</button>`
+  input.setAttribute("aria-expanded", "true");
+  list.innerHTML = hits.map((name, i) =>
+    `<button type="button" class="ima-acl-suggest-item" role="option" id="${listId}-opt-${i}" data-acl-add="${escapeHtml(name)}" aria-selected="false">${escapeHtml(name)}</button>`
   ).join("");
+  setAclActive(list, 0);
 }
 
 function onAclSearchKey(event) {
+  const input = event.target;
+  const picker = input.closest(".ima-acl-picker");
+  const list = picker?.querySelector(".ima-acl-suggest");
+  if (event.key === "Escape") {
+    event.preventDefault();
+    input.value = "";
+    filterAclSuggest(input);
+    return;
+  }
+  const items = aclSuggestItems(list);
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    if (!items.length) return;
+    event.preventDefault();
+    const cur = items.findIndex((el) => el.classList.contains("is-on"));
+    const next = event.key === "ArrowDown"
+      ? Math.min(items.length - 1, (cur < 0 ? -1 : cur) + 1)
+      : Math.max(0, (cur < 0 ? items.length : cur) - 1);
+    setAclActive(list, next);
+    return;
+  }
   if (event.key !== "Enter") return;
   event.preventDefault();
-  const first = event.target.closest(".ima-acl-picker")?.querySelector("[data-acl-add]");
-  if (first) addAclUser(first.getAttribute("data-acl-add"), first.closest(".ima-acl-picker"));
+  const active = items.find((el) => el.classList.contains("is-on")) || items[0];
+  if (active) addAclUser(active.getAttribute("data-acl-add"), picker);
 }
 
 async function saveImaGroupAcl(groupId, usernames) {
@@ -6138,11 +6182,12 @@ function rememberAclOnModel(groupId, names) {
 }
 
 async function addAclUser(name, picker) {
-  if (!name || !picker) return;
+  if (!name || !picker || picker.dataset.busy) return;
   const groupId = picker.dataset.groupId;
   if (!groupId) return;
   const current = aclGrantedNames(picker);
   if (current.includes(name)) return;
+  picker.dataset.busy = "1";
   try {
     const saved = await saveImaGroupAcl(groupId, [...current, name]);
     rememberAclOnModel(groupId, saved);
@@ -6151,20 +6196,24 @@ async function addAclUser(name, picker) {
     if (search) {
       search.value = "";
       filterAclSuggest(search);
+      search.focus();
     }
     flash("权限已保存");
   } catch (err) {
     flash("保存失败: " + err.message, "error");
+  } finally {
+    delete picker.dataset.busy;
   }
 }
 
 async function removeAclUser(name, picker) {
-  if (!name || !picker) return;
+  if (!name || !picker || picker.dataset.busy) return;
   const groupId = picker.dataset.groupId;
   if (!groupId) return;
   const current = aclGrantedNames(picker);
   if (!current.includes(name)) return;
   if (current.length === 1 && !confirm("将只剩管理员可看，确定？")) return;
+  picker.dataset.busy = "1";
   try {
     const saved = await saveImaGroupAcl(groupId, current.filter((item) => item !== name));
     rememberAclOnModel(groupId, saved);
@@ -6174,6 +6223,8 @@ async function removeAclUser(name, picker) {
     flash("权限已保存");
   } catch (err) {
     flash("保存失败: " + err.message, "error");
+  } finally {
+    delete picker.dataset.busy;
   }
 }
 

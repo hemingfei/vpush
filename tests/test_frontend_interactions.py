@@ -2120,6 +2120,8 @@ def test_ima_collector_acl_granted_via_separate_put():
     assert "filterAclSuggest" in src
     assert "ima-acl-chip" in src
     assert "ima-acl-search" in src
+    assert "ArrowDown" in _fn_body("onAclSearchKey")
+    assert 'role="combobox"' in _fn_body("aclPickerHtml")
     assert "saveImaGroupAcl" in src
     assert "/groups/" in _fn_body("saveImaGroupAcl")
     assert 'id="ima-acl-save"' not in knowledge
@@ -3350,9 +3352,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=252"' in html
-    assert 'src="/app.js?v=353"' in html
-    assert 'dav-shell-v222' in sw
+    assert 'href="/style.css?v=253"' in html
+    assert 'src="/app.js?v=354"' in html
+    assert 'dav-shell-v223' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
