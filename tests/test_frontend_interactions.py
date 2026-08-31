@@ -2090,7 +2090,7 @@ def test_ima_group_save_reads_rows_and_preserves_legacy_token_fields():
 
 
 def test_ima_collector_acl_granted_via_separate_put():
-    """知识库权限在用户管理；ACL 不塞进 collector groups，也不出现在知识库目录。"""
+    """采集页与用户管理都能授权；ACL 不塞进 collector groups，也不出现在阅读目录。"""
     src = APP_JS.read_text()
     save = _fn_body("saveImaCollector")
     read = _fn_body("readImaMountGroups")
@@ -2113,9 +2113,12 @@ def test_ima_collector_acl_granted_via_separate_put():
     assert "/api/admin/ima-collector" in load_users
     assert "acl_usernames" not in save
     assert "acl_usernames" not in read
-    stats = _fn_body("loadAdminKnowledge")
-    assert "s.ima_collector" in stats
-    assert "initImaMountState" in stats
+    knowledge = _fn_body("loadAdminKnowledge")
+    assert 'id="ima-group-acl"' in knowledge
+    assert "saveImaGroupAcl" in src
+    assert "/groups/" in _fn_body("saveImaGroupAcl")
+    assert "s.ima_collector" in knowledge
+    assert "initImaMountState" in knowledge
 
 
 def test_ima_discovery_status_is_safe_and_does_not_render_secrets():
@@ -2386,6 +2389,29 @@ def test_local_scan_button_driven_by_inflight_flag():
     assert "onclick=\"scanLocalLibraries()\"" in render
     assert "_scanInFlight ? \"disabled\" : \"\"" in render
     assert '_scanInFlight ? "扫描中…" : "扫描本地库"' in render
+
+
+def test_knowledge_settings_p1_p2_control_density():
+    """星球日常/高级分层；存储去重不进主工具栏；本地库授权勾选；中金采集默认收起。"""
+    knowledge = _fn_body("loadAdminKnowledge")
+    assert "高级（翻页、间隔、App 通道）" in knowledge
+    assert 'id="pc-zq-comments"' in knowledge
+    assert knowledge.index('id="pc-zq-comments"') < knowledge.index('id="pc-zq-pages"')
+    storage = _fn_body("imaStoragePanelHtml")
+    assert "onclick=\"runStorageDedup()\"" not in storage
+    assert "去重每月 1 日 04:00 自动执行" in storage
+    assert "onclick=\"runStorageConsistency()\"" in storage
+    health = _fn_body("loadStorageHealth")
+    assert "onclick=\"runStorageDedup()\"" in health
+    card = _fn_body("localLibraryCardHtml")
+    assert "<details open" not in card
+    assert "details.cicc-collect" in card or 'class="cicc-collect"' in card
+    modal = _fn_body("openLocalLibraryModal")
+    assert "data-ll-user" in modal
+    assert 'id="ll-users"' not in modal
+    save = _fn_body("saveLocalLibraryModal")
+    assert "现在扫描以应用到库内文档" in save
+    assert "[data-ll-user]:checked" in save
 
 
 def test_ima_reader_nav_requires_matching_snapshot_route():
@@ -3316,9 +3342,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=248"' in html
-    assert 'src="/app.js?v=348"' in html
-    assert 'dav-shell-v217' in sw
+    assert 'href="/style.css?v=250"' in html
+    assert 'src="/app.js?v=350"' in html
+    assert 'dav-shell-v219' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -4304,7 +4330,8 @@ def test_knowledge_settings_nav_and_empty_state():
 
 def test_knowledge_settings_storage_and_phone_sync_blocks():
     knowledge = _fn_body("loadAdminKnowledge")
-    assert "ima_phone_sync.command" in knowledge
+    assert "ima_phone_sync.command" not in knowledge
+    assert "手机同步" not in knowledge
     assert "Refresh Token" not in knowledge
     assert 'id="ima-pure-token"' not in knowledge
     assert 'id="ima-storage-status"' in _fn_body("imaStoragePanelHtml")
@@ -4326,6 +4353,8 @@ def test_knowledge_settings_uses_collect_tabs_and_interval_chips():
     assert "ima-pure-interval" not in save
     trigger = _fn_body("triggerImaCollector")
     assert "group_id" in trigger
+    assert "请先挂载该知识库并保存" in trigger
+    assert "同步当前库" in _fn_body("loadAdminKnowledge")
 
 
 def test_save_polling_splits_zsxq_fields():

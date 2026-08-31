@@ -6028,7 +6028,85 @@ function selectImaMountGroup(groupId) {
   const focus = imaFocusSnapshot();
   imaMountState.selectedGroupId = String(group.id);
   renderImaMountGroups();
+  renderImaGroupAcl();
   imaRestoreFocus(focus);
+}
+
+let _aclCandidateUsers = null;
+let _imaAclRenderSeq = 0;
+
+async function fetchAclCandidateUsers() {
+  if (_aclCandidateUsers) return _aclCandidateUsers;
+  _aclCandidateUsers = (await api("/api/users")).filter((u) => !u.is_admin);
+  return _aclCandidateUsers;
+}
+
+function aclChecksHtml(usernames, listId, dataAttr) {
+  const granted = new Set(usernames || []);
+  const users = _aclCandidateUsers || [];
+  if (!users.length) {
+    return `<p class="muted">还没有可授权的普通用户。管理员无需授权即可阅读。</p>`;
+  }
+  return `<div id="${listId}" class="um-kb-list">${users.map((u) => {
+    const name = String(u.username || "");
+    return `<label class="um-kb-item">
+      <input type="checkbox" ${dataAttr}="${escapeHtml(name)}"${granted.has(name) ? " checked" : ""}>
+      <span>${escapeHtml(name)}</span>
+    </label>`;
+  }).join("")}</div>`;
+}
+
+async function renderImaGroupAcl() {
+  const slot = $("#ima-group-acl");
+  if (!slot) return;
+  const group = imaMountGroup(imaMountState.selectedGroupId);
+  if (!group) {
+    slot.innerHTML = '<p class="muted">先选择一个知识库</p>';
+    return;
+  }
+  const seq = ++_imaAclRenderSeq;
+  const groupId = String(group.id);
+  slot.innerHTML = '<p class="muted">加载用户…</p>';
+  try {
+    await fetchAclCandidateUsers();
+    if (seq !== _imaAclRenderSeq || String(imaMountState.selectedGroupId) !== groupId) return;
+    const granted = group.acl_usernames || [];
+    slot.innerHTML = `
+      ${aclChecksHtml(granted, "ima-acl-list", "data-ima-acl-user")}
+      <div class="toolbar" style="margin-top:10px">
+        <button type="button" class="btn-ghost" id="ima-acl-save" onclick="saveImaGroupAcl()">保存授权</button>
+        <span class="muted">${granted.length ? `已授权 ${granted.length} 人` : "仅管理员可见"}</span>
+      </div>`;
+  } catch (err) {
+    if (seq !== _imaAclRenderSeq) return;
+    slot.innerHTML = `<p class="muted">用户列表加载失败：${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function saveImaGroupAcl() {
+  const group = imaMountGroup(imaMountState.selectedGroupId);
+  if (!group) {
+    flash("请先选择知识库", "error");
+    return;
+  }
+  const btn = $("#ima-acl-save");
+  if (btn?.disabled) return;
+  const usernames = [...document.querySelectorAll("#ima-acl-list [data-ima-acl-user]:checked")]
+    .map((el) => el.getAttribute("data-ima-acl-user"))
+    .filter(Boolean);
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api(`/api/admin/ima-collector/groups/${encodeURIComponent(group.id)}/acl`, {
+      method: "PUT",
+      body: JSON.stringify({ usernames }),
+    });
+    group.acl_usernames = r.acl_usernames || usernames;
+    flash("已保存授权");
+    renderImaGroupAcl();
+  } catch (err) {
+    flash("保存授权失败: " + err.message, "error");
+    if (btn) btn.disabled = false;
+  }
 }
 
 function toggleImaFolderExpand(button) {
@@ -6150,6 +6228,7 @@ async function discoverImaGroups() {
       imaMountState.discoveryOwner = request;
       imaMountState.discoveryBusy = true;
       renderImaMountGroups();
+      renderImaGroupAcl();
       const currentStatus = $("#ima-group-discovery-status");
       if (currentStatus) currentStatus.innerHTML = imaGroupDiscoveryStatusText(result);
     } else {
@@ -6329,20 +6408,19 @@ function imaStoragePanelHtml(storage) {
   return `<section class="section-panel ks-panel" data-panel="storage" id="ima-storage-panel">
     <header class="section-head"><div><h2 class="section-title">存储</h2>
     <p class="section-meta">刷新探测，备份归档。密钥不进网页。</p></div></header>
-    <div class="cfg-foot">
-      <p class="muted" id="ima-storage-status">${escapeHtml(labels[status] || status)} · 用量 ${escapeHtml(used)} · 上次备份 ${escapeHtml(resticAt)} · 检查 ${escapeHtml(resticOk)}（${escapeHtml(checkAt)}）</p>
-      <div class="toolbar ima-storage-toolbar">
-        <button type="button" class="btn-ghost" id="ima-storage-refresh" onclick="refreshImaStorage()">刷新状态</button>
-        <button type="button" class="btn-normal" id="ima-storage-backup" onclick="backupImaStorage()">立即备份</button>
-      </div>
-      <div id="ima-storage-health" class="cfg-foot"><p class="muted">存储健康加载中…</p></div>
-      <div id="ima-consistency" class="cfg-foot"><p class="muted">一致性体检：点「体检」后生成报告。</p></div>
-      <div class="toolbar ima-storage-toolbar">
-        <button type="button" class="btn-ghost" id="ima-consistency-run" onclick="runStorageConsistency()">一致性体检</button>
-        <button type="button" class="btn-ghost" onclick="runStorageDedup()">去重（低优先级）</button>
-        <span class="muted">去重已配置每月 1 日 04:00 自动执行</span>
-      </div>
+    <p class="muted" id="ima-storage-status">${escapeHtml(labels[status] || status)} · 用量 ${escapeHtml(used)} · 上次备份 ${escapeHtml(resticAt)} · 检查 ${escapeHtml(resticOk)}（${escapeHtml(checkAt)}）</p>
+    <div class="toolbar ima-storage-toolbar">
+      <button type="button" class="btn-ghost" id="ima-storage-refresh" onclick="refreshImaStorage()">刷新状态</button>
+      <button type="button" class="btn-normal" id="ima-storage-backup" onclick="backupImaStorage()">立即备份</button>
+      <button type="button" class="btn-ghost" id="ima-consistency-run" onclick="runStorageConsistency()">一致性体检</button>
     </div>
+    <div id="ima-storage-health"><p class="muted">存储健康加载中…</p></div>
+    <div id="ima-consistency" hidden></div>
+    <details class="ks-advanced" id="ima-storage-more">
+      <summary class="cfg-group-title">磁盘、备份与告警</summary>
+      <div id="ima-storage-details"><p class="muted">加载中…</p></div>
+    </details>
+    <p class="muted">去重每月 1 日 04:00 自动执行。</p>
   </section>`;
 }
 
@@ -6683,7 +6761,6 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
   const zq = s.zsxq_cookie || {};
   const zc = s.zsxq_cache || { files: 0, bytes: 0 };
   const zcSize = fmtCacheBytes(zc.bytes);
-  const tokenSet = pure.refresh_token?.set;
   setPageTitle("研报库设置");
   $("#admin-body").innerHTML = `
     <div id="stats-poll-error"></div>
@@ -6718,6 +6795,11 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
                 <div id="ima-folder-tree" class="ima-folder-tree" role="tree" aria-label="知识库文件夹" aria-live="polite"></div>
               </section>
             </div>
+            <div class="ima-source-block" id="ima-group-acl-block">
+              <header class="ima-source-block-head"><div><h3 class="ima-source-title">谁能阅读</h3>
+              <p class="section-meta">勾选后即可阅读当前库。管理员无需授权。授权单独保存，不随采集配置提交。</p></div></header>
+              <div id="ima-group-acl"><p class="muted">加载中…</p></div>
+            </div>
           </div>
         </div>
         <div class="cfg-foot ima-collector-foot">
@@ -6725,11 +6807,7 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
             <div id="ima-sync-progress">${imaCollectorProgressHtml(imaCollector)}</div>
             <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
           </div>
-          <div class="toolbar"><button type="button" class="btn-normal" id="ima-collector-save"${imaMountState.saveOwner ? " disabled" : ""} onclick="saveImaCollector()">保存采集配置</button><button type="button" class="btn-ghost" id="ima-sync-btn" onclick="triggerImaCollector()">${REFRESH_ICON}<span>立即同步</span></button></div>
-        </div>
-        <div class="ima-source-block">
-          <header class="ima-source-block-head"><div><h3 class="ima-source-title">手机同步</h3>
-          <p class="section-meta">本机双击 <code>scripts/ima_phone_sync.command</code> 写入 Token。当前：${tokenSet ? "已保存" : "未保存"}。</p></div></header>
+          <div class="toolbar"><button type="button" class="btn-normal" id="ima-collector-save"${imaMountState.saveOwner ? " disabled" : ""} onclick="saveImaCollector()">保存采集配置</button><button type="button" class="btn-ghost" id="ima-sync-btn" onclick="triggerImaCollector()">${REFRESH_ICON}<span>同步当前库</span></button></div>
         </div>
       </section>
       <section class="section-panel ks-panel" data-panel="zsxq">
@@ -6748,20 +6826,16 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
         </div>
       </div>
       <div class="ima-source-block">
-        <header class="ima-source-block-head"><div><h3 class="ima-source-title">抓取参数</h3></div></header>
+        <header class="ima-source-block-head"><div><h3 class="ima-source-title">抓取</h3>
+        <p class="section-meta">日常只开关评论和预缓存；翻页、间隔、App 通道在高级里。</p></div></header>
         <div class="cfg-group cfg-group--zsxq">
           <div class="cfg-fields">
-            <label class="cfg-field" title="每星球每轮最多翻几页，每页 20 条">
-              <span>单轮翻页<span class="cfg-unit">页</span></span>
-              <input id="pc-zq-pages" type="number" class="form-control" min="1" max="20" value="${s.polling_config.zsxq_max_pages ?? 3}">
-            </label>
-            <label class="cfg-field" title="列表/详情请求间隔，过短容易触发 1059">
-              <span>请求间隔<span class="cfg-unit">秒</span></span>
-              <input id="pc-zq-delay" type="number" class="form-control" min="0.2" max="10" step="0.1" value="${s.polling_config.zsxq_fetch_delay_seconds ?? 1}">
-            </label>
-            <label class="cfg-field" title="附件 download_url 请求间隔，过短容易撞日限">
-              <span>附件间隔<span class="cfg-unit">秒</span></span>
-              <input id="pc-zq-file-delay" type="number" class="form-control" min="0.2" max="10" step="0.1" value="${s.polling_config.zsxq_file_delay_seconds ?? 1}">
+            <label class="cfg-field cfg-check" title="新帖自动抓评论入库（可一并推送）；旧帖不动">
+              <input id="pc-zq-comments" type="checkbox" ${s.polling_config.zsxq_fetch_comments ? "checked" : ""}>
+              <span class="cfg-flag-text">
+                <span>抓取评论</span>
+                <span class="cfg-check-desc">新主题的评论在抓帖时一并入库</span>
+              </span>
             </label>
             <label class="cfg-field cfg-check" title="抓到新帖时就把 PDF 拉到本地；默认关闭，点开再下，省日限">
               <input id="pc-zq-prefetch" type="checkbox" ${s.polling_config.zsxq_prefetch_files ? "checked" : ""}>
@@ -6770,33 +6844,43 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
                 <span class="cfg-check-desc">打开后新帖 PDF 会立刻落到本地，费配额；默认点开再下</span>
               </span>
             </label>
-            <label class="cfg-field cfg-check" title="新帖自动抓评论入库（可一并推送）；旧帖不动">
-              <input id="pc-zq-comments" type="checkbox" ${s.polling_config.zsxq_fetch_comments ? "checked" : ""}>
-              <span class="cfg-flag-text">
-                <span>抓取评论</span>
-                <span class="cfg-check-desc">新主题的评论在抓帖时一并入库</span>
-              </span>
-            </label>
-            <label class="cfg-field" title="单主题评论最多翻几页（每页 20 条）">
-              <span>评论翻页<span class="cfg-unit">页</span></span>
-              <input id="pc-zq-comment-pages" type="number" class="form-control" min="1" max="10" value="${s.polling_config.zsxq_max_comment_pages ?? 3}">
-            </label>
-            <label class="cfg-field" title="每轮最多发起的评论请求数，保护限流">
-              <span>评论预算<span class="cfg-unit">次/轮</span></span>
-              <input id="pc-zq-comment-budget" type="number" class="form-control" min="1" max="200" value="${s.polling_config.zsxq_comment_budget ?? 30}">
-            </label>
-            <label class="cfg-field cfg-check" title="用 App 通道请求头（xiaomiquan UA + X-Request-Id/X-Version）代替浏览器头；默认关，等你复测日限差异确认有收益再开">
-              <input id="pc-zq-app" type="checkbox" ${s.polling_config.zsxq_app_channel ? "checked" : ""}>
-              <span class="cfg-flag-text">
-                <span>App 通道头</span>
-                <span class="cfg-check-desc">伪称 Android 客户端请求；与 web 通道共用账号配额</span>
-              </span>
-            </label>
-            <label class="cfg-field cfg-field--wide" title="App 通道 UA 里的设备标识：Android 版本 + 品牌_型号，空格自动压成下划线">
-              <span>设备标识<span class="cfg-unit">RELEASE BRAND_MODEL</span></span>
-              <input id="pc-zq-app-device" type="text" class="form-control" maxlength="64" value="${escapeHtml(s.polling_config.zsxq_app_device ?? "16 OnePlus_PJD110")}">
-            </label>
           </div>
+          <details class="ks-advanced">
+            <summary class="cfg-group-title">高级（翻页、间隔、App 通道）</summary>
+            <div class="cfg-fields">
+              <label class="cfg-field" title="每星球每轮最多翻几页，每页 20 条">
+                <span>单轮翻页<span class="cfg-unit">页</span></span>
+                <input id="pc-zq-pages" type="number" class="form-control" min="1" max="20" value="${s.polling_config.zsxq_max_pages ?? 3}">
+              </label>
+              <label class="cfg-field" title="列表/详情请求间隔，过短容易触发 1059">
+                <span>请求间隔<span class="cfg-unit">秒</span></span>
+                <input id="pc-zq-delay" type="number" class="form-control" min="0.2" max="10" step="0.1" value="${s.polling_config.zsxq_fetch_delay_seconds ?? 1}">
+              </label>
+              <label class="cfg-field" title="附件 download_url 请求间隔，过短容易撞日限">
+                <span>附件间隔<span class="cfg-unit">秒</span></span>
+                <input id="pc-zq-file-delay" type="number" class="form-control" min="0.2" max="10" step="0.1" value="${s.polling_config.zsxq_file_delay_seconds ?? 1}">
+              </label>
+              <label class="cfg-field" title="单主题评论最多翻几页（每页 20 条）">
+                <span>评论翻页<span class="cfg-unit">页</span></span>
+                <input id="pc-zq-comment-pages" type="number" class="form-control" min="1" max="10" value="${s.polling_config.zsxq_max_comment_pages ?? 3}">
+              </label>
+              <label class="cfg-field" title="每轮最多发起的评论请求数，保护限流">
+                <span>评论预算<span class="cfg-unit">次/轮</span></span>
+                <input id="pc-zq-comment-budget" type="number" class="form-control" min="1" max="200" value="${s.polling_config.zsxq_comment_budget ?? 30}">
+              </label>
+              <label class="cfg-field cfg-check" title="用 App 通道请求头（xiaomiquan UA + X-Request-Id/X-Version）代替浏览器头；默认关，等你复测日限差异确认有收益再开">
+                <input id="pc-zq-app" type="checkbox" ${s.polling_config.zsxq_app_channel ? "checked" : ""}>
+                <span class="cfg-flag-text">
+                  <span>App 通道头</span>
+                  <span class="cfg-check-desc">伪称 Android 客户端请求；与 web 通道共用账号配额</span>
+                </span>
+              </label>
+              <label class="cfg-field cfg-field--wide" title="App 通道 UA 里的设备标识：Android 版本 + 品牌_型号，空格自动压成下划线">
+                <span>设备标识<span class="cfg-unit">RELEASE BRAND_MODEL</span></span>
+                <input id="pc-zq-app-device" type="text" class="form-control" maxlength="64" value="${escapeHtml(s.polling_config.zsxq_app_device ?? "16 OnePlus_PJD110")}">
+              </label>
+            </div>
+          </details>
           <div class="cfg-foot">
             <p class="muted" id="zq-cache-stat">附件缓存 ${zcSize} / ${zc.files || 0} 个文件</p>
             <div class="toolbar">
@@ -6824,6 +6908,7 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
   if (collectorDraft) initImaMountState(collectorGroups, true);
   else initImaMountState(pure.groups || [], preserveMountDraftForReload);
   renderImaMountGroups();
+  renderImaGroupAcl();
   document.querySelectorAll(".ima-interval-seg").forEach((seg) => {
     const current = imaGroupIntervalSeconds(imaMountGroup(seg.dataset.groupId));
     seg.querySelectorAll("button[data-sec]").forEach((btn) => {
@@ -7194,10 +7279,12 @@ async function runStorageConsistency() {
     if ((rep.bad_name_count ?? 0) > 0) items.push(`命名不规范 ${rep.bad_name_count} 个`);
     if ((rep.empty_dir_count ?? 0) > 0) items.push(`空目录 ${rep.empty_dir_count} 个`);
     if ((rep.no_sidecar_count ?? 0) > 0) items.push(`无摘要元数据 ${rep.no_sidecar_count} 篇`);
+    box.hidden = false;
     box.innerHTML = items.length
       ? `<p class="section-meta">体检发现：${items.join("；")}。${rep.files ?? ""} 个 PDF 已扫描。</p>`
       : `<p class="section-meta">体检通过：未发现异常。</p>`;
   } catch (err) {
+    box.hidden = false;
     box.innerHTML = `<p class="muted">体检失败：${escapeHtml(err.message)}</p>`;
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = "一致性体检"; }
@@ -7213,6 +7300,7 @@ async function runStorageDedup() {
 
 async function loadStorageHealth() {
   const box = document.getElementById("ima-storage-health");
+  const details = document.getElementById("ima-storage-details");
   if (!box) return;
   try {
     const h = await api("/api/admin/ima-storage/health");
@@ -7240,19 +7328,22 @@ async function loadStorageHealth() {
     box.innerHTML = `
       <p class="section-meta">磁盘 <strong style="color:${color}">${disk.used_gb ?? "—"} / ${disk.total_gb ?? "—"} GB（${pct}%）</strong>
        · 归档 ${(st.archive && st.archive.files) ?? "—"} 个 PDF
-       · 中德链路 ${wg.ok ? `${wg.rtt_ms ?? "—"} ms` : "不通"} · 归档挂载 ${nfs.mounted ? "正常" : "异常"} / 标记 ${nfs.marker_ok ? "正常" : "缺失"}</p>
-      <div style="background:var(--color-surface-soft);height:8px;border-radius:4px;overflow:hidden;margin:6px 0">
-        <div style="width:${Math.min(pct, 100)}%;height:100%;background:${color}"></div></div>
+       · 中德链路 ${wg.ok ? `${wg.rtt_ms ?? "—"} ms` : "不通"} · 归档挂载 ${nfs.mounted ? "正常" : "异常"}</p>
+      <div class="ima-storage-bar"><div style="width:${Math.min(pct, 100)}%;background:${color}"></div></div>`;
+    if (details) {
+      details.innerHTML = `
       ${cats ? `<ul class="muted" style="margin:4px 0 0;padding-left:18px">${cats}</ul>` : ""}
       <p class="section-meta" style="margin:10px 0 2px"><strong>备份</strong>（快照 · 上次成功 ${b.restic_last_success ? fmtTs(b.restic_last_success) : "无"}）</p>
       ${backupHtml}
-      <div class="toolbar" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <label>告警阈值 磁盘≥<input id="ima-alert-warn" type="number" value="${cfg.disk_warn ?? 80}" style="width:64px">% /
-        <input id="ima-alert-crit" type="number" value="${cfg.disk_crit ?? 90}" style="width:64px">%</label>
-        <label>状态过期 ≥<input id="ima-alert-stale" type="number" value="${cfg.stale_minutes ?? 30}" style="width:56px"> 分钟</label>
+      <div class="toolbar ima-storage-alerts">
+        <label>告警阈值 磁盘≥<input id="ima-alert-warn" type="number" value="${cfg.disk_warn ?? 80}">% /
+        <input id="ima-alert-crit" type="number" value="${cfg.disk_crit ?? 90}">%</label>
+        <label>状态过期 ≥<input id="ima-alert-stale" type="number" value="${cfg.stale_minutes ?? 30}"> 分钟</label>
         <label><input id="ima-alert-notify" type="checkbox" ${cfg.notify_enabled ? "checked" : ""}> 推送通知</label>
         <button type="button" class="btn-ghost" onclick="saveStorageAlerts()">保存告警设置</button>
+        <button type="button" class="btn-ghost" onclick="runStorageDedup()">立即去重</button>
       </div>`;
+    }
   } catch (err) {
     box.innerHTML = `<p class="muted">存储健康加载失败：${escapeHtml(err.message)}</p>`;
   }
@@ -7284,6 +7375,7 @@ async function refreshImaStorage() {
     if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     const slot = $("#ima-storage-panel");
     if (slot) slot.outerHTML = imaStoragePanelHtml(data);
+    loadStorageHealth();
     flash("存储状态已刷新");
   } catch (err) {
     if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
@@ -7314,6 +7406,7 @@ async function backupImaStorage() {
 
 let _ciccPollTimer = null;
 let _ciccLastStatus = null;
+let _ciccDetailsOpen = false; // 轮询重绘时保留「研报采集」展开状态
 let _localLibsLast = null;
 let _scanInFlight = false; // 扫描进行中：15s 轮询重渲染时按钮保持禁用，不复活
 
@@ -7473,7 +7566,7 @@ function localLibraryCardHtml(lib) {
   const aclCount = (lib.acl_usernames || []).length;
   const tags = (lib.tags || []).length ? ` · 标签 ${escapeHtml(lib.tags.join("、"))}` : "";
   const ciccInner = lib.slug === CICC_RESEARCH_SLUG && _ciccLastStatus
-    ? `<details open style="margin-top:10px"><summary class="cfg-group-title">研报采集</summary>${ciccControlInnerHtml(_ciccLastStatus)}</details>`
+    ? `<details class="cicc-collect"${_ciccDetailsOpen ? " open" : ""}><summary class="cfg-group-title">研报采集</summary>${ciccControlInnerHtml(_ciccLastStatus)}</details>`
     : "";
   return `<div class="ima-source-block" data-slug="${escapeHtml(lib.slug)}">
     <header class="ima-source-block-head"><div><h3 class="ima-source-title">${escapeHtml(lib.name)}</h3>
@@ -7489,6 +7582,8 @@ function localLibraryCardHtml(lib) {
 function renderLocalTab() {
   const slot = $("#local-libs-body");
   if (!slot || !_localLibsLast) return;
+  const prev = slot.querySelector("details.cicc-collect");
+  if (prev) _ciccDetailsOpen = prev.open;
   const libs = _localLibsLast.libraries || [];
   const hasCiccLib = libs.some((lib) => lib.slug === CICC_RESEARCH_SLUG);
   const fallbackCicc = !hasCiccLib && _ciccLastStatus
@@ -7593,34 +7688,44 @@ function localLibraryModalShell(title, innerHtml) {
   return mask;
 }
 
-function openLocalLibraryModal(slug) {
+async function openLocalLibraryModal(slug) {
   const lib = ((_localLibsLast && _localLibsLast.libraries) || []).find((l) => l.slug === slug);
   if (!lib) return;
+  try {
+    await fetchAclCandidateUsers();
+  } catch (err) {
+    flash("加载用户失败: " + err.message, "error");
+    return;
+  }
+  const aclHtml = aclChecksHtml(lib.acl_usernames || [], "ll-acl-list", "data-ll-user");
   const mask = localLibraryModalShell(`编辑本地库：${escapeHtml(lib.name)}`, `
     <label class="form-label">库名
       <input id="ll-name" class="form-control" maxlength="80" value="${escapeHtml(lib.name)}">
     </label>
-    <label class="form-label">库级标签（逗号分隔，下次扫描后应用到库内文档）
+    <label class="form-label">库级标签（逗号分隔）
       <input id="ll-tags" class="form-control" value="${escapeHtml((lib.tags || []).join(", "))}" placeholder="研报, 中金">
     </label>
-    <label class="form-label">授权用户（逗号分隔用户名，清空则仅管理员可见）
-      <input id="ll-users" class="form-control" value="${escapeHtml((lib.acl_usernames || []).join(", "))}" placeholder="user1, user2">
-    </label>`);
-  mask.querySelector("#ll-save").addEventListener("click", () => saveLocalLibraryModal(slug, mask));
+    <p class="muted">改标签后保存可立刻扫描，写入库内文档。</p>
+    <p class="form-label">授权用户（清空则仅管理员可见）</p>
+    ${aclHtml}`);
+  mask.querySelector("#ll-save").addEventListener("click", () => saveLocalLibraryModal(slug, mask, lib.tags || []));
 }
 
-async function saveLocalLibraryModal(slug, mask) {
+async function saveLocalLibraryModal(slug, mask, previousTags) {
   const btn = mask.querySelector("#ll-save");
   const name = mask.querySelector("#ll-name").value.trim();
   const tags = splitListCsv(mask.querySelector("#ll-tags").value);
-  const usernames = splitListCsv(mask.querySelector("#ll-users").value);
+  const usernames = [...mask.querySelectorAll("#ll-acl-list [data-ll-user]:checked")]
+    .map((el) => el.dataset.llUser)
+    .filter(Boolean);
   if (!name) {
     flash("库名不能为空", "error");
     return;
   }
+  const tagsChanged = tags.slice().sort().join("\0") !== [...previousTags].map(String).sort().join("\0");
   if (btn) btn.disabled = true;
   try {
-    const [data] = await Promise.all([
+    await Promise.all([
       api(`/api/admin/ima-local-libraries/${encodeURIComponent(slug)}`, {
         method: "PUT",
         body: JSON.stringify({ name, tags }),
@@ -7632,8 +7737,10 @@ async function saveLocalLibraryModal(slug, mask) {
     ]);
     mask.remove();
     flash("已保存本地库设置");
-    _localLibsLast = data;
-    renderLocalTab();
+    await loadLocalLibraries(true);
+    if (tagsChanged && confirm("库级标签已改，现在扫描以应用到库内文档？")) {
+      await scanLocalLibraries();
+    }
   } catch (err) {
     flash("保存失败: " + err.message, "error");
     if (btn) btn.disabled = false;
@@ -8346,11 +8453,19 @@ async function triggerImaCollector() {
     flash("请先选择知识库", "error");
     return;
   }
+  const group = imaMountGroup(groupId);
+  const mounted = Array.isArray(group?.folder_ids) && group.folder_ids.length;
+  if (!mounted) {
+    flash("请先挂载该知识库并保存", "error");
+    return;
+  }
   if (btn) btn.disabled = true;
   try {
     const result = await api("/api/admin/ima-collector/sync", { method: "POST", body: JSON.stringify({ group_id: groupId }) });
     if (!routeStillActive(routeSeq)) return;
-    flash(result.status === "already_running" ? "IMA 文档同步正在进行中" : "IMA 文档同步已启动");
+    flash(result.status === "already_running"
+      ? "IMA 文档同步正在进行中"
+      : `已启动同步「${group?.name || groupId}」`);
     const status = await api("/api/admin/ima-collector");
     if (!routeStillActive(routeSeq)) return;
     const target = $("#ima-collector-status");

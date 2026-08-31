@@ -3334,6 +3334,36 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .ks-panel { display: none; }
 .ks-panel.is-on { display: grid; gap: 16px; }
 .ks-panel[data-panel="storage"].is-on { display: block; }
+.ks-advanced { margin-top: 12px; }
+.ks-advanced > summary { cursor: pointer; }
+.ks-advanced > summary::-webkit-details-marker { display: none; }
+.ks-advanced > summary::before { content: "▸ "; }
+.ks-advanced[open] > summary::before { content: "▾ "; }
+.ks-advanced .cfg-fields { margin-top: 10px; }
+.cicc-collect { margin-top: 10px; }
+.ima-storage-bar {
+  background: var(--color-surface-soft);
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 6px 0 12px;
+}
+.ima-storage-bar > div { height: 100%; }
+.ima-storage-alerts {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.ima-storage-alerts input[type="number"] { width: 56px; }
+#ll-acl-list,
+#ima-acl-list {
+  max-height: 240px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 4px 0;
+}
 .knowledge-settings .ima-credential-actions {
   margin-top: var(--space-3);
 }
