@@ -2468,6 +2468,14 @@ def test_ima_dedicated_reader_fills_the_desktop_surface():
     assert "color-scheme: light" not in css[css.index(".ima-reader-page"):]
 
 
+def test_ima_search_ignores_single_ascii_character():
+    body = _fn_body("imaUsableSearchQuery")
+    assert "length < 2" in body
+    assert r"/^[\x00-\x7F]*$/" in body
+    src = APP_JS.read_text()
+    assert "imaUsableSearchQuery(" in src
+
+
 def test_ima_source_filter_is_compact_and_subscription_management_survives():
     src = APP_JS.read_text()
     controls = _fn_body("knowledgeSourceControlsHtml")
@@ -3286,8 +3294,8 @@ def test_frontend_asset_urls_bust_browser_cache():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=244"' in html
-    assert 'src="/app.js?v=340"' in html
-    assert 'dav-shell-v208' in sw
+    assert 'src="/app.js?v=341"' in html
+    assert 'dav-shell-v209' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

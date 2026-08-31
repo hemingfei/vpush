@@ -1560,7 +1560,10 @@ def test_indexed_api_serves_without_reading_json(tmp_path, monkeypatch):
     assert "cover_url" not in body["items"][0]
     assert "pdf_path" not in body["items"][0]
     assert "txt_path" not in body["items"][0]
-    assert "unknown" in body["days"]
+    assert body["days"] == []
+    grouped = client.get(f"/api/ima-documents?group={group_a}", headers=admin_headers)
+    assert grouped.status_code == 200, grouped.text
+    assert "unknown" in grouped.json()["days"]
 
     catalog_payload = client.get("/api/ima-documents/catalog", headers=admin_headers)
     assert catalog_payload.status_code == 200, catalog_payload.text

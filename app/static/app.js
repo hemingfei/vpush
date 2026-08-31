@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.103";
+const APP_VERSION = "1.12.104";
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["config", "cookies", "proxies", "plaza"];
@@ -924,7 +924,7 @@ function imaDocumentsGroupFromRoute() {
 
 function imaDocumentsRequestPath() {
   const params = new URLSearchParams();
-  const query = routeQuery().get("q") || "";
+  const query = imaUsableSearchQuery(routeQuery().get("q") || "");
   const day = routeQuery().get("day") || "";
   const tag = routeQuery().get("tag") || "";
   const group = imaDocumentsGroupFromRoute() || "";
@@ -1023,6 +1023,13 @@ function selectImaDocumentGroup(value) {
   renderImaDocuments(seq);
 }
 
+function imaUsableSearchQuery(raw) {
+  const query = String(raw || "").trim();
+  if (!query) return "";
+  if (query.length < 2 && /^[\x00-\x7F]*$/.test(query)) return "";
+  return query;
+}
+
 function queueImaDocumentsSearch() {
   if (_imaSearchComposing) return;
   clearTimeout(_imaSearchTimer);
@@ -1036,7 +1043,7 @@ function submitImaDocumentsSearch() {
     _imaSearchComposing = false;
     return;
   }
-  state.imaDocumentsQuery = ($("#ima-doc-q")?.value || "").trim();
+  state.imaDocumentsQuery = imaUsableSearchQuery($("#ima-doc-q")?.value || "");
   state.imaDocumentsDay = "";
   replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay, state.imaDocumentsTag));
   const seq = ++routeRenderSeq;
@@ -1330,7 +1337,7 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
     state.imaDocumentsHasMore = false;
   }
   const selectedGroup = imaDocumentsGroupFromRoute() || state.imaDocumentsGroup || "";
-  const query = routeQuery().get("q") || "";
+  const query = imaUsableSearchQuery(routeQuery().get("q") || "");
   const day = routeQuery().get("day") || "";
   const tag = routeQuery().get("tag") || "";
   const searchMode = !!(query || tag);
