@@ -1162,6 +1162,7 @@ img.pt-icon { display: block; object-fit: contain; }
   display: flex; align-items: center; justify-content: center;
   padding: 28px;
   cursor: zoom-out;
+  user-select: none; /* 拖拽平移时不选中任何内容 */
   animation: lightbox-in 0.25s ease-out;
 }
 .lightbox-img {
@@ -1173,35 +1174,65 @@ img.pt-icon { display: block; object-fit: contain; }
   box-shadow: var(--shadow-lg);
   object-fit: contain;
   cursor: default;
-  touch-action: pan-y; /* 水平滑动交给 JS 切换图片，垂直保留原生 */
+  touch-action: none; /* 缩放/平移手势全部交给 JS，禁用原生捏合与双击缩放 */
+  -webkit-user-drag: none;
   animation: lightbox-img-in 0.28s ease-out;
 }
+/* 缩放过渡（lb-anim）：滚轮/双击/按钮/吸附复位时启用；连续拖拽与捏合中移除以保证跟手 */
+.lightbox-img.lb-anim { transition: transform 0.22s ease-out, opacity 0.12s ease-out; }
+.lightbox-img.lb-dragging { cursor: grabbing !important; }
+/* 左上角缩放工具条：− / 当前倍数（点击复位）/ + */
+.lightbox-zoom {
+  z-index: 1;
+  position: absolute; top: 18px; left: 18px;
+  display: flex; align-items: center; gap: 8px;
+}
+.lightbox-zbtn {
+  height: 42px; min-width: 42px; padding: 0 14px;
+  border: none; border-radius: var(--radius-pill);
+  background: rgba(12, 14, 18, 0.45); color: var(--color-white);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  font-size: 20px; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: background var(--ease-standard);
+}
+.lightbox-zbtn:hover { background: rgba(12, 14, 18, 0.62); }
+.lightbox-zbtn:disabled { opacity: 0.4; cursor: default; }
+.lightbox-zbtn:disabled:hover { background: rgba(12, 14, 18, 0.45); }
+.lightbox-zpct { font-size: 14px; }
 .lightbox-close {
+  z-index: 1;
   position: absolute; top: 18px; right: 18px;
   width: 42px; height: 42px; border-radius: 50%;
   border: none;
-  background: rgba(255, 255, 255, 0.14); color: var(--color-white);
+  /* 深色半透明底：放大后的亮色图片铺满视口时控件仍可辨识（与底部计数徽章一致） */
+  background: rgba(12, 14, 18, 0.45); color: var(--color-white);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
   font-size: 18px; line-height: 1;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer;
   transition: background var(--ease-standard);
 }
-.lightbox-close:hover { background: rgba(255, 255, 255, 0.26); }
+.lightbox-close:hover { background: rgba(12, 14, 18, 0.62); }
 /* 多图切换：左右箭头（半透明圆钮，hover 增强）+ 计数 */
 .lightbox-nav {
+  z-index: 1;
   position: absolute; top: 50%; transform: translateY(-50%);
   width: 46px; height: 46px; border-radius: 50%;
   border: none;
-  background: rgba(255, 255, 255, 0.12); color: var(--color-white);
+  background: rgba(12, 14, 18, 0.45); color: var(--color-white);
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
   font-size: 26px; line-height: 1;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer;
   transition: background var(--ease-standard);
 }
-.lightbox-nav:hover { background: rgba(255, 255, 255, 0.26); }
+.lightbox-nav:hover { background: rgba(12, 14, 18, 0.62); }
 .lightbox-prev { left: 20px; }
 .lightbox-next { right: 20px; }
 .lightbox-count {
+  z-index: 1;
   position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%);
   color: rgba(255, 255, 255, 0.85);
   font-size: var(--text-sm);
@@ -1210,6 +1241,7 @@ img.pt-icon { display: block; object-fit: contain; }
 }
 /* 图片彻底失效（直连+代理都 404）时灯箱内的占位提示 */
 .lightbox-dead {
+  z-index: 1;
   position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
   color: rgba(255, 255, 255, 0.72);
   font-size: var(--text-sm);
@@ -1229,6 +1261,8 @@ body.lightbox-open { overflow: hidden; }
 @keyframes lightbox-img-out { to { opacity: 0; transform: scale(0.97); } }
 @media (prefers-reduced-motion: reduce) {
   .lightbox, .lightbox-img, .lightbox.closing, .lightbox.closing .lightbox-img { animation: none; }
+  /* 缩放的过渡动画也一并禁用，缩放立即生效 */
+  .lightbox-img.lb-anim { transition: opacity 0.12s ease-out; }
   /* 骨架屏 shimmer 无限循环、toast 入场：reduce 下改为静态/瞬显 */
   .tl-sk-item, .tl-sk-line { animation: none; }
   .tl-new-badge.show { animation: none; }
@@ -2542,6 +2576,7 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   }
   .btn-sm { min-height: 44px; }
   .lightbox-close { width: 44px; height: 44px; }
+  .lightbox-zbtn { height: 44px; min-width: 44px; }
   .topbar-logout { min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
   .tl-group .post-images { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
   .tl-group .post-images img { width: 100%; height: auto; aspect-ratio: 1; }
