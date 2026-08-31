@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.109";
+const APP_VERSION = "1.12.110";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -6022,23 +6022,9 @@ function imaFocusSnapshot(element = document.activeElement) {
   return { element, id: element?.id || "" };
 }
 
-function imaAclDirty() {
-  const group = imaMountGroup(imaMountState.selectedGroupId);
-  const list = $("#ima-acl-list");
-  if (!group || !list) return false;
-  const granted = new Set(group.acl_usernames || []);
-  const checked = [...list.querySelectorAll("[data-ima-acl-user]:checked")]
-    .map((el) => el.getAttribute("data-ima-acl-user"))
-    .filter(Boolean);
-  if (checked.length !== granted.size) return true;
-  return checked.some((name) => !granted.has(name));
-}
-
 function selectImaMountGroup(groupId) {
   const group = imaMountGroup(groupId);
   if (!group) return;
-  if (String(group.id) !== String(imaMountState.selectedGroupId || "") && imaAclDirty()
-    && !confirm("权限未保存，切换库会丢弃改动。继续？")) return;
   const focus = imaFocusSnapshot();
   imaMountState.selectedGroupId = String(group.id);
   renderImaMountGroups();
@@ -6049,44 +6035,146 @@ function selectImaMountGroup(groupId) {
 let _aclCandidateUsers = null;
 let _imaAclRenderSeq = 0;
 
-async function fetchAclCandidateUsers() {
-  if (_aclCandidateUsers) return _aclCandidateUsers;
+async function fetchAclCandidateUsers(force = false) {
+  if (!force && _aclCandidateUsers) return _aclCandidateUsers;
   _aclCandidateUsers = (await api("/api/users")).filter((u) => !u.is_admin);
   return _aclCandidateUsers;
 }
 
-function aclChecksHtml(usernames, listId, dataAttr) {
-  const granted = new Set(usernames || []);
-  const users = _aclCandidateUsers || [];
-  if (!users.length) {
-    return `<p class="muted">还没有普通用户。</p>`;
-  }
+function aclGrantedNames(picker) {
+  return [...(picker?.querySelectorAll("[data-acl-remove]") || [])]
+    .map((el) => el.getAttribute("data-acl-remove"))
+    .filter(Boolean);
+}
+
+function aclChipHtml(name) {
+  return `<button type="button" class="ima-acl-chip" data-acl-remove="${escapeHtml(name)}" aria-label="移除 ${escapeHtml(name)}">${escapeHtml(name)}<span aria-hidden="true">×</span></button>`;
+}
+
+function aclPickerHtml(usernames, listId) {
+  const granted = [...new Set(usernames || [])];
+  const chips = granted.length
+    ? granted.map(aclChipHtml).join("")
+    : `<span class="muted ima-acl-none">仅管理员</span>`;
   return `<div class="ima-acl-picker">
-    <input type="search" class="form-control ima-acl-search" placeholder="搜索用户" aria-label="搜索用户" oninput="filterAclList('${listId}', this.value)">
-    <div id="${listId}" class="um-kb-list">${users.map((u) => {
-    const name = String(u.username || "");
-    return `<label class="um-kb-item">
-      <input type="checkbox" ${dataAttr}="${escapeHtml(name)}"${granted.has(name) ? " checked" : ""}>
-      <span>${escapeHtml(name)}</span>
-    </label>`;
-  }).join("")}</div>
+    <div class="ima-acl-chips">${chips}</div>
+    <p class="muted ima-acl-status" aria-live="polite">${granted.length ? `${granted.length} 人可看` : "仅管理员"}</p>
+    <input type="search" class="form-control ima-acl-search" placeholder="搜索并添加用户" aria-label="搜索并添加用户" aria-controls="${listId}" autocomplete="off" oninput="filterAclSuggest(this)" onkeydown="onAclSearchKey(event)">
+    <div id="${listId}" class="ima-acl-suggest" hidden role="listbox"></div>
     <p class="muted ima-acl-empty" hidden>没有匹配的用户</p>
   </div>`;
 }
 
-function filterAclList(listId, q) {
-  const list = document.getElementById(listId);
-  if (!list) return;
-  const needle = String(q || "").trim().toLowerCase();
-  let shown = 0;
-  for (const item of list.querySelectorAll(".um-kb-item")) {
-    const name = (item.querySelector("span")?.textContent || "").trim().toLowerCase();
-    const on = !needle || name.includes(needle);
-    item.hidden = !on;
-    if (on) shown += 1;
+function filterAclSuggest(input) {
+  const picker = input.closest(".ima-acl-picker");
+  const list = picker?.querySelector(".ima-acl-suggest");
+  const empty = picker?.querySelector(".ima-acl-empty");
+  if (!picker || !list) return;
+  const needle = input.value.trim().toLowerCase();
+  const granted = new Set(aclGrantedNames(picker));
+  if (!needle) {
+    list.hidden = true;
+    list.innerHTML = "";
+    if (empty) empty.hidden = true;
+    return;
   }
-  const empty = list.closest(".ima-acl-picker")?.querySelector(".ima-acl-empty");
-  if (empty) empty.hidden = shown > 0;
+  const hits = (_aclCandidateUsers || [])
+    .map((u) => String(u.username || ""))
+    .filter((name) => name && !granted.has(name) && name.toLowerCase().includes(needle));
+  if (!hits.length) {
+    list.hidden = true;
+    list.innerHTML = "";
+    if (empty) empty.hidden = false;
+    return;
+  }
+  if (empty) empty.hidden = true;
+  list.hidden = false;
+  list.innerHTML = hits.map((name) =>
+    `<button type="button" class="ima-acl-suggest-item" role="option" data-acl-add="${escapeHtml(name)}">${escapeHtml(name)}</button>`
+  ).join("");
+}
+
+function onAclSearchKey(event) {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  const first = event.target.closest(".ima-acl-picker")?.querySelector("[data-acl-add]");
+  if (first) addAclUser(first.getAttribute("data-acl-add"), first.closest(".ima-acl-picker"));
+}
+
+async function saveImaGroupAcl(groupId, usernames) {
+  const r = await api(`/api/admin/ima-collector/groups/${encodeURIComponent(groupId)}/acl`, {
+    method: "PUT",
+    body: JSON.stringify({ usernames }),
+  });
+  return r.acl_usernames || usernames;
+}
+
+function applyAclNamesToPicker(picker, names) {
+  const chips = picker.querySelector(".ima-acl-chips");
+  const status = picker.querySelector(".ima-acl-status");
+  if (chips) {
+    chips.innerHTML = names.length
+      ? names.map(aclChipHtml).join("")
+      : `<span class="muted ima-acl-none">仅管理员</span>`;
+  }
+  if (status) status.textContent = names.length ? `${names.length} 人可看` : "仅管理员";
+}
+
+function rememberAclOnModel(groupId, names) {
+  const group = imaMountGroup(groupId);
+  if (group) group.acl_usernames = names;
+  const lib = ((_localLibsLast && _localLibsLast.libraries) || [])
+    .find((item) => `local-${item.slug}` === groupId);
+  if (!lib) return;
+  lib.acl_usernames = names;
+  const el = document.querySelector(`.ima-source-block[data-slug="${lib.slug}"]`);
+  const line = el?.querySelector(".section-meta");
+  if (!line) return;
+  const n = names.length;
+  line.innerHTML = line.innerHTML.replace(
+    /· (权限 \d+ 人|仅管理员)\s*$/,
+    `· ${n ? `权限 ${n} 人` : "仅管理员"}`,
+  );
+}
+
+async function addAclUser(name, picker) {
+  if (!name || !picker) return;
+  const groupId = picker.dataset.groupId;
+  if (!groupId) return;
+  const current = aclGrantedNames(picker);
+  if (current.includes(name)) return;
+  try {
+    const saved = await saveImaGroupAcl(groupId, [...current, name]);
+    rememberAclOnModel(groupId, saved);
+    applyAclNamesToPicker(picker, saved);
+    const search = picker.querySelector(".ima-acl-search");
+    if (search) {
+      search.value = "";
+      filterAclSuggest(search);
+    }
+    flash("权限已保存");
+  } catch (err) {
+    flash("保存失败: " + err.message, "error");
+  }
+}
+
+async function removeAclUser(name, picker) {
+  if (!name || !picker) return;
+  const groupId = picker.dataset.groupId;
+  if (!groupId) return;
+  const current = aclGrantedNames(picker);
+  if (!current.includes(name)) return;
+  if (current.length === 1 && !confirm("将只剩管理员可看，确定？")) return;
+  try {
+    const saved = await saveImaGroupAcl(groupId, current.filter((item) => item !== name));
+    rememberAclOnModel(groupId, saved);
+    applyAclNamesToPicker(picker, saved);
+    const search = picker.querySelector(".ima-acl-search");
+    if (search?.value) filterAclSuggest(search);
+    flash("权限已保存");
+  } catch (err) {
+    flash("保存失败: " + err.message, "error");
+  }
 }
 
 async function renderImaGroupAcl() {
@@ -6103,45 +6191,13 @@ async function renderImaGroupAcl() {
   try {
     await fetchAclCandidateUsers();
     if (seq !== _imaAclRenderSeq || String(imaMountState.selectedGroupId) !== groupId) return;
-    const granted = group.acl_usernames || [];
-    slot.innerHTML = `
-      ${aclChecksHtml(granted, "ima-acl-list", "data-ima-acl-user")}
-      <div class="toolbar" style="margin-top:10px">
-        <button type="button" class="btn-ghost" id="ima-acl-save" onclick="saveImaGroupAcl()">保存</button>
-        <span class="muted" id="ima-acl-status">${granted.length ? `${granted.length} 人可看` : "仅管理员"}</span>
-      </div>`;
+    slot.innerHTML = aclPickerHtml(group.acl_usernames || [], "ima-acl-list");
+    const picker = slot.querySelector(".ima-acl-picker");
+    if (picker) picker.dataset.groupId = groupId;
   } catch (err) {
     if (seq !== _imaAclRenderSeq) return;
-    slot.innerHTML = `<p class="muted">用户列表加载失败：${escapeHtml(err.message)}</p>`;
-  }
-}
-
-async function saveImaGroupAcl() {
-  const group = imaMountGroup(imaMountState.selectedGroupId);
-  if (!group) {
-    flash("请先选择知识库", "error");
-    return;
-  }
-  const btn = $("#ima-acl-save");
-  if (btn?.disabled) return;
-  const usernames = [...document.querySelectorAll("#ima-acl-list [data-ima-acl-user]:checked")]
-    .map((el) => el.getAttribute("data-ima-acl-user"))
-    .filter(Boolean);
-  if (btn) btn.disabled = true;
-  try {
-    const r = await api(`/api/admin/ima-collector/groups/${encodeURIComponent(group.id)}/acl`, {
-      method: "PUT",
-      body: JSON.stringify({ usernames }),
-    });
-    group.acl_usernames = r.acl_usernames || usernames;
-    const n = (group.acl_usernames || []).length;
-    const status = $("#ima-acl-status");
-    if (status) status.textContent = n ? `${n} 人可看` : "仅管理员";
-    flash("权限已保存");
-    if (btn) btn.disabled = false;
-  } catch (err) {
-    flash("保存失败: " + err.message, "error");
-    if (btn) btn.disabled = false;
+    slot.innerHTML = `<p class="muted">用户列表加载失败：${escapeHtml(err.message)}</p>
+      <button type="button" class="btn-ghost" onclick="fetchAclCandidateUsers(true).then(renderImaGroupAcl)">重试</button>`;
   }
 }
 
@@ -6833,7 +6889,7 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
             </div>
             <div class="ima-source-block" id="ima-group-acl-block">
               <header class="ima-source-block-head"><div><h3 class="ima-source-title">权限控制</h3>
-              <p class="section-meta">当前选中库的可见用户。管理员始终可看。与上方采集配置分开保存。</p></div></header>
+              <p class="section-meta">当前库谁能看。管理员始终可看。添加或移除即时生效。</p></div></header>
               <div id="ima-group-acl"><p class="muted">加载中…</p></div>
             </div>
           </div>
@@ -7700,14 +7756,25 @@ function localLibraryModalShell(title, innerHtml) {
   mask.className = "modal-mask";
   mask.innerHTML = `
     <div class="modal-card" role="dialog" aria-modal="true" aria-label="${title}">
-      <h3 style="margin-bottom:12px">${title}</h3>
+      <h3 class="ima-source-title" style="margin-bottom:12px">${title}</h3>
       ${innerHtml}
       <div class="toolbar" style="margin-top:16px">
         <button class="btn-normal" id="ll-save">保存</button>
         <button type="button" class="btn-sm" data-close>取消</button>
       </div>
     </div>`;
-  const close = () => mask.remove();
+  document.body.appendChild(mask);
+  const snap = () => ({
+    name: mask.querySelector("#ll-name")?.value || "",
+    tags: mask.querySelector("#ll-tags")?.value || "",
+  });
+  const initial = snap();
+  const close = () => {
+    const now = snap();
+    if ((now.name !== initial.name || now.tags !== initial.tags)
+      && !confirm("有未保存的修改，确定关闭？")) return;
+    mask.remove();
+  };
   mask.addEventListener("click", (e) => {
     if (e.target === mask) close();
   });
@@ -7718,8 +7785,7 @@ function localLibraryModalShell(title, innerHtml) {
     }
   });
   mask.querySelector("[data-close]").addEventListener("click", close);
-  document.body.appendChild(mask);
-  const first = mask.querySelector("input, select, textarea, button");
+  const first = mask.querySelector("#ll-name, input, select, textarea, button");
   if (first) first.focus();
   return mask;
 }
@@ -7733,7 +7799,7 @@ async function openLocalLibraryModal(slug) {
     flash("加载用户失败: " + err.message, "error");
     return;
   }
-  const aclHtml = aclChecksHtml(lib.acl_usernames || [], "ll-acl-list", "data-ll-user");
+  const aclHtml = aclPickerHtml(lib.acl_usernames || [], "ll-acl-list");
   const mask = localLibraryModalShell(`编辑本地库：${escapeHtml(lib.name)}`, `
     <label class="form-label">库名
       <input id="ll-name" class="form-control" maxlength="80" value="${escapeHtml(lib.name)}">
@@ -7742,8 +7808,10 @@ async function openLocalLibraryModal(slug) {
       <input id="ll-tags" class="form-control" value="${escapeHtml((lib.tags || []).join(", "))}" placeholder="研报, 中金">
     </label>
     <p class="muted">改标签后保存可立刻扫描，写入库内文档。</p>
-    <p class="form-label">权限控制（不勾选则仅管理员）</p>
+    <p class="form-label">权限控制（添加或移除即时生效）</p>
     ${aclHtml}`);
+  const picker = mask.querySelector(".ima-acl-picker");
+  if (picker) picker.dataset.groupId = `local-${slug}`;
   mask.querySelector("#ll-save").addEventListener("click", () => saveLocalLibraryModal(slug, mask, lib.tags || []));
 }
 
@@ -7751,9 +7819,6 @@ async function saveLocalLibraryModal(slug, mask, previousTags) {
   const btn = mask.querySelector("#ll-save");
   const name = mask.querySelector("#ll-name").value.trim();
   const tags = splitListCsv(mask.querySelector("#ll-tags").value);
-  const usernames = [...mask.querySelectorAll("#ll-acl-list [data-ll-user]:checked")]
-    .map((el) => el.dataset.llUser)
-    .filter(Boolean);
   if (!name) {
     flash("库名不能为空", "error");
     return;
@@ -7761,16 +7826,10 @@ async function saveLocalLibraryModal(slug, mask, previousTags) {
   const tagsChanged = tags.slice().sort().join("\0") !== [...previousTags].map(String).sort().join("\0");
   if (btn) btn.disabled = true;
   try {
-    await Promise.all([
-      api(`/api/admin/ima-local-libraries/${encodeURIComponent(slug)}`, {
-        method: "PUT",
-        body: JSON.stringify({ name, tags }),
-      }),
-      api(`/api/admin/ima-collector/groups/${encodeURIComponent(`local-${slug}`)}/acl`, {
-        method: "PUT",
-        body: JSON.stringify({ usernames }),
-      }),
-    ]);
+    await api(`/api/admin/ima-local-libraries/${encodeURIComponent(slug)}`, {
+      method: "PUT",
+      body: JSON.stringify({ name, tags }),
+    });
     mask.remove();
     flash("已保存本地库设置");
     await loadLocalLibraries(true);
@@ -11656,6 +11715,16 @@ $("#btn-back").addEventListener("click", () => {
 });
 // 本地库卡片按钮：slug 来自存储机目录名，用 data 属性委托而非内联 onclick（防 JS 注入）
 document.addEventListener("click", (e) => {
+  const add = e.target.closest("[data-acl-add]");
+  if (add) {
+    addAclUser(add.getAttribute("data-acl-add"), add.closest(".ima-acl-picker"));
+    return;
+  }
+  const remove = e.target.closest("[data-acl-remove]");
+  if (remove) {
+    removeAclUser(remove.getAttribute("data-acl-remove"), remove.closest(".ima-acl-picker"));
+    return;
+  }
   const edit = e.target.closest("[data-ll-edit]");
   if (edit) {
     openLocalLibraryModal(edit.dataset.llEdit);

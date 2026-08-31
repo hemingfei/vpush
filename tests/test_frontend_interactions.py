@@ -2117,10 +2117,12 @@ def test_ima_collector_acl_granted_via_separate_put():
     assert "谁能阅读" not in knowledge
     assert "权限控制" in knowledge
     assert 'id="ima-group-acl"' in knowledge
-    assert "filterAclList" in src
+    assert "filterAclSuggest" in src
+    assert "ima-acl-chip" in src
     assert "ima-acl-search" in src
     assert "saveImaGroupAcl" in src
     assert "/groups/" in _fn_body("saveImaGroupAcl")
+    assert 'id="ima-acl-save"' not in knowledge
     assert "s.ima_collector" in knowledge
     assert "initImaMountState" in knowledge
 
@@ -2411,11 +2413,13 @@ def test_knowledge_settings_p1_p2_control_density():
     assert "<details open" not in card
     assert "details.cicc-collect" in card or 'class="cicc-collect"' in card
     modal = _fn_body("openLocalLibraryModal")
-    assert "data-ll-user" in modal
+    assert "aclPickerHtml" in modal
+    assert "data-acl-remove" in _fn_body("aclChipHtml")
     assert 'id="ll-users"' not in modal
     save = _fn_body("saveLocalLibraryModal")
     assert "现在扫描以应用到库内文档" in save
-    assert "[data-ll-user]:checked" in save
+    assert "[data-ll-user]:checked" not in save
+    assert "ima-collector/groups" not in save
 
 
 def test_ima_reader_nav_requires_matching_snapshot_route():
@@ -3346,9 +3350,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=251"' in html
-    assert 'src="/app.js?v=352"' in html
-    assert 'dav-shell-v221' in sw
+    assert 'href="/style.css?v=252"' in html
+    assert 'src="/app.js?v=353"' in html
+    assert 'dav-shell-v222' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
