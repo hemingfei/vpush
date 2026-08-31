@@ -5875,6 +5875,7 @@ function setImaGroupInterval(event, button) {
   imaMountState.revision += 1;
   imaMountState.collectorRevision += 1;
   imaMountState.dirty = true;
+  renderImaCollectorDirtyState();
   const draft = rememberImaCollectorDraft();
   if (imaMountState.saveOwner) imaMountState.saveOwner.liveSnapshot = draft;
   const focus = imaFocusSnapshot(button);
@@ -5893,6 +5894,27 @@ function renderImaMountGroups() {
   if (count) count.textContent = `${groups.length} 个`;
   renderImaSelectedGroup();
   renderImaFolderTree(imaMountState.selectedGroupId);
+  renderImaCollectorDirtyState();
+}
+
+function renderImaCollectorDirtyState() {
+  const bar = $("#ima-collector-savebar");
+  if (!bar) return;
+  bar.hidden = !(imaMountState.dirty || imaMountState.collectorDirty);
+}
+
+function discardImaCollectorChanges() {
+  if (!confirm("有未保存的采集配置修改，确定放弃？")) return;
+  imaMountState.saveOwner = null;
+  imaMountState.collectorDraft = null;
+  imaMountState.collectorDraftRevision = "";
+  imaMountState.collectorDirty = false;
+  imaMountState.dirty = false;
+  imaMountState.collectorConfirmedRevision = "";
+  imaMountState.collectorConfirmedLiveRevision = -1;
+  imaMountState.collectorConfirmedMountRevision = -1;
+  renderImaCollectorDirtyState();
+  loadAdminKnowledge(routeRenderSeq);
 }
 
 function imaFolderAncestorSelected(groupId, folderId) {
@@ -6355,6 +6377,7 @@ function toggleImaFolder(input) {
   imaMountState.revision += 1;
   imaMountState.collectorRevision += 1;
   imaMountState.dirty = true;
+  renderImaCollectorDirtyState();
   const draft = rememberImaCollectorDraft();
   if (imaMountState.saveOwner) imaMountState.saveOwner.liveSnapshot = draft;
   renderImaMountGroups();
@@ -7022,12 +7045,16 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
             </div>
           </div>
         </div>
-        <div class="cfg-foot ima-collector-foot">
-          <div class="ima-collector-foot-main">
-            <div id="ima-sync-progress">${imaCollectorProgressHtml(imaCollector)}</div>
-            <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
+        <div class="ima-collector-runtime">
+          <div id="ima-sync-progress">${imaCollectorProgressHtml(imaCollector)}</div>
+          <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
+        </div>
+        <div class="ima-collector-savebar" id="ima-collector-savebar" hidden>
+          <span class="ima-unsaved-status"><span aria-hidden="true"></span>有未保存的采集配置修改</span>
+          <div class="toolbar">
+            <button type="button" class="btn-ghost" id="ima-collector-discard" onclick="discardImaCollectorChanges()">放弃修改</button>
+            <button type="button" class="btn-normal" id="ima-collector-save"${imaMountState.saveOwner ? " disabled" : ""} onclick="saveImaCollector()">保存采集配置</button>
           </div>
-          <div class="toolbar"><button type="button" class="btn-normal" id="ima-collector-save"${imaMountState.saveOwner ? " disabled" : ""} onclick="saveImaCollector()">保存采集配置</button></div>
         </div>
       </section>
       <section class="section-panel ks-panel" data-panel="zsxq">
@@ -8645,8 +8672,11 @@ function applyImaCollectorProgress(status) {
   if (progress) progress.innerHTML = imaCollectorProgressHtml(status);
   const btn = $("#ima-sync-btn");
   if (btn && document.body.contains(btn)) btn.disabled = !!status?.running;
+  const text = imaCollectorStatusText(status);
   const target = $("#ima-collector-status");
-  if (target) target.textContent = imaCollectorStatusText(status);
+  if (target) target.textContent = text;
+  const selected = $("#ima-selected-group-state");
+  if (selected) selected.textContent = text;
 }
 
 function startImaProgressPoll() {

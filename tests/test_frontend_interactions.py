@@ -4312,6 +4312,37 @@ def test_ima_discovery_success_releases_only_its_owned_button():
     assert "const currentButton = $(\"#ima-discover-btn\")" in finally_block
 
 
+def test_ima_collector_dirty_bar_excludes_acl_and_can_discard():
+    src = APP_JS.read_text()
+    knowledge = _fn_body("loadAdminKnowledge")
+    dirty = _fn_body("renderImaCollectorDirtyState")
+    discard = _fn_body("discardImaCollectorChanges")
+    progress = _fn_body("applyImaCollectorProgress")
+    savebar = knowledge[knowledge.index('id="ima-collector-savebar"'):knowledge.index("</section>", knowledge.index('id="ima-collector-savebar"'))]
+    runtime = knowledge[knowledge.index("ima-collector-runtime"):knowledge.index("ima-collector-savebar")]
+
+    assert 'id="ima-collector-savebar" hidden' in knowledge
+    assert 'id="ima-collector-discard"' in savebar
+    assert 'id="ima-collector-save"' in savebar
+    assert knowledge.count('id="ima-collector-save"') == 1
+    assert 'id="ima-sync-progress"' in runtime
+    assert 'id="ima-collector-status"' in runtime
+    assert "bar.hidden = !(imaMountState.dirty || imaMountState.collectorDirty)" in dirty
+    assert "renderImaCollectorDirtyState()" in _fn_body("renderImaMountGroups")
+    assert "renderImaCollectorDirtyState()" in _fn_body("setImaGroupInterval")
+    assert "renderImaCollectorDirtyState()" in _fn_body("toggleImaFolder")
+    assert "renderImaCollectorDirtyState" not in _fn_body("saveImaGroupAcl")
+    assert "renderImaCollectorDirtyState" not in _fn_body("addAclUser")
+    assert "renderImaCollectorDirtyState" not in _fn_body("removeAclUser")
+    assert "saveImaGroupAcl" not in dirty
+    assert "ima-selected-group-state" in progress
+    assert "confirm(" in discard
+    assert "collectorDraft = null" in discard
+    assert "collectorDraftRevision = \"\"" in discard
+    assert "loadAdminKnowledge(routeRenderSeq)" in discard
+    assert src.count("function discardImaCollectorChanges") == 1
+
+
 def test_ima_collector_save_restores_focus_only_when_original_focus_survives():
     """保存期间用户切换到其他控件后，旧保存回调不得抢回焦点。"""
     save = _fn_body("saveImaCollector")
