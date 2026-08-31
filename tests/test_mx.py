@@ -63,7 +63,7 @@ def test_missing_id_different_content_different_key():
 
 
 def test_unparsable_message_dropped_not_json_dumped():
-    """解析不出文本/图片的消息直接丢弃，不能把整包 JSON 当正文推送。"""
+    """解析不出文本/图片/文件的消息直接丢弃，不能把整包 JSON 当正文推送。"""
     db = make_db()
     fetcher = make_fetcher(db)
     kol = make_kol(db)
@@ -147,11 +147,13 @@ def test_file_message_no_url_ext_file_name_ext_respected():
         "createtime": 1700000000000,
     }
     post = fetcher._parse_message_to_post(raw, kol)
-    assert post is None
+    assert post is not None
+    assert post.content == "[文件]"
+    assert not post.images
 
 
-def test_file_message_non_image_still_dropped():
-    """file 消息不是图片格式（如 pdf）时维持原行为：解析不出内容则丢弃。"""
+def test_file_message_non_image_kept_as_attachment():
+    """file 消息不是图片格式（如 pdf）时保留消息并合成 [文件] 占位正文，不再整条丢弃。"""
     db = make_db()
     fetcher = make_fetcher(db)
     kol = make_kol(db)
@@ -162,7 +164,40 @@ def test_file_message_non_image_still_dropped():
         "createtime": 1700000000000,
     }
     post = fetcher._parse_message_to_post(raw, kol)
-    assert post is None
+    assert post is not None
+    assert post.content == "[文件]"
+
+
+def test_pure_voice_message_kept_with_placeholder():
+    """纯语音消息（只有 file 无文字）不能整条丢弃：合成 [语音] 占位正文。"""
+    db = make_db()
+    fetcher = make_fetcher(db)
+    kol = make_kol(db)
+    raw = {
+        "id": 16,
+        "rid": 101,
+        "msg": '[{"type": "file", "url": "https://cdn.test/a.mp3", "name": "点击播放"}]',
+        "createtime": 1700000000000,
+    }
+    post = fetcher._parse_message_to_post(raw, kol)
+    assert post is not None
+    assert post.content == "[语音]"
+
+
+def test_text_with_pdf_file_keeps_text():
+    """文字 + PDF 附件的消息：正文保留文字，消息不丢。"""
+    db = make_db()
+    fetcher = make_fetcher(db)
+    kol = make_kol(db)
+    raw = {
+        "id": 17,
+        "rid": 101,
+        "msg": '[{"type": "text", "msg": "看报告"}, {"type": "file", "url": "https://img.test/doc.pdf", "name": "文档"}]',
+        "createtime": 1700000000000,
+    }
+    post = fetcher._parse_message_to_post(raw, kol)
+    assert post is not None
+    assert post.content == "看报告"
 
 
 def test_json_encoded_plain_string_msg():

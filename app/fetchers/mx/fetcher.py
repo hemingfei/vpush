@@ -30,10 +30,12 @@ ROOM_CACHE_MISS_TTL_SECONDS = 60
 
 # file 消息可能是平台把截图/图片当文件发送（如钉钉转存图），按图片处理的判定：
 # URL 带图片扩展名，或 URL 完全没有扩展名（转存图常不带格式后缀，此时参考文件名
-# 扩展名兜底）；URL 带其他扩展名（.pdf/.zip 等）视为真实文件，忽略
+# 扩展名兜底）；URL 带其他扩展名（.pdf/.zip 等）视为真实文件，走附件保留
 IMAGE_FILE_EXT_RE = re.compile(r"\.(png|jpe?g|gif|webp|bmp|avif)$", re.IGNORECASE)
 # 任意文件扩展名（2-5 位，避免把「v1.2」这类版本号尾巴当成扩展名）
 ANY_FILE_EXT_RE = re.compile(r"\.[A-Za-z0-9]{2,5}$")
+# 音频扩展名：纯语音消息合成「[语音]」占位正文时区分文件类型用
+AUDIO_EXT_RE = re.compile(r"\.(mp3|m4a|aac|wav|ogg|oga|opus|amr|flac)$", re.IGNORECASE)
 
 
 def looks_like_image_url(url: str, name: str = "") -> bool:
@@ -260,10 +262,11 @@ class MxFetcher(Fetcher):
 
             # 尝试多种方式获取 msg 字段
             msg_field = raw_msg.get("msg") or raw_msg.get("message") or ""
-            content, images = self._parse_msg_content(msg_field)
+            content, images, files = self._parse_msg_content(msg_field)
 
-            # 解析不出文本/图片的消息直接丢弃：把原始 JSON 整包当正文入库会变成垃圾推送
-            if not content and not images:
+            # 完全解析不出文本/图片/文件的消息才丢弃：把原始 JSON 整包当正文入库
+            # 会变成垃圾推送；纯文件消息（语音/PDF 等）已在解析时合成占位正文保留
+            if not content and not images and not files:
                 logger.debug("MX message without parsable content dropped: %s", str(raw_msg)[:200])
                 return None
 
@@ -335,19 +338,22 @@ class MxFetcher(Fetcher):
 
     def _parse_msg_content(self, msg_str):
         """
-        解析 msg 字段，返回 (content, images)。
-        
+        解析 msg 字段，返回 (content, images, files)。
+
         Args:
             msg_str: msg 字段的 JSON 字符串
-            
+
         Returns:
-            (content, images) 元组
+            (content, images, files) 元组。files 是非图片附件（语音/PDF 等）
+            的 [{url, name}] 列表，原始 msg 已随 detail 入库，前端从
+            detail.msg 自行解析渲染播放按钮/附件链接，这里只负责占位正文
         """
         if not msg_str:
-            return "", []
+            return "", [], []
 
         content_parts = []
         images = []
+        files = []
 
         try:
             msg_list = json.loads(msg_str)
@@ -367,6 +373,8 @@ class MxFetcher(Fetcher):
                             url = (item.get("url") or "").strip()
                             if url and looks_like_image_url(url, item.get("name") or ""):
                                 self._append_image(images, url)
+                            elif url:
+                                files.append({"url": url, "name": item.get("name") or ""})
             elif isinstance(msg_list, str):
                 # msg 字段是 JSON 编码的纯字符串
                 content_parts.append(msg_list)
@@ -375,7 +383,21 @@ class MxFetcher(Fetcher):
             content_parts.append(msg_str)
 
         content = "\n".join(content_parts)
-        return normalize_mx_text(content), images[:4]
+        # 纯文件消息（如语音）没有文字：合成占位正文保住消息不被丢弃，
+        # 推送渠道和帖卡也不至于空正文
+        if not content and files:
+            if all(self._file_is_audio(f) for f in files):
+                content = "[语音]"
+            else:
+                content = "[文件]"
+        return normalize_mx_text(content), images[:4], files
+
+    @staticmethod
+    def _file_is_audio(file_item) -> bool:
+        """按 URL path / 文件名扩展名判断附件是否音频（与前端播放按钮口径一致）。"""
+        url_path = urlparse(str(file_item.get("url") or "")).path
+        name = str(file_item.get("name") or "")
+        return bool(AUDIO_EXT_RE.search(url_path) or AUDIO_EXT_RE.search(name))
 
     def _append_image(self, images, url):
         """图片统一走本地缓存，下载失败或内存库时保留原 URL。"""

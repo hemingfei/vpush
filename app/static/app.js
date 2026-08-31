@@ -3870,6 +3870,8 @@ function renderLiveFeed() {
 function renderTimelineFeed() {
   const feed = $("#feed");
   if (!feed) return;
+  // 全量重绘会重建所有卡片，正在播放的语音先停掉，避免孤儿音频继续出声
+  if (_mxAudioBtn && feed.contains(_mxAudioBtn)) stopMxAudio();
   const posts = _tlPosts;
   const visibleIds = new Set(posts.map((p) => p.id));
   for (const id of [..._tlExpanded]) {
@@ -3933,6 +3935,8 @@ function tlTogglePost(id) {
     wrap.innerHTML = postCard(post).trim();
     const next = wrap.firstElementChild;
     if (next) {
+      // 换卡会丢掉正在播放的语音按钮，先停掉避免出现"无声播放"的孤儿音频
+      if (_mxAudioBtn && card.contains(_mxAudioBtn)) stopMxAudio();
       card.replaceWith(next);
       return;
     }
@@ -3989,6 +3993,49 @@ function postFiles(post) {
     try { d = JSON.parse(d); } catch { return []; }
   }
   return Array.isArray(d?.files) ? d.files.filter((f) => f && (f.url || f.name)) : [];
+}
+
+// MX 附件消息：MX 帖的 detail 是入库时的原始消息，msg 字段是 JSON 数组字符串。
+// type=file 的项按后端 looks_like_image_url 同口径拆分：图片类已由后端转 images
+// 不重复显示，其余（语音/PDF 等）作为附件——音频渲染播放按钮，其他渲染直链
+const MX_IMG_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|avif)$/i;
+const MX_ANY_EXT_RE = /\.[A-Za-z0-9]{2,5}$/;
+const MX_AUDIO_EXT_RE = /\.(mp3|m4a|aac|wav|ogg|oga|opus|amr|flac)$/i;
+
+function mxLooksLikeImage(url, name) {
+  const urlPath = String(url || "").split(/[?#]/)[0];
+  const namePath = String(name || "").split(/[?#]/)[0];
+  if (MX_IMG_EXT_RE.test(urlPath)) return true;
+  if (MX_ANY_EXT_RE.test(urlPath)) return false;
+  if (MX_ANY_EXT_RE.test(namePath)) return MX_IMG_EXT_RE.test(namePath);
+  return true;
+}
+
+function mxAttachments(post) {
+  if (post.platform !== "mx") return [];
+  let detail = post.detail;
+  if (typeof detail === "string" && detail) {
+    try { detail = JSON.parse(detail); } catch { return []; }
+  }
+  if (!detail || typeof detail !== "object") return [];
+  let msgList = detail.msg;
+  if (typeof msgList === "string" && msgList) {
+    try { msgList = JSON.parse(msgList); } catch { return []; }
+  }
+  if (!Array.isArray(msgList)) return [];
+  return msgList
+    .filter((item) => item && item.type === "file" && /^https?:\/\//i.test(String(item.url || "").trim()))
+    .map((item) => {
+      const url = String(item.url).trim();
+      const name = String(item.name || "");
+      if (mxLooksLikeImage(url, name)) return null; // 图片类已由后端转 images
+      return {
+        url,
+        name,
+        audio: MX_AUDIO_EXT_RE.test(url.split(/[?#]/)[0]) || MX_AUDIO_EXT_RE.test(name),
+      };
+    })
+    .filter(Boolean);
 }
 
 function combinationDetailHtml(post) {
@@ -4078,6 +4125,14 @@ function postCard(post) {
             ? `<a class="p-file" href="${escapeHtml(href)}" target="_blank" rel="noopener">📎 ${escapeHtml(f.name || "附件")}</a>`
             : `<span class="p-file">📎 ${escapeHtml(f.name || "附件")}</span>`;
         }).join("")}
+      ${mxAttachments(post).map((f) => f.audio
+        ? `<div class="mx-audio-row">
+            <button type="button" class="mx-audio-btn" data-url="${escapeHtml(f.url)}" onclick="toggleMxAudio(this)">
+              <span class="mx-audio-icon" aria-hidden="true">▶</span>
+              <span class="mx-audio-label">${escapeHtml(f.name || "点击播放")}</span>
+            </button>
+          </div>`
+        : `<a class="p-file" href="${escapeHtml(f.url)}" target="_blank" rel="noopener">📎 ${escapeHtml(f.name || "附件")}</a>`).join("")}
       <div class="p-meta">
         ${post.category_name ? `<span class="cat">${escapeHtml(post.category_name)}</span>` : ""}
         ${post.post_type === "reply" ? `<span class="cat">回复</span>` : ""}
@@ -4143,6 +4198,62 @@ function closeMxRawModal() {
   if (!mask) return;
   document.removeEventListener("keydown", mask._onKey, true);
   mask.remove();
+}
+
+// ---------- MX 语音播放 ----------
+// 全局同一时刻只播一条语音：点击按钮用 <audio> 直接拉 MX CDN 音频流（源公开可访问、
+// 支持 Range，无需代理）；再点一次停止，点其他语音自动停掉上一条
+let _mxAudio = null;
+let _mxAudioBtn = null;
+
+function _mxPaintAudioBtn(btn, icon, label, cls = "") {
+  if (!btn) return;
+  btn.classList.remove("loading", "playing");
+  if (cls) btn.classList.add(cls);
+  const iconEl = btn.querySelector(".mx-audio-icon");
+  const labelEl = btn.querySelector(".mx-audio-label");
+  if (iconEl) iconEl.textContent = icon;
+  if (labelEl) labelEl.textContent = label;
+}
+
+function stopMxAudio() {
+  const audio = _mxAudio;
+  const btn = _mxAudioBtn;
+  _mxAudio = null;
+  _mxAudioBtn = null;
+  if (audio) {
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load(); // 释放未播完的下载连接
+  }
+  _mxPaintAudioBtn(btn, "▶", "点击播放");
+}
+
+function toggleMxAudio(btn) {
+  const url = btn.dataset.url || "";
+  if (!/^https?:\/\//i.test(url)) return;
+  if (_mxAudioBtn === btn) { stopMxAudio(); return; }
+  stopMxAudio();
+  const audio = new Audio(url);
+  _mxAudio = audio;
+  _mxAudioBtn = btn;
+  _mxPaintAudioBtn(btn, "⟳", "加载中…", "loading");
+  const isCurrent = () => _mxAudio === audio;
+  audio.addEventListener("playing", () => {
+    if (isCurrent()) _mxPaintAudioBtn(btn, "⏸", "播放中…", "playing");
+  });
+  audio.addEventListener("ended", () => {
+    if (isCurrent()) stopMxAudio();
+  });
+  const fail = () => {
+    // 主动 stop 时 removeAttribute+load 会连带触发 error，此时不算失败
+    if (!isCurrent()) return;
+    stopMxAudio();
+    _mxPaintAudioBtn(btn, "✕", "播放失败");
+    setTimeout(() => { if (_mxAudioBtn !== btn) _mxPaintAudioBtn(btn, "▶", "点击播放"); }, 2000);
+  };
+  audio.addEventListener("error", fail);
+  audio.play().catch(fail);
 }
 
 // ---------- 搜索 ----------
