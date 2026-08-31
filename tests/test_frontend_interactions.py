@@ -4244,6 +4244,21 @@ def test_ima_mount_uses_master_detail_and_selected_group_controls():
     assert 'aria-selected="${selected}"' in row
 
 
+def test_ima_folder_panel_is_collapsed_and_preserves_lazy_tree():
+    src = APP_JS.read_text()
+    knowledge = _fn_body("loadAdminKnowledge")
+    toggle = _fn_body("toggleImaFolderPanel")
+
+    assert "folderPanelGroupId" in src
+    assert 'id="ima-folder-panel-toggle"' in knowledge
+    assert 'aria-expanded="false"' in knowledge
+    assert 'id="ima-folder-panel"' in knowledge
+    assert "hidden" in knowledge
+    assert "imaMountState.folderPanelGroupId" in toggle
+    assert "renderImaFolderTree" in toggle
+    assert "loadImaFolderChildren" not in toggle
+
+
 def test_ima_mount_ui_preserves_draft_and_uses_safe_dynamic_text():
     src = APP_JS.read_text()
     for name in (

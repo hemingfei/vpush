@@ -123,6 +123,7 @@ const state = {
 const imaMountState = {
   groups: [],
   selectedGroupId: "",
+  folderPanelGroupId: "",
   drafts: new Map(),
   folders: new Map(),
   parents: new Map(),
@@ -5798,6 +5799,7 @@ function initImaMountState(groups, preserve = false) {
   if (!preserve && !imaMountState.saveOwner) imaMountState.revision += 1;
   imaMountState.dirty = preserve ? oldDirty : false;
   if (!preserve) imaMountState.discoveryEntered = false;
+  if (!preserve) imaMountState.folderPanelGroupId = "";
   const available = new Set(imaMountState.groups.map((group) => String(group.id)));
   for (const group of imaMountState.groups) {
     const previous = preserve ? oldDrafts.get(String(group.id)) : null;
@@ -6002,9 +6004,24 @@ function imaFolderOrphansHtml(groupId, rootId) {
     </label>`).join("")}</div>`;
 }
 
+function toggleImaFolderPanel(button) {
+  const groupId = String(imaMountState.selectedGroupId || "");
+  imaMountState.folderPanelGroupId = button?.getAttribute("aria-expanded") === "true" ? "" : groupId;
+  renderImaFolderTree(groupId);
+}
+
 function renderImaFolderTree(groupId) {
   const tree = $("#ima-folder-tree");
   if (!tree) return;
+  const open = !!groupId && imaMountState.folderPanelGroupId === String(groupId);
+  const panel = $("#ima-folder-panel");
+  const toggle = $("#ima-folder-panel-toggle");
+  const summary = $("#ima-folder-summary");
+  const selectedCount = groupId ? imaMountDraft(String(groupId)).size : 0;
+  if (toggle) toggle.setAttribute("aria-expanded", String(open));
+  if (panel) panel.hidden = !open;
+  if (summary) summary.textContent = selectedCount ? `已选 ${selectedCount} 个 · 父目录包含新子目录` : "未选择文件夹";
+  if (!open) return;
   const group = imaMountGroup(groupId);
   const title = $("#ima-folder-title");
   const count = $("#ima-folder-count");
@@ -6016,7 +6033,6 @@ function renderImaFolderTree(groupId) {
   }
   const groupKey = String(group.id);
   const rootId = String(group.root_folder_id || "");
-  const selectedCount = imaMountDraft(groupKey).size;
   if (title) title.textContent = group.name || groupKey;
   if (count) count.textContent = `${selectedCount} 个文件夹`;
   const rootKey = imaMountCacheKey(groupKey, rootId);
