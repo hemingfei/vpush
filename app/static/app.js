@@ -1753,7 +1753,7 @@ async function loadImaPdf(mediaId, readerSeq) {
       if (status) status.remove();
       panel.hidden = false;
       panel.removeAttribute("aria-busy");
-      frame.src = window._imaPdfUrl;
+      frame.src = `${window._imaPdfUrl}#view=FitH&zoom=page-width`;
       frame.hidden = false;
       frame.addEventListener("error", () => showImaPdfFail(mediaId, seq, readerSeq), { once: true });
     }
