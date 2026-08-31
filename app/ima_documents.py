@@ -6,7 +6,6 @@ import hashlib
 import json
 import logging
 import os
-import glob
 import re
 import tempfile
 import threading
@@ -1398,21 +1397,27 @@ def apply_title_overrides(
 
 
 def load_title_overrides(archive_root: Path | str) -> dict[str, str]:
-    """各组目录下 titles.json（storage 机标题提取器产物）→ 展示名覆盖。"""
+    """各组目录下 titles.json（storage 机标题提取器产物）→ 展示名覆盖。
+
+    只 stat 顶层 ``<group>/titles.json``，不 glob 进 PDF 目录（NFS 上会把同步拖成数秒）。
+    """
     overrides: dict[str, str] = {}
+    root = str(archive_root)
     try:
-        paths = glob.glob(os.path.join(str(archive_root), "*", "titles.json"))
-        paths += glob.glob(os.path.join(str(archive_root), "*", "__*", "titles.json"))
+        names = os.listdir(root)
     except OSError:
         return overrides
-    for path in paths:
+    for name in names:
+        path = os.path.join(root, name, "titles.json")
         try:
+            if not os.path.isfile(path):
+                continue
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
-            if isinstance(data, dict):
-                overrides.update({str(k): str(v) for k, v in data.items() if v})
         except (OSError, ValueError):
             continue
+        if isinstance(data, dict):
+            overrides.update({str(k): str(v) for k, v in data.items() if v})
     return overrides
 
 
@@ -3525,6 +3530,7 @@ class ImaDocumentService:
         cfg: ImaDocumentConfig,
         group: ImaGroupConfig,
         state: dict[str, dict[str, Any]],
+        title_overrides: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         try:
             client = ImaPureClient(cfg, group=group)
@@ -3544,7 +3550,8 @@ class ImaDocumentService:
             downloaded=0,
             failed=0,
         )
-        title_overrides = load_title_overrides(self.store.archive_root)
+        if title_overrides is None:
+            title_overrides = load_title_overrides(self.store.archive_root)
         listed = None
         used_listing_cache = False
         last_exc: TypeError | None = None
@@ -3819,11 +3826,14 @@ class ImaDocumentService:
             group_errors: dict[str, str] = {}
             last_error = discovery_error
             succeeded_groups = 0
+            title_overrides = load_title_overrides(self.store.archive_root)
             for group in enabled_groups:
                 try:
                     self._mark_group_runtime(group.id, started=True)
                     try:
-                        group_result = self._sync_group(cfg, group, state)
+                        group_result = self._sync_group(
+                            cfg, group, state, title_overrides=title_overrides
+                        )
                     finally:
                         self._mark_group_runtime(group.id, started=False)
                     if group_result.get("skipped"):

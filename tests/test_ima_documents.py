@@ -31,6 +31,7 @@ from app.ima_documents import (
     ImaDocumentStore,
     ImaGroupConfig,
     ImaPureClient,
+    load_title_overrides,
     _clamp_group_interval,
     _safe_error,
     decrypt_body,
@@ -3209,6 +3210,16 @@ def test_manifest_skips_cached_child_when_parent_counts_match():
     third = client.manifest(listing_cache=cache)
     assert {item["media_id"] for item in third} == {"pdf_root", "pdf_child", "pdf_new"}
     assert "child" in calls
+
+
+def test_load_title_overrides_only_reads_group_root_file(tmp_path):
+    group = tmp_path / "7476__abc"
+    group.mkdir()
+    (group / "titles.json").write_text('{"slug": "Real Title"}', encoding="utf-8")
+    nested = group / "nested"
+    nested.mkdir()
+    (nested / "titles.json").write_text('{"other": "Ignored"}', encoding="utf-8")
+    assert load_title_overrides(tmp_path) == {"slug": "Real Title"}
 
 
 def test_manifest_applies_title_overrides_on_cached_child_records():
