@@ -2930,16 +2930,15 @@ def test_ima_document_counts_use_real_total_not_page_plus():
     assert 'hasMore ? "+" : ""' not in reader
 
 
-def test_ima_local_library_pdf_does_not_embed_chrome_frame():
-    """本地库 PDF（中金等）不内嵌 Chrome PDF 插件，避免同页卡死。"""
-    src = APP_JS.read_text()
+def test_ima_pdf_preview_is_inline_on_desktop():
+    """PC / 手机 Web 统一内嵌 iframe；右上角新标签作 iOS 逃生舱。"""
     reader = _fn_body("renderImaDocument")
     load = _fn_body("loadImaPdf")
-    assert "function imaInlinePdfFrame(" in src
-    assert "imaInlinePdfFrame(item.group_id || documentGroup)" in reader
-    assert 'startsWith("local-")' in src
-    assert "ima-pdf-phone-open" in reader
-    assert "打开预览" in reader
+    assert "function imaInlinePdfFrame(" not in APP_JS.read_text()
+    assert "ima-pdf-frame" in reader
+    assert "ima-pdf-phone-open" not in reader
+    assert "openImaPdfNewTab()" in reader
+    assert "ima-pdf-phone-open" not in load
     assert "signal: abort.signal" in load or "{ signal: abort.signal }" in load
 
 
@@ -3293,9 +3292,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=244"' in html
-    assert 'src="/app.js?v=342"' in html
-    assert 'dav-shell-v210' in sw
+    assert 'href="/style.css?v=245"' in html
+    assert 'src="/app.js?v=343"' in html
+    assert 'dav-shell-v211' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -4343,9 +4342,10 @@ def test_knowledge_desk_serves_phone_without_refusal():
     assert "grid-template-columns: 44px minmax(0, 1fr) 84px" in css
     # 同优先级后者胜：手机覆盖块必须声明在桌面规则之后，否则被覆盖回桌面网格
     assert css.index("知识库阅读台（手机）") > css.index("grid-template-columns: minmax(0, 1fr) auto")
-    # 手机阅读页：iframe 换成 blob 就绪后的「打开 PDF」大按钮
-    assert "ima-pdf-phone-open" in _fn_body("renderImaDocument")
-    assert "ima-pdf-phone-open" in _fn_body("loadImaPdf")
+    # 手机与 PC 同 iframe 预览；新标签按钮仍在工具栏
+    assert "ima-pdf-frame" in _fn_body("renderImaDocument")
+    assert "ima-pdf-phone-open" not in _fn_body("renderImaDocument")
+    assert "ima-pdf-phone-open" not in _fn_body("loadImaPdf")
     assert "ima-back-count" not in _fn_body("renderImaDocument")
     assert "ima-reader-download" not in _fn_body("renderImaDocument")
     # 遗留手机块不得再拉伸阅读工具栏按钮（曾把下载钮撑出屏）

@@ -1135,15 +1135,6 @@ img.pt-icon { display: block; object-fit: contain; }
 }
 .combo-cash b { color: var(--color-text-strong); font-variant-numeric: tabular-nums; }
 .combo-cash { color: var(--color-text-muted); font-size: var(--text-sm); }
-@media (max-width: 768px) {
-  .combo-action {
-    grid-template-columns: 3.5em minmax(0, 1fr);
-    row-gap: 2px; column-gap: 8px; padding: 7px 0;
-  }
-  .combo-action-cols { display: none; }
-  .combo-action-meta { grid-column: 2; justify-content: flex-start; gap: 10px; }
-  .combo-holdings { grid-template-columns: 1fr; }
-}
 /* ---------- 图片灯箱 ---------- */
 .lightbox {
   position: fixed; inset: 0; z-index: 300;
@@ -2261,6 +2252,13 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
 /* ---------- 手机端（≤768px）壳层 ---------- */
 @media (max-width: 768px) {
   .sidebar { display: none; }
+  .combo-action {
+    grid-template-columns: 3.5em minmax(0, 1fr);
+    row-gap: 2px; column-gap: 8px; padding: 7px 0;
+  }
+  .combo-action-cols { display: none; }
+  .combo-action-meta { grid-column: 2; justify-content: flex-start; gap: 10px; }
+  .combo-holdings { grid-template-columns: 1fr; }
   .bottom-nav { display: flex; }
   .theme-toggle-btn { display: inline-flex; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; }
   .icon-btn { width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; }
@@ -3080,12 +3078,6 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   min-height: 0;
   border: 0;
 }
-.ima-pdf-panel .ima-pdf-open {
-  width: calc(100% - 32px);
-  max-width: 280px;
-  min-height: 48px;
-  margin: auto;
-}
 .ima-reader-nav { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); border-top: var(--border-default); }
 .ima-reader-nav button { min-width: 0; min-height: 40px; padding: 0 16px; overflow: hidden; border: 0; background: var(--color-surface); color: var(--color-text-muted); font-size: var(--text-sm); font-weight: var(--font-weight-medium); text-overflow: ellipsis; white-space: nowrap; }
 .ima-reader-nav button:hover { background: var(--color-surface-soft); color: var(--color-accent-text); }
@@ -3229,7 +3221,6 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
     padding-left: 12px;
     padding-right: 12px;
   }
-  .ima-pdf-open { width: calc(100% - 32px); min-height: 48px; margin: 16px; }
 }
 
 .ima-source-stack { display: grid; gap: var(--space-5); }
