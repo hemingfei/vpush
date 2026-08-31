@@ -239,6 +239,22 @@ def test_summarize_daily_success_parses():
     assert summary.points[1].post_indexes == [1]
 
 
+def test_summarize_daily_parses_paragraph_citations_without_list_prefix():
+    """grok-4.6 常把要点写成带（[N]）的段落，没有 - / 1. 前缀。"""
+    client = httpx.Client(transport=httpx.MockTransport(_daily_handler(
+        "今日共 2 条动态，围绕降息与科技股。"
+        "美联储释放降息信号，科技股受益（[1]）"
+        "市场整体波动不大（[2]）"
+    )))
+    posts = [make_post(external_id=f"p{i}") for i in range(2)]
+    summary = summarize_daily(posts, make_config(), client=client)
+    assert summary is not None
+    assert "降息" in summary.overview
+    assert len(summary.points) == 2
+    assert summary.points[0].post_indexes == [0]
+    assert summary.points[1].post_indexes == [1]
+
+
 def test_summarize_daily_prompt_includes_rules():
     captured = {}
 
@@ -255,6 +271,7 @@ def test_summarize_daily_prompt_includes_rules():
     assert "100~150 字" in captured["system"]
     assert "大V" in captured["system"]
     assert "（[N]）" in captured["system"]
+    assert "以「- 」开头" in captured["system"]
     # 输入行带序号，模型可引用
     assert "1. [原帖][xueqiu] 张三：" in captured["user"]
 
