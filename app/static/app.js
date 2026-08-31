@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.116";
+const APP_VERSION = "1.12.117";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -8614,9 +8614,7 @@ async function triggerImaCollector() {
   try {
     const result = await api("/api/admin/ima-collector/sync", { method: "POST", body: JSON.stringify({ group_id: groupId }) });
     if (!routeStillActive(routeSeq)) return;
-    flash(result.status === "already_running"
-      ? "IMA 文档同步正在进行中"
-      : `已启动同步「${group?.name || groupId}」`);
+    flash(result.status === "already_running" ? "IMA 文档同步正在进行中" : `已启动同步「${group?.name || groupId}」`);
     const status = await api("/api/admin/ima-collector");
     if (!routeStillActive(routeSeq)) return;
     const target = $("#ima-collector-status");
