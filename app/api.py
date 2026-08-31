@@ -33,7 +33,7 @@ from fastapi import (
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from . import auth, wechat
+from . import auth, user_quota, wechat
 from .avatar_cache import cache_avatar
 from .bot_core import BIND_CODE_TTL
 from .db import _UNSET, ALLOWED_PLATFORMS, DB, days_until_purge, user_plain_secret
@@ -1427,6 +1427,54 @@ def create_api_router(
             raise HTTPException(status_code=403, detail="需要管理员权限")
         return user
 
+    def _quota_or_429(user: dict, bucket: str, period_start: int, limit: int, window_seconds: int, detail: str) -> None:
+        allowed, retry_after = db.consume_user_quota(
+            int(user["id"]), bucket, period_start, limit, window_seconds
+        )
+        if allowed:
+            return
+        raise HTTPException(
+            status_code=429,
+            detail=detail,
+            headers={"Retry-After": str(max(int(retry_after), 1))},
+        )
+
+    def _enforce_ima_list_quota(user: dict) -> None:
+        if user.get("is_admin"):
+            return
+        now = time.time()
+        _quota_or_429(
+            user,
+            user_quota.BUCKET_LIST_BURST,
+            user_quota.window_start(now, user_quota.IMA_LIST_BURST_SEC),
+            user_quota.IMA_LIST_BURST,
+            user_quota.IMA_LIST_BURST_SEC,
+            "刷新过于频繁，请稍后再试",
+        )
+
+    def _enforce_ima_file_quota(user: dict) -> None:
+        if user.get("is_admin"):
+            return
+        now = time.time()
+        _quota_or_429(
+            user,
+            user_quota.BUCKET_PDF_BURST,
+            user_quota.window_start(now, user_quota.IMA_PDF_BURST_SEC),
+            user_quota.IMA_PDF_BURST,
+            user_quota.IMA_PDF_BURST_SEC,
+            "阅读过于频繁，请稍后再试",
+        )
+        day_start = user_quota.shanghai_day_start(now)
+        day_seconds = 24 * 3600
+        _quota_or_429(
+            user,
+            user_quota.BUCKET_PDF_DAY,
+            day_start,
+            user_quota.IMA_PDF_DAY,
+            day_seconds,
+            "今日阅读已达上限，明天再看",
+        )
+
     # ---- 认证 ----
     @router.get("/version")
     def version_info():
@@ -2551,6 +2599,7 @@ def create_api_router(
         offset: int = 0,
         user: dict = Depends(get_current_user),
     ):
+        _enforce_ima_list_quota(user)
         groups = _readable_groups(user)
         group = group.strip()
         if group and group not in {group_config.id for group_config in groups}:
@@ -2686,6 +2735,7 @@ def create_api_router(
         group: str = Query("", max_length=128),
         user: dict = Depends(get_current_user),
     ):
+        _enforce_ima_file_quota(user)
         document = _ima_document(user, media_id, group)
         txt = _ima_archive_file(document, "txt")
         if txt is None or not txt.is_file():
@@ -2703,6 +2753,7 @@ def create_api_router(
         download: int = Query(0, ge=0, le=1),
         user: dict = Depends(get_current_user),
     ):
+        _enforce_ima_file_quota(user)
         document = _ima_document(user, media_id, group)
         pdf = _ima_archive_file(document, "pdf")
         if pdf is None or not pdf.is_file():
