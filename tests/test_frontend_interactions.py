@@ -1798,7 +1798,7 @@ def test_ima_config_uses_small_sync_icon_and_consistent_brand_case():
     assert '<h3 class="ima-source-title">IMA 凭证</h3>' not in stats
     assert "保存 IMA 凭证" not in stats
     assert "saveImaCredentials()" not in stats
-    assert ".ima-collector-foot .refresh-icon" in css
+    assert ".ima-selected-head .refresh-icon" in css
     assert "width: 16px" in css
     assert "height: 16px" in css
 
@@ -4288,14 +4288,25 @@ def test_ima_mount_ui_preserves_draft_and_uses_safe_dynamic_text():
     assert "renderImaMountGroups" not in render
 
 
-def test_ima_mount_css_stacks_at_800px_and_keeps_touch_targets():
+def test_ima_master_detail_css_matches_duty_console_and_mobile_contract():
     css = STYLE_CSS.read_text()
-    assert ".ima-mount-layout" in css
-    assert ".ima-folder-tree" in css
-    narrow = _media_block(css, "@media (max-width: 800px)")
+    desktop = css[css.index(".ima-mount-layout"):]
+    narrow = _media_block(css, "@media (max-width: 900px)", last=True)
+
+    assert "grid-template-columns: minmax(240px, 280px) minmax(0, 1fr)" in desktop
+    assert ".ima-mount-rail" in css
+    assert ".ima-mount-detail" in css
+    assert ".ima-detail-section" in css
+    assert ".ima-kb-select" in css
+    assert re.search(r"\.ima-kb-select\s*\{[^}]*display:\s*none", css)
     assert re.search(r"\.ima-mount-layout\s*\{[^}]*grid-template-columns:\s*1fr", narrow)
-    assert re.search(r"\.ima-mount-kb-row[^}]*min-height:\s*44px", css)
-    assert re.search(r"\.ima-folder-row[^}]*min-height:\s*44px", css)
+    assert re.search(r"\.ima-kb-list\s*\{[^}]*display:\s*none", narrow)
+    assert re.search(r"\.ima-kb-select\s*\{[^}]*display:\s*block", narrow)
+    assert "position: sticky" in narrow
+    assert "min-height: 44px" in css
+    for selector in (".ima-mount-layout", ".ima-mount-rail", ".ima-mount-detail", ".ima-detail-section"):
+        rule = css[css.index(selector):css.index("}", css.index(selector))]
+        assert "box-shadow" not in rule
 
 
 def test_ima_discovery_success_releases_only_its_owned_button():
