@@ -3956,9 +3956,10 @@ class DB:
             where_params,
         )
         group_counts = {row["group_id"]: int(row["n"]) for row in group_rows}
-        # 全库浏览不算日期/标签面：跨组 DISTINCT + JOIN 会扫两万行，拖死单进程 SQLite。
-        need_facets = len(groups) == 1 or bool(requested_day or requested_tag)
-        if need_facets:
+        # 日期 DISTINCT 全库会扫两万行；标签 JOIN 文档表生产实测 ~800ms。
+        # 全库只跳过日期面。标签改扫 ima_document_tags（按 group_id，约 17ms）。
+        need_day_facets = len(groups) == 1 or bool(requested_day or requested_tag)
+        if need_day_facets:
             days = [
                 row["day"]
                 for row in self._rows(
@@ -3967,6 +3968,9 @@ class DB:
                     where_params,
                 )
             ]
+        else:
+            days = []
+        if requested_day:
             tag_rows = self._rows(
                 "SELECT t.tag AS tag, COUNT(*) AS n FROM ima_document_tags t "
                 "JOIN ima_document_index d "
@@ -3974,10 +3978,14 @@ class DB:
                 f"WHERE {where_sql} GROUP BY t.tag ORDER BY n DESC, t.tag",
                 where_params,
             )
-            tag_counts = {row["tag"]: int(row["n"]) for row in tag_rows}
         else:
-            days = []
-            tag_counts = {}
+            tag_rows = self._rows(
+                "SELECT t.tag AS tag, COUNT(*) AS n FROM ima_document_tags t "
+                f"WHERE t.group_id IN ({', '.join('?' for _ in groups)}) "
+                "GROUP BY t.tag ORDER BY n DESC, t.tag",
+                groups,
+            )
+        tag_counts = {row["tag"]: int(row["n"]) for row in tag_rows}
         return {
             "items": items,
             "days": days,
