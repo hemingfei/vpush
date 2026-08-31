@@ -4216,7 +4216,17 @@ def test_sidebar_has_slim_toggle_matching_rail():
     assert 'localStorage.setItem(SIDEBAR_SLIM_KEY' in _fn_body("toggleSidebarSlim")
     assert "max-width: 900px" in _fn_body("toggleSidebarSlim")
     assert "html.sidebar-slim .sidebar { width: 68px" in css
-    rail = _media_block(css, "@media (max-width: 900px)", last=True)  # 2116 行的侧栏轨块，1298 是 tl-ima-entry
+    idx = 0
+    rail = ""
+    while True:
+        nxt = css.find("@media (max-width: 900px)", idx)
+        if nxt == -1:
+            break
+        block = _media_block(css[nxt:], "@media (max-width: 900px)")
+        if ".sidebar { width: 68px" in block:
+            rail = block
+            break
+        idx = nxt + 1
     assert ".sidebar { width: 68px" in rail
     assert "pointer-events: none" in rail
     assert "@media (max-width: 768px)" in css
