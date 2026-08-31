@@ -263,16 +263,18 @@ def _normalize_kol_request_input(platform: str, raw: str) -> tuple[str, str | No
     return "", f"不支持的平台: {platform}"
 
 
-def _parse_batch_kol_line(line: str, default_platform: str) -> tuple[str, str, str, str | None]:
+def _parse_batch_kol_line(line: str, default_platform: str = "") -> tuple[str, str, str, str | None]:
     """批量导入单行解析：返回 (platform, external_id, nickname, error)。
 
-    error 非空时本行失败。链接能识别出平台（雪球主页/组合/微博/X）则按识别结果
-    归一化；无法识别的 URL 或纯数字 UID 回退 default_platform；X 统一存 screen name。
+    error 非空时本行失败。只认链接/组合码能识别出的平台（雪球主页/组合/微博/X/
+    知识星球/ima）；纯数字 UID 或无法识别的 URL 不再回退默认平台。X 统一存 screen name。
+    例外：default_platform == "system"（系统 KOL 批量导入）时，昵称/整行直接作为外部 ID。
     """
     nickname = ""
     external_id = ""
     platform = ""
     parse_error = None
+    unrecognized = False
     for token in line.split():
         detected = _detect_platform_from_link(token)
         if detected:
@@ -281,31 +283,34 @@ def _parse_batch_kol_line(line: str, default_platform: str) -> tuple[str, str, s
                 parse_error = err
                 continue
             platform, external_id, parse_error = detected, ext, None
+            unrecognized = False
             continue
         if token.startswith(("http://", "https://")):
-            if not external_id:
-                external_id = token  # 无法识别的源地址，回退默认平台
+            if default_platform == "system" and not external_id:
+                external_id = token  # 系统 KOL：无法识别的源地址直接作为外部 ID
+            else:
+                unrecognized = True
             continue
-        if token.isdigit() and not external_id:
-            external_id = token
+        if token.isdigit():
+            if default_platform == "system" and not external_id:
+                external_id = token
+            else:
+                unrecognized = True
             continue
         nickname = f"{nickname} {token}".strip()
     if not external_id:
         if default_platform == "system":
-            # 系统平台：如果没有检测到 external_id，把整个 line（或者 nickname）作为 external_id
+            # 系统平台：没有识别出平台时，把昵称（纯文本行）作为外部 ID
             if nickname:
                 return default_platform, nickname, "", None
-            else:
-                return default_platform, "", nickname, "未识别到链接或ID，请至少输入一个 ID 或昵称"
-        return default_platform, "", nickname, parse_error or "未识别到链接或ID"
-    platform = platform or default_platform
-    # 对于系统平台，或者非 x.com/twitter.com 的 http(s) 地址原样保留；其余走归一化
-    if platform == "system":
-        return platform, external_id, nickname, None
-    if external_id.startswith(("http://", "https://")) and not re.search(
-        r"(?:x|twitter)\.com", external_id
-    ):
-        return platform, external_id, nickname, None
+            return default_platform, "", nickname, "未识别到链接或ID，请至少输入一个 ID 或昵称"
+        if unrecognized:
+            return "", "", nickname, "无法识别平台，请粘贴雪球/微博/X/知识星球主页链接"
+        return "", "", nickname, parse_error or "未识别到链接或ID"
+    if not platform:
+        if default_platform == "system":
+            return default_platform, external_id, nickname, None
+        return "", "", nickname, parse_error or "无法识别平台，请粘贴主页链接"
     ext, err = _normalize_kol_request_input(platform, external_id)
     if err:
         return platform, "", nickname, err
@@ -420,7 +425,7 @@ class KolIn(BaseModel):
 
 
 class KolBatchIn(BaseModel):
-    platform: str = "xueqiu"
+    platform: str | None = None  # 兼容旧客户端；平台只从每行链接识别
     lines: str
     category_id: int | None = None
     priority: bool = False
@@ -584,6 +589,12 @@ class CiccTriggerIn(BaseModel):
 
 class CiccScheduleIn(BaseModel):
     enabled: bool
+    time: str | None = None  # HH:mm，None=不改时间
+
+
+class CiccCategoriesIn(BaseModel):
+    categories: list[str] = []  # 空数组=采集全部品类
+    keywords: list[str] = []    # 标题关键词白名单（空=不过滤）
 
 
 class ImaKbAclIn(BaseModel):
@@ -3085,22 +3096,17 @@ def create_api_router(
 
     @router.post("/admin/ima-storage/backup", dependencies=[Depends(require_admin)])
     def backup_ima_storage(admin: dict = Depends(require_admin)):
-        from pathlib import Path
+        from .cicc_collector import from_env
 
-        from .ima_storage import request_pending, write_request_file
-
+        # 旧实现写 .vpush-backup-request 请求文件，但存储机从未有消费者（死信）；
+        # 改走命令通道：dispatch 的 backup 模式直接运行 restic-backup.sh
         _require_remote_archive()
-        status = ima_documents.storage_status
-        public = status.public()
-        if not status.can_write():
-            raise HTTPException(status_code=503, detail="知识库存储暂不可用")
-        archive = os.environ.get("IMA_ARCHIVE_ROOT", "").strip()
-        request_path = Path(archive) / ".vpush-backup-request"
-        if request_pending(request_path, public.get("restic_last_success", 0)):
-            return {"status": "already_running", **public}
-        write_request_file(request_path)
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        result = ctl.trigger("backup", admin["username"])
         _audit(admin, "ima_storage_backup", "", "requested")
-        return {"status": "started", **public}
+        return {"status": "started", **result}
 
     @router.get("/admin/cicc/status", dependencies=[Depends(require_admin)])
     def cicc_status(admin: dict = Depends(require_admin)):
@@ -3125,16 +3131,134 @@ def create_api_router(
         _audit(admin, "cicc_trigger", "", body.mode)
         return result
 
-    @router.put("/admin/cicc/schedule", dependencies=[Depends(require_admin)])
-    def cicc_set_schedule(body: CiccScheduleIn, admin: dict = Depends(require_admin)):
+    @router.get("/admin/cicc/schedule", dependencies=[Depends(require_admin)])
+    def cicc_get_schedule(admin: dict = Depends(require_admin)):
         from .cicc_collector import from_env
 
         ctl = from_env()
         if ctl is None:
             raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        return ctl.read_schedule()
+
+    @router.put("/admin/cicc/schedule", dependencies=[Depends(require_admin)])
+    def cicc_set_schedule(body: CiccScheduleIn, admin: dict = Depends(require_admin)):
+        import re as _re
+
+        from .cicc_collector import from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        if body.time is not None and not _re.fullmatch(r"\d{2}:\d{2}", body.time):
+            raise HTTPException(status_code=400, detail="时间格式应为 HH:mm")
         result = ctl.set_schedule(body.enabled)
-        _audit(admin, "cicc_schedule", "", "enabled" if body.enabled else "disabled")
+        if body.time is not None:
+            result.update(ctl.set_schedule_time(body.time, admin["username"]))
+        _audit(admin, "cicc_schedule", "",
+               f"{'enabled' if body.enabled else 'disabled'} time={body.time or '-'}")
         return result
+
+    CICC_CATEGORIES_KEY = "cicc_category_settings"
+
+    @router.get("/admin/ima-collector/cicc-categories", dependencies=[Depends(require_admin)])
+    def cicc_categories_get(admin: dict = Depends(require_admin)):
+        from .cicc_collector import from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        cicc_settings = (ctl.status().get("cicc_settings") or {})
+        settings = cicc_settings.get("categories")
+        if settings is None:  # 存储机还没透传（离线/未刷新）→ 退回 DB 里上次保存的定向
+            raw = db.get_setting(CICC_CATEGORIES_KEY)
+            try:
+                settings = json.loads(raw) if raw else []
+            except ValueError:
+                settings = []
+        raw_kw = db.get_setting("cicc_keywords_key")
+        try:
+            keywords = json.loads(raw_kw) if raw_kw else []
+        except ValueError:
+            keywords = []
+        return {"categories": settings, "keywords": keywords}
+
+    @router.put("/admin/ima-collector/cicc-categories", dependencies=[Depends(require_admin)])
+    def cicc_categories_put(body: CiccCategoriesIn, admin: dict = Depends(require_admin)):
+        from .cicc_collector import CICC_CATEGORIES, from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        cats = list(dict.fromkeys(c.strip() for c in body.categories if c.strip()))
+        unknown = sorted(set(cats) - set(CICC_CATEGORIES))
+        if unknown:
+            raise HTTPException(status_code=400, detail=f"未知品类：{'、'.join(unknown)}")
+        keywords = list(dict.fromkeys(k.strip() for k in body.keywords if k.strip()))
+        ctl.set_cicc_settings(cats, admin["username"], keywords)
+        db.set_setting(CICC_CATEGORIES_KEY, json.dumps(cats, ensure_ascii=False))
+        db.set_setting("cicc_keywords_key", json.dumps(keywords, ensure_ascii=False))
+        note = "全部品类" if not cats else "、".join(cats)
+        if keywords:
+            note += f"｜关键词：{'、'.join(keywords)}"
+        _audit(admin, "cicc_categories", "", note)
+        return {"categories": cats, "keywords": keywords}
+
+    @router.get("/admin/ima-storage/health", dependencies=[Depends(require_admin)])
+    def ima_storage_health(admin: dict = Depends(require_admin)):
+        from .cicc_collector import from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        return ctl.status()
+
+    @router.get("/admin/ima-storage/consistency", dependencies=[Depends(require_admin)])
+    def ima_storage_consistency_get(admin: dict = Depends(require_admin)):
+        from .cicc_collector import from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        return ctl.status().get("consistency") or {}
+
+    @router.post("/admin/ima-storage/consistency/run", dependencies=[Depends(require_admin)])
+    def ima_storage_consistency_run(admin: dict = Depends(require_admin)):
+        from .cicc_collector import from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        result = ctl.trigger("consistency", admin["username"])
+        _audit(admin, "ima_consistency_run", "", "")
+        return result
+
+    @router.post("/admin/ima-storage/dedup", dependencies=[Depends(require_admin)])
+    def ima_storage_dedup(admin: dict = Depends(require_admin)):
+        from .cicc_collector import from_env
+
+        ctl = from_env()
+        if ctl is None:
+            raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
+        result = ctl.trigger("dedup", admin["username"])
+        _audit(admin, "ima_dedup", "", "")
+        return result
+
+    @router.get("/admin/ima-storage/alerts", dependencies=[Depends(require_admin)])
+    def ima_storage_alerts_get(admin: dict = Depends(require_admin)):
+        from .cicc_alerts import load_alert_settings
+
+        return {"settings": load_alert_settings(db)}
+
+    @router.put("/admin/ima-storage/alerts", dependencies=[Depends(require_admin)])
+    def ima_storage_alerts_put(body: dict, admin: dict = Depends(require_admin)):
+        from .cicc_alerts import save_alert_settings
+
+        try:
+            saved = save_alert_settings(db, body or {})
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=f"参数非法：{exc}")
+        _audit(admin, "ima_storage_alerts", "", json.dumps(saved, ensure_ascii=False))
+        return {"settings": saved}
 
     @router.get("/admin/ima-local-libraries", dependencies=[Depends(require_admin)])
     def get_ima_local_libraries():
@@ -4251,21 +4375,22 @@ def create_api_router(
 
     @router.post("/kols/batch", dependencies=[Depends(require_admin)])
     def batch_add_kols(body: KolBatchIn, admin: dict = Depends(require_admin)):
-        """批量导入：每行一个「昵称 链接/UID」或「链接/UID」。
+        """批量导入：每行一个「昵称 链接」或「链接」。
 
-        按链接自动识别平台（雪球主页/雪球组合页/微博主页/X主页），
-        纯 UID 等无法识别的行使用 body.platform 作为默认平台。
+        按链接自动识别平台（雪球主页/雪球组合页/微博主页/X主页/知识星球）。
+        纯 UID 等无法识别的行失败，不再使用默认平台；
+        body.platform == "system" 时走系统 KOL 导入（昵称/整行作为外部 ID）。
         """
-        if body.platform not in ALLOWED_PLATFORMS:
-            raise HTTPException(status_code=400, detail=f"不支持的平台: {body.platform}")
         if body.category_id is not None and db.get_category(body.category_id) is None:
             raise HTTPException(status_code=400, detail="分类不存在")
+        # 平台只从每行链接识别；仅系统 KOL 导入沿用请求里显式指定的 system 平台
+        default_platform = body.platform if body.platform == "system" else ""
         results = []
         for raw in body.lines.splitlines():
             line = raw.strip()
             if not line:
                 continue
-            platform, external_id, nickname, err = _parse_batch_kol_line(line, body.platform)
+            platform, external_id, nickname, err = _parse_batch_kol_line(line, default_platform)
             if err:
                 results.append({"ok": False, "line": line[:80], "error": err})
                 continue

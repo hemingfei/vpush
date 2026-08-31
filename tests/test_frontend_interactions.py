@@ -259,7 +259,8 @@ def test_feishu_personal_async_callbacks_are_owner_guarded_and_logout_resets_all
     countdown = _fn_body("startFeishuBindCountdown")
     assert "fsPersonalOwnerActive(owner)" in countdown
     assert "fsPersonalState.countdownTimer !== timer" in countdown
-    assert "startFeishuPersonalPoll(fsPersonalState.sessionId, owner)" in countdown
+    assert "refreshFeishuBindCode()" in countdown
+    assert "startFeishuPersonalPoll(" not in countdown
 
     clear = _fn_body("clearSessionCaches")
     for statement in (
@@ -272,6 +273,18 @@ def test_feishu_personal_async_callbacks_are_owner_guarded_and_logout_resets_all
     ):
         assert statement in clear
     assert clear.index("stopFeishuPersonalPoll()") < clear.index("fsPersonalState.owner = null")
+
+
+def test_feishu_personal_keeps_polling_while_awaiting_bind():
+    """awaiting_bind 不得停轮询；码过期/丢失时自动 refresh-code，避免卡在 0s。"""
+    poll = _fn_body("startFeishuPersonalPoll")
+    awaiting = poll[poll.index('data.status === "awaiting_bind"'):poll.index('data.status === "active"')]
+    assert "stopFeishuPersonalPoll" not in awaiting
+    assert "refreshFeishuBindCode" in awaiting
+
+    refresh = _fn_body("refreshFeishuBindCode")
+    assert "stopFeishuPersonalPoll" not in refresh
+    assert "refreshInFlight" in refresh
 
 
 def test_weibo_qr_callbacks_are_owner_guarded_and_logout_invalidates_timer():
@@ -1996,7 +2009,6 @@ def test_ima_collector_save_clears_only_matching_mount_revision():
     assert "if (!preserve && !imaMountState.saveOwner) imaMountState.revision += 1" in init
     assert "imaMountState.revision += 1" in toggle
     assert "const mountRevision = imaMountState.revision" in save
-    assert "const mountRevision = imaMountState.revision" in save
     assert "imaMountState.saveOwner = saveOwner" in save
     assert "saveOwner.liveSnapshot =" in save
     assert "imaMountState.dirty = false" in save
@@ -2482,6 +2494,14 @@ def test_ima_dedicated_reader_fills_the_desktop_surface():
     assert "color-scheme: light" not in css[css.index(".ima-reader-page"):]
 
 
+def test_ima_search_ignores_single_ascii_character():
+    body = _fn_body("imaUsableSearchQuery")
+    assert "length < 2" in body
+    assert r"/^[\x00-\x7F]*$/" in body
+    src = APP_JS.read_text()
+    assert "imaUsableSearchQuery(" in src
+
+
 def test_ima_source_filter_is_compact_and_subscription_management_survives():
     src = APP_JS.read_text()
     controls = _fn_body("knowledgeSourceControlsHtml")
@@ -2489,9 +2509,8 @@ def test_ima_source_filter_is_compact_and_subscription_management_survives():
     assert 'id="ima-doc-source"' in controls
     assert 'aria-label="资料源"' in controls
     assert "selectImaDocumentGroup(this.value)" in controls
-    assert "ima-source-manage" in controls
-    assert "knowledgeLibRowHtml" in controls
-    assert 'knowledgeLibRowHtml(group, selected, "subscribed")' in controls
+    assert "ima-source-manage" not in controls
+    assert "管理订阅" not in controls
     assert "subscribeKnowledge" in src
     assert "unsubscribeKnowledge" in src
 
@@ -2766,6 +2785,18 @@ def test_live_feed_is_prefetched_and_shares_inflight_request():
     assert "liveWscnRequest(" in _fn_body("prefetchLiveFeed")
 
 
+def test_xueqiu_badge_uses_official_mark():
+    """雪球角标用官方图，盒尺寸仍走 .pt-icon。"""
+    src = APP_JS.read_text()
+    css = STYLE_CSS.read_text()
+    assert 'src="/xueqiu-mark.png"' in src
+    assert (APP_JS.parent / "xueqiu-mark.png").is_file()
+    assert "img.pt-icon { display: block; object-fit: contain; }" in css
+    assert ".pt-icon { width: 16px; height: 16px; flex-shrink: 0; }" in css
+    assert ".icon-badge-bar .tl-pill .pt-icon { width: 20px; height: 20px; }" in css
+    assert ".post-item .p-name-line .p-platform .pt-icon { width: 13px; height: 13px; }" in css
+
+
 def test_live_pill_icon_matches_platform_badge_size():
     """快讯角标与其他平台同尺寸，选中不得反色出白圆。"""
     src = APP_JS.read_text()
@@ -2819,6 +2850,23 @@ def test_web_combination_posts_use_structured_rebalance_details():
     assert "combo-detail" in detail
     assert ".combo-detail" in css
     assert ".combo-action" in css
+
+
+def test_web_combination_pc_rows_are_compact_single_line():
+    """PC 调仓一行四列、持仓两列；不重复「成交价」前缀、不用 emoji 撑高。"""
+    detail = _fn_body("combinationDetailHtml")
+    css = STYLE_CSS.read_text()
+    assert "combo-action-head" not in detail
+    assert "成交价 ${" not in detail
+    assert "combo-action-cols" in detail
+    for glyph in ("🗑", "🆕", "➕", "➖", "💵"):
+        assert glyph not in detail
+    assert ".combo-action {" in css
+    assert "grid-template-columns: 3.5em minmax(0, 1fr) auto" in css
+    assert "combo-action-meta" in detail
+    assert ".combo-holdings {" in css
+    assert "grid-template-columns: 1fr 1fr" in css
+    assert "@media (max-width: 768px)" in css
 
 
 def test_live_toolbar_keeps_existing_filter_structure():
@@ -2921,12 +2969,14 @@ def test_ima_document_counts_use_real_total_not_page_plus():
     reader = _fn_body("renderImaDocument")
     assert "function imaResolvedCount(" in src
     assert "function imaDocumentsCountLabel(" in src
-    assert "function imaReaderBackLabel(" in src
+    assert "function imaReaderBackLabel(" not in src
     assert "imaDocumentsCountLabel(" in render
     assert "snapshot.documentCount" in render
     assert "data.document_count" in render
     assert "imaDocumentsCountLabel(" in more
-    assert "imaReaderBackLabel(listSnapshot)" in reader
+    assert "imaReaderBackLabel" not in reader
+    assert "ima-back-count" not in reader
+    assert "条结果" not in reader
     assert "imaSnapshotIsFiltered" in src
     assert 'has_more ? "+" : ""' not in render
     assert 'imaDocumentsHasMore ? "+" : ""' not in more
@@ -2961,6 +3011,8 @@ def test_ima_reader_clamps_long_abstract_and_keeps_preview_floor():
     assert ".ima-reader-page .ima-pdf-panel {" in css
     assert "min-height: 240px;" in css
     assert "contain: strict;" in css
+    assert "align-items: baseline;" in css
+    assert ".ima-reader-filemeta {" in css
 
 
 def test_ima_document_reader_preserves_group_context_and_metadata():
@@ -2982,16 +3034,18 @@ def test_ima_document_reader_preserves_group_context_and_metadata():
     assert "ima-reader-info" in reader
     assert "<details open" in reader
     assert "查看 PDF" not in reader
-    assert "下载" in reader
-    assert "btn-normal ima-reader-download" in reader
+    assert "ima-reader-download" not in reader
+    assert "下载 PDF" not in reader
     assert 'class="btn-ghost ima-reader-back"' not in reader
     assert "ima-back-icon" in reader
+    assert ">返回</button>" in reader
     assert "imaDisplayTitle" in reader and "item.size" in reader
     assert "ima-reader-abstract" in reader
     assert "ima-reader-empty" in reader
     assert "还没有预览文件" in reader
     assert "回列表" not in reader
     assert "ima-reader-filemeta" in reader
+    assert "section-meta ima-reader-filemeta" not in reader
     assert "needs_translation" in reader
     assert "/translate" in reader
 
@@ -3171,8 +3225,11 @@ def test_ima_report_search_is_debounced_and_explicitly_pages():
     assert "submitImaDocumentsSearch()" in queued
     assert 'oninput="queueImaDocumentsSearch()"' in render
     assert 'id="ima-docs-more"' in render
-    assert 'onclick="loadImaDocumentsMore()"' in render
-    assert "IntersectionObserver" not in src[src.index("const _imaItems"):src.index("async function renderImaDocument")]
+    assert 'role="status"' in render
+    assert 'startImaDocumentsAutoLoad()' in render
+    auto = _fn_body("startImaDocumentsAutoLoad")
+    assert "IntersectionObserver" in auto
+    assert "root: body" in auto
     assert "正在加载更多" in more
     assert "加载失败，重试" in more
 
@@ -3223,9 +3280,11 @@ def test_ima_reader_has_one_app_download_and_result_neighbors():
 
     assert "ima-reader-toolbar" in reader
     assert "backFromImaReader" in reader
-    assert "btn-normal ima-reader-download" in reader
+    assert "ima-reader-download" not in reader
+    assert "下载 PDF" not in reader
     assert 'class="btn-ghost ima-reader-back"' not in reader
     assert "ima-back-icon" in reader
+    assert ">返回</button>" in reader
     assert "<details open" in reader
     assert "imaReaderNavHtml" in reader
     assert "openImaDocument" in nav
@@ -3287,9 +3346,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=238"' in html
-    assert 'src="/app.js?v=332"' in html
-    assert 'dav-shell-v200' in sw
+    assert 'href="/style.css?v=245"' in html
+    assert 'src="/app.js?v=343"' in html
+    assert 'dav-shell-v211' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -3390,8 +3449,8 @@ def test_knowledge_defaults_to_all_readable_sources():
     assert 'id="ima-doc-source"' in controls
     assert '>全部研报<' in controls
     assert "state.imaCatalogSubscribed" in controls
-    assert "available" in controls
-    assert "knowledgeLibRowHtml" in controls
+    assert "管理订阅" not in controls
+    assert "knowledgeLibRowHtml" in render
     assert "subscribeKnowledge" in APP_JS.read_text()
 
 
@@ -3921,9 +3980,15 @@ def test_admin_kols_mobile_filters_and_actions_align():
 def test_admin_kols_add_fields_have_accessible_names():
     """添加区控件要有可达名称，不能只靠 placeholder。"""
     body = _fn_body("loadAdminKols")
-    assert 'aria-label="默认平台（未识别的行）"' in body
+    src = APP_JS.read_text()
+    assert 'id="ad-batch-platform"' not in body
+    assert "默认平台" not in body
+    assert "adminPlatformDefaultCat" not in src
     assert 'aria-label="分类"' in body
-    assert 'aria-label="大V链接或UID，每行一个"' in body
+    assert 'aria-label="大V主页链接，每行一个"' in body
+    assert "平台由链接自动识别" in body
+    assert "adminBatchLinesHint()" in body
+    assert "function adminBatchLinesHint(" in src
 
 
 def test_admin_kols_import_result_preserves_lines():
@@ -4331,11 +4396,11 @@ def test_knowledge_desk_serves_phone_without_refusal():
     assert "grid-template-columns: 44px minmax(0, 1fr) 84px" in css
     # 同优先级后者胜：手机覆盖块必须声明在桌面规则之后，否则被覆盖回桌面网格
     assert css.index("知识库阅读台（手机）") > css.index("grid-template-columns: minmax(0, 1fr) auto")
-    # 手机阅读页：iframe 换成 blob 就绪后的「打开 PDF」大按钮，返回按钮省略结果数
+    # 手机阅读页：iframe 换成 blob 就绪后的「打开 PDF」大按钮
     assert "ima-pdf-phone-open" in _fn_body("renderImaDocument")
     assert "ima-pdf-phone-open" in _fn_body("loadImaPdf")
-    assert ".ima-reader-back .ima-back-count { display: none; }" in css
-    assert ".ima-reader-download span { display: none; }" in css
+    assert "ima-back-count" not in _fn_body("renderImaDocument")
+    assert "ima-reader-download" not in _fn_body("renderImaDocument")
     # 遗留手机块不得再拉伸阅读工具栏按钮（曾把下载钮撑出屏）
     assert "flex: 1; justify-content: center" not in css
 
@@ -4355,3 +4420,5 @@ def test_knowledge_zero_sub_empty_state_wraps_source_controls():
     assert "ima-report-filters-row" in body
     css = STYLE_CSS.read_text()
     assert ".ima-report-filters-row { padding: 12px 16px; flex-wrap: wrap; }" in css
+    assert ".ima-report-filters > .ima-report-source" in css
+    assert "width: 100%;" in css[css.index(".ima-report-source select"):css.index(".ima-report-head .ima-doc-filter-chips")]

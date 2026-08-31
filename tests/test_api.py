@@ -297,7 +297,7 @@ def test_batch_import_x_kol_auto_resolves_name(monkeypatch):
 
 
 def test_batch_import_auto_detects_platform_per_line(monkeypatch):
-    """批量导入按链接自动识别平台，纯 UID 回退默认平台。"""
+    """批量导入按链接自动识别平台；纯 UID 不再回退默认平台。"""
     from app import api as api_mod
 
     monkeypatch.setattr(api_mod, "resolve_weibo_profile", lambda external_id, cookie="", db=None: {"name": "微博用户", "avatar_url": ""})
@@ -312,7 +312,6 @@ def test_batch_import_auto_detects_platform_per_line(monkeypatch):
         "/api/kols/batch",
         headers=headers,
         json={
-            "platform": "xueqiu",  # 默认平台：仅对无法识别的行生效
             "lines": "\n".join([
                 "雪球大V https://xueqiu.com/u/10001",
                 "https://xueqiu.com/P/ZH100002",
@@ -323,7 +322,10 @@ def test_batch_import_auto_detects_platform_per_line(monkeypatch):
         },
     )
     assert resp.status_code == 200
-    assert resp.json()["ok"] == 5, resp.json()
+    body = resp.json()
+    assert body["ok"] == 4, body
+    assert body["failed"]
+    assert any("20005" in f["line"] and "无法识别平台" in f["error"] for f in body["failed"])
     kols = client.get("/api/kols", headers=headers).json()
     by_ext = {k["external_id"]: k for k in kols}
     assert by_ext["10001"]["platform"] == "xueqiu"
@@ -331,7 +333,7 @@ def test_batch_import_auto_detects_platform_per_line(monkeypatch):
     assert by_ext["1642591402"]["platform"] == "weibo"
     assert by_ext["elonmusk"]["platform"] == "twitter"  # X 存 screen name 而非完整 URL
     assert "https://x.com/elonmusk" not in by_ext
-    assert by_ext["20005"]["platform"] == "xueqiu"  # 纯 UID 回退默认平台
+    assert "20005" not in by_ext
 
 
 def test_batch_import_normalizes_weibo_mobile_and_rejects_tweet_url(monkeypatch):
@@ -1584,8 +1586,9 @@ def test_batch_import_kols(monkeypatch):
     )
     data = resp.json()
     assert resp.status_code == 200
-    assert data["total"] == 4 and data["ok"] == 3
-    assert len(data["failed"]) == 1
+    assert data["total"] == 4 and data["ok"] == 2
+    assert len(data["failed"]) == 2
+    assert any("67890" in f["line"] and "无法识别平台" in f["error"] for f in data["failed"])
     kols = client.get("/api/kols", headers=headers).json()
     names = {k["name"] for k in kols}
     assert "段永平" in names
@@ -1611,7 +1614,7 @@ def test_batch_import_auto_fills_xueqiu_nickname(monkeypatch):
             "lines": (
                 "https://xueqiu.com/u/55555\n"
                 "https://xueqiu.com/u/66666\n"
-                "段永平 77777"
+                "段永平 https://xueqiu.com/u/77777"
             ),
         },
     )

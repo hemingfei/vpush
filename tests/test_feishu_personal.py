@@ -9,10 +9,12 @@ import httpx
 import pytest
 from cryptography.fernet import Fernet
 
+from app.bot_core import BIND_CODE_TTL as SHARED_BIND_CODE_TTL
 from app.channels import channel_bound
 from app.config import Config, FeishuConfig
 from app.db import DB
 from app.feishu_personal import (
+    BIND_CODE_TTL,
     POLL_MAX_ACTIVE,
     FeishuBindListener,
     FeishuPersonalManager,
@@ -197,6 +199,10 @@ def test_hash_bind_code_stable():
     assert hash_bind_code("406d93") == hash_bind_code("406d93")
     assert len(hash_bind_code("406d93")) == 64
     assert hash_bind_code("406d93") != hash_bind_code("406D93")
+
+
+def test_personal_bind_code_ttl_matches_shared():
+    assert BIND_CODE_TTL == SHARED_BIND_CODE_TTL == 600
 
 
 def test_parse_bind_code():

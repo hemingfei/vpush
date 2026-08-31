@@ -31,6 +31,7 @@ from app.ima_documents import (
     ImaDocumentStore,
     ImaGroupConfig,
     ImaPureClient,
+    load_title_overrides,
     _clamp_group_interval,
     _safe_error,
     decrypt_body,
@@ -3209,6 +3210,53 @@ def test_manifest_skips_cached_child_when_parent_counts_match():
     third = client.manifest(listing_cache=cache)
     assert {item["media_id"] for item in third} == {"pdf_root", "pdf_child", "pdf_new"}
     assert "child" in calls
+
+
+def test_load_title_overrides_only_reads_group_root_file(tmp_path):
+    group = tmp_path / "7476__abc"
+    group.mkdir()
+    (group / "titles.json").write_text('{"slug": "Real Title"}', encoding="utf-8")
+    nested = group / "nested"
+    nested.mkdir()
+    (nested / "titles.json").write_text('{"other": "Ignored"}', encoding="utf-8")
+    assert load_title_overrides(tmp_path) == {"slug": "Real Title"}
+
+
+def test_manifest_applies_title_overrides_on_cached_child_records():
+    group = ImaGroupConfig("research", "研究", "kb", "root", True, "discovered", ("mount",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    responses = {
+        "mount": [
+            {"media_id": "pdf_root", "name": "a.pdf", "file_size": 8},
+            {
+                "media_type": 99,
+                "folder_info": {"folder_id": "child", "name": "0826"},
+                "file_number": 1,
+                "folder_number": 0,
+            },
+        ],
+        "child": [
+            {"media_id": "pdf_child", "name": "b.pdf", "file_size": 8},
+        ],
+    }
+
+    def list_items(folder_id):
+        return list(responses[folder_id])
+
+    client.list_items = list_items
+    cache = {}
+    first = client.manifest(listing_cache=cache)
+    child = next(item for item in first if item["media_id"] == "pdf_child")
+    assert child["name"] == "b.pdf"
+    second = client.manifest(
+        listing_cache=cache,
+        title_overrides={"b": "Real Title", "a": "Root Title"},
+    )
+    by_id = {item["media_id"]: item["name"] for item in second}
+    assert by_id["pdf_child"] == "Real Title.pdf"
+    assert by_id["pdf_root"] == "Root Title.pdf"
+    cached_child = (cache.get("child") or {}).get("records") or []
+    assert cached_child[0]["name"] == "b.pdf"
 
 
 def test_manifest_deduplicates_overlapping_roots_and_stops_folder_cycles():

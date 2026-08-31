@@ -1204,6 +1204,12 @@ def test_ima_document_index_search_ranking_and_literal_wildcards(tmp_path):
     page = db.ima_document_page(["semi"], query="ai", limit=50, offset=0)
     assert [item["media_id"] for item in page["items"][:3]] == ["title", "tag", "body"]
     assert page["document_count"] == 3
+    assert page["days"] == []
+    assert page["tag_counts"] == {}
+    assert db.ima_document_page(["semi"], query="a", limit=50, offset=0)["items"][0][
+        "media_id"
+    ] == "body"
+    assert db.ima_document_page(["semi"], query="a")["document_count"] == 5
     assert page["items"][0]["tags"] == []
     assert page["items"][1]["tags"] == ["AI"]
     assert isinstance(page["items"][0]["has_pdf"], bool)

@@ -922,8 +922,9 @@ class ImaPureClient:
                 return items
             cursor = next_cursor
 
-    def manifest(self, listing_cache: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    def manifest(self, listing_cache: dict[str, Any] | None = None, title_overrides: dict[str, str] | None = None) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
+        title_overrides = title_overrides or {}
         roots = (
             self.group.mount_folder_ids
             if self.group is not None
@@ -1113,7 +1114,8 @@ class ImaPureClient:
                 _ingest(folder_id, items)
                 _remember_listing(folder_id, items)
         records.sort(key=lambda item: (item["day"], item["media_id"]))
-        return records
+        # listing cache 存原始云端名；覆盖只作用在返回值，避免缓存命中跳过 append_file 后丢标题。
+        return apply_title_overrides(records, title_overrides)
 
     def get_media(self, media_id: str) -> dict[str, Any]:
         token = self._token()
@@ -1368,6 +1370,55 @@ def translation_fields(abstract: str, state_item: dict[str, Any]) -> dict[str, A
         "abstract_zh": cached if fresh else "",
         "needs_translation": bool(text) and (not already) and (not fresh),
     }
+
+
+def apply_title_overrides(
+    records: list[dict[str, Any]], overrides: dict[str, str] | None
+) -> list[dict[str, Any]]:
+    """按磁盘 titles.json 把展示名换成 PDF 首页标题；不改 listing cache / 磁盘文件名。"""
+    if not overrides or not records:
+        return records
+    out: list[dict[str, Any]] = []
+    for record in records:
+        name = str(record.get("name") or "")
+        stem = name.removesuffix(".pdf")
+        override = str(overrides.get(stem) or "").strip()
+        if not override:
+            out.append(record)
+            continue
+        new_name = override if override.lower().endswith(".pdf") else f"{override}.pdf"
+        if new_name == name:
+            out.append(record)
+            continue
+        updated = dict(record)
+        updated["name"] = new_name
+        out.append(updated)
+    return out
+
+
+def load_title_overrides(archive_root: Path | str) -> dict[str, str]:
+    """各组目录下 titles.json（storage 机标题提取器产物）→ 展示名覆盖。
+
+    只 stat 顶层 ``<group>/titles.json``，不 glob 进 PDF 目录（NFS 上会把同步拖成数秒）。
+    """
+    overrides: dict[str, str] = {}
+    root = str(archive_root)
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return overrides
+    for name in names:
+        path = os.path.join(root, name, "titles.json")
+        try:
+            if not os.path.isfile(path):
+                continue
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            overrides.update({str(k): str(v) for k, v in data.items() if v})
+    return overrides
 
 
 class ImaDocumentStore:
@@ -3479,6 +3530,7 @@ class ImaDocumentService:
         cfg: ImaDocumentConfig,
         group: ImaGroupConfig,
         state: dict[str, dict[str, Any]],
+        title_overrides: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         try:
             client = ImaPureClient(cfg, group=group)
@@ -3498,13 +3550,25 @@ class ImaDocumentService:
             downloaded=0,
             failed=0,
         )
-        try:
-            listed = client.manifest(listing_cache=listing_cache)
-        except TypeError as exc:
-            if "listing_cache" not in str(exc):
-                raise
-            listed = client.manifest()
-        else:
+        if title_overrides is None:
+            title_overrides = load_title_overrides(self.store.archive_root)
+        listed = None
+        used_listing_cache = False
+        last_exc: TypeError | None = None
+        for kwargs in (
+            {"listing_cache": listing_cache, "title_overrides": title_overrides},
+            {"listing_cache": listing_cache},
+            {},
+        ):
+            try:
+                listed = client.manifest(**kwargs)
+                used_listing_cache = "listing_cache" in kwargs
+                break
+            except TypeError as exc:
+                last_exc = exc
+        if listed is None and last_exc is not None:
+            raise last_exc
+        if used_listing_cache:
             listing_all[group.id] = listing_cache
             self.store.save_listing_cache(listing_all)
         records = [
@@ -3762,11 +3826,14 @@ class ImaDocumentService:
             group_errors: dict[str, str] = {}
             last_error = discovery_error
             succeeded_groups = 0
+            title_overrides = load_title_overrides(self.store.archive_root)
             for group in enabled_groups:
                 try:
                     self._mark_group_runtime(group.id, started=True)
                     try:
-                        group_result = self._sync_group(cfg, group, state)
+                        group_result = self._sync_group(
+                            cfg, group, state, title_overrides=title_overrides
+                        )
                     finally:
                         self._mark_group_runtime(group.id, started=False)
                     if group_result.get("skipped"):

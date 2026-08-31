@@ -549,6 +549,16 @@ def _like_pattern(value: str) -> str:
     return f"%{escaped}%"
 
 
+def _ima_query_usable(value: str) -> bool:
+    """单字母 ASCII 几乎匹配全库，LIKE 摘要会把整站锁死；中文单字仍可搜。"""
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if any(ord(char) > 127 for char in text):
+        return True
+    return len(text) >= 2
+
+
 def _ima_authorized_groups(readable_group_ids, group: str = "") -> list[str]:
     allowed = [str(item) for item in readable_group_ids if str(item)]
     requested = str(group or "").strip()
@@ -1925,6 +1935,11 @@ class DB:
                         "INSERT OR IGNORE INTO ima_kb_acl (group_id, user_id) VALUES (?, ?)",
                         (group_id, uid),
                     )
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO ima_kb_subscriptions (user_id, group_id, created_at) "
+                        "VALUES (?, ?, ?)",
+                        (uid, group_id, int(time.time())),
+                    )
                 rows = self._conn.execute(
                     "SELECT user_id FROM ima_kb_subscriptions WHERE group_id = ?",
                     (group_id,),
@@ -2006,6 +2021,11 @@ class DB:
                     self._conn.execute(
                         "INSERT OR IGNORE INTO ima_kb_acl (group_id, user_id) VALUES (?, ?)",
                         (group_id, uid),
+                    )
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO ima_kb_subscriptions (user_id, group_id, created_at) "
+                        "VALUES (?, ?, ?)",
+                        (uid, group_id, int(time.time())),
                     )
                 for group_id in existing - allowed:
                     self._conn.execute(
@@ -4130,19 +4150,27 @@ class DB:
         )
         rank_sql = "0"
         pattern = None
+        rank_placeholders = 0
         if query:
             pattern = _like_pattern(query)
-            clauses.append(
-                f"(d.name_folded {like} OR d.metadata_folded {like} "
-                f"OR d.abstract_folded {like} OR {tag_like.format(like=like)})"
-            )
-            params.extend([pattern, pattern, pattern, pattern])
-            rank_sql = (
-                f"CASE WHEN d.name_folded {like} THEN 3 "
-                f"WHEN d.metadata_folded {like} OR {tag_like.format(like=like)} THEN 2 "
-                "ELSE 1 END"
-            )
-        return " AND ".join(clauses), params, rank_sql, pattern
+            if len(query.strip()) < 2:
+                clauses.append(f"(d.name_folded {like} OR d.metadata_folded {like})")
+                params.extend([pattern, pattern])
+                rank_sql = f"CASE WHEN d.name_folded {like} THEN 3 ELSE 2 END"
+                rank_placeholders = 1
+            else:
+                clauses.append(
+                    f"(d.name_folded {like} OR d.metadata_folded {like} "
+                    f"OR d.abstract_folded {like} OR {tag_like.format(like=like)})"
+                )
+                params.extend([pattern, pattern, pattern, pattern])
+                rank_sql = (
+                    f"CASE WHEN d.name_folded {like} THEN 3 "
+                    f"WHEN d.metadata_folded {like} OR {tag_like.format(like=like)} THEN 2 "
+                    "ELSE 1 END"
+                )
+                rank_placeholders = 3
+        return " AND ".join(clauses), params, rank_sql, pattern, rank_placeholders
 
     def ima_document_page(
         self,
@@ -4158,18 +4186,18 @@ class DB:
         requested_day = str(day or "").strip()
         requested_tag = str(tag or "").strip()
         requested_query = str(query or "").strip()
+        if requested_query and not _ima_query_usable(requested_query):
+            requested_query = ""
         page_limit = max(int(limit), 1)
         page_offset = max(int(offset), 0)
         groups = _ima_authorized_groups(readable_group_ids, group)
         if not groups:
             return _ima_empty_page(requested_day, page_offset)
 
-        where_sql, where_params, rank_sql, pattern = self._ima_page_filters(
+        where_sql, where_params, rank_sql, pattern, rank_n = self._ima_page_filters(
             groups, requested_query, requested_day, requested_tag
         )
-        item_params = list(where_params)
-        if pattern is not None:
-            item_params = [pattern, pattern, pattern, *where_params]
+        item_params = ([pattern] * rank_n + list(where_params)) if pattern else list(where_params)
         rows = self._rows(
             f"SELECT d.*, {rank_sql} AS match_rank FROM ima_document_index d "
             f"WHERE {where_sql} "
@@ -4181,31 +4209,52 @@ class DB:
         has_more = len(rows) > page_limit
         items = [_ima_public_document(row) for row in rows[:page_limit]]
 
+        searching = bool(requested_query)
+        if searching:
+            return {
+                "items": items,
+                "days": [],
+                "tags": [],
+                "tag_counts": {},
+                "document_count": page_offset + len(items) + int(has_more),
+                "day": requested_day,
+                "has_more": has_more,
+                "offset": page_offset,
+                "group_counts": {},
+            }
+
         count_row = self._rows(
             f"SELECT COUNT(*) AS n FROM ima_document_index d WHERE {where_sql}",
             where_params,
         )
-        days = [
-            row["day"]
-            for row in self._rows(
-                f"SELECT DISTINCT d.day FROM ima_document_index d "
-                f"WHERE {where_sql} ORDER BY d.valid_day DESC, d.day DESC",
-                where_params,
-            )
-        ]
-        tag_rows = self._rows(
-            "SELECT t.tag AS tag, COUNT(*) AS n FROM ima_document_tags t "
-            "JOIN ima_document_index d "
-            "ON d.group_id = t.group_id AND d.media_id = t.media_id "
-            f"WHERE {where_sql} GROUP BY t.tag ORDER BY n DESC, t.tag",
-            where_params,
-        )
-        tag_counts = {row["tag"]: int(row["n"]) for row in tag_rows}
         group_rows = self._rows(
             f"SELECT d.group_id AS group_id, COUNT(*) AS n "
             f"FROM ima_document_index d WHERE {where_sql} GROUP BY d.group_id",
             where_params,
         )
+        group_counts = {row["group_id"]: int(row["n"]) for row in group_rows}
+        # 全库浏览不算日期/标签面：跨组 DISTINCT + JOIN 会扫两万行，拖死单进程 SQLite。
+        need_facets = len(groups) == 1 or bool(requested_day or requested_tag)
+        if need_facets:
+            days = [
+                row["day"]
+                for row in self._rows(
+                    f"SELECT DISTINCT d.day FROM ima_document_index d "
+                    f"WHERE {where_sql} ORDER BY d.valid_day DESC, d.day DESC",
+                    where_params,
+                )
+            ]
+            tag_rows = self._rows(
+                "SELECT t.tag AS tag, COUNT(*) AS n FROM ima_document_tags t "
+                "JOIN ima_document_index d "
+                "ON d.group_id = t.group_id AND d.media_id = t.media_id "
+                f"WHERE {where_sql} GROUP BY t.tag ORDER BY n DESC, t.tag",
+                where_params,
+            )
+            tag_counts = {row["tag"]: int(row["n"]) for row in tag_rows}
+        else:
+            days = []
+            tag_counts = {}
         return {
             "items": items,
             "days": days,
@@ -4215,7 +4264,7 @@ class DB:
             "day": requested_day,
             "has_more": has_more,
             "offset": page_offset,
-            "group_counts": {row["group_id"]: int(row["n"]) for row in group_rows},
+            "group_counts": group_counts,
         }
 
     def ima_document_catalog_stats(self, group_ids: list[str]) -> dict[str, dict]:

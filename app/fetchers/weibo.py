@@ -10,7 +10,7 @@ import threading
 import time
 
 import httpx
-import rsa
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from ..avatar_cache import cache_avatar
 from ..logging_setup import redact_secrets
@@ -202,8 +202,10 @@ class WeiboFetcher(Fetcher):
 
     @staticmethod
     def _encrypt_password(password: str, pubkey_hex: str, nonce: str) -> str:
-        key = rsa.PublicKey(int(pubkey_hex, 16), 65537)
-        encrypted = rsa.encrypt(f"{nonce}\n{password}".encode(), key)
+        public_key = rsa.RSAPublicNumbers(65537, int(pubkey_hex, 16)).public_key()
+        encrypted = public_key.encrypt(
+            f"{nonce}\n{password}".encode(), padding.PKCS1v15()
+        )
         return base64.b64encode(encrypted).decode()
 
     def _prelogin(self) -> dict:

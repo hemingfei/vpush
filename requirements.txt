@@ -2,7 +2,6 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 httpx[socks]==0.28.1
 PyYAML==6.0.2
-rsa==4.9
 lark-oapi==1.7.1
 cryptography==44.0.1
 pypdf>=5
