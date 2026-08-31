@@ -1181,45 +1181,42 @@ img.pt-icon { display: block; object-fit: contain; }
 .lightbox-zbtn {
   height: 42px; min-width: 42px; padding: 0 14px;
   border: none; border-radius: var(--radius-pill);
-  background: rgba(12, 14, 18, 0.45); color: var(--color-white);
-  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  background: rgba(12, 14, 18, 0.55); color: var(--color-white);
   font-size: 20px; line-height: 1;
   display: inline-flex; align-items: center; justify-content: center;
   cursor: pointer;
   transition: background var(--ease-standard);
 }
-.lightbox-zbtn:hover { background: rgba(12, 14, 18, 0.62); }
+.lightbox-zbtn:hover { background: rgba(12, 14, 18, 0.72); }
 .lightbox-zbtn:disabled { opacity: 0.4; cursor: default; }
-.lightbox-zbtn:disabled:hover { background: rgba(12, 14, 18, 0.45); }
-.lightbox-zpct { font-size: 14px; }
+.lightbox-zbtn:disabled:hover { background: rgba(12, 14, 18, 0.55); }
+.lightbox-zpct { font-size: var(--text-sm); }
 .lightbox-close {
   z-index: 1;
   position: absolute; top: 18px; right: 18px;
   width: 42px; height: 42px; border-radius: 50%;
   border: none;
   /* 深色半透明底：放大后的亮色图片铺满视口时控件仍可辨识（与底部计数徽章一致） */
-  background: rgba(12, 14, 18, 0.45); color: var(--color-white);
-  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  background: rgba(12, 14, 18, 0.55); color: var(--color-white);
   font-size: 18px; line-height: 1;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer;
   transition: background var(--ease-standard);
 }
-.lightbox-close:hover { background: rgba(12, 14, 18, 0.62); }
+.lightbox-close:hover { background: rgba(12, 14, 18, 0.72); }
 /* 多图切换：左右箭头（半透明圆钮，hover 增强）+ 计数 */
 .lightbox-nav {
   z-index: 1;
   position: absolute; top: 50%; transform: translateY(-50%);
   width: 46px; height: 46px; border-radius: 50%;
   border: none;
-  background: rgba(12, 14, 18, 0.45); color: var(--color-white);
-  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  background: rgba(12, 14, 18, 0.55); color: var(--color-white);
   font-size: 26px; line-height: 1;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer;
   transition: background var(--ease-standard);
 }
-.lightbox-nav:hover { background: rgba(12, 14, 18, 0.62); }
+.lightbox-nav:hover { background: rgba(12, 14, 18, 0.72); }
 .lightbox-prev { left: 20px; }
 .lightbox-next { right: 20px; }
 .lightbox-count {
@@ -4151,7 +4148,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 }
 
 .ai-form-section-title {
-  font-size: 14px;
+  font-size: var(--text-sm);
   font-weight: 600;
   color: var(--text-color);
   margin-bottom: 16px;
@@ -4182,7 +4179,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 }
 
 .ai-form-label span {
-  font-size: 14px;
+  font-size: var(--text-sm);
   font-weight: 500;
   color: var(--text-color);
 }
@@ -4245,7 +4242,7 @@ html:not(.theme-dark) .ai-form-select option {
 .ai-prompt-textarea {
   min-height: 160px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 14px;
+  font-size: var(--text-sm);
 }
 
 .ai-form-hint {
@@ -4263,7 +4260,7 @@ html:not(.theme-dark) .ai-form-select option {
   gap: 8px;
   padding: 10px 16px;
   border-radius: 10px;
-  font-size: 14px;
+  font-size: var(--text-sm);
   font-weight: 500;
   color: var(--accent-color);
   background: rgba(59, 130, 246, 0.1);
@@ -4307,7 +4304,7 @@ html:not(.theme-dark) .ai-form-select option {
   padding: 12px 16px;
   border: 2px solid var(--border-color);
   border-radius: 12px;
-  font-size: 14px;
+  font-size: var(--text-sm);
   font-weight: 500;
   color: var(--text-color);
   background: var(--card-bg);
@@ -4367,7 +4364,7 @@ html:not(.theme-dark) .ai-form-select option {
 .ai-report-content {
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 14px;
+  font-size: var(--text-body);
   line-height: 1.7;
   color: var(--text-color);
 }
@@ -4394,7 +4391,7 @@ html:not(.theme-dark) .ai-form-select option {
 }
 
 .ai-logs-subtitle {
-  font-size: 14px;
+  font-size: var(--text-sm);
   color: var(--muted-color);
   margin: 0;
 }
