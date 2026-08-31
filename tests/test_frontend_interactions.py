@@ -1818,6 +1818,8 @@ def test_ima_group_render_has_safe_mount_rows_and_recovery_controls():
     assert 'escapeHtml(group?.name || groupId)' in kb_row
     assert 'data-folder-id="${escapeHtml(folderId)}"' in folder_row
     assert 'aria-expanded="${expanded}"' in folder_row
+    assert "knownEmpty" in folder_row
+    assert "item?.has_children === false" in folder_row
     assert 'onchange="toggleImaFolder(this)"' in folder_row
     assert 'onclick="retryImaFolderLoad(this)"' in src
     assert "尚未发现共享知识库" in src
@@ -1862,7 +1864,8 @@ def test_ima_mount_tree_exposes_the_knowledge_base_root():
     assert "imaFolderRowHtml(groupKey" in render
     assert "has_children: true" in render
     assert "tree.scrollTop" in render
-    assert "imaMountState.expanded.has(rootKey)" in render
+    assert "imaRenderFolderBranch" not in render
+    assert "imaRenderFolderBranch(groupId, folderId, depth + 1)" in _fn_body("imaFolderRowHtml")
     assert "folderId === String(group?.root_folder_id || \"\")" in toggle
     assert "selected.clear()" in toggle
     assert "new Set([rootId])" in orphans
@@ -3353,8 +3356,8 @@ def test_frontend_asset_urls_bust_browser_cache():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=253"' in html
-    assert 'src="/app.js?v=358"' in html
-    assert 'dav-shell-v227' in sw
+    assert 'src="/app.js?v=359"' in html
+    assert 'dav-shell-v228' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

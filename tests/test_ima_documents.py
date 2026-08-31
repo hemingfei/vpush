@@ -1287,6 +1287,31 @@ def test_list_items_accepts_empty_terminal_page(monkeypatch):
     assert client.list_items("root") == []
 
 
+def test_list_items_folders_only_keeps_earlier_pages_if_later_page_fails():
+    client = ImaPureClient(
+        ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
+    )
+    client._token = lambda: "access"
+    calls = []
+
+    def open_json(request):
+        calls.append(json.loads(request.data))
+        if len(calls) == 1:
+            return {
+                "code": 0,
+                "knowledge_list": [
+                    {"media_type": 99, "folder_info": {"folder_id": "folder-a", "name": "A"}},
+                ],
+                "next_cursor": "p2",
+            }, {}
+        return {"code": 51, "msg": "busy"}, {}
+
+    client._open_json = open_json
+    items = client.list_items("root", folders_only=True)
+    assert [item["folder_info"]["folder_id"] for item in items] == ["folder-a"]
+    assert len(calls) >= 2
+
+
 def test_list_items_folders_only_stops_after_file_page():
     client = ImaPureClient(
         ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
@@ -2583,6 +2608,43 @@ def test_folder_info_classifies_mixed_metadata_as_folder():
         "parent_id": "root",
         "has_children": None,
     }
+
+
+def test_normalize_reads_folder_counts_from_folder_info():
+    nested = normalize_ima_folder_item(
+        {
+            "media_type": 99,
+            "folder_info": {
+                "folder_id": "child",
+                "name": "原始稿",
+                "folder_number": 321,
+                "file_number": 321,
+            },
+        },
+        "root",
+    )
+    assert nested == {
+        "id": "child",
+        "name": "原始稿",
+        "parent_id": "root",
+        "has_children": True,
+        "folder_count": 321,
+        "file_count": 321,
+    }
+    empty = normalize_ima_folder_item(
+        {
+            "media_type": 99,
+            "folder_info": {
+                "folder_id": "leaf",
+                "name": "空目录",
+                "folder_number": 0,
+                "file_number": 8,
+            },
+        },
+        "root",
+    )
+    assert empty["has_children"] is False
+    assert empty["folder_count"] == 0
 
 
 def test_normalize_ima_folder_item_matches_folder_classification():

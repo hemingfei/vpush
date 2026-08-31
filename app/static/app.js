@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.115";
+const APP_VERSION = "1.12.116";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -5926,7 +5926,8 @@ function imaFolderRowHtml(groupId, item, depth) {
   if (!folderId) return "";
   imaMountState.parents.set(imaMountCacheKey(groupId, folderId), String(item?.parent_id || ""));
   const childKey = imaMountCacheKey(groupId, folderId);
-  const hasChildren = item?.has_children !== false || imaMountState.folders.has(childKey);
+  const knownEmpty = item?.has_children === false || Number(item?.folder_count) === 0;
+  const hasChildren = !knownEmpty || imaMountState.folders.has(childKey);
   const expanded = imaMountState.expanded.has(childKey);
   const selection = imaFolderSelectionState(groupId, folderId);
   const inputId = `ima-folder-${groupId}-${folderId}`;
@@ -6009,7 +6010,7 @@ function renderImaFolderTree(groupId) {
     name: "整个知识库",
     parent_id: "",
     has_children: true,
-  }, 0) + (imaMountState.expanded.has(rootKey) ? imaRenderFolderBranch(groupKey, rootId, 1) : "") + imaFolderOrphansHtml(groupKey, rootId);
+  }, 0) + imaFolderOrphansHtml(groupKey, rootId);
   tree.querySelectorAll('input[data-indeterminate="true"]').forEach((input) => {
     input.indeterminate = true;
   });

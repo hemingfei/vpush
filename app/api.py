@@ -2844,6 +2844,11 @@ def create_api_router(
                 max_pages=IMA_FOLDER_LIST_MAX_PAGES,
             )
         except Exception as exc:  # noqa: BLE001 - folder endpoint must return a safe error
+            logger.exception(
+                "IMA folder list failed group=%s parent=%s",
+                group_id,
+                actual_parent_id,
+            )
             detail = _safe_error(exc)
             raise HTTPException(status_code=502, detail=f"IMA 文件夹读取失败: {detail}") from None
         items = []

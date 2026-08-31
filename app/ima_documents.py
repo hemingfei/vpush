@@ -372,10 +372,13 @@ def _count_value(item: dict[str, Any], keys: tuple[str, ...]) -> int | None:
     return None
 
 
+def _folder_count_source(item: dict[str, Any]) -> dict[str, Any]:
+    info = item.get("folder_info") if isinstance(item.get("folder_info"), dict) else {}
+    return {**info, **item}
+
 
 def ima_folder_listing_hint(item: dict[str, Any]) -> tuple[int | None, int | None, int | None]:
-    info = item.get("folder_info") if isinstance(item.get("folder_info"), dict) else {}
-    merged = {**info, **item}
+    merged = _folder_count_source(item)
     files = _count_value(merged, ("file_number", "file_count"))
     folders = _count_value(merged, ("folder_number", "sub_folder_count", "children_count", "child_count"))
     mtime = _optional_int(merged.get("update_time") or merged.get("last_modify_time"))
@@ -391,7 +394,10 @@ def _listing_cache_hit(node: dict[str, Any], hint: tuple[int | None, int | None,
     return False
 
 def ima_folder_children_hint(item: dict[str, Any]) -> bool | None:
-    count = _count_value(item, ("folder_number", "sub_folder_count", "children_count", "child_count"))
+    count = _count_value(
+        _folder_count_source(item),
+        ("folder_number", "sub_folder_count", "children_count", "child_count"),
+    )
     return None if count is None else count > 0
 
 
@@ -407,8 +413,9 @@ def normalize_ima_folder_item(item: dict[str, Any], parent_id: str) -> dict[str,
         "parent_id": parent_id,
         "has_children": ima_folder_children_hint(item),
     }
-    folder_count = _count_value(item, ("folder_number", "sub_folder_count"))
-    file_count = _count_value(item, ("file_number", "file_count"))
+    counts = _folder_count_source(item)
+    folder_count = _count_value(counts, ("folder_number", "sub_folder_count"))
+    file_count = _count_value(counts, ("file_number", "file_count"))
     if folder_count is not None:
         normalized["folder_count"] = folder_count
     if file_count is not None:
@@ -881,20 +888,25 @@ class ImaPureClient:
             )
             status = None
             data = {}
-            for attempt in range(4):
-                data, _ = self._open_json(request)
-                status = _ima_response_status(data, "IMA list")
-                if _ima_success_status(status):
-                    break
-                if status not in (51, 429, 30005) or attempt == 3:
-                    raise RuntimeError(f"IMA list failed code={status}")
-                time.sleep(1.5 * (attempt + 1))
-                request = urllib.request.Request(
-                    BASE + "/knowledge_tab_reader/get_knowledge_list",
-                    data=json.dumps(body, ensure_ascii=False).encode(),
-                    method="POST",
-                    headers=self._headers(self._token()),
-                )
+            try:
+                for attempt in range(4):
+                    data, _ = self._open_json(request)
+                    status = _ima_response_status(data, "IMA list")
+                    if _ima_success_status(status):
+                        break
+                    if status not in (51, 429, 30005) or attempt == 3:
+                        raise RuntimeError(f"IMA list failed code={status}")
+                    time.sleep(1.5 * (attempt + 1))
+                    request = urllib.request.Request(
+                        BASE + "/knowledge_tab_reader/get_knowledge_list",
+                        data=json.dumps(body, ensure_ascii=False).encode(),
+                        method="POST",
+                        headers=self._headers(self._token()),
+                    )
+            except Exception:
+                if folders_only and items:
+                    return items
+                raise
             payload = self._payload(data)
             if not isinstance(payload, dict):
                 raise RuntimeError("IMA list returned invalid response")
