@@ -993,9 +993,6 @@ class ImaPureClient:
             except (TypeError, ValueError, OverflowError):
                 ts_ms = 0
             name = item_display_name(item, media_id)
-            override = title_overrides.get(str(name).removesuffix(".pdf"))
-            if override:
-                name = f"{override}.pdf"
             if not (name.lower().endswith(".pdf") or media_id.lower().startswith("pdf_")):
                 return
             seen_media_ids.add(media_id)
@@ -1118,7 +1115,8 @@ class ImaPureClient:
                 _ingest(folder_id, items)
                 _remember_listing(folder_id, items)
         records.sort(key=lambda item: (item["day"], item["media_id"]))
-        return records
+        # listing cache 存原始云端名；覆盖只作用在返回值，避免缓存命中跳过 append_file 后丢标题。
+        return apply_title_overrides(records, title_overrides)
 
     def get_media(self, media_id: str) -> dict[str, Any]:
         token = self._token()
@@ -1373,6 +1371,30 @@ def translation_fields(abstract: str, state_item: dict[str, Any]) -> dict[str, A
         "abstract_zh": cached if fresh else "",
         "needs_translation": bool(text) and (not already) and (not fresh),
     }
+
+
+def apply_title_overrides(
+    records: list[dict[str, Any]], overrides: dict[str, str] | None
+) -> list[dict[str, Any]]:
+    """按磁盘 titles.json 把展示名换成 PDF 首页标题；不改 listing cache / 磁盘文件名。"""
+    if not overrides or not records:
+        return records
+    out: list[dict[str, Any]] = []
+    for record in records:
+        name = str(record.get("name") or "")
+        stem = name.removesuffix(".pdf")
+        override = str(overrides.get(stem) or "").strip()
+        if not override:
+            out.append(record)
+            continue
+        new_name = override if override.lower().endswith(".pdf") else f"{override}.pdf"
+        if new_name == name:
+            out.append(record)
+            continue
+        updated = dict(record)
+        updated["name"] = new_name
+        out.append(updated)
+    return out
 
 
 def load_title_overrides(archive_root: Path | str) -> dict[str, str]:
