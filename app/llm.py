@@ -326,6 +326,9 @@ def summarize_daily(posts, llm_config=None, client=None) -> DailySummary | None:
         ],
         4000,
         client=client,
+        # grok-4.6 thinking + 长提示经常超过默认 60s，超时会降级成原文列表
+        timeout=MARK_RESOLVE_TIMEOUT,
+        attempts=1,
     )
     return _parse_daily_summary(text or "", len(posts))
 
