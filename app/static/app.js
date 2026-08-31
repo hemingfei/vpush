@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.102";
+const APP_VERSION = "1.12.103";
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["config", "cookies", "proxies", "plaza"];
@@ -1177,16 +1177,11 @@ function knowledgeLibRowHtml(group, selected, mode) {
 function knowledgeSourceControlsHtml(selectedGroup = "") {
   const selected = String(selectedGroup || "");
   const subscribed = state.imaCatalogSubscribed || [];
-  const available = state.imaCatalogAvailable || [];
   const options = [{ id: "", name: "全部研报" }, ...subscribed.map((group) => ({
     id: String(group.id || ""),
     name: group.name || group.id,
   }))];
-  const canManage = available.length || (!state.user?.is_admin && subscribed.length);
-  const manageHtml = canManage
-    ? `<details class="ima-source-manage"><summary>管理订阅</summary><div class="ima-source-menu">${subscribed.map((group) => knowledgeLibRowHtml(group, selected, "subscribed")).join("")}${available.map((group) => knowledgeLibRowHtml(group, selected, "available")).join("")}</div></details>`
-    : "";
-  return `<label class="ima-report-source"><span class="sr-only">资料源</span><select id="ima-doc-source" aria-label="资料源" onchange="selectImaDocumentGroup(this.value)"><option value=""${selected ? "" : " selected"}>全部研报</option>${options.filter((group) => group.id).map((group) => `<option value="${escapeHtml(group.id)}"${group.id === selected ? " selected" : ""}>${escapeHtml(group.name)}</option>`).join("")}</select></label>${manageHtml}`;
+  return `<label class="ima-report-source"><span class="sr-only">资料源</span><select id="ima-doc-source" aria-label="资料源" onchange="selectImaDocumentGroup(this.value)"><option value=""${selected ? "" : " selected"}>全部研报</option>${options.filter((group) => group.id).map((group) => `<option value="${escapeHtml(group.id)}"${group.id === selected ? " selected" : ""}>${escapeHtml(group.name)}</option>`).join("")}</select></label>`;
 }
 
 function refreshKnowledge() {
@@ -1295,9 +1290,9 @@ async function renderKnowledge(seq, encodedMediaId = "") {
         list.innerHTML = `${controls}${emptyState("还没有配置知识库", `<div><button type="button" class="btn-normal" onclick="go('admin/knowledge')">去配置采集</button></div>`)}`;
       } else {
         list.innerHTML = `${controls}${emptyState(
-          "还没有订阅知识库",
+          "还没有可看的知识库",
           available.length
-            ? `<div><p class="section-meta">在管理订阅里点订阅</p></div>`
+            ? `<div class="kb-lib-empty">${available.map((group) => knowledgeLibRowHtml(group, "", "available")).join("")}</div>`
             : `<div><p class="section-meta">找管理员在用户设置里勾选知识库后再来</p></div>`
         )}`;
       }
@@ -3665,23 +3660,27 @@ function combinationDetailHtml(post) {
     sections.push(`<div class="combo-stats">${stats.map(([key, value]) => `<span class="combo-stat"><b>${escapeHtml(key)}</b> ${escapeHtml(value)}</span>`).join("")}</div>`);
   }
   if (actions.length) {
-    sections.push(`<section class="combo-section"><h3 class="combo-section-title">调仓明细</h3><div class="combo-actions">${actions.map((a) => {
+    const rows = actions.map((a) => {
       const type = a.type || "调整";
-      const icon = { 清仓: "🗑", 新建: "🆕", 增持: "➕", 减持: "➖" }[type] || "•";
       const stock = a.stock || a.symbol || "";
-      const symbol = a.stock && a.symbol ? `（${a.symbol}）` : "";
-      const price = a.price != null && String(a.price).trim() ? `<div class="combo-action-price">成交价 ${escapeHtml(a.price)}</div>` : "";
-      return `<div class="combo-action"><div class="combo-action-head"><span class="combo-action-type">${icon} ${escapeHtml(type)}</span><strong>${escapeHtml(stock)}${escapeHtml(symbol)}</strong></div><div class="combo-action-position">${escapeHtml(a.prev || "0.0%")} → ${escapeHtml(a.target || "0.0%")}</div>${price}</div>`;
-    }).join("")}</div></section>`);
+      const symbol = a.stock && a.symbol
+        ? ` <span class="combo-sym">${escapeHtml(a.symbol)}</span>`
+        : "";
+      const price = a.price != null && String(a.price).trim()
+        ? `<span class="combo-action-price">${escapeHtml(a.price)}</span>`
+        : "";
+      return `<div class="combo-action"><span class="combo-action-type">${escapeHtml(type)}</span><strong class="combo-action-name">${escapeHtml(stock)}${symbol}</strong><span class="combo-action-meta"><span class="combo-action-position">${escapeHtml(a.prev || "0.0%")} → ${escapeHtml(a.target || "0.0%")}</span>${price}</span></div>`;
+    }).join("");
+    sections.push(`<section class="combo-section"><h3 class="combo-section-title">调仓明细</h3><div class="combo-actions"><div class="combo-action combo-action-cols" aria-hidden="true"><span>操作</span><span>标的</span><span>仓位 / 成交价</span></div>${rows}</div></section>`);
   }
   if (holdings.length) {
     sections.push(`<section class="combo-section"><h3 class="combo-section-title">现有持仓</h3><div class="combo-holdings">${holdings.map((h) => {
       const name = h.name || h.symbol || "";
-      const symbol = h.name && h.symbol ? `（${h.symbol}）` : "";
-      return `<div class="combo-holding"><span>${escapeHtml(name)}${escapeHtml(symbol)}</span><b>${escapeHtml(h.weight)}%</b></div>`;
+      const symbol = h.name && h.symbol ? ` <span class="combo-sym">${escapeHtml(h.symbol)}</span>` : "";
+      return `<div class="combo-holding"><span>${escapeHtml(name)}${symbol}</span><span class="combo-w">${escapeHtml(h.weight)}%</span></div>`;
     }).join("")}</div></section>`);
   }
-  if (detail.cash) sections.push(`<div class="combo-cash">💵 现金 <b>${escapeHtml(detail.cash)}</b></div>`);
+  if (detail.cash) sections.push(`<div class="combo-cash">现金 <b>${escapeHtml(detail.cash)}</b></div>`);
   return sections.length ? `<div class="combo-detail">${sections.join("")}</div>` : "";
 }
 

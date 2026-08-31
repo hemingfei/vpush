@@ -1744,6 +1744,11 @@ class DB:
                         "INSERT OR IGNORE INTO ima_kb_acl (group_id, user_id) VALUES (?, ?)",
                         (group_id, uid),
                     )
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO ima_kb_subscriptions (user_id, group_id, created_at) "
+                        "VALUES (?, ?, ?)",
+                        (uid, group_id, int(time.time())),
+                    )
                 rows = self._conn.execute(
                     "SELECT user_id FROM ima_kb_subscriptions WHERE group_id = ?",
                     (group_id,),
@@ -1825,6 +1830,11 @@ class DB:
                     self._conn.execute(
                         "INSERT OR IGNORE INTO ima_kb_acl (group_id, user_id) VALUES (?, ?)",
                         (group_id, uid),
+                    )
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO ima_kb_subscriptions (user_id, group_id, created_at) "
+                        "VALUES (?, ?, ?)",
+                        (uid, group_id, int(time.time())),
                     )
                 for group_id in existing - allowed:
                     self._conn.execute(

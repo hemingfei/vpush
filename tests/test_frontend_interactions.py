@@ -2475,9 +2475,8 @@ def test_ima_source_filter_is_compact_and_subscription_management_survives():
     assert 'id="ima-doc-source"' in controls
     assert 'aria-label="资料源"' in controls
     assert "selectImaDocumentGroup(this.value)" in controls
-    assert "ima-source-manage" in controls
-    assert "knowledgeLibRowHtml" in controls
-    assert 'knowledgeLibRowHtml(group, selected, "subscribed")' in controls
+    assert "ima-source-manage" not in controls
+    assert "管理订阅" not in controls
     assert "subscribeKnowledge" in src
     assert "unsubscribeKnowledge" in src
 
@@ -2790,6 +2789,23 @@ def test_web_combination_posts_use_structured_rebalance_details():
     assert "combo-detail" in detail
     assert ".combo-detail" in css
     assert ".combo-action" in css
+
+
+def test_web_combination_pc_rows_are_compact_single_line():
+    """PC 调仓一行四列、持仓两列；不重复「成交价」前缀、不用 emoji 撑高。"""
+    detail = _fn_body("combinationDetailHtml")
+    css = STYLE_CSS.read_text()
+    assert "combo-action-head" not in detail
+    assert "成交价 ${" not in detail
+    assert "combo-action-cols" in detail
+    for glyph in ("🗑", "🆕", "➕", "➖", "💵"):
+        assert glyph not in detail
+    assert ".combo-action {" in css
+    assert "grid-template-columns: 3.5em minmax(0, 1fr) auto" in css
+    assert "combo-action-meta" in detail
+    assert ".combo-holdings {" in css
+    assert "grid-template-columns: 1fr 1fr" in css
+    assert "@media (max-width: 768px)" in css
 
 
 def test_live_toolbar_keeps_existing_filter_structure():
@@ -3269,9 +3285,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=242"' in html
-    assert 'src="/app.js?v=338"' in html
-    assert 'dav-shell-v206' in sw
+    assert 'href="/style.css?v=244"' in html
+    assert 'src="/app.js?v=340"' in html
+    assert 'dav-shell-v208' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -3372,8 +3388,8 @@ def test_knowledge_defaults_to_all_readable_sources():
     assert 'id="ima-doc-source"' in controls
     assert '>全部研报<' in controls
     assert "state.imaCatalogSubscribed" in controls
-    assert "available" in controls
-    assert "knowledgeLibRowHtml" in controls
+    assert "管理订阅" not in controls
+    assert "knowledgeLibRowHtml" in render
     assert "subscribeKnowledge" in APP_JS.read_text()
 
 

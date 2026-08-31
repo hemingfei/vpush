@@ -126,17 +126,14 @@ def test_ima_kb_acl_and_subscribe_roundtrip(tmp_path):
     assert db.ima_kb_acl_usernames("banking") == ["kb_user"]
     assert db.ima_kb_can_subscribe(user_id, "banking") is True
     assert db.ima_kb_can_subscribe(admin_id, "banking") is False
-    assert db.ima_kb_can_read(user_id, "banking") is False
-    db.ima_kb_subscribe(user_id, "banking")
     assert db.ima_kb_can_read(user_id, "banking") is True
     db.set_ima_kb_acl("banking", [])
     assert db.ima_kb_can_read(user_id, "banking") is False
     assert db.ima_kb_is_subscribed(user_id, "banking") is False
     db.set_ima_kb_acl("banking", [user_id])
-    db.ima_kb_subscribe(user_id, "banking")
     db.set_ima_kb_acl_for_user(user_id, ["macro"])
     assert db.ima_kb_group_ids_for_user(user_id) == ["macro"]
-    assert db.ima_kb_subscribed_group_ids_for_user(user_id) == []
+    assert db.ima_kb_subscribed_group_ids_for_user(user_id) == ["macro"]
     assert db.ima_kb_can_subscribe(user_id, "banking") is False
 
 
@@ -164,10 +161,6 @@ def test_catalog_hides_ungranted_groups_from_users(tmp_path):
     db.set_ima_kb_acl("banking", [user_id])
     user = {"id": user_id, "is_admin": 0}
     admin = {"id": admin_id, "is_admin": 1}
-    listed = catalog(db, user, _groups())
-    assert [g["id"] for g in listed["available"]] == ["banking"]
-    assert listed["subscribed"] == []
-    db.ima_kb_subscribe(user_id, "banking")
     listed = catalog(db, user, _groups())
     assert [g["id"] for g in listed["subscribed"]] == ["banking"]
     assert listed["available"] == []
@@ -301,15 +294,12 @@ def test_user_cannot_see_kb_until_granted_and_subscribed(tmp_path, monkeypatch):
     )
     assert granted.status_code == 200, granted.text
     catalog_payload = client.get("/api/ima-documents/catalog", headers=user_headers).json()
-    assert [g["id"] for g in catalog_payload["available"]]
-    assert "acl_usernames" not in catalog_payload["available"][0]
+    assert [g["id"] for g in catalog_payload["subscribed"]]
+    assert catalog_payload["available"] == []
+    assert "acl_usernames" not in catalog_payload["subscribed"][0]
     admin_catalog = client.get("/api/ima-documents/catalog", headers=admin_headers).json()
     admin_group = next(g for g in admin_catalog["subscribed"] if g["id"] == group_id)
     assert "reader" in admin_group["acl_usernames"]
-    assert client.get("/api/ima-documents/file_abc", headers=user_headers).status_code == 404
-    assert client.post(
-        f"/api/ima-documents/groups/{group_id}/subscribe", headers=user_headers
-    ).status_code == 200
     assert client.get("/api/ima-documents/file_abc", headers=user_headers).status_code == 200
 
     outsider = _headers(client, "outsider", "KBOUT1")
@@ -361,10 +351,8 @@ def test_admin_sets_user_ima_kb_groups(tmp_path, monkeypatch):
     reader = next(u for u in client.get("/api/users", headers=admin_headers).json() if u["username"] == "reader")
     assert group_id in reader["ima_kb_groups"]
     catalog = client.get("/api/ima-documents/catalog", headers=user_headers).json()
-    assert any(g["id"] == group_id for g in catalog["available"])
-    assert client.post(
-        f"/api/ima-documents/groups/{group_id}/subscribe", headers=user_headers
-    ).status_code == 200
+    assert any(g["id"] == group_id for g in catalog["subscribed"])
+    assert catalog["available"] == []
     reader = next(u for u in client.get("/api/users", headers=admin_headers).json() if u["username"] == "reader")
     assert group_id in reader["ima_kb_subscribed"]
     updated = client.put(
@@ -1638,10 +1626,6 @@ def test_indexed_api_serves_without_reading_json(tmp_path, monkeypatch):
         json={"usernames": ["idx_reader"]},
     )
     assert granted.status_code == 200, granted.text
-    assert client.get("/api/ima-documents", headers=reader_headers).json()["items"] == []
-    assert client.post(
-        f"/api/ima-documents/groups/{group_a}/subscribe", headers=reader_headers
-    ).status_code == 200
     reader_list = client.get("/api/ima-documents", headers=reader_headers)
     assert reader_list.status_code == 200
     assert {item["media_id"] for item in reader_list.json()["items"]} == {
