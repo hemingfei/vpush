@@ -257,6 +257,10 @@ docker compose up -d --build
 
 `miniprogram/` 是微信小程序客户端。用微信开发者工具打开，把 `miniprogram/config.js` 的 `BASE_URL` 改为后端地址，并在微信公众平台配置 `WECHAT_APP_ID` / `WECHAT_APP_SECRET` 即可；未配置微信凭据时登录页自动降级为账号密码登录。
 
+## 跨平台 App（可选）
+
+`mobile/` 提供 Capacitor 封装的移动客户端（Android 可直接构建 APK，iOS 需 macOS）。App 是一个薄壳：首次启动填写自托管服务器地址即可像网页一样使用全部功能，前端随服务器升级自动同步，详见 `mobile/README.md`。
+
 ## 备份与运维
 
 - 数据库为单文件 `data/dav.db`，直接复制即备份

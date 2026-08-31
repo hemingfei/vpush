@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#f8f8fb" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1a2433" media="(prefers-color-scheme: dark)">
+  <title>V Push</title>
+  <script src="capacitor.js"></script>
+  <style>
+    :root {
+      --bg: #f8f8fb;
+      --surface: #ffffff;
+      --border: #e6e8ef;
+      --text: #1c2333;
+      --text-soft: #6b7280;
+      --accent: #1668e0;
+      --accent-strong: #1258c4;
+      --danger: #d9534f;
+      --ok: #1a9a5c;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #121826;
+        --surface: #1a2433;
+        --border: #2a3547;
+        --text: #e7ebf3;
+        --text-soft: #93a0b4;
+        --accent: #5a9bf5;
+        --accent-strong: #3f86ee;
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .card {
+      width: 100%;
+      max-width: 380px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px 24px;
+      text-align: center;
+    }
+    .logo { width: 72px; height: 72px; margin: 0 auto 12px; display: block; }
+    h1 { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+    .sub { font-size: 13px; color: var(--text-soft); margin-bottom: 24px; }
+    .field {
+      width: 100%;
+      padding: 12px 14px;
+      font-size: 15px;
+      color: var(--text);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      outline: none;
+      -webkit-user-select: text;
+      user-select: text;
+    }
+    .field:focus { border-color: var(--accent); }
+    .btn {
+      width: 100%;
+      margin-top: 12px;
+      padding: 12px;
+      font-size: 15px;
+      font-weight: 600;
+      color: #fff;
+      background: linear-gradient(180deg, var(--accent), var(--accent-strong));
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+    .btn:disabled { opacity: 0.55; }
+    .status { min-height: 34px; margin-top: 14px; font-size: 13px; color: var(--text-soft); line-height: 1.4; }
+    .status.err { color: var(--danger); }
+    .status.ok { color: var(--ok); }
+    .hint { margin-top: 18px; font-size: 12px; color: var(--text-soft); line-height: 1.6; }
+    .prev { color: var(--accent); word-break: break-all; }
+    .spinner {
+      display: inline-block; width: 14px; height: 14px; vertical-align: -2px;
+      border: 2px solid var(--text-soft); border-top-color: transparent; border-radius: 50%;
+      animation: spin 0.8s linear infinite; margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .hide { display: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="img/logo-mark-dark.svg">
+      <img class="logo" src="img/logo-mark.svg" alt="">
+    </picture>
+    <h1>V Push</h1>
+    <p class="sub">连接到你的自托管服务器</p>
+
+    <div id="setup">
+      <input id="url" class="field" type="url" inputmode="url" autocomplete="off"
+             spellcheck="false" placeholder="服务器地址，如 http://192.168.1.10:8000">
+      <button id="go" class="btn" type="button">连 接</button>
+      <div id="status" class="status"></div>
+      <p class="hint" id="prevHint" style="text-align:left;">
+        填写 V Push 服务的访问地址（网页后台地址，不含登录页之后的路径）。<br>
+        支持局域网 http 地址或已配置 HTTPS 的公网地址。
+      </p>
+    </div>
+
+    <div id="connecting" class="hide">
+      <div class="status"><span class="spinner"></span><span id="connectingText">正在连接…</span></div>
+    </div>
+  </div>
+
+  <script>
+    const KEY = 'serverUrl';
+    const prefs = (window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.Preferences) || {
+      get: async ({ key }) => ({ value: localStorage.getItem(key) }),
+      set: async ({ key, value }) => { localStorage.setItem(key, value); },
+      remove: async ({ key }) => { localStorage.removeItem(key); }
+    };
+
+    const $ = (id) => document.getElementById(id);
+    const setupEl = $('setup'), connectingEl = $('connecting'), statusEl = $('status');
+
+    function showSetup(msg, isErr) {
+      connectingEl.classList.add('hide');
+      setupEl.classList.remove('hide');
+      statusEl.textContent = msg || '';
+      statusEl.className = 'status' + (isErr ? ' err' : '');
+    }
+    function showConnecting(text) {
+      setupEl.classList.add('hide');
+      connectingEl.classList.remove('hide');
+      $('connectingText').textContent = text || '正在连接…';
+    }
+
+    /* 用 <img> 探测：不受 CORS 限制；探测路径是前端静态资源，无需登录即可访问。
+       多路径依次尝试，任一成功即可。 */
+    const PROBE_PATHS = ['/icon-192.png', '/logo-mark.svg', '/logo.svg'];
+
+    function probeOnce(src, timeoutMs) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        let done = false;
+        const timer = setTimeout(() => { if (!done) { done = true; img.src = ''; resolve(false); } }, timeoutMs);
+        img.onload = () => { if (!done) { done = true; clearTimeout(timer); resolve(true); } };
+        img.onerror = () => { if (!done) { done = true; clearTimeout(timer); resolve(false); } };
+        img.src = src + (src.includes('?') ? '&' : '?') + 'probe=' + Date.now();
+      });
+    }
+
+    async function probe(base, timeoutMs) {
+      for (const path of PROBE_PATHS) {
+        if (await probeOnce(base + path, timeoutMs || 10000)) return true;
+      }
+      return false;
+    }
+
+    function normalize(input) {
+      let s = (input || '').trim().replace(/\/+$/, '');
+      if (!s) return { candidates: [] };
+      if (/^https?:\/\//i.test(s)) return { candidates: [s], explicit: true };
+      if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return { candidates: ['https://' + s, 'http://' + s] };
+      return { candidates: [] };
+    }
+
+    async function connect(raw) {
+      const { candidates, explicit } = normalize(raw);
+      if (!candidates.length) { showSetup('请输入正确的服务器地址', true); return; }
+      $('go').disabled = true;
+      for (const base of candidates) {
+        showConnecting('正在连接 ' + base + ' …');
+        const ok = await probe(base);
+        if (ok) {
+          await prefs.set({ key: KEY, value: base });
+          showConnecting('连接成功，正在进入…');
+          window.location.replace(base + '/');
+          return;
+        }
+        if (explicit) break;
+      }
+      $('go').disabled = false;
+      const tip = '无法连接 ' + candidates[0] + '。排查步骤：'
+        + '① 用手机浏览器打开 ' + candidates[0] + '/healthz，能显示 {"status":"ok"} 说明网络可达（否则是网络问题，检查服务器防火墙/安全组是否对手机所在网络放行该端口）；'
+        + '② 浏览器能打开但本 APP 不行时，确认安装的是最新 APK，或长按 APP 图标用「切换服务器」重试。';
+      showSetup(tip, true);
+    }
+
+    $('go').addEventListener('click', () => connect($('url').value));
+    $('url').addEventListener('keydown', (e) => { if (e.key === 'Enter') connect($('url').value); });
+
+    (async () => {
+      const isReset = new URLSearchParams(window.location.search).get('reset') === '1';
+      const { value } = await prefs.get({ key: KEY });
+
+      if (isReset) {
+        await prefs.remove({ key: KEY });
+        if (value) {
+          $('prevHint').innerHTML = '上次连接的服务器：<span class="prev"></span><br>填写 V Push 服务的访问地址（网页后台地址）。';
+          document.querySelector('#prevHint .prev').textContent = value;
+        }
+        showSetup('请输入要连接的服务器地址');
+        $('url').focus();
+        return;
+      }
+
+      if (value) {
+        showConnecting('正在连接 ' + value + ' …');
+        const ok = await probe(value, 8000);
+        if (ok) { window.location.replace(value + '/'); return; }
+        showSetup('无法连接上次的服务器（' + value + '）。可检查服务器后重试，或输入新的地址。', true);
+        $('url').value = value;
+        return;
+      }
+
+      showSetup('');
+      $('url').focus();
+    })();
+  </script>
+</body>
+</html>

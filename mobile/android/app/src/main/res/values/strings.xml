@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">V Push</string>
+    <string name="title_activity_main">V Push</string>
+    <string name="package_name">com.icekale.vpush</string>
+    <string name="custom_url_scheme">com.icekale.vpush</string>
+    <string name="shortcut_switch_server">切换服务器</string>
+    <string name="shortcut_switch_server_long">连接其他 V Push 服务器</string>
+</resources>

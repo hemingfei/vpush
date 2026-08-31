@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="switch_server"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_switch_server"
+        android:shortcutLongLabel="@string/shortcut_switch_server_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.icekale.vpush"
+            android:targetClass="com.icekale.vpush.MainActivity">
+            <extra
+                android:name="switch_server"
+                android:value="true" />
+        </intent>
+    </shortcut>
+</shortcuts>

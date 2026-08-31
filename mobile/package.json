@@ -1,0 +1,19 @@
+{
+  "name": "vpush-mobile",
+  "private": true,
+  "version": "1.0.0",
+  "description": "V Push 跨平台客户端（Capacitor 封装，加载自托管服务器前端）",
+  "scripts": {
+    "sync": "cap sync",
+    "open:android": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.4.4",
+    "@capacitor/core": "^7.4.4",
+    "@capacitor/preferences": "^7.0.2"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^7.4.4"
+  }
+}

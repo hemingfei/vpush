@@ -1,0 +1,11 @@
+{
+  "appId": "com.icekale.vpush",
+  "appName": "V Push",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": true
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}
