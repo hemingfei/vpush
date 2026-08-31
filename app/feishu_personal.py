@@ -26,7 +26,7 @@ DEFINITIVE_ERROR_CODES = frozenset({
     20001,   # 应用或能力不存在
     99991670,
 })
-BIND_CODE_TTL = 60  # 绑定码有效期（秒）
+BIND_CODE_TTL = 600  # 绑定码有效期（秒），与共享机器人 /bind 一致
 POLL_MAX_ACTIVE = 16  # 同时进行中的轮询/监听上限（ponytail: 简单上限防资源滥用）
 POLL_MAX_INTERVAL = 30
 
@@ -368,7 +368,7 @@ class FeishuPersonalManager:
 
     # ---- 绑定码 ----
     def issue_bind_code(self, session_id: str) -> dict:
-        """生成/刷新 60 秒绑定码；作废旧码，新码立即生效。"""
+        """生成/刷新绑定码；作废旧码，新码立即生效。"""
         session = self.db.get_feishu_registration_session(session_id)
         if session is None:
             raise RuntimeError("注册会话不存在")

@@ -259,7 +259,8 @@ def test_feishu_personal_async_callbacks_are_owner_guarded_and_logout_resets_all
     countdown = _fn_body("startFeishuBindCountdown")
     assert "fsPersonalOwnerActive(owner)" in countdown
     assert "fsPersonalState.countdownTimer !== timer" in countdown
-    assert "startFeishuPersonalPoll(fsPersonalState.sessionId, owner)" in countdown
+    assert "refreshFeishuBindCode()" in countdown
+    assert "startFeishuPersonalPoll(" not in countdown
 
     clear = _fn_body("clearSessionCaches")
     for statement in (
@@ -272,6 +273,18 @@ def test_feishu_personal_async_callbacks_are_owner_guarded_and_logout_resets_all
     ):
         assert statement in clear
     assert clear.index("stopFeishuPersonalPoll()") < clear.index("fsPersonalState.owner = null")
+
+
+def test_feishu_personal_keeps_polling_while_awaiting_bind():
+    """awaiting_bind 不得停轮询；码过期/丢失时自动 refresh-code，避免卡在 0s。"""
+    poll = _fn_body("startFeishuPersonalPoll")
+    awaiting = poll[poll.index('data.status === "awaiting_bind"'):poll.index('data.status === "active"')]
+    assert "stopFeishuPersonalPoll" not in awaiting
+    assert "refreshFeishuBindCode" in awaiting
+
+    refresh = _fn_body("refreshFeishuBindCode")
+    assert "stopFeishuPersonalPoll" not in refresh
+    assert "refreshInFlight" in refresh
 
 
 def test_weibo_qr_callbacks_are_owner_guarded_and_logout_invalidates_timer():

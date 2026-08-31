@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.100";
+const APP_VERSION = "1.12.101";
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["config", "cookies", "proxies", "plaza"];
@@ -399,6 +399,7 @@ function clearSessionCaches() {
   fsPersonalState.bindExpiresAt = 0;
   fsPersonalState.verificationUri = "";
   fsPersonalState.qrUri = "";
+  fsPersonalState.refreshInFlight = false;
   if (typeof wbQrTimer !== "undefined") {
     if (wbQrTimer) clearTimeout(wbQrTimer);
     wbQrTimer = null;
@@ -4831,7 +4832,7 @@ function bindGuideHtml(bound, stepsHtml) {
 // ---------- 飞书个人机器人（扫码注册） ----------
 const fsPersonalState = {
   sessionId: "", bindCommand: "", bindExpiresAt: 0, verificationUri: "", qrUri: "",
-  pollTimer: null, countdownTimer: null, owner: null,
+  pollTimer: null, countdownTimer: null, owner: null, refreshInFlight: false,
 };
 
 function fsPersonalOwnerActive(owner) {
@@ -4936,12 +4937,20 @@ function startFeishuPersonalPoll(sessionId, owner = fsPersonalState.owner) {
       // 同步个人机器人展示状态（轮询期间 /api/me 不会刷新）
       state.user.feishu_personal = state.user.feishu_personal || {};
       if (data.personal_bot_status) state.user.feishu_personal.status = data.personal_bot_status;
-      if (data.status === "awaiting_bind" && data.bind_command) {
-        fsPersonalState.bindCommand = data.bind_command;
-        fsPersonalState.bindExpiresAt = (data.bind_code_expires_at || 0) * 1000;
-        stopFeishuPersonalPoll(owner);
-        fsPersonalRender(owner);
-        startFeishuBindCountdown(owner);
+      if (data.status === "awaiting_bind") {
+        if (data.bind_command) {
+          const expiresAt = (data.bind_code_expires_at || 0) * 1000;
+          const changed = fsPersonalState.bindCommand !== data.bind_command
+            || fsPersonalState.bindExpiresAt !== expiresAt;
+          fsPersonalState.bindCommand = data.bind_command;
+          fsPersonalState.bindExpiresAt = expiresAt;
+          if (changed) {
+            fsPersonalRender(owner);
+            startFeishuBindCountdown(owner);
+          }
+        } else {
+          refreshFeishuBindCode();
+        }
       } else if (data.status === "active") {
         stopFeishuPersonalPoll(owner);
         fsPersonalState.sessionId = "";
@@ -4992,8 +5001,7 @@ function startFeishuBindCountdown(owner = fsPersonalState.owner) {
     if (secs <= 0) {
       clearInterval(timer);
       fsPersonalState.countdownTimer = null;
-      // 绑定码过期：轮询刷新（服务端 awaiting_bind 状态下重新生成即可）
-      if (fsPersonalState.sessionId) startFeishuPersonalPoll(fsPersonalState.sessionId, owner);
+      if (fsPersonalState.sessionId) refreshFeishuBindCode();
     }
   }, 1000);
   fsPersonalState.countdownTimer = timer;
@@ -5002,17 +5010,19 @@ function startFeishuBindCountdown(owner = fsPersonalState.owner) {
 async function refreshFeishuBindCode() {
   const owner = fsPersonalState.owner;
   const sessionId = fsPersonalState.sessionId;
-  if (!sessionId || !fsPersonalOwnerActive(owner)) return;
+  if (!sessionId || !fsPersonalOwnerActive(owner) || fsPersonalState.refreshInFlight) return;
+  fsPersonalState.refreshInFlight = true;
   try {
     const data = await api(`/api/me/feishu-personal/register/${sessionId}/refresh-code`, { method: "POST" });
     if (!fsPersonalOwnerActive(owner) || fsPersonalState.sessionId !== sessionId) return;
     fsPersonalState.bindCommand = data.bind_command;
     fsPersonalState.bindExpiresAt = (data.bind_code_expires_at || 0) * 1000;
-    stopFeishuPersonalPoll(owner);
     fsPersonalRender(owner);
     startFeishuBindCountdown(owner);
   } catch (err) {
     if (fsPersonalOwnerActive(owner)) flash(err.message, "error");
+  } finally {
+    fsPersonalState.refreshInFlight = false;
   }
 }
 
