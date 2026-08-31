@@ -3202,7 +3202,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   font-size: var(--text-xs); font-weight: var(--font-weight-medium);
 }
 
-/* 知识库阅读台（手机）：必须在桌面规则之后声明，否则同优先级被后者覆盖 */
+/* 研报库阅读台（手机）：必须在桌面规则之后声明，否则同优先级被后者覆盖 */
 @media (max-width: 768px) {
   .page-main:has(.ima-report-page),
   .page-main:has(.ima-reader-page) {

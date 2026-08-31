@@ -2096,7 +2096,7 @@ def test_ima_collector_acl_granted_via_separate_put():
     open_user = _fn_body("adminOpenUser")
     persist = _fn_body("adminSaveUserKnowledge")
     load_users = _fn_body("loadAdminUsers")
-    assert "<h4>知识库</h4>" in open_user
+    assert "<h4>研报库</h4>" in open_user
     assert 'id="um-kb"' in open_user
     assert "data-kb-group" in open_user
     assert "勾选后可自行订阅，取消立即失效。" in open_user
@@ -3292,9 +3292,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=245"' in html
-    assert 'src="/app.js?v=345"' in html
-    assert 'dav-shell-v213' in sw
+    assert 'href="/style.css?v=246"' in html
+    assert 'src="/app.js?v=346"' in html
+    assert 'dav-shell-v214' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -3312,7 +3312,7 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     assert nav.index('route: "timeline"') < nav.index('route: "knowledge"')
     assert 'route: "ima-documents"' not in nav
     assert "IMA 文档" not in nav
-    assert 'label: "知识库"' in nav
+    assert 'label: "研报库"' in nav
     assert 'group: "资料"' not in nav
     assert 'route: "ima-documents"' not in mobile
     assert 'route: "knowledge"' not in mobile
@@ -3320,8 +3320,8 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     assert "知识库请在电脑上打开" not in src
     assert 'class="tl-ima-entry"' in timeline
     assert "go('knowledge')" in timeline
-    assert "知识库" in timeline
-    assert "打开知识库" in timeline
+    assert "研报库" in timeline
+    assert "打开研报库" in timeline
     css = STYLE_CSS.read_text()
     assert ".tl-ima-entry { display: none; }" in css
     # 手机（≤768px）也显示入口：知识库已放开移动端
@@ -3345,7 +3345,7 @@ def test_knowledge_parallel_loads_catalog_and_first_page():
     assert "prefetched" in list_fn
     assert "await prefetched" in list_fn
     assert "imaDocumentsRequestPath()" in list_fn
-    assert "知识库目录加载失败" in render
+    assert "研报库目录加载失败" in render
     assert "refreshKnowledge()" in render
     assert "refreshImaDocuments()" in list_fn
     assert 'params.set("limit", "50")' in path_fn
@@ -4246,10 +4246,10 @@ def test_ima_collector_storage_status_text_contract():
         "  last_result: { downloaded: 3, failed: 0 }"
         "};\n"
         "const cases = ["
-        "  [{ ...base, storage: { status: 'unavailable' } }, '知识库存储暂不可用'],"
-        "  [{ ...base, storage: { status: 'stale' } }, '知识库存储状态过期'],"
-        "  [{ ...base, storage: { status: 'readonly' } }, '知识库存储当前只读'],"
-        "  [{ ...base, storage: { status: 'capacity_blocked' } }, '知识库存储空间已达限制'],"
+        "  [{ ...base, storage: { status: 'unavailable' } }, '研报库存储暂不可用'],"
+        "  [{ ...base, storage: { status: 'stale' } }, '研报库存储状态过期'],"
+        "  [{ ...base, storage: { status: 'readonly' } }, '研报库存储当前只读'],"
+        "  [{ ...base, storage: { status: 'capacity_blocked' } }, '研报库存储空间已达限制'],"
         "  [{ ...base, storage: { status: 'available', used_percent: 23 } }, '已归档 12 份 · 上次新增 3 份 · 存储 23%'],"
         "  [base, '已归档 12 份 · 上次新增 3 份'],"
         "  [{ ...base, index: { status: 'ready' } }, '已归档 12 份 · 上次新增 3 份'],"
@@ -4268,12 +4268,12 @@ def test_ima_collector_storage_status_text_contract():
 def test_knowledge_settings_nav_and_empty_state():
     src = APP_JS.read_text()
     assert '{ route: "admin/knowledge"' in src
-    assert 'label: "知识库设置"' in src
+    assert 'label: "研报库设置"' in src
     assert "knowledge: loadAdminKnowledge" in _fn_body("renderAdmin")
     assert "go('admin/knowledge')" in _fn_body("renderKnowledge")
     assert "admin/stats?tab=config" not in _fn_body("renderKnowledge")
     stats = _fn_body("loadAdminStats")
-    assert "知识库设置" in stats
+    assert "研报库设置" in stats
     assert "go('admin/knowledge')" in stats
     assert "IMA 与知识星球设置已移至" in stats
 
@@ -4337,11 +4337,11 @@ def test_knowledge_desk_serves_phone_without_refusal():
     assert "isPhoneShell" not in src
     css = STYLE_CSS.read_text()
     # 手机壳层给阅读台独立高度，不再整页拒绝
-    assert "知识库阅读台（手机）" in css
+    assert "研报库阅读台（手机）" in css
     assert "100dvh - 120px" in css
     assert "grid-template-columns: 44px minmax(0, 1fr) 84px" in css
     # 同优先级后者胜：手机覆盖块必须声明在桌面规则之后，否则被覆盖回桌面网格
-    assert css.index("知识库阅读台（手机）") > css.index("grid-template-columns: minmax(0, 1fr) auto")
+    assert css.index("研报库阅读台（手机）") > css.index("grid-template-columns: minmax(0, 1fr) auto")
     # 手机与 PC 同 iframe 预览；新标签按钮仍在工具栏
     assert "ima-pdf-frame" in _fn_body("renderImaDocument")
     assert "ima-pdf-phone-open" not in _fn_body("renderImaDocument")

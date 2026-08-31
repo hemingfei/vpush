@@ -498,7 +498,7 @@ function avatarHtml(name, url) {
 const NAV = [
   { group: "订阅", items: [
     { route: "timeline", icon: LIST_ICON, label: "最新动态" },
-    { route: "knowledge", icon: BOOK_ICON, label: "知识库" },
+    { route: "knowledge", icon: BOOK_ICON, label: "研报库" },
     { route: "home", icon: GRID_ICON, label: "订阅广场" },
     { route: "combinations", icon: TRENDING_ICON, label: "组合订阅" },
     { route: "mysubs", icon: BOOKMARK_ICON, label: "我的订阅" },
@@ -513,7 +513,7 @@ const NAV = [
     ]},
     { label: "数据与日志", items: [
       { route: "admin/stats", icon: BOOK_ICON, label: "数据源" },
-      { route: "admin/knowledge", icon: BOOK_ICON, label: "知识库设置" },
+      { route: "admin/knowledge", icon: BOOK_ICON, label: "研报库设置" },
       { route: "admin/posts", icon: FILE_TEXT_ICON, label: "帖子" },
       { route: "admin/logs", icon: SEND_ICON, label: "推送记录" },
       { route: "admin/audit", icon: HISTORY_ICON, label: "操作日志" },
@@ -1210,7 +1210,7 @@ async function subscribeKnowledge(groupId, btn) {
 }
 
 async function unsubscribeKnowledge(groupId, btn) {
-  const name = btn?.dataset?.name || "这个知识库";
+  const name = btn?.dataset?.name || "这个研报库";
   if (!confirm(`退订后将无法打开「${name}」。确定退订？`)) return;
   const routeSeq = routeRenderSeq;
   const token = state.token;
@@ -1232,7 +1232,7 @@ async function unsubscribeKnowledge(groupId, btn) {
 async function renderKnowledge(seq, encodedMediaId = "") {
   stopImaDocumentsAutoLoad();
   const mediaId = encodedMediaId ? decodeURIComponent(encodedMediaId) : "";
-  setPageTitle("知识库");
+  setPageTitle("研报库");
   if (!$("#ima-report-page") && !$("#ima-reader-page")) {
     $("#main").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
   }
@@ -1263,19 +1263,19 @@ async function renderKnowledge(seq, encodedMediaId = "") {
     } else if (documentsOk) {
       const groups = Array.isArray(documentsResult.value.groups) ? documentsResult.value.groups : [];
       subscribed = groups.map((group) => ({ id: group.id, name: group.name, enabled: true }));
-      catalogWarning = "知识库目录加载失败";
+      catalogWarning = "研报库目录加载失败";
     } else {
       subscribed = Array.isArray(state.imaCatalogSubscribed) ? state.imaCatalogSubscribed : [];
       available = Array.isArray(state.imaCatalogAvailable) ? state.imaCatalogAvailable : [];
-      catalogWarning = "知识库目录加载失败";
+      catalogWarning = "研报库目录加载失败";
     }
     state.imaCatalogSubscribed = subscribed;
     state.imaCatalogAvailable = available;
     const isAdmin = !!state.user?.is_admin;
     const selectedGroup = imaDocumentsGroupFromRoute();
     if (catalogOk && selectedGroup && !isAdmin && !subscribed.some((group) => String(group.id) === selectedGroup)) {
-      setPageTitle("知识库", true, "knowledge", "回知识库");
-      $("#main").innerHTML = emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回知识库</button></div>`);
+      setPageTitle("研报库", true, "knowledge", "回研报库");
+      $("#main").innerHTML = emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回研报库</button></div>`);
       return;
     }
     state.imaDocumentsGroup = selectedGroup;
@@ -1289,13 +1289,13 @@ async function renderKnowledge(seq, encodedMediaId = "") {
       const list = $("#kb-list");
       const controls = `<div class="ima-report-head"><div class="ima-report-filters ima-report-filters-row">${knowledgeSourceControlsHtml("")}</div></div>`;
       if (isAdmin) {
-        list.innerHTML = `${controls}${emptyState("还没有配置知识库", `<div><button type="button" class="btn-normal" onclick="go('admin/knowledge')">去配置采集</button></div>`)}`;
+        list.innerHTML = `${controls}${emptyState("还没有配置研报库", `<div><button type="button" class="btn-normal" onclick="go('admin/knowledge')">去配置采集</button></div>`)}`;
       } else {
         list.innerHTML = `${controls}${emptyState(
-          "还没有可看的知识库",
+          "还没有可看的研报库",
           available.length
             ? `<div class="kb-lib-empty">${available.map((group) => knowledgeLibRowHtml(group, "", "available")).join("")}</div>`
-            : `<div><p class="section-meta">找管理员在用户设置里勾选知识库后再来</p></div>`
+            : `<div><p class="section-meta">找管理员在用户设置里勾选研报库后再来</p></div>`
         )}`;
       }
       if (catalogWarning) {
@@ -1342,7 +1342,7 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
   state.imaDocumentsQuery = query;
   state.imaDocumentsDay = day;
   state.imaDocumentsTag = tag;
-  if (!knowledgeMediaIdFromPath()) setPageTitle("知识库");
+  if (!knowledgeMediaIdFromPath()) setPageTitle("研报库");
   const listRoot = $("#kb-list");
   if (!listRoot) {
     await renderKnowledge(seq);
@@ -1471,7 +1471,7 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
     }
     const denied = String(err.message || "").includes("知识库不存在");
     body.innerHTML = denied
-      ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回知识库</button></div>`)
+      ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回研报库</button></div>`)
       : emptyState(`加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="refreshImaDocuments()">重试</button></div>`);
   }
 }
@@ -1646,7 +1646,7 @@ async function renderImaDocument(seq, mediaId) {
   state.imaDocumentsTag = tag;
   const groupQuery = documentGroup ? `?group=${encodeURIComponent(documentGroup)}` : "";
   let backRoute = imaDocumentsRoute(listGroup, query, day, tag);
-  setPageTitle("知识库");
+  setPageTitle("研报库");
   $("#kb-reader").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
   try {
     const item = await api(`/api/ima-documents/${encodeURIComponent(mediaId)}${groupQuery}`);
@@ -1654,7 +1654,7 @@ async function renderImaDocument(seq, mediaId) {
       backRoute = imaDocumentsRoute(item.group_id, query, day, tag);
     }
     if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
-    setPageTitle(item.group_name || $("#ima-doc-title")?.textContent || "知识库");
+    setPageTitle(item.group_name || $("#ima-doc-title")?.textContent || "研报库");
     const ticker = imaDocTicker(item.name);
     const tickerMeta = ticker ? `<span class="ima-reader-meta-item">${escapeHtml(ticker)}</span>` : "";
     const dayContext = (item.sort_date || item.day)
@@ -1711,7 +1711,7 @@ async function renderImaDocument(seq, mediaId) {
     if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
     const denied = String(err.message || "").includes("知识库不存在");
     $("#kb-reader").innerHTML = denied
-      ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('${escapeHtml(backRoute)}')">回知识库</button></div>`)
+      ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('${escapeHtml(backRoute)}')">回研报库</button></div>`)
       : emptyState(`文档加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="go('${escapeHtml(backRoute)}')">返回文档列表</button></div>`);
   }
 }
@@ -2806,7 +2806,7 @@ async function renderTimeline(seq) {
     <div class="tl-ima-entry">
       <button type="button" class="tl-ima-entry-btn" onclick="go('knowledge')">
         <span class="tl-ima-entry-icon">${BOOK_ICON}</span>
-        <span><strong>知识库</strong><small>打开知识库</small></span>
+        <span><strong>研报库</strong><small>打开研报库</small></span>
       </button>
     </div>
     <section class="section-panel tl-feed-panel" id="tl-feed-panel">
@@ -6445,7 +6445,7 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
         <div class="cfg-save-row">
           <button type="button" class="btn-normal" id="pc-save" onclick="savePollingConfig()">保存抓取设置</button>
         </div>
-        <p class="section-meta"><a href="/admin/knowledge" onclick="event.preventDefault();go('admin/knowledge')">IMA 与知识星球设置已移至知识库设置</a></p>
+        <p class="section-meta"><a href="/admin/knowledge" onclick="event.preventDefault();go('admin/knowledge')">IMA 与知识星球设置已移至研报库设置</a></p>
       </section>
     </div>
     <div id="st-cookies" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-cookies" style="display:none">
@@ -6485,7 +6485,7 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
           ${tw.set && !tw.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('twitter','X')" aria-label="清除 X Cookie">清除</button>` : ""}
         </div>
       </section>
-      <p class="section-meta"><a href="/admin/knowledge" onclick="event.preventDefault();go('admin/knowledge')">IMA 与知识星球设置已移至知识库设置</a></p>
+      <p class="section-meta"><a href="/admin/knowledge" onclick="event.preventDefault();go('admin/knowledge')">IMA 与知识星球设置已移至研报库设置</a></p>
     </div>
     <div id="st-proxies" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-proxies" style="display:none"></div>`;
   renderStatsData(s);
@@ -6571,7 +6571,7 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
   const zc = s.zsxq_cache || { files: 0, bytes: 0 };
   const zcSize = fmtCacheBytes(zc.bytes);
   const tokenSet = pure.refresh_token?.set;
-  setPageTitle("知识库设置");
+  setPageTitle("研报库设置");
   $("#admin-body").innerHTML = `
     <div id="stats-poll-error"></div>
     <div class="knowledge-settings">
@@ -6698,7 +6698,7 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
     ${imaStoragePanelHtml(imaCollector.storage)}
     <section class="section-panel ks-panel" data-panel="local" id="local-libs-panel">
       <header class="section-head"><div><h2 class="section-title">本地库</h2>
-      <p class="section-meta">存储机 <code>local/&lt;slug&gt;/</code> 下的文件夹知识库；中金研报由存储机采集脚本写入 cicc-research 库。启用并授权用户后即可在知识库中阅读。</p></div></header>
+      <p class="section-meta">存储机 <code>local/&lt;slug&gt;/</code> 下的文件夹研报库；中金研报由存储机采集脚本写入 cicc-research 库。启用并授权用户后即可在研报库中阅读。</p></div></header>
       <div id="local-libs-body"><p class="muted">加载中…</p></div>
     </section>
     </div>`;
@@ -8018,10 +8018,10 @@ function imaCollectorStatusText(status) {
   const config = status.config || {};
   const storage = status.storage;
   const storageMessages = {
-    unavailable: "知识库存储暂不可用",
-    stale: "知识库存储状态过期",
-    readonly: "知识库存储当前只读",
-    capacity_blocked: "知识库存储空间已达限制",
+    unavailable: "研报库存储暂不可用",
+    stale: "研报库存储状态过期",
+    readonly: "研报库存储当前只读",
+    capacity_blocked: "研报库存储空间已达限制",
   };
   if (storageMessages[storage?.status]) return storageMessages[storage.status];
   let text;
@@ -8030,7 +8030,7 @@ function imaCollectorStatusText(status) {
   else {
     const groups = Array.isArray(config.groups) ? config.groups : [];
     const mounted = groups.filter((group) => Array.isArray(group.folder_ids) && group.folder_ids.length).length;
-    if (!mounted) text = "已连接 · 尚未挂载知识库";
+    if (!mounted) text = "已连接 · 尚未挂载研报库";
     else if (status.last_finished_at) {
       const ok = Number(result.downloaded || 0);
       const failed = Number(result.failed || 0);
@@ -10849,7 +10849,7 @@ function adminOpenUser(userId, focus) {
       <div class="toolbar">
         <button class="btn-sm" onclick="adminSaveUserKnowledge(${u.id})">保存</button>
       </div>`
-    : `<p class="muted">还没有配置知识库。</p>`;
+    : `<p class="muted">还没有配置研报库。</p>`;
   closeAdminModal();
   const mask = document.createElement("div");
   mask.className = "modal-mask";
@@ -10884,7 +10884,7 @@ function adminOpenUser(userId, focus) {
         </div>
       </section>`}
       ${u.is_admin ? "" : `<section class="um-block">
-        <h4>知识库</h4>
+        <h4>研报库</h4>
         <p class="muted">勾选后可自行订阅，取消立即失效。</p>
         ${kbList}
       </section>`}
@@ -10939,7 +10939,7 @@ async function adminSaveUserKnowledge(userId) {
       revoked.push(String(item.dataset.kbName || groupId).trim());
     }
   }
-  if (revoked.length && !confirm(`取消勾选后，对方会立刻看不到这些知识库：${revoked.join("、")}。确定保存？`)) return;
+  if (revoked.length && !confirm(`取消勾选后，对方会立刻看不到这些研报库：${revoked.join("、")}。确定保存？`)) return;
   try {
     await api(`/api/admin/users/${userId}/ima-kb`, {
       method: "PUT",
