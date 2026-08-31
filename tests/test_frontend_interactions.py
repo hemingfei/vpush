@@ -2531,8 +2531,9 @@ def test_timeline_filterbar_stays_in_main_column():
     assert ".tl-layout { margin: 0 auto" not in css.replace("\n", " ")
     wide = re.search(r"@media \(min-width:\s*1280px\)\s*\{([\s\S]*?)\n\}", css)
     assert wide, "缺少宽屏布局块"
+    # 宽屏筛选条基线 64px、纵向 flex：平台行 + 大V头像行两排时自适应撑高
     assert re.search(
-        r"\.tl-filterbar\s*\{[^}]*height:\s*64px[^}]*display:\s*flex[^}]*align-items:\s*center",
+        r"\.tl-filterbar\s*\{[^}]*min-height:\s*64px[^}]*display:\s*flex[^}]*flex-direction:\s*column",
         wide.group(1),
     )
     assert re.search(

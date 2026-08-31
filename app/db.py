@@ -3469,6 +3469,7 @@ class DB:
         favorite: bool = False,
         tag: str | None = None,
         include_secondary: bool = False,
+        kol_id: int | None = None,
         since_id: int | None = None,
         exclude_platforms: list[str] | None = None,
     ) -> list[dict]:
@@ -3480,13 +3481,17 @@ class DB:
         placeholders = ", ".join("?" * len(kol_ids))
         conds = [f"p.kol_id IN ({placeholders})", "COALESCE(p.blocked, 0) = 0"]
         params: list = [user_id, *kol_ids]
-        if not include_secondary and not platform:
+        if not include_secondary and not platform and not kol_id:
             # 默认隐藏次要大V的动态（全局 kols.secondary 或个人订阅 secondary）：
             # 避免连珠炮式发言刷屏时间线；特别关注（favorite）穿透始终显示
-            # 点平台角标时不隐藏次要，否则高频星球角标会空
+            # 点平台角标或指定大V时不隐藏次要，否则高频星球角标会空
             conds.append(
                 "(s.favorite = 1 OR (COALESCE(k.secondary, 0) = 0 AND COALESCE(s.secondary, 0) = 0))"
             )
+        if kol_id:
+            # 指定大V：与 kol_ids 取交集（IN 条件已限制可读范围），越权 id 查不到数据
+            conds.append("p.kol_id = ?")
+            params.append(kol_id)
         if platform:
             conds.append("p.platform = ?")
             params.append(platform)

@@ -95,6 +95,7 @@ const state = {
   timelineFavorite: false,
   timelineSecondary: false,
   timelinePlatform: "",
+  timelineKolId: 0,
   timelineCategory: "",
   timelineTag: "",
   timelineQ: "",
@@ -687,6 +688,7 @@ function clearSessionCaches() {
   state.timelineCategory = "";
   state.timelineTag = "";
   state.timelinePlatform = "";
+  state.timelineKolId = 0;
   state.timelineFavorite = false;
   state.timelineSecondary = false;
   state.liveImportant = false;
@@ -2717,7 +2719,7 @@ function tlFilterKey() {
   return JSON.stringify([
     state.timelineQ || "", state.timelinePlatform || "",
     state.timelineCategory || "", state.timelineTag || "", state.timelineFavorite,
-    state.timelineSecondary,
+    state.timelineSecondary, state.timelineKolId || 0,
   ]);
 }
 
@@ -2733,12 +2735,17 @@ function tlActiveChips() {
   if (state.timelineSecondary) chips.push({ key: "secondary", label: "次要大V" });
   if (state.timelineQ) chips.push({ key: "q", label: `关键词：${escapeHtml(state.timelineQ)}` });
   if (state.timelineTag) chips.push({ key: "tag", label: `标签：${escapeHtml(state.timelineTag)}` });
+  if (state.timelineKolId) {
+    const kol = _tlKolRows.find((k) => k.id === state.timelineKolId);
+    chips.push({ key: "kol", label: `大V：${escapeHtml(kol ? kol.name : `#${state.timelineKolId}`)}` });
+  }
   return chips;
 }
 
 function tlSnapshotFilters() {
   return {
     timelinePlatform: state.timelinePlatform,
+    timelineKolId: state.timelineKolId,
     timelineFavorite: state.timelineFavorite,
     timelineSecondary: state.timelineSecondary,
     timelineQ: state.timelineQ,
@@ -2770,6 +2777,7 @@ function tlSyncFilterChrome() {
 function tlRestoreFilters(snap) {
   if (!snap) return;
   state.timelinePlatform = snap.timelinePlatform;
+  state.timelineKolId = snap.timelineKolId || 0;
   state.timelineFavorite = snap.timelineFavorite;
   state.timelineSecondary = snap.timelineSecondary;
   state.timelineQ = snap.timelineQ;
@@ -2779,6 +2787,7 @@ function tlRestoreFilters(snap) {
   const tag = $("#tl-tag"); if (tag) tag.value = state.timelineTag || "";
   const pills = $("#tl-pills");
   if (pills) pills.innerHTML = tlPillsHtml();
+  renderTlKolBar();
   tlPaintViewToggles();
   tlSyncFilterChrome();
 }
@@ -2799,6 +2808,8 @@ function tlRemoveFilter(key) {
     if (tagSel) tagSel.value = "";
   } else if (key === "favorite") state.timelineFavorite = false;
   else if (key === "secondary") state.timelineSecondary = false;
+  else if (key === "kol") state.timelineKolId = 0;
+  if (key === "kol") renderTlKolBar();
   tlPaintViewToggles();
   tlSyncFilterChrome();
   loadTimeline(true, routeRenderSeq, { revert });
@@ -2832,7 +2843,7 @@ function tlPlazaEntries() {
 let _platSwipe = null;
 
 function mobilePlatformSwipeIgnore(el) {
-  return !!el.closest("a, button, input, select, textarea, .tl-pills, .platform-tabs, .icon-badge-bar, .tl-filter-panel, .home-filter-content, .lightbox, .bottom-nav, .post-images");
+  return !!el.closest("a, button, input, select, textarea, .tl-pills, .tl-kolbar, .platform-tabs, .icon-badge-bar, .tl-filter-panel, .home-filter-content, .lightbox, .bottom-nav, .post-images");
 }
 
 function mobilePlatformSwipeSurface(el) {
@@ -2999,6 +3010,8 @@ function syncTimelineSourceView() {
   $("#tl-filterbar")?.classList.toggle("live-mode", live);
   const pills = $("#tl-pills");
   if (pills) pills.innerHTML = tlPillsHtml();
+  renderTlKolBar();
+  if (!live) loadTimelineKols();
   $("#live-toolbar")?.remove();
   const bar = $("#tl-platform-bar");
   const actions = bar?.querySelector(".tl-actions");
@@ -3092,6 +3105,7 @@ async function renderTimeline(seq) {
         <div class="tl-pills" id="tl-pills" role="radiogroup" aria-label="平台和内容源">${tlPillsHtml()}</div>
         ${wide ? "" : tlFilterActionsHtml()}
       </div>
+      <div class="tl-kolbar" id="tl-kolbar" hidden></div>
       ${wide ? "" : tlFilterPanelHtml()}
       <div class="tl-new-badge${live ? " live-mode" : ""}" id="tl-new-badge">
         <button class="tl-new-badge-btn" onclick="refreshTimeline()" aria-label="${live ? "有新快讯，点击查看" : "有新动态，点击查看"}">
@@ -3127,6 +3141,11 @@ async function renderTimeline(seq) {
   if (live) startLiveClock();
   else stopLiveClock();
   renderLiveRail();
+  if (!live) {
+    renderTlKolBar();
+    loadTimelineKols();
+  }
+  ensureTlKolbarResizeSync();
   if (reuse) {
     renderFeed();
     window.scrollTo(0, feedScrollY());
@@ -3250,6 +3269,7 @@ async function pollFeedUpdates() {
       const params = new URLSearchParams({ limit: "50", since_id: String(pendingLatestId || latestId) });
       if (state.timelineQ) params.set("q", state.timelineQ);
       if (state.timelinePlatform) params.set("platform", state.timelinePlatform);
+      if (state.timelineKolId) params.set("kol_id", String(state.timelineKolId));
       if (state.timelineCategory) params.set("category_id", state.timelineCategory);
       if (state.timelineTag) params.set("tag", state.timelineTag);
       if (state.timelineFavorite) params.set("favorite", "1");
@@ -3386,6 +3406,8 @@ function tlPickPlatform(p) {
     tlPersistSource();
   }
   state.timelinePlatform = p;
+  // 平台切换后原大V可能不属于新平台，会筛出空列表，直接清除
+  state.timelineKolId = 0;
   if (leftLive) {
     stopTimelinePoll();
     if ($("#tl-feed-panel")) syncTimelineSourceView();
@@ -3394,6 +3416,118 @@ function tlPickPlatform(p) {
   }
   const pills = $("#tl-pills");
   if (pills) pills.innerHTML = tlPillsHtml();
+  renderTlKolBar();
+  tlSyncFilterChrome();
+  loadTimeline(true, routeRenderSeq, { revert });
+}
+
+// ---------- 时间线大V头像行（第二排） ----------
+// 数据源 = 我的订阅（/api/my/subscriptions 已按广场可见性过滤）；
+// feed 本身只含已订阅大V，按订阅列头像才能保证点击后筛得出内容。
+// 排序：特别关注置顶、组内按最近发言倒序；只在头像行渲染时（进页面/点平台）算一次，不做持续重排。
+let _tlKolRows = [];
+let _tlKolsPromise = null;
+let _tlKolsLoadedAt = 0;
+const TL_KOLS_TTL = 30 * 1000;
+const TL_KOLBAR_EXPANDED_KEY = "tl-kolbar-expanded";
+let _tlKolbarExpanded = (() => {
+  try { return sessionStorage.getItem(TL_KOLBAR_EXPANDED_KEY) === "1"; } catch { return false; }
+})();
+const TL_CARET_SVG = `<svg class="tl-kolbar-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>`;
+
+function tlKolLastPostMs(k) {
+  const t = k.last_post_at ? Date.parse(k.last_post_at) : NaN;
+  return Number.isNaN(t) ? -1 : t;
+}
+
+function tlKolRowsFor(platform) {
+  const rows = _tlKolRows.filter((k) => !platform || k.platform === platform);
+  return rows.sort((a, b) =>
+    ((b.favorite ? 1 : 0) - (a.favorite ? 1 : 0)) || (tlKolLastPostMs(b) - tlKolLastPostMs(a)));
+}
+
+function tlKolItemsHtml() {
+  return tlKolRowsFor(state.timelinePlatform).map((k) => {
+    const selected = state.timelineKolId === k.id;
+    const avatar = k.avatar_url && !_deadImgUrls.has(k.avatar_url)
+      ? `<img src="${escapeHtml(k.avatar_url)}" alt="" loading="lazy" data-av-name="${escapeHtml(k.name)}" data-av-class="tl-kol-ph" onerror="avatarImgError(this)">`
+      : `<span class="tl-kol-ph">${escapeHtml(avatarText(k.name))}</span>`;
+    return `<button class="tl-kol-item${selected ? " selected" : ""}" role="radio" aria-checked="${selected}"
+      aria-label="只看 ${escapeHtml(k.name)}" title="${escapeHtml(k.name)}" onclick="tlPickKol(${k.id})">
+      <span class="tl-kol-av">${avatar}</span>
+      <span class="tl-kol-name">${escapeHtml(k.name)}</span>
+    </button>`;
+  }).join("");
+}
+
+function tlKolbarEmpty() {
+  return isLiveTimeline()
+    || !_tlKolRows.some((k) => !state.timelinePlatform || k.platform === state.timelinePlatform);
+}
+
+function renderTlKolBar() {
+  const bar = $("#tl-kolbar");
+  if (!bar) return;
+  if (tlKolbarEmpty()) {
+    bar.innerHTML = "";
+    bar.hidden = true;
+    return;
+  }
+  bar.hidden = false;
+  bar.classList.toggle("expanded", _tlKolbarExpanded);
+  bar.innerHTML = `
+    <div class="tl-kolbar-strip" id="tl-kolbar-strip" role="radiogroup" aria-label="按大V筛选">${tlKolItemsHtml()}</div>
+    <button type="button" class="tl-kolbar-toggle" aria-expanded="${_tlKolbarExpanded}" aria-controls="tl-kolbar-strip" onclick="tlToggleKolbar()">
+      ${_tlKolbarExpanded ? "收起" : "展开"}${TL_CARET_SVG}
+    </button>`;
+  tlSyncKolbarToggle();
+}
+
+// 单行放得下就不显示展开开关（展开态始终显示，供收起）
+function tlSyncKolbarToggle() {
+  const strip = $("#tl-kolbar-strip");
+  const toggle = $("#tl-kolbar .tl-kolbar-toggle");
+  if (!strip || !toggle) return;
+  toggle.hidden = !_tlKolbarExpanded && strip.scrollWidth <= strip.clientWidth + 1;
+}
+
+function tlToggleKolbar() {
+  _tlKolbarExpanded = !_tlKolbarExpanded;
+  try { sessionStorage.setItem(TL_KOLBAR_EXPANDED_KEY, _tlKolbarExpanded ? "1" : "0"); } catch { /* */ }
+  renderTlKolBar();
+}
+
+let _tlKolbarResizeTimer = null;
+function ensureTlKolbarResizeSync() {
+  if (ensureTlKolbarResizeSync.bound) return;
+  ensureTlKolbarResizeSync.bound = true;
+  // 视口宽度变化会改变"单行是否放得下"，防抖后仅同步开关可见性
+  window.addEventListener("resize", () => {
+    clearTimeout(_tlKolbarResizeTimer);
+    _tlKolbarResizeTimer = setTimeout(tlSyncKolbarToggle, 150);
+  });
+}
+
+async function ensureTimelineKols() {
+  if (_tlKolRows.length && Date.now() - _tlKolsLoadedAt < TL_KOLS_TTL) return _tlKolRows;
+  if (!_tlKolsPromise) {
+    _tlKolsPromise = api("/api/my/subscriptions").then((rows) => {
+      _tlKolRows = Array.isArray(rows) ? rows : [];
+      _tlKolsLoadedAt = Date.now();
+      return _tlKolRows;
+    }).finally(() => { _tlKolsPromise = null; });
+  }
+  return _tlKolsPromise;
+}
+
+function loadTimelineKols() {
+  ensureTimelineKols().then(() => renderTlKolBar()).catch(() => { /* 订阅列表拉不到就不显示大V行 */ });
+}
+
+function tlPickKol(id) {
+  const revert = tlSnapshotFilters();
+  state.timelineKolId = state.timelineKolId === id ? 0 : id;
+  renderTlKolBar();
   tlSyncFilterChrome();
   loadTimeline(true, routeRenderSeq, { revert });
 }
@@ -3445,11 +3579,13 @@ function tlResetFilters() {
   state.timelineCategory = "";
   state.timelineTag = "";
   state.timelinePlatform = "";
+  state.timelineKolId = 0;
   state.timelineFavorite = false;
   state.timelineSecondary = false;
   const q = $("#tl-q"); if (q) q.value = "";
   const tag = $("#tl-tag"); if (tag) tag.value = "";
   const pills = $("#tl-pills"); if (pills) pills.innerHTML = tlPillsHtml();
+  renderTlKolBar();
   const fb = $("#tl-filter-toggle"); if (fb) fb.setAttribute("aria-expanded", "false");
   $("#tl-filterbar")?.classList.remove("open");
   tlPaintViewToggles();
@@ -3637,6 +3773,7 @@ async function loadTimeline(reset = true, routeSeq, opts) {
       const params = new URLSearchParams({ limit: "50", offset: String(reset ? 0 : _tlOffset) });
       if (state.timelineQ) params.set("q", state.timelineQ);
       if (state.timelinePlatform) params.set("platform", state.timelinePlatform);
+      if (state.timelineKolId) params.set("kol_id", String(state.timelineKolId));
       if (state.timelineCategory) params.set("category_id", state.timelineCategory);
       if (state.timelineTag) params.set("tag", state.timelineTag);
       if (state.timelineFavorite) params.set("favorite", "1");

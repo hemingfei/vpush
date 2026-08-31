@@ -1101,6 +1101,28 @@ def test_secondary_api():
     assert next(k for k in subs if k["id"] == kid)["secondary"] == 1
 
 
+def test_my_subscriptions_last_post_at():
+    """订阅列表经 k.* 带出 kols.last_post_at（最近抓到帖子的时间，动态页大V行排序用）；
+    入库新帖时写侧维护，无帖子的订阅为空串。"""
+    client = make_client()
+    db = client.app.state.db
+    kid_a = db.add_kol("xueqiu", "大V甲", "a1")
+    kid_b = db.add_kol("xueqiu", "大V乙", "b1")
+
+    reg = register(client, "lastpost")
+    headers = {"Authorization": f"Bearer {reg.json()['token']}"}
+    uid = reg.json()["user"]["id"]
+    for kid in (kid_a, kid_b):
+        db.add_subscription(uid, kid, type="post")
+
+    subs = {s["id"]: s for s in client.get("/api/my/subscriptions", headers=headers).json()}
+    assert subs[kid_b]["last_post_at"] == ""
+    db.insert_post("xueqiu", kid_a, "p1", "甲", "正文", "u1", "2026-08-01 08:00")
+    subs = {s["id"]: s for s in client.get("/api/my/subscriptions", headers=headers).json()}
+    # 写侧维护：入库即更新为抓取时间（非 published_at）
+    assert subs[kid_a]["last_post_at"] != ""
+
+
 def test_hide_images_api_defaults_toggles_and_is_subscription_scoped():
     client = make_client()
     admin = auth_headers(client)
@@ -2923,6 +2945,53 @@ def test_my_feed_hides_secondary_by_default():
     admin_headers = {"Authorization": f"Bearer {admin_reg.json()['token']}"}
     admin_feed = client.get("/api/my/feed", headers=admin_headers).json()
     assert [p["external_id"] for p in admin_feed] == ["p1"]
+
+
+def test_my_feed_filter_by_kol():
+    """/api/my/feed 支持 kol_id 只看某位大V（动态页大V头像行）：显式选择穿透次要，越权/无效 id 返回空。"""
+    client = make_client()
+    db = client.app.state.db
+
+    kid_a = db.add_kol("xueqiu", "雪球A", "a1")
+    kid_b = db.add_kol("weibo", "微博B", "b1")
+    kid_sec = db.add_kol("xueqiu", "次要C", "c1", secondary=True)
+    kid_priv = db.add_kol("xueqiu", "私密D", "d1")
+    db.update_kol(kid_priv, is_private=True)
+
+    reg = register(client, "kolfilter")
+    headers = {"Authorization": f"Bearer {reg.json()['token']}"}
+    uid = reg.json()["user"]["id"]
+    for kid in (kid_a, kid_b, kid_sec, kid_priv):
+        db.add_subscription(uid, kid, type="post")
+    # 个人次要（显式选大V时应穿透可见）
+    db.set_subscription_secondary(uid, kid_sec, True)
+
+    db.insert_post("xueqiu", kid_a, "p1", "a", "正文a", "u1", "2026-08-07 10:00")
+    db.insert_post("weibo", kid_b, "p2", "b", "正文b", "u2", "2026-08-07 11:00")
+    db.insert_post("xueqiu", kid_sec, "p3", "c", "正文c", "u3", "2026-08-07 12:00")
+    db.insert_post("xueqiu", kid_priv, "p4", "d", "正文d", "u4", "2026-08-07 13:00")
+
+    def feed_kol_ids(**kw):
+        from urllib.parse import urlencode
+        resp = client.get("/api/my/feed?" + urlencode(kw), headers=headers)
+        assert resp.status_code == 200
+        return [p["kol_id"] for p in resp.json()]
+
+    # 指定大V：只返回该大V的动态
+    assert feed_kol_ids(kol_id=kid_a) == [kid_a]
+    assert feed_kol_ids(kol_id=kid_b) == [kid_b]
+    # 显式选大V穿透次要（与点平台角标一致）
+    assert feed_kol_ids(kol_id=kid_sec) == [kid_sec]
+    # kol_id 与 platform 交集为空 → 空列表
+    assert feed_kol_ids(kol_id=kid_a, platform="weibo") == []
+    # ACL 私有大V不可读：即使传 kol_id 也拿不到（可读集合交集兜底）
+    assert feed_kol_ids(kol_id=kid_priv) == []
+    # 不带 kol_id：私有大V同样被可读集合过滤，次要默认隐藏
+    assert feed_kol_ids() == [kid_b, kid_a]
+    # 无效/0/负数 id：按无筛选处理，不报错
+    assert feed_kol_ids(kol_id=0) == [kid_b, kid_a]
+    assert feed_kol_ids(kol_id=-5) == [kid_b, kid_a]
+    assert feed_kol_ids(kol_id=99999) == []
 
 
 def test_my_feed_hides_zsxq_unless_filtered():

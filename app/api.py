@@ -2078,6 +2078,7 @@ def create_api_router(
         favorite: int = 0,
         tag: str | None = None,
         include_secondary: int = 0,
+        kol_id: int | None = None,  # 只看某位大V（时间线大V头像行筛选）
         since_id: int | None = None,  # 仅返回 id 大于该值的帖子（新帖检测/计数，配合现有筛选）
         user: dict = Depends(get_current_user),
     ):
@@ -2094,6 +2095,7 @@ def create_api_router(
                 favorite=bool(favorite),
                 tag=tag,
                 include_secondary=bool(include_secondary),
+                kol_id=kol_id if kol_id and kol_id > 0 else None,
                 since_id=since_id,
                 exclude_platforms=plaza_hidden_platforms(db),
             ),
