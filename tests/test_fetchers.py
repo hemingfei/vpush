@@ -1,12 +1,13 @@
 import json
 import threading
 import time
+from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
 import pytest
-import rsa
+from cryptography.hazmat.primitives.asymmetric import rsa as crypto_rsa
 
 from app.config import XueqiuConfig
 from app.db import DB
@@ -22,6 +23,13 @@ from app.fetchers.xueqiu import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+@lru_cache(maxsize=1)
+def _weibo_test_pubkey_hex() -> str:
+    # 微博登录 mock 只要能喂给 cryptography 加密的模数；不解密。
+    key = crypto_rsa.generate_private_key(public_exponent=65537, key_size=1024)
+    return format(key.public_key().public_numbers().n, "x")
 
 
 def test_xueqiu_dewatermark_crops_corner(monkeypatch, tmp_path):
@@ -1037,8 +1045,7 @@ def test_resolve_weibo_profile(monkeypatch):
 
 def _make_weibo_login_mocks(fixture):
     """返回 (handler, client) —— prelogin 返回测试公钥，login 返回 retcode=0 并下发 SUB cookie。"""
-    _, priv = rsa.newkeys(512)
-    pubkey_hex = format(priv.n, "x")
+    pubkey_hex = _weibo_test_pubkey_hex()
     timeline_hits = {"n": 0}
 
     def handler(request):
@@ -1088,11 +1095,8 @@ def test_weibo_auto_login_and_retry():
 
 def test_weibo_html_login_redirect_triggers_auto_login():
     """会话过期时接口 302 到 passport 登录页（HTML），应触发自动登录并重试。"""
-    import rsa
-
     fixture = json.loads((FIXTURES / "weibo_sample.json").read_text(encoding="utf-8"))
-    _, priv = rsa.newkeys(512)
-    pubkey_hex = format(priv.n, "x")
+    pubkey_hex = _weibo_test_pubkey_hex()
     timeline_hits = {"n": 0}
 
     def handler(request):
@@ -1141,10 +1145,9 @@ def test_weibo_html_login_redirect_triggers_auto_login():
 def test_weibo_login_failure_raises():
     def handler(request):
         if request.url.path == "/sso/prelogin.php":
-            _, priv = rsa.newkeys(512)
             body = (
                 'sinaSSOController.preloginCallBack({"retcode":0,'
-                f'"pubkey":"{format(priv.n, "x")}","nonce":"abc","rsakv":"1",'
+                f'"pubkey":"{_weibo_test_pubkey_hex()}","nonce":"abc","rsakv":"1",'
                 '"servertime":"1700000000","pcid":""})'
             )
             return httpx.Response(200, text=body)
@@ -1173,12 +1176,11 @@ def test_weibo_login_failure_sets_cooldown():
 
     def handler(request):
         if request.url.path == "/sso/prelogin.php":
-            _, priv = rsa.newkeys(512)
             return httpx.Response(
                 200,
                 text=(
                     'sinaSSOController.preloginCallBack({"retcode":0,'
-                    f'"pubkey":"{format(priv.n, "x")}","nonce":"abc","rsakv":"1",'
+                    f'"pubkey":"{_weibo_test_pubkey_hex()}","nonce":"abc","rsakv":"1",'
                     '"servertime":"1700000000","pcid":""})'
                 ),
             )
