@@ -4089,6 +4089,9 @@ def create_api_router(
             schedule_day_of_week=body.schedule_day_of_week,
             schedule_time=body.schedule_time
         )
+        # 初始化下次运行时间，避免 next_run_at 为空被调度器视为立即到期
+        db.update_ai_task(task_id, next_run_at=ai_analysis.format_next_run(
+            db.get_ai_task(task_id), datetime.now(UTC)))
         _audit(admin, "create_ai_task", str(task_id), body.name)
         return {"id": task_id}
 
@@ -4150,7 +4153,9 @@ def create_api_router(
         existing = db.get_ai_task(task_id)
         if not existing:
             raise HTTPException(status_code=404, detail="任务不存在")
-        db.update_ai_task(task_id, enabled=True)
+        # 启用时重算下次运行时间，避免遗留的过期 next_run_at 触发立即运行
+        db.update_ai_task(task_id, enabled=True,
+                          next_run_at=ai_analysis.format_next_run(existing, datetime.now(UTC)))
         _audit(admin, "enable_ai_task", str(task_id), existing["name"])
         return {"ok": True}
 
@@ -4929,6 +4934,9 @@ def create_api_router(
             schedule_time=body.schedule_time,
         )
         _audit(admin, "create_ai_task", str(task_id), body.name)
+        # 初始化下次运行时间，避免 next_run_at 为空被调度器视为立即到期
+        db.update_ai_task(task_id, next_run_at=ai_analysis.format_next_run(
+            db.get_ai_task(task_id), datetime.now(UTC)))
         task = db.get_ai_task(task_id)
         return {"task": task, "ok": True}
 

@@ -2206,6 +2206,13 @@ class Scheduler:
                 due_tasks = self.db.get_due_ai_tasks(now_str)
                 for task in due_tasks:
                     task_id = task["id"]
+                    # next_run_at 为空说明从未排期（老数据或无有效调度日）：
+                    # 先补算下次运行时间，不立即触发
+                    if not task.get("next_run_at"):
+                        next_run = ai_analysis.calculate_next_run(task, now)
+                        if next_run:
+                            self.db.update_ai_task(task_id, next_run_at=next_run.isoformat())
+                        continue
                     # 检查是否已在运行
                     if task_id in _ai_task_running:
                         continue

@@ -90,6 +90,15 @@ def calculate_next_run(task: dict, now: datetime) -> datetime | None:
     return None
 
 
+def format_next_run(task: dict, now: datetime) -> str | None:
+    """计算任务下次运行时间并转为可存储的 ISO 字符串（UTC）。
+
+    next_run_at 为空时调度器会把任务视为立即到期，创建/启用任务后必须写入该字段。
+    """
+    next_run = calculate_next_run(task, now)
+    return next_run.isoformat() if next_run else None
+
+
 def format_messages_for_llm(posts: list[dict]) -> str:
     """将帖子列表格式化为LLM可读的文本"""
     if not posts:
