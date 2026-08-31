@@ -3358,6 +3358,21 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 }
 .ima-storage-alerts input[type="number"] { width: 56px; }
 .ima-acl-picker { display: grid; gap: 8px; min-width: 0; }
+#ima-group-acl .ima-acl-picker.is-compact .ima-acl-chips {
+  max-height: 80px;
+  overflow: hidden;
+}
+#ima-group-acl .ima-acl-picker.is-compact.is-expanded .ima-acl-chips { max-height: none; }
+.ima-acl-more {
+  justify-self: start;
+  min-height: 36px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-accent-text);
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-medium);
+}
 .ima-acl-chips {
   display: flex;
   flex-wrap: wrap;

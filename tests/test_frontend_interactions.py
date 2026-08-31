@@ -2132,6 +2132,21 @@ def test_ima_collector_acl_granted_via_separate_put():
     assert "initImaMountState" in knowledge
 
 
+def test_ima_group_acl_search_precedes_compact_chips_and_stays_immediate():
+    picker = _fn_body("aclPickerHtml")
+    render = _fn_body("renderImaGroupAcl")
+    apply = _fn_body("applyAclNamesToPicker")
+
+    assert picker.index("ima-acl-search") < picker.index("ima-acl-chips")
+    assert "ima-acl-more" in picker
+    assert "toggleImaAclExpanded" in picker
+    assert "data-count" in picker
+    assert "compact" in render
+    assert "syncImaAclMoreButton" in apply
+    assert "saveImaGroupAcl" in _fn_body("addAclUser")
+    assert "saveImaGroupAcl" in _fn_body("removeAclUser")
+
+
 def test_ima_discovery_status_is_safe_and_does_not_render_secrets():
     """发现错误只输出 escaped 文本，IMA token 不得进入 HTML value/placeholder。"""
     src = APP_JS.read_text()

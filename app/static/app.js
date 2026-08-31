@@ -6089,17 +6089,18 @@ function aclChipHtml(name) {
   return `<button type="button" class="ima-acl-chip" data-acl-remove="${escapeHtml(name)}" aria-label="移除 ${escapeHtml(name)}">${escapeHtml(name)}<span aria-hidden="true">×</span></button>`;
 }
 
-function aclPickerHtml(usernames, listId) {
+function aclPickerHtml(usernames, listId, compact = false) {
   const granted = [...new Set(usernames || [])];
   const chips = granted.length
     ? granted.map(aclChipHtml).join("")
     : `<span class="muted ima-acl-none">仅管理员</span>`;
-  return `<div class="ima-acl-picker">
-    <div class="ima-acl-chips">${chips}</div>
-    <p class="muted ima-acl-status" aria-live="polite">${granted.length ? `${granted.length} 人可看` : "仅管理员"}</p>
+  return `<div class="ima-acl-picker${compact ? " is-compact" : ""}" data-count="${granted.length}">
     <input type="search" class="form-control ima-acl-search" placeholder="搜索并添加用户" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-label="搜索并添加用户" aria-controls="${listId}" autocomplete="off" oninput="filterAclSuggest(this)" onkeydown="onAclSearchKey(event)">
     <div id="${listId}" class="ima-acl-suggest" hidden role="listbox"></div>
     <p class="muted ima-acl-empty" hidden>没有匹配的用户</p>
+    <div class="ima-acl-chips">${chips}</div>
+    <button type="button" class="ima-acl-more" onclick="toggleImaAclExpanded(this)" hidden></button>
+    <p class="muted ima-acl-status" aria-live="polite">${granted.length ? `${granted.length} 人可看` : "仅管理员"}</p>
   </div>`;
 }
 
@@ -6200,6 +6201,24 @@ function applyAclNamesToPicker(picker, names) {
       : `<span class="muted ima-acl-none">仅管理员</span>`;
   }
   if (status) status.textContent = names.length ? `${names.length} 人可看` : "仅管理员";
+  syncImaAclMoreButton(picker, names.length);
+}
+
+function syncImaAclMoreButton(picker, count) {
+  const button = picker?.querySelector(".ima-acl-more");
+  if (!button) return;
+  picker.dataset.count = String(count);
+  button.hidden = count <= 6;
+  const expanded = picker.classList.contains("is-expanded");
+  button.textContent = expanded ? "收起" : `展开全部 ${count} 人`;
+  button.setAttribute("aria-expanded", String(expanded));
+}
+
+function toggleImaAclExpanded(button) {
+  const picker = button?.closest(".ima-acl-picker");
+  if (!picker) return;
+  picker.classList.toggle("is-expanded");
+  syncImaAclMoreButton(picker, Number(picker.dataset.count || 0));
 }
 
 function rememberAclOnModel(groupId, names) {
@@ -6280,9 +6299,12 @@ async function renderImaGroupAcl() {
   try {
     await fetchAclCandidateUsers();
     if (seq !== _imaAclRenderSeq || String(imaMountState.selectedGroupId) !== groupId) return;
-    slot.innerHTML = aclPickerHtml(group.acl_usernames || [], "ima-acl-list");
+    slot.innerHTML = aclPickerHtml(group.acl_usernames || [], "ima-acl-list", /* compact */ true);
     const picker = slot.querySelector(".ima-acl-picker");
-    if (picker) picker.dataset.groupId = groupId;
+    if (picker) {
+      picker.dataset.groupId = groupId;
+      syncImaAclMoreButton(picker, (group.acl_usernames || []).length);
+    }
   } catch (err) {
     if (seq !== _imaAclRenderSeq) return;
     slot.innerHTML = `<p class="muted">用户列表加载失败：${escapeHtml(err.message)}</p>
