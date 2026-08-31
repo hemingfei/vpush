@@ -1224,6 +1224,10 @@ def test_ima_document_index_search_ranking_and_literal_wildcards(tmp_path):
     assert latest["items"][0]["media_id"] == "body"
     assert latest["group_counts"]["semi"] == 5
     assert "other" not in latest["group_counts"]
+    all_groups = db.ima_document_page(["semi", "other"], limit=50, offset=0)
+    assert all_groups["days"] == []
+    assert all_groups["tag_counts"]["AI"] == 1
+    assert all_groups["tags"] == ["AI"]
     assert latest["has_more"] is False
     assert latest["offset"] == 0
     assert latest["day"] == ""

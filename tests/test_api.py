@@ -3802,6 +3802,7 @@ def test_keywords_crud_api():
     # 覆盖更新
     client.put("/api/me", headers=headers, json={"keywords": ["半导体"]})
     assert client.get("/api/me", headers=headers).json()["keywords"] == ["半导体"]
+    assert client.get("/api/me", headers=headers).json()["keywords_match_reports"] is False
 
 
 def test_keywords_limits_api():

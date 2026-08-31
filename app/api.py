@@ -404,6 +404,7 @@ class MeUpdate(BaseModel):
     dnd_end: str | None = None
     dnd_allow_favorite: bool | None = None
     keywords: list[str] | None = None
+    keywords_match_reports: bool | None = None
     llm_api_base: str | None = None
     llm_api_key: str | None = None
     llm_model: str | None = None
@@ -790,6 +791,7 @@ def public_user(user: dict, db=None) -> dict:
         "dnd_start": user.get("dnd_start") or "",
         "dnd_end": user.get("dnd_end") or "",
         "dnd_allow_favorite": bool(user.get("dnd_allow_favorite")),
+        "keywords_match_reports": bool(user.get("keywords_match_reports")),
         "llm_api_base": user.get("llm_api_base") or "",
         "llm_api_key": mask_secret(user_plain_secret(user, "llm_api_key", db)),
         "llm_model": user.get("llm_model") or "",
@@ -1746,6 +1748,12 @@ def create_api_router(
                         status_code=400,
                         detail=f"单个关键词最长 {KEYWORDS_MAX_LENGTH} 字：{keyword}",
                     )
+        if "keywords_match_reports" in body.model_fields_set and body.keywords_match_reports is not None:
+            want = bool(body.keywords_match_reports)
+            updates["keywords_match_reports"] = want
+            current = db.get_user(user["id"]) or {}
+            if want and not current.get("keywords_match_reports"):
+                updates["keywords_match_reports_since"] = datetime.now(UTC).isoformat()
         if "notify_enabled" in body.model_fields_set:
             updates["notify_enabled"] = body.notify_enabled
         if "daily_report_enabled" in body.model_fields_set and body.daily_report_enabled is not None:
@@ -3262,15 +3270,17 @@ def create_api_router(
         _audit(admin, "ima_storage_alerts", "", json.dumps(saved, ensure_ascii=False))
         return {"settings": saved}
 
+    def _with_local_library_acl(payload: dict) -> dict:
+        for item in payload.get("libraries") or []:
+            group_id = str(item.get("group_id") or "")
+            item["acl_usernames"] = db.ima_kb_acl_usernames(group_id) if group_id else []
+        return payload
+
     @router.get("/admin/ima-local-libraries", dependencies=[Depends(require_admin)])
     def get_ima_local_libraries():
         if ima_documents is None:
             raise HTTPException(status_code=503, detail="IMA 文档服务未启用")
-        payload = ima_documents.local_scan_status()
-        for item in payload["libraries"]:
-            group_id = str(item.get("group_id") or "")
-            item["acl_usernames"] = db.ima_kb_acl_usernames(group_id) if group_id else []
-        return payload
+        return _with_local_library_acl(ima_documents.local_scan_status())
 
     @router.post("/admin/ima-local-libraries/scan", dependencies=[Depends(require_admin)])
     def scan_ima_local_libraries(admin: dict = Depends(require_admin)):
@@ -3280,7 +3290,7 @@ def create_api_router(
         if result.get("status") == "already_running":
             raise HTTPException(status_code=409, detail="IMA 同步或扫描正在进行，请稍后再试")
         _audit(admin, "scan_ima_local_libraries", "", str(result.get("status") or ""))
-        return result
+        return _with_local_library_acl(result)
 
     @router.put("/admin/ima-local-libraries/{slug}/enabled", dependencies=[Depends(require_admin)])
     def set_ima_local_library_enabled(
@@ -3301,7 +3311,7 @@ def create_api_router(
             slug,
             "enabled" if body.enabled else "disabled",
         )
-        return ima_documents.local_scan_status()
+        return _with_local_library_acl(ima_documents.local_scan_status())
 
     @router.put("/admin/ima-local-libraries/{slug}", dependencies=[Depends(require_admin)])
     def update_ima_local_library(
@@ -3321,7 +3331,7 @@ def create_api_router(
             # 属主/权限不对（须 99:100 可写）时必须报错，不能静默
             raise HTTPException(status_code=502, detail=f"标记文件写入失败：{_safe_error(exc)}") from exc
         _audit(admin, "update_ima_local_library", slug, "")
-        return result
+        return _with_local_library_acl(result)
 
     @router.post("/admin/ima-local-libraries", dependencies=[Depends(require_admin)])
     def create_ima_local_library(body: LocalLibraryCreateIn, admin: dict = Depends(require_admin)):
@@ -3337,7 +3347,7 @@ def create_api_router(
             # 存储归档不可写（须 99:100 可写）时必须报错，不能静默
             raise HTTPException(status_code=502, detail=f"存储归档写入失败：{_safe_error(exc)}") from exc
         _audit(admin, "create_ima_local_library", body.slug, str(result.get("status") or ""))
-        return result
+        return _with_local_library_acl(result)
 
     @router.get("/admin/ima-credentials", dependencies=[Depends(require_admin)])
     def get_ima_credentials():

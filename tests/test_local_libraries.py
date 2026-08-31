@@ -586,6 +586,11 @@ def test_local_library_admin_meta_create_acl_endpoints(tmp_path, monkeypatch):
     listed = client.get("/api/admin/ima-local-libraries", headers=admin_headers)
     item = listed.json()["libraries"][0]
     assert item["acl_usernames"] == ["meta_user"]
+    # 扫描/改名响应也要带授权，避免保存后立刻扫描把卡片冲成「仅管理员」
+    assert updated.json()["libraries"][0]["acl_usernames"] == ["meta_user"]
+    scanned = client.post("/api/admin/ima-local-libraries/scan", headers=admin_headers)
+    assert scanned.status_code == 200, scanned.text
+    assert scanned.json()["libraries"][0]["acl_usernames"] == ["meta_user"]
 
     # 错误路径：重复建库 409；非法 slug/name 400；空更新 400；库不存在 404
     assert (
@@ -688,13 +693,15 @@ def test_latest_stream_orders_by_pub_date_across_years(tmp_path):
 
 
 def test_days_facets_keep_mmdd_buckets(tmp_path):
-    """days facets 是 MMDD 桶，不受 sort_date 影响。"""
+    """跨组浏览不算日期面；单组仍是 MMDD 桶。"""
     service, archive = _service(tmp_path)
     groups = _make_mixed_stream(service, archive)
 
     page = service.list_documents(groups)
+    assert page["days"] == []
 
-    assert page["days"] == ["1231", "0830"]
+    single = service.list_documents((groups[1],))
+    assert single["days"] == ["1231", "0830"]
 
 
 def test_unknown_day_document_sinks_to_bottom(tmp_path):
@@ -728,7 +735,8 @@ def test_json_fallback_matches_index_order(tmp_path, monkeypatch):
     assert [item["name"] for item in fallback["items"]] == [
         item["name"] for item in indexed["items"]
     ]
-    assert fallback["days"] == indexed["days"]
+    assert indexed["days"] == []
+    assert fallback["days"] == ["1231", "0830"]
 
 
 def test_sidecar_invalid_publish_left_empty_and_sinks(tmp_path):

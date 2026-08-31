@@ -9,10 +9,14 @@
 
 登录态：/root/cicc/cookies.txt（一行原始 Cookie 头），chmod 600。
 目录契约见 docs/superpowers/specs/2026-08-29-local-storage-library-mount-design.md：
-  local/<slug>/.vpush-local-library.json + <MMDD>/<中文原名>.pdf，属主 99:100。
+  local/cicc-research/.vpush-local-library.json
+  local/cicc-research/.vpush-local-meta.jsonl   # 列表摘要/标签 sidecar，扫描器按 *_<id>.pdf 匹配
+  local/cicc-research/<品类>/<MMDD>/<中文原名>_<id>.pdf
+  属主 99:100。
 """
 
 import argparse
+import fcntl
 import http.client
 import io
 import json
@@ -173,9 +177,122 @@ def day_dir(publish_time: str) -> str:
     return (dt.astimezone(TZ_BJ)).strftime("%m%d")
 
 
-def target_path(root: Path, slug: str, publish_time: str, title: str, rid: int) -> Path:
+LIB_SLUG, LIB_NAME = "cicc-research", "中金点睛"
+SIDECAR_NAME = ".vpush-local-meta.jsonl"
+
+
+def publish_date(publish_time: str) -> str:
+    """列表 publishTime → 北京日期 YYYY-MM-DD；非法则空串。"""
+    raw = str(publish_time or "").strip()
+    if not raw:
+        return ""
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return dt.astimezone(TZ_BJ).strftime("%Y-%m-%d")
+    except ValueError:
+        day = raw[:10]
+        return day if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) else ""
+
+
+def category_id_names(param: dict) -> dict:
+    """param.treeData / industriesData 的 id→中文名（含子节点）。"""
+    id_name: dict = {}
+    for node in list(param.get("treeData") or []) + list(param.get("industriesData") or []):
+        if not isinstance(node, dict):
+            continue
+        nid, nname = node.get("id"), node.get("name")
+        if nid is not None and nname:
+            id_name[nid] = nname
+            id_name[str(nid)] = nname
+        for ch in node.get("children") or []:
+            if not isinstance(ch, dict):
+                continue
+            cid, cname = ch.get("id"), ch.get("name")
+            if cid is not None and cname:
+                id_name[cid] = cname
+                id_name[str(cid)] = cname
+    return id_name
+
+
+def sidecar_row(item: dict, id_name: dict, cat_name: str = "") -> dict:
+    """列表项 → sidecar 一行，字段对齐 cicc_meta_backfill / 本地库规格 §11。"""
+    tags: list[str] = []
+    extra = list(item.get("documentLabels") or [])
+    for raw in [item.get("reportType"), cat_name, *extra]:
+        tag = str(raw).strip() if raw else ""
+        if tag and tag not in tags:
+            tags.append(tag)
+    for pid in item.get("portalCategoryIds") or []:
+        name = id_name.get(pid) or id_name.get(str(pid))
+        if name and name not in tags:
+            tags.append(name)
+    authors = []
+    for analyst in item.get("analysts") or []:
+        if isinstance(analyst, dict) and analyst.get("name"):
+            authors.append(str(analyst["name"]).strip())
+        elif isinstance(analyst, str) and analyst.strip():
+            authors.append(analyst.strip())
+    day = publish_date(item.get("publishTime") or "")
+    return {
+        "id": str(item.get("id") or "").strip(),
+        "title": str(item.get("title") or ""),
+        "summary": str(item.get("summary") or "")[:2000],
+        "tags": tags[:5],
+        "day": day.replace("-", "")[4:] if len(day) >= 10 else "unknown",
+        "publish": day,
+        "authors": " ".join(authors),
+    }
+
+
+def load_sidecar(path: Path) -> dict:
+    rows: dict = {}
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return rows
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        rid = str(row.get("id") or "").strip() if isinstance(row, dict) else ""
+        if rid:
+            rows[rid] = row
+    return rows
+
+
+def merge_sidecar(path: Path, updates: dict, *, fix_owner: bool = False) -> int:
+    """把本轮 upsert 合并进 sidecar（文件锁，多进程分片不会互相覆盖）。"""
+    if not updates:
+        return 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(".vpush-local-meta.lock")
+    with open(lock_path, "a+", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        rows = load_sidecar(path)
+        rows.update(updates)
+        tmp = path.with_name(f".vpush-local-meta.jsonl.tmp.{os.getpid()}")
+        tmp.write_text(
+            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows.values()),
+            encoding="utf-8",
+        )
+        os.replace(tmp, path)
+        if fix_owner:
+            os.chown(path, CHOWN_UID, CHOWN_GID)
+            os.chmod(path, 0o640)
+            try:
+                os.chown(lock_path, CHOWN_UID, CHOWN_GID)
+            except OSError:
+                pass
+        return len(rows)
+
+
+def target_path(root: Path, cat_name: str, publish_time: str, title: str, rid: int) -> Path:
+    """单库布局：root/cicc-research/<品类名>/<MMDD>/<中文名>_<id>.pdf"""
     name = fit_bytes(sanitize_title(title), 200 - len(f"_{rid}")) + f"_{rid}.pdf"
-    return root / slug / day_dir(publish_time) / name
+    return root / LIB_SLUG / cat_name / day_dir(publish_time) / name
 
 
 def setup_library(root: Path, slug: str, name: str, *, fix_owner: bool) -> None:
@@ -193,9 +310,12 @@ def setup_library(root: Path, slug: str, name: str, *, fix_owner: bool) -> None:
         os.chmod(marker, 0o640)
 
 
+def fetch_param(sess: Session) -> dict:
+    return sess.request("/reports/api/v3/param")["data"]
+
+
 def fetch_categories(sess: Session) -> list[dict]:
-    data = sess.request("/reports/api/v3/param")["data"]
-    return data["treeData"]
+    return fetch_param(sess)["treeData"]
 
 
 def list_page(sess: Session, cat_id: int, page: int, start: str | None, end: str | None) -> dict:
@@ -362,8 +482,24 @@ def main() -> None:
         assert fit_bytes("中" * 300, 20).encode().__len__() <= 20
         assert day_dir("2026-08-29T12:43:03Z") == "0829"  # UTC+8
         assert day_dir("2026-08-29T17:43:03Z") == "0830"  # 跨日归北京日期
-        p = target_path(Path("/x"), "cicc-macro", "2026-08-01T00:00:00Z", "标题/1", 42)
-        assert str(p) == "/x/cicc-macro/0801/标题 1_42.pdf", str(p)
+        p = target_path(Path("/x"), "宏观经济", "2026-08-01T00:00:00Z", "标题/1", 42)
+        assert str(p) == "/x/cicc-research/宏观经济/0801/标题 1_42.pdf", str(p)
+        row = sidecar_row({
+            "id": 42,
+            "title": "宁德时代深度",
+            "summary": "动力电池",
+            "reportType": "深度报告",
+            "documentLabels": ["新能源"],
+            "portalCategoryIds": [7],
+            "publishTime": "2026-08-29T17:43:03Z",
+            "analysts": [{"name": "张三"}],
+        }, {7: "电力设备"}, "公司研究")
+        assert row["id"] == "42"
+        assert row["publish"] == "2026-08-30"  # UTC 17:43 → 北京 0830
+        assert row["day"] == "0830"
+        assert row["tags"] == ["深度报告", "公司研究", "新能源", "电力设备"]
+        assert row["authors"] == "张三"
+        assert row["summary"] == "动力电池"
         try:
             import fitz
         except ImportError:
@@ -404,16 +540,20 @@ def main() -> None:
         os.chmod(root, 0o750)
 
     wanted = [c.strip() for c in args.categories.split(",") if c.strip()]
-    cats = fetch_categories(sess)  # 列表接口是读操作：能成功即登录态有效
+    param = fetch_param(sess)  # 列表接口是读操作：能成功即登录态有效
+    all_cats = param.get("treeData") or []
+    id_name = category_id_names(param)
     try:
         os.remove(PAUSED_FILE)  # 新一轮跑起来了：清掉上次的熔断标记（再熔断会重写）
     except OSError:
         pass
     if wanted:
-        cats = [c for c in cats if c["name"] in wanted]
+        cats = [c for c in all_cats if c["name"] in wanted]
         missing = set(wanted) - {c["name"] for c in cats}
         if missing:
-            sys.exit(f"未知品类: {missing}；可选: {[c['name'] for c in fetch_categories(sess)]}")
+            sys.exit(f"未知品类: {missing}；可选: {[c['name'] for c in all_cats]}")
+    else:
+        cats = all_cats
 
     end = date.today().strftime("%Y-%m-%d")
     start = args.since or ((date.today() - timedelta(days=args.days - 1)).strftime("%Y-%m-%d") if args.days else None)
@@ -422,10 +562,20 @@ def main() -> None:
     stop = False
     # 幂等只靠磁盘文件名（含报告 id，唯一）；无 state 文件，多进程并行无竞态
 
+    setup_library(root, LIB_SLUG, LIB_NAME, fix_owner=fix_owner)
+    sidecar_path = root / LIB_SLUG / SIDECAR_NAME
+    pending_meta: dict = {}
+
+    def flush_sidecar() -> None:
+        nonlocal pending_meta
+        if pending_meta:
+            merge_sidecar(sidecar_path, pending_meta, fix_owner=fix_owner)
+            pending_meta = {}
+
     for cat in cats:
-        name, slug = cat["name"], SLUG_MAP.get(cat["name"], f"cicc-cat-{cat['id']}")
-        if not stop:
-            setup_library(root, slug, name, fix_owner=fix_owner)
+        name = cat["name"]
+        if stop:
+            break
         page, total_seen = args.page_start, 0
         while True:
             data = list_page(sess, cat["id"], page, start, None if args.all else end)
@@ -443,7 +593,12 @@ def main() -> None:
                 if args.limit and stats["downloaded"] >= args.limit:
                     stop = True
                     break
-                tp = target_path(root, slug, it["publishTime"], it["title"], rid)
+                tp = target_path(root, name, it["publishTime"], it["title"], rid)
+                row = sidecar_row(it, id_name, name)
+                if row["id"]:
+                    pending_meta[row["id"]] = row
+                    if len(pending_meta) >= 20:
+                        flush_sidecar()
                 if tp.exists():
                     stats["skipped"] += 1
                     continue
@@ -474,8 +629,10 @@ def main() -> None:
                 break
             page += 1
             time.sleep(SLEEP_PAGE)
+        flush_sidecar()
         print(f"[{name}] 列出 {total_seen} 篇" + ("（中止）" if stop else ""))
 
+    flush_sidecar()
     print(f"完成：下载 {stats['downloaded']}，已存在跳过 {stats['skipped']}，失败 {stats['failed']}")
 
 

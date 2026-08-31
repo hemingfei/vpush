@@ -712,6 +712,7 @@ def test_settings_save_feedback_uses_flash():
         assert span_id not in settings
     for name in (
         "saveNotify", "saveDailyReport", "saveTranslateTwitter", "saveDnd", "saveKeywords",
+        "saveKeywordsMatchReports",
         "savePushChannels", "saveLlm", "savePassword", "saveCustomTgBot",
         "saveWecomWebhook", "saveBarkKey", "enableWebPush", "disableWebPush",
     ):
@@ -1673,7 +1674,8 @@ def test_settings_save_callbacks_require_same_route_token_and_session_before_all
     """所有设置保存回调的异步收尾都必须仍属于发起路由和会话。"""
     for name in (
         "saveNotify", "saveDailyReport", "saveCustomTgBot", "saveWecomWebhook",
-        "saveBarkKey", "enableWebPush", "disableWebPush", "saveKeywords", "saveLlm",
+        "saveBarkKey", "enableWebPush", "disableWebPush", "saveKeywords",
+        "saveKeywordsMatchReports", "saveLlm",
     ):
         body = _fn_body(name)
         await_api = body.index("await api(")
@@ -2114,7 +2116,7 @@ def test_ima_group_save_reads_rows_and_preserves_legacy_token_fields():
 
 
 def test_ima_collector_acl_granted_via_separate_put():
-    """知识库权限在用户管理；ACL 不塞进 collector groups，也不出现在知识库目录。"""
+    """采集页与用户管理都能授权；ACL 不塞进 collector groups，也不出现在阅读目录。"""
     src = APP_JS.read_text()
     save = _fn_body("saveImaCollector")
     read = _fn_body("readImaMountGroups")
@@ -2122,10 +2124,11 @@ def test_ima_collector_acl_granted_via_separate_put():
     open_user = _fn_body("adminOpenUser")
     persist = _fn_body("adminSaveUserKnowledge")
     load_users = _fn_body("loadAdminUsers")
-    assert "<h4>知识库</h4>" in open_user
+    assert "<h4>研报库</h4>" in open_user
     assert 'id="um-kb"' in open_user
     assert "data-kb-group" in open_user
-    assert "勾选后可自行订阅，取消立即失效。" in open_user
+    assert "勾选后即可阅读" in open_user
+    assert "可自行订阅" not in open_user
     assert "谁能订" not in src
     assert "谁能定" not in src
     assert "knowledgeAclPanelHtml" not in catalog
@@ -2136,9 +2139,20 @@ def test_ima_collector_acl_granted_via_separate_put():
     assert "/api/admin/ima-collector" in load_users
     assert "acl_usernames" not in save
     assert "acl_usernames" not in read
-    stats = _fn_body("loadAdminKnowledge")
-    assert "s.ima_collector" in stats
-    assert "initImaMountState" in stats
+    knowledge = _fn_body("loadAdminKnowledge")
+    assert "谁能阅读" not in knowledge
+    assert "权限控制" in knowledge
+    assert 'id="ima-group-acl"' in knowledge
+    assert "filterAclSuggest" in src
+    assert "ima-acl-chip" in src
+    assert "ima-acl-search" in src
+    assert "ArrowDown" in _fn_body("onAclSearchKey")
+    assert 'role="combobox"' in _fn_body("aclPickerHtml")
+    assert "saveImaGroupAcl" in src
+    assert "/groups/" in _fn_body("saveImaGroupAcl")
+    assert 'id="ima-acl-save"' not in knowledge
+    assert "s.ima_collector" in knowledge
+    assert "initImaMountState" in knowledge
 
 
 def test_ima_discovery_status_is_safe_and_does_not_render_secrets():
@@ -2411,6 +2425,31 @@ def test_local_scan_button_driven_by_inflight_flag():
     assert '_scanInFlight ? "扫描中…" : "扫描本地库"' in render
 
 
+def test_knowledge_settings_p1_p2_control_density():
+    """星球日常/高级分层；存储去重不进主工具栏；本地库授权勾选；中金采集默认收起。"""
+    knowledge = _fn_body("loadAdminKnowledge")
+    assert "高级（翻页、间隔、App 通道）" in knowledge
+    assert 'id="pc-zq-comments"' in knowledge
+    assert knowledge.index('id="pc-zq-comments"') < knowledge.index('id="pc-zq-pages"')
+    storage = _fn_body("imaStoragePanelHtml")
+    assert "onclick=\"runStorageDedup()\"" not in storage
+    assert "去重每月 1 日 04:00 自动执行" in storage
+    assert "onclick=\"runStorageConsistency()\"" in storage
+    health = _fn_body("loadStorageHealth")
+    assert "onclick=\"runStorageDedup()\"" in health
+    card = _fn_body("localLibraryCardHtml")
+    assert "<details open" not in card
+    assert "details.cicc-collect" in card or 'class="cicc-collect"' in card
+    modal = _fn_body("openLocalLibraryModal")
+    assert "aclPickerHtml" in modal
+    assert "data-acl-remove" in _fn_body("aclChipHtml")
+    assert 'id="ll-users"' not in modal
+    save = _fn_body("saveLocalLibraryModal")
+    assert "现在扫描以应用到库内文档" in save
+    assert "[data-ll-user]:checked" not in save
+    assert "ima-collector/groups" not in save
+
+
 def test_ima_reader_nav_requires_matching_snapshot_route():
     """阅读器上一篇/下一篇与结果计数只使用与返回列表路由匹配的快照（F3）。"""
     src = APP_JS.read_text()
@@ -2500,6 +2539,26 @@ def test_ima_search_ignores_single_ascii_character():
     assert r"/^[\x00-\x7F]*$/" in body
     src = APP_JS.read_text()
     assert "imaUsableSearchQuery(" in src
+
+
+def test_report_keyword_watch_uses_settings_switch_not_library_subscribe():
+    src = APP_JS.read_text()
+    settings = _fn_body("renderSettings")
+    assert "匹配研报库" in settings
+    assert "set-kw-reports" in settings
+    assert "saveKeywordsMatchReports" in settings
+    assert "每日研报入库结束" in settings
+    assert "管理订阅" not in settings
+    assert "toggleReportKeyword" in src
+    assert "REPORT_WATCH_BLOCKED_TAGS" in src
+    assert "imaReaderWatchHtml" in src
+    modal = _fn_body("adminOpenUser")
+    assert "勾选后即可阅读" in modal
+    assert "可自行订阅" not in modal
+    css = STYLE_CSS.read_text()
+    assert ".ima-reader-watch .ima-doc-tag.is-action" in css
+    assert "min-height: 44px" in css[css.index(".ima-reader-watch .ima-doc-tag.is-action"):css.index(".ima-reader-watch .ima-doc-tag.is-action") + 280]
+    assert "管理订阅" not in _fn_body("knowledgeSourceControlsHtml")
 
 
 def test_ima_source_filter_is_compact_and_subscription_management_survives():
@@ -2984,17 +3043,17 @@ def test_ima_document_counts_use_real_total_not_page_plus():
     assert 'hasMore ? "+" : ""' not in reader
 
 
-def test_ima_local_library_pdf_does_not_embed_chrome_frame():
-    """本地库 PDF（中金等）不内嵌 Chrome PDF 插件，避免同页卡死。"""
-    src = APP_JS.read_text()
+def test_ima_pdf_preview_is_inline_on_desktop():
+    """PC / 手机 Web 统一内嵌 iframe；右上角新标签作 iOS 逃生舱。"""
     reader = _fn_body("renderImaDocument")
     load = _fn_body("loadImaPdf")
-    assert "function imaInlinePdfFrame(" in src
-    assert "imaInlinePdfFrame(item.group_id || documentGroup)" in reader
-    assert 'startsWith("local-")' in src
-    assert "ima-pdf-phone-open" in reader
-    assert "打开预览" in reader
+    assert "function imaInlinePdfFrame(" not in APP_JS.read_text()
+    assert "ima-pdf-frame" in reader
+    assert "ima-pdf-phone-open" not in reader
+    assert "openImaPdfNewTab()" in reader
+    assert "ima-pdf-phone-open" not in load
     assert "signal: abort.signal" in load or "{ signal: abort.signal }" in load
+    assert "#view=FitH" in load
 
 
 def test_ima_reader_clamps_long_abstract_and_keeps_preview_floor():
@@ -3347,9 +3406,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=245"' in html
-    assert 'src="/app.js?v=343"' in html
-    assert 'dav-shell-v211' in sw
+    assert 'href="/style.css?v=254"' in html
+    assert 'src="/app.js?v=355"' in html
+    assert 'dav-shell-v224' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -3367,7 +3426,7 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     assert nav.index('route: "timeline"') < nav.index('route: "knowledge"')
     assert 'route: "ima-documents"' not in nav
     assert "IMA 文档" not in nav
-    assert 'label: "知识库"' in nav
+    assert 'label: "研报库"' in nav
     assert 'group: "资料"' not in nav
     assert 'route: "ima-documents"' not in mobile
     assert 'route: "knowledge"' not in mobile
@@ -3375,8 +3434,8 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     assert "知识库请在电脑上打开" not in src
     assert 'class="tl-ima-entry"' in timeline
     assert "go('knowledge')" in timeline
-    assert "知识库" in timeline
-    assert "打开知识库" in timeline
+    assert "研报库" in timeline
+    assert "打开研报库" in timeline
     css = STYLE_CSS.read_text()
     assert ".tl-ima-entry { display: none; }" in css
     # 手机（≤768px）也显示入口：知识库已放开移动端
@@ -3400,7 +3459,7 @@ def test_knowledge_parallel_loads_catalog_and_first_page():
     assert "prefetched" in list_fn
     assert "await prefetched" in list_fn
     assert "imaDocumentsRequestPath()" in list_fn
-    assert "知识库目录加载失败" in render
+    assert "研报库目录加载失败" in render
     assert "refreshKnowledge()" in render
     assert "refreshImaDocuments()" in list_fn
     assert 'params.set("limit", "50")' in path_fn
@@ -4301,10 +4360,10 @@ def test_ima_collector_storage_status_text_contract():
         "  last_result: { downloaded: 3, failed: 0 }"
         "};\n"
         "const cases = ["
-        "  [{ ...base, storage: { status: 'unavailable' } }, '知识库存储暂不可用'],"
-        "  [{ ...base, storage: { status: 'stale' } }, '知识库存储状态过期'],"
-        "  [{ ...base, storage: { status: 'readonly' } }, '知识库存储当前只读'],"
-        "  [{ ...base, storage: { status: 'capacity_blocked' } }, '知识库存储空间已达限制'],"
+        "  [{ ...base, storage: { status: 'unavailable' } }, '研报库存储暂不可用'],"
+        "  [{ ...base, storage: { status: 'stale' } }, '研报库存储状态过期'],"
+        "  [{ ...base, storage: { status: 'readonly' } }, '研报库存储当前只读'],"
+        "  [{ ...base, storage: { status: 'capacity_blocked' } }, '研报库存储空间已达限制'],"
         "  [{ ...base, storage: { status: 'available', used_percent: 23 } }, '已归档 12 份 · 上次新增 3 份 · 存储 23%'],"
         "  [base, '已归档 12 份 · 上次新增 3 份'],"
         "  [{ ...base, index: { status: 'ready' } }, '已归档 12 份 · 上次新增 3 份'],"
@@ -4323,19 +4382,20 @@ def test_ima_collector_storage_status_text_contract():
 def test_knowledge_settings_nav_and_empty_state():
     src = APP_JS.read_text()
     assert '{ route: "admin/knowledge"' in src
-    assert 'label: "知识库设置"' in src
+    assert 'label: "研报库设置"' in src
     assert "knowledge: loadAdminKnowledge" in _fn_body("renderAdmin")
     assert "go('admin/knowledge')" in _fn_body("renderKnowledge")
     assert "admin/stats?tab=config" not in _fn_body("renderKnowledge")
     stats = _fn_body("loadAdminStats")
-    assert "知识库设置" in stats
+    assert "研报库设置" in stats
     assert "go('admin/knowledge')" in stats
     assert "IMA 与知识星球设置已移至" in stats
 
 
 def test_knowledge_settings_storage_and_phone_sync_blocks():
     knowledge = _fn_body("loadAdminKnowledge")
-    assert "ima_phone_sync.command" in knowledge
+    assert "ima_phone_sync.command" not in knowledge
+    assert "手机同步" not in knowledge
     assert "Refresh Token" not in knowledge
     assert 'id="ima-pure-token"' not in knowledge
     assert 'id="ima-storage-status"' in _fn_body("imaStoragePanelHtml")
@@ -4357,6 +4417,8 @@ def test_knowledge_settings_uses_collect_tabs_and_interval_chips():
     assert "ima-pure-interval" not in save
     trigger = _fn_body("triggerImaCollector")
     assert "group_id" in trigger
+    assert "请先挂载该知识库并保存" in trigger
+    assert "同步当前库" in _fn_body("loadAdminKnowledge")
 
 
 def test_save_polling_splits_zsxq_fields():
@@ -4392,14 +4454,15 @@ def test_knowledge_desk_serves_phone_without_refusal():
     assert "isPhoneShell" not in src
     css = STYLE_CSS.read_text()
     # 手机壳层给阅读台独立高度，不再整页拒绝
-    assert "知识库阅读台（手机）" in css
+    assert "研报库阅读台（手机）" in css
     assert "100dvh - 120px" in css
     assert "grid-template-columns: 44px minmax(0, 1fr) 84px" in css
     # 同优先级后者胜：手机覆盖块必须声明在桌面规则之后，否则被覆盖回桌面网格
-    assert css.index("知识库阅读台（手机）") > css.index("grid-template-columns: minmax(0, 1fr) auto")
-    # 手机阅读页：iframe 换成 blob 就绪后的「打开 PDF」大按钮
-    assert "ima-pdf-phone-open" in _fn_body("renderImaDocument")
-    assert "ima-pdf-phone-open" in _fn_body("loadImaPdf")
+    assert css.index("研报库阅读台（手机）") > css.index("grid-template-columns: minmax(0, 1fr) auto")
+    # 手机与 PC 同 iframe 预览；新标签按钮仍在工具栏
+    assert "ima-pdf-frame" in _fn_body("renderImaDocument")
+    assert "ima-pdf-phone-open" not in _fn_body("renderImaDocument")
+    assert "ima-pdf-phone-open" not in _fn_body("loadImaPdf")
     assert "ima-back-count" not in _fn_body("renderImaDocument")
     assert "ima-reader-download" not in _fn_body("renderImaDocument")
     # 遗留手机块不得再拉伸阅读工具栏按钮（曾把下载钮撑出屏）
