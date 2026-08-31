@@ -1020,6 +1020,14 @@ class DB:
             self._conn.execute("ALTER TABLE users ADD COLUMN wecom_webhook_hash TEXT NOT NULL DEFAULT ''")
         if "bark_key_hash" not in user_cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN bark_key_hash TEXT NOT NULL DEFAULT ''")
+        if "keywords_match_reports" not in user_cols:
+            self._conn.execute(
+                "ALTER TABLE users ADD COLUMN keywords_match_reports INTEGER NOT NULL DEFAULT 0"
+            )
+        if "keywords_match_reports_since" not in user_cols:
+            self._conn.execute(
+                "ALTER TABLE users ADD COLUMN keywords_match_reports_since TEXT NOT NULL DEFAULT ''"
+            )
         self._conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_feed_token "
             "ON users(feed_token) WHERE feed_token != ''"
@@ -1110,6 +1118,19 @@ class DB:
             "  created_at TEXT NOT NULL DEFAULT (datetime('now')),"
             "  UNIQUE (user_id, keyword)"
             ")"
+        )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS knowledge_keyword_notified ("
+            "  user_id INTEGER NOT NULL,"
+            "  group_id TEXT NOT NULL,"
+            "  media_id TEXT NOT NULL,"
+            "  created_at TEXT NOT NULL DEFAULT (datetime('now')),"
+            "  PRIMARY KEY (user_id, group_id, media_id)"
+            ")"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_knowledge_kw_notified_user "
+            "ON knowledge_keyword_notified(user_id)"
         )
         kol_cols = {row["name"] for row in self._rows("PRAGMA table_info(kols)")}
         if "is_private" not in kol_cols:
@@ -2136,6 +2157,7 @@ class DB:
         "push_channels", "dnd_start", "dnd_end", "dnd_allow_favorite",
         "feed_token", "bark_key", "llm_api_base", "llm_api_key", "llm_model",
         "token_version", "last_login_at",
+        "keywords_match_reports", "keywords_match_reports_since",
     })
 
     def _build_user_sets(self, updates: dict) -> tuple[list, list]:
@@ -2144,7 +2166,10 @@ class DB:
         for key, value in updates.items():
             if key not in self._UPDATE_USER_COLUMNS:
                 raise ValueError(f"非法用户字段: {key}")
-            if key in ("is_admin", "notify_enabled", "daily_report", "translate_twitter", "dnd_allow_favorite"):
+            if key in (
+                "is_admin", "notify_enabled", "daily_report", "translate_twitter",
+                "dnd_allow_favorite", "keywords_match_reports",
+            ):
                 value = _to_bool(value)
             if key in SECRET_COLUMNS:
                 plain = (value or "").strip()
@@ -2703,6 +2728,71 @@ class DB:
         """用户的关键词提醒规则（命中即穿透免打扰并加急推送）。"""
         return self.get_users_keywords([user_id]).get(int(user_id), [])
 
+    def list_knowledge_keyword_users(self) -> list[dict]:
+        return self._rows(
+            "SELECT * FROM users WHERE notify_enabled = 1 AND keywords_match_reports = 1 "
+            "ORDER BY id"
+        )
+
+    def list_recent_ima_documents(self, since: str, limit: int = 400) -> list[dict]:
+        since = str(since or "").strip()
+        if not since:
+            return []
+        cap = max(1, min(int(limit), 800))
+        rows = self._rows(
+            "SELECT * FROM ima_document_index WHERE downloaded_at >= ? "
+            "ORDER BY downloaded_at DESC, sort_date DESC LIMIT ?",
+            (since, cap),
+        )
+        return [_ima_public_document(row) for row in rows]
+
+    def filter_unnotified_knowledge_docs(self, user_id: int, docs: list[dict]) -> list[dict]:
+        if not docs:
+            return []
+        keys = [
+            (str(doc.get("group_id") or ""), str(doc.get("media_id") or ""))
+            for doc in docs
+        ]
+        keys = [(g, m) for g, m in keys if g and m]
+        if not keys:
+            return []
+        media_ids = list({media_id for _, media_id in keys})
+        placeholders = ", ".join("?" * len(media_ids))
+        seen = {
+            (str(row["group_id"]), str(row["media_id"]))
+            for row in self._rows(
+                "SELECT group_id, media_id FROM knowledge_keyword_notified "
+                f"WHERE user_id = ? AND media_id IN ({placeholders})",
+                (int(user_id), *media_ids),
+            )
+        }
+        out = []
+        for doc in docs:
+            key = (str(doc.get("group_id") or ""), str(doc.get("media_id") or ""))
+            if key[0] and key[1] and key not in seen:
+                out.append(doc)
+        return out
+
+    def mark_knowledge_keyword_notified(self, user_id: int, docs: list[dict]) -> None:
+        rows = []
+        seen: set[tuple[str, str]] = set()
+        for doc in docs:
+            group_id = str(doc.get("group_id") or "")
+            media_id = str(doc.get("media_id") or "")
+            if not group_id or not media_id or (group_id, media_id) in seen:
+                continue
+            seen.add((group_id, media_id))
+            rows.append((int(user_id), group_id, media_id))
+        if not rows:
+            return
+        with self._lock:
+            self._conn.executemany(
+                "INSERT OR IGNORE INTO knowledge_keyword_notified "
+                "(user_id, group_id, media_id) VALUES (?, ?, ?)",
+                rows,
+            )
+            self._conn.commit()
+
     def set_user_keywords(self, user_id: int, keywords: list[str]) -> None:
         # 先去重保序：user_keywords 有 UNIQUE(user_id, keyword)，重复值会让
         # 中途 INSERT 失败留下悬空事务
@@ -2813,6 +2903,9 @@ class DB:
                 )
                 self._conn.execute("DELETE FROM webpush_subscriptions WHERE user_id = ?", (user_id,))
                 self._conn.execute("DELETE FROM user_keywords WHERE user_id = ?", (user_id,))
+                self._conn.execute(
+                    "DELETE FROM knowledge_keyword_notified WHERE user_id = ?", (user_id,)
+                )
                 self._conn.execute(
                     "DELETE FROM feishu_personal_bots WHERE user_id = ?", (user_id,)
                 )

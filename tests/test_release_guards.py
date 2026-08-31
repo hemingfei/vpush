@@ -60,6 +60,8 @@ SENTINELS += [
 # —— 知识库设置增强第二批（feat/kb-settings-batch2，2026-08-30）——
 SENTINELS += [
     ("scripts/cicc_report_collector.py", "def write_paused", "熔断前写 paused.json（quota/auth）"),
+    ("scripts/cicc_report_collector.py", "def sidecar_row", "增量采集写入 sidecar 摘要/标签"),
+    ("scripts/cicc_report_collector.py", "def merge_sidecar", "sidecar 文件锁合并，多进程不互相覆盖"),
     ("scripts/vps/cicc-status.py", '"paused"', "status 合并 paused.json 熔断状态"),
     ("scripts/vps/cicc-status.py", "def backup_section", "status 增加 backup 节（诚实呈现未配置）"),
     ("scripts/vps/cicc-incremental.py", "def paused_skip", "增量门控：auth 熔断 48h 内跳过"),
@@ -75,6 +77,8 @@ SENTINELS += [
     ("app/static/app.js", "runStorageConsistency", "存储页签一致性体检入口"),
     ("app/static/app.js", "runStorageDedup", "去重手动触发入口"),
     ("app/static/app.js", "cicc-keywords", "标题关键词白名单输入"),
+    ("app/knowledge_notify.py", "def maybe_notify_knowledge_keywords", "研报关键词合并推送"),
+    ("app/static/app.js", "匹配研报库", "设置页研报匹配开关"),
     ("scripts/vps/cicc-consistency.py", "def main", "本地库一致性体检脚本"),
     ("scripts/vps/cicc-dispatch.py", "consistency", "一致性命令模式"),
 ]

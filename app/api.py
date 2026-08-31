@@ -375,6 +375,7 @@ class MeUpdate(BaseModel):
     dnd_end: str | None = None
     dnd_allow_favorite: bool | None = None
     keywords: list[str] | None = None
+    keywords_match_reports: bool | None = None
     llm_api_base: str | None = None
     llm_api_key: str | None = None
     llm_model: str | None = None
@@ -702,6 +703,7 @@ def public_user(user: dict, db=None) -> dict:
         "dnd_start": user.get("dnd_start") or "",
         "dnd_end": user.get("dnd_end") or "",
         "dnd_allow_favorite": bool(user.get("dnd_allow_favorite")),
+        "keywords_match_reports": bool(user.get("keywords_match_reports")),
         "llm_api_base": user.get("llm_api_base") or "",
         "llm_api_key": mask_secret(user_plain_secret(user, "llm_api_key", db)),
         "llm_model": user.get("llm_model") or "",
@@ -1656,6 +1658,12 @@ def create_api_router(
                         status_code=400,
                         detail=f"单个关键词最长 {KEYWORDS_MAX_LENGTH} 字：{keyword}",
                     )
+        if "keywords_match_reports" in body.model_fields_set and body.keywords_match_reports is not None:
+            want = bool(body.keywords_match_reports)
+            updates["keywords_match_reports"] = want
+            current = db.get_user(user["id"]) or {}
+            if want and not current.get("keywords_match_reports"):
+                updates["keywords_match_reports_since"] = datetime.now(UTC).isoformat()
         if "notify_enabled" in body.model_fields_set:
             updates["notify_enabled"] = body.notify_enabled
         if "daily_report_enabled" in body.model_fields_set and body.daily_report_enabled is not None:

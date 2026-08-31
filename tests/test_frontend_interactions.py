@@ -686,6 +686,7 @@ def test_settings_save_feedback_uses_flash():
         assert span_id not in settings
     for name in (
         "saveNotify", "saveDailyReport", "saveTranslateTwitter", "saveDnd", "saveKeywords",
+        "saveKeywordsMatchReports",
         "savePushChannels", "saveLlm", "savePassword", "saveCustomTgBot",
         "saveWecomWebhook", "saveBarkKey", "enableWebPush", "disableWebPush",
     ):
@@ -1647,7 +1648,8 @@ def test_settings_save_callbacks_require_same_route_token_and_session_before_all
     """所有设置保存回调的异步收尾都必须仍属于发起路由和会话。"""
     for name in (
         "saveNotify", "saveDailyReport", "saveCustomTgBot", "saveWecomWebhook",
-        "saveBarkKey", "enableWebPush", "disableWebPush", "saveKeywords", "saveLlm",
+        "saveBarkKey", "enableWebPush", "disableWebPush", "saveKeywords",
+        "saveKeywordsMatchReports", "saveLlm",
     ):
         body = _fn_body(name)
         await_api = body.index("await api(")
@@ -2099,7 +2101,8 @@ def test_ima_collector_acl_granted_via_separate_put():
     assert "<h4>研报库</h4>" in open_user
     assert 'id="um-kb"' in open_user
     assert "data-kb-group" in open_user
-    assert "勾选后可自行订阅，取消立即失效。" in open_user
+    assert "勾选后即可阅读" in open_user
+    assert "可自行订阅" not in open_user
     assert "谁能订" not in src
     assert "谁能定" not in src
     assert "knowledgeAclPanelHtml" not in catalog
@@ -2474,6 +2477,26 @@ def test_ima_search_ignores_single_ascii_character():
     assert r"/^[\x00-\x7F]*$/" in body
     src = APP_JS.read_text()
     assert "imaUsableSearchQuery(" in src
+
+
+def test_report_keyword_watch_uses_settings_switch_not_library_subscribe():
+    src = APP_JS.read_text()
+    settings = _fn_body("renderSettings")
+    assert "匹配研报库" in settings
+    assert "set-kw-reports" in settings
+    assert "saveKeywordsMatchReports" in settings
+    assert "每日研报入库结束" in settings
+    assert "管理订阅" not in settings
+    assert "toggleReportKeyword" in src
+    assert "REPORT_WATCH_BLOCKED_TAGS" in src
+    assert "imaReaderWatchHtml" in src
+    modal = _fn_body("adminOpenUser")
+    assert "勾选后即可阅读" in modal
+    assert "可自行订阅" not in modal
+    css = STYLE_CSS.read_text()
+    assert ".ima-reader-watch .ima-doc-tag.is-action" in css
+    assert "min-height: 44px" in css[css.index(".ima-reader-watch .ima-doc-tag.is-action"):css.index(".ima-reader-watch .ima-doc-tag.is-action") + 280]
+    assert "管理订阅" not in _fn_body("knowledgeSourceControlsHtml")
 
 
 def test_ima_source_filter_is_compact_and_subscription_management_survives():
@@ -3293,9 +3316,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=247"' in html
-    assert 'src="/app.js?v=347"' in html
-    assert 'dav-shell-v216' in sw
+    assert 'href="/style.css?v=248"' in html
+    assert 'src="/app.js?v=348"' in html
+    assert 'dav-shell-v217' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

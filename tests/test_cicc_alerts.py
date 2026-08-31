@@ -126,3 +126,49 @@ def test_collector_keywords_filter():
     assert len(mod.filter_by_keywords(items, ["宁德时代"])) == 1
     assert len(mod.filter_by_keywords(items, ["宁德时代", "白酒"])) == 1  # 「白酒」不在标题中
     assert mod.filter_by_keywords(items, ["不存在的词"]) == []
+
+
+def _collector():
+    spec = importlib.util.spec_from_file_location(
+        "cicc_collector_sidecar", ROOT / "scripts/cicc_report_collector.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_collector_sidecar_row_uses_beijing_date_and_caps_tags():
+    mod = _collector()
+    row = mod.sidecar_row({
+        "id": 99,
+        "title": "宁德时代深度",
+        "summary": "x" * 3000,
+        "reportType": "深度报告",
+        "documentLabels": ["新能源", "电力设备"],
+        "portalCategoryIds": ["7", 8],
+        "publishTime": "2026-08-29T17:43:03Z",
+        "analysts": [{"name": "张三"}, "李四"],
+    }, {7: "公司研究", "8": "汽车"}, "公司研究")
+    assert row["id"] == "99"
+    assert row["publish"] == "2026-08-30"
+    assert row["day"] == "0830"
+    assert len(row["summary"]) == 2000
+    assert row["tags"] == ["深度报告", "公司研究", "新能源", "电力设备", "汽车"]
+    assert row["authors"] == "张三 李四"
+
+
+def test_collector_merge_sidecar_upserts_and_keeps_existing(tmp_path):
+    mod = _collector()
+    path = tmp_path / ".vpush-local-meta.jsonl"
+    path.write_text(
+        json.dumps({"id": "1", "title": "旧", "summary": "a", "tags": [], "day": "0801", "publish": "2026-08-01", "authors": ""}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    n = mod.merge_sidecar(path, {
+        "1": {"id": "1", "title": "新", "summary": "b", "tags": ["宏观"], "day": "0802", "publish": "2026-08-02", "authors": "甲"},
+        "2": {"id": "2", "title": "增量", "summary": "c", "tags": ["宁德时代"], "day": "0830", "publish": "2026-08-30", "authors": ""},
+    })
+    assert n == 2
+    rows = mod.load_sidecar(path)
+    assert rows["1"]["title"] == "新"
+    assert rows["2"]["summary"] == "c"
+    assert "宁德时代" in rows["2"]["tags"]

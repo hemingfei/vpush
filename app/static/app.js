@@ -22,7 +22,12 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.106";
+const APP_VERSION = "1.12.107";
+const KEYWORDS_MAX_COUNT = 20;
+const REPORT_WATCH_BLOCKED_TAGS = new Set([
+  "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
+  "量化及ESG", "大宗商品", "外汇研究", "固定收益", "中金研究院", "其他",
+]);
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["config", "cookies", "proxies", "plaza"];
@@ -814,6 +819,36 @@ function imaDocumentTagsHtml(tags, interactive = false) {
   return `<span class="ima-doc-tags">${chips.join("")}</span>`;
 }
 
+function isReportWatchableTag(tag) {
+  const name = String(tag || "").trim();
+  return !!name && !REPORT_WATCH_BLOCKED_TAGS.has(name);
+}
+
+function userKeywordSet() {
+  return new Set((state.user?.keywords || []).map((k) => String(k || "").trim()).filter(Boolean));
+}
+
+function imaWatchTagButton(tag) {
+  const name = String(tag || "").trim();
+  if (!name) return "";
+  const watching = userKeywordSet().has(name);
+  const pressed = watching ? "true" : "false";
+  const selected = watching ? " is-selected" : "";
+  const title = watching ? "已在关键词提醒中" : "加入关键词提醒";
+  return `<button type="button" class="ima-doc-tag is-action is-watch${selected}" data-tag="${escapeHtml(name)}" aria-pressed="${pressed}" title="${title}" onclick="event.stopPropagation();toggleReportKeyword(this.dataset.tag)">${escapeHtml(name)}</button>`;
+}
+
+function imaReaderWatchHtml(tags) {
+  const list = (Array.isArray(tags) ? tags : []).map((tag) => String(tag || "").trim()).filter(Boolean);
+  if (!list.length) return "";
+  const chips = list.map((tag) => (
+    isReportWatchableTag(tag)
+      ? imaWatchTagButton(tag)
+      : `<span class="ima-doc-tag">${escapeHtml(tag)}</span>`
+  ));
+  return `<div class="ima-reader-watch" aria-label="研报标签">${chips.join("")}</div>`;
+}
+
 function imaTagCountsFromData(data) {
   const raw = data && data.tag_counts;
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
@@ -859,12 +894,14 @@ function imaDistinctiveTags(tags, counts = _imaTagCounts, documentCount = _imaDo
 function imaReportMetaHtml(item) {
   const parts = [];
   const ticker = imaDocTicker(item.name);
-  if (ticker) parts.push(ticker);
-  parts.push(...imaDistinctiveTags(item?.tags));
+  if (ticker) parts.push(`<span>${escapeHtml(ticker)}</span>`);
+  for (const tag of imaDistinctiveTags(item?.tags)) {
+    parts.push(isReportWatchableTag(tag) ? imaWatchTagButton(tag) : `<span>${escapeHtml(tag)}</span>`);
+  }
   const size = fmtDocSize(item?.size);
-  if (size) parts.push(size);
+  if (size) parts.push(`<span>${escapeHtml(size)}</span>`);
   return parts.length
-    ? `<span class="ima-report-meta">${parts.map((part) => `<span>${escapeHtml(part)}</span>`).join("")}</span>`
+    ? `<span class="ima-report-meta">${parts.join("")}</span>`
     : "";
 }
 
@@ -1690,6 +1727,7 @@ async function renderImaDocument(seq, mediaId) {
         <section class="ima-reader-info">
           <h2 class="ima-reader-title">${escapeHtml(imaDisplayTitle(item.name))}</h2>
           ${fileMetaHtml}
+          ${imaReaderWatchHtml(item.tags)}
           ${abstractHtml}
         </section>
         ${pdfPanel}
@@ -4327,7 +4365,7 @@ async function renderSettings(seq) {
         <header class="section-head">
           <div>
             <h2 class="section-title">关键词提醒</h2>
-            <p class="section-meta">命中关键词的动态会加标记，并在免打扰时段实时推送（穿透免打扰）；每行一个，最多 20 个，每个不超过 50 字。</p>
+            <p class="section-meta">每行一个，最多 20 个，每个不超过 50 字。动态命中会加标记并实时推送（穿透免打扰）；研报命中在每日更新后合并成一条，不穿透免打扰。</p>
           </div>
         </header>
         <div class="form-row">
@@ -4335,10 +4373,15 @@ async function renderSettings(seq) {
           <textarea id="set-keywords" class="form-control" rows="4"
             placeholder="ETF&#10;降息&#10;中概股">${escapeHtml((state.user.keywords || []).join("\n"))}</textarea>
         </div>
+        <label class="switch kw-report-switch">
+          <input id="set-kw-reports" type="checkbox" ${state.user.keywords_match_reports ? "checked" : ""} onchange="saveKeywordsMatchReports()">
+          <span class="track"></span>
+          <span>匹配研报库</span>
+        </label>
         <div class="toolbar" style="margin-top:10px">
           <button class="btn-normal" onclick="saveKeywords()">保存关键词</button>
         </div>
-        <p class="muted">适用场景：只关心某个大V聊的特定话题（如「只想要 ETF 相关的」）；命中即实时送达，不受免打扰影响。</p>
+        <p class="muted">动态命中即实时送达。开启「匹配研报库」后，每日研报入库结束会把命中篇目合成一条推送；需要管理员已授权对应研报库。</p>
       </section>
       <section class="section-panel">
         <header class="section-head">
@@ -5450,7 +5493,77 @@ async function saveKeywords() {
     });
     if (!routeStillActive(routeSeq) || token !== state.token
       || sessionGeneration !== imaMountState.sessionGeneration) return;
+    if (state.user) state.user.keywords = keywords;
     flash(`已保存 ${keywords.length} 个关键词`);
+  } catch (err) {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
+    flash(err.message, "error");
+  }
+}
+
+async function saveKeywordsMatchReports() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
+  const input = $("#set-kw-reports");
+  const on = !!(input && input.checked);
+  try {
+    const data = await api("/api/me", {
+      method: "PUT",
+      body: JSON.stringify({ keywords_match_reports: on }),
+    });
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
+    if (state.user) state.user.keywords_match_reports = !!(data && data.keywords_match_reports);
+    flash(on ? "已开启研报匹配" : "已关闭研报匹配");
+  } catch (err) {
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
+    if (input) input.checked = !on;
+    flash(err.message, "error");
+  }
+}
+
+function syncReportWatchChips() {
+  const watching = userKeywordSet();
+  document.querySelectorAll(".ima-doc-tag.is-watch").forEach((btn) => {
+    const on = watching.has(String(btn.dataset.tag || "").trim());
+    btn.classList.toggle("is-selected", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+    btn.title = on ? "已在关键词提醒中" : "加入关键词提醒";
+  });
+}
+
+async function toggleReportKeyword(tag) {
+  const name = String(tag || "").trim();
+  if (!name || !isReportWatchableTag(name)) return;
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
+  const current = [...userKeywordSet()];
+  if (current.includes(name)) {
+    flash("已在关键词提醒中");
+    return;
+  }
+  if (current.length >= KEYWORDS_MAX_COUNT) {
+    flash(`关键词最多 ${KEYWORDS_MAX_COUNT} 个`, "error");
+    return;
+  }
+  const keywords = [...current, name];
+  try {
+    const data = await api("/api/me", {
+      method: "PUT",
+      body: JSON.stringify({ keywords, keywords_match_reports: true }),
+    });
+    if (!routeStillActive(routeSeq) || token !== state.token
+      || sessionGeneration !== imaMountState.sessionGeneration) return;
+    if (state.user) {
+      state.user.keywords = keywords;
+      state.user.keywords_match_reports = data?.keywords_match_reports !== false;
+    }
+    syncReportWatchChips();
+    flash("已加入关键词提醒，每日更新后推送");
   } catch (err) {
     if (!routeStillActive(routeSeq) || token !== state.token
       || sessionGeneration !== imaMountState.sessionGeneration) return;
@@ -7281,6 +7394,7 @@ function ciccControlInnerHtml(cicc) {
     .join("") || '<p class="muted">暂无操作记录</p>';
   return `
     <p class="muted" aria-live="polite">${escapeHtml(ciccRunningText(cicc))} · 更新于 ${fmtTs(cicc.ts)}</p>
+    <p class="muted">增量完成后，向已授权且开启「匹配研报库」的用户推送命中摘要。</p>
     ${ciccPausedLine(cicc)}
     <div class="toolbar" style="margin:12px 0">
       <button type="button" class="btn-normal" onclick="triggerCicc('incr')">增量采集（近3天）</button>
@@ -10885,7 +10999,7 @@ function adminOpenUser(userId, focus) {
       </section>`}
       ${u.is_admin ? "" : `<section class="um-block">
         <h4>研报库</h4>
-        <p class="muted">勾选后可自行订阅，取消立即失效。</p>
+        <p class="muted">勾选后即可阅读；若对方开了「匹配研报库」，每日更新后会按他的关键词推一条摘要。取消勾选立即看不到，也不会再推该库。</p>
         ${kbList}
       </section>`}
       <section class="um-block">

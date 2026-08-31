@@ -1794,6 +1794,8 @@ class Scheduler:
         self._last_cookie_keepalive = time.monotonic()
         self._last_retry = 0.0
         self._last_health_check = time.monotonic()
+        self._last_cicc_alert_check = 0.0
+        self._last_knowledge_notify = 0.0
         self._last_proxy_tick = 0.0
 
     def stop(self):
@@ -2022,7 +2024,8 @@ class Scheduler:
                     )
                 except Exception:  # noqa: BLE001
                     logger.exception("数据源健康告警异常")
-            if now_mono - self._last_health_check >= CICC_ALERT_CHECK_INTERVAL:
+            if now_mono - self._last_cicc_alert_check >= CICC_ALERT_CHECK_INTERVAL:
+                self._last_cicc_alert_check = now_mono
                 try:
                     from .cicc_alerts import maybe_check_cicc
 
@@ -2031,6 +2034,16 @@ class Scheduler:
                     )
                 except Exception:  # noqa: BLE001
                     logger.exception("中金存储告警异常")
+            if now_mono - self._last_knowledge_notify >= 60:
+                self._last_knowledge_notify = now_mono
+                try:
+                    from .knowledge_notify import maybe_notify_knowledge_keywords
+
+                    await asyncio.to_thread(
+                        maybe_notify_knowledge_keywords, self.db, self.notifiers_config
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception("研报关键词提醒异常")
             if now_mono - self._last_proxy_tick >= PROXY_TICK_INTERVAL:
                 self._last_proxy_tick = now_mono
                 try:
