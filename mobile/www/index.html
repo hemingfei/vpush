@@ -143,8 +143,12 @@
       $('connectingText').textContent = text || '正在连接…';
     }
 
-    /* 用 <img> 探测：不受 CORS 限制；探测路径是前端静态资源，无需登录即可访问。
-       多路径依次尝试，任一成功即可。 */
+    let lastProbeDetail = '';
+
+    /* 双通道探测，任一成功即可达：
+       1) 原生 HTTP（CapacitorHttp 插件，走 Java 网络栈）——不受 WebView 混合内容/图片加载限制，
+          失败时给出系统级错误详情；浏览器环境（无原生桥）自动跳过
+       2) <img> 加载前端静态资源——浏览器环境兜底（不受 CORS 限制） */
     const PROBE_PATHS = ['/icon-192.png', '/logo-mark.svg', '/logo.svg'];
 
     function probeOnce(src, timeoutMs) {
@@ -158,11 +162,46 @@
       });
     }
 
-    async function probe(base, timeoutMs) {
+    async function probeImg(base, timeoutMs) {
       for (const path of PROBE_PATHS) {
-        if (await probeOnce(base + path, timeoutMs || 10000)) return true;
+        if (await probeOnce(base + path, timeoutMs)) return true;
       }
       return false;
+    }
+
+    async function probeNative(base, timeoutMs) {
+      const Http = (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp) || null;
+      if (!Http || typeof Http.get !== 'function') return { skipped: true };
+      try {
+        const resp = await Http.get({ url: base + '/healthz', connectTimeout: timeoutMs, readTimeout: timeoutMs });
+        if (resp && resp.status === 200) return { ok: true };
+        return { ok: false, detail: '服务返回 HTTP ' + (resp && resp.status) };
+      } catch (e) {
+        let msg = e && (e.errorMessage || e.message);
+        if (!msg) { try { msg = JSON.stringify(e); } catch (_) { msg = String(e); } }
+        return { ok: false, detail: msg };
+      }
+    }
+
+    /* 任一 promise 成功立即 resolve(true)，全部失败 resolve(false) */
+    function anyOf(promises) {
+      return new Promise((resolve) => {
+        let pending = promises.length;
+        promises.forEach((p) => p.then((ok) => {
+          if (ok) resolve(true);
+          else if (--pending === 0) resolve(false);
+        }));
+      });
+    }
+
+    async function probe(base, timeoutMs) {
+      const t = timeoutMs || 10000;
+      const results = await anyOf([probeImg(base, t), probeNative(base, t).then((r) => {
+        if (r.ok) return true;
+        if (!r.skipped) lastProbeDetail = r.detail;
+        return false;
+      })]);
+      return results;
     }
 
     function normalize(input) {
@@ -189,9 +228,10 @@
         if (explicit) break;
       }
       $('go').disabled = false;
-      const tip = '无法连接 ' + candidates[0] + '。排查步骤：'
-        + '① 用手机浏览器打开 ' + candidates[0] + '/healthz，能显示 {"status":"ok"} 说明网络可达（否则是网络问题，检查服务器防火墙/安全组是否对手机所在网络放行该端口）；'
-        + '② 浏览器能打开但本 APP 不行时，确认安装的是最新 APK，或长按 APP 图标用「切换服务器」重试。';
+      let tip = '无法连接 ' + candidates[0] + '。';
+      if (lastProbeDetail) tip += '探测详情：' + lastProbeDetail + '。';
+      tip += '排查：① 用手机浏览器打开 ' + candidates[0] + '/healthz 确认网络可达；'
+        + '② 浏览器可达而 APP 不行时，请把上面的「探测详情」原文发给开发者。';
       showSetup(tip, true);
     }
 
@@ -217,7 +257,7 @@
         showConnecting('正在连接 ' + value + ' …');
         const ok = await probe(value, 8000);
         if (ok) { window.location.replace(value + '/'); return; }
-        showSetup('无法连接上次的服务器（' + value + '）。可检查服务器后重试，或输入新的地址。', true);
+        showSetup('无法连接上次的服务器（' + value + '）。' + (lastProbeDetail ? '原因：' + lastProbeDetail + '。' : '') + '可检查服务器后重试，或输入新的地址。', true);
         $('url').value = value;
         return;
       }
