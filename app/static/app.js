@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.108";
+const APP_VERSION = "1.12.109";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -6022,9 +6022,23 @@ function imaFocusSnapshot(element = document.activeElement) {
   return { element, id: element?.id || "" };
 }
 
+function imaAclDirty() {
+  const group = imaMountGroup(imaMountState.selectedGroupId);
+  const list = $("#ima-acl-list");
+  if (!group || !list) return false;
+  const granted = new Set(group.acl_usernames || []);
+  const checked = [...list.querySelectorAll("[data-ima-acl-user]:checked")]
+    .map((el) => el.getAttribute("data-ima-acl-user"))
+    .filter(Boolean);
+  if (checked.length !== granted.size) return true;
+  return checked.some((name) => !granted.has(name));
+}
+
 function selectImaMountGroup(groupId) {
   const group = imaMountGroup(groupId);
   if (!group) return;
+  if (String(group.id) !== String(imaMountState.selectedGroupId || "") && imaAclDirty()
+    && !confirm("权限未保存，切换库会丢弃改动。继续？")) return;
   const focus = imaFocusSnapshot();
   imaMountState.selectedGroupId = String(group.id);
   renderImaMountGroups();
@@ -6045,15 +6059,34 @@ function aclChecksHtml(usernames, listId, dataAttr) {
   const granted = new Set(usernames || []);
   const users = _aclCandidateUsers || [];
   if (!users.length) {
-    return `<p class="muted">还没有可授权的普通用户。管理员无需授权即可阅读。</p>`;
+    return `<p class="muted">还没有普通用户。</p>`;
   }
-  return `<div id="${listId}" class="um-kb-list">${users.map((u) => {
+  return `<div class="ima-acl-picker">
+    <input type="search" class="form-control ima-acl-search" placeholder="搜索用户" aria-label="搜索用户" oninput="filterAclList('${listId}', this.value)">
+    <div id="${listId}" class="um-kb-list">${users.map((u) => {
     const name = String(u.username || "");
     return `<label class="um-kb-item">
       <input type="checkbox" ${dataAttr}="${escapeHtml(name)}"${granted.has(name) ? " checked" : ""}>
       <span>${escapeHtml(name)}</span>
     </label>`;
-  }).join("")}</div>`;
+  }).join("")}</div>
+    <p class="muted ima-acl-empty" hidden>没有匹配的用户</p>
+  </div>`;
+}
+
+function filterAclList(listId, q) {
+  const list = document.getElementById(listId);
+  if (!list) return;
+  const needle = String(q || "").trim().toLowerCase();
+  let shown = 0;
+  for (const item of list.querySelectorAll(".um-kb-item")) {
+    const name = (item.querySelector("span")?.textContent || "").trim().toLowerCase();
+    const on = !needle || name.includes(needle);
+    item.hidden = !on;
+    if (on) shown += 1;
+  }
+  const empty = list.closest(".ima-acl-picker")?.querySelector(".ima-acl-empty");
+  if (empty) empty.hidden = shown > 0;
 }
 
 async function renderImaGroupAcl() {
@@ -6074,8 +6107,8 @@ async function renderImaGroupAcl() {
     slot.innerHTML = `
       ${aclChecksHtml(granted, "ima-acl-list", "data-ima-acl-user")}
       <div class="toolbar" style="margin-top:10px">
-        <button type="button" class="btn-ghost" id="ima-acl-save" onclick="saveImaGroupAcl()">保存授权</button>
-        <span class="muted">${granted.length ? `已授权 ${granted.length} 人` : "仅管理员可见"}</span>
+        <button type="button" class="btn-ghost" id="ima-acl-save" onclick="saveImaGroupAcl()">保存</button>
+        <span class="muted" id="ima-acl-status">${granted.length ? `${granted.length} 人可看` : "仅管理员"}</span>
       </div>`;
   } catch (err) {
     if (seq !== _imaAclRenderSeq) return;
@@ -6101,10 +6134,13 @@ async function saveImaGroupAcl() {
       body: JSON.stringify({ usernames }),
     });
     group.acl_usernames = r.acl_usernames || usernames;
-    flash("已保存授权");
-    renderImaGroupAcl();
+    const n = (group.acl_usernames || []).length;
+    const status = $("#ima-acl-status");
+    if (status) status.textContent = n ? `${n} 人可看` : "仅管理员";
+    flash("权限已保存");
+    if (btn) btn.disabled = false;
   } catch (err) {
-    flash("保存授权失败: " + err.message, "error");
+    flash("保存失败: " + err.message, "error");
     if (btn) btn.disabled = false;
   }
 }
@@ -6796,8 +6832,8 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
               </section>
             </div>
             <div class="ima-source-block" id="ima-group-acl-block">
-              <header class="ima-source-block-head"><div><h3 class="ima-source-title">谁能阅读</h3>
-              <p class="section-meta">勾选后即可阅读当前库。管理员无需授权。授权单独保存，不随采集配置提交。</p></div></header>
+              <header class="ima-source-block-head"><div><h3 class="ima-source-title">权限控制</h3>
+              <p class="section-meta">当前选中库的可见用户。管理员始终可看。与上方采集配置分开保存。</p></div></header>
               <div id="ima-group-acl"><p class="muted">加载中…</p></div>
             </div>
           </div>
@@ -7570,7 +7606,7 @@ function localLibraryCardHtml(lib) {
     : "";
   return `<div class="ima-source-block" data-slug="${escapeHtml(lib.slug)}">
     <header class="ima-source-block-head"><div><h3 class="ima-source-title">${escapeHtml(lib.name)}</h3>
-    <p class="section-meta"><code>${escapeHtml(lib.slug)}</code> · ${meta} · ${lib.enabled ? "已启用" : "未启用"}${tags} · 授权 ${aclCount ? `${aclCount} 人` : "仅管理员"}</p></div>
+    <p class="section-meta"><code>${escapeHtml(lib.slug)}</code> · ${meta} · ${lib.enabled ? "已启用" : "未启用"}${tags} · ${aclCount ? `权限 ${aclCount} 人` : "仅管理员"}</p></div>
     <div class="toolbar">
       <button type="button" class="btn-ghost" data-ll-edit="${escapeHtml(lib.slug)}">编辑</button>
       <button type="button" class="btn-ghost" data-ll-toggle="${escapeHtml(lib.slug)}" data-ll-enabled="${lib.enabled ? "false" : "true"}">${lib.enabled ? "停用" : "启用"}</button>
@@ -7706,7 +7742,7 @@ async function openLocalLibraryModal(slug) {
       <input id="ll-tags" class="form-control" value="${escapeHtml((lib.tags || []).join(", "))}" placeholder="研报, 中金">
     </label>
     <p class="muted">改标签后保存可立刻扫描，写入库内文档。</p>
-    <p class="form-label">授权用户（清空则仅管理员可见）</p>
+    <p class="form-label">权限控制（不勾选则仅管理员）</p>
     ${aclHtml}`);
   mask.querySelector("#ll-save").addEventListener("click", () => saveLocalLibraryModal(slug, mask, lib.tags || []));
 }

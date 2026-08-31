@@ -2114,7 +2114,11 @@ def test_ima_collector_acl_granted_via_separate_put():
     assert "acl_usernames" not in save
     assert "acl_usernames" not in read
     knowledge = _fn_body("loadAdminKnowledge")
+    assert "谁能阅读" not in knowledge
+    assert "权限控制" in knowledge
     assert 'id="ima-group-acl"' in knowledge
+    assert "filterAclList" in src
+    assert "ima-acl-search" in src
     assert "saveImaGroupAcl" in src
     assert "/groups/" in _fn_body("saveImaGroupAcl")
     assert "s.ima_collector" in knowledge
@@ -3342,9 +3346,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=250"' in html
-    assert 'src="/app.js?v=351"' in html
-    assert 'dav-shell-v220' in sw
+    assert 'href="/style.css?v=251"' in html
+    assert 'src="/app.js?v=352"' in html
+    assert 'dav-shell-v221' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

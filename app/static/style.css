@@ -3357,13 +3357,15 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   align-items: center;
 }
 .ima-storage-alerts input[type="number"] { width: 56px; }
+.ima-acl-search { margin: 8px 0; }
 #ll-acl-list,
 #ima-acl-list {
   max-height: 240px;
   overflow: auto;
-  margin: 6px 0 0;
+  margin: 0;
   padding: 4px 0;
 }
+.ima-acl-empty { margin: 6px 0 0; }
 .knowledge-settings .ima-credential-actions {
   margin-top: var(--space-3);
 }
