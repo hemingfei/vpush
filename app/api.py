@@ -1147,6 +1147,7 @@ def create_api_router(
     router = APIRouter(prefix="/api")
     # 登录/注册限流（内存版，单实例够用）：每 IP 窗口内失败次数超限后 429
     login_attempts: dict[str, list[float]] = {}
+    ima_quota_alerts: set[tuple] = set()
     LOGIN_MAX_FAILURES = 8
     LOGIN_WINDOW = 300
     # 账号级失败锁定（防 IP 轮换爆破，独立于上面的 IP 限流）：
@@ -1427,12 +1428,32 @@ def create_api_router(
             raise HTTPException(status_code=403, detail="需要管理员权限")
         return user
 
-    def _quota_or_429(user: dict, bucket: str, period_start: int, limit: int, window_seconds: int, detail: str) -> None:
+    def _quota_or_429(
+        user: dict,
+        bucket: str,
+        period_start: int,
+        limit: int,
+        window_seconds: int,
+        detail: str,
+        notice: str,
+    ) -> None:
         allowed, retry_after = db.consume_user_quota(
             int(user["id"]), bucket, period_start, limit, window_seconds
         )
         if allowed:
             return
+        key = (int(user["id"]), bucket, int(period_start))
+        if key not in ima_quota_alerts:
+            ima_quota_alerts.add(key)
+            if len(ima_quota_alerts) > 2000:
+                ima_quota_alerts.clear()
+                ima_quota_alerts.add(key)
+            db.log_admin_action(
+                None,
+                "ima_quota",
+                str(user.get("username") or user["id"]),
+                notice,
+            )
         raise HTTPException(
             status_code=429,
             detail=detail,
@@ -1450,6 +1471,7 @@ def create_api_router(
             user_quota.IMA_LIST_BURST,
             user_quota.IMA_LIST_BURST_SEC,
             "刷新过于频繁，请稍后再试",
+            "知识库列表 10 分钟超限",
         )
 
     def _enforce_ima_file_quota(user: dict) -> None:
@@ -1463,6 +1485,7 @@ def create_api_router(
             user_quota.IMA_PDF_BURST,
             user_quota.IMA_PDF_BURST_SEC,
             "阅读过于频繁，请稍后再试",
+            "知识库 PDF 10 分钟超限",
         )
         day_start = user_quota.shanghai_day_start(now)
         day_seconds = 24 * 3600
@@ -1473,6 +1496,7 @@ def create_api_router(
             user_quota.IMA_PDF_DAY,
             day_seconds,
             "今日阅读已达上限，明天再看",
+            "知识库 PDF 今日达上限",
         )
 
     # ---- 认证 ----

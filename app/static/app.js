@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.112";
+const APP_VERSION = "1.12.113";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -10435,7 +10435,7 @@ async function loadAdminAudit() {
     </section>
     <section class="section-panel">
       <header class="section-head"><div><h2 class="section-title">操作日志</h2>
-      <p class="section-meta">管理员关键操作记录（改权限/删用户/增删大V/注册码/cookie）。</p></div></header>
+      <p class="section-meta">管理员关键操作、以及用户知识库超额（操作 ima_quota，目标是用户名）。</p></div></header>
       <div class="table-wrap">
         <table>
           <thead><tr><th scope="col">时间</th><th scope="col">管理员</th><th scope="col">操作</th><th scope="col">目标</th><th scope="col">详情</th></tr></thead>

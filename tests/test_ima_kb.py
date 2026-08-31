@@ -372,6 +372,11 @@ def test_ima_file_quota_blocks_burst_but_exempts_admin(tmp_path, monkeypatch):
     assert blocked.status_code == 429
     assert "频繁" in blocked.json()["detail"]
     assert blocked.headers.get("retry-after")
+    assert client.get(pdf_path, headers=user_headers).status_code == 429
+    logs = client.get("/api/admin/logs", headers=admin_headers).json()
+    quota_logs = [row for row in logs if row.get("action") == "ima_quota"]
+    assert len(quota_logs) == 1
+    assert quota_logs[0]["target"] == "reader"
     assert client.get(pdf_path, headers=admin_headers).status_code == 200
     assert client.get("/api/ima-documents", headers=user_headers).status_code == 200
     assert client.get("/api/ima-documents", headers=user_headers).status_code == 200
