@@ -6826,6 +6826,7 @@ function renderAdminNews() {
       <div class="news-admin-feeds">${(selected.feeds || []).length ? selected.feeds.map(adminNewsFeedRowHtml).join("") : emptyState("还没有配置 Feed")}</div>
     </section>` : `<section class="news-admin-detail-panel">${emptyState("选择一个媒体开始管理")}</section>`;
   const settings = adminNewsState.settings || { enabled: true, refresh_interval_minutes: 10 };
+  const selectedStatus = adminNewsState.status;
   target.innerHTML = `${statsTabsHtml("news")}
     <div id="st-news" class="news-admin-page">
       <section class="section-panel news-admin-settings">
@@ -6841,7 +6842,7 @@ function renderAdminNews() {
         <aside class="news-admin-source-rail">
           <div class="news-admin-source-toolbar"><input class="form-control" type="search" placeholder="搜索媒体" value="${escapeHtml(adminNewsState.q)}" oninput="adminNewsState.q=this.value;renderAdminNews()">
             <select class="form-control" aria-label="媒体状态" onchange="adminNewsState.status=this.value;renderAdminNews()">
-              ${["all", "ok", "paused", "delayed", "unavailable"].map((status) => `<option value="${status}" ${adminNewsState.status === status ? "selected" : ""}>${adminNewsStatusLabel(status)}</option>`).join("")}
+              ${["all", "ok", "paused", "delayed", "unavailable"].map((status) => `<option value="${status}" ${selectedStatus === status ? "selected" : ""}>${adminNewsStatusLabel(status)}</option>`).join("")}
             </select>
             <label class="news-admin-archived-toggle"><input type="checkbox" ${adminNewsState.showArchived ? "checked" : ""} onchange="adminNewsState.showArchived=this.checked;renderAdminNews()"> 显示已归档</label>
           </div>
