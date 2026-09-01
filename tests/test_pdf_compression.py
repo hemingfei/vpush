@@ -211,6 +211,45 @@ def test_run_retries_verifier_failures(tmp_path, monkeypatch):
     assert json.loads(state.read_text())["files"] == {}
 
 
+def test_run_strips_watermark_even_when_compression_is_rejected(tmp_path, monkeypatch):
+    report = tmp_path / "report.pdf"
+    _pdf(report, b"watermarked")
+    state = tmp_path / "state.json"
+    stripped = b"%PDF-1.7\nclean"
+    monkeypatch.setattr(
+        compressor, "strip_watermark_result",
+        lambda data: (stripped, "watermark_stripped"),
+    )
+    monkeypatch.setattr(
+        compressor, "compress_pdf_result", lambda data: (data, "ratio_rejected"))
+
+    compressor.run(Namespace(
+        root=str(tmp_path), state=str(state), limit=0, dry_run=False,
+        strip_watermark=True,
+    ))
+
+    assert report.read_bytes() == stripped
+    record = json.loads(state.read_text())["files"][str(report)]
+    assert record["result"] == "watermark_stripped"
+
+
+def test_run_retries_watermark_failures(tmp_path, monkeypatch):
+    report = tmp_path / "report.pdf"
+    _pdf(report)
+    state = tmp_path / "state.json"
+    monkeypatch.setattr(
+        compressor, "strip_watermark_result",
+        lambda data: (data, "watermark_error"),
+    )
+
+    compressor.run(Namespace(
+        root=str(tmp_path), state=str(state), limit=0, dry_run=False,
+        strip_watermark=True,
+    ))
+
+    assert json.loads(state.read_text())["files"] == {}
+
+
 def test_hourly_timer_installer_keeps_jobs_low_priority():
     text = INSTALLER.read_text()
     assert "OnCalendar=hourly" in text
@@ -223,6 +262,10 @@ def test_hourly_timer_installer_keeps_jobs_low_priority():
     assert "scripts/cicc_report_collector.py" in text
     assert "scripts/pdf_backfill_compress.py" in text
     assert "scripts/vps/ima-puller.py" in text
+    assert "scripts/vps/cicc-dispatch.py" in text
+    assert "vpush-cicc-pdf-daily.timer" in text
+    assert "06:15:00 Asia/Shanghai" in text
+    assert "/srv/vpush-ima/local/cicc-research --strip-watermark" in text
 
 
 def test_atomic_state_write_round_trip(tmp_path):

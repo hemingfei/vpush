@@ -91,7 +91,9 @@ def main() -> None:
                 subprocess.run(["pkill", "-f", "cicc_repor[t]_collector"], check=False)
                 entry["ok"] = True
             elif mode == "compress":
-                launch([PY, "-u", COMPRESSOR, "--root", "/srv/vpush-ima/local"],
+                launch(["nice", "-n", "19", "ionice", "-c2", "-n7",
+                        PY, "-u", COMPRESSOR, "--root",
+                        "/srv/vpush-ima/local/cicc-research", "--strip-watermark"],
                        "ui_compress.log")
                 entry["ok"] = True
             elif mode == "schedule":

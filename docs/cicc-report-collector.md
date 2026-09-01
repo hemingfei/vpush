@@ -59,7 +59,7 @@ nohup python3 -u cicc_report_collector.py --since 2026-01-01 --categories 行业
 nohup python3 -u cicc_report_collector.py --since 2026-01-01 --categories 宏观经济,市场策略,全球研究,量化及ESG,大宗商品,外汇研究,中金研究院,其他 > y2026_rest.log 2>&1 &
 
 # 采完后的 gs 压缩回刷（低优先级，质量守卫：新件<原90%且页数+文本一致才替换）
-nohup nice -n 19 python3 -u pdf_backfill_compress.py --root /srv/vpush-ima/local > compress_cicc.log 2>&1 &
+nohup nice -n 19 ionice -c2 -n7 python3 -u pdf_backfill_compress.py --root /srv/vpush-ima/local/cicc-research --strip-watermark > compress_cicc.log 2>&1 &
 
 # 全量回补（多年历史，>=5万篇，除非确定需要否则不建议）
 nohup python3 -u /root/cicc/cicc_report_collector.py --all > /root/cicc/backfill.log 2>&1 &
@@ -92,12 +92,22 @@ tail -f /root/cicc/*.log     # 进度
 - API（仅管理员）：`GET /api/admin/cicc/status`、`POST /api/admin/cicc/trigger {mode}`、
   `PUT /api/admin/cicc/schedule {enabled}`；依赖 `IMA_ARCHIVE_ROOT` 指向 NFS 归档。
 
-## PDF 压缩策略
+## PDF 去水印与压缩策略
 
-> ⚠️ **中金库边界不变**：`/srv/vpush-ima/local/` 的存量回刷永久停跑。中金新增文件仍由采集管道按需执行
-> `compress_pdf`，全站增量脚本明确排除 `local/`。
+中金新增文件在采集落盘前调用 `strip_watermark`；存量与后续增量由独立任务
+`vpush-cicc-pdf-daily.timer` 每天北京时间 06:15 处理：
 
-全站 IMA 增量由 `scripts/pdf_backfill_compress.py` 处理：
+- 根目录固定为 `/srv/vpush-ima/local/cicc-research`，不扫描其他本地知识库。
+- 先识别并移除中金 756×192 / 380×138 贴图水印，要求页数、书签、页面框/旋转和逐页文本层一致；
+  去水印允许预期的渲染变化。
+- 再运行 v3 压缩：小于原件 90%、至少节省 256 KiB，且 96dpi RGB 全页渲染逐像素一致才采用。
+- 使用独立 root-scoped 状态；文件被覆写后自动重检。中金 daily 与全站 hourly 共用全局锁，在单核存储机上不会并行跑。
+- 后台「压缩」按钮与 timer 使用同一入口：
+  `pdf_backfill_compress.py --root /srv/vpush-ima/local/cicc-research --strip-watermark`。
+- 2026-09-02 存量核查：5,108 份中 4,667 份只有已清空的水印 image 空流，441 份无目标资源，
+  **活跃水印为 0**；不做无意义的存量重写。首次 daily 只建立 v3 状态，后续处理新增或被覆写文件。
+
+全站非中金 IMA 增量仍由 `scripts/pdf_backfill_compress.py` 的默认根目录处理：
 
 - **IMA-flat-v3**：检测完整嵌入的微软雅黑，优先用 PyMuPDF `subset_fonts()` 无损子集化；
   其他 PDF 或子集化未达到门槛时才走 Ghostscript `/prepress`。

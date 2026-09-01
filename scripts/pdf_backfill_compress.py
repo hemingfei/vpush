@@ -26,11 +26,13 @@ from cicc_report_collector import (
     IMA_FLAT_MARKER,
     IMA_FLAT_MIN_BYTES,
     compress_pdf_result,
+    strip_watermark_result,
 )
 
 ROOT = "/srv/vpush-ima"
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(HERE, "compress_state.json")
+GLOBAL_LOCK = os.path.join(HERE, "compress_global.lock")
 STRATEGY_VERSION = 3
 FRESH_SEC = 120
 EXCLUDE = ("/srv/vpush-ima/local/",)
@@ -219,6 +221,11 @@ def scan_files(root: str) -> dict[str, os.stat_result]:
     return files
 
 
+def replacement_count(stats: Counter) -> int:
+    return sum(value for result, value in stats.items()
+               if result.startswith(("compressed_", "watermark_stripped")))
+
+
 def run(args: argparse.Namespace) -> None:
     files = scan_files(args.root)
     records, migrated = load_state(args.state, args.root, files)
@@ -231,7 +238,8 @@ def run(args: argparse.Namespace) -> None:
         if now - st.st_mtime < FRESH_SEC:
             fresh += 1
             continue
-        ima_flat = is_ima_flat_path(path, st.st_size)
+        ima_flat = (not getattr(args, "strip_watermark", False)
+                    and is_ima_flat_path(path, st.st_size))
         pending.append((not ima_flat, -st.st_mtime_ns, path, st))
     pending.sort()
     if args.limit:
@@ -250,9 +258,20 @@ def run(args: argparse.Namespace) -> None:
             stats["source_changed"] += 1
             continue
 
-        new, result = compress_pdf_result(data)
+        prepared = data
+        watermark_result = ""
+        if getattr(args, "strip_watermark", False):
+            prepared, watermark_result = strip_watermark_result(data)
+        new, result = compress_pdf_result(prepared)
+        if watermark_result == "watermark_stripped":
+            if result.startswith("compressed_"):
+                result = f"watermark_stripped_{result}"
+            else:
+                new, result = prepared, "watermark_stripped"
+        elif watermark_result not in {"", "not_watermarked"}:
+            new, result = data, watermark_result
         processed_stat = original
-        if result.startswith("compressed_"):
+        if result.startswith(("compressed_", "watermark_stripped")):
             if args.dry_run:
                 replaced = True
             else:
@@ -275,7 +294,8 @@ def run(args: argparse.Namespace) -> None:
 
         if not args.dry_run and result not in {
                 "source_changed", "subset_error", "subset_unavailable",
-                "gs_error", "gs_unavailable", "verify_error", "verify_unavailable"}:
+                "gs_error", "gs_unavailable", "verify_error", "verify_unavailable",
+                "watermark_error", "watermark_unavailable"}:
             if processed_stat is None:
                 records.pop(path, None)
             else:
@@ -284,15 +304,14 @@ def run(args: argparse.Namespace) -> None:
             atomic_write_json(args.state, state_payload(args.root, records))
             saved = (before - after) / 1048576
             print(f"... 处理 {index}/{len(pending)}，替换 "
-                  f"{stats['compressed_subset'] + stats['compressed_gs']}，"
+                  f"{replacement_count(stats)}，"
                   f"累计省 {saved:.0f}MB", flush=True)
 
     if not args.dry_run and (pending or migrated):
         atomic_write_json(args.state, state_payload(args.root, records))
     saved = (before - after) / 1048576
     reasons = ", ".join(f"{key}={value}" for key, value in sorted(stats.items())) or "无"
-    print(f"完成：处理 {sum(stats.values())}，替换 "
-          f"{stats['compressed_subset'] + stats['compressed_gs']}，"
+    print(f"完成：处理 {sum(stats.values())}，替换 {replacement_count(stats)}，"
           f"{before / 1048576:.0f}MB -> {after / 1048576:.0f}MB（省 {saved:.0f}MB）；"
           f"{reasons}", flush=True)
 
@@ -303,12 +322,15 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=0, help="本次最多处理多少个")
     parser.add_argument("--root", default=ROOT)
     parser.add_argument("--state", default=None)
+    parser.add_argument("--strip-watermark", action="store_true",
+                        help="替换前移除已知中金贴图水印（仅中金库使用）")
     args = parser.parse_args()
     args.state = args.state or default_state_path(args.root)
 
     os.makedirs(os.path.dirname(args.state) or ".", exist_ok=True)
-    with open(args.state + ".lock", "w") as lock:
+    with open(GLOBAL_LOCK, "w") as global_lock, open(args.state + ".lock", "w") as lock:
         try:
+            fcntl.flock(global_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             print("已有压缩任务在运行，本次跳过", flush=True)
