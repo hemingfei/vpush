@@ -52,6 +52,7 @@ def test_incremental_summary_written(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "CICC_DIR", str(tmp_path))
     monkeypatch.setattr(m, "collectors_running", lambda: 0)
     (tmp_path / "incremental.enabled").write_text("1")
+    (tmp_path / "schedule.json").write_text('{"time":"00:00"}')
 
     class R:
         returncode = 0
