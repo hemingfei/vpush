@@ -679,6 +679,7 @@ CREATE TABLE IF NOT EXISTS users (
     dnd_allow_favorite INTEGER NOT NULL DEFAULT 0,
     token_version INTEGER NOT NULL DEFAULT 0,
     last_login_at TEXT,
+    news_last_seen_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS subscriptions (
@@ -691,6 +692,62 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (user_id, kol_id)
 );
+CREATE TABLE IF NOT EXISTS news_sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    built_in INTEGER NOT NULL DEFAULT 0,
+    default_selected INTEGER NOT NULL DEFAULT 0,
+    archived_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS news_feeds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id INTEGER NOT NULL REFERENCES news_sources(id),
+    name TEXT NOT NULL COLLATE NOCASE,
+    url TEXT NOT NULL,
+    normalized_url TEXT NOT NULL UNIQUE,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    etag TEXT NOT NULL DEFAULT '',
+    last_modified TEXT NOT NULL DEFAULT '',
+    last_attempt_at TEXT,
+    last_success_at TEXT,
+    last_error_code TEXT NOT NULL DEFAULT '',
+    last_error_detail TEXT NOT NULL DEFAULT '',
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    archived_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (source_id, name)
+);
+CREATE TABLE IF NOT EXISTS user_news_sources (
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    source_id INTEGER NOT NULL REFERENCES news_sources(id),
+    selected_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (user_id, source_id)
+);
+CREATE TABLE IF NOT EXISTS news_articles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id INTEGER NOT NULL REFERENCES news_sources(id),
+    feed_id INTEGER NOT NULL REFERENCES news_feeds(id),
+    external_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    url TEXT NOT NULL,
+    author TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    content_html TEXT NOT NULL DEFAULT '',
+    images TEXT NOT NULL DEFAULT '[]',
+    published_at TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    UNIQUE (source_id, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_news_articles_time ON news_articles(published_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_news_articles_source_time ON news_articles(source_id, published_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_news_feeds_due ON news_feeds(enabled, archived_at, last_attempt_at);
+
 CREATE TABLE IF NOT EXISTS bind_codes (
     code TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL,
@@ -846,6 +903,16 @@ CREATE INDEX IF NOT EXISTS idx_source_events_platform ON source_events(platform,
 """
 
 ALLOWED_PLATFORMS = {"xueqiu", "combination", "weibo", "twitter", "ima", "zsxq"}
+
+_BUILTIN_NEWS = (
+    ("bloomberg", "Bloomberg", (("最新财经", "https://quanwenrss.com/bloomberg"),)),
+    ("caixin", "财新", (("最新文章", "https://quanwenrss.com/caixin"),)),
+    ("ft", "FT 中文网", (("综合新闻", "https://quanwenrss.com/ft"),)),
+    ("morganstanley", "摩根士丹利", (
+        ("中国", "https://quanwenrss.com/morganstanley/china"),
+        ("全球", "https://quanwenrss.com/morganstanley/global"),
+    )),
+)
 
 
 class DB:
@@ -1016,6 +1083,9 @@ class DB:
             self._conn.execute("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0")
         if "last_login_at" not in user_cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN last_login_at TEXT")
+        if "news_last_seen_at" not in user_cols:
+            self._conn.execute("ALTER TABLE users ADD COLUMN news_last_seen_at TEXT")
+        self._migrate_news()
         if "wecom_webhook_hash" not in user_cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN wecom_webhook_hash TEXT NOT NULL DEFAULT ''")
         if "bark_key_hash" not in user_cols:
@@ -1312,6 +1382,46 @@ class DB:
                 f"CREATE UNIQUE INDEX IF NOT EXISTS uq_users_{column} "
                 f"ON users({column}) WHERE {column} != ''"
             )
+
+    def _migrate_news(self) -> None:
+        for slug, name, feeds in _BUILTIN_NEWS:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO news_sources "
+                "(slug, name, built_in, default_selected) VALUES (?, ?, 1, 1)",
+                (slug, name),
+            )
+            source = self._conn.execute(
+                "SELECT id FROM news_sources WHERE slug = ?", (slug,)
+            ).fetchone()
+            for feed_name, url in feeds:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO news_feeds "
+                    "(source_id, name, url, normalized_url) VALUES (?, ?, ?, ?)",
+                    (source["id"], feed_name, url, url),
+                )
+        self._conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES "
+            "('news_enabled', '1'), ('news_refresh_interval_seconds', '600')"
+        )
+        if self.get_setting("news_default_sources_v1") == "1":
+            return
+        default_ids = [
+            row["id"] for row in self._rows(
+                "SELECT id FROM news_sources WHERE built_in = 1 "
+                "AND default_selected = 1 AND archived_at IS NULL ORDER BY id"
+            )
+        ]
+        for user in self._rows("SELECT id FROM users"):
+            for source_id in default_ids:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO user_news_sources (user_id, source_id) "
+                    "VALUES (?, ?)",
+                    (user["id"], source_id),
+                )
+        self._conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('news_default_sources_v1', '1') "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        )
 
     def _ensure_ima_document_tables(self) -> None:
         # CREATE IF NOT EXISTS only. Do not insert meta here: a malformed table
@@ -2166,6 +2276,27 @@ class DB:
         rows = self._rows("SELECT COUNT(*) AS n FROM users")
         return rows[0]["n"]
 
+    def list_user_news_source_ids(
+        self, user_id: int, include_archived: bool = False
+    ) -> list[int]:
+        sql = (
+            "SELECT u.source_id FROM user_news_sources u "
+            "JOIN news_sources s ON s.id = u.source_id WHERE u.user_id = ?"
+        )
+        params: list[object] = [user_id]
+        if not include_archived:
+            sql += " AND s.archived_at IS NULL"
+        sql += " ORDER BY u.source_id"
+        return [row["source_id"] for row in self._rows(sql, params)]
+
+    def _insert_default_news_sources(self, user_id: int) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO user_news_sources (user_id, source_id) "
+            "SELECT ?, id FROM news_sources "
+            "WHERE built_in = 1 AND default_selected = 1 AND archived_at IS NULL",
+            (user_id,),
+        )
+
     def add_user(
         self,
         username: str,
@@ -2179,16 +2310,26 @@ class DB:
     ) -> int:
         if self.get_user_by_username_ci(username):
             raise ValueError(f"用户名已存在: {username}")
-        try:
-            return self._execute(
-                "INSERT INTO users (username, password_hash, is_admin, telegram_chat_id, "
-                "feishu_open_id, feishu_chat_id, notify_enabled, wechat_openid) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (username, password_hash, 1 if is_admin else 0, telegram_chat_id, feishu_open_id,
-                 feishu_chat_id, 1 if notify_enabled else 0, wechat_openid),
-            )
-        except sqlite3.IntegrityError:
-            raise ValueError(f"用户名已存在: {username}") from None
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                insert = self._conn.execute(
+                    "INSERT INTO users (username, password_hash, is_admin, telegram_chat_id, "
+                    "feishu_open_id, feishu_chat_id, notify_enabled, wechat_openid) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (username, password_hash, 1 if is_admin else 0, telegram_chat_id, feishu_open_id,
+                     feishu_chat_id, 1 if notify_enabled else 0, wechat_openid),
+                )
+                user_id = insert.lastrowid
+                self._insert_default_news_sources(user_id)
+                self._conn.commit()
+                return user_id
+            except sqlite3.IntegrityError:
+                self._conn.rollback()
+                raise ValueError(f"用户名已存在: {username}") from None
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def touch_last_login(self, user_id: int) -> None:
         self._execute(
@@ -2514,6 +2655,7 @@ class DB:
                 except sqlite3.IntegrityError:
                     raise ValueError(f"用户名已存在: {username}") from None
                 uid = insert.lastrowid
+                self._insert_default_news_sources(uid)
                 self._conn.execute(
                     "UPDATE register_codes SET used_by = ? WHERE code = ?",
                     (uid, code),

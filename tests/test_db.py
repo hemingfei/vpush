@@ -7,11 +7,86 @@ from app import db as db_module
 from app.db import DB
 
 
+def test_news_migration_seeds_builtin_sources_and_feeds(tmp_path):
+    db = DB(str(tmp_path / "news.db"))
+    sources = db._rows("SELECT slug, default_selected FROM news_sources ORDER BY id")
+    feeds = db._rows("SELECT url FROM news_feeds ORDER BY id")
+    assert [row["slug"] for row in sources] == ["bloomberg", "caixin", "ft", "morganstanley"]
+    assert all(row["default_selected"] == 1 for row in sources)
+    assert len(feeds) == 5
+
+
+def test_new_user_gets_only_builtin_news_sources(tmp_path):
+    db = DB(str(tmp_path / "news-user.db"))
+    uid = db.add_user("reader", "hash")
+    assert len(db.list_user_news_source_ids(uid)) == 4
+    db._execute(
+        "INSERT INTO news_sources (slug, name) VALUES ('custom-test', 'Custom Test')"
+    )
+    uid2 = db.add_user("reader2", "hash")
+    assert len(db.list_user_news_source_ids(uid2)) == 4
+
+
+def test_news_default_backfill_runs_once(tmp_path):
+    path = tmp_path / "news-once.db"
+    db = DB(str(path))
+    uid = db.add_user("reader", "hash")
+    db._execute("DELETE FROM user_news_sources WHERE user_id = ?", (uid,))
+    db.close()
+    reopened = DB(str(path))
+    assert reopened.list_user_news_source_ids(uid) == []
+
+
+def test_legacy_database_gets_news_anchor_and_default_relations(tmp_path):
+    path = tmp_path / "legacy-news.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            is_admin INTEGER NOT NULL DEFAULT 0,
+            wechat_openid TEXT NOT NULL DEFAULT '',
+            telegram_chat_id TEXT NOT NULL DEFAULT '',
+            telegram_bot_token TEXT NOT NULL DEFAULT '',
+            feishu_open_id TEXT NOT NULL DEFAULT '',
+            feishu_chat_id TEXT NOT NULL DEFAULT '',
+            wecom_webhook TEXT NOT NULL DEFAULT '',
+            wecom_webhook_hash TEXT NOT NULL DEFAULT '',
+            bark_key TEXT NOT NULL DEFAULT '',
+            bark_key_hash TEXT NOT NULL DEFAULT '',
+            notify_enabled INTEGER NOT NULL DEFAULT 1,
+            daily_report INTEGER NOT NULL DEFAULT 0,
+            translate_twitter INTEGER NOT NULL DEFAULT 1,
+            push_channels TEXT NOT NULL DEFAULT '',
+            dnd_start TEXT NOT NULL DEFAULT '',
+            dnd_end TEXT NOT NULL DEFAULT '',
+            dnd_allow_favorite INTEGER NOT NULL DEFAULT 0,
+            token_version INTEGER NOT NULL DEFAULT 0,
+            last_login_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO users (username, password_hash) VALUES ('old-reader', 'hash');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    db = DB(str(path))
+    user = db.get_user_by_username("old-reader")
+    assert "news_last_seen_at" in {row["name"] for row in db._rows("PRAGMA table_info(users)")}
+    assert len(db.list_user_news_source_ids(user["id"])) == 4
+
+
 def test_set_settings_atomic_writes_multiple_values(tmp_path):
     db = DB(str(tmp_path / "settings.db"))
     db.set_settings_atomic({"ima_one": "value-one", "ima_two": "value-two"})
     assert db.get_setting("ima_one") == "value-one"
     assert db.get_setting("ima_two") == "value-two"
+
+
 
 
 def test_set_settings_atomic_rolls_back_all_values_on_sql_error(tmp_path):
