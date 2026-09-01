@@ -1,5 +1,12 @@
 /* 设计 token 来自 vendor/design-tokens.css（stock-lu 原文件） */
 
+/* 系统栏安全区：iOS PWA / 浏览器取 env()；Android APP（Capacitor edge-to-edge）
+   env() 恒为 0，由壳工程 MainActivity 把真实系统栏高度注入同名内联变量覆盖 */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body {
@@ -60,7 +67,7 @@ button:focus-visible {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 40px 24px;
+  padding: calc(40px + var(--safe-top)) 24px 40px;
   background-image: var(--gradient-login-page);
 }
 .login-shell {
@@ -422,14 +429,15 @@ textarea.form-control {
 
 .main-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .topbar {
-  height: 56px;
+  height: calc(56px + var(--safe-top));
+  padding: 0 24px;
+  padding-top: var(--safe-top);
   position: sticky;
   top: 0;
   z-index: 30;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 24px;
   background: var(--color-bg);
   border-bottom: var(--border-default);
 }
@@ -467,8 +475,8 @@ textarea.form-control {
 .page-main:has(.ima-reader-page) {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 56px);
-  max-height: calc(100vh - 56px);
+  height: calc(100vh - 56px - var(--safe-top));
+  max-height: calc(100vh - 56px - var(--safe-top));
   padding-top: 16px;
   padding-bottom: 16px;
   overflow: hidden;
@@ -1364,7 +1372,7 @@ body.lightbox-open { overflow: hidden; }
 
 .tl-filterbar {
   position: sticky;
-  top: 56px;
+  top: calc(56px + var(--safe-top));
   z-index: 25;
   overflow: visible;
   background: var(--color-bg);
@@ -1503,7 +1511,8 @@ body.lightbox-open { overflow: hidden; }
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 10px;
+  /* 原 10px：6px 移入 strip 的 padding-top，给新帖角标留出不被裁剪的探出空间 */
+  margin-top: 4px;
 }
 .tl-kolbar[hidden] { display: none; }
 .tl-kolbar-strip {
@@ -1514,6 +1523,9 @@ body.lightbox-open { overflow: hidden; }
   gap: 10px;
   flex: 1;
   min-width: 0;
+  /* 顶部/右侧留白：角标向头像外探出，滚动容器 overflow 裁剪需要这部分空间 */
+  padding-top: 6px;
+  padding-inline-end: 6px;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-x;
   overscroll-behavior-x: contain;
@@ -1544,7 +1556,7 @@ body.lightbox-open { overflow: hidden; }
   white-space: nowrap;
   transition: border-color var(--ease-standard), color var(--ease-standard);
 }
-.tl-kolbar.expanded .tl-kolbar-toggle { margin-top: 17px; }
+.tl-kolbar.expanded .tl-kolbar-toggle { margin-top: 23px; }
 .tl-kolbar-toggle:hover { border-color: var(--color-accent-text); color: var(--color-accent-text); }
 .tl-kolbar-toggle:focus-visible { outline: 2px solid var(--color-accent-text); outline-offset: 2px; }
 .tl-kolbar-toggle[hidden] { display: none; }
@@ -1600,6 +1612,52 @@ body.lightbox-open { overflow: hidden; }
 .tl-kol-item:focus-visible { outline: 2px solid var(--color-accent-text); outline-offset: 2px; }
 .tl-kol-item.selected .tl-kol-av { border-color: var(--color-accent); }
 .tl-kol-item.selected .tl-kol-name { color: var(--color-accent-text); font-weight: var(--font-weight-semibold); }
+/* 新消息角标：头像右上角探出的小圆，筛选单一大V时显示其他大V新到的动态条数 */
+.tl-kol-avwrap {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.tl-kol-count {
+  position: absolute;
+  top: -6px;
+  right: -8px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--color-danger);
+  color: var(--color-white);
+  font-size: 11px;
+  font-weight: var(--font-weight-semibold);
+  line-height: 17px;
+  text-align: center;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+/* 返回顶部：移动端动态页滚动较深时出现在右下角（悬在 bottom-nav 上方） */
+.tl-backtop {
+  display: none;
+  position: fixed;
+  right: 14px;
+  bottom: calc(84px + var(--safe-bottom));
+  z-index: 55;
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  border: var(--border-default);
+  border-radius: 50%;
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition: opacity var(--ease-standard), transform var(--ease-standard);
+}
+.tl-backtop.show { opacity: 1; pointer-events: auto; transform: none; }
+.tl-backtop svg { width: 18px; height: 18px; }
 .tl-filter-views { display: flex; flex-wrap: wrap; gap: 8px; }
 .tl-filter-views .fav-toggle { flex: 1; min-width: 0; justify-content: center; }
 .tl-filterbar .fav-toggle { height: 44px; min-height: 44px; }
@@ -1639,7 +1697,7 @@ body.lightbox-open { overflow: hidden; }
   .tl-rail {
     width: 100%;
     position: sticky;
-    top: 56px;
+    top: calc(56px + var(--safe-top));
   }
   .tl-layout.live-mode .tl-rail-view,
   .tl-layout.live-mode #tl-rail-recs,
@@ -2419,7 +2477,7 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   z-index: 50;
   background: var(--color-bg);
   border-top: var(--border-default);
-  padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+  padding: 6px 4px calc(6px + var(--safe-bottom));
   justify-content: space-around;
 }
 .bnav-item {
@@ -2494,12 +2552,16 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   .notice-warn { flex-direction: column; }
   .notice-warn .btn-normal { min-height: 44px; }
   .cookie-paste { font-size: 16px; }
-  .topbar { padding: 0 14px; } /* 左右 14px 与内容区 page-main 对齐，logo 和下方胶囊同列 */
+  .topbar { padding: 0 14px; padding-top: var(--safe-top); } /* 左右 14px 与内容区 page-main 对齐，logo 和下方胶囊同列 */
 
   /* 移动端左上角：logo 单独显示并放大；页名仍留在无障碍树 */
   .topbar-logo { height: 32px; }
   .topbar-title h1 { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-  .page-main { padding: 16px 14px calc(74px + env(safe-area-inset-bottom)); --page-pad-x: 14px; }
+  .page-main { padding: 16px 14px calc(74px + var(--safe-bottom)); --page-pad-x: 14px; }
+  /* 下滑收起整个筛选条（平台行+大V行），上滑恢复；藏进不透明 topbar 后面 */
+  .tl-filterbar { transition: transform 0.25s var(--ease-standard); }
+  .tl-filterbar.tl-bars-hidden { transform: translateY(calc(-100% - 16px)); }
+  .tl-backtop { display: inline-flex; }
   .platform-tabs {
     flex-wrap: nowrap;
     overflow-x: auto;

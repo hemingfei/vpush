@@ -19,11 +19,22 @@ import com.getcapacitor.BridgeWebViewClient;
  */
 public class AppLinkWebViewClient extends BridgeWebViewClient {
 
+    /** 每次页面加载完成（本地壳页或远端服务器页）后的回调，用于重新注入系统栏 inset。 */
+    interface PageLoadListener {
+        void onPageFinished();
+    }
+
     private final Bridge bridge;
+    private final PageLoadListener pageLoadListener;
 
     public AppLinkWebViewClient(Bridge bridge) {
+        this(bridge, null);
+    }
+
+    public AppLinkWebViewClient(Bridge bridge, PageLoadListener pageLoadListener) {
         super(bridge);
         this.bridge = bridge;
+        this.pageLoadListener = pageLoadListener;
     }
 
     @Override
@@ -52,5 +63,13 @@ public class AppLinkWebViewClient extends BridgeWebViewClient {
             // 无可处理的应用时留在原地
         }
         return true;
+    }
+
+    @Override
+    public void onPageFinished(WebView view, String url) {
+        super.onPageFinished(view, url);
+        if (pageLoadListener != null) {
+            pageLoadListener.onPageFinished();
+        }
     }
 }

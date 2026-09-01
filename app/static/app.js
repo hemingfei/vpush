@@ -905,6 +905,7 @@ function clearSessionCaches() {
   state.timelineTag = "";
   state.timelinePlatform = "";
   state.timelineKolId = 0;
+  tlClearKolNewCounts();
   state.timelineFavorite = false;
   state.timelineSecondary = false;
   state.liveImportant = false;
@@ -3051,7 +3052,7 @@ function tlRemoveFilter(key) {
     if (tagSel) tagSel.value = "";
   } else if (key === "favorite") state.timelineFavorite = false;
   else if (key === "secondary") state.timelineSecondary = false;
-  else if (key === "kol") state.timelineKolId = 0;
+  else if (key === "kol") { state.timelineKolId = 0; tlClearKolNewCounts(); }
   if (key === "kol") renderTlKolBar();
   tlPaintViewToggles();
   tlSyncFilterChrome();
@@ -3379,7 +3380,8 @@ async function renderTimeline(seq) {
         <div id="tl-rail-tags"></div>
       </div>
     </aside>` : ""}
-    </div>`;
+    </div>
+    <button type="button" id="tl-backtop" class="tl-backtop" aria-label="返回顶部" title="返回顶部" onclick="tlScrollToTop()">${ARROW_UP_ICON}</button>`;
   tlSyncNewBadgeMode();
   if (live) startLiveClock();
   else stopLiveClock();
@@ -3389,9 +3391,13 @@ async function renderTimeline(seq) {
     loadTimelineKols();
   }
   ensureTlKolbarResizeSync();
+  ensureTimelineScrollChrome();
+  tlSyncScrollChrome();
   if (reuse) {
     renderFeed();
     window.scrollTo(0, feedScrollY());
+    // 恢复滚动位置不算一次「下滑」，重置方向基准，避免进页面就收起筛选条
+    _tlScrollLastY = feedScrollY();
     startTimelinePoll();
     pollFeedUpdates();
     if (!wide && !live) loadTimelineTags().catch(() => { _tlTags = []; _tlDynamicTags = []; });
@@ -3525,6 +3531,23 @@ async function pollFeedUpdates() {
       const anchor = feedNewestPost(feedPosts());
       newer = posts.filter((p) => feedTimeAsc(p, anchor) > 0);
     }
+    // 筛选单个大V浏览时，顺带按 since_id 轮询其他大V的新动态并累计到头像角标；
+    // 只累计计数，不触发当前视图的新帖胶囊/提示音/自动刷新
+    if (!live && state.timelineKolId && _tlOthersAnchorId) {
+      try {
+        const others = await api(`/api/my/feed?limit=50&since_id=${_tlOthersAnchorId}`);
+        if (!routeStillActive(seq) || !$("#feed") || isLiveTimeline()) return;
+        let changed = false;
+        for (const p of others) {
+          if (p.id > _tlOthersAnchorId) _tlOthersAnchorId = p.id;
+          if (p.kol_id && p.kol_id !== state.timelineKolId) {
+            _tlKolNewCounts.set(p.kol_id, (_tlKolNewCounts.get(p.kol_id) || 0) + 1);
+            changed = true;
+          }
+        }
+        if (changed) tlApplyKolNewCounts();
+      } catch { /* 其他大V计数拉取失败静默，不影响主轮询 */ }
+    }
     if (!newer.length) return;
     const have = new Set(pendingNew.map((p) => p.id));
     for (const p of newer) {
@@ -3651,6 +3674,7 @@ function tlPickPlatform(p) {
   state.timelinePlatform = p;
   // 平台切换后原大V可能不属于新平台，会筛出空列表，直接清除
   state.timelineKolId = 0;
+  tlClearKolNewCounts();
   if (leftLive) {
     stopTimelinePoll();
     if ($("#tl-feed-panel")) syncTimelineSourceView();
@@ -3676,6 +3700,12 @@ const TL_KOLBAR_EXPANDED_KEY = "tl-kolbar-expanded";
 let _tlKolbarExpanded = (() => {
   try { return sessionStorage.getItem(TL_KOLBAR_EXPANDED_KEY) === "1"; } catch { return false; }
 })();
+// 筛选单个大V浏览时，其他大V新到动态的会话内计数（kolId → 条数）。
+// 清零时机：回到「全部」时全部清零；切换选中的大V只清新选中那个（他的新帖已列在列表里）。
+// _tlOthersAnchorId 是「其他大V」轮询的 since_id 消费基准：选中大V时推进到
+// max(旧锚点, 全量 feed 最新 id)，之后只被本查询自己推进（与所看大V的新帖无关）。
+let _tlKolNewCounts = new Map();
+let _tlOthersAnchorId = 0;
 const TL_CARET_SVG = `<svg class="tl-kolbar-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>`;
 
 function tlKolLastPostMs(k) {
@@ -3695,9 +3725,14 @@ function tlKolItemsHtml() {
     const avatar = k.avatar_url && !_deadImgUrls.has(k.avatar_url)
       ? `<img src="${escapeHtml(k.avatar_url)}" alt="" loading="lazy" data-av-name="${escapeHtml(k.name)}" data-av-class="tl-kol-ph" onerror="avatarImgError(this)">`
       : `<span class="tl-kol-ph">${escapeHtml(avatarText(k.name))}</span>`;
+    // 新消息角标：只在筛选某位大V时统计「其他大V」新到的动态条数，回到全部即清零
+    const n = _tlKolNewCounts.get(k.id) || 0;
+    const count = n > 0
+      ? `<span class="tl-kol-count" aria-hidden="true" title="${escapeHtml(k.name)} 有 ${n} 条新动态">${n > 99 ? "99+" : n}</span>`
+      : "";
     return `<button class="tl-kol-item${selected ? " selected" : ""}" role="radio" aria-checked="${selected}"
-      aria-label="只看 ${escapeHtml(k.name)}" title="${escapeHtml(k.name)}" onclick="tlPickKol(${k.id})">
-      <span class="tl-kol-av">${avatar}</span>
+      aria-label="只看 ${escapeHtml(k.name)}${n ? `，${n} 条新动态` : ""}" title="${escapeHtml(k.name)}" onclick="tlPickKol(${k.id})">
+      <span class="tl-kol-avwrap"><span class="tl-kol-av">${avatar}</span>${count}</span>
       <span class="tl-kol-name">${escapeHtml(k.name)}</span>
     </button>`;
   }).join("");
@@ -3751,6 +3786,39 @@ function ensureTlKolbarResizeSync() {
   });
 }
 
+// ---------- 手机端滚动显隐：下滑收起筛选条（平台行+大V行），上滑恢复；滚动较深显示返回顶部 ----------
+// 筛选条是 sticky 且被不透明 topbar 盖住（z 更高），translateY(-100%) 藏进 topbar 后面即可，
+// transform 不改变文档流，不会引起内容跳动。
+let _tlScrollChromeBound = false;
+let _tlScrollLastY = 0;
+let _tlScrollRaf = 0;
+
+function ensureTimelineScrollChrome() {
+  if (_tlScrollChromeBound) return;
+  _tlScrollChromeBound = true;
+  window.addEventListener("scroll", () => {
+    if (_tlScrollRaf) return;
+    _tlScrollRaf = requestAnimationFrame(() => { _tlScrollRaf = 0; tlSyncScrollChrome(); });
+  }, { passive: true });
+}
+
+function tlSyncScrollChrome() {
+  const y = window.scrollY;
+  const bar = $("#tl-filterbar");
+  if (bar && !bar.classList.contains("open")) { // 筛选面板展开时不收起
+    const delta = y - _tlScrollLastY;
+    if (y <= 80 || delta < -2 || !isMobileTimelineFilter()) bar.classList.remove("tl-bars-hidden");
+    else if (delta > 2 && y > 120) bar.classList.add("tl-bars-hidden");
+  }
+  const backtop = $("#tl-backtop");
+  if (backtop) backtop.classList.toggle("show", isMobileTimelineFilter() && y > 600);
+  _tlScrollLastY = y;
+}
+
+function tlScrollToTop() {
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
 async function ensureTimelineKols() {
   if (_tlKolRows.length && Date.now() - _tlKolsLoadedAt < TL_KOLS_TTL) return _tlKolRows;
   if (!_tlKolsPromise) {
@@ -3770,9 +3838,34 @@ function loadTimelineKols() {
 function tlPickKol(id) {
   const revert = tlSnapshotFilters();
   state.timelineKolId = state.timelineKolId === id ? 0 : id;
+  if (state.timelineKolId) {
+    // 切到某位大V：只清他自己的角标（他的新帖此刻已列在列表里），其他大V角标原样保留；
+    // 锚点推进到「已消费位置」与「此刻全量 feed 最新帖」的较大者，作为新起点
+    _tlKolNewCounts.delete(state.timelineKolId);
+    _tlOthersAnchorId = Math.max(_tlOthersAnchorId, _tlLatestId || 0);
+  } else {
+    // 回到「全部」：所有角标清零；锚点归零，下次选中时重新起步
+    tlClearKolNewCounts();
+  }
   renderTlKolBar();
   tlSyncFilterChrome();
   loadTimeline(true, routeRenderSeq, { revert });
+}
+
+// 计数变化后重绘大V行；恢复横向滚动位置，避免角标刷新把列表拽回开头
+function tlApplyKolNewCounts() {
+  const strip = $("#tl-kolbar-strip");
+  const sl = strip ? strip.scrollLeft : 0;
+  renderTlKolBar();
+  const next = $("#tl-kolbar-strip");
+  if (next) next.scrollLeft = sl;
+}
+
+function tlClearKolNewCounts() {
+  _tlOthersAnchorId = 0;
+  if (!_tlKolNewCounts.size) return;
+  _tlKolNewCounts.clear();
+  tlApplyKolNewCounts();
 }
 
 function tlSyncActiveChips() {
@@ -3823,6 +3916,7 @@ function tlResetFilters() {
   state.timelineTag = "";
   state.timelinePlatform = "";
   state.timelineKolId = 0;
+  tlClearKolNewCounts();
   state.timelineFavorite = false;
   state.timelineSecondary = false;
   const q = $("#tl-q"); if (q) q.value = "";
