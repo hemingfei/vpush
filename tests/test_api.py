@@ -5681,17 +5681,21 @@ def test_admin_news_settings_bounds_and_permission():
     admin = auth_headers(client)
     settings = client.get("/api/admin/news/settings", headers=admin)
     assert settings.status_code == 200
-    assert settings.json() == {"enabled": True, "refresh_interval_minutes": 10}
+    assert settings.json() == {"enabled": True, "visible": True, "refresh_interval_minutes": 10}
+    assert client.get("/api/me", headers=admin).json()["news_visible"] is True
     assert client.patch(
         "/api/admin/news/settings", headers=admin,
         json={"refresh_interval_minutes": 4},
     ).status_code == 400
     updated = client.patch(
         "/api/admin/news/settings", headers=admin,
-        json={"enabled": False, "refresh_interval_minutes": 15},
+        json={"enabled": False, "visible": False, "refresh_interval_minutes": 15},
     )
     assert updated.status_code == 200
-    assert updated.json() == {"enabled": False, "refresh_interval_minutes": 15}
+    assert updated.json() == {"enabled": False, "visible": False, "refresh_interval_minutes": 15}
+    assert client.get("/api/me", headers=admin).json()["news_visible"] is False
+    assert client.app.state.db.get_setting("news_enabled") == "0"
+    assert client.app.state.db.get_setting("news_visible") == "0"
 
 
 def test_admin_news_audit_redacts_feed_query(monkeypatch):

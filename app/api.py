@@ -406,6 +406,7 @@ class NewsSeenIn(BaseModel):
 
 class NewsSettingsIn(BaseModel):
     enabled: bool | None = None
+    visible: bool | None = None
     refresh_interval_minutes: int | None = None
 
 
@@ -1879,6 +1880,7 @@ def create_api_router(
     def me(user: dict = Depends(get_current_user)):
         user = db.get_user(user["id"])
         profile = public_user(user, db)
+        profile["news_visible"] = db.get_setting("news_visible") != "0"
         profile["subscription_count"] = db.count_subscriptions(user["id"])
         profile["keywords"] = db.get_user_keywords(user["id"])
         if notifiers_config is not None:
@@ -2508,6 +2510,7 @@ def create_api_router(
             interval = 600
         return {
             "enabled": db.get_setting("news_enabled") == "1",
+            "visible": db.get_setting("news_visible") != "0",
             "refresh_interval_minutes": max(5, min(1440, interval // 60)),
         }
 
@@ -2518,6 +2521,8 @@ def create_api_router(
         values = {}
         if "enabled" in body.model_fields_set:
             values["news_enabled"] = "1" if body.enabled else "0"
+        if "visible" in body.model_fields_set:
+            values["news_visible"] = "1" if body.visible else "0"
         if "refresh_interval_minutes" in body.model_fields_set:
             if body.refresh_interval_minutes is None or not 5 <= body.refresh_interval_minutes <= 1440:
                 raise HTTPException(status_code=400, detail="刷新周期必须为 5-1440 分钟")

@@ -24,7 +24,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.126";
+const APP_VERSION = "1.12.127";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -85,6 +85,7 @@ const state = {
   mysubsFavorite: false,
   settingsTab: "subs",
   newsSources: [],
+  newsVisible: true,
   newsFilterSourceId: "",
   newsQuery: "",
   newsItems: [],
@@ -1181,11 +1182,11 @@ function renderSidebar(user) {
   const html = NAV.filter((g) => !g.admin || user.is_admin)
     .map((group) => `
       ${group.group ? `<div class="nav-group-label">${group.group}</div>` : ""}
-      ${(group.items || []).map(navItemHtml).join("")}
+      ${(group.items || []).filter((item) => item.route !== "news" || state.newsVisible).map(navItemHtml).join("")}
       ${(group.subs || []).map((sub) => `
         <details class="nav-sub" open>
           <summary class="nav-sub-label">${sub.label}</summary>
-          ${sub.items.map(navItemHtml).join("")}
+          ${sub.items.filter((item) => item.route !== "news" || state.newsVisible).map(navItemHtml).join("")}
         </details>`).join("")}
     `).join("");
   $("#sidebar-nav").innerHTML = html;
@@ -1204,7 +1205,7 @@ const MOBILE_NAV = [
 ];
 
 function renderBottomNav(user) {
-  const tabs = [...MOBILE_NAV];
+  const tabs = MOBILE_NAV.filter((tab) => tab.route !== "news" || state.newsVisible);
   if (user.is_admin) tabs.push({ route: "more", icon: PLUS_ICON, label: "更多" });
   $("#bottom-nav").innerHTML = tabs.map((t) => `
     <button class="bnav-item" data-route="${t.route}" onclick="go('${t.route}')">
@@ -7782,7 +7783,7 @@ function renderAdminNews() {
       </div>
       <div class="news-admin-feeds">${(selected.feeds || []).length ? selected.feeds.map(adminNewsFeedRowHtml).join("") : emptyState("还没有配置 Feed")}</div>
     </section>` : `<section class="news-admin-detail-panel">${emptyState("选择一个媒体开始管理")}</section>`;
-  const settings = adminNewsState.settings || { enabled: true, refresh_interval_minutes: 10 };
+  const settings = adminNewsState.settings || { enabled: true, visible: true, refresh_interval_minutes: 10 };
   const selectedStatus = adminNewsState.status;
   target.innerHTML = `${statsTabsHtml("news")}
     <div id="st-news" class="news-admin-page">
@@ -7790,6 +7791,7 @@ function renderAdminNews() {
         <div><h2 class="section-title">财经资讯</h2><p class="section-meta">共享采集所有启用 Feed；用户按媒体主动选择来源。</p></div>
         <div class="news-admin-settings-controls">
           <label class="switch"><input id="news-global-enabled" type="checkbox" ${settings.enabled ? "checked" : ""} onchange="saveAdminNewsSettings()"><span class="track"></span><span>启用财经新闻采集</span></label>
+          <label class="switch"><input id="news-global-visible" type="checkbox" ${settings.visible ? "checked" : ""} onchange="saveAdminNewsSettings()"><span class="track"></span><span>向用户显示财经新闻</span></label>
           <label class="news-admin-interval">刷新周期 <input id="news-global-interval" class="form-control" type="number" min="5" max="1440" value="${Number(settings.refresh_interval_minutes) || 10}"> 分钟</label>
           <button type="button" class="btn-ghost" onclick="saveAdminNewsSettings()">保存设置</button>
           <button type="button" class="btn-normal" onclick="refreshAllAdminNews()">${REFRESH_ICON} 刷新全部</button>
@@ -7822,8 +7824,12 @@ async function loadAdminNews(seq = routeRenderSeq) {
     ]);
     if (!routeStillActive(seq) || loadSeq !== _adminNewsLoadSeq) return false;
     adminNewsState.settings = settings;
+    state.newsVisible = settings.visible !== false;
     adminNewsState.sources = sources.items || [];
     if (!adminNewsState.sources.some((source) => source.id === adminNewsState.selectedId)) adminNewsState.selectedId = 0;
+    renderSidebar(state.user);
+    renderTopbar(state.user);
+    renderBottomNav(state.user);
     renderAdminNews();
     return true;
   } catch (err) {
@@ -7841,13 +7847,14 @@ function selectAdminNewsSource(sourceId) {
 async function saveAdminNewsSettings() {
   const seq = routeRenderSeq;
   const enabled = $("#news-global-enabled")?.checked;
+  const visible = $("#news-global-visible")?.checked;
   const interval = Number($("#news-global-interval")?.value);
   if (!Number.isInteger(interval) || interval < 5 || interval > 1440) {
     flash("刷新周期必须为 5-1440 分钟", "error");
     return;
   }
   try {
-    await api("/api/admin/news/settings", { method: "PATCH", body: JSON.stringify({ enabled, refresh_interval_minutes: interval }) });
+    await api("/api/admin/news/settings", { method: "PATCH", body: JSON.stringify({ enabled, visible, refresh_interval_minutes: interval }) });
     if (!routeStillActive(seq)) return;
     flash("财经新闻设置已保存");
     await loadAdminNews(seq);
@@ -13899,6 +13906,11 @@ async function router() {
   $("#app-view").classList.remove("hidden");
   $("#auth-view").classList.add("hidden");
   state.user = user;
+  state.newsVisible = user.news_visible !== false;
+  if (page === "news" && !state.newsVisible) {
+    replaceRoute("timeline");
+    return;
+  }
   renderSidebar(state.user);
   renderTopbar(state.user);
   renderBottomNav(state.user);

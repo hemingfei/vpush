@@ -3510,6 +3510,18 @@ def test_financial_news_navigation_keeps_quick_news_in_timeline():
     assert 'data-platform="live"' in _fn_body("tlPillsHtml")
 
 
+def test_financial_news_visibility_is_runtime_controlled():
+    src = APP_JS.read_text()
+    sidebar = _fn_body("renderSidebar")
+    bottom = _fn_body("renderBottomNav")
+    router = _fn_body("router")
+    assert "state.newsVisible" in sidebar
+    assert "state.newsVisible" in bottom
+    assert "news_visible" in router
+    assert 'page === "news"' in router
+    assert 'replaceRoute("timeline")' in router
+
+
 def test_news_reader_functions_cover_sources_seen_and_blob_cleanup():
     src = APP_JS.read_text()
     for name in (
@@ -3557,6 +3569,7 @@ def test_admin_news_tab_is_full_feed_manager():
     ):
         assert f"function {name}" in src or f"async function {name}" in src
     assert "财经资讯" in src
+    assert "向用户显示财经新闻" in src
     assert "显示已归档" in src
     assert "验证并保存" in src
 
@@ -3583,8 +3596,8 @@ def test_financial_news_action_icons_have_stable_dimensions():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=262"' in html
-    assert 'src="/app.js?v=372"' in html
-    assert 'dav-shell-v241' in sw
+    assert 'src="/app.js?v=373"' in html
+    assert 'dav-shell-v242' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
