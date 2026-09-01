@@ -5563,3 +5563,89 @@ def test_llm_models_allows_intranet_base(monkeypatch):
     )
     assert resp.status_code == 200
     assert resp.json()["models"] == ["local-model"]
+
+
+def test_admin_news_feed_crud_archives_without_deleting_articles(monkeypatch):
+    client = make_client("admin-news.db")
+    headers = auth_headers(client)
+    monkeypatch.setattr(client.app.state.news_service, "validate_feed", lambda url: {
+        "format": "rss20", "title": "Fixture", "entries": []
+    })
+    source_response = client.post(
+        "/api/admin/news/sources", headers=headers, json={"name": "路透市场"}
+    )
+    assert source_response.status_code == 200
+    source = source_response.json()
+    feed_response = client.post(
+        f"/api/admin/news/sources/{source['id']}/feeds",
+        headers=headers,
+        json={"name": "市场", "url": "https://feed.example/rss"},
+    )
+    assert feed_response.status_code == 200
+    feed = feed_response.json()
+    assert feed["normalized_url"] == "https://feed.example/rss"
+    listing = client.get("/api/admin/news/sources", headers=headers).json()
+    listed = next(item for item in listing["items"] if item["id"] == source["id"])
+    assert listed["feeds"][0]["id"] == feed["id"]
+    assert client.post(
+        f"/api/admin/news/feeds/{feed['id']}/archive", headers=headers
+    ).status_code == 200
+    assert client.post(
+        f"/api/admin/news/feeds/{feed['id']}/restore", headers=headers
+    ).status_code == 200
+    assert client.post(
+        f"/api/admin/news/sources/{source['id']}/archive", headers=headers
+    ).status_code == 200
+    assert client.post(
+        f"/api/admin/news/sources/{source['id']}/restore", headers=headers
+    ).status_code == 200
+
+
+def test_admin_news_settings_bounds_and_permission():
+    client = make_client("admin-news-settings.db")
+    user = user_headers(client, "news_settings_user")
+    assert client.get("/api/admin/news/settings", headers=user).status_code == 403
+    admin = auth_headers(client)
+    settings = client.get("/api/admin/news/settings", headers=admin)
+    assert settings.status_code == 200
+    assert settings.json() == {"enabled": True, "refresh_interval_minutes": 10}
+    assert client.patch(
+        "/api/admin/news/settings", headers=admin,
+        json={"refresh_interval_minutes": 4},
+    ).status_code == 400
+    updated = client.patch(
+        "/api/admin/news/settings", headers=admin,
+        json={"enabled": False, "refresh_interval_minutes": 15},
+    )
+    assert updated.status_code == 200
+    assert updated.json() == {"enabled": False, "refresh_interval_minutes": 15}
+
+
+def test_admin_news_audit_redacts_feed_query(monkeypatch):
+    client = make_client("admin-news-audit.db")
+    headers = auth_headers(client)
+    monkeypatch.setattr(client.app.state.news_service, "validate_feed", lambda url: {
+        "format": "atom10", "title": "Fixture", "entries": []
+    })
+    source_id = client.post(
+        "/api/admin/news/sources", headers=headers, json={"name": "审计媒体"}
+    ).json()["id"]
+    response = client.post(
+        f"/api/admin/news/sources/{source_id}/feeds", headers=headers,
+        json={"name": "主源", "url": "https://feed.example/rss?secret=value"},
+    )
+    assert response.status_code == 200
+    detail = client.app.state.db.list_admin_logs(10)[0]["detail"]
+    assert "secret" not in detail and "value" not in detail
+
+
+def test_admin_news_refresh_reports_busy_feed_ids(monkeypatch):
+    client = make_client("admin-news-refresh.db")
+    headers = auth_headers(client)
+    calls = []
+    monkeypatch.setattr(client.app.state.news_service, "submit_feed", lambda feed_id: calls.append(feed_id) or False)
+    response = client.post("/api/admin/news/refresh", headers=headers)
+    assert response.status_code == 202
+    assert response.json()["accepted_feed_ids"] == []
+    assert len(response.json()["busy_feed_ids"]) == 5
+    assert len(calls) == 5

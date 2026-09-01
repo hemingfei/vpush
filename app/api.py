@@ -37,7 +37,13 @@ from . import auth, user_quota, wechat
 from .avatar_cache import cache_avatar
 from .bot_core import BIND_CODE_TTL
 from .db import _UNSET, ALLOWED_PLATFORMS, DB, days_until_purge, user_plain_secret
-from .news import NewsInputError, NewsNotFound, NewsService, NewsUpstreamError
+from .news import (
+    NewsInputError,
+    NewsNotFound,
+    NewsService,
+    NewsUpstreamError,
+    normalize_feed_url,
+)
 from .fetchers.base import CN_TZ, PLATFORM_LABELS, apply_twitter_feed, strip_html
 from .fetchers.combination import extract_cube_symbol, resolve_combination_profile
 from .fetchers.ima import (
@@ -364,6 +370,35 @@ class WebPushIn(BaseModel):
 
 class NewsSeenIn(BaseModel):
     view_started_at: str
+
+
+class NewsSettingsIn(BaseModel):
+    enabled: bool | None = None
+    refresh_interval_minutes: int | None = None
+
+
+class NewsSourceCreateIn(BaseModel):
+    name: str
+
+
+class NewsSourceUpdateIn(BaseModel):
+    name: str | None = None
+    enabled: bool | None = None
+
+
+class NewsFeedCreateIn(BaseModel):
+    name: str
+    url: str
+
+
+class NewsFeedUpdateIn(BaseModel):
+    name: str | None = None
+    url: str | None = None
+    enabled: bool | None = None
+
+
+class NewsFeedValidateIn(BaseModel):
+    url: str
 
 
 class MeUpdate(BaseModel):
@@ -1231,6 +1266,16 @@ def create_api_router(
 
     def _audit(admin: dict, action: str, target: str = "", detail: str = "") -> None:
         db.log_admin_action(admin["id"], action, target, detail)
+
+    def news_audit_url(url: str) -> str:
+        try:
+            parsed = httpx.URL(url)
+            host = parsed.host or ""
+            if parsed.port is not None:
+                host = f"{host}:{parsed.port}"
+            return f"{parsed.scheme}://{host}{parsed.path or '/'}"[:240]
+        except Exception:
+            return "invalid-url"
 
     def _invite_by_user_id() -> dict[int, dict]:
         out: dict[int, dict] = {}
@@ -2204,6 +2249,255 @@ def create_api_router(
                 "X-Content-Type-Options": "nosniff",
             },
         )
+
+    # ---- 管理员财经新闻 ----
+    def _admin_news_source_row(source: dict, include_archived: bool = True) -> dict:
+        feeds = db.list_news_feeds(source["id"], include_archived=include_archived)
+        return {
+            **source,
+            "enabled": bool(source["enabled"]),
+            "feeds": feeds,
+            "article_count": db.count_news_articles_for_source(source["id"]),
+        }
+
+    def _admin_news_source(source_id: int) -> dict:
+        source = db.get_news_source(source_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="媒体不存在")
+        return source
+
+    def _news_url_or_400(url: str) -> tuple[str, str]:
+        raw = (url or "").strip()
+        if not raw or len(raw) > 2048:
+            raise HTTPException(status_code=400, detail="Feed URL 长度必须为 1-2048 个字符")
+        try:
+            return raw, normalize_feed_url(raw)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Feed URL 必须是安全的 HTTP(S) 地址") from None
+
+    def _news_validate_or_error(url: str) -> dict:
+        try:
+            return _news_service_or_503().validate_feed(url)
+        except NewsInputError:
+            raise HTTPException(status_code=400, detail="Feed 地址无法验证") from None
+        except NewsUpstreamError:
+            raise HTTPException(status_code=502, detail="Feed 暂时无法访问") from None
+
+    def _news_refresh_ids(feed_ids: list[int], response: Response) -> dict:
+        if db.get_setting("news_enabled") != "1":
+            raise HTTPException(status_code=409, detail="财经新闻采集已关闭")
+        accepted, busy = [], []
+        service = _news_service_or_503()
+        for feed_id in feed_ids:
+            if service.submit_feed(feed_id):
+                accepted.append(feed_id)
+            else:
+                busy.append(feed_id)
+        response.status_code = 202
+        return {"accepted_feed_ids": accepted, "busy_feed_ids": busy}
+
+    @router.get("/admin/news/settings")
+    def admin_news_settings(admin: dict = Depends(require_admin)):
+        del admin
+        try:
+            interval = int(db.get_setting("news_refresh_interval_seconds") or 600)
+        except ValueError:
+            interval = 600
+        return {
+            "enabled": db.get_setting("news_enabled") == "1",
+            "refresh_interval_minutes": max(5, min(1440, interval // 60)),
+        }
+
+    @router.patch("/admin/news/settings")
+    def update_admin_news_settings(
+        body: NewsSettingsIn, admin: dict = Depends(require_admin)
+    ):
+        values = {}
+        if "enabled" in body.model_fields_set:
+            values["news_enabled"] = "1" if body.enabled else "0"
+        if "refresh_interval_minutes" in body.model_fields_set:
+            if body.refresh_interval_minutes is None or not 5 <= body.refresh_interval_minutes <= 1440:
+                raise HTTPException(status_code=400, detail="刷新周期必须为 5-1440 分钟")
+            values["news_refresh_interval_seconds"] = str(body.refresh_interval_minutes * 60)
+        if values:
+            db.set_settings_atomic(values)
+            _audit(admin, "news_settings_update", "", json.dumps(values, ensure_ascii=False))
+        return admin_news_settings(admin)
+
+    @router.get("/admin/news/sources")
+    def admin_news_sources(
+        include_archived: bool = Query(False), admin: dict = Depends(require_admin)
+    ):
+        del admin
+        return {
+            "items": [
+                _admin_news_source_row(source, include_archived)
+                for source in db.list_news_sources(include_archived=include_archived)
+            ]
+        }
+
+    @router.post("/admin/news/sources")
+    def create_admin_news_source(
+        body: NewsSourceCreateIn, admin: dict = Depends(require_admin)
+    ):
+        name = (body.name or "").strip()
+        if not 1 <= len(name) <= 60:
+            raise HTTPException(status_code=400, detail="媒体名称长度必须为 1-60 个字符")
+        try:
+            source_id = db.add_news_source(name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        _audit(admin, "news_source_create", str(source_id), name)
+        return _admin_news_source_row(_admin_news_source(source_id))
+
+    @router.patch("/admin/news/sources/{source_id}")
+    def update_admin_news_source(
+        source_id: int, body: NewsSourceUpdateIn, admin: dict = Depends(require_admin)
+    ):
+        _admin_news_source(source_id)
+        kwargs = {}
+        if "name" in body.model_fields_set:
+            kwargs["name"] = body.name
+        if "enabled" in body.model_fields_set:
+            kwargs["enabled"] = body.enabled
+        try:
+            source = db.update_news_source(source_id, **kwargs)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        _audit(admin, "news_source_update", str(source_id), json.dumps(kwargs, ensure_ascii=False))
+        return _admin_news_source_row(source)
+
+    @router.post("/admin/news/sources/{source_id}/archive")
+    def archive_admin_news_source(source_id: int, admin: dict = Depends(require_admin)):
+        _admin_news_source(source_id)
+        db.set_news_source_archived(source_id, True)
+        _audit(admin, "news_source_archive", str(source_id))
+        return {"ok": True}
+
+    @router.post("/admin/news/sources/{source_id}/restore")
+    def restore_admin_news_source(source_id: int, admin: dict = Depends(require_admin)):
+        _admin_news_source(source_id)
+        db.set_news_source_archived(source_id, False)
+        _audit(admin, "news_source_restore", str(source_id))
+        return {"ok": True}
+
+    @router.post("/admin/news/sources/{source_id}/refresh")
+    def refresh_admin_news_source(
+        source_id: int, response: Response, admin: dict = Depends(require_admin)
+    ):
+        source = _admin_news_source(source_id)
+        if source["archived_at"] or not source["enabled"]:
+            raise HTTPException(status_code=400, detail="媒体已停用或归档")
+        feed_ids = [
+            feed["id"] for feed in db.list_news_feeds(source_id)
+            if feed["enabled"]
+        ]
+        result = _news_refresh_ids(feed_ids, response)
+        _audit(admin, "news_source_refresh", str(source_id), str(result))
+        return result
+
+    @router.post("/admin/news/feeds/validate")
+    def validate_admin_news_feed(
+        body: NewsFeedValidateIn, admin: dict = Depends(require_admin)
+    ):
+        del admin
+        _, normalized = _news_url_or_400(body.url)
+        return _news_validate_or_error(normalized)
+
+    @router.post("/admin/news/sources/{source_id}/feeds")
+    def create_admin_news_feed(
+        source_id: int, body: NewsFeedCreateIn, admin: dict = Depends(require_admin)
+    ):
+        source = _admin_news_source(source_id)
+        if source["archived_at"]:
+            raise HTTPException(status_code=400, detail="归档媒体不能新增 Feed")
+        name = (body.name or "").strip()
+        if not 1 <= len(name) <= 80:
+            raise HTTPException(status_code=400, detail="Feed 名称长度必须为 1-80 个字符")
+        raw_url, normalized = _news_url_or_400(body.url)
+        if db.get_news_feed_by_normalized_url(normalized):
+            raise HTTPException(status_code=400, detail="Feed URL 已存在")
+        _news_validate_or_error(normalized)
+        try:
+            feed_id = db.add_news_feed(source_id, name, raw_url, normalized)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        _audit(admin, "news_feed_create", str(feed_id), news_audit_url(raw_url))
+        return db.get_news_feed(feed_id)
+
+    @router.patch("/admin/news/feeds/{feed_id}")
+    def update_admin_news_feed(
+        feed_id: int, body: NewsFeedUpdateIn, admin: dict = Depends(require_admin)
+    ):
+        feed = db.get_news_feed(feed_id)
+        if feed is None:
+            raise HTTPException(status_code=404, detail="Feed 不存在")
+        kwargs = {}
+        if "name" in body.model_fields_set:
+            name = (body.name or "").strip()
+            if not 1 <= len(name) <= 80:
+                raise HTTPException(status_code=400, detail="Feed 名称长度必须为 1-80 个字符")
+            kwargs["name"] = name
+        if "enabled" in body.model_fields_set:
+            kwargs["enabled"] = body.enabled
+        if "url" in body.model_fields_set and body.url is not None:
+            raw_url, normalized = _news_url_or_400(body.url)
+            duplicate = db.get_news_feed_by_normalized_url(normalized)
+            if duplicate and duplicate["id"] != feed_id:
+                raise HTTPException(status_code=400, detail="Feed URL 已存在")
+            if raw_url != feed["url"] or normalized != feed["normalized_url"]:
+                _news_validate_or_error(normalized)
+            kwargs.update(url=raw_url, normalized_url=normalized)
+        try:
+            saved = db.update_news_feed(feed_id, **kwargs)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        _audit(admin, "news_feed_update", str(feed_id), news_audit_url(saved["url"]))
+        return saved
+
+    @router.post("/admin/news/feeds/{feed_id}/archive")
+    def archive_admin_news_feed(feed_id: int, admin: dict = Depends(require_admin)):
+        if db.get_news_feed(feed_id) is None:
+            raise HTTPException(status_code=404, detail="Feed 不存在")
+        db.set_news_feed_archived(feed_id, True)
+        _audit(admin, "news_feed_archive", str(feed_id))
+        return {"ok": True}
+
+    @router.post("/admin/news/feeds/{feed_id}/restore")
+    def restore_admin_news_feed(feed_id: int, admin: dict = Depends(require_admin)):
+        if db.get_news_feed(feed_id) is None:
+            raise HTTPException(status_code=404, detail="Feed 不存在")
+        db.set_news_feed_archived(feed_id, False)
+        _audit(admin, "news_feed_restore", str(feed_id))
+        return {"ok": True}
+
+    @router.post("/admin/news/feeds/{feed_id}/refresh")
+    def refresh_admin_news_feed(
+        feed_id: int, response: Response, admin: dict = Depends(require_admin)
+    ):
+        feed = db.get_news_feed(feed_id)
+        if feed is None:
+            raise HTTPException(status_code=404, detail="Feed 不存在")
+        if feed["archived_at"] or not feed["enabled"]:
+            raise HTTPException(status_code=400, detail="Feed 已停用或归档")
+        result = _news_refresh_ids([feed_id], response)
+        _audit(admin, "news_feed_refresh", str(feed_id), str(result))
+        return result
+
+    @router.post("/admin/news/refresh")
+    def refresh_all_admin_news(
+        response: Response, admin: dict = Depends(require_admin)
+    ):
+        feed_ids = []
+        for source in db.list_news_sources():
+            if source["enabled"] and not source["archived_at"]:
+                feed_ids.extend(
+                    feed["id"] for feed in db.list_news_feeds(source["id"])
+                    if feed["enabled"]
+                )
+        result = _news_refresh_ids(feed_ids, response)
+        _audit(admin, "news_refresh", "", str(result))
+        return result
 
     @router.get("/my/subscriptions")
     def my_subscriptions(user: dict = Depends(get_current_user)):
