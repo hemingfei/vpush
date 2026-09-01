@@ -49,6 +49,7 @@ const BOOK_ICON = `<svg class="nav-book-icon" viewBox="0 0 24 24" fill="none" st
 // 导航线性图标集（lucide 风格，stroke=currentColor，与 STAR/BELL/EYE 同一词汇）
 const LIST_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg>`;
 const WSCN_LIVE_ICON = `<svg class="pt-icon" viewBox="180 240 640 620" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="m466.944 649.6 41.152-102.464 18.4 49.472L432.192 828.8H416.32L246.08 423.136c-11.808-26.208-34.656-46.368-62.72-54.336l-1.6-.448V367.2h216.992v.608l-.192.096c-17.664 11.84-24.48 25.696-24.48 45.056 0 5.664 2.784 14.08 2.784 14.08l90.08 222.56zm239.648-345.92h135.264v.832l-.864.128c-16.96 3.136-32.576 18.848-43.104 44.576l-1.632 4.16-161.28 424.96h-14.4L548.192 597.76l67.488-151.104 55.2 140.544L752 370.176l.032-.032c11.68-31.616-11.424-65.28-45.12-65.728h-.32v-.736zm-21.44-68.576c-1.152 2.304-5.568 12.8-5.568 12.8L538.432 573.44 433.056 310.944c-6.4-18.4-25.184-51.84-64.64-62.816v-.768h248.48v1.216h-.448c-6.784 0-53.856 1.504-53.856 51.296 0 7.168 4.512 24.096 6.304 29.248l18.304 46.24 54.336-132.544c3.936-9.984 2.048-16.256 1.472-18.496-4.416-10.88-17.312-23.68-35.648-26.56v-.448h115.904v.576c-19.584 4.192-29.632 18.944-38.144 37.184"/></svg>`;
+const NEWS_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M6 8h9M6 12h12M6 16h8"/><path d="M17 8h1"/></svg>`;
 const GRID_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>`;
 const GEAR_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
 const DASHBOARD_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>`;
@@ -79,6 +80,15 @@ const state = {
   mysubsPlatform: "",
   mysubsFavorite: false,
   settingsTab: "subs",
+  newsSources: [],
+  newsFilterSourceId: "",
+  newsQuery: "",
+  newsItems: [],
+  newsOffset: 0,
+  newsHasMore: false,
+  newsRequestSeq: 0,
+  newsObserver: null,
+  newsImageUrls: new Set(),
   adminKolsPlatform: "",
   adminKols: [],
   adminKolsQ: "",
@@ -388,6 +398,40 @@ function openImaDocument(mediaId, groupId = "", replace = false) {
   renderImaDocument(seq, id);
 }
 
+function clearNewsImageUrls() {
+  for (const url of state.newsImageUrls) URL.revokeObjectURL(url);
+  state.newsImageUrls.clear();
+}
+
+function stopNewsAutoLoad() {
+  state.newsObserver?.disconnect();
+  state.newsObserver = null;
+}
+
+function clearNewsReaderState() {
+  stopNewsAutoLoad();
+  clearNewsImageUrls();
+  state.newsSources = [];
+  state.newsFilterSourceId = "";
+  state.newsQuery = "";
+  state.newsItems = [];
+  state.newsOffset = 0;
+  state.newsHasMore = false;
+  state.newsRequestSeq += 1;
+}
+
+function startNewsAutoLoad(seq) {
+  stopNewsAutoLoad();
+  const sentinel = $("#news-load-sentinel");
+  if (!sentinel || !state.newsHasMore) return;
+  if ("IntersectionObserver" in window) {
+    state.newsObserver = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) loadFinancialNews(false, seq);
+    }, { rootMargin: "400px 0px" });
+    state.newsObserver.observe(sentinel);
+  }
+}
+
 function clearSessionCaches() {
   clearImaPdfUrl();
   if (typeof stopTimelinePoll === "function") stopTimelinePoll();
@@ -405,6 +449,7 @@ function clearSessionCaches() {
     wbQrTimer = null;
     wbQrSeq += 1;
   }
+  clearNewsReaderState();
   _tlPosts.length = 0;
   _tlOffset = 0;
   _tlHasMore = true;
@@ -503,6 +548,7 @@ function avatarHtml(name, url) {
 const NAV = [
   { group: "订阅", items: [
     { route: "timeline", icon: LIST_ICON, label: "最新动态" },
+    { route: "news", icon: NEWS_ICON, label: "财经新闻" },
     { route: "knowledge", icon: BOOK_ICON, label: "研报库" },
     { route: "home", icon: GRID_ICON, label: "订阅广场" },
     { route: "settings", icon: GEAR_ICON, label: "订阅与推送" },
@@ -660,6 +706,7 @@ function renderSidebar(user) {
 
 const MOBILE_NAV = [
   { route: "timeline", icon: LIST_ICON, label: "动态" },
+  { route: "news", icon: NEWS_ICON, label: "财经新闻" },
   { route: "home", icon: GRID_ICON, label: "广场" },
   { route: "settings", icon: GEAR_ICON, label: "订阅与推送" },
 ];
@@ -12022,7 +12069,7 @@ if (window.matchMedia) {
 // ---------- 路由 ----------
 let routeRenderSeq = 0; // 每次路由切换递增；异步渲染完成后凭此丢弃过期响应
 const SPA_PREFIXES = new Set([
-  "timeline", "home", "combinations", "mysubs", "settings",
+  "timeline", "home", "combinations", "mysubs", "settings", "news",
   "search", "kol", "more", "admin", "zsxq", "ima-documents", "knowledge",
 ]);
 
@@ -12054,6 +12101,174 @@ function routeQuery() {
 function isRoute(prefix) {
   const path = routePath();
   return prefix.endsWith("/") ? path.startsWith(prefix) : path === prefix || path.startsWith(prefix + "/");
+}
+
+function renderNewsCenter(seq, articleId = "") {
+  clearNewsImageUrls();
+  stopNewsAutoLoad();
+  if (!routeStillActive(seq)) return;
+  if (articleId) return renderFinancialNewsArticle(Number(articleId), seq);
+  return renderFinancialNewsList(seq);
+}
+
+function newsListItemHtml(item) {
+  const thumbnail = item.has_image
+    ? `<img class="news-list-thumb" data-news-thumbnail="${item.id}" alt="" loading="lazy">`
+    : "";
+  return `<article class="news-list-item" data-news-id="${item.id}" tabindex="0" role="link" onclick="openNewsArticle(${item.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openNewsArticle(${item.id})}">
+    ${thumbnail}<div class="news-list-copy"><div class="news-list-meta"><span>${escapeHtml(item.source_name || "")}</span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time>${item.is_new ? '<span class="news-new-label">新</span>' : ""}</div>
+    <h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary || "暂无摘要")}</p></div>
+  </article>`;
+}
+
+function newsSourceFilterOptions() {
+  const selected = new Set(state.newsSources.filter((source) => source.selected).map((source) => String(source.id)));
+  return `<option value="">全部来源</option>${state.newsSources.filter((source) => selected.has(String(source.id))).map((source) => `<option value="${source.id}" ${String(state.newsFilterSourceId) === String(source.id) ? "selected" : ""}>${escapeHtml(source.name)}</option>`).join("")}`;
+}
+
+function renderNewsListShell(collectionEnabled = true) {
+  const main = $("#main");
+  if (!main) return;
+  main.innerHTML = `<section class="news-page" id="news-page">
+    <header class="news-page-head"><div><h2 class="section-title">财经新闻</h2><p class="section-meta">按媒体聚合的长文阅读，原文链接保留。</p></div><button type="button" class="btn-normal" onclick="openNewsSourcePicker()">我的来源</button></header>
+    ${collectionEnabled ? "" : '<div class="notice notice-warn">管理员已暂停财经新闻采集，历史文章仍可阅读。</div>'}
+    <div class="news-list-toolbar"><select id="news-source-filter" class="form-control" aria-label="新闻来源" onchange="state.newsFilterSourceId=this.value;loadFinancialNews(true,routeRenderSeq)">${newsSourceFilterOptions()}</select><div class="search-bar"><input id="news-query" type="search" placeholder="搜索标题或摘要" value="${escapeHtml(state.newsQuery)}" oninput="state.newsQuery=this.value;clearTimeout(window._newsSearchTimer);window._newsSearchTimer=setTimeout(()=>loadFinancialNews(true,routeRenderSeq),250)"></div></div>
+    <div id="news-list" class="news-list"><div class="admin-skeleton" aria-hidden="true"></div></div>
+    <div id="news-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>
+  </section>`;
+}
+
+async function renderFinancialNewsList(seq) {
+  setPageTitle("财经新闻");
+  clearNewsImageUrls();
+  state.newsItems = [];
+  state.newsOffset = 0;
+  state.newsHasMore = false;
+  renderNewsListShell(true);
+  try {
+    const sources = await api("/api/news/sources");
+    if (!routeStillActive(seq)) return;
+    state.newsSources = sources.items || [];
+    if (state.newsFilterSourceId && !state.newsSources.some((source) => source.selected && String(source.id) === String(state.newsFilterSourceId))) state.newsFilterSourceId = "";
+    renderNewsListShell(sources.collection_enabled !== false);
+    await loadFinancialNews(true, seq);
+  } catch (err) {
+    if (!routeStillActive(seq)) return;
+    const list = $("#news-list");
+    if (list) list.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="renderFinancialNewsList(routeRenderSeq)">重试</button></div>`);
+  }
+}
+
+async function loadFinancialNews(reset = false, seq = routeRenderSeq) {
+  const list = $("#news-list");
+  if (!list || !routeStillActive(seq)) return;
+  const requestSeq = ++state.newsRequestSeq;
+  if (reset) {
+    stopNewsAutoLoad();
+    state.newsItems = [];
+    state.newsOffset = 0;
+    list.innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
+  }
+  const params = new URLSearchParams({ limit: "30", offset: String(state.newsOffset) });
+  if (state.newsFilterSourceId) params.set("source_id", state.newsFilterSourceId);
+  if (state.newsQuery.trim()) params.set("q", state.newsQuery.trim());
+  try {
+    const data = await api(`/api/news?${params}`);
+    if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
+    const items = data.items || [];
+    state.newsItems = reset ? items : state.newsItems.concat(items);
+    state.newsOffset = data.next_offset || state.newsItems.length;
+    state.newsHasMore = !!data.has_more;
+    list.innerHTML = state.newsItems.length ? state.newsItems.map(newsListItemHtml).join("") : emptyState(state.newsSources.some((source) => source.selected) ? "没有符合条件的财经新闻" : "还没有选择新闻来源", `<div><button type="button" class="btn-normal" onclick="openNewsSourcePicker()">选择来源</button></div>`);
+    for (const item of items) {
+      const image = document.querySelector(`[data-news-thumbnail="${item.id}"]`);
+      if (image) loadNewsImageBlob(item.id, 0, image, seq);
+    }
+    if (state.newsItems.length) {
+      const seenAt = data.view_started_at;
+      await Promise.resolve();
+      if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
+      if (seenAt) api("/api/news/seen", { method: "POST", body: JSON.stringify({ view_started_at: seenAt }) }).catch(() => {});
+    }
+    startNewsAutoLoad(seq);
+  } catch (err) {
+    if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
+    list.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="loadFinancialNews(${reset},routeRenderSeq)">重试</button></div>`);
+  }
+}
+
+async function loadNewsImageBlob(articleId, index, image, seq = routeRenderSeq) {
+  try {
+    const blob = await apiBlob(`/api/news/${articleId}/images/${index}`);
+    if (!routeStillActive(seq) || !image || !document.body.contains(image)) return;
+    const url = URL.createObjectURL(blob);
+    state.newsImageUrls.add(url);
+    image.src = url;
+  } catch {
+    /* 单张图片失败不阻塞文章阅读 */
+  }
+}
+
+async function renderFinancialNewsArticle(articleId, seq) {
+  setPageTitle("财经新闻", true, "news", "返回财经新闻");
+  const main = $("#main");
+  if (!main) return;
+  main.innerHTML = `<article class="news-article-page"><div class="admin-skeleton" aria-hidden="true"></div></article>`;
+  try {
+    const article = await api(`/api/news/${articleId}`);
+    if (!routeStillActive(seq)) return;
+    main.innerHTML = `<article class="news-article-page"><header class="news-article-head"><div class="news-article-meta"><span>${escapeHtml(article.source_name || "")}</span><time datetime="${escapeHtml(article.published_at || "")}">${escapeHtml(fmtPublished(article.published_at, false))}</time></div><h1>${escapeHtml(article.title)}</h1>${article.author ? `<p class="section-meta">作者：${escapeHtml(article.author)}</p>` : ""}<a class="btn-ghost news-original-link" href="${escapeHtml(article.url)}" target="_blank" rel="noopener noreferrer nofollow">打开原文 ${EXTERNAL_LINK_ICON}</a></header><div class="news-article-body">${article.content_html || `<p>${escapeHtml(article.summary || "暂无正文")}</p>`}</div></article>`;
+    loadNewsImages(articleId, seq);
+  } catch (err) {
+    if (routeStillActive(seq)) main.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="renderFinancialNewsArticle(${articleId},routeRenderSeq)">重试</button></div>`);
+  }
+}
+
+async function loadNewsImages(articleId, seq = routeRenderSeq) {
+  const images = [...document.querySelectorAll("[data-news-image-index]")];
+  await Promise.all(images.map((image) => loadNewsImageBlob(articleId, Number(image.dataset.newsImageIndex), image, seq)));
+}
+
+function openNewsArticle(articleId) {
+  const id = Number(articleId);
+  if (Number.isInteger(id) && id > 0) go(`news/${id}`);
+}
+
+function newsSourcePickerRows(filter = "") {
+  const q = filter.trim().toLowerCase();
+  return state.newsSources.filter((source) => !q || source.name.toLowerCase().includes(q)).map((source) => `<label class="news-source-option"><input type="checkbox" value="${source.id}" ${source.selected ? "checked" : ""}><span>${escapeHtml(source.name)}</span>${source.enabled ? "" : '<em>管理员已暂停更新</em>'}</label>`).join("") || '<p class="muted">没有匹配的媒体</p>';
+}
+
+function openNewsSourcePicker() {
+  const mask = document.createElement("div");
+  mask.className = "modal-mask news-source-modal";
+  mask.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="news-source-picker-title"><h3 id="news-source-picker-title">我的来源</h3><input id="news-source-search" class="form-control" type="search" placeholder="搜索媒体"><div id="news-source-options" class="news-source-options">${newsSourcePickerRows()}</div><div class="toolbar"><button type="button" class="btn-normal" onclick="saveNewsSources(this.closest('.news-source-modal'))">保存</button><button type="button" class="btn-ghost" data-close>取消</button></div></div>`;
+  document.body.appendChild(mask);
+  const close = () => mask.remove();
+  mask.addEventListener("click", (event) => { if (event.target === mask) close(); });
+  mask.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } });
+  mask.querySelector("[data-close]").addEventListener("click", close);
+  mask.querySelector("#news-source-search").addEventListener("input", (event) => { mask.querySelector("#news-source-options").innerHTML = newsSourcePickerRows(event.target.value); });
+  mask.querySelector("#news-source-search").focus();
+}
+
+async function saveNewsSources(mask) {
+  if (!mask) return;
+  const ids = [...mask.querySelectorAll(".news-source-option input:checked")].map((input) => Number(input.value));
+  const button = mask.querySelector("button.btn-normal");
+  if (button) button.disabled = true;
+  const seq = routeRenderSeq;
+  try {
+    await api("/api/me", { method: "PUT", body: JSON.stringify({ news_source_ids: ids }) });
+    if (!routeStillActive(seq)) return;
+    mask.remove();
+    state.newsFilterSourceId = "";
+    flash("新闻来源已保存");
+    await renderFinancialNewsList(seq);
+  } catch (err) {
+    flash(err.message, "error");
+    if (button) button.disabled = false;
+  }
 }
 
 function isSpaPath(pathname) {
@@ -12096,6 +12311,7 @@ async function router() {
   }
   const path = routePath();
   const [page, rawParam] = path.split("/");
+  if (page !== "news") clearNewsReaderState();
   if (page !== "settings") state.settingsTab = "subs";
   // 管理后台默认全景概览：/admin 与 /admin/dashboard 等价，侧边栏高亮才能对上
   const param = page === "admin" && !rawParam ? "dashboard" : rawParam;
@@ -12140,6 +12356,7 @@ async function router() {
       replaceRoute("settings");
       return;
     }
+    else if (page === "news") await renderNewsCenter(renderSeq, rawParam);
     else if (page === "zsxq") {
       state.timelinePlatform = timelineVisibleSet().has("zsxq") ? "zsxq" : "";
       replaceRoute("timeline");

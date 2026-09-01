@@ -251,6 +251,9 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
+        path = request.url.path
+        if path == "/news" or path.startswith("/news/") or path == "/api/news" or path.startswith("/api/news/"):
+            response.headers.setdefault("X-Robots-Tag", "noindex, nofollow")
         return response
 
     @app.middleware("http")

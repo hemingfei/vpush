@@ -3444,6 +3444,39 @@ def test_ima_document_list_hides_tag_rail_but_keeps_tag_filtering():
     assert "uniqueTags" in render
 
 
+def test_financial_news_navigation_keeps_quick_news_in_timeline():
+    src = APP_JS.read_text()
+    nav = src[src.index("const NAV ="):src.index("const SIDEBAR_SLIM_KEY")]
+    mobile = src[src.index("const MOBILE_NAV ="):src.index("function renderBottomNav")]
+    assert nav.index('route: "timeline"') < nav.index('route: "news"') < nav.index('route: "knowledge"')
+    assert 'label: "财经新闻"' in nav
+    assert 'route: "news"' in mobile
+    assert 'data-platform="live"' in _fn_body("tlPillsHtml")
+
+
+def test_news_reader_functions_cover_sources_seen_and_blob_cleanup():
+    src = APP_JS.read_text()
+    for name in (
+        "renderNewsCenter", "loadFinancialNews", "openNewsSourcePicker",
+        "saveNewsSources", "openNewsArticle", "loadNewsImages", "clearNewsImageUrls",
+    ):
+        assert f"function {name}" in src or f"async function {name}" in src
+    seen = _fn_body("loadFinancialNews")
+    assert '"/api/news/seen"' in seen
+    assert "view_started_at" in seen
+    images = _fn_body("clearNewsImageUrls")
+    assert "URL.revokeObjectURL" in images
+
+
+def test_news_source_picker_is_searchable_checkbox_dialog():
+    body = _fn_body("openNewsSourcePicker")
+    assert 'type="search"' in body
+    body = body + _fn_body("newsSourcePickerRows")
+    assert 'type="checkbox"' in body
+    assert 'role="dialog"' in body
+    assert "我的来源" in body
+
+
 def test_admin_news_tab_is_full_feed_manager():
     src = APP_JS.read_text()
     assert 'const STATS_TABS = ["config", "cookies", "proxies", "plaza", "news"]' in src
