@@ -2615,6 +2615,7 @@ class ImaDocumentService:
         self._sync_lock = threading.Lock()
         self._discovery_lock = threading.Lock()
         self._scheduler_thread: threading.Thread | None = None
+        self._maintenance_thread: threading.Thread | None = None
         self._worker_thread: threading.Thread | None = None
         self._local_scan_thread: threading.Thread | None = None
         self._running = False
@@ -3221,28 +3222,29 @@ class ImaDocumentService:
             self._rebuild_index_if_needed()
         except Exception:
             logger.exception("IMA document index rebuild failed")
-        if self.store.archive_writable():
-            try:
-                restored = self.store.restore_original_filenames()
-                if restored.get("renamed"):
-                    logger.info("IMA restored %s original filenames", restored["renamed"])
-            except Exception:
-                logger.exception("IMA original filename restore failed")
-        elif self.storage_status.remote:
-            logger.warning("IMA archive unavailable; skip filename restore")
-        if self.store.archive_readable():
-            try:
-                rebuilt = self.store.rebuild_manifest_from_state()
-                if rebuilt:
-                    logger.info("IMA rebuilt %s manifest records from state", rebuilt)
-            except Exception:
-                logger.exception("IMA manifest rebuild from state failed")
-            try:
-                self.retag_all()
-            except Exception:
-                logger.exception("IMA document retag failed")
-        elif self.storage_status.remote:
-            logger.warning("IMA archive unavailable; skip manifest rebuild and retag")
+        with self._sync_lock:
+            if self.store.archive_writable():
+                try:
+                    restored = self.store.restore_original_filenames()
+                    if restored.get("renamed"):
+                        logger.info("IMA restored %s original filenames", restored["renamed"])
+                except Exception:
+                    logger.exception("IMA original filename restore failed")
+            elif self.storage_status.remote:
+                logger.warning("IMA archive unavailable; skip filename restore")
+            if self.store.archive_readable():
+                try:
+                    rebuilt = self.store.rebuild_manifest_from_state()
+                    if rebuilt:
+                        logger.info("IMA rebuilt %s manifest records from state", rebuilt)
+                except Exception:
+                    logger.exception("IMA manifest rebuild from state failed")
+                try:
+                    self.retag_all()
+                except Exception:
+                    logger.exception("IMA document retag failed")
+            elif self.storage_status.remote:
+                logger.warning("IMA archive unavailable; skip manifest rebuild and retag")
         try:
             self._rebuild_index_if_needed()
         except Exception:
@@ -3250,17 +3252,18 @@ class ImaDocumentService:
         self._sync_full_text_index()
 
     def start(self) -> None:
-        # Remote NFS restore/retag can take minutes; do not block /healthz.
-        if self.storage_status.remote:
-            threading.Thread(
-                target=self._archive_maintenance, name="ima-archive-maintenance", daemon=True
-            ).start()
-        else:
-            self._archive_maintenance()
+        # Archive work can take minutes on NFS and local disks; never block startup.
         with self._state_lock:
             if self._scheduler_thread and self._scheduler_thread.is_alive():
                 return
             self._stop.clear()
+            if self._maintenance_thread is None or not self._maintenance_thread.is_alive():
+                self._maintenance_thread = threading.Thread(
+                    target=self._archive_maintenance,
+                    name="ima-archive-maintenance",
+                    daemon=True,
+                )
+                self._maintenance_thread.start()
             self._scheduler_thread = threading.Thread(
                 target=self._schedule_loop, name="ima-documents", daemon=True
             )
@@ -3529,19 +3532,22 @@ class ImaDocumentService:
         return scanned
 
     def stop(self) -> None:
-        self._stop.set()
-        self._cancel_requested = True
-        scheduler = self._scheduler_thread
-        if scheduler and scheduler.is_alive():
-            scheduler.join()
+        current = threading.current_thread()
         with self._state_lock:
+            self._stop.set()
+            self._cancel_requested = True
+            scheduler = self._scheduler_thread
             worker = self._worker_thread
-        if worker and worker.is_alive() and worker is not threading.current_thread():
-            worker.join()
-        with self._state_lock:
             local_scan = self._local_scan_thread
-        if local_scan and local_scan.is_alive() and local_scan is not threading.current_thread():
+            maintenance = self._maintenance_thread
+        if scheduler and scheduler.is_alive() and scheduler is not current:
+            scheduler.join()
+        if worker and worker.is_alive() and worker is not current:
+            worker.join()
+        if local_scan and local_scan.is_alive() and local_scan is not current:
             local_scan.join()
+        if maintenance is not None and maintenance is not current:
+            maintenance.join()
 
     def _schedule_loop(self) -> None:
         while not self._stop.wait(30):

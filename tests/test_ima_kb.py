@@ -1348,8 +1348,10 @@ def test_full_text_index_failure_does_not_escape_maintenance_or_healthz(
     client = TestClient(create_app(db_path=tmp_path / "failure.sqlite"))
     service = client.app.state.ima_documents
     scheduler_started = threading.Event()
+    failure_seen = threading.Event()
 
     def fail(_rows):
+        failure_seen.set()
         raise RuntimeError("simulated full-text failure")
 
     def schedule_loop():
@@ -1366,6 +1368,7 @@ def test_full_text_index_failure_does_not_escape_maintenance_or_healthz(
     scheduler = service._scheduler_thread
     try:
         assert scheduler_started.wait(1)
+        assert failure_seen.wait(1)
         assert scheduler is not None and scheduler.is_alive()
         assert client.get("/healthz").status_code == 200
         assert service.status()["full_text_index"]["enabled"] is True
