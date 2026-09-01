@@ -5,6 +5,7 @@ import pytest
 import httpx
 
 from app.news import (
+    NewsNotFound,
     ParsedArticle,
     clean_article_html,
     normalize_article_url,
@@ -199,6 +200,8 @@ def test_fetch_image_rejects_non_image_and_oversized_body(tmp_path, monkeypatch)
         "published_at": "2026-09-01T00:00:00+00:00",
         "fetched_at": "2026-09-01T00:00:00+00:00", "content_hash": "img",
     })
+    with pytest.raises(NewsNotFound, match="图片不存在"):
+        service.fetch_image(article_id, -1, uid)
     with pytest.raises(ValueError, match="图片类型"):
         service.fetch_image(article_id, 0, uid)
 
@@ -212,6 +215,29 @@ def test_fetch_image_rejects_non_image_and_oversized_body(tmp_path, monkeypatch)
     )
     with pytest.raises(ValueError, match="地址不安全|响应体过大"):
         service.fetch_image(article_id, 0, uid)
+    service.close()
+    client.close()
+    db.close()
+
+
+
+
+def test_parse_skips_entry_without_article_url():
+    payload = b'''<rss version="2.0"><channel><title>Missing URL</title><item><title>No URL</title></item></channel></rss>'''
+    assert parse_feed(payload, "https://feed.example/rss", NOW).articles == []
+
+
+def test_refresh_feed_redacts_query_from_network_error(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+
+    def handler(request):
+        raise httpx.ConnectError("secret=value", request=request)
+
+    service, db, client, feed_id = make_news_service(tmp_path, handler)
+    result = service.refresh_feed(feed_id)
+    assert result["error_code"] == "network_error"
+    detail = db.get_news_feed(feed_id)["last_error_detail"]
+    assert "secret" not in detail and "value" not in detail
     service.close()
     client.close()
     db.close()

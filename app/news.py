@@ -165,7 +165,8 @@ def _entry_link(entry: dict, feed_url: str) -> str:
     for link in links:
         if link.get("rel", "alternate") == "alternate" and link.get("href"):
             return normalize_article_url(urljoin(feed_url, link["href"]))
-    return normalize_article_url(urljoin(feed_url, entry.get("link") or ""))
+    raw_link = entry.get("link") or ""
+    return normalize_article_url(urljoin(feed_url, raw_link)) if raw_link else ""
 
 
 def _entry_content(entry: dict) -> str:
@@ -297,6 +298,14 @@ class NewsService:
 
     @staticmethod
     def _error_detail(exc: BaseException) -> str:
+        request = getattr(exc, "request", None)
+        if request is not None:
+            try:
+                parsed = urlsplit(str(request.url))
+                safe_url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+                return f"{type(exc).__name__}: {safe_url}"[:300]
+            except ValueError:
+                pass
         text = " ".join(str(exc or "").split())
         return text[:300] or "上游请求失败"
 
@@ -379,7 +388,10 @@ class NewsService:
         if not article:
             raise NewsNotFound("文章不存在")
         try:
-            target = article["images"][int(index)]
+            image_index = int(index)
+            if image_index < 0:
+                raise IndexError
+            target = article["images"][image_index]
         except (IndexError, TypeError, ValueError):
             raise NewsNotFound("图片不存在") from None
         try:
@@ -387,7 +399,7 @@ class NewsService:
                 self.client,
                 target,
                 max_bytes=MAX_IMAGE_BYTES,
-                default_ports_only=False,
+                default_ports_only=True,
                 timeout=httpx.Timeout(connect=5, read=15, write=5, pool=5),
             )
         except ValueError as exc:

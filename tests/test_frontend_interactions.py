@@ -3477,6 +3477,14 @@ def test_news_source_picker_is_searchable_checkbox_dialog():
     assert "我的来源" in body
 
 
+def test_news_source_picker_preserves_selection_across_search():
+    open_picker = _fn_body("openNewsSourcePicker")
+    save = _fn_body("saveNewsSources")
+    assert "newsSelectedIds" in open_picker
+    assert "mask._newsSelectedIds" in save
+    assert "newsSourcePickerRows(event.target.value" in open_picker
+
+
 def test_admin_news_tab_is_full_feed_manager():
     src = APP_JS.read_text()
     assert 'const STATS_TABS = ["config", "cookies", "proxies", "plaza", "news"]' in src

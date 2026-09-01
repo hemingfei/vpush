@@ -12234,27 +12234,47 @@ function openNewsArticle(articleId) {
   if (Number.isInteger(id) && id > 0) go(`news/${id}`);
 }
 
-function newsSourcePickerRows(filter = "") {
+function newsSourcePickerRows(filter = "", selectedIds = null) {
   const q = filter.trim().toLowerCase();
-  return state.newsSources.filter((source) => !q || source.name.toLowerCase().includes(q)).map((source) => `<label class="news-source-option"><input type="checkbox" value="${source.id}" ${source.selected ? "checked" : ""}><span>${escapeHtml(source.name)}</span>${source.enabled ? "" : '<em>管理员已暂停更新</em>'}</label>`).join("") || '<p class="muted">没有匹配的媒体</p>';
+  return state.newsSources.filter((source) => !q || source.name.toLowerCase().includes(q)).map((source) => `<label class="news-source-option"><input type="checkbox" value="${source.id}" ${(selectedIds ? selectedIds.has(Number(source.id)) : source.selected) ? "checked" : ""}><span>${escapeHtml(source.name)}</span>${source.enabled ? "" : '<em>管理员已暂停更新</em>'}</label>`).join("") || '<p class="muted">没有匹配的媒体</p>';
 }
 
 function openNewsSourcePicker() {
+  const newsSelectedIds = new Set(state.newsSources.filter((source) => source.selected).map((source) => Number(source.id)));
   const mask = document.createElement("div");
   mask.className = "modal-mask news-source-modal";
-  mask.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="news-source-picker-title"><h3 id="news-source-picker-title">我的来源</h3><input id="news-source-search" class="form-control" type="search" placeholder="搜索媒体"><div id="news-source-options" class="news-source-options">${newsSourcePickerRows()}</div><div class="toolbar"><button type="button" class="btn-normal" onclick="saveNewsSources(this.closest('.news-source-modal'))">保存</button><button type="button" class="btn-ghost" data-close>取消</button></div></div>`;
+  mask._newsSelectedIds = newsSelectedIds;
+  mask.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="news-source-picker-title"><h3 id="news-source-picker-title">我的来源</h3><input id="news-source-search" class="form-control" type="search" placeholder="搜索媒体"><div id="news-source-options" class="news-source-options">${newsSourcePickerRows("", newsSelectedIds)}</div><div class="toolbar"><button type="button" class="btn-normal" onclick="saveNewsSources(this.closest('.news-source-modal'))">保存</button><button type="button" class="btn-ghost" data-close>取消</button></div></div>`;
   document.body.appendChild(mask);
   const close = () => mask.remove();
+  const captureSelection = () => {
+    mask.querySelectorAll(".news-source-option input").forEach((input) => {
+      const id = Number(input.value);
+      if (input.checked) newsSelectedIds.add(id);
+      else newsSelectedIds.delete(id);
+    });
+  };
   mask.addEventListener("click", (event) => { if (event.target === mask) close(); });
   mask.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } });
   mask.querySelector("[data-close]").addEventListener("click", close);
-  mask.querySelector("#news-source-search").addEventListener("input", (event) => { mask.querySelector("#news-source-options").innerHTML = newsSourcePickerRows(event.target.value); });
+  mask.querySelector("#news-source-search").addEventListener("input", (event) => {
+    captureSelection();
+    mask.querySelector("#news-source-options").innerHTML = newsSourcePickerRows(event.target.value, newsSelectedIds);
+  });
   mask.querySelector("#news-source-search").focus();
 }
 
 async function saveNewsSources(mask) {
   if (!mask) return;
-  const ids = [...mask.querySelectorAll(".news-source-option input:checked")].map((input) => Number(input.value));
+  const ids = (() => {
+    const selected = mask._newsSelectedIds || new Set();
+    mask.querySelectorAll(".news-source-option input").forEach((input) => {
+      const id = Number(input.value);
+      if (input.checked) selected.add(id);
+      else selected.delete(id);
+    });
+    return [...selected];
+  })();
   const button = mask.querySelector("button.btn-normal");
   if (button) button.disabled = true;
   const seq = routeRenderSeq;
