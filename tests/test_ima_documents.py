@@ -32,6 +32,9 @@ from app.ima_documents import (
     ImaGroupConfig,
     ImaPureClient,
     load_title_overrides,
+    group_next_run_at,
+    next_shanghai_schedule,
+    shanghai_schedule_gate,
     _clamp_group_interval,
     _safe_error,
     decrypt_body,
@@ -1287,6 +1290,31 @@ def test_list_items_accepts_empty_terminal_page(monkeypatch):
     assert client.list_items("root") == []
 
 
+def test_list_items_folders_only_keeps_earlier_pages_if_later_page_fails():
+    client = ImaPureClient(
+        ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
+    )
+    client._token = lambda: "access"
+    calls = []
+
+    def open_json(request):
+        calls.append(json.loads(request.data))
+        if len(calls) == 1:
+            return {
+                "code": 0,
+                "knowledge_list": [
+                    {"media_type": 99, "folder_info": {"folder_id": "folder-a", "name": "A"}},
+                ],
+                "next_cursor": "p2",
+            }, {}
+        return {"code": 51, "msg": "busy"}, {}
+
+    client._open_json = open_json
+    items = client.list_items("root", folders_only=True)
+    assert [item["folder_info"]["folder_id"] for item in items] == ["folder-a"]
+    assert len(calls) >= 2
+
+
 def test_list_items_folders_only_stops_after_file_page():
     client = ImaPureClient(
         ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
@@ -2125,7 +2153,8 @@ def _listing_client(listed):
 
 def test_scheduled_sync_skips_group_that_is_not_due(tmp_path, monkeypatch):
     now = time.time()
-    db = _two_mounted_groups_db(runtime={"b": {"last_started_at": int(now - 3600)}})
+    db = _two_mounted_groups_db(runtime={"b": {"last_started_at": int(now)}})
+
     listed = []
     monkeypatch.setattr(ima_documents, "ImaPureClient", _listing_client(listed))
     service = ImaDocumentService(db, tmp_path / "ima")
@@ -2172,6 +2201,106 @@ def test_scheduled_sync_skips_when_no_group_is_due(tmp_path, monkeypatch):
     assert result["status"] == "not_due"
     assert listed == []
     assert db.get_setting(IMA_PURE_LAST_RESULT_KEY) == existing
+
+
+def test_shanghai_schedule_is_next_0100():
+    from datetime import datetime, timedelta, timezone
+    tz = timezone(timedelta(hours=8))
+    before = datetime(2026, 9, 1, 0, 30, tzinfo=tz).timestamp()
+    after = datetime(2026, 9, 1, 1, 5, tzinfo=tz).timestamp()
+    today = datetime(2026, 9, 1, 1, 0, tzinfo=tz).timestamp()
+    tomorrow = datetime(2026, 9, 2, 1, 0, tzinfo=tz).timestamp()
+    assert shanghai_schedule_gate(before) == today
+    assert next_shanghai_schedule(before) == today
+    assert next_shanghai_schedule(after) == tomorrow
+
+
+def test_group_next_run_at_catches_up_24h_group_after_0100():
+    from datetime import datetime, timedelta, timezone
+
+    tz = timezone(timedelta(hours=8))
+    now = datetime(2026, 9, 1, 2, 0, tzinfo=tz).timestamp()
+    yesterday = datetime(2026, 8, 31, 1, 5, tzinfo=tz).timestamp()
+    group = ImaGroupConfig("g", "库", "kb", "root", True, "discovered", ("root",), 86400)
+    assert group_next_run_at(group, yesterday, now) == now
+
+
+def test_group_next_run_at_keeps_subdaily_interval():
+    now = 1_000_000.0
+    group_1h = ImaGroupConfig("a", "A", "kb", "root", True, "discovered", ("root",), 3600)
+    group_6h = ImaGroupConfig("b", "B", "kb", "root", True, "discovered", ("root",), 21600)
+    assert group_next_run_at(group_1h, now - 1800, now) == now + 1800
+    assert group_next_run_at(group_6h, now - 7200, now) == now + 14400
+
+
+def test_scheduled_run_at_picks_overdue_1h_not_todays_24h(tmp_path, monkeypatch):
+    now = time.time()
+    gate = shanghai_schedule_gate(now)
+    b_last = int(gate + 60) if now >= gate else int(now)
+    db = _two_mounted_groups_db(
+        runtime={
+            "a": {"last_started_at": int(now - 7200)},
+            "b": {"last_started_at": b_last},
+        }
+    )
+    listed = []
+    monkeypatch.setattr(ima_documents, "ImaPureClient", _listing_client(listed))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    monkeypatch.setattr(service, "discover", lambda: {"discovery": {}})
+    assert service._scheduled_run_at(now) == now
+    assert service.trigger(scheduled=True)["status"] == "started"
+    service._worker_thread.join(timeout=10)
+    assert listed == ["a"]
+
+
+def test_due_scheduler_still_starts_cicc_scan_without_ima_credentials(tmp_path, monkeypatch):
+    service = ImaDocumentService(FakeDB({}), tmp_path / "ima")
+    monkeypatch.setattr(service, "_scheduled_run_at", lambda now: now)
+    monkeypatch.setattr(service, "_local_libraries_need_scan", lambda: True)
+    started = []
+    monkeypatch.setattr(service, "_start_local_scan", lambda: started.append(True))
+    assert service._schedule_once(now=1_000_000)["status"] == "not_configured"
+    assert started == [True]
+
+
+def test_start_local_scan_does_not_start_duplicate_thread(tmp_path, monkeypatch):
+    service = ImaDocumentService(FakeDB({}), tmp_path / "ima")
+    entered = threading.Event()
+    release = threading.Event()
+
+    def scan():
+        entered.set()
+        release.wait(2)
+        return {"status": "finished"}
+
+    monkeypatch.setattr(service, "scan_local_libraries", scan)
+    service._start_local_scan()
+    assert entered.wait(1)
+    first = service._local_scan_thread
+    service._start_local_scan()
+    assert service._local_scan_thread is first
+    release.set()
+    first.join(2)
+
+
+def test_24h_group_due_only_after_shanghai_0100(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    tz = timezone(timedelta(hours=8))
+    gate = datetime(2026, 9, 1, 1, 0, tzinfo=tz).timestamp()
+    db = FakeDB({
+        ima_documents.IMA_PURE_GROUPS_KEY: json.dumps([{
+            "id": "g", "name": "库", "knowledge_base_id": "kb",
+            "root_folder_id": "root", "folder_ids": ["root"],
+            "enabled": True, "interval_seconds": 86400,
+        }]),
+        IMA_PURE_GROUP_RUNTIME_KEY: json.dumps({"g": {"last_started_at": int(gate - 3600)}}),
+    })
+    service = ImaDocumentService(db, tmp_path / "ima")
+    group = service.config().groups[0]
+    assert service._group_due(group, gate - 60) is False
+    assert service._group_due(group, gate + 60) is True
+    db.set_setting(IMA_PURE_GROUP_RUNTIME_KEY, json.dumps({"g": {"last_started_at": int(gate + 120)}}))
+    assert service._group_due(group, gate + 180) is False
 
 
 def test_from_db_preserves_stored_group_interval():
@@ -2583,6 +2712,43 @@ def test_folder_info_classifies_mixed_metadata_as_folder():
         "parent_id": "root",
         "has_children": None,
     }
+
+
+def test_normalize_reads_folder_counts_from_folder_info():
+    nested = normalize_ima_folder_item(
+        {
+            "media_type": 99,
+            "folder_info": {
+                "folder_id": "child",
+                "name": "原始稿",
+                "folder_number": 321,
+                "file_number": 321,
+            },
+        },
+        "root",
+    )
+    assert nested == {
+        "id": "child",
+        "name": "原始稿",
+        "parent_id": "root",
+        "has_children": True,
+        "folder_count": 321,
+        "file_count": 321,
+    }
+    empty = normalize_ima_folder_item(
+        {
+            "media_type": 99,
+            "folder_info": {
+                "folder_id": "leaf",
+                "name": "空目录",
+                "folder_number": 0,
+                "file_number": 8,
+            },
+        },
+        "root",
+    )
+    assert empty["has_children"] is False
+    assert empty["folder_count"] == 0
 
 
 def test_normalize_ima_folder_item_matches_folder_classification():
@@ -4090,6 +4256,97 @@ def test_empty_ready_index_falls_back_when_sources_change(tmp_path):
     service.store.save_manifest([record])
     service.store.save_state({service.store.state_key(record): {"pdf": "semi/a.pdf"}})
     assert service._index_usable() is False
+
+
+def test_ready_index_with_rows_falls_back_when_sources_change(tmp_path):
+    db = DB(str(tmp_path / "stale-ready.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    first = {
+        "group_id": "semi",
+        "media_id": "file_a",
+        "name": "a.pdf",
+        "day": "0829",
+    }
+    service.store.save_manifest([first])
+    service.store.save_state({service.store.state_key(first): {"pdf": "semi/a.pdf"}})
+    assert service.rebuild_read_index()["status"] == "ready"
+    assert db.ima_document_index_count() == 1
+    assert service._index_usable() is True
+    second = {
+        "group_id": "semi",
+        "media_id": "file_b",
+        "name": "b.pdf",
+        "day": "0831",
+    }
+    service.store.save_manifest([first, second])
+    service.store.save_state({
+        service.store.state_key(first): {"pdf": "semi/a.pdf"},
+        service.store.state_key(second): {"pdf": "semi/b.pdf"},
+    })
+    assert service._index_usable() is False
+
+
+def test_failed_index_with_stale_fingerprint_is_not_usable(tmp_path):
+    db = DB(str(tmp_path / "stale.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    record = {"media_id": "m1", "name": "A.pdf", "day": "0801"}
+    service.store.save_manifest([record])
+    service.store.save_state({})
+    assert service.rebuild_read_index()["status"] == "ready"
+    db.mark_ima_document_index("failed", error="boom")
+    service.store.save_manifest([record, {"media_id": "m2", "name": "B.pdf", "day": "0802"}])
+    assert service._index_usable() is False
+
+
+def test_rebuild_read_index_applies_title_overrides(tmp_path):
+    db = DB(str(tmp_path / "titles.sqlite"))
+    archive = tmp_path / "archive"
+    group_dir = archive / "bank1__hash"
+    group_dir.mkdir(parents=True)
+    (group_dir / "titles.json").write_text(
+        json.dumps({"Goldman-Foo-260801": "高盛-测试-260801.pdf"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    db.set_setting(IMA_PURE_GROUPS_KEY, json.dumps([{
+        "id": "bank1",
+        "name": "全球顶级投行研报库",
+        "knowledge_base_id": "kb",
+        "root_folder_id": "root",
+        "folder_ids": ["root"],
+        "enabled": True,
+    }]))
+    service = ImaDocumentService(db, tmp_path / "ima", archive_root=archive)
+    record = {
+        "group_id": "bank1",
+        "media_id": "m1",
+        "name": "Goldman-Foo-260801.pdf",
+        "day": "0801",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state({})
+    assert service.rebuild_read_index()["status"] == "ready"
+    row = db._rows("SELECT name FROM ima_document_index WHERE media_id = ?", ("m1",))[0]
+    assert row["name"] == "高盛-测试-260801.pdf"
+
+
+def test_local_libraries_need_scan_when_cicc_newer(tmp_path):
+    db = DB(str(tmp_path / "cicc-scan.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima", archive_root=tmp_path / "archive")
+    cicc = service.store.local_root / ".cicc"
+    cicc.mkdir(parents=True)
+    (cicc / "status.json").write_text(json.dumps({
+        "storage": {"last_incr_summary": {"ts": 1_700_000_100, "added": 3}},
+    }), encoding="utf-8")
+    db.set_setting(ima_documents.IMA_LOCAL_LIBRARIES_KEY, json.dumps({
+        "scanned_at": "2023-11-14T22:13:00+00:00",
+        "libraries": [],
+    }))
+    assert service._local_libraries_need_scan() is True
+    db.set_setting(ima_documents.IMA_LOCAL_LIBRARIES_KEY, json.dumps({
+        "scanned_at": "2023-11-14T22:15:00+00:00",
+        "libraries": [],
+    }))
+    assert service._local_libraries_need_scan() is False
 
 
 def test_rebuild_read_index_holds_sync_lock(tmp_path, monkeypatch):

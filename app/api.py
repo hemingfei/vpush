@@ -33,7 +33,7 @@ from fastapi import (
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from . import auth, wechat
+from . import auth, user_quota, wechat
 from .avatar_cache import cache_avatar
 from .bot_core import BIND_CODE_TTL
 from .db import (
@@ -1237,6 +1237,7 @@ def create_api_router(
     router = APIRouter(prefix="/api")
     # 登录/注册限流（内存版，单实例够用）：每 IP 窗口内失败次数超限后 429
     login_attempts: dict[str, list[float]] = {}
+    ima_quota_alerts: set[tuple] = set()
     LOGIN_MAX_FAILURES = 8
     LOGIN_WINDOW = 300
     # 账号级失败锁定（防 IP 轮换爆破，独立于上面的 IP 限流）：
@@ -1517,6 +1518,77 @@ def create_api_router(
             raise HTTPException(status_code=403, detail="需要管理员权限")
         return user
 
+    def _quota_or_429(
+        user: dict,
+        bucket: str,
+        period_start: int,
+        limit: int,
+        window_seconds: int,
+        detail: str,
+        notice: str,
+    ) -> None:
+        allowed, retry_after = db.consume_user_quota(
+            int(user["id"]), bucket, period_start, limit, window_seconds
+        )
+        if allowed:
+            return
+        key = (int(user["id"]), bucket, int(period_start))
+        if key not in ima_quota_alerts:
+            ima_quota_alerts.add(key)
+            if len(ima_quota_alerts) > 2000:
+                ima_quota_alerts.clear()
+                ima_quota_alerts.add(key)
+            db.log_admin_action(
+                None,
+                "ima_quota",
+                str(user.get("username") or user["id"]),
+                notice,
+            )
+        raise HTTPException(
+            status_code=429,
+            detail=detail,
+            headers={"Retry-After": str(max(int(retry_after), 1))},
+        )
+
+    def _enforce_ima_list_quota(user: dict) -> None:
+        if user.get("is_admin"):
+            return
+        now = time.time()
+        _quota_or_429(
+            user,
+            user_quota.BUCKET_LIST_BURST,
+            user_quota.window_start(now, user_quota.IMA_LIST_BURST_SEC),
+            user_quota.IMA_LIST_BURST,
+            user_quota.IMA_LIST_BURST_SEC,
+            "刷新过于频繁，请稍后再试",
+            "知识库列表 10 分钟超限",
+        )
+
+    def _enforce_ima_file_quota(user: dict) -> None:
+        if user.get("is_admin"):
+            return
+        now = time.time()
+        _quota_or_429(
+            user,
+            user_quota.BUCKET_PDF_BURST,
+            user_quota.window_start(now, user_quota.IMA_PDF_BURST_SEC),
+            user_quota.IMA_PDF_BURST,
+            user_quota.IMA_PDF_BURST_SEC,
+            "阅读过于频繁，请稍后再试",
+            "知识库 PDF 10 分钟超限",
+        )
+        day_start = user_quota.shanghai_day_start(now)
+        day_seconds = 24 * 3600
+        _quota_or_429(
+            user,
+            user_quota.BUCKET_PDF_DAY,
+            day_start,
+            user_quota.IMA_PDF_DAY,
+            day_seconds,
+            "今日阅读已达上限，明天再看",
+            "知识库 PDF 今日达上限",
+        )
+
     # ---- 认证 ----
     @router.get("/version")
     def version_info():
@@ -1788,12 +1860,39 @@ def create_api_router(
                 from .url_safety import is_allowed_user_llm_base
 
                 if not is_allowed_user_llm_base(value):
-                    raise HTTPException(status_code=400, detail="用户 LLM 地址不能指向内网或非法地址")
+                    raise HTTPException(status_code=400, detail="LLM 地址须为 http(s) URL")
             updates["llm_api_base"] = value
         if "llm_model" in body.model_fields_set:
             updates["llm_model"] = (body.llm_model or "").strip()
         db.update_user_atomic(user["id"], updates, keywords=keywords)
         return public_user(db.get_user(user["id"]), db)
+
+    @router.post("/me/llm-models")
+    def list_my_llm_models(body: MeUpdate, request: Request, user: dict = Depends(get_current_user)):
+        """按 OpenAI 兼容 GET /models 拉取模型 id 列表。"""
+        from types import SimpleNamespace
+
+        from .llm import list_models
+        from .scheduler import _system_llm_config
+        from .url_safety import is_allowed_user_llm_base
+
+        user = db.get_user(user["id"]) or user
+        base = (body.llm_api_base if body.llm_api_base is not None else user.get("llm_api_base") or "").strip()
+        key = (body.llm_api_key or "").strip()
+        if not key or _is_masked_secret(key):
+            key = user_plain_secret(user, "llm_api_key", db)
+        if not base or not key:
+            cfg = _system_llm_config(db, getattr(request.app.state, "llm_config", None) if request else None)
+            if cfg is None:
+                raise HTTPException(status_code=400, detail="请先填写 API 地址和 Key")
+            models = list_models(cfg)
+        else:
+            if not is_allowed_user_llm_base(base):
+                raise HTTPException(status_code=400, detail="LLM 地址须为 http(s) URL")
+            models = list_models(SimpleNamespace(api_base=base, api_key=key, model="", user_supplied=True))
+        if models is None:
+            raise HTTPException(status_code=502, detail="无法获取模型列表，请检查地址和 Key")
+        return {"models": models}
 
     @router.post("/me/webpush")
     def subscribe_webpush(body: WebPushIn, request: Request, user: dict = Depends(get_current_user)):
@@ -2659,6 +2758,7 @@ def create_api_router(
         offset: int = 0,
         user: dict = Depends(get_current_user),
     ):
+        _enforce_ima_list_quota(user)
         groups = _readable_groups(user)
         group = group.strip()
         if group and group not in {group_config.id for group_config in groups}:
@@ -2794,6 +2894,7 @@ def create_api_router(
         group: str = Query("", max_length=128),
         user: dict = Depends(get_current_user),
     ):
+        _enforce_ima_file_quota(user)
         document = _ima_document(user, media_id, group)
         txt = _ima_archive_file(document, "txt")
         if txt is None or not txt.is_file():
@@ -2811,6 +2912,7 @@ def create_api_router(
         download: int = Query(0, ge=0, le=1),
         user: dict = Depends(get_current_user),
     ):
+        _enforce_ima_file_quota(user)
         document = _ima_document(user, media_id, group)
         pdf = _ima_archive_file(document, "pdf")
         if pdf is None or not pdf.is_file():
@@ -2877,6 +2979,11 @@ def create_api_router(
                 max_pages=IMA_FOLDER_LIST_MAX_PAGES,
             )
         except Exception as exc:  # noqa: BLE001 - folder endpoint must return a safe error
+            logger.exception(
+                "IMA folder list failed group=%s parent=%s",
+                group_id,
+                actual_parent_id,
+            )
             detail = _safe_error(exc)
             raise HTTPException(status_code=502, detail=f"IMA 文件夹读取失败: {detail}") from None
         items = []
@@ -5035,7 +5142,7 @@ def create_api_router(
 
     @router.get("/stats", dependencies=[Depends(require_admin)])
     def stats():
-        kols = db.list_kols()
+        kols = db.list_kols(with_subscriber_count=True)
         # 「正常」状态有新鲜度窗口：source_ok 太久没更新视为近期无成功，
         # 避免平台曾成功过一次就永远显示正常（连续失败被掩盖）。
         # 窗口取 2× 全局轮询间隔，至少 5 分钟；无启用大V的平台不判定。
@@ -5134,6 +5241,7 @@ def create_api_router(
                 "platform": k["platform"],
                 "enabled": bool(k["enabled"]),
                 "last_post_at": last_post_at.get(k["id"]) or "",
+                "subscriber_count": int(k.get("subscriber_count") or 0),
             }
             for k in kols
         ]
@@ -5180,6 +5288,7 @@ def create_api_router(
             "recent_source_events": db.recent_source_events(30),
             "kol_health": kol_health,
             "retry_pending": int(db.get_setting("stats_retry_pending") or 0),
+            "pending_kol_requests": db.count_pending_kol_requests(),
             "alerts": {
                 "push_alert_last_at": db.get_setting("push_alert_last_at") or "",
                 "x_direct_alert_at": db.get_setting("x_direct_alert_at") or "",

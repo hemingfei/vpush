@@ -94,6 +94,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         index_root,
         archive_root=archive_root,
         storage_status=storage_status,
+        llm_config=config.llm,
     )
     # WARNING+ 日志持久化到 error_logs 表（跨重启可查，管理后台错误记录面板）
     register_error_sink(

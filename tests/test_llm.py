@@ -99,18 +99,32 @@ def test_custom_base_url_and_long_content_truncation():
     assert captured["content_len"] <= 12000
 
 
-def test_rejects_unsafe_api_base_before_request():
+def test_user_llm_allows_private_http_base():
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "内网摘要"}}]},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    config = make_config(api_base="http://127.0.0.1:8000/v1")
+    config.user_supplied = True
+    assert summarize_posts([make_post()], config, client=client) == "内网摘要"
+    assert seen["url"] == "http://127.0.0.1:8000/v1/chat/completions"
+
+
+def test_user_llm_rejects_non_http_base_before_request():
     client = httpx.Client(
         transport=httpx.MockTransport(
-            lambda request: (_ for _ in ()).throw(AssertionError("不应访问内网 LLM"))
+            lambda request: (_ for _ in ()).throw(AssertionError("不应访问非法 LLM URL"))
         )
     )
-    unsafe = make_config(api_base="http://127.0.0.1:8000/v1")
-    unsafe.user_supplied = True
-    assert summarize_posts([make_post()], unsafe, client=client) is None
-    metadata = make_config(api_base="http://169.254.169.254/latest")
-    metadata.user_supplied = True
-    assert summarize_posts([make_post()], metadata, client=client) is None
+    config = make_config(api_base="file:///etc/passwd")
+    config.user_supplied = True
+    assert summarize_posts([make_post()], config, client=client) is None
 
 
 def test_cache_reuses_result_within_batch():
@@ -239,6 +253,22 @@ def test_summarize_daily_success_parses():
     assert summary.points[1].post_indexes == [1]
 
 
+def test_summarize_daily_parses_paragraph_citations_without_list_prefix():
+    """grok-4.6 常把要点写成带（[N]）的段落，没有 - / 1. 前缀。"""
+    client = httpx.Client(transport=httpx.MockTransport(_daily_handler(
+        "今日共 2 条动态，围绕降息与科技股。"
+        "美联储释放降息信号，科技股受益（[1]）"
+        "市场整体波动不大（[2]）"
+    )))
+    posts = [make_post(external_id=f"p{i}") for i in range(2)]
+    summary = summarize_daily(posts, make_config(), client=client)
+    assert summary is not None
+    assert "降息" in summary.overview
+    assert len(summary.points) == 2
+    assert summary.points[0].post_indexes == [0]
+    assert summary.points[1].post_indexes == [1]
+
+
 def test_summarize_daily_prompt_includes_rules():
     captured = {}
 
@@ -255,6 +285,7 @@ def test_summarize_daily_prompt_includes_rules():
     assert "100~150 字" in captured["system"]
     assert "大V" in captured["system"]
     assert "（[N]）" in captured["system"]
+    assert "以「- 」开头" in captured["system"]
     # 输入行带序号，模型可引用
     assert "1. [原帖][xueqiu] 张三：" in captured["user"]
 

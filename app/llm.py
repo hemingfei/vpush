@@ -145,6 +145,46 @@ def _chat(
             client.close()
 
 
+def list_models(llm_config) -> list[str] | None:
+    """GET {base}/models，OpenAI 兼容。失败返回 None。"""
+    values = _config_values(llm_config)
+    if values is None:
+        return None
+    api_key, api_base, _model = values
+    import httpx
+
+    try:
+        with httpx.Client(timeout=20) as client:
+            resp = client.get(
+                f"{api_base}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        if resp.status_code >= 400:
+            logger.warning("LLM /models HTTP %s", resp.status_code)
+            return None
+        payload = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("LLM /models 失败: %s", exc)
+        return None
+    rows = payload.get("data") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        return None
+    seen: set[str] = set()
+    out: list[str] = []
+    for row in rows:
+        if isinstance(row, str):
+            item = row.strip()
+        elif isinstance(row, dict):
+            item = str(row.get("id") or "").strip()
+        else:
+            continue
+        if item and item not in seen:
+            seen.add(item)
+            out.append(item)
+    out.sort()
+    return out
+
+
 SUMMARY_SYSTEM_PROMPT = (
     "你是信息摘要助手。把下面用户订阅的社交动态整理成简洁的中文要点。"
     "要求：按重要性排序，每条要点一行，以「- 」开头；"
@@ -241,9 +281,9 @@ DAILY_SUMMARY_SYSTEM_PROMPT = (
     "   覆盖当天值得关注的全部动态，不要因为追求精简而漏掉重要内容；"
     "3. 每条要点 100~150 字：点明是谁（大V名）说的、核心观点与关键数字，"
     "   并补一句关键依据（怎么说的/为什么/影响）；细节论证过程可省略；"
-    "4. 每条要点末尾标注依据的帖子序号，格式（[N]）或（[N][M]），对应输入行开头的序号；"
+    "4. 每条要点单独一行、以「- 」开头，末尾标注依据的帖子序号，格式（[N]）或（[N][M]），对应输入行开头的序号；"
     "5. 保留关键数字与结论，去掉寒暄与无关细节；不要添加原文没有的信息，不要臆测。"
-    "输出除总览和要点外不要任何解释。"
+    "输出除总览和要点外不要任何解释；不要把要点写成连续段落。"
 )
 
 
@@ -275,6 +315,22 @@ def _parse_daily_summary(text: str, post_count: int) -> DailySummary | None:
     lines = text.strip().splitlines()
     overview_lines: list[str] = []
     points: list[DailyPoint] = []
+    cite_re = re.compile(r"（((?:\[\d+\])+)）")
+
+    def _indexes_from(body: str) -> tuple[str, list[int]]:
+        indexes: list[int] = []
+        tail = body
+        while True:
+            idx_match = re.search(r"（((?:\[\d+\])+)）[。．.，,；;！!？?]?\s*$", tail)
+            if not idx_match:
+                break
+            for num_str in re.findall(r"\[(\d+)\]", idx_match.group(1)):
+                num = int(num_str)
+                if 1 <= num <= post_count and num - 1 not in indexes:
+                    indexes.append(num - 1)
+            tail = tail[: idx_match.start()].rstrip("。．.，,；;！!？? ").rstrip()
+        return tail or body, indexes
+
     for line in lines:
         stripped = line.strip()
         match = re.match(r"^(?:[-•*]\s+|[-•*]|\d+[.、]\s+)(.*)$", stripped, re.DOTALL)
@@ -282,21 +338,24 @@ def _parse_daily_summary(text: str, post_count: int) -> DailySummary | None:
             body = match.group(1).strip()
             if not body:
                 continue
-            # 提取行尾形如（[1]）或（[1][3]）的序号标记，容忍后随句读标点
-            indexes: list[int] = []
-            tail = body
-            while True:
-                idx_match = re.search(r"（((?:\[\d+\])+)）[。．.，,；;！!？?]?\s*$", tail)
-                if not idx_match:
-                    break
-                for num_str in re.findall(r"\[(\d+)\]", idx_match.group(1)):
-                    num = int(num_str)
-                    if 1 <= num <= post_count and num - 1 not in indexes:
-                        indexes.append(num - 1)
-                tail = tail[: idx_match.start()].rstrip("。．.，,；;！!？? ").rstrip()
+            tail, indexes = _indexes_from(body)
             points.append(DailyPoint(text=tail or body, post_indexes=indexes))
         elif stripped:
             overview_lines.append(stripped)
+    # grok-4.6 常把要点写成带（[N]）的段落而不是「- 」列表
+    if not points:
+        blob = " ".join(overview_lines).strip()
+        cited = list(cite_re.finditer(blob))
+        if cited:
+            overview_end = cited[0].start()
+            lead = blob[:overview_end].strip()
+            overview_lines = [lead] if lead else []
+            starts = [0] + [m.end() for m in cited[:-1]]
+            for start, match in zip(starts, cited):
+                chunk = blob[start:match.end()].strip()
+                tail, indexes = _indexes_from(chunk)
+                if tail:
+                    points.append(DailyPoint(text=tail, post_indexes=indexes))
     # 解析层强制上限：模型可能输出超过 8 条，只保留前八条（顺序与引用序号不变）
     points = points[:8]
     if not points:
@@ -352,6 +411,9 @@ def summarize_daily(posts, llm_config=None, client=None) -> DailySummary | None:
         ],
         4000,
         client=client,
+        # grok-4.6 thinking + 长提示经常超过默认 60s，超时会降级成原文列表
+        timeout=MARK_RESOLVE_TIMEOUT,
+        attempts=1,
     )
     return _parse_daily_summary(text or "", len(posts))
 

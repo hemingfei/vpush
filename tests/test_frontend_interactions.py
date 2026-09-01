@@ -727,6 +727,16 @@ def test_settings_save_feedback_uses_flash():
     assert "flash(" in _fn_body("pasteCookieField")
 
 
+def test_llm_settings_are_openai_compatible_with_model_list():
+    render = _fn_body("renderSettings")
+    assert "OpenAI 兼容" in render
+    assert "DeepSeek、Grok、OpenAI" in render
+    assert 'id="set-llm-model-list"' in render
+    assert "loadLlmModels()" in render
+    assert "/api/me/llm-models" in _fn_body("loadLlmModels")
+    assert "escapeHtml" in _fn_body("loadLlmModels")
+
+
 def test_kol_image_settings_is_fourth_push_section_and_loads_independently():
     """动态图片卡片位于关键词后，并在设置页初始化完成后独立加载。"""
     body = _fn_body("renderSettings")
@@ -1106,12 +1116,14 @@ def test_dashboard_is_duty_console():
     src = APP_JS.read_text()
     assert "核心指标" in dash
     assert "近 14 天推送趋势" in dash
+    assert "今日新帖" in dash
+    assert "今日推送" in dash
     assert "数据源健康" in dash
     assert "停更" in dash or "kol-health" in dash
     assert dash.count("数据源健康") == 1
+    assert dash.find("数据源健康") < dash.find("dash-duty-strip-slot")
     assert dash.find("dash-duty-strip-slot") < dash.find("停更")
-    assert dash.find("停更") < dash.find("数据源健康")
-    assert dash.find("数据源健康") < dash.find("核心指标")
+    assert dash.find("停更") < dash.find("核心指标")
     assert "setPageTitle(\"全景概览\")" in dash
     assert 'id="dash-duty-strip-slot"' in dash
     assert "dutyStripHtml" in live
@@ -1165,8 +1177,12 @@ def test_stale_kols_are_exceptions_not_inventory():
     body = _fn_body("staleEnabledKols")
     html = _fn_body("staleKolsHtml")
     assert "enabled" in rows
+    assert "subscriber_count" in rows
     assert "STALE_KOL_HOURS" in rows
     assert "STALE_KOL_LIMIT" in body
+    duty = _fn_body("dutyStripHtml")
+    assert "pending_kol_requests" in duty
+    assert "admin/requests" in duty
     assert "kol-health-verdict" in html
     open_fn = _fn_body("openAdminKolFromHealth")
     assert "adminKolsQ" in open_fn
@@ -1824,7 +1840,7 @@ def test_ima_config_uses_small_sync_icon_and_consistent_brand_case():
     assert '<h3 class="ima-source-title">IMA 凭证</h3>' not in stats
     assert "保存 IMA 凭证" not in stats
     assert "saveImaCredentials()" not in stats
-    assert ".ima-collector-foot .refresh-icon" in css
+    assert ".ima-selected-head .refresh-icon" in css
     assert "width: 16px" in css
     assert "height: 16px" in css
 
@@ -1844,6 +1860,8 @@ def test_ima_group_render_has_safe_mount_rows_and_recovery_controls():
     assert 'escapeHtml(group?.name || groupId)' in kb_row
     assert 'data-folder-id="${escapeHtml(folderId)}"' in folder_row
     assert 'aria-expanded="${expanded}"' in folder_row
+    assert "knownEmpty" in folder_row
+    assert "item?.has_children === false" in folder_row
     assert 'onchange="toggleImaFolder(this)"' in folder_row
     assert 'onclick="retryImaFolderLoad(this)"' in src
     assert "尚未发现共享知识库" in src
@@ -1888,7 +1906,8 @@ def test_ima_mount_tree_exposes_the_knowledge_base_root():
     assert "imaFolderRowHtml(groupKey" in render
     assert "has_children: true" in render
     assert "tree.scrollTop" in render
-    assert "imaMountState.expanded.has(rootKey)" in render
+    assert "imaRenderFolderBranch" not in render
+    assert "imaRenderFolderBranch(groupId, folderId, depth + 1)" in _fn_body("imaFolderRowHtml")
     assert "folderId === String(group?.root_folder_id || \"\")" in toggle
     assert "selected.clear()" in toggle
     assert "new Set([rootId])" in orphans
@@ -2141,7 +2160,7 @@ def test_ima_collector_acl_granted_via_separate_put():
     assert "acl_usernames" not in read
     knowledge = _fn_body("loadAdminKnowledge")
     assert "谁能阅读" not in knowledge
-    assert "权限控制" in knowledge
+    assert "查看权限" in knowledge
     assert 'id="ima-group-acl"' in knowledge
     assert "filterAclSuggest" in src
     assert "ima-acl-chip" in src
@@ -2153,6 +2172,21 @@ def test_ima_collector_acl_granted_via_separate_put():
     assert 'id="ima-acl-save"' not in knowledge
     assert "s.ima_collector" in knowledge
     assert "initImaMountState" in knowledge
+
+
+def test_ima_group_acl_search_precedes_compact_chips_and_stays_immediate():
+    picker = _fn_body("aclPickerHtml")
+    render = _fn_body("renderImaGroupAcl")
+    apply = _fn_body("applyAclNamesToPicker")
+
+    assert picker.index("ima-acl-search") < picker.index("ima-acl-chips")
+    assert "ima-acl-more" in picker
+    assert "toggleImaAclExpanded" in picker
+    assert "data-count" in picker
+    assert "compact" in render
+    assert "syncImaAclMoreButton" in apply
+    assert "saveImaGroupAcl" in _fn_body("addAclUser")
+    assert "saveImaGroupAcl" in _fn_body("removeAclUser")
 
 
 def test_ima_discovery_status_is_safe_and_does_not_render_secrets():
@@ -3406,9 +3440,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=254"' in html
-    assert 'src="/app.js?v=355"' in html
-    assert 'dav-shell-v224' in sw
+    assert 'href="/style.css?v=261"' in html
+    assert 'src="/app.js?v=369"' in html
+    assert 'dav-shell-v238' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -4229,7 +4263,7 @@ def test_admin_tag_page_has_llm_maintain():
     """标签管理页可一键跑 LLM 维护，不必再走脚本。"""
     render = _fn_body("loadAdminTagsTab")
     assert "标签维护" in render
-    assert "Grok" in render
+    assert "LLM" in render
     assert "adminMaintainTags" in render
     assert "维护并回填待打标" in render
     body = _fn_body("adminMaintainTags")
@@ -4252,7 +4286,17 @@ def test_sidebar_has_slim_toggle_matching_rail():
     assert 'localStorage.setItem(SIDEBAR_SLIM_KEY' in _fn_body("toggleSidebarSlim")
     assert "max-width: 900px" in _fn_body("toggleSidebarSlim")
     assert "html.sidebar-slim .sidebar { width: 68px" in css
-    rail = _media_block(css, "@media (max-width: 900px)", last=True)  # 2116 行的侧栏轨块，1298 是 tl-ima-entry
+    idx = 0
+    rail = ""
+    while True:
+        nxt = css.find("@media (max-width: 900px)", idx)
+        if nxt == -1:
+            break
+        block = _media_block(css[nxt:], "@media (max-width: 900px)")
+        if ".sidebar { width: 68px" in block:
+            rail = block
+            break
+        idx = nxt + 1
     assert ".sidebar { width: 68px" in rail
     assert "pointer-events: none" in rail
     assert "@media (max-width: 768px)" in css
@@ -4274,6 +4318,42 @@ def test_ima_mount_settings_use_two_panes_and_lazy_folder_api():
     assert "root_folder_id" not in _fn_body("imaMountGroupRowHtml")
 
 
+def test_ima_mount_uses_master_detail_and_selected_group_controls():
+    knowledge = _fn_body("loadAdminKnowledge")
+    row = _fn_body("imaMountGroupRowHtml")
+    interval = _fn_body("imaIntervalSegHtml")
+    render = _fn_body("renderImaMountGroups")
+
+    assert 'class="ima-mount-layout"' in knowledge
+    assert 'id="ima-kb-list"' in knowledge
+    assert 'id="ima-kb-select"' in knowledge
+    assert 'id="ima-selected-group-name"' in knowledge
+    assert 'id="ima-selected-interval"' in knowledge
+    assert 'id="ima-group-acl"' in knowledge
+    assert 'id="ima-folder-panel"' in knowledge
+    assert "imaIntervalSegHtml" not in row
+    assert 'id="ima-interval-${escapeHtml(groupId)}-${sec}"' in interval
+    assert 'aria-pressed="${current === sec}"' in interval
+    assert "renderImaSelectedGroup" in render
+    assert 'role="option"' in row
+    assert 'aria-selected="${selected}"' in row
+
+
+def test_ima_folder_panel_is_collapsed_and_preserves_lazy_tree():
+    src = APP_JS.read_text()
+    knowledge = _fn_body("loadAdminKnowledge")
+    toggle = _fn_body("toggleImaFolderPanel")
+
+    assert "folderPanelGroupId" in src
+    assert 'id="ima-folder-panel-toggle"' in knowledge
+    assert 'aria-expanded="false"' in knowledge
+    assert 'id="ima-folder-panel"' in knowledge
+    assert "hidden" in knowledge
+    assert "imaMountState.folderPanelGroupId" in toggle
+    assert "renderImaFolderTree" in toggle
+    assert "loadImaFolderChildren" not in toggle
+
+
 def test_ima_mount_ui_preserves_draft_and_uses_safe_dynamic_text():
     src = APP_JS.read_text()
     for name in (
@@ -4288,14 +4368,25 @@ def test_ima_mount_ui_preserves_draft_and_uses_safe_dynamic_text():
     assert "renderImaMountGroups" not in render
 
 
-def test_ima_mount_css_stacks_at_800px_and_keeps_touch_targets():
+def test_ima_master_detail_css_matches_duty_console_and_mobile_contract():
     css = STYLE_CSS.read_text()
-    assert ".ima-mount-layout" in css
-    assert ".ima-folder-tree" in css
-    narrow = _media_block(css, "@media (max-width: 800px)")
+    desktop = css[css.index(".ima-mount-layout"):]
+    narrow = _media_block(css, "@media (max-width: 900px)", last=True)
+
+    assert "grid-template-columns: minmax(240px, 280px) minmax(0, 1fr)" in desktop
+    assert ".ima-mount-rail" in css
+    assert ".ima-mount-detail" in css
+    assert ".ima-detail-section" in css
+    assert ".ima-kb-select" in css
+    assert re.search(r"\.ima-kb-select\s*\{[^}]*display:\s*none", css)
     assert re.search(r"\.ima-mount-layout\s*\{[^}]*grid-template-columns:\s*1fr", narrow)
-    assert re.search(r"\.ima-mount-kb-row[^}]*min-height:\s*44px", css)
-    assert re.search(r"\.ima-folder-row[^}]*min-height:\s*44px", css)
+    assert re.search(r"\.ima-kb-list\s*\{[^}]*display:\s*none", narrow)
+    assert re.search(r"\.ima-kb-select\s*\{[^}]*display:\s*block", narrow)
+    assert "position: sticky" in narrow
+    assert "min-height: 44px" in css
+    for selector in (".ima-mount-layout", ".ima-mount-rail", ".ima-mount-detail", ".ima-detail-section"):
+        rule = css[css.index(selector):css.index("}", css.index(selector))]
+        assert "box-shadow" not in rule
 
 
 def test_ima_discovery_success_releases_only_its_owned_button():
@@ -4310,6 +4401,37 @@ def test_ima_discovery_success_releases_only_its_owned_button():
     assert "imaMountState.discoveryOwner !== request" in finally_block
     assert "generation === imaMountState.generation" not in finally_block
     assert "const currentButton = $(\"#ima-discover-btn\")" in finally_block
+
+
+def test_ima_collector_dirty_bar_excludes_acl_and_can_discard():
+    src = APP_JS.read_text()
+    knowledge = _fn_body("loadAdminKnowledge")
+    dirty = _fn_body("renderImaCollectorDirtyState")
+    discard = _fn_body("discardImaCollectorChanges")
+    progress = _fn_body("applyImaCollectorProgress")
+    savebar = knowledge[knowledge.index('id="ima-collector-savebar"'):knowledge.index("</section>", knowledge.index('id="ima-collector-savebar"'))]
+    runtime = knowledge[knowledge.index("ima-collector-runtime"):knowledge.index("ima-collector-savebar")]
+
+    assert 'id="ima-collector-savebar" hidden' in knowledge
+    assert 'id="ima-collector-discard"' in savebar
+    assert 'id="ima-collector-save"' in savebar
+    assert knowledge.count('id="ima-collector-save"') == 1
+    assert 'id="ima-sync-progress"' in runtime
+    assert 'id="ima-collector-status"' in runtime
+    assert "bar.hidden = !(imaMountState.dirty || imaMountState.collectorDirty)" in dirty
+    assert "renderImaCollectorDirtyState()" in _fn_body("renderImaMountGroups")
+    assert "renderImaCollectorDirtyState()" in _fn_body("setImaGroupInterval")
+    assert "renderImaCollectorDirtyState()" in _fn_body("toggleImaFolder")
+    assert "renderImaCollectorDirtyState" not in _fn_body("saveImaGroupAcl")
+    assert "renderImaCollectorDirtyState" not in _fn_body("addAclUser")
+    assert "renderImaCollectorDirtyState" not in _fn_body("removeAclUser")
+    assert "saveImaGroupAcl" not in dirty
+    assert "ima-selected-group-state" in progress
+    assert "confirm(" in discard
+    assert "collectorDraft = null" in discard
+    assert "collectorDraftRevision = \"\"" in discard
+    assert "loadAdminKnowledge(routeRenderSeq)" in discard
+    assert src.count("function discardImaCollectorChanges") == 1
 
 
 def test_ima_collector_save_restores_focus_only_when_original_focus_survives():
@@ -4410,7 +4532,7 @@ def test_knowledge_settings_uses_collect_tabs_and_interval_chips():
     assert 'data-tab="collect"' in knowledge
     assert 'data-tab="zsxq"' in knowledge
     assert 'data-tab="storage"' in knowledge
-    assert "ima-interval-seg" in knowledge
+    assert "imaIntervalSegHtml" in _fn_body("renderImaSelectedGroup")
     assert "imaCollectorProgressHtml" in knowledge or "ima-sync-progress" in knowledge
     assert "saveImaCredentials()" not in knowledge
     save = _fn_body("saveImaCollector")

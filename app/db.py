@@ -1268,6 +1268,15 @@ class DB:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_ima_kb_sub_group ON ima_kb_subscriptions(group_id)"
         )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS user_quota ("
+            "  user_id INTEGER NOT NULL,"
+            "  bucket TEXT NOT NULL,"
+            "  period_start INTEGER NOT NULL,"
+            "  count INTEGER NOT NULL,"
+            "  PRIMARY KEY (user_id, bucket)"
+            ")"
+        )
         self._ensure_ima_document_tables()
         self._migrate_ima_document_index()
         self._conn.execute(
@@ -2062,6 +2071,40 @@ class DB:
                 self._conn.rollback()
                 raise
 
+    def consume_user_quota(
+        self, user_id: int, bucket: str, period_start: int, limit: int, window_seconds: int
+    ) -> tuple[bool, int]:
+        """Increment a quota bucket. Returns (allowed, retry_after_seconds)."""
+        uid = int(user_id)
+        period_start = int(period_start)
+        limit = max(int(limit), 1)
+        window_seconds = max(int(window_seconds), 1)
+        retry = max(period_start + window_seconds - int(time.time()), 1)
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT period_start, count FROM user_quota WHERE user_id = ? AND bucket = ?",
+                (uid, bucket),
+            ).fetchone()
+            if row is None or int(row["period_start"]) != period_start:
+                self._conn.execute(
+                    "INSERT INTO user_quota (user_id, bucket, period_start, count) "
+                    "VALUES (?, ?, ?, 1) "
+                    "ON CONFLICT(user_id, bucket) DO UPDATE SET period_start = excluded.period_start, "
+                    "count = excluded.count",
+                    (uid, bucket, period_start),
+                )
+                self._conn.commit()
+                return True, 0
+            count = int(row["count"])
+            if count >= limit:
+                return False, retry
+            self._conn.execute(
+                "UPDATE user_quota SET count = count + 1 WHERE user_id = ? AND bucket = ?",
+                (uid, bucket),
+            )
+            self._conn.commit()
+            return True, 0
+
     def ima_kb_can_subscribe(self, user_id: int, group_id: str) -> bool:
         return bool(
             self._rows(
@@ -2158,6 +2201,11 @@ class DB:
             sql += " WHERE " + " AND ".join(conds)
         sql += " ORDER BY r.id DESC"
         return self._rows(sql, params)
+
+    def count_pending_kol_requests(self) -> int:
+        return _to_int((self._rows(
+            "SELECT COUNT(*) AS v FROM kol_requests WHERE status = 'pending'"
+        ) or [{}])[0].get("v"))
 
     def get_kol_request(self, request_id: int) -> dict | None:
         rows = self._rows("SELECT * FROM kol_requests WHERE id = ?", (request_id,))
@@ -4163,6 +4211,18 @@ class DB:
             except Exception:
                 self._conn.rollback()
                 raise
+
+    def set_ima_index_fingerprint(self, fingerprint: str) -> None:
+        with self._lock:
+            total = self._conn.execute(
+                "SELECT COUNT(*) FROM ima_document_index"
+            ).fetchone()[0]
+            self._conn.execute(
+                "UPDATE ima_document_index_meta SET fingerprint = ?, document_count = ? "
+                "WHERE id = 1",
+                (str(fingerprint or ""), int(total)),
+            )
+            self._conn.commit()
 
     def update_ima_document_batch(self, rows, fingerprint: str) -> int:
         prepared_by_key = {}

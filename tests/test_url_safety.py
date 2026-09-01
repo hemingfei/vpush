@@ -100,10 +100,10 @@ def test_user_llm_allows_public_third_party(monkeypatch):
     assert is_allowed_user_llm_base("http://llm.example.com:11434/v1") is True
 
 
-def test_user_llm_still_blocks_ssrf():
-    assert is_allowed_user_llm_base("http://127.0.0.1:11434") is False
-    assert is_allowed_user_llm_base("http://192.168.1.1/v1") is False
-    assert is_allowed_user_llm_base("http://169.254.169.254/") is False
+def test_user_llm_allows_intranet_and_blocks_non_http():
+    assert is_allowed_user_llm_base("http://127.0.0.1:11434") is True
+    assert is_allowed_user_llm_base("http://192.168.1.1/v1") is True
+    assert is_allowed_user_llm_base("http://10.80.0.2:8096/v1") is True
     assert is_allowed_user_llm_base("https://user:pass@api.deepseek.com") is False
     assert is_allowed_user_llm_base("file:///etc/passwd") is False
     assert is_allowed_user_llm_base("") is False

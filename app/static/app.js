@@ -24,7 +24,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.111";
+const APP_VERSION = "1.12.123";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -132,6 +132,7 @@ const state = {
 const imaMountState = {
   groups: [],
   selectedGroupId: "",
+  folderPanelGroupId: "",
   drafts: new Map(),
   folders: new Map(),
   parents: new Map(),
@@ -2298,7 +2299,11 @@ async function loadImaPdf(mediaId, readerSeq) {
     }
   } catch (err) {
     if (err && err.name === "AbortError") return;
-    if (routeStillActive(seq) && readerSeq === _imaReaderSeq) showImaPdfFail(mediaId, seq, readerSeq);
+    if (routeStillActive(seq) && readerSeq === _imaReaderSeq) {
+      const message = String(err.message || "");
+      if (message.includes("频繁") || message.includes("上限")) flash(message, "error");
+      showImaPdfFail(mediaId, seq, readerSeq);
+    }
   }
 }
 
@@ -5370,28 +5375,32 @@ async function renderSettings(seq) {
         <header class="section-head">
           <div>
             <h2 class="section-title">AI 摘要（可选，用你的大模型）</h2>
-            <p class="section-meta">默认用站点 Grok。填了自己的 Key 才改用你的账号。接口为 OpenAI 兼容格式（/chat/completions）。</p>
+            <p class="section-meta">任意 OpenAI 兼容接口（/chat/completions 与 /models）。DeepSeek、Grok、OpenAI、本地网关均可。不填则用站点默认模型。</p>
           </div>
         </header>
         <div class="form-row">
           <label for="set-llm-base">API 地址（Base URL）</label>
           <input id="set-llm-base" class="form-control" type="text"
-            placeholder="留空则跟站点 Grok"
+            placeholder="https://api.openai.com/v1"
             value="${escapeHtml(state.user.llm_api_base || "")}">
-          <p class="muted" style="margin-top:4px">OpenAI 兼容的公网 http(s) 地址即可，不能指向内网。留空跟站点同一套。</p>
+          <p class="muted" style="margin-top:4px">OpenAI 兼容的 http(s) Base URL，内网和本机也可以。留空跟站点同一套。</p>
         </div>
         <div class="form-row">
           <label for="set-llm-key">API Key</label>
           <input id="set-llm-key" class="form-control" type="password"
-            placeholder="sk-...（清空并保存 = 用站点 Grok）"
+            placeholder="sk-...（清空并保存 = 用站点默认）"
             value="${escapeHtml(state.user.llm_api_key || "")}" autocomplete="off">
         </div>
         <div class="form-row">
-          <label for="set-llm-model">模型名</label>
-          <input id="set-llm-model" class="form-control" type="text"
-            placeholder="grok-4.6"
-            value="${escapeHtml(state.user.llm_model || "")}">
-          <p class="muted" style="margin-top:4px">留空默认 <code>grok-4.6</code></p>
+          <label for="set-llm-model">模型</label>
+          <div class="row" style="gap:10px;flex-wrap:wrap">
+            <input id="set-llm-model" class="form-control" type="text" list="set-llm-model-list"
+              placeholder="保存地址和 Key 后可拉取列表，也可手填"
+              value="${escapeHtml(state.user.llm_model || "")}" style="flex:1;min-width:220px">
+            <datalist id="set-llm-model-list"></datalist>
+            <button type="button" class="btn-ghost" onclick="loadLlmModels()">拉取模型列表</button>
+          </div>
+          <p class="muted" style="margin-top:4px">列表来自该接口的 <code>/models</code>；没有列表的网关仍可手填模型名。</p>
         </div>
         <div class="toolbar" style="margin-top:10px">
           <button class="btn-normal" onclick="saveLlm()">保存</button>
@@ -6446,12 +6455,36 @@ async function saveLlm() {
     await api("/api/me", { method: "PUT", body: JSON.stringify(payload) });
     if (!routeStillActive(routeSeq) || token !== state.token
       || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(payload.llm_api_key ? "已保存，将用你的模型" : "已保存，将用站点 Grok");
+    flash(payload.llm_api_key ? "已保存，将用你的模型" : "已保存，将用站点默认模型");
     await reloadSettings(routeSeq);
   } catch (err) {
     if (!routeStillActive(routeSeq) || token !== state.token
       || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(err.message, "error");
+  }
+}
+
+async function loadLlmModels() {
+  const routeSeq = routeRenderSeq;
+  const list = $("#set-llm-model-list");
+  const input = $("#set-llm-model");
+  try {
+    const data = await api("/api/me/llm-models", {
+      method: "POST",
+      body: JSON.stringify({
+        llm_api_base: ($("#set-llm-base").value || "").trim(),
+        llm_api_key: ($("#set-llm-key").value || "").trim(),
+      }),
+    });
+    if (!routeStillActive(routeSeq)) return;
+    const models = Array.isArray(data.models) ? data.models : [];
+    if (list) {
+      list.innerHTML = models.map((id) => `<option value="${escapeHtml(id)}"></option>`).join("");
+    }
+    if (input && models.length && !input.value) input.value = models[0];
+    flash(models.length ? `已加载 ${models.length} 个模型` : "接口未返回模型，可手填模型名");
+  } catch (err) {
+    if (routeStillActive(routeSeq)) flash(err.message || "拉取模型失败", "error");
   }
 }
 
@@ -6666,6 +6699,7 @@ function initImaMountState(groups, preserve = false) {
   if (!preserve && !imaMountState.saveOwner) imaMountState.revision += 1;
   imaMountState.dirty = preserve ? oldDirty : false;
   if (!preserve) imaMountState.discoveryEntered = false;
+  if (!preserve) imaMountState.folderPanelGroupId = "";
   const available = new Set(imaMountState.groups.map((group) => String(group.id)));
   for (const group of imaMountState.groups) {
     const previous = preserve ? oldDrafts.get(String(group.id)) : null;
@@ -6687,7 +6721,7 @@ function imaIntervalSegHtml(group) {
   const current = imaGroupIntervalSeconds(group);
   return `<span class="ima-interval-seg" data-group-id="${escapeHtml(groupId)}">${
     [[3600, "1h"], [21600, "6h"], [86400, "24h"]].map(([sec, label]) =>
-      `<button type="button" data-sec="${sec}" class="${current === sec ? "is-on" : ""}" onclick="setImaGroupInterval(event, this)">${label}</button>`
+      `<button type="button" id="ima-interval-${escapeHtml(groupId)}-${sec}" data-sec="${sec}" aria-pressed="${current === sec}" class="${current === sec ? "is-on" : ""}" onclick="setImaGroupInterval(event, this)">${label}</button>`
     ).join("")
   }</span>`;
 }
@@ -6699,19 +6733,39 @@ function imaMountGroupRowHtml(group) {
   const source = group?.source === "discovered" ? "自动发现" : "旧配置";
   const count = draft.size;
   const mountText = count ? `已选择 ${count} 个文件夹` : "未挂载";
-  return `
-    <div class="ima-mount-kb-item${selected ? " is-selected" : ""}">
-    <button type="button" class="ima-mount-kb-row${selected ? " is-selected" : ""}" id="ima-kb-row-${escapeHtml(groupId)}" role="option"
-      aria-selected="${selected}" data-group-id="${escapeHtml(groupId)}"
-      onclick="selectImaMountGroup(this.dataset.groupId)">
-      <span class="ima-mount-kb-copy">
-        <span class="ima-mount-kb-name" title="${escapeHtml(group?.name || groupId)}">${escapeHtml(group?.name || groupId)}</span>
-        <span class="ima-mount-kb-meta">${escapeHtml(source)} · ${escapeHtml(mountText)}</span>
-      </span>
-      <span class="ima-mount-kb-count" aria-hidden="true">${count}</span>
-    </button>
-    ${imaIntervalSegHtml(group)}
-    </div>`;
+  return `<button type="button" class="ima-mount-kb-row${selected ? " is-selected" : ""}"
+    id="ima-kb-row-${escapeHtml(groupId)}" role="option" aria-selected="${selected}"
+    data-group-id="${escapeHtml(groupId)}" onclick="selectImaMountGroup(this.dataset.groupId)">
+    <span class="ima-mount-kb-copy">
+      <span class="ima-mount-kb-name" title="${escapeHtml(group?.name || groupId)}">${escapeHtml(group?.name || groupId)}</span>
+      <span class="ima-mount-kb-meta">${escapeHtml(source)} · ${escapeHtml(mountText)}</span>
+    </span>
+    <span class="ima-mount-kb-count" aria-hidden="true">${count}</span>
+  </button>`;
+}
+
+function renderImaSelectedGroup() {
+  const group = imaMountGroup(imaMountState.selectedGroupId);
+  const title = $("#ima-selected-group-name");
+  const interval = $("#ima-selected-interval");
+  const select = $("#ima-kb-select");
+  if (select) {
+    select.innerHTML = imaMountState.groups.map((item) => {
+      const id = String(item.id || "");
+      return `<option value="${escapeHtml(id)}"${id === String(imaMountState.selectedGroupId) ? " selected" : ""}>${escapeHtml(item.name || id)}</option>`;
+    }).join("");
+  }
+  if (!group) {
+    if (title) title.textContent = "选择知识库";
+    if (interval) interval.innerHTML = "";
+    return;
+  }
+  if (title) title.textContent = group.name || String(group.id);
+  if (interval) {
+    const hours = Math.round(imaGroupIntervalSeconds(group) / 3600);
+    const note = hours >= 24 ? "每日 01:00 后自动同步（上海）" : `每 ${hours} 小时检查`;
+    interval.innerHTML = `${imaIntervalSegHtml(group)}<span class="muted">${note}</span>`;
+  }
 }
 
 function setImaGroupInterval(event, button) {
@@ -6725,6 +6779,7 @@ function setImaGroupInterval(event, button) {
   imaMountState.revision += 1;
   imaMountState.collectorRevision += 1;
   imaMountState.dirty = true;
+  renderImaCollectorDirtyState();
   const draft = rememberImaCollectorDraft();
   if (imaMountState.saveOwner) imaMountState.saveOwner.liveSnapshot = draft;
   const focus = imaFocusSnapshot(button);
@@ -6741,7 +6796,29 @@ function renderImaMountGroups() {
     : '<div class="empty ima-mount-empty">尚未发现共享知识库</div>';
   const count = $("#ima-kb-count");
   if (count) count.textContent = `${groups.length} 个`;
+  renderImaSelectedGroup();
   renderImaFolderTree(imaMountState.selectedGroupId);
+  renderImaCollectorDirtyState();
+}
+
+function renderImaCollectorDirtyState() {
+  const bar = $("#ima-collector-savebar");
+  if (!bar) return;
+  bar.hidden = !(imaMountState.dirty || imaMountState.collectorDirty);
+}
+
+function discardImaCollectorChanges() {
+  if (!confirm("有未保存的采集配置修改，确定放弃？")) return;
+  imaMountState.saveOwner = null;
+  imaMountState.collectorDraft = null;
+  imaMountState.collectorDraftRevision = "";
+  imaMountState.collectorDirty = false;
+  imaMountState.dirty = false;
+  imaMountState.collectorConfirmedRevision = "";
+  imaMountState.collectorConfirmedLiveRevision = -1;
+  imaMountState.collectorConfirmedMountRevision = -1;
+  renderImaCollectorDirtyState();
+  loadAdminKnowledge(routeRenderSeq);
 }
 
 function imaFolderAncestorSelected(groupId, folderId) {
@@ -6794,7 +6871,8 @@ function imaFolderRowHtml(groupId, item, depth) {
   if (!folderId) return "";
   imaMountState.parents.set(imaMountCacheKey(groupId, folderId), String(item?.parent_id || ""));
   const childKey = imaMountCacheKey(groupId, folderId);
-  const hasChildren = item?.has_children !== false || imaMountState.folders.has(childKey);
+  const knownEmpty = item?.has_children === false || Number(item?.folder_count) === 0;
+  const hasChildren = !knownEmpty || imaMountState.folders.has(childKey);
   const expanded = imaMountState.expanded.has(childKey);
   const selection = imaFolderSelectionState(groupId, folderId);
   const inputId = `ima-folder-${groupId}-${folderId}`;
@@ -6852,9 +6930,24 @@ function imaFolderOrphansHtml(groupId, rootId) {
     </label>`).join("")}</div>`;
 }
 
+function toggleImaFolderPanel(button) {
+  const groupId = String(imaMountState.selectedGroupId || "");
+  imaMountState.folderPanelGroupId = button?.getAttribute("aria-expanded") === "true" ? "" : groupId;
+  renderImaFolderTree(groupId);
+}
+
 function renderImaFolderTree(groupId) {
   const tree = $("#ima-folder-tree");
   if (!tree) return;
+  const open = !!groupId && imaMountState.folderPanelGroupId === String(groupId);
+  const panel = $("#ima-folder-panel");
+  const toggle = $("#ima-folder-panel-toggle");
+  const summary = $("#ima-folder-summary");
+  const selectedCount = groupId ? imaMountDraft(String(groupId)).size : 0;
+  if (toggle) toggle.setAttribute("aria-expanded", String(open));
+  if (panel) panel.hidden = !open;
+  if (summary) summary.textContent = selectedCount ? `已选 ${selectedCount} 个 · 父目录包含新子目录` : "未选择文件夹";
+  if (!open) return;
   const group = imaMountGroup(groupId);
   const title = $("#ima-folder-title");
   const count = $("#ima-folder-count");
@@ -6866,7 +6959,6 @@ function renderImaFolderTree(groupId) {
   }
   const groupKey = String(group.id);
   const rootId = String(group.root_folder_id || "");
-  const selectedCount = imaMountDraft(groupKey).size;
   if (title) title.textContent = group.name || groupKey;
   if (count) count.textContent = `${selectedCount} 个文件夹`;
   const rootKey = imaMountCacheKey(groupKey, rootId);
@@ -6877,7 +6969,7 @@ function renderImaFolderTree(groupId) {
     name: "整个知识库",
     parent_id: "",
     has_children: true,
-  }, 0) + (imaMountState.expanded.has(rootKey) ? imaRenderFolderBranch(groupKey, rootId, 1) : "") + imaFolderOrphansHtml(groupKey, rootId);
+  }, 0) + imaFolderOrphansHtml(groupKey, rootId);
   tree.querySelectorAll('input[data-indeterminate="true"]').forEach((input) => {
     input.indeterminate = true;
   });
@@ -6923,17 +7015,18 @@ function aclChipHtml(name) {
   return `<button type="button" class="ima-acl-chip" data-acl-remove="${escapeHtml(name)}" aria-label="移除 ${escapeHtml(name)}">${escapeHtml(name)}<span aria-hidden="true">×</span></button>`;
 }
 
-function aclPickerHtml(usernames, listId) {
+function aclPickerHtml(usernames, listId, compact = false) {
   const granted = [...new Set(usernames || [])];
   const chips = granted.length
     ? granted.map(aclChipHtml).join("")
     : `<span class="muted ima-acl-none">仅管理员</span>`;
-  return `<div class="ima-acl-picker">
-    <div class="ima-acl-chips">${chips}</div>
-    <p class="muted ima-acl-status" aria-live="polite">${granted.length ? `${granted.length} 人可看` : "仅管理员"}</p>
+  return `<div class="ima-acl-picker${compact ? " is-compact" : ""}" data-count="${granted.length}">
     <input type="search" class="form-control ima-acl-search" placeholder="搜索并添加用户" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-label="搜索并添加用户" aria-controls="${listId}" autocomplete="off" oninput="filterAclSuggest(this)" onkeydown="onAclSearchKey(event)">
     <div id="${listId}" class="ima-acl-suggest" hidden role="listbox"></div>
     <p class="muted ima-acl-empty" hidden>没有匹配的用户</p>
+    <div class="ima-acl-chips">${chips}</div>
+    <button type="button" class="ima-acl-more" onclick="toggleImaAclExpanded(this)" hidden></button>
+    <p class="muted ima-acl-status" aria-live="polite">${granted.length ? `${granted.length} 人可看` : "仅管理员"}</p>
   </div>`;
 }
 
@@ -7034,6 +7127,24 @@ function applyAclNamesToPicker(picker, names) {
       : `<span class="muted ima-acl-none">仅管理员</span>`;
   }
   if (status) status.textContent = names.length ? `${names.length} 人可看` : "仅管理员";
+  syncImaAclMoreButton(picker, names.length);
+}
+
+function syncImaAclMoreButton(picker, count) {
+  const button = picker?.querySelector(".ima-acl-more");
+  if (!button) return;
+  picker.dataset.count = String(count);
+  button.hidden = count <= 6;
+  const expanded = picker.classList.contains("is-expanded");
+  button.textContent = expanded ? "收起" : `展开全部 ${count} 人`;
+  button.setAttribute("aria-expanded", String(expanded));
+}
+
+function toggleImaAclExpanded(button) {
+  const picker = button?.closest(".ima-acl-picker");
+  if (!picker) return;
+  picker.classList.toggle("is-expanded");
+  syncImaAclMoreButton(picker, Number(picker.dataset.count || 0));
 }
 
 function rememberAclOnModel(groupId, names) {
@@ -7114,9 +7225,12 @@ async function renderImaGroupAcl() {
   try {
     await fetchAclCandidateUsers();
     if (seq !== _imaAclRenderSeq || String(imaMountState.selectedGroupId) !== groupId) return;
-    slot.innerHTML = aclPickerHtml(group.acl_usernames || [], "ima-acl-list");
+    slot.innerHTML = aclPickerHtml(group.acl_usernames || [], "ima-acl-list", /* compact */ true);
     const picker = slot.querySelector(".ima-acl-picker");
-    if (picker) picker.dataset.groupId = groupId;
+    if (picker) {
+      picker.dataset.groupId = groupId;
+      syncImaAclMoreButton(picker, (group.acl_usernames || []).length);
+    }
   } catch (err) {
     if (seq !== _imaAclRenderSeq) return;
     slot.innerHTML = `<p class="muted">用户列表加载失败：${escapeHtml(err.message)}</p>
@@ -7167,6 +7281,7 @@ function toggleImaFolder(input) {
   imaMountState.revision += 1;
   imaMountState.collectorRevision += 1;
   imaMountState.dirty = true;
+  renderImaCollectorDirtyState();
   const draft = rememberImaCollectorDraft();
   if (imaMountState.saveOwner) imaMountState.saveOwner.liveSnapshot = draft;
   renderImaMountGroups();
@@ -7886,32 +8001,53 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
                 <span id="ima-group-discovery-status" class="muted" aria-live="polite">${imaGroupDiscoveryStatusText(imaCollector)}</span>
               </div>
               <div class="toolbar ima-groups-toolbar">
-                <button type="button" class="btn-ghost" id="ima-discover-btn" onclick="discoverImaGroups()">${REFRESH_ICON}<span>重新发现</span></button>
+                <button type="button" class="btn-ghost" id="ima-discover-btn" onclick="discoverImaGroups()" aria-label="重新发现共享知识库">${REFRESH_ICON}<span>重新发现</span></button>
               </div>
             </div>
             <div class="ima-mount-layout" id="ima-mount-layout">
-              <section class="ima-mount-pane" aria-labelledby="ima-kb-pane-title">
+              <aside class="ima-mount-rail" aria-labelledby="ima-kb-pane-title">
                 <header class="ima-mount-pane-head"><strong id="ima-kb-pane-title">知识库</strong><span id="ima-kb-count" class="muted"></span></header>
+                <select id="ima-kb-select" class="form-control ima-kb-select" aria-label="选择知识库" onchange="selectImaMountGroup(this.value)"></select>
                 <div id="ima-kb-list" class="ima-kb-list" role="listbox" aria-label="共享知识库"></div>
+              </aside>
+              <section class="ima-mount-detail" aria-labelledby="ima-selected-group-name">
+                <header class="ima-selected-head">
+                  <div><strong id="ima-selected-group-name">选择知识库</strong><span id="ima-selected-group-state" class="muted">${imaCollectorStatusText(imaCollector)}</span></div>
+                  <button type="button" class="btn-ghost" id="ima-sync-btn" onclick="triggerImaCollector()" aria-label="同步当前库">${REFRESH_ICON}<span>同步当前库</span></button>
+                </header>
+                <section class="ima-detail-section ima-frequency-section">
+                  <div><h3>同步频率</h3><p class="section-meta">修改后需要保存。</p></div>
+                  <div id="ima-selected-interval" class="ima-selected-interval"></div>
+                </section>
+                <section class="ima-detail-section" id="ima-group-acl-block">
+                  <header><h3>查看权限</h3><p class="section-meta">添加或移除即时生效；管理员始终可看。</p></header>
+                  <div id="ima-group-acl"><p class="muted">加载中…</p></div>
+                </section>
+                <section class="ima-detail-section ima-folder-section">
+                  <button type="button" class="ima-folder-panel-toggle" id="ima-folder-panel-toggle"
+                    aria-expanded="false" aria-controls="ima-folder-panel" onclick="toggleImaFolderPanel(this)">
+                    <span><strong>采集文件夹</strong><span id="ima-folder-summary" class="muted">未选择文件夹</span></span>
+                    <span aria-hidden="true">›</span>
+                  </button>
+                  <div id="ima-folder-panel" hidden>
+                    <header class="ima-mount-pane-head"><strong id="ima-folder-title">选择知识库</strong><span id="ima-folder-count" class="muted"></span></header>
+                    <div id="ima-folder-tree" class="ima-folder-tree" role="tree" aria-label="知识库文件夹" aria-live="polite"></div>
+                  </div>
+                </section>
               </section>
-              <section class="ima-mount-pane" aria-labelledby="ima-folder-title">
-                <header class="ima-mount-pane-head"><strong id="ima-folder-title">选择知识库</strong><span id="ima-folder-count" class="muted"></span></header>
-                <div id="ima-folder-tree" class="ima-folder-tree" role="tree" aria-label="知识库文件夹" aria-live="polite"></div>
-              </section>
-            </div>
-            <div class="ima-source-block" id="ima-group-acl-block">
-              <header class="ima-source-block-head"><div><h3 class="ima-source-title">权限控制</h3>
-              <p class="section-meta">当前库谁能看。管理员始终可看。添加或移除即时生效。</p></div></header>
-              <div id="ima-group-acl"><p class="muted">加载中…</p></div>
             </div>
           </div>
         </div>
-        <div class="cfg-foot ima-collector-foot">
-          <div class="ima-collector-foot-main">
-            <div id="ima-sync-progress">${imaCollectorProgressHtml(imaCollector)}</div>
-            <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
+        <div class="ima-collector-runtime">
+          <div id="ima-sync-progress">${imaCollectorProgressHtml(imaCollector)}</div>
+          <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
+        </div>
+        <div class="ima-collector-savebar" id="ima-collector-savebar" hidden>
+          <span class="ima-unsaved-status"><span aria-hidden="true"></span>有未保存的采集配置修改</span>
+          <div class="toolbar">
+            <button type="button" class="btn-ghost" id="ima-collector-discard" onclick="discardImaCollectorChanges()">放弃修改</button>
+            <button type="button" class="btn-normal" id="ima-collector-save"${imaMountState.saveOwner ? " disabled" : ""} onclick="saveImaCollector()">保存采集配置</button>
           </div>
-          <div class="toolbar"><button type="button" class="btn-normal" id="ima-collector-save"${imaMountState.saveOwner ? " disabled" : ""} onclick="saveImaCollector()">保存采集配置</button><button type="button" class="btn-ghost" id="ima-sync-btn" onclick="triggerImaCollector()">${REFRESH_ICON}<span>同步当前库</span></button></div>
         </div>
       </section>
       <section class="section-panel ks-panel" data-panel="zsxq">
@@ -8103,7 +8239,7 @@ async function setPlazaSourceMode(platform, mode) {
 
 function staleEnabledKolRows(rows, nowMs) {
   const cutoff = (nowMs || Date.now()) - STALE_KOL_HOURS * 3600 * 1000;
-  const live = (rows || []).filter((k) => k.enabled);
+  const live = (rows || []).filter((k) => k.enabled && (k.subscriber_count == null || Number(k.subscriber_count) > 0));
   const stale = live.filter((k) => {
     if (!k.last_post_at) return true;
     const ts = parseDbUtcMs(k.last_post_at);
@@ -8141,44 +8277,45 @@ function sourceCredentialGap(src, cookieItems) {
   return false;
 }
 
-function sourceStatusCell(src, cookieItems) {
-  if (src.ok) return '<td class="status-ok" data-label="状态">正常</td>';
-  if (sourceCredentialGap(src, cookieItems)) {
-    return '<td class="dash-status-cred" data-label="状态">凭据缺失</td>';
-  }
-  if (sourceNeverStarted(src)) {
-    return '<td class="muted" data-label="状态">未开始</td>';
-  }
-  if (src.consecutive_fails >= 3) {
-    return '<td class="status-fail" data-label="状态">持续失败</td>';
-  }
-  return '<td class="status-warn" data-label="状态">暂无成功</td>';
+function sourceStatusNote(src) {
+  if (src.platform !== "twitter" || src.direct_mode !== "fallback") return "";
+  return ` <span class="status-warn" title="${escapeHtml(src.direct_fallback_reason || "")}">直抓失败</span>`;
 }
 
-function sourceChannelCell(src) {
-  if (src.platform !== "twitter") return '<td class="muted ak-hide-mobile" data-label="通道">—</td>';
-  if (src.direct_mode === "direct") return '<td class="ak-hide-mobile" data-label="通道"><span class="status-ok">直抓</span></td>';
-  if (src.direct_mode === "fallback") {
-    return `<td class="ak-hide-mobile" data-label="通道"><span class="status-warn" title="${escapeHtml(src.direct_fallback_reason || "")}">直抓失败</span></td>`;
+function sourceStatusCell(src, cookieItems) {
+  const note = sourceStatusNote(src);
+  if (src.ok) return `<td class="status-ok" data-label="状态">正常${note}</td>`;
+  if (sourceCredentialGap(src, cookieItems)) {
+    return `<td class="dash-status-cred" data-label="状态">凭据缺失${note}</td>`;
   }
-  return '<td class="muted ak-hide-mobile" data-label="通道">—</td>';
+  if (sourceNeverStarted(src)) {
+    return `<td class="muted" data-label="状态">未开始${note}</td>`;
+  }
+  if (src.consecutive_fails >= 3) {
+    return `<td class="status-fail" data-label="状态">持续失败${note}</td>`;
+  }
+  return `<td class="status-warn" data-label="状态">暂无成功${note}</td>`;
 }
 
 function sourceRowsHtml(sources, cookieItems) {
   const rows = sources || [];
-  if (!rows.length) return '<tr class="ak-empty"><td colspan="9" class="muted">暂无数据源</td></tr>';
-  return rows.map((src) => `
-    <tr>
+  if (!rows.length) return '<tr class="ak-empty"><td colspan="4" class="muted">暂无数据源</td></tr>';
+  return rows.map((src) => {
+    const warn = src.warn_24h ? ` <span class="status-warn">⚠${src.warn_24h}</span>` : "";
+    const counts = `<span class="muted dash-source-counts">${src.ok_24h} / ${src.fail_24h}${warn}</span>`;
+    const hint = [
+      src.consecutive_fails ? `连续失败 ${src.consecutive_fails}` : "",
+      src.next_retry_at ? `下次重试 ${fmtTs(src.next_retry_at)}` : "",
+      src.last_ok_at ? `最近成功 ${fmtTs(src.last_ok_at)}` : "",
+    ].filter(Boolean).join(" · ");
+    return `
+    <tr${hint ? ` title="${escapeHtml(hint)}"` : ""}>
       <td data-label="平台">${PLATFORM_LABELS[src.platform] || escapeHtml(src.platform)}</td>
       ${sourceStatusCell(src, cookieItems)}
-      ${sourceChannelCell(src)}
-      <td class="ak-hide-mobile" data-label="24h 成功率">${rateBar(src.success_rate_24h)}</td>
-      <td class="ak-hide-mobile" data-label="成功 / 失败">${src.ok_24h} / ${src.fail_24h}${src.warn_24h ? ` <span class="status-warn">⚠${src.warn_24h}</span>` : ""}</td>
-      <td class="ak-hide-mobile${src.consecutive_fails >= 3 ? " status-fail" : ""}" data-label="连续失败">${src.consecutive_fails}</td>
-      <td class="ak-hide-mobile" data-label="最近成功">${fmtTs(src.last_ok_at)}</td>
-      <td class="ak-hide-mobile" data-label="下次重试">${src.next_retry_at ? fmtTs(src.next_retry_at) : "—"}</td>
+      <td class="ak-hide-mobile dash-source-rate" data-label="24h 成功率">${rateBar(src.success_rate_24h)}${counts}</td>
       ${sourceCauseCell(src, cookieItems)}
-    </tr>`).join("");
+    </tr>`;
+  }).join("");
 }
 
 function sourceCauseCell(src, cookieItems) {
@@ -8195,12 +8332,12 @@ function sourceCauseCell(src, cookieItems) {
 }
 
 function abnormalSourceEvents(events, limit) {
-  return (events || []).filter((e) => e.status !== "ok").slice(0, limit || 8);
+  return (events || []).filter((e) => e.status !== "ok").slice(0, limit || 5);
 }
 
 function sourceEventRowsHtml(events) {
   const rows = abnormalSourceEvents(events);
-  if (!rows.length) return `<p class="muted">近 24 小时无异常事件</p>`;
+  if (!rows.length) return "";
   return `<div class="dash-events">${rows.map((e) => `<div class="dash-event">
     <span class="dash-event-dot ${escapeHtml(e.status)}"></span>
     <span class="muted dash-event-time">${escapeHtml(fmtDbTime(e.created_at))}</span>
@@ -8211,41 +8348,49 @@ function sourceEventRowsHtml(events) {
 }
 
 function dashboardFetchMetaHtml(s) {
-  const retry = s.retry_pending
+  const items = [];
+  items.push(s.last_poll_at ? `最近抓取 ${fmtTs(s.last_poll_at)}` : "尚未轮询");
+  if (s.last_poll_duration_ms) items.push(`耗时 ${(Number(s.last_poll_duration_ms) / 1000).toFixed(1)} 秒`);
+  if (s.enabled_kols != null) items.push(`活跃抓取 ${s.active_kols || 0}/${s.enabled_kols}`);
+  items.push(`轮询 ${s.polling_interval_seconds || "—"} 秒`);
+  items.push(s.retry_pending
     ? `<span class="status-warn">待重试 ${s.retry_pending} 条</span>`
-    : `<span class="status-ok">重试队列空闲</span>`;
-  const pollBit = s.last_poll_at ? `最近抓取 ${fmtTs(s.last_poll_at)}` : "尚未轮询";
-  const durBit = s.last_poll_duration_ms
-    ? ` · 耗时 ${(Number(s.last_poll_duration_ms) / 1000).toFixed(1)} 秒`
-    : "";
+    : `<span class="status-ok">重试空闲</span>`);
   const alerts = s.alerts || {};
-  const chips = [];
-  if (alerts.push_alert_last_at) chips.push(`推送告警 ${fmtTs(alerts.push_alert_last_at)}`);
-  if (alerts.x_direct_alert_at) chips.push(`X失败告警 ${fmtTs(alerts.x_direct_alert_at)}`);
-  if (alerts.cookie_keepalive_alert_at) chips.push(`cookie保活告警 ${fmtTs(alerts.cookie_keepalive_alert_at)}`);
-  if (alerts.xueqiu_probe_alert_at) chips.push(`雪球探测告警 ${fmtTs(alerts.xueqiu_probe_alert_at)}`);
-  return `<p class="section-meta dash-fetch-meta" id="dash-fetch-meta">
-    ${pollBit}${durBit} · 轮询 ${s.polling_interval_seconds || "—"} 秒 · ${retry}${chips.length ? ` · ${chips.map((c) => escapeHtml(c)).join(" · ")}` : ""}
-  </p>`;
+  if (alerts.push_alert_last_at) items.push(`<span class="status-warn">推送告警 ${escapeHtml(fmtTs(alerts.push_alert_last_at))}</span>`);
+  if (alerts.x_direct_alert_at) items.push(`<span class="status-warn">X失败告警 ${escapeHtml(fmtTs(alerts.x_direct_alert_at))}</span>`);
+  if (alerts.cookie_keepalive_alert_at) items.push(`<span class="status-warn">cookie保活告警 ${escapeHtml(fmtTs(alerts.cookie_keepalive_alert_at))}</span>`);
+  if (alerts.xueqiu_probe_alert_at) items.push(`<span class="status-warn">雪球探测告警 ${escapeHtml(fmtTs(alerts.xueqiu_probe_alert_at))}</span>`);
+  return `<p class="section-meta dash-fetch-meta" id="dash-fetch-meta">${items.map((bit) => `<span>${bit}</span>`).join("")}</p>`;
+}
+
+function fmtRelativeFromMs(ms, nowMs) {
+  if (ms == null) return "从未";
+  const hours = Math.floor(Math.max(0, (nowMs || Date.now()) - ms) / 3600000);
+  if (hours < 1) return "不到 1 小时前";
+  if (hours < 48) return `${hours} 小时前`;
+  return `${Math.floor(hours / 24)} 天前`;
 }
 
 function staleKolsHtml(rows) {
   const all = staleEnabledKolRows(rows);
   const stale = all.slice(0, STALE_KOL_LIMIT);
   if (!all.length) {
-    return `<p class="muted" id="kol-health-empty">启用中的大V 在 ${STALE_KOL_HOURS} 小时内都抓到过新帖</p>`;
+    return `<p class="muted" id="kol-health-empty">有订阅的大V 在 ${STALE_KOL_HOURS} 小时内都抓到过新帖</p>`;
   }
   const extra = all.length > stale.length ? `，列出 ${stale.length} 个` : "";
-  return `<p class="dash-stale-verdict" id="kol-health-verdict">启用中 ${all.length} 个超过 ${STALE_KOL_HOURS} 小时没抓到新帖${extra}</p>
-    <div class="table-wrap"><table class="ak-table dash-stale-table">
-    <thead><tr><th scope="col">大V</th><th class="ak-hide-mobile" scope="col">平台</th><th scope="col">最近抓到新帖</th></tr></thead>
-    <tbody>${stale.map((h) => `
-      <tr>
-        <td data-label="大V"><button type="button" class="linkish" data-name="${escapeHtml(h.name)}" onclick="openAdminKolFromHealth(this.dataset.name)">${escapeHtml(h.name)}</button></td>
-        <td class="ak-hide-mobile" data-label="平台">${PLATFORM_LABELS[h.platform] || escapeHtml(h.platform)}</td>
-        <td class="muted" data-label="最近抓到新帖">${h.last_post_at ? escapeHtml(fmtDbTime(h.last_post_at)) : "从未抓到"}</td>
-      </tr>`).join("")}</tbody>
-  </table></div>`;
+  const nowMs = Date.now();
+  return `<p class="dash-stale-verdict" id="kol-health-verdict">${all.length} 个有订阅大V超过 ${STALE_KOL_HOURS} 小时没抓到新帖${extra}</p>
+    <ul class="dash-stale-list">${stale.map((h) => {
+      const when = h.last_post_at ? fmtRelativeFromMs(parseDbUtcMs(h.last_post_at), nowMs) : "从未";
+      const plat = PLATFORM_LABELS[h.platform] || h.platform || "";
+      const subs = Number(h.subscriber_count);
+      const subBit = Number.isFinite(subs) && subs > 0 ? ` · ${subs} 订` : "";
+      return `<li>
+        <button type="button" class="linkish" data-name="${escapeHtml(h.name)}" onclick="openAdminKolFromHealth(this.dataset.name)">${escapeHtml(h.name)}</button>
+        <span class="muted">${escapeHtml(plat)} · ${escapeHtml(when)}${escapeHtml(subBit)}</span>
+      </li>`;
+    }).join("")}</ul>`;
 }
 
 function dutyStripHtml(s) {
@@ -8261,11 +8406,13 @@ function dutyStripHtml(s) {
     else failing += 1;
   });
   const staleAll = staleEnabledKolRows(s.kol_health).length;
+  const pending = Number(s.pending_kol_requests) || 0;
   const bits = [];
   if (failing) bits.push(`<li class="is-fail">${failing} 条管线持续失败</li>`);
   if (cred) bits.push(`<li class="is-warn">${cred} 条凭据缺失</li>`);
   if (never) bits.push(`<li class="is-idle">${never} 条尚未开始抓取</li>`);
-  if (staleAll) bits.push(`<li class="is-fail">${staleAll} 个启用大V停更</li>`);
+  if (staleAll) bits.push(`<li class="is-fail">${staleAll} 个有订阅大V停更</li>`);
+  if (pending) bits.push(`<li class="is-warn"><button type="button" class="linkish" onclick="go('admin/requests')">${pending} 条待审批</button></li>`);
   if (!bits.length) bits.push(`<li class="is-ok">管线正常，没有停更例外</li>`);
   return `<ul class="dash-duty-strip" id="dash-duty-strip">${bits.join("")}</ul>`;
 }
@@ -8293,6 +8440,8 @@ function renderStatsData(s) {
   if (events) events.innerHTML = sourceEventRowsHtml(s.recent_source_events);
   const kh = $("#kol-health");
   if (kh) kh.innerHTML = staleKolsHtml(s.kol_health);
+  const stalePanel = $("#dash-stale-panel");
+  if (stalePanel) stalePanel.hidden = !staleEnabledKolRows(s.kol_health).length;
   const imaCollectorStatus = $("#ima-collector-status");
   if (imaCollectorStatus && s.ima_collector) imaCollectorStatus.textContent = imaCollectorStatusText(s.ima_collector);
   const imaGroupDiscoveryStatus = $("#ima-group-discovery-status");
@@ -9764,8 +9913,11 @@ function applyImaCollectorProgress(status) {
   if (progress) progress.innerHTML = imaCollectorProgressHtml(status);
   const btn = $("#ima-sync-btn");
   if (btn && document.body.contains(btn)) btn.disabled = !!status?.running;
+  const text = imaCollectorStatusText(status);
   const target = $("#ima-collector-status");
-  if (target) target.textContent = imaCollectorStatusText(status);
+  if (target) target.textContent = text;
+  const selected = $("#ima-selected-group-state");
+  if (selected) selected.textContent = text;
 }
 
 function startImaProgressPoll() {
@@ -9805,9 +9957,7 @@ async function triggerImaCollector() {
   try {
     const result = await api("/api/admin/ima-collector/sync", { method: "POST", body: JSON.stringify({ group_id: groupId }) });
     if (!routeStillActive(routeSeq)) return;
-    flash(result.status === "already_running"
-      ? "IMA 文档同步正在进行中"
-      : `已启动同步「${group?.name || groupId}」`);
+    flash(result.status === "already_running" ? "IMA 文档同步正在进行中" : `已启动同步「${group?.name || groupId}」`);
     const status = await api("/api/admin/ima-collector");
     if (!routeStillActive(routeSeq)) return;
     const target = $("#ima-collector-status");
@@ -10021,78 +10171,67 @@ async function loadAdminDashboard() {
       </div>`;
     }).join("");
 
-    const trendSection = trend.length
-      ? `<section class="section-panel">
-        <header class="section-head"><div><h2 class="section-title">近 14 天推送趋势</h2>
-        <p class="section-meta">每日推送条数（绿色=成功，红色=失败）。</p></div></header>
-        ${trendHtml}
-      </section>`
-      : "";
     const platformSection = platformRows
       ? `<section class="section-panel">
-          <header class="section-head"><div><h2 class="section-title">帖子来源分布</h2>
-          <p class="section-meta">累计抓取帖子按平台。</p></div></header>
+          <header class="section-head"><div><h2 class="section-title">帖子来源分布</h2></div></header>
           ${platformRows}
         </section>`
       : "";
     const channelSection = channelRows
       ? `<section class="section-panel">
-          <header class="section-head"><div><h2 class="section-title">渠道推送成功率（7 天）</h2>
-          <p class="section-meta">各渠道成功/总数与成功率。</p></div></header>
+          <header class="section-head"><div><h2 class="section-title">渠道推送成功率（7 天）</h2></div></header>
           ${channelRows}
         </section>`
       : "";
     const splitSection = (platformSection || channelSection)
       ? `<div class="dash-split">${platformSection}${channelSection}</div>`
       : "";
+    const volumeStats = `<div class="dash-stats">
+          ${statCard("近 7 天推送", pu.total_7d || 0)}
+          ${statCard("推送成功率", rate)}
+          ${statCard("绑定渠道用户", u.bound || 0)}
+        </div>`;
+    const volumeBody = trendHtml
+      ? `<div class="dash-volume">${volumeStats}${trendHtml}</div>`
+      : volumeStats;
 
     if (!routeStillActive(_adminRenderSeq)) return;
     setPageTitle("全景概览");
     $("#admin-body").innerHTML = `
       <div id="dash-cookie-slot"></div>
-      <div id="dash-duty-strip-slot"></div>
-      <section class="section-panel">
-        <header class="section-head"><div><h2 class="section-title">停更大V</h2>
-        <p class="section-meta">点名字进大V管理。</p></div></header>
-        <div id="kol-health"></div>
-      </section>
-      <section class="section-panel">
-        <header class="section-head">
-          <div><h2 class="section-title">数据源健康</h2>
-          ${dashboardFetchMetaHtml(st)}</div>
-          <div class="toolbar"><button type="button" class="btn-ghost" onclick="refreshDashboardLive()">立即刷新</button></div>
-        </header>
-        <div id="stats-poll-error"></div>
-        <div class="table-wrap">
-          <table class="ak-table dash-source-table">
-            <thead><tr>
-              <th scope="col">平台</th><th scope="col">状态</th>
-              <th class="ak-hide-mobile" scope="col">通道</th>
-              <th class="ak-hide-mobile" scope="col">24h 成功率</th>
-              <th class="ak-hide-mobile" scope="col">成功 / 失败</th>
-              <th class="ak-hide-mobile" scope="col">连续失败</th>
-              <th class="ak-hide-mobile" scope="col">最近成功</th>
-              <th class="ak-hide-mobile" scope="col">下次重试</th>
-              <th scope="col">最近错误</th>
-            </tr></thead>
-            <tbody id="sources-table"></tbody>
-          </table>
-        </div>
-        <div id="dash-source-events"></div>
-      </section>
-      <section class="section-panel">
+      <div class="dash-duty-grid">
+        <section class="section-panel dash-source-panel">
+          <header class="section-head">
+            <div>
+              <h2 class="section-title">数据源健康</h2>
+              <div id="dash-duty-strip-slot"></div>
+              ${dashboardFetchMetaHtml(st)}
+            </div>
+            <div class="toolbar"><button type="button" class="btn-ghost" onclick="refreshDashboardLive()">立即刷新</button></div>
+          </header>
+          <div id="stats-poll-error"></div>
+          <div class="table-wrap">
+            <table class="ak-table dash-source-table">
+              <thead><tr>
+                <th scope="col">平台</th><th scope="col">状态</th>
+                <th class="ak-hide-mobile" scope="col">24h 成功率</th>
+                <th scope="col">最近错误</th>
+              </tr></thead>
+              <tbody id="sources-table"></tbody>
+            </table>
+          </div>
+          <div id="dash-source-events"></div>
+        </section>
+        <section class="section-panel dash-stale-panel" id="dash-stale-panel" hidden>
+          <header class="section-head"><div><h2 class="section-title">停更大V</h2></div></header>
+          <div id="kol-health"></div>
+        </section>
+      </div>
+      <section class="section-panel dash-volume-panel">
         <header class="section-head"><div><h2 class="section-title">核心指标</h2>
-        <p class="section-meta">用户、订阅与推送的业务总览（推送统计为近 7 天）。</p></div></header>
-        <div class="dash-stats">
-          ${statCard("注册用户", u.total || 0)}
-          ${statCard("绑定渠道用户", u.bound || 0)}
-          ${statCard("订阅数", s.total || 0)}
-          ${statCard("近 7 天推送", pu.total_7d || 0)}
-          ${statCard("推送成功率", rate)}
-          ${statCard("帖子总量", p.total || 0)}
-        </div>
+        <p class="section-meta">今日新帖 ${p.today || 0} · 今日推送 ${pu.today || 0} · 7 日新用户 ${u.new_7d || 0} · 注册 ${u.total || 0}</p></div></header>
+        ${volumeBody}
       </section>
-      ${trendSection}
       ${splitSection}`;
     renderStatsData(st);
     startDashboardLiveTimer();
@@ -11407,10 +11546,10 @@ async function loadAdminTagsTab() {
     <section class="section-panel">
       <header class="section-head">
         <div><h2 class="section-title">标签维护</h2>
-        <p class="section-meta">合并种子黑话、解析 $标记$ 新股、去掉指数/ETF 误入的股票名，并清理过期标签与碎片别名。每日自动一次，也可立即执行。标记解析跟管理员「推送设置 → AI 摘要」同一套 Grok。</p></div>
+        <p class="section-meta">合并种子黑话、解析 $标记$ 新股、去掉指数/ETF 误入的股票名，并清理过期标签与碎片别名。每日自动一次，也可立即执行。标记解析跟管理员「推送设置 → AI 摘要」同一套 LLM。</p></div>
       </header>
       <p class="section-meta" style="margin-top:8px" id="tag-maintain-meta">${escapeHtml(adminMaintainSummary(data))}</p>
-      ${data.maintain && data.maintain.llm_ready ? "" : `<p class="section-meta">未检测到 Grok。请到「推送设置 → AI 摘要」配置，或设环境变量 LLM_API_KEY。点运行仍会合并种子、清碎片和误标。</p>`}
+      ${data.maintain && data.maintain.llm_ready ? "" : `<p class="section-meta">未检测到站点 LLM。请到「推送设置 → AI 摘要」配置 OpenAI 兼容接口，或设环境变量 LLM_API_KEY。点运行仍会合并种子、清碎片和误标。</p>`}
       <div class="toolbar" style="margin-top:12px">
         <button class="btn-normal" onclick="adminMaintainTags('pending')">维护并回填待打标</button>
         <button class="btn-ghost" onclick="adminMaintainTags('none')">仅维护词表</button>
@@ -11769,7 +11908,7 @@ async function loadAdminAudit() {
     </section>
     <section class="section-panel">
       <header class="section-head"><div><h2 class="section-title">操作日志</h2>
-      <p class="section-meta">管理员关键操作记录（改权限/删用户/增删大V/注册码/cookie）。</p></div></header>
+      <p class="section-meta">管理员关键操作、以及用户知识库超额（操作 ima_quota，目标是用户名）。</p></div></header>
       <div class="table-wrap">
         <table>
           <thead><tr><th scope="col">时间</th><th scope="col">管理员</th><th scope="col">操作</th><th scope="col">目标</th><th scope="col">详情</th></tr></thead>

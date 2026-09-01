@@ -331,6 +331,60 @@ def test_user_cannot_see_kb_until_granted_and_subscribed(tmp_path, monkeypatch):
     assert client.get("/api/ima-documents/file_abc", headers=user_headers).status_code == 404
 
 
+def test_ima_file_quota_blocks_burst_but_exempts_admin(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    import app.user_quota as quotas
+
+    monkeypatch.setattr(quotas, "IMA_PDF_BURST", 2)
+    monkeypatch.setattr(quotas, "IMA_LIST_BURST", 2)
+    client = TestClient(create_app(db_path=tmp_path / "quota.sqlite"))
+    user_headers = _headers(client, "reader", "KBQUOTA")
+    admin_headers = _headers(client, "kb_owner_q", "KBADMQ", admin=True)
+    store = client.app.state.ima_documents.store
+    record = {"media_id": "file_abc", "name": "Report.pdf", "day": "0825", "size": 8}
+    pdf = store.pdf_path(record)
+    txt = store.txt_path(record)
+    pdf.parent.mkdir(parents=True)
+    pdf.write_bytes(b"%PDF-1.7 extra")
+    txt.write_text("text", encoding="utf-8")
+    store.save_manifest([record])
+    store.save_state(
+        {
+            "file_abc": {
+                "pdf": str(pdf.relative_to(store.root)),
+                "txt": str(txt.relative_to(store.root)),
+                "size": 8,
+                "chars": 4,
+            }
+        }
+    )
+    group_id = client.get("/api/admin/ima-collector", headers=admin_headers).json()["config"]["groups"][0]["id"]
+    assert client.put(
+        f"/api/admin/ima-collector/groups/{group_id}/acl",
+        headers=admin_headers,
+        json={"usernames": ["reader"]},
+    ).status_code == 200
+    pdf_path = f"/api/ima-documents/file_abc/pdf?group={group_id}"
+    txt_path = f"/api/ima-documents/file_abc/text?group={group_id}"
+    assert client.get(pdf_path, headers=user_headers).status_code == 200
+    assert client.get(txt_path, headers=user_headers).status_code == 200
+    blocked = client.get(pdf_path, headers=user_headers)
+    assert blocked.status_code == 429
+    assert "频繁" in blocked.json()["detail"]
+    assert blocked.headers.get("retry-after")
+    assert client.get(pdf_path, headers=user_headers).status_code == 429
+    logs = client.get("/api/admin/logs", headers=admin_headers).json()
+    quota_logs = [row for row in logs if row.get("action") == "ima_quota"]
+    assert len(quota_logs) == 1
+    assert quota_logs[0]["target"] == "reader"
+    assert client.get(pdf_path, headers=admin_headers).status_code == 200
+    assert client.get("/api/ima-documents", headers=user_headers).status_code == 200
+    assert client.get("/api/ima-documents", headers=user_headers).status_code == 200
+    listed = client.get("/api/ima-documents", headers=user_headers)
+    assert listed.status_code == 429
+    assert "频繁" in listed.json()["detail"]
+
+
 def test_admin_sets_user_ima_kb_groups(tmp_path, monkeypatch):
     monkeypatch.setenv("DAV_UI_ONLY", "1")
     client = TestClient(create_app(db_path=tmp_path / "user-kb.sqlite"))

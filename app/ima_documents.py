@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http.client import IncompleteRead
 from pathlib import Path
 from typing import Any
@@ -35,6 +35,7 @@ IMA_DOWNLOAD_RETRY_DELAYS = (2, 8)
 IMA_INDEX_VERSION = 4  # v4：IMA sort_date 年份取媒体真实创建年（原按当前年补全会跨年排错）；升位强制重建
 IMA_STATE_FLUSH_COUNT = 20
 IMA_STATE_FLUSH_SECONDS = 2.0
+IMA_SCHEDULE_HOUR = 1  # 上海时间每日自动同步起点
 
 BASE = os.environ.get("IMA_BASE", "https://ima.qq.com/cgi-bin")
 GUID = os.environ.get("IMA_GUID", "7497986728819336")
@@ -48,6 +49,30 @@ IUA = os.environ.get(
 )
 CLIENT_TYPE = "256001"
 TOKEN_TTL = 7000
+
+
+def next_shanghai_schedule(now: float, hour: int = IMA_SCHEDULE_HOUR) -> float:
+    dt = datetime.fromtimestamp(now, CN_TZ)
+    gate = dt.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if dt >= gate:
+        gate += timedelta(days=1)
+    return gate.timestamp()
+
+
+def shanghai_schedule_gate(now: float, hour: int = IMA_SCHEDULE_HOUR) -> float:
+    dt = datetime.fromtimestamp(now, CN_TZ)
+    return dt.replace(hour=hour, minute=0, second=0, microsecond=0).timestamp()
+
+
+def group_next_run_at(group: "ImaGroupConfig", last_started_at: float, now: float) -> float:
+    interval = _clamp_group_interval(group.interval_seconds)
+    if interval >= 86400:
+        gate = shanghai_schedule_gate(now)
+        if now >= gate and last_started_at < gate:
+            return now
+        return next_shanghai_schedule(now)
+    return max(now, last_started_at + interval)
+
 
 IMA_PURE_UID_KEY = "ima_pure_uid"
 IMA_PURE_REFRESH_TOKEN_KEY = "ima_pure_refresh_token"
@@ -372,10 +397,13 @@ def _count_value(item: dict[str, Any], keys: tuple[str, ...]) -> int | None:
     return None
 
 
+def _folder_count_source(item: dict[str, Any]) -> dict[str, Any]:
+    info = item.get("folder_info") if isinstance(item.get("folder_info"), dict) else {}
+    return {**info, **item}
+
 
 def ima_folder_listing_hint(item: dict[str, Any]) -> tuple[int | None, int | None, int | None]:
-    info = item.get("folder_info") if isinstance(item.get("folder_info"), dict) else {}
-    merged = {**info, **item}
+    merged = _folder_count_source(item)
     files = _count_value(merged, ("file_number", "file_count"))
     folders = _count_value(merged, ("folder_number", "sub_folder_count", "children_count", "child_count"))
     mtime = _optional_int(merged.get("update_time") or merged.get("last_modify_time"))
@@ -391,7 +419,10 @@ def _listing_cache_hit(node: dict[str, Any], hint: tuple[int | None, int | None,
     return False
 
 def ima_folder_children_hint(item: dict[str, Any]) -> bool | None:
-    count = _count_value(item, ("folder_number", "sub_folder_count", "children_count", "child_count"))
+    count = _count_value(
+        _folder_count_source(item),
+        ("folder_number", "sub_folder_count", "children_count", "child_count"),
+    )
     return None if count is None else count > 0
 
 
@@ -407,8 +438,9 @@ def normalize_ima_folder_item(item: dict[str, Any], parent_id: str) -> dict[str,
         "parent_id": parent_id,
         "has_children": ima_folder_children_hint(item),
     }
-    folder_count = _count_value(item, ("folder_number", "sub_folder_count"))
-    file_count = _count_value(item, ("file_number", "file_count"))
+    counts = _folder_count_source(item)
+    folder_count = _count_value(counts, ("folder_number", "sub_folder_count"))
+    file_count = _count_value(counts, ("file_number", "file_count"))
     if folder_count is not None:
         normalized["folder_count"] = folder_count
     if file_count is not None:
@@ -881,20 +913,25 @@ class ImaPureClient:
             )
             status = None
             data = {}
-            for attempt in range(4):
-                data, _ = self._open_json(request)
-                status = _ima_response_status(data, "IMA list")
-                if _ima_success_status(status):
-                    break
-                if status not in (51, 429, 30005) or attempt == 3:
-                    raise RuntimeError(f"IMA list failed code={status}")
-                time.sleep(1.5 * (attempt + 1))
-                request = urllib.request.Request(
-                    BASE + "/knowledge_tab_reader/get_knowledge_list",
-                    data=json.dumps(body, ensure_ascii=False).encode(),
-                    method="POST",
-                    headers=self._headers(self._token()),
-                )
+            try:
+                for attempt in range(4):
+                    data, _ = self._open_json(request)
+                    status = _ima_response_status(data, "IMA list")
+                    if _ima_success_status(status):
+                        break
+                    if status not in (51, 429, 30005) or attempt == 3:
+                        raise RuntimeError(f"IMA list failed code={status}")
+                    time.sleep(1.5 * (attempt + 1))
+                    request = urllib.request.Request(
+                        BASE + "/knowledge_tab_reader/get_knowledge_list",
+                        data=json.dumps(body, ensure_ascii=False).encode(),
+                        method="POST",
+                        headers=self._headers(self._token()),
+                    )
+            except Exception:
+                if folders_only and items:
+                    return items
+                raise
             payload = self._payload(data)
             if not isinstance(payload, dict):
                 raise RuntimeError("IMA list returned invalid response")
@@ -2537,8 +2574,10 @@ class ImaDocumentService:
         *,
         archive_root: str | Path | None = None,
         storage_status: ImaStorageStatus | None = None,
+        llm_config: Any = None,
     ):
         self.db = db
+        self.llm_config = llm_config
         self.storage_status = storage_status or ImaStorageStatus(None, remote=False)
         self.store = ImaDocumentStore(
             index_root,
@@ -2553,6 +2592,7 @@ class ImaDocumentService:
         self._discovery_lock = threading.Lock()
         self._scheduler_thread: threading.Thread | None = None
         self._worker_thread: threading.Thread | None = None
+        self._local_scan_thread: threading.Thread | None = None
         self._running = False
         self._next_run_at = 0.0
         self._cancel_requested = False
@@ -2711,7 +2751,9 @@ class ImaDocumentService:
         else:
             records = []
         state = state_value if isinstance(state_value, dict) else {}
-        return self.store._normalize_manifest_records(records, groups), state
+        normalized = self.store._normalize_manifest_records(records, groups)
+        overrides = load_title_overrides(self.store.archive_root)
+        return apply_title_overrides(normalized, overrides), state
 
     def _index_row(
         self, record: dict[str, Any], state: dict[str, dict[str, Any]]
@@ -2806,6 +2848,9 @@ class ImaDocumentService:
                 continue
         try:
             replacer(group_id, rows)
+            setter = getattr(self.db, "set_ima_index_fingerprint", None)
+            if callable(setter):
+                setter(self._source_fingerprint())
         except Exception as exc:  # noqa: BLE001
             logger.warning("IMA index group replace failed error=%s", _safe_error(exc))
 
@@ -2835,17 +2880,14 @@ class ImaDocumentService:
         status = self.read_index_status()
         counter = getattr(self.db, "ima_document_index_count", None)
         count = int(counter()) if callable(counter) else 0
+        getter = getattr(self.db, "ima_document_index_meta", None)
+        meta = getter() if callable(getter) else {}
+        fingerprint = str(meta.get("fingerprint") or "")
+        if fingerprint != self._source_fingerprint():
+            return False
         if status["status"] == "ready":
-            if count > 0:
-                return True
-            getter = getattr(self.db, "ima_document_index_meta", None)
-            fingerprint = ""
-            if callable(getter):
-                fingerprint = str(getter().get("fingerprint") or "")
-            return fingerprint == self._source_fingerprint()
-        if status["status"] in {"rebuilding", "failed"}:
-            return count > 0
-        return False
+            return True
+        return status["status"] in {"rebuilding", "failed"} and count > 0
 
     def rebuild_read_index(
         self, groups: tuple[ImaGroupConfig, ...] | None = None
@@ -3225,6 +3267,36 @@ class ImaDocumentService:
         libraries = [item for item in value.get("libraries") or [] if isinstance(item, dict)]
         return {"scanned_at": str(value.get("scanned_at") or ""), "libraries": libraries}
 
+    def _cicc_incr_ts(self) -> float:
+        path = self.store.local_root / ".cicc" / "status.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError):
+            return 0.0
+        if not isinstance(data, dict):
+            return 0.0
+        storage = data.get("storage") if isinstance(data.get("storage"), dict) else {}
+        summary = storage.get("last_incr_summary") if isinstance(storage.get("last_incr_summary"), dict) else {}
+        if not summary:
+            summary = data.get("last_incremental") if isinstance(data.get("last_incremental"), dict) else {}
+        try:
+            return float(summary.get("ts") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _local_scan_ts(self) -> float:
+        raw = str(self.local_scan_status().get("scanned_at") or "").strip()
+        if not raw:
+            return 0.0
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return 0.0
+
+    def _local_libraries_need_scan(self) -> bool:
+        incr = self._cicc_incr_ts()
+        return bool(incr) and incr > self._local_scan_ts()
+
     def product_groups(self) -> tuple[ImaGroupConfig, ...]:
         """用户侧组：IMA 组 + 已启用的本地库；停用/报错的本地库不出现。"""
         local = tuple(
@@ -3343,6 +3415,12 @@ class ImaDocumentService:
                 )
         if removed:
             self.store.save_state(state)
+            setter = getattr(self.db, "set_ima_index_fingerprint", None)
+            if callable(setter):
+                setter(self._source_fingerprint())
+            marker = getattr(self.db, "mark_ima_document_index", None)
+            if callable(marker):
+                marker("ready")
 
     def set_local_library_enabled(self, slug: str, enabled: bool) -> dict[str, Any]:
         """写标记文件 enabled 字段；磁盘写失败抛 OSError 由路由层报错。"""
@@ -3415,27 +3493,53 @@ class ImaDocumentService:
             worker = self._worker_thread
         if worker and worker.is_alive() and worker is not threading.current_thread():
             worker.join()
+        with self._state_lock:
+            local_scan = self._local_scan_thread
+        if local_scan and local_scan.is_alive() and local_scan is not threading.current_thread():
+            local_scan.join()
 
     def _schedule_loop(self) -> None:
         while not self._stop.wait(30):
             if self._stop.is_set():
                 break
-            cfg = self.config()
-            now = time.time()
-            with self._state_lock:
-                if not self._next_run_at:
-                    self._next_run_at = now + self._scheduled_delay(cfg)
-                due = now >= self._next_run_at
-            if due:
-                self.trigger(scheduled=True)
+            self._schedule_once()
+
+    def _scheduled_run_at(self, now: float) -> float:
+        runtime = self._group_runtime()
+        candidates = []
+        for group in self._mounted_groups():
+            item = runtime.get(group.id) if isinstance(runtime.get(group.id), dict) else {}
+            try:
+                last = float((item or {}).get("last_started_at") or 0)
+            except (TypeError, ValueError):
+                last = 0.0
+            candidates.append(group_next_run_at(group, last, now))
+        return min(candidates, default=next_shanghai_schedule(now))
+
+    def _schedule_once(self, now: float | None = None) -> dict[str, Any]:
+        current = time.time() if now is None else now
+        next_run = self._scheduled_run_at(current)
+        with self._state_lock:
+            self._next_run_at = next_run
+        result = self.trigger(scheduled=True) if current >= next_run else {"status": "not_due"}
+        if self._local_libraries_need_scan() and result.get("status") != "started":
+            self._start_local_scan()
+        return result
+
+    def _start_local_scan(self) -> None:
+        with self._state_lock:
+            if self._local_scan_thread and self._local_scan_thread.is_alive():
+                return
+            self._local_scan_thread = threading.Thread(
+                target=self.scan_local_libraries,
+                name="ima-local-library-scan",
+                daemon=True,
+            )
+            self._local_scan_thread.start()
 
     def _mounted_groups(self, cfg: ImaDocumentConfig | None = None) -> list[ImaGroupConfig]:
         groups = (cfg or self.config()).groups
         return [group for group in groups if group.enabled and group.mount_folder_ids]
-
-    def _scheduled_delay(self, cfg: ImaDocumentConfig | None = None) -> int:
-        mounted = self._mounted_groups(cfg)
-        return max(1800, min((group.interval_seconds for group in mounted), default=3600))
 
     def _group_runtime(self) -> dict[str, Any]:
         raw = self.db.get_setting(IMA_PURE_GROUP_RUNTIME_KEY) or "{}"
@@ -3465,7 +3569,11 @@ class ImaDocumentService:
             last = float(item.get("last_started_at") or 0)
         except (TypeError, ValueError):
             last = 0.0
-        return (now - last) >= _clamp_group_interval(group.interval_seconds)
+        interval = _clamp_group_interval(group.interval_seconds)
+        if interval >= 86400:
+            gate = shanghai_schedule_gate(now)
+            return now >= gate and last < gate
+        return (now - last) >= interval
 
     def trigger(self, scheduled: bool = False, group_id: str = "") -> dict[str, Any]:
         cfg = self.config()
@@ -3493,7 +3601,6 @@ class ImaDocumentService:
             ):
                 return {"status": "too_soon", "retry_at": int(last_started + cfg.interval_seconds)}
             if scheduled:
-                self._next_run_at = now + self._scheduled_delay(cfg)
                 if not any(self._group_due(group, now) for group in self._mounted_groups(cfg)):
                     return {"status": "not_due"}
             else:
@@ -3511,6 +3618,16 @@ class ImaDocumentService:
     def _worker(self) -> None:
         try:
             self.sync_once()
+            try:
+                self.scan_local_libraries()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Local library scan failed error=%s", _safe_error(exc))
+            self._rebuild_index_if_needed()
+            try:
+                from .ima_title_zh import refresh_bank_titles_zh
+                refresh_bank_titles_zh(self)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("投行标题翻译失败 error=%s", _safe_error(exc))
         except Exception as exc:  # noqa: BLE001 - worker must release its lock
             error = _safe_error(exc)
             logger.error("IMA document sync failed error=%s", error)
@@ -3794,13 +3911,12 @@ class ImaDocumentService:
                 self._sync_group_id = ""
                 scheduled_flag = self._sync_scheduled
                 self._sync_scheduled = False
-            try:
-                # 本地库廉价遍历搭 IMA 同步周期一次；失败只记日志不挡 IMA
-                self._scan_local_libraries_locked()
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Local library scan failed error=%s", _safe_error(exc))
             cfg = self.config()
             if not cfg.credentials_configured:
+                try:
+                    self._scan_local_libraries_locked()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Local library scan failed error=%s", _safe_error(exc))
                 return {"status": "not_configured"}
             blocked = self._storage_block_status()
             if blocked:

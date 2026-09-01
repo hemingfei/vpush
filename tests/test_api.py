@@ -3362,6 +3362,9 @@ def test_stats_returns_source_stability_fields():
     assert len(data["recent_source_events"]) == 2
     assert data["retry_pending"] == 2
     assert any(h["id"] == kid and h["last_post_at"] for h in data["kol_health"])
+    health = next(h for h in data["kol_health"] if h["id"] == kid)
+    assert health["subscriber_count"] == 0
+    assert data["pending_kol_requests"] == 0
     assert "push_alert_last_at" in data["alerts"]
 
 
@@ -5431,3 +5434,73 @@ def test_ima_storage_admin_actions_conflict_when_local():
     assert refresh.status_code == 409
     assert backup.status_code == 409
     assert "未启用远程归档" in refresh.json()["detail"]
+
+
+def test_llm_models_lists_openai_compatible_ids(monkeypatch):
+    client = make_client()
+    headers = auth_headers(client)
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, headers=None):
+            assert url == "https://api.openai.com/v1/models"
+            assert headers["Authorization"] == "Bearer sk-test"
+            return FakeResp()
+
+    monkeypatch.setattr("httpx.Client", FakeClient)
+    monkeypatch.setattr("app.url_safety.is_allowed_user_llm_base", lambda url: True)
+    resp = client.post(
+        "/api/me/llm-models",
+        json={"llm_api_base": "https://api.openai.com/v1", "llm_api_key": "sk-test"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["models"] == ["gpt-4o", "gpt-4o-mini"]
+
+
+def test_llm_models_allows_intranet_base(monkeypatch):
+    client = make_client()
+    headers = auth_headers(client)
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"data": [{"id": "local-model"}]}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, headers=None):
+            assert url == "http://127.0.0.1:11434/v1/models"
+            return FakeResp()
+
+    monkeypatch.setattr("httpx.Client", FakeClient)
+    resp = client.post(
+        "/api/me/llm-models",
+        json={"llm_api_base": "http://127.0.0.1:11434/v1", "llm_api_key": "sk-test"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["models"] == ["local-model"]
