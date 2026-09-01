@@ -10,6 +10,7 @@ import shutil
 import sqlite3
 import threading
 import time
+import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -2276,19 +2277,6 @@ class DB:
         rows = self._rows("SELECT COUNT(*) AS n FROM users")
         return rows[0]["n"]
 
-    def list_user_news_source_ids(
-        self, user_id: int, include_archived: bool = False
-    ) -> list[int]:
-        sql = (
-            "SELECT u.source_id FROM user_news_sources u "
-            "JOIN news_sources s ON s.id = u.source_id WHERE u.user_id = ?"
-        )
-        params: list[object] = [user_id]
-        if not include_archived:
-            sql += " AND s.archived_at IS NULL"
-        sql += " ORDER BY u.source_id"
-        return [row["source_id"] for row in self._rows(sql, params)]
-
     def _insert_default_news_sources(self, user_id: int) -> None:
         self._conn.execute(
             "INSERT OR IGNORE INTO user_news_sources (user_id, source_id) "
@@ -2397,6 +2385,7 @@ class DB:
         updates: dict,
         *,
         keywords=_UNSET,
+        news_source_ids=_UNSET,
         revoke_tokens: bool = False,
     ) -> None:
         """一次提交用户字段与关键词；密码变更可同时撤销既有 token。"""
@@ -2418,6 +2407,24 @@ class DB:
                         self._conn.execute(
                             "INSERT INTO user_keywords (user_id, keyword) VALUES (?, ?)",
                             (user_id, keyword),
+                        )
+                if news_source_ids is not _UNSET:
+                    ids = list(dict.fromkeys(int(source_id) for source_id in news_source_ids))
+                    if ids:
+                        placeholders = ",".join("?" * len(ids))
+                        valid = self._conn.execute(
+                            f"SELECT id FROM news_sources WHERE archived_at IS NULL AND id IN ({placeholders})",
+                            ids,
+                        ).fetchall()
+                        if {row["id"] for row in valid} != set(ids):
+                            raise ValueError("来源不存在或已归档")
+                    self._conn.execute(
+                        "DELETE FROM user_news_sources WHERE user_id = ?", (user_id,)
+                    )
+                    for source_id in ids:
+                        self._conn.execute(
+                            "INSERT INTO user_news_sources (user_id, source_id) VALUES (?, ?)",
+                            (user_id, source_id),
                         )
                 self._conn.commit()
             except Exception:
@@ -2665,6 +2672,402 @@ class DB:
             except Exception:
                 self._conn.rollback()
                 raise
+
+    # ---- Financial news ----
+    def list_news_sources(self, include_archived: bool = False) -> list[dict]:
+        sql = "SELECT * FROM news_sources"
+        if not include_archived:
+            sql += " WHERE archived_at IS NULL"
+        sql += " ORDER BY id"
+        return self._rows(sql)
+
+    def get_news_source(self, source_id: int) -> dict | None:
+        rows = self._rows("SELECT * FROM news_sources WHERE id = ?", (source_id,))
+        return rows[0] if rows else None
+
+    def add_news_source(self, name: str) -> int:
+        name = (name or "").strip()
+        if not name or len(name) > 60:
+            raise ValueError("媒体名称长度必须为 1-60 个字符")
+        try:
+            return self._execute(
+                "INSERT INTO news_sources (slug, name, built_in, default_selected) "
+                "VALUES (?, ?, 0, 0)",
+                (f"custom-{uuid.uuid4().hex}", name),
+            )
+        except sqlite3.IntegrityError:
+            raise ValueError("媒体名称已存在") from None
+
+    def update_news_source(
+        self,
+        source_id: int,
+        *,
+        name: str | None = None,
+        enabled: bool | None = None,
+    ) -> dict | None:
+        current = self.get_news_source(source_id)
+        if current is None:
+            return None
+        sets: list[str] = []
+        params: list[object] = []
+        if name is not None:
+            name = name.strip()
+            if not name or len(name) > 60:
+                raise ValueError("媒体名称长度必须为 1-60 个字符")
+            sets.append("name = ?")
+            params.append(name)
+        if enabled is not None:
+            sets.append("enabled = ?")
+            params.append(1 if enabled else 0)
+        if not sets:
+            return current
+        sets.append("updated_at = datetime('now')")
+        params.append(source_id)
+        try:
+            self._execute(
+                f"UPDATE news_sources SET {', '.join(sets)} WHERE id = ?", params
+            )
+        except sqlite3.IntegrityError:
+            raise ValueError("媒体名称已存在") from None
+        return self.get_news_source(source_id)
+
+    def set_news_source_archived(self, source_id: int, archived: bool) -> None:
+        self._execute(
+            "UPDATE news_sources SET archived_at = ?, updated_at = datetime('now') WHERE id = ?",
+            (datetime.now(UTC).isoformat() if archived else None, source_id),
+        )
+
+    def list_news_feeds(
+        self, source_id: int | None = None, include_archived: bool = False
+    ) -> list[dict]:
+        conds: list[str] = []
+        params: list[object] = []
+        if source_id is not None:
+            conds.append("source_id = ?")
+            params.append(source_id)
+        if not include_archived:
+            conds.append("archived_at IS NULL")
+        sql = "SELECT * FROM news_feeds"
+        if conds:
+            sql += " WHERE " + " AND ".join(conds)
+        sql += " ORDER BY id"
+        return self._rows(sql, params)
+
+    def get_news_feed(self, feed_id: int) -> dict | None:
+        rows = self._rows("SELECT * FROM news_feeds WHERE id = ?", (feed_id,))
+        return rows[0] if rows else None
+
+    def get_news_feed_by_normalized_url(self, normalized_url: str) -> dict | None:
+        rows = self._rows(
+            "SELECT * FROM news_feeds WHERE normalized_url = ?", (normalized_url,)
+        )
+        return rows[0] if rows else None
+
+    def add_news_feed(
+        self, source_id: int, name: str, url: str, normalized_url: str
+    ) -> int:
+        name, url, normalized_url = name.strip(), url.strip(), normalized_url.strip()
+        if not name or len(name) > 80:
+            raise ValueError("Feed 名称长度必须为 1-80 个字符")
+        if not url or len(url) > 2048 or not normalized_url:
+            raise ValueError("Feed URL 无效")
+        try:
+            return self._execute(
+                "INSERT INTO news_feeds (source_id, name, url, normalized_url) "
+                "VALUES (?, ?, ?, ?)",
+                (source_id, name, url, normalized_url),
+            )
+        except sqlite3.IntegrityError as exc:
+            if "normalized_url" in str(exc):
+                raise ValueError("Feed URL 已存在") from None
+            raise ValueError("该媒体下的 Feed 名称已存在") from None
+
+    def update_news_feed(
+        self,
+        feed_id: int,
+        *,
+        name: str | None = None,
+        url: str | None = None,
+        normalized_url: str | None = None,
+        enabled: bool | None = None,
+    ) -> dict | None:
+        current = self.get_news_feed(feed_id)
+        if current is None:
+            return None
+        next_name = current["name"] if name is None else name.strip()
+        next_url = current["url"] if url is None else url.strip()
+        next_normalized = (
+            current["normalized_url"] if normalized_url is None else normalized_url.strip()
+        )
+        if not next_name or len(next_name) > 80:
+            raise ValueError("Feed 名称长度必须为 1-80 个字符")
+        if not next_url or len(next_url) > 2048 or not next_normalized:
+            raise ValueError("Feed URL 无效")
+        url_changed = (
+            next_url != current["url"] or next_normalized != current["normalized_url"]
+        )
+        sets = ["name = ?", "url = ?", "normalized_url = ?"]
+        params: list[object] = [next_name, next_url, next_normalized]
+        if enabled is not None:
+            sets.append("enabled = ?")
+            params.append(1 if enabled else 0)
+        if url_changed:
+            sets.extend([
+                "etag = ''", "last_modified = ''", "last_attempt_at = NULL",
+                "last_success_at = NULL", "last_error_code = ''",
+                "last_error_detail = ''", "consecutive_failures = 0",
+            ])
+        sets.append("updated_at = datetime('now')")
+        params.append(feed_id)
+        try:
+            self._execute(
+                f"UPDATE news_feeds SET {', '.join(sets)} WHERE id = ?", params
+            )
+        except sqlite3.IntegrityError as exc:
+            if "normalized_url" in str(exc):
+                raise ValueError("Feed URL 已存在") from None
+            raise ValueError("该媒体下的 Feed 名称已存在") from None
+        return self.get_news_feed(feed_id)
+
+    def set_news_feed_archived(self, feed_id: int, archived: bool) -> None:
+        self._execute(
+            "UPDATE news_feeds SET archived_at = ?, updated_at = datetime('now') WHERE id = ?",
+            (datetime.now(UTC).isoformat() if archived else None, feed_id),
+        )
+
+    def list_user_news_source_ids(
+        self, user_id: int, include_archived: bool = False
+    ) -> list[int]:
+        sql = (
+            "SELECT u.source_id FROM user_news_sources u "
+            "JOIN news_sources s ON s.id = u.source_id WHERE u.user_id = ?"
+        )
+        params: list[object] = [user_id]
+        if not include_archived:
+            sql += " AND s.archived_at IS NULL"
+        sql += " ORDER BY u.source_id"
+        return [row["source_id"] for row in self._rows(sql, params)]
+
+    def set_user_news_sources(self, user_id: int, source_ids: list[int]) -> None:
+        ids = list(dict.fromkeys(int(source_id) for source_id in source_ids))
+        if ids:
+            placeholders = ",".join("?" * len(ids))
+            rows = self._rows(
+                f"SELECT id FROM news_sources WHERE archived_at IS NULL AND id IN ({placeholders})",
+                ids,
+            )
+            if {row["id"] for row in rows} != set(ids):
+                raise ValueError("来源不存在或已归档")
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                self._conn.execute(
+                    "DELETE FROM user_news_sources WHERE user_id = ?", (user_id,)
+                )
+                for source_id in ids:
+                    self._conn.execute(
+                        "INSERT INTO user_news_sources (user_id, source_id) VALUES (?, ?)",
+                        (user_id, source_id),
+                    )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def list_due_news_feeds(self, before_iso: str) -> list[dict]:
+        return self._rows(
+            "SELECT f.*, s.name AS source_name, s.enabled AS source_enabled "
+            "FROM news_feeds f JOIN news_sources s ON s.id = f.source_id "
+            "WHERE f.enabled = 1 AND f.archived_at IS NULL "
+            "AND s.enabled = 1 AND s.archived_at IS NULL "
+            "AND (f.last_attempt_at IS NULL OR f.last_attempt_at < ?) ORDER BY f.id",
+            (before_iso,),
+        )
+
+    def mark_news_feed_attempt(self, feed_id: int, attempted_at: str) -> None:
+        self._execute(
+            "UPDATE news_feeds SET last_attempt_at = ?, updated_at = datetime('now') WHERE id = ?",
+            (attempted_at, feed_id),
+        )
+
+    def mark_news_feed_success(
+        self,
+        feed_id: int,
+        *,
+        etag: str,
+        last_modified: str,
+        succeeded_at: str,
+    ) -> None:
+        self._execute(
+            "UPDATE news_feeds SET etag = ?, last_modified = ?, last_success_at = ?, "
+            "last_error_code = '', last_error_detail = '', consecutive_failures = 0, "
+            "updated_at = datetime('now') WHERE id = ?",
+            (etag or "", last_modified or "", succeeded_at, feed_id),
+        )
+
+    def mark_news_feed_failure(
+        self, feed_id: int, code: str, detail: str, attempted_at: str
+    ) -> None:
+        self._execute(
+            "UPDATE news_feeds SET last_error_code = ?, last_error_detail = ?, "
+            "consecutive_failures = consecutive_failures + 1, last_attempt_at = ?, "
+            "updated_at = datetime('now') WHERE id = ?",
+            (code, detail[:300], attempted_at, feed_id),
+        )
+
+    def upsert_news_article(self, article: dict) -> int:
+        images = article.get("images", [])
+        if not isinstance(images, list):
+            images = []
+        values = (
+            article["source_id"], article["feed_id"], article["external_id"],
+            article["title"], article["url"], article.get("author", ""),
+            article.get("summary", ""), article.get("content_html", ""),
+            json.dumps(images, ensure_ascii=False), article["published_at"],
+            article["fetched_at"], article.get("content_hash", ""),
+        )
+        with self._lock:
+            try:
+                self._conn.execute(
+                    "INSERT INTO news_articles "
+                    "(source_id, feed_id, external_id, title, url, author, summary, "
+                    "content_html, images, published_at, fetched_at, content_hash) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(source_id, external_id) DO UPDATE SET "
+                    "feed_id = excluded.feed_id, title = excluded.title, url = excluded.url, "
+                    "author = excluded.author, summary = excluded.summary, "
+                    "content_html = excluded.content_html, images = excluded.images, "
+                    "published_at = excluded.published_at, fetched_at = excluded.fetched_at, "
+                    "content_hash = excluded.content_hash",
+                    values,
+                )
+                row = self._conn.execute(
+                    "SELECT id FROM news_articles WHERE source_id = ? AND external_id = ?",
+                    (article["source_id"], article["external_id"]),
+                ).fetchone()
+                self._conn.commit()
+                return row["id"]
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    @staticmethod
+    def _normalize_news_article(row: dict) -> dict:
+        raw_images = row.get("images")
+        try:
+            images = json.loads(raw_images) if isinstance(raw_images, str) else raw_images
+        except (TypeError, ValueError):
+            images = []
+        row["images"] = images if isinstance(images, list) else []
+        row["has_image"] = bool(row["images"])
+        return row
+
+    def delete_news_articles_older_than(self, days: int) -> int:
+        if days < 0:
+            return 0
+        cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM news_articles WHERE published_at < ?", (cutoff,)
+            )
+            self._conn.commit()
+            return cur.rowcount
+
+    def _news_article_filter(
+        self, user_id: int, source_id: int | None, q: str
+    ) -> tuple[str, list[object]]:
+        conds = [
+            "u.user_id = ?",
+            "s.id = a.source_id",
+            "s.archived_at IS NULL",
+        ]
+        params: list[object] = [user_id]
+        if source_id is not None:
+            conds.append("a.source_id = ?")
+            params.append(source_id)
+        if q:
+            conds.append("(a.title LIKE ? OR a.summary LIKE ?)")
+            like = f"%{q}%"
+            params.extend([like, like])
+        return " AND ".join(conds), params
+
+    def list_news_articles(
+        self,
+        user_id: int,
+        *,
+        source_id: int | None,
+        q: str,
+        limit: int,
+        offset: int,
+    ) -> list[dict]:
+        where, params = self._news_article_filter(user_id, source_id, (q or "").strip())
+        params.extend([max(1, min(int(limit), 100)), max(0, int(offset))])
+        rows = self._rows(
+            "SELECT a.*, s.name AS source_name, s.slug AS source_slug, s.enabled AS source_enabled "
+            "FROM news_articles a JOIN user_news_sources u ON u.source_id = a.source_id "
+            "JOIN news_sources s ON s.id = a.source_id "
+            f"WHERE {where} ORDER BY a.published_at DESC, a.id DESC LIMIT ? OFFSET ?",
+            params,
+        )
+        return [self._normalize_news_article(row) for row in rows]
+
+    def count_news_articles(self, user_id: int, *, source_id: int | None, q: str) -> int:
+        where, params = self._news_article_filter(user_id, source_id, (q or "").strip())
+        rows = self._rows(
+            "SELECT COUNT(*) AS n FROM news_articles a "
+            "JOIN user_news_sources u ON u.source_id = a.source_id "
+            "JOIN news_sources s ON s.id = a.source_id "
+            f"WHERE {where}",
+            params,
+        )
+        return _to_int(rows[0]["n"]) if rows else 0
+
+    def get_news_article(
+        self, article_id: int, user_id: int | None = None
+    ) -> dict | None:
+        sql = (
+            "SELECT a.*, s.name AS source_name, s.slug AS source_slug, "
+            "s.enabled AS source_enabled FROM news_articles a "
+            "JOIN news_sources s ON s.id = a.source_id "
+            "WHERE a.id = ? AND s.archived_at IS NULL"
+        )
+        params: list[object] = [article_id]
+        if user_id is not None:
+            sql += " AND EXISTS (SELECT 1 FROM user_news_sources u WHERE u.user_id = ? AND u.source_id = a.source_id)"
+            params.append(user_id)
+        rows = self._rows(sql, params)
+        return self._normalize_news_article(rows[0]) if rows else None
+
+    def advance_news_seen(self, user_id: int, view_started_at: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE users SET news_last_seen_at = ? WHERE id = ? "
+                "AND (news_last_seen_at IS NULL OR news_last_seen_at < ?)",
+                (view_started_at, user_id, view_started_at),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def news_source_statuses(self, user_id: int) -> list[dict]:
+        statuses = []
+        for source_id in self.list_user_news_source_ids(user_id):
+            source = self.get_news_source(source_id)
+            feeds = self.list_news_feeds(source_id)
+            successes = [feed["last_success_at"] for feed in feeds if feed["last_success_at"]]
+            if not source["enabled"] or not feeds:
+                code = "paused"
+            elif any(feed["consecutive_failures"] > 0 for feed in feeds if not feed["last_success_at"]):
+                code = "unavailable"
+            elif any(feed["consecutive_failures"] > 0 for feed in feeds):
+                code = "delayed"
+            else:
+                code = "ok"
+            statuses.append({
+                "id": source_id,
+                "code": code,
+                "last_success_at": max(successes) if successes else None,
+            })
+        return statuses
 
     # ---- Subscription ----
     def add_subscription(self, user_id: int, kol_id: int, type: str = "post") -> bool:
@@ -3083,6 +3486,25 @@ class DB:
                             ),
                         )
                 self._conn.execute(
+                    "INSERT OR IGNORE INTO user_news_sources (user_id, source_id, selected_at) "
+                    "SELECT ?, source_id, selected_at FROM user_news_sources WHERE user_id = ?",
+                    (to_user_id, from_user_id),
+                )
+                source_anchor = self._conn.execute(
+                    "SELECT news_last_seen_at FROM users WHERE id = ?", (from_user_id,)
+                ).fetchone()["news_last_seen_at"]
+                target_anchor = self._conn.execute(
+                    "SELECT news_last_seen_at FROM users WHERE id = ?", (to_user_id,)
+                ).fetchone()["news_last_seen_at"]
+                if source_anchor and (not target_anchor or source_anchor > target_anchor):
+                    self._conn.execute(
+                        "UPDATE users SET news_last_seen_at = ? WHERE id = ?",
+                        (source_anchor, to_user_id),
+                    )
+                self._conn.execute(
+                    "DELETE FROM user_news_sources WHERE user_id = ?", (from_user_id,)
+                )
+                self._conn.execute(
                     "DELETE FROM subscriptions WHERE user_id = ?", (from_user_id,)
                 )
                 self._conn.commit()
@@ -3095,6 +3517,9 @@ class DB:
             try:
                 self._conn.execute("BEGIN")
                 self._conn.execute("DELETE FROM bind_codes WHERE user_id = ?", (user_id,))
+                self._conn.execute(
+                    "DELETE FROM user_news_sources WHERE user_id = ?", (user_id,)
+                )
                 self._conn.execute("DELETE FROM subscriptions WHERE user_id = ?", (user_id,))
                 self._conn.execute("DELETE FROM push_logs WHERE user_id = ?", (user_id,))
                 self._conn.execute("DELETE FROM kol_acl WHERE user_id = ?", (user_id,))
