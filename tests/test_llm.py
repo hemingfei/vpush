@@ -99,18 +99,32 @@ def test_custom_base_url_and_long_content_truncation():
     assert captured["content_len"] <= 12000
 
 
-def test_rejects_unsafe_api_base_before_request():
+def test_user_llm_allows_private_http_base():
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "内网摘要"}}]},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    config = make_config(api_base="http://127.0.0.1:8000/v1")
+    config.user_supplied = True
+    assert summarize_posts([make_post()], config, client=client) == "内网摘要"
+    assert seen["url"] == "http://127.0.0.1:8000/v1/chat/completions"
+
+
+def test_user_llm_rejects_non_http_base_before_request():
     client = httpx.Client(
         transport=httpx.MockTransport(
-            lambda request: (_ for _ in ()).throw(AssertionError("不应访问内网 LLM"))
+            lambda request: (_ for _ in ()).throw(AssertionError("不应访问非法 LLM URL"))
         )
     )
-    unsafe = make_config(api_base="http://127.0.0.1:8000/v1")
-    unsafe.user_supplied = True
-    assert summarize_posts([make_post()], unsafe, client=client) is None
-    metadata = make_config(api_base="http://169.254.169.254/latest")
-    metadata.user_supplied = True
-    assert summarize_posts([make_post()], metadata, client=client) is None
+    config = make_config(api_base="file:///etc/passwd")
+    config.user_supplied = True
+    assert summarize_posts([make_post()], config, client=client) is None
 
 
 def test_cache_reuses_result_within_batch():
