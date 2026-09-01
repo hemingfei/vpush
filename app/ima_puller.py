@@ -111,7 +111,7 @@ def save_pdf(
     request_headers = {str(k): str(v) for k, v in headers.items()}
     request_headers["User-Agent"] = "okhttp/4.12.0"
     fd, temp_name = tempfile.mkstemp(
-        prefix=destination.name + ".", suffix=".part", dir=destination.parent
+        prefix=".vpush-", suffix=".part", dir=destination.parent
     )
     os.close(fd)
     temp = Path(temp_name)
@@ -166,6 +166,10 @@ def _error_status(exc: Exception) -> int:
     if isinstance(exc, PermissionError):
         return 400
     if isinstance(exc, ValueError):
+        return 400
+    if isinstance(exc, OSError) and getattr(exc, "errno", None) == 36:
+        return 400
+    if "File name too long" in text or "ENAMETOOLONG" in text:
         return 400
     if "HTTP 403" in text:
         return 403

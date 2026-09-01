@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import time
 
-APP_VERSION = "1.12.124"
+APP_VERSION = "1.12.125"
 VERSION_CHECK_TTL = 6 * 3600  # 6 小时
 GITHUB_REPO = "icekale/vpush"
 
