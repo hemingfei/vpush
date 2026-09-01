@@ -845,6 +845,9 @@ def admin_user_summary(
     }
 
 
+IMA_DOCUMENT_LIST_MAX_OFFSET = 2000
+
+
 def bounded_limit(value: int, default: int = 100) -> int:
     """分页 limit 统一钳制：负数/0 按 1 处理（SQLite 的 LIMIT -1 表示不限制），上限 500。"""
     try:
@@ -3072,7 +3075,7 @@ def create_api_router(
         group: str = Query("", max_length=128),
         tag: str = Query("", max_length=64),
         limit: int = 50,
-        offset: int = 0,
+        offset: int = Query(0, ge=0, le=IMA_DOCUMENT_LIST_MAX_OFFSET),
         user: dict = Depends(get_current_user),
     ):
         _enforce_ima_list_quota(user)

@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import threading
 import time
 
@@ -1236,6 +1237,154 @@ def test_admin_ima_discover_failure_keeps_previous_groups(tmp_path, monkeypatch)
     assert json.loads(db.get_setting(IMA_PURE_GROUPS_KEY)) == original
 
 
+def test_full_text_index_disabled_by_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    monkeypatch.delenv("IMA_SEARCH_GROUP_IDS", raising=False)
+    path = tmp_path / "ima-search.db"
+
+    client = TestClient(create_app(db_path=tmp_path / "disabled-search.sqlite"))
+
+    assert client.app.state.ima_search_index.group_ids == ()
+    assert client.app.state.ima_search_index.path == path
+    assert client.app.state.ima_documents.status()["full_text_index"] == {
+        "enabled": False,
+        "ready": False,
+        "documents": 0,
+        "last_sync_at": "",
+        "error": "",
+    }
+    assert not path.exists()
+
+
+def test_full_text_index_env_parses_deduplicated_groups_and_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    monkeypatch.setenv("IMA_SEARCH_GROUP_IDS", " group-b,group-a, group-b,, ")
+
+    client = TestClient(create_app(db_path=tmp_path / "configured-search.sqlite"))
+    index = client.app.state.ima_search_index
+
+    assert index.group_ids == ("group-b", "group-a")
+    assert index.path == tmp_path / "ima-search.db"
+    assert index.archive_root == (tmp_path / "ima").resolve()
+    assert not index.path.exists()
+
+
+def test_full_text_index_db_rows_filter_and_order_groups(tmp_path):
+    db = DB(tmp_path / "rows.sqlite")
+    db.replace_ima_document_index(
+        [
+            {"group_id": "group-b", "media_id": "two", "name": "B"},
+            {"group_id": "group-a", "media_id": "two", "name": "A2"},
+            {"group_id": "group-a", "media_id": "one", "name": "A1"},
+        ],
+        "fingerprint",
+        0,
+    )
+
+    assert db.ima_document_index_rows([]) == []
+    rows = db.ima_document_index_rows(["group-b", "group-a", "group-a"])
+    assert [(row["group_id"], row["media_id"]) for row in rows] == [
+        ("group-a", "one"),
+        ("group-a", "two"),
+        ("group-b", "two"),
+    ]
+    assert rows[0]["txt_path"] == ""
+
+
+def test_full_text_index_maintenance_runs_after_final_metadata_rebuild(tmp_path, monkeypatch):
+    db = DB(tmp_path / "maintenance.sqlite")
+    service = ImaDocumentService(db, tmp_path / "ima")
+    calls = []
+
+    monkeypatch.setattr(service, "_rebuild_index_if_needed", lambda: calls.append("rebuild"))
+    monkeypatch.setattr(service.store, "archive_writable", lambda: False)
+    monkeypatch.setattr(service.store, "archive_readable", lambda: False)
+    monkeypatch.setattr(service, "_sync_full_text_index", lambda: calls.append("full-text"))
+
+    service._archive_maintenance()
+
+    assert calls == ["rebuild", "rebuild", "full-text"]
+
+
+def test_full_text_index_sync_once_invokes_background_sync_once(tmp_path, monkeypatch):
+    db = DB(tmp_path / "cycle.sqlite")
+    service = ImaDocumentService(db, tmp_path / "ima")
+    group = ImaGroupConfig("group-a", "资料", "kb-a", "root-a", folder_ids=("folder-a",))
+    config = ImaDocumentConfig(uid="uid", refresh_token="refresh", groups=(group,))
+    calls = []
+
+    monkeypatch.setattr(service, "config", lambda: config)
+    monkeypatch.setattr(service, "_storage_block_status", lambda: None)
+    monkeypatch.setattr(
+        service,
+        "discover",
+        lambda: {"ok": True, "discovery": {"status": "ok", "error": ""}},
+    )
+    monkeypatch.setattr(
+        service,
+        "_sync_group",
+        lambda *_args, **_kwargs: {
+            "group_id": "group-a",
+            "group_name": "资料",
+            "total": 0,
+            "pending": 0,
+            "downloaded": 0,
+            "failed": 0,
+            "last_error": "",
+        },
+    )
+    monkeypatch.setattr(service, "_sync_full_text_index", lambda: calls.append("sync"))
+
+    assert service.sync_once()["status"] == "finished"
+    assert calls == ["sync"]
+
+
+def test_full_text_index_failure_does_not_escape_maintenance_or_healthz(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    monkeypatch.setenv("IMA_SEARCH_GROUP_IDS", "group-a")
+    monkeypatch.delenv("IMA_ARCHIVE_ROOT", raising=False)
+    monkeypatch.delenv("IMA_STORAGE_STATUS_PATH", raising=False)
+    client = TestClient(create_app(db_path=tmp_path / "failure.sqlite"))
+    service = client.app.state.ima_documents
+    scheduler_started = threading.Event()
+    log_seen = threading.Event()
+    log_messages = []
+
+    def fail(_rows):
+        raise RuntimeError("simulated full-text failure")
+
+    def record_exception(message, *args, **kwargs):
+        log_messages.append(message)
+        log_seen.set()
+
+    def schedule_loop():
+        scheduler_started.set()
+        service._stop.wait(2)
+
+    monkeypatch.setattr(client.app.state.ima_search_index, "sync", fail)
+    monkeypatch.setattr("app.ima_documents.logger.exception", record_exception)
+    monkeypatch.setattr(service, "_rebuild_index_if_needed", lambda: None)
+    monkeypatch.setattr(service.store, "archive_writable", lambda: False)
+    monkeypatch.setattr(service.store, "archive_readable", lambda: False)
+    monkeypatch.setattr(service, "_schedule_loop", schedule_loop)
+
+    service.start()
+    scheduler = service._scheduler_thread
+    try:
+        assert scheduler_started.wait(1)
+        assert log_seen.wait(1)
+        assert scheduler is not None and scheduler.is_alive()
+        assert client.get("/healthz").status_code == 200
+        assert service.status()["full_text_index"]["enabled"] is True
+        assert log_messages == ["IMA full-text index sync failed"]
+    finally:
+        service.stop()
+
+    assert scheduler is not None and not scheduler.is_alive()
+
+
 def _remote_storage_client(tmp_path, monkeypatch, *, available=True, writable=True, **status_overrides):
     monkeypatch.setenv("DAV_UI_ONLY", "1")
     archive_root = tmp_path / "archive"
@@ -1490,6 +1639,520 @@ def _block_json_readers(store, monkeypatch):
 
     monkeypatch.setattr(store, "load_manifest", boom)
     monkeypatch.setattr(store, "load_state", boom)
+
+
+def _seed_full_text_search(client, records_and_tags):
+    service = client.app.state.ima_documents
+    store = service.store
+    records = []
+    state = {}
+    for record, tags, text in records_and_tags:
+        records.append(record)
+        state.update(_seed_indexed_record(store, record, tags=tags, txt=text))
+    store.save_manifest(records)
+    store.save_state(state)
+    assert service.rebuild_read_index(service.config().groups)["status"] == "ready"
+    service._sync_full_text_index()
+    assert service.search_index.status()["ready"] is True
+    return service
+
+
+def _full_text_search_client(tmp_path, monkeypatch, name):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    monkeypatch.setenv("IMA_SEARCH_GROUP_IDS", "group-a,group-b")
+    client = TestClient(create_app(db_path=tmp_path / f"{name}.sqlite"))
+    admin_headers = _headers(client, f"{name}_admin", "FTSADMIN1", admin=True)
+    reader_headers = _headers(client, f"{name}_reader", "FTSREAD01")
+    group_a, group_b = _configure_two_groups(client, admin_headers)
+    reader = client.app.state.db.get_user_by_username(f"{name}_reader")
+    client.app.state.db.set_ima_kb_acl(group_a, [reader["id"]])
+    return client, admin_headers, reader_headers, group_a, group_b
+
+
+def test_full_text_search_api_preserves_metadata_order_dedupes_and_enforces_acl(
+    tmp_path, monkeypatch
+):
+    client, admin_headers, reader_headers, group_a, group_b = _full_text_search_client(
+        tmp_path, monkeypatch, "hybrid_order"
+    )
+    phrase = "quantum interconnect"
+    records = [
+        ({"media_id": "title-hit", "name": "Quantum interconnect outlook.pdf", "day": "0904", "group_id": group_a, "abstract": "title"}, [], phrase + " in body"),
+        ({"media_id": "tag-hit", "name": "Tag report.pdf", "day": "0903", "group_id": group_a, "abstract": "tag"}, [phrase], "unrelated body"),
+        ({"media_id": "abstract-hit", "name": "Abstract report.pdf", "day": "0902", "group_id": group_a, "abstract": phrase + " adoption"}, [], "unrelated body"),
+        ({"media_id": "body-hit", "name": "Body report.pdf", "day": "0901", "group_id": group_a, "abstract": "unrelated"}, [], "deep " + phrase + " demand"),
+        ({"media_id": "private-hit", "name": "Private report.pdf", "day": "0905", "group_id": group_b, "abstract": "unrelated"}, [], "private " + phrase),
+    ]
+    _seed_full_text_search(client, records)
+
+    response = client.get(
+        "/api/ima-documents?q=quantum%20interconnect", headers=reader_headers
+    )
+
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    assert [item["media_id"] for item in items] == [
+        "title-hit", "tag-hit", "abstract-hit", "body-hit"
+    ]
+    assert [item["media_id"] for item in items].count("title-hit") == 1
+    assert "private-hit" not in {item["media_id"] for item in items}
+    assert "quantum interconnect" in items[-1]["search_snippet"].casefold()
+    assert "abstract" not in items[-1]
+    assert "body" not in items[-1]
+
+    selected = client.get(
+        f"/api/ima-documents?q=quantum%20interconnect&group={group_a}",
+        headers=admin_headers,
+    ).json()["items"]
+    assert "private-hit" not in {item["media_id"] for item in selected}
+
+
+def test_hybrid_full_text_search_applies_exact_tag_to_body_only_hits(
+    tmp_path, monkeypatch
+):
+    client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
+        tmp_path, monkeypatch, "hybrid_tag"
+    )
+    records = [
+        ({"media_id": "selected", "name": "Selected.pdf", "day": "0902", "group_id": group_a, "abstract": "none"}, ["selected-tag"], "liquidity runway improves"),
+        ({"media_id": "other", "name": "Other.pdf", "day": "0901", "group_id": group_a, "abstract": "none"}, ["other-tag"], "liquidity runway declines"),
+    ]
+    _seed_full_text_search(client, records)
+
+    items = client.get(
+        "/api/ima-documents?q=liquidity%20runway&tag=selected-tag",
+        headers=admin_headers,
+    ).json()["items"]
+
+    assert [item["media_id"] for item in items] == ["selected"]
+
+
+def test_hybrid_full_text_search_pages_metadata_then_body_without_duplicates(
+    tmp_path, monkeypatch
+):
+    client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
+        tmp_path, monkeypatch, "hybrid_pages"
+    )
+    phrase = "wafer bottleneck"
+    records = [
+        ({"media_id": "metadata", "name": "Wafer bottleneck.pdf", "day": "0902", "group_id": group_a, "abstract": "none"}, [], phrase + " duplicate body"),
+        ({"media_id": "body", "name": "Supply report.pdf", "day": "0901", "group_id": group_a, "abstract": "none"}, [], "persistent " + phrase),
+    ]
+    _seed_full_text_search(client, records)
+
+    pages = [
+        client.get(
+            f"/api/ima-documents?q=wafer%20bottleneck&limit=1&offset={offset}",
+            headers=admin_headers,
+        ).json()
+        for offset in range(3)
+    ]
+
+    assert [page["items"][0]["media_id"] for page in pages[:2]] == ["metadata", "body"]
+    assert pages[0]["has_more"] is True
+    assert pages[1]["has_more"] is False
+    assert pages[2]["items"] == []
+    assert pages[2]["has_more"] is False
+
+
+def test_hybrid_full_text_search_pages_beyond_rank_200(
+    tmp_path, monkeypatch
+):
+    client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
+        tmp_path, monkeypatch, "hybrid_deep_pages"
+    )
+    records = [
+        (
+            {
+                "media_id": f"body-{index_value:03d}",
+                "name": f"Document {index_value:03d}.pdf",
+                "day": "0901",
+                "group_id": group_a,
+                "abstract": "unrelated",
+            },
+            [],
+            "ranked body needle",
+        )
+        for index_value in range(205)
+    ]
+    _seed_full_text_search(client, records)
+
+    deep_page = client.get(
+        "/api/ima-documents?q=ranked%20body%20needle&limit=3&offset=201",
+        headers=admin_headers,
+    ).json()
+    final_page = client.get(
+        "/api/ima-documents?q=ranked%20body%20needle&limit=3&offset=204",
+        headers=admin_headers,
+    ).json()
+
+    assert [item["media_id"] for item in deep_page["items"]] == [
+        "body-201", "body-202", "body-203"
+    ]
+    assert deep_page["has_more"] is True
+    assert [item["media_id"] for item in final_page["items"]] == ["body-204"]
+    assert final_page["has_more"] is False
+    assert final_page["document_count"] == 205
+
+
+def test_hybrid_metadata_page_does_not_materialize_all_matches(
+    tmp_path, monkeypatch
+):
+    client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
+        tmp_path, monkeypatch, "hybrid_bounded_metadata"
+    )
+    records = [
+        (
+            {
+                "media_id": f"metadata-{index_value}",
+                "name": f"Capacity planning {index_value}.pdf",
+                "day": f"090{index_value}",
+                "group_id": group_a,
+                "abstract": "unrelated",
+            },
+            [],
+            "capacity planning body",
+        )
+        for index_value in range(1, 6)
+    ]
+    service = _seed_full_text_search(client, records)
+    calls = {"count": 0, "page": 0, "search": 0}
+    original_count = service.db.ima_document_match_count
+    original_page = service.db.ima_document_page
+    original_search = service.search_index.search
+
+    def counted_count(*args, **kwargs):
+        calls["count"] += 1
+        return original_count(*args, **kwargs)
+
+    def counted_page(*args, **kwargs):
+        calls["page"] += 1
+        return original_page(*args, **kwargs)
+
+    def counted_search(*args, **kwargs):
+        calls["search"] += 1
+        return original_search(*args, **kwargs)
+
+    monkeypatch.setattr(service.db, "ima_document_match_count", counted_count)
+    monkeypatch.setattr(service.db, "ima_document_page", counted_page)
+    monkeypatch.setattr(service.search_index, "search", counted_search)
+
+    response = client.get(
+        "/api/ima-documents?q=capacity%20planning&limit=2",
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(response.json()["items"]) == 2
+    assert response.json()["has_more"] is True
+    assert calls == {"count": 1, "page": 1, "search": 0}
+
+
+def test_hybrid_full_text_search_short_missing_and_broken_indexes_keep_metadata(
+    tmp_path, monkeypatch
+):
+    client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
+        tmp_path, monkeypatch, "hybrid_fallback"
+    )
+    records = [
+        ({"media_id": "short", "name": "估值跟踪.pdf", "day": "0902", "group_id": group_a, "abstract": "估值"}, [], "unrelated"),
+        ({"media_id": "fallback", "name": "Fallback phrase.pdf", "day": "0901", "group_id": group_a, "abstract": "none"}, [], "unrelated"),
+    ]
+    service = _seed_full_text_search(client, records)
+
+    short = client.get("/api/ima-documents?q=%E4%BC%B0%E5%80%BC", headers=admin_headers)
+    assert [item["media_id"] for item in short.json()["items"]] == ["short"]
+
+    service.search_index.path = tmp_path / "absent-search.db"
+    missing = client.get("/api/ima-documents?q=fallback%20phrase", headers=admin_headers)
+    assert [item["media_id"] for item in missing.json()["items"]] == ["fallback"]
+
+    def broken_search(*_args, **_kwargs):
+        raise sqlite3.OperationalError("broken optional index")
+
+    monkeypatch.setattr(service.search_index, "search", broken_search)
+    broken = client.get("/api/ima-documents?q=fallback%20phrase", headers=admin_headers)
+    assert broken.status_code == 200, broken.text
+    assert [item["media_id"] for item in broken.json()["items"]] == ["fallback"]
+
+
+@pytest.mark.parametrize(
+    ("metadata_total", "page_limit", "expected_fts_calls", "expected_count"),
+    [
+        (0, 50, [(51, 2000)], 2051),
+        (0, 200, [(200, 2000), (1, 2200)], 2201),
+        (0, 500, [(200, 2000), (200, 2200), (101, 2400)], 2501),
+        (1, 1, [(200, offset) for offset in range(0, 2200, 200)], 2200),
+    ],
+)
+def test_hybrid_max_offset_uses_bounded_fts_batches(
+    tmp_path,
+    monkeypatch,
+    metadata_total,
+    page_limit,
+    expected_fts_calls,
+    expected_count,
+):
+    client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
+        tmp_path, monkeypatch, f"hybrid_max_offset_{metadata_total}"
+    )
+    service = client.app.state.ima_documents
+    calls = {"search": [], "lookup": 0}
+
+    monkeypatch.setattr(service, "_index_usable", lambda: True)
+    monkeypatch.setattr(service.search_index, "status", lambda: {"error": ""})
+    monkeypatch.setattr(
+        service.db,
+        "ima_document_match_count",
+        lambda *_args, **_kwargs: metadata_total,
+    )
+
+    def search(_query, _group_ids, limit, *, offset=0):
+        calls["search"].append((limit, offset))
+        assert limit <= 200
+        return [
+            {
+                "group_id": group_a,
+                "media_id": f"hit-{rank}",
+                "search_snippet": "body needle",
+            }
+            for rank in range(offset, offset + limit)
+        ]
+
+    def lookup(keys, *_args, **_kwargs):
+        calls["lookup"] += 1
+        return [
+            {
+                "group_id": group_id,
+                "media_id": media_id,
+                "name": f"{media_id}.pdf",
+                "day": "0901",
+                "_metadata_match": metadata_total == 1 and media_id == "hit-0",
+            }
+            for group_id, media_id in keys
+        ]
+
+    monkeypatch.setattr(service.search_index, "search", search)
+    monkeypatch.setattr(service.db, "ima_documents_by_keys", lookup)
+
+    response = client.get(
+        f"/api/ima-documents?q=body%20needle&limit={page_limit}&offset=2000",
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert [item["media_id"] for item in response.json()["items"]] == [
+        f"hit-{rank}" for rank in range(2000, 2000 + page_limit)
+    ]
+    assert response.json()["has_more"] is True
+    assert response.json()["document_count"] == expected_count
+    assert calls == {"search": expected_fts_calls, "lookup": len(expected_fts_calls)}
+
+
+def test_hybrid_tag_filter_stops_after_eleven_rejected_fts_batches(
+    tmp_path, monkeypatch
+):
+    client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
+        tmp_path, monkeypatch, "hybrid_tag_batch_cap"
+    )
+    service = client.app.state.ima_documents
+    calls = {"search": 0, "lookup": 0}
+
+    monkeypatch.setattr(service, "_index_usable", lambda: True)
+    monkeypatch.setattr(
+        service.db,
+        "ima_document_match_count",
+        lambda *_args, **_kwargs: 0,
+    )
+
+    def search(_query, _group_ids, limit, *, offset=0):
+        calls["search"] += 1
+        if calls["search"] > 11:
+            raise AssertionError("hybrid FTS scan exceeded eleven batches")
+        assert limit == 200
+        return [
+            {
+                "group_id": group_a,
+                "media_id": f"rejected-{rank}",
+                "search_snippet": "body needle",
+            }
+            for rank in range(offset, offset + limit)
+        ]
+
+    def reject_all(_keys, *_args, **_kwargs):
+        calls["lookup"] += 1
+        return []
+
+    monkeypatch.setattr(service.search_index, "search", search)
+    monkeypatch.setattr(service.db, "ima_documents_by_keys", reject_all)
+
+    response = client.get(
+        "/api/ima-documents?q=body%20needle&tag=restricted&limit=1",
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["items"] == []
+    assert response.json()["has_more"] is False
+    assert response.json()["document_count"] == 0
+    assert calls == {"search": 11, "lookup": 11}
+
+
+@pytest.mark.parametrize(
+    (
+        "scenario",
+        "page_offset",
+        "eligible_batch",
+        "eligible_count",
+        "expected_ids",
+        "expected_has_more",
+        "expected_count",
+    ),
+    [
+        ("full_page", 0, 11, 2, ["candidate-2000", "candidate-2001"], True, 3),
+        ("sparse_deep", 2000, 1, 1, [], False, 1),
+    ],
+)
+def test_hybrid_capped_pages_report_lower_bounds_honestly(
+    tmp_path,
+    monkeypatch,
+    scenario,
+    page_offset,
+    eligible_batch,
+    eligible_count,
+    expected_ids,
+    expected_has_more,
+    expected_count,
+):
+    client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
+        tmp_path, monkeypatch, f"cap_{scenario}"
+    )
+    service = client.app.state.ima_documents
+    calls = {"search": 0, "lookup": 0}
+
+    monkeypatch.setattr(service, "_index_usable", lambda: True)
+    monkeypatch.setattr(
+        service.db,
+        "ima_document_match_count",
+        lambda *_args, **_kwargs: 0,
+    )
+
+    def search(_query, _group_ids, limit, *, offset=0):
+        calls["search"] += 1
+        return [
+            {
+                "group_id": group_a,
+                "media_id": f"candidate-{rank}",
+                "search_snippet": "body needle",
+            }
+            for rank in range(offset, offset + limit)
+        ]
+
+    def lookup(keys, *_args, **_kwargs):
+        calls["lookup"] += 1
+        if calls["lookup"] != eligible_batch:
+            return []
+        return [
+            {
+                "group_id": group_id,
+                "media_id": media_id,
+                "name": f"{media_id}.pdf",
+                "day": "0901",
+                "_metadata_match": False,
+            }
+            for group_id, media_id in keys[:eligible_count]
+        ]
+
+    monkeypatch.setattr(service.search_index, "search", search)
+    monkeypatch.setattr(service.db, "ima_documents_by_keys", lookup)
+
+    response = client.get(
+        f"/api/ima-documents?q=body%20needle&tag=restricted&limit=2&offset={page_offset}",
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [item["media_id"] for item in body["items"]] == expected_ids
+    assert body["has_more"] is expected_has_more
+    assert body["document_count"] == expected_count
+    assert calls == {"search": 11, "lookup": 11}
+
+
+def test_hybrid_stale_search_error_disables_direct_deep_seek(tmp_path, monkeypatch):
+    client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
+        tmp_path, monkeypatch, "hybrid_stale_seek"
+    )
+    service = client.app.state.ima_documents
+    offsets = []
+    lookup_calls = 0
+
+    monkeypatch.setattr(service, "_index_usable", lambda: True)
+    monkeypatch.setattr(service.search_index, "status", lambda: {"error": "sync failed"})
+    monkeypatch.setattr(
+        service.db,
+        "ima_document_match_count",
+        lambda *_args, **_kwargs: 0,
+    )
+
+    def search(_query, _group_ids, limit, *, offset=0):
+        offsets.append(offset)
+        assert limit == 200
+        return [
+            {
+                "group_id": group_a,
+                "media_id": f"hit-{rank}",
+                "search_snippet": "body needle",
+            }
+            for rank in range(offset, offset + limit)
+        ]
+
+    def lookup(keys, *_args, **_kwargs):
+        nonlocal lookup_calls
+        lookup_calls += 1
+        return [
+            {
+                "group_id": group_id,
+                "media_id": media_id,
+                "name": f"{media_id}.pdf",
+                "day": "0901",
+                "_metadata_match": False,
+            }
+            for group_id, media_id in keys
+        ]
+
+    monkeypatch.setattr(service.search_index, "search", search)
+    monkeypatch.setattr(service.db, "ima_documents_by_keys", lookup)
+
+    response = client.get(
+        "/api/ima-documents?q=body%20needle&limit=1&offset=2000",
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert [item["media_id"] for item in response.json()["items"]] == ["hit-2000"]
+    assert response.json()["has_more"] is True
+    assert offsets == list(range(0, 2200, 200))
+    assert lookup_calls == 11
+
+
+def test_ima_documents_offset_is_bounded(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "ima-offset.sqlite"))
+    headers = _headers(client, "ima_offset_admin", "IMAOFFSET1", admin=True)
+
+    assert client.get(
+        "/api/ima-documents?offset=-1", headers=headers
+    ).status_code == 422
+    assert client.get(
+        "/api/ima-documents?offset=2001", headers=headers
+    ).status_code == 422
+    accepted = client.get(
+        "/api/ima-documents?offset=2000", headers=headers
+    )
+
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["offset"] == 2000
 
 
 def test_indexed_api_serves_without_reading_json(tmp_path, monkeypatch):

@@ -2092,6 +2092,122 @@ def test_scheduler_checks_stop_after_wait_before_trigger(tmp_path, monkeypatch):
     assert calls == []
 
 
+def test_maintenance_thread_start_returns_and_stop_waits_for_release(tmp_path, monkeypatch):
+    service = ImaDocumentService(FakeDB(), tmp_path / "ima")
+    maintenance_started = threading.Event()
+    maintenance_release = threading.Event()
+    scheduler_started = threading.Event()
+    start_returned = threading.Event()
+    stop_returned = threading.Event()
+
+    def maintenance():
+        maintenance_started.set()
+        assert maintenance_release.wait(2)
+
+    def schedule_loop():
+        scheduler_started.set()
+        service._stop.wait(2)
+
+    monkeypatch.setattr(service, "_archive_maintenance", maintenance)
+    monkeypatch.setattr(service, "_schedule_loop", schedule_loop)
+
+    starter = threading.Thread(
+        target=lambda: (service.start(), start_returned.set()), daemon=True
+    )
+    stopper = None
+    starter.start()
+    try:
+        assert maintenance_started.wait(1)
+        assert start_returned.wait(1), "start blocked on archive maintenance"
+        assert scheduler_started.wait(1)
+        assert service._scheduler_thread is not None
+        assert service._scheduler_thread.is_alive()
+
+        stopper = threading.Thread(
+            target=lambda: (service.stop(), stop_returned.set()), daemon=True
+        )
+        stopper.start()
+        assert not stop_returned.wait(0.1), "stop returned before maintenance finished"
+        maintenance_release.set()
+        assert stop_returned.wait(1)
+        assert service._maintenance_thread is not None
+        assert not service._maintenance_thread.is_alive()
+    finally:
+        maintenance_release.set()
+        starter.join(2)
+        if stopper is not None:
+            stopper.join(2)
+        service.stop()
+
+
+def test_maintenance_thread_duplicate_start_reuses_worker(tmp_path, monkeypatch):
+    service = ImaDocumentService(FakeDB(), tmp_path / "ima")
+    maintenance_started = threading.Event()
+    maintenance_release = threading.Event()
+    calls = []
+
+    def maintenance():
+        calls.append(threading.current_thread())
+        maintenance_started.set()
+        assert maintenance_release.wait(2)
+
+    monkeypatch.setattr(service, "_archive_maintenance", maintenance)
+    monkeypatch.setattr(service, "_schedule_loop", lambda: service._stop.wait(2))
+
+    service.start()
+    try:
+        assert maintenance_started.wait(1)
+        first = service._maintenance_thread
+        service.start()
+        assert service._maintenance_thread is first
+        assert calls == [first]
+    finally:
+        maintenance_release.set()
+        service.stop()
+
+
+def test_archive_maintenance_serializes_mutations_with_sync_once(tmp_path, monkeypatch):
+    service = ImaDocumentService(FakeDB(), tmp_path / "ima")
+    maintenance_mutating = threading.Event()
+    maintenance_release = threading.Event()
+    sync_entered = threading.Event()
+    sync_result = {}
+
+    def restore():
+        maintenance_mutating.set()
+        assert maintenance_release.wait(2)
+        return {"renamed": 0}
+
+    def config():
+        sync_entered.set()
+        return ImaDocumentConfig(uid="", refresh_token="")
+
+    monkeypatch.setattr(service, "_rebuild_index_if_needed", lambda: None)
+    monkeypatch.setattr(service.store, "archive_writable", lambda: True)
+    monkeypatch.setattr(service.store, "restore_original_filenames", restore)
+    monkeypatch.setattr(service.store, "archive_readable", lambda: False)
+    monkeypatch.setattr(service, "config", config)
+
+    maintenance = threading.Thread(target=service._archive_maintenance, daemon=True)
+    sync = threading.Thread(
+        target=lambda: sync_result.update(service.sync_once()), daemon=True
+    )
+    maintenance.start()
+    try:
+        assert maintenance_mutating.wait(1)
+        sync.start()
+        sync.join(1)
+        assert not sync.is_alive()
+        assert not sync_entered.is_set(), "sync_once entered while maintenance mutated state"
+        assert sync_result["status"] == "already_running"
+    finally:
+        maintenance_release.set()
+        maintenance.join(2)
+        sync.join(2)
+
+    assert not maintenance.is_alive()
+
+
 def test_stop_waits_for_worker_without_timeout(tmp_path):
     service = ImaDocumentService(FakeDB(), tmp_path / "ima")
     calls = []
@@ -4414,11 +4530,12 @@ def test_rebuild_read_index_holds_sync_lock(tmp_path, monkeypatch):
 
 
 def test_archive_maintenance_rebuilds_index_before_nfs_work():
-    source = inspect.getsource(ImaDocumentService.start)
+    source = inspect.getsource(ImaDocumentService._archive_maintenance)
     first = source.index("_rebuild_index_if_needed")
     restore = source.index("restore_original_filenames")
     last = source.rindex("_rebuild_index_if_needed")
-    assert first < restore < last
+    full_text = source.index("_sync_full_text_index")
+    assert first < restore < last < full_text
 
 
 

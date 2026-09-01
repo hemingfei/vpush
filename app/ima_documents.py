@@ -25,6 +25,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from .fetchers.base import CN_TZ
 from .fetchers.ima_inspect import item_cover, item_text
+from .ima_search import ImaSearchIndex
 from .ima_storage import ImaStorageStatus
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,8 @@ IMA_LIST_WORKERS = 3
 IMA_FOLDER_LIST_MAX_PAGES = 20
 IMA_DOWNLOAD_RETRY_DELAYS = (2, 8)
 IMA_INDEX_VERSION = 4  # v4：IMA sort_date 年份取媒体真实创建年（原按当前年补全会跨年排错）；升位强制重建
+IMA_FTS_BATCH_SIZE = 200
+IMA_FTS_MAX_BATCHES = 11
 IMA_STATE_FLUSH_COUNT = 20
 IMA_STATE_FLUSH_SECONDS = 2.0
 IMA_SCHEDULE_HOUR = 1  # 上海时间每日自动同步起点
@@ -2596,9 +2599,11 @@ class ImaDocumentService:
         archive_root: str | Path | None = None,
         storage_status: ImaStorageStatus | None = None,
         llm_config: Any = None,
+        search_index: ImaSearchIndex | None = None,
     ):
         self.db = db
         self.llm_config = llm_config
+        self.search_index = search_index
         self.storage_status = storage_status or ImaStorageStatus(None, remote=False)
         self.store = ImaDocumentStore(
             index_root,
@@ -2612,6 +2617,7 @@ class ImaDocumentService:
         self._sync_lock = threading.Lock()
         self._discovery_lock = threading.Lock()
         self._scheduler_thread: threading.Thread | None = None
+        self._maintenance_thread: threading.Thread | None = None
         self._worker_thread: threading.Thread | None = None
         self._local_scan_thread: threading.Thread | None = None
         self._running = False
@@ -3035,6 +3041,8 @@ class ImaDocumentService:
             public["group_id"] = item["group_id"]
         if item.get("group_name"):
             public["group_name"] = item["group_name"]
+        if item.get("search_snippet"):
+            public["search_snippet"] = str(item["search_snippet"])[:240]
         return public
 
     def list_documents(
@@ -3049,15 +3057,171 @@ class ImaDocumentService:
         offset: int = 0,
     ) -> dict[str, Any]:
         if self._index_usable():
-            page = self.db.ima_document_page(
-                [item.id for item in groups],
-                group=group,
-                query=query,
-                day=day,
-                tag=tag,
-                limit=limit,
-                offset=offset,
-            )
+            readable_ids = [item.id for item in groups]
+            page_limit = max(int(limit), 1)
+            page_offset = max(int(offset), 0)
+            page = None
+            count_matches = getattr(self.db, "ima_document_match_count", None)
+            lookup = getattr(self.db, "ima_documents_by_keys", None)
+            if (
+                query
+                and self.search_index is not None
+                and callable(count_matches)
+                and callable(lookup)
+            ):
+                scoped_ids = (
+                    [group] if group and group in readable_ids else readable_ids
+                )
+                metadata_total = count_matches(
+                    readable_ids,
+                    group=group,
+                    query=query,
+                    day=day,
+                    tag=tag,
+                )
+                metadata_items: list[dict] = []
+                if page_offset < metadata_total:
+                    metadata_page = self.db.ima_document_page(
+                        readable_ids,
+                        group=group,
+                        query=query,
+                        day=day,
+                        tag=tag,
+                        limit=min(page_limit, metadata_total - page_offset),
+                        offset=page_offset,
+                    )
+                    metadata_items = list(metadata_page.get("items") or [])
+                    if (
+                        len(metadata_items) >= page_limit
+                        and page_offset + len(metadata_items) < metadata_total
+                    ):
+                        page = metadata_page
+                        page["document_count"] = metadata_total
+                        page["has_more"] = True
+
+                if page is None:
+                    body_offset = max(page_offset - metadata_total, 0)
+                    body_limit = page_limit - len(metadata_items)
+                    body_target = body_limit + 1
+                    body_rows: list[dict] = []
+                    body_seen = 0
+                    search_error = str(self.search_index.status().get("error") or "")
+                    seek_body_offset = (
+                        metadata_total == 0 and not day and not tag and not search_error
+                    )
+                    fts_offset = body_offset if seek_body_offset else 0
+                    exhausted = False
+                    fts_batches = 0
+                    # ponytail: Pilot cap is 2200 raw candidates; use cursor/keyset pagination if it expands.
+                    while (
+                        len(body_rows) < body_target
+                        and fts_batches < IMA_FTS_MAX_BATCHES
+                    ):
+                        fts_batches += 1
+                        fts_limit = (
+                            min(
+                                body_target - len(body_rows),
+                                IMA_FTS_BATCH_SIZE,
+                            )
+                            if seek_body_offset
+                            else IMA_FTS_BATCH_SIZE
+                        )
+                        try:
+                            fts_hits = self.search_index.search(
+                                query,
+                                scoped_ids,
+                                fts_limit,
+                                offset=fts_offset,
+                            )
+                        except Exception as exc:  # noqa: BLE001 - optional search falls back
+                            logger.warning(
+                                "IMA full-text search failed error=%s", _safe_error(exc)
+                            )
+                            exhausted = True
+                            break
+                        if not fts_hits:
+                            exhausted = True
+                            break
+                        if seek_body_offset and body_seen == 0:
+                            body_seen = body_offset
+                        hydrated = lookup(
+                            [
+                                (hit.get("group_id"), hit.get("media_id"))
+                                for hit in fts_hits
+                            ],
+                            readable_ids,
+                            group=group,
+                            query=query,
+                            day=day,
+                            tag=tag,
+                        )
+                        hydrated_by_key = {
+                            (
+                                str(item.get("group_id") or ""),
+                                str(item.get("media_id") or ""),
+                            ): item
+                            for item in hydrated
+                        }
+                        for hit in fts_hits:
+                            key = (
+                                str(hit.get("group_id") or ""),
+                                str(hit.get("media_id") or ""),
+                            )
+                            item = hydrated_by_key.get(key)
+                            if item is None or item.pop("_metadata_match", False):
+                                continue
+                            body_seen += 1
+                            if body_seen <= body_offset or len(body_rows) >= body_target:
+                                continue
+                            body_rows.append(
+                                {
+                                    **item,
+                                    "search_snippet": str(
+                                        hit.get("search_snippet") or ""
+                                    )[:240],
+                                }
+                            )
+                        fts_offset += len(fts_hits)
+                        if len(fts_hits) < fts_limit:
+                            exhausted = True
+                            break
+
+                    capped = (
+                        fts_batches == IMA_FTS_MAX_BATCHES and not exhausted
+                    )
+                    items = metadata_items + body_rows[:body_limit]
+                    has_more = len(body_rows) > body_limit or (capped and bool(items))
+                    document_count = metadata_total + body_seen
+                    if (
+                        not exhausted
+                        and items
+                        and (not capped or len(items) >= page_limit)
+                    ):
+                        document_count = max(
+                            document_count,
+                            page_offset + len(items) + int(has_more),
+                        )
+                    page = {
+                        "items": items,
+                        "days": [],
+                        "tags": [],
+                        "tag_counts": {},
+                        "document_count": document_count,
+                        "day": str(day or "").strip(),
+                        "has_more": has_more,
+                        "offset": page_offset,
+                        "group_counts": {},
+                    }
+            if page is None:
+                page = self.db.ima_document_page(
+                    readable_ids,
+                    group=group,
+                    query=query,
+                    day=day,
+                    tag=tag,
+                    limit=limit,
+                    offset=offset,
+                )
             counts = page.get("group_counts") or {}
             page["groups"] = [
                 {
@@ -3191,14 +3355,34 @@ class ImaDocumentService:
             "documents": document_count,
             "progress": progress,
             "index": index,
+            "full_text_index": (
+                self.search_index.status()
+                if self.search_index is not None
+                else {
+                    "enabled": False,
+                    "ready": False,
+                    "documents": 0,
+                    "last_sync_at": "",
+                    "error": "",
+                }
+            ),
         }
 
-    def start(self) -> None:
-        def _archive_maintenance() -> None:
-            try:
-                self._rebuild_index_if_needed()
-            except Exception:
-                logger.exception("IMA document index rebuild failed")
+    def _sync_full_text_index(self) -> None:
+        if self.search_index is None or not self.search_index.enabled:
+            return
+        try:
+            rows = self.db.ima_document_index_rows(self.search_index.group_ids)
+            self.search_index.sync(rows)
+        except Exception:  # noqa: BLE001 - optional search must not stop IMA workers
+            logger.exception("IMA full-text index sync failed")
+
+    def _archive_maintenance(self) -> None:
+        try:
+            self._rebuild_index_if_needed()
+        except Exception:
+            logger.exception("IMA document index rebuild failed")
+        with self._sync_lock:
             if self.store.archive_writable():
                 try:
                     restored = self.store.restore_original_filenames()
@@ -3221,22 +3405,25 @@ class ImaDocumentService:
                     logger.exception("IMA document retag failed")
             elif self.storage_status.remote:
                 logger.warning("IMA archive unavailable; skip manifest rebuild and retag")
-            try:
-                self._rebuild_index_if_needed()
-            except Exception:
-                logger.exception("IMA document index rebuild failed")
+        try:
+            self._rebuild_index_if_needed()
+        except Exception:
+            logger.exception("IMA document index rebuild failed")
+        self._sync_full_text_index()
 
-        # Remote NFS restore/retag can take minutes; do not block /healthz.
-        if self.storage_status.remote:
-            threading.Thread(
-                target=_archive_maintenance, name="ima-archive-maintenance", daemon=True
-            ).start()
-        else:
-            _archive_maintenance()
+    def start(self) -> None:
+        # Archive work can take minutes on NFS and local disks; never block startup.
         with self._state_lock:
             if self._scheduler_thread and self._scheduler_thread.is_alive():
                 return
             self._stop.clear()
+            if self._maintenance_thread is None or not self._maintenance_thread.is_alive():
+                self._maintenance_thread = threading.Thread(
+                    target=self._archive_maintenance,
+                    name="ima-archive-maintenance",
+                    daemon=True,
+                )
+                self._maintenance_thread.start()
             self._scheduler_thread = threading.Thread(
                 target=self._schedule_loop, name="ima-documents", daemon=True
             )
@@ -3505,19 +3692,22 @@ class ImaDocumentService:
         return scanned
 
     def stop(self) -> None:
-        self._stop.set()
-        self._cancel_requested = True
-        scheduler = self._scheduler_thread
-        if scheduler and scheduler.is_alive():
-            scheduler.join()
+        current = threading.current_thread()
         with self._state_lock:
+            self._stop.set()
+            self._cancel_requested = True
+            scheduler = self._scheduler_thread
             worker = self._worker_thread
-        if worker and worker.is_alive() and worker is not threading.current_thread():
-            worker.join()
-        with self._state_lock:
             local_scan = self._local_scan_thread
-        if local_scan and local_scan.is_alive() and local_scan is not threading.current_thread():
+            maintenance = self._maintenance_thread
+        if scheduler and scheduler.is_alive() and scheduler is not current:
+            scheduler.join()
+        if worker and worker.is_alive() and worker is not current:
+            worker.join()
+        if local_scan and local_scan.is_alive() and local_scan is not current:
             local_scan.join()
+        if maintenance is not None and maintenance is not current:
+            maintenance.join()
 
     def _schedule_loop(self) -> None:
         while not self._stop.wait(30):
@@ -4008,6 +4198,7 @@ class ImaDocumentService:
             }
             self.db.set_setting(IMA_PURE_LAST_FINISHED_KEY, str(int(time.time())))
             self.db.set_setting(IMA_PURE_LAST_RESULT_KEY, json.dumps(result, ensure_ascii=False))
+            self._sync_full_text_index()
             return {"status": "finished", **result}
         finally:
             self._sync_lock.release()

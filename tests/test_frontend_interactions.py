@@ -3316,6 +3316,18 @@ def test_ima_report_row_is_document_first_and_keeps_optional_metadata():
     assert "unknown" not in row
 
 
+def test_ima_report_row_full_text_search_snippet_is_optional_and_escaped():
+    row = _fn_body("imaDocumentRow")
+    css = STYLE_CSS.read_text()
+
+    assert "item.search_snippet" in row
+    assert "escapeHtml(item.search_snippet)" in row
+    assert "ima-report-snippet" in row
+    assert "item.search_snippet ?" in row
+    assert ".ima-report-snippet" in css
+    assert "-webkit-line-clamp: 2" in css
+
+
 def test_ima_report_search_is_debounced_and_explicitly_pages():
     src = APP_JS.read_text()
     render = _fn_body("renderImaDocuments")
@@ -3540,8 +3552,8 @@ def test_financial_news_action_icons_have_stable_dimensions():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=262"' in html
-    assert 'src="/app.js?v=373"' in html
-    assert 'dav-shell-v242' in sw
+    assert 'src="/app.js?v=374"' in html
+    assert 'dav-shell-v243' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

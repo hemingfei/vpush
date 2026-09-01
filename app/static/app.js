@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.127";
+const APP_VERSION = "1.12.128";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -953,10 +953,11 @@ function imaDocumentRow(item) {
   const day = fmtImaDayShort(item.sort_date || item.day) || "—";
   const source = String(item.group_name || "");
   const meta = imaReportMetaHtml(item); // .ima-report-meta
+  const snippet = item.search_snippet ? `<span class="ima-report-snippet">${escapeHtml(item.search_snippet)}</span>` : "";
   return `
     <article class="ima-doc-row" role="button" tabindex="0" data-media-id="${escapeHtml(item.media_id)}" data-group-id="${escapeHtml(item.group_id || "")}" onclick="openImaDocument(this.dataset.mediaId, this.dataset.groupId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openImaDocument(this.dataset.mediaId, this.dataset.groupId)}">
       <time class="ima-report-date">${escapeHtml(day)}</time>
-      <span class="ima-report-copy"><strong class="ima-report-title">${escapeHtml(imaListTitle(item.name))}</strong>${meta}</span>
+      <span class="ima-report-copy"><strong class="ima-report-title">${escapeHtml(imaListTitle(item.name))}</strong>${snippet}${meta}</span>
       <span class="ima-report-source">${escapeHtml(source)}</span>
     </article>`;
 }

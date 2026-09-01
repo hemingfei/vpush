@@ -19,6 +19,7 @@ from .config import load_config
 from .db import DB
 from .fetchers import build_fetchers
 from .ima_documents import ImaDocumentService
+from .ima_search import ImaSearchIndex
 from .ima_storage import ImaStorageStatus
 from .logging_setup import register_error_sink, setup_logging
 from .news import NewsService
@@ -90,12 +91,25 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     archive_root = Path(archive_env) if archive_env else index_root
     status_env = os.environ.get("IMA_STORAGE_STATUS_PATH", "").strip()
     storage_status = ImaStorageStatus(status_env or None, remote=bool(archive_env))
+    search_group_ids = tuple(
+        dict.fromkeys(
+            item.strip()
+            for item in os.environ.get("IMA_SEARCH_GROUP_IDS", "").split(",")
+            if item.strip()
+        )
+    )
+    ima_search_index = ImaSearchIndex(
+        Path(config.db_path).parent / "ima-search.db",
+        archive_root,
+        search_group_ids,
+    )
     ima_documents = ImaDocumentService(
         db,
         index_root,
         archive_root=archive_root,
         storage_status=storage_status,
         llm_config=config.llm,
+        search_index=ima_search_index,
     )
     # WARNING+ 日志持久化到 error_logs 表（跨重启可查，管理后台错误记录面板）
     register_error_sink(
@@ -242,6 +256,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     app.state.db = db
     app.state.llm_config = config.llm
     app.state.ima_documents = ima_documents
+    app.state.ima_search_index = ima_search_index
     app.state.news_service = news_service
 
     @app.middleware("http")
