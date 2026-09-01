@@ -3098,6 +3098,58 @@ def test_ima_pdf_preview_is_inline_on_desktop():
     assert "#view=FitH" in load
 
 
+def test_ima_pdf_preview_uses_page_open_button_in_standalone_pwa():
+    """独立 PWA 不嵌 Android PDF 占位页，改由顶层页面打开 blob。"""
+    standalone = _fn_body("isStandalonePwa")
+    reader = _fn_body("renderImaDocument")
+    load = _fn_body("loadImaPdf")
+    opener = _fn_body("openImaPdfNewTab")
+    assert '(display-mode: standalone)' in standalone
+    assert "navigator.standalone === true" in standalone
+    assert "isStandalonePwa()" in reader
+    assert 'const openLabel = standalonePwa ? "打开 PDF" : "新标签打开 PDF"' in reader
+    assert 'aria-label="${openLabel}"' in reader
+    assert "ima-pdf-pwa-open" in reader
+    assert "openImaPdfNewTab()" in reader
+    assert "ima-pdf-pwa-open" in load
+    assert "pwaOpen.hidden = false" in load
+    assert "isStandalonePwa()" in opener
+    assert "window.location.assign(window._imaPdfUrl)" in opener
+    assert opener.index("window.location.assign(window._imaPdfUrl)") < opener.index("window.open(window._imaPdfUrl")
+
+
+def test_ima_pdf_open_helper_executes_pwa_and_browser_routes():
+    standalone = _fn_body("isStandalonePwa")
+    opener = _fn_body("openImaPdfNewTab")
+    js = f"""
+const assert = require("node:assert/strict");
+let standalone = true;
+const calls = [];
+const window = {{
+  _imaPdfUrl: "blob:test",
+  matchMedia: () => ({{ matches: standalone }}),
+  location: {{ assign: (url) => calls.push(["assign", url]) }},
+  open: (...args) => calls.push(["open", ...args]),
+}};
+const navigator = {{ standalone: false }};
+const flash = (...args) => calls.push(["flash", ...args]);
+function isStandalonePwa() {{{standalone}}}
+function openImaPdfNewTab() {{{opener}}}
+openImaPdfNewTab();
+assert.deepEqual(calls[0], ["assign", "blob:test"]);
+standalone = false;
+openImaPdfNewTab();
+assert.deepEqual(calls[1], ["open", "blob:test", "_blank", "noopener"]);
+navigator.standalone = true;
+openImaPdfNewTab();
+assert.deepEqual(calls[2], ["assign", "blob:test"]);
+window._imaPdfUrl = "";
+openImaPdfNewTab();
+assert.deepEqual(calls[3], ["flash", "PDF 还没加载好，稍后再试", "error"]);
+"""
+    subprocess.run(["node", "-e", js], check=True)
+
+
 def test_ima_reader_clamps_long_abstract_and_keeps_preview_floor():
     """长摘要默认三行截断，展开后仍限高，预览区保底高度。"""
     src = APP_JS.read_text()
