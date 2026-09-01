@@ -4414,11 +4414,12 @@ def test_rebuild_read_index_holds_sync_lock(tmp_path, monkeypatch):
 
 
 def test_archive_maintenance_rebuilds_index_before_nfs_work():
-    source = inspect.getsource(ImaDocumentService.start)
+    source = inspect.getsource(ImaDocumentService._archive_maintenance)
     first = source.index("_rebuild_index_if_needed")
     restore = source.index("restore_original_filenames")
     last = source.rindex("_rebuild_index_if_needed")
-    assert first < restore < last
+    full_text = source.index("_sync_full_text_index")
+    assert first < restore < last < full_text
 
 
 
