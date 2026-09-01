@@ -53,6 +53,127 @@ def test_create_app_exposes_shared_news_service():
     service.close()
 
 
+def insert_news_article(db, source_id, published_at, external_id=None, images=None):
+    feed_id = db.list_news_feeds(source_id=source_id)[0]["id"]
+    return db.upsert_news_article({
+        "source_id": source_id,
+        "feed_id": feed_id,
+        "external_id": external_id or f"article-{source_id}-{published_at}",
+        "title": "测试财经新闻",
+        "url": "https://example.com/article",
+        "author": "作者",
+        "summary": "摘要",
+        "content_html": "<p>正文</p>",
+        "images": images or [],
+        "published_at": published_at,
+        "fetched_at": published_at,
+        "content_hash": "hash",
+    })
+
+
+def test_news_list_and_seen_anchor_are_user_scoped():
+    client = make_client("news-api.db")
+    first_headers = user_headers(client, "news_first")
+    second_headers = user_headers(client, "news_second")
+    db = client.app.state.db
+    first_uid = db.get_user_by_username("news_first")["id"]
+    second_uid = db.get_user_by_username("news_second")["id"]
+    source_ids = [row["id"] for row in db.list_news_sources()]
+    db.set_user_news_sources(first_uid, source_ids[:1])
+    db.set_user_news_sources(second_uid, [])
+    article_id = insert_news_article(db, source_ids[0], "2026-09-01T10:00:00+00:00")
+
+    sources = client.get("/api/news/sources", headers=first_headers)
+    assert sources.status_code == 200
+    assert sources.json()["items"][0]["selected"] is True
+    first = client.get("/api/news", headers=first_headers).json()
+    assert first["items"][0]["id"] == article_id
+    assert first["items"][0]["is_new"] is False
+    assert "view_started_at" in first
+    assert client.post(
+        "/api/news/seen", headers=first_headers,
+        json={"view_started_at": first["view_started_at"]},
+    ).status_code == 200
+    assert client.get(f"/api/news/{article_id}", headers=second_headers).status_code == 404
+    assert client.get("/api/news", headers=second_headers).json()["items"] == []
+
+
+def test_news_source_selection_and_invalid_selection_are_authenticated():
+    client = make_client("news-source-api.db")
+    headers = user_headers(client, "news_source_user")
+    db = client.app.state.db
+    uid = db.get_user_by_username("news_source_user")["id"]
+    source_ids = [row["id"] for row in db.list_news_sources()]
+    response = client.put("/api/me", headers=headers, json={"news_source_ids": []})
+    assert response.status_code == 200
+    assert db.list_user_news_source_ids(uid) == []
+    response = client.put("/api/me", headers=headers, json={"news_source_ids": [999999]})
+    assert response.status_code == 400
+    assert db.list_user_news_source_ids(uid) == []
+    response = client.put("/api/me", headers=headers, json={"news_source_ids": source_ids[:1]})
+    assert response.status_code == 200
+    assert db.list_user_news_source_ids(uid) == source_ids[:1]
+    assert client.get("/api/news/sources").status_code == 401
+
+
+def test_news_seen_rejects_naive_timestamp_and_moves_forward_only():
+    client = make_client("news-seen-api.db")
+    headers = user_headers(client, "news_seen_user")
+    assert client.post(
+        "/api/news/seen", headers=headers,
+        json={"view_started_at": "2026-09-01T10:00:00"},
+    ).status_code == 400
+    assert client.post(
+        "/api/news/seen", headers=headers,
+        json={"view_started_at": "2026-09-01T10:00:00+00:00"},
+    ).status_code == 200
+    assert client.post(
+        "/api/news/seen", headers=headers,
+        json={"view_started_at": "2026-09-01T09:00:00+00:00"},
+    ).status_code == 200
+
+
+
+
+def test_news_disabled_cache_archived_detail_and_image_headers(monkeypatch):
+    client = make_client("news-permissions.db")
+    headers = user_headers(client, "news_permission_user")
+    db = client.app.state.db
+    uid = db.get_user_by_username("news_permission_user")["id"]
+    source_id = db.list_news_sources()[0]["id"]
+    feed_id = db.list_news_feeds(source_id=source_id)[0]["id"]
+    db.set_user_news_sources(uid, [source_id])
+    article_id = db.upsert_news_article({
+        "source_id": source_id, "feed_id": feed_id, "external_id": "permission-1",
+        "title": "Permission", "url": "https://example.com/article", "author": "",
+        "summary": "", "content_html": '<img data-news-image-index="0">',
+        "images": ["https://feed.example/image.jpg"],
+        "published_at": "2026-09-01T00:00:00+00:00",
+        "fetched_at": "2026-09-01T00:00:00+00:00", "content_hash": "permission",
+    })
+    db.update_news_source(source_id, enabled=False)
+    assert client.get("/api/news", headers=headers).json()["items"][0]["id"] == article_id
+
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+    client.app.state.news_service.client = __import__("httpx").Client(
+        transport=__import__("httpx").MockTransport(
+            lambda request: __import__("httpx").Response(
+                200, headers={"content-type": "image/jpeg"}, content=b"jpeg"
+            )
+        ),
+        trust_env=False,
+    )
+    image = client.get(f"/api/news/{article_id}/images/0", headers=headers)
+    assert image.status_code == 200
+    assert image.headers["cache-control"] == "private, max-age=86400"
+    assert image.headers["x-content-type-options"] == "nosniff"
+    assert image.content == b"jpeg"
+    assert client.get(f"/api/news/{article_id}/images/0").status_code == 401
+
+    db.set_news_source_archived(source_id, True)
+    assert client.get(f"/api/news/{article_id}", headers=headers).status_code == 404
+
+
 def test_admin_kols_pagination_and_filters():
     """管理大V列表：分页 + 关键词/平台/分类/状态筛选 + 权限。"""
     client = make_client()

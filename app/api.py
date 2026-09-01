@@ -37,6 +37,7 @@ from . import auth, user_quota, wechat
 from .avatar_cache import cache_avatar
 from .bot_core import BIND_CODE_TTL
 from .db import _UNSET, ALLOWED_PLATFORMS, DB, days_until_purge, user_plain_secret
+from .news import NewsInputError, NewsNotFound, NewsService, NewsUpstreamError
 from .fetchers.base import CN_TZ, PLATFORM_LABELS, apply_twitter_feed, strip_html
 from .fetchers.combination import extract_cube_symbol, resolve_combination_profile
 from .fetchers.ima import (
@@ -361,6 +362,10 @@ class WebPushIn(BaseModel):
     keys: WebPushKeys
 
 
+class NewsSeenIn(BaseModel):
+    view_started_at: str
+
+
 class MeUpdate(BaseModel):
     telegram_chat_id: str | None = None
     telegram_bot_token: str | None = None
@@ -380,6 +385,7 @@ class MeUpdate(BaseModel):
     llm_api_base: str | None = None
     llm_api_key: str | None = None
     llm_model: str | None = None
+    news_source_ids: list[int] | None = None
 
 
 class PasswordChangeIn(BaseModel):
@@ -1144,6 +1150,7 @@ def create_api_router(
     notifiers_config=None,
     trust_proxy: bool = False,
     ima_documents: ImaDocumentService | None = None,
+    news_service: NewsService | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api")
     # 登录/注册限流（内存版，单实例够用）：每 IP 窗口内失败次数超限后 429
@@ -1778,7 +1785,17 @@ def create_api_router(
             updates["llm_api_base"] = value
         if "llm_model" in body.model_fields_set:
             updates["llm_model"] = (body.llm_model or "").strip()
-        db.update_user_atomic(user["id"], updates, keywords=keywords)
+        news_source_ids = _UNSET
+        if "news_source_ids" in body.model_fields_set:
+            if body.news_source_ids is None:
+                raise HTTPException(status_code=400, detail="新闻来源必须是来源 ID 数组")
+            news_source_ids = body.news_source_ids
+        try:
+            db.update_user_atomic(
+                user["id"], updates, keywords=keywords, news_source_ids=news_source_ids
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
         return public_user(db.get_user(user["id"]), db)
 
     @router.post("/me/llm-models")
@@ -2084,6 +2101,109 @@ def create_api_router(
     def unsubscribe(kol_id: int, user: dict = Depends(get_current_user)):
         db.remove_subscription(user["id"], kol_id)
         return {"ok": True}
+
+    # ---- 财经新闻 ----
+    def _news_service_or_503() -> NewsService:
+        if news_service is None:
+            raise HTTPException(status_code=503, detail="财经新闻服务不可用")
+        return news_service
+
+    @router.get("/news/sources")
+    def news_sources(user: dict = Depends(get_current_user)):
+        selected_ids = set(db.list_user_news_source_ids(user["id"]))
+        statuses = {row["id"]: row for row in db.news_source_statuses(user["id"])}
+        items = []
+        for source in db.list_news_sources():
+            status = statuses.get(source["id"], {"code": "paused", "last_success_at": None})
+            items.append({
+                "id": source["id"],
+                "slug": source["slug"],
+                "name": source["name"],
+                "enabled": bool(source["enabled"]),
+                "selected": source["id"] in selected_ids,
+                "status": status["code"],
+                "last_success_at": status["last_success_at"],
+            })
+        return {
+            "items": items,
+            "collection_enabled": db.get_setting("news_enabled") == "1",
+        }
+
+    @router.get("/news")
+    def list_news(
+        limit: int = Query(30, ge=1, le=100),
+        offset: int = Query(0, ge=0),
+        source_id: int | None = Query(None),
+        q: str = Query("", max_length=200),
+        user: dict = Depends(get_current_user),
+    ):
+        selected_ids = set(db.list_user_news_source_ids(user["id"]))
+        if source_id is not None and source_id not in selected_ids:
+            raise HTTPException(status_code=400, detail="只能筛选已选择的新闻来源")
+        view_started_at = datetime.now(UTC).isoformat()
+        anchor = (db.get_user(user["id"]) or {}).get("news_last_seen_at")
+        rows = db.list_news_articles(
+            user["id"], source_id=source_id, q=q, limit=limit, offset=offset
+        )
+        items = []
+        for row in rows:
+            row.pop("images", None)
+            row["is_new"] = bool(anchor and row["published_at"] > anchor)
+            items.append(row)
+        total = db.count_news_articles(user["id"], source_id=source_id, q=q)
+        return {
+            "items": items,
+            "offset": offset,
+            "next_offset": offset + len(items),
+            "has_more": offset + len(items) < total,
+            "view_started_at": view_started_at,
+            "source_statuses": db.news_source_statuses(user["id"]),
+        }
+
+    @router.post("/news/seen")
+    def mark_news_seen(body: NewsSeenIn, user: dict = Depends(get_current_user)):
+        raw = (body.view_started_at or "").strip()
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="时间必须是带时区的 ISO 8601 时间") from None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise HTTPException(status_code=400, detail="时间必须是带时区的 ISO 8601 时间")
+        normalized = value.astimezone(UTC).isoformat()
+        db.advance_news_seen(user["id"], normalized)
+        return {"ok": True, "news_last_seen_at": normalized}
+
+    @router.get("/news/{article_id}")
+    def news_article(article_id: int, user: dict = Depends(get_current_user)):
+        article = db.get_news_article(article_id, user_id=user["id"])
+        if article is None:
+            raise HTTPException(status_code=404, detail="文章不存在")
+        article.pop("images", None)
+        article.pop("has_image", None)
+        return article
+
+    @router.get("/news/{article_id}/images/{index}")
+    def news_article_image(
+        article_id: int, index: int, user: dict = Depends(get_current_user)
+    ):
+        try:
+            body, content_type = _news_service_or_503().fetch_image(
+                article_id, index, user["id"]
+            )
+        except NewsNotFound:
+            raise HTTPException(status_code=404, detail="图片不存在") from None
+        except NewsInputError:
+            raise HTTPException(status_code=400, detail="图片地址不安全或类型不受支持") from None
+        except NewsUpstreamError:
+            raise HTTPException(status_code=502, detail="图片暂时无法加载") from None
+        return Response(
+            content=body,
+            media_type=content_type,
+            headers={
+                "Cache-Control": "private, max-age=86400",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @router.get("/my/subscriptions")
     def my_subscriptions(user: dict = Depends(get_current_user)):
