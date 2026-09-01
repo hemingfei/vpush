@@ -1545,6 +1545,19 @@ def test_news_cleanup_removes_only_articles_older_than_retention(tmp_path):
     assert [r["external_id"] for r in db._rows("SELECT external_id FROM news_articles")] == ["new"]
 
 
+def test_news_source_status_is_paused_when_all_feeds_are_disabled(tmp_path):
+    db = DB(str(tmp_path / "source-status.db"))
+    uid = db.add_user("reader", "hash")
+    source_id = db.list_user_news_source_ids(uid)[0]
+    feed_ids = [feed["id"] for feed in db.list_news_feeds(source_id)]
+    db._execute(
+        f"UPDATE news_feeds SET enabled = 0 WHERE id IN ({','.join('?' * len(feed_ids))})",
+        feed_ids,
+    )
+    status = next(item for item in db.news_source_statuses(uid) if item["id"] == source_id)
+    assert status["code"] == "paused"
+
+
 def test_update_user_atomic_replaces_news_sources_and_preserves_empty_selection(tmp_path):
     db = DB(str(tmp_path / "atomic-news.db"))
     uid = db.add_user("reader", "hash")

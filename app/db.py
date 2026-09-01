@@ -3059,12 +3059,13 @@ class DB:
         for source_id in self.list_user_news_source_ids(user_id):
             source = self.get_news_source(source_id)
             feeds = self.list_news_feeds(source_id)
-            successes = [feed["last_success_at"] for feed in feeds if feed["last_success_at"]]
-            if not source["enabled"] or not feeds:
+            enabled_feeds = [feed for feed in feeds if feed["enabled"]]
+            successes = [feed["last_success_at"] for feed in enabled_feeds if feed["last_success_at"]]
+            if not source["enabled"] or not enabled_feeds:
                 code = "paused"
-            elif any(feed["consecutive_failures"] > 0 for feed in feeds if not feed["last_success_at"]):
+            elif any(feed["consecutive_failures"] > 0 and not feed["last_success_at"] for feed in enabled_feeds):
                 code = "unavailable"
-            elif any(feed["consecutive_failures"] > 0 for feed in feeds):
+            elif any(feed["consecutive_failures"] > 0 for feed in enabled_feeds):
                 code = "delayed"
             else:
                 code = "ok"
