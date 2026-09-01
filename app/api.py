@@ -110,6 +110,7 @@ from .plaza import (
     plaza_source_rows,
     plaza_visible_platforms,
     set_plaza_visibility,
+    user_timeline_platforms,
 )
 from .proxy import (
     ProxyRouter,
@@ -1651,6 +1652,9 @@ def create_api_router(
         profile["webpush_count"] = db.count_webpush_subscriptions(user["id"])
         profile["webpush_bound"] = profile["webpush_count"] > 0
         profile["plaza_platforms"] = plaza_visible_platforms(db)
+        profile["timeline_platforms"] = user_timeline_platforms(
+            db, user["id"], bool(user.get("is_admin"))
+        )
         return profile
 
     @router.put("/me")

@@ -51,6 +51,12 @@ def plaza_visible_platforms(db: DB) -> list[str]:
     return [row["platform"] for row in plaza_source_rows(db) if row["visible"]]
 
 
+def user_timeline_platforms(db: DB, user_id: int, is_admin: bool = False) -> list[str]:
+    """动态角标：广场可见 ∩ 当前用户已订阅平台。广场仍用 plaza_visible_platforms。"""
+    have = db.subscribed_platforms(user_id, is_admin)
+    return [platform for platform in plaza_visible_platforms(db) if platform in have]
+
+
 def plaza_hidden_platforms(db: DB) -> list[str]:
     return [row["platform"] for row in plaza_source_rows(db) if not row["visible"]]
 

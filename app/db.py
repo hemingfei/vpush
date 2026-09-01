@@ -2688,6 +2688,17 @@ class DB:
             return subscribed
         return subscribed & self.visible_kol_ids(user_id)
 
+    def subscribed_platforms(self, user_id: int, is_admin: bool = False) -> set[str]:
+        ids = self.readable_subscribed_kol_ids(user_id, is_admin)
+        if not ids:
+            return set()
+        placeholders = ",".join("?" * len(ids))
+        rows = self._rows(
+            f"SELECT DISTINCT platform FROM kols WHERE id IN ({placeholders})",
+            tuple(ids),
+        )
+        return {row["platform"] for row in rows}
+
     def subscribed_kol_types(self, user_id: int) -> dict[int, str]:
         rows = self._rows(
             "SELECT kol_id, type FROM subscriptions WHERE user_id = ?", (user_id,)

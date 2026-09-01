@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.123";
+const APP_VERSION = "1.12.124";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -2301,7 +2301,7 @@ async function renderMySubs(seq) {
 }
 
 function mysubsMobileFiltersHtml() {
-  const platforms = tlPlazaEntries().map(([p, label]) => {
+  const platforms = tlTimelineEntries().map(([p, label]) => {
     const short = platformShortLabel(p);
     return `
     <button class="tl-pill ${state.mysubsPlatform === p ? "selected" : ""}"
@@ -2324,7 +2324,7 @@ function mysubsMobileFiltersHtml() {
 function renderMySubsTabs() {
   $("#mysubs-tabs").innerHTML = isMobileTimelineFilter()
     ? mysubsMobileFiltersHtml()
-    : tlPlazaEntries().map(([p]) => platformTabHTML(p, state.mysubsPlatform, "switchMySubsPlatform")).join("");
+    : tlTimelineEntries().map(([p]) => platformTabHTML(p, state.mysubsPlatform, "switchMySubsPlatform")).join("");
 }
 
 function switchMySubsPlatform(platform) {
@@ -2568,9 +2568,23 @@ function plazaVisibleSet() {
   return new Set(list);
 }
 
-function tlPlazaEntries() {
-  const vis = plazaVisibleSet();
+function timelineVisibleSet() {
+  const list = state.user && Array.isArray(state.user.timeline_platforms)
+    ? state.user.timeline_platforms
+    : plazaVisibleSet();
+  return new Set(list);
+}
+
+function tlPlatformEntries(vis) {
   return TL_PLATFORMS.filter(([p]) => !p || vis.has(p));
+}
+
+function tlPlazaEntries() {
+  return tlPlatformEntries(plazaVisibleSet());
+}
+
+function tlTimelineEntries() {
+  return tlPlatformEntries(timelineVisibleSet());
 }
 
 let _platSwipe = null;
@@ -2588,14 +2602,13 @@ function mobilePlatformSwipeSurface(el) {
 }
 
 function mobilePlatformSwipeContext(surface) {
-  if (surface === "timeline") return { current: () => state.timelinePlatform, apply: (p) => tlPickPlatform(p) };
-  if (surface === "home") return { current: () => state.platform, apply: (p) => homePickMobilePlatform(p) };
-  if (surface === "mysubs") return { current: () => state.mysubsPlatform, apply: (p) => switchMySubsPlatform(p) };
+  if (surface === "timeline") return { current: () => state.timelinePlatform, apply: (p) => tlPickPlatform(p), entries: tlTimelineEntries };
+  if (surface === "home") return { current: () => state.platform, apply: (p) => homePickMobilePlatform(p), entries: tlPlazaEntries };
+  if (surface === "mysubs") return { current: () => state.mysubsPlatform, apply: (p) => switchMySubsPlatform(p), entries: tlTimelineEntries };
   return null;
 }
 
-function mobileSwipeAdjacent(current, dir) {
-  const entries = tlPlazaEntries();
+function mobileSwipeAdjacent(current, dir, entries) {
   const idx = entries.findIndex(([p]) => p === current);
   const next = idx + dir;
   if (idx < 0 || next < 0 || next >= entries.length) return null;
@@ -2630,7 +2643,7 @@ function onPlatSwipeEnd(e) {
   if (Math.abs(dx) < 56 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
   const ctx = mobilePlatformSwipeContext(start.surface);
   if (!ctx) return;
-  const next = mobileSwipeAdjacent(ctx.current(), dx < 0 ? 1 : -1);
+  const next = mobileSwipeAdjacent(ctx.current(), dx < 0 ? 1 : -1, ctx.entries());
   if (next === null) return;
   ctx.apply(next);
 }
@@ -2643,14 +2656,15 @@ function ensureMobilePlatformSwipe() {
 }
 
 function ensurePlazaPlatformSelection() {
-  const vis = plazaVisibleSet();
-  if (state.timelinePlatform && !vis.has(state.timelinePlatform)) {
+  const plaza = plazaVisibleSet();
+  const timeline = timelineVisibleSet();
+  if (state.timelinePlatform && !timeline.has(state.timelinePlatform)) {
     state.timelinePlatform = "";
   }
-  if (state.platform && !vis.has(state.platform)) {
+  if (state.platform && !plaza.has(state.platform)) {
     state.platform = "";
   }
-  if (state.mysubsPlatform && !vis.has(state.mysubsPlatform)) {
+  if (state.mysubsPlatform && !timeline.has(state.mysubsPlatform)) {
     state.mysubsPlatform = "";
   }
 }
@@ -3055,7 +3069,7 @@ function tlPillsHtml() {
       ${WSCN_LIVE_ICON}<span>快讯</span>
     </button>`;
   const pills = [];
-  for (const [p, label] of tlPlazaEntries()) {
+  for (const [p, label] of tlTimelineEntries()) {
     const selected = !liveSelected && state.timelinePlatform === p;
     const short = platformShortLabel(p);
     pills.push(`
@@ -7253,6 +7267,10 @@ function applyPlazaSources(sources) {
   if (box) box.innerHTML = plazaSourceRowsHtml(sources);
   if (state.user) {
     state.user.plaza_platforms = (sources || []).filter((row) => row.visible).map((row) => row.platform);
+    const vis = new Set(state.user.plaza_platforms);
+    if (Array.isArray(state.user.timeline_platforms)) {
+      state.user.timeline_platforms = state.user.timeline_platforms.filter((p) => vis.has(p));
+    }
   }
 }
 
@@ -11781,7 +11799,7 @@ async function router() {
     else if (page === "combinations") await renderCombinations(renderSeq);
     else if (page === "mysubs") await renderMySubs(renderSeq);
     else if (page === "zsxq") {
-      state.timelinePlatform = plazaVisibleSet().has("zsxq") ? "zsxq" : "";
+      state.timelinePlatform = timelineVisibleSet().has("zsxq") ? "zsxq" : "";
       replaceRoute("timeline");
       return;
     }

@@ -600,15 +600,16 @@ def test_plaza_source_visibility_admin_and_pills():
     assert "动态广场显示" in _fn_body("loadAdminStats")
     assert "plazaSourceRowsHtml(s.plaza_sources)" in _fn_body("loadAdminStats")
     assert "plaza_platforms" in _fn_body("plazaVisibleSet")
-    assert "tlPlazaEntries()" in _fn_body("tlPillsHtml")
+    assert "timeline_platforms" in _fn_body("timelineVisibleSet")
+    assert "tlTimelineEntries()" in _fn_body("tlPillsHtml")
     assert "tlPlazaEntries()" in _fn_body("renderPlatformTabs")
     assert "tlPlazaEntries()" in _fn_body("homeMobilePlatformsHtml")
-    assert "tlPlazaEntries()" in _fn_body("renderMySubsTabs")
-    assert "tlPlazaEntries()" in _fn_body("mysubsMobileFiltersHtml")
+    assert "tlTimelineEntries()" in _fn_body("renderMySubsTabs")
+    assert "tlTimelineEntries()" in _fn_body("mysubsMobileFiltersHtml")
     assert "ensurePlazaPlatformSelection()" in _fn_body("renderTimeline")
     assert "ensurePlazaPlatformSelection()" in _fn_body("renderHome")
     assert "ensurePlazaPlatformSelection()" in _fn_body("renderMySubs")
-    assert 'plazaVisibleSet().has("zsxq")' in src
+    assert 'timelineVisibleSet().has("zsxq")' in src
     assert "/api/admin/plaza-sources" in _fn_body("setPlazaSourceMode")
     assert "applyPlazaSources(data.sources)" in _fn_body("setPlazaSourceMode")
     assert "applyPlazaSources(s.plaza_sources)" in _fn_body("renderStatsData")
@@ -3387,8 +3388,8 @@ def test_frontend_asset_urls_bust_browser_cache():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=261"' in html
-    assert 'src="/app.js?v=369"' in html
-    assert 'dav-shell-v238' in sw
+    assert 'src="/app.js?v=370"' in html
+    assert 'dav-shell-v239' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

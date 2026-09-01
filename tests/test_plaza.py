@@ -123,3 +123,38 @@ def test_plaza_sources_api_and_feed_filter():
     assert client.get("/api/my/feed?platform=zsxq", headers=uh).json() == []
     assert [p["external_id"] for p in client.get("/api/my/feed", headers=uh).json()] == ["xq1"]
     assert all(k["platform"] != "zsxq" for k in client.get("/api/catalog", headers=uh).json())
+
+
+def test_timeline_hides_unsubscribed_platform_badge():
+    """动态角标跟当前用户订阅；广场仍露出未订阅的启用平台。"""
+    client = make_client()
+    db = client.app.state.db
+    xq = db.add_kol("xueqiu", "雪球大V", "x1")
+    wb = db.add_kol("weibo", "Kale微博", "1642591402")
+    uh = user_headers(client, "kale01")
+    uid = client.get("/api/me", headers=uh).json()["id"]
+    db.add_subscription(uid, xq, type="post")
+    db.insert_post("xueqiu", xq, "xq1", "雪球帖", "正文", "u1", "")
+    db.insert_post("weibo", wb, "wb1", "微博帖", "微博正文", "u2", "")
+
+    me = client.get("/api/me", headers=uh).json()
+    assert "xueqiu" in me["plaza_platforms"]
+    assert "weibo" in me["plaza_platforms"]
+    assert me["timeline_platforms"] == ["xueqiu"]
+    assert client.get("/api/my/feed?platform=weibo", headers=uh).json() == []
+
+    db.add_subscription(uid, wb, type="post")
+    me = client.get("/api/me", headers=uh).json()
+    assert me["timeline_platforms"] == ["xueqiu", "weibo"]
+    assert [p["external_id"] for p in client.get("/api/my/feed?platform=weibo", headers=uh).json()] == [
+        "wb1"
+    ]
+
+    client.put(
+        "/api/admin/plaza-sources",
+        headers=auth_headers(client),
+        json={"visibility": {"weibo": "hide"}},
+    )
+    me = client.get("/api/me", headers=uh).json()
+    assert "weibo" not in me["plaza_platforms"]
+    assert "weibo" not in me["timeline_platforms"]
