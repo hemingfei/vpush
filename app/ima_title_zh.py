@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -14,6 +15,9 @@ MIN_SORT = "2026-07-01"
 BATCH = 12
 MAX_PER_RUN = 240
 CJK = re.compile(r"[\u4e00-\u9fff]")
+DATE_SUFFIX = re.compile(r"-(\d{6})\.pdf$", re.I)
+TITLE_TRANSLATION_TIMEOUT = 20
+TITLE_TRANSLATION_BUDGET_SECONDS = 180
 PROMPT = (
     "把投行研报英文文件名译成中文展示名。规则："
     "1. 券商用中文（高盛/野村/摩根士丹利/摩根大通/瑞银/德意志银行/伯恩斯坦/花旗/美银证券/汇丰/麦格理等）"
@@ -29,6 +33,18 @@ def _stem(name: str) -> str:
 
 def _has_cjk(text: str) -> bool:
     return bool(CJK.search(text or ""))
+
+
+def _normalized_translation(source: str, translated: str) -> str:
+    value = str(translated or "").strip()
+    if not value or not _has_cjk(value):
+        return ""
+    source_suffix = DATE_SUFFIX.search(source)
+    value = value.removesuffix(".pdf").removesuffix(".PDF")
+    value = re.sub(r"-\d{1,6}$", "", value)
+    if source_suffix:
+        value = f"{value}-{source_suffix.group(1)}"
+    return f"{value}.pdf"
 
 
 def _group_dir(archive_root, group_id: str) -> str:
@@ -87,13 +103,24 @@ def refresh_bank_titles_zh(service: Any, *, llm_config=None, chat=None, limit: i
     from .llm import _chat
     from .scheduler import _system_llm_config
 
-    cfg = llm_config if llm_config is not None else _system_llm_config(service.db)
+    cfg = llm_config if llm_config is not None else _system_llm_config(
+        service.db,
+        getattr(service, "llm_config", None),
+    )
     if cfg is None:
         return 0
     chat_fn = chat or (lambda titles: _parse_list(
-        _chat(cfg, [{"role": "user", "content": PROMPT + json.dumps(titles, ensure_ascii=False)}], 2200, temperature=0.2) or "",
+        _chat(
+            cfg,
+            [{"role": "user", "content": PROMPT + json.dumps(titles, ensure_ascii=False)}],
+            2200,
+            temperature=0.2,
+            timeout=TITLE_TRANSLATION_TIMEOUT,
+        ) or "",
         len(titles),
     ))
+    deadline = time.monotonic() + TITLE_TRANSLATION_BUDGET_SECONDS
+    remaining = max(0, int(limit))
     groups = [
         group for group in service.config().groups
         if BANK_NAME_HINT in str(group.name or "")
@@ -112,36 +139,44 @@ def refresh_bank_titles_zh(service: Any, *, llm_config=None, chat=None, limit: i
             "WHERE group_id = ? AND sort_date >= ? ORDER BY sort_date, name",
             (group.id, MIN_SORT),
         )
-        pending = []
+        pending: dict[str, dict[str, Any]] = {}
         for row in rows:
             name = str(row["name"] or "")
             stem = _stem(name)
-            if not name or _has_cjk(name) or _has_cjk(str(overrides.get(stem) or "")):
+            override = str(overrides.get(stem) or "")
+            if override and _has_cjk(override):
+                service.db._execute(
+                    "UPDATE ima_document_index SET name = ?, name_folded = ? WHERE group_id = ? AND media_id = ?",
+                    (override, override.casefold(), group.id, str(row["media_id"] or "")),
+                )
                 continue
-            pending.append((str(row["media_id"] or ""), name, stem))
-        pending = pending[: max(0, int(limit))]
-        for i in range(0, len(pending), BATCH):
-            chunk = pending[i : i + BATCH]
-            translated = chat_fn([item[1] for item in chunk])
+            if not name or _has_cjk(name):
+                continue
+            item = pending.setdefault(stem, {"source": name, "media_ids": []})
+            item["media_ids"].append(str(row["media_id"] or ""))
+        entries = list(pending.values())[:remaining]
+        for i in range(0, len(entries), BATCH):
+            if remaining <= 0 or time.monotonic() >= deadline:
+                break
+            chunk = entries[i : i + min(BATCH, remaining)]
+            translated = chat_fn([item["source"] for item in chunk])
             if not translated:
                 logger.warning("投行标题翻译批次失败 group=%s offset=%s", group.id[:16], i)
-                continue
-            for (media_id, _src, stem), zh in zip(chunk, translated):
-                if not zh or not _has_cjk(zh):
+                break
+            for item, raw_zh in zip(chunk, translated):
+                zh = _normalized_translation(item["source"], raw_zh)
+                if not zh:
                     continue
-                if not zh.lower().endswith(".pdf"):
-                    zh += ".pdf"
+                stem = _stem(item["source"])
                 overrides[stem] = zh
-                try:
+                for media_id in item["media_ids"]:
                     service.db._execute(
                         "UPDATE ima_document_index SET name = ?, name_folded = ? "
                         "WHERE group_id = ? AND media_id = ?",
                         (zh, zh.casefold(), group.id, media_id),
                     )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("投行标题回写索引失败: %s", exc)
-                    continue
-                done += 1
+                    done += 1
+                remaining -= 1
             _save_overrides(titles_path, overrides)
     if done:
         logger.info("投行标题已译 %s 条", done)

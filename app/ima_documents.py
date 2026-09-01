@@ -2574,8 +2574,10 @@ class ImaDocumentService:
         *,
         archive_root: str | Path | None = None,
         storage_status: ImaStorageStatus | None = None,
+        llm_config: Any = None,
     ):
         self.db = db
+        self.llm_config = llm_config
         self.storage_status = storage_status or ImaStorageStatus(None, remote=False)
         self.store = ImaDocumentStore(
             index_root,
