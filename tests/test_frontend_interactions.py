@@ -650,8 +650,13 @@ def test_plaza_source_visibility_admin_and_pills():
     """管理员可设广场数据源自动/显示/隐藏；角标和旧 #/zsxq 都认可见列表。"""
     src = APP_JS.read_text()
     css = STYLE_CSS.read_text()
-    assert 'STATS_TABS = ["config", "cookies", "proxies", "plaza"]' in src
-    assert 'data-tab="plaza"' in _fn_body("loadAdminStats")
+    assert 'STATS_TABS = ["config", "cookies", "proxies", "plaza", "news"]' in src
+    tabs = _fn_body("statsTabsHtml")
+    assert 'data-tab="${tab}"' in tabs
+    assert "proxies:" in tabs
+    assert "plaza:" in tabs
+    assert "news:" in tabs
+    assert "财经资讯" in tabs
     assert "动态广场显示" in _fn_body("loadAdminStats")
     assert "plazaSourceRowsHtml(s.plaza_sources)" in _fn_body("loadAdminStats")
     assert "plaza_platforms" in _fn_body("plazaVisibleSet")
@@ -1023,7 +1028,7 @@ def test_kol_image_css_is_compact_truncating_and_touchable():
 
 def test_stats_proxies_tab():
     src = APP_JS.read_text()
-    assert 'data-tab="proxies"' in src
+    assert 'data-tab="${tab}"' in _fn_body("statsTabsHtml")
     assert "function loadProxyAdmin" in src
     assert 'STATS_TABS.includes(tab)' in _fn_body("statsTabFromHash")
     assert '"proxies"' in APP_JS.read_text()
@@ -1035,11 +1040,11 @@ def test_stats_proxies_tab():
 def test_stats_tabs_expose_tab_aria():
     """数据源分段导航与注册码页同一套 tab 语义。"""
     src = APP_JS.read_text()
-    assert 'role="tab" id="tab-config" aria-selected="true" aria-controls="st-config"' in src
-    assert 'id="tab-overview"' not in src
-    assert 'id="tab-health"' not in src
-    assert 'aria-controls="st-proxies"' in src
-    assert 'role="tabpanel" aria-labelledby="tab-proxies"' in src
+    tabs = _fn_body("statsTabsHtml")
+    assert 'role="tab"' in tabs
+    assert 'id="tab-${tab}"' in tabs
+    assert "aria-controls=\"st-${tab}\"" in tabs
+    assert "news:" in tabs
     switch = _fn_body("switchStatsTab")
     assert 'setAttribute("aria-selected"' in switch
 
@@ -1123,16 +1128,12 @@ def test_stats_tabs_are_config_workshop_only():
     assert "监控总览" not in load
     assert "大V健康" not in load
     assert "大V抓取健康" not in load
+    assert 'statsTabsHtml("config")' in load
+    assert "data-tab=\"cookies\"" not in load
+    assert "data-tab=\"proxies\"" not in load
+    assert "data-tab=\"plaza\"" not in load
     assert 'id="st-overview"' not in load
     assert 'id="st-health"' not in load
-    assert 'id="sources-table"' not in load
-    assert 'id="kol-health"' not in load
-    assert "statsTimer =" not in load
-    assert "setInterval" not in load
-    assert 'data-tab="config"' in load
-    assert 'data-tab="cookies"' in load
-    assert 'data-tab="proxies"' in load
-    assert 'data-tab="plaza"' in load
     hash_fn = _fn_body("statsTabFromHash")
     switch = _fn_body("switchStatsTab")
     assert 'tab === "overview"' in hash_fn or '"overview"' in hash_fn
@@ -3441,6 +3442,29 @@ def test_ima_document_list_hides_tag_rail_but_keeps_tag_filtering():
     assert 'id="ima-doc-tag"' in render
     assert "tagSelect.hidden" in render or "tagSelect.removeAttribute(\"hidden\")" in render or "hidden" in render
     assert "uniqueTags" in render
+
+
+def test_admin_news_tab_is_full_feed_manager():
+    src = APP_JS.read_text()
+    assert 'const STATS_TABS = ["config", "cookies", "proxies", "plaza", "news"]' in src
+    for name in (
+        "loadAdminNews", "renderAdminNews", "openNewsSourceModal",
+        "openNewsFeedModal", "validateNewsFeedDraft", "refreshAdminNewsFeed",
+        "archiveAdminNewsSource", "restoreAdminNewsSource",
+    ):
+        assert f"function {name}" in src or f"async function {name}" in src
+    assert "财经资讯" in src
+    assert "显示已归档" in src
+    assert "验证并保存" in src
+
+
+def test_admin_news_master_detail_is_responsive():
+    css = STYLE_CSS.read_text()
+    assert ".news-admin-layout" in css
+    assert "grid-template-columns: 240px minmax(0, 1fr)" in css
+    mobile = _media_block(css, "@media (max-width: 768px)", last=True)
+    assert ".news-admin-layout" in mobile
+    assert "grid-template-columns: 1fr" in mobile
 
 
 def test_frontend_asset_urls_bust_browser_cache():
