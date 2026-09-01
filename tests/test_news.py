@@ -215,3 +215,28 @@ def test_fetch_image_rejects_non_image_and_oversized_body(tmp_path, monkeypatch)
     service.close()
     client.close()
     db.close()
+
+
+def test_submit_due_skips_disabled_collection_and_submits_due_feeds(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+    service, db, client, feed_id = make_news_service(
+        tmp_path, lambda request: httpx.Response(304)
+    )
+    db.set_setting("news_enabled", "0")
+    assert service.submit_due() == []
+    accepted = []
+    service.submit_feed = lambda current_id: accepted.append(current_id) or True
+    db.set_setting("news_enabled", "1")
+    db._execute(
+        "UPDATE news_feeds SET last_attempt_at = ? WHERE id != ?",
+        ("2099-01-01T00:00:00+00:00", feed_id),
+    )
+    db._execute(
+        "UPDATE news_feeds SET last_attempt_at = ? WHERE id = ?",
+        ("2026-01-01T00:00:00+00:00", feed_id),
+    )
+    assert service.submit_due() == [feed_id]
+    assert accepted == [feed_id]
+    service.close()
+    client.close()
+    db.close()

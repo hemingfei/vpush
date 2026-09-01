@@ -3011,6 +3011,12 @@ class DB:
         )
         return [self._normalize_news_article(row) for row in rows]
 
+    def count_news_articles_for_source(self, source_id: int) -> int:
+        rows = self._rows(
+            "SELECT COUNT(*) AS n FROM news_articles WHERE source_id = ?", (source_id,)
+        )
+        return _to_int(rows[0]["n"]) if rows else 0
+
     def count_news_articles(self, user_id: int, *, source_id: int | None, q: str) -> int:
         where, params = self._news_article_filter(user_id, source_id, (q or "").strip())
         rows = self._rows(
