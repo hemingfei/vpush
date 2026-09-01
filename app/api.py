@@ -4384,7 +4384,7 @@ def create_api_router(
 
     @router.get("/stats", dependencies=[Depends(require_admin)])
     def stats():
-        kols = db.list_kols()
+        kols = db.list_kols(with_subscriber_count=True)
         # 「正常」状态有新鲜度窗口：source_ok 太久没更新视为近期无成功，
         # 避免平台曾成功过一次就永远显示正常（连续失败被掩盖）。
         # 窗口取 2× 全局轮询间隔，至少 5 分钟；无启用大V的平台不判定。
@@ -4483,6 +4483,7 @@ def create_api_router(
                 "platform": k["platform"],
                 "enabled": bool(k["enabled"]),
                 "last_post_at": last_post_at.get(k["id"]) or "",
+                "subscriber_count": int(k.get("subscriber_count") or 0),
             }
             for k in kols
         ]
@@ -4529,6 +4530,7 @@ def create_api_router(
             "recent_source_events": db.recent_source_events(30),
             "kol_health": kol_health,
             "retry_pending": int(db.get_setting("stats_retry_pending") or 0),
+            "pending_kol_requests": db.count_pending_kol_requests(),
             "alerts": {
                 "push_alert_last_at": db.get_setting("push_alert_last_at") or "",
                 "x_direct_alert_at": db.get_setting("x_direct_alert_at") or "",

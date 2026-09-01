@@ -2499,6 +2499,13 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
 .dash-duty-strip li.is-fail { color: var(--color-danger); }
 .dash-duty-strip li.is-warn { color: var(--color-warning-strong); }
 .dash-duty-strip li.is-idle { color: var(--color-text); font-weight: var(--font-weight-medium); }
+.dash-duty-strip .linkish {
+  min-height: 0;
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+}
 .dash-status-cred { color: var(--color-warning-strong); }
 .dash-stale-verdict {
   margin: 0 0 8px;
@@ -2605,6 +2612,10 @@ button.linkish:hover { text-decoration: underline; }
   .dash-duty-strip {
     flex-direction: column;
     gap: 4px;
+  }
+  .dash-duty-strip .linkish {
+    min-height: 44px;
+    min-width: 44px;
   }
   .dash-source-panel .section-head,
   .dash-volume-panel .section-head {

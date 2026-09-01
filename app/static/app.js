@@ -7278,7 +7278,7 @@ async function setPlazaSourceMode(platform, mode) {
 
 function staleEnabledKolRows(rows, nowMs) {
   const cutoff = (nowMs || Date.now()) - STALE_KOL_HOURS * 3600 * 1000;
-  const live = (rows || []).filter((k) => k.enabled);
+  const live = (rows || []).filter((k) => k.enabled && (k.subscriber_count == null || Number(k.subscriber_count) > 0));
   const stale = live.filter((k) => {
     if (!k.last_post_at) return true;
     const ts = parseDbUtcMs(k.last_post_at);
@@ -7390,6 +7390,7 @@ function dashboardFetchMetaHtml(s) {
   const items = [];
   items.push(s.last_poll_at ? `最近抓取 ${fmtTs(s.last_poll_at)}` : "尚未轮询");
   if (s.last_poll_duration_ms) items.push(`耗时 ${(Number(s.last_poll_duration_ms) / 1000).toFixed(1)} 秒`);
+  if (s.enabled_kols != null) items.push(`活跃抓取 ${s.active_kols || 0}/${s.enabled_kols}`);
   items.push(`轮询 ${s.polling_interval_seconds || "—"} 秒`);
   items.push(s.retry_pending
     ? `<span class="status-warn">待重试 ${s.retry_pending} 条</span>`
@@ -7414,17 +7415,19 @@ function staleKolsHtml(rows) {
   const all = staleEnabledKolRows(rows);
   const stale = all.slice(0, STALE_KOL_LIMIT);
   if (!all.length) {
-    return `<p class="muted" id="kol-health-empty">启用中的大V 在 ${STALE_KOL_HOURS} 小时内都抓到过新帖</p>`;
+    return `<p class="muted" id="kol-health-empty">有订阅的大V 在 ${STALE_KOL_HOURS} 小时内都抓到过新帖</p>`;
   }
   const extra = all.length > stale.length ? `，列出 ${stale.length} 个` : "";
   const nowMs = Date.now();
-  return `<p class="dash-stale-verdict" id="kol-health-verdict">${all.length} 个超过 ${STALE_KOL_HOURS} 小时没抓到新帖${extra}</p>
+  return `<p class="dash-stale-verdict" id="kol-health-verdict">${all.length} 个有订阅大V超过 ${STALE_KOL_HOURS} 小时没抓到新帖${extra}</p>
     <ul class="dash-stale-list">${stale.map((h) => {
       const when = h.last_post_at ? fmtRelativeFromMs(parseDbUtcMs(h.last_post_at), nowMs) : "从未";
       const plat = PLATFORM_LABELS[h.platform] || h.platform || "";
+      const subs = Number(h.subscriber_count);
+      const subBit = Number.isFinite(subs) && subs > 0 ? ` · ${subs} 订` : "";
       return `<li>
         <button type="button" class="linkish" data-name="${escapeHtml(h.name)}" onclick="openAdminKolFromHealth(this.dataset.name)">${escapeHtml(h.name)}</button>
-        <span class="muted">${escapeHtml(plat)} · ${escapeHtml(when)}</span>
+        <span class="muted">${escapeHtml(plat)} · ${escapeHtml(when)}${escapeHtml(subBit)}</span>
       </li>`;
     }).join("")}</ul>`;
 }
@@ -7442,11 +7445,13 @@ function dutyStripHtml(s) {
     else failing += 1;
   });
   const staleAll = staleEnabledKolRows(s.kol_health).length;
+  const pending = Number(s.pending_kol_requests) || 0;
   const bits = [];
   if (failing) bits.push(`<li class="is-fail">${failing} 条管线持续失败</li>`);
   if (cred) bits.push(`<li class="is-warn">${cred} 条凭据缺失</li>`);
   if (never) bits.push(`<li class="is-idle">${never} 条尚未开始抓取</li>`);
-  if (staleAll) bits.push(`<li class="is-fail">${staleAll} 个启用大V停更</li>`);
+  if (staleAll) bits.push(`<li class="is-fail">${staleAll} 个有订阅大V停更</li>`);
+  if (pending) bits.push(`<li class="is-warn"><button type="button" class="linkish" onclick="go('admin/requests')">${pending} 条待审批</button></li>`);
   if (!bits.length) bits.push(`<li class="is-ok">管线正常，没有停更例外</li>`);
   return `<ul class="dash-duty-strip" id="dash-duty-strip">${bits.join("")}</ul>`;
 }
@@ -9028,7 +9033,7 @@ async function loadAdminDashboard() {
       </div>
       <section class="section-panel dash-volume-panel">
         <header class="section-head"><div><h2 class="section-title">核心指标</h2>
-        <p class="section-meta">注册用户 ${u.total || 0} · 订阅 ${s.total || 0} · 帖子 ${p.total || 0}</p></div></header>
+        <p class="section-meta">今日新帖 ${p.today || 0} · 今日推送 ${pu.today || 0} · 7 日新用户 ${u.new_7d || 0} · 注册 ${u.total || 0}</p></div></header>
         ${volumeBody}
       </section>
       ${splitSection}`;

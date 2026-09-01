@@ -2021,6 +2021,11 @@ class DB:
         sql += " ORDER BY r.id DESC"
         return self._rows(sql, params)
 
+    def count_pending_kol_requests(self) -> int:
+        return _to_int((self._rows(
+            "SELECT COUNT(*) AS v FROM kol_requests WHERE status = 'pending'"
+        ) or [{}])[0].get("v"))
+
     def get_kol_request(self, request_id: int) -> dict | None:
         rows = self._rows("SELECT * FROM kol_requests WHERE id = ?", (request_id,))
         return rows[0] if rows else None

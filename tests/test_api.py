@@ -3293,6 +3293,9 @@ def test_stats_returns_source_stability_fields():
     assert len(data["recent_source_events"]) == 2
     assert data["retry_pending"] == 2
     assert any(h["id"] == kid and h["last_post_at"] for h in data["kol_health"])
+    health = next(h for h in data["kol_health"] if h["id"] == kid)
+    assert health["subscriber_count"] == 0
+    assert data["pending_kol_requests"] == 0
     assert "push_alert_last_at" in data["alerts"]
 
 

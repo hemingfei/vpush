@@ -1090,6 +1090,8 @@ def test_dashboard_is_duty_console():
     src = APP_JS.read_text()
     assert "核心指标" in dash
     assert "近 14 天推送趋势" in dash
+    assert "今日新帖" in dash
+    assert "今日推送" in dash
     assert "数据源健康" in dash
     assert "停更" in dash or "kol-health" in dash
     assert dash.count("数据源健康") == 1
@@ -1149,8 +1151,12 @@ def test_stale_kols_are_exceptions_not_inventory():
     body = _fn_body("staleEnabledKols")
     html = _fn_body("staleKolsHtml")
     assert "enabled" in rows
+    assert "subscriber_count" in rows
     assert "STALE_KOL_HOURS" in rows
     assert "STALE_KOL_LIMIT" in body
+    duty = _fn_body("dutyStripHtml")
+    assert "pending_kol_requests" in duty
+    assert "admin/requests" in duty
     assert "kol-health-verdict" in html
     open_fn = _fn_body("openAdminKolFromHealth")
     assert "adminKolsQ" in open_fn
@@ -3380,9 +3386,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=260"' in html
-    assert 'src="/app.js?v=368"' in html
-    assert 'dav-shell-v237' in sw
+    assert 'href="/style.css?v=261"' in html
+    assert 'src="/app.js?v=369"' in html
+    assert 'dav-shell-v238' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
