@@ -32,6 +32,7 @@ from app.ima_documents import (
     ImaGroupConfig,
     ImaPureClient,
     load_title_overrides,
+    group_next_run_at,
     next_shanghai_schedule,
     shanghai_schedule_gate,
     _clamp_group_interval,
@@ -2212,6 +2213,44 @@ def test_shanghai_schedule_is_next_0100():
     assert shanghai_schedule_gate(before) == today
     assert next_shanghai_schedule(before) == today
     assert next_shanghai_schedule(after) == tomorrow
+
+
+def test_group_next_run_at_catches_up_24h_group_after_0100():
+    from datetime import datetime, timedelta, timezone
+
+    tz = timezone(timedelta(hours=8))
+    now = datetime(2026, 9, 1, 2, 0, tzinfo=tz).timestamp()
+    yesterday = datetime(2026, 8, 31, 1, 5, tzinfo=tz).timestamp()
+    group = ImaGroupConfig("g", "库", "kb", "root", True, "discovered", ("root",), 86400)
+    assert group_next_run_at(group, yesterday, now) == now
+
+
+def test_group_next_run_at_keeps_subdaily_interval():
+    now = 1_000_000.0
+    group_1h = ImaGroupConfig("a", "A", "kb", "root", True, "discovered", ("root",), 3600)
+    group_6h = ImaGroupConfig("b", "B", "kb", "root", True, "discovered", ("root",), 21600)
+    assert group_next_run_at(group_1h, now - 1800, now) == now + 1800
+    assert group_next_run_at(group_6h, now - 7200, now) == now + 14400
+
+
+def test_scheduled_run_at_picks_overdue_1h_not_todays_24h(tmp_path, monkeypatch):
+    now = time.time()
+    gate = shanghai_schedule_gate(now)
+    b_last = int(gate + 60) if now >= gate else int(now)
+    db = _two_mounted_groups_db(
+        runtime={
+            "a": {"last_started_at": int(now - 7200)},
+            "b": {"last_started_at": b_last},
+        }
+    )
+    listed = []
+    monkeypatch.setattr(ima_documents, "ImaPureClient", _listing_client(listed))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    monkeypatch.setattr(service, "discover", lambda: {"discovery": {}})
+    assert service._scheduled_run_at(now) == now
+    assert service.trigger(scheduled=True)["status"] == "started"
+    service._worker_thread.join(timeout=10)
+    assert listed == ["a"]
 
 
 def test_24h_group_due_only_after_shanghai_0100(tmp_path):

@@ -64,6 +64,16 @@ def shanghai_schedule_gate(now: float, hour: int = IMA_SCHEDULE_HOUR) -> float:
     return dt.replace(hour=hour, minute=0, second=0, microsecond=0).timestamp()
 
 
+def group_next_run_at(group: "ImaGroupConfig", last_started_at: float, now: float) -> float:
+    interval = _clamp_group_interval(group.interval_seconds)
+    if interval >= 86400:
+        gate = shanghai_schedule_gate(now)
+        if now >= gate and last_started_at < gate:
+            return now
+        return next_shanghai_schedule(now)
+    return max(now, last_started_at + interval)
+
+
 IMA_PURE_UID_KEY = "ima_pure_uid"
 IMA_PURE_REFRESH_TOKEN_KEY = "ima_pure_refresh_token"
 IMA_PURE_KB_ID_KEY = "ima_pure_knowledge_base_id"
@@ -3476,16 +3486,29 @@ class ImaDocumentService:
         while not self._stop.wait(30):
             if self._stop.is_set():
                 break
-            cfg = self.config()
-            now = time.time()
-            with self._state_lock:
-                if not self._next_run_at:
-                    self._next_run_at = next_shanghai_schedule(now)
-                due = now >= self._next_run_at
-            if due:
-                self.trigger(scheduled=True)
-            elif self._local_libraries_need_scan():
-                self.scan_local_libraries()
+            self._schedule_once()
+
+    def _scheduled_run_at(self, now: float) -> float:
+        runtime = self._group_runtime()
+        candidates = []
+        for group in self._mounted_groups():
+            item = runtime.get(group.id) if isinstance(runtime.get(group.id), dict) else {}
+            try:
+                last = float((item or {}).get("last_started_at") or 0)
+            except (TypeError, ValueError):
+                last = 0.0
+            candidates.append(group_next_run_at(group, last, now))
+        return min(candidates, default=next_shanghai_schedule(now))
+
+    def _schedule_once(self, now: float | None = None) -> dict[str, Any]:
+        current = time.time() if now is None else now
+        next_run = self._scheduled_run_at(current)
+        with self._state_lock:
+            self._next_run_at = next_run
+        result = self.trigger(scheduled=True) if current >= next_run else {"status": "not_due"}
+        if self._local_libraries_need_scan() and result.get("status") != "started":
+            self.scan_local_libraries()
+        return result
 
     def _mounted_groups(self, cfg: ImaDocumentConfig | None = None) -> list[ImaGroupConfig]:
         groups = (cfg or self.config()).groups
@@ -3551,7 +3574,6 @@ class ImaDocumentService:
             ):
                 return {"status": "too_soon", "retry_at": int(last_started + cfg.interval_seconds)}
             if scheduled:
-                self._next_run_at = next_shanghai_schedule(now)
                 if not any(self._group_due(group, now) for group in self._mounted_groups(cfg)):
                     return {"status": "not_due"}
             else:
