@@ -211,6 +211,25 @@ def test_run_retries_verifier_failures(tmp_path, monkeypatch):
     assert json.loads(state.read_text())["files"] == {}
 
 
+def test_watermark_guard_closes_document_on_early_return(monkeypatch):
+    collector = sys.modules[compressor.strip_watermark_result.__module__]
+
+    class FakeDoc:
+        is_form_pdf = True
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    doc = FakeDoc()
+    monkeypatch.setitem(sys.modules, "fitz", type("Fitz", (), {"open": lambda **_: doc}))
+
+    _, result = collector.strip_watermark_result(b"%PDF-1.7")
+
+    assert result == "unsupported_features"
+    assert doc.closed is True
+
+
 def test_run_strips_watermark_even_when_compression_is_rejected(tmp_path, monkeypatch):
     report = tmp_path / "report.pdf"
     _pdf(report, b"watermarked")

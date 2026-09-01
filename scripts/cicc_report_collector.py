@@ -370,6 +370,7 @@ def strip_watermark_result(payload: bytes) -> tuple[bytes, str]:
             print("WARN: 未装 python3-fitz/pymupdf，本次不去水印", file=sys.stderr)
             _wm_warned = True
         return payload, "watermark_unavailable"
+    doc = None
     try:
         doc = fitz.open(stream=payload, filetype="pdf")
         if _pdf_has_unsupported_watermark_features(doc):
@@ -403,6 +404,9 @@ def strip_watermark_result(payload: bytes) -> tuple[bytes, str]:
     except Exception as e:  # noqa: BLE001 — 去水印失败不阻断采集
         print(f"WARN: 去水印失败，保留原文件: {e}", file=sys.stderr)
         return payload, "watermark_error"
+    finally:
+        if doc is not None:
+            doc.close()
 
 
 def strip_watermark(payload: bytes) -> bytes:
