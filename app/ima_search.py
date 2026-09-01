@@ -10,6 +10,9 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
+MAX_BODY_BYTES = 8 * 1024 * 1024
+MAX_QUERY_CHARS = 256
+
 _EMPTY_COUNTS = {
     "indexed": 0,
     "updated": 0,
@@ -226,7 +229,11 @@ class ImaSearchIndex:
                     missing += 1
                     continue
                 try:
-                    body = _plain_text(path.read_text(encoding="utf-8", errors="ignore"))
+                    with path.open("rb") as stream:
+                        raw_body = stream.read(MAX_BODY_BYTES + 1)
+                    body = _plain_text(
+                        raw_body[:MAX_BODY_BYTES].decode("utf-8", errors="ignore")
+                    )
                 except OSError:
                     missing += 1
                     continue
@@ -292,7 +299,7 @@ class ImaSearchIndex:
     def search(
         self, query: str, readable_group_ids: list[str], limit: int
     ) -> list[dict]:
-        text = " ".join(str(query or "").split())
+        text = " ".join(str(query or "").split())[:MAX_QUERY_CHARS]
         if (
             not self.enabled
             or not self.path.is_file()

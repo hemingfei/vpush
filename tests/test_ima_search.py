@@ -2,6 +2,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
+import app.ima_search as ima_search
 from app.ima_search import ImaSearchIndex
 
 
@@ -26,6 +27,14 @@ def _row(
         "downloaded_at": downloaded_at,
         "chars": chars,
     }
+
+
+def _writer_connection(index: ImaSearchIndex, factory) -> sqlite3.Connection:
+    connection = sqlite3.connect(index.path, timeout=5, factory=factory)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA busy_timeout=5000")
+    connection.execute("PRAGMA journal_mode=WAL")
+    return connection
 
 
 def test_disabled_index_does_not_create_database(tmp_path):
@@ -110,17 +119,23 @@ def test_sync_and_search_overlap_serves_a_committed_version(tmp_path, monkeypatc
 
     body.write_text("Updated committed supply outlook.", encoding="utf-8")
     changed = {**row, "downloaded_at": "2026-09-02T00:00:00+00:00"}
-    read_started = threading.Event()
-    allow_read = threading.Event()
-    original_read_text = Path.read_text
+    dml_done = threading.Event()
+    allow_commit = threading.Event()
+    original_connect = index._connect
 
-    def controlled_read_text(path, *args, **kwargs):
-        if path == body:
-            read_started.set()
-            assert allow_read.wait(2), "sync body read was not released"
-        return original_read_text(path, *args, **kwargs)
+    class PausingConnection(sqlite3.Connection):
+        def executemany(self, sql, parameters):
+            result = super().executemany(sql, parameters)
+            dml_done.set()
+            assert allow_commit.wait(2), "sync transaction was not released"
+            return result
 
-    monkeypatch.setattr(Path, "read_text", controlled_read_text)
+    def controlled_connect(*, readonly=False):
+        if readonly:
+            return original_connect(readonly=True)
+        return _writer_connection(index, PausingConnection)
+
+    monkeypatch.setattr(index, "_connect", controlled_connect)
     outcome = {}
 
     def run_sync():
@@ -128,9 +143,9 @@ def test_sync_and_search_overlap_serves_a_committed_version(tmp_path, monkeypatc
 
     worker = threading.Thread(target=run_sync)
     worker.start()
-    assert read_started.wait(2), "sync did not reach the controlled body read"
+    assert dml_done.wait(2), "sync did not execute transactional DML"
     overlapping = index.search("previous committed", ["semi"], 10)
-    allow_read.set()
+    allow_commit.set()
     worker.join(2)
 
     assert not worker.is_alive()
@@ -157,6 +172,40 @@ def test_sync_removes_configured_documents_absent_from_next_input(tmp_path):
     assert second["indexed"] == 1
     assert second["removed"] == 1
     assert [item["media_id"] for item in index.search("gross margin", ["semi"], 10)] == ["one"]
+
+
+def test_sync_bounds_body_bytes_and_indexes_only_the_prefix(tmp_path, monkeypatch):
+    assert ima_search.MAX_BODY_BYTES == 8 * 1024 * 1024
+    monkeypatch.setattr(ima_search, "MAX_BODY_BYTES", 64)
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    prefix = b"searchable prefix " + b"x" * (64 - len(b"searchable prefix "))
+    (archive / "large.txt").write_bytes(prefix + b" beyond-limit-marker")
+    index = ImaSearchIndex(tmp_path / "ima-search.db", archive, ("semi",))
+
+    assert index.sync([_row("semi", "large", "large.txt")])["updated"] == 1
+    assert index.search("searchable prefix", ["semi"], 10)[0]["media_id"] == "large"
+    assert index.search("beyond-limit-marker", ["semi"], 10) == []
+    with index._connect(readonly=True) as connection:
+        stored = connection.execute(
+            "SELECT body FROM documents WHERE media_id = 'large'"
+        ).fetchone()[0]
+    assert "beyond-limit-marker" not in stored
+    assert len(stored.encode()) <= 64
+
+
+def test_oversized_query_is_truncated_before_fts(tmp_path):
+    assert ima_search.MAX_QUERY_CHARS == 256
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    prefix = "cashflow" + "x" * (ima_search.MAX_QUERY_CHARS - len("cashflow"))
+    (archive / "report.txt").write_text(prefix, encoding="utf-8")
+    index = ImaSearchIndex(tmp_path / "ima-search.db", archive, ("semi",))
+    index.sync([_row("semi", "report", "report.txt")])
+
+    results = index.search(prefix + "y" * 1000, ["semi"], 10)
+
+    assert results[0]["media_id"] == "report"
 
 
 def test_database_uses_wal_busy_timeout_and_trigram_fts(tmp_path):
@@ -211,7 +260,8 @@ def test_search_enforces_acl_short_query_rules_and_plain_snippets(tmp_path):
 def test_sync_failure_keeps_last_good_index_and_reports_error(tmp_path, monkeypatch):
     archive = tmp_path / "archive"
     archive.mkdir()
-    (archive / "report.txt").write_text("supply chain normalization", encoding="utf-8")
+    body = archive / "report.txt"
+    body.write_text("supply chain normalization", encoding="utf-8")
     index = ImaSearchIndex(tmp_path / "ima-search.db", archive, ("semi",))
     row = _row("semi", "report", "report.txt")
     assert index.sync([row])["indexed"] == 1
@@ -221,12 +271,23 @@ def test_sync_failure_keeps_last_good_index_and_reports_error(tmp_path, monkeypa
     assert good_status["last_sync_at"]
     assert good_status["error"] == ""
 
-    def broken_connect(*args, **kwargs):
-        raise sqlite3.OperationalError("simulated sync failure")
+    body.write_text("updated demand outlook", encoding="utf-8")
+    changed = {**row, "downloaded_at": "2026-09-02T00:00:00+00:00"}
+    original_connect = index._connect
+
+    class FailingAfterDmlConnection(sqlite3.Connection):
+        def executemany(self, sql, parameters):
+            super().executemany(sql, parameters)
+            raise sqlite3.OperationalError("simulated failure after DML")
+
+    def controlled_connect(*, readonly=False):
+        if readonly:
+            return original_connect(readonly=True)
+        return _writer_connection(index, FailingAfterDmlConnection)
 
     with monkeypatch.context() as patch:
-        patch.setattr("app.ima_search.sqlite3.connect", broken_connect)
-        result = index.sync([row])
+        patch.setattr(index, "_connect", controlled_connect)
+        result = index.sync([changed])
 
     assert result == {
         "indexed": 1,
@@ -240,8 +301,9 @@ def test_sync_failure_keeps_last_good_index_and_reports_error(tmp_path, monkeypa
     assert failed_status["ready"] is True
     assert failed_status["documents"] == 1
     assert failed_status["last_sync_at"] == good_status["last_sync_at"]
-    assert "simulated sync failure" in failed_status["error"]
+    assert "simulated failure after DML" in failed_status["error"]
     assert index.search("supply chain", ["semi"], 10)[0]["media_id"] == "report"
+    assert index.search("updated demand", ["semi"], 10) == []
 
 
 def test_search_database_failure_returns_empty_and_preserves_last_good_index(tmp_path, monkeypatch):
