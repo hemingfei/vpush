@@ -3119,7 +3119,10 @@ class ImaDocumentService:
                     ):
                         fts_batches += 1
                         fts_limit = (
-                            body_target - len(body_rows)
+                            min(
+                                body_target - len(body_rows),
+                                IMA_FTS_BATCH_SIZE,
+                            )
                             if seek_body_offset
                             else IMA_FTS_BATCH_SIZE
                         )

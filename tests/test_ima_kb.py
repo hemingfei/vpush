@@ -1877,22 +1877,27 @@ def test_hybrid_full_text_search_short_missing_and_broken_indexes_keep_metadata(
 
 
 @pytest.mark.parametrize(
-    ("metadata_total", "page_limit", "expected_fts_limit", "expected_calls"),
-    [(0, 50, 51, 1), (1, 1, 200, 11)],
+    ("metadata_total", "page_limit", "expected_fts_calls", "expected_count"),
+    [
+        (0, 50, [(51, 2000)], 2051),
+        (0, 200, [(200, 2000), (1, 2200)], 2201),
+        (0, 500, [(200, 2000), (200, 2200), (101, 2400)], 2501),
+        (1, 1, [(200, offset) for offset in range(0, 2200, 200)], 2200),
+    ],
 )
 def test_hybrid_max_offset_uses_bounded_fts_batches(
     tmp_path,
     monkeypatch,
     metadata_total,
     page_limit,
-    expected_fts_limit,
-    expected_calls,
+    expected_fts_calls,
+    expected_count,
 ):
     client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
         tmp_path, monkeypatch, f"hybrid_max_offset_{metadata_total}"
     )
     service = client.app.state.ima_documents
-    calls = {"search": 0, "lookup": 0}
+    calls = {"search": [], "lookup": 0}
 
     monkeypatch.setattr(service, "_index_usable", lambda: True)
     monkeypatch.setattr(service.search_index, "status", lambda: {"error": ""})
@@ -1903,8 +1908,8 @@ def test_hybrid_max_offset_uses_bounded_fts_batches(
     )
 
     def search(_query, _group_ids, limit, *, offset=0):
-        calls["search"] += 1
-        assert limit == expected_fts_limit
+        calls["search"].append((limit, offset))
+        assert limit <= 200
         return [
             {
                 "group_id": group_a,
@@ -1940,7 +1945,8 @@ def test_hybrid_max_offset_uses_bounded_fts_batches(
         f"hit-{rank}" for rank in range(2000, 2000 + page_limit)
     ]
     assert response.json()["has_more"] is True
-    assert calls == {"search": expected_calls, "lookup": expected_calls}
+    assert response.json()["document_count"] == expected_count
+    assert calls == {"search": expected_fts_calls, "lookup": len(expected_fts_calls)}
 
 
 def test_hybrid_tag_filter_stops_after_eleven_rejected_fts_batches(
