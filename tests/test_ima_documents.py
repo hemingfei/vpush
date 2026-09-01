@@ -2253,6 +2253,36 @@ def test_scheduled_run_at_picks_overdue_1h_not_todays_24h(tmp_path, monkeypatch)
     assert listed == ["a"]
 
 
+def test_due_scheduler_still_starts_cicc_scan_without_ima_credentials(tmp_path, monkeypatch):
+    service = ImaDocumentService(FakeDB({}), tmp_path / "ima")
+    monkeypatch.setattr(service, "_scheduled_run_at", lambda now: now)
+    monkeypatch.setattr(service, "_local_libraries_need_scan", lambda: True)
+    started = []
+    monkeypatch.setattr(service, "_start_local_scan", lambda: started.append(True))
+    assert service._schedule_once(now=1_000_000)["status"] == "not_configured"
+    assert started == [True]
+
+
+def test_start_local_scan_does_not_start_duplicate_thread(tmp_path, monkeypatch):
+    service = ImaDocumentService(FakeDB({}), tmp_path / "ima")
+    entered = threading.Event()
+    release = threading.Event()
+
+    def scan():
+        entered.set()
+        release.wait(2)
+        return {"status": "finished"}
+
+    monkeypatch.setattr(service, "scan_local_libraries", scan)
+    service._start_local_scan()
+    assert entered.wait(1)
+    first = service._local_scan_thread
+    service._start_local_scan()
+    assert service._local_scan_thread is first
+    release.set()
+    first.join(2)
+
+
 def test_24h_group_due_only_after_shanghai_0100(tmp_path):
     from datetime import datetime, timedelta, timezone
     tz = timezone(timedelta(hours=8))

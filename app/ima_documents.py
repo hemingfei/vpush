@@ -2590,6 +2590,7 @@ class ImaDocumentService:
         self._discovery_lock = threading.Lock()
         self._scheduler_thread: threading.Thread | None = None
         self._worker_thread: threading.Thread | None = None
+        self._local_scan_thread: threading.Thread | None = None
         self._running = False
         self._next_run_at = 0.0
         self._cancel_requested = False
@@ -3481,6 +3482,10 @@ class ImaDocumentService:
             worker = self._worker_thread
         if worker and worker.is_alive() and worker is not threading.current_thread():
             worker.join()
+        with self._state_lock:
+            local_scan = self._local_scan_thread
+        if local_scan and local_scan.is_alive() and local_scan is not threading.current_thread():
+            local_scan.join()
 
     def _schedule_loop(self) -> None:
         while not self._stop.wait(30):
@@ -3507,8 +3512,19 @@ class ImaDocumentService:
             self._next_run_at = next_run
         result = self.trigger(scheduled=True) if current >= next_run else {"status": "not_due"}
         if self._local_libraries_need_scan() and result.get("status") != "started":
-            self.scan_local_libraries()
+            self._start_local_scan()
         return result
+
+    def _start_local_scan(self) -> None:
+        with self._state_lock:
+            if self._local_scan_thread and self._local_scan_thread.is_alive():
+                return
+            self._local_scan_thread = threading.Thread(
+                target=self.scan_local_libraries,
+                name="ima-local-library-scan",
+                daemon=True,
+            )
+            self._local_scan_thread.start()
 
     def _mounted_groups(self, cfg: ImaDocumentConfig | None = None) -> list[ImaGroupConfig]:
         groups = (cfg or self.config()).groups
