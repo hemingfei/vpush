@@ -1770,7 +1770,7 @@ def create_api_router(
                 from .url_safety import is_allowed_user_llm_base
 
                 if not is_allowed_user_llm_base(value):
-                    raise HTTPException(status_code=400, detail="用户 LLM 地址不能指向内网或非法地址")
+                    raise HTTPException(status_code=400, detail="LLM 地址须为 http(s) URL")
             updates["llm_api_base"] = value
         if "llm_model" in body.model_fields_set:
             updates["llm_model"] = (body.llm_model or "").strip()
@@ -1798,7 +1798,7 @@ def create_api_router(
             models = list_models(cfg)
         else:
             if not is_allowed_user_llm_base(base):
-                raise HTTPException(status_code=400, detail="用户 LLM 地址不能指向内网或非法地址")
+                raise HTTPException(status_code=400, detail="LLM 地址须为 http(s) URL")
             models = list_models(SimpleNamespace(api_base=base, api_key=key, model="", user_supplied=True))
         if models is None:
             raise HTTPException(status_code=502, detail="无法获取模型列表，请检查地址和 Key")

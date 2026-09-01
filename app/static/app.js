@@ -4522,7 +4522,7 @@ async function renderSettings(seq) {
           <input id="set-llm-base" class="form-control" type="text"
             placeholder="https://api.openai.com/v1"
             value="${escapeHtml(state.user.llm_api_base || "")}">
-          <p class="muted" style="margin-top:4px">公网 http(s) Base URL，不能指向内网。留空跟站点同一套。</p>
+          <p class="muted" style="margin-top:4px">OpenAI 兼容的 http(s) Base URL，内网和本机也可以。留空跟站点同一套。</p>
         </div>
         <div class="form-row">
           <label for="set-llm-key">API Key</label>

@@ -92,15 +92,17 @@ def is_safe_http_url(url: str) -> bool:
 
 
 def is_allowed_user_llm_base(url: str) -> bool:
-    """用户级 LLM：任意公网 http(s)，拒绝内网/元数据和带账号密码的地址。"""
+    """用户级 LLM：任意 http(s) Base URL，含本机和内网；拒绝带账号密码和非 http(s)。"""
     raw = (url or "").strip()
     try:
         parsed = urlparse(raw)
     except ValueError:
         return False
+    if parsed.scheme not in ALLOWED_SCHEMES or not parsed.hostname:
+        return False
     if parsed.username or parsed.password:
         return False
-    return is_safe_http_url(raw)
+    return True
 
 
 def _pinned_request(url: str) -> tuple[str, str]:
