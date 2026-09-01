@@ -3072,7 +3072,7 @@ def create_api_router(
         group: str = Query("", max_length=128),
         tag: str = Query("", max_length=64),
         limit: int = 50,
-        offset: int = 0,
+        offset: int = Query(0, ge=0, le=100000),
         user: dict = Depends(get_current_user),
     ):
         _enforce_ima_list_quota(user)

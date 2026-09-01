@@ -3056,85 +3056,127 @@ class ImaDocumentService:
     ) -> dict[str, Any]:
         if self._index_usable():
             readable_ids = [item.id for item in groups]
+            page_limit = max(int(limit), 1)
+            page_offset = max(int(offset), 0)
             page = None
-            fts_hits: list[dict] = []
-            if query and self.search_index is not None:
+            count_matches = getattr(self.db, "ima_document_match_count", None)
+            lookup = getattr(self.db, "ima_documents_by_keys", None)
+            if (
+                query
+                and self.search_index is not None
+                and callable(count_matches)
+                and callable(lookup)
+            ):
                 scoped_ids = (
                     [group] if group and group in readable_ids else readable_ids
                 )
-                try:
-                    fts_hits = self.search_index.search(query, scoped_ids, 200)
-                except Exception as exc:  # noqa: BLE001 - optional search falls back
-                    logger.warning("IMA full-text search failed error=%s", _safe_error(exc))
-            lookup = getattr(self.db, "ima_documents_by_keys", None)
-            if fts_hits and callable(lookup):
-                fts_rows = lookup(
-                    [(hit.get("group_id"), hit.get("media_id")) for hit in fts_hits],
-                    scoped_ids,
+                metadata_total = count_matches(
+                    readable_ids,
+                    group=group,
+                    query=query,
+                    day=day,
                     tag=tag,
                 )
-                if day:
-                    fts_rows = [row for row in fts_rows if row.get("day") == day]
-                fts_by_key = {
-                    (str(row.get("group_id") or ""), str(row.get("media_id") or "")): row
-                    for row in fts_rows
-                }
-                if fts_by_key:
-                    metadata_items: list[dict] = []
-                    metadata_offset = 0
-                    while True:
-                        metadata_page = self.db.ima_document_page(
+                metadata_items: list[dict] = []
+                if page_offset < metadata_total:
+                    metadata_page = self.db.ima_document_page(
+                        readable_ids,
+                        group=group,
+                        query=query,
+                        day=day,
+                        tag=tag,
+                        limit=min(page_limit, metadata_total - page_offset),
+                        offset=page_offset,
+                    )
+                    metadata_items = list(metadata_page.get("items") or [])
+                    if (
+                        len(metadata_items) >= page_limit
+                        and page_offset + len(metadata_items) < metadata_total
+                    ):
+                        page = metadata_page
+                        page["document_count"] = metadata_total
+                        page["has_more"] = True
+
+                if page is None:
+                    body_offset = max(page_offset - metadata_total, 0)
+                    body_limit = page_limit - len(metadata_items)
+                    body_target = body_limit + 1
+                    body_rows: list[dict] = []
+                    body_seen = 0
+                    fts_offset = 0
+                    exhausted = False
+                    while len(body_rows) < body_target:
+                        try:
+                            fts_hits = self.search_index.search(
+                                query, scoped_ids, 200, offset=fts_offset
+                            )
+                        except Exception as exc:  # noqa: BLE001 - optional search falls back
+                            logger.warning(
+                                "IMA full-text search failed error=%s", _safe_error(exc)
+                            )
+                            exhausted = True
+                            break
+                        if not fts_hits:
+                            exhausted = True
+                            break
+                        hydrated = lookup(
+                            [
+                                (hit.get("group_id"), hit.get("media_id"))
+                                for hit in fts_hits
+                            ],
                             readable_ids,
                             group=group,
                             query=query,
                             day=day,
                             tag=tag,
-                            limit=200,
-                            offset=metadata_offset,
                         )
-                        batch = list(metadata_page.get("items") or [])
-                        metadata_items.extend(batch)
-                        if not metadata_page.get("has_more") or not batch:
+                        hydrated_by_key = {
+                            (
+                                str(item.get("group_id") or ""),
+                                str(item.get("media_id") or ""),
+                            ): item
+                            for item in hydrated
+                        }
+                        for hit in fts_hits:
+                            key = (
+                                str(hit.get("group_id") or ""),
+                                str(hit.get("media_id") or ""),
+                            )
+                            item = hydrated_by_key.get(key)
+                            if item is None or item.pop("_metadata_match", False):
+                                continue
+                            body_seen += 1
+                            if body_seen <= body_offset or len(body_rows) >= body_target:
+                                continue
+                            body_rows.append(
+                                {
+                                    **item,
+                                    "search_snippet": str(
+                                        hit.get("search_snippet") or ""
+                                    )[:240],
+                                }
+                            )
+                        fts_offset += len(fts_hits)
+                        if len(fts_hits) < 200:
+                            exhausted = True
                             break
-                        metadata_offset += len(batch)
 
-                    snippets = {
-                        (str(hit.get("group_id") or ""), str(hit.get("media_id") or "")):
-                            str(hit.get("search_snippet") or "")[:240]
-                        for hit in fts_hits
-                    }
-                    merged: list[dict] = []
-                    seen: set[tuple[str, str]] = set()
-                    for item in metadata_items:
-                        key = (
-                            str(item.get("group_id") or ""),
-                            str(item.get("media_id") or ""),
+                    items = metadata_items + body_rows[:body_limit]
+                    has_more = len(body_rows) > body_limit
+                    document_count = metadata_total + body_seen
+                    if not exhausted:
+                        document_count = max(
+                            document_count,
+                            page_offset + len(items) + int(has_more),
                         )
-                        if key in fts_by_key and snippets.get(key):
-                            item = {**item, "search_snippet": snippets[key]}
-                        merged.append(item)
-                        seen.add(key)
-                    for hit in fts_hits:
-                        key = (
-                            str(hit.get("group_id") or ""),
-                            str(hit.get("media_id") or ""),
-                        )
-                        item = fts_by_key.get(key)
-                        if item is None or key in seen:
-                            continue
-                        merged.append({**item, "search_snippet": snippets.get(key, "")})
-                        seen.add(key)
-
-                    page_limit = max(int(limit), 1)
-                    page_offset = max(int(offset), 0)
                     page = {
-                        "items": merged[page_offset:page_offset + page_limit],
+                        "items": items,
                         "days": [],
                         "tags": [],
                         "tag_counts": {},
-                        "document_count": len(merged),
+                        "document_count": document_count,
                         "day": str(day or "").strip(),
-                        "has_more": page_offset + page_limit < len(merged),
+                        "has_more": has_more,
                         "offset": page_offset,
                         "group_counts": {},
                     }

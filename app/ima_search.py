@@ -203,73 +203,71 @@ class ImaSearchIndex:
                 if row["group_id"] in configured
             }
             present: set[tuple[str, str]] = set()
-            prepared: list[tuple[str, str, str, str, str, str]] = []
             skipped = 0
             missing = 0
-            for source in rows:
-                group_id = str(source.get("group_id") or "").strip()
-                if group_id not in configured:
-                    skipped += 1
-                    continue
-                media_id = str(source.get("media_id") or "").strip()
-                if not media_id:
-                    missing += 1
-                    continue
-                key = (group_id, media_id)
-                if key in present:
-                    skipped += 1
-                    continue
-                present.add(key)
-                digest = _source_hash(source)
-                if existing.get(key) == digest:
-                    skipped += 1
-                    continue
-                path = self._safe_path(source.get("txt_path"))
-                if path is None or not path.is_file():
-                    missing += 1
-                    continue
-                try:
-                    with path.open("rb") as stream:
-                        raw_body = stream.read(MAX_BODY_BYTES + 1)
-                    body = _plain_text(
-                        raw_body[:MAX_BODY_BYTES].decode("utf-8", errors="ignore")
-                    )
-                except OSError:
-                    missing += 1
-                    continue
-                metadata = " ".join(
-                    str(source.get(field) or "")
-                    for field in ("group_name", "metadata_folded", "abstract", "tags_json")
-                )
-                prepared.append(
-                    (
-                        group_id,
-                        media_id,
-                        digest,
-                        _plain_text(str(source.get("name") or "")),
-                        _plain_text(metadata),
-                        body,
-                    )
-                )
-
-            removed_keys = set(existing) - present
+            updated = 0
             placeholders = ",".join("?" for _ in configured)
             now = datetime.now(UTC).isoformat()
             with connection:
+                for source in rows:
+                    group_id = str(source.get("group_id") or "").strip()
+                    if group_id not in configured:
+                        skipped += 1
+                        continue
+                    media_id = str(source.get("media_id") or "").strip()
+                    if not media_id:
+                        missing += 1
+                        continue
+                    key = (group_id, media_id)
+                    if key in present:
+                        skipped += 1
+                        continue
+                    present.add(key)
+                    digest = _source_hash(source)
+                    if existing.get(key) == digest:
+                        skipped += 1
+                        continue
+                    path = self._safe_path(source.get("txt_path"))
+                    if path is None or not path.is_file():
+                        missing += 1
+                        continue
+                    try:
+                        with path.open("rb") as stream:
+                            raw_body = stream.read(MAX_BODY_BYTES + 1)
+                        body = _plain_text(
+                            raw_body[:MAX_BODY_BYTES].decode("utf-8", errors="ignore")
+                        )
+                    except OSError:
+                        missing += 1
+                        continue
+                    metadata = " ".join(
+                        str(source.get(field) or "")
+                        for field in ("group_name", "metadata_folded", "abstract", "tags_json")
+                    )
+                    connection.execute(
+                        "INSERT INTO documents "
+                        "(group_id, media_id, source_hash, name, metadata, body) "
+                        "VALUES (?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(group_id, media_id) DO UPDATE SET "
+                        "source_hash=excluded.source_hash, name=excluded.name, "
+                        "metadata=excluded.metadata, body=excluded.body",
+                        (
+                            group_id,
+                            media_id,
+                            digest,
+                            _plain_text(str(source.get("name") or "")),
+                            _plain_text(metadata),
+                            body,
+                        ),
+                    )
+                    updated += 1
+
+                removed_keys = set(existing) - present
                 for group_id, media_id in removed_keys:
                     connection.execute(
                         "DELETE FROM documents WHERE group_id = ? AND media_id = ?",
                         (group_id, media_id),
                     )
-                connection.executemany(
-                    "INSERT INTO documents "
-                    "(group_id, media_id, source_hash, name, metadata, body) "
-                    "VALUES (?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT(group_id, media_id) DO UPDATE SET "
-                    "source_hash=excluded.source_hash, name=excluded.name, "
-                    "metadata=excluded.metadata, body=excluded.body",
-                    prepared,
-                )
                 count = int(
                     connection.execute(
                         f"SELECT COUNT(*) FROM documents WHERE group_id IN ({placeholders})",
@@ -288,7 +286,7 @@ class ImaSearchIndex:
             self._error = ""
             return {
                 "indexed": count,
-                "updated": len(prepared),
+                "updated": updated,
                 "skipped": skipped,
                 "removed": len(removed_keys),
                 "missing": missing,
@@ -297,7 +295,11 @@ class ImaSearchIndex:
             connection.close()
 
     def search(
-        self, query: str, readable_group_ids: list[str], limit: int
+        self,
+        query: str,
+        readable_group_ids: list[str],
+        limit: int,
+        offset: int = 0,
     ) -> list[dict]:
         text = " ".join(str(query or "").split())[:MAX_QUERY_CHARS]
         if (
@@ -325,8 +327,8 @@ class ImaSearchIndex:
                     "snippet(documents_fts, 2, '[', ']', ' … ', 32) AS search_snippet "
                     "FROM documents_fts JOIN documents d ON d.id = documents_fts.rowid "
                     f"WHERE documents_fts.body MATCH ? AND d.group_id IN ({placeholders}) "
-                    "ORDER BY score, d.group_id, d.media_id LIMIT ?",
-                    (phrase, *allowed, min(int(limit), 200)),
+                    "ORDER BY score, d.group_id, d.media_id LIMIT ? OFFSET ?",
+                    (phrase, *allowed, min(int(limit), 200), max(int(offset), 0)),
                 ).fetchall()
             return [
                 {

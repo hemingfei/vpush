@@ -108,6 +108,46 @@ def test_identical_sync_does_not_reread_and_changed_source_updates(tmp_path):
     assert index.search("supply chain", ["semi"], 10)[0]["media_id"] == "report"
 
 
+def test_sync_streams_each_changed_body_into_the_transaction(tmp_path, monkeypatch):
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    first = archive / "first.txt"
+    second = archive / "second.txt"
+    first.write_text("first searchable body", encoding="utf-8")
+    second.write_text("second searchable body", encoding="utf-8")
+    index = ImaSearchIndex(tmp_path / "ima-search.db", archive, ("semi",))
+    written: list[str] = []
+
+    class TrackingConnection(sqlite3.Connection):
+        def execute(self, sql, parameters=()):
+            result = super().execute(sql, parameters)
+            if sql.startswith("INSERT INTO documents "):
+                written.append(parameters[1])
+            return result
+
+    monkeypatch.setattr(
+        index,
+        "_connect",
+        lambda *, readonly=False: _writer_connection(index, TrackingConnection),
+    )
+    original_open = Path.open
+
+    def tracked_open(path, *args, **kwargs):
+        if path == second:
+            assert written == ["first"]
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", tracked_open)
+
+    result = index.sync([
+        _row("semi", "first", "first.txt"),
+        _row("semi", "second", "second.txt"),
+    ])
+
+    assert result["updated"] == 2
+    assert written == ["first", "second"]
+
+
 def test_sync_and_search_overlap_serves_a_committed_version(tmp_path, monkeypatch):
     archive = tmp_path / "archive"
     archive.mkdir()
@@ -124,10 +164,11 @@ def test_sync_and_search_overlap_serves_a_committed_version(tmp_path, monkeypatc
     original_connect = index._connect
 
     class PausingConnection(sqlite3.Connection):
-        def executemany(self, sql, parameters):
-            result = super().executemany(sql, parameters)
-            dml_done.set()
-            assert allow_commit.wait(2), "sync transaction was not released"
+        def execute(self, sql, parameters=()):
+            result = super().execute(sql, parameters)
+            if sql.startswith("INSERT INTO documents "):
+                dml_done.set()
+                assert allow_commit.wait(2), "sync transaction was not released"
             return result
 
     def controlled_connect(*, readonly=False):
@@ -274,6 +315,22 @@ def test_full_text_search_matches_body_column_only(tmp_path):
     )] == ["body-only"]
 
 
+def test_full_text_search_supports_bounded_offset_pages(tmp_path):
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    rows = []
+    for index_value in range(3):
+        filename = f"body-{index_value}.txt"
+        (archive / filename).write_text("ranked body phrase", encoding="utf-8")
+        rows.append(_row("semi", f"body-{index_value}", filename))
+    index = ImaSearchIndex(tmp_path / "ima-search.db", archive, ("semi",))
+    index.sync(rows)
+
+    assert [item["media_id"] for item in index.search(
+        "ranked body", ["semi"], 1, offset=1
+    )] == ["body-1"]
+
+
 def test_full_text_search_unready_index_returns_empty(tmp_path):
     archive = tmp_path / "archive"
     archive.mkdir()
@@ -310,9 +367,11 @@ def test_sync_failure_keeps_last_good_index_and_reports_error(tmp_path, monkeypa
     original_connect = index._connect
 
     class FailingAfterDmlConnection(sqlite3.Connection):
-        def executemany(self, sql, parameters):
-            super().executemany(sql, parameters)
-            raise sqlite3.OperationalError("simulated failure after DML")
+        def execute(self, sql, parameters=()):
+            result = super().execute(sql, parameters)
+            if sql.startswith("INSERT INTO documents "):
+                raise sqlite3.OperationalError("simulated failure after DML")
+            return result
 
     def controlled_connect(*, readonly=False):
         if readonly:

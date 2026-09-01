@@ -1750,6 +1750,99 @@ def test_hybrid_full_text_search_pages_metadata_then_body_without_duplicates(
     assert pages[2]["has_more"] is False
 
 
+def test_hybrid_full_text_search_pages_beyond_rank_200(
+    tmp_path, monkeypatch
+):
+    client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
+        tmp_path, monkeypatch, "hybrid_deep_pages"
+    )
+    records = [
+        (
+            {
+                "media_id": f"body-{index_value:03d}",
+                "name": f"Document {index_value:03d}.pdf",
+                "day": "0901",
+                "group_id": group_a,
+                "abstract": "unrelated",
+            },
+            [],
+            "ranked body needle",
+        )
+        for index_value in range(205)
+    ]
+    _seed_full_text_search(client, records)
+
+    deep_page = client.get(
+        "/api/ima-documents?q=ranked%20body%20needle&limit=3&offset=201",
+        headers=admin_headers,
+    ).json()
+    final_page = client.get(
+        "/api/ima-documents?q=ranked%20body%20needle&limit=3&offset=204",
+        headers=admin_headers,
+    ).json()
+
+    assert [item["media_id"] for item in deep_page["items"]] == [
+        "body-201", "body-202", "body-203"
+    ]
+    assert deep_page["has_more"] is True
+    assert [item["media_id"] for item in final_page["items"]] == ["body-204"]
+    assert final_page["has_more"] is False
+    assert final_page["document_count"] == 205
+
+
+def test_hybrid_metadata_page_does_not_materialize_all_matches(
+    tmp_path, monkeypatch
+):
+    client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
+        tmp_path, monkeypatch, "hybrid_bounded_metadata"
+    )
+    records = [
+        (
+            {
+                "media_id": f"metadata-{index_value}",
+                "name": f"Capacity planning {index_value}.pdf",
+                "day": f"090{index_value}",
+                "group_id": group_a,
+                "abstract": "unrelated",
+            },
+            [],
+            "capacity planning body",
+        )
+        for index_value in range(1, 6)
+    ]
+    service = _seed_full_text_search(client, records)
+    calls = {"count": 0, "page": 0, "search": 0}
+    original_count = service.db.ima_document_match_count
+    original_page = service.db.ima_document_page
+    original_search = service.search_index.search
+
+    def counted_count(*args, **kwargs):
+        calls["count"] += 1
+        return original_count(*args, **kwargs)
+
+    def counted_page(*args, **kwargs):
+        calls["page"] += 1
+        return original_page(*args, **kwargs)
+
+    def counted_search(*args, **kwargs):
+        calls["search"] += 1
+        return original_search(*args, **kwargs)
+
+    monkeypatch.setattr(service.db, "ima_document_match_count", counted_count)
+    monkeypatch.setattr(service.db, "ima_document_page", counted_page)
+    monkeypatch.setattr(service.search_index, "search", counted_search)
+
+    response = client.get(
+        "/api/ima-documents?q=capacity%20planning&limit=2",
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(response.json()["items"]) == 2
+    assert response.json()["has_more"] is True
+    assert calls == {"count": 1, "page": 1, "search": 0}
+
+
 def test_hybrid_full_text_search_short_missing_and_broken_indexes_keep_metadata(
     tmp_path, monkeypatch
 ):
@@ -1776,6 +1869,25 @@ def test_hybrid_full_text_search_short_missing_and_broken_indexes_keep_metadata(
     broken = client.get("/api/ima-documents?q=fallback%20phrase", headers=admin_headers)
     assert broken.status_code == 200, broken.text
     assert [item["media_id"] for item in broken.json()["items"]] == ["fallback"]
+
+
+def test_ima_documents_offset_is_bounded(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "ima-offset.sqlite"))
+    headers = _headers(client, "ima_offset_admin", "IMAOFFSET1", admin=True)
+
+    assert client.get(
+        "/api/ima-documents?offset=-1", headers=headers
+    ).status_code == 422
+    assert client.get(
+        "/api/ima-documents?offset=100001", headers=headers
+    ).status_code == 422
+    accepted = client.get(
+        "/api/ima-documents?offset=100000", headers=headers
+    )
+
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["offset"] == 100000
 
 
 def test_indexed_api_serves_without_reading_json(tmp_path, monkeypatch):
