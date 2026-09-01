@@ -953,10 +953,11 @@ function imaDocumentRow(item) {
   const day = fmtImaDayShort(item.sort_date || item.day) || "—";
   const source = String(item.group_name || "");
   const meta = imaReportMetaHtml(item); // .ima-report-meta
+  const snippet = item.search_snippet ? `<span class="ima-report-snippet">${escapeHtml(item.search_snippet)}</span>` : "";
   return `
     <article class="ima-doc-row" role="button" tabindex="0" data-media-id="${escapeHtml(item.media_id)}" data-group-id="${escapeHtml(item.group_id || "")}" onclick="openImaDocument(this.dataset.mediaId, this.dataset.groupId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openImaDocument(this.dataset.mediaId, this.dataset.groupId)}">
       <time class="ima-report-date">${escapeHtml(day)}</time>
-      <span class="ima-report-copy"><strong class="ima-report-title">${escapeHtml(imaListTitle(item.name))}</strong>${meta}</span>
+      <span class="ima-report-copy"><strong class="ima-report-title">${escapeHtml(imaListTitle(item.name))}</strong>${snippet}${meta}</span>
       <span class="ima-report-source">${escapeHtml(source)}</span>
     </article>`;
 }

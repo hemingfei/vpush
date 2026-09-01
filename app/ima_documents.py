@@ -3039,6 +3039,8 @@ class ImaDocumentService:
             public["group_id"] = item["group_id"]
         if item.get("group_name"):
             public["group_name"] = item["group_name"]
+        if item.get("search_snippet"):
+            public["search_snippet"] = str(item["search_snippet"])[:240]
         return public
 
     def list_documents(
@@ -3053,15 +3055,99 @@ class ImaDocumentService:
         offset: int = 0,
     ) -> dict[str, Any]:
         if self._index_usable():
-            page = self.db.ima_document_page(
-                [item.id for item in groups],
-                group=group,
-                query=query,
-                day=day,
-                tag=tag,
-                limit=limit,
-                offset=offset,
-            )
+            readable_ids = [item.id for item in groups]
+            page = None
+            fts_hits: list[dict] = []
+            if query and self.search_index is not None:
+                scoped_ids = (
+                    [group] if group and group in readable_ids else readable_ids
+                )
+                try:
+                    fts_hits = self.search_index.search(query, scoped_ids, 200)
+                except Exception as exc:  # noqa: BLE001 - optional search falls back
+                    logger.warning("IMA full-text search failed error=%s", _safe_error(exc))
+            lookup = getattr(self.db, "ima_documents_by_keys", None)
+            if fts_hits and callable(lookup):
+                fts_rows = lookup(
+                    [(hit.get("group_id"), hit.get("media_id")) for hit in fts_hits],
+                    scoped_ids,
+                    tag=tag,
+                )
+                if day:
+                    fts_rows = [row for row in fts_rows if row.get("day") == day]
+                fts_by_key = {
+                    (str(row.get("group_id") or ""), str(row.get("media_id") or "")): row
+                    for row in fts_rows
+                }
+                if fts_by_key:
+                    metadata_items: list[dict] = []
+                    metadata_offset = 0
+                    while True:
+                        metadata_page = self.db.ima_document_page(
+                            readable_ids,
+                            group=group,
+                            query=query,
+                            day=day,
+                            tag=tag,
+                            limit=200,
+                            offset=metadata_offset,
+                        )
+                        batch = list(metadata_page.get("items") or [])
+                        metadata_items.extend(batch)
+                        if not metadata_page.get("has_more") or not batch:
+                            break
+                        metadata_offset += len(batch)
+
+                    snippets = {
+                        (str(hit.get("group_id") or ""), str(hit.get("media_id") or "")):
+                            str(hit.get("search_snippet") or "")[:240]
+                        for hit in fts_hits
+                    }
+                    merged: list[dict] = []
+                    seen: set[tuple[str, str]] = set()
+                    for item in metadata_items:
+                        key = (
+                            str(item.get("group_id") or ""),
+                            str(item.get("media_id") or ""),
+                        )
+                        if key in fts_by_key and snippets.get(key):
+                            item = {**item, "search_snippet": snippets[key]}
+                        merged.append(item)
+                        seen.add(key)
+                    for hit in fts_hits:
+                        key = (
+                            str(hit.get("group_id") or ""),
+                            str(hit.get("media_id") or ""),
+                        )
+                        item = fts_by_key.get(key)
+                        if item is None or key in seen:
+                            continue
+                        merged.append({**item, "search_snippet": snippets.get(key, "")})
+                        seen.add(key)
+
+                    page_limit = max(int(limit), 1)
+                    page_offset = max(int(offset), 0)
+                    page = {
+                        "items": merged[page_offset:page_offset + page_limit],
+                        "days": [],
+                        "tags": [],
+                        "tag_counts": {},
+                        "document_count": len(merged),
+                        "day": str(day or "").strip(),
+                        "has_more": page_offset + page_limit < len(merged),
+                        "offset": page_offset,
+                        "group_counts": {},
+                    }
+            if page is None:
+                page = self.db.ima_document_page(
+                    readable_ids,
+                    group=group,
+                    query=query,
+                    day=day,
+                    tag=tag,
+                    limit=limit,
+                    offset=offset,
+                )
             counts = page.get("group_counts") or {}
             page["groups"] = [
                 {

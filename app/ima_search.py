@@ -302,6 +302,7 @@ class ImaSearchIndex:
         text = " ".join(str(query or "").split())[:MAX_QUERY_CHARS]
         if (
             not self.enabled
+            or not self._ready
             or not self.path.is_file()
             or len("".join(text.split())) < 3
             or int(limit) <= 0
@@ -323,7 +324,7 @@ class ImaSearchIndex:
                     "bm25(documents_fts, 8.0, 3.0, 1.0) AS score, "
                     "snippet(documents_fts, 2, '[', ']', ' … ', 32) AS search_snippet "
                     "FROM documents_fts JOIN documents d ON d.id = documents_fts.rowid "
-                    f"WHERE documents_fts MATCH ? AND d.group_id IN ({placeholders}) "
+                    f"WHERE documents_fts.body MATCH ? AND d.group_id IN ({placeholders}) "
                     "ORDER BY score, d.group_id, d.media_id LIMIT ?",
                     (phrase, *allowed, min(int(limit), 200)),
                 ).fetchall()

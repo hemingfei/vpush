@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import threading
 import time
 
@@ -1633,6 +1634,148 @@ def _block_json_readers(store, monkeypatch):
 
     monkeypatch.setattr(store, "load_manifest", boom)
     monkeypatch.setattr(store, "load_state", boom)
+
+
+def _seed_full_text_search(client, records_and_tags):
+    service = client.app.state.ima_documents
+    store = service.store
+    records = []
+    state = {}
+    for record, tags, text in records_and_tags:
+        records.append(record)
+        state.update(_seed_indexed_record(store, record, tags=tags, txt=text))
+    store.save_manifest(records)
+    store.save_state(state)
+    assert service.rebuild_read_index(service.config().groups)["status"] == "ready"
+    service._sync_full_text_index()
+    assert service.search_index.status()["ready"] is True
+    return service
+
+
+def _full_text_search_client(tmp_path, monkeypatch, name):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    monkeypatch.setenv("IMA_SEARCH_GROUP_IDS", "group-a,group-b")
+    client = TestClient(create_app(db_path=tmp_path / f"{name}.sqlite"))
+    admin_headers = _headers(client, f"{name}_admin", "FTSADMIN1", admin=True)
+    reader_headers = _headers(client, f"{name}_reader", "FTSREAD01")
+    group_a, group_b = _configure_two_groups(client, admin_headers)
+    reader = client.app.state.db.get_user_by_username(f"{name}_reader")
+    client.app.state.db.set_ima_kb_acl(group_a, [reader["id"]])
+    return client, admin_headers, reader_headers, group_a, group_b
+
+
+def test_full_text_search_api_preserves_metadata_order_dedupes_and_enforces_acl(
+    tmp_path, monkeypatch
+):
+    client, admin_headers, reader_headers, group_a, group_b = _full_text_search_client(
+        tmp_path, monkeypatch, "hybrid_order"
+    )
+    phrase = "quantum interconnect"
+    records = [
+        ({"media_id": "title-hit", "name": "Quantum interconnect outlook.pdf", "day": "0904", "group_id": group_a, "abstract": "title"}, [], phrase + " in body"),
+        ({"media_id": "tag-hit", "name": "Tag report.pdf", "day": "0903", "group_id": group_a, "abstract": "tag"}, [phrase], "unrelated body"),
+        ({"media_id": "abstract-hit", "name": "Abstract report.pdf", "day": "0902", "group_id": group_a, "abstract": phrase + " adoption"}, [], "unrelated body"),
+        ({"media_id": "body-hit", "name": "Body report.pdf", "day": "0901", "group_id": group_a, "abstract": "unrelated"}, [], "deep " + phrase + " demand"),
+        ({"media_id": "private-hit", "name": "Private report.pdf", "day": "0905", "group_id": group_b, "abstract": "unrelated"}, [], "private " + phrase),
+    ]
+    _seed_full_text_search(client, records)
+
+    response = client.get(
+        "/api/ima-documents?q=quantum%20interconnect", headers=reader_headers
+    )
+
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    assert [item["media_id"] for item in items] == [
+        "title-hit", "tag-hit", "abstract-hit", "body-hit"
+    ]
+    assert [item["media_id"] for item in items].count("title-hit") == 1
+    assert "private-hit" not in {item["media_id"] for item in items}
+    assert "quantum interconnect" in items[-1]["search_snippet"].casefold()
+    assert "abstract" not in items[-1]
+    assert "body" not in items[-1]
+
+    selected = client.get(
+        f"/api/ima-documents?q=quantum%20interconnect&group={group_a}",
+        headers=admin_headers,
+    ).json()["items"]
+    assert "private-hit" not in {item["media_id"] for item in selected}
+
+
+def test_hybrid_full_text_search_applies_exact_tag_to_body_only_hits(
+    tmp_path, monkeypatch
+):
+    client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
+        tmp_path, monkeypatch, "hybrid_tag"
+    )
+    records = [
+        ({"media_id": "selected", "name": "Selected.pdf", "day": "0902", "group_id": group_a, "abstract": "none"}, ["selected-tag"], "liquidity runway improves"),
+        ({"media_id": "other", "name": "Other.pdf", "day": "0901", "group_id": group_a, "abstract": "none"}, ["other-tag"], "liquidity runway declines"),
+    ]
+    _seed_full_text_search(client, records)
+
+    items = client.get(
+        "/api/ima-documents?q=liquidity%20runway&tag=selected-tag",
+        headers=admin_headers,
+    ).json()["items"]
+
+    assert [item["media_id"] for item in items] == ["selected"]
+
+
+def test_hybrid_full_text_search_pages_metadata_then_body_without_duplicates(
+    tmp_path, monkeypatch
+):
+    client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
+        tmp_path, monkeypatch, "hybrid_pages"
+    )
+    phrase = "wafer bottleneck"
+    records = [
+        ({"media_id": "metadata", "name": "Wafer bottleneck.pdf", "day": "0902", "group_id": group_a, "abstract": "none"}, [], phrase + " duplicate body"),
+        ({"media_id": "body", "name": "Supply report.pdf", "day": "0901", "group_id": group_a, "abstract": "none"}, [], "persistent " + phrase),
+    ]
+    _seed_full_text_search(client, records)
+
+    pages = [
+        client.get(
+            f"/api/ima-documents?q=wafer%20bottleneck&limit=1&offset={offset}",
+            headers=admin_headers,
+        ).json()
+        for offset in range(3)
+    ]
+
+    assert [page["items"][0]["media_id"] for page in pages[:2]] == ["metadata", "body"]
+    assert pages[0]["has_more"] is True
+    assert pages[1]["has_more"] is False
+    assert pages[2]["items"] == []
+    assert pages[2]["has_more"] is False
+
+
+def test_hybrid_full_text_search_short_missing_and_broken_indexes_keep_metadata(
+    tmp_path, monkeypatch
+):
+    client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
+        tmp_path, monkeypatch, "hybrid_fallback"
+    )
+    records = [
+        ({"media_id": "short", "name": "估值跟踪.pdf", "day": "0902", "group_id": group_a, "abstract": "估值"}, [], "unrelated"),
+        ({"media_id": "fallback", "name": "Fallback phrase.pdf", "day": "0901", "group_id": group_a, "abstract": "none"}, [], "unrelated"),
+    ]
+    service = _seed_full_text_search(client, records)
+
+    short = client.get("/api/ima-documents?q=%E4%BC%B0%E5%80%BC", headers=admin_headers)
+    assert [item["media_id"] for item in short.json()["items"]] == ["short"]
+
+    service.search_index.path = tmp_path / "absent-search.db"
+    missing = client.get("/api/ima-documents?q=fallback%20phrase", headers=admin_headers)
+    assert [item["media_id"] for item in missing.json()["items"]] == ["fallback"]
+
+    def broken_search(*_args, **_kwargs):
+        raise sqlite3.OperationalError("broken optional index")
+
+    monkeypatch.setattr(service.search_index, "search", broken_search)
+    broken = client.get("/api/ima-documents?q=fallback%20phrase", headers=admin_headers)
+    assert broken.status_code == 200, broken.text
+    assert [item["media_id"] for item in broken.json()["items"]] == ["fallback"]
 
 
 def test_indexed_api_serves_without_reading_json(tmp_path, monkeypatch):

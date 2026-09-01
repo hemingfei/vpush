@@ -4747,6 +4747,51 @@ class DB:
             groups,
         )
 
+    def ima_documents_by_keys(
+        self,
+        keys,
+        readable_group_ids: list[str],
+        *,
+        tag: str = "",
+    ) -> list[dict]:
+        groups = _ima_authorized_groups(readable_group_ids)
+        allowed = set(groups)
+        pairs: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for key in keys:
+            try:
+                group_id, media_id = (str(value).strip() for value in key)
+            except (TypeError, ValueError):
+                continue
+            pair = (group_id, media_id)
+            if group_id in allowed and media_id and pair not in seen:
+                seen.add(pair)
+                pairs.append(pair)
+            if len(pairs) >= 200:
+                break
+        if not groups or not pairs:
+            return []
+        pair_sql = " OR ".join(
+            "(d.group_id = ? AND d.media_id = ?)" for _ in pairs
+        )
+        params: list[str] = [*groups, *(value for pair in pairs for value in pair)]
+        tag_sql = ""
+        requested_tag = str(tag or "").strip()
+        if requested_tag:
+            tag_sql = (
+                " AND EXISTS (SELECT 1 FROM ima_document_tags t "
+                "WHERE t.group_id = d.group_id AND t.media_id = d.media_id "
+                "AND t.tag = ?)"
+            )
+            params.append(requested_tag)
+        rows = self._rows(
+            "SELECT d.* FROM ima_document_index d "
+            f"WHERE d.group_id IN ({', '.join('?' for _ in groups)}) "
+            f"AND ({pair_sql}){tag_sql}",
+            params,
+        )
+        return [_ima_public_document(row) for row in rows]
+
     def ima_document_catalog_stats(self, group_ids: list[str]) -> dict[str, dict]:
         groups = _ima_authorized_groups(group_ids)
         if not groups:

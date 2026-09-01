@@ -257,6 +257,40 @@ def test_search_enforces_acl_short_query_rules_and_plain_snippets(tmp_path):
     assert len(results[0]["search_snippet"]) <= 240
 
 
+def test_full_text_search_matches_body_column_only(tmp_path):
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    (archive / "title.txt").write_text("unrelated body", encoding="utf-8")
+    (archive / "body.txt").write_text("quantum interconnect demand", encoding="utf-8")
+    index = ImaSearchIndex(tmp_path / "ima-search.db", archive, ("semi",))
+
+    index.sync([
+        _row("semi", "title-only", "title.txt", name="Quantum interconnect outlook"),
+        _row("semi", "body-only", "body.txt", name="Unrelated report"),
+    ])
+
+    assert [item["media_id"] for item in index.search(
+        "quantum interconnect", ["semi"], 10
+    )] == ["body-only"]
+
+
+def test_full_text_search_unready_index_returns_empty(tmp_path):
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    (archive / "report.txt").write_text("quantum interconnect demand", encoding="utf-8")
+    path = tmp_path / "ima-search.db"
+    index = ImaSearchIndex(path, archive, ("semi",))
+    index.sync([_row("semi", "report", "report.txt")])
+    with sqlite3.connect(path) as connection:
+        connection.execute("UPDATE search_meta SET ready = 0 WHERE id = 1")
+        connection.commit()
+
+    unready = ImaSearchIndex(path, archive, ("semi",))
+
+    assert unready.status()["ready"] is False
+    assert unready.search("quantum interconnect", ["semi"], 10) == []
+
+
 def test_sync_failure_keeps_last_good_index_and_reports_error(tmp_path, monkeypatch):
     archive = tmp_path / "archive"
     archive.mkdir()
