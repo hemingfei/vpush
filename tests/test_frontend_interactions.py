@@ -529,28 +529,52 @@ def test_timeline_polish_matches_chip_row_and_browser_surfaces():
     assert 'style="margin-top:14px' not in feed
 
 
-def test_mobile_mysubs_filter_renders_icon_badges_keeps_desktop_toolbar():
-    """订阅页移动端：平台+特别关注全部变为一行角标；桌面保留文字胶囊+按钮。"""
-    render = _fn_body("renderMySubs")
+def test_settings_subscription_panel_reuses_mobile_badges_and_desktop_toolbar():
+    """设置页订阅管理复用原有订阅筛选和卡片列表。"""
+    panel = _fn_body("settingsSubscriptionsPanelHtml")
     tabs = _fn_body("renderMySubsTabs")
     mobile_html = _fn_body("mysubsMobileFiltersHtml")
 
-    assert "isMobileTimelineFilter()" in render
-    assert 'id="mysubs-tabs"' in render
-    # 桌面分支必须保留完整工具栏
-    assert 'id="mysubs-fav-toggle"' in render
-    assert '"platform-tabs"' in render
+    assert "isMobileTimelineFilter()" in panel
+    assert 'id="mysubs-tabs"' in panel
+    assert 'id="mysubs-list"' in panel
+    assert 'id="mysubs-fav-toggle"' in panel
+    assert '"platform-tabs"' in panel
     assert "platformShortLabel(p)" in mobile_html
     assert "switchMySubsPlatform('${p}')" in mobile_html
     assert "toggleMySubsFav()" in mobile_html
     assert "STAR_SVG" in mobile_html
-    assert "特别关注" in mobile_html
-    assert "<span>${short}</span>" in mobile_html
-    # 星标点击后需重绘角标选中态
-    assert "renderMySubsTabs()" in _fn_body("toggleMySubsFav")
-    # 双分支渲染：移动角标 / 桌面文字胶囊
     assert "mysubsMobileFiltersHtml()" in tabs
     assert 'platformTabHTML(p, state.mysubsPlatform' in tabs
+
+
+def test_settings_subscription_loader_is_route_guarded_local_and_retryable():
+    load = _fn_body("loadSettingsSubscriptions")
+
+    assert 'api("/api/my/subscriptions")' in load
+    assert load.count("routeStillActive(seq)") >= 2
+    assert '$("#main").innerHTML' not in load
+    assert '$("#mysubs-list")' in load
+    assert "renderMySubsTabs()" in load
+    assert "renderMySubsList()" in load
+    assert "加载失败:" in load
+    assert "重试" in load
+    assert "loadSettingsSubscriptions(routeRenderSeq)" in load
+
+
+def test_subscription_management_is_the_default_settings_tab():
+    src = APP_JS.read_text()
+    render = _fn_body("renderSettings")
+    switch = _fn_body("switchSettingsTab")
+
+    assert 'const SETTINGS_TABS = ["subs", "push", "bind", "llm", "account"]' in src
+    assert 'data-tab="subs"' in render
+    assert 'id="st-subs"' in render
+    assert "settingsSubscriptionsPanelHtml()" in render
+    assert 'switchSettingsTab(state.settingsTab || "subs")' in render
+    assert 'setPageTitle("订阅与推送")' in render
+    assert 'name = "subs"' in switch
+
 
 
 def test_platform_tabs_always_show_short_labels():
@@ -639,7 +663,7 @@ def test_plaza_source_visibility_admin_and_pills():
     assert "tlTimelineEntries()" in _fn_body("mysubsMobileFiltersHtml")
     assert "ensurePlazaPlatformSelection()" in _fn_body("renderTimeline")
     assert "ensurePlazaPlatformSelection()" in _fn_body("renderHome")
-    assert "ensurePlazaPlatformSelection()" in _fn_body("renderMySubs")
+    assert "ensurePlazaPlatformSelection()" in _fn_body("renderSettings")
     assert 'timelineVisibleSet().has("zsxq")' in src
     assert "/api/admin/plaza-sources" in _fn_body("setPlazaSourceMode")
     assert "applyPlazaSources(data.sources)" in _fn_body("setPlazaSourceMode")
@@ -756,10 +780,12 @@ def test_kol_image_settings_is_fourth_push_section_and_loads_independently():
     assert 'id="kol-images-settings"' in push
     assert "正在加载已订阅大V" in push and 'class="muted' in push
 
-    restore = body.rindex('switchSettingsTab(state.settingsTab || "push")')
+    restore = body.rindex('switchSettingsTab(state.settingsTab || "subs")')
     dnd = body.rindex("toggleDnd()")
+    subscriptions = body.rindex("loadSettingsSubscriptions(seq);")
     loader = body.rindex("loadKolImageSettings(seq);")
-    assert restore < dnd < loader
+    assert restore < dnd < subscriptions < loader
+    assert "await loadSettingsSubscriptions" not in body
     assert "await loadKolImageSettings" not in body
 
 
@@ -2335,9 +2361,7 @@ def test_kol_card_name_wraps_full_combination_title():
     assert head and "align-items: flex-start" in head.group(1)
     card = _fn_body("kolCard")
     assert "kol-card-meta" in card
-    assert "opts = opts || {}" in card
-    combos = _fn_body("renderCombinations")
-    assert "hidePlatform: true" in combos
+    assert "PLATFORM_LABELS[kol.platform]" in card
 
 
 def test_timeline_new_badge_pins_to_sticky_filterbar():
@@ -3017,6 +3041,11 @@ def test_settings_tabs_use_tab_aria():
     assert 'role="tablist" aria-label="设置分页"' in render
     assert 'role="tab"' in render and "aria-controls=" in render
     assert 'role="tabpanel"' in render
+    for tab in ("subs", "push", "bind", "llm", "account"):
+        assert f'id="tab-{tab}"' in render
+        assert f'aria-controls="st-{tab}"' in render
+        assert f'id="st-{tab}"' in render
+        assert f'aria-labelledby="tab-{tab}"' in render
     switch = _fn_body("switchSettingsTab")
     assert 'setAttribute("aria-selected"' in switch
     assert "el.hidden = !on" in switch

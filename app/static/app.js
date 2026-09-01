@@ -2102,12 +2102,9 @@ async function switchPlatform(platform) {
   await loadHomeKols(routeRenderSeq);
 }
 
-function kolCard(kol, opts) {
-  opts = opts || {};
+function kolCard(kol) {
   const tags = [];
-  if (!opts.hidePlatform) {
-    tags.push(`<span class="tag">${PLATFORM_LABELS[kol.platform] || escapeHtml(kol.platform)}</span>`);
-  }
+  tags.push(`<span class="tag">${PLATFORM_LABELS[kol.platform] || escapeHtml(kol.platform)}</span>`);
   if (kol.category_name) tags.push(`<span class="tag">${escapeHtml(kol.category_name)}</span>`);
   if (kol.platform === "combination" && kol.quote && kol.quote.day_percent_gain != null) {
     const gain = kol.quote.day_percent_gain;
@@ -2177,7 +2174,7 @@ async function toggleFavorite(kolId, btn) {
     if (btn) btn.classList.toggle("fav-on", next);
     flash(next ? "已加星标" : "已取消星标");
     if (isRoute("home")) renderHomeList();
-    else if (isRoute("mysubs")) renderMySubsList();
+    else if (isRoute("settings") && state.settingsTab === "subs") renderMySubsList();
   } catch (err) {
     alert("操作失败: " + err.message);
   }
@@ -2195,7 +2192,7 @@ async function toggleSecondary(kolId, btn) {
     if (btn) btn.classList.toggle("sec-on", next);
     flash(next ? "已设为次要（降频推送）" : "已取消次要");
     if (isRoute("home")) renderHomeList();
-    else if (isRoute("mysubs")) renderMySubsList();
+    else if (isRoute("settings") && state.settingsTab === "subs") renderMySubsList();
   } catch (err) {
     alert("操作失败: " + err.message);
   }
@@ -2218,8 +2215,7 @@ async function refreshKolsView() {
   // 发起前捕获当前路由令牌；完成后再写 DOM，避免局部刷新覆盖已切走的新路由
   const seq = routeRenderSeq;
   if (isRoute("home")) await loadHomeKols(seq); // 重拉 catalog，已订阅置顶即时生效
-  else if (isRoute("combinations")) await renderCombinations(seq);
-  else if (isRoute("mysubs")) await renderMySubs(seq);
+  else if (isRoute("settings")) await loadSettingsSubscriptions(seq);
   else if (isRoute("kol/")) await renderKolPage(Number(routePath().split("/")[1] || 0), seq);
   else if (isRoute("search")) doSearch(seq);
 }
@@ -2265,33 +2261,39 @@ async function setSubscribeType(kolId, input) {
   }
 }
 
-// ---------- 我的订阅 / 动态 ----------
-async function renderMySubs(seq) {
-  setPageTitle("我的订阅");
-  ensurePlazaPlatformSelection();
+function settingsSubscriptionsPanelHtml() {
   const mobileFilter = isMobileTimelineFilter();
-  $("#main").innerHTML = `
+  return `
     <section class="section-panel${mobileFilter ? " home-panel" : ""}">
       <header class="section-head home-head">
-        <div>
-          <h2 class="section-title">已订阅</h2>
-        </div>
+        <div><h2 class="section-title">已订阅</h2></div>
       </header>
       <div class="toolbar" style="margin:12px 0 16px">
         <div class="${mobileFilter ? "icon-badge-bar mysubs-mobile-filters" : "platform-tabs"}" id="mysubs-tabs"></div>
         ${mobileFilter ? "" : `<button id="mysubs-fav-toggle" class="fav-toggle ${state.mysubsFavorite ? "fav-on" : ""}" onclick="toggleMySubsFav()">${STAR_SVG} 特别关注</button>`}
       </div>
-      <div id="mysubs-list" class="kol-grid"></div>
+      <div id="mysubs-list" class="kol-grid">${emptyState("加载中…")}</div>
     </section>`;
+}
+
+async function loadSettingsSubscriptions(seq) {
+  const target = $("#mysubs-list");
+  if (!target) return;
+  target.innerHTML = emptyState("加载中…");
   try {
     const subs = await api("/api/my/subscriptions");
-    if (!routeStillActive(seq)) return; // 已切走：不写旧页面数据
+    if (!routeStillActive(seq)) return;
     state.catalog = subs.map((k) => ({ ...k, subscribed: true }));
     renderMySubsTabs();
     renderMySubsList();
   } catch (err) {
     if (!routeStillActive(seq)) return;
-    $("#mysubs-list").innerHTML = emptyState(err.message);
+    const current = $("#mysubs-list");
+    if (!current) return;
+    current.innerHTML = emptyState(
+      "加载失败: " + err.message,
+      `<div><button type="button" class="btn-ghost" onclick="loadSettingsSubscriptions(routeRenderSeq)">重试</button></div>`
+    );
   }
 }
 
@@ -2350,37 +2352,6 @@ function toggleMySubsFav() {
   if (btn) btn.classList.toggle("fav-on", state.mysubsFavorite);
   renderMySubsTabs(); // 移动端星标角标在 #mysubs-tabs 内，需重绘
   renderMySubsList();
-}
-
-async function renderCombinations(seq) {
-  setPageTitle("组合订阅");
-  $("#main").innerHTML = `
-    <section class="section-panel">
-      <header class="section-head">
-        <div>
-          <h2 class="section-title">雪球组合</h2>
-          <p class="section-meta" id="combo-meta">加载中…</p>
-        </div>
-      </header>
-      <div id="combo-list" class="kol-grid"></div>
-    </section>`;
-  try {
-    const kols = await api("/api/catalog?platform=combination");
-    if (!routeStillActive(seq)) return; // 已切走：不写旧页面数据
-    state.catalog = kols;
-    $("#combo-meta").textContent = `共 ${kols.length} 个组合`;
-    $("#combo-list").innerHTML = kols.length
-      ? kols.map((k) => kolCard(k, { hidePlatform: true })).join("")
-      : emptyState(
-          "还没有添加雪球组合",
-          state.user?.is_admin
-            ? `<div><button class="btn-normal btn-add" onclick="go('admin/kols')">去管理后台添加</button></div>`
-            : `<div><button class="btn-normal btn-add" onclick="go('search')">申请添加 →</button></div>`
-        );
-  } catch (err) {
-    if (!routeStillActive(seq)) return;
-    $("#combo-list").innerHTML = emptyState(err.message);
-  }
 }
 
 // ---------- 动态 ----------
@@ -4095,7 +4066,7 @@ async function toggleKolPageSubscribe(kolId) {
 // ---------- 推送设置 ----------
 let settingsPollTimer = null;
 let _pushStatusHtml = "";
-const SETTINGS_TABS = ["push", "bind", "llm", "account"];
+const SETTINGS_TABS = ["subs", "push", "bind", "llm", "account"];
 let _kolImageSubscriptions = [];
 const _kolImagePendingIds = new Set();
 let _kolImageLoadGeneration = 0;
@@ -4290,7 +4261,8 @@ async function refreshSettingsStatus() {
 async function renderSettings(seq) {
   const token = state.token;
   const sessionGeneration = imaMountState.sessionGeneration;
-  setPageTitle("推送设置");
+  setPageTitle("订阅与推送");
+  ensurePlazaPlatformSelection();
   try {
     const user = await api("/api/me");
     if (!routeStillActive(seq) || token !== state.token
@@ -4306,10 +4278,14 @@ async function renderSettings(seq) {
     const fsTarget = fsBot ? `<b>${escapeHtml(fsBot)}</b>` : "你的机器人应用名";
     $("#main").innerHTML = `
       <div class="settings-tabs" role="tablist" aria-label="设置分页">
-        <button type="button" class="settings-tab active" role="tab" id="tab-push" aria-selected="true" aria-controls="st-push" data-tab="push" onclick="switchSettingsTab('push')">推送设置</button>
+        <button type="button" class="settings-tab active" role="tab" id="tab-subs" aria-selected="true" aria-controls="st-subs" data-tab="subs" onclick="switchSettingsTab('subs')">订阅管理</button>
+        <button type="button" class="settings-tab" role="tab" id="tab-push" aria-selected="false" aria-controls="st-push" data-tab="push" onclick="switchSettingsTab('push')">推送设置</button>
         <button type="button" class="settings-tab" role="tab" id="tab-bind" aria-selected="false" aria-controls="st-bind" data-tab="bind" onclick="switchSettingsTab('bind')">渠道绑定</button>
         <button type="button" class="settings-tab" role="tab" id="tab-llm" aria-selected="false" aria-controls="st-llm" data-tab="llm" onclick="switchSettingsTab('llm')">AI 摘要</button>
         <button type="button" class="settings-tab" role="tab" id="tab-account" aria-selected="false" aria-controls="st-account" data-tab="account" onclick="switchSettingsTab('account')">账号设置</button>
+      </div>
+      <div id="st-subs" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-subs">
+        ${settingsSubscriptionsPanelHtml()}
       </div>
       <div id="st-push" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-push">
       <section class="section-panel">
@@ -4601,8 +4577,9 @@ async function renderSettings(seq) {
       </div>`;
     _pushStatusHtml = channelStatusHtml(state.user);
     if (pendingBindActive() && !settingsTargetBound(state.user)) startSettingsPoll();
-    switchSettingsTab(state.settingsTab || "push"); // 恢复上次所在分栏
+    switchSettingsTab(state.settingsTab || "subs"); // 恢复上次所在分栏
     toggleDnd(); // 根据开关初始状态同步时段输入框的禁用/置灰
+    loadSettingsSubscriptions(seq);
     loadKolImageSettings(seq);
   } catch (err) {
     if (!routeStillActive(seq) || token !== state.token
@@ -4766,8 +4743,8 @@ async function toggleKolImages(kolId, input) {
 }
 
 function switchSettingsTab(name) {
-  // 设置页分段导航：推送 / 渠道绑定 / AI 摘要 / 账号设置
-  if (!SETTINGS_TABS.includes(name)) name = "push";
+  // 设置页分段导航：订阅管理 / 推送 / 渠道绑定 / AI 摘要 / 账号设置
+  if (!SETTINGS_TABS.includes(name)) name = "subs";
   state.settingsTab = name;
   document.querySelectorAll(".settings-tab[data-tab]").forEach((b) => {
     if (!SETTINGS_TABS.includes(b.dataset.tab)) return;
@@ -10221,10 +10198,10 @@ async function loadAdminTagsTab() {
     <section class="section-panel">
       <header class="section-head">
         <div><h2 class="section-title">标签维护</h2>
-        <p class="section-meta">合并种子黑话、解析 $标记$ 新股、去掉指数/ETF 误入的股票名，并清理过期标签与碎片别名。每日自动一次，也可立即执行。标记解析跟管理员「推送设置 → AI 摘要」同一套 LLM。</p></div>
+        <p class="section-meta">合并种子黑话、解析 $标记$ 新股、去掉指数/ETF 误入的股票名，并清理过期标签与碎片别名。每日自动一次，也可立即执行。标记解析跟管理员「订阅与推送 → AI 摘要」同一套 LLM。</p></div>
       </header>
       <p class="section-meta" style="margin-top:8px" id="tag-maintain-meta">${escapeHtml(adminMaintainSummary(data))}</p>
-      ${data.maintain && data.maintain.llm_ready ? "" : `<p class="section-meta">未检测到站点 LLM。请到「推送设置 → AI 摘要」配置 OpenAI 兼容接口，或设环境变量 LLM_API_KEY。点运行仍会合并种子、清碎片和误标。</p>`}
+      ${data.maintain && data.maintain.llm_ready ? "" : `<p class="section-meta">未检测到站点 LLM。请到「订阅与推送 → AI 摘要」配置 OpenAI 兼容接口，或设环境变量 LLM_API_KEY。点运行仍会合并种子、清碎片和误标。</p>`}
       <div class="toolbar" style="margin-top:12px">
         <button class="btn-normal" onclick="adminMaintainTags('pending')">维护并回填待打标</button>
         <button class="btn-ghost" onclick="adminMaintainTags('none')">仅维护词表</button>
