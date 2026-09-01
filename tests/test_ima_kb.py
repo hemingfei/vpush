@@ -1340,7 +1340,7 @@ def test_full_text_index_sync_once_invokes_background_sync_once(tmp_path, monkey
 
 
 def test_full_text_index_failure_does_not_escape_maintenance_or_healthz(
-    tmp_path, monkeypatch, caplog
+    tmp_path, monkeypatch
 ):
     monkeypatch.setenv("DAV_UI_ONLY", "1")
     monkeypatch.setenv("IMA_SEARCH_GROUP_IDS", "group-a")
@@ -1349,17 +1349,22 @@ def test_full_text_index_failure_does_not_escape_maintenance_or_healthz(
     client = TestClient(create_app(db_path=tmp_path / "failure.sqlite"))
     service = client.app.state.ima_documents
     scheduler_started = threading.Event()
-    failure_seen = threading.Event()
+    log_seen = threading.Event()
+    log_messages = []
 
     def fail(_rows):
-        failure_seen.set()
         raise RuntimeError("simulated full-text failure")
+
+    def record_exception(message, *args, **kwargs):
+        log_messages.append(message)
+        log_seen.set()
 
     def schedule_loop():
         scheduler_started.set()
         service._stop.wait(2)
 
     monkeypatch.setattr(client.app.state.ima_search_index, "sync", fail)
+    monkeypatch.setattr("app.ima_documents.logger.exception", record_exception)
     monkeypatch.setattr(service, "_rebuild_index_if_needed", lambda: None)
     monkeypatch.setattr(service.store, "archive_writable", lambda: False)
     monkeypatch.setattr(service.store, "archive_readable", lambda: False)
@@ -1369,11 +1374,11 @@ def test_full_text_index_failure_does_not_escape_maintenance_or_healthz(
     scheduler = service._scheduler_thread
     try:
         assert scheduler_started.wait(1)
-        assert failure_seen.wait(1)
+        assert log_seen.wait(1)
         assert scheduler is not None and scheduler.is_alive()
         assert client.get("/healthz").status_code == 200
         assert service.status()["full_text_index"]["enabled"] is True
-        assert "IMA full-text index sync failed" in caplog.text
+        assert log_messages == ["IMA full-text index sync failed"]
     finally:
         service.stop()
 

@@ -3552,8 +3552,8 @@ def test_financial_news_action_icons_have_stable_dimensions():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=262"' in html
-    assert 'src="/app.js?v=373"' in html
-    assert 'dav-shell-v242' in sw
+    assert 'src="/app.js?v=374"' in html
+    assert 'dav-shell-v243' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
