@@ -1,7 +1,13 @@
 import httpx
 import pytest
 
-from app.url_safety import _blocked_ip, is_allowed_user_llm_base, is_safe_http_url, safe_get
+from app.url_safety import (
+    _blocked_ip,
+    is_allowed_user_llm_base,
+    is_safe_http_url,
+    safe_get,
+    safe_get_limited,
+)
 
 
 def test_rejects_non_http_and_empty():
@@ -107,6 +113,43 @@ def test_user_llm_allows_intranet_and_blocks_non_http():
     assert is_allowed_user_llm_base("https://user:pass@api.deepseek.com") is False
     assert is_allowed_user_llm_base("file:///etc/passwd") is False
     assert is_allowed_user_llm_base("") is False
+
+
+
+
+def test_safe_get_limited_rejects_credentials_and_nondefault_ports(monkeypatch):
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
+    for url in (
+        "https://user:pass@feed.example/rss",
+        "https://feed.example:8443/rss",
+        "http://feed.example:8080/rss",
+    ):
+        with pytest.raises(ValueError, match="不安全的下载地址"):
+            safe_get_limited(client, url, max_bytes=1024, default_ports_only=True)
+
+
+def test_safe_get_limited_stops_after_decompressed_limit(monkeypatch):
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, content=b"x" * 1025)
+        )
+    )
+    with pytest.raises(ValueError, match="响应体过大"):
+        safe_get_limited(client, "https://feed.example/rss", max_bytes=1024)
+
+
+def test_safe_get_limited_revalidates_redirect_target(monkeypatch):
+    def handler(request):
+        if request.headers["host"] == "feed.example":
+            return httpx.Response(302, headers={"location": "http://169.254.169.254/latest"})
+        raise AssertionError("blocked redirect must not be requested")
+
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(ValueError, match="不安全的下载地址"):
+        safe_get_limited(client, "https://feed.example/rss", max_bytes=1024)
 
 
 def test_safe_get_blocks_too_many_redirects(monkeypatch):
