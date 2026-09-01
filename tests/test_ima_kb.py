@@ -1871,6 +1871,68 @@ def test_hybrid_full_text_search_short_missing_and_broken_indexes_keep_metadata(
     assert [item["media_id"] for item in broken.json()["items"]] == ["fallback"]
 
 
+@pytest.mark.parametrize(
+    ("metadata_total", "max_calls"),
+    [(0, 2), (1, 11)],
+)
+def test_hybrid_max_offset_uses_bounded_fts_batches(
+    tmp_path, monkeypatch, metadata_total, max_calls
+):
+    client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
+        tmp_path, monkeypatch, f"hybrid_max_offset_{metadata_total}"
+    )
+    service = client.app.state.ima_documents
+    calls = {"search": 0, "lookup": 0}
+
+    monkeypatch.setattr(service, "_index_usable", lambda: True)
+    monkeypatch.setattr(
+        service.db,
+        "ima_document_match_count",
+        lambda *_args, **_kwargs: metadata_total,
+    )
+
+    def search(_query, _group_ids, limit, *, offset=0):
+        calls["search"] += 1
+        assert limit == 200
+        return [
+            {
+                "group_id": group_a,
+                "media_id": f"hit-{rank}",
+                "search_snippet": "body needle",
+            }
+            for rank in range(offset, offset + limit)
+        ]
+
+    def lookup(keys, *_args, **_kwargs):
+        calls["lookup"] += 1
+        return [
+            {
+                "group_id": group_id,
+                "media_id": media_id,
+                "name": f"{media_id}.pdf",
+                "day": "0901",
+                "_metadata_match": metadata_total == 1 and media_id == "hit-0",
+            }
+            for group_id, media_id in keys
+        ]
+
+    monkeypatch.setattr(service.search_index, "search", search)
+    monkeypatch.setattr(service.db, "ima_documents_by_keys", lookup)
+
+    response = client.get(
+        "/api/ima-documents?q=body%20needle&limit=1&offset=2000",
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert [item["media_id"] for item in response.json()["items"]] == ["hit-2000"]
+    assert response.json()["has_more"] is True
+    assert calls["search"] == calls["lookup"]
+    assert calls["search"] <= max_calls
+    if metadata_total == 0:
+        assert calls == {"search": 1, "lookup": 1}
+
+
 def test_ima_documents_offset_is_bounded(tmp_path, monkeypatch):
     monkeypatch.setenv("DAV_UI_ONLY", "1")
     client = TestClient(create_app(db_path=tmp_path / "ima-offset.sqlite"))
@@ -1880,14 +1942,14 @@ def test_ima_documents_offset_is_bounded(tmp_path, monkeypatch):
         "/api/ima-documents?offset=-1", headers=headers
     ).status_code == 422
     assert client.get(
-        "/api/ima-documents?offset=100001", headers=headers
+        "/api/ima-documents?offset=2001", headers=headers
     ).status_code == 422
     accepted = client.get(
-        "/api/ima-documents?offset=100000", headers=headers
+        "/api/ima-documents?offset=2000", headers=headers
     )
 
     assert accepted.status_code == 200, accepted.text
-    assert accepted.json()["offset"] == 100000
+    assert accepted.json()["offset"] == 2000
 
 
 def test_indexed_api_serves_without_reading_json(tmp_path, monkeypatch):

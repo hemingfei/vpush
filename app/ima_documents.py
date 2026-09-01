@@ -3103,7 +3103,8 @@ class ImaDocumentService:
                     body_target = body_limit + 1
                     body_rows: list[dict] = []
                     body_seen = 0
-                    fts_offset = 0
+                    seek_body_offset = metadata_total == 0 and not day and not tag
+                    fts_offset = body_offset if seek_body_offset else 0
                     exhausted = False
                     while len(body_rows) < body_target:
                         try:
@@ -3119,6 +3120,8 @@ class ImaDocumentService:
                         if not fts_hits:
                             exhausted = True
                             break
+                        if seek_body_offset and body_seen == 0:
+                            body_seen = body_offset
                         hydrated = lookup(
                             [
                                 (hit.get("group_id"), hit.get("media_id"))
