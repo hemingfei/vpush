@@ -405,35 +405,105 @@ def strip_watermark(payload: bytes) -> bytes:
 
 
 COMPRESS_RATIO = 0.90  # 压缩后体积低于原件 90% 才采用；已优化的 PDF 压不动，自动跳过（幂等）
+COMPRESS_MIN_SAVING = 256 * 1024
+IMA_FLAT_MIN_BYTES = 2 * 1024 * 1024
+IMA_FLAT_MARKER = b"ima-flat-v3"
+IMA_FLAT_FONT = "Microsoft YaHei Regular"
 _gs_warned = False
 
 
-def pdf_equivalent(a: bytes, b: bytes) -> bool:
-    """页数一致且逐页文本层一致（忽略空白）才认为内容等价。"""
+def _pdf_has_unsupported_features(doc) -> bool:
+    if doc.is_form_pdf or doc.embfile_count() or doc.get_ocgs():
+        return True
+    catalog = doc.pdf_catalog()
+    if any(doc.xref_get_key(catalog, key)[0] != "null"
+           for key in ("Perms", "AcroForm", "OpenAction", "AA", "Names", "Collection",
+                       "StructTreeRoot", "MarkInfo", "PageLabels")):
+        return True
+    return any(
+        any(page.annots() or ()) or any(page.widgets() or ()) or page.get_links()
+        for page in doc
+    )
+
+
+def pdf_equivalence_result(a: bytes, b: bytes) -> str:
+    """返回空串表示可安全替换，否则返回可记录的拒绝或临时错误原因。"""
     try:
         import fitz
-        da, db = fitz.open(stream=a, filetype="pdf"), fitz.open(stream=b, filetype="pdf")
-        if len(da) != len(db):
-            return False
-        return all(re.sub(r"\s+", "", pa.get_text()) == re.sub(r"\s+", "", pb.get_text())
-                   for pa, pb in zip(da, db))
+    except ImportError:
+        return "verify_unavailable"
+    try:
+        with fitz.open(stream=a, filetype="pdf") as da, fitz.open(
+                stream=b, filetype="pdf") as db:
+            if _pdf_has_unsupported_features(da) or _pdf_has_unsupported_features(db):
+                return "unsupported_features"
+            if len(da) != len(db) or da.get_toc(simple=True) != db.get_toc(simple=True):
+                return "content_mismatch"
+            matrix = fitz.Matrix(96 / 72, 96 / 72)
+            boxes = ("mediabox", "cropbox", "bleedbox", "trimbox", "artbox")
+            for pa, pb in zip(da, db):
+                if pa.rotation != pb.rotation:
+                    return "content_mismatch"
+                for box in boxes:
+                    if any(abs(x - y) > 0.01 for x, y in zip(
+                            getattr(pa, box), getattr(pb, box))):
+                        return "content_mismatch"
+                if re.sub(r"\s+", "", pa.get_text()) != re.sub(r"\s+", "", pb.get_text()):
+                    return "content_mismatch"
+                pix_a = pa.get_pixmap(matrix=matrix, colorspace=fitz.csRGB,
+                                      alpha=False, annots=False)
+                pix_b = pb.get_pixmap(matrix=matrix, colorspace=fitz.csRGB,
+                                      alpha=False, annots=False)
+                if ((pix_a.width, pix_a.height, pix_a.stride) !=
+                        (pix_b.width, pix_b.height, pix_b.stride) or
+                        pix_a.samples != pix_b.samples):
+                    return "content_mismatch"
+            return ""
     except Exception:
-        return False
+        return "verify_error"
 
 
-def compress_pdf(data: bytes) -> bytes:
-    """gs /prepress（最高品质，300dpi 上限）条件压缩：输出更小且内容等价才采用，
-    否则原样返回。已压缩/优化的文件压不动 → 自动跳过，重复调用幂等。
-    未装 ghostscript 或任何异常均返回原文，不阻断采集。"""
+def pdf_equivalent(a: bytes, b: bytes) -> bool:
+    return not pdf_equivalence_result(a, b)
+
+
+def _compression_rejection(original: bytes, candidate: bytes) -> str:
+    if (len(candidate) >= len(original) * COMPRESS_RATIO or
+            len(original) - len(candidate) < COMPRESS_MIN_SAVING):
+        return "ratio_rejected"
+    return pdf_equivalence_result(original, candidate)
+
+
+def _subset_ima_flat(data: bytes) -> tuple[bytes | None, str]:
+    if len(data) < IMA_FLAT_MIN_BYTES or IMA_FLAT_MARKER not in data:
+        return None, "not_ima_flat"
+    try:
+        import fitz
+    except ImportError:
+        return None, "subset_unavailable"
+    try:
+        with fitz.open(stream=data, filetype="pdf") as doc:
+            if doc.metadata.get("subject") != IMA_FLAT_MARKER.decode():
+                return None, "not_ima_flat"
+            if not hasattr(doc, "subset_fonts"):
+                return None, "subset_unavailable"
+            if not any(font[3] == IMA_FLAT_FONT
+                       for page in doc for font in page.get_fonts(full=True)):
+                return None, "font_already_subset"
+            doc.subset_fonts(verbose=False)
+            return doc.tobytes(garbage=4, deflate=True, use_objstms=1), ""
+    except Exception:
+        return None, "subset_error"
+
+
+def _ghostscript_compress(data: bytes) -> tuple[bytes | None, str]:
     global _gs_warned
-    if not data.startswith(b"%PDF"):
-        return data
     gs = shutil.which("gs")
     if not gs:
         if not _gs_warned:
             print("WARN: 未装 ghostscript，跳过压缩", file=sys.stderr)
             _gs_warned = True
-        return data
+        return None, "gs_unavailable"
     try:
         with tempfile.TemporaryDirectory() as td:
             src, out = os.path.join(td, "s.pdf"), os.path.join(td, "o.pdf")
@@ -443,16 +513,41 @@ def compress_pdf(data: bytes) -> bytes:
                 [gs, "-sDEVICE=pdfwrite", "-dCompatibilityLevel=1.7",
                  "-dPDFSETTINGS=/prepress", "-dAutoRotatePages=/None",
                  "-dNOPAUSE", "-dQUIET", "-dBATCH", f"-sOutputFile={out}", src],
-                capture_output=True, timeout=600)
+                capture_output=True, timeout=600, check=False)
             if r.returncode != 0 or not os.path.exists(out) or os.path.getsize(out) == 0:
-                return data
+                return None, "gs_error"
             with open(out, "rb") as f:
-                new = f.read()
+                return f.read(), ""
     except Exception:  # noqa: BLE001 — 压缩失败不阻断采集
-        return data
-    if len(new) >= len(data) * COMPRESS_RATIO or not pdf_equivalent(data, new):
-        return data
-    return new
+        return None, "gs_error"
+
+
+def compress_pdf_result(data: bytes) -> tuple[bytes, str]:
+    """无损条件压缩并返回结果原因；任何失败都保留原文。"""
+    if not data.startswith(b"%PDF"):
+        return data, "not_pdf"
+
+    subset, subset_reason = _subset_ima_flat(data)
+    if subset is not None:
+        rejection = _compression_rejection(data, subset)
+        if not rejection:
+            return subset, "compressed_subset"
+        subset_reason = rejection
+
+    candidate, gs_reason = _ghostscript_compress(data)
+    if candidate is not None:
+        rejection = _compression_rejection(data, candidate)
+        if not rejection:
+            return candidate, "compressed_gs"
+        return data, rejection
+    if subset_reason not in {"not_ima_flat", "font_already_subset"}:
+        return data, subset_reason
+    return data, gs_reason
+
+
+def compress_pdf(data: bytes) -> bytes:
+    """IMA-flat 先做字体子集化，其他 PDF 使用 gs /prepress；失败保留原文。"""
+    return compress_pdf_result(data)[0]
 
 
 def main() -> None:

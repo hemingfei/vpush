@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -7,6 +8,7 @@ import tempfile
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -15,6 +17,16 @@ MAX_PDF_BYTES = 200 * 1024 * 1024
 MAX_JSON_BYTES = 1_000_000
 RANGE_MIN_BYTES = 8 * 1024 * 1024
 RANGE_PARTS = 4
+
+
+@contextmanager
+def path_lock(destination: Path):
+    fd = os.open(destination.parent, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
 
 
 class AllowedRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -148,7 +160,8 @@ def save_pdf(
                 raise RuntimeError("IMA download is not a PDF")
             if expected_size and size != int(expected_size):
                 raise RuntimeError(f"IMA PDF size mismatch got={size} expected={expected_size}")
-        os.replace(temp, destination)
+        with path_lock(destination):
+            os.replace(temp, destination)
     except Exception:
         temp.unlink(missing_ok=True)
         raise

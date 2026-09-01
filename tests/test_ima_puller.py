@@ -3,16 +3,15 @@ import json
 import threading
 import urllib.error
 import urllib.request
-from pathlib import Path
+from contextlib import contextmanager
 
 import pytest
 
 from app.ima_puller import (
-    MAX_PDF_BYTES,
     _error_status,
     allowed_url,
-    save_pdf,
     safe_dest,
+    save_pdf,
     serve_puller,
 )
 
@@ -110,6 +109,29 @@ def test_save_pdf_long_title_keeps_part_under_name_max(tmp_path, monkeypatch):
     assert result["size"] == 12
     leftovers = list(path.parent.glob(".vpush-*")) + list(path.parent.glob("*.part"))
     assert leftovers == []
+
+
+def test_save_pdf_uses_path_lock_for_replace(tmp_path, monkeypatch):
+    import app.ima_puller as puller
+
+    _fake_opener_factory(monkeypatch, puller)
+    entered = []
+
+    @contextmanager
+    def fake_lock(path):
+        entered.append(path)
+        yield
+
+    monkeypatch.setattr(puller, "path_lock", fake_lock)
+    save_pdf(
+        tmp_path,
+        "g/0829/a.pdf",
+        "https://res-skb.ima.qq.com/a.pdf",
+        {"X-IMA-Sign": "sig"},
+        expected_size=12,
+    )
+
+    assert entered == [tmp_path / "g" / "0829" / "a.pdf"]
 
 
 def test_save_pdf_writes_atomically(tmp_path, monkeypatch):

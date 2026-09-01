@@ -92,27 +92,30 @@ tail -f /root/cicc/*.log     # 进度
 - API（仅管理员）：`GET /api/admin/cicc/status`、`POST /api/admin/cicc/trigger {mode}`、
   `PUT /api/admin/cicc/schedule {enabled}`；依赖 `IMA_ARCHIVE_ROOT` 指向 NFS 归档。
 
-## 全站 PDF 压缩回刷（2026-08-30，已停用）
+## PDF 压缩策略
 
-> ⚠️ **用户决定（2026-08-30）：中金库压缩回刷永久停跑，任何会话不要再启动。**
-> 新文件由采集管道内置 compress_pdf（去水印+gs，90% 阈值）在落地时压缩，回刷无必要。
-> 停止时进度：中金库 750/4,956（省 72MB）、全站 5,600 处理/省 3.1GB；断点保留在
-> `compress_state.json`（中金 `.bak-premerge` 后重扫版），仅在用户明确要求时才可续跑。
+> ⚠️ **中金库边界不变**：`/srv/vpush-ima/local/` 的存量回刷永久停跑。中金新增文件仍由采集管道按需执行
+> `compress_pdf`，全站增量脚本明确排除 `local/`。
 
-原操作记录（已废弃，仅存档）：
+全站 IMA 增量由 `scripts/pdf_backfill_compress.py` 处理：
 
-- **增量**：采集脚本内置 `compress_pdf`（gs /prepress 最高品质档，300dpi 上限）——新体积 < 原件 90%
-  且页数+逐页文本层一致才采用；已优化的 PDF 压不动自动跳过（幂等，满足「压缩过的不再压」）。
-- **存量回刷**：`scripts/pdf_backfill_compress.py`（VPS `/root/cicc/`）扫 `/srv/vpush-ima` 全部 PDF
-  （**排除 `local/` 中金目录**，归采集管辖），大文件优先，断点 `compress_state.json` 可中断续跑，
-  替换保留原属主/权限/mtime 并 fsync；120 秒内新写入的文件跳过（避开采集进程）。
-  - 试跑：`python3 -u /root/cicc/pdf_backfill_compress.py --limit 20`
-  - 全量：`nohup python3 -u /root/cicc/pdf_backfill_compress.py > /root/cicc/compress.log 2>&1 &`
-- 实测（31 篇分层基准）：投行原版研报（占全站体量 ~86%）本已优化，压缩率 ≈100% 自动跳过；
-  收益来自低效 PDF——K-Research 40→2.4MB、Semianalysis 54→16MB（×2 重复）、伯恩斯坦美洲能源 42→28MB。
-  全站 16.6K 个 / 55GB，预计释放 4~8GB。
-- ⚠️ 存储 VPS 仅 1 核：全量回刷已 `renice +19` 让位采集进程，预计 1~2 天跑完。
-  注意 `pkill -f pdf_backfill` 会匹配 ssh 命令串误杀自身连接，停止请按 pid（`pgrep -f "python3 -u /root/cicc/pdf_backfill"`）。
+- **IMA-flat-v3**：检测完整嵌入的微软雅黑，优先用 PyMuPDF `subset_fonts()` 无损子集化；
+  其他 PDF 或子集化未达到门槛时才走 Ghostscript `/prepress`。
+- **采用门槛**：压缩后小于原件 90%、至少节省 256 KiB，并且页数、所有页面框/旋转、书签、逐页文本层
+  和 96dpi RGB 全页渲染逐像素一致。签名、表单、批注、附件、图层、链接或 tagged PDF 一律保留原件；
+  投行原版已优化或整页 JPEG 的文件会自动跳过，不降低 DPI。验证器不可用/异常只记临时失败，下小时重试。
+- **状态与并发**：状态按 root 隔离；全站使用 `compress_state.json`，其他 `--root` 使用独立哈希文件。
+  每条记录包含 path + size + mtime_ns + inode + strategy_version；同路径被 puller 覆写或策略升级后自动重检。
+  puller 与压缩器在最终替换时共同锁住父目录，替换前复核源指纹；状态和 PDF 都使用 fsync + 原子替换。
+- **调度**：`vpush-compress-hourly.timer` 每小时低优先级运行一次（`nice 19 + ionice`）。全库无任务空扫约 3 秒；
+  新文件仍跳过 120 秒，避免与下载进程冲突。
+- 安装/迁移：`bash scripts/vps/install_compress_hourly.sh`（会删除旧 monthly unit）。
+- 手动试跑：`python3 -u /root/cicc/pdf_backfill_compress.py --dry-run --limit 20`。
+- 手动执行：`nice -n 19 ionice -c2 -n7 python3 -u /root/cicc/pdf_backfill_compress.py`。
+
+2026-09-01 基准：38 个遗漏的 IMA-flat 大文件 655.3MB → 117.0MB，逐页文本完全一致；
+最大样本及 KR 样本的 96dpi 渲染逐像素一致。Ghostscript 处理 KR 虽更小，但会损坏部分复制/搜索文本，
+因此 v3 使用 RGB 全页像素校验，且不能放宽文本层校验。
 
 ## 全站 PDF 去重（2026-08-30）
 
