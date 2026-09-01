@@ -701,6 +701,16 @@ def test_settings_save_feedback_uses_flash():
     assert "flash(" in _fn_body("pasteCookieField")
 
 
+def test_llm_settings_are_openai_compatible_with_model_list():
+    render = _fn_body("renderSettings")
+    assert "OpenAI 兼容" in render
+    assert "DeepSeek、Grok、OpenAI" in render
+    assert 'id="set-llm-model-list"' in render
+    assert "loadLlmModels()" in render
+    assert "/api/me/llm-models" in _fn_body("loadLlmModels")
+    assert "escapeHtml" in _fn_body("loadLlmModels")
+
+
 def test_kol_image_settings_is_fourth_push_section_and_loads_independently():
     """动态图片卡片位于关键词后，并在设置页初始化完成后独立加载。"""
     body = _fn_body("renderSettings")
@@ -4193,7 +4203,7 @@ def test_admin_tag_page_has_llm_maintain():
     """标签管理页可一键跑 LLM 维护，不必再走脚本。"""
     render = _fn_body("loadAdminTagsTab")
     assert "标签维护" in render
-    assert "Grok" in render
+    assert "LLM" in render
     assert "adminMaintainTags" in render
     assert "维护并回填待打标" in render
     body = _fn_body("adminMaintainTags")

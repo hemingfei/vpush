@@ -1777,6 +1777,33 @@ def create_api_router(
         db.update_user_atomic(user["id"], updates, keywords=keywords)
         return public_user(db.get_user(user["id"]), db)
 
+    @router.post("/me/llm-models")
+    def list_my_llm_models(body: MeUpdate, request: Request, user: dict = Depends(get_current_user)):
+        """按 OpenAI 兼容 GET /models 拉取模型 id 列表。"""
+        from types import SimpleNamespace
+
+        from .llm import list_models
+        from .scheduler import _system_llm_config
+        from .url_safety import is_allowed_user_llm_base
+
+        user = db.get_user(user["id"]) or user
+        base = (body.llm_api_base if body.llm_api_base is not None else user.get("llm_api_base") or "").strip()
+        key = (body.llm_api_key or "").strip()
+        if not key or _is_masked_secret(key):
+            key = user_plain_secret(user, "llm_api_key", db)
+        if not base or not key:
+            cfg = _system_llm_config(db, getattr(request.app.state, "llm_config", None) if request else None)
+            if cfg is None:
+                raise HTTPException(status_code=400, detail="请先填写 API 地址和 Key")
+            models = list_models(cfg)
+        else:
+            if not is_allowed_user_llm_base(base):
+                raise HTTPException(status_code=400, detail="用户 LLM 地址不能指向内网或非法地址")
+            models = list_models(SimpleNamespace(api_base=base, api_key=key, model="", user_supplied=True))
+        if models is None:
+            raise HTTPException(status_code=502, detail="无法获取模型列表，请检查地址和 Key")
+        return {"models": models}
+
     @router.post("/me/webpush")
     def subscribe_webpush(body: WebPushIn, request: Request, user: dict = Depends(get_current_user)):
         from .notifiers.webpush import (

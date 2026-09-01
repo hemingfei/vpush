@@ -119,6 +119,46 @@ def _chat(
             client.close()
 
 
+def list_models(llm_config) -> list[str] | None:
+    """GET {base}/models，OpenAI 兼容。失败返回 None。"""
+    values = _config_values(llm_config)
+    if values is None:
+        return None
+    api_key, api_base, _model = values
+    import httpx
+
+    try:
+        with httpx.Client(timeout=20) as client:
+            resp = client.get(
+                f"{api_base}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        if resp.status_code >= 400:
+            logger.warning("LLM /models HTTP %s", resp.status_code)
+            return None
+        payload = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("LLM /models 失败: %s", exc)
+        return None
+    rows = payload.get("data") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        return None
+    seen: set[str] = set()
+    out: list[str] = []
+    for row in rows:
+        if isinstance(row, str):
+            item = row.strip()
+        elif isinstance(row, dict):
+            item = str(row.get("id") or "").strip()
+        else:
+            continue
+        if item and item not in seen:
+            seen.add(item)
+            out.append(item)
+    out.sort()
+    return out
+
+
 SUMMARY_SYSTEM_PROMPT = (
     "你是信息摘要助手。把下面用户订阅的社交动态整理成简洁的中文要点。"
     "要求：按重要性排序，每条要点一行，以「- 」开头；"

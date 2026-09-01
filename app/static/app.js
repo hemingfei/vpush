@@ -4514,28 +4514,32 @@ async function renderSettings(seq) {
         <header class="section-head">
           <div>
             <h2 class="section-title">AI 摘要（可选，用你的大模型）</h2>
-            <p class="section-meta">默认用站点 Grok。填了自己的 Key 才改用你的账号。接口为 OpenAI 兼容格式（/chat/completions）。</p>
+            <p class="section-meta">任意 OpenAI 兼容接口（/chat/completions 与 /models）。DeepSeek、Grok、OpenAI、本地网关均可。不填则用站点默认模型。</p>
           </div>
         </header>
         <div class="form-row">
           <label for="set-llm-base">API 地址（Base URL）</label>
           <input id="set-llm-base" class="form-control" type="text"
-            placeholder="留空则跟站点 Grok"
+            placeholder="https://api.openai.com/v1"
             value="${escapeHtml(state.user.llm_api_base || "")}">
-          <p class="muted" style="margin-top:4px">OpenAI 兼容的公网 http(s) 地址即可，不能指向内网。留空跟站点同一套。</p>
+          <p class="muted" style="margin-top:4px">公网 http(s) Base URL，不能指向内网。留空跟站点同一套。</p>
         </div>
         <div class="form-row">
           <label for="set-llm-key">API Key</label>
           <input id="set-llm-key" class="form-control" type="password"
-            placeholder="sk-...（清空并保存 = 用站点 Grok）"
+            placeholder="sk-...（清空并保存 = 用站点默认）"
             value="${escapeHtml(state.user.llm_api_key || "")}" autocomplete="off">
         </div>
         <div class="form-row">
-          <label for="set-llm-model">模型名</label>
-          <input id="set-llm-model" class="form-control" type="text"
-            placeholder="grok-4.6"
-            value="${escapeHtml(state.user.llm_model || "")}">
-          <p class="muted" style="margin-top:4px">留空默认 <code>grok-4.6</code></p>
+          <label for="set-llm-model">模型</label>
+          <div class="row" style="gap:10px;flex-wrap:wrap">
+            <input id="set-llm-model" class="form-control" type="text" list="set-llm-model-list"
+              placeholder="保存地址和 Key 后可拉取列表，也可手填"
+              value="${escapeHtml(state.user.llm_model || "")}" style="flex:1;min-width:220px">
+            <datalist id="set-llm-model-list"></datalist>
+            <button type="button" class="btn-ghost" onclick="loadLlmModels()">拉取模型列表</button>
+          </div>
+          <p class="muted" style="margin-top:4px">列表来自该接口的 <code>/models</code>；没有列表的网关仍可手填模型名。</p>
         </div>
         <div class="toolbar" style="margin-top:10px">
           <button class="btn-normal" onclick="saveLlm()">保存</button>
@@ -5589,12 +5593,36 @@ async function saveLlm() {
     await api("/api/me", { method: "PUT", body: JSON.stringify(payload) });
     if (!routeStillActive(routeSeq) || token !== state.token
       || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(payload.llm_api_key ? "已保存，将用你的模型" : "已保存，将用站点 Grok");
+    flash(payload.llm_api_key ? "已保存，将用你的模型" : "已保存，将用站点默认模型");
     await reloadSettings(routeSeq);
   } catch (err) {
     if (!routeStillActive(routeSeq) || token !== state.token
       || sessionGeneration !== imaMountState.sessionGeneration) return;
     flash(err.message, "error");
+  }
+}
+
+async function loadLlmModels() {
+  const routeSeq = routeRenderSeq;
+  const list = $("#set-llm-model-list");
+  const input = $("#set-llm-model");
+  try {
+    const data = await api("/api/me/llm-models", {
+      method: "POST",
+      body: JSON.stringify({
+        llm_api_base: ($("#set-llm-base").value || "").trim(),
+        llm_api_key: ($("#set-llm-key").value || "").trim(),
+      }),
+    });
+    if (!routeStillActive(routeSeq)) return;
+    const models = Array.isArray(data.models) ? data.models : [];
+    if (list) {
+      list.innerHTML = models.map((id) => `<option value="${escapeHtml(id)}"></option>`).join("");
+    }
+    if (input && models.length && !input.value) input.value = models[0];
+    flash(models.length ? `已加载 ${models.length} 个模型` : "接口未返回模型，可手填模型名");
+  } catch (err) {
+    if (routeStillActive(routeSeq)) flash(err.message || "拉取模型失败", "error");
   }
 }
 
@@ -10178,10 +10206,10 @@ async function loadAdminTagsTab() {
     <section class="section-panel">
       <header class="section-head">
         <div><h2 class="section-title">标签维护</h2>
-        <p class="section-meta">合并种子黑话、解析 $标记$ 新股、去掉指数/ETF 误入的股票名，并清理过期标签与碎片别名。每日自动一次，也可立即执行。标记解析跟管理员「推送设置 → AI 摘要」同一套 Grok。</p></div>
+        <p class="section-meta">合并种子黑话、解析 $标记$ 新股、去掉指数/ETF 误入的股票名，并清理过期标签与碎片别名。每日自动一次，也可立即执行。标记解析跟管理员「推送设置 → AI 摘要」同一套 LLM。</p></div>
       </header>
       <p class="section-meta" style="margin-top:8px" id="tag-maintain-meta">${escapeHtml(adminMaintainSummary(data))}</p>
-      ${data.maintain && data.maintain.llm_ready ? "" : `<p class="section-meta">未检测到 Grok。请到「推送设置 → AI 摘要」配置，或设环境变量 LLM_API_KEY。点运行仍会合并种子、清碎片和误标。</p>`}
+      ${data.maintain && data.maintain.llm_ready ? "" : `<p class="section-meta">未检测到站点 LLM。请到「推送设置 → AI 摘要」配置 OpenAI 兼容接口，或设环境变量 LLM_API_KEY。点运行仍会合并种子、清碎片和误标。</p>`}
       <div class="toolbar" style="margin-top:12px">
         <button class="btn-normal" onclick="adminMaintainTags('pending')">维护并回填待打标</button>
         <button class="btn-ghost" onclick="adminMaintainTags('none')">仅维护词表</button>
