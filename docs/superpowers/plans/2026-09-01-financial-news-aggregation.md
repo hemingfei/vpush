@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the approved authenticated financial-news center, secure shared RSS/Atom ingestion, full administrator Feed management, per-user media selection, in-app full-text reading, and the WSCN quick-news navigation move.
+**Goal:** Build the approved authenticated financial-news reader, secure shared RSS/Atom ingestion, full administrator Feed management, per-user media selection, and in-app full-text reading while leaving WSCN quick news in the existing dynamic timeline.
 
 **Architecture:** Add one focused `NewsService` domain module that reuses and tightens the existing `app.url_safety` pinned-request boundary, owns feed parsing/sanitizing, conditional refreshes, image fetching, and per-Feed executor locks. Keep persistence in the existing `DB` class, expose user/admin routes from the existing API router, call the shared service from the existing Scheduler, and add the UI to the current static SPA without introducing a second frontend or scheduler.
 
@@ -27,13 +27,13 @@
 - `app/main.py` - create one shared `NewsService`, pass it to API/Scheduler, close it before SQLite, add the `news` SPA prefix.
 - `app/scheduler.py` - submit due Feed refreshes and clean old news in the existing loop.
 - `app/api.py` - user news API, authenticated image API, personal source update, administrator source/Feed/settings/refresh API.
-- `app/static/app.js` - admin Feed manager, news list/reader/source picker, Information Center tabs, navigation migration.
-- `app/static/style.css` - responsive admin master-detail, news list/reader, source dialog, Information Center tabs.
+- `app/static/app.js` - admin Feed manager, standalone financial-news list/reader/source picker and navigation entry.
+- `app/static/style.css` - responsive admin master-detail, news list/reader and source dialog.
 - `app/static/index.html` - static asset cache-buster revisions.
 - `app/static/sw.js` - shell cache revision.
 - `app/version.py` - patch release version.
-- `PRODUCT.md` - add media-reading capability and the person/media/document boundary.
-- `DESIGN.md` - replace the obsolete fixed seven-badge rule and document the Information Center.
+- `PRODUCT.md` - add media-reading capability and the dynamic/news/research-document boundary.
+- `DESIGN.md` - document the standalone financial-news reader and source-selection controls.
 - `tests/test_url_safety.py` - strict URL, port, redirect, DNS and decompressed-size coverage.
 - `tests/test_db.py` - migration, defaults, archive/restore, user relations, article queries and cleanup.
 - `tests/test_scheduler.py` - due refresh and retention integration.
@@ -46,8 +46,8 @@
 
 1. Tasks 1-4 establish secure data capability without exposing routes.
 2. Tasks 5-7 expose and schedule the backend while the old UI remains unchanged; no news article is connected to any notifier, retry queue, digest or push log.
-3. Tasks 8-10 add administrator UI, reader UI and navigation migration.
-4. Task 11 runs the full suite, real-Feed smoke test and desktop/mobile browser verification.
+3. Tasks 8-9 add the administrator UI and standalone financial-news reader; WSCN remains in the dynamic timeline.
+4. Task 10 runs the full suite, real-Feed smoke test and desktop/mobile browser verification.
 
 ### Task 1: Extend The Existing Pinned URL Fetcher
 
@@ -1133,10 +1133,22 @@ git commit -m "feat: add financial feed admin workspace"
 - Modify: `app/main.py`
 - Modify: `tests/test_frontend_interactions.py`
 - Modify: `tests/test_spa_routes.py`
+- Modify: `PRODUCT.md`
+- Modify: `DESIGN.md`
 
 - [ ] **Step 1: Write route and interaction contracts**
 
 ```python
+def test_financial_news_navigation_keeps_quick_news_in_timeline():
+    src = APP_JS.read_text()
+    nav = src[src.index("const NAV ="):src.index("const SIDEBAR_SLIM_KEY")]
+    mobile = src[src.index("const MOBILE_NAV ="):src.index("function renderBottomNav")]
+    assert nav.index('route: "timeline"') < nav.index('route: "news"') < nav.index('route: "knowledge"')
+    assert 'label: "财经新闻"' in nav
+    assert 'route: "news"' in mobile
+    assert 'data-platform="live"' in _fn_body("tlPillsHtml")
+
+
 def test_news_reader_functions_cover_sources_seen_and_blob_cleanup():
     src = APP_JS.read_text()
     for name in (
@@ -1163,19 +1175,21 @@ Add `/news` and `/news/123` to `tests/test_spa_routes.py`, and assert both respo
 
 - [ ] **Step 2: Run focused tests and verify failures**
 
-Run: `pytest tests/test_frontend_interactions.py -k news_reader -q && pytest tests/test_spa_routes.py -q`
+Run: `pytest tests/test_frontend_interactions.py -k 'financial_news_navigation or news_reader' -q && pytest tests/test_spa_routes.py -q`
 
 Expected: FAIL for missing functions and missing SPA prefix.
 
 - [ ] **Step 3: Add SPA route and reader state**
 
-Add `news` to both backend and frontend SPA prefix sets. Route `page === "news"` to `renderNewsCenter(renderSeq, rawParam)`. Add state for sources, selected filter, query, items, offset, has-more, request sequence, observer and Blob URLs. Reset/abort/revoke all of it from `clearSessionCaches()` and route cleanup.
+Add `news` to both backend and frontend SPA prefix sets. Add a Lucide-style newspaper icon and insert `{ route: "news", label: "财经新闻" }` immediately after `timeline` in desktop and mobile navigation. Route `page === "news"` to `renderNewsCenter(renderSeq, rawParam)`. Keep the existing WSCN live button in `tlPillsHtml()` and do not change `isLiveTimeline()`, `renderTimeline()`, `_livePosts`, live polling, cache, filters or scroll state.
+
+Add state for news sources, selected filter, query, items, offset, has-more, request sequence, observer and Blob URLs. Reset/abort/revoke all news-reader state from `clearSessionCaches()` and route cleanup.
 
 In the existing security-header middleware, set `X-Robots-Tag: noindex, nofollow` when the request path is `/news`, starts with `/news/`, or starts with `/api/news`.
 
 - [ ] **Step 4: Implement list loading and seen acknowledgment**
 
-Implement these final reader functions without changing their names in Task 10: `renderNewsCenter(seq, articleId)`, `renderFinancialNewsList(seq)`, `renderFinancialNewsArticle(articleId, seq)`, `loadFinancialNews(reset, seq)`, and `openNewsArticle(articleId)` (which routes to `news/{id}`). `renderNewsCenter` renders the article reader when `articleId` is present; otherwise it calls `renderFinancialNewsList`. `loadFinancialNews` sends `limit=30`, offset, selected media and query; discards stale responses with both route and request sequence; appends escaped rows; then POSTs the exact returned `view_started_at` only after rows are in the DOM.
+Implement these final reader functions: `renderNewsCenter(seq, articleId)`, `renderFinancialNewsList(seq)`, `renderFinancialNewsArticle(articleId, seq)`, `loadFinancialNews(reset, seq)`, and `openNewsArticle(articleId)` (which routes to `news/{id}`). `renderNewsCenter` renders the article reader when `articleId` is present; otherwise it calls `renderFinancialNewsList`. `loadFinancialNews` sends `limit=30`, offset, selected media and query; discards stale responses with both route and request sequence; appends escaped rows; then POSTs the exact returned `view_started_at` only after rows are in the DOM.
 
 Use an `IntersectionObserver` sentinel for pagination. First-load history must not receive a “新” badge; render only server-provided `is_new=true`.
 
@@ -1195,114 +1209,30 @@ The reader always shows media, title, author/time when present, sanitized body, 
 
 Keep list typography at reading size, summaries to two lines, stable 96x64 thumbnails, and article body at a readable max width without card nesting. Make tables scroll inside the article body, images responsive, source dialog fit 320px, and all controls at least 42px high.
 
-- [ ] **Step 8: Run personal news frontend tests**
+- [ ] **Step 8: Update product and design contracts**
 
-Run: `pytest tests/test_frontend_interactions.py -k news -q`
+In `PRODUCT.md`, add the authenticated “财经新闻” reader and administrator Feed management. Document the boundary “动态 = 大 V 动态 + 实时快讯，财经新闻 = 媒体长文，研报库 = 研究文档”, keep the self-hosted/non-public positioning, and state that financial news is reading-only in v1.
 
-Expected: PASS.
+In `DESIGN.md`, document the standalone financial-news list, searchable checkbox source dialog, single-select temporary media filter and responsive full-text reader. Preserve the existing dynamic-platform and quick-news rules.
+
+- [ ] **Step 9: Run personal news frontend tests**
+
+Run: `pytest tests/test_frontend_interactions.py -k 'news or live_' -q`
+
+Expected: PASS, including the contract that quick news remains in the dynamic timeline.
 
 Run: `pytest tests/test_spa_routes.py -q`
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit reader UI**
+- [ ] **Step 10: Commit reader UI**
 
 ```bash
-git add app/static/app.js app/static/style.css app/main.py tests/test_frontend_interactions.py tests/test_spa_routes.py
+git add app/static/app.js app/static/style.css app/main.py PRODUCT.md DESIGN.md tests/test_frontend_interactions.py tests/test_spa_routes.py
 git commit -m "feat: add personal financial news reader"
 ```
 
-### Task 10: Move WSCN Quick News Into The Information Center
-
-**Files:**
-- Modify: `app/static/app.js`
-- Modify: `app/static/style.css`
-- Modify: `PRODUCT.md`
-- Modify: `DESIGN.md`
-- Modify: `tests/test_frontend_interactions.py`
-
-- [ ] **Step 1: Rewrite the existing quick-news navigation tests first**
-
-Replace tests asserting that WSCN is the second timeline platform pill with contracts that assert:
-
-```python
-def test_information_center_owns_quick_news_and_financial_news():
-    src = APP_JS.read_text()
-    nav = src[src.index("const NAV ="):src.index("const SIDEBAR_SLIM_KEY")]
-    mobile = src[src.index("const MOBILE_NAV ="):src.index("function renderBottomNav")]
-    assert nav.index('route: "timeline"') < nav.index('route: "news"') < nav.index('route: "knowledge"')
-    assert 'route: "news"' in mobile
-    assert "财经新闻" in _fn_body("newsTabsHtml")
-    assert "快讯" in _fn_body("newsTabsHtml")
-    assert "data-platform=\"live\"" not in _fn_body("tlPillsHtml")
-
-
-def test_information_center_defaults_to_financial_news_and_remembers_session_tab():
-    src = APP_JS.read_text()
-    assert 'const NEWS_TAB_KEY = "newsTab"' in src
-    assert 'sessionStorage.getItem(NEWS_TAB_KEY) || "financial"' in src
-    assert 'sessionStorage.setItem(NEWS_TAB_KEY' in _fn_body("switchNewsTab")
-```
-
-Update mobile badge assertions from the obsolete fixed seven items to the current user-scoped `timeline_platforms` entries plus “全部”, and preserve the minimum 44px target regardless of the returned count.
-
-- [ ] **Step 2: Run migration contracts and verify failures**
-
-Run: `pytest tests/test_frontend_interactions.py -k 'information_center or live_' -q`
-
-Expected: FAIL until the old live pill is removed.
-
-- [ ] **Step 3: Add desktop/mobile Information Center navigation**
-
-Add a Lucide-style newspaper icon constant. Insert `news` immediately after `timeline` in desktop and mobile navigation. The mobile order becomes dynamic, information, plaza, combinations, subscriptions, settings; administrators append “more”. Keep each item flexible with a 44px minimum at 320px.
-
-- [ ] **Step 4: Reuse the existing WSCN renderer under news tabs**
-
-Add `NEWS_TAB_KEY`, default `financial`, `newsTabsHtml()` and `switchNewsTab(tab)`. Keep `renderNewsCenter()` as the route owner and mount one stable shell:
-
-```javascript
-async function renderNewsCenter(seq, articleId = "") {
-  if (articleId) return renderFinancialNewsArticle(Number(articleId), seq);
-  if (!$("#news-center")) {
-    $("#main").innerHTML = `<div class="news-center" id="news-center">${newsTabsHtml()}<div id="news-panel"></div></div>`;
-  }
-  if (state.newsTab === "live") return renderTimeline(seq);
-  return renderFinancialNewsList(seq);
-}
-```
-
-`switchNewsTab(tab)` saves the outgoing financial/live scroll, writes session state, repaints tab ARIA state, clears only `#news-panel`, and calls `renderNewsCenter(routeRenderSeq)`; it must not replace all of `#main`.
-
-Change `isLiveTimeline()` to return `isRoute("news") && state.newsTab === "live"`. Make `renderTimeline(seq)` derive `const informationCenter = isLiveTimeline()` from the route, target `#news-panel` instead of `#main` in that mode, and title the page “资讯”. In Information Center mode, do not render `tlPillsHtml()` or the研报库 entry; render only the existing live search/filter action, new badge, `liveFeedHeadHtml()`, Feed panel and wide live rail. This keeps every existing internal `renderTimeline(routeRenderSeq)` retry on the correct Information Center shell without passing an optional flag.
-
-Refactor `renderFinancialNewsList()` to target `#news-panel` when the shell exists. Existing WSCN fetching, 15-second polling, cache, search, important filter, infinite loading and scroll state remain unchanged.
-
-- [ ] **Step 5: Remove live mode from the dynamic platform strip**
-
-Delete `TL_SOURCE_KEY`, `state.timelineSource`, `tlPersistSource()`, `tlPickSource()`, the live pill insertion and the branch that moves from live to KOL. Timeline route always renders KOL content. Keep `_livePosts`, prefetch and WSCN functions because the Information Center reuses them. Update `syncTimelineSourceView()` so it is only used by Information Center tab switching, never to place quick news back into the dynamic platform strip.
-
-Update route scroll persistence so timeline uses `_tlSavedScrollY`, news/live uses `_liveSavedScrollY`, and financial news maintains its own list scroll position.
-
-- [ ] **Step 6: Update product and design contracts**
-
-In `PRODUCT.md`, add the authenticated Information Center, administrator Feed management and the fixed boundary “动态 = 人，资讯 = 媒体，研报库 = 文档”. Keep the self-hosted/non-public positioning and explicitly state financial news is reading-only in v1.
-
-In `DESIGN.md`, replace “固定 7 格” with equal-width platform badges derived from the current user's subscribed `timeline_platforms` plus “全部”, retaining at least 44px targets. Add the Information Center’s two stable tabs and note that media selection uses a searchable checkbox dialog plus a single-select temporary filter.
-
-- [ ] **Step 7: Run all frontend interaction tests**
-
-Run: `pytest tests/test_frontend_interactions.py -q`
-
-Expected: PASS, including updated quick-news and mobile contracts.
-
-- [ ] **Step 8: Commit navigation migration**
-
-```bash
-git add app/static/app.js app/static/style.css PRODUCT.md DESIGN.md tests/test_frontend_interactions.py
-git commit -m "feat: move quick news into information center"
-```
-
-### Task 11: Version, Full Verification And Browser Acceptance
+### Task 10: Version, Full Verification And Browser Acceptance
 
 **Files:**
 - Modify: `app/version.py`
@@ -1313,7 +1243,7 @@ git commit -m "feat: move quick news into information center"
 
 - [ ] **Step 1: Bump coherent static and application versions**
 
-At plan authoring time the shared worktree already contains unrelated pending release bumps to `1.12.124`, `app.js?v=370`, and `dav-shell-v239`; preserve them. For this feature, change backend and frontend `APP_VERSION` from `1.12.124` to `1.12.125`, change `style.css?v=261` to `262`, `app.js?v=370` to `371`, and `dav-shell-v239` to `dav-shell-v240`. If those unrelated pending changes are not present when execution starts, stop this step and rebase the four targets to one increment above the then-current values rather than overwriting newer metadata.
+At plan authoring time the released baseline is `1.12.124`, `style.css?v=261`, `app.js?v=370`, and `dav-shell-v239`. For this feature, change backend and frontend `APP_VERSION` to `1.12.125`, change the style query to `262`, the app query to `371`, and the shell cache to `dav-shell-v240`. If execution starts from newer release metadata, increment each then-current value exactly once instead of overwriting it.
 
 Add a PWA test asserting the final cache name and both final index query revisions.
 
@@ -1385,9 +1315,9 @@ Expected: server listens on `http://127.0.0.1:8765`; login is `admin` / `review1
 
 At 1440x900 and 320x720:
 
-1. Log in and confirm desktop/mobile navigation places “资讯” after “动态”.
-2. Open `资讯`; confirm default “财经新闻”, switch to “快讯”, then return and reload to verify session tab memory.
-3. Confirm quick news retains search, important filter, 15-second update detection and infinite loading.
+1. Log in and confirm desktop/mobile navigation places “财经新闻” after “动态”.
+2. Open `动态`; confirm the existing “快讯”平台角标 remains available with search, important filter, 15-second update detection and infinite loading.
+3. Open `财经新闻`; confirm the mixed article list appears directly without a quick-news tab.
 4. Open “我的来源”, search, save an explicit empty selection, verify empty state, then restore Bloomberg.
 5. Open a full article; verify sanitized text, external link, authenticated Blob images, no direct third-party image `src`, and no overlap.
 6. Open `数据源 → 财经资讯`; add `https://feeds.bbci.co.uk/news/business/rss.xml` under a new “BBC Business” media, inspect validation preview, edit/disable/refresh/archive/restore it.
@@ -1412,7 +1342,7 @@ Commit:
 
 ```bash
 git add app/version.py app/static/app.js app/static/index.html app/static/sw.js tests/test_frontend_pwa.py
-git commit -m "chore: release financial news center"
+git commit -m "chore: release financial news reader"
 ```
 
 ## Final Acceptance Checklist
@@ -1426,7 +1356,7 @@ git commit -m "chore: release financial news center"
 - [ ] Disabled media remain readable with a paused status; archived media are hidden but recover relations/history.
 - [ ] User list/search/filter/pagination/full text/seen anchor obey media permissions.
 - [ ] Financial articles never enter Telegram, Feishu, WeCom, Bark or Web Push paths.
-- [ ] WSCN remains short-cached and nonpersistent under `资讯 → 快讯`; dynamic timeline contains people only.
+- [ ] WSCN remains in the dynamic platform strip with its existing short cache, nonpersistent model, filters, polling and scroll behavior.
 - [ ] Administrator and user layouts work at desktop and 320px with no overlap.
 - [ ] `PRODUCT.md`, `DESIGN.md`, asset versions and service-worker cache agree with shipped behavior.
 - [ ] Full pytest suite, real-Feed smoke test and Playwright acceptance all pass.
