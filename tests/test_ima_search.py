@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 from pathlib import Path
 
 from app.ima_search import ImaSearchIndex
@@ -98,6 +99,47 @@ def test_identical_sync_does_not_reread_and_changed_source_updates(tmp_path):
     assert index.search("supply chain", ["semi"], 10)[0]["media_id"] == "report"
 
 
+def test_sync_and_search_overlap_serves_a_committed_version(tmp_path, monkeypatch):
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    body = archive / "report.txt"
+    body.write_text("Previous committed margin outlook.", encoding="utf-8")
+    index = ImaSearchIndex(tmp_path / "ima-search.db", archive, ("semi",))
+    row = _row("semi", "report", "report.txt")
+    assert index.sync([row])["updated"] == 1
+
+    body.write_text("Updated committed supply outlook.", encoding="utf-8")
+    changed = {**row, "downloaded_at": "2026-09-02T00:00:00+00:00"}
+    read_started = threading.Event()
+    allow_read = threading.Event()
+    original_read_text = Path.read_text
+
+    def controlled_read_text(path, *args, **kwargs):
+        if path == body:
+            read_started.set()
+            assert allow_read.wait(2), "sync body read was not released"
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", controlled_read_text)
+    outcome = {}
+
+    def run_sync():
+        outcome["result"] = index.sync([changed])
+
+    worker = threading.Thread(target=run_sync)
+    worker.start()
+    assert read_started.wait(2), "sync did not reach the controlled body read"
+    overlapping = index.search("previous committed", ["semi"], 10)
+    allow_read.set()
+    worker.join(2)
+
+    assert not worker.is_alive()
+    assert [item["media_id"] for item in overlapping] == ["report"]
+    assert outcome["result"]["updated"] == 1
+    assert index.search("previous committed", ["semi"], 10) == []
+    assert index.search("updated committed", ["semi"], 10)[0]["media_id"] == "report"
+
+
 def test_sync_removes_configured_documents_absent_from_next_input(tmp_path):
     archive = tmp_path / "archive"
     archive.mkdir()
@@ -125,10 +167,10 @@ def test_database_uses_wal_busy_timeout_and_trigram_fts(tmp_path):
     index = ImaSearchIndex(path, archive, ("semi",))
     index.sync([_row("semi", "report", "report.txt")])
 
+    with index._connect(readonly=True) as connection:
+        assert connection.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
     with sqlite3.connect(path) as connection:
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
-        connection.execute("PRAGMA busy_timeout=5000")
-        assert connection.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
         schema = connection.execute(
             "SELECT sql FROM sqlite_master WHERE name = 'documents_fts'"
         ).fetchone()[0]
@@ -200,3 +242,30 @@ def test_sync_failure_keeps_last_good_index_and_reports_error(tmp_path, monkeypa
     assert failed_status["last_sync_at"] == good_status["last_sync_at"]
     assert "simulated sync failure" in failed_status["error"]
     assert index.search("supply chain", ["semi"], 10)[0]["media_id"] == "report"
+
+
+def test_search_database_failure_returns_empty_and_preserves_last_good_index(tmp_path, monkeypatch):
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    (archive / "report.txt").write_text("free cash flow recovery", encoding="utf-8")
+    index = ImaSearchIndex(tmp_path / "ima-search.db", archive, ("semi",))
+    row = _row("semi", "report", "report.txt")
+    assert index.sync([row])["indexed"] == 1
+    good_status = index.status()
+    original_connect = index._connect
+
+    def fail_readonly_connect(*, readonly=False):
+        if readonly:
+            raise sqlite3.OperationalError("simulated search failure")
+        return original_connect(readonly=readonly)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(index, "_connect", fail_readonly_connect)
+        assert index.search("cash flow", ["semi"], 10) == []
+        failed_status = index.status()
+
+    assert failed_status["ready"] is True
+    assert failed_status["documents"] == 1
+    assert failed_status["last_sync_at"] == good_status["last_sync_at"]
+    assert "simulated search failure" in failed_status["error"]
+    assert index.search("cash flow", ["semi"], 10)[0]["media_id"] == "report"
