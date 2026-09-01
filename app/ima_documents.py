@@ -3118,11 +3118,16 @@ class ImaDocumentService:
                         and fts_batches < IMA_FTS_MAX_BATCHES
                     ):
                         fts_batches += 1
+                        fts_limit = (
+                            body_target - len(body_rows)
+                            if seek_body_offset
+                            else IMA_FTS_BATCH_SIZE
+                        )
                         try:
                             fts_hits = self.search_index.search(
                                 query,
                                 scoped_ids,
-                                IMA_FTS_BATCH_SIZE,
+                                fts_limit,
                                 offset=fts_offset,
                             )
                         except Exception as exc:  # noqa: BLE001 - optional search falls back
@@ -3174,7 +3179,7 @@ class ImaDocumentService:
                                 }
                             )
                         fts_offset += len(fts_hits)
-                        if len(fts_hits) < IMA_FTS_BATCH_SIZE:
+                        if len(fts_hits) < fts_limit:
                             exhausted = True
                             break
 

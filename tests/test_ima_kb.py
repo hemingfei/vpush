@@ -1877,11 +1877,16 @@ def test_hybrid_full_text_search_short_missing_and_broken_indexes_keep_metadata(
 
 
 @pytest.mark.parametrize(
-    ("metadata_total", "max_calls"),
-    [(0, 2), (1, 11)],
+    ("metadata_total", "page_limit", "expected_fts_limit", "expected_calls"),
+    [(0, 50, 51, 1), (1, 1, 200, 11)],
 )
 def test_hybrid_max_offset_uses_bounded_fts_batches(
-    tmp_path, monkeypatch, metadata_total, max_calls
+    tmp_path,
+    monkeypatch,
+    metadata_total,
+    page_limit,
+    expected_fts_limit,
+    expected_calls,
 ):
     client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
         tmp_path, monkeypatch, f"hybrid_max_offset_{metadata_total}"
@@ -1899,7 +1904,7 @@ def test_hybrid_max_offset_uses_bounded_fts_batches(
 
     def search(_query, _group_ids, limit, *, offset=0):
         calls["search"] += 1
-        assert limit == 200
+        assert limit == expected_fts_limit
         return [
             {
                 "group_id": group_a,
@@ -1926,17 +1931,16 @@ def test_hybrid_max_offset_uses_bounded_fts_batches(
     monkeypatch.setattr(service.db, "ima_documents_by_keys", lookup)
 
     response = client.get(
-        "/api/ima-documents?q=body%20needle&limit=1&offset=2000",
+        f"/api/ima-documents?q=body%20needle&limit={page_limit}&offset=2000",
         headers=admin_headers,
     )
 
     assert response.status_code == 200, response.text
-    assert [item["media_id"] for item in response.json()["items"]] == ["hit-2000"]
+    assert [item["media_id"] for item in response.json()["items"]] == [
+        f"hit-{rank}" for rank in range(2000, 2000 + page_limit)
+    ]
     assert response.json()["has_more"] is True
-    assert calls["search"] == calls["lookup"]
-    assert calls["search"] <= max_calls
-    if metadata_total == 0:
-        assert calls == {"search": 1, "lookup": 1}
+    assert calls == {"search": expected_calls, "lookup": expected_calls}
 
 
 def test_hybrid_tag_filter_stops_after_eleven_rejected_fts_batches(
