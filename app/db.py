@@ -4736,6 +4736,17 @@ class DB:
             "group_counts": group_counts,
         }
 
+    def ima_document_index_rows(self, group_ids) -> list[dict]:
+        groups = list(dict.fromkeys(str(item).strip() for item in group_ids if str(item).strip()))
+        if not groups:
+            return []
+        return self._rows(
+            "SELECT * FROM ima_document_index "
+            f"WHERE group_id IN ({', '.join('?' for _ in groups)}) "
+            "ORDER BY group_id, media_id",
+            groups,
+        )
+
     def ima_document_catalog_stats(self, group_ids: list[str]) -> dict[str, dict]:
         groups = _ima_authorized_groups(group_ids)
         if not groups:

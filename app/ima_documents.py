@@ -25,6 +25,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from .fetchers.base import CN_TZ
 from .fetchers.ima_inspect import item_cover, item_text
+from .ima_search import ImaSearchIndex
 from .ima_storage import ImaStorageStatus
 
 logger = logging.getLogger(__name__)
@@ -2596,9 +2597,11 @@ class ImaDocumentService:
         archive_root: str | Path | None = None,
         storage_status: ImaStorageStatus | None = None,
         llm_config: Any = None,
+        search_index: ImaSearchIndex | None = None,
     ):
         self.db = db
         self.llm_config = llm_config
+        self.search_index = search_index
         self.storage_status = storage_status or ImaStorageStatus(None, remote=False)
         self.store = ImaDocumentStore(
             index_root,
@@ -3191,48 +3194,69 @@ class ImaDocumentService:
             "documents": document_count,
             "progress": progress,
             "index": index,
+            "full_text_index": (
+                self.search_index.status()
+                if self.search_index is not None
+                else {
+                    "enabled": False,
+                    "ready": False,
+                    "documents": 0,
+                    "last_sync_at": "",
+                    "error": "",
+                }
+            ),
         }
 
-    def start(self) -> None:
-        def _archive_maintenance() -> None:
-            try:
-                self._rebuild_index_if_needed()
-            except Exception:
-                logger.exception("IMA document index rebuild failed")
-            if self.store.archive_writable():
-                try:
-                    restored = self.store.restore_original_filenames()
-                    if restored.get("renamed"):
-                        logger.info("IMA restored %s original filenames", restored["renamed"])
-                except Exception:
-                    logger.exception("IMA original filename restore failed")
-            elif self.storage_status.remote:
-                logger.warning("IMA archive unavailable; skip filename restore")
-            if self.store.archive_readable():
-                try:
-                    rebuilt = self.store.rebuild_manifest_from_state()
-                    if rebuilt:
-                        logger.info("IMA rebuilt %s manifest records from state", rebuilt)
-                except Exception:
-                    logger.exception("IMA manifest rebuild from state failed")
-                try:
-                    self.retag_all()
-                except Exception:
-                    logger.exception("IMA document retag failed")
-            elif self.storage_status.remote:
-                logger.warning("IMA archive unavailable; skip manifest rebuild and retag")
-            try:
-                self._rebuild_index_if_needed()
-            except Exception:
-                logger.exception("IMA document index rebuild failed")
+    def _sync_full_text_index(self) -> None:
+        if self.search_index is None or not self.search_index.enabled:
+            return
+        try:
+            rows = self.db.ima_document_index_rows(self.search_index.group_ids)
+            self.search_index.sync(rows)
+        except Exception:  # noqa: BLE001 - optional search must not stop IMA workers
+            logger.exception("IMA full-text index sync failed")
 
+    def _archive_maintenance(self) -> None:
+        try:
+            self._rebuild_index_if_needed()
+        except Exception:
+            logger.exception("IMA document index rebuild failed")
+        if self.store.archive_writable():
+            try:
+                restored = self.store.restore_original_filenames()
+                if restored.get("renamed"):
+                    logger.info("IMA restored %s original filenames", restored["renamed"])
+            except Exception:
+                logger.exception("IMA original filename restore failed")
+        elif self.storage_status.remote:
+            logger.warning("IMA archive unavailable; skip filename restore")
+        if self.store.archive_readable():
+            try:
+                rebuilt = self.store.rebuild_manifest_from_state()
+                if rebuilt:
+                    logger.info("IMA rebuilt %s manifest records from state", rebuilt)
+            except Exception:
+                logger.exception("IMA manifest rebuild from state failed")
+            try:
+                self.retag_all()
+            except Exception:
+                logger.exception("IMA document retag failed")
+        elif self.storage_status.remote:
+            logger.warning("IMA archive unavailable; skip manifest rebuild and retag")
+        try:
+            self._rebuild_index_if_needed()
+        except Exception:
+            logger.exception("IMA document index rebuild failed")
+        self._sync_full_text_index()
+
+    def start(self) -> None:
         # Remote NFS restore/retag can take minutes; do not block /healthz.
         if self.storage_status.remote:
             threading.Thread(
-                target=_archive_maintenance, name="ima-archive-maintenance", daemon=True
+                target=self._archive_maintenance, name="ima-archive-maintenance", daemon=True
             ).start()
         else:
-            _archive_maintenance()
+            self._archive_maintenance()
         with self._state_lock:
             if self._scheduler_thread and self._scheduler_thread.is_alive():
                 return
@@ -4008,6 +4032,7 @@ class ImaDocumentService:
             }
             self.db.set_setting(IMA_PURE_LAST_FINISHED_KEY, str(int(time.time())))
             self.db.set_setting(IMA_PURE_LAST_RESULT_KEY, json.dumps(result, ensure_ascii=False))
+            self._sync_full_text_index()
             return {"status": "finished", **result}
         finally:
             self._sync_lock.release()

@@ -1236,6 +1236,131 @@ def test_admin_ima_discover_failure_keeps_previous_groups(tmp_path, monkeypatch)
     assert json.loads(db.get_setting(IMA_PURE_GROUPS_KEY)) == original
 
 
+def test_full_text_index_disabled_by_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    monkeypatch.delenv("IMA_SEARCH_GROUP_IDS", raising=False)
+    path = tmp_path / "ima-search.db"
+
+    client = TestClient(create_app(db_path=tmp_path / "disabled-search.sqlite"))
+
+    assert client.app.state.ima_search_index.group_ids == ()
+    assert client.app.state.ima_search_index.path == path
+    assert client.app.state.ima_documents.status()["full_text_index"] == {
+        "enabled": False,
+        "ready": False,
+        "documents": 0,
+        "last_sync_at": "",
+        "error": "",
+    }
+    assert not path.exists()
+
+
+def test_full_text_index_env_parses_deduplicated_groups_and_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    monkeypatch.setenv("IMA_SEARCH_GROUP_IDS", " group-b,group-a, group-b,, ")
+
+    client = TestClient(create_app(db_path=tmp_path / "configured-search.sqlite"))
+    index = client.app.state.ima_search_index
+
+    assert index.group_ids == ("group-b", "group-a")
+    assert index.path == tmp_path / "ima-search.db"
+    assert index.archive_root == (tmp_path / "ima").resolve()
+    assert not index.path.exists()
+
+
+def test_full_text_index_db_rows_filter_and_order_groups(tmp_path):
+    db = DB(tmp_path / "rows.sqlite")
+    db.replace_ima_document_index(
+        [
+            {"group_id": "group-b", "media_id": "two", "name": "B"},
+            {"group_id": "group-a", "media_id": "two", "name": "A2"},
+            {"group_id": "group-a", "media_id": "one", "name": "A1"},
+        ],
+        "fingerprint",
+        0,
+    )
+
+    assert db.ima_document_index_rows([]) == []
+    rows = db.ima_document_index_rows(["group-b", "group-a", "group-a"])
+    assert [(row["group_id"], row["media_id"]) for row in rows] == [
+        ("group-a", "one"),
+        ("group-a", "two"),
+        ("group-b", "two"),
+    ]
+    assert rows[0]["txt_path"] == ""
+
+
+def test_full_text_index_maintenance_runs_after_final_metadata_rebuild(tmp_path, monkeypatch):
+    db = DB(tmp_path / "maintenance.sqlite")
+    service = ImaDocumentService(db, tmp_path / "ima")
+    calls = []
+
+    monkeypatch.setattr(service, "_rebuild_index_if_needed", lambda: calls.append("rebuild"))
+    monkeypatch.setattr(service.store, "archive_writable", lambda: False)
+    monkeypatch.setattr(service.store, "archive_readable", lambda: False)
+    monkeypatch.setattr(service, "_sync_full_text_index", lambda: calls.append("full-text"))
+
+    service._archive_maintenance()
+
+    assert calls == ["rebuild", "rebuild", "full-text"]
+
+
+def test_full_text_index_sync_once_invokes_background_sync_once(tmp_path, monkeypatch):
+    db = DB(tmp_path / "cycle.sqlite")
+    service = ImaDocumentService(db, tmp_path / "ima")
+    group = ImaGroupConfig("group-a", "资料", "kb-a", "root-a", folder_ids=("folder-a",))
+    config = ImaDocumentConfig(uid="uid", refresh_token="refresh", groups=(group,))
+    calls = []
+
+    monkeypatch.setattr(service, "config", lambda: config)
+    monkeypatch.setattr(service, "_storage_block_status", lambda: None)
+    monkeypatch.setattr(
+        service,
+        "discover",
+        lambda: {"ok": True, "discovery": {"status": "ok", "error": ""}},
+    )
+    monkeypatch.setattr(
+        service,
+        "_sync_group",
+        lambda *_args, **_kwargs: {
+            "group_id": "group-a",
+            "group_name": "资料",
+            "total": 0,
+            "pending": 0,
+            "downloaded": 0,
+            "failed": 0,
+            "last_error": "",
+        },
+    )
+    monkeypatch.setattr(service, "_sync_full_text_index", lambda: calls.append("sync"))
+
+    assert service.sync_once()["status"] == "finished"
+    assert calls == ["sync"]
+
+
+def test_full_text_index_failure_does_not_escape_maintenance_or_healthz(
+    tmp_path, monkeypatch, caplog
+):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    monkeypatch.setenv("IMA_SEARCH_GROUP_IDS", "group-a")
+    client = TestClient(create_app(db_path=tmp_path / "failure.sqlite"))
+    service = client.app.state.ima_documents
+
+    def fail(_rows):
+        raise RuntimeError("simulated full-text failure")
+
+    monkeypatch.setattr(client.app.state.ima_search_index, "sync", fail)
+    monkeypatch.setattr(service, "_rebuild_index_if_needed", lambda: None)
+    monkeypatch.setattr(service.store, "archive_writable", lambda: False)
+    monkeypatch.setattr(service.store, "archive_readable", lambda: False)
+
+    service._archive_maintenance()
+
+    assert client.get("/healthz").status_code == 200
+    assert service.status()["full_text_index"]["enabled"] is True
+    assert "IMA full-text index sync failed" in caplog.text
+
+
 def _remote_storage_client(tmp_path, monkeypatch, *, available=True, writable=True, **status_overrides):
     monkeypatch.setenv("DAV_UI_ONLY", "1")
     archive_root = tmp_path / "archive"
