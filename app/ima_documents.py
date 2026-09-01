@@ -3913,6 +3913,10 @@ class ImaDocumentService:
                 self._sync_scheduled = False
             cfg = self.config()
             if not cfg.credentials_configured:
+                try:
+                    self._scan_local_libraries_locked()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Local library scan failed error=%s", _safe_error(exc))
                 return {"status": "not_configured"}
             blocked = self._storage_block_status()
             if blocked:
