@@ -1402,7 +1402,7 @@ class DB:
                 )
         self._conn.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES "
-            "('news_enabled', '1'), ('news_refresh_interval_seconds', '600')"
+            "('news_enabled', '1'), ('news_visible', '1'), ('news_refresh_interval_seconds', '600')"
         )
         if self.get_setting("news_default_sources_v1") == "1":
             return
