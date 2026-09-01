@@ -3178,10 +3178,17 @@ class ImaDocumentService:
                             exhausted = True
                             break
 
+                    capped = (
+                        fts_batches == IMA_FTS_MAX_BATCHES and not exhausted
+                    )
                     items = metadata_items + body_rows[:body_limit]
-                    has_more = len(body_rows) > body_limit
+                    has_more = len(body_rows) > body_limit or (capped and bool(items))
                     document_count = metadata_total + body_seen
-                    if not exhausted:
+                    if (
+                        not exhausted
+                        and items
+                        and (not capped or len(items) >= page_limit)
+                    ):
                         document_count = max(
                             document_count,
                             page_offset + len(items) + int(has_more),

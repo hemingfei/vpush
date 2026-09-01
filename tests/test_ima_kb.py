@@ -1983,6 +1983,87 @@ def test_hybrid_tag_filter_stops_after_eleven_rejected_fts_batches(
     assert calls == {"search": 11, "lookup": 11}
 
 
+@pytest.mark.parametrize(
+    (
+        "scenario",
+        "page_offset",
+        "eligible_batch",
+        "eligible_count",
+        "expected_ids",
+        "expected_has_more",
+        "expected_count",
+    ),
+    [
+        ("full_page", 0, 11, 2, ["candidate-2000", "candidate-2001"], True, 3),
+        ("sparse_deep", 2000, 1, 1, [], False, 1),
+    ],
+)
+def test_hybrid_capped_pages_report_lower_bounds_honestly(
+    tmp_path,
+    monkeypatch,
+    scenario,
+    page_offset,
+    eligible_batch,
+    eligible_count,
+    expected_ids,
+    expected_has_more,
+    expected_count,
+):
+    client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
+        tmp_path, monkeypatch, f"cap_{scenario}"
+    )
+    service = client.app.state.ima_documents
+    calls = {"search": 0, "lookup": 0}
+
+    monkeypatch.setattr(service, "_index_usable", lambda: True)
+    monkeypatch.setattr(
+        service.db,
+        "ima_document_match_count",
+        lambda *_args, **_kwargs: 0,
+    )
+
+    def search(_query, _group_ids, limit, *, offset=0):
+        calls["search"] += 1
+        return [
+            {
+                "group_id": group_a,
+                "media_id": f"candidate-{rank}",
+                "search_snippet": "body needle",
+            }
+            for rank in range(offset, offset + limit)
+        ]
+
+    def lookup(keys, *_args, **_kwargs):
+        calls["lookup"] += 1
+        if calls["lookup"] != eligible_batch:
+            return []
+        return [
+            {
+                "group_id": group_id,
+                "media_id": media_id,
+                "name": f"{media_id}.pdf",
+                "day": "0901",
+                "_metadata_match": False,
+            }
+            for group_id, media_id in keys[:eligible_count]
+        ]
+
+    monkeypatch.setattr(service.search_index, "search", search)
+    monkeypatch.setattr(service.db, "ima_documents_by_keys", lookup)
+
+    response = client.get(
+        f"/api/ima-documents?q=body%20needle&tag=restricted&limit=2&offset={page_offset}",
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [item["media_id"] for item in body["items"]] == expected_ids
+    assert body["has_more"] is expected_has_more
+    assert body["document_count"] == expected_count
+    assert calls == {"search": 11, "lookup": 11}
+
+
 def test_hybrid_stale_search_error_disables_direct_deep_seek(tmp_path, monkeypatch):
     client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
         tmp_path, monkeypatch, "hybrid_stale_seek"
