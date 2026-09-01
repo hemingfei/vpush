@@ -50,8 +50,6 @@ const BOOK_ICON = `<svg class="nav-book-icon" viewBox="0 0 24 24" fill="none" st
 const LIST_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg>`;
 const WSCN_LIVE_ICON = `<svg class="pt-icon" viewBox="180 240 640 620" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="m466.944 649.6 41.152-102.464 18.4 49.472L432.192 828.8H416.32L246.08 423.136c-11.808-26.208-34.656-46.368-62.72-54.336l-1.6-.448V367.2h216.992v.608l-.192.096c-17.664 11.84-24.48 25.696-24.48 45.056 0 5.664 2.784 14.08 2.784 14.08l90.08 222.56zm239.648-345.92h135.264v.832l-.864.128c-16.96 3.136-32.576 18.848-43.104 44.576l-1.632 4.16-161.28 424.96h-14.4L548.192 597.76l67.488-151.104 55.2 140.544L752 370.176l.032-.032c11.68-31.616-11.424-65.28-45.12-65.728h-.32v-.736zm-21.44-68.576c-1.152 2.304-5.568 12.8-5.568 12.8L538.432 573.44 433.056 310.944c-6.4-18.4-25.184-51.84-64.64-62.816v-.768h248.48v1.216h-.448c-6.784 0-53.856 1.504-53.856 51.296 0 7.168 4.512 24.096 6.304 29.248l18.304 46.24 54.336-132.544c3.936-9.984 2.048-16.256 1.472-18.496-4.416-10.88-17.312-23.68-35.648-26.56v-.448h115.904v.576c-19.584 4.192-29.632 18.944-38.144 37.184"/></svg>`;
 const GRID_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>`;
-const TRENDING_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 7l-8.5 8.5-5-5L2 17"/><path d="M16 7h6v6"/></svg>`;
-const BOOKMARK_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>`;
 const GEAR_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
 const DASHBOARD_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>`;
 const FOLDER_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
@@ -80,6 +78,7 @@ const state = {
   platform: "",
   mysubsPlatform: "",
   mysubsFavorite: false,
+  settingsTab: "subs",
   adminKolsPlatform: "",
   adminKols: [],
   adminKolsQ: "",
@@ -506,9 +505,7 @@ const NAV = [
     { route: "timeline", icon: LIST_ICON, label: "最新动态" },
     { route: "knowledge", icon: BOOK_ICON, label: "研报库" },
     { route: "home", icon: GRID_ICON, label: "订阅广场" },
-    { route: "combinations", icon: TRENDING_ICON, label: "组合订阅" },
-    { route: "mysubs", icon: BOOKMARK_ICON, label: "我的订阅" },
-    { route: "settings", icon: GEAR_ICON, label: "推送设置" },
+    { route: "settings", icon: GEAR_ICON, label: "订阅与推送" },
   ]},
   { group: "", admin: true, subs: [
     { label: "内容管理", items: [
@@ -664,9 +661,7 @@ function renderSidebar(user) {
 const MOBILE_NAV = [
   { route: "timeline", icon: LIST_ICON, label: "动态" },
   { route: "home", icon: GRID_ICON, label: "广场" },
-  { route: "combinations", icon: TRENDING_ICON, label: "组合" },
-  { route: "mysubs", icon: BOOKMARK_ICON, label: "订阅" },
-  { route: "settings", icon: GEAR_ICON, label: "设置" },
+  { route: "settings", icon: GEAR_ICON, label: "订阅与推送" },
 ];
 
 function renderBottomNav(user) {
@@ -11763,6 +11758,7 @@ async function router() {
   }
   const path = routePath();
   const [page, rawParam] = path.split("/");
+  if (page !== "settings") state.settingsTab = "subs";
   // 管理后台默认全景概览：/admin 与 /admin/dashboard 等价，侧边栏高亮才能对上
   const param = page === "admin" && !rawParam ? "dashboard" : rawParam;
   if (!state.token) {
@@ -11796,8 +11792,16 @@ async function router() {
   );
   try {
     if (page === "home") await renderHome(renderSeq);
-    else if (page === "combinations") await renderCombinations(renderSeq);
-    else if (page === "mysubs") await renderMySubs(renderSeq);
+    else if (page === "combinations") {
+      state.platform = "combination";
+      replaceRoute("home");
+      return;
+    }
+    else if (page === "mysubs") {
+      state.settingsTab = "subs";
+      replaceRoute("settings");
+      return;
+    }
     else if (page === "zsxq") {
       state.timelinePlatform = timelineVisibleSet().has("zsxq") ? "zsxq" : "";
       replaceRoute("timeline");

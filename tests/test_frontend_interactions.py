@@ -1,6 +1,6 @@
 """前端交互静态回归测试：订阅卡片操作必须按当前路由刷新。
 
-背景：kolCard 的「订阅」按钮在首页、我的订阅、组合订阅、搜索、KOL 详情
+背景：kolCard 的「订阅」按钮在首页、订阅管理、搜索、KOL 详情
 多个页面复用 toggleSubscribe()。曾出现成功后无条件调用首页专用的
 renderHomeList()，在非首页会因找不到 #kol-list 抛异常并落入 catch 弹出
 「操作失败」假错误。本测试静态固化两条约定：
@@ -13,6 +13,37 @@ from pathlib import Path
 
 APP_JS = Path(__file__).parent.parent / "app" / "static" / "app.js"
 STYLE_CSS = APP_JS.with_name("style.css")
+
+
+def test_subscription_push_is_the_only_subscription_management_navigation_entry():
+    src = APP_JS.read_text()
+    nav = src[src.index("const NAV ="):src.index("const SIDEBAR_SLIM_KEY")]
+    mobile = src[src.index("const MOBILE_NAV ="):src.index("function renderBottomNav")]
+
+    for block in (nav, mobile):
+        assert 'route: "settings"' in block
+        assert 'label: "订阅与推送"' in block
+        assert 'route: "mysubs"' not in block
+        assert 'route: "combinations"' not in block
+    assert "TRENDING_ICON" not in src
+    assert "BOOKMARK_ICON" not in src
+
+
+def test_legacy_subscription_pages_redirect_at_the_router_boundary():
+    src = APP_JS.read_text()
+    router = _fn_body("router")
+    prefixes = src[src.index("const SPA_PREFIXES"):src.index("function routeStillActive")]
+
+    assert '"mysubs"' in prefixes and '"combinations"' in prefixes
+    assert 'page === "mysubs"' in router
+    assert 'state.settingsTab = "subs"' in router
+    assert 'replaceRoute("settings")' in router
+    assert 'page === "combinations"' in router
+    assert 'state.platform = "combination"' in router
+    assert 'replaceRoute("home")' in router
+    assert "renderMySubs(renderSeq)" not in router
+    assert "renderCombinations(renderSeq)" not in router
+
 
 
 def test_knowledge_row_hides_unused_cover_fallback_icon():
@@ -80,17 +111,17 @@ def test_refresh_kols_view_covers_all_card_routes():
     body = _fn_body("refreshKolsView")
     for route_call in (
         'isRoute("home")',
-        'isRoute("combinations")',
-        'isRoute("mysubs")',
+        'isRoute("settings")',
         'isRoute("kol/")',
         'isRoute("search")',
     ):
         assert route_call in body, f"refreshKolsView 缺少 {route_call} 路由分支"
     assert "loadHomeKols" in body
-    assert "renderCombinations" in body
-    assert "renderMySubs" in body
+    assert "loadSettingsSubscriptions" in body
     assert "renderKolPage" in body
     assert "doSearch" in body
+    assert 'isRoute("mysubs")' not in body
+    assert 'isRoute("combinations")' not in body
 
 
 def test_search_page_lists_only_unsubscribed_kols_without_query():
@@ -122,7 +153,7 @@ def test_router_emits_route_token():
     """router 每次路由切换必须递增 routeRenderSeq 并把 token 传给渲染函数。"""
     body = _fn_body("router")
     assert "const renderSeq = ++routeRenderSeq;" in body
-    for call in ("renderHome(renderSeq)", "renderMySubs(renderSeq)", "renderCombinations(renderSeq)",
+    for call in ("renderHome(renderSeq)",
                  "renderTimeline(renderSeq)", "renderKolPage(Number(param), renderSeq)",
                  "renderSearch(renderSeq)", "renderSettings(renderSeq)"):
         assert call in body, f"router 未把 token 传给 {call}"
@@ -132,11 +163,11 @@ def test_router_emits_route_token():
 
 def test_renderers_check_route_token_after_await():
     """各异步渲染函数在 await 之后、写 DOM 之前必须检查 routeStillActive。"""
-    for name in ("renderHome", "renderMySubs", "renderCombinations", "renderTimeline", "renderKolPage", "renderSettings"):
+    for name in ("renderHome", "renderTimeline", "renderKolPage", "renderSettings"):
         body = _fn_body(name)
         assert "routeStillActive(" in body, f"{name} 缺少路由令牌检查"
     # doSearch / loadHomeKols / loadTimeline / loadMyAsks 是局部刷新入口，同样要检查
-    for name in ("doSearch", "loadHomeKols", "loadTimeline", "loadMyAsks"):
+    for name in ("doSearch", "loadHomeKols", "loadTimeline", "loadMyAsks", "loadSettingsSubscriptions"):
         body = _fn_body(name)
         assert "routeStillActive(" in body, f"{name} 缺少路由令牌检查"
     # renderHomeList 不得在没有 #kol-list 时解引用（旧响应落入非首页）
