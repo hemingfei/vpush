@@ -34,6 +34,8 @@ IMA_LIST_WORKERS = 3
 IMA_FOLDER_LIST_MAX_PAGES = 20
 IMA_DOWNLOAD_RETRY_DELAYS = (2, 8)
 IMA_INDEX_VERSION = 4  # v4：IMA sort_date 年份取媒体真实创建年（原按当前年补全会跨年排错）；升位强制重建
+IMA_FTS_BATCH_SIZE = 200
+IMA_FTS_MAX_BATCHES = 11
 IMA_STATE_FLUSH_COUNT = 20
 IMA_STATE_FLUSH_SECONDS = 2.0
 IMA_SCHEDULE_HOUR = 1  # 上海时间每日自动同步起点
@@ -3103,13 +3105,25 @@ class ImaDocumentService:
                     body_target = body_limit + 1
                     body_rows: list[dict] = []
                     body_seen = 0
-                    seek_body_offset = metadata_total == 0 and not day and not tag
+                    search_error = str(self.search_index.status().get("error") or "")
+                    seek_body_offset = (
+                        metadata_total == 0 and not day and not tag and not search_error
+                    )
                     fts_offset = body_offset if seek_body_offset else 0
                     exhausted = False
-                    while len(body_rows) < body_target:
+                    fts_batches = 0
+                    # ponytail: Pilot cap is 2200 raw candidates; use cursor/keyset pagination if it expands.
+                    while (
+                        len(body_rows) < body_target
+                        and fts_batches < IMA_FTS_MAX_BATCHES
+                    ):
+                        fts_batches += 1
                         try:
                             fts_hits = self.search_index.search(
-                                query, scoped_ids, 200, offset=fts_offset
+                                query,
+                                scoped_ids,
+                                IMA_FTS_BATCH_SIZE,
+                                offset=fts_offset,
                             )
                         except Exception as exc:  # noqa: BLE001 - optional search falls back
                             logger.warning(
@@ -3160,7 +3174,7 @@ class ImaDocumentService:
                                 }
                             )
                         fts_offset += len(fts_hits)
-                        if len(fts_hits) < 200:
+                        if len(fts_hits) < IMA_FTS_BATCH_SIZE:
                             exhausted = True
                             break
 

@@ -1885,6 +1885,7 @@ def test_hybrid_max_offset_uses_bounded_fts_batches(
     calls = {"search": 0, "lookup": 0}
 
     monkeypatch.setattr(service, "_index_usable", lambda: True)
+    monkeypatch.setattr(service.search_index, "status", lambda: {"error": ""})
     monkeypatch.setattr(
         service.db,
         "ima_document_match_count",
@@ -1931,6 +1932,112 @@ def test_hybrid_max_offset_uses_bounded_fts_batches(
     assert calls["search"] <= max_calls
     if metadata_total == 0:
         assert calls == {"search": 1, "lookup": 1}
+
+
+def test_hybrid_tag_filter_stops_after_eleven_rejected_fts_batches(
+    tmp_path, monkeypatch
+):
+    client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
+        tmp_path, monkeypatch, "hybrid_tag_batch_cap"
+    )
+    service = client.app.state.ima_documents
+    calls = {"search": 0, "lookup": 0}
+
+    monkeypatch.setattr(service, "_index_usable", lambda: True)
+    monkeypatch.setattr(
+        service.db,
+        "ima_document_match_count",
+        lambda *_args, **_kwargs: 0,
+    )
+
+    def search(_query, _group_ids, limit, *, offset=0):
+        calls["search"] += 1
+        if calls["search"] > 11:
+            raise AssertionError("hybrid FTS scan exceeded eleven batches")
+        assert limit == 200
+        return [
+            {
+                "group_id": group_a,
+                "media_id": f"rejected-{rank}",
+                "search_snippet": "body needle",
+            }
+            for rank in range(offset, offset + limit)
+        ]
+
+    def reject_all(_keys, *_args, **_kwargs):
+        calls["lookup"] += 1
+        return []
+
+    monkeypatch.setattr(service.search_index, "search", search)
+    monkeypatch.setattr(service.db, "ima_documents_by_keys", reject_all)
+
+    response = client.get(
+        "/api/ima-documents?q=body%20needle&tag=restricted&limit=1",
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["items"] == []
+    assert response.json()["has_more"] is False
+    assert response.json()["document_count"] == 0
+    assert calls == {"search": 11, "lookup": 11}
+
+
+def test_hybrid_stale_search_error_disables_direct_deep_seek(tmp_path, monkeypatch):
+    client, admin_headers, _reader_headers, group_a, _group_b = _full_text_search_client(
+        tmp_path, monkeypatch, "hybrid_stale_seek"
+    )
+    service = client.app.state.ima_documents
+    offsets = []
+    lookup_calls = 0
+
+    monkeypatch.setattr(service, "_index_usable", lambda: True)
+    monkeypatch.setattr(service.search_index, "status", lambda: {"error": "sync failed"})
+    monkeypatch.setattr(
+        service.db,
+        "ima_document_match_count",
+        lambda *_args, **_kwargs: 0,
+    )
+
+    def search(_query, _group_ids, limit, *, offset=0):
+        offsets.append(offset)
+        assert limit == 200
+        return [
+            {
+                "group_id": group_a,
+                "media_id": f"hit-{rank}",
+                "search_snippet": "body needle",
+            }
+            for rank in range(offset, offset + limit)
+        ]
+
+    def lookup(keys, *_args, **_kwargs):
+        nonlocal lookup_calls
+        lookup_calls += 1
+        return [
+            {
+                "group_id": group_id,
+                "media_id": media_id,
+                "name": f"{media_id}.pdf",
+                "day": "0901",
+                "_metadata_match": False,
+            }
+            for group_id, media_id in keys
+        ]
+
+    monkeypatch.setattr(service.search_index, "search", search)
+    monkeypatch.setattr(service.db, "ima_documents_by_keys", lookup)
+
+    response = client.get(
+        "/api/ima-documents?q=body%20needle&limit=1&offset=2000",
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert [item["media_id"] for item in response.json()["items"]] == ["hit-2000"]
+    assert response.json()["has_more"] is True
+    assert offsets == list(range(0, 2200, 200))
+    assert lookup_calls == 11
 
 
 def test_ima_documents_offset_is_bounded(tmp_path, monkeypatch):
