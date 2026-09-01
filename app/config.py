@@ -125,7 +125,6 @@ class MxConfig:
     ws_enabled: bool = True
     page_size: int = 50
     max_history_pages: int = 100
-    sync_interval_hours: int = 1
 
 
 @dataclass
@@ -216,7 +215,6 @@ _ENV_MAP = {
     "MX_WS_ENABLED": ("sources", "mx", "ws_enabled"),
     "MX_PAGE_SIZE": ("sources", "mx", "page_size"),
     "MX_MAX_HISTORY_PAGES": ("sources", "mx", "max_history_pages"),
-    "MX_SYNC_INTERVAL_HOURS": ("sources", "mx", "sync_interval_hours"),
     "POLLING_INTERVAL_SECONDS": ("polling", "interval_seconds"),
     "POLLING_PRIORITY_INTERVAL_SECONDS": ("polling", "priority_interval_seconds"),
     "POLLING_JITTER_SECONDS": ("polling", "jitter_seconds"),

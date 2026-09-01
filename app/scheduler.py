@@ -25,6 +25,7 @@ _ai_task_max_concurrent = 3  # 最多同时3个任务
 _ai_task_running = set()  # 正在运行的任务ID
 from .logging_setup import redact_secrets
 from .fetchers.base import (
+    CN_TZ,
     PLATFORM_LABELS,
     Fetcher,
     Post,
@@ -37,11 +38,16 @@ from .proxy import note_fetch_proxy, tick_proxy_pools
 
 # MX 相关导入
 try:
+    from .fetchers.mx.client import MXTokenExpiredError
     from .services.mx_sync import MXRoomSyncService
+    from .services.mx_window import generate_mx_daily_window, in_window as mx_in_window
     MX_AVAILABLE = True
 except Exception as e:
     MX_AVAILABLE = False
     logger.warning("MX modules not available: %s", e)
+
+    class MXTokenExpiredError(RuntimeError):
+        """MX 模块不可用时的占位类型（仅供 except 匹配）。"""
 
 # 全局 MX 相关变量
 _mx_fetcher = None
@@ -55,6 +61,7 @@ def get_mx_ws_status() -> dict:
     return {
         "connected": False,
         "last_message_at": None,
+        "gave_up": False,
         "detail": "MX 未启用或 WS 尚未初始化",
     }
 
@@ -908,6 +915,10 @@ def poll_once(
     jobs = []
     for kol in db.list_kols():
         if not kol["enabled"]:
+            continue
+        # MX 走 WebSocket 实时推送，不参与轮询自动拉取历史消息；
+        # 需要补历史时由管理员在后台手动触发「拉取历史」。
+        if kol["platform"] == "mx":
             continue
         if kol["id"] not in subscribed_ids:
             continue
@@ -1841,6 +1852,18 @@ class Scheduler:
         self._mx_sync_service = None
         self._mx_ws_task = None
         self._mx_ws_on_message = None
+        self._mx_ws_on_give_up = None
+        # 每日窗口管理：WS 会话与兜底拉取只在窗口内运行（7-8点随机开/16-17点随机关）
+        self._mx_window_task: asyncio.Task | None = None
+        self._mx_fallback_task: asyncio.Task | None = None
+        self._mx_window_date = None
+        self._mx_window_start: datetime | None = None
+        self._mx_window_stop: datetime | None = None
+        self._mx_window_open = False
+        # 本窗口内 WS 已永久放弃自动重连（防窗口循环反复拉起，违背「只重连一次」）
+        self._mx_ws_gave_up = False
+        # TOKEN 过期熔断：置位后不再发起任何拉取/WS，直到管理员更换 TOKEN
+        self._mx_token_expired = False
 
     def _submit_news_due(self):
         if self.news_service is None:
@@ -1858,6 +1881,12 @@ class Scheduler:
         if self._mx_ws_task:
             self._mx_ws_task.cancel()
             self._mx_ws_task = None
+        if self._mx_window_task:
+            self._mx_window_task.cancel()
+            self._mx_window_task = None
+        if self._mx_fallback_task:
+            self._mx_fallback_task.cancel()
+            self._mx_fallback_task = None
         if self._mx_sync_service:
             self._mx_sync_service.stop()
             self._mx_sync_service = None
@@ -1918,6 +1947,240 @@ class Scheduler:
         )
         return post_id
 
+    def _publish_system_alert_sync(self, title: str, content: str) -> int | None:
+        """（阻塞版）用系统平台账号「系统通知」发布告警：入库 + 实时推送。
+
+        与系统 KOL webhook 同链路（ingest_external_post），但无需 token/签名，
+        供调度器内部发布 WS 重连失败、TOKEN 过期等运行状态消息。
+        """
+        import uuid
+
+        kol = self.db.get_kol_by_external("system", "system_alert")
+        if kol is None:
+            try:
+                kol_id = self.db.add_kol(
+                    platform="system",
+                    name="系统通知",
+                    external_id="system_alert",
+                )
+                self.db.update_kol(kol_id, enabled=True, silent=False)
+            except Exception:
+                logger.error("创建系统通知 KOL 失败", exc_info=True)
+                return None
+        else:
+            kol_id = kol["id"]
+        post = Post(
+            platform="system",
+            kol_id=kol_id,
+            kol_name="系统通知",
+            external_id=f"system_alert_{uuid.uuid4().hex[:12]}",
+            title=title,
+            content=content,
+            url="",
+            published_at=datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+            post_type="post",
+        )
+        return self.ingest_external_post(post)
+
+    async def _publish_system_alert(self, title: str, content: str):
+        """用系统平台账号「系统通知」发布运行告警（异步入口）。
+
+        发布失败只记日志，绝不能反过来影响调用方（WS 重连任务等）。
+        """
+        try:
+            post_id = await asyncio.to_thread(
+                self._publish_system_alert_sync, title, content
+            )
+            if post_id:
+                logger.info("系统告警已发布 title=%s post_id=%s", title, post_id)
+        except Exception:
+            logger.error(f"发布系统告警失败 title={title}", exc_info=True)
+
+    def publish_mx_error(self, key: str, title: str, content: str):
+        """MX 平台报错统一走系统 KOL「系统通知」发布；同 key 30 分钟节流。
+
+        key=token_expired 时同时置熔断标记：在管理员更换 TOKEN 前不再发起
+        任何 MX 拉取/连接，避免死 TOKEN 继续打加重风控处罚。
+        供调度器内部与 api 层（on_mx_alert）统一调用；阻塞版可在线程中调用。
+        """
+        try:
+            if key == "token_expired":
+                self._mx_token_expired = True
+            if not _cooldown_ok(self.db, f"mx_alert_{key}", 1800):
+                return
+            post_id = self._publish_system_alert_sync(title, content)
+            if post_id:
+                logger.info("MX 报错告警已发布 key=%s post_id=%s", key, post_id)
+        except Exception:
+            logger.error(f"发布 MX 报错失败 key={key}", exc_info=True)
+
+    # ---- MX 每日运行窗口：7-8 点随机开、16-17 点随机关，窗口外零请求 ----
+
+    def _mx_window_today(self):
+        """取（必要时生成）当天的运行窗口，生成后当天固定。"""
+        today = datetime.now(CN_TZ).date()
+        if self._mx_window_date != today or self._mx_window_start is None:
+            self._mx_window_date = today
+            self._mx_window_start, self._mx_window_stop = generate_mx_daily_window(today)
+            logger.info(
+                "MX 今日运行窗口：%s ~ %s",
+                self._mx_window_start.strftime("%H:%M:%S"),
+                self._mx_window_stop.strftime("%H:%M:%S"),
+            )
+        return self._mx_window_start, self._mx_window_stop
+
+    def _mx_in_window(self) -> bool:
+        start, stop = self._mx_window_today()
+        return mx_in_window(datetime.now(CN_TZ), start, stop)
+
+    def _mx_session_active(self) -> bool:
+        return bool(self._mx_ws_task and not self._mx_ws_task.done())
+
+    async def _mx_window_loop(self):
+        """MX 每日窗口管理循环：开窗启动会话、关窗停止会话，顺带检查 TOKEN 时效。
+
+        每个窗口只尝试启动一次会话；失败/放弃后不再自动拉起（避免形成
+        周期性重连流量），靠 TOKEN 更换或次日窗口恢复。
+        """
+        while not self._stop.is_set():
+            try:
+                if self._mx_in_window():
+                    if not self._mx_window_open:
+                        self._mx_window_open = True
+                        self._mx_ws_gave_up = False  # 新窗口：复位放弃标记
+                        await self._mx_session_start()
+                elif self._mx_window_open:
+                    self._mx_window_open = False
+                    await self._mx_session_stop()
+                await asyncio.to_thread(self._mx_check_token_age)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.error("MX window loop error", exc_info=True)
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                raise
+
+    async def _mx_session_start(self):
+        """开启当日 MX 会话：启动 WS 监听 + 兜底拉取循环。"""
+        if not self.mx_config.ws_enabled:
+            logger.info("MX 窗口已开启，但实时推送未启用（ws_enabled=false），跳过会话")
+            return
+        if self._mx_token_expired:
+            logger.warning("MX 窗口已开启，但 TOKEN 已过期未更换，跳过会话")
+            return
+        try:
+            message = await self.mx_ws_control("connect")
+            logger.info(f"MX 窗口会话启动：{message}")
+        except Exception as exc:
+            logger.error(f"MX 窗口会话启动失败：{exc}", exc_info=True)
+            await asyncio.to_thread(
+                self.publish_mx_error,
+                "session_start",
+                "MX 会话启动失败",
+                f"⚠️ MX 运行窗口已开启，但 WebSocket 启动失败：{exc}",
+            )
+            return
+        self._mx_fallback_task = asyncio.create_task(self._mx_fallback_loop())
+
+    async def _mx_session_stop(self):
+        """关闭当日 MX 会话：停兜底拉取与 WS 监听（窗口外零请求）。"""
+        if self._mx_fallback_task:
+            self._mx_fallback_task.cancel()
+            self._mx_fallback_task = None
+        if self._mx_session_active():
+            try:
+                await self.mx_ws_control("disconnect")
+            except Exception:  # noqa: BLE001 - 关窗尽力即可
+                logger.warning("MX 窗口关闭会话失败", exc_info=True)
+        logger.info("MX 窗口已关闭，会话停止")
+
+    async def _mx_fallback_loop(self):
+        """兜底拉取：窗口内每随机 20-200 分钟拉 1 个启用房间，防 WS 静默假死。
+
+        随机间隔 + 每轮只拉 1 个房间：把节拍和量级都压到真人水平，
+        不产生「固定周期扫全量房间」的爬虫签名。
+        """
+        try:
+            while not self._stop.is_set():
+                await asyncio.sleep(random.uniform(20 * 60, 200 * 60))
+                if self._stop.is_set() or not self._mx_in_window():
+                    continue
+                if self._mx_token_expired:
+                    continue
+                await self._mx_fallback_pull_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.error("MX fallback loop error", exc_info=True)
+
+    async def _mx_fallback_pull_once(self):
+        """随机拉 1 个启用房间的最新消息（含有限追平），入库并推送。"""
+        fetcher = self.fetchers.get("mx")
+        if fetcher is None:
+            return
+        kols = [k for k in self.db.list_kols(platform="mx") if k.get("enabled")]
+        if not kols:
+            return
+        kol = random.choice(kols)
+
+        def _pull():
+            posts = fetcher.fetch(kol) or []
+            saved = 0
+            for post in posts:
+                if self.ingest_external_post(post) is not None:
+                    saved += 1
+            return len(posts), saved
+
+        try:
+            total, saved = await asyncio.to_thread(_pull)
+            logger.info(
+                "MX 兜底拉取 room=%s(%s)：%d 条，新增 %d",
+                kol["name"], kol["external_id"], total, saved,
+            )
+        except MXTokenExpiredError:
+            logger.error("MX 兜底拉取发现 TOKEN 过期", exc_info=True)
+            await asyncio.to_thread(
+                self.publish_mx_error,
+                "token_expired",
+                "MX TOKEN 已过期",
+                "⚠️ MX TOKEN 已过期，兜底拉取失败，MX 已暂停拉取与实时推送。"
+                "\n请到后台「数据源 → MX」更换 TOKEN（TOKEN 需每 2 天更换一次）。",
+            )
+        except Exception as exc:
+            logger.warning(
+                "MX 兜底拉取失败 room=%s: %s", kol.get("external_id"), exc, exc_info=True
+            )
+            await asyncio.to_thread(
+                self.publish_mx_error,
+                "fallback_pull",
+                "MX 兜底拉取失败",
+                f"⚠️ MX 兜底拉取房间 {kol.get('name')}（{kol.get('external_id')}）失败：{exc}",
+            )
+
+    def _mx_check_token_age(self):
+        """TOKEN 时效检查：超过 2 天未更换 → 系统 KOL 提醒手动更换（每轮一次）。"""
+        now_ts = int(time.time())
+        try:
+            updated = int(self.db.get_setting("mx_token_updated_at") or 0)
+        except (TypeError, ValueError):
+            updated = 0
+        if not updated:
+            # 首次运行：以当前时间作为 TOKEN 起用时间
+            self.db.set_setting("mx_token_updated_at", str(now_ts))
+            return
+        if now_ts - updated < 2 * 86400:
+            return
+        if not _cooldown_ok(self.db, "mx_token_reminder", 2 * 86400):
+            return
+        days = max(1, (now_ts - updated) // 86400)
+        self._publish_system_alert_sync(
+            "MX TOKEN 已超过 2 天，请更换",
+            f"⚠️ MX TOKEN 已使用约 {days} 天，按风控对策必须每 2 天更换一次。"
+            "\n请到后台「数据源 → MX」更新 TOKEN；更换后自动恢复拉取与实时推送。",
+        )
+
     async def _send_startup_message(self):
         """启动提示只推送给管理员（走管理员各自绑定的渠道），普通用户不推送。"""
         if self.notifiers_config is None:
@@ -1958,13 +2221,20 @@ class Scheduler:
             logger.info("Initializing MX platform...")
 
             # 创建并启动房间同步服务（初始同步在后台执行，避免阻塞 WS 上线）
-            self._mx_sync_service = MXRoomSyncService(self.mx_config, self.db)
+            self._mx_sync_service = MXRoomSyncService(
+                self.mx_config,
+                self.db,
+                on_error=lambda msg: self.publish_mx_error(
+                    "room_sync", "MX 房间同步失败", f"⚠️ {msg}"
+                ),
+                # 房间同步同样只在每日窗口内、TOKEN 有效时执行
+                should_run=lambda: self._mx_in_window() and not self._mx_token_expired,
+            )
 
             # 启动定时同步（含后台初始同步）
             await self._mx_sync_service.start_periodic_sync()
 
-            # 启动 WebSocket（如果启用）
-            if self.mx_config.ws_enabled and "mx" in self.fetchers:
+            if "mx" in self.fetchers:
                 mx_fetcher = self.fetchers["mx"]
                 global _mx_fetcher
                 _mx_fetcher = mx_fetcher  # 供 get_mx_ws_status 读取连接状态
@@ -1998,19 +2268,52 @@ class Scheduler:
                     except Exception as e:
                         logger.error(f"Failed to process MX real-time message: {e}", exc_info=True)
 
+                async def on_ws_give_up(reason: str, token_expired: bool = False):
+                    """WS 永久放弃自动重连：置状态标记并用系统账号发布告警。"""
+                    self._mx_ws_gave_up = True
+                    if token_expired:
+                        self._mx_token_expired = True
+                        await self._publish_system_alert(
+                            "MX TOKEN 已过期",
+                            "⚠️ MX TOKEN 已过期或无效，WebSocket 连接被拒，已停止重试。"
+                            "\n请到后台「数据源 → MX」更换 TOKEN（TOKEN 需每 2 天更换一次），"
+                            "更换后自动恢复。",
+                        )
+                    else:
+                        await self._publish_system_alert(
+                            "MX WebSocket 自动重连失败",
+                            "⚠️ MX WebSocket 断线后自动重连失败，已停止自动重连，"
+                            "消息暂停实时更新。\n"
+                            f"失败原因：{reason or '未知'}\n"
+                            "请到后台「数据源 → MX」手动接入，或检查 MX 账号/网络状态。",
+                        )
+
                 self._mx_ws_on_message = on_mx_message
-                self._mx_ws_task = asyncio.create_task(mx_fetcher.start_ws(on_mx_message))
+                self._mx_ws_on_give_up = on_ws_give_up
+
+            # 启动每日窗口管理：WS 会话与兜底拉取的启停全部由窗口驱动，
+            # 不再服务一启动就常驻在线
+            if self._mx_window_task is None or self._mx_window_task.done():
+                self._mx_window_task = asyncio.create_task(self._mx_window_loop())
 
             logger.info("MX platform initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize MX platform: {e}", exc_info=True)
 
     async def _stop_mx(self):
-        """停止 MX 房间同步与 WebSocket，并移除 mx 抓取器（禁用/重配时调用）。"""
+        """停止 MX 房间同步、窗口管理与 WebSocket，并移除 mx 抓取器（禁用/重配时调用）。"""
         global _mx_fetcher
         if self._mx_ws_task:
             self._mx_ws_task.cancel()
             self._mx_ws_task = None
+        if self._mx_window_task:
+            self._mx_window_task.cancel()
+            self._mx_window_task = None
+        if self._mx_fallback_task:
+            self._mx_fallback_task.cancel()
+            self._mx_fallback_task = None
+        self._mx_window_open = False
+        self._mx_ws_gave_up = False
         _mx_fetcher = None
         if self._mx_sync_service:
             self._mx_sync_service.stop()
@@ -2056,13 +2359,18 @@ class Scheduler:
             mx_fetcher = self.fetchers["mx"]
             global _mx_fetcher
             _mx_fetcher = mx_fetcher  # 供 get_mx_ws_status 读取连接状态
-            self._mx_ws_task = asyncio.create_task(mx_fetcher.start_ws(self._mx_ws_on_message))
+            self._mx_ws_task = asyncio.create_task(
+                mx_fetcher.start_ws(
+                    self._mx_ws_on_message, on_ws_give_up=self._mx_ws_on_give_up
+                )
+            )
             logger.info("MX WebSocket 已由管理员手动启动")
             return "已发起 MX WebSocket 连接"
         raise RuntimeError(f"未知操作：{action}")
 
     async def apply_mx_config(self, mx_config) -> None:
-        """MX 配置变更后热应用：停掉旧任务，按需重建抓取器并重启同步/WS。"""
+        """MX 配置变更后热应用：停掉旧任务，按需重建抓取器并重启同步/窗口管理。"""
+        old_token = self.mx_config.token if self.mx_config else ""
         await self._stop_mx()
         self.mx_config = mx_config
         if not (MX_AVAILABLE and mx_config and mx_config.enabled):
@@ -2071,6 +2379,12 @@ class Scheduler:
         from .fetchers.mx.fetcher import MxFetcher
 
         self.fetchers["mx"] = MxFetcher(mx_config, self.db)
+        if (mx_config.token or "") != (old_token or ""):
+            # TOKEN 更换：重置 2 天时效计时，并解除过期熔断与放弃标记
+            self.db.set_setting("mx_token_updated_at", str(int(time.time())))
+            self._mx_token_expired = False
+            self._mx_ws_gave_up = False
+            logger.info("MX TOKEN 已更换，重置时效计时并解除熔断")
         await self._init_mx()
 
     async def run(self):

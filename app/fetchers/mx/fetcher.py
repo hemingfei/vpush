@@ -197,12 +197,13 @@ class MxFetcher(Fetcher):
         except Exception:
             return format_published_at(str(int(time.time())))
 
-    async def start_ws(self, on_message):
+    async def start_ws(self, on_message, on_ws_give_up=None):
         """
         启动 WebSocket 连接并监听实时消息。
-        
+
         Args:
             on_message: 回调函数，当收到新消息时调用（可以是异步函数）
+            on_ws_give_up: 自动重连永久放弃时的回调（参数为失败原因），用于发布系统告警
         """
         if not self._ws_enabled:
             logger.info("MX WebSocket is disabled")
@@ -227,7 +228,7 @@ class MxFetcher(Fetcher):
             self._ws_tasks.add(task)
             task.add_done_callback(self._ws_tasks.discard)
 
-        self.ws_client = MxWsClient(self.config, _on_raw_message)
+        self.ws_client = MxWsClient(self.config, _on_raw_message, on_give_up=on_ws_give_up)
         await self.ws_client.run_forever()
 
     async def stop_ws(self):
@@ -414,10 +415,22 @@ class MxFetcher(Fetcher):
             状态字典（detail 用于区分未连接的具体原因）
         """
         if self.ws_client:
-            detail = "已手动断开" if getattr(self.ws_client, "manually_stopped", False) else ""
+            client = self.ws_client
+            gave_up = bool(getattr(client, "gave_up", False))
+            if getattr(client, "manually_stopped", False):
+                detail = "已手动断开"
+            elif gave_up:
+                # 12 秒后的那次重连也失败了：已永久放弃自动重连
+                detail = "自动重连失败已停止，请手动接入"
+            elif not client.connected:
+                # 断线后等待 12 秒自动重连；任务已退出且未放弃时需管理员接入
+                detail = "未连接，等待自动重连" if getattr(client, "running", False) else "已断线，请手动接入"
+            else:
+                detail = ""
             return {
-                "connected": self.ws_client.connected,
-                "last_message_at": self.ws_client.last_message_at,
+                "connected": client.connected,
+                "last_message_at": client.last_message_at,
+                "gave_up": gave_up,
                 "detail": detail,
             }
         if not self._ws_enabled:

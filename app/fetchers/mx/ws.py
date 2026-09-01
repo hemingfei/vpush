@@ -20,8 +20,29 @@ BROWSER_UA = (
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
 
-# 断线后由 run_forever 循环负责重连的间隔（秒）
-RECONNECT_INTERVAL_SECONDS = 5
+# 断线后的重连策略：只等 12 秒重连一次；这次重连再失败就永久放弃自动重连
+# （高频无上限重连会加重平台风控处罚），恢复只能靠管理员在后台手动接入
+RECONNECT_DELAY_SECONDS = 12
+
+# 连接阶段被拒时，判定为 TOKEN 过期/无效的关键词（命中则不重试，直接放弃告警）
+_AUTH_FAIL_KEYWORDS = (
+    "401",
+    "403",
+    "unauthorized",
+    "forbidden",
+    "auth",
+    "token",
+    "登录",
+    "认证",
+    "过期",
+    "无效",
+)
+
+
+def _looks_like_auth_failure(reason: str) -> bool:
+    """连接阶段的报错是否像 TOKEN 过期/无效（握手 401/403 或鉴权类文案）。"""
+    text = (reason or "").lower()
+    return any(kw in text for kw in _AUTH_FAIL_KEYWORDS)
 
 
 def _browser_handshake_headers(config) -> dict:
@@ -38,21 +59,32 @@ class MxWsClient:
 
     NAMESPACE = "/msg"
 
-    def __init__(self, config: Any, on_message_callback: Callable[[dict], None]):
+    def __init__(
+        self,
+        config: Any,
+        on_message_callback: Callable[[dict], None],
+        on_give_up: Callable[[str], Any] | None = None,
+    ):
         """
         Initialize MX WebSocket client.
 
         Args:
             config: MX configuration object
             on_message_callback: Callback function when a new message is received
+            on_give_up: 永久放弃自动重连时的回调（参数为失败原因），用于发布系统告警
         """
         self.config = config
         self.on_message = on_message_callback
+        self.on_give_up = on_give_up
         self.connected = False
         self.last_message_at: datetime | None = None
         self._sio: Any = None
         self._task: Any = None
         self._should_stop = False
+        # run_forever 存活期间为 True：供状态接口区分「连接中」与「已断线」
+        self.running = False
+        # 12 秒后的那次重连也失败后置 True：已永久放弃自动重连，需管理员手动接入
+        self.gave_up = False
         # 管理员主动断开标记：与掉线区分开，供状态接口展示原因
         self.manually_stopped = False
 
@@ -64,9 +96,8 @@ class MxWsClient:
             # 使用配置的 namespace
             namespace = getattr(self.config, "ws_namespace", self.NAMESPACE)
 
-            # 内部重连必须关闭：python-socketio 的内部重连延迟单位是秒，且
-            # run_forever 的 wait() 会阻塞在内部重连任务上（断线后要等满退避
-            # 时间才能恢复）。统一由 run_forever 以固定间隔自管理重连。
+            # 库内部重连必须关闭：断线后由管理员在后台手动重连（重新走 start_ws
+            # 建新客户端），绝不能让 python-socketio 自己悄悄重连。
             self._sio = socketio.AsyncClient(
                 logger=logger,
                 engineio_logger=False,  # 关闭 Engine.IO 底层详细日志，避免刷屏
@@ -227,27 +258,78 @@ class MxWsClient:
         return parsed
 
     async def run_forever(self):
-        """
-        Run the WebSocket client forever, with automatic reconnection.
+        """连接并监听 MX WebSocket，断线后按「只重连一次」策略自恢复。
+
+        首次连接失败或断线：等待 RECONNECT_DELAY_SECONDS 秒后重连一次；
+        重连成功则恢复额度（下次断线仍可重连一次），重连再失败就永久放弃
+        自动重连：置 gave_up 并触发 on_give_up 回调（用于系统账号发布告警）。
+        连接阶段若被判定为 TOKEN 过期/无效，则不等待不重试，立即放弃。
+        恢复只能由管理员在后台手动接入（start_ws 会创建新客户端，状态自动复位）。
         """
         self._should_stop = False
+        self.running = True
+        self.gave_up = False
+        # 本次连接是否还欠一次「12 秒后重连」机会：连接成功后恢复
+        reconnect_pending = False
+        try:
+            while not self._should_stop:
+                reason = ""
+                connect_attempt = False
+                try:
+                    if not self.connected:
+                        connect_attempt = True
+                        await self.connect()
+                    reconnect_pending = False
+                    # Sleep and let the Socket.IO client handle events
+                    await self._sio.wait()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.error(f"MX WebSocket error: {e}", exc_info=True)
+                    reason = str(e) or e.__class__.__name__
+                finally:
+                    self.connected = False
+                if self._should_stop or self.manually_stopped:
+                    break
+                # TOKEN 过期/无效（连接阶段被拒）：不等待不重试，直接永久放弃并告警；
+                # 更换 TOKEN 后由管理员手动接入或次日窗口自动恢复
+                if connect_attempt and _looks_like_auth_failure(reason):
+                    self.gave_up = True
+                    logger.error("MX WebSocket 连接被拒（TOKEN 过期/无效），已停止重试")
+                    self._fire_give_up(reason, True)
+                    break
+                if reconnect_pending:
+                    # 12 秒后的那次重连也失败（或重连后立即再断）：永久放弃
+                    self.gave_up = True
+                    logger.error("MX WebSocket 重连失败，已停止自动重连；请在管理后台手动接入")
+                    self._fire_give_up(reason, False)
+                    break
+                reconnect_pending = True
+                logger.error(
+                    "MX WebSocket 断开（%s），%d 秒后重连一次；再失败将停止自动重连",
+                    reason or "connection closed",
+                    RECONNECT_DELAY_SECONDS,
+                )
+                await asyncio.sleep(RECONNECT_DELAY_SECONDS)
+        finally:
+            self.running = False
 
-        while not self._should_stop:
-            try:
-                if not self.connected:
-                    await self.connect()
+    def _fire_give_up(self, reason: str, token_expired: bool):
+        """永久放弃自动重连时回调外部（发布系统告警等）；回调异常只记日志。"""
+        if self.on_give_up is None:
+            return
+        try:
+            result = self.on_give_up(reason, token_expired)
+            if asyncio.iscoroutine(result):
+                asyncio.create_task(self._await_give_up(result))
+        except Exception:
+            logger.error("MX WebSocket 重连失败回调执行异常", exc_info=True)
 
-                # Sleep and let the Socket.IO client handle events
-                await self._sio.wait()
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.error(f"MX WebSocket error: {e}, reconnecting in {RECONNECT_INTERVAL_SECONDS} seconds...", exc_info=True)
-                self.connected = False
-
-            if self._should_stop:
-                break
-            await asyncio.sleep(RECONNECT_INTERVAL_SECONDS)
+    async def _await_give_up(self, coro):
+        try:
+            await coro
+        except Exception:
+            logger.error("MX WebSocket 重连失败回调执行异常", exc_info=True)
 
     async def stop(self):
         """Stop the WebSocket client."""

@@ -326,6 +326,8 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
             on_mx_config_changed=scheduler.apply_mx_config if background_workers_enabled() else None,
             # MX WebSocket 手动接入/断开（设置页按钮），同样仅在后台任务启用时可用
             on_mx_ws_control=scheduler.mx_ws_control if background_workers_enabled() else None,
+            # MX 报错统一走系统 KOL「系统通知」发布（含 TOKEN 过期熔断标记）
+            on_mx_alert=scheduler.publish_mx_error if background_workers_enabled() else None,
             news_service=news_service,
             # 系统 KOL Webhook 来帖的入库+推送回调（纯 UI 调试模式下只入库不推送）
             on_external_post=scheduler.ingest_external_post if background_workers_enabled() else None,

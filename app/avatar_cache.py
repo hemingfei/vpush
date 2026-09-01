@@ -21,11 +21,20 @@ UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 # 新浪图床有防盗链校验，需带 weibo.com Referer 才能下载；对 X/雪球图床无副作用
 DOWNLOAD_HEADERS = {"User-Agent": UA, "Referer": "https://weibo.com/"}
 ZSXQ_HEADERS = {"User-Agent": UA, "Referer": "https://wx.zsxq.com/"}
+# MX 图片/头像必须用 MX 站点的浏览器形态下载：之前错误地带 weibo.com Referer，
+# 在 MX 自家 CDN 的日志里又是一个「账号行为自相矛盾」的风控信号
+MX_SITE_DOMAIN = "naaifu.cn"
+MX_REFERER = "https://mx.2026.naaifu.cn/"
 
 
 def headers_for(url: str) -> dict[str, str]:
     if "zsxq.com" in (url or ""):
         return dict(ZSXQ_HEADERS)
+    if MX_SITE_DOMAIN in (url or ""):
+        # 延迟导入：app.fetchers.mx 包初始化会反向导入本模块，顶层导入会成环
+        from .fetchers.mx.ws import BROWSER_UA
+
+        return {"User-Agent": BROWSER_UA, "Referer": MX_REFERER}
     return dict(DOWNLOAD_HEADERS)
 
 
