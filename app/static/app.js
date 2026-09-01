@@ -7069,7 +7069,7 @@ async function validateNewsFeedDraft(sourceId, feedId = 0, mask = document.query
   button.disabled = true;
   try {
     const validation = await api("/api/admin/news/feeds/validate", { method: "POST", body: JSON.stringify({ url }) });
-    preview.innerHTML = `<p><strong>${escapeHtml(validation.format)}</strong> · ${escapeHtml(validation.title || "无标题")}</p>${(validation.entries || []).map((entry) => `<p>${escapeHtml(entry.title)} · ${escapeHtml(entry.published_at || "")}</p>`).join("") || "<p>有效 Feed，暂无条目</p>"}`;
+    preview.innerHTML = `<p><strong>${escapeHtml(validation.format)}</strong> · ${escapeHtml(validation.title || "无标题")}</p>${(validation.entries || []).map((entry) => `<p>${escapeHtml(entry.title)} · ${escapeHtml(entry.published_at || "")}<br>${escapeHtml(entry.text || "暂无纯文本预览")}</p>`).join("") || "<p>有效 Feed，暂无条目</p>"}`;
     const feed = adminNewsState.sources.flatMap((source) => source.feeds || []).find((item) => item.id === Number(feedId));
     await api(feedId ? `/api/admin/news/feeds/${feedId}` : `/api/admin/news/sources/${sourceId}/feeds`, {
       method: feedId ? "PATCH" : "POST", body: JSON.stringify(feedId ? { name, url } : { name, url }),
@@ -12180,7 +12180,11 @@ async function loadFinancialNews(reset = false, seq = routeRenderSeq) {
     state.newsItems = reset ? items : state.newsItems.concat(items);
     state.newsOffset = data.next_offset || state.newsItems.length;
     state.newsHasMore = !!data.has_more;
-    list.innerHTML = state.newsItems.length ? state.newsItems.map(newsListItemHtml).join("") : emptyState(state.newsSources.some((source) => source.selected) ? "没有符合条件的财经新闻" : "还没有选择新闻来源", `<div><button type="button" class="btn-normal" onclick="openNewsSourcePicker()">选择来源</button></div>`);
+    if (reset) {
+      list.innerHTML = state.newsItems.length ? items.map(newsListItemHtml).join("") : emptyState(state.newsSources.some((source) => source.selected) ? "没有符合条件的财经新闻" : "还没有选择新闻来源", `<div><button type="button" class="btn-normal" onclick="openNewsSourcePicker()">选择来源</button></div>`);
+    } else if (items.length) {
+      list.insertAdjacentHTML("beforeend", items.map(newsListItemHtml).join(""));
+    }
     for (const item of items) {
       const image = document.querySelector(`[data-news-thumbnail="${item.id}"]`);
       if (image) loadNewsImageBlob(item.id, 0, image, seq);

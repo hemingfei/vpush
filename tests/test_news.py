@@ -113,6 +113,21 @@ def make_news_service(tmp_path, handler):
     return NewsService(db, client=client), db, client, feed_id
 
 
+
+
+def test_validate_feed_preview_contains_plain_text(tmp_path, monkeypatch):
+    payload = (FIXTURES / "news_rss.xml").read_bytes()
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+    service, db, client, feed_id = make_news_service(
+        tmp_path, lambda request: httpx.Response(200, content=payload)
+    )
+    preview = service.validate_feed("https://feed.example/rss")
+    assert preview["entries"][0]["text"] == "Short fixture summary"
+    service.close()
+    client.close()
+    db.close()
+
+
 def test_refresh_feed_sends_conditional_headers_and_handles_304(tmp_path, monkeypatch):
     requests = []
 
@@ -152,6 +167,30 @@ def test_submit_feed_rejects_duplicate_inflight_refresh(tmp_path, monkeypatch):
         db.close()
 
 
+
+
+def test_submitted_unexpected_failure_is_recorded_and_releases_lock(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+    service, db, client, feed_id = make_news_service(
+        tmp_path, lambda request: httpx.Response(304)
+    )
+    lock = service._feed_lock(feed_id)
+    lock.acquire()
+
+    def broken_refresh(current_id):
+        raise RuntimeError("worker failure")
+
+    monkeypatch.setattr(service, "refresh_feed", broken_refresh)
+    service._run_submitted(feed_id, lock)
+    feed = db.get_news_feed(feed_id)
+    assert not lock.locked()
+    assert feed["last_error_code"] == "network_error"
+    assert "worker failure" not in feed["last_error_detail"]
+    service.close()
+    client.close()
+    db.close()
+
+
 def test_refresh_feed_upserts_articles_and_recovers_failure(tmp_path, monkeypatch):
     payload = (FIXTURES / "news_rss.xml").read_bytes()
     monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
@@ -163,6 +202,22 @@ def test_refresh_feed_upserts_articles_and_recovers_failure(tmp_path, monkeypatc
     assert len(db._rows("SELECT * FROM news_articles")) == 2
     feed = db.get_news_feed(feed_id)
     assert feed["etag"] == '"fresh"' and feed["consecutive_failures"] == 0
+    service.close()
+    client.close()
+    db.close()
+
+
+
+
+def test_refresh_feed_does_not_store_articles_outside_retention_window(tmp_path, monkeypatch):
+    payload = b'''<?xml version="1.0"?><rss version="2.0"><channel><title>Old</title><item><guid>old-1</guid><title>Old article</title><link>https://feed.example/old</link><pubDate>Tue, 01 Jan 2020 00:00:00 GMT</pubDate><description>Old summary</description></item></channel></rss>'''
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+    service, db, client, feed_id = make_news_service(
+        tmp_path, lambda request: httpx.Response(200, content=payload)
+    )
+    result = service.refresh_feed(feed_id)
+    assert result["status"] == "updated"
+    assert db._rows("SELECT * FROM news_articles") == []
     service.close()
     client.close()
     db.close()

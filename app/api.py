@@ -2214,6 +2214,8 @@ def create_api_router(
             raise HTTPException(status_code=400, detail="时间必须是带时区的 ISO 8601 时间") from None
         if value.tzinfo is None or value.utcoffset() is None:
             raise HTTPException(status_code=400, detail="时间必须是带时区的 ISO 8601 时间")
+        if value > datetime.now(UTC):
+            raise HTTPException(status_code=400, detail="时间不能晚于当前时间")
         normalized = value.astimezone(UTC).isoformat()
         db.advance_news_seen(user["id"], normalized)
         return {"ok": True, "news_last_seen_at": normalized}

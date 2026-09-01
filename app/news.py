@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ MAX_TITLE_CHARS = 500
 MAX_AUTHOR_CHARS = 200
 MAX_SUMMARY_CHARS = 2000
 MAX_BODY_BYTES = 512 * 1024
+DEFAULT_RETENTION_DAYS = 30
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 _TRACKING_QUERY_KEYS = {"fbclid", "gclid"}
 _ALLOWED_TAGS = {
@@ -40,6 +42,9 @@ _ALLOWED_ATTRIBUTES = {
     "th": ["colspan", "rowspan"],
     "td": ["colspan", "rowspan"],
 }
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -256,6 +261,14 @@ class NewsService:
     def _run_submitted(self, feed_id: int, lock: threading.Lock) -> None:
         try:
             self.refresh_feed(feed_id)
+        except Exception:  # noqa: BLE001 - worker 异常也必须落库并释放锁
+            logger.exception("财经新闻后台刷新异常 feed_id=%s", feed_id)
+            try:
+                self.db.mark_news_feed_failure(
+                    feed_id, "network_error", "后台刷新异常", datetime.now(UTC).isoformat()
+                )
+            except Exception:  # noqa: BLE001 - DB 故障只能记录日志
+                logger.exception("财经新闻后台刷新错误状态写入失败 feed_id=%s", feed_id)
         finally:
             lock.release()
 
@@ -291,10 +304,24 @@ class NewsService:
             "format": parsed.format,
             "title": parsed.title,
             "entries": [
-                {"title": article.title, "published_at": article.published_at}
+                {
+                    "title": article.title,
+                    "published_at": article.published_at,
+                    "text": article.summary,
+                }
                 for article in parsed.articles[:3]
             ],
         }
+
+    def _retention_days(self) -> int | None:
+        raw = self.db.get_setting("stats_posts_retention_days")
+        if raw is None:
+            return DEFAULT_RETENTION_DAYS
+        try:
+            days = int(raw)
+        except (TypeError, ValueError):
+            return DEFAULT_RETENTION_DAYS
+        return days if days > 0 else None
 
     @staticmethod
     def _error_detail(exc: BaseException) -> str:
@@ -336,7 +363,15 @@ class NewsService:
             if not 200 <= response.status_code < 300:
                 raise NewsUpstreamError("Feed 返回 HTTP 错误")
             parsed = parse_feed(response.content, feed["url"], datetime.now(UTC))
+            retention_days = self._retention_days()
+            cutoff = (
+                datetime.now(UTC) - timedelta(days=retention_days)
+                if retention_days is not None else None
+            )
+            stored = 0
             for article in parsed.articles:
+                if cutoff is not None and datetime.fromisoformat(article.published_at) < cutoff:
+                    continue
                 self.db.upsert_news_article({
                     "source_id": feed["source_id"],
                     "feed_id": feed_id,
@@ -351,13 +386,14 @@ class NewsService:
                     "fetched_at": article.fetched_at,
                     "content_hash": article.content_hash,
                 })
+                stored += 1
             self.db.mark_news_feed_success(
                 feed_id,
                 etag=response.headers.get("etag", ""),
                 last_modified=response.headers.get("last-modified", ""),
                 succeeded_at=attempted_at,
             )
-            return {"status": "updated", "feed_id": feed_id, "articles": len(parsed.articles)}
+            return {"status": "updated", "feed_id": feed_id, "articles": stored}
         except ValueError as exc:
             code = "unsafe_url" if "安全" in str(exc) or "地址" in str(exc) else "invalid_feed"
             self.db.mark_news_feed_failure(feed_id, code, self._error_detail(exc), attempted_at)

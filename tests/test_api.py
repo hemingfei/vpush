@@ -131,6 +131,10 @@ def test_news_seen_rejects_naive_timestamp_and_moves_forward_only():
         "/api/news/seen", headers=headers,
         json={"view_started_at": "2026-09-01T09:00:00+00:00"},
     ).status_code == 200
+    assert client.post(
+        "/api/news/seen", headers=headers,
+        json={"view_started_at": "2999-01-01T00:00:00+00:00"},
+    ).status_code == 400
 
 
 

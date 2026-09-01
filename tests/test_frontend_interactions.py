@@ -3468,6 +3468,12 @@ def test_news_reader_functions_cover_sources_seen_and_blob_cleanup():
     assert "URL.revokeObjectURL" in images
 
 
+def test_news_pagination_appends_without_replacing_existing_thumbnails():
+    body = _fn_body("loadFinancialNews")
+    assert "insertAdjacentHTML" in body
+    assert "state.newsItems.map(newsListItemHtml)" not in body
+
+
 def test_news_source_picker_is_searchable_checkbox_dialog():
     body = _fn_body("openNewsSourcePicker")
     assert 'type="search"' in body

@@ -152,7 +152,20 @@ def test_safe_get_limited_revalidates_redirect_target(monkeypatch):
         safe_get_limited(client, "https://feed.example/rss", max_bytes=1024)
 
 
-def test_safe_get_blocks_too_many_redirects(monkeypatch):
+
+
+def test_safe_get_limited_revalidates_dns_on_same_host_redirect(monkeypatch):
+    resolved = iter([["93.184.216.34"], ["10.0.0.8"]])
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: next(resolved))
+
+    def handler(request):
+        assert request.headers["host"] == "same.example"
+        return httpx.Response(302, headers={"location": "https://same.example/next"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(ValueError, match="不安全的下载地址"):
+        safe_get_limited(client, "https://same.example/start", max_bytes=1024)
+
     def handler(request):
         return httpx.Response(302, headers={"location": "https://safe.example/loop"})
 
