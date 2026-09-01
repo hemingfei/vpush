@@ -1243,7 +1243,7 @@ git commit -m "feat: add personal financial news reader"
 
 - [ ] **Step 1: Bump coherent static and application versions**
 
-At plan authoring time the released baseline is `1.12.124`, `style.css?v=261`, `app.js?v=370`, and `dav-shell-v239`. For this feature, change backend and frontend `APP_VERSION` to `1.12.125`, change the style query to `262`, the app query to `371`, and the shell cache to `dav-shell-v240`. If execution starts from newer release metadata, increment each then-current value exactly once instead of overwriting it.
+At the start of this feature branch, the released baseline is `1.12.124`, `style.css?v=261`, `app.js?v=370`, and `dav-shell-v239`. The subscription merge runs first and advances only `app.js` to `371` and the shell cache to `v240`; it does not change `style.css` or `APP_VERSION`. After that commit, this feature advances `APP_VERSION` to `1.12.125`, `style.css` to `262`, `app.js` to `372`, and the shell cache to `v241`. If execution starts from newer release metadata, increment each then-current value exactly once at the corresponding phase instead of overwriting it.
 
 Add a PWA test asserting the final cache name and both final index query revisions.
 
