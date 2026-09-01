@@ -3574,6 +3574,11 @@ class ImaDocumentService:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Local library scan failed error=%s", _safe_error(exc))
             self._rebuild_index_if_needed()
+            try:
+                from .ima_title_zh import refresh_bank_titles_zh
+                refresh_bank_titles_zh(self)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("投行标题翻译失败 error=%s", _safe_error(exc))
         except Exception as exc:  # noqa: BLE001 - worker must release its lock
             error = _safe_error(exc)
             logger.error("IMA document sync failed error=%s", error)
