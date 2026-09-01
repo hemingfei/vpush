@@ -284,6 +284,7 @@ def test_scan_removes_disappeared_library(tmp_path):
 
     assert _index_group_ids(service.store) == {"local-stay"}
     assert service.db.ima_document_index_count() == 1
+    assert service._index_usable() is True
     # ACL 行不受库消失影响（本用例没有 ACL 行，只要组行被清掉即可）
 
 

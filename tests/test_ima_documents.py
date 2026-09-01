@@ -4286,6 +4286,49 @@ def test_ready_index_with_rows_falls_back_when_sources_change(tmp_path):
     assert service._index_usable() is False
 
 
+def test_failed_index_with_stale_fingerprint_is_not_usable(tmp_path):
+    db = DB(str(tmp_path / "stale.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    record = {"media_id": "m1", "name": "A.pdf", "day": "0801"}
+    service.store.save_manifest([record])
+    service.store.save_state({})
+    assert service.rebuild_read_index()["status"] == "ready"
+    db.mark_ima_document_index("failed", error="boom")
+    service.store.save_manifest([record, {"media_id": "m2", "name": "B.pdf", "day": "0802"}])
+    assert service._index_usable() is False
+
+
+def test_rebuild_read_index_applies_title_overrides(tmp_path):
+    db = DB(str(tmp_path / "titles.sqlite"))
+    archive = tmp_path / "archive"
+    group_dir = archive / "bank1__hash"
+    group_dir.mkdir(parents=True)
+    (group_dir / "titles.json").write_text(
+        json.dumps({"Goldman-Foo-260801": "高盛-测试-260801.pdf"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    db.set_setting(IMA_PURE_GROUPS_KEY, json.dumps([{
+        "id": "bank1",
+        "name": "全球顶级投行研报库",
+        "knowledge_base_id": "kb",
+        "root_folder_id": "root",
+        "folder_ids": ["root"],
+        "enabled": True,
+    }]))
+    service = ImaDocumentService(db, tmp_path / "ima", archive_root=archive)
+    record = {
+        "group_id": "bank1",
+        "media_id": "m1",
+        "name": "Goldman-Foo-260801.pdf",
+        "day": "0801",
+    }
+    service.store.save_manifest([record])
+    service.store.save_state({})
+    assert service.rebuild_read_index()["status"] == "ready"
+    row = db._rows("SELECT name FROM ima_document_index WHERE media_id = ?", ("m1",))[0]
+    assert row["name"] == "高盛-测试-260801.pdf"
+
+
 def test_local_libraries_need_scan_when_cicc_newer(tmp_path):
     db = DB(str(tmp_path / "cicc-scan.sqlite"))
     service = ImaDocumentService(db, tmp_path / "ima", archive_root=tmp_path / "archive")

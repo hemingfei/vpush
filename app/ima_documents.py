@@ -2749,7 +2749,9 @@ class ImaDocumentService:
         else:
             records = []
         state = state_value if isinstance(state_value, dict) else {}
-        return self.store._normalize_manifest_records(records, groups), state
+        normalized = self.store._normalize_manifest_records(records, groups)
+        overrides = load_title_overrides(self.store.archive_root)
+        return apply_title_overrides(normalized, overrides), state
 
     def _index_row(
         self, record: dict[str, Any], state: dict[str, dict[str, Any]]
@@ -2876,13 +2878,14 @@ class ImaDocumentService:
         status = self.read_index_status()
         counter = getattr(self.db, "ima_document_index_count", None)
         count = int(counter()) if callable(counter) else 0
-        if status["status"] in {"rebuilding", "failed"}:
-            return count > 0
-        if status["status"] != "ready":
-            return False
         getter = getattr(self.db, "ima_document_index_meta", None)
-        fingerprint = str(getter().get("fingerprint") or "") if callable(getter) else ""
-        return fingerprint == self._source_fingerprint()
+        meta = getter() if callable(getter) else {}
+        fingerprint = str(meta.get("fingerprint") or "")
+        if fingerprint != self._source_fingerprint():
+            return False
+        if status["status"] == "ready":
+            return True
+        return status["status"] in {"rebuilding", "failed"} and count > 0
 
     def rebuild_read_index(
         self, groups: tuple[ImaGroupConfig, ...] | None = None
@@ -3410,6 +3413,12 @@ class ImaDocumentService:
                 )
         if removed:
             self.store.save_state(state)
+            setter = getattr(self.db, "set_ima_index_fingerprint", None)
+            if callable(setter):
+                setter(self._source_fingerprint())
+            marker = getattr(self.db, "mark_ima_document_index", None)
+            if callable(marker):
+                marker("ready")
 
     def set_local_library_enabled(self, slug: str, enabled: bool) -> dict[str, Any]:
         """写标记文件 enabled 字段；磁盘写失败抛 OSError 由路由层报错。"""
