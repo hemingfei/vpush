@@ -24,7 +24,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.123";
+const APP_VERSION = "1.12.126";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -33,7 +33,7 @@ const REPORT_WATCH_BLOCKED_TAGS = new Set([
 const TL_SOURCE_KEY = "timelineSource";
 const KB_LAST_GROUP_KEY = "kb-last-group";
 const PLATFORM_TABS = ["", "system", "xueqiu", "combination", "weibo", "twitter", "zsxq", "mx"];
-const STATS_TABS = ["config", "cookies", "mx", "proxies", "plaza"];
+const STATS_TABS = ["config", "cookies", "mx", "proxies", "plaza", "news"];
 const STALE_KOL_LIMIT = 10;
 const STALE_KOL_HOURS = 48;
 const TL_PLATFORMS = PLATFORM_TABS.map((p) => [p, p ? PLATFORM_LABELS[p] : "全部"]);
@@ -52,9 +52,8 @@ const BOOK_ICON = `<svg class="nav-book-icon" viewBox="0 0 24 24" fill="none" st
 // 导航线性图标集（lucide 风格，stroke=currentColor，与 STAR/BELL/EYE 同一词汇）
 const LIST_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg>`;
 const WSCN_LIVE_ICON = `<svg class="pt-icon" viewBox="180 240 640 620" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="m466.944 649.6 41.152-102.464 18.4 49.472L432.192 828.8H416.32L246.08 423.136c-11.808-26.208-34.656-46.368-62.72-54.336l-1.6-.448V367.2h216.992v.608l-.192.096c-17.664 11.84-24.48 25.696-24.48 45.056 0 5.664 2.784 14.08 2.784 14.08l90.08 222.56zm239.648-345.92h135.264v.832l-.864.128c-16.96 3.136-32.576 18.848-43.104 44.576l-1.632 4.16-161.28 424.96h-14.4L548.192 597.76l67.488-151.104 55.2 140.544L752 370.176l.032-.032c11.68-31.616-11.424-65.28-45.12-65.728h-.32v-.736zm-21.44-68.576c-1.152 2.304-5.568 12.8-5.568 12.8L538.432 573.44 433.056 310.944c-6.4-18.4-25.184-51.84-64.64-62.816v-.768h248.48v1.216h-.448c-6.784 0-53.856 1.504-53.856 51.296 0 7.168 4.512 24.096 6.304 29.248l18.304 46.24 54.336-132.544c3.936-9.984 2.048-16.256 1.472-18.496-4.416-10.88-17.312-23.68-35.648-26.56v-.448h115.904v.576c-19.584 4.192-29.632 18.944-38.144 37.184"/></svg>`;
+const NEWS_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M6 8h9M6 12h12M6 16h8"/><path d="M17 8h1"/></svg>`;
 const GRID_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>`;
-const TRENDING_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 7l-8.5 8.5-5-5L2 17"/><path d="M16 7h6v6"/></svg>`;
-const BOOKMARK_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>`;
 const GEAR_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
 const DASHBOARD_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>`;
 const FOLDER_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
@@ -84,6 +83,16 @@ const state = {
   platform: "",
   mysubsPlatform: "",
   mysubsFavorite: false,
+  settingsTab: "subs",
+  newsSources: [],
+  newsFilterSourceId: "",
+  newsQuery: "",
+  newsItems: [],
+  newsOffset: 0,
+  newsHasMore: false,
+  newsRequestSeq: 0,
+  newsObserver: null,
+  newsImageUrls: new Set(),
   adminKolsPlatform: "",
   adminKols: [],
   adminKolsQ: "",
@@ -873,6 +882,40 @@ function openImaDocument(mediaId, groupId = "", replace = false) {
   renderImaDocument(seq, id);
 }
 
+function clearNewsImageUrls() {
+  for (const url of state.newsImageUrls) URL.revokeObjectURL(url);
+  state.newsImageUrls.clear();
+}
+
+function stopNewsAutoLoad() {
+  state.newsObserver?.disconnect();
+  state.newsObserver = null;
+}
+
+function clearNewsReaderState() {
+  stopNewsAutoLoad();
+  clearNewsImageUrls();
+  state.newsSources = [];
+  state.newsFilterSourceId = "";
+  state.newsQuery = "";
+  state.newsItems = [];
+  state.newsOffset = 0;
+  state.newsHasMore = false;
+  state.newsRequestSeq += 1;
+}
+
+function startNewsAutoLoad(seq) {
+  stopNewsAutoLoad();
+  const sentinel = $("#news-load-sentinel");
+  if (!sentinel || !state.newsHasMore) return;
+  if ("IntersectionObserver" in window) {
+    state.newsObserver = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) loadFinancialNews(false, seq);
+    }, { rootMargin: "400px 0px" });
+    state.newsObserver.observe(sentinel);
+  }
+}
+
 function clearSessionCaches() {
   clearImaPdfUrl();
   if (typeof stopTimelinePoll === "function") stopTimelinePoll();
@@ -890,6 +933,7 @@ function clearSessionCaches() {
     wbQrTimer = null;
     wbQrSeq += 1;
   }
+  clearNewsReaderState();
   _tlPosts.length = 0;
   _tlOffset = 0;
   _tlHasMore = true;
@@ -998,45 +1042,34 @@ function avatarHtml(name, url) {
 
 // ---------- 壳 ----------
 const NAV = [
-  {
-    group: "订阅", items: [
-      { route: "timeline", icon: LIST_ICON, label: "最新动态" },
-      { route: "knowledge", icon: BOOK_ICON, label: "研报库" },
-      { route: "home", icon: GRID_ICON, label: "订阅广场" },
-      { route: "combinations", icon: TRENDING_ICON, label: "组合订阅" },
-      { route: "mysubs", icon: BOOKMARK_ICON, label: "我的订阅" },
-      { route: "settings", icon: GEAR_ICON, label: "推送设置" },
-    ]
-  },
-  {
-    group: "", admin: true, subs: [
-      {
-        label: "内容管理", items: [
-          { route: "admin/dashboard", icon: DASHBOARD_ICON, label: "全景概览" },
-          { route: "admin/kols", icon: V_ICON, label: "大V管理" },
-          { route: "admin/ai-analysis", icon: BRAIN_ICON, label: "AI分析" },
-          { route: "admin/vocab", icon: FOLDER_ICON, label: "标签分类" },
-          { route: "admin/requests", icon: USER_PLUS_ICON, label: "添加审批" },
-        ]
-      },
-      {
-        label: "数据与日志", items: [
-          { route: "admin/stats", icon: BOOK_ICON, label: "数据源" },
-          { route: "admin/knowledge", icon: BOOK_ICON, label: "研报库设置" },
-          { route: "admin/posts", icon: FILE_TEXT_ICON, label: "帖子" },
-          { route: "admin/logs", icon: SEND_ICON, label: "推送记录" },
-          { route: "admin/audit", icon: HISTORY_ICON, label: "操作日志" },
-          { route: "admin/backup", icon: DATABASE_ICON, label: "备份" },
-        ]
-      },
-      {
-        label: "用户与注册", items: [
-          { route: "admin/users", icon: USERS_ICON, label: "用户" },
-          { route: "admin/codes", icon: KEY_ICON, label: "注册码" },
-        ]
-      },
-    ]
-  },
+  { group: "订阅", items: [
+    { route: "timeline", icon: LIST_ICON, label: "最新动态" },
+    { route: "news", icon: NEWS_ICON, label: "财经新闻" },
+    { route: "knowledge", icon: BOOK_ICON, label: "研报库" },
+    { route: "home", icon: GRID_ICON, label: "订阅广场" },
+    { route: "settings", icon: GEAR_ICON, label: "订阅与推送" },
+  ]},
+  { group: "", admin: true, subs: [
+    { label: "内容管理", items: [
+      { route: "admin/dashboard", icon: DASHBOARD_ICON, label: "全景概览" },
+      { route: "admin/kols", icon: V_ICON, label: "大V管理" },
+      { route: "admin/ai-analysis", icon: BRAIN_ICON, label: "AI分析" },
+      { route: "admin/vocab", icon: FOLDER_ICON, label: "标签分类" },
+      { route: "admin/requests", icon: USER_PLUS_ICON, label: "添加审批" },
+    ]},
+    { label: "数据与日志", items: [
+      { route: "admin/stats", icon: BOOK_ICON, label: "数据源" },
+      { route: "admin/knowledge", icon: BOOK_ICON, label: "研报库设置" },
+      { route: "admin/posts", icon: FILE_TEXT_ICON, label: "帖子" },
+      { route: "admin/logs", icon: SEND_ICON, label: "推送记录" },
+      { route: "admin/audit", icon: HISTORY_ICON, label: "操作日志" },
+      { route: "admin/backup", icon: DATABASE_ICON, label: "备份" },
+    ]},
+    { label: "用户与注册", items: [
+      { route: "admin/users", icon: USERS_ICON, label: "用户" },
+      { route: "admin/codes", icon: KEY_ICON, label: "注册码" },
+    ]},
+  ]},
 ];
 
 const SIDEBAR_SLIM_KEY = "sidebar-slim";
@@ -1165,10 +1198,9 @@ function renderSidebar(user) {
 
 const MOBILE_NAV = [
   { route: "timeline", icon: LIST_ICON, label: "动态" },
+  { route: "news", icon: NEWS_ICON, label: "财经新闻" },
   { route: "home", icon: GRID_ICON, label: "广场" },
-  { route: "combinations", icon: TRENDING_ICON, label: "组合" },
-  { route: "mysubs", icon: BOOKMARK_ICON, label: "订阅" },
-  { route: "settings", icon: GEAR_ICON, label: "设置" },
+  { route: "settings", icon: GEAR_ICON, label: "订阅与推送" },
 ];
 
 function renderBottomNav(user) {
@@ -2592,12 +2624,9 @@ async function switchPlatform(platform) {
   await loadHomeKols(routeRenderSeq);
 }
 
-function kolCard(kol, opts) {
-  opts = opts || {};
+function kolCard(kol) {
   const tags = [];
-  if (!opts.hidePlatform) {
-    tags.push(`<span class="tag">${PLATFORM_LABELS[kol.platform] || escapeHtml(kol.platform)}</span>`);
-  }
+  tags.push(`<span class="tag">${PLATFORM_LABELS[kol.platform] || escapeHtml(kol.platform)}</span>`);
   if (kol.category_name) tags.push(`<span class="tag">${escapeHtml(kol.category_name)}</span>`);
   if (kol.platform === "combination" && kol.quote && kol.quote.day_percent_gain != null) {
     const gain = kol.quote.day_percent_gain;
@@ -2667,7 +2696,7 @@ async function toggleFavorite(kolId, btn) {
     if (btn) btn.classList.toggle("fav-on", next);
     flash(next ? "已加星标" : "已取消星标");
     if (isRoute("home")) renderHomeList();
-    else if (isRoute("mysubs")) renderMySubsList();
+    else if (isRoute("settings") && state.settingsTab === "subs") renderMySubsList();
   } catch (err) {
     flash("操作失败: " + err.message, "error");
   }
@@ -2685,7 +2714,7 @@ async function toggleSecondary(kolId, btn) {
     if (btn) btn.classList.toggle("sec-on", next);
     flash(next ? "已设为次要（降频推送）" : "已取消次要");
     if (isRoute("home")) renderHomeList();
-    else if (isRoute("mysubs")) renderMySubsList();
+    else if (isRoute("settings") && state.settingsTab === "subs") renderMySubsList();
   } catch (err) {
     flash("操作失败: " + err.message, "error");
   }
@@ -2708,8 +2737,7 @@ async function refreshKolsView() {
   // 发起前捕获当前路由令牌；完成后再写 DOM，避免局部刷新覆盖已切走的新路由
   const seq = routeRenderSeq;
   if (isRoute("home")) await loadHomeKols(seq); // 重拉 catalog，已订阅置顶即时生效
-  else if (isRoute("combinations")) await renderCombinations(seq);
-  else if (isRoute("mysubs")) await renderMySubs(seq);
+  else if (isRoute("settings")) await loadSettingsSubscriptions(seq);
   else if (isRoute("kol/")) await renderKolPage(Number(routePath().split("/")[1] || 0), seq);
   else if (isRoute("search")) doSearch(seq);
 }
@@ -2755,38 +2783,44 @@ async function setSubscribeType(kolId, input) {
   }
 }
 
-// ---------- 我的订阅 / 动态 ----------
-async function renderMySubs(seq) {
-  setPageTitle("我的订阅");
-  ensurePlazaPlatformSelection();
+function settingsSubscriptionsPanelHtml() {
   const mobileFilter = isMobileTimelineFilter();
-  $("#main").innerHTML = `
+  return `
     <section class="section-panel${mobileFilter ? " home-panel" : ""}">
       <header class="section-head home-head">
-        <div>
-          <h2 class="section-title">已订阅</h2>
-        </div>
+        <div><h2 class="section-title">已订阅</h2></div>
       </header>
       <div class="toolbar" style="margin:12px 0 16px">
         <div class="${mobileFilter ? "icon-badge-bar mysubs-mobile-filters" : "platform-tabs"}" id="mysubs-tabs"></div>
         ${mobileFilter ? "" : `<button id="mysubs-fav-toggle" class="fav-toggle ${state.mysubsFavorite ? "fav-on" : ""}" onclick="toggleMySubsFav()">${STAR_SVG} 特别关注</button>`}
       </div>
-      <div id="mysubs-list" class="kol-grid"></div>
+      <div id="mysubs-list" class="kol-grid">${emptyState("加载中…")}</div>
     </section>`;
+}
+
+async function loadSettingsSubscriptions(seq) {
+  const target = $("#mysubs-list");
+  if (!target) return;
+  target.innerHTML = emptyState("加载中…");
   try {
     const subs = await api("/api/my/subscriptions");
-    if (!routeStillActive(seq)) return; // 已切走：不写旧页面数据
+    if (!routeStillActive(seq)) return;
     state.catalog = subs.map((k) => ({ ...k, subscribed: true }));
     renderMySubsTabs();
     renderMySubsList();
   } catch (err) {
     if (!routeStillActive(seq)) return;
-    $("#mysubs-list").innerHTML = emptyState(err.message);
+    const current = $("#mysubs-list");
+    if (!current) return;
+    current.innerHTML = emptyState(
+      "加载失败: " + err.message,
+      `<div><button type="button" class="btn-ghost" onclick="loadSettingsSubscriptions(routeRenderSeq)">重试</button></div>`
+    );
   }
 }
 
 function mysubsMobileFiltersHtml() {
-  const platforms = tlPlazaEntries().map(([p, label]) => {
+  const platforms = tlTimelineEntries().map(([p, label]) => {
     const short = platformShortLabel(p);
     return `
     <button class="tl-pill ${state.mysubsPlatform === p ? "selected" : ""}"
@@ -2809,7 +2843,7 @@ function mysubsMobileFiltersHtml() {
 function renderMySubsTabs() {
   $("#mysubs-tabs").innerHTML = isMobileTimelineFilter()
     ? mysubsMobileFiltersHtml()
-    : tlPlazaEntries().map(([p]) => platformTabHTML(p, state.mysubsPlatform, "switchMySubsPlatform")).join("");
+    : tlTimelineEntries().map(([p]) => platformTabHTML(p, state.mysubsPlatform, "switchMySubsPlatform")).join("");
 }
 
 function switchMySubsPlatform(platform) {
@@ -2840,37 +2874,6 @@ function toggleMySubsFav() {
   if (btn) btn.classList.toggle("fav-on", state.mysubsFavorite);
   renderMySubsTabs(); // 移动端星标角标在 #mysubs-tabs 内，需重绘
   renderMySubsList();
-}
-
-async function renderCombinations(seq) {
-  setPageTitle("组合订阅");
-  $("#main").innerHTML = `
-    <section class="section-panel">
-      <header class="section-head">
-        <div>
-          <h2 class="section-title">雪球组合</h2>
-          <p class="section-meta" id="combo-meta">加载中…</p>
-        </div>
-      </header>
-      <div id="combo-list" class="kol-grid"></div>
-    </section>`;
-  try {
-    const kols = await api("/api/catalog?platform=combination");
-    if (!routeStillActive(seq)) return; // 已切走：不写旧页面数据
-    state.catalog = kols;
-    $("#combo-meta").textContent = `共 ${kols.length} 个组合`;
-    $("#combo-list").innerHTML = kols.length
-      ? kols.map((k) => kolCard(k, { hidePlatform: true })).join("")
-      : emptyState(
-        "还没有添加雪球组合",
-        state.user?.is_admin
-          ? `<div><button class="btn-normal btn-add" onclick="go('admin/kols')">去管理后台添加</button></div>`
-          : `<div><button class="btn-normal btn-add" onclick="go('search')">申请添加 →</button></div>`
-      );
-  } catch (err) {
-    if (!routeStillActive(seq)) return;
-    $("#combo-list").innerHTML = emptyState(err.message);
-  }
 }
 
 // ---------- 动态 ----------
@@ -3079,9 +3082,23 @@ function plazaVisibleSet() {
   return new Set(list);
 }
 
-function tlPlazaEntries() {
-  const vis = plazaVisibleSet();
+function timelineVisibleSet() {
+  const list = state.user && Array.isArray(state.user.timeline_platforms)
+    ? state.user.timeline_platforms
+    : plazaVisibleSet();
+  return new Set(list);
+}
+
+function tlPlatformEntries(vis) {
   return TL_PLATFORMS.filter(([p]) => !p || vis.has(p));
+}
+
+function tlPlazaEntries() {
+  return tlPlatformEntries(plazaVisibleSet());
+}
+
+function tlTimelineEntries() {
+  return tlPlatformEntries(timelineVisibleSet());
 }
 
 let _platSwipe = null;
@@ -3099,14 +3116,13 @@ function mobilePlatformSwipeSurface(el) {
 }
 
 function mobilePlatformSwipeContext(surface) {
-  if (surface === "timeline") return { current: () => state.timelinePlatform, apply: (p) => tlPickPlatform(p) };
-  if (surface === "home") return { current: () => state.platform, apply: (p) => homePickMobilePlatform(p) };
-  if (surface === "mysubs") return { current: () => state.mysubsPlatform, apply: (p) => switchMySubsPlatform(p) };
+  if (surface === "timeline") return { current: () => state.timelinePlatform, apply: (p) => tlPickPlatform(p), entries: tlTimelineEntries };
+  if (surface === "home") return { current: () => state.platform, apply: (p) => homePickMobilePlatform(p), entries: tlPlazaEntries };
+  if (surface === "mysubs") return { current: () => state.mysubsPlatform, apply: (p) => switchMySubsPlatform(p), entries: tlTimelineEntries };
   return null;
 }
 
-function mobileSwipeAdjacent(current, dir) {
-  const entries = tlPlazaEntries();
+function mobileSwipeAdjacent(current, dir, entries) {
   const idx = entries.findIndex(([p]) => p === current);
   const next = idx + dir;
   if (idx < 0 || next < 0 || next >= entries.length) return null;
@@ -3141,7 +3157,7 @@ function onPlatSwipeEnd(e) {
   if (Math.abs(dx) < 56 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
   const ctx = mobilePlatformSwipeContext(start.surface);
   if (!ctx) return;
-  const next = mobileSwipeAdjacent(ctx.current(), dx < 0 ? 1 : -1);
+  const next = mobileSwipeAdjacent(ctx.current(), dx < 0 ? 1 : -1, ctx.entries());
   if (next === null) return;
   ctx.apply(next);
 }
@@ -3154,14 +3170,15 @@ function ensureMobilePlatformSwipe() {
 }
 
 function ensurePlazaPlatformSelection() {
-  const vis = plazaVisibleSet();
-  if (state.timelinePlatform && !vis.has(state.timelinePlatform)) {
+  const plaza = plazaVisibleSet();
+  const timeline = timelineVisibleSet();
+  if (state.timelinePlatform && !timeline.has(state.timelinePlatform)) {
     state.timelinePlatform = "";
   }
-  if (state.platform && !vis.has(state.platform)) {
+  if (state.platform && !plaza.has(state.platform)) {
     state.platform = "";
   }
-  if (state.mysubsPlatform && !vis.has(state.mysubsPlatform)) {
+  if (state.mysubsPlatform && !timeline.has(state.mysubsPlatform)) {
     state.mysubsPlatform = "";
   }
 }
@@ -3651,7 +3668,7 @@ function tlPillsHtml() {
       ${WSCN_LIVE_ICON}<span>快讯</span>
     </button>`;
   const pills = [];
-  for (const [p, label] of tlPlazaEntries()) {
+  for (const [p, label] of tlTimelineEntries()) {
     const selected = !liveSelected && state.timelinePlatform === p;
     const short = platformShortLabel(p);
     pills.push(`
@@ -5041,7 +5058,7 @@ async function toggleKolPageSubscribe(kolId) {
 // ---------- 推送设置 ----------
 let settingsPollTimer = null;
 let _pushStatusHtml = "";
-const SETTINGS_TABS = ["push", "bind", "llm", "account"];
+const SETTINGS_TABS = ["subs", "push", "bind", "llm", "account"];
 let _kolImageSubscriptions = [];
 const _kolImagePendingIds = new Set();
 let _kolImageLoadGeneration = 0;
@@ -5236,7 +5253,8 @@ async function refreshSettingsStatus() {
 async function renderSettings(seq) {
   const token = state.token;
   const sessionGeneration = imaMountState.sessionGeneration;
-  setPageTitle("推送设置");
+  setPageTitle("订阅与推送");
+  ensurePlazaPlatformSelection();
   try {
     const user = await api("/api/me");
     if (!routeStillActive(seq) || token !== state.token
@@ -5252,10 +5270,14 @@ async function renderSettings(seq) {
     const fsTarget = fsBot ? `<b>${escapeHtml(fsBot)}</b>` : "你的机器人应用名";
     $("#main").innerHTML = `
       <div class="settings-tabs" role="tablist" aria-label="设置分页">
-        <button type="button" class="settings-tab active" role="tab" id="tab-push" aria-selected="true" aria-controls="st-push" data-tab="push" onclick="switchSettingsTab('push')">推送设置</button>
+        <button type="button" class="settings-tab active" role="tab" id="tab-subs" aria-selected="true" aria-controls="st-subs" data-tab="subs" onclick="switchSettingsTab('subs')">订阅管理</button>
+        <button type="button" class="settings-tab" role="tab" id="tab-push" aria-selected="false" aria-controls="st-push" data-tab="push" onclick="switchSettingsTab('push')">推送设置</button>
         <button type="button" class="settings-tab" role="tab" id="tab-bind" aria-selected="false" aria-controls="st-bind" data-tab="bind" onclick="switchSettingsTab('bind')">渠道绑定</button>
         <button type="button" class="settings-tab" role="tab" id="tab-llm" aria-selected="false" aria-controls="st-llm" data-tab="llm" onclick="switchSettingsTab('llm')">AI 摘要</button>
         <button type="button" class="settings-tab" role="tab" id="tab-account" aria-selected="false" aria-controls="st-account" data-tab="account" onclick="switchSettingsTab('account')">账号设置</button>
+      </div>
+      <div id="st-subs" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-subs">
+        ${settingsSubscriptionsPanelHtml()}
       </div>
       <div id="st-push" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-push">
       <section class="section-panel">
@@ -5547,8 +5569,9 @@ async function renderSettings(seq) {
       </div>`;
     _pushStatusHtml = channelStatusHtml(state.user);
     if (pendingBindActive() && !settingsTargetBound(state.user)) startSettingsPoll();
-    switchSettingsTab(state.settingsTab || "push"); // 恢复上次所在分栏
+    switchSettingsTab(state.settingsTab || "subs"); // 恢复上次所在分栏
     toggleDnd(); // 根据开关初始状态同步时段输入框的禁用/置灰
+    loadSettingsSubscriptions(seq);
     loadKolImageSettings(seq);
   } catch (err) {
     if (!routeStillActive(seq) || token !== state.token
@@ -5712,8 +5735,8 @@ async function toggleKolImages(kolId, input) {
 }
 
 function switchSettingsTab(name) {
-  // 设置页分段导航：推送 / 渠道绑定 / AI 摘要 / 账号设置
-  if (!SETTINGS_TABS.includes(name)) name = "push";
+  // 设置页分段导航：订阅管理 / 推送 / 渠道绑定 / AI 摘要 / 账号设置
+  if (!SETTINGS_TABS.includes(name)) name = "subs";
   state.settingsTab = name;
   document.querySelectorAll(".settings-tab[data-tab]").forEach((b) => {
     if (!SETTINGS_TABS.includes(b.dataset.tab)) return;
@@ -5730,6 +5753,31 @@ function switchSettingsTab(name) {
   });
 }
 
+const adminNewsState = {
+  settings: null,
+  sources: [],
+  selectedId: 0,
+  q: "",
+  status: "all",
+  showArchived: false,
+  busy: false,
+};
+let _adminNewsLoadSeq = 0;
+
+function statsTabsHtml(active = "config") {
+  const labels = {
+    config: "抓取设置",
+    cookies: "Cookie 管理",
+    mx: "MX平台",
+    proxies: "代理",
+    plaza: "广场显示",
+    news: "财经资讯",
+  };
+  return `<div class="settings-tabs" role="tablist" aria-label="数据源管理">
+    ${STATS_TABS.map((tab) => `<button type="button" class="settings-tab ${tab === active ? "active" : ""}" role="tab" id="tab-${tab}" aria-selected="${tab === active}" aria-controls="st-${tab}" data-tab="${tab}" onclick="switchStatsTab('${tab}')">${labels[tab]}</button>`).join("")}
+  </div>`;
+}
+
 function statsTabFromHash() {
   const tab = routeQuery().get("tab") || "config";
   if (tab === "overview" || tab === "health") return "legacy-dashboard";
@@ -5737,12 +5785,19 @@ function statsTabFromHash() {
 }
 
 function switchStatsTab(name) {
-  // 数据源页分段导航：抓取设置 / Cookie 管理 / 代理 / 广场显示
+  // 数据源页分段导航：抓取设置 / Cookie 管理 / 代理 / 广场显示 / 财经资讯
   if (name === "legacy-dashboard" || name === "overview" || name === "health") {
     replaceRoute("admin/dashboard");
     return;
   }
   if (!STATS_TABS.includes(name)) name = "config";
+  if (name === "news") {
+    stopStatsTimer();
+    const next = "/admin/stats?tab=news";
+    if (location.pathname + location.search !== next) history.replaceState(null, "", next);
+    loadAdminNews(routeRenderSeq);
+    return;
+  }
   document.querySelectorAll(".settings-tab[data-tab]").forEach((b) => {
     const on = b.dataset.tab === name;
     b.classList.toggle("active", on);
@@ -7648,9 +7703,345 @@ function imaStoragePanelHtml(storage) {
   </section>`;
 }
 
+function adminNewsSourceStatus(source) {
+  const feeds = (source.feeds || []).filter((feed) => !feed.archived_at && feed.enabled);
+  if (!source.enabled || !feeds.length) return "paused";
+  if (feeds.some((feed) => feed.consecutive_failures > 0 && !feed.last_success_at)) return "unavailable";
+  if (feeds.some((feed) => feed.consecutive_failures > 0)) return "delayed";
+  return "ok";
+}
+
+function adminNewsStatusLabel(status) {
+  return ({ all: "全部", ok: "正常", paused: "已暂停", delayed: "有延迟", unavailable: "暂不可用" })[status] || status;
+}
+
+function adminNewsFilteredSources() {
+  const q = adminNewsState.q.trim().toLowerCase();
+  return adminNewsState.sources.filter((source) => {
+    if (!adminNewsState.showArchived && source.archived_at) return false;
+    if (q && !(source.name || "").toLowerCase().includes(q)) return false;
+    return adminNewsState.status === "all" || adminNewsSourceStatus(source) === adminNewsState.status;
+  });
+}
+
+function adminNewsSourceRowHtml(source) {
+  const status = adminNewsSourceStatus(source);
+  return `<button type="button" class="news-admin-source-row ${source.id === adminNewsState.selectedId ? "is-selected" : ""} ${source.archived_at ? "is-archived" : ""}" onclick="selectAdminNewsSource(${source.id})">
+    <span class="news-admin-source-name">${escapeHtml(source.name)}</span>
+    <span class="news-admin-source-meta"><span class="news-admin-status news-admin-status-${status}">${adminNewsStatusLabel(status)}</span><span>${source.article_count || 0} 篇</span></span>
+  </button>`;
+}
+
+function adminNewsFeedRowHtml(feed) {
+  const status = feed.archived_at ? "已归档" : (feed.enabled ? (feed.consecutive_failures ? "有延迟" : "启用") : "已停用");
+  const error = feed.last_error_detail ? `<p class="news-admin-feed-error">${escapeHtml(feed.last_error_detail)}</p>` : "";
+  return `<div class="news-admin-feed-row ${feed.archived_at ? "is-archived" : ""}">
+    <div class="news-admin-feed-main">
+      <div class="news-admin-feed-title"><strong>${escapeHtml(feed.name)}</strong><span class="news-admin-status">${status}</span></div>
+      <div class="news-admin-feed-url">${escapeHtml(feed.url)}</div>
+      <div class="news-admin-feed-meta">最近成功：${escapeHtml(feed.last_success_at || "无记录")} · 连续失败：${Number(feed.consecutive_failures || 0)}</div>
+      ${error}
+    </div>
+    <div class="news-admin-feed-actions">
+      ${feed.archived_at ? `<button type="button" class="btn-ghost" onclick="restoreAdminNewsFeed(${feed.id})">恢复</button>` : `
+        <button type="button" class="btn-ghost" onclick="openNewsFeedModal(${feed.source_id}, ${feed.id})">编辑</button>
+        <button type="button" class="btn-ghost" onclick="refreshAdminNewsFeed(${feed.id})" title="刷新 Feed" aria-label="刷新 Feed">${REFRESH_ICON}</button>
+        <button type="button" class="btn-ghost" onclick="toggleAdminNewsFeed(${feed.id}, ${feed.enabled ? "false" : "true"})">${feed.enabled ? "停用" : "启用"}</button>
+        <button type="button" class="btn-ghost danger" onclick="archiveAdminNewsFeed(${feed.id})">归档</button>`}
+    </div>
+  </div>`;
+}
+
+function renderAdminNews() {
+  const target = $("#admin-body");
+  if (!target) return;
+  const visible = adminNewsFilteredSources();
+  const selected = adminNewsState.sources.find((source) => source.id === adminNewsState.selectedId)
+    || visible.find((source) => !source.archived_at)
+    || visible[0];
+  if (selected && selected.id !== adminNewsState.selectedId) adminNewsState.selectedId = selected.id;
+  const detail = selected ? `
+    <section class="news-admin-detail-panel">
+      <header class="news-admin-detail-head">
+        <div><p class="section-kicker">媒体</p><h2 class="section-title">${escapeHtml(selected.name)}</h2>
+          <p class="section-meta">${selected.archived_at ? "已归档，用户暂不可读" : (selected.enabled ? "正在采集" : "已停用，仅保留历史文章")}</p></div>
+        <div class="toolbar news-admin-actions">
+          ${selected.archived_at ? `<button type="button" class="btn-normal" onclick="restoreAdminNewsSource(${selected.id})">恢复媒体</button>` : `
+            <button type="button" class="btn-ghost" onclick="openNewsSourceModal(${selected.id})">编辑媒体</button>
+            <button type="button" class="btn-ghost" onclick="toggleAdminNewsSource(${selected.id}, ${selected.enabled ? "false" : "true"})">${selected.enabled ? "停用采集" : "启用采集"}</button>
+            <button type="button" class="btn-ghost danger" onclick="archiveAdminNewsSource(${selected.id})">归档</button>`}
+        </div>
+      </header>
+      <div class="news-admin-metrics">
+        <span>文章 <strong>${selected.article_count || 0}</strong></span>
+        <span>Feed <strong>${(selected.feeds || []).filter((feed) => !feed.archived_at).length}</strong></span>
+        <span>状态 <strong>${adminNewsStatusLabel(adminNewsSourceStatus(selected))}</strong></span>
+      </div>
+      <div class="news-admin-feed-head"><div><h3>Feed 地址</h3><p class="section-meta">一个媒体可以配置多个公网 RSS/Atom Feed。</p></div>
+        ${selected.archived_at ? "" : `<button type="button" class="btn-normal" onclick="openNewsFeedModal(${selected.id})">${PLUS_ICON} 添加 Feed</button>`}
+      </div>
+      <div class="news-admin-feeds">${(selected.feeds || []).length ? selected.feeds.map(adminNewsFeedRowHtml).join("") : emptyState("还没有配置 Feed")}</div>
+    </section>` : `<section class="news-admin-detail-panel">${emptyState("选择一个媒体开始管理")}</section>`;
+  const settings = adminNewsState.settings || { enabled: true, refresh_interval_minutes: 10 };
+  const selectedStatus = adminNewsState.status;
+  target.innerHTML = `${statsTabsHtml("news")}
+    <div id="st-news" class="news-admin-page">
+      <section class="section-panel news-admin-settings">
+        <div><h2 class="section-title">财经资讯</h2><p class="section-meta">共享采集所有启用 Feed；用户按媒体主动选择来源。</p></div>
+        <div class="news-admin-settings-controls">
+          <label class="switch"><input id="news-global-enabled" type="checkbox" ${settings.enabled ? "checked" : ""} onchange="saveAdminNewsSettings()"><span class="track"></span><span>启用财经新闻采集</span></label>
+          <label class="news-admin-interval">刷新周期 <input id="news-global-interval" class="form-control" type="number" min="5" max="1440" value="${Number(settings.refresh_interval_minutes) || 10}"> 分钟</label>
+          <button type="button" class="btn-ghost" onclick="saveAdminNewsSettings()">保存设置</button>
+          <button type="button" class="btn-normal" onclick="refreshAllAdminNews()">${REFRESH_ICON} 刷新全部</button>
+        </div>
+      </section>
+      <div class="news-admin-layout">
+        <aside class="news-admin-source-rail">
+          <div class="news-admin-source-toolbar"><input class="form-control" type="search" placeholder="搜索媒体" value="${escapeHtml(adminNewsState.q)}" oninput="adminNewsState.q=this.value;renderAdminNews()">
+            <select class="form-control" aria-label="媒体状态" onchange="adminNewsState.status=this.value;renderAdminNews()">
+              ${["all", "ok", "paused", "delayed", "unavailable"].map((status) => `<option value="${status}" ${selectedStatus === status ? "selected" : ""}>${adminNewsStatusLabel(status)}</option>`).join("")}
+            </select>
+            <label class="news-admin-archived-toggle"><input type="checkbox" ${adminNewsState.showArchived ? "checked" : ""} onchange="adminNewsState.showArchived=this.checked;renderAdminNews()"> 显示已归档</label>
+          </div>
+          <button type="button" class="btn-normal news-admin-add-source" onclick="openNewsSourceModal()">${PLUS_ICON} 新增媒体</button>
+          <div class="news-admin-source-list">${visible.length ? visible.map(adminNewsSourceRowHtml).join("") : emptyState("没有匹配的媒体")}</div>
+        </aside>
+        ${detail}
+      </div>
+    </div>`;
+}
+
+async function loadAdminNews(seq = routeRenderSeq) {
+  if (!routeStillActive(seq)) return false;
+  const loadSeq = ++_adminNewsLoadSeq;
+  stopStatsTimer();
+  try {
+    const [settings, sources] = await Promise.all([
+      api("/api/admin/news/settings"),
+      api(`/api/admin/news/sources?include_archived=${adminNewsState.showArchived ? "1" : "0"}`),
+    ]);
+    if (!routeStillActive(seq) || loadSeq !== _adminNewsLoadSeq) return false;
+    adminNewsState.settings = settings;
+    adminNewsState.sources = sources.items || [];
+    if (!adminNewsState.sources.some((source) => source.id === adminNewsState.selectedId)) adminNewsState.selectedId = 0;
+    renderAdminNews();
+    return true;
+  } catch (err) {
+    if (!routeStillActive(seq) || loadSeq !== _adminNewsLoadSeq) return false;
+    $("#admin-body").innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-normal" onclick="loadAdminNews(routeRenderSeq)">重试</button></div>`);
+    return false;
+  }
+}
+
+function selectAdminNewsSource(sourceId) {
+  adminNewsState.selectedId = Number(sourceId);
+  renderAdminNews();
+}
+
+async function saveAdminNewsSettings() {
+  const seq = routeRenderSeq;
+  const enabled = $("#news-global-enabled")?.checked;
+  const interval = Number($("#news-global-interval")?.value);
+  if (!Number.isInteger(interval) || interval < 5 || interval > 1440) {
+    flash("刷新周期必须为 5-1440 分钟", "error");
+    return;
+  }
+  try {
+    await api("/api/admin/news/settings", { method: "PATCH", body: JSON.stringify({ enabled, refresh_interval_minutes: interval }) });
+    if (!routeStillActive(seq)) return;
+    flash("财经新闻设置已保存");
+    await loadAdminNews(seq);
+  } catch (err) {
+    flash(err.message, "error");
+  }
+}
+
+async function refreshAllAdminNews() {
+  const seq = routeRenderSeq;
+  try {
+    const result = await api("/api/admin/news/refresh", { method: "POST" });
+    if (!routeStillActive(seq)) return;
+    flash(`已提交 ${result.accepted_feed_ids.length} 个 Feed，忙碌 ${result.busy_feed_ids.length} 个`);
+    await loadAdminNews(seq);
+  } catch (err) {
+    flash(err.message, "error");
+  }
+}
+
+async function refreshAdminNewsFeed(feedId) {
+  const seq = routeRenderSeq;
+  try {
+    await api(`/api/admin/news/feeds/${feedId}/refresh`, { method: "POST" });
+    if (!routeStillActive(seq)) return;
+    flash("Feed 刷新已提交");
+    await loadAdminNews(seq);
+  } catch (err) {
+    flash(err.message, "error");
+  }
+}
+
+async function refreshAdminNewsSource(sourceId) {
+  const seq = routeRenderSeq;
+  try {
+    const result = await api(`/api/admin/news/sources/${sourceId}/refresh`, { method: "POST" });
+    if (!routeStillActive(seq)) return;
+    flash(`已提交 ${result.accepted_feed_ids.length} 个 Feed`);
+    await loadAdminNews(seq);
+  } catch (err) {
+    flash(err.message, "error");
+  }
+}
+
+async function toggleAdminNewsSource(sourceId, enabled) {
+  const seq = routeRenderSeq;
+  try {
+    await api(`/api/admin/news/sources/${sourceId}`, { method: "PATCH", body: JSON.stringify({ enabled }) });
+    if (!routeStillActive(seq)) return;
+    flash(enabled ? "媒体已启用" : "媒体已停用");
+    await loadAdminNews(seq);
+  } catch (err) { flash(err.message, "error"); }
+}
+
+async function toggleAdminNewsFeed(feedId, enabled) {
+  const seq = routeRenderSeq;
+  try {
+    await api(`/api/admin/news/feeds/${feedId}`, { method: "PATCH", body: JSON.stringify({ enabled }) });
+    if (!routeStillActive(seq)) return;
+    flash(enabled ? "Feed 已启用" : "Feed 已停用");
+    await loadAdminNews(seq);
+  } catch (err) { flash(err.message, "error"); }
+}
+
+async function archiveAdminNewsSource(sourceId) {
+  const seq = routeRenderSeq;
+  if (!confirm("归档媒体后将停止采集并对用户隐藏，确认继续？")) return;
+  try {
+    await api(`/api/admin/news/sources/${sourceId}/archive`, { method: "POST" });
+    if (!routeStillActive(seq)) return;
+    flash("媒体已归档");
+    await loadAdminNews(seq);
+  } catch (err) { flash(err.message, "error"); }
+}
+
+async function restoreAdminNewsSource(sourceId) {
+  const seq = routeRenderSeq;
+  try {
+    await api(`/api/admin/news/sources/${sourceId}/restore`, { method: "POST" });
+    if (!routeStillActive(seq)) return;
+    flash("媒体已恢复");
+    await loadAdminNews(seq);
+  } catch (err) { flash(err.message, "error"); }
+}
+
+async function archiveAdminNewsFeed(feedId) {
+  const seq = routeRenderSeq;
+  if (!confirm("归档 Feed 后将停止采集，确认继续？")) return;
+  try {
+    await api(`/api/admin/news/feeds/${feedId}/archive`, { method: "POST" });
+    if (!routeStillActive(seq)) return;
+    flash("Feed 已归档");
+    await loadAdminNews(seq);
+  } catch (err) { flash(err.message, "error"); }
+}
+
+async function restoreAdminNewsFeed(feedId) {
+  const seq = routeRenderSeq;
+  try {
+    await api(`/api/admin/news/feeds/${feedId}/restore`, { method: "POST" });
+    if (!routeStillActive(seq)) return;
+    flash("Feed 已恢复");
+    await loadAdminNews(seq);
+  } catch (err) { flash(err.message, "error"); }
+}
+
+function closeNewsModal(mask) {
+  if (mask) mask.remove();
+  else document.querySelector(".news-admin-modal")?.remove();
+}
+
+function openNewsSourceModal(sourceId = 0) {
+  const source = adminNewsState.sources.find((item) => item.id === Number(sourceId));
+  const mask = document.createElement("div");
+  mask.className = "modal-mask news-admin-modal";
+  mask.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="news-source-modal-title">
+    <h3 id="news-source-modal-title">${source ? "编辑媒体" : "新增媒体"}</h3>
+    <label class="form-label">媒体名称<input id="news-source-name" class="form-control" maxlength="60" value="${escapeHtml(source?.name || "")}"></label>
+    <p class="muted">新增媒体不会自动加入任何用户的新闻流；启用全文采集前请确认内容许可。</p>
+    <div class="toolbar"><button type="button" class="btn-normal" id="news-source-save">保存</button><button type="button" class="btn-ghost" data-close>取消</button></div>
+  </div>`;
+  document.body.appendChild(mask);
+  const close = () => closeNewsModal(mask);
+  mask.addEventListener("click", (event) => { if (event.target === mask) close(); });
+  mask.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } });
+  mask.querySelector("[data-close]").addEventListener("click", close);
+  mask.querySelector("#news-source-save").addEventListener("click", async () => {
+    const name = mask.querySelector("#news-source-name").value.trim();
+    if (!name) { flash("媒体名称不能为空", "error"); return; }
+    const seq = routeRenderSeq;
+    const button = mask.querySelector("#news-source-save");
+    button.disabled = true;
+    try {
+      await api(source ? `/api/admin/news/sources/${source.id}` : "/api/admin/news/sources", {
+        method: source ? "PATCH" : "POST", body: JSON.stringify({ name }),
+      });
+      if (!routeStillActive(seq)) return;
+      close();
+      flash("媒体已保存");
+      await loadAdminNews(seq);
+    } catch (err) { flash(err.message, "error"); button.disabled = false; }
+  });
+  mask.querySelector("#news-source-name").focus();
+}
+
+function openNewsFeedModal(sourceId, feedId = 0) {
+  const source = adminNewsState.sources.find((item) => item.id === Number(sourceId));
+  if (!source) return;
+  const feed = (source.feeds || []).find((item) => item.id === Number(feedId));
+  const mask = document.createElement("div");
+  mask.className = "modal-mask news-admin-modal";
+  mask.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="news-feed-modal-title">
+    <h3 id="news-feed-modal-title">${feed ? "编辑 Feed" : "新增 Feed"}</h3>
+    <label class="form-label">Feed 名称<input id="news-feed-name" class="form-control" maxlength="80" value="${escapeHtml(feed?.name || "")}"></label>
+    <label class="form-label">公网 RSS/Atom URL<input id="news-feed-url" class="form-control" maxlength="2048" type="url" value="${escapeHtml(feed?.url || "")}" placeholder="https://example.com/feed.xml"></label>
+    <p class="muted">只接受公网 HTTP(S) Feed；保存前会使用正式 SSRF 防护验证。管理员须确认全文内容许可。</p>
+    <div id="news-feed-preview" class="news-admin-preview" aria-live="polite"></div>
+    <div class="toolbar"><button type="button" class="btn-normal" id="news-feed-save">验证并保存</button><button type="button" class="btn-ghost" data-close>取消</button></div>
+  </div>`;
+  document.body.appendChild(mask);
+  const close = () => closeNewsModal(mask);
+  mask.addEventListener("click", (event) => { if (event.target === mask) close(); });
+  mask.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } });
+  mask.querySelector("[data-close]").addEventListener("click", close);
+  mask.querySelector("#news-feed-save").addEventListener("click", () => validateNewsFeedDraft(source.id, feed?.id || 0, mask));
+  mask.querySelector("#news-feed-name").focus();
+}
+
+async function validateNewsFeedDraft(sourceId, feedId = 0, mask = document.querySelector(".news-admin-modal")) {
+  if (!mask) return;
+  const name = mask.querySelector("#news-feed-name").value.trim();
+  const url = mask.querySelector("#news-feed-url").value.trim();
+  const button = mask.querySelector("#news-feed-save");
+  const preview = mask.querySelector("#news-feed-preview");
+  if (!name || !url) { flash("请填写 Feed 名称和 URL", "error"); return; }
+  button.disabled = true;
+  try {
+    const validation = await api("/api/admin/news/feeds/validate", { method: "POST", body: JSON.stringify({ url }) });
+    preview.innerHTML = `<p><strong>${escapeHtml(validation.format)}</strong> · ${escapeHtml(validation.title || "无标题")}</p>${(validation.entries || []).map((entry) => `<p>${escapeHtml(entry.title)} · ${escapeHtml(entry.published_at || "")}<br>${escapeHtml(entry.text || "暂无纯文本预览")}</p>`).join("") || "<p>有效 Feed，暂无条目</p>"}`;
+    const feed = adminNewsState.sources.flatMap((source) => source.feeds || []).find((item) => item.id === Number(feedId));
+    await api(feedId ? `/api/admin/news/feeds/${feedId}` : `/api/admin/news/sources/${sourceId}/feeds`, {
+      method: feedId ? "PATCH" : "POST", body: JSON.stringify(feedId ? { name, url } : { name, url }),
+    });
+    if (!routeStillActive(routeRenderSeq)) return;
+    closeNewsModal(mask);
+    flash("Feed 已验证并保存");
+    await loadAdminNews(routeRenderSeq);
+  } catch (err) { flash(err.message, "error"); button.disabled = false; }
+}
+
 async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = null) {
   if (!routeStillActive(seq)) return false;
   const tab = statsTabFromHash();
+  if (tab === "news") return loadAdminNews(seq);
   if (tab === "legacy-dashboard") {
     replaceRoute("admin/dashboard");
     return false;
@@ -7728,13 +8119,7 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
   const zcSize = fmtCacheBytes(zc.bytes);
   $("#admin-body").innerHTML = `
     <div id="stats-poll-error"></div>
-    <div class="settings-tabs" role="tablist" aria-label="数据源管理">
-      <button type="button" class="settings-tab active" role="tab" id="tab-config" aria-selected="true" aria-controls="st-config" data-tab="config" onclick="switchStatsTab('config')">抓取设置</button>
-      <button type="button" class="settings-tab" role="tab" id="tab-cookies" aria-selected="false" aria-controls="st-cookies" data-tab="cookies" onclick="switchStatsTab('cookies')">Cookie 管理</button>
-      <button type="button" class="settings-tab" role="tab" id="tab-mx" aria-selected="false" aria-controls="st-mx" data-tab="mx" onclick="switchStatsTab('mx')">MX平台</button>
-      <button type="button" class="settings-tab" role="tab" id="tab-proxies" aria-selected="false" aria-controls="st-proxies" data-tab="proxies" onclick="switchStatsTab('proxies')">代理</button>
-      <button type="button" class="settings-tab" role="tab" id="tab-plaza" aria-selected="false" aria-controls="st-plaza" data-tab="plaza" onclick="switchStatsTab('plaza')">广场显示</button>
-    </div>
+    ${statsTabsHtml("config")}
     <div id="st-plaza" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-plaza" style="display:none">
       <section class="section-panel">
         <header class="section-head">
@@ -8308,6 +8693,10 @@ function applyPlazaSources(sources) {
   if (box) box.innerHTML = plazaSourceRowsHtml(sources);
   if (state.user) {
     state.user.plaza_platforms = (sources || []).filter((row) => row.visible).map((row) => row.platform);
+    const vis = new Set(state.user.plaza_platforms);
+    if (Array.isArray(state.user.timeline_platforms)) {
+      state.user.timeline_platforms = state.user.timeline_platforms.filter((p) => vis.has(p));
+    }
   }
 }
 
@@ -11640,10 +12029,10 @@ async function loadAdminTagsTab() {
     <section class="section-panel">
       <header class="section-head">
         <div><h2 class="section-title">标签维护</h2>
-        <p class="section-meta">合并种子黑话、解析 $标记$ 新股、去掉指数/ETF 误入的股票名，并清理过期标签与碎片别名。每日自动一次，也可立即执行。标记解析跟管理员「推送设置 → AI 摘要」同一套 LLM。</p></div>
+        <p class="section-meta">合并种子黑话、解析 $标记$ 新股、去掉指数/ETF 误入的股票名，并清理过期标签与碎片别名。每日自动一次，也可立即执行。标记解析跟管理员「订阅与推送 → AI 摘要」同一套 LLM。</p></div>
       </header>
       <p class="section-meta" style="margin-top:8px" id="tag-maintain-meta">${escapeHtml(adminMaintainSummary(data))}</p>
-      ${data.maintain && data.maintain.llm_ready ? "" : `<p class="section-meta">未检测到站点 LLM。请到「推送设置 → AI 摘要」配置 OpenAI 兼容接口，或设环境变量 LLM_API_KEY。点运行仍会合并种子、清碎片和误标。</p>`}
+      ${data.maintain && data.maintain.llm_ready ? "" : `<p class="section-meta">未检测到站点 LLM。请到「订阅与推送 → AI 摘要」配置 OpenAI 兼容接口，或设环境变量 LLM_API_KEY。点运行仍会合并种子、清碎片和误标。</p>`}
       <div class="toolbar" style="margin-top:12px">
         <button class="btn-normal" onclick="adminMaintainTags('pending')">维护并回填待打标</button>
         <button class="btn-ghost" onclick="adminMaintainTags('none')">仅维护词表</button>
@@ -13112,7 +13501,7 @@ if (window.matchMedia) {
 // ---------- 路由 ----------
 let routeRenderSeq = 0; // 每次路由切换递增；异步渲染完成后凭此丢弃过期响应
 const SPA_PREFIXES = new Set([
-  "timeline", "home", "combinations", "mysubs", "settings",
+  "timeline", "home", "combinations", "mysubs", "settings", "news",
   "search", "kol", "more", "admin", "zsxq", "ima-documents", "knowledge",
 ]);
 
@@ -13144,6 +13533,198 @@ function routeQuery() {
 function isRoute(prefix) {
   const path = routePath();
   return prefix.endsWith("/") ? path.startsWith(prefix) : path === prefix || path.startsWith(prefix + "/");
+}
+
+function renderNewsCenter(seq, articleId = "") {
+  clearNewsImageUrls();
+  stopNewsAutoLoad();
+  if (!routeStillActive(seq)) return;
+  if (articleId) return renderFinancialNewsArticle(Number(articleId), seq);
+  return renderFinancialNewsList(seq);
+}
+
+function newsListItemHtml(item) {
+  const thumbnail = item.has_image
+    ? `<img class="news-list-thumb" data-news-thumbnail="${item.id}" alt="" loading="lazy">`
+    : "";
+  return `<article class="news-list-item" data-news-id="${item.id}" tabindex="0" role="link" onclick="openNewsArticle(${item.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openNewsArticle(${item.id})}">
+    ${thumbnail}<div class="news-list-copy"><div class="news-list-meta"><span>${escapeHtml(item.source_name || "")}</span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time>${item.is_new ? '<span class="news-new-label">新</span>' : ""}</div>
+    <h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary || "暂无摘要")}</p></div>
+  </article>`;
+}
+
+function newsSourceFilterOptions() {
+  const selected = new Set(state.newsSources.filter((source) => source.selected).map((source) => String(source.id)));
+  return `<option value="">全部来源</option>${state.newsSources.filter((source) => selected.has(String(source.id))).map((source) => `<option value="${source.id}" ${String(state.newsFilterSourceId) === String(source.id) ? "selected" : ""}>${escapeHtml(source.name)}</option>`).join("")}`;
+}
+
+function renderNewsListShell(collectionEnabled = true) {
+  const main = $("#main");
+  if (!main) return;
+  main.innerHTML = `<section class="news-page" id="news-page">
+    <header class="news-page-head"><div><h2 class="section-title">财经新闻</h2><p class="section-meta">按媒体聚合的长文阅读，原文链接保留。</p></div><button type="button" class="btn-normal" onclick="openNewsSourcePicker()">我的来源</button></header>
+    ${collectionEnabled ? "" : '<div class="notice notice-warn">管理员已暂停财经新闻采集，历史文章仍可阅读。</div>'}
+    <div class="news-list-toolbar"><select id="news-source-filter" class="form-control" aria-label="新闻来源" onchange="state.newsFilterSourceId=this.value;loadFinancialNews(true,routeRenderSeq)">${newsSourceFilterOptions()}</select><div class="search-bar"><input id="news-query" type="search" placeholder="搜索标题或摘要" value="${escapeHtml(state.newsQuery)}" oninput="state.newsQuery=this.value;clearTimeout(window._newsSearchTimer);window._newsSearchTimer=setTimeout(()=>loadFinancialNews(true,routeRenderSeq),250)"></div></div>
+    <div id="news-list" class="news-list"><div class="admin-skeleton" aria-hidden="true"></div></div>
+    <div id="news-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>
+  </section>`;
+}
+
+async function renderFinancialNewsList(seq) {
+  setPageTitle("财经新闻");
+  clearNewsImageUrls();
+  state.newsItems = [];
+  state.newsOffset = 0;
+  state.newsHasMore = false;
+  renderNewsListShell(true);
+  try {
+    const sources = await api("/api/news/sources");
+    if (!routeStillActive(seq)) return;
+    state.newsSources = sources.items || [];
+    if (state.newsFilterSourceId && !state.newsSources.some((source) => source.selected && String(source.id) === String(state.newsFilterSourceId))) state.newsFilterSourceId = "";
+    renderNewsListShell(sources.collection_enabled !== false);
+    await loadFinancialNews(true, seq);
+  } catch (err) {
+    if (!routeStillActive(seq)) return;
+    const list = $("#news-list");
+    if (list) list.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="renderFinancialNewsList(routeRenderSeq)">重试</button></div>`);
+  }
+}
+
+async function loadFinancialNews(reset = false, seq = routeRenderSeq) {
+  const list = $("#news-list");
+  if (!list || !routeStillActive(seq)) return;
+  const requestSeq = ++state.newsRequestSeq;
+  if (reset) {
+    stopNewsAutoLoad();
+    state.newsItems = [];
+    state.newsOffset = 0;
+    list.innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
+  }
+  const params = new URLSearchParams({ limit: "30", offset: String(state.newsOffset) });
+  if (state.newsFilterSourceId) params.set("source_id", state.newsFilterSourceId);
+  if (state.newsQuery.trim()) params.set("q", state.newsQuery.trim());
+  try {
+    const data = await api(`/api/news?${params}`);
+    if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
+    const items = data.items || [];
+    state.newsItems = reset ? items : state.newsItems.concat(items);
+    state.newsOffset = data.next_offset || state.newsItems.length;
+    state.newsHasMore = !!data.has_more;
+    if (reset) {
+      list.innerHTML = state.newsItems.length ? items.map(newsListItemHtml).join("") : emptyState(state.newsSources.some((source) => source.selected) ? "没有符合条件的财经新闻" : "还没有选择新闻来源", `<div><button type="button" class="btn-normal" onclick="openNewsSourcePicker()">选择来源</button></div>`);
+    } else if (items.length) {
+      list.insertAdjacentHTML("beforeend", items.map(newsListItemHtml).join(""));
+    }
+    for (const item of items) {
+      const image = document.querySelector(`[data-news-thumbnail="${item.id}"]`);
+      if (image) loadNewsImageBlob(item.id, 0, image, seq);
+    }
+    if (state.newsItems.length) {
+      const seenAt = data.view_started_at;
+      await Promise.resolve();
+      if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
+      if (seenAt) api("/api/news/seen", { method: "POST", body: JSON.stringify({ view_started_at: seenAt }) }).catch(() => {});
+    }
+    startNewsAutoLoad(seq);
+  } catch (err) {
+    if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
+    list.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="loadFinancialNews(${reset},routeRenderSeq)">重试</button></div>`);
+  }
+}
+
+async function loadNewsImageBlob(articleId, index, image, seq = routeRenderSeq) {
+  try {
+    const blob = await apiBlob(`/api/news/${articleId}/images/${index}`);
+    if (!routeStillActive(seq) || !image || !document.body.contains(image)) return;
+    const url = URL.createObjectURL(blob);
+    state.newsImageUrls.add(url);
+    image.src = url;
+  } catch {
+    /* 单张图片失败不阻塞文章阅读 */
+  }
+}
+
+async function renderFinancialNewsArticle(articleId, seq) {
+  setPageTitle("财经新闻", true, "news", "返回财经新闻");
+  const main = $("#main");
+  if (!main) return;
+  main.innerHTML = `<article class="news-article-page"><div class="admin-skeleton" aria-hidden="true"></div></article>`;
+  try {
+    const article = await api(`/api/news/${articleId}`);
+    if (!routeStillActive(seq)) return;
+    main.innerHTML = `<article class="news-article-page"><header class="news-article-head"><div class="news-article-meta"><span>${escapeHtml(article.source_name || "")}</span><time datetime="${escapeHtml(article.published_at || "")}">${escapeHtml(fmtPublished(article.published_at, false))}</time></div><h1>${escapeHtml(article.title)}</h1>${article.author ? `<p class="section-meta">作者：${escapeHtml(article.author)}</p>` : ""}<a class="btn-ghost news-original-link" href="${escapeHtml(article.url)}" target="_blank" rel="noopener noreferrer nofollow">打开原文 ${EXTERNAL_LINK_ICON}</a></header><div class="news-article-body">${article.content_html || `<p>${escapeHtml(article.summary || "暂无正文")}</p>`}</div></article>`;
+    loadNewsImages(articleId, seq);
+  } catch (err) {
+    if (routeStillActive(seq)) main.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="renderFinancialNewsArticle(${articleId},routeRenderSeq)">重试</button></div>`);
+  }
+}
+
+async function loadNewsImages(articleId, seq = routeRenderSeq) {
+  const images = [...document.querySelectorAll("[data-news-image-index]")];
+  await Promise.all(images.map((image) => loadNewsImageBlob(articleId, Number(image.dataset.newsImageIndex), image, seq)));
+}
+
+function openNewsArticle(articleId) {
+  const id = Number(articleId);
+  if (Number.isInteger(id) && id > 0) go(`news/${id}`);
+}
+
+function newsSourcePickerRows(filter = "", selectedIds = null) {
+  const q = filter.trim().toLowerCase();
+  return state.newsSources.filter((source) => !q || source.name.toLowerCase().includes(q)).map((source) => `<label class="news-source-option"><input type="checkbox" value="${source.id}" ${(selectedIds ? selectedIds.has(Number(source.id)) : source.selected) ? "checked" : ""}><span>${escapeHtml(source.name)}</span>${source.enabled ? "" : '<em>管理员已暂停更新</em>'}</label>`).join("") || '<p class="muted">没有匹配的媒体</p>';
+}
+
+function openNewsSourcePicker() {
+  const newsSelectedIds = new Set(state.newsSources.filter((source) => source.selected).map((source) => Number(source.id)));
+  const mask = document.createElement("div");
+  mask.className = "modal-mask news-source-modal";
+  mask._newsSelectedIds = newsSelectedIds;
+  mask.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="news-source-picker-title"><h3 id="news-source-picker-title">我的来源</h3><input id="news-source-search" class="form-control" type="search" placeholder="搜索媒体"><div id="news-source-options" class="news-source-options">${newsSourcePickerRows("", newsSelectedIds)}</div><div class="toolbar"><button type="button" class="btn-normal" onclick="saveNewsSources(this.closest('.news-source-modal'))">保存</button><button type="button" class="btn-ghost" data-close>取消</button></div></div>`;
+  document.body.appendChild(mask);
+  const close = () => mask.remove();
+  const captureSelection = () => {
+    mask.querySelectorAll(".news-source-option input").forEach((input) => {
+      const id = Number(input.value);
+      if (input.checked) newsSelectedIds.add(id);
+      else newsSelectedIds.delete(id);
+    });
+  };
+  mask.addEventListener("click", (event) => { if (event.target === mask) close(); });
+  mask.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } });
+  mask.querySelector("[data-close]").addEventListener("click", close);
+  mask.querySelector("#news-source-search").addEventListener("input", (event) => {
+    captureSelection();
+    mask.querySelector("#news-source-options").innerHTML = newsSourcePickerRows(event.target.value, newsSelectedIds);
+  });
+  mask.querySelector("#news-source-search").focus();
+}
+
+async function saveNewsSources(mask) {
+  if (!mask) return;
+  const ids = (() => {
+    const selected = mask._newsSelectedIds || new Set();
+    mask.querySelectorAll(".news-source-option input").forEach((input) => {
+      const id = Number(input.value);
+      if (input.checked) selected.add(id);
+      else selected.delete(id);
+    });
+    return [...selected];
+  })();
+  const button = mask.querySelector("button.btn-normal");
+  if (button) button.disabled = true;
+  const seq = routeRenderSeq;
+  try {
+    await api("/api/me", { method: "PUT", body: JSON.stringify({ news_source_ids: ids }) });
+    if (!routeStillActive(seq)) return;
+    mask.remove();
+    state.newsFilterSourceId = "";
+    flash("新闻来源已保存");
+    await renderFinancialNewsList(seq);
+  } catch (err) {
+    flash(err.message, "error");
+    if (button) button.disabled = false;
+  }
 }
 
 function isSpaPath(pathname) {
@@ -13186,6 +13767,8 @@ async function router() {
   }
   const path = routePath();
   const [page, rawParam] = path.split("/");
+  if (page !== "news") clearNewsReaderState();
+  if (page !== "settings") state.settingsTab = "subs";
   // 管理后台默认全景概览：/admin 与 /admin/dashboard 等价，侧边栏高亮才能对上
   const param = page === "admin" && !rawParam ? "dashboard" : rawParam;
   if (!state.token) {
@@ -13219,10 +13802,19 @@ async function router() {
   );
   try {
     if (page === "home") await renderHome(renderSeq);
-    else if (page === "combinations") await renderCombinations(renderSeq);
-    else if (page === "mysubs") await renderMySubs(renderSeq);
+    else if (page === "combinations") {
+      state.platform = "combination";
+      replaceRoute("home");
+      return;
+    }
+    else if (page === "mysubs") {
+      state.settingsTab = "subs";
+      replaceRoute("settings");
+      return;
+    }
+    else if (page === "news") await renderNewsCenter(renderSeq, rawParam);
     else if (page === "zsxq") {
-      state.timelinePlatform = plazaVisibleSet().has("zsxq") ? "zsxq" : "";
+      state.timelinePlatform = timelineVisibleSet().has("zsxq") ? "zsxq" : "";
       replaceRoute("timeline");
       return;
     }

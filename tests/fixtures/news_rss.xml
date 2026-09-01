@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Fixture RSS</title>
+    <link>https://feed.example/rss</link>
+    <description>Deterministic RSS fixture</description>
+    <item>
+      <guid isPermaLink="false">rss-guid-1</guid>
+      <title>Fixture market update</title>
+      <link>/articles/one?utm_source=fixture</link>
+      <author>fixture-author</author>
+      <pubDate>Tue, 01 Sep 2026 10:00:00 GMT</pubDate>
+      <description><![CDATA[Short fixture summary]]></description>
+      <content:encoded><![CDATA[
+        <p>Full fixture text.</p>
+        <a href="/research/more" onclick="evil()">Read more</a>
+        <script>alert('bad')</script>
+        <img src="/images/one.jpg" alt="one" onerror="evil()" />
+        <img src="https://cdn.example/two.png" alt="two" />
+        <iframe src="https://evil.example/frame"></iframe>
+        <a href="javascript:alert(1)">bad link</a>
+      ]]></content:encoded>
+    </item>
+    <item>
+      <guid>rss-guid-2</guid>
+      <title>Second fixture item</title>
+      <link>https://feed.example/articles/two</link>
+      <pubDate>Tue, 01 Sep 2026 09:00:00 GMT</pubDate>
+      <description>Second summary</description>
+    </item>
+  </channel>
+</rss>

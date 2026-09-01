@@ -1,11 +1,13 @@
 import base64
 import hashlib
 import inspect
+import io
 import json
 import logging
 import sqlite3
 import threading
 import time
+import urllib.error
 
 import pytest
 from fastapi.testclient import TestClient
@@ -44,6 +46,9 @@ from app.ima_documents import (
     normalize_discovered_groups,
     normalize_ima_folder_item,
     safe_filename,
+    _retryable_download_error,
+    MAX_FILENAME_BYTES,
+    _PART_TEMP_OVERHEAD,
 )
 from app.ima_storage import ImaStorageStatus
 from app.main import create_app
@@ -1482,7 +1487,21 @@ def test_safe_filename_fits_linux_name_max():
     title = "花旗-中国汽车制造：" + ("订单疲软预计资金流向切换" * 12) + ".pdf"
     name = safe_filename(title, "fallback")
     assert name.endswith(".pdf")
-    assert len(name.encode("utf-8")) <= 255
+    encoded = name.encode("utf-8")
+    assert len(encoded) <= MAX_FILENAME_BYTES
+    # Storage puller still creates `{name}.XXXXXXXX.part` until it is upgraded.
+    assert len(encoded) + _PART_TEMP_OVERHEAD <= 255
+
+
+def test_retryable_download_skips_filename_too_long():
+    assert (
+        _retryable_download_error(
+            RuntimeError("IMA PDF HTTP 502 [Errno 36] File name too long: /srv/x.pdf")
+        )
+        is False
+    )
+    assert _retryable_download_error(RuntimeError("IMA PDF HTTP 502")) is True
+    assert _retryable_download_error(RuntimeError("IMA PDF HTTP 400 dest invalid")) is False
 
 
 def test_restore_recovers_state_when_title_file_already_moved(tmp_path):
@@ -3681,6 +3700,35 @@ def test_download_posts_to_puller_when_url_configured(tmp_path, monkeypatch):
     assert seen["body"]["headers"]["X-IMA-Sign"] == "sig"
     assert result["size"] == 8
     assert result["md5"] == "d" * 32
+
+
+def test_download_includes_puller_error_body(tmp_path, monkeypatch):
+    archive = tmp_path / "archive"
+    archive.mkdir()
+
+    def fake_urlopen(req, timeout=120):
+        raise urllib.error.HTTPError(
+            req.full_url,
+            502,
+            "Bad Gateway",
+            {},
+            io.BytesIO(b"[Errno 36] File name too long: /srv/x.pdf"),
+        )
+
+    monkeypatch.setenv("IMA_PULL_URL", "http://10.80.0.2:8743/pull")
+    monkeypatch.setenv("IMA_PULL_TOKEN", "tok")
+    monkeypatch.setenv("IMA_ARCHIVE_ROOT", str(archive))
+    monkeypatch.setattr(ima_documents.urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(RuntimeError, match="File name too long"):
+        ImaPureClient(ImaDocumentConfig(refresh_token="refresh")).download(
+            {
+                "jump_url_info": {
+                    "url": "https://res-skb.ima.qq.com/file.pdf?sign=1",
+                    "headers": {"X-IMA-Sign": "sig"},
+                }
+            },
+            archive / "g" / "a.pdf",
+        )
 
 
 def test_download_uses_cdn_when_pull_url_unset(tmp_path, monkeypatch):

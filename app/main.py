@@ -21,6 +21,7 @@ from .fetchers import build_fetchers
 from .ima_documents import ImaDocumentService
 from .ima_storage import ImaStorageStatus
 from .logging_setup import register_error_sink, setup_logging
+from .news import NewsService
 from .notifiers import build_notifiers
 from .scheduler import Scheduler, set_alerts_enabled
 
@@ -46,7 +47,7 @@ def docs_enabled() -> bool:
 
 
 SPA_PREFIXES = frozenset({
-    "timeline", "home", "combinations", "mysubs", "settings",
+    "timeline", "home", "combinations", "mysubs", "settings", "news",
     "search", "kol", "more", "admin", "zsxq", "ima-documents", "knowledge",
 })
 
@@ -84,6 +85,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         config.db_path = str(db_path)
     db = DB(config.db_path, credential_key=config.notifiers.feishu.credential_key)
     logger.info(f"数据库文件: {Path(config.db_path).resolve()}（启动目录 {Path.cwd()}）")
+    news_service = NewsService(db)
     index_root = Path(config.db_path).parent / "ima"
     archive_env = os.environ.get("IMA_ARCHIVE_ROOT", "").strip()
     archive_root = Path(archive_env) if archive_env else index_root
@@ -193,6 +195,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         config.sources.weibo,
         config.llm,
         config.sources.mx,
+        news_service=news_service,
     )
 
     @asynccontextmanager
@@ -248,6 +251,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
                 pass
             if bot is not None:
                 bot.client.close()
+        news_service.close()
         ima_documents.stop()
         db.close()
 
@@ -262,6 +266,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     app.state.db = db
     app.state.llm_config = config.llm
     app.state.ima_documents = ima_documents
+    app.state.news_service = news_service
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -270,6 +275,9 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
+        path = request.url.path
+        if path == "/news" or path.startswith("/news/") or path == "/api/news" or path.startswith("/api/news/"):
+            response.headers.setdefault("X-Robots-Tag", "noindex, nofollow")
         return response
 
     @app.middleware("http")
@@ -318,6 +326,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
             on_mx_config_changed=scheduler.apply_mx_config if background_workers_enabled() else None,
             # MX WebSocket 手动接入/断开（设置页按钮），同样仅在后台任务启用时可用
             on_mx_ws_control=scheduler.mx_ws_control if background_workers_enabled() else None,
+            news_service=news_service,
         )
     )
     # 本地头像缓存（数据目录/avatars），避免第三方图床过期/外链失效

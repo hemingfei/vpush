@@ -1255,7 +1255,13 @@ class ImaPureClient:
                 with urllib.request.urlopen(request, timeout=120) as response:
                     body = json.loads(response.read().decode())
             except urllib.error.HTTPError as exc:
-                raise RuntimeError(f"IMA PDF HTTP {exc.code}") from exc
+                detail = ""
+                try:
+                    detail = exc.read().decode("utf-8", "replace")[:200].strip()
+                except Exception:
+                    detail = ""
+                suffix = f" {detail}" if detail else ""
+                raise RuntimeError(f"IMA PDF HTTP {exc.code}{suffix}") from exc
             return {
                 "size": int(body.get("size") or 0),
                 "md5": str(body.get("md5") or ""),
@@ -1264,7 +1270,7 @@ class ImaPureClient:
         headers["User-Agent"] = "okhttp/4.12.0"
         destination.parent.mkdir(parents=True, exist_ok=True)
         fd, temp_name = tempfile.mkstemp(
-            prefix=destination.name + ".", suffix=".part", dir=destination.parent
+            prefix=".vpush-", suffix=".part", dir=destination.parent
         )
         os.close(fd)
         temp = Path(temp_name)
@@ -1315,8 +1321,15 @@ def _retryable_download_error(exc: Exception) -> bool:
         )
     ):
         return True
+    if "File name too long" in text or "ENAMETOOLONG" in text:
+        return False
     match = re.search(r"HTTP (\d{3})", text)
-    return bool(match and (int(match.group(1)) in (403, 408, 409, 425, 429) or int(match.group(1)) >= 500))
+    if not match:
+        return False
+    code = int(match.group(1))
+    if code == 400:
+        return False
+    return code in (403, 408, 409, 425, 429) or code >= 500
 
 
 def item_display_name(item: dict[str, Any], media_id: str) -> str:
@@ -1353,7 +1366,10 @@ def drop_duplicate_copies(records: list[dict[str, Any]]) -> list[dict[str, Any]]
     return kept
 
 
+# Complete .pdf name, not the stem. ext4 NAME_MAX is 255; the storage
+# puller still prefixes `{name}.XXXXXXXX.part` (+14 bytes), so 240 leaves room.
 MAX_FILENAME_BYTES = 240
+_PART_TEMP_OVERHEAD = len(".xxxxxxxx.part")
 
 
 def _fit_utf8(value: str, max_bytes: int) -> str:
@@ -1379,9 +1395,10 @@ def safe_filename(
         stem, suffix = value[:-4], ".pdf"
     else:
         stem, suffix = value, ".pdf"
-    stem = _fit_utf8(stem, max_bytes)
+    stem_budget = max(1, max_bytes - len(suffix.encode("utf-8")))
+    stem = _fit_utf8(stem, stem_budget)
     if not stem:
-        stem = _fit_utf8(str(fallback), max_bytes) or "document"
+        stem = _fit_utf8(str(fallback), stem_budget) or "document"
     return f"{stem}{suffix}"
 
 
@@ -1571,8 +1588,12 @@ class ImaDocumentStore:
         if occupied and str(relative) in occupied:
             path = Path(filename)
             token = self._collision_token(media_id)
-            stem = _fit_utf8(path.stem, MAX_FILENAME_BYTES - len(token) - 2)
-            filename = f"{stem}__{token}{path.suffix or '.pdf'}"
+            suffix = path.suffix or ".pdf"
+            stem = _fit_utf8(
+                path.stem,
+                MAX_FILENAME_BYTES - len(token) - 2 - len(suffix.encode("utf-8")),
+            )
+            filename = f"{stem}__{token}{suffix}"
             relative = Path(day) / filename
             if not self._is_legacy_group(group_id):
                 relative = Path(self._group_namespace(group_id)) / relative

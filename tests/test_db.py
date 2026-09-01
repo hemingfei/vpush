@@ -7,11 +7,111 @@ from app import db as db_module
 from app.db import DB
 
 
+def test_news_migration_seeds_builtin_sources_and_feeds(tmp_path):
+    db = DB(str(tmp_path / "news.db"))
+    sources = db._rows("SELECT slug, default_selected FROM news_sources ORDER BY id")
+    feeds = db._rows("SELECT url FROM news_feeds ORDER BY id")
+    assert [row["slug"] for row in sources] == ["bloomberg", "caixin", "ft", "morganstanley"]
+    assert all(row["default_selected"] == 1 for row in sources)
+    assert len(feeds) == 5
+
+
+def test_new_user_gets_only_builtin_news_sources(tmp_path):
+    db = DB(str(tmp_path / "news-user.db"))
+    uid = db.add_user("reader", "hash")
+    assert len(db.list_user_news_source_ids(uid)) == 4
+    db._execute(
+        "INSERT INTO news_sources (slug, name) VALUES ('custom-test', 'Custom Test')"
+    )
+    uid2 = db.add_user("reader2", "hash")
+    assert len(db.list_user_news_source_ids(uid2)) == 4
+
+
+def test_news_default_backfill_runs_once(tmp_path):
+    path = tmp_path / "news-once.db"
+    db = DB(str(path))
+    uid = db.add_user("reader", "hash")
+    db._execute("DELETE FROM user_news_sources WHERE user_id = ?", (uid,))
+    db.close()
+    reopened = DB(str(path))
+    assert reopened.list_user_news_source_ids(uid) == []
+
+
+def test_legacy_database_gets_news_anchor_and_default_relations(tmp_path):
+    path = tmp_path / "legacy-news.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            is_admin INTEGER NOT NULL DEFAULT 0,
+            wechat_openid TEXT NOT NULL DEFAULT '',
+            telegram_chat_id TEXT NOT NULL DEFAULT '',
+            telegram_bot_token TEXT NOT NULL DEFAULT '',
+            feishu_open_id TEXT NOT NULL DEFAULT '',
+            feishu_chat_id TEXT NOT NULL DEFAULT '',
+            wecom_webhook TEXT NOT NULL DEFAULT '',
+            wecom_webhook_hash TEXT NOT NULL DEFAULT '',
+            bark_key TEXT NOT NULL DEFAULT '',
+            bark_key_hash TEXT NOT NULL DEFAULT '',
+            notify_enabled INTEGER NOT NULL DEFAULT 1,
+            daily_report INTEGER NOT NULL DEFAULT 0,
+            translate_twitter INTEGER NOT NULL DEFAULT 1,
+            push_channels TEXT NOT NULL DEFAULT '',
+            dnd_start TEXT NOT NULL DEFAULT '',
+            dnd_end TEXT NOT NULL DEFAULT '',
+            dnd_allow_favorite INTEGER NOT NULL DEFAULT 0,
+            token_version INTEGER NOT NULL DEFAULT 0,
+            last_login_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO users (username, password_hash) VALUES ('old-reader', 'hash');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    db = DB(str(path))
+    user = db.get_user_by_username("old-reader")
+    assert "news_last_seen_at" in {row["name"] for row in db._rows("PRAGMA table_info(users)")}
+    assert len(db.list_user_news_source_ids(user["id"])) == 4
+
+
+
+
+def test_transfer_subscriptions_merges_news_sources_and_seen_anchor(tmp_path):
+    db = DB(str(tmp_path / "transfer-news.db"))
+    source_uid = db.add_user("source-news", "hash")
+    target_uid = db.add_user("target-news", "hash")
+    source_ids = db.list_user_news_source_ids(source_uid)
+    db.set_user_news_sources(source_uid, source_ids[:2])
+    db.set_user_news_sources(target_uid, source_ids[1:3])
+    db._execute("UPDATE users SET news_last_seen_at = ? WHERE id = ?", ("2026-09-01T11:00:00+00:00", source_uid))
+    db._execute("UPDATE users SET news_last_seen_at = ? WHERE id = ?", ("2026-09-01T10:00:00+00:00", target_uid))
+
+    db.transfer_subscriptions(source_uid, target_uid)
+
+    assert db.list_user_news_source_ids(source_uid, include_archived=True) == []
+    assert db.list_user_news_source_ids(target_uid) == source_ids[:3]
+    assert db.get_user(target_uid)["news_last_seen_at"] == "2026-09-01T11:00:00+00:00"
+
+
+def test_delete_user_removes_news_source_relations(tmp_path):
+    db = DB(str(tmp_path / "delete-news.db"))
+    uid = db.add_user("delete-news", "hash")
+    db.delete_user(uid)
+    assert db._rows("SELECT * FROM user_news_sources WHERE user_id = ?", (uid,)) == []
+
+
 def test_set_settings_atomic_writes_multiple_values(tmp_path):
     db = DB(str(tmp_path / "settings.db"))
     db.set_settings_atomic({"ima_one": "value-one", "ima_two": "value-two"})
     assert db.get_setting("ima_one") == "value-one"
     assert db.get_setting("ima_two") == "value-two"
+
 
 
 def test_set_settings_atomic_rolls_back_all_values_on_sql_error(tmp_path):
@@ -1328,3 +1428,144 @@ def test_merge_default_tag_vocabulary_adds_missing_keeps_custom(tmp_path):
     for rule in DEFAULT_TAG_RULES:
         assert rule["tag"] in tags
     db.close()
+
+
+def test_news_source_archive_preserves_user_relation(tmp_path):
+    db = DB(str(tmp_path / "archive.db"))
+    uid = db.add_user("reader", "hash")
+    source_id = db.add_news_source("路透市场")
+    db.set_user_news_sources(uid, [source_id])
+    db.set_news_source_archived(source_id, True)
+    assert source_id in db.list_user_news_source_ids(uid, include_archived=True)
+    assert source_id not in db.list_user_news_source_ids(uid)
+    db.set_news_source_archived(source_id, False)
+    assert source_id in db.list_user_news_source_ids(uid)
+
+
+def test_news_article_upsert_updates_without_duplicate(tmp_path):
+    db = DB(str(tmp_path / "article.db"))
+    source_id = db.add_news_source("测试媒体")
+    feed_id = db.add_news_feed(source_id, "主源", "https://feed.example/rss", "https://feed.example/rss")
+    article = {
+        "source_id": source_id, "feed_id": feed_id, "external_id": "guid-1",
+        "title": "First", "url": "https://example.com/1", "author": "A",
+        "summary": "S", "content_html": "<p>One</p>", "images": [],
+        "published_at": "2026-09-01T00:00:00+00:00",
+        "fetched_at": "2026-09-01T00:01:00+00:00", "content_hash": "h1",
+    }
+    first = db.upsert_news_article(article)
+    article.update(title="Updated", content_hash="h2")
+    second = db.upsert_news_article(article)
+    assert first == second
+    assert db.get_news_article(first)["title"] == "Updated"
+
+
+def test_news_seen_anchor_only_moves_forward(tmp_path):
+    db = DB(str(tmp_path / "seen.db"))
+    uid = db.add_user("reader", "hash")
+    assert db.advance_news_seen(uid, "2026-09-01T10:00:00+00:00")
+    assert not db.advance_news_seen(uid, "2026-09-01T09:00:00+00:00")
+    assert db.get_user(uid)["news_last_seen_at"] == "2026-09-01T10:00:00+00:00"
+
+
+def test_news_feed_url_change_resets_conditional_state(tmp_path):
+    db = DB(str(tmp_path / "feed-reset.db"))
+    source_id = db.add_news_source("测试媒体")
+    feed_id = db.add_news_feed(source_id, "主源", "https://feed.example/rss", "https://feed.example/rss")
+    db._execute(
+        "UPDATE news_feeds SET etag = ?, last_modified = ?, last_attempt_at = ?, "
+        "last_success_at = ?, last_error_code = 'network_error', last_error_detail = 'bad', "
+        "consecutive_failures = 3 WHERE id = ?",
+        ('"v1"', "Mon, 01 Sep 2026 00:00:00 GMT", "2026-09-01T00:00:00+00:00",
+         "2026-09-01T00:00:00+00:00", feed_id),
+    )
+    db.update_news_feed(
+        feed_id, url="https://feed.example/new", normalized_url="https://feed.example/new"
+    )
+    feed = db.get_news_feed(feed_id)
+    assert feed["etag"] == feed["last_modified"] == ""
+    assert feed["last_attempt_at"] is None and feed["last_success_at"] is None
+    assert feed["last_error_code"] == feed["last_error_detail"] == ""
+    assert feed["consecutive_failures"] == 0
+
+
+def test_disabled_source_keeps_cached_articles_readable(tmp_path):
+    db = DB(str(tmp_path / "disabled.db"))
+    uid = db.add_user("reader", "hash")
+    source_id = db.add_news_source("测试媒体")
+    feed_id = db.add_news_feed(source_id, "主源", "https://feed.example/rss", "https://feed.example/rss")
+    db.set_user_news_sources(uid, [source_id])
+    article_id = db.upsert_news_article({
+        "source_id": source_id, "feed_id": feed_id, "external_id": "disabled-1",
+        "title": "Cached", "url": "https://example.com/1", "author": "",
+        "summary": "", "content_html": "<p>Cached</p>", "images": [],
+        "published_at": "2026-09-01T00:00:00+00:00",
+        "fetched_at": "2026-09-01T00:01:00+00:00", "content_hash": "cached",
+    })
+    db.update_news_source(source_id, enabled=False)
+    assert db.list_news_articles(uid, source_id=None, q="", limit=30, offset=0)[0]["id"] == article_id
+
+
+def test_archived_source_hides_article_from_user_detail(tmp_path):
+    db = DB(str(tmp_path / "archived-detail.db"))
+    uid = db.add_user("reader", "hash")
+    source_id = db.add_news_source("测试媒体")
+    feed_id = db.add_news_feed(source_id, "主源", "https://feed.example/rss", "https://feed.example/rss")
+    db.set_user_news_sources(uid, [source_id])
+    article_id = db.upsert_news_article({
+        "source_id": source_id, "feed_id": feed_id, "external_id": "archived-1",
+        "title": "Archived", "url": "https://example.com/1", "author": "",
+        "summary": "", "content_html": "<p>Archived</p>", "images": [],
+        "published_at": "2026-09-01T00:00:00+00:00",
+        "fetched_at": "2026-09-01T00:01:00+00:00", "content_hash": "archived",
+    })
+    db.set_news_source_archived(source_id, True)
+    assert db.get_news_article(article_id, user_id=uid) is None
+
+
+
+
+def test_news_cleanup_removes_only_articles_older_than_retention(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    db = DB(str(tmp_path / "cleanup.db"))
+    source_id = db.add_news_source("测试媒体")
+    feed_id = db.add_news_feed(source_id, "主源", "https://feed.example/rss", "https://feed.example/rss")
+    old = (datetime.now(UTC) - timedelta(days=31)).isoformat()
+    new = datetime.now(UTC).isoformat()
+    for external_id, published_at in (("old", old), ("new", new)):
+        db.upsert_news_article({
+            "source_id": source_id, "feed_id": feed_id, "external_id": external_id,
+            "title": external_id, "url": "https://example.com/" + external_id, "author": "",
+            "summary": "", "content_html": "", "images": [],
+            "published_at": published_at, "fetched_at": published_at,
+            "content_hash": external_id,
+        })
+    assert db.delete_news_articles_older_than(30) == 1
+    assert [r["external_id"] for r in db._rows("SELECT external_id FROM news_articles")] == ["new"]
+
+
+def test_news_source_status_is_paused_when_all_feeds_are_disabled(tmp_path):
+    db = DB(str(tmp_path / "source-status.db"))
+    uid = db.add_user("reader", "hash")
+    source_id = db.list_user_news_source_ids(uid)[0]
+    feed_ids = [feed["id"] for feed in db.list_news_feeds(source_id)]
+    db._execute(
+        f"UPDATE news_feeds SET enabled = 0 WHERE id IN ({','.join('?' * len(feed_ids))})",
+        feed_ids,
+    )
+    status = next(item for item in db.news_source_statuses(uid) if item["id"] == source_id)
+    assert status["code"] == "paused"
+
+
+def test_update_user_atomic_replaces_news_sources_and_preserves_empty_selection(tmp_path):
+    db = DB(str(tmp_path / "atomic-news.db"))
+    uid = db.add_user("reader", "hash")
+    source_ids = db.list_user_news_source_ids(uid)
+    db.update_user_atomic(uid, {}, news_source_ids=source_ids[:1])
+    assert db.list_user_news_source_ids(uid) == source_ids[:1]
+    db.update_user_atomic(uid, {}, news_source_ids=[])
+    assert db.list_user_news_source_ids(uid) == []
+    with pytest.raises(ValueError, match="来源不存在"):
+        db.update_user_atomic(uid, {}, news_source_ids=[999999])
+    assert db.list_user_news_source_ids(uid) == []

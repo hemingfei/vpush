@@ -7,7 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from app.ima_puller import MAX_PDF_BYTES, allowed_url, save_pdf, safe_dest, serve_puller
+from app.ima_puller import (
+    MAX_PDF_BYTES,
+    _error_status,
+    allowed_url,
+    save_pdf,
+    safe_dest,
+    serve_puller,
+)
 
 
 def test_safe_dest_rejects_escape(tmp_path):
@@ -77,6 +84,32 @@ def test_safe_dest_rejects_symlink_ancestor(tmp_path):
     link.symlink_to(real)
     with pytest.raises(ValueError):
         safe_dest(archive, "group/0829/Report.pdf")
+
+
+def test_error_status_filename_too_long():
+    assert _error_status(OSError(36, "File name too long")) == 400
+    assert _error_status(RuntimeError("IMA PDF HTTP 502")) == 502
+
+
+def test_save_pdf_long_title_keeps_part_under_name_max(tmp_path, monkeypatch):
+    import app.ima_puller as puller
+
+    _fake_opener_factory(monkeypatch, puller)
+    # Final name sits on NAME_MAX. The old `{name}.XXXXXXXX.part` prefix overflowed.
+    title = ("a" * 251) + ".pdf"
+    dest = f"g/0830/{title}"
+    result = save_pdf(
+        tmp_path,
+        dest,
+        "https://res-skb.ima.qq.com/a.pdf",
+        {"X-IMA-Sign": "sig"},
+        expected_size=12,
+    )
+    path = tmp_path / "g" / "0830" / title
+    assert path.read_bytes().startswith(b"%PDF-1.7")
+    assert result["size"] == 12
+    leftovers = list(path.parent.glob(".vpush-*")) + list(path.parent.glob("*.part"))
+    assert leftovers == []
 
 
 def test_save_pdf_writes_atomically(tmp_path, monkeypatch):

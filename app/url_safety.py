@@ -52,6 +52,18 @@ def _blocked_ip(ip: str) -> bool:
             addr = addr.ipv4_mapped
         elif addr in _NAT64_NETWORK:
             addr = ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)
+    if any(
+        getattr(addr, attr)
+        for attr in (
+            "is_loopback",
+            "is_private",
+            "is_link_local",
+            "is_multicast",
+            "is_unspecified",
+            "is_reserved",
+        )
+    ):
+        return True
     return any(addr in net for net in _BLOCKED_NETWORKS)
 
 
@@ -128,6 +140,91 @@ def _pinned_request(url: str) -> tuple[str, str]:
     host_header = parsed.netloc.rsplit("@", 1)[-1]
     pinned = urlunparse(parsed._replace(netloc=netloc))
     return pinned, host_header
+
+
+def _safe_url_label(url: str) -> str:
+    """错误信息只保留 scheme/host/port/path，不泄露 query 或凭据。"""
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return "invalid-url"
+    netloc = parsed.netloc.rsplit("@", 1)[-1]
+    return urlunparse((parsed.scheme, netloc, parsed.path, "", "", ""))[:160]
+
+
+def _strict_pinned_request(url: str, default_ports_only: bool) -> tuple[str, str]:
+    raw = (url or "").strip()
+    if len(raw) > 2048:
+        raise ValueError("不安全的下载地址: URL 过长")
+    try:
+        parsed = urlparse(raw)
+        port = parsed.port
+    except ValueError:
+        raise ValueError(f"不安全的下载地址: {_safe_url_label(raw)}") from None
+    if (
+        parsed.scheme not in ALLOWED_SCHEMES
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.hostname.lower() == "localhost"
+    ):
+        raise ValueError(f"不安全的下载地址: {_safe_url_label(raw)}")
+    expected_port = 443 if parsed.scheme == "https" else 80
+    if default_ports_only and port not in (None, expected_port):
+        raise ValueError(f"不安全的下载地址: {_safe_url_label(raw)}")
+    try:
+        return _pinned_request(raw)
+    except ValueError:
+        raise ValueError(f"不安全的下载地址: {_safe_url_label(raw)}") from None
+
+
+def safe_get_limited(
+    client: httpx.Client,
+    url: str,
+    *,
+    max_bytes: int,
+    headers: dict[str, str] | None = None,
+    default_ports_only: bool = False,
+    timeout: httpx.Timeout | float = 15,
+) -> httpx.Response:
+    """逐跳固定已验证公网 IP，并限制解压后的响应体大小。"""
+    if max_bytes < 0:
+        raise ValueError("响应体大小限制无效")
+    current = url
+    for _ in range(MAX_REDIRECTS + 1):
+        pinned, host_header = _strict_pinned_request(current, default_ports_only)
+        hostname = urlparse(current).hostname or ""
+        request_headers = {**(headers or {}), "Host": host_header}
+        with client.stream(
+            "GET",
+            pinned,
+            timeout=timeout,
+            follow_redirects=False,
+            headers=request_headers,
+            extensions={"sni_hostname": hostname},
+        ) as response:
+            if response.status_code in (301, 302, 303, 307, 308):
+                location = response.headers.get("location")
+                if not location:
+                    return httpx.Response(
+                        response.status_code,
+                        headers=response.headers,
+                        request=response.request,
+                    )
+                current = urljoin(current, location)
+                continue
+            body = bytearray()
+            for chunk in response.iter_bytes():
+                body.extend(chunk)
+                if len(body) > max_bytes:
+                    raise ValueError("响应体过大")
+            return httpx.Response(
+                response.status_code,
+                headers=response.headers,
+                content=bytes(body),
+                request=response.request,
+            )
+    raise ValueError(f"重定向次数过多: {_safe_url_label(url)}")
 
 
 def safe_get(client: httpx.Client, url: str, timeout: float = 15) -> httpx.Response:

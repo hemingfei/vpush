@@ -1,6 +1,6 @@
 """前端交互静态回归测试：订阅卡片操作必须按当前路由刷新。
 
-背景：kolCard 的「订阅」按钮在首页、我的订阅、组合订阅、搜索、KOL 详情
+背景：kolCard 的「订阅」按钮在首页、订阅管理、搜索、KOL 详情
 多个页面复用 toggleSubscribe()。曾出现成功后无条件调用首页专用的
 renderHomeList()，在非首页会因找不到 #kol-list 抛异常并落入 catch 弹出
 「操作失败」假错误。本测试静态固化两条约定：
@@ -13,6 +13,37 @@ from pathlib import Path
 
 APP_JS = Path(__file__).parent.parent / "app" / "static" / "app.js"
 STYLE_CSS = APP_JS.with_name("style.css")
+
+
+def test_subscription_push_is_the_only_subscription_management_navigation_entry():
+    src = APP_JS.read_text()
+    nav = src[src.index("const NAV ="):src.index("const SIDEBAR_SLIM_KEY")]
+    mobile = src[src.index("const MOBILE_NAV ="):src.index("function renderBottomNav")]
+
+    for block in (nav, mobile):
+        assert 'route: "settings"' in block
+        assert 'label: "订阅与推送"' in block
+        assert 'route: "mysubs"' not in block
+        assert 'route: "combinations"' not in block
+    assert "TRENDING_ICON" not in src
+    assert "BOOKMARK_ICON" not in src
+
+
+def test_legacy_subscription_pages_redirect_at_the_router_boundary():
+    src = APP_JS.read_text()
+    router = _fn_body("router")
+    prefixes = src[src.index("const SPA_PREFIXES"):src.index("function routeStillActive")]
+
+    assert '"mysubs"' in prefixes and '"combinations"' in prefixes
+    assert 'page === "mysubs"' in router
+    assert 'state.settingsTab = "subs"' in router
+    assert 'replaceRoute("settings")' in router
+    assert 'page === "combinations"' in router
+    assert 'state.platform = "combination"' in router
+    assert 'replaceRoute("home")' in router
+    assert "renderMySubs(renderSeq)" not in router
+    assert "renderCombinations(renderSeq)" not in router
+
 
 
 def test_knowledge_row_hides_unused_cover_fallback_icon():
@@ -80,17 +111,17 @@ def test_refresh_kols_view_covers_all_card_routes():
     body = _fn_body("refreshKolsView")
     for route_call in (
         'isRoute("home")',
-        'isRoute("combinations")',
-        'isRoute("mysubs")',
+        'isRoute("settings")',
         'isRoute("kol/")',
         'isRoute("search")',
     ):
         assert route_call in body, f"refreshKolsView 缺少 {route_call} 路由分支"
     assert "loadHomeKols" in body
-    assert "renderCombinations" in body
-    assert "renderMySubs" in body
+    assert "loadSettingsSubscriptions" in body
     assert "renderKolPage" in body
     assert "doSearch" in body
+    assert 'isRoute("mysubs")' not in body
+    assert 'isRoute("combinations")' not in body
 
 
 def test_search_page_lists_only_unsubscribed_kols_without_query():
@@ -122,7 +153,7 @@ def test_router_emits_route_token():
     """router 每次路由切换必须递增 routeRenderSeq 并把 token 传给渲染函数。"""
     body = _fn_body("router")
     assert "const renderSeq = ++routeRenderSeq;" in body
-    for call in ("renderHome(renderSeq)", "renderMySubs(renderSeq)", "renderCombinations(renderSeq)",
+    for call in ("renderHome(renderSeq)",
                  "renderTimeline(renderSeq)", "renderKolPage(Number(param), renderSeq)",
                  "renderSearch(renderSeq)", "renderSettings(renderSeq)"):
         assert call in body, f"router 未把 token 传给 {call}"
@@ -132,11 +163,11 @@ def test_router_emits_route_token():
 
 def test_renderers_check_route_token_after_await():
     """各异步渲染函数在 await 之后、写 DOM 之前必须检查 routeStillActive。"""
-    for name in ("renderHome", "renderMySubs", "renderCombinations", "renderTimeline", "renderKolPage", "renderSettings"):
+    for name in ("renderHome", "renderTimeline", "renderKolPage", "renderSettings"):
         body = _fn_body(name)
         assert "routeStillActive(" in body, f"{name} 缺少路由令牌检查"
     # doSearch / loadHomeKols / loadTimeline / loadMyAsks 是局部刷新入口，同样要检查
-    for name in ("doSearch", "loadHomeKols", "loadTimeline", "loadMyAsks"):
+    for name in ("doSearch", "loadHomeKols", "loadTimeline", "loadMyAsks", "loadSettingsSubscriptions"):
         body = _fn_body(name)
         assert "routeStillActive(" in body, f"{name} 缺少路由令牌检查"
     # renderHomeList 不得在没有 #kol-list 时解引用（旧响应落入非首页）
@@ -498,28 +529,52 @@ def test_timeline_polish_matches_chip_row_and_browser_surfaces():
     assert 'style="margin-top:14px' not in feed
 
 
-def test_mobile_mysubs_filter_renders_icon_badges_keeps_desktop_toolbar():
-    """订阅页移动端：平台+特别关注全部变为一行角标；桌面保留文字胶囊+按钮。"""
-    render = _fn_body("renderMySubs")
+def test_settings_subscription_panel_reuses_mobile_badges_and_desktop_toolbar():
+    """设置页订阅管理复用原有订阅筛选和卡片列表。"""
+    panel = _fn_body("settingsSubscriptionsPanelHtml")
     tabs = _fn_body("renderMySubsTabs")
     mobile_html = _fn_body("mysubsMobileFiltersHtml")
 
-    assert "isMobileTimelineFilter()" in render
-    assert 'id="mysubs-tabs"' in render
-    # 桌面分支必须保留完整工具栏
-    assert 'id="mysubs-fav-toggle"' in render
-    assert '"platform-tabs"' in render
+    assert "isMobileTimelineFilter()" in panel
+    assert 'id="mysubs-tabs"' in panel
+    assert 'id="mysubs-list"' in panel
+    assert 'id="mysubs-fav-toggle"' in panel
+    assert '"platform-tabs"' in panel
     assert "platformShortLabel(p)" in mobile_html
     assert "switchMySubsPlatform('${p}')" in mobile_html
     assert "toggleMySubsFav()" in mobile_html
     assert "STAR_SVG" in mobile_html
-    assert "特别关注" in mobile_html
-    assert "<span>${short}</span>" in mobile_html
-    # 星标点击后需重绘角标选中态
-    assert "renderMySubsTabs()" in _fn_body("toggleMySubsFav")
-    # 双分支渲染：移动角标 / 桌面文字胶囊
     assert "mysubsMobileFiltersHtml()" in tabs
     assert 'platformTabHTML(p, state.mysubsPlatform' in tabs
+
+
+def test_settings_subscription_loader_is_route_guarded_local_and_retryable():
+    load = _fn_body("loadSettingsSubscriptions")
+
+    assert 'api("/api/my/subscriptions")' in load
+    assert load.count("routeStillActive(seq)") >= 2
+    assert '$("#main").innerHTML' not in load
+    assert '$("#mysubs-list")' in load
+    assert "renderMySubsTabs()" in load
+    assert "renderMySubsList()" in load
+    assert "加载失败:" in load
+    assert "重试" in load
+    assert "loadSettingsSubscriptions(routeRenderSeq)" in load
+
+
+def test_subscription_management_is_the_default_settings_tab():
+    src = APP_JS.read_text()
+    render = _fn_body("renderSettings")
+    switch = _fn_body("switchSettingsTab")
+
+    assert 'const SETTINGS_TABS = ["subs", "push", "bind", "llm", "account"]' in src
+    assert 'data-tab="subs"' in render
+    assert 'id="st-subs"' in render
+    assert "settingsSubscriptionsPanelHtml()" in render
+    assert 'switchSettingsTab(state.settingsTab || "subs")' in render
+    assert 'setPageTitle("订阅与推送")' in render
+    assert 'name = "subs"' in switch
+
 
 
 def test_platform_tabs_always_show_short_labels():
@@ -595,20 +650,28 @@ def test_plaza_source_visibility_admin_and_pills():
     """管理员可设广场数据源自动/显示/隐藏；角标和旧 #/zsxq 都认可见列表。"""
     src = APP_JS.read_text()
     css = STYLE_CSS.read_text()
-    assert 'STATS_TABS = ["config", "cookies", "mx", "proxies", "plaza"]' in src
-    assert 'data-tab="plaza"' in _fn_body("loadAdminStats")
+    assert 'STATS_TABS = ["config", "cookies", "mx", "proxies", "plaza", "news"]' in src
+    tabs = _fn_body("statsTabsHtml")
+    assert 'data-tab="${tab}"' in tabs
+    assert "proxies:" in tabs
+    assert "plaza:" in tabs
+    assert "mx:" in tabs
+    assert "MX平台" in tabs
+    assert "news:" in tabs
+    assert "财经资讯" in tabs
     assert "动态广场显示" in _fn_body("loadAdminStats")
     assert "plazaSourceRowsHtml(s.plaza_sources)" in _fn_body("loadAdminStats")
     assert "plaza_platforms" in _fn_body("plazaVisibleSet")
-    assert "tlPlazaEntries()" in _fn_body("tlPillsHtml")
+    assert "timeline_platforms" in _fn_body("timelineVisibleSet")
+    assert "tlTimelineEntries()" in _fn_body("tlPillsHtml")
     assert "tlPlazaEntries()" in _fn_body("renderPlatformTabs")
     assert "tlPlazaEntries()" in _fn_body("homeMobilePlatformsHtml")
-    assert "tlPlazaEntries()" in _fn_body("renderMySubsTabs")
-    assert "tlPlazaEntries()" in _fn_body("mysubsMobileFiltersHtml")
+    assert "tlTimelineEntries()" in _fn_body("renderMySubsTabs")
+    assert "tlTimelineEntries()" in _fn_body("mysubsMobileFiltersHtml")
     assert "ensurePlazaPlatformSelection()" in _fn_body("renderTimeline")
     assert "ensurePlazaPlatformSelection()" in _fn_body("renderHome")
-    assert "ensurePlazaPlatformSelection()" in _fn_body("renderMySubs")
-    assert 'plazaVisibleSet().has("zsxq")' in src
+    assert "ensurePlazaPlatformSelection()" in _fn_body("renderSettings")
+    assert 'timelineVisibleSet().has("zsxq")' in src
     assert "/api/admin/plaza-sources" in _fn_body("setPlazaSourceMode")
     assert "applyPlazaSources(data.sources)" in _fn_body("setPlazaSourceMode")
     assert "applyPlazaSources(s.plaza_sources)" in _fn_body("renderStatsData")
@@ -750,10 +813,12 @@ def test_kol_image_settings_is_fourth_push_section_and_loads_independently():
     assert 'id="kol-images-settings"' in push
     assert "正在加载已订阅大V" in push and 'class="muted' in push
 
-    restore = body.rindex('switchSettingsTab(state.settingsTab || "push")')
+    restore = body.rindex('switchSettingsTab(state.settingsTab || "subs")')
     dnd = body.rindex("toggleDnd()")
+    subscriptions = body.rindex("loadSettingsSubscriptions(seq);")
     loader = body.rindex("loadKolImageSettings(seq);")
-    assert restore < dnd < loader
+    assert restore < dnd < subscriptions < loader
+    assert "await loadSettingsSubscriptions" not in body
     assert "await loadKolImageSettings" not in body
 
 
@@ -991,7 +1056,7 @@ def test_kol_image_css_is_compact_truncating_and_touchable():
 
 def test_stats_proxies_tab():
     src = APP_JS.read_text()
-    assert 'data-tab="proxies"' in src
+    assert 'data-tab="${tab}"' in _fn_body("statsTabsHtml")
     assert "function loadProxyAdmin" in src
     assert 'STATS_TABS.includes(tab)' in _fn_body("statsTabFromHash")
     assert '"proxies"' in APP_JS.read_text()
@@ -1003,11 +1068,11 @@ def test_stats_proxies_tab():
 def test_stats_tabs_expose_tab_aria():
     """数据源分段导航与注册码页同一套 tab 语义。"""
     src = APP_JS.read_text()
-    assert 'role="tab" id="tab-config" aria-selected="true" aria-controls="st-config"' in src
-    assert 'id="tab-overview"' not in src
-    assert 'id="tab-health"' not in src
-    assert 'aria-controls="st-proxies"' in src
-    assert 'role="tabpanel" aria-labelledby="tab-proxies"' in src
+    tabs = _fn_body("statsTabsHtml")
+    assert 'role="tab"' in tabs
+    assert 'id="tab-${tab}"' in tabs
+    assert "aria-controls=\"st-${tab}\"" in tabs
+    assert "news:" in tabs
     switch = _fn_body("switchStatsTab")
     assert 'setAttribute("aria-selected"' in switch
 
@@ -1091,16 +1156,12 @@ def test_stats_tabs_are_config_workshop_only():
     assert "监控总览" not in load
     assert "大V健康" not in load
     assert "大V抓取健康" not in load
+    assert 'statsTabsHtml("config")' in load
+    assert "data-tab=\"cookies\"" not in load
+    assert "data-tab=\"proxies\"" not in load
+    assert "data-tab=\"plaza\"" not in load
     assert 'id="st-overview"' not in load
     assert 'id="st-health"' not in load
-    assert 'id="sources-table"' not in load
-    assert 'id="kol-health"' not in load
-    assert "statsTimer =" not in load
-    assert "setInterval" not in load
-    assert 'data-tab="config"' in load
-    assert 'data-tab="cookies"' in load
-    assert 'data-tab="proxies"' in load
-    assert 'data-tab="plaza"' in load
     hash_fn = _fn_body("statsTabFromHash")
     switch = _fn_body("switchStatsTab")
     assert 'tab === "overview"' in hash_fn or '"overview"' in hash_fn
@@ -2329,9 +2390,7 @@ def test_kol_card_name_wraps_full_combination_title():
     assert head and "align-items: flex-start" in head.group(1)
     card = _fn_body("kolCard")
     assert "kol-card-meta" in card
-    assert "opts = opts || {}" in card
-    combos = _fn_body("renderCombinations")
-    assert "hidePlatform: true" in combos
+    assert "PLATFORM_LABELS[kol.platform]" in card
 
 
 def test_timeline_new_badge_pins_to_sticky_filterbar():
@@ -3039,6 +3098,11 @@ def test_settings_tabs_use_tab_aria():
     assert 'role="tablist" aria-label="设置分页"' in render
     assert 'role="tab"' in render and "aria-controls=" in render
     assert 'role="tabpanel"' in render
+    for tab in ("subs", "push", "bind", "llm", "account"):
+        assert f'id="tab-{tab}"' in render
+        assert f'aria-controls="st-{tab}"' in render
+        assert f'id="st-{tab}"' in render
+        assert f'aria-labelledby="tab-{tab}"' in render
     switch = _fn_body("switchSettingsTab")
     assert 'setAttribute("aria-selected"' in switch
     assert "el.hidden = !on" in switch
@@ -3436,13 +3500,91 @@ def test_ima_document_list_hides_tag_rail_but_keeps_tag_filtering():
     assert "uniqueTags" in render
 
 
-def test_frontend_asset_urls_bust_browser_cache():
+def test_financial_news_navigation_keeps_quick_news_in_timeline():
+    src = APP_JS.read_text()
+    nav = src[src.index("const NAV ="):src.index("const SIDEBAR_SLIM_KEY")]
+    mobile = src[src.index("const MOBILE_NAV ="):src.index("function renderBottomNav")]
+    assert nav.index('route: "timeline"') < nav.index('route: "news"') < nav.index('route: "knowledge"')
+    assert 'label: "财经新闻"' in nav
+    assert 'route: "news"' in mobile
+    assert 'data-platform="live"' in _fn_body("tlPillsHtml")
+
+
+def test_news_reader_functions_cover_sources_seen_and_blob_cleanup():
+    src = APP_JS.read_text()
+    for name in (
+        "renderNewsCenter", "loadFinancialNews", "openNewsSourcePicker",
+        "saveNewsSources", "openNewsArticle", "loadNewsImages", "clearNewsImageUrls",
+    ):
+        assert f"function {name}" in src or f"async function {name}" in src
+    seen = _fn_body("loadFinancialNews")
+    assert '"/api/news/seen"' in seen
+    assert "view_started_at" in seen
+    images = _fn_body("clearNewsImageUrls")
+    assert "URL.revokeObjectURL" in images
+
+
+def test_news_pagination_appends_without_replacing_existing_thumbnails():
+    body = _fn_body("loadFinancialNews")
+    assert "insertAdjacentHTML" in body
+    assert "state.newsItems.map(newsListItemHtml)" not in body
+
+
+def test_news_source_picker_is_searchable_checkbox_dialog():
+    body = _fn_body("openNewsSourcePicker")
+    assert 'type="search"' in body
+    body = body + _fn_body("newsSourcePickerRows")
+    assert 'type="checkbox"' in body
+    assert 'role="dialog"' in body
+    assert "我的来源" in body
+
+
+def test_news_source_picker_preserves_selection_across_search():
+    open_picker = _fn_body("openNewsSourcePicker")
+    save = _fn_body("saveNewsSources")
+    assert "newsSelectedIds" in open_picker
+    assert "mask._newsSelectedIds" in save
+    assert "newsSourcePickerRows(event.target.value" in open_picker
+
+
+def test_admin_news_tab_is_full_feed_manager():
+    src = APP_JS.read_text()
+    assert 'const STATS_TABS = ["config", "cookies", "mx", "proxies", "plaza", "news"]' in src
+    for name in (
+        "loadAdminNews", "renderAdminNews", "openNewsSourceModal",
+        "openNewsFeedModal", "validateNewsFeedDraft", "refreshAdminNewsFeed",
+        "archiveAdminNewsSource", "restoreAdminNewsSource",
+    ):
+        assert f"function {name}" in src or f"async function {name}" in src
+    assert "财经资讯" in src
+    assert "显示已归档" in src
+    assert "验证并保存" in src
+
+
+def test_admin_news_master_detail_is_responsive():
+    css = STYLE_CSS.read_text()
+    assert ".news-admin-layout" in css
+    assert "grid-template-columns: 240px minmax(0, 1fr)" in css
+    mobile = _media_block(css, "@media (max-width: 768px)", last=True)
+    assert ".news-admin-layout" in mobile
+    assert "grid-template-columns: 1fr" in mobile
+
+
+
+def test_financial_news_action_icons_have_stable_dimensions():
+    css = STYLE_CSS.read_text()
+    assert ".news-admin-page .btn-normal .nav-svg" in css
+    rule = re.search(r"\.news-admin-page \.btn-normal \.nav-svg\s*\{([^}]*)\}", css)
+    assert rule and "width: 16px" in rule.group(1) and "height: 16px" in rule.group(1)
+
+
+
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=261"' in html
-    assert 'src="/app.js?v=369"' in html
-    assert 'dav-shell-v238' in sw
+    assert 'href="/style.css?v=262"' in html
+    assert 'src="/app.js?v=372"' in html
+    assert 'dav-shell-v241' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

@@ -1810,6 +1810,7 @@ class Scheduler:
         weibo_config=None,
         llm_config=None,
         mx_config=None,
+        news_service=None,
     ):
         self.db = db
         self.fetchers = fetchers
@@ -1820,6 +1821,7 @@ class Scheduler:
         self.weibo_config = weibo_config
         self.llm_config = llm_config
         self.mx_config = mx_config
+        self.news_service = news_service
         self.states: dict[str, PlatformState] = {}
         self._digest: dict[int, list[Post]] = {}
         self._dnd_buffer: dict[int, list[Post]] = {}
@@ -1839,6 +1841,15 @@ class Scheduler:
         self._mx_sync_service = None
         self._mx_ws_task = None
         self._mx_ws_on_message = None
+
+    def _submit_news_due(self):
+        if self.news_service is None:
+            return []
+        try:
+            return self.news_service.submit_due()
+        except Exception:  # noqa: BLE001 - 新闻失败不能停止其他调度
+            logger.exception("财经新闻刷新异常")
+            return []
 
     def stop(self):
         self._stop.set()
@@ -2090,6 +2101,10 @@ class Scheduler:
             except Exception:  # noqa: BLE001 - 任何异常都不能终止循环
                 logger.exception("轮询周期异常")
                 self.db.set_setting("stats_last_poll_error", "轮询周期异常")
+            try:
+                await asyncio.to_thread(self._submit_news_due)
+            except Exception:  # noqa: BLE001
+                logger.exception("财经新闻调度异常")
             now_mono = time.monotonic()
             # 推送失败重试（每 60 秒检查一次）
             if now_mono - self._last_retry >= 60:
@@ -2314,6 +2329,15 @@ class Scheduler:
                             logger.info("清理过期帖子 %d 条（保留 %d 天）", removed, retention)
                     except Exception:  # noqa: BLE001
                         logger.exception("帖子清理失败")
+                if retention > 0:
+                    try:
+                        removed_news = await asyncio.to_thread(
+                            self.db.delete_news_articles_older_than, retention
+                        )
+                        if removed_news:
+                            logger.info("清理过期财经新闻 %d 条（保留 %d 天）", removed_news, retention)
+                    except Exception:  # noqa: BLE001
+                        logger.exception("财经新闻清理失败")
                 log_retention = self.polling_config.push_logs_retention_days
                 if log_retention > 0:
                     try:
