@@ -7316,44 +7316,45 @@ function sourceCredentialGap(src, cookieItems) {
   return false;
 }
 
-function sourceStatusCell(src, cookieItems) {
-  if (src.ok) return '<td class="status-ok" data-label="状态">正常</td>';
-  if (sourceCredentialGap(src, cookieItems)) {
-    return '<td class="dash-status-cred" data-label="状态">凭据缺失</td>';
-  }
-  if (sourceNeverStarted(src)) {
-    return '<td class="muted" data-label="状态">未开始</td>';
-  }
-  if (src.consecutive_fails >= 3) {
-    return '<td class="status-fail" data-label="状态">持续失败</td>';
-  }
-  return '<td class="status-warn" data-label="状态">暂无成功</td>';
+function sourceStatusNote(src) {
+  if (src.platform !== "twitter" || src.direct_mode !== "fallback") return "";
+  return ` <span class="status-warn" title="${escapeHtml(src.direct_fallback_reason || "")}">直抓失败</span>`;
 }
 
-function sourceChannelCell(src) {
-  if (src.platform !== "twitter") return '<td class="muted ak-hide-mobile" data-label="通道">—</td>';
-  if (src.direct_mode === "direct") return '<td class="ak-hide-mobile" data-label="通道"><span class="status-ok">直抓</span></td>';
-  if (src.direct_mode === "fallback") {
-    return `<td class="ak-hide-mobile" data-label="通道"><span class="status-warn" title="${escapeHtml(src.direct_fallback_reason || "")}">直抓失败</span></td>`;
+function sourceStatusCell(src, cookieItems) {
+  const note = sourceStatusNote(src);
+  if (src.ok) return `<td class="status-ok" data-label="状态">正常${note}</td>`;
+  if (sourceCredentialGap(src, cookieItems)) {
+    return `<td class="dash-status-cred" data-label="状态">凭据缺失${note}</td>`;
   }
-  return '<td class="muted ak-hide-mobile" data-label="通道">—</td>';
+  if (sourceNeverStarted(src)) {
+    return `<td class="muted" data-label="状态">未开始${note}</td>`;
+  }
+  if (src.consecutive_fails >= 3) {
+    return `<td class="status-fail" data-label="状态">持续失败${note}</td>`;
+  }
+  return `<td class="status-warn" data-label="状态">暂无成功${note}</td>`;
 }
 
 function sourceRowsHtml(sources, cookieItems) {
   const rows = sources || [];
-  if (!rows.length) return '<tr class="ak-empty"><td colspan="9" class="muted">暂无数据源</td></tr>';
-  return rows.map((src) => `
-    <tr>
+  if (!rows.length) return '<tr class="ak-empty"><td colspan="4" class="muted">暂无数据源</td></tr>';
+  return rows.map((src) => {
+    const warn = src.warn_24h ? ` <span class="status-warn">⚠${src.warn_24h}</span>` : "";
+    const counts = `<span class="muted dash-source-counts">${src.ok_24h} / ${src.fail_24h}${warn}</span>`;
+    const hint = [
+      src.consecutive_fails ? `连续失败 ${src.consecutive_fails}` : "",
+      src.next_retry_at ? `下次重试 ${fmtTs(src.next_retry_at)}` : "",
+      src.last_ok_at ? `最近成功 ${fmtTs(src.last_ok_at)}` : "",
+    ].filter(Boolean).join(" · ");
+    return `
+    <tr${hint ? ` title="${escapeHtml(hint)}"` : ""}>
       <td data-label="平台">${PLATFORM_LABELS[src.platform] || escapeHtml(src.platform)}</td>
       ${sourceStatusCell(src, cookieItems)}
-      ${sourceChannelCell(src)}
-      <td class="ak-hide-mobile" data-label="24h 成功率">${rateBar(src.success_rate_24h)}</td>
-      <td class="ak-hide-mobile" data-label="成功 / 失败">${src.ok_24h} / ${src.fail_24h}${src.warn_24h ? ` <span class="status-warn">⚠${src.warn_24h}</span>` : ""}</td>
-      <td class="ak-hide-mobile${src.consecutive_fails >= 3 ? " status-fail" : ""}" data-label="连续失败">${src.consecutive_fails}</td>
-      <td class="ak-hide-mobile" data-label="最近成功">${fmtTs(src.last_ok_at)}</td>
-      <td class="ak-hide-mobile" data-label="下次重试">${src.next_retry_at ? fmtTs(src.next_retry_at) : "—"}</td>
+      <td class="ak-hide-mobile dash-source-rate" data-label="24h 成功率">${rateBar(src.success_rate_24h)}${counts}</td>
       ${sourceCauseCell(src, cookieItems)}
-    </tr>`).join("");
+    </tr>`;
+  }).join("");
 }
 
 function sourceCauseCell(src, cookieItems) {
@@ -7370,12 +7371,12 @@ function sourceCauseCell(src, cookieItems) {
 }
 
 function abnormalSourceEvents(events, limit) {
-  return (events || []).filter((e) => e.status !== "ok").slice(0, limit || 8);
+  return (events || []).filter((e) => e.status !== "ok").slice(0, limit || 5);
 }
 
 function sourceEventRowsHtml(events) {
   const rows = abnormalSourceEvents(events);
-  if (!rows.length) return `<p class="muted">近 24 小时无异常事件</p>`;
+  if (!rows.length) return "";
   return `<div class="dash-events">${rows.map((e) => `<div class="dash-event">
     <span class="dash-event-dot ${escapeHtml(e.status)}"></span>
     <span class="muted dash-event-time">${escapeHtml(fmtDbTime(e.created_at))}</span>
@@ -7386,22 +7387,27 @@ function sourceEventRowsHtml(events) {
 }
 
 function dashboardFetchMetaHtml(s) {
-  const retry = s.retry_pending
+  const items = [];
+  items.push(s.last_poll_at ? `最近抓取 ${fmtTs(s.last_poll_at)}` : "尚未轮询");
+  if (s.last_poll_duration_ms) items.push(`耗时 ${(Number(s.last_poll_duration_ms) / 1000).toFixed(1)} 秒`);
+  items.push(`轮询 ${s.polling_interval_seconds || "—"} 秒`);
+  items.push(s.retry_pending
     ? `<span class="status-warn">待重试 ${s.retry_pending} 条</span>`
-    : `<span class="status-ok">重试队列空闲</span>`;
-  const pollBit = s.last_poll_at ? `最近抓取 ${fmtTs(s.last_poll_at)}` : "尚未轮询";
-  const durBit = s.last_poll_duration_ms
-    ? ` · 耗时 ${(Number(s.last_poll_duration_ms) / 1000).toFixed(1)} 秒`
-    : "";
+    : `<span class="status-ok">重试空闲</span>`);
   const alerts = s.alerts || {};
-  const chips = [];
-  if (alerts.push_alert_last_at) chips.push(`推送告警 ${fmtTs(alerts.push_alert_last_at)}`);
-  if (alerts.x_direct_alert_at) chips.push(`X失败告警 ${fmtTs(alerts.x_direct_alert_at)}`);
-  if (alerts.cookie_keepalive_alert_at) chips.push(`cookie保活告警 ${fmtTs(alerts.cookie_keepalive_alert_at)}`);
-  if (alerts.xueqiu_probe_alert_at) chips.push(`雪球探测告警 ${fmtTs(alerts.xueqiu_probe_alert_at)}`);
-  return `<p class="section-meta dash-fetch-meta" id="dash-fetch-meta">
-    ${pollBit}${durBit} · 轮询 ${s.polling_interval_seconds || "—"} 秒 · ${retry}${chips.length ? ` · ${chips.map((c) => escapeHtml(c)).join(" · ")}` : ""}
-  </p>`;
+  if (alerts.push_alert_last_at) items.push(`<span class="status-warn">推送告警 ${escapeHtml(fmtTs(alerts.push_alert_last_at))}</span>`);
+  if (alerts.x_direct_alert_at) items.push(`<span class="status-warn">X失败告警 ${escapeHtml(fmtTs(alerts.x_direct_alert_at))}</span>`);
+  if (alerts.cookie_keepalive_alert_at) items.push(`<span class="status-warn">cookie保活告警 ${escapeHtml(fmtTs(alerts.cookie_keepalive_alert_at))}</span>`);
+  if (alerts.xueqiu_probe_alert_at) items.push(`<span class="status-warn">雪球探测告警 ${escapeHtml(fmtTs(alerts.xueqiu_probe_alert_at))}</span>`);
+  return `<p class="section-meta dash-fetch-meta" id="dash-fetch-meta">${items.map((bit) => `<span>${bit}</span>`).join("")}</p>`;
+}
+
+function fmtRelativeFromMs(ms, nowMs) {
+  if (ms == null) return "从未";
+  const hours = Math.floor(Math.max(0, (nowMs || Date.now()) - ms) / 3600000);
+  if (hours < 1) return "不到 1 小时前";
+  if (hours < 48) return `${hours} 小时前`;
+  return `${Math.floor(hours / 24)} 天前`;
 }
 
 function staleKolsHtml(rows) {
@@ -7411,16 +7417,16 @@ function staleKolsHtml(rows) {
     return `<p class="muted" id="kol-health-empty">启用中的大V 在 ${STALE_KOL_HOURS} 小时内都抓到过新帖</p>`;
   }
   const extra = all.length > stale.length ? `，列出 ${stale.length} 个` : "";
-  return `<p class="dash-stale-verdict" id="kol-health-verdict">启用中 ${all.length} 个超过 ${STALE_KOL_HOURS} 小时没抓到新帖${extra}</p>
-    <div class="table-wrap"><table class="ak-table dash-stale-table">
-    <thead><tr><th scope="col">大V</th><th class="ak-hide-mobile" scope="col">平台</th><th scope="col">最近抓到新帖</th></tr></thead>
-    <tbody>${stale.map((h) => `
-      <tr>
-        <td data-label="大V"><button type="button" class="linkish" data-name="${escapeHtml(h.name)}" onclick="openAdminKolFromHealth(this.dataset.name)">${escapeHtml(h.name)}</button></td>
-        <td class="ak-hide-mobile" data-label="平台">${PLATFORM_LABELS[h.platform] || escapeHtml(h.platform)}</td>
-        <td class="muted" data-label="最近抓到新帖">${h.last_post_at ? escapeHtml(fmtDbTime(h.last_post_at)) : "从未抓到"}</td>
-      </tr>`).join("")}</tbody>
-  </table></div>`;
+  const nowMs = Date.now();
+  return `<p class="dash-stale-verdict" id="kol-health-verdict">${all.length} 个超过 ${STALE_KOL_HOURS} 小时没抓到新帖${extra}</p>
+    <ul class="dash-stale-list">${stale.map((h) => {
+      const when = h.last_post_at ? fmtRelativeFromMs(parseDbUtcMs(h.last_post_at), nowMs) : "从未";
+      const plat = PLATFORM_LABELS[h.platform] || h.platform || "";
+      return `<li>
+        <button type="button" class="linkish" data-name="${escapeHtml(h.name)}" onclick="openAdminKolFromHealth(this.dataset.name)">${escapeHtml(h.name)}</button>
+        <span class="muted">${escapeHtml(plat)} · ${escapeHtml(when)}</span>
+      </li>`;
+    }).join("")}</ul>`;
 }
 
 function dutyStripHtml(s) {
@@ -7468,6 +7474,8 @@ function renderStatsData(s) {
   if (events) events.innerHTML = sourceEventRowsHtml(s.recent_source_events);
   const kh = $("#kol-health");
   if (kh) kh.innerHTML = staleKolsHtml(s.kol_health);
+  const stalePanel = $("#dash-stale-panel");
+  if (stalePanel) stalePanel.hidden = !staleEnabledKolRows(s.kol_health).length;
   const imaCollectorStatus = $("#ima-collector-status");
   if (imaCollectorStatus && s.ima_collector) imaCollectorStatus.textContent = imaCollectorStatusText(s.ima_collector);
   const imaGroupDiscoveryStatus = $("#ima-group-discovery-status");
@@ -8962,78 +8970,67 @@ async function loadAdminDashboard() {
       </div>`;
     }).join("");
 
-    const trendSection = trend.length
-      ? `<section class="section-panel">
-        <header class="section-head"><div><h2 class="section-title">近 14 天推送趋势</h2>
-        <p class="section-meta">每日推送条数（绿色=成功，红色=失败）。</p></div></header>
-        ${trendHtml}
-      </section>`
-      : "";
     const platformSection = platformRows
       ? `<section class="section-panel">
-          <header class="section-head"><div><h2 class="section-title">帖子来源分布</h2>
-          <p class="section-meta">累计抓取帖子按平台。</p></div></header>
+          <header class="section-head"><div><h2 class="section-title">帖子来源分布</h2></div></header>
           ${platformRows}
         </section>`
       : "";
     const channelSection = channelRows
       ? `<section class="section-panel">
-          <header class="section-head"><div><h2 class="section-title">渠道推送成功率（7 天）</h2>
-          <p class="section-meta">各渠道成功/总数与成功率。</p></div></header>
+          <header class="section-head"><div><h2 class="section-title">渠道推送成功率（7 天）</h2></div></header>
           ${channelRows}
         </section>`
       : "";
     const splitSection = (platformSection || channelSection)
       ? `<div class="dash-split">${platformSection}${channelSection}</div>`
       : "";
+    const volumeStats = `<div class="dash-stats">
+          ${statCard("近 7 天推送", pu.total_7d || 0)}
+          ${statCard("推送成功率", rate)}
+          ${statCard("绑定渠道用户", u.bound || 0)}
+        </div>`;
+    const volumeBody = trendHtml
+      ? `<div class="dash-volume">${volumeStats}${trendHtml}</div>`
+      : volumeStats;
 
     if (!routeStillActive(_adminRenderSeq)) return;
     setPageTitle("全景概览");
     $("#admin-body").innerHTML = `
       <div id="dash-cookie-slot"></div>
-      <div id="dash-duty-strip-slot"></div>
-      <section class="section-panel">
-        <header class="section-head"><div><h2 class="section-title">停更大V</h2>
-        <p class="section-meta">点名字进大V管理。</p></div></header>
-        <div id="kol-health"></div>
-      </section>
-      <section class="section-panel">
-        <header class="section-head">
-          <div><h2 class="section-title">数据源健康</h2>
-          ${dashboardFetchMetaHtml(st)}</div>
-          <div class="toolbar"><button type="button" class="btn-ghost" onclick="refreshDashboardLive()">立即刷新</button></div>
-        </header>
-        <div id="stats-poll-error"></div>
-        <div class="table-wrap">
-          <table class="ak-table dash-source-table">
-            <thead><tr>
-              <th scope="col">平台</th><th scope="col">状态</th>
-              <th class="ak-hide-mobile" scope="col">通道</th>
-              <th class="ak-hide-mobile" scope="col">24h 成功率</th>
-              <th class="ak-hide-mobile" scope="col">成功 / 失败</th>
-              <th class="ak-hide-mobile" scope="col">连续失败</th>
-              <th class="ak-hide-mobile" scope="col">最近成功</th>
-              <th class="ak-hide-mobile" scope="col">下次重试</th>
-              <th scope="col">最近错误</th>
-            </tr></thead>
-            <tbody id="sources-table"></tbody>
-          </table>
-        </div>
-        <div id="dash-source-events"></div>
-      </section>
-      <section class="section-panel">
+      <div class="dash-duty-grid">
+        <section class="section-panel dash-source-panel">
+          <header class="section-head">
+            <div>
+              <h2 class="section-title">数据源健康</h2>
+              <div id="dash-duty-strip-slot"></div>
+              ${dashboardFetchMetaHtml(st)}
+            </div>
+            <div class="toolbar"><button type="button" class="btn-ghost" onclick="refreshDashboardLive()">立即刷新</button></div>
+          </header>
+          <div id="stats-poll-error"></div>
+          <div class="table-wrap">
+            <table class="ak-table dash-source-table">
+              <thead><tr>
+                <th scope="col">平台</th><th scope="col">状态</th>
+                <th class="ak-hide-mobile" scope="col">24h 成功率</th>
+                <th scope="col">最近错误</th>
+              </tr></thead>
+              <tbody id="sources-table"></tbody>
+            </table>
+          </div>
+          <div id="dash-source-events"></div>
+        </section>
+        <section class="section-panel dash-stale-panel" id="dash-stale-panel" hidden>
+          <header class="section-head"><div><h2 class="section-title">停更大V</h2></div></header>
+          <div id="kol-health"></div>
+        </section>
+      </div>
+      <section class="section-panel dash-volume-panel">
         <header class="section-head"><div><h2 class="section-title">核心指标</h2>
-        <p class="section-meta">用户、订阅与推送的业务总览（推送统计为近 7 天）。</p></div></header>
-        <div class="dash-stats">
-          ${statCard("注册用户", u.total || 0)}
-          ${statCard("绑定渠道用户", u.bound || 0)}
-          ${statCard("订阅数", s.total || 0)}
-          ${statCard("近 7 天推送", pu.total_7d || 0)}
-          ${statCard("推送成功率", rate)}
-          ${statCard("帖子总量", p.total || 0)}
-        </div>
+        <p class="section-meta">注册用户 ${u.total || 0} · 订阅 ${s.total || 0} · 帖子 ${p.total || 0}</p></div></header>
+        ${volumeBody}
       </section>
-      ${trendSection}
       ${splitSection}`;
     renderStatsData(st);
     startDashboardLiveTimer();

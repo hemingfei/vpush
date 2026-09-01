@@ -1093,9 +1093,9 @@ def test_dashboard_is_duty_console():
     assert "数据源健康" in dash
     assert "停更" in dash or "kol-health" in dash
     assert dash.count("数据源健康") == 1
+    assert dash.find("数据源健康") < dash.find("dash-duty-strip-slot")
     assert dash.find("dash-duty-strip-slot") < dash.find("停更")
-    assert dash.find("停更") < dash.find("数据源健康")
-    assert dash.find("数据源健康") < dash.find("核心指标")
+    assert dash.find("停更") < dash.find("核心指标")
     assert "setPageTitle(\"全景概览\")" in dash
     assert 'id="dash-duty-strip-slot"' in dash
     assert "dutyStripHtml" in live
@@ -3380,9 +3380,9 @@ def test_frontend_asset_urls_bust_browser_cache():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=259"' in html
-    assert 'src="/app.js?v=366"' in html
-    assert 'dav-shell-v235' in sw
+    assert 'href="/style.css?v=260"' in html
+    assert 'src="/app.js?v=367"' in html
+    assert 'dav-shell-v236' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
