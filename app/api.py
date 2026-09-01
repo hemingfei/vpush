@@ -1,7 +1,10 @@
 """REST API：认证、订阅目录、我的动态、KOL/分类管理。"""
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -51,7 +54,7 @@ from .news import (
     NewsUpstreamError,
     normalize_feed_url,
 )
-from .fetchers.base import CN_TZ, PLATFORM_LABELS, apply_twitter_feed, strip_html
+from .fetchers.base import CN_TZ, PLATFORM_LABELS, Post, apply_twitter_feed, strip_html
 from .fetchers.combination import extract_cube_symbol, resolve_combination_profile
 from .fetchers.ima import (
     IMA_API_KEY_KEY,
@@ -494,6 +497,13 @@ class KolBatchAction(BaseModel):
     ids: list[int]
     action: str  # enable|disable|priority|secondary|normal|category|delete
     value: bool | int | None = None
+
+
+class KolWebhookUpdate(BaseModel):
+    """系统 KOL Webhook 配置更新；secret=None 不修改，""=清除，非空=设置。"""
+
+    enabled: bool | None = None
+    secret: str | None = None
 
 
 class UserBatchAction(BaseModel):
@@ -1265,6 +1275,91 @@ def _do_reject_kol_request(db: DB, request_id: int, admin: dict) -> None:
     db.log_admin_action(admin["id"], "reject_kol_request", str(request_id), req["external_id"])
 
 
+# ---- 系统 KOL Webhook（入站，飞书自定义机器人风格）----
+
+WEBHOOK_RATE_LIMIT = 100  # 每 token 每分钟条数上限（对齐飞书自定义机器人）
+WEBHOOK_RATE_WINDOW = 60
+WEBHOOK_CONTENT_LIMIT = 8000
+WEBHOOK_TITLE_LIMIT = 200
+WEBHOOK_MAX_IMAGES = 9
+
+
+def verify_webhook_sign(secret: str, timestamp, sign, now: int | None = None) -> bool:
+    """飞书自定义机器人同款签名校验：sign = base64(hmac_sha256(key=f"{ts}\n{secret}"))。
+
+    时间戳与服务器时间相差超过 1 小时视为过期，防重放。
+    """
+    try:
+        ts = int(str(timestamp).strip())
+    except (TypeError, ValueError):
+        return False
+    now = now if now is not None else int(time.time())
+    if abs(now - ts) > 3600:
+        return False
+    string_to_sign = f"{ts}\n{secret}"
+    digest = hmac.new(string_to_sign.encode("utf-8"), digestmod=hashlib.sha256).digest()
+    expected = base64.b64encode(digest).decode("utf-8")
+    return hmac.compare_digest(expected, str(sign or "").strip())
+
+
+def _webhook_rich_text(post_block: dict) -> tuple[str, str]:
+    """解析飞书 post 富文本块，返回 (title, text)；只取文本与链接，image_key 忽略。"""
+    block = post_block.get("zh_cn") or post_block.get("en_us") or {}
+    lines: list[str] = []
+    for line in block.get("content") or []:
+        if not isinstance(line, list):
+            continue
+        parts = []
+        for el in line:
+            if not isinstance(el, dict):
+                continue
+            text = el.get("text") if isinstance(el.get("text"), str) else ""
+            href = el.get("href") if isinstance(el.get("href"), str) else ""
+            if text and href:
+                parts.append(f"{text} ({href})")
+            elif text:
+                parts.append(text)
+            elif href:
+                parts.append(href)
+        lines.append("".join(parts))
+    title = block.get("title")
+    return (title.strip() if isinstance(title, str) else ""), "\n".join(l for l in lines if l)
+
+
+def extract_webhook_message(payload: dict) -> tuple[str, str, list[str]]:
+    """从 webhook 请求体提取 (title, content, images)。
+
+    兼容两种格式：
+    - 飞书自定义机器人：msg_type=text/post 的 content 结构
+    - 简化格式：{"text": "...", "title": "...", "images": [url, ...]}
+    两种都解析不出时抛 ValueError。
+    """
+    msg_type = payload.get("msg_type")
+    content = payload.get("content")
+    if msg_type == "text" and isinstance(content, dict):
+        text = content.get("text")
+        if isinstance(text, str) and text.strip():
+            return "", text.strip(), []
+    if msg_type == "post" and isinstance(content, dict) and isinstance(content.get("post"), dict):
+        title, text = _webhook_rich_text(content["post"])
+        if text:
+            return title[:WEBHOOK_TITLE_LIMIT], text, []
+    text = payload.get("text")
+    if isinstance(text, str) and text.strip():
+        title = payload.get("title")
+        title = title.strip()[:WEBHOOK_TITLE_LIMIT] if isinstance(title, str) else ""
+        raw_images = payload.get("images")
+        images = []
+        if isinstance(raw_images, list):
+            images = [
+                u.strip()
+                for u in raw_images
+                if isinstance(u, str) and u.strip()
+            ][:WEBHOOK_MAX_IMAGES]
+        return title, text.strip(), images
+    raise ValueError("消息内容为空")
+
+
 def create_api_router(
     db: DB,
     secret: str,
@@ -1274,6 +1369,7 @@ def create_api_router(
     trust_proxy: bool = False,
     ima_documents: ImaDocumentService | None = None,
     on_mx_config_changed=None,
+    on_external_post=None,
     on_mx_ws_control=None,
     news_service: NewsService | None = None,
 ) -> APIRouter:
@@ -1296,6 +1392,21 @@ def create_api_router(
     MAX_PASSWORD_LEN = 128
     # 微博扫码登录会话：qrid -> {client, created_at}
     weibo_qr_sessions: dict[str, dict] = {}
+    # 系统 KOL Webhook 入站限流：每 token 滑动窗口（单实例内存版）
+    webhook_rate: dict[str, list[float]] = {}
+
+    def _webhook_rate_allow(key: str) -> bool:
+        now = time.time()
+        recent = [t for t in webhook_rate.get(key, []) if now - t < WEBHOOK_RATE_WINDOW]
+        allowed = len(recent) < WEBHOOK_RATE_LIMIT
+        if allowed:
+            recent.append(now)
+        webhook_rate[key] = recent
+        if len(webhook_rate) > 2000:
+            for k in list(webhook_rate):
+                if all(now - t >= WEBHOOK_RATE_WINDOW for t in webhook_rate[k]):
+                    del webhook_rate[k]
+        return allowed
 
     def _client_ip(request: Request) -> str:
         """优先取 X-Forwarded-For 首段（仅当位于可信反代之后），否则用直连 IP。
@@ -5006,6 +5117,121 @@ def create_api_router(
             "ids": [r["id"] for r in results if r["ok"]],
             "failed": [r for r in results if not r["ok"]],
         }
+
+    # ---- 系统 KOL Webhook（外部调用让该 KOL 发言，参考飞书自定义机器人）----
+
+    def _require_system_kol_for_webhook(kol_id: int) -> dict:
+        kol = db.get_kol_webhook_config(kol_id)
+        if not kol:
+            raise HTTPException(status_code=404, detail="KOL 不存在")
+        if kol["platform"] != "system":
+            raise HTTPException(status_code=400, detail="仅系统 KOL 支持 Webhook")
+        return kol
+
+    def _webhook_info(kol: dict) -> dict:
+        token = kol.get("webhook_token") or ""
+        return {
+            "kol_id": kol["id"],
+            "kol_name": kol["name"],
+            "enabled": bool(kol.get("webhook_enabled")),
+            "token": token,
+            "secret_set": bool(kol.get("webhook_secret")),
+            "path": f"/api/kol-webhook/{token}" if token else "",
+        }
+
+    @router.get("/admin/kols/{kol_id}/webhook", dependencies=[Depends(require_admin)])
+    def get_kol_webhook(kol_id: int, admin: dict = Depends(require_admin)):
+        """查看系统 KOL 的 Webhook 配置（token 仅管理员可见）。"""
+        del admin
+        return _webhook_info(_require_system_kol_for_webhook(kol_id))
+
+    @router.put("/admin/kols/{kol_id}/webhook", dependencies=[Depends(require_admin)])
+    def update_kol_webhook(
+        kol_id: int, body: KolWebhookUpdate, admin: dict = Depends(require_admin)
+    ):
+        """启用/停用 Webhook，可选设置签名密钥（"" 清除）；首次启用自动生成 token。"""
+        kol = _require_system_kol_for_webhook(kol_id)
+        if body.enabled is not None:
+            if body.enabled and not (kol.get("webhook_token") or ""):
+                db.set_kol_webhook(kol_id, token=secrets.token_urlsafe(24))
+            db.set_kol_webhook(kol_id, enabled=body.enabled)
+        if "secret" in body.model_fields_set:
+            db.set_kol_webhook(kol_id, secret=(body.secret or "").strip())
+        _audit(admin, "kol_webhook_update", str(kol_id), f"enabled={body.enabled}")
+        return _webhook_info(db.get_kol_webhook_config(kol_id))
+
+    @router.post(
+        "/admin/kols/{kol_id}/webhook/regenerate", dependencies=[Depends(require_admin)]
+    )
+    def regenerate_kol_webhook(kol_id: int, admin: dict = Depends(require_admin)):
+        """更换 Webhook token：旧 URL 立即失效（泄露后轮换用）。"""
+        _require_system_kol_for_webhook(kol_id)
+        token = secrets.token_urlsafe(24)
+        db.set_kol_webhook(kol_id, token=token)
+        _audit(admin, "kol_webhook_regenerate", str(kol_id), "")
+        return _webhook_info(db.get_kol_webhook_config(kol_id))
+
+    @router.post("/kol-webhook/{token}")
+    async def kol_webhook_incoming(token: str, request: Request):
+        """入站 Webhook：外部调用让系统 KOL「发言」，无需登录态，token 即凭据。
+
+        兼容飞书自定义机器人请求体（msg_type=text/post，可选 timestamp+sign 签名）
+        与简化格式 {"text": "...", "title": "...", "images": [...]}。
+        """
+        if not token or len(token) > 128 or not re.fullmatch(r"[A-Za-z0-9_-]+", token):
+            raise HTTPException(status_code=404, detail="webhook 不存在")
+        if not _webhook_rate_allow(token):
+            raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
+        kol = db.get_kol_by_webhook_token(token)
+        if kol is None:
+            raise HTTPException(status_code=404, detail="webhook 不存在或已停用")
+        try:
+            payload = await request.json()
+        except Exception:  # noqa: BLE001 - 非法 JSON 一律按参数错误处理
+            raise HTTPException(status_code=400, detail="请求体不是合法 JSON") from None
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="请求体需为 JSON 对象")
+        secret = db.get_kol_webhook_secret(kol["id"])
+        if secret and not verify_webhook_sign(
+            secret, payload.get("timestamp"), payload.get("sign")
+        ):
+            raise HTTPException(status_code=403, detail="签名校验失败")
+        try:
+            title, content, images = extract_webhook_message(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        if len(content) > WEBHOOK_CONTENT_LIMIT:
+            raise HTTPException(
+                status_code=400, detail=f"内容超过 {WEBHOOK_CONTENT_LIMIT} 字符上限"
+            )
+        # msg_id/external_id 可选：带了就按 token+msg_id 幂等去重（客户端重试安全）
+        msg_id = str(payload.get("msg_id") or payload.get("external_id") or "").strip()[:128]
+        token8 = hashlib.sha256(token.encode("utf-8")).hexdigest()[:8]
+        external_id = (
+            f"webhook_{token8}_{msg_id}"
+            if msg_id
+            else f"webhook_{token8}_{secrets.token_hex(8)}"
+        )
+        post = Post(
+            platform=kol["platform"],
+            kol_id=kol["id"],
+            kol_name=kol["name"],
+            external_id=external_id,
+            title=title,
+            content=content,
+            url="",
+            published_at=datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+            images=images,
+        )
+        # 入库+推送走调度器链路（免打扰/次要缓冲/重试队列）；纯 UI 调试模式只入库
+        save = on_external_post or db.save_post
+        post_id = await asyncio.to_thread(save, post)
+        result: dict = {"code": 0, "msg": "success"}
+        if post_id is None:
+            result["duplicate"] = True
+        else:
+            result["post_id"] = post_id
+        return result
 
     @router.put("/kols/{kol_id}", dependencies=[Depends(require_admin)])
     def update_kol(kol_id: int, body: KolUpdate, admin: dict = Depends(require_admin)):

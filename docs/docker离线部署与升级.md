@@ -32,7 +32,8 @@ services:
 ### 1. 本地：构建并导出镜像（在项目根目录）
 
 ```bash
-docker build -t vpush:<版本> .
+# PIP_INDEX_URL 换清华源，国内网络构建快很多（只影响主镜像，waf-bot 用不到）
+docker build --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple -t vpush:<版本> .
 docker build -t vpush-waf-bot:<版本> ./waf-bot
 
 # 两个镜像一起打进一个 tar
@@ -43,7 +44,6 @@ docker save vpush:<版本> vpush-waf-bot:<版本> -o vpush-<版本>.tar
 ```
 
 本地是 Windows x64、服务器是 x86_64，架构一致，无需 `--platform`。
-国内网络慢可给主镜像加：`--build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`。
 
 ### 2. 上传文件到服务器
 

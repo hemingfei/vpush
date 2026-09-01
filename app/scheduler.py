@@ -1863,7 +1863,7 @@ class Scheduler:
             self._mx_sync_service = None
         global _mx_fetcher
         _mx_fetcher = None
-        
+
         # 尽力把缓冲中未推送的合并摘要发出去，避免重启/关闭丢消息
         try:
             flush_digest(
@@ -1883,7 +1883,41 @@ class Scheduler:
             self._flush_secondary_buffers()
         except Exception:  # noqa: BLE001
             logger.exception("关闭时个人次要缓冲推送失败")
-    
+
+    def ingest_external_post(self, post: Post) -> int | None:
+        """外部来源（系统 KOL webhook）发帖：入库 + 实时推送，返回 post_id（重复为 None）。
+
+        与 MX 实时消息同链路：复用免打扰/次要合并缓冲与推送重试队列，
+        大V 屏蔽词命中只入库不推送，静默源同样不打推送。
+        """
+        post_id = self.db.save_post(post)
+        if not post_id:
+            return None
+        if self.db.is_post_blocked(post_id):
+            logger.info(
+                "关键词拦截不推送 platform=%s kol=%s id=%s",
+                post.platform, post.kol_name, post.external_id,
+            )
+            return post_id
+        kol = self.db.get_kol(post.kol_id) or {}
+        if kol.get("silent"):
+            logger.info(
+                "静默源入库不打推送 platform=%s kol=%s id=%s",
+                post.platform, post.kol_name, post.external_id,
+            )
+            return post_id
+        notify_subscribers(
+            self.db,
+            post_id,
+            post,
+            self.notifiers_config,
+            self.notifiers,
+            self.retry_queue,
+            dnd_buffer=self._dnd_buffer,
+            secondary_buffer=self._secondary_buffer,
+        )
+        return post_id
+
     async def _send_startup_message(self):
         """启动提示只推送给管理员（走管理员各自绑定的渠道），普通用户不推送。"""
         if self.notifiers_config is None:

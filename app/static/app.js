@@ -10798,6 +10798,7 @@ async function loadAdminKols(opts) {
               <td data-label="状态" class="${k.enabled ? "status-ok" : "status-fail"}">${k.enabled ? "启用" : "停用"}</td>
               <td class="ak-actions" data-label="操作">
                 ${tierSel}
+                ${k.platform === "system" ? `<button class="btn-sm" onclick="adminKolWebhook(${k.id})">Webhook</button>` : ""}
                 <button class="btn-sm" onclick="adminToggleKol(${k.id}, ${k.enabled ? 0 : 1})">${k.enabled ? "停用" : "启用"}</button>
                 <button class="btn-sm" onclick="adminEditKolKeywords(${k.id})">屏蔽词</button>
                 <button class="btn-sm" onclick="adminEditKol(${k.id})">编辑</button>
@@ -11205,6 +11206,117 @@ async function saveKolEdit(id) {
   } catch (err) {
     flash("保存失败: " + err.message, "error");
     if (btn) btn.disabled = false;
+  }
+}
+
+// ---- 系统 KOL Webhook（外部调用让该 KOL 发言，飞书自定义机器人风格）----
+function _kolWebhookUrl(wh) {
+  return `${location.origin}${wh.path || ""}`;
+}
+
+function _kolWebhookCurl(wh) {
+  return `curl -X POST '${_kolWebhookUrl(wh)}' -H 'Content-Type: application/json' -d '{"msg_type":"text","content":{"text":"大家好"}}'`;
+}
+
+async function adminKolWebhook(id) {
+  const row = (state.adminKols || []).find((k) => k.id === id);
+  if (!row) return;
+  let wh;
+  try {
+    wh = await api(`/api/admin/kols/${id}/webhook`);
+  } catch (err) {
+    flash("加载失败: " + err.message, "error");
+    return;
+  }
+  const mask = document.createElement("div");
+  mask.className = "modal-mask";
+  mask.innerHTML = `
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="kw-title">
+      <h3 id="kw-title" style="margin-bottom:12px">Webhook：${escapeHtml(row.name)}</h3>
+      <p class="muted" style="margin-top:0">外部程序 POST 消息到该地址，就会以「${escapeHtml(row.name)}」的身份发帖并推送给订阅者（参考飞书自定义机器人，兼容其请求格式）。</p>
+      <label class="form-label" style="display:flex;align-items:center;gap:8px">
+        <input id="kw-enabled" type="checkbox" ${wh.enabled ? "checked" : ""} onchange="adminKolWebhookToggle(${id}, this.checked)"> 启用 Webhook
+      </label>
+      <div id="kw-url-wrap" ${wh.enabled && wh.token ? "" : "hidden"}>
+        <label class="form-label">Webhook 地址
+          <div class="toolbar" style="gap:8px">
+            <input id="kw-url" class="form-control" readonly value="${escapeHtml(_kolWebhookUrl(wh))}" onclick="this.select()">
+            <button type="button" class="btn-sm" onclick="copyText(document.getElementById('kw-url').value, '已复制 Webhook 地址')">复制</button>
+          </div>
+        </label>
+        <label class="form-label">签名密钥（可选，防伪造；飞书同款 HMAC 校验）
+          <div class="toolbar" style="gap:8px">
+            <input id="kw-secret" class="form-control" placeholder="${wh.secret_set ? "已设置（输入新值可更换）" : "留空则不校验签名"}">
+            <button type="button" class="btn-sm" onclick="adminKolWebhookSaveSecret(${id})">保存密钥</button>
+            ${wh.secret_set ? `<button type="button" class="btn-sm" onclick="adminKolWebhookSaveSecret(${id}, true)">清除</button>` : ""}
+          </div>
+        </label>
+        <div class="toolbar" style="gap:8px">
+          <button type="button" class="btn-sm" onclick="adminKolWebhookRegenerate(${id})">重新生成 Token（旧地址立即失效）</button>
+        </div>
+        <label class="form-label">调用示例
+          <pre class="muted" style="white-space:pre-wrap;user-select:all">${escapeHtml(_kolWebhookCurl(wh))}</pre>
+        </label>
+      </div>
+      <div class="toolbar" style="margin-top:16px">
+        <button type="button" class="btn-sm" data-close>关闭</button>
+      </div>
+    </div>`;
+  document.body.appendChild(mask);
+  mask.addEventListener("click", (e) => { if (e.target === mask) mask.remove(); });
+  mask.addEventListener("keydown", (e) => { if (e.key === "Escape") mask.remove(); });
+  mask.querySelector("[data-close]").addEventListener("click", () => mask.remove());
+}
+
+async function adminKolWebhookToggle(id, enabled) {
+  try {
+    const wh = await api(`/api/admin/kols/${id}/webhook`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    });
+    flash(enabled ? "Webhook 已启用" : "Webhook 已停用");
+    const wrap = $("#kw-url-wrap");
+    if (wrap) wrap.hidden = !(wh.enabled && wh.token);
+    const urlEl = $("#kw-url");
+    if (urlEl && wh.path) urlEl.value = _kolWebhookUrl(wh);
+  } catch (err) {
+    flash("保存失败: " + err.message, "error");
+    const cb = $("#kw-enabled");
+    if (cb) cb.checked = !enabled;
+  }
+}
+
+async function adminKolWebhookSaveSecret(id, clear = false) {
+  const value = clear ? "" : ($("#kw-secret")?.value || "").trim();
+  if (!clear && !value) {
+    flash("请输入密钥，或点「清除」", "error");
+    return;
+  }
+  try {
+    const wh = await api(`/api/admin/kols/${id}/webhook`, {
+      method: "PUT",
+      body: JSON.stringify({ secret: value }),
+    });
+    flash(wh.secret_set ? "签名密钥已保存" : "签名密钥已清除");
+    const input = $("#kw-secret");
+    if (input) {
+      input.value = "";
+      input.placeholder = wh.secret_set ? "已设置（输入新值可更换）" : "留空则不校验签名";
+    }
+  } catch (err) {
+    flash("保存失败: " + err.message, "error");
+  }
+}
+
+async function adminKolWebhookRegenerate(id) {
+  if (!(await showConfirm("确定更换 Token？旧 Webhook 地址会立即失效。"))) return;
+  try {
+    const wh = await api(`/api/admin/kols/${id}/webhook/regenerate`, { method: "POST" });
+    const urlEl = $("#kw-url");
+    if (urlEl) urlEl.value = _kolWebhookUrl(wh);
+    flash("已更换 Token");
+  } catch (err) {
+    flash("操作失败: " + err.message, "error");
   }
 }
 

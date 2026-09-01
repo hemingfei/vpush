@@ -173,6 +173,17 @@ def days_until_purge(created_at: str | None, n: int, m: int) -> int | None:
     return max(0, int(sec // 86400))
 
 
+# 系统 KOL 的 Webhook 配置列：只通过专用管理端点读写，
+# 通用查询（get_kol/list_kols 等）一律剥离，避免 token/密钥随接口外泄
+_WEBHOOK_COLUMNS = ("webhook_enabled", "webhook_token", "webhook_secret")
+
+
+def _strip_webhook_fields(row: dict) -> dict:
+    for col in _WEBHOOK_COLUMNS:
+        row.pop(col, None)
+    return row
+
+
 def _normalize_post_images(rows: list[dict]) -> list[dict]:
     """posts 行的 images 是 JSON 文本，API 场景统一解析为数组。"""
     for row in rows:
@@ -631,6 +642,9 @@ CREATE TABLE IF NOT EXISTS kols (
     priority INTEGER NOT NULL DEFAULT 0,
     extra_data TEXT NOT NULL DEFAULT '',
     block_keywords TEXT NOT NULL DEFAULT '',
+    webhook_enabled INTEGER NOT NULL DEFAULT 0,
+    webhook_token TEXT NOT NULL DEFAULT '',
+    webhook_secret TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS kol_acl (
@@ -1125,6 +1139,18 @@ class DB:
             self._conn.execute("ALTER TABLE kols ADD COLUMN silent INTEGER NOT NULL DEFAULT 0")
         if "priority" not in cols:
             self._conn.execute("ALTER TABLE kols ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")
+        # 系统 KOL 的入站 Webhook：URL 内嵌 token 鉴权 + 可选飞书同款签名密钥
+        if "webhook_enabled" not in cols:
+            self._conn.execute("ALTER TABLE kols ADD COLUMN webhook_enabled INTEGER NOT NULL DEFAULT 0")
+        if "webhook_token" not in cols:
+            self._conn.execute("ALTER TABLE kols ADD COLUMN webhook_token TEXT NOT NULL DEFAULT ''")
+        if "webhook_secret" not in cols:
+            self._conn.execute("ALTER TABLE kols ADD COLUMN webhook_secret TEXT NOT NULL DEFAULT ''")
+        # token 唯一性（空串不算）：防碰撞 + 查询走索引
+        self._conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_kols_webhook_token "
+            "ON kols(webhook_token) WHERE webhook_token != ''"
+        )
         # 知识星球默认次要：只跑一次，避免覆盖管理员后来改回的「普通」
         if (self.get_setting("zsxq_default_secondary_v1") or "") != "1":
             self._conn.execute(
@@ -1858,7 +1884,7 @@ class DB:
         if limit:
             sql += " LIMIT ? OFFSET ?"
             params.extend([limit, offset])
-        return self._rows(sql, params)
+        return [_strip_webhook_fields(r) for r in self._rows(sql, params)]
 
     def list_kol_ids(
         self,
@@ -1928,7 +1954,7 @@ class DB:
     def get_kol(self, kol_id: int) -> dict | None:
         """获取单个大V"""
         rows = self._rows("SELECT * FROM kols WHERE id = ?", (kol_id,))
-        return rows[0] if rows else None
+        return _strip_webhook_fields(rows[0]) if rows else None
 
     def get_kol_by_external(self, platform: str, external_id: str) -> dict | None:
         """按平台 + 外部ID 查大V（更新 external_id 时的唯一性校验用）。"""
@@ -1938,18 +1964,64 @@ class DB:
         )
         return rows[0] if rows else None
 
+    def get_kol_by_webhook_token(self, token: str) -> dict | None:
+        """按 Webhook token 取已启用的大V（token 唯一索引保证查询走索引）。"""
+        rows = self._rows(
+            "SELECT * FROM kols WHERE webhook_token = ? AND webhook_enabled = 1 AND enabled = 1",
+            (token,),
+        )
+        return rows[0] if rows else None
+
+    def set_kol_webhook(
+        self,
+        kol_id: int,
+        enabled: bool | None = None,
+        token: str | None = None,
+        secret: str | None = None,
+    ) -> None:
+        """更新系统 KOL 的 Webhook 配置；secret 落库前按凭据密钥加密。"""
+        sets, params = [], []
+        if enabled is not None:
+            sets.append("webhook_enabled = ?")
+            params.append(1 if enabled else 0)
+        if token is not None:
+            sets.append("webhook_token = ?")
+            params.append(token)
+        if secret is not None:
+            sets.append("webhook_secret = ?")
+            params.append(self._encrypt_secret(secret))
+        if not sets:
+            return
+        params.append(kol_id)
+        self._execute(f"UPDATE kols SET {', '.join(sets)} WHERE id = ?", tuple(params))
+
+    def get_kol_webhook_config(self, kol_id: int) -> dict | None:
+        """管理端专用：取大V完整行（含 webhook 配置列，get_kol 已剥离这些列）。"""
+        rows = self._rows("SELECT * FROM kols WHERE id = ?", (kol_id,))
+        return rows[0] if rows else None
+
+    def get_kol_webhook_secret(self, kol_id: int) -> str:
+        """取系统 KOL Webhook 签名密钥明文（enc1: 前缀值解密；无密钥时原样返回）。"""
+        rows = self._rows("SELECT webhook_secret FROM kols WHERE id = ?", (kol_id,))
+        if not rows:
+            return ""
+        return decrypt_stored_secret(rows[0]["webhook_secret"], self.credential_key)
+
     def recommended_kols(self, user_id: int, limit: int = 4) -> list[dict]:
         """新用户引导推荐：启用且公开的大V，按订阅人数倒序。"""
-        return self._rows(
-            "SELECT k.*, c.name AS category_name, "
-            "(SELECT COUNT(*) FROM subscriptions s WHERE s.kol_id = k.id) AS subscriber_count, "
-            "EXISTS(SELECT 1 FROM subscriptions mine "
-            "       WHERE mine.kol_id = k.id AND mine.user_id = ?) AS subscribed "
-            "FROM kols k LEFT JOIN categories c ON c.id = k.category_id "
-            "WHERE k.enabled = 1 AND k.is_private = 0 "
-            "ORDER BY subscriber_count DESC, k.id DESC LIMIT ?",
-            (user_id, limit),
-        )
+        return [
+            _strip_webhook_fields(r)
+            for r in self._rows(
+                "SELECT k.*, c.name AS category_name, "
+                "(SELECT COUNT(*) FROM subscriptions s WHERE s.kol_id = k.id) AS subscriber_count, "
+                "EXISTS(SELECT 1 FROM subscriptions mine "
+                "       WHERE mine.kol_id = k.id AND mine.user_id = ?) AS subscribed "
+                "FROM kols k LEFT JOIN categories c ON c.id = k.category_id "
+                "WHERE k.enabled = 1 AND k.is_private = 0 "
+                "ORDER BY subscriber_count DESC, k.id DESC LIMIT ?",
+                (user_id, limit),
+            )
+        ]
 
     def last_post_time_by_kol(self) -> dict[int, str]:
         """每个大V最近一次抓到帖子的时间（kols.last_post_at），用于活跃度排序。"""
@@ -3301,6 +3373,7 @@ class DB:
         # 用别名带回个人次要（覆盖全局列）
         for r in rows:
             r["secondary"] = r.pop("sub_secondary")
+            _strip_webhook_fields(r)
         return rows
 
     def count_subscriptions(self, user_id: int) -> int:
