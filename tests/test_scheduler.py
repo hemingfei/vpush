@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import json
 import tempfile
@@ -3389,6 +3390,34 @@ def test_delete_posts_older_than_rolls_back_batch_on_failure():
 
     assert db.get_post(post_id) is not None
     assert db.list_push_logs()
+
+
+
+
+def test_scheduler_submits_news_in_its_own_failure_boundary():
+    calls = []
+
+    class FakeNewsService:
+        def submit_due(self):
+            calls.append("submitted")
+
+    scheduler = Scheduler(
+        None, {}, [], SimpleNamespace(), news_service=FakeNewsService()
+    )
+    scheduler._submit_news_due()
+    assert calls == ["submitted"]
+
+
+
+def test_scheduler_news_failure_does_not_escape_loop_boundary():
+    class BrokenNewsService:
+        def submit_due(self):
+            raise RuntimeError("news failed")
+
+    scheduler = Scheduler(
+        None, {}, [], SimpleNamespace(), news_service=BrokenNewsService()
+    )
+    scheduler._submit_news_due()
 
 
 def test_scheduler_loop_delay_uses_min_interval():

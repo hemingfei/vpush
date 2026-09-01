@@ -46,6 +46,13 @@ def user_headers(client, username, password="pass123456"):
     return {"Authorization": f"Bearer {token}"}
 
 
+def test_create_app_exposes_shared_news_service():
+    client = make_client("news-service.db")
+    service = client.app.state.news_service
+    assert service.db is client.app.state.db
+    service.close()
+
+
 def test_admin_kols_pagination_and_filters():
     """管理大V列表：分页 + 关键词/平台/分类/状态筛选 + 权限。"""
     client = make_client()

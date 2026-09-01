@@ -21,6 +21,7 @@ from .fetchers import build_fetchers
 from .ima_documents import ImaDocumentService
 from .ima_storage import ImaStorageStatus
 from .logging_setup import register_error_sink, setup_logging
+from .news import NewsService
 from .notifiers import build_notifiers
 from .scheduler import Scheduler, set_alerts_enabled
 
@@ -46,7 +47,7 @@ def docs_enabled() -> bool:
 
 
 SPA_PREFIXES = frozenset({
-    "timeline", "home", "combinations", "mysubs", "settings",
+    "timeline", "home", "combinations", "mysubs", "settings", "news",
     "search", "kol", "more", "admin", "zsxq", "ima-documents", "knowledge",
 })
 
@@ -83,6 +84,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     if db_path is not None:
         config.db_path = str(db_path)
     db = DB(config.db_path, credential_key=config.notifiers.feishu.credential_key)
+    news_service = NewsService(db)
     index_root = Path(config.db_path).parent / "ima"
     archive_env = os.environ.get("IMA_ARCHIVE_ROOT", "").strip()
     archive_root = Path(archive_env) if archive_env else index_root
@@ -169,6 +171,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         config.sources.xueqiu,
         config.sources.weibo,
         config.llm,
+        news_service=news_service,
     )
 
     @asynccontextmanager
@@ -224,6 +227,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
                 pass
             if bot is not None:
                 bot.client.close()
+        news_service.close()
         ima_documents.stop()
         db.close()
 
@@ -238,6 +242,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     app.state.db = db
     app.state.llm_config = config.llm
     app.state.ima_documents = ima_documents
+    app.state.news_service = news_service
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -290,6 +295,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
             notifiers_config=config.notifiers,
             trust_proxy=config.web.trust_proxy,
             ima_documents=ima_documents,
+            news_service=news_service,
         )
     )
     # 本地头像缓存（数据目录/avatars），避免第三方图床过期/外链失效

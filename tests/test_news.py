@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+import httpx
 
 from app.news import (
     ParsedArticle,
@@ -88,8 +89,129 @@ def test_parse_truncates_text_fields():
     assert len(article.summary) == 2000
 
 
+
+
 def test_normalizers_reject_credentials_and_non_http_urls():
     with pytest.raises(ValueError):
         normalize_feed_url("https://user:pass@feed.example/rss")
     with pytest.raises(ValueError):
         normalize_article_url("javascript:alert(1)")
+
+
+
+def make_news_service(tmp_path, handler):
+    from app.db import DB
+    from app.news import NewsService
+
+    db = DB(str(tmp_path / "service.db"))
+    source_id = db.add_news_source("测试媒体")
+    feed_id = db.add_news_feed(
+        source_id, "主源", "https://feed.example/rss", "https://feed.example/rss"
+    )
+    client = httpx.Client(transport=httpx.MockTransport(handler), trust_env=False)
+    return NewsService(db, client=client), db, client, feed_id
+
+
+def test_refresh_feed_sends_conditional_headers_and_handles_304(tmp_path, monkeypatch):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(304, headers={"etag": '"v2"'})
+
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+    service, db, client, feed_id = make_news_service(tmp_path, handler)
+    db._execute(
+        "UPDATE news_feeds SET etag = ?, last_modified = ? WHERE id = ?",
+        ('"v1"', "Mon, 01 Sep 2026 00:00:00 GMT", feed_id),
+    )
+    result = service.refresh_feed(feed_id)
+    assert result["status"] == "not_modified"
+    assert requests[0].headers["if-none-match"] == '"v1"'
+    assert requests[0].headers["if-modified-since"] == "Mon, 01 Sep 2026 00:00:00 GMT"
+    assert db.get_news_feed(feed_id)["consecutive_failures"] == 0
+    service.close()
+    client.close()
+    db.close()
+
+
+def test_submit_feed_rejects_duplicate_inflight_refresh(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+    service, db, client, feed_id = make_news_service(
+        tmp_path, lambda request: httpx.Response(304)
+    )
+    lock = service._feed_lock(feed_id)
+    assert lock.acquire(blocking=False)
+    try:
+        assert not service.submit_feed(feed_id)
+    finally:
+        lock.release()
+        service.close()
+        client.close()
+        db.close()
+
+
+def test_refresh_feed_upserts_articles_and_recovers_failure(tmp_path, monkeypatch):
+    payload = (FIXTURES / "news_rss.xml").read_bytes()
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+    service, db, client, feed_id = make_news_service(
+        tmp_path, lambda request: httpx.Response(200, headers={"etag": '"fresh"'}, content=payload)
+    )
+    result = service.refresh_feed(feed_id)
+    assert result["status"] == "updated" and result["articles"] == 2
+    assert len(db._rows("SELECT * FROM news_articles")) == 2
+    feed = db.get_news_feed(feed_id)
+    assert feed["etag"] == '"fresh"' and feed["consecutive_failures"] == 0
+    service.close()
+    client.close()
+    db.close()
+
+
+def test_refresh_feed_failure_is_recorded_without_touching_articles(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+    service, db, client, feed_id = make_news_service(
+        tmp_path, lambda request: httpx.Response(500, content=b"upstream")
+    )
+    result = service.refresh_feed(feed_id)
+    assert result["error_code"] == "http_error"
+    feed = db.get_news_feed(feed_id)
+    assert feed["last_error_code"] == "http_error"
+    assert feed["consecutive_failures"] == 1
+    assert db._rows("SELECT * FROM news_articles") == []
+    service.close()
+    client.close()
+    db.close()
+
+
+def test_fetch_image_rejects_non_image_and_oversized_body(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+    service, db, client, feed_id = make_news_service(
+        tmp_path, lambda request: httpx.Response(200, headers={"content-type": "text/html"}, content=b"html")
+    )
+    uid = db.add_user("reader", "hash")
+    source_id = db.get_news_feed(feed_id)["source_id"]
+    db.set_user_news_sources(uid, [source_id])
+    article_id = db.upsert_news_article({
+        "source_id": source_id, "feed_id": feed_id, "external_id": "img-1",
+        "title": "Image", "url": "https://example.com/article", "author": "",
+        "summary": "", "content_html": "<img data-news-image-index=\"0\">",
+        "images": ["https://feed.example/image.jpg"],
+        "published_at": "2026-09-01T00:00:00+00:00",
+        "fetched_at": "2026-09-01T00:00:00+00:00", "content_hash": "img",
+    })
+    with pytest.raises(ValueError, match="图片类型"):
+        service.fetch_image(article_id, 0, uid)
+
+    service.client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, headers={"content-type": "image/jpeg"}, content=b"x" * (10 * 1024 * 1024 + 1)
+            )
+        ),
+        trust_env=False,
+    )
+    with pytest.raises(ValueError, match="地址不安全|响应体过大"):
+        service.fetch_image(article_id, 0, uid)
+    service.close()
+    client.close()
+    db.close()
