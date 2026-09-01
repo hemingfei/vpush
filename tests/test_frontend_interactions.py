@@ -3508,7 +3508,15 @@ def test_admin_news_master_detail_is_responsive():
     assert "grid-template-columns: 1fr" in mobile
 
 
-def test_frontend_asset_urls_bust_browser_cache():
+
+def test_financial_news_action_icons_have_stable_dimensions():
+    css = STYLE_CSS.read_text()
+    assert ".news-admin-page .btn-normal .nav-svg" in css
+    rule = re.search(r"\.news-admin-page \.btn-normal \.nav-svg\s*\{([^}]*)\}", css)
+    assert rule and "width: 16px" in rule.group(1) and "height: 16px" in rule.group(1)
+
+
+
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
