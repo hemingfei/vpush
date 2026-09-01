@@ -4189,6 +4189,54 @@ def test_empty_ready_index_falls_back_when_sources_change(tmp_path):
     assert service._index_usable() is False
 
 
+def test_ready_index_with_rows_falls_back_when_sources_change(tmp_path):
+    db = DB(str(tmp_path / "stale-ready.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima")
+    first = {
+        "group_id": "semi",
+        "media_id": "file_a",
+        "name": "a.pdf",
+        "day": "0829",
+    }
+    service.store.save_manifest([first])
+    service.store.save_state({service.store.state_key(first): {"pdf": "semi/a.pdf"}})
+    assert service.rebuild_read_index()["status"] == "ready"
+    assert db.ima_document_index_count() == 1
+    assert service._index_usable() is True
+    second = {
+        "group_id": "semi",
+        "media_id": "file_b",
+        "name": "b.pdf",
+        "day": "0831",
+    }
+    service.store.save_manifest([first, second])
+    service.store.save_state({
+        service.store.state_key(first): {"pdf": "semi/a.pdf"},
+        service.store.state_key(second): {"pdf": "semi/b.pdf"},
+    })
+    assert service._index_usable() is False
+
+
+def test_local_libraries_need_scan_when_cicc_newer(tmp_path):
+    db = DB(str(tmp_path / "cicc-scan.sqlite"))
+    service = ImaDocumentService(db, tmp_path / "ima", archive_root=tmp_path / "archive")
+    cicc = service.store.local_root / ".cicc"
+    cicc.mkdir(parents=True)
+    (cicc / "status.json").write_text(json.dumps({
+        "storage": {"last_incr_summary": {"ts": 1_700_000_100, "added": 3}},
+    }), encoding="utf-8")
+    db.set_setting(ima_documents.IMA_LOCAL_LIBRARIES_KEY, json.dumps({
+        "scanned_at": "2023-11-14T22:13:00+00:00",
+        "libraries": [],
+    }))
+    assert service._local_libraries_need_scan() is True
+    db.set_setting(ima_documents.IMA_LOCAL_LIBRARIES_KEY, json.dumps({
+        "scanned_at": "2023-11-14T22:15:00+00:00",
+        "libraries": [],
+    }))
+    assert service._local_libraries_need_scan() is False
+
+
 def test_rebuild_read_index_holds_sync_lock(tmp_path, monkeypatch):
     db = DB(str(tmp_path / "rebuild-lock.sqlite"))
     service = ImaDocumentService(db, tmp_path / "ima")

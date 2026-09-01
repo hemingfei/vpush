@@ -2833,6 +2833,9 @@ class ImaDocumentService:
                 continue
         try:
             replacer(group_id, rows)
+            setter = getattr(self.db, "set_ima_index_fingerprint", None)
+            if callable(setter):
+                setter(self._source_fingerprint())
         except Exception as exc:  # noqa: BLE001
             logger.warning("IMA index group replace failed error=%s", _safe_error(exc))
 
@@ -2862,17 +2865,13 @@ class ImaDocumentService:
         status = self.read_index_status()
         counter = getattr(self.db, "ima_document_index_count", None)
         count = int(counter()) if callable(counter) else 0
-        if status["status"] == "ready":
-            if count > 0:
-                return True
-            getter = getattr(self.db, "ima_document_index_meta", None)
-            fingerprint = ""
-            if callable(getter):
-                fingerprint = str(getter().get("fingerprint") or "")
-            return fingerprint == self._source_fingerprint()
         if status["status"] in {"rebuilding", "failed"}:
             return count > 0
-        return False
+        if status["status"] != "ready":
+            return False
+        getter = getattr(self.db, "ima_document_index_meta", None)
+        fingerprint = str(getter().get("fingerprint") or "") if callable(getter) else ""
+        return fingerprint == self._source_fingerprint()
 
     def rebuild_read_index(
         self, groups: tuple[ImaGroupConfig, ...] | None = None
@@ -3252,6 +3251,36 @@ class ImaDocumentService:
         libraries = [item for item in value.get("libraries") or [] if isinstance(item, dict)]
         return {"scanned_at": str(value.get("scanned_at") or ""), "libraries": libraries}
 
+    def _cicc_incr_ts(self) -> float:
+        path = self.store.local_root / ".cicc" / "status.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError):
+            return 0.0
+        if not isinstance(data, dict):
+            return 0.0
+        storage = data.get("storage") if isinstance(data.get("storage"), dict) else {}
+        summary = storage.get("last_incr_summary") if isinstance(storage.get("last_incr_summary"), dict) else {}
+        if not summary:
+            summary = data.get("last_incremental") if isinstance(data.get("last_incremental"), dict) else {}
+        try:
+            return float(summary.get("ts") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _local_scan_ts(self) -> float:
+        raw = str(self.local_scan_status().get("scanned_at") or "").strip()
+        if not raw:
+            return 0.0
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return 0.0
+
+    def _local_libraries_need_scan(self) -> bool:
+        incr = self._cicc_incr_ts()
+        return bool(incr) and incr > self._local_scan_ts()
+
     def product_groups(self) -> tuple[ImaGroupConfig, ...]:
         """用户侧组：IMA 组 + 已启用的本地库；停用/报错的本地库不出现。"""
         local = tuple(
@@ -3455,6 +3484,8 @@ class ImaDocumentService:
                 due = now >= self._next_run_at
             if due:
                 self.trigger(scheduled=True)
+            elif self._local_libraries_need_scan():
+                self.scan_local_libraries()
 
     def _mounted_groups(self, cfg: ImaDocumentConfig | None = None) -> list[ImaGroupConfig]:
         groups = (cfg or self.config()).groups
@@ -3538,6 +3569,11 @@ class ImaDocumentService:
     def _worker(self) -> None:
         try:
             self.sync_once()
+            try:
+                self.scan_local_libraries()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Local library scan failed error=%s", _safe_error(exc))
+            self._rebuild_index_if_needed()
         except Exception as exc:  # noqa: BLE001 - worker must release its lock
             error = _safe_error(exc)
             logger.error("IMA document sync failed error=%s", error)
@@ -3821,11 +3857,6 @@ class ImaDocumentService:
                 self._sync_group_id = ""
                 scheduled_flag = self._sync_scheduled
                 self._sync_scheduled = False
-            try:
-                # 本地库廉价遍历搭 IMA 同步周期一次；失败只记日志不挡 IMA
-                self._scan_local_libraries_locked()
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Local library scan failed error=%s", _safe_error(exc))
             cfg = self.config()
             if not cfg.credentials_configured:
                 return {"status": "not_configured"}

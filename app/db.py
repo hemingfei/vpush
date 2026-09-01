@@ -3925,6 +3925,18 @@ class DB:
                 self._conn.rollback()
                 raise
 
+    def set_ima_index_fingerprint(self, fingerprint: str) -> None:
+        with self._lock:
+            total = self._conn.execute(
+                "SELECT COUNT(*) FROM ima_document_index"
+            ).fetchone()[0]
+            self._conn.execute(
+                "UPDATE ima_document_index_meta SET fingerprint = ?, document_count = ? "
+                "WHERE id = 1",
+                (str(fingerprint or ""), int(total)),
+            )
+            self._conn.commit()
+
     def update_ima_document_batch(self, rows, fingerprint: str) -> int:
         prepared_by_key = {}
         for row in rows:
