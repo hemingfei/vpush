@@ -226,6 +226,27 @@ def test_incoming_sign_verification():
     assert db.get_post(data["post_id"])["content"] == "签名消息"
 
 
+def test_incoming_saves_raw_payload_detail():
+    """原始 payload（去掉 sign）随帖入库，供前端「查看原文」弹窗展示，对齐 MX。"""
+    client = make_client()
+    admin = auth_headers(client)
+    db = client.app.state.db
+    kid = _make_system_kol(client, "KOL 原始消息")
+    token = _enable_webhook(client, admin, kid, secret="top-secret").json()["token"]
+
+    ts = int(time.time())
+    data = _post_incoming(
+        client,
+        token,
+        {"text": "原始消息内容", "timestamp": str(ts), "sign": _feishu_sign("top-secret", ts)},
+    ).json()
+    post = db.get_post(data["post_id"])
+    detail = json.loads(post["detail"])
+    assert detail["text"] == "原始消息内容"
+    assert detail["timestamp"] == str(ts)
+    assert "sign" not in detail  # 签名值不落库
+
+
 def test_incoming_rejects_bad_token_and_disabled():
     client = make_client()
     admin = auth_headers(client)

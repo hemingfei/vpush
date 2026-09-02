@@ -679,6 +679,7 @@ CREATE TABLE IF NOT EXISTS posts (
     fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
     blocked INTEGER NOT NULL DEFAULT 0,
     block_hit TEXT NOT NULL DEFAULT '',
+    hidden INTEGER NOT NULL DEFAULT 0,
     UNIQUE (platform, external_id)
 );
 CREATE TABLE IF NOT EXISTS push_logs (
@@ -1124,6 +1125,10 @@ class DB:
         if "block_hit" not in post_cols:
             self._conn.execute(
                 "ALTER TABLE posts ADD COLUMN block_hit TEXT NOT NULL DEFAULT ''"
+            )
+        if "hidden" not in post_cols:
+            self._conn.execute(
+                "ALTER TABLE posts ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0"
             )
         kol_cols = {row["name"] for row in self._rows("PRAGMA table_info(kols)")}
         if "block_keywords" not in kol_cols:
@@ -3997,6 +4002,38 @@ class DB:
         )
         return rows[0] if rows else None
 
+    def set_post_hidden(self, post_id: int, hidden: bool) -> bool:
+        """设置帖子隐藏状态：所有用户侧列表/时间线/详情不再可见，内容保留库内。
+
+        返回该帖是否存在（不存在返回 False）。
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE posts SET hidden = ? WHERE id = ?",
+                (1 if hidden else 0, post_id),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def delete_post(self, post_id: int) -> bool:
+        """彻底删除单帖及其推送记录，返回该帖是否存在。
+
+        与 delete_posts_older_than 同策略：只清 push_logs 与帖子本身，
+        ai_analysis_logs.output_post_id 悬空由 get_post 返回 None 兜底。
+        """
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                cur = self._conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
+                self._conn.execute(
+                    "DELETE FROM push_logs WHERE post_id = ?", (post_id,)
+                )
+                self._conn.commit()
+                return cur.rowcount > 0
+            except Exception:
+                self._conn.rollback()
+                raise
+
     # ---- 大V 关键词屏蔽 ----
     def is_post_blocked(self, post_id: int) -> bool:
         """单帖是否已被关键词拦截（推送端跳过用）。"""
@@ -4209,6 +4246,8 @@ class DB:
         below_id: int | None = None,
         include_blocked: bool = False,
         blocked_only: bool = False,
+        include_hidden: bool = False,
+        hidden_only: bool = False,
     ) -> list[dict]:
         sql = (
             "SELECT p.*, k.name AS kol_name, k.category_id AS category_id, "
@@ -4223,6 +4262,12 @@ class DB:
         elif not include_blocked:
             # 关键词拦截的帖：入库保留（可回溯），但任何列表/时间线都不展示
             conds.append("COALESCE(p.blocked, 0) = 0")
+        if hidden_only:
+            # 只看管理员隐藏的帖（管理端「帖子」页筛选用）
+            conds.append("COALESCE(p.hidden, 0) = 1")
+        elif not include_hidden:
+            # 管理员隐藏的帖：内容保留库内（可恢复），但任何列表/时间线都不展示
+            conds.append("COALESCE(p.hidden, 0) = 0")
         if platform:
             conds.append("p.platform = ?")
             params.append(platform)
@@ -4322,7 +4367,12 @@ class DB:
         if platform and hidden and platform in hidden:
             return []
         placeholders = ", ".join("?" * len(kol_ids))
-        conds = [f"p.kol_id IN ({placeholders})", "COALESCE(p.blocked, 0) = 0"]
+        conds = [
+            f"p.kol_id IN ({placeholders})",
+            "COALESCE(p.blocked, 0) = 0",
+            # 管理员隐藏的帖对所有用户不可见
+            "COALESCE(p.hidden, 0) = 0",
+        ]
         params: list = [user_id, *kol_ids]
         if not include_secondary and not platform and not kol_id:
             # 默认隐藏次要大V的动态（全局 kols.secondary 或个人订阅 secondary）：
@@ -4394,6 +4444,7 @@ class DB:
             f"WHERE p.kol_id IN ({placeholders}) AND strftime('%s', p.fetched_at) >= ? "
             "AND COALESCE(k.silent, 0) = 0 "
             "AND COALESCE(p.blocked, 0) = 0 "
+            "AND COALESCE(p.hidden, 0) = 0 "
             "ORDER BY p.published_at DESC, p.id DESC LIMIT ?",
             (user_id, *kol_ids, since_ts, limit),
         ))))

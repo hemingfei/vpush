@@ -279,7 +279,8 @@ def _parse_batch_kol_line(line: str, default_platform: str = "") -> tuple[str, s
 
     error 非空时本行失败。只认链接/组合码能识别出的平台（雪球主页/组合/微博/X/
     知识星球/ima）；纯数字 UID 或无法识别的 URL 不再回退默认平台。X 统一存 screen name。
-    例外：default_platform == "system"（系统 KOL 批量导入）时，昵称/整行直接作为外部 ID。
+    例外：default_platform == "system"（系统 KOL 批量导入）时，支持「中文名 外部ID」
+    （空格分隔，最后一个字段是外部 ID，中文名可省略）；识别出的链接仍按原平台导入。
     """
     nickname = ""
     external_id = ""
@@ -311,10 +312,14 @@ def _parse_batch_kol_line(line: str, default_platform: str = "") -> tuple[str, s
         nickname = f"{nickname} {token}".strip()
     if not external_id:
         if default_platform == "system":
-            # 系统平台：没有识别出平台时，把昵称（纯文本行）作为外部 ID
+            # 系统平台：「中文名 外部ID」按空格拆分，最后一个字段是外部 ID；
+            # 整行只有一段文本时仍把整行作为外部 ID
+            tokens = line.split()
+            if len(tokens) >= 2:
+                return default_platform, tokens[-1], " ".join(tokens[:-1]), None
             if nickname:
                 return default_platform, nickname, "", None
-            return default_platform, "", nickname, "未识别到链接或ID，请至少输入一个 ID 或昵称"
+            return default_platform, "", "", "未识别到链接或ID，请至少输入一个 ID 或昵称"
         if unrecognized:
             return "", "", nickname, "无法识别平台，请粘贴雪球/微博/X/知识星球主页链接"
         return "", "", nickname, parse_error or "未识别到链接或ID"
@@ -2813,11 +2818,15 @@ def create_api_router(
 
     @router.get("/posts/{post_id}")
     def post_detail(post_id: int, user: dict = Depends(get_current_user)):
-        """单帖详情（AI 分析日志「查看输出帖子」等场景）；可见性规则与 KOL 帖子列表一致。"""
+        """单帖详情（AI 分析日志「查看输出帖子」等场景）；可见性规则与 KOL 帖子列表一致。
+
+        管理员隐藏的帖对普通用户 404；管理员本人可见（管理端帖子页可打开核对）。
+        """
         post = db.get_post(post_id)
         if (
             not post
             or post.get("blocked")
+            or (post.get("hidden") and not user.get("is_admin"))
             or not _plaza_kol_visible(user, db.get_kol(post["kol_id"]))
         ):
             raise HTTPException(status_code=404, detail="帖子不存在")
@@ -4995,7 +5004,8 @@ def create_api_router(
 
         按链接自动识别平台（雪球主页/雪球组合页/微博主页/X主页/知识星球）。
         纯 UID 等无法识别的行失败，不再使用默认平台；
-        body.platform == "system" 时走系统 KOL 导入（昵称/整行作为外部 ID）。
+        body.platform == "system" 时走系统 KOL 导入，每行「中文名 外部ID」（空格分隔，
+        中文名可省略，仅一段文本时整行作为外部 ID）。
         """
         if body.category_id is not None and db.get_category(body.category_id) is None:
             raise HTTPException(status_code=400, detail="分类不存在")
@@ -5173,6 +5183,8 @@ def create_api_router(
             if msg_id
             else f"webhook_{token8}_{secrets.token_hex(8)}"
         )
+        # 原始 payload 随帖入库（去掉 sign 签名值），前端「查看原文」弹窗展示用，对齐 MX
+        raw_detail = {k: v for k, v in payload.items() if k != "sign"}
         post = Post(
             platform=kol["platform"],
             kol_id=kol["id"],
@@ -5183,6 +5195,7 @@ def create_api_router(
             url="",
             published_at=datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
             images=images,
+            detail=raw_detail,
         )
         # 入库+推送走调度器链路（免打扰/次要缓冲/重试队列）；纯 UI 调试模式只入库
         save = on_external_post or db.save_post
@@ -5516,12 +5529,50 @@ def create_api_router(
         return result
 
     @router.get("/posts", dependencies=[Depends(require_admin)])
-    def list_posts(limit: int = 100, platform: str | None = None, kol_id: int | None = None, q: str | None = None, offset: int = 0, blocked: int = 0):
-        """管理端帖子列表；blocked=1 时只返回被关键词拦截的帖（拦截详情用）。"""
+    def list_posts(
+        limit: int = 100,
+        platform: str | None = None,
+        kol_id: int | None = None,
+        q: str | None = None,
+        offset: int = 0,
+        blocked: int = 0,
+        include_hidden: int = 0,
+        hidden_only: int = 0,
+    ):
+        """管理端帖子列表；blocked=1 时只返回被关键词拦截的帖（拦截详情用）。
+
+        hidden_only=1 只看管理员隐藏的帖；include_hidden=1 时全部返回（含已隐藏，
+        管理端默认，用于恢复展示）。用户侧接口不走这里，hidden 帖默认被 db 层过滤。
+        """
         return db.list_posts(
             limit=bounded_limit(limit), platform=platform, kol_id=kol_id,
             q=q, offset=offset, blocked_only=bool(blocked),
+            include_hidden=bool(include_hidden), hidden_only=bool(hidden_only),
         )
+
+    @router.post("/posts/{post_id}/hide")
+    def hide_post(post_id: int, admin: dict = Depends(require_admin)):
+        """隐藏帖子：所有用户侧不可见，内容保留库内（可恢复）。"""
+        if not db.set_post_hidden(post_id, True):
+            raise HTTPException(status_code=404, detail="帖子不存在")
+        _audit(admin, "post_hide", str(post_id))
+        return {"ok": True, "hidden": True}
+
+    @router.post("/posts/{post_id}/unhide")
+    def unhide_post(post_id: int, admin: dict = Depends(require_admin)):
+        """取消隐藏：恢复所有用户侧展示。"""
+        if not db.set_post_hidden(post_id, False):
+            raise HTTPException(status_code=404, detail="帖子不存在")
+        _audit(admin, "post_unhide", str(post_id))
+        return {"ok": True, "hidden": False}
+
+    @router.post("/posts/{post_id}/delete")
+    def delete_post(post_id: int, admin: dict = Depends(require_admin)):
+        """彻底删除帖子及其推送记录，不可恢复。"""
+        if not db.delete_post(post_id):
+            raise HTTPException(status_code=404, detail="帖子不存在")
+        _audit(admin, "post_delete", str(post_id))
+        return {"ok": True, "deleted": True}
 
     @router.get("/push-logs", dependencies=[Depends(require_admin)])
     def list_push_logs(

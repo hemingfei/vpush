@@ -4651,18 +4651,21 @@ function postCard(post) {
         ${Array.isArray(post.tags) && post.tags.length
       ? post.tags.map((t) => `<button type="button" class="cat cat-tag post-tag-filter" data-tag="${escapeHtml(t)}" onclick="tlPickTag(this.dataset.tag)">${escapeHtml(t)}</button>`).join("")
       : ""}
-        ${post.platform === "zsxq" ? "" : post.platform === "mx"
-          ? `<a href="#" onclick="event.preventDefault();openMxRawModal(${post.id})" title="查看 MX 原始消息">查看原文 →</a>`
+        ${post.platform === "zsxq" ? "" : RAW_MODAL_LABELS[post.platform]
+          ? `<a href="#" onclick="event.preventDefault();openRawModal(${post.id}, '${RAW_MODAL_LABELS[post.platform]}')" title="查看${RAW_MODAL_LABELS[post.platform]}原始消息">查看原文 →</a>`
           : `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener">查看原文 →</a>`}
       </div>
     </div>`;
 }
 
-// MX 消息没有外部原文链接，「查看原文」弹窗展示入库时保存的原始解密消息（posts.detail = MX 推送原始 JSON）
-function openMxRawModal(postId) {
+// 无外部原文链接的平台（MX/系统 KOL）「查看原文」弹窗展示入库时保存的原始消息：
+// MX = 推送解密后的原始 JSON；系统 KOL = webhook 入站原始 payload（posts.detail）
+const RAW_MODAL_LABELS = { mx: "MX", system: "系统 KOL" };
+
+function openRawModal(postId, label) {
   const post = _tlPosts.find((p) => p.id === postId);
   if (!post) return;
-  closeMxRawModal(); // 防连点叠开
+  closeRawModal(); // 防连点叠开
   let detail = post.detail;
   if (typeof detail === "string" && detail) {
     try { detail = JSON.parse(detail); } catch { /* 非 JSON 字符串按原样展示 */ }
@@ -4676,10 +4679,10 @@ function openMxRawModal(postId) {
   mask.className = "modal-mask mx-raw-mask";
   mask.setAttribute("role", "dialog");
   mask.setAttribute("aria-modal", "true");
-  mask.setAttribute("aria-label", "MX 原始消息");
+  mask.setAttribute("aria-label", `${label} 原始消息`);
   mask.innerHTML = `
     <div class="modal-card mx-raw-card">
-      <h3 class="mx-raw-title">MX 原始消息</h3>
+      <h3 class="mx-raw-title">${escapeHtml(label)} 原始消息</h3>
       <p class="mx-raw-meta">${who}${fmtPublished(post.published_at, true)}</p>
       ${text
         ? `<button type="button" class="btn-ghost mx-raw-copy" onclick="copyText(mxRawModalText(), '已复制原始消息')">复制 JSON</button>
@@ -4688,12 +4691,12 @@ function openMxRawModal(postId) {
     </div>`;
   mask._rawText = text;
   mask.addEventListener("click", (e) => {
-    if (e.target === mask) closeMxRawModal();
+    if (e.target === mask) closeRawModal();
   });
   mask._onKey = (e) => {
     if (e.key === "Escape") {
       e.preventDefault();
-      closeMxRawModal();
+      closeRawModal();
     }
   };
   document.addEventListener("keydown", mask._onKey, true);
@@ -4705,7 +4708,7 @@ function mxRawModalText() {
   return document.querySelector(".mx-raw-mask")?._rawText || "";
 }
 
-function closeMxRawModal() {
+function closeRawModal() {
   const mask = document.querySelector(".mx-raw-mask");
   if (!mask) return;
   document.removeEventListener("keydown", mask._onKey, true);
@@ -10809,7 +10812,7 @@ async function loadAdminKols(opts) {
       </header>
       <textarea id="ad-batch-lines" class="form-control ak-add-lines" rows="6" placeholder="https://xueqiu.com/u/12345&#10;段永平 https://xueqiu.com/u/12345&#10;https://weibo.com/u/1642591402&#10;https://x.com/elonmusk&#10;https://xueqiu.com/P/ZH123456" aria-label="大V主页链接，每行一个" oninput="adminBatchLinesHint()"></textarea>
       <div class="toolbar ak-add-bar">
-        <label class="muted" for="ad-batch-system"><input type="checkbox" id="ad-batch-system"> 系统 KOL（用于 AI 分析）</label>
+        <label class="muted" for="ad-batch-system"><input type="checkbox" id="ad-batch-system" onchange="adminBatchSystemToggle()"> 系统 KOL（用于 AI 分析）</label>
         <select id="ad-batch-category" class="form-control" aria-label="分类"><option value="">未分类</option>${catOptions}</select>
         <button class="btn-normal" id="ad-batch-btn" onclick="adminBatchAddKols()">添加</button>
         <div id="ad-batch-result" class="muted ak-add-result"></div>
@@ -10979,7 +10982,7 @@ async function adminBatchAddKols() {
     return;
   }
   const category = $("#ad-batch-category").value;
-  // 系统 KOL：勾选后整行文本作为外部 ID，走 AI 分析专用平台
+  // 系统 KOL：每行「中文名 外部ID」（空格分隔，中文名可省略），走 AI 分析专用平台
   const systemMode = $("#ad-batch-system")?.checked;
   const btn = $("#ad-batch-btn");
   if (btn) btn.disabled = true;
@@ -11022,6 +11025,20 @@ function adminBatchLinesHint() {
   if (!cat || cat.value) return;
   for (const opt of cat.options) {
     if (opt.textContent.trim() === "实盘") { cat.value = opt.value; break; }
+  }
+}
+
+function adminBatchSystemToggle() {
+  const system = $("#ad-batch-system")?.checked;
+  const ta = $("#ad-batch-lines");
+  if (!ta) return;
+  const meta = ta.closest(".section-panel")?.querySelector(".section-meta");
+  if (system) {
+    ta.placeholder = "张三 sys_kol_001\n李四 sys_kol_002\nsys_kol_003";
+    if (meta) meta.textContent = "每行一个：中文名 外部ID（空格分隔，中文名可省略，仅填一段文本时整行作为外部 ID）。";
+  } else {
+    ta.placeholder = "https://xueqiu.com/u/12345\n段永平 https://xueqiu.com/u/12345\nhttps://weibo.com/u/1642591402\nhttps://x.com/elonmusk\nhttps://xueqiu.com/P/ZH123456";
+    if (meta) meta.textContent = "每行一个：昵称 + 主页链接（昵称可省略）。平台由链接自动识别。";
   }
 }
 
@@ -12324,10 +12341,17 @@ function renderAdminPosts() {
           <input id="ad-posts-q" class="form-control" style="margin:0;width:240px" placeholder="搜索标题/内容关键词" value="${escapeHtml(state.adminPostsQ || "")}" onkeydown="if(event.key==='Enter')adminFilterPosts()">
           <select id="ad-posts-platform" class="form-control" style="margin:0;width:auto" onchange="adminFilterPosts()">
             <option value="">全部平台</option>
+            <option value="system" ${state.adminPostsPlatform === "system" ? "selected" : ""}>系统</option>
+            <option value="mx" ${state.adminPostsPlatform === "mx" ? "selected" : ""}>MX平台</option>
             <option value="xueqiu" ${state.adminPostsPlatform === "xueqiu" ? "selected" : ""}>雪球</option>
             <option value="weibo" ${state.adminPostsPlatform === "weibo" ? "selected" : ""}>微博</option>
             <option value="twitter" ${state.adminPostsPlatform === "twitter" ? "selected" : ""}>X</option>
             <option value="zsxq" ${state.adminPostsPlatform === "zsxq" ? "selected" : ""}>知识星球</option>
+          </select>
+          <select id="ad-posts-status" class="form-control" style="margin:0;width:auto" onchange="adminFilterPosts()" aria-label="按可见状态筛选">
+            <option value="" ${!state.adminPostsStatus ? "selected" : ""}>全部状态</option>
+            <option value="normal" ${state.adminPostsStatus === "normal" ? "selected" : ""}>未隐藏</option>
+            <option value="hidden" ${state.adminPostsStatus === "hidden" ? "selected" : ""}>已隐藏</option>
           </select>
           <select id="ad-posts-kol" class="form-control" style="margin:0;width:auto" onchange="adminFilterPosts()">${kolsHtml}</select>
           <button class="btn-normal" onclick="adminFilterPosts()">筛选</button>
@@ -12335,7 +12359,7 @@ function renderAdminPosts() {
       </header>
       <div class="table-wrap">
         <table>
-          <thead><tr><th scope="col">ID</th><th scope="col">大V</th><th scope="col">分类</th><th scope="col">内容</th><th scope="col">时间</th><th scope="col">链接</th></tr></thead>
+          <thead><tr><th scope="col">ID</th><th scope="col">大V</th><th scope="col">分类</th><th scope="col">内容</th><th scope="col">时间</th><th scope="col">链接</th><th scope="col">操作</th></tr></thead>
           <tbody>${_adminPosts.map(postRowHtml).join("")}</tbody>
         </table>
       </div>
@@ -12349,19 +12373,30 @@ function postRowHtml(p) {
   const expanded = _adminPostsExpanded.has(p.id);
   const body = (p.title ? p.title + "\n" : "") + (p.content || "");
   const safeUrl = /^https?:\/\//i.test(p.url || "") ? p.url : "";
+  const rowStyle = expanded
+    ? ' style="background:var(--color-surface-accent-soft)"'
+    : (p.hidden ? ' style="opacity:0.55"' : "");
   return `
-    <tr${expanded ? ' style="background:var(--color-surface-accent-soft)"' : ""}>
-      <td>${p.id}</td><td>${escapeHtml(p.kol_name)}</td>
+    <tr${rowStyle}>
+      <td>${p.id}${p.hidden ? ' <span class="post-hidden-badge">已隐藏</span>' : ""}</td>
+      <td>${escapeHtml(p.kol_name)}</td>
       <td>${escapeHtml(p.category_name || "")}</td>
+      <td>${escapeHtml(PLATFORM_LABELS[p.platform] || p.platform)}</td>
       <td class="post-cell" onclick="adminTogglePost(${p.id})" title="点击展开/收起全文" role="button" tabindex="0" aria-expanded="${expanded}" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();adminTogglePost(${p.id})}">
         <pre class="content-cell">${escapeHtml(body.slice(0, expanded ? 100000 : 120))}</pre>
         <span class="muted">${expanded ? "▲ 收起" : (body.length > 120 ? "▼ 展开全文" : "")}</span>
       </td>
       <td>${escapeHtml(p.published_at)}</td>
       <td>${safeUrl ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener">原文</a>` : ""}</td>
+      <td style="white-space:nowrap">
+        ${p.hidden
+          ? `<button type="button" class="btn-sm" onclick="adminSetPostHidden(${p.id}, false)">取消隐藏</button>`
+          : `<button type="button" class="btn-sm" onclick="adminSetPostHidden(${p.id}, true)">隐藏</button>`}
+        <button type="button" class="btn-sm danger" onclick="adminDeletePost(${p.id})">删除</button>
+      </td>
     </tr>
-    ${expanded ? `<tr><td colspan="6"><div class="post-detail">
-        <p class="muted" style="margin-bottom:8px">类型：${p.post_type === "reply" ? "回复" : "原帖"} · 平台：${escapeHtml(p.platform)} · 外部ID：${escapeHtml(p.external_id)} · 图片：${(p.images || []).length} 张</p>
+    ${expanded ? `<tr><td colspan="7"><div class="post-detail">
+        <p class="muted" style="margin-bottom:8px">类型：${p.post_type === "reply" ? "回复" : "原帖"} · 平台：${escapeHtml(PLATFORM_LABELS[p.platform] || p.platform)} · 外部ID：${escapeHtml(p.external_id)} · 图片：${(p.images || []).length} 张${p.hidden ? " · <strong>状态：已隐藏（用户不可见）</strong>" : ""}</p>
         <pre class="content-cell">${escapeHtml(body)}</pre>
       </div></td></tr>` : ""}`;
 }
@@ -12372,6 +12407,10 @@ async function loadAdminPosts(reset = true) {
   if (state.adminPostsQ) params.set("q", state.adminPostsQ);
   if (state.adminPostsPlatform) params.set("platform", state.adminPostsPlatform);
   if (state.adminPostsKolId) params.set("kol_id", state.adminPostsKolId);
+  // 状态筛选：默认全部（含已隐藏，便于恢复）；normal=未隐藏；hidden=只看已隐藏
+  if (state.adminPostsStatus === "hidden") params.set("hidden_only", "1");
+  else if (state.adminPostsStatus === "normal") { /* 默认 db 层已排除隐藏 */ }
+  else params.set("include_hidden", "1");
   const [posts, kolsHtml] = await Promise.all([api(`/api/posts?${params}`), _adminKolsSelect()]);
   if (seq !== _adminPostsSeq) return; // 筛选条件已变，丢弃过期响应
   if (reset) {
@@ -12399,8 +12438,37 @@ function adminTogglePost(id) {
 async function adminFilterPosts() {
   state.adminPostsQ = $("#ad-posts-q").value.trim();
   state.adminPostsPlatform = $("#ad-posts-platform").value;
+  state.adminPostsStatus = $("#ad-posts-status").value;
   state.adminPostsKolId = $("#ad-posts-kol").value;
   loadAdminPosts(true);
+}
+
+async function adminSetPostHidden(id, hidden) {
+  try {
+    await api(`/api/posts/${id}/${hidden ? "hide" : "unhide"}`, { method: "POST" });
+    const p = _adminPosts.find((x) => x.id === id);
+    if (p) p.hidden = hidden ? 1 : 0;
+    renderAdminPosts();
+    flash(hidden ? "已隐藏：所有用户不可见，内容保留可恢复" : "已恢复显示", "success");
+  } catch (err) {
+    flash("操作失败: " + err.message, "error");
+  }
+}
+
+async function adminDeletePost(id) {
+  if (!confirm("确定删除该帖子？将从数据库彻底删除（含推送记录），不可恢复")) return;
+  try {
+    await api(`/api/posts/${id}/delete`, { method: "POST" });
+    const i = _adminPosts.findIndex((x) => x.id === id);
+    if (i >= 0) {
+      _adminPosts.splice(i, 1);
+      _adminPostsExpanded.delete(id);
+      renderAdminPosts();
+    }
+    flash("已删除", "success");
+  } catch (err) {
+    flash("操作失败: " + err.message, "error");
+  }
 }
 
 let _adminLogsSeq = 0;

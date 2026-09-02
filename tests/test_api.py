@@ -1749,6 +1749,34 @@ def test_batch_import_kols(monkeypatch):
     assert any(k["external_id"] == "8790885129" for k in kols)
 
 
+def test_batch_import_system_kol_name_external_id_format():
+    """系统 KOL：每行「中文名 外部ID」空格分隔；仅一段文本时整行作为外部 ID。"""
+    client = make_client()
+    headers = auth_headers(client)
+    resp = client.post(
+        "/api/kols/batch",
+        headers=headers,
+        json={
+            "platform": "system",
+            "lines": (
+                "张三 sys_001\n"
+                "李四 王五 sys_002\n"
+                "only_id_003\n"
+                "赵六 https://example.com/kol/abc\n"
+            ),
+        },
+    )
+    data = resp.json()
+    assert resp.status_code == 200
+    assert data["total"] == 4 and data["ok"] == 4 and not data["failed"]
+    items = client.get("/api/admin/kols", headers=headers).json()["items"]
+    by_ext = {k["external_id"]: k for k in items if k["platform"] == "system"}
+    assert by_ext["sys_001"]["name"] == "张三"
+    assert by_ext["sys_002"]["name"] == "李四 王五"
+    assert by_ext["only_id_003"]["name"] == "system_only_id_003"
+    assert by_ext["https://example.com/kol/abc"]["name"] == "赵六"
+
+
 def test_batch_import_auto_fills_xueqiu_nickname(monkeypatch):
     client = make_client()
     headers = auth_headers(client)

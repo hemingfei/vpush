@@ -769,18 +769,20 @@ def test_zsxq_is_plaza_badge_not_sidebar_page():
     assert "星球动态不混入" in _fn_body("renderTimelineFeed")
 
 
-def test_mx_post_view_original_opens_raw_message_modal():
-    """MX 消息没有外部原文链接：「查看原文」必须弹窗展示入库的原始解密消息（detail），不能开空页。"""
+def test_post_view_original_opens_raw_message_modal():
+    """MX/系统 KOL 消息没有外部原文链接：「查看原文」必须弹窗展示入库的原始消息（detail），不能开空页。"""
     src = APP_JS.read_text()
     post_card = _fn_body("postCard")
-    assert 'post.platform === "mx"' in post_card
-    assert "openMxRawModal(" in post_card
-    modal = _fn_body("openMxRawModal")
+    assert "RAW_MODAL_LABELS[post.platform]" in post_card
+    assert "openRawModal(" in post_card
+    modal = _fn_body("openRawModal")
     assert "_tlPosts.find" in modal
     assert "JSON.stringify(detail, null, 2)" in modal
     assert "escapeHtml(text)" in modal
-    assert "closeMxRawModal()" in modal
-    assert "function closeMxRawModal" in src
+    assert "closeRawModal()" in modal
+    assert "function closeRawModal" in src
+    # 弹窗平台表：MX 与系统 KOL（webhook 入站原始 payload）都走弹窗
+    assert 'RAW_MODAL_LABELS = { mx: "MX", system: "系统 KOL" }' in src
     css = STYLE_CSS.read_text()
     assert ".mx-raw-pre" in css
     assert ".mx-raw-card" in css
@@ -3725,9 +3727,9 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=264"' in html
-    assert 'src="/app.js?v=378"' in html
-    assert 'dav-shell-v246' in sw
+    assert 'href="/style.css?v=265"' in html
+    assert 'src="/app.js?v=380"' in html
+    assert 'dav-shell-v248' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -4300,6 +4302,17 @@ def test_admin_kols_add_is_one_form():
     assert 'id="ad-batch-lines"' in load
     assert 'onclick="adminBatchAddKols()"' in load
     assert ">添加<" in load
+
+
+def test_admin_kols_system_batch_format_hint():
+    """勾选系统 KOL 后，输入提示切换为「中文名 外部ID」格式。"""
+    load = _fn_body("loadAdminKols")
+    assert 'onchange="adminBatchSystemToggle()"' in load
+    toggle = _fn_body("adminBatchSystemToggle")
+    assert "张三 sys_kol_001" in toggle
+    assert "中文名 外部ID" in toggle
+    add = _fn_body("adminBatchAddKols")
+    assert "中文名 外部ID" in add
 
 
 def test_admin_kols_mobile_table_uses_data_labels():
@@ -4915,3 +4928,39 @@ def test_knowledge_zero_sub_empty_state_wraps_source_controls():
     assert ".ima-report-filters-row { padding: 12px 16px; flex-wrap: wrap; }" in css
     assert ".ima-report-filters > .ima-report-source" in css
     assert "width: 100%;" in css[css.index(".ima-report-source select"):css.index(".ima-report-head .ima-doc-filter-chips")]
+
+
+def test_admin_posts_page_supports_hide_delete_and_status_filter():
+    """管理端帖子页：平台/状态筛选 + 操作列（隐藏可恢复、删除需确认）。"""
+    src = APP_JS.read_text()
+    row = _fn_body("postRowHtml")
+    render = _fn_body("renderAdminPosts")
+    load = _fn_body("loadAdminPosts")
+
+    # 平台筛选补齐 MX平台/系统；状态筛选三档（默认含已隐藏便于恢复）
+    assert '<option value="mx"' in render
+    assert '<option value="system"' in render
+    assert 'id="ad-posts-status"' in render
+    assert '<th scope="col">操作</th>' in render
+
+    # 行渲染：隐藏标记 + 隐藏/取消隐藏/删除按钮，展开详情列数同步 7 列
+    assert "post-hidden-badge" in row
+    assert "adminSetPostHidden(" in row
+    assert "adminDeletePost(" in row
+    assert 'colspan="7"' in row
+
+    # 请求参数：默认 include_hidden=1；已隐藏 tab 用 hidden_only=1
+    assert 'params.set("include_hidden", "1")' in load
+    assert 'params.set("hidden_only", "1")' in load
+
+    # 动作函数：删除前必须 confirm，走专用管理端接口
+    hide = _fn_body("adminSetPostHidden")
+    delete = _fn_body("adminDeletePost")
+    assert '`/api/posts/${id}/${hidden ? "hide" : "unhide"}`' in hide
+    assert "/api/posts/${id}/delete" in delete
+    assert "confirm(" in delete
+    assert "confirm(" not in hide  # 隐藏可恢复，不打断
+
+    css = STYLE_CSS.read_text()
+    assert ".post-hidden-badge {" in css
+    assert "var(--color-danger-soft)" in css

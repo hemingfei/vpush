@@ -2940,6 +2940,9 @@ class Scheduler:
             post_row = self.db.get_post(row["post_id"])
             if post_row is None:
                 continue
+            if post_row.get("hidden") or post_row.get("blocked"):
+                # 入库后管理员隐藏/关键词拦截的帖：重试不再外推
+                continue
             user_id = row["user_id"]
             kol = self.db.get_kol(post_row["kol_id"])
             try:

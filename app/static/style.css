@@ -3032,6 +3032,14 @@ button.linkish:hover { text-decoration: underline; }
 
 /* 管理帖子列表：点击展开全文 */
 .post-cell { cursor: pointer; }
+.post-hidden-badge {
+  font-size: var(--text-xs);
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+  border-radius: var(--radius-pill);
+  padding: 2px 10px;
+  white-space: nowrap;
+}
 .post-detail {
   background: var(--color-surface-accent-soft);
   border-radius: var(--radius-control);
