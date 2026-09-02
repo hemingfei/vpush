@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.130";
+const APP_VERSION = "1.12.131";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -707,6 +707,7 @@ function renderSidebar(user) {
   renderThemeSwitcher();
   syncSidebarToggle();
   checkUpdate();
+  ensureVersionRefreshCheck();
 }
 
 const MOBILE_NAV = [
@@ -1914,6 +1915,14 @@ async function downloadImaPdf(mediaId) {
 async function checkUpdate() {
   try {
     const v = await api("/api/version");
+    if (v.current && v.current !== APP_VERSION) {
+      const refreshKey = `dav_version_refresh_${v.current}`;
+      if (!sessionStorage.getItem(refreshKey)) {
+        sessionStorage.setItem(refreshKey, "1");
+        location.reload();
+        return;
+      }
+    }
     const link = $("#sidebar-gh-link");
     const meta = $("#sidebar-version");
     if (!link || !meta) return;
@@ -1926,6 +1935,15 @@ async function checkUpdate() {
   } catch {
     /* 更新检查失败不打扰，保留本地硬编码版本兜底 */
   }
+}
+
+function ensureVersionRefreshCheck() {
+  if (ensureVersionRefreshCheck.bound) return;
+  ensureVersionRefreshCheck.bound = true;
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") checkUpdate();
+  });
+  window.addEventListener("focus", checkUpdate);
 }
 
 function renderTopbar(user) {

@@ -3670,8 +3670,8 @@ def test_static_asset_cache_bust_versions():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=264"' in html
-    assert 'src="/app.js?v=377"' in html
-    assert 'dav-shell-v245' in sw
+    assert 'src="/app.js?v=378"' in html
+    assert 'dav-shell-v246' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -4837,6 +4837,18 @@ def test_user_modal_kb_grants_include_local_libraries():
     modal = _fn_body("adminOpenUser")
     assert "本地库" in modal
     assert "group.local" in modal
+
+
+def test_stale_frontend_refreshes_after_release():
+    check = _fn_body("checkUpdate")
+    assert "v.current !== APP_VERSION" in check
+    assert "sessionStorage.getItem(refreshKey)" in check
+    assert 'sessionStorage.setItem(refreshKey, "1")' in check
+    assert "location.reload()" in check
+    lifecycle = _fn_body("ensureVersionRefreshCheck")
+    assert 'addEventListener("visibilitychange"' in lifecycle
+    assert 'addEventListener("focus", checkUpdate)' in lifecycle
+    assert "ensureVersionRefreshCheck()" in _fn_body("renderSidebar")
 
 
 def test_knowledge_zero_sub_empty_state_wraps_source_controls():
