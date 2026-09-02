@@ -529,6 +529,32 @@ def test_timeline_polish_matches_chip_row_and_browser_surfaces():
     assert 'style="margin-top:14px' not in feed
 
 
+def test_plaza_rerenders_across_mobile_breakpoint_and_hydrates_search():
+    """广场跨手机断点时重建 DOM，桌面搜索框回显当前筛选。"""
+    src = APP_JS.read_text()
+    render = _fn_body("renderHome")
+    desktop_search = (
+        'placeholder="搜索昵称或 ID，即时过滤" '
+        'value="${escapeHtml(state.homeQ || "")}"'
+    )
+    missing = []
+    if "function ensureHomeMobileWatch" not in src:
+        missing.append("ensureHomeMobileWatch")
+    if desktop_search not in render:
+        missing.append("desktop search value")
+    assert not missing, f"missing responsive contracts: {', '.join(missing)}"
+
+    watch = _fn_body("ensureHomeMobileWatch")
+    assert "let _homeMobileWatchBound = false" in src
+    assert "ensureHomeMobileWatch()" in render
+    assert "max-width: 768px" in watch
+    assert 'addEventListener("change"' in watch
+    assert '$(".home-panel")' in watch
+    assert '$("#kol-list")' in watch
+    assert "renderHome(routeRenderSeq)" in watch
+    assert desktop_search in render
+
+
 def test_plaza_keeps_subscribed_and_favorite_filters():
     """订阅广场用目录字段筛选已订阅/特别关注，不另拉订阅列表。"""
     src = APP_JS.read_text()
@@ -677,7 +703,9 @@ def test_mobile_home_filter_reuses_native_and_shared_controls():
     assert "state.platform = platform" in pick
     assert 'toggleAttribute("hidden"' in toggle
     assert "loadHomeKols(routeRenderSeq)" in pick
-    assert "state.homeQ || state.homeCategory || state.homeSubscribed || state.homeFavorite" in _fn_body("homeHasFilters")
+    panel_state = _fn_body("homePanelHasFilters")
+    assert "state.homeCategory || state.homeFavorite" in panel_state
+    assert "state.homeQ || state.homeSubscribed" in panel_state
 
 
 def test_plaza_source_visibility_admin_and_pills():
@@ -720,7 +748,8 @@ def test_zsxq_is_plaza_badge_not_sidebar_page():
     assert 'replaceRoute("timeline")' in src
     assert "--color-brand-zsxq" in css
     assert 'data-platform="zsxq"' in css
-    assert "state.platform" not in _fn_body("homeHasFilters")
+    assert "state.platform" not in _fn_body("homePanelHasFilters")
+    assert "state.platform" not in _fn_body("homeFilteredKols")
     assert "function postFiles" in src
     assert 'post.platform === "zsxq"' in _fn_body("postCard")
     assert "class=\"p-file\"" in _fn_body("postCard")

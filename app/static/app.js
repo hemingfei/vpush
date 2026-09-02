@@ -1953,10 +1953,6 @@ function emptyState(text, actionHtml = "") {
   return `<div class="empty">${escapeHtml(text)}${actionHtml}</div>`;
 }
 
-function homeHasFilters() {
-  return !!(state.homeQ || state.homeCategory || state.homeSubscribed || state.homeFavorite);
-}
-
 function homePanelHasFilters() {
   return !!(state.homeCategory || state.homeFavorite || (isMobileTimelineFilter() && (state.homeQ || state.homeSubscribed)));
 }
@@ -2050,10 +2046,20 @@ async function homeResetFilters() {
   await renderHome(routeRenderSeq);
 }
 
+let _homeMobileWatchBound = false;
+function ensureHomeMobileWatch() {
+  if (_homeMobileWatchBound) return;
+  _homeMobileWatchBound = true;
+  window.matchMedia("(max-width: 768px)").addEventListener("change", () => {
+    if ($(".home-panel") && $("#kol-list")) renderHome(routeRenderSeq);
+  });
+}
+
 // ---------- 订阅广场 ----------
 async function renderHome(seq) {
   setPageTitle("订阅广场");
   ensurePlazaPlatformSelection();
+  ensureHomeMobileWatch();
   const mobileHome = isMobileTimelineFilter();
   let onboardingHtml = "";
   if (state.user && !state.user.subscription_count) {
@@ -2109,7 +2115,7 @@ async function renderHome(seq) {
           <div class="toolbar" style="margin-top:12px">
             <div class="search-bar" style="flex:1;min-width:220px">
               ${SEARCH_ICON}
-              <input id="home-search" placeholder="搜索昵称或 ID，即时过滤" oninput="homeSearch(this.value)">
+              <input id="home-search" placeholder="搜索昵称或 ID，即时过滤" value="${escapeHtml(state.homeQ || "")}" oninput="homeSearch(this.value)">
             </div>
             <div class="platform-tabs" id="platform-tabs"></div>
             ${homeSubscribedToggleHtml()}
