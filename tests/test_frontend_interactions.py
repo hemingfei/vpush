@@ -533,18 +533,51 @@ def test_plaza_keeps_subscribed_and_favorite_filters():
     """订阅广场用目录字段筛选已订阅/特别关注，不另拉订阅列表。"""
     src = APP_JS.read_text()
     render = _fn_body("renderHome")
-    has = _fn_body("homeHasFilters")
-    reset = _fn_body("homeResetFilters")
-    filtered = _fn_body("homeFilteredKols")
-    toggles = _fn_body("homeScopeTogglesHtml")
+    panel = _fn_body("homeFilterPanelHtml")
+    scope = _fn_body("homeScopeTogglesHtml")
+    subscribed = _fn_body("homeSubscribedToggleHtml")
+    filter_toggle = _fn_body("homeFilterToggleHtml")
+    toggle_filter = _fn_body("homeToggleFilter")
 
-    assert "homeScopeTogglesHtml()" in render
-    assert "toggleHomeSubscribed()" in toggles
-    assert "toggleHomeFavorite()" in toggles
-    assert "已订阅" in toggles
-    assert "特别关注" in toggles
-    assert "state.homeSubscribed" in has and "state.homeFavorite" in has
-    assert "state.homeSubscribed = state.homeFavorite = false" in reset
+    for call in (
+        "homeFilterPanelHtml(false)", "homeFilterPanelHtml(true)",
+        "homeSubscribedToggleHtml()", "homeFilterToggleHtml()",
+    ):
+        assert call in render
+    assert "homeScopeTogglesHtml(mobile)" in panel
+
+    assert scope.count("<label") == 2
+    assert scope.count('type="checkbox"') == 2
+    for marker in (
+        'id="home-fav-toggle"', 'state.homeFavorite ? "checked" : ""',
+        'onchange="toggleHomeFavorite()"', "只看特别关注",
+        'id="home-sub-toggle"', 'state.homeSubscribed ? "checked" : ""',
+        'onchange="toggleHomeSubscribed()"', "只看已订阅",
+    ):
+        assert marker in scope
+
+    for marker in (
+        "<button", 'type="button"', 'id="home-sub-toggle"', "已订阅",
+        'aria-pressed="${state.homeSubscribed}"',
+        'onclick="toggleHomeSubscribed()"',
+    ):
+        assert marker in subscribed
+    for marker in (
+        "<button", 'type="button"', 'aria-label="筛选"',
+        'aria-expanded="false"', 'aria-controls="home-filter-panel"',
+        'onclick="homeToggleFilter()"',
+    ):
+        assert marker in filter_toggle
+    assert "特别关注" not in filter_toggle
+    assert 'setAttribute("aria-expanded", String(open))' in toggle_filter
+
+    panel_state = re.sub(r"\s+", " ", _fn_body("homePanelHasFilters")).strip()
+    assert panel_state == (
+        "{ return !!(state.homeCategory || state.homeFavorite || "
+        "(isMobileTimelineFilter() && (state.homeQ || state.homeSubscribed))); }"
+    )
+    assert "state.homeSubscribed = state.homeFavorite = false" in _fn_body("homeResetFilters")
+    filtered = _fn_body("homeFilteredKols")
     assert "state.homeSubscribed && !k.subscribed" in filtered
     assert "state.homeFavorite && !k.favorite" in filtered
     assert "function settingsSubscriptionsPanelHtml" not in src
@@ -590,24 +623,32 @@ def test_product_spec_locks_mobile_platform_badges():
     assert "把角标改回带字胶囊即违规" in design
 
 
-def test_mobile_mysubs_filter_is_seven_equal_44px_targets():
+def test_mobile_plaza_and_timeline_filters_are_seven_equal_44px_targets():
     """广场/动态移动端：6 平台 + 筛选共 7 等宽 44px 角标，文字仅 aria。"""
     css = STYLE_CSS.read_text()
     pill = re.search(r"\.tl-pill\s*\{([^}]*)\}", css)
     assert pill and "44px" in pill.group(1)
-    assert "特别关注" in _fn_body("homeScopeTogglesHtml")
+    assert "homeFilterToggleHtml()" in _fn_body("renderHome")
     assert 'aria-label="筛选"' in _fn_body("tlFilterActionsHtml")
     assert ".icon-badge-bar .tl-pill span" in css and "display: none" in css
     assert ".icon-badge-bar > .fav-toggle" in css and "font-size: 0" in css
+    assert ".icon-badge-bar > .home-filter-toggle" in css
     assert 'class="icon-badge-bar"' in _fn_body("renderHome")
     assert "tl-filterbar-top icon-badge-bar" in _fn_body("renderTimeline")
-    assert "repeat(7, minmax(0, 1fr))" in css
     assert "#tl-filterbar .icon-badge-bar" in css
     assert "repeat(8, minmax(0, 1fr))" in css
-    # 不再把筛选条竖着堆成两行
-    mobile = re.search(r"@media \(max-width: 768px\) \{(.*)\}\s*/\* ----------", css, re.DOTALL)
-    body = mobile.group(1) if mobile else css
-    assert ".tl-filterbar-top { flex-direction: column" not in body.replace(" ", "")
+
+    mobile = _media_block(css, "@media (max-width: 768px)")
+    assert re.search(
+        r"\.icon-badge-bar\s*\{[^}]*grid-template-columns:\s*"
+        r"repeat\(7,\s*minmax\(0,\s*1fr\)\)", mobile,
+    )
+    assert re.search(
+        r"[^{}]*\.home-filter-toggle[^{}]*\{[^}]*(?:min-)?height:\s*44px", mobile,
+    )
+    assert not re.search(
+        r"\.tl-filterbar-top\s*\{[^}]*flex-direction:\s*column", mobile,
+    )
 
 
 # ---- 订阅广场移动端头部密度 ----
@@ -615,20 +656,25 @@ def test_mobile_mysubs_filter_is_seven_equal_44px_targets():
 def test_mobile_home_filter_reuses_native_and_shared_controls():
     """广场移动端与订阅/动态同一行角标；搜索分类收进漏斗。"""
     render = _fn_body("renderHome")
+    panel = _fn_body("homeFilterPanelHtml")
+    filter_toggle = _fn_body("homeFilterToggleHtml")
     mobile_platforms = _fn_body("homeMobilePlatformsHtml")
     pick = _fn_body("homePickMobilePlatform")
     toggle = _fn_body("homeToggleFilter")
 
-    for marker in ('class="icon-badge-bar"', 'id="home-filter-toggle"',
-                   'id="home-search"', 'id="platform-tabs"', 'id="home-cats"',
-                   'id="home-filter-panel"'):
-        assert marker in render
+    assert all(marker in render for marker in (
+        'class="icon-badge-bar"', "homeMobilePlatformsHtml()",
+        "homeFilterToggleHtml()", "homeFilterPanelHtml(true)",
+    ))
+    assert all(marker in panel for marker in (
+        'id="home-search"', 'id="home-cats"', 'id="home-filter-panel"',
+    ))
+    assert 'id="home-filter-toggle"' in filter_toggle and "homeToggleFilter()" in filter_toggle
     assert "<details" not in render
     assert "platformShortLabel(p)" in mobile_platforms
     assert "<span>${short}</span>" in mobile_platforms
     assert "homePickMobilePlatform('${p}')" in mobile_platforms
     assert "state.platform = platform" in pick
-    assert "homeToggleFilter()" in render
     assert 'toggleAttribute("hidden"' in toggle
     assert "loadHomeKols(routeRenderSeq)" in pick
     assert "state.homeQ || state.homeCategory || state.homeSubscribed || state.homeFavorite" in _fn_body("homeHasFilters")
