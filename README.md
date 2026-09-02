@@ -20,7 +20,7 @@
 
 | | |
 | --- | --- |
-| <img src="docs/screenshots/home.png" width="420"><br>订阅广场 · 平台筛选与分类目录 | <img src="docs/screenshots/settings.png" width="420"><br>订阅与推送 · 订阅管理与推送配置 |
+| <img src="docs/screenshots/home.png" width="420"><br>订阅广场 · 平台筛选、已订阅与特别关注 | <img src="docs/screenshots/settings.png" width="420"><br>设置 · 推送配置与渠道绑定 |
 | <img src="docs/screenshots/login.png" width="420"><br>登录注册 · 注册码邀请 | <img src="docs/screenshots/admin-stats.png" width="420"><br>管理后台 · 数据源与抓取状态 |
 
 </div>
@@ -29,8 +29,8 @@
 
 - **多源聚合**：雪球帖子/回复、雪球组合调仓、微博、X、**ima 知识库**，自动去重、按发布时间顺序推送；带图动态文字+图片同卡送达（TG 相册 / 飞书卡片插图）；组合详情页提供实时净值/今日涨跌、当前持仓（权重条）与净值曲线（调仓卡自动附当日涨跌）
 - **多用户**：注册码注册，用户自助订阅/退订，各自独立的动态流与推送
-- **订阅广场**：发现并订阅大V、雪球组合及其他平台内容
-- **订阅与推送**：在“订阅管理”维护已订项目，并配置推送规则、接收渠道、AI 摘要和账号
+- **订阅广场**：发现并订阅大V、雪球组合及其他平台内容；用已订阅、特别关注筛选维护已订项目
+- **设置**：配置推送规则、接收渠道、AI 摘要和账号
 - **多通道推送**：Telegram（官方共享机器人或用户自建机器人）、飞书私聊/群、企业微信群机器人、Bark（iOS 自托管通知）、浏览器通知（Chrome / Edge Web Push，关掉标签页也能弹）；绑定多个渠道时可自选接收通道
 - **关键词提醒**：设置关键词后，命中关键词的动态带 🔑 标记、并在免打扰时段实时穿透推送（适合只关心某个大V聊的特定话题）
 - **特别关注**：把订阅的大V标星 ⭐，推送消息带星标标识、每日精选置顶；可在免打扰时段内选择「特别关注穿透」实时提醒
@@ -93,7 +93,7 @@ cp .env.example .env
 | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | 推荐 | Telegram 机器人 token，[BotFather](https://t.me/BotFather) 创建 |
 | `TELEGRAM_CHAT_ID` | 推荐 | 管理员接收系统告警的会话 ID（可用 [@userinfobot](https://t.me/userinfobot) 查询） |
-| `TELEGRAM_BOT_USERNAME` | 推荐 | 机器人 @username，用于订阅与推送页的一键绑定链接 |
+| `TELEGRAM_BOT_USERNAME` | 推荐 | 机器人 @username，用于设置页的一键绑定链接 |
 | `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 可选 | 飞书自建应用凭据（用于机器人命令与私聊推送），配置见下文 |
 | `FEISHU_WEBHOOK_URL` | 可选 | 飞书群机器人 webhook（系统告警用，用户可自行在网页绑定各自的群机器人） |
 | `WECOM_WEBHOOK_URL` | 可选 | 企业微信群机器人 webhook（系统告警用） |
@@ -218,7 +218,7 @@ docker compose up -d --build
 2. 填入 `.env`：`TELEGRAM_BOT_TOKEN`、`TELEGRAM_BOT_USERNAME`、`TELEGRAM_CHAT_ID`
 3. 用户加机器人后发 `/start`，再发 `/list` 浏览订阅
 
-用户也可以在网页「订阅与推送」里粘贴自己的 Bot Token，用自己的机器人收推送（不受共享机器人广播限速影响）。
+用户也可以在网页「设置」里粘贴自己的 Bot Token，用自己的机器人收推送（不受共享机器人广播限速影响）。
 
 ### 飞书
 
@@ -230,7 +230,7 @@ docker compose up -d --build
 4. 发布版本并等待审核通过
 5. 把 `FEISHU_APP_ID` / `FEISHU_APP_SECRET` / `FEISHU_BOT_NAME` 填入 `.env`
 
-> 关键：用户必须在机器人的**私聊**会话里发消息/命令，群聊不会收到新帖推送；网页「订阅与推送」里有分步引导。
+> 关键：用户必须在机器人的**私聊**会话里发消息/命令，群聊不会收到新帖推送；网页「设置」里有分步引导。
 
 ### 飞书个人机器人（可选，免共享限频）
 
@@ -244,7 +244,7 @@ docker compose up -d --build
 
 ### 企业微信
 
-企业微信任意群里添加「群机器人」，复制 webhook 粘贴到网页「订阅与推送」即可（用户各自绑定，互不影响）。
+企业微信任意群里添加「群机器人」，复制 webhook 粘贴到网页「设置」即可（用户各自绑定，互不影响）。
 
 ## 数据源配置
 
@@ -283,8 +283,8 @@ uvicorn app.main:app --reload
 ## 常见问题
 
 - **登录被锁定 / 提示尝试次数过多？** 同一 IP 连续失败 8 次会临时限流（5 分钟）；账号连续失败（管理员 3 次、普通用户 10 次，1 小时内）会触发账号级临时锁定（15–30 分钟自动解锁），锁定期内即使密码正确也拒绝。锁定事件会在管理后台「操作日志」中留痕，方便排查是否被爆破。
-- **收不到推送？** 先到网页「订阅与推送」确认状态为已绑定；飞书必须是私聊会话；Telegram 先给机器人发 `/start`
-- **绑定了多个渠道只收到一部分？** 在「订阅与推送 → 推送设置」勾选想接收的渠道
+- **收不到推送？** 先到网页「设置」确认状态为已绑定；飞书必须是私聊会话；Telegram 先给机器人发 `/start`
+- **绑定了多个渠道只收到一部分？** 在「设置 → 推送设置」勾选想接收的渠道
 - **雪球抓取失败？** 后台「数据源 → Cookie 管理」更新 Cookie。先确认 `waf-bot` 在运行，且 `data/waf_cookies.json` 最近几分钟有更新；校验失败时 sidecar 不会覆盖旧文件。组合相关报错通常是登录 Cookie 失效，后台更新会同步给 sidecar。通过 `.env` 或 `config.yaml` 改 Cookie 后需重启主服务
 - **X 抓不到？** 后台开启「X 内容自动翻译」，并在「数据源 → Cookie 管理」更新 Cookie（或设 `TWITTER_COOKIE`）。403 多为临时风控，等数小时再试；code 89/353 则是 Cookie 失效或接口变更
 

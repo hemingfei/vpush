@@ -5091,6 +5091,105 @@ class DB:
             "group_counts": group_counts,
         }
 
+    def ima_document_match_count(
+        self,
+        readable_group_ids: list[str],
+        *,
+        group: str = "",
+        query: str = "",
+        day: str = "",
+        tag: str = "",
+    ) -> int:
+        requested_query = str(query or "").strip()
+        if requested_query and not _ima_query_usable(requested_query):
+            requested_query = ""
+        groups = _ima_authorized_groups(readable_group_ids, group)
+        if not groups:
+            return 0
+        where_sql, where_params, _rank_sql, _pattern, _rank_n = self._ima_page_filters(
+            groups,
+            requested_query,
+            str(day or "").strip(),
+            str(tag or "").strip(),
+        )
+        rows = self._rows(
+            f"SELECT COUNT(*) AS n FROM ima_document_index d WHERE {where_sql}",
+            where_params,
+        )
+        return int(rows[0]["n"] if rows else 0)
+
+    def ima_document_index_rows(self, group_ids) -> list[dict]:
+        groups = list(dict.fromkeys(str(item).strip() for item in group_ids if str(item).strip()))
+        if not groups:
+            return []
+        return self._rows(
+            "SELECT * FROM ima_document_index "
+            f"WHERE group_id IN ({', '.join('?' for _ in groups)}) "
+            "ORDER BY group_id, media_id",
+            groups,
+        )
+
+    def ima_documents_by_keys(
+        self,
+        keys,
+        readable_group_ids: list[str],
+        *,
+        group: str = "",
+        query: str = "",
+        day: str = "",
+        tag: str = "",
+    ) -> list[dict]:
+        groups = _ima_authorized_groups(readable_group_ids, group)
+        allowed = set(groups)
+        pairs: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for key in keys:
+            try:
+                group_id, media_id = (str(value).strip() for value in key)
+            except (TypeError, ValueError):
+                continue
+            pair = (group_id, media_id)
+            if group_id in allowed and media_id and pair not in seen:
+                seen.add(pair)
+                pairs.append(pair)
+            if len(pairs) >= 200:
+                break
+        if not groups or not pairs:
+            return []
+
+        requested_query = str(query or "").strip()
+        if requested_query and not _ima_query_usable(requested_query):
+            requested_query = ""
+        requested_day = str(day or "").strip()
+        requested_tag = str(tag or "").strip()
+        base_where, base_params, _rank_sql, _pattern, _rank_n = self._ima_page_filters(
+            groups, "", requested_day, requested_tag
+        )
+        metadata_where, metadata_params, _rank_sql, _pattern, _rank_n = (
+            self._ima_page_filters(
+                groups, requested_query, requested_day, requested_tag
+            )
+        )
+        pair_sql = " OR ".join(
+            "(d.group_id = ? AND d.media_id = ?)" for _ in pairs
+        )
+        rows = self._rows(
+            f"SELECT d.*, CASE WHEN {metadata_where} THEN 1 ELSE 0 END "
+            "AS metadata_match FROM ima_document_index d "
+            f"WHERE {base_where} AND ({pair_sql})",
+            (
+                *metadata_params,
+                *base_params,
+                *(value for pair in pairs for value in pair),
+            ),
+        )
+        items = []
+        for row in rows:
+            item = _ima_public_document(row)
+            item["_metadata_match"] = bool(row["metadata_match"])
+            items.append(item)
+        return items
+
     def ima_document_catalog_stats(self, group_ids: list[str]) -> dict[str, dict]:
         groups = _ima_authorized_groups(group_ids)
         if not groups:

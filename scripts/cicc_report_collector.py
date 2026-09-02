@@ -360,11 +360,8 @@ WM_SIZES = {(756, 192), (380, 138)}
 _wm_warned = False
 
 
-def strip_watermark(payload: bytes) -> bytes:
-    """内存中去水印：抹掉水印图的 Do 绘制指令并清资源引用。压缩纯无损
-    （deflate 重压/对象流/垃圾回收，不重采样图片；实测>300ppi图仅占体积~9%，
-    有损降采样不划算，维持不动）。没剥水印且重压不省空间 → 保留原文件。
-    任何异常返回原文（宁带水印不丢文件）；未装 pymupdf 时原样跳过。"""
+def strip_watermark_result(payload: bytes) -> tuple[bytes, str]:
+    """移除已知中金贴图水印，并验证页面结构与文本层保持一致。"""
     global _wm_warned
     try:
         import fitz
@@ -372,16 +369,19 @@ def strip_watermark(payload: bytes) -> bytes:
         if not _wm_warned:
             print("WARN: 未装 python3-fitz/pymupdf，本次不去水印", file=sys.stderr)
             _wm_warned = True
-        return payload
+        return payload, "watermark_unavailable"
+    doc = None
     try:
         doc = fitz.open(stream=payload, filetype="pdf")
+        if _pdf_has_unsupported_watermark_features(doc):
+            return payload, "unsupported_features"
         stripped = False
         for page in doc:
             wm = [img for img in page.get_images(full=True)
-                  if (img[2], img[3]) in WM_SIZES]
+                  if (img[2], img[3]) in WM_SIZES and doc.xref_stream(img[0])]
             if not wm:
                 continue
-            for xref in page.get_contents():  # 逐流处理：只改写含水印指令的流，避免全页重排膨胀
+            for xref in page.get_contents():  # 直接引用时顺便移除 Do；嵌套 Form 内引用靠清空图流处理
                 cont = doc.xref_stream(xref)
                 hit = False
                 for img in wm:
@@ -391,49 +391,173 @@ def strip_watermark(payload: bytes) -> bytes:
                         hit = True
                 if hit:
                     doc.update_stream(xref, cont)
-                    stripped = True
-            for img in wm:  # 清空图流（含 smask）：不动 Resources dict，顺带抹掉水印字节本体
-                doc.update_stream(img[0], b"")
-                if img[1]:
-                    doc.update_stream(img[1], b"")
-                stripped = True
-        out = doc.tobytes(garbage=4, deflate=True, use_objstms=1)
-        return out if (stripped or len(out) < len(payload)) else payload
+            for image_xref, smask_xref in {(img[0], img[1]) for img in wm}:
+                doc.update_stream(image_xref, b"")
+                if smask_xref:
+                    doc.update_stream(smask_xref, b"")
+            stripped = True
+        if not stripped:
+            return payload, "not_watermarked"
+        out = doc.tobytes(garbage=0, deflate=True, use_objstms=0)
+        rejection = pdf_structure_result(payload, out)
+        return (payload, rejection) if rejection else (out, "watermark_stripped")
     except Exception as e:  # noqa: BLE001 — 去水印失败不阻断采集
         print(f"WARN: 去水印失败，保留原文件: {e}", file=sys.stderr)
-        return payload
+        return payload, "watermark_error"
+    finally:
+        if doc is not None:
+            doc.close()
+
+
+def strip_watermark(payload: bytes) -> bytes:
+    return strip_watermark_result(payload)[0]
 
 
 COMPRESS_RATIO = 0.90  # 压缩后体积低于原件 90% 才采用；已优化的 PDF 压不动，自动跳过（幂等）
+COMPRESS_MIN_SAVING = 256 * 1024
+IMA_FLAT_MIN_BYTES = 2 * 1024 * 1024
+IMA_FLAT_MARKER = b"ima-flat-v3"
+IMA_FLAT_FONT = "Microsoft YaHei Regular"
 _gs_warned = False
 
 
-def pdf_equivalent(a: bytes, b: bytes) -> bool:
-    """页数一致且逐页文本层一致（忽略空白）才认为内容等价。"""
+def _pdf_has_unsupported_features(doc) -> bool:
+    if doc.is_form_pdf or doc.embfile_count() or doc.get_ocgs():
+        return True
+    catalog = doc.pdf_catalog()
+    if any(doc.xref_get_key(catalog, key)[0] != "null"
+           for key in ("Perms", "AcroForm", "OpenAction", "AA", "Names", "Collection",
+                       "StructTreeRoot", "MarkInfo", "PageLabels")):
+        return True
+    return any(
+        any(page.annots() or ()) or any(page.widgets() or ()) or page.get_links()
+        for page in doc
+    )
+
+
+def _pdf_has_unsupported_watermark_features(doc) -> bool:
+    if doc.is_form_pdf or doc.embfile_count() or doc.get_ocgs():
+        return True
+    catalog = doc.pdf_catalog()
+    if any(doc.xref_get_key(catalog, key)[0] != "null"
+           for key in ("Perms", "AcroForm", "OpenAction", "AA", "Names", "Collection",
+                       "PageLabels")):
+        return True
+    return any(
+        any(page.annots() or ()) or any(page.widgets() or ())
+        for page in doc
+    )
+
+
+def _pdf_documents_structure_result(da, db, *, watermark: bool = False) -> str:
+    unsupported = (_pdf_has_unsupported_watermark_features if watermark
+                   else _pdf_has_unsupported_features)
+    if unsupported(da) or unsupported(db):
+        return "unsupported_features"
+    if len(da) != len(db) or da.get_toc(simple=True) != db.get_toc(simple=True):
+        return "content_mismatch"
+    if watermark:
+        for key in ("StructTreeRoot", "MarkInfo"):
+            if (da.xref_get_key(da.pdf_catalog(), key) !=
+                    db.xref_get_key(db.pdf_catalog(), key)):
+                return "content_mismatch"
+    boxes = ("mediabox", "cropbox", "bleedbox", "trimbox", "artbox")
+    for pa, pb in zip(da, db):
+        if pa.rotation != pb.rotation:
+            return "content_mismatch"
+        if watermark and pa.get_links() != pb.get_links():
+            return "content_mismatch"
+        for box in boxes:
+            if any(abs(x - y) > 0.01 for x, y in zip(
+                    getattr(pa, box), getattr(pb, box))):
+                return "content_mismatch"
+        if re.sub(r"\s+", "", pa.get_text()) != re.sub(r"\s+", "", pb.get_text()):
+            return "content_mismatch"
+    return ""
+
+
+def pdf_structure_result(a: bytes, b: bytes) -> str:
+    """校验页面结构和文本层；去水印允许渲染按预期变化。"""
     try:
         import fitz
-        da, db = fitz.open(stream=a, filetype="pdf"), fitz.open(stream=b, filetype="pdf")
-        if len(da) != len(db):
-            return False
-        return all(re.sub(r"\s+", "", pa.get_text()) == re.sub(r"\s+", "", pb.get_text())
-                   for pa, pb in zip(da, db))
+    except ImportError:
+        return "verify_unavailable"
+    try:
+        with fitz.open(stream=a, filetype="pdf") as da, fitz.open(
+                stream=b, filetype="pdf") as db:
+            return _pdf_documents_structure_result(da, db, watermark=True)
     except Exception:
-        return False
+        return "verify_error"
 
 
-def compress_pdf(data: bytes) -> bytes:
-    """gs /prepress（最高品质，300dpi 上限）条件压缩：输出更小且内容等价才采用，
-    否则原样返回。已压缩/优化的文件压不动 → 自动跳过，重复调用幂等。
-    未装 ghostscript 或任何异常均返回原文，不阻断采集。"""
+def pdf_equivalence_result(a: bytes, b: bytes) -> str:
+    """返回空串表示可安全替换，否则返回可记录的拒绝或临时错误原因。"""
+    try:
+        import fitz
+    except ImportError:
+        return "verify_unavailable"
+    try:
+        with fitz.open(stream=a, filetype="pdf") as da, fitz.open(
+                stream=b, filetype="pdf") as db:
+            rejection = _pdf_documents_structure_result(da, db)
+            if rejection:
+                return rejection
+            matrix = fitz.Matrix(96 / 72, 96 / 72)
+            for pa, pb in zip(da, db):
+                pix_a = pa.get_pixmap(matrix=matrix, colorspace=fitz.csRGB,
+                                      alpha=False, annots=False)
+                pix_b = pb.get_pixmap(matrix=matrix, colorspace=fitz.csRGB,
+                                      alpha=False, annots=False)
+                if ((pix_a.width, pix_a.height, pix_a.stride) !=
+                        (pix_b.width, pix_b.height, pix_b.stride) or
+                        pix_a.samples != pix_b.samples):
+                    return "content_mismatch"
+            return ""
+    except Exception:
+        return "verify_error"
+
+
+def pdf_equivalent(a: bytes, b: bytes) -> bool:
+    return not pdf_equivalence_result(a, b)
+
+
+def _compression_rejection(original: bytes, candidate: bytes) -> str:
+    if (len(candidate) >= len(original) * COMPRESS_RATIO or
+            len(original) - len(candidate) < COMPRESS_MIN_SAVING):
+        return "ratio_rejected"
+    return pdf_equivalence_result(original, candidate)
+
+
+def _subset_ima_flat(data: bytes) -> tuple[bytes | None, str]:
+    if len(data) < IMA_FLAT_MIN_BYTES or IMA_FLAT_MARKER not in data:
+        return None, "not_ima_flat"
+    try:
+        import fitz
+    except ImportError:
+        return None, "subset_unavailable"
+    try:
+        with fitz.open(stream=data, filetype="pdf") as doc:
+            if doc.metadata.get("subject") != IMA_FLAT_MARKER.decode():
+                return None, "not_ima_flat"
+            if not hasattr(doc, "subset_fonts"):
+                return None, "subset_unavailable"
+            if not any(font[3] == IMA_FLAT_FONT
+                       for page in doc for font in page.get_fonts(full=True)):
+                return None, "font_already_subset"
+            doc.subset_fonts(verbose=False)
+            return doc.tobytes(garbage=4, deflate=True, use_objstms=1), ""
+    except Exception:
+        return None, "subset_error"
+
+
+def _ghostscript_compress(data: bytes) -> tuple[bytes | None, str]:
     global _gs_warned
-    if not data.startswith(b"%PDF"):
-        return data
     gs = shutil.which("gs")
     if not gs:
         if not _gs_warned:
             print("WARN: 未装 ghostscript，跳过压缩", file=sys.stderr)
             _gs_warned = True
-        return data
+        return None, "gs_unavailable"
     try:
         with tempfile.TemporaryDirectory() as td:
             src, out = os.path.join(td, "s.pdf"), os.path.join(td, "o.pdf")
@@ -443,16 +567,56 @@ def compress_pdf(data: bytes) -> bytes:
                 [gs, "-sDEVICE=pdfwrite", "-dCompatibilityLevel=1.7",
                  "-dPDFSETTINGS=/prepress", "-dAutoRotatePages=/None",
                  "-dNOPAUSE", "-dQUIET", "-dBATCH", f"-sOutputFile={out}", src],
-                capture_output=True, timeout=600)
+                capture_output=True, timeout=600, check=False)
             if r.returncode != 0 or not os.path.exists(out) or os.path.getsize(out) == 0:
-                return data
+                return None, "gs_error"
             with open(out, "rb") as f:
-                new = f.read()
+                return f.read(), ""
     except Exception:  # noqa: BLE001 — 压缩失败不阻断采集
-        return data
-    if len(new) >= len(data) * COMPRESS_RATIO or not pdf_equivalent(data, new):
-        return data
-    return new
+        return None, "gs_error"
+
+
+def _pdf_rewrite_guard_result(data: bytes) -> str:
+    try:
+        import fitz
+    except ImportError:
+        return "verify_unavailable"
+    try:
+        with fitz.open(stream=data, filetype="pdf") as doc:
+            return "unsupported_features" if _pdf_has_unsupported_features(doc) else ""
+    except Exception:
+        return "verify_error"
+
+
+def compress_pdf_result(data: bytes) -> tuple[bytes, str]:
+    """无损条件压缩并返回结果原因；任何失败都保留原文。"""
+    if not data.startswith(b"%PDF"):
+        return data, "not_pdf"
+    guard = _pdf_rewrite_guard_result(data)
+    if guard:
+        return data, guard
+
+    subset, subset_reason = _subset_ima_flat(data)
+    if subset is not None:
+        rejection = _compression_rejection(data, subset)
+        if not rejection:
+            return subset, "compressed_subset"
+        subset_reason = rejection
+
+    candidate, gs_reason = _ghostscript_compress(data)
+    if candidate is not None:
+        rejection = _compression_rejection(data, candidate)
+        if not rejection:
+            return candidate, "compressed_gs"
+        return data, rejection
+    if subset_reason not in {"not_ima_flat", "font_already_subset"}:
+        return data, subset_reason
+    return data, gs_reason
+
+
+def compress_pdf(data: bytes) -> bytes:
+    """IMA-flat 先做字体子集化，其他 PDF 使用 gs /prepress；失败保留原文。"""
+    return compress_pdf_result(data)[0]
 
 
 def main() -> None:
@@ -472,7 +636,8 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true", help="只列清单不下载")
     ap.add_argument("--compress", action="store_true",
                     help="下载时同步 gs /prepress 压缩（1核机上单篇可达几十秒，默认关；推荐采完后用 "
-                         "pdf_backfill_compress.py --root /srv/vpush-ima/local 低优先级回刷）")
+                         "pdf_backfill_compress.py --root /srv/vpush-ima/local/cicc-research "
+                         "--strip-watermark 低优先级回刷）")
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
 
@@ -516,6 +681,10 @@ def main() -> None:
             assert len(out) == 1
             pix = out[0].get_pixmap(dpi=72)
             assert set(pix.samples) == {255}, "水印未被剥离"
+            empty = fitz.open(stream=buf.getvalue(), filetype="pdf")
+            empty.update_stream(empty[0].get_images(full=True)[0][0], b"")
+            empty_bytes = empty.tobytes()
+            assert strip_watermark(empty_bytes) == empty_bytes, "空水印资源不应触发重写"
             # 内容等价判断：同文本等价，异文本不等价
             assert pdf_equivalent(buf.getvalue(), buf.getvalue())
             d2 = fitz.open()

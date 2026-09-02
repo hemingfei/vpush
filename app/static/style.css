@@ -1663,7 +1663,6 @@ body.lightbox-open { overflow: hidden; }
 .tl-filterbar .fav-toggle { height: 44px; min-height: 44px; }
 .tl-filter-views .fav-toggle,
 .tl-rail-view .fav-toggle { height: 44px; min-height: 44px; }
-.mysubs-mobile-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .tl-actions { display: flex; gap: 10px; flex-shrink: 0; }
 .tl-layout { display: flex; align-items: flex-start; gap: 20px; }
 .tl-main { flex: 1; min-width: 0; }
@@ -2571,8 +2570,7 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
     overscroll-behavior-x: contain;
   }
   .tl-feed-panel,
-  #kol-list,
-  #mysubs-list { touch-action: pan-y; }
+  #kol-list { touch-action: pan-y; }
   /* 动态/订阅/广场：一行等宽图标角标（全部+5平台+筛选/星标）。字只留 aria，禁止改回带字胶囊。 */
   .icon-badge-bar {
     display: grid;
@@ -3427,6 +3425,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .ima-doc-row .ima-report-source { text-align: right; }
 .ima-report-copy { min-width: 0; display: grid; gap: 2px; }
 .ima-report-title { overflow: hidden; color: var(--color-text-strong); font-size: var(--text-body); font-weight: var(--font-weight-medium); line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.ima-report-snippet { display: -webkit-box; overflow: hidden; color: var(--color-text-muted); font-size: var(--text-xs); line-height: 1.35; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .ima-report-meta { display: flex; min-width: 0; gap: 8px; overflow: hidden; color: var(--color-text-muted); font-size: var(--text-xs); font-weight: var(--font-weight-medium); line-height: 1.35; white-space: nowrap; }
 .ima-report-meta .ima-doc-tag.is-action {
   flex: 0 1 auto;
