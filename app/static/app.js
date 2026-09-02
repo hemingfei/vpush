@@ -2051,7 +2051,7 @@ function ensureHomeMobileWatch() {
   if (_homeMobileWatchBound) return;
   _homeMobileWatchBound = true;
   window.matchMedia("(max-width: 768px)").addEventListener("change", () => {
-    if ($(".home-panel") && $("#kol-list")) renderHome(routeRenderSeq);
+    if (routePath() === "home" && $(".home-panel") && $("#kol-list")) renderHome(++routeRenderSeq);
   });
 }
 

@@ -551,7 +551,8 @@ def test_plaza_rerenders_across_mobile_breakpoint_and_hydrates_search():
     assert 'addEventListener("change"' in watch
     assert '$(".home-panel")' in watch
     assert '$("#kol-list")' in watch
-    assert "renderHome(routeRenderSeq)" in watch
+    assert 'routePath() === "home"' in watch
+    assert "renderHome(++routeRenderSeq)" in watch
     assert desktop_search in render
 
 
