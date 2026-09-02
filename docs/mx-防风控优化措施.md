@@ -35,7 +35,10 @@
 | TOKEN | 2 天强制更换提醒 + 过期熔断 | `scheduler._mx_check_token_age` / `MXTokenExpiredError` |
 | 特征 | 房间列表 100/页正常翻页 | `client.get_rooms` |
 | 特征 | 房间同步随机 2-6 小时 | `mx_sync.SYNC_MIN/MAX_INTERVAL_SECONDS` |
-| 特征 | HTTP 请求头补齐浏览器 UA/Origin/Referer | `client._headers` |
+| 特征 | HTTP 请求头与 WS 同形 | `client._headers` |
+| 特征 | **TLS 指纹（JA3/JA4）+ HTTP/2 + 头序对齐 Chrome**（curl_cffi impersonate） | `client.py`（`ws.py` 人格常量） |
+| 特征 | WS 握手头补齐 Chrome WebSocket 特征（Pragma/Cache-Control、客户端提示） | `ws._browser_handshake_headers` |
+| 特征 | 房间同步复用同一 HTTP 连接，不再每次新建 TLS 握手 | `mx_sync._get_client` |
 | 特征 | MX 图片走 MX 站点头（去掉 weibo Referer） | `avatar_cache.headers_for` |
 | 告警 | 所有报错统一走系统 KOL「系统通知」 | `scheduler.publish_mx_error` |
 
@@ -74,10 +77,34 @@
 
 ### 5. 请求特征修正（消灭「一眼假」）
 
+- **TLS/HTTP 指纹对齐 Chrome（2026-09 二次加固，收益最大的残留项）**：只补 UA 头挡不住
+  「Chrome UA + Python TLS」的 JA3/JA4 与 UA 一致性校验，也挡不住 httpx 的 HTTP/1.1、
+  `accept-encoding: gzip, deflate`（无 br/zstd）、缺失 `sec-ch-ua`/`sec-fetch-*` 这些
+  底层特征。`MXClient` 已整体切换到 `curl_cffi.Session(impersonate="chrome146")`：
+  TLS 指纹、HTTP/2、头序、UA/客户端提示全部与 Chrome 对齐，`_headers` 只覆盖 XHR 与
+  导航请求的差异项（`accept` 用 axios 形态、`sec-fetch-site/mode/dest`、用
+  `None` 删除导航特有头）。curl_cffi Session 默认按线程隔离底层 curl 句柄，无状态
+  token API 可跨线程共享。
+- **人格常量单一来源**：`ws.py` 顶部集中定义 `IMPERSONATE_TARGET` / `BROWSER_UA` /
+  `SEC_CH_UA*` / `ACCEPT_LANGUAGE`（UA/提示取 chrome146 模板实测值），HTTP、WS 握手、
+  图片下载三处共用；`tests/test_mx.py` 的 `test_persona_constants_are_consistent` 锁定
+  主版本一致，`test_http_wire_persona_matches_ws_persona` 用本地回环服务锁定线上实际
+  发出的头与 WS 握手同一人格。**改任何一处人格常量都要三处同步。**
 - **房间列表正常分页**：`get_rooms` 从 `limit=1000000` 改为每页 100（`ROOM_PAGE_SIZE`）逐页拉全量，50 页安全上限；不再有单条日志可定罪的参数。
 - **同步间隔随机化**：房间列表同步从固定周期改为**每轮随机 2-6 小时**（`SYNC_MIN/MAX_INTERVAL_SECONDS`）；原 `sync_interval_hours` 配置项（含 UI 输入框、环境变量映射、API 字段）已整体移除，避免留下无效旋钮。
-- **HTTP 请求头与 WS 同形**：`client._headers` 补齐浏览器 UA + 按 `api_base` 派生的 Origin/Referer（与 `ws.py` 握手头同一形态），消除「同一 token 一个 Chrome 一个 python-httpx」的自相矛盾。
+- **房间同步复用连接**：`MXRoomSyncService` 持有同一个 `MXClient`（`_get_client`），不再
+  每次同步新建 TLS 连接——同指纹的重复握手在风控日志里是可聚合计数的行为；`stop()` 统一关闭。
+- **WS 握手头补齐**：`_browser_handshake_headers` 补齐 Chrome WebSocket 握手的
+  Pragma/Cache-Control、`Accept-Encoding: gzip, deflate, br, zstd`、Accept-Language、
+  sec-ch-ua 客户端提示和 sec-fetch-* fetch 元数据（按 fetch spec：WS 的 mode 为
+  `"websocket"`、dest 为空串、同域 site 为 `same-origin`——早期版本误以为 Chrome 的
+  WS 握手不带 sec-fetch-*，实际缺了才是区分特征）；UA 显式覆盖 aiohttp 的
+  「Python aiohttp/x」默认值。WS 底层 TLS 仍是 aiohttp/Python 指纹，但一天只
+  连一次，量级上风险可接受（彻底解决需 curl_cffi WebSocket + 自写 engineio 层，性价比低）。
 - **图片/头像下载修正**：`avatar_cache.headers_for` 新增 MX 域名（`naaifu.cn`）分支——MX 浏览器 UA + MX 站点 Referer；之前 MX 图片错误地带 `weibo.com` Referer，在 MX 自家 CDN 日志里又是一个假信号。
+  已评估并**保留 httpx 下载**：SSRF 防护（`url_safety.safe_get` 的逐跳固定 IP + SNI 校验）
+  与 httpx 深度耦合，curl_cffi 0.16 的 requests 层不支持 per-request RESOLVE，重写
+  SSRF 层的复杂度与回归风险大于 CDN 指纹收益——CDN 是最弱的检测面，且频率低。
 - **拉取历史上限**：手动拉取只取最新 100 条、单次请求，不再最多 100 页×50 条地深翻历史。
 
 ### 6. 报错统一告警：系统通知 KOL
@@ -98,33 +125,49 @@
 
 | 文件 | 改动 |
 |------|------|
-| `app/fetchers/mx/ws.py` | 重连策略（12 秒一次/永久放弃/TOKEN 过期零重试）、gave_up 状态、give-up 回调 |
-| `app/fetchers/mx/client.py` | 浏览器形态请求头、房间列表分页、`MXTokenExpiredError`、transport 注入（测试用） |
+| `app/fetchers/mx/ws.py` | 重连策略（12 秒一次/永久放弃/TOKEN 过期零重试）、gave_up 状态、give-up 回调；人格常量集中定义（`IMPERSONATE_TARGET`/`BROWSER_UA`/`SEC_CH_UA*`，chrome146）、WS 握手头补齐 Chrome WebSocket 特征 |
+| `app/fetchers/mx/client.py` | **HTTP 层切换 curl_cffi impersonate（TLS/JA3/H2/头序对齐 Chrome）**、XHR 形态头覆盖与导航头删除、`MXTokenExpiredError`、session 注入（测试用） |
 | `app/fetchers/mx/fetcher.py` | `start_ws` 透传 give-up 回调；`get_ws_status` 暴露 gave_up |
 | `app/scheduler.py` | poll_once 跳过 mx；窗口管理循环；兜底拉取循环；TOKEN 时效/熔断；`_publish_system_alert` / `publish_mx_error`；手动 WS 控制透传回调 |
 | `app/services/mx_window.py` | 新增：每日随机窗口生成与判定 |
-| `app/services/mx_sync.py` | 随机 2-6 小时间隔；`on_error`/`should_run` 门控回调 |
+| `app/services/mx_sync.py` | 随机 2-6 小时间隔；`on_error`/`should_run` 门控回调；**复用同一 `MXClient`，`stop()` 统一关闭** |
 | `app/api.py` | 拉取历史限 100 条；`on_mx_alert` 接线；WS 接口文案；移除 sync_interval_hours |
 | `app/main.py` | `on_mx_alert=scheduler.publish_mx_error` 接线 |
 | `app/avatar_cache.py` | MX 域名图片请求头分支 |
 | `app/config.py` | 移除 `sync_interval_hours` 字段与 `MX_SYNC_INTERVAL_HOURS` 环境变量映射 |
 | `app/static/app.js` | WS 状态展示；移除同步间隔输入框 |
-| `tests/test_mx.py` | 重连策略/窗口/告警/熔断/分页/请求头等 12+ 个新契约测试 |
+| `tests/test_mx.py` | 重连策略/窗口/告警/熔断/分页/请求头等契约测试；**新增线上人格（curl_cffi 实测）、WS 握手人格、人格常量一致性、同步客户端复用** |
 
 ## 五、运维配套（代码管不住的部分）
 
 1. **只订阅真看的房间**——订阅数决定暴露面量级。
-2. **固定一个 IP 部署**，不要多实例共用同一个 token。
+2. **IP 类型比「固定 IP」更重要**：优先部署在家庭宽带（如 Unraid/NAS），机房 IP
+   （尤其境外 VPS）叠加「中国站 + 无手机端活跃」本身就是高权重风控信号——换了新
+   token 也会很快再被标记。多实例不要共用同一个 token。
 3. **换新号后低量爬坡**：IP 与行为指纹大概率已在风控记录，先按默认窗口跑几天再逐步放开。
 4. **订阅「系统通知」KOL**，TOKEN 提醒和一切报错都从这里出来；TOKEN 到期及时手动更换。
+5. **换 TOKEN 的取号环境要分散**：不要每次都从同一台设备/同一网络环境重新登录取 token。
 
 ## 六、遗留事项与残留风险
 
-- **请求签名检查未做**：官方网页 JS 是否对 `/api/msg/list` 附加 `sign` 类参数，需要抓包分析官方前端——这属于对对方防护机制的主动逆向，未纳入本工程，是否执行自行决策。
+- **抓包核对清单（强烈建议做一次，半天工作量，能关掉所有协议层未知项）**：
+  用浏览器登录 MX 网页端，DevTools → Network 抓包核对：
+  1. WS 握手：官方前端是 polling→websocket 升级还是 websocket 直连？
+     若官方走默认「先 polling 再升级」，我们永远 websocket 直连就是 100% 区分度特征
+     （改 `ws.py` 的 `transports` 参数即可对齐）；
+  2. WS 连上后官方客户端是否 emit 进房/已读类事件（我们目前「只听不说」）；
+  3. HTTP 请求是否附加 `sign` 类签名参数（官方网页 JS 对 `/api/msg/list`）；
+  4. 实际 `accept`/`accept-language` 等头形态与我们的常量是否有出入；
+  5. 官方用户 UA 分布（若官方端大量是移动 App，桌面 Chrome 人格是否合理）。
+  其中第 3 条属于对对方防护机制的主动逆向，是否执行自行决策。
+- **图片/头像下载保留 httpx**：SSRF 防护与 httpx 深度耦合（见「请求特征修正」），
+  CDN 是最弱检测面，暂不引入 curl_cffi 重写。
+- **WS 底层 TLS 仍是 Python 指纹**：一天一次连接，量级风险可接受，详见「请求特征修正」。
 - **兜底追平的量级**：`fetcher.fetch` 在消息突发时最多向后追 3 页（`BACKFILL_PAGES=3`），属于补洞必需，量级有界。
 - **本质风险仍在**：MX 的 API 加密密钥按日期派生（`crypto.generate_key`），说明平台是有意防爬的。以上措施把流量压到真人量级、消除显眼特征，是**显著降低风险**，不是消除风险。长期稳定要么找平台要授权接口，要么接受偶发封号、换号换 TOKEN 的运营成本。
 
 ## 七、验证
 
-- `tests/test_mx.py` 全量通过（54 个用例，含重连策略、TOKEN 过期零重试、分页、请求头、随机窗口边界、告警节流、熔断标记、2 天提醒等新契约测试）。
+- `tests/test_mx.py` 全量通过（57 个用例，含重连策略、TOKEN 过期零重试、分页、请求头、随机窗口边界、告警节流、熔断标记、2 天提醒，以及二次加固新增的线上人格实测/WS 握手人格/常量一致性/同步客户端复用等契约测试）。
+- 线上人格实测：本地回环 HTTP 服务捕获 curl_cffi 实际发出的请求，UA 逐字节等于 `BROWSER_UA`、客户端提示一致、导航特有头已删除、无重复头。
 - 全量测试套件与改动前 HEAD 基线逐项对比：失败集合完全一致（均为 Windows symlink/网络类存量环境问题），本次改造零回归。

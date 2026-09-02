@@ -13,12 +13,19 @@ from .crypto import decrypt_ws_data
 
 logger = logging.getLogger(__name__)
 
-# 与 MX 网页端一致的浏览器形态请求头：服务端/网关会校验 Origin、UA，
-# 缺失时可能拒绝握手或静默不推送
+# MX 对外人格常量：HTTP（curl_cffi impersonate）、WS 握手（aiohttp）、图片下载
+# 三处必须同形，否则「同一个 token 多个客户端人格」就是风控的现成特征。
+# UA / sec-ch-ua 取自 curl_cffi chrome146 模板实测值（2026-09 当前版本），
+# 改动任何一项都要同步三处并跑 tests/test_mx.py 的人格契约测试。
+IMPERSONATE_TARGET = "chrome146"
 BROWSER_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
 )
+SEC_CH_UA = '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"'
+SEC_CH_UA_MOBILE = "?0"
+SEC_CH_UA_PLATFORM = '"macOS"'
+ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9"
 
 # 断线后的重连策略：只等 12 秒重连一次；这次重连再失败就永久放弃自动重连
 # （高频无上限重连会加重平台风控处罚），恢复只能靠管理员在后台手动接入
@@ -46,9 +53,27 @@ def _looks_like_auth_failure(reason: str) -> bool:
 
 
 def _browser_handshake_headers(config) -> dict:
-    """按配置的 ws 地址派生 Origin，返回握手请求头（与网页端形态一致）。"""
+    """按配置的 ws 地址派生 Origin，返回握手请求头（与网页端 Chrome 形态一致）。
+
+    Chrome 的 WebSocket 握手带 Pragma/Cache-Control、Accept-Encoding/Language、
+    sec-ch-ua 客户端提示和 sec-fetch-* fetch 元数据（fetch spec：WS 的 mode 为
+    "websocket"、dest 为空串；同域连接 site 为 same-origin）；UA 必须显式覆盖，
+    否则 aiohttp 会发出自己的「Python aiohttp/x」默认 UA，单条握手就是机器人实锤。
+    """
     host = urlparse(str(getattr(config, "ws_url", ""))).netloc
-    headers = {"User-Agent": BROWSER_UA}
+    headers = {
+        "User-Agent": BROWSER_UA,
+        "Pragma": "no-cache",
+        "Cache-Control": "no-cache",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "Accept-Language": ACCEPT_LANGUAGE,
+        "sec-ch-ua": SEC_CH_UA,
+        "sec-ch-ua-mobile": SEC_CH_UA_MOBILE,
+        "sec-ch-ua-platform": SEC_CH_UA_PLATFORM,
+        "sec-fetch-site": "same-origin",
+        "sec-fetch-mode": "websocket",
+        "sec-fetch-dest": "empty",
+    }
     if host:
         headers["Origin"] = f"https://{host}"
     return headers

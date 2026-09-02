@@ -33,6 +33,14 @@ class MXRoomSyncService:
         self._sync_task: asyncio.Task | None = None
         self._initial_sync_task: asyncio.Task | None = None
         self._stopped = False
+        # 复用同一客户端：每次同步都新建连接会产生一串「新 TLS 握手」事件，
+        # 同指纹的连接在风控日志里可被聚合计数
+        self._client: MXClient | None = None
+
+    def _get_client(self) -> MXClient:
+        if self._client is None:
+            self._client = MXClient(self.config.api_base, self.config.token)
+        return self._client
 
     def _notify_error(self, message: str):
         if self.on_error is None:
@@ -52,7 +60,7 @@ class MXRoomSyncService:
             return
 
         logger.info("Starting MX room sync")
-        client = MXClient(self.config.api_base, self.config.token)
+        client = self._get_client()
         try:
             rooms = client.get_rooms()
             logger.info(f"Fetched {len(rooms)} MX rooms")
@@ -65,8 +73,6 @@ class MXRoomSyncService:
         except Exception as e:
             logger.error(f"MX room sync failed: {e}", exc_info=True)
             raise
-        finally:
-            client.close()
 
     def _sync_room(self, room: dict):
         """Sync a single room to KOL."""
@@ -242,3 +248,6 @@ class MXRoomSyncService:
                 task.cancel()
         self._sync_task = None
         self._initial_sync_task = None
+        if self._client is not None:
+            self._client.close()
+            self._client = None

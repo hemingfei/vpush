@@ -4498,7 +4498,12 @@ def create_api_router(
                 raise HTTPException(status_code=400, detail="MX 平台未启用")
             
             sync_service = MXRoomSyncService(mx_config, db)
-            await sync_service.sync_rooms()
+            try:
+                await sync_service.sync_rooms()
+            finally:
+                # 临时 service 用完即弃：必须 stop() 关闭内部缓存的 HTTP 会话，
+                # 否则 curl 句柄只能等 GC 回收
+                sync_service.stop()
             _audit(admin, "sync_mx_rooms", "", "")
             return {"ok": True}
         except HTTPException:

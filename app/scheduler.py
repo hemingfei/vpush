@@ -2324,6 +2324,12 @@ class Scheduler:
                 await mx_fetcher.stop_ws()
             except Exception:  # noqa: BLE001 - 任务已被 cancel，尽力断开即可
                 logger.warning("停止 MX WebSocket 失败", exc_info=True)
+            client = getattr(mx_fetcher, "mx_client", None)
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:  # noqa: BLE001 - 尽力关闭即可
+                    logger.warning("关闭 MX HTTP 会话失败", exc_info=True)
 
     async def mx_ws_control(self, action: str) -> str:
         """管理员手动控制 MX WebSocket（connect 接入 / disconnect 断开），返回提示消息。

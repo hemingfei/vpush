@@ -532,20 +532,33 @@ def test_sync_preserves_user_toggled_show_in_plaza():
     assert json.loads(kol["extra_data"])["show_in_plaza"] is False
 
 
-def test_sync_rooms_blocking_closes_client(monkeypatch):
+def test_sync_rooms_reuses_client_until_stop(monkeypatch):
+    """房间同步必须复用同一客户端（每次同步新建 TLS 连接是可聚合计数的机器
+    信号），stop 时统一关闭。"""
     db = make_db()
     service = MXRoomSyncService(MxConfig(token="t"), db)
 
-    closed = []
     from app.fetchers.mx.client import MXClient
 
-    monkeypatch.setattr(
-        MXClient, "get_rooms", lambda self: [_ for _ in ()] or [{"id": 1, "title": "r"}]
-    )
-    monkeypatch.setattr(MXClient, "close", lambda self: closed.append(True))
+    created = []
+    orig_init = MXClient.__init__
+
+    def counting_init(self, *args, **kwargs):
+        orig_init(self, *args, **kwargs)
+        created.append(self)
+
+    monkeypatch.setattr(MXClient, "__init__", counting_init)
+    monkeypatch.setattr(MXClient, "get_rooms", lambda self: [{"id": 1, "title": "r"}])
+
     service._sync_rooms_blocking()
-    assert closed == [True]
+    service._sync_rooms_blocking()
+    assert len(created) == 1
     assert db.get_kol_by_external("mx", "1") is not None
+
+    closed = []
+    monkeypatch.setattr(MXClient, "close", lambda self: closed.append(True))
+    service.stop()
+    assert closed == [True]
 
 
 # ---- 广场显隐 ----
@@ -942,59 +955,137 @@ def test_ws_non_auth_connect_error_still_retries_once(monkeypatch):
 
 # ---- HTTP 客户端特征修正 ----
 
+class _FakeCffiResponse:
+    """curl_cffi Response 的最小鸭子类型。"""
+
+    def __init__(self, payload, status_code=200):
+        self.status_code = status_code
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+class _FakeCffiSession:
+    """按序返回 payload 的假 curl_cffi Session，记录每次请求供断言。"""
+
+    def __init__(self, payloads):
+        self._payloads = payloads
+        self.requests = []
+
+    def request(self, method, url, headers=None, data=None, timeout=None):
+        self.requests.append(
+            {"method": method, "url": url, "headers": headers, "data": data}
+        )
+        return _FakeCffiResponse(self._payloads[len(self.requests) - 1])
+
+
 def test_client_headers_look_like_browser():
-    """HTTP 请求头必须带浏览器 UA/Origin/Referer，与 WS 握手同一客户端形态。"""
+    """HTTP 请求头必须是 Chrome 同源 XHR 形态；UA/sec-ch-ua 由 impersonate 模板提供，
+    _headers 只负责覆盖 XHR 与导航请求的差异项。"""
     from app.fetchers.mx.client import MXClient
 
     client = MXClient("https://mx.test/business-api/5", "t")
     headers = client._headers()
-    assert headers["User-Agent"].startswith("Mozilla/5.0")
     assert headers["Origin"] == "https://mx.test"
     assert headers["Referer"] == "https://mx.test/"
     assert headers["token"] == "t" and headers["version"] == "web"
+    assert headers["accept"] == "application/json, text/plain, */*"
+    assert headers["sec-fetch-site"] == "same-origin"
+    assert headers["sec-fetch-mode"] == "cors"
+    assert headers["sec-fetch-dest"] == "empty"
+    # 导航请求特有头必须以 None 标记删除，不能随 impersonate 模板发出
+    assert headers["upgrade-insecure-requests"] is None
+    assert headers["sec-fetch-user"] is None
 
 
 def test_get_rooms_paginates_with_normal_page_size():
     """房间列表正常分页（100/页翻页拉全量），不再出现 limit=1000000 的异常特征。"""
     import json as jsonlib
 
-    import httpx
-
     from app.fetchers.mx.client import MXClient, ROOM_PAGE_SIZE
 
-    captured = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        body = jsonlib.loads(request.content)
-        captured.append(body)
-        rooms = [{"id": i} for i in range(ROOM_PAGE_SIZE)] if body["pages"] == 1 else [{"id": 999}]
-        return httpx.Response(200, json={"code": 200, "list": rooms})
-
-    client = MXClient(
-        "https://mx.test/business-api/5", "t", transport=httpx.MockTransport(handler)
+    page1 = [{"id": i} for i in range(ROOM_PAGE_SIZE)]
+    session = _FakeCffiSession(
+        [
+            {"code": 200, "list": page1},
+            {"code": 200, "list": [{"id": 999}]},
+        ]
     )
+    client = MXClient("https://mx.test/business-api/5", "t", session=session)
     rooms = client.get_rooms()
 
     assert len(rooms) == ROOM_PAGE_SIZE + 1
-    assert [b["pages"] for b in captured] == [1, 2]
-    assert all(b["limit"] == ROOM_PAGE_SIZE for b in captured)
+    bodies = [jsonlib.loads(r["data"]) for r in session.requests]
+    assert [b["pages"] for b in bodies] == [1, 2]
+    assert all(b["limit"] == ROOM_PAGE_SIZE for b in bodies)
 
 
 def test_token_expired_raises_dedicated_error():
     """TOKEN 过期响应必须抛专用异常，调用方据此停止重试并告警。"""
-    import httpx
     import pytest
 
     from app.fetchers.mx.client import MXClient, MXTokenExpiredError
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"code": 502, "msg": "token expired"})
-
-    client = MXClient(
-        "https://mx.test/business-api/5", "t", transport=httpx.MockTransport(handler)
-    )
+    session = _FakeCffiSession([{"code": 502, "msg": "token expired"}])
+    client = MXClient("https://mx.test/business-api/5", "t", session=session)
     with pytest.raises(MXTokenExpiredError):
         client.get_rooms()
+
+
+def test_http_wire_persona_matches_ws_persona():
+    """真实 curl_cffi 会话发出的线上请求必须与 WS 握手是同一 Chrome 人格：
+    UA 逐字节等于 BROWSER_UA、客户端提示一致、无导航残留头、无重复头。
+    这是防风控的核心契约：JA3 由 impersonate 保证，此测试锁定头层面。"""
+    import http.server
+    import threading
+
+    from app.fetchers.mx.client import MXClient
+    from app.fetchers.mx.ws import BROWSER_UA, SEC_CH_UA
+
+    captured = {}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("content-length") or 0))
+            keys = [k.lower() for k in self.headers.keys()]
+            captured["ua"] = self.headers.get("User-Agent")
+            captured["sec_ch_ua"] = self.headers.get("sec-ch-ua")
+            captured["accept"] = self.headers.get("accept")
+            captured["sec_fetch_mode"] = self.headers.get("sec-fetch-mode")
+            captured["no_nav"] = (
+                "upgrade-insecure-requests" not in keys
+                and "sec-fetch-user" not in keys
+            )
+            captured["no_dups"] = len(keys) == len(set(keys))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"code":200,"list":[{"id":1}]}')
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        client = MXClient(f"http://127.0.0.1:{port}/business-api/5", "tok")
+        rooms = client.get_rooms()
+        client.close()
+    finally:
+        server.shutdown()
+
+    assert rooms == [{"id": 1}]
+    assert captured["ua"] == BROWSER_UA
+    assert captured["sec_ch_ua"] == SEC_CH_UA
+    assert captured["accept"] == "application/json, text/plain, */*"
+    assert captured["sec_fetch_mode"] == "cors"
+    assert captured["no_nav"] and captured["no_dups"]
 
 
 def test_avatar_cache_headers_for_mx_domain():
@@ -1007,6 +1098,52 @@ def test_avatar_cache_headers_for_mx_domain():
     assert "weibo.com" not in headers["Referer"]
     # 其他图床行为不变
     assert headers_for("https://wx1.sinaimg.cn/a.jpg")["Referer"] == "https://weibo.com/"
+
+
+# ---- 客户端人格一致性（HTTP / WS / 常量） ----
+
+def test_ws_handshake_headers_full_chrome_persona():
+    """WS 握手头必须与 HTTP 同一 Chrome 人格：UA/客户端提示一致，
+    带 Chrome WS 特有的缓存协商头，且任何值都不得暴露 Python 客户端。"""
+    from types import SimpleNamespace
+
+    from app.fetchers.mx.ws import (
+        ACCEPT_LANGUAGE,
+        BROWSER_UA,
+        SEC_CH_UA,
+        SEC_CH_UA_MOBILE,
+        SEC_CH_UA_PLATFORM,
+        _browser_handshake_headers,
+    )
+
+    config = SimpleNamespace(ws_url="wss://mx.2026.naaifu.cn")
+    headers = _browser_handshake_headers(config)
+    assert headers["User-Agent"] == BROWSER_UA
+    assert headers["Origin"] == "https://mx.2026.naaifu.cn"
+    assert headers["sec-ch-ua"] == SEC_CH_UA
+    assert headers["sec-ch-ua-mobile"] == SEC_CH_UA_MOBILE
+    assert headers["sec-ch-ua-platform"] == SEC_CH_UA_PLATFORM
+    assert headers["Accept-Language"] == ACCEPT_LANGUAGE
+    # Chrome 的 WebSocket 握手带 Pragma/Cache-Control，也带 sec-fetch-* fetch 元数据
+    # （fetch spec：WS 的 mode 为 "websocket"、dest 为空串，同域 site 为 same-origin）
+    assert headers["Pragma"] == "no-cache"
+    assert headers["sec-fetch-site"] == "same-origin"
+    assert headers["sec-fetch-mode"] == "websocket"
+    assert headers["sec-fetch-dest"] == "empty"
+    assert all("python" not in str(v).lower() for v in headers.values())
+
+
+def test_persona_constants_are_consistent():
+    """UA、sec-ch-ua、impersonate 目标三者的 Chrome 主版本必须一致，
+    防止将来只改其中一处造成新的「人格分裂」。"""
+    import re
+
+    from app.fetchers.mx.ws import BROWSER_UA, IMPERSONATE_TARGET, SEC_CH_UA
+
+    ua_major = re.search(r"Chrome/(\d+)", BROWSER_UA).group(1)
+    hint_majors = set(re.findall(r'v="(\d+)"', SEC_CH_UA))
+    assert ua_major in hint_majors
+    assert ua_major in IMPERSONATE_TARGET
 
 
 # ---- 每日运行窗口 ----
