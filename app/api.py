@@ -1676,7 +1676,7 @@ def create_api_router(
         payload = auth.verify_token(token, secret)
         if not payload:
             raise HTTPException(status_code=401, detail="未登录或登录已过期")
-        user = db.get_user(payload.get("uid"))
+        user = db.get_authenticated_user(payload.get("uid"))
         if user is None:
             raise HTTPException(status_code=401, detail="用户不存在")
         if int(payload.get("ver", 0)) != int(user.get("token_version") or 0):

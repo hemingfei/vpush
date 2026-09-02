@@ -1,5 +1,7 @@
 """DB 层单元测试：迁移、唯一性与事务一致性。"""
 import sqlite3
+import threading
+from pathlib import Path
 
 import pytest
 
@@ -1360,19 +1362,21 @@ def test_ima_document_catalog_stats_and_detail_ambiguity(tmp_path):
         [
             _index_row("semi", "shared", "0829", name="后发.pdf", tags=["AI"]),
             _index_row("semi", "older", "0828", name="先发.pdf"),
+            _index_row("semi", "same-day", "0829", name="最后.pdf"),
+            _index_row("semi", "unknown", "unknown", name="未知.pdf"),
             _index_row("macro", "shared", "0830", name="宏观.pdf"),
         ],
         "fp",
         2,
     )
     stats = db.ima_document_catalog_stats(["semi", "macro", "empty"])
-    assert stats["semi"]["document_count"] == 2
+    assert stats["semi"]["document_count"] == 4
     assert stats["semi"]["latest_day"] == "0829"
-    assert stats["semi"]["latest_title"] == "后发.pdf"
-    assert stats["semi"]["latest_media_id"] == "shared"
+    assert stats["semi"]["latest_title"] == "最后.pdf"
+    assert stats["semi"]["latest_media_id"] == "same-day"
     assert stats["macro"]["latest_media_id"] == "shared"
     assert "empty" not in stats
-    assert db.ima_document_index_count() == 3
+    assert db.ima_document_index_count() == 5
 
     found = db.ima_document_from_index("shared", ["semi", "macro"], "semi")
     assert found["group_id"] == "semi"
@@ -1382,6 +1386,268 @@ def test_ima_document_catalog_stats_and_detail_ambiguity(tmp_path):
     assert db.ima_document_from_index("shared", ["semi", "macro"]) is None
     assert db.ima_document_from_index("shared", ["semi"])["group_id"] == "semi"
     assert db.ima_document_from_index("missing", ["semi"]) is None
+
+
+def test_ima_catalog_latest_query_uses_group_latest_index_without_temp_sort(
+    tmp_path, monkeypatch
+):
+    db = DB(str(tmp_path / "catalog-plan.sqlite"))
+    db.replace_ima_document_index(
+        [_index_row("semi", "one", "0829", name="研报.pdf")], "fp", 1
+    )
+    original = db._read_only_rows
+    captured = []
+
+    def capture(sql, params=()):
+        captured.append((sql, params))
+        return original(sql, params)
+
+    monkeypatch.setattr(db, "_read_only_rows", capture)
+    assert db.ima_document_catalog_stats(["semi"])["semi"]["document_count"] == 1
+
+    assert len(captured) == 1
+    sql, params = captured[0]
+    assert "WITH counts" in sql
+    assert "latest.group_id = counts.group_id" in sql
+    assert "ORDER BY latest.sort_date DESC, latest.name DESC LIMIT 1" in sql
+    plan = db._rows("EXPLAIN QUERY PLAN " + sql, params)
+    details = "\n".join(str(row["detail"]) for row in plan)
+    assert "idx_ima_doc_group_latest" in details
+    assert "TEMP B-TREE" not in details
+
+
+def test_replace_database_waits_for_active_readers(tmp_path, monkeypatch):
+    path = tmp_path / "live.sqlite"
+    candidate_path = tmp_path / "candidate.sqlite"
+    db = DB(str(path))
+    db.set_setting("marker", "old")
+    candidate = DB(str(candidate_path))
+    candidate.set_setting("marker", "new")
+    candidate.close()
+    read_active = threading.Event()
+    release_read = threading.Event()
+    replace_started = threading.Event()
+    replace_done = threading.Event()
+    errors = []
+    original_connect = sqlite3.connect
+
+    def block_read():
+        read_active.set()
+        if not release_read.wait(2):
+            raise TimeoutError("reader release timed out")
+        return 1
+
+    def connect(*args, **kwargs):
+        conn = original_connect(*args, **kwargs)
+        if kwargs.get("uri") and "mode=ro" in str(args[0]):
+            conn.create_function("test_block_read", 0, block_read)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+
+    def read():
+        try:
+            db._read_only_rows("SELECT test_block_read()")
+        except BaseException as exc:
+            errors.append(exc)
+
+    def replace():
+        try:
+            replace_started.set()
+            db.replace_database(candidate_path)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            replace_done.set()
+
+    reader = threading.Thread(target=read)
+    replacer = threading.Thread(target=replace)
+    started = []
+    try:
+        reader.start()
+        started.append(reader)
+        assert read_active.wait(1)
+        replacer.start()
+        started.append(replacer)
+        assert replace_started.wait(1)
+        assert not replace_done.wait(0.1), "replace completed while read connection was active"
+    finally:
+        release_read.set()
+        for thread in started:
+            thread.join(2)
+    assert all(not thread.is_alive() for thread in started)
+    assert errors == []
+    assert db.get_setting("marker") == "new"
+
+
+def test_replace_database_failure_wakes_waiting_readers(tmp_path, monkeypatch):
+    db = DB(str(tmp_path / "replace-failure.sqlite"))
+    db.set_setting("marker", "old")
+    candidate = tmp_path / "candidate.sqlite"
+    candidate.write_bytes(b"unused")
+    copy_started = threading.Event()
+    release_copy = threading.Event()
+    reader_done = threading.Event()
+    replace_errors = []
+    reader_errors = []
+
+    def fail_copy(_source, target):
+        Path(target).write_bytes(b"partial copy")
+        copy_started.set()
+        if not release_copy.wait(2):
+            raise TimeoutError("copy release timed out")
+        raise OSError("copy failed")
+
+    def replace():
+        try:
+            db.replace_database(candidate)
+        except BaseException as exc:
+            replace_errors.append(exc)
+
+    def read():
+        try:
+            db.get_setting("ima_waiting_reader")
+        except BaseException as exc:
+            reader_errors.append(exc)
+        finally:
+            reader_done.set()
+
+    monkeypatch.setattr(db_module.shutil, "copy2", fail_copy)
+    replacer = threading.Thread(target=replace)
+    reader = threading.Thread(target=read)
+    started = []
+    try:
+        replacer.start()
+        started.append(replacer)
+        assert copy_started.wait(1)
+        reader.start()
+        started.append(reader)
+        assert not reader_done.wait(0.1), "reader bypassed pending replace"
+    finally:
+        release_copy.set()
+        for thread in started:
+            thread.join(2)
+    assert all(not thread.is_alive() for thread in started)
+    assert len(replace_errors) == 1
+    assert isinstance(replace_errors[0], OSError)
+    assert reader_errors == []
+    assert reader_done.is_set()
+    assert db.get_setting("marker") == "old"
+    assert {path.name for path in tmp_path.iterdir()} == {
+        "candidate.sqlite",
+        "replace-failure.sqlite",
+    }
+
+
+def test_ima_read_models_do_not_wait_for_python_db_lock(tmp_path):
+    db = DB(str(tmp_path / "ima-readonly.sqlite"))
+    db.replace_ima_document_index(
+        [_index_row("semi", "one", "0829", name="研报.pdf")], "fp", 1
+    )
+    locked = threading.Event()
+    release = threading.Event()
+    results = {}
+    errors = []
+
+    def hold_lock():
+        try:
+            with db._lock:
+                locked.set()
+                release.wait(2)
+        except BaseException as exc:
+            errors.append(exc)
+
+    def read_models():
+        try:
+            results["page"] = db.ima_document_page(["semi"])["document_count"]
+            results["catalog"] = db.ima_document_catalog_stats(["semi"])["semi"][
+                "document_count"
+            ]
+            results["meta"] = db.ima_document_index_meta()["fingerprint"]
+            results["count"] = db.ima_document_index_count()
+        except BaseException as exc:
+            errors.append(exc)
+
+    holder = threading.Thread(target=hold_lock)
+    reader = threading.Thread(target=read_models)
+    started = []
+    try:
+        holder.start()
+        started.append(holder)
+        assert locked.wait(1)
+        reader.start()
+        started.append(reader)
+        reader.join(0.5)
+        assert not reader.is_alive(), "IMA reads waited for DB._lock"
+    finally:
+        release.set()
+        for thread in started:
+            thread.join(2)
+    assert all(not thread.is_alive() for thread in started)
+    assert errors == []
+    assert results == {"page": 1, "catalog": 1, "meta": "fp", "count": 1}
+
+
+def test_ima_request_reads_do_not_wait_for_python_db_lock(tmp_path):
+    db = DB(str(tmp_path / "ima-request-readonly.sqlite"))
+    user_id = db.add_user("reader", "hash")
+    db.set_setting("ima_pure_uid", "ima-user")
+    db.set_ima_kb_acl("semi", [user_id])
+    locked = threading.Event()
+    release = threading.Event()
+    results = {}
+    errors = []
+
+    def hold_lock():
+        try:
+            with db._lock:
+                locked.set()
+                release.wait(2)
+        except BaseException as exc:
+            errors.append(exc)
+
+    def read_request_data():
+        try:
+            results["user"] = db.get_authenticated_user(user_id)["username"]
+            results["setting"] = db.get_setting("ima_pure_uid")
+            results["groups"] = db.ima_kb_group_ids_for_user(user_id)
+        except BaseException as exc:
+            errors.append(exc)
+
+    holder = threading.Thread(target=hold_lock)
+    reader = threading.Thread(target=read_request_data)
+    started = []
+    try:
+        holder.start()
+        started.append(holder)
+        assert locked.wait(1)
+        reader.start()
+        started.append(reader)
+        reader.join(0.5)
+        assert not reader.is_alive(), "IMA request reads waited for DB._lock"
+    finally:
+        release.set()
+        for thread in started:
+            thread.join(2)
+    assert all(not thread.is_alive() for thread in started)
+    assert errors == []
+    assert results == {
+        "user": "reader",
+        "setting": "ima-user",
+        "groups": ["semi"],
+    }
+
+
+def test_ima_read_models_still_work_with_memory_database():
+    db = DB(":memory:")
+    db.replace_ima_document_index(
+        [_index_row("semi", "one", "0829", name="研报.pdf")], "fp", 1
+    )
+
+    assert db.ima_document_page(["semi"])["document_count"] == 1
+    assert db.ima_document_catalog_stats(["semi"])["semi"]["document_count"] == 1
+    assert db.ima_document_index_meta()["fingerprint"] == "fp"
+    assert db.ima_document_index_count() == 1
 
 
 def test_default_tag_rules_cover_market_topics():

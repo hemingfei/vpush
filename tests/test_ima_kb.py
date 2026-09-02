@@ -170,6 +170,130 @@ def test_catalog_hides_ungranted_groups_from_users(tmp_path):
     assert readable_group_ids(db, admin, _groups()) == {"banking", "macro"}
 
 
+def test_user_group_lists_use_two_bulk_acl_reads_with_constant_fanout():
+    groups = tuple(
+        ImaGroupConfig(f"g{i:02d}", f"Group {i:02d}", f"kb{i:02d}", f"root{i:02d}")
+        for i in range(25)
+    )
+
+    class CountingDB:
+        def __init__(self):
+            self.calls = {"acl": 0, "subscriptions": 0}
+
+        def ima_kb_group_ids_for_user(self, user_id):
+            assert user_id == 7
+            self.calls["acl"] += 1
+            return ["g20", "g03", "g01", "not-configured"]
+
+        def ima_kb_subscribed_group_ids_for_user(self, user_id):
+            assert user_id == 7
+            self.calls["subscriptions"] += 1
+            return ["g22", "g20", "g03"]
+
+        def ima_kb_can_read(self, *_args):
+            raise AssertionError("per-group read query used")
+
+        def ima_kb_can_subscribe(self, *_args):
+            raise AssertionError("per-group subscribe query used")
+
+    db = CountingDB()
+    user = {"id": 7, "is_admin": 0}
+
+    assert readable_group_ids(db, user, groups) == {"g03", "g20"}
+    assert db.calls == {"acl": 1, "subscriptions": 1}
+
+    db.calls = {"acl": 0, "subscriptions": 0}
+    listed = catalog(db, user, groups)
+    assert [item["id"] for item in listed["subscribed"]] == ["g03", "g20"]
+    assert [item["id"] for item in listed["available"]] == ["g01"]
+    assert db.calls == {"acl": 1, "subscriptions": 1}
+
+
+def test_catalog_endpoint_user_acl_reads_complete_while_db_lock_is_held(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "catalog-db-lock.sqlite"))
+    user_headers = _headers(client, "catalog_lock_reader", "CATLOCK1")
+    admin_headers = _headers(client, "catalog_lock_admin", "CATLOCK2", admin=True)
+    db = client.app.state.db
+    group_id = client.get(
+        "/api/admin/ima-collector", headers=admin_headers
+    ).json()["config"]["groups"][0]["id"]
+    assert client.put(
+        f"/api/admin/ima-collector/groups/{group_id}/acl",
+        headers=admin_headers,
+        json={"usernames": ["catalog_lock_reader"]},
+    ).status_code == 200
+    finished = threading.Event()
+    responses = []
+    errors = []
+
+    def request_catalog():
+        try:
+            responses.append(
+                client.get("/api/ima-documents/catalog", headers=user_headers)
+            )
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            finished.set()
+
+    worker = threading.Thread(target=request_catalog)
+    started = []
+    db._lock.acquire()
+    try:
+        worker.start()
+        started.append(worker)
+        assert finished.wait(1), "catalog auth/ACL reads waited for DB._lock"
+    finally:
+        db._lock.release()
+        for thread in started:
+            thread.join(2)
+    assert all(not thread.is_alive() for thread in started)
+    assert errors == []
+    assert responses[0].status_code == 200, responses[0].text
+    payload = responses[0].json()
+    assert [group["id"] for group in payload["subscribed"]] == [group_id]
+    assert payload["available"] == []
+
+
+def test_admin_document_list_read_path_completes_while_db_lock_is_held(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "admin-list-db-lock.sqlite"))
+    headers = _headers(client, "admin_list_lock", "ADMINLOCK", admin=True)
+    db = client.app.state.db
+    finished = threading.Event()
+    responses = []
+    errors = []
+
+    def request_list():
+        try:
+            responses.append(client.get("/api/ima-documents", headers=headers))
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            finished.set()
+
+    worker = threading.Thread(target=request_list)
+    started = []
+    db._lock.acquire()
+    try:
+        worker.start()
+        started.append(worker)
+        assert finished.wait(1), "admin list auth/config/read model waited for DB._lock"
+    finally:
+        db._lock.release()
+        for thread in started:
+            thread.join(2)
+    assert all(not thread.is_alive() for thread in started)
+    assert errors == []
+    assert responses[0].status_code == 200, responses[0].text
+    assert set(responses[0].json()) >= {"groups", "items", "document_count"}
+
+
 def test_catalog_endpoint_reads_config_once(tmp_path, monkeypatch):
     monkeypatch.setenv("DAV_UI_ONLY", "1")
     client = TestClient(create_app(db_path=tmp_path / "catalog-snapshot.sqlite"))

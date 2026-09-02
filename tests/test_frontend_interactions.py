@@ -529,22 +529,88 @@ def test_timeline_polish_matches_chip_row_and_browser_surfaces():
     assert 'style="margin-top:14px' not in feed
 
 
+def test_plaza_rerenders_across_mobile_breakpoint_and_hydrates_search():
+    """广场跨手机断点时重建 DOM，桌面搜索框回显当前筛选。"""
+    src = APP_JS.read_text()
+    render = _fn_body("renderHome")
+    desktop_search = (
+        'placeholder="搜索昵称或 ID，即时过滤" '
+        'value="${escapeHtml(state.homeQ || "")}"'
+    )
+    missing = []
+    if "function ensureHomeMobileWatch" not in src:
+        missing.append("ensureHomeMobileWatch")
+    if desktop_search not in render:
+        missing.append("desktop search value")
+    assert not missing, f"missing responsive contracts: {', '.join(missing)}"
+
+    watch = _fn_body("ensureHomeMobileWatch")
+    assert "let _homeMobileWatchBound = false" in src
+    assert "ensureHomeMobileWatch()" in render
+    assert "max-width: 768px" in watch
+    assert 'addEventListener("change"' in watch
+    assert '$(".home-panel")' in watch
+    assert '$("#kol-list")' in watch
+    assert 'routePath() === "home"' in watch
+    assert "renderHome(++routeRenderSeq)" in watch
+    assert desktop_search in render
+    assert re.search(
+        r'if \(!routeStillActive\(seq\)\) return;[^\n]*\n\s*'
+        r'const mobileHome = isMobileTimelineFilter\(\);\n\s*'
+        r'\$\("#main"\)\.innerHTML',
+        render,
+    ), "viewport must be sampled after the final route guard and next to the DOM commit"
+
+
 def test_plaza_keeps_subscribed_and_favorite_filters():
     """订阅广场用目录字段筛选已订阅/特别关注，不另拉订阅列表。"""
     src = APP_JS.read_text()
     render = _fn_body("renderHome")
-    has = _fn_body("homeHasFilters")
-    reset = _fn_body("homeResetFilters")
-    filtered = _fn_body("homeFilteredKols")
-    toggles = _fn_body("homeScopeTogglesHtml")
+    panel = _fn_body("homeFilterPanelHtml")
+    scope = _fn_body("homeScopeTogglesHtml")
+    subscribed = _fn_body("homeSubscribedToggleHtml")
+    filter_toggle = _fn_body("homeFilterToggleHtml")
+    toggle_filter = _fn_body("homeToggleFilter")
 
-    assert "homeScopeTogglesHtml()" in render
-    assert "toggleHomeSubscribed()" in toggles
-    assert "toggleHomeFavorite()" in toggles
-    assert "已订阅" in toggles
-    assert "特别关注" in toggles
-    assert "state.homeSubscribed" in has and "state.homeFavorite" in has
-    assert "state.homeSubscribed = state.homeFavorite = false" in reset
+    for call in (
+        "homeFilterPanelHtml(false)", "homeFilterPanelHtml(true)",
+        "homeSubscribedToggleHtml()", "homeFilterToggleHtml()",
+    ):
+        assert call in render
+    assert "homeScopeTogglesHtml(mobile)" in panel
+
+    assert scope.count("<label") == 2
+    assert scope.count('type="checkbox"') == 2
+    for marker in (
+        'id="home-fav-toggle"', 'state.homeFavorite ? "checked" : ""',
+        'onchange="toggleHomeFavorite()"', "只看特别关注",
+        'id="home-sub-toggle"', 'state.homeSubscribed ? "checked" : ""',
+        'onchange="toggleHomeSubscribed()"', "只看已订阅",
+    ):
+        assert marker in scope
+
+    for marker in (
+        "<button", 'type="button"', 'id="home-sub-toggle"', "已订阅",
+        'aria-pressed="${state.homeSubscribed}"',
+        'onclick="toggleHomeSubscribed()"',
+    ):
+        assert marker in subscribed
+    for marker in (
+        "<button", 'type="button"', 'aria-label="筛选"',
+        'aria-expanded="false"', 'aria-controls="home-filter-panel"',
+        'onclick="homeToggleFilter()"',
+    ):
+        assert marker in filter_toggle
+    assert "特别关注" not in filter_toggle
+    assert 'setAttribute("aria-expanded", String(open))' in toggle_filter
+
+    panel_state = re.sub(r"\s+", " ", _fn_body("homePanelHasFilters")).strip()
+    assert panel_state == (
+        "{ return !!(state.homeCategory || state.homeFavorite || "
+        "(isMobileTimelineFilter() && (state.homeQ || state.homeSubscribed))); }"
+    )
+    assert "state.homeSubscribed = state.homeFavorite = false" in _fn_body("homeResetFilters")
+    filtered = _fn_body("homeFilteredKols")
     assert "state.homeSubscribed && !k.subscribed" in filtered
     assert "state.homeFavorite && !k.favorite" in filtered
     assert "function settingsSubscriptionsPanelHtml" not in src
@@ -590,24 +656,32 @@ def test_product_spec_locks_mobile_platform_badges():
     assert "把角标改回带字胶囊即违规" in design
 
 
-def test_mobile_mysubs_filter_is_seven_equal_44px_targets():
+def test_mobile_plaza_and_timeline_filters_are_seven_equal_44px_targets():
     """广场/动态移动端：6 平台 + 筛选共 7 等宽 44px 角标，文字仅 aria。"""
     css = STYLE_CSS.read_text()
     pill = re.search(r"\.tl-pill\s*\{([^}]*)\}", css)
     assert pill and "44px" in pill.group(1)
-    assert "特别关注" in _fn_body("homeScopeTogglesHtml")
+    assert "homeFilterToggleHtml()" in _fn_body("renderHome")
     assert 'aria-label="筛选"' in _fn_body("tlFilterActionsHtml")
     assert ".icon-badge-bar .tl-pill span" in css and "display: none" in css
     assert ".icon-badge-bar > .fav-toggle" in css and "font-size: 0" in css
+    assert ".icon-badge-bar > .home-filter-toggle" in css
     assert 'class="icon-badge-bar"' in _fn_body("renderHome")
     assert "tl-filterbar-top icon-badge-bar" in _fn_body("renderTimeline")
-    assert "repeat(7, minmax(0, 1fr))" in css
     assert "#tl-filterbar .icon-badge-bar" in css
     assert "repeat(8, minmax(0, 1fr))" in css
-    # 不再把筛选条竖着堆成两行
-    mobile = re.search(r"@media \(max-width: 768px\) \{(.*)\}\s*/\* ----------", css, re.DOTALL)
-    body = mobile.group(1) if mobile else css
-    assert ".tl-filterbar-top { flex-direction: column" not in body.replace(" ", "")
+
+    mobile = _media_block(css, "@media (max-width: 768px)")
+    assert re.search(
+        r"\.icon-badge-bar\s*\{[^}]*grid-template-columns:\s*"
+        r"repeat\(7,\s*minmax\(0,\s*1fr\)\)", mobile,
+    )
+    assert re.search(
+        r"[^{}]*\.home-filter-toggle[^{}]*\{[^}]*(?:min-)?height:\s*44px", mobile,
+    )
+    assert not re.search(
+        r"\.tl-filterbar-top\s*\{[^}]*flex-direction:\s*column", mobile,
+    )
 
 
 # ---- 订阅广场移动端头部密度 ----
@@ -615,23 +689,30 @@ def test_mobile_mysubs_filter_is_seven_equal_44px_targets():
 def test_mobile_home_filter_reuses_native_and_shared_controls():
     """广场移动端与订阅/动态同一行角标；搜索分类收进漏斗。"""
     render = _fn_body("renderHome")
+    panel = _fn_body("homeFilterPanelHtml")
+    filter_toggle = _fn_body("homeFilterToggleHtml")
     mobile_platforms = _fn_body("homeMobilePlatformsHtml")
     pick = _fn_body("homePickMobilePlatform")
     toggle = _fn_body("homeToggleFilter")
 
-    for marker in ('class="icon-badge-bar"', 'id="home-filter-toggle"',
-                   'id="home-search"', 'id="platform-tabs"', 'id="home-cats"',
-                   'id="home-filter-panel"'):
-        assert marker in render
+    assert all(marker in render for marker in (
+        'class="icon-badge-bar"', "homeMobilePlatformsHtml()",
+        "homeFilterToggleHtml()", "homeFilterPanelHtml(true)",
+    ))
+    assert all(marker in panel for marker in (
+        'id="home-search"', 'id="home-cats"', 'id="home-filter-panel"',
+    ))
+    assert 'id="home-filter-toggle"' in filter_toggle and "homeToggleFilter()" in filter_toggle
     assert "<details" not in render
     assert "platformShortLabel(p)" in mobile_platforms
     assert "<span>${short}</span>" in mobile_platforms
     assert "homePickMobilePlatform('${p}')" in mobile_platforms
     assert "state.platform = platform" in pick
-    assert "homeToggleFilter()" in render
     assert 'toggleAttribute("hidden"' in toggle
     assert "loadHomeKols(routeRenderSeq)" in pick
-    assert "state.homeQ || state.homeCategory || state.homeSubscribed || state.homeFavorite" in _fn_body("homeHasFilters")
+    panel_state = _fn_body("homePanelHasFilters")
+    assert "state.homeCategory || state.homeFavorite" in panel_state
+    assert "state.homeQ || state.homeSubscribed" in panel_state
 
 
 def test_plaza_source_visibility_admin_and_pills():
@@ -676,7 +757,8 @@ def test_zsxq_is_plaza_badge_not_sidebar_page():
     assert 'replaceRoute("timeline")' in src
     assert "--color-brand-zsxq" in css
     assert 'data-platform="zsxq"' in css
-    assert "state.platform" not in _fn_body("homeHasFilters")
+    assert "state.platform" not in _fn_body("homePanelHasFilters")
+    assert "state.platform" not in _fn_body("homeFilteredKols")
     assert "function postFiles" in src
     assert 'post.platform === "zsxq"' in _fn_body("postCard")
     assert "class=\"p-file\"" in _fn_body("postCard")
@@ -3643,9 +3725,9 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=263"' in html
-    assert 'src="/app.js?v=375"' in html
-    assert 'dav-shell-v244' in sw
+    assert 'href="/style.css?v=264"' in html
+    assert 'src="/app.js?v=378"' in html
+    assert 'dav-shell-v246' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -3682,15 +3764,22 @@ def test_ima_documents_follow_latest_dynamic_navigation():
 
 def test_knowledge_parallel_loads_catalog_and_first_page():
     render = _fn_body("renderKnowledge")
+    list_shell = _fn_body("mountKnowledgeListShell")
     list_fn = _fn_body("renderImaDocuments")
     path_fn = _fn_body("imaDocumentsRequestPath")
-    skeleton = render.index("admin-skeleton")
+    mount = render.index("if (!mediaId) mountKnowledgeListShell();")
     catalog = render.index('api("/api/ima-documents/catalog")')
     documents = render.index("api(imaDocumentsRequestPath())")
+    render_task = render.index("renderImaDocuments(seq, { prefetched: documentsPromise })")
     first_await = render.index("await ")
     settled = render.index("Promise.allSettled")
-    assert skeleton < catalog < first_await
-    assert skeleton < documents < first_await
+    assert mount < catalog < first_await
+    assert mount < documents < first_await
+    assert documents < render_task < settled
+    assert render.count("renderImaDocuments(seq, { prefetched: documentsPromise })") == 1
+    assert "await documentsRenderTask" in render
+    assert render.count("mountKnowledgeListShell()") == 1
+    assert 'id="kb-list" tabindex="-1"><div class="admin-skeleton"' in list_shell
     assert "Promise.allSettled" in render
     assert settled >= first_await
     assert "prefetched" in list_fn
@@ -3706,6 +3795,9 @@ def test_knowledge_parallel_loads_catalog_and_first_page():
     assert "!mediaId && !snapshot" in render
     assert "catalogOk && selectedGroup" in render
     assert "!subscribed.length && catalogOk" in render
+    assert "knowledgeSourceControlsHtml(selectedGroup)" in render
+    assert ".ima-report-source" in render
+    assert "if (mediaId)" in render
 
 
 def test_knowledge_index_status_copy_is_admin_only():
@@ -4801,6 +4893,18 @@ def test_user_modal_kb_grants_include_local_libraries():
     modal = _fn_body("adminOpenUser")
     assert "本地库" in modal
     assert "group.local" in modal
+
+
+def test_stale_frontend_refreshes_after_release():
+    check = _fn_body("checkUpdate")
+    assert "v.current !== APP_VERSION" in check
+    assert "sessionStorage.getItem(refreshKey)" in check
+    assert 'sessionStorage.setItem(refreshKey, "1")' in check
+    assert "location.reload()" in check
+    lifecycle = _fn_body("ensureVersionRefreshCheck")
+    assert 'addEventListener("visibilitychange"' in lifecycle
+    assert 'addEventListener("focus", checkUpdate)' in lifecycle
+    assert "ensureVersionRefreshCheck()" in _fn_body("renderSidebar")
 
 
 def test_knowledge_zero_sub_empty_state_wraps_source_controls():

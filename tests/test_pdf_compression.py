@@ -110,17 +110,17 @@ def test_record_invalidates_when_file_is_replaced(tmp_path):
     assert not compressor.record_matches(record, path.stat())
 
 
-def test_directory_lock_blocks_other_process(tmp_path):
-    path = tmp_path / "report.pdf"
-    _pdf(path)
+def test_archive_lock_blocks_other_process(tmp_path):
+    lock = tmp_path / compressor.ARCHIVE_LOCK_NAME
+    lock.touch()
     code = (
         "import fcntl, os, sys; "
-        "fd=os.open(sys.argv[1], os.O_RDONLY); "
-        "fcntl.flock(fd, fcntl.LOCK_EX); print('locked', flush=True); "
+        "fd=os.open(sys.argv[1], os.O_RDWR); "
+        "fcntl.lockf(fd,fcntl.LOCK_EX); print('locked', flush=True); "
         "sys.stdin.read(1)"
     )
     process = subprocess.Popen(
-        [sys.executable, "-c", code, str(tmp_path)],
+        [sys.executable, "-c", code, str(lock)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         text=True,
@@ -135,7 +135,7 @@ def test_directory_lock_blocks_other_process(tmp_path):
 
         threading.Thread(target=release, daemon=True).start()
         started = time.monotonic()
-        with compressor.path_lock(str(path)):
+        with compressor.archive_lock(str(tmp_path)):
             pass
         assert time.monotonic() - started >= 0.15
     finally:
@@ -152,7 +152,7 @@ def test_replace_pdf_refuses_changed_source(tmp_path):
     _pdf(path, b"new")
 
     replaced, reason, replaced_stat = compressor.replace_pdf(
-        path, b"%PDF-1.7\ncompressed", original)
+        str(tmp_path), str(path), b"%PDF-1.7\ncompressed", original)
 
     assert (replaced, reason, replaced_stat) == (False, "source_changed", None)
     assert path.read_bytes().endswith(b"new")
@@ -164,7 +164,7 @@ def test_replace_pdf_returns_replaced_file_fingerprint(tmp_path):
     original = path.stat()
 
     replaced, reason, replaced_stat = compressor.replace_pdf(
-        path, b"%PDF-1.7\ncompressed", original)
+        str(tmp_path), str(path), b"%PDF-1.7\ncompressed", original)
 
     assert (replaced, reason) == (True, "")
     assert replaced_stat is not None
@@ -280,11 +280,15 @@ def test_hourly_timer_installer_keeps_jobs_low_priority():
     assert "stop vpush-compress-hourly.service" in text
     assert "scripts/cicc_report_collector.py" in text
     assert "scripts/pdf_backfill_compress.py" in text
+    assert "scripts/pdf_dedup_hardlink.py" in text
     assert "scripts/vps/ima-puller.py" in text
     assert "scripts/vps/cicc-dispatch.py" in text
     assert "vpush-cicc-pdf-daily.timer" in text
     assert "06:15:00 Asia/Shanghai" in text
     assert "/srv/vpush-ima/local/cicc-research --strip-watermark" in text
+    assert "vpush-cicc-dedup.timer" in text
+    assert "OnCalendar=*-*-01 04:10:00 Asia/Shanghai" in text
+    assert "pdf_dedup_hardlink.py --apply" in text
 
 
 def test_atomic_state_write_round_trip(tmp_path):

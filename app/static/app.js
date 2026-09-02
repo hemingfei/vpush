@@ -24,7 +24,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.129";
+const APP_VERSION = "1.12.131";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -1140,7 +1140,7 @@ function mountKnowledgeListShell() {
   clearImaPdfUrl();
   $("#main").innerHTML = `
     <section class="section-panel ima-report-page" id="ima-report-page">
-      <div id="kb-list" tabindex="-1"></div>
+      <div id="kb-list" tabindex="-1"><div class="admin-skeleton" aria-hidden="true"></div></div>
     </section>`;
 }
 
@@ -1199,6 +1199,8 @@ function renderSidebar(user) {
   `;
   renderThemeSwitcher();
   syncSidebarToggle();
+  checkUpdate();
+  ensureVersionRefreshCheck();
 }
 
 const MOBILE_NAV = [
@@ -1811,11 +1813,15 @@ async function renderKnowledge(seq, encodedMediaId = "") {
   stopImaDocumentsAutoLoad();
   const mediaId = encodedMediaId ? decodeURIComponent(encodedMediaId) : "";
   setPageTitle("研报库");
-  if (!$("#ima-report-page") && !$("#ima-reader-page")) {
+  if (mediaId && !$("#ima-reader-page")) {
     $("#main").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
   }
+  if (!mediaId) mountKnowledgeListShell();
   const catalogPromise = api("/api/ima-documents/catalog");
   const documentsPromise = mediaId || currentImaListSnapshot() ? null : api(imaDocumentsRequestPath());
+  const documentsRenderTask = mediaId
+    ? null
+    : renderImaDocuments(seq, { prefetched: documentsPromise });
   try {
     const settled = await Promise.allSettled(
       documentsPromise ? [catalogPromise, documentsPromise] : [catalogPromise]
@@ -1851,6 +1857,10 @@ async function renderKnowledge(seq, encodedMediaId = "") {
     state.imaCatalogAvailable = available;
     const isAdmin = !!state.user?.is_admin;
     const selectedGroup = imaDocumentsGroupFromRoute();
+    const sourceControl = $("#kb-list .ima-report-source");
+    if (sourceControl) {
+      sourceControl.outerHTML = knowledgeSourceControlsHtml(selectedGroup);
+    }
     if (catalogOk && selectedGroup && !isAdmin && !subscribed.some((group) => String(group.id) === selectedGroup)) {
       setPageTitle("研报库", true, "knowledge", "回研报库");
       $("#main").innerHTML = emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回研报库</button></div>`);
@@ -1862,7 +1872,6 @@ async function renderKnowledge(seq, encodedMediaId = "") {
       await renderImaDocument(seq, mediaId);
       return;
     }
-    mountKnowledgeListShell();
     if (!subscribed.length && catalogOk) {
       const list = $("#kb-list");
       const controls = `<div class="ima-report-head"><div class="ima-report-filters ima-report-filters-row">${knowledgeSourceControlsHtml("")}</div></div>`;
@@ -1881,7 +1890,7 @@ async function renderKnowledge(seq, encodedMediaId = "") {
       }
       return;
     }
-    await renderImaDocuments(seq, { prefetched: documentsPromise });
+    await documentsRenderTask;
     if (catalogWarning) {
       const warning = `<p class="section-meta ima-catalog-warning">${escapeHtml(catalogWarning)}</p>`;
       const head = $("#kb-list .ima-report-head");
@@ -2396,6 +2405,40 @@ async function downloadImaPdf(mediaId) {
   }
 }
 
+async function checkUpdate() {
+  try {
+    const v = await api("/api/version");
+    if (v.current && v.current !== APP_VERSION) {
+      const refreshKey = `dav_version_refresh_${v.current}`;
+      if (!sessionStorage.getItem(refreshKey)) {
+        sessionStorage.setItem(refreshKey, "1");
+        location.reload();
+        return;
+      }
+    }
+    const link = $("#sidebar-gh-link");
+    const meta = $("#sidebar-version");
+    if (!link || !meta) return;
+    // 始终显示服务端返回的当前版本，避免本地硬编码版本过期
+    meta.innerHTML = `v${escapeHtml(v.current)}`;
+    if (v.update_available && v.latest) {
+      link.classList.add("has-update");
+      meta.innerHTML += ` <a class="sidebar-update" href="${escapeHtml(v.url)}" target="_blank" rel="noopener" title="有新版本">↑ ${escapeHtml(v.latest)}</a>`;
+    }
+  } catch {
+    /* 更新检查失败不打扰，保留本地硬编码版本兜底 */
+  }
+}
+
+function ensureVersionRefreshCheck() {
+  if (ensureVersionRefreshCheck.bound) return;
+  ensureVersionRefreshCheck.bound = true;
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") checkUpdate();
+  });
+  window.addEventListener("focus", checkUpdate);
+}
+
 function renderTopbar(user) {
   $("#topbar-user").innerHTML = `
     <button class="theme-toggle-btn" id="theme-toggle-btn" onclick="cycleTheme()" aria-label="切换主题" title="切换主题"></button>
@@ -2421,34 +2464,61 @@ function emptyState(text, actionHtml = "") {
   return `<div class="empty">${escapeHtml(text)}${actionHtml}</div>`;
 }
 
-function homeHasFilters() {
-  return !!(state.homeQ || state.homeCategory || state.homeSubscribed || state.homeFavorite);
+function homePanelHasFilters() {
+  return !!(state.homeCategory || state.homeFavorite || (isMobileTimelineFilter() && (state.homeQ || state.homeSubscribed)));
 }
 
-function homeScopeTogglesHtml() {
-  return `<div class="tl-filter-views">
-    <button type="button" id="home-sub-toggle" class="fav-toggle ${state.homeSubscribed ? "fav-on" : ""}" aria-pressed="${state.homeSubscribed}" onclick="toggleHomeSubscribed()">已订阅</button>
-    <button type="button" id="home-fav-toggle" class="fav-toggle ${state.homeFavorite ? "fav-on" : ""}" aria-pressed="${state.homeFavorite}" onclick="toggleHomeFavorite()">${STAR_SVG} 特别关注</button>
+function homeSubscribedToggleHtml() {
+  return `<button type="button" id="home-sub-toggle" class="fav-toggle ${state.homeSubscribed ? "fav-on" : ""}" aria-pressed="${state.homeSubscribed}" onclick="toggleHomeSubscribed()">已订阅</button>`;
+}
+
+function homeScopeTogglesHtml(includeSubscribed) {
+  return `<div class="home-scope-filters">
+    ${includeSubscribed ? `<label class="switch home-scope-switch">
+      <input type="checkbox" id="home-sub-toggle" ${state.homeSubscribed ? "checked" : ""} onchange="toggleHomeSubscribed()">
+      <span class="track"></span><span>只看已订阅</span>
+    </label>` : ""}
+    <label class="switch home-scope-switch">
+      <input type="checkbox" id="home-fav-toggle" ${state.homeFavorite ? "checked" : ""} onchange="toggleHomeFavorite()">
+      <span class="track"></span><span>只看特别关注</span>
+    </label>
+  </div>`;
+}
+
+function homeFilterToggleHtml() {
+  return `<button type="button" id="home-filter-toggle" class="fav-toggle home-filter-toggle ${homePanelHasFilters() ? "has-filter" : ""}" aria-label="筛选" aria-expanded="false" aria-controls="home-filter-panel" onclick="homeToggleFilter()">${FILTER_ICON}</button>`;
+}
+
+function homeFilterPanelHtml(mobile) {
+  return `<div class="home-filter-content" id="home-filter-panel" hidden>
+    ${mobile ? `<div class="search-bar home-search-bar">
+      ${SEARCH_ICON}
+      <input id="home-search" placeholder="搜索昵称或 ID" value="${escapeHtml(state.homeQ || "")}" oninput="homeSearch(this.value)">
+    </div>` : ""}
+    <div class="home-cats" id="home-cats"></div>
+    ${homeScopeTogglesHtml(mobile)}
+    <div class="home-filter-actions">
+      <button class="btn-ghost" onclick="homeResetFilters()">清除筛选</button>
+    </div>
   </div>`;
 }
 
 function toggleHomeSubscribed() {
   state.homeSubscribed = !state.homeSubscribed;
-  const btn = $("#home-sub-toggle");
-  if (btn) {
-    btn.classList.toggle("fav-on", state.homeSubscribed);
-    btn.setAttribute("aria-pressed", String(state.homeSubscribed));
+  const toggle = $("#home-sub-toggle");
+  if (toggle?.matches('input[type="checkbox"]')) {
+    toggle.checked = state.homeSubscribed;
+  } else if (toggle) {
+    toggle.classList.toggle("fav-on", state.homeSubscribed);
+    toggle.setAttribute("aria-pressed", String(state.homeSubscribed));
   }
   renderHomeList();
 }
 
 function toggleHomeFavorite() {
   state.homeFavorite = !state.homeFavorite;
-  const btn = $("#home-fav-toggle");
-  if (btn) {
-    btn.classList.toggle("fav-on", state.homeFavorite);
-    btn.setAttribute("aria-pressed", String(state.homeFavorite));
-  }
+  const toggle = $("#home-fav-toggle");
+  if (toggle) toggle.checked = state.homeFavorite;
   renderHomeList();
 }
 
@@ -2487,11 +2557,20 @@ async function homeResetFilters() {
   await renderHome(routeRenderSeq);
 }
 
+let _homeMobileWatchBound = false;
+function ensureHomeMobileWatch() {
+  if (_homeMobileWatchBound) return;
+  _homeMobileWatchBound = true;
+  window.matchMedia("(max-width: 768px)").addEventListener("change", () => {
+    if (routePath() === "home" && $(".home-panel") && $("#kol-list")) renderHome(++routeRenderSeq);
+  });
+}
+
 // ---------- 订阅广场 ----------
 async function renderHome(seq) {
   setPageTitle("订阅广场");
   ensurePlazaPlatformSelection();
-  const mobileHome = isMobileTimelineFilter();
+  ensureHomeMobileWatch();
   let onboardingHtml = "";
   if (state.user && !state.user.subscription_count) {
     try {
@@ -2527,6 +2606,7 @@ async function renderHome(seq) {
     }
   }
   if (!routeStillActive(seq)) return; // 已切走：不写旧首页的 DOM
+  const mobileHome = isMobileTimelineFilter();
   $("#main").innerHTML = `
     ${onboardingHtml}
     <section class="section-panel home-panel">
@@ -2540,28 +2620,19 @@ async function renderHome(seq) {
             <div class="tl-pills" id="home-mobile-platforms" role="radiogroup" aria-label="平台">
               ${homeMobilePlatformsHtml()}
             </div>
-            <button type="button" id="home-filter-toggle" class="fav-toggle ${homeHasFilters() ? "has-filter" : ""}" aria-label="筛选" aria-expanded="false" aria-controls="home-filter-panel" onclick="homeToggleFilter()">${FILTER_ICON}筛选</button>
+            ${homeFilterToggleHtml()}
           </div>
-          <div class="home-filter-content" id="home-filter-panel" hidden>
-            <div class="search-bar home-search-bar">
-              ${SEARCH_ICON}
-              <input id="home-search" placeholder="搜索昵称或 ID" value="${escapeHtml(state.homeQ || "")}" oninput="homeSearch(this.value)">
-            </div>
-            <div class="home-cats" id="home-cats"></div>
-            ${homeScopeTogglesHtml()}
-            <div class="home-filter-actions">
-              <button class="btn-ghost" onclick="homeResetFilters()">清除筛选</button>
-            </div>
-          </div>` : `
+          ${homeFilterPanelHtml(true)}` : `
           <div class="toolbar" style="margin-top:12px">
             <div class="search-bar" style="flex:1;min-width:220px">
               ${SEARCH_ICON}
-              <input id="home-search" placeholder="搜索昵称或 ID，即时过滤" oninput="homeSearch(this.value)">
+              <input id="home-search" placeholder="搜索昵称或 ID，即时过滤" value="${escapeHtml(state.homeQ || "")}" oninput="homeSearch(this.value)">
             </div>
             <div class="platform-tabs" id="platform-tabs"></div>
-            ${homeScopeTogglesHtml()}
+            ${homeSubscribedToggleHtml()}
+            ${homeFilterToggleHtml()}
           </div>
-          <div class="home-cats" id="home-cats"></div>`}
+          ${homeFilterPanelHtml(false)}`}
       </header>
       ${state.user?.is_admin ? "" : `
         <div class="request-banner">
@@ -2613,7 +2684,7 @@ function homeFilteredKols() {
 }
 
 function renderHomeList() {
-  $("#home-filter-toggle")?.classList.toggle("has-filter", homeHasFilters());
+  $("#home-filter-toggle")?.classList.toggle("has-filter", homePanelHasFilters());
   const cats = $("#home-cats");
   if (cats) cats.innerHTML = categoryChipsHtml();
   const meta = $("#catalog-meta");

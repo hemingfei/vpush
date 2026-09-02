@@ -8,13 +8,15 @@ import sqlite3
 import threading
 import time
 import urllib.error
+from contextlib import contextmanager
 
 import pytest
 from fastapi.testclient import TestClient
 
-import app.ima_documents as ima_documents
+from app import ima_documents
 from app.db import DB
 from app.ima_documents import (
+    _PART_TEMP_OVERHEAD,
     IMA_INDEX_VERSION,
     IMA_LEGACY_GROUP_ID,
     IMA_LEGACY_GROUP_NAME,
@@ -28,27 +30,26 @@ from app.ima_documents import (
     IMA_PURE_ROOT_FOLDER_KEY,
     IMA_PURE_UID_KEY,
     IMA_STATE_FLUSH_SECONDS,
+    MAX_FILENAME_BYTES,
     ImaDocumentConfig,
     ImaDocumentService,
     ImaDocumentStore,
     ImaGroupConfig,
     ImaPureClient,
-    load_title_overrides,
-    group_next_run_at,
-    next_shanghai_schedule,
-    shanghai_schedule_gate,
     _clamp_group_interval,
+    _retryable_download_error,
     _safe_error,
     decrypt_body,
     encrypt_body,
+    group_next_run_at,
     is_ima_folder_item,
+    load_title_overrides,
     merge_groups,
+    next_shanghai_schedule,
     normalize_discovered_groups,
     normalize_ima_folder_item,
     safe_filename,
-    _retryable_download_error,
-    MAX_FILENAME_BYTES,
-    _PART_TEMP_OVERHEAD,
+    shanghai_schedule_gate,
 )
 from app.ima_storage import ImaStorageStatus
 from app.main import create_app
@@ -3870,6 +3871,7 @@ def test_download_uses_cdn_when_pull_url_unset(tmp_path, monkeypatch):
         return FakeResponse()
 
     monkeypatch.setenv("IMA_PULL_URL", "")
+    monkeypatch.setenv("IMA_ARCHIVE_ROOT", str(tmp_path))
     monkeypatch.setattr(ima_documents.urllib.request, "urlopen", fake_urlopen)
     dest = tmp_path / "g" / "a.pdf"
     ImaPureClient(ImaDocumentConfig(refresh_token="refresh")).download(
@@ -3884,6 +3886,47 @@ def test_download_uses_cdn_when_pull_url_unset(tmp_path, monkeypatch):
     assert seen["url"] == "https://res-skb.ima.qq.com/file.pdf?sign=1"
     assert "/pull" not in seen["url"]
     assert dest.read_bytes().startswith(b"%PDF-1.7")
+
+
+def test_direct_download_uses_archive_lock(tmp_path, monkeypatch):
+    class FakeResponse:
+        def __init__(self):
+            self._data = b"%PDF-1.7xxxx"
+
+        def read(self, n):
+            chunk = self._data[:n]
+            self._data = self._data[n:]
+            return chunk
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setenv("IMA_PULL_URL", "")
+    monkeypatch.setenv("IMA_ARCHIVE_ROOT", str(tmp_path))
+    locked = []
+
+    @contextmanager
+    def fake_archive_lock(root):
+        locked.append(root)
+        yield
+
+    monkeypatch.setattr(ima_documents, "archive_lock", fake_archive_lock)
+    monkeypatch.setattr(
+        ima_documents.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeResponse(),
+    )
+    destination = tmp_path / "g" / "a.pdf"
+    ImaPureClient(ImaDocumentConfig(refresh_token="refresh")).download(
+        {"jump_url_info": {"url": "https://res-skb.ima.qq.com/file.pdf"}},
+        destination,
+    )
+
+    assert locked == [tmp_path]
+    assert destination.read_bytes().startswith(b"%PDF-1.7")
 
 
 def test_sync_redownloads_when_pull_url_set_even_if_file_exists(tmp_path, monkeypatch):
@@ -4404,6 +4447,53 @@ def test_write_abstract_zh_updates_index_after_state(tmp_path):
     assert row["abstract_zh"] == "你好"
 
 
+def test_index_usable_reads_meta_once_and_uses_embedded_document_count(
+    tmp_path, monkeypatch
+):
+    class IndexDB:
+        def __init__(self):
+            self.meta_calls = 0
+            self.count_calls = 0
+
+        def ima_document_page(self, *_args, **_kwargs):
+            return {}
+
+        def ima_document_index_meta(self):
+            self.meta_calls += 1
+            return {
+                "status": "failed",
+                "fingerprint": "current",
+                "document_count": 2,
+            }
+
+        def ima_document_index_count(self):
+            self.count_calls += 1
+            return 2
+
+    db = IndexDB()
+    service = ImaDocumentService(db, tmp_path / "ima")
+    monkeypatch.setattr(service, "_source_fingerprint", lambda: "current")
+
+    assert service._index_usable() is True
+    assert db.meta_calls == 1
+    assert db.count_calls == 0
+
+
+def test_index_usable_falls_back_to_counter_for_legacy_meta(tmp_path, monkeypatch):
+    class LegacyIndexDB:
+        ima_document_page = lambda *_args, **_kwargs: {}
+        ima_document_index_meta = lambda *_args, **_kwargs: {
+            "status": "failed",
+            "fingerprint": "current",
+        }
+        ima_document_index_count = lambda *_args, **_kwargs: 1
+
+    service = ImaDocumentService(LegacyIndexDB(), tmp_path / "ima")
+    monkeypatch.setattr(service, "_source_fingerprint", lambda: "current")
+
+    assert service._index_usable() is True
+
+
 def test_empty_ready_index_falls_back_when_sources_change(tmp_path):
     db = DB(str(tmp_path / "empty-ready.sqlite"))
     service = ImaDocumentService(db, tmp_path / "ima")
@@ -4527,6 +4617,253 @@ def test_rebuild_read_index_holds_sync_lock(tmp_path, monkeypatch):
     assert result["status"] == "ready"
     assert held == [True]
     assert service._sync_lock.locked() is False
+
+
+def _run_archive_maintenance(
+    tmp_path, monkeypatch, *, remote=True, checkpoint=None, failing_step=""
+):
+    db = FakeDB()
+    service = ImaDocumentService(
+        db,
+        tmp_path / "ima",
+        storage_status=ImaStorageStatus(None, remote=remote),
+    )
+    fingerprint = "source-fingerprint"
+    if checkpoint is not None:
+        db.set_setting(ima_documents.IMA_MAINTENANCE_FINGERPRINT_KEY, checkpoint)
+    calls = []
+
+    def step(name, result=None):
+        def run():
+            calls.append(name)
+            if name == failing_step:
+                raise RuntimeError(f"{name} failed")
+            return result
+
+        return run
+
+    monkeypatch.setattr(service, "_source_fingerprint", lambda: fingerprint)
+    monkeypatch.setattr(service, "_rebuild_index_if_needed", step("index"))
+    monkeypatch.setattr(service, "_sync_full_text_index", step("fts"))
+    monkeypatch.setattr(service.store, "archive_writable", lambda: True)
+    monkeypatch.setattr(service.store, "archive_readable", lambda: True)
+    monkeypatch.setattr(
+        service.store, "restore_original_filenames", step("restore", {"renamed": 0})
+    )
+    monkeypatch.setattr(
+        service.store, "rebuild_manifest_from_state", step("manifest", 0)
+    )
+    monkeypatch.setattr(service, "retag_all", step("retag", {}))
+    service._archive_maintenance()
+    return db, calls, fingerprint
+
+
+def test_remote_archive_maintenance_serializes_checkpoint_decision(
+    tmp_path, monkeypatch
+):
+    class ObservedLock:
+        def __init__(self):
+            self.lock = threading.Lock()
+            self.attempts = 0
+            self.second_waiting = threading.Event()
+
+        def acquire(self, *args, **kwargs):
+            self.attempts += 1
+            if self.attempts == 2:
+                self.second_waiting.set()
+            return self.lock.acquire(*args, **kwargs)
+
+        def release(self):
+            self.lock.release()
+
+        def __enter__(self):
+            self.acquire()
+            return self
+
+        def __exit__(self, *_args):
+            self.release()
+
+        def locked(self):
+            return self.lock.locked()
+
+    db = FakeDB()
+    service = ImaDocumentService(
+        db,
+        tmp_path / "ima",
+        storage_status=ImaStorageStatus(None, remote=True),
+    )
+    service._sync_lock = ObservedLock()
+    restore_started = threading.Event()
+    release_restore = threading.Event()
+    calls = []
+    errors = []
+    monkeypatch.setattr(service, "_source_fingerprint", lambda: "current")
+    monkeypatch.setattr(service, "_rebuild_index_if_needed", lambda: None)
+    monkeypatch.setattr(service, "_sync_full_text_index", lambda: None)
+    monkeypatch.setattr(service.store, "archive_writable", lambda: True)
+    monkeypatch.setattr(service.store, "archive_readable", lambda: True)
+
+    def restore():
+        calls.append("restore")
+        restore_started.set()
+        if not release_restore.wait(2):
+            raise TimeoutError("maintenance release timed out")
+        return {"renamed": 0}
+
+    monkeypatch.setattr(service.store, "restore_original_filenames", restore)
+    monkeypatch.setattr(service.store, "rebuild_manifest_from_state", lambda: 0)
+    monkeypatch.setattr(service, "retag_all", lambda: {})
+
+    def maintain():
+        try:
+            service._archive_maintenance()
+        except BaseException as exc:
+            errors.append(exc)
+
+    first = threading.Thread(target=maintain)
+    second = threading.Thread(target=maintain)
+    started = []
+    try:
+        first.start()
+        started.append(first)
+        assert restore_started.wait(1)
+        second.start()
+        started.append(second)
+        assert service._sync_lock.second_waiting.wait(1)
+    finally:
+        release_restore.set()
+        for thread in started:
+            thread.join(2)
+    assert all(not thread.is_alive() for thread in started)
+    assert errors == []
+    assert calls == ["restore"]
+    assert db.get_setting(ima_documents.IMA_MAINTENANCE_FINGERPRINT_KEY) == "current"
+
+
+def test_remote_archive_maintenance_checkpoint_read_failure_runs_without_advancing(
+    tmp_path, monkeypatch, caplog
+):
+    db = FakeDB()
+    service = ImaDocumentService(
+        db,
+        tmp_path / "ima",
+        storage_status=ImaStorageStatus(None, remote=True),
+    )
+    calls = []
+    checkpoint_writes = []
+    monkeypatch.setattr(service, "_source_fingerprint", lambda: "current")
+    monkeypatch.setattr(service, "_rebuild_index_if_needed", lambda: calls.append("index"))
+    monkeypatch.setattr(service, "_sync_full_text_index", lambda: calls.append("fts"))
+    monkeypatch.setattr(service.store, "archive_writable", lambda: True)
+    monkeypatch.setattr(service.store, "archive_readable", lambda: True)
+    monkeypatch.setattr(
+        service.store,
+        "restore_original_filenames",
+        lambda: calls.append("restore") or {"renamed": 0},
+    )
+    monkeypatch.setattr(
+        service.store,
+        "rebuild_manifest_from_state",
+        lambda: calls.append("manifest") or 0,
+    )
+    monkeypatch.setattr(service, "retag_all", lambda: calls.append("retag") or {})
+    monkeypatch.setattr(
+        db,
+        "get_setting",
+        lambda _key: (_ for _ in ()).throw(RuntimeError("checkpoint unavailable")),
+    )
+    monkeypatch.setattr(
+        db, "set_setting", lambda key, value: checkpoint_writes.append((key, value))
+    )
+
+    with caplog.at_level("ERROR"):
+        service._archive_maintenance()
+
+    assert calls == ["index", "restore", "manifest", "retag", "index", "fts"]
+    assert checkpoint_writes == []
+    assert "IMA maintenance checkpoint read failed" in caplog.text
+
+
+def test_remote_archive_maintenance_matching_checkpoint_skips_nfs_work(
+    tmp_path, monkeypatch
+):
+    db, calls, fingerprint = _run_archive_maintenance(
+        tmp_path, monkeypatch, checkpoint="source-fingerprint"
+    )
+
+    assert calls == ["index", "index", "fts"]
+    assert db.get_setting(ima_documents.IMA_MAINTENANCE_FINGERPRINT_KEY) == fingerprint
+
+
+@pytest.mark.parametrize("checkpoint", [None, "stale-fingerprint"])
+def test_remote_archive_maintenance_missing_or_stale_checkpoint_runs_and_updates(
+    tmp_path, monkeypatch, checkpoint
+):
+    db, calls, fingerprint = _run_archive_maintenance(
+        tmp_path, monkeypatch, checkpoint=checkpoint
+    )
+
+    assert calls == ["index", "restore", "manifest", "retag", "index", "fts"]
+    assert db.get_setting(ima_documents.IMA_MAINTENANCE_FINGERPRINT_KEY) == fingerprint
+
+
+def test_remote_archive_maintenance_checkpoints_completed_source(
+    tmp_path, monkeypatch
+):
+    db = FakeDB()
+    service = ImaDocumentService(
+        db,
+        tmp_path / "ima",
+        storage_status=ImaStorageStatus(None, remote=True),
+    )
+    fingerprints = iter(["before-maintenance", "after-maintenance"])
+    monkeypatch.setattr(service, "_source_fingerprint", lambda: next(fingerprints))
+    monkeypatch.setattr(service, "_rebuild_index_if_needed", lambda: None)
+    monkeypatch.setattr(service, "_sync_full_text_index", lambda: None)
+    monkeypatch.setattr(service.store, "archive_writable", lambda: True)
+    monkeypatch.setattr(service.store, "archive_readable", lambda: True)
+    monkeypatch.setattr(
+        service.store, "restore_original_filenames", lambda: {"renamed": 0}
+    )
+    monkeypatch.setattr(service.store, "rebuild_manifest_from_state", lambda: 0)
+    monkeypatch.setattr(service, "retag_all", lambda: {})
+
+    service._archive_maintenance()
+
+    assert (
+        db.get_setting(ima_documents.IMA_MAINTENANCE_FINGERPRINT_KEY)
+        == "after-maintenance"
+    )
+
+
+@pytest.mark.parametrize("failing_step", ["restore", "manifest", "retag"])
+def test_remote_archive_maintenance_failure_does_not_advance_checkpoint(
+    tmp_path, monkeypatch, failing_step
+):
+    db, calls, _fingerprint = _run_archive_maintenance(
+        tmp_path,
+        monkeypatch,
+        checkpoint="stale-fingerprint",
+        failing_step=failing_step,
+    )
+
+    assert calls == ["index", "restore", "manifest", "retag", "index", "fts"]
+    assert (
+        db.get_setting(ima_documents.IMA_MAINTENANCE_FINGERPRINT_KEY)
+        == "stale-fingerprint"
+    )
+
+
+def test_local_archive_maintenance_ignores_remote_checkpoint(tmp_path, monkeypatch):
+    db, calls, _fingerprint = _run_archive_maintenance(
+        tmp_path, monkeypatch, remote=False, checkpoint="source-fingerprint"
+    )
+
+    assert calls == ["index", "restore", "manifest", "retag", "index", "fts"]
+    assert (
+        db.get_setting(ima_documents.IMA_MAINTENANCE_FINGERPRINT_KEY)
+        == "source-fingerprint"
+    )
 
 
 def test_archive_maintenance_rebuilds_index_before_nfs_work():
