@@ -12315,7 +12315,7 @@ const _adminPostsExpanded = new Set();
 let _adminKolsOptions = null;
 
 async function _adminKolsSelect() {
-  // 大V下拉选项（按平台分组），只拉一次缓存
+  // 大V下拉选项（按平台分组），只拉一次缓存；首项空值=全部大V，选中态在渲染后按 state 同步
   if (_adminKolsOptions) return _adminKolsOptions;
   const kols = await api("/api/kols");
   const groups = {};
@@ -12325,13 +12325,13 @@ async function _adminKolsSelect() {
   }
   _adminKolsOptions = Object.entries(groups)
     .map(([g, list]) => `<optgroup label="${escapeHtml(g)}">${list.map((k) =>
-      `<option value="${k.id}" ${state.adminPostsKolId == k.id ? "selected" : ""}>${escapeHtml(k.name)}</option>`).join("")}</optgroup>`)
+      `<option value="${k.id}">${escapeHtml(k.name)}</option>`).join("")}</optgroup>`)
     .join("");
   return _adminKolsOptions;
 }
 
 function renderAdminPosts() {
-  const kolsHtml = _adminKolsOptions || `<option value="">全部大V</option>`;
+  const kolsHtml = _adminKolsOptions || "";
   if (!routeStillActive(_adminRenderSeq)) return;
   $("#admin-body").innerHTML = `
     <section class="section-panel">
@@ -12353,7 +12353,7 @@ function renderAdminPosts() {
             <option value="normal" ${state.adminPostsStatus === "normal" ? "selected" : ""}>未隐藏</option>
             <option value="hidden" ${state.adminPostsStatus === "hidden" ? "selected" : ""}>已隐藏</option>
           </select>
-          <select id="ad-posts-kol" class="form-control" style="margin:0;width:auto" onchange="adminFilterPosts()">${kolsHtml}</select>
+          <select id="ad-posts-kol" class="form-control" style="margin:0;width:auto" onchange="adminFilterPosts()"><option value="">全部大V</option>${kolsHtml}</select>
           <button class="btn-normal" onclick="adminFilterPosts()">筛选</button>
         </div>
       </header>
@@ -12367,6 +12367,9 @@ function renderAdminPosts() {
       ? `<div class="toolbar" style="margin-top:14px;justify-content:center"><button class="btn-normal" onclick="adminPostsLoadMore()">加载更多</button></div>`
       : `<p class="muted" style="text-align:center;margin-top:14px">已加载全部</p>`}
     </section>`;
+  // 选中态随 state 同步（空值=全部大V），重渲染后不丢失
+  const kolSel = $("#ad-posts-kol");
+  if (kolSel) kolSel.value = state.adminPostsKolId ? String(state.adminPostsKolId) : "";
 }
 
 function postRowHtml(p) {

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import base64
-import fcntl
 import hashlib
 import json
 import logging
@@ -21,6 +20,18 @@ from http.client import IncompleteRead
 from pathlib import Path
 from typing import Any
 
+try:  # fcntl 仅 POSIX 存在；Windows 用 msvcrt 锁首字节实现同等进程互斥
+    import fcntl
+
+    def _lock_fd(fd: int) -> None:
+        fcntl.lockf(fd, fcntl.LOCK_EX)
+
+except ImportError:
+    import msvcrt
+
+    def _lock_fd(fd: int) -> None:
+        msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -37,7 +48,7 @@ logger = logging.getLogger(__name__)
 def archive_lock(root: Path):
     fd = os.open(root / ".vpush-pdf.lock", os.O_RDWR | os.O_CREAT, 0o660)
     try:
-        fcntl.lockf(fd, fcntl.LOCK_EX)
+        _lock_fd(fd)
         yield
     finally:
         os.close(fd)

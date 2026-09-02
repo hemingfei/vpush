@@ -8,22 +8,24 @@
 
 | 文件 | 来源 | 作用 |
 |---|---|---|
-| `vpush-1.12.101.tar` | 本地 `docker save` 导出 | 包含两个镜像（主应用 + waf-bot） |
+| `vpush-latest.tar` | 本地 `docker save` 导出 | 包含两个镜像（主应用 + waf-bot） |
 | `docker-compose.prod.yml` | 项目根目录 | 容器编排（端口、挂载、环境变量） |
 | `docker-compose.override.yml` | 见下文模板 | 把 compose 里的 `build:` 替换成已加载的镜像 |
 | `config.yaml` | 本地项目根目录 | 应用配置（挂载为容器内 `/data/config.yaml`） |
 | `.env` | 本地项目根目录 | 敏感变量（飞书/Telegram/cookie 等），不进镜像 |
 | `data/` | 可选：迁移旧数据时才传 | 数据库、日志、cookie 等持久化数据 |
 
-`docker-compose.override.yml` 内容模板（`1.12.101` 换成实际版本号，如 1.12.96）：
+镜像统一使用 `latest` 标签（`docker build` / `docker pull` 不写 tag 时默认就是 `latest`），不需要在命令里填版本号；tar 文件名只是本地文件名，可随意（建议带上构建日期方便区分，如 `vpush-latest-20260902.tar`）。
+
+`docker-compose.override.yml` 内容模板（写一次即可，以后升级不用再改）：
 
 ```yaml
 services:
   vpush:
-    image: vpush:1.12.101
+    image: vpush:latest
     build: !reset null
   waf-bot:
-    image: vpush-waf-bot:1.12.101
+    image: vpush-waf-bot:latest
     build: !reset null
 ```
 
@@ -33,14 +35,14 @@ services:
 
 ```bash
 # PIP_INDEX_URL 换清华源，国内网络构建快很多（只影响主镜像，waf-bot 用不到）
-docker build --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple -t vpush:1.12.101 .
-docker build -t vpush-waf-bot:1.12.101 ./waf-bot
+docker build --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple -t vpush:latest .
+docker build -t vpush-waf-bot:latest ./waf-bot
 
 # 两个镜像一起打进一个 tar
-docker save vpush:1.12.101 vpush-waf-bot:1.12.101 -o vpush-1.12.101.tar
+docker save vpush:latest vpush-waf-bot:latest -o vpush-latest.tar
 
 # 可选：压缩后传输（服务器上先 gunzip）
-# gzip vpush-1.12.101.tar
+# gzip vpush-latest.tar
 ```
 
 本地是 Windows x64、服务器是 x86_64，架构一致，无需 `--platform`。
@@ -48,7 +50,7 @@ docker save vpush:1.12.101 vpush-waf-bot:1.12.101 -o vpush-1.12.101.tar
 ### 2. 上传文件到服务器
 
 ```bash
-scp vpush-1.12.101.tar docker-compose.prod.yml config.yaml .env root@服务器IP:/root/VPush/
+scp vpush-latest.tar docker-compose.prod.yml config.yaml .env root@服务器IP:/root/VPush/
 ```
 
 注意 `config.yaml` 和 `.env` 含敏感信息，只走 SSH/可信渠道。
@@ -57,16 +59,16 @@ scp vpush-1.12.101.tar docker-compose.prod.yml config.yaml .env root@服务器IP
 
 ```bash
 cd /root/VPush
-docker load -i vpush-1.12.101.tar
+docker load -i vpush-latest.tar
 
-# 创建 override（首次部署做一次，以后只改里面的版本号）
+# 创建 override（首次部署做一次，之后升级不用再动）
 cat > docker-compose.override.yml <<'EOF'
 services:
   vpush:
-    image: vpush:1.12.101
+    image: vpush:latest
     build: !reset null
   waf-bot:
-    image: vpush-waf-bot:1.12.101
+    image: vpush-waf-bot:latest
     build: !reset null
 EOF
 
@@ -87,16 +89,26 @@ docker logs -f vpush                   # 看启动日志
 
 ## 三、版本升级
 
-1. 本地重复「构建 + 导出」（用新版本号，如 `vpush:1.12.97`）；
-2. `scp` 上传新 tar，服务器 `docker load`；
-3. 修改 `docker-compose.override.yml` 里两个 image 的 tag 为新版本；
-4. 重新启动（compose 自动重建容器）：
+tag 恒为 `latest`，全程不用改任何配置文件：
+
+1. 本地重复「构建 + 导出」（命令同上，tag 还是 `latest`）；
+2. `scp` 上传新 tar，服务器 `docker load`（新镜像自动顶掉 `latest` 标签，旧镜像变成 `<none>` 悬空镜像）；
+3. 直接重新启动，compose 检测到镜像更新会自动重建容器：
 
 ```bash
 docker compose -f docker-compose.prod.yml -f docker-compose.override.yml up -d
 ```
 
-数据都在 `data/` 和 `config.yaml` 里，升级不受影响。回滚就是把 override 里的 tag 改回旧版本再 `up -d`。旧镜像确认不用后可 `docker image prune -a` 清理。
+数据都在 `data/` 和 `config.yaml` 里，升级不受影响。
+
+**回滚**：`latest` 标签被新镜像占用后，旧镜像还在（`docker images -f dangling=true` 能看到，标签为 `<none>`），用镜像 ID 打回标签再启动即可：
+
+```bash
+docker tag <旧镜像ID> vpush:latest
+docker compose -f docker-compose.prod.yml -f docker-compose.override.yml up -d
+```
+
+所以 `docker image prune -a` 清理悬空镜像前想清楚：清掉就没了回滚退路。如果希望回滚更省事，本地构建时可以顺手多打一个版本号 tag（`docker build ... -t vpush:latest -t vpush:1.12.102 .`），回滚时把 override 里的 image 改成对应版本号再 `up -d`，代价是 tar 里多带上一个镜像、load 后多占一份磁盘。
 
 ## 四、权限与已知坑（重要）
 

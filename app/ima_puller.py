@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
@@ -12,6 +11,18 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
+
+try:  # fcntl 仅 POSIX 存在；Windows 用 msvcrt 锁首字节实现同等进程互斥
+    import fcntl
+
+    def _lock_fd(fd: int) -> None:
+        fcntl.lockf(fd, fcntl.LOCK_EX)
+
+except ImportError:
+    import msvcrt
+
+    def _lock_fd(fd: int) -> None:
+        msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
 
 MAX_PDF_BYTES = 200 * 1024 * 1024
 MAX_JSON_BYTES = 1_000_000
@@ -26,7 +37,7 @@ LOCK_NAME = ".vpush-pdf.lock"
 def archive_lock(root: Path):
     fd = os.open(root / LOCK_NAME, os.O_RDWR | os.O_CREAT, 0o660)
     try:
-        fcntl.lockf(fd, fcntl.LOCK_EX)
+        _lock_fd(fd)
         yield
     finally:
         os.close(fd)

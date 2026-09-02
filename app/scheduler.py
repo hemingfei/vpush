@@ -2496,6 +2496,9 @@ class Scheduler:
                     steps.extend(await asyncio.to_thread(service.boot_sequence))
                 except MXTokenExpiredError:
                     self._mx_trigger_token_expired()  # boot 报告里已含失败步骤
+                except Exception as exc:  # noqa: BLE001 - 启动序列异常不能炸掉登录接口
+                    logger.error("MX 启动序列异常: %s", exc, exc_info=True)
+                    record("启动序列", False, str(exc)[:100])
                 else:
                     try:
                         count = await service.sync_rooms()

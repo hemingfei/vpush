@@ -93,39 +93,6 @@ class MXRoomSyncService:
                                "ms": int((time.monotonic() - started) * 1000)})
         return report
 
-    def boot_sequence(self):
-        """官方网页端冷启动的只读启动序列（room/list 除外，由 sync_rooms 负责）。
-
-        顺序与真实打开网页一致：user/info → system/config → msg/tip →
-        grouplist → 平台公告，全部走同一个复用客户端（同一连接）。TOKEN 过期
-        向上抛出（触发熔断）；其余单个请求失败只记日志不中断——对齐是最佳
-        努力，不能反过来影响消息链路。
-        """
-        client = self._get_client()
-        steps = (
-            ("user/info", client.user_info),
-            ("system/config", client.system_config),
-            ("msg/tip", client.msg_tip),
-            ("room/grouplist", client.room_grouplist),
-            ("master-notice", client.master_notice),
-        )
-        for name, fn in steps:
-            try:
-                result = fn()
-                # user/info 的返回里带服务端当前 token：与本地配置不一致说明服务端
-                # 已轮换，当前 token 随时会失效——提前告警，避免等 401 才发现
-                if name == "user/info" and isinstance(result, dict):
-                    remote = (result.get("info") or {}).get("token")
-                    if remote and remote != self.config.token:
-                        logger.warning(
-                            "MX user/info 返回 token 与本地配置不一致（服务端可能已轮换），"
-                            "请尽快到后台「数据源 → MX」更换 TOKEN"
-                        )
-            except MXTokenExpiredError:
-                raise
-            except Exception as exc:  # noqa: BLE001 - 对齐请求失败不影响消息链路
-                logger.warning("MX 启动序列 %s 失败（忽略）: %s", name, exc)
-
     def _sync_rooms_blocking(self) -> int:
         if not self.config.token:
             logger.warning("MX token not configured, skipping room sync")
