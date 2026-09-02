@@ -1957,30 +1957,61 @@ function homeHasFilters() {
   return !!(state.homeQ || state.homeCategory || state.homeSubscribed || state.homeFavorite);
 }
 
-function homeScopeTogglesHtml() {
-  return `<div class="tl-filter-views">
-    <button type="button" id="home-sub-toggle" class="fav-toggle ${state.homeSubscribed ? "fav-on" : ""}" aria-pressed="${state.homeSubscribed}" onclick="toggleHomeSubscribed()">已订阅</button>
-    <button type="button" id="home-fav-toggle" class="fav-toggle ${state.homeFavorite ? "fav-on" : ""}" aria-pressed="${state.homeFavorite}" onclick="toggleHomeFavorite()">${STAR_SVG} 特别关注</button>
+function homePanelHasFilters() {
+  return !!(state.homeCategory || state.homeFavorite || (isMobileTimelineFilter() && (state.homeQ || state.homeSubscribed)));
+}
+
+function homeSubscribedToggleHtml() {
+  return `<button type="button" id="home-sub-toggle" class="fav-toggle ${state.homeSubscribed ? "fav-on" : ""}" aria-pressed="${state.homeSubscribed}" onclick="toggleHomeSubscribed()">已订阅</button>`;
+}
+
+function homeScopeTogglesHtml(includeSubscribed) {
+  return `<div class="home-scope-filters">
+    ${includeSubscribed ? `<label class="switch home-scope-switch">
+      <input type="checkbox" id="home-sub-toggle" ${state.homeSubscribed ? "checked" : ""} onchange="toggleHomeSubscribed()">
+      <span class="track"></span><span>只看已订阅</span>
+    </label>` : ""}
+    <label class="switch home-scope-switch">
+      <input type="checkbox" id="home-fav-toggle" ${state.homeFavorite ? "checked" : ""} onchange="toggleHomeFavorite()">
+      <span class="track"></span><span>只看特别关注</span>
+    </label>
+  </div>`;
+}
+
+function homeFilterToggleHtml() {
+  return `<button type="button" id="home-filter-toggle" class="fav-toggle home-filter-toggle ${homePanelHasFilters() ? "has-filter" : ""}" aria-label="筛选" aria-expanded="false" aria-controls="home-filter-panel" onclick="homeToggleFilter()">${FILTER_ICON}</button>`;
+}
+
+function homeFilterPanelHtml(mobile) {
+  return `<div class="home-filter-content" id="home-filter-panel" hidden>
+    ${mobile ? `<div class="search-bar home-search-bar">
+      ${SEARCH_ICON}
+      <input id="home-search" placeholder="搜索昵称或 ID" value="${escapeHtml(state.homeQ || "")}" oninput="homeSearch(this.value)">
+    </div>` : ""}
+    <div class="home-cats" id="home-cats"></div>
+    ${homeScopeTogglesHtml(mobile)}
+    <div class="home-filter-actions">
+      <button class="btn-ghost" onclick="homeResetFilters()">清除筛选</button>
+    </div>
   </div>`;
 }
 
 function toggleHomeSubscribed() {
   state.homeSubscribed = !state.homeSubscribed;
-  const btn = $("#home-sub-toggle");
-  if (btn) {
-    btn.classList.toggle("fav-on", state.homeSubscribed);
-    btn.setAttribute("aria-pressed", String(state.homeSubscribed));
+  const toggle = $("#home-sub-toggle");
+  if (toggle?.matches('input[type="checkbox"]')) {
+    toggle.checked = state.homeSubscribed;
+  } else if (toggle) {
+    toggle.classList.toggle("fav-on", state.homeSubscribed);
+    toggle.setAttribute("aria-pressed", String(state.homeSubscribed));
   }
   renderHomeList();
 }
 
 function toggleHomeFavorite() {
   state.homeFavorite = !state.homeFavorite;
-  const btn = $("#home-fav-toggle");
-  if (btn) {
-    btn.classList.toggle("fav-on", state.homeFavorite);
-    btn.setAttribute("aria-pressed", String(state.homeFavorite));
-  }
+  const toggle = $("#home-fav-toggle");
+  if (toggle) toggle.checked = state.homeFavorite;
   renderHomeList();
 }
 
@@ -2072,28 +2103,19 @@ async function renderHome(seq) {
             <div class="tl-pills" id="home-mobile-platforms" role="radiogroup" aria-label="平台">
               ${homeMobilePlatformsHtml()}
             </div>
-            <button type="button" id="home-filter-toggle" class="fav-toggle ${homeHasFilters() ? "has-filter" : ""}" aria-label="筛选" aria-expanded="false" aria-controls="home-filter-panel" onclick="homeToggleFilter()">${FILTER_ICON}筛选</button>
+            ${homeFilterToggleHtml()}
           </div>
-          <div class="home-filter-content" id="home-filter-panel" hidden>
-            <div class="search-bar home-search-bar">
-              ${SEARCH_ICON}
-              <input id="home-search" placeholder="搜索昵称或 ID" value="${escapeHtml(state.homeQ || "")}" oninput="homeSearch(this.value)">
-            </div>
-            <div class="home-cats" id="home-cats"></div>
-            ${homeScopeTogglesHtml()}
-            <div class="home-filter-actions">
-              <button class="btn-ghost" onclick="homeResetFilters()">清除筛选</button>
-            </div>
-          </div>` : `
+          ${homeFilterPanelHtml(true)}` : `
           <div class="toolbar" style="margin-top:12px">
             <div class="search-bar" style="flex:1;min-width:220px">
               ${SEARCH_ICON}
               <input id="home-search" placeholder="搜索昵称或 ID，即时过滤" oninput="homeSearch(this.value)">
             </div>
             <div class="platform-tabs" id="platform-tabs"></div>
-            ${homeScopeTogglesHtml()}
+            ${homeSubscribedToggleHtml()}
+            ${homeFilterToggleHtml()}
           </div>
-          <div class="home-cats" id="home-cats"></div>`}
+          ${homeFilterPanelHtml(false)}`}
       </header>
       ${state.user?.is_admin ? "" : `
         <div class="request-banner">
@@ -2145,7 +2167,7 @@ function homeFilteredKols() {
 }
 
 function renderHomeList() {
-  $("#home-filter-toggle")?.classList.toggle("has-filter", homeHasFilters());
+  $("#home-filter-toggle")?.classList.toggle("has-filter", homePanelHasFilters());
   const cats = $("#home-cats");
   if (cats) cats.innerHTML = categoryChipsHtml();
   const meta = $("#catalog-meta");

@@ -952,8 +952,19 @@ img.pt-icon { display: block; object-fit: contain; }
 
 /* 分类 chips */
 .home-cats { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.home-filter > summary { list-style: none; }
-.home-filter > summary::-webkit-details-marker { display: none; }
+.home-filter-content {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--color-bg-muted);
+}
+.home-filter-content[hidden] { display: none; }
+.home-scope-filters { display: flex; flex-wrap: wrap; gap: 16px; }
+.home-scope-switch { min-height: 44px; }
+.home-filter-toggle { width: 44px; height: 44px; padding: 0; justify-content: center; flex-shrink: 0; }
 .home-head .fav-toggle.has-filter { border-color: var(--color-accent-text); color: var(--color-accent-text); background: var(--color-accent-soft); font-weight: var(--font-weight-semibold); }
 .cat-chip {
   height: 32px; padding: 0 14px;
@@ -2270,7 +2281,6 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   .home-head { margin-bottom: 10px; position: relative; }
   .home-head .section-title { margin-top: 0; }
   .home-head .section-meta { margin-top: 2px; }
-  .home-filter-content { display: grid; gap: 10px; margin-top: 12px; }
   .home-search-bar { min-height: 44px; }
   .home-filter-content .home-cats {
     margin-top: 0;
@@ -2320,9 +2330,11 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   .icon-badge-bar .tl-actions { display: contents; }
   .icon-badge-bar .tl-pill,
   .icon-badge-bar > .fav-toggle,
+  .icon-badge-bar > .home-filter-toggle,
   .icon-badge-bar .tl-actions button {
     width: 100%;
     min-width: 0;
+    height: 44px;
     padding: 0;
     border-radius: var(--radius-control);
     justify-content: center;
@@ -2333,7 +2345,6 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   .icon-badge-bar .tl-actions button { font-size: 0; gap: 0; }
   .icon-badge-bar .funnel-icon,
   .icon-badge-bar .star-icon { width: 20px; height: 20px; }
-  .home-filter-content[hidden] { display: none; }
   .home-head .icon-badge-bar { margin-top: 10px; }
   .tl-new-badge-btn { min-height: 44px; overflow: hidden; }
   .kol-item { flex-wrap: wrap; }
