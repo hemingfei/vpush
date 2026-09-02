@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 _DAY_KEY = re.compile(r"^\d{4}$")
 
@@ -15,7 +16,12 @@ def readable_group_ids(db: Any, user: dict[str, Any], groups: Iterable[Any]) -> 
     ids = {str(group.id) for group in groups}
     if is_admin(user):
         return ids
-    return {group_id for group_id in ids if db.ima_kb_can_read(int(user["id"]), group_id)}
+    uid = int(user["id"])
+    acl = {str(group_id) for group_id in db.ima_kb_group_ids_for_user(uid)}
+    subscribed = {
+        str(group_id) for group_id in db.ima_kb_subscribed_group_ids_for_user(uid)
+    }
+    return ids & acl & subscribed
 
 
 def catalog(db: Any, user: dict[str, Any], groups: Iterable[Any]) -> dict[str, list[dict[str, Any]]]:
@@ -26,15 +32,16 @@ def catalog(db: Any, user: dict[str, Any], groups: Iterable[Any]) -> dict[str, l
     if is_admin(user):
         return {"subscribed": items, "available": []}
     uid = int(user["id"])
-    subscribed: list[dict[str, Any]] = []
-    available: list[dict[str, Any]] = []
-    for item in items:
-        group_id = item["id"]
-        if db.ima_kb_can_read(uid, group_id):
-            subscribed.append(item)
-        elif db.ima_kb_can_subscribe(uid, group_id):
-            available.append(item)
-    return {"subscribed": subscribed, "available": available}
+    acl = {str(group_id) for group_id in db.ima_kb_group_ids_for_user(uid)}
+    subscriptions = {
+        str(group_id) for group_id in db.ima_kb_subscribed_group_ids_for_user(uid)
+    }
+    subscribed_ids = acl & subscriptions
+    available_ids = acl - subscriptions
+    return {
+        "subscribed": [item for item in items if str(item["id"]) in subscribed_ids],
+        "available": [item for item in items if str(item["id"]) in available_ids],
+    }
 
 
 def attach_catalog_summary(

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import re
-import shutil
 import sqlite3
 import threading
 import time
@@ -353,10 +352,7 @@ def restore_from_bytes(db: DB, data: bytes) -> None:
         except Exception:
             logger.exception("恢复后无法打开数据库")
             try:
-                shutil.copy2(snap, db.path)
-                Path(str(db.path) + "-wal").unlink(missing_ok=True)
-                Path(str(db.path) + "-shm").unlink(missing_ok=True)
-                db.reopen()
+                db.replace_database(snap)
             except Exception:
                 logger.exception("恢复回滚失败")
             raise BackupError(MSG_ROLLBACK) from None

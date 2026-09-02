@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -243,6 +244,93 @@ def test_restore_upload_valid_db_replaces_and_rollback_on_reopen_fail(monkeypatc
         restore_from_bytes(db, snap.read_bytes())
     assert MSG_ROLLBACK in str(exc.value)
     assert db.get_register_code("STAY01") is not None
+
+
+def test_restore_rollback_waits_for_active_readonly_reader(tmp_path, monkeypatch):
+    from app.backup import MSG_ROLLBACK, BackupError, restore_from_bytes
+
+    db = DB(tmp_path / "live.sqlite")
+    db.set_setting("marker", "old")
+    replacement = DB(tmp_path / "replacement.sqlite")
+    replacement.set_setting("marker", "new")
+    replacement.close()
+    replacement_data = Path(replacement.path).read_bytes()
+    replacement_done = threading.Event()
+    read_active = threading.Event()
+    release_read = threading.Event()
+    restore_done = threading.Event()
+    reader_values = []
+    reader_errors = []
+    restore_errors = []
+    original_connect = sqlite3.connect
+    original_replace = db.replace_database
+    replace_calls = 0
+
+    def block_read():
+        read_active.set()
+        if not release_read.wait(2):
+            raise TimeoutError("reader release timed out")
+        return 1
+
+    def connect(*args, **kwargs):
+        conn = original_connect(*args, **kwargs)
+        if kwargs.get("uri") and "mode=ro" in str(args[0]):
+            conn.create_function("test_block_read", 0, block_read)
+        return conn
+
+    def replace_then_fail_once(candidate):
+        nonlocal replace_calls
+        replace_calls += 1
+        original_replace(candidate)
+        if replace_calls == 1:
+            replacement_done.set()
+            if not read_active.wait(2):
+                raise TimeoutError("reader did not become active")
+            raise RuntimeError("post-replace validation failed")
+
+    def read():
+        try:
+            if not replacement_done.wait(2):
+                raise TimeoutError("replacement did not complete")
+            rows = db._read_only_rows(
+                "SELECT value, test_block_read() FROM settings WHERE key = 'marker'"
+            )
+            reader_values.append(rows[0]["value"])
+        except BaseException as exc:
+            reader_errors.append(exc)
+
+    def restore():
+        try:
+            restore_from_bytes(db, replacement_data)
+        except BaseException as exc:
+            restore_errors.append(exc)
+        finally:
+            restore_done.set()
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    monkeypatch.setattr(db, "replace_database", replace_then_fail_once)
+    reader = threading.Thread(target=read)
+    restorer = threading.Thread(target=restore)
+    started = []
+    try:
+        reader.start()
+        started.append(reader)
+        restorer.start()
+        started.append(restorer)
+        assert read_active.wait(2)
+        assert not restore_done.wait(0.1), "rollback completed while reader was active"
+    finally:
+        release_read.set()
+        for thread in started:
+            thread.join(2)
+    assert all(not thread.is_alive() for thread in started)
+    assert reader_errors == []
+    assert reader_values == ["new"]
+    assert len(restore_errors) == 1
+    assert isinstance(restore_errors[0], BackupError)
+    assert restore_errors[0].message == MSG_ROLLBACK
+    assert replace_calls == 2
+    assert db.get_setting("marker") == "old"
 
 
 def test_scheduled_upload_and_restore_webdav(monkeypatch):

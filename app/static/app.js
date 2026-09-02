@@ -643,7 +643,7 @@ function mountKnowledgeListShell() {
   clearImaPdfUrl();
   $("#main").innerHTML = `
     <section class="section-panel ima-report-page" id="ima-report-page">
-      <div id="kb-list" tabindex="-1"></div>
+      <div id="kb-list" tabindex="-1"><div class="admin-skeleton" aria-hidden="true"></div></div>
     </section>`;
 }
 
@@ -1319,11 +1319,15 @@ async function renderKnowledge(seq, encodedMediaId = "") {
   stopImaDocumentsAutoLoad();
   const mediaId = encodedMediaId ? decodeURIComponent(encodedMediaId) : "";
   setPageTitle("研报库");
-  if (!$("#ima-report-page") && !$("#ima-reader-page")) {
+  if (mediaId && !$("#ima-reader-page")) {
     $("#main").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
   }
+  if (!mediaId) mountKnowledgeListShell();
   const catalogPromise = api("/api/ima-documents/catalog");
   const documentsPromise = mediaId || currentImaListSnapshot() ? null : api(imaDocumentsRequestPath());
+  const documentsRenderTask = mediaId
+    ? null
+    : renderImaDocuments(seq, { prefetched: documentsPromise });
   try {
     const settled = await Promise.allSettled(
       documentsPromise ? [catalogPromise, documentsPromise] : [catalogPromise]
@@ -1359,6 +1363,10 @@ async function renderKnowledge(seq, encodedMediaId = "") {
     state.imaCatalogAvailable = available;
     const isAdmin = !!state.user?.is_admin;
     const selectedGroup = imaDocumentsGroupFromRoute();
+    const sourceControl = $("#kb-list .ima-report-source");
+    if (sourceControl) {
+      sourceControl.outerHTML = knowledgeSourceControlsHtml(selectedGroup);
+    }
     if (catalogOk && selectedGroup && !isAdmin && !subscribed.some((group) => String(group.id) === selectedGroup)) {
       setPageTitle("研报库", true, "knowledge", "回研报库");
       $("#main").innerHTML = emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回研报库</button></div>`);
@@ -1370,7 +1378,6 @@ async function renderKnowledge(seq, encodedMediaId = "") {
       await renderImaDocument(seq, mediaId);
       return;
     }
-    mountKnowledgeListShell();
     if (!subscribed.length && catalogOk) {
       const list = $("#kb-list");
       const controls = `<div class="ima-report-head"><div class="ima-report-filters ima-report-filters-row">${knowledgeSourceControlsHtml("")}</div></div>`;
@@ -1389,7 +1396,7 @@ async function renderKnowledge(seq, encodedMediaId = "") {
       }
       return;
     }
-    await renderImaDocuments(seq, { prefetched: documentsPromise });
+    await documentsRenderTask;
     if (catalogWarning) {
       const warning = `<p class="section-meta ima-catalog-warning">${escapeHtml(catalogWarning)}</p>`;
       const head = $("#kb-list .ima-report-head");

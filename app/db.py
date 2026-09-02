@@ -926,6 +926,9 @@ class DB:
         # RLock：_migrate 等内部路径会在持锁状态下调用 _rows/_execute，
         # 非重入锁会自死锁
         self._lock = threading.RLock()
+        self._reader_condition = threading.Condition()
+        self._active_readers = 0
+        self._replace_pending = False
         self._open_unlocked()
         self._migrate()
         self._conn.commit()
@@ -966,19 +969,33 @@ class DB:
             self._conn.commit()
 
     def replace_database(self, candidate: str | Path) -> None:
-        """关闭连接，用 candidate 覆盖库文件后重新打开。调用方负责失败回滚。"""
+        """等待只读连接退出，原子替换库文件后重新打开。调用方负责失败回滚。"""
         path = Path(self.path)
+        temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
         with self._lock:
+            with self._reader_condition:
+                self._replace_pending = True
+                while self._active_readers:
+                    self._reader_condition.wait()
             try:
-                self._conn.close()
-            except sqlite3.Error:
-                pass
-            shutil.copy2(candidate, path)
-            Path(str(path) + "-wal").unlink(missing_ok=True)
-            Path(str(path) + "-shm").unlink(missing_ok=True)
-            self._open_unlocked()
-            self._migrate()
-            self._conn.commit()
+                shutil.copy2(candidate, temp)
+                try:
+                    self._conn.close()
+                except sqlite3.Error:
+                    pass
+                temp.replace(path)
+                Path(str(path) + "-wal").unlink(missing_ok=True)
+                Path(str(path) + "-shm").unlink(missing_ok=True)
+                self._open_unlocked()
+                self._migrate()
+                self._conn.commit()
+            finally:
+                try:
+                    temp.unlink(missing_ok=True)
+                finally:
+                    with self._reader_condition:
+                        self._replace_pending = False
+                        self._reader_condition.notify_all()
 
     def _migrate(self):
         post_cols = {row["name"] for row in self._rows("PRAGMA table_info(posts)")}
@@ -1565,6 +1582,29 @@ class DB:
             cur = self._conn.execute(sql, params)
             return [dict(row) for row in cur.fetchall()]
 
+    def _read_only_rows(self, sql, params=()):
+        if self.path == ":memory:":
+            return self._rows(sql, params)
+        with self._reader_condition:
+            while self._replace_pending:
+                self._reader_condition.wait()
+            self._active_readers += 1
+        try:
+            conn = sqlite3.connect(
+                Path(self.path).resolve().as_uri() + "?mode=ro", uri=True
+            )
+            try:
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA busy_timeout = 5000")
+                return [dict(row) for row in conn.execute(sql, params).fetchall()]
+            finally:
+                conn.close()
+        finally:
+            with self._reader_condition:
+                self._active_readers -= 1
+                if not self._active_readers:
+                    self._reader_condition.notify_all()
+
     def _execute(self, sql, params=()):
         with self._lock:
             cur = self._conn.execute(sql, params)
@@ -1918,7 +1958,7 @@ class DB:
     def ima_kb_acl_usernames(self, group_id: str) -> list[str]:
         return [
             r["username"]
-            for r in self._rows(
+            for r in self._read_only_rows(
                 "SELECT u.username FROM ima_kb_acl a JOIN users u ON u.id = a.user_id "
                 "WHERE a.group_id = ? ORDER BY u.username",
                 (group_id,),
@@ -1928,7 +1968,7 @@ class DB:
     def ima_kb_acl_user_ids(self, group_id: str) -> list[int]:
         return [
             r["user_id"]
-            for r in self._rows(
+            for r in self._read_only_rows(
                 "SELECT user_id FROM ima_kb_acl WHERE group_id = ?",
                 (group_id,),
             )
@@ -1937,7 +1977,7 @@ class DB:
     def ima_kb_group_ids_for_user(self, user_id: int) -> list[str]:
         return [
             str(row["group_id"])
-            for row in self._rows(
+            for row in self._read_only_rows(
                 "SELECT group_id FROM ima_kb_acl WHERE user_id = ? ORDER BY group_id",
                 (int(user_id),),
             )
@@ -1946,7 +1986,7 @@ class DB:
     def ima_kb_subscribed_group_ids_for_user(self, user_id: int) -> list[str]:
         return [
             str(row["group_id"])
-            for row in self._rows(
+            for row in self._read_only_rows(
                 "SELECT group_id FROM ima_kb_subscriptions WHERE user_id = ? ORDER BY group_id",
                 (int(user_id),),
             )
@@ -1954,13 +1994,13 @@ class DB:
 
     def ima_kb_acl_map(self) -> dict[int, list[str]]:
         mapped: dict[int, list[str]] = {}
-        for row in self._rows("SELECT user_id, group_id FROM ima_kb_acl"):
+        for row in self._read_only_rows("SELECT user_id, group_id FROM ima_kb_acl"):
             mapped.setdefault(int(row["user_id"]), []).append(str(row["group_id"]))
         return mapped
 
     def ima_kb_sub_map(self) -> dict[int, list[str]]:
         mapped: dict[int, list[str]] = {}
-        for row in self._rows("SELECT user_id, group_id FROM ima_kb_subscriptions"):
+        for row in self._read_only_rows("SELECT user_id, group_id FROM ima_kb_subscriptions"):
             mapped.setdefault(int(row["user_id"]), []).append(str(row["group_id"]))
         return mapped
 
@@ -2037,7 +2077,7 @@ class DB:
 
     def ima_kb_can_subscribe(self, user_id: int, group_id: str) -> bool:
         return bool(
-            self._rows(
+            self._read_only_rows(
                 "SELECT 1 FROM ima_kb_acl WHERE group_id = ? AND user_id = ?",
                 (group_id, user_id),
             )
@@ -2062,7 +2102,7 @@ class DB:
 
     def ima_kb_is_subscribed(self, user_id: int, group_id: str) -> bool:
         return bool(
-            self._rows(
+            self._read_only_rows(
                 "SELECT 1 FROM ima_kb_subscriptions WHERE user_id = ? AND group_id = ?",
                 (user_id, group_id),
             )
@@ -2187,6 +2227,10 @@ class DB:
     # ---- User ----
     def get_user(self, user_id: int) -> dict | None:
         rows = self._rows("SELECT * FROM users WHERE id = ?", (user_id,))
+        return rows[0] if rows else None
+
+    def get_authenticated_user(self, user_id: int) -> dict | None:
+        rows = self._read_only_rows("SELECT * FROM users WHERE id = ?", (user_id,))
         return rows[0] if rows else None
 
     def get_user_by_username(self, username: str) -> dict | None:
@@ -4131,7 +4175,8 @@ class DB:
 
     # ---- Settings ----
     def get_setting(self, key: str) -> str | None:
-        rows = self._rows("SELECT value FROM settings WHERE key = ?", (key,))
+        reader = self._read_only_rows if str(key).startswith("ima_") else self._rows
+        rows = reader("SELECT value FROM settings WHERE key = ?", (key,))
         return rows[0]["value"] if rows else None
 
     def set_setting(self, key: str, value: str) -> None:
@@ -4559,7 +4604,7 @@ class DB:
         return len(prepared)
 
     def ima_document_index_meta(self) -> dict:
-        rows = self._rows("SELECT * FROM ima_document_index_meta WHERE id = 1")
+        rows = self._read_only_rows("SELECT * FROM ima_document_index_meta WHERE id = 1")
         if not rows:
             return self._ima_meta_fallback()
         meta = self._ima_meta_fallback()
@@ -4659,7 +4704,7 @@ class DB:
             groups, requested_query, requested_day, requested_tag
         )
         item_params = ([pattern] * rank_n + list(where_params)) if pattern else list(where_params)
-        rows = self._rows(
+        rows = self._read_only_rows(
             f"SELECT d.*, {rank_sql} AS match_rank FROM ima_document_index d "
             f"WHERE {where_sql} "
             # 跨年排序：sort_date（YYYY-MM-DD）DESC，空串（unknown）沉底
@@ -4684,11 +4729,11 @@ class DB:
                 "group_counts": {},
             }
 
-        count_row = self._rows(
+        count_row = self._read_only_rows(
             f"SELECT COUNT(*) AS n FROM ima_document_index d WHERE {where_sql}",
             where_params,
         )
-        group_rows = self._rows(
+        group_rows = self._read_only_rows(
             f"SELECT d.group_id AS group_id, COUNT(*) AS n "
             f"FROM ima_document_index d WHERE {where_sql} GROUP BY d.group_id",
             where_params,
@@ -4700,7 +4745,7 @@ class DB:
         if need_day_facets:
             days = [
                 row["day"]
-                for row in self._rows(
+                for row in self._read_only_rows(
                     f"SELECT DISTINCT d.day FROM ima_document_index d "
                     f"WHERE {where_sql} ORDER BY d.valid_day DESC, d.day DESC",
                     where_params,
@@ -4709,7 +4754,7 @@ class DB:
         else:
             days = []
         if requested_day:
-            tag_rows = self._rows(
+            tag_rows = self._read_only_rows(
                 "SELECT t.tag AS tag, COUNT(*) AS n FROM ima_document_tags t "
                 "JOIN ima_document_index d "
                 "ON d.group_id = t.group_id AND d.media_id = t.media_id "
@@ -4717,7 +4762,7 @@ class DB:
                 where_params,
             )
         else:
-            tag_rows = self._rows(
+            tag_rows = self._read_only_rows(
                 "SELECT t.tag AS tag, COUNT(*) AS n FROM ima_document_tags t "
                 f"WHERE t.group_id IN ({', '.join('?' for _ in groups)}) "
                 "GROUP BY t.tag ORDER BY n DESC, t.tag",
@@ -4757,7 +4802,7 @@ class DB:
             str(day or "").strip(),
             str(tag or "").strip(),
         )
-        rows = self._rows(
+        rows = self._read_only_rows(
             f"SELECT COUNT(*) AS n FROM ima_document_index d WHERE {where_sql}",
             where_params,
         )
@@ -4818,7 +4863,7 @@ class DB:
         pair_sql = " OR ".join(
             "(d.group_id = ? AND d.media_id = ?)" for _ in pairs
         )
-        rows = self._rows(
+        rows = self._read_only_rows(
             f"SELECT d.*, CASE WHEN {metadata_where} THEN 1 ELSE 0 END "
             "AS metadata_match FROM ima_document_index d "
             f"WHERE {base_where} AND ({pair_sql})",
@@ -4840,26 +4885,25 @@ class DB:
         if not groups:
             return {}
         placeholders = ", ".join("?" for _ in groups)
-        rows = self._rows(
-            "SELECT group_id, day AS latest_day, sort_date AS latest_sort_date, "
-            "name AS latest_title, media_id AS latest_media_id, document_count FROM ("
-            "SELECT group_id, day, sort_date, name, media_id, "
-            "COUNT(*) OVER (PARTITION BY group_id) AS document_count, "
-            "ROW_NUMBER() OVER ("
-            "PARTITION BY group_id "
-            "ORDER BY (sort_date = '') ASC, sort_date DESC, name DESC"
-            ") AS rn FROM ima_document_index "
-            f"WHERE group_id IN ({placeholders})"
-            ") ranked WHERE rn = 1",
+        rows = self._read_only_rows(
+            "WITH counts AS ("
+            "SELECT group_id, COUNT(*) AS document_count FROM ima_document_index "
+            f"WHERE group_id IN ({placeholders}) GROUP BY group_id) "
+            "SELECT counts.group_id, counts.document_count, "
+            "d.day, d.sort_date, d.name, d.media_id FROM counts "
+            "JOIN ima_document_index AS d ON d.rowid = ("
+            "SELECT latest.rowid FROM ima_document_index AS latest "
+            "WHERE latest.group_id = counts.group_id "
+            "ORDER BY latest.sort_date DESC, latest.name DESC LIMIT 1)",
             groups,
         )
         return {
             row["group_id"]: {
                 "document_count": int(row["document_count"]),
-                "latest_day": row["latest_day"],
-                "latest_sort_date": row["latest_sort_date"],
-                "latest_title": row["latest_title"],
-                "latest_media_id": row["latest_media_id"],
+                "latest_day": row["day"],
+                "latest_sort_date": row["sort_date"],
+                "latest_title": row["name"],
+                "latest_media_id": row["media_id"],
             }
             for row in rows
         }
@@ -4874,7 +4918,7 @@ class DB:
         groups = _ima_authorized_groups(readable_group_ids, group)
         if not media_id or not groups:
             return None
-        rows = self._rows(
+        rows = self._read_only_rows(
             "SELECT * FROM ima_document_index WHERE media_id = ? "
             f"AND group_id IN ({', '.join('?' for _ in groups)}) "
             "ORDER BY valid_day DESC, day DESC, name DESC",
@@ -4885,7 +4929,7 @@ class DB:
         return _ima_public_document(rows[0])
 
     def ima_document_index_count(self) -> int:
-        rows = self._rows("SELECT COUNT(*) AS n FROM ima_document_index")
+        rows = self._read_only_rows("SELECT COUNT(*) AS n FROM ima_document_index")
         return int(rows[0]["n"] if rows else 0)
 
     def get_tag_vocabulary(self) -> list[dict]:

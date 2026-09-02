@@ -88,6 +88,7 @@ IMA_PURE_LAST_FINISHED_KEY = "ima_pure_last_finished_at"
 IMA_PURE_LAST_RESULT_KEY = "ima_pure_last_result"
 IMA_PURE_DISCOVERY_KEY = "ima_pure_discovery"
 IMA_PURE_GROUP_RUNTIME_KEY = "ima_pure_group_runtime"
+IMA_MAINTENANCE_FINGERPRINT_KEY = "ima_maintenance_completed_fingerprint"
 IMA_LEGACY_GROUP_ID = "legacy"
 IMA_LEGACY_GROUP_NAME = "IMA 文档"
 IMA_PURE_UID_DEFAULT = "001aa361168019ef"
@@ -2904,17 +2905,20 @@ class ImaDocumentService:
         page = getattr(self.db, "ima_document_page", None)
         if not callable(page):
             return False
-        status = self.read_index_status()
-        counter = getattr(self.db, "ima_document_index_count", None)
-        count = int(counter()) if callable(counter) else 0
         getter = getattr(self.db, "ima_document_index_meta", None)
-        meta = getter() if callable(getter) else {}
+        meta = (getter() or {}) if callable(getter) else {}
         fingerprint = str(meta.get("fingerprint") or "")
         if fingerprint != self._source_fingerprint():
             return False
-        if status["status"] == "ready":
+        status = str(meta.get("status") or "fallback")
+        if status == "ready":
             return True
-        return status["status"] in {"rebuilding", "failed"} and count > 0
+        if "document_count" in meta:
+            count = int(meta.get("document_count") or 0)
+        else:
+            counter = getattr(self.db, "ima_document_index_count", None)
+            count = int(counter()) if callable(counter) else 0
+        return status in {"rebuilding", "failed"} and count > 0
 
     def rebuild_read_index(
         self, groups: tuple[ImaGroupConfig, ...] | None = None
@@ -3383,28 +3387,55 @@ class ImaDocumentService:
         except Exception:
             logger.exception("IMA document index rebuild failed")
         with self._sync_lock:
-            if self.store.archive_writable():
+            fingerprint = self._source_fingerprint() if self.storage_status.remote else ""
+            checkpoint_read_ok = True
+            maintenance_done = False
+            if self.storage_status.remote:
                 try:
-                    restored = self.store.restore_original_filenames()
-                    if restored.get("renamed"):
-                        logger.info("IMA restored %s original filenames", restored["renamed"])
+                    maintenance_done = (
+                        self.db.get_setting(IMA_MAINTENANCE_FINGERPRINT_KEY)
+                        == fingerprint
+                    )
                 except Exception:
-                    logger.exception("IMA original filename restore failed")
-            elif self.storage_status.remote:
-                logger.warning("IMA archive unavailable; skip filename restore")
-            if self.store.archive_readable():
-                try:
-                    rebuilt = self.store.rebuild_manifest_from_state()
-                    if rebuilt:
-                        logger.info("IMA rebuilt %s manifest records from state", rebuilt)
-                except Exception:
-                    logger.exception("IMA manifest rebuild from state failed")
-                try:
-                    self.retag_all()
-                except Exception:
-                    logger.exception("IMA document retag failed")
-            elif self.storage_status.remote:
-                logger.warning("IMA archive unavailable; skip manifest rebuild and retag")
+                    checkpoint_read_ok = False
+                    logger.exception("IMA maintenance checkpoint read failed")
+            maintenance_ok = True
+            if not maintenance_done:
+                if self.store.archive_writable():
+                    try:
+                        restored = self.store.restore_original_filenames()
+                        if restored.get("renamed"):
+                            logger.info("IMA restored %s original filenames", restored["renamed"])
+                    except Exception:
+                        maintenance_ok = False
+                        logger.exception("IMA original filename restore failed")
+                elif self.storage_status.remote:
+                    maintenance_ok = False
+                    logger.warning("IMA archive unavailable; skip filename restore")
+                if self.store.archive_readable():
+                    try:
+                        rebuilt = self.store.rebuild_manifest_from_state()
+                        if rebuilt:
+                            logger.info("IMA rebuilt %s manifest records from state", rebuilt)
+                    except Exception:
+                        maintenance_ok = False
+                        logger.exception("IMA manifest rebuild from state failed")
+                    try:
+                        self.retag_all()
+                    except Exception:
+                        maintenance_ok = False
+                        logger.exception("IMA document retag failed")
+                elif self.storage_status.remote:
+                    maintenance_ok = False
+                    logger.warning("IMA archive unavailable; skip manifest rebuild and retag")
+                if self.storage_status.remote and maintenance_ok and checkpoint_read_ok:
+                    try:
+                        self.db.set_setting(
+                            IMA_MAINTENANCE_FINGERPRINT_KEY,
+                            self._source_fingerprint(),
+                        )
+                    except Exception:
+                        logger.exception("IMA maintenance checkpoint update failed")
         try:
             self._rebuild_index_if_needed()
         except Exception:

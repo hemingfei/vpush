@@ -3626,15 +3626,22 @@ def test_ima_documents_follow_latest_dynamic_navigation():
 
 def test_knowledge_parallel_loads_catalog_and_first_page():
     render = _fn_body("renderKnowledge")
+    list_shell = _fn_body("mountKnowledgeListShell")
     list_fn = _fn_body("renderImaDocuments")
     path_fn = _fn_body("imaDocumentsRequestPath")
-    skeleton = render.index("admin-skeleton")
+    mount = render.index("if (!mediaId) mountKnowledgeListShell();")
     catalog = render.index('api("/api/ima-documents/catalog")')
     documents = render.index("api(imaDocumentsRequestPath())")
+    render_task = render.index("renderImaDocuments(seq, { prefetched: documentsPromise })")
     first_await = render.index("await ")
     settled = render.index("Promise.allSettled")
-    assert skeleton < catalog < first_await
-    assert skeleton < documents < first_await
+    assert mount < catalog < first_await
+    assert mount < documents < first_await
+    assert documents < render_task < settled
+    assert render.count("renderImaDocuments(seq, { prefetched: documentsPromise })") == 1
+    assert "await documentsRenderTask" in render
+    assert render.count("mountKnowledgeListShell()") == 1
+    assert 'id="kb-list" tabindex="-1"><div class="admin-skeleton"' in list_shell
     assert "Promise.allSettled" in render
     assert settled >= first_await
     assert "prefetched" in list_fn
@@ -3650,6 +3657,9 @@ def test_knowledge_parallel_loads_catalog_and_first_page():
     assert "!mediaId && !snapshot" in render
     assert "catalogOk && selectedGroup" in render
     assert "!subscribed.length && catalogOk" in render
+    assert "knowledgeSourceControlsHtml(selectedGroup)" in render
+    assert ".ima-report-source" in render
+    assert "if (mediaId)" in render
 
 
 def test_knowledge_index_status_copy_is_admin_only():
