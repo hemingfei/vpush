@@ -137,13 +137,15 @@ def _in_x_fallback(db: DB) -> bool:
 
 
 def _is_platform_wide_error(exc: BaseException) -> bool:
-    """只有 cookie/登录/代理池枯竭才停整平台；单大V超时不连坐。"""
+    """Cookie、登录、限流或代理池枯竭时停整平台；单大V超时不连坐。"""
     from .proxy import ProxyUnavailable
 
     if isinstance(exc, ProxyUnavailable):
         return True
     text = str(exc)
     if any(token in text for token in ("cookie", "WAF", "反爬", "登录")):
+        return True
+    if "X GraphQL" in text and "HTTP 429" in text:
         return True
     return "login" in text.lower()
 
@@ -916,6 +918,10 @@ def poll_once(
         client = httpx.Client(timeout=15)
         try:
             with platform_sem[kol["platform"]]:
+                # 同轮已有 worker 判定整平台故障时，不再让排队任务继续撞上游。
+                with platform_lock[kol["platform"]]:
+                    if now < state.skip_until:
+                        return
                 _fetch_kol_once(
                     db,
                     fetchers,
@@ -1087,12 +1093,15 @@ def _fetch_kol_once(
     note_fetch_proxy(fetcher, True)
     recovered = False
     with state_lock:
+        # 同轮并发请求可能已判定整平台故障；单个成功不能清掉该退避。
+        platform_blocked = now < state.skip_until
         recovered = kol["id"] in state.alerted_kols
         if recovered:
             state.alerted_kols.discard(kol["id"])
         state.kol_fails[kol["id"]] = 0
-        state.fail_count = 0
-        state.skip_until = 0.0
+        if not platform_blocked:
+            state.fail_count = 0
+            state.skip_until = 0.0
         state.kol_skip_until.pop(kol["id"], None)
         state.last_fetched[kol["id"]] = time.monotonic()
         if round_stats is not None:

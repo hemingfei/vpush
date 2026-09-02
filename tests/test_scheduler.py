@@ -967,6 +967,50 @@ def test_platform_wide_errors_do_not_auto_disable_kol(monkeypatch):
     assert not any("已自动停用" in t for t in notifier.texts)
 
 
+def test_twitter_429_stops_queued_kols_and_keeps_platform_backoff(monkeypatch):
+    """X 限流后最多放行已并发的请求，不能继续把整批 KOL 打完。"""
+    db = make_db()
+    for i in range(8):
+        add_kol_subscribed(db, "twitter", f"X{i}", f"x{i}")
+    states = {"twitter": PlatformState()}
+    calls = 0
+    lock = threading.Lock()
+    started = threading.Barrier(2)
+
+    class RateLimitedFetcher:
+        def fetch(self, kol):
+            nonlocal calls
+            with lock:
+                calls += 1
+                current = calls
+            if current <= 2:
+                started.wait(timeout=5)
+            if current == 1:
+                raise RuntimeError("X GraphQL UserTweets HTTP 429")
+            if current == 2:
+                deadline = time.monotonic() + 5
+                while not states["twitter"].skip_until and time.monotonic() < deadline:
+                    time.sleep(0.001)
+                assert states["twitter"].skip_until
+            return []
+
+    monkeypatch.setattr("app.scheduler.random.uniform", lambda *_: 0)
+    fetcher = RateLimitedFetcher()
+    poll_once(db, {"twitter": fetcher}, [], states, interval_seconds=0)
+
+    assert calls == 2
+    assert states["twitter"].skip_until > time.monotonic()
+    assert states["twitter"].fail_count == 1
+    stats = db.source_event_stats("twitter", 24)
+    assert stats["ok"] == stats["fail"] == 1
+
+    states["twitter"].skip_until = time.monotonic() - 1
+    poll_once(db, {"twitter": fetcher}, [], states, interval_seconds=0)
+    assert calls > 2
+    assert states["twitter"].skip_until == 0
+    assert states["twitter"].fail_count == 0
+
+
 def test_generic_failures_do_not_auto_disable_at_alert_threshold(monkeypatch):
     """普通 boom 只告警，不在第 3 次就停用。"""
     db = make_db()
