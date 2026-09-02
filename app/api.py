@@ -3460,7 +3460,11 @@ def create_api_router(
         service = _require_feishu_documents()
         try:
             admin_id = service.oauth_callback(state.strip(), code.strip())
-        except FeishuDocumentError:
+        except FeishuDocumentError as exc:
+            logger.warning(
+                "Feishu OAuth callback failed code=%s detail=%s",
+                getattr(exc, "code", 0), str(exc)[:120],
+            )
             from fastapi.responses import RedirectResponse
 
             return RedirectResponse(

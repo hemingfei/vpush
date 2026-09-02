@@ -1737,7 +1737,13 @@ function imaReaderNavHtml(mediaId, groupId = "", snapshot = null) {
 }
 
 function feishuTimelineAssetHtml(asset, mediaId, groupId) {
-  if (!asset?.id) return "";
+  if (!asset?.id) {
+    if (asset?.unavailable) {
+      const kind = asset.kind === "image" ? "图片" : "附件";
+      return `<span class="feishu-asset-missing" role="note">作者未开放${kind}下载，仅飞书内可看</span>`;
+    }
+    return "";
+  }
   const name = asset.name || (asset.kind === "image" ? "文档图片" : "文档附件");
   if (String(asset.mime || "").startsWith("image/") || asset.kind === "image") {
     return `<a class="post-img-link" href="#" onclick="event.preventDefault();openLightbox(this.querySelector('img'))" aria-label="查看${escapeHtml(name)}"><img src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" data-feishu-asset="${escapeHtml(asset.id)}" data-media-id="${escapeHtml(mediaId)}" data-group-id="${escapeHtml(groupId)}" alt="${escapeHtml(name)}" loading="lazy"></a>`;
@@ -1759,7 +1765,7 @@ function feishuTimelineBlockHtml(block, mediaId, groupId) {
   const identity = speaker
     ? `<div class="feishu-entry-speaker"><strong>${escapeHtml(speaker)}</strong>${reply ? `<span>回复 ${escapeHtml(reply)}</span>` : ""}</div>`
     : "";
-  const assets = (block.assets || []).filter((asset) => asset && asset.id);
+  const assets = (block.assets || []).filter((asset) => asset && (asset.id || asset.unavailable));
   const assetHtml = assets.length ? `<div class="post-images feishu-entry-assets">${assets.map((asset) => feishuTimelineAssetHtml(asset, mediaId, groupId)).join("")}</div>` : "";
   return `<div class="feishu-entry-block${speaker ? " has-speaker" : ""}">${identity}${text ? `<p>${escapeHtml(text).replace(/\n/g, "<br>")}</p>` : ""}${assetHtml}</div>`;
 }

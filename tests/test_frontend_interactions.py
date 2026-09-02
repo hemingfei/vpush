@@ -3680,8 +3680,8 @@ def test_static_asset_cache_bust_versions():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=265"' in html
-    assert 'src="/app.js?v=379"' in html
-    assert 'dav-shell-v247' in sw
+    assert 'src="/app.js?v=380"' in html
+    assert 'dav-shell-v248' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

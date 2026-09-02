@@ -296,7 +296,12 @@ class FeishuDocumentClient:
         response = self.client.post(f"{FEISHU_API}/authen/v2/oauth/token", json=payload)
         data = self._json(response)
         if response.status_code >= 400 or data.get("code") not in (None, 0):
-            raise FeishuDocumentError("飞书授权失败", code=int(data.get("code") or response.status_code), auth_required=True)
+            detail = str(data.get("error_description") or data.get("error") or "")[:160]
+            raise FeishuDocumentError(
+                f"飞书授权失败（{data.get('code') or response.status_code}: {detail}）",
+                code=int(data.get("code") or response.status_code),
+                auth_required=True,
+            )
         return data.get("data") if isinstance(data.get("data"), dict) else data
 
     @staticmethod
@@ -362,10 +367,12 @@ class FeishuDocumentClient:
         }
 
     def blocks(self, document_id: str, revision_id: str, access_token: str) -> list[dict[str, Any]]:
+        # 飞书对显式历史 revision 返回 403/1770032（forBidden），只能读最新版；
+        # revision 仅用于变更检测，读取瞬间文档又更新时下一轮同步自愈收敛。
         output: list[dict[str, Any]] = []
         page_token = ""
         while True:
-            params: dict[str, Any] = {"page_size": 500, "document_revision_id": revision_id}
+            params: dict[str, Any] = {"page_size": 500}
             if page_token:
                 params["page_token"] = page_token
             data = self.get(f"/docx/v1/documents/{document_id}/blocks", access_token, params)
@@ -713,7 +720,14 @@ class FeishuDocumentSyncService:
                             token = asset["token"]
                             if token in assets:
                                 continue
-                            payload, mime, disposition = self.client.download_media(token, access_token)
+                            try:
+                                payload, mime, disposition = self.client.download_media(token, access_token)
+                            except FeishuDocumentError as exc:
+                                if exc.auth_required:
+                                    raise  # 令牌失效走上层刷新重试，不能把媒体标成不可用
+                                # 作者关闭下载权限等上游限制：标记跳过，不让整个版本失败
+                                assets[token] = {**asset, "id": "", "unavailable": True}
+                                continue
                             total_media_bytes += len(payload)
                             if total_media_bytes > MAX_DOCUMENT_MEDIA_BYTES:
                                 raise FeishuDocumentError("飞书文档媒体总量超过 250 MB 限制")
