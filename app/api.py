@@ -1375,6 +1375,7 @@ def create_api_router(
     on_mx_config_changed=None,
     on_external_post=None,
     on_mx_ws_control=None,
+    on_mx_alert=None,
     news_service: NewsService | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api")
@@ -4387,7 +4388,6 @@ def create_api_router(
                     "ws_enabled": True,
                     "page_size": 50,
                     "max_history_pages": 100,
-                    "sync_interval_hours": 1,
                 }
             return {
                 "enabled": bool(getattr(mx_config, "enabled", False)),
@@ -4399,7 +4399,6 @@ def create_api_router(
                 "ws_enabled": bool(getattr(mx_config, "ws_enabled", True)),
                 "page_size": int(getattr(mx_config, "page_size", 50)),
                 "max_history_pages": int(getattr(mx_config, "max_history_pages", 100)),
-                "sync_interval_hours": int(getattr(mx_config, "sync_interval_hours", 1)),
             }
         except Exception:
             return {
@@ -4412,7 +4411,6 @@ def create_api_router(
                 "ws_enabled": True,
                 "page_size": 50,
                 "max_history_pages": 100,
-                "sync_interval_hours": 1,
             }
 
 
@@ -4472,8 +4470,6 @@ def create_api_router(
                 config.sources.mx.page_size = max(1, int(raw_body["page_size"] or 50))
             if "max_history_pages" in raw_body:
                 config.sources.mx.max_history_pages = max(1, int(raw_body["max_history_pages"] or 100))
-            if "sync_interval_hours" in raw_body:
-                config.sources.mx.sync_interval_hours = max(1, int(raw_body["sync_interval_hours"] or 1))
 
             logger.info("Attempting to save config...")
             # 保存配置
@@ -4505,7 +4501,12 @@ def create_api_router(
                 raise HTTPException(status_code=400, detail="MX 平台未启用")
             
             sync_service = MXRoomSyncService(mx_config, db)
-            await sync_service.sync_rooms()
+            try:
+                await sync_service.sync_rooms()
+            finally:
+                # 临时 service 用完即弃：必须 stop() 关闭内部缓存的 HTTP 会话，
+                # 否则 curl 句柄只能等 GC 回收
+                sync_service.stop()
             _audit(admin, "sync_mx_rooms", "", "")
             return {"ok": True}
         except HTTPException:
@@ -4591,6 +4592,7 @@ def create_api_router(
             raise HTTPException(status_code=404, detail="房间不存在")
         
         from .config import load_config
+        from .fetchers.mx.client import MXTokenExpiredError
         from .fetchers.mx.fetcher import MxFetcher
         
         config = load_config()
@@ -4601,52 +4603,13 @@ def create_api_router(
         def pull_history_task():
             fetcher = None
             try:
-                logger.info(f"开始拉取 MX 房间 {room_id} 历史消息")
+                # 风控对策：手动拉取也只取最新 100 条，一次请求完成，不再无限翻页
+                MX_PULL_LIMIT = 100
+                logger.info(f"开始拉取 MX 房间 {room_id} 最新 {MX_PULL_LIMIT} 条消息")
                 fetcher = MxFetcher(mx_config, db)
-                
-                # 获取更多历史消息
-                max_pages = getattr(mx_config, "max_history_pages", 100)
-                page_size = getattr(mx_config, "page_size", 50)
-                
-                all_messages = []
-                current_msg_id = 0
-                pages_fetched = 0
-                
-                while pages_fetched < max_pages:
-                    try:
-                        logger.info(f"正在获取第 {pages_fetched + 1} 页，游标 {current_msg_id}")
-                        messages = fetcher.mx_client.get_room_history(room_id, current_msg_id, page_size)
-                        logger.info(f"获取到 {len(messages)} 条消息")
-                        
-                        if not messages:
-                            logger.info("没有更多消息了")
-                            break
-                        
-                        all_messages.extend(messages)
-                        
-                        # 找到最旧的消息 id 作为下一页的游标
-                        if len(messages) > 0:
-                            msg_ids = [msg.get("id", 0) for msg in messages if msg.get("id")]
-                            if msg_ids:
-                                current_msg_id = min(msg_ids)
-                                logger.info(f"下一页游标：{current_msg_id}")
-                            else:
-                                logger.info("没有找到消息 id，停止分页")
-                                break
-                        
-                        pages_fetched += 1
-                        
-                        # 如果返回的消息少于 page_size，说明是最后一页
-                        if len(messages) < page_size:
-                            logger.info("消息数量少于页面大小，已经是最后一页")
-                            break
-                        
-                        time.sleep(0.1)  # 避免请求过快
-                    except Exception as page_e:
-                        logger.error(f"获取第 {pages_fetched + 1} 页时出错：{page_e}", exc_info=True)
-                        break
-                
-                logger.info(f"总共获取到 {len(all_messages)} 条原始消息")
+
+                all_messages = fetcher.mx_client.get_room_history(room_id, 0, MX_PULL_LIMIT)
+                logger.info(f"获取到 {len(all_messages)} 条消息")
                 
                 # 解析并保存帖子
                 posts = fetcher._build_posts(kol, all_messages)
@@ -4666,9 +4629,27 @@ def create_api_router(
                     db.mark_kol_baseline(kol["id"])
                 
                 new_count = sum(1 for pid in post_ids if pid is not None)
-                logger.info(f"完成拉取 MX 房间 {room_id} 历史消息：共 {len(posts)} 条，新增 {new_count} 条")
+                logger.info(f"完成拉取 MX 房间 {room_id} 最新消息：共 {len(posts)} 条，新增 {new_count} 条")
             except Exception as e:
-                logger.error(f"拉取 MX 房间 {room_id} 历史消息失败：{e}", exc_info=True)
+                logger.error(f"拉取 MX 房间 {room_id} 消息失败：{e}", exc_info=True)
+                # MX 报错统一走系统 KOL「系统通知」发布；TOKEN 过期同时触发熔断
+                if on_mx_alert is not None:
+                    try:
+                        key = (
+                            "token_expired"
+                            if isinstance(e, MXTokenExpiredError)
+                            or "token expired" in str(e).lower()
+                            else "pull_history"
+                        )
+                        detail = (
+                            "MX TOKEN 已过期，手动拉取失败，MX 已暂停拉取与实时推送。"
+                            "\n请到后台「数据源 → MX」更换 TOKEN（TOKEN 需每 2 天更换一次）。"
+                            if key == "token_expired"
+                            else f"⚠️ 拉取 MX 房间 {room_id} 消息失败：{e}"
+                        )
+                        on_mx_alert(key, "MX 拉取消息失败" if key != "token_expired" else "MX TOKEN 已过期", detail)
+                    except Exception:
+                        logger.error("发布 MX 拉取失败告警出错", exc_info=True)
             finally:
                 if fetcher is not None:
                     fetcher.mx_client.close()
@@ -4688,7 +4669,7 @@ def create_api_router(
 
     @router.post("/admin/sources/mx/ws/disconnect")
     async def disconnect_mx_ws(admin: dict = Depends(require_admin)):
-        """主动断开 MX WebSocket 连接（停止自动重连，可再手动接入）。"""
+        """主动断开 MX WebSocket 连接（断线仅自动重连一次，失败即停止，可再手动接入）。"""
         if on_mx_ws_control is None:
             raise HTTPException(status_code=503, detail="后台任务未启用，无法控制 WebSocket")
         try:
@@ -4700,7 +4681,7 @@ def create_api_router(
 
     @router.post("/admin/sources/mx/ws/connect")
     async def connect_mx_ws(admin: dict = Depends(require_admin)):
-        """主动接入 MX WebSocket 连接。"""
+        """主动接入 MX WebSocket 连接（同时复位「重连失败已停止」状态）。"""
         if on_mx_ws_control is None:
             raise HTTPException(status_code=503, detail="后台任务未启用，无法控制 WebSocket")
         try:

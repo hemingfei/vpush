@@ -343,6 +343,159 @@ def test_ws_short_plain_content_keeps_fields(monkeypatch):
     assert parsed["rid"] == "7" and parsed["id"] == 4
 
 
+# ---- WS 重连策略：12 秒后仅重连一次，失败永久放弃 ----
+
+def test_ws_gives_up_after_one_failed_reconnect(monkeypatch):
+    """断线后只重连一次：重连再失败即置 gave_up 并触发回调，不再无限重试。"""
+    import app.fetchers.mx.ws as mx_ws
+
+    monkeypatch.setattr(mx_ws, "RECONNECT_DELAY_SECONDS", 0.01)
+    give_ups = []
+    client = MxWsClient(
+        SimpleNamespace(), lambda m: None,
+        on_give_up=lambda r, t: give_ups.append((r, t)),
+    )
+    attempts = {"n": 0}
+
+    async def failing_connect():
+        attempts["n"] += 1
+        raise RuntimeError("connect refused")
+
+    client.connect = failing_connect
+    asyncio.run(asyncio.wait_for(client.run_forever(), timeout=5))
+
+    assert attempts["n"] == 2  # 首连 + 唯一一次重连，绝没有第三次
+    assert client.gave_up is True
+    assert client.running is False
+    assert give_ups == [("connect refused", False)]
+
+
+def test_ws_give_up_supports_async_callback(monkeypatch):
+    """give-up 回调支持协程函数（调度器传的是 async 系统告警发布）。"""
+    import app.fetchers.mx.ws as mx_ws
+
+    monkeypatch.setattr(mx_ws, "RECONNECT_DELAY_SECONDS", 0.01)
+    results = []
+
+    async def on_give_up(reason, token_expired=False):
+        results.append((reason, token_expired))
+
+    client = MxWsClient(SimpleNamespace(), lambda m: None, on_give_up=on_give_up)
+
+    async def failing_connect():
+        raise RuntimeError("down")
+
+    client.connect = failing_connect
+
+    async def scenario():
+        await asyncio.wait_for(client.run_forever(), timeout=5)
+        # 留出一拍让 _fire_give_up 创建的协程任务跑完
+        await asyncio.sleep(0.05)
+
+    asyncio.run(scenario())
+    assert client.gave_up is True
+    assert len(results) == 1
+
+
+def test_ws_successful_reconnect_resets_and_keeps_listening(monkeypatch):
+    """首连失败后重连成功：恢复重连额度继续监听，不触发放弃回调。"""
+    import app.fetchers.mx.ws as mx_ws
+
+    monkeypatch.setattr(mx_ws, "RECONNECT_DELAY_SECONDS", 0.01)
+    give_ups = []
+    client = MxWsClient(
+        SimpleNamespace(), lambda m: None,
+        on_give_up=lambda r, t: give_ups.append((r, t)),
+    )
+    attempts = {"n": 0}
+
+    async def connect():
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise RuntimeError("first fail")
+        client.connected = True
+
+        async def wait_forever():
+            await asyncio.Event().wait()
+
+        client._sio = SimpleNamespace(wait=wait_forever)
+
+    client.connect = connect
+
+    async def scenario():
+        task = asyncio.create_task(client.run_forever())
+        await asyncio.sleep(0.2)
+        assert attempts["n"] == 2
+        assert client.gave_up is False
+        assert give_ups == []
+        assert client.connected is True
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(scenario())
+
+
+def test_ws_gives_up_when_retry_after_clean_drop_fails(monkeypatch):
+    """重连成功后再次断线（wait 正常返回）：仍有一次重连机会；该次失败则放弃。"""
+    import app.fetchers.mx.ws as mx_ws
+
+    monkeypatch.setattr(mx_ws, "RECONNECT_DELAY_SECONDS", 0.01)
+    give_ups = []
+    client = MxWsClient(
+        SimpleNamespace(), lambda m: None,
+        on_give_up=lambda r, t: give_ups.append((r, t)),
+    )
+    attempts = {"n": 0}
+
+    async def connect():
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            async def wait_once():
+                pass  # wait() 立即返回 = 服务端正常断开
+
+            client._sio = SimpleNamespace(wait=wait_once)
+        else:
+            raise RuntimeError("reconnect refused")
+
+    client.connect = connect
+    asyncio.run(asyncio.wait_for(client.run_forever(), timeout=5))
+
+    assert attempts["n"] == 2
+    assert client.gave_up is True
+    assert give_ups and give_ups[0][1] is False and "reconnect refused" in give_ups[0][0]
+
+
+def test_ws_manual_disconnect_no_give_up(monkeypatch):
+    """等待重连窗口内管理员手动断开：正常退出，不触发放弃回调。"""
+    import app.fetchers.mx.ws as mx_ws
+
+    give_ups = []
+    client = MxWsClient(
+        SimpleNamespace(), lambda m: None,
+        on_give_up=lambda r, t: give_ups.append((r, t)),
+    )
+
+    async def failing_connect():
+        raise RuntimeError("down")
+
+    client.connect = failing_connect
+
+    async def fake_sleep(seconds):
+        # 首次进入重连等待窗口时模拟管理员手动断开
+        await client.stop()
+
+    monkeypatch.setattr(mx_ws.asyncio, "sleep", fake_sleep)
+    asyncio.run(asyncio.wait_for(client.run_forever(), timeout=5))
+
+    assert client.gave_up is False
+    assert give_ups == []
+    assert client.manually_stopped is True
+    assert client.running is False
+
+
 # ---- 房间同步 ----
 
 def test_sync_room_creates_kol_with_fallback_name_and_intro():
@@ -379,20 +532,33 @@ def test_sync_preserves_user_toggled_show_in_plaza():
     assert json.loads(kol["extra_data"])["show_in_plaza"] is False
 
 
-def test_sync_rooms_blocking_closes_client(monkeypatch):
+def test_sync_rooms_reuses_client_until_stop(monkeypatch):
+    """房间同步必须复用同一客户端（每次同步新建 TLS 连接是可聚合计数的机器
+    信号），stop 时统一关闭。"""
     db = make_db()
     service = MXRoomSyncService(MxConfig(token="t"), db)
 
-    closed = []
     from app.fetchers.mx.client import MXClient
 
-    monkeypatch.setattr(
-        MXClient, "get_rooms", lambda self: [_ for _ in ()] or [{"id": 1, "title": "r"}]
-    )
-    monkeypatch.setattr(MXClient, "close", lambda self: closed.append(True))
+    created = []
+    orig_init = MXClient.__init__
+
+    def counting_init(self, *args, **kwargs):
+        orig_init(self, *args, **kwargs)
+        created.append(self)
+
+    monkeypatch.setattr(MXClient, "__init__", counting_init)
+    monkeypatch.setattr(MXClient, "get_rooms", lambda self: [{"id": 1, "title": "r"}])
+
     service._sync_rooms_blocking()
-    assert closed == [True]
+    service._sync_rooms_blocking()
+    assert len(created) == 1
     assert db.get_kol_by_external("mx", "1") is not None
+
+    closed = []
+    monkeypatch.setattr(MXClient, "close", lambda self: closed.append(True))
+    service.stop()
+    assert closed == [True]
 
 
 # ---- 广场显隐 ----
@@ -736,3 +902,344 @@ def test_decrypt_api_data_with_emoji_content():
     # 传输层合并代理对后的密文（真实客户端收到的形态）
     transported = _merge_pairs_like_transport(compressed)
     assert crypto.decrypt_api_data(transported) == payload
+
+
+# ---- TOKEN 过期：连接被拒不重试，直接放弃并标记 ----
+
+def test_ws_token_expired_gives_up_immediately_without_retry(monkeypatch):
+    """连接阶段被拒且像 TOKEN 过期：不等待不重试，立即放弃并回调 token_expired=True。"""
+    import app.fetchers.mx.ws as mx_ws
+
+    monkeypatch.setattr(mx_ws, "RECONNECT_DELAY_SECONDS", 0.01)
+    give_ups = []
+    client = MxWsClient(
+        SimpleNamespace(), lambda m: None,
+        on_give_up=lambda r, t: give_ups.append((r, t)),
+    )
+    attempts = {"n": 0}
+
+    async def failing_connect():
+        attempts["n"] += 1
+        raise RuntimeError("Unexpected status code 401 in server response")
+
+    client.connect = failing_connect
+    asyncio.run(asyncio.wait_for(client.run_forever(), timeout=5))
+
+    assert attempts["n"] == 1  # TOKEN 过期绝不重试
+    assert client.gave_up is True
+    assert give_ups and give_ups[0][1] is True
+
+
+def test_ws_non_auth_connect_error_still_retries_once(monkeypatch):
+    """非鉴权类连接错误（如网络不可达）保持「12 秒后重连一次」策略。"""
+    import app.fetchers.mx.ws as mx_ws
+
+    monkeypatch.setattr(mx_ws, "RECONNECT_DELAY_SECONDS", 0.01)
+    give_ups = []
+    client = MxWsClient(
+        SimpleNamespace(), lambda m: None,
+        on_give_up=lambda r, t: give_ups.append((r, t)),
+    )
+    attempts = {"n": 0}
+
+    async def failing_connect():
+        attempts["n"] += 1
+        raise RuntimeError("connection refused")
+
+    client.connect = failing_connect
+    asyncio.run(asyncio.wait_for(client.run_forever(), timeout=5))
+
+    assert attempts["n"] == 2
+    assert give_ups == [("connection refused", False)]
+
+
+# ---- HTTP 客户端特征修正 ----
+
+class _FakeCffiResponse:
+    """curl_cffi Response 的最小鸭子类型。"""
+
+    def __init__(self, payload, status_code=200):
+        self.status_code = status_code
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+class _FakeCffiSession:
+    """按序返回 payload 的假 curl_cffi Session，记录每次请求供断言。"""
+
+    def __init__(self, payloads):
+        self._payloads = payloads
+        self.requests = []
+
+    def request(self, method, url, headers=None, data=None, timeout=None):
+        self.requests.append(
+            {"method": method, "url": url, "headers": headers, "data": data}
+        )
+        return _FakeCffiResponse(self._payloads[len(self.requests) - 1])
+
+
+def test_client_headers_look_like_browser():
+    """HTTP 请求头必须是 Chrome 同源 XHR 形态；UA/sec-ch-ua 由 impersonate 模板提供，
+    _headers 只负责覆盖 XHR 与导航请求的差异项。"""
+    from app.fetchers.mx.client import MXClient
+
+    client = MXClient("https://mx.test/business-api/5", "t")
+    headers = client._headers()
+    assert headers["Origin"] == "https://mx.test"
+    assert headers["Referer"] == "https://mx.test/"
+    assert headers["token"] == "t" and headers["version"] == "web"
+    assert headers["accept"] == "application/json, text/plain, */*"
+    assert headers["sec-fetch-site"] == "same-origin"
+    assert headers["sec-fetch-mode"] == "cors"
+    assert headers["sec-fetch-dest"] == "empty"
+    # 导航请求特有头必须以 None 标记删除，不能随 impersonate 模板发出
+    assert headers["upgrade-insecure-requests"] is None
+    assert headers["sec-fetch-user"] is None
+
+
+def test_get_rooms_paginates_with_normal_page_size():
+    """房间列表正常分页（100/页翻页拉全量），不再出现 limit=1000000 的异常特征。"""
+    import json as jsonlib
+
+    from app.fetchers.mx.client import MXClient, ROOM_PAGE_SIZE
+
+    page1 = [{"id": i} for i in range(ROOM_PAGE_SIZE)]
+    session = _FakeCffiSession(
+        [
+            {"code": 200, "list": page1},
+            {"code": 200, "list": [{"id": 999}]},
+        ]
+    )
+    client = MXClient("https://mx.test/business-api/5", "t", session=session)
+    rooms = client.get_rooms()
+
+    assert len(rooms) == ROOM_PAGE_SIZE + 1
+    bodies = [jsonlib.loads(r["data"]) for r in session.requests]
+    assert [b["pages"] for b in bodies] == [1, 2]
+    assert all(b["limit"] == ROOM_PAGE_SIZE for b in bodies)
+
+
+def test_token_expired_raises_dedicated_error():
+    """TOKEN 过期响应必须抛专用异常，调用方据此停止重试并告警。"""
+    import pytest
+
+    from app.fetchers.mx.client import MXClient, MXTokenExpiredError
+
+    session = _FakeCffiSession([{"code": 502, "msg": "token expired"}])
+    client = MXClient("https://mx.test/business-api/5", "t", session=session)
+    with pytest.raises(MXTokenExpiredError):
+        client.get_rooms()
+
+
+def test_http_wire_persona_matches_ws_persona():
+    """真实 curl_cffi 会话发出的线上请求必须与 WS 握手是同一 Chrome 人格：
+    UA 逐字节等于 BROWSER_UA、客户端提示一致、无导航残留头、无重复头。
+    这是防风控的核心契约：JA3 由 impersonate 保证，此测试锁定头层面。"""
+    import http.server
+    import threading
+
+    from app.fetchers.mx.client import MXClient
+    from app.fetchers.mx.ws import BROWSER_UA, SEC_CH_UA
+
+    captured = {}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("content-length") or 0))
+            keys = [k.lower() for k in self.headers.keys()]
+            captured["ua"] = self.headers.get("User-Agent")
+            captured["sec_ch_ua"] = self.headers.get("sec-ch-ua")
+            captured["accept"] = self.headers.get("accept")
+            captured["sec_fetch_mode"] = self.headers.get("sec-fetch-mode")
+            captured["no_nav"] = (
+                "upgrade-insecure-requests" not in keys
+                and "sec-fetch-user" not in keys
+            )
+            captured["no_dups"] = len(keys) == len(set(keys))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"code":200,"list":[{"id":1}]}')
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        client = MXClient(f"http://127.0.0.1:{port}/business-api/5", "tok")
+        rooms = client.get_rooms()
+        client.close()
+    finally:
+        server.shutdown()
+
+    assert rooms == [{"id": 1}]
+    assert captured["ua"] == BROWSER_UA
+    assert captured["sec_ch_ua"] == SEC_CH_UA
+    assert captured["accept"] == "application/json, text/plain, */*"
+    assert captured["sec_fetch_mode"] == "cors"
+    assert captured["no_nav"] and captured["no_dups"]
+
+
+def test_avatar_cache_headers_for_mx_domain():
+    """MX 域名图片必须带 MX 站点 Referer，绝不能再带 weibo.com 的假信号。"""
+    from app.avatar_cache import headers_for
+
+    headers = headers_for("https://mx.2026.naaifu.cn/uploads/a.png")
+    assert headers["User-Agent"].startswith("Mozilla/5.0")
+    assert "naaifu.cn" in headers["Referer"]
+    assert "weibo.com" not in headers["Referer"]
+    # 其他图床行为不变
+    assert headers_for("https://wx1.sinaimg.cn/a.jpg")["Referer"] == "https://weibo.com/"
+
+
+# ---- 客户端人格一致性（HTTP / WS / 常量） ----
+
+def test_ws_handshake_headers_full_chrome_persona():
+    """WS 握手头必须与 HTTP 同一 Chrome 人格：UA/客户端提示一致，
+    带 Chrome WS 特有的缓存协商头，且任何值都不得暴露 Python 客户端。"""
+    from types import SimpleNamespace
+
+    from app.fetchers.mx.ws import (
+        ACCEPT_LANGUAGE,
+        BROWSER_UA,
+        SEC_CH_UA,
+        SEC_CH_UA_MOBILE,
+        SEC_CH_UA_PLATFORM,
+        _browser_handshake_headers,
+    )
+
+    config = SimpleNamespace(ws_url="wss://mx.2026.naaifu.cn")
+    headers = _browser_handshake_headers(config)
+    assert headers["User-Agent"] == BROWSER_UA
+    assert headers["Origin"] == "https://mx.2026.naaifu.cn"
+    assert headers["sec-ch-ua"] == SEC_CH_UA
+    assert headers["sec-ch-ua-mobile"] == SEC_CH_UA_MOBILE
+    assert headers["sec-ch-ua-platform"] == SEC_CH_UA_PLATFORM
+    assert headers["Accept-Language"] == ACCEPT_LANGUAGE
+    # Chrome 的 WebSocket 握手带 Pragma/Cache-Control，也带 sec-fetch-* fetch 元数据
+    # （fetch spec：WS 的 mode 为 "websocket"、dest 为空串，同域 site 为 same-origin）
+    assert headers["Pragma"] == "no-cache"
+    assert headers["sec-fetch-site"] == "same-origin"
+    assert headers["sec-fetch-mode"] == "websocket"
+    assert headers["sec-fetch-dest"] == "empty"
+    assert all("python" not in str(v).lower() for v in headers.values())
+
+
+def test_persona_constants_are_consistent():
+    """UA、sec-ch-ua、impersonate 目标三者的 Chrome 主版本必须一致，
+    防止将来只改其中一处造成新的「人格分裂」。"""
+    import re
+
+    from app.fetchers.mx.ws import BROWSER_UA, IMPERSONATE_TARGET, SEC_CH_UA
+
+    ua_major = re.search(r"Chrome/(\d+)", BROWSER_UA).group(1)
+    hint_majors = set(re.findall(r'v="(\d+)"', SEC_CH_UA))
+    assert ua_major in hint_majors
+    assert ua_major in IMPERSONATE_TARGET
+
+
+# ---- 每日运行窗口 ----
+
+def test_mx_daily_window_within_bounds():
+    """随机窗口必须 7 点开、16 点关（各自在 1 小时抖动内），且开在关之前。"""
+    from datetime import date, timedelta
+
+    from app.services.mx_window import generate_mx_daily_window, in_window
+
+    day = date(2026, 9, 1)
+    for _ in range(20):
+        start, stop = generate_mx_daily_window(day)
+        assert start.date() == day and stop.date() == day
+        assert start.hour == 7 and start.minute <= 59
+        assert stop.hour == 16
+        assert start < stop
+        assert in_window(start, start, stop)
+        assert in_window(stop - timedelta(seconds=1), start, stop)
+        assert not in_window(stop, start, stop)
+        assert not in_window(start - timedelta(seconds=1), start, stop)
+
+
+# ---- 系统通知 KOL：报错统一发布 + 节流 + TOKEN 熔断/时效 ----
+
+def test_publish_mx_error_creates_system_kol_and_throttles():
+    """MX 报错走「系统通知」KOL 发布；同 key 30 分钟内只发一条。"""
+    from app.scheduler import Scheduler
+
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.publish_mx_error("test_err", "测试告警", "第一条")
+    scheduler.publish_mx_error("test_err", "测试告警", "第二条（应被节流）")
+
+    kol = db.get_kol_by_external("system", "system_alert")
+    assert kol is not None and kol["name"] == "系统通知"
+    rows = db._rows("SELECT COUNT(*) AS c FROM posts WHERE kol_id = ?", (kol["id"],))
+    assert rows[0]["c"] == 1
+    scheduler.stop()
+
+
+def test_publish_mx_error_token_expired_sets_circuit_breaker():
+    """key=token_expired 的报错必须置 TOKEN 熔断标记。"""
+    from app.scheduler import Scheduler
+
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    assert scheduler._mx_token_expired is False
+    scheduler.publish_mx_error("token_expired", "MX TOKEN 已过期", "请更换")
+    assert scheduler._mx_token_expired is True
+    scheduler.stop()
+
+
+def test_token_age_reminder_after_two_days():
+    """TOKEN 超过 2 天 → 系统通知 KOL 提醒更换，且节流期内不重复提醒。"""
+    import time as timelib
+
+    from app.scheduler import Scheduler
+
+    db = make_db()
+    scheduler = _make_scheduler(db)
+
+    # 无记录：首次只落基准，不发提醒
+    scheduler._mx_check_token_age()
+    kol = db.get_kol_by_external("system", "system_alert")
+    assert kol is None
+
+    # 回填 3 天前的 TOKEN 起用时间：应发提醒
+    db.set_setting("mx_token_updated_at", str(int(timelib.time()) - 3 * 86400))
+    scheduler._mx_check_token_age()
+    kol = db.get_kol_by_external("system", "system_alert")
+    assert kol is not None
+    rows = db._rows("SELECT COUNT(*) AS c FROM posts WHERE kol_id = ?", (kol["id"],))
+    assert rows[0]["c"] == 1
+
+    # 节流期内再检查：不重复发
+    scheduler._mx_check_token_age()
+    rows = db._rows("SELECT COUNT(*) AS c FROM posts WHERE kol_id = ?", (kol["id"],))
+    assert rows[0]["c"] == 1
+    scheduler.stop()
+
+
+# ---- 房间列表同步：随机间隔 ----
+
+def test_mx_room_sync_interval_is_randomized():
+    """房间列表同步必须是随机 2-6 小时：固定周期是最直白的机器信号。"""
+    from app.services import mx_sync
+
+    assert mx_sync.SYNC_MIN_INTERVAL_SECONDS == 2 * 3600
+    assert mx_sync.SYNC_MAX_INTERVAL_SECONDS == 6 * 3600
+
+
+def test_mx_config_has_no_fixed_sync_interval_knob():
+    """固定间隔配置项已移除，避免留下无效的 UI 输入框/环境变量。"""
+    import dataclasses
+
+    from app.config import MxConfig
+
+    assert "sync_interval_hours" not in {f.name for f in dataclasses.fields(MxConfig)}

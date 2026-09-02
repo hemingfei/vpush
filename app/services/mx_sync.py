@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 from datetime import datetime
 from typing import Any
 
@@ -13,15 +14,41 @@ from ..fetchers.mx.client import MXClient
 
 logger = logging.getLogger(__name__)
 
+# 房间列表同步间隔：每轮在 2-6 小时之间随机取值。
+# 精确的固定周期（每小时/每 24 小时整）是风控日志里最直白的机器信号，
+# 随机化后相邻两次同步的间隔不可预测。
+SYNC_MIN_INTERVAL_SECONDS = 2 * 3600
+SYNC_MAX_INTERVAL_SECONDS = 6 * 3600
+
 
 class MXRoomSyncService:
-    def __init__(self, config: MxConfig, db=None):
+    def __init__(self, config: MxConfig, db=None, on_error=None, should_run=None):
         self.config = config
         self.db = db
+        # on_error(str)：房间同步失败时回调（调度器用它走系统 KOL「系统通知」告警）
+        self.on_error = on_error
+        # should_run()：同步执行前的门控（每日运行窗口 / TOKEN 状态）
+        self.should_run = should_run
         self._last_sync: datetime | None = None
         self._sync_task: asyncio.Task | None = None
         self._initial_sync_task: asyncio.Task | None = None
         self._stopped = False
+        # 复用同一客户端：每次同步都新建连接会产生一串「新 TLS 握手」事件，
+        # 同指纹的连接在风控日志里可被聚合计数
+        self._client: MXClient | None = None
+
+    def _get_client(self) -> MXClient:
+        if self._client is None:
+            self._client = MXClient(self.config.api_base, self.config.token)
+        return self._client
+
+    def _notify_error(self, message: str):
+        if self.on_error is None:
+            return
+        try:
+            self.on_error(message)
+        except Exception:  # noqa: BLE001 - 告警失败不影响同步任务
+            logger.error("MX sync on_error 回调失败", exc_info=True)
 
     async def sync_rooms(self):
         """Sync all MX rooms to KOLs（同步 HTTP/DB 走线程池，不阻塞事件循环）。"""
@@ -33,7 +60,7 @@ class MXRoomSyncService:
             return
 
         logger.info("Starting MX room sync")
-        client = MXClient(self.config.api_base, self.config.token)
+        client = self._get_client()
         try:
             rooms = client.get_rooms()
             logger.info(f"Fetched {len(rooms)} MX rooms")
@@ -46,8 +73,6 @@ class MXRoomSyncService:
         except Exception as e:
             logger.error(f"MX room sync failed: {e}", exc_info=True)
             raise
-        finally:
-            client.close()
 
     def _sync_room(self, room: dict):
         """Sync a single room to KOL."""
@@ -175,30 +200,45 @@ class MXRoomSyncService:
         self._stopped = False
 
         async def run_initial_sync():
+            # 初始同步同样受窗口门控：窗口外启动服务时不产生 MX 请求
+            if self.should_run is not None and not self.should_run():
+                logger.info("MX 初始同步跳过：不在运行窗口内")
+                return
             try:
                 await self.sync_rooms()
             except Exception as e:  # noqa: BLE001 - 后台任务自行吞错记日志
                 logger.error(f"MX initial room sync error: {e}", exc_info=True)
+                self._notify_error(f"房间同步失败：{e}")
 
         if self._initial_sync_task is None or self._initial_sync_task.done():
             # 持有任务引用：事件循环只持弱引用，不保存可能被 GC 中途取消
             self._initial_sync_task = asyncio.create_task(run_initial_sync())
 
-        interval_hours = self.config.sync_interval_hours or 1
-        interval = interval_hours * 3600
-
         async def sync_loop():
+            # 每轮随机睡 2-6 小时再尝试一次：窗口外/TOKEN 失效时只跳过本次，
+            # 不产生任何 MX 请求，下一次尝试仍是随机 2-6 小时之后
             while not self._stopped:
                 try:
-                    await asyncio.sleep(interval)
-                    if self.config.enabled and not self._stopped:
-                        await self.sync_rooms()
+                    await asyncio.sleep(
+                        random.uniform(SYNC_MIN_INTERVAL_SECONDS, SYNC_MAX_INTERVAL_SECONDS)
+                    )
+                    if self._stopped:
+                        break
+                    if not self.config.enabled:
+                        continue
+                    if self.should_run is not None and not self.should_run():
+                        continue
+                    await self.sync_rooms()
                 except Exception as e:
                     logger.error(f"MX periodic sync error: {e}", exc_info=True)
+                    self._notify_error(f"房间同步失败：{e}")
 
         # 持有任务引用：事件循环只持弱引用，不保存可能被 GC 中途取消
         self._sync_task = asyncio.create_task(sync_loop())
-        logger.info(f"MX periodic sync started, interval: {interval_hours}h")
+        logger.info(
+            f"MX periodic sync started, interval: random "
+            f"{SYNC_MIN_INTERVAL_SECONDS // 3600}-{SYNC_MAX_INTERVAL_SECONDS // 3600}h"
+        )
 
     def stop(self):
         """停止定时同步任务（同步方法，可在非事件循环上下文调用）。"""
@@ -208,3 +248,6 @@ class MXRoomSyncService:
                 task.cancel()
         self._sync_task = None
         self._initial_sync_task = None
+        if self._client is not None:
+            self._client.close()
+            self._client = None

@@ -5,31 +5,76 @@ import json
 import logging
 import time
 from typing import Any
+from urllib.parse import urlparse
 
-import httpx
+from curl_cffi import requests as cffi_requests
 
 from .crypto import decrypt_api_data
+from .ws import ACCEPT_LANGUAGE, IMPERSONATE_TARGET
 
 logger = logging.getLogger(__name__)
 
+# 房间列表正常分页大小：绝不能发异常大 limit（单条日志就是机器人实锤）
+ROOM_PAGE_SIZE = 100
+# 房间列表翻页安全上限（50 页 = 5000 个房间，远超实际规模）
+MAX_ROOM_PAGES = 50
+
+# Chrome 同源 XHR 的 accept 形态（前端 axios 的默认值）
+XHR_ACCEPT = "application/json, text/plain, */*"
+# 导航请求特有头：impersonate 默认会带，XHR 不该带；headers 里置 None 即从请求中删除
+_NAV_ONLY_HEADERS = ("upgrade-insecure-requests", "sec-fetch-user")
+
+
+class MXTokenExpiredError(RuntimeError):
+    """TOKEN 过期/无效：调用方据此停止重试并通过系统 KOL 告警，绝不能继续打。"""
+
 
 class MXClient:
-    """MX platform API client."""
+    """MX platform API client.
 
-    def __init__(self, base_url: str, token: str):
+    HTTP 层用 curl_cffi impersonate：TLS 指纹（JA3/JA4）、HTTP/2、头序与 Chrome
+    完全对齐——只补 UA/Origin 头挡不住「Chrome UA + Python TLS」的 JA3 与 UA
+    一致性校验。Session 默认按线程隔离底层 curl 句柄，无状态 token API 可跨线程
+    共享；session 参数仅供测试注入假客户端。
+    """
+
+    def __init__(self, base_url: str, token: str, session=None):
         self.base_url = base_url.rstrip("/")
         self.token = token
-        self._http = httpx.Client(timeout=30.0)
+        self._injected_session = session
+        self._session = session or cffi_requests.Session(
+            impersonate=IMPERSONATE_TARGET
+        )
 
     def close(self):
-        self._http.close()
+        if self._injected_session is not None:
+            return
+        try:
+            self._session.close()
+        except Exception:  # noqa: BLE001 - 尽力关闭即可
+            logger.warning("MX HTTP session close failed", exc_info=True)
 
     def _headers(self) -> dict[str, str]:
-        return {
+        """请求头与网页端同源 XHR 形态一致：同一个 token 下 WS 和 HTTP 必须像
+        同一个客户端。UA / sec-ch-ua / accept-encoding 由 impersonate 模板提供，
+        这里只覆盖 XHR 与导航请求的差异项（None 表示从默认头中删除）。"""
+        host = urlparse(self.base_url).netloc
+        headers = {
             "token": self.token,
             "Content-Type": "application/json",
             "version": "web",
+            "accept": XHR_ACCEPT,
+            "accept-language": ACCEPT_LANGUAGE,
+            "sec-fetch-site": "same-origin",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-dest": "empty",
         }
+        for nav_header in _NAV_ONLY_HEADERS:
+            headers[nav_header] = None
+        if host:
+            headers["Origin"] = f"https://{host}"
+            headers["Referer"] = f"https://{host}/"
+        return headers
 
     def _check_token_expired(self, data: Any) -> bool:
         if isinstance(data, dict):
@@ -45,12 +90,14 @@ class MXClient:
         url = f"{self.base_url}{path}"
         headers = self._headers()
         body = json.dumps(json_data) if json_data else None
-        response = self._http.request(method, url, headers=headers, content=body)
+        response = self._session.request(
+            method, url, headers=headers, data=body, timeout=30.0
+        )
         response.raise_for_status()
         result = response.json()
 
         if self._check_token_expired(result):
-            raise RuntimeError("MX token expired")
+            raise MXTokenExpiredError("MX token expired")
 
         if isinstance(result, dict) and "data" in result:
             encrypted_data = result["data"]
@@ -62,22 +109,31 @@ class MXClient:
         return result
 
     def get_rooms(self) -> list[dict]:
-        """获取房间列表。
+        """获取房间列表：每页 100 正常翻页拉全量。
 
         Returns:
             房间列表
         """
-        data = {
-            "pages": 1,
-            "limit": 1000000,
-            "tt": int(time.time() * 1000),
-        }
-        result = self._request("POST", "/api/room/list", data)
-        if isinstance(result, dict) and "list" in result:
-            return result["list"]
-        if isinstance(result, list):
-            return result
-        return []
+        rooms: list[dict] = []
+        for page in range(1, MAX_ROOM_PAGES + 1):
+            data = {
+                "pages": page,
+                "limit": ROOM_PAGE_SIZE,
+                "tt": int(time.time() * 1000),
+            }
+            result = self._request("POST", "/api/room/list", data)
+            if isinstance(result, dict) and "list" in result:
+                batch = result["list"]
+            elif isinstance(result, list):
+                batch = result
+            else:
+                batch = []
+            if not batch:
+                break
+            rooms.extend(batch)
+            if len(batch) < ROOM_PAGE_SIZE:
+                break
+        return rooms
 
     def get_room_history(
         self, room_id: int, msg_id: int = 0, limit: int = 50

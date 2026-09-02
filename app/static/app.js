@@ -8287,10 +8287,6 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
             <p class="cfg-group-title">同步与抓取</p>
             <div class="cfg-fields">
               <label class="cfg-field">
-                <span>房间同步间隔<span class="cfg-unit">小时</span></span>
-                <input id="mx-sync-hours" type="number" class="form-control" min="1" max="168">
-              </label>
-              <label class="cfg-field">
                 <span>单页房间消息数</span>
                 <input id="mx-page-size" type="number" class="form-control" min="1" max="100">
               </label>
@@ -9587,7 +9583,6 @@ async function loadMxAdmin() {
     $("#mx-ws-path").value = config.ws_path || "/socket.io";
     $("#mx-ws-namespace").value = config.ws_namespace || "/msg";
     $("#mx-ws-enabled").checked = config.ws_enabled;
-    $("#mx-sync-hours").value = config.sync_interval_hours || 1;
     $("#mx-page-size").value = config.page_size || 50;
     $("#mx-max-pages").value = config.max_history_pages || 100;
 
@@ -9621,7 +9616,6 @@ async function saveMxConfig() {
     // Parse numbers with defaults, ensure minimum values
     const page_size = Math.max(1, Number($("#mx-page-size").value) || 50);
     const max_history_pages = Math.max(1, Number($("#mx-max-pages").value) || 100);
-    const sync_interval_hours = Math.max(1, Number($("#mx-sync-hours").value) || 1);
 
     const payload = {
       enabled: $("#mx-enabled").checked,
@@ -9633,7 +9627,6 @@ async function saveMxConfig() {
       ws_enabled: $("#mx-ws-enabled").checked,
       page_size,
       max_history_pages,
-      sync_interval_hours,
     };
     console.log("Saving MX config payload:", payload);
 
@@ -9658,7 +9651,6 @@ async function testMxConnection() {
     // Parse numbers with defaults, ensure minimum values
     const page_size = Math.max(1, Number($("#mx-page-size").value) || 50);
     const max_history_pages = Math.max(1, Number($("#mx-max-pages").value) || 100);
-    const sync_interval_hours = Math.max(1, Number($("#mx-sync-hours").value) || 1);
 
     const payload = {
       enabled: $("#mx-enabled").checked,
@@ -9670,7 +9662,6 @@ async function testMxConnection() {
       ws_enabled: $("#mx-ws-enabled").checked,
       page_size,
       max_history_pages,
-      sync_interval_hours,
     };
     console.log("Testing MX connection with payload:", payload);
 

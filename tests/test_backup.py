@@ -18,9 +18,16 @@ from app.main import create_app
 _reg_code_seq = 0
 
 
+@pytest.fixture(autouse=True)
+def _ui_only_env(monkeypatch):
+    """测试实例必须关闭后台任务（避免抢生产 Telegram 机器人）；经 monkeypatch
+    设置，测完自动还原——裸 os.environ 会泄漏到同进程后续测试，把
+    create_app 的调度器接线（on_mx_config_changed 等）整体关掉。"""
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+
+
 def make_client(name="test.db"):
     tmp = tempfile.mkdtemp()
-    os.environ["DAV_UI_ONLY"] = "1"
     app = create_app(config=None, db_path=Path(tmp) / name)
     return TestClient(app)
 

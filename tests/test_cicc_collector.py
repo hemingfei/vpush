@@ -76,9 +76,16 @@ def test_from_env_none_without_archive(monkeypatch):
     assert from_env() is None
 
 
+@pytest.fixture(autouse=True)
+def _ui_only_env(monkeypatch):
+    """测试实例必须关闭后台任务（避免抢生产 Telegram 机器人）；经 monkeypatch
+    设置，测完自动还原——裸 os.environ 会泄漏到同进程后续测试，把
+    create_app 的调度器接线（on_mx_config_changed 等）整体关掉。"""
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+
+
 def _admin_client():
     tmp = tempfile.mkdtemp()
-    os.environ["DAV_UI_ONLY"] = "1"
     os.environ["IMA_ARCHIVE_ROOT"] = tempfile.mkdtemp()
     os.environ.pop("IMA_PULL_URL", None)
     cmd_dir = Path(os.environ["IMA_ARCHIVE_ROOT"]) / "local" / ".cicc" / "commands"
@@ -101,7 +108,6 @@ def test_admin_cicc_api(tmp_path, monkeypatch):
     monkeypatch.delenv("IMA_PULL_URL", raising=False)
     monkeypatch.setenv("IMA_ARCHIVE_ROOT", str(tmp_path / "archive"))
     (tmp_path / "archive" / "local" / ".cicc" / "commands").mkdir(parents=True)
-    os.environ["DAV_UI_ONLY"] = "1"
     app = create_app(config=None, db_path=Path(tmp_path) / "cicc.db")
     client = TestClient(app)
     headers = _admin_headers(client)
