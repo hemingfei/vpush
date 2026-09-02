@@ -15,7 +15,8 @@ public class MainActivity extends BridgeActivity {
 
     private static final String EXTRA_SWITCH_SERVER = "switch_server";
 
-    // 最近一次系统栏 inset（px）；页面每次加载完成后注入 CSS 变量，见 injectSafeAreaInsets()
+    // 最近一次系统栏 inset（CSS px，已按屏幕密度从物理像素换算）；
+    // 页面每次加载完成后注入 CSS 变量，见 injectSafeAreaInsets()
     private int barInsetTop = 0;
     private int barInsetBottom = 0;
 
@@ -35,8 +36,12 @@ public class MainActivity extends BridgeActivity {
                             WindowInsetsCompat.Type.statusBars()
                                     | WindowInsetsCompat.Type.navigationBars()
                                     | WindowInsetsCompat.Type.displayCutout());
-                    barInsetTop = bars.top;
-                    barInsetBottom = bars.bottom;
+                    // getInsets() 返回物理像素，而 WebView 里 1 CSS px = 1dp（viewport 为
+                    // width=device-width），必须除以屏幕密度换算，否则注入的
+                    // --safe-top/--safe-bottom 会放大 density 倍，顶部出现巨大留白。
+                    float density = v.getResources().getDisplayMetrics().density;
+                    barInsetTop = Math.round(bars.top / density);
+                    barInsetBottom = Math.round(bars.bottom / density);
                     injectSafeAreaInsets();
                     return windowInsets;
                 });
