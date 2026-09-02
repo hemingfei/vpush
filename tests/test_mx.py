@@ -349,7 +349,7 @@ def test_ws_gives_up_after_one_failed_reconnect(monkeypatch):
     """断线后只重连一次：重连再失败即置 gave_up 并触发回调，不再无限重试。"""
     import app.fetchers.mx.ws as mx_ws
 
-    monkeypatch.setattr(mx_ws, "RECONNECT_DELAY_SECONDS", 0.01)
+    monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
     give_ups = []
     client = MxWsClient(
         SimpleNamespace(), lambda m: None,
@@ -374,7 +374,7 @@ def test_ws_give_up_supports_async_callback(monkeypatch):
     """give-up 回调支持协程函数（调度器传的是 async 系统告警发布）。"""
     import app.fetchers.mx.ws as mx_ws
 
-    monkeypatch.setattr(mx_ws, "RECONNECT_DELAY_SECONDS", 0.01)
+    monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
     results = []
 
     async def on_give_up(reason, token_expired=False):
@@ -401,7 +401,7 @@ def test_ws_successful_reconnect_resets_and_keeps_listening(monkeypatch):
     """首连失败后重连成功：恢复重连额度继续监听，不触发放弃回调。"""
     import app.fetchers.mx.ws as mx_ws
 
-    monkeypatch.setattr(mx_ws, "RECONNECT_DELAY_SECONDS", 0.01)
+    monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
     give_ups = []
     client = MxWsClient(
         SimpleNamespace(), lambda m: None,
@@ -442,7 +442,7 @@ def test_ws_gives_up_when_retry_after_clean_drop_fails(monkeypatch):
     """重连成功后再次断线（wait 正常返回）：仍有一次重连机会；该次失败则放弃。"""
     import app.fetchers.mx.ws as mx_ws
 
-    monkeypatch.setattr(mx_ws, "RECONNECT_DELAY_SECONDS", 0.01)
+    monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
     give_ups = []
     client = MxWsClient(
         SimpleNamespace(), lambda m: None,
@@ -959,7 +959,7 @@ def test_ws_token_expired_gives_up_immediately_without_retry(monkeypatch):
     """连接阶段被拒且像 TOKEN 过期：不等待不重试，立即放弃并回调 token_expired=True。"""
     import app.fetchers.mx.ws as mx_ws
 
-    monkeypatch.setattr(mx_ws, "RECONNECT_DELAY_SECONDS", 0.01)
+    monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
     give_ups = []
     client = MxWsClient(
         SimpleNamespace(), lambda m: None,
@@ -983,7 +983,7 @@ def test_ws_non_auth_connect_error_still_retries_once(monkeypatch):
     """非鉴权类连接错误（如网络不可达）保持「12 秒后重连一次」策略。"""
     import app.fetchers.mx.ws as mx_ws
 
-    monkeypatch.setattr(mx_ws, "RECONNECT_DELAY_SECONDS", 0.01)
+    monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
     give_ups = []
     client = MxWsClient(
         SimpleNamespace(), lambda m: None,
@@ -1201,23 +1201,68 @@ def test_persona_constants_are_consistent():
 
 # ---- 每日运行窗口 ----
 
-def test_mx_daily_window_within_bounds():
-    """随机窗口必须 7 点开、16 点关（各自在 1 小时抖动内），且开在关之前。"""
+def test_mx_daily_windows_within_bounds():
+    """三段窗口必须落在各自时段内、互不重叠有序，且开在关之前。"""
     from datetime import date, timedelta
 
-    from app.services.mx_window import generate_mx_daily_window, in_window
+    from app.services.mx_window import generate_mx_daily_windows, in_window
 
     day = date(2026, 9, 1)
     for _ in range(20):
-        start, stop = generate_mx_daily_window(day)
-        assert start.date() == day and stop.date() == day
-        assert start.hour == 7 and start.minute <= 59
-        assert stop.hour == 16
-        assert start < stop
-        assert in_window(start, start, stop)
-        assert in_window(stop - timedelta(seconds=1), start, stop)
-        assert not in_window(stop, start, stop)
-        assert not in_window(start - timedelta(seconds=1), start, stop)
+        windows = generate_mx_daily_windows(day)
+        assert len(windows) == 3
+        w1, w2, w3 = windows
+        # 早市：7:00-8:00 开，11:40-12:00 关
+        assert w1[0].hour == 7 and w1[0].minute <= 59
+        assert (w1[1].hour, w1[1].minute) >= (11, 40) and w1[1].hour < 12
+        # 午后：12:30-12:50 开，16:00-16:30 关
+        assert (w2[0].hour, w2[0].minute) >= (12, 30) and w2[0].hour < 13
+        assert w2[1].hour == 16 and w2[1].minute <= 29
+        # 晚间：19:00-19:30 开，21:00-22:00 关
+        assert w3[0].hour == 19 and w3[0].minute <= 29
+        assert w3[1].hour == 21
+        for start, stop in windows:
+            assert start.date() == day and stop.date() == day
+            assert start < stop
+            assert in_window(start, windows)
+            assert in_window(stop - timedelta(seconds=1), windows)
+            assert not in_window(stop, windows)
+        # 有序且互不重叠
+        assert w1[1] <= w2[0] and w2[1] <= w3[0]
+
+
+def test_daily_fallback_slot_inside_window_and_before_close():
+    """每日兜底预约时刻必须落在某段窗口内部，且距关窗至少 1 分钟。"""
+    from datetime import date, timedelta
+
+    from app.services.mx_window import generate_mx_daily_windows, pick_daily_fallback_slot
+
+    windows = generate_mx_daily_windows(date(2026, 9, 1))
+    for _ in range(50):
+        slot = pick_daily_fallback_slot(windows)
+        assert any(
+            start <= slot < stop - timedelta(seconds=60) for start, stop in windows
+        )
+
+
+def test_reconnect_delay_is_random_within_16_36s(monkeypatch):
+    """断线重连延时必须取自 16-36 秒随机区间（固定/超短周期重连是机器信号）。"""
+    import app.fetchers.mx.ws as mx_ws
+
+    calls = []
+    orig_uniform = mx_ws.random.uniform
+
+    def spy(a, b):
+        calls.append((a, b))
+        return orig_uniform(a, b)
+
+    monkeypatch.setattr(mx_ws.random, "uniform", spy)
+    for _ in range(50):
+        delay = mx_ws._reconnect_delay()
+        assert 16.0 <= delay <= 36.0
+    assert calls
+    assert {a for a, _ in calls} == {16.0}
+    assert {b for _, b in calls} == {36.0}
 
 
 # ---- 系统通知 KOL：报错统一发布 + 节流 + TOKEN 熔断/时效 ----

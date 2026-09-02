@@ -1,7 +1,10 @@
-"""MX 每日运行窗口：把 MX 在线时间压缩到每天一段随机时段，降低被风控画像的暴露面。
+"""MX 每日运行窗口：把 MX 在线时间压缩到每天三段随机时段，降低被风控画像的暴露面。
 
-窗口每天生成一次：早 7:00-8:00 之间随机一个时刻开启，晚 16:00-17:00 之间随机
-一个时刻关闭，生成后当天固定（服务重启后重新生成，属可接受的随机性损失）。
+窗口每天生成一次（2026-09-02 起为三段）：
+- 早市：7:00-8:00 之间随机开，11:40-12:00 之间随机关；
+- 午后：12:30-12:50 之间随机开，16:00-16:30 之间随机关；
+- 晚间：19:00-19:30 之间随机开，21:00-22:00 之间随机关。
+生成后当天固定（服务重启后重新生成，属可接受的随机性损失）。
 """
 from __future__ import annotations
 
@@ -10,23 +13,42 @@ from datetime import date, datetime, time, timedelta, timezone
 
 CN_TZ = timezone(timedelta(hours=8))
 
-WINDOW_START_EARLIEST = time(7, 0)
-WINDOW_STOP_EARLIEST = time(16, 0)
-# 开/关各自在 [earliest, earliest+1h) 内随机
-WINDOW_RANDOM_SPAN_SECONDS = 3600
+# 每日窗口规格：(开窗最早时刻, 开窗随机跨度秒, 关窗最早时刻, 关窗随机跨度秒)
+DAILY_WINDOW_SPECS = (
+    (time(7, 0), 3600, time(11, 40), 20 * 60),      # 早市
+    (time(12, 30), 20 * 60, time(16, 0), 30 * 60),  # 午后
+    (time(19, 0), 30 * 60, time(21, 0), 3600),      # 晚间
+)
 
 
-def generate_mx_daily_window(day: date) -> tuple[datetime, datetime]:
-    """生成 day 当天的运行窗口 (start, stop)：开在 7-8 点、关在 16-17 点的随机时刻。"""
-    start = datetime.combine(
-        day, WINDOW_START_EARLIEST, tzinfo=CN_TZ
-    ) + timedelta(seconds=random.randint(0, WINDOW_RANDOM_SPAN_SECONDS - 1))
-    stop = datetime.combine(
-        day, WINDOW_STOP_EARLIEST, tzinfo=CN_TZ
-    ) + timedelta(seconds=random.randint(0, WINDOW_RANDOM_SPAN_SECONDS - 1))
-    return start, stop
+def generate_mx_daily_windows(day: date) -> list[tuple[datetime, datetime]]:
+    """生成 day 当天的运行窗口列表：各段在自身随机跨度内取开/关时刻。"""
+    windows = []
+    for open_earliest, open_span, stop_earliest, stop_span in DAILY_WINDOW_SPECS:
+        start = datetime.combine(
+            day, open_earliest, tzinfo=CN_TZ
+        ) + timedelta(seconds=random.randint(0, open_span - 1))
+        stop = datetime.combine(
+            day, stop_earliest, tzinfo=CN_TZ
+        ) + timedelta(seconds=random.randint(0, stop_span - 1))
+        windows.append((start, stop))
+    return windows
 
 
-def in_window(now: datetime, start: datetime, stop: datetime) -> bool:
-    """now 是否落在 [start, stop) 窗口内。"""
-    return start <= now < stop
+def in_window(now: datetime, windows: list[tuple[datetime, datetime]]) -> bool:
+    """now 是否落在任一 [start, stop) 窗口内。"""
+    return any(start <= now < stop for start, stop in windows)
+
+
+def pick_daily_fallback_slot(
+    windows: list[tuple[datetime, datetime]],
+) -> datetime | None:
+    """在窗口内随机挑一个时刻，作为当日唯一一次兜底拉取的预约时刻。
+
+    离关窗至少留 1 分钟，避免时刻落在关窗边缘导致必然放弃。
+    """
+    if not windows:
+        return None
+    start, stop = random.choice(windows)
+    span = max(0.0, (stop - start).total_seconds() - 60)
+    return start + timedelta(seconds=random.uniform(0, span))

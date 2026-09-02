@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import time
 import asyncio
 from datetime import datetime
@@ -27,9 +28,15 @@ SEC_CH_UA_MOBILE = "?0"
 SEC_CH_UA_PLATFORM = '"macOS"'
 ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9"
 
-# 断线后的重连策略：只等 12 秒重连一次；这次重连再失败就永久放弃自动重连
-# （高频无上限重连会加重平台风控处罚），恢复只能靠管理员在后台手动接入
-RECONNECT_DELAY_SECONDS = 12
+# 断线后的重连策略：等 16-36 秒（随机）重连一次；这次重连再失败就永久放弃自动重连。
+# 高频无上限重连是攻击性特征，固定周期的重连节拍也是机器信号（2026-09-02 由固定
+# 12 秒改为区间随机），恢复只能靠管理员在后台手动接入
+RECONNECT_DELAY_RANGE = (16.0, 36.0)
+
+
+def _reconnect_delay() -> float:
+    """断线重连等待秒数：16-36 秒之间随机。"""
+    return random.uniform(*RECONNECT_DELAY_RANGE)
 
 # 连接阶段被拒时，判定为 TOKEN 过期/无效的关键词（命中则不重试，直接放弃告警）
 _AUTH_FAIL_KEYWORDS = (
@@ -285,8 +292,8 @@ class MxWsClient:
     async def run_forever(self):
         """连接并监听 MX WebSocket，断线后按「只重连一次」策略自恢复。
 
-        首次连接失败或断线：等待 RECONNECT_DELAY_SECONDS 秒后重连一次；
-        重连成功则恢复额度（下次断线仍可重连一次），重连再失败就永久放弃
+        首次连接失败或断线：等待 16-36 秒随机延时后重连一次；
+        重连成功则恢复额度（下次断线仍有一次机会），重连再失败就永久放弃
         自动重连：置 gave_up 并触发 on_give_up 回调（用于系统账号发布告警）。
         连接阶段若被判定为 TOKEN 过期/无效，则不等待不重试，立即放弃。
         恢复只能由管理员在后台手动接入（start_ws 会创建新客户端，状态自动复位）。
@@ -330,12 +337,13 @@ class MxWsClient:
                     self._fire_give_up(reason, False)
                     break
                 reconnect_pending = True
+                delay = _reconnect_delay()
                 logger.error(
-                    "MX WebSocket 断开（%s），%d 秒后重连一次；再失败将停止自动重连",
+                    "MX WebSocket 断开（%s），%.0f 秒后重连一次；再失败将停止自动重连",
                     reason or "connection closed",
-                    RECONNECT_DELAY_SECONDS,
+                    delay,
                 )
-                await asyncio.sleep(RECONNECT_DELAY_SECONDS)
+                await asyncio.sleep(delay)
         finally:
             self.running = False
 

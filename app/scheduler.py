@@ -40,7 +40,11 @@ from .proxy import note_fetch_proxy, tick_proxy_pools
 try:
     from .fetchers.mx.client import MXTokenExpiredError
     from .services.mx_sync import MXRoomSyncService
-    from .services.mx_window import generate_mx_daily_window, in_window as mx_in_window
+    from .services.mx_window import (
+        generate_mx_daily_windows,
+        in_window as mx_in_window,
+        pick_daily_fallback_slot,
+    )
     MX_AVAILABLE = True
 except Exception as e:
     MX_AVAILABLE = False
@@ -1853,13 +1857,14 @@ class Scheduler:
         self._mx_ws_task = None
         self._mx_ws_on_message = None
         self._mx_ws_on_give_up = None
-        # 每日窗口管理：WS 会话与兜底拉取只在窗口内运行（7-8点随机开/16-17点随机关）
+        # 每日多窗口管理：WS 会话只在窗口内运行（每日三段随机时段，见 mx_window.py）
         self._mx_window_task: asyncio.Task | None = None
-        self._mx_fallback_task: asyncio.Task | None = None
+        self._mx_windows: list | None = None
         self._mx_window_date = None
-        self._mx_window_start: datetime | None = None
-        self._mx_window_stop: datetime | None = None
         self._mx_window_open = False
+        # 每日一次兜底拉取的预约时刻（随窗口一起生成，当天固定；错过不补打）
+        self._mx_fallback_at: datetime | None = None
+        self._mx_fallback_done = False
         # 本窗口内 WS 已永久放弃自动重连（防窗口循环反复拉起，违背「只重连一次」）
         self._mx_ws_gave_up = False
         # TOKEN 过期熔断：置位后不再发起任何拉取/WS，直到管理员更换 TOKEN
@@ -1884,9 +1889,6 @@ class Scheduler:
         if self._mx_window_task:
             self._mx_window_task.cancel()
             self._mx_window_task = None
-        if self._mx_fallback_task:
-            self._mx_fallback_task.cancel()
-            self._mx_fallback_task = None
         if self._mx_sync_service:
             self._mx_sync_service.stop()
             self._mx_sync_service = None
@@ -2016,22 +2018,28 @@ class Scheduler:
 
     # ---- MX 每日运行窗口：7-8 点随机开、16-17 点随机关，窗口外零请求 ----
 
-    def _mx_window_today(self):
-        """取（必要时生成）当天的运行窗口，生成后当天固定。"""
+    # ---- MX 每日运行窗口：每日三段随机时段（早/午后/晚间），窗口外零请求 ----
+
+    def _mx_windows_today(self) -> list:
+        """取（必要时生成）当天的运行窗口与兜底预约时刻，生成后当天固定。"""
         today = datetime.now(CN_TZ).date()
-        if self._mx_window_date != today or self._mx_window_start is None:
+        if self._mx_window_date != today or self._mx_windows is None:
             self._mx_window_date = today
-            self._mx_window_start, self._mx_window_stop = generate_mx_daily_window(today)
+            self._mx_windows = generate_mx_daily_windows(today)
+            self._mx_fallback_at = pick_daily_fallback_slot(self._mx_windows)
+            self._mx_fallback_done = False
             logger.info(
-                "MX 今日运行窗口：%s ~ %s",
-                self._mx_window_start.strftime("%H:%M:%S"),
-                self._mx_window_stop.strftime("%H:%M:%S"),
+                "MX 今日运行窗口：%s；每日兜底拉取预约时刻：%s",
+                "、".join(
+                    f"{s.strftime('%H:%M:%S')}~{e.strftime('%H:%M:%S')}"
+                    for s, e in self._mx_windows
+                ),
+                self._mx_fallback_at.strftime("%H:%M:%S") if self._mx_fallback_at else "无",
             )
-        return self._mx_window_start, self._mx_window_stop
+        return self._mx_windows
 
     def _mx_in_window(self) -> bool:
-        start, stop = self._mx_window_today()
-        return mx_in_window(datetime.now(CN_TZ), start, stop)
+        return mx_in_window(datetime.now(CN_TZ), self._mx_windows_today())
 
     def _mx_session_active(self) -> bool:
         return bool(self._mx_ws_task and not self._mx_ws_task.done())
@@ -2053,6 +2061,7 @@ class Scheduler:
                     self._mx_window_open = False
                     await self._mx_session_stop()
                 await asyncio.to_thread(self._mx_check_token_age)
+                await self._mx_maybe_daily_fallback()
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -2063,7 +2072,7 @@ class Scheduler:
                 raise
 
     async def _mx_session_start(self):
-        """开启当日 MX 会话：启动 WS 监听 + 兜底拉取循环。"""
+        """开启当前窗口的 MX 会话：启动 WS 监听（每个窗口只尝试一次）。"""
         if not self.mx_config.ws_enabled:
             logger.info("MX 窗口已开启，但实时推送未启用（ws_enabled=false），跳过会话")
             return
@@ -2082,13 +2091,9 @@ class Scheduler:
                 f"⚠️ MX 运行窗口已开启，但 WebSocket 启动失败：{exc}",
             )
             return
-        self._mx_fallback_task = asyncio.create_task(self._mx_fallback_loop())
 
     async def _mx_session_stop(self):
-        """关闭当日 MX 会话：停兜底拉取与 WS 监听（窗口外零请求）。"""
-        if self._mx_fallback_task:
-            self._mx_fallback_task.cancel()
-            self._mx_fallback_task = None
+        """关闭当前窗口的 MX 会话：断开 WS 监听（窗口外零请求）。"""
         if self._mx_session_active():
             try:
                 await self.mx_ws_control("disconnect")
@@ -2096,24 +2101,29 @@ class Scheduler:
                 logger.warning("MX 窗口关闭会话失败", exc_info=True)
         logger.info("MX 窗口已关闭，会话停止")
 
-    async def _mx_fallback_loop(self):
-        """兜底拉取：窗口内每随机 20-200 分钟拉 1 个启用房间，防 WS 静默假死。
+    async def _mx_maybe_daily_fallback(self):
+        """每日一次兜底拉取：到达当天预约时刻且会话存活时执行，每天最多 1 次。
 
-        随机间隔 + 每轮只拉 1 个房间：把节拍和量级都压到真人水平，
-        不产生「固定周期扫全量房间」的爬虫签名。
+        兜底的存在意义只是防 WS 静默假死，量级必须压到真人水平：时刻一过
+        或会话未存活直到关窗，当天直接放弃，绝不补打。
         """
-        try:
-            while not self._stop.is_set():
-                await asyncio.sleep(random.uniform(20 * 60, 200 * 60))
-                if self._stop.is_set() or not self._mx_in_window():
-                    continue
-                if self._mx_token_expired:
-                    continue
-                await self._mx_fallback_pull_once()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.error("MX fallback loop error", exc_info=True)
+        if self._mx_fallback_at is None or self._mx_fallback_done:
+            return
+        now = datetime.now(CN_TZ)
+        if now < self._mx_fallback_at:
+            return
+        if not self._mx_in_window():
+            self._mx_fallback_done = True
+            logger.info("MX 每日兜底拉取放弃：预约时刻后会话未存活（窗口已结束）")
+            return
+        if self._mx_token_expired or not self._mx_session_active():
+            # 会话还没起来（或 TOKEN 刚过期）：等下一个 30s tick，直到窗口结束
+            return
+        self._mx_fallback_done = True
+        logger.info(
+            "MX 每日兜底拉取开始（预约 %s）", self._mx_fallback_at.strftime("%H:%M:%S")
+        )
+        await self._mx_fallback_pull_once()
 
     async def _mx_fallback_pull_once(self):
         """随机拉 1 个启用房间的最新消息（含有限追平），入库并推送。"""
@@ -2309,9 +2319,6 @@ class Scheduler:
         if self._mx_window_task:
             self._mx_window_task.cancel()
             self._mx_window_task = None
-        if self._mx_fallback_task:
-            self._mx_fallback_task.cancel()
-            self._mx_fallback_task = None
         self._mx_window_open = False
         self._mx_ws_gave_up = False
         _mx_fetcher = None
