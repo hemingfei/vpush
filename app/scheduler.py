@@ -12,7 +12,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .backup import run_scheduled
 from .channels import channel_bound, channel_enabled
@@ -1872,6 +1872,9 @@ class Scheduler:
         # 每日一次兜底拉取的预约时刻（随窗口一起生成，当天固定；错过不补打）
         self._mx_fallback_at: datetime | None = None
         self._mx_fallback_done = False
+        # 晚间兜底强关：23:30-23:35 随机一秒，若 MX 仍在线则强制关闭（防手动登录忘关）
+        self._mx_force_close_at: datetime | None = None
+        self._mx_force_close_done = False
         # 本窗口内 WS 已永久放弃自动重连（防窗口循环反复拉起，违背「只重连一次」）
         self._mx_ws_gave_up = False
         # TOKEN 过期熔断：置位后不再发起任何拉取/WS，直到管理员更换 TOKEN
@@ -2090,6 +2093,12 @@ class Scheduler:
             self._mx_armed = arm_windows(self._mx_windows, datetime.now(CN_TZ))
             self._mx_fallback_at = pick_daily_fallback_slot(self._mx_windows)
             self._mx_fallback_done = False
+            # 晚间兜底强关时刻：23:30 起随机 0-300 秒（正常窗口最晚 22 点前已关，
+            # 这是防「手动登录忘关」的最后保险）
+            self._mx_force_close_at = datetime(
+                today.year, today.month, today.day, 23, 30, tzinfo=CN_TZ
+            ) + timedelta(seconds=random.randint(0, 300))
+            self._mx_force_close_done = False
             missed = [i + 1 for i, armed in enumerate(self._mx_armed) if not armed]
             logger.info(
                 "MX 今日运行窗口：%s；每日兜底拉取预约时刻：%s%s",
@@ -2141,6 +2150,7 @@ class Scheduler:
                     await self._mx_session_stop()
                 await asyncio.to_thread(self._mx_check_token_age)
                 await self._mx_maybe_daily_fallback()
+                await self._mx_maybe_nightly_force_close()
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -2228,6 +2238,28 @@ class Scheduler:
             "MX 每日兜底拉取开始（预约 %s）", self._mx_fallback_at.strftime("%H:%M:%S")
         )
         await self._mx_fallback_pull_once()
+
+    async def _mx_maybe_nightly_force_close(self):
+        """晚间兜底强关：23:30-23:35 间随机一秒，MX 若仍在线一律强制关闭。
+
+        正常三段窗口最晚 22 点前就会关窗；这条是防「手动登录后忘关」等场景的
+        最后保险，无论会话来源（自动/手动）到点即关，当天只执行一次。
+        """
+        if self._mx_force_close_at is None or self._mx_force_close_done:
+            return
+        now = datetime.now(CN_TZ)
+        if now < self._mx_force_close_at:
+            return
+        self._mx_force_close_done = True
+        if not (self._mx_window_open or self._mx_session_active()):
+            logger.info("MX 晚间强关检查：会话未在线，无需关闭")
+            return
+        logger.info(
+            "MX 晚间强关触发（预约 %s）：强制关闭仍在运行的会话",
+            self._mx_force_close_at.strftime("%H:%M:%S"),
+        )
+        self._mx_window_open = False
+        await self._mx_session_stop()
 
     async def _mx_fallback_pull_once(self):
         """随机拉 1 个启用房间的最新消息（含有限追平），入库并推送。"""

@@ -1276,6 +1276,84 @@ def test_arm_windows_disarms_missed_on_restart():
     assert arm_windows(windows, mid_w2) == [False, False, True]
 
 
+def test_nightly_force_close_time_within_bounds():
+    """晚间强关时刻必须落在 23:30:00-23:35:00 之间（每天随机）。"""
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler._mx_windows_today()
+    fc = scheduler._mx_force_close_at
+    assert fc is not None
+    assert fc.hour == 23 and 30 <= fc.minute <= 35
+    assert not (fc.minute == 35 and fc.second > 0)
+
+
+def test_nightly_force_close_stops_active_session():
+    """到点若仍在线（无论自动/手动登录），晚间强关必须关闭会话。"""
+    from datetime import datetime, timedelta
+
+    from app.services.mx_window import CN_TZ
+
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+
+    actions = []
+
+    async def fake_ws_control(action):
+        # 与真实 mx_ws_control("disconnect") 口径一致：取消 WS 任务并置空
+        actions.append(action)
+        if scheduler._mx_ws_task and not scheduler._mx_ws_task.done():
+            scheduler._mx_ws_task.cancel()
+        scheduler._mx_ws_task = None
+        return "已断开"
+
+    scheduler.mx_ws_control = fake_ws_control
+    scheduler._mx_force_close_at = datetime.now(CN_TZ) - timedelta(seconds=1)
+    scheduler._mx_force_close_done = False
+
+    async def scenario():
+        scheduler._mx_ws_task = asyncio.create_task(asyncio.sleep(3600))  # 模拟会话在线
+        await scheduler._mx_maybe_nightly_force_close()
+
+    asyncio.run(scenario())
+
+    assert actions == ["disconnect"]
+    assert scheduler._mx_force_close_done is True
+    assert scheduler._mx_window_open is False
+    assert scheduler._mx_ws_task is None
+
+
+def test_nightly_force_close_waits_until_scheduled():
+    """未到预约时刻：不关闭、不标记完成。"""
+    from datetime import datetime, timedelta
+
+    from app.services.mx_window import CN_TZ
+
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+
+    actions = []
+
+    async def fake_ws_control(action):
+        actions.append(action)
+        return "ok"
+
+    scheduler.mx_ws_control = fake_ws_control
+    scheduler._mx_force_close_at = datetime.now(CN_TZ) + timedelta(seconds=60)
+    scheduler._mx_force_close_done = False
+
+    async def scenario():
+        scheduler._mx_ws_task = asyncio.create_task(asyncio.sleep(3600))  # 模拟会话在线
+        await scheduler._mx_maybe_nightly_force_close()
+
+    asyncio.run(scenario())
+
+    assert actions == []
+    assert scheduler._mx_force_close_done is False
+    scheduler._mx_ws_task.cancel()
+
+
 def test_daily_fallback_slot_inside_window_and_before_close():
     """每日兜底预约时刻必须落在某段窗口内部，且距关窗至少 1 分钟。"""
     from datetime import date, timedelta
