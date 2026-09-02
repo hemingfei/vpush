@@ -554,6 +554,12 @@ def test_plaza_rerenders_across_mobile_breakpoint_and_hydrates_search():
     assert 'routePath() === "home"' in watch
     assert "renderHome(++routeRenderSeq)" in watch
     assert desktop_search in render
+    assert re.search(
+        r'if \(!routeStillActive\(seq\)\) return;[^\n]*\n\s*'
+        r'const mobileHome = isMobileTimelineFilter\(\);\n\s*'
+        r'\$\("#main"\)\.innerHTML',
+        render,
+    ), "viewport must be sampled after the final route guard and next to the DOM commit"
 
 
 def test_plaza_keeps_subscribed_and_favorite_filters():

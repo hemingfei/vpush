@@ -2060,7 +2060,6 @@ async function renderHome(seq) {
   setPageTitle("订阅广场");
   ensurePlazaPlatformSelection();
   ensureHomeMobileWatch();
-  const mobileHome = isMobileTimelineFilter();
   let onboardingHtml = "";
   if (state.user && !state.user.subscription_count) {
     try {
@@ -2096,6 +2095,7 @@ async function renderHome(seq) {
     }
   }
   if (!routeStillActive(seq)) return; // 已切走：不写旧首页的 DOM
+  const mobileHome = isMobileTimelineFilter();
   $("#main").innerHTML = `
     ${onboardingHtml}
     <section class="section-panel home-panel">
