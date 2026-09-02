@@ -204,7 +204,6 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         # 在 lifespan 内注入而非模块级，避免导入即钉死全局 flag、影响测试对环境变量的操控
         set_alerts_enabled(config.alerts_enabled)
         if background_workers_enabled():
-            feishu_documents.recover_read_models()
             ima_documents.start()
             feishu_documents.start()
             task = asyncio.create_task(scheduler.run())

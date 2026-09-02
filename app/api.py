@@ -3475,6 +3475,18 @@ def create_api_router(
 
         return RedirectResponse(url="/admin/knowledge?tab=feishu&oauth=success", status_code=303)
 
+    def _queue_feishu_sync(background_tasks: BackgroundTasks, service, source_id: int, force: bool) -> None:
+        def _run() -> None:
+            try:
+                service.sync_source(source_id, force)
+            except Exception:  # noqa: BLE001 - 失败状态已落库，后台不得二次抛出
+                logger.warning(
+                    "Feishu document background sync failed source_id=%s", source_id,
+                    exc_info=True,
+                )
+
+        background_tasks.add_task(_run)
+
     @router.post("/admin/feishu-documents")
     def add_feishu_document_source(
         body: FeishuDocumentSourceIn,
@@ -3487,7 +3499,7 @@ def create_api_router(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         source = db.upsert_feishu_document_source(parsed)
-        background_tasks.add_task(service.sync_source, int(source["id"]), True)
+        _queue_feishu_sync(background_tasks, service, int(source["id"]), True)
         _audit(admin, "add_feishu_document_source", str(source["id"]), parsed["canonical_url"])
         return _public_feishu_source(source)
 
@@ -3509,7 +3521,7 @@ def create_api_router(
             last_error="",
         )
         if body.enabled:
-            background_tasks.add_task(service.sync_source, source_id, False)
+            _queue_feishu_sync(background_tasks, service, source_id, False)
         else:
             ima_documents.remove_external_document(source["group_id"], source["media_id"])
         updated = db.get_feishu_document_source(source_id)
@@ -3528,7 +3540,7 @@ def create_api_router(
             raise HTTPException(status_code=404, detail="飞书文档来源不存在")
         if not source.get("enabled"):
             raise HTTPException(status_code=400, detail="请先启用该来源")
-        background_tasks.add_task(service.sync_source, source_id, True)
+        _queue_feishu_sync(background_tasks, service, source_id, True)
         _audit(admin, "sync_feishu_document_source", str(source_id))
         return {"ok": True, "status": "queued"}
 
