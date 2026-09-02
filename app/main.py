@@ -18,6 +18,7 @@ from .api import create_api_router
 from .config import load_config
 from .db import DB
 from .fetchers import build_fetchers
+from .feishu_documents import FeishuDocumentSyncService
 from .ima_documents import ImaDocumentService
 from .ima_search import ImaSearchIndex
 from .ima_storage import ImaStorageStatus
@@ -111,6 +112,12 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         llm_config=config.llm,
         search_index=ima_search_index,
     )
+    feishu_documents = FeishuDocumentSyncService(
+        db,
+        config.feishu_documents,
+        archive_root,
+        ima_documents=ima_documents,
+    )
     # WARNING+ 日志持久化到 error_logs 表（跨重启可查，管理后台错误记录面板）
     register_error_sink(
         lambda record: db.record_error_log(record.levelname, record.name, record.getMessage())
@@ -197,7 +204,9 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         # 在 lifespan 内注入而非模块级，避免导入即钉死全局 flag、影响测试对环境变量的操控
         set_alerts_enabled(config.alerts_enabled)
         if background_workers_enabled():
+            feishu_documents.recover_read_models()
             ima_documents.start()
+            feishu_documents.start()
             task = asyncio.create_task(scheduler.run())
             if config.alerts_enabled and config.notifiers.telegram.bot_token:
                 from .telegram_bot import TelegramBot
@@ -242,6 +251,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
             if bot is not None:
                 bot.client.close()
         news_service.close()
+        feishu_documents.stop()
         ima_documents.stop()
         db.close()
 
@@ -256,6 +266,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     app.state.db = db
     app.state.llm_config = config.llm
     app.state.ima_documents = ima_documents
+    app.state.feishu_documents = feishu_documents
     app.state.ima_search_index = ima_search_index
     app.state.news_service = news_service
 
@@ -313,6 +324,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
             notifiers_config=config.notifiers,
             trust_proxy=config.web.trust_proxy,
             ima_documents=ima_documents,
+            feishu_documents=feishu_documents,
             news_service=news_service,
         )
     )

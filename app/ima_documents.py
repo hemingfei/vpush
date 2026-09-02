@@ -2788,6 +2788,43 @@ class ImaDocumentService:
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise RuntimeError(f"unreadable IMA source {path.name}") from exc
 
+    def _committed_feishu_sources(
+        self,
+        records: list[dict[str, Any]],
+        state: dict[str, dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+        lister = getattr(self.db, "list_feishu_document_sources", None)
+        if not callable(lister):
+            return records, state
+        all_sources = lister(include_deleted=True)
+        feishu_groups = {
+            str(item.get("group_id") or "") for item in all_sources if item.get("group_id")
+        }
+        if not feishu_groups:
+            return records, state
+        records = [
+            item for item in records
+            if str(item.get("group_id") or "") not in feishu_groups
+        ]
+        state = {
+            key: item for key, item in state.items()
+            if str(item.get("group_id") or "") not in feishu_groups
+        }
+        for source in all_sources:
+            if not source.get("enabled") or source.get("deleted_at"):
+                continue
+            try:
+                record = json.loads(str(source.get("published_record_json") or ""))
+                state_item = json.loads(str(source.get("published_state_json") or ""))
+                if not isinstance(record, dict) or not isinstance(state_item, dict):
+                    continue
+                key = self.store.state_key(record)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            records.append(record)
+            state[key] = state_item
+        return records, state
+
     def _load_rebuild_sources(
         self, groups: tuple[ImaGroupConfig, ...] | None
     ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
@@ -2800,6 +2837,7 @@ class ImaDocumentService:
         else:
             records = []
         state = state_value if isinstance(state_value, dict) else {}
+        records, state = self._committed_feishu_sources(records, state)
         normalized = self.store._normalize_manifest_records(records, groups)
         overrides = load_title_overrides(self.store.archive_root)
         return apply_title_overrides(normalized, overrides), state
@@ -3557,8 +3595,69 @@ class ImaDocumentService:
         incr = self._cicc_incr_ts()
         return bool(incr) and incr > self._local_scan_ts()
 
+    def external_document_current(
+        self, group_id: str, media_id: str, txt_path: str
+    ) -> bool:
+        record = next(
+            (
+                item for item in self.store.load_manifest()
+                if str(item.get("group_id") or "") == str(group_id)
+                and str(item.get("media_id") or "") == str(media_id)
+            ),
+            None,
+        )
+        if record is None:
+            return False
+        state_item = self.store.load_state().get(self.store.state_key(record)) or {}
+        if str(state_item.get("txt") or "") != str(txt_path):
+            return False
+        finder = getattr(self.db, "ima_document_from_index", None)
+        if not callable(finder):
+            return True
+        document = finder(str(media_id), [str(group_id)], str(group_id))
+        return bool(document and str(document.get("txt_path") or "") == str(txt_path))
+
+    def publish_external_document(
+        self,
+        group: ImaGroupConfig,
+        record: dict[str, Any],
+        state_item: dict[str, Any],
+    ) -> None:
+        """Publish one externally archived document through the shared read model."""
+        with self._sync_lock:
+            self.store._remember_groups((group,))
+            normalized = dict(record)
+            normalized["group_id"] = group.id
+            normalized["group_name"] = group.name
+            state = self.store.load_state()
+            state[self.store.state_key(normalized)] = {
+                **state_item,
+                "group_id": group.id,
+                "group_name": group.name,
+            }
+            self.store.save_state(state)
+            self.store.save_group_manifest(group.id, [normalized])
+            self._replace_group_index(group.id, [normalized], state)
+            if self.search_index is not None:
+                self.search_index.add_group_ids((group.id,))
+            self._sync_full_text_index()
+
+    def remove_external_document(self, group_id: str, media_id: str) -> None:
+        """Hide an external document while leaving its archived versions untouched."""
+        record = {"group_id": str(group_id), "media_id": str(media_id)}
+        with self._sync_lock:
+            self.store.save_group_manifest(group_id, [])
+            state = self.store.load_state()
+            try:
+                state.pop(self.store.state_key(record), None)
+            except ValueError:
+                pass
+            self.store.save_state(state)
+            self._replace_group_index(group_id, [], state)
+            self._sync_full_text_index()
+
     def product_groups(self) -> tuple[ImaGroupConfig, ...]:
-        """用户侧组：IMA 组 + 已启用的本地库；停用/报错的本地库不出现。"""
+        """用户侧组：IMA 组、已启用本地库及飞书文档来源。"""
         local = tuple(
             ImaGroupConfig(
                 id=group_id,
@@ -3573,7 +3672,19 @@ class ImaDocumentService:
             )
             if group_id and name
         )
-        return self.config().groups + local
+        feishu = tuple(
+            ImaGroupConfig(
+                id=str(item.get("group_id") or ""),
+                name=str(item.get("title") or "飞书文档"),
+                knowledge_base_id="",
+                root_folder_id="",
+            )
+            for item in self.db.list_feishu_document_sources(active_only=True)
+            if item.get("group_id") and item.get("timeline_path")
+        )
+        if self.search_index is not None:
+            self.search_index.add_group_ids(group.id for group in feishu)
+        return self.config().groups + local + feishu
 
     def scan_local_libraries(self) -> dict[str, Any]:
         """管理员手动扫描；与 IMA 同步互斥，避免 manifest/state 互相覆盖。"""

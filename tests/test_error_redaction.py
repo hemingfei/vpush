@@ -79,6 +79,37 @@ def test_error_db_handler_passes_redacted_copy_to_sink():
     assert record.getMessage() == secret
 
 
+def test_error_db_handler_persists_redacted_exception_summary():
+    captured = []
+    register_error_sink(lambda record: captured.append(record))
+    secret = "api_key=exception-secret"
+    try:
+        raise RuntimeError(f"database busy {secret}")
+    except RuntimeError as exc:
+        record = logging.LogRecord(
+            "test.sink",
+            logging.ERROR,
+            __file__,
+            1,
+            "scheduled task failed",
+            (),
+            (type(exc), exc, exc.__traceback__),
+        )
+
+    original_exc_info = record.exc_info
+    try:
+        ErrorDbHandler().emit(record)
+    finally:
+        register_error_sink(None)
+
+    message = captured[0].getMessage()
+    assert message == "scheduled task failed: RuntimeError: database busy api_key=<redacted>"
+    assert "exception-secret" not in message
+    assert captured[0].exc_info is None
+    assert record.getMessage() == "scheduled task failed"
+    assert record.exc_info is original_exc_info
+
+
 def test_redacting_formatter_removes_credentials_and_preserves_ordinary_text():
     formatter = RedactingFormatter("%(levelname)s %(message)s")
     secret = "Cookie: auth_token=short8; api_key=long-secret-value-1234567890 Bearer abcdefghijklmnop"

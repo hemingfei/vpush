@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import mimetypes
 import os
 import re
 import secrets
@@ -83,6 +84,11 @@ from .fetchers.zsxq import (
     resolve_zsxq_file_url,
     resolve_zsxq_profile,
     zsxq_cache_stats,
+)
+from .feishu_documents import (
+    FeishuDocumentError,
+    FeishuDocumentSyncService,
+    parse_feishu_document_url,
 )
 from .ima_documents import (
     IMA_FOLDER_LIST_MAX_PAGES,
@@ -595,6 +601,19 @@ class ImaCollectorIn(BaseModel):
 
 class ImaCollectorSyncIn(BaseModel):
     group_id: str = ""
+
+
+class FeishuDocumentSourceIn(BaseModel):
+    url: str
+
+
+class FeishuDocumentSourceUpdateIn(BaseModel):
+    enabled: bool
+
+
+class FeishuDocumentOauthCallbackIn(BaseModel):
+    state: str
+    code: str
 
 
 class CiccTriggerIn(BaseModel):
@@ -1189,6 +1208,7 @@ def create_api_router(
     notifiers_config=None,
     trust_proxy: bool = False,
     ima_documents: ImaDocumentService | None = None,
+    feishu_documents: FeishuDocumentSyncService | None = None,
     news_service: NewsService | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api")
@@ -3055,6 +3075,10 @@ def create_api_router(
             str(item.get("group_id") or "")
             for item in ima_documents.local_scan_status()["libraries"]
         }
+        ids |= {
+            str(item.get("group_id") or "")
+            for item in db.list_feishu_document_sources()
+        }
         return ids
 
     def _readable_groups(user: dict):
@@ -3158,6 +3182,12 @@ def create_api_router(
         user: dict = Depends(get_current_user),
     ):
         document = _ima_document(user, media_id, group)
+        document_type = "feishu_timeline" if document.get("group_id", "").startswith("feishu-") else "document"
+        source_url = ""
+        if document_type == "feishu_timeline":
+            source = db.get_feishu_document_source_by_group(str(document.get("group_id") or ""))
+            if source and not source.get("deleted_at") and source.get("enabled"):
+                source_url = str(source.get("canonical_url") or "")
         return {
             "media_id": document["media_id"],
             "name": document["name"],
@@ -3174,6 +3204,8 @@ def create_api_router(
             "tags": document.get("tags") or [],
             "has_pdf": bool(document.get("has_pdf")),
             "has_txt": bool(document.get("has_txt")),
+            "type": document_type,
+            "source_url": source_url,
         }
 
     @router.post("/ima-documents/{media_id}/translate")
@@ -3207,6 +3239,98 @@ def create_api_router(
         if not ima_documents.store.archive_readable():
             raise HTTPException(status_code=503, detail="知识库存储暂不可用")
         return ima_documents.store.authorized_archive_file(document.get(f"{field}_path"))
+
+    @router.get("/ima-documents/{media_id}/timeline")
+    def get_feishu_document_timeline(
+        media_id: str,
+        group: str = Query("", max_length=128),
+        order: Literal["latest", "original"] = "latest",
+        user: dict = Depends(get_current_user),
+    ):
+        if feishu_documents is None:
+            raise HTTPException(status_code=503, detail="飞书文档服务未启用")
+        document = _ima_document(user, media_id, group)
+        source = db.get_feishu_document_source_by_group(str(document.get("group_id") or ""))
+        if source is None or source.get("deleted_at") or not source.get("enabled"):
+            raise HTTPException(status_code=404, detail="飞书文档不存在")
+        try:
+            timeline = feishu_documents.timeline(source)
+        except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=404, detail="时间线内容不存在") from exc
+        entries = list(timeline.get("entries") or [])
+        if order == "latest":
+            entries.reverse()
+        return {
+            "source": {
+                "id": source["id"],
+                "group_id": source["group_id"],
+                "media_id": source["media_id"],
+                "title": source.get("title") or document["name"],
+                "canonical_url": source["canonical_url"],
+                "revision_id": source.get("revision_id") or "",
+                "last_success_at": source.get("last_success_at") or "",
+            },
+            "notices": timeline.get("notices") or [],
+            "entries": entries,
+            "order": order,
+        }
+
+    @router.get("/ima-documents/timeline/all")
+    def get_all_feishu_document_timelines(
+        order: Literal["latest", "original"] = "latest",
+        user: dict = Depends(get_current_user),
+    ):
+        if feishu_documents is None:
+            raise HTTPException(status_code=503, detail="飞书文档服务未启用")
+        readable = {group.id for group in _readable_groups(user)}
+        sources = [
+            item for item in db.list_feishu_document_sources(active_only=True)
+            if item.get("timeline_path") and item.get("group_id") in readable
+        ]
+        entries = []
+        notices = []
+        public_sources = []
+        for source in sources:
+            try:
+                timeline = feishu_documents.timeline(source)
+            except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
+                continue
+            public_source = {
+                "id": source["id"],
+                "group_id": source["group_id"],
+                "media_id": source["media_id"],
+                "title": source.get("title") or "飞书文档",
+                "revision_id": source.get("revision_id") or "",
+                "last_success_at": source.get("last_success_at") or "",
+            }
+            public_sources.append(public_source)
+            notices.extend({**item, "source": public_source} for item in timeline.get("notices") or [])
+            entries.extend({**item, "source": public_source} for item in timeline.get("entries") or [])
+        entries.sort(
+            key=lambda item: (str(item.get("timestamp") or ""), str(item.get("id") or "")),
+            reverse=order == "latest",
+        )
+        return {"sources": public_sources, "notices": notices, "entries": entries, "order": order}
+
+    @router.get("/ima-documents/{media_id}/assets/{asset_id}")
+    def get_feishu_document_asset(
+        media_id: str,
+        asset_id: str,
+        group: str = Query("", max_length=128),
+        user: dict = Depends(get_current_user),
+    ):
+        _enforce_ima_file_quota(user)
+        if feishu_documents is None:
+            raise HTTPException(status_code=503, detail="飞书文档服务未启用")
+        document = _ima_document(user, media_id, group)
+        source = db.get_feishu_document_source_by_group(str(document.get("group_id") or ""))
+        if source is None or source.get("deleted_at") or not source.get("enabled"):
+            raise HTTPException(status_code=404, detail="飞书文档不存在")
+        try:
+            asset = feishu_documents.asset(source, asset_id)
+        except (FileNotFoundError, OSError):
+            raise HTTPException(status_code=404, detail="飞书文档资源不存在") from None
+        return FileResponse(str(asset), media_type=mimetypes.guess_type(asset.name)[0] or "application/octet-stream")
 
     @router.get("/ima-documents/{media_id}/text")
     def get_ima_document_text(
@@ -3255,6 +3379,171 @@ def create_api_router(
         for group in payload.get("config", {}).get("groups", []):
             group["acl_usernames"] = db.ima_kb_acl_usernames(group["id"])
         return payload
+
+    def _public_feishu_source(source: dict) -> dict:
+        interval = max(int(getattr(feishu_documents.config, "interval_seconds", 60)), 15)
+        last_checked = str(source.get("last_checked_at") or "")
+        next_check_at = ""
+        if last_checked and source.get("enabled") and not source.get("deleted_at"):
+            try:
+                next_check_at = (
+                    datetime.fromisoformat(last_checked.replace("Z", "+00:00"))
+                    + timedelta(seconds=interval)
+                ).isoformat()
+            except ValueError:
+                pass
+        return {
+            "id": int(source["id"]),
+            "source_type": source["source_type"],
+            "canonical_url": source["canonical_url"],
+            "group_id": source["group_id"],
+            "media_id": source["media_id"],
+            "title": source.get("title") or "待首次同步",
+            "revision_id": source.get("revision_id") or "",
+            "entry_count": int(source.get("entry_count") or 0),
+            "enabled": bool(source.get("enabled")),
+            "sync_status": source.get("sync_status") or "pending",
+            "last_checked_at": source.get("last_checked_at") or "",
+            "last_success_at": source.get("last_success_at") or "",
+            "next_check_at": next_check_at,
+            "last_error": str(source.get("last_error") or "")[:300],
+            "acl_usernames": db.ima_kb_acl_usernames(str(source["group_id"])),
+        }
+
+    def _require_feishu_documents():
+        if feishu_documents is None:
+            raise HTTPException(status_code=503, detail="飞书文档服务未启用")
+        return feishu_documents
+
+    @router.get("/admin/feishu-documents", dependencies=[Depends(require_admin)])
+    def list_feishu_document_sources():
+        service = _require_feishu_documents()
+        credential = db.get_feishu_oauth_credential()
+        return {
+            "configured": service.configured,
+            "authorized": bool(credential),
+            "interval_seconds": max(int(service.config.interval_seconds), 15),
+            "sources": [
+                _public_feishu_source(source)
+                for source in db.list_feishu_document_sources()
+            ],
+        }
+
+    @router.post("/admin/feishu-documents/oauth/start")
+    def start_feishu_documents_oauth(admin: dict = Depends(require_admin)):
+        service = _require_feishu_documents()
+        try:
+            url = service.oauth_start(int(admin["id"]))
+        except FeishuDocumentError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _audit(admin, "start_feishu_documents_oauth")
+        return {"url": url}
+
+    @router.post("/admin/feishu-documents/oauth/callback")
+    def finish_feishu_documents_oauth(body: FeishuDocumentOauthCallbackIn):
+        service = _require_feishu_documents()
+        try:
+            admin_id = service.oauth_callback(body.state.strip(), body.code.strip())
+        except FeishuDocumentError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        admin = db.get_user(admin_id)
+        if admin is None or not admin.get("is_admin"):
+            raise HTTPException(status_code=403, detail="授权发起账号不是管理员")
+        _audit(admin, "finish_feishu_documents_oauth")
+        return {"ok": True}
+
+    @router.get("/admin/feishu-documents/oauth/callback")
+    def finish_feishu_documents_oauth_redirect(
+        state: str = Query("", max_length=256),
+        code: str = Query("", max_length=4096),
+    ):
+        service = _require_feishu_documents()
+        try:
+            admin_id = service.oauth_callback(state.strip(), code.strip())
+        except FeishuDocumentError:
+            from fastapi.responses import RedirectResponse
+
+            return RedirectResponse(
+                url="/admin/knowledge?tab=feishu&oauth=failed",
+                status_code=303,
+            )
+        admin = db.get_user(admin_id)
+        if admin is None or not admin.get("is_admin"):
+            raise HTTPException(status_code=403, detail="授权发起账号不是管理员")
+        _audit(admin, "finish_feishu_documents_oauth")
+        from fastapi.responses import RedirectResponse
+
+        return RedirectResponse(url="/admin/knowledge?tab=feishu&oauth=success", status_code=303)
+
+    @router.post("/admin/feishu-documents")
+    def add_feishu_document_source(
+        body: FeishuDocumentSourceIn,
+        background_tasks: BackgroundTasks,
+        admin: dict = Depends(require_admin),
+    ):
+        service = _require_feishu_documents()
+        try:
+            parsed = parse_feishu_document_url(body.url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        source = db.upsert_feishu_document_source(parsed)
+        background_tasks.add_task(service.sync_source, int(source["id"]), True)
+        _audit(admin, "add_feishu_document_source", str(source["id"]), parsed["canonical_url"])
+        return _public_feishu_source(source)
+
+    @router.patch("/admin/feishu-documents/{source_id}")
+    def update_feishu_document_source(
+        source_id: int,
+        body: FeishuDocumentSourceUpdateIn,
+        background_tasks: BackgroundTasks,
+        admin: dict = Depends(require_admin),
+    ):
+        service = _require_feishu_documents()
+        source = db.get_feishu_document_source(source_id)
+        if source is None or source.get("deleted_at"):
+            raise HTTPException(status_code=404, detail="飞书文档来源不存在")
+        db.update_feishu_document_source(
+            source_id,
+            enabled=body.enabled,
+            sync_status="pending" if body.enabled else "disabled",
+            last_error="",
+        )
+        if body.enabled:
+            background_tasks.add_task(service.sync_source, source_id, False)
+        else:
+            ima_documents.remove_external_document(source["group_id"], source["media_id"])
+        updated = db.get_feishu_document_source(source_id)
+        _audit(admin, "update_feishu_document_source", str(source_id), str(body.enabled))
+        return _public_feishu_source(updated)
+
+    @router.post("/admin/feishu-documents/{source_id}/sync")
+    def sync_feishu_document_source(
+        source_id: int,
+        background_tasks: BackgroundTasks,
+        admin: dict = Depends(require_admin),
+    ):
+        service = _require_feishu_documents()
+        source = db.get_feishu_document_source(source_id)
+        if source is None or source.get("deleted_at"):
+            raise HTTPException(status_code=404, detail="飞书文档来源不存在")
+        if not source.get("enabled"):
+            raise HTTPException(status_code=400, detail="请先启用该来源")
+        background_tasks.add_task(service.sync_source, source_id, True)
+        _audit(admin, "sync_feishu_document_source", str(source_id))
+        return {"ok": True, "status": "queued"}
+
+    @router.delete("/admin/feishu-documents/{source_id}")
+    def delete_feishu_document_source(
+        source_id: int,
+        admin: dict = Depends(require_admin),
+    ):
+        _require_feishu_documents()
+        source = db.soft_delete_feishu_document_source(source_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="飞书文档来源不存在")
+        ima_documents.remove_external_document(source["group_id"], source["media_id"])
+        _audit(admin, "delete_feishu_document_source", str(source_id))
+        return {"ok": True}
 
     @router.get("/admin/ima-collector", dependencies=[Depends(require_admin)])
     def get_ima_collector():

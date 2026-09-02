@@ -8,6 +8,11 @@ ALL_ENV = [
     "FEISHU_WEBHOOK_URL",
     "FEISHU_APP_ID",
     "FEISHU_APP_SECRET",
+    "FEISHU_DOCS_APP_ID",
+    "FEISHU_DOCS_APP_SECRET",
+    "FEISHU_DOCS_REDIRECT_URI",
+    "FEISHU_DOCS_SCOPES",
+    "FEISHU_DOCS_INTERVAL_SECONDS",
     "WECOM_WEBHOOK_URL",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_CHAT_ID",
@@ -37,6 +42,11 @@ def test_defaults_without_file(tmp_path, monkeypatch):
     config = load_config(tmp_path / "nope.yaml")
     assert config.polling.interval_seconds == 180
     assert config.notifiers.feishu.webhook_url == ""
+    assert config.feishu_documents.interval_seconds == 60
+    assert config.feishu_documents.scopes == (
+        "wiki:node:read docx:document:readonly "
+        "docs:document.media:download offline_access"
+    )
     assert config.db_path == "data/dav.db"
 
 

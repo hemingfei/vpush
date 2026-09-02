@@ -1524,16 +1524,26 @@ def test_ima_document_collector_lives_in_knowledge_settings():
 
 
 def test_ima_settings_have_one_parent_and_keep_zsxq_under_ima():
-    """知识库设置页采集在前，知识星球随后，存储在后。"""
+    """知识库设置页采集在前，飞书文档随后，知识星球与存储在后。"""
     knowledge = _fn_body("loadAdminKnowledge")
     collect = knowledge.index('data-tab="collect"')
+    feishu = knowledge.index('data-tab="feishu"')
     zsxq = knowledge.index('data-tab="zsxq"')
     storage = knowledge.index('data-tab="storage"')
-    assert collect < zsxq < storage
+    assert collect < feishu < zsxq < storage
+    assert 'id="feishu-documents-body"' in knowledge
     assert '<h2 class="section-title">存储</h2>' in _fn_body("imaStoragePanelHtml")
     assert 'class="cfg-group cfg-group--zsxq"' in knowledge
     assert 'id="pc-zq-pages"' in knowledge
     assert 'id="pc-zq-save"' in knowledge
+
+
+def test_feishu_document_timeline_uses_knowledge_reader_and_admin_tab():
+    src = APP_JS.read_text()
+    assert "/api/admin/feishu-documents" in src
+    assert "/api/ima-documents/timeline/all" in src
+    assert "feishu-timeline-panel" in src
+    assert "item.type === \"feishu_timeline\"" in src
 
 
 def test_zsxq_settings_use_one_column_on_narrow_layout():
@@ -3669,9 +3679,9 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=264"' in html
-    assert 'src="/app.js?v=378"' in html
-    assert 'dav-shell-v246' in sw
+    assert 'href="/style.css?v=265"' in html
+    assert 'src="/app.js?v=379"' in html
+    assert 'dav-shell-v247' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

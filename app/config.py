@@ -23,6 +23,15 @@ class FeishuConfig:
 
 
 @dataclass
+class FeishuDocumentsConfig:
+    app_id: str = ""
+    app_secret: str = ""
+    redirect_uri: str = ""
+    scopes: str = "wiki:node:read docx:document:readonly docs:document.media:download offline_access"
+    interval_seconds: int = 60
+
+
+@dataclass
 class WeComConfig:
     webhook_url: str = ""
 
@@ -146,6 +155,7 @@ class Config:
     web: WebConfig = field(default_factory=WebConfig)
     wechat: WeChatConfig = field(default_factory=WeChatConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    feishu_documents: FeishuDocumentsConfig = field(default_factory=FeishuDocumentsConfig)
     db_path: str = "data/dav.db"
     # 管理员告警总开关：false 时不发任何告警、不启动 TG/飞书 bot 长轮询。
     # 本地开发/测试实例务必置 false，避免用生产 config 误发告警、抢生产 bot 轮询。
@@ -164,6 +174,11 @@ _ENV_MAP = {
     "TELEGRAM_BOT_USERNAME": ("notifiers", "telegram", "bot_username"),
     "FEISHU_BOT_NAME": ("notifiers", "feishu", "bot_name"),
     "FEISHU_CREDENTIAL_KEY": ("notifiers", "feishu", "credential_key"),
+    "FEISHU_DOCS_APP_ID": ("feishu_documents", "app_id"),
+    "FEISHU_DOCS_APP_SECRET": ("feishu_documents", "app_secret"),
+    "FEISHU_DOCS_REDIRECT_URI": ("feishu_documents", "redirect_uri"),
+    "FEISHU_DOCS_SCOPES": ("feishu_documents", "scopes"),
+    "FEISHU_DOCS_INTERVAL_SECONDS": ("feishu_documents", "interval_seconds"),
     "WECOM_WEBHOOK_URL": ("notifiers", "wecom", "webhook_url"),
     "BARK_SERVER": ("notifiers", "bark", "bark_server"),
     "BARK_KEY": ("notifiers", "bark", "bark_key"),
@@ -243,6 +258,7 @@ def _validate(config: Config) -> None:
         ("web.trust_proxy", config.web, "trust_proxy", bool),
         ("notifiers.telegram.rich_messages", config.notifiers.telegram, "rich_messages", bool),
         ("alerts_enabled", config, "alerts_enabled", bool),
+        ("feishu_documents.interval_seconds", config.feishu_documents, "interval_seconds", int),
     )
     for label, obj, attr, expected in checks:
         value = getattr(obj, attr)
@@ -284,6 +300,8 @@ def _validate(config: Config) -> None:
         raise ValueError("配置项 polling.cookie_keepalive_interval_seconds 必须 >= 0")
     if not 0 <= config.polling.daily_report_hour <= 23:
         raise ValueError("配置项 polling.daily_report_hour 需在 0-23 之间")
+    if config.feishu_documents.interval_seconds < 15:
+        raise ValueError("配置项 feishu_documents.interval_seconds 必须 >= 15")
 
 
 def load_config(path: str | Path | None = None) -> Config:

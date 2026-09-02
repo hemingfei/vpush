@@ -80,6 +80,16 @@ class ImaSearchIndex:
     def enabled(self) -> bool:
         return bool(self.group_ids)
 
+    def add_group_ids(self, group_ids) -> None:
+        """Enable body indexing for dynamically configured document groups."""
+        added = tuple(
+            str(item).strip()
+            for item in group_ids
+            if str(item).strip() and str(item).strip() not in self.group_ids
+        )
+        if added:
+            self.group_ids = self.group_ids + tuple(dict.fromkeys(added))
+
     def _connect(self, *, readonly: bool = False) -> sqlite3.Connection:
         if readonly:
             uri = self.path.resolve().as_uri() + "?mode=ro"
