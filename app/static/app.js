@@ -32,7 +32,7 @@ const REPORT_WATCH_BLOCKED_TAGS = new Set([
 ]);
 const TL_SOURCE_KEY = "timelineSource";
 const KB_LAST_GROUP_KEY = "kb-last-group";
-const PLATFORM_TABS = ["", "system", "xueqiu", "combination", "weibo", "twitter", "zsxq", "mx"];
+const PLATFORM_TABS = ["", "system", "mx", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
 const STATS_TABS = ["config", "cookies", "mx", "proxies", "plaza", "news"];
 const STALE_KOL_LIMIT = 10;
 const STALE_KOL_HOURS = 48;
