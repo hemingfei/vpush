@@ -3669,8 +3669,8 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=263"' in html
-    assert 'src="/app.js?v=376"' in html
+    assert 'href="/style.css?v=264"' in html
+    assert 'src="/app.js?v=377"' in html
     assert 'dav-shell-v245' in sw
 
 
