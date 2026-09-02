@@ -4,34 +4,21 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import random
+import time
 from datetime import datetime
-from typing import Any
 
 from ..avatar_cache import cache_avatar
 from ..config import MxConfig
-from ..fetchers.mx.client import MXClient
+from ..fetchers.mx.client import MXClient, MXTokenExpiredError
 
 logger = logging.getLogger(__name__)
 
-# 房间列表同步间隔：每轮在 2-6 小时之间随机取值。
-# 精确的固定周期（每小时/每 24 小时整）是风控日志里最直白的机器信号，
-# 随机化后相邻两次同步的间隔不可预测。
-SYNC_MIN_INTERVAL_SECONDS = 2 * 3600
-SYNC_MAX_INTERVAL_SECONDS = 6 * 3600
-
 
 class MXRoomSyncService:
-    def __init__(self, config: MxConfig, db=None, on_error=None, should_run=None):
+    def __init__(self, config: MxConfig, db=None):
         self.config = config
         self.db = db
-        # on_error(str)：房间同步失败时回调（调度器用它走系统 KOL「系统通知」告警）
-        self.on_error = on_error
-        # should_run()：同步执行前的门控（每日运行窗口 / TOKEN 状态）
-        self.should_run = should_run
         self._last_sync: datetime | None = None
-        self._sync_task: asyncio.Task | None = None
-        self._initial_sync_task: asyncio.Task | None = None
         self._stopped = False
         # 复用同一客户端：每次同步都新建连接会产生一串「新 TLS 握手」事件，
         # 同指纹的连接在风控日志里可被聚合计数
@@ -43,22 +30,106 @@ class MXRoomSyncService:
         return self._client
 
     def _notify_error(self, message: str):
-        if self.on_error is None:
-            return
-        try:
-            self.on_error(message)
-        except Exception:  # noqa: BLE001 - 告警失败不影响同步任务
-            logger.error("MX sync on_error 回调失败", exc_info=True)
+        """同步失败的统一出口：当前由调用方（开窗会话）捕获后走系统告警，保留挂点。"""
+        logger.error("MX room sync error: %s", message)
 
-    async def sync_rooms(self):
-        """Sync all MX rooms to KOLs（同步 HTTP/DB 走线程池，不阻塞事件循环）。"""
-        await asyncio.to_thread(self._sync_rooms_blocking)
+    async def sync_rooms(self) -> int:
+        """Sync all MX rooms to KOLs（同步 HTTP/DB 走线程池，不阻塞事件循环）。
 
-    def _sync_rooms_blocking(self):
+        Returns:
+            本次拉取到的房间数量（供开窗/登录报告展示）。
+        """
+        return await asyncio.to_thread(self._sync_rooms_blocking)
+
+    def boot_sequence(self) -> list[dict]:
+        """官方网页端冷启动的只读启动序列（room/list 除外，由 sync_rooms 负责）。
+
+        顺序与真实打开网页一致：user/info → system/config → msg/tip →
+        grouplist → 平台公告，全部走同一个复用客户端（同一连接）。返回逐接口
+        报告 [{name, ok, detail, ms}]；TOKEN 过期向上抛出（触发熔断，报告里
+        已含失败步骤）；其余单个请求失败记为失败项但不中断——对齐是最佳努力，
+        不能反过来影响消息链路。
+        """
+        client = self._get_client()
+        report: list[dict] = []
+
+        def user_info_detail(result):
+            info = (result or {}).get("info") or {}
+            remote = info.get("token")
+            if remote and remote != self.config.token:
+                logger.warning(
+                    "MX user/info 返回 token 与本地配置不一致（服务端可能已轮换），"
+                    "请尽快到后台「数据源 → MX」更换 TOKEN"
+                )
+            return f"账号 {info.get('user') or '?'}"
+
+        def tip_detail(result):
+            data = (result or {}).get("data") or {}
+            return f"总未读 {data.get('count', '?')}"
+
+        steps = (
+            ("user/info", client.user_info, user_info_detail),
+            ("system/config", client.system_config, None),
+            ("msg/tip", client.msg_tip, tip_detail),
+            ("room/grouplist", client.room_grouplist,
+             lambda r: f"{len((r or {}).get('list') or [])} 个分组"),
+            ("master-notice", client.master_notice,
+             lambda r: f"{len((r or {}).get('list') or [])} 条平台公告"),
+        )
+        for name, fn, detail_fn in steps:
+            started = time.monotonic()
+            try:
+                result = fn()
+                detail = detail_fn(result) if detail_fn else "ok"
+                report.append({"name": name, "ok": True, "detail": detail,
+                               "ms": int((time.monotonic() - started) * 1000)})
+            except MXTokenExpiredError:
+                report.append({"name": name, "ok": False, "detail": "TOKEN 已过期/无效",
+                               "ms": int((time.monotonic() - started) * 1000)})
+                raise
+            except Exception as exc:  # noqa: BLE001 - 对齐请求失败不影响消息链路
+                logger.warning("MX 启动序列 %s 失败（忽略）: %s", name, exc)
+                report.append({"name": name, "ok": False, "detail": str(exc)[:80],
+                               "ms": int((time.monotonic() - started) * 1000)})
+        return report
+
+    def boot_sequence(self):
+        """官方网页端冷启动的只读启动序列（room/list 除外，由 sync_rooms 负责）。
+
+        顺序与真实打开网页一致：user/info → system/config → msg/tip →
+        grouplist → 平台公告，全部走同一个复用客户端（同一连接）。TOKEN 过期
+        向上抛出（触发熔断）；其余单个请求失败只记日志不中断——对齐是最佳
+        努力，不能反过来影响消息链路。
+        """
+        client = self._get_client()
+        steps = (
+            ("user/info", client.user_info),
+            ("system/config", client.system_config),
+            ("msg/tip", client.msg_tip),
+            ("room/grouplist", client.room_grouplist),
+            ("master-notice", client.master_notice),
+        )
+        for name, fn in steps:
+            try:
+                result = fn()
+                # user/info 的返回里带服务端当前 token：与本地配置不一致说明服务端
+                # 已轮换，当前 token 随时会失效——提前告警，避免等 401 才发现
+                if name == "user/info" and isinstance(result, dict):
+                    remote = (result.get("info") or {}).get("token")
+                    if remote and remote != self.config.token:
+                        logger.warning(
+                            "MX user/info 返回 token 与本地配置不一致（服务端可能已轮换），"
+                            "请尽快到后台「数据源 → MX」更换 TOKEN"
+                        )
+            except MXTokenExpiredError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - 对齐请求失败不影响消息链路
+                logger.warning("MX 启动序列 %s 失败（忽略）: %s", name, exc)
+
+    def _sync_rooms_blocking(self) -> int:
         if not self.config.token:
             logger.warning("MX token not configured, skipping room sync")
-            return
-
+            return 0
         logger.info("Starting MX room sync")
         client = self._get_client()
         try:
@@ -70,6 +141,7 @@ class MXRoomSyncService:
 
             self._last_sync = datetime.now()
             logger.info(f"MX room sync completed, processed {len(rooms)} rooms")
+            return len(rooms)
         except Exception as e:
             logger.error(f"MX room sync failed: {e}", exc_info=True)
             raise
@@ -188,66 +260,9 @@ class MXRoomSyncService:
         except Exception as e:
             logger.error(f"Failed to update MX KOL extra_data id: {kol_id}: {e}", exc_info=True)
 
-    async def start_periodic_sync(self):
-        """Start periodic room sync.
-
-        初始同步放在后台任务执行：146 个房间逐个处理（含最多 15s 超时的头像
-        下载）可能耗时数分钟，await 它会阻塞 WS 与调度启动——历史上表现为
-        「后端启动后好几分钟连不上 WebSocket」。
-        """
-        if self._sync_task is not None and not self._sync_task.done():
-            return
-        self._stopped = False
-
-        async def run_initial_sync():
-            # 初始同步同样受窗口门控：窗口外启动服务时不产生 MX 请求
-            if self.should_run is not None and not self.should_run():
-                logger.info("MX 初始同步跳过：不在运行窗口内")
-                return
-            try:
-                await self.sync_rooms()
-            except Exception as e:  # noqa: BLE001 - 后台任务自行吞错记日志
-                logger.error(f"MX initial room sync error: {e}", exc_info=True)
-                self._notify_error(f"房间同步失败：{e}")
-
-        if self._initial_sync_task is None or self._initial_sync_task.done():
-            # 持有任务引用：事件循环只持弱引用，不保存可能被 GC 中途取消
-            self._initial_sync_task = asyncio.create_task(run_initial_sync())
-
-        async def sync_loop():
-            # 每轮随机睡 2-6 小时再尝试一次：窗口外/TOKEN 失效时只跳过本次，
-            # 不产生任何 MX 请求，下一次尝试仍是随机 2-6 小时之后
-            while not self._stopped:
-                try:
-                    await asyncio.sleep(
-                        random.uniform(SYNC_MIN_INTERVAL_SECONDS, SYNC_MAX_INTERVAL_SECONDS)
-                    )
-                    if self._stopped:
-                        break
-                    if not self.config.enabled:
-                        continue
-                    if self.should_run is not None and not self.should_run():
-                        continue
-                    await self.sync_rooms()
-                except Exception as e:
-                    logger.error(f"MX periodic sync error: {e}", exc_info=True)
-                    self._notify_error(f"房间同步失败：{e}")
-
-        # 持有任务引用：事件循环只持弱引用，不保存可能被 GC 中途取消
-        self._sync_task = asyncio.create_task(sync_loop())
-        logger.info(
-            f"MX periodic sync started, interval: random "
-            f"{SYNC_MIN_INTERVAL_SECONDS // 3600}-{SYNC_MAX_INTERVAL_SECONDS // 3600}h"
-        )
-
     def stop(self):
-        """停止定时同步任务（同步方法，可在非事件循环上下文调用）。"""
+        """停止同步服务：关闭内部缓存的 HTTP 会话（同步由开窗动作触发，无后台任务）。"""
         self._stopped = True
-        for task in (self._sync_task, self._initial_sync_task):
-            if task is not None and not task.done():
-                task.cancel()
-        self._sync_task = None
-        self._initial_sync_task = None
         if self._client is not None:
             self._client.close()
             self._client = None

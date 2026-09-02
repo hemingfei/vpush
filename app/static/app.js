@@ -8299,10 +8299,11 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
         </div>
         <div class="toolbar mx-config-actions">
           <button type="button" class="btn-normal" id="mx-save-btn" onclick="saveMxConfig()">保存配置</button>
-          <button type="button" class="btn-ghost" id="mx-test-btn" onclick="testMxConnection()">测试连接</button>
-          <button type="button" class="btn-ghost" id="mx-sync-btn" onclick="syncMxRooms()">立即同步房间</button>
+          <button type="button" class="btn-ghost" id="mx-login-btn" onclick="mxSessionLogin()">登录</button>
+          <button type="button" class="btn-ghost danger" id="mx-logout-btn" onclick="mxSessionLogout()">退出</button>
         </div>
         <p class="section-meta" id="mx-ws-status">WebSocket 状态：加载中...</p>
+        <div id="mx-api-status" class="section-meta" style="margin-top:6px">接口状态：尚未执行（点击「登录」后显示逐接口结果）</div>
       </section>
       <section class="section-panel">
         <header class="section-head">
@@ -9545,28 +9546,59 @@ async function refreshMxWsStatus() {
     const s = await api("/api/admin/sources/mx/ws-status");
     const last = s.last_message_at ? new Date(s.last_message_at).toLocaleString() : "从未收到";
     const detail = s.detail ? `（${s.detail}）` : "";
-    // 已连接时提供主动断开，未连接时提供主动接入
-    const action = s.connected
-      ? `<button type="button" class="btn-ghost danger" id="mx-ws-toggle" onclick="toggleMxWs('disconnect')">主动断开</button>`
-      : `<button type="button" class="btn-ghost" id="mx-ws-toggle" onclick="toggleMxWs('connect')">主动连接</button>`;
-    el.innerHTML = `<span>WebSocket 状态：${s.connected ? "✅ 已连接" : "❌ 未连接"}，最近收到消息：${escapeHtml(last)}${escapeHtml(detail)}</span> ${action}`;
+    el.innerHTML = `<span>WebSocket 状态：${s.connected ? "✅ 已连接" : "❌ 未连接"}，最近收到消息：${escapeHtml(last)}${escapeHtml(detail)}</span>`;
+    renderMxApiStatus(s.login_report);
   } catch (err) {
     el.textContent = `WebSocket 状态：获取失败（${err.message || "未知错误"}）`;
   }
 }
 
-async function toggleMxWs(action) {
-  const btn = $("#mx-ws-toggle");
-  if (btn) btn.disabled = true;
+function renderMxApiStatus(report) {
+  const box = $("#mx-api-status");
+  if (!box) return;
+  if (!report || !Array.isArray(report.steps) || !report.steps.length) {
+    box.textContent = "接口状态：尚未执行（点击「登录」后显示启动序列/房间同步/WS 的逐接口结果）";
+    return;
+  }
+  const rows = report.steps.map((s) => {
+    const mark = s.ok ? "✅" : "❌";
+    return `<li>${mark} ${escapeHtml(s.name)}（${s.ms}ms）：${escapeHtml(s.detail || "")}</li>`;
+  }).join("");
+  const head = report.ok ? "✅ 全部成功" : "❌ 存在失败项";
+  box.innerHTML = `<details><summary>接口状态（${escapeHtml(report.time || "")}）：${head}</summary><ul>${rows}</ul></details>`;
+}
+
+async function mxSessionLogin() {
+  const btn = $("#mx-login-btn");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  if ($("#mx-logout-btn")) $("#mx-logout-btn").disabled = true;
   try {
-    const res = await api(`/api/admin/sources/mx/ws/${action}`, { method: "POST" });
-    flash(res.message || (action === "disconnect" ? "已断开 MX WebSocket" : "已发起 MX WebSocket 连接"));
+    const result = await api("/api/admin/sources/mx/session/login", { method: "POST" });
+    renderMxApiStatus(result.report);
+    flash(result.ok ? "登录成功：启动序列、房间同步与 WS 均正常" : "登录完成，存在失败项（见接口状态）", result.ok ? "success" : "error");
   } catch (err) {
-    flash(err.message || "操作失败", "error");
+    flash(err.message || "登录失败", "error");
   } finally {
+    if (btn) btn.disabled = false;
+    if ($("#mx-logout-btn")) $("#mx-logout-btn").disabled = false;
     refreshMxWsStatus();
-    // 连接握手需要一点时间，稍后再刷一次拿到最终状态
     setTimeout(refreshMxWsStatus, 2500);
+  }
+}
+
+async function mxSessionLogout() {
+  const btn = $("#mx-logout-btn");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    const res = await api("/api/admin/sources/mx/ws/disconnect", { method: "POST" });
+    flash(res.message || "已退出 MX 会话");
+  } catch (err) {
+    flash(err.message || "退出失败", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+    refreshMxWsStatus();
   }
 }
 
@@ -9638,55 +9670,6 @@ async function saveMxConfig() {
     refreshMxWsStatus();
   } catch (err) {
     flash(err.message || "保存失败", "error");
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-}
-
-async function testMxConnection() {
-  const btn = $("#mx-test-btn");
-  if (!btn || btn.disabled) return;
-  btn.disabled = true;
-  try {
-    // Parse numbers with defaults, ensure minimum values
-    const page_size = Math.max(1, Number($("#mx-page-size").value) || 30);
-    const max_history_pages = Math.max(1, Number($("#mx-max-pages").value) || 100);
-
-    const payload = {
-      enabled: $("#mx-enabled").checked,
-      token: $("#mx-token").value.trim(),
-      api_base: $("#mx-api-base").value.trim() || "https://mx.2026.naaifu.cn/business-api/5",
-      ws_url: $("#mx-ws-url").value.trim() || "wss://mx.2026.naaifu.cn/business-api/5",
-      ws_path: $("#mx-ws-path").value.trim() || "/socket.io",
-      ws_namespace: $("#mx-ws-namespace").value.trim() || "/msg",
-      ws_enabled: $("#mx-ws-enabled").checked,
-      page_size,
-      max_history_pages,
-    };
-    console.log("Testing MX connection with payload:", payload);
-
-    const result = await api("/api/admin/sources/mx/test", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-    flash(`连接成功！发现 ${result.room_count} 个房间`, "success");
-  } catch (err) {
-    flash(err.message || "连接失败", "error");
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-}
-
-async function syncMxRooms() {
-  const btn = $("#mx-sync-btn");
-  if (!btn || btn.disabled) return;
-  btn.disabled = true;
-  try {
-    await api("/api/admin/sources/mx/rooms/sync", { method: "POST" });
-    flash("房间同步已触发");
-    loadMxRooms();
-  } catch (err) {
-    flash(err.message || "同步失败", "error");
   } finally {
     if (btn) btn.disabled = false;
   }

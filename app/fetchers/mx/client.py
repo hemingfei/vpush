@@ -91,8 +91,8 @@ class MXClient:
                 return True
         return False
 
-    def _request(self, method: str, path: str, json_data: dict = None) -> Any:
-        url = f"{self.base_url}{path}"
+    def _request(self, method: str, path: str, json_data: dict = None, base_url: str = None) -> Any:
+        url = f"{base_url or self.base_url}{path}"
         headers = self._headers()
         body = json.dumps(json_data) if json_data else None
         response = self._session.request(
@@ -136,6 +136,52 @@ class MXClient:
         拉取消息前调用一次即可对齐「人打开了房间」的行为链。"""
         data = {"rid": room_id, "tt": int(time.time() * 1000)}
         self._request("POST", "/api/room/view", data)
+
+    # ---- 官方冷启动序列的只读端点（2026-09-02 抓包实测）----
+    # master-api 与 business-api 同主机不同前缀。vpush 在开窗会话启动时按官方
+    # 顺序补发这些只读请求，使「开窗」的请求足迹与「真人打开网页」一致；
+    # 全部只读、无业务副作用，失败由调用方按最佳努力处理。
+
+    def _master_base(self) -> str:
+        parsed = urlparse(self.base_url)
+        return f"{parsed.scheme}://{parsed.netloc}/master-api"
+
+    def user_info(self) -> Any:
+        return self._request(
+            "POST", "/api/user/info",
+            {"device": "web-browser", "tt": int(time.time() * 1000)},
+            base_url=self._master_base(),
+        )
+
+    def system_config(self) -> Any:
+        return self._request(
+            "POST", "/api/system/config", {"tt": int(time.time() * 1000)},
+            base_url=self._master_base(),
+        )
+
+    def msg_tip(self) -> Any:
+        return self._request("POST", "/api/msg/tip", {"tt": int(time.time() * 1000)})
+
+    def room_grouplist(self) -> Any:
+        return self._request(
+            "POST", "/api/room/grouplist", {"tt": int(time.time() * 1000)},
+            base_url=self._master_base(),
+        )
+
+    def master_notice(self) -> Any:
+        """平台公告（GET，token 在 query；官方启动必发，business 版 404 照发故跳过）。"""
+        url = (
+            f"{self._master_base()}/api/notice"
+            f"?tt={int(time.time() * 1000)}&token={self.token}"
+        )
+        # GET 无 body：不带 Content-Type（与官方 axios 形态一致）
+        headers = {k: v for k, v in self._headers().items() if k != "Content-Type"}
+        response = self._session.request("GET", url, headers=headers, timeout=30.0)
+        response.raise_for_status()
+        result = response.json()
+        if self._check_token_expired(result):
+            raise MXTokenExpiredError("MX token expired")
+        return result
 
     def get_room_history(
         self, room_id: int, msg_id: int = 0, limit: int = 50

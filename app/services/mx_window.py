@@ -40,6 +40,18 @@ def in_window(now: datetime, windows: list[tuple[datetime, datetime]]) -> bool:
     return any(start <= now < stop for start, stop in windows)
 
 
+def arm_windows(
+    windows: list[tuple[datetime, datetime]], now: datetime
+) -> list[bool]:
+    """标记哪些窗口「武装」（到点自动开启）。
+
+    重启安全：开窗时刻早于 now（服务重启前就已错过）的窗口不武装——重启后
+    不自动续连，只能管理员「登录」手动拉起，或等下一个尚未到点的窗口到点
+    自动触发。
+    """
+    return [start >= now for start, _ in windows]
+
+
 def pick_daily_fallback_slot(
     windows: list[tuple[datetime, datetime]],
 ) -> datetime | None:

@@ -128,19 +128,52 @@ async (page) => {
 | 端点 | 基线请求体 |
 |---|---|
 | `POST /business-api/5/api/room/list` | `{"pages":1,"limit":1000000,"tt":<ms>}`（冷启动单次全量） |
-| `POST /business-api/5/api/msg/list` | `{"rid":<id>,"msgid":0,"pagesize":30,"tt":<ms>}` |
-| `POST /business-api/5/api/room/view` | `{"rid":<id>,"tt":<ms>}`（进房上报，每次打开房间都发） |
-| `POST /business-api/5/api/msg/tip` | `{"tt":<ms>}`（全局未读） |
-| `POST /business-api/5/api/room/notice` | （房间公告，与 view/msg/list 构成进房三连） |
+| `POST /business-api/5/api/msg/list` | 补漏/翻页：`{"rid":<id>,"msgid":<0=最新；或本地最旧消息id=向上翻页>,"pagesize":30,"tt":<ms>}`（仅「启动补漏」与「加载更早」两个场景，见 3.3-S3） |
+| `POST /business-api/5/api/room/view` | `{"rid":<id>,"tt":<ms>}`（进房上报，每次点选房间必发） |
+| `POST /business-api/5/api/msg/tip` | `{"tt":<ms>}`（全局未读，仅启动） |
+| `POST /business-api/5/api/room/notice` | 房间公告，每次点选房间必发（与 view 成对；弹窗有 sessionStorage 按日已读标记） |
 
-### 3.3 启动时序与端点清单
+### 3.3 全端点调用时机矩阵（按触发场景；2026-09-02 晚补测缓存模型后修订）
 
-登录前：`GET /master-api/api/code?tt=`（验证码）。
-登录后：`POST /master-api/api/login` → `/api/user/info` → `/api/system/config` →
-`business-api/5/api/room/list` → `/api/msg/tip` → `/master-api/api/room/grouplist` →
-恢复上次房间（进房三连）→ `GET /master-api/api/notice?tt=&token=`（200）与
-`GET /business-api/5/api/notice?...`（**官方自己 404 也照发**）→
-`/master-api/api/user/issign`、`/api/user/showad`、`/member-ai-api/api/ai-analysis/member/modules` → WS。
+**场景 S1 应用启动**——手动输密码登录成功 / 关窗重开自动登录 / F5 刷新，三种情况序列完全相同：
+
+| 顺序 | 请求 | 触发条件/说明 |
+|---|---|---|
+| 0 | `GET /master-api/api/code?tt=` | 仅未登录时（登录页图形验证码；已登录启动不出现） |
+| 0b | `POST /master-api/api/login` | 仅手动输密码登录时（自动登录无此请求，token 取自 localStorage `mx_web_token`） |
+| 1 | `POST /master-api/api/user/info` | 启动必发 |
+| 2 | `POST /master-api/api/system/config` | 启动必发 |
+| 3 | `POST /business-api/5/api/room/list` | 启动必发，单次全量 `{"pages":1,"limit":1000000,"tt"}` |
+| 4 | `POST /business-api/5/api/msg/tip` | 启动必发 `{"tt"}`（全局未读提示） |
+| 5 | `POST /master-api/api/room/grouplist` | 启动必发（房间分组） |
+| 6 | `room/view` + `msg/list` + `room/notice` | 恢复「上次打开的房间」；其中 msg/list 是对本地缓存的**增量补漏**（`msgid=0`、pagesize 30，结果与 localStorage 合并） |
+| 7 | `GET /master-api/api/notice?tt=&token=`（200） | 启动必发（平台公告，token 在 query） |
+| 7b | `GET /business-api/5/api/notice?...`（404） | 官方自己也照发（试错请求） |
+| 8 | `POST /master-api/api/user/issign`、`/api/user/showad` | 启动必发（签到状态/广告展示判定） |
+| 9 | WS 连接 | 冷启动/刷新才连；登录后当次会话不连（详见 3.4） |
+
+**场景 S2 会话期间点选房间**（无论该房间本会话是否打开过）：
+
+- 必发：`room/view`（进房/已读上报）+ `room/notice`（房间公告）；
+- **不发 `msg/list`**——历史消息渲染自 localStorage 缓存（`mx_web_messages_<rid>`，按房间持久化），
+  新消息由 WS `room_msg` 实时追加进缓存。
+
+**场景 S3 房间内向上翻历史**（点「加载更早」）：
+
+- `POST /business-api/5/api/msg/list`，body `{"rid","msgid":<本地最旧消息id>,"pagesize":30,"tt"}`
+  （以本地最旧消息为游标分页回拉，结果并回 localStorage）。
+
+**场景 S4 AI 功能**（点「查看今日 AI 分析」）：`POST /member-ai-api/api/ai-analysis/member/modules`。
+
+**场景 S5 媒体加载**（渲染消息时按需，非 API）：消息内图片走第三方图床
+（wework.qpic.cn / ps.ssl.qhimg.com / pic.guhai888.cn / i.gsxcdn.com / img.meituan.net /
+static.dingtalk.com），语音走腾讯云 mp3（HTTP 206 分段加载）。
+
+**vpush 不调用的官方端点**：`login`/`code`（人工取号红线，永不自动调用）、`issign`/
+`showad`/`member-ai-api`（请求体未采集，不猜格式硬发，留待巡检抓到再补）、`business-api/5`
+的 `room/notice`（点选语义，仅真点房间才发）——其余启动序列（user/info/system/config/
+room/list/msg/tip/grouplist/notice）已由开窗会话按官方顺序补发（`boot_sequence`，
+2026-09-02）。vpush 运行期无任何登录行为，token 由人工网页取号获得。
 
 ### 3.4 WS 行为
 
@@ -153,6 +186,29 @@ async (page) => {
 | 客户端 emit | **无任何业务事件** |
 | 心跳 | **服务器发 `2`、客户端答 `3`**，25s 间隔 / 20s 超时 |
 | 连接时机 | 冷启动/刷新才连；登录后当次会话不连 |
+
+### 3.5 请求/返回格式契约（2026-09-02 实测响应体解密分析）
+
+响应外层统一为 `{"code":200,"msg":"success",...}`；**加密是有选择性的**——实测仅
+`msg/list` 返回密文（`{"code":200,"data":"<LZ+AES密文>"}`，用 `crypto.decrypt_api_data`
+按日期密钥解密），其余端点全为明文 JSON；历史记载 `room/list` 也出现过密文形态，
+vpush 的 `_request` 已做明文/密文双形态兼容。`tt` 均为毫秒时间戳。
+
+| 端点 | 发送 body | 返回（解密后/明文）业务结构 |
+|---|---|---|
+| `GET /master-api/api/code?tt=` | —（query tt） | 图形验证码图片字节（非 JSON） |
+| `POST /master-api/api/login` | 账号/密码/验证码字段（**刻意未采集**） | 含 token 的用户信息（**刻意未采集**） |
+| `POST /master-api/api/user/info` | `{"device":"web-browser","tt"}` | `info:{id,user,avatar,nickname,star,mdr,score,token(32),vip,allsearch,duty,showlog,opengroup,force_password_reset,forcePasswordReset}` |
+| `POST /master-api/api/system/config` | `{"tt"}` | `AD:{IOS,Android}`、`open_shop/msg_details_yz/msg_details_ad/open_notice/open_update/open_mall/openregister/scoremax/scoremin`（均为字符串开关） |
+| `POST /business-api/5/api/room/list` | `{"pages":1,"limit":1000000,"tt"}` | `list:[{id,title,createtime,msg(末条摘要),msgtime,msguid,avatar,teaname,introduce,taboo,color,textcolor,message_today,prohibition,webhook,websecret,star,gid,exttime}]` |
+| `POST /business-api/5/api/msg/tip` | `{"tt"}` | `data:{count:<总未读>, "r<rid>":<未读数(封顶99)>...}` |
+| `POST /master-api/api/room/grouplist` | `{"tt"}` | `list:[分组]`（无分组时空数组） |
+| `POST /business-api/5/api/room/view` | `{"rid","tt"}` | 无业务字段（仅 code/msg） |
+| `POST /business-api/5/api/room/notice` | `{"rid","tt"}` | `list:[房间公告]`（可空；弹窗受 sessionStorage 按日已读控制） |
+| `GET /master-api/api/notice?tt=&token=` | —（query tt+token） | `list:[{id,createtime,content,state,AD,note,mid}]`（平台公告 → 「系统公告」弹窗） |
+| `GET /business-api/5/api/notice?...` | —（query） | 官方自己 404 也照发 |
+| `POST /business-api/5/api/msg/list` | `{"rid","msgid":<0=最新/游标>,"pagesize":30,"tt"}` | **加密**；解密后 `list:[{id,uid,rid,msg(内嵌JSON串:text/pic/file),createtime:"YYYY-MM-DD HH:MM:SS",oid,type}]`——注意 HTTP 响应里 createtime 是**日期字符串**（WS 推送里是毫秒数，vpush 两种都兼容） |
+| `POST /master-api/api/user/issign`、`/api/user/showad`、`POST /member-ai-api/...` | 未逐个采集（非 vpush 链路） | — |
 
 ---
 

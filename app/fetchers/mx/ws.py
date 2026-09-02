@@ -193,15 +193,6 @@ class MxWsClient:
             logger.error(f"Failed to connect to MX WebSocket: {e}", exc_info=True)
             raise
 
-    async def disconnect(self):
-        """Disconnect from MX WebSocket server."""
-        if self._sio is not None:
-            try:
-                await self._sio.disconnect()
-            except Exception:  # noqa: BLE001 - 尽力断开即可
-                logger.warning("MX WebSocket disconnect failed", exc_info=True)
-        self.connected = False
-
     async def _handle_message(self, data):
         """
         Handle incoming WebSocket message.
@@ -365,7 +356,21 @@ class MxWsClient:
             logger.error("MX WebSocket 重连失败回调执行异常", exc_info=True)
 
     async def stop(self):
-        """Stop the WebSocket client."""
+        """停止 WS 客户端：模拟用户直接关闭标签页/浏览器退出。
+
+        真实用户的退出不会发 socket.io `41`、engine.io CLOSE 包或 WS Close 帧
+        ——服务端只会看到 TCP 连接消失（transport close）。因此这里不做任何
+        关闭握手，直接关闭底层 aiohttp 会话掐断连接；sio.disconnect() 会发送
+        优雅关闭包，绝不能用在「退出/关窗」语义上。
+        """
         self._should_stop = True
         self.manually_stopped = True
-        await self.disconnect()
+        self.connected = False
+        eio = getattr(self._sio, "eio", None)
+        http = getattr(eio, "http", None)
+        if http is not None and not getattr(http, "closed", True):
+            try:
+                await http.close()
+            except Exception:  # noqa: BLE001 - 尽力掐断即可，失败仅记日志
+                logger.debug("MX WS 底层连接掐断失败（忽略）", exc_info=True)
+        self._sio = None

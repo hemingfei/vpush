@@ -496,6 +496,42 @@ def test_ws_manual_disconnect_no_give_up(monkeypatch):
     assert client.running is False
 
 
+def test_ws_stop_aborts_like_tab_close():
+    """退出/停用必须模拟「直接关标签页」：不发任何优雅关闭包，直接掐断底层连接。"""
+    class FakeHttp:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    class FakeEio:
+        def __init__(self):
+            self.http = FakeHttp()
+
+    class FakeSio:
+        def __init__(self):
+            self.eio = FakeEio()
+            self.disconnect_called = False
+
+        async def disconnect(self):
+            self.disconnect_called = True
+            raise AssertionError("退出不得走优雅断开（不应调用 sio.disconnect）")
+
+    client = MxWsClient(SimpleNamespace(), lambda m: None)
+    sio = FakeSio()
+    client._sio = sio
+    client.connected = True
+
+    asyncio.run(client.stop())
+
+    assert sio.eio.http.closed is True
+    assert sio.disconnect_called is False
+    assert client.manually_stopped is True
+    assert client.connected is False
+    assert client._sio is None
+
+
 # ---- 房间同步 ----
 
 def test_sync_room_creates_kol_with_fallback_name_and_intro():
@@ -792,11 +828,6 @@ def test_update_mx_config_endpoint_hot_applies(monkeypatch):
         await orig_apply(self, mx_config)
 
     monkeypatch.setattr(sched_mod.Scheduler, "apply_mx_config", spy)
-    # 测试不需要真的启动周期同步循环（避免 TestClient 循环关闭时任务悬挂告警）
-    monkeypatch.setattr(
-        "app.services.mx_sync.MXRoomSyncService.start_periodic_sync",
-        lambda self: _noop_coroutine(),
-    )
 
     app = create_app(config=Config(), db_path=Path(tmp) / "t.db")
     client = TestClient(app)
@@ -839,10 +870,6 @@ def test_update_mx_config_endpoint_hot_applies(monkeypatch):
     assert resp.status_code == 200
     assert len(calls) == 2
     assert "mx" not in sched.fetchers
-
-
-async def _noop_coroutine():
-    return None
 
 
 # ---- WS 状态 ----
@@ -1231,6 +1258,24 @@ def test_mx_daily_windows_within_bounds():
         assert w1[1] <= w2[0] and w2[1] <= w3[0]
 
 
+def test_arm_windows_disarms_missed_on_restart():
+    """重启落在某段窗口内时，该段不武装（不自动续连），后续窗口照常到点开启。"""
+    from datetime import date, datetime, time, timedelta
+
+    from app.services.mx_window import CN_TZ, arm_windows, generate_mx_daily_windows
+
+    windows = generate_mx_daily_windows(date(2026, 9, 1))
+    # 重启落在第一段窗口内：第一段错过开窗时刻不武装，二三段照常
+    mid_w1 = windows[0][0] + timedelta(minutes=10)
+    assert arm_windows(windows, mid_w1) == [False, True, True]
+    # 重启在所有窗口之前：全部武装（到点自动开启）
+    early = datetime.combine(date(2026, 9, 1), time(6, 0), tzinfo=CN_TZ)
+    assert arm_windows(windows, early) == [True, True, True]
+    # 重启落在第二段窗口内：一、二段都不武装（第二段属中途续连），仅第三段武装
+    mid_w2 = windows[1][0] + timedelta(minutes=5)
+    assert arm_windows(windows, mid_w2) == [False, False, True]
+
+
 def test_daily_fallback_slot_inside_window_and_before_close():
     """每日兜底预约时刻必须落在某段窗口内部，且距关窗至少 1 分钟。"""
     from datetime import date, timedelta
@@ -1324,14 +1369,227 @@ def test_token_age_reminder_after_two_days():
     scheduler.stop()
 
 
-# ---- 房间列表同步：随机间隔 ----
+# ---- 房间列表同步：开窗触发（2026-09-02 起不再有后台周期同步） ----
 
-def test_mx_room_sync_interval_is_randomized():
-    """房间列表同步必须是随机 2-6 小时：固定周期是最直白的机器信号。"""
-    from app.services import mx_sync
+def test_room_sync_service_has_no_periodic_loop():
+    """房间同步由开窗动作触发（与官方「打开网页必拉一次」一致），无后台周期任务。"""
+    from app.services.mx_sync import MXRoomSyncService
 
-    assert mx_sync.SYNC_MIN_INTERVAL_SECONDS == 2 * 3600
-    assert mx_sync.SYNC_MAX_INTERVAL_SECONDS == 6 * 3600
+    assert not hasattr(MXRoomSyncService, "start_periodic_sync")
+
+
+def test_session_start_pulls_room_list_once(monkeypatch):
+    """开窗会话启动必须像真人打开网页：先发官方启动序列，再拉一次房间列表。"""
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+
+    service = MXRoomSyncService(MxConfig(token="t"), db)
+    calls = []
+
+    def fake_boot():
+        calls.append("boot")
+
+    async def fake_sync():
+        calls.append("sync")
+
+    monkeypatch.setattr(service, "boot_sequence", fake_boot)
+    monkeypatch.setattr(service, "sync_rooms", fake_sync)
+    scheduler._mx_sync_service = service
+
+    asyncio.run(scheduler._mx_session_start())
+    assert calls == ["boot", "sync"]
+
+
+def test_session_start_skips_room_sync_when_token_expired():
+    """TOKEN 熔断时开窗不得触发房间同步。"""
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+    scheduler._mx_token_expired = True
+
+    service = MXRoomSyncService(MxConfig(token="t"), db)
+
+    def _must_not_run():
+        raise AssertionError("TOKEN 过期时不应触发房间同步")
+
+    service.sync_rooms = _must_not_run
+    scheduler._mx_sync_service = service
+
+    asyncio.run(scheduler._mx_session_start())
+
+
+def test_master_boot_endpoints_wire_format():
+    """官方冷启动序列的只读端点：master-api 前缀、请求体、notice 的 GET+query 形态。"""
+    import json as jsonlib
+
+    from app.fetchers.mx.client import MXClient
+
+    ok = {"code": 200, "msg": "success"}
+    session = _FakeCffiSession([ok] * 4 + [{"code": 200, "msg": "success", "list": []}])
+    client = MXClient("https://mx.test/business-api/5", "tok", session=session)
+
+    client.user_info()
+    client.system_config()
+    client.msg_tip()
+    client.room_grouplist()
+    client.master_notice()
+
+    assert len(session.requests) == 5
+    r_user, r_config, r_tip, r_group, r_notice = session.requests
+    assert r_user["url"] == "https://mx.test/master-api/api/user/info"
+    assert jsonlib.loads(r_user["data"])["device"] == "web-browser"
+    assert r_config["url"] == "https://mx.test/master-api/api/system/config"
+    assert jsonlib.loads(r_config["data"])["tt"] > 0
+    assert r_tip["url"] == "https://mx.test/business-api/5/api/msg/tip"
+    assert r_group["url"] == "https://mx.test/master-api/api/room/grouplist"
+    assert r_notice["method"] == "GET"
+    assert r_notice["url"].startswith("https://mx.test/master-api/api/notice?tt=")
+    assert "token=tok" in r_notice["url"]
+    # GET 无 body：不带 Content-Type（与官方 axios 形态一致）
+    assert "Content-Type" not in (r_notice["headers"] or {})
+
+
+def test_boot_sequence_runs_all_steps_and_propagates_token_expiry():
+    """启动序列按官方顺序全量执行；TOKEN 过期必须向上抛出（触发熔断）。"""
+    import pytest
+
+    from app.fetchers.mx.client import MXTokenExpiredError
+    from app.services.mx_sync import MXRoomSyncService
+
+    service = MXRoomSyncService(MxConfig(token="t"), db=None)
+
+    class StubClient:
+        def __init__(self):
+            self.calls = []
+
+        def user_info(self):
+            self.calls.append("user_info")
+
+        def system_config(self):
+            self.calls.append("system_config")
+
+        def msg_tip(self):
+            self.calls.append("msg_tip")
+
+        def room_grouplist(self):
+            self.calls.append("grouplist")
+
+        def master_notice(self):
+            self.calls.append("notice")
+
+    stub = StubClient()
+    service._client = stub
+    service.boot_sequence()
+    assert stub.calls == ["user_info", "system_config", "msg_tip", "grouplist", "notice"]
+
+    class ExpiredClient:
+        def user_info(self):
+            raise MXTokenExpiredError("MX token expired")
+
+        def system_config(self):
+            raise AssertionError("TOKEN 过期后不应继续执行后续步骤")
+
+        def msg_tip(self):
+            raise AssertionError("TOKEN 过期后不应继续执行后续步骤")
+
+        def room_grouplist(self):
+            raise AssertionError("TOKEN 过期后不应继续执行后续步骤")
+
+        def master_notice(self):
+            raise AssertionError("TOKEN 过期后不应继续执行后续步骤")
+
+    service._client = ExpiredClient()
+    with pytest.raises(MXTokenExpiredError):
+        service.boot_sequence()
+    # 报告在抛出前已记录失败步骤
+    assert service._client is not None
+
+
+def test_mx_manual_login_reports_each_step(monkeypatch):
+    """「登录」按钮：逐接口产出报告（启动序列 → 房间同步 → websocket）。"""
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+
+    service = MXRoomSyncService(MxConfig(token="t"), db)
+
+    def fake_boot():
+        return [
+            {"name": "user/info", "ok": True, "detail": "账号 tester", "ms": 3},
+            {"name": "system/config", "ok": True, "detail": "ok", "ms": 2},
+        ]
+
+    async def fake_sync():
+        return 129
+
+    monkeypatch.setattr(service, "boot_sequence", fake_boot)
+    monkeypatch.setattr(service, "sync_rooms", fake_sync)
+    scheduler._mx_sync_service = service
+
+    report = asyncio.run(scheduler.mx_manual_login())
+    assert [s["name"] for s in report["steps"]] == [
+        "user/info", "system/config", "room/list", "websocket",
+    ]
+    assert report["ok"] is True
+    assert report["steps"][2]["detail"] == "129 个房间"
+
+
+def test_mx_manual_login_token_expired_sets_breaker(monkeypatch):
+    """TOKEN 过期时「登录」不得继续连接，且必须置熔断标记。"""
+    from app.fetchers.mx.client import MXTokenExpiredError
+
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+
+    service = MXRoomSyncService(MxConfig(token="t"), db)
+
+    def fake_boot():
+        raise MXTokenExpiredError("MX token expired")
+
+    monkeypatch.setattr(service, "boot_sequence", fake_boot)
+    scheduler._mx_sync_service = service
+
+    report = asyncio.run(scheduler.mx_manual_login())
+    assert report["ok"] is False
+    assert scheduler._mx_token_expired is True
+    assert any("TOKEN" in s["detail"] for s in report["steps"])
+
+
+def test_token_expiry_breaker_also_aborts_ws(monkeypatch):
+    """HTTP 先发现 TOKEN 过期时，WS 必须被立即掐断（不能挂在死 token 上）。"""
+    db = make_db()
+    scheduler = _make_scheduler(db)
+
+    class StubWs:
+        def __init__(self):
+            self.stopped = False
+
+        async def stop(self):
+            self.stopped = True
+
+    class StubFetcher:
+        def __init__(self):
+            self.ws_client = StubWs()
+
+    fetcher = StubFetcher()
+    scheduler.fetchers["mx"] = fetcher
+
+    async def scenario():
+        # 真实应用在 lifespan 事件循环中构造 Scheduler 时即已捕获循环引用
+        scheduler._mx_touch_loop()
+        scheduler._mx_ws_task = asyncio.create_task(asyncio.sleep(3600))
+        # 模拟 HTTP 链路在线程中发现 TOKEN 过期（publish_mx_error 的阻塞调用口径）
+        await asyncio.to_thread(
+            scheduler.publish_mx_error, "token_expired", "MX TOKEN 已过期", "请更换"
+        )
+        await asyncio.sleep(0.05)  # 给 WS 掐断任务一拍执行时间
+        assert scheduler._mx_token_expired is True
+        assert fetcher.ws_client.stopped is True
+        assert scheduler._mx_ws_task is None
+
+    asyncio.run(scenario())
 
 
 def test_mx_config_has_no_fixed_sync_interval_knob():

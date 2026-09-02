@@ -1375,6 +1375,7 @@ def create_api_router(
     on_mx_config_changed=None,
     on_external_post=None,
     on_mx_ws_control=None,
+    on_mx_session_login=None,
     on_mx_alert=None,
     news_service: NewsService | None = None,
 ) -> APIRouter:
@@ -4414,32 +4415,6 @@ def create_api_router(
             }
 
 
-    @router.post("/admin/sources/mx/test", dependencies=[Depends(require_admin)])
-    async def test_mx_connection(request: Request):
-        """测试 MX 平台连接。"""
-        try:
-            import asyncio
-
-            raw_body = await request.json()
-            logger.info(f"Received MX test connection: {raw_body}")
-
-            from .fetchers.mx.client import MXClient
-            api_base = str(raw_body.get("api_base") or "https://mx.2026.naaifu.cn/business-api/5")
-            token = str(raw_body.get("token") or "")
-
-            def _probe() -> int:
-                client = MXClient(api_base, token)
-                try:
-                    return len(client.get_rooms())
-                finally:
-                    client.close()
-
-            # 同步 HTTP 放线程池，避免 30s 超时内阻塞整个事件循环
-            room_count = await asyncio.to_thread(_probe)
-            return {"ok": True, "room_count": room_count}
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"连接失败: {exc}") from exc
-
     @router.put("/admin/sources/mx", dependencies=[Depends(require_admin)])
     async def update_mx_config(request: Request, admin: dict = Depends(require_admin)):
         """更新 MX 平台配置。"""
@@ -4488,31 +4463,6 @@ def create_api_router(
         except Exception as exc:
             logger.exception(f"Failed to save MX config: {exc}")
             raise HTTPException(status_code=400, detail=f"保存配置失败: {exc}") from exc
-
-    @router.post("/admin/sources/mx/rooms/sync", dependencies=[Depends(require_admin)])
-    async def sync_mx_rooms(admin: dict = Depends(require_admin)):
-        """立即同步 MX 房间。"""
-        try:
-            from .config import load_config
-            from .services.mx_sync import MXRoomSyncService
-            config = load_config()
-            mx_config = config.sources.mx if hasattr(config.sources, "mx") else None
-            if not mx_config or not mx_config.enabled:
-                raise HTTPException(status_code=400, detail="MX 平台未启用")
-            
-            sync_service = MXRoomSyncService(mx_config, db)
-            try:
-                await sync_service.sync_rooms()
-            finally:
-                # 临时 service 用完即弃：必须 stop() 关闭内部缓存的 HTTP 会话，
-                # 否则 curl 句柄只能等 GC 回收
-                sync_service.stop()
-            _audit(admin, "sync_mx_rooms", "", "")
-            return {"ok": True}
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"同步失败: {exc}") from exc
 
     @router.get("/admin/sources/mx/rooms", dependencies=[Depends(require_admin)])
     def get_mx_rooms(search: str = "", enabled_only: bool = False):
@@ -4700,6 +4650,18 @@ def create_api_router(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         _audit(admin, "connect_mx_ws", "", "")
         return {"ok": True, "message": message}
+
+    @router.post("/admin/sources/mx/session/login", dependencies=[Depends(require_admin)])
+    async def login_mx_session(admin: dict = Depends(require_admin)):
+        """后台「登录」：像真人打开网页一样执行启动序列 + 房间同步 + 连接 WS，逐接口返回结果。"""
+        if on_mx_session_login is None:
+            raise HTTPException(status_code=503, detail="后台任务未启用，无法执行登录")
+        try:
+            report = await on_mx_session_login()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _audit(admin, "login_mx_session", "", "")
+        return {"ok": bool(report.get("ok")), "report": report}
 
     # ---- AI 分析任务管理 ----
     @router.get("/admin/ai-analysis/tasks", dependencies=[Depends(require_admin)])
