@@ -129,10 +129,12 @@ tail -f /root/cicc/*.log     # 进度
 
 ## 全站 PDF 去重（2026-08-30）
 
-- `scripts/pdf_dedup_hardlink.py`（VPS `/root/cicc/`）：同体积 → sha1 同内容 → 多余路径换成指向
-  「mtime 最老」正本的**硬链接**（os.link 临时名 + os.replace 原子换入）。两条路径都保留（ima 索引/
-  访问零变化），存储只占一份；ima-puller 覆写其中一条不影响另一条。排除 `local/`；幂等可重跑。
+- `scripts/pdf_dedup_hardlink.py`（VPS `/root/cicc/`）：同体积 → 不同 inode 才计算 sha256 → 多余路径换成
+  指向「mtime 最老」正本的**硬链接**。两条路径都保留（ima 索引/访问零变化），存储只占一份；
+  已共享 inode 的路径跳过，与压缩任务共用进程锁；替换时与 DMIT、ima-puller、压缩器共用归档根
+  `.vpush-pdf.lock` POSIX 锁，跨 NFS 主机互斥。排除 `local/`；幂等可重跑。
   - dry-run：`python3 -u /root/cicc/pdf_dedup_hardlink.py`；执行：加 `--apply`（建议 nice -n 19）
+- `vpush-cicc-dedup.timer` 每月 1 日北京时间 04:10 自动运行，避开 04:00 整点压缩后做存量收尾。
 - 2026-08-30 首跑：465 组重复、合并 467 个文件、释放 1.34GB（多为同研报重复上传，文件名带 `(1)`/`(2)`）。
   已各自压过的副本字节不同（gs 内嵌时间戳）合不了，属预期。压缩回刷跑完后可再跑一次去重收尾。
 

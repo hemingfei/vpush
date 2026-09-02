@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import fcntl
 import hashlib
 import json
 import logging
@@ -13,6 +14,7 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from http.client import IncompleteRead
@@ -29,6 +31,18 @@ from .ima_search import ImaSearchIndex
 from .ima_storage import ImaStorageStatus
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def archive_lock(root: Path):
+    fd = os.open(root / ".vpush-pdf.lock", os.O_RDWR | os.O_CREAT, 0o660)
+    try:
+        fcntl.lockf(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
 IMA_DOWNLOAD_WORKERS = 4
 IMA_LIST_WORKERS = 3
 IMA_FOLDER_LIST_MAX_PAGES = 20
@@ -1301,7 +1315,11 @@ class ImaPureClient:
                 raise RuntimeError("IMA download is not a PDF")
             if expected_size and size != int(expected_size):
                 raise RuntimeError(f"IMA PDF size mismatch got={size} expected={expected_size}")
-            os.replace(temp, destination)
+            archive_root_text = os.environ.get("IMA_ARCHIVE_ROOT", "").strip()
+            if not archive_root_text:
+                raise RuntimeError("IMA_ARCHIVE_ROOT required")
+            with archive_lock(Path(archive_root_text)):
+                os.replace(temp, destination)
         except Exception:
             temp.unlink(missing_ok=True)
             raise
@@ -1741,9 +1759,12 @@ class ImaDocumentStore:
             desired.parent.mkdir(parents=True, exist_ok=True)
             if desired.parent.is_symlink():
                 continue
-            os.replace(current_pdf, desired)
-            if current_txt.is_file() and current_txt != desired_txt:
-                os.replace(current_txt, desired_txt)
+            with archive_lock(self.archive_root):
+                if not current_pdf.is_file() or desired.exists():
+                    continue
+                os.replace(current_pdf, desired)
+                if current_txt.is_file() and current_txt != desired_txt:
+                    os.replace(current_txt, desired_txt)
             new_pdf = str(desired.relative_to(self.archive_root))
             occupied.discard(str(current_rel or ""))
             occupied.add(new_pdf)

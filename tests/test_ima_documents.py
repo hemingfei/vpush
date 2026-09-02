@@ -8,13 +8,15 @@ import sqlite3
 import threading
 import time
 import urllib.error
+from contextlib import contextmanager
 
 import pytest
 from fastapi.testclient import TestClient
 
-import app.ima_documents as ima_documents
+from app import ima_documents
 from app.db import DB
 from app.ima_documents import (
+    _PART_TEMP_OVERHEAD,
     IMA_INDEX_VERSION,
     IMA_LEGACY_GROUP_ID,
     IMA_LEGACY_GROUP_NAME,
@@ -28,27 +30,26 @@ from app.ima_documents import (
     IMA_PURE_ROOT_FOLDER_KEY,
     IMA_PURE_UID_KEY,
     IMA_STATE_FLUSH_SECONDS,
+    MAX_FILENAME_BYTES,
     ImaDocumentConfig,
     ImaDocumentService,
     ImaDocumentStore,
     ImaGroupConfig,
     ImaPureClient,
-    load_title_overrides,
-    group_next_run_at,
-    next_shanghai_schedule,
-    shanghai_schedule_gate,
     _clamp_group_interval,
+    _retryable_download_error,
     _safe_error,
     decrypt_body,
     encrypt_body,
+    group_next_run_at,
     is_ima_folder_item,
+    load_title_overrides,
     merge_groups,
+    next_shanghai_schedule,
     normalize_discovered_groups,
     normalize_ima_folder_item,
     safe_filename,
-    _retryable_download_error,
-    MAX_FILENAME_BYTES,
-    _PART_TEMP_OVERHEAD,
+    shanghai_schedule_gate,
 )
 from app.ima_storage import ImaStorageStatus
 from app.main import create_app
@@ -3870,6 +3871,7 @@ def test_download_uses_cdn_when_pull_url_unset(tmp_path, monkeypatch):
         return FakeResponse()
 
     monkeypatch.setenv("IMA_PULL_URL", "")
+    monkeypatch.setenv("IMA_ARCHIVE_ROOT", str(tmp_path))
     monkeypatch.setattr(ima_documents.urllib.request, "urlopen", fake_urlopen)
     dest = tmp_path / "g" / "a.pdf"
     ImaPureClient(ImaDocumentConfig(refresh_token="refresh")).download(
@@ -3884,6 +3886,47 @@ def test_download_uses_cdn_when_pull_url_unset(tmp_path, monkeypatch):
     assert seen["url"] == "https://res-skb.ima.qq.com/file.pdf?sign=1"
     assert "/pull" not in seen["url"]
     assert dest.read_bytes().startswith(b"%PDF-1.7")
+
+
+def test_direct_download_uses_archive_lock(tmp_path, monkeypatch):
+    class FakeResponse:
+        def __init__(self):
+            self._data = b"%PDF-1.7xxxx"
+
+        def read(self, n):
+            chunk = self._data[:n]
+            self._data = self._data[n:]
+            return chunk
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setenv("IMA_PULL_URL", "")
+    monkeypatch.setenv("IMA_ARCHIVE_ROOT", str(tmp_path))
+    locked = []
+
+    @contextmanager
+    def fake_archive_lock(root):
+        locked.append(root)
+        yield
+
+    monkeypatch.setattr(ima_documents, "archive_lock", fake_archive_lock)
+    monkeypatch.setattr(
+        ima_documents.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeResponse(),
+    )
+    destination = tmp_path / "g" / "a.pdf"
+    ImaPureClient(ImaDocumentConfig(refresh_token="refresh")).download(
+        {"jump_url_info": {"url": "https://res-skb.ima.qq.com/file.pdf"}},
+        destination,
+    )
+
+    assert locked == [tmp_path]
+    assert destination.read_bytes().startswith(b"%PDF-1.7")
 
 
 def test_sync_redownloads_when_pull_url_set_even_if_file_exists(tmp_path, monkeypatch):

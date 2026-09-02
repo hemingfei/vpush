@@ -111,7 +111,7 @@ def test_save_pdf_long_title_keeps_part_under_name_max(tmp_path, monkeypatch):
     assert leftovers == []
 
 
-def test_save_pdf_uses_path_lock_for_replace(tmp_path, monkeypatch):
+def test_save_pdf_uses_archive_lock_for_replace(tmp_path, monkeypatch):
     import app.ima_puller as puller
 
     _fake_opener_factory(monkeypatch, puller)
@@ -122,7 +122,7 @@ def test_save_pdf_uses_path_lock_for_replace(tmp_path, monkeypatch):
         entered.append(path)
         yield
 
-    monkeypatch.setattr(puller, "path_lock", fake_lock)
+    monkeypatch.setattr(puller, "archive_lock", fake_lock)
     save_pdf(
         tmp_path,
         "g/0829/a.pdf",
@@ -131,7 +131,7 @@ def test_save_pdf_uses_path_lock_for_replace(tmp_path, monkeypatch):
         expected_size=12,
     )
 
-    assert entered == [tmp_path / "g" / "0829" / "a.pdf"]
+    assert entered == [tmp_path]
 
 
 def test_save_pdf_writes_atomically(tmp_path, monkeypatch):

@@ -21,11 +21,14 @@ RANGE_MIN_BYTES = 8 * 1024 * 1024
 RANGE_PARTS = 4
 
 
+LOCK_NAME = ".vpush-pdf.lock"
+
+
 @contextmanager
-def path_lock(destination: Path):
-    fd = os.open(destination.parent, os.O_RDONLY)
+def archive_lock(root: Path):
+    fd = os.open(root / LOCK_NAME, os.O_RDWR | os.O_CREAT, 0o660)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        fcntl.lockf(fd, fcntl.LOCK_EX)
         yield
     finally:
         os.close(fd)
@@ -165,7 +168,7 @@ def save_pdf(
                 raise RuntimeError("IMA download is not a PDF")
             if expected_size and size != int(expected_size):
                 raise RuntimeError(f"IMA PDF size mismatch got={size} expected={expected_size}")
-        with path_lock(destination):
+        with archive_lock(root):
             os.replace(temp, destination)
         log.info("saved %s (%d bytes)", destination, size)
     except Exception as exc:

@@ -33,6 +33,7 @@ ROOT = "/srv/vpush-ima"
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(HERE, "compress_state.json")
 GLOBAL_LOCK = os.path.join(HERE, "compress_global.lock")
+ARCHIVE_LOCK_NAME = ".vpush-pdf.lock"
 STRATEGY_VERSION = 3
 FRESH_SEC = 120
 EXCLUDE = ("/srv/vpush-ima/local/",)
@@ -47,10 +48,10 @@ def default_state_path(root: str) -> str:
 
 
 @contextmanager
-def path_lock(path: str):
-    fd = os.open(os.path.dirname(path), os.O_RDONLY)
+def archive_lock(root: str):
+    fd = os.open(os.path.join(root, ARCHIVE_LOCK_NAME), os.O_RDWR | os.O_CREAT, 0o660)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        fcntl.lockf(fd, fcntl.LOCK_EX)
         yield
     finally:
         os.close(fd)
@@ -172,7 +173,7 @@ def state_payload(root: str, records: dict) -> dict:
 
 
 def replace_pdf(
-    path: str, data: bytes, original: os.stat_result
+    root: str, path: str, data: bytes, original: os.stat_result
 ) -> tuple[bool, str, os.stat_result | None]:
     directory = os.path.dirname(path)
     fd, temp = tempfile.mkstemp(prefix=".compress-", suffix=".pdf", dir=directory)
@@ -184,7 +185,7 @@ def replace_pdf(
         os.chmod(temp, original.st_mode & 0o7777)
         os.chown(temp, original.st_uid, original.st_gid)
         os.utime(temp, ns=(original.st_atime_ns, original.st_mtime_ns))
-        with path_lock(path):
+        with archive_lock(root):
             if not source_unchanged(path, original):
                 return False, "source_changed", None
             os.replace(temp, path)
@@ -275,7 +276,9 @@ def run(args: argparse.Namespace) -> None:
             if args.dry_run:
                 replaced = True
             else:
-                replaced, failure, replaced_stat = replace_pdf(path, new, original)
+                replaced, failure, replaced_stat = replace_pdf(
+                    args.root, path, new, original
+                )
                 if replaced:
                     processed_stat = replaced_stat
                 else:
