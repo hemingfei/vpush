@@ -1,6 +1,6 @@
 """前端交互静态回归测试：订阅卡片操作必须按当前路由刷新。
 
-背景：kolCard 的「订阅」按钮在首页、订阅管理、搜索、KOL 详情
+背景：kolCard 的「订阅」按钮在首页、搜索、KOL 详情
 多个页面复用 toggleSubscribe()。曾出现成功后无条件调用首页专用的
 renderHomeList()，在非首页会因找不到 #kol-list 抛异常并落入 catch 弹出
 「操作失败」假错误。本测试静态固化两条约定：
@@ -22,7 +22,7 @@ def test_subscription_push_is_the_only_subscription_management_navigation_entry(
 
     for block in (nav, mobile):
         assert 'route: "settings"' in block
-        assert 'label: "订阅与推送"' in block
+        assert 'label: "设置"' in block
         assert 'route: "mysubs"' not in block
         assert 'route: "combinations"' not in block
     assert "TRENDING_ICON" not in src
@@ -36,11 +36,11 @@ def test_legacy_subscription_pages_redirect_at_the_router_boundary():
 
     assert '"mysubs"' in prefixes and '"combinations"' in prefixes
     assert 'page === "mysubs"' in router
-    assert 'state.settingsTab = "subs"' in router
-    assert 'replaceRoute("settings")' in router
+    assert 'state.homeSubscribed = true' in router
     assert 'page === "combinations"' in router
     assert 'state.platform = "combination"' in router
     assert 'replaceRoute("home")' in router
+    assert 'replaceRoute("settings")' not in router
     assert "renderMySubs(renderSeq)" not in router
     assert "renderCombinations(renderSeq)" not in router
 
@@ -111,13 +111,12 @@ def test_refresh_kols_view_covers_all_card_routes():
     body = _fn_body("refreshKolsView")
     for route_call in (
         'isRoute("home")',
-        'isRoute("settings")',
         'isRoute("kol/")',
         'isRoute("search")',
     ):
         assert route_call in body, f"refreshKolsView 缺少 {route_call} 路由分支"
     assert "loadHomeKols" in body
-    assert "loadSettingsSubscriptions" in body
+    assert "loadSettingsSubscriptions" not in body
     assert "renderKolPage" in body
     assert "doSearch" in body
     assert 'isRoute("mysubs")' not in body
@@ -167,7 +166,7 @@ def test_renderers_check_route_token_after_await():
         body = _fn_body(name)
         assert "routeStillActive(" in body, f"{name} 缺少路由令牌检查"
     # doSearch / loadHomeKols / loadTimeline / loadMyAsks 是局部刷新入口，同样要检查
-    for name in ("doSearch", "loadHomeKols", "loadTimeline", "loadMyAsks", "loadSettingsSubscriptions"):
+    for name in ("doSearch", "loadHomeKols", "loadTimeline", "loadMyAsks"):
         body = _fn_body(name)
         assert "routeStillActive(" in body, f"{name} 缺少路由令牌检查"
     # renderHomeList 不得在没有 #kol-list 时解引用（旧响应落入非首页）
@@ -404,7 +403,8 @@ def test_mobile_platform_swipe_switches_adjacent_tab():
     assert 'return "timeline"' in surface
     assert "tlPickPlatform" in ctx
     assert "homePickMobilePlatform" in ctx
-    assert "switchMySubsPlatform" in ctx
+    assert "switchMySubsPlatform" not in ctx
+    assert 'return "mysubs"' not in surface
     assert "start.surface" in end
     assert ".tl-pills" in ignore
     assert ".bottom-nav" in ignore
@@ -529,51 +529,40 @@ def test_timeline_polish_matches_chip_row_and_browser_surfaces():
     assert 'style="margin-top:14px' not in feed
 
 
-def test_settings_subscription_panel_reuses_mobile_badges_and_desktop_toolbar():
-    """设置页订阅管理复用原有订阅筛选和卡片列表。"""
-    panel = _fn_body("settingsSubscriptionsPanelHtml")
-    tabs = _fn_body("renderMySubsTabs")
-    mobile_html = _fn_body("mysubsMobileFiltersHtml")
+def test_plaza_keeps_subscribed_and_favorite_filters():
+    """订阅广场用目录字段筛选已订阅/特别关注，不另拉订阅列表。"""
+    src = APP_JS.read_text()
+    render = _fn_body("renderHome")
+    has = _fn_body("homeHasFilters")
+    reset = _fn_body("homeResetFilters")
+    filtered = _fn_body("homeFilteredKols")
+    toggles = _fn_body("homeScopeTogglesHtml")
 
-    assert "isMobileTimelineFilter()" in panel
-    assert 'id="mysubs-tabs"' in panel
-    assert 'id="mysubs-list"' in panel
-    assert 'id="mysubs-fav-toggle"' in panel
-    assert '"platform-tabs"' in panel
-    assert "platformShortLabel(p)" in mobile_html
-    assert "switchMySubsPlatform('${p}')" in mobile_html
-    assert "toggleMySubsFav()" in mobile_html
-    assert "STAR_SVG" in mobile_html
-    assert "mysubsMobileFiltersHtml()" in tabs
-    assert 'platformTabHTML(p, state.mysubsPlatform' in tabs
-
-
-def test_settings_subscription_loader_is_route_guarded_local_and_retryable():
-    load = _fn_body("loadSettingsSubscriptions")
-
-    assert 'api("/api/my/subscriptions")' in load
-    assert load.count("routeStillActive(seq)") >= 2
-    assert '$("#main").innerHTML' not in load
-    assert '$("#mysubs-list")' in load
-    assert "renderMySubsTabs()" in load
-    assert "renderMySubsList()" in load
-    assert "加载失败:" in load
-    assert "重试" in load
-    assert "loadSettingsSubscriptions(routeRenderSeq)" in load
+    assert "homeScopeTogglesHtml()" in render
+    assert "toggleHomeSubscribed()" in toggles
+    assert "toggleHomeFavorite()" in toggles
+    assert "已订阅" in toggles
+    assert "特别关注" in toggles
+    assert "state.homeSubscribed" in has and "state.homeFavorite" in has
+    assert "state.homeSubscribed = state.homeFavorite = false" in reset
+    assert "state.homeSubscribed && !k.subscribed" in filtered
+    assert "state.homeFavorite && !k.favorite" in filtered
+    assert "function settingsSubscriptionsPanelHtml" not in src
+    assert "function loadSettingsSubscriptions" not in src
 
 
-def test_subscription_management_is_the_default_settings_tab():
+def test_push_is_the_default_settings_tab():
     src = APP_JS.read_text()
     render = _fn_body("renderSettings")
     switch = _fn_body("switchSettingsTab")
 
-    assert 'const SETTINGS_TABS = ["subs", "push", "bind", "llm", "account"]' in src
-    assert 'data-tab="subs"' in render
-    assert 'id="st-subs"' in render
-    assert "settingsSubscriptionsPanelHtml()" in render
-    assert 'switchSettingsTab(state.settingsTab || "subs")' in render
-    assert 'setPageTitle("订阅与推送")' in render
-    assert 'name = "subs"' in switch
+    assert 'const SETTINGS_TABS = ["push", "bind", "llm", "account"]' in src
+    assert 'data-tab="subs"' not in render
+    assert 'id="st-subs"' not in render
+    assert "settingsSubscriptionsPanelHtml()" not in render
+    assert 'switchSettingsTab(state.settingsTab || "push")' in render
+    assert 'setPageTitle("设置")' in render
+    assert 'name = "push"' in switch
 
 
 
@@ -602,12 +591,11 @@ def test_product_spec_locks_mobile_platform_badges():
 
 
 def test_mobile_mysubs_filter_is_seven_equal_44px_targets():
-    """订阅/动态移动端：6 平台 + 星标/筛选共 7 等宽 44px 角标，文字仅 aria。"""
+    """广场/动态移动端：6 平台 + 筛选共 7 等宽 44px 角标，文字仅 aria。"""
     css = STYLE_CSS.read_text()
     pill = re.search(r"\.tl-pill\s*\{([^}]*)\}", css)
     assert pill and "44px" in pill.group(1)
-    assert "特别关注" in _fn_body("mysubsMobileFiltersHtml")
-    assert 'aria-label="特别关注"' in _fn_body("mysubsMobileFiltersHtml")
+    assert "特别关注" in _fn_body("homeScopeTogglesHtml")
     assert 'aria-label="筛选"' in _fn_body("tlFilterActionsHtml")
     assert ".icon-badge-bar .tl-pill span" in css and "display: none" in css
     assert ".icon-badge-bar > .fav-toggle" in css and "font-size: 0" in css
@@ -643,7 +631,7 @@ def test_mobile_home_filter_reuses_native_and_shared_controls():
     assert "homeToggleFilter()" in render
     assert 'toggleAttribute("hidden"' in toggle
     assert "loadHomeKols(routeRenderSeq)" in pick
-    assert "state.homeQ || state.homeCategory" in _fn_body("homeHasFilters")
+    assert "state.homeQ || state.homeCategory || state.homeSubscribed || state.homeFavorite" in _fn_body("homeHasFilters")
 
 
 def test_plaza_source_visibility_admin_and_pills():
@@ -664,11 +652,8 @@ def test_plaza_source_visibility_admin_and_pills():
     assert "tlTimelineEntries()" in _fn_body("tlPillsHtml")
     assert "tlPlazaEntries()" in _fn_body("renderPlatformTabs")
     assert "tlPlazaEntries()" in _fn_body("homeMobilePlatformsHtml")
-    assert "tlTimelineEntries()" in _fn_body("renderMySubsTabs")
-    assert "tlTimelineEntries()" in _fn_body("mysubsMobileFiltersHtml")
     assert "ensurePlazaPlatformSelection()" in _fn_body("renderTimeline")
     assert "ensurePlazaPlatformSelection()" in _fn_body("renderHome")
-    assert "ensurePlazaPlatformSelection()" in _fn_body("renderSettings")
     assert 'timelineVisibleSet().has("zsxq")' in src
     assert "/api/admin/plaza-sources" in _fn_body("setPlazaSourceMode")
     assert "applyPlazaSources(data.sources)" in _fn_body("setPlazaSourceMode")
@@ -785,12 +770,11 @@ def test_kol_image_settings_is_fourth_push_section_and_loads_independently():
     assert 'id="kol-images-settings"' in push
     assert "正在加载已订阅大V" in push and 'class="muted' in push
 
-    restore = body.rindex('switchSettingsTab(state.settingsTab || "subs")')
+    restore = body.rindex('switchSettingsTab(state.settingsTab || "push")')
     dnd = body.rindex("toggleDnd()")
-    subscriptions = body.rindex("loadSettingsSubscriptions(seq);")
     loader = body.rindex("loadKolImageSettings(seq);")
-    assert restore < dnd < subscriptions < loader
-    assert "await loadSettingsSubscriptions" not in body
+    assert restore < dnd < loader
+    assert "loadSettingsSubscriptions" not in body
     assert "await loadKolImageSettings" not in body
 
 
@@ -3042,7 +3026,7 @@ def test_settings_tabs_use_tab_aria():
     assert 'role="tablist" aria-label="设置分页"' in render
     assert 'role="tab"' in render and "aria-controls=" in render
     assert 'role="tabpanel"' in render
-    for tab in ("subs", "push", "bind", "llm", "account"):
+    for tab in ("push", "bind", "llm", "account"):
         assert f'id="tab-{tab}"' in render
         assert f'aria-controls="st-{tab}"' in render
         assert f'id="st-{tab}"' in render
@@ -3599,13 +3583,13 @@ def test_financial_news_action_icons_have_stable_dimensions():
     assert rule and "width: 16px" in rule.group(1) and "height: 16px" in rule.group(1)
 
 
-
+def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=262"' in html
-    assert 'src="/app.js?v=374"' in html
-    assert 'dav-shell-v243' in sw
+    assert 'href="/style.css?v=263"' in html
+    assert 'src="/app.js?v=375"' in html
+    assert 'dav-shell-v244' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

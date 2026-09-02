@@ -1441,7 +1441,6 @@ body.lightbox-open { overflow: hidden; }
 .tl-filterbar .fav-toggle { height: 44px; min-height: 44px; }
 .tl-filter-views .fav-toggle,
 .tl-rail-view .fav-toggle { height: 44px; min-height: 44px; }
-.mysubs-mobile-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .tl-actions { display: flex; gap: 10px; flex-shrink: 0; }
 .tl-layout { display: flex; align-items: flex-start; gap: 20px; }
 .tl-main { flex: 1; min-width: 0; }
@@ -2306,8 +2305,7 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
     overscroll-behavior-x: contain;
   }
   .tl-feed-panel,
-  #kol-list,
-  #mysubs-list { touch-action: pan-y; }
+  #kol-list { touch-action: pan-y; }
   /* 动态/订阅/广场：一行等宽图标角标（全部+5平台+筛选/星标）。字只留 aria，禁止改回带字胶囊。 */
   .icon-badge-bar {
     display: grid;

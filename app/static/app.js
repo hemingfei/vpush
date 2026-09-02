@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.128";
+const APP_VERSION = "1.12.129";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -77,9 +77,7 @@ const state = {
   user: null,
   catalog: [],
   platform: "",
-  mysubsPlatform: "",
-  mysubsFavorite: false,
-  settingsTab: "subs",
+  settingsTab: "push",
   newsSources: [],
   newsVisible: true,
   newsFilterSourceId: "",
@@ -103,6 +101,8 @@ const state = {
   inactivePolicy: { inactive_after_days: 90, inactive_purge_after_days: 30, customized: false },
   homeQ: "",
   homeCategory: "",
+  homeSubscribed: false,
+  homeFavorite: false,
   timelineFavorite: false,
   timelineSecondary: false,
   timelinePlatform: "",
@@ -556,7 +556,7 @@ const NAV = [
     { route: "news", icon: NEWS_ICON, label: "财经新闻" },
     { route: "knowledge", icon: BOOK_ICON, label: "研报库" },
     { route: "home", icon: GRID_ICON, label: "订阅广场" },
-    { route: "settings", icon: GEAR_ICON, label: "订阅与推送" },
+    { route: "settings", icon: GEAR_ICON, label: "设置" },
   ]},
   { group: "", admin: true, subs: [
     { label: "内容管理", items: [
@@ -713,7 +713,7 @@ const MOBILE_NAV = [
   { route: "timeline", icon: LIST_ICON, label: "动态" },
   { route: "news", icon: NEWS_ICON, label: "财经新闻" },
   { route: "home", icon: GRID_ICON, label: "广场" },
-  { route: "settings", icon: GEAR_ICON, label: "订阅与推送" },
+  { route: "settings", icon: GEAR_ICON, label: "设置" },
 ];
 
 function renderBottomNav(user) {
@@ -1947,7 +1947,34 @@ function emptyState(text, actionHtml = "") {
 }
 
 function homeHasFilters() {
-  return !!(state.homeQ || state.homeCategory);
+  return !!(state.homeQ || state.homeCategory || state.homeSubscribed || state.homeFavorite);
+}
+
+function homeScopeTogglesHtml() {
+  return `<div class="tl-filter-views">
+    <button type="button" id="home-sub-toggle" class="fav-toggle ${state.homeSubscribed ? "fav-on" : ""}" aria-pressed="${state.homeSubscribed}" onclick="toggleHomeSubscribed()">已订阅</button>
+    <button type="button" id="home-fav-toggle" class="fav-toggle ${state.homeFavorite ? "fav-on" : ""}" aria-pressed="${state.homeFavorite}" onclick="toggleHomeFavorite()">${STAR_SVG} 特别关注</button>
+  </div>`;
+}
+
+function toggleHomeSubscribed() {
+  state.homeSubscribed = !state.homeSubscribed;
+  const btn = $("#home-sub-toggle");
+  if (btn) {
+    btn.classList.toggle("fav-on", state.homeSubscribed);
+    btn.setAttribute("aria-pressed", String(state.homeSubscribed));
+  }
+  renderHomeList();
+}
+
+function toggleHomeFavorite() {
+  state.homeFavorite = !state.homeFavorite;
+  const btn = $("#home-fav-toggle");
+  if (btn) {
+    btn.classList.toggle("fav-on", state.homeFavorite);
+    btn.setAttribute("aria-pressed", String(state.homeFavorite));
+  }
+  renderHomeList();
 }
 
 function homeToggleFilter() {
@@ -1981,6 +2008,7 @@ async function homePickMobilePlatform(platform) {
 
 async function homeResetFilters() {
   state.homeQ = state.homeCategory = state.platform = "";
+  state.homeSubscribed = state.homeFavorite = false;
   await renderHome(routeRenderSeq);
 }
 
@@ -2045,6 +2073,7 @@ async function renderHome(seq) {
               <input id="home-search" placeholder="搜索昵称或 ID" value="${escapeHtml(state.homeQ || "")}" oninput="homeSearch(this.value)">
             </div>
             <div class="home-cats" id="home-cats"></div>
+            ${homeScopeTogglesHtml()}
             <div class="home-filter-actions">
               <button class="btn-ghost" onclick="homeResetFilters()">清除筛选</button>
             </div>
@@ -2055,6 +2084,7 @@ async function renderHome(seq) {
               <input id="home-search" placeholder="搜索昵称或 ID，即时过滤" oninput="homeSearch(this.value)">
             </div>
             <div class="platform-tabs" id="platform-tabs"></div>
+            ${homeScopeTogglesHtml()}
           </div>
           <div class="home-cats" id="home-cats"></div>`}
       </header>
@@ -2099,6 +2129,8 @@ function homeSearch(v) {
 function homeFilteredKols() {
   const q = state.homeQ.toLowerCase();
   return state.catalog.filter((k) => {
+    if (state.homeSubscribed && !k.subscribed) return false;
+    if (state.homeFavorite && !k.favorite) return false;
     if (state.homeCategory && k.category_name !== state.homeCategory) return false;
     if (!q) return true;
     return (k.name || "").toLowerCase().includes(q) || (k.external_id || "").toLowerCase().includes(q);
@@ -2240,7 +2272,6 @@ async function toggleFavorite(kolId, btn) {
     if (btn) btn.classList.toggle("fav-on", next);
     flash(next ? "已加星标" : "已取消星标");
     if (isRoute("home")) renderHomeList();
-    else if (isRoute("settings") && state.settingsTab === "subs") renderMySubsList();
   } catch (err) {
     alert("操作失败: " + err.message);
   }
@@ -2258,7 +2289,6 @@ async function toggleSecondary(kolId, btn) {
     if (btn) btn.classList.toggle("sec-on", next);
     flash(next ? "已设为次要（降频推送）" : "已取消次要");
     if (isRoute("home")) renderHomeList();
-    else if (isRoute("settings") && state.settingsTab === "subs") renderMySubsList();
   } catch (err) {
     alert("操作失败: " + err.message);
   }
@@ -2281,7 +2311,6 @@ async function refreshKolsView() {
   // 发起前捕获当前路由令牌；完成后再写 DOM，避免局部刷新覆盖已切走的新路由
   const seq = routeRenderSeq;
   if (isRoute("home")) await loadHomeKols(seq); // 重拉 catalog，已订阅置顶即时生效
-  else if (isRoute("settings")) await loadSettingsSubscriptions(seq);
   else if (isRoute("kol/")) await renderKolPage(Number(routePath().split("/")[1] || 0), seq);
   else if (isRoute("search")) doSearch(seq);
 }
@@ -2325,99 +2354,6 @@ async function setSubscribeType(kolId, input) {
     alert("切换订阅类型失败: " + err.message);
     refreshKolsView();
   }
-}
-
-function settingsSubscriptionsPanelHtml() {
-  const mobileFilter = isMobileTimelineFilter();
-  return `
-    <section class="section-panel${mobileFilter ? " home-panel" : ""}">
-      <header class="section-head home-head">
-        <div><h2 class="section-title">已订阅</h2></div>
-      </header>
-      <div class="toolbar" style="margin:12px 0 16px">
-        <div class="${mobileFilter ? "icon-badge-bar mysubs-mobile-filters" : "platform-tabs"}" id="mysubs-tabs"></div>
-        ${mobileFilter ? "" : `<button id="mysubs-fav-toggle" class="fav-toggle ${state.mysubsFavorite ? "fav-on" : ""}" onclick="toggleMySubsFav()">${STAR_SVG} 特别关注</button>`}
-      </div>
-      <div id="mysubs-list" class="kol-grid">${emptyState("加载中…")}</div>
-    </section>`;
-}
-
-async function loadSettingsSubscriptions(seq) {
-  const target = $("#mysubs-list");
-  if (!target) return;
-  target.innerHTML = emptyState("加载中…");
-  try {
-    const subs = await api("/api/my/subscriptions");
-    if (!routeStillActive(seq)) return;
-    state.catalog = subs.map((k) => ({ ...k, subscribed: true }));
-    renderMySubsTabs();
-    renderMySubsList();
-  } catch (err) {
-    if (!routeStillActive(seq)) return;
-    const current = $("#mysubs-list");
-    if (!current) return;
-    current.innerHTML = emptyState(
-      "加载失败: " + err.message,
-      `<div><button type="button" class="btn-ghost" onclick="loadSettingsSubscriptions(routeRenderSeq)">重试</button></div>`
-    );
-  }
-}
-
-function mysubsMobileFiltersHtml() {
-  const platforms = tlTimelineEntries().map(([p, label]) => {
-    const short = platformShortLabel(p);
-    return `
-    <button class="tl-pill ${state.mysubsPlatform === p ? "selected" : ""}"
-      data-platform="${p}"
-      aria-label="${label}"
-      title="${label}"
-      role="radio"
-      aria-checked="${state.mysubsPlatform === p}"
-      onclick="switchMySubsPlatform('${p}')">
-      ${PLATFORM_ICONS[p || ""]}<span>${short}</span>
-    </button>`;
-  }).join("");
-  return `<div class="tl-pills" role="radiogroup" aria-label="平台">${platforms}</div>
-    <button class="fav-toggle ${state.mysubsFavorite ? "fav-on" : ""}"
-      aria-label="特别关注"
-      aria-pressed="${state.mysubsFavorite}"
-      onclick="toggleMySubsFav()">${STAR_SVG} 特别关注</button>`;
-}
-
-function renderMySubsTabs() {
-  $("#mysubs-tabs").innerHTML = isMobileTimelineFilter()
-    ? mysubsMobileFiltersHtml()
-    : tlTimelineEntries().map(([p]) => platformTabHTML(p, state.mysubsPlatform, "switchMySubsPlatform")).join("");
-}
-
-function switchMySubsPlatform(platform) {
-  state.mysubsPlatform = platform;
-  renderMySubsTabs();
-  renderMySubsList();
-}
-
-function renderMySubsList() {
-  let kols = state.catalog.filter(
-    (k) => !state.mysubsPlatform || k.platform === state.mysubsPlatform
-  );
-  if (state.mysubsFavorite) {
-    kols = kols.filter((k) => k.favorite);
-  } else {
-    kols = [...kols].sort((a, b) => (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0));
-  }
-  // 同类别排在一起（组内保持星标优先/订阅顺序），未分类排最后
-  kols = [...kols].sort((a, b) => (a.category_name ? 0 : 1) - (b.category_name ? 0 : 1));
-  $("#mysubs-list").innerHTML = kols.length
-    ? groupedKolCards(kols)
-    : emptyState("这里还没有订阅", `<div><button class="btn-normal btn-add" onclick="go('home')">去订阅广场看看</button></div>`);
-}
-
-function toggleMySubsFav() {
-  state.mysubsFavorite = !state.mysubsFavorite;
-  const btn = $("#mysubs-fav-toggle");
-  if (btn) btn.classList.toggle("fav-on", state.mysubsFavorite);
-  renderMySubsTabs(); // 移动端星标角标在 #mysubs-tabs 内，需重绘
-  renderMySubsList();
 }
 
 // ---------- 动态 ----------
@@ -2629,14 +2565,12 @@ function mobilePlatformSwipeSurface(el) {
   if (isLiveTimeline()) return null;
   if ($("#tl-feed-panel") && el.closest(".tl-main")) return "timeline";
   if ($("#home-mobile-platforms") && ($("#kol-list")?.contains(el) || el.closest(".home-panel"))) return "home";
-  if ($("#mysubs-tabs") && $("#mysubs-list")?.contains(el)) return "mysubs";
   return null;
 }
 
 function mobilePlatformSwipeContext(surface) {
   if (surface === "timeline") return { current: () => state.timelinePlatform, apply: (p) => tlPickPlatform(p), entries: tlTimelineEntries };
   if (surface === "home") return { current: () => state.platform, apply: (p) => homePickMobilePlatform(p), entries: tlPlazaEntries };
-  if (surface === "mysubs") return { current: () => state.mysubsPlatform, apply: (p) => switchMySubsPlatform(p), entries: tlTimelineEntries };
   return null;
 }
 
@@ -2695,9 +2629,6 @@ function ensurePlazaPlatformSelection() {
   }
   if (state.platform && !plaza.has(state.platform)) {
     state.platform = "";
-  }
-  if (state.mysubsPlatform && !timeline.has(state.mysubsPlatform)) {
-    state.mysubsPlatform = "";
   }
 }
 
@@ -4132,7 +4063,7 @@ async function toggleKolPageSubscribe(kolId) {
 // ---------- 推送设置 ----------
 let settingsPollTimer = null;
 let _pushStatusHtml = "";
-const SETTINGS_TABS = ["subs", "push", "bind", "llm", "account"];
+const SETTINGS_TABS = ["push", "bind", "llm", "account"];
 let _kolImageSubscriptions = [];
 const _kolImagePendingIds = new Set();
 let _kolImageLoadGeneration = 0;
@@ -4327,8 +4258,7 @@ async function refreshSettingsStatus() {
 async function renderSettings(seq) {
   const token = state.token;
   const sessionGeneration = imaMountState.sessionGeneration;
-  setPageTitle("订阅与推送");
-  ensurePlazaPlatformSelection();
+  setPageTitle("设置");
   try {
     const user = await api("/api/me");
     if (!routeStillActive(seq) || token !== state.token
@@ -4344,14 +4274,10 @@ async function renderSettings(seq) {
     const fsTarget = fsBot ? `<b>${escapeHtml(fsBot)}</b>` : "你的机器人应用名";
     $("#main").innerHTML = `
       <div class="settings-tabs" role="tablist" aria-label="设置分页">
-        <button type="button" class="settings-tab active" role="tab" id="tab-subs" aria-selected="true" aria-controls="st-subs" data-tab="subs" onclick="switchSettingsTab('subs')">订阅管理</button>
-        <button type="button" class="settings-tab" role="tab" id="tab-push" aria-selected="false" aria-controls="st-push" data-tab="push" onclick="switchSettingsTab('push')">推送设置</button>
+        <button type="button" class="settings-tab active" role="tab" id="tab-push" aria-selected="true" aria-controls="st-push" data-tab="push" onclick="switchSettingsTab('push')">推送设置</button>
         <button type="button" class="settings-tab" role="tab" id="tab-bind" aria-selected="false" aria-controls="st-bind" data-tab="bind" onclick="switchSettingsTab('bind')">渠道绑定</button>
         <button type="button" class="settings-tab" role="tab" id="tab-llm" aria-selected="false" aria-controls="st-llm" data-tab="llm" onclick="switchSettingsTab('llm')">AI 摘要</button>
         <button type="button" class="settings-tab" role="tab" id="tab-account" aria-selected="false" aria-controls="st-account" data-tab="account" onclick="switchSettingsTab('account')">账号设置</button>
-      </div>
-      <div id="st-subs" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-subs">
-        ${settingsSubscriptionsPanelHtml()}
       </div>
       <div id="st-push" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-push">
       <section class="section-panel">
@@ -4643,9 +4569,8 @@ async function renderSettings(seq) {
       </div>`;
     _pushStatusHtml = channelStatusHtml(state.user);
     if (pendingBindActive() && !settingsTargetBound(state.user)) startSettingsPoll();
-    switchSettingsTab(state.settingsTab || "subs"); // 恢复上次所在分栏
+    switchSettingsTab(state.settingsTab || "push"); // 恢复上次所在分栏
     toggleDnd(); // 根据开关初始状态同步时段输入框的禁用/置灰
-    loadSettingsSubscriptions(seq);
     loadKolImageSettings(seq);
   } catch (err) {
     if (!routeStillActive(seq) || token !== state.token
@@ -4809,8 +4734,8 @@ async function toggleKolImages(kolId, input) {
 }
 
 function switchSettingsTab(name) {
-  // 设置页分段导航：订阅管理 / 推送 / 渠道绑定 / AI 摘要 / 账号设置
-  if (!SETTINGS_TABS.includes(name)) name = "subs";
+  // 设置页分段导航：推送 / 渠道绑定 / AI 摘要 / 账号设置
+  if (!SETTINGS_TABS.includes(name)) name = "push";
   state.settingsTab = name;
   document.querySelectorAll(".settings-tab[data-tab]").forEach((b) => {
     if (!SETTINGS_TABS.includes(b.dataset.tab)) return;
@@ -10632,10 +10557,10 @@ async function loadAdminTagsTab() {
     <section class="section-panel">
       <header class="section-head">
         <div><h2 class="section-title">标签维护</h2>
-        <p class="section-meta">合并种子黑话、解析 $标记$ 新股、去掉指数/ETF 误入的股票名，并清理过期标签与碎片别名。每日自动一次，也可立即执行。标记解析跟管理员「订阅与推送 → AI 摘要」同一套 LLM。</p></div>
+        <p class="section-meta">合并种子黑话、解析 $标记$ 新股、去掉指数/ETF 误入的股票名，并清理过期标签与碎片别名。每日自动一次，也可立即执行。标记解析跟管理员「设置 → AI 摘要」同一套 LLM。</p></div>
       </header>
       <p class="section-meta" style="margin-top:8px" id="tag-maintain-meta">${escapeHtml(adminMaintainSummary(data))}</p>
-      ${data.maintain && data.maintain.llm_ready ? "" : `<p class="section-meta">未检测到站点 LLM。请到「订阅与推送 → AI 摘要」配置 OpenAI 兼容接口，或设环境变量 LLM_API_KEY。点运行仍会合并种子、清碎片和误标。</p>`}
+      ${data.maintain && data.maintain.llm_ready ? "" : `<p class="section-meta">未检测到站点 LLM。请到「设置 → AI 摘要」配置 OpenAI 兼容接口，或设环境变量 LLM_API_KEY。点运行仍会合并种子、清碎片和误标。</p>`}
       <div class="toolbar" style="margin-top:12px">
         <button class="btn-normal" onclick="adminMaintainTags('pending')">维护并回填待打标</button>
         <button class="btn-ghost" onclick="adminMaintainTags('none')">仅维护词表</button>
@@ -12362,7 +12287,7 @@ async function router() {
   const path = routePath();
   const [page, rawParam] = path.split("/");
   if (page !== "news") clearNewsReaderState();
-  if (page !== "settings") state.settingsTab = "subs";
+  if (page !== "settings") state.settingsTab = "push";
   // 管理后台默认全景概览：/admin 与 /admin/dashboard 等价，侧边栏高亮才能对上
   const param = page === "admin" && !rawParam ? "dashboard" : rawParam;
   if (!state.token) {
@@ -12407,8 +12332,8 @@ async function router() {
       return;
     }
     else if (page === "mysubs") {
-      state.settingsTab = "subs";
-      replaceRoute("settings");
+      state.homeSubscribed = true;
+      replaceRoute("home");
       return;
     }
     else if (page === "news") await renderNewsCenter(renderSeq, rawParam);
