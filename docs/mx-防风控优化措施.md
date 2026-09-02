@@ -11,7 +11,7 @@
 |---|------|------|----------------|
 | 1 | HTTP 与 WS「双人格」 | `client.py` | 同一 token：WS 是 Chrome 浏览器，HTTP 是 `python-httpx/0.x` 裸 UA、无 Origin/Referer |
 | 2 | 全量房间顺序轮询 | scheduler | 每 60~180 秒把所有房间 rid 扫一遍，24/7 不停（146 房间 ≈ 8760 次/小时） |
-| 3 | 异常大 limit | `client.get_rooms` | `limit=1000000` 拉房间列表，单条日志就是机器人实锤 |
+| 3 | 异常大 limit | `client.get_rooms` | ~~limit=1000000 是机器人实锤~~ **2026-09-02 抓包推翻：官方冷启动就是单次 limit=1000000**（见 `mx-官方网页端抓包核对-2026-09-02.md`） |
 | 4 | 固定周期节拍 | scheduler | 精确 60/180 秒、每小时整点同步，时间轴上是完美周期信号 |
 | 5 | WS 在线还全量 HTTP 轮询 | scheduler | 真人网页端：WS 收推送 + 只拉当前打开的房间 |
 | 6 | 被踢后 5 秒硬重连 | `ws.py` | 高频无上限重连是攻击性特征，会把「踢下线」升级成「封号」 |
@@ -33,7 +33,7 @@
 | WS | TOKEN 过期不重试，立即放弃 | `ws._looks_like_auth_failure` |
 | WS | 指数式自我封锁：gave_up 状态 + 手动接入复位 | `ws.py` / `fetcher.get_ws_status` |
 | TOKEN | 2 天强制更换提醒 + 过期熔断 | `scheduler._mx_check_token_age` / `MXTokenExpiredError` |
-| 特征 | 房间列表 100/页正常翻页 | `client.get_rooms` |
+| 特征 | 房间列表官方形态单次全量（limit=1000000，2026-09-02 抓包对齐） | `client.get_rooms` |
 | 特征 | 房间同步随机 2-6 小时 | `mx_sync.SYNC_MIN/MAX_INTERVAL_SECONDS` |
 | 特征 | HTTP 请求头与 WS 同形 | `client._headers` |
 | 特征 | **TLS 指纹（JA3/JA4）+ HTTP/2 + 头序对齐 Chrome**（curl_cffi impersonate） | `client.py`（`ws.py` 人格常量） |
@@ -90,7 +90,10 @@
   图片下载三处共用；`tests/test_mx.py` 的 `test_persona_constants_are_consistent` 锁定
   主版本一致，`test_http_wire_persona_matches_ws_persona` 用本地回环服务锁定线上实际
   发出的头与 WS 握手同一人格。**改任何一处人格常量都要三处同步。**
-- **房间列表正常分页**：`get_rooms` 从 `limit=1000000` 改为每页 100（`ROOM_PAGE_SIZE`）逐页拉全量，50 页安全上限；不再有单条日志可定罪的参数。
+- **房间列表官方形态（2026-09-02 修订）**：抓包实测官方冷启动就是单次
+  `{"pages":1,"limit":1000000}` 全量——该参数官方自己就发，无罪；曾改为 100/页
+  （`ROOM_PAGE_SIZE`）逐页翻，现已恢复官方单次全量形态（既同形又把每次同步从最多
+  50 个请求降到 1 个）。详见 `mx-官方网页端抓包核对-2026-09-02.md`。
 - **同步间隔随机化**：房间列表同步从固定周期改为**每轮随机 2-6 小时**（`SYNC_MIN/MAX_INTERVAL_SECONDS`）；原 `sync_interval_hours` 配置项（含 UI 输入框、环境变量映射、API 字段）已整体移除，避免留下无效旋钮。
 - **房间同步复用连接**：`MXRoomSyncService` 持有同一个 `MXClient`（`_get_client`），不再
   每次同步新建 TLS 连接——同指纹的重复握手在风控日志里是可聚合计数的行为；`stop()` 统一关闭。
@@ -171,3 +174,21 @@
 - `tests/test_mx.py` 全量通过（57 个用例，含重连策略、TOKEN 过期零重试、分页、请求头、随机窗口边界、告警节流、熔断标记、2 天提醒，以及二次加固新增的线上人格实测/WS 握手人格/常量一致性/同步客户端复用等契约测试）。
 - 线上人格实测：本地回环 HTTP 服务捕获 curl_cffi 实际发出的请求，UA 逐字节等于 `BROWSER_UA`、客户端提示一致、导航特有头已删除、无重复头。
 - 全量测试套件与改动前 HEAD 基线逐项对比：失败集合完全一致（均为 Windows symlink/网络类存量环境问题），本次改造零回归。
+
+## 八、2026-09-02 抓包核对修订（已落地）
+
+用真实账号人工登录官方网页端抓包逐项核对（详见 `mx-官方网页端抓包核对-2026-09-02.md`），
+按实测对齐以下实现（`tests/test_mx.py` 59 例全部通过）：
+
+| 改动 | 实测依据 |
+|------|---------|
+| HTTP 头补 `ad: true`、`i: qq`（前端写死的常驻渠道标记，登录前请求即携带、与账号无关） | 两账号 + 登录前请求实测一致 |
+| `accept` 改为 `*/*`（官方是 fetch 默认形态，不是 axios 默认值） | wire 级请求头实测 |
+| WS 地址默认改为 `wss://mx.2026.naaifu.cn/business-api/5`（官方实际连 `{api_base}/socket.io/`） | WS 握手 URL 实测 |
+| `get_rooms` 恢复官方单次 `limit=1000000` 全量（推翻本文件旧的「机器人实锤」判断） | 两个账号冷启动实测一致 |
+| `page_size` 默认 50 → 30（官方 `msg/list` 实测 pagesize=30） | 请求体实测 |
+| 拉取消息前先发 `room/view {rid,tt}` 进房上报（官方每次打开房间都先发；失败不阻断拉取，TOKEN 过期照常上抛熔断） | 进房行为链实测 |
+| 确认无需改动：websocket 直连、`/msg` 命名空间、auth 载荷 `{tt,token,version:"web"}`、「只听不说」、无 sign 签名、服务器 ping/客户端 pong 心跳 | 全部与现实现一致 |
+
+注意：**已保存过配置的部署不会被新默认值覆盖**，需在后台「数据源 → MX」把 WebSocket 地址
+更新为 `wss://mx.2026.naaifu.cn/business-api/5`。

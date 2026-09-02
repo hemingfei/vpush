@@ -14,13 +14,14 @@ from .ws import ACCEPT_LANGUAGE, IMPERSONATE_TARGET
 
 logger = logging.getLogger(__name__)
 
-# 房间列表正常分页大小：绝不能发异常大 limit（单条日志就是机器人实锤）
-ROOM_PAGE_SIZE = 100
-# 房间列表翻页安全上限（50 页 = 5000 个房间，远超实际规模）
-MAX_ROOM_PAGES = 50
+# 房间列表官方形态：2026-09-02 官方网页端抓包实测，冷启动就是单次
+# {"pages":1,"limit":1000000} 全量拉取——该参数官方自己就发（无罪，频率才是信号）；
+# 旧的「100/页翻页」反而与官方不符且请求数更多，已恢复官方形态
+ROOM_LIST_LIMIT = 1000000
 
-# Chrome 同源 XHR 的 accept 形态（前端 axios 的默认值）
-XHR_ACCEPT = "application/json, text/plain, */*"
+# Chrome 同源 XHR 的 accept 形态：官方网页端实测为 */*（fetch 默认值），
+# 不是 axios 的 "application/json, text/plain, */*"
+XHR_ACCEPT = "*/*"
 # 导航请求特有头：impersonate 默认会带，XHR 不该带；headers 里置 None 即从请求中删除
 _NAV_ONLY_HEADERS = ("upgrade-insecure-requests", "sec-fetch-user")
 
@@ -63,6 +64,10 @@ class MXClient:
             "token": self.token,
             "Content-Type": "application/json",
             "version": "web",
+            # 官方前端常驻自定义头：登录前的请求就已携带，两账号实测一致，
+            # 为前端写死的渠道标记（与账号无关，2026-09-02 抓包）；缺失即「一眼假」
+            "ad": "true",
+            "i": "qq",
             "accept": XHR_ACCEPT,
             "accept-language": ACCEPT_LANGUAGE,
             "sec-fetch-site": "same-origin",
@@ -109,31 +114,28 @@ class MXClient:
         return result
 
     def get_rooms(self) -> list[dict]:
-        """获取房间列表：每页 100 正常翻页拉全量。
+        """获取房间列表：与官方网页端一致，单次 limit=1000000 全量拉取。
 
         Returns:
             房间列表
         """
-        rooms: list[dict] = []
-        for page in range(1, MAX_ROOM_PAGES + 1):
-            data = {
-                "pages": page,
-                "limit": ROOM_PAGE_SIZE,
-                "tt": int(time.time() * 1000),
-            }
-            result = self._request("POST", "/api/room/list", data)
-            if isinstance(result, dict) and "list" in result:
-                batch = result["list"]
-            elif isinstance(result, list):
-                batch = result
-            else:
-                batch = []
-            if not batch:
-                break
-            rooms.extend(batch)
-            if len(batch) < ROOM_PAGE_SIZE:
-                break
-        return rooms
+        data = {
+            "pages": 1,
+            "limit": ROOM_LIST_LIMIT,
+            "tt": int(time.time() * 1000),
+        }
+        result = self._request("POST", "/api/room/list", data)
+        if isinstance(result, dict) and "list" in result:
+            return result["list"]
+        if isinstance(result, list):
+            return result
+        return []
+
+    def room_view(self, room_id: int) -> None:
+        """进房上报：官方网页端每次打开房间都先发 {"rid","tt"}（抓包实测），
+        拉取消息前调用一次即可对齐「人打开了房间」的行为链。"""
+        data = {"rid": room_id, "tt": int(time.time() * 1000)}
+        self._request("POST", "/api/room/view", data)
 
     def get_room_history(
         self, room_id: int, msg_id: int = 0, limit: int = 50

@@ -18,7 +18,7 @@ from ..base import (
     format_published_at,
     warn_timeline_gap,
 )
-from .client import MXClient
+from .client import MXClient, MXTokenExpiredError
 from .ws import MxWsClient
 
 logger = logging.getLogger(__name__)
@@ -88,7 +88,8 @@ class MxFetcher(Fetcher):
             getattr(source_config, "token", "")
         )
         self.max_history_pages = getattr(source_config, "max_history_pages", 100)
-        self.page_size = getattr(source_config, "page_size", 50)
+        # 官方 msg/list 的 pagesize 实测为 30（2026-09-02 抓包）
+        self.page_size = getattr(source_config, "page_size", 30)
         self.ws_client = None
         # (monotonic, kol) 元组：kol 为 None 也缓存（更短 TTL），未知房间噪音事件不至于打爆数据库
         self._room_cache: dict = {}
@@ -97,6 +98,16 @@ class MxFetcher(Fetcher):
 
     def fetch(self, kol):
         room_id = int(kol["external_id"])
+
+        # 官方网页端每次打开房间都先发 room/view 进房上报（2026-09-02 抓包实测）：
+        # 拉取前对齐「人打开了这个房间」的请求链。上报失败只记日志不阻断拉取；
+        # TOKEN 过期照常抛出，交由上层熔断/告警接管
+        try:
+            self.mx_client.room_view(room_id)
+        except MXTokenExpiredError:
+            raise
+        except Exception:  # noqa: BLE001 - 上报失败不影响拉取
+            logger.warning("MX room/view 上报失败 room=%s", room_id, exc_info=True)
 
         try:
             # 直接获取最新消息

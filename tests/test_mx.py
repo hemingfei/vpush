@@ -592,6 +592,9 @@ class FakeMxClient:
     def __init__(self, pages):
         self.pages = pages
 
+    def room_view(self, room_id):
+        pass
+
     def get_room_history(self, room_id, msg_id=0, limit=50):
         return self.pages.get(msg_id, [])
 
@@ -621,6 +624,9 @@ def test_fetch_no_backfill_when_tail_known():
     class Closed:
         def __init__(self):
             self.calls = 0
+
+        def room_view(self, room_id):
+            pass
 
         def get_room_history(self, room_id, msg_id=0, limit=50):
             self.calls += 1
@@ -652,6 +658,9 @@ def test_backfill_stops_when_cursor_stalls():
     calls = []
 
     class Stalled:
+        def room_view(self, room_id):
+            pass
+
         def get_room_history(self, room_id, msg_id=0, limit=50):
             calls.append(msg_id)
             if msg_id == 0:
@@ -662,6 +671,46 @@ def test_backfill_stops_when_cursor_stalls():
     posts = fetcher.fetch(kol)
     assert len(calls) <= 3  # 首页 + 一次追平即停
     assert {p.external_id for p in posts} == {"5", "4"}
+
+
+# ---- 进房上报（对齐官方「打开房间」行为链） ----
+
+def test_fetch_reports_room_view_before_history():
+    """拉取消息前必须先发一次 room/view 进房上报（官方每次打开房间都先发）。"""
+    db = make_db()
+    kol = make_kol(db)
+    fetcher = make_fetcher(db, page_size=50)
+    calls = []
+
+    class Fake:
+        def room_view(self, room_id):
+            calls.append(("view", room_id))
+
+        def get_room_history(self, room_id, msg_id=0, limit=50):
+            calls.append(("history", room_id))
+            return [msg(2, "m2"), msg(1, "m1")]
+
+    fetcher.mx_client = Fake()
+    posts = fetcher.fetch(kol)
+    assert calls == [("view", 101), ("history", 101)]
+    assert {p.external_id for p in posts} == {"2", "1"}
+
+
+def test_fetch_survives_room_view_failure():
+    """进房上报失败只记日志，不能阻断消息拉取。"""
+    db = make_db()
+    kol = make_kol(db)
+    fetcher = make_fetcher(db, page_size=50)
+
+    class Fake:
+        def room_view(self, room_id):
+            raise RuntimeError("view failed")
+
+        def get_room_history(self, room_id, msg_id=0, limit=50):
+            return [msg(3, "m3")]
+
+    fetcher.mx_client = Fake()
+    assert {p.external_id for p in fetcher.fetch(kol)} == {"3"}
 
 
 # ---- 配置热加载 ----
@@ -994,7 +1043,10 @@ def test_client_headers_look_like_browser():
     assert headers["Origin"] == "https://mx.test"
     assert headers["Referer"] == "https://mx.test/"
     assert headers["token"] == "t" and headers["version"] == "web"
-    assert headers["accept"] == "application/json, text/plain, */*"
+    # accept 为官方实测的 */*（fetch 默认形态），不是 axios 默认值
+    assert headers["accept"] == "*/*"
+    # 官方前端常驻自定义头：登录前请求即携带、与账号无关（前端写死的渠道标记）
+    assert headers["ad"] == "true" and headers["i"] == "qq"
     assert headers["sec-fetch-site"] == "same-origin"
     assert headers["sec-fetch-mode"] == "cors"
     assert headers["sec-fetch-dest"] == "empty"
@@ -1003,26 +1055,24 @@ def test_client_headers_look_like_browser():
     assert headers["sec-fetch-user"] is None
 
 
-def test_get_rooms_paginates_with_normal_page_size():
-    """房间列表正常分页（100/页翻页拉全量），不再出现 limit=1000000 的异常特征。"""
+def test_get_rooms_single_official_full_pull():
+    """房间列表与官方网页端一致：单次 {"pages":1,"limit":1000000} 全量拉取。
+
+    2026-09-02 抓包推翻旧结论：官方冷启动就是单次 limit=1000000（该参数
+    无罪，频率才是信号），旧的 100/页翻页反而与官方不符且请求数更多。
+    """
     import json as jsonlib
 
-    from app.fetchers.mx.client import MXClient, ROOM_PAGE_SIZE
+    from app.fetchers.mx.client import MXClient, ROOM_LIST_LIMIT
 
-    page1 = [{"id": i} for i in range(ROOM_PAGE_SIZE)]
-    session = _FakeCffiSession(
-        [
-            {"code": 200, "list": page1},
-            {"code": 200, "list": [{"id": 999}]},
-        ]
-    )
+    rooms = [{"id": i} for i in range(146)]
+    session = _FakeCffiSession([{"code": 200, "list": rooms}])
     client = MXClient("https://mx.test/business-api/5", "t", session=session)
-    rooms = client.get_rooms()
+    assert client.get_rooms() == rooms
 
-    assert len(rooms) == ROOM_PAGE_SIZE + 1
-    bodies = [jsonlib.loads(r["data"]) for r in session.requests]
-    assert [b["pages"] for b in bodies] == [1, 2]
-    assert all(b["limit"] == ROOM_PAGE_SIZE for b in bodies)
+    assert len(session.requests) == 1
+    body = jsonlib.loads(session.requests[0]["data"])
+    assert body["pages"] == 1 and body["limit"] == ROOM_LIST_LIMIT
 
 
 def test_token_expired_raises_dedicated_error():
@@ -1056,6 +1106,8 @@ def test_http_wire_persona_matches_ws_persona():
             captured["ua"] = self.headers.get("User-Agent")
             captured["sec_ch_ua"] = self.headers.get("sec-ch-ua")
             captured["accept"] = self.headers.get("accept")
+            captured["ad"] = self.headers.get("ad")
+            captured["i"] = self.headers.get("i")
             captured["sec_fetch_mode"] = self.headers.get("sec-fetch-mode")
             captured["no_nav"] = (
                 "upgrade-insecure-requests" not in keys
@@ -1083,8 +1135,9 @@ def test_http_wire_persona_matches_ws_persona():
     assert rooms == [{"id": 1}]
     assert captured["ua"] == BROWSER_UA
     assert captured["sec_ch_ua"] == SEC_CH_UA
-    assert captured["accept"] == "application/json, text/plain, */*"
+    assert captured["accept"] == "*/*"
     assert captured["sec_fetch_mode"] == "cors"
+    assert captured["ad"] == "true" and captured["i"] == "qq"
     assert captured["no_nav"] and captured["no_dups"]
 
 

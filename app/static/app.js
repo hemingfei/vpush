@@ -8271,7 +8271,7 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
               </label>
               <label class="cfg-field">
                 <span>WebSocket 地址</span>
-                <input id="mx-ws-url" type="text" class="form-control" placeholder="wss://mx.2026.naaifu.cn">
+                <input id="mx-ws-url" type="text" class="form-control" placeholder="wss://mx.2026.naaifu.cn/business-api/5">
               </label>
               <label class="cfg-field">
                 <span>WebSocket 路径</span>
@@ -9579,11 +9579,11 @@ async function loadMxAdmin() {
     $("#mx-enabled").checked = config.enabled;
     $("#mx-token").value = config.token || "";
     $("#mx-api-base").value = config.api_base || "https://mx.2026.naaifu.cn/business-api/5";
-    $("#mx-ws-url").value = config.ws_url || "wss://mx.2026.naaifu.cn";
+    $("#mx-ws-url").value = config.ws_url || "wss://mx.2026.naaifu.cn/business-api/5";
     $("#mx-ws-path").value = config.ws_path || "/socket.io";
     $("#mx-ws-namespace").value = config.ws_namespace || "/msg";
     $("#mx-ws-enabled").checked = config.ws_enabled;
-    $("#mx-page-size").value = config.page_size || 50;
+    $("#mx-page-size").value = config.page_size || 30;
     $("#mx-max-pages").value = config.max_history_pages || 100;
 
     // Load rooms
@@ -9614,14 +9614,14 @@ async function saveMxConfig() {
   btn.disabled = true;
   try {
     // Parse numbers with defaults, ensure minimum values
-    const page_size = Math.max(1, Number($("#mx-page-size").value) || 50);
+    const page_size = Math.max(1, Number($("#mx-page-size").value) || 30);
     const max_history_pages = Math.max(1, Number($("#mx-max-pages").value) || 100);
 
     const payload = {
       enabled: $("#mx-enabled").checked,
       token: $("#mx-token").value.trim(),
       api_base: $("#mx-api-base").value.trim() || "https://mx.2026.naaifu.cn/business-api/5",
-      ws_url: $("#mx-ws-url").value.trim() || "wss://mx.2026.naaifu.cn",
+      ws_url: $("#mx-ws-url").value.trim() || "wss://mx.2026.naaifu.cn/business-api/5",
       ws_path: $("#mx-ws-path").value.trim() || "/socket.io",
       ws_namespace: $("#mx-ws-namespace").value.trim() || "/msg",
       ws_enabled: $("#mx-ws-enabled").checked,
@@ -9649,14 +9649,14 @@ async function testMxConnection() {
   btn.disabled = true;
   try {
     // Parse numbers with defaults, ensure minimum values
-    const page_size = Math.max(1, Number($("#mx-page-size").value) || 50);
+    const page_size = Math.max(1, Number($("#mx-page-size").value) || 30);
     const max_history_pages = Math.max(1, Number($("#mx-max-pages").value) || 100);
 
     const payload = {
       enabled: $("#mx-enabled").checked,
       token: $("#mx-token").value.trim(),
       api_base: $("#mx-api-base").value.trim() || "https://mx.2026.naaifu.cn/business-api/5",
-      ws_url: $("#mx-ws-url").value.trim() || "wss://mx.2026.naaifu.cn",
+      ws_url: $("#mx-ws-url").value.trim() || "wss://mx.2026.naaifu.cn/business-api/5",
       ws_path: $("#mx-ws-path").value.trim() || "/socket.io",
       ws_namespace: $("#mx-ws-namespace").value.trim() || "/msg",
       ws_enabled: $("#mx-ws-enabled").checked,

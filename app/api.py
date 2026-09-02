@@ -4382,22 +4382,22 @@ def create_api_router(
                     "enabled": False,
                     "token": "",
                     "api_base": "https://mx.2026.naaifu.cn/business-api/5",
-                    "ws_url": "wss://mx.2026.naaifu.cn",
+                    "ws_url": "wss://mx.2026.naaifu.cn/business-api/5",
                     "ws_path": "/socket.io",
                     "ws_namespace": "/msg",
                     "ws_enabled": True,
-                    "page_size": 50,
+                    "page_size": 30,
                     "max_history_pages": 100,
                 }
             return {
                 "enabled": bool(getattr(mx_config, "enabled", False)),
                 "token": getattr(mx_config, "token", ""),
                 "api_base": getattr(mx_config, "api_base", "https://mx.2026.naaifu.cn/business-api/5"),
-                "ws_url": getattr(mx_config, "ws_url", "wss://mx.2026.naaifu.cn"),
+                "ws_url": getattr(mx_config, "ws_url", "wss://mx.2026.naaifu.cn/business-api/5"),
                 "ws_path": getattr(mx_config, "ws_path", "/socket.io"),
                 "ws_namespace": getattr(mx_config, "ws_namespace", "/msg"),
                 "ws_enabled": bool(getattr(mx_config, "ws_enabled", True)),
-                "page_size": int(getattr(mx_config, "page_size", 50)),
+                "page_size": int(getattr(mx_config, "page_size", 30)),
                 "max_history_pages": int(getattr(mx_config, "max_history_pages", 100)),
             }
         except Exception:
@@ -4459,7 +4459,7 @@ def create_api_router(
             if "api_base" in raw_body:
                 config.sources.mx.api_base = str(raw_body["api_base"] or "https://mx.2026.naaifu.cn/business-api/5")
             if "ws_url" in raw_body:
-                config.sources.mx.ws_url = str(raw_body["ws_url"] or "wss://mx.2026.naaifu.cn")
+                config.sources.mx.ws_url = str(raw_body["ws_url"] or "wss://mx.2026.naaifu.cn/business-api/5")
             if "ws_path" in raw_body:
                 config.sources.mx.ws_path = str(raw_body["ws_path"] or "/socket.io")
             if "ws_namespace" in raw_body:
@@ -4467,7 +4467,7 @@ def create_api_router(
             if "ws_enabled" in raw_body:
                 config.sources.mx.ws_enabled = bool(raw_body["ws_enabled"])
             if "page_size" in raw_body:
-                config.sources.mx.page_size = max(1, int(raw_body["page_size"] or 50))
+                config.sources.mx.page_size = max(1, int(raw_body["page_size"] or 30))
             if "max_history_pages" in raw_body:
                 config.sources.mx.max_history_pages = max(1, int(raw_body["max_history_pages"] or 100))
 
@@ -4607,6 +4607,16 @@ def create_api_router(
                 MX_PULL_LIMIT = 100
                 logger.info(f"开始拉取 MX 房间 {room_id} 最新 {MX_PULL_LIMIT} 条消息")
                 fetcher = MxFetcher(mx_config, db)
+
+                # 官方网页端打开房间都先 room/view 进房上报（抓包实测）：拉取前
+                # 对齐「人打开了这个房间」的行为链；上报失败不阻断拉取，
+                # TOKEN 过期则照常抛给下方告警/熔断逻辑
+                try:
+                    fetcher.mx_client.room_view(room_id)
+                except MXTokenExpiredError:
+                    raise
+                except Exception:
+                    logger.warning("MX room/view 上报失败 room=%s", room_id, exc_info=True)
 
                 all_messages = fetcher.mx_client.get_room_history(room_id, 0, MX_PULL_LIMIT)
                 logger.info(f"获取到 {len(all_messages)} 条消息")

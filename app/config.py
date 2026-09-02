@@ -119,11 +119,13 @@ class MxConfig:
     enabled: bool = False
     token: str = ""
     api_base: str = "https://mx.2026.naaifu.cn/business-api/5"
-    ws_url: str = "wss://mx.2026.naaifu.cn"
+    # 官方网页端 WS 实际连 {api_base}/socket.io/（2026-09-02 抓包），不再是站点根路径
+    ws_url: str = "wss://mx.2026.naaifu.cn/business-api/5"
     ws_path: str = "/socket.io"
     ws_namespace: str = "/msg"
     ws_enabled: bool = True
-    page_size: int = 50
+    # 官方 msg/list 的 pagesize 实测为 30（2026-09-02 抓包）
+    page_size: int = 30
     max_history_pages: int = 100
 
 
