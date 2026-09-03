@@ -310,28 +310,40 @@ def _run_tag_tick_locked(db, llm_config, publish_alert) -> dict:
         batches += 1
         rows = db.list_mx_posts_after(cursor, batch_size)
 
+    recovered = False
+    alert_due = False
+    failures = 0
     with _state_lock:
         if batches:
-            if _state["alert_active"]:
-                _publish_alert(
-                    publish_alert,
-                    "MX LLM 打标已恢复",
-                    f"本次处理 {processed} 条消息，打标已恢复正常。",
-                )
-                _state["alert_active"] = False
+            recovered = _state["alert_active"]
+            _state["alert_active"] = False
             _state["consecutive_failures"] = 0
-        elif failed_batches:
+        else:
             _state["consecutive_failures"] += failed_batches
             failures = _state["consecutive_failures"]
-            if failures >= ALERT_FAIL_THRESHOLD and _alert_cooldown_ok(db):
-                _publish_alert(
-                    publish_alert,
-                    f"MX LLM 打标连续失败 {failures} 次",
-                    "⚠️ MX 实时消息 LLM 打标连续失败，暂停重试至下个触发点。\n"
-                    f"最近错误：{last_error or '未知'}\n"
-                    "请检查系统 LLM 配置（管理员推送设置里的 API Key/模型）与额度。",
-                )
-                _state["alert_active"] = True
+            # 仅真实失败的 tick 才触发告警判定：空转 tick（无积压）不得凭
+            # 历史失败计数误报
+            alert_due = bool(failed_batches) and failures >= ALERT_FAIL_THRESHOLD
+
+    # 告警链路含 DB 读写（冷却时间戳）与系统通知入库推送，放在状态锁外：
+    # get_tagger_status 供管理端轮询，不能被推送网络 IO 卡住。
+    # 同一时刻只有一个 tick 在跑（_tick_lock 单飞），锁外读写的串行性不受影响。
+    if recovered:
+        _publish_alert(
+            publish_alert,
+            "MX LLM 打标已恢复",
+            f"本次处理 {processed} 条消息，打标已恢复正常。",
+        )
+    elif alert_due and _alert_cooldown_ok(db):
+        _publish_alert(
+            publish_alert,
+            f"MX LLM 打标连续失败 {failures} 次",
+            "⚠️ MX 实时消息 LLM 打标连续失败，暂停重试至下个触发点。\n"
+            f"最近错误：{last_error or '未知'}\n"
+            "请检查系统 LLM 配置（管理员推送设置里的 API Key/模型）与额度。",
+        )
+        with _state_lock:
+            _state["alert_active"] = True
 
     _record_run(processed, batches, failed_batches > 0, last_error)
     logger.info(
@@ -443,8 +455,10 @@ async def mx_llm_tag_loop(db, llm_config_provider, publish_alert=None) -> None:
             await asyncio.sleep(60)
             continue
         try:
+            # provider 取配置含同步 DB 查询/解密，与 run_tag_tick 一起放进线程执行，
+            # 不阻塞共享给 API 的事件循环
             await asyncio.to_thread(
-                run_tag_tick, db, llm_config_provider(), publish_alert
+                lambda: run_tag_tick(db, llm_config_provider(), publish_alert)
             )
         except Exception:  # noqa: BLE001 - tick 异常不终止循环
             logger.exception("MX LLM 打标 tick 异常")

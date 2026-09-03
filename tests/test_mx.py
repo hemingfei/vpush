@@ -1844,6 +1844,30 @@ def test_realtime_ingest_skips_disabled_room_immediately():
     scheduler.stop()
 
 
+def test_realtime_ingest_applies_rule_tags_immediately():
+    """MX 实时消息入库前先走本地规则打标（不等 LLM）：话题+股票标签即时可见。"""
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+    scheduler.fetchers["mx"] = make_fetcher(db)
+    kid = db.add_kol("mx", "房间K", "1100")
+    db.set_stock_aliases([{"alias": "宁王", "stock": "宁德时代"}])
+
+    async def scenario():
+        await scheduler._init_mx()
+        callback = scheduler._mx_ws_on_message
+        post = Post(platform="mx", kol_id=kid, kol_name="房间K", external_id="m1",
+                    title="", content="央行宣布降息，宁王可以关注", url="",
+                    published_at="2026-01-01 00:00:00", post_type="post", images=[], detail={})
+        await callback(post)
+
+    asyncio.run(scenario())
+    saved = db.list_posts(platform="mx")[0]
+    assert saved["tags"] == ["宏观", "宁德时代"]
+    assert saved["llm_tagged"] == 0  # 本地先打，LLM 标记未写
+    scheduler.stop()
+
+
 # ---- 旧版 ws_url 自动迁移 ----
 
 def test_load_config_migrates_legacy_mx_ws_url(tmp_path):

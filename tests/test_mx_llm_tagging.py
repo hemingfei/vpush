@@ -209,6 +209,33 @@ def test_run_tag_tick_success_writes_and_advances_cursor():
     db.close()
 
 
+def test_run_tag_tick_replaces_local_rule_tags():
+    """实时链路先打的本地规则标签，LLM 打标完成后被整体替换（含零命中写空）。"""
+    db = make_db()
+    (pid,) = _add_mx_posts(db, 1)
+    # 模拟实时/兜底入库时已先走过本地规则打标
+    db.update_post_tags(pid, ["宏观"])
+    import app.llm as llm
+    orig = llm.tag_posts_llm
+    _reset_state()
+    try:
+        llm.tag_posts_llm = lambda rows, *a, **kw: {
+            pid: _result(
+                topics=[{"name": "个股", "confidence": "high"}],
+                stocks=[{"official": "申菱环境", "raw": "申领环境", "confidence": "high"}],
+            )
+        }
+        result = m.run_tag_tick(db, make_config())
+    finally:
+        llm.tag_posts_llm = orig
+
+    assert result["processed"] == 1
+    posts = {p["id"]: p for p in db.list_posts(platform="mx", include_hidden=True)}
+    assert posts[pid]["tags"] == ["申菱环境", "个股"]  # 规则标签被 LLM 标签替换
+    assert posts[pid]["llm_tagged"] == 1
+    db.close()
+
+
 def test_run_tag_tick_low_tags_go_to_review():
     db = make_db()
     (pid,) = _add_mx_posts(db, 1)
@@ -280,6 +307,30 @@ def test_run_tag_tick_recovery_notice_after_success():
     assert result["batches"] == 1
     assert alerts[-1] == "MX LLM 打标已恢复"
     assert db.get_mx_llm_tag_cursor() == pid
+    db.close()
+
+
+def test_run_tag_tick_idle_no_false_alert_after_failures():
+    """积压消失（如帖子被隐藏）后的空转 tick 不得凭历史失败计数再次告警。"""
+    db = make_db()
+    (pid,) = _add_mx_posts(db, 1)
+    import app.llm as llm
+    orig = llm.tag_posts_llm
+    alerts = []
+    _reset_state()
+    try:
+        llm.tag_posts_llm = lambda rows, *a, **kw: None
+        for _ in range(3):
+            m.run_tag_tick(db, make_config(), publish_alert=lambda t, c: alerts.append(t))
+        assert len(alerts) == 1
+        # 积压清空 + 冷却窗口已过：空转 tick（failed_batches=0）不应再告警
+        db._execute("UPDATE posts SET hidden = 1 WHERE id = ?", (pid,))
+        db.set_setting(m._ALERT_COOLDOWN_KEY, "0")
+        r = m.run_tag_tick(db, make_config(), publish_alert=lambda t, c: alerts.append(t))
+        assert r["batches"] == 0 and r["failed_batches"] == 0
+        assert len(alerts) == 1
+    finally:
+        llm.tag_posts_llm = orig
     db.close()
 
 

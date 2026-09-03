@@ -409,6 +409,8 @@ def backfill_post_tags(db, mode: str = "pending") -> dict:
     """按当前词表 + 股票名 + 别名回填贴文标签。
 
     mode=pending 只处理未打标（''/NULL）；mode=all 全量重算。
+    两种模式都跳过已经过 LLM 打标的 MX 帖（llm_tagged=1）：LLM 游标已越过
+    它们，规则标签一旦覆盖，LLM 标签无法自动恢复。
     """
     if mode not in ("pending", "all"):
         raise ValueError(f"unknown backfill mode: {mode}")
@@ -421,6 +423,9 @@ def backfill_post_tags(db, mode: str = "pending") -> dict:
     processed = 0
     tagged_count = 0
     for batch in iter_post_row_batches(db, untagged_only=mode == "pending"):
+        batch = [r for r in batch if not r.get("llm_tagged")]
+        if not batch:
+            continue
         posts = _rows_to_posts(batch)
         tagged = rule_tag_posts(posts, tag_rules)
         stock_tagged = stock_tag_posts(posts, stock_names, aliases=stock_aliases)

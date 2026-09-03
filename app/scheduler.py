@@ -61,6 +61,11 @@ _mx_fetcher = None
 _mx_sync_service = None
 _mx_login_report = None
 
+# MX 实时/兜底消息本地规则打标输入（词表/股票名/别名）的缓存时长：
+# WS 消息逐条打标，全量股票名单不能逐条查库；60 秒与管理员改词表的
+# 下批生效速度对齐（轮询管线也是每轮现取一次）
+MX_RULE_TAG_INPUTS_TTL = 60.0
+
 
 def get_mx_ws_status() -> dict:
     """获取 MX WebSocket 连接状态（含最近一次「登录」的逐接口报告）。"""
@@ -1937,6 +1942,9 @@ class Scheduler:
         self._mx_window_task: asyncio.Task | None = None
         # MX 消息 LLM 打标循环：独立于 MX 会话（只读 posts 表），MX 未启用也照常调度
         self._mx_tag_task: asyncio.Task | None = None
+        # MX 消息本地规则打标输入缓存：(monotonic, (tag_rules, stock_names, stock_aliases))，
+        # WS 消息逐条打标，全量名单 TTL 内复用（并发解析线程下的重复取一次无害）
+        self._mx_rule_tag_cache: tuple[float, tuple] | None = None
         self._mx_windows: list | None = None
         self._mx_window_date = None
         self._mx_window_open = False
@@ -2036,6 +2044,54 @@ class Scheduler:
             secondary_buffer=self._secondary_buffer,
         )
         return post_id
+
+    def _mx_rule_tag_inputs(self) -> tuple:
+        """MX 本地规则打标输入（话题词表/股票名/股票别名），TTL 缓存。
+
+        WS 消息逐条打标，全量股票名单不能逐条查库；60 秒与管理员改词表的
+        下批生效速度对齐（轮询管线也是每轮现取一次）。
+        """
+        cached = self._mx_rule_tag_cache
+        now = time.monotonic()
+        if cached is not None and now - cached[0] < MX_RULE_TAG_INPUTS_TTL:
+            return cached[1]
+        from .stock_universe import aliases_for_tagging, names_for_plain_text_tagging
+
+        excluded = self.db.get_stock_name_exclusions()
+        inputs = (
+            self.db.get_tag_vocabulary(),
+            names_for_plain_text_tagging(self.db.get_stock_names(), excluded),
+            aliases_for_tagging(self.db.get_stock_aliases(), excluded),
+        )
+        self._mx_rule_tag_cache = (now, inputs)
+        return inputs
+
+    def _apply_mx_rule_tags(self, post) -> None:
+        """MX 消息入库前先走本地规则打标（消息即时带上标签），LLM 打标完成后
+        由 mx_llm_tagging.update_post_tags_llm 整体替换。
+
+        与轮询管线 _process_posts 同口径：话题（≤3）+ 股票（≤2）合并。
+        打标失败不影响入库与推送。
+        """
+        try:
+            from .tagging import (
+                STOCK_PER_POST_MAX,
+                TAG_PER_POST_MAX,
+                rule_tag_posts,
+                stock_tag_posts,
+            )
+
+            tag_rules, stock_names, stock_aliases = self._mx_rule_tag_inputs()
+            topics = rule_tag_posts([post], tag_rules).get(0) or []
+            stocks = stock_tag_posts([post], stock_names, aliases=stock_aliases).get(0) or []
+            post.tags = list(topics)[:TAG_PER_POST_MAX] + list(stocks)[:STOCK_PER_POST_MAX]
+        except Exception:  # noqa: BLE001 - 打标失败不影响入库推送
+            logger.warning(
+                "MX 消息规则打标失败 kol=%s id=%s",
+                getattr(post, "kol_name", ""),
+                getattr(post, "external_id", ""),
+                exc_info=True,
+            )
 
     def _publish_system_alert_sync(self, title: str, content: str) -> int | None:
         """（阻塞版）用系统平台账号「系统通知」发布告警：入库 + 实时推送。
@@ -2416,8 +2472,13 @@ class Scheduler:
 
         def _pull():
             posts = fetcher.fetch(kol) or []
+            # 只给新帖打标：已入库的旧帖重打是白算（入库去重也存不进去）
+            known = self.db.existing_post_keys([("mx", p.external_id) for p in posts])
             saved = 0
             for post in posts:
+                if ("mx", post.external_id) not in known:
+                    # 与 WS 实时同口径：入库前先走本地规则打标，LLM 打标后整体替换
+                    self._apply_mx_rule_tags(post)
                 if self.ingest_external_post(post) is not None:
                     saved += 1
             return len(posts), saved
@@ -2533,6 +2594,9 @@ class Scheduler:
                                     post.platform, post.kol_name, post.external_id,
                                 )
                                 return
+                            # 入库前先走本地规则打标（消息即时带标签），LLM 打标
+                            # 完成后由打标循环整体替换
+                            self._apply_mx_rule_tags(post)
                             post_id = self.db.save_post(post)
                             if not post_id:
                                 return

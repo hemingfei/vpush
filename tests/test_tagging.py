@@ -576,3 +576,23 @@ def test_backfill_post_tags_pending_and_all():
     assert full == {"processed": 2, "tagged": 1}
     assert db.get_post(old)["tags"] == "[]"
     db.close()
+
+
+def test_backfill_all_skips_llm_tagged():
+    """LLM 打标过的帖（llm_tagged=1）不被规则回填覆盖：游标已过、覆盖即无法恢复。"""
+    import tempfile
+    from pathlib import Path
+
+    from app.db import DB
+
+    db = DB(Path(tempfile.mkdtemp()) / "bf.db")
+    kid = db.add_kol("xueqiu", "A", "1")
+    llm_post = db.insert_post("xueqiu", kid, "llm", "LLM帖", "央行宣布降息", "u", "")
+    plain = db.insert_post("xueqiu", kid, "plain", "规则帖", "央行宣布降息", "u", "")
+    db.update_post_tags_llm(llm_post, ["申菱环境"])
+    full = backfill_post_tags(db, "all")
+    assert full == {"processed": 1, "tagged": 1}  # LLM 帖不计入 processed
+    assert db.get_post(llm_post)["tags"] == '["申菱环境"]'
+    assert db.get_post(llm_post)["llm_tagged"] == 1
+    assert db.get_post(plain)["tags"] == '["宏观"]'
+    db.close()
