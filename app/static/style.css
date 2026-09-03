@@ -3199,8 +3199,9 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .ima-reader { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .ima-reader-toolbar { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding: 8px 16px; border-bottom: var(--border-default); }
 .ima-reader--feishu .ima-reader-toolbar { gap: 10px; }
-.ima-reader--feishu .ima-reader-title { flex: 1 1 auto; min-width: 0; margin: 0; overflow: hidden; color: var(--color-text-strong); font-size: var(--text-title); font-weight: var(--font-weight-semibold); line-height: 1.35; white-space: nowrap; text-overflow: ellipsis; }
+.ima-reader--feishu .ima-reader-title { flex: 0 1 auto; min-width: 0; max-width: 36%; margin: 0; overflow: hidden; color: var(--color-text-strong); font-size: var(--text-title); font-weight: var(--font-weight-semibold); line-height: 1.35; white-space: nowrap; text-overflow: ellipsis; }
 .ima-reader--feishu .ima-reader-back { max-width: 88px; }
+.ima-reader--feishu .ima-reader-actions { margin-left: auto; }
 .ima-reader-actions { display: flex; align-items: center; gap: 8px; }
 .ima-reader-back { flex: 0 1 auto; display: inline-flex; align-items: center; gap: 2px; min-width: 0; min-height: 44px; max-width: 50%; overflow: hidden; padding: 0 8px 0 2px; border: 0; background: transparent; color: var(--color-text); font: inherit; font-size: var(--text-sm); font-weight: var(--font-weight-medium); white-space: nowrap; text-overflow: ellipsis; }
 .ima-reader-back:hover { color: var(--color-accent-text); }
@@ -3239,7 +3240,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 
 .feishu-timeline-panel { --feishu-time-rail: 68px; --feishu-track-gap: 20px; --feishu-entry-pad: 22px; --feishu-time-line: 20px; --feishu-node-size: 10px; --feishu-rail-center: calc(var(--feishu-time-rail) + (var(--feishu-track-gap) / 2)); flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; background: var(--color-surface); }
 .ima-reader--feishu .feishu-timeline-panel { border-top: 0; }
-.feishu-timeline-toolbar { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 8px 16px; border-bottom: var(--border-default); }
+.feishu-timeline-toolbar { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 8px; padding: 0; border: 0; }
 .feishu-timeline-toolbar select { min-height: 40px; max-width: 220px; border: var(--border-strong); border-radius: var(--radius-control); padding: 0 30px 0 10px; background: var(--color-surface); color: var(--color-text); font: inherit; font-size: var(--text-sm); }
 .feishu-timeline-toolbar .feishu-display-segment { flex: 0 0 auto; }
 .feishu-date-select { display: none; }
@@ -3430,8 +3431,8 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
     padding-left: 12px;
     padding-right: 12px;
   }
-  .ima-reader--feishu .ima-reader-title { font-size: var(--text-body); }
-  .feishu-timeline-toolbar { justify-content: flex-start; flex-wrap: wrap; padding: 8px 12px; }
+  .ima-reader--feishu .ima-reader-title { max-width: 42%; font-size: var(--text-body); }
+  .feishu-timeline-toolbar { flex: 1 1 100%; justify-content: flex-start; padding: 0; }
   .feishu-timeline-toolbar label { flex: 1 1 130px; min-width: 0; }
   .feishu-timeline-toolbar select { width: 100%; max-width: none; min-width: 0; min-height: 44px; }
   .feishu-timeline-toolbar .feishu-display-segment { flex: 1 1 auto; }

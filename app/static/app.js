@@ -2134,7 +2134,7 @@ async function loadFeishuTimeline(item, seq, readerSeq, mode = "timeline") {
   };
   const panel = $("#ima-document-panel");
   if (!panel) return;
-  panel.innerHTML = `<div id="feishu-timeline-toolbar" class="feishu-timeline-toolbar"></div><div class="feishu-timeline-layout"><main id="feishu-timeline-body" class="feishu-timeline-body"></main><nav id="feishu-date-nav" class="feishu-date-nav" aria-label="日期目录"></nav></div><button type="button" id="feishu-latest-fab" class="feishu-latest-fab" onclick="jumpFeishuTimelineLatest()">回到最新</button>`;
+  panel.innerHTML = `<div class="feishu-timeline-layout"><main id="feishu-timeline-body" class="feishu-timeline-body"></main><nav id="feishu-date-nav" class="feishu-date-nav" aria-label="日期目录"></nav></div><button type="button" id="feishu-latest-fab" class="feishu-latest-fab" onclick="jumpFeishuTimelineLatest()">回到最新</button>`;
   renderFeishuTimelineToolbar();
   const body = $("#feishu-timeline-body");
   if (body) body.onscroll = () => toggleFeishuLatestFab();
@@ -2310,8 +2310,8 @@ async function checkFeishuTimelineUpdate(mediaId, groupId, baseline, seq, reader
       ? String(state.baseline ?? baseline)
       : String(baseline);
     if (String(item.downloaded_at || "") !== known) {
-      const toolbar = $(".feishu-timeline-toolbar");
-      if (toolbar && !$("#feishu-new-content")) toolbar.insertAdjacentHTML("afterend", `<button type="button" id="feishu-new-content" class="feishu-new-content" data-media-id="${escapeHtml(mediaId)}" data-group-id="${escapeHtml(groupId)}" onclick="applyFeishuTimelineUpdate(this)">有新内容，点击载入</button>`);
+      const panel = $("#ima-document-panel");
+      if (panel && !$("#feishu-new-content")) panel.insertAdjacentHTML("afterbegin", `<button type="button" id="feishu-new-content" class="feishu-new-content" data-media-id="${escapeHtml(mediaId)}" data-group-id="${escapeHtml(groupId)}" onclick="applyFeishuTimelineUpdate(this)">有新内容，点击载入</button>`);
       return;
     }
   } catch { /* 保持 last-good 阅读 */ }
@@ -2387,6 +2387,7 @@ async function renderImaDocument(seq, mediaId) {
         <header class="ima-reader-toolbar">
           <button type="button" class="ima-reader-back" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back)" aria-label="返回"><span class="ima-back-icon" aria-hidden="true">‹</span>返回</button>
           <h2 class="ima-reader-title">${readerTitle}</h2>
+          <div id="feishu-timeline-toolbar" class="feishu-timeline-toolbar"></div>
           <div class="ima-reader-actions"><button type="button" class="icon-btn" aria-label="返回搜索" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back, true)">${SEARCH_ICON}</button>${openNewTab}</div>
         </header>
         ${documentPanel}

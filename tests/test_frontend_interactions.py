@@ -1709,12 +1709,15 @@ def test_feishu_timeline_reader_interaction_batch():
     assert "showSourceSelect = sources.length > 1" in toolbar
     reader = _fn_body("renderImaDocument")
     assert "ima-reader--feishu" in reader
+    assert 'id="feishu-timeline-toolbar"' in reader
     assert "isFeishuTimeline ? \"\" : imaDocTicker" in reader
     assert "isFeishuTimeline ? \"\" : fmtDocSize" in reader
     css = STYLE_CSS.read_text()
     compact = re.search(r"\.ima-reader--feishu \.ima-reader-title\s*\{[^}]*\}", css)
     assert compact and "text-overflow: ellipsis" in compact.group(0)
-    assert "justify-content: flex-end" in css
+    bar = re.search(r"\.feishu-timeline-toolbar\s*\{[^}]*\}", css)
+    assert bar and "justify-content: flex-start" in bar.group(0)
+    assert "margin-left: auto" in css
     assert "loadFeishuTimelinePage(true)" in mode_switch
     assert "flash(" in mode_switch
     assert "renderFeishuTimelineToolbar()" in order_switch
@@ -3923,9 +3926,9 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=274"' in html
-    assert 'src="/app.js?v=393"' in html
-    assert 'dav-shell-v258' in sw
+    assert 'href="/style.css?v=275"' in html
+    assert 'src="/app.js?v=394"' in html
+    assert 'dav-shell-v259' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
