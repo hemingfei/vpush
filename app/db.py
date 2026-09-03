@@ -1025,6 +1025,7 @@ CREATE TABLE IF NOT EXISTS ai_analysis_tasks (
     last_run_at TEXT,
     last_run_status TEXT,
     next_run_at TEXT,
+    fail_count INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -1243,6 +1244,12 @@ class DB:
             self._conn.execute("ALTER TABLE ai_analysis_logs ADD COLUMN prompt_text TEXT")
         if "post_count" not in ai_log_cols:
             self._conn.execute("ALTER TABLE ai_analysis_logs ADD COLUMN post_count INTEGER")
+        # AI 任务连续失败计数：首次失败 5 分钟后自动重试一次，重试仍失败停用任务
+        ai_task_cols = {row["name"] for row in self._rows("PRAGMA table_info(ai_analysis_tasks)")}
+        if "fail_count" not in ai_task_cols:
+            self._conn.execute(
+                "ALTER TABLE ai_analysis_tasks ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0"
+            )
         # AI 分析报告帖的 published_at 曾存 UTC ISO 串，与其余帖子「北京时间裸字符串」
         # 的约定不一致，时间线按墙钟解析会偏差 8 小时：一次性换算成北京时间
         for row in self._rows(
@@ -5898,7 +5905,7 @@ class DB:
                               "time_range_end_days_offset", "time_range_end_time",
                               "selected_kol_ids", "prompt_template",
                               "schedule_day_of_week", "schedule_time",
-                              "last_run_at", "last_run_status", "next_run_at"]
+                              "last_run_at", "last_run_status", "next_run_at", "fail_count"]
             updates = []
             params = []
             for key, value in kwargs.items():

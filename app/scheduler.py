@@ -10,6 +10,7 @@ import random
 import re
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -624,6 +625,66 @@ def _daily_ok(db: DB, key: str) -> bool:
         return False
     db.set_setting(key, today)
     return True
+
+
+# AI 分析任务停用告警冷却：同一任务 30 分钟内只发一条「系统通知」
+AI_TASK_STOP_ALERT_COOLDOWN = 1800
+
+
+def build_system_alert_post(db: DB, title: str, content: str) -> Post | None:
+    """构造系统 KOL「系统通知」的告警帖（必要时自动创建该 KOL），返回 Post。
+
+    只负责构造；入库与实时推送由调用方的管线完成（Scheduler.ingest_external_post
+    或 api 层的 on_external_post 回调），便于调度器内外复用同一告警形态。
+    """
+    kol = db.get_kol_by_external("system", "system_alert")
+    if kol is None:
+        try:
+            kol_id = db.add_kol(
+                platform="system",
+                name="系统通知",
+                external_id="system_alert",
+            )
+            db.update_kol(kol_id, enabled=True, silent=False)
+        except Exception:
+            logger.error("创建系统通知 KOL 失败", exc_info=True)
+            return None
+    else:
+        kol_id = kol["id"]
+    return Post(
+        platform="system",
+        kol_id=kol_id,
+        kol_name="系统通知",
+        external_id=f"system_alert_{uuid.uuid4().hex[:12]}",
+        title=title,
+        content=content,
+        url="",
+        published_at=datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+        post_type="post",
+    )
+
+
+def build_ai_task_stop_alert(db: DB, task_id: int, reason: str) -> Post | None:
+    """构造「AI 分析任务重试耗尽已停用」告警帖；冷却窗口内返回 None 不重复发。
+
+    任务在自动重试仍失败后被停用（见 ai_analysis._register_failure），此处通过
+    系统 KOL「系统通知」告知管理员，入库后实时推送给订阅者。
+    """
+    if not _cooldown_ok(db, f"ai_task_stop_alert_{task_id}", AI_TASK_STOP_ALERT_COOLDOWN):
+        return None
+    task = db.get_ai_task(task_id) or {}
+    target_kol = (
+        db.get_kol(task["target_kol_id"]) if task.get("target_kol_id") else None
+    )
+    kol_label = f"「{target_kol['name']}」" if target_kol else f"ID {task.get('target_kol_id')}"
+    title = "⚠️ AI 分析任务连续失败已停止"
+    content = (
+        f"任务「{task.get('name') or task_id}」（目标 KOL：{kol_label}）"
+        f"自动重试一次后仍失败，已停止调度，本次错误：\n"
+        f"{(reason or '未知错误')[:300]}\n"
+        "请检查 LLM 配置与网络后，在管理后台 AI 分析页重新启用任务。"
+    )
+    return build_system_alert_post(db, title, content)
 
 
 def maybe_alert_source_failure(
@@ -1976,33 +2037,9 @@ class Scheduler:
         与系统 KOL webhook 同链路（ingest_external_post），但无需 token/签名，
         供调度器内部发布 WS 重连失败、TOKEN 过期等运行状态消息。
         """
-        import uuid
-
-        kol = self.db.get_kol_by_external("system", "system_alert")
-        if kol is None:
-            try:
-                kol_id = self.db.add_kol(
-                    platform="system",
-                    name="系统通知",
-                    external_id="system_alert",
-                )
-                self.db.update_kol(kol_id, enabled=True, silent=False)
-            except Exception:
-                logger.error("创建系统通知 KOL 失败", exc_info=True)
-                return None
-        else:
-            kol_id = kol["id"]
-        post = Post(
-            platform="system",
-            kol_id=kol_id,
-            kol_name="系统通知",
-            external_id=f"system_alert_{uuid.uuid4().hex[:12]}",
-            title=title,
-            content=content,
-            url="",
-            published_at=datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
-            post_type="post",
-        )
+        post = build_system_alert_post(self.db, title, content)
+        if post is None:
+            return None
         return self.ingest_external_post(post)
 
     async def _publish_system_alert(self, title: str, content: str):
@@ -2018,6 +2055,26 @@ class Scheduler:
                 logger.info("系统告警已发布 title=%s post_id=%s", title, post_id)
         except Exception:
             logger.error(f"发布系统告警失败 title={title}", exc_info=True)
+
+    async def _alert_ai_task_stopped(self, task_id: int, reason: str) -> None:
+        """AI 分析任务重试耗尽被停用后，经系统 KOL「系统通知」告知。
+
+        构造/冷却判定走线程（阻塞 DB），推送复用 ingest_external_post 管线；
+        任何异常只记日志，不影响调度主流程。
+        """
+        try:
+            post = await asyncio.to_thread(
+                build_ai_task_stop_alert, self.db, task_id, reason
+            )
+            if post is None:
+                return
+            post_id = await asyncio.to_thread(self.ingest_external_post, post)
+            if post_id:
+                logger.info(
+                    "AI 任务停用告警已发布 task_id=%s post_id=%s", task_id, post_id
+                )
+        except Exception:
+            logger.error("发布 AI 任务停用告警失败 task_id=%s", task_id, exc_info=True)
 
     def _mx_touch_loop(self):
         """记录当前事件循环（供线程侧把 WS 掐断等动作投递回调度循环）。"""
@@ -2809,7 +2866,14 @@ class Scheduler:
                         _ai_task_running.add(tid)
                         try:
                             async with _ai_task_semaphore:
-                                await asyncio.to_thread(ai_analysis.run_analysis_task, tid, self.db)
+                                result = await asyncio.to_thread(
+                                    ai_analysis.run_analysis_task, tid, self.db
+                                )
+                            # 自动重试仍失败：任务已被停用，经「系统通知」告知管理员
+                            if isinstance(result, dict) and result.get("retries_exhausted"):
+                                await self._alert_ai_task_stopped(
+                                    tid, str(result.get("message") or "")
+                                )
                         finally:
                             _ai_task_running.discard(tid)
 

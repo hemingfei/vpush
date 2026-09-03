@@ -26,6 +26,11 @@ DEFAULT_PROMPT_TEMPLATE = """你是专业的财经内容分析师。请根据以
 
 请直接输出报告，无需寒暄。"""
 
+# 失败重试策略：首次失败不放弃，退避 5 分钟后自动重试一次；
+# 重试仍失败说明不是瞬时抖动，停用任务等人工介入，避免调度器每轮重复发起
+AI_TASK_RETRY_DELAY_SECONDS = 300
+AI_TASK_MAX_CONSECUTIVE_FAILS = 2
+
 
 def parse_schedule_days(day_of_week_str: str) -> list[int]:
     """解析星期几配置字符串为 Python weekday() 整数列表（周一=0…周日=6）。
@@ -166,9 +171,63 @@ def extract_token_usage(usage: dict | None) -> tuple[int, int, int]:
     return prompt_tokens, completion_tokens, total_tokens
 
 
+def _register_failure(db: DB, task: dict, now: datetime) -> bool:
+    """记录一次运行失败并安排后续动作。
+
+    首次失败：next_run_at 推到 5 分钟后，调度器到点自动重试一次；
+    重试仍失败：停用任务（enabled=0）并按正常计划预留 next_run_at，
+    彻底终结「失败 → 立即到期 → 再失败」的无限循环。
+    返回 True 表示重试已耗尽、任务被停用，调用方应发送停用告警。
+    """
+    task_id = task["id"]
+    fail_count = int(task.get("fail_count") or 0) + 1
+    exhausted = fail_count >= AI_TASK_MAX_CONSECUTIVE_FAILS
+    if exhausted:
+        next_run = calculate_next_run(task, now)
+        db.update_ai_task(
+            task_id,
+            enabled=False,
+            fail_count=fail_count,
+            last_run_at=now.isoformat(),
+            last_run_status="failed",
+            next_run_at=next_run.isoformat() if next_run else None,
+        )
+        logger.error(
+            "[AI Task] 任务 %s（%s）自动重试后仍失败，已停用调度", task_id, task.get("name")
+        )
+    else:
+        retry_at = now + timedelta(seconds=AI_TASK_RETRY_DELAY_SECONDS)
+        db.update_ai_task(
+            task_id,
+            fail_count=fail_count,
+            last_run_at=now.isoformat(),
+            last_run_status="failed",
+            next_run_at=retry_at.isoformat(),
+        )
+        logger.warning(
+            "[AI Task] 任务 %s 运行失败，%d 分钟后自动重试（第 %d 次）",
+            task_id, AI_TASK_RETRY_DELAY_SECONDS // 60, fail_count,
+        )
+    return exhausted
+
+
+def _failed_result(message: str, *, retries_exhausted: bool = False,
+                   prompt_tokens: int = 0, completion_tokens: int = 0,
+                   total_tokens: int = 0) -> dict[str, Any]:
+    return {
+        "success": False,
+        "message": message,
+        "post_id": None,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "retries_exhausted": retries_exhausted,
+    }
+
+
 def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
     """执行一次分析任务
-    
+
     Returns:
         dict with keys:
         success: bool
@@ -177,19 +236,13 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
         prompt_tokens: int
         completion_tokens: int
         total_tokens: int
+        retries_exhausted: bool (重试耗尽、任务已被停用，调用方应发送告警)
     """
     logger.info(f"[AI Task] 开始执行任务 {task_id}")
     task = db.get_ai_task(task_id)
     if not task:
         logger.error(f"[AI Task] 任务 {task_id} 不存在")
-        return {
-            "success": False,
-            "message": f"任务 {task_id} 不存在",
-            "post_id": None,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-        }
+        return _failed_result(f"任务 {task_id} 不存在")
     
     logger.info(f"[AI Task] 任务详情: {task}")
     
@@ -206,15 +259,9 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
         # 1. 获取目标KOL信息
         target_kol = db.get_kol(task["target_kol_id"])
         if not target_kol:
+            exhausted = _register_failure(db, task, now)
             db.update_ai_log(log_id, status="failed", message="目标KOL不存在", completed_at=now.isoformat())
-            return {
-                "success": False,
-                "message": "目标KOL不存在",
-                "post_id": None,
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
-            }
+            return _failed_result("目标KOL不存在", retries_exhausted=exhausted)
         
         # 2. 获取需要分析的帖子
         # published_at 是发帖时间的北京时间裸字符串（YYYY-MM-DD HH:MM，全表统一），
@@ -259,15 +306,9 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
         logger.info(f"[AI Task] 读取 LLM 配置: api_base={llm_config.api_base}, model={llm_config.model}, api_key_set={bool(llm_config.api_key)}")
         
         if not llm_config.api_key:
+            exhausted = _register_failure(db, task, now)
             db.update_ai_log(log_id, status="failed", message="LLM未配置", completed_at=now.isoformat())
-            return {
-                "success": False,
-                "message": "LLM未配置",
-                "post_id": None,
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
-            }
+            return _failed_result("LLM未配置", retries_exhausted=exhausted)
         
         llm_result, usage = llm._chat(
             llm_config,
@@ -287,19 +328,19 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
             logger.warning(f"[AI Task] 任务 {task_id} 输出因 max_tokens 上限被截断（finish_reason=length），报告不完整")
 
         if llm_result is None:
+            exhausted = _register_failure(db, task, now)
             db.update_ai_log(
                 log_id, status="failed", message="LLM调用失败",
                 prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, total_tokens=total_tokens,
                 completed_at=datetime.now(timezone.utc).isoformat()
             )
-            return {
-                "success": False,
-                "message": "LLM调用失败",
-                "post_id": None,
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": total_tokens,
-            }
+            return _failed_result(
+                "LLM调用失败",
+                retries_exhausted=exhausted,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            )
         
         # 5. 保存为目标KOL的帖子
         analysis_content = llm._message_text(llm_result) if isinstance(llm_result, dict) else str(llm_result)
@@ -351,9 +392,10 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
             task_id,
             last_run_at=now.isoformat(),
             last_run_status="success",
+            fail_count=0,
             next_run_at=next_run.isoformat() if next_run else None
         )
-        
+
         return {
             "success": True,
             "message": success_msg,
@@ -361,32 +403,23 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
+            "retries_exhausted": False,
         }
-    
+
     except Exception as e:
         logger.exception(f"AI分析任务 {task_id} 执行失败")
         error_msg = str(e)[:500]
+        exhausted = _register_failure(db, task, now)
         db.update_ai_log(
             log_id,
             status="failed",
             message=error_msg,
             completed_at=datetime.now(timezone.utc).isoformat()
         )
-        next_run = calculate_next_run(task, now)
-        db.update_ai_task(
-            task_id,
-            last_run_at=now.isoformat(),
-            last_run_status="failed",
-            next_run_at=next_run.isoformat() if next_run else None
+        return _failed_result(
+            error_msg,
+            retries_exhausted=exhausted,
         )
-        return {
-            "success": False,
-            "message": error_msg,
-            "post_id": None,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-        }
 
 
 def run_due_analysis_tasks(db: DB) -> None:

@@ -1398,6 +1398,22 @@ def extract_webhook_message(payload: dict) -> tuple[str, str, list[str]]:
     raise ValueError("消息内容为空")
 
 
+def _notify_ai_task_stopped(db: DB, task_id: int, reason: str, publish) -> None:
+    """手动运行触发重试耗尽时，经系统 KOL「系统通知」告知（与调度器共用冷却）。
+
+    publish 是 create_api_router 收到的 on_external_post 回调（入库+实时推送）；
+    纯 UI 调试模式（无后台任务）下为 None，跳过推送。
+    """
+    try:
+        from .scheduler import build_ai_task_stop_alert
+
+        post = build_ai_task_stop_alert(db, task_id, reason)
+        if post is not None and publish is not None:
+            publish(post)
+    except Exception:
+        logger.exception("发布 AI 任务停用告警失败 task_id=%s", task_id)
+
+
 def create_api_router(
     db: DB,
     secret: str,
@@ -5166,6 +5182,9 @@ def create_api_router(
             merged = {**existing, **update_kwargs}
             next_run = ai_analysis.calculate_next_run(merged, datetime.now(UTC))
             update_kwargs["next_run_at"] = next_run.isoformat() if next_run else None
+        # 重新启用时清零连续失败计数，重新保有「失败自动重试一次」的机会
+        if update_kwargs.get("enabled"):
+            update_kwargs["fail_count"] = 0
 
         db.update_ai_task(task_id, **update_kwargs)
         _audit(admin, "update_ai_task", str(task_id), f"fields={', '.join(body.model_fields_set)}")
@@ -5187,8 +5206,9 @@ def create_api_router(
         existing = db.get_ai_task(task_id)
         if not existing:
             raise HTTPException(status_code=404, detail="任务不存在")
-        # 启用时重算下次运行时间，避免遗留的过期 next_run_at 触发立即运行
-        db.update_ai_task(task_id, enabled=True,
+        # 启用时重算下次运行时间，避免遗留的过期 next_run_at 触发立即运行；
+        # 同时清零连续失败计数，重新启用后仍保有「失败自动重试一次」的机会
+        db.update_ai_task(task_id, enabled=True, fail_count=0,
                           next_run_at=ai_analysis.format_next_run(existing, datetime.now(UTC)))
         _audit(admin, "enable_ai_task", str(task_id), existing["name"])
         return {"ok": True}
@@ -5211,12 +5231,17 @@ def create_api_router(
         if not existing:
             raise HTTPException(status_code=404, detail="任务不存在")
         logger.info(f"===== 任务详情: {existing} =====")
-        
+
         def run_task():
             logger.info(f"===== 开始后台运行 AI 任务 {task_id} =====")
             try:
                 result = ai_analysis.run_analysis_task(task_id, db)
                 logger.info(f"===== AI 任务 {task_id} 运行完成: {result} =====")
+                # 自动重试耗尽：与调度器同策略，经系统 KOL「系统通知」告知
+                if isinstance(result, dict) and result.get("retries_exhausted"):
+                    _notify_ai_task_stopped(
+                        db, task_id, str(result.get("message") or ""), on_external_post
+                    )
             except Exception as e:
                 logger.exception(f"===== AI 分析任务 {task_id} 运行异常 =====")
         
@@ -6161,6 +6186,9 @@ def create_api_router(
             merged = {**task, **update_data}
             next_run = ai_analysis.calculate_next_run(merged, datetime.now(UTC))
             update_data["next_run_at"] = next_run.isoformat() if next_run else None
+        # 重新启用时清零连续失败计数，重新保有「失败自动重试一次」的机会
+        if update_data.get("enabled"):
+            update_data["fail_count"] = 0
         db.update_ai_task(task_id, **update_data)
         _audit(admin, "update_ai_task", str(task_id), task["name"])
         task = db.get_ai_task(task_id)
@@ -6179,6 +6207,11 @@ def create_api_router(
             try:
                 result = ai_analysis.run_analysis_task(task_id, db)
                 logger.info(f"===== AI 任务 {task_id} 运行完成: {result} =====")
+                # 自动重试耗尽：与调度器同策略，经系统 KOL「系统通知」告知
+                if isinstance(result, dict) and result.get("retries_exhausted"):
+                    _notify_ai_task_stopped(
+                        db, task_id, str(result.get("message") or ""), on_external_post
+                    )
             except Exception as e:
                 logger.exception(f"===== AI 分析任务 {task_id} 运行异常 =====")
         

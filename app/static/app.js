@@ -8947,7 +8947,7 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
         <div class="toolbar mx-config-actions">
           <button type="button" class="btn-normal" id="mx-save-btn" onclick="saveMxConfig()">保存配置</button>
           <button type="button" class="btn-ghost" id="mx-login-btn" onclick="mxSessionLogin()">登录</button>
-          <button type="button" class="btn-ghost danger" id="mx-logout-btn" onclick="mxSessionLogout()">退出</button>
+          <button type="button" class="btn-ghost" id="mx-logout-btn" onclick="mxSessionLogout()">退出</button>
         </div>
         <p class="section-meta" id="mx-ws-status">WebSocket 状态：加载中...</p>
         <div id="mx-api-status" class="section-meta" style="margin-top:6px">接口状态：尚未执行（点击「登录」后显示逐接口结果）</div>
@@ -10223,15 +10223,17 @@ function renderMxApiStatus(report) {
   const box = $("#mx-api-status");
   if (!box) return;
   if (!report || !Array.isArray(report.steps) || !report.steps.length) {
-    box.textContent = "接口状态：尚未执行（点击「登录」后显示启动序列/房间同步/WS 的逐接口结果）";
+    box.textContent = "接口状态：尚无会话记录（等待运行时段到点系统自动 MX 平台登录，或点击「登录」手动执行）";
     return;
   }
   const rows = report.steps.map((s) => {
     const mark = s.ok ? "✅" : "❌";
-    return `<li>${mark} ${escapeHtml(s.name)}（${s.ms}ms）：${escapeHtml(s.detail || "")}</li>`;
+    const ms = Number.isFinite(s.ms) ? `（${s.ms}ms）` : "";
+    return `<li>${mark} ${escapeHtml(s.name)}${ms}：${escapeHtml(s.detail || "")}</li>`;
   }).join("");
   const head = report.ok ? "✅ 全部成功" : "❌ 存在失败项";
-  box.innerHTML = `<details><summary>接口状态（${escapeHtml(report.time || "")}）：${head}</summary><ul>${rows}</ul></details>`;
+  const source = report.source === "auto" ? "系统自动登录" : "管理员手动登录";
+  box.innerHTML = `<details><summary>接口状态（${escapeHtml(report.time || "")}，${source}）：${head}</summary><ul>${rows}</ul></details>`;
 }
 
 async function mxSessionLogin() {
@@ -13161,14 +13163,14 @@ async function loadAdminAudit() {
     </section>
     <section class="section-panel">
       <header class="section-head"><div><h2 class="section-title">操作日志</h2>
-      <p class="section-meta">管理员关键操作、以及用户知识库超额（操作 ima_quota，目标是用户名）。</p></div></header>
+      <p class="section-meta">管理员关键操作、系统自动 MX 平台登录/断开（mx_auto_*，管理员列显示「系统」）、以及用户知识库超额（操作 ima_quota，目标是用户名）。</p></div></header>
       <div class="table-wrap">
         <table>
           <thead><tr><th scope="col">时间</th><th scope="col">管理员</th><th scope="col">操作</th><th scope="col">目标</th><th scope="col">详情</th></tr></thead>
           <tbody>${logs.length === 0 ? `<tr><td colspan="5" class="muted">暂无记录</td></tr>` : logs.map((l) => `
             <tr>
               <td>${escapeHtml(fmtDbTime(l.created_at))}</td>
-              <td>${escapeHtml(l.username || "")}</td>
+              <td>${escapeHtml(l.username || (String(l.action || "").indexOf("mx_auto_") === 0 ? "系统" : ""))}</td>
               <td>${escapeHtml(l.action)}</td>
               <td>${escapeHtml(l.target)}</td>
               <td class="muted">${escapeHtml(l.detail)}</td>
@@ -14795,6 +14797,10 @@ function renderAdminAiAnalysis() {
     const lastRunStatus = task.last_run_status;
     const lastRunStatusClass = lastRunStatus === 'success' ? 'success' : lastRunStatus === 'failed' ? 'error' : 'neutral';
     const lastRunStatusText = lastRunStatus === 'success' ? '成功' : lastRunStatus === 'failed' ? '失败' : '未运行';
+    // 自动重试后仍失败被停用的任务单独标注，与手动禁用区分开
+    const autoStopped = !task.enabled && lastRunStatus === 'failed' && Number(task.fail_count || 0) >= 2;
+    const statusBadgeCls = task.enabled ? 'enabled' : (autoStopped ? 'disabled auto-stopped' : 'disabled');
+    const statusBadgeText = task.enabled ? '已启用' : (autoStopped ? '失败停用' : '已禁用');
     const targetKol = (state.kolIdToName && state.kolIdToName[task.target_kol_id]) || `ID: ${task.target_kol_id}`;
     const analyzedCount = (() => {
       try {
@@ -14814,7 +14820,10 @@ function renderAdminAiAnalysis() {
           <div class="ai-task-cell-main">${escapeHtml(task.name)}</div>
           ${task.description ? `<div class="ai-task-cell-sub">${escapeHtml(task.description)}</div>` : ''}
         </td>
-        <td><span class="ai-task-status-badge ${task.enabled ? 'enabled' : 'disabled'}">${task.enabled ? '已启用' : '已禁用'}</span></td>
+        <td>
+          <span class="ai-task-status-badge ${statusBadgeCls}" ${autoStopped ? 'title="自动重试后仍失败，已停止调度；修复后可点「启用」恢复"' : ''}>${statusBadgeText}</span>
+          ${autoStopped ? `<div class="ai-task-cell-sub">连续失败 ${task.fail_count} 次</div>` : ''}
+        </td>
         <td>${escapeHtml(targetKol)}</td>
         <td>${schedule}</td>
         <td>${analyzedCount}</td>
@@ -14826,6 +14835,7 @@ function renderAdminAiAnalysis() {
           <button type="button" class="btn-sm" onclick="runAiTask(${task.id})">运行</button>
           <button type="button" class="btn-sm" onclick="openAiTaskModal(${task.id})">编辑</button>
           <button type="button" class="btn-sm" onclick="viewAiTaskLogs(${task.id})">日志</button>
+          <button type="button" class="btn-sm ${task.enabled ? 'danger' : ''}" onclick="toggleAiTask(${task.id}, ${task.enabled ? 1 : 0})">${task.enabled ? '禁用' : '启用'}</button>
           <button type="button" class="btn-sm danger" onclick="deleteAiTask(${task.id})">删除</button>
         </td>
       </tr>
@@ -15263,6 +15273,19 @@ async function runAiTask(taskId) {
   try {
     await api(`/api/admin/ai-tasks/${taskId}/run`, { method: "POST" });
     flash("任务已开始运行，请稍后查看日志");
+  } catch (err) {
+    flash(err.message, "error");
+  }
+}
+
+async function toggleAiTask(taskId, currentlyEnabled) {
+  const action = currentlyEnabled ? "禁用" : "启用";
+  if (!(await showConfirm(`确定要${action}此任务吗？`))) return;
+  try {
+    // 启用时后端会重算下次运行时间并清零连续失败计数
+    await api(`/api/admin/ai-analysis/tasks/${taskId}/${currentlyEnabled ? "disable" : "enable"}`, { method: "POST" });
+    flash(`任务已${action}`);
+    await loadAdminAiAnalysis();
   } catch (err) {
     flash(err.message, "error");
   }

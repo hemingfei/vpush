@@ -4331,6 +4331,12 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   color: #6b7280;
 }
 
+/* 连续失败被自动停用：区别于手动禁用的中性灰，用警示橙提示需要人工介入 */
+.ai-task-status-badge.disabled.auto-stopped {
+  background: rgba(249, 115, 22, 0.12);
+  color: #f97316;
+}
+
 .ai-task-run-status {
   display: inline-flex;
   align-items: center;
