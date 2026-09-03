@@ -267,6 +267,21 @@ DEFAULT_TAG_RULES = [
 ]
 TAG_VOCABULARY_KEY = "tag_vocabulary"
 
+# MX 实时消息 LLM 打标（app/mx_llm_tagging.py）：进度游标、开关与批参数存 settings 表。
+MX_LLM_TAG_CURSOR_KEY = "mx_llm_tag_cursor"
+MX_LLM_TAG_ENABLED_KEY = "mx_llm_tag_enabled"
+MX_LLM_TAG_BATCH_SIZE_KEY = "mx_llm_tag_batch_size"
+MX_LLM_TAG_MAX_CALLS_KEY = "mx_llm_tag_max_calls_per_tick"
+# LLM 发现的新黑话候选（kind=general 才入库），人工审核通过后并入 stock_aliases
+STOCK_ALIAS_CANDIDATES_KEY = "stock_alias_candidates"
+STOCK_ALIAS_CANDIDATES_MAX = 200
+
+# 操作类型词表（LLM 打标的第三类标签，管理端可改）
+ACTION_TAG_VOCABULARY_KEY = "action_tag_vocabulary"
+DEFAULT_ACTION_TAGS = ["建仓", "加仓", "减仓", "清仓", "做T", "观察"]
+# 帖子标签总数上限（话题+股票+操作），与规则打标的话题≤3+股票≤2 体系对齐
+POST_TAGS_MAX = 5
+
 # 常用股票名表：纯文字提及（无 $标记$）时按名称子串匹配打股票标签。
 # 管理员可在后台增删；$股票名(代码)$ 标记会自动识别、无需在此登记。
 DEFAULT_STOCK_NAMES = [
@@ -1049,6 +1064,19 @@ CREATE TABLE IF NOT EXISTS ai_analysis_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_ai_logs_task ON ai_analysis_logs(task_id);
 CREATE INDEX IF NOT EXISTS idx_ai_logs_status ON ai_analysis_logs(status);
+
+-- MX 实时消息 LLM 打标：low 准确度标签的人工审核队列
+CREATE TABLE IF NOT EXISTS post_tag_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id INTEGER NOT NULL,
+    tag TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT '',
+    confidence TEXT NOT NULL DEFAULT 'low',
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(post_id, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_post_tag_reviews_status ON post_tag_reviews(status, id);
 """
 
 ALLOWED_PLATFORMS = {"xueqiu", "combination", "weibo", "twitter", "ima", "zsxq", "mx", "system"}
@@ -4897,6 +4925,163 @@ class DB:
         """回写单条贴文的标签（回填/纠错用），空列表持久化为 '[]'（已处理零命中）。"""
         tags_json = json.dumps(tags, ensure_ascii=False)
         self._execute("UPDATE posts SET tags = ? WHERE id = ?", (tags_json, post_id))
+
+    # ---- MX 实时消息 LLM 打标（app/mx_llm_tagging.py） ----
+
+    def list_mx_posts_after(self, cursor: int, limit: int = 40) -> list[dict]:
+        """取 id 大于游标的 MX 帖（id 升序，供 LLM 批量打标扫描）。
+
+        blocked/hidden 的帖不取：它们不进任何展示与推送，由游标自然跳过，
+        不浪费 LLM token。
+        """
+        return self._rows(
+            "SELECT p.id, p.platform, p.external_id, p.title, p.content, "
+            "p.published_at, k.name AS kol_name FROM posts p "
+            "JOIN kols k ON k.id = p.kol_id "
+            "WHERE p.platform = 'mx' AND p.id > ? "
+            "AND COALESCE(p.blocked, 0) = 0 AND COALESCE(p.hidden, 0) = 0 "
+            "ORDER BY p.id ASC LIMIT ?",
+            (int(cursor), int(limit)),
+        )
+
+    def append_post_tag(self, post_id: int, tag: str) -> bool:
+        """给帖子追加一个标签（审核通过用）；已存在或已达上限时不写，返回是否写入。"""
+        tag = str(tag or "").strip()
+        if not tag:
+            return False
+        rows = self._rows("SELECT tags FROM posts WHERE id = ?", (post_id,))
+        if not rows:
+            return False
+        try:
+            tags = json.loads(str(rows[0].get("tags") or "[]"))
+        except ValueError:
+            tags = []
+        if not isinstance(tags, list):
+            tags = []
+        tags = [str(t) for t in tags if str(t)]
+        if tag in tags or len(tags) >= POST_TAGS_MAX:
+            return False
+        tags.append(tag)
+        self.update_post_tags(post_id, tags)
+        return True
+
+    def add_pending_tag_review(self, post_id: int, tag: str, kind: str, confidence: str) -> None:
+        """登记一条待人工审核的标签；同帖同标签只登记一次（审核结论不被重跑覆盖）。"""
+        self._execute(
+            "INSERT OR IGNORE INTO post_tag_reviews (post_id, tag, kind, confidence) "
+            "VALUES (?, ?, ?, ?)",
+            (int(post_id), str(tag), str(kind), str(confidence)),
+        )
+
+    def list_tag_reviews(self, status: str = "pending", limit: int = 200) -> list[dict]:
+        """按状态列审核队列（默认 pending），联 posts 取帖子摘要。"""
+        return self._rows(
+            "SELECT r.id, r.post_id, r.tag, r.kind, r.confidence, r.status, r.created_at, "
+            "p.title, p.content, p.platform, k.name AS kol_name "
+            "FROM post_tag_reviews r "
+            "JOIN posts p ON p.id = r.post_id "
+            "JOIN kols k ON k.id = p.kol_id "
+            "WHERE r.status = ? ORDER BY r.id DESC LIMIT ?",
+            (str(status), int(limit)),
+        )
+
+    def set_tag_review_status(self, review_id: int, status: str) -> dict | None:
+        """更新审核状态，返回该条审核（含 post_id/tag），不存在返回 None。"""
+        rows = self._rows("SELECT * FROM post_tag_reviews WHERE id = ?", (int(review_id),))
+        if not rows:
+            return None
+        review = rows[0]
+        self._execute(
+            "UPDATE post_tag_reviews SET status = ? WHERE id = ?", (str(status), int(review_id))
+        )
+        return review
+
+    def get_mx_llm_tag_cursor(self) -> int:
+        raw = self.get_setting(MX_LLM_TAG_CURSOR_KEY)
+        try:
+            return int(str(raw or "0"))
+        except ValueError:
+            return 0
+
+    def set_mx_llm_tag_cursor(self, value: int) -> None:
+        self.set_setting(MX_LLM_TAG_CURSOR_KEY, str(int(value)))
+
+    def get_mx_llm_tag_enabled(self) -> bool:
+        return str(self.get_setting(MX_LLM_TAG_ENABLED_KEY) or "1") not in ("0", "false")
+
+    def set_mx_llm_tag_enabled(self, enabled: bool) -> None:
+        self.set_setting(MX_LLM_TAG_ENABLED_KEY, "1" if enabled else "0")
+
+    def get_mx_llm_tag_int_setting(self, key: str, default: int) -> int:
+        try:
+            return int(str(self.get_setting(key) or default))
+        except ValueError:
+            return default
+
+    def get_action_tag_vocabulary(self) -> list[str]:
+        raw = self.get_setting(ACTION_TAG_VOCABULARY_KEY)
+        if not raw:
+            return list(DEFAULT_ACTION_TAGS)
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            return list(DEFAULT_ACTION_TAGS)
+        if not isinstance(parsed, list):
+            return list(DEFAULT_ACTION_TAGS)
+        tags = [str(t).strip() for t in parsed if str(t).strip()]
+        return tags or list(DEFAULT_ACTION_TAGS)
+
+    def set_action_tag_vocabulary(self, tags: list[str]) -> None:
+        cleaned = [str(t).strip() for t in tags or [] if str(t).strip()]
+        self.set_setting(ACTION_TAG_VOCABULARY_KEY, json.dumps(cleaned, ensure_ascii=False))
+
+    def get_stock_alias_candidates(self) -> list[dict]:
+        raw = self.get_setting(STOCK_ALIAS_CANDIDATES_KEY)
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            return []
+        return [item for item in parsed if isinstance(item, dict)] if isinstance(parsed, list) else []
+
+    def set_stock_alias_candidates(self, items: list[dict]) -> None:
+        self.set_setting(STOCK_ALIAS_CANDIDATES_KEY, json.dumps(items, ensure_ascii=False))
+
+    def merge_stock_alias_candidates(self, pairs: list[tuple[str, str, int | None]]) -> int:
+        """合并新发现的黑话候选（alias, stock, sample_post_id），同对 count+1，满则丢最旧。
+
+        返回合并后的候选总数。调用方负责先做 kind=general / is_acceptable_alias
+        预过滤，这里只做纯合并。
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        items = self.get_stock_alias_candidates()
+        index = {(str(i.get("alias")), str(i.get("stock"))): i for i in items}
+        for alias, stock, sample_post_id in pairs:
+            alias, stock = str(alias), str(stock)
+            if not alias or not stock:
+                continue
+            existing = index.get((alias, stock))
+            if existing is not None:
+                existing["count"] = int(existing.get("count") or 0) + 1
+                existing["last_seen_at"] = now
+            else:
+                item = {
+                    "alias": alias,
+                    "stock": stock,
+                    "count": 1,
+                    "first_seen_at": now,
+                    "last_seen_at": now,
+                }
+                if sample_post_id is not None:
+                    item["sample_post_id"] = int(sample_post_id)
+                items.append(item)
+                index[(alias, stock)] = item
+        if len(items) > STOCK_ALIAS_CANDIDATES_MAX:
+            items = items[len(items) - STOCK_ALIAS_CANDIDATES_MAX :]
+        self.set_stock_alias_candidates(items)
+        return len(items)
+
 
     @staticmethod
     def _ima_document_row(row, group_id: str | None = None) -> tuple[dict, list[str]]:

@@ -12699,7 +12699,19 @@ async function adminDeleteCategory(id) {
 }
 
 async function loadAdminTagsTab() {
-  const data = await api("/api/tags");
+  let data, tagStatus, tagReviews, aliasCands;
+  try {
+    [data, tagStatus, tagReviews, aliasCands] = await Promise.all([
+      api("/api/tags"),
+      api("/api/admin/mx-llm-tag/status"),
+      api("/api/admin/post-tag-reviews?status=pending"),
+      api("/api/admin/stock-alias-candidates"),
+    ]);
+  } catch (err) {
+    if (!routeStillActive(_adminRenderSeq)) return;
+    $("#vocab-tab-body").innerHTML = emptyState("加载失败: " + err.message);
+    return;
+  }
   const tags = Array.isArray(data?.tags) ? data.tags : [];
   const stockNames = Array.isArray(data?.stock_names) ? data.stock_names : [];
   const stockAliases = Array.isArray(data?.stock_aliases) ? data.stock_aliases : [];
@@ -12769,12 +12781,139 @@ async function loadAdminTagsTab() {
         <span id="tag-backfill-result" class="muted"></span>
       </div>
     </section>
+    ${adminMxTagPanel(tagStatus, tagReviews, aliasCands)}
     <section class="section-panel">
       <header class="section-head"><div><h2 class="section-title">当前词表（${tags.length} 个）</h2></div></header>
       <div class="tag-vocab-preview">
         ${tags.length ? tags.map((r) => `<span class="cat cat-tag">${escapeHtml(r.tag)}</span>`).join("") : "（空）"}
       </div>
     </section>`;
+}
+
+const _TAG_REVIEW_KINDS = { topic: "话题", stock: "股票", action: "操作" };
+let _mxAliasCandidates = [];
+
+function adminMxTagPanel(tagStatus, tagReviews, aliasCands) {
+  const st = tagStatus || {};
+  const lastRun = st.last_run;
+  const statusLine = [
+    `下次触发 ${escapeHtml(st.next_tick || "—")}`,
+    `游标 ${Number(st.cursor) || 0}`,
+    `今日 LLM 调用 ${(st.calls_today && st.calls_today.count) || 0} 次`,
+    `待审标签 ${(st.pending_reviews || 0)} 条`,
+    `黑话候选 ${(st.pending_alias_candidates || 0)} 条`,
+  ].join("；");
+  const lastRunLine = !lastRun
+    ? "最近一次：尚未触发"
+    : `最近一次：${escapeHtml(lastRun.at || "")} 处理 ${lastRun.processed || 0} 条 / ${lastRun.batches || 0} 批` +
+      (lastRun.failed ? `（失败：${escapeHtml(lastRun.error || "未知")}）` : "");
+  const alertLine = st.alert_active
+    ? `<p class="status-fail" style="margin-top:8px">⚠️ 连续失败 ${st.consecutive_failures || 0} 次，已发系统告警，恢复后会再通知。</p>`
+    : "";
+  const reviewRows = (tagReviews || []).length === 0
+    ? `<tr><td colspan="5" class="muted">暂无待审标签</td></tr>`
+    : (tagReviews || []).map((r) => {
+        const excerpt = String(r.title || r.content || "").trim().slice(0, 60);
+        return `
+        <tr>
+          <td>${r.id}</td>
+          <td>${escapeHtml(r.kol_name || "")}：${escapeHtml(excerpt)}</td>
+          <td><span class="cat cat-tag">${escapeHtml(r.tag)}</span></td>
+          <td>${_TAG_REVIEW_KINDS[r.kind] || escapeHtml(r.kind || "—")}</td>
+          <td>
+            <button class="btn-sm" onclick="adminReviewTag(${r.id}, 'approve')">通过</button>
+            <button class="btn-sm danger" onclick="adminReviewTag(${r.id}, 'reject')">拒绝</button>
+          </td>
+        </tr>`;
+      }).join("");
+  _mxAliasCandidates = Array.isArray(aliasCands?.candidates) ? aliasCands.candidates : [];
+  const candRows = _mxAliasCandidates.length === 0
+    ? `<tr><td colspan="5" class="muted">暂无黑话候选（LLM 判定为通用黑话时才会进入这里）</td></tr>`
+    : _mxAliasCandidates.map((c, idx) => `
+        <tr>
+          <td>${escapeHtml(c.alias || "")}</td>
+          <td>${escapeHtml(c.stock || "")}</td>
+          <td>${Number(c.count) || 1}</td>
+          <td>${escapeHtml(fmtDbTime(c.first_seen_at || ""))}</td>
+          <td>
+            <button class="btn-sm" onclick="adminReviewAliasCandidate(${idx}, 'approve')">通过</button>
+            <button class="btn-sm danger" onclick="adminReviewAliasCandidate(${idx}, 'reject')">拒绝</button>
+          </td>
+        </tr>`).join("");
+  return `
+    <section class="section-panel">
+      <header class="section-head">
+        <div><h2 class="section-title">MX 实时打标（LLM）</h2>
+        <p class="section-meta">MX 消息由 LLM 打话题/股票/操作三类标签（带准确度）：high 直接写入，low 进下方审核队列；发现的通用黑话进候选队列。工作日 9:00-10:30 每分钟、10:30-15:10 每五分钟，另加 18 点/23 点集中；周末 9/12/15/18/20/23 点集中。</p></div>
+      </header>
+      <p class="section-meta" style="margin-top:8px">${statusLine}</p>
+      <p class="section-meta" style="margin-top:4px">${lastRunLine}</p>
+      ${alertLine}
+      <div class="toolbar" style="margin-top:12px">
+        <button class="${st.enabled ? "btn-ghost" : "btn-normal"}" onclick="adminMxTagToggle()">
+          ${st.enabled ? "关闭实时打标" : "开启实时打标"}
+        </button>
+      </div>
+    </section>
+    <section class="section-panel">
+      <header class="section-head"><div><h2 class="section-title">标签审核</h2>
+      <p class="section-meta">LLM 标了但不确定（low 准确度）的标签，通过后追加到该条消息。</p></div></header>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">ID</th><th scope="col">消息</th><th scope="col">标签</th><th scope="col">类型</th><th scope="col">操作</th></tr></thead>
+          <tbody>${reviewRows}</tbody>
+        </table>
+      </div>
+    </section>
+    <section class="section-panel">
+      <header class="section-head"><div><h2 class="section-title">黑话候选</h2>
+      <p class="section-meta">LLM 判定为「社区通用」的新黑话（仅当前消息语境成立的不会进来）。通过后写入黑话别名表，后续消息免 LLM 直接命中。</p></div></header>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">别名</th><th scope="col">正式名</th><th scope="col">出现次数</th><th scope="col">首次发现</th><th scope="col">操作</th></tr></thead>
+          <tbody>${candRows}</tbody>
+        </table>
+      </div>
+    </section>`;
+}
+
+async function adminMxTagToggle() {
+  try {
+    const st = await api("/api/admin/mx-llm-tag/status");
+    const data = await api("/api/admin/mx-llm-tag/toggle", {
+      method: "POST",
+      body: JSON.stringify({ enabled: !st.enabled }),
+    });
+    flash(data.enabled ? "MX 实时打标已开启" : "MX 实时打标已关闭");
+    loadAdminVocabTab("tags");
+  } catch (err) {
+    flash("操作失败: " + err.message, "error");
+  }
+}
+
+async function adminReviewTag(id, action) {
+  try {
+    await api(`/api/admin/post-tag-reviews/${id}/${action}`, { method: "POST" });
+    flash(action === "approve" ? "已通过并追加到消息标签" : "已拒绝该标签");
+    loadAdminVocabTab("tags");
+  } catch (err) {
+    flash("操作失败: " + err.message, "error");
+  }
+}
+
+async function adminReviewAliasCandidate(idx, action) {
+  const cand = _mxAliasCandidates[idx];
+  if (!cand) return;
+  try {
+    await api(`/api/admin/stock-alias-candidates/${action}`, {
+      method: "POST",
+      body: JSON.stringify({ alias: cand.alias, stock: cand.stock }),
+    });
+    flash(action === "approve" ? `已把「${cand.alias}=${cand.stock}」写入黑话别名表` : "已拒绝该候选");
+    loadAdminVocabTab("tags");
+  } catch (err) {
+    flash("操作失败: " + err.message, "error");
+  }
 }
 
 async function adminSaveStockNames() {

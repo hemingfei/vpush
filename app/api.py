@@ -44,6 +44,8 @@ from .db import (
     _UNSET,
     ALLOWED_PLATFORMS,
     DB,
+    MX_LLM_TAG_BATCH_SIZE_KEY,
+    MX_LLM_TAG_MAX_CALLS_KEY,
     days_until_purge,
     parse_block_keywords,
     user_plain_secret,
@@ -560,6 +562,15 @@ class TagBackfillIn(BaseModel):
 
 class TagMaintainIn(BaseModel):
     backfill: Literal["none", "pending", "all"] = "none"
+
+
+class MxLlmTagToggleIn(BaseModel):
+    enabled: bool
+
+
+class AliasCandidateActionIn(BaseModel):
+    alias: str
+    stock: str
 
 
 class KolRequestIn(BaseModel):
@@ -5966,6 +5977,130 @@ def create_api_router(
             detail=f"mode={body.mode} processed={result['processed']} tagged={result['tagged']}",
         )
         return result
+
+    # ---- MX 实时消息 LLM 打标：审核队列 / 黑话候选 / 状态开关 ----
+
+    @router.get("/admin/mx-llm-tag/status", dependencies=[Depends(require_admin)])
+    def mx_llm_tag_status():
+        """打标循环运行状态：开关、游标、批参数、待审数、下次触发与运行摘要。"""
+        from .mx_llm_tagging import get_tagger_status, next_due_tick
+
+        now = datetime.now(CN_TZ)
+        return {
+            "enabled": db.get_mx_llm_tag_enabled(),
+            "cursor": db.get_mx_llm_tag_cursor(),
+            "batch_size": db.get_mx_llm_tag_int_setting(
+                MX_LLM_TAG_BATCH_SIZE_KEY, 40
+            ),
+            "max_calls_per_tick": db.get_mx_llm_tag_int_setting(
+                MX_LLM_TAG_MAX_CALLS_KEY, 5
+            ),
+            "pending_reviews": len(db.list_tag_reviews()),
+            "pending_alias_candidates": len(db.get_stock_alias_candidates()),
+            "next_tick": next_due_tick(now).strftime("%Y-%m-%d %H:%M:%S"),
+            **get_tagger_status(),
+        }
+
+    @router.post("/admin/mx-llm-tag/toggle", dependencies=[Depends(require_admin)])
+    def mx_llm_tag_toggle(body: MxLlmTagToggleIn, admin: dict = Depends(require_admin)):
+        db.set_mx_llm_tag_enabled(body.enabled)
+        _audit(admin, "mx_llm_tag_toggle", detail=f"enabled={body.enabled}")
+        return {"ok": True, "enabled": db.get_mx_llm_tag_enabled()}
+
+    @router.get("/admin/post-tag-reviews", dependencies=[Depends(require_admin)])
+    def admin_post_tag_reviews(status: str = "pending"):
+        """LLM 打标 low 准确度标签的人工审核队列（默认 pending）。"""
+        if status not in ("pending", "approved", "rejected"):
+            raise HTTPException(status_code=400, detail=f"未知状态: {status}")
+        return db.list_tag_reviews(status=status)
+
+    @router.post(
+        "/admin/post-tag-reviews/{review_id}/approve",
+        dependencies=[Depends(require_admin)],
+    )
+    def approve_post_tag_review(review_id: int, admin: dict = Depends(require_admin)):
+        """通过待审标签：追加到帖子标签（已满 5 个或已存在时返回 409）。"""
+        from .db import POST_TAGS_MAX
+
+        review = db.set_tag_review_status(review_id, "approved")
+        if review is None:
+            raise HTTPException(status_code=404, detail="审核记录不存在")
+        if not db.append_post_tag(review["post_id"], review["tag"]):
+            # 追加失败（满/重复/帖子已删）则回滚审核状态，让管理员重处理
+            db.set_tag_review_status(review_id, "pending")
+            raise HTTPException(
+                status_code=409,
+                detail=f"追加失败：帖子标签已满 {POST_TAGS_MAX} 个、标签已存在或帖子已删除",
+            )
+        _audit(admin, "approve_post_tag_review", detail=f"post={review['post_id']} tag={review['tag']}")
+        return {"ok": True}
+
+    @router.post(
+        "/admin/post-tag-reviews/{review_id}/reject",
+        dependencies=[Depends(require_admin)],
+    )
+    def reject_post_tag_review(review_id: int, admin: dict = Depends(require_admin)):
+        review = db.set_tag_review_status(review_id, "rejected")
+        if review is None:
+            raise HTTPException(status_code=404, detail="审核记录不存在")
+        _audit(admin, "reject_post_tag_review", detail=f"post={review['post_id']} tag={review['tag']}")
+        return {"ok": True}
+
+    @router.get("/admin/stock-alias-candidates", dependencies=[Depends(require_admin)])
+    def admin_stock_alias_candidates():
+        """LLM 发现的新黑话候选（kind=general），人工审核通过后并入别名表。"""
+        return {"candidates": db.get_stock_alias_candidates()}
+
+    @router.post(
+        "/admin/stock-alias-candidates/approve", dependencies=[Depends(require_admin)]
+    )
+    def approve_stock_alias_candidate(
+        body: AliasCandidateActionIn, admin: dict = Depends(require_admin)
+    ):
+        from .stock_universe import names_for_plain_text_tagging
+        from .tagging import is_acceptable_alias
+
+        alias = (body.alias or "").strip()
+        stock = (body.stock or "").strip()
+        if not alias or not stock:
+            raise HTTPException(status_code=400, detail="alias/stock 不能为空")
+        # 与打标 tick 同一名单口径：常用表+全市场−排除项，再并入别名正式名
+        names = set(
+            names_for_plain_text_tagging(
+                db.get_stock_names(), db.get_stock_name_exclusions()
+            )
+        ) | {a["stock"] for a in db.get_stock_aliases()}
+        if not is_acceptable_alias(alias, stock, names):
+            raise HTTPException(status_code=400, detail="不是合法别名（需指向已知名且非碎片）")
+        aliases = db.get_stock_aliases()
+        if all(a.get("alias") != alias for a in aliases):
+            aliases.append({"alias": alias, "stock": stock})
+            db.set_stock_aliases(aliases)
+        candidates = [
+            c
+            for c in db.get_stock_alias_candidates()
+            if not (c.get("alias") == alias and c.get("stock") == stock)
+        ]
+        db.set_stock_alias_candidates(candidates)
+        _audit(admin, "approve_stock_alias_candidate", detail=f"{alias}={stock}")
+        return {"ok": True}
+
+    @router.post(
+        "/admin/stock-alias-candidates/reject", dependencies=[Depends(require_admin)]
+    )
+    def reject_stock_alias_candidate(
+        body: AliasCandidateActionIn, admin: dict = Depends(require_admin)
+    ):
+        alias = (body.alias or "").strip()
+        stock = (body.stock or "").strip()
+        candidates = [
+            c
+            for c in db.get_stock_alias_candidates()
+            if not (c.get("alias") == alias and c.get("stock") == stock)
+        ]
+        db.set_stock_alias_candidates(candidates)
+        _audit(admin, "reject_stock_alias_candidate", detail=f"{alias}={stock}")
+        return {"ok": True, "remaining": len(candidates)}
 
     @router.get("/posts", dependencies=[Depends(require_admin)])
     def list_posts(

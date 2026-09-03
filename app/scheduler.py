@@ -25,6 +25,7 @@ _ai_task_semaphore = None
 _ai_task_max_concurrent = 3  # 最多同时3个任务
 _ai_task_running = set()  # 正在运行的任务ID
 from .logging_setup import redact_secrets
+from .mx_llm_tagging import mx_llm_tag_loop
 from .fetchers.base import (
     CN_TZ,
     PLATFORM_LABELS,
@@ -1934,6 +1935,8 @@ class Scheduler:
         self._mx_ws_on_give_up = None
         # 每日多窗口管理：WS 会话只在窗口内运行（每日三段随机时段，见 mx_window.py）
         self._mx_window_task: asyncio.Task | None = None
+        # MX 消息 LLM 打标循环：独立于 MX 会话（只读 posts 表），MX 未启用也照常调度
+        self._mx_tag_task: asyncio.Task | None = None
         self._mx_windows: list | None = None
         self._mx_window_date = None
         self._mx_window_open = False
@@ -1971,6 +1974,9 @@ class Scheduler:
         if self._mx_window_task:
             self._mx_window_task.cancel()
             self._mx_window_task = None
+        if self._mx_tag_task:
+            self._mx_tag_task.cancel()
+            self._mx_tag_task = None
         if self._mx_sync_service:
             self._mx_sync_service.stop()
             self._mx_sync_service = None
@@ -2751,7 +2757,16 @@ class Scheduler:
             and self._mx_sync_service is None
         ):
             await self._init_mx()
-        
+
+        # MX 消息 LLM 打标循环：告警走系统通知 KOL（阻塞版可在工作线程中调用）
+        self._mx_tag_task = asyncio.create_task(
+            mx_llm_tag_loop(
+                self.db,
+                lambda: _system_llm_config(self.db, self.llm_config),
+                publish_alert=self._publish_system_alert_sync,
+            )
+        )
+
         while not self._stop.is_set():
             started = time.monotonic()
             interval_seconds = _polling_setting(

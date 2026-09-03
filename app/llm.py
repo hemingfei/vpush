@@ -552,3 +552,233 @@ def resolve_stock_marks(marks, llm_config=None, client=None) -> list[dict]:
         )
     logger.info("LLM 标记解析 marks=%d 解析=%d", len(marks), len(result))
     return result
+
+
+# ---- MX 消息批量打标（话题/股票/操作 + 黑话映射，app/mx_llm_tagging.py 调用） ----
+
+# 与标记解析同量级：thinking + 40 条消息的三类标签 JSON 输出
+TAG_CHAT_TIMEOUT = 180
+TAG_BATCH_MAX_TOKENS = 6000
+# 单条消息送入 LLM 的正文截断长度（MX 群消息多为短句，500 字足够上下文）
+TAG_INPUT_TEXT_MAX = 500
+
+# 规则与少样本示例是稳定部分（利于 prompt cache）；词表/股票参考由
+# build_tag_system_prompt() 每次调用时拼在尾部（管理员改词表下一批即生效）
+TAG_SYSTEM_PROMPT_HEADER = (
+    "你是 A 股财经社区的贴文打标器。社区发言大量使用黑话、戏称、简称甚至错别字指代"
+    "股票，请给每条消息打标签，并整理出你用到的黑话映射。\n"
+    "\n"
+    "【判定规则】\n"
+    "1. 股票（≤2）：official 必须是真实存在的股票正式简称；文中 $名称(代码)$ 标记直接按"
+    "标记识别；黑话/简称/错别字一律还原成正式简称（如 宁王→宁德时代）。没有明确指向的"
+    "股票不要输出。\n"
+    "2. 话题（≤3）：只能从「话题词表」里选，不要发明新话题。\n"
+    "3. 操作（≤2）：只能从「操作词表」里选；只有明确表达买卖动作时才输出（如“加了点/减了/"
+    "做了个T/先看着”）；仅描述持仓现状不算操作。\n"
+    "4. confidence 两档：high=有明确依据（名称、代码、公认黑话、明确上下文）；low=拼写相近"
+    "但不确定、需要脑补、泛泛提及。拿不准一律 low。\n"
+    "5. jargon：把你在本条消息中用到的黑话/简称/错别字映射列出来，kind 三选一：\n"
+    "   - general：社区通用黑话，其他作者也这么用（如 宁王→宁德时代）\n"
+    "   - context：仅当前这条消息的语境成立，不能推广（如某作者这条消息里用“芒果”指芒果超媒）\n"
+    "   - typo：错别字/音近字（如 申领环境→申菱环境）\n"
+    "   只有确定是 general 才标 general，拿不准标 context。\n"
+    "6. 宁缺毋滥：没有把握的维度输出空数组；每条消息都必须输出，消息 id 原样带回。\n"
+    "7. 只输出一个 JSON 对象，不要输出任何其他内容。格式：\n"
+    '{"results":[{"id":101,"topics":[{"name":"话题","confidence":"high|low"}],'
+    '"stocks":[{"official":"正式简称","raw":"原文词","confidence":"high|low"}],'
+    '"actions":[{"name":"操作","confidence":"high|low"}],'
+    '"jargon":[{"raw":"原文词","official":"正式名","kind":"general|context|typo"}]}]}\n'
+    "\n"
+    "【示例】\n"
+    "输入消息：\n"
+    '[{"id":101,"author":"修心见道","text":"申领环境，又红5以上减的，均线低吃回来，做了个T"},\n'
+    ' {"id":102,"author":"修心见道","text":"芒果都绿了，真牛逼。"},\n'
+    ' {"id":103,"author":"轻舟","text":"轻神农，明天看看大盘再说"}]\n'
+    "输出：\n"
+    '{"results":[\n'
+    ' {"id":101,"topics":[{"name":"个股","confidence":"high"}],\n'
+    '  "stocks":[{"official":"申菱环境","raw":"申领环境","confidence":"high"}],\n'
+    '  "actions":[{"name":"做T","confidence":"high"},{"name":"减仓","confidence":"low"}],\n'
+    '  "jargon":[{"raw":"申领环境","official":"申菱环境","kind":"typo"}]},\n'
+    ' {"id":102,"topics":[{"name":"个股","confidence":"low"}],\n'
+    '  "stocks":[{"official":"芒果超媒","raw":"芒果","confidence":"high"}],\n'
+    '  "actions":[],"jargon":[{"raw":"芒果","official":"芒果超媒","kind":"context"}]},\n'
+    ' {"id":103,"topics":[{"name":"大盘","confidence":"high"}],\n'
+    '  "stocks":[{"official":"神农种业","raw":"神农","confidence":"high"}],\n'
+    '  "actions":[{"name":"建仓","confidence":"low"}],\n'
+    '  "jargon":[{"raw":"神农","official":"神农种业","kind":"context"}]}]}\n'
+)
+
+
+def build_tag_system_prompt(tag_rules, action_tags, stock_names, aliases=None) -> str:
+    """拼装打标系统提示词：稳定规则/示例 + 当次生效的话题词表/操作词表/股票参考。"""
+    topic_lines = []
+    for rule in tag_rules or []:
+        if not isinstance(rule, dict):
+            continue
+        tag = str(rule.get("tag") or "").strip()
+        if not tag:
+            continue
+        keywords = [str(k).strip() for k in (rule.get("keywords") or []) if str(k).strip()]
+        topic_lines.append(f"{tag}: {'、'.join(keywords)}" if keywords else tag)
+    actions = [str(a).strip() for a in (action_tags or []) if str(a).strip()]
+    names = [str(n).strip() for n in (stock_names or []) if str(n).strip()]
+    alias_pairs = []
+    for item in aliases or []:
+        if not isinstance(item, dict):
+            continue
+        alias = str(item.get("alias") or "").strip()
+        stock = str(item.get("stock") or "").strip()
+        if alias and stock:
+            alias_pairs.append(f"{alias}={stock}")
+    parts = [TAG_SYSTEM_PROMPT_HEADER, "【话题词表】"]
+    parts.append("\n".join(topic_lines) if topic_lines else "（空）")
+    parts.append("\n【操作词表】\n" + ("、".join(actions) if actions else "（空）"))
+    parts.append(
+        "\n【已知股票与黑话参考】（可输出参考之外的 A 股正式简称）\n"
+        + ("、".join(names) if names else "（空）")
+    )
+    if alias_pairs:
+        parts.append("\n" + "\n".join(alias_pairs))
+    return "\n".join(parts)
+
+
+def _tag_confidence(value) -> str:
+    return "high" if str(value or "").strip().lower() == "high" else "low"
+
+
+def _normalize_tag_items(raw) -> list[dict]:
+    """话题/操作条目归一：[{name, confidence}]，name 非空才保留。"""
+    items: list[dict] = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        items.append({"name": name, "confidence": _tag_confidence(item.get("confidence"))})
+    return items
+
+
+def _normalize_stock_items(raw) -> list[dict]:
+    items: list[dict] = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        official = str(item.get("official") or "").strip()
+        if not official:
+            continue
+        items.append(
+            {
+                "official": official,
+                "raw": str(item.get("raw") or "").strip(),
+                "confidence": _tag_confidence(item.get("confidence")),
+            }
+        )
+    return items
+
+
+def _normalize_jargon(raw) -> list[dict]:
+    items: list[dict] = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        raw_term = str(item.get("raw") or "").strip()
+        official = str(item.get("official") or "").strip()
+        if not raw_term or not official:
+            continue
+        kind = str(item.get("kind") or "").strip().lower()
+        if kind not in ("general", "context", "typo"):
+            kind = "context"  # 未知 kind 按最保守处理，防止语境映射被全局化
+        items.append({"raw": raw_term, "official": official, "kind": kind})
+    return items
+
+
+def tag_posts_llm(
+    posts,
+    tag_rules,
+    action_tags,
+    stock_names,
+    aliases=None,
+    llm_config=None,
+    client=None,
+) -> dict[int, dict] | None:
+    """让 LLM 给一批 MX 消息打话题/股票/操作三类标签并整理黑话映射。
+
+    posts: [{id, kol_name, title, content}, ...]（list_mx_posts_after 的行，id 升序）。
+    返回 {post_id: {"topics","stocks","actions","jargon"}}（仅做结构归一，词表/
+    全市场校验由调用方完成）；任何失败返回 None（整批失败语义）。
+    """
+    rows = list(posts or [])
+    if not rows:
+        return {}
+    id_set = set()
+    messages = []
+    for row in rows:
+        try:
+            pid = int(row["id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        id_set.add(pid)
+        text = " ".join(
+            (
+                str(row.get("title") or "").strip(),
+                str(row.get("content") or "").strip(),
+            )
+        ).strip()[:TAG_INPUT_TEXT_MAX]
+        messages.append(
+            {"id": pid, "author": str(row.get("kol_name") or ""), "text": text}
+        )
+    if not messages:
+        return {}
+    system = build_tag_system_prompt(tag_rules, action_tags, stock_names, aliases)
+    text = _chat(
+        llm_config,
+        [
+            {"role": "system", "content": system},
+            {
+                "role": "user",
+                "content": "消息列表：\n"
+                + json.dumps(messages, ensure_ascii=False),
+            },
+        ],
+        TAG_BATCH_MAX_TOKENS,
+        client=client,
+        temperature=0,
+        attempts=2,
+        response_format={"type": "json_object"},
+        timeout=TAG_CHAT_TIMEOUT,
+    )
+    if not text:
+        return None
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        logger.warning("LLM 打标无 JSON 对象: %.100s", text)
+        return None
+    try:
+        parsed = json.loads(match.group(0))
+    except ValueError:
+        logger.warning("LLM 打标 JSON 解析失败: %.100s", text)
+        return None
+    results = parsed.get("results") if isinstance(parsed, dict) else None
+    if not isinstance(results, list):
+        logger.warning("LLM 打标缺少 results 数组: %.100s", text)
+        return None
+    out: dict[int, dict] = {}
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        try:
+            pid = int(item.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if pid not in id_set or pid in out:
+            continue
+        out[pid] = {
+            "topics": _normalize_tag_items(item.get("topics")),
+            "stocks": _normalize_stock_items(item.get("stocks")),
+            "actions": _normalize_tag_items(item.get("actions")),
+            "jargon": _normalize_jargon(item.get("jargon")),
+        }
+    logger.info("LLM 打标 posts=%d 解析=%d", len(messages), len(out))
+    return out
