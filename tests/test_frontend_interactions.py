@@ -1604,7 +1604,7 @@ def test_feishu_source_display_mode_switchable_between_timeline_and_document():
     reader = _fn_body("renderImaDocument")
     assert 'item.feishu_display === "document"' in reader
     load = _fn_body("loadFeishuTimeline")
-    assert 'order=${docMode ? "original" : "latest"}' in load
+    assert 'order: docMode ? "original" : "latest"' in load
     assert 'mode: docMode ? "document" : "timeline"' in load
     # 文档模式隐藏排序切换（始终原文顺序），但保留来源筛选与日期跳转
     assert "${docMode ? \"\" :" in load
@@ -1638,6 +1638,43 @@ def test_feishu_timeline_ui_fixes():
     assert ".feishu-display-segment" in css
     assert ".feishu-display-option.is-selected" in css
 
+
+
+def test_feishu_timeline_uses_windowed_pages_and_load_more_state():
+    src = APP_JS.read_text()
+    load = _fn_body("loadFeishuTimeline")
+    view = _fn_body("renderFeishuTimelineView")
+
+    assert "feishuTimelineRequestPath" in load
+    assert 'params.set("window_days", "7")' in src
+    assert "next_cursor" in src
+    assert "has_more" in src
+    assert "loadMoreFeishuTimeline" in src
+    assert "feishuTimelineMoreHtml" in view
+    assert "state.loading && !entries.length" in view
+    assert "正在载入时间线" in view
+
+
+def test_feishu_timeline_removes_unavailable_media_and_failed_image_shells():
+    src = APP_JS.read_text()
+    asset = _fn_body("feishuTimelineAssetHtml")
+    images = _fn_body("loadFeishuTimelineImages")
+    view = _fn_body("renderFeishuTimelineView")
+
+    assert "asset.unavailable" not in src
+    assert 'closest(".post-img-link")' in images
+    assert 'class="feishu-timeline-notice"' not in src
+
+
+def test_feishu_timeline_b_layout_shares_one_track_geometry():
+    src = STYLE_CSS.read_text()
+    entries = _fn_body("feishuTimelineEntriesHtml")
+
+    assert "feishuEntryAuthor" in entries
+    assert "--feishu-time-rail" in src
+    assert "--feishu-track-gap" in src
+    assert "grid-template-columns: var(--feishu-time-rail)" in src
+    assert ".feishu-entry-author" in src
 
 
 def test_zsxq_settings_use_one_column_on_narrow_layout():

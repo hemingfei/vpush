@@ -354,6 +354,7 @@ function revokeFeishuTimelineMediaUrls() {
   });
   for (const url of _feishuTimelineMediaUrls) URL.revokeObjectURL(url);
   _feishuTimelineMediaUrls = [];
+  _feishuTimelineMediaCache.clear();
 }
 
 function clearImaPdfUrl() {
@@ -769,6 +770,7 @@ let _imaReaderSeq = 0;
 let _imaPdfAbort = null;
 let _feishuTimelineTimer = null;
 let _feishuTimelineMediaUrls = [];
+let _feishuTimelineMediaCache = new Map();
 let _feishuTimelineState = null;
 let _feishuSourceLoadSeq = 0;
 let _feishuPreviewSeq = 0;
@@ -1794,13 +1796,7 @@ function imaReaderNavHtml(mediaId, groupId = "", snapshot = null) {
 }
 
 function feishuTimelineAssetHtml(asset, mediaId, groupId) {
-  if (!asset?.id) {
-    if (asset?.unavailable) {
-      const kind = asset.kind === "image" ? "图片" : "附件";
-      return `<span class="feishu-asset-missing" role="note">作者未开放${kind}下载，仅飞书内可看</span>`;
-    }
-    return "";
-  }
+  if (!asset?.id) return "";
   const name = asset.name || (asset.kind === "image" ? "文档图片" : "文档附件");
   if (String(asset.mime || "").startsWith("image/") || asset.kind === "image") {
     return `<a class="post-img-link" href="#" onclick="event.preventDefault();openLightbox(this.querySelector('img'))" aria-label="查看${escapeHtml(name)}"><img src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" data-feishu-asset="${escapeHtml(asset.id)}" data-media-id="${escapeHtml(mediaId)}" data-group-id="${escapeHtml(groupId)}" alt="${escapeHtml(name)}" loading="lazy"></a>`;
@@ -1808,7 +1804,7 @@ function feishuTimelineAssetHtml(asset, mediaId, groupId) {
   return `<button type="button" class="feishu-attachment" data-asset-id="${escapeHtml(asset.id)}" data-media-id="${escapeHtml(mediaId)}" data-group-id="${escapeHtml(groupId)}" data-name="${escapeHtml(name)}" onclick="downloadFeishuTimelineAsset(this)">${escapeHtml(name)}</button>`;
 }
 
-function feishuTimelineBlockHtml(block, mediaId, groupId) {
+function feishuTimelineBlockHtml(block, mediaId, groupId, showSpeaker = true) {
   if (block.type === "table") {
     const rows = (block.rows || []).map((row, rowIndex) => {
       const tag = rowIndex === 0 ? "th" : "td";
@@ -1819,12 +1815,19 @@ function feishuTimelineBlockHtml(block, mediaId, groupId) {
   const speaker = String(block.speaker || "");
   const reply = String(block.reply_to || "");
   const text = String(block.text || "");
-  const identity = speaker
+  const identity = speaker && showSpeaker
     ? `<div class="feishu-entry-speaker"><strong>${escapeHtml(speaker)}</strong>${reply ? `<span>回复 ${escapeHtml(reply)}</span>` : ""}</div>`
     : "";
-  const assets = (block.assets || []).filter((asset) => asset && (asset.id || asset.unavailable));
+  const assets = (block.assets || []).filter((asset) => asset && asset.id);
   const assetHtml = assets.length ? `<div class="post-images feishu-entry-assets">${assets.map((asset) => feishuTimelineAssetHtml(asset, mediaId, groupId)).join("")}</div>` : "";
   return `<div class="feishu-entry-block${speaker ? " has-speaker" : ""}">${identity}${text ? `<p>${escapeHtml(text).replace(/\n/g, "<br>")}</p>` : ""}${assetHtml}</div>`;
+}
+
+function feishuEntryAuthor(entry) {
+  const blocks = Array.isArray(entry?.blocks) ? entry.blocks : [];
+  const speakers = [...new Set(blocks.map((block) => String(block?.speaker || "").trim()).filter(Boolean))];
+  if (speakers.length !== 1 || blocks.some((block) => String(block?.reply_to || "").trim())) return "";
+  return speakers[0];
 }
 
 function feishuTimelineEntriesHtml(entries, showSource) {
@@ -1834,13 +1837,16 @@ function feishuTimelineEntriesHtml(entries, showSource) {
     const source = entry.source || {};
     const day = String(entry.day || String(entry.timestamp || "").slice(0, 10));
     const dayHead = day !== lastDay
-      ? `<h3 class="feishu-day-heading" id="feishu-day-${escapeHtml(day)}">${escapeHtml(fmtImaDay(day) || day)}</h3>`
+      ? `<h3 class="feishu-day-heading" id="feishu-day-${escapeHtml(day)}"><span>${escapeHtml(fmtImaDay(day) || day)}</span></h3>`
       : "";
     lastDay = day;
-    const sourceLabel = showSource && source.title ? `<span>${escapeHtml(source.title)}</span>` : "";
+    const author = feishuEntryAuthor(entry);
+    const sourceLabel = showSource && source.title ? `<span class="feishu-entry-source">${escapeHtml(source.title)}</span>` : "";
+    const authorLabel = author ? `<span class="feishu-entry-author">${escapeHtml(author)}</span>` : "";
+    const blocks = (entry.blocks || []).map((block) => feishuTimelineBlockHtml(block, source.media_id || "", source.group_id || "", !author)).join("");
     return `${dayHead}<article class="feishu-entry" data-entry-id="${escapeHtml(entry.id || "")}">
-      <div class="feishu-entry-time"><time datetime="${escapeHtml(entry.timestamp || "")}">${escapeHtml(entry.time || "")}</time>${sourceLabel}</div>
-      <div class="feishu-entry-content">${(entry.blocks || []).map((block) => feishuTimelineBlockHtml(block, source.media_id || "", source.group_id || "")).join("") || '<p class="muted">空记录</p>'}</div>
+      <div class="feishu-entry-time"><time datetime="${escapeHtml(entry.timestamp || "")}">${escapeHtml(entry.time || "")}</time>${authorLabel}${sourceLabel}</div>
+      <div class="feishu-entry-content">${blocks || '<p class="muted">空记录</p>'}</div>
     </article>`;
   }).join("");
 }
@@ -1863,21 +1869,30 @@ function feishuDocumentEntriesHtml(entries) {
 function renderFeishuTimelineView() {
   const host = $("#feishu-timeline-body");
   if (!host || !_feishuTimelineState) return;
-  const { data, selectedGroup } = _feishuTimelineState;
-  const docMode = _feishuTimelineState.mode === "document";
+  const state = _feishuTimelineState;
+  const { data, selectedGroup } = state;
+  const docMode = state.mode === "document";
   const entries = selectedGroup
     ? (data.entries || []).filter((entry) => entry.source?.group_id === selectedGroup)
     : (data.entries || []);
+  if (state.loading && !entries.length) {
+    host.innerHTML = '<p class="ima-reader-status" role="status">正在载入时间线…</p>';
+    host.classList.toggle("is-doc-mode", docMode);
+    renderFeishuTimelineDates([]);
+    return;
+  }
   // 文档开头的标题块会混进公告，过滤与来源标题相同的回显
   const notices = (data.notices || []).filter((notice) => !selectedGroup || notice.source?.group_id === selectedGroup)
     .filter((notice) => {
       const text = String(notice.text || "").trim();
       return !text || text !== String(notice.source?.title || "").trim();
     });
-  const noticeHtml = notices.length ? `<aside class="feishu-timeline-notice"><strong>文档提示</strong>${notices.map((notice) => notice.type === "table" ? feishuTimelineBlockHtml(notice, notice.source?.media_id || "", notice.source?.group_id || "") : `<p>${escapeHtml(notice.text || "").replace(/\n/g, "<br>")}</p>`).join("")}</aside>` : "";
-  revokeFeishuTimelineMediaUrls();
+  const preambleHtml = notices.map((notice) => notice.type === "table"
+    ? feishuTimelineBlockHtml(notice, notice.source?.media_id || "", notice.source?.group_id || "")
+    : `<div class="feishu-entry-block feishu-timeline-preamble-block"><p>${escapeHtml(notice.text || "").replace(/\n/g, "<br>")}</p></div>`
+  ).join("");
   const showSourceLabels = !selectedGroup && (data.sources || []).length > 1;
-  host.innerHTML = `${noticeHtml}${docMode ? feishuDocumentEntriesHtml(entries) : feishuTimelineEntriesHtml(entries, showSourceLabels)}`;
+  host.innerHTML = `${preambleHtml}${docMode ? feishuDocumentEntriesHtml(entries) : feishuTimelineEntriesHtml(entries, showSourceLabels)}${docMode ? "" : feishuTimelineMoreHtml()}`;
   host.classList.toggle("is-doc-mode", docMode);
   loadFeishuTimelineImages();
   renderFeishuTimelineDates(entries);
@@ -1892,10 +1907,92 @@ function renderFeishuTimelineDates(entries) {
   if (select) select.innerHTML = `<option value="">跳到日期</option>${days.map((day) => `<option value="${escapeHtml(day)}">${escapeHtml(fmtImaDay(day) || day)}</option>`).join("")}`;
 }
 
-function selectFeishuTimelineSource(groupId) {
-  if (!_feishuTimelineState) return;
-  _feishuTimelineState.selectedGroup = String(groupId || "");
+function feishuTimelineRequestPath(state, before = "") {
+  const params = new URLSearchParams({ order: state.order });
+  if (state.mode !== "document") params.set("window_days", "7");
+  if (state.selectedGroup) params.set("group", state.selectedGroup);
+  if (before) params.set("before", before);
+  return `/api/ima-documents/timeline/all?${params.toString()}`;
+}
+
+function mergeFeishuTimelineEntries(current, incoming) {
+  const seen = new Set(current.map((entry) => String(entry.id || "")));
+  return [...current, ...incoming.filter((entry) => {
+    const id = String(entry.id || "");
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  })];
+}
+
+function feishuTimelineMoreHtml() {
+  const state = _feishuTimelineState;
+  if (!state || (!state.hasMore && !state.error)) return "";
+  const label = state.loading ? "正在加载…" : state.error ? "重试" : "加载更早";
+  const error = state.error ? `<p class="feishu-timeline-load-error" role="alert">${escapeHtml(state.error)}</p>` : "";
+  return `<div class="feishu-timeline-more"><button type="button" class="btn-normal" onclick="loadMoreFeishuTimeline()"${state.loading ? " disabled" : ""}>${label}</button>${error}</div>`;
+}
+
+async function loadFeishuTimelinePage(reset = false) {
+  const current = _feishuTimelineState;
+  if (!current || current.loading) return false;
+  const before = reset ? "" : current.nextCursor;
+  if (reset) revokeFeishuTimelineMediaUrls();
+  const requestState = {
+    ...current,
+    loading: true,
+    error: "",
+    nextCursor: reset ? "" : current.nextCursor,
+    hasMore: reset ? false : current.hasMore,
+    data: reset ? { ...current.data, entries: [], notices: [] } : current.data,
+  };
+  _feishuTimelineState = requestState;
   renderFeishuTimelineView();
+  try {
+    const data = await api(feishuTimelineRequestPath(requestState, before));
+    if (!routeStillActive(requestState.seq) || requestState.readerSeq !== _imaReaderSeq || _feishuTimelineState !== requestState) return false;
+    _feishuTimelineState = {
+      ...requestState,
+      data: {
+        ...data,
+        entries: reset ? (data.entries || []) : mergeFeishuTimelineEntries(requestState.data.entries || [], data.entries || []),
+        notices: reset ? (data.notices || []) : (requestState.data.notices || []),
+      },
+      nextCursor: String(data.next_cursor || ""),
+      hasMore: !!data.has_more,
+      loading: false,
+      error: "",
+    };
+    renderFeishuTimelineView();
+    return true;
+  } catch (err) {
+    if (!routeStillActive(requestState.seq) || requestState.readerSeq !== _imaReaderSeq || _feishuTimelineState !== requestState) return false;
+    _feishuTimelineState = { ...requestState, loading: false, error: err.message || "时间线加载失败" };
+    renderFeishuTimelineView();
+    return false;
+  }
+}
+
+async function loadMoreFeishuTimeline() {
+  const state = _feishuTimelineState;
+  if (!state || state.loading || (!state.hasMore && !state.error)) return;
+  await loadFeishuTimelinePage(false);
+}
+
+async function selectFeishuTimelineSource(groupId) {
+  if (!_feishuTimelineState || _feishuTimelineState.loading) return;
+  const current = _feishuTimelineState;
+  const selectedGroup = String(groupId || "");
+  if (selectedGroup === current.selectedGroup) return;
+  _feishuTimelineState = {
+    ...current,
+    selectedGroup,
+    data: { ...current.data, entries: [], notices: [] },
+    nextCursor: "",
+    hasMore: false,
+    error: "",
+  };
+  await loadFeishuTimelinePage(true);
 }
 
 function jumpFeishuTimelineDay(day) {
@@ -1905,37 +2002,57 @@ function jumpFeishuTimelineDay(day) {
 
 async function changeFeishuTimelineOrder(order, select = null) {
   if (!_feishuTimelineState || !["latest", "original"].includes(order)) return;
-  if (_feishuTimelineState.mode === "document") return; // 文档视图固定原文顺序
-  const previous = _feishuTimelineState.order || "latest";
-  const { seq, readerSeq, selectedGroup } = _feishuTimelineState;
+  if (_feishuTimelineState.mode === "document" || _feishuTimelineState.loading) return;
+  const current = _feishuTimelineState;
+  const previous = current.order || "latest";
+  if (order === previous) return;
   if (select) select.disabled = true;
-  try {
-    const data = await api(`/api/ima-documents/timeline/all?order=${encodeURIComponent(order)}`);
-    if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
-    _feishuTimelineState = { ..._feishuTimelineState, data, order, selectedGroup };
-    renderFeishuTimelineView();
-  } catch (err) {
+  _feishuTimelineState = {
+    ...current,
+    order,
+    data: { ...current.data, entries: [], notices: [] },
+    nextCursor: "",
+    hasMore: false,
+    error: "",
+  };
+  const loaded = await loadFeishuTimelinePage(true);
+  if (!loaded && routeStillActive(current.seq) && current.readerSeq === _imaReaderSeq && _feishuTimelineState?.order === order) {
+    const message = _feishuTimelineState.error || "时间线排序失败";
+    _feishuTimelineState = current;
     if (select?.isConnected) select.value = previous;
-    if (routeStillActive(seq) && readerSeq === _imaReaderSeq) flash(err.message || "时间线排序失败", "error");
-  } finally {
-    if (select?.isConnected) select.disabled = false;
+    renderFeishuTimelineView();
+    flash(message, "error");
   }
+  if (select?.isConnected) select.disabled = false;
 }
 
 async function loadFeishuTimelineImages() {
   const seq = routeRenderSeq;
   const readerSeq = _imaReaderSeq;
-  const images = [...document.querySelectorAll("img[data-feishu-asset]")];
+  const images = [...document.querySelectorAll("img[data-feishu-asset]:not([data-feishu-loading])")];
   await Promise.all(images.map(async (img) => {
-    const query = img.dataset.groupId ? `?group=${encodeURIComponent(img.dataset.groupId)}` : "";
+    img.dataset.feishuLoading = "1";
+    const mediaId = img.dataset.mediaId || "";
+    const groupId = img.dataset.groupId || "";
+    const assetId = img.dataset.feishuAsset || "";
+    const cacheKey = `${mediaId}|${groupId}|${assetId}`;
+    const cached = _feishuTimelineMediaCache.get(cacheKey);
+    if (cached) {
+      img.src = cached;
+      return;
+    }
+    const query = groupId ? `?group=${encodeURIComponent(groupId)}` : "";
     try {
-      const blob = await apiBlob(`/api/ima-documents/${encodeURIComponent(img.dataset.mediaId)}/assets/${encodeURIComponent(img.dataset.feishuAsset)}${query}`);
+      const blob = await apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/assets/${encodeURIComponent(assetId)}${query}`);
       if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq || !img.isConnected) return;
       const url = URL.createObjectURL(blob);
       _feishuTimelineMediaUrls.push(url);
+      _feishuTimelineMediaCache.set(cacheKey, url);
       img.src = url;
     } catch {
-      if (img.isConnected) img.remove();
+      const link = img.closest(".post-img-link");
+      if (link) link.remove();
+      else if (img.isConnected) img.remove();
     }
   }));
 }
@@ -1960,10 +2077,24 @@ async function downloadFeishuTimelineAsset(button) {
 
 async function loadFeishuTimeline(item, seq, readerSeq, mode = "timeline") {
   const docMode = mode === "document";
-  const data = await api(`/api/ima-documents/timeline/all?order=${docMode ? "original" : "latest"}`);
-  if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
   const selectedGroup = item.group_id || "";
-  _feishuTimelineState = { data, selectedGroup, order: docMode ? "original" : "latest", mode: docMode ? "document" : "timeline", seq, readerSeq };
+  const requestState = {
+    selectedGroup,
+    order: docMode ? "original" : "latest",
+    mode: docMode ? "document" : "timeline",
+    seq,
+    readerSeq,
+  };
+  const data = await api(feishuTimelineRequestPath(requestState));
+  if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
+  _feishuTimelineState = {
+    data,
+    ...requestState,
+    nextCursor: String(data.next_cursor || ""),
+    hasMore: !!data.has_more,
+    loading: false,
+    error: "",
+  };
   const sources = data.sources || [];
   const sourceOptions = [{ group_id: "", title: "全部来源" }, ...sources];
   const panel = $("#ima-document-panel");
