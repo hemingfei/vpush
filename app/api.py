@@ -6007,6 +6007,22 @@ def create_api_router(
         _audit(admin, "mx_llm_tag_toggle", detail=f"enabled={body.enabled}")
         return {"ok": True, "enabled": db.get_mx_llm_tag_enabled()}
 
+    @router.post("/admin/mx-llm-tag/test", dependencies=[Depends(require_admin)])
+    def mx_llm_tag_test(request: Request, admin: dict = Depends(require_admin)):
+        """试打 10 条：游标后未处理 MX 帖走一遍 LLM 打标，只预览不写库、不推游标。"""
+        from .mx_llm_tagging import run_tag_test
+        from .scheduler import _system_llm_config
+
+        llm_cfg = _system_llm_config(db, getattr(request.app.state, "llm_config", None))
+        result = run_tag_test(db, llm_cfg)
+        skipped = result.get("skipped")
+        if skipped == "busy":
+            raise HTTPException(status_code=409, detail="打标正在进行，请稍后再试")
+        if skipped == "no_llm":
+            raise HTTPException(status_code=400, detail="未配置系统 LLM（设置 → AI 摘要）")
+        _audit(admin, "mx_llm_tag_test", detail=f"tested={result.get('tested', 0)}")
+        return result
+
     @router.get("/admin/post-tag-reviews", dependencies=[Depends(require_admin)])
     def admin_post_tag_reviews(status: str = "pending"):
         """LLM 打标 low 准确度标签的人工审核队列（默认 pending）。"""

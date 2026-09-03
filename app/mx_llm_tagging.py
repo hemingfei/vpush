@@ -41,6 +41,8 @@ ALERT_COOLDOWN_SECONDS = 1800
 _ALERT_COOLDOWN_KEY = "mx_llm_tag_alert_at"
 # 防偷懒：LLM 响应缺失的消息占比超过该值，整批视为失败（游标不动，下轮重试）
 MISSING_RATIO_LIMIT = 0.3
+# 管理端「试打」按钮每次取的未处理消息条数
+TEST_BATCH_SIZE = 10
 
 # 运行状态（进程内计数，重启归零）：供管理端状态面板展示
 _state_lock = threading.Lock()
@@ -343,6 +345,81 @@ def _run_tag_tick_locked(db, llm_config, publish_alert) -> dict:
         "error": last_error,
         "cursor": cursor,
     }
+
+
+def run_tag_test(db, llm_config) -> dict:
+    """试打标：取游标之后最多 10 条未处理 MX 帖，走一遍与正式 tick 完全同源的
+    LLM 调用与校验，只返回预览结果——不写标签、不进审核/候选表、不推进游标。
+
+    管理端「试打 10 条」按钮用；拿不到单飞锁（正式 tick 在跑）返回 busy。
+    """
+    from .llm import tag_posts_llm
+    from .tagging import is_acceptable_alias
+
+    if not _tick_lock.acquire(blocking=False):
+        return {"skipped": "busy"}
+    try:
+        if not (llm_config and getattr(llm_config, "api_key", "")):
+            return {"skipped": "no_llm"}
+        tag_rules, topic_tags, action_tags, names, aliases, valid_stocks = _tag_inputs(db)
+        known_aliases = {a["alias"] for a in aliases}
+        cursor = db.get_mx_llm_tag_cursor()
+        rows = db.list_mx_posts_after(cursor, TEST_BATCH_SIZE)
+        if not rows:
+            return {"skipped": "no_posts", "cursor": cursor}
+        response = tag_posts_llm(
+            rows, tag_rules, action_tags, names, aliases, llm_config
+        )
+        _record_call()
+        if response is None:
+            return {"skipped": "llm_failed"}
+        writes, reviews, general_pairs = validate_batch_response(
+            rows, response, topic_tags, action_tags, valid_stocks
+        )
+        pairs = [
+            (alias, stock, pid)
+            for alias, stock, pid in general_pairs
+            if alias not in known_aliases
+            and is_acceptable_alias(alias, stock, valid_stocks)
+        ]
+        items = []
+        for row in rows:
+            pid = int(row["id"])
+            excerpt = " ".join(
+                (str(row.get("title") or ""), str(row.get("content") or ""))
+            ).strip()[:100]
+            items.append(
+                {
+                    "post_id": pid,
+                    "kol_name": str(row.get("kol_name") or ""),
+                    "excerpt": excerpt,
+                    "tags": list(writes.get(pid) or []),
+                    "review_tags": [
+                        {"tag": tag, "kind": kind}
+                        for rp, tag, kind in reviews
+                        if rp == pid
+                    ],
+                    "jargon": [
+                        {"alias": alias, "stock": stock}
+                        for alias, stock, rp in pairs
+                        if rp == pid
+                    ],
+                }
+            )
+        return {
+            "cursor": cursor,
+            "tested": len(rows),
+            "items": items,
+            "summary": {
+                "would_tag": sum(1 for item in items if item["tags"]),
+                "would_review": sum(len(item["review_tags"]) for item in items),
+                "would_candidates": len({(j["alias"], j["stock"]) for j in (
+                    j for item in items for j in item["jargon"]
+                )}),
+            },
+        }
+    finally:
+        _tick_lock.release()
 
 
 async def mx_llm_tag_loop(db, llm_config_provider, publish_alert=None) -> None:

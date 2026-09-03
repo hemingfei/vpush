@@ -317,6 +317,61 @@ def test_run_tag_tick_busy_lock_skipped():
     db.close()
 
 
+# ---- run_tag_test：试打预览，零写入 ----
+
+def test_run_tag_test_preview_and_no_writes():
+    db = make_db()
+    ids = _add_mx_posts(db, 3)
+    response = {
+        ids[0]: _result(
+            stocks=[{"official": "贵州茅台", "raw": "茅哥", "confidence": "high"}],
+            jargon=[{"raw": "茅哥", "official": "贵州茅台", "kind": "general"}],
+        ),
+        ids[1]: _result(
+            topics=[{"name": "科技", "confidence": "low"}],
+            jargon=[{"raw": "芒果", "official": "贵州茅台", "kind": "context"}],
+        ),
+        ids[2]: _result(),
+    }
+    import app.llm as llm
+    orig = llm.tag_posts_llm
+    llm.tag_posts_llm = lambda rows, *a, **kw: dict(response)
+    _reset_state()
+    try:
+        result = m.run_tag_test(db, make_config())
+    finally:
+        llm.tag_posts_llm = orig
+
+    assert result["tested"] == 3 and result["cursor"] == 0
+    items = {it["post_id"]: it for it in result["items"]}
+    assert items[ids[0]]["tags"] == ["贵州茅台"]
+    assert items[ids[0]]["jargon"] == [{"alias": "茅哥", "stock": "贵州茅台"}]
+    assert items[ids[1]]["review_tags"] == [{"tag": "科技", "kind": "topic"}]
+    assert items[ids[1]]["jargon"] == []  # context 黑话不进候选
+    assert items[ids[2]]["tags"] == []
+    assert result["summary"] == {"would_tag": 1, "would_review": 1, "would_candidates": 1}
+    # 零写入：游标、标签、审核队列、候选表全部不动
+    assert db.get_mx_llm_tag_cursor() == 0
+    posts = {p["id"]: p for p in db.list_posts(platform="mx", include_hidden=True)}
+    assert all(p["tags"] == [] for p in posts.values())
+    assert db.list_tag_reviews() == []
+    assert db.get_stock_alias_candidates() == []
+    db.close()
+
+
+def test_run_tag_test_skips():
+    db = make_db()
+    (pid,) = _add_mx_posts(db, 1)
+    _reset_state()
+    with m._tick_lock:
+        assert m.run_tag_test(db, make_config()) == {"skipped": "busy"}
+    assert m.run_tag_test(db, make_config(None)) == {"skipped": "no_llm"}
+    db.set_mx_llm_tag_cursor(pid)  # 游标推到末尾 → 无未处理消息
+    result = m.run_tag_test(db, make_config())
+    assert result["skipped"] == "no_posts" and result["cursor"] == pid
+    db.close()
+
+
 # ---- db 辅助：审核队列与候选表 ----
 
 def test_append_post_tag_cap_and_dedupe():

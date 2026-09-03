@@ -12792,6 +12792,7 @@ async function loadAdminTagsTab() {
 
 const _TAG_REVIEW_KINDS = { topic: "话题", stock: "股票", action: "操作" };
 let _mxAliasCandidates = [];
+let _mxTagTestResult = null;
 
 function adminMxTagPanel(tagStatus, tagReviews, aliasCands) {
   const st = tagStatus || {};
@@ -12850,10 +12851,12 @@ function adminMxTagPanel(tagStatus, tagReviews, aliasCands) {
       <p class="section-meta" style="margin-top:4px">${lastRunLine}</p>
       ${alertLine}
       <div class="toolbar" style="margin-top:12px">
+        <button class="btn-normal" onclick="adminMxTagTest()">试打 10 条（不写库）</button>
         <button class="${st.enabled ? "btn-ghost" : "btn-normal"}" onclick="adminMxTagToggle()">
           ${st.enabled ? "关闭实时打标" : "开启实时打标"}
         </button>
       </div>
+      ${adminMxTagTestBlock()}
     </section>
     <section class="section-panel">
       <header class="section-head"><div><h2 class="section-title">标签审核</h2>
@@ -12875,6 +12878,46 @@ function adminMxTagPanel(tagStatus, tagReviews, aliasCands) {
         </table>
       </div>
     </section>`;
+}
+
+function adminMxTagTestBlock() {
+  const r = _mxTagTestResult;
+  if (!r) return "";
+  if (r.skipped === "no_posts") {
+    return `<p class="section-meta" style="margin-top:8px">试打结果：游标 ${r.cursor} 之后暂无未处理消息。</p>`;
+  }
+  const summary = r.summary || {};
+  const rows = (r.items || []).map((it) => `
+    <tr>
+      <td>${it.post_id}</td>
+      <td>${escapeHtml(it.kol_name || "")}：${escapeHtml(it.excerpt || "")}</td>
+      <td>${(it.tags || []).map((t) => `<span class="cat cat-tag">${escapeHtml(t)}</span>`).join("") || '<span class="muted">（无）</span>'}</td>
+      <td>${(it.review_tags || []).map((t) => `<span class="cat cat-tag">${escapeHtml(t.tag)}</span>`).join("") || '<span class="muted">（无）</span>'}</td>
+      <td>${(it.jargon || []).map((j) => `${escapeHtml(j.alias)}=${escapeHtml(j.stock)}`).join("、") || '<span class="muted">（无）</span>'}</td>
+    </tr>`).join("");
+  return `
+    <p class="section-meta" style="margin-top:10px">试打 ${r.tested} 条（游标 ${r.cursor} 之后，未写库）：
+      预计直接写入 <b>${summary.would_tag || 0}</b> 条、
+      进审核 <b>${summary.would_review || 0}</b> 个标签、
+      新增黑话候选 <b>${summary.would_candidates || 0}</b> 个。</p>
+    <div class="table-wrap" style="margin-top:8px">
+      <table>
+        <thead><tr><th scope="col">ID</th><th scope="col">消息</th><th scope="col">将写入标签</th><th scope="col">将进审核</th><th scope="col">将入候选黑话</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+async function adminMxTagTest() {
+  try {
+    const data = await api("/api/admin/mx-llm-tag/test", { method: "POST" });
+    _mxTagTestResult = data;
+    flash(`试打完成：${data.tested} 条，预计写入 ${data.summary?.would_tag || 0} 条`);
+  } catch (err) {
+    _mxTagTestResult = null;
+    flash("试打失败: " + err.message, "error");
+  }
+  loadAdminVocabTab("tags");
 }
 
 async function adminMxTagToggle() {
