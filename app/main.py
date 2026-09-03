@@ -18,6 +18,7 @@ from .api import create_api_router
 from .config import load_config
 from .db import DB
 from .fetchers import build_fetchers
+from .feishu_documents import FeishuDocumentSyncService
 from .ima_documents import ImaDocumentService
 from .ima_search import ImaSearchIndex
 from .ima_storage import ImaStorageStatus
@@ -111,6 +112,12 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         storage_status=storage_status,
         llm_config=config.llm,
         search_index=ima_search_index,
+    )
+    feishu_documents = FeishuDocumentSyncService(
+        db,
+        config.feishu_documents,
+        archive_root,
+        ima_documents=ima_documents,
     )
     # WARNING+ 日志持久化到 error_logs 表（跨重启可查，管理后台错误记录面板）
     register_error_sink(
@@ -222,6 +229,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         set_alerts_enabled(config.alerts_enabled)
         if background_workers_enabled():
             ima_documents.start()
+            feishu_documents.start()
             task = asyncio.create_task(scheduler.run())
             if config.alerts_enabled and config.notifiers.telegram.bot_token:
                 from .telegram_bot import TelegramBot
@@ -266,6 +274,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
             if bot is not None:
                 bot.client.close()
         news_service.close()
+        feishu_documents.stop()
         ima_documents.stop()
         db.close()
 
@@ -280,6 +289,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     app.state.db = db
     app.state.llm_config = config.llm
     app.state.ima_documents = ima_documents
+    app.state.feishu_documents = feishu_documents
     app.state.ima_search_index = ima_search_index
     app.state.news_service = news_service
 
@@ -345,6 +355,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
             on_mx_session_login=scheduler.mx_manual_login if background_workers_enabled() else None,
             # MX 报错统一走系统 KOL「系统通知」发布（含 TOKEN 过期熔断标记）
             on_mx_alert=scheduler.publish_mx_error if background_workers_enabled() else None,
+            feishu_documents=feishu_documents,
             news_service=news_service,
             # 系统 KOL Webhook 来帖的入库+推送回调（纯 UI 调试模式下只入库不推送）
             on_external_post=scheduler.ingest_external_post if background_workers_enabled() else None,

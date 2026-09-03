@@ -1554,16 +1554,120 @@ def test_ima_document_collector_lives_in_knowledge_settings():
 
 
 def test_ima_settings_have_one_parent_and_keep_zsxq_under_ima():
-    """知识库设置页采集在前，知识星球随后，存储在后。"""
+    """知识库设置页采集在前，飞书文档标签固定在最后。"""
     knowledge = _fn_body("loadAdminKnowledge")
     collect = knowledge.index('data-tab="collect"')
     zsxq = knowledge.index('data-tab="zsxq"')
     storage = knowledge.index('data-tab="storage"')
-    assert collect < zsxq < storage
+    local = knowledge.index('data-tab="local"')
+    feishu = knowledge.index('data-tab="feishu"')
+    assert collect < zsxq < storage < local < feishu
+    assert 'id="feishu-documents-body"' in knowledge
+    assert "feishuDocsConfigHtml" in _fn_body("loadFeishuDocumentSources")
+    config_html = _fn_body("feishuDocsConfigHtml")
+    for field_id in ("feishu-cfg-app-id", "feishu-cfg-secret", "feishu-cfg-redirect", "feishu-cfg-scopes", "feishu-cfg-interval", "feishu-cfg-save"):
+        assert f'id="{field_id}"' in config_html
+    save = _fn_body("saveFeishuDocsConfig")
+    assert '"/api/admin/feishu-documents/config"' in save
+    assert "interval_seconds" in save
+    assert "15–86400" in save
     assert '<h2 class="section-title">存储</h2>' in _fn_body("imaStoragePanelHtml")
     assert 'class="cfg-group cfg-group--zsxq"' in knowledge
     assert 'id="pc-zq-pages"' in knowledge
     assert 'id="pc-zq-save"' in knowledge
+
+
+def test_feishu_document_timeline_uses_knowledge_reader_and_admin_tab():
+    src = APP_JS.read_text()
+    assert "/api/admin/feishu-documents" in src
+    assert "/api/ima-documents/timeline/all" in src
+    assert "feishu-timeline-panel" in src
+    assert "item.type === \"feishu_timeline\"" in src
+
+
+def test_selecting_feishu_group_opens_timeline_directly():
+    """研报库切到飞书来源（下拉/侧栏同路）直接进时间线，不再停留在单行列表。"""
+    body = _fn_body("selectImaDocumentGroup")
+    assert 'groupId.startsWith("feishu-")' in body
+    assert "openImaDocument(item.media_id, groupId, true)" in body
+    # 带搜索词时不得跳转（搜索结果仍需列表形态）
+    assert "!imaUsableSearchQuery(state.imaDocumentsQuery)" in body
+    # 跳转后旧异步不得覆盖新页面
+    assert "routeStillActive(seq)" in body
+    # 非飞书来源仍走列表渲染
+    assert body.rstrip().endswith("renderImaDocuments(seq);\n}")
+
+
+def test_feishu_settings_auto_preview_and_uniform_source_actions():
+    src = APP_JS.read_text()
+    add_panel = _fn_body("loadAdminKnowledge")
+    rows = _fn_body("feishuSourceRowsHtml")
+    preview = _fn_body("previewFeishuDocument")
+    queue = _fn_body("queueFeishuDocumentPreview")
+    add = _fn_body("addFeishuDocumentSource")
+
+    assert 'oninput="queueFeishuDocumentPreview(this.value)"' in add_panel
+    assert 'id="feishu-document-preview"' in add_panel
+    assert '"/api/admin/feishu-documents/preview"' in preview
+    assert "_feishuPreviewSeq" in queue and "setTimeout" in queue
+    assert "await previewFeishuDocument" in add
+    assert "_feishuPreview.data" in add
+    assert 'class="feishu-display-segment"' in rows
+    assert 'class="feishu-display-option' in rows
+    assert 'class="btn-ghost feishu-action"' in rows
+    assert 'class="icon-btn" data-source-id="${source.id}"' not in rows
+    assert '<span>启用</span>' in rows
+    assert 'location.protocol === "https:"' in src
+    assert '`${location.origin}/api/admin/feishu-documents/oauth/callback`' in src
+
+
+def test_feishu_source_display_mode_switchable_between_timeline_and_document():
+    """飞书来源支持时间线/文档两种展示，设置行可切换，阅读器按模式分支。"""
+    src = APP_JS.read_text()
+    rows = _fn_body("feishuSourceRowsHtml")
+    assert "feishu-display-segment" in rows
+    assert "feishu-display-option" in rows
+    assert ">时间线</button>" in rows and ">文档</button>" in rows
+    switcher = _fn_body("setFeishuSourceDisplay")
+    assert "display_mode" in switcher
+    assert "PATCH" in switcher or "method: \"PATCH\"" in switcher or '"PATCH"' in switcher
+    reader = _fn_body("renderImaDocument")
+    assert 'item.feishu_display === "document"' in reader
+    load = _fn_body("loadFeishuTimeline")
+    assert 'order=${docMode ? "original" : "latest"}' in load
+    assert 'mode: docMode ? "document" : "timeline"' in load
+    # 文档模式隐藏排序切换（始终原文顺序），但保留来源筛选与日期跳转
+    assert "${docMode ? \"\" :" in load
+    doc_view = _fn_body("renderFeishuTimelineView")
+    assert "feishuDocumentEntriesHtml(entries)" in doc_view
+    assert 'classList.toggle("is-doc-mode", docMode)' in doc_view
+
+
+
+def test_feishu_timeline_ui_fixes():
+    """时间线/设置页 UI 修复契约：时间格式化、公告去标题回显、来源标签按需显示。"""
+    src = APP_JS.read_text()
+    # 设置行 ISO 时间不再走 fmtTs（epoch 语义产生 Invalid Date）
+    rows = _fn_body("feishuSourceRowsHtml")
+    assert "fmtFeishuTime(source.last_success_at)" in rows
+    assert "fmtFeishuTime(source.next_check_at)" in rows
+    assert "function fmtFeishuTime(s)" in src
+    # 公告过滤与来源标题相同的回显
+    view = _fn_body("renderFeishuTimelineView")
+    assert "notice.source?.title" in view
+    # 单来源/多来源模式下来源标签按需渲染
+    assert "showSourceLabels = !selectedGroup && (data.sources || []).length > 1" in view
+    entries_fn = _fn_body("feishuTimelineEntriesHtml")
+    assert "showSource && source.title" in entries_fn
+    # 文档模式下禁止排序切换
+    order = _fn_body("changeFeishuTimelineOrder")
+    assert 'mode === "document"' in order
+    # 设置页来源行：隐藏重复的「仅管理员」空态、展示方式统一为分段控件
+    css = STYLE_CSS.read_text()
+    assert ".feishu-source-acl .ima-acl-none { display: none; }" in css
+    assert ".feishu-display-segment" in css
+    assert ".feishu-display-option.is-selected" in css
+
 
 
 def test_zsxq_settings_use_one_column_on_narrow_layout():
@@ -2495,7 +2599,7 @@ def test_ima_documents_group_switching_contract():
     assert "ima-doc-source" in src
     assert "selectImaDocumentGroup" in src
     assert "routeQuery()" in src
-    assert "replaceImaDocumentsRoute(imaDocumentsRoute(value, state.imaDocumentsQuery, \"\", \"\"))" in src
+    assert "replaceImaDocumentsRoute(imaDocumentsRoute(groupId, state.imaDocumentsQuery, \"\", \"\"))" in src
     assert "selectImaDocumentGroup(value)" in src
     assert "state.imaDocumentsDay = \"\"" in src
     assert "escapeHtml(group.id" in src or "escapeHtml(group.value" in src
@@ -2528,7 +2632,7 @@ def test_ima_document_group_switch_refreshes_locally():
     select = _fn_body("selectImaDocumentGroup")
     helper = _fn_body("replaceImaDocumentsRoute")
     assert "replaceRoute(" not in select
-    assert "replaceImaDocumentsRoute(imaDocumentsRoute(value, state.imaDocumentsQuery, \"\", \"\"))" in select
+    assert "replaceImaDocumentsRoute(imaDocumentsRoute(groupId, state.imaDocumentsQuery, \"\", \"\"))" in select
     assert "state.imaDocumentsTag = \"\"" in select
     assert "state.imaDocumentsGroup" in select
     assert "state.imaDocumentsDay = \"\"" in select
@@ -3524,6 +3628,46 @@ def test_ima_report_search_is_debounced_and_explicitly_pages():
     assert "加载失败，重试" in more
 
 
+def test_ima_search_stashes_unfiltered_list_for_clear_and_back():
+    """离开搜索时先还原进搜索前的列表，避免再次打整库接口卡死。"""
+    src = APP_JS.read_text()
+    submit = _fn_body("submitImaDocumentsSearch")
+    render = _fn_body("renderImaDocuments")
+    clear_one = _fn_body("clearImaDocumentsFilter")
+    clear_all = _fn_body("clearImaDocumentsFilters")
+    capture = _fn_body("captureImaListSnapshot")
+
+    assert "function stashImaStreamSnapshot(" in src
+    assert "function adoptImaStreamSnapshot(" in src
+    assert "stashImaStreamSnapshot()" in submit
+    assert submit.index("stashImaStreamSnapshot()") < submit.index("replaceImaDocumentsRoute")
+    assert "adoptImaStreamSnapshot()" in render
+    assert render.index("adoptImaStreamSnapshot()") < render.index("currentImaListSnapshot()")
+    assert "stashImaStreamSnapshot" not in clear_one
+    assert "stashImaStreamSnapshot" not in clear_all
+    assert "location.pathname + location.search" in capture
+
+
+def test_ima_pdf_blob_is_detached_before_revoke():
+    """阅读页返回时必须先拆掉 PDF iframe / blob 图，再 revoke，避免 Chromium 卡死。"""
+    clear = _fn_body("clearImaPdfUrl")
+    back = _fn_body("backFromImaReader")
+    revoke_images = _fn_body("revokeFeishuTimelineMediaUrls")
+    assert "ima-pdf-frame" in clear
+    assert "URL.revokeObjectURL(pdfUrl)" in clear
+    assert clear.index("ima-pdf-frame") < clear.index("URL.revokeObjectURL(pdfUrl)")
+    assert "clearImaPdfUrl()" in back
+    assert back.index("clearImaPdfUrl()") < back.index("history.back()")
+    assert "removeAttribute" in revoke_images
+    assert revoke_images.index("removeAttribute") < revoke_images.index("URL.revokeObjectURL")
+
+
+def test_knowledge_list_shell_rebuilds_when_kb_list_is_missing():
+    mount = _fn_body("mountKnowledgeListShell")
+    assert '$("#kb-list")' in mount
+    assert mount.index("$(\"#ima-report-page\")") < mount.index("$(\"#main\").innerHTML")
+
+
 def test_ima_report_render_reuses_mounted_header_and_cancels_stale_search():
     render = _fn_body("renderImaDocuments")
     submit = _fn_body("submitImaDocumentsSearch")
@@ -3548,9 +3692,10 @@ def test_ima_reader_captures_and_restores_the_loaded_result_set():
     opener = _fn_body("openImaDocument")
     refresh = _fn_body("refreshImaDocuments")
 
-    assert "_imaItems.map" in capture
-    assert "scrollTop" in capture
-    assert "state.imaDocumentsHasMore" in capture
+    clone = _fn_body("cloneImaListSnapshotFields")
+    assert "_imaItems.map" in clone
+    assert "scrollTop" in clone
+    assert "state.imaDocumentsHasMore" in clone
     assert "location.pathname + location.search" in capture
     assert "captureImaListSnapshot" in opener
     assert "snapshot.route" in current
@@ -3727,9 +3872,9 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=265"' in html
-    assert 'src="/app.js?v=380"' in html
-    assert 'dav-shell-v248' in sw
+    assert 'href="/style.css?v=270"' in html
+    assert 'src="/app.js?v=389"' in html
+    assert 'dav-shell-v256' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -4906,6 +5051,13 @@ def test_user_modal_kb_grants_include_local_libraries():
     modal = _fn_body("adminOpenUser")
     assert "本地库" in modal
     assert "group.local" in modal
+
+
+def test_user_modal_kb_hides_feishu_groups():
+    load = _fn_body("loadAdminUsers")
+    modal = _fn_body("adminOpenUser")
+    assert 'startsWith("feishu-")' in load
+    assert 'startsWith("feishu-")' in modal
 
 
 def test_stale_frontend_refreshes_after_release():

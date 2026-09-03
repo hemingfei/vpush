@@ -117,8 +117,15 @@ class ErrorDbHandler(logging.Handler):
             return
         try:
             safe_record = copy.copy(record)
-            safe_record.msg = redact_secrets(record.getMessage())
+            message = record.getMessage()
+            if record.exc_info and record.exc_info[1] is not None:
+                exc = record.exc_info[1]
+                detail = str(exc)
+                message += f": {type(exc).__name__}" + (f": {detail}" if detail else "")
+            safe_record.msg = redact_secrets(message)
             safe_record.args = ()
+            safe_record.exc_info = None
+            safe_record.exc_text = None
             sink(safe_record)
         except Exception:  # noqa: BLE001, S110 - 错误日志落库失败不影响业务
             pass

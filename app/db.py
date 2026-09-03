@@ -888,6 +888,58 @@ CREATE TABLE IF NOT EXISTS feishu_registration_sessions (
 CREATE INDEX IF NOT EXISTS idx_frs_user ON feishu_registration_sessions(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_frs_status ON feishu_registration_sessions(status);
 
+-- 飞书云文档：共享 OAuth 凭据、一次性授权会话和可软删除的文档来源。
+CREATE TABLE IF NOT EXISTS feishu_document_oauth (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    access_token_ciphertext TEXT NOT NULL,
+    refresh_token_ciphertext TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    refresh_expires_at INTEGER NOT NULL DEFAULT 0,
+    scopes TEXT NOT NULL DEFAULT '',
+    open_id TEXT NOT NULL DEFAULT '',
+    tenant_key TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS feishu_document_oauth_sessions (
+    state_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    code_verifier_ciphertext TEXT NOT NULL DEFAULT '',
+    consumed_at INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_fdos_expires ON feishu_document_oauth_sessions(expires_at);
+CREATE TABLE IF NOT EXISTS feishu_document_sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_key_hash TEXT UNIQUE NOT NULL,
+    host TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    source_token TEXT NOT NULL,
+    canonical_url TEXT NOT NULL,
+    group_id TEXT UNIQUE NOT NULL,
+    media_id TEXT UNIQUE NOT NULL,
+    document_id TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    revision_id TEXT NOT NULL DEFAULT '',
+    content_hash TEXT NOT NULL DEFAULT '',
+    timeline_path TEXT NOT NULL DEFAULT '',
+    txt_path TEXT NOT NULL DEFAULT '',
+    asset_root TEXT NOT NULL DEFAULT '',
+    entry_count INTEGER NOT NULL DEFAULT 0,
+    published_record_json TEXT NOT NULL DEFAULT '',
+    published_state_json TEXT NOT NULL DEFAULT '',
+    display_mode TEXT NOT NULL DEFAULT 'timeline',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    sync_status TEXT NOT NULL DEFAULT 'pending',
+    last_checked_at TEXT NOT NULL DEFAULT '',
+    last_success_at TEXT NOT NULL DEFAULT '',
+    last_error TEXT NOT NULL DEFAULT '',
+    deleted_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_fds_active ON feishu_document_sources(enabled, deleted_at);
+
 CREATE TABLE IF NOT EXISTS webpush_subscriptions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -1366,6 +1418,14 @@ class DB:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_webpush_user ON webpush_subscriptions(user_id)"
         )
+        feishu_oauth_session_cols = {
+            row["name"] for row in self._rows("PRAGMA table_info(feishu_document_oauth_sessions)")
+        }
+        if "code_verifier_ciphertext" not in feishu_oauth_session_cols:
+            self._conn.execute(
+                "ALTER TABLE feishu_document_oauth_sessions ADD COLUMN "
+                "code_verifier_ciphertext TEXT NOT NULL DEFAULT ''"
+            )
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS ima_kb_acl ("
             "  group_id TEXT NOT NULL,"
@@ -1398,6 +1458,24 @@ class DB:
         )
         self._ensure_ima_document_tables()
         self._migrate_ima_document_index()
+        feishu_source_cols = {
+            row["name"] for row in self._rows("PRAGMA table_info(feishu_document_sources)")
+        }
+        if "published_record_json" not in feishu_source_cols:
+            self._conn.execute(
+                "ALTER TABLE feishu_document_sources ADD COLUMN "
+                "published_record_json TEXT NOT NULL DEFAULT ''"
+            )
+        if "published_state_json" not in feishu_source_cols:
+            self._conn.execute(
+                "ALTER TABLE feishu_document_sources ADD COLUMN "
+                "published_state_json TEXT NOT NULL DEFAULT ''"
+            )
+        if "display_mode" not in feishu_source_cols:
+            self._conn.execute(
+                "ALTER TABLE feishu_document_sources ADD COLUMN "
+                "display_mode TEXT NOT NULL DEFAULT 'timeline'"
+            )
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS user_keywords ("
             "  user_id INTEGER NOT NULL,"
@@ -2334,6 +2412,9 @@ class DB:
             return True, 0
 
     def ima_kb_can_subscribe(self, user_id: int, group_id: str) -> bool:
+        from .ima_kb import is_open_group
+        if is_open_group(group_id):
+            return True
         return bool(
             self._read_only_rows(
                 "SELECT 1 FROM ima_kb_acl WHERE group_id = ? AND user_id = ?",
@@ -5961,3 +6042,204 @@ class DB:
                 )
                 self._conn.commit()
                 return cursor.rowcount
+
+    # ---- 飞书文档 OAuth 与来源 ----
+    _FEISHU_DOCUMENT_SOURCE_COLUMNS = frozenset({
+        "document_id", "title", "revision_id", "content_hash", "timeline_path",
+        "txt_path", "asset_root", "entry_count", "published_record_json",
+        "published_state_json", "display_mode", "enabled", "sync_status",
+        "last_checked_at", "last_success_at", "last_error", "deleted_at",
+    })
+
+    def create_feishu_oauth_session(
+        self,
+        state_hash: str,
+        user_id: int,
+        expires_at: int,
+        code_verifier: str = "",
+    ) -> None:
+        verifier_ciphertext = self._encrypt_secret(code_verifier) if code_verifier else ""
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM feishu_document_oauth_sessions WHERE expires_at < ? OR consumed_at IS NOT NULL",
+                (int(time.time()),),
+            )
+            self._conn.execute(
+                "INSERT INTO feishu_document_oauth_sessions "
+                "(state_hash, user_id, expires_at, code_verifier_ciphertext) VALUES (?, ?, ?, ?)",
+                (state_hash, int(user_id), int(expires_at), verifier_ciphertext),
+            )
+            self._conn.commit()
+
+    def consume_feishu_oauth_session(self, state_hash: str, now: int) -> dict | None:
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                row = self._conn.execute(
+                    "SELECT * FROM feishu_document_oauth_sessions "
+                    "WHERE state_hash = ? AND consumed_at IS NULL AND expires_at >= ?",
+                    (state_hash, int(now)),
+                ).fetchone()
+                if row is None:
+                    self._conn.rollback()
+                    return None
+                self._conn.execute(
+                    "UPDATE feishu_document_oauth_sessions SET consumed_at = ? WHERE state_hash = ?",
+                    (int(now), state_hash),
+                )
+                self._conn.commit()
+                value = dict(row)
+                ciphertext = str(value.pop("code_verifier_ciphertext", "") or "")
+                value["code_verifier"] = (
+                    decrypt_stored_secret(ciphertext, self.credential_key)
+                    if ciphertext else ""
+                )
+                return value
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def save_feishu_oauth_credential(self, token: dict) -> None:
+        access = str(token.get("access_token") or "").strip()
+        refresh = str(token.get("refresh_token") or "").strip()
+        if not access or not refresh or not self.credential_key:
+            raise ValueError("飞书 OAuth 凭据不完整或未配置加密密钥")
+        now = int(time.time())
+        expires_at = now + int(token.get("expires_in") or 0)
+        refresh_expires_at = now + int(token.get("refresh_token_expires_in") or token.get("refresh_expires_in") or 0)
+        access_cipher = self._encrypt_secret(access)
+        refresh_cipher = self._encrypt_secret(refresh)
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO feishu_document_oauth "
+                "(id, access_token_ciphertext, refresh_token_ciphertext, expires_at, refresh_expires_at, scopes, open_id, tenant_key, updated_at) "
+                "VALUES (1, ?, ?, ?, ?, ?, ?, ?, datetime('now')) "
+                "ON CONFLICT(id) DO UPDATE SET access_token_ciphertext=excluded.access_token_ciphertext, "
+                "refresh_token_ciphertext=excluded.refresh_token_ciphertext, expires_at=excluded.expires_at, "
+                "refresh_expires_at=excluded.refresh_expires_at, scopes=excluded.scopes, open_id=excluded.open_id, "
+                "tenant_key=excluded.tenant_key, updated_at=datetime('now')",
+                (
+                    access_cipher,
+                    refresh_cipher,
+                    expires_at,
+                    refresh_expires_at,
+                    str(token.get("scope") or ""),
+                    str(token.get("open_id") or ""),
+                    str(token.get("tenant_key") or ""),
+                ),
+            )
+            self._conn.commit()
+
+    def get_feishu_oauth_credential(self, *, decrypt: bool = False) -> dict | None:
+        rows = self._read_only_rows("SELECT * FROM feishu_document_oauth WHERE id = 1")
+        if not rows:
+            return None
+        row = rows[0]
+        if decrypt:
+            row["access_token"] = decrypt_stored_secret(row.pop("access_token_ciphertext"), self.credential_key)
+            row["refresh_token"] = decrypt_stored_secret(row.pop("refresh_token_ciphertext"), self.credential_key)
+        else:
+            row.pop("access_token_ciphertext", None)
+            row.pop("refresh_token_ciphertext", None)
+        return row
+
+    # ---- 飞书文档应用配置（设置页可改，优先于环境变量） ----
+    _FEISHU_DOCS_PLAIN_KEYS = ("app_id", "redirect_uri", "scopes", "interval_seconds")
+
+    def set_feishu_docs_settings(self, values: dict) -> None:
+        secret = str(values.get("app_secret") or "").strip()
+        if secret:
+            if not self.credential_key:
+                raise ValueError("未配置 FEISHU_CREDENTIAL_KEY，无法保存应用密钥")
+            self.set_setting("feishu_docs_app_secret", self._encrypt_secret(secret))
+        for key in self._FEISHU_DOCS_PLAIN_KEYS:
+            if values.get(key) is not None:
+                self.set_setting(f"feishu_docs_{key}", str(values[key]))
+
+    def get_feishu_docs_settings(self) -> dict:
+        # 只读连接：同步线程每轮都会调用，不得抢占 DB._lock（与飞书来源读路径同一约定）
+        out: dict[str, str] = {}
+        for key in self._FEISHU_DOCS_PLAIN_KEYS:
+            rows = self._read_only_rows(
+                "SELECT value FROM settings WHERE key = ?", (f"feishu_docs_{key}",)
+            )
+            out[key] = str(rows[0]["value"]) if rows else ""
+        cipher_rows = self._read_only_rows(
+            "SELECT value FROM settings WHERE key = ?", ("feishu_docs_app_secret",)
+        )
+        cipher = str(cipher_rows[0]["value"]) if cipher_rows else ""
+        if cipher.startswith(SECRET_PREFIX):
+            out["app_secret"] = decrypt_stored_secret(cipher, self.credential_key)
+        else:
+            out["app_secret"] = cipher
+        return out
+
+    def upsert_feishu_document_source(self, parsed: dict[str, str]) -> dict:
+        key_hash = hashlib.sha256(parsed["source_key"].encode()).hexdigest()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO feishu_document_sources "
+                "(source_key_hash, host, source_type, source_token, canonical_url, group_id, media_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(source_key_hash) DO UPDATE SET "
+                "host=excluded.host, source_type=excluded.source_type, source_token=excluded.source_token, "
+                "canonical_url=excluded.canonical_url, enabled=1, deleted_at=NULL, sync_status='pending', "
+                "last_error='', updated_at=datetime('now')",
+                (
+                    key_hash, parsed["host"], parsed["source_type"], parsed["source_token"],
+                    parsed["canonical_url"], parsed["group_id"], parsed["media_id"],
+                ),
+            )
+            self._conn.commit()
+        row = self.get_feishu_document_source_by_hash(key_hash)
+        if row is None:
+            raise sqlite3.IntegrityError("飞书文档来源写入失败")
+        return row
+
+    def get_feishu_document_source_by_hash(self, source_key_hash: str) -> dict | None:
+        rows = self._read_only_rows("SELECT * FROM feishu_document_sources WHERE source_key_hash = ?", (source_key_hash,))
+        return rows[0] if rows else None
+
+    def get_feishu_document_source(self, source_id: int) -> dict | None:
+        rows = self._read_only_rows("SELECT * FROM feishu_document_sources WHERE id = ?", (int(source_id),))
+        return rows[0] if rows else None
+
+    def get_feishu_document_source_by_group(self, group_id: str) -> dict | None:
+        rows = self._read_only_rows("SELECT * FROM feishu_document_sources WHERE group_id = ?", (group_id,))
+        return rows[0] if rows else None
+
+    def list_feishu_document_sources(
+        self, *, active_only: bool = False, include_deleted: bool = False
+    ) -> list[dict]:
+        if active_only:
+            where = "WHERE enabled = 1 AND deleted_at IS NULL"
+        elif include_deleted:
+            where = ""
+        else:
+            where = "WHERE deleted_at IS NULL"
+        return self._read_only_rows(f"SELECT * FROM feishu_document_sources {where} ORDER BY id")
+
+    def update_feishu_document_source(self, source_id: int, **kwargs) -> None:
+        sets, params = [], []
+        for key, value in kwargs.items():
+            if key not in self._FEISHU_DOCUMENT_SOURCE_COLUMNS:
+                raise ValueError(f"非法飞书文档字段: {key}")
+            sets.append(f"{key} = ?")
+            params.append(_to_bool(value) if key == "enabled" else value)
+        if not sets:
+            return
+        sets.append("updated_at = datetime('now')")
+        params.append(int(source_id))
+        self._execute(f"UPDATE feishu_document_sources SET {', '.join(sets)} WHERE id = ?", params)
+
+    def publish_feishu_document_source(self, source_id: int, **kwargs) -> None:
+        values = dict(kwargs)
+        values.update({"sync_status": "succeeded", "last_error": "", "last_checked_at": kwargs.get("last_success_at") or ""})
+        self.update_feishu_document_source(source_id, **values)
+
+    def soft_delete_feishu_document_source(self, source_id: int) -> dict | None:
+        source = self.get_feishu_document_source(source_id)
+        if source is None:
+            return None
+        now = datetime.now(UTC).isoformat()
+        self.update_feishu_document_source(source_id, enabled=0, sync_status="disabled", deleted_at=now)
+        return source

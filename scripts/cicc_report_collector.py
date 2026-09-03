@@ -295,6 +295,14 @@ def target_path(root: Path, cat_name: str, publish_time: str, title: str, rid: i
     return root / LIB_SLUG / cat_name / day_dir(publish_time) / name
 
 
+def prepare_target_dir(path: Path, *, fix_owner: bool) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    if fix_owner:
+        for directory in (path.parent, path):
+            os.chown(directory, CHOWN_UID, CHOWN_GID)
+            os.chmod(directory, 0o750)
+
+
 def setup_library(root: Path, slug: str, name: str, *, fix_owner: bool) -> None:
     d = root / slug
     d.mkdir(parents=True, exist_ok=True)
@@ -779,10 +787,7 @@ def main() -> None:
                     payload = strip_watermark(fetch(sess, rid))  # 无损去水印，毫秒级
                     if args.compress:
                         payload = compress_pdf(payload)
-                    tp.parent.mkdir(parents=True, exist_ok=True)
-                    if fix_owner:
-                        os.chown(tp.parent, CHOWN_UID, CHOWN_GID)
-                        os.chmod(tp.parent, 0o750)
+                    prepare_target_dir(tp.parent, fix_owner=fix_owner)
                     tp.write_bytes(payload)
                     if fix_owner:
                         os.chown(tp, CHOWN_UID, CHOWN_GID)

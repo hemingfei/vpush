@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from app.cicc_collector import CiccControl, from_env
 from app.main import create_app
+from scripts import cicc_report_collector
 
 
 @pytest.fixture
@@ -102,6 +103,29 @@ def _admin_headers(client):
     data = resp.json()
     client.app.state.db.update_user(data["user"]["id"], is_admin=True)
     return {"Authorization": f"Bearer {data['token']}"}
+
+
+def test_prepare_target_dir_repairs_category_parent(monkeypatch, tmp_path):
+    target = tmp_path / "local" / "cicc-research" / "金融工程" / "0903"
+    target.parent.mkdir(parents=True)
+    target.parent.chmod(0o700)
+    chowns = []
+    monkeypatch.setattr(
+        cicc_report_collector.os,
+        "chown",
+        lambda path, uid, gid: chowns.append((Path(path), uid, gid)),
+    )
+
+    cicc_report_collector.prepare_target_dir(target, fix_owner=True)
+
+    assert target.is_dir()
+    assert chowns == [
+        (target.parent, cicc_report_collector.CHOWN_UID, cicc_report_collector.CHOWN_GID),
+        (target, cicc_report_collector.CHOWN_UID, cicc_report_collector.CHOWN_GID),
+    ]
+    assert target.parent.stat().st_mode & 0o777 == 0o750
+    assert target.stat().st_mode & 0o777 == 0o750
+
 
 
 def test_admin_cicc_api(tmp_path, monkeypatch):
