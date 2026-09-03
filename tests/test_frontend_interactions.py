@@ -1730,6 +1730,28 @@ def test_feishu_timeline_uses_windowed_pages_and_load_more_state():
     assert "来源切换失败" in source
 
 
+def test_feishu_timeline_source_selection_updates_pills_and_header():
+    src = APP_JS.read_text()
+    source = _fn_body("selectFeishuTimelineSource")
+    toolbar_update = _fn_body("updateFeishuTimelineToolbar")
+    header_update = _fn_body("updateFeishuTimelineHeader")
+    route_update = _fn_body("updateFeishuTimelineRoute")
+    load = _fn_body("loadFeishuTimeline")
+    view = _fn_body("renderFeishuTimelineView")
+
+    assert "updateFeishuTimelineToolbar()" in source
+    assert "updateFeishuTimelineHeader()" in source
+    assert "updateFeishuTimelineRoute()" in source
+    assert "updateFeishuTimelineToolbar()" in view
+    assert "updateFeishuTimelineHeader()" in view
+    assert "updateFeishuTimelineHeader()" in load
+    assert 'btn.classList.toggle("selected", on)' in toolbar_update
+    assert 'btn.setAttribute("aria-checked", on ? "true" : "false")' in toolbar_update
+    assert "titleEl.textContent = title" in header_update
+    assert "setPageTitle(title)" in header_update
+    assert "replaceImaDocumentsRoute(" in route_update
+
+
 def test_feishu_timeline_removes_unavailable_media_and_failed_image_shells():
     src = APP_JS.read_text()
     asset = _fn_body("feishuTimelineAssetHtml")
@@ -4073,8 +4095,8 @@ def test_static_asset_cache_bust_versions():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=285"' in html
-    assert 'src="/app.js?v=403"' in html
-    assert 'dav-shell-v264' in sw
+    assert 'src="/app.js?v=404"' in html
+    assert 'dav-shell-v265' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

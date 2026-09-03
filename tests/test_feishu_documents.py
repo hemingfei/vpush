@@ -584,6 +584,7 @@ def test_feishu_timeline_is_open_to_all_users(tmp_path, monkeypatch):
     timeline = client.get("/api/ima-documents/timeline/all", headers=user).json()
     assert timeline["entries"]
     assert timeline["entries"][0]["source"]["group_id"] == group_id
+    assert "canonical_url" in timeline["sources"][0]
     windowed = client.get(
         f"/api/ima-documents/timeline/all?window_days=7&group={group_id}",
         headers=user,

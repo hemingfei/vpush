@@ -1955,6 +1955,8 @@ function renderFeishuTimelineView() {
   const entries = raw.filter(feishuEntryHasContent);
   const fab = $("#feishu-latest-fab");
   if (fab) fab.textContent = "回到最新";
+  updateFeishuTimelineToolbar();
+  updateFeishuTimelineHeader();
   if (state.loading && !entries.length) {
     host.innerHTML = '<p class="ima-reader-status" role="status">正在载入时间线…</p>';
     renderFeishuTimelineDates([]);
@@ -2076,12 +2078,82 @@ async function selectFeishuTimelineSource(groupId) {
     hasMore: false,
     error: "",
   };
+  updateFeishuTimelineToolbar();
+  updateFeishuTimelineHeader();
+  updateFeishuTimelineRoute();
   const loaded = await loadFeishuTimelinePage(true);
   if (!loaded && routeStillActive(current.seq) && current.readerSeq === _imaReaderSeq && _feishuTimelineState?.selectedGroup === selectedGroup) {
     const message = _feishuTimelineState.error || "来源切换失败";
     _feishuTimelineState = current;
+    updateFeishuTimelineToolbar();
+    updateFeishuTimelineHeader();
+    updateFeishuTimelineRoute();
     renderFeishuTimelineView();
     flash(message, "error");
+  }
+}
+
+function updateFeishuTimelineToolbar() {
+  const host = $("#feishu-timeline-toolbar");
+  if (!host || !_feishuTimelineState) return;
+  const selected = String(_feishuTimelineState.selectedGroup || "");
+  const pills = host.querySelectorAll(".feishu-source-pills .tl-pill");
+  if (pills.length) {
+    pills.forEach((btn) => {
+      const on = String(btn.dataset.group || "") === selected;
+      btn.classList.toggle("selected", on);
+      btn.setAttribute("aria-checked", on ? "true" : "false");
+    });
+  } else {
+    renderFeishuTimelineToolbar();
+  }
+}
+
+function updateFeishuTimelineHeader() {
+  if (!_feishuTimelineState) return;
+  const { selectedGroup, data } = _feishuTimelineState;
+  const sources = data?.sources || [];
+  let title = "";
+  let sourceUrl = "";
+  if (selectedGroup) {
+    const matched = sources.find((s) => String(s.group_id || "") === selectedGroup);
+    title = feishuSourceDisplay(matched?.title || selectedGroup).label;
+    sourceUrl = matched?.canonical_url || "";
+  } else if (sources.length === 1) {
+    title = feishuSourceDisplay(sources[0]?.title || "").label;
+    sourceUrl = sources[0]?.canonical_url || "";
+  } else {
+    title = "全部时间线";
+  }
+  const titleEl = $(".ima-reader--feishu .ima-reader-title");
+  if (titleEl) titleEl.textContent = title;
+  setPageTitle(title);
+  const openLink = $(".ima-reader--feishu .ima-reader-actions a[data-feishu-canonical]");
+  if (openLink) {
+    if (sourceUrl) {
+      openLink.href = sourceUrl;
+      openLink.removeAttribute("hidden");
+    } else {
+      openLink.setAttribute("hidden", "");
+    }
+  }
+}
+
+function updateFeishuTimelineRoute() {
+  if (!_feishuTimelineState) return;
+  const { selectedGroup, data, mediaId } = _feishuTimelineState;
+  const sources = data?.sources || [];
+  if (selectedGroup) {
+    const matched = sources.find((s) => String(s.group_id || "") === selectedGroup);
+    const targetMediaId = matched?.media_id || mediaId;
+    if (targetMediaId) {
+      replaceImaDocumentsRoute(imaDocumentReaderRoute(targetMediaId, selectedGroup));
+    }
+  } else {
+    const targetMediaId = mediaId || sources[0]?.media_id;
+    if (targetMediaId) {
+      replaceImaDocumentsRoute(imaDocumentReaderRoute(targetMediaId, ""));
+    }
   }
 }
 
@@ -2157,8 +2229,10 @@ async function downloadFeishuTimelineAsset(button) {
 }
 
 async function loadFeishuTimeline(item, seq, readerSeq) {
-  const selectedGroup = item.group_id || "";
+  const query = routeQuery();
+  const selectedGroup = query.has("doc_group") ? (query.get("doc_group") || "") : (item.group_id || "");
   const requestState = {
+    mediaId: item.media_id || "",
     selectedGroup,
     order: "latest",
     seq,
@@ -2179,6 +2253,7 @@ async function loadFeishuTimeline(item, seq, readerSeq) {
   if (!panel) return;
   panel.innerHTML = `<div class="feishu-timeline-layout"><main id="feishu-timeline-body" class="feishu-timeline-body"></main><nav id="feishu-date-nav" class="feishu-date-nav" aria-label="日期目录"></nav></div><button type="button" id="feishu-latest-fab" class="feishu-latest-fab" onclick="jumpFeishuTimelineLatest()">回到最新</button>`;
   renderFeishuTimelineToolbar();
+  updateFeishuTimelineHeader();
   const body = $("#feishu-timeline-body");
   if (body) body.onscroll = () => toggleFeishuLatestFab();
   renderFeishuTimelineView();
@@ -2366,8 +2441,8 @@ async function renderImaDocument(seq, mediaId) {
     const listSnapshot = _imaListSnapshot && _imaListSnapshot.route === normalizeRoute(backRoute) ? _imaListSnapshot : null;
     const standalonePwa = isStandalonePwa();
     const openLabel = standalonePwa ? "打开 PDF" : "新标签打开 PDF";
-    const openNewTab = isFeishuTimeline && item.source_url
-      ? `<a class="icon-btn" href="${escapeHtml(item.source_url)}" target="_blank" rel="noopener" aria-label="打开飞书原文" title="打开飞书原文">${EXTERNAL_LINK_ICON}</a>`
+    const openNewTab = isFeishuTimeline
+      ? `<a class="icon-btn" data-feishu-canonical="1" href="${escapeHtml(item.source_url || "")}" ${item.source_url ? "" : "hidden"} target="_blank" rel="noopener" aria-label="打开飞书原文" title="打开飞书原文">${EXTERNAL_LINK_ICON}</a>`
       : item.has_pdf
         ? `<button type="button" class="icon-btn" aria-label="${openLabel}" title="${openLabel}" onclick="openImaPdfNewTab()">${EXTERNAL_LINK_ICON}</button>`
         : "";

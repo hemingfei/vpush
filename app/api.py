@@ -3388,6 +3388,7 @@ def create_api_router(
                 "group_id": source["group_id"],
                 "media_id": source["media_id"],
                 "title": source.get("title") or "飞书文档",
+                "canonical_url": source.get("canonical_url") or "",
                 "revision_id": source.get("revision_id") or "",
                 "last_success_at": source.get("last_success_at") or "",
             }
