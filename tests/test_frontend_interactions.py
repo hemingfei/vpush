@@ -1666,6 +1666,28 @@ def test_feishu_source_avatar_files_are_small_static_pngs():
     assert shiye.stat().st_size < 80_000
 
 
+def test_feishu_timeline_toolbar_uses_source_avatar_pills():
+    src = APP_JS.read_text()
+    css = STYLE_CSS.read_text()
+    toolbar = _fn_body("feishuTimelineToolbarHtml")
+    pills = _fn_body("feishuSourcePillsHtml")
+    select_src = _fn_body("selectFeishuTimelineSource")
+    item = _fn_body("feishuLiveItemHtml")
+    assert "function feishuSourcePillsHtml" in src
+    assert "feishuSourcePillsHtml(" in toolbar
+    assert 'aria-label="来源"' in pills
+    assert "feishu-source-avatar" in pills
+    assert "selectFeishuTimelineSource(this.dataset.group)" in pills
+    assert "全部来源" not in toolbar
+    assert 'select aria-label="来源"' not in toolbar
+    assert 'id="feishu-date-select"' in toolbar
+    assert "select[aria-label=" not in select_src
+    assert "class=\"live-item\"" in item
+    assert "feishu-source-avatar" not in item
+    assert ".feishu-source-avatar" in css
+    assert "border-radius: 50%" in css
+
+
 def test_feishu_timeline_uses_windowed_pages_and_load_more_state():
     src = APP_JS.read_text()
     load = _fn_body("loadFeishuTimeline")
@@ -1734,7 +1756,8 @@ def test_feishu_timeline_reader_interaction_batch():
     assert ">原文顺序</button>" not in toolbar
     assert "function switchFeishuTimelineMode" not in src
     assert "function changeFeishuTimelineOrder" not in src
-    assert "showSourceSelect = sources.length > 1" in toolbar
+    assert "feishuSourcePillsHtml(" in toolbar
+    assert 'select aria-label="来源"' not in toolbar
     reader = _fn_body("renderImaDocument")
     assert "ima-reader--feishu" in reader
     assert 'id="feishu-timeline-toolbar"' in reader

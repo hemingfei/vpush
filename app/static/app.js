@@ -2030,8 +2030,6 @@ async function selectFeishuTimelineSource(groupId) {
   if (!loaded && routeStillActive(current.seq) && current.readerSeq === _imaReaderSeq && _feishuTimelineState?.selectedGroup === selectedGroup) {
     const message = _feishuTimelineState.error || "来源切换失败";
     _feishuTimelineState = current;
-    const select = document.querySelector('.feishu-timeline-toolbar select[aria-label="来源"]');
-    if (select?.isConnected) select.value = current.selectedGroup;
     renderFeishuTimelineView();
     flash(message, "error");
   }
@@ -2137,14 +2135,25 @@ async function loadFeishuTimeline(item, seq, readerSeq) {
   _feishuTimelineTimer = setTimeout(() => checkFeishuTimelineUpdate(item.media_id, item.group_id, _feishuTimelineState.baseline, seq, readerSeq), 60000);
 }
 
+function feishuSourcePillsHtml(sources, selectedGroup) {
+  const selected = String(selectedGroup || "");
+  const items = sources.length > 1 ? [{ group_id: "", title: "全部" }, ...sources] : sources;
+  if (!items.length) return "";
+  return `<div class="tl-pills feishu-source-pills" role="radiogroup" aria-label="来源">${items.map((source) => {
+    const id = String(source.group_id || "");
+    const display = feishuSourceDisplay(source.title);
+    const on = id === selected;
+    const img = display.avatar ? `<img class="feishu-source-avatar" src="${escapeHtml(display.avatar)}" alt="">` : "";
+    return `<button type="button" class="tl-pill${on ? " selected" : ""}" role="radio" aria-checked="${on}" data-group="${escapeHtml(id)}" aria-label="${escapeHtml(display.label)}" onclick="selectFeishuTimelineSource(this.dataset.group)">${img}<span>${escapeHtml(display.label)}</span></button>`;
+  }).join("")}</div>`;
+}
+
 function feishuTimelineToolbarHtml() {
   const state = _feishuTimelineState || {};
   const selectedGroup = state.selectedGroup || "";
   const sources = state.data?.sources || [];
-  const showSourceSelect = sources.length > 1;
-  const sourceOptions = [{ group_id: "", title: "全部来源" }, ...sources];
   return `
-    ${showSourceSelect ? `<label><span class="sr-only">来源</span><select aria-label="来源" onchange="selectFeishuTimelineSource(this.value)">${sourceOptions.map((source) => `<option value="${escapeHtml(source.group_id)}"${source.group_id === selectedGroup ? " selected" : ""}>${escapeHtml(source.title)}</option>`).join("")}</select></label>` : ""}
+    ${feishuSourcePillsHtml(sources, selectedGroup)}
     <select id="feishu-date-select" class="feishu-date-select" aria-label="跳到日期" onchange="jumpFeishuTimelineDay(this.value)"></select>`;
 }
 
