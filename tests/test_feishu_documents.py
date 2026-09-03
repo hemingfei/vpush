@@ -19,6 +19,29 @@ from app.feishu_documents import (
 from app.ima_documents import ImaDocumentService
 
 
+def test_feishu_timeline_disk_cache_returns_same_object_and_invalidates_on_mtime(tmp_path):
+    import os
+
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    target = archive / "timeline.json"
+    target.write_text(json.dumps({"entries": [{"id": "a"}]}, ensure_ascii=False), encoding="utf-8")
+    _db, _ima, service = _service(tmp_path, FakeFeishuClient())
+    service.archive_root = archive
+    source = {"timeline_path": "timeline.json"}
+    try:
+        first = service.timeline(source)
+        assert service.timeline(source) is first  # mtime 未变：命中缓存
+        target.write_text(json.dumps({"entries": [{"id": "b"}]}, ensure_ascii=False), encoding="utf-8")
+        bumped = time.time() + 5
+        os.utime(target, (bumped, bumped))
+        second = service.timeline(source)
+        assert second is not first
+        assert second["entries"] == [{"id": "b"}]
+    finally:
+        service._timeline_cache.pop("timeline.json", None)
+
+
 def test_parse_feishu_document_url_normalizes_and_rejects_untrusted_hosts():
     parsed = parse_feishu_document_url(
         "https://hcn3wbq9qksp.feishu.cn/docx/NXbndzo1wowuQFxtH3ec5U3snOd?from=from_copylink"

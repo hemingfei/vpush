@@ -864,6 +864,9 @@ class FeishuDocumentSyncService:
             "entry_count": len(timeline.get("entries") or []),
         }
 
+    # ponytail: in-process parsed-JSON cache keyed by timeline_path+mtime; timelines only change on new doc version (new path/mtime), no TTL needed
+    _timeline_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
     def timeline(self, source: dict[str, Any]) -> dict[str, Any]:
         raw = str(source.get("timeline_path") or "")
         if not raw:
@@ -872,9 +875,16 @@ class FeishuDocumentSyncService:
         root = self.archive_root.resolve()
         if not path.is_relative_to(root) or not path.is_file():
             raise FileNotFoundError
+        mtime = path.stat().st_mtime
+        cached = self._timeline_cache.get(raw)
+        if cached and cached[0] == mtime:
+            return cached[1]
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             raise ValueError("invalid timeline")
+        if len(self._timeline_cache) > 32:
+            self._timeline_cache.clear()
+        self._timeline_cache[raw] = (mtime, data)
         return data
 
     def asset(self, source: dict[str, Any], asset_id: str) -> Path:
