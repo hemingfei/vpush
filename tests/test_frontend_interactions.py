@@ -1682,6 +1682,11 @@ def test_feishu_timeline_toolbar_uses_source_avatar_pills():
     assert "全部来源" not in toolbar
     assert 'select aria-label="来源"' not in toolbar
     assert 'id="feishu-date-select"' in toolbar
+    assert "has-avatar" in pills
+    assert "feishu-date-badge" in toolbar
+    assert "FEISHU_DATE_ICON" in toolbar
+    assert ".feishu-source-pills .tl-pill.has-avatar span { display: none; }" in css
+    assert ".feishu-date-badge" in css
     assert "select[aria-label=" not in select_src
     assert "class=\"live-item\"" in item
     assert "feishu-source-avatar" not in item
@@ -3998,8 +4003,8 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=283"' in html
-    assert 'src="/app.js?v=401"' in html
+    assert 'href="/style.css?v=284"' in html
+    assert 'src="/app.js?v=402"' in html
     assert 'dav-shell-v263' in sw
 
 

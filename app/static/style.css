@@ -3249,6 +3249,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   object-fit: cover;
   flex-shrink: 0;
 }
+.feishu-date-badge { display: none; position: relative; }
 .feishu-timeline-toolbar select { min-height: 40px; max-width: 220px; border: var(--border-strong); border-radius: var(--radius-control); padding: 0 30px 0 10px; background: var(--color-surface); color: var(--color-text); font: inherit; font-size: var(--text-sm); }
 .feishu-timeline-toolbar .feishu-display-segment { flex: 0 0 auto; }
 .feishu-date-select { display: none; }
@@ -3455,7 +3456,43 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   .feishu-timeline-toolbar label { flex: 1 1 130px; min-width: 0; }
   .feishu-timeline-toolbar select { width: auto; max-width: 160px; min-width: 0; min-height: 44px; }
   .feishu-timeline-toolbar .feishu-display-segment { flex: 1 1 auto; }
-  .feishu-date-select { display: block; flex: 0 1 140px; }
+  .feishu-source-pills .tl-pill.has-avatar {
+    width: 44px;
+    min-width: 44px;
+    padding: 0;
+    border-radius: 50%;
+  }
+  .feishu-source-pills .tl-pill.has-avatar span { display: none; }
+  .feishu-source-pills .tl-pill.has-avatar .feishu-source-avatar { width: 28px; height: 28px; }
+  .feishu-timeline-toolbar label.feishu-date-badge {
+    display: inline-flex;
+    flex: 0 0 44px;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    border: var(--border-strong);
+    border-radius: 50%;
+    background: var(--color-surface);
+    color: var(--color-text-strong);
+  }
+  .feishu-date-badge .feishu-date-ic { width: 20px; height: 20px; }
+  .feishu-date-badge .feishu-date-select {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-height: 0;
+    max-width: none;
+    opacity: 0;
+    font-size: 16px;
+    cursor: pointer;
+  }
   .feishu-timeline-layout { grid-template-columns: minmax(0, 1fr); }
   .feishu-date-nav { display: none; }
   .feishu-timeline-panel { --feishu-time-rail: 48px; --feishu-track-gap: 16px; --feishu-entry-pad: 18px; }
