@@ -1456,8 +1456,8 @@ function knowledgeSourceControlsHtml(selectedGroup = "") {
   }));
   const pillsHtml = `<div class="kb-source-pills-desk">${feishuSourcePillsHtml(sources, selectedGroup, "selectImaDocumentGroup")}</div>`;
   const mobileOptions = [
-    `<option value="" ${!selectedGroup ? "selected" : ""}>📚 全部研报库</option>`,
-    ...sources.map((s) => `<option value="${escapeHtml(s.group_id)}" ${s.group_id === selectedGroup ? "selected" : ""}>📚 ${escapeHtml(s.title)}</option>`)
+    `<option value="" ${!selectedGroup ? "selected" : ""}>全部研报库</option>`,
+    ...sources.map((s) => `<option value="${escapeHtml(s.group_id)}" ${s.group_id === selectedGroup ? "selected" : ""}>${escapeHtml(s.title)}</option>`)
   ].join("");
   const mobileSelectHtml = `<div class="kb-source-select-wrap"><select class="kb-source-select-mobile" aria-label="切换研报库" onchange="selectImaDocumentGroup(this.value)">${mobileOptions}</select></div>`;
   return `<div class="ima-report-source">${pillsHtml}${mobileSelectHtml}</div>`;
