@@ -1917,14 +1917,20 @@ function feishuSourceDisplay(title) {
   return FEISHU_SOURCE_DISPLAY[raw] || { label: raw, avatar: "" };
 }
 
+function feishuSpeakerAvatarHtml(name) {
+  const display = feishuSourceDisplay(name);
+  if (display.avatar) return `<img class="feishu-speaker-avatar" src="${escapeHtml(display.avatar)}" alt="" loading="lazy">`;
+  // ponytail: 未建映射的新发言人掉回首字色块，不断档
+  return `<span class="feishu-speaker-avatar feishu-speaker-fallback" aria-hidden="true">${escapeHtml(display.label.slice(0, 1))}</span>`;
+}
+
 function feishuLiveItemHtml(entry, showSource) {
   const source = entry.source || {};
   const author = feishuEntryAuthor(entry);
   const sourceLabel = showSource && source.title ? `<div class="feishu-live-source">${escapeHtml(feishuSourceDisplay(source.title).label)}</div>` : "";
-  const speaker = author ? `<div class="feishu-live-speaker">${escapeHtml(author)}</div>` : "";
+  const speaker = author ? `<div class="feishu-live-speaker">${feishuSpeakerAvatarHtml(author)}<strong>${escapeHtml(feishuSourceDisplay(author).label)}</strong><time datetime="${escapeHtml(entry.timestamp || "")}">${escapeHtml(entry.time || "")}</time></div>` : "";
   const blocks = (entry.blocks || []).filter(feishuBlockHasContent).map((block) => feishuTimelineBlockHtml(block, source.media_id || "", source.group_id || "", !author)).join("");
   return `<article class="live-item" data-entry-id="${escapeHtml(entry.id || "")}">
-    <time class="live-time" datetime="${escapeHtml(entry.timestamp || "")}">${escapeHtml(entry.time || "")}</time>
     <div class="live-main">${speaker}${sourceLabel}<div class="live-body">${blocks}</div></div>
   </article>`;
 }

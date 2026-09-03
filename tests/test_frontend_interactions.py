@@ -1773,16 +1773,18 @@ def test_feishu_timeline_uses_live_feed_layout():
     item = _fn_body("feishuLiveItemHtml")
 
     assert "class=\"live-item\"" in item
-    assert "class=\"live-time\"" in item
     assert "class=\"live-body\"" in item
+    assert "feishu-live-speaker" in item
+    assert "feishu-speaker-avatar" in _fn_body("feishuSpeakerAvatarHtml")
+    assert "<time" in item
     assert "tl-group live-group" in entries
     assert "feishuEntryHasContent" in entries
     assert "收起" in _fn_body("feishuBlockHasContent")
     assert "日无更新" in _fn_body("feishuBlockHasContent")
-    assert "flex-basis: 56px" in src
     assert ".live-item" in src
-    assert ".live-time" in src
     assert ".live-body" in src
+    assert ".feishu-live-speaker" in src
+    assert ".feishu-speaker-avatar" in src
     assert ".tl-group-head" in src
 
 
