@@ -7533,8 +7533,9 @@ function feishuSourceRowsHtml(data) {
     const openLine = readable
       ? `<p class="feishu-source-open">全员可读，无需单独授权</p>`
       : `<p class="feishu-source-open is-blocked">同步成功后全员可读，当前暂无可读内容</p>`;
+    const shownTitle = source.display_name || source.title;
     return `<article class="feishu-source-row" data-source-id="${source.id}">
-      <div class="feishu-source-copy"><div class="feishu-source-title"><strong>${escapeHtml(source.title)}</strong><span class="feishu-source-state" data-status="${escapeHtml(source.sync_status)}">${escapeHtml(feishuSourceStatusLabel(source))}</span></div><p>${escapeHtml(detail)}</p>${error}</div>
+      <div class="feishu-source-copy"><div class="feishu-source-title"><strong>${escapeHtml(shownTitle)}</strong><button type="button" class="feishu-title-rename" onclick="renameFeishuDocumentSource(this.closest('[data-source-id]').dataset.sourceId,'${escapeHtml(shownTitle)}')" aria-label="修改展示名">改名</button><span class="feishu-source-state" data-status="${escapeHtml(source.sync_status)}">${escapeHtml(feishuSourceStatusLabel(source))}</span></div><p>${escapeHtml(detail)}</p>${error}</div>
       <label class="feishu-source-toggle"><span>启用</span><input type="checkbox" ${source.enabled ? "checked" : ""} onchange="toggleFeishuDocumentSource(this.closest('[data-source-id]').dataset.sourceId,this.checked,this)"></label>
       <div class="feishu-source-actions">
         <span class="feishu-display-label">展示方式</span>
@@ -7580,6 +7581,23 @@ function feishuDocsConfigHtml(data) {
       <button type="button" class="btn-normal" id="feishu-cfg-save" onclick="saveFeishuDocsConfig()">保存设置</button>
     </div>
   </div>`;
+}
+
+async function renameFeishuDocumentSource(id, current) {
+  const name = prompt("新的展示名（留空则恢复飞书标题）：", current || "");
+  if (name === null) return;
+  const value = name.trim();
+  if (value.length > 200) {
+    flash("展示名过长（≤200 字）", "error");
+    return;
+  }
+  try {
+    await api(`/api/admin/feishu-documents/${id}`, { method: "PATCH", body: JSON.stringify({ display_name: value }) });
+    flash(value ? "展示名已更新，知识库内容将随之刷新" : "已恢复飞书标题，知识库内容将随之刷新");
+    await loadFeishuDocumentSources();
+  } catch (err) {
+    flash(err.message || "保存失败", "error");
+  }
 }
 
 async function saveFeishuDocsConfig() {

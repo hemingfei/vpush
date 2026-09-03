@@ -620,6 +620,7 @@ class FeishuDocumentConfigIn(BaseModel):
 class FeishuDocumentSourceUpdateIn(BaseModel):
     enabled: bool | None = None
     display_mode: str | None = None
+    display_name: str | None = None
 
 
 class FeishuDocumentOauthCallbackIn(BaseModel):
@@ -3353,7 +3354,7 @@ def create_api_router(
                 "id": source["id"],
                 "group_id": source["group_id"],
                 "media_id": source["media_id"],
-                "title": source.get("title") or document["name"],
+                "title": source.get("display_name") or source.get("title") or document["name"],
                 "canonical_url": source["canonical_url"],
                 "revision_id": source.get("revision_id") or "",
                 "last_success_at": source.get("last_success_at") or "",
@@ -3387,7 +3388,7 @@ def create_api_router(
                 "id": source["id"],
                 "group_id": source["group_id"],
                 "media_id": source["media_id"],
-                "title": source.get("title") or "飞书文档",
+                "title": source.get("display_name") or source.get("title") or "飞书文档",
                 "canonical_url": source.get("canonical_url") or "",
                 "revision_id": source.get("revision_id") or "",
                 "last_success_at": source.get("last_success_at") or "",
@@ -3507,6 +3508,7 @@ def create_api_router(
             "group_id": source["group_id"],
             "media_id": source["media_id"],
             "title": source.get("title") or "待首次同步",
+            "display_name": source.get("display_name") or "",
             "revision_id": source.get("revision_id") or "",
             "entry_count": int(source.get("entry_count") or 0),
             "enabled": bool(source.get("enabled")),
@@ -3717,13 +3719,18 @@ def create_api_router(
         source = db.get_feishu_document_source(source_id)
         if source is None or source.get("deleted_at"):
             raise HTTPException(status_code=404, detail="飞书文档来源不存在")
-        if body.enabled is None and body.display_mode is None:
+        if body.enabled is None and body.display_mode is None and body.display_name is None:
             raise HTTPException(status_code=400, detail="没有要更新的字段")
         if body.display_mode is not None and body.display_mode not in {"timeline", "document"}:
             raise HTTPException(status_code=400, detail="展示方式必须是 timeline 或 document")
         updates: dict[str, Any] = {}
         if body.display_mode is not None:
             updates["display_mode"] = body.display_mode
+        if body.display_name is not None:
+            name = body.display_name.strip()
+            if len(name) > 200:
+                raise HTTPException(status_code=400, detail="展示名过长（≤200 字）")
+            updates["display_name"] = name
         if body.enabled is not None:
             updates.update(enabled=body.enabled, sync_status="pending" if body.enabled else "disabled", last_error="")
         db.update_feishu_document_source(source_id, **updates)
@@ -3732,6 +3739,14 @@ def create_api_router(
         elif body.enabled is False:
             ima_documents.remove_external_document(source["group_id"], source["media_id"])
         updated = db.get_feishu_document_source(source_id)
+        if (
+            "display_name" in updates
+            and updates["display_name"] != str(source.get("display_name") or "")
+            and body.enabled is not False
+            and source.get("txt_path")
+        ):
+            # ponytail: 与周期同步线程无锁并发，窗口极小且同步本身也会带新展示名重发
+            background_tasks.add_task(service.republish_from_archive, source_id)
         _audit(admin, "update_feishu_document_source", str(source_id), json.dumps({k: v for k, v in updates.items()}, ensure_ascii=False))
         return _public_feishu_source(updated)
 

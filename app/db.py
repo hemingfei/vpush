@@ -1286,6 +1286,11 @@ class DB:
                 "ALTER TABLE feishu_document_sources ADD COLUMN "
                 "display_mode TEXT NOT NULL DEFAULT 'timeline'"
             )
+        if "display_name" not in feishu_source_cols:
+            self._conn.execute(
+                "ALTER TABLE feishu_document_sources ADD COLUMN "
+                "display_name TEXT NOT NULL DEFAULT ''"
+            )
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS user_keywords ("
             "  user_id INTEGER NOT NULL,"
@@ -5467,7 +5472,7 @@ class DB:
     _FEISHU_DOCUMENT_SOURCE_COLUMNS = frozenset({
         "document_id", "title", "revision_id", "content_hash", "timeline_path",
         "txt_path", "asset_root", "entry_count", "published_record_json",
-        "published_state_json", "display_mode", "enabled", "sync_status",
+        "published_state_json", "display_mode", "display_name", "enabled", "sync_status",
         "last_checked_at", "last_success_at", "last_error", "deleted_at",
     })
 

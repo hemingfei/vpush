@@ -3784,6 +3784,8 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .feishu-source-copy { min-width: 0; }
 .feishu-source-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 28px; }
 .feishu-source-title strong { min-width: 0; overflow: hidden; color: var(--color-text-strong); font-size: var(--text-body); text-overflow: ellipsis; white-space: nowrap; }
+.feishu-title-rename { flex: 0 0 auto; border: none; background: none; color: var(--color-text-muted); font: inherit; font-size: var(--text-xs); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.feishu-title-rename:hover { color: var(--color-text-strong); }
 .feishu-source-state { min-height: 22px; padding: 2px 8px; border-radius: var(--radius-pill); background: var(--color-surface-soft); color: var(--color-text-muted); font-size: var(--text-xs); font-weight: var(--font-weight-medium); }
 .feishu-source-state[data-status="succeeded"] { color: var(--color-success); }
 .feishu-source-state[data-status="failed"],

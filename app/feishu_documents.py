@@ -235,6 +235,15 @@ def normalize_timeline(blocks: list[dict[str, Any]]) -> dict[str, Any]:
     return {"notices": notices, "entries": entries}
 
 
+def source_display_title(source: dict[str, Any], fallback: str = "飞书文档") -> str:
+    """展示名优先：管理员自定义 display_name > 飞书标题 > fallback。"""
+    return (
+        str(source.get("display_name") or "").strip()
+        or str(source.get("title") or "").strip()
+        or fallback
+    )
+
+
 def timeline_plain_text(title: str, timeline: dict[str, Any]) -> str:
     lines = [str(title or "").strip()]
     for item in timeline.get("notices") or []:
@@ -720,7 +729,7 @@ class FeishuDocumentSyncService:
         plain = path.read_text(encoding="utf-8")
         group, record, state_item = self._publication_payload(
             source,
-            str(source.get("title") or meta["title"]),
+            source_display_title(source, str(meta.get("title") or "飞书文档")),
             timeline,
             plain,
             txt_path,
@@ -732,6 +741,20 @@ class FeishuDocumentSyncService:
         ):
             raise FeishuDocumentError("飞书文档读模型恢复失败")
 
+    def republish_from_archive(self, source_id: int) -> None:
+        """管理员改展示名后从归档重建读模型（不重新抓取飞书）。"""
+        source = self.db.get_feishu_document_source(int(source_id))
+        if source is None or source.get("deleted_at") or not source.get("txt_path"):
+            return
+        self._republish_archived(
+            source,
+            {
+                "document_id": str(source.get("document_id") or ""),
+                "title": str(source.get("title") or "飞书文档"),
+                "revision_id": str(source.get("revision_id") or ""),
+            },
+        )
+
     def _rollback_read_model(self, source: dict[str, Any]) -> None:
         if self.ima_documents is None:
             return
@@ -741,7 +764,7 @@ class FeishuDocumentSyncService:
             if isinstance(record, dict) and isinstance(state_item, dict):
                 group = ImaGroupConfig(
                     id=str(source["group_id"]),
-                    name=str(source.get("title") or "飞书文档"),
+                    name=source_display_title(source),
                     knowledge_base_id="",
                     root_folder_id="",
                 )
@@ -833,7 +856,7 @@ class FeishuDocumentSyncService:
         timeline_path = str(rel / "timeline.json")
         txt_path = str(rel / "content.txt")
         group, record, state_item = self._publication_payload(
-            source, meta["title"], timeline, plain, txt_path, now
+            source, source_display_title(source, str(meta["title"])), timeline, plain, txt_path, now
         )
         self.ima_documents.publish_external_document(group, record, state_item)
         if not self.ima_documents.external_document_current(

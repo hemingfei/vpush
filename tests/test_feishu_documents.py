@@ -720,3 +720,55 @@ def test_feishu_source_display_mode_patch_and_detail(tmp_path, monkeypatch):
         json={"display_mode": "poster"},
     ).status_code == 400
     service.stop()
+
+
+def test_feishu_display_name_rename_updates_timeline_and_republish(tmp_path, monkeypatch):
+    client, service, admin, user = _feishu_api(tmp_path, monkeypatch)
+    client.app.state.db.save_feishu_oauth_credential({
+        "access_token": "access", "refresh_token": "refresh",
+        "expires_in": 3600, "refresh_token_expires_in": 7200,
+    })
+    added = client.post(
+        "/api/admin/feishu-documents", headers=admin,
+        json={"url": "https://a.feishu.cn/docx/NXbndzo1wowuQFxtH3ec5U3snOd"},
+    ).json()
+    source = client.app.state.db.get_feishu_document_source(added["id"])
+    service.sync_source(source["id"], True)
+
+    renamed = client.patch(
+        f"/api/admin/feishu-documents/{source['id']}", headers=admin,
+        json={"display_name": "  神非档案  "},
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["display_name"] == "神非档案"
+    assert renamed.json()["title"] == "测试时间线"  # 原标题不动
+
+    # 时间线接口（普通用户）展示名优先
+    timeline = client.get("/api/ima-documents/timeline/all", headers=user).json()
+    assert timeline["sources"][0]["title"] == "神非档案"
+
+    # 读模型（知识库记录）同步改名
+    record = client.get(
+        f"/api/ima-documents/{source['media_id']}?group={source['group_id']}", headers=user
+    ).json()
+    assert record["name"] == "神非档案"
+
+    # 研报库目录（订阅列表/筛选器）组名同步改名
+    catalog = client.get("/api/ima-documents/catalog", headers=user).json()
+    group_item = next(i for i in catalog["subscribed"] if i["id"] == source["group_id"])
+    assert group_item["name"] == "神非档案"
+
+    # 置空 = 恢复飞书标题
+    reset = client.patch(
+        f"/api/admin/feishu-documents/{source['id']}", headers=admin,
+        json={"display_name": ""},
+    )
+    assert reset.status_code == 200
+    timeline2 = client.get("/api/ima-documents/timeline/all", headers=user).json()
+    assert timeline2["sources"][0]["title"] == "测试时间线"
+
+    assert client.patch(
+        f"/api/admin/feishu-documents/{source['id']}", headers=admin,
+        json={"display_name": "x" * 201},
+    ).status_code == 400
+    service.stop()
