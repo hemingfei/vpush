@@ -3717,6 +3717,20 @@ def test_ima_report_header_responsive_source_and_search_clear():
     assert head.index("</form>") < head.index('id="ima-doc-day-nav-slot"')
 
 
+def test_ima_report_responsive_controls_css():
+    css = STYLE_CSS.read_text()
+    assert ".kb-source-pills-desk" in css
+    assert ".kb-source-select-mobile" in css
+    assert ".ima-search-clear" in css
+    # Desktop hides mobile select
+    assert re.search(r"\.kb-source-select-wrap\s*\{[^}]*display:\s*none", css) or re.search(r"\.kb-source-select-mobile\s*\{[^}]*display:\s*none", css)
+    # Mobile breakpoint switches pills to none and shows select
+    mobile_part = css[css.rfind("@media (max-width: 768px)"):]
+    assert ".kb-source-pills-desk" in mobile_part
+    assert "display: none" in mobile_part
+    assert ".kb-source-select-mobile" in mobile_part or ".kb-source-select-wrap" in mobile_part
+
+
 def test_knowledge_desk_defaults_to_latest_stream():
     """无日期时拉最新流并分页，不把 URL 写成某一天。"""
     render = _fn_body("renderImaDocuments")
