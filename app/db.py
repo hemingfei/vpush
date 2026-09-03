@@ -1311,6 +1311,23 @@ class DB:
                 self._conn.execute(
                     "UPDATE posts SET content = ? WHERE id = ?", (cleaned, row["id"])
                 )
+        # 知识星球帖的 published_at 曾存带毫秒+时区的 ISO 串（2026-09-03T15:48:42.756+0800），
+        # 与其余帖子「北京时间裸字符串」的约定不一致：字符串排序会把星球帖顶到同日最前，
+        # 展示也带 T/毫秒。统一换算成北京时间裸字符串；按「日期+T」特征筛选保持幂等，
+        # 换算后为空格分隔不再命中
+        from .fetchers.base import parse_published_at
+
+        for row in self._rows(
+            "SELECT id, published_at FROM posts WHERE published_at LIKE '____-__-__T%'"
+        ):
+            dt = parse_published_at(row["published_at"])
+            if dt is None:
+                continue
+            formatted = dt.strftime("%Y-%m-%d %H:%M:%S")
+            if formatted != row["published_at"]:
+                self._conn.execute(
+                    "UPDATE posts SET published_at = ? WHERE id = ?", (formatted, row["id"])
+                )
         user_cols = {row["name"] for row in self._rows("PRAGMA table_info(users)")}
         if "wechat_openid" not in user_cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN wechat_openid TEXT NOT NULL DEFAULT ''")

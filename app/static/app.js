@@ -12953,7 +12953,7 @@ function renderAdminPosts() {
       </header>
       <div class="table-wrap">
         <table>
-          <thead><tr><th scope="col">ID</th><th scope="col">大V</th><th scope="col">分类</th><th scope="col">内容</th><th scope="col">时间</th><th scope="col">链接</th><th scope="col">操作</th></tr></thead>
+          <thead><tr><th scope="col">ID</th><th scope="col">大V</th><th scope="col">分类</th><th scope="col">平台</th><th scope="col">内容</th><th scope="col">时间</th><th scope="col">链接</th><th scope="col">操作</th></tr></thead>
           <tbody>${_adminPosts.map(postRowHtml).join("")}</tbody>
         </table>
       </div>
@@ -12992,7 +12992,7 @@ function postRowHtml(p) {
         <button type="button" class="btn-sm danger" onclick="adminDeletePost(${p.id})">删除</button>
       </td>
     </tr>
-    ${expanded ? `<tr><td colspan="7"><div class="post-detail">
+    ${expanded ? `<tr><td colspan="8"><div class="post-detail">
         <p class="muted" style="margin-bottom:8px">类型：${p.post_type === "reply" ? "回复" : "原帖"} · 平台：${escapeHtml(PLATFORM_LABELS[p.platform] || p.platform)} · 外部ID：${escapeHtml(p.external_id)} · 图片：${(p.images || []).length} 张${p.hidden ? " · <strong>状态：已隐藏（用户不可见）</strong>" : ""}</p>
         <pre class="content-cell">${escapeHtml(body)}</pre>
       </div></td></tr>` : ""}`;

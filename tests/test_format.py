@@ -138,10 +138,18 @@ def test_combination_feishu_card():
 
 def test_format_published_at_rfc2822():
     # X：UTC +0000 转北京时间
-    assert format_published_at("Fri Aug 06 10:00:00 +0000 2026") == "2026-08-06 18:00"
+    assert format_published_at("Fri Aug 06 10:00:00 +0000 2026") == "2026-08-06 18:00:00"
     # 微博：已带 +0800
-    assert format_published_at("Wed Aug 05 21:00:00 +0800 2026") == "2026-08-05 21:00"
+    assert format_published_at("Wed Aug 05 21:00:00 +0800 2026") == "2026-08-05 21:00:00"
     # 已是可读格式的不动
-    assert format_published_at("2026-08-04 21:00") == "2026-08-04 21:00"
+    assert format_published_at("2026-08-04 21:00") == "2026-08-04 21:00:00"
     # 纯数字毫秒时间戳继续转换
-    assert format_published_at("1720000000000") == "2024-07-03 17:46"
+    assert format_published_at("1720000000000") == "2024-07-03 17:46:40"
+
+
+def test_format_published_at_zsxq_iso_millis():
+    # 知识星球 create_time：带毫秒+时区的 ISO 串，须归一化为北京时间裸字符串，
+    # 否则原样入库会破坏字符串排序（T > 空格，同日星球帖全部置顶）
+    assert format_published_at("2026-09-03T15:48:42.756+0800") == "2026-09-03 15:48:42"
+    assert format_published_at("2026-09-03T15:48:42.756+0000") == "2026-09-03 23:48:42"
+    assert format_published_at("2026-09-03T15:48:42.756") == "2026-09-03 15:48:42"

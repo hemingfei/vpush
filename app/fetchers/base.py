@@ -170,10 +170,17 @@ def parse_published_at(raw: str) -> datetime | None:
             return dt.astimezone(CN_TZ)
     except (TypeError, ValueError):
         pass
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S%z"):
+    # 含毫秒的 ISO 串（知识星球 create_time 形如 2026-09-03T15:48:42.756+0800）
+    # 解析失败会原样入库，破坏「北京时间裸字符串」的统一格式与排序
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M",
+        "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S.%f%z",
+    ):
         try:
             dt = datetime.strptime(raw, fmt)
-            return dt if dt.tzinfo else dt.replace(tzinfo=CN_TZ)
+            # 带 %z 的按 docstring 约定换算成北京时间；naive 视为已是北京时间
+            return dt.astimezone(CN_TZ) if dt.tzinfo else dt.replace(tzinfo=CN_TZ)
         except ValueError:
             continue
     return None
