@@ -192,6 +192,21 @@ def build_channel_notifier(
     raise RuntimeError(f"未知渠道: {channel}")
 
 
+def is_permanent_push_error(exc: BaseException | str) -> bool:
+    """确定性推送失败：同一内容重发必然被再次拒绝，不该进重试队列。
+
+    目前覆盖飞书卡片内容超限错误——schema 2.0 会把 lark_md 正文里的
+    markdown 表格渲染成 table 组件，超过单卡数量上限时整卡拒绝
+    （如 code=230099 ... ErrCode: 11310; ErrMsg: card table number over limit）。
+    卡片每次按同一帖子原样重建，内容不变，重试只会反复刷失败日志。
+    """
+    text = str(exc)
+    if "card table number over limit" in text:
+        return True
+    # 同族卡片结构超限错误（元素数/层级等）：拒绝原因固定在内容本身
+    return "Failed to create card content" in text and "over limit" in text
+
+
 def deliver_post(
     db,
     post_id: int,
@@ -256,6 +271,11 @@ def deliver_post(
                     # 网络等模糊错误：不进重试队列双发，交给重试队列（设计 8.4）
                     logger.info("飞书个人推送模糊错误，进重试队列 user=%s", user["username"])
         if retry_queue is not None:
-            retry_queue.add(post, channel, user["id"])
+            if is_permanent_push_error(exc):
+                logger.info(
+                    "确定性推送错误不入重试队列 user=%s channel=%s", user["username"], channel
+                )
+            else:
+                retry_queue.add(post, channel, user["id"])
         if alert_cb is not None:
             alert_cb(db, alert_notifiers or [], f"user={user['username']} channel={channel} err={exc}")

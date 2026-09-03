@@ -1250,9 +1250,9 @@ def test_mx_daily_windows_within_bounds():
         # 午后：12:30-12:50 开，16:00-16:30 关
         assert (w2[0].hour, w2[0].minute) >= (12, 30) and w2[0].hour < 13
         assert w2[1].hour == 16 and w2[1].minute <= 29
-        # 晚间：19:00-19:30 开，21:00-22:00 关
+        # 晚间：19:00-19:30 开，23:30-23:55 关
         assert w3[0].hour == 19 and w3[0].minute <= 29
-        assert w3[1].hour == 21
+        assert w3[1].hour == 23 and 30 <= w3[1].minute <= 54
         for start, stop in windows:
             assert start.date() == day and stop.date() == day
             assert start < stop

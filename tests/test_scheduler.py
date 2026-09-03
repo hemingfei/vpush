@@ -1499,6 +1499,128 @@ def test_retry_queue_keys_include_platform():
     assert q.pending() == 2
 
 
+FEISHU_CARD_OVER_LIMIT = (
+    "飞书发送失败(code=230099): Failed to create card content, "
+    "ext=ErrCode: 11310; ErrMsg: card table number over limit; ErrorValue: table;"
+)
+
+
+def test_retry_due_permanent_error_drops_item(monkeypatch):
+    """重试遇飞书卡片超限等确定性错误立即放弃；普通错误仍走退避。"""
+    clock = {"t": 1000.0}
+    monkeypatch.setattr("app.scheduler.time.monotonic", lambda: clock["t"])
+    db = make_db()
+    kid = db.add_kol("xueqiu", "A", "1")
+    uid = db.add_user("u", "h", telegram_chat_id="111")
+    db.add_subscription(uid, kid)
+    scheduler = Scheduler(
+        db,
+        {},
+        [],
+        SimpleNamespace(),
+        notifiers_config=SimpleNamespace(
+            telegram=SimpleNamespace(bot_token="t", chat_id=""),
+            feishu=SimpleNamespace(),
+            wecom=SimpleNamespace(),
+        ),
+        xueqiu_config=SimpleNamespace(cookie=""),
+        weibo_config=SimpleNamespace(cookie="", username="", password=""),
+    )
+    doomed = make_post(kid)
+    doomed.external_id = "doom"
+    transient = make_post(kid)
+    transient.external_id = "transient"
+    q = scheduler.retry_queue
+    q.add(doomed, "telegram", uid)
+    q.add(transient, "telegram", uid)
+    clock["t"] = 2000  # 越过 60 秒退避
+
+    class SelectiveTG:
+        """按帖子区分失败原因：卡片超限 vs 普通网络错误。"""
+
+        def __init__(self, *args, **kwargs):
+            self.client = SimpleNamespace(close=lambda: None)
+
+        def notify(self, post):
+            if post.external_id == "doom":
+                raise RuntimeError(FEISHU_CARD_OVER_LIMIT)
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr("app.notifiers.telegram.TelegramNotifier", SelectiveTG)
+    scheduler._retry_due_pushes()
+    # 确定性错误直接放弃出队；普通错误按退避留在队列等下一轮
+    # （transient 刚失败进入 5 分钟退避，due() 为空，需看队列内容）
+    assert q.pending() == 1
+    remaining = next(iter(q._items.values()))
+    assert remaining["post"].external_id == "transient"
+    assert remaining["attempts"] == 1
+
+
+def test_recovery_skips_permanent_errors():
+    """重启恢复：卡片超限等确定性失败不再复活重试，普通失败照常恢复。"""
+    db = make_db()
+    kid = db.add_kol("xueqiu", "A", "1")
+    pid1 = db.insert_post("xueqiu", kid, "p1", "t", "c", "u", "")
+    pid2 = db.insert_post("xueqiu", kid, "p2", "t", "c", "u", "")
+    uid = db.add_user("u", "h", telegram_chat_id="111")
+    db.add_subscription(uid, kid)
+    db.add_push_log(pid1, "telegram", "failed", FEISHU_CARD_OVER_LIMIT, user_id=uid)
+    db.add_push_log(pid2, "telegram", "failed", "boom", user_id=uid)
+    db._execute("UPDATE push_logs SET created_at = datetime('now', '-1 hours')")
+
+    scheduler = Scheduler(
+        db,
+        {},
+        [],
+        SimpleNamespace(),
+        notifiers_config=SimpleNamespace(telegram=SimpleNamespace(bot_token="t", chat_id="111")),
+        xueqiu_config=SimpleNamespace(cookie=""),
+        weibo_config=SimpleNamespace(cookie="", username="", password=""),
+    )
+    scheduler._recover_failed_pushes()
+    assert scheduler.retry_queue.pending() == 1
+    assert next(iter(scheduler.retry_queue._items.values()))["post"].external_id == "p2"
+
+
+def test_dnd_summary_permanent_error_keeps_log_without_retry(monkeypatch):
+    """免打扰汇总遇确定性错误：失败日志留档但不进重试队列。"""
+    clock = {"t": 1000.0}
+    monkeypatch.setattr("app.scheduler.time.monotonic", lambda: clock["t"])
+    db = make_db()
+    kid = db.add_kol("xueqiu", "A", "1")
+    db.insert_post("xueqiu", kid, "p1", "t", "c", "u", "")
+    uid = db.add_user("u", "h", telegram_chat_id="111")
+    db.add_subscription(uid, kid)
+    scheduler = Scheduler(
+        db,
+        {},
+        [],
+        SimpleNamespace(),
+        notifiers_config=SimpleNamespace(
+            telegram=SimpleNamespace(bot_token="t", chat_id=""),
+            feishu=SimpleNamespace(),
+            wecom=SimpleNamespace(),
+        ),
+        xueqiu_config=SimpleNamespace(cookie=""),
+        weibo_config=SimpleNamespace(cookie="", username="", password=""),
+    )
+    scheduler._dnd_buffer[uid] = [make_post(kid)]
+    monkeypatch.setattr("app.scheduler._in_dnd_window", lambda user, now=None: False)
+
+    class OverLimitTG:
+        def __init__(self, *args, **kwargs):
+            self.client = SimpleNamespace(close=lambda: None)
+
+        def send_dnd_summary(self, posts, title=None):
+            raise RuntimeError(FEISHU_CARD_OVER_LIMIT)
+
+    monkeypatch.setattr("app.notifiers.telegram.TelegramNotifier", OverLimitTG)
+    scheduler._flush_dnd_buffers()
+    # 不静默丢失（失败日志留档），但也不进重试队列无限空转
+    assert len(db.list_push_logs(channel="telegram", status="failed")) == 1
+    assert scheduler.retry_queue.pending() == 0
+
+
 def test_digest_failure_alerts_admin(monkeypatch):
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")

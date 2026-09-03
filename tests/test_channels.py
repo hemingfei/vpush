@@ -202,6 +202,38 @@ def test_deliver_post_failure_writes_log_and_alerts(monkeypatch):
     assert alerts and "channel=telegram" in alerts[0]
 
 
+FEISHU_CARD_OVER_LIMIT = (
+    "飞书发送失败(code=230099): Failed to create card content, "
+    "ext=ErrCode: 11310; ErrMsg: card table number over limit; ErrorValue: table;"
+)
+
+
+def test_deliver_post_permanent_error_skips_retry_queue(monkeypatch):
+    """飞书卡片超限等确定性错误：写失败日志并告警，但不进重试队列。"""
+    db = SimpleNamespace()
+    logs = []
+    db.add_push_log = lambda post_id, channel, status, error="", user_id=None: logs.append(status)
+    alerts = []
+
+    class OverLimit:
+        def notify(self, post):
+            raise RuntimeError(FEISHU_CARD_OVER_LIMIT)
+
+    import app.channels as channels_mod
+
+    monkeypatch.setattr(channels_mod, "build_channel_notifier", lambda *a, **k: OverLimit())
+    retry_calls = []
+    retry = SimpleNamespace(add=lambda post, channel, user_id: retry_calls.append(channel))
+
+    deliver_post(
+        db, 7, make_post(), make_user(), "telegram", make_config(), client=None,
+        retry_queue=retry, alert_notifiers=[], alert_cb=lambda db, ns, msg: alerts.append(msg),
+    )
+    assert logs == ["failed"]
+    assert retry_calls == []
+    assert alerts and "channel=telegram" in alerts[0]
+
+
 def test_deliver_post_feishu_fallback_reuses_hidden_copy(monkeypatch):
     db = SimpleNamespace(add_push_log=lambda *args, **kwargs: None)
     received = []
