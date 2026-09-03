@@ -21,3 +21,8 @@ scripts/diag_feishu_push.py
 scripts/manual_feishu_push.py
 scripts/expand_stock_coverage.py
 docs/superpowers/
+
+# 本地密钥备份与逆向研究产物（严禁入库）
+config.yaml.bak-*
+docs/research/
+.cursor/
