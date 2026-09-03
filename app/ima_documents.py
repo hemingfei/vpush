@@ -3678,7 +3678,11 @@ class ImaDocumentService:
         feishu = tuple(
             ImaGroupConfig(
                 id=str(item.get("group_id") or ""),
-                name=str(item.get("title") or "飞书文档"),
+                name=(
+                    str(item.get("display_name") or "").strip()
+                    or str(item.get("title") or "").strip()
+                    or "飞书文档"
+                ),
                 knowledge_base_id="",
                 root_folder_id="",
             )
