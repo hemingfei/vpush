@@ -1634,8 +1634,7 @@ def test_feishu_timeline_ui_fixes():
     assert "showSource && source.title" in item
     assert "feishuEntryHasContent" in entries_fn
     assert "空记录" not in entries_fn
-    order = _fn_body("changeFeishuTimelineOrder")
-    assert "current.loading || order === current.order" in order
+    assert "function changeFeishuTimelineOrder" not in src
     # 设置页来源行：隐藏重复的「仅管理员」空态、展示方式统一为分段控件
     css = STYLE_CSS.read_text()
     assert ".feishu-source-acl .ima-acl-none { display: none; }" in css
@@ -1698,7 +1697,6 @@ def test_feishu_timeline_reader_interaction_batch():
     """时间线阅读交互批次：默认时间线、滚动自动加载、增量更新锚定、图片懒加载、移动端回到最新。"""
     src = APP_JS.read_text()
     toolbar = _fn_body("feishuTimelineToolbarHtml")
-    order_switch = _fn_body("changeFeishuTimelineOrder")
     more = _fn_body("feishuTimelineMoreHtml")
     observe = _fn_body("observeFeishuTimelineMore")
     images = _fn_body("loadFeishuTimelineImages")
@@ -1709,8 +1707,10 @@ def test_feishu_timeline_reader_interaction_batch():
 
     assert ">时间线</button>" not in toolbar
     assert ">文档</button>" not in toolbar
-    assert ">最新优先</button>" in toolbar and ">原文顺序</button>" in toolbar
+    assert ">最新优先</button>" not in toolbar
+    assert ">原文顺序</button>" not in toolbar
     assert "function switchFeishuTimelineMode" not in src
+    assert "function changeFeishuTimelineOrder" not in src
     assert "showSourceSelect = sources.length > 1" in toolbar
     reader = _fn_body("renderImaDocument")
     assert "ima-reader--feishu" in reader
@@ -1722,8 +1722,10 @@ def test_feishu_timeline_reader_interaction_batch():
     assert compact and "text-overflow: ellipsis" in compact.group(0)
     bar = re.search(r"\.feishu-timeline-toolbar\s*\{[^}]*\}", css)
     assert bar and "justify-content: flex-start" in bar.group(0)
+    assert "gap: var(--space-3)" in bar.group(0)
+    feishu_bar = re.search(r"\.ima-reader--feishu \.ima-reader-toolbar\s*\{[^}]*\}", css)
+    assert feishu_bar and "gap: var(--space-4)" in feishu_bar.group(0)
     assert "margin-left: auto" in css
-    assert "renderFeishuTimelineToolbar()" in order_switch
     # 滚动到底自动加载更早（按钮保留为降级）
     assert "feishu-timeline-sentinel" in more
     assert "IntersectionObserver" in observe and "loadMoreFeishuTimeline()" in observe
@@ -1733,7 +1735,7 @@ def test_feishu_timeline_reader_interaction_batch():
     assert "reloadFeishuTimeline" not in src
     assert "feishuAnchorEntry" in apply_update and "feishuRestoreEntry" in apply_update
     assert "feishuTimelineUpdatePath" in apply_update
-    assert "继续向下加载即可看到" in apply_update
+    assert "继续向下加载即可看到" not in apply_update
     assert "renderFeishuTimelineView()" in apply_update
     assert "checkFeishuTimelineUpdate" in apply_update
     # 图片只在接近视口时加载，缓存复用
@@ -1741,8 +1743,8 @@ def test_feishu_timeline_reader_interaction_batch():
     assert "fetchFeishuTimelineAsset" in images
     assert "Promise.all" not in images
     assert "_feishuTimelineMediaCache" in fetch_asset
-    # 移动端「回到最新」按当前排序决定方向
-    assert "scrollHeight" in fab_jump and "scrollTo" in fab_jump
+    # 移动端「回到最新」固定滚到顶部
+    assert "scrollTo" in fab_jump and "top: 0" in fab_jump
     assert "toggleFeishuLatestFab" in src
 
     css = STYLE_CSS.read_text()
@@ -3926,9 +3928,9 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=277"' in html
-    assert 'src="/app.js?v=396"' in html
-    assert 'dav-shell-v261' in sw
+    assert 'href="/style.css?v=279"' in html
+    assert 'src="/app.js?v=397"' in html
+    assert 'dav-shell-v263' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

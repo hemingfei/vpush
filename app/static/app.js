@@ -1891,7 +1891,7 @@ function renderFeishuTimelineView() {
     : (data.entries || []);
   const entries = raw.filter(feishuEntryHasContent);
   const fab = $("#feishu-latest-fab");
-  if (fab) fab.textContent = state.order === "original" ? "跳到最新" : "回到最新";
+  if (fab) fab.textContent = "回到最新";
   if (state.loading && !entries.length) {
     host.innerHTML = '<p class="ima-reader-status" role="status">正在载入时间线…</p>';
     renderFeishuTimelineDates([]);
@@ -1916,7 +1916,7 @@ function renderFeishuTimelineDates(entries) {
 }
 
 function feishuTimelineRequestPath(state, before = "") {
-  const params = new URLSearchParams({ order: state.order === "original" ? "original" : "latest" });
+  const params = new URLSearchParams({ order: "latest" });
   params.set("window_days", "7");
   if (state.selectedGroup) params.set("group", state.selectedGroup);
   if (before) params.set("before", before);
@@ -2029,29 +2029,6 @@ function jumpFeishuTimelineDay(day) {
   document.getElementById(`feishu-day-${day}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-async function changeFeishuTimelineOrder(order) {
-  const current = _feishuTimelineState;
-  if (!current || !["latest", "original"].includes(order)) return;
-  if (current.loading || order === current.order) return;
-  _feishuTimelineState = {
-    ...current,
-    order,
-    data: { ...current.data, entries: [], notices: [] },
-    nextCursor: "",
-    hasMore: false,
-    error: "",
-  };
-  renderFeishuTimelineToolbar();
-  const loaded = await loadFeishuTimelinePage(true);
-  if (!loaded && routeStillActive(current.seq) && current.readerSeq === _imaReaderSeq && _feishuTimelineState?.order === order) {
-    const message = _feishuTimelineState.error || "时间线排序失败";
-    _feishuTimelineState = current;
-    renderFeishuTimelineToolbar();
-    renderFeishuTimelineView();
-    flash(message, "error");
-  }
-}
-
 function fetchFeishuTimelineAsset(img) {
   const seq = routeRenderSeq;
   const readerSeq = _imaReaderSeq;
@@ -2149,17 +2126,12 @@ async function loadFeishuTimeline(item, seq, readerSeq) {
 
 function feishuTimelineToolbarHtml() {
   const state = _feishuTimelineState || {};
-  const order = state.order === "original" ? "original" : "latest";
   const selectedGroup = state.selectedGroup || "";
   const sources = state.data?.sources || [];
   const showSourceSelect = sources.length > 1;
   const sourceOptions = [{ group_id: "", title: "全部来源" }, ...sources];
   return `
     ${showSourceSelect ? `<label><span class="sr-only">来源</span><select aria-label="来源" onchange="selectFeishuTimelineSource(this.value)">${sourceOptions.map((source) => `<option value="${escapeHtml(source.group_id)}"${source.group_id === selectedGroup ? " selected" : ""}>${escapeHtml(source.title)}</option>`).join("")}</select></label>` : ""}
-    <div class="feishu-display-segment feishu-order-segment" role="group" aria-label="排序">
-      <button type="button" class="feishu-display-option${order === "latest" ? " is-selected" : ""}" aria-pressed="${order === "latest"}" onclick="changeFeishuTimelineOrder('latest')">最新优先</button>
-      <button type="button" class="feishu-display-option${order === "original" ? " is-selected" : ""}" aria-pressed="${order === "original"}" onclick="changeFeishuTimelineOrder('original')">原文顺序</button>
-    </div>
     <select id="feishu-date-select" class="feishu-date-select" aria-label="跳到日期" onchange="jumpFeishuTimelineDay(this.value)"></select>`;
 }
 
@@ -2178,9 +2150,7 @@ function toggleFeishuLatestFab() {
 function jumpFeishuTimelineLatest() {
   const host = $("#feishu-timeline-body");
   if (!host) return;
-  const state = _feishuTimelineState;
-  const toBottom = !state || state.order === "original";
-  host.scrollTo({ top: toBottom ? host.scrollHeight : 0, behavior: "smooth" });
+  host.scrollTo({ top: 0, behavior: "smooth" });
   const fab = $("#feishu-latest-fab");
   if (fab) fab.classList.remove("is-visible");
 }
@@ -2217,13 +2187,7 @@ function feishuTimelineCursorFromEntry(entry) {
 }
 
 function feishuTimelineUpdatePath(state) {
-  const append = state.order === "original";
-  if (!append || !state.hasMore) {
-    const last = append ? (state.data?.entries || []).at(-1) : null;
-    const before = last && !state.hasMore ? feishuTimelineCursorFromEntry(last) : "";
-    return feishuTimelineRequestPath(state, before);
-  }
-  return "";
+  return feishuTimelineRequestPath(state);
 }
 
 async function applyFeishuTimelineUpdate(button) {
@@ -2233,18 +2197,8 @@ async function applyFeishuTimelineUpdate(button) {
   const groupId = button?.dataset?.groupId || "";
   if (!current || !host || !mediaId || current.loading) return;
   button.disabled = true;
-  const append = current.order === "original";
   try {
     const metaPath = `/api/ima-documents/${encodeURIComponent(mediaId)}${groupId ? `?group=${encodeURIComponent(groupId)}` : ""}`;
-    if (append && current.hasMore) {
-      const meta = await api(metaPath);
-      if (!routeStillActive(current.seq) || current.readerSeq !== _imaReaderSeq) return;
-      _feishuTimelineState = { ...current, baseline: String(meta.downloaded_at || current.baseline || "") };
-      button.remove();
-      flash("有新内容，继续向下加载即可看到");
-      _feishuTimelineTimer = setTimeout(() => checkFeishuTimelineUpdate(mediaId, groupId, _feishuTimelineState.baseline, current.seq, current.readerSeq), 60000);
-      return;
-    }
     const [fresh, meta] = await Promise.all([
       api(feishuTimelineUpdatePath(current)),
       api(metaPath),
@@ -2252,22 +2206,19 @@ async function applyFeishuTimelineUpdate(button) {
     if (!routeStillActive(current.seq) || current.readerSeq !== _imaReaderSeq) return;
     const existing = new Set((current.data.entries || []).map((entry) => String(entry.id || "")));
     const added = (fresh.entries || []).filter((entry) => String(entry.id || "") && !existing.has(String(entry.id)));
-    const anchor = append ? null : feishuAnchorEntry(host);
+    const anchor = feishuAnchorEntry(host);
     const scrollTop = host.scrollTop;
     _feishuTimelineState = {
       ...current,
       baseline: String(meta.downloaded_at || current.baseline || ""),
       data: {
         ...current.data,
-        entries: append
-          ? [...(current.data.entries || []), ...added]
-          : [...added, ...(current.data.entries || [])],
+        entries: [...added, ...(current.data.entries || [])],
       },
     };
     button.remove();
     renderFeishuTimelineView();
-    if (append) host.scrollTop = scrollTop;
-    else feishuRestoreEntry(host, anchor, scrollTop);
+    feishuRestoreEntry(host, anchor, scrollTop);
     flash(added.length ? `已载入 ${added.length} 条新内容` : "已是最新内容");
     _feishuTimelineTimer = setTimeout(() => checkFeishuTimelineUpdate(mediaId, groupId, _feishuTimelineState.baseline, current.seq, current.readerSeq), 60000);
   } catch (err) {
