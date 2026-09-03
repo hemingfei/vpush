@@ -1302,6 +1302,20 @@ body.lightbox-open { overflow: hidden; }
   white-space: nowrap;
 }
 .post-item .p-meta .cat-tag { margin: 0; }
+/* 「更多N」展开按钮：与标签徽章同形，可点击 */
+.tags-more-btn { border: 0; font: inherit; cursor: pointer; }
+/* 手动 LLM 打标进度条 */
+.mx-tag-progress-bar { height: 8px; border-radius: var(--radius-pill); background: var(--color-accent-soft); overflow: hidden; }
+.mx-tag-progress-fill { height: 100%; border-radius: var(--radius-pill); background: var(--color-accent); transition: width .4s var(--ease-standard, ease); }
+/* 手动打标选大V弹窗 */
+.admin-modal-mask { position: fixed; inset: 0; z-index: 320; background: rgba(0, 0, 0, .55); display: flex; align-items: center; justify-content: center; padding: 20px; }
+.admin-modal { background: var(--color-bg, #fff); color: var(--color-text, #111); border-radius: 12px; width: min(560px, 100%); max-height: 82vh; display: flex; flex-direction: column; gap: 10px; padding: 18px; box-shadow: 0 12px 40px rgba(0, 0, 0, .35); }
+.admin-modal-title { margin: 0; font-size: var(--text-md, 16px); }
+.admin-modal-list { overflow: auto; border: 1px solid var(--color-border, rgba(128, 128, 128, .3)); border-radius: 8px; }
+.mx-tag-kol-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; }
+.mx-tag-kol-row:hover { background: var(--color-accent-soft); }
+.mx-tag-kol-row + .mx-tag-kol-row { border-top: 1px solid var(--color-border, rgba(128, 128, 128, .2)); }
+.mx-tag-kol-count { margin-left: auto; font-size: var(--text-xs, 12px); color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
 .post-item .p-meta .cat.post-tag-filter { position: relative; border: 0; font: inherit; cursor: pointer; }
 .post-item .p-meta .cat.post-tag-filter:hover,
 .post-item .p-meta .cat.post-tag-filter:focus-visible {

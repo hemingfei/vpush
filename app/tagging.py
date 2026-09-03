@@ -19,14 +19,16 @@ import logging
 import re
 import threading
 
+from .db import POST_TAGS_MAX
+
 logger = logging.getLogger(__name__)
 
 # 每条贴文最多标签数
 TAG_PER_POST_MAX = 3
 # 词表上限：词表过大既稀释标签区分度，也难维护关键词
 TAG_VOCABULARY_MAX = 30
-# 每条贴文最多股票标签数（叠加在话题标签之后，总上限 5）
-STOCK_PER_POST_MAX = 2
+# 每条贴文最多股票标签数（叠加在话题标签之后，合并后总上限 POST_TAGS_MAX=10）
+STOCK_PER_POST_MAX = 6
 # 常用股票名表上限（手改）；全市场正式简称另库存，不占这个额度
 STOCK_TABLE_MAX = 400
 # 别名表上限
@@ -264,7 +266,7 @@ def tag_text(
     stock_names,
     aliases=None,
 ) -> list[str]:
-    """对任意标题+正文跑现有规则，返回话题标签+股票标签（总上限 5）。"""
+    """对任意标题+正文跑现有规则，返回话题标签+股票标签（总上限 POST_TAGS_MAX）。"""
 
     class _Doc:
         def __init__(self, title: str, content: str):
@@ -430,9 +432,11 @@ def backfill_post_tags(db, mode: str = "pending") -> dict:
         tagged = rule_tag_posts(posts, tag_rules)
         stock_tagged = stock_tag_posts(posts, stock_names, aliases=stock_aliases)
         for i, _post in enumerate(posts):
-            merged = list((tagged.get(i) or [])[:TAG_PER_POST_MAX]) + list(
-                (stock_tagged.get(i) or [])[:STOCK_PER_POST_MAX]
-            )
+            # 话题（≤3）+ 股票（≤6），总上限 10（超出截尾，股票可能被话题挤掉尾部）
+            merged = (
+                list((tagged.get(i) or [])[:TAG_PER_POST_MAX])
+                + list((stock_tagged.get(i) or [])[:STOCK_PER_POST_MAX])
+            )[:POST_TAGS_MAX]
             db.update_post_tags(batch[i]["id"], merged)
             if merged:
                 tagged_count += 1

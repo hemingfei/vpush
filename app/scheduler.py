@@ -16,8 +16,8 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 
 from .backup import run_scheduled
-from .channels import channel_bound, channel_enabled
-from .db import _UNSET, ALLOWED_PLATFORMS, DB, days_until_purge, user_plain_secret
+from .channels import channel_bound, channel_enabled, is_permanent_push_error
+from .db import _UNSET, ALLOWED_PLATFORMS, DB, POST_TAGS_MAX, days_until_purge, user_plain_secret
 from . import ai_analysis
 
 # AI分析任务并发控制
@@ -1263,7 +1263,12 @@ def _fetch_kol_once(
                 logger.warning("X 内容翻译失败 post=%s err=%s", post.external_id, exc)
     # 关键词规则打标：仅对新帖（与翻译同判据），纯本地计算零成本，异常不影响入库
     try:
-        from .tagging import rule_tag_posts, stock_tag_posts
+        from .tagging import (
+            STOCK_PER_POST_MAX,
+            TAG_PER_POST_MAX,
+            rule_tag_posts,
+            stock_tag_posts,
+        )
 
         fresh = [p for p in posts if (p.platform, p.external_id) not in existing_keys]
         if fresh:
@@ -1280,10 +1285,12 @@ def _fetch_kol_once(
                 stock_aliases = db.get_stock_aliases()
             stock_tagged = stock_tag_posts(fresh, stock_names, aliases=stock_aliases)
             for i, post in enumerate(fresh):
-                # 合并：话题标签（≤3）+ 股票标签（≤2），总上限 5
+                # 合并：话题标签（≤3）+ 股票标签（≤6），总上限 10
                 topics = tagged.get(i, [])
                 stocks = stock_tagged.get(i, [])
-                post.tags = list(topics[:3]) + list(stocks[:2])
+                post.tags = (
+                    list(topics[:TAG_PER_POST_MAX]) + list(stocks[:STOCK_PER_POST_MAX])
+                )[:POST_TAGS_MAX]
     except Exception as exc:  # noqa: BLE001 - 打标失败不影响抓取/推送
         logger.warning(
             "规则打标失败 platform=%s kol=%s err=%s", kol["platform"], kol["name"], exc
@@ -1466,7 +1473,8 @@ def _send_digest_bundle(
         )
         if sent_digest:
             return
-        if retry_queue is not None:
+        # 卡片超限等确定性错误重发必败，不入重试队列
+        if retry_queue is not None and not is_permanent_push_error(exc):
             for post in posts:
                 retry_queue.add(post, channel, user["id"])
         for post in posts:
@@ -2070,7 +2078,7 @@ class Scheduler:
         """MX 消息入库前先走本地规则打标（消息即时带上标签），LLM 打标完成后
         由 mx_llm_tagging.update_post_tags_llm 整体替换。
 
-        与轮询管线 _process_posts 同口径：话题（≤3）+ 股票（≤2）合并。
+        与轮询管线 _process_posts 同口径：话题（≤3）+ 股票（≤6）合并，总上限 10。
         打标失败不影响入库与推送。
         """
         try:
@@ -2084,7 +2092,9 @@ class Scheduler:
             tag_rules, stock_names, stock_aliases = self._mx_rule_tag_inputs()
             topics = rule_tag_posts([post], tag_rules).get(0) or []
             stocks = stock_tag_posts([post], stock_names, aliases=stock_aliases).get(0) or []
-            post.tags = list(topics)[:TAG_PER_POST_MAX] + list(stocks)[:STOCK_PER_POST_MAX]
+            post.tags = (
+                list(topics)[:TAG_PER_POST_MAX] + list(stocks)[:STOCK_PER_POST_MAX]
+            )[:POST_TAGS_MAX]
         except Exception:  # noqa: BLE001 - 打标失败不影响入库推送
             logger.warning(
                 "MX 消息规则打标失败 kol=%s id=%s",
@@ -2221,8 +2231,8 @@ class Scheduler:
             self._mx_armed = arm_windows(self._mx_windows, datetime.now(CN_TZ))
             self._mx_fallback_at = pick_daily_fallback_slot(self._mx_windows)
             self._mx_fallback_done = False
-            # 晚间兜底断开时刻：23:30-23:55 之间随机（正常窗口最晚 22 点前已关，
-            # 这是防「手动登录忘关」的最后保险）
+            # 晚间兜底断开时刻：23:30-23:55 之间随机（与晚间关窗同区间，先到者
+            # 关窗；这条额外兜住「关窗后手动登录忘关」的场景）
             self._mx_force_close_at = datetime(
                 today.year, today.month, today.day, 23, 30, tzinfo=CN_TZ
             ) + timedelta(seconds=random.randint(0, 1500))
@@ -2435,8 +2445,9 @@ class Scheduler:
     async def _mx_maybe_nightly_force_close(self):
         """晚间兜底断开：23:30-23:55 之间随机一秒，MX 若仍在线一律强制断开。
 
-        正常三段窗口最晚 22 点前就会关窗；这条是防「手动登录后忘关」等场景的
-        最后保险，无论会话来源（自动/手动）到点即关，当天只执行一次。
+        晚间窗口关窗（23:30-23:55 随机）与这条兜底同区间，先到者关窗；这条
+        额外兜住「关窗后手动登录忘关」等场景，无论会话来源（自动/手动）到点即关，
+        当天只执行一次。
         """
         if self._mx_force_close_at is None or self._mx_force_close_done:
             return
@@ -2831,14 +2842,17 @@ class Scheduler:
         ):
             await self._init_mx()
 
-        # MX 消息 LLM 打标循环：告警走系统通知 KOL（阻塞版可在工作线程中调用）
-        self._mx_tag_task = asyncio.create_task(
-            mx_llm_tag_loop(
-                self.db,
-                lambda: _system_llm_config(self.db, self.llm_config),
-                publish_alert=self._publish_system_alert_sync,
+        # MX LLM 打标：当前为全手动模式（后台「开始 LLM 打标」触发），
+        # 自动循环默认关闭；恢复自动触发时把 settings 的 mx_llm_tag_auto_enabled
+        # 置 1 即可（调度代码原样保留在 mx_llm_tagging.mx_llm_tag_loop）
+        if str(self.db.get_setting("mx_llm_tag_auto_enabled") or "0") == "1":
+            self._mx_tag_task = asyncio.create_task(
+                mx_llm_tag_loop(
+                    self.db,
+                    lambda: _system_llm_config(self.db, self.llm_config),
+                    publish_alert=self._publish_system_alert_sync,
+                )
             )
-        )
 
         while not self._stop.is_set():
             started = time.monotonic()
@@ -3179,6 +3193,9 @@ class Scheduler:
         rows = self.db.list_failed_push_logs(since_hours=24, limit=2000)
         recovered = 0
         for row in rows:
+            if is_permanent_push_error(row.get("error") or ""):
+                # 卡片超限等内容性错误永不成功，重启不再复活重试
+                continue
             post_row = self.db.get_post(row["post_id"])
             if post_row is None:
                 continue
@@ -3230,7 +3247,11 @@ class Scheduler:
                 self._retry_push(item)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("重试推送失败 channel=%s err=%s", item["channel"], exc)
-                self.retry_queue.fail(item)
+                if is_permanent_push_error(exc):
+                    # 卡片超限等内容性错误重发必败，立即放弃，不再退避空转刷日志
+                    self.retry_queue.drop(item)
+                else:
+                    self.retry_queue.fail(item)
         # 把待重试数量落库，供后台「数据源」页展示
         self.db.set_setting("stats_retry_pending", str(self.retry_queue.pending()))
 
@@ -3423,7 +3444,8 @@ class Scheduler:
                             self.db.add_push_log(
                                 post_id, channel, "failed", f"dnd summary: {exc}", user_id=user["id"]
                             )
-                        self.retry_queue.add(post, channel, user["id"])
+                        if not is_permanent_push_error(exc):
+                            self.retry_queue.add(post, channel, user["id"])
         finally:
             client.close()
 

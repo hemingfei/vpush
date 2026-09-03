@@ -1,21 +1,18 @@
-"""MX 实时消息的开盘时段 LLM 打标。
+"""MX 消息的 LLM 打标（当前为全手动模式）。
 
-调度（mx_llm_tag_loop，常驻 asyncio 任务）：
-- 工作日 09:00-10:29 每分钟、10:30-15:05 每五分钟，另加 18:00/23:00 集中点；
-- 周末 09/12/15/18/20/23 点集中；
-- 法定节假日无日历，按工作日表跑——无新帖则零 LLM 调用，自然空转。
+手动打标（start_manual_job，管理端「开始 LLM 打标」）：
+- 弹窗选 MX 大V（显示各自未打标消息数），一次最多处理 1000 条；
+- 后台线程分批调 LLM（批大小取 settings），按 llm_tagged=0 选帖（blocked/hidden
+  不算，最旧优先），逐批更新进度，可取消；
+- 结果与帖子已有标签**去重合并**（不再整体替换），low 进 post_tag_reviews 人工
+  审核，kind=general 黑话经 is_acceptable_alias 预过滤后进候选表。
 
-进度（settings 键 mx_llm_tag_cursor = 已处理的最大 post id）重启安全；每个触发
-点循环排空积压（单 tick 最多 N 批），单批失败游标不动、下个触发点整体重试
-（重复打标是幂等覆盖，无害）。
+自动触发（mx_llm_tag_loop）暂停：原开盘时段调度保留代码，scheduler 按设置
+mx_llm_tag_auto_enabled（默认关）决定是否启动，后续恢复自动模式时重开。
 
-打标（llm.tag_posts_llm）：话题+股票+操作三类标签，每个标签带 confidence；
-high 直接整体替换写入 posts.tags（总上限 POST_TAGS_MAX，超出按 股票>操作>话题
-截断），low 进 post_tag_reviews 人工审核；LLM 报告的 kind=general 黑话经
-is_acceptable_alias 预过滤后进 stock_alias_candidates 候选表，人工审核通过后
-并入 stock_aliases 供规则打标免费命中（context/typo 一律不入候选）。
+试打（run_tag_test）：取 10 条未打标消息走同源调用与校验，零写入，供调参预览。
 
-连续失败 >=3 次通过系统通知 KOL 告警（30 分钟冷却），恢复后发恢复通知。
+连续失败告警逻辑仅自动模式使用；手动模式失败直接体现在任务进度里。
 """
 from __future__ import annotations
 
@@ -28,6 +25,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from .db import (
     MX_LLM_TAG_BATCH_SIZE_KEY,
     MX_LLM_TAG_MAX_CALLS_KEY,
+    POST_STOCK_TAGS_MAX,
     POST_TAGS_MAX,
 )
 
@@ -43,6 +41,8 @@ _ALERT_COOLDOWN_KEY = "mx_llm_tag_alert_at"
 MISSING_RATIO_LIMIT = 0.3
 # 管理端「试打」按钮每次取的未处理消息条数
 TEST_BATCH_SIZE = 10
+# 手动打标一次最多处理的消息条数
+MAX_MANUAL_MESSAGES = 1000
 
 # 运行状态（进程内计数，重启归零）：供管理端状态面板展示
 _state_lock = threading.Lock()
@@ -51,20 +51,48 @@ _state: dict = {
     "alert_active": False,
     "last_run": None,
     "calls_today": {"date": "", "count": 0},
+    # 正式 tick 进行中的 monotonic 起始时刻（None=空闲），供面板/试打提示展示
+    "tick_started_at": None,
 }
 
 # 单飞锁：LLM 单批最长 180s，分钟级触发点可能撞上未结束的上一轮
 _tick_lock = threading.Lock()
+# 试打专用锁：试打零写入（不写标签/审核/候选、不推游标），与正式 tick 并行
+# 是安全的——不与 _tick_lock 互斥，否则开盘时段 tick 连续持锁（每批 LLM 最长
+# 6 分钟、单 tick 最多 5 批），「试打 10 条」会长时间 409 无法诊断
+_test_lock = threading.Lock()
+
+# 手动打标任务：同一时刻只跑一个（单飞），状态供管理端进度轮询
+_job_lock = threading.Lock()
+_job_state_lock = threading.Lock()
+_job_state: dict = {
+    "running": False,
+    "cancel_requested": False,
+    "started_at": None,
+    "finished_at": None,
+    "kols": [],
+    "total": 0,
+    "processed": 0,
+    "batches": 0,
+    "failed_batches": 0,
+    "error": "",
+    "summary": None,
+}
 
 
 def get_tagger_status() -> dict:
     """管理端状态面板用的运行快照（内存计数）。"""
     with _state_lock:
+        started = _state["tick_started_at"]
         return {
             "consecutive_failures": _state["consecutive_failures"],
             "alert_active": _state["alert_active"],
             "last_run": dict(_state["last_run"]) if _state["last_run"] else None,
             "calls_today": dict(_state["calls_today"]),
+            "tick_running": started is not None,
+            "tick_running_seconds": (
+                int(time_module.time() - started) if started is not None else 0
+            ),
         }
 
 
@@ -167,7 +195,7 @@ def validate_batch_response(batch_rows, response, topic_tags, action_tags, valid
         ]
         stocks_high = _dedupe(
             [s["official"] for s in stocks if s.get("confidence") == "high"]
-        )[:2]
+        )[:POST_STOCK_TAGS_MAX]
         actions_high = _dedupe(
             [
                 a["name"]
@@ -245,9 +273,13 @@ def run_tag_tick(db, llm_config, publish_alert=None) -> dict:
     """
     if not _tick_lock.acquire(blocking=False):
         return {"skipped": "busy"}
+    with _state_lock:
+        _state["tick_started_at"] = time_module.time()
     try:
         return _run_tag_tick_locked(db, llm_config, publish_alert)
     finally:
+        with _state_lock:
+            _state["tick_started_at"] = None
         _tick_lock.release()
 
 
@@ -256,8 +288,11 @@ def _run_tag_tick_locked(db, llm_config, publish_alert) -> dict:
     from .tagging import is_acceptable_alias
 
     if not db.get_mx_llm_tag_enabled():
+        # 开关关闭/未配 LLM 属常态：每个触发点都会走一次，DEBUG 防刷屏
+        logger.debug("MX LLM 打标 tick 跳过：开关已关闭")
         return {"skipped": "disabled"}
     if not (llm_config and getattr(llm_config, "api_key", "")):
+        logger.debug("MX LLM 打标 tick 跳过：未配置系统 LLM")
         return {"skipped": "no_llm"}
 
     batch_size = min(
@@ -283,11 +318,19 @@ def _run_tag_tick_locked(db, llm_config, publish_alert) -> dict:
         if response is None:
             failed_batches += 1
             last_error = "LLM 调用失败或输出无效"
+            logger.warning(
+                "MX LLM 打标批次 #%d 失败：%s（游标保持 %d，下个触发点重试）",
+                batches + 1, last_error, cursor,
+            )
             break
         missing = len(rows) - len(response)
         if len(rows) and missing / len(rows) > MISSING_RATIO_LIMIT:
             failed_batches += 1
             last_error = f"LLM 响应缺失 {missing}/{len(rows)} 条"
+            logger.warning(
+                "MX LLM 打标批次 #%d 失败：%s（游标保持 %d，下个触发点重试）",
+                batches + 1, last_error, cursor,
+            )
             break
         writes, reviews, general_pairs = validate_batch_response(
             rows, response, topic_tags, action_tags, valid_stocks
@@ -308,6 +351,11 @@ def _run_tag_tick_locked(db, llm_config, publish_alert) -> dict:
         db.set_mx_llm_tag_cursor(cursor)
         processed += len(rows)
         batches += 1
+        logger.info(
+            "MX LLM 打标批次 #%d 完成 posts=%d 写入标签=%d 进审核=%d 黑话候选=%d 游标→%d",
+            batches, len(rows), sum(1 for t in writes.values() if t),
+            len(reviews), len(pairs), cursor,
+        )
         rows = db.list_mx_posts_after(cursor, batch_size)
 
     recovered = False
@@ -360,30 +408,40 @@ def _run_tag_tick_locked(db, llm_config, publish_alert) -> dict:
 
 
 def run_tag_test(db, llm_config) -> dict:
-    """试打标：取游标之后最多 10 条未处理 MX 帖，走一遍与正式 tick 完全同源的
-    LLM 调用与校验，只返回预览结果——不写标签、不进审核/候选表、不推进游标。
+    """试打标：取最多 10 条未 LLM 打标的 MX 消息（最旧优先），走一遍与手动打标
+    完全同源的 LLM 调用与校验，只返回预览结果——不写标签、不进审核/候选表。
 
-    管理端「试打 10 条」按钮用；拿不到单飞锁（正式 tick 在跑）返回 busy。
+    管理端「试打 10 条」按钮用。零写入，与手动任务并行安全（独立 _test_lock，
+    只防管理员连点造成并发试打）。
     """
     from .llm import tag_posts_llm
     from .tagging import is_acceptable_alias
 
-    if not _tick_lock.acquire(blocking=False):
+    if not _test_lock.acquire(blocking=False):
+        logger.info("MX LLM 打标试打跳过：上一次试打仍在进行")
         return {"skipped": "busy"}
     try:
         if not (llm_config and getattr(llm_config, "api_key", "")):
+            logger.warning("MX LLM 打标试打跳过：未配置系统 LLM")
             return {"skipped": "no_llm"}
         tag_rules, topic_tags, action_tags, names, aliases, valid_stocks = _tag_inputs(db)
         known_aliases = {a["alias"] for a in aliases}
-        cursor = db.get_mx_llm_tag_cursor()
-        rows = db.list_mx_posts_after(cursor, TEST_BATCH_SIZE)
+        rows = db.list_mx_pending_posts(None, TEST_BATCH_SIZE)
         if not rows:
-            return {"skipped": "no_posts", "cursor": cursor}
+            logger.info("MX LLM 打标试打跳过：暂无未打标消息")
+            return {"skipped": "no_posts"}
+        logger.info(
+            "MX LLM 打标试打开始 取未打标消息 %d 条（id %d..%d）",
+            len(rows), int(rows[0]["id"]), int(rows[-1]["id"]),
+        )
         response = tag_posts_llm(
             rows, tag_rules, action_tags, names, aliases, llm_config
         )
         _record_call()
         if response is None:
+            logger.warning(
+                "MX LLM 打标试打失败：LLM 调用失败或输出无效（详见上方 LLM 请求日志）",
+            )
             return {"skipped": "llm_failed"}
         writes, reviews, general_pairs = validate_batch_response(
             rows, response, topic_tags, action_tags, valid_stocks
@@ -418,20 +476,197 @@ def run_tag_test(db, llm_config) -> dict:
                     ],
                 }
             )
+        summary = {
+            "would_tag": sum(1 for item in items if item["tags"]),
+            "would_review": sum(len(item["review_tags"]) for item in items),
+            "would_candidates": len({(j["alias"], j["stock"]) for j in (
+                j for item in items for j in item["jargon"]
+            )}),
+        }
+        logger.info(
+            "MX LLM 打标试打完成 tested=%d 将合并=%d 条 将进审核=%d 个 将入候选=%d 对"
+            "（未写库）",
+            len(rows), summary["would_tag"],
+            summary["would_review"], summary["would_candidates"],
+        )
+        for item in items:
+            logger.info(
+                "MX LLM 打标试打 post=%s author=%s 合并=[%s] 审核=[%s] 黑话=[%s] 原文=%.80s",
+                item["post_id"],
+                item["kol_name"],
+                "、".join(item["tags"]) or "无",
+                "、".join(t["tag"] for t in item["review_tags"]) or "无",
+                "、".join(f"{j['alias']}={j['stock']}" for j in item["jargon"]) or "无",
+                item["excerpt"],
+            )
         return {
-            "cursor": cursor,
             "tested": len(rows),
             "items": items,
-            "summary": {
-                "would_tag": sum(1 for item in items if item["tags"]),
-                "would_review": sum(len(item["review_tags"]) for item in items),
-                "would_candidates": len({(j["alias"], j["stock"]) for j in (
-                    j for item in items for j in item["jargon"]
-                )}),
-            },
+            "summary": summary,
         }
     finally:
-        _tick_lock.release()
+        _test_lock.release()
+
+
+# ---- 手动打标任务（管理端「开始 LLM 打标」：选大V、上限 1000 条、可取消） ----
+
+def get_manual_job_status() -> dict:
+    """手动打标任务状态快照（进度轮询用）。"""
+    with _job_state_lock:
+        return {k: (dict(v) if isinstance(v, dict) else (list(v) if isinstance(v, list) else v))
+                for k, v in _job_state.items()}
+
+
+def request_cancel_manual_job() -> bool:
+    """请求取消正在跑的手动任务（当前批次完成后停止）。返回是否有任务在跑。"""
+    with _job_state_lock:
+        if not _job_state["running"]:
+            return False
+        _job_state["cancel_requested"] = True
+    logger.info("MX 手动打标收到取消请求，当前批次完成后停止")
+    return True
+
+
+def start_manual_job(db, llm_config, kol_ids: list[int], max_messages: int) -> dict:
+    """启动一次手动打标后台任务；已有任务在跑时返回 started=False。
+
+    消息数按 max_messages（服务端硬顶 MAX_MANUAL_MESSAGES）截取，最旧优先。
+    """
+    if not _job_lock.acquire(blocking=False):
+        return {"started": False, "reason": "busy"}
+    if not (llm_config and getattr(llm_config, "api_key", "")):
+        _job_lock.release()
+        return {"started": False, "reason": "no_llm"}
+    kol_ids = [int(kid) for kid in (kol_ids or [])]
+    max_messages = max(1, min(int(max_messages or MAX_MANUAL_MESSAGES), MAX_MANUAL_MESSAGES))
+    kols = [k["name"] for k in db.list_kols(platform="mx") if k["id"] in set(kol_ids)]
+    with _job_state_lock:
+        _job_state.update(
+            running=True, cancel_requested=False, started_at=datetime.now(CN_TZ).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+            finished_at=None, kols=kols, total=0, processed=0, batches=0,
+            failed_batches=0, error="", summary=None,
+        )
+    threading.Thread(
+        target=_run_manual_job, args=(db, llm_config, kol_ids, max_messages),
+        name="mx-llm-tag-manual", daemon=True,
+    ).start()
+    logger.info(
+        "MX 手动打标任务已启动 kols=%d max_messages=%d", len(kol_ids), max_messages
+    )
+    return {"started": True}
+
+
+def _run_manual_job(db, llm_config, kol_ids: list[int], max_messages: int) -> None:
+    """手动打标任务主体（后台线程）：分批调 LLM，结果与已有标签去重合并。"""
+    from .llm import tag_posts_llm
+    from .tagging import is_acceptable_alias
+
+    total = processed = batches = failed = tagged_posts = review_count = 0
+    candidate_count = 0
+    error = ""
+    cancelled = False
+    try:
+        rows = db.list_mx_pending_posts(kol_ids, max_messages)
+        total = len(rows)
+        with _job_state_lock:
+            _job_state["total"] = total
+        if not total:
+            logger.info("MX 手动打标任务：所选大V暂无未打标消息")
+            return
+        batch_size = min(
+            max(db.get_mx_llm_tag_int_setting(MX_LLM_TAG_BATCH_SIZE_KEY, 40), 1), 100
+        )
+        tag_rules, topic_tags, action_tags, names, aliases, valid_stocks = _tag_inputs(db)
+        known_aliases = {a["alias"] for a in aliases}
+        logger.info(
+            "MX 手动打标任务开始 kols=%s 未打标消息 %d 条（id %d..%d）",
+            _job_state["kols"], total, int(rows[0]["id"]), int(rows[-1]["id"]),
+        )
+        for start in range(0, total, batch_size):
+            with _job_state_lock:
+                cancelled = _job_state["cancel_requested"]
+            if cancelled:
+                logger.info("MX 手动打标任务：已取消（已处理 %d/%d）", processed, total)
+                break
+            chunk = rows[start:start + batch_size]
+            response = tag_posts_llm(
+                chunk, tag_rules, action_tags, names, aliases, llm_config
+            )
+            _record_call()
+            if response is None:
+                failed += 1
+                error = "LLM 调用失败或输出无效"
+                logger.warning(
+                    "MX 手动打标批次 #%d 失败：%s（剩余消息保持未打标，可直接重试）",
+                    batches + 1, error,
+                )
+                break
+            missing = len(chunk) - len(response)
+            if chunk and missing / len(chunk) > MISSING_RATIO_LIMIT:
+                failed += 1
+                error = f"LLM 响应缺失 {missing}/{len(chunk)} 条"
+                logger.warning(
+                    "MX 手动打标批次 #%d 失败：%s（剩余消息保持未打标，可直接重试）",
+                    batches + 1, error,
+                )
+                break
+            writes, reviews, general_pairs = validate_batch_response(
+                chunk, response, topic_tags, action_tags, valid_stocks
+            )
+            for pid, tags in writes.items():
+                # 与已有标签去重合并（不再是整体替换）：本地规则打的标签保留
+                db.merge_post_tags_llm(pid, tags)
+            for pid, tag, kind in reviews:
+                db.add_pending_tag_review(pid, tag, kind, "low")
+            pairs = [
+                (alias, stock, pid)
+                for alias, stock, pid in general_pairs
+                if alias not in known_aliases
+                and is_acceptable_alias(alias, stock, valid_stocks)
+            ]
+            if pairs:
+                db.merge_stock_alias_candidates(pairs)
+            tagged_posts += sum(1 for t in writes.values() if t)
+            review_count += len(reviews)
+            candidate_count += len(pairs)
+            processed += len(chunk)
+            batches += 1
+            with _job_state_lock:
+                _job_state.update(processed=processed, batches=batches,
+                                  failed_batches=failed)
+            logger.info(
+                "MX 手动打标批次 #%d 完成 posts=%d 合并标签=%d 进审核=%d 黑话候选=%d 进度 %d/%d",
+                batches, len(chunk), sum(1 for t in writes.values() if t),
+                len(reviews), len(pairs), processed, total,
+            )
+    except Exception as exc:  # noqa: BLE001 - 任务异常体现在进度里，不影响服务
+        error = f"{type(exc).__name__}: {exc}"
+        logger.exception("MX 手动打标任务异常")
+    finally:
+        summary = {
+            "total": total,
+            "processed": processed,
+            "tagged_posts": tagged_posts,
+            "reviews": review_count,
+            "candidates": candidate_count,
+            "failed_batches": failed,
+            "cancelled": cancelled,
+            "error": error,
+        }
+        with _job_state_lock:
+            _job_state.update(
+                running=False,
+                finished_at=datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+                processed=processed, batches=batches, failed_batches=failed,
+                error=error, summary=summary,
+            )
+        _job_lock.release()
+        logger.info(
+            "MX 手动打标任务结束 processed=%d/%d 合并标签帖=%d 审核=%d 候选=%d 失败批=%d 取消=%s",
+            processed, total, tagged_posts, review_count, candidate_count, failed, cancelled,
+        )
 
 
 async def mx_llm_tag_loop(db, llm_config_provider, publish_alert=None) -> None:

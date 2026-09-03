@@ -569,7 +569,7 @@ TAG_SYSTEM_PROMPT_HEADER = (
     "股票，请给每条消息打标签，并整理出你用到的黑话映射。\n"
     "\n"
     "【判定规则】\n"
-    "1. 股票（≤2）：official 必须是真实存在的股票正式简称。你熟知 A 股所有股票的正式"
+    "1. 股票（≤6）：official 必须是真实存在的股票正式简称。你熟知 A 股所有股票的正式"
     "名称、简称和昵称，可以立刻判断一句话里提到的股票是哪只；黑话/简称/昵称/错别字"
     "一律还原成正式简称（如 宁王→宁德时代）。没有明确指向的股票不要输出。\n"
     "2. 话题（≤3）：只能从「话题词表」里选，不要发明新话题。\n"
@@ -780,5 +780,7 @@ def tag_posts_llm(
             "actions": _normalize_tag_items(item.get("actions")),
             "jargon": _normalize_jargon(item.get("jargon")),
         }
-    logger.info("LLM 打标 posts=%d 解析=%d", len(messages), len(out))
+    logger.info(
+        "LLM 打标 posts=%d 解析=%d 缺失=%d", len(messages), len(out), len(id_set) - len(out)
+    )
     return out

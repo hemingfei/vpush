@@ -4928,14 +4928,30 @@ function postCard(post) {
       <div class="p-meta">
         ${post.category_name ? `<span class="cat">${escapeHtml(post.category_name)}</span>` : ""}
         ${post.post_type === "reply" ? `<span class="cat">回复</span>` : ""}
-        ${Array.isArray(post.tags) && post.tags.length
-      ? post.tags.map((t) => `<button type="button" class="cat cat-tag post-tag-filter" data-tag="${escapeHtml(t)}" onclick="tlPickTag(this.dataset.tag)">${escapeHtml(t)}</button>`).join("")
-      : ""}
+        ${renderPostTagChips(post.tags)}
         ${post.platform === "zsxq" ? "" : RAW_MODAL_LABELS[post.platform]
           ? `<a href="#" onclick="event.preventDefault();openRawModal(${post.id}, '${RAW_MODAL_LABELS[post.platform]}')" title="查看${RAW_MODAL_LABELS[post.platform]}原始消息">查看原文 →</a>`
           : `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener">查看原文 →</a>`}
       </div>
     </div>`;
+}
+
+// 标签徽章：最多直接显示 6 个，超出折叠进「更多N」，点击展开/收起
+function renderPostTagChips(tags) {
+  if (!Array.isArray(tags) || !tags.length) return "";
+  const chip = (t) => `<button type="button" class="cat cat-tag post-tag-filter" data-tag="${escapeHtml(t)}" onclick="tlPickTag(this.dataset.tag)">${escapeHtml(t)}</button>`;
+  if (tags.length <= 6) return tags.map(chip).join("");
+  return `${tags.slice(0, 6).map(chip).join("")}` +
+    `<span class="tag-extra" hidden>${tags.slice(6).map(chip).join("")}</span>` +
+    `<button type="button" class="cat cat-tag tags-more-btn" data-n="${tags.length - 6}" onclick="togglePostTags(this)">更多${tags.length - 6}</button>`;
+}
+
+function togglePostTags(btn) {
+  const extra = btn.previousElementSibling;
+  if (!extra || !extra.classList.contains("tag-extra")) return;
+  const open = !extra.hidden;
+  extra.hidden = open;
+  btn.textContent = open ? `更多${btn.dataset.n || ""}` : "收起";
 }
 
 // 无外部原文链接的平台（MX/系统 KOL）「查看原文」弹窗展示入库时保存的原始消息：
@@ -12699,13 +12715,14 @@ async function adminDeleteCategory(id) {
 }
 
 async function loadAdminTagsTab() {
-  let data, tagStatus, tagReviews, aliasCands;
+  let data, tagStatus, tagReviews, aliasCands, tagPending;
   try {
-    [data, tagStatus, tagReviews, aliasCands] = await Promise.all([
+    [data, tagStatus, tagReviews, aliasCands, tagPending] = await Promise.all([
       api("/api/tags"),
       api("/api/admin/mx-llm-tag/status"),
       api("/api/admin/post-tag-reviews?status=pending"),
       api("/api/admin/stock-alias-candidates"),
+      api("/api/admin/mx-llm-tag/pending"),
     ]);
   } catch (err) {
     if (!routeStillActive(_adminRenderSeq)) return;
@@ -12781,33 +12798,33 @@ async function loadAdminTagsTab() {
         <span id="tag-backfill-result" class="muted"></span>
       </div>
     </section>
-    ${adminMxTagPanel(tagStatus, tagReviews, aliasCands)}
+    ${adminMxTagPanel(tagStatus, tagReviews, aliasCands, tagPending)}
     <section class="section-panel">
       <header class="section-head"><div><h2 class="section-title">当前词表（${tags.length} 个）</h2></div></header>
       <div class="tag-vocab-preview">
         ${tags.length ? tags.map((r) => `<span class="cat cat-tag">${escapeHtml(r.tag)}</span>`).join("") : "（空）"}
       </div>
     </section>`;
+  // 有打标任务在跑（或刚结束未确认）：恢复进度轮询，更新面板里的进度区
+  adminMxTagPollProgress();
 }
 
 const _TAG_REVIEW_KINDS = { topic: "话题", stock: "股票", action: "操作" };
 let _mxAliasCandidates = [];
 let _mxTagTestResult = null;
+let _mxTagPollTimer = null;
+let _mxTagSeenFinishedAt = null; // 已提示过的任务完成时刻（防重复弹提示）
+let _mxTagPollSeenOnce = false;  // 首次观察进度时静默采纳当前状态
 
-function adminMxTagPanel(tagStatus, tagReviews, aliasCands) {
+function adminMxTagPanel(tagStatus, tagReviews, aliasCands, tagPending) {
   const st = tagStatus || {};
-  const lastRun = st.last_run;
+  const pendingTotal = Number(tagPending?.total) || 0;
   const statusLine = [
-    `下次触发 ${escapeHtml(st.next_tick || "—")}`,
-    `游标 ${Number(st.cursor) || 0}`,
+    `未打标消息 ${pendingTotal} 条`,
     `今日 LLM 调用 ${(st.calls_today && st.calls_today.count) || 0} 次`,
     `待审标签 ${(st.pending_reviews || 0)} 条`,
     `黑话候选 ${(st.pending_alias_candidates || 0)} 条`,
   ].join("；");
-  const lastRunLine = !lastRun
-    ? "最近一次：尚未触发"
-    : `最近一次：${escapeHtml(lastRun.at || "")} 处理 ${lastRun.processed || 0} 条 / ${lastRun.batches || 0} 批` +
-      (lastRun.failed ? `（失败：${escapeHtml(lastRun.error || "未知")}）` : "");
   const alertLine = st.alert_active
     ? `<p class="status-fail" style="margin-top:8px">⚠️ 连续失败 ${st.consecutive_failures || 0} 次，已发系统告警，恢复后会再通知。</p>`
     : "";
@@ -12844,18 +12861,16 @@ function adminMxTagPanel(tagStatus, tagReviews, aliasCands) {
   return `
     <section class="section-panel">
       <header class="section-head">
-        <div><h2 class="section-title">MX 实时打标（LLM）</h2>
-        <p class="section-meta">MX 消息由 LLM 打话题/股票/操作三类标签（带准确度）：high 直接写入，low 进下方审核队列；发现的通用黑话进候选队列。工作日 9:00-10:30 每分钟、10:30-15:10 每五分钟，另加 18 点/23 点集中；周末 9/12/15/18/20/23 点集中。</p></div>
+        <div><h2 class="section-title">MX LLM 打标（手动）</h2>
+        <p class="section-meta">选大V后对其未打标消息跑 LLM（话题/股票/操作三类标签，带准确度）：high 与消息已有标签<b>去重合并</b>写入，low 进下方审核队列；发现的通用黑话进候选队列。一次最多处理 1000 条；自动触发已停用。</p></div>
       </header>
       <p class="section-meta" style="margin-top:8px">${statusLine}</p>
-      <p class="section-meta" style="margin-top:4px">${lastRunLine}</p>
       ${alertLine}
       <div class="toolbar" style="margin-top:12px">
-        <button class="btn-normal" onclick="adminMxTagTest()">试打 10 条（不写库）</button>
-        <button class="${st.enabled ? "btn-ghost" : "btn-normal"}" onclick="adminMxTagToggle()">
-          ${st.enabled ? "关闭实时打标" : "开启实时打标"}
-        </button>
+        <button class="btn-normal" onclick="adminMxTagOpenRunModal()">开始 LLM 打标</button>
+        <button class="btn-ghost" onclick="adminMxTagTest()">试打 10 条（不写库）</button>
       </div>
+      <div id="mx-tag-progress" style="margin-top:12px">${adminMxTagProgressInner()}</div>
       ${adminMxTagTestBlock()}
     </section>
     <section class="section-panel">
@@ -12880,11 +12895,157 @@ function adminMxTagPanel(tagStatus, tagReviews, aliasCands) {
     </section>`;
 }
 
+// ---- 手动打标：选大V弹窗 + 进度轮询 ----
+
+function adminMxTagProgressInner(job) {
+  const j = job || {};
+  const s = j.summary;
+  if (!j.running && !s) {
+    return `<p class="section-meta">暂无进行中的打标任务。</p>`;
+  }
+  if (!j.running && s) {
+    return `
+      <p class="section-meta">上次任务${s.cancelled ? "已取消" : "已完成"}（${escapeHtml(j.finished_at || "")}）：
+        处理 <b>${s.processed || 0}</b>/${s.total || 0} 条，合并标签 <b>${s.tagged_posts || 0}</b> 条消息，
+        进审核 ${s.reviews || 0} 个，黑话候选 ${s.candidates || 0} 个，失败批次 ${s.failed_batches || 0}。</p>
+      ${s.error ? `<p class="status-fail" style="margin-top:4px">错误：${escapeHtml(s.error)}</p>` : ""}`;
+  }
+  const pct = j.total ? Math.min(100, Math.round(((j.processed || 0) / j.total) * 100)) : 0;
+  return `
+    <p class="section-meta">正在打标（${escapeHtml((j.kols || []).join("、"))}）：
+      已处理 <b>${j.processed || 0}</b>/${j.total || 0} 条 · 批次 ${j.batches || 0} · 失败批次 ${j.failed_batches || 0}</p>
+    <div class="mx-tag-progress-bar"><div class="mx-tag-progress-fill" style="width:${pct}%"></div></div>
+    <div class="toolbar" style="margin-top:8px">
+      <button class="btn-sm danger" onclick="adminMxTagCancel()">取消任务</button>
+      ${j.cancel_requested ? `<span class="muted">取消中：当前批次完成后停止…</span>` : ""}
+    </div>`;
+}
+
+function adminMxTagPollProgress() {
+  if (_mxTagPollTimer) return; // 已有轮询在跑
+  const tick = async () => {
+    let job;
+    try {
+      job = await api("/api/admin/mx-llm-tag/progress");
+    } catch {
+      _mxTagPollTimer = setTimeout(tick, 5000);
+      return;
+    }
+    const box = $("#mx-tag-progress");
+    if (box) box.innerHTML = adminMxTagProgressInner(job);
+    if (job.running) {
+      _mxTagPollTimer = setTimeout(tick, 3000);
+      return;
+    }
+    _mxTagPollTimer = null;
+    const finishedAt = job.finished_at || "";
+    if (!_mxTagPollSeenOnce) {
+      // 首次观察：静默采纳当前状态（避免页面加载时对历史完成任务重复提示）
+      _mxTagPollSeenOnce = true;
+      _mxTagSeenFinishedAt = finishedAt;
+    } else if (job.summary && finishedAt !== _mxTagSeenFinishedAt) {
+      _mxTagSeenFinishedAt = finishedAt;
+      if (routeStillActive(_adminRenderSeq)) {
+        const s = job.summary;
+        flash(
+          s.error
+            ? `打标任务结束（出错）：已处理 ${s.processed}/${s.total} 条。${s.error}`
+            : `打标任务${s.cancelled ? "已取消" : "完成"}：处理 ${s.processed}/${s.total} 条，合并标签 ${s.tagged_posts} 条消息`,
+          s.error ? "error" : "ok",
+        );
+        loadAdminVocabTab("tags");
+      }
+    }
+  };
+  tick();
+}
+
+async function adminMxTagOpenRunModal() {
+  let pending;
+  try {
+    pending = await api("/api/admin/mx-llm-tag/pending");
+  } catch (err) {
+    flash("加载未打标数据失败: " + err.message, "error");
+    return;
+  }
+  const kols = Array.isArray(pending?.kols) ? pending.kols : [];
+  const cap = Number(pending?.max_messages) || 1000;
+  if (!kols.length) {
+    flash("还没有 MX 大V，请先在「数据源 → MX」同步房间", "error");
+    return;
+  }
+  const rows = kols.map((k) => `
+    <label class="mx-tag-kol-row" data-kol="${k.kol_id}" data-pending="${k.pending}">
+      <input type="checkbox" data-kol="${k.kol_id}" ${k.pending > 0 ? "" : "disabled"}>
+      <span class="mx-tag-kol-name">${escapeHtml(k.name || `大V${k.kol_id}`)}${k.enabled ? "" : ' <span class="muted">（已停用）</span>'}</span>
+      <span class="mx-tag-kol-count ${k.pending ? "" : "muted"}">${k.pending} 条未打标</span>
+    </label>`).join("");
+  const mask = document.createElement("div");
+  mask.className = "admin-modal-mask";
+  mask.id = "mx-tag-run-mask";
+  mask.innerHTML = `
+    <div class="admin-modal" role="dialog" aria-modal="true" aria-label="选择要打标的 MX 大V">
+      <h3 class="admin-modal-title">选择要 LLM 打标的 MX 大V</h3>
+      <p class="section-meta">勾选大V，合计最多处理 ${cap} 条未打标消息（最旧优先）；单个大V超出上限时只处理其最旧的 ${cap} 条。</p>
+      <div class="admin-modal-list">${rows}</div>
+      <p class="section-meta" id="mx-tag-run-total">已选 0 / ${cap} 条</p>
+      <div class="toolbar">
+        <button class="btn-normal" id="mx-tag-run-start" disabled onclick="adminMxTagStartRun()">开始打标</button>
+        <button class="btn-ghost" onclick="document.getElementById('mx-tag-run-mask').remove()">取消</button>
+      </div>
+    </div>`;
+  document.body.appendChild(mask);
+  const recount = () => {
+    let total = 0;
+    mask.querySelectorAll("input[type=checkbox]:checked").forEach((cb) => {
+      const row = cb.closest(".mx-tag-kol-row");
+      total += Math.min(Number(row?.dataset.pending) || 0, cap);
+    });
+    const startBtn = mask.querySelector("#mx-tag-run-start");
+    startBtn.disabled = total === 0;
+    startBtn.textContent = total > cap ? `开始打标（处理最旧的 ${cap} 条）` : `开始打标（${total} 条）`;
+    mask.querySelector("#mx-tag-run-total").innerHTML = total > cap
+      ? `已选超过上限，本次将处理最旧的 <b>${cap}</b> 条`
+      : `已选 <b>${total}</b> / ${cap} 条`;
+  };
+  mask.addEventListener("change", recount);
+  recount();
+}
+
+async function adminMxTagStartRun() {
+  const mask = document.getElementById("mx-tag-run-mask");
+  const kolIds = [...mask.querySelectorAll("input[type=checkbox]:checked")]
+    .map((cb) => Number(cb.dataset.kol));
+  if (!kolIds.length) return;
+  try {
+    await api("/api/admin/mx-llm-tag/run", {
+      method: "POST",
+      body: JSON.stringify({ kol_ids: kolIds, max_messages: 1000 }),
+    });
+    mask.remove();
+    flash("打标任务已启动");
+    const box = $("#mx-tag-progress");
+    if (box) box.innerHTML = adminMxTagProgressInner({ running: true });
+    adminMxTagPollProgress();
+  } catch (err) {
+    flash("启动失败: " + err.message, "error");
+  }
+}
+
+async function adminMxTagCancel() {
+  try {
+    await api("/api/admin/mx-llm-tag/cancel", { method: "POST" });
+    flash("已请求取消，当前批次完成后停止");
+  } catch (err) {
+    flash("取消失败: " + err.message, "error");
+  }
+}
+
 function adminMxTagTestBlock() {
   const r = _mxTagTestResult;
   if (!r) return "";
   if (r.skipped === "no_posts") {
-    return `<p class="section-meta" style="margin-top:8px">试打结果：游标 ${r.cursor} 之后暂无未处理消息。</p>`;
+    return `<p class="section-meta" style="margin-top:8px">试打结果：暂无未打标消息。</p>`;
   }
   const summary = r.summary || {};
   const rows = (r.items || []).map((it) => `
@@ -12896,7 +13057,7 @@ function adminMxTagTestBlock() {
       <td>${(it.jargon || []).map((j) => `${escapeHtml(j.alias)}=${escapeHtml(j.stock)}`).join("、") || '<span class="muted">（无）</span>'}</td>
     </tr>`).join("");
   return `
-    <p class="section-meta" style="margin-top:10px">试打 ${r.tested} 条（游标 ${r.cursor} 之后，未写库）：
+    <p class="section-meta" style="margin-top:10px">试打 ${r.tested} 条未打标消息（未写库，正式打标将与已有标签去重合并）：
       预计直接写入 <b>${summary.would_tag || 0}</b> 条、
       进审核 <b>${summary.would_review || 0}</b> 个标签、
       新增黑话候选 <b>${summary.would_candidates || 0}</b> 个。</p>
@@ -12918,20 +13079,6 @@ async function adminMxTagTest() {
     flash("试打失败: " + err.message, "error");
   }
   loadAdminVocabTab("tags");
-}
-
-async function adminMxTagToggle() {
-  try {
-    const st = await api("/api/admin/mx-llm-tag/status");
-    const data = await api("/api/admin/mx-llm-tag/toggle", {
-      method: "POST",
-      body: JSON.stringify({ enabled: !st.enabled }),
-    });
-    flash(data.enabled ? "MX 实时打标已开启" : "MX 实时打标已关闭");
-    loadAdminVocabTab("tags");
-  } catch (err) {
-    flash("操作失败: " + err.message, "error");
-  }
 }
 
 async function adminReviewTag(id, action) {

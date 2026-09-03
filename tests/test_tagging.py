@@ -126,11 +126,17 @@ def test_stock_name_substring_match():
 
 
 def test_stock_tags_dedup_and_limit():
-    """$标记$ 与股票名表命中同名去重；最多 2 个。"""
+    """$标记$ 与股票名表命中同名去重；最多 6 个。"""
     post = make_post(content="$长鑫(SH688825)$ 长鑫大涨，$中船特气(SH688146)$ 也涨，$神火股份(SZ000933)$ 跟进。")
     result = stock_tag_posts([post], ["长鑫"])
-    # 长鑫去重后剩 2 个（长鑫、中船特气），第 3 个（神火）被截断
-    assert result[0] == ["长鑫", "中船特气"]
+    # 同名去重（长鑫 标记+文字）后 3 个全保留（上限已从 2 放宽到 6）
+    assert result[0] == ["长鑫", "中船特气", "神火股份"]
+    # 超过 6 只截断到前 6
+    marks = " ".join(f"$股票{i}(SH6000{i})$" for i in range(1, 8))
+    result = stock_tag_posts(
+        [make_post(content=marks)], [f"股票{i}" for i in range(1, 8)]
+    )
+    assert result[0] == [f"股票{i}" for i in range(1, 7)]
 
 
 def test_stock_no_match_empty():

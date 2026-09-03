@@ -28,7 +28,7 @@ def _reset_state():
     with m._state_lock:
         m._state.update(
             consecutive_failures=0, alert_active=False, last_run=None,
-            calls_today={"date": "", "count": 0},
+            calls_today={"date": "", "count": 0}, tick_started_at=None,
         )
 
 
@@ -135,8 +135,26 @@ def test_validate_total_cap_priority_stock_first():
     writes, _reviews, _pairs = m.validate_batch_response(
         rows, response, TOPICS, ACTIONS, VALID
     )
-    # 2 股票 + 2 操作 + 1 话题（截到 5，话题优先级最低）
-    assert writes[1] == ["贵州茅台", "宁德时代", "建仓", "做T", "宏观"]
+    # 2 股票 + 2 操作 + 3 话题，共 7 个未触顶（总上限 10）
+    assert writes[1] == ["贵州茅台", "宁德时代", "建仓", "做T", "宏观", "大盘", "个股"]
+
+    # 股票上限 6：7 只合法股票截到前 6；其余维度全保留（6+2+3=11 < 总上限 15）
+    big_topics = [f"话{i}" for i in range(1, 4)]
+    big_actions = [f"操{i}" for i in range(1, 3)]
+    big_valid = {f"股{i}" for i in range(1, 8)}
+    response = {
+        1: _result(
+            topics=[{"name": t, "confidence": "high"} for t in big_topics],
+            stocks=[{"official": s, "confidence": "high"} for s in sorted(big_valid)],
+            actions=[{"name": a, "confidence": "high"} for a in big_actions],
+        ),
+    }
+    writes, _reviews, _pairs = m.validate_batch_response(
+        rows, response, big_topics, big_actions, big_valid
+    )
+    assert writes[1] == [
+        f"股{i}" for i in range(1, 7)
+    ] + ["操1", "操2", "话1", "话2", "话3"]
 
 
 def test_validate_general_jargon_only():
@@ -394,7 +412,7 @@ def test_run_tag_test_preview_and_no_writes():
     finally:
         llm.tag_posts_llm = orig
 
-    assert result["tested"] == 3 and result["cursor"] == 0
+    assert result["tested"] == 3
     items = {it["post_id"]: it for it in result["items"]}
     assert items[ids[0]]["tags"] == ["贵州茅台"]
     assert items[ids[0]]["jargon"] == [{"alias": "茅哥", "stock": "贵州茅台"}]
@@ -415,12 +433,93 @@ def test_run_tag_test_skips():
     db = make_db()
     (pid,) = _add_mx_posts(db, 1)
     _reset_state()
-    with m._tick_lock:
+    with m._test_lock:  # 只有另一个试打在跑才 busy
         assert m.run_tag_test(db, make_config()) == {"skipped": "busy"}
     assert m.run_tag_test(db, make_config(None)) == {"skipped": "no_llm"}
-    db.set_mx_llm_tag_cursor(pid)  # 游标推到末尾 → 无未处理消息
+    db.update_post_tags_llm(pid, [])  # 标记已打标 → 无未打标消息
     result = m.run_tag_test(db, make_config())
-    assert result["skipped"] == "no_posts" and result["cursor"] == pid
+    assert result == {"skipped": "no_posts"}
+    db.close()
+
+
+def test_run_tag_test_runs_alongside_formal_tick():
+    """正式 tick 持锁期间试打照常可用：试打零写入，与打标并行是安全的。"""
+    db = make_db()
+    (pid,) = _add_mx_posts(db, 1)
+    import app.llm as llm
+    orig = llm.tag_posts_llm
+    llm.tag_posts_llm = lambda rows, *a, **kw: {
+        pid: _result(stocks=[{"official": "贵州茅台", "confidence": "high"}])
+    }
+    _reset_state()
+    try:
+        with m._tick_lock:  # 模拟正式 tick 正在跑（开盘时段可能连持数十分钟）
+            result = m.run_tag_test(db, make_config())
+        assert result["tested"] == 1
+        assert result["items"][0]["tags"] == ["贵州茅台"]
+        assert db.get_mx_llm_tag_cursor() == 0  # 试打不推游标
+        db.close()
+        db = make_db()
+        (pid2,) = _add_mx_posts(db, 1)
+        # 正式 tick 自身不受影响
+        llm.tag_posts_llm = lambda rows, *a, **kw: {int(r["id"]): _result() for r in rows}
+        assert m.run_tag_tick(db, make_config())["processed"] == 1
+    finally:
+        llm.tag_posts_llm = orig
+    db.close()
+
+
+def test_tick_running_flag_visible_in_status():
+    db = make_db()
+    _reset_state()
+    observed = {}
+    orig = m._run_tag_tick_locked
+
+    def spy(db_, cfg, alert=None):
+        status = m.get_tagger_status()
+        observed["running"] = status["tick_running"]
+        observed["seconds"] = status["tick_running_seconds"]
+        return {"processed": 0, "batches": 0, "failed_batches": 0, "error": "", "cursor": 0}
+
+    m._run_tag_tick_locked = spy
+    try:
+        m.run_tag_tick(db, make_config())
+    finally:
+        m._run_tag_tick_locked = orig
+
+    assert observed["running"] is True and observed["seconds"] >= 0
+    assert m.get_tagger_status()["tick_running"] is False  # 结束后复位
+    db.close()
+
+
+def test_run_tag_test_logs_details(caplog):
+    """试打全程有日志：开始/汇总/逐帖明细，管理员可从服务端日志核对打标依据。"""
+    import logging
+
+    db = make_db()
+    (pid,) = _add_mx_posts(db, 1)
+    import app.llm as llm
+    orig = llm.tag_posts_llm
+    llm.tag_posts_llm = lambda rows, *a, **kw: {
+        pid: _result(
+            stocks=[{"official": "贵州茅台", "raw": "茅哥", "confidence": "high"}],
+            jargon=[{"raw": "茅哥", "official": "贵州茅台", "kind": "general"}],
+        )
+    }
+    _reset_state()
+    try:
+        with caplog.at_level(logging.INFO, logger="app.mx_llm_tagging"):
+            result = m.run_tag_test(db, make_config())
+    finally:
+        llm.tag_posts_llm = orig
+
+    assert result["tested"] == 1
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "试打开始" in text and "取未打标消息 1 条" in text
+    assert "试打完成" in text and "将合并=1" in text
+    assert f"post={pid}" in text
+    assert "合并=[贵州茅台]" in text
+    assert "黑话=[茅哥=贵州茅台]" in text
     db.close()
 
 
@@ -447,11 +546,16 @@ def test_append_post_tag_cap_and_dedupe():
     (pid,) = _add_mx_posts(db, 1)
     assert db.append_post_tag(pid, "贵州茅台") is True
     assert db.append_post_tag(pid, "贵州茅台") is False  # 判重
-    for tag in ("宁德时代", "宏观", "大盘", "个股"):
-        db.append_post_tag(pid, tag)
-    assert db.append_post_tag(pid, "科技") is False  # 已满 5 个
+    # 补满到 15 个后追加失败
+    for tag in ("宁德时代", "申菱环境", "宏观", "大盘", "个股", "科技", "财报",
+                "政策", "资讯", "美股", "港股", "黄金", "大宗", "医药"):
+        assert db.append_post_tag(pid, tag) is True
+    assert db.append_post_tag(pid, "加密") is False  # 已满 15 个
     posts = {p["id"]: p for p in db.list_posts(platform="mx", include_hidden=True)}
-    assert posts[pid]["tags"] == ["贵州茅台", "宁德时代", "宏观", "大盘", "个股"]
+    assert posts[pid]["tags"] == [
+        "贵州茅台", "宁德时代", "申菱环境", "宏观", "大盘", "个股", "科技", "财报",
+        "政策", "资讯", "美股", "港股", "黄金", "大宗", "医药",
+    ]
     db.close()
 
 
@@ -534,3 +638,110 @@ def test_tag_posts_llm_bad_output_returns_none():
         assert out is None
     assert tag_posts_llm(rows, [], [], [], llm_config=None) is None
     assert tag_posts_llm([], [], [], [], llm_config=make_config()) == {}
+
+
+# ---- 手动打标：合并写入 / 未打标计数 / 后台任务 ----
+
+def test_merge_post_tags_llm_dedupe_and_cap():
+    """LLM 结果与已有标签去重合并（已有在前），总数截到 POST_TAGS_MAX。"""
+    db = make_db()
+    (pid,) = _add_mx_posts(db, 1)
+    db.update_post_tags(pid, ["宏观", "个股"])  # 本地规则先打的标签
+    n = db.merge_post_tags_llm(pid, ["申菱环境", "个股", "做T"])
+    assert n == 4
+    row = db.list_posts(platform="mx", include_hidden=True)[0]
+    assert row["tags"] == ["宏观", "个股", "申菱环境", "做T"]
+    assert row["llm_tagged"] == 1
+    # 合并后超总数上限：截到前 POST_TAGS_MAX 个
+    db.merge_post_tags_llm(pid, [f"标{i}" for i in range(12)])  # 4+12=16 → 15
+    row = db.list_posts(platform="mx", include_hidden=True)[0]
+    assert len(row["tags"]) == 15
+    db.close()
+
+
+def test_count_and_list_mx_pending():
+    db = make_db()
+    kid = db.add_kol("mx", "房间A", "p1")
+    kid2 = db.add_kol("mx", "房间B", "p2")
+    p1 = db.insert_post("mx", kid, "a1", "", "消息一", "u", "")
+    p2 = db.insert_post("mx", kid, "a2", "", "消息二", "u", "")
+    b1 = db.insert_post("mx", kid2, "b1", "", "消息三", "u", "")
+    db._execute("UPDATE posts SET blocked = 1 WHERE id = ?", (p2,))
+    done = db.insert_post("mx", kid2, "b2", "", "消息四", "u", "")
+    db.update_post_tags_llm(done, [])  # 已打标的不算 pending
+    counts = {r["kol_id"]: int(r["pending"]) for r in db.count_mx_pending_by_kol()}
+    assert counts[kid] == 1 and counts[kid2] == 1
+    assert db.count_mx_pending_total() == 2
+    assert [r["id"] for r in db.list_mx_pending_posts([kid], 10)] == [p1]
+    assert [r["id"] for r in db.list_mx_pending_posts(None, 10)] == [p1, b1]
+    db.close()
+
+
+def test_run_manual_job_merges_and_reports():
+    """手动任务：分批合并写入、low 进审核、进度汇总正确、llm_tagged 置位。"""
+    db = make_db()
+    kid = db.add_kol("mx", "房间M", "m1")
+    p1 = db.insert_post("mx", kid, "x1", "", "申领环境做个T", "u", "")
+    p2 = db.insert_post("mx", kid, "x2", "", "宁王可以关注", "u", "")
+    db.update_post_tags(p1, ["个股"])  # 本地已有标签，验证合并保留
+    import app.llm as llm
+    orig = llm.tag_posts_llm
+
+    def fake(rows, *a, **kw):
+        out = {}
+        for r in rows:
+            out[int(r["id"])] = (
+                _result(
+                    stocks=[{"official": "申菱环境", "confidence": "high"}],
+                    actions=[{"name": "做T", "confidence": "high"}],
+                ) if "申领" in r["content"]
+                else _result(topics=[{"name": "科技", "confidence": "low"}])
+            )
+        return out
+
+    _reset_state()
+    llm.tag_posts_llm = fake
+    assert m._job_lock.acquire(blocking=False)
+    try:
+        m._run_manual_job(db, make_config(), [kid], 100)
+        status = m.get_manual_job_status()
+        assert status["running"] is False and status["total"] == 2
+        s = status["summary"]
+        # tagged_posts 只统计拿到 LLM 标签的消息（p2 仅 low，进审核不写标签）
+        assert s["processed"] == 2 and s["tagged_posts"] == 1
+        assert s["reviews"] == 1 and s["candidates"] == 0 and s["failed_batches"] == 0
+        assert s["error"] == "" and s["cancelled"] is False
+        posts = {p["id"]: p for p in db.list_posts(platform="mx", include_hidden=True)}
+        # 本地标签保留 + LLM 标签去重合并；仅 low 的消息合并结果为空但已算处理
+        assert posts[p1]["tags"] == ["个股", "申菱环境", "做T"]
+        assert posts[p2]["tags"] == []
+        assert all(p["llm_tagged"] == 1 for p in posts.values())
+        assert [(r["tag"], r["kind"]) for r in db.list_tag_reviews()] == [("科技", "topic")]
+        assert db.list_mx_pending_posts(None, 100) == []
+    finally:
+        llm.tag_posts_llm = orig
+    db.close()
+
+
+def test_run_manual_job_llm_failure_keeps_pending():
+    """LLM 调用失败：任务报错收场，未处理消息保持未打标（可直接重试）。"""
+    db = make_db()
+    kid = db.add_kol("mx", "房间F", "f1")
+    p1 = db.insert_post("mx", kid, "y1", "", "内容一", "u", "")
+    p2 = db.insert_post("mx", kid, "y2", "", "内容二", "u", "")
+    import app.llm as llm
+    orig = llm.tag_posts_llm
+    _reset_state()
+    llm.tag_posts_llm = lambda rows, *a, **kw: None
+    assert m._job_lock.acquire(blocking=False)
+    try:
+        m._run_manual_job(db, make_config(), [kid], 100)
+        status = m.get_manual_job_status()
+        assert status["summary"]["failed_batches"] == 1
+        assert "LLM 调用失败" in status["summary"]["error"]
+        assert status["summary"]["processed"] == 0
+        pending_ids = {r["id"] for r in db.list_mx_pending_posts(None, 100)}
+        assert pending_ids == {p1, p2}
+    finally:
+        llm.tag_posts_llm = orig
+    db.close()

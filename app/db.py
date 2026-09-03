@@ -279,8 +279,10 @@ STOCK_ALIAS_CANDIDATES_MAX = 200
 # 操作类型词表（LLM 打标的第三类标签，管理端可改）
 ACTION_TAG_VOCABULARY_KEY = "action_tag_vocabulary"
 DEFAULT_ACTION_TAGS = ["建仓", "加仓", "减仓", "清仓", "做T", "观察"]
-# 帖子标签总数上限（话题+股票+操作），与规则打标的话题≤3+股票≤2 体系对齐
-POST_TAGS_MAX = 5
+# 帖子标签总数上限（话题+股票+操作），与规则打标的话题≤3+股票≤6 体系对齐
+POST_TAGS_MAX = 15
+# 其中股票标签最多 6 个（LLM 打标与规则打标同口径）
+POST_STOCK_TAGS_MAX = 6
 
 # 常用股票名表：纯文字提及（无 $标记$）时按名称子串匹配打股票标签。
 # 管理员可在后台增删；$股票名(代码)$ 标记会自动识别、无需在此登记。
@@ -4678,9 +4680,9 @@ class DB:
         )
 
     def list_failed_push_logs(self, since_hours: int = 24, limit: int = 2000) -> list[dict]:
-        """最近 N 小时内失败的推送记录（用于重启后恢复重推）。"""
+        """最近 N 小时内失败的推送记录，含失败原因（用于重启后恢复重推）。"""
         return self._rows(
-            "SELECT post_id, channel, user_id FROM push_logs "
+            "SELECT post_id, channel, user_id, error FROM push_logs "
             "WHERE status = 'failed' AND created_at >= datetime('now', ?) "
             "ORDER BY id DESC LIMIT ?",
             (f"-{since_hours} hours", limit),
@@ -4944,6 +4946,32 @@ class DB:
             "UPDATE posts SET tags = ?, llm_tagged = 1 WHERE id = ?", (tags_json, post_id)
         )
 
+    def merge_post_tags_llm(self, post_id: int, tags: list[str]) -> int:
+        """LLM 打标结果与已有标签去重合并（已有在前、新标签补位），置 llm_tagged=1。
+
+        总数截到 POST_TAGS_MAX。返回合并后的标签数。
+        """
+        rows = self._rows("SELECT tags FROM posts WHERE id = ?", (post_id,))
+        if not rows:
+            return 0
+        try:
+            existing = json.loads(str(rows[0].get("tags") or "[]"))
+        except ValueError:
+            existing = []
+        if not isinstance(existing, list):
+            existing = []
+        merged = [str(t) for t in existing if str(t)]
+        for tag in tags or []:
+            tag = str(tag)
+            if tag and tag not in merged:
+                merged.append(tag)
+        merged = merged[:POST_TAGS_MAX]
+        self._execute(
+            "UPDATE posts SET tags = ?, llm_tagged = 1 WHERE id = ?",
+            (json.dumps(merged, ensure_ascii=False), post_id),
+        )
+        return len(merged)
+
     # ---- MX 实时消息 LLM 打标（app/mx_llm_tagging.py） ----
 
     def list_mx_posts_after(self, cursor: int, limit: int = 40) -> list[dict]:
@@ -4961,6 +4989,53 @@ class DB:
             "ORDER BY p.id ASC LIMIT ?",
             (int(cursor), int(limit)),
         )
+
+    def count_mx_pending_by_kol(self) -> list[dict]:
+        """每个 MX 大V 的未 LLM 打标消息数（blocked/hidden 不算），含 0 条的大V。
+
+        手动打标弹窗用：按未打标数降序、同名再按名称排，便于优先处理积压大户。
+        """
+        return self._rows(
+            "SELECT k.id AS kol_id, k.name AS name, k.enabled AS enabled, "
+            "COUNT(p.id) AS pending FROM kols k "
+            "LEFT JOIN posts p ON p.kol_id = k.id AND p.platform = 'mx' "
+            "AND COALESCE(p.blocked, 0) = 0 AND COALESCE(p.hidden, 0) = 0 "
+            "AND COALESCE(p.llm_tagged, 0) = 0 "
+            "WHERE k.platform = 'mx' "
+            "GROUP BY k.id, k.name, k.enabled "
+            "ORDER BY pending DESC, k.name ASC"
+        )
+
+    def count_mx_pending_total(self) -> int:
+        """全部 MX 帖的未 LLM 打标消息总数（blocked/hidden 不算）。"""
+        rows = self._rows(
+            "SELECT COUNT(*) AS n FROM posts p "
+            "WHERE p.platform = 'mx' AND COALESCE(p.blocked, 0) = 0 "
+            "AND COALESCE(p.hidden, 0) = 0 AND COALESCE(p.llm_tagged, 0) = 0"
+        )
+        return int(rows[0]["n"]) if rows else 0
+
+    def list_mx_pending_posts(self, kol_ids: list[int] | None, limit: int) -> list[dict]:
+        """取待 LLM 打标的 MX 帖（未打标、未拦截/隐藏，id 升序=最旧优先）。
+
+        kol_ids 为 None 时不限大V（试打用）；否则只取指定大V（手动打标用）。
+        行结构与 list_mx_posts_after 一致，另带 kol_id。
+        """
+        sql = (
+            "SELECT p.id, p.platform, p.external_id, p.title, p.content, "
+            "p.published_at, p.kol_id, k.name AS kol_name FROM posts p "
+            "JOIN kols k ON k.id = p.kol_id "
+            "WHERE p.platform = 'mx' AND COALESCE(p.llm_tagged, 0) = 0 "
+            "AND COALESCE(p.blocked, 0) = 0 AND COALESCE(p.hidden, 0) = 0 "
+        )
+        params: list = []
+        if kol_ids:
+            placeholders = ",".join("?" for _ in kol_ids)
+            sql += f"AND p.kol_id IN ({placeholders}) "
+            params.extend(int(kid) for kid in kol_ids)
+        sql += "ORDER BY p.id ASC LIMIT ?"
+        params.append(int(limit))
+        return self._rows(sql, params)
 
     def append_post_tag(self, post_id: int, tag: str) -> bool:
         """给帖子追加一个标签（审核通过用）；已存在或已达上限时不写，返回是否写入。"""

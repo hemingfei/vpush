@@ -568,6 +568,11 @@ class MxLlmTagToggleIn(BaseModel):
     enabled: bool
 
 
+class MxLlmTagRunIn(BaseModel):
+    kol_ids: list[int]
+    max_messages: int = 1000
+
+
 class AliasCandidateActionIn(BaseModel):
     alias: str
     stock: str
@@ -6009,7 +6014,7 @@ def create_api_router(
 
     @router.post("/admin/mx-llm-tag/test", dependencies=[Depends(require_admin)])
     def mx_llm_tag_test(request: Request, admin: dict = Depends(require_admin)):
-        """试打 10 条：游标后未处理 MX 帖走一遍 LLM 打标，只预览不写库、不推游标。"""
+        """试打 10 条：取未打标 MX 消息走一遍 LLM 打标，只预览不写库。"""
         from .mx_llm_tagging import run_tag_test
         from .scheduler import _system_llm_config
 
@@ -6017,11 +6022,72 @@ def create_api_router(
         result = run_tag_test(db, llm_cfg)
         skipped = result.get("skipped")
         if skipped == "busy":
-            raise HTTPException(status_code=409, detail="打标正在进行，请稍后再试")
+            raise HTTPException(status_code=409, detail="上一次试打仍在进行，请稍后再试")
         if skipped == "no_llm":
             raise HTTPException(status_code=400, detail="未配置系统 LLM（设置 → AI 摘要）")
         _audit(admin, "mx_llm_tag_test", detail=f"tested={result.get('tested', 0)}")
         return result
+
+    @router.get("/admin/mx-llm-tag/pending", dependencies=[Depends(require_admin)])
+    def mx_llm_tag_pending():
+        """手动打标弹窗：每个 MX 大V 的未打标消息数（含 0 条的大V）与总数。"""
+        from .mx_llm_tagging import MAX_MANUAL_MESSAGES
+
+        kols = db.count_mx_pending_by_kol()
+        return {
+            "kols": [
+                {
+                    "kol_id": int(r["kol_id"]),
+                    "name": str(r["name"] or ""),
+                    "enabled": bool(r["enabled"]),
+                    "pending": int(r["pending"]),
+                }
+                for r in kols
+            ],
+            "total": db.count_mx_pending_total(),
+            "max_messages": MAX_MANUAL_MESSAGES,
+        }
+
+    @router.post("/admin/mx-llm-tag/run", dependencies=[Depends(require_admin)])
+    def mx_llm_tag_run(body: MxLlmTagRunIn, request: Request, admin: dict = Depends(require_admin)):
+        """启动手动打标后台任务：所选大V的未打标消息，最旧优先，上限 1000 条。
+
+        结果与每条消息已有标签去重合并；进度经 /admin/mx-llm-tag/progress 轮询。
+        """
+        from .mx_llm_tagging import MAX_MANUAL_MESSAGES, start_manual_job
+        from .scheduler import _system_llm_config
+
+        kol_ids = sorted({int(kid) for kid in (body.kol_ids or [])})
+        if not kol_ids:
+            raise HTTPException(status_code=400, detail="请至少选择一个大V")
+        max_messages = min(
+            max(int(body.max_messages or MAX_MANUAL_MESSAGES), 1), MAX_MANUAL_MESSAGES
+        )
+        llm_cfg = _system_llm_config(db, getattr(request.app.state, "llm_config", None))
+        result = start_manual_job(db, llm_cfg, kol_ids, max_messages)
+        if not result["started"]:
+            if result["reason"] == "busy":
+                raise HTTPException(status_code=409, detail="打标任务正在进行，请稍后再试")
+            raise HTTPException(status_code=400, detail="未配置系统 LLM（设置 → AI 摘要）")
+        _audit(admin, "mx_llm_tag_run", detail=f"kols={len(kol_ids)} max={max_messages}")
+        return {"ok": True, "max_messages": max_messages}
+
+    @router.get("/admin/mx-llm-tag/progress", dependencies=[Depends(require_admin)])
+    def mx_llm_tag_progress():
+        """手动打标任务进度（前台轮询）。"""
+        from .mx_llm_tagging import get_manual_job_status
+
+        return get_manual_job_status()
+
+    @router.post("/admin/mx-llm-tag/cancel", dependencies=[Depends(require_admin)])
+    def mx_llm_tag_cancel(admin: dict = Depends(require_admin)):
+        """请求取消当前手动打标任务（当前批次完成后停止）。"""
+        from .mx_llm_tagging import request_cancel_manual_job
+
+        if not request_cancel_manual_job():
+            raise HTTPException(status_code=409, detail="当前没有进行中的打标任务")
+        _audit(admin, "mx_llm_tag_cancel")
+        return {"ok": True}
 
     @router.get("/admin/post-tag-reviews", dependencies=[Depends(require_admin)])
     def admin_post_tag_reviews(status: str = "pending"):
@@ -6035,7 +6101,7 @@ def create_api_router(
         dependencies=[Depends(require_admin)],
     )
     def approve_post_tag_review(review_id: int, admin: dict = Depends(require_admin)):
-        """通过待审标签：追加到帖子标签（已满 5 个或已存在时返回 409）。"""
+        """通过待审标签：追加到帖子标签（已达上限 POST_TAGS_MAX 或已存在时返回 409）。"""
         from .db import POST_TAGS_MAX
 
         review = db.set_tag_review_status(review_id, "approved")
