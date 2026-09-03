@@ -206,6 +206,8 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         if background_workers_enabled():
             ima_documents.start()
             feishu_documents.start()
+            # ponytail: 后台线程预热 timeline 缓存，不挡启动；首击不再冷读
+            threading.Thread(target=feishu_documents.warm_timeline_cache, daemon=True, name="feishu-timeline-warmup").start()
             task = asyncio.create_task(scheduler.run())
             if config.alerts_enabled and config.notifiers.telegram.bot_token:
                 from .telegram_bot import TelegramBot

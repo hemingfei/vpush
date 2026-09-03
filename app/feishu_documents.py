@@ -867,6 +867,23 @@ class FeishuDocumentSyncService:
     # ponytail: in-process parsed-JSON cache keyed by timeline_path+mtime; timelines only change on new doc version (new path/mtime), no TTL needed
     _timeline_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
+    def warm_timeline_cache(self) -> int:
+        """启动预热：把各源 timeline.json 预解析进内存，首击不再冷读。失败逐个跳过。"""
+        warmed = 0
+        try:
+            sources = self.db.list_feishu_document_sources(active_only=True)
+        except Exception:
+            logger.exception("Feishu timeline warmup list failed")
+            return 0
+        for source in sources:
+            try:
+                self.timeline(source)
+            except Exception:
+                continue
+            else:
+                warmed += 1
+        return warmed
+
     def timeline(self, source: dict[str, Any]) -> dict[str, Any]:
         raw = str(source.get("timeline_path") or "")
         if not raw:
