@@ -1607,7 +1607,8 @@ def test_feishu_source_display_mode_switchable_between_timeline_and_document():
     assert 'order: docMode ? "original" : "latest"' in load
     assert 'mode: docMode ? "document" : "timeline"' in load
     # 文档模式隐藏排序切换（始终原文顺序），但保留来源筛选与日期跳转
-    assert "${docMode ? \"\" :" in load
+    toolbar = _fn_body("feishuTimelineToolbarHtml")
+    assert 'docMode ? "" :' in toolbar
     doc_view = _fn_body("renderFeishuTimelineView")
     assert "feishuDocumentEntriesHtml(entries)" in doc_view
     assert 'classList.toggle("is-doc-mode", docMode)' in doc_view
@@ -1662,11 +1663,11 @@ def test_feishu_timeline_uses_windowed_pages_and_load_more_state():
 def test_feishu_timeline_removes_unavailable_media_and_failed_image_shells():
     src = APP_JS.read_text()
     asset = _fn_body("feishuTimelineAssetHtml")
-    images = _fn_body("loadFeishuTimelineImages")
+    fetch_asset = _fn_body("fetchFeishuTimelineAsset")
     view = _fn_body("renderFeishuTimelineView")
 
     assert "asset.unavailable" not in src
-    assert 'closest(".post-img-link")' in images
+    assert 'closest(".post-img-link")' in fetch_asset
     assert 'class="feishu-timeline-notice"' not in src
     assert "preambleHtml" not in view
     assert "data.notices" not in view
@@ -1686,6 +1687,55 @@ def test_feishu_timeline_b_layout_shares_one_track_geometry():
     assert "padding: var(--feishu-entry-pad) 0" in src
     assert "top: calc(var(--feishu-entry-pad) + (var(--feishu-time-line) - var(--feishu-node-size)) / 2)" in src
     assert "line-height: var(--feishu-time-line)" in src
+
+
+def test_feishu_timeline_reader_interaction_batch():
+    """时间线阅读交互批次：视图内切换、滚动自动加载、增量更新锚定、图片懒加载、移动端回到最新。"""
+    src = APP_JS.read_text()
+    toolbar = _fn_body("feishuTimelineToolbarHtml")
+    mode_switch = _fn_body("switchFeishuTimelineMode")
+    order_switch = _fn_body("changeFeishuTimelineOrder")
+    more = _fn_body("feishuTimelineMoreHtml")
+    observe = _fn_body("observeFeishuTimelineMore")
+    images = _fn_body("loadFeishuTimelineImages")
+    fetch_asset = _fn_body("fetchFeishuTimelineAsset")
+    apply_update = _fn_body("applyFeishuTimelineUpdate")
+    check = _fn_body("checkFeishuTimelineUpdate")
+    fab_jump = _fn_body("jumpFeishuTimelineLatest")
+
+    # 阅读器内「时间线/文档」与「排序」用分段控件，切换只影响本次阅读
+    assert ">时间线</button>" in toolbar and ">文档</button>" in toolbar
+    assert ">最新优先</button>" in toolbar and ">原文顺序</button>" in toolbar
+    assert "loadFeishuTimelinePage(true)" in mode_switch
+    assert "flash(" in mode_switch
+    assert "renderFeishuTimelineToolbar()" in order_switch
+    # 滚动到底自动加载更早（按钮保留为降级）
+    assert "feishu-timeline-sentinel" in more
+    assert "IntersectionObserver" in observe and "loadMoreFeishuTimeline()" in observe
+    # 新内容走增量合并 + 滚动锚定，不再整页重载
+    assert "applyFeishuTimelineUpdate(this)" in check
+    assert "data-group-id" in check
+    assert "reloadFeishuTimeline" not in src
+    assert "feishuAnchorEntry" in apply_update and "feishuRestoreEntry" in apply_update
+    assert "renderFeishuTimelineView()" in apply_update
+    assert "checkFeishuTimelineUpdate" in apply_update
+    # 图片只在接近视口时加载，缓存复用
+    assert "IntersectionObserver" in images
+    assert "fetchFeishuTimelineAsset" in images
+    assert "Promise.all" not in images
+    assert "_feishuTimelineMediaCache" in fetch_asset
+    # 移动端「回到最新」按当前排序决定方向
+    assert "scrollHeight" in fab_jump and "scrollTo" in fab_jump
+    assert "toggleFeishuLatestFab" in src
+
+    css = STYLE_CSS.read_text()
+    heading = re.search(r"\.feishu-day-heading\s*\{[^}]*\}", css)
+    doc_day = re.search(r"\.feishu-doc-day\s*\{[^}]*\}", css)
+    assert heading and "position: sticky" in heading.group(0)
+    assert doc_day and "position: sticky" in doc_day.group(0)
+    author = re.search(r"\.feishu-entry-author\s*\{[^}]*\}", css)
+    assert author and "var(--font-weight-semibold)" in author.group(0)
+    assert ".feishu-latest-fab" in css and ".feishu-latest-fab.is-visible" in css
 
 
 def test_zsxq_settings_use_one_column_on_narrow_layout():
@@ -3862,9 +3912,9 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=272"' in html
-    assert 'src="/app.js?v=390"' in html
-    assert 'dav-shell-v255' in sw
+    assert 'href="/style.css?v=273"' in html
+    assert 'src="/app.js?v=391"' in html
+    assert 'dav-shell-v256' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
