@@ -123,7 +123,7 @@ Expected: collection fails with `ImportError: cannot import name '_feishu_timeli
 
 - [ ] **Step 3: Implement the minimal cursor and page helpers**
 
-Add `base64` to the standard-library imports and add these helpers before `create_router`/the route factory in `app/api.py`:
+Add `base64` to the standard-library imports and change the typing import to `from typing import Any, Literal`. Add these helpers before `create_router`/the route factory in `app/api.py`:
 
 ```python
 import base64
