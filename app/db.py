@@ -5574,10 +5574,17 @@ class DB:
                 self.set_setting(f"feishu_docs_{key}", str(values[key]))
 
     def get_feishu_docs_settings(self) -> dict:
+        # 只读连接：同步线程每轮都会调用，不得抢占 DB._lock（与飞书来源读路径同一约定）
         out: dict[str, str] = {}
         for key in self._FEISHU_DOCS_PLAIN_KEYS:
-            out[key] = str(self.get_setting(f"feishu_docs_{key}") or "")
-        cipher = str(self.get_setting("feishu_docs_app_secret") or "")
+            rows = self._read_only_rows(
+                "SELECT value FROM settings WHERE key = ?", (f"feishu_docs_{key}",)
+            )
+            out[key] = str(rows[0]["value"]) if rows else ""
+        cipher_rows = self._read_only_rows(
+            "SELECT value FROM settings WHERE key = ?", ("feishu_docs_app_secret",)
+        )
+        cipher = str(cipher_rows[0]["value"]) if cipher_rows else ""
         if cipher.startswith(SECRET_PREFIX):
             out["app_secret"] = decrypt_stored_secret(cipher, self.credential_key)
         else:

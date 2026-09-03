@@ -1785,7 +1785,7 @@ function feishuTimelineBlockHtml(block, mediaId, groupId) {
   return `<div class="feishu-entry-block${speaker ? " has-speaker" : ""}">${identity}${text ? `<p>${escapeHtml(text).replace(/\n/g, "<br>")}</p>` : ""}${assetHtml}</div>`;
 }
 
-function feishuTimelineEntriesHtml(entries) {
+function feishuTimelineEntriesHtml(entries, showSource) {
   if (!entries.length) return emptyState("这个范围内还没有时间线记录");
   let lastDay = "";
   return entries.map((entry) => {
@@ -1795,8 +1795,9 @@ function feishuTimelineEntriesHtml(entries) {
       ? `<h3 class="feishu-day-heading" id="feishu-day-${escapeHtml(day)}">${escapeHtml(fmtImaDay(day) || day)}</h3>`
       : "";
     lastDay = day;
+    const sourceLabel = showSource && source.title ? `<span>${escapeHtml(source.title)}</span>` : "";
     return `${dayHead}<article class="feishu-entry" data-entry-id="${escapeHtml(entry.id || "")}">
-      <div class="feishu-entry-time"><time datetime="${escapeHtml(entry.timestamp || "")}">${escapeHtml(entry.time || "")}</time><span>${escapeHtml(source.title || "")}</span></div>
+      <div class="feishu-entry-time"><time datetime="${escapeHtml(entry.timestamp || "")}">${escapeHtml(entry.time || "")}</time>${sourceLabel}</div>
       <div class="feishu-entry-content">${(entry.blocks || []).map((block) => feishuTimelineBlockHtml(block, source.media_id || "", source.group_id || "")).join("") || '<p class="muted">空记录</p>'}</div>
     </article>`;
   }).join("");
@@ -1825,10 +1826,16 @@ function renderFeishuTimelineView() {
   const entries = selectedGroup
     ? (data.entries || []).filter((entry) => entry.source?.group_id === selectedGroup)
     : (data.entries || []);
-  const notices = (data.notices || []).filter((notice) => !selectedGroup || notice.source?.group_id === selectedGroup);
+  // 文档开头的标题块会混进公告，过滤与来源标题相同的回显
+  const notices = (data.notices || []).filter((notice) => !selectedGroup || notice.source?.group_id === selectedGroup)
+    .filter((notice) => {
+      const text = String(notice.text || "").trim();
+      return !text || text !== String(notice.source?.title || "").trim();
+    });
   const noticeHtml = notices.length ? `<aside class="feishu-timeline-notice"><strong>文档提示</strong>${notices.map((notice) => notice.type === "table" ? feishuTimelineBlockHtml(notice, notice.source?.media_id || "", notice.source?.group_id || "") : `<p>${escapeHtml(notice.text || "").replace(/\n/g, "<br>")}</p>`).join("")}</aside>` : "";
   revokeFeishuTimelineMediaUrls();
-  host.innerHTML = `${noticeHtml}${docMode ? feishuDocumentEntriesHtml(entries) : feishuTimelineEntriesHtml(entries)}`;
+  const showSourceLabels = !selectedGroup && (data.sources || []).length > 1;
+  host.innerHTML = `${noticeHtml}${docMode ? feishuDocumentEntriesHtml(entries) : feishuTimelineEntriesHtml(entries, showSourceLabels)}`;
   host.classList.toggle("is-doc-mode", docMode);
   loadFeishuTimelineImages();
   renderFeishuTimelineDates(entries);
@@ -1856,6 +1863,7 @@ function jumpFeishuTimelineDay(day) {
 
 async function changeFeishuTimelineOrder(order, select = null) {
   if (!_feishuTimelineState || !["latest", "original"].includes(order)) return;
+  if (_feishuTimelineState.mode === "document") return; // 文档视图固定原文顺序
   const previous = _feishuTimelineState.order || "latest";
   const { seq, readerSeq, selectedGroup } = _feishuTimelineState;
   if (select) select.disabled = true;
@@ -6040,6 +6048,13 @@ function fmtTs(ts) {
   return ts ? new Date(Number(ts) * 1000).toLocaleString() : "-";
 }
 
+// 飞书来源的 ISO 时间串（2026-09-03T00:58:17+00:00），fmtTs 的秒数语义会得到 Invalid Date
+function fmtFeishuTime(s) {
+  if (!s) return "-";
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? String(s) : d.toLocaleString();
+}
+
 // 数据库里 SQLite 生成的 created_at/fetched_at 是 UTC（datetime('now')），
 // 展示时按 UTC 解析并转成浏览器本地时间（北京时间），避免慢 8 小时
 function fmtDbTime(s) {
@@ -6958,8 +6973,8 @@ function feishuSourceRowsHtml(data) {
       source.source_type === "wiki" ? "Wiki" : "Docx",
       source.revision_id ? `revision ${source.revision_id}` : "尚无版本",
       source.entry_count ? `${source.entry_count} 条记录` : "尚无记录",
-      source.last_success_at ? `最近成功 ${fmtTs(source.last_success_at)}` : "尚未同步成功",
-      source.next_check_at && source.enabled ? `下次检查 ${fmtTs(source.next_check_at)}` : "",
+      source.last_success_at ? `最近成功 ${fmtFeishuTime(source.last_success_at)}` : "尚未同步成功",
+      source.next_check_at && source.enabled ? `下次检查 ${fmtFeishuTime(source.next_check_at)}` : "",
     ].filter(Boolean).join(" · ");
     const error = source.last_error ? `<p class="feishu-source-error">${escapeHtml(imaSafeError(source.last_error))}</p>` : "";
     return `<article class="feishu-source-row" data-source-id="${source.id}">

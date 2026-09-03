@@ -1589,6 +1589,31 @@ def test_feishu_source_display_mode_switchable_between_timeline_and_document():
     assert 'classList.toggle("is-doc-mode", docMode)' in doc_view
 
 
+def test_feishu_timeline_ui_fixes():
+    """时间线/设置页 UI 修复契约：时间格式化、公告去标题回显、来源标签按需显示。"""
+    src = APP_JS.read_text()
+    # 设置行 ISO 时间不再走 fmtTs（epoch 语义产生 Invalid Date）
+    rows = _fn_body("feishuSourceRowsHtml")
+    assert "fmtFeishuTime(source.last_success_at)" in rows
+    assert "fmtFeishuTime(source.next_check_at)" in rows
+    assert "function fmtFeishuTime(s)" in src
+    # 公告过滤与来源标题相同的回显
+    view = _fn_body("renderFeishuTimelineView")
+    assert "notice.source?.title" in view
+    # 单来源/多来源模式下来源标签按需渲染
+    assert "showSourceLabels = !selectedGroup && (data.sources || []).length > 1" in view
+    entries_fn = _fn_body("feishuTimelineEntriesHtml")
+    assert "showSource && source.title" in entries_fn
+    # 文档模式下禁止排序切换
+    order = _fn_body("changeFeishuTimelineOrder")
+    assert 'mode === "document"' in order
+    # 设置页来源行：隐藏重复的「仅管理员」空态、展示下拉固定宽度
+    css = STYLE_CSS.read_text()
+    assert ".feishu-source-acl .ima-acl-none { display: none; }" in css
+    assert ".feishu-display-select { min-width: 5.5em; }" in css
+
+
+
 def test_zsxq_settings_use_one_column_on_narrow_layout():
     """知识星球配置在 800px 及以下不能继续用双列挤压字段。"""
     css = STYLE_CSS.read_text()
@@ -3722,9 +3747,9 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=267"' in html
-    assert 'src="/app.js?v=383"' in html
-    assert 'dav-shell-v251' in sw
+    assert 'href="/style.css?v=268"' in html
+    assert 'src="/app.js?v=384"' in html
+    assert 'dav-shell-v252' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
