@@ -349,6 +349,9 @@ async function apiBlob(path, options = {}) {
 }
 
 function revokeFeishuTimelineMediaUrls() {
+  document.querySelectorAll("img[data-feishu-asset]").forEach((img) => {
+    if (String(img.src || "").startsWith("blob:")) img.removeAttribute("src");
+  });
   for (const url of _feishuTimelineMediaUrls) URL.revokeObjectURL(url);
   _feishuTimelineMediaUrls = [];
 }
@@ -358,10 +361,11 @@ function clearImaPdfUrl() {
     _imaPdfAbort.abort();
     _imaPdfAbort = null;
   }
-  if (window._imaPdfUrl) {
-    URL.revokeObjectURL(window._imaPdfUrl);
-    window._imaPdfUrl = "";
-  }
+  const frame = $("#ima-pdf-frame");
+  if (frame) frame.removeAttribute("src");
+  const pdfUrl = window._imaPdfUrl;
+  window._imaPdfUrl = "";
+  if (pdfUrl) URL.revokeObjectURL(pdfUrl);
   clearTimeout(_feishuTimelineTimer);
   _feishuTimelineTimer = null;
   revokeFeishuTimelineMediaUrls();
@@ -648,7 +652,7 @@ function ensureKnowledgeKeys() {
 
 function mountKnowledgeListShell() {
   ensureKnowledgeKeys();
-  if ($("#ima-report-page")) return;
+  if ($("#ima-report-page") && $("#kb-list")) return;
   clearImaPdfUrl();
   $("#main").innerHTML = `
     <section class="section-panel ima-report-page" id="ima-report-page">
@@ -759,12 +763,17 @@ async function renderMore(seq) {
 
 const _imaItems = [];
 let _imaListSnapshot = null;
+let _imaStreamSnapshot = null;
 let _imaListSeq = 0;
 let _imaReaderSeq = 0;
 let _imaPdfAbort = null;
 let _feishuTimelineTimer = null;
 let _feishuTimelineMediaUrls = [];
 let _feishuTimelineState = null;
+let _feishuSourceLoadSeq = 0;
+let _feishuPreviewSeq = 0;
+let _feishuPreviewTimer = null;
+let _feishuPreview = { url: "", data: null };
 let _imaLoadingMore = false;
 let _imaSearchTimer = null;
 let _imaDocsLoadObserver = null;
@@ -1049,18 +1058,47 @@ function imaDocumentKey(mediaId, groupId = "") {
   return `${String(groupId || "")}\u0000${String(mediaId || "")}`;
 }
 
-function captureImaListSnapshot(selectedMediaId = "", selectedGroupId = "") {
+function cloneImaListSnapshotFields() {
   const body = $("#ima-docs-body");
-  if (!body) return;
-  _imaListSnapshot = {
-    route: location.pathname + location.search,
+  if (!body) return null;
+  return {
     items: _imaItems.map((item) => ({ ...item, tags: [...(item.tags || [])] })),
     hasMore: !!state.imaDocumentsHasMore,
     days: [...(state.imaDocumentsDays || [])],
     tagCounts: { ..._imaTagCounts },
     documentCount: _imaDocumentCount,
     scrollTop: body.scrollTop,
+    selectedKey: "",
+    consumed: false,
+  };
+}
+
+function captureImaListSnapshot(selectedMediaId = "", selectedGroupId = "") {
+  const fields = cloneImaListSnapshotFields();
+  if (!fields) return;
+  _imaListSnapshot = {
+    ...fields,
+    route: location.pathname + location.search,
     selectedKey: imaDocumentKey(selectedMediaId, selectedGroupId),
+  };
+}
+
+function stashImaStreamSnapshot() {
+  if (routeQuery().get("q") || routeQuery().get("tag") || routeQuery().get("day")) return;
+  const fields = cloneImaListSnapshotFields();
+  if (!fields || !fields.items.length) return;
+  _imaStreamSnapshot = fields;
+}
+
+function adoptImaStreamSnapshot() {
+  if (!_imaStreamSnapshot || currentImaListSnapshot()) return;
+  if (imaUsableSearchQuery(routeQuery().get("q") || "") || routeQuery().get("tag") || routeQuery().get("day")) return;
+  _imaListSnapshot = {
+    ..._imaStreamSnapshot,
+    items: _imaStreamSnapshot.items.map((item) => ({ ...item, tags: [...(item.tags || [])] })),
+    days: [..._imaStreamSnapshot.days],
+    tagCounts: { ..._imaStreamSnapshot.tagCounts },
+    route: location.pathname + location.search,
     consumed: false,
   };
 }
@@ -1152,7 +1190,9 @@ function submitImaDocumentsSearch() {
     _imaSearchComposing = false;
     return;
   }
-  state.imaDocumentsQuery = imaUsableSearchQuery($("#ima-doc-q")?.value || "");
+  const nextQuery = imaUsableSearchQuery($("#ima-doc-q")?.value || "");
+  if (nextQuery && !routeQuery().get("q") && !routeQuery().get("tag")) stashImaStreamSnapshot();
+  state.imaDocumentsQuery = nextQuery;
   state.imaDocumentsDay = "";
   replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay, state.imaDocumentsTag));
   const seq = ++routeRenderSeq;
@@ -1493,6 +1533,7 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
   <div id="ima-docs-body" class="ima-report-body">${keepOld && oldHtml ? oldHtml : imaReportSkeletonHtml()}</div>`;
   }
   const body = $("#ima-docs-body");
+  adoptImaStreamSnapshot();
   const snapshot = currentImaListSnapshot();
   if (snapshot && body) {
     const tagSelect = $("#ima-doc-tag");
@@ -1729,6 +1770,7 @@ async function loadImaDocumentsMore() {
 }
 
 function backFromImaReader(fallbackRoute, focusSearch = false) {
+  clearImaPdfUrl();
   const snapshot = _imaListSnapshot;
   if (snapshot && snapshot.route === normalizeRoute(fallbackRoute)) {
     if (focusSearch) snapshot.focusSearch = true;
@@ -6977,19 +7019,19 @@ function feishuSourceRowsHtml(data) {
       source.next_check_at && source.enabled ? `下次检查 ${fmtFeishuTime(source.next_check_at)}` : "",
     ].filter(Boolean).join(" · ");
     const error = source.last_error ? `<p class="feishu-source-error">${escapeHtml(imaSafeError(source.last_error))}</p>` : "";
+    const displayMode = source.display_mode === "document" ? "document" : "timeline";
     return `<article class="feishu-source-row" data-source-id="${source.id}">
       <div class="feishu-source-copy"><div class="feishu-source-title"><strong>${escapeHtml(source.title)}</strong><span class="feishu-source-state" data-status="${escapeHtml(source.sync_status)}">${escapeHtml(feishuSourceStatusLabel(source))}</span></div><p>${escapeHtml(detail)}</p>${error}</div>
-      <label class="feishu-source-toggle"><span class="sr-only">启用 ${escapeHtml(source.title)}</span><input type="checkbox" ${source.enabled ? "checked" : ""} onchange="toggleFeishuDocumentSource(this.closest('[data-source-id]').dataset.sourceId,this.checked,this)"></label>
+      <label class="feishu-source-toggle"><span>启用</span><input type="checkbox" ${source.enabled ? "checked" : ""} onchange="toggleFeishuDocumentSource(this.closest('[data-source-id]').dataset.sourceId,this.checked,this)"></label>
       <div class="feishu-source-actions">
-        <label class="feishu-display-field"><span class="sr-only">展示方式 ${escapeHtml(source.title)}</span>
-          <select class="feishu-display-select" aria-label="展示方式" onchange="setFeishuSourceDisplay(this.closest('[data-source-id]').dataset.sourceId,this.value,this)">
-            <option value="timeline"${source.display_mode !== "document" ? " selected" : ""}>时间线</option>
-            <option value="document"${source.display_mode === "document" ? " selected" : ""}>文档</option>
-          </select>
-        </label>
-        <button type="button" class="icon-btn" data-source-id="${source.id}" onclick="syncFeishuDocumentSource(this.dataset.sourceId,this)" aria-label="立即同步" title="立即同步">${REFRESH_ICON}</button>
-        <a class="icon-btn" href="${escapeHtml(source.canonical_url)}" target="_blank" rel="noopener" aria-label="打开飞书原文" title="打开飞书原文">${EXTERNAL_LINK_ICON}</a>
-        <button type="button" class="btn-ghost danger" data-source-id="${source.id}" data-title="${escapeHtml(source.title)}" onclick="removeFeishuDocumentSource(this.dataset.sourceId,this.dataset.title,this)">移除</button>
+        <span class="feishu-display-label">展示方式</span>
+        <div class="feishu-display-segment" role="group" aria-label="展示方式 ${escapeHtml(source.title)}">
+        <button type="button" class="feishu-display-option${displayMode === "timeline" ? " is-selected" : ""}" aria-pressed="${displayMode === "timeline"}" onclick="setFeishuSourceDisplay(this.closest('[data-source-id]').dataset.sourceId,'timeline',this)">时间线</button>
+        <button type="button" class="feishu-display-option${displayMode === "document" ? " is-selected" : ""}" aria-pressed="${displayMode === "document"}" onclick="setFeishuSourceDisplay(this.closest('[data-source-id]').dataset.sourceId,'document',this)">文档</button>
+        </div>
+        <button type="button" class="btn-ghost feishu-action" data-source-id="${source.id}" onclick="syncFeishuDocumentSource(this.dataset.sourceId,this)" aria-label="立即同步 ${escapeHtml(source.title)}">${REFRESH_ICON}<span>立即同步</span></button>
+        <a class="btn-ghost feishu-action" href="${escapeHtml(source.canonical_url)}" target="_blank" rel="noopener" aria-label="打开飞书原文 ${escapeHtml(source.title)}">${EXTERNAL_LINK_ICON}<span>打开原文</span></a>
+        <button type="button" class="btn-ghost danger feishu-action" data-source-id="${source.id}" data-title="${escapeHtml(source.title)}" onclick="removeFeishuDocumentSource(this.dataset.sourceId,this.dataset.title,this)">移除</button>
       </div>
       <div class="feishu-source-acl"><span>查看权限</span>${aclPickerHtml(source.acl_usernames || [], `feishu-acl-${source.id}`, true)}</div>
     </article>`;
@@ -6999,6 +7041,10 @@ function feishuSourceRowsHtml(data) {
 function feishuDocsConfigHtml(data) {
   const cfg = data.config || {};
   const secretPlaceholder = cfg.app_secret_set ? "已保存（留空保持不变）" : "飞书开放平台 → 凭证与基础信息";
+  const defaultRedirect = location.protocol === "https:"
+    ? `${location.origin}/api/admin/feishu-documents/oauth/callback`
+    : "";
+  const redirectValue = cfg.redirect_uri || defaultRedirect;
   const redirectWarn = cfg.redirect_uri && cfg.redirect_path_ok === false
     ? `<p class="form-error" role="alert">当前回调路径不是本站 OAuth 回调（…/api/admin/feishu-documents/oauth/callback），授权会失败。</p>`
     : "";
@@ -7011,7 +7057,7 @@ function feishuDocsConfigHtml(data) {
     <div class="cfg-fields">
       <label class="cfg-field"><span>App ID</span><input id="feishu-cfg-app-id" class="form-control" value="${escapeHtml(cfg.app_id || "")}" placeholder="cli_..." autocomplete="off"></label>
       <label class="cfg-field"><span>App Secret</span><input id="feishu-cfg-secret" class="form-control" type="password" autocomplete="new-password" placeholder="${escapeHtml(secretPlaceholder)}"></label>
-      <label class="cfg-field feishu-field--wide"><span>回调地址（须与开放平台安全设置一致）</span><input id="feishu-cfg-redirect" class="form-control" type="url" value="${escapeHtml(cfg.redirect_uri || "")}" placeholder="https://your.domain.com/api/admin/feishu-documents/oauth/callback" autocomplete="off"></label>
+      <label class="cfg-field feishu-field--wide"><span>回调地址（须与开放平台安全设置一致）</span><input id="feishu-cfg-redirect" class="form-control" type="url" value="${escapeHtml(redirectValue)}" placeholder="https://your.domain.com/api/admin/feishu-documents/oauth/callback" autocomplete="off"></label>
       <label class="cfg-field feishu-field--wide"><span>授权权限（空格分隔）</span><input id="feishu-cfg-scopes" class="form-control" value="${escapeHtml(cfg.scopes || "")}" placeholder="wiki:node:read docx:document:readonly docs:document.media:download offline_access" autocomplete="off"></label>
       <label class="cfg-field"><span>检查间隔（秒，≥15）</span><input id="feishu-cfg-interval" class="form-control" type="number" min="15" max="86400" step="1" value="${Number(cfg.interval_seconds) || 60}"></label>
     </div>
@@ -7053,15 +7099,19 @@ async function saveFeishuDocsConfig() {
 async function loadFeishuDocumentSources() {
   const host = $("#feishu-documents-body");
   if (!host) return;
+  const loadSeq = ++_feishuSourceLoadSeq;
+  const routeSeq = routeRenderSeq;
+  const active = () => loadSeq === _feishuSourceLoadSeq && routeStillActive(routeSeq) && $("#feishu-documents-body") === host;
   try {
     const data = await api("/api/admin/feishu-documents");
-    if (!$("#feishu-documents-body")) return;
+    if (!active()) return;
     const auth = data.authorized ? "已授权" : (data.configured ? "尚未授权" : "应用未配置");
     const authButton = data.configured
       ? `<button type="button" class="btn-ghost" onclick="authorizeFeishuDocuments()">${data.authorized ? "重新授权" : "授权飞书"}</button>`
       : "";
     host.innerHTML = `${feishuDocsConfigHtml(data)}<div class="feishu-source-summary"><span>${escapeHtml(auth)} · 每 ${Number(data.interval_seconds) || 60} 秒检查</span>${authButton}</div>${feishuSourceRowsHtml(data)}`;
     await fetchAclCandidateUsers();
+    if (!active()) return;
     host.querySelectorAll(".feishu-source-row").forEach((row) => {
       const picker = row.querySelector(".ima-acl-picker");
       const source = (data.sources || []).find((item) => String(item.id) === row.dataset.sourceId);
@@ -7070,6 +7120,7 @@ async function loadFeishuDocumentSources() {
       syncImaAclMoreButton(picker, (source.acl_usernames || []).length);
     });
   } catch (err) {
+    if (!active()) return;
     host.innerHTML = emptyState(`飞书文档加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="loadFeishuDocumentSources()">重试</button></div>`);
   }
 }
@@ -7083,15 +7134,78 @@ async function authorizeFeishuDocuments() {
   }
 }
 
+function feishuLocalUrlInfo(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    const host = (parsed.hostname || "").toLowerCase().replace(/\.$/, "");
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const trusted = ["feishu.cn", "larksuite.com"].some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
+    if (parsed.protocol !== "https:" || !trusted || parts.length !== 2 || !["wiki", "docx"].includes(parts[0])) return { invalid: true };
+    return { type: parts[0], label: parts[0] === "wiki" ? "Wiki" : "Docx" };
+  } catch {
+    return { invalid: true };
+  }
+}
+
+function renderFeishuDocumentPreview(info = null, message = "") {
+  const preview = $("#feishu-document-preview");
+  if (!preview) return;
+  if (!info && !message) { preview.innerHTML = ""; return; }
+  if (info?.loading) {
+    preview.innerHTML = `<span class="feishu-preview-status is-loading">正在读取 ${escapeHtml(info.label)} 文档信息…</span>`;
+    return;
+  }
+  if (info?.data) {
+    const data = info.data;
+    preview.innerHTML = `<span class="feishu-preview-status is-ready"><strong>${escapeHtml(data.title || "飞书文档")}</strong><span>${escapeHtml(data.source_type === "wiki" ? "Wiki" : "Docx")} · revision ${escapeHtml(data.revision_id || "-")}</span></span>`;
+    return;
+  }
+  preview.innerHTML = `<span class="feishu-preview-status${info?.invalid ? " is-invalid" : ""}">${escapeHtml(message || (info?.invalid ? "请输入有效的飞书 Wiki 或 Docx 链接" : "尚未读取文档信息"))}</span>`;
+}
+
+function queueFeishuDocumentPreview(value) {
+  const url = String(value || "").trim();
+  clearTimeout(_feishuPreviewTimer);
+  _feishuPreview = { url, data: null };
+  const local = feishuLocalUrlInfo(url);
+  if (!url) { renderFeishuDocumentPreview(); return; }
+  if (!local || local.invalid) { renderFeishuDocumentPreview({ invalid: true }); return; }
+  renderFeishuDocumentPreview({ loading: true, label: local.label });
+  const seq = ++_feishuPreviewSeq;
+  _feishuPreviewTimer = setTimeout(() => previewFeishuDocument(url, seq), 360);
+}
+
+async function previewFeishuDocument(url, seq = _feishuPreviewSeq) {
+  try {
+    const data = await api("/api/admin/feishu-documents/preview", { method: "POST", body: JSON.stringify({ url }) });
+    if (seq !== _feishuPreviewSeq || $("#feishu-document-url")?.value.trim() !== url) return;
+    _feishuPreview = { url, data };
+    renderFeishuDocumentPreview({ data });
+  } catch (err) {
+    if (seq !== _feishuPreviewSeq || $("#feishu-document-url")?.value.trim() !== url) return;
+    _feishuPreview = { url, data: null };
+    renderFeishuDocumentPreview(null, err.message || "暂时无法读取文档信息");
+  }
+}
+
 async function addFeishuDocumentSource() {
   const input = $("#feishu-document-url");
   const button = $("#feishu-document-add");
   const url = input?.value?.trim() || "";
   if (!url) { flash("请填写飞书 Wiki 或 Docx 链接", "error"); return; }
+  const local = feishuLocalUrlInfo(url);
+  if (!local || local.invalid) { renderFeishuDocumentPreview({ invalid: true }); flash("请输入有效的飞书 Wiki 或 Docx 链接", "error"); return; }
   if (button) button.disabled = true;
   try {
+    if (_feishuPreview.url !== url || !_feishuPreview.data) {
+      await previewFeishuDocument(url, ++_feishuPreviewSeq);
+    }
     await api("/api/admin/feishu-documents", { method: "POST", body: JSON.stringify({ url }) });
     input.value = "";
+    _feishuPreview = { url: "", data: null };
+    renderFeishuDocumentPreview();
     flash("来源已添加，正在首次同步");
     await loadFeishuDocumentSources();
   } catch (err) {
@@ -7101,16 +7215,28 @@ async function addFeishuDocumentSource() {
   }
 }
 
-async function setFeishuSourceDisplay(sourceId, displayMode, select) {
-  if (select) select.disabled = true;
+async function setFeishuSourceDisplay(sourceId, displayMode, button) {
+  const row = button?.closest("[data-source-id]");
+  const options = row?.querySelectorAll(".feishu-display-option") || [];
+  options.forEach((option) => { option.disabled = true; });
   try {
     await api(`/api/admin/feishu-documents/${encodeURIComponent(sourceId)}`, { method: "PATCH", body: JSON.stringify({ display_mode: displayMode }) });
+    options.forEach((option) => {
+      const selected = option.textContent.trim() === (displayMode === "document" ? "文档" : "时间线");
+      option.classList.toggle("is-selected", selected);
+      option.setAttribute("aria-pressed", String(selected));
+    });
     flash(displayMode === "document" ? "已切换为文档视图，重新打开即生效" : "已切换为时间线视图");
   } catch (err) {
-    if (select) select.value = displayMode === "document" ? "timeline" : "document";
+    const previous = displayMode === "document" ? "timeline" : "document";
+    options.forEach((option) => {
+      const selected = option.textContent.trim() === (previous === "document" ? "文档" : "时间线");
+      option.classList.toggle("is-selected", selected);
+      option.setAttribute("aria-pressed", String(selected));
+    });
     flash(err.message || "切换失败", "error");
   } finally {
-    if (select) select.disabled = false;
+    options.forEach((option) => { option.disabled = false; });
   }
 }
 
@@ -7940,8 +8066,9 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
         <p class="section-meta">订阅私有 Wiki 或 Docx，按文档 revision 自动更新为时间线。移除只撤下阅读入口，历史归档永久保留。</p></div></header>
         <form class="feishu-source-add" onsubmit="event.preventDefault();addFeishuDocumentSource()">
           <label for="feishu-document-url" class="sr-only">飞书文档链接</label>
-          <input id="feishu-document-url" class="form-control" type="url" inputmode="url" placeholder="https://example.feishu.cn/wiki/... 或 /docx/..." autocomplete="off">
+          <input id="feishu-document-url" class="form-control" type="url" inputmode="url" placeholder="https://example.feishu.cn/wiki/... 或 /docx/..." autocomplete="off" oninput="queueFeishuDocumentPreview(this.value)">
           <button type="submit" class="btn-normal" id="feishu-document-add">添加来源</button>
+          <div id="feishu-document-preview" class="feishu-document-preview" aria-live="polite"></div>
         </form>
         <div id="feishu-documents-body"><div class="admin-skeleton" aria-hidden="true"></div></div>
       </section>
@@ -11993,7 +12120,7 @@ async function loadAdminUsers() {
   }
   state.adminUsers = users;
   const imaGroups = ((collector && collector.config && collector.config.groups) || [])
-    .filter((group) => group && group.id && group.enabled !== false);
+    .filter((group) => group && group.id && group.enabled !== false && !String(group.id).startsWith("feishu-"));
   const localGroups = (((localLibs && localLibs.libraries) || []) || [])
     .map((lib) => ({
       id: String(lib.group_id || ""),
@@ -12001,7 +12128,7 @@ async function loadAdminUsers() {
       enabled: Boolean(lib.enabled) && !lib.error,
       local: true,
     }))
-    .filter((group) => group.id && group.name);
+    .filter((group) => group.id && group.name && !group.id.startsWith("feishu-"));
   state.imaKbGroups = imaGroups.concat(localGroups);
   if (policy) {
     state.inactivePolicy = policy;
@@ -12212,7 +12339,7 @@ function adminOpenUser(userId, focus) {
   const origin = escapeHtml(u.origin_label || "网页");
   const loginHint = u.has_password ? "可网页登录" : "无密码，不能网页登录";
   const lastSeen = u.last_login_at ? escapeHtml(fmtDbTime(u.last_login_at)) : "从未登录";
-  const kbGroups = state.imaKbGroups || [];
+  const kbGroups = (state.imaKbGroups || []).filter((group) => !String(group.id || "").startsWith("feishu-"));
   const kbGranted = new Set(u.ima_kb_groups || []);
   const kbSubscribed = new Set(u.ima_kb_subscribed || []);
   const kbList = kbGroups.length

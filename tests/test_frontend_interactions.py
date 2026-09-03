@@ -1568,12 +1568,36 @@ def test_selecting_feishu_group_opens_timeline_directly():
     assert body.rstrip().endswith("renderImaDocuments(seq);\n}")
 
 
+def test_feishu_settings_auto_preview_and_uniform_source_actions():
+    src = APP_JS.read_text()
+    add_panel = _fn_body("loadAdminKnowledge")
+    rows = _fn_body("feishuSourceRowsHtml")
+    preview = _fn_body("previewFeishuDocument")
+    queue = _fn_body("queueFeishuDocumentPreview")
+    add = _fn_body("addFeishuDocumentSource")
+
+    assert 'oninput="queueFeishuDocumentPreview(this.value)"' in add_panel
+    assert 'id="feishu-document-preview"' in add_panel
+    assert '"/api/admin/feishu-documents/preview"' in preview
+    assert "_feishuPreviewSeq" in queue and "setTimeout" in queue
+    assert "await previewFeishuDocument" in add
+    assert "_feishuPreview.data" in add
+    assert 'class="feishu-display-segment"' in rows
+    assert 'class="feishu-display-option' in rows
+    assert 'class="btn-ghost feishu-action"' in rows
+    assert 'class="icon-btn" data-source-id="${source.id}"' not in rows
+    assert '<span>启用</span>' in rows
+    assert 'location.protocol === "https:"' in src
+    assert '`${location.origin}/api/admin/feishu-documents/oauth/callback`' in src
+
+
 def test_feishu_source_display_mode_switchable_between_timeline_and_document():
     """飞书来源支持时间线/文档两种展示，设置行可切换，阅读器按模式分支。"""
     src = APP_JS.read_text()
     rows = _fn_body("feishuSourceRowsHtml")
-    assert "feishu-display-select" in rows
-    assert '<option value="timeline"' in rows and '<option value="document"' in rows
+    assert "feishu-display-segment" in rows
+    assert "feishu-display-option" in rows
+    assert ">时间线</button>" in rows and ">文档</button>" in rows
     switcher = _fn_body("setFeishuSourceDisplay")
     assert "display_mode" in switcher
     assert "PATCH" in switcher or "method: \"PATCH\"" in switcher or '"PATCH"' in switcher
@@ -1587,6 +1611,7 @@ def test_feishu_source_display_mode_switchable_between_timeline_and_document():
     doc_view = _fn_body("renderFeishuTimelineView")
     assert "feishuDocumentEntriesHtml(entries)" in doc_view
     assert 'classList.toggle("is-doc-mode", docMode)' in doc_view
+
 
 
 def test_feishu_timeline_ui_fixes():
@@ -1607,10 +1632,11 @@ def test_feishu_timeline_ui_fixes():
     # 文档模式下禁止排序切换
     order = _fn_body("changeFeishuTimelineOrder")
     assert 'mode === "document"' in order
-    # 设置页来源行：隐藏重复的「仅管理员」空态、展示下拉固定宽度
+    # 设置页来源行：隐藏重复的「仅管理员」空态、展示方式统一为分段控件
     css = STYLE_CSS.read_text()
     assert ".feishu-source-acl .ima-acl-none { display: none; }" in css
-    assert ".feishu-display-select { min-width: 5.5em; }" in css
+    assert ".feishu-display-segment" in css
+    assert ".feishu-display-option.is-selected" in css
 
 
 
@@ -3544,6 +3570,46 @@ def test_ima_report_search_is_debounced_and_explicitly_pages():
     assert "加载失败，重试" in more
 
 
+def test_ima_search_stashes_unfiltered_list_for_clear_and_back():
+    """离开搜索时先还原进搜索前的列表，避免再次打整库接口卡死。"""
+    src = APP_JS.read_text()
+    submit = _fn_body("submitImaDocumentsSearch")
+    render = _fn_body("renderImaDocuments")
+    clear_one = _fn_body("clearImaDocumentsFilter")
+    clear_all = _fn_body("clearImaDocumentsFilters")
+    capture = _fn_body("captureImaListSnapshot")
+
+    assert "function stashImaStreamSnapshot(" in src
+    assert "function adoptImaStreamSnapshot(" in src
+    assert "stashImaStreamSnapshot()" in submit
+    assert submit.index("stashImaStreamSnapshot()") < submit.index("replaceImaDocumentsRoute")
+    assert "adoptImaStreamSnapshot()" in render
+    assert render.index("adoptImaStreamSnapshot()") < render.index("currentImaListSnapshot()")
+    assert "stashImaStreamSnapshot" not in clear_one
+    assert "stashImaStreamSnapshot" not in clear_all
+    assert "location.pathname + location.search" in capture
+
+
+def test_ima_pdf_blob_is_detached_before_revoke():
+    """阅读页返回时必须先拆掉 PDF iframe / blob 图，再 revoke，避免 Chromium 卡死。"""
+    clear = _fn_body("clearImaPdfUrl")
+    back = _fn_body("backFromImaReader")
+    revoke_images = _fn_body("revokeFeishuTimelineMediaUrls")
+    assert "ima-pdf-frame" in clear
+    assert "URL.revokeObjectURL(pdfUrl)" in clear
+    assert clear.index("ima-pdf-frame") < clear.index("URL.revokeObjectURL(pdfUrl)")
+    assert "clearImaPdfUrl()" in back
+    assert back.index("clearImaPdfUrl()") < back.index("history.back()")
+    assert "removeAttribute" in revoke_images
+    assert revoke_images.index("removeAttribute") < revoke_images.index("URL.revokeObjectURL")
+
+
+def test_knowledge_list_shell_rebuilds_when_kb_list_is_missing():
+    mount = _fn_body("mountKnowledgeListShell")
+    assert '$("#kb-list")' in mount
+    assert mount.index("$(\"#ima-report-page\")") < mount.index("$(\"#main\").innerHTML")
+
+
 def test_ima_report_render_reuses_mounted_header_and_cancels_stale_search():
     render = _fn_body("renderImaDocuments")
     submit = _fn_body("submitImaDocumentsSearch")
@@ -3568,9 +3634,10 @@ def test_ima_reader_captures_and_restores_the_loaded_result_set():
     opener = _fn_body("openImaDocument")
     refresh = _fn_body("refreshImaDocuments")
 
-    assert "_imaItems.map" in capture
-    assert "scrollTop" in capture
-    assert "state.imaDocumentsHasMore" in capture
+    clone = _fn_body("cloneImaListSnapshotFields")
+    assert "_imaItems.map" in clone
+    assert "scrollTop" in clone
+    assert "state.imaDocumentsHasMore" in clone
     assert "location.pathname + location.search" in capture
     assert "captureImaListSnapshot" in opener
     assert "snapshot.route" in current
@@ -3747,9 +3814,9 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=268"' in html
-    assert 'src="/app.js?v=384"' in html
-    assert 'dav-shell-v252' in sw
+    assert 'href="/style.css?v=269"' in html
+    assert 'src="/app.js?v=388"' in html
+    assert 'dav-shell-v255' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -4915,6 +4982,13 @@ def test_user_modal_kb_grants_include_local_libraries():
     modal = _fn_body("adminOpenUser")
     assert "本地库" in modal
     assert "group.local" in modal
+
+
+def test_user_modal_kb_hides_feishu_groups():
+    load = _fn_body("loadAdminUsers")
+    modal = _fn_body("adminOpenUser")
+    assert 'startsWith("feishu-")' in load
+    assert 'startsWith("feishu-")' in modal
 
 
 def test_stale_frontend_refreshes_after_release():
