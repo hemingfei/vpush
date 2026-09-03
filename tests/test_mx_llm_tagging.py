@@ -200,6 +200,7 @@ def test_run_tag_tick_success_writes_and_advances_cursor():
     by_id = {p["id"]: p for p in tags0}
     assert by_id[ids[0]]["tags"] == ["申菱环境", "做T", "个股"]
     assert by_id[ids[1]]["tags"] == ["贵州茅台"]
+    assert all(p["llm_tagged"] == 1 for p in by_id.values())  # LLM 写回打标记
     # typo 不进候选；general 进候选
     candidates = db.get_stock_alias_candidates()
     assert [c["alias"] for c in candidates] == ["茅哥"]
@@ -369,6 +370,22 @@ def test_run_tag_test_skips():
     db.set_mx_llm_tag_cursor(pid)  # 游标推到末尾 → 无未处理消息
     result = m.run_tag_test(db, make_config())
     assert result["skipped"] == "no_posts" and result["cursor"] == pid
+    db.close()
+
+
+# ---- llm_tagged 标记位：只有 LLM 写回才打 ----
+
+def test_llm_tagged_marker_only_set_by_llm_write():
+    db = make_db()
+    (pid,) = _add_mx_posts(db, 1)
+    # 规则回填（update_post_tags）与人工追加不打 LLM 标记
+    db.update_post_tags(pid, ["宏观"])
+    row = db.list_posts(platform="mx", include_hidden=True)[0]
+    assert row["llm_tagged"] == 0 and row["tags"] == ["宏观"]
+    # LLM 写回：替换标签并标记（新库迁移后列存在、默认 0）
+    db.update_post_tags_llm(pid, ["贵州茅台"])
+    row = db.list_posts(platform="mx", include_hidden=True)[0]
+    assert row["llm_tagged"] == 1 and row["tags"] == ["贵州茅台"]
     db.close()
 
 

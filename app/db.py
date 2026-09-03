@@ -1199,6 +1199,12 @@ class DB:
             self._conn.execute(
                 "ALTER TABLE posts ADD COLUMN content_src TEXT NOT NULL DEFAULT ''"
             )
+        if "llm_tagged" not in post_cols:
+            # MX 消息 LLM 打标标记：1=已经过 LLM 打标（含判定无标签的空结果），
+            # 0=尚未处理。与 tags 是否为空独立，用于区分「未打标」与「零命中」。
+            self._conn.execute(
+                "ALTER TABLE posts ADD COLUMN llm_tagged INTEGER NOT NULL DEFAULT 0"
+            )
         if "blocked" not in post_cols:
             self._conn.execute(
                 "ALTER TABLE posts ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0"
@@ -4925,6 +4931,18 @@ class DB:
         """回写单条贴文的标签（回填/纠错用），空列表持久化为 '[]'（已处理零命中）。"""
         tags_json = json.dumps(tags, ensure_ascii=False)
         self._execute("UPDATE posts SET tags = ? WHERE id = ?", (tags_json, post_id))
+
+    def update_post_tags_llm(self, post_id: int, tags: list[str]) -> None:
+        """LLM 打标回写：整体替换标签并标记该帖已经过 LLM 打标。
+
+        llm_tagged 与「有无标签」独立：LLM 判定无标签（空数组）也算已处理，
+        用于区分「未打标」与「打了但零命中」。规则回填走 update_post_tags，
+        不打此标记。
+        """
+        tags_json = json.dumps(tags, ensure_ascii=False)
+        self._execute(
+            "UPDATE posts SET tags = ?, llm_tagged = 1 WHERE id = ?", (tags_json, post_id)
+        )
 
     # ---- MX 实时消息 LLM 打标（app/mx_llm_tagging.py） ----
 

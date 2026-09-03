@@ -13157,7 +13157,7 @@ function postRowHtml(p) {
     : (p.hidden ? ' style="opacity:0.55"' : "");
   return `
     <tr${rowStyle}>
-      <td>${p.id}${p.hidden ? ' <span class="post-hidden-badge">已隐藏</span>' : ""}</td>
+      <td>${p.id}${p.hidden ? ' <span class="post-hidden-badge">已隐藏</span>' : ""}${p.platform === "mx" ? (p.llm_tagged ? ' <span class="cat cat-tag" title="该消息已经过 LLM 打标（判定无标签时标签列表为空）">LLM</span>' : ' <span class="muted" title="尚未经过 LLM 打标">待LLM</span>') : ""}</td>
       <td>${escapeHtml(p.kol_name)}</td>
       <td>${escapeHtml(p.category_name || "")}</td>
       <td>${escapeHtml(PLATFORM_LABELS[p.platform] || p.platform)}</td>
@@ -13175,7 +13175,7 @@ function postRowHtml(p) {
       </td>
     </tr>
     ${expanded ? `<tr><td colspan="8"><div class="post-detail">
-        <p class="muted" style="margin-bottom:8px">类型：${p.post_type === "reply" ? "回复" : "原帖"} · 平台：${escapeHtml(PLATFORM_LABELS[p.platform] || p.platform)} · 外部ID：${escapeHtml(p.external_id)} · 图片：${(p.images || []).length} 张${p.hidden ? " · <strong>状态：已隐藏（用户不可见）</strong>" : ""}</p>
+        <p class="muted" style="margin-bottom:8px">类型：${p.post_type === "reply" ? "回复" : "原帖"} · 平台：${escapeHtml(PLATFORM_LABELS[p.platform] || p.platform)} · 外部ID：${escapeHtml(p.external_id)} · 图片：${(p.images || []).length} 张${p.platform === "mx" ? ` · LLM 打标：${p.llm_tagged ? "已打标" : "未打标"}` : ""}${p.hidden ? " · <strong>状态：已隐藏（用户不可见）</strong>" : ""}</p>
         <pre class="content-cell">${escapeHtml(body)}</pre>
       </div></td></tr>` : ""}`;
 }

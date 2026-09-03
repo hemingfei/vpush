@@ -293,7 +293,7 @@ def _run_tag_tick_locked(db, llm_config, publish_alert) -> dict:
             rows, response, topic_tags, action_tags, valid_stocks
         )
         for pid, tags in writes.items():
-            db.update_post_tags(pid, tags)
+            db.update_post_tags_llm(pid, tags)
         for pid, tag, kind in reviews:
             db.add_pending_tag_review(pid, tag, kind, "low")
         pairs = [
