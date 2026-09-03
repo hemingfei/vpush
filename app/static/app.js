@@ -1830,7 +1830,8 @@ async function loadImaDocumentsMore() {
 function backFromImaReader(fallbackRoute, focusSearch = false) {
   clearImaPdfUrl();
   const snapshot = _imaListSnapshot;
-  if (snapshot && snapshot.route === normalizeRoute(fallbackRoute)) {
+  // ponytail: 直链/刷新进入时上一页不是知识库（history.back 会跑偏到广场）；列表点进来才有 selectedKey
+  if (snapshot && snapshot.selectedKey && snapshot.route === normalizeRoute(fallbackRoute)) {
     if (focusSearch) snapshot.focusSearch = true;
     history.back();
     return;
