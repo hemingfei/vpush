@@ -1881,18 +1881,8 @@ function renderFeishuTimelineView() {
     renderFeishuTimelineDates([]);
     return;
   }
-  // 文档开头的标题块会混进公告，过滤与来源标题相同的回显
-  const notices = (data.notices || []).filter((notice) => !selectedGroup || notice.source?.group_id === selectedGroup)
-    .filter((notice) => {
-      const text = String(notice.text || "").trim();
-      return !text || text !== String(notice.source?.title || "").trim();
-    });
-  const preambleHtml = notices.map((notice) => `<div class="feishu-timeline-preamble-block">${notice.type === "table"
-    ? feishuTimelineBlockHtml(notice, notice.source?.media_id || "", notice.source?.group_id || "")
-    : `<div class="feishu-entry-block"><p>${escapeHtml(notice.text || "").replace(/\n/g, "<br>")}</p></div>`
-  }</div>`).join("");
   const showSourceLabels = !selectedGroup && (data.sources || []).length > 1;
-  host.innerHTML = `${preambleHtml}${docMode ? feishuDocumentEntriesHtml(entries) : feishuTimelineEntriesHtml(entries, showSourceLabels)}${docMode ? "" : feishuTimelineMoreHtml()}`;
+  host.innerHTML = `${docMode ? feishuDocumentEntriesHtml(entries) : feishuTimelineEntriesHtml(entries, showSourceLabels)}${docMode ? "" : feishuTimelineMoreHtml()}`;
   host.classList.toggle("is-doc-mode", docMode);
   loadFeishuTimelineImages();
   renderFeishuTimelineDates(entries);

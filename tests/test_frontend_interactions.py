@@ -1615,16 +1615,17 @@ def test_feishu_source_display_mode_switchable_between_timeline_and_document():
 
 
 def test_feishu_timeline_ui_fixes():
-    """时间线/设置页 UI 修复契约：时间格式化、公告去标题回显、来源标签按需显示。"""
+    """时间线/设置页 UI 修复契约：时间格式化、公告隐藏、来源标签按需显示。"""
     src = APP_JS.read_text()
     # 设置行 ISO 时间不再走 fmtTs（epoch 语义产生 Invalid Date）
     rows = _fn_body("feishuSourceRowsHtml")
     assert "fmtFeishuTime(source.last_success_at)" in rows
     assert "fmtFeishuTime(source.next_check_at)" in rows
     assert "function fmtFeishuTime(s)" in src
-    # 公告过滤与来源标题相同的回显
+    # 时间线不再渲染文档开头的公告
     view = _fn_body("renderFeishuTimelineView")
-    assert "notice.source?.title" in view
+    assert "notice.source?.title" not in view
+    assert "data.notices" not in view
     # 单来源/多来源模式下来源标签按需渲染
     assert "showSourceLabels = !selectedGroup && (data.sources || []).length > 1" in view
     entries_fn = _fn_body("feishuTimelineEntriesHtml")
@@ -1667,6 +1668,8 @@ def test_feishu_timeline_removes_unavailable_media_and_failed_image_shells():
     assert "asset.unavailable" not in src
     assert 'closest(".post-img-link")' in images
     assert 'class="feishu-timeline-notice"' not in src
+    assert "preambleHtml" not in view
+    assert "data.notices" not in view
 
 
 def test_feishu_timeline_b_layout_shares_one_track_geometry():
