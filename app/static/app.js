@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.133";
+const APP_VERSION = "1.12.134";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -135,6 +135,7 @@ const imaMountState = {
   groups: [],
   selectedGroupId: "",
   folderPanelGroupId: "",
+  folderPanelTouched: false,
   drafts: new Map(),
   folders: new Map(),
   parents: new Map(),
@@ -162,6 +163,30 @@ const imaMountState = {
 };
 
 const KS_TAB_KEY = "ks-tab";
+
+// ponytail: tablist 方向键导航（roving tabindex），左右/上下/Home/End
+function onKnowledgeTabsKey(event) {
+  const current = event.target?.closest?.(".ks-tab");
+  if (!current) return;
+  const tabs = [...document.querySelectorAll(".ks-tab")];
+  const i = tabs.indexOf(current);
+  if (i < 0) return;
+  let next = -1;
+  if (event.key === "ArrowRight" || event.key === "ArrowDown") next = (i + 1) % tabs.length;
+  else if (event.key === "ArrowLeft" || event.key === "ArrowUp") next = (i - 1 + tabs.length) % tabs.length;
+  else if (event.key === "Home") next = 0;
+  else if (event.key === "End") next = tabs.length - 1;
+  else return;
+  event.preventDefault();
+  tabs[next].focus();
+  switchKnowledgeSettingsTab(tabs[next].dataset.tab);
+}
+
+// ponytail: 刷新/关闭前只拦采集草稿（其他均为即时生效）；页签切换由 switchKnowledgeSettingsTab 守卫
+window.addEventListener("beforeunload", (event) => {
+  if (!imaCollectorHasUnsaved || !imaCollectorHasUnsaved()) return;
+  event.preventDefault();
+});
 let imaCollectorPureCache = {
   uid: "",
   knowledge_base_id: "",
@@ -6599,6 +6624,7 @@ function initImaMountState(groups, preserve = false) {
   imaMountState.dirty = preserve ? oldDirty : false;
   if (!preserve) imaMountState.discoveryEntered = false;
   if (!preserve) imaMountState.folderPanelGroupId = "";
+  if (!preserve) imaMountState.folderPanelTouched = false;
   const available = new Set(imaMountState.groups.map((group) => String(group.id)));
   for (const group of imaMountState.groups) {
     const previous = preserve ? oldDrafts.get(String(group.id)) : null;
@@ -6831,6 +6857,7 @@ function imaFolderOrphansHtml(groupId, rootId) {
 
 function toggleImaFolderPanel(button) {
   const groupId = String(imaMountState.selectedGroupId || "");
+  imaMountState.folderPanelTouched = true;
   imaMountState.folderPanelGroupId = button?.getAttribute("aria-expanded") === "true" ? "" : groupId;
   renderImaFolderTree(groupId);
 }
@@ -6838,6 +6865,10 @@ function toggleImaFolderPanel(button) {
 function renderImaFolderTree(groupId) {
   const tree = $("#ima-folder-tree");
   if (!tree) return;
+  // ponytail: 空配置默认展开（主操作优先），选过文件夹后记住用户收起状态
+  if (groupId && !imaMountDraft(String(groupId)).size && !imaMountState.folderPanelTouched) {
+    imaMountState.folderPanelGroupId = String(groupId);
+  }
   const open = !!groupId && imaMountState.folderPanelGroupId === String(groupId);
   const panel = $("#ima-folder-panel");
   const toggle = $("#ima-folder-panel-toggle");
@@ -6920,7 +6951,7 @@ function aclPickerHtml(usernames, listId, compact = false) {
     ? granted.map(aclChipHtml).join("")
     : `<span class="muted ima-acl-none">仅管理员</span>`;
   return `<div class="ima-acl-picker${compact ? " is-compact" : ""}" data-count="${granted.length}">
-    <input type="search" class="form-control ima-acl-search" placeholder="搜索并添加用户" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-label="搜索并添加用户" aria-controls="${listId}" autocomplete="off" oninput="filterAclSuggest(this)" onkeydown="onAclSearchKey(event)">
+    <input type="search" class="form-control ima-acl-search" placeholder="搜索并添加用户" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-label="搜索并添加用户" aria-controls="${listId}" autocomplete="off" oninput="filterAclSuggest(this)" onkeydown="onAclSearchKey(event)" onfocus="filterAclSuggest(this)">
     <div id="${listId}" class="ima-acl-suggest" hidden role="listbox"></div>
     <p class="muted ima-acl-empty" hidden>没有匹配的用户</p>
     <div class="ima-acl-chips">${chips}</div>
@@ -6959,14 +6990,11 @@ function filterAclSuggest(input) {
     input.setAttribute("aria-expanded", "false");
     input.removeAttribute("aria-activedescendant");
   };
-  if (!needle) {
-    close();
-    if (empty) empty.hidden = true;
-    return;
-  }
+  // ponytail: 空查询展示前 8 个候选（可浏览），有输入再按子串过滤
   const hits = (_aclCandidateUsers || [])
     .map((u) => String(u.username || ""))
-    .filter((name) => name && !granted.has(name) && name.toLowerCase().includes(needle));
+    .filter((name) => name && !granted.has(name) && (!needle || name.toLowerCase().includes(needle)))
+    .slice(0, needle ? 50 : 8);
   if (!hits.length) {
     close();
     if (empty) empty.hidden = false;
@@ -7394,10 +7422,18 @@ async function reloadAdminSettingsPage(seq, authoritativeImaStatus = null) {
   return loadAdminStats(seq, authoritativeImaStatus);
 }
 
+function imaCollectorHasUnsaved() {
+  return !!(imaMountState.dirty || imaMountState.collectorDirty);
+}
+
 function switchKnowledgeSettingsTab(tab) {
   if (tab === "cicc") tab = "local"; // 旧页签记忆迁移：中金已并入本地库
   const allowed = ["collect", "zsxq", "storage", "local", "feishu"];
   const next = allowed.includes(tab) ? tab : "collect";
+  // ponytail: 页签级守卫只拦采集未保存（ACL/cookie/开关均为即时生效，无需拦）
+  const current = document.querySelector(".ks-tab.is-on")?.dataset.tab || "collect";
+  if (next !== current && current === "collect" && imaCollectorHasUnsaved()
+    && !confirm("采集配置有未保存的修改，切换页签将保留草稿。继续吗？")) return;
   if (next === "local") {
     loadLocalLibraries();
     loadCiccStatus();
@@ -7408,10 +7444,12 @@ function switchKnowledgeSettingsTab(tab) {
   if (next === "storage") loadStorageHealth();
   if (next === "feishu") loadFeishuDocumentSources();
   try { sessionStorage.setItem(KS_TAB_KEY, next); } catch { /* ignore */ }
+  // ponytail: roving tabindex + aria-selected，方向键按 tablist 惯例切换
   document.querySelectorAll(".ks-tab").forEach((btn) => {
     const on = btn.dataset.tab === next;
     btn.classList.toggle("is-on", on);
     btn.setAttribute("aria-selected", String(on));
+    btn.tabIndex = on ? 0 : -1;
   });
   document.querySelectorAll(".ks-panel").forEach((panel) => {
     panel.classList.toggle("is-on", panel.dataset.panel === next);
@@ -7443,6 +7481,10 @@ function feishuSourceRowsHtml(data) {
     ].filter(Boolean).join(" · ");
     const error = source.last_error ? `<p class="feishu-source-error">${escapeHtml(imaSafeError(source.last_error))}</p>` : "";
     const displayMode = source.display_mode === "document" ? "document" : "timeline";
+    const readable = source.sync_status === "succeeded" && Number(source.entry_count || 0) > 0;
+    const openLine = readable
+      ? `<p class="feishu-source-open">全员可读，无需单独授权</p>`
+      : `<p class="feishu-source-open is-blocked">同步成功后全员可读，当前暂无可读内容</p>`;
     return `<article class="feishu-source-row" data-source-id="${source.id}">
       <div class="feishu-source-copy"><div class="feishu-source-title"><strong>${escapeHtml(source.title)}</strong><span class="feishu-source-state" data-status="${escapeHtml(source.sync_status)}">${escapeHtml(feishuSourceStatusLabel(source))}</span></div><p>${escapeHtml(detail)}</p>${error}</div>
       <label class="feishu-source-toggle"><span>启用</span><input type="checkbox" ${source.enabled ? "checked" : ""} onchange="toggleFeishuDocumentSource(this.closest('[data-source-id]').dataset.sourceId,this.checked,this)"></label>
@@ -7456,7 +7498,7 @@ function feishuSourceRowsHtml(data) {
         <a class="btn-ghost feishu-action" href="${escapeHtml(source.canonical_url)}" target="_blank" rel="noopener" aria-label="打开飞书原文 ${escapeHtml(source.title)}">${EXTERNAL_LINK_ICON}<span>打开原文</span></a>
         <button type="button" class="btn-ghost danger feishu-action" data-source-id="${source.id}" data-title="${escapeHtml(source.title)}" onclick="removeFeishuDocumentSource(this.dataset.sourceId,this.dataset.title,this)">移除</button>
       </div>
-      <p class="feishu-source-open">全员可读，无需单独授权</p>
+      ${openLine}
     </article>`;
   }).join("")}</div>`;
 }
@@ -7611,6 +7653,7 @@ async function addFeishuDocumentSource() {
   if (!url) { flash("请填写飞书 Wiki 或 Docx 链接", "error"); return; }
   const local = feishuLocalUrlInfo(url);
   if (!local || local.invalid) { renderFeishuDocumentPreview({ invalid: true }); flash("请输入有效的飞书 Wiki 或 Docx 链接", "error"); return; }
+  if (!confirm("飞书文档添加后全站用户可读，不支持单独授权。确认添加吗？")) return;
   if (button) button.disabled = true;
   try {
     if (_feishuPreview.url !== url || !_feishuPreview.data) {
@@ -7711,7 +7754,7 @@ function imaStoragePanelHtml(storage) {
     missing: "未配置",
     invalid: "状态无效",
   };
-  return `<section class="section-panel ks-panel" data-panel="storage" id="ima-storage-panel">
+  return `<section class="section-panel ks-panel" data-panel="storage" id="ks-panel-storage" role="tabpanel" aria-labelledby="ks-tab-storage">
     <header class="section-head"><div><h2 class="section-title">存储</h2>
     <p class="section-meta">刷新探测，备份归档。密钥不进网页。</p></div></header>
     <p class="muted" id="ima-storage-status">${escapeHtml(labels[status] || status)} · 用量 ${escapeHtml(used)} · 上次备份 ${escapeHtml(resticAt)} · 检查 ${escapeHtml(resticOk)}（${escapeHtml(checkAt)}）</p>
@@ -8408,14 +8451,14 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
   $("#admin-body").innerHTML = `
     <div id="stats-poll-error"></div>
     <div class="knowledge-settings">
-      <div class="ks-tabs" role="tablist">
-        <button type="button" class="ks-tab is-on" data-tab="collect" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">采集</button>
-        <button type="button" class="ks-tab" data-tab="zsxq" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">星球</button>
-        <button type="button" class="ks-tab" data-tab="storage" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">存储</button>
-        <button type="button" class="ks-tab" data-tab="local" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">本地库</button>
-        <button type="button" class="ks-tab" data-tab="feishu" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">飞书文档</button>
+      <div class="ks-tabs" role="tablist" aria-label="研报库设置页签" onkeydown="onKnowledgeTabsKey(event)">
+        <button type="button" role="tab" class="ks-tab is-on" data-tab="collect" aria-selected="true" aria-controls="ks-panel-collect" id="ks-tab-collect" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">采集</button>
+        <button type="button" role="tab" class="ks-tab" data-tab="zsxq" aria-selected="false" aria-controls="ks-panel-zsxq" id="ks-tab-zsxq" tabindex="-1" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">星球</button>
+        <button type="button" role="tab" class="ks-tab" data-tab="storage" aria-selected="false" aria-controls="ks-panel-storage" id="ks-tab-storage" tabindex="-1" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">存储</button>
+        <button type="button" role="tab" class="ks-tab" data-tab="local" aria-selected="false" aria-controls="ks-panel-local" id="ks-tab-local" tabindex="-1" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">本地库</button>
+        <button type="button" role="tab" class="ks-tab" data-tab="feishu" aria-selected="false" aria-controls="ks-panel-feishu" id="ks-tab-feishu" tabindex="-1" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">飞书文档</button>
       </div>
-      <section class="section-panel ks-panel is-on" data-panel="collect">
+      <section class="section-panel ks-panel is-on" data-panel="collect" role="tabpanel" id="ks-panel-collect" aria-labelledby="ks-tab-collect">
         <header class="section-head"><div><h2 class="section-title">IMA 文档采集</h2>
         <p class="section-meta">勾选文件夹后同步其中新增 PDF。父目录包含以后新建的子目录。</p></div></header>
         <div class="cfg-stack ima-collector-stack">
@@ -8475,7 +8518,7 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
           </div>
         </div>
       </section>
-      <section class="section-panel ks-panel" data-panel="feishu">
+      <section class="section-panel ks-panel" data-panel="feishu" role="tabpanel" id="ks-panel-feishu" aria-labelledby="ks-tab-feishu">
         <header class="section-head"><div><h2 class="section-title">飞书文档</h2>
         <p class="section-meta">订阅私有 Wiki 或 Docx，按文档 revision 自动更新为时间线。移除只撤下阅读入口，历史归档永久保留。</p></div></header>
         <form class="feishu-source-add" onsubmit="event.preventDefault();addFeishuDocumentSource()">
@@ -8486,7 +8529,7 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
         </form>
         <div id="feishu-documents-body"><div class="admin-skeleton" aria-hidden="true"></div></div>
       </section>
-      <section class="section-panel ks-panel" data-panel="zsxq">
+      <section class="section-panel ks-panel" data-panel="zsxq" role="tabpanel" id="ks-panel-zsxq" aria-labelledby="ks-tab-zsxq">
       <header class="section-head"><div><h2 class="section-title">知识星球</h2>
       <p class="section-meta">Cookie 与抓取分开保存，互不覆盖。</p></div></header>
       <div class="ima-source-stack">
@@ -8569,7 +8612,7 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
       </div>
     </section>
     ${imaStoragePanelHtml(imaCollector.storage)}
-    <section class="section-panel ks-panel" data-panel="local" id="local-libs-panel">
+    <section class="section-panel ks-panel" data-panel="local" role="tabpanel" id="ks-panel-local" aria-labelledby="ks-tab-local">
       <header class="section-head"><div><h2 class="section-title">本地库</h2>
       <p class="section-meta">存储机 <code>local/&lt;slug&gt;/</code> 下的文件夹研报库；中金研报由存储机采集脚本写入 cicc-research 库。启用并授权用户后即可在研报库中阅读。</p></div></header>
       <div id="local-libs-body"><p class="muted">加载中…</p></div>
@@ -9073,7 +9116,7 @@ async function refreshImaStorage() {
   try {
     const data = await api("/api/admin/ima-storage/refresh", { method: "POST" });
     if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    const slot = $("#ima-storage-panel");
+    const slot = $("#ks-panel-storage");
     if (slot) slot.outerHTML = imaStoragePanelHtml(data);
     loadStorageHealth();
     flash("存储状态已刷新");

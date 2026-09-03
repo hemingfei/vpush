@@ -1638,6 +1638,12 @@ def test_feishu_timeline_ui_fixes():
     # 设置页来源行：飞书文档全员开放，只展示说明不设权限 picker、展示方式统一为分段控件
     assert "feishu-source-acl" not in src
     assert "全员可读，无需单独授权" in rows
+    # P5：失败/未同步行展示阻塞态，而非常开标签
+    assert "is-blocked" in rows
+    assert "同步成功后全员可读" in rows
+    # P1：添加来源前确认公开范围
+    add = _fn_body("addFeishuDocumentSource")
+    assert "不支持单独授权" in add
     css = STYLE_CSS.read_text()
     assert ".feishu-source-open" in css
     assert ".feishu-display-segment" in css
@@ -4098,7 +4104,7 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=286"' in html
+    assert 'href="/style.css?v=287"' in html
     assert 'src="/app.js?v=410"' in html
     assert 'dav-shell-v271' in sw
 
@@ -5295,3 +5301,31 @@ def test_knowledge_zero_sub_empty_state_wraps_source_controls():
     assert ".ima-report-filters-row { padding: 12px 16px; flex-wrap: wrap; }" in css
     assert ".ima-report-filters > .ima-report-source" in css
     assert "display: flex;" in css[css.index(".ima-report-filters > .ima-report-source"):css.index(".ima-report-head .ima-doc-filter-chips")]
+
+
+def test_knowledge_tabs_dirty_guard_and_a11y():
+    """P3/Sam：采集未保存时切页签与关页面均守卫；页签具 tab 语义与方向键导航。"""
+    src = APP_JS.read_text()
+    switch = _fn_body("switchKnowledgeSettingsTab")
+    assert "imaCollectorHasUnsaved" in switch
+    assert "采集配置有未保存的修改" in switch
+    assert 'beforeunload' in src
+    assert 'role="tab"' in src and 'role="tabpanel"' in src
+    assert "onKnowledgeTabsKey" in src
+    assert "roving" in src.lower() or 'tabIndex = on ? 0 : -1' in switch
+
+
+def test_knowledge_folder_tree_expands_when_empty():
+    """P2：未选文件夹时默认展开采集树；用户手动切换后记住。"""
+    tree = _fn_body("renderImaFolderTree")
+    assert "folderPanelTouched" in tree
+    toggle = _fn_body("toggleImaFolderPanel")
+    assert "folderPanelTouched = true" in toggle
+
+
+def test_knowledge_acl_browsable_on_focus():
+    """P4：ACL 空查询展示候选可浏览，聚焦即出列表。"""
+    filt = _fn_body("filterAclSuggest")
+    assert "slice(0, needle ? 50 : 8)" in filt
+    picker = _fn_body("aclPickerHtml")
+    assert 'onfocus="filterAclSuggest(this)"' in picker
