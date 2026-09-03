@@ -3362,6 +3362,9 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .feishu-entry-speaker { display: flex; flex-wrap: wrap; align-items: baseline; gap: 7px; margin-bottom: 5px; }
 .feishu-entry-speaker strong { color: var(--color-text-strong); font-size: var(--text-body); font-weight: var(--font-weight-semibold); }
 .feishu-entry-speaker span { color: var(--color-text-muted); font-size: var(--text-xs); }
+.feishu-entry-speaker .feishu-entry-reply-to { color: var(--color-accent-strong); font-size: var(--text-xs); font-weight: var(--font-weight-semibold); }
+/* BBS 嵌套回复：缩进 + 左侧竖线 + 浅底 */
+.feishu-entry-block.is-reply { margin-left: 34px; padding: 8px 12px; border-left: 2px solid var(--color-line-strong); background: var(--color-surface-soft); border-radius: 0 var(--radius-control) var(--radius-control) 0; }
 .feishu-entry-assets { margin-top: 10px; }
 .feishu-entry-assets .post-img-link { max-width: 280px; }
 .feishu-entry-assets img { min-width: 64px; min-height: 48px; max-height: 360px; object-fit: contain; background: var(--color-surface-soft); }

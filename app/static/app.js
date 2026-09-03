@@ -1873,11 +1873,11 @@ function feishuTimelineBlockHtml(block, mediaId, groupId, showSpeaker = true) {
   const reply = String(block.reply_to || "");
   const text = String(block.text || "");
   const identity = speaker && showSpeaker
-    ? `<div class="feishu-entry-speaker">${feishuSpeakerAvatarHtml(speaker)}<strong>${escapeHtml(feishuSourceDisplay(speaker).label)}</strong>${reply ? `<span>回复 ${escapeHtml(reply)}</span>` : ""}</div>`
+    ? `<div class="feishu-entry-speaker">${feishuSpeakerAvatarHtml(speaker)}<strong>${escapeHtml(feishuSourceDisplay(speaker).label)}</strong>${reply ? `<span class="feishu-entry-reply-to">↪ 回复 @${escapeHtml(reply)}</span>` : ""}</div>`
     : "";
   const assets = (block.assets || []).filter((asset) => asset && asset.id);
   const assetHtml = assets.length ? `<div class="post-images feishu-entry-assets">${assets.map((asset) => feishuTimelineAssetHtml(asset, mediaId, groupId)).join("")}</div>` : "";
-  return `<div class="feishu-entry-block${speaker ? " has-speaker" : ""}">${identity}${text ? `<p>${escapeHtml(text).replace(/\n/g, "<br>")}</p>` : ""}${assetHtml}</div>`;
+  return `<div class="feishu-entry-block${speaker ? " has-speaker" : ""}${reply ? " is-reply" : ""}">${identity}${text ? `<p>${escapeHtml(text).replace(/\n/g, "<br>")}</p>` : ""}${assetHtml}</div>`;
 }
 
 function feishuEntryAuthor(entry) {
