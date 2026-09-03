@@ -11,7 +11,7 @@
 - 只支持飞书 / Lark HTTPS 的 `/wiki/{token}` 与 `/docx/{token}`。Wiki 节点必须是 docx。
 - 采集按 `revision_id` 增量；归档到 `IMA_ARCHIVE_ROOT/feishu-documents/{source_key_hash}/versions/{content_hash}/`。
 - 时间线：时间戳分段、说话人、`A 回复 B`、首段时间戳前的提示、表格单元格去重。同分钟多条保留。
-- 读模型复用 IMA catalog / ACL / 订阅。授权用户后自动订阅，与现有 `set_ima_kb_acl` 一致。
+- 读模型复用 IMA catalog。飞书组（`feishu-*`）默认对所有登录用户开放，无需 ACL。
 - 前端打开 `type=feishu_timeline` 时渲染时间线，不走 PDF 预览。图片走已登录 blob 接口。
 - 失败保留 last-good 归档与读模型。软删除隐藏来源，磁盘版本不删。
 
@@ -23,6 +23,5 @@
 
 ## 验收
 
-- 未授权用户看不到该组文档和时间线。
-- 授权用户在研报库看到时间线，可按来源/日期/最新优先浏览。
+- 登录用户在研报库看到飞书时间线，可按来源/日期/最新优先浏览。无需 ACL。
 - 管理员可添加、启停、立即同步、移除来源；未配置应用时不能开始授权。

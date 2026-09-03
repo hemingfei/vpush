@@ -113,6 +113,7 @@ from .ima_documents import (
 from .ima_kb import (
     attach_catalog_acl,
     attach_catalog_summary,
+    is_open_group,
     readable_group_ids,
 )
 from .ima_kb import catalog as ima_kb_catalog
@@ -3582,6 +3583,19 @@ def create_api_router(
 
         background_tasks.add_task(_run)
 
+    @router.post("/admin/feishu-documents/preview")
+    def preview_feishu_document_source(
+        body: FeishuDocumentSourceIn,
+        admin: dict = Depends(require_admin),
+    ):
+        service = _require_feishu_documents()
+        try:
+            preview = service.preview_document_url(body.url)
+        except FeishuDocumentError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _audit(admin, "preview_feishu_document_source")
+        return preview
+
     @router.post("/admin/feishu-documents")
     def add_feishu_document_source(
         body: FeishuDocumentSourceIn,
@@ -3744,7 +3758,7 @@ def create_api_router(
         seen: set[str] = set()
         for group_id in body.group_ids:
             value = str(group_id or "").strip()
-            if not value or value in seen:
+            if not value or value in seen or is_open_group(value):
                 continue
             if value not in known:
                 raise HTTPException(status_code=404, detail="知识库不存在")

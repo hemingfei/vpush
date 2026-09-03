@@ -438,6 +438,47 @@ def _feishu_api(tmp_path, monkeypatch, fake=None):
     return client, service, admin, user
 
 
+def test_feishu_document_preview_returns_metadata_without_creating_source(tmp_path, monkeypatch):
+    client, service, admin, _user = _feishu_api(tmp_path, monkeypatch)
+    client.app.state.db.save_feishu_oauth_credential({
+        "access_token": "access", "refresh_token": "refresh",
+        "expires_in": 3600, "refresh_token_expires_in": 7200,
+    })
+
+    response = client.post(
+        "/api/admin/feishu-documents/preview",
+        headers=admin,
+        json={"url": "https://a.feishu.cn/docx/NXbndzo1wowuQFxtH3ec5U3snOd?from=copy"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "source_type": "docx",
+        "title": "测试时间线",
+        "revision_id": "1",
+        "ready": True,
+    }
+    assert client.app.state.db.list_feishu_document_sources() == []
+    assert not list(tmp_path.glob("**/timeline.json"))
+    assert service.client.block_calls == 0
+    service.stop()
+
+
+def test_feishu_document_preview_requires_admin_and_authorization(tmp_path, monkeypatch):
+    client, service, admin, user = _feishu_api(tmp_path, monkeypatch)
+    url = "https://a.feishu.cn/wiki/Dyc5wDTVUiwiKvkbBO1cGvHWnHh"
+
+    assert client.post(
+        "/api/admin/feishu-documents/preview", headers=user, json={"url": url}
+    ).status_code == 403
+    missing = client.post(
+        "/api/admin/feishu-documents/preview", headers=admin, json={"url": url}
+    )
+    assert missing.status_code == 400
+    assert "授权" in missing.json()["detail"]
+    service.stop()
+
+
 def test_api_rejects_untrusted_feishu_url(tmp_path, monkeypatch):
     client, _service, admin, _user = _feishu_api(tmp_path, monkeypatch)
     resp = client.post(
@@ -448,7 +489,7 @@ def test_api_rejects_untrusted_feishu_url(tmp_path, monkeypatch):
     assert resp.status_code == 400
 
 
-def test_feishu_timeline_is_acl_and_subscription_gated(tmp_path, monkeypatch):
+def test_feishu_timeline_is_open_to_all_users(tmp_path, monkeypatch):
     client, _service, admin, user = _feishu_api(tmp_path, monkeypatch)
     client.app.state.db.save_feishu_oauth_credential({
         "access_token": "access",
@@ -479,22 +520,6 @@ def test_feishu_timeline_is_acl_and_subscription_gated(tmp_path, monkeypatch):
     assert admin_doc["type"] == "feishu_timeline"
     assert admin_doc["source_url"] == "https://a.feishu.cn/docx/NXbndzo1wowuQFxtH3ec5U3snOd"
 
-    catalog = client.get("/api/ima-documents/catalog", headers=user).json()
-    assert all(
-        item["id"] != group_id
-        for item in catalog.get("subscribed", []) + catalog.get("available", [])
-    )
-    assert client.get(
-        f"/api/ima-documents/{media_id}?group={group_id}", headers=user
-    ).status_code == 404
-    assert client.get("/api/ima-documents/timeline/all", headers=user).json()["entries"] == []
-
-    acl = client.put(
-        f"/api/admin/ima-collector/groups/{group_id}/acl",
-        headers=admin,
-        json={"usernames": ["fs_user"]},
-    )
-    assert acl.status_code == 200, acl.text
     catalog = client.get("/api/ima-documents/catalog", headers=user).json()
     assert any(item["id"] == group_id for item in catalog["subscribed"])
     user_doc = client.get(

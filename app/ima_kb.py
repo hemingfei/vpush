@@ -12,6 +12,10 @@ def is_admin(user: dict[str, Any]) -> bool:
     return bool(user.get("is_admin"))
 
 
+def is_open_group(group_id: str) -> bool:
+    return str(group_id).startswith("feishu-")
+
+
 def readable_group_ids(db: Any, user: dict[str, Any], groups: Iterable[Any]) -> set[str]:
     ids = {str(group.id) for group in groups}
     if is_admin(user):
@@ -21,7 +25,7 @@ def readable_group_ids(db: Any, user: dict[str, Any], groups: Iterable[Any]) -> 
     subscribed = {
         str(group_id) for group_id in db.ima_kb_subscribed_group_ids_for_user(uid)
     }
-    return ids & acl & subscribed
+    return (ids & acl & subscribed) | {gid for gid in ids if is_open_group(gid)}
 
 
 def catalog(db: Any, user: dict[str, Any], groups: Iterable[Any]) -> dict[str, list[dict[str, Any]]]:
@@ -36,8 +40,9 @@ def catalog(db: Any, user: dict[str, Any], groups: Iterable[Any]) -> dict[str, l
     subscriptions = {
         str(group_id) for group_id in db.ima_kb_subscribed_group_ids_for_user(uid)
     }
-    subscribed_ids = acl & subscriptions
-    available_ids = acl - subscriptions
+    open_ids = {str(item["id"]) for item in items if is_open_group(str(item["id"]))}
+    subscribed_ids = (acl & subscriptions) | open_ids
+    available_ids = acl - subscribed_ids
     return {
         "subscribed": [item for item in items if str(item["id"]) in subscribed_ids],
         "available": [item for item in items if str(item["id"]) in available_ids],

@@ -538,6 +538,29 @@ class FeishuDocumentSyncService:
         document_id = self.client.resolve_document(source, access_token)
         return document_id, self.client.document_meta(document_id, access_token)
 
+    def preview_document_url(self, url: str) -> dict[str, Any]:
+        """读取文档元数据供管理员确认，不创建来源或发布读模型。"""
+        try:
+            source = parse_feishu_document_url(url)
+        except ValueError as exc:
+            raise FeishuDocumentError(str(exc)) from exc
+        if not self.configured:
+            raise FeishuDocumentError("飞书文档应用尚未配置")
+        access_token = self._access_token()
+        try:
+            _document_id, meta = self._read_document(source, access_token)
+        except FeishuDocumentError as exc:
+            if not exc.auth_required:
+                raise
+            access_token = self._access_token(force_refresh=True)
+            _document_id, meta = self._read_document(source, access_token)
+        return {
+            "source_type": source["source_type"],
+            "title": str(meta.get("title") or "飞书文档")[:200],
+            "revision_id": str(meta.get("revision_id") or "-1"),
+            "ready": True,
+        }
+
     def recover_read_models(self) -> dict[str, int]:
         if self.ima_documents is None or not self.ima_documents.store.archive_readable():
             return {"recovered": 0, "failed": 0}

@@ -2154,6 +2154,9 @@ class DB:
             return True, 0
 
     def ima_kb_can_subscribe(self, user_id: int, group_id: str) -> bool:
+        from .ima_kb import is_open_group
+        if is_open_group(group_id):
+            return True
         return bool(
             self._read_only_rows(
                 "SELECT 1 FROM ima_kb_acl WHERE group_id = ? AND user_id = ?",

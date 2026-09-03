@@ -170,7 +170,19 @@ def test_catalog_hides_ungranted_groups_from_users(tmp_path):
     assert readable_group_ids(db, admin, _groups()) == {"banking", "macro"}
 
 
-def test_user_group_lists_use_two_bulk_acl_reads_with_constant_fanout():
+def test_feishu_groups_are_open_without_acl(tmp_path):
+    db = DB(tmp_path / "feishu-open.sqlite")
+    user_id = db.add_user("reader", "hash", is_admin=False)
+    user = {"id": user_id, "is_admin": 0}
+    groups = _groups() + (
+        ImaGroupConfig("feishu-abc", "飞书文档", "", ""),
+    )
+    listed = catalog(db, user, groups)
+    assert [g["id"] for g in listed["subscribed"]] == ["feishu-abc"]
+    assert listed["available"] == []
+    assert readable_group_ids(db, user, groups) == {"feishu-abc"}
+    assert [g["id"] for g in catalog(db, user, _groups())["subscribed"]] == []
+
     groups = tuple(
         ImaGroupConfig(f"g{i:02d}", f"Group {i:02d}", f"kb{i:02d}", f"root{i:02d}")
         for i in range(25)
