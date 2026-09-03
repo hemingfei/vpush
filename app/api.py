@@ -607,6 +607,14 @@ class FeishuDocumentSourceIn(BaseModel):
     url: str
 
 
+class FeishuDocumentConfigIn(BaseModel):
+    app_id: str | None = None
+    app_secret: str | None = None
+    redirect_uri: str | None = None
+    scopes: str | None = None
+    interval_seconds: int | None = None
+
+
 class FeishuDocumentSourceUpdateIn(BaseModel):
     enabled: bool
 
@@ -3415,6 +3423,30 @@ def create_api_router(
             raise HTTPException(status_code=503, detail="飞书文档服务未启用")
         return feishu_documents
 
+    def _public_feishu_config(service) -> dict:
+        cfg = service.config
+        from urllib.parse import urlparse
+
+        path = urlparse(cfg.redirect_uri).path
+        stored = db.get_feishu_docs_settings()
+        has_db = any(
+            str(stored.get(key) or "").strip()
+            for key in ("app_id", "app_secret", "redirect_uri", "scopes", "interval_seconds")
+        )
+        base = service.base_config
+        source = "db" if has_db else (
+            "env" if (base.app_id and base.app_secret and base.redirect_uri) else ""
+        )
+        return {
+            "app_id": cfg.app_id,
+            "app_secret_set": bool(cfg.app_secret),
+            "redirect_uri": cfg.redirect_uri,
+            "redirect_path_ok": path == "/api/admin/feishu-documents/oauth/callback",
+            "scopes": cfg.scopes,
+            "interval_seconds": max(int(cfg.interval_seconds), 15),
+            "config_source": source,
+        }
+
     @router.get("/admin/feishu-documents", dependencies=[Depends(require_admin)])
     def list_feishu_document_sources():
         service = _require_feishu_documents()
@@ -3423,10 +3455,64 @@ def create_api_router(
             "configured": service.configured,
             "authorized": bool(credential),
             "interval_seconds": max(int(service.config.interval_seconds), 15),
+            "config": _public_feishu_config(service),
             "sources": [
                 _public_feishu_source(source)
                 for source in db.list_feishu_document_sources()
             ],
+        }
+
+    @router.put("/admin/feishu-documents/config")
+    def update_feishu_documents_config(body: FeishuDocumentConfigIn, admin: dict = Depends(require_admin)):
+        service = _require_feishu_documents()
+        if not callable(getattr(db, "set_feishu_docs_settings", None)):
+            raise HTTPException(status_code=503, detail="飞书文档配置存储不可用")
+        updates: dict[str, Any] = {}
+        if body.app_id is not None:
+            value = body.app_id.strip()
+            if len(value) > 128:
+                raise HTTPException(status_code=400, detail="App ID 过长")
+            updates["app_id"] = value
+        if body.app_secret is not None and body.app_secret.strip():
+            value = body.app_secret.strip()
+            if len(value) > 256:
+                raise HTTPException(status_code=400, detail="App Secret 过长")
+            updates["app_secret"] = value
+        if body.redirect_uri is not None:
+            value = body.redirect_uri.strip()
+            if value and not value.startswith("https://"):
+                raise HTTPException(status_code=400, detail="回调地址必须是 HTTPS")
+            if len(value) > 512:
+                raise HTTPException(status_code=400, detail="回调地址过长")
+            updates["redirect_uri"] = value
+        if body.scopes is not None:
+            value = " ".join(body.scopes.split())
+            if not value:
+                raise HTTPException(status_code=400, detail="授权权限不能为空")
+            if len(value) > 500:
+                raise HTTPException(status_code=400, detail="授权权限列表过长")
+            updates["scopes"] = value
+        if body.interval_seconds is not None:
+            if not 15 <= int(body.interval_seconds) <= 86400:
+                raise HTTPException(status_code=400, detail="检查间隔需在 15–86400 秒之间")
+            updates["interval_seconds"] = str(int(body.interval_seconds))
+        if not updates:
+            raise HTTPException(status_code=400, detail="没有要保存的配置")
+        previous_app_id = service.config.app_id
+        try:
+            db.set_feishu_docs_settings(updates)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        service.reload_config()
+        service.start()
+        credentials_changed = ("app_secret" in updates) or (
+            updates.get("app_id") is not None and updates["app_id"] != previous_app_id
+        )
+        _audit(admin, "update_feishu_documents_config", "", ",".join(sorted(updates)))
+        return {
+            "ok": True,
+            "config": _public_feishu_config(service),
+            "reauth_required": bool(credentials_changed and db.get_feishu_oauth_credential()),
         }
 
     @router.post("/admin/feishu-documents/oauth/start")

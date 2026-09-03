@@ -3578,6 +3578,12 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .knowledge-settings .ima-credential-actions {
   margin-top: var(--space-3);
 }
+.feishu-config { display: grid; gap: 12px; }
+.feishu-config-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.feishu-config .cfg-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3) var(--space-4); margin-top: 0; }
+.feishu-config .cfg-field { min-width: 0; display: grid; gap: 6px; }
+.feishu-config .feishu-field--wide { grid-column: 1 / -1; }
+.feishu-config-actions { justify-content: flex-end; }
 .feishu-source-add { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
 .feishu-source-add .form-control { width: 100%; min-width: 0; }
 .feishu-source-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; color: var(--color-text-muted); font-size: var(--text-sm); }
@@ -3602,6 +3608,9 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .feishu-source-acl .ima-acl-status, .feishu-source-acl .ima-acl-more { grid-column: 2; }
 @media (max-width: 800px) {
   .ks-tab { min-height: 44px; }
+  .feishu-config .cfg-fields { grid-template-columns: minmax(0, 1fr); }
+  .feishu-config-actions { justify-content: flex-start; }
+  .feishu-config-actions .btn-normal { width: 100%; }
   .feishu-source-add { grid-template-columns: minmax(0, 1fr); }
   .feishu-source-add .btn-normal { width: 100%; }
   .feishu-source-summary { align-items: flex-start; }

@@ -19,6 +19,7 @@ from urllib.parse import unquote, urlencode, urlparse
 
 import httpx
 
+from .config import FeishuDocumentsConfig
 from .ima_documents import ImaGroupConfig, archive_lock
 
 logger = logging.getLogger(__name__)
@@ -408,15 +409,48 @@ class FeishuDocumentClient:
 class FeishuDocumentSyncService:
     def __init__(self, db, config, archive_root: Path, ima_documents=None, client: FeishuDocumentClient | None = None):
         self.db = db
-        self.config = config
+        self.base_config = config
         self.archive_root = Path(archive_root)
         self.ima_documents = ima_documents
-        self.client = client or FeishuDocumentClient(config.app_id, config.app_secret, config.redirect_uri, config.scopes)
         self._owns_client = client is None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._sync_lock = threading.RLock()
         self._refresh_lock = threading.Lock()
+        self.config = self._merged_config()
+        self.client = client or FeishuDocumentClient(
+            self.config.app_id, self.config.app_secret,
+            self.config.redirect_uri, self.config.scopes,
+        )
+
+    def _merged_config(self) -> FeishuDocumentsConfig:
+        """DB 设置（设置页保存）优先于环境变量；密钥解密后合并。"""
+        stored: dict[str, str] = {}
+        getter = getattr(self.db, "get_feishu_docs_settings", None)
+        if callable(getter):
+            try:
+                stored = getter()
+            except Exception:
+                logger.exception("Feishu docs settings load failed")
+        try:
+            interval = int(stored.get("interval_seconds") or 0)
+        except (TypeError, ValueError):
+            interval = 0
+        base = self.base_config
+        return FeishuDocumentsConfig(
+            app_id=str(stored.get("app_id") or "").strip() or base.app_id,
+            app_secret=str(stored.get("app_secret") or "").strip() or base.app_secret,
+            redirect_uri=str(stored.get("redirect_uri") or "").strip() or base.redirect_uri,
+            scopes=str(stored.get("scopes") or "").strip() or base.scopes,
+            interval_seconds=interval if interval >= 15 else base.interval_seconds,
+        )
+
+    def reload_config(self) -> None:
+        self.config = self._merged_config()
+        self.client.app_id = self.config.app_id
+        self.client.app_secret = self.config.app_secret
+        self.client.redirect_uri = self.config.redirect_uri
+        self.client.scopes = self.config.scopes
 
     @property
     def configured(self) -> bool:

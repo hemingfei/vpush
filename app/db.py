@@ -5554,6 +5554,30 @@ class DB:
             row.pop("refresh_token_ciphertext", None)
         return row
 
+    # ---- 飞书文档应用配置（设置页可改，优先于环境变量） ----
+    _FEISHU_DOCS_PLAIN_KEYS = ("app_id", "redirect_uri", "scopes", "interval_seconds")
+
+    def set_feishu_docs_settings(self, values: dict) -> None:
+        secret = str(values.get("app_secret") or "").strip()
+        if secret:
+            if not self.credential_key:
+                raise ValueError("未配置 FEISHU_CREDENTIAL_KEY，无法保存应用密钥")
+            self.set_setting("feishu_docs_app_secret", self._encrypt_secret(secret))
+        for key in self._FEISHU_DOCS_PLAIN_KEYS:
+            if values.get(key) is not None:
+                self.set_setting(f"feishu_docs_{key}", str(values[key]))
+
+    def get_feishu_docs_settings(self) -> dict:
+        out: dict[str, str] = {}
+        for key in self._FEISHU_DOCS_PLAIN_KEYS:
+            out[key] = str(self.get_setting(f"feishu_docs_{key}") or "")
+        cipher = str(self.get_setting("feishu_docs_app_secret") or "")
+        if cipher.startswith(SECRET_PREFIX):
+            out["app_secret"] = decrypt_stored_secret(cipher, self.credential_key)
+        else:
+            out["app_secret"] = cipher
+        return out
+
     def upsert_feishu_document_source(self, parsed: dict[str, str]) -> dict:
         key_hash = hashlib.sha256(parsed["source_key"].encode()).hexdigest()
         with self._lock:

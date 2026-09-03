@@ -6883,7 +6883,7 @@ async function reloadAdminSettingsPage(seq, authoritativeImaStatus = null) {
 
 function switchKnowledgeSettingsTab(tab) {
   if (tab === "cicc") tab = "local"; // 旧页签记忆迁移：中金已并入本地库
-  const allowed = ["collect", "feishu", "zsxq", "storage", "local"];
+  const allowed = ["collect", "zsxq", "storage", "local", "feishu"];
   const next = allowed.includes(tab) ? tab : "collect";
   if (next === "local") {
     loadLocalLibraries();
@@ -6942,6 +6942,60 @@ function feishuSourceRowsHtml(data) {
   }).join("")}</div>`;
 }
 
+function feishuDocsConfigHtml(data) {
+  const cfg = data.config || {};
+  const secretPlaceholder = cfg.app_secret_set ? "已保存（留空保持不变）" : "飞书开放平台 → 凭证与基础信息";
+  const redirectWarn = cfg.redirect_uri && cfg.redirect_path_ok === false
+    ? `<p class="form-error" role="alert">当前回调路径不是本站 OAuth 回调（…/api/admin/feishu-documents/oauth/callback），授权会失败。</p>`
+    : "";
+  const sourceLabel = { db: "设置页", env: "环境变量" }[cfg.config_source] || "";
+  return `<div class="cfg-group feishu-config">
+    <div class="feishu-config-head">
+      <p class="cfg-group-title">应用与采集</p>
+      <span class="muted">${sourceLabel ? `配置来源：${sourceLabel}` : "尚未配置"}</span>
+    </div>
+    <div class="cfg-fields">
+      <label class="cfg-field"><span>App ID</span><input id="feishu-cfg-app-id" class="form-control" value="${escapeHtml(cfg.app_id || "")}" placeholder="cli_..." autocomplete="off"></label>
+      <label class="cfg-field"><span>App Secret</span><input id="feishu-cfg-secret" class="form-control" type="password" autocomplete="new-password" placeholder="${escapeHtml(secretPlaceholder)}"></label>
+      <label class="cfg-field feishu-field--wide"><span>回调地址（须与开放平台安全设置一致）</span><input id="feishu-cfg-redirect" class="form-control" type="url" value="${escapeHtml(cfg.redirect_uri || "")}" placeholder="https://your.domain.com/api/admin/feishu-documents/oauth/callback" autocomplete="off"></label>
+      <label class="cfg-field feishu-field--wide"><span>授权权限（空格分隔）</span><input id="feishu-cfg-scopes" class="form-control" value="${escapeHtml(cfg.scopes || "")}" placeholder="wiki:node:read docx:document:readonly docs:document.media:download offline_access" autocomplete="off"></label>
+      <label class="cfg-field"><span>检查间隔（秒，≥15）</span><input id="feishu-cfg-interval" class="form-control" type="number" min="15" max="86400" step="1" value="${Number(cfg.interval_seconds) || 60}"></label>
+    </div>
+    ${redirectWarn}
+    <p class="section-meta">修改 App ID / Secret 后需重新授权；检查间隔对所有来源生效，按文档 revision 增量同步。</p>
+    <div class="toolbar feishu-config-actions">
+      <button type="button" class="btn-normal" id="feishu-cfg-save" onclick="saveFeishuDocsConfig()">保存设置</button>
+    </div>
+  </div>`;
+}
+
+async function saveFeishuDocsConfig() {
+  const button = $("#feishu-cfg-save");
+  const interval = Number($("#feishu-cfg-interval")?.value || 0);
+  if (!Number.isFinite(interval) || interval < 15 || interval > 86400) {
+    flash("检查间隔需在 15–86400 秒之间", "error");
+    return;
+  }
+  const payload = {
+    app_id: $("#feishu-cfg-app-id")?.value.trim() || "",
+    redirect_uri: $("#feishu-cfg-redirect")?.value.trim() || "",
+    scopes: $("#feishu-cfg-scopes")?.value.trim() || "",
+    interval_seconds: interval,
+  };
+  const secret = $("#feishu-cfg-secret")?.value?.trim();
+  if (secret) payload.app_secret = secret;
+  if (button) button.disabled = true;
+  try {
+    const r = await api("/api/admin/feishu-documents/config", { method: "PUT", body: JSON.stringify(payload) });
+    flash(r.reauth_required ? "设置已保存；应用凭据已变更，请重新授权" : "飞书文档设置已保存");
+    await loadFeishuDocumentSources();
+  } catch (err) {
+    flash(err.message || "保存失败", "error");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 async function loadFeishuDocumentSources() {
   const host = $("#feishu-documents-body");
   if (!host) return;
@@ -6952,7 +7006,7 @@ async function loadFeishuDocumentSources() {
     const authButton = data.configured
       ? `<button type="button" class="btn-ghost" onclick="authorizeFeishuDocuments()">${data.authorized ? "重新授权" : "授权飞书"}</button>`
       : "";
-    host.innerHTML = `<div class="feishu-source-summary"><span>${escapeHtml(auth)} · 每 ${Number(data.interval_seconds) || 60} 秒检查</span>${authButton}</div>${feishuSourceRowsHtml(data)}`;
+    host.innerHTML = `${feishuDocsConfigHtml(data)}<div class="feishu-source-summary"><span>${escapeHtml(auth)} · 每 ${Number(data.interval_seconds) || 60} 秒检查</span>${authButton}</div>${feishuSourceRowsHtml(data)}`;
     await fetchAclCandidateUsers();
     host.querySelectorAll(".feishu-source-row").forEach((row) => {
       const picker = row.querySelector(".ima-acl-picker");
@@ -7749,10 +7803,10 @@ async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus 
     <div class="knowledge-settings">
       <div class="ks-tabs" role="tablist">
         <button type="button" class="ks-tab is-on" data-tab="collect" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">采集</button>
-        <button type="button" class="ks-tab" data-tab="feishu" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">飞书文档</button>
         <button type="button" class="ks-tab" data-tab="zsxq" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">星球</button>
         <button type="button" class="ks-tab" data-tab="storage" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">存储</button>
         <button type="button" class="ks-tab" data-tab="local" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">本地库</button>
+        <button type="button" class="ks-tab" data-tab="feishu" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">飞书文档</button>
       </div>
       <section class="section-panel ks-panel is-on" data-panel="collect">
         <header class="section-head"><div><h2 class="section-title">IMA 文档采集</h2>

@@ -504,3 +504,63 @@ def test_feishu_timeline_is_acl_and_subscription_gated(tmp_path, monkeypatch):
     timeline = client.get("/api/ima-documents/timeline/all", headers=user).json()
     assert timeline["entries"]
     assert timeline["entries"][0]["source"]["group_id"] == group_id
+
+
+def test_feishu_docs_config_endpoint_persists_and_hot_reloads(tmp_path, monkeypatch):
+    client, service, admin, _user = _feishu_api(tmp_path, monkeypatch)
+
+    initial = client.get("/api/admin/feishu-documents", headers=admin).json()
+    assert initial["config"]["app_id"] == "cli_id"  # 来自环境变量
+    assert initial["config"]["config_source"] == "env"
+    assert initial["config"]["app_secret_set"] is True
+    assert initial["config"]["redirect_path_ok"] is True
+
+    saved = client.put(
+        "/api/admin/feishu-documents/config",
+        headers=admin,
+        json={
+            "app_id": "cli_page",
+            "app_secret": "page-secret-value",
+            "redirect_uri": "https://page.example.com/api/admin/feishu-documents/oauth/callback",
+            "scopes": "wiki:node:read offline_access",
+            "interval_seconds": 120,
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["reauth_required"] is False
+
+    stored = client.get("/api/admin/feishu-documents", headers=admin).json()
+    cfg = stored["config"]
+    assert cfg["app_id"] == "cli_page"
+    assert cfg["config_source"] == "db"
+    assert cfg["app_secret_set"] is True
+    assert cfg["interval_seconds"] == 120
+    assert stored["interval_seconds"] == 120
+    assert "page-secret-value" not in saved.text and "page-secret-value" not in stored.__str__()
+
+    db = client.app.state.db
+    raw_setting = db.get_setting("feishu_docs_app_secret")
+    assert raw_setting.startswith("enc1:")
+    assert service.config.app_id == "cli_page"
+    assert service.configured is True
+
+    admin_id = db.get_user_by_username("fs_admin")["id"]
+    url = service.oauth_start(admin_id)
+    assert "state=" in url  # 应用配置齐备后可直接发起授权
+    assert service.client.app_id == "cli_page"  # reload_config 已热更新客户端
+
+    assert client.put(
+        "/api/admin/feishu-documents/config", headers=admin, json={"interval_seconds": 10}
+    ).status_code == 400
+    assert client.put(
+        "/api/admin/feishu-documents/config", headers=admin,
+        json={"redirect_uri": "http://page.example.com/cb"},
+    ).status_code == 400
+    assert client.put(
+        "/api/admin/feishu-documents/config", headers=admin, json={}
+    ).status_code == 400
+    # 非管理员不可改
+    assert client.put(
+        "/api/admin/feishu-documents/config", headers=_user, json={"interval_seconds": 60}
+    ).status_code == 403
+    service.stop()

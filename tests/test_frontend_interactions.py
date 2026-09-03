@@ -1524,14 +1524,23 @@ def test_ima_document_collector_lives_in_knowledge_settings():
 
 
 def test_ima_settings_have_one_parent_and_keep_zsxq_under_ima():
-    """知识库设置页采集在前，飞书文档随后，知识星球与存储在后。"""
+    """知识库设置页采集在前，飞书文档标签固定在最后。"""
     knowledge = _fn_body("loadAdminKnowledge")
     collect = knowledge.index('data-tab="collect"')
-    feishu = knowledge.index('data-tab="feishu"')
     zsxq = knowledge.index('data-tab="zsxq"')
     storage = knowledge.index('data-tab="storage"')
-    assert collect < feishu < zsxq < storage
+    local = knowledge.index('data-tab="local"')
+    feishu = knowledge.index('data-tab="feishu"')
+    assert collect < zsxq < storage < local < feishu
     assert 'id="feishu-documents-body"' in knowledge
+    assert "feishuDocsConfigHtml" in _fn_body("loadFeishuDocumentSources")
+    config_html = _fn_body("feishuDocsConfigHtml")
+    for field_id in ("feishu-cfg-app-id", "feishu-cfg-secret", "feishu-cfg-redirect", "feishu-cfg-scopes", "feishu-cfg-interval", "feishu-cfg-save"):
+        assert f'id="{field_id}"' in config_html
+    save = _fn_body("saveFeishuDocsConfig")
+    assert '"/api/admin/feishu-documents/config"' in save
+    assert "interval_seconds" in save
+    assert "15–86400" in save
     assert '<h2 class="section-title">存储</h2>' in _fn_body("imaStoragePanelHtml")
     assert 'class="cfg-group cfg-group--zsxq"' in knowledge
     assert 'id="pc-zq-pages"' in knowledge
@@ -3679,9 +3688,9 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=265"' in html
-    assert 'src="/app.js?v=380"' in html
-    assert 'dav-shell-v248' in sw
+    assert 'href="/style.css?v=266"' in html
+    assert 'src="/app.js?v=381"' in html
+    assert 'dav-shell-v249' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
