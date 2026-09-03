@@ -4235,7 +4235,4 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   .news-list-thumb { width: 84px; height: 56px; flex-basis: 84px; }
   .news-article-body { font-size: 16px; }
   .news-article-head h1 { font-size: 24px; }
-  .kb-source-pills-desk { display: none !important; }
-  .kb-source-select-wrap { display: inline-flex; }
-  .kb-source-select-mobile { display: inline-flex; width: 100%; }
 }
