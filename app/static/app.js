@@ -2335,9 +2335,9 @@ async function renderImaDocument(seq, mediaId) {
         <header class="ima-reader-toolbar">
           <button type="button" class="ima-reader-back" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back)" aria-label="返回"><span class="ima-back-icon" aria-hidden="true">‹</span>返回</button>
           <h2 class="ima-reader-title">${readerTitle}</h2>
-          <div id="feishu-timeline-toolbar" class="feishu-timeline-toolbar"></div>
           <div class="ima-reader-actions"><button type="button" class="icon-btn" aria-label="返回搜索" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back, true)">${SEARCH_ICON}</button>${openNewTab}</div>
         </header>
+        <div id="feishu-timeline-toolbar" class="feishu-timeline-toolbar"></div>
         ${documentPanel}
       </article>`
       : `

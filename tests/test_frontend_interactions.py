@@ -1686,6 +1686,11 @@ def test_feishu_timeline_toolbar_uses_source_avatar_pills():
     assert "feishu-source-avatar" not in item
     assert ".feishu-source-avatar" in css
     assert "border-radius: 50%" in css
+    reader = _fn_body("renderImaDocument")
+    header_end = reader.find("</header>")
+    toolbar_at = reader.find('id="feishu-timeline-toolbar"')
+    assert 0 < header_end < toolbar_at
+    assert "flex-wrap: wrap" not in css[css.index(".feishu-source-pills"):css.index(".feishu-source-avatar")]
 
 
 def test_knowledge_and_timeline_use_feishu_source_display_names():
@@ -3986,8 +3991,8 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=280"' in html
-    assert 'src="/app.js?v=398"' in html
+    assert 'href="/style.css?v=281"' in html
+    assert 'src="/app.js?v=399"' in html
     assert 'dav-shell-v263' in sw
 
 
