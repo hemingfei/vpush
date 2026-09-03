@@ -3248,11 +3248,15 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .feishu-timeline-body { min-width: 0; overflow-y: auto; scroll-behavior: smooth; padding: 4px 28px 40px 24px; }
 .feishu-timeline-body .tl-group { margin: 0; }
 .feishu-timeline-body .live-item { align-items: flex-start; }
-.feishu-live-speaker { margin-bottom: 4px; color: var(--color-text-strong); font-size: var(--text-sm); font-weight: var(--font-weight-semibold); }
-.feishu-live-source { margin-bottom: 4px; color: var(--color-text-muted); font-size: var(--text-xs); }
-.feishu-timeline-body .live-body .feishu-entry-block { margin: 0 0 8px; }
-.feishu-timeline-body .live-body .feishu-entry-block:last-child { margin-bottom: 0; }
-.feishu-timeline-body .live-body .feishu-entry-block p { max-width: 75ch; margin: 0; color: inherit; font: inherit; line-height: 1.65; overflow-wrap: break-word; }
+.feishu-timeline-body .live-time { flex-basis: 56px; padding-top: 0; line-height: 1.65; white-space: nowrap; }
+.feishu-live-speaker { margin: 0 0 4px; color: var(--color-text-strong); font-size: var(--text-body); font-weight: var(--font-weight-semibold); line-height: 1.65; }
+.feishu-live-source { margin: 0 0 4px; color: var(--color-text-muted); font-size: var(--text-xs); line-height: 1.65; }
+.feishu-timeline-body .live-body .feishu-entry-block { margin: 0; }
+.feishu-timeline-body .live-body .feishu-entry-block + .feishu-entry-block { margin-top: 8px; }
+.feishu-timeline-body .live-body .feishu-entry-block p { max-width: 75ch; margin: 0 0 8px; color: inherit; font: inherit; line-height: 1.65; overflow-wrap: break-word; }
+.feishu-timeline-body .live-body .feishu-entry-block p:last-child { margin-bottom: 0; }
+.feishu-timeline-body .live-body .feishu-entry-speaker { margin-bottom: 4px; }
+.feishu-timeline-body .live-body .feishu-entry-speaker strong { font-size: var(--text-body); line-height: 1.65; }
 .feishu-day-heading { position: sticky; top: 0; z-index: 2; display: grid; grid-template-columns: var(--feishu-time-rail) minmax(0, 1fr); column-gap: var(--feishu-track-gap); margin: 28px 0 0; padding: 0 0 10px; border-bottom: var(--border-default); background: var(--color-surface); color: var(--color-text-strong); font-size: var(--text-sm); font-weight: var(--font-weight-semibold); scroll-margin-top: 12px; }
 .feishu-day-heading::before { content: ""; }
 .feishu-entry { position: relative; display: grid; grid-template-columns: var(--feishu-time-rail) minmax(0, 1fr); gap: var(--feishu-track-gap); padding: var(--feishu-entry-pad) 0; }

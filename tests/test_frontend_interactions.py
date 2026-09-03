@@ -1685,6 +1685,9 @@ def test_feishu_timeline_uses_live_feed_layout():
     assert "class=\"live-body\"" in item
     assert "tl-group live-group" in entries
     assert "feishuEntryHasContent" in entries
+    assert "收起" in _fn_body("feishuBlockHasContent")
+    assert "日无更新" in _fn_body("feishuBlockHasContent")
+    assert "flex-basis: 56px" in src
     assert ".live-item" in src
     assert ".live-time" in src
     assert ".live-body" in src
@@ -3923,9 +3926,9 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=276"' in html
-    assert 'src="/app.js?v=395"' in html
-    assert 'dav-shell-v260' in sw
+    assert 'href="/style.css?v=277"' in html
+    assert 'src="/app.js?v=396"' in html
+    assert 'dav-shell-v261' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

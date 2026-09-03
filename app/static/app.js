@@ -1841,7 +1841,12 @@ function feishuBlockHasContent(block) {
   if (block.type === "table") {
     return (block.rows || []).some((row) => (row || []).some((cell) => String(cell?.text || "").trim() || (cell?.assets || []).some((asset) => asset?.id)));
   }
-  return Boolean(String(block.text || "").trim() || (block.assets || []).some((asset) => asset?.id));
+  const text = String(block.text || "").trim();
+  if ((block.assets || []).some((asset) => asset?.id)) return true;
+  if (!text) return false;
+  if (text === "收起") return false;
+  if (/^\d+日无更新$/.test(text)) return false;
+  return true;
 }
 
 function feishuEntryHasContent(entry) {
