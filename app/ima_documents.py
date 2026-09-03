@@ -3106,6 +3106,9 @@ class ImaDocumentService:
             public["group_name"] = item["group_name"]
         if item.get("search_snippet"):
             public["search_snippet"] = str(item["search_snippet"])[:240]
+        abstract_text = str(item.get("abstract_zh") or item.get("abstract") or "").strip()
+        if abstract_text:
+            public["abstract"] = abstract_text[:140]
         return public
 
     def list_documents(
