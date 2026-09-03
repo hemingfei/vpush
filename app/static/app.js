@@ -22,7 +22,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.132";
+const APP_VERSION = "1.12.133";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -7450,7 +7450,7 @@ function feishuSourceRowsHtml(data) {
         <a class="btn-ghost feishu-action" href="${escapeHtml(source.canonical_url)}" target="_blank" rel="noopener" aria-label="打开飞书原文 ${escapeHtml(source.title)}">${EXTERNAL_LINK_ICON}<span>打开原文</span></a>
         <button type="button" class="btn-ghost danger feishu-action" data-source-id="${source.id}" data-title="${escapeHtml(source.title)}" onclick="removeFeishuDocumentSource(this.dataset.sourceId,this.dataset.title,this)">移除</button>
       </div>
-      <div class="feishu-source-acl"><span>查看权限</span>${aclPickerHtml(source.acl_usernames || [], `feishu-acl-${source.id}`, true)}</div>
+      <p class="feishu-source-open">全员可读，无需单独授权</p>
     </article>`;
   }).join("")}</div>`;
 }
@@ -7527,15 +7527,6 @@ async function loadFeishuDocumentSources() {
       ? `<button type="button" class="btn-ghost" onclick="authorizeFeishuDocuments()">${data.authorized ? "重新授权" : "授权飞书"}</button>`
       : "";
     host.innerHTML = `${feishuDocsConfigHtml(data)}<div class="feishu-source-summary"><span>${escapeHtml(auth)} · 每 ${Number(data.interval_seconds) || 60} 秒检查</span>${authButton}</div>${feishuSourceRowsHtml(data)}`;
-    await fetchAclCandidateUsers();
-    if (!active()) return;
-    host.querySelectorAll(".feishu-source-row").forEach((row) => {
-      const picker = row.querySelector(".ima-acl-picker");
-      const source = (data.sources || []).find((item) => String(item.id) === row.dataset.sourceId);
-      if (!picker || !source) return;
-      picker.dataset.groupId = source.group_id;
-      syncImaAclMoreButton(picker, (source.acl_usernames || []).length);
-    });
   } catch (err) {
     if (!active()) return;
     host.innerHTML = emptyState(`飞书文档加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="loadFeishuDocumentSources()">重试</button></div>`);

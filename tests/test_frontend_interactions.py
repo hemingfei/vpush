@@ -1635,9 +1635,11 @@ def test_feishu_timeline_ui_fixes():
     assert "feishuEntryHasContent" in entries_fn
     assert "空记录" not in entries_fn
     assert "function changeFeishuTimelineOrder" not in src
-    # 设置页来源行：隐藏重复的「仅管理员」空态、展示方式统一为分段控件
+    # 设置页来源行：飞书文档全员开放，只展示说明不设权限 picker、展示方式统一为分段控件
+    assert "feishu-source-acl" not in src
+    assert "全员可读，无需单独授权" in rows
     css = STYLE_CSS.read_text()
-    assert ".feishu-source-acl .ima-acl-none { display: none; }" in css
+    assert ".feishu-source-open" in css
     assert ".feishu-display-segment" in css
     assert ".feishu-display-option.is-selected" in css
 
@@ -4094,9 +4096,9 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=285"' in html
-    assert 'src="/app.js?v=405"' in html
-    assert 'dav-shell-v266' in sw
+    assert 'href="/style.css?v=286"' in html
+    assert 'src="/app.js?v=406"' in html
+    assert 'dav-shell-v267' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

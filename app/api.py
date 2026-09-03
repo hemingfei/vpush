@@ -3516,7 +3516,6 @@ def create_api_router(
             "last_success_at": source.get("last_success_at") or "",
             "next_check_at": next_check_at,
             "last_error": str(source.get("last_error") or "")[:300],
-            "acl_usernames": db.ima_kb_acl_usernames(str(source["group_id"])),
         }
 
     def _require_feishu_documents():
