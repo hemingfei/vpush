@@ -824,6 +824,33 @@ function toggleImaAbstract(btn) {
   btn.setAttribute("aria-expanded", expanded ? "true" : "false");
 }
 
+function copyImaAbstract() {
+  const text = $("#ima-reader-abstract")?.textContent?.trim() || "";
+  if (!text) return;
+  const doFlash = () => flash("已复制研报摘要");
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(doFlash).catch(() => copyImaAbstractFallback(text, doFlash));
+  } else {
+    copyImaAbstractFallback(text, doFlash);
+  }
+}
+
+function copyImaAbstractFallback(text, onSuccess) {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+    if (onSuccess) onSuccess();
+  } catch (err) {
+    flash("复制失败，请手动选择复制", "error");
+  }
+}
+
 function fmtImaDay(day) {
   const raw = String(day || "").trim();
   let match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
@@ -2328,8 +2355,9 @@ async function renderImaDocument(seq, mediaId) {
     const abstractMore = abstractLong
       ? `<button type="button" class="ima-abstract-more" aria-expanded="false" onclick="toggleImaAbstract(this)">展开</button>`
       : "";
+    const copyBtn = `<button type="button" class="ima-abstract-copy-btn" onclick="event.stopPropagation();copyImaAbstract()" aria-label="复制摘要" title="复制摘要"><span aria-hidden="true">📋</span> 复制摘要</button>`;
     const abstractHtml = abstractText
-      ? `<details open class="ima-reader-abstract${abstractLong ? " is-clamped" : ""}"><summary>摘要</summary><p id="ima-reader-abstract">${escapeHtml(abstractText)}</p>${abstractMore}</details>`
+      ? `<details open class="ima-reader-abstract${abstractLong ? " is-clamped" : ""}"><summary><span>摘要</span>${copyBtn}</summary><p id="ima-reader-abstract">${escapeHtml(abstractText)}</p>${abstractMore}</details>`
       : "";
     // 快照路由校验（与 currentImaListSnapshot 同思路）：与本次应返回的列表路由不匹配的旧快照不用于导航/计数
     const listSnapshot = _imaListSnapshot && _imaListSnapshot.route === normalizeRoute(backRoute) ? _imaListSnapshot : null;
