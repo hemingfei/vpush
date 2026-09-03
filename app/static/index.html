@@ -4,6 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#f8f8fb">
+  <script>
+    /* 首屏前同步状态栏色：安卓 PWA 独立窗口取启动时的 meta/manifest，等 app.js 的 applyTheme 就晚了（白条问题） */
+    try {
+      var _t = localStorage.getItem("theme") || "auto";
+      if (_t === "dark" || (_t === "auto" && matchMedia("(prefers-color-scheme: dark)").matches)) {
+        document.querySelector('meta[name="theme-color"]').content = "#11141a";
+      }
+    } catch (e) {}
+  </script>
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -132,6 +141,6 @@
     </div>
     <nav id="bottom-nav" class="bottom-nav"></nav>
   </div>
-  <script src="/app.js?v=410"></script>
+  <script src="/app.js?v=411"></script>
 </body>
 </html>

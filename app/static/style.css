@@ -3335,6 +3335,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .feishu-timeline-layout { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 132px; overflow: hidden; }
 .feishu-timeline-body { min-width: 0; overflow-y: auto; scroll-behavior: smooth; padding: 14px 28px 40px 24px; }
 .feishu-timeline-body .tl-group { margin: 0; }
+.feishu-timeline-body .tl-group:first-child .tl-group-head { margin-top: 10px; }
 .feishu-timeline-body .live-item { align-items: flex-start; }
 .feishu-live-speaker { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; color: var(--color-text-strong); font-size: var(--text-body); font-weight: var(--font-weight-semibold); line-height: 1.65; }
 .feishu-live-speaker time { color: var(--color-text-muted); font-size: var(--text-xs); font-weight: var(--font-weight-normal); font-variant-numeric: tabular-nums; }
