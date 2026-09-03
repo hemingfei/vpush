@@ -1106,14 +1106,29 @@ function replaceImaDocumentsRoute(path) {
   if (location.pathname + location.search !== url) history.replaceState(null, "", url);
 }
 
-function selectImaDocumentGroup(value) {
-  state.imaDocumentsGroup = String(value || "");
+async function selectImaDocumentGroup(value) {
+  const groupId = String(value || "");
+  state.imaDocumentsGroup = groupId;
   state.imaDocumentsDay = "";
   state.imaDocumentsDays = [];
   state.imaDocumentsTag = "";
   state.imaDocumentsQuery = $("#ima-doc-q")?.value?.trim() || state.imaDocumentsQuery || "";
-  replaceImaDocumentsRoute(imaDocumentsRoute(value, state.imaDocumentsQuery, "", ""));
+  replaceImaDocumentsRoute(imaDocumentsRoute(groupId, state.imaDocumentsQuery, "", ""));
   const seq = ++routeRenderSeq;
+  // 飞书来源一库一文：选中即直接进时间线，省一次点击；带搜索词时仍回列表
+  if (groupId.startsWith("feishu-") && !imaUsableSearchQuery(state.imaDocumentsQuery)) {
+    renderImaDocuments(seq);
+    try {
+      const data = await api(`/api/ima-documents?group=${encodeURIComponent(groupId)}&limit=1`);
+      if (!routeStillActive(seq)) return;
+      const item = (data.items || [])[0];
+      if (item) {
+        openImaDocument(item.media_id, groupId, true);
+        return;
+      }
+    } catch { /* 取不到就停留在列表 */ }
+    return;
+  }
   renderImaDocuments(seq);
 }
 

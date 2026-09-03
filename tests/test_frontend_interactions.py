@@ -1555,6 +1555,19 @@ def test_feishu_document_timeline_uses_knowledge_reader_and_admin_tab():
     assert "item.type === \"feishu_timeline\"" in src
 
 
+def test_selecting_feishu_group_opens_timeline_directly():
+    """研报库切到飞书来源（下拉/侧栏同路）直接进时间线，不再停留在单行列表。"""
+    body = _fn_body("selectImaDocumentGroup")
+    assert 'groupId.startsWith("feishu-")' in body
+    assert "openImaDocument(item.media_id, groupId, true)" in body
+    # 带搜索词时不得跳转（搜索结果仍需列表形态）
+    assert "!imaUsableSearchQuery(state.imaDocumentsQuery)" in body
+    # 跳转后旧异步不得覆盖新页面
+    assert "routeStillActive(seq)" in body
+    # 非飞书来源仍走列表渲染
+    assert body.rstrip().endswith("renderImaDocuments(seq);\n}")
+
+
 def test_zsxq_settings_use_one_column_on_narrow_layout():
     """知识星球配置在 800px 及以下不能继续用双列挤压字段。"""
     css = STYLE_CSS.read_text()
@@ -2484,7 +2497,7 @@ def test_ima_documents_group_switching_contract():
     assert "ima-doc-source" in src
     assert "selectImaDocumentGroup" in src
     assert "routeQuery()" in src
-    assert "replaceImaDocumentsRoute(imaDocumentsRoute(value, state.imaDocumentsQuery, \"\", \"\"))" in src
+    assert "replaceImaDocumentsRoute(imaDocumentsRoute(groupId, state.imaDocumentsQuery, \"\", \"\"))" in src
     assert "selectImaDocumentGroup(value)" in src
     assert "state.imaDocumentsDay = \"\"" in src
     assert "escapeHtml(group.id" in src or "escapeHtml(group.value" in src
@@ -2517,7 +2530,7 @@ def test_ima_document_group_switch_refreshes_locally():
     select = _fn_body("selectImaDocumentGroup")
     helper = _fn_body("replaceImaDocumentsRoute")
     assert "replaceRoute(" not in select
-    assert "replaceImaDocumentsRoute(imaDocumentsRoute(value, state.imaDocumentsQuery, \"\", \"\"))" in select
+    assert "replaceImaDocumentsRoute(imaDocumentsRoute(groupId, state.imaDocumentsQuery, \"\", \"\"))" in select
     assert "state.imaDocumentsTag = \"\"" in select
     assert "state.imaDocumentsGroup" in select
     assert "state.imaDocumentsDay = \"\"" in select
@@ -3689,8 +3702,8 @@ def test_static_asset_cache_bust_versions():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=266"' in html
-    assert 'src="/app.js?v=381"' in html
-    assert 'dav-shell-v249' in sw
+    assert 'src="/app.js?v=382"' in html
+    assert 'dav-shell-v250' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
