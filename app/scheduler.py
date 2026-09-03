@@ -1942,7 +1942,7 @@ class Scheduler:
         # 每日一次兜底拉取的预约时刻（随窗口一起生成，当天固定；错过不补打）
         self._mx_fallback_at: datetime | None = None
         self._mx_fallback_done = False
-        # 晚间兜底强关：23:30-23:35 随机一秒，若 MX 仍在线则强制关闭（防手动登录忘关）
+        # 晚间兜底断开：23:30-23:55 之间随机一秒，若 MX 仍在线则强制断开（防手动登录忘关）
         self._mx_force_close_at: datetime | None = None
         self._mx_force_close_done = False
         # 本窗口内 WS 已永久放弃自动重连（防窗口循环反复拉起，违背「只重连一次」）
@@ -2121,7 +2121,7 @@ class Scheduler:
             task.cancel()
         if ws_client is not None:
             try:
-                await ws_client.stop()
+                await ws_client.stop(reason="TOKEN 已熔断，系统强制断开")
             except Exception:  # noqa: BLE001 - 尽力掐断
                 logger.debug("MX WS 掐断失败（忽略）", exc_info=True)
         self._mx_ws_task = None
@@ -2159,21 +2159,21 @@ class Scheduler:
             self._mx_armed = arm_windows(self._mx_windows, datetime.now(CN_TZ))
             self._mx_fallback_at = pick_daily_fallback_slot(self._mx_windows)
             self._mx_fallback_done = False
-            # 晚间兜底强关时刻：23:30 起随机 0-300 秒（正常窗口最晚 22 点前已关，
+            # 晚间兜底断开时刻：23:30-23:55 之间随机（正常窗口最晚 22 点前已关，
             # 这是防「手动登录忘关」的最后保险）
             self._mx_force_close_at = datetime(
                 today.year, today.month, today.day, 23, 30, tzinfo=CN_TZ
-            ) + timedelta(seconds=random.randint(0, 300))
+            ) + timedelta(seconds=random.randint(0, 1500))
             self._mx_force_close_done = False
             missed = [i + 1 for i, armed in enumerate(self._mx_armed) if not armed]
             logger.info(
-                "MX 今日运行窗口：%s；每日兜底拉取预约时刻：%s%s",
+                "MX 今日运行时段：%s；每日兜底拉取预约时刻：%s%s",
                 "、".join(
                     f"{s.strftime('%H:%M:%S')}~{e.strftime('%H:%M:%S')}"
                     for s, e in self._mx_windows
                 ),
                 self._mx_fallback_at.strftime("%H:%M:%S") if self._mx_fallback_at else "无",
-                f"；第 {'、'.join(map(str, missed))} 段因重启错过开窗时刻，今天不再自动开启"
+                f"；第 {'、'.join(map(str, missed))} 段因重启错过登录时刻，今天不再自动登录"
                 if missed
                 else "",
             )
@@ -2193,11 +2193,18 @@ class Scheduler:
     def _mx_session_active(self) -> bool:
         return bool(self._mx_ws_task and not self._mx_ws_task.done())
 
-    async def _mx_window_loop(self):
-        """MX 每日窗口管理循环：开窗启动会话、关窗停止会话，顺带检查 TOKEN 时效。
+    def _mx_log_auto_event(self, action: str, detail: str) -> None:
+        """把系统自动的 MX 平台登录/断开写入操作日志（user_id=NULL，非管理员手动操作）。"""
+        try:
+            self.db.log_admin_action(None, action, "mx", detail)
+        except Exception:  # noqa: BLE001 - 日志失败不影响窗口管理
+            logger.debug("写入 MX 自动登录/断开操作日志失败", exc_info=True)
 
-        每个窗口只尝试启动一次会话；失败/放弃后不再自动拉起（避免形成
-        周期性重连流量），靠 TOKEN 更换或次日窗口恢复。
+    async def _mx_window_loop(self):
+        """MX 每日运行时段管理循环：到点自动 MX 平台登录、时段结束自动断开，顺带检查 TOKEN 时效。
+
+        每个时段只尝试登录一次；失败/放弃后不再自动拉起（避免形成
+        周期性重连流量），靠 TOKEN 更换或次日时段恢复。
         """
         while not self._stop.is_set():
             try:
@@ -2211,9 +2218,21 @@ class Scheduler:
                             self._mx_window_open = True
                             self._mx_ws_gave_up = False  # 新窗口：复位放弃标记
                             await self._mx_session_start()
+                            start, stop = self._mx_windows[idx]
+                            await asyncio.to_thread(
+                                self._mx_log_auto_event,
+                                "mx_auto_login",
+                                f"第 {idx + 1} 段运行时段 {start:%H:%M:%S}~{stop:%H:%M:%S} "
+                                "到点，系统自动执行 MX 平台登录（启动序列 + 房间同步 + WS 推送）",
+                            )
                 elif self._mx_window_open:
                     self._mx_window_open = False
                     await self._mx_session_stop()
+                    await asyncio.to_thread(
+                        self._mx_log_auto_event,
+                        "mx_auto_disconnect",
+                        "运行时段结束，系统自动执行 MX 平台断开（时段外零请求）",
+                    )
                 await asyncio.to_thread(self._mx_check_token_age)
                 await self._mx_maybe_daily_fallback()
                 await self._mx_maybe_nightly_force_close()
@@ -2227,59 +2246,105 @@ class Scheduler:
                 raise
 
     async def _mx_session_start(self):
-        """开启当前窗口的 MX 会话：按官方冷启动序列执行（启动请求 → 房间列表 → WS）。"""
+        """系统自动执行 MX 平台登录：按官方冷启动序列执行（启动请求 → 房间列表 → WS）。
+
+        逐接口结果写入模块级 _mx_login_report（source=auto），后台「接口状态」
+        展示的是系统自动登录的真实启动过程，而不只是 WS 连接结果。TOKEN 过期
+        即熔断告警并中止本次登录；其余失败只告警不阻断消息链路。
+        """
+        global _mx_login_report
         self._mx_touch_loop()
+
+        steps: list[dict] = []
+
+        def record(name: str, ok: bool, detail: str):
+            steps.append({"name": name, "ok": ok, "detail": str(detail)[:100]})
+
+        def finish():
+            global _mx_login_report
+            _mx_login_report = {
+                "time": datetime.now(CN_TZ).strftime("%H:%M:%S"),
+                "ok": bool(steps) and all(s["ok"] for s in steps),
+                "steps": steps,
+                "source": "auto",
+            }
+
         if self._mx_token_expired:
-            logger.warning("MX 窗口已开启，但 TOKEN 已过期未更换，跳过会话")
+            logger.warning("MX 平台登录取消：TOKEN 已过期未更换，跳过登录")
+            record("前置检查", False, "TOKEN 已熔断（过期），请更换 TOKEN 后等待下个运行时段")
+            finish()
             return
         # 官方网页端每次「打开应用」都会：补发启动只读序列（user/info → system/config
         # → msg/tip → grouplist → 平台公告）→ 拉一次房间列表 → 连 WS（2026-09-02
         # 抓包实测）。vpush 开窗完全按此顺序执行，使请求足迹与「真人打开网页」一致。
-        # TOKEN 过期即熔断告警并中止本窗口；其余失败只告警不阻断消息链路。
         if self._mx_sync_service is not None:
+            token_expired = False
             try:
-                await asyncio.to_thread(self._mx_sync_service.boot_sequence)
-                await self._mx_sync_service.sync_rooms()
+                boot_steps = await asyncio.to_thread(self._mx_sync_service.boot_sequence)
+                steps.extend(boot_steps or [])
             except MXTokenExpiredError:
-                self._mx_trigger_token_expired()
-                await asyncio.to_thread(
-                    self.publish_mx_error,
-                    "token_expired",
-                    "MX TOKEN 已过期",
-                    "⚠️ MX TOKEN 已过期或无效，开窗会话启动失败，已暂停拉取与实时推送。"
-                    "\n请到后台「数据源 → MX」更换 TOKEN（TOKEN 需每 2 天更换一次）。",
-                )
-                return
-            except Exception as exc:
+                token_expired = True
+            except Exception as exc:  # noqa: BLE001 - 启动序列异常不阻断消息链路
+                record("启动序列", False, str(exc)[:100])
                 await asyncio.to_thread(
                     self.publish_mx_error,
                     "room_sync",
                     "MX 房间同步失败",
-                    f"⚠️ 窗口开启时的启动序列/房间列表同步失败：{exc}",
+                    f"⚠️ 登录时的启动序列/房间列表同步失败：{exc}",
                 )
-        if not self.mx_config.ws_enabled:
-            logger.info("MX 窗口已开启，但实时推送未启用（ws_enabled=false），仅完成启动序列与房间同步")
-            return
-        try:
-            message = await self.mx_ws_control("connect")
-            logger.info(f"MX 窗口会话启动：{message}")
-        except Exception as exc:
-            logger.error(f"MX 窗口会话启动失败：{exc}", exc_info=True)
-            await asyncio.to_thread(
-                self.publish_mx_error,
-                "session_start",
-                "MX 会话启动失败",
-                f"⚠️ MX 运行窗口已开启，但 WebSocket 启动失败：{exc}",
-            )
+            else:
+                try:
+                    count = await self._mx_sync_service.sync_rooms()
+                    record("room/list", True, f"{count} 个房间")
+                except MXTokenExpiredError:
+                    token_expired = True
+                except Exception as exc:  # noqa: BLE001
+                    record("room/list", False, str(exc)[:100])
+                    await asyncio.to_thread(
+                        self.publish_mx_error,
+                        "room_sync",
+                        "MX 房间同步失败",
+                        f"⚠️ 登录时的房间列表同步失败：{exc}",
+                    )
+            if token_expired:
+                self._mx_trigger_token_expired()
+                record("TOKEN 校验", False, "TOKEN 已过期/无效，本次登录中止")
+                finish()
+                await asyncio.to_thread(
+                    self.publish_mx_error,
+                    "token_expired",
+                    "MX TOKEN 已过期",
+                    "⚠️ MX TOKEN 已过期或无效，MX 平台登录失败，已暂停拉取与实时推送。"
+                    "\n请到后台「数据源 → MX」更换 TOKEN（TOKEN 需每 2 天更换一次）。",
+                )
+                return
+        if self.mx_config.ws_enabled:
+            try:
+                message = await self.mx_ws_control("connect", source="auto")
+                record("websocket", True, message)
+                logger.info(f"MX 平台登录：{message}")
+            except Exception as exc:
+                record("websocket", False, str(exc)[:100])
+                logger.error(f"MX 平台登录失败：{exc}", exc_info=True)
+                await asyncio.to_thread(
+                    self.publish_mx_error,
+                    "session_start",
+                    "MX 平台登录失败",
+                    f"⚠️ MX 平台登录时 WebSocket 启动失败：{exc}",
+                )
+        else:
+            record("websocket", True, "ws_enabled=false，跳过实时推送")
+            logger.info("MX 平台登录完成，但实时推送未启用（ws_enabled=false），仅完成启动序列与房间同步")
+        finish()
 
     async def _mx_session_stop(self):
-        """关闭当前窗口的 MX 会话：断开 WS 监听（窗口外零请求）。"""
+        """系统自动执行 MX 平台断开：断开 WS 监听（运行时段外零请求）。"""
         if self._mx_session_active():
             try:
-                await self.mx_ws_control("disconnect")
-            except Exception:  # noqa: BLE001 - 关窗尽力即可
-                logger.warning("MX 窗口关闭会话失败", exc_info=True)
-        logger.info("MX 窗口已关闭，会话停止")
+                await self.mx_ws_control("disconnect", source="auto")
+            except Exception:  # noqa: BLE001 - 断开尽力即可
+                logger.warning("MX 平台断开失败", exc_info=True)
+        logger.info("MX 平台已断开：运行时段结束，会话停止")
 
     async def _mx_maybe_daily_fallback(self):
         """每日一次兜底拉取：到达当天预约时刻且会话存活时执行，每天最多 1 次。
@@ -2294,7 +2359,7 @@ class Scheduler:
             return
         if not self._mx_in_window():
             self._mx_fallback_done = True
-            logger.info("MX 每日兜底拉取放弃：预约时刻后会话未存活（窗口已结束）")
+            logger.info("MX 每日兜底拉取放弃：预约时刻后会话未存活（运行时段已结束）")
             return
         if self._mx_token_expired or not self._mx_session_active():
             # 会话还没起来（或 TOKEN 刚过期）：等下一个 30s tick，直到窗口结束
@@ -2306,7 +2371,7 @@ class Scheduler:
         await self._mx_fallback_pull_once()
 
     async def _mx_maybe_nightly_force_close(self):
-        """晚间兜底强关：23:30-23:35 间随机一秒，MX 若仍在线一律强制关闭。
+        """晚间兜底断开：23:30-23:55 之间随机一秒，MX 若仍在线一律强制断开。
 
         正常三段窗口最晚 22 点前就会关窗；这条是防「手动登录后忘关」等场景的
         最后保险，无论会话来源（自动/手动）到点即关，当天只执行一次。
@@ -2318,14 +2383,20 @@ class Scheduler:
             return
         self._mx_force_close_done = True
         if not (self._mx_window_open or self._mx_session_active()):
-            logger.info("MX 晚间强关检查：会话未在线，无需关闭")
+            logger.info("MX 晚间兜底检查：会话未在线，无需断开")
             return
         logger.info(
-            "MX 晚间强关触发（预约 %s）：强制关闭仍在运行的会话",
+            "MX 晚间兜底断开触发（预约 %s）：强制断开仍在运行的会话",
             self._mx_force_close_at.strftime("%H:%M:%S"),
         )
         self._mx_window_open = False
         await self._mx_session_stop()
+        await asyncio.to_thread(
+            self._mx_log_auto_event,
+            "mx_auto_disconnect",
+            f"晚间兜底检查（预约 {self._mx_force_close_at:%H:%M:%S}）："
+            "系统自动执行 MX 平台断开（防止登录后未断开）",
+        )
 
     async def _mx_fallback_pull_once(self):
         """随机拉 1 个启用房间的最新消息（含有限追平），入库并推送。"""
@@ -2535,10 +2606,10 @@ class Scheduler:
         """后台「登录」按钮：像真人打开网页一样执行启动序列 + 房间同步 + 连接 WS。
 
         不受每日窗口限制（管理员明确点击，与手动拉取历史同一定位）；逐接口
-        结果写入模块级 mx_login_report 供前端「接口状态」展示；TOKEN 过期即
+        结果写入模块级 _mx_login_report 供前端「接口状态」展示；TOKEN 过期即
         熔断并计入报告。
         """
-        global mx_login_report
+        global _mx_login_report
         self._mx_touch_loop()
         steps: list[dict] = []
 
@@ -2594,16 +2665,20 @@ class Scheduler:
             "time": datetime.now(CN_TZ).strftime("%H:%M:%S"),
             "ok": bool(steps) and all(s["ok"] for s in steps),
             "steps": steps,
+            "source": "manual",
         }
-        mx_login_report = report
+        _mx_login_report = report
         return report
 
-    async def mx_ws_control(self, action: str) -> str:
-        """管理员手动控制 MX WebSocket（connect 接入 / disconnect 断开），返回提示消息。
+    async def mx_ws_control(self, action: str, source: str = "manual") -> str:
+        """控制 MX WebSocket（connect 接入 / disconnect 断开），返回提示消息。
 
-        与 _stop_mx 不同：手动断开保留 mx 抓取器与房间同步，只停 WS 监听任务，
-        以便随后可手动重新接入。
+        source 标记真实触发者：manual=管理员在后台点击（按钮/接口），auto=系统
+        运行时段到点自动登录/断开。日志必须按来源如实记录，不得把系统自动动作记成手动。
+        与 _stop_mx 不同：断开保留 mx 抓取器与房间同步，只停 WS 监听任务，
+        以便随后可重新接入。
         """
+        source_label = "系统自动" if source == "auto" else "管理员手动"
         if action == "disconnect":
             if self._mx_ws_task:
                 self._mx_ws_task.cancel()
@@ -2612,11 +2687,14 @@ class Scheduler:
             if fetcher is None:
                 raise RuntimeError("MX 平台未启用")
             try:
-                await fetcher.stop_ws()
+                reason = (
+                    "运行时段结束，系统自动断开" if source == "auto" else "已由管理员手动断开"
+                )
+                await fetcher.stop_ws(reason=reason)
             except Exception as exc:  # noqa: BLE001 - 尽力断开，失败时给出可读错误
                 logger.warning("主动断开 MX WebSocket 失败", exc_info=True)
                 raise RuntimeError("断开 WebSocket 失败，请查看服务端日志") from exc
-            logger.info("MX WebSocket 已由管理员手动断开")
+            logger.info("MX WebSocket 已断开（%s）", source_label)
             return "已断开 MX WebSocket 连接"
         if action == "connect":
             if not (MX_AVAILABLE and self.mx_config and self.mx_config.enabled):
@@ -2637,7 +2715,7 @@ class Scheduler:
                     self._mx_ws_on_message, on_ws_give_up=self._mx_ws_on_give_up
                 )
             )
-            logger.info("MX WebSocket 已由管理员手动启动")
+            logger.info("MX WebSocket 已发起连接（%s）", source_label)
             return "已发起 MX WebSocket 连接"
         raise RuntimeError(f"未知操作：{action}")
 

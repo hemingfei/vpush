@@ -242,10 +242,10 @@ class MxFetcher(Fetcher):
         self.ws_client = MxWsClient(self.config, _on_raw_message, on_give_up=on_ws_give_up)
         await self.ws_client.run_forever()
 
-    async def stop_ws(self):
-        """停止 WebSocket 连接。"""
+    async def stop_ws(self, reason: str = "已手动断开"):
+        """停止 WebSocket 连接（reason 记录触发者，供状态页如实展示）。"""
         if self.ws_client:
-            await self.ws_client.stop()
+            await self.ws_client.stop(reason=reason)
 
     def _parse_message_to_post(self, raw_msg, kol=None):
         """
@@ -429,7 +429,7 @@ class MxFetcher(Fetcher):
             client = self.ws_client
             gave_up = bool(getattr(client, "gave_up", False))
             if getattr(client, "manually_stopped", False):
-                detail = "已手动断开"
+                detail = getattr(client, "stop_reason", "") or "已手动断开"
             elif gave_up:
                 # 12 秒后的那次重连也失败了：已永久放弃自动重连
                 detail = "自动重连失败已停止，请手动接入"

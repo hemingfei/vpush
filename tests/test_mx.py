@@ -751,6 +751,11 @@ def test_fetch_survives_room_view_failure():
 
 # ---- 配置热加载 ----
 
+async def _noop_async_zero():
+    """替代 sync_rooms 的空实现：返回 0 个房间。"""
+    return 0
+
+
 def _make_scheduler(db):
     from app.scheduler import Scheduler
 
@@ -1277,14 +1282,14 @@ def test_arm_windows_disarms_missed_on_restart():
 
 
 def test_nightly_force_close_time_within_bounds():
-    """晚间强关时刻必须落在 23:30:00-23:35:00 之间（每天随机）。"""
+    """晚间断开时刻必须落在 23:30:00-23:55:00 之间（每天随机）。"""
     db = make_db()
     scheduler = _make_scheduler(db)
     scheduler._mx_windows_today()
     fc = scheduler._mx_force_close_at
     assert fc is not None
-    assert fc.hour == 23 and 30 <= fc.minute <= 35
-    assert not (fc.minute == 35 and fc.second > 0)
+    assert fc.hour == 23 and 30 <= fc.minute <= 55
+    assert not (fc.minute == 55 and fc.second > 0)
 
 
 def test_nightly_force_close_stops_active_session():
@@ -1299,9 +1304,9 @@ def test_nightly_force_close_stops_active_session():
 
     actions = []
 
-    async def fake_ws_control(action):
+    async def fake_ws_control(action, source="manual"):
         # 与真实 mx_ws_control("disconnect") 口径一致：取消 WS 任务并置空
-        actions.append(action)
+        actions.append((action, source))
         if scheduler._mx_ws_task and not scheduler._mx_ws_task.done():
             scheduler._mx_ws_task.cancel()
         scheduler._mx_ws_task = None
@@ -1317,7 +1322,7 @@ def test_nightly_force_close_stops_active_session():
 
     asyncio.run(scenario())
 
-    assert actions == ["disconnect"]
+    assert actions == [("disconnect", "auto")]
     assert scheduler._mx_force_close_done is True
     assert scheduler._mx_window_open is False
     assert scheduler._mx_ws_task is None
@@ -1335,8 +1340,8 @@ def test_nightly_force_close_waits_until_scheduled():
 
     actions = []
 
-    async def fake_ws_control(action):
-        actions.append(action)
+    async def fake_ws_control(action, source="manual"):
+        actions.append((action, source))
         return "ok"
 
     scheduler.mx_ws_control = fake_ws_control
@@ -1635,6 +1640,114 @@ def test_mx_manual_login_token_expired_sets_breaker(monkeypatch):
     assert any("TOKEN" in s["detail"] for s in report["steps"])
 
 
+def test_manual_login_report_persists_in_ws_status(monkeypatch):
+    """手动登录报告必须写入模块级状态（ws-status 轮询可见，而非只在响应里）。"""
+    import app.scheduler as scheduler_mod
+
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+
+    service = MXRoomSyncService(MxConfig(token="t"), db)
+    monkeypatch.setattr(service, "boot_sequence", lambda: [])
+    monkeypatch.setattr(service, "sync_rooms", _noop_async_zero)
+    scheduler._mx_sync_service = service
+
+    report = asyncio.run(scheduler.mx_manual_login())
+    status = scheduler_mod.get_mx_ws_status()
+    assert status["login_report"] is report
+    assert status["login_report"]["source"] == "manual"
+
+
+def test_session_start_records_auto_report(monkeypatch):
+    """系统自动 MX 平台登录必须产出逐接口报告（source=auto），而非只有 WS 连接结果。"""
+    import app.scheduler as scheduler_mod
+
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+
+    service = MXRoomSyncService(MxConfig(token="t"), db)
+
+    def fake_boot():
+        return [{"name": "user/info", "ok": True, "detail": "账号 tester", "ms": 3}]
+
+    monkeypatch.setattr(service, "boot_sequence", fake_boot)
+    monkeypatch.setattr(service, "sync_rooms", _noop_async_zero)
+    scheduler._mx_sync_service = service
+
+    asyncio.run(scheduler._mx_session_start())
+
+    report = scheduler_mod.get_mx_ws_status()["login_report"]
+    assert report["source"] == "auto"
+    assert report["ok"] is True
+    assert [s["name"] for s in report["steps"]] == [
+        "user/info", "room/list", "websocket",
+    ]
+
+
+def test_session_start_token_expired_records_failed_report():
+    """TOKEN 熔断时系统自动登录：报告如实记录失败原因，且不触发房间同步。"""
+    import app.scheduler as scheduler_mod
+
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+    scheduler._mx_token_expired = True
+
+    service = MXRoomSyncService(MxConfig(token="t"), db)
+
+    def _must_not_run():
+        raise AssertionError("TOKEN 过期时不应触发房间同步")
+
+    service.sync_rooms = _must_not_run
+    scheduler._mx_sync_service = service
+
+    asyncio.run(scheduler._mx_session_start())
+
+    report = scheduler_mod.get_mx_ws_status()["login_report"]
+    assert report["source"] == "auto"
+    assert report["ok"] is False
+    assert any("TOKEN" in s["detail"] for s in report["steps"])
+
+
+def test_session_stop_disconnects_as_auto_source():
+    """系统自动 MX 平台断开必须带 source=auto，日志不得记成管理员手动。"""
+    db = make_db()
+    scheduler = _make_scheduler(db)
+
+    calls = []
+
+    async def fake_ws_control(action, source="manual"):
+        calls.append((action, source))
+        return "已断开"
+
+    scheduler.mx_ws_control = fake_ws_control
+
+    async def scenario():
+        scheduler._mx_ws_task = asyncio.create_task(asyncio.sleep(3600))  # 模拟会话在线
+        await scheduler._mx_session_stop()
+
+    asyncio.run(scenario())
+
+    assert calls == [("disconnect", "auto")]
+
+
+def test_auto_session_events_written_to_admin_logs():
+    """系统自动 MX 平台登录/断开写入操作日志（user_id=NULL），与管理员手动操作区分。"""
+    db = make_db()
+    scheduler = _make_scheduler(db)
+
+    scheduler._mx_log_auto_event("mx_auto_login", "第 1 段运行时段到点，系统自动执行 MX 平台登录")
+
+    entry = next(
+        r for r in db.list_admin_logs(limit=10) if r["action"] == "mx_auto_login"
+    )
+    assert entry["user_id"] is None
+    assert entry["username"] is None
+    assert "系统自动" in entry["detail"]
+
+
 def test_token_expiry_breaker_also_aborts_ws(monkeypatch):
     """HTTP 先发现 TOKEN 过期时，WS 必须被立即掐断（不能挂在死 token 上）。"""
     db = make_db()
@@ -1644,7 +1757,7 @@ def test_token_expiry_breaker_also_aborts_ws(monkeypatch):
         def __init__(self):
             self.stopped = False
 
-        async def stop(self):
+        async def stop(self, reason: str = "已手动断开"):
             self.stopped = True
 
     class StubFetcher:

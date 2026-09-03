@@ -126,6 +126,8 @@ class MxWsClient:
         self.gave_up = False
         # 管理员主动断开标记：与掉线区分开，供状态接口展示原因
         self.manually_stopped = False
+        # 断开原因（管理员手动 / 系统窗口自动），stop() 时写入，供状态接口如实展示
+        self.stop_reason = ""
 
     async def connect(self):
         """Connect to MX WebSocket server."""
@@ -362,16 +364,19 @@ class MxWsClient:
         except Exception:
             logger.error("MX WebSocket 重连失败回调执行异常", exc_info=True)
 
-    async def stop(self):
+    async def stop(self, reason: str = "已手动断开"):
         """停止 WS 客户端：模拟用户直接关闭标签页/浏览器退出。
 
         真实用户的退出不会发 socket.io `41`、engine.io CLOSE 包或 WS Close 帧
         ——服务端只会看到 TCP 连接消失（transport close）。因此这里不做任何
         关闭握手，直接关闭底层 aiohttp 会话掐断连接；sio.disconnect() 会发送
         优雅关闭包，绝不能用在「退出/关窗」语义上。
+
+        reason 记录触发者（管理员手动 / 系统窗口自动），供状态页如实展示。
         """
         self._should_stop = True
         self.manually_stopped = True
+        self.stop_reason = reason
         self.connected = False
         eio = getattr(self._sio, "eio", None)
         http = getattr(eio, "http", None)
