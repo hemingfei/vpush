@@ -836,18 +836,21 @@ function copyImaAbstract() {
 }
 
 function copyImaAbstractFallback(text, onSuccess) {
+  const ta = document.createElement("textarea");
   try {
-    const ta = document.createElement("textarea");
     ta.value = text;
     ta.style.position = "fixed";
     ta.style.opacity = "0";
+    ta.setAttribute("readonly", "");
     document.body.appendChild(ta);
     ta.select();
-    document.execCommand("copy");
-    document.body.removeChild(ta);
+    const ok = document.execCommand("copy");
+    if (!ok) throw new Error("execCommand copy returned false");
     if (onSuccess) onSuccess();
   } catch (err) {
     flash("复制失败，请手动选择复制", "error");
+  } finally {
+    if (ta.parentNode) ta.remove();
   }
 }
 

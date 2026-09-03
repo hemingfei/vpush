@@ -2977,7 +2977,7 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
 .ima-reader-abstract {
   margin: 10px 0 0;
   padding: 12px 14px;
-  border: 1px solid var(--border-soft);
+  border: var(--border-soft);
   border-left: 4px solid var(--color-accent);
   border-radius: var(--radius-control);
   background: var(--color-surface-soft);
@@ -2998,7 +2998,8 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 8px;
+  min-height: 26px;
+  padding: 2px 10px;
   border: var(--border-default);
   border-radius: var(--radius-pill);
   background: var(--color-surface);
