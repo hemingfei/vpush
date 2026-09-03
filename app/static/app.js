@@ -1873,7 +1873,7 @@ function feishuTimelineBlockHtml(block, mediaId, groupId, showSpeaker = true) {
   const reply = String(block.reply_to || "");
   const text = String(block.text || "");
   const identity = speaker && showSpeaker
-    ? `<div class="feishu-entry-speaker"><strong>${escapeHtml(speaker)}</strong>${reply ? `<span>回复 ${escapeHtml(reply)}</span>` : ""}</div>`
+    ? `<div class="feishu-entry-speaker">${feishuSpeakerAvatarHtml(speaker)}<strong>${escapeHtml(feishuSourceDisplay(speaker).label)}</strong>${reply ? `<span>回复 ${escapeHtml(reply)}</span>` : ""}</div>`
     : "";
   const assets = (block.assets || []).filter((asset) => asset && asset.id);
   const assetHtml = assets.length ? `<div class="post-images feishu-entry-assets">${assets.map((asset) => feishuTimelineAssetHtml(asset, mediaId, groupId)).join("")}</div>` : "";
