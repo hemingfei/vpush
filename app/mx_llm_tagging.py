@@ -296,7 +296,7 @@ def _run_tag_tick_locked(db, llm_config, publish_alert) -> dict:
         return {"skipped": "no_llm"}
 
     batch_size = min(
-        max(db.get_mx_llm_tag_int_setting(MX_LLM_TAG_BATCH_SIZE_KEY, 40), 1), 100
+        max(db.get_mx_llm_tag_int_setting(MX_LLM_TAG_BATCH_SIZE_KEY, 300), 1), 1000
     )
     max_calls = min(
         max(db.get_mx_llm_tag_int_setting(MX_LLM_TAG_MAX_CALLS_KEY, 5), 1), 20
@@ -576,7 +576,7 @@ def _run_manual_job(db, llm_config, kol_ids: list[int], max_messages: int) -> No
             logger.info("MX 手动打标任务：所选大V暂无未打标消息")
             return
         batch_size = min(
-            max(db.get_mx_llm_tag_int_setting(MX_LLM_TAG_BATCH_SIZE_KEY, 40), 1), 100
+            max(db.get_mx_llm_tag_int_setting(MX_LLM_TAG_BATCH_SIZE_KEY, 300), 1), 1000
         )
         tag_rules, topic_tags, action_tags, names, aliases, valid_stocks = _tag_inputs(db)
         known_aliases = {a["alias"] for a in aliases}

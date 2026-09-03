@@ -556,9 +556,10 @@ def resolve_stock_marks(marks, llm_config=None, client=None) -> list[dict]:
 
 # ---- MX 消息批量打标（话题/股票/操作 + 黑话映射，app/mx_llm_tagging.py 调用） ----
 
-# 与标记解析同量级：thinking + 40 条消息的三类标签 JSON 输出
-TAG_CHAT_TIMEOUT = 180
-TAG_BATCH_MAX_TOKENS = 6000
+# 与 AI 分析任务同档：大批次（默认 300 条/批）的标签 JSON 输出，
+# 部分服务端拒绝 max_tokens 时 _chat 会自动降级为不传
+TAG_CHAT_TIMEOUT = 300
+TAG_BATCH_MAX_TOKENS = 80000
 # 单条消息送入 LLM 的正文截断长度（MX 群消息多为短句，500 字足够上下文）
 TAG_INPUT_TEXT_MAX = 500
 
