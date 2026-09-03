@@ -1320,7 +1320,7 @@ function knowledgeCardSummary(group) {
 
 function knowledgeLibRowHtml(group, selected, mode) {
   const id = String(group.id || "");
-  const name = group.name || id;
+  const name = feishuSourceDisplay(group.name || id).label;
   const summary = knowledgeCardSummary(group);
   if (mode === "available") {
     return `<div class="kb-lib-row is-available">
@@ -1343,7 +1343,7 @@ function knowledgeSourceControlsHtml(selectedGroup = "") {
   const subscribed = state.imaCatalogSubscribed || [];
   const options = [{ id: "", name: "全部研报" }, ...subscribed.map((group) => ({
     id: String(group.id || ""),
-    name: group.name || group.id,
+    name: feishuSourceDisplay(group.name || group.id).label,
   }))];
   return `<label class="ima-report-source"><span class="sr-only">资料源</span><select id="ima-doc-source" aria-label="资料源" onchange="selectImaDocumentGroup(this.value)"><option value=""${selected ? "" : " selected"}>全部研报</option>${options.filter((group) => group.id).map((group) => `<option value="${escapeHtml(group.id)}"${group.id === selected ? " selected" : ""}>${escapeHtml(group.name)}</option>`).join("")}</select></label>`;
 }
@@ -1590,7 +1590,7 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
     if (title) title.textContent = "最新研报";
     const resultCount = imaDocumentsCountLabel(!!(query || tag), data.document_count, items.length, data.has_more);
     if (meta) meta.textContent = resultCount;
-    if (!knowledgeMediaIdFromPath()) setPageTitle(selectedGroupName);
+    if (!knowledgeMediaIdFromPath()) setPageTitle(feishuSourceDisplay(selectedGroupName).label);
     const days = Array.isArray(data.days)
       ? data.days.filter(Boolean)
       : [...new Set(items.map((item) => item.day).filter(Boolean))];
@@ -1869,7 +1869,7 @@ function feishuSourceDisplay(title) {
 function feishuLiveItemHtml(entry, showSource) {
   const source = entry.source || {};
   const author = feishuEntryAuthor(entry);
-  const sourceLabel = showSource && source.title ? `<div class="feishu-live-source">${escapeHtml(source.title)}</div>` : "";
+  const sourceLabel = showSource && source.title ? `<div class="feishu-live-source">${escapeHtml(feishuSourceDisplay(source.title).label)}</div>` : "";
   const speaker = author ? `<div class="feishu-live-speaker">${escapeHtml(author)}</div>` : "";
   const blocks = (entry.blocks || []).filter(feishuBlockHasContent).map((block) => feishuTimelineBlockHtml(block, source.media_id || "", source.group_id || "", !author)).join("");
   return `<article class="live-item" data-entry-id="${escapeHtml(entry.id || "")}">

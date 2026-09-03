@@ -1688,6 +1688,18 @@ def test_feishu_timeline_toolbar_uses_source_avatar_pills():
     assert "border-radius: 50%" in css
 
 
+def test_knowledge_and_timeline_use_feishu_source_display_names():
+    row = _fn_body("knowledgeLibRowHtml")
+    controls = _fn_body("knowledgeSourceControlsHtml")
+    item = _fn_body("feishuLiveItemHtml")
+    render = _fn_body("renderImaDocuments")
+    assert "feishuSourceDisplay(" in row
+    assert "feishuSourceDisplay(" in controls
+    assert "feishuSourceDisplay(source.title).label" in item
+    assert "feishuSourceDisplay(selectedGroupName).label" in render
+    assert 'id="ima-doc-source"' in controls
+
+
 def test_feishu_timeline_uses_windowed_pages_and_load_more_state():
     src = APP_JS.read_text()
     load = _fn_body("loadFeishuTimeline")
