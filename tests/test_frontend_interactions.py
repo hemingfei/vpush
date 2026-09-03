@@ -1643,6 +1643,29 @@ def test_feishu_timeline_ui_fixes():
 
 
 
+def test_feishu_source_display_maps_known_libraries():
+    src = APP_JS.read_text()
+    helper = _fn_body("feishuSourceDisplay")
+    assert 'function feishuSourceDisplay' in src
+    assert '"K神-2026"' in src and '"Q神-档案库"' in src
+    assert '"Q神"' in src
+    assert "杨康平" in src and "失业期神" in src
+    assert "/feishu-yang.png?v=1" in src
+    assert "/feishu-shiye.png?v=1" in src
+    assert "FEISHU_SOURCE_DISPLAY[raw]" in helper
+    assert 'label: raw' in helper
+
+
+def test_feishu_source_avatar_files_are_small_static_pngs():
+    yang = APP_JS.with_name("feishu-yang.png")
+    shiye = APP_JS.with_name("feishu-shiye.png")
+    assert yang.is_file() and shiye.is_file()
+    assert yang.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert shiye.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert yang.stat().st_size < 80_000
+    assert shiye.stat().st_size < 80_000
+
+
 def test_feishu_timeline_uses_windowed_pages_and_load_more_state():
     src = APP_JS.read_text()
     load = _fn_body("loadFeishuTimeline")

@@ -1853,6 +1853,19 @@ function feishuEntryHasContent(entry) {
   return (entry?.blocks || []).some(feishuBlockHasContent);
 }
 
+const FEISHU_SOURCE_DISPLAY = {
+  "K神-2026": { label: "杨康平", avatar: "/feishu-yang.png?v=1" },
+  "杨康平": { label: "杨康平", avatar: "/feishu-yang.png?v=1" },
+  "Q神-档案库": { label: "失业期神", avatar: "/feishu-shiye.png?v=1" },
+  "Q神": { label: "失业期神", avatar: "/feishu-shiye.png?v=1" },
+  "失业期神": { label: "失业期神", avatar: "/feishu-shiye.png?v=1" },
+};
+
+function feishuSourceDisplay(title) {
+  const raw = String(title || "").trim();
+  return FEISHU_SOURCE_DISPLAY[raw] || { label: raw, avatar: "" };
+}
+
 function feishuLiveItemHtml(entry, showSource) {
   const source = entry.source || {};
   const author = feishuEntryAuthor(entry);
