@@ -3775,6 +3775,22 @@ def test_ima_report_row_full_text_search_snippet_is_optional_and_escaped():
     assert "-webkit-line-clamp: 2" in css
 
 
+def test_ima_doc_row_renders_abstract_when_present():
+    row = _fn_body("imaDocumentRow")
+    css = STYLE_CSS.read_text()
+
+    # Preserves search snippet logic while adding abstract snippet fallback
+    assert "item.search_snippet" in row
+    assert "escapeHtml(item.search_snippet)" in row
+    assert "item.abstract" in row
+    assert "escapeHtml(item.abstract)" in row
+
+    # Title clamp 2 lines in CSS
+    assert ".ima-report-title" in css
+    assert "-webkit-line-clamp: 2" in css
+
+
+
 def test_ima_report_search_is_debounced_and_explicitly_pages():
     src = APP_JS.read_text()
     render = _fn_body("renderImaDocuments")
