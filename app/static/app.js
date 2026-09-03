@@ -645,12 +645,13 @@ function knowledgeTypingTarget(el) {
 function onKnowledgeListKey(e) {
   if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
   if (!isRoute("knowledge") && !isRoute("ima-documents")) return;
-  if (e.key === "Escape" && _imaDayPicker.open) {
+  if (e.key === "Escape" && (_imaDayPicker.open || _imaTagMenu.open)) {
     e.preventDefault();
     closeImaDayPicker();
+    closeImaTagMenu();
     return;
   }
-  if (_imaDayPicker.open) return;
+  if (_imaDayPicker.open || _imaTagMenu.open) return;
   if (knowledgeTypingTarget(e.target)) return;
   if (e.key !== "j" && e.key !== "k") return;
   const rows = [...document.querySelectorAll("#kb-list .ima-doc-row")];
@@ -1345,7 +1346,60 @@ function pickImaDay(value) {
   selectImaDocumentsDay(value);
 }
 
+let _imaTagMenu = { open: false, keys: [] };
+
+function closeImaTagMenu() {
+  _imaTagMenu.open = false;
+  document.querySelectorAll(".kb-desk-day-menu[data-tag-menu]").forEach((el) => el.remove());
+  $("#ima-doc-tag")?.setAttribute("aria-expanded", "false");
+}
+
+// 标签名是任意字符串，不内联进 onclick（防注入），菜单存 keys，点选传下标
+function imaTagMenuHtml(current) {
+  const counts = _imaTagCounts || {};
+  const keys = Object.keys(counts).sort((a, b) => (counts[b] || 0) - (counts[a] || 0));
+  if (current && !keys.includes(current)) keys.unshift(current);
+  _imaTagMenu.keys = keys;
+  const items = [`<button type="button" role="option" class="kb-desk-day-option${current ? "" : " is-selected"}" aria-selected="${!current}" onclick="pickImaTag(-1)">全部标签</button>`];
+  keys.forEach((key, i) => {
+    const on = key === current;
+    items.push(`<button type="button" role="option" class="kb-desk-day-option${on ? " is-selected" : ""}" aria-selected="${on}" onclick="pickImaTag(${i})">${escapeHtml(key)}${counts[key] ? `（${counts[key]}）` : ""}</button>`);
+  });
+  return `<div class="kb-desk-day-menu" data-tag-menu role="listbox" aria-label="标签">${items.join("")}</div>`;
+}
+
+function toggleImaTagMenu(event) {
+  event?.stopPropagation();
+  if (_imaTagMenu.open) {
+    closeImaTagMenu();
+    return;
+  }
+  closeImaDayPicker();
+  const trigger = $("#ima-doc-tag");
+  const host = trigger?.closest(".ima-report-tag");
+  if (!trigger || !host) return;
+  _imaTagMenu.open = true;
+  host.insertAdjacentHTML("beforeend", imaTagMenuHtml(String(state.imaDocumentsTag || "")));
+  const menu = host.querySelector(".kb-desk-day-menu");
+  if (menu) {
+    menu.style.position = "fixed";
+    const box = trigger.getBoundingClientRect();
+    const width = Math.max(160, box.width);
+    menu.style.left = `${Math.max(8, Math.min(box.left, window.innerWidth - width - 8))}px`;
+    menu.style.top = `${box.bottom + 4}px`;
+    menu.style.width = `${width}px`;
+  }
+  trigger.setAttribute("aria-expanded", "true");
+}
+
+function pickImaTag(i) {
+  const key = i >= 0 ? (_imaTagMenu.keys?.[i] || "") : "";
+  closeImaTagMenu();
+  selectImaDocumentsTag(key);
+}
+
 function onImaDayPickerDocDown(event) {
+  if (_imaTagMenu.open && !event.target?.closest?.(".ima-tag-trigger, .kb-desk-day-menu[data-tag-menu]")) closeImaTagMenu();
   if (!_imaDayPicker.open) return;
   if (event.target?.closest?.(".kb-desk-day, .kb-desk-day-menu")) return;
   closeImaDayPicker();
@@ -1609,7 +1663,7 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
     <form class="ima-report-search" onsubmit="event.preventDefault();submitImaDocumentsSearch()">
       <label class="ima-report-searchbox">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜标题、公司、代码、行业或资料源" aria-label="搜索研报" oninput="queueImaDocumentsSearch()" oncompositionstart="_imaSearchComposing=true" oncompositionend="_imaSearchComposing=false;queueImaDocumentsSearch()">${clearBtn}</label>
     </form>
-    <div class="ima-report-filters">${sourceControls}<span id="ima-doc-day-nav-slot"></span><label class="ima-report-tag"><span class="sr-only">标签</span><select id="ima-doc-tag" aria-label="标签" onchange="selectImaDocumentsTag(this.value)" hidden><option value="">全部标签</option></select></label></div>
+    <div class="ima-report-filters">${sourceControls}<span id="ima-doc-day-nav-slot"></span><div class="ima-report-tag"><span class="sr-only">标签</span><button type="button" class="kb-desk-day ima-tag-trigger" id="ima-doc-tag" aria-haspopup="listbox" aria-expanded="false" onclick="toggleImaTagMenu(event)" hidden>全部标签</button></div></div>
     <div id="ima-doc-filter-chips" class="ima-doc-filter-chips"></div>
     <div class="ima-report-columns" aria-hidden="true"><span>日期</span><span>标题</span><span>资料源</span></div>
   </header>
@@ -1619,16 +1673,13 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
   adoptImaStreamSnapshot();
   const snapshot = currentImaListSnapshot();
   if (snapshot && body) {
-    const tagSelect = $("#ima-doc-tag");
+    const tagTrigger = $("#ima-doc-tag");
     const uniqueTags = Object.keys(snapshot.tagCounts || {});
     if (tag && !uniqueTags.includes(tag)) uniqueTags.unshift(tag);
-    if (tagSelect) {
-      tagSelect.innerHTML = `<option value="">全部标签</option>${uniqueTags.map((value) => {
-        const n = snapshot.tagCounts[value];
-        return `<option value="${escapeHtml(value)}" ${value === tag ? "selected" : ""}>${escapeHtml(value)}${n ? `（${n}）` : ""}</option>`;
-      }).join("")}`;
-      if (uniqueTags.length || tag) tagSelect.removeAttribute("hidden");
-      else tagSelect.hidden = true;
+    if (tagTrigger) {
+      tagTrigger.textContent = tag || "全部标签";
+      if (uniqueTags.length || tag) tagTrigger.removeAttribute("hidden");
+      else tagTrigger.hidden = true;
     }
     const navSlot = $("#ima-doc-day-nav-slot");
     if (navSlot) {
@@ -1670,20 +1721,17 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
       ? data.days.filter(Boolean)
       : [...new Set(items.map((item) => item.day).filter(Boolean))];
     state.imaDocumentsDays = days;
-    const tagSelect = $("#ima-doc-tag");
+    const tagTrigger = $("#ima-doc-tag");
     _imaTagCounts = imaTagCountsFromData(data);
     _imaDocumentCount = Number(data.document_count) || imaTagCoverageBase(_imaTagCounts, 0);
     const uniqueTags = Array.isArray(data.tags)
       ? data.tags.filter(Boolean)
       : Object.keys(_imaTagCounts);
     if (tag && !uniqueTags.includes(tag)) uniqueTags.unshift(tag);
-    if (tagSelect) {
-      tagSelect.innerHTML = `<option value="">全部标签</option>${uniqueTags.map((value) => {
-        const n = _imaTagCounts[value];
-        return `<option value="${escapeHtml(value)}" ${value === tag ? "selected" : ""}>${escapeHtml(value)}${n ? `（${n}）` : ""}</option>`;
-      }).join("")}`;
-      if (uniqueTags.length || tag) tagSelect.removeAttribute("hidden");
-      else tagSelect.hidden = true;
+    if (tagTrigger) {
+      tagTrigger.textContent = tag || "全部标签";
+      if (uniqueTags.length || tag) tagTrigger.removeAttribute("hidden");
+      else tagTrigger.hidden = true;
     }
     const navSlot = $("#ima-doc-day-nav-slot");
     if (navSlot) {
