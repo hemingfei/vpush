@@ -1339,13 +1339,12 @@ function knowledgeLibRowHtml(group, selected, mode) {
 }
 
 function knowledgeSourceControlsHtml(selectedGroup = "") {
-  const selected = String(selectedGroup || "");
   const subscribed = state.imaCatalogSubscribed || [];
-  const options = [{ id: "", name: "全部研报" }, ...subscribed.map((group) => ({
-    id: String(group.id || ""),
-    name: feishuSourceDisplay(group.name || group.id).label,
-  }))];
-  return `<label class="ima-report-source"><span class="sr-only">资料源</span><select id="ima-doc-source" aria-label="资料源" onchange="selectImaDocumentGroup(this.value)"><option value=""${selected ? "" : " selected"}>全部研报</option>${options.filter((group) => group.id).map((group) => `<option value="${escapeHtml(group.id)}"${group.id === selected ? " selected" : ""}>${escapeHtml(group.name)}</option>`).join("")}</select></label>`;
+  const sources = subscribed.map((group) => ({
+    group_id: String(group.id || ""),
+    title: group.name || group.id,
+  }));
+  return `<div class="ima-report-source">${feishuSourcePillsHtml(sources, selectedGroup, "selectImaDocumentGroup")}</div>`;
 }
 
 function refreshKnowledge() {
@@ -1521,8 +1520,8 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
   if (existingHead) {
     const input = $("#ima-doc-q");
     if (input && document.activeElement !== input) input.value = query;
-    const source = $("#ima-doc-source");
-    if (source) source.value = selectedGroup;
+    const source = existingHead.querySelector(".ima-report-source");
+    if (source) source.outerHTML = knowledgeSourceControlsHtml(selectedGroup);
     const body = $("#ima-docs-body");
     if (body && !keepOld) body.innerHTML = imaReportSkeletonHtml();
   } else {
@@ -1533,8 +1532,8 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
     <div class="ima-report-heading"><div><h2 id="ima-doc-title">最新研报</h2><p id="ima-doc-meta" class="section-meta"></p></div><button type="button" class="icon-btn" aria-label="刷新研报" title="刷新研报" onclick="refreshImaDocuments()">${REFRESH_ICON}</button></div>
     <form class="ima-report-search" onsubmit="event.preventDefault();submitImaDocumentsSearch()">
       <label class="ima-report-searchbox">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜标题、公司、代码、行业或资料源" aria-label="搜索研报" oninput="queueImaDocumentsSearch()" oncompositionstart="_imaSearchComposing=true" oncompositionend="_imaSearchComposing=false;queueImaDocumentsSearch()"><span id="ima-doc-day-nav-slot"></span></label>
-      <div class="ima-report-filters">${sourceControls}<label class="ima-report-tag"><span class="sr-only">标签</span><select id="ima-doc-tag" aria-label="标签" onchange="selectImaDocumentsTag(this.value)" hidden><option value="">全部标签</option></select></label></div>
     </form>
+    <div class="ima-report-filters">${sourceControls}<label class="ima-report-tag"><span class="sr-only">标签</span><select id="ima-doc-tag" aria-label="标签" onchange="selectImaDocumentsTag(this.value)" hidden><option value="">全部标签</option></select></label></div>
     <div id="ima-doc-filter-chips" class="ima-doc-filter-chips"></div>
     <div class="ima-report-columns" aria-hidden="true"><span>日期</span><span>标题</span><span>资料源</span></div>
   </header>
@@ -2135,7 +2134,7 @@ async function loadFeishuTimeline(item, seq, readerSeq) {
   _feishuTimelineTimer = setTimeout(() => checkFeishuTimelineUpdate(item.media_id, item.group_id, _feishuTimelineState.baseline, seq, readerSeq), 60000);
 }
 
-function feishuSourcePillsHtml(sources, selectedGroup) {
+function feishuSourcePillsHtml(sources, selectedGroup, onSelect = "selectFeishuTimelineSource") {
   const selected = String(selectedGroup || "");
   const items = sources.length > 1 ? [{ group_id: "", title: "全部" }, ...sources] : sources;
   if (!items.length) return "";
@@ -2144,7 +2143,7 @@ function feishuSourcePillsHtml(sources, selectedGroup) {
     const display = feishuSourceDisplay(source.title);
     const on = id === selected;
     const img = display.avatar ? `<img class="feishu-source-avatar" src="${escapeHtml(display.avatar)}" alt="">` : "";
-    return `<button type="button" class="tl-pill${on ? " selected" : ""}" role="radio" aria-checked="${on}" data-group="${escapeHtml(id)}" aria-label="${escapeHtml(display.label)}" onclick="selectFeishuTimelineSource(this.dataset.group)">${img}<span>${escapeHtml(display.label)}</span></button>`;
+    return `<button type="button" class="tl-pill${on ? " selected" : ""}" role="radio" aria-checked="${on}" data-group="${escapeHtml(id)}" aria-label="${escapeHtml(display.label)}" onclick="${onSelect}(this.dataset.group)">${img}<span>${escapeHtml(display.label)}</span></button>`;
   }).join("")}</div>`;
 }
 
@@ -2292,8 +2291,12 @@ async function renderImaDocument(seq, mediaId) {
       backRoute = imaDocumentsRoute(item.group_id, query, day, tag);
     }
     if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
-    setPageTitle(item.group_name || $("#ima-doc-title")?.textContent || "研报库");
     const isFeishuTimeline = item.type === "feishu_timeline";
+    setPageTitle(
+      isFeishuTimeline
+        ? feishuSourceDisplay(item.group_name || item.name).label
+        : (item.group_name || $("#ima-doc-title")?.textContent || "研报库")
+    );
     const ticker = isFeishuTimeline ? "" : imaDocTicker(item.name);
     const tickerMeta = ticker ? `<span class="ima-reader-meta-item">${escapeHtml(ticker)}</span>` : "";
     const dayContext = !isFeishuTimeline && (item.sort_date || item.day)
@@ -2328,14 +2331,18 @@ async function renderImaDocument(seq, mediaId) {
     const fileMetaHtml = (tickerMeta || dayContext || sizeMeta)
       ? `<div class="ima-reader-filemeta">${tickerMeta}${dayContext}${sizeMeta}</div>`
       : "";
-    const readerTitle = escapeHtml(imaDisplayTitle(item.name));
+    const readerTitle = escapeHtml(isFeishuTimeline ? feishuSourceDisplay(item.name).label : imaDisplayTitle(item.name));
+    const fromSearch = !!(query || tag);
+    const searchBack = fromSearch
+      ? `<button type="button" class="icon-btn" aria-label="返回搜索" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back, true)">${SEARCH_ICON}</button>`
+      : "";
     $("#kb-reader").innerHTML = isFeishuTimeline
       ? `
       <article class="ima-reader ima-reader--feishu">
         <header class="ima-reader-toolbar">
           <button type="button" class="ima-reader-back" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back)" aria-label="返回"><span class="ima-back-icon" aria-hidden="true">‹</span>返回</button>
           <h2 class="ima-reader-title">${readerTitle}</h2>
-          <div class="ima-reader-actions"><button type="button" class="icon-btn" aria-label="返回搜索" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back, true)">${SEARCH_ICON}</button>${openNewTab}</div>
+          <div class="ima-reader-actions">${searchBack}${openNewTab}</div>
         </header>
         <div id="feishu-timeline-toolbar" class="feishu-timeline-toolbar"></div>
         ${documentPanel}
@@ -2344,7 +2351,7 @@ async function renderImaDocument(seq, mediaId) {
       <article class="ima-reader">
         <header class="ima-reader-toolbar">
           <button type="button" class="ima-reader-back" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back)" aria-label="返回"><span class="ima-back-icon" aria-hidden="true">‹</span>返回</button>
-          <div class="ima-reader-actions"><button type="button" class="icon-btn" aria-label="返回搜索" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back, true)">${SEARCH_ICON}</button>${openNewTab}</div>
+          <div class="ima-reader-actions">${searchBack}${openNewTab}</div>
         </header>
         <section class="ima-reader-info">
           <h2 class="ima-reader-title">${readerTitle}</h2>

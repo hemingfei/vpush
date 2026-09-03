@@ -1677,7 +1677,8 @@ def test_feishu_timeline_toolbar_uses_source_avatar_pills():
     assert "feishuSourcePillsHtml(" in toolbar
     assert 'aria-label="来源"' in pills
     assert "feishu-source-avatar" in pills
-    assert "selectFeishuTimelineSource(this.dataset.group)" in pills
+    assert "onSelect = \"selectFeishuTimelineSource\"" in src
+    assert "${onSelect}(this.dataset.group)" in pills
     assert "全部来源" not in toolbar
     assert 'select aria-label="来源"' not in toolbar
     assert 'id="feishu-date-select"' in toolbar
@@ -1699,10 +1700,11 @@ def test_knowledge_and_timeline_use_feishu_source_display_names():
     item = _fn_body("feishuLiveItemHtml")
     render = _fn_body("renderImaDocuments")
     assert "feishuSourceDisplay(" in row
-    assert "feishuSourceDisplay(" in controls
+    assert "feishuSourcePillsHtml(" in controls
+    assert "selectImaDocumentGroup" in controls
+    assert 'id="ima-doc-source"' not in controls
     assert "feishuSourceDisplay(source.title).label" in item
     assert "feishuSourceDisplay(selectedGroupName).label" in render
-    assert 'id="ima-doc-source"' in controls
 
 
 def test_feishu_timeline_uses_windowed_pages_and_load_more_state():
@@ -2743,14 +2745,14 @@ def test_ima_documents_group_switching_contract():
     assert 'routeQuery().get("group")' in src
     assert "group_name" in src
     assert "params.set(\"group\"" in _fn_body("imaDocumentsRequestPath")
-    assert "ima-doc-source" in src
+    assert "feishu-source-pills" in src
     assert "selectImaDocumentGroup" in src
     assert "routeQuery()" in src
     assert "replaceImaDocumentsRoute(imaDocumentsRoute(groupId, state.imaDocumentsQuery, \"\", \"\"))" in src
     assert "selectImaDocumentGroup(value)" in src
     assert "state.imaDocumentsDay = \"\"" in src
-    assert "escapeHtml(group.id" in src or "escapeHtml(group.value" in src
-    assert "escapeHtml(group.name" in src
+    assert "escapeHtml(group.id" in src or "escapeHtml(id)" in src
+    assert "title: group.name || group.id" in src
     assert "没有访问权限" in src
 
 
@@ -2759,10 +2761,9 @@ def test_ima_documents_group_controls_render_response_groups_safely():
     src = APP_JS.read_text()
     render = _fn_body("renderImaDocuments")
     assert "data.groups" in render or "groups =" in render
-    assert "escapeHtml(group.id" in src or "escapeHtml(group.value" in src
-    assert "escapeHtml(group.name" in src
-    assert "ima-doc-source" in src
-    assert "escapeHtml(group.name" in src
+    assert "escapeHtml(id)" in src
+    assert "feishuSourcePillsHtml(" in src
+    assert "escapeHtml(display.label)" in src
 
 
 def test_ima_documents_all_group_labels_and_single_group_title():
@@ -2977,9 +2978,10 @@ def test_ima_source_filter_is_compact_and_subscription_management_survives():
     src = APP_JS.read_text()
     controls = _fn_body("knowledgeSourceControlsHtml")
 
-    assert 'id="ima-doc-source"' in controls
-    assert 'aria-label="资料源"' in controls
-    assert "selectImaDocumentGroup(this.value)" in controls
+    assert "feishuSourcePillsHtml(" in controls
+    assert 'class="ima-report-source"' in controls
+    assert "selectImaDocumentGroup" in controls
+    assert 'id="ima-doc-source"' not in controls
     assert "ima-source-manage" not in controls
     assert "管理订阅" not in controls
     assert "subscribeKnowledge" in src
@@ -3541,6 +3543,10 @@ def test_ima_document_reader_preserves_group_context_and_metadata():
     assert "ima-back-icon" in reader
     assert ">返回</button>" in reader
     assert "imaDisplayTitle" in reader and "item.size" in reader
+    assert "feishuSourceDisplay(item.name).label" in reader
+    assert "const fromSearch = !!(query || tag)" in reader
+    assert "${searchBack}" in reader
+    assert reader.count('aria-label="返回搜索"') == 1
     assert "ima-reader-abstract" in reader
     assert "ima-reader-empty" in reader
     assert "还没有预览文件" in reader
@@ -3680,9 +3686,10 @@ def test_ima_report_header_owns_search_date_and_filters():
 
     assert 'id="ima-doc-q"' in head
     assert 'id="ima-doc-day-nav-slot"' in head
-    assert 'id="ima-doc-source"' in _fn_body("knowledgeSourceControlsHtml")
+    assert "feishuSourcePillsHtml(" in _fn_body("knowledgeSourceControlsHtml")
     assert 'id="ima-doc-tag"' in head
     assert head.index('id="ima-doc-q"') < head.index('id="ima-doc-day-nav-slot"')
+    assert head.index("</form>") < head.index('class="ima-report-filters"')
 
 
 def test_knowledge_desk_defaults_to_latest_stream():
@@ -3795,7 +3802,7 @@ def test_ima_report_render_reuses_mounted_header_and_cancels_stale_search():
 
     assert render.index('querySelector(".ima-report-head")') < render.index("listRoot.innerHTML")
     assert "document.activeElement" in render
-    assert '$("#ima-doc-source")' in render
+    assert 'querySelector(".ima-report-source")' in render
     assert '$("#ima-report-page")' in submit
     assert "return" in submit
     assert "clearTimeout(_imaSearchTimer)" in stop
@@ -3991,8 +3998,8 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=281"' in html
-    assert 'src="/app.js?v=399"' in html
+    assert 'href="/style.css?v=283"' in html
+    assert 'src="/app.js?v=401"' in html
     assert 'dav-shell-v263' in sw
 
 
@@ -4101,8 +4108,8 @@ def test_knowledge_defaults_to_all_readable_sources():
 
     assert "subscribed.length === 1" not in render
     assert "rememberedKnowledgeGroup" not in APP_JS.read_text()
-    assert 'id="ima-doc-source"' in controls
-    assert '>全部研报<' in controls
+    assert "feishuSourcePillsHtml(" in controls
+    assert 'id="ima-doc-source"' not in controls
     assert "state.imaCatalogSubscribed" in controls
     assert "管理订阅" not in controls
     assert "knowledgeLibRowHtml" in render
@@ -5187,4 +5194,4 @@ def test_knowledge_zero_sub_empty_state_wraps_source_controls():
     css = STYLE_CSS.read_text()
     assert ".ima-report-filters-row { padding: 12px 16px; flex-wrap: wrap; }" in css
     assert ".ima-report-filters > .ima-report-source" in css
-    assert "width: 100%;" in css[css.index(".ima-report-source select"):css.index(".ima-report-head .ima-doc-filter-chips")]
+    assert "display: flex;" in css[css.index(".ima-report-filters > .ima-report-source"):css.index(".ima-report-head .ima-doc-filter-chips")]
