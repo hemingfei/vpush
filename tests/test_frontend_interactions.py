@@ -1681,6 +1681,11 @@ def test_feishu_timeline_b_layout_shares_one_track_geometry():
     assert "--feishu-track-gap" in src
     assert "grid-template-columns: var(--feishu-time-rail)" in src
     assert ".feishu-entry-author" in src
+    assert "--feishu-entry-pad" in src
+    assert "--feishu-time-line" in src
+    assert "padding: var(--feishu-entry-pad) 0" in src
+    assert "top: calc(var(--feishu-entry-pad) + (var(--feishu-time-line) - var(--feishu-node-size)) / 2)" in src
+    assert "line-height: var(--feishu-time-line)" in src
 
 
 def test_zsxq_settings_use_one_column_on_narrow_layout():
@@ -3857,7 +3862,7 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=271"' in html
+    assert 'href="/style.css?v=272"' in html
     assert 'src="/app.js?v=390"' in html
     assert 'dav-shell-v255' in sw
 
