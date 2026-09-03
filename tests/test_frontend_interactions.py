@@ -1649,10 +1649,13 @@ def test_feishu_timeline_uses_windowed_pages_and_load_more_state():
     assert 'params.set("window_days", "7")' in src
     assert "next_cursor" in src
     assert "has_more" in src
-    assert "loadMoreFeishuTimeline" in src
     assert "feishuTimelineMoreHtml" in view
     assert "state.loading && !entries.length" in view
     assert "正在载入时间线" in view
+    source = _fn_body("selectFeishuTimelineSource")
+    assert "const loaded = await loadFeishuTimelinePage(true)" in source
+    assert "_feishuTimelineState = current" in source
+    assert "来源切换失败" in source
 
 
 def test_feishu_timeline_removes_unavailable_media_and_failed_image_shells():

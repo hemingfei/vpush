@@ -1887,10 +1887,10 @@ function renderFeishuTimelineView() {
       const text = String(notice.text || "").trim();
       return !text || text !== String(notice.source?.title || "").trim();
     });
-  const preambleHtml = notices.map((notice) => notice.type === "table"
+  const preambleHtml = notices.map((notice) => `<div class="feishu-timeline-preamble-block">${notice.type === "table"
     ? feishuTimelineBlockHtml(notice, notice.source?.media_id || "", notice.source?.group_id || "")
-    : `<div class="feishu-entry-block feishu-timeline-preamble-block"><p>${escapeHtml(notice.text || "").replace(/\n/g, "<br>")}</p></div>`
-  ).join("");
+    : `<div class="feishu-entry-block"><p>${escapeHtml(notice.text || "").replace(/\n/g, "<br>")}</p></div>`
+  }</div>`).join("");
   const showSourceLabels = !selectedGroup && (data.sources || []).length > 1;
   host.innerHTML = `${preambleHtml}${docMode ? feishuDocumentEntriesHtml(entries) : feishuTimelineEntriesHtml(entries, showSourceLabels)}${docMode ? "" : feishuTimelineMoreHtml()}`;
   host.classList.toggle("is-doc-mode", docMode);
@@ -1992,7 +1992,15 @@ async function selectFeishuTimelineSource(groupId) {
     hasMore: false,
     error: "",
   };
-  await loadFeishuTimelinePage(true);
+  const loaded = await loadFeishuTimelinePage(true);
+  if (!loaded && routeStillActive(current.seq) && current.readerSeq === _imaReaderSeq && _feishuTimelineState?.selectedGroup === selectedGroup) {
+    const message = _feishuTimelineState.error || "来源切换失败";
+    _feishuTimelineState = current;
+    const select = document.querySelector('.feishu-timeline-toolbar select[aria-label="来源"]');
+    if (select?.isConnected) select.value = current.selectedGroup;
+    renderFeishuTimelineView();
+    flash(message, "error");
+  }
 }
 
 function jumpFeishuTimelineDay(day) {
