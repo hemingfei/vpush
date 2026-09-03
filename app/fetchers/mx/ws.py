@@ -14,6 +14,13 @@ from .crypto import decrypt_ws_data
 
 logger = logging.getLogger(__name__)
 
+# python-socketio 会用传入 logger 为收到的每个事件打一条 INFO
+# （Received event "room_msg" [/msg]），消息高峰期直接刷屏。给它单独一个
+# 子 logger 调到 WARNING：库的逐事件/连接过程噪音静音，真正的告警与错误仍保留；
+# 本模块自身的 INFO（连接/断开等）走上面 logger，不受影响。
+sio_logger = logging.getLogger(__name__ + ".socketio")
+sio_logger.setLevel(logging.WARNING)
+
 # MX 对外人格常量：HTTP（curl_cffi impersonate）、WS 握手（aiohttp）、图片下载
 # 三处必须同形，否则「同一个 token 多个客户端人格」就是风控的现成特征。
 # UA / sec-ch-ua 取自 curl_cffi chrome146 模板实测值（2026-09 当前版本），
@@ -131,7 +138,7 @@ class MxWsClient:
             # 库内部重连必须关闭：断线后由管理员在后台手动重连（重新走 start_ws
             # 建新客户端），绝不能让 python-socketio 自己悄悄重连。
             self._sio = socketio.AsyncClient(
-                logger=logger,
+                logger=sio_logger,
                 engineio_logger=False,  # 关闭 Engine.IO 底层详细日志，避免刷屏
                 reconnection=False,
             )
