@@ -4856,11 +4856,11 @@ def create_api_router(
                 "enabled": False,
                 "token": "",
                 "api_base": "https://mx.2026.naaifu.cn/business-api/5",
-                "ws_url": "wss://mx.2026.naaifu.cn",
+                "ws_url": "wss://mx.2026.naaifu.cn/business-api/5",
                 "ws_path": "/socket.io",
                 "ws_namespace": "/msg",
                 "ws_enabled": True,
-                "page_size": 50,
+                "page_size": 30,
                 "max_history_pages": 100,
             }
 

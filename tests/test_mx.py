@@ -1790,3 +1790,90 @@ def test_mx_config_has_no_fixed_sync_interval_knob():
     from app.config import MxConfig
 
     assert "sync_interval_hours" not in {f.name for f in dataclasses.fields(MxConfig)}
+
+
+# ---- 停用房间的实时链路过滤 ----
+
+def test_ws_parse_drops_disabled_room():
+    """管理端停用的房间：WS 实时消息在解析层即丢弃（不下载图片/不建帖）。"""
+    db = make_db()
+    kid = db.add_kol("mx", "房间H", "800")
+    fetcher = make_fetcher(db)
+    # 启用房间照常解析
+    assert fetcher._parse_message_to_post(msg(1, "hello", rid=800)) is not None
+    # 停用后：新解析会话（缓存视为已过期）直接丢弃
+    db.set_kols_enabled([kid], False)
+    fetcher_fresh = make_fetcher(db)
+    assert fetcher_fresh._parse_message_to_post(msg(2, "hello", rid=800)) is None
+
+
+def test_manual_pull_history_ignores_room_disabled():
+    """手动拉历史显式传 kol：停用房间仍可补历史（管理员明确动作）。"""
+    db = make_db()
+    kid = db.add_kol("mx", "房间I", "900")
+    db.set_kols_enabled([kid], False)
+    fetcher = make_fetcher(db)
+    kol = db.get_kol(kid)
+    assert fetcher._parse_message_to_post(msg(1, "hello"), kol) is not None
+
+
+def test_realtime_ingest_skips_disabled_room_immediately():
+    """实时入库前按数据库实时状态兜底：停用立即生效，不等房间缓存 TTL。"""
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+    scheduler.fetchers["mx"] = make_fetcher(db)
+    kid = db.add_kol("mx", "房间J", "1000")
+
+    async def scenario():
+        await scheduler._init_mx()
+        callback = scheduler._mx_ws_on_message
+        assert callback is not None
+        post = Post(platform="mx", kol_id=kid, kol_name="房间J", external_id="m1",
+                    title="", content="hi", url="", published_at="2026-01-01 00:00:00",
+                    post_type="post", images=[], detail={})
+        # 启用房间：正常入库
+        await callback(post)
+        db.set_kols_enabled([kid], False)
+        # 停用后：即使解析层缓存里还是启用态（TTL 内），入库前也会被拦下
+        await callback(post)
+        rows = db._rows("SELECT COUNT(*) AS c FROM posts WHERE kol_id = ?", (kid,))
+        assert rows[0]["c"] == 1
+
+    asyncio.run(scenario())
+    scheduler.stop()
+
+
+# ---- 旧版 ws_url 自动迁移 ----
+
+def test_load_config_migrates_legacy_mx_ws_url(tmp_path):
+    """旧部署 config.yaml 里的站点根路径 ws_url 加载时迁移为 {api_base} 的 wss 形态。"""
+    from app.config import load_config
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "sources:\n"
+        "  mx:\n"
+        "    enabled: true\n"
+        "    api_base: https://mx.2026.naaifu.cn/business-api/5\n"
+        "    ws_url: wss://mx.2026.naaifu.cn\n",
+        encoding="utf-8",
+    )
+    config = load_config(cfg)
+    assert config.sources.mx.ws_url == "wss://mx.2026.naaifu.cn/business-api/5"
+
+
+def test_load_config_keeps_custom_mx_ws_url(tmp_path):
+    """已是带路径形态（官方/自定义）的 ws_url 不被迁移覆盖。"""
+    from app.config import load_config
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "sources:\n"
+        "  mx:\n"
+        "    api_base: https://mx.2026.naaifu.cn/business-api/5\n"
+        "    ws_url: wss://mx.2026.naaifu.cn/business-api/5\n",
+        encoding="utf-8",
+    )
+    config = load_config(cfg)
+    assert config.sources.mx.ws_url == "wss://mx.2026.naaifu.cn/business-api/5"

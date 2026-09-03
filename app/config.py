@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 import yaml
 
@@ -276,6 +277,26 @@ def _set_path(obj, path, value) -> None:
     setattr(obj, path[-1], value)
 
 
+def _migrate_legacy_mx_ws_url(config: Config) -> None:
+    """旧版默认 ws_url（站点根路径）自动迁移为官方实际形态（{api_base} 的 wss 形态）。
+
+    2026-09-02 抓包确认官方网页端 WS 实际连 {api_base}/socket.io/，代码默认值与
+    文档已同步；更早部署的 config.yaml 里可能还存着旧的站点根路径值，加载时自动
+    纠正（管理端下次保存配置即落盘新值）。ws_url 已是带路径的形态则视为自定义
+    配置，原样保留。
+    """
+    mx = config.sources.mx
+    api_base = (mx.api_base or "").strip()
+    if not api_base:
+        return
+    parsed = urlparse(api_base)
+    if not parsed.netloc:
+        return
+    legacy = f"wss://{parsed.netloc}"
+    if (mx.ws_url or "").strip().rstrip("/") == legacy:
+        mx.ws_url = f"wss://{parsed.netloc}{parsed.path}".rstrip("/")
+
+
 def _validate(config: Config) -> None:
     """类型归一化与校验：配置错误在启动时尽早暴露。"""
     checks = (
@@ -395,5 +416,6 @@ def load_config(path: str | Path | None = None) -> Config:
             continue
         # 原始字符串交给 _validate 的 checks 表归一化（str→int/bool），不在此重复转换
         _set_path(config, attr_path, value)
+    _migrate_legacy_mx_ws_url(config)
     _validate(config)
     return config

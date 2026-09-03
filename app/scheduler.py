@@ -2524,6 +2524,15 @@ class Scheduler:
                     try:
                         # 把数据库操作放在单独线程中，避免事务冲突
                         def _save_and_notify():
+                            # 停用房间不入库不推送：以数据库实时状态为准（房间缓存有
+                            # TTL），停用立即生效，与轮询平台「停用即不抓取」口径一致
+                            kol_row = self.db.get_kol(post.kol_id) or {}
+                            if not kol_row.get("enabled", True):
+                                logger.info(
+                                    "MX 房间已停用，实时消息不处理 platform=%s kol=%s id=%s",
+                                    post.platform, post.kol_name, post.external_id,
+                                )
+                                return
                             post_id = self.db.save_post(post)
                             if not post_id:
                                 return

@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+import os
+import uuid
 from pathlib import Path
 
 import httpx
@@ -68,7 +70,15 @@ def cache_image_file(db, url: str, folder: str, url_prefix: str, client: httpx.C
         if not ext or len(resp.content) > MAX_BYTES or len(resp.content) <= 2048:
             return url
         target = dest / f"{key}.{ext}"
-        target.write_bytes(resp.content)
+        # WS 解析已并发跑在线程池里，同一 URL 可能被两个线程同时下载缓存：
+        # 先写临时文件再原子替换，避免交错写同一目标文件产出坏图
+        tmp = dest / f"{key}.{uuid.uuid4().hex[:8]}.part"
+        try:
+            tmp.write_bytes(resp.content)
+            os.replace(tmp, target)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            return url
         return f"{url_prefix}/{target.name}"
     except Exception:
         return url

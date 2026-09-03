@@ -91,7 +91,8 @@ class MxFetcher(Fetcher):
         # 官方 msg/list 的 pagesize 实测为 30（2026-09-02 抓包）
         self.page_size = getattr(source_config, "page_size", 30)
         self.ws_client = None
-        # (monotonic, kol) 元组：kol 为 None 也缓存（更短 TTL），未知房间噪音事件不至于打爆数据库
+        # (monotonic, kol) 元组：kol 为 None 也缓存（更短 TTL），未知房间噪音事件不至于打爆数据库；
+        # WS 解析在线程池并发执行，dict 读写靠 GIL 原子性即可（最坏情况重复查一次库）
         self._room_cache: dict = {}
         self._ws_tasks: set = set()
         self._ws_enabled = getattr(source_config, "ws_enabled", True)
@@ -222,7 +223,10 @@ class MxFetcher(Fetcher):
 
         async def on_raw_message(raw_msg):
             try:
-                post = self._parse_message_to_post(raw_msg)
+                # 解析含同步 IO（房间查库、图片 httpx 下载最长 15s/张），而调度器
+                # 与 API 共用同一事件循环：直接在 loop 上解析会冻结整个服务，还拖垮
+                # socket.io 心跳导致服务端断连，必须丢线程池执行
+                post = await asyncio.to_thread(self._parse_message_to_post, raw_msg)
                 if post:
                     if asyncio.iscoroutinefunction(on_message):
                         await on_message(post)
@@ -266,10 +270,19 @@ class MxFetcher(Fetcher):
                 return None
 
             # 获取 KOL 信息
+            from_room_cache = False
             if kol is None:
                 kol = self._get_room_info(room_id)
+                from_room_cache = kol is not None
             if not kol:
                 logger.warning(f"MX room {room_id} not found")
+                return None
+            # 实时链路（kol 来自房间缓存）不处理管理端停用的房间，避免停用后继续
+            # 白耗图片下载/解析；手动拉历史、兜底拉取显式传 kol，不受此限制（兜底
+            # 已自行过滤 enabled）。缓存有 TTL，停用至多延迟一个 TTL 生效，调度器
+            # 入库前还会按数据库实时状态再兜底一次
+            if from_room_cache and not kol.get("enabled", True):
+                logger.debug("MX room %s disabled, realtime message dropped", room_id)
                 return None
 
             # 尝试多种方式获取 msg 字段
