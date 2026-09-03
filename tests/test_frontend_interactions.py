@@ -1602,16 +1602,16 @@ def test_feishu_source_display_mode_switchable_between_timeline_and_document():
     assert "display_mode" in switcher
     assert "PATCH" in switcher or "method: \"PATCH\"" in switcher or '"PATCH"' in switcher
     reader = _fn_body("renderImaDocument")
-    assert 'item.feishu_display === "document"' in reader
     load = _fn_body("loadFeishuTimeline")
-    assert 'order: docMode ? "original" : "latest"' in load
-    assert 'mode: docMode ? "document" : "timeline"' in load
-    # 文档模式隐藏排序切换（始终原文顺序），但保留来源筛选与日期跳转
+    assert "loadFeishuTimeline(item, seq, readerSeq)" in reader
+    assert 'order: "latest"' in load
+    assert "mode: docMode" not in load
     toolbar = _fn_body("feishuTimelineToolbarHtml")
-    assert 'docMode ? "" :' in toolbar
-    doc_view = _fn_body("renderFeishuTimelineView")
-    assert "feishuDocumentEntriesHtml(entries)" in doc_view
-    assert 'classList.toggle("is-doc-mode", docMode)' in doc_view
+    assert ">时间线</button>" not in toolbar
+    assert ">文档</button>" not in toolbar
+    view = _fn_body("renderFeishuTimelineView")
+    assert "feishuDocumentEntriesHtml" not in view
+    assert "is-doc-mode" not in view
 
 
 
@@ -1630,10 +1630,12 @@ def test_feishu_timeline_ui_fixes():
     # 单来源/多来源模式下来源标签按需渲染
     assert "showSourceLabels = !selectedGroup && (data.sources || []).length > 1" in view
     entries_fn = _fn_body("feishuTimelineEntriesHtml")
-    assert "showSource && source.title" in entries_fn
-    # 文档模式下禁止排序切换
+    item = _fn_body("feishuLiveItemHtml")
+    assert "showSource && source.title" in item
+    assert "feishuEntryHasContent" in entries_fn
+    assert "空记录" not in entries_fn
     order = _fn_body("changeFeishuTimelineOrder")
-    assert 'mode === "document"' in order
+    assert "current.loading || order === current.order" in order
     # 设置页来源行：隐藏重复的「仅管理员」空态、展示方式统一为分段控件
     css = STYLE_CSS.read_text()
     assert ".feishu-source-acl .ima-acl-none { display: none; }" in css
@@ -1673,27 +1675,26 @@ def test_feishu_timeline_removes_unavailable_media_and_failed_image_shells():
     assert "data.notices" not in view
 
 
-def test_feishu_timeline_b_layout_shares_one_track_geometry():
+def test_feishu_timeline_uses_live_feed_layout():
     src = STYLE_CSS.read_text()
     entries = _fn_body("feishuTimelineEntriesHtml")
+    item = _fn_body("feishuLiveItemHtml")
 
-    assert "feishuEntryAuthor" in entries
-    assert "--feishu-time-rail" in src
-    assert "--feishu-track-gap" in src
-    assert "grid-template-columns: var(--feishu-time-rail)" in src
-    assert ".feishu-entry-author" in src
-    assert "--feishu-entry-pad" in src
-    assert "--feishu-time-line" in src
-    assert "padding: var(--feishu-entry-pad) 0" in src
-    assert "top: calc(var(--feishu-entry-pad) + (var(--feishu-time-line) - var(--feishu-node-size)) / 2)" in src
-    assert "line-height: var(--feishu-time-line)" in src
+    assert "class=\"live-item\"" in item
+    assert "class=\"live-time\"" in item
+    assert "class=\"live-body\"" in item
+    assert "tl-group live-group" in entries
+    assert "feishuEntryHasContent" in entries
+    assert ".live-item" in src
+    assert ".live-time" in src
+    assert ".live-body" in src
+    assert ".tl-group-head" in src
 
 
 def test_feishu_timeline_reader_interaction_batch():
-    """时间线阅读交互批次：视图内切换、滚动自动加载、增量更新锚定、图片懒加载、移动端回到最新。"""
+    """时间线阅读交互批次：默认时间线、滚动自动加载、增量更新锚定、图片懒加载、移动端回到最新。"""
     src = APP_JS.read_text()
     toolbar = _fn_body("feishuTimelineToolbarHtml")
-    mode_switch = _fn_body("switchFeishuTimelineMode")
     order_switch = _fn_body("changeFeishuTimelineOrder")
     more = _fn_body("feishuTimelineMoreHtml")
     observe = _fn_body("observeFeishuTimelineMore")
@@ -1703,9 +1704,10 @@ def test_feishu_timeline_reader_interaction_batch():
     check = _fn_body("checkFeishuTimelineUpdate")
     fab_jump = _fn_body("jumpFeishuTimelineLatest")
 
-    # 阅读器内「时间线/文档」与「排序」用分段控件，切换只影响本次阅读
-    assert ">时间线</button>" in toolbar and ">文档</button>" in toolbar
+    assert ">时间线</button>" not in toolbar
+    assert ">文档</button>" not in toolbar
     assert ">最新优先</button>" in toolbar and ">原文顺序</button>" in toolbar
+    assert "function switchFeishuTimelineMode" not in src
     assert "showSourceSelect = sources.length > 1" in toolbar
     reader = _fn_body("renderImaDocument")
     assert "ima-reader--feishu" in reader
@@ -1718,8 +1720,6 @@ def test_feishu_timeline_reader_interaction_batch():
     bar = re.search(r"\.feishu-timeline-toolbar\s*\{[^}]*\}", css)
     assert bar and "justify-content: flex-start" in bar.group(0)
     assert "margin-left: auto" in css
-    assert "loadFeishuTimelinePage(true)" in mode_switch
-    assert "flash(" in mode_switch
     assert "renderFeishuTimelineToolbar()" in order_switch
     # 滚动到底自动加载更早（按钮保留为降级）
     assert "feishu-timeline-sentinel" in more
@@ -1743,12 +1743,9 @@ def test_feishu_timeline_reader_interaction_batch():
     assert "toggleFeishuLatestFab" in src
 
     css = STYLE_CSS.read_text()
-    heading = re.search(r"\.feishu-day-heading\s*\{[^}]*\}", css)
-    doc_day = re.search(r"\.feishu-doc-day\s*\{[^}]*\}", css)
-    assert heading and "position: sticky" in heading.group(0)
-    assert doc_day and "position: sticky" in doc_day.group(0)
-    author = re.search(r"\.feishu-entry-author\s*\{[^}]*\}", css)
-    assert author and "var(--font-weight-semibold)" in author.group(0)
+    assert ".tl-group-head" in css
+    speaker = re.search(r"\.feishu-live-speaker\s*\{[^}]*\}", css)
+    assert speaker and "var(--font-weight-semibold)" in speaker.group(0)
     assert ".feishu-latest-fab" in css and ".feishu-latest-fab.is-visible" in css
 
 
@@ -3926,9 +3923,9 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=275"' in html
-    assert 'src="/app.js?v=394"' in html
-    assert 'dav-shell-v259' in sw
+    assert 'href="/style.css?v=276"' in html
+    assert 'src="/app.js?v=395"' in html
+    assert 'dav-shell-v260' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
