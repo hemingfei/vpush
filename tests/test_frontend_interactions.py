@@ -1658,19 +1658,6 @@ def test_feishu_source_display_maps_known_libraries():
     assert 'label: raw' in helper
 
 
-def test_feishu_author_only_docs_infer_default_speaker():
-    # 杨康平/K神-2026 是 authorOnly 文档：裸文本块推断为文档作者发言，Coming 映射到杨康平
-    src = APP_JS.read_text()
-    assert '"Coming"' in src
-    assert "authorOnly: true" in src
-    live = _fn_body("feishuLiveItemHtml")
-    block = _fn_body("feishuTimelineBlockHtml")
-    assert "srcDisplay.authorOnly" in live
-    assert 'feishuSourceDisplay(source.title)' in live
-    assert "block.speaker || defaultSpeaker" in block
-    assert "feishuTimelineBlockHtml(block, mediaId, groupId, showSpeaker = true, defaultSpeaker = \"\")" in src
-
-
 def test_feishu_source_avatar_files_are_small_static_pngs():
     yang = APP_JS.with_name("feishu-yang.png")
     shiye = APP_JS.with_name("feishu-shiye.png")
@@ -4112,8 +4099,8 @@ def test_static_asset_cache_bust_versions():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=286"' in html
-    assert 'src="/app.js?v=409"' in html
-    assert 'dav-shell-v270' in sw
+    assert 'src="/app.js?v=410"' in html
+    assert 'dav-shell-v271' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

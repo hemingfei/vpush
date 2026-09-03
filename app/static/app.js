@@ -1861,7 +1861,7 @@ function feishuTimelineAssetHtml(asset, mediaId, groupId) {
   return `<button type="button" class="feishu-attachment" data-asset-id="${escapeHtml(asset.id)}" data-media-id="${escapeHtml(mediaId)}" data-group-id="${escapeHtml(groupId)}" data-name="${escapeHtml(name)}" onclick="downloadFeishuTimelineAsset(this)">${escapeHtml(name)}</button>`;
 }
 
-function feishuTimelineBlockHtml(block, mediaId, groupId, showSpeaker = true, defaultSpeaker = "") {
+function feishuTimelineBlockHtml(block, mediaId, groupId, showSpeaker = true) {
   if (block.type === "table") {
     const rows = (block.rows || []).map((row, rowIndex) => {
       const tag = rowIndex === 0 ? "th" : "td";
@@ -1869,7 +1869,7 @@ function feishuTimelineBlockHtml(block, mediaId, groupId, showSpeaker = true, de
     }).join("");
     return rows ? `<div class="feishu-entry-table" role="region" aria-label="文档表格" tabindex="0"><table><tbody>${rows}</tbody></table></div>` : "";
   }
-  const speaker = String(block.speaker || defaultSpeaker || "");
+  const speaker = String(block.speaker || "");
   const reply = String(block.reply_to || "");
   const text = String(block.text || "");
   const identity = speaker && showSpeaker
@@ -1905,12 +1905,11 @@ function feishuEntryHasContent(entry) {
 }
 
 const FEISHU_SOURCE_DISPLAY = {
-  "K神-2026": { label: "杨康平", avatar: "/feishu-yang.png?v=1", authorOnly: true },
-  "杨康平": { label: "杨康平", avatar: "/feishu-yang.png?v=1", authorOnly: true },
+  "K神-2026": { label: "杨康平", avatar: "/feishu-yang.png?v=1" },
+  "杨康平": { label: "杨康平", avatar: "/feishu-yang.png?v=1" },
   "Q神-档案库": { label: "失业期神", avatar: "/feishu-shiye.png?v=1" },
   "Q神": { label: "失业期神", avatar: "/feishu-shiye.png?v=1" },
   "失业期神": { label: "失业期神", avatar: "/feishu-shiye.png?v=1" },
-  "Coming": { label: "杨康平", avatar: "/feishu-yang.png?v=1", authorOnly: true },
 };
 
 function feishuSourceDisplay(title) {
@@ -1927,13 +1926,10 @@ function feishuSpeakerAvatarHtml(name) {
 
 function feishuLiveItemHtml(entry, showSource) {
   const source = entry.source || {};
-  const srcDisplay = feishuSourceDisplay(source.title);
-  // authorOnly 文档（如杨康平/K神-2026）：飞书里整篇都是作者独白，无 speaker 的裸文本块推断为作者发言
-  const author = srcDisplay.authorOnly ? "" : feishuEntryAuthor(entry);
+  const author = feishuEntryAuthor(entry);
   const sourceLabel = showSource && source.title ? `<div class="feishu-live-source">${escapeHtml(feishuSourceDisplay(source.title).label)}</div>` : "";
   const speaker = author ? `<div class="feishu-live-speaker">${feishuSpeakerAvatarHtml(author)}<strong>${escapeHtml(feishuSourceDisplay(author).label)}</strong><time datetime="${escapeHtml(entry.timestamp || "")}">${escapeHtml(entry.time || "")}</time></div>` : "";
-  const defaultSpeaker = srcDisplay.authorOnly ? srcDisplay.label : "";
-  const blocks = (entry.blocks || []).filter(feishuBlockHasContent).map((block) => feishuTimelineBlockHtml(block, source.media_id || "", source.group_id || "", !author, defaultSpeaker)).join("");
+  const blocks = (entry.blocks || []).filter(feishuBlockHasContent).map((block) => feishuTimelineBlockHtml(block, source.media_id || "", source.group_id || "", !author)).join("");
   return `<article class="live-item" data-entry-id="${escapeHtml(entry.id || "")}">
     <div class="live-main">${speaker}${sourceLabel}<div class="live-body">${blocks}</div></div>
   </article>`;

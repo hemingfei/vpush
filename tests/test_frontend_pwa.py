@@ -51,8 +51,8 @@ def test_frontend_assets_match_financial_news_release_revision():
     sw = SW_JS.read_text()
     app = (STATIC / "app.js").read_text()
     assert 'href="/style.css?v=286"' in html
-    assert 'src="/app.js?v=409"' in html
-    assert 'const CACHE = "dav-shell-v270";' in sw
+    assert 'src="/app.js?v=410"' in html
+    assert 'const CACHE = "dav-shell-v271";' in sw
     assert 'const APP_VERSION = "1.12.133";' in app
 
 
