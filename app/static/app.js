@@ -2147,13 +2147,15 @@ function feishuTimelineToolbarHtml() {
   const docMode = state.mode === "document";
   const order = state.order === "original" ? "original" : "latest";
   const selectedGroup = state.selectedGroup || "";
-  const sourceOptions = [{ group_id: "", title: "全部来源" }, ...(state.data?.sources || [])];
+  const sources = state.data?.sources || [];
+  const showSourceSelect = sources.length > 1;
+  const sourceOptions = [{ group_id: "", title: "全部来源" }, ...sources];
   return `
     <div class="feishu-display-segment feishu-mode-segment" role="group" aria-label="展示方式">
       <button type="button" class="feishu-display-option${docMode ? "" : " is-selected"}" aria-pressed="${!docMode}" onclick="switchFeishuTimelineMode('timeline')">时间线</button>
       <button type="button" class="feishu-display-option${docMode ? " is-selected" : ""}" aria-pressed="${docMode}" onclick="switchFeishuTimelineMode('document')">文档</button>
     </div>
-    <label><span class="sr-only">来源</span><select aria-label="来源" onchange="selectFeishuTimelineSource(this.value)">${sourceOptions.map((source) => `<option value="${escapeHtml(source.group_id)}"${source.group_id === selectedGroup ? " selected" : ""}>${escapeHtml(source.title)}</option>`).join("")}</select></label>
+    ${showSourceSelect ? `<label><span class="sr-only">来源</span><select aria-label="来源" onchange="selectFeishuTimelineSource(this.value)">${sourceOptions.map((source) => `<option value="${escapeHtml(source.group_id)}"${source.group_id === selectedGroup ? " selected" : ""}>${escapeHtml(source.title)}</option>`).join("")}</select></label>` : ""}
     ${docMode ? "" : `<div class="feishu-display-segment feishu-order-segment" role="group" aria-label="排序">
       <button type="button" class="feishu-display-option${order === "latest" ? " is-selected" : ""}" aria-pressed="${order === "latest"}" onclick="changeFeishuTimelineOrder('latest')">最新优先</button>
       <button type="button" class="feishu-display-option${order === "original" ? " is-selected" : ""}" aria-pressed="${order === "original"}" onclick="changeFeishuTimelineOrder('original')">原文顺序</button>
@@ -2343,12 +2345,13 @@ async function renderImaDocument(seq, mediaId) {
     }
     if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
     setPageTitle(item.group_name || $("#ima-doc-title")?.textContent || "研报库");
-    const ticker = imaDocTicker(item.name);
+    const isFeishuTimeline = item.type === "feishu_timeline";
+    const ticker = isFeishuTimeline ? "" : imaDocTicker(item.name);
     const tickerMeta = ticker ? `<span class="ima-reader-meta-item">${escapeHtml(ticker)}</span>` : "";
-    const dayContext = (item.sort_date || item.day)
+    const dayContext = !isFeishuTimeline && (item.sort_date || item.day)
       ? `<span class="ima-reader-day ima-reader-meta-item">${escapeHtml(fmtImaDay(item.sort_date || item.day))}</span>`
       : "";
-    const abstractText = item.abstract_zh || item.abstract || "";
+    const abstractText = isFeishuTimeline ? "" : (item.abstract_zh || item.abstract || "");
     const abstractLong = abstractText.length > IMA_ABSTRACT_CLAMP_CHARS;
     const abstractMore = abstractLong
       ? `<button type="button" class="ima-abstract-more" aria-expanded="false" onclick="toggleImaAbstract(this)">展开</button>`
@@ -2359,7 +2362,6 @@ async function renderImaDocument(seq, mediaId) {
     // 快照路由校验（与 currentImaListSnapshot 同思路）：与本次应返回的列表路由不匹配的旧快照不用于导航/计数
     const listSnapshot = _imaListSnapshot && _imaListSnapshot.route === normalizeRoute(backRoute) ? _imaListSnapshot : null;
     const standalonePwa = isStandalonePwa();
-    const isFeishuTimeline = item.type === "feishu_timeline";
     const openLabel = standalonePwa ? "打开 PDF" : "新标签打开 PDF";
     const openNewTab = isFeishuTimeline && item.source_url
       ? `<a class="icon-btn" href="${escapeHtml(item.source_url)}" target="_blank" rel="noopener" aria-label="打开飞书原文" title="打开飞书原文">${EXTERNAL_LINK_ICON}</a>`
@@ -2373,19 +2375,30 @@ async function renderImaDocument(seq, mediaId) {
             ? `<button id="ima-pdf-pwa-open" type="button" class="btn-normal" onclick="openImaPdfNewTab()" hidden>打开 PDF</button>`
             : `<iframe id="ima-pdf-frame" title="PDF 预览" hidden style="position:absolute;inset:0;width:100%;height:100%;border:0"></iframe>`}</div>`
         : `<div class="ima-pdf-panel"><div class="ima-reader-empty" role="status"><p>还没有预览文件</p></div></div>`;
-    const sizeLine = fmtDocSize(item.size);
+    const sizeLine = isFeishuTimeline ? "" : fmtDocSize(item.size);
     const sizeMeta = sizeLine ? `<span class="ima-reader-meta-item">${escapeHtml(sizeLine)}</span>` : "";
     const fileMetaHtml = (tickerMeta || dayContext || sizeMeta)
       ? `<div class="ima-reader-filemeta">${tickerMeta}${dayContext}${sizeMeta}</div>`
       : "";
-    $("#kb-reader").innerHTML = `
+    const readerTitle = escapeHtml(imaDisplayTitle(item.name));
+    $("#kb-reader").innerHTML = isFeishuTimeline
+      ? `
+      <article class="ima-reader ima-reader--feishu">
+        <header class="ima-reader-toolbar">
+          <button type="button" class="ima-reader-back" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back)" aria-label="返回"><span class="ima-back-icon" aria-hidden="true">‹</span>返回</button>
+          <h2 class="ima-reader-title">${readerTitle}</h2>
+          <div class="ima-reader-actions"><button type="button" class="icon-btn" aria-label="返回搜索" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back, true)">${SEARCH_ICON}</button>${openNewTab}</div>
+        </header>
+        ${documentPanel}
+      </article>`
+      : `
       <article class="ima-reader">
         <header class="ima-reader-toolbar">
           <button type="button" class="ima-reader-back" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back)" aria-label="返回"><span class="ima-back-icon" aria-hidden="true">‹</span>返回</button>
           <div class="ima-reader-actions"><button type="button" class="icon-btn" aria-label="返回搜索" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back, true)">${SEARCH_ICON}</button>${openNewTab}</div>
         </header>
         <section class="ima-reader-info">
-          <h2 class="ima-reader-title">${escapeHtml(imaDisplayTitle(item.name))}</h2>
+          <h2 class="ima-reader-title">${readerTitle}</h2>
           ${fileMetaHtml}
           ${imaReaderWatchHtml(item.tags)}
           ${abstractHtml}

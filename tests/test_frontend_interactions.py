@@ -1706,6 +1706,15 @@ def test_feishu_timeline_reader_interaction_batch():
     # 阅读器内「时间线/文档」与「排序」用分段控件，切换只影响本次阅读
     assert ">时间线</button>" in toolbar and ">文档</button>" in toolbar
     assert ">最新优先</button>" in toolbar and ">原文顺序</button>" in toolbar
+    assert "showSourceSelect = sources.length > 1" in toolbar
+    reader = _fn_body("renderImaDocument")
+    assert "ima-reader--feishu" in reader
+    assert "isFeishuTimeline ? \"\" : imaDocTicker" in reader
+    assert "isFeishuTimeline ? \"\" : fmtDocSize" in reader
+    css = STYLE_CSS.read_text()
+    compact = re.search(r"\.ima-reader--feishu \.ima-reader-title\s*\{[^}]*\}", css)
+    assert compact and "text-overflow: ellipsis" in compact.group(0)
+    assert "justify-content: flex-end" in css
     assert "loadFeishuTimelinePage(true)" in mode_switch
     assert "flash(" in mode_switch
     assert "renderFeishuTimelineToolbar()" in order_switch
@@ -3578,7 +3587,7 @@ def test_ima_document_reader_error_actions_use_scoped_backroute():
 def test_ima_document_reader_omits_empty_source_metadata():
     """没有代码时不输出空的阅读页代码标记。"""
     reader = _fn_body("renderImaDocument")
-    assert "const ticker = imaDocTicker(item.name)" in reader
+    assert "const ticker = isFeishuTimeline ? \"\" : imaDocTicker(item.name)" in reader
     assert "ticker ?" in reader
     assert "${tickerMeta}" in reader
 
@@ -3914,9 +3923,9 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=273"' in html
-    assert 'src="/app.js?v=392"' in html
-    assert 'dav-shell-v257' in sw
+    assert 'href="/style.css?v=274"' in html
+    assert 'src="/app.js?v=393"' in html
+    assert 'dav-shell-v258' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
