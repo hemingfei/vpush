@@ -1345,7 +1345,13 @@ function knowledgeSourceControlsHtml(selectedGroup = "") {
     group_id: String(group.id || ""),
     title: group.name || group.id,
   }));
-  return `<div class="ima-report-source">${feishuSourcePillsHtml(sources, selectedGroup, "selectImaDocumentGroup")}</div>`;
+  const pillsHtml = `<div class="kb-source-pills-desk">${feishuSourcePillsHtml(sources, selectedGroup, "selectImaDocumentGroup")}</div>`;
+  const mobileOptions = [
+    `<option value="" ${!selectedGroup ? "selected" : ""}>📚 全部研报库</option>`,
+    ...sources.map((s) => `<option value="${escapeHtml(s.group_id)}" ${s.group_id === selectedGroup ? "selected" : ""}>📚 ${escapeHtml(s.title)}</option>`)
+  ].join("");
+  const mobileSelectHtml = `<div class="kb-source-select-wrap"><select class="kb-source-select-mobile" aria-label="切换研报库" onchange="selectImaDocumentGroup(this.value)">${mobileOptions}</select></div>`;
+  return `<div class="ima-report-source">${pillsHtml}${mobileSelectHtml}</div>`;
 }
 
 function refreshKnowledge() {
@@ -1523,18 +1529,32 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
     if (input && document.activeElement !== input) input.value = query;
     const source = existingHead.querySelector(".ima-report-source");
     if (source) source.outerHTML = knowledgeSourceControlsHtml(selectedGroup);
+    let clearBtn = existingHead.querySelector(".ima-search-clear");
+    if (query) {
+      if (!clearBtn) {
+        const searchBox = existingHead.querySelector(".ima-report-searchbox");
+        if (searchBox) {
+          searchBox.insertAdjacentHTML("beforeend", `<button type="button" class="ima-search-clear" onclick="clearImaDocumentsFilter('q')" aria-label="清除搜索">${X_ICON}</button>`);
+        }
+      }
+    } else if (clearBtn) {
+      clearBtn.remove();
+    }
     const body = $("#ima-docs-body");
     if (body && !keepOld) body.innerHTML = imaReportSkeletonHtml();
   } else {
     _imaSearchComposing = false;
     const sourceControls = knowledgeSourceControlsHtml(selectedGroup);
+    const clearBtn = query
+      ? `<button type="button" class="ima-search-clear" onclick="clearImaDocumentsFilter('q')" aria-label="清除搜索">${X_ICON}</button>`
+      : "";
     listRoot.innerHTML = `
   <header class="ima-report-head">
     <div class="ima-report-heading"><div><h2 id="ima-doc-title">最新研报</h2><p id="ima-doc-meta" class="section-meta"></p></div><button type="button" class="icon-btn" aria-label="刷新研报" title="刷新研报" onclick="refreshImaDocuments()">${REFRESH_ICON}</button></div>
     <form class="ima-report-search" onsubmit="event.preventDefault();submitImaDocumentsSearch()">
-      <label class="ima-report-searchbox">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜标题、公司、代码、行业或资料源" aria-label="搜索研报" oninput="queueImaDocumentsSearch()" oncompositionstart="_imaSearchComposing=true" oncompositionend="_imaSearchComposing=false;queueImaDocumentsSearch()"><span id="ima-doc-day-nav-slot"></span></label>
+      <label class="ima-report-searchbox">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜标题、公司、代码、行业或资料源" aria-label="搜索研报" oninput="queueImaDocumentsSearch()" oncompositionstart="_imaSearchComposing=true" oncompositionend="_imaSearchComposing=false;queueImaDocumentsSearch()">${clearBtn}</label>
     </form>
-    <div class="ima-report-filters">${sourceControls}<label class="ima-report-tag"><span class="sr-only">标签</span><select id="ima-doc-tag" aria-label="标签" onchange="selectImaDocumentsTag(this.value)" hidden><option value="">全部标签</option></select></label></div>
+    <div class="ima-report-filters">${sourceControls}<span id="ima-doc-day-nav-slot"></span><label class="ima-report-tag"><span class="sr-only">标签</span><select id="ima-doc-tag" aria-label="标签" onchange="selectImaDocumentsTag(this.value)" hidden><option value="">全部标签</option></select></label></div>
     <div id="ima-doc-filter-chips" class="ima-doc-filter-chips"></div>
     <div class="ima-report-columns" aria-hidden="true"><span>日期</span><span>标题</span><span>资料源</span></div>
   </header>

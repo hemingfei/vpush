@@ -3697,6 +3697,26 @@ def test_ima_report_header_owns_search_date_and_filters():
     assert head.index("</form>") < head.index('class="ima-report-filters"')
 
 
+def test_ima_report_header_responsive_source_and_search_clear():
+    render = _fn_body("renderImaDocuments")
+    source_fn = _fn_body("knowledgeSourceControlsHtml")
+
+    # Clear button in searchbox when query is non-empty
+    assert "clearImaDocumentsFilter('q')" in render
+    assert "ima-search-clear" in render
+
+    # Responsive source controls: contains both pills and mobile select
+    assert "feishuSourcePillsHtml(" in source_fn
+    assert "kb-source-select-mobile" in source_fn
+    assert "selectImaDocumentGroup(this.value)" in source_fn
+
+    # Date slot moved out of search form into toolbar/filters
+    head_start = render.index('<header class="ima-report-head">')
+    head_end = render.index("</header>", head_start)
+    head = render[head_start:head_end]
+    assert head.index("</form>") < head.index('id="ima-doc-day-nav-slot"')
+
+
 def test_knowledge_desk_defaults_to_latest_stream():
     """无日期时拉最新流并分页，不把 URL 写成某一天。"""
     render = _fn_body("renderImaDocuments")
