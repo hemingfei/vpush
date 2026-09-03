@@ -2226,6 +2226,29 @@ function feishuRestoreEntry(host, anchor, fallbackTop) {
   host.scrollTop = fallbackTop || 0;
 }
 
+function feishuTimelineCursorFromEntry(entry) {
+  const raw = JSON.stringify({
+    timestamp: String(entry?.timestamp || ""),
+    id: String(entry?.id || ""),
+  });
+  const bytes = new TextEncoder().encode(raw);
+  let bin = "";
+  bytes.forEach((byte) => { bin += String.fromCharCode(byte); });
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function feishuTimelineUpdatePath(state) {
+  const append = state.mode === "document" || state.order === "original";
+  if (!append || state.mode === "document" || !state.hasMore) {
+    const last = append ? (state.data?.entries || []).at(-1) : null;
+    const before = last && state.mode !== "document" && !state.hasMore
+      ? feishuTimelineCursorFromEntry(last)
+      : "";
+    return feishuTimelineRequestPath(state, before);
+  }
+  return "";
+}
+
 async function applyFeishuTimelineUpdate(button) {
   const current = _feishuTimelineState;
   const host = $("#feishu-timeline-body");
@@ -2233,15 +2256,25 @@ async function applyFeishuTimelineUpdate(button) {
   const groupId = button?.dataset?.groupId || "";
   if (!current || !host || !mediaId || current.loading) return;
   button.disabled = true;
+  const append = current.mode === "document" || current.order === "original";
   try {
+    const metaPath = `/api/ima-documents/${encodeURIComponent(mediaId)}${groupId ? `?group=${encodeURIComponent(groupId)}` : ""}`;
+    if (append && current.mode !== "document" && current.hasMore) {
+      const meta = await api(metaPath);
+      if (!routeStillActive(current.seq) || current.readerSeq !== _imaReaderSeq) return;
+      _feishuTimelineState = { ...current, baseline: String(meta.downloaded_at || current.baseline || "") };
+      button.remove();
+      flash("有新内容，继续向下加载即可看到");
+      _feishuTimelineTimer = setTimeout(() => checkFeishuTimelineUpdate(mediaId, groupId, _feishuTimelineState.baseline, current.seq, current.readerSeq), 60000);
+      return;
+    }
     const [fresh, meta] = await Promise.all([
-      api(feishuTimelineRequestPath(current)),
-      api(`/api/ima-documents/${encodeURIComponent(mediaId)}${groupId ? `?group=${encodeURIComponent(groupId)}` : ""}`),
+      api(feishuTimelineUpdatePath(current)),
+      api(metaPath),
     ]);
     if (!routeStillActive(current.seq) || current.readerSeq !== _imaReaderSeq) return;
     const existing = new Set((current.data.entries || []).map((entry) => String(entry.id || "")));
     const added = (fresh.entries || []).filter((entry) => String(entry.id || "") && !existing.has(String(entry.id)));
-    const append = current.mode === "document" || current.order === "original";
     const anchor = append ? null : feishuAnchorEntry(host);
     const scrollTop = host.scrollTop;
     _feishuTimelineState = {

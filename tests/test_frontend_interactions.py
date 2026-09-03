@@ -1717,6 +1717,8 @@ def test_feishu_timeline_reader_interaction_batch():
     assert "data-group-id" in check
     assert "reloadFeishuTimeline" not in src
     assert "feishuAnchorEntry" in apply_update and "feishuRestoreEntry" in apply_update
+    assert "feishuTimelineUpdatePath" in apply_update
+    assert "继续向下加载即可看到" in apply_update
     assert "renderFeishuTimelineView()" in apply_update
     assert "checkFeishuTimelineUpdate" in apply_update
     # 图片只在接近视口时加载，缓存复用
@@ -3913,8 +3915,8 @@ def test_static_asset_cache_bust_versions():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     assert 'href="/style.css?v=273"' in html
-    assert 'src="/app.js?v=391"' in html
-    assert 'dav-shell-v256' in sw
+    assert 'src="/app.js?v=392"' in html
+    assert 'dav-shell-v257' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
