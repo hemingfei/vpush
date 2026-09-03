@@ -596,6 +596,31 @@ def test_typeahead_no_exact_match_falls_back_to_userbyscreenname(monkeypatch):
     assert calls["tweets"] == 1
 
 
+def test_typeahead_429_does_not_fall_back_to_userbyscreenname(monkeypatch):
+    """typeahead 429 是账号级限流，不能再打 UserByScreenName 把配额打得更穿。"""
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
+    calls = {"userby": 0, "tweets": 0}
+
+    def handler(request):
+        if "typeahead" in str(request.url):
+            return httpx.Response(429)
+        if "UserByScreenName" in str(request.url):
+            calls["userby"] += 1
+            return httpx.Response(200, json={"data": {}})
+        if "UserTweets" in str(request.url):
+            calls["tweets"] += 1
+            return httpx.Response(200, json=_timeline_response())
+        return httpx.Response(404)
+
+    db = DB(":memory:")
+    kid = db.add_kol("twitter", "SemiAnalysis", "https://x.com/SemiAnalysis_")
+    fetcher = _make_fetcher(handler, db)
+    with pytest.raises(RuntimeError, match="typeahead HTTP 429"):
+        fetcher.fetch(db.get_kol(kid))
+    assert calls["userby"] == 0
+    assert calls["tweets"] == 0
+
+
 def test_graphql_401_fails_without_api_twitter_retry(monkeypatch):
     """GraphQL 401 直接失败：不再换 guest token 重试（guest/activate 已不可用）。"""
     monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")

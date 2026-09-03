@@ -444,6 +444,8 @@ class TwitterFetcher(Fetcher):
             params={"q": screen_name, "result_type": "users"},
             headers=headers,
         )
+        if resp.status_code == 429:
+            raise RuntimeError("X typeahead HTTP 429")
         if resp.status_code != 200:
             return None
         users = (resp.json() or {}).get("users") or []

@@ -1011,6 +1011,18 @@ def test_twitter_429_stops_queued_kols_and_keeps_platform_backoff(monkeypatch):
     assert states["twitter"].fail_count == 0
 
 
+def test_twitter_429_platform_backoff_at_least_15_minutes(monkeypatch):
+    """X 429 窗口约 15 分钟；本地 30s 起跳会在窗内反复撞限。"""
+    monkeypatch.setattr("app.scheduler.random.uniform", lambda *_: 0)
+    for err in ("X GraphQL UserTweets HTTP 429", "X typeahead HTTP 429"):
+        db = make_db()
+        add_kol_subscribed(db, "twitter", "X", "x")
+        states = {"twitter": PlatformState()}
+        poll_once(db, {"twitter": FakeFetcherError(err)}, [], states, interval_seconds=0)
+        remaining = states["twitter"].skip_until - time.monotonic()
+        assert remaining >= 890, err
+
+
 def test_generic_failures_do_not_auto_disable_at_alert_threshold(monkeypatch):
     """普通 boom 只告警，不在第 3 次就停用。"""
     db = make_db()
