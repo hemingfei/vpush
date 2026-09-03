@@ -65,7 +65,9 @@ class _NoCacheStaticFiles(StaticFiles):
 
     def file_response(self, full_path, stat_result, scope, status_code=200):
         response = super().file_response(full_path, stat_result, scope, status_code)
-        if str(full_path).endswith((".html", ".js", ".css")):
+        # manifest 也必须重新校验：WebAPK 安装时 Chrome 会取它烤入状态栏色，
+        # 命中旧缓存会把浅色 theme_color 烤进安装包（卸载重装也救不回来）
+        if str(full_path).endswith((".html", ".js", ".css", ".webmanifest", ".json")):
             response.headers["Cache-Control"] = "no-cache"
         return response
 
