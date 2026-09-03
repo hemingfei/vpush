@@ -109,6 +109,61 @@ def test_timeline_normalizes_table_cells_without_rendering_children_twice():
     }]
 
 
+from app.api import _feishu_timeline_cursor, _feishu_timeline_page
+
+
+def _timeline_entry(entry_id, day, time="12:00"):
+    return {
+        "id": entry_id,
+        "timestamp": f"{day}T{time}:00+08:00",
+        "day": day,
+        "time": time,
+        "blocks": [{"type": "text", "text": entry_id}],
+    }
+
+
+def test_feishu_timeline_page_returns_latest_seven_days_and_cursor():
+    entries = [
+        _timeline_entry("d10", "2026-09-10"),
+        _timeline_entry("d09", "2026-09-09"),
+        _timeline_entry("d08", "2026-09-08"),
+        _timeline_entry("d07", "2026-09-07"),
+        _timeline_entry("d06", "2026-09-06"),
+        _timeline_entry("d05", "2026-09-05"),
+        _timeline_entry("d04", "2026-09-04"),
+        _timeline_entry("d03", "2026-09-03"),
+    ]
+
+    page, has_more, cursor = _feishu_timeline_page(entries, "latest", 7, "")
+
+    assert [item["id"] for item in page] == ["d10", "d09", "d08", "d07", "d06", "d05", "d04"]
+    assert has_more is True
+    assert cursor == _feishu_timeline_cursor(page[-1])
+
+
+def test_feishu_timeline_page_uses_strict_timestamp_and_id_cursor():
+    entries = [
+        _timeline_entry("same-b", "2026-09-04", "12:00"),
+        _timeline_entry("same-a", "2026-09-04", "12:00"),
+        _timeline_entry("older", "2026-09-03"),
+    ]
+    before = _feishu_timeline_cursor(entries[0])
+
+    page, _has_more, _cursor = _feishu_timeline_page(entries, "latest", 7, before)
+
+    assert [item["id"] for item in page] == ["same-a", "older"]
+
+
+def test_feishu_timeline_page_without_window_preserves_full_order():
+    entries = [_timeline_entry("a", "2026-09-01"), _timeline_entry("b", "2026-09-02")]
+
+    page, has_more, cursor = _feishu_timeline_page(entries, "latest", None, "")
+
+    assert [item["id"] for item in page] == ["b", "a"]
+    assert has_more is False
+    assert cursor == ""
+
+
 def _service(tmp_path, client):
     key = Fernet.generate_key().decode()
     db = DB(tmp_path / "db.sqlite", credential_key=key)
@@ -529,6 +584,18 @@ def test_feishu_timeline_is_open_to_all_users(tmp_path, monkeypatch):
     timeline = client.get("/api/ima-documents/timeline/all", headers=user).json()
     assert timeline["entries"]
     assert timeline["entries"][0]["source"]["group_id"] == group_id
+    windowed = client.get(
+        f"/api/ima-documents/timeline/all?window_days=7&group={group_id}",
+        headers=user,
+    )
+    assert windowed.status_code == 200, windowed.text
+    assert windowed.json()["has_more"] is False
+    assert windowed.json()["next_cursor"] == ""
+    invalid = client.get(
+        "/api/ima-documents/timeline/all?window_days=7&before=bad-cursor",
+        headers=user,
+    )
+    assert invalid.status_code == 400
 
 
 def test_feishu_docs_config_endpoint_persists_and_hot_reloads(tmp_path, monkeypatch):

@@ -1,6 +1,7 @@
 """REST API：认证、订阅目录、我的动态、KOL/分类管理。"""
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -12,7 +13,7 @@ import sqlite3
 import threading
 import time
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 
@@ -1208,6 +1209,80 @@ def _do_reject_kol_request(db: DB, request_id: int, admin: dict) -> None:
         raise HTTPException(status_code=404, detail="申请不存在或已处理")
     db.set_kol_request_status(request_id, "rejected")
     db.log_admin_action(admin["id"], "reject_kol_request", str(request_id), req["external_id"])
+
+
+def _feishu_timeline_entry_key(entry: dict[str, Any]) -> tuple[str, str]:
+    return (str(entry.get("timestamp") or ""), str(entry.get("id") or ""))
+
+
+def _feishu_timeline_cursor(entry: dict[str, Any]) -> str:
+    raw = json.dumps(
+        {"timestamp": _feishu_timeline_entry_key(entry)[0], "id": _feishu_timeline_entry_key(entry)[1]},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _feishu_timeline_cursor_key(cursor: str) -> tuple[str, str]:
+    try:
+        padding = "=" * (-len(cursor) % 4)
+        payload = json.loads(
+            base64.urlsafe_b64decode((cursor + padding).encode("ascii")).decode("utf-8")
+        )
+        timestamp = str(payload["timestamp"])
+        entry_id = str(payload["id"])
+    except (KeyError, TypeError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("时间线游标无效") from exc
+    if not timestamp or not entry_id:
+        raise ValueError("时间线游标无效")
+    return timestamp, entry_id
+
+
+def _feishu_timeline_page(
+    entries: list[dict[str, Any]],
+    order: Literal["latest", "original"],
+    window_days: int | None,
+    before: str,
+) -> tuple[list[dict[str, Any]], bool, str]:
+    ordered = sorted(entries, key=_feishu_timeline_entry_key, reverse=order == "latest")
+    if not window_days:
+        return ordered, False, ""
+    cursor_key = _feishu_timeline_cursor_key(before) if before else None
+    candidates = [
+        item for item in ordered
+        if cursor_key is None
+        or (
+            _feishu_timeline_entry_key(item) < cursor_key
+            if order == "latest"
+            else _feishu_timeline_entry_key(item) > cursor_key
+        )
+    ]
+    if not candidates:
+        return [], False, ""
+    anchor = datetime.fromisoformat(
+        str(candidates[0].get("day") or candidates[0]["timestamp"][:10])
+    ).date()
+    if order == "latest":
+        lower = anchor - timedelta(days=window_days - 1)
+        page = [
+            item for item in candidates
+            if lower <= datetime.fromisoformat(
+                str(item.get("day") or item["timestamp"][:10])
+            ).date() <= anchor
+        ]
+    else:
+        upper = anchor + timedelta(days=window_days - 1)
+        page = [
+            item for item in candidates
+            if anchor <= datetime.fromisoformat(
+                str(item.get("day") or item["timestamp"][:10])
+            ).date() <= upper
+        ]
+    if not page:
+        return [], bool(candidates), ""
+    has_more = len(page) < len(candidates)
+    return page, has_more, _feishu_timeline_cursor(page[-1]) if has_more else ""
 
 
 def create_api_router(
@@ -3291,24 +3366,24 @@ def create_api_router(
     @router.get("/ima-documents/timeline/all")
     def get_all_feishu_document_timelines(
         order: Literal["latest", "original"] = "latest",
+        group: str = Query("", max_length=128),
+        window_days: int | None = Query(None, ge=1, le=31),
+        before: str = Query("", max_length=512),
         user: dict = Depends(get_current_user),
     ):
         if feishu_documents is None:
             raise HTTPException(status_code=503, detail="飞书文档服务未启用")
+        if before and not window_days:
+            raise HTTPException(status_code=400, detail="时间线游标需要窗口参数")
         readable = {group.id for group in _readable_groups(user)}
         sources = [
             item for item in db.list_feishu_document_sources(active_only=True)
             if item.get("timeline_path") and item.get("group_id") in readable
         ]
-        entries = []
-        notices = []
-        public_sources = []
-        for source in sources:
-            try:
-                timeline = feishu_documents.timeline(source)
-            except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
-                continue
-            public_source = {
+        if group and not any(item.get("group_id") == group for item in sources):
+            raise HTTPException(status_code=404, detail="文档不存在")
+        public_sources = [
+            {
                 "id": source["id"],
                 "group_id": source["group_id"],
                 "media_id": source["media_id"],
@@ -3316,14 +3391,33 @@ def create_api_router(
                 "revision_id": source.get("revision_id") or "",
                 "last_success_at": source.get("last_success_at") or "",
             }
-            public_sources.append(public_source)
+            for source in sources
+        ]
+        source_by_group = {item["group_id"]: item for item in public_sources}
+        entries = []
+        notices = []
+        for source in sources:
+            if group and source.get("group_id") != group:
+                continue
+            try:
+                timeline = feishu_documents.timeline(source)
+            except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
+                continue
+            public_source = source_by_group[source["group_id"]]
             notices.extend({**item, "source": public_source} for item in timeline.get("notices") or [])
             entries.extend({**item, "source": public_source} for item in timeline.get("entries") or [])
-        entries.sort(
-            key=lambda item: (str(item.get("timestamp") or ""), str(item.get("id") or "")),
-            reverse=order == "latest",
-        )
-        return {"sources": public_sources, "notices": notices, "entries": entries, "order": order}
+        try:
+            entries, has_more, next_cursor = _feishu_timeline_page(entries, order, window_days, before)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="时间线游标无效") from exc
+        return {
+            "sources": public_sources,
+            "notices": notices,
+            "entries": entries,
+            "order": order,
+            "has_more": has_more,
+            "next_cursor": next_cursor,
+        }
 
     @router.get("/ima-documents/{media_id}/assets/{asset_id}")
     def get_feishu_document_asset(
