@@ -874,6 +874,7 @@ CREATE TABLE IF NOT EXISTS feishu_document_sources (
     entry_count INTEGER NOT NULL DEFAULT 0,
     published_record_json TEXT NOT NULL DEFAULT '',
     published_state_json TEXT NOT NULL DEFAULT '',
+    display_mode TEXT NOT NULL DEFAULT 'timeline',
     enabled INTEGER NOT NULL DEFAULT 1,
     sync_status TEXT NOT NULL DEFAULT 'pending',
     last_checked_at TEXT NOT NULL DEFAULT '',
@@ -1279,6 +1280,11 @@ class DB:
             self._conn.execute(
                 "ALTER TABLE feishu_document_sources ADD COLUMN "
                 "published_state_json TEXT NOT NULL DEFAULT ''"
+            )
+        if "display_mode" not in feishu_source_cols:
+            self._conn.execute(
+                "ALTER TABLE feishu_document_sources ADD COLUMN "
+                "display_mode TEXT NOT NULL DEFAULT 'timeline'"
             )
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS user_keywords ("
@@ -5458,7 +5464,7 @@ class DB:
     _FEISHU_DOCUMENT_SOURCE_COLUMNS = frozenset({
         "document_id", "title", "revision_id", "content_hash", "timeline_path",
         "txt_path", "asset_root", "entry_count", "published_record_json",
-        "published_state_json", "enabled", "sync_status",
+        "published_state_json", "display_mode", "enabled", "sync_status",
         "last_checked_at", "last_success_at", "last_error", "deleted_at",
     })
 

@@ -1568,6 +1568,27 @@ def test_selecting_feishu_group_opens_timeline_directly():
     assert body.rstrip().endswith("renderImaDocuments(seq);\n}")
 
 
+def test_feishu_source_display_mode_switchable_between_timeline_and_document():
+    """飞书来源支持时间线/文档两种展示，设置行可切换，阅读器按模式分支。"""
+    src = APP_JS.read_text()
+    rows = _fn_body("feishuSourceRowsHtml")
+    assert "feishu-display-select" in rows
+    assert '<option value="timeline"' in rows and '<option value="document"' in rows
+    switcher = _fn_body("setFeishuSourceDisplay")
+    assert "display_mode" in switcher
+    assert "PATCH" in switcher or "method: \"PATCH\"" in switcher or '"PATCH"' in switcher
+    reader = _fn_body("renderImaDocument")
+    assert 'item.feishu_display === "document"' in reader
+    load = _fn_body("loadFeishuTimeline")
+    assert 'order=${docMode ? "original" : "latest"}' in load
+    assert 'mode: docMode ? "document" : "timeline"' in load
+    # 文档模式隐藏排序切换（始终原文顺序），但保留来源筛选与日期跳转
+    assert "${docMode ? \"\" :" in load
+    doc_view = _fn_body("renderFeishuTimelineView")
+    assert "feishuDocumentEntriesHtml(entries)" in doc_view
+    assert 'classList.toggle("is-doc-mode", docMode)' in doc_view
+
+
 def test_zsxq_settings_use_one_column_on_narrow_layout():
     """知识星球配置在 800px 及以下不能继续用双列挤压字段。"""
     css = STYLE_CSS.read_text()
@@ -3701,9 +3722,9 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=266"' in html
-    assert 'src="/app.js?v=382"' in html
-    assert 'dav-shell-v250' in sw
+    assert 'href="/style.css?v=267"' in html
+    assert 'src="/app.js?v=383"' in html
+    assert 'dav-shell-v251' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():

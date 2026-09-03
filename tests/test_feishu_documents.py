@@ -564,3 +564,43 @@ def test_feishu_docs_config_endpoint_persists_and_hot_reloads(tmp_path, monkeypa
         "/api/admin/feishu-documents/config", headers=_user, json={"interval_seconds": 60}
     ).status_code == 403
     service.stop()
+
+
+def test_feishu_source_display_mode_patch_and_detail(tmp_path, monkeypatch):
+    client, service, admin, _user = _feishu_api(tmp_path, monkeypatch)
+    client.app.state.db.save_feishu_oauth_credential({
+        "access_token": "access", "refresh_token": "refresh",
+        "expires_in": 3600, "refresh_token_expires_in": 7200,
+    })
+    added = client.post(
+        "/api/admin/feishu-documents", headers=admin,
+        json={"url": "https://a.feishu.cn/docx/NXbndzo1wowuQFxtH3ec5U3snOd"},
+    ).json()
+    source = client.app.state.db.get_feishu_document_source(added["id"])
+    service.sync_source(source["id"], True)
+
+    detail = client.get(
+        f"/api/ima-documents/{source['media_id']}?group={source['group_id']}", headers=admin
+    ).json()
+    assert detail["feishu_display"] == "timeline"
+
+    patched = client.patch(
+        f"/api/admin/feishu-documents/{source['id']}", headers=admin,
+        json={"display_mode": "document"},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["display_mode"] == "document"
+
+    detail = client.get(
+        f"/api/ima-documents/{source['media_id']}?group={source['group_id']}", headers=admin
+    ).json()
+    assert detail["feishu_display"] == "document"
+
+    assert client.patch(
+        f"/api/admin/feishu-documents/{source['id']}", headers=admin, json={}
+    ).status_code == 400
+    assert client.patch(
+        f"/api/admin/feishu-documents/{source['id']}", headers=admin,
+        json={"display_mode": "poster"},
+    ).status_code == 400
+    service.stop()

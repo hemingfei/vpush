@@ -616,7 +616,8 @@ class FeishuDocumentConfigIn(BaseModel):
 
 
 class FeishuDocumentSourceUpdateIn(BaseModel):
-    enabled: bool
+    enabled: bool | None = None
+    display_mode: str | None = None
 
 
 class FeishuDocumentOauthCallbackIn(BaseModel):
@@ -3192,10 +3193,12 @@ def create_api_router(
         document = _ima_document(user, media_id, group)
         document_type = "feishu_timeline" if document.get("group_id", "").startswith("feishu-") else "document"
         source_url = ""
+        feishu_display = "timeline"
         if document_type == "feishu_timeline":
             source = db.get_feishu_document_source_by_group(str(document.get("group_id") or ""))
             if source and not source.get("deleted_at") and source.get("enabled"):
                 source_url = str(source.get("canonical_url") or "")
+                feishu_display = str(source.get("display_mode") or "timeline")
         return {
             "media_id": document["media_id"],
             "name": document["name"],
@@ -3214,6 +3217,7 @@ def create_api_router(
             "has_txt": bool(document.get("has_txt")),
             "type": document_type,
             "source_url": source_url,
+            "feishu_display": feishu_display,
         }
 
     @router.post("/ima-documents/{media_id}/translate")
@@ -3410,6 +3414,7 @@ def create_api_router(
             "revision_id": source.get("revision_id") or "",
             "entry_count": int(source.get("entry_count") or 0),
             "enabled": bool(source.get("enabled")),
+            "display_mode": str(source.get("display_mode") or "timeline"),
             "sync_status": source.get("sync_status") or "pending",
             "last_checked_at": source.get("last_checked_at") or "",
             "last_success_at": source.get("last_success_at") or "",
@@ -3604,18 +3609,22 @@ def create_api_router(
         source = db.get_feishu_document_source(source_id)
         if source is None or source.get("deleted_at"):
             raise HTTPException(status_code=404, detail="飞书文档来源不存在")
-        db.update_feishu_document_source(
-            source_id,
-            enabled=body.enabled,
-            sync_status="pending" if body.enabled else "disabled",
-            last_error="",
-        )
-        if body.enabled:
+        if body.enabled is None and body.display_mode is None:
+            raise HTTPException(status_code=400, detail="没有要更新的字段")
+        if body.display_mode is not None and body.display_mode not in {"timeline", "document"}:
+            raise HTTPException(status_code=400, detail="展示方式必须是 timeline 或 document")
+        updates: dict[str, Any] = {}
+        if body.display_mode is not None:
+            updates["display_mode"] = body.display_mode
+        if body.enabled is not None:
+            updates.update(enabled=body.enabled, sync_status="pending" if body.enabled else "disabled", last_error="")
+        db.update_feishu_document_source(source_id, **updates)
+        if body.enabled is True:
             _queue_feishu_sync(background_tasks, service, source_id, False)
-        else:
+        elif body.enabled is False:
             ima_documents.remove_external_document(source["group_id"], source["media_id"])
         updated = db.get_feishu_document_source(source_id)
-        _audit(admin, "update_feishu_document_source", str(source_id), str(body.enabled))
+        _audit(admin, "update_feishu_document_source", str(source_id), json.dumps({k: v for k, v in updates.items()}, ensure_ascii=False))
         return _public_feishu_source(updated)
 
     @router.post("/admin/feishu-documents/{source_id}/sync")
