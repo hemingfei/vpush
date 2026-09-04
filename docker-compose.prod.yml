@@ -61,6 +61,11 @@ services:
       - FEISHU_DOCS_REDIRECT_URI=${FEISHU_DOCS_REDIRECT_URI:-}
       - FEISHU_DOCS_SCOPES=${FEISHU_DOCS_SCOPES:-wiki:node:read docx:document:readonly docs:document.media:download offline_access}
       - FEISHU_DOCS_INTERVAL_SECONDS=${FEISHU_DOCS_INTERVAL_SECONDS:-60}
+      - IMGBED_BASE_URL=${IMGBED_BASE_URL:-}
+      - IMGBED_TOKEN=${IMGBED_TOKEN:-}
+      - IMGBED_CHANNEL=${IMGBED_CHANNEL:-telegram}
+      - IMGBED_CHANNEL_NAME=${IMGBED_CHANNEL_NAME:-vpush-imgbed}
+      - IMGBED_FOLDER=${IMGBED_FOLDER:-vpush}
     volumes:
       - ./data:/data
       - ${IMA_ARCHIVE_HOST_PATH:-./data/ima}:/data/ima-archive

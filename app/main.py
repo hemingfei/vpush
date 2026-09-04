@@ -17,6 +17,7 @@ from . import auth
 from .api import create_api_router
 from .config import load_config
 from .db import DB
+from . import imgbed
 from .fetchers import build_fetchers
 from .feishu_documents import FeishuDocumentSyncService
 from .ima_documents import ImaDocumentService
@@ -183,6 +184,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
                 auth.hash_password(config.web.admin_password),
                 is_admin=True,
             )
+    imgbed.configure(config)
     fetchers = build_fetchers(config, db)
     notifiers = build_notifiers(config)
     scheduler = Scheduler(

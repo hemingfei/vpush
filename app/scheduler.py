@@ -1181,6 +1181,15 @@ def _fetch_kol_once(
     # 首次成功 fetch（含空列表）即打标：空账号/偶发空窗后，下一轮新帖必须正常推送。
     first_fetch = not kol.get("baseline_ready")
     post_ids = db.insert_posts_batch(posts)
+    try:
+        from . import imgbed
+
+        for post, post_id in zip(posts, post_ids):
+            if post_id is None:
+                continue
+            imgbed.enqueue_urls(db, post.images)
+    except Exception:  # noqa: BLE001 - 图床入队失败不影响抓取推送
+        logger.exception("图床入队失败 platform=%s kol=%s", kol["platform"], kol["name"])
     if first_fetch:
         db.mark_kol_baseline(kol["id"])
     # 空轮判定用「本轮是否新增入库」：时间线接口总是返回最近 N 条（含旧帖），
@@ -1811,6 +1820,7 @@ class Scheduler:
         self._last_cicc_alert_check = 0.0
         self._last_knowledge_notify = 0.0
         self._last_proxy_tick = 0.0
+        self._last_imgbed = 0.0
 
     def _submit_news_due(self):
         if self.news_service is None:
@@ -2077,6 +2087,14 @@ class Scheduler:
                     await asyncio.to_thread(tick_proxy_pools, self.db)
                 except Exception:  # noqa: BLE001
                     logger.exception("代理池刷新异常")
+            if now_mono - self._last_imgbed >= 20:
+                self._last_imgbed = now_mono
+                try:
+                    from . import imgbed
+
+                    await asyncio.to_thread(imgbed.process_pending, self.db)
+                except Exception:  # noqa: BLE001
+                    logger.exception("图床镜像异常")
             # 股票黑话别名识别 + 误标清理：每天一次（配 LLM 才识别，清理恒执行）
             if self._stock_alias_due():
                 ran = False

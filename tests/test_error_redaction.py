@@ -21,6 +21,8 @@ def test_redact_secrets_patterns():
     assert "<redacted>" in redact_secrets("400 on send?key=abc123DEF456ghi789JKL")
     assert "<redacted>" in redact_secrets("GET https://api.day.app/AbCdEf123456789/body")
     assert "<redacted>" in redact_secrets("Authorization: Bearer sk-proj-abcdef1234567890abcdef")
+    assert "imgbed_" not in redact_secrets("token=imgbed_062d923abf2c7414be04ea8b74d442fe")
+    assert "<redacted>" in redact_secrets("token=imgbed_062d923abf2c7414be04ea8b74d442fe")
     # 微博登录 META 响应里的账号线索
     out = redact_secrets("retcode=101 su=dXNlckBleGFtcGxlLmNvbQ== errcode=…")
     assert "dXNlckBleGFtcGxlLmNvbQ==" not in out

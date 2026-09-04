@@ -134,6 +134,17 @@ class PollingConfig:
 
 
 @dataclass
+class ImgbedConfig:
+    """自建 CloudFlare ImgBed：把 X 配图镜像成可直连的公开地址。未配 token 则关闭。"""
+
+    base_url: str = ""
+    token: str = ""
+    channel: str = "telegram"
+    channel_name: str = "vpush-imgbed"
+    folder: str = "vpush"
+
+
+@dataclass
 class WebConfig:
     allow_register: bool = True
     admin_password: str = ""
@@ -156,6 +167,7 @@ class Config:
     wechat: WeChatConfig = field(default_factory=WeChatConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     feishu_documents: FeishuDocumentsConfig = field(default_factory=FeishuDocumentsConfig)
+    imgbed: ImgbedConfig = field(default_factory=ImgbedConfig)
     db_path: str = "data/dav.db"
     # 管理员告警总开关：false 时不发任何告警、不启动 TG/飞书 bot 长轮询。
     # 本地开发/测试实例务必置 false，避免用生产 config 误发告警、抢生产 bot 轮询。
@@ -215,6 +227,11 @@ _ENV_MAP = {
     "WECHAT_APP_SECRET": ("wechat", "app_secret"),
     "DB_PATH": ("db_path",),
     "ALERTS_ENABLED": ("alerts_enabled",),
+    "IMGBED_BASE_URL": ("imgbed", "base_url"),
+    "IMGBED_TOKEN": ("imgbed", "token"),
+    "IMGBED_CHANNEL": ("imgbed", "channel"),
+    "IMGBED_CHANNEL_NAME": ("imgbed", "channel_name"),
+    "IMGBED_FOLDER": ("imgbed", "folder"),
 }
 
 
