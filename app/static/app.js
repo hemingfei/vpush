@@ -1311,7 +1311,7 @@ function imaTagMenuHtml(current) {
   const keys = Object.keys(counts).sort((a, b) => (counts[b] || 0) - (counts[a] || 0));
   if (current && !keys.includes(current)) keys.unshift(current);
   _imaTagMenu.keys = keys;
-  const items = [`<button type="button" role="option" class="kb-desk-day-option${current ? "" : " is-selected"}" aria-selected="${!current}" onclick="pickImaTag(-1)">全部标签</button>`];
+  const items = [`<button type="button" role="option" class="kb-desk-day-option${current ? "" : " is-selected"}" aria-selected="${!current}" onclick="pickImaTag(-1)">全部</button>`];
   keys.forEach((key, i) => {
     const on = key === current;
     items.push(`<button type="button" role="option" class="kb-desk-day-option${on ? " is-selected" : ""}" aria-selected="${on}" onclick="pickImaTag(${i})">${escapeHtml(key)}${counts[key] ? `（${counts[key]}）` : ""}</button>`);
@@ -1407,7 +1407,7 @@ function knowledgeSourceControlsHtml(selectedGroup = "") {
   }));
   const pillsHtml = `<div class="kb-source-pills-desk">${feishuSourcePillsHtml(sources, selectedGroup, "knowledge")}</div>`;
   const mobileOptions = [
-    `<option value="" ${!selectedGroup ? "selected" : ""}>全部研报库</option>`,
+    `<option value="" ${!selectedGroup ? "selected" : ""}>研报库</option>`,
     ...sources.map((s) => `<option value="${escapeHtml(s.group_id)}" ${s.group_id === selectedGroup ? "selected" : ""}>${escapeHtml(s.title)}</option>`)
   ].join("");
   const mobileSelectHtml = `<div class="kb-source-select-wrap"><select class="kb-source-select-mobile" aria-label="切换研报库" onchange="selectImaDocumentGroup(this.value)">${mobileOptions}</select></div>`;
@@ -1614,7 +1614,7 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
     <form class="ima-report-search" onsubmit="event.preventDefault();submitImaDocumentsSearch()">
       <label class="ima-report-searchbox">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜标题、公司、代码、行业或资料源" aria-label="搜索研报" oninput="queueImaDocumentsSearch()" oncompositionstart="_imaSearchComposing=true" oncompositionend="_imaSearchComposing=false;queueImaDocumentsSearch()">${clearBtn}</label>
     </form>
-    <div class="ima-report-filters">${sourceControls}<span id="ima-doc-day-nav-slot"></span><div class="ima-report-tag"><span class="sr-only">标签</span><button type="button" class="kb-desk-day ima-tag-trigger" id="ima-doc-tag" aria-haspopup="listbox" aria-expanded="false" onclick="toggleImaTagMenu(event)" hidden>全部标签</button></div></div>
+    <div class="ima-report-filters">${sourceControls}<span id="ima-doc-day-nav-slot"></span><div class="ima-report-tag"><span class="sr-only">标签</span><button type="button" class="kb-desk-day ima-tag-trigger" id="ima-doc-tag" aria-haspopup="listbox" aria-expanded="false" onclick="toggleImaTagMenu(event)" hidden>标签</button></div></div>
     <div id="ima-doc-filter-chips" class="ima-doc-filter-chips"></div>
     <div class="ima-report-columns" aria-hidden="true"><span>日期</span><span>标题</span><span>资料源</span></div>
   </header>
@@ -1628,7 +1628,7 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
     const uniqueTags = Object.keys(snapshot.tagCounts || {});
     if (tag && !uniqueTags.includes(tag)) uniqueTags.unshift(tag);
     if (tagTrigger) {
-      tagTrigger.textContent = tag || "全部标签";
+      tagTrigger.textContent = tag || "标签";
       if (uniqueTags.length || tag) tagTrigger.removeAttribute("hidden");
       else tagTrigger.hidden = true;
     }
@@ -1680,7 +1680,7 @@ async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = 
       : Object.keys(_imaTagCounts);
     if (tag && !uniqueTags.includes(tag)) uniqueTags.unshift(tag);
     if (tagTrigger) {
-      tagTrigger.textContent = tag || "全部标签";
+      tagTrigger.textContent = tag || "标签";
       if (uniqueTags.length || tag) tagTrigger.removeAttribute("hidden");
       else tagTrigger.hidden = true;
     }

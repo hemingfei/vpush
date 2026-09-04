@@ -3193,10 +3193,10 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   width: 12px;
   height: 12px;
 }
-.kb-source-select-wrap { display: none; }
+.kb-source-select-wrap { display: none; position: relative; }
 .kb-source-select-mobile {
   min-height: 42px;
-  padding: 0 10px;
+  padding: 0 28px 0 10px;
   border: var(--border-strong);
   border-radius: var(--radius-control);
   background: var(--color-surface);
@@ -3207,6 +3207,8 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   cursor: pointer;
   width: 100%;
   min-width: 0;
+  appearance: none;
+  -webkit-appearance: none;
 }
 .ima-report-filters { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: nowrap; }
 .ima-report-filters > .ima-report-source { flex: 1 1 auto; min-width: 0; display: flex; }
@@ -3557,23 +3559,40 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   .ima-report-search { grid-template-columns: minmax(0, 1fr); }
   .ima-report-filters { flex-wrap: nowrap; }
   .kb-source-pills-desk { display: none !important; }
-  .kb-source-select-wrap { display: inline-flex; flex: 1 1 auto; min-width: 0; }
-  .kb-source-select-mobile { display: inline-flex; width: 100%; }
-  .ima-report-filters > .ima-report-tag { flex: 1 1 auto; min-width: 0; }
+  .ima-report-filters > .ima-report-source,
+  .ima-report-filters > .ima-report-tag {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .kb-source-select-wrap { display: block; width: 100%; min-width: 0; }
+  .kb-source-select-mobile { display: block; width: 100%; }
   .ima-tag-trigger {
     display: flex;
+    position: relative;
     width: 100%;
     min-height: 42px;
     align-items: center;
-    justify-content: space-between;
     margin-left: 0;
+    padding: 0 28px 0 10px;
     border: var(--border-strong);
     border-radius: var(--radius-control);
     background: var(--color-surface);
-    white-space: nowrap;
     overflow: hidden;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .ima-tag-trigger::after { content: "▾"; opacity: 0.55; flex: 0 0 auto; }
+  .kb-source-select-wrap::after,
+  .ima-tag-trigger::after {
+    content: "▾";
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+    opacity: 0.55;
+    line-height: 1;
+  }
   .ima-report-tag > .kb-desk-day-menu[data-tag-menu] { max-height: 50dvh; }
   .ima-report-columns,
   .ima-doc-row,

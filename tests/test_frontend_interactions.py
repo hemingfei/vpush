@@ -3764,6 +3764,9 @@ def test_ima_report_header_responsive_source_and_search_clear():
     assert "feishuSourcePillsHtml(" in source_fn
     assert "kb-source-select-mobile" in source_fn
     assert "selectImaDocumentGroup(this.value)" in source_fn
+    assert ">研报库</option>" in source_fn
+    assert 'onclick="pickImaTag(-1)">全部</button>' in _fn_body("imaTagMenuHtml")
+    assert 'tag || "标签"' in render
 
     # Date slot moved out of search form into toolbar/filters
     head_start = render.index('<header class="ima-report-head">')
@@ -3777,15 +3780,20 @@ def test_ima_report_responsive_controls_css():
     assert ".kb-source-pills-desk" in css
     assert ".kb-source-select-mobile" in css
     assert ".ima-search-clear" in css
+    assert "appearance: none" in css
     # Desktop hides mobile select
     assert re.search(r"\.kb-source-select-wrap\s*\{[^}]*display:\s*none", css) or re.search(r"\.kb-source-select-mobile\s*\{[^}]*display:\s*none", css)
     # Mobile breakpoint switches pills to none and shows select
     mobile_matches = [m.start() for m in re.finditer(r"@media\s*\([^)]*max-width:\s*768px\)", css)]
-    mobile_parts = [css[idx:idx+1200] for idx in mobile_matches]
+    mobile_parts = [css[idx:idx+2400] for idx in mobile_matches]
     kb_mobile = next((part for part in mobile_parts if ".kb-source-pills-desk" in part), "")
     assert kb_mobile
     assert "display: none" in kb_mobile
     assert ".kb-source-select-mobile" in kb_mobile or ".kb-source-select-wrap" in kb_mobile
+    assert "flex: 1 1 0" in kb_mobile
+    assert 'content: "▾"' in kb_mobile
+    assert ".kb-source-select-wrap::after" in kb_mobile
+    assert ".ima-tag-trigger::after" in kb_mobile
 
 
 def test_knowledge_desk_defaults_to_latest_stream():
