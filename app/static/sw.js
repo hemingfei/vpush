@@ -99,7 +99,7 @@ self.addEventListener("notificationclick", (e) => {
 
 async function networkFirstNavigate(req) {
   try {
-    const fresh = await fetch(req);
+    const fresh = await fetch(req, { cache: "reload" });
     if (fresh && fresh.ok) return fresh;
   } catch {
     /* 离线 */
@@ -110,7 +110,9 @@ async function networkFirstNavigate(req) {
 async function networkFirst(req) {
   let fresh;
   try {
-    fresh = await fetch(req);
+    // cache:"reload" 绕过 HTTP 缓存：CF 会给裸 URL 模块强加 4h 浏览器缓存，
+    // 不绕过的话「网络优先」会被浏览器缓存短路，发版后模块最长滞后 4 小时
+    fresh = await fetch(req, { cache: "reload" });
   } catch {
     const cached = await caches.match(req, { ignoreSearch: true });
     return cached || Response.error();
