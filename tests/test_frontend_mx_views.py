@@ -53,3 +53,18 @@ def test_mx_views_assets_exist_with_scope():
     assert "async function renderMxViews(" in js
     assert "window._mxvPosts" in js
     assert "/api/mx-views/stream" in js
+
+
+def test_mx_views_skeleton_functions_exist():
+    js = (STATIC / "mx-views.js").read_text()
+    for fn in ("renderMxViews", "mxvLoadDay", "mxvApplySnapshot", "mxvGoLatest",
+               "mxvStep", "mxvEnsureSSE", "mxvTeardown"):
+        assert f"function {fn}(" in js, fn
+    assert "EventSource(" in js and "event: version" in js.replace("\\n", "\n") or "addEventListener" in js
+
+
+def test_mx_views_css_key_components():
+    css = (STATIC / "mx-views.css").read_text()
+    for cls in (".mxv-statusbar", ".mxv-timeline", ".mxv-tl-head", ".mxv-banner", ".mxv-chip",
+                ".mxv-board", ".mxv-row", ".mxv-drawer", ".mxv-kolcard", "@keyframes mxvFlashIn"):
+        assert cls in css, cls
