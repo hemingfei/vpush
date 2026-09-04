@@ -25,7 +25,8 @@ ADMIN_NEWS_JS = APP_JS.parent / "views" / "admin" / "news.js"
 ADMIN_USERS_JS = APP_JS.parent / "views" / "admin" / "users.js"
 ADMIN_KOLS_JS = APP_JS.parent / "views" / "admin" / "kol.js"
 ADMIN_INFRA_JS = APP_JS.parent / "views" / "admin" / "infra.js"
-VIEW_JS_SOURCES = (APP_JS, NEWS_JS, FEISHU_PERSONAL_JS, PUSH_SETTINGS_JS, ADMIN_CODES_JS, ADMIN_NEWS_JS, ADMIN_USERS_JS, ADMIN_KOLS_JS, ADMIN_INFRA_JS)
+ADMIN_DASHBOARD_JS = APP_JS.parent / "views" / "admin" / "dashboard.js"
+VIEW_JS_SOURCES = (APP_JS, NEWS_JS, FEISHU_PERSONAL_JS, PUSH_SETTINGS_JS, ADMIN_CODES_JS, ADMIN_NEWS_JS, ADMIN_USERS_JS, ADMIN_KOLS_JS, ADMIN_INFRA_JS, ADMIN_DASHBOARD_JS)
 
 
 def test_subscription_push_is_the_only_subscription_management_navigation_entry():
@@ -1252,7 +1253,7 @@ def test_dashboard_is_duty_console():
     dash = _fn_body("loadAdminDashboard")
     live = _fn_body("renderStatsData")
     rows = _fn_body("sourceRowsHtml")
-    src = APP_JS.read_text()
+    src = APP_JS.read_text() + ADMIN_DASHBOARD_JS.read_text()
     assert "核心指标" in dash
     assert "近 14 天推送趋势" in dash
     assert "今日新帖" in dash
@@ -1929,11 +1930,11 @@ def test_ima_sync_feedback_guards_duplicate_requests():
 
 def test_ima_save_reloads_with_authoritative_put_status_override():
     """保存后的 PUT 状态必须在等待完成后传给 stats reload，并覆盖 stale IMA 数据。"""
-    src = APP_JS.read_text(encoding="utf-8")
+    src = APP_JS.read_text(encoding="utf-8") + ADMIN_DASHBOARD_JS.read_text(encoding="utf-8")
     save = _fn_body("saveImaCollector")
     load = _fn_body("loadAdminStats")
 
-    assert re.search(r"async function loadAdminStats\(seq = _adminRenderSeq, authoritativeImaStatus = null\)", src)
+    assert re.search(r"async function loadAdminStats\(seq = currentAdminSeq\(\), authoritativeImaStatus = null\)", src)
     put = 'const savedImaStatus = await api("/api/admin/ima-collector"'
     assert put in save
     assert "saveOwner.savedImaStatus = savedImaStatus" in save
@@ -1949,8 +1950,8 @@ def test_ima_stats_failure_after_save_renders_cached_stats_with_retry():
     load = _fn_body("loadAdminStats")
 
     assert "let _lastAdminStatsSnapshot = null" in src
-    assert "_lastAdminStatsSnapshot = s" in load
-    assert "const fallbackStats = _lastAdminStatsSnapshot" in load
+    assert "setStatsSnapshot(s)" in load
+    assert "const fallbackStats = getStatsSnapshot()" in load
     assert "fallbackStats && authoritativeImaStatus" in load
     assert "statsLoadError" in load
     render = load.index('$("#admin-body").innerHTML = `')
