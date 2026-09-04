@@ -891,13 +891,15 @@ img.pt-icon { display: block; object-fit: contain; }
 /* 平台/筛选角标统一圆底衬：位图、实底、描边三种来源的外轮廓与底色归一 */
 .tl-pill .pt-icon,
 .platform-tab .pt-icon {
-  width: 26px;
-  height: 26px;
-  padding: 5px;
+  width: 22px;
+  height: 22px;
+  padding: 3px;
   box-sizing: border-box;
   border-radius: 50%;
   background: var(--color-bg-muted);
 }
+.tl-pill:hover .pt-icon,
+.platform-tab:hover .pt-icon { background: var(--color-accent-soft); }
 /* 选中反白时去掉底衬，避免蓝底上再叠灰圆 */
 .tl-pill.selected .pt-icon,
 .platform-tab.selected .pt-icon { background: transparent; }
@@ -2425,13 +2427,19 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
     justify-content: center;
   }
   .icon-badge-bar .tl-pill span { display: none; }
-  .icon-badge-bar .tl-pill .pt-icon { width: 28px; height: 28px; }
+  .icon-badge-bar .tl-pill .pt-icon {
+    width: min(30px, 88%);
+    aspect-ratio: 1;
+    height: auto;
+    padding: 6px;
+  }
   .icon-badge-bar > .fav-toggle,
   .icon-badge-bar .tl-actions button { font-size: 0; gap: 0; }
   .icon-badge-bar .funnel-icon,
   .icon-badge-bar .star-icon {
-    width: 28px;
-    height: 28px;
+    width: min(30px, 88%);
+    aspect-ratio: 1;
+    height: auto;
     padding: 6px;
     box-sizing: border-box;
     border-radius: 50%;
