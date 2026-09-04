@@ -138,6 +138,20 @@ def test_lightbox_traps_and_restores_focus(page: Page):
     expect(page.locator("#lightbox-trigger")).to_be_focused()
 
 
+def test_module_shell_survives_offline_reload(playwright_instance, static_origin):
+    browser = playwright_instance.chromium.launch(channel="chrome", headless=True)
+    context = browser.new_context(service_workers="allow")
+    page = context.new_page()
+    page.goto(static_origin, wait_until="networkidle")
+    page.reload(wait_until="networkidle")
+    page.wait_for_function("navigator.serviceWorker.controller !== null")
+    context.set_offline(True)
+    page.reload(wait_until="domcontentloaded")
+    expect(page.locator(".login-brand-title")).to_have_text("V Push")
+    context.close()
+    browser.close()
+
+
 def test_kol_editor_uses_shared_focus_and_dirty_close_guard(page: Page):
     page.evaluate(
         """() => {

@@ -36,9 +36,12 @@ jobs:
         run: |
           pip install -r requirements.txt -r requirements-test.txt
           python -m pytest -q --maxfail=1
-      - name: 前端 JS 语法检查
+      - name: 前端静态检查
         run: |
-          node --input-type=module --check < app/static/app.js
+          find app/static -type f -name '*.js' -print0 | while IFS= read -r -d '' file; do
+            node --input-type=module --check < "$file"
+          done
+          python scripts/bump_assets.py --check
           node --check miniprogram/utils/api.js
           node --check miniprogram/pages/*/*.js
       - name: sidecar 测试
