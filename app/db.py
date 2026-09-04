@@ -958,7 +958,7 @@ CREATE INDEX IF NOT EXISTS idx_subscriptions_kol_id ON subscriptions(kol_id);
 CREATE INDEX IF NOT EXISTS idx_source_events_platform ON source_events(platform, created_at);
 """
 
-ALLOWED_PLATFORMS = {"xueqiu", "combination", "weibo", "twitter", "ima", "zsxq"}
+ALLOWED_PLATFORMS = {"xueqiu", "combination", "weibo", "twitter", "ima", "zsxq", "truth"}
 
 _BUILTIN_NEWS = (
     ("bloomberg", "Bloomberg", (("最新财经", "https://quanwenrss.com/bloomberg"),)),
@@ -4013,6 +4013,14 @@ class DB:
     def count_posts(self) -> int:
         rows = self._rows("SELECT COUNT(*) AS n FROM posts")
         return rows[0]["n"]
+
+    def max_external_id_num(self, platform: str) -> int:
+        """平台内最大数字 external_id（Truth 存档按 id 增量拉取）。无帖返回 0。"""
+        rows = self._rows(
+            "SELECT MAX(CAST(external_id AS INTEGER)) AS m FROM posts WHERE platform = ?",
+            (platform,),
+        )
+        return int(rows[0]["m"] or 0)
 
     def delete_push_logs_older_than(self, days: int) -> int:
         """删除超过 N 天的推送日志，返回删除条数（帖子保留期之外的独立清理）。"""

@@ -199,6 +199,8 @@ def _detect_platform_from_link(text: str) -> str | None:
         return "ima"
     if re.search(r"(?:wx\.)?zsxq\.com", text):
         return "zsxq"
+    if re.search(r"(?:^|[/:.])truthsocial\.com", text):
+        return "truth"
     return None
 
 

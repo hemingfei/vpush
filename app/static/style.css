@@ -993,6 +993,17 @@ img.pt-icon { display: block; object-fit: contain; }
   border-radius: inherit;
   display: block;
 }
+/* Truth Social 认证粉勾：压在头像右下角，描边圈住避免和照片糊在一起 */
+.avatar-verified { position: relative; display: inline-flex; line-height: 0; flex-shrink: 0; }
+.avatar-verified .vs-check {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--color-surface);
+}
 .kol-info { flex: 1; min-width: 0; cursor: pointer; text-decoration: none; }
 .kol-info .base { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .kol-info .name { min-width: 104px; font-size: var(--text-body); font-weight: var(--font-weight-semibold); color: var(--color-text-strong); }
@@ -2355,15 +2366,15 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   }
   .tl-feed-panel,
   #kol-list { touch-action: pan-y; }
-  /* 动态/订阅/广场：一行等宽图标角标（全部+5平台+筛选/星标）。字只留 aria，禁止改回带字胶囊。 */
+  /* 动态/订阅/广场：一行等宽图标角标（全部+6平台+筛选/星标）。字只留 aria，禁止改回带字胶囊。 */
   .icon-badge-bar {
     display: grid;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-columns: repeat(8, minmax(0, 1fr));
     gap: 8px;
     width: 100%;
   }
   #tl-filterbar .icon-badge-bar {
-    grid-template-columns: repeat(8, minmax(0, 1fr));
+    grid-template-columns: repeat(9, minmax(0, 1fr));
   }
   .icon-badge-bar .tl-pills,
   .icon-badge-bar .tl-actions { display: contents; }

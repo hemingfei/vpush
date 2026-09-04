@@ -752,12 +752,12 @@ def test_mobile_plaza_and_timeline_filters_are_seven_equal_44px_targets():
     assert 'class="icon-badge-bar"' in _fn_body("renderHome")
     assert "tl-filterbar-top icon-badge-bar" in _fn_body("renderTimeline")
     assert "#tl-filterbar .icon-badge-bar" in css
-    assert "repeat(8, minmax(0, 1fr))" in css
+    assert "repeat(9, minmax(0, 1fr))" in css
 
     mobile = _media_block(css, "@media (max-width: 768px)")
     assert re.search(
         r"\.icon-badge-bar\s*\{[^}]*grid-template-columns:\s*"
-        r"repeat\(7,\s*minmax\(0,\s*1fr\)\)", mobile,
+        r"repeat\(8,\s*minmax\(0,\s*1fr\)\)", mobile,
     )
     assert re.search(
         r"[^{}]*\.home-filter-toggle[^{}]*\{[^}]*(?:min-)?height:\s*44px", mobile,
