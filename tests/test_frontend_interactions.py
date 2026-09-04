@@ -16,6 +16,8 @@ from scripts.bump_assets import asset_digest, module_urls
 APP_JS = Path(__file__).parent.parent / "app" / "static" / "app.js"
 STYLE_CSS = APP_JS.with_name("style.css")
 ROOT = Path(__file__).resolve().parents[1]
+DIALOG_JS = APP_JS.parent / "core" / "dialog.js"
+NEWS_JS = APP_JS.parent / "views" / "news.js"
 
 
 def test_subscription_push_is_the_only_subscription_management_navigation_entry():
@@ -59,9 +61,9 @@ def test_knowledge_row_hides_unused_cover_fallback_icon():
 
 
 
-def _fn_body(name: str) -> str:
-    """提取指定函数（或变量=函数）的函数体。"""
-    src = APP_JS.read_text()
+def _fn_body(name: str, path: Path = APP_JS) -> str:
+    """提取指定文件中的函数体。"""
+    src = path.read_text()
     m = re.search(rf"async\s+function\s+{name}\b|function\s+{name}\b", src)
     assert m, f"未找到函数 {name}"
     i = m.end()
@@ -5341,10 +5343,10 @@ def test_knowledge_acl_browsable_on_focus():
 def test_trap_focus_utility_and_a11y_enhancements():
     """P1: 模态框无障碍焦点管理与还原。"""
     src = APP_JS.read_text()
-    assert "function trapFocus(container, onEscape)" in src
-    assert "focusableSelector" in src
-    assert "MutationObserver" in src
-    assert "previousActive.focus()" in src
+    body = _fn_body("trapFocus", DIALOG_JS)
+    assert "focusableSelector" in body
+    assert "MutationObserver" in body
+    assert "previousActive.focus()" in body
     assert "trapFocus(mask, close)" in src
     assert "trapFocus(overlay, closeLightbox)" in src
     edit = _fn_body("adminEditKol")
@@ -5443,3 +5445,11 @@ def test_inline_handlers_do_not_read_module_lexicals():
         roots = set(INLINE_MEMBER_RE.findall(stripped)) - INLINE_BUILTINS - INLINE_SAFE_MEMBER_ROOTS
         assert not roots, attr
         assert ".then(" not in attr
+
+
+def test_core_helpers_are_real_modules():
+    src = APP_JS.read_text()
+    assert 'from "./core/html.js"' in src
+    assert 'from "./core/dialog.js"' in src
+    assert "function escapeHtml(" not in src
+    assert "function trapFocus(" not in src
