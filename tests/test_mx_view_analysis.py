@@ -218,3 +218,81 @@ def test_aggregate_day_state_strength_momentum_kols():
     assert topics["房地产"]["net"] == 0
     assert payload["trading_day"] == day and payload["snapshot_at"] == at
     assert any(k["kol_id"] == 1 for k in payload["kols"])
+
+
+# ---- Task 5：批次全流程 ----
+
+from app import mx_view_analysis as mva
+
+
+def _seed_posts(db, day):
+    kol = db.add_kol("mx", "王哥", "room1")
+    db.insert_post(platform="mx", kol_id=kol, external_id="m1", title="", url="",
+                   content="固态电池订单爆了", published_at=f"{day} 09:16:00")
+    db.insert_post(platform="mx", kol_id=kol, external_id="m2", title="", url="",
+                   content="看好算力", published_at=f"{day} 09:21:00")
+    return kol
+
+
+_VIEW_JSON = (
+    '{"opinions":[{"author":"王哥","target_type":"topic","target_name":"固态电池",'
+    '"direction":"bull","action":"","confidence":"high","summary":"订单爆了","evidence":[%d]}]}'
+)
+_SUMMARY_JSON = (
+    '{"text":"早盘王哥看多固态电池。","items":[{"type":"topic","name":"固态电池",'
+    '"direction":"bull"}]}'
+)
+
+
+def test_run_snapshot_batch_end_to_end(monkeypatch):
+    db = make_db()
+    day = "2026-09-04"  # 周五
+    kol = _seed_posts(db, day)
+    db.set_setting(mva.MX_VIEW_ENABLED_KEY, "1")
+    calls = {"n": 0}
+
+    def fake_chat(llm_config, messages, max_tokens, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _VIEW_JSON % db._rows("SELECT id FROM posts")[0]["id"]
+        return _SUMMARY_JSON
+
+    monkeypatch.setattr(mva.llm, "_chat", fake_chat)
+
+    result = mva.run_snapshot_batch(db, day=day, snapshot_at="09:20", window=("09:15", "09:20"))
+    assert result["ran"] is True and result["opinions"] == 1
+    assert result["message_count"] == 1
+    assert calls["n"] == 2  # 研判 + 总结
+    snap = db.get_mx_view_snapshot(day, "09:20")
+    assert snap["payload"]["summary"]["text"].startswith("早盘")
+    assert snap["payload"]["topics"][0]["name"] == "固态电池"
+    assert snap["payload"]["new_opinions"][0]["kol_id"] == kol
+    assert snap["payload"]["message_count"] == 1
+    assert mva.get_view_version(db) == 1  # live 批次推版本
+    m1_id = db._rows("SELECT id FROM posts WHERE external_id = 'm1'")[0]["id"]
+    assert db.get_mx_view_cursor() == m1_id
+
+    # 同窗口重跑：0 条新消息 → 不落空快照、不调 LLM、版本不动
+    calls["n"] = 10
+    r2 = mva.run_snapshot_batch(db, day=day, snapshot_at="09:20", window=("09:15", "09:20"))
+    assert r2["ran"] is False and calls["n"] == 10 and mva.get_view_version(db) == 1
+
+
+def test_run_due_view_batch_catchup_and_failure(monkeypatch):
+    db = make_db()
+    day = "2026-09-04"
+    _seed_posts(db, day)
+    assert mva.run_due_view_batch(db) is None  # 未启用 → 直接短路返回 None
+    db.set_setting(mva.MX_VIEW_ENABLED_KEY, "1")
+
+    monkeypatch.setattr(mva.llm, "_chat", lambda *a, **k: None)
+    try:
+        mva.run_snapshot_batch(db, day=day, snapshot_at="09:20", window=("09:15", "09:20"))
+        raise AssertionError("应当抛出 LLM 失败")
+    except RuntimeError:
+        pass
+    assert mva.get_fail_count(db) == 1
+    batch = db._rows("SELECT status, error FROM mx_view_batches")[0]
+    assert batch["status"] == "failed" and batch["error"]
+    assert db.get_mx_view_cursor() == 0  # 失败游标不动
+    assert db.get_mx_view_snapshot(day, "09:20") is None  # 失败不落快照

@@ -12,6 +12,8 @@ import re
 import threading
 from datetime import datetime, timedelta, timezone
 
+from . import llm
+
 logger = logging.getLogger(__name__)
 
 CN_TZ = timezone(timedelta(hours=8))
@@ -361,3 +363,210 @@ def aggregate_day_state(day, snapshot_at, opinions, prev_payload=None, new_opini
             for o in (new_opinions or [])
         ][:50],
     }
+
+
+# ---- 批次全流程（研判 → 校验落库 → 聚合 → 总结 → 版本推进） ----
+
+_batch_lock = threading.Lock()
+_fail_lock = threading.Lock()
+_fail_count = 0
+
+
+def get_fail_count(db) -> int:
+    with _fail_lock:
+        return _fail_count
+
+
+def _reset_fail_count() -> None:
+    global _fail_count
+    with _fail_lock:
+        _fail_count = 0
+
+
+def _bump_fail_count() -> int:
+    global _fail_count
+    with _fail_lock:
+        _fail_count += 1
+        return _fail_count
+
+
+_backfill_state_lock = threading.Lock()
+_backfill_state: dict = {
+    "running": False, "cancel": False, "day_from": "", "day_to": "",
+    "current_day": "", "done_windows": 0, "total_windows": 0, "error": "",
+}
+
+
+def backfill_running() -> bool:
+    with _backfill_state_lock:
+        return bool(_backfill_state["running"])
+
+
+SUMMARY_SYSTEM_PROMPT = (
+    "你是A股操作建议总结助手。输入某交易日某快照时刻的群体大V观点聚合数据（JSON）。"
+    '输出 JSON：{"text":"不超过3句话的今日操作建议","items":[{"type":"topic|stock","name":"标的",'
+    '"direction":"bull|bear","action":"建仓|加仓|减仓|清仓|做T|观察（可空）"}]}。'
+    "items 最多 6 条，只选最有共识的方向与重点个股；text 用最简洁的中文讲清：主攻什么、回避什么、重点个股怎么操作。"
+)
+
+
+def _agg_digest(payload: dict, prev_summary: str) -> str:
+    slim = {
+        "snapshot_at": payload["snapshot_at"],
+        "topics": payload["topics"][:8],
+        "stocks": payload["stocks"][:8],
+        "kol_count": len(payload.get("kols") or []),
+        "prev_summary": prev_summary,
+    }
+    return json.dumps(slim, ensure_ascii=False)
+
+
+def generate_summary(db, llm_config, payload) -> dict:
+    """每快照一版总结；LLM 失败/未配置不拖垮批次，回退占位文案。
+
+    未配置时交由 llm._chat 自行返回 None → 回退，与配置了坏 key 的失败同路。
+    """
+    fallback = {"text": "（本次总结生成失败，以上一版为准）", "items": []}
+    prev = ""
+    try:
+        snaps = db.list_mx_view_snapshots(payload["trading_day"])
+        earlier = [s for s in snaps if s["snapshot_at"] < payload["snapshot_at"] and s["payload"].get("summary")]
+        if earlier:
+            prev = earlier[-1]["payload"]["summary"].get("text") or ""
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        text = llm._chat(
+            llm_config,
+            [
+                {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
+                {"role": "user", "content": _agg_digest(payload, prev)},
+            ],
+            4000,
+            temperature=0,
+            attempts=2,
+            response_format={"type": "json_object"},
+            timeout=120,
+        )
+        if not text:
+            return fallback
+        parsed = json.loads(re.search(r"\{.*\}", text, re.DOTALL).group(0))
+        items = [
+            {
+                "type": str(i.get("type") or "topic"),
+                "name": str(i.get("name") or "")[:30],
+                "direction": i.get("direction") if i.get("direction") in ("bull", "bear") else "neutral",
+                "action": str(i.get("action") or ""),
+            }
+            for i in (parsed.get("items") or []) if isinstance(i, dict) and str(i.get("name") or "").strip()
+        ][:6]
+        return {"text": str(parsed.get("text") or "").strip()[:500] or fallback["text"], "items": items}
+    except Exception:  # noqa: BLE001
+        logger.exception("MX 观点总结生成失败")
+        return fallback
+
+
+def _maybe_summary(db, llm_config, payload) -> dict:
+    """按 mx_view_summary_min_interval_min 间隔复用上一版总结（默认 0=每快照必出）。"""
+    interval = get_summary_min_interval(db)
+    if interval > 0:
+        snaps = [s for s in db.list_mx_view_snapshots(payload["trading_day"])
+                 if s["payload"].get("summary") and s["snapshot_at"] < payload["snapshot_at"]]
+        if snaps:
+            last = snaps[-1]
+            last_min = _hhmm_to_min(last["snapshot_at"])
+            cur_min = _hhmm_to_min(payload["snapshot_at"])
+            if cur_min - last_min < interval:
+                return last["payload"]["summary"]
+    return generate_summary(db, llm_config, payload)
+
+
+def run_snapshot_batch(db, day, snapshot_at, window, kind="live", llm_config=None,
+                       advance_cursor: bool = True) -> dict:
+    """跑一个快照批次：取窗口消息 → LLM 研判 → 校验落库 → 聚合存快照。
+
+    失败抛异常（批次落 failed、游标不动）；0 条新消息直接返回 {"ran": False}。
+    回填（advance_cursor=False）时不推进消息游标，避免抢走 live 批次的未读窗口。
+    """
+    with _batch_lock:
+        batch_id = db.upsert_mx_view_batch(day, snapshot_at, kind)
+        cursor = db.get_mx_view_cursor()
+        kol_ids = get_kol_ids(db)
+        posts = db.list_mx_posts_in_window(
+            day, window[0], window[1], after_id=cursor,
+            kol_ids=kol_ids or None, limit=get_batch_size(db),
+        )
+        if not posts:
+            db.finish_mx_view_batch(batch_id, "done", 0)
+            return {"ran": False, "opinions": 0, "message_count": 0}
+        try:
+            raw = llm.research_viewpoints(
+                posts, get_topic_hints(db), db.get_action_tag_vocabulary(), llm_config=llm_config
+            )
+            if raw is None:
+                raise RuntimeError("LLM 研判失败（无有效响应）")
+            valid, new_topics = validate_opinions(
+                raw, posts, db.get_stock_aliases(), day, snapshot_at
+            )
+            db.replace_mx_opinions(batch_id, valid)
+            if advance_cursor:
+                db.set_mx_view_cursor(max(int(p["id"]) for p in posts))
+            if new_topics:
+                add_topic_candidates(db, new_topics)
+
+            opinions = db.list_mx_opinions(day)
+            snaps = db.list_mx_view_snapshots(day)
+            earlier = [s for s in snaps if s["snapshot_at"] < snapshot_at]
+            prev_payload = earlier[-1]["payload"] if earlier else None
+            payload = aggregate_day_state(day, snapshot_at, opinions, prev_payload, new_opinions=valid)
+            payload["message_count"] = len(posts)
+            payload["summary"] = _maybe_summary(db, llm_config, payload)
+            seq = len([s for s in snaps if s["snapshot_at"] < snapshot_at]) + 1
+            db.upsert_mx_view_snapshot(day, snapshot_at, seq, kind, payload, batch_id)
+            db.finish_mx_view_batch(batch_id, "done", len(posts))
+            if kind == "live":
+                bump_view_version(db)
+            _reset_fail_count()
+            logger.info("MX 观点快照 %s %s messages=%d opinions=%d", day, snapshot_at, len(posts), len(valid))
+            return {"ran": True, "opinions": len(valid), "message_count": len(posts)}
+        except Exception as e:  # noqa: BLE001
+            db.finish_mx_view_batch(batch_id, "failed", len(posts), str(e)[:500])
+            count = _bump_fail_count()
+            logger.error("MX 观点快照失败 %s %s（连续第 %d 次）: %s", day, snapshot_at, count, e)
+            raise
+
+
+def run_due_view_batch(db, llm_config=None):
+    """调度器入口：启用且工作日且无回填时，跑最近一个到期的计划快照。
+
+    错过多个快照（停机）时只跑一批、以实际时刻命名（时间轴不补空档）。
+    返回 {"ran":..., "failed":..., "consecutive":...} 或 None（无动作）。
+    """
+    if not get_enabled(db) or backfill_running():
+        return None
+    now = datetime.now(CN_TZ)
+    if now.weekday() >= 5:
+        return None
+    day = now.strftime("%Y-%m-%d")
+    now_hhmm = now.strftime("%H:%M")
+    times = resolve_schedule(load_schedule_config_raw(db))
+    done = {s["snapshot_at"] for s in db.list_mx_view_snapshots(day)}
+    last_done = max(done, default="")
+    pending = [t for t in times if t > last_done and t <= now_hhmm]
+    if not pending:
+        return None
+    if _batch_lock.locked():
+        return None
+    idx = times.index(pending[0])
+    win_start = MX_VIEW_FIRST_WINDOW_START if idx == 0 else times[idx - 1]
+    # 错过多个快照：快照名与窗口终点都用当前时刻，覆盖到最后一条消息
+    snapshot_at = pending[0] if len(pending) == 1 else now_hhmm
+    win_end = snapshot_at
+    try:
+        result = run_snapshot_batch(
+            db, day=day, snapshot_at=snapshot_at, window=(win_start, win_end),
+            kind="live", llm_config=llm_config,
+        )
+        return {"ran": result["ran"], "failed": False, "consecutive": get_fail_count(db)}
+    except Exception as e:  # noqa: BLE001
+        return {"ran": False, "failed": True, "error": str(e), "consecutive": get_fail_count(db)}
