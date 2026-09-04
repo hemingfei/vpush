@@ -1079,6 +1079,52 @@ CREATE TABLE IF NOT EXISTS post_tag_reviews (
     UNIQUE(post_id, tag)
 );
 CREATE INDEX IF NOT EXISTS idx_post_tag_reviews_status ON post_tag_reviews(status, id);
+
+-- MX 大V实时观点：结构化多空观点明细 / 研判批次 / 快照存档
+CREATE TABLE IF NOT EXISTS mx_opinions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL,
+    trading_day TEXT NOT NULL,
+    snapshot_at TEXT NOT NULL,
+    kol_id INTEGER NOT NULL,
+    target_type TEXT NOT NULL,
+    target_name TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    action TEXT NOT NULL DEFAULT '',
+    confidence TEXT NOT NULL DEFAULT 'high',
+    summary TEXT NOT NULL DEFAULT '',
+    evidence_post_ids TEXT NOT NULL DEFAULT '[]',
+    occurred_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (batch_id, kol_id, target_type, target_name)
+);
+CREATE INDEX IF NOT EXISTS idx_mx_opinions_day_target ON mx_opinions(trading_day, target_type, target_name);
+CREATE INDEX IF NOT EXISTS idx_mx_opinions_day_kol ON mx_opinions(trading_day, kol_id);
+
+CREATE TABLE IF NOT EXISTS mx_view_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trading_day TEXT NOT NULL,
+    snapshot_at TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'live',
+    status TEXT NOT NULL DEFAULT 'running',
+    message_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (trading_day, snapshot_at, kind)
+);
+
+CREATE TABLE IF NOT EXISTS mx_view_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trading_day TEXT NOT NULL,
+    snapshot_at TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'live',
+    payload TEXT NOT NULL,
+    batch_id INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (trading_day, snapshot_at)
+);
+CREATE INDEX IF NOT EXISTS idx_mx_view_snapshots_day ON mx_view_snapshots(trading_day, snapshot_at);
 """
 
 ALLOWED_PLATFORMS = {"xueqiu", "combination", "weibo", "twitter", "ima", "zsxq", "mx", "system"}
@@ -5036,6 +5082,143 @@ class DB:
         sql += "ORDER BY p.id ASC LIMIT ?"
         params.append(int(limit))
         return self._rows(sql, params)
+
+    # ---- MX 大V实时观点 ----
+
+    def upsert_mx_view_batch(self, trading_day, snapshot_at, kind, status="running",
+                             message_count=0, error="") -> int:
+        self._execute(
+            "INSERT INTO mx_view_batches (trading_day, snapshot_at, kind, status, message_count, error) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(trading_day, snapshot_at, kind) DO UPDATE SET "
+            "status = excluded.status, message_count = excluded.message_count, error = excluded.error",
+            (trading_day, snapshot_at, kind, status, int(message_count), str(error or "")),
+        )
+        rows = self._rows(
+            "SELECT id FROM mx_view_batches WHERE trading_day = ? AND snapshot_at = ? AND kind = ?",
+            (trading_day, snapshot_at, kind),
+        )
+        return int(rows[0]["id"])
+
+    def finish_mx_view_batch(self, batch_id, status, message_count=0, error="") -> None:
+        self._execute(
+            "UPDATE mx_view_batches SET status = ?, message_count = ?, error = ? WHERE id = ?",
+            (status, int(message_count), str(error or ""), int(batch_id)),
+        )
+
+    def replace_mx_opinions(self, batch_id, opinions: list[dict]) -> int:
+        """整批替换该批次的观点（重跑同批先清后插，满足 UNIQUE 约束）。
+
+        观点元素不携带 trading_day/snapshot_at（接口约定），交易日与快照时刻
+        取自批次记录；元素显式给出时以元素为准。
+        """
+        batch_id = int(batch_id)
+        self._execute("DELETE FROM mx_opinions WHERE batch_id = ?", (batch_id,))
+        batch = self._rows(
+            "SELECT trading_day, snapshot_at FROM mx_view_batches WHERE id = ?", (batch_id,)
+        )
+        batch_day = str(batch[0]["trading_day"]) if batch else ""
+        batch_at = str(batch[0]["snapshot_at"]) if batch else ""
+        for op in opinions or []:
+            self._execute(
+                "INSERT OR IGNORE INTO mx_opinions (batch_id, trading_day, snapshot_at, kol_id, "
+                "target_type, target_name, direction, action, confidence, summary, "
+                "evidence_post_ids, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    batch_id, str(op.get("trading_day") or batch_day),
+                    str(op.get("snapshot_at") or batch_at), int(op["kol_id"]),
+                    str(op["target_type"]), str(op["target_name"]), str(op["direction"]),
+                    str(op.get("action") or ""), str(op.get("confidence") or "high"),
+                    str(op.get("summary") or ""),
+                    json.dumps([int(i) for i in op.get("evidence_post_ids") or []]),
+                    str(op.get("occurred_at") or ""),
+                ),
+            )
+        rows = self._rows("SELECT COUNT(*) AS n FROM mx_opinions WHERE batch_id = ?", (batch_id,))
+        return int(rows[0]["n"])
+
+    def list_mx_opinions(self, trading_day, up_to_at=None) -> list[dict]:
+        sql = (
+            "SELECT o.*, k.name AS kol_name, k.avatar_url, COALESCE(k.priority, 0) AS kol_priority "
+            "FROM mx_opinions o JOIN kols k ON k.id = o.kol_id WHERE o.trading_day = ?"
+        )
+        params: list = [trading_day]
+        if up_to_at:
+            sql += " AND o.snapshot_at <= ?"
+            params.append(up_to_at)
+        sql += " ORDER BY o.snapshot_at ASC, o.occurred_at ASC, o.id ASC"
+        return self._rows(sql, tuple(params))
+
+    def upsert_mx_view_snapshot(self, trading_day, snapshot_at, seq, kind, payload: dict, batch_id=0) -> None:
+        self._execute(
+            "INSERT INTO mx_view_snapshots (trading_day, snapshot_at, seq, kind, payload, batch_id) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(trading_day, snapshot_at) DO UPDATE SET "
+            "seq = excluded.seq, kind = excluded.kind, payload = excluded.payload, "
+            "batch_id = excluded.batch_id, created_at = datetime('now')",
+            (trading_day, snapshot_at, int(seq), kind,
+             json.dumps(payload, ensure_ascii=False), int(batch_id)),
+        )
+
+    def _parse_snapshot_row(self, row) -> dict:
+        snap = dict(row)
+        try:
+            snap["payload"] = json.loads(snap.get("payload") or "{}")
+        except ValueError:
+            snap["payload"] = {}
+        return snap
+
+    def list_mx_view_snapshots(self, trading_day) -> list[dict]:
+        rows = self._rows(
+            "SELECT * FROM mx_view_snapshots WHERE trading_day = ? ORDER BY snapshot_at ASC",
+            (trading_day,),
+        )
+        return [self._parse_snapshot_row(r) for r in rows]
+
+    def get_mx_view_snapshot(self, trading_day, snapshot_at):
+        rows = self._rows(
+            "SELECT * FROM mx_view_snapshots WHERE trading_day = ? AND snapshot_at = ?",
+            (trading_day, snapshot_at),
+        )
+        return self._parse_snapshot_row(rows[0]) if rows else None
+
+    def mx_view_days(self) -> list[dict]:
+        return self._rows(
+            "SELECT trading_day, COUNT(*) AS snapshots FROM mx_view_snapshots "
+            "GROUP BY trading_day ORDER BY trading_day DESC LIMIT 60"
+        )
+
+    def get_mx_view_cursor(self) -> int:
+        raw = self.get_setting("mx_view_cursor")
+        try:
+            return int(raw or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def set_mx_view_cursor(self, value: int) -> None:
+        self.set_setting("mx_view_cursor", str(int(value)))
+
+    def list_mx_posts_in_window(self, day, start_hhmm, end_hhmm, after_id=0,
+                                kol_ids=None, limit=600) -> list[dict]:
+        """取某天某快照窗口内的 MX 消息（(start, end] 半开区间，HH:MM 字典序比较）。
+
+        blocked/hidden 不取（与打标游标同口径）；id > after_id 由游标保证不重扫。
+        MX 日消息量千条级，substr 过滤不走索引可接受。
+        """
+        sql = (
+            "SELECT p.id, p.external_id, p.title, p.content, p.published_at, p.kol_id, k.name AS kol_name "
+            "FROM posts p JOIN kols k ON k.id = p.kol_id "
+            "WHERE p.platform = 'mx' AND substr(p.published_at, 1, 10) = ? "
+            "AND substr(p.published_at, 12, 5) > ? AND substr(p.published_at, 12, 5) <= ? "
+            "AND p.id > ? AND COALESCE(p.blocked, 0) = 0 AND COALESCE(p.hidden, 0) = 0"
+        )
+        params: list = [day, start_hhmm, end_hhmm, int(after_id)]
+        if kol_ids:
+            sql += " AND p.kol_id IN (%s)" % ",".join("?" for _ in kol_ids)
+            params.extend(int(i) for i in kol_ids)
+        sql += " ORDER BY p.id ASC LIMIT ?"
+        params.append(int(limit))
+        return self._rows(sql, tuple(params))
 
     def has_post(self, post_id: int) -> bool:
         """帖子是否存在（手动加标签区分 404 与标签满/重复用）。"""
