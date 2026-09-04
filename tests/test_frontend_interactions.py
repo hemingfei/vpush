@@ -3399,7 +3399,9 @@ def test_xueqiu_badge_uses_official_mark():
     assert (APP_JS.parent / "xueqiu-mark.png").is_file()
     assert "img.pt-icon { display: block; object-fit: contain; }" in css
     assert ".pt-icon { width: 16px; height: 16px; flex-shrink: 0; }" in css
-    assert ".icon-badge-bar .tl-pill .pt-icon { width: 20px; height: 20px; }" in css
+    # 平台/筛选角标统一 26px 圆底衬，选中态去底衬反白
+    assert "border-radius: 50%;\n  background: var(--color-bg-muted);" in css
+    assert ".tl-pill.selected .pt-icon,\n.platform-tab.selected .pt-icon { background: transparent; }" in css
     assert ".post-item .p-name-line .p-platform .pt-icon { width: 13px; height: 13px; }" in css
 
 
