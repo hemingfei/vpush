@@ -1,4 +1,12 @@
 import { escapeHtml, imgProxyUrl, imgSrcFor } from "./core/html.js";
+import {
+  ARROW_UP_ICON, BELL_ICON, BELL_OFF_ICON, BOOK_ICON, BRAIN_ICON, DATABASE_ICON, DASHBOARD_ICON, FOLDER_ICON,
+  EYE_ICON, EYE_OFF_ICON, EXTERNAL_LINK_ICON, FEISHU_DATE_ICON, FILE_TEXT_ICON, FILTER_ICON,
+  GEAR_ICON, GITHUB_ICON, GRID_ICON, HISTORY_ICON, KEY_ICON, LIST_ICON,
+  MX_VIEWS_ICON, NEWS_ICON, PLUS_ICON, REFRESH_ICON, SEARCH_ICON, SEND_ICON, STAR_SVG,
+  THEME_AUTO_ICON, THEME_MOON_ICON, THEME_SUN_ICON, TRASH_ICON, USER_PLUS_ICON, USERS_ICON,
+  V_ICON, WSCN_LIVE_ICON, X_ICON,
+} from "./core/icons.js";
 import { trapFocus } from "./core/dialog.js";
 import { createLightbox } from "./core/lightbox.js";
 import { createNewsView } from "./views/news.js";
@@ -46,7 +54,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.136";
+const APP_VERSION = "1.12.139";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -55,51 +63,10 @@ const REPORT_WATCH_BLOCKED_TAGS = new Set([
 const TL_SOURCE_KEY = "timelineSource";
 const KB_LAST_GROUP_KEY = "kb-last-group";
 const PLATFORM_TABS = ["", "system", "mx", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
-const STATS_TABS = ["config", "cookies", "mx", "proxies", "plaza", "news"];
+const STATS_TABS = ["config", "cookies", "mx", "imgbed", "plaza", "news", "proxies"];
 const STALE_KOL_LIMIT = 10;
 const STALE_KOL_HOURS = 48;
 const TL_PLATFORMS = PLATFORM_TABS.map((p) => [p, p ? PLATFORM_LABELS[p] : "全部"]);
-const STAR_SVG = `<svg class="star-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.95 5.98 6.6.96-4.78 4.66 1.13 6.58L12 17.6l-5.9 3.1 1.13-6.58L2.45 9.44l6.6-.96L12 2.5z"/></svg>`;
-// 次要（降频）铃铛图标：线性风格，与 TRASH_ICON 一致（stroke=currentColor）
-const BELL_ICON = `<svg class="bell-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>`;
-const BELL_OFF_ICON = `<svg class="bell-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5"/><path d="M17 17H3s3-2 3-9a4.67 4.67 0 0 1 .3-1.7"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/><path d="m2 2 20 20"/></svg>`;
-// 显示/隐藏（筛选器语义）眼睛图标：线性风格，与 BELL_ICON 一致（stroke=currentColor）
-const EYE_ICON = `<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>`;
-const EYE_OFF_ICON = `<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><path d="m3 3 18 18"/></svg>`;
-const TRASH_ICON = `<svg class="trash-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>`;
-// 筛选漏斗图标：线性风格，与 EYE/BELL 一致（stroke=currentColor），补齐三键图标的视觉平衡
-const FILTER_ICON = `<svg class="funnel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>`;
-const V_ICON = `<svg class="nav-v-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 4.5L12 19.5L19.5 4.5"/></svg>`;
-const BOOK_ICON = `<svg class="nav-book-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>`;
-// 导航线性图标集（lucide 风格，stroke=currentColor，与 STAR/BELL/EYE 同一词汇）
-const LIST_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg>`;
-const MX_VIEWS_ICON = `<svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>`;
-const WSCN_LIVE_ICON = `<svg class="pt-icon" viewBox="180 240 640 620" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="m466.944 649.6 41.152-102.464 18.4 49.472L432.192 828.8H416.32L246.08 423.136c-11.808-26.208-34.656-46.368-62.72-54.336l-1.6-.448V367.2h216.992v.608l-.192.096c-17.664 11.84-24.48 25.696-24.48 45.056 0 5.664 2.784 14.08 2.784 14.08l90.08 222.56zm239.648-345.92h135.264v.832l-.864.128c-16.96 3.136-32.576 18.848-43.104 44.576l-1.632 4.16-161.28 424.96h-14.4L548.192 597.76l67.488-151.104 55.2 140.544L752 370.176l.032-.032c11.68-31.616-11.424-65.28-45.12-65.728h-.32v-.736zm-21.44-68.576c-1.152 2.304-5.568 12.8-5.568 12.8L538.432 573.44 433.056 310.944c-6.4-18.4-25.184-51.84-64.64-62.816v-.768h248.48v1.216h-.448c-6.784 0-53.856 1.504-53.856 51.296 0 7.168 4.512 24.096 6.304 29.248l18.304 46.24 54.336-132.544c3.936-9.984 2.048-16.256 1.472-18.496-4.416-10.88-17.312-23.68-35.648-26.56v-.448h115.904v.576c-19.584 4.192-29.632 18.944-38.144 37.184"/></svg>`;
-const NEWS_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M6 8h9M6 12h12M6 16h8"/><path d="M17 8h1"/></svg>`;
-const GRID_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>`;
-const GEAR_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
-const DASHBOARD_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>`;
-const FOLDER_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
-const BRAIN_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5a3 3 0 0 1 3 3c0 1.1-.5 2.1-1.3 2.8.8.7 1.3 1.7 1.3 2.8 0 2.2-1.8 4-4 4s-4-1.8-4-4c0-1.1.5-2.1 1.3-2.8A3 3 0 0 1 9 8a3 3 0 0 1 3-3z"/><path d="M9 9c-.7 0-1.3.6-1.3 1.3v.2c0 .4.2.8.5 1.1.3.3.3.7.3 1.1v.4c0 1.1.9 2 2 2s2-.9 2-2v-.4c0-.4 0-.8.3-1.1.3-.3.5-.7.5-1.1v-.2C16.3 9.6 15.7 9 15 9"/><path d="M7 8c-.7 0-1.3.6-1.3 1.3v.2c0 .4.2.8.5 1.1.3.3.3.7.3 1.1v.4c0 1.1.9 2 2 2s2-.9 2-2v-.4c0-.4 0-.8.3-1.1.3-.3.5-.7.5-1.1v-.2C11.3 8.6 10.7 8 10 8"/><path d="M5 7c-.7 0-1.3.6-1.3 1.3v.2c0 .4.2.8.5 1.1.3.3.3.7.3 1.1v.4c0 1.1.9 2 2 2s2-.9 2-2v-.4c0-.4 0-.8.3-1.1.3-.3.5-.7.5-1.1v-.2C8.3 7.6 7.7 7 7 7"/><path d="M3 6c-.7 0-1.3.6-1.3 1.3v.2c0 .4.2.8.5 1.1.3.3.3.7.3 1.1v.4c0 1.1.9 2 2 2s2-.9 2-2v-.4c0-.4 0-.8.3-1.1.3-.3.5-.7.5-1.1v-.2C6.3 6.6 5.7 6 5 6"/></svg>`;
-const USER_PLUS_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>`;
-const FILE_TEXT_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8M16 17H8"/></svg>`;
-const SEND_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg>`;
-const HISTORY_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>`;
-const DATABASE_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>`;
-const USERS_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`;
-const KEY_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>`;
-const PLUS_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>`;
-const X_ICON = `<svg class="x-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>`;
-const ARROW_UP_ICON = `<svg class="tl-badge-arrow" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3.59l7.457 7.45-1.414 1.42L13 7.41V21h-2V7.41l-5.043 5.05-1.414-1.42L12 3.59z"/></svg>`;
-const REFRESH_ICON = `<svg class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 5v4h4"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 19v-4h-4"/></svg>`;
-const EXTERNAL_LINK_ICON = `<svg class="external-link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`;
-const SEARCH_ICON = `<svg class="search-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`;
-const FEISHU_DATE_ICON = `<svg class="feishu-date-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 11h18"/></svg>`;
-const GITHUB_ICON = `<svg class="sidebar-gh-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.55 0-.27-.01-1.17-.02-2.12-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.75 2.69 1.25 3.35.95.1-.74.4-1.25.72-1.54-2.55-.29-5.23-1.28-5.23-5.68 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.05 0 0 .96-.31 3.15 1.18a10.9 10.9 0 0 1 5.74 0c2.19-1.49 3.15-1.18 3.15-1.18.62 1.59.23 2.76.11 3.05.73.81 1.18 1.83 1.18 3.09 0 4.41-2.69 5.38-5.25 5.67.41.35.77 1.05.77 2.12 0 1.53-.01 2.76-.01 3.14 0 .3.2.66.8.55A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></svg>`;
-// 主题切换图标：线性风格，与 TRASH_ICON 一致（stroke=currentColor）
-const THEME_SUN_ICON = `<svg class="theme-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>`;
-const THEME_MOON_ICON = `<svg class="theme-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
-const THEME_AUTO_ICON = `<svg class="theme-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>`;
 const state = {
   token: localStorage.getItem("dav_token") || "",
   user: null,
@@ -4187,6 +4154,7 @@ function statsTabsHtml(active = "config") {
     config: "抓取设置",
     cookies: "Cookie 管理",
     mx: "MX平台",
+    imgbed: "图床设置",
     proxies: "代理",
     plaza: "广场显示",
     news: "财经资讯",
@@ -4203,7 +4171,7 @@ function statsTabFromHash() {
 }
 
 function switchStatsTab(name) {
-  // 数据源页分段导航：抓取设置 / Cookie 管理 / 代理 / 广场显示 / 财经资讯
+  // 数据源页分段导航：抓取设置 / Cookie 管理 / MX平台 / 图床设置 / 代理 / 广场显示 / 财经资讯
   if (name === "legacy-dashboard" || name === "overview" || name === "health") {
     replaceRoute("admin/dashboard");
     return;
@@ -4291,6 +4259,73 @@ function cookieUpdatedLabel(info) {
   if (!info || !info.set) return "未写入";
   if (info.from_env) return "已从环境变量读取";
   return info.updated_at ? `已写入（${escapeHtml(fmtTs(info.updated_at))}）` : "已写入";
+}
+
+function imgbedStatusLabel(info) {
+  if (!info || !info.enabled) return "未接入";
+  if (info.token_from_env) return "已从环境变量读取";
+  return info.updated_at ? `已接入（${escapeHtml(fmtTs(info.updated_at))}）` : "已接入";
+}
+
+async function saveImgbedSettings() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
+  const baseUrl = $("#imgbed-base-url")?.value.trim() || "";
+  const apiKey = $("#imgbed-token")?.value.trim() || "";
+  const channelName = $("#imgbed-channel-name")?.value.trim() || "";
+  const folder = $("#imgbed-folder")?.value.trim() || "";
+  if (!baseUrl) {
+    flash("请填写图床地址", "error");
+    $("#imgbed-base-url")?.focus();
+    return;
+  }
+  try {
+    const saved = await api("/api/admin/imgbed", {
+      method: "PUT",
+      body: JSON.stringify({
+        base_url: baseUrl,
+        token: apiKey,
+        channel_name: channelName,
+        folder,
+      }),
+    });
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    if (saved?.last_check_error) {
+      flash(`已保存，但连通检查失败：${saved.last_check_error}`, "error");
+    } else {
+      flash("图床设置已保存，连通正常");
+    }
+    history.replaceState(null, "", "/admin/stats?tab=imgbed");
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    await loadAdminStats(routeSeq);
+  } catch (err) {
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    flash(err.message, "error");
+  }
+}
+
+let _imgbedClearPending = false;
+
+async function clearImgbedSettings() {
+  if (_imgbedClearPending) return;
+  if (!confirm("清除图床设置？清除后 X 配图退回服务端代理，直到重新接入。")) return;
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
+  _imgbedClearPending = true;
+  try {
+    await api("/api/admin/imgbed", { method: "DELETE" });
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    flash("已清除图床设置，X 配图走服务端代理");
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    await loadAdminStats(routeSeq);
+  } catch (err) {
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    flash(err.message, "error");
+  } finally {
+    _imgbedClearPending = false;
+  }
 }
 
 
@@ -5470,6 +5505,9 @@ function applyTheme() {
   if (meta) meta.setAttribute("content", dark ? "#11141a" : "#f8f8fb");
   const statusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
   if (statusBar) statusBar.setAttribute("content", dark ? "black-translucent" : "default");
+  // 同步 manifest 链接：部分安卓 PWA 独立窗口只认 manifest 静态 theme_color
+  const manifestLink = document.getElementById("manifest");
+  if (manifestLink) manifestLink.setAttribute("href", dark ? "/manifest-dark.webmanifest?v=2" : "/manifest.webmanifest?v=2");
   // 品牌符号（登录页 + topbar + 侧边栏）用融合版，深浅各一
   const logo = document.querySelector(".topbar-logo");
   if (logo) logo.src = dark ? "/logo-mark-dark.svg" : "/logo-mark.svg";
@@ -6057,9 +6095,13 @@ const {
   currentRouteSeq: () => routeRenderSeq,
   bumpRouteSeq: () => ++routeRenderSeq,
   currentAdminSeq: () => _adminRenderSeq,
+  FOLDER_ICON,
   imaMountState,
   imaCollectorPureCache,
   reloadAdminSettingsPage,
+  isAdminSettingsPath,
+  currentLocalLibraries: () => _localLibsLast,
+  focusCookieField,
 });
 
 
@@ -6106,6 +6148,7 @@ const {
   cookieRepairItems,
   cookieRepairBanner,
   cookieUpdatedLabel,
+  imgbedStatusLabel,
   setPageTitle,
   STALE_KOL_HOURS,
   STALE_KOL_LIMIT,
@@ -6135,6 +6178,7 @@ const {
   currentRouteSeq: () => routeRenderSeq,
   currentAdminSeq: () => _adminRenderSeq,
   routeQuery,
+  REFRESH_ICON,
   setPageTitle,
   imaMountState,
   imaCollectorPureCache,
@@ -6196,6 +6240,8 @@ async function router() {
   stopStatsTimer();
   stopImaProgressPoll();
   stopTimelinePoll();
+  // 离开 MX观点页：关 SSE 连接、停时钟/兜底轮询（重进页面时会重建）
+  if (typeof mxvTeardown === "function") mxvTeardown();
   // 离开动态页前记录滚动位置，切回时恢复阅读位置
   if (document.querySelector("#feed")) {
     if (isLiveTimeline()) _liveSavedScrollY = window.scrollY;
@@ -7628,6 +7674,8 @@ const INLINE_HANDLERS = {
   saveDnd,
   saveFeishuDocsConfig,
   saveImaCollector,
+  saveImgbedSettings,
+  clearImgbedSettings,
   saveKeywords,
   saveKeywordsMatchReports,
   saveKolEdit,

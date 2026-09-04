@@ -82,6 +82,15 @@ def test_mx_views_target_detail_with_evidence():
     assert op["kol_name"] == "王哥" and op["direction"] == "bull"
     assert op["evidence"][0]["content"] == "固态电池订单爆了"
 
+    kol = client.get(
+        f"/api/mx-views/kol/{db._rows('SELECT id FROM kols')[0]['id']}"
+        "?day=2026-09-04&at=09:20",
+        headers=headers,
+    ).json()
+    # 大V下钻时间线也要带作者名/头像字段（抽屉里渲染头像与名字）
+    assert kol["kol"]["name"] == "王哥" and len(kol["timeline"]) == 1
+    assert kol["timeline"][0]["kol_name"] == "王哥" and "avatar" in kol["timeline"][0]
+
 
 def test_mx_views_admin_config_and_status():
     client = make_client()

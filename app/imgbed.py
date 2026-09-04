@@ -47,11 +47,16 @@ def configure(config) -> None:
     _config = getattr(config, "imgbed", None)
 
 
+def current_config():
+    return _config
+
+
 def enabled(config=None) -> bool:
-    cfg = config or _config
+    cfg = config if config is not None else _config
     if cfg is None:
         return False
-    return bool(cfg.base_url and cfg.token)
+    cfg = getattr(cfg, "imgbed", cfg)
+    return bool(getattr(cfg, "base_url", "") and getattr(cfg, "token", ""))
 
 
 def source_host(url: str) -> str:
@@ -67,8 +72,14 @@ def is_source_url(url: str) -> bool:
     return host in SOURCE_HOSTS
 
 
+def public_host() -> str:
+    cfg = current_config()
+    host = source_host(getattr(cfg, "base_url", "") if cfg is not None else "")
+    return host or "img.053727.xyz"
+
+
 def public_url(url: str) -> bool:
-    return source_host(url) == "img.053727.xyz"
+    return source_host(url) == public_host()
 
 
 def enqueue_urls(db, urls: list[str] | None) -> int:
@@ -109,6 +120,51 @@ def enqueue_recent_posts(db, limit: int = 40) -> int:
             urls = []
         queued += enqueue_urls(db, urls if isinstance(urls, list) else [])
     return queued
+
+
+def apply_runtime(base_url: str, token: str, channel: str = "", channel_name: str = "", folder: str = "") -> None:
+    from .config import ImgbedConfig
+
+    current = current_config() or ImgbedConfig()
+    configure(
+        type("ImgbedRuntime", (), {"imgbed": ImgbedConfig(
+            base_url=base_url or current.base_url,
+            token=token or current.token,
+            channel=channel or current.channel,
+            channel_name=channel_name or current.channel_name,
+            folder=folder or current.folder,
+        )})()
+    )
+
+
+def probe(base_url: str) -> tuple[bool, str]:
+    """轻量连通检查：主机应答（含 4xx）即算可达；网络错误/5xx 判失败。"""
+    url = (base_url or "").strip()
+    if not url:
+        return False, "未配置图床地址"
+    try:
+        with _http_client(timeout=5, follow_redirects=False) as client:
+            resp = client.get(url.rstrip("/") + "/", headers={"User-Agent": BROWSER_UA})
+    except Exception as exc:  # noqa: BLE001 - 探测失败是结果不是异常
+        return False, redact_secrets(f"{type(exc).__name__}: {exc}")[:200]
+    if resp.status_code < 500:
+        return True, ""
+    return False, f"图床返回 HTTP {resp.status_code}"
+
+
+def reset_to_env() -> None:
+    """清除库内配置后回到环境变量/默认值。"""
+    import os
+
+    from .config import ImgbedConfig
+
+    configure(type("ImgbedRuntime", (), {"imgbed": ImgbedConfig(
+        base_url=os.environ.get("IMGBED_BASE_URL", "").strip(),
+        token=os.environ.get("IMGBED_TOKEN", "").strip(),
+        channel=os.environ.get("IMGBED_CHANNEL", "") or "telegram",
+        channel_name=os.environ.get("IMGBED_CHANNEL_NAME", "") or "vpush-imgbed",
+        folder=os.environ.get("IMGBED_FOLDER", "") or "vpush",
+    )})())
 
 
 def process_pending(db, config=None, limit: int = BATCH_LIMIT) -> int:

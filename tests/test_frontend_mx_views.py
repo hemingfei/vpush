@@ -23,8 +23,8 @@ def _fn_body(name: str, src: str = APP_JS) -> str:
 
 
 def test_index_html_includes_mx_views_assets():
-    assert 'href="/mx-views.css?v=1"' in INDEX
-    assert 'src="/mx-views.js?v=1"' in INDEX
+    assert 'href="/mx-views.css?v=2"' in INDEX
+    assert 'src="/mx-views.js?v=2"' in INDEX
 
 
 def test_router_and_nav_register_mx_views():
@@ -32,6 +32,7 @@ def test_router_and_nav_register_mx_views():
     assert '"mx-views"' in prefixes
     router = _fn_body("router")
     assert 'page === "mx-views"' in router and "renderMxViews" in router
+    assert "mxvTeardown" in router  # 离开页面清理 SSE/定时器
     nav = APP_JS[APP_JS.index("const NAV ="):APP_JS.index("const SIDEBAR_SLIM_KEY")]
     assert 'route: "mx-views"' in nav and 'label: "MX观点"' in nav
     assert 'route: "admin/mx-views"' in nav and 'label: "MX观点"' in nav

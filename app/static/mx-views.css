@@ -11,7 +11,8 @@
 .mxv-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px;}
 .mxv-dot.live{background:var(--mxv-bear);animation:mxvBreath 2s ease-in-out infinite;}
 .mxv-dot.off{background:var(--mxv-faint);}
-.mxv-dot.sse{background:var(--mxv-accent);}
+.mxv-dot.sse{background:var(--mxv-faint);}
+.mxv-dot.sse.on{background:var(--mxv-accent);box-shadow:0 0 6px rgba(91,140,255,.8);}
 @keyframes mxvBreath{0%,100%{opacity:.4}50%{opacity:1}}
 @keyframes mxvFlashIn{from{opacity:0;transform:translateY(-6px);background:rgba(91,140,255,.18)}to{opacity:1;transform:none}}
 .mxv-timeline{background:var(--mxv-panel);border:1px solid var(--mxv-line);border-radius:10px;padding:10px 14px;margin-bottom:12px;}
@@ -19,8 +20,11 @@
 .mxv-tl-rail{position:absolute;top:16px;left:0;right:0;height:3px;background:#1a2a4d;border-radius:2px;}
 .mxv-tl-done{position:absolute;top:16px;height:3px;border-radius:2px;
   background:linear-gradient(90deg,#2e4a8a,var(--mxv-accent));box-shadow:0 0 8px rgba(91,140,255,.6);}
-.mxv-tl-tick{position:absolute;top:12px;width:1px;height:9px;background:#3a4c74;cursor:pointer;}
-.mxv-tl-tick.special{top:8px;color:var(--mxv-gold);}
+/* 1px 可见刻度 + 8px 透明热区（background-clip:content-box），移动端也点得中 */
+.mxv-tl-tick{position:absolute;top:12px;width:9px;height:9px;margin-left:-4px;
+  background-color:#3a4c74;background-clip:content-box;padding:0 4px;cursor:pointer;}
+.mxv-tl-tick:hover{background-color:var(--mxv-accent);}
+.mxv-tl-tick.special{top:8px;height:13px;background-color:var(--mxv-gold);}
 .mxv-tl-head{position:absolute;top:2px;transform:translateX(-50%);text-align:center;cursor:pointer;}
 .mxv-tl-head .t{background:linear-gradient(90deg,#5b8cff,#2e6bff);color:#fff;border-radius:5px;
   padding:1px 8px;font-size:12px;white-space:nowrap;box-shadow:0 0 10px rgba(91,140,255,.8);}
@@ -39,6 +43,7 @@
 .mxv-chip{border-radius:20px;padding:2px 10px;font-size:12px;cursor:pointer;border:1px solid;}
 .mxv-chip.bull{background:#2a1218;border-color:#5c2330;color:#ff8090;}
 .mxv-chip.bear{background:#0f241d;border-color:#1d4a38;color:#5fe8bd;}
+.mxv-chip.neutral{background:#1a2333;border-color:#2a3a5c;color:var(--mxv-muted);}
 .mxv-boards{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;}
 @media (max-width:900px){.mxv-boards{grid-template-columns:1fr;}}
 .mxv-board{background:var(--mxv-panel);border:1px solid var(--mxv-line);border-radius:10px;padding:10px 12px;}

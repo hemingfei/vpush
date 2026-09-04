@@ -2,7 +2,7 @@
 window._mxvPosts = []; // 证据原帖缓存，供 app.js openRawModal 查找
 window._mxvTargets = []; // 标的索引，供 onclick 按下标打开（避免外部名称注入 JS 字符串）
 const _mxv = { seq: 0, day: null, days: [], snapshots: [], at: null, payload: null,
-  atLatest: true, hasNew: false, es: null, pollTimer: null, clockTimer: null, drawer: null };
+  atLatest: true, hasNew: false, es: null, sseOk: false, pollTimer: null, clockTimer: null, drawer: null };
 
 function mxvTeardown() {
   if (_mxv.es) { try { _mxv.es.close(); } catch (e) {} _mxv.es = null; }
@@ -10,7 +10,7 @@ function mxvTeardown() {
   if (_mxv.clockTimer) { clearInterval(_mxv.clockTimer); _mxv.clockTimer = null; }
   const d = document.querySelector(".mxv-drawer-mask"); if (d) d.remove();
   const dr = document.querySelector(".mxv-drawer"); if (dr) dr.remove();
-  Object.assign(_mxv, { day: null, payload: null, at: null, drawer: null, hasNew: false });
+  Object.assign(_mxv, { day: null, payload: null, at: null, drawer: null, hasNew: false, sseOk: false });
 }
 
 async function renderMxViews(seq) {
@@ -69,6 +69,10 @@ function mxvStep(dir) {
   if (next) mxvApplySnapshot(next.snapshot_at);
 }
 
+function mxvSseDotSync() {
+  document.querySelectorAll(".mxv-dot.sse").forEach((d) => d.classList.toggle("on", !!_mxv.sseOk));
+}
+
 function mxvEnsureSSE() {
   if (!state.token || _mxv.es) return;
   try {
@@ -82,15 +86,30 @@ function mxvEnsureSSE() {
       }
     });
     es.onerror = () => { // EventSource 自动重连；兜底轮询 60s
+      _mxv.sseOk = false;
+      mxvSseDotSync();
       if (!_mxv.pollTimer) _mxv.pollTimer = setInterval(() => { if (_mxv.atLatest) mxvRefreshLatest(); }, 60000);
     };
-    es.onopen = () => { if (_mxv.pollTimer) { clearInterval(_mxv.pollTimer); _mxv.pollTimer = null; } };
+    es.onopen = () => {
+      _mxv.sseOk = true;
+      mxvSseDotSync();
+      if (_mxv.pollTimer) { clearInterval(_mxv.pollTimer); _mxv.pollTimer = null; }
+    };
     _mxv.es = es;
   } catch (e) { /* SSE 不可用时静默，靠手动刷新 */ }
 }
 
 async function mxvRefreshLatest() {
   if (!routeStillActive(_mxv.seq)) return;
+  if (!_mxv.day) { // 空态停留：live 首个快照落库后自动恢复
+    try {
+      const daysData = await api("/api/mx-views/days");
+      if (!routeStillActive(_mxv.seq)) return;
+      _mxv.days = (daysData.days || []).map((d) => d.trading_day);
+      if (_mxv.days.length) await mxvLoadDay(_mxv.days[0], _mxv.seq);
+    } catch (e) { /* 无数据保持空态 */ }
+    return;
+  }
   const dayData = await api(`/api/mx-views/day?day=${encodeURIComponent(_mxv.day)}`).catch(() => null);
   if (!dayData || !routeStillActive(_mxv.seq)) return;
   _mxv.snapshots = dayData.snapshots || [];
@@ -117,7 +136,7 @@ function mxvRootHtml() {
       <span class="mxv-pill" id="mxv-market"><span class="mxv-dot off"></span>—</span>
       <span class="mxv-pill" id="mxv-clock">--:--:--</span>
       <span class="mxv-pill">数据 ${escapeHtml(_mxv.at || "—")}${p.message_count != null ? ` · ${p.message_count} 条消息` : ""}</span>
-      <span class="mxv-pill"><span class="mxv-dot sse"></span>SSE</span>
+      <span class="mxv-pill"><span class="mxv-dot sse${_mxv.sseOk ? " on" : ""}"></span>SSE</span>
       <select class="mxv-pill" style="color:var(--mxv-text)" onchange="mxvPickDay(this.value)" aria-label="选择交易日">${dayOpts}</select>
       <button class="mxv-btn" onclick="mxvRefreshLatest()" style="margin-left:auto">刷新</button>
     </div>
@@ -140,13 +159,12 @@ function mxvTimelineHtml() {
     const special = ["12:00", "16:00"].includes(s.snapshot_at) || i === 0;
     return `<div class="mxv-tl-tick ${special ? "special" : ""}" style="left:${left}%"
       title="${s.snapshot_at} · ${s.message_count}条消息" onclick="mxvApplySnapshot('${s.snapshot_at}')"></div>
-      <div class="mxv-tl-head" style="left:${left}%;${active ? "" : "display:none"}" id="mxv-tl-head">
+      <div class="mxv-tl-head" style="left:${left}%;${active ? "" : "display:none"}">
         <div class="t">${s.snapshot_at}</div><div class="s"></div></div>`;
   }).join("");
-  const idx = snaps.findIndex((s) => s.snapshot_at === _mxv.at);
+  const idx = Math.max(0, snaps.findIndex((s) => s.snapshot_at === _mxv.at));
   const doneW = n <= 1 ? 100 : (idx / (n - 1)) * 100;
-  const prev = idx > 0 ? snaps[idx - 1] : null;
-  const diff = mxvDiffText(_mxv.snapshots[idx], prev);
+  const diff = mxvDiffText();
   return `
   <div class="mxv-timeline">
     <div style="display:flex;align-items:center;gap:8px">
@@ -164,15 +182,12 @@ function mxvTimelineHtml() {
   </div>`;
 }
 
-function mxvDiffText(cur, prev) {
-  if (!cur || !_mxv.payload) return "";
-  const prevMap = {};
-  ((prev && prev.payload) ? prev.payload.topics : []).forEach((t) => { prevMap[t.name] = t.net; });
+function mxvDiffText() {
+  // momentum = net - 上一快照 net，反推上一版数值即可，不必再拉上一份 payload
+  if (!_mxv.payload) return "";
   const parts = [];
   (_mxv.payload.topics || []).slice(0, 3).forEach((t) => {
-    if (prevMap[t.name] !== undefined && t.net !== prevMap[t.name]) {
-      parts.push(`${escapeHtml(t.name)} 净多空 ${prevMap[t.name]}→${t.net}`);
-    }
+    if (t.momentum) parts.push(`${escapeHtml(t.name)} 净多空 ${t.net - t.momentum}→${t.net}`);
   });
   return parts.join(" · ");
 }
@@ -207,9 +222,9 @@ function mxvStartClock() {
 
 function mxvChipsHtml(items) {
   return (items || []).map((it) => {
-    const label = it.action ? `${it.name} ${it.action}×${it.count || ""}` :
-      `${it.name}${it.count ? ` ×${it.count}` : ""}`;
-    const cls = it.direction === "bear" ? "bear" : "bull";
+    const cnt = it.count != null ? ` ×${it.count}` : "";
+    const label = it.action ? `${it.name} ${it.action}${cnt}` : `${it.name}${cnt}`;
+    const cls = it.direction === "bear" ? "bear" : it.direction === "neutral" ? "neutral" : "bull";
     const target = it.type === "stock" ? "stock" : "topic";
     window._mxvTargets.push({ type: target, name: it.name });
     const idx = window._mxvTargets.length - 1;
@@ -348,7 +363,7 @@ function mxvDrawerShell(title, subHtml) {
     <div class="mxv-drawer-mask" onclick="mxvCloseDrawer()"></div>
     <aside class="mxv-drawer" role="dialog" aria-label="${escapeHtml(title)}">
       <button class="close" onclick="mxvCloseDrawer()" aria-label="关闭">✕</button>
-      <h3>${escapeHtml(title)}</h3>
+      <h3 id="mxv-drawer-title">${escapeHtml(title)}</h3>
       <div id="mxv-drawer-body">${subHtml || `<div class="mxv-empty">加载中…</div>`}</div>
     </aside>`;
 }
@@ -412,6 +427,8 @@ async function mxvOpenKol(kolId) {
     const body = document.getElementById("mxv-drawer-body");
     if (!body) return;
     _mxv.drawer.title = data.kol.name;
+    const h = document.getElementById("mxv-drawer-title");
+    if (h) h.textContent = data.kol.name;
     body.innerHTML = `
       <div style="margin:6px 0 10px;display:flex;gap:10px;align-items:center">
         ${data.kol.avatar ? `<img src="${escapeHtml(data.kol.avatar)}" style="width:34px;height:34px;border-radius:50%" alt="">` : ""}

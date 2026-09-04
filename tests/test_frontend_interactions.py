@@ -17,6 +17,7 @@ APP_JS = Path(__file__).parent.parent / "app" / "static" / "app.js"
 STYLE_CSS = APP_JS.with_name("style.css")
 ROOT = Path(__file__).resolve().parents[1]
 DIALOG_JS = APP_JS.parent / "core" / "dialog.js"
+ICONS_JS = APP_JS.parent / "core" / "icons.js"
 NEWS_JS = APP_JS.parent / "views" / "news.js"
 FEISHU_PERSONAL_JS = APP_JS.parent / "views" / "feishu-personal.js"
 PUSH_SETTINGS_JS = APP_JS.parent / "views" / "push-settings.js"
@@ -26,7 +27,44 @@ ADMIN_USERS_JS = APP_JS.parent / "views" / "admin" / "users.js"
 ADMIN_KOLS_JS = APP_JS.parent / "views" / "admin" / "kol.js"
 ADMIN_INFRA_JS = APP_JS.parent / "views" / "admin" / "infra.js"
 ADMIN_DASHBOARD_JS = APP_JS.parent / "views" / "admin" / "dashboard.js"
-VIEW_JS_SOURCES = (APP_JS, NEWS_JS, FEISHU_PERSONAL_JS, PUSH_SETTINGS_JS, ADMIN_CODES_JS, ADMIN_NEWS_JS, ADMIN_USERS_JS, ADMIN_KOLS_JS, ADMIN_INFRA_JS, ADMIN_DASHBOARD_JS)
+IMA_JS = APP_JS.parent / "views" / "ima.js"
+ADMIN_IMA_COLLECTOR_JS = APP_JS.parent / "views" / "admin" / "ima-collector.js"
+ADMIN_KNOWLEDGE_JS = APP_JS.parent / "views" / "admin" / "knowledge.js"
+VIEW_JS_SOURCES = (
+    APP_JS,
+    NEWS_JS,
+    FEISHU_PERSONAL_JS,
+    PUSH_SETTINGS_JS,
+    ADMIN_CODES_JS,
+    ADMIN_NEWS_JS,
+    ADMIN_USERS_JS,
+    ADMIN_KOLS_JS,
+    ADMIN_INFRA_JS,
+    ADMIN_DASHBOARD_JS,
+    IMA_JS,
+    ADMIN_IMA_COLLECTOR_JS,
+    ADMIN_KNOWLEDGE_JS,
+)
+
+
+def test_ima_modules_receive_cross_module_dependencies():
+    knowledge = ADMIN_KNOWLEDGE_JS.read_text()
+    collector = ADMIN_IMA_COLLECTOR_JS.read_text()
+    app = APP_JS.read_text()
+
+    assert "REFRESH_ICON," in knowledge[:knowledge.index("function onKnowledgeTabsKey")]
+    assert "let _toastTimer = null;" in app
+    assert "let _toastTimer = null;" not in knowledge
+    assert "FOLDER_ICON," in collector[:collector.index("function imaMountCacheKey")]
+    for dependency in ("isAdminSettingsPath,", "currentLocalLibraries,", "focusCookieField,"):
+        assert dependency in collector[:collector.index("function imaMountCacheKey")]
+    assert "_localLibsLast" not in collector
+    knowledge_call = app[app.index("createAdminKnowledgeView({"):]
+    collector_call = app[app.index("createAdminImaCollectorView({"):]
+    assert "REFRESH_ICON," in knowledge_call[:knowledge_call.index("});")]
+    assert "FOLDER_ICON," in collector_call[:collector_call.index("});")]
+    for dependency in ("isAdminSettingsPath,", "currentLocalLibraries:", "focusCookieField,"):
+        assert dependency in collector_call[:collector_call.index("});")]
 
 
 def test_subscription_push_is_the_only_subscription_management_navigation_entry():
@@ -110,6 +148,10 @@ def _fn_body(name: str, path: Path = APP_JS) -> str:
         except AssertionError as err:
             last_err = err
     raise last_err
+
+
+def _all_view_source() -> str:
+    return "\n".join(path.read_text() for path in VIEW_JS_SOURCES if path.exists())
 
 
 def _has_route_seq_capture(text: str) -> bool:
@@ -760,13 +802,15 @@ def test_plaza_source_visibility_admin_and_pills():
     """管理员可设广场数据源自动/显示/隐藏；角标和旧 #/zsxq 都认可见列表。"""
     src = APP_JS.read_text()
     css = STYLE_CSS.read_text()
-    assert 'STATS_TABS = ["config", "cookies", "mx", "proxies", "plaza", "news"]' in src
+    assert 'STATS_TABS = ["config", "cookies", "mx", "imgbed", "plaza", "news", "proxies"]' in src
     tabs = _fn_body("statsTabsHtml")
     assert 'data-tab="${tab}"' in tabs
     assert "proxies:" in tabs
     assert "plaza:" in tabs
     assert "mx:" in tabs
     assert "MX平台" in tabs
+    assert "imgbed:" in tabs
+    assert "图床设置" in tabs
     assert "news:" in tabs
     assert "财经资讯" in tabs
     assert "动态广场显示" in _fn_body("loadAdminStats")
@@ -1251,6 +1295,47 @@ def test_stats_cookie_repair_deep_link():
     assert "src.xueqiu && !src.xueqiu.ok" in repair
 
 
+def test_stats_imgbed_tab_matches_cookie_settings_pattern():
+    src = APP_JS.read_text()
+    dashboard = ADMIN_DASHBOARD_JS.read_text()
+    assert 'imgbed: "图床设置"' in src
+    assert "st-imgbed" in dashboard
+    assert "API 密钥" in dashboard
+    # 「API Token」是 st-mx 面板的字段文案；图床区块（imgbedSettingsHtml 起）内不允许出现
+    imgbed_html = dashboard.split("imgbedSettingsHtml", 1)[1].split("function plazaSourceEffect", 1)[0]
+    assert ">API Token<" not in imgbed_html
+    assert "保存图床设置" in dashboard
+    # Cookie 同款工具条：粘贴助手 + 危险清除，不用抓取设置的保存行
+    assert "pasteCookieField('imgbed-token')" in dashboard
+    assert 'onclick="clearImgbedSettings()"' in dashboard
+    assert "cfg-save-row" not in dashboard.split("imgbedSettingsHtml", 1)[1].split("function plazaSourceEffect", 1)[0]
+    # 首跑接线说明：讲三步接线，GitHub 只作来源标注
+    meta = dashboard.split("section-title\">图床</h2>", 1)[1].split("</p>", 1)[0]
+    assert "打开图床后台" in meta
+    assert "创建 API 密钥" in meta
+    assert "CloudFlare-ImgBed" in meta
+    # 渠道/目录收进高级，不占首屏
+    advanced = dashboard.split("imgbed-advanced", 1)[1].split("</details>", 1)[0]
+    assert "imgbed-channel-name" in advanced
+    assert "imgbed-folder" in advanced
+    # 计数拆开，失败独立可见
+    assert "失败 ${info.failed_count || 0} 张" in dashboard
+    assert "failed_count" in _fn_body("dutyStripHtml", ADMIN_DASHBOARD_JS)
+    assert "tab=imgbed" in _fn_body("dutyStripHtml", ADMIN_DASHBOARD_JS)
+    save = _fn_body("saveImgbedSettings")
+    assert "flash(" in save
+    assert "alert(" not in save
+    assert "/api/admin/imgbed" in save
+    assert "loadAdminStats(routeSeq)" in save
+    # 只在地址为空的校验分支 focus；保存成功后不再把焦点拽回地址
+    assert save.count("focus()") == 1
+    clear = _fn_body("clearImgbedSettings")
+    assert "confirm(" in clear
+    assert 'method: "DELETE"' in clear
+    assert "type=\"password\"" in dashboard
+    assert "autocomplete=\"new-password\"" in dashboard
+
+
 def test_stats_default_tab_is_config():
     switch = _fn_body("switchStatsTab")
     assert 'name === "config" ? "/admin/stats"' in switch
@@ -1469,7 +1554,7 @@ def test_ima_pdf_download_checks_session_owner_before_every_side_effect():
         "URL.revokeObjectURL(url)",
         'flash(`PDF 下载失败：${err.message}`, "error")',
     ]
-    assert "const routeSeq = routeRenderSeq" in body[:fetch]
+    assert "const routeSeq = currentRouteSeq()" in body[:fetch]
     assert "const token = state.token" in body[:fetch]
     assert "const sessionGeneration = imaMountState.sessionGeneration" in body[:fetch]
     for side_effect in side_effects:
@@ -1505,17 +1590,17 @@ def test_knowledge_reader_pdf_fail_uses_header_download_only():
 
 def test_ima_pdf_load_is_owned_by_route_and_reader_generation_before_load_or_fail_side_effects():
     """旧阅读器的 PDF 完成、校验失败和 iframe 错误不得污染当前阅读器。"""
-    src = APP_JS.read_text()
+    src = _all_view_source()
     reader = _fn_body("renderImaDocument")
     load = _fn_body("loadImaPdf")
     fail = _fn_body("showImaPdfFail")
 
-    assert "const readerSeq = ++_imaReaderSeq" in reader
+    assert "const readerSeq = bumpImaReaderSeq()" in reader
     assert "loadImaPdf(mediaId, readerSeq)" in reader
     assert re.search(r"async function loadImaPdf\(mediaId, readerSeq\)", src)
     assert re.search(r"function showImaPdfFail\(mediaId, seq, readerSeq\)", src)
 
-    owner_guard = "if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;"
+    owner_guard = "if (!routeStillActive(seq) || readerSeq !== currentImaReaderSeq()) return;"
     assert load.count(owner_guard) >= 2
     head_read = "await blob.slice(0, 5).text()"
     assert load.index(owner_guard) < load.index(head_read)
@@ -1557,7 +1642,7 @@ def test_cookie_save_nested_stats_reload_preserves_owner_sequence_and_focus_guar
 def test_cookie_tab_primary_buttons_are_44px():
     """Cookie 管理主按钮提到 44px；不改全局 --control-height-2xl，避免登录/筛选错位。"""
     css = STYLE_CSS.read_text()
-    block = re.search(r"#st-cookies\s+\.btn-normal\s*\{([^}]*)\}", css)
+    block = re.search(r"#st-cookies\s+\.btn-normal,\s*#st-imgbed\s+\.btn-normal\s*\{([^}]*)\}", css)
     assert block, "缺少 #st-cookies .btn-normal"
     assert "44px" in block.group(1)
     tokens = (APP_JS.parent / "vendor" / "design-tokens.css").read_text()
@@ -1619,7 +1704,7 @@ def test_ima_settings_have_one_parent_and_keep_zsxq_under_ima():
 
 
 def test_feishu_document_timeline_uses_knowledge_reader_and_admin_tab():
-    src = APP_JS.read_text()
+    src = _all_view_source()
     assert "/api/admin/feishu-documents" in src
     assert "/api/ima-documents/timeline/all" in src
     assert "feishu-timeline-panel" in src
@@ -1636,7 +1721,7 @@ def test_selecting_feishu_group_opens_timeline_directly():
     # 跳转后旧异步不得覆盖新页面
     assert "routeStillActive(seq)" in body
     # 非飞书来源仍走列表渲染
-    assert body.rstrip().endswith("renderImaDocuments(seq);\n}")
+    assert body.rstrip().endswith("renderImaDocuments(seq);\n  }")
 
 
 def test_feishu_settings_auto_preview_and_uniform_source_actions():
@@ -1993,7 +2078,7 @@ def test_ima_stats_failure_after_save_renders_cached_stats_with_retry():
 
 def test_ima_collector_pending_save_snapshots_full_form_and_secret_state():
     """stats 重建期间必须使用提交快照，token 只能由 JS 恢复，不能进入 HTML。"""
-    src = APP_JS.read_text(encoding="utf-8")
+    src = _all_view_source()
     load = _fn_body("loadAdminKnowledge")
     save = _fn_body("saveImaCollector")
     assert "function imaCollectorFormSnapshot" in src
@@ -2026,7 +2111,7 @@ def test_ima_collector_save_rechecks_form_revision_after_stats_reload_before_cle
 
 def test_ima_collector_full_form_draft_survives_owner_cleanup_and_stats_rebuild():
     """保存 owner 清理后，UID/间隔/知识库/根目录脏编辑仍由后续 stats 重建恢复。"""
-    src = APP_JS.read_text(encoding="utf-8")
+    src = _all_view_source()
     load = _fn_body("loadAdminKnowledge")
     save = _fn_body("saveImaCollector")
     assert "collectorDraft" in src
@@ -2084,7 +2169,7 @@ def test_ima_save_reload_owns_mount_generation_bump_and_preserves_stale_guards()
     assert "setInterval" not in load
     assert "let statsReloadAccepted;" in save
     assert "reloadAdminSettingsPage(routeSeq, savedImaStatus)" in save
-    assert "reloadAdminSettingsPage(routeRenderSeq, savedImaStatus)" in save
+    assert "reloadAdminSettingsPage(currentRouteSeq(), savedImaStatus)" in save
     reload = save.index("statsReloadAccepted = await reloadAdminSettingsPage(routeSeq, savedImaStatus);")
     cleanup_guard = save.index("if (!statsReloadAccepted", reload)
     assert save.index("sessionGeneration !== imaMountState.sessionGeneration", 0, reload) < reload
@@ -2111,7 +2196,7 @@ def test_ima_stats_failure_keeps_polling_and_exposes_route_owned_retry():
 def test_ima_sync_responses_and_cleanup_are_owned_by_initiating_route():
     """同步 POST/status 的旧响应不得闪现或重绘新路由。"""
     body = _fn_body("triggerImaCollector")
-    assert "const routeSeq = routeRenderSeq" in body
+    assert "const routeSeq = currentRouteSeq()" in body
     post = body.index("await api(\"/api/admin/ima-collector/sync\"")
     assert body.index("if (!routeStillActive(routeSeq)) return", post) < body.index("flash(", post)
     status = body.index("await api(\"/api/admin/ima-collector\"")
@@ -2237,7 +2322,7 @@ def test_admin_credential_saves_require_same_route_token_and_session_before_side
     ima = _fn_body("saveImaCredentials")
     post = ima.index('await api("/api/admin/')
     for capture in (
-        "const routeSeq = routeRenderSeq",
+        "const routeSeq = currentRouteSeq()",
         "const token = state.token",
         "const sessionGeneration = imaMountState.sessionGeneration",
     ):
@@ -2338,7 +2423,7 @@ def test_ima_config_uses_small_sync_icon_and_consistent_brand_case():
 
 def test_ima_group_render_has_safe_mount_rows_and_recovery_controls():
     """IMA 设置展示知识库列表、文件夹树和可恢复的目录加载控件。"""
-    src = APP_JS.read_text()
+    src = _all_view_source()
     kb_row = _fn_body("imaMountGroupRowHtml")
     folder_row = _fn_body("imaFolderRowHtml")
     render = _fn_body("loadAdminKnowledge")
@@ -2481,15 +2566,15 @@ def test_ima_departed_save_does_not_clear_until_current_reload_reconciles():
 
 def test_ima_collector_save_is_owned_by_initiating_route_and_preserves_drafts():
     """旧的 collector 保存回调不得重绘新路由，stats 重建不得丢失脏挂载 draft。"""
-    src = APP_JS.read_text(encoding="utf-8")
+    src = _all_view_source()
     load = _fn_body("loadAdminKnowledge")
     save = _fn_body("saveImaCollector")
 
-    assert re.search(r"async function loadAdminKnowledge\(seq = _adminRenderSeq, authoritativeImaStatus = null\)", src)
+    assert re.search(r"async function loadAdminKnowledge\(seq = currentAdminSeq\(\), authoritativeImaStatus = null\)", src)
     assert "routeStillActive(seq)" in load
     assert "const preserveMountDraft = imaMountState.dirty" in load
     assert "initImaMountState(pure.groups || [], preserveMountDraftForReload)" in load
-    assert "const routeSeq = routeRenderSeq" in save
+    assert "const routeSeq = currentRouteSeq()" in save
     assert "const saveButton = $(\"#ima-collector-save\")" in save
     assert "saveButton.disabled = true" in save
     assert "!isAdminSettingsPath()" in save
@@ -2612,7 +2697,7 @@ def test_ima_group_save_reads_rows_and_preserves_legacy_token_fields():
     """采集配置保存同时提交群组，并保留旧 scalar/token 兼容字段。"""
     save = _fn_body("saveImaCollector")
     assert "groups: readImaMountGroups()" in save
-    assert "function readImaMountGroups" in APP_JS.read_text()
+    assert "function readImaMountGroups" in _all_view_source()
     assert "folder_ids" in _fn_body("readImaMountGroups")
     for field in ("uid", "knowledge_base_id", "root_folder_id", "interval_seconds"):
         assert f"{field}:" in save
@@ -2622,12 +2707,12 @@ def test_ima_group_save_reads_rows_and_preserves_legacy_token_fields():
     assert 'id="ima-pure-interval"' not in knowledge
     assert 'id="ima-pure-uid"' not in knowledge
     assert re.search(r'id="ima-pure-token"[^>]*', knowledge) is None
-    assert 'value="${pure.refresh_token' not in APP_JS.read_text()
+    assert 'value="${pure.refresh_token' not in _all_view_source()
 
 
 def test_ima_collector_acl_granted_via_separate_put():
     """采集页与用户管理都能授权；ACL 不塞进 collector groups，也不出现在阅读目录。"""
-    src = APP_JS.read_text()
+    src = _all_view_source()
     save = _fn_body("saveImaCollector")
     read = _fn_body("readImaMountGroups")
     catalog = _fn_body("renderKnowledge")
@@ -2801,7 +2886,7 @@ def test_new_badge_avatars_fit_inside_capsule():
     assert "52px" not in av.group(1) and "24px" not in av.group(1)
     assert arrow, "缺少箭头尺寸"
     assert "width: 20px" in arrow.group(1) and "height: 20px" in arrow.group(1)
-    assert 'd="M12 3.59l7.457 7.45-1.414 1.42L13 7.41V21h-2V7.41l-5.043 5.05-1.414-1.42L12 3.59z"' in js
+    assert 'd="M12 3.59l7.457 7.45-1.414 1.42L13 7.41V21h-2V7.41l-5.043 5.05-1.414-1.42L12 3.59z"' in ICONS_JS.read_text()
     assert not re.search(r"\.tl-new-badge-btn\s*\{[^}]*overflow:\s*visible", css)
 
 
@@ -2846,7 +2931,7 @@ def test_timeline_new_badge_pins_to_sticky_filterbar():
 
 def test_ima_documents_group_switching_contract():
     """文档列表必须按 URL 群组切换，并让两个控件共享安全的选择逻辑。"""
-    src = APP_JS.read_text()
+    src = _all_view_source()
     render = _fn_body("renderImaDocuments")
     assert "imaDocumentsGroup" in src
     assert "imaDocumentsGroupFromRoute" in src
@@ -2877,7 +2962,7 @@ def test_ima_documents_group_controls_render_response_groups_safely():
 
 def test_ima_documents_all_group_labels_and_single_group_title():
     """全部知识库结果显示来源标签，单群组结果不重复显示；标题包含名称和数量。"""
-    src = APP_JS.read_text()
+    src = _all_view_source()
     assert "item.group_name" in src
     assert "selectedGroupName" in src or "groupName" in src
     assert "count" in _fn_body("renderImaDocuments")
@@ -2885,7 +2970,7 @@ def test_ima_documents_all_group_labels_and_single_group_title():
 
 def test_ima_document_group_switch_refreshes_locally():
     """群组切换只更新文档局部路由并使旧请求失效，不触发全局 router。"""
-    src = APP_JS.read_text()
+    src = _all_view_source()
     select = _fn_body("selectImaDocumentGroup")
     helper = _fn_body("replaceImaDocumentsRoute")
     assert "replaceRoute(" not in select
@@ -2894,7 +2979,7 @@ def test_ima_document_group_switch_refreshes_locally():
     assert "state.imaDocumentsGroup" in select
     assert "state.imaDocumentsDay = \"\"" in select
     assert "state.imaDocumentsQuery" in select
-    assert "const seq = ++routeRenderSeq;" in select
+    assert "const seq = bumpRouteSeq();" in select
     assert "renderImaDocuments(seq)" in select
     assert "normalizeRoute" in helper
     assert "history.replaceState" in helper
@@ -2903,7 +2988,7 @@ def test_ima_document_group_switch_refreshes_locally():
 
 def test_ima_documents_filters_round_trip_through_local_url():
     """文档列表从 URL 恢复 q/day，搜索和日期变化通过专用 handler 更新局部 URL。"""
-    src = APP_JS.read_text()
+    src = _all_view_source()
     render = _fn_body("renderImaDocuments")
     route = _fn_body("imaDocumentsRoute")
     assert 'routeQuery().get("q")' in render
@@ -2974,7 +3059,7 @@ def test_knowledge_settings_p1_p2_control_density():
 
 def test_ima_reader_nav_requires_matching_snapshot_route():
     """阅读器上一篇/下一篇与结果计数只使用与返回列表路由匹配的快照（F3）。"""
-    src = APP_JS.read_text()
+    src = _all_view_source()
     nav = _fn_body("imaReaderNavHtml")
     render = _fn_body("renderImaDocument")
     assert "snapshot = null" in src  # nav 从入参取快照，不再自取模块级变量
@@ -2985,10 +3070,10 @@ def test_ima_reader_nav_requires_matching_snapshot_route():
 
 def test_ima_documents_refresh_and_retry_advance_local_route_seq():
     """刷新与重试必须递增局部路由序号，避免旧请求覆盖新结果。"""
-    src = APP_JS.read_text()
+    src = _all_view_source()
     render = _fn_body("renderImaDocuments")
     refresh = _fn_body("refreshImaDocuments")
-    assert "const seq = ++routeRenderSeq;" in refresh
+    assert "const seq = bumpRouteSeq();" in refresh
     assert "renderImaDocuments(seq, { keepOld: true })" in refresh
     assert 'onclick="refreshImaDocuments()"' in render
     assert "refreshImaDocuments()" in render
@@ -3059,12 +3144,12 @@ def test_ima_search_ignores_single_ascii_character():
     body = _fn_body("imaUsableSearchQuery")
     assert "length < 2" in body
     assert r"/^[\x00-\x7F]*$/" in body
-    src = APP_JS.read_text()
+    src = _all_view_source()
     assert "imaUsableSearchQuery(" in src
 
 
 def test_report_keyword_watch_uses_settings_switch_not_library_subscribe():
-    src = APP_JS.read_text()
+    src = _all_view_source()
     settings = _fn_body("renderSettings")
     assert "匹配研报库" in settings
     assert "set-kw-reports" in settings
@@ -3382,9 +3467,9 @@ def test_xueqiu_badge_uses_official_mark():
 
 def test_live_pill_icon_matches_platform_badge_size():
     """快讯角标与其他平台同尺寸，选中不得反色出白圆。"""
-    src = APP_JS.read_text()
+    src = ICONS_JS.read_text()
     css = STYLE_CSS.read_text()
-    icon = re.search(r"const WSCN_LIVE_ICON = `([^`]+)`", src).group(1)
+    icon = re.search(r"export const WSCN_LIVE_ICON = `([^`]+)`", src).group(1)
     assert 'class="pt-icon"' in icon
     assert "#FFF" not in icon and "#1378F0" not in icon
     assert 'fill="currentColor"' in icon
@@ -3551,7 +3636,7 @@ def test_channel_status_poll_skips_identical_and_restores_focus():
 
 def test_ima_document_counts_use_real_total_not_page_plus():
     """列表/阅读器计数用 document_count，不再用当前页条数拼 50+。"""
-    src = APP_JS.read_text()
+    src = _all_view_source()
     render = _fn_body("renderImaDocuments")
     more = _fn_body("loadImaDocumentsMore")
     reader = _fn_body("renderImaDocument")
@@ -3638,7 +3723,7 @@ assert.deepEqual(calls[3], ["flash", "PDF 还没加载好，稍后再试", "erro
 
 def test_ima_reader_clamps_long_abstract_and_keeps_preview_floor():
     """长摘要默认三行截断，展开后仍限高，预览区保底高度。"""
-    src = APP_JS.read_text()
+    src = _all_view_source()
     reader = _fn_body("renderImaDocument")
     css = STYLE_CSS.read_text()
     assert "IMA_ABSTRACT_CLAMP_CHARS" in src
@@ -3656,7 +3741,7 @@ def test_ima_reader_clamps_long_abstract_and_keeps_preview_floor():
 
 
 def test_ima_reader_abstract_callout_and_copy():
-    src = APP_JS.read_text()
+    src = _all_view_source()
     reader = _fn_body("renderImaDocument")
     css = STYLE_CSS.read_text()
 
@@ -3731,7 +3816,7 @@ def test_ima_document_reader_requests_keep_current_group_for_all_endpoints():
 def test_ima_document_reader_route_preserves_list_filters_without_inline_query_injection():
     """文档行通过 handler 打开，并把当前列表 group/q/day/tag 安全带入阅读 URL。"""
 
-    src = APP_JS.read_text()
+    src = _all_view_source()
     row = _fn_body("imaDocumentRow")
     route = _fn_body("imaDocumentReaderRoute")
     opener = _fn_body("openImaDocument")
@@ -3744,14 +3829,14 @@ def test_ima_document_reader_route_preserves_list_filters_without_inline_query_i
     assert "_imaDocumentRoute(item.media_id)" not in row
     assert "imaDocumentReaderRoute(id, groupId)" in opener
     assert "history.pushState" in opener
-    assert "++routeRenderSeq" in opener
+    assert "bumpRouteSeq()" in opener
     assert "mountKnowledgeReaderShell" in opener
     assert "renderImaDocument(seq, id)" in opener
 
 
 def test_ima_document_row_group_scope_is_escaped_and_reaches_reader_route():
     """全库列表的同名文档必须把所属库安全传给阅读路由。"""
-    src = APP_JS.read_text()
+    src = _all_view_source()
     row = _fn_body("imaDocumentRow")
     route = _fn_body("imaDocumentReaderRoute")
     opener = _fn_body("openImaDocument")
@@ -3773,7 +3858,7 @@ def test_ima_knowledge_subscription_callbacks_require_current_session_owner():
         request = body.index("await api(")
         prefix = body[:request]
         for capture in (
-            "const routeSeq = routeRenderSeq",
+            "const routeSeq = currentRouteSeq()",
             "const token = state.token",
             "const sessionGeneration = imaMountState.sessionGeneration",
         ):
@@ -3970,7 +4055,7 @@ def test_ima_report_search_is_debounced_and_explicitly_pages():
 
 def test_ima_search_stashes_unfiltered_list_for_clear_and_back():
     """离开搜索时先还原进搜索前的列表，避免再次打整库接口卡死。"""
-    src = APP_JS.read_text()
+    src = _all_view_source()
     submit = _fn_body("submitImaDocumentsSearch")
     render = _fn_body("renderImaDocuments")
     clear_one = _fn_body("clearImaDocumentsFilter")
@@ -4087,7 +4172,7 @@ def test_ima_reader_separates_document_group_from_list_source_filter():
 
 def test_ima_day_picker_restricts_to_available_days():
     """日期菜单只列出有文档的 MMDD，点选走 selectImaDocumentsDay。"""
-    src = APP_JS.read_text()
+    src = _all_view_source()
     nav = _fn_body("imaDocumentsDayNavHtml")
     menu = _fn_body("imaDayMenuHtml")
     pick = _fn_body("pickImaDay")
@@ -4178,7 +4263,7 @@ def test_news_source_picker_preserves_selection_across_search():
 
 def test_admin_news_tab_is_full_feed_manager():
     src = APP_JS.read_text() + ADMIN_NEWS_JS.read_text()
-    assert 'const STATS_TABS = ["config", "cookies", "mx", "proxies", "plaza", "news"]' in src
+    assert 'const STATS_TABS = ["config", "cookies", "mx", "imgbed", "plaza", "news", "proxies"]' in src
     for name in (
         "loadAdminNews", "renderAdminNews", "openNewsSourceModal",
         "openNewsFeedModal", "validateNewsFeedDraft", "refreshAdminNewsFeed",
@@ -4188,7 +4273,16 @@ def test_admin_news_tab_is_full_feed_manager():
     assert "财经资讯" in src
     assert "向用户显示财经新闻" in src
     assert "显示已归档" in src
+    archived_toggle = _fn_body("updateAdminNewsArchived", ADMIN_NEWS_JS)
+    assert "loadAdminNews()" in archived_toggle
+    assert "renderAdminNews()" not in archived_toggle
     assert "验证并保存" in src
+    kols_select = _fn_body("_adminKolsSelect", ADMIN_NEWS_JS)
+    assert '"selected"' not in kols_select
+    assert 'value=""' not in kols_select
+    posts_render = _fn_body("renderAdminPosts", ADMIN_NEWS_JS)
+    assert '<option value="">全部大V</option>` + (_adminKolsOptions || "")' in posts_render
+    assert 'kolSelect.value = state.adminPostsKolId ? String(state.adminPostsKolId) : ""' in posts_render
 
 
 def test_admin_news_master_detail_is_responsive():
@@ -4692,7 +4786,7 @@ def test_ima_stats_timer_owns_each_overlapping_request_and_stop_invalidates_it()
 
 def test_ima_pending_save_uses_session_owner_across_stats_reentry_but_logout_invalidates():
     """stats 重入只改变 mount generation；登出仍须让旧 PUT 失去 session owner。"""
-    src = APP_JS.read_text(encoding="utf-8")
+    src = _all_view_source()
     clear = _fn_body("clearSessionCaches")
     save = _fn_body("saveImaCollector")
     assert "sessionGeneration: 0" in src
@@ -4705,7 +4799,7 @@ def test_ima_pending_save_uses_session_owner_across_stats_reentry_but_logout_inv
     assert guard < mutation
     post_put = save[put:save.index("} catch", put)]
     assert "generation !== imaMountState.generation" not in post_put
-    assert "reloadAdminSettingsPage(routeRenderSeq, savedImaStatus)" in post_put
+    assert "reloadAdminSettingsPage(currentRouteSeq(), savedImaStatus)" in post_put
     assert clear.index("imaMountState.saveOwner = null") < clear.index("imaMountState.sessionGeneration += 1")
 
 
@@ -5099,7 +5193,7 @@ def test_sidebar_has_slim_toggle_matching_rail():
 
 
 def test_ima_mount_settings_use_two_panes_and_lazy_folder_api():
-    src = APP_JS.read_text()
+    src = _all_view_source()
     stats = _fn_body("loadAdminKnowledge")
     assert 'class="ima-mount-layout"' in stats
     assert 'id="ima-kb-list"' in stats
@@ -5199,7 +5293,7 @@ def test_ima_discovery_success_releases_only_its_owned_button():
 
 
 def test_ima_collector_dirty_bar_excludes_acl_and_can_discard():
-    src = APP_JS.read_text()
+    src = _all_view_source()
     knowledge = _fn_body("loadAdminKnowledge")
     dirty = _fn_body("renderImaCollectorDirtyState")
     discard = _fn_body("discardImaCollectorChanges")
@@ -5214,6 +5308,7 @@ def test_ima_collector_dirty_bar_excludes_acl_and_can_discard():
     assert 'id="ima-sync-progress"' in runtime
     assert 'id="ima-collector-status"' in runtime
     assert "bar.hidden = !(imaMountState.dirty || imaMountState.collectorDirty)" in dirty
+    assert "renderImaCollectorDirtyState()" in _fn_body("saveImaCollector")
     assert "renderImaCollectorDirtyState()" in _fn_body("renderImaMountGroups")
     assert "renderImaCollectorDirtyState()" in _fn_body("setImaGroupInterval")
     assert "renderImaCollectorDirtyState()" in _fn_body("toggleImaFolder")
@@ -5225,7 +5320,7 @@ def test_ima_collector_dirty_bar_excludes_acl_and_can_discard():
     assert "confirm(" in discard
     assert "collectorDraft = null" in discard
     assert "collectorDraftRevision = \"\"" in discard
-    assert "loadAdminKnowledge(routeRenderSeq)" in discard
+    assert "reloadAdminSettingsPage(currentRouteSeq())" in discard
     assert src.count("function discardImaCollectorChanges") == 1
 
 
@@ -5422,6 +5517,18 @@ def test_knowledge_zero_sub_empty_state_wraps_source_controls():
     assert ".ima-report-filters-row { padding: 12px 16px; flex-wrap: wrap; }" in css
     assert ".ima-report-filters > .ima-report-source" in css
     assert "display: flex;" in css[css.index(".ima-report-filters > .ima-report-source"):css.index(".ima-report-head .ima-doc-filter-chips")]
+
+
+def test_knowledge_tabs_dirty_guard_and_a11y():
+    """P3/Sam：采集未保存时切页签与关页面均守卫；页签具 tab 语义与方向键导航。"""
+    src = _all_view_source()
+    switch = _fn_body("switchKnowledgeSettingsTab")
+    assert "imaCollectorHasUnsaved" in switch
+    assert "采集配置有未保存的修改" in switch
+    assert 'beforeunload' in src
+    assert 'role="tab"' in src and 'role="tabpanel"' in src
+    assert "onKnowledgeTabsKey" in src
+    assert "roving" in src.lower() or 'tabIndex = on ? 0 : -1' in switch
 
 
 def test_admin_posts_page_supports_hide_delete_and_status_filter():

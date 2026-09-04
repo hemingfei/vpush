@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="V Push">
   <title>V Push</title>
-  <link rel="manifest" href="/manifest.webmanifest?v=2">
+  <link id="manifest" rel="manifest" href="/manifest.webmanifest?v=2">
   <link rel="apple-touch-icon" href="/icon-192.png">
   <link rel="apple-touch-icon" href="/icon-192.png" media="(prefers-color-scheme: light)">
   <link rel="apple-touch-icon" href="/icon-192-dark.png" media="(prefers-color-scheme: dark)">
@@ -31,14 +31,18 @@
         if (themeColor) themeColor.content = dark ? "#11141a" : "#f8f8fb";
         var statusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
         if (statusBar) statusBar.content = dark ? "black-translucent" : "default";
+        // 安卓部分机型独立窗口只认 manifest 静态 theme_color（无视运行时 meta）：
+        // 深色时整体换成深色 manifest，状态栏/启动色才跟得上
+        var manifestLink = document.getElementById("manifest");
+        if (manifestLink) manifestLink.href = dark ? "/manifest-dark.webmanifest?v=2" : "/manifest.webmanifest?v=2";
         var fav = document.getElementById("favicon");
         if (fav) fav.setAttribute("href", dark ? "/logo-mark-dark.svg" : "/logo-mark.svg");
       } catch (e) { /* localStorage 不可用时静默 */ }
     })();
   </script>
   <link rel="stylesheet" href="/vendor/design-tokens.css?v=26">
-  <link rel="stylesheet" href="/style.css?v=9203ff14f1a6">
-  <link rel="stylesheet" href="/mx-views.css?v=1">
+  <link rel="stylesheet" href="/style.css?v=1d0a2bd52696">
+  <link rel="stylesheet" href="/mx-views.css?v=2">
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -137,7 +141,7 @@
     </div>
     <nav id="bottom-nav" class="bottom-nav"></nav>
   </div>
-  <script src="/mx-views.js?v=1"></script>
-  <script type="module" src="/app.js?v=9203ff14f1a6"></script>
+  <script src="/mx-views.js?v=2"></script>
+  <script type="module" src="/app.js?v=1d0a2bd52696"></script>
 </body>
 </html>

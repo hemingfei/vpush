@@ -5370,12 +5370,13 @@ class DB:
                 "evidence": ev,
             })
         evidence = []
-        if post_ids:
-            marks = ",".join("?" for _ in post_ids)
+        unique_ids = list(dict.fromkeys(post_ids))  # 观点间证据常重复，IN 参数去重
+        if unique_ids:
+            marks = ",".join("?" for _ in unique_ids)
             for p in self._rows(
                 f"SELECT p.id, p.content, p.published_at, k.name AS author FROM posts p "
                 f"JOIN kols k ON k.id = p.kol_id WHERE p.id IN ({marks})",
-                tuple(post_ids),
+                tuple(unique_ids),
             ):
                 evidence.append({
                     "post_id": int(p["id"]), "author": p["author"],
@@ -5408,7 +5409,9 @@ class DB:
             ev = json.loads(r["evidence_post_ids"] or "[]")
             post_ids.extend(ev)
             timeline.append({
-                "snapshot_at": r["snapshot_at"], "target_type": r["target_type"],
+                "snapshot_at": r["snapshot_at"], "kol_id": int(r["kol_id"]),
+                "kol_name": r["kol_name"], "avatar": r["avatar_url"] or "",
+                "target_type": r["target_type"],
                 "target_name": r["target_name"], "direction": r["direction"],
                 "action": r["action"] or "", "summary": r["summary"] or "",
                 "occurred_at": r["occurred_at"] or "", "evidence": ev,

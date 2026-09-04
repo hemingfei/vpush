@@ -235,6 +235,7 @@ def validate_opinions(raw, posts, aliases, day, snapshot_at):
         if author and author not in authors:
             continue  # 作者与证据不符：丢弃
         kol_id = int(ev_posts[0]["kol_id"])
+        kol_name = str(ev_posts[0].get("kol_name") or "")
         ttype = str(item.get("target_type") or "")
         direction = str(item.get("direction") or "")
         if ttype not in VALID_TARGET_TYPES or direction not in VALID_DIRECTIONS:
@@ -257,6 +258,7 @@ def validate_opinions(raw, posts, aliases, day, snapshot_at):
                 "trading_day": day,
                 "snapshot_at": snapshot_at,
                 "kol_id": kol_id,
+                "kol_name": kol_name,
                 "target_type": ttype,
                 "target_name": name,
                 "direction": direction,
@@ -431,26 +433,19 @@ def _agg_digest(payload: dict, prev_summary: str) -> str:
     return json.dumps(slim, ensure_ascii=False)
 
 
-def generate_summary(db, llm_config, payload) -> dict:
+def generate_summary(db, llm_config, payload, prev_summary: str = "") -> dict:
     """每快照一版总结；LLM 失败/未配置不拖垮批次，回退占位文案。
 
+    prev_summary 由调用方传入（_maybe_summary 已读好的上一版），这里不再读快照表。
     未配置时交由 llm._chat 自行返回 None → 回退，与配置了坏 key 的失败同路。
     """
     fallback = {"text": "（本次总结生成失败，以上一版为准）", "items": []}
-    prev = ""
-    try:
-        snaps = db.list_mx_view_snapshots(payload["trading_day"])
-        earlier = [s for s in snaps if s["snapshot_at"] < payload["snapshot_at"] and s["payload"].get("summary")]
-        if earlier:
-            prev = earlier[-1]["payload"]["summary"].get("text") or ""
-    except Exception:  # noqa: BLE001
-        pass
     try:
         text = llm._chat(
             llm_config,
             [
                 {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
-                {"role": "user", "content": _agg_digest(payload, prev)},
+                {"role": "user", "content": _agg_digest(payload, prev_summary)},
             ],
             4000,
             temperature=0,
@@ -476,19 +471,27 @@ def generate_summary(db, llm_config, payload) -> dict:
         return fallback
 
 
-def _maybe_summary(db, llm_config, payload) -> dict:
-    """按 mx_view_summary_min_interval_min 间隔复用上一版总结（默认 0=每快照必出）。"""
+def _maybe_summary(db, llm_config, payload, earlier=None) -> dict:
+    """按 mx_view_summary_min_interval_min 间隔复用上一版总结（默认 0=每快照必出）。
+
+    earlier 为调用方已读好的当日快照行（升序）；不传则自查一次，
+    避免与 generate_summary 各自再全表读一遍当日大 payload。
+    """
     interval = get_summary_min_interval(db)
-    if interval > 0:
-        snaps = [s for s in db.list_mx_view_snapshots(payload["trading_day"])
-                 if s["payload"].get("summary") and s["snapshot_at"] < payload["snapshot_at"]]
-        if snaps:
-            last = snaps[-1]
-            last_min = _hhmm_to_min(last["snapshot_at"])
-            cur_min = _hhmm_to_min(payload["snapshot_at"])
-            if cur_min - last_min < interval:
-                return last["payload"]["summary"]
-    return generate_summary(db, llm_config, payload)
+    if earlier is None:
+        earlier = db.list_mx_view_snapshots(payload["trading_day"])
+    with_summary = [
+        s for s in earlier
+        if s["snapshot_at"] < payload["snapshot_at"] and s["payload"].get("summary")
+    ]
+    prev_text = ""
+    if with_summary:
+        last = with_summary[-1]
+        prev_text = last["payload"]["summary"].get("text") or ""
+        if interval > 0 and \
+                _hhmm_to_min(payload["snapshot_at"]) - _hhmm_to_min(last["snapshot_at"]) < interval:
+            return last["payload"]["summary"]
+    return generate_summary(db, llm_config, payload, prev_summary=prev_text)
 
 
 def run_snapshot_batch(db, day, snapshot_at, window, kind="live", llm_config=None,
@@ -496,33 +499,49 @@ def run_snapshot_batch(db, day, snapshot_at, window, kind="live", llm_config=Non
     """跑一个快照批次：取窗口消息 → LLM 研判 → 校验落库 → 聚合存快照。
 
     失败抛异常（批次落 failed、游标不动）；0 条新消息直接返回 {"ran": False}。
-    回填（advance_cursor=False）时不推进消息游标，避免抢走 live 批次的未读窗口。
+    回填（kind="backfill"）不增量（after_id=0 整窗重放）也不推游标：live 游标是
+    「今日最大已读 id」，回溯历史日时它会把窗口内消息全部滤掉，回填会静默空跑。
+    窗口消息数超过单批上限时分块多批研判（游标随块推进），不静默丢弃剩余消息。
     """
     with _batch_lock:
         batch_id = db.upsert_mx_view_batch(day, snapshot_at, kind)
-        cursor = db.get_mx_view_cursor()
         kol_ids = get_kol_ids(db)
-        posts = db.list_mx_posts_in_window(
-            day, window[0], window[1], after_id=cursor,
-            kol_ids=kol_ids or None, limit=get_batch_size(db),
-        )
-        if not posts:
-            db.finish_mx_view_batch(batch_id, "done", 0)
-            return {"ran": False, "opinions": 0, "message_count": 0}
+        limit = get_batch_size(db)
+        after_id = 0 if kind == "backfill" else db.get_mx_view_cursor()
+        posts: list[dict] = []
         try:
-            raw = llm.research_viewpoints(
-                posts, get_topic_hints(db), db.get_action_tag_vocabulary(), llm_config=llm_config
-            )
-            if raw is None:
-                raise RuntimeError("LLM 研判失败（无有效响应）")
-            valid, new_topics = validate_opinions(
-                raw, posts, db.get_stock_aliases(), day, snapshot_at
-            )
+            hints = get_topic_hints(db)
+            vocab = db.get_action_tag_vocabulary()
+            aliases = db.get_stock_aliases()
+            merged: dict[tuple, dict] = {}  # (kol_id, target_type, target_name) 跨块去重
+            new_topic_names: set[str] = set()
+            while True:
+                chunk = db.list_mx_posts_in_window(
+                    day, window[0], window[1], after_id=after_id,
+                    kol_ids=kol_ids or None, limit=limit,
+                )
+                if not chunk:
+                    break
+                posts.extend(chunk)
+                raw = llm.research_viewpoints(chunk, hints, vocab, llm_config=llm_config)
+                if raw is None:
+                    raise RuntimeError("LLM 研判失败（无有效响应）")
+                chunk_valid, chunk_topics = validate_opinions(raw, chunk, aliases, day, snapshot_at)
+                for op in chunk_valid:
+                    merged.setdefault((op["kol_id"], op["target_type"], op["target_name"]), op)
+                new_topic_names.update(chunk_topics)
+                if len(chunk) < limit:
+                    break
+                after_id = max(int(p["id"]) for p in chunk)
+            if not posts:
+                db.finish_mx_view_batch(batch_id, "done", 0)
+                return {"ran": False, "opinions": 0, "message_count": 0}
+            valid = list(merged.values())
             db.replace_mx_opinions(batch_id, valid)
             if advance_cursor:
                 db.set_mx_view_cursor(max(int(p["id"]) for p in posts))
-            if new_topics:
-                add_topic_candidates(db, new_topics)
+            if new_topic_names:
+                add_topic_candidates(db, sorted(new_topic_names))
 
             opinions = db.list_mx_opinions(day)
             snaps = db.list_mx_view_snapshots(day)
@@ -530,8 +549,8 @@ def run_snapshot_batch(db, day, snapshot_at, window, kind="live", llm_config=Non
             prev_payload = earlier[-1]["payload"] if earlier else None
             payload = aggregate_day_state(day, snapshot_at, opinions, prev_payload, new_opinions=valid)
             payload["message_count"] = len(posts)
-            payload["summary"] = _maybe_summary(db, llm_config, payload)
-            seq = len([s for s in snaps if s["snapshot_at"] < snapshot_at]) + 1
+            payload["summary"] = _maybe_summary(db, llm_config, payload, earlier)
+            seq = len(earlier) + 1
             db.upsert_mx_view_snapshot(day, snapshot_at, seq, kind, payload, batch_id)
             db.finish_mx_view_batch(batch_id, "done", len(posts))
             if kind == "live":

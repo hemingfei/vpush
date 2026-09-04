@@ -380,7 +380,7 @@ export function createAdminNewsView(dependencies) {
   let _adminKolsOptions = null;
 
   async function _adminKolsSelect() {
-    // 大V下拉选项（按平台分组），只拉一次缓存
+    // 大V下拉选项（按平台分组），只拉一次缓存；选中态不烤进 HTML，由 renderAdminPosts 按状态回填
     if (_adminKolsOptions) return _adminKolsOptions;
     const kols = await api("/api/kols");
     const groups = {};
@@ -390,13 +390,13 @@ export function createAdminNewsView(dependencies) {
     }
     _adminKolsOptions = Object.entries(groups)
       .map(([g, list]) => `<optgroup label="${escapeHtml(g)}">${list.map((k) =>
-        `<option value="${k.id}" ${state.adminPostsKolId == k.id ? "selected" : ""}>${escapeHtml(k.name)}</option>`).join("")}</optgroup>`)
+        `<option value="${k.id}">${escapeHtml(k.name)}</option>`).join("")}</optgroup>`)
       .join("");
     return _adminKolsOptions;
   }
 
   function renderAdminPosts() {
-    const kolsHtml = _adminKolsOptions || "";
+    const kolsHtml = `<option value="">全部大V</option>` + (_adminKolsOptions || "");
     if (!routeStillActive(currentAdminSeq())) return;
     $("#admin-body").innerHTML = `
       <section class="section-panel">
@@ -418,7 +418,7 @@ export function createAdminNewsView(dependencies) {
               <option value="normal" ${state.adminPostsStatus === "normal" ? "selected" : ""}>未隐藏</option>
               <option value="hidden" ${state.adminPostsStatus === "hidden" ? "selected" : ""}>已隐藏</option>
             </select>
-            <select id="ad-posts-kol" class="form-control" style="margin:0;width:auto" onchange="adminFilterPosts()"><option value="">全部大V</option>${kolsHtml}</select>
+            <select id="ad-posts-kol" class="form-control" style="margin:0;width:auto" onchange="adminFilterPosts()">${kolsHtml}</select>
             <button class="btn-normal" onclick="adminFilterPosts()">筛选</button>
           </div>
         </header>
@@ -433,8 +433,8 @@ export function createAdminNewsView(dependencies) {
       : `<p class="muted" style="text-align:center;margin-top:14px">已加载全部</p>`}
       </section>`;
     // 选中态随 state 同步（空值=全部大V），重渲染后不丢失
-    const kolSel = $("#ad-posts-kol");
-    if (kolSel) kolSel.value = state.adminPostsKolId ? String(state.adminPostsKolId) : "";
+    const kolSelect = $("#ad-posts-kol");
+    if (kolSelect) kolSelect.value = state.adminPostsKolId ? String(state.adminPostsKolId) : "";
   }
 
   function postRowHtml(p) {
@@ -551,7 +551,7 @@ export function createAdminNewsView(dependencies) {
 
   function updateAdminNewsArchived(showArchived) {
     adminNewsState.showArchived = showArchived;
-    renderAdminNews();
+    loadAdminNews();
   }
   return {
     loadAdminNews,

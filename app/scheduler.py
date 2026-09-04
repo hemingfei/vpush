@@ -1969,6 +1969,7 @@ class Scheduler:
         self._last_knowledge_notify = 0.0
         self._last_proxy_tick = 0.0
         self._last_mx_view_check = 0.0
+        self._mx_view_check_running = False
         self._mx_sync_service = None
         self._mx_ws_task = None
         self._mx_ws_on_message = None
@@ -3103,10 +3104,20 @@ class Scheduler:
             # --- MX 观点快照检查（每 20 秒） ---
             if now_mono - self._last_mx_view_check >= 20:
                 self._last_mx_view_check = now_mono
-                try:
-                    await asyncio.to_thread(self._mx_view_check_tick)
-                except Exception:  # noqa: BLE001
-                    logger.exception("MX 观点快照检查异常")
+                # 批次内含 LLM 调用（超时上限分钟级）：后台单飞执行，
+                # 内联 await 会卡住调度主循环，延误重试/保活/备份等任务
+                if not self._mx_view_check_running:
+                    self._mx_view_check_running = True
+
+                    async def _mx_view_tick() -> None:
+                        try:
+                            await asyncio.to_thread(self._mx_view_check_tick)
+                        except Exception:  # noqa: BLE001
+                            logger.exception("MX 观点快照检查异常")
+                        finally:
+                            self._mx_view_check_running = False
+
+                    asyncio.create_task(_mx_view_tick())
 
             # --- 清理旧日志（每小时一次） ---
             try:

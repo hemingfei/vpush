@@ -11,9 +11,13 @@ export function createAdminImaCollectorView(dependencies) {
     currentRouteSeq,
     bumpRouteSeq,
     currentAdminSeq,
+    FOLDER_ICON,
     imaMountState,
     imaCollectorPureCache,
     reloadAdminSettingsPage,
+    isAdminSettingsPath,
+    currentLocalLibraries,
+    focusCookieField,
   } = dependencies;
 
   let imaProgressTimer = null;
@@ -527,7 +531,7 @@ export function createAdminImaCollectorView(dependencies) {
   function rememberAclOnModel(groupId, names) {
     const group = imaMountGroup(groupId);
     if (group) group.acl_usernames = names;
-    const lib = ((_localLibsLast && _localLibsLast.libraries) || [])
+    const lib = ((currentLocalLibraries()?.libraries) || [])
       .find((item) => `local-${item.slug}` === groupId);
     if (!lib) return;
     lib.acl_usernames = names;
@@ -1001,6 +1005,7 @@ export function createAdminImaCollectorView(dependencies) {
           if (tokenInput) tokenInput.value = "";
         }
       }
+      renderImaCollectorDirtyState();
       const restoreFocus = document.activeElement === focusElement || document.activeElement === document.body;
       if (!focusMoved && restoreFocus) {
         const focusTarget = document.getElementById(focusId) || document.getElementById("ima-collector-save");

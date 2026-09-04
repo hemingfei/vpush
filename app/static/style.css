@@ -431,6 +431,7 @@ textarea.form-control {
 .topbar {
   height: calc(56px + var(--safe-top));
   padding: 0 24px;
+  /* 沉浸式状态栏（安卓 15 强制 edge-to-edge）下内容不顶进状态栏 */
   padding-top: var(--safe-top);
   position: sticky;
   top: 0;
@@ -2278,9 +2279,19 @@ pre.content-cell { white-space: pre-wrap; overflow-wrap: break-word; min-width: 
   font-family: var(--font-mono);
   font-size: var(--text-sm);
 }
-#st-cookies .btn-normal {
+#st-cookies .btn-normal,
+#st-imgbed .btn-normal {
   min-height: 44px;
   height: 44px;
+}
+#st-imgbed .field-label { margin-top: 14px; }
+#st-imgbed .imgbed-advanced { margin-top: 16px; }
+#st-imgbed .imgbed-advanced summary { cursor: pointer; }
+#st-imgbed .imgbed-advanced .cfg-fields { margin-top: 10px; }
+.cfg-field-error {
+  margin: 6px 0 0;
+  font-size: var(--text-xs);
+  color: var(--color-danger);
 }
 .ima-source-panel .btn-normal,
 .ima-storage-toolbar .btn-normal,

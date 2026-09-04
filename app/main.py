@@ -208,6 +208,13 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
                 is_admin=True,
             )
     imgbed.configure(config)
+    imgbed.apply_runtime(
+        db.get_setting("imgbed_base_url") or config.imgbed.base_url,
+        db.get_setting("imgbed_token") or config.imgbed.token,
+        db.get_setting("imgbed_channel") or config.imgbed.channel,
+        db.get_setting("imgbed_channel_name") or config.imgbed.channel_name,
+        db.get_setting("imgbed_folder") or config.imgbed.folder,
+    )
     fetchers = build_fetchers(config, db)
     notifiers = build_notifiers(config)
     scheduler = Scheduler(

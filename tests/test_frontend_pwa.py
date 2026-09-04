@@ -58,7 +58,7 @@ def test_frontend_assets_match_financial_news_release_revision():
     assert f'const CACHE = "dav-shell-{digest}";' in sw
     for url in module_urls(ROOT):
         assert f'"{url}"' in sw
-    assert 'const APP_VERSION = "1.12.136";' in app
+    assert 'const APP_VERSION = "1.12.139";' in app
 
 
 def test_pwa_icons_have_light_and_dark_sets():
@@ -100,3 +100,28 @@ def test_status_bar_follows_app_theme():
     manifest = (STATIC / "manifest.webmanifest").read_text()
     assert '"theme_color": "#f8f8fb"' in manifest
     assert '"background_color": "#f8f8fb"' in manifest
+
+
+def test_dark_manifest_for_theme_colored_status_bars():
+    """部分安卓 PWA 独立窗口只认 manifest 静态 theme_color：
+    必须有深色 manifest，且防闪脚本与 applyTheme 都会按主题切换链接。"""
+    dark = (STATIC / "manifest-dark.webmanifest").read_text()
+    assert '"theme_color": "#11141a"' in dark
+    assert '"background_color": "#0f1115"' in dark
+    assert "/icon-512-dark.png" in dark
+
+    html = (STATIC / "index.html").read_text()
+    assert 'id="manifest" rel="manifest" href="/manifest.webmanifest?v=2"' in html
+    assert 'manifestLink.href = dark ? "/manifest-dark.webmanifest?v=2" : "/manifest.webmanifest?v=2"' in html
+
+    app = (STATIC / "app.js").read_text()
+    assert 'manifestLink.setAttribute("href", dark ? "/manifest-dark.webmanifest?v=2" : "/manifest.webmanifest?v=2")' in app
+
+    sw = SW_JS.read_text()
+    assert '"/manifest-dark.webmanifest"' in sw
+
+    css = (STATIC / "style.css").read_text()
+    # 安全区经 --safe-top 变量间接引用（Android Capacitor 壳注入真实系统栏高度覆盖），
+    # 变量定义处仍取 env()，topbar/正文等消费处统一用 var(--safe-top)
+    assert "--safe-top: env(safe-area-inset-top, 0px);" in css
+    assert "padding-top: var(--safe-top);" in css

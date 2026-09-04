@@ -267,6 +267,7 @@ def test_run_snapshot_batch_end_to_end(monkeypatch):
     assert snap["payload"]["summary"]["text"].startswith("早盘")
     assert snap["payload"]["topics"][0]["name"] == "固态电池"
     assert snap["payload"]["new_opinions"][0]["kol_id"] == kol
+    assert snap["payload"]["new_opinions"][0]["kol_name"] == "王哥"  # 观点流要显示作者
     assert snap["payload"]["message_count"] == 1
     assert mva.get_view_version(db) == 1  # live 批次推版本
     m1_id = db._rows("SELECT id FROM posts WHERE external_id = 'm1'")[0]["id"]
@@ -276,6 +277,59 @@ def test_run_snapshot_batch_end_to_end(monkeypatch):
     calls["n"] = 10
     r2 = mva.run_snapshot_batch(db, day=day, snapshot_at="09:20", window=("09:15", "09:20"))
     assert r2["ran"] is False and calls["n"] == 10 and mva.get_view_version(db) == 1
+
+
+def test_run_snapshot_batch_chunks_when_window_exceeds_limit(monkeypatch):
+    """窗口消息数超过单批上限：分块研判全部消息，不静默丢弃剩余。"""
+    db = make_db()
+    day = "2026-09-04"
+    kol = db.add_kol("mx", "王哥", "room1")
+    ids = []
+    for i in range(3):
+        db.insert_post(platform="mx", kol_id=kol, external_id=f"m{i}", title="", url="",
+                       content=f"第{i}条消息", published_at=f"{day} 09:1{6 + i}:00")
+        ids.append(db._rows("SELECT id FROM posts WHERE external_id = ?", (f"m{i}",))[0]["id"])
+
+    def fake_chat(llm_config, messages, max_tokens, **kw):
+        pid = json.loads(messages[1]["content"].split("消息列表：\n", 1)[1])[0]["id"]
+        return _VIEW_JSON % pid
+
+    monkeypatch.setattr(mva.llm, "_chat", fake_chat)
+    db.set_setting(mva.MX_VIEW_BATCH_SIZE_KEY, "2")  # 每块 2 条 → 3 条消息分 2 块
+    result = mva.run_snapshot_batch(db, day=day, snapshot_at="09:20", window=("09:15", "09:20"))
+    assert result["ran"] is True and result["message_count"] == 3  # 3 条全部处理
+    assert db.get_mx_view_cursor() == ids[-1]  # 游标盖到最后一条
+    snap = db.get_mx_view_snapshot(day, "09:20")
+    assert snap["payload"]["message_count"] == 3
+
+
+def test_backfill_replays_history_despite_live_cursor(monkeypatch):
+    """live 游标（今日最大已读 id）不得把回填历史日的消息滤掉。"""
+    db = make_db()
+    old_day, today = "2026-09-03", "2026-09-04"
+    kol = db.add_kol("mx", "王哥", "room1")
+    db.insert_post(platform="mx", kol_id=kol, external_id="old1", title="", url="",
+                   content="历史消息", published_at=f"{old_day} 09:16:00")
+    db.insert_post(platform="mx", kol_id=kol, external_id="new1", title="", url="",
+                   content="今日消息", published_at=f"{today} 09:16:00")
+    db.set_mx_view_cursor(db._rows("SELECT MAX(id) AS m FROM posts")[0]["m"])  # live 已跑到今日
+
+    new_id = db._rows("SELECT id FROM posts WHERE external_id = 'new1'")[0]["id"]
+    old_id = db._rows("SELECT id FROM posts WHERE external_id = 'old1'")[0]["id"]
+    monkeypatch.setattr(
+        mva.llm, "_chat",
+        lambda *a, **k: _VIEW_JSON % old_id,
+    )
+    # 回填历史日：不受今日游标影响，正常取到 09:15-09:20 的历史消息
+    result = mva.run_snapshot_batch(db, day=old_day, snapshot_at="09:20",
+                                    window=("09:15", "09:20"), kind="backfill",
+                                    advance_cursor=False)
+    assert result["ran"] is True and result["opinions"] == 1 and result["message_count"] == 1
+    assert db.get_mx_view_cursor() == new_id  # 游标不动
+    assert mva.get_view_version(db) == 0  # 回填不推版本
+    # live 同窗重跑（游标已盖过）→ 0 条新消息
+    r2 = mva.run_snapshot_batch(db, day=today, snapshot_at="09:20", window=("09:15", "09:20"))
+    assert r2["ran"] is False
 
 
 def test_run_due_view_batch_catchup_and_failure(monkeypatch):
