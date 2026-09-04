@@ -803,6 +803,7 @@ IMAGE_PROXY_HOSTS = frozenset({
     "pbs.twimg.com", "video.twimg.com", "abs.twimg.com",
     "xqimg.imedao.com", "xueqiuimg.com",
     "wx1.sinaimg.cn", "wx2.sinaimg.cn", "wx3.sinaimg.cn", "wx4.sinaimg.cn",
+    "static-assets-1.truthsocial.com",
 })
 
 

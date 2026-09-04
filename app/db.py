@@ -1837,7 +1837,8 @@ class DB:
         conds, params = self._kol_filters(platform, category_id, q, status)
         if conds:
             sql += " WHERE " + " AND ".join(conds)
-        sql += " ORDER BY k.id"
+        # 推荐权重置顶（订阅广场「置顶」位），其余按 id 稳定排序
+        sql += " ORDER BY k.recommend_weight DESC, k.id"
         if limit:
             sql += " LIMIT ? OFFSET ?"
             params.extend([limit, offset])

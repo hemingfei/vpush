@@ -5626,7 +5626,7 @@ def test_twimg_post_images_render_through_proxy():
     挂起永远不触发——只靠 onerror 补救会在部分网络下图挂死。
     """
     html_src = (APP_JS.parent / "core" / "html.js").read_text()
-    for host in ("pbs.twimg.com", "video.twimg.com", "abs.twimg.com"):
+    for host in ("pbs.twimg.com", "video.twimg.com", "abs.twimg.com", "static-assets-1.truthsocial.com"):
         assert f'"{host}"' in html_src
     assert "IMG_PROXY_ALWAYS_HOSTS" in html_src
 
