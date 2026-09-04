@@ -469,6 +469,7 @@ class KolUpdate(BaseModel):
     visible_users: list[str] | None = None
     original_only: bool | None = None
     silent: bool | None = None
+    recommend_weight: int | None = None
 
 
 class KolBatchAction(BaseModel):
@@ -5043,6 +5044,9 @@ def create_api_router(
             category_id=body.category_id if "category_id" in body.model_fields_set else _UNSET,
             priority=body.priority if "priority" in body.model_fields_set else _UNSET,
             secondary=body.secondary if "secondary" in body.model_fields_set else _UNSET,
+            recommend_weight=(
+                body.recommend_weight if "recommend_weight" in body.model_fields_set else _UNSET
+            ),
         )
         if "is_private" in body.model_fields_set and body.is_private is not None:
             db.update_kol(kol_id, is_private=body.is_private)

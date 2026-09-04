@@ -3627,6 +3627,29 @@ def test_img_proxy_rejects_non_image(monkeypatch):
     assert resp.status_code == 400
 
 
+def test_recommend_weight_orders_recommendations():
+    """推荐位排序：recommend_weight 优先于订阅人数。"""
+    client = make_client()
+    headers = auth_headers(client)
+    db = client.app.state.db
+    low = db.add_kol("xueqiu", "多订阅", "low1")
+    high = db.add_kol("xueqiu", "特朗普", "trump1")
+    # 多订阅者的大V在纯订阅数排序下必胜；只给权重低票
+    db.add_subscription(db.list_users()[0]["id"], low)
+    resp = client.put(f"/api/kols/{high}", headers=headers, json={"recommend_weight": 100})
+    assert resp.status_code == 200
+    assert resp.json()["recommend_weight"] == 100
+    rec = client.get("/api/recommendations", headers=headers).json()
+    ids = [r["id"] for r in rec]
+    assert ids[:2] == [high, low]
+    # 权重清零后回到订阅数排序
+    client.put(f"/api/kols/{high}", headers=headers, json={"recommend_weight": 0})
+    rec = client.get("/api/recommendations", headers=headers).json()
+    assert [r["id"] for r in rec][:2] == [low, high]
+    negative = client.put(f"/api/kols/{high}", headers=headers, json={"recommend_weight": -5})
+    assert negative.json()["recommend_weight"] == 0
+
+
 def test_admin_imgbed_settings_roundtrip(monkeypatch):
     from app import imgbed as imgbed_mod
 

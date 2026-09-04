@@ -1338,6 +1338,11 @@ class DB:
         kol_cols = {row["name"] for row in self._rows("PRAGMA table_info(kols)")}
         if "is_private" not in kol_cols:
             self._conn.execute("ALTER TABLE kols ADD COLUMN is_private INTEGER NOT NULL DEFAULT 0")
+        if "recommend_weight" not in kol_cols:
+            # 订阅广场推荐权重：越大越靠前，优先于订阅人数排序（0 = 默认）
+            self._conn.execute(
+                "ALTER TABLE kols ADD COLUMN recommend_weight INTEGER NOT NULL DEFAULT 0"
+            )
         if "avatar_url" not in kol_cols:
             self._conn.execute("ALTER TABLE kols ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''")
         if "avatar_source" not in kol_cols:
@@ -1912,7 +1917,7 @@ class DB:
         return rows[0] if rows else None
 
     def recommended_kols(self, user_id: int, limit: int = 4) -> list[dict]:
-        """新用户引导推荐：启用且公开的大V，按订阅人数倒序。"""
+        """新用户引导推荐：启用且公开的大V，推荐权重优先，其后按订阅人数倒序。"""
         return self._rows(
             "SELECT k.*, c.name AS category_name, "
             "(SELECT COUNT(*) FROM subscriptions s WHERE s.kol_id = k.id) AS subscriber_count, "
@@ -1920,7 +1925,7 @@ class DB:
             "       WHERE mine.kol_id = k.id AND mine.user_id = ?) AS subscribed "
             "FROM kols k LEFT JOIN categories c ON c.id = k.category_id "
             "WHERE k.enabled = 1 AND k.is_private = 0 "
-            "ORDER BY subscriber_count DESC, k.id DESC LIMIT ?",
+            "ORDER BY k.recommend_weight DESC, subscriber_count DESC, k.id DESC LIMIT ?",
             (user_id, limit),
         )
 
@@ -1943,6 +1948,7 @@ class DB:
         secondary=_UNSET,
         is_private=_UNSET,
         silent=_UNSET,
+        recommend_weight=_UNSET,
     ):
         sets, params = [], []
         if name is not None:
@@ -1976,6 +1982,9 @@ class DB:
         if silent is not _UNSET:
             sets.append("silent = ?")
             params.append(1 if silent else 0)
+        if recommend_weight is not _UNSET:
+            sets.append("recommend_weight = ?")
+            params.append(max(int(recommend_weight or 0), 0))
         if not sets:
             return
         params.append(kol_id)
