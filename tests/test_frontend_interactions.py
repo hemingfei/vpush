@@ -19,7 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DIALOG_JS = APP_JS.parent / "core" / "dialog.js"
 NEWS_JS = APP_JS.parent / "views" / "news.js"
 FEISHU_PERSONAL_JS = APP_JS.parent / "views" / "feishu-personal.js"
-VIEW_JS_SOURCES = (APP_JS, NEWS_JS, FEISHU_PERSONAL_JS)
+PUSH_SETTINGS_JS = APP_JS.parent / "views" / "push-settings.js"
+VIEW_JS_SOURCES = (APP_JS, NEWS_JS, FEISHU_PERSONAL_JS, PUSH_SETTINGS_JS)
 
 
 def test_subscription_push_is_the_only_subscription_management_navigation_entry():
@@ -106,7 +107,16 @@ def _fn_body(name: str, path: Path = APP_JS) -> str:
 
 
 def _has_route_seq_capture(text: str) -> bool:
-    return "const routeSeq = routeRenderSeq" in text or "const routeSeq = currentRouteSeq()" in text
+    return any(marker in text for marker in (
+        "const routeSeq = routeRenderSeq",
+        "const routeSeq = currentRouteSeq()",
+        "const seq = routeRenderSeq",
+        "const seq = currentRouteSeq()",
+    ))
+
+
+def _calls_with_route_seq(text: str, fn: str) -> bool:
+    return f"{fn}(routeRenderSeq)" in text or f"{fn}(currentRouteSeq())" in text
 
 
 def _media_block(css: str, query: str, last: bool = False) -> str:
@@ -229,7 +239,7 @@ def test_settings_async_responses_are_owned_by_route_and_session_before_mutation
     fetch = refresh.index('await api("/api/me")')
     state_write = refresh.index("state.user = user", fetch)
     guard = refresh.index("routeStillActive", fetch)
-    assert "const seq = routeRenderSeq" in refresh[:fetch]
+    assert _has_route_seq_capture(refresh[:fetch])
     assert "const token = state.token" in refresh[:fetch]
     assert "const sessionGeneration = imaMountState.sessionGeneration" in refresh[:fetch]
     assert guard < state_write
@@ -643,7 +653,7 @@ def test_plaza_keeps_subscribed_and_favorite_filters():
 
 
 def test_push_is_the_default_settings_tab():
-    src = APP_JS.read_text()
+    src = PUSH_SETTINGS_JS.read_text()
     render = _fn_body("renderSettings")
     switch = _fn_body("switchSettingsTab")
 
@@ -802,7 +812,7 @@ def test_dnd_save_button_aligns_left_with_other_settings_buttons():
     assert "justify-content: flex-end" not in actions.group(1), (
         "免打扰保存按钮右对齐会与左侧表单项、下方模块错开"
     )
-    settings = APP_JS.read_text()
+    settings = PUSH_SETTINGS_JS.read_text()
     dnd_block = settings[settings.index('class="dnd-actions"'):]
     assert "saveDnd()" in dnd_block
     assert "dnd-result" not in dnd_block[:400], "保存反馈应走 toast，不要在按钮旁放结果 span"
@@ -829,10 +839,7 @@ def test_submit_ask_requires_category():
 
 def test_settings_save_feedback_uses_flash():
     """推送设置保存/失败统一走 flash toast，不再用 alert 或行内「已保存 ✅」。"""
-    src = APP_JS.read_text()
-    start = src.index("// ---------- 推送设置 ----------")
-    end = src.index("// ---------- 管理后台")
-    settings = src[start:end]
+    settings = PUSH_SETTINGS_JS.read_text() + FEISHU_PERSONAL_JS.read_text()
     assert "已保存 ✅" not in settings
     assert "alert(" not in settings
     for span_id in ("dnd-result", "keywords-result", "push-channels-result", "llm-result", "custom-tg-result"):
@@ -906,7 +913,7 @@ def test_kol_image_loader_is_route_guarded_local_and_retryable():
 
 def test_kol_image_loader_latest_generation_and_revision_win():
     """同路由并发 GET 只允许最新且未跨 mutation 的响应或错误落地。"""
-    src = APP_JS.read_text()
+    src = PUSH_SETTINGS_JS.read_text()
     load = _fn_body("loadKolImageSettings")
     error = load[load.index("catch"):]
 
@@ -985,12 +992,12 @@ def test_kol_image_search_threshold_fields_and_local_results():
 
 def test_kol_image_toggle_is_inverse_guarded_and_rolls_back():
     """切换即时保存反向 hide_images，进行中禁用，失败回滚并走 toast。"""
-    src = APP_JS.read_text()
+    src = PUSH_SETTINGS_JS.read_text()
     body = _fn_body("toggleKolImages")
 
     assert "const _kolImagePendingIds = new Set()" in src
     assert "if (!input || input.disabled || _kolImagePendingIds.has(kolId)) return" in body
-    assert "const seq = routeRenderSeq" in body
+    assert _has_route_seq_capture(body)
     assert "input.disabled = true" in body
     assert "/api/subscriptions/${kolId}/hide-images" in body
     assert re.search(r'method:\s*"PUT"', body)
@@ -1049,7 +1056,7 @@ def test_kol_image_toggle_recovers_stale_route_after_returning_to_settings():
         "reloadKolImageSettingsIfNeeded()"
     )
     assert "renderKolImageSettings()" not in cleanup
-    assert "loadKolImageSettings(routeRenderSeq)" in reload_if_needed
+    assert _calls_with_route_seq(reload_if_needed, "loadKolImageSettings")
 
 
 def test_kol_image_same_route_pending_load_reloads_after_last_toggle():
@@ -1070,9 +1077,12 @@ def test_kol_image_same_route_pending_load_reloads_after_last_toggle():
     assert "if (!_kolImageReloadNeeded || _kolImagePendingIds.size)" in reload_if_needed
     assert 'if (!isRoute("settings")) return' in reload_if_needed
     assert "_kolImageReloadNeeded = false" in reload_if_needed
-    assert "loadKolImageSettings(routeRenderSeq)" in reload_if_needed
-    assert reload_if_needed.index("_kolImageReloadNeeded = false") < reload_if_needed.index(
-        "loadKolImageSettings(routeRenderSeq)"
+    assert _calls_with_route_seq(reload_if_needed, "loadKolImageSettings")
+    assert reload_if_needed.index("_kolImageReloadNeeded = false") < min(
+        i for i in (
+            reload_if_needed.find("loadKolImageSettings(routeRenderSeq)"),
+            reload_if_needed.find("loadKolImageSettings(currentRouteSeq())"),
+        ) if i >= 0
     )
 
 
@@ -2162,7 +2172,7 @@ def test_settings_save_callbacks_require_same_route_token_and_session_before_all
 def test_settings_reload_passes_original_route_sequence():
     """设置异步回调重载时必须继续使用发起请求的路由令牌。"""
     reload = _fn_body("reloadSettings")
-    assert "async function reloadSettings(routeSeq)" in APP_JS.read_text()
+    assert "async function reloadSettings(routeSeq)" in PUSH_SETTINGS_JS.read_text()
     assert "if (!routeStillActive(routeSeq)) return;" in reload
     assert "renderSettings(routeSeq)" in reload
     for name in ("saveCustomTgBot", "saveWecomWebhook", "saveBarkKey", "enableWebPush", "disableWebPush", "saveLlm"):
