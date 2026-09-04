@@ -1,4 +1,4 @@
-import { escapeHtml, imgOnError, imgProxyUrl } from "./core/html.js";
+import { escapeHtml, imgOnError, imgProxyUrl, imgSrcFor } from "./core/html.js";
 import { trapFocus } from "./core/dialog.js";
 import { createLightbox } from "./core/lightbox.js";
 import { createNewsView } from "./views/news.js";
@@ -4419,7 +4419,7 @@ function postCard(post) {
       ${Array.isArray(post.images) && post.images.length ? `
         <div class="post-images">
           ${post.images.slice(0, 4).map((img) => `
-            <a class="post-img-link" href="#" onclick="event.preventDefault();openLightbox(this.querySelector('img'))" aria-label="查看${escapeHtml(post.kol_name)}的配图"><img src="${escapeHtml(img)}" loading="lazy" alt="${escapeHtml(post.kol_name)} 的配图" onerror="imgOnError(this)"></a>`).join("")}
+            <a class="post-img-link" href="#" onclick="event.preventDefault();openLightbox(this.querySelector('img'))" aria-label="查看${escapeHtml(post.kol_name)}的配图"><img src="${escapeHtml(imgSrcFor(img))}" loading="lazy" alt="${escapeHtml(post.kol_name)} 的配图" onerror="imgOnError(this)"></a>`).join("")}
           ${post.images.length > 4 ? `<span class="post-images-more">+${post.images.length - 4}</span>` : ""}
         </div>` : ""}
       ${postFiles(post).map((f) => {

@@ -5505,3 +5505,33 @@ def test_financial_news_is_a_view_module():
     assert "function renderNewsCenter(" not in src
     assert "function loadNewsImageBlob(" not in src
     assert "createNewsView({" in src
+
+
+def test_twimg_post_images_render_through_proxy():
+    """帖子配图对已知被墙图床必须直接渲染为代理地址。
+
+    大陆对 twimg 的封锁形态不定：连接重置会触发 onerror 回退，但 DNS 黑洞
+    挂起永远不触发——只靠 onerror 补救会在部分网络下图挂死。
+    """
+    html_src = (APP_JS.parent / "core" / "html.js").read_text()
+    for host in ("pbs.twimg.com", "video.twimg.com", "abs.twimg.com"):
+        assert f'"{host}"' in html_src
+    assert "IMG_PROXY_ALWAYS_HOSTS" in html_src
+
+    src = APP_JS.read_text()
+    assert "imgSrcFor" in src.splitlines()[0]
+    assert 'src="${escapeHtml(imgSrcFor(img))}"' in src
+
+    html_path = APP_JS.parent / "core" / "html.js"
+    js = f"""
+const assert = require("node:assert");
+const {{ pathToFileURL }} = require("node:url");
+import(pathToFileURL({str(html_path)!r})).then(async (m) => {{
+  const proxied = m.imgSrcFor("https://pbs.twimg.com/media/abc.jpg?format=jpg");
+  assert.ok(proxied.startsWith("/api/img-proxy?url="), proxied);
+  assert.ok(decodeURIComponent(proxied).includes("https://pbs.twimg.com/media/abc.jpg"), proxied);
+  assert.equal(m.imgSrcFor("https://xqimg.imedao.com/a.png"), "https://xqimg.imedao.com/a.png");
+  assert.equal(m.imgSrcFor("not a url"), "not a url");
+}}).catch((e) => {{ console.error(e); process.exit(1); }});
+"""
+    subprocess.run(["node", "-e", js], check=True)
