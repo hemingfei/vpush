@@ -91,3 +91,13 @@ def test_mx_views_drawer_functions():
     assert "/api/mx-views/kol/" in kolbody
     allsrc = js
     assert "openRawModal(" in allsrc and "_mxvPosts" in allsrc
+
+
+def test_admin_mx_views_page_function():
+    js = (STATIC / "mx-views.js").read_text()
+    assert "async function loadAdminMxViews(" in js
+    body = _fn_body("loadAdminMxViews", js)
+    for marker in ("/api/admin/mx-views/config", "/api/admin/mx-views/status",
+                   "mxvAdminSaveConfig", "mxvAdminStartBackfill", "adopt"):
+        assert marker in body, marker
+    assert "admin-body" in body

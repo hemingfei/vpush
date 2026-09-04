@@ -432,3 +432,178 @@ function mxvRenderDrawer() { /* 抽屉按需打开；换快照时若开着则原
   if (_mxv.drawer.mode === "target") mxvOpenTarget(_mxv.drawer.type, _mxv.drawer.name);
   else if (_mxv.drawer.mode === "kol") mxvOpenKol(_mxv.drawer.kolId);
 }
+
+// ---------- 管理端：admin/mx-views ----------
+let _mxvAdmin = {};
+
+async function loadAdminMxViews() {
+  let cfg, status;
+  try {
+    [cfg, status] = await Promise.all([
+      api("/api/admin/mx-views/config"),
+      api("/api/admin/mx-views/status"),
+    ]);
+  } catch (err) {
+    if (!routeStillActive(_adminRenderSeq)) return;
+    $("#admin-body").innerHTML = emptyState("加载失败: " + err.message);
+    return;
+  }
+  if (!routeStillActive(_adminRenderSeq)) return;
+  _mxvAdmin = { cfg, kols: [] };
+  $("#admin-body").innerHTML = `
+  <section class="section-panel">
+    <header class="section-head"><div>
+      <h2 class="section-title">MX 观点</h2>
+      <p class="section-meta">交易时段按快照表批量研判 MX 大V消息，产出题材/个股多空观点与每日操作总结（页面 /mx-views）。</p>
+    </div></header>
+    <div style="display:grid;gap:14px">
+      <div class="settings-panel">
+        <label style="display:flex;gap:8px;align-items:center">
+          <input type="checkbox" id="mxv-enabled" ${cfg.enabled ? "checked" : ""}>
+          <b>启用研判</b><span class="muted">（仅周一~周五，节假日不判；关闭即停）</span>
+        </label>
+      </div>
+      <div class="settings-panel">
+        <b>快照时刻表</b>
+        <p class="muted" style="margin:4px 0">JSON：segments（时段+间隔分钟，起止都生成）+ extra_times；首窗固定 09:15→09:20。当前解析：</p>
+        <textarea id="mxv-schedule" class="form-control" rows="6">${escapeHtml(JSON.stringify(cfg.schedule.config, null, 1))}</textarea>
+        <p class="muted">解析结果（${cfg.schedule.resolved_times.length} 个）：${cfg.schedule.resolved_times.join(" ")}</p>
+      </div>
+      <div class="settings-panel">
+        <b>批参数</b>
+        <label>单批消息上限 <input id="mxv-batch" class="form-control" type="number" min="1" value="${cfg.batch_size}" style="width:110px"></label>
+        <label>总结最小间隔（分钟，0=每快照一版） <input id="mxv-interval" class="form-control" type="number" min="0" value="${cfg.summary_min_interval}" style="width:110px"></label>
+      </div>
+      <div class="settings-panel">
+        <b>分析大V范围</b>
+        <p class="muted">已选 ${cfg.kol_ids.length} 个；<b>空 = 全部启用的 MX 房间</b>。<button class="btn-sm" onclick="mxvAdminToggleKols()">展开/收起选择</button></p>
+        <div id="mxv-kols" style="display:none"></div>
+      </div>
+      <div class="settings-panel">
+        <b>题材参考表</b>
+        <p class="muted">每行一个题材；LLM 优先输出这些名称，表外新题材会进下方候选。</p>
+        <textarea id="mxv-hints" class="form-control" rows="6">${escapeHtml(cfg.topic_hints.join("\n"))}</textarea>
+      </div>
+      <div class="settings-panel">
+        <b>新题材候选</b>
+        <!-- 候选操作走 /api/admin/mx-views/topic-candidates/adopt、/dismiss -->
+        <p class="muted">每行一个题材；LLM 优先输出这些名称，表外新题材会进下方候选。</p>
+        <div id="mxv-cands">${cfg.topic_candidates.length ? cfg.topic_candidates.map((c) =>
+          `<span class="cat-chip">${escapeHtml(c)}
+            <button class="btn-sm" onclick="mxvAdminAdopt('${escapeHtml(c)}')">采纳</button>
+            <button class="btn-sm" onclick="mxvAdminDismiss('${escapeHtml(c)}')">忽略</button></span>`).join(" ")
+          : `<span class="muted">暂无候选</span>`}</div>
+      </div>
+      <div class="settings-panel">
+        <b>运行</b>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn-normal" onclick="mxvAdminRun()">手动跑一批</button>
+          <input id="mxv-bf-from" class="form-control" type="date" style="width:150px">
+          <input id="mxv-bf-to" class="form-control" type="date" style="width:150px">
+          <button class="btn-normal" onclick="mxvAdminStartBackfill()">回填</button>
+          <button class="btn-sm" onclick="mxvAdminCancelBackfill()">取消回填</button>
+          <span id="mxv-bf-progress" class="muted"></span>
+        </div>
+        <p id="mxv-status" class="muted" style="margin:8px 0 0">${mxvAdminStatusLine(status)}</p>
+      </div>
+      <div><button class="btn-normal" onclick="mxvAdminSaveConfig()">保存全部配置</button></div>
+    </div>
+  </section>`;
+  mxvAdminStartProgressPoll();
+}
+
+function mxvAdminStatusLine(s) {
+  return `游标 ${s.cursor} · 版本 ${s.version} · 今日 live 批次 ${s.batches_today} · 连续失败 ${s.fail_count}` +
+    (s.last_batch ? ` · 上批 ${s.last_batch.trading_day} ${s.last_batch.snapshot_at} ${s.last_batch.status}${s.last_batch.error ? "：" + (s.last_batch.error || "").slice(0, 120) : ""}` : "");
+}
+
+async function mxvAdminSaveConfig() {
+  let schedule;
+  try {
+    schedule = JSON.parse($("#mxv-schedule").value);
+  } catch (e) {
+    flash("快照时刻表不是合法 JSON", "error");
+    return;
+  }
+  try {
+    await api("/api/admin/mx-views/config", {
+      method: "PUT",
+      body: JSON.stringify({
+        enabled: $("#mxv-enabled").checked,
+        schedule,
+        batch_size: Number($("#mxv-batch").value) || 600,
+        summary_min_interval: Number($("#mxv-interval").value) || 0,
+        kol_ids: _mxvAdmin.selected ? Array.from(_mxvAdmin.selected) : undefined,
+        topic_hints: $("#mxv-hints").value.split("\n").map((x) => x.trim()).filter(Boolean),
+      }),
+    });
+    flash("配置已保存");
+    loadAdminMxViews();
+  } catch (err) {
+    flash(err.message, "error");
+  }
+}
+
+async function mxvAdminToggleKols() {
+  const box = $("#mxv-kols");
+  if (box.style.display !== "none") { box.style.display = "none"; return; }
+  if (!_mxvAdmin.kols.length) {
+    const data = await api("/api/admin/kols?platform=mx&limit=300").catch(() => ({ items: [] }));
+    _mxvAdmin.kols = data.items || data.kols || [];
+    _mxvAdmin.selected = new Set(_mxvAdmin.cfg.kol_ids || []);
+  }
+  box.style.display = "block";
+  box.innerHTML = _mxvAdmin.kols.map((k) => `
+    <label style="display:inline-flex;gap:4px;align-items:center;margin:2px 10px 2px 0">
+      <input type="checkbox" value="${k.id}" ${_mxvAdmin.selected.has(k.id) ? "checked" : ""}
+        onchange="this.checked ? _mxvAdmin.selected.add(${k.id}) : _mxvAdmin.selected.delete(${k.id})">
+      ${escapeHtml(k.name)}${k.enabled ? "" : "（停用）"}
+    </label>`).join("");
+}
+
+async function mxvAdminAdopt(name) {
+  try {
+    await api("/api/admin/mx-views/topic-candidates/adopt", { method: "POST", body: JSON.stringify({ name }) });
+    flash(`已采纳「${name}」`);
+    loadAdminMxViews();
+  } catch (err) { flash(err.message, "error"); }
+}
+
+async function mxvAdminDismiss(name) {
+  await api("/api/admin/mx-views/topic-candidates/dismiss", { method: "POST", body: JSON.stringify({ name }) }).catch(() => {});
+  loadAdminMxViews();
+}
+
+function mxvAdminStartBackfill() {
+  const dayFrom = $("#mxv-bf-from").value, dayTo = $("#mxv-bf-to").value;
+  if (!dayFrom || !dayTo) { flash("请选择回填日期范围", "error"); return; }
+  api("/api/admin/mx-views/backfill", { method: "POST", body: JSON.stringify({ day_from: dayFrom, day_to: dayTo }) })
+    .then(() => { flash("回填已启动"); mxvAdminStartProgressPoll(); })
+    .catch((err) => flash(err.message, "error"));
+}
+
+function mxvAdminCancelBackfill() {
+  api("/api/admin/mx-views/backfill/cancel", { method: "POST" }).then(() => flash("已请求取消")).catch(() => {});
+}
+
+function mxvAdminRun() {
+  api("/api/admin/mx-views/run", { method: "POST" })
+    .then(() => flash("已触发手动跑批"))
+    .catch((err) => flash(err.message, "error"));
+}
+
+let _mxvProgressTimer = null;
+function mxvAdminStartProgressPoll() {
+  if (_mxvProgressTimer) clearInterval(_mxvProgressTimer);
+  _mxvProgressTimer = setInterval(async () => {
+    const el = $("#mxv-bf-progress");
+    const st = $("#mxv-status");
+    if (!el || !st) { clearInterval(_mxvProgressTimer); _mxvProgressTimer = null; return; }
+    const [p, s] = await Promise.all([
+      api("/api/admin/mx-views/backfill/progress").catch(() => null),
+      api("/api/admin/mx-views/status").catch(() => null),
+    ]);
+    if (p) el.textContent = p.running ? `回填中 ${p.done_windows}/${p.total_windows}${p.current_day ? "（" + p.current_day + "）" : ""}` : "";
+    if (s) st.textContent = mxvAdminStatusLine(s);
+  }, 3000);
+}
