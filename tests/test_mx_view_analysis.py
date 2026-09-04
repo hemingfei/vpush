@@ -107,3 +107,42 @@ def test_snapshot_windows_first_window_starts_at_0915():
     # 12:00 的上一快照是 11:30；16:00 的上一快照是 15:00
     assert wins[times.index("12:00")] == ("11:30", "12:00")
     assert wins[times.index("16:00")] == ("15:00", "16:00")
+
+
+from app import llm as llm_mod
+
+
+def test_research_viewpoints_parses_and_normalizes(monkeypatch):
+    posts = [
+        {"id": 11, "kol_name": "王哥", "title": "", "content": "固态电池订单爆了", "published_at": "2026-09-04 09:18:00"},
+        {"id": 12, "kol_name": "李姐", "title": "", "content": "地产别碰", "published_at": "2026-09-04 09:19:00"},
+    ]
+    captured = {}
+
+    def fake_chat(llm_config, messages, max_tokens, **kw):
+        captured["messages"] = messages
+        return (
+            '{"opinions": ['
+            '{"author":"王哥","target_type":"topic","target_name":"固态电池","direction":"bull",'
+            '"action":"","confidence":"high","summary":"订单排到Q2","evidence":[11,99]},'
+            '{"author":"李姐","target_type":"stock","target_name":"中X锂业","direction":"bear",'
+            '"action":"减仓","confidence":"low","summary":"高位减一点","evidence":[12]}'
+            "]}"
+        )
+
+    monkeypatch.setattr(llm_mod, "_chat", fake_chat)
+    out = llm_mod.research_viewpoints(posts, ["固态电池"], ["建仓", "减仓"])
+    assert out is not None and len(out) == 2
+    assert out[0]["evidence"] == [11]  # 幻觉 id 99 在解析层丢弃
+    assert out[1]["direction"] == "bear" and out[1]["action"] == "减仓"
+    user_text = captured["messages"][1]["content"]
+    assert '"id": 11' in user_text and "固态电池" in captured["messages"][0]["content"]
+
+
+def test_research_viewpoints_failure_returns_none(monkeypatch):
+    monkeypatch.setattr(llm_mod, "_chat", lambda *a, **k: None)
+    assert llm_mod.research_viewpoints(
+        [{"id": 1, "kol_name": "A", "title": "", "content": "x", "published_at": "2026-09-04 09:00:00"}],
+        [], [],
+    ) is None
+    assert llm_mod.research_viewpoints([], [], []) == []

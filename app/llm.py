@@ -562,6 +562,10 @@ TAG_CHAT_TIMEOUT = 300
 TAG_BATCH_MAX_TOKENS = 80000
 # 单条消息送入 LLM 的正文截断长度（MX 群消息多为短句，500 字足够上下文）
 TAG_INPUT_TEXT_MAX = 500
+# 研判与打标同档：大批次 opinions JSON 输出，部分服务端拒绝 max_tokens 时
+# _chat 会自动降级为不传
+VIEW_CHAT_TIMEOUT = 300
+VIEW_MAX_TOKENS = 80000
 
 # 规则与少样本示例是稳定部分（利于 prompt cache）；词表/股票参考由
 # build_tag_system_prompt() 每次调用时拼在尾部（管理员改词表下一批即生效）
@@ -784,4 +788,122 @@ def tag_posts_llm(
     logger.info(
         "LLM 打标 posts=%d 解析=%d 缺失=%d", len(messages), len(out), len(id_set) - len(out)
     )
+    return out
+
+
+# ---- MX 大V观点研判（多空观点提取 + 证据约束，MX 实时观点管线调用） ----
+
+VIEW_SYSTEM_PROMPT_HEADER = """你是A股盘面研判助手。输入是财经社群大V在某一时间段的消息（JSON 数组：id/author/time/text）。
+对每位大V明确表达的观点输出 JSON：
+{"opinions":[{"author":"大V名","target_type":"topic|stock","target_name":"题材名或股票正式简称","direction":"bull|bear|neutral","action":"建仓|加仓|减仓|清仓|做T|观察（无则空串）","confidence":"high|low","summary":"不超过40字的观点理由","evidence":[消息id]}]}
+规则：
+1. 只提取明确表达的观点，不推测；同一位大V对同一标的的多条消息合并为一条 opinion（evidence 聚合多个 id）。
+2. direction：看多/利好/看涨/推荐买入=bull；看空/风险提示/看跌/减仓建议=bear；中性陈述=neutral。
+3. action 仅在明确给出操作建议时输出（建仓/加仓/减仓/清仓/做T/观察），否则空串；题材观点一般无 action。
+4. target_type=stock 时 target_name 一律用 A 股正式简称，黑话按【黑话参考】还原；topic 优先用【题材参考表】名称，新题材用通行简短中文名。
+5. evidence 必须是输入里真实存在的消息 id（至少 1 个），无依据的观点不要输出；不编造大V与标的。"""
+
+
+def build_view_system_prompt(topic_hints, action_tags) -> str:
+    """多空研判系统提示词：稳定规则 + 当次题材参考表/操作词表。"""
+    hints = [str(h).strip() for h in (topic_hints or []) if str(h).strip()]
+    actions = [str(a).strip() for a in (action_tags or []) if str(a).strip()]
+    parts = [VIEW_SYSTEM_PROMPT_HEADER, "【题材参考表】", "、".join(hints) if hints else "（空）"]
+    parts.append("\n【操作词表】\n" + ("、".join(actions) if actions else "（空）"))
+    return "\n".join(parts)
+
+
+def research_viewpoints(posts, topic_hints, action_tags, llm_config=None, client=None):
+    """让 LLM 对一批 MX 消息做多空观点研判。
+
+    posts: [{id, kol_name, title, content, published_at}, ...]（id 升序）。
+    返回归一化后的 opinion 列表（宽松归一；词表校验/作者核对由调用方完成），
+    空输入返回 []，调用/解析失败返回 None（整批失败语义）。
+    """
+    rows = list(posts or [])
+    if not rows:
+        return []
+    id_set = set()
+    messages = []
+    for row in rows:
+        try:
+            pid = int(row["id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        id_set.add(pid)
+        text = " ".join(
+            (str(row.get("title") or "").strip(), str(row.get("content") or "").strip())
+        ).strip()[:TAG_INPUT_TEXT_MAX]
+        messages.append(
+            {"id": pid, "author": str(row.get("kol_name") or ""),
+             "time": str(row.get("published_at") or ""), "text": text}
+        )
+    if not messages:
+        return []
+    system = build_view_system_prompt(topic_hints, action_tags)
+    text = _chat(
+        llm_config,
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": "消息列表：\n" + json.dumps(messages, ensure_ascii=False)},
+        ],
+        VIEW_MAX_TOKENS,
+        client=client,
+        temperature=0,
+        attempts=2,
+        response_format={"type": "json_object"},
+        timeout=VIEW_CHAT_TIMEOUT,
+    )
+    if not text:
+        return None
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        logger.warning("LLM 研判无 JSON 对象: %.100s", text)
+        return None
+    try:
+        parsed = json.loads(match.group(0))
+    except ValueError:
+        logger.warning("LLM 研判 JSON 解析失败: %.100s", text)
+        return None
+    items = parsed.get("opinions") if isinstance(parsed, dict) else None
+    if not isinstance(items, list):
+        logger.warning("LLM 研判缺少 opinions 数组: %.100s", text)
+        return None
+    out = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        direction = str(item.get("direction") or "")
+        if direction not in ("bull", "bear", "neutral"):
+            continue
+        ttype = str(item.get("target_type") or "")
+        if ttype not in ("topic", "stock"):
+            continue
+        name = str(item.get("target_name") or "").strip()[:30]
+        if not name:
+            continue
+        evidence = []
+        for ev in item.get("evidence") or []:
+            try:
+                ev_id = int(ev)
+            except (TypeError, ValueError):
+                continue
+            if ev_id in id_set and ev_id not in evidence:
+                evidence.append(ev_id)
+        if not evidence:
+            continue
+        action = str(item.get("action") or "").strip()
+        out.append(
+            {
+                "author": str(item.get("author") or "").strip()[:40],
+                "target_type": ttype,
+                "target_name": name,
+                "direction": direction,
+                "action": action,
+                "confidence": "low" if str(item.get("confidence") or "") == "low" else "high",
+                "summary": str(item.get("summary") or "").strip()[:200],
+                "evidence": evidence,
+            }
+        )
+    logger.info("LLM 研判 posts=%d opinions=%d", len(messages), len(out))
     return out
