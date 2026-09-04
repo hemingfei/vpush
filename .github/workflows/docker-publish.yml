@@ -42,6 +42,7 @@ jobs:
             node --input-type=module --check < "$file"
           done
           python scripts/bump_assets.py --check
+          python scripts/check_inline_handlers.py
           node --check miniprogram/utils/api.js
           node --check miniprogram/pages/*/*.js
       - name: sidecar 测试
