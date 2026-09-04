@@ -4959,7 +4959,7 @@ function togglePostTags(btn) {
 const RAW_MODAL_LABELS = { mx: "MX", system: "系统 KOL" };
 
 function openRawModal(postId, label) {
-  const post = _tlPosts.find((p) => p.id === postId);
+  const post = _tlPosts.find((p) => p.id === postId) || _kolPagePosts.find((p) => p.id === postId);
   if (!post) return;
   closeRawModal(); // 防连点叠开
   let detail = post.detail;
@@ -4971,6 +4971,7 @@ function openRawModal(postId, label) {
     : String(detail ?? "").trim().length > 0;
   const text = hasRaw && typeof detail === "object" ? JSON.stringify(detail, null, 2) : String(detail ?? "");
   const who = post.kol_name ? `${escapeHtml(post.kol_name)} · ` : "";
+  const isAdmin = !!state.user?.is_admin;
   const mask = document.createElement("div");
   mask.className = "modal-mask mx-raw-mask";
   mask.setAttribute("role", "dialog");
@@ -4984,19 +4985,110 @@ function openRawModal(postId, label) {
         ? `<button type="button" class="btn-ghost mx-raw-copy" onclick="copyText(mxRawModalText(), '已复制原始消息')">复制 JSON</button>
            <pre class="mx-raw-pre">${escapeHtml(text)}</pre>`
         : `<p class="mx-raw-empty muted">该消息没有保存原始数据</p>`}
+      <div class="mx-raw-tags">
+        <div class="mx-raw-tags-title">标签</div>
+        <div class="mx-raw-tags-list" id="mx-raw-tags-list">${mxRawTagsHtml(post.tags, isAdmin)}</div>
+        ${isAdmin ? `
+        <div class="mx-raw-tag-add">
+          <input id="mx-raw-tag-input" class="form-control" maxlength="30" placeholder="输入新标签，回车或点添加" onkeydown="if(event.key==='Enter'){event.preventDefault();mxRawAddTag();}">
+          <button type="button" class="btn-sm" onclick="mxRawAddTag()">添加标签</button>
+        </div>` : ""}
+      </div>
     </div>`;
   mask._rawText = text;
+  mask._postId = postId;
   mask.addEventListener("click", (e) => {
     if (e.target === mask) closeRawModal();
   });
   mask._onKey = (e) => {
     if (e.key === "Escape") {
+      // 正在输入标签时按 Escape：先清空输入，再按才关弹窗
+      if (e.target && e.target.id === "mx-raw-tag-input" && e.target.value) {
+        e.target.value = "";
+        e.preventDefault();
+        return;
+      }
       e.preventDefault();
       closeRawModal();
     }
   };
   document.addEventListener("keydown", mask._onKey, true);
   document.body.appendChild(mask);
+}
+
+// 原始消息弹窗里的标签徽章：管理员带 × 删除按钮
+function mxRawTagsHtml(tags, isAdmin) {
+  const list = Array.isArray(tags) ? tags : [];
+  const chips = list.map((t) => `
+    <span class="cat cat-tag mx-raw-tag">${escapeHtml(t)}${isAdmin
+      ? `<button type="button" class="mx-raw-tag-del" data-tag="${escapeHtml(t)}" aria-label="删除标签 ${escapeHtml(t)}" title="删除标签 ${escapeHtml(t)}" onclick="mxRawRemoveTag(this.dataset.tag)">×</button>`
+      : ""}</span>`).join("");
+  return chips || '<span class="muted mx-raw-tag-empty">暂无标签</span>';
+}
+
+function _mxRawModalPost() {
+  const mask = document.querySelector(".mx-raw-mask");
+  if (!mask) return null;
+  return _tlPosts.find((p) => p.id === mask._postId)
+    || _kolPagePosts.find((p) => p.id === mask._postId)
+    || null;
+}
+
+function mxRawRenderTags(tags) {
+  const list = document.getElementById("mx-raw-tags-list");
+  if (list) list.innerHTML = mxRawTagsHtml(tags, !!state.user?.is_admin);
+}
+
+// 增删标签后同步内存缓存，并热替换背后的帖子卡片（关弹窗即见新标签，不用整页刷新）
+function _syncPostTags(postId, tags) {
+  if (!Array.isArray(tags)) return;
+  const post = _tlPosts.find((p) => p.id === postId) || _kolPagePosts.find((p) => p.id === postId);
+  if (post) post.tags = tags;
+  const card = document.querySelector(`.post-item[data-post-id="${postId}"]`);
+  if (!post || !card) return;
+  const wrap = document.createElement("div");
+  wrap.innerHTML = postCard(post).trim();
+  const next = wrap.firstElementChild;
+  if (next) {
+    // 换卡会丢掉正在播放的语音按钮，先停掉避免出现"无声播放"的孤儿音频
+    if (_mxAudioBtn && card.contains(_mxAudioBtn)) stopMxAudio();
+    card.replaceWith(next);
+  }
+}
+
+async function mxRawAddTag() {
+  const post = _mxRawModalPost();
+  const input = document.getElementById("mx-raw-tag-input");
+  const tag = (input?.value || "").trim();
+  if (!post || !tag) return;
+  try {
+    const data = await api(`/api/admin/posts/${post.id}/tags/add`, {
+      method: "POST",
+      body: JSON.stringify({ tag }),
+    });
+    if (input) input.value = "";
+    _syncPostTags(post.id, data.tags);
+    mxRawRenderTags(data.tags);
+    flash(`已添加标签「${tag}」`);
+  } catch (err) {
+    flash("添加失败: " + err.message, "error");
+  }
+}
+
+async function mxRawRemoveTag(tag) {
+  const post = _mxRawModalPost();
+  if (!post || !tag) return;
+  try {
+    const data = await api(`/api/admin/posts/${post.id}/tags/remove`, {
+      method: "POST",
+      body: JSON.stringify({ tag }),
+    });
+    _syncPostTags(post.id, data.tags);
+    mxRawRenderTags(data.tags);
+    flash(`已删除标签「${tag}」`);
+  } catch (err) {
+    flash("删除失败: " + err.message, "error");
+  }
 }
 
 // 复制按钮取当前弹窗内存的原文（避免从 DOM 读 pre 文本时转义还原出错）
@@ -8941,7 +9033,8 @@ async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = nu
       <section class="section-panel">
         <header class="section-head">
           <div><h2 class="section-title">MX平台配置</h2>
-          <p class="section-meta">配置 MX 平台的 API Token、同步和 WebSocket 推送。</p></div>
+          <p class="section-meta">配置 MX 平台的 API Token、同步和 WebSocket 推送。</p>
+          <p class="section-meta" id="mx-token-updated" style="display:none"></p></div>
         </header>
         <div class="cfg-grid">
           <div class="cfg-group">
@@ -10322,6 +10415,19 @@ async function mxSessionLogout() {
   }
 }
 
+function updateMxTokenUpdatedLabel(config) {
+  const el = $("#mx-token-updated");
+  if (!el) return;
+  if (config.token) {
+    el.textContent = config.token_updated_at
+      ? `Token 更新于 ${fmtTs(config.token_updated_at)}`
+      : "Token 更新时间：暂无记录（Token 可能由环境变量提供）";
+    el.style.display = "";
+  } else {
+    el.style.display = "none";
+  }
+}
+
 async function loadMxAdmin() {
   const box = $("#st-mx");
   if (!box) return;
@@ -10337,6 +10443,7 @@ async function loadMxAdmin() {
     $("#mx-ws-enabled").checked = config.ws_enabled;
     $("#mx-page-size").value = config.page_size || 30;
     $("#mx-max-pages").value = config.max_history_pages || 100;
+    updateMxTokenUpdatedLabel(config);
 
     // Load rooms
     loadMxRooms();
@@ -10387,6 +10494,9 @@ async function saveMxConfig() {
       body: JSON.stringify(payload),
     });
     flash("MX配置已保存");
+    try {
+      updateMxTokenUpdatedLabel(await api("/api/admin/sources/mx"));
+    } catch {}
     refreshMxWsStatus();
   } catch (err) {
     flash(err.message || "保存失败", "error");
@@ -12847,6 +12957,8 @@ async function loadAdminTagsTab() {
 
 const _TAG_REVIEW_KINDS = { topic: "话题", stock: "股票", action: "操作" };
 let _mxAliasCandidates = [];
+let _mxTagReviews = [];               // 当前待审标签列表（行内保留完整消息文本供「更多」展开）
+const _tagReviewExpanded = new Set(); // 已展开全文的审核记录 id（重渲染后保持展开状态）
 let _mxTagTestResult = null;
 let _mxTagPollTimer = null;
 let _mxTagSeenFinishedAt = null; // 已提示过的任务完成时刻（防重复弹提示）
@@ -12865,16 +12977,20 @@ function adminMxTagPanel(tagStatus, tagReviews, aliasCands, tagPending) {
     ? `<p class="status-fail" style="margin-top:8px">⚠️ 连续失败 ${st.consecutive_failures || 0} 次，已发系统告警，恢复后会再通知。</p>`
     : "";
   const reviewRows = (tagReviews || []).length === 0
-    ? `<tr><td colspan="5" class="muted">暂无待审标签</td></tr>`
+    ? `<tr><td colspan="6" class="muted">暂无待审标签</td></tr>`
     : (tagReviews || []).map((r) => {
-        const excerpt = String(r.title || r.content || "").trim().slice(0, 60);
+        // 全文渲染进单元格，默认钳 2 行，超过 60 字给「更多/收起」展开按钮
+        const msg = String(r.title || r.content || "").trim();
+        const expanded = _tagReviewExpanded.has(r.id);
         return `
         <tr>
+          <td class="tag-review-check"><input type="checkbox" data-review-id="${r.id}" aria-label="选择审核 ${r.id}" onchange="adminTagReviewSelChange()"></td>
           <td>${r.id}</td>
-          <td>${escapeHtml(r.kol_name || "")}：${escapeHtml(excerpt)}</td>
+          <td class="tag-review-msg"><span class="muted">${escapeHtml(r.kol_name || "")}：</span><span class="tag-review-msg-text${expanded ? " expanded" : ""}">${escapeHtml(msg)}</span>${msg.length > 60 ? `<button type="button" class="post-expand-btn" aria-expanded="${expanded}" onclick="toggleTagReviewMsg(${r.id}, this)">${expanded ? "收起 ▲" : "更多 ▼"}</button>` : ""}</td>
           <td><span class="cat cat-tag">${escapeHtml(r.tag)}</span></td>
           <td>${_TAG_REVIEW_KINDS[r.kind] || escapeHtml(r.kind || "—")}</td>
           <td>
+            <button class="btn-sm" onclick="adminOpenTagReviewModal(${r.post_id})" title="查看该消息的全部标签并直接操作">查看</button>
             <button class="btn-sm" onclick="adminReviewTag(${r.id}, 'approve')">通过</button>
             <button class="btn-sm danger" onclick="adminReviewTag(${r.id}, 'reject')">拒绝</button>
           </td>
@@ -12898,7 +13014,7 @@ function adminMxTagPanel(tagStatus, tagReviews, aliasCands, tagPending) {
     <section class="section-panel">
       <header class="section-head">
         <div><h2 class="section-title">MX LLM 打标（手动）</h2>
-        <p class="section-meta">选大V后对其未打标消息跑 LLM（话题/股票/操作三类标签，带准确度）：high 与消息已有标签<b>去重合并</b>写入，low 进下方审核队列；发现的通用黑话进候选队列。一次最多处理 1000 条；自动触发已停用。</p></div>
+        <p class="section-meta">选大V后对其未打标消息跑 LLM（话题/股票/操作三类标签，带准确度）：high 与消息已有标签<b>去重合并</b>写入，low 进下方审核队列（已在消息标签里的不再进审核）；发现的通用黑话进候选队列。一次最多处理 1000 条；自动触发已停用。</p></div>
       </header>
       <p class="section-meta" style="margin-top:8px">${statusLine}</p>
       ${alertLine}
@@ -12911,12 +13027,17 @@ function adminMxTagPanel(tagStatus, tagReviews, aliasCands, tagPending) {
     </section>
     <section class="section-panel">
       <header class="section-head"><div><h2 class="section-title">标签审核</h2>
-      <p class="section-meta">LLM 标了但不确定（low 准确度）的标签，通过后追加到该条消息。</p></div></header>
+      <p class="section-meta">LLM 标了但不确定（low 准确度）的标签，通过后追加到该条消息。可勾选多条批量操作。</p></div></header>
       <div class="table-wrap">
         <table>
-          <thead><tr><th scope="col">ID</th><th scope="col">消息</th><th scope="col">标签</th><th scope="col">类型</th><th scope="col">操作</th></tr></thead>
-          <tbody>${reviewRows}</tbody>
+          <thead><tr><th scope="col" class="tag-review-check"><input type="checkbox" id="tag-review-sel-all" aria-label="全选待审标签" onchange="adminTagReviewSelAll(this.checked)"></th><th scope="col">ID</th><th scope="col">消息</th><th scope="col">标签</th><th scope="col">类型</th><th scope="col">操作</th></tr></thead>
+          <tbody id="tag-review-tbody">${reviewRows}</tbody>
         </table>
+      </div>
+      <div class="toolbar" style="margin-top:10px">
+        <button class="btn-normal" id="tag-review-batch-approve" disabled onclick="adminReviewTagsBatch('approve')">批量通过</button>
+        <button class="btn-ghost" id="tag-review-batch-reject" disabled onclick="adminReviewTagsBatch('reject')">批量拒绝</button>
+        <span class="muted" id="tag-review-sel-count">未选择</span>
       </div>
     </section>
     <section class="section-panel">
@@ -13122,6 +13243,236 @@ async function adminReviewTag(id, action) {
     await api(`/api/admin/post-tag-reviews/${id}/${action}`, { method: "POST" });
     flash(action === "approve" ? "已通过并追加到消息标签" : "已拒绝该标签");
     loadAdminVocabTab("tags");
+  } catch (err) {
+    flash("操作失败: " + err.message, "error");
+  }
+}
+
+// 待审标签消息默认钳 2 行，点「更多/收起」原地切换，不整表重渲染
+function toggleTagReviewMsg(id, btn) {
+  if (_tagReviewExpanded.has(id)) _tagReviewExpanded.delete(id);
+  else _tagReviewExpanded.add(id);
+  const expanded = _tagReviewExpanded.has(id);
+  const text = btn.closest("td")?.querySelector(".tag-review-msg-text");
+  if (text) text.classList.toggle("expanded", expanded);
+  btn.textContent = expanded ? "收起 ▲" : "更多 ▼";
+  btn.setAttribute("aria-expanded", String(expanded));
+}
+
+function adminTagReviewSelectedIds() {
+  return [...document.querySelectorAll("#tag-review-tbody input[data-review-id]:checked")]
+    .map((cb) => Number(cb.dataset.reviewId))
+    .filter(Number.isFinite);
+}
+
+// 勾选变化后同步全选框状态（全选/半选）、计数与批量按钮可用性
+function adminTagReviewSelChange() {
+  const ids = adminTagReviewSelectedIds();
+  const total = document.querySelectorAll("#tag-review-tbody input[data-review-id]").length;
+  const selAll = document.getElementById("tag-review-sel-all");
+  if (selAll) {
+    selAll.checked = total > 0 && ids.length === total;
+    selAll.indeterminate = ids.length > 0 && ids.length < total;
+  }
+  const count = document.getElementById("tag-review-sel-count");
+  if (count) count.textContent = ids.length ? `已选 ${ids.length} 条` : "未选择";
+  const approveBtn = document.getElementById("tag-review-batch-approve");
+  const rejectBtn = document.getElementById("tag-review-batch-reject");
+  if (approveBtn) approveBtn.disabled = !ids.length;
+  if (rejectBtn) rejectBtn.disabled = !ids.length;
+}
+
+function adminTagReviewSelAll(on) {
+  document.querySelectorAll("#tag-review-tbody input[data-review-id]").forEach((cb) => { cb.checked = on; });
+  adminTagReviewSelChange();
+}
+
+async function adminReviewTagsBatch(action) {
+  const ids = adminTagReviewSelectedIds();
+  if (!ids.length) return;
+  const label = action === "approve" ? "通过" : "拒绝";
+  const tip = action === "approve" ? "通过后标签会追加到对应消息。" : "";
+  if (!(await showConfirm(`确认${label}选中的 ${ids.length} 条待审标签？${tip}`))) return;
+  try {
+    const data = await api("/api/admin/post-tag-reviews/batch", {
+      method: "POST",
+      body: JSON.stringify({ ids, action }),
+    });
+    const okCount = Array.isArray(data.ok) ? data.ok.length : 0;
+    const failed = Array.isArray(data.failed) ? data.failed : [];
+    flash(
+      failed.length
+        ? `已${label} ${okCount} 条，失败 ${failed.length} 条：${failed.map((f) => `#${f.id} ${f.reason}`).join("；")}`
+        : `已${label} ${okCount} 条待审标签`,
+      failed.length ? "error" : "ok",
+    );
+    loadAdminVocabTab("tags");
+  } catch (err) {
+    flash(`批量${label}失败: ` + err.message, "error");
+  }
+}
+
+// ---- 审核行「查看」弹窗：消息的现有标签 / LLM 打入的标签 / 待审核标签，逐个可直接操作 ----
+
+let _tagDetailDirty = false; // 弹窗内改过标签，关闭时刷新背后的审核队列
+
+async function adminOpenTagReviewModal(postId) {
+  let data;
+  try {
+    data = await api(`/api/admin/posts/${postId}/tag-detail`);
+  } catch (err) {
+    flash("加载失败: " + err.message, "error");
+    return;
+  }
+  closeTagReviewModal(); // 防连点叠开
+  const mask = document.createElement("div");
+  mask.className = "modal-mask tag-detail-mask";
+  mask.id = "tag-detail-mask";
+  mask.setAttribute("role", "dialog");
+  mask.setAttribute("aria-modal", "true");
+  mask.setAttribute("aria-label", "标签详情");
+  mask.innerHTML = `
+    <div class="modal-card tag-detail-card">
+      <button type="button" class="tag-detail-close" aria-label="关闭" onclick="closeTagReviewModal()">×</button>
+      <h3 class="mx-raw-title">标签详情</h3>
+      <p class="mx-raw-meta">${escapeHtml(data.kol_name || "")} · ${fmtPublished(data.published_at, true)}</p>
+      <div class="tag-detail-body" id="tag-detail-body"></div>
+    </div>`;
+  mask._postId = postId;
+  mask.addEventListener("click", (e) => {
+    if (e.target === mask) closeTagReviewModal();
+  });
+  mask._onKey = (e) => {
+    if (e.key === "Escape") {
+      // 正在输入标签时按 Escape：先清空输入，再按才关弹窗
+      if (e.target && e.target.id === "tag-detail-add-input" && e.target.value) {
+        e.target.value = "";
+        e.preventDefault();
+        return;
+      }
+      e.preventDefault();
+      closeTagReviewModal();
+    }
+  };
+  document.addEventListener("keydown", mask._onKey, true);
+  document.body.appendChild(mask);
+  adminPaintTagDetail(data);
+}
+
+function _tagDetailKindLabel(kind) {
+  return _TAG_REVIEW_KINDS[kind] || (kind ? escapeHtml(kind) : "");
+}
+
+function adminTagDetailHtml(d) {
+  const llmSet = new Set((d.llm_tags || []).map((x) => x.tag));
+  const delBtn = (t) => `
+    <button type="button" class="mx-raw-tag-del" data-tag="${escapeHtml(t)}"
+      aria-label="删除标签 ${escapeHtml(t)}" title="删除标签 ${escapeHtml(t)}"
+      onclick="adminTagDetailRemoveTag(this.dataset.tag)">×</button>`;
+  const curChips = (d.tags || []).map((t) => `
+    <span class="cat cat-tag tag-detail-chip${llmSet.has(t) ? " is-llm" : ""}">
+      ${escapeHtml(t)}${llmSet.has(t) ? '<i class="tag-llm-badge" title="LLM 打标">LLM</i>' : ""}${delBtn(t)}
+    </span>`).join("") || '<span class="muted">暂无标签，可在下方输入框添加</span>';
+  const llmChips = (d.llm_tags || []).map((x) => `
+    <span class="cat cat-tag tag-detail-chip is-llm">
+      ${escapeHtml(x.tag)}<i class="tag-llm-badge" title="LLM 打标">LLM</i>${delBtn(x.tag)}
+    </span>`).join("") || '<span class="muted">暂无（LLM 直写或审核通过的标签会显示在这里）</span>';
+  const pendingRows = (d.pending_reviews || []).map((r) => `
+    <div class="tag-detail-pending-row">
+      <span class="cat cat-tag">${escapeHtml(r.tag)}</span>
+      <span class="tag-detail-pending-meta">${_tagDetailKindLabel(r.kind) || "—"} · ${r.confidence === "high" ? "高准确度" : "低准确度"}</span>
+      <span class="tag-detail-pending-ops">
+        <button class="btn-sm" onclick="adminTagReviewModalReview(${r.id}, 'approve')">通过</button>
+        <button class="btn-sm danger" onclick="adminTagReviewModalReview(${r.id}, 'reject')">拒绝</button>
+      </span>
+    </div>`).join("") || '<span class="muted">暂无待审核标签</span>';
+  const content = String(d.content || "").trim() || String(d.title || "").trim();
+  return `
+    ${content ? `<div class="tag-detail-msg">${escapeHtml(content)}</div>` : ""}
+    <section class="tag-detail-section">
+      <h4 class="tag-detail-sec-title">当前标签（${(d.tags || []).length}）</h4>
+      <div class="tag-detail-chips">${curChips}</div>
+      <div class="mx-raw-tag-add">
+        <input id="tag-detail-add-input" class="form-control" maxlength="30" placeholder="输入新标签，回车或点添加" onkeydown="if(event.key==='Enter'){event.preventDefault();adminTagDetailAddTag();}">
+        <button type="button" class="btn-sm" onclick="adminTagDetailAddTag()">添加标签</button>
+      </div>
+    </section>
+    <section class="tag-detail-section">
+      <h4 class="tag-detail-sec-title">LLM 打入的标签（${(d.llm_tags || []).length}）</h4>
+      <div class="tag-detail-chips">${llmChips}</div>
+    </section>
+    <section class="tag-detail-section">
+      <h4 class="tag-detail-sec-title">待审核标签（${(d.pending_reviews || []).length}）</h4>
+      <div class="tag-detail-pending">${pendingRows}</div>
+    </section>`;
+}
+
+function adminPaintTagDetail(data) {
+  const body = document.querySelector("#tag-detail-mask #tag-detail-body");
+  if (body) body.innerHTML = adminTagDetailHtml(data);
+}
+
+async function adminTagDetailRefresh() {
+  const mask = document.getElementById("tag-detail-mask");
+  if (!mask) return;
+  try {
+    adminPaintTagDetail(await api(`/api/admin/posts/${mask._postId}/tag-detail`));
+  } catch (err) {
+    flash("刷新失败: " + err.message, "error");
+  }
+}
+
+function closeTagReviewModal() {
+  const mask = document.getElementById("tag-detail-mask");
+  if (!mask) return;
+  document.removeEventListener("keydown", mask._onKey, true);
+  mask.remove();
+  if (_tagDetailDirty) {
+    _tagDetailDirty = false;
+    loadAdminVocabTab("tags"); // 弹窗里改过标签，关闭时同步背后的审核队列
+  }
+}
+
+async function adminTagDetailRemoveTag(tag) {
+  const mask = document.getElementById("tag-detail-mask");
+  if (!mask || !tag) return;
+  try {
+    await api(`/api/admin/posts/${mask._postId}/tags/remove`, {
+      method: "POST",
+      body: JSON.stringify({ tag }),
+    });
+    _tagDetailDirty = true;
+    flash(`已删除标签「${tag}」`);
+    adminTagDetailRefresh();
+  } catch (err) {
+    flash("删除失败: " + err.message, "error");
+  }
+}
+
+async function adminTagDetailAddTag() {
+  const mask = document.getElementById("tag-detail-mask");
+  const input = document.getElementById("tag-detail-add-input");
+  const tag = (input?.value || "").trim();
+  if (!mask || !tag) return;
+  try {
+    await api(`/api/admin/posts/${mask._postId}/tags/add`, {
+      method: "POST",
+      body: JSON.stringify({ tag }),
+    });
+    _tagDetailDirty = true;
+    flash(`已添加标签「${tag}」`);
+    adminTagDetailRefresh();
+  } catch (err) {
+    flash("添加失败: " + err.message, "error");
+  }
+}
+
+async function adminTagReviewModalReview(reviewId, action) {
+  try {
+    await api(`/api/admin/post-tag-reviews/${reviewId}/${action}`, { method: "POST" });
+    _tagDetailDirty = true;
+    flash(action === "approve" ? "已通过并追加到消息标签" : "已拒绝该标签");
+    adminTagDetailRefresh();
   } catch (err) {
     flash("操作失败: " + err.message, "error");
   }

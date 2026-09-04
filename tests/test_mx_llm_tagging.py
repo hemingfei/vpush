@@ -95,7 +95,7 @@ def test_validate_high_writes_low_reviews():
             stocks=[{"official": "宁德时代", "raw": "宁王", "confidence": "low"}],
         ),
     }
-    writes, reviews, pairs = m.validate_batch_response(
+    writes, reviews, pairs, applied = m.validate_batch_response(
         rows, response, TOPICS, ACTIONS, VALID
     )
     assert writes[1] == ["贵州茅台", "做T", "个股"]
@@ -103,6 +103,8 @@ def test_validate_high_writes_low_reviews():
     assert (2, "宁德时代", "stock") in reviews
     assert (2, "科技", "topic") in reviews
     assert pairs == [("茅台", "贵州茅台", 1)]
+    # applied 与 writes 同口径，且带类型（供写库后登记标签来源）
+    assert applied == [(1, "贵州茅台", "stock"), (1, "做T", "action"), (1, "个股", "topic")]
 
 
 def test_validate_drops_vocab_miss_and_hallucination():
@@ -114,7 +116,7 @@ def test_validate_drops_vocab_miss_and_hallucination():
             actions=[{"name": "加仓", "confidence": "low"}],
         ),
     }
-    writes, reviews, pairs = m.validate_batch_response(
+    writes, reviews, pairs, applied = m.validate_batch_response(
         rows, response, TOPICS, ACTIONS, VALID
     )
     assert writes[1] == []
@@ -132,7 +134,7 @@ def test_validate_total_cap_priority_stock_first():
             actions=[{"name": a, "confidence": "high"} for a in ("建仓", "做T")],
         ),
     }
-    writes, _reviews, _pairs = m.validate_batch_response(
+    writes, _reviews, _pairs, _applied = m.validate_batch_response(
         rows, response, TOPICS, ACTIONS, VALID
     )
     # 2 股票 + 2 操作 + 3 话题，共 7 个未触顶（总上限 10）
@@ -149,7 +151,7 @@ def test_validate_total_cap_priority_stock_first():
             actions=[{"name": a, "confidence": "high"} for a in big_actions],
         ),
     }
-    writes, _reviews, _pairs = m.validate_batch_response(
+    writes, _reviews, _pairs, _applied = m.validate_batch_response(
         rows, response, big_topics, big_actions, big_valid
     )
     assert writes[1] == [
@@ -169,7 +171,7 @@ def test_validate_general_jargon_only():
         ]),
         2: _result(jargon=[{"raw": "茅哥", "official": "贵州茅台", "kind": "general"}]),
     }
-    _w, _r, pairs = m.validate_batch_response(rows, response, TOPICS, ACTIONS, VALID)
+    _w, _r, pairs, _applied = m.validate_batch_response(rows, response, TOPICS, ACTIONS, VALID)
     assert pairs == [("茅哥", "贵州茅台", 1), ("茅哥", "贵州茅台", 2)]
 
 
@@ -574,6 +576,18 @@ def test_tag_review_unique_and_status_flow():
     db.close()
 
 
+def test_tag_review_skips_tag_already_on_post():
+    """标签已在帖上（规则标签/上一轮已写入）时不进审核：通过与否它都已在帖。"""
+    db = make_db()
+    (pid,) = _add_mx_posts(db, 1)
+    db.update_post_tags(pid, ["科技"])
+    assert db.add_pending_tag_review(pid, "科技", "topic", "low") is False
+    assert db.list_tag_reviews() == []
+    assert db.add_pending_tag_review(pid, "宏观", "topic", "low") is True
+    assert [r["tag"] for r in db.list_tag_reviews()] == ["宏观"]
+    db.close()
+
+
 def test_merge_stock_alias_candidates_dedupe_and_cap():
     from app.db import STOCK_ALIAS_CANDIDATES_MAX
 
@@ -718,6 +732,30 @@ def test_run_manual_job_merges_and_reports():
         assert all(p["llm_tagged"] == 1 for p in posts.values())
         assert [(r["tag"], r["kind"]) for r in db.list_tag_reviews()] == [("科技", "topic")]
         assert db.list_mx_pending_posts(None, 100) == []
+    finally:
+        llm.tag_posts_llm = orig
+    db.close()
+
+
+def test_run_manual_job_low_tag_already_on_post_not_reviewed():
+    """LLM low 建议的标签若已在帖上（如规则标签），不进审核队列也不计数。"""
+    db = make_db()
+    kid = db.add_kol("mx", "房间N", "n1")
+    p1 = db.insert_post("mx", kid, "y1", "", "消息内容", "u", "")
+    db.update_post_tags(p1, ["科技"])
+    import app.llm as llm
+    orig = llm.tag_posts_llm
+    llm.tag_posts_llm = lambda rows, *a, **kw: {
+        int(r["id"]): _result(topics=[{"name": "科技", "confidence": "low"}]) for r in rows
+    }
+    _reset_state()
+    assert m._job_lock.acquire(blocking=False)
+    try:
+        m._run_manual_job(db, make_config(), [kid], 100)
+        s = m.get_manual_job_status()["summary"]
+        assert s["reviews"] == 0 and s["processed"] == 1
+        assert db.list_tag_reviews() == []
+        assert db.get_post_tags(p1) == ["科技"]  # 合并后规则标签保留
     finally:
         llm.tag_posts_llm = orig
     db.close()

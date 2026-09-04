@@ -578,6 +578,15 @@ class AliasCandidateActionIn(BaseModel):
     stock: str
 
 
+class TagReviewBatchIn(BaseModel):
+    ids: list[int]
+    action: Literal["approve", "reject"]
+
+
+class PostTagEditIn(BaseModel):
+    tag: str
+
+
 class KolRequestIn(BaseModel):
     platform: str
     external_id: str
@@ -6098,7 +6107,10 @@ def create_api_router(
 
     @router.get("/admin/post-tag-reviews", dependencies=[Depends(require_admin)])
     def admin_post_tag_reviews(status: str = "pending"):
-        """LLM 打标 low 准确度标签的人工审核队列（默认 pending）。"""
+        """LLM 打标 low 准确度标签的人工审核队列（默认 pending）。
+
+        标签已在帖上的 pending 记录不列出：通过与否它都已在帖，审核无意义。
+        """
         if status not in ("pending", "approved", "rejected"):
             raise HTTPException(status_code=400, detail=f"未知状态: {status}")
         return db.list_tag_reviews(status=status)
@@ -6108,18 +6120,17 @@ def create_api_router(
         dependencies=[Depends(require_admin)],
     )
     def approve_post_tag_review(review_id: int, admin: dict = Depends(require_admin)):
-        """通过待审标签：追加到帖子标签（已达上限 POST_TAGS_MAX 或已存在时返回 409）。"""
-        from .db import POST_TAGS_MAX
-
+        """通过待审标签：追加到帖子标签；追加失败（帖删/已存在/已满）409 并注明具体原因。"""
         review = db.set_tag_review_status(review_id, "approved")
         if review is None:
             raise HTTPException(status_code=404, detail="审核记录不存在")
         if not db.append_post_tag(review["post_id"], review["tag"]):
-            # 追加失败（满/重复/帖子已删）则回滚审核状态，让管理员重处理
+            # 追加失败则回滚审核状态，让管理员重处理；报错给出确切原因
             db.set_tag_review_status(review_id, "pending")
             raise HTTPException(
                 status_code=409,
-                detail=f"追加失败：帖子标签已满 {POST_TAGS_MAX} 个、标签已存在或帖子已删除",
+                detail="追加失败："
+                + (db.post_tag_add_error(review["post_id"], review["tag"]) or "未知原因"),
             )
         _audit(admin, "approve_post_tag_review", detail=f"post={review['post_id']} tag={review['tag']}")
         return {"ok": True}
@@ -6134,6 +6145,84 @@ def create_api_router(
             raise HTTPException(status_code=404, detail="审核记录不存在")
         _audit(admin, "reject_post_tag_review", detail=f"post={review['post_id']} tag={review['tag']}")
         return {"ok": True}
+
+    @router.post("/admin/post-tag-reviews/batch", dependencies=[Depends(require_admin)])
+    def batch_post_tag_reviews(body: TagReviewBatchIn, admin: dict = Depends(require_admin)):
+        """批量通过/拒绝待审标签：逐条复用单条逻辑，返回成败明细供前端汇总提示。"""
+        review_ids = sorted({int(rid) for rid in body.ids})
+        if not review_ids:
+            raise HTTPException(status_code=400, detail="请至少选择一条审核记录")
+        status = "approved" if body.action == "approve" else "rejected"
+        ok_ids: list[int] = []
+        failed: list[dict] = []
+        for review_id in review_ids:
+            review = db.set_tag_review_status(review_id, status)
+            if review is None:
+                failed.append({"id": review_id, "reason": "审核记录不存在"})
+                continue
+            if (
+                body.action == "approve"
+                and not db.append_post_tag(review["post_id"], review["tag"])
+            ):
+                # 与单条一致：追加失败回滚审核状态，报错给出确切原因
+                db.set_tag_review_status(review_id, "pending")
+                failed.append(
+                    {
+                        "id": review_id,
+                        "tag": review["tag"],
+                        "reason": (
+                            db.post_tag_add_error(review["post_id"], review["tag"])
+                            or "追加失败"
+                        ),
+                    }
+                )
+                continue
+            ok_ids.append(review_id)
+        _audit(
+            admin,
+            f"batch_{body.action}_post_tag_review",
+            detail=f"ok={len(ok_ids)} failed={len(failed)}",
+        )
+        return {"ok": ok_ids, "failed": failed}
+
+    @router.post("/admin/posts/{post_id}/tags/add", dependencies=[Depends(require_admin)])
+    def add_post_tag(post_id: int, body: PostTagEditIn, admin: dict = Depends(require_admin)):
+        """管理员手动给帖子加标签（与审核通过同口径：去重、上限 POST_TAGS_MAX）。"""
+        from .db import POST_TAGS_MAX
+
+        tag = (body.tag or "").strip()
+        if not tag:
+            raise HTTPException(status_code=400, detail="标签不能为空")
+        if not db.append_post_tag(post_id, tag):
+            if not db.has_post(post_id):
+                raise HTTPException(status_code=404, detail="帖子不存在")
+            existing = db.get_post_tags(post_id)
+            if tag in existing:
+                raise HTTPException(status_code=409, detail="该标签已存在")
+            raise HTTPException(
+                status_code=409, detail=f"添加失败：标签已达上限 {POST_TAGS_MAX} 个"
+            )
+        _audit(admin, "add_post_tag", detail=f"post={post_id} tag={tag}")
+        return {"ok": True, "tags": db.get_post_tags(post_id)}
+
+    @router.post("/admin/posts/{post_id}/tags/remove", dependencies=[Depends(require_admin)])
+    def remove_post_tag_api(post_id: int, body: PostTagEditIn, admin: dict = Depends(require_admin)):
+        """管理员手动删除帖子上的一个标签。"""
+        tag = (body.tag or "").strip()
+        if not tag:
+            raise HTTPException(status_code=400, detail="标签不能为空")
+        if not db.remove_post_tag(post_id, tag):
+            raise HTTPException(status_code=404, detail="标签不存在或帖子已删除")
+        _audit(admin, "remove_post_tag", detail=f"post={post_id} tag={tag}")
+        return {"ok": True, "tags": db.get_post_tags(post_id)}
+
+    @router.get("/admin/posts/{post_id}/tag-detail", dependencies=[Depends(require_admin)])
+    def admin_post_tag_detail(post_id: int):
+        """标签审核「查看」弹窗：消息内容、当前标签、LLM 打入的标签、待审核标签。"""
+        detail = db.get_post_tag_detail(post_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="帖子不存在")
+        return detail
 
     @router.get("/admin/stock-alias-candidates", dependencies=[Depends(require_admin)])
     def admin_stock_alias_candidates():

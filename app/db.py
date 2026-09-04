@@ -5037,46 +5037,165 @@ class DB:
         params.append(int(limit))
         return self._rows(sql, params)
 
-    def append_post_tag(self, post_id: int, tag: str) -> bool:
-        """给帖子追加一个标签（审核通过用）；已存在或已达上限时不写，返回是否写入。"""
-        tag = str(tag or "").strip()
-        if not tag:
-            return False
+    def has_post(self, post_id: int) -> bool:
+        """帖子是否存在（手动加标签区分 404 与标签满/重复用）。"""
+        return bool(self._rows("SELECT 1 FROM posts WHERE id = ?", (int(post_id),)))
+
+    def get_post_tags(self, post_id: int) -> list[str]:
+        """读取单条帖子的标签列表（帖子不存在返回空列表）。"""
         rows = self._rows("SELECT tags FROM posts WHERE id = ?", (post_id,))
         if not rows:
-            return False
+            return []
         try:
             tags = json.loads(str(rows[0].get("tags") or "[]"))
         except ValueError:
             tags = []
         if not isinstance(tags, list):
-            tags = []
-        tags = [str(t) for t in tags if str(t)]
+            return []
+        return [str(t) for t in tags if str(t)]
+
+    def append_post_tag(self, post_id: int, tag: str) -> bool:
+        """给帖子追加一个标签（审核通过/管理员手动加标签）；已存在或已达上限时不写。"""
+        tag = str(tag or "").strip()
+        if not tag:
+            return False
+        rows = self._rows("SELECT id FROM posts WHERE id = ?", (post_id,))
+        if not rows:
+            return False
+        tags = self.get_post_tags(post_id)
         if tag in tags or len(tags) >= POST_TAGS_MAX:
             return False
         tags.append(tag)
         self.update_post_tags(post_id, tags)
         return True
 
-    def add_pending_tag_review(self, post_id: int, tag: str, kind: str, confidence: str) -> None:
-        """登记一条待人工审核的标签；同帖同标签只登记一次（审核结论不被重跑覆盖）。"""
+    def post_tag_add_error(self, post_id: int, tag: str) -> str | None:
+        """append_post_tag 返回 False 时的具体原因（帖删/已存在/已满），能成功则 None。"""
+        tag = str(tag or "").strip()
+        if not self._rows("SELECT id FROM posts WHERE id = ?", (post_id,)):
+            return "帖子已删除"
+        tags = self.get_post_tags(post_id)
+        if tag in tags:
+            return "该标签已在消息标签里"
+        if len(tags) >= POST_TAGS_MAX:
+            return f"消息标签已达上限 {POST_TAGS_MAX} 个"
+        return None
+
+    def remove_post_tag(self, post_id: int, tag: str) -> bool:
+        """删除帖子上一个标签（管理员手动编辑用）；标签不存在或帖子已删返回 False。"""
+        tag = str(tag or "").strip()
+        if not tag:
+            return False
+        rows = self._rows("SELECT id FROM posts WHERE id = ?", (post_id,))
+        if not rows:
+            return False
+        tags = self.get_post_tags(post_id)
+        if tag not in tags:
+            return False
+        self.update_post_tags(post_id, [t for t in tags if t != tag])
+        return True
+
+    def add_pending_tag_review(self, post_id: int, tag: str, kind: str, confidence: str) -> bool:
+        """登记一条待人工审核的标签；同帖同标签只登记一次（审核结论不被重跑覆盖）。
+
+        标签已在帖上（规则标签/上一轮已写入/管理员手动加过）时不登记：
+        通过与否该标签都已在帖，审核无意义。返回是否真正登记。
+        """
+        tag = str(tag or "").strip()
+        if not tag or tag in self.get_post_tags(post_id):
+            return False
         self._execute(
             "INSERT OR IGNORE INTO post_tag_reviews (post_id, tag, kind, confidence) "
             "VALUES (?, ?, ?, ?)",
-            (int(post_id), str(tag), str(kind), str(confidence)),
+            (int(post_id), tag, str(kind), str(confidence)),
+        )
+        return True
+
+    def record_llm_applied_tag(self, post_id: int, tag: str, kind: str) -> None:
+        """登记 LLM high 直写的标签（status=applied），供「查看」弹窗区分标签来源。
+
+        同帖同标签已有 pending 行时升级为 applied（LLM 已实际写入，无需再审）；
+        approved/rejected 行保持不变（人工审核结论不被重跑覆盖）。
+        """
+        tag = str(tag or "").strip()
+        if not tag:
+            return
+        self._execute(
+            "INSERT OR IGNORE INTO post_tag_reviews (post_id, tag, kind, confidence, status) "
+            "VALUES (?, ?, ?, 'high', 'applied')",
+            (int(post_id), tag, str(kind or "")),
+        )
+        self._execute(
+            "UPDATE post_tag_reviews SET status = 'applied', confidence = 'high' "
+            "WHERE post_id = ? AND tag = ? AND status = 'pending'",
+            (int(post_id), tag),
         )
 
+    def get_post_tag_detail(self, post_id: int) -> dict | None:
+        """标签审核「查看」弹窗数据：消息内容 + 当前标签 + LLM 打入的标签 + 待审核标签。
+
+        llm_tags 只列仍在帖上的 LLM 来源标签（status=applied/approved 且在
+        当前 tags 里），管理员手动删掉后自动从该列表消失。
+        """
+        rows = self._rows(
+            "SELECT p.id, p.platform, p.title, p.content, p.published_at, p.tags, "
+            "k.name AS kol_name FROM posts p JOIN kols k ON k.id = p.kol_id "
+            "WHERE p.id = ?",
+            (int(post_id),),
+        )
+        if not rows:
+            return None
+        row = dict(rows[0])
+        try:
+            tags = [str(t) for t in json.loads(str(row.pop("tags") or "[]")) if str(t)]
+        except ValueError:
+            tags = []
+        reviews = self._rows(
+            "SELECT id, tag, kind, confidence, status FROM post_tag_reviews "
+            "WHERE post_id = ? ORDER BY id",
+            (int(post_id),),
+        )
+        tag_set = set(tags)
+        llm_tags = [
+            {"tag": r["tag"], "kind": r["kind"], "status": r["status"]}
+            for r in reviews
+            if r["status"] in ("applied", "approved") and r["tag"] in tag_set
+        ]
+        pending = [
+            {"id": r["id"], "tag": r["tag"], "kind": r["kind"], "confidence": r["confidence"]}
+            for r in reviews
+            # 已在帖上的 pending 记录不展示：通过与否该标签都已在帖
+            if r["status"] == "pending" and r["tag"] not in tag_set
+        ]
+        row.update({"tags": tags, "llm_tags": llm_tags, "pending_reviews": pending})
+        return row
+
     def list_tag_reviews(self, status: str = "pending", limit: int = 200) -> list[dict]:
-        """按状态列审核队列（默认 pending），联 posts 取帖子摘要。"""
-        return self._rows(
+        """按状态列审核队列（默认 pending），联 posts 取帖子摘要。
+
+        pending 队列剔除标签已在帖上的记录：登记后标签又被直写/手动加上时，
+        通过与否该标签都已在帖，继续挂着只会误导；其余状态原样返回。
+        """
+        rows = self._rows(
             "SELECT r.id, r.post_id, r.tag, r.kind, r.confidence, r.status, r.created_at, "
-            "p.title, p.content, p.platform, k.name AS kol_name "
+            "p.title, p.content, p.platform, p.tags, k.name AS kol_name "
             "FROM post_tag_reviews r "
             "JOIN posts p ON p.id = r.post_id "
             "JOIN kols k ON k.id = p.kol_id "
             "WHERE r.status = ? ORDER BY r.id DESC LIMIT ?",
             (str(status), int(limit)),
         )
+        if status != "pending":
+            return rows
+        out = []
+        for row in rows:
+            try:
+                tags = [str(t) for t in json.loads(str(row.pop("tags") or "[]")) if str(t)]
+            except ValueError:
+                tags = []
+            if row["tag"] not in tags:
+                out.append(row)
+        return out
 
     def set_tag_review_status(self, review_id: int, status: str) -> dict | None:
         """更新审核状态，返回该条审核（含 post_id/tag），不存在返回 None。"""

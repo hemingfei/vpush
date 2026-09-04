@@ -5,7 +5,8 @@
 - 后台线程分批调 LLM（批大小取 settings），按 llm_tagged=0 选帖（blocked/hidden
   不算，最旧优先），逐批更新进度，可取消；
 - 结果与帖子已有标签**去重合并**（不再整体替换），low 进 post_tag_reviews 人工
-  审核，kind=general 黑话经 is_acceptable_alias 预过滤后进候选表。
+  审核（标签已在帖上的不进——通过与否它都已在帖），kind=general 黑话经
+  is_acceptable_alias 预过滤后进候选表。
 
 自动触发（mx_llm_tag_loop）暂停：原开盘时段调度保留代码，scheduler 按设置
 mx_llm_tag_auto_enabled（默认关）决定是否启动，后续恢复自动模式时重开。
@@ -169,19 +170,22 @@ def _dedupe(items: list[str]) -> list[str]:
 def validate_batch_response(batch_rows, response, topic_tags, action_tags, valid_stocks):
     """把 tag_posts_llm 的归一结果校验为可写数据。
 
-    返回 (writes, reviews, general_pairs)：
+    返回 (writes, reviews, general_pairs, applied)：
     - writes: {post_id: [最终标签]}——仅收 high 且过词表/名单校验的标签，按
       股票>操作>话题 拼接后截到 POST_TAGS_MAX；LLM 缺失的帖子写空（是否整批
       作废由调用方按 MISSING_RATIO_LIMIT 决定）；
     - reviews: [(post_id, tag, kind)]——low 标签进人工审核（幻觉股票既不写也不审）；
     - general_pairs: [(alias, stock, post_id)]——kind=general 的黑话映射（context/
-      typo 在 llm 归一层已保守处理，这里只认 general 且正式名在名单内）。
+      typo 在 llm 归一层已保守处理，这里只认 general 且正式名在名单内）；
+    - applied: [(post_id, tag, kind)]——与 writes 同口径的 high 直写明细（带类型，
+      供写库后登记标签来源）。
     """
     topic_set = {str(t) for t in topic_tags or []}
     action_set = {str(t) for t in action_tags or []}
     writes: dict[int, list[str]] = {}
     reviews: list[tuple[int, str, str]] = []
     general_pairs: list[tuple[str, str, int]] = []
+    applied: list[tuple[int, str, str]] = []
     for row in batch_rows:
         pid = int(row["id"])
         result = (response or {}).get(pid)
@@ -210,7 +214,16 @@ def validate_batch_response(batch_rows, response, topic_tags, action_tags, valid
                 if t.get("name") in topic_set and t.get("confidence") == "high"
             ]
         )[:3]
-        writes[pid] = _dedupe(stocks_high + actions_high + topics_high)[:POST_TAGS_MAX]
+        high_with_kind = (
+            [(t, "stock") for t in stocks_high]
+            + [(t, "action") for t in actions_high]
+            + [(t, "topic") for t in topics_high]
+        )
+        writes[pid] = _dedupe([t for t, _ in high_with_kind])[:POST_TAGS_MAX]
+        kind_by_tag: dict[str, str] = {}
+        for t, kind in high_with_kind:
+            kind_by_tag.setdefault(t, kind)
+        applied.extend((pid, t, kind_by_tag[t]) for t in writes[pid])
         for stock in stocks:
             if stock.get("confidence") != "high":
                 reviews.append((pid, stock["official"], "stock"))
@@ -230,7 +243,7 @@ def validate_batch_response(batch_rows, response, topic_tags, action_tags, valid
                 and raw != official
             ):
                 general_pairs.append((raw, official, pid))
-    return writes, reviews, general_pairs
+    return writes, reviews, general_pairs, applied
 
 
 def _record_call(count: int = 1) -> None:
@@ -332,13 +345,16 @@ def _run_tag_tick_locked(db, llm_config, publish_alert) -> dict:
                 batches + 1, last_error, cursor,
             )
             break
-        writes, reviews, general_pairs = validate_batch_response(
+        writes, reviews, general_pairs, _applied = validate_batch_response(
             rows, response, topic_tags, action_tags, valid_stocks
         )
         for pid, tags in writes.items():
             db.update_post_tags_llm(pid, tags)
+        review_logged = 0
         for pid, tag, kind in reviews:
-            db.add_pending_tag_review(pid, tag, kind, "low")
+            # 标签已在帖上（如规则标签）时登记会被跳过，按实际登记计数
+            if db.add_pending_tag_review(pid, tag, kind, "low"):
+                review_logged += 1
         pairs = [
             (alias, stock, pid)
             for alias, stock, pid in general_pairs
@@ -354,7 +370,7 @@ def _run_tag_tick_locked(db, llm_config, publish_alert) -> dict:
         logger.info(
             "MX LLM 打标批次 #%d 完成 posts=%d 写入标签=%d 进审核=%d 黑话候选=%d 游标→%d",
             batches, len(rows), sum(1 for t in writes.values() if t),
-            len(reviews), len(pairs), cursor,
+            review_logged, len(pairs), cursor,
         )
         rows = db.list_mx_posts_after(cursor, batch_size)
 
@@ -443,7 +459,7 @@ def run_tag_test(db, llm_config) -> dict:
                 "MX LLM 打标试打失败：LLM 调用失败或输出无效（详见上方 LLM 请求日志）",
             )
             return {"skipped": "llm_failed"}
-        writes, reviews, general_pairs = validate_batch_response(
+        writes, reviews, general_pairs, _applied = validate_batch_response(
             rows, response, topic_tags, action_tags, valid_stocks
         )
         pairs = [
@@ -458,6 +474,7 @@ def run_tag_test(db, llm_config) -> dict:
             excerpt = " ".join(
                 (str(row.get("title") or ""), str(row.get("content") or ""))
             ).strip()[:100]
+            existing = set(db.get_post_tags(pid))  # 已在帖上的 low 标签不会进审核
             items.append(
                 {
                     "post_id": pid,
@@ -467,7 +484,7 @@ def run_tag_test(db, llm_config) -> dict:
                     "review_tags": [
                         {"tag": tag, "kind": kind}
                         for rp, tag, kind in reviews
-                        if rp == pid
+                        if rp == pid and tag not in existing
                     ],
                     "jargon": [
                         {"alias": alias, "stock": stock}
@@ -612,14 +629,24 @@ def _run_manual_job(db, llm_config, kol_ids: list[int], max_messages: int) -> No
                     batches + 1, error,
                 )
                 break
-            writes, reviews, general_pairs = validate_batch_response(
+            writes, reviews, general_pairs, applied = validate_batch_response(
                 chunk, response, topic_tags, action_tags, valid_stocks
             )
             for pid, tags in writes.items():
                 # 与已有标签去重合并（不再是整体替换）：本地规则打的标签保留
+                known = set(db.get_post_tags(pid))
                 db.merge_post_tags_llm(pid, tags)
+                # LLM 实际新写入的标签登记来源（applied），供查看弹窗区分
+                applied_kinds = {t: k for p2, t, k in applied if p2 == pid}
+                for tag in tags:
+                    if tag not in known:
+                        db.record_llm_applied_tag(pid, tag, applied_kinds.get(tag, ""))
+            review_logged = 0
             for pid, tag, kind in reviews:
-                db.add_pending_tag_review(pid, tag, kind, "low")
+                # 标签已在帖上（本地规则标签保留在合并结果里）时不登记，按实际登记计数
+                if db.add_pending_tag_review(pid, tag, kind, "low"):
+                    review_logged += 1
+                    review_count += 1
             pairs = [
                 (alias, stock, pid)
                 for alias, stock, pid in general_pairs
@@ -629,7 +656,6 @@ def _run_manual_job(db, llm_config, kol_ids: list[int], max_messages: int) -> No
             if pairs:
                 db.merge_stock_alias_candidates(pairs)
             tagged_posts += sum(1 for t in writes.values() if t)
-            review_count += len(reviews)
             candidate_count += len(pairs)
             processed += len(chunk)
             batches += 1
@@ -639,7 +665,7 @@ def _run_manual_job(db, llm_config, kol_ids: list[int], max_messages: int) -> No
             logger.info(
                 "MX 手动打标批次 #%d 完成 posts=%d 合并标签=%d 进审核=%d 黑话候选=%d 进度 %d/%d",
                 batches, len(chunk), sum(1 for t in writes.values() if t),
-                len(reviews), len(pairs), processed, total,
+                review_logged, len(pairs), processed, total,
             )
     except Exception as exc:  # noqa: BLE001 - 任务异常体现在进度里，不影响服务
         error = f"{type(exc).__name__}: {exc}"
