@@ -879,6 +879,12 @@ textarea.proxy-import { min-height: 96px; }
 }
 .platform-tab.selected .pt-icon,
 .tl-pill.selected .pt-icon { filter: brightness(0) invert(1); }
+/* 位图品牌 logo 不能反白（会糊成白团）：选中时改坐白色圆底衬，原色图形在蓝底上依旧清晰 */
+.platform-tab.selected img.pt-icon,
+.tl-pill.selected img.pt-icon {
+  filter: none;
+  background: #fff;
+}
 .pt-label { display: inline; }
 .pt-icon { width: 16px; height: 16px; flex-shrink: 0; }
 img.pt-icon { display: block; object-fit: contain; }
