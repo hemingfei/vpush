@@ -127,6 +127,7 @@ button:focus-visible {
 }
 @media (prefers-reduced-motion: reduce) {
   .login-card { animation: none; }
+  .tl-pill[data-platform="live"]::after { animation: none; }
   .icon-badge-bar .pt-icon,
   .icon-badge-bar .funnel-icon,
   .icon-badge-bar .star-icon { transition: none; }
@@ -911,6 +912,25 @@ img.pt-icon { display: block; object-fit: contain; }
 .tl-pill.selected .pt-icon,
 .platform-tab.selected .pt-icon { background: transparent; }
 .tl-pill[data-platform="live"]:not(.selected) .pt-icon { color: var(--color-accent); }
+/* 快讯实时呼吸点：提示这是实时流（选中蓝底上换白描边） */
+.tl-pill[data-platform="live"] { position: relative; }
+.tl-pill[data-platform="live"]::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0 2px var(--color-surface);
+  animation: live-pulse 2.4s ease-in-out infinite;
+}
+.tl-pill[data-platform="live"].selected::after { box-shadow: 0 0 0 2px var(--color-accent); }
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
 .platform-tab[data-platform="xueqiu"]:not(.selected) .pt-icon,
 .tl-pill[data-platform="xueqiu"]:not(.selected) .pt-icon { color: var(--color-brand-xueqiu); }
 .platform-tab[data-platform="combination"]:not(.selected) .pt-icon,
