@@ -20,7 +20,8 @@ DIALOG_JS = APP_JS.parent / "core" / "dialog.js"
 NEWS_JS = APP_JS.parent / "views" / "news.js"
 FEISHU_PERSONAL_JS = APP_JS.parent / "views" / "feishu-personal.js"
 PUSH_SETTINGS_JS = APP_JS.parent / "views" / "push-settings.js"
-VIEW_JS_SOURCES = (APP_JS, NEWS_JS, FEISHU_PERSONAL_JS, PUSH_SETTINGS_JS)
+ADMIN_CODES_JS = APP_JS.parent / "views" / "admin" / "codes.js"
+VIEW_JS_SOURCES = (APP_JS, NEWS_JS, FEISHU_PERSONAL_JS, PUSH_SETTINGS_JS, ADMIN_CODES_JS)
 
 
 def test_subscription_push_is_the_only_subscription_management_navigation_entry():
@@ -4496,7 +4497,7 @@ def test_admin_codes_page_has_batch_bar():
     assert "/api/admin/register-codes/batch" in batch
     assert "confirm(" in batch
     assert "copyText(" in _fn_body("adminCodesCopySelected")
-    src = APP_JS.read_text()
+    src = APP_JS.read_text() + ADMIN_CODES_JS.read_text()
     assert "adminCodesTogglePage" in src
     assert "adminCodesSyncPageCheck" in src
     assert "adminSaveCodeNote" not in src
@@ -5467,7 +5468,7 @@ def test_app_uses_native_module_entry():
 def test_inline_handlers_have_exact_explicit_exports():
     source = APP_JS.read_text()
     html = INDEX_HTML.read_text()
-    views_src = "".join(path.read_text() for path in sorted((APP_JS.parent / "views").glob("*.js")))
+    views_src = "".join(path.read_text() for path in sorted((APP_JS.parent / "views").rglob("*.js")))
     core_src = "".join(path.read_text() for path in sorted((APP_JS.parent / "core").glob("*.js")))
     used = _inline_handler_calls(html + source + views_src + core_src)
     exported = _inline_handler_registry(source)
@@ -5479,7 +5480,7 @@ def test_inline_handlers_have_exact_explicit_exports():
 
 def test_inline_handlers_do_not_read_module_lexicals():
     source = APP_JS.read_text()
-    views_src = "".join(path.read_text() for path in sorted((APP_JS.parent / "views").glob("*.js")))
+    views_src = "".join(path.read_text() for path in sorted((APP_JS.parent / "views").rglob("*.js")))
     core_src = "".join(path.read_text() for path in sorted((APP_JS.parent / "core").glob("*.js")))
     for attr in EVENT_ATTRIBUTE_RE.findall(source + views_src + core_src):
         assert "${" not in attr or not INLINE_DYNAMIC_CALL_RE.search(attr), attr
