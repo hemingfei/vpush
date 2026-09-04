@@ -29,6 +29,32 @@ def test_ok_local_and_imported_handler(tmp_path: Path):
     assert check(app) == 0
 
 
+def test_missing_import_export_fails(tmp_path: Path, capsys):
+    app = _tree(
+        tmp_path,
+        'import { ghost } from "./views/sample.js";\n'
+        "const INLINE_HANDLERS = { ghost, };\n",
+        "export function wired() {}\n",
+    )
+    assert check(app) == 1
+    assert "missing export: ghost" in capsys.readouterr().out
+
+
+def test_missing_factory_return_fails(tmp_path: Path, capsys):
+    app = _tree(
+        tmp_path,
+        'import { createView } from "./views/sample.js";\n'
+        "const { ghost } = createView({});\n"
+        "const INLINE_HANDLERS = { ghost, };\n",
+        "export function createView() {\n"
+        "  function ghost() {}\n"
+        "  return {};\n"
+        "}\n",
+    )
+    assert check(app) == 1
+    assert "missing factory return: ghost" in capsys.readouterr().out
+
+
 def test_missing_handler_fails(tmp_path: Path, capsys):
     app = _tree(
         tmp_path,

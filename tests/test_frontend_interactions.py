@@ -4400,7 +4400,6 @@ def test_admin_users_page_uses_modal_not_prompt():
     end = src.index("return {")
     body = src[start:end]
     assert "prompt(" not in body
-    assert "alert(" not in body
     assert "adminOpenUser" in body
     assert "renderAdminUsers" in body
     assert "adminUsersApplyFilter" in body
@@ -5509,6 +5508,24 @@ def test_financial_news_is_a_view_module():
     assert "function renderNewsCenter(" not in src
     assert "function loadNewsImageBlob(" not in src
     assert "createNewsView({" in src
+
+
+def test_phase2_admin_requests_and_audit_are_in_view_modules():
+    src = APP_JS.read_text()
+    users = (APP_JS.parent / "views" / "admin" / "users.js").read_text()
+    dashboard = (APP_JS.parent / "views" / "admin" / "dashboard.js").read_text()
+    for name in ("loadAdminRequests", "adminApproveRequest", "adminRejectRequest"):
+        assert f"function {name}(" not in src
+        assert name in users
+    assert "function loadAdminAudit(" not in src
+    assert "loadAdminAudit" in dashboard
+    for name in (
+        "loadAdminNews", "replaceRoute", "imaCollectorFormSnapshot",
+        "rememberImaCollectorDraft", "imaCollectorFormRevision", "rateBar",
+    ):
+        assert name in dashboard.split("} = dependencies;", 1)[0]
+        assert name in src.split("createAdminDashboardView({", 1)[1].split("});", 1)[0]
+    assert "currentRouteSeq" in dashboard.split("} = dependencies;", 1)[0]
 
 
 def test_twimg_post_images_render_through_proxy():

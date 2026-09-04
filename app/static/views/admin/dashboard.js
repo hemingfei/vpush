@@ -35,6 +35,13 @@ export function createAdminDashboardView(dependencies) {
     STALE_KOL_LIMIT,
     PLATFORM_ICONS,
     fmtCacheBytes,
+    loadAdminNews,
+    replaceRoute,
+    imaCollectorFormSnapshot,
+    rememberImaCollectorDraft,
+    imaCollectorFormRevision,
+    rateBar,
+    currentRouteSeq,
   } = dependencies;
 
   async function loadAdminStats(seq = currentAdminSeq(), authoritativeImaStatus = null) {
@@ -337,7 +344,7 @@ export function createAdminDashboardView(dependencies) {
   }
 
   async function setPlazaSourceMode(platform, mode) {
-    const routeSeq = routeRenderSeq;
+    const routeSeq = currentRouteSeq();
     const token = state.token;
     const sessionGeneration = imaMountState.sessionGeneration;
     const current = document.querySelector(`.plaza-src[data-platform="${CSS.escape(platform)}"] .plaza-src-mode.selected`);
@@ -811,9 +818,79 @@ export function createAdminDashboardView(dependencies) {
     loadAdminLogs();
   }
 
+  async function loadAdminAudit() {
+    const logs = await api("/api/admin/logs?limit=100");
+    if (!routeStillActive(currentAdminSeq())) return;
+    $("#admin-body").innerHTML = `
+      <section class="section-panel">
+        <header class="section-head">
+          <div>
+            <h2 class="section-title">系统日志</h2>
+            <p class="section-meta">内存环形缓冲的最近 500 条日志，每 5 秒自动刷新；更完整历史见 docker logs（LOG_LEVEL=DEBUG 可开启更详细日志）。</p>
+          </div>
+          <div class="toolbar" style="margin-top:12px">
+            <select id="syslog-level" class="form-control" style="width:auto" onchange="loadAdminSysLogsPanel()">
+              <option value="">全部级别</option>
+              <option value="ERROR">ERROR+</option>
+              <option value="WARNING">WARNING+</option>
+              <option value="INFO">INFO+</option>
+              <option value="DEBUG">DEBUG（仅LOG_LEVEL=DEBUG时产生）</option>
+            </select>
+            <input id="syslog-q" class="form-control" style="width:220px" placeholder="关键词过滤（如 推送失败 / 大V名）" onkeydown="if(event.key==='Enter')loadAdminSysLogsPanel()">
+            <button class="btn-normal" onclick="loadAdminSysLogsPanel()">刷新</button>
+          </div>
+        </header>
+        <pre class="syslog" id="syslog-pre">加载中…</pre>
+      </section>
+      <section class="section-panel">
+        <header class="section-head">
+          <div>
+            <h2 class="section-title">错误记录</h2>
+            <p class="section-meta">WARNING 及以上日志持久化存储（跨重启保留最近 5000 条），即使环形缓冲滚动或重启后仍可查。</p>
+          </div>
+          <div class="toolbar" style="margin-top:12px">
+            <select id="errlog-level" class="form-control" style="width:auto" onchange="loadAdminErrorLogs()">
+              <option value="">全部级别</option>
+              <option value="ERROR">ERROR+</option>
+              <option value="WARNING">WARNING+</option>
+            </select>
+            <button class="btn-normal" onclick="loadAdminErrorLogs()">刷新</button>
+          </div>
+        </header>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th scope="col">时间</th><th scope="col">级别</th><th scope="col">来源</th><th scope="col">内容</th></tr></thead>
+            <tbody id="errlog-body"><tr><td colspan="4" class="muted">加载中…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+      <section class="section-panel">
+        <header class="section-head"><div><h2 class="section-title">操作日志</h2>
+        <p class="section-meta">管理员关键操作、以及用户知识库超额（操作 ima_quota，目标是用户名）。</p></div></header>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th scope="col">时间</th><th scope="col">管理员</th><th scope="col">操作</th><th scope="col">目标</th><th scope="col">详情</th></tr></thead>
+            <tbody>${logs.length === 0 ? `<tr><td colspan="5" class="muted">暂无记录</td></tr>` : logs.map((l) => `
+              <tr>
+                <td>${escapeHtml(fmtDbTime(l.created_at))}</td>
+                <td>${escapeHtml(l.username || "")}</td>
+                <td>${escapeHtml(l.action)}</td>
+                <td>${escapeHtml(l.target)}</td>
+                <td class="muted">${escapeHtml(l.detail)}</td>
+              </tr>`).join("")}</tbody>
+          </table>
+        </div>
+      </section>`;
+    stopSysLogsTimer();
+    sysLogsTimer = setInterval(loadAdminSysLogsPanel, 5000);
+    loadAdminSysLogsPanel();
+    loadAdminErrorLogs();
+  }
+
   return {
     loadAdminStats,
     loadAdminDashboard,
+    loadAdminAudit,
     loadAdminLogs,
     loadAdminErrorLogs,
     loadAdminSysLogsPanel,

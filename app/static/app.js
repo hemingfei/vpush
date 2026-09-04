@@ -7445,162 +7445,11 @@ async function pollWeiboQr(qrid, owner) {
   }
 }
 
-async function loadAdminRequests() {
-  let requests, all;
-  try {
-    [requests, all] = await Promise.all([
-      api("/api/admin/kol-requests?status=pending"),
-      api("/api/admin/kol-requests"),
-    ]);
-  } catch (err) {
-    if (!routeStillActive(_adminRenderSeq)) return;
-    $("#admin-body").innerHTML = emptyState("加载失败: " + err.message);
-    return;
-  }
-  const done = all.filter((r) => r.status !== "pending");
-  const pendingRows = requests.length === 0
-    ? `<tr><td colspan="8" class="muted">暂无待审批申请</td></tr>`
-    : requests.map((r) => `
-        <tr>
-          <td>${r.id}</td><td>${PLATFORM_LABELS[r.platform] || r.platform}</td>
-          <td>${escapeHtml(r.name || "（未填）")}</td><td>${escapeHtml(r.external_id)}</td>
-          <td>${escapeHtml(r.category_name || "—")}</td>
-          <td>${escapeHtml(r.requester || r.user_id)}</td><td>${escapeHtml(fmtDbTime(r.created_at))}</td>
-          <td>
-            <button class="btn-sm" onclick="adminApproveRequest(${r.id})">通过</button>
-            <button class="btn-sm danger" onclick="adminRejectRequest(${r.id})">拒绝</button>
-          </td>
-        </tr>`).join("");
-  const historyRows = done.length === 0
-    ? `<tr><td colspan="8" class="muted">暂无处理记录</td></tr>`
-    : done.map((r) => `
-        <tr>
-          <td>${r.id}</td><td>${PLATFORM_LABELS[r.platform] || r.platform}</td>
-          <td>${escapeHtml(r.name || "（未填）")}</td><td>${escapeHtml(r.external_id)}</td>
-          <td>${escapeHtml(r.category_name || "—")}</td>
-          <td>${escapeHtml(r.requester || r.user_id)}</td>
-          <td class="${r.status === "approved" ? "status-ok" : "status-fail"}">${r.status === "approved" ? "已通过" : "已拒绝"}</td>
-          <td>${escapeHtml(fmtDbTime(r.handled_at))}</td>
-        </tr>`).join("");
-  if (!routeStillActive(_adminRenderSeq)) return;
-  $("#admin-body").innerHTML = `
-    <section class="section-panel">
-      <header class="section-head"><div><h2 class="section-title">添加审批</h2>
-      <p class="section-meta">用户申请添加的大V，审批通过后进入订阅广场。</p></div></header>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th scope="col">ID</th><th scope="col">平台</th><th scope="col">昵称</th><th scope="col">外部ID</th><th scope="col">分类</th><th scope="col">申请人</th><th scope="col">申请时间</th><th scope="col">操作</th></tr></thead>
-          <tbody>${pendingRows}</tbody>
-        </table>
-      </div>
-    </section>
-    <section class="section-panel">
-      <header class="section-head"><div><h2 class="section-title">处理记录</h2></div></header>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th scope="col">ID</th><th scope="col">平台</th><th scope="col">昵称</th><th scope="col">外部ID</th><th scope="col">分类</th><th scope="col">申请人</th><th scope="col">状态</th><th scope="col">处理时间</th></tr></thead>
-          <tbody>${historyRows}</tbody>
-        </table>
-      </div>
-    </section>`;
-}
-
-async function adminApproveRequest(id) {
-  try {
-    await api(`/api/admin/kol-requests/${id}/approve`, { method: "POST" });
-    flash("已通过申请，大V已进入订阅广场");
-    loadAdminRequests();
-  } catch (err) {
-    alert("操作失败: " + err.message);
-  }
-}
-
-async function adminRejectRequest(id) {
-  if (!confirm("确认拒绝该申请？")) return;
-  try {
-    await api(`/api/admin/kol-requests/${id}/reject`, { method: "POST" });
-    flash("已拒绝该申请");
-    loadAdminRequests();
-  } catch (err) {
-    alert("操作失败: " + err.message);
-  }
-}
-
-
 function parseDbUtcMs(s) {
   if (!s) return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/.exec(String(s));
   if (!m) return null;
   return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
-}
-
-async function loadAdminAudit() {
-  const logs = await api("/api/admin/logs?limit=100");
-  if (!routeStillActive(_adminRenderSeq)) return;
-  $("#admin-body").innerHTML = `
-    <section class="section-panel">
-      <header class="section-head">
-        <div>
-          <h2 class="section-title">系统日志</h2>
-          <p class="section-meta">内存环形缓冲的最近 500 条日志，每 5 秒自动刷新；更完整历史见 docker logs（LOG_LEVEL=DEBUG 可开启更详细日志）。</p>
-        </div>
-        <div class="toolbar" style="margin-top:12px">
-          <select id="syslog-level" class="form-control" style="width:auto" onchange="loadAdminSysLogsPanel()">
-            <option value="">全部级别</option>
-            <option value="ERROR">ERROR+</option>
-            <option value="WARNING">WARNING+</option>
-            <option value="INFO">INFO+</option>
-            <option value="DEBUG">DEBUG（仅LOG_LEVEL=DEBUG时产生）</option>
-          </select>
-          <input id="syslog-q" class="form-control" style="width:220px" placeholder="关键词过滤（如 推送失败 / 大V名）" onkeydown="if(event.key==='Enter')loadAdminSysLogsPanel()">
-          <button class="btn-normal" onclick="loadAdminSysLogsPanel()">刷新</button>
-        </div>
-      </header>
-      <pre class="syslog" id="syslog-pre">加载中…</pre>
-    </section>
-    <section class="section-panel">
-      <header class="section-head">
-        <div>
-          <h2 class="section-title">错误记录</h2>
-          <p class="section-meta">WARNING 及以上日志持久化存储（跨重启保留最近 5000 条），即使环形缓冲滚动或重启后仍可查。</p>
-        </div>
-        <div class="toolbar" style="margin-top:12px">
-          <select id="errlog-level" class="form-control" style="width:auto" onchange="loadAdminErrorLogs()">
-            <option value="">全部级别</option>
-            <option value="ERROR">ERROR+</option>
-            <option value="WARNING">WARNING+</option>
-          </select>
-          <button class="btn-normal" onclick="loadAdminErrorLogs()">刷新</button>
-        </div>
-      </header>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th scope="col">时间</th><th scope="col">级别</th><th scope="col">来源</th><th scope="col">内容</th></tr></thead>
-          <tbody id="errlog-body"><tr><td colspan="4" class="muted">加载中…</td></tr></tbody>
-        </table>
-      </div>
-    </section>
-    <section class="section-panel">
-      <header class="section-head"><div><h2 class="section-title">操作日志</h2>
-      <p class="section-meta">管理员关键操作、以及用户知识库超额（操作 ima_quota，目标是用户名）。</p></div></header>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th scope="col">时间</th><th scope="col">管理员</th><th scope="col">操作</th><th scope="col">目标</th><th scope="col">详情</th></tr></thead>
-          <tbody>${logs.length === 0 ? `<tr><td colspan="5" class="muted">暂无记录</td></tr>` : logs.map((l) => `
-            <tr>
-              <td>${escapeHtml(fmtDbTime(l.created_at))}</td>
-              <td>${escapeHtml(l.username || "")}</td>
-              <td>${escapeHtml(l.action)}</td>
-              <td>${escapeHtml(l.target)}</td>
-              <td class="muted">${escapeHtml(l.detail)}</td>
-            </tr>`).join("")}</tbody>
-        </table>
-      </div>
-    </section>`;
-  stopSysLogsTimer();
-  sysLogsTimer = setInterval(loadAdminSysLogsPanel, 5000);
-  loadAdminSysLogsPanel();
-  loadAdminErrorLogs();
 }
 
 // ---------- 主题（深色模式）----------
@@ -7928,6 +7777,9 @@ const {
 
 const {
   loadAdminUsers,
+  loadAdminRequests,
+  adminApproveRequest,
+  adminRejectRequest,
   adminUsersApplyFilter,
   adminUsersBatch,
   adminUserToggleSelect,
@@ -7961,6 +7813,7 @@ const {
   USER_CHANNEL_KEYS,
   CHANNEL_LABELS,
   CHANNEL_ICONS,
+  PLATFORM_LABELS,
   usernameRuleError,
 });
 
@@ -8050,6 +7903,7 @@ const {
 const {
   loadAdminStats,
   loadAdminDashboard,
+  loadAdminAudit,
   loadAdminLogs,
   loadAdminErrorLogs,
   loadAdminSysLogsPanel,
@@ -8094,6 +7948,13 @@ const {
   STALE_KOL_LIMIT,
   PLATFORM_ICONS,
   fmtCacheBytes,
+  loadAdminNews,
+  replaceRoute,
+  imaCollectorFormSnapshot,
+  rememberImaCollectorDraft,
+  imaCollectorFormRevision,
+  rateBar,
+  currentRouteSeq: () => routeRenderSeq,
 });
 
 

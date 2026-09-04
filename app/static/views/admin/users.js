@@ -16,6 +16,7 @@ export function createAdminUsersView(dependencies) {
     USER_CHANNEL_KEYS,
     CHANNEL_LABELS,
     CHANNEL_ICONS,
+    PLATFORM_LABELS,
     usernameRuleError,
   } = dependencies;
 
@@ -738,8 +739,92 @@ export function createAdminUsersView(dependencies) {
   }
 
 
+  async function loadAdminRequests() {
+    let requests, all;
+    try {
+      [requests, all] = await Promise.all([
+        api("/api/admin/kol-requests?status=pending"),
+        api("/api/admin/kol-requests"),
+      ]);
+    } catch (err) {
+      if (!routeStillActive(currentAdminSeq())) return;
+      $("#admin-body").innerHTML = emptyState("加载失败: " + err.message);
+      return;
+    }
+    const done = all.filter((r) => r.status !== "pending");
+    const pendingRows = requests.length === 0
+      ? `<tr><td colspan="8" class="muted">暂无待审批申请</td></tr>`
+      : requests.map((r) => `
+          <tr>
+            <td>${r.id}</td><td>${PLATFORM_LABELS[r.platform] || r.platform}</td>
+            <td>${escapeHtml(r.name || "（未填）")}</td><td>${escapeHtml(r.external_id)}</td>
+            <td>${escapeHtml(r.category_name || "—")}</td>
+            <td>${escapeHtml(r.requester || r.user_id)}</td><td>${escapeHtml(fmtDbTime(r.created_at))}</td>
+            <td>
+              <button class="btn-sm" onclick="adminApproveRequest(${r.id})">通过</button>
+              <button class="btn-sm danger" onclick="adminRejectRequest(${r.id})">拒绝</button>
+            </td>
+          </tr>`).join("");
+    const historyRows = done.length === 0
+      ? `<tr><td colspan="8" class="muted">暂无处理记录</td></tr>`
+      : done.map((r) => `
+          <tr>
+            <td>${r.id}</td><td>${PLATFORM_LABELS[r.platform] || r.platform}</td>
+            <td>${escapeHtml(r.name || "（未填）")}</td><td>${escapeHtml(r.external_id)}</td>
+            <td>${escapeHtml(r.category_name || "—")}</td>
+            <td>${escapeHtml(r.requester || r.user_id)}</td>
+            <td class="${r.status === "approved" ? "status-ok" : "status-fail"}">${r.status === "approved" ? "已通过" : "已拒绝"}</td>
+            <td>${escapeHtml(fmtDbTime(r.handled_at))}</td>
+          </tr>`).join("");
+    if (!routeStillActive(currentAdminSeq())) return;
+    $("#admin-body").innerHTML = `
+      <section class="section-panel">
+        <header class="section-head"><div><h2 class="section-title">添加审批</h2>
+        <p class="section-meta">用户申请添加的大V，审批通过后进入订阅广场。</p></div></header>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th scope="col">ID</th><th scope="col">平台</th><th scope="col">昵称</th><th scope="col">外部ID</th><th scope="col">分类</th><th scope="col">申请人</th><th scope="col">申请时间</th><th scope="col">操作</th></tr></thead>
+            <tbody>${pendingRows}</tbody>
+          </table>
+        </div>
+      </section>
+      <section class="section-panel">
+        <header class="section-head"><div><h2 class="section-title">处理记录</h2></div></header>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th scope="col">ID</th><th scope="col">平台</th><th scope="col">昵称</th><th scope="col">外部ID</th><th scope="col">分类</th><th scope="col">申请人</th><th scope="col">状态</th><th scope="col">处理时间</th></tr></thead>
+            <tbody>${historyRows}</tbody>
+          </table>
+        </div>
+      </section>`;
+  }
+
+  async function adminApproveRequest(id) {
+    try {
+      await api(`/api/admin/kol-requests/${id}/approve`, { method: "POST" });
+      flash("已通过申请，大V已进入订阅广场");
+      loadAdminRequests();
+    } catch (err) {
+      alert("操作失败: " + err.message);
+    }
+  }
+
+  async function adminRejectRequest(id) {
+    if (!confirm("确认拒绝该申请？")) return;
+    try {
+      await api(`/api/admin/kol-requests/${id}/reject`, { method: "POST" });
+      flash("已拒绝该申请");
+      loadAdminRequests();
+    } catch (err) {
+      alert("操作失败: " + err.message);
+    }
+  }
+
   return {
     loadAdminUsers,
+    loadAdminRequests,
+    adminApproveRequest,
+    adminRejectRequest,
     adminUsersApplyFilter,
     adminUsersBatch,
     adminUserToggleSelect,
