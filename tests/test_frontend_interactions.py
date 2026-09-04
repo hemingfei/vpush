@@ -22,7 +22,8 @@ FEISHU_PERSONAL_JS = APP_JS.parent / "views" / "feishu-personal.js"
 PUSH_SETTINGS_JS = APP_JS.parent / "views" / "push-settings.js"
 ADMIN_CODES_JS = APP_JS.parent / "views" / "admin" / "codes.js"
 ADMIN_NEWS_JS = APP_JS.parent / "views" / "admin" / "news.js"
-VIEW_JS_SOURCES = (APP_JS, NEWS_JS, FEISHU_PERSONAL_JS, PUSH_SETTINGS_JS, ADMIN_CODES_JS, ADMIN_NEWS_JS)
+ADMIN_USERS_JS = APP_JS.parent / "views" / "admin" / "users.js"
+VIEW_JS_SOURCES = (APP_JS, NEWS_JS, FEISHU_PERSONAL_JS, PUSH_SETTINGS_JS, ADMIN_CODES_JS, ADMIN_NEWS_JS, ADMIN_USERS_JS)
 
 
 def test_subscription_push_is_the_only_subscription_management_navigation_entry():
@@ -4391,9 +4392,9 @@ def test_admin_backup_page_three_panels_download_skips_webdav():
 
 def test_admin_users_page_uses_modal_not_prompt():
     """用户管理：搜索/筛选/管理面板，不再用 prompt/alert 改名、重置密码、测试推送。"""
-    src = APP_JS.read_text()
+    src = ADMIN_USERS_JS.read_text()
     start = src.index("async function loadAdminUsers")
-    end = src.index("// ---------- 主题")
+    end = src.index("return {")
     body = src[start:end]
     assert "prompt(" not in body
     assert "alert(" not in body
@@ -4430,7 +4431,7 @@ def test_admin_users_page_has_batch_bar():
     assert "关闭推送" in render
     assert "adminUsersBatch(" in render
     assert "/api/admin/users/batch" in _fn_body("adminUsersBatch")
-    src = APP_JS.read_text()
+    src = ADMIN_USERS_JS.read_text()
     assert "let _adminUsersSelected" in src
     delete_fn = _fn_body("adminUsersBatch")
     assert "confirm(" in delete_fn
@@ -4460,7 +4461,7 @@ def test_admin_users_page_has_inactive_policy():
     assert "inactivePolicyRuleLabel" in render
     assert "领码或网页注册后从未登录" in render
     assert "没有未激活账号" in render
-    src = APP_JS.read_text()
+    src = ADMIN_USERS_JS.read_text()
     assert "adminSaveInactivePolicy" in src
     assert "adminInactivePolicySyncSave" in src
     assert "adminRefreshInactivePreview" in src
