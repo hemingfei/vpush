@@ -23,7 +23,8 @@ PUSH_SETTINGS_JS = APP_JS.parent / "views" / "push-settings.js"
 ADMIN_CODES_JS = APP_JS.parent / "views" / "admin" / "codes.js"
 ADMIN_NEWS_JS = APP_JS.parent / "views" / "admin" / "news.js"
 ADMIN_USERS_JS = APP_JS.parent / "views" / "admin" / "users.js"
-VIEW_JS_SOURCES = (APP_JS, NEWS_JS, FEISHU_PERSONAL_JS, PUSH_SETTINGS_JS, ADMIN_CODES_JS, ADMIN_NEWS_JS, ADMIN_USERS_JS)
+ADMIN_KOLS_JS = APP_JS.parent / "views" / "admin" / "kol.js"
+VIEW_JS_SOURCES = (APP_JS, NEWS_JS, FEISHU_PERSONAL_JS, PUSH_SETTINGS_JS, ADMIN_CODES_JS, ADMIN_NEWS_JS, ADMIN_USERS_JS, ADMIN_KOLS_JS)
 
 
 def test_subscription_push_is_the_only_subscription_management_navigation_entry():
@@ -4798,7 +4799,7 @@ def test_admin_kols_mobile_filters_and_actions_align():
 def test_admin_kols_add_fields_have_accessible_names():
     """添加区控件要有可达名称，不能只靠 placeholder。"""
     body = _fn_body("loadAdminKols")
-    src = APP_JS.read_text()
+    src = APP_JS.read_text() + ADMIN_KOLS_JS.read_text()
     assert 'id="ad-batch-platform"' not in body
     assert "默认平台" not in body
     assert "adminPlatformDefaultCat" not in src
