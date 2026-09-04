@@ -31,7 +31,7 @@ def static_origin():
         server.server_close()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def playwright_instance():
     with sync_playwright() as instance:
         yield instance
