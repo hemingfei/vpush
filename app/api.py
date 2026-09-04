@@ -4838,6 +4838,7 @@ def create_api_router(
                 return {
                     "enabled": False,
                     "token": "",
+                    "token_updated_at": db.get_setting("mx_token_updated_at") or "",
                     "api_base": "https://mx.2026.naaifu.cn/business-api/5",
                     "ws_url": "wss://mx.2026.naaifu.cn/business-api/5",
                     "ws_path": "/socket.io",
@@ -4849,6 +4850,7 @@ def create_api_router(
             return {
                 "enabled": bool(getattr(mx_config, "enabled", False)),
                 "token": getattr(mx_config, "token", ""),
+                "token_updated_at": db.get_setting("mx_token_updated_at") or "",
                 "api_base": getattr(mx_config, "api_base", "https://mx.2026.naaifu.cn/business-api/5"),
                 "ws_url": getattr(mx_config, "ws_url", "wss://mx.2026.naaifu.cn/business-api/5"),
                 "ws_path": getattr(mx_config, "ws_path", "/socket.io"),
@@ -4861,6 +4863,7 @@ def create_api_router(
             return {
                 "enabled": False,
                 "token": "",
+                "token_updated_at": db.get_setting("mx_token_updated_at") or "",
                 "api_base": "https://mx.2026.naaifu.cn/business-api/5",
                 "ws_url": "wss://mx.2026.naaifu.cn/business-api/5",
                 "ws_path": "/socket.io",
@@ -4886,7 +4889,10 @@ def create_api_router(
             if "enabled" in raw_body:
                 config.sources.mx.enabled = bool(raw_body["enabled"])
             if "token" in raw_body:
-                config.sources.mx.token = str(raw_body["token"] or "")
+                new_token = str(raw_body["token"] or "")
+                if new_token != (config.sources.mx.token or ""):
+                    config.sources.mx.token = new_token
+                    db.set_setting("mx_token_updated_at", str(int(time.time())))
             if "api_base" in raw_body:
                 config.sources.mx.api_base = str(raw_body["api_base"] or "https://mx.2026.naaifu.cn/business-api/5")
             if "ws_url" in raw_body:

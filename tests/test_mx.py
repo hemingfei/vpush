@@ -877,6 +877,66 @@ def test_update_mx_config_endpoint_hot_applies(monkeypatch):
     assert "mx" not in sched.fetchers
 
 
+def test_mx_token_updated_at_recorded_only_on_change(monkeypatch):
+    """MX 设置页展示的 Token 更新时间：仅 token 实际变化才刷新，其余字段保存不影响。"""
+    import time as time_mod
+
+    from fastapi.testclient import TestClient
+
+    from app.config import Config
+    from app.main import create_app
+
+    tmp = tempfile.mkdtemp()
+    monkeypatch.setenv("CONFIG_PATH", str(Path(tmp) / "config.yaml"))
+
+    clock = {"now": 1_700_000_000}
+    monkeypatch.setattr(time_mod, "time", lambda: clock["now"])
+
+    app = create_app(config=Config(), db_path=Path(tmp) / "t.db")
+    client = TestClient(app)
+    db = client.app.state.db
+
+    code = "TESTMXT1"
+    db.add_register_code(code)
+    data = client.post(
+        "/api/auth/register",
+        json={"username": "mxtokadmin", "password": "secret123", "code": code},
+    ).json()
+    db.update_user(data["user"]["id"], is_admin=True)
+    headers = {"Authorization": f"Bearer {data['token']}"}
+
+    def get_config():
+        return client.get("/api/admin/sources/mx", headers=headers).json()
+
+    assert get_config()["token_updated_at"] == ""
+
+    clock["now"] = 1_700_000_100
+    client.put(
+        "/api/admin/sources/mx",
+        json={"enabled": False, "ws_enabled": False, "token": "tok-1"},
+        headers=headers,
+    )
+    assert get_config()["token_updated_at"] == "1700000100"
+
+    # 只调其他字段、token 未变 → 时间不刷新
+    clock["now"] = 1_700_000_200
+    client.put(
+        "/api/admin/sources/mx",
+        json={"token": "tok-1", "page_size": 66},
+        headers=headers,
+    )
+    assert get_config()["token_updated_at"] == "1700000100"
+
+    # token 变化 → 时间刷新
+    clock["now"] = 1_700_000_300
+    client.put(
+        "/api/admin/sources/mx",
+        json={"token": "tok-2"},
+        headers=headers,
+    )
+    assert get_config()["token_updated_at"] == "1700000300"
+
+
 # ---- WS 状态 ----
 
 def test_ws_status_reflects_client():
