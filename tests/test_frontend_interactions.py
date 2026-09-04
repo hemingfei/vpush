@@ -4104,9 +4104,9 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=289"' in html
-    assert 'src="/app.js?v=414"' in html
-    assert 'dav-shell-v275' in sw
+    assert 'href="/style.css?v=290"' in html
+    assert 'src="/app.js?v=415"' in html
+    assert 'dav-shell-v276' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -4701,7 +4701,9 @@ def test_admin_kols_edit_modal_is_dialog():
     assert 'role="dialog"' in body
     assert "aria-modal" in body
     assert "aria-labelledby" in body
-    assert 'e.key === "Tab"' in body or 'e.key==="Tab"' in body
+    assert "trapFocus(mask, tryClose)" in body
+    assert 'e.key === "Tab"' not in body
+    assert 'e.key==="Tab"' not in body
     assert "ek-users-wrap" in body
     assert "hidden" in body
 
@@ -5329,3 +5331,37 @@ def test_knowledge_acl_browsable_on_focus():
     assert "slice(0, needle ? 50 : 8)" in filt
     picker = _fn_body("aclPickerHtml")
     assert 'onfocus="filterAclSuggest(this)"' in picker
+
+
+def test_trap_focus_utility_and_a11y_enhancements():
+    """P1: 模态框无障碍焦点管理与还原。"""
+    src = APP_JS.read_text()
+    assert "function trapFocus(container, onEscape)" in src
+    assert "focusableSelector" in src
+    assert "MutationObserver" in src
+    assert "previousActive.focus()" in src
+    assert "trapFocus(mask, close)" in src
+    assert "trapFocus(overlay, closeLightbox)" in src
+    edit = _fn_body("adminEditKol")
+    assert "trapFocus(mask, tryClose)" in edit
+    assert 'if (e.key === "Tab")' not in edit
+
+
+def test_news_list_shell_renders_shimmer_skeleton():
+    """P1: 财经新闻骨架屏包含占位卡片与线条。"""
+    shell = _fn_body("renderNewsListShell")
+    assert "newsListSkeletonHtml()" in shell
+    assert "admin-sk-card" not in shell
+    skeleton = _fn_body("newsListSkeletonHtml")
+    assert "admin-sk-card" in skeleton
+    assert "admin-skeleton" in skeleton
+
+
+def test_design_tokens_p0_p1_compliance():
+    """P0/P1: 消除 side-tab，补齐圆角 Token 与移动端 Sheet 适配。"""
+    css = STYLE_CSS.read_text()
+    assert "border-left: 4px solid var(--color-accent)" not in css
+    assert ".tl-pill[data-platform=\"live\"]:not(.selected) .pt-icon { color: var(--color-accent); }" in css
+    assert "border-radius: var(--radius-pill);" in css
+    assert "@media (max-width: 640px)" in css
+    assert "border-radius: var(--radius-card) var(--radius-card) 0 0;" in css

@@ -256,6 +256,8 @@ function openLightbox(img) {
   document.body.appendChild(overlay);
   document.body.classList.add("lightbox-open");
   document.addEventListener("keydown", lightboxKeyHandler);
+  trapFocus(overlay, closeLightbox);
+  overlay.querySelector(".lightbox-close")?.focus();
 }
 
 let _lbTouchStart = null;
@@ -299,13 +301,12 @@ function lightboxStep(dir) {
 }
 
 function lightboxKeyHandler(e) {
-  if (e.key === "Escape") closeLightbox();
-  else if (e.key === "ArrowLeft") lightboxStep(-1);
+  if (e.key === "ArrowLeft") lightboxStep(-1);
   else if (e.key === "ArrowRight") lightboxStep(1);
 }
 
 function closeLightbox() {
-  const overlay = document.querySelector(".lightbox");
+  const overlay = document.querySelector(".lightbox:not(.closing)");
   if (!overlay) return;
   overlay.classList.add("closing"); // 触发淡出+轻微缩小动画
   // 动画结束后移除 DOM；reduced-motion 下 animation 被禁用（animationend 不触发），用超时兜底
@@ -314,6 +315,74 @@ function closeLightbox() {
   setTimeout(remove, 240); // 略大于关闭动画 200ms；reduced-motion 下 animationend 不触发时兜底
   document.body.classList.remove("lightbox-open");
   document.removeEventListener("keydown", lightboxKeyHandler);
+}
+
+/**
+ * 模态框无障碍焦点管理 (A11y / Focus Trap)：
+ * 1. 捕获 Tab / Shift+Tab 循环；
+ * 2. 响应 Escape 关闭；
+ * 3. 弹窗销毁时自动还原焦点至触发元素。
+ */
+function trapFocus(container, onEscape) {
+  const previousActive = document.activeElement;
+  const focusableSelector = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+  function handleKeydown(e) {
+    if (e.key === "Escape") {
+      if (typeof onEscape === "function") {
+        e.preventDefault();
+        onEscape();
+      }
+      return;
+    }
+    if (e.key !== "Tab") return;
+    const focusables = Array.from(container.querySelectorAll(focusableSelector)).filter((el) => el.offsetParent !== null || el === document.activeElement);
+    if (!focusables.length) {
+      e.preventDefault();
+      return;
+    }
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey) {
+      if (document.activeElement === first || !container.contains(document.activeElement)) {
+        e.preventDefault();
+        last.focus();
+      }
+    } else {
+      if (document.activeElement === last || !container.contains(document.activeElement)) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  }
+
+  container.addEventListener("keydown", handleKeydown);
+
+  setTimeout(() => {
+    if (!container.contains(document.activeElement)) {
+      const initial = container.querySelector("[autofocus]") || container.querySelector(focusableSelector);
+      if (initial) initial.focus();
+    }
+  }, 0);
+
+  const observer = new MutationObserver(() => {
+    if (!document.body.contains(container)) {
+      observer.disconnect();
+      container.removeEventListener("keydown", handleKeydown);
+      if (previousActive && previousActive.isConnected) {
+        previousActive.focus();
+      }
+    }
+  });
+  observer.observe(document.body, { childList: true });
+
+  return () => {
+    observer.disconnect();
+    container.removeEventListener("keydown", handleKeydown);
+    if (previousActive && previousActive.isConnected) {
+      previousActive.focus();
+    }
+  };
 }
 
 let _toastTimer = null;
@@ -8113,8 +8182,8 @@ function openNewsSourceModal(sourceId = 0) {
   </div>`;
   document.body.appendChild(mask);
   const close = () => closeNewsModal(mask);
+  trapFocus(mask, close);
   mask.addEventListener("click", (event) => { if (event.target === mask) close(); });
-  mask.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } });
   mask.querySelector("[data-close]").addEventListener("click", close);
   mask.querySelector("#news-source-save").addEventListener("click", async () => {
     const name = mask.querySelector("#news-source-name").value.trim();
@@ -8151,8 +8220,8 @@ function openNewsFeedModal(sourceId, feedId = 0) {
   </div>`;
   document.body.appendChild(mask);
   const close = () => closeNewsModal(mask);
+  trapFocus(mask, close);
   mask.addEventListener("click", (event) => { if (event.target === mask) close(); });
-  mask.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } });
   mask.querySelector("[data-close]").addEventListener("click", close);
   mask.querySelector("#news-feed-save").addEventListener("click", () => validateNewsFeedDraft(source.id, feed?.id || 0, mask));
   mask.querySelector("#news-feed-name").focus();
@@ -9495,12 +9564,7 @@ function localLibraryModalShell(title, innerHtml) {
   mask.addEventListener("click", (e) => {
     if (e.target === mask) close();
   });
-  mask.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      close();
-    }
-  });
+  trapFocus(mask, close);
   mask.querySelector("[data-close]").addEventListener("click", close);
   const first = mask.querySelector("#ll-name, input, select, textarea, button");
   if (first) first.focus();
@@ -10964,38 +11028,9 @@ async function adminEditKol(id) {
   mask.addEventListener("click", (e) => {
     if (e.target === mask) tryClose();
   });
-  mask.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      tryClose();
-      return;
-    }
-    if (e.key === "Tab") {
-      const nodes = [...mask.querySelectorAll("button, input, select, textarea")].filter((el) => !el.disabled && !el.hidden && el.offsetParent);
-      if (!nodes.length) return;
-      const first = nodes[0];
-      const last = nodes[nodes.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    }
-  });
   mask.querySelector("[data-close]").addEventListener("click", tryClose);
-  // 焦点管理：打开聚焦首个输入框；无论以哪种方式关闭，焦点都还原到触发按钮
-  const trigger = document.activeElement;
-  const firstInput = mask.querySelector("input, select, textarea, button");
-  if (firstInput) firstInput.focus();
-  const observer = new MutationObserver(() => {
-    if (!document.body.contains(mask)) {
-      observer.disconnect();
-      if (trigger && trigger.isConnected) trigger.focus();
-    }
-  });
-  observer.observe(document.body, { childList: true });
+  trapFocus(mask, tryClose);
+  mask.querySelector("input, select, textarea, button")?.focus();
 }
 
 async function saveKolEdit(id) {
@@ -12941,20 +12976,10 @@ function adminOpenUser(userId, focus) {
   mask.addEventListener("click", (e) => {
     if (e.target === mask) mask.remove();
   });
-  mask.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") mask.remove();
-  });
   document.body.appendChild(mask);
-  const trigger = document.activeElement;
+  trapFocus(mask, () => mask.remove());
   const first = focus === "push" ? $("#um-push-msg") : $("#um-name");
   if (first) first.focus();
-  const observer = new MutationObserver(() => {
-    if (!document.body.contains(mask)) {
-      observer.disconnect();
-      if (trigger && trigger.isConnected) trigger.focus();
-    }
-  });
-  observer.observe(document.body, { childList: true });
 }
 
 async function adminSaveUserKnowledge(userId) {
@@ -13232,7 +13257,7 @@ function renderNewsCenter(seq, articleId = "") {
 
 function newsListItemHtml(item) {
   const thumbnail = item.has_image
-    ? `<img class="news-list-thumb" data-news-thumbnail="${item.id}" alt="" loading="lazy">`
+    ? `<img class="news-list-thumb" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 64'%3E%3C/svg%3E" data-news-thumbnail="${item.id}" alt="" loading="lazy" onerror="this.style.display='none'">`
     : "";
   return `<article class="news-list-item" data-news-id="${item.id}" tabindex="0" role="link" onclick="openNewsArticle(${item.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openNewsArticle(${item.id})}">
     ${thumbnail}<div class="news-list-copy"><div class="news-list-meta"><span>${escapeHtml(item.source_name || "")}</span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time>${item.is_new ? '<span class="news-new-label">新</span>' : ""}</div>
@@ -13245,6 +13270,11 @@ function newsSourceFilterOptions() {
   return `<option value="">全部来源</option>${state.newsSources.filter((source) => selected.has(String(source.id))).map((source) => `<option value="${source.id}" ${String(state.newsFilterSourceId) === String(source.id) ? "selected" : ""}>${escapeHtml(source.name)}</option>`).join("")}`;
 }
 
+function newsListSkeletonHtml() {
+  const card = '<div class="admin-sk-card"><div class="admin-sk-line admin-sk-head"></div><div class="admin-sk-line"></div></div>';
+  return `<div class="admin-skeleton" aria-hidden="true">${card.repeat(3)}</div>`;
+}
+
 function renderNewsListShell(collectionEnabled = true) {
   const main = $("#main");
   if (!main) return;
@@ -13252,7 +13282,7 @@ function renderNewsListShell(collectionEnabled = true) {
     <header class="news-page-head"><div><h2 class="section-title">财经新闻</h2><p class="section-meta">按媒体聚合的长文阅读，原文链接保留。</p></div><button type="button" class="btn-normal" onclick="openNewsSourcePicker()">我的来源</button></header>
     ${collectionEnabled ? "" : '<div class="notice notice-warn">管理员已暂停财经新闻采集，历史文章仍可阅读。</div>'}
     <div class="news-list-toolbar"><select id="news-source-filter" class="form-control" aria-label="新闻来源" onchange="state.newsFilterSourceId=this.value;loadFinancialNews(true,routeRenderSeq)">${newsSourceFilterOptions()}</select><div class="search-bar"><input id="news-query" type="search" placeholder="搜索标题或摘要" value="${escapeHtml(state.newsQuery)}" oninput="state.newsQuery=this.value;clearTimeout(window._newsSearchTimer);window._newsSearchTimer=setTimeout(()=>loadFinancialNews(true,routeRenderSeq),250)"></div></div>
-    <div id="news-list" class="news-list"><div class="admin-skeleton" aria-hidden="true"></div></div>
+    <div id="news-list" class="news-list">${newsListSkeletonHtml()}</div>
     <div id="news-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>
   </section>`;
 }
@@ -13286,7 +13316,7 @@ async function loadFinancialNews(reset = false, seq = routeRenderSeq) {
     stopNewsAutoLoad();
     state.newsItems = [];
     state.newsOffset = 0;
-    list.innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
+    list.innerHTML = newsListSkeletonHtml();
   }
   const params = new URLSearchParams({ limit: "30", offset: String(state.newsOffset) });
   if (state.newsFilterSourceId) params.set("source_id", state.newsFilterSourceId);
@@ -13328,7 +13358,7 @@ async function loadNewsImageBlob(articleId, index, image, seq = routeRenderSeq) 
     state.newsImageUrls.add(url);
     image.src = url;
   } catch {
-    /* 单张图片失败不阻塞文章阅读 */
+    if (routeStillActive(seq) && image && document.body.contains(image)) image.remove();
   }
 }
 
@@ -13378,7 +13408,7 @@ function openNewsSourcePicker() {
     });
   };
   mask.addEventListener("click", (event) => { if (event.target === mask) close(); });
-  mask.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } });
+  trapFocus(mask, close);
   mask.querySelector("[data-close]").addEventListener("click", close);
   mask.querySelector("#news-source-search").addEventListener("input", (event) => {
     captureSelection();
@@ -13674,3 +13704,14 @@ if ("serviceWorker" in navigator) {
 
 applyTheme(); // 与 index.html 防闪脚本同一逻辑，兜底 + 同步 meta theme-color
 router();
+
+// VPush 全局门面（P2 模块化与可测试性）
+window.VPush = {
+  version: APP_VERSION,
+  state,
+  api,
+  flash,
+  trapFocus,
+  go,
+  router,
+};
