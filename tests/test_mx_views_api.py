@@ -46,6 +46,28 @@ def test_mx_views_days_day_snapshot_roundtrip():
     assert client.get("/api/mx-views/days").status_code == 401
 
 
+def test_mx_views_stream_pushes_initial_version(monkeypatch):
+    # TestClient 会等整个 ASGI 应用跑完才返回响应，故把 SSE 轮询上限/间隔调小让流尽快收尾。
+    from app import api as api_module
+
+    monkeypatch.setattr(api_module, "_MX_SSE_MAX_TICKS", 2)
+    monkeypatch.setattr(api_module, "_MX_SSE_TICK_SECONDS", 0.01)
+    client = make_client()
+    headers = auth_headers(client)
+    db = client.app.state.db
+    _seed_snapshot(db)  # version >= 1
+    token = headers["Authorization"].split(" ", 1)[1]
+    with client.stream("GET", f"/api/mx-views/stream?token={token}", headers=headers) as resp:
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
+        lines = resp.iter_lines()
+        first = next(lines)
+        assert first == "event: version"
+        second = next(lines)
+        assert second.startswith("data: {")
+        assert '"version"' in second
+
+
 def test_mx_views_target_detail_with_evidence():
     client = make_client()
     headers = auth_headers(client)

@@ -34,7 +34,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from . import auth, user_quota, wechat
@@ -1437,6 +1437,12 @@ def _notify_ai_task_stopped(db: DB, task_id: int, reason: str, publish) -> None:
             publish(post)
     except Exception:
         logger.exception("发布 AI 任务停用告警失败 task_id=%s", task_id)
+
+
+# MX 观点 SSE 版本推送参数：每 tick 轮询一次版本，跳满上限后主动断开
+#（浏览器 EventSource 会按 SSE 规范自动重连，防止单连接无限驻留）。
+_MX_SSE_TICK_SECONDS = 3
+_MX_SSE_MAX_TICKS = 480  # ~24 分钟
 
 
 def create_api_router(
@@ -5823,6 +5829,40 @@ def create_api_router(
         if not detail:
             raise HTTPException(status_code=404, detail="该大V当日暂无观点")
         return detail
+
+    @router.get("/mx-views/stream")
+    async def mx_views_stream(request: Request, current_user: dict = Depends(get_current_user)):
+        """SSE：推版本号变更，客户端收到后自行拉最新快照。单实例进程内轮询 settings。
+
+        跳满 _MX_SSE_MAX_TICKS 后主动断开（EventSource 自动重连），客户端断开亦即止。
+        """
+        import asyncio
+        import json as _json
+
+        async def gen():
+            last = -1
+            ticks = 0
+            while ticks < _MX_SSE_MAX_TICKS:
+                if await request.is_disconnected():
+                    break
+                try:
+                    ver = await asyncio.to_thread(db.get_setting, "mx_view_version")
+                    v = int(ver or 0)
+                except Exception:  # noqa: BLE001
+                    v = last
+                if v != last:
+                    last = v
+                    yield f"event: version\ndata: {_json.dumps({'version': v})}\n\n"
+                elif ticks % 7 == 0:  # ~20s 心跳，防代理断连
+                    yield ": ping\n\n"
+                ticks += 1
+                await asyncio.sleep(_MX_SSE_TICK_SECONDS)
+
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @router.get("/tags")
     def list_tags(request: Request, user: dict = Depends(get_current_user)):
