@@ -67,3 +67,43 @@ def test_mx_view_cursor_roundtrip():
     assert db.get_mx_view_cursor() == 0
     db.set_mx_view_cursor(42)
     assert db.get_mx_view_cursor() == 42
+
+
+from app.mx_view_analysis import (
+    DEFAULT_MX_VIEW_SCHEDULE,
+    MX_VIEW_FIRST_WINDOW_START,
+    resolve_schedule,
+    snapshot_windows,
+)
+
+
+def test_resolve_schedule_default_has_38_snapshots():
+    times = resolve_schedule(DEFAULT_MX_VIEW_SCHEDULE)
+    assert times[0] == "09:20" and times[1] == "09:26"
+    assert "09:30" in times and "10:30" in times and "11:30" in times
+    assert "12:00" in times and "13:20" in times and "15:00" in times and times[-1] == "16:00"
+    assert len(times) == 38
+    assert times == sorted(set(times))
+
+
+def test_resolve_schedule_ignores_bad_segments_and_dedupes():
+    cfg = {
+        "segments": [
+            {"start": "09:00", "end": "09:10", "interval_min": 5},
+            {"start": "bad", "end": "10:00", "interval_min": 5},
+            {"start": "10:00", "end": "10:20", "interval_min": 0},
+        ],
+        "extra_times": ["09:10", "xx:00", "09:10"],
+    }
+    assert resolve_schedule(cfg) == ["09:00", "09:05", "09:10"]
+
+
+def test_snapshot_windows_first_window_starts_at_0915():
+    times = resolve_schedule(DEFAULT_MX_VIEW_SCHEDULE)
+    wins = snapshot_windows(times)
+    assert wins[0] == (MX_VIEW_FIRST_WINDOW_START, "09:20")
+    assert wins[1] == ("09:20", "09:26")
+    assert wins[2] == ("09:26", "09:30")
+    # 12:00 的上一快照是 11:30；16:00 的上一快照是 15:00
+    assert wins[times.index("12:00")] == ("11:30", "12:00")
+    assert wins[times.index("16:00")] == ("15:00", "16:00")
