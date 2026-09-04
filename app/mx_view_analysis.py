@@ -183,3 +183,181 @@ def resolve_system_llm_config(db):
     cfg.model = db.get_setting("llm_model") or config.llm.model or "gpt-4o-mini"
     cfg.user_supplied = False
     return cfg
+
+
+# ---- 观点校验与聚合 ----
+
+VALID_DIRECTIONS = ("bull", "bear", "neutral")
+VALID_TARGET_TYPES = ("topic", "stock")
+VALID_ACTIONS = tuple(a for a in ACTION_BOOST if a)
+
+
+def validate_opinions(raw, posts, aliases, day, snapshot_at):
+    """校验 LLM 研判结果：证据核对/作者核对/枚举/黑话归一/批内去重。
+
+    返回 (可落库 opinions, 参考表之外的新题材名)。任何一项不满足即丢弃该条。
+    """
+    posts_by_id = {}
+    for p in posts or []:
+        posts_by_id[int(p["id"])] = p
+    alias_map = {str(a.get("alias") or ""): str(a.get("stock") or "") for a in aliases or []}
+    valid: list[dict] = []
+    new_topics: list[str] = []
+    seen: set[tuple] = set()
+    for item in raw or []:
+        if not isinstance(item, dict):
+            continue
+        evidence = []
+        for ev in item.get("evidence") or []:
+            try:
+                ev_id = int(ev)
+            except (TypeError, ValueError):
+                continue
+            if ev_id in posts_by_id and ev_id not in evidence:
+                evidence.append(ev_id)
+        if not evidence:
+            continue
+        ev_posts = [posts_by_id[i] for i in evidence]
+        authors = {str(p.get("kol_name") or "") for p in ev_posts}
+        author = str(item.get("author") or "")
+        if author and author not in authors:
+            continue  # 作者与证据不符：丢弃
+        kol_id = int(ev_posts[0]["kol_id"])
+        ttype = str(item.get("target_type") or "")
+        direction = str(item.get("direction") or "")
+        if ttype not in VALID_TARGET_TYPES or direction not in VALID_DIRECTIONS:
+            continue
+        name = str(item.get("target_name") or "").strip()
+        if not name:
+            continue
+        if ttype == "stock":
+            name = alias_map.get(name, name)
+        action = str(item.get("action") or "").strip()
+        if action and action not in VALID_ACTIONS:
+            action = ""
+        key = (kol_id, ttype, name)
+        if key in seen:
+            continue
+        seen.add(key)
+        occurred = max(str(p.get("published_at") or "") for p in ev_posts)
+        valid.append(
+            {
+                "trading_day": day,
+                "snapshot_at": snapshot_at,
+                "kol_id": kol_id,
+                "target_type": ttype,
+                "target_name": name,
+                "direction": direction,
+                "action": action,
+                "confidence": str(item.get("confidence") or "high"),
+                "summary": str(item.get("summary") or "").strip()[:200],
+                "evidence_post_ids": evidence,
+                "occurred_at": occurred,
+            }
+        )
+        if ttype == "topic":
+            new_topics.append(name)
+    return valid, sorted(set(new_topics))
+
+
+def _opinion_weight(op: dict) -> float:
+    """方向定符号 × 操作放大 × 大V权重。"""
+    if op["direction"] == "bull":
+        sign = 1.0
+    elif op["direction"] == "bear":
+        sign = -1.0
+    else:
+        return 0.0
+    boost = ACTION_BOOST.get(str(op.get("action") or ""), 1.0)
+    kol_w = 1.2 if int(op.get("kol_priority") or 0) > 0 else 1.0
+    return sign * boost * kol_w
+
+
+def aggregate_day_state(day, snapshot_at, opinions, prev_payload=None, new_opinions=None):
+    """按「当前立场」口径聚合整页状态：每大V每标的取 ≤snapshot_at 的最新一条。
+
+    opinions 须已按 (snapshot_at, occurred_at, id) 升序（list_mx_opinions 的序）。
+    """
+    stance: dict[tuple, dict] = {}
+    for op in opinions or []:
+        if str(op.get("snapshot_at") or "") > snapshot_at:
+            continue
+        stance[(int(op["kol_id"]), str(op["target_type"]), str(op["target_name"]))] = op
+
+    def _blank(kind, name):
+        return (
+            {"name": name, "bull": 0, "bear": 0, "net": 0, "s_bull": 0.0, "s_bear": 0.0,
+             "strength": 50, "momentum": 0, "latest_at": "", "actions": {}}
+            if kind == "stock"
+            else {"name": name, "bull": 0, "bear": 0, "net": 0, "s_bull": 0.0, "s_bear": 0.0,
+                  "strength": 50, "momentum": 0, "latest_at": ""}
+        )
+
+    topics: dict[str, dict] = {}
+    stocks: dict[str, dict] = {}
+    kol_state: dict[int, dict] = {}
+    for (kol_id, ttype, name), op in stance.items():
+        w = _opinion_weight(op)
+        bucket = stocks if ttype == "stock" else topics
+        agg = bucket.setdefault(name, _blank(ttype, name))
+        if w > 0:
+            agg["bull"] += 1
+            agg["s_bull"] += w
+        elif w < 0:
+            agg["bear"] += 1
+            agg["s_bear"] += abs(w)
+        occurred = str(op.get("occurred_at") or "")
+        if occurred > agg["latest_at"]:
+            agg["latest_at"] = occurred
+        if ttype == "stock" and op.get("action"):
+            agg["actions"][op["action"]] = agg["actions"].get(op["action"], 0) + 1
+        # 大V总览
+        ks = kol_state.setdefault(
+            kol_id,
+            {"kol_id": kol_id, "name": op.get("kol_name") or "", "avatar": op.get("avatar_url") or "",
+             "opinion_count": 0, "bull_names": [], "bear_names": [], "last_at": ""},
+        )
+        ks["opinion_count"] += 1
+        target = f"{name}" if ttype == "topic" else name
+        if w > 0 and len(ks["bull_names"]) < 8:
+            ks["bull_names"].append(target)
+        if w < 0 and len(ks["bear_names"]) < 8:
+            ks["bear_names"].append(target)
+        if occurred > ks["last_at"]:
+            ks["last_at"] = occurred
+
+    def _finalize(bucket, prev_list):
+        prev_net = {str(x.get("name")): int(x.get("net") or 0) for x in (prev_list or [])}
+        out = []
+        for agg in bucket.values():
+            total = agg["s_bull"] + agg["s_bear"]
+            agg["net"] = agg["bull"] - agg["bear"]
+            agg["strength"] = round(50 + 45 * (agg["s_bull"] - agg["s_bear"]) / max(total, 1.0))
+            agg["momentum"] = agg["net"] - prev_net.get(agg["name"], agg["net"])
+            for drop in ("s_bull", "s_bear"):
+                agg.pop(drop)
+            out.append(agg)
+        return out
+
+    topic_rows = sorted(_finalize(topics, (prev_payload or {}).get("topics")),
+                        key=lambda x: (-x["net"], -(x["bull"] + x["bear"])))
+    stock_rows = sorted(_finalize(stocks, (prev_payload or {}).get("stocks")),
+                        key=lambda x: (-x["strength"], -x["net"]))
+    kol_rows = sorted(kol_state.values(), key=lambda x: (-x["opinion_count"], x["name"]))
+    return {
+        "trading_day": day,
+        "snapshot_at": snapshot_at,
+        "summary": None,  # Task 5 填充 {"text","items"}
+        "topics": topic_rows,
+        "stocks": stock_rows,
+        "kols": kol_rows,
+        "new_opinions": [
+            {
+                "kol_id": int(o["kol_id"]), "kol_name": o.get("kol_name") or "",
+                "target_type": o["target_type"], "target_name": o["target_name"],
+                "direction": o["direction"], "action": o.get("action") or "",
+                "summary": o.get("summary") or "", "occurred_at": o.get("occurred_at") or "",
+            }
+            for o in (new_opinions or [])
+        ][:50],
+    }

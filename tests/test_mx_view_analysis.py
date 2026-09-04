@@ -146,3 +146,75 @@ def test_research_viewpoints_failure_returns_none(monkeypatch):
         [], [],
     ) is None
     assert llm_mod.research_viewpoints([], [], []) == []
+
+
+from app.mx_view_analysis import aggregate_day_state, validate_opinions
+
+
+def _posts():
+    return [
+        {"id": 11, "kol_id": 1, "kol_name": "王哥", "title": "", "content": "固态电池订单爆了",
+         "published_at": "2026-09-04 09:18:00"},
+        {"id": 12, "kol_id": 2, "kol_name": "李姐", "title": "", "content": "中锂减持",
+         "published_at": "2026-09-04 09:19:00"},
+    ]
+
+
+def test_validate_opinions_drops_hallucinations_and_normalizes():
+    raw = [
+        {"author": "王哥", "target_type": "topic", "target_name": "固态电池", "direction": "bull",
+         "action": "", "confidence": "high", "summary": "订单爆了", "evidence": [11]},
+        {"author": "李姐", "target_type": "stock", "target_name": "中锂", "direction": "bear",
+         "action": "减仓", "confidence": "high", "summary": "高位", "evidence": [12]},
+        {"author": "王哥", "target_type": "stock", "target_name": "不存在股", "direction": "bull",
+         "action": "", "confidence": "high", "summary": "", "evidence": [999]},  # 幻觉 evidence
+        {"author": "张三", "target_type": "topic", "target_name": "机器人", "direction": "bull",
+         "action": "", "confidence": "high", "summary": "", "evidence": [11]},  # 作者不一致
+        {"author": "李姐", "target_type": "stock", "target_name": "中锂", "direction": "bear",
+         "action": "减仓", "confidence": "high", "summary": "重复", "evidence": [12]},  # 批内去重
+    ]
+    valid, new_topics = validate_opinions(
+        raw, _posts(), [{"alias": "中锂", "stock": "中X锂业"}], "2026-09-04", "09:20"
+    )
+    assert len(valid) == 2
+    assert valid[1]["target_name"] == "中X锂业"  # 黑话归一
+    assert valid[0]["kol_id"] == 1 and valid[0]["evidence_post_ids"] == [11]
+    assert valid[0]["snapshot_at"] == "09:20" and valid[0]["trading_day"] == "2026-09-04"
+    assert new_topics == ["固态电池"]
+
+
+def test_aggregate_day_state_strength_momentum_kols():
+    day, at = "2026-09-04", "09:26"
+
+    def op(snap, kol, ttype, name, direction, action="", at_occ="09:18:00", prio=0):
+        return {
+            "snapshot_at": snap, "kol_id": kol, "kol_name": f"大V{kol}",
+            "avatar_url": "", "kol_priority": prio,
+            "target_type": ttype, "target_name": name, "direction": direction,
+            "action": action, "summary": "s", "occurred_at": f"2026-09-04 {at_occ}",
+        }
+
+    prev = {"topics": [{"name": "固态电池", "net": 5}], "stocks": []}
+    opinions = [
+        op("09:20", 1, "topic", "固态电池", "bull"),
+        op("09:20", 2, "topic", "固态电池", "bull"),
+        op("09:26", 1, "topic", "固态电池", "bull"),  # 同大V最新仍 bull
+        op("09:20", 3, "topic", "固态电池", "bear"),
+        op("09:20", 4, "stock", "XX股份", "bull", "建仓", prio=1),  # priority 加权 1.5*1.2
+        op("09:20", 5, "topic", "房地产", "bear"),
+        op("09:26", 5, "topic", "房地产", "bear"),  # 当前立场口径：仍 bear
+        op("09:20", 6, "topic", "房地产", "bull"),  # 但 6 翻多 → net 0
+    ]
+    payload = aggregate_day_state(day, at, opinions, prev)
+    topics = {t["name"]: t for t in payload["topics"]}
+    # 当前立场口径：大V1 的两条 bull 去重为一条 → bull=2（与大V5 的 bear 去重同理）
+    assert topics["固态电池"]["bull"] == 2 and topics["固态电池"]["bear"] == 1
+    assert topics["固态电池"]["net"] == 1
+    assert topics["固态电池"]["momentum"] == -4  # 上一快照 net=5
+    stocks = {s["name"]: s for s in payload["stocks"]}
+    # XX股份: w = 1 * 1.5 * 1.2 = 1.8 → strength = 50+45 = 95
+    assert stocks["XX股份"]["strength"] == 95
+    assert stocks["XX股份"]["actions"] == {"建仓": 1}
+    assert topics["房地产"]["net"] == 0
+    assert payload["trading_day"] == day and payload["snapshot_at"] == at
+    assert any(k["kol_id"] == 1 for k in payload["kols"])
