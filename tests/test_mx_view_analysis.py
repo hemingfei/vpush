@@ -331,3 +331,12 @@ def test_backfill_replays_days_without_touching_cursor_or_version(monkeypatch):
 def test_backfill_rejects_range_over_30_days():
     db = make_db()
     assert mva.start_backfill_job(db, "2026-01-01", "2026-09-01") is False
+
+
+def test_build_mx_view_fail_alert_cooldown():
+    from app.scheduler import build_mx_view_fail_alert
+
+    db = make_db()
+    first = build_mx_view_fail_alert(db, "LLM 超时")
+    assert first is not None and "MX 观点" in first.title
+    assert build_mx_view_fail_alert(db, "LLM 超时") is None  # 冷却窗口内不重复

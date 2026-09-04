@@ -19,6 +19,7 @@ from .backup import run_scheduled
 from .channels import channel_bound, channel_enabled, is_permanent_push_error
 from .db import _UNSET, ALLOWED_PLATFORMS, DB, POST_TAGS_MAX, days_until_purge, user_plain_secret
 from . import ai_analysis
+from . import mx_view_analysis
 
 # AI分析任务并发控制
 _ai_task_semaphore = None
@@ -689,6 +690,19 @@ def build_ai_task_stop_alert(db: DB, task_id: int, reason: str) -> Post | None:
         f"自动重试一次后仍失败，已停止调度，本次错误：\n"
         f"{(reason or '未知错误')[:300]}\n"
         "请检查 LLM 配置与网络后，在管理后台 AI 分析页重新启用任务。"
+    )
+    return build_system_alert_post(db, title, content)
+
+
+def build_mx_view_fail_alert(db: DB, reason: str) -> Post | None:
+    """MX 观点快照连续失败 ≥3 次的告警帖；冷却 30 分钟。"""
+    if not _cooldown_ok(db, "mx_view_fail_alert", AI_TASK_STOP_ALERT_COOLDOWN):
+        return None
+    title = "⚠️ MX 观点研判连续失败"
+    content = (
+        f"MX 大V观点快照批次连续失败 {mx_view_analysis.get_fail_count(db)} 次，本次错误：\n"
+        f"{(reason or '未知错误')[:300]}\n"
+        "游标未推进，下个快照时刻会自动重试；也可到 管理后台 → MX观点 手动跑一批诊断。"
     )
     return build_system_alert_post(db, title, content)
 
@@ -1942,6 +1956,7 @@ class Scheduler:
         self._last_cicc_alert_check = 0.0
         self._last_knowledge_notify = 0.0
         self._last_proxy_tick = 0.0
+        self._last_mx_view_check = 0.0
         self._mx_sync_service = None
         self._mx_ws_task = None
         self._mx_ws_on_message = None
@@ -2271,6 +2286,18 @@ class Scheduler:
             self.db.log_admin_action(None, action, "mx", detail)
         except Exception:  # noqa: BLE001 - 日志失败不影响窗口管理
             logger.debug("写入 MX 自动登录/断开操作日志失败", exc_info=True)
+
+    def _mx_view_check_tick(self) -> None:
+        """快照触发检查（线程内执行）：到期即跑；连续失败≥3 发系统通知。"""
+        result = mx_view_analysis.run_due_view_batch(
+            self.db, llm_config=_system_llm_config(self.db, self.llm_config)
+        )
+        if result is None:
+            return
+        if result.get("failed") and int(result.get("consecutive") or 0) >= 3:
+            post = build_mx_view_fail_alert(self.db, str(result.get("error") or ""))
+            if post is not None:
+                self.ingest_external_post(post)
 
     async def _mx_window_loop(self):
         """MX 每日运行时段管理循环：到点自动 MX 平台登录、时段结束自动断开，顺带检查 TOKEN 时效。
@@ -3061,6 +3088,14 @@ class Scheduler:
                     asyncio.create_task(run_task_wrapper(task_id))
             except Exception:  # noqa: BLE001
                 logger.exception("AI分析任务检查异常")
+
+            # --- MX 观点快照检查（每 20 秒） ---
+            if now_mono - self._last_mx_view_check >= 20:
+                self._last_mx_view_check = now_mono
+                try:
+                    await asyncio.to_thread(self._mx_view_check_tick)
+                except Exception:  # noqa: BLE001
+                    logger.exception("MX 观点快照检查异常")
 
             # --- 清理旧日志（每小时一次） ---
             try:
