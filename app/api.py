@@ -5781,6 +5781,49 @@ def create_api_router(
         _audit(admin, "delete_category", str(category_id))
         return {"ok": True}
 
+    # ---- MX 大V实时观点（用户端） ----
+    from .mx_view_analysis import get_view_version
+
+    @router.get("/mx-views/days")
+    async def mx_views_days(current_user: dict = Depends(get_current_user)):
+        return {"days": [dict(r) for r in db.mx_view_days()]}
+
+    @router.get("/mx-views/day")
+    async def mx_views_day(day: str, current_user: dict = Depends(get_current_user)):
+        snaps = db.list_mx_view_snapshots(day)
+        items = [{
+            "snapshot_at": s["snapshot_at"], "seq": s["seq"], "kind": s["kind"],
+            "message_count": int(s["payload"].get("message_count") or 0),
+        } for s in snaps]
+        return {"trading_day": day, "latest_at": snaps[-1]["snapshot_at"] if snaps else None,
+                "snapshots": items}
+
+    @router.get("/mx-views/snapshot")
+    async def mx_views_snapshot(day: str, at: str, current_user: dict = Depends(get_current_user)):
+        snap = db.get_mx_view_snapshot(day, at)
+        if not snap:
+            raise HTTPException(status_code=404, detail="快照不存在")
+        return {"trading_day": day, "snapshot_at": at, "version": get_view_version(db),
+                "payload": snap["payload"]}
+
+    @router.get("/mx-views/target")
+    async def mx_views_target(type: str, name: str, day: str, at: str = "",
+                              current_user: dict = Depends(get_current_user)):
+        if type not in ("topic", "stock"):
+            raise HTTPException(status_code=422, detail="type 须为 topic|stock")
+        detail = db.get_mx_view_target_detail(day, type, name, up_to_at=at or None)
+        if not detail:
+            raise HTTPException(status_code=404, detail="该标的暂无观点")
+        return detail
+
+    @router.get("/mx-views/kol/{kol_id}")
+    async def mx_views_kol(kol_id: int, day: str, at: str = "",
+                           current_user: dict = Depends(get_current_user)):
+        detail = db.get_mx_view_kol_detail(kol_id, day, up_to_at=at or None)
+        if not detail:
+            raise HTTPException(status_code=404, detail="该大V当日暂无观点")
+        return detail
+
     @router.get("/tags")
     def list_tags(request: Request, user: dict = Depends(get_current_user)):
         """贴文话题词表：登录用户可读（动态页标签筛选），管理与写入仍需管理员。

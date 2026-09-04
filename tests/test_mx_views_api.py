@@ -1,0 +1,61 @@
+"""MX 观点用户端 API 测试。"""
+from test_api import auth_headers, make_client
+
+from app import mx_view_analysis as mva
+
+
+def _seed_snapshot(db):
+    kol = db.add_kol("mx", "王哥", "room1")
+    db.insert_post(platform="mx", kol_id=kol, external_id="m1", title="", url="",
+                   content="固态电池订单爆了", published_at="2026-09-04 09:16:00")
+    bid = db.upsert_mx_view_batch("2026-09-04", "09:20", "live")
+    db.replace_mx_opinions(bid, [{
+        "trading_day": "2026-09-04", "snapshot_at": "09:20", "kol_id": kol,
+        "target_type": "topic", "target_name": "固态电池", "direction": "bull",
+        "action": "", "confidence": "high", "summary": "订单爆了",
+        "evidence_post_ids": [db._rows("SELECT id FROM posts")[0]["id"]],
+        "occurred_at": "2026-09-04 09:16:00",
+    }])
+    payload = mva.aggregate_day_state("2026-09-04", "09:20", db.list_mx_opinions("2026-09-04"), None)
+    payload["summary"] = {"text": "看多固态电池", "items": []}
+    payload["message_count"] = 1
+    db.upsert_mx_view_snapshot("2026-09-04", "09:20", 1, "live", payload, bid)
+    mva.bump_view_version(db)
+    return kol
+
+
+def test_mx_views_days_day_snapshot_roundtrip():
+    client = make_client()
+    headers = auth_headers(client)
+    db = client.app.state.db
+    _seed_snapshot(db)
+
+    days = client.get("/api/mx-views/days", headers=headers).json()
+    assert days["days"] == [{"trading_day": "2026-09-04", "snapshots": 1}]
+
+    day = client.get("/api/mx-views/day?day=2026-09-04", headers=headers).json()
+    assert day["latest_at"] == "09:20"
+    assert day["snapshots"] == [{"snapshot_at": "09:20", "seq": 1, "kind": "live", "message_count": 1}]
+
+    snap = client.get("/api/mx-views/snapshot?day=2026-09-04&at=09:20", headers=headers).json()
+    assert snap["version"] >= 1
+    assert snap["payload"]["topics"][0]["name"] == "固态电池"
+    assert client.get("/api/mx-views/snapshot?day=2026-09-04&at=10:00",
+                      headers=headers).status_code == 404
+    # 未登录 401
+    assert client.get("/api/mx-views/days").status_code == 401
+
+
+def test_mx_views_target_detail_with_evidence():
+    client = make_client()
+    headers = auth_headers(client)
+    db = client.app.state.db
+    _seed_snapshot(db)
+    data = client.get(
+        "/api/mx-views/target?type=topic&name=固态电池&day=2026-09-04&at=09:20",
+        headers=headers,
+    ).json()
+    assert data["bull"]["count"] == 1 and data["bear"]["count"] == 0
+    op = data["timeline"][0]
+    assert op["kol_name"] == "王哥" and op["direction"] == "bull"
+    assert op["evidence"][0]["content"] == "固态电池订单爆了"

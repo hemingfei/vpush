@@ -5220,6 +5220,114 @@ class DB:
         params.append(int(limit))
         return self._rows(sql, tuple(params))
 
+    def get_mx_view_target_detail(self, trading_day, target_type, target_name, up_to_at=None):
+        """题材/个股下钻：多空大V分组（各取最新一条）+ 观点时间线（含证据原帖全文）。"""
+        sql = ("SELECT o.*, k.name AS kol_name, k.avatar_url FROM mx_opinions o "
+               "JOIN kols k ON k.id = o.kol_id WHERE o.trading_day = ? "
+               "AND o.target_type = ? AND o.target_name = ?")
+        params: list = [trading_day, target_type, target_name]
+        if up_to_at:
+            sql += " AND o.snapshot_at <= ?"
+            params.append(up_to_at)
+        sql += " ORDER BY o.snapshot_at ASC, o.occurred_at ASC, o.id ASC"
+        rows = self._rows(sql, tuple(params))
+        if not rows:
+            return None
+        latest: dict[int, dict] = {}
+        for r in rows:  # 升序遍历，后者覆盖前者=最新
+            latest[int(r["kol_id"])] = r
+
+        def _kol_block(direction):
+            kols = []
+            for r in latest.values():
+                if r["direction"] != direction:
+                    continue
+                kols.append({
+                    "kol_id": int(r["kol_id"]), "name": r["kol_name"],
+                    "avatar": r["avatar_url"] or "", "at": r["snapshot_at"],
+                    "action": r["action"] or "", "summary": r["summary"] or "",
+                    "occurred_at": r["occurred_at"] or "",
+                })
+            kols.sort(key=lambda x: x["occurred_at"], reverse=True)
+            return {"count": len(kols), "kols": kols}
+
+        timeline = []
+        post_ids = []
+        for r in rows:
+            ev = json.loads(r["evidence_post_ids"] or "[]")
+            post_ids.extend(ev)
+            timeline.append({
+                "snapshot_at": r["snapshot_at"], "kol_id": int(r["kol_id"]),
+                "kol_name": r["kol_name"], "avatar": r["avatar_url"] or "",
+                "direction": r["direction"], "action": r["action"] or "",
+                "summary": r["summary"] or "", "occurred_at": r["occurred_at"] or "",
+                "evidence": ev,
+            })
+        evidence = []
+        if post_ids:
+            marks = ",".join("?" for _ in post_ids)
+            for p in self._rows(
+                f"SELECT p.id, p.content, p.published_at, k.name AS author FROM posts p "
+                f"JOIN kols k ON k.id = p.kol_id WHERE p.id IN ({marks})",
+                tuple(post_ids),
+            ):
+                evidence.append({
+                    "post_id": int(p["id"]), "author": p["author"],
+                    "time": p["published_at"], "content": (p["content"] or "")[:800],
+                })
+        ev_by_id = {e["post_id"]: e for e in evidence}
+        for item in timeline:
+            item["evidence"] = [ev_by_id[i] for i in item["evidence"] if i in ev_by_id]
+        return {
+            "trading_day": trading_day, "type": target_type, "name": target_name,
+            "bull": _kol_block("bull"), "bear": _kol_block("bear"),
+            "neutral": _kol_block("neutral"), "timeline": timeline,
+        }
+
+    def get_mx_view_kol_detail(self, kol_id, trading_day, up_to_at=None):
+        """大V下钻：其 ≤at 的全部观点（附证据原帖）。"""
+        sql = ("SELECT o.*, k.name AS kol_name, k.avatar_url FROM mx_opinions o "
+               "JOIN kols k ON k.id = o.kol_id WHERE o.trading_day = ? AND o.kol_id = ?")
+        params: list = [trading_day, int(kol_id)]
+        if up_to_at:
+            sql += " AND o.snapshot_at <= ?"
+            params.append(up_to_at)
+        sql += " ORDER BY o.snapshot_at ASC, o.occurred_at ASC, o.id ASC"
+        rows = self._rows(sql, tuple(params))
+        if not rows:
+            return None
+        post_ids = []
+        timeline = []
+        for r in rows:
+            ev = json.loads(r["evidence_post_ids"] or "[]")
+            post_ids.extend(ev)
+            timeline.append({
+                "snapshot_at": r["snapshot_at"], "target_type": r["target_type"],
+                "target_name": r["target_name"], "direction": r["direction"],
+                "action": r["action"] or "", "summary": r["summary"] or "",
+                "occurred_at": r["occurred_at"] or "", "evidence": ev,
+            })
+        evidence = []
+        if post_ids:
+            marks = ",".join("?" for _ in set(post_ids))
+            for p in self._rows(
+                f"SELECT p.id, p.content, p.published_at, k.name AS author FROM posts p "
+                f"JOIN kols k ON k.id = p.kol_id WHERE p.id IN ({marks})",
+                tuple(set(post_ids)),
+            ):
+                evidence.append({
+                    "post_id": int(p["id"]), "author": p["author"],
+                    "time": p["published_at"], "content": (p["content"] or "")[:800],
+                })
+        ev_by_id = {e["post_id"]: e for e in evidence}
+        for item in timeline:
+            item["evidence"] = [ev_by_id[i] for i in item["evidence"] if i in ev_by_id]
+        return {
+            "kol": {"kol_id": int(kol_id), "name": rows[0]["kol_name"],
+                    "avatar": rows[0]["avatar_url"] or ""},
+            "trading_day": trading_day, "timeline": timeline,
+        }
+
     def has_post(self, post_id: int) -> bool:
         """帖子是否存在（手动加标签区分 404 与标签满/重复用）。"""
         return bool(self._rows("SELECT 1 FROM posts WHERE id = ?", (int(post_id),)))
