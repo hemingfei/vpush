@@ -6352,6 +6352,7 @@ def create_api_router(
     async def admin_mx_views_candidate_dismiss(request: Request, admin: dict = Depends(get_current_user)):
         body = await request.json()
         remove_topic_candidate(db, str(body.get("name") or ""))
+        _audit(admin, "mx_view_candidate_dismiss", str(body.get("name") or ""))
         return {"ok": True}
 
     @router.get("/admin/post-tag-reviews", dependencies=[Depends(require_admin)])
