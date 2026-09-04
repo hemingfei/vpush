@@ -1,5 +1,5 @@
 /* V Push Service Worker —— network-first：静态外壳离线可用，API 永不缓存 */
-const CACHE = "dav-shell-1008771a1da9";
+const CACHE = "dav-shell-2f3da4bc4015";
 const SHELL = [
   "/",
   "/app.js",
@@ -8,6 +8,7 @@ const SHELL = [
   "/core/html.js",
   "/core/lightbox.js",
   "/views/admin/codes.js",
+  "/views/admin/infra.js",
   "/views/admin/kol.js",
   "/views/admin/news.js",
   "/views/admin/users.js",

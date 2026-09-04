@@ -70,7 +70,7 @@ SENTINELS += [
     ("app/api.py", "cicc-categories", "品类定向 GET/PUT 端点"),
     ("app/cicc_alerts.py", "def paused_alert", "熔断告警文案（quota/auth 区分）"),
     ("app/static/app.js", "saveCiccCategories", "中金页签品类定向多选保存"),
-    ("app/static/app.js", "备份未生效", "存储页签诚实展示备份未配置"),
+    ("app/static/views/admin/infra.js", "备份未生效", "存储页签诚实展示备份未配置"),
 ]
 # —— 知识库设置增强第三批（feat/kb-settings-batch2 后续，2026-08-30）——
 SENTINELS += [

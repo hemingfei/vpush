@@ -24,7 +24,8 @@ ADMIN_CODES_JS = APP_JS.parent / "views" / "admin" / "codes.js"
 ADMIN_NEWS_JS = APP_JS.parent / "views" / "admin" / "news.js"
 ADMIN_USERS_JS = APP_JS.parent / "views" / "admin" / "users.js"
 ADMIN_KOLS_JS = APP_JS.parent / "views" / "admin" / "kol.js"
-VIEW_JS_SOURCES = (APP_JS, NEWS_JS, FEISHU_PERSONAL_JS, PUSH_SETTINGS_JS, ADMIN_CODES_JS, ADMIN_NEWS_JS, ADMIN_USERS_JS, ADMIN_KOLS_JS)
+ADMIN_INFRA_JS = APP_JS.parent / "views" / "admin" / "infra.js"
+VIEW_JS_SOURCES = (APP_JS, NEWS_JS, FEISHU_PERSONAL_JS, PUSH_SETTINGS_JS, ADMIN_CODES_JS, ADMIN_NEWS_JS, ADMIN_USERS_JS, ADMIN_KOLS_JS, ADMIN_INFRA_JS)
 
 
 def test_subscription_push_is_the_only_subscription_management_navigation_entry():
@@ -1132,7 +1133,7 @@ def test_kol_image_css_is_compact_truncating_and_touchable():
 
 
 def test_stats_proxies_tab():
-    src = APP_JS.read_text()
+    src = APP_JS.read_text() + ADMIN_INFRA_JS.read_text()
     assert 'data-tab="${tab}"' in _fn_body("statsTabsHtml")
     assert "function loadProxyAdmin" in src
     assert 'STATS_TABS.includes(tab)' in _fn_body("statsTabFromHash")
