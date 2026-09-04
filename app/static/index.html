@@ -4,18 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#f8f8fb">
-  <script>
-    /* 首屏前同步状态栏色：安卓 PWA 独立窗口取启动时的 meta/manifest，等 app.js 的 applyTheme 就晚了（白条问题） */
-    try {
-      var _t = localStorage.getItem("theme") || "auto";
-      if (_t === "dark" || (_t === "auto" && matchMedia("(prefers-color-scheme: dark)").matches)) {
-        document.querySelector('meta[name="theme-color"]').content = "#11141a";
-      }
-    } catch (e) {}
-  </script>
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="V Push">
   <title>V Push</title>
   <link rel="manifest" href="/manifest.webmanifest?v=2">
@@ -29,20 +20,24 @@
   <link rel="icon" type="image/svg+xml" href="/logo-mark-dark.svg" media="(prefers-color-scheme: dark)">
   <link id="favicon" rel="icon" type="image/svg+xml" href="/logo-mark.svg">
   <script>
-    // 主题防闪：首帧前按 localStorage 或系统偏好设置 html.theme-dark（app.js 里 setTheme 管理同一逻辑）
+    /* 首屏前同步主题与状态栏：安卓 PWA 独立窗口取启动时的 meta/manifest */
     (function () {
       try {
         var m = localStorage.getItem("theme") || "auto";
         var dark = m === "dark" || (m === "auto" && window.matchMedia("(prefers-color-scheme: dark)").matches);
         if (dark) document.documentElement.classList.add("theme-dark");
         if (localStorage.getItem("sidebar-slim") === "1") document.documentElement.classList.add("sidebar-slim");
+        var themeColor = document.querySelector('meta[name="theme-color"]');
+        if (themeColor) themeColor.content = dark ? "#11141a" : "#f8f8fb";
+        var statusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+        if (statusBar) statusBar.content = dark ? "black-translucent" : "default";
         var fav = document.getElementById("favicon");
         if (fav) fav.setAttribute("href", dark ? "/logo-mark-dark.svg" : "/logo-mark.svg");
       } catch (e) { /* localStorage 不可用时静默 */ }
     })();
   </script>
   <link rel="stylesheet" href="/vendor/design-tokens.css?v=26">
-  <link rel="stylesheet" href="/style.css?v=3586e2a9f283">
+  <link rel="stylesheet" href="/style.css?v=49e56dab48ac">
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -141,6 +136,6 @@
     </div>
     <nav id="bottom-nav" class="bottom-nav"></nav>
   </div>
-  <script type="module" src="/app.js?v=3586e2a9f283"></script>
+  <script type="module" src="/app.js?v=49e56dab48ac"></script>
 </body>
 </html>

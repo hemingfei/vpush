@@ -1,7 +1,7 @@
 /* 设计 token 来自 vendor/design-tokens.css（stock-lu 原文件） */
 
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+html, body { height: 100%; background: var(--color-bg); }
 body {
   background: var(--color-bg);
   color: var(--color-text);

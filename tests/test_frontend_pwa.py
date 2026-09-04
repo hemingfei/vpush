@@ -88,3 +88,15 @@ def test_pwa_icons_have_light_and_dark_sets():
     sw = SW_JS.read_text()
     assert "/icon-192-dark.png" in sw
     assert "/icon-512-dark.png" in sw
+
+
+def test_status_bar_follows_app_theme():
+    html = (STATIC / "index.html").read_text()
+    assert 'name="apple-mobile-web-app-status-bar-style" content="default"' in html
+    assert 'statusBar.content = dark ? "black-translucent" : "default"' in html
+    app = (STATIC / "app.js").read_text()
+    assert 'apple-mobile-web-app-status-bar-style' in app
+    assert 'dark ? "black-translucent" : "default"' in app
+    manifest = (STATIC / "manifest.webmanifest").read_text()
+    assert '"theme_color": "#f8f8fb"' in manifest
+    assert '"background_color": "#f8f8fb"' in manifest
