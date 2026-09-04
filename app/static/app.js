@@ -44,7 +44,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.136";
+const APP_VERSION = "1.12.137";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -190,6 +190,9 @@ const imaCollectorPureCache = {
   root_folder_id: "",
   interval_seconds: 3600,
 };
+
+let _toastTimer = null;
+// 操作反馈统一走 toast：成功 flash(msg)，失败 flash(msg, "error")。绑定码等需停留的内容仍写在页面上。
 function flash(message, type = "success") {
   let el = $("#toast");
   if (!el) {
@@ -5093,9 +5096,13 @@ const {
   currentRouteSeq: () => routeRenderSeq,
   bumpRouteSeq: () => ++routeRenderSeq,
   currentAdminSeq: () => _adminRenderSeq,
+  FOLDER_ICON,
   imaMountState,
   imaCollectorPureCache,
   reloadAdminSettingsPage,
+  isAdminSettingsPath,
+  currentLocalLibraries: () => _localLibsLast,
+  focusCookieField,
 });
 
 
@@ -5171,6 +5178,7 @@ const {
   currentRouteSeq: () => routeRenderSeq,
   currentAdminSeq: () => _adminRenderSeq,
   routeQuery,
+  REFRESH_ICON,
   setPageTitle,
   imaMountState,
   imaCollectorPureCache,

@@ -10,6 +10,7 @@ export function createAdminKnowledgeView(dependencies) {
     currentRouteSeq,
     currentAdminSeq,
     routeQuery,
+    REFRESH_ICON,
     setPageTitle,
     imaMountState,
     imaCollectorPureCache,
@@ -73,10 +74,6 @@ export function createAdminKnowledgeView(dependencies) {
     if (!imaCollectorHasUnsaved || !imaCollectorHasUnsaved()) return;
     event.preventDefault();
   });
-
-
-  let _toastTimer = null;
-  // 操作反馈统一走 toast：成功 flash(msg)，失败 flash(msg, "error")。绑定码等需停留的内容仍写在页面上。
 
   function switchKnowledgeSettingsTab(tab) {
     if (tab === "cicc") tab = "local"; // 旧页签记忆迁移：中金已并入本地库
