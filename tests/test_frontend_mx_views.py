@@ -79,3 +79,15 @@ def test_mx_views_boards_render_function():
     # mxv-ratio 多空比例条由辅助函数 mxvRatioHtml 产出，渲染体以调用形式接入双榜
     assert "mxv-ratio" in _fn_body("mxvRatioHtml", js)
     assert body.count("mxvRatioHtml(") >= 2
+
+
+def test_mx_views_drawer_functions():
+    js = (STATIC / "mx-views.js").read_text()
+    for fn in ("mxvOpenTarget", "mxvOpenKol", "mxvCloseDrawer"):
+        assert f"function {fn}(" in js, fn
+    body = _fn_body("mxvOpenTarget", js)
+    assert "/api/mx-views/target" in body and "at=" in body
+    kolbody = _fn_body("mxvOpenKol", js)
+    assert "/api/mx-views/kol/" in kolbody
+    allsrc = js
+    assert "openRawModal(" in allsrc and "_mxvPosts" in allsrc

@@ -1,5 +1,6 @@
 // MX 平台大V实时观点页（/mx-views）——页面级暗色终端，样式全部 .mxv- 前缀
 window._mxvPosts = []; // 证据原帖缓存，供 app.js openRawModal 查找
+window._mxvTargets = []; // 标的索引，供 onclick 按下标打开（避免外部名称注入 JS 字符串）
 const _mxv = { seq: 0, day: null, days: [], snapshots: [], at: null, payload: null,
   atLatest: true, hasNew: false, es: null, pollTimer: null, clockTimer: null, drawer: null };
 
@@ -53,6 +54,7 @@ async function mxvApplySnapshot(at) {
   _mxv.atLatest = _mxv.snapshots.length > 0 && at === _mxv.snapshots[_mxv.snapshots.length - 1].snapshot_at;
   if (_mxv.atLatest) _mxv.hasNew = false;
   window._mxvPosts = []; // 换快照清证据缓存
+  window._mxvTargets = []; // 换快照清标的索引
   mxvRenderShell();
 }
 
@@ -209,7 +211,9 @@ function mxvChipsHtml(items) {
       `${it.name}${it.count ? ` ×${it.count}` : ""}`;
     const cls = it.direction === "bear" ? "bear" : "bull";
     const target = it.type === "stock" ? "stock" : "topic";
-    return `<span class="mxv-chip ${cls}" onclick="mxvOpenTarget('${target}', '${escapeHtml(it.name)}')">${escapeHtml(label)}</span>`;
+    window._mxvTargets.push({ type: target, name: it.name });
+    const idx = window._mxvTargets.length - 1;
+    return `<span class="mxv-chip ${cls}" onclick="mxvOpenTargetAt(${idx})">${escapeHtml(label)}</span>`;
   }).join("");
 }
 
@@ -229,6 +233,7 @@ function mxvRatioHtml(bull, bear) {
 
 function mxvRenderBoards() {
   if (!_mxv.payload) return;
+  window._mxvTargets = []; // 重新渲染双榜前清空标的索引
   const p = _mxv.payload;
   const banner = $("#mxv-banner");
   if (banner) {
@@ -245,18 +250,23 @@ function mxvRenderBoards() {
   }
   const boards = $("#mxv-boards");
   if (boards) {
-    const topicRows = (p.topics || []).map((t, i) => `
-      <div class="mxv-row" onclick="mxvOpenTarget('topic', '${escapeHtml(t.name)}')">
+    const topicRows = (p.topics || []).map((t, i) => {
+      window._mxvTargets.push({ type: "topic", name: t.name });
+      const ti = window._mxvTargets.length - 1;
+      return `
+      <div class="mxv-row" onclick="mxvOpenTargetAt(${ti})">
         <span class="rank">${i + 1}</span><span class="name">${escapeHtml(t.name)}</span>
         ${mxvRatioHtml(t.bull, t.bear)}
         <span class="mxv-net ${t.net > 0 ? "bull" : t.net < 0 ? "bear" : "flat"}">${t.bull}多/${t.bear}空</span>
         ${mxvMomo(t.momentum)}
         <span class="mxv-latest-time">${escapeHtml((t.latest_at || "").slice(11, 16))}</span>
-      </div>`).join("");
+      </div>`; }).join("");
     const stockRows = (p.stocks || []).map((s, i) => {
       const actions = Object.entries(s.actions || {}).map(([k, v]) => `${k}×${v}`).join(" ");
+      window._mxvTargets.push({ type: "stock", name: s.name });
+      const si = window._mxvTargets.length - 1;
       return `
-      <div class="mxv-row" onclick="mxvOpenTarget('stock', '${escapeHtml(s.name)}')">
+      <div class="mxv-row" onclick="mxvOpenTargetAt(${si})">
         <span class="rank">${i + 1}</span><span class="name">${escapeHtml(s.name)}</span>
         ${mxvRatioHtml(s.bull, s.bear)}
         <span class="mxv-net ${s.net > 0 ? "bull" : s.net < 0 ? "bear" : "flat"}">${s.strength}</span>
@@ -305,4 +315,120 @@ function mxvRenderBoards() {
       `<div class="mxv-kols">${cards || `<div class="mxv-empty">暂无大V观点</div>`}</div>`;
   }
 }
-function mxvRenderDrawer() { /* Task 14 填充：右侧抽屉 */ }
+
+function mxvCloseDrawer() {
+  const mask = document.querySelector(".mxv-drawer-mask");
+  const drawer = document.querySelector(".mxv-drawer");
+  if (mask) mask.remove();
+  if (drawer) drawer.remove();
+  _mxv.drawer = null;
+}
+
+function mxvBadge(direction, action) {
+  const d = direction === "bull" ? `<span class="mxv-badge bull">↑看多</span>`
+    : direction === "bear" ? `<span class="mxv-badge bear">↓看空</span>`
+    : `<span class="mxv-badge neutral">中性</span>`;
+  return d + (action ? ` <span class="mxv-badge act">${escapeHtml(action)}</span>` : "");
+}
+
+function mxvEvidenceHtml(ev) {
+  return (ev || []).map((e) => {
+    window._mxvPosts.push({ id: e.post_id, kol_name: e.author, published_at: e.time,
+      content: e.content, detail: "", tags: [] });
+    return `<div class="ev">
+      <div>${escapeHtml(e.author)} · ${escapeHtml((e.time || "").slice(5, 16))}</div>
+      <div class="c">${escapeHtml(e.content)}</div>
+      <button class="raw" onclick="openRawModal(${e.post_id}, 'MX原始消息')">查看原始消息</button>
+    </div>`;
+  }).join("");
+}
+
+function mxvDrawerShell(title, subHtml) {
+  return `
+    <div class="mxv-drawer-mask" onclick="mxvCloseDrawer()"></div>
+    <aside class="mxv-drawer" role="dialog" aria-label="${escapeHtml(title)}">
+      <button class="close" onclick="mxvCloseDrawer()" aria-label="关闭">✕</button>
+      <h3>${escapeHtml(title)}</h3>
+      <div id="mxv-drawer-body">${subHtml || `<div class="mxv-empty">加载中…</div>`}</div>
+    </aside>`;
+}
+
+function mxvTimelineListHtml(timeline) {
+  return (timeline || []).map((op) => `
+    <div class="mxv-op">
+      <div class="head">
+        ${op.avatar ? `<img class="ava" src="${escapeHtml(op.avatar)}" alt="">` : `<div class="ava"></div>`}
+        <span class="who">${escapeHtml(op.kol_name)}</span>
+        ${mxvBadge(op.direction, op.action)}
+        ${(_mxv.drawer && _mxv.drawer.mode === "kol" && op.target_name) ? `<span style="color:var(--mxv-text);font-size:12px">${escapeHtml(op.target_name)}</span>` : ""}
+        <span class="when">快照 ${escapeHtml(op.snapshot_at)} · ${escapeHtml((op.occurred_at || "").slice(11, 16))}</span>
+      </div>
+      ${op.summary ? `<p class="sum">${escapeHtml(op.summary)}</p>` : ""}
+      ${op.evidence && op.evidence.length ? `<details class="mxv-op-evidence">
+        <summary>依据消息（${op.evidence.length}）</summary>${mxvEvidenceHtml(op.evidence)}</details>` : ""}
+    </div>`).join("") || `<div class="mxv-empty">该快照前暂无观点</div>`;
+}
+
+async function mxvOpenTarget(type, name) {
+  _mxv.drawer = { mode: "target", type, name, title: name };
+  const slot = document.getElementById("mxv-drawer-slot");
+  if (!slot) return;
+  slot.innerHTML = mxvDrawerShell(name);
+  try {
+    const data = await api(`/api/mx-views/target?type=${type}&name=${encodeURIComponent(name)}&day=${encodeURIComponent(_mxv.day)}&at=${encodeURIComponent(_mxv.at || "")}`);
+    if (_mxv.drawer && _mxv.drawer.name !== name) return;
+    const body = document.getElementById("mxv-drawer-body");
+    if (!body) return;
+    const net = data.bull.count - data.bear.count;
+    body.innerHTML = `
+      <div style="margin:6px 0 10px">
+        <span class="mxv-net ${net > 0 ? "bull" : net < 0 ? "bear" : "flat"}" style="font-size:15px">净多空 ${net > 0 ? "+" : ""}${net}</span>
+        <span style="color:var(--mxv-faint);font-size:12px;margin-left:8px">${data.bull.count} 多 / ${data.bear.count} 空 · 截至 ${escapeHtml(_mxv.at || "")}</span>
+      </div>
+      <div style="display:flex;gap:12px;margin-bottom:8px;font-size:13px">
+        <div><span style="color:var(--mxv-bull)">▲ 看多 ${data.bull.count}</span>
+          <span style="color:var(--mxv-muted)">　${escapeHtml(data.bull.kols.map((k) => k.name).slice(0, 8).join("、"))}</span></div>
+      </div>
+      <div style="display:flex;gap:12px;margin-bottom:8px;font-size:13px">
+        <div><span style="color:var(--mxv-bear)">▼ 看空 ${data.bear.count}</span>
+          <span style="color:var(--mxv-muted)">　${escapeHtml(data.bear.kols.map((k) => k.name).slice(0, 8).join("、"))}</span></div>
+      </div>
+      <div style="color:var(--mxv-accent);font-size:13px;margin:10px 0 4px">观点时间线（操作时间点已标金）</div>
+      ${mxvTimelineListHtml(data.timeline)}`;
+  } catch (err) {
+    const body = document.getElementById("mxv-drawer-body");
+    if (body) body.innerHTML = `<div class="mxv-empty">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+async function mxvOpenKol(kolId) {
+  _mxv.drawer = { mode: "kol", kolId, title: `大V #${kolId}` };
+  const slot = document.getElementById("mxv-drawer-slot");
+  if (!slot) return;
+  slot.innerHTML = mxvDrawerShell("大V观点");
+  try {
+    const data = await api(`/api/mx-views/kol/${kolId}?day=${encodeURIComponent(_mxv.day)}&at=${encodeURIComponent(_mxv.at || "")}`);
+    if (!_mxv.drawer || _mxv.drawer.kolId !== kolId) return;
+    const body = document.getElementById("mxv-drawer-body");
+    if (!body) return;
+    _mxv.drawer.title = data.kol.name;
+    body.innerHTML = `
+      <div style="margin:6px 0 10px;display:flex;gap:10px;align-items:center">
+        ${data.kol.avatar ? `<img src="${escapeHtml(data.kol.avatar)}" style="width:34px;height:34px;border-radius:50%" alt="">` : ""}
+        <b style="color:#fff">${escapeHtml(data.kol.name)}</b>
+        <span style="color:var(--mxv-faint);font-size:12px">${data.timeline.length} 条观点 · 截至 ${escapeHtml(_mxv.at || "")}</span>
+      </div>
+      ${mxvTimelineListHtml(data.timeline)}`;
+  } catch (err) {
+    const body = document.getElementById("mxv-drawer-body");
+    if (body) body.innerHTML = `<div class="mxv-empty">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function mxvOpenTargetAt(i) { const t = window._mxvTargets[i]; if (t) mxvOpenTarget(t.type, t.name); }
+
+function mxvRenderDrawer() { /* 抽屉按需打开；换快照时若开着则原位刷新 */
+  if (!_mxv.drawer) return;
+  if (_mxv.drawer.mode === "target") mxvOpenTarget(_mxv.drawer.type, _mxv.drawer.name);
+  else if (_mxv.drawer.mode === "kol") mxvOpenKol(_mxv.drawer.kolId);
+}
