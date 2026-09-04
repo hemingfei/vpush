@@ -1,11 +1,11 @@
 # sidecar helper runtime
-FROM node:22-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436 AS node
+FROM node:22-slim AS node
 
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 
-FROM python:3.12-slim-bookworm@sha256:4766d8b510c428e595d74b9cc5bbb2fae8e26316fffb4adc89908d79aacd58a2
+FROM python:3.12-slim
 
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /app/node_modules /app/node_modules
