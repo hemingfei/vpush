@@ -68,3 +68,14 @@ def test_mx_views_css_key_components():
     for cls in (".mxv-statusbar", ".mxv-timeline", ".mxv-tl-head", ".mxv-banner", ".mxv-chip",
                 ".mxv-board", ".mxv-row", ".mxv-drawer", ".mxv-kolcard", "@keyframes mxvFlashIn"):
         assert cls in css, cls
+
+
+def test_mx_views_boards_render_function():
+    js = (STATIC / "mx-views.js").read_text()
+    body = _fn_body("mxvRenderBoards", js)
+    for marker in ("mxv-banner", "mxv-boards", "mxv-chip", "mxv-kolcard",
+                   "mxvOpenTarget", "mxvOpenKol", "mxv-feed-item"):
+        assert marker in body, marker
+    # mxv-ratio 多空比例条由辅助函数 mxvRatioHtml 产出，渲染体以调用形式接入双榜
+    assert "mxv-ratio" in _fn_body("mxvRatioHtml", js)
+    assert body.count("mxvRatioHtml(") >= 2

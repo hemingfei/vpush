@@ -203,5 +203,106 @@ function mxvStartClock() {
   _mxv.clockTimer = setInterval(tick, 1000);
 }
 
-function mxvRenderBoards() { /* Task 13 填充：banner/双榜/观点流/大V总览 */ }
+function mxvChipsHtml(items) {
+  return (items || []).map((it) => {
+    const label = it.action ? `${it.name} ${it.action}×${it.count || ""}` :
+      `${it.name}${it.count ? ` ×${it.count}` : ""}`;
+    const cls = it.direction === "bear" ? "bear" : "bull";
+    const target = it.type === "stock" ? "stock" : "topic";
+    return `<span class="mxv-chip ${cls}" onclick="mxvOpenTarget('${target}', '${escapeHtml(it.name)}')">${escapeHtml(label)}</span>`;
+  }).join("");
+}
+
+function mxvMomo(m) {
+  if (m > 0) return `<span class="mxv-momo up">↑${m}</span>`;
+  if (m < 0) return `<span class="mxv-momo down">↓${-m}</span>`;
+  return `<span class="mxv-momo flat">→</span>`;
+}
+
+function mxvRatioHtml(bull, bear) {
+  const total = Math.max(bull + bear, 1);
+  const bp = Math.round((bull / total) * 100), sp = Math.round((bear / total) * 100);
+  return `<div class="mxv-ratio" role="img" aria-label="看多${bull} 看空${bear}">
+    ${bull ? `<div class="b" style="width:${bp}%"></div>` : ""}
+    ${bear ? `<div class="s" style="width:${sp}%"></div>` : ""}</div>`;
+}
+
+function mxvRenderBoards() {
+  if (!_mxv.payload) return;
+  const p = _mxv.payload;
+  const banner = $("#mxv-banner");
+  if (banner) {
+    const s = p.summary || {};
+    banner.innerHTML = s && s.text ? `
+      <div class="mxv-banner">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+          <b style="color:#fff">⚡ 今日操作</b>
+          <span style="margin-left:auto;color:var(--mxv-faint);font-size:11px">第 ${(_mxv.snapshots.find((x) => x.snapshot_at === _mxv.at) || {}).seq || "—"} 版 · ${escapeHtml(_mxv.at || "")} 生成</span>
+        </div>
+        <div class="text">${escapeHtml(s.text || "")}</div>
+        <div class="mxv-chips">${mxvChipsHtml(s.items)}</div>
+      </div>` : "";
+  }
+  const boards = $("#mxv-boards");
+  if (boards) {
+    const topicRows = (p.topics || []).map((t, i) => `
+      <div class="mxv-row" onclick="mxvOpenTarget('topic', '${escapeHtml(t.name)}')">
+        <span class="rank">${i + 1}</span><span class="name">${escapeHtml(t.name)}</span>
+        ${mxvRatioHtml(t.bull, t.bear)}
+        <span class="mxv-net ${t.net > 0 ? "bull" : t.net < 0 ? "bear" : "flat"}">${t.bull}多/${t.bear}空</span>
+        ${mxvMomo(t.momentum)}
+        <span class="mxv-latest-time">${escapeHtml((t.latest_at || "").slice(11, 16))}</span>
+      </div>`).join("");
+    const stockRows = (p.stocks || []).map((s, i) => {
+      const actions = Object.entries(s.actions || {}).map(([k, v]) => `${k}×${v}`).join(" ");
+      return `
+      <div class="mxv-row" onclick="mxvOpenTarget('stock', '${escapeHtml(s.name)}')">
+        <span class="rank">${i + 1}</span><span class="name">${escapeHtml(s.name)}</span>
+        ${mxvRatioHtml(s.bull, s.bear)}
+        <span class="mxv-net ${s.net > 0 ? "bull" : s.net < 0 ? "bear" : "flat"}">${s.strength}</span>
+        ${mxvMomo(s.momentum)}
+        <span class="mxv-actions">${escapeHtml(actions)}</span>
+      </div>`;
+    }).join("");
+    boards.innerHTML = `
+      <div class="mxv-boards">
+        <div class="mxv-board"><h3>题材多空榜</h3>${topicRows || `<div class="mxv-empty">暂无题材观点</div>`}</div>
+        <div class="mxv-board"><h3>个股强度榜</h3>${stockRows || `<div class="mxv-empty">暂无个股观点</div>`}</div>
+      </div>`;
+  }
+  const feed = $("#mxv-feed");
+  if (feed) {
+    const items = (p.new_opinions || []).map((o, i) => `
+      <div class="mxv-feed-item ${_mxv.atLatest && i === 0 ? "fresh" : ""}">
+        <span style="color:var(--mxv-accent)">${escapeHtml((o.occurred_at || "").slice(11, 16))}</span>
+        <span class="mxv-badge ${o.direction}">${o.direction === "bull" ? "↑看多" : o.direction === "bear" ? "↓看空" : "中性"}</span>
+        ${o.action ? `<span class="mxv-badge act">${escapeHtml(o.action)}</span>` : ""}
+        <span style="color:var(--mxv-text)">${escapeHtml(o.target_name)}</span>
+        <span style="color:var(--mxv-muted)">· ${escapeHtml(o.kol_name)}</span>
+        <span style="color:var(--mxv-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(o.summary || "")}</span>
+      </div>`).join("");
+    feed.innerHTML = `<h3 style="margin:0 0 6px;color:var(--mxv-accent);font-size:14px">实时观点流（${escapeHtml(_mxv.at || "")} 批次）</h3>` +
+      (items || `<div class="mxv-empty">本批次无新增观点</div>`);
+  }
+  const kols = $("#mxv-kols");
+  if (kols) {
+    const cards = (p.kols || []).map((k) => {
+      const b = (k.bull_names || []).length, s = (k.bear_names || []).length;
+      const tot = Math.max(b + s, 1);
+      return `
+      <div class="mxv-kolcard" onclick="mxvOpenKol(${k.kol_id})">
+        ${k.avatar ? `<img src="${escapeHtml(k.avatar)}" alt="" loading="lazy">` : `<div class="ava"></div>`}
+        <div style="flex:1;min-width:0">
+          <div class="n">${escapeHtml(k.name)} <span style="color:var(--mxv-faint);font-size:11px">${k.opinion_count} 观点</span></div>
+          <div class="mini"><div class="b" style="width:${Math.round((b / tot) * 100)}%"></div>
+            <div class="s" style="width:${Math.round((s / tot) * 100)}%"></div></div>
+          <div class="tags">${k.bull_names && k.bull_names.length ? `<span style="color:var(--mxv-bull)">▲</span> ${escapeHtml(k.bull_names.slice(0, 4).join("、"))}` : ""}
+            ${k.bear_names && k.bear_names.length ? `<br><span style="color:var(--mxv-bear)">▼</span> ${escapeHtml(k.bear_names.slice(0, 4).join("、"))}` : ""}</div>
+        </div>
+      </div>`;
+    }).join("");
+    kols.innerHTML = `<h3 style="margin:0 0 8px;color:var(--mxv-accent);font-size:14px">大V观点总览</h3>` +
+      `<div class="mxv-kols">${cards || `<div class="mxv-empty">暂无大V观点</div>`}</div>`;
+  }
+}
 function mxvRenderDrawer() { /* Task 14 填充：右侧抽屉 */ }
