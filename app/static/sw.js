@@ -1,5 +1,5 @@
 /* V Push Service Worker —— network-first：静态外壳离线可用，API 永不缓存 */
-const CACHE = "dav-shell-eaabc42493cc";
+const CACHE = "dav-shell-8527fec771df";
 const SHELL = [
   "/",
   "/app.js",
@@ -30,6 +30,7 @@ const SHELL = [
   "/icon-192-dark.png",
   "/icon-512-dark.png",
   "/manifest.webmanifest",
+  "/manifest-dark.webmanifest",
 ];
 
 self.addEventListener("install", (e) => {

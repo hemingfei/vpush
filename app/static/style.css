@@ -442,7 +442,7 @@ textarea.form-control {
 
 .main-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .topbar {
-  height: 56px;
+  height: calc(56px + env(safe-area-inset-top, 0px));
   position: sticky;
   top: 0;
   z-index: 30;
@@ -450,6 +450,8 @@ textarea.form-control {
   align-items: center;
   justify-content: space-between;
   padding: 0 24px;
+  /* 沉浸式状态栏（安卓 15 强制 edge-to-edge）下内容不顶进状态栏 */
+  padding-top: env(safe-area-inset-top, 0px);
   background: var(--color-bg);
   border-bottom: var(--border-default);
 }

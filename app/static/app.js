@@ -4593,6 +4593,9 @@ function applyTheme() {
   if (meta) meta.setAttribute("content", dark ? "#11141a" : "#f8f8fb");
   const statusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
   if (statusBar) statusBar.setAttribute("content", dark ? "black-translucent" : "default");
+  // 同步 manifest 链接：部分安卓 PWA 独立窗口只认 manifest 静态 theme_color
+  const manifestLink = document.getElementById("manifest");
+  if (manifestLink) manifestLink.setAttribute("href", dark ? "/manifest-dark.webmanifest?v=2" : "/manifest.webmanifest?v=2");
   // 品牌符号（登录页 + topbar + 侧边栏）用融合版，深浅各一
   const logo = document.querySelector(".topbar-logo");
   if (logo) logo.src = dark ? "/logo-mark-dark.svg" : "/logo-mark.svg";
