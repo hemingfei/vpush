@@ -5386,7 +5386,7 @@ def test_trap_focus_utility_and_a11y_enhancements():
     assert "MutationObserver" in body
     assert "previousActive.focus()" in body
     assert "trapFocus(mask, close)" in src
-    assert "trapFocus(overlay, closeLightbox)" in src
+    assert "trapFocus(overlay, closeLightbox)" in (APP_JS.parent / "core" / "lightbox.js").read_text()
     edit = _fn_body("adminEditKol")
     assert "trapFocus(mask, tryClose)" in edit
     assert 'if (e.key === "Tab")' not in edit
@@ -5468,7 +5468,8 @@ def test_inline_handlers_have_exact_explicit_exports():
     source = APP_JS.read_text()
     html = INDEX_HTML.read_text()
     views_src = "".join(path.read_text() for path in sorted((APP_JS.parent / "views").glob("*.js")))
-    used = _inline_handler_calls(html + source + views_src)
+    core_src = "".join(path.read_text() for path in sorted((APP_JS.parent / "core").glob("*.js")))
+    used = _inline_handler_calls(html + source + views_src + core_src)
     exported = _inline_handler_registry(source)
     assert used == exported, (
         f"missing={sorted(used - exported)} extra={sorted(exported - used)}"
@@ -5479,7 +5480,8 @@ def test_inline_handlers_have_exact_explicit_exports():
 def test_inline_handlers_do_not_read_module_lexicals():
     source = APP_JS.read_text()
     views_src = "".join(path.read_text() for path in sorted((APP_JS.parent / "views").glob("*.js")))
-    for attr in EVENT_ATTRIBUTE_RE.findall(source + views_src):
+    core_src = "".join(path.read_text() for path in sorted((APP_JS.parent / "core").glob("*.js")))
+    for attr in EVENT_ATTRIBUTE_RE.findall(source + views_src + core_src):
         assert "${" not in attr or not INLINE_DYNAMIC_CALL_RE.search(attr), attr
         stripped = re.sub(r"\$\{[^}]+\}", "", attr)
         roots = set(INLINE_MEMBER_RE.findall(stripped)) - INLINE_BUILTINS - INLINE_SAFE_MEMBER_ROOTS
