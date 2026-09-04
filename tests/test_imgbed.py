@@ -47,6 +47,17 @@ def test_enqueue_recent_posts_backfills_twitter_images(db, cfg):
     assert db.list_pending_hosted_images()[0]["source_url"] == SOURCE
 
 
+def test_truth_images_enqueue_and_rewrite(db, cfg):
+    imgbed.configure(type("C", (), {"imgbed": cfg})())
+    truth_src = "https://static-assets-1.truthsocial.com/media/abc.png"
+    truth_hosted = "https://img.053727.xyz/file/vpush/2.png"
+    kid = db.add_kol("truth", "Donald J. Trump", "realDonaldTrump")
+    db.insert_post("truth", kid, "p1", "t", "c", "u", "", images=[truth_src])
+    assert imgbed.enqueue_recent_posts(db) == 1
+    db.mark_hosted_image(truth_src, status="ready", hosted_url=truth_hosted)
+    assert db.list_posts()[0]["images"] == [truth_hosted]
+
+
 def test_apply_runtime_updates_public_host(db, cfg):
     imgbed.configure(type("C", (), {"imgbed": cfg})())
     imgbed.apply_runtime("https://img.example.net", "imgbed_other")

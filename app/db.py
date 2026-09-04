@@ -4335,9 +4335,11 @@ class DB:
         )
         return (rows[0]["hosted_url"] if rows else "") or ""
 
-    def recent_twitter_image_rows(self, limit: int = 40) -> list[dict]:
+    def recent_mirrorable_image_rows(self, limit: int = 40) -> list[dict]:
+        """最近的镜像源图（X / Truth Social），供图床缓慢回填。"""
         return self._rows(
-            "SELECT images FROM posts WHERE platform = 'twitter' AND images LIKE '%twimg.com%' "
+            "SELECT images FROM posts WHERE platform IN ('twitter', 'truth') "
+            "AND (images LIKE '%twimg.com%' OR images LIKE '%truthsocial.com%') "
             "ORDER BY id DESC LIMIT ?",
             (max(int(limit), 1),),
         )

@@ -23,6 +23,7 @@ SOURCE_HOSTS = frozenset({
     "pbs.twimg.com",
     "video.twimg.com",
     "abs.twimg.com",
+    "static-assets-1.truthsocial.com",
 })
 ALLOWED_TYPES = {
     "image/jpeg": "jpg",
@@ -110,7 +111,7 @@ def rewrite_urls(db, urls: list[str] | None) -> list[str]:
 
 
 def enqueue_recent_posts(db, limit: int = 40) -> int:
-    rows = db.recent_twitter_image_rows(limit=limit)
+    rows = db.recent_mirrorable_image_rows(limit=limit)
     queued = 0
     for row in rows:
         raw = row.get("images") or ""
