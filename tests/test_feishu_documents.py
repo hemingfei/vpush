@@ -19,6 +19,29 @@ from app.feishu_documents import (
 from app.ima_documents import ImaDocumentService
 
 
+def test_feishu_timeline_disk_cache_returns_same_object_and_invalidates_on_mtime(tmp_path):
+    import os
+
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    target = archive / "timeline.json"
+    target.write_text(json.dumps({"entries": [{"id": "a"}]}, ensure_ascii=False), encoding="utf-8")
+    _db, _ima, service = _service(tmp_path, FakeFeishuClient())
+    service.archive_root = archive
+    source = {"timeline_path": "timeline.json"}
+    try:
+        first = service.timeline(source)
+        assert service.timeline(source) is first  # mtime 未变：命中缓存
+        target.write_text(json.dumps({"entries": [{"id": "b"}]}, ensure_ascii=False), encoding="utf-8")
+        bumped = time.time() + 5
+        os.utime(target, (bumped, bumped))
+        second = service.timeline(source)
+        assert second is not first
+        assert second["entries"] == [{"id": "b"}]
+    finally:
+        service._timeline_cache.pop("timeline.json", None)
+
+
 def test_parse_feishu_document_url_normalizes_and_rejects_untrusted_hosts():
     parsed = parse_feishu_document_url(
         "https://hcn3wbq9qksp.feishu.cn/docx/NXbndzo1wowuQFxtH3ec5U3snOd?from=from_copylink"
@@ -107,6 +130,61 @@ def test_timeline_normalizes_table_cells_without_rendering_children_twice():
         ],
         "columns": 2,
     }]
+
+
+from app.api import _feishu_timeline_cursor, _feishu_timeline_page
+
+
+def _timeline_entry(entry_id, day, time="12:00"):
+    return {
+        "id": entry_id,
+        "timestamp": f"{day}T{time}:00+08:00",
+        "day": day,
+        "time": time,
+        "blocks": [{"type": "text", "text": entry_id}],
+    }
+
+
+def test_feishu_timeline_page_returns_latest_seven_days_and_cursor():
+    entries = [
+        _timeline_entry("d10", "2026-09-10"),
+        _timeline_entry("d09", "2026-09-09"),
+        _timeline_entry("d08", "2026-09-08"),
+        _timeline_entry("d07", "2026-09-07"),
+        _timeline_entry("d06", "2026-09-06"),
+        _timeline_entry("d05", "2026-09-05"),
+        _timeline_entry("d04", "2026-09-04"),
+        _timeline_entry("d03", "2026-09-03"),
+    ]
+
+    page, has_more, cursor = _feishu_timeline_page(entries, "latest", 7, "")
+
+    assert [item["id"] for item in page] == ["d10", "d09", "d08", "d07", "d06", "d05", "d04"]
+    assert has_more is True
+    assert cursor == _feishu_timeline_cursor(page[-1])
+
+
+def test_feishu_timeline_page_uses_strict_timestamp_and_id_cursor():
+    entries = [
+        _timeline_entry("same-b", "2026-09-04", "12:00"),
+        _timeline_entry("same-a", "2026-09-04", "12:00"),
+        _timeline_entry("older", "2026-09-03"),
+    ]
+    before = _feishu_timeline_cursor(entries[0])
+
+    page, _has_more, _cursor = _feishu_timeline_page(entries, "latest", 7, before)
+
+    assert [item["id"] for item in page] == ["same-a", "older"]
+
+
+def test_feishu_timeline_page_without_window_preserves_full_order():
+    entries = [_timeline_entry("a", "2026-09-01"), _timeline_entry("b", "2026-09-02")]
+
+    page, has_more, cursor = _feishu_timeline_page(entries, "latest", None, "")
+
+    assert [item["id"] for item in page] == ["b", "a"]
+    assert has_more is False
+    assert cursor == ""
 
 
 def _service(tmp_path, client):
@@ -529,6 +607,19 @@ def test_feishu_timeline_is_open_to_all_users(tmp_path, monkeypatch):
     timeline = client.get("/api/ima-documents/timeline/all", headers=user).json()
     assert timeline["entries"]
     assert timeline["entries"][0]["source"]["group_id"] == group_id
+    assert "canonical_url" in timeline["sources"][0]
+    windowed = client.get(
+        f"/api/ima-documents/timeline/all?window_days=7&group={group_id}",
+        headers=user,
+    )
+    assert windowed.status_code == 200, windowed.text
+    assert windowed.json()["has_more"] is False
+    assert windowed.json()["next_cursor"] == ""
+    invalid = client.get(
+        "/api/ima-documents/timeline/all?window_days=7&before=bad-cursor",
+        headers=user,
+    )
+    assert invalid.status_code == 400
 
 
 def test_feishu_docs_config_endpoint_persists_and_hot_reloads(tmp_path, monkeypatch):
@@ -627,5 +718,57 @@ def test_feishu_source_display_mode_patch_and_detail(tmp_path, monkeypatch):
     assert client.patch(
         f"/api/admin/feishu-documents/{source['id']}", headers=admin,
         json={"display_mode": "poster"},
+    ).status_code == 400
+    service.stop()
+
+
+def test_feishu_display_name_rename_updates_timeline_and_republish(tmp_path, monkeypatch):
+    client, service, admin, user = _feishu_api(tmp_path, monkeypatch)
+    client.app.state.db.save_feishu_oauth_credential({
+        "access_token": "access", "refresh_token": "refresh",
+        "expires_in": 3600, "refresh_token_expires_in": 7200,
+    })
+    added = client.post(
+        "/api/admin/feishu-documents", headers=admin,
+        json={"url": "https://a.feishu.cn/docx/NXbndzo1wowuQFxtH3ec5U3snOd"},
+    ).json()
+    source = client.app.state.db.get_feishu_document_source(added["id"])
+    service.sync_source(source["id"], True)
+
+    renamed = client.patch(
+        f"/api/admin/feishu-documents/{source['id']}", headers=admin,
+        json={"display_name": "  神非档案  "},
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["display_name"] == "神非档案"
+    assert renamed.json()["title"] == "测试时间线"  # 原标题不动
+
+    # 时间线接口（普通用户）展示名优先
+    timeline = client.get("/api/ima-documents/timeline/all", headers=user).json()
+    assert timeline["sources"][0]["title"] == "神非档案"
+
+    # 读模型（知识库记录）同步改名
+    record = client.get(
+        f"/api/ima-documents/{source['media_id']}?group={source['group_id']}", headers=user
+    ).json()
+    assert record["name"] == "神非档案"
+
+    # 研报库目录（订阅列表/筛选器）组名同步改名
+    catalog = client.get("/api/ima-documents/catalog", headers=user).json()
+    group_item = next(i for i in catalog["subscribed"] if i["id"] == source["group_id"])
+    assert group_item["name"] == "神非档案"
+
+    # 置空 = 恢复飞书标题
+    reset = client.patch(
+        f"/api/admin/feishu-documents/{source['id']}", headers=admin,
+        json={"display_name": ""},
+    )
+    assert reset.status_code == 200
+    timeline2 = client.get("/api/ima-documents/timeline/all", headers=user).json()
+    assert timeline2["sources"][0]["title"] == "测试时间线"
+
+    assert client.patch(
+        f"/api/admin/feishu-documents/{source['id']}", headers=admin,
+        json={"display_name": "x" * 201},
     ).status_code == 400
     service.stop()

@@ -3117,6 +3117,9 @@ class ImaDocumentService:
             public["group_name"] = item["group_name"]
         if item.get("search_snippet"):
             public["search_snippet"] = str(item["search_snippet"])[:240]
+        abstract_text = str(item.get("abstract_zh") or item.get("abstract") or "").strip()
+        if abstract_text:
+            public["abstract"] = abstract_text[:140]
         return public
 
     def list_documents(
@@ -3686,7 +3689,11 @@ class ImaDocumentService:
         feishu = tuple(
             ImaGroupConfig(
                 id=str(item.get("group_id") or ""),
-                name=str(item.get("title") or "飞书文档"),
+                name=(
+                    str(item.get("display_name") or "").strip()
+                    or str(item.get("title") or "").strip()
+                    or "飞书文档"
+                ),
                 knowledge_base_id="",
                 root_folder_id="",
             )

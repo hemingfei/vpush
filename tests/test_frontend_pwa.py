@@ -1,9 +1,11 @@
 """PWA Service Worker 静态回归测试：API 永不缓存，外壳仍可离线。"""
 import re
 from pathlib import Path
+from scripts.bump_assets import asset_digest, module_urls
 
 SW_JS = Path(__file__).parent.parent / "app" / "static" / "sw.js"
 STATIC = SW_JS.parent
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_fetch_handler_excludes_api_route():
@@ -50,10 +52,13 @@ def test_frontend_assets_match_financial_news_release_revision():
     html = (STATIC / "index.html").read_text()
     sw = SW_JS.read_text()
     app = (STATIC / "app.js").read_text()
-    assert 'href="/style.css?v=275"' in html
-    assert 'src="/app.js?v=393"' in html
-    assert 'const CACHE = "dav-shell-v256";' in sw
-    assert 'const APP_VERSION = "1.12.132";' in app
+    digest = asset_digest(ROOT)
+    assert f'href="/style.css?v={digest}"' in html
+    assert f'src="/app.js?v={digest}"' in html
+    assert f'const CACHE = "dav-shell-{digest}";' in sw
+    for url in module_urls(ROOT):
+        assert f'"{url}"' in sw
+    assert 'const APP_VERSION = "1.12.136";' in app
 
 
 def test_pwa_icons_have_light_and_dark_sets():
@@ -83,3 +88,15 @@ def test_pwa_icons_have_light_and_dark_sets():
     sw = SW_JS.read_text()
     assert "/icon-192-dark.png" in sw
     assert "/icon-512-dark.png" in sw
+
+
+def test_status_bar_follows_app_theme():
+    html = (STATIC / "index.html").read_text()
+    assert 'name="apple-mobile-web-app-status-bar-style" content="default"' in html
+    assert 'statusBar.content = dark ? "black-translucent" : "default"' in html
+    app = (STATIC / "app.js").read_text()
+    assert 'apple-mobile-web-app-status-bar-style' in app
+    assert 'dark ? "black-translucent" : "default"' in app
+    manifest = (STATIC / "manifest.webmanifest").read_text()
+    assert '"theme_color": "#f8f8fb"' in manifest
+    assert '"background_color": "#f8f8fb"' in manifest

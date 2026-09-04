@@ -184,20 +184,23 @@ def _strip_webhook_fields(row: dict) -> dict:
     return row
 
 
-def _normalize_post_images(rows: list[dict]) -> list[dict]:
+def _normalize_post_images(rows: list[dict], db=None) -> list[dict]:
     """posts 行的 images 是 JSON 文本，API 场景统一解析为数组。"""
+    from . import imgbed
+
     for row in rows:
         raw = row.get("images")
         if isinstance(raw, list):
-            continue
-        if isinstance(raw, str) and raw:
+            images = raw
+        elif isinstance(raw, str) and raw:
             try:
                 parsed = json.loads(raw)
-                row["images"] = parsed if isinstance(parsed, list) else []
+                images = parsed if isinstance(parsed, list) else []
             except (TypeError, ValueError):
-                row["images"] = []
+                images = []
         else:
-            row["images"] = []
+            images = []
+        row["images"] = imgbed.rewrite_urls(db, images) if db is not None else images
     return rows
 
 
@@ -1580,6 +1583,11 @@ class DB:
                 "ALTER TABLE feishu_document_sources ADD COLUMN "
                 "display_mode TEXT NOT NULL DEFAULT 'timeline'"
             )
+        if "display_name" not in feishu_source_cols:
+            self._conn.execute(
+                "ALTER TABLE feishu_document_sources ADD COLUMN "
+                "display_name TEXT NOT NULL DEFAULT ''"
+            )
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS user_keywords ("
             "  user_id INTEGER NOT NULL,"
@@ -1600,6 +1608,26 @@ class DB:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_knowledge_kw_notified_user "
             "ON knowledge_keyword_notified(user_id)"
+        )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS hosted_images ("
+            "  source_url TEXT PRIMARY KEY,"
+            "  hosted_url TEXT NOT NULL DEFAULT '',"
+            "  content_hash TEXT NOT NULL DEFAULT '',"
+            "  status TEXT NOT NULL DEFAULT 'pending',"
+            "  attempts INTEGER NOT NULL DEFAULT 0,"
+            "  last_error TEXT NOT NULL DEFAULT '',"
+            "  last_attempt_at TEXT NOT NULL DEFAULT '',"
+            "  created_at TEXT NOT NULL DEFAULT (datetime('now'))"
+            ")"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_hosted_images_status "
+            "ON hosted_images(status, last_attempt_at)"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_hosted_images_hash "
+            "ON hosted_images(content_hash) WHERE content_hash != ''"
         )
         kol_cols = {row["name"] for row in self._rows("PRAGMA table_info(kols)")}
         if "is_private" not in kol_cols:
@@ -4477,7 +4505,7 @@ class DB:
         sql += " ORDER BY p.published_at DESC, p.id DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         return _sanitize_post_detail(
-            _normalize_post_tags(_normalize_post_images(self._rows(sql, params)))
+            _normalize_post_tags(_normalize_post_images(self._rows(sql, params), db=self))
         )
 
     def count_posts(self) -> int:
@@ -4607,7 +4635,7 @@ class DB:
             "LEFT JOIN subscriptions s ON s.kol_id = p.kol_id AND s.user_id = ? "
             f"WHERE {' AND '.join(conds)} ORDER BY p.published_at DESC, p.id DESC LIMIT ? OFFSET ?",
             (*params, limit, offset),
-        ))))
+        ), db=self)))
         for row in rows:
             if row.pop("_hide_images"):
                 row["images"] = []
@@ -4632,7 +4660,7 @@ class DB:
             "AND COALESCE(p.hidden, 0) = 0 "
             "ORDER BY p.published_at DESC, p.id DESC LIMIT ?",
             (user_id, *kol_ids, since_ts, limit),
-        ))))
+        ), db=self)))
 
     def daily_report_users(self) -> list[dict]:
         """开启每日精选、启用通知且绑定过渠道的用户。"""
@@ -4765,6 +4793,86 @@ class DB:
             )
 
     # ---- Settings ----
+    def enqueue_hosted_image(self, source_url: str) -> bool:
+        url = (source_url or "").strip()
+        if not url:
+            return False
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO hosted_images (source_url, status) VALUES (?, 'pending')",
+                (url,),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def hosted_image_url(self, source_url: str) -> str:
+        url = (source_url or "").strip()
+        if not url:
+            return ""
+        rows = self._rows(
+            "SELECT hosted_url FROM hosted_images WHERE source_url = ? AND status = 'ready' "
+            "AND hosted_url != ''",
+            (url,),
+        )
+        return (rows[0]["hosted_url"] if rows else "") or ""
+
+    def hosted_image_url_by_hash(self, content_hash: str) -> str:
+        digest = (content_hash or "").strip()
+        if not digest:
+            return ""
+        rows = self._rows(
+            "SELECT hosted_url FROM hosted_images WHERE content_hash = ? AND status = 'ready' "
+            "AND hosted_url != '' LIMIT 1",
+            (digest,),
+        )
+        return (rows[0]["hosted_url"] if rows else "") or ""
+
+    def recent_twitter_image_rows(self, limit: int = 40) -> list[dict]:
+        return self._rows(
+            "SELECT images FROM posts WHERE platform = 'twitter' AND images LIKE '%twimg.com%' "
+            "ORDER BY id DESC LIMIT ?",
+            (max(int(limit), 1),),
+        )
+
+    def list_pending_hosted_images(self, limit: int = 8) -> list[dict]:
+        from .imgbed import retry_cutoff
+
+        cutoff = retry_cutoff()
+        return self._rows(
+            "SELECT source_url, hosted_url, content_hash, status, attempts, last_error, "
+            "last_attempt_at FROM hosted_images "
+            "WHERE status = 'pending' OR (status = 'failed' AND last_attempt_at <= ?) "
+            "ORDER BY created_at LIMIT ?",
+            (cutoff, max(int(limit), 1)),
+        )
+
+    def mark_hosted_image(
+        self,
+        source_url: str,
+        *,
+        status: str,
+        hosted_url: str = "",
+        content_hash: str = "",
+        last_error: str = "",
+    ) -> None:
+        from .imgbed import utc_now
+
+        self._execute(
+            "UPDATE hosted_images SET status = ?, hosted_url = CASE WHEN ? != '' THEN ? ELSE hosted_url END, "
+            "content_hash = CASE WHEN ? != '' THEN ? ELSE content_hash END, "
+            "attempts = attempts + 1, last_error = ?, last_attempt_at = ? WHERE source_url = ?",
+            (
+                status,
+                hosted_url,
+                hosted_url,
+                content_hash,
+                content_hash,
+                last_error,
+                utc_now(),
+                source_url,
+            ),
+        )
+
     def get_setting(self, key: str) -> str | None:
         reader = self._read_only_rows if str(key).startswith("ima_") else self._rows
         rows = reader("SELECT value FROM settings WHERE key = ?", (key,))
@@ -6778,7 +6886,7 @@ class DB:
     _FEISHU_DOCUMENT_SOURCE_COLUMNS = frozenset({
         "document_id", "title", "revision_id", "content_hash", "timeline_path",
         "txt_path", "asset_root", "entry_count", "published_record_json",
-        "published_state_json", "display_mode", "enabled", "sync_status",
+        "published_state_json", "display_mode", "display_name", "enabled", "sync_status",
         "last_checked_at", "last_success_at", "last_error", "deleted_at",
     })
 

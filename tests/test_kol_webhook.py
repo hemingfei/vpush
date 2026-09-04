@@ -353,7 +353,7 @@ def test_admin_ui_webhook_button_and_modal_wiring():
     """系统 KOL 行有 Webhook 按钮，弹窗走专用管理端点。"""
     import re
 
-    app_js = Path(__file__).parent.parent / "app" / "static" / "app.js"
+    app_js = Path(__file__).parent.parent / "app" / "static" / "views" / "admin" / "kol.js"
     src = app_js.read_text(encoding="utf-8")
     # 行内按钮：仅 system 平台渲染
     assert re.search(r'k\.platform === "system"[^\n]*adminKolWebhook\(', src)

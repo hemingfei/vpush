@@ -1833,7 +1833,7 @@ def test_full_text_search_api_preserves_metadata_order_dedupes_and_enforces_acl(
     assert [item["media_id"] for item in items].count("title-hit") == 1
     assert "private-hit" not in {item["media_id"] for item in items}
     assert "quantum interconnect" in items[-1]["search_snippet"].casefold()
-    assert "abstract" not in items[-1]
+    assert items[-1].get("abstract") == "unrelated"[:140]
     assert "body" not in items[-1]
 
     selected = client.get(
@@ -2409,7 +2409,7 @@ def test_indexed_api_serves_without_reading_json(tmp_path, monkeypatch):
         "file_macro",
     }
     assert body["items"][0]["media_id"] == "file_ai"
-    assert "abstract" not in body["items"][0]
+    assert body["items"][0].get("abstract") == "算力需求"[:140]
     assert "cover_url" not in body["items"][0]
     assert "pdf_path" not in body["items"][0]
     assert "txt_path" not in body["items"][0]

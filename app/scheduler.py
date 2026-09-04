@@ -172,6 +172,7 @@ def _polling_bool(db: DB, key: str, default: bool = False) -> bool:
 NORMAL_IDLE_CAP_SECONDS = 900
 PRIORITY_IDLE_CAP_SECONDS = 180
 X_FALLBACK_CAP_SECONDS = 1800
+X_RATE_LIMIT_BACKOFF_SECONDS = 900  # X 429 窗口约 15 分钟，30s 起跳会在窗内反复撞限
 COMBINATION_BASE_SECONDS = 30
 COMBINATION_IDLE_CAP_SECONDS = 120
 SECONDARY_BASE_SECONDS = 900
@@ -198,7 +199,7 @@ def _is_platform_wide_error(exc: BaseException) -> bool:
     text = str(exc)
     if any(token in text for token in ("cookie", "WAF", "反爬", "登录")):
         return True
-    if "X GraphQL" in text and "HTTP 429" in text:
+    if "HTTP 429" in text and ("X GraphQL" in text or "X typeahead" in text):
         return True
     return "login" in text.lower()
 
@@ -1164,6 +1165,8 @@ def _fetch_kol_once(
         with state_lock:
             state.fail_count += 1
             delay = min(30 * (2 ** (state.fail_count - 1)), 600)
+            if _is_platform_wide_error(exc) and "HTTP 429" in str(exc):
+                delay = max(delay, X_RATE_LIMIT_BACKOFF_SECONDS)
             until = time.monotonic() + delay
             state.kol_skip_until[kol["id"]] = until
             if _is_platform_wide_error(exc):
@@ -1315,6 +1318,15 @@ def _fetch_kol_once(
     # 首次成功 fetch（含空列表）即打标：空账号/偶发空窗后，下一轮新帖必须正常推送。
     first_fetch = not kol.get("baseline_ready")
     post_ids = db.insert_posts_batch(posts)
+    try:
+        from . import imgbed
+
+        for post, post_id in zip(posts, post_ids):
+            if post_id is None:
+                continue
+            imgbed.enqueue_urls(db, post.images)
+    except Exception:  # noqa: BLE001 - 图床入队失败不影响抓取推送
+        logger.exception("图床入队失败 platform=%s kol=%s", kol["platform"], kol["name"])
     if first_fetch:
         db.mark_kol_baseline(kol["id"])
     # 空轮判定用「本轮是否新增入库」：时间线接口总是返回最近 N 条（含旧帖），
@@ -1985,6 +1997,7 @@ class Scheduler:
         self._mx_token_expired = False
         # 事件循环引用：线程侧（publish_mx_error 阻塞口径）需要把 WS 掐断投递回调度循环
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._last_imgbed = 0.0
 
     def _submit_news_due(self):
         if self.news_service is None:
@@ -3141,6 +3154,14 @@ class Scheduler:
                     await asyncio.to_thread(tick_proxy_pools, self.db)
                 except Exception:  # noqa: BLE001
                     logger.exception("代理池刷新异常")
+            if now_mono - self._last_imgbed >= 20:
+                self._last_imgbed = now_mono
+                try:
+                    from . import imgbed
+
+                    await asyncio.to_thread(imgbed.process_pending, self.db)
+                except Exception:  # noqa: BLE001
+                    logger.exception("图床镜像异常")
             # 股票黑话别名识别 + 误标清理：每天一次（配 LLM 才识别，清理恒执行）
             if self._stock_alias_due():
                 ran = False

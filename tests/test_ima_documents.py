@@ -4938,3 +4938,38 @@ def test_restore_fast_path_skips_probe_for_canonical_names(tmp_path):
     store._find_existing_pdf = boom
     assert store.restore_original_filenames()["renamed"] == 0
     assert path.is_file()
+
+
+def test_public_list_item_includes_truncated_abstract():
+    from app.ima_documents import ImaDocumentService
+
+    # Case 1: abstract_zh takes precedence and is truncated to 140 chars
+    long_zh = "这是一段很长的中文研报摘要。" * 20
+    item1 = {
+        "media_id": "doc1",
+        "name": "测试研报1.pdf",
+        "abstract_zh": long_zh,
+        "abstract": "English abstract",
+    }
+    public1 = ImaDocumentService._public_list_item(item1)
+    assert "abstract" in public1
+    assert public1["abstract"] == long_zh[:140]
+    assert len(public1["abstract"]) == 140
+
+    # Case 2: abstract fallback when abstract_zh missing
+    item2 = {
+        "media_id": "doc2",
+        "name": "测试研报2.pdf",
+        "abstract": "   Fallback abstract content with spaces   ",
+    }
+    public2 = ImaDocumentService._public_list_item(item2)
+    assert public2["abstract"] == "Fallback abstract content with spaces"
+
+    # Case 3: no abstract present -> key omitted or empty
+    item3 = {
+        "media_id": "doc3",
+        "name": "测试研报3.pdf",
+    }
+    public3 = ImaDocumentService._public_list_item(item3)
+    assert "abstract" not in public3
+

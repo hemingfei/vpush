@@ -43,6 +43,7 @@ _REDACT_PATTERNS = [
     ),
     (re.compile(r"(api\.day\.app/)[A-Za-z0-9]{8,}", re.IGNORECASE), r"\1<redacted>"),
     (re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]{16,}", re.IGNORECASE), r"\1<redacted>"),
+    (re.compile(r"(imgbed_[A-Fa-f0-9]{16,})"), "<redacted>"),
     # 微博登录 META 响应：su 是 base64 用户名，其余为 SSO 会话 cookie 名
     (re.compile(r"(\bsu=)[^&\s'\"<>]+", re.IGNORECASE), r"\1<redacted>"),
     (re.compile(r"(\b(?:SUB|SUE|SUP|SCF|SSOLoginState)=)[^;\s'\"<>]+"), r"\1<redacted>"),

@@ -1,8 +1,25 @@
 /* V Push Service Worker —— network-first：静态外壳离线可用，API 永不缓存 */
-const CACHE = "dav-shell-v256";
+const CACHE = "dav-shell-9203ff14f1a6";
 const SHELL = [
   "/",
   "/app.js",
+  // asset-modules:start
+  "/core/dialog.js",
+  "/core/html.js",
+  "/core/lightbox.js",
+  "/views/admin/codes.js",
+  "/views/admin/dashboard.js",
+  "/views/admin/ima-collector.js",
+  "/views/admin/infra.js",
+  "/views/admin/knowledge.js",
+  "/views/admin/kol.js",
+  "/views/admin/news.js",
+  "/views/admin/users.js",
+  "/views/feishu-personal.js",
+  "/views/ima.js",
+  "/views/news.js",
+  "/views/push-settings.js",
+  // asset-modules:end
   "/style.css",
   "/vendor/design-tokens.css",
   "/logo-mark.svg",

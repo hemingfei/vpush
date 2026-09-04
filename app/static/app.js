@@ -1,4 +1,26 @@
+import { escapeHtml, imgProxyUrl, imgSrcFor } from "./core/html.js";
+import { trapFocus } from "./core/dialog.js";
+import { createLightbox } from "./core/lightbox.js";
+import { createNewsView } from "./views/news.js";
+import { createImaView } from "./views/ima.js";
+import { createFeishuPersonalView } from "./views/feishu-personal.js";
+import { createAdminCodesView } from "./views/admin/codes.js";
+import { createAdminNewsView } from "./views/admin/news.js";
+import { createAdminUsersView } from "./views/admin/users.js";
+import { createAdminKolsView } from "./views/admin/kol.js";
+import { createAdminInfraView } from "./views/admin/infra.js";
+import { createAdminImaCollectorView } from "./views/admin/ima-collector.js";
+import { createAdminKnowledgeView } from "./views/admin/knowledge.js";
+import { createAdminDashboardView } from "./views/admin/dashboard.js";
+import { createPushSettingsView } from "./views/push-settings.js";
+
 const $ = (sel) => document.querySelector(sel);
+
+const { openLightbox, closeLightbox, lightboxStep, _lbZoomStep, _lbZoomReset } = createLightbox({
+  escapeHtml,
+  imgOnError,
+  trapFocus,
+});
 
 const PLATFORM_LABELS = { xueqiu: "雪球", combination: "雪球组合", weibo: "微博", twitter: "X", ima: "ima", zsxq: "知识星球", mx: "MX平台", system: "系统" };
 const PLATFORM_SHORT_LABELS = { xueqiu: "雪球", combination: "组合", weibo: "微博", twitter: "X", ima: "ima", zsxq: "星球", mx: "MX", system: "系统" };
@@ -24,7 +46,7 @@ const CHANNEL_ICONS = {
 };
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.132";
+const APP_VERSION = "1.12.136";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -72,7 +94,8 @@ const ARROW_UP_ICON = `<svg class="tl-badge-arrow" viewBox="0 0 24 24" fill="cur
 const REFRESH_ICON = `<svg class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 5v4h4"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 19v-4h-4"/></svg>`;
 const EXTERNAL_LINK_ICON = `<svg class="external-link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`;
 const SEARCH_ICON = `<svg class="search-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`;
-
+const FEISHU_DATE_ICON = `<svg class="feishu-date-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 11h18"/></svg>`;
+const GITHUB_ICON = `<svg class="sidebar-gh-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.55 0-.27-.01-1.17-.02-2.12-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.75 2.69 1.25 3.35.95.1-.74.4-1.25.72-1.54-2.55-.29-5.23-1.28-5.23-5.68 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.05 0 0 .96-.31 3.15 1.18a10.9 10.9 0 0 1 5.74 0c2.19-1.49 3.15-1.18 3.15-1.18.62 1.59.23 2.76.11 3.05.73.81 1.18 1.83 1.18 3.09 0 4.41-2.69 5.38-5.25 5.67.41.35.77 1.05.77 2.12 0 1.53-.01 2.76-.01 3.14 0 .3.2.66.8.55A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></svg>`;
 // 主题切换图标：线性风格，与 TRASH_ICON 一致（stroke=currentColor）
 const THEME_SUN_ICON = `<svg class="theme-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>`;
 const THEME_MOON_ICON = `<svg class="theme-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
@@ -144,6 +167,7 @@ const imaMountState = {
   groups: [],
   selectedGroupId: "",
   folderPanelGroupId: "",
+  folderPanelTouched: false,
   drafts: new Map(),
   folders: new Map(),
   parents: new Map(),
@@ -170,29 +194,12 @@ const imaMountState = {
   generation: 0,
 };
 
-const KS_TAB_KEY = "ks-tab";
-let imaCollectorPureCache = {
+const imaCollectorPureCache = {
   uid: "",
   knowledge_base_id: "",
   root_folder_id: "",
   interval_seconds: 3600,
 };
-let imaProgressTimer = null;
-let imaProgressPollSeq = 0;
-
-function escapeHtml(text) {
-  return String(text ?? "").replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  }[c]));
-}
-
-function imgProxyUrl(url) {
-  return `/api/img-proxy?url=${encodeURIComponent(url)}`;
-}
-
-// 轻量 Markdown 渲染（安全：先整体 escapeHtml 再解析，输出内不会出现未转义的用户 HTML）。
-// 支持：# 标题、**粗体**、*斜体*、`行内代码`、``` 代码块、[链接](url)、裸链接、
-// - / 1. 列表、> 引用、--- 分隔线；段落内换行保留为 <br>。不支持的语法原样展示。
 function mdInline(s) {
   return s.replace(
     /(`[^`\n]+`)|(\[[^\]\n]+\]\(https?:\/\/[^\s)]+\))|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|(https?:\/\/[^\s<>"\u3000-\u303f\uff00-\uffef\u4e00-\u9fff]+)/g,
@@ -354,324 +361,6 @@ function imgOnError(img) {
   img.dataset.proxied = "1";
   img.src = imgProxyUrl(src);
   img.onerror = imgOnError;
-}
-
-// ---------- 图片灯箱（点击放大原图，背景变暗，多图可左右切换；支持滚轮/双击/双指缩放与拖拽平移） ----------
-let _lightboxImages = [];
-let _lightboxIndex = 0;
-const LB_SCALE_MAX = 5;
-let _lbScale = 1;
-let _lbTx = 0; // 图片中心相对视口中心的位移（px）
-let _lbTy = 0;
-let _lbSwipe = null; // 未放大时的滑动切图起点
-let _lbPan = null; // 放大后的单指/鼠标拖拽状态
-let _lbPinch = null; // 双指捏合的起始状态
-let _lbLastTap = 0; // 双击（双指外的原地点按两连击）检测
-let _lbLastTapX = 0;
-let _lbLastTapY = 0;
-let _lbTapFromTouchAt = 0; // 移动端双击已在 touchend 处理，用于屏蔽紧随合成的 dblclick
-let _lbOnResize = null;
-
-function _lbImg() {
-  return document.querySelector(".lightbox-img");
-}
-
-// 放大后限制平移：图片比视口大的方向不允许拖出边界，小的方向保持居中
-function _lbClampPan() {
-  const img = _lbImg();
-  if (!img) return;
-  const halfX = Math.max(0, (img.offsetWidth * _lbScale - window.innerWidth) / 2);
-  const halfY = Math.max(0, (img.offsetHeight * _lbScale - window.innerHeight) / 2);
-  _lbTx = Math.max(-halfX, Math.min(halfX, _lbTx));
-  _lbTy = Math.max(-halfY, Math.min(halfY, _lbTy));
-}
-
-// 同步缩放工具条（按钮可用态、倍数文本）与图片光标；不动 transform
-function _lbSyncZoomUI() {
-  const zIn = document.querySelector(".lightbox-zin");
-  const zOut = document.querySelector(".lightbox-zout");
-  const pct = document.querySelector(".lightbox-zpct");
-  if (zIn) zIn.disabled = _lbScale >= LB_SCALE_MAX;
-  if (zOut) zOut.disabled = _lbScale <= 1;
-  if (pct) pct.textContent = `${Math.round(_lbScale * 100)}%`;
-  const img = _lbImg();
-  if (img) img.style.cursor = _lbScale > 1 ? "grab" : "";
-}
-
-function _lbApplyTransform(animate) {
-  const img = _lbImg();
-  if (!img) return;
-  img.classList.toggle("lb-anim", !!animate);
-  img.style.transform = `translate(${_lbTx}px, ${_lbTy}px) scale(${_lbScale})`;
-  _lbSyncZoomUI();
-}
-
-// 以屏幕点 (x, y) 为锚缩放：锚点对应的图片内容在缩放前后保持在屏幕原位
-function _lbZoomAt(x, y, nextScale) {
-  const scale = Math.min(LB_SCALE_MAX, Math.max(1, nextScale));
-  if (scale === _lbScale) return;
-  const k = scale / _lbScale;
-  const cx = window.innerWidth / 2;
-  const cy = window.innerHeight / 2;
-  _lbTx = (x - cx) - k * ((x - cx) - _lbTx);
-  _lbTy = (y - cy) - k * ((y - cy) - _lbTy);
-  _lbScale = scale;
-  _lbClampPan();
-  _lbApplyTransform(false);
-}
-
-function _lbZoomStep(dir) {
-  _lbZoomAt(window.innerWidth / 2, window.innerHeight / 2, _lbScale * (dir > 0 ? 1.4 : 1 / 1.4));
-}
-
-function _lbZoomReset(animate = true) {
-  if (_lbScale === 1 && !_lbTx && !_lbTy) return;
-  _lbScale = 1;
-  _lbTx = 0;
-  _lbTy = 0;
-  _lbApplyTransform(animate);
-}
-
-function _lbDoubleTapZoom(x, y) {
-  if (_lbScale > 1.05) _lbZoomReset();
-  else _lbZoomAt(x, y, 2.5);
-}
-
-function _lbTapDetect(x, y) {
-  const now = Date.now();
-  if (now - _lbLastTap < 320 && Math.hypot(x - _lbLastTapX, y - _lbLastTapY) < 40) {
-    _lbLastTap = 0;
-    _lbTapFromTouchAt = now;
-    _lbDoubleTapZoom(x, y);
-    return;
-  }
-  _lbLastTap = now;
-  _lbLastTapX = x;
-  _lbLastTapY = y;
-}
-
-function openLightbox(img) {
-  if (!img) return;
-  // 收集当前帖子（同一 .post-images 容器）里的全部图片，支持左右切换
-  const container = img.closest(".post-images");
-  if (container) {
-    _lightboxImages = [...container.querySelectorAll("img")]
-      .filter((im) => !im.dataset.dead) // 已失效被隐藏的图不再进入灯箱
-      .map((im) => im.currentSrc || im.src || "")
-      .filter(Boolean);
-  } else {
-    _lightboxImages = [(img.currentSrc || img.src || "")].filter(Boolean);
-  }
-  if (!_lightboxImages.length) return;
-  _lightboxIndex = Math.max(0, _lightboxImages.indexOf(img.currentSrc || img.src || ""));
-  _lbScale = 1; _lbTx = 0; _lbTy = 0; // 上一次会话的缩放状态不带入
-  _lbSwipe = _lbPan = _lbPinch = null;
-  closeLightbox(); // 防重复打开
-  const overlay = document.createElement("div");
-  overlay.className = "lightbox";
-  overlay.setAttribute("role", "dialog");
-  overlay.setAttribute("aria-modal", "true");
-  overlay.setAttribute("aria-label", "查看大图");
-  overlay.innerHTML = `
-    <button class="lightbox-close" aria-label="关闭" onclick="event.stopPropagation();closeLightbox()">✕</button>
-    <div class="lightbox-zoom">
-      <button class="lightbox-zbtn lightbox-zout" aria-label="缩小" onclick="event.stopPropagation();_lbZoomStep(-1)">−</button>
-      <button class="lightbox-zbtn lightbox-zpct" aria-label="重置缩放" title="重置缩放" onclick="event.stopPropagation();_lbZoomReset()">100%</button>
-      <button class="lightbox-zbtn lightbox-zin" aria-label="放大" onclick="event.stopPropagation();_lbZoomStep(1)">+</button>
-    </div>
-    <img class="lightbox-img" src="${escapeHtml(_lightboxImages[_lightboxIndex])}" alt="动态配图" draggable="false" onerror="imgOnError(this)">
-    ${_lightboxImages.length > 1 ? `
-      <button class="lightbox-nav lightbox-prev" aria-label="上一张" onclick="event.stopPropagation();lightboxStep(-1)">‹</button>
-      <button class="lightbox-nav lightbox-next" aria-label="下一张" onclick="event.stopPropagation();lightboxStep(1)">›</button>
-      <span class="lightbox-count">${_lightboxIndex + 1} / ${_lightboxImages.length}</span>` : ""}`;
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) closeLightbox();
-  });
-  // 桌面双击：在倍数与 2.5x 间切换（移动端双击走 touchend，这里跳过其合成的 dblclick）
-  overlay.addEventListener("dblclick", (e) => {
-    if (Date.now() - _lbTapFromTouchAt < 600) return;
-    if (!e.target.classList.contains("lightbox-img")) return;
-    _lbDoubleTapZoom(e.clientX, e.clientY);
-  });
-  // 滚轮缩放，以光标为锚点
-  overlay.addEventListener("wheel", (e) => {
-    e.preventDefault();
-    _lbZoomAt(e.clientX, e.clientY, _lbScale * (e.deltaY < 0 ? 1.18 : 1 / 1.18));
-  }, { passive: false });
-  // 放大后鼠标拖拽平移
-  overlay.addEventListener("mousedown", (e) => {
-    if (_lbScale <= 1 || !e.target.classList.contains("lightbox-img")) return;
-    e.preventDefault(); // 阻止图片原生拖拽幽灵
-    const img = _lbImg();
-    img.classList.add("lb-dragging");
-    const start = { x: e.clientX, y: e.clientY, tx: _lbTx, ty: _lbTy };
-    const onMove = (ev) => {
-      _lbTx = start.tx + (ev.clientX - start.x);
-      _lbTy = start.ty + (ev.clientY - start.y);
-      _lbClampPan();
-      _lbApplyTransform(false);
-    };
-    const onUp = () => {
-      img.classList.remove("lb-dragging");
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-    };
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-  });
-  // 移动端手势：单指滑动切换图片（未放大）/ 拖拽平移（放大后），双指捏合缩放
-  overlay.addEventListener("touchstart", lightboxTouchStart, { passive: true });
-  overlay.addEventListener("touchmove", lightboxTouchMove, { passive: false });
-  overlay.addEventListener("touchend", lightboxTouchEnd, { passive: true });
-  _lbOnResize = () => {
-    _lbClampPan();
-    _lbApplyTransform(false);
-  };
-  window.addEventListener("resize", _lbOnResize);
-  document.body.appendChild(overlay);
-  _lbSyncZoomUI(); // 初始 1x：禁用「−」、倍数显示 100%
-  document.body.classList.add("lightbox-open");
-  document.addEventListener("keydown", lightboxKeyHandler);
-}
-
-function lightboxTouchStart(e) {
-  // 从箭头/关闭/缩放按钮上开始的触摸不拦截（按钮有自己的事件）
-  if (e.target.closest(".lightbox-nav, .lightbox-close, .lightbox-zbtn")) return;
-  if (e.touches.length >= 2) {
-    // 双指捏合：记录起始指距、中点与图片状态，move 阶段据此整体换算
-    const [a, b] = e.touches;
-    _lbPinch = {
-      dist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY),
-      x: (a.clientX + b.clientX) / 2,
-      y: (a.clientY + b.clientY) / 2,
-      scale: _lbScale,
-      tx: _lbTx,
-      ty: _lbTy,
-    };
-    _lbSwipe = _lbPan = null;
-    return;
-  }
-  if (_lbScale > 1) {
-    const t = e.touches[0];
-    _lbPan = { x: t.clientX, y: t.clientY, tx: _lbTx, ty: _lbTy, t: Date.now() };
-    return;
-  }
-  const t0 = e.touches[0];
-  _lbSwipe = { x: t0.clientX, y: t0.clientY, t: Date.now() };
-}
-
-function lightboxTouchMove(e) {
-  if (_lbPinch && e.touches.length >= 2) {
-    e.preventDefault();
-    if (_lbPinch.dist <= 0) return;
-    const [a, b] = e.touches;
-    const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-    const scale = Math.min(LB_SCALE_MAX, Math.max(1, _lbPinch.scale * (dist / _lbPinch.dist)));
-    const k = scale / _lbPinch.scale;
-    const mx = (a.clientX + b.clientX) / 2;
-    const my = (a.clientY + b.clientY) / 2;
-    const cx = window.innerWidth / 2;
-    const cy = window.innerHeight / 2;
-    // 锚点公式：起始中点对应的图片内容随两指中点移动，捏合同时完成缩放与平移
-    _lbTx = (mx - cx) - k * ((_lbPinch.x - cx) - _lbPinch.tx);
-    _lbTy = (my - cy) - k * ((_lbPinch.y - cy) - _lbPinch.ty);
-    _lbScale = scale;
-    _lbClampPan();
-    _lbApplyTransform(false);
-    return;
-  }
-  if (_lbPan && e.touches.length === 1) {
-    e.preventDefault(); // 阻止松手合成 click 与页面默认手势
-    const t = e.touches[0];
-    _lbTx = _lbPan.tx + (t.clientX - _lbPan.x);
-    _lbTy = _lbPan.ty + (t.clientY - _lbPan.y);
-    _lbClampPan();
-    _lbApplyTransform(false);
-    return;
-  }
-  if (!_lbSwipe) return;
-  const dx = e.touches[0].clientX - _lbSwipe.x;
-  const dy = e.touches[0].clientY - _lbSwipe.y;
-  // 水平滑动占优时拦截：阻止页面滚动，也阻止松手后合成 click（避免误关灯箱）
-  if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) e.preventDefault();
-}
-
-function lightboxTouchEnd(e) {
-  if (_lbPinch) {
-    if (e.touches.length === 1) {
-      // 抬起一根手指后无缝转为单指拖拽
-      const t = e.touches[0];
-      _lbPan = { x: t.clientX, y: t.clientY, tx: _lbTx, ty: _lbTy, t: Date.now() };
-      _lbPinch = null;
-    } else if (e.touches.length === 0) {
-      _lbPinch = null;
-      if (_lbScale <= 1.02) _lbZoomReset(); // 捏回 1x 附近时吸附复位
-    }
-    return;
-  }
-  if (_lbPan) {
-    const t = e.changedTouches[0];
-    const still = t && Date.now() - _lbPan.t < 350 && Math.hypot(t.clientX - _lbPan.x, t.clientY - _lbPan.y) < 15;
-    if (e.touches.length === 0) _lbPan = null;
-    if (still) _lbTapDetect(t.clientX, t.clientY); // 放大状态下的原地点按：参与双击检测（双击复位）
-    return;
-  }
-  if (!_lbSwipe) return;
-  const t = e.changedTouches[0];
-  const dx = t.clientX - _lbSwipe.x;
-  const dy = t.clientY - _lbSwipe.y;
-  _lbSwipe = null;
-  if (Math.hypot(dx, dy) < 24) {
-    _lbTapDetect(t.clientX, t.clientY); // 原地点按：双击检测（双击放大 2.5x）
-    return;
-  }
-  // 阈值：水平 40px 且明显占优；放大后的拖拽平移在 _lbPan 分支处理，不走切图
-  if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-  lightboxStep(dx < 0 ? 1 : -1);
-}
-
-function lightboxStep(dir) {
-  if (_lightboxImages.length < 2) return;
-  _lightboxIndex = (_lightboxIndex + dir + _lightboxImages.length) % _lightboxImages.length;
-  const img = document.querySelector(".lightbox-img");
-  if (!img) return;
-  _lbZoomReset(false); // 换图复位缩放
-  img.style.opacity = "0";
-  setTimeout(() => {
-    img.src = _lightboxImages[_lightboxIndex];
-    img.style.opacity = "";
-    img.style.display = ""; // 上一张若已失效被隐藏，切图时恢复
-    img.onerror = imgOnError;
-    $(".lightbox-dead")?.remove();
-    const count = document.querySelector(".lightbox-count");
-    if (count) count.textContent = `${_lightboxIndex + 1} / ${_lightboxImages.length}`;
-  }, 120); // 与淡出过渡衔接
-}
-
-function lightboxKeyHandler(e) {
-  if (e.key === "Escape") closeLightbox();
-  else if (e.key === "ArrowLeft") lightboxStep(-1);
-  else if (e.key === "ArrowRight") lightboxStep(1);
-  else if (e.key === "+" || e.key === "=") _lbZoomStep(1);
-  else if (e.key === "-" || e.key === "_") _lbZoomStep(-1);
-  else if (e.key === "0") _lbZoomReset();
-}
-
-function closeLightbox() {
-  const overlay = document.querySelector(".lightbox");
-  if (!overlay) return;
-  _lbSwipe = _lbPan = _lbPinch = null;
-  if (_lbOnResize) {
-    window.removeEventListener("resize", _lbOnResize);
-    _lbOnResize = null;
-  }
-  overlay.classList.add("closing"); // 触发淡出+轻微缩小动画
-  // 动画结束后移除 DOM；reduced-motion 下 animation 被禁用（animationend 不触发），用超时兜底
-  const remove = () => overlay.remove();
-  overlay.addEventListener("animationend", remove, { once: true });
-  setTimeout(remove, 240); // 略大于关闭动画 200ms；reduced-motion 下 animationend 不触发时兜底
-  document.body.classList.remove("lightbox-open");
-  document.removeEventListener("keydown", lightboxKeyHandler);
 }
 
 let _toastTimer = null;
@@ -839,18 +528,14 @@ function revokeFeishuTimelineMediaUrls() {
   });
   for (const url of _feishuTimelineMediaUrls) URL.revokeObjectURL(url);
   _feishuTimelineMediaUrls = [];
+  _feishuTimelineMediaCache.clear();
 }
 
-function clearImaPdfUrl() {
-  if (_imaPdfAbort) {
-    _imaPdfAbort.abort();
-    _imaPdfAbort = null;
-  }
-  const frame = $("#ima-pdf-frame");
-  if (frame) frame.removeAttribute("src");
-  const pdfUrl = window._imaPdfUrl;
-  window._imaPdfUrl = "";
-  if (pdfUrl) URL.revokeObjectURL(pdfUrl);
+function resetFeishuTimelineMedia() {
+  _feishuMoreObserver?.disconnect();
+  _feishuMoreObserver = null;
+  _feishuAssetObserver?.disconnect();
+  _feishuAssetObserver = null;
   clearTimeout(_feishuTimelineTimer);
   _feishuTimelineTimer = null;
   revokeFeishuTimelineMediaUrls();
@@ -859,80 +544,6 @@ function clearImaPdfUrl() {
 
 function isStandalonePwa() {
   return window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
-}
-
-function _imaDocumentRoute(mediaId) {
-  return `knowledge/${encodeURIComponent(mediaId).replace(/'/g, "%27")}`;
-}
-
-function imaDocumentReaderRoute(mediaId, groupId = "") {
-  const listGroup = routeQuery().get("group") || state.imaDocumentsGroup || "";
-  const listRoute = normalizeRoute(imaDocumentsRoute(
-    listGroup,
-    state.imaDocumentsQuery,
-    state.imaDocumentsDay,
-    state.imaDocumentsTag
-  ));
-  const params = new URLSearchParams(listRoute.split("?")[1] || "");
-  if (groupId) params.set("doc_group", groupId);
-  const query = params.toString();
-  return `${_imaDocumentRoute(mediaId)}${query ? `?${query}` : ""}`;
-}
-
-function imaReaderDocumentGroup() {
-  return routeQuery().get("doc_group")
-    || routeQuery().get("group")
-    || state.imaDocumentsGroup
-    || "";
-}
-
-function openImaDocument(mediaId, groupId = "", replace = false) {
-  const id = String(mediaId || "");
-  if (!id) return;
-  const listWasOpen = !!$("#ima-report-page");
-  if (listWasOpen) captureImaListSnapshot(id, groupId);
-  const url = normalizeRoute(imaDocumentReaderRoute(id, groupId));
-  if (location.pathname + location.search !== url) {
-    if (replace) history.replaceState(null, "", url);
-    else history.pushState(null, "", url);
-  }
-  mountKnowledgeReaderShell();
-  const seq = ++routeRenderSeq;
-  renderImaDocument(seq, id);
-}
-
-function clearNewsImageUrls() {
-  for (const url of state.newsImageUrls) URL.revokeObjectURL(url);
-  state.newsImageUrls.clear();
-}
-
-function stopNewsAutoLoad() {
-  state.newsObserver?.disconnect();
-  state.newsObserver = null;
-}
-
-function clearNewsReaderState() {
-  stopNewsAutoLoad();
-  clearNewsImageUrls();
-  state.newsSources = [];
-  state.newsFilterSourceId = "";
-  state.newsQuery = "";
-  state.newsItems = [];
-  state.newsOffset = 0;
-  state.newsHasMore = false;
-  state.newsRequestSeq += 1;
-}
-
-function startNewsAutoLoad(seq) {
-  stopNewsAutoLoad();
-  const sentinel = $("#news-load-sentinel");
-  if (!sentinel || !state.newsHasMore) return;
-  if ("IntersectionObserver" in window) {
-    state.newsObserver = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) loadFinancialNews(false, seq);
-    }, { rootMargin: "400px 0px" });
-    state.newsObserver.observe(sentinel);
-  }
 }
 
 function clearSessionCaches() {
@@ -962,7 +573,7 @@ function clearSessionCaches() {
   _tlSavedScrollY = 0;
   _tlPendingNew.length = 0;
   _tlPendingLatestId = 0;
-  pendingBind = null;
+  feishuPersonalView.pendingBind = null;
   state.timelineQ = "";
   state.timelineCategory = "";
   state.timelineTag = "";
@@ -1095,80 +706,6 @@ const NAV = [
 
 const SIDEBAR_SLIM_KEY = "sidebar-slim";
 
-function knowledgeMediaIdFromPath() {
-  const [page, raw] = String(routePath() || "").split("/");
-  if (page !== "knowledge" && page !== "ima-documents") return "";
-  if (!raw) return "";
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
-}
-
-function knowledgeTypingTarget(el) {
-  const tag = (el && el.tagName) || "";
-  return /^(INPUT|TEXTAREA|SELECT)$/.test(tag) || !!(el && el.isContentEditable);
-}
-
-function onKnowledgeListKey(e) {
-  if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
-  if (!isRoute("knowledge") && !isRoute("ima-documents")) return;
-  if (e.key === "Escape" && _imaDayPicker.open) {
-    e.preventDefault();
-    closeImaDayPicker();
-    return;
-  }
-  if (_imaDayPicker.open) return;
-  if (knowledgeTypingTarget(e.target)) return;
-  if (e.key !== "j" && e.key !== "k") return;
-  const rows = [...document.querySelectorAll("#kb-list .ima-doc-row")];
-  if (rows.length) {
-    const current = knowledgeMediaIdFromPath();
-    let idx = rows.findIndex((row) => row.dataset.mediaId === current);
-    if (e.key === "j") idx = idx < 0 ? 0 : idx + 1;
-    else idx = idx < 0 ? rows.length - 1 : idx - 1;
-    if (idx < 0 || idx >= rows.length) return;
-    e.preventDefault();
-    rows[idx].focus();
-    return;
-  }
-  const snapshot = _imaListSnapshot;
-  if (!snapshot || snapshot.items.length < 2) return;
-  const idx = snapshot.items.findIndex((item) => String(item.media_id) === knowledgeMediaIdFromPath());
-  if (idx < 0) return;
-  const next = snapshot.items[idx + (e.key === "j" ? 1 : -1)];
-  if (!next) return;
-  e.preventDefault();
-  openImaDocument(next.media_id, next.group_id || "", true);
-}
-
-function ensureKnowledgeKeys() {
-  if (window._kbKeysBound) return;
-  window._kbKeysBound = true;
-  document.addEventListener("keydown", onKnowledgeListKey);
-  document.addEventListener("pointerdown", onImaDayPickerDocDown);
-}
-
-function mountKnowledgeListShell() {
-  ensureKnowledgeKeys();
-  if ($("#ima-report-page") && $("#kb-list")) return;
-  clearImaPdfUrl();
-  $("#main").innerHTML = `
-    <section class="section-panel ima-report-page" id="ima-report-page">
-      <div id="kb-list" tabindex="-1"><div class="admin-skeleton" aria-hidden="true"></div></div>
-    </section>`;
-}
-
-function mountKnowledgeReaderShell() {
-  ensureKnowledgeKeys();
-  if ($("#ima-reader-page")) return;
-  $("#main").innerHTML = `
-    <section class="section-panel ima-reader-page" id="ima-reader-page">
-      <div id="kb-reader"><div class="admin-skeleton" aria-hidden="true"></div></div>
-    </section>`;
-}
-
 function sidebarIsSlim() {
   return document.documentElement.classList.contains("sidebar-slim");
 }
@@ -1258,133 +795,17 @@ async function renderMore(seq) {
     </section>`;
 }
 
-const _imaItems = [];
-let _imaListSnapshot = null;
-let _imaStreamSnapshot = null;
-let _imaListSeq = 0;
-let _imaReaderSeq = 0;
-let _imaPdfAbort = null;
 let _feishuTimelineTimer = null;
 let _feishuTimelineMediaUrls = [];
+let _feishuTimelineMediaCache = new Map();
 let _feishuTimelineState = null;
+let _feishuMoreObserver = null;
+let _feishuAssetObserver = null;
 let _feishuSourceLoadSeq = 0;
 let _feishuPreviewSeq = 0;
 let _feishuPreviewTimer = null;
 let _feishuPreview = { url: "", data: null };
-let _imaLoadingMore = false;
-let _imaSearchTimer = null;
-let _imaDocsLoadObserver = null;
-let _imaDocsLoadFallback = null;
-let _imaSearchComposing = false;
-let _imaTagCounts = {};
-let _imaDocumentCount = 0;
-const IMA_TAG_COMMON_RATIO = 0.5;
-const IMA_ABSTRACT_CLAMP_CHARS = 120;
-
-function imaCountText(n) {
-  return (Number(n) || 0).toLocaleString("zh-CN");
-}
-
-function imaResolvedCount(filtered, documentCount, itemCount, hasMore) {
-  const loaded = Number(itemCount) || 0;
-  const reported = Number(documentCount) || 0;
-  // 读模型 document_count 是过滤后总数；JSON 回退路径仍可能给整库总量。
-  // 已经一页装下、且上报数大于已加载数时，信已加载条数。
-  if (filtered && !hasMore && loaded > 0 && reported > loaded) return loaded;
-  return reported || loaded;
-}
-
-function imaDocumentsCountLabel(filtered, documentCount, itemCount, hasMore) {
-  const total = imaResolvedCount(filtered, documentCount, itemCount, hasMore);
-  return filtered ? `${imaCountText(total)} 条结果` : `${imaCountText(total)} 份`;
-}
-
-function imaSnapshotIsFiltered(snapshot) {
-  const route = String((snapshot && snapshot.route) || "");
-  return /[?&]q=/.test(route) || /[?&]tag=/.test(route);
-}
-
-function toggleImaAbstract(btn) {
-  const box = btn && btn.closest(".ima-reader-abstract");
-  if (!box) return;
-  const expanded = box.classList.toggle("is-expanded");
-  btn.textContent = expanded ? "收起" : "展开";
-  btn.setAttribute("aria-expanded", expanded ? "true" : "false");
-}
-
-function fmtImaDay(day) {
-  const raw = String(day || "").trim();
-  let match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
-  if (match) {
-    const year = Number(match[1]);
-    const base = `${Number(match[2])}月${Number(match[3])}日`;
-    return year === new Date().getFullYear() ? base : `${year}年${base}`;
-  }
-  match = /^(\d{2})(\d{2})$/.exec(raw);
-  if (!match) return raw === "unknown" ? "未知日期" : raw;
-  return `${Number(match[1])}月${Number(match[2])}日`;
-}
-
-function fmtImaDayShort(day) {
-  const raw = String(day || "").trim();
-  let match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
-  if (match) {
-    const year = Number(match[1]);
-    const base = `${Number(match[2])}/${Number(match[3])}`;
-    return year === new Date().getFullYear() ? base : `${String(year).slice(2)}/${base}`;
-  }
-  match = /^(\d{2})(\d{2})$/.exec(raw);
-  if (!match) return "";
-  return `${Number(match[1])}/${Number(match[2])}`;
-}
-
-function imaDisplayTitle(name) {
-  let s = String(name || "").replace(/\.pdf$/i, "").replace(/-副本$/u, "").trim();
-  let lastCjk = -1;
-  for (let i = 0; i < s.length; i += 1) {
-    if (/[\u4e00-\u9fff]/.test(s[i])) lastCjk = i;
-  }
-  if (lastCjk >= 0) {
-    const rest = s.slice(lastCjk + 1);
-    const cut = rest.search(/\s+[A-Za-z]/);
-    if (cut >= 0) s = s.slice(0, lastCjk + 1 + cut).trim();
-  }
-  return s;
-}
-
-function imaDocTicker(name) {
-  const m = String(name || "").match(/[（(]([A-Z0-9][A-Z0-9.\-]*)[）)]/);
-  return m ? m[1] : "";
-}
-
-function imaListTitle(name) {
-  let s = imaDisplayTitle(name).replace(/[（(][A-Z0-9][A-Z0-9.\-]*[）)]/g, "");
-  s = s.replace(/^[^\-–—]{1,8}[-–—]/, "");
-  return s.replace(/\s+/g, " ").trim() || imaDisplayTitle(name);
-}
-
-function fmtDocSize(bytes) {
-  const n = Number(bytes) || 0;
-  return n > 0 ? fmtCacheBytes(n) : "";
-}
-
-function imaDocKindLabel(item) {
-  if (item?.has_pdf) return "PDF";
-  if (item?.has_txt) return "全文";
-  return "仅摘要";
-}
-
-function imaDocumentTagsHtml(tags, interactive = false) {
-  const list = Array.isArray(tags) ? tags.filter(Boolean) : [];
-  if (!list.length) return "";
-  const chips = list.map((tag) => {
-    const label = escapeHtml(tag);
-    return interactive
-      ? `<button type="button" class="ima-doc-tag is-action" data-tag="${label}" onclick="event.stopPropagation();selectImaDocumentsTag(this.dataset.tag)">${label}</button>`
-      : `<span class="ima-doc-tag">${label}</span>`;
-  });
-  return `<span class="ima-doc-tags">${chips.join("")}</span>`;
-}
+let _imaReaderSeq = 0;
 
 function isReportWatchableTag(tag) {
   const name = String(tag || "").trim();
@@ -1395,909 +816,8 @@ function userKeywordSet() {
   return new Set((state.user?.keywords || []).map((k) => String(k || "").trim()).filter(Boolean));
 }
 
-function imaWatchTagButton(tag) {
-  const name = String(tag || "").trim();
-  if (!name) return "";
-  const watching = userKeywordSet().has(name);
-  const pressed = watching ? "true" : "false";
-  const selected = watching ? " is-selected" : "";
-  const title = watching ? "已在关键词提醒中" : "加入关键词提醒";
-  return `<button type="button" class="ima-doc-tag is-action is-watch${selected}" data-tag="${escapeHtml(name)}" aria-pressed="${pressed}" title="${title}" onclick="event.stopPropagation();toggleReportKeyword(this.dataset.tag)">${escapeHtml(name)}</button>`;
-}
-
-function imaReaderWatchHtml(tags) {
-  const list = (Array.isArray(tags) ? tags : []).map((tag) => String(tag || "").trim()).filter(Boolean);
-  if (!list.length) return "";
-  const chips = list.map((tag) => (
-    isReportWatchableTag(tag)
-      ? imaWatchTagButton(tag)
-      : `<span class="ima-doc-tag">${escapeHtml(tag)}</span>`
-  ));
-  return `<div class="ima-reader-watch" aria-label="研报标签">${chips.join("")}</div>`;
-}
-
-function imaTagCountsFromData(data) {
-  const raw = data && data.tag_counts;
-  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    const counts = {};
-    for (const [tag, n] of Object.entries(raw)) {
-      const name = String(tag || "").trim();
-      const count = Number(n) || 0;
-      if (name && count) counts[name] = count;
-    }
-    if (Object.keys(counts).length) return counts;
-  }
-  const counts = {};
-  for (const item of data?.items || []) {
-    for (const tag of Array.isArray(item.tags) ? item.tags : []) {
-      const name = String(tag || "").trim();
-      if (name) counts[name] = (counts[name] || 0) + 1;
-    }
-  }
-  return counts;
-}
-
-function imaTagCoverageBase(counts = _imaTagCounts, documentCount = _imaDocumentCount) {
-  const n = Number(documentCount) || 0;
-  if (n > 0) return n;
-  const values = Object.values(counts || {}).map((item) => Number(item) || 0);
-  return values.length ? Math.max(...values) : 0;
-}
-
-function imaDistinctiveTags(tags, counts = _imaTagCounts, documentCount = _imaDocumentCount) {
-  const list = (Array.isArray(tags) ? tags : []).map((tag) => String(tag || "").trim()).filter(Boolean);
-  if (!list.length) return [];
-  const freq = counts && typeof counts === "object" ? counts : {};
-  const total = imaTagCoverageBase(freq, documentCount);
-  const ranked = list
-    .map((tag) => ({ tag, n: Number(freq[tag]) || 0 }))
-    .sort((a, b) => a.n - b.n || a.tag.localeCompare(b.tag, "zh"));
-  const rare = total
-    ? ranked.filter((item) => item.n > 0 && item.n / total <= IMA_TAG_COMMON_RATIO)
-    : ranked;
-  return rare.slice(0, 2).map((item) => item.tag);
-}
-
-function imaReportMetaHtml(item) {
-  const parts = [];
-  const ticker = imaDocTicker(item.name);
-  if (ticker) parts.push(`<span>${escapeHtml(ticker)}</span>`);
-  for (const tag of imaDistinctiveTags(item?.tags)) {
-    parts.push(isReportWatchableTag(tag) ? imaWatchTagButton(tag) : `<span>${escapeHtml(tag)}</span>`);
-  }
-  const size = fmtDocSize(item?.size);
-  if (size) parts.push(`<span>${escapeHtml(size)}</span>`);
-  return parts.length
-    ? `<span class="ima-report-meta">${parts.join("")}</span>`
-    : "";
-}
-
-function imaDocumentRow(item) {
-  const day = fmtImaDayShort(item.sort_date || item.day) || "—";
-  const source = String(item.group_name || "");
-  const meta = imaReportMetaHtml(item); // .ima-report-meta
-  const snippet = item.search_snippet ? `<span class="ima-report-snippet">${escapeHtml(item.search_snippet)}</span>` : "";
-  return `
-    <article class="ima-doc-row" role="button" tabindex="0" data-media-id="${escapeHtml(item.media_id)}" data-group-id="${escapeHtml(item.group_id || "")}" onclick="openImaDocument(this.dataset.mediaId, this.dataset.groupId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openImaDocument(this.dataset.mediaId, this.dataset.groupId)}">
-      <time class="ima-report-date">${escapeHtml(day)}</time>
-      <span class="ima-report-copy"><strong class="ima-report-title">${escapeHtml(imaListTitle(item.name))}</strong>${snippet}${meta}</span>
-      <span class="ima-report-source">${escapeHtml(source)}</span>
-    </article>`;
-}
-
-function imaReportSkeletonHtml() {
-  return Array.from({ length: 6 }, () => `
-    <div class="ima-report-skeleton-row" aria-hidden="true">
-      <span class="ima-report-date"></span>
-      <span class="ima-report-copy"></span>
-      <span class="ima-report-source"></span>
-    </div>`).join("");
-}
-
-function imaDocumentsEmptyHtml(hasFilter) {
-  if (hasFilter) {
-    return emptyState(
-      "没有找到相关研报",
-      `<div><p class="section-meta">换个公司、代码或主题试试</p><button type="button" class="btn-normal" onclick="clearImaDocumentsFilters()">清除筛选</button></div>`
-    );
-  }
-  return emptyState("这里还没有研报");
-}
-
-function imaDocumentGroups(items, showGroupLabel = false) {
-  const groups = new Map();
-  for (const item of items || []) {
-    const key = item.sort_date || item.day;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(item);
-  }
-  return [...groups.entries()].map(([day, rows]) => `
-    <section class="ima-doc-day">
-      <header class="ima-doc-day-head"><h2>${escapeHtml(fmtImaDay(day) || day)}</h2><span>${rows.length} 份</span></header>
-      <div class="ima-doc-list">${rows.map((item) => imaDocumentRow(item)).join("")}</div>
-    </section>`).join("");
-}
-
-function imaDocumentsGroupFromRoute() {
-  return routeQuery().get("group") || "";
-}
-
-function imaDocumentsRequestPath() {
-  const params = new URLSearchParams();
-  const query = imaUsableSearchQuery(routeQuery().get("q") || "");
-  const day = routeQuery().get("day") || "";
-  const tag = routeQuery().get("tag") || "";
-  const group = imaDocumentsGroupFromRoute() || "";
-  if (query) params.set("q", query);
-  if (tag) params.set("tag", tag);
-  if (group) params.set("group", group);
-  if (query || tag || !day) {
-    params.set("limit", "50");
-    params.set("offset", "0");
-  } else {
-    params.set("day", day);
-  }
-  return `/api/ima-documents?${params.toString()}`;
-}
-
-function imaDocumentsRoute(group, query, day, tag) {
-  const params = new URLSearchParams();
-  if (group) params.set("group", group);
-  if (query) params.set("q", query);
-  if (day) params.set("day", day);
-  const selectedTag = tag === undefined ? (state.imaDocumentsTag || "") : tag;
-  if (selectedTag) params.set("tag", selectedTag);
-  const routeQueryString = params.toString();
-  return `knowledge${routeQueryString ? `?${routeQueryString}` : ""}`;
-}
-
-function imaDocumentKey(mediaId, groupId = "") {
-  return `${String(groupId || "")}\u0000${String(mediaId || "")}`;
-}
-
-function cloneImaListSnapshotFields() {
-  const body = $("#ima-docs-body");
-  if (!body) return null;
-  return {
-    items: _imaItems.map((item) => ({ ...item, tags: [...(item.tags || [])] })),
-    hasMore: !!state.imaDocumentsHasMore,
-    days: [...(state.imaDocumentsDays || [])],
-    tagCounts: { ..._imaTagCounts },
-    documentCount: _imaDocumentCount,
-    scrollTop: body.scrollTop,
-    selectedKey: "",
-    consumed: false,
-  };
-}
-
-function captureImaListSnapshot(selectedMediaId = "", selectedGroupId = "") {
-  const fields = cloneImaListSnapshotFields();
-  if (!fields) return;
-  _imaListSnapshot = {
-    ...fields,
-    route: location.pathname + location.search,
-    selectedKey: imaDocumentKey(selectedMediaId, selectedGroupId),
-  };
-}
-
-function stashImaStreamSnapshot() {
-  if (routeQuery().get("q") || routeQuery().get("tag") || routeQuery().get("day")) return;
-  const fields = cloneImaListSnapshotFields();
-  if (!fields || !fields.items.length) return;
-  _imaStreamSnapshot = fields;
-}
-
-function adoptImaStreamSnapshot() {
-  if (!_imaStreamSnapshot || currentImaListSnapshot()) return;
-  if (imaUsableSearchQuery(routeQuery().get("q") || "") || routeQuery().get("tag") || routeQuery().get("day")) return;
-  _imaListSnapshot = {
-    ..._imaStreamSnapshot,
-    items: _imaStreamSnapshot.items.map((item) => ({ ...item, tags: [...(item.tags || [])] })),
-    days: [..._imaStreamSnapshot.days],
-    tagCounts: { ..._imaStreamSnapshot.tagCounts },
-    route: location.pathname + location.search,
-    consumed: false,
-  };
-}
-
-function currentImaListSnapshot() {
-  const snapshot = _imaListSnapshot;
-  return snapshot && !snapshot.consumed && snapshot.route === location.pathname + location.search
-    ? snapshot
-    : null;
-}
-
-function restoreImaListSnapshot(snapshot, body) {
-  if (!snapshot || !body) return false;
-  _imaItems.length = 0;
-  _imaItems.push(...snapshot.items.map((item) => ({ ...item, tags: [...(item.tags || [])] })));
-  state.imaDocumentsHasMore = snapshot.hasMore;
-  state.imaDocumentsDays = [...snapshot.days];
-  _imaTagCounts = { ...snapshot.tagCounts };
-  _imaDocumentCount = snapshot.documentCount;
-  const more = snapshot.hasMore
-    ? `<div id="ima-docs-more" class="ima-docs-more" role="status" aria-live="polite">下滑加载更多</div>`
-    : "";
-  body.innerHTML = `<div class="ima-doc-list">${snapshot.items.map((item) => imaDocumentRow(item)).join("")}</div>${more}`;
-  startImaDocumentsAutoLoad();
-  requestAnimationFrame(() => {
-    body.scrollTop = snapshot.scrollTop;
-    const row = [...body.querySelectorAll(".ima-doc-row")].find((item) => imaDocumentKey(item.dataset.mediaId, item.dataset.groupId) === snapshot.selectedKey);
-    if (row) {
-      row.classList.add("is-selected");
-      row.setAttribute("aria-current", "true");
-    }
-    if (snapshot.focusSearch) {
-      snapshot.focusSearch = false;
-      $("#ima-doc-q")?.focus();
-    }
-  });
-  snapshot.consumed = true;
-  return true;
-}
-
-function replaceImaDocumentsRoute(path) {
-  const url = normalizeRoute(path);
-  if (location.pathname + location.search !== url) history.replaceState(null, "", url);
-}
-
-async function selectImaDocumentGroup(value) {
-  const groupId = String(value || "");
-  state.imaDocumentsGroup = groupId;
-  state.imaDocumentsDay = "";
-  state.imaDocumentsDays = [];
-  state.imaDocumentsTag = "";
-  state.imaDocumentsQuery = $("#ima-doc-q")?.value?.trim() || state.imaDocumentsQuery || "";
-  replaceImaDocumentsRoute(imaDocumentsRoute(groupId, state.imaDocumentsQuery, "", ""));
-  const seq = ++routeRenderSeq;
-  // 飞书来源一库一文：选中即直接进时间线，省一次点击；带搜索词时仍回列表
-  if (groupId.startsWith("feishu-") && !imaUsableSearchQuery(state.imaDocumentsQuery)) {
-    renderImaDocuments(seq);
-    try {
-      const data = await api(`/api/ima-documents?group=${encodeURIComponent(groupId)}&limit=1`);
-      if (!routeStillActive(seq)) return;
-      const item = (data.items || [])[0];
-      if (item) {
-        openImaDocument(item.media_id, groupId, true);
-        return;
-      }
-    } catch { /* 取不到就停留在列表 */ }
-    return;
-  }
-  renderImaDocuments(seq);
-}
-
-function imaUsableSearchQuery(raw) {
-  const query = String(raw || "").trim();
-  if (!query) return "";
-  if (query.length < 2 && /^[\x00-\x7F]*$/.test(query)) return "";
-  return query;
-}
-
-function queueImaDocumentsSearch() {
-  if (_imaSearchComposing) return;
-  clearTimeout(_imaSearchTimer);
-  _imaSearchTimer = setTimeout(() => submitImaDocumentsSearch(), 250);
-}
-
-function submitImaDocumentsSearch() {
-  clearTimeout(_imaSearchTimer);
-  _imaSearchTimer = null;
-  if (!$("#ima-report-page") || !$("#ima-doc-q")) {
-    _imaSearchComposing = false;
-    return;
-  }
-  const nextQuery = imaUsableSearchQuery($("#ima-doc-q")?.value || "");
-  if (nextQuery && !routeQuery().get("q") && !routeQuery().get("tag")) stashImaStreamSnapshot();
-  state.imaDocumentsQuery = nextQuery;
-  state.imaDocumentsDay = "";
-  replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay, state.imaDocumentsTag));
-  const seq = ++routeRenderSeq;
-  renderImaDocuments(seq);
-}
-
-function selectImaDocumentsDay(value) {
-  const day = String(value || "");
-  state.imaDocumentsQuery = "";
-  state.imaDocumentsTag = "";
-  state.imaDocumentsDay = day;
-  const input = $("#ima-doc-q");
-  if (input) input.value = "";
-  replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, "", state.imaDocumentsDay, ""));
-  const seq = ++routeRenderSeq;
-  renderImaDocuments(seq);
-}
-
-function selectImaDocumentsTag(value) {
-  state.imaDocumentsTag = String(value || "");
-  state.imaDocumentsDay = "";
-  replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay, state.imaDocumentsTag));
-  const seq = ++routeRenderSeq;
-  renderImaDocuments(seq);
-}
-
-let _imaDayPicker = { open: false };
-
-function imaDayMenuDays(days) {
-  return (Array.isArray(days) ? days : []).filter((day) => /^\d{4}$/.test(day));
-}
-
-function imaDayMenuHtml(day, days) {
-  const current = String(day || "");
-  const items = [`<button type="button" role="option" class="kb-desk-day-option${current ? "" : " is-selected"}" aria-selected="${!current}" onclick="pickImaDay('')">最新</button>`];
-  for (const key of imaDayMenuDays(days)) {
-    const on = key === current;
-    items.push(`<button type="button" role="option" class="kb-desk-day-option${on ? " is-selected" : ""}" aria-selected="${on}" onclick="pickImaDay('${escapeHtml(key)}')">${escapeHtml(fmtImaDay(key))}</button>`);
-  }
-  return `<div class="kb-desk-day-menu" role="listbox" aria-label="日期">${items.join("")}</div>`;
-}
-
-function placeImaDayMenu(menu, trigger) {
-  const box = trigger.getBoundingClientRect();
-  const list = $("#kb-list")?.getBoundingClientRect();
-  const width = Math.max(140, box.width);
-  const minL = list ? list.left + 8 : 8;
-  const maxL = (list ? list.right : window.innerWidth) - width - 8;
-  const left = Math.min(Math.max(minL, box.right - width), Math.max(minL, maxL));
-  menu.style.position = "fixed";
-  menu.style.left = `${left}px`;
-  menu.style.top = `${box.bottom + 4}px`;
-  menu.style.minWidth = `${width}px`;
-}
-
-function closeImaDayPicker() {
-  _imaDayPicker.open = false;
-  document.querySelectorAll(".kb-desk-day-menu").forEach((el) => el.remove());
-  const trigger = $("#ima-doc-day");
-  if (trigger) trigger.setAttribute("aria-expanded", "false");
-}
-
-function renderImaDayMenu() {
-  const trigger = $("#ima-doc-day");
-  const host = trigger?.closest(".ima-report-searchbox") || trigger?.closest(".kb-desk-search") || trigger?.parentElement;
-  if (!trigger || !host) return;
-  host.querySelector(".kb-desk-day-menu")?.remove();
-  host.insertAdjacentHTML("beforeend", imaDayMenuHtml(state.imaDocumentsDay || "", state.imaDocumentsDays));
-  const menu = host.querySelector(".kb-desk-day-menu");
-  if (menu) placeImaDayMenu(menu, trigger);
-  trigger.setAttribute("aria-expanded", "true");
-}
-
-function toggleImaDayPicker(event) {
-  event?.stopPropagation();
-  if (_imaDayPicker.open) {
-    closeImaDayPicker();
-    return;
-  }
-  _imaDayPicker.open = true;
-  renderImaDayMenu();
-}
-
-function pickImaDay(value) {
-  closeImaDayPicker();
-  selectImaDocumentsDay(value);
-}
-
-function onImaDayPickerDocDown(event) {
-  if (!_imaDayPicker.open) return;
-  if (event.target?.closest?.(".kb-desk-day, .kb-desk-day-menu")) return;
-  closeImaDayPicker();
-}
-
-function imaDocumentsDayNavHtml(day, days) {
-  const list = imaDayMenuDays(days);
-  if (!list.length && !(Array.isArray(days) && days.length)) return "";
-  const current = String(day || "");
-  const label = current ? (fmtImaDay(current) || current) : "最新";
-  return `<button type="button" class="kb-desk-day" id="ima-doc-day" aria-label="筛选日期" aria-haspopup="listbox" aria-expanded="false" onclick="toggleImaDayPicker(event)">${escapeHtml(label)}</button>`;
-}
-
-function refreshImaDocuments() {
-  const seq = ++routeRenderSeq;
-  renderImaDocuments(seq, { keepOld: true });
-}
-
-function imaReportRefreshErrorHtml(message) {
-  return `<div class="ima-report-refresh-error" role="alert"><span>最新研报暂时无法更新：${escapeHtml(message)}</span><button type="button" class="btn-ghost" onclick="refreshImaDocuments()">重试</button></div>`;
-}
-
-function knowledgeCardSummary(group) {
-  const count = Number(group.document_count || 0);
-  const day = fmtImaDay(group.latest_sort_date || group.latest_day);
-  return count ? `${count} 份${day ? ` · ${day}` : ""}` : "还没有文档";
-}
-
-function knowledgeLibRowHtml(group, selected, mode) {
-  const id = String(group.id || "");
-  const name = group.name || id;
-  const summary = knowledgeCardSummary(group);
-  if (mode === "available") {
-    return `<div class="kb-lib-row is-available">
-      <div class="kb-lib-copy"><strong class="kb-lib-name">${escapeHtml(name)}</strong><span class="kb-lib-meta">${escapeHtml(summary)}</span></div>
-      <button type="button" class="btn-normal" data-group="${escapeHtml(id)}" onclick="subscribeKnowledge(this.dataset.group, this)">订阅</button>
-    </div>`;
-  }
-  const on = id === String(selected || "");
-  const unsub = !state.user?.is_admin
-    ? `<button type="button" class="btn-ghost kb-lib-unsub" data-group="${escapeHtml(id)}" data-name="${escapeHtml(name)}" onclick="event.stopPropagation();unsubscribeKnowledge(this.dataset.group, this)">退订</button>`
-    : "";
-  return `<div class="kb-lib-row${on ? " is-selected" : ""}${unsub ? " has-unsub" : ""}">
-    <button type="button" class="kb-lib-open" role="option" aria-selected="${on}" data-group="${escapeHtml(id)}" onclick="selectImaDocumentGroup(this.dataset.group)"><strong class="kb-lib-name">${escapeHtml(name)}</strong><span class="kb-lib-meta">${escapeHtml(summary)}</span></button>
-    ${unsub}
-  </div>`;
-}
-
-function knowledgeSourceControlsHtml(selectedGroup = "") {
-  const selected = String(selectedGroup || "");
-  const subscribed = state.imaCatalogSubscribed || [];
-  const options = [{ id: "", name: "全部研报" }, ...subscribed.map((group) => ({
-    id: String(group.id || ""),
-    name: group.name || group.id,
-  }))];
-  return `<label class="ima-report-source"><span class="sr-only">资料源</span><select id="ima-doc-source" aria-label="资料源" onchange="selectImaDocumentGroup(this.value)"><option value=""${selected ? "" : " selected"}>全部研报</option>${options.filter((group) => group.id).map((group) => `<option value="${escapeHtml(group.id)}"${group.id === selected ? " selected" : ""}>${escapeHtml(group.name)}</option>`).join("")}</select></label>`;
-}
-
-function refreshKnowledge() {
-  const seq = ++routeRenderSeq;
-  renderKnowledge(seq);
-}
-
-async function subscribeKnowledge(groupId, btn) {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  if (btn) btn.disabled = true;
-  try {
-    await api(`/api/ima-documents/groups/${encodeURIComponent(groupId)}/subscribe`, { method: "POST" });
-    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    flash("已订阅");
-    replaceImaDocumentsRoute(imaDocumentsRoute(groupId, "", "", ""));
-    refreshKnowledge();
-  } catch (err) {
-    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    flash(err.message || "订阅失败", "error");
-    if (btn) btn.disabled = false;
-  }
-}
-
-async function unsubscribeKnowledge(groupId, btn) {
-  const name = btn?.dataset?.name || "这个研报库";
-  if (!(await showConfirm(`退订后将无法打开「${name}」。确定退订？`))) return;
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  if (btn) btn.disabled = true;
-  try {
-    await api(`/api/ima-documents/groups/${encodeURIComponent(groupId)}/subscribe`, { method: "DELETE" });
-    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    flash("已退订");
-    replaceImaDocumentsRoute(imaDocumentsRoute("", "", "", ""));
-    refreshKnowledge();
-  } catch (err) {
-    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    flash(err.message || "退订失败", "error");
-    if (btn) btn.disabled = false;
-  }
-}
-
-async function renderKnowledge(seq, encodedMediaId = "") {
-  stopImaDocumentsAutoLoad();
-  const mediaId = encodedMediaId ? decodeURIComponent(encodedMediaId) : "";
-  setPageTitle("研报库");
-  if (mediaId && !$("#ima-reader-page")) {
-    $("#main").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
-  }
-  if (!mediaId) mountKnowledgeListShell();
-  const catalogPromise = api("/api/ima-documents/catalog");
-  const documentsPromise = mediaId || currentImaListSnapshot() ? null : api(imaDocumentsRequestPath());
-  const documentsRenderTask = mediaId
-    ? null
-    : renderImaDocuments(seq, { prefetched: documentsPromise });
-  try {
-    const settled = await Promise.allSettled(
-      documentsPromise ? [catalogPromise, documentsPromise] : [catalogPromise]
-    );
-    if (!routeStillActive(seq)) return;
-    const catalogResult = settled[0];
-    const documentsResult = documentsPromise ? settled[1] : null;
-    const catalogOk = catalogResult.status === "fulfilled";
-    const documentsOk = documentsResult?.status === "fulfilled";
-    const snapshot = currentImaListSnapshot();
-    if (!catalogOk && !documentsOk && !mediaId && !snapshot) {
-      const message = catalogResult.reason?.message || documentsResult?.reason?.message || "请求失败";
-      $("#main").innerHTML = emptyState(`加载失败：${message}`, `<div><button type="button" class="btn-normal" onclick="refreshKnowledge()">重试</button></div>`);
-      return;
-    }
-    let subscribed = [];
-    let available = [];
-    let catalogWarning = "";
-    if (catalogOk) {
-      const data = catalogResult.value;
-      subscribed = Array.isArray(data.subscribed) ? data.subscribed : [];
-      available = Array.isArray(data.available) ? data.available : [];
-    } else if (documentsOk) {
-      const groups = Array.isArray(documentsResult.value.groups) ? documentsResult.value.groups : [];
-      subscribed = groups.map((group) => ({ id: group.id, name: group.name, enabled: true }));
-      catalogWarning = "研报库目录加载失败";
-    } else {
-      subscribed = Array.isArray(state.imaCatalogSubscribed) ? state.imaCatalogSubscribed : [];
-      available = Array.isArray(state.imaCatalogAvailable) ? state.imaCatalogAvailable : [];
-      catalogWarning = "研报库目录加载失败";
-    }
-    state.imaCatalogSubscribed = subscribed;
-    state.imaCatalogAvailable = available;
-    const isAdmin = !!state.user?.is_admin;
-    const selectedGroup = imaDocumentsGroupFromRoute();
-    const sourceControl = $("#kb-list .ima-report-source");
-    if (sourceControl) {
-      sourceControl.outerHTML = knowledgeSourceControlsHtml(selectedGroup);
-    }
-    if (catalogOk && selectedGroup && !isAdmin && !subscribed.some((group) => String(group.id) === selectedGroup)) {
-      setPageTitle("研报库", true, "knowledge", "回研报库");
-      $("#main").innerHTML = emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回研报库</button></div>`);
-      return;
-    }
-    state.imaDocumentsGroup = selectedGroup;
-    if (mediaId) {
-      mountKnowledgeReaderShell();
-      await renderImaDocument(seq, mediaId);
-      return;
-    }
-    if (!subscribed.length && catalogOk) {
-      const list = $("#kb-list");
-      const controls = `<div class="ima-report-head"><div class="ima-report-filters ima-report-filters-row">${knowledgeSourceControlsHtml("")}</div></div>`;
-      if (isAdmin) {
-        list.innerHTML = `${controls}${emptyState("还没有配置研报库", `<div><button type="button" class="btn-normal" onclick="go('admin/knowledge')">去配置采集</button></div>`)}`;
-      } else {
-        list.innerHTML = `${controls}${emptyState(
-          "还没有可看的研报库",
-          available.length
-            ? `<div class="kb-lib-empty">${available.map((group) => knowledgeLibRowHtml(group, "", "available")).join("")}</div>`
-            : `<div><p class="section-meta">找管理员在用户设置里勾选研报库后再来</p></div>`
-        )}`;
-      }
-      if (catalogWarning) {
-        list.insertAdjacentHTML("afterbegin", `<p class="section-meta ima-catalog-warning">${escapeHtml(catalogWarning)}</p>`);
-      }
-      return;
-    }
-    await documentsRenderTask;
-    if (catalogWarning) {
-      const warning = `<p class="section-meta ima-catalog-warning">${escapeHtml(catalogWarning)}</p>`;
-      const head = $("#kb-list .ima-report-head");
-      if (head) head.insertAdjacentHTML("afterend", warning);
-      else $("#kb-list")?.insertAdjacentHTML("afterbegin", warning);
-    }
-  } catch (err) {
-    if (routeStillActive(seq)) {
-      $("#main").innerHTML = emptyState(`加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="refreshKnowledge()">重试</button></div>`);
-    }
-  }
-}
-
-async function renderImaDocuments(seq, { keepOld = false, prefetched = null } = {}) {
-  stopImaDocumentsAutoLoad();
-  if (!$("#ima-report-page")) {
-    await renderKnowledge(seq);
-    return;
-  }
-  const previousBody = $("#ima-docs-body");
-  const oldHtml = keepOld ? previousBody?.innerHTML || "" : "";
-  _imaListSeq += 1;
-  _imaLoadingMore = false;
-  if (!keepOld) {
-    _imaItems.length = 0;
-    state.imaDocumentsHasMore = false;
-  }
-  const selectedGroup = imaDocumentsGroupFromRoute() || state.imaDocumentsGroup || "";
-  const query = imaUsableSearchQuery(routeQuery().get("q") || "");
-  const day = routeQuery().get("day") || "";
-  const tag = routeQuery().get("tag") || "";
-  const searchMode = !!(query || tag);
-  const streamMode = !day && !searchMode;
-  const paged = searchMode || streamMode;
-  state.imaDocumentsGroup = selectedGroup;
-  state.imaDocumentsQuery = query;
-  state.imaDocumentsDay = day;
-  state.imaDocumentsTag = tag;
-  if (!knowledgeMediaIdFromPath()) setPageTitle("研报库");
-  const listRoot = $("#kb-list");
-  if (!listRoot) {
-    await renderKnowledge(seq);
-    return;
-  }
-  const existingHead = listRoot.querySelector(".ima-report-head");
-  if (existingHead) {
-    const input = $("#ima-doc-q");
-    if (input && document.activeElement !== input) input.value = query;
-    const source = $("#ima-doc-source");
-    if (source) source.value = selectedGroup;
-    const body = $("#ima-docs-body");
-    if (body && !keepOld) body.innerHTML = imaReportSkeletonHtml();
-  } else {
-    _imaSearchComposing = false;
-    const sourceControls = knowledgeSourceControlsHtml(selectedGroup);
-    listRoot.innerHTML = `
-  <header class="ima-report-head">
-    <div class="ima-report-heading"><div><h2 id="ima-doc-title">最新研报</h2><p id="ima-doc-meta" class="section-meta"></p></div><button type="button" class="icon-btn" aria-label="刷新研报" title="刷新研报" onclick="refreshImaDocuments()">${REFRESH_ICON}</button></div>
-    <form class="ima-report-search" onsubmit="event.preventDefault();submitImaDocumentsSearch()">
-      <label class="ima-report-searchbox">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜标题、公司、代码、行业或资料源" aria-label="搜索研报" oninput="queueImaDocumentsSearch()" oncompositionstart="_imaSearchComposing=true" oncompositionend="_imaSearchComposing=false;queueImaDocumentsSearch()"><span id="ima-doc-day-nav-slot"></span></label>
-      <div class="ima-report-filters">${sourceControls}<label class="ima-report-tag"><span class="sr-only">标签</span><select id="ima-doc-tag" aria-label="标签" onchange="selectImaDocumentsTag(this.value)" hidden><option value="">全部标签</option></select></label></div>
-    </form>
-    <div id="ima-doc-filter-chips" class="ima-doc-filter-chips"></div>
-    <div class="ima-report-columns" aria-hidden="true"><span>日期</span><span>标题</span><span>资料源</span></div>
-  </header>
-  <div id="ima-docs-body" class="ima-report-body">${keepOld && oldHtml ? oldHtml : imaReportSkeletonHtml()}</div>`;
-  }
-  const body = $("#ima-docs-body");
-  adoptImaStreamSnapshot();
-  const snapshot = currentImaListSnapshot();
-  if (snapshot && body) {
-    const tagSelect = $("#ima-doc-tag");
-    const uniqueTags = Object.keys(snapshot.tagCounts || {});
-    if (tag && !uniqueTags.includes(tag)) uniqueTags.unshift(tag);
-    if (tagSelect) {
-      tagSelect.innerHTML = `<option value="">全部标签</option>${uniqueTags.map((value) => {
-        const n = snapshot.tagCounts[value];
-        return `<option value="${escapeHtml(value)}" ${value === tag ? "selected" : ""}>${escapeHtml(value)}${n ? `（${n}）` : ""}</option>`;
-      }).join("")}`;
-      if (uniqueTags.length || tag) tagSelect.removeAttribute("hidden");
-      else tagSelect.hidden = true;
-    }
-    const navSlot = $("#ima-doc-day-nav-slot");
-    if (navSlot) {
-      closeImaDayPicker();
-      navSlot.innerHTML = imaDocumentsDayNavHtml(searchMode ? "" : day, snapshot.days);
-    }
-    restoreImaListSnapshot(snapshot, body);
-    const title = $("#ima-doc-title");
-    const meta = $("#ima-doc-meta");
-    if (title) title.textContent = "最新研报";
-    if (meta) {
-      meta.textContent = imaDocumentsCountLabel(
-        !!(query || tag),
-        snapshot.documentCount,
-        snapshot.items.length,
-        snapshot.hasMore,
-      );
-    }
-    syncImaDocumentsFilterStatus();
-    $("#ima-report-page")?.removeAttribute("aria-busy");
-    return;
-  }
-  $("#ima-report-page")?.setAttribute("aria-busy", "true");
-  try {
-    const data = prefetched != null ? await prefetched : await api(imaDocumentsRequestPath());
-    if (!routeStillActive(seq)) return;
-    $("#ima-report-page")?.removeAttribute("aria-busy");
-    const groups = Array.isArray(data.groups) ? data.groups : [];
-    const items = Array.isArray(data.items) ? data.items : [];
-    const selectedGroupInfo = groups.find((group) => String(group.id || "") === selectedGroup);
-    const selectedGroupName = selectedGroupInfo?.name || (selectedGroup ? selectedGroup : "全部");
-    const title = $("#ima-doc-title");
-    const meta = $("#ima-doc-meta");
-    if (title) title.textContent = "最新研报";
-    const resultCount = imaDocumentsCountLabel(!!(query || tag), data.document_count, items.length, data.has_more);
-    if (meta) meta.textContent = resultCount;
-    if (!knowledgeMediaIdFromPath()) setPageTitle(selectedGroupName);
-    const days = Array.isArray(data.days)
-      ? data.days.filter(Boolean)
-      : [...new Set(items.map((item) => item.day).filter(Boolean))];
-    state.imaDocumentsDays = days;
-    const tagSelect = $("#ima-doc-tag");
-    _imaTagCounts = imaTagCountsFromData(data);
-    _imaDocumentCount = Number(data.document_count) || imaTagCoverageBase(_imaTagCounts, 0);
-    const uniqueTags = Array.isArray(data.tags)
-      ? data.tags.filter(Boolean)
-      : Object.keys(_imaTagCounts);
-    if (tag && !uniqueTags.includes(tag)) uniqueTags.unshift(tag);
-    if (tagSelect) {
-      tagSelect.innerHTML = `<option value="">全部标签</option>${uniqueTags.map((value) => {
-        const n = _imaTagCounts[value];
-        return `<option value="${escapeHtml(value)}" ${value === tag ? "selected" : ""}>${escapeHtml(value)}${n ? `（${n}）` : ""}</option>`;
-      }).join("")}`;
-      if (uniqueTags.length || tag) tagSelect.removeAttribute("hidden");
-      else tagSelect.hidden = true;
-    }
-    const navSlot = $("#ima-doc-day-nav-slot");
-    if (navSlot) {
-      closeImaDayPicker();
-      navSlot.innerHTML = imaDocumentsDayNavHtml(searchMode ? "" : day, days);
-    }
-    const hasFilter = !!(query || tag);
-    syncImaDocumentsFilterStatus();
-    _imaItems.length = 0;
-    _imaItems.push(...items);
-    state.imaDocumentsHasMore = !!(paged && data.has_more);
-    const body = $("#ima-docs-body");
-    if (!items.length) {
-      body.innerHTML = imaDocumentsEmptyHtml(hasFilter);
-      return;
-    }
-    const more = state.imaDocumentsHasMore
-      ? `<div id="ima-docs-more" class="ima-docs-more" role="status" aria-live="polite">下滑加载更多</div>`
-      : "";
-    body.innerHTML = `<div class="ima-doc-list">${items.map((item) => imaDocumentRow(item)).join("")}</div>${more}`;
-    startImaDocumentsAutoLoad();
-  } catch (err) {
-    if (!routeStillActive(seq)) return;
-    const body = $("#ima-docs-body");
-    $("#ima-report-page")?.removeAttribute("aria-busy");
-    if (keepOld && oldHtml && body) {
-      body.innerHTML = oldHtml;
-      body.insertAdjacentHTML("afterbegin", imaReportRefreshErrorHtml(err.message || "请求失败"));
-      return;
-    }
-    const denied = String(err.message || "").includes("知识库不存在");
-    body.innerHTML = denied
-      ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回研报库</button></div>`)
-      : emptyState(`加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="refreshImaDocuments()">重试</button></div>`);
-  }
-}
-
-function imaDocumentsFilterChipsHtml() {
-  const chips = [];
-  if (state.imaDocumentsQuery) {
-    chips.push(`<span class="ima-doc-filter-chip">搜索 ${escapeHtml(state.imaDocumentsQuery)}<button type="button" onclick="clearImaDocumentsFilter('q')" aria-label="清除搜索">${X_ICON}</button></span>`);
-  }
-  if (state.imaDocumentsTag) {
-    chips.push(`<span class="ima-doc-filter-chip">${escapeHtml(state.imaDocumentsTag)}<button type="button" onclick="clearImaDocumentsFilter('tag')" aria-label="清除标签">${X_ICON}</button></span>`);
-  }
-  if (!chips.length) return "";
-  chips.push(`<button type="button" class="btn-ghost" onclick="clearImaDocumentsFilters()">清除筛选</button>`);
-  return chips.join("");
-}
-
-function syncImaDocumentsFilterStatus() {
-  const chips = $("#ima-doc-filter-chips");
-  if (chips) chips.innerHTML = imaDocumentsFilterChipsHtml();
-}
-
-function clearImaDocumentsFilter(kind) {
-  if (kind === "q") {
-    state.imaDocumentsQuery = "";
-    const input = $("#ima-doc-q");
-    if (input) input.value = "";
-  }
-  if (kind === "day") state.imaDocumentsDay = "";
-  if (kind === "tag") state.imaDocumentsTag = "";
-  if (kind !== "day") state.imaDocumentsDay = "";
-  replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, state.imaDocumentsQuery, state.imaDocumentsDay, state.imaDocumentsTag));
-  renderImaDocuments(++routeRenderSeq);
-}
-
-function clearImaDocumentsFilters() {
-  state.imaDocumentsQuery = "";
-  state.imaDocumentsTag = "";
-  state.imaDocumentsDay = "";
-  const input = $("#ima-doc-q");
-  if (input) input.value = "";
-  replaceImaDocumentsRoute(imaDocumentsRoute(state.imaDocumentsGroup, "", state.imaDocumentsDay, ""));
-  renderImaDocuments(++routeRenderSeq);
-}
-
-function stopImaDocumentsAutoLoad() {
-  _imaDocsLoadObserver?.disconnect();
-  _imaDocsLoadObserver = null;
-  if (_imaDocsLoadFallback) {
-    const body = $("#ima-docs-body");
-    body?.removeEventListener("scroll", _imaDocsLoadFallback);
-    _imaDocsLoadFallback = null;
-  }
-  clearTimeout(_imaSearchTimer);
-  _imaSearchTimer = null;
-  _imaLoadingMore = false;
-}
-
-function startImaDocumentsAutoLoad() {
-  stopImaDocumentsAutoLoad();
-  const body = $("#ima-docs-body");
-  const sentinel = $("#ima-docs-more");
-  if (!body || !sentinel || !state.imaDocumentsHasMore) return;
-  const load = () => loadImaDocumentsMore();
-  if ("IntersectionObserver" in window) {
-    _imaDocsLoadObserver = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) load();
-    }, { root: body, rootMargin: "400px 0px" });
-    _imaDocsLoadObserver.observe(sentinel);
-    return;
-  }
-  _imaDocsLoadFallback = () => {
-    if (body.scrollTop + body.clientHeight >= body.scrollHeight - 400) load();
-  };
-  body.addEventListener("scroll", _imaDocsLoadFallback, { passive: true });
-  _imaDocsLoadFallback();
-}
-
-async function loadImaDocumentsMore() {
-  if (_imaLoadingMore || !state.imaDocumentsHasMore) return;
-  if (state.imaDocumentsDay && !state.imaDocumentsQuery && !state.imaDocumentsTag) return;
-  _imaLoadingMore = true;
-  const moreBtn = $("#ima-docs-more");
-  if (moreBtn) {
-    moreBtn.textContent = "正在加载更多…";
-    moreBtn.setAttribute("aria-busy", "true");
-  }
-  const seq = routeRenderSeq;
-  const listSeq = _imaListSeq;
-  try {
-    const params = new URLSearchParams();
-    if (state.imaDocumentsQuery) params.set("q", state.imaDocumentsQuery);
-    if (state.imaDocumentsTag) params.set("tag", state.imaDocumentsTag);
-    if (state.imaDocumentsGroup) params.set("group", state.imaDocumentsGroup);
-    params.set("limit", "50");
-    params.set("offset", String(_imaItems.length));
-    const data = await api(`/api/ima-documents?${params.toString()}`);
-    if (listSeq !== _imaListSeq || !routeStillActive(seq)) return;
-    const incoming = Array.isArray(data.items) ? data.items : [];
-    _imaItems.push(...incoming);
-    state.imaDocumentsHasMore = !!data.has_more && incoming.length > 0;
-    const body = $("#ima-docs-body");
-    const list = body?.querySelector(".ima-doc-list");
-    if (list && incoming.length) {
-      list.insertAdjacentHTML("beforeend", incoming.map((item) => imaDocumentRow(item)).join(""));
-    }
-    const btn = $("#ima-docs-more");
-    if (!state.imaDocumentsHasMore) {
-      btn?.remove();
-    } else if (btn) {
-      btn.textContent = "下滑加载更多";
-      btn.removeAttribute("aria-busy");
-    }
-    startImaDocumentsAutoLoad();
-    const meta = $("#ima-doc-meta");
-    if (meta) {
-      meta.textContent = imaDocumentsCountLabel(
-        !!(state.imaDocumentsQuery || state.imaDocumentsTag),
-        _imaDocumentCount,
-        _imaItems.length,
-        state.imaDocumentsHasMore,
-      );
-    }
-  } catch (err) {
-    if (listSeq !== _imaListSeq || !routeStillActive(seq)) return;
-    const failed = $("#ima-docs-more");
-    if (failed) {
-      failed.removeAttribute("aria-busy");
-      failed.innerHTML = `<button type="button" class="btn-ghost" onclick="loadImaDocumentsMore()">加载失败，重试</button>`;
-    }
-  } finally {
-    if (listSeq === _imaListSeq) _imaLoadingMore = false;
-  }
-}
-
-function backFromImaReader(fallbackRoute, focusSearch = false) {
-  clearImaPdfUrl();
-  const snapshot = _imaListSnapshot;
-  if (snapshot && snapshot.route === normalizeRoute(fallbackRoute)) {
-    if (focusSearch) snapshot.focusSearch = true;
-    history.back();
-    return;
-  }
-  go(fallbackRoute);
-}
-
-function imaReaderNavHtml(mediaId, groupId = "", snapshot = null) {
-  if (!snapshot || snapshot.items.length < 2) return "";
-  const current = imaDocumentKey(mediaId, groupId);
-  const index = snapshot.items.findIndex((item) => imaDocumentKey(item.media_id, item.group_id) === current);
-  if (index < 0) return "";
-  const prev = snapshot.items[index - 1];
-  const next = snapshot.items[index + 1];
-  const button = (item, className, label) => item
-    ? `<button type="button" class="${className}" data-media-id="${escapeHtml(item.media_id)}" data-group-id="${escapeHtml(item.group_id || "")}" onclick="openImaDocument(this.dataset.mediaId, this.dataset.groupId, true)">${label} <span>${escapeHtml(imaListTitle(item.name))}</span></button>`
-    : "";
-  return `<nav class="ima-reader-nav" aria-label="同一结果集">${button(prev, "ima-reader-prev", "上一份")}${button(next, "ima-reader-next", "下一份")}</nav>`;
-}
-
 function feishuTimelineAssetHtml(asset, mediaId, groupId) {
-  if (!asset?.id) {
-    if (asset?.unavailable) {
-      const kind = asset.kind === "image" ? "图片" : "附件";
-      return `<span class="feishu-asset-missing" role="note">作者未开放${kind}下载，仅飞书内可看</span>`;
-    }
-    return "";
-  }
+  if (!asset?.id) return "";
   const name = asset.name || (asset.kind === "image" ? "文档图片" : "文档附件");
   if (String(asset.mime || "").startsWith("image/") || asset.kind === "image") {
     return `<a class="post-img-link" href="#" onclick="event.preventDefault();openLightbox(this.querySelector('img'))" aria-label="查看${escapeHtml(name)}"><img src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" data-feishu-asset="${escapeHtml(asset.id)}" data-media-id="${escapeHtml(mediaId)}" data-group-id="${escapeHtml(groupId)}" alt="${escapeHtml(name)}" loading="lazy"></a>`;
@@ -2305,7 +825,7 @@ function feishuTimelineAssetHtml(asset, mediaId, groupId) {
   return `<button type="button" class="feishu-attachment" data-asset-id="${escapeHtml(asset.id)}" data-media-id="${escapeHtml(mediaId)}" data-group-id="${escapeHtml(groupId)}" data-name="${escapeHtml(name)}" onclick="downloadFeishuTimelineAsset(this)">${escapeHtml(name)}</button>`;
 }
 
-function feishuTimelineBlockHtml(block, mediaId, groupId) {
+function feishuTimelineBlockHtml(block, mediaId, groupId, showSpeaker = true) {
   if (block.type === "table") {
     const rows = (block.rows || []).map((row, rowIndex) => {
       const tag = rowIndex === 0 ? "th" : "td";
@@ -2316,68 +836,110 @@ function feishuTimelineBlockHtml(block, mediaId, groupId) {
   const speaker = String(block.speaker || "");
   const reply = String(block.reply_to || "");
   const text = String(block.text || "");
-  const identity = speaker
-    ? `<div class="feishu-entry-speaker"><strong>${escapeHtml(speaker)}</strong>${reply ? `<span>回复 ${escapeHtml(reply)}</span>` : ""}</div>`
+  const identity = speaker && showSpeaker
+    ? `<div class="feishu-entry-speaker">${feishuSpeakerAvatarHtml(speaker)}<strong>${escapeHtml(feishuSourceDisplay(speaker).label)}</strong>${reply ? `<span class="feishu-entry-reply-to">↪ 回复 @${escapeHtml(reply)}</span>` : ""}</div>`
     : "";
-  const assets = (block.assets || []).filter((asset) => asset && (asset.id || asset.unavailable));
+  const assets = (block.assets || []).filter((asset) => asset && asset.id);
   const assetHtml = assets.length ? `<div class="post-images feishu-entry-assets">${assets.map((asset) => feishuTimelineAssetHtml(asset, mediaId, groupId)).join("")}</div>` : "";
-  return `<div class="feishu-entry-block${speaker ? " has-speaker" : ""}">${identity}${text ? `<p>${escapeHtml(text).replace(/\n/g, "<br>")}</p>` : ""}${assetHtml}</div>`;
+  return `<div class="feishu-entry-block${speaker ? " has-speaker" : ""}${reply ? " is-reply" : ""}">${identity}${text ? `<p>${escapeHtml(text).replace(/\n/g, "<br>")}</p>` : ""}${assetHtml}</div>`;
+}
+
+function feishuEntryAuthor(entry) {
+  const blocks = Array.isArray(entry?.blocks) ? entry.blocks : [];
+  const speakers = [...new Set(blocks.map((block) => String(block?.speaker || "").trim()).filter(Boolean))];
+  if (speakers.length !== 1 || blocks.some((block) => String(block?.reply_to || "").trim())) return "";
+  return speakers[0];
+}
+
+function feishuBlockHasContent(block) {
+  if (!block) return false;
+  if (block.type === "table") {
+    return (block.rows || []).some((row) => (row || []).some((cell) => String(cell?.text || "").trim() || (cell?.assets || []).some((asset) => asset?.id)));
+  }
+  const text = String(block.text || "").trim();
+  if ((block.assets || []).some((asset) => asset?.id)) return true;
+  if (!text) return false;
+  if (text === "收起") return false;
+  if (/^\d+日无更新$/.test(text)) return false;
+  return true;
+}
+
+function feishuEntryHasContent(entry) {
+  return (entry?.blocks || []).some(feishuBlockHasContent);
+}
+
+const FEISHU_SOURCE_DISPLAY = {
+  "K神-2026": { label: "杨康平", avatar: "/feishu-yang.png?v=1" },
+  "杨康平": { label: "杨康平", avatar: "/feishu-yang.png?v=1" },
+  "Q神-档案库": { label: "失业期神", avatar: "/feishu-shiye.png?v=1" },
+  "Q神": { label: "失业期神", avatar: "/feishu-shiye.png?v=1" },
+  "失业期神": { label: "失业期神", avatar: "/feishu-shiye.png?v=1" },
+};
+
+function feishuSourceDisplay(title) {
+  const raw = String(title || "").trim();
+  return FEISHU_SOURCE_DISPLAY[raw] || { label: raw, avatar: "" };
+}
+
+function feishuSpeakerAvatarHtml(name) {
+  const display = feishuSourceDisplay(name);
+  if (display.avatar) return `<img class="feishu-speaker-avatar" src="${escapeHtml(display.avatar)}" alt="" loading="lazy">`;
+  // ponytail: 未建映射的新发言人掉回首字色块，不断档
+  return `<span class="feishu-speaker-avatar feishu-speaker-fallback" aria-hidden="true">${escapeHtml(display.label.slice(0, 1))}</span>`;
+}
+
+function feishuLiveItemHtml(entry, showSource) {
+  const source = entry.source || {};
+  const author = feishuEntryAuthor(entry);
+  const sourceLabel = showSource && source.title ? `<div class="feishu-live-source">${escapeHtml(feishuSourceDisplay(source.title).label)}</div>` : "";
+  const speaker = author ? `<div class="feishu-live-speaker">${feishuSpeakerAvatarHtml(author)}<strong>${escapeHtml(feishuSourceDisplay(author).label)}</strong><time datetime="${escapeHtml(entry.timestamp || "")}">${escapeHtml(entry.time || "")}</time></div>` : "";
+  const blocks = (entry.blocks || []).filter(feishuBlockHasContent).map((block) => feishuTimelineBlockHtml(block, source.media_id || "", source.group_id || "", !author)).join("");
+  return `<article class="live-item" data-entry-id="${escapeHtml(entry.id || "")}">
+    <div class="live-main">${speaker}${sourceLabel}<div class="live-body">${blocks}</div></div>
+  </article>`;
 }
 
 function feishuTimelineEntriesHtml(entries, showSource) {
-  if (!entries.length) return emptyState("这个范围内还没有时间线记录");
-  let lastDay = "";
-  return entries.map((entry) => {
-    const source = entry.source || {};
+  const visible = (entries || []).filter(feishuEntryHasContent);
+  if (!visible.length) return emptyState("这个范围内还没有时间线记录");
+  const grouped = [];
+  for (const entry of visible) {
     const day = String(entry.day || String(entry.timestamp || "").slice(0, 10));
-    const dayHead = day !== lastDay
-      ? `<h3 class="feishu-day-heading" id="feishu-day-${escapeHtml(day)}">${escapeHtml(fmtImaDay(day) || day)}</h3>`
-      : "";
-    lastDay = day;
-    const sourceLabel = showSource && source.title ? `<span>${escapeHtml(source.title)}</span>` : "";
-    return `${dayHead}<article class="feishu-entry" data-entry-id="${escapeHtml(entry.id || "")}">
-      <div class="feishu-entry-time"><time datetime="${escapeHtml(entry.timestamp || "")}">${escapeHtml(entry.time || "")}</time>${sourceLabel}</div>
-      <div class="feishu-entry-content">${(entry.blocks || []).map((block) => feishuTimelineBlockHtml(block, source.media_id || "", source.group_id || "")).join("") || '<p class="muted">空记录</p>'}</div>
-    </article>`;
-  }).join("");
-}
-
-function feishuDocumentEntriesHtml(entries) {
-  if (!entries.length) return emptyState("这个文档还没有内容");
-  let lastDay = "";
-  return entries.map((entry) => {
-    const source = entry.source || {};
-    const day = String(entry.day || String(entry.timestamp || "").slice(0, 10));
-    const dayMark = day !== lastDay
-      ? `<h3 class="feishu-doc-day" id="feishu-day-${escapeHtml(day)}">${escapeHtml(fmtImaDay(day) || day)}</h3>`
-      : "";
-    lastDay = day;
-    const timeChip = entry.time ? `<span class="feishu-doc-time"><time datetime="${escapeHtml(entry.timestamp || "")}">${escapeHtml(entry.time)}</time></span>` : "";
-    return `${dayMark}<section class="feishu-doc-entry">${timeChip}<div class="feishu-doc-content">${(entry.blocks || []).map((block) => feishuTimelineBlockHtml(block, source.media_id || "", source.group_id || "")).join("")}</div></section>`;
-  }).join("");
+    if (!grouped.length || grouped.at(-1).day !== day) grouped.push({ day, items: [] });
+    grouped.at(-1).items.push(entry);
+  }
+  return grouped.map((group) => `
+    <div class="tl-group live-group" id="feishu-day-${escapeHtml(group.day)}">
+      <div class="tl-group-head"><span>${escapeHtml(fmtImaDay(group.day) || group.day)}</span></div>
+      <div class="live-feed">${group.items.map((entry) => feishuLiveItemHtml(entry, showSource)).join("")}</div>
+    </div>`).join("");
 }
 
 function renderFeishuTimelineView() {
   const host = $("#feishu-timeline-body");
   if (!host || !_feishuTimelineState) return;
-  const { data, selectedGroup } = _feishuTimelineState;
-  const docMode = _feishuTimelineState.mode === "document";
-  const entries = selectedGroup
+  const state = _feishuTimelineState;
+  const { data, selectedGroup } = state;
+  const raw = selectedGroup
     ? (data.entries || []).filter((entry) => entry.source?.group_id === selectedGroup)
     : (data.entries || []);
-  // 文档开头的标题块会混进公告，过滤与来源标题相同的回显
-  const notices = (data.notices || []).filter((notice) => !selectedGroup || notice.source?.group_id === selectedGroup)
-    .filter((notice) => {
-      const text = String(notice.text || "").trim();
-      return !text || text !== String(notice.source?.title || "").trim();
-    });
-  const noticeHtml = notices.length ? `<aside class="feishu-timeline-notice"><strong>文档提示</strong>${notices.map((notice) => notice.type === "table" ? feishuTimelineBlockHtml(notice, notice.source?.media_id || "", notice.source?.group_id || "") : `<p>${escapeHtml(notice.text || "").replace(/\n/g, "<br>")}</p>`).join("")}</aside>` : "";
-  revokeFeishuTimelineMediaUrls();
+  const entries = raw.filter(feishuEntryHasContent);
+  const fab = $("#feishu-latest-fab");
+  if (fab) fab.textContent = "回到最新";
+  updateFeishuTimelineToolbar();
+  updateFeishuTimelineHeader();
+  if (state.loading && !entries.length) {
+    host.innerHTML = '<p class="ima-reader-status" role="status">正在载入时间线…</p>';
+    renderFeishuTimelineDates([]);
+    observeFeishuTimelineMore();
+    return;
+  }
   const showSourceLabels = !selectedGroup && (data.sources || []).length > 1;
-  host.innerHTML = `${noticeHtml}${docMode ? feishuDocumentEntriesHtml(entries) : feishuTimelineEntriesHtml(entries, showSourceLabels)}`;
-  host.classList.toggle("is-doc-mode", docMode);
+  host.innerHTML = `${feishuTimelineEntriesHtml(entries, showSourceLabels)}${feishuTimelineMoreHtml()}`;
   loadFeishuTimelineImages();
   renderFeishuTimelineDates(entries);
+  observeFeishuTimelineMore();
+  toggleFeishuLatestFab();
 }
 
 function renderFeishuTimelineDates(entries) {
@@ -2389,10 +951,181 @@ function renderFeishuTimelineDates(entries) {
   if (select) select.innerHTML = `<option value="">跳到日期</option>${days.map((day) => `<option value="${escapeHtml(day)}">${escapeHtml(fmtImaDay(day) || day)}</option>`).join("")}`;
 }
 
-function selectFeishuTimelineSource(groupId) {
-  if (!_feishuTimelineState) return;
-  _feishuTimelineState.selectedGroup = String(groupId || "");
+function feishuTimelineRequestPath(state, before = "") {
+  const params = new URLSearchParams({ order: "latest" });
+  params.set("window_days", "7");
+  if (state.selectedGroup) params.set("group", state.selectedGroup);
+  if (before) params.set("before", before);
+  return `/api/ima-documents/timeline/all?${params.toString()}`;
+}
+
+function mergeFeishuTimelineEntries(current, incoming) {
+  const seen = new Set(current.map((entry) => String(entry.id || "")));
+  return [...current, ...incoming.filter((entry) => {
+    const id = String(entry.id || "");
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  })];
+}
+
+function feishuTimelineMoreHtml() {
+  const state = _feishuTimelineState;
+  if (!state || (!state.hasMore && !state.error)) return "";
+  const label = state.loading ? "正在加载…" : state.error ? "重试" : "加载更早";
+  const error = state.error ? `<p class="feishu-timeline-load-error" role="alert">${escapeHtml(state.error)}</p>` : "";
+  return `<div class="feishu-timeline-more feishu-timeline-sentinel"><button type="button" class="btn-normal" onclick="loadMoreFeishuTimeline()"${state.loading ? " disabled" : ""}>${label}</button>${error}</div>`;
+}
+
+async function loadFeishuTimelinePage(reset = false) {
+  const current = _feishuTimelineState;
+  if (!current || current.loading) return false;
+  const before = reset ? "" : current.nextCursor;
+  if (reset) revokeFeishuTimelineMediaUrls();
+  const requestState = {
+    ...current,
+    loading: true,
+    error: "",
+    nextCursor: reset ? "" : current.nextCursor,
+    hasMore: reset ? false : current.hasMore,
+    data: reset ? { ...current.data, entries: [], notices: [] } : current.data,
+  };
+  _feishuTimelineState = requestState;
   renderFeishuTimelineView();
+  try {
+    const data = await api(feishuTimelineRequestPath(requestState, before));
+    if (!routeStillActive(requestState.seq) || requestState.readerSeq !== _imaReaderSeq || _feishuTimelineState !== requestState) return false;
+    _feishuTimelineState = {
+      ...requestState,
+      data: {
+        ...data,
+        entries: reset ? (data.entries || []) : mergeFeishuTimelineEntries(requestState.data.entries || [], data.entries || []),
+        notices: reset ? (data.notices || []) : (requestState.data.notices || []),
+      },
+      nextCursor: String(data.next_cursor || ""),
+      hasMore: !!data.has_more,
+      loading: false,
+      error: "",
+    };
+    renderFeishuTimelineView();
+    return true;
+  } catch (err) {
+    if (!routeStillActive(requestState.seq) || requestState.readerSeq !== _imaReaderSeq || _feishuTimelineState !== requestState) return false;
+    _feishuTimelineState = { ...requestState, loading: false, error: err.message || "时间线加载失败" };
+    renderFeishuTimelineView();
+    return false;
+  }
+}
+
+async function loadMoreFeishuTimeline() {
+  const state = _feishuTimelineState;
+  if (!state || state.loading || (!state.hasMore && !state.error)) return;
+  await loadFeishuTimelinePage(false);
+}
+
+function observeFeishuTimelineMore() {
+  _feishuMoreObserver?.disconnect();
+  _feishuMoreObserver = null;
+  const host = $("#feishu-timeline-body");
+  const sentinel = host?.querySelector(".feishu-timeline-sentinel");
+  if (!host || !sentinel || typeof IntersectionObserver !== "function") return;
+  _feishuMoreObserver = new IntersectionObserver((items) => {
+    if (!_feishuTimelineState || _feishuTimelineState.loading) return;
+    if (items.some((item) => item.isIntersecting)) loadMoreFeishuTimeline();
+  }, { root: host, rootMargin: "480px 0px" });
+  _feishuMoreObserver.observe(sentinel);
+}
+
+async function selectFeishuTimelineSource(groupId) {
+  if (!_feishuTimelineState || _feishuTimelineState.loading) return;
+  const current = _feishuTimelineState;
+  const selectedGroup = String(groupId || "");
+  if (selectedGroup === current.selectedGroup) return;
+  _feishuTimelineState = {
+    ...current,
+    selectedGroup,
+    data: { ...current.data, entries: [], notices: [] },
+    nextCursor: "",
+    hasMore: false,
+    error: "",
+  };
+  updateFeishuTimelineToolbar();
+  updateFeishuTimelineHeader();
+  updateFeishuTimelineRoute();
+  const loaded = await loadFeishuTimelinePage(true);
+  if (!loaded && routeStillActive(current.seq) && current.readerSeq === _imaReaderSeq && _feishuTimelineState?.selectedGroup === selectedGroup) {
+    const message = _feishuTimelineState.error || "来源切换失败";
+    _feishuTimelineState = current;
+    updateFeishuTimelineToolbar();
+    updateFeishuTimelineHeader();
+    updateFeishuTimelineRoute();
+    renderFeishuTimelineView();
+    flash(message, "error");
+  }
+}
+
+function updateFeishuTimelineToolbar() {
+  const host = $("#feishu-timeline-toolbar");
+  if (!host || !_feishuTimelineState) return;
+  const selected = String(_feishuTimelineState.selectedGroup || "");
+  const pills = host.querySelectorAll(".feishu-source-pills .tl-pill");
+  if (pills.length) {
+    pills.forEach((btn) => {
+      const on = String(btn.dataset.group || "") === selected;
+      btn.classList.toggle("selected", on);
+      btn.setAttribute("aria-checked", on ? "true" : "false");
+    });
+  } else {
+    renderFeishuTimelineToolbar();
+  }
+}
+
+function updateFeishuTimelineHeader() {
+  if (!_feishuTimelineState) return;
+  const { selectedGroup, data } = _feishuTimelineState;
+  const sources = data?.sources || [];
+  let title = "";
+  let sourceUrl = "";
+  if (selectedGroup) {
+    const matched = sources.find((s) => String(s.group_id || "") === selectedGroup);
+    title = feishuSourceDisplay(matched?.title || selectedGroup).label;
+    sourceUrl = matched?.canonical_url || "";
+  } else if (sources.length === 1) {
+    title = feishuSourceDisplay(sources[0]?.title || "").label;
+    sourceUrl = sources[0]?.canonical_url || "";
+  } else {
+    title = "全部时间线";
+  }
+  const titleEl = $(".ima-reader--feishu .ima-reader-title");
+  if (titleEl) titleEl.textContent = title;
+  setPageTitle(title);
+  const openLink = $(".ima-reader--feishu .ima-reader-actions a[data-feishu-canonical]");
+  if (openLink) {
+    if (sourceUrl) {
+      openLink.href = sourceUrl;
+      openLink.removeAttribute("hidden");
+    } else {
+      openLink.setAttribute("hidden", "");
+    }
+  }
+}
+
+function updateFeishuTimelineRoute() {
+  if (!_feishuTimelineState) return;
+  const { selectedGroup, data, mediaId } = _feishuTimelineState;
+  const sources = data?.sources || [];
+  if (selectedGroup) {
+    const matched = sources.find((s) => String(s.group_id || "") === selectedGroup);
+    const targetMediaId = matched?.media_id || mediaId;
+    if (targetMediaId) {
+      replaceImaDocumentsRoute(imaDocumentReaderRoute(targetMediaId, selectedGroup));
+    }
+  } else {
+    const targetMediaId = mediaId || sources[0]?.media_id;
+    if (targetMediaId) {
+      replaceImaDocumentsRoute(imaDocumentReaderRoute(targetMediaId, ""));
+    }
+  }
 }
 
 function jumpFeishuTimelineDay(day) {
@@ -2400,41 +1133,52 @@ function jumpFeishuTimelineDay(day) {
   document.getElementById(`feishu-day-${day}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-async function changeFeishuTimelineOrder(order, select = null) {
-  if (!_feishuTimelineState || !["latest", "original"].includes(order)) return;
-  if (_feishuTimelineState.mode === "document") return; // 文档视图固定原文顺序
-  const previous = _feishuTimelineState.order || "latest";
-  const { seq, readerSeq, selectedGroup } = _feishuTimelineState;
-  if (select) select.disabled = true;
-  try {
-    const data = await api(`/api/ima-documents/timeline/all?order=${encodeURIComponent(order)}`);
-    if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
-    _feishuTimelineState = { ..._feishuTimelineState, data, order, selectedGroup };
-    renderFeishuTimelineView();
-  } catch (err) {
-    if (select?.isConnected) select.value = previous;
-    if (routeStillActive(seq) && readerSeq === _imaReaderSeq) flash(err.message || "时间线排序失败", "error");
-  } finally {
-    if (select?.isConnected) select.disabled = false;
-  }
-}
-
-async function loadFeishuTimelineImages() {
+function fetchFeishuTimelineAsset(img) {
   const seq = routeRenderSeq;
   const readerSeq = _imaReaderSeq;
-  const images = [...document.querySelectorAll("img[data-feishu-asset]")];
-  await Promise.all(images.map(async (img) => {
-    const query = img.dataset.groupId ? `?group=${encodeURIComponent(img.dataset.groupId)}` : "";
-    try {
-      const blob = await apiBlob(`/api/ima-documents/${encodeURIComponent(img.dataset.mediaId)}/assets/${encodeURIComponent(img.dataset.feishuAsset)}${query}`);
+  img.dataset.feishuLoading = "1";
+  const mediaId = img.dataset.mediaId || "";
+  const groupId = img.dataset.groupId || "";
+  const assetId = img.dataset.feishuAsset || "";
+  const cacheKey = `${mediaId}|${groupId}|${assetId}`;
+  const cached = _feishuTimelineMediaCache.get(cacheKey);
+  if (cached) {
+    img.src = cached;
+    return Promise.resolve();
+  }
+  const query = groupId ? `?group=${encodeURIComponent(groupId)}` : "";
+  return apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/assets/${encodeURIComponent(assetId)}${query}`)
+    .then((blob) => {
       if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq || !img.isConnected) return;
       const url = URL.createObjectURL(blob);
       _feishuTimelineMediaUrls.push(url);
+      _feishuTimelineMediaCache.set(cacheKey, url);
       img.src = url;
-    } catch {
-      if (img.isConnected) img.remove();
+    })
+    .catch(() => {
+      const link = img.closest(".post-img-link");
+      if (link) link.remove();
+      else if (img.isConnected) img.remove();
+    });
+}
+
+function loadFeishuTimelineImages() {
+  _feishuAssetObserver?.disconnect();
+  _feishuAssetObserver = null;
+  const images = [...document.querySelectorAll("img[data-feishu-asset]:not([data-feishu-loading])")];
+  if (!images.length) return;
+  if (typeof IntersectionObserver !== "function") {
+    images.forEach((img) => fetchFeishuTimelineAsset(img));
+    return;
+  }
+  _feishuAssetObserver = new IntersectionObserver((items, observer) => {
+    for (const item of items) {
+      if (!item.isIntersecting) continue;
+      observer.unobserve(item.target);
+      fetchFeishuTimelineAsset(item.target);
     }
-  }));
+  }, { rootMargin: "600px 0px" });
+  images.forEach((img) => _feishuAssetObserver.observe(img));
 }
 
 async function downloadFeishuTimelineAsset(button) {
@@ -2455,237 +1199,168 @@ async function downloadFeishuTimelineAsset(button) {
   }
 }
 
-async function loadFeishuTimeline(item, seq, readerSeq, mode = "timeline") {
-  const docMode = mode === "document";
-  const data = await api(`/api/ima-documents/timeline/all?order=${docMode ? "original" : "latest"}`);
+async function loadFeishuTimeline(item, seq, readerSeq) {
+  const query = routeQuery();
+  const selectedGroup = query.has("doc_group") ? (query.get("doc_group") || "") : (item.group_id || "");
+  const requestState = {
+    mediaId: item.media_id || "",
+    selectedGroup,
+    order: "latest",
+    seq,
+    readerSeq,
+  };
+  const data = await api(feishuTimelineRequestPath(requestState));
   if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
-  const selectedGroup = item.group_id || "";
-  _feishuTimelineState = { data, selectedGroup, order: docMode ? "original" : "latest", mode: docMode ? "document" : "timeline", seq, readerSeq };
-  const sources = data.sources || [];
-  const sourceOptions = [{ group_id: "", title: "全部来源" }, ...sources];
+  _feishuTimelineState = {
+    data,
+    ...requestState,
+    baseline: String(item.downloaded_at || ""),
+    nextCursor: String(data.next_cursor || ""),
+    hasMore: !!data.has_more,
+    loading: false,
+    error: "",
+  };
   const panel = $("#ima-document-panel");
   if (!panel) return;
-  panel.innerHTML = `<div class="feishu-timeline-toolbar">
-    <label><span class="sr-only">来源</span><select aria-label="来源" onchange="selectFeishuTimelineSource(this.value)">${sourceOptions.map((source) => `<option value="${escapeHtml(source.group_id)}"${source.group_id === selectedGroup ? " selected" : ""}>${escapeHtml(source.title)}</option>`).join("")}</select></label>
-    ${docMode ? "" : `<label><span class="sr-only">排序</span><select aria-label="排序" onchange="changeFeishuTimelineOrder(this.value,this)"><option value="latest">最新优先</option><option value="original">原文顺序</option></select></label>`}
-    <select id="feishu-date-select" class="feishu-date-select" aria-label="跳到日期" onchange="jumpFeishuTimelineDay(this.value)"></select>
-  </div><div class="feishu-timeline-layout"><main id="feishu-timeline-body" class="feishu-timeline-body"></main><nav id="feishu-date-nav" class="feishu-date-nav" aria-label="日期目录"></nav></div>`;
+  panel.innerHTML = `<div class="feishu-timeline-layout"><main id="feishu-timeline-body" class="feishu-timeline-body"></main><nav id="feishu-date-nav" class="feishu-date-nav" aria-label="日期目录"></nav></div><button type="button" id="feishu-latest-fab" class="feishu-latest-fab" onclick="jumpFeishuTimelineLatest()">回到最新</button>`;
+  renderFeishuTimelineToolbar();
+  updateFeishuTimelineHeader();
+  const body = $("#feishu-timeline-body");
+  if (body) body.onscroll = () => toggleFeishuLatestFab();
   renderFeishuTimelineView();
-  const baseline = String(item.downloaded_at || "");
-  _feishuTimelineTimer = setTimeout(() => checkFeishuTimelineUpdate(item.media_id, item.group_id, baseline, seq, readerSeq), 60000);
+  _feishuTimelineTimer = setTimeout(() => checkFeishuTimelineUpdate(item.media_id, item.group_id, _feishuTimelineState.baseline, seq, readerSeq), 60000);
 }
 
-function reloadFeishuTimeline(button) {
+function feishuSourcePillsHtml(sources, selectedGroup, target = "timeline") {
+  const selected = String(selectedGroup || "");
+  const items = sources.length > 1 ? [{ group_id: "", title: "全部" }, ...sources] : sources;
+  if (!items.length) return "";
+  return `<div class="tl-pills feishu-source-pills" role="radiogroup" aria-label="来源">${items.map((source) => {
+    const id = String(source.group_id || "");
+    const display = feishuSourceDisplay(source.title);
+    const on = id === selected;
+    const img = display.avatar ? `<img class="feishu-source-avatar" src="${escapeHtml(display.avatar)}" alt="">` : "";
+    return `<button type="button" class="tl-pill${on ? " selected" : ""}${img ? " has-avatar" : ""}" role="radio" aria-checked="${on}" data-group="${escapeHtml(id)}" data-source-target="${target}" aria-label="${escapeHtml(display.label)}" onclick="selectFeishuSource(this)">${img}<span>${escapeHtml(display.label)}</span></button>`;
+  }).join("")}</div>`;
+}
+
+function feishuTimelineToolbarHtml() {
+  const state = _feishuTimelineState || {};
+  const selectedGroup = state.selectedGroup || "";
+  const sources = state.data?.sources || [];
+  return `
+    ${feishuSourcePillsHtml(sources, selectedGroup)}
+    <label class="feishu-date-badge">${FEISHU_DATE_ICON}<select id="feishu-date-select" class="feishu-date-select" aria-label="跳到日期" onchange="jumpFeishuTimelineDay(this.value)"></select></label>`;
+}
+
+function renderFeishuTimelineToolbar() {
+  const host = $("#feishu-timeline-toolbar");
+  if (host && _feishuTimelineState) host.innerHTML = feishuTimelineToolbarHtml();
+}
+
+function toggleFeishuLatestFab() {
+  const host = $("#feishu-timeline-body");
+  const fab = $("#feishu-latest-fab");
+  if (!host || !fab) return;
+  fab.classList.toggle("is-visible", host.scrollTop > host.clientHeight * 1.5);
+}
+
+function jumpFeishuTimelineLatest() {
+  const host = $("#feishu-timeline-body");
+  if (!host) return;
+  host.scrollTo({ top: 0, behavior: "smooth" });
+  const fab = $("#feishu-latest-fab");
+  if (fab) fab.classList.remove("is-visible");
+}
+
+function feishuAnchorEntry(host) {
+  const hostTop = host.getBoundingClientRect().top;
+  for (const el of host.querySelectorAll("[data-entry-id]")) {
+    const rect = el.getBoundingClientRect();
+    if (rect.bottom > hostTop + 4) return { id: el.dataset.entryId, delta: Math.max(0, rect.top - hostTop) };
+  }
+  return null;
+}
+
+function feishuRestoreEntry(host, anchor, fallbackTop) {
+  if (anchor?.id) {
+    const el = host.querySelector(`[data-entry-id="${CSS.escape(anchor.id)}"]`);
+    if (el) {
+      host.scrollTop = Math.max(0, el.offsetTop - anchor.delta);
+      return;
+    }
+  }
+  host.scrollTop = fallbackTop || 0;
+}
+
+function feishuTimelineCursorFromEntry(entry) {
+  const raw = JSON.stringify({
+    timestamp: String(entry?.timestamp || ""),
+    id: String(entry?.id || ""),
+  });
+  const bytes = new TextEncoder().encode(raw);
+  let bin = "";
+  bytes.forEach((byte) => { bin += String.fromCharCode(byte); });
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function feishuTimelineUpdatePath(state) {
+  return feishuTimelineRequestPath(state);
+}
+
+async function applyFeishuTimelineUpdate(button) {
+  const current = _feishuTimelineState;
+  const host = $("#feishu-timeline-body");
   const mediaId = button?.dataset?.mediaId || "";
-  if (mediaId) renderImaDocument(routeRenderSeq, mediaId);
+  const groupId = button?.dataset?.groupId || "";
+  if (!current || !host || !mediaId || current.loading) return;
+  button.disabled = true;
+  try {
+    const metaPath = `/api/ima-documents/${encodeURIComponent(mediaId)}${groupId ? `?group=${encodeURIComponent(groupId)}` : ""}`;
+    const [fresh, meta] = await Promise.all([
+      api(feishuTimelineUpdatePath(current)),
+      api(metaPath),
+    ]);
+    if (!routeStillActive(current.seq) || current.readerSeq !== _imaReaderSeq) return;
+    const existing = new Set((current.data.entries || []).map((entry) => String(entry.id || "")));
+    const added = (fresh.entries || []).filter((entry) => String(entry.id || "") && !existing.has(String(entry.id)));
+    const anchor = feishuAnchorEntry(host);
+    const scrollTop = host.scrollTop;
+    _feishuTimelineState = {
+      ...current,
+      baseline: String(meta.downloaded_at || current.baseline || ""),
+      data: {
+        ...current.data,
+        entries: [...added, ...(current.data.entries || [])],
+      },
+    };
+    button.remove();
+    renderFeishuTimelineView();
+    feishuRestoreEntry(host, anchor, scrollTop);
+    flash(added.length ? `已载入 ${added.length} 条新内容` : "已是最新内容");
+    _feishuTimelineTimer = setTimeout(() => checkFeishuTimelineUpdate(mediaId, groupId, _feishuTimelineState.baseline, current.seq, current.readerSeq), 60000);
+  } catch (err) {
+    if (button.isConnected) button.disabled = false;
+    flash(err.message || "载入新内容失败", "error");
+  }
 }
 
 async function checkFeishuTimelineUpdate(mediaId, groupId, baseline, seq, readerSeq) {
   try {
     const item = await api(`/api/ima-documents/${encodeURIComponent(mediaId)}?group=${encodeURIComponent(groupId)}`);
     if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
-    if (String(item.downloaded_at || "") !== baseline) {
-      const toolbar = $(".feishu-timeline-toolbar");
-      if (toolbar && !$("#feishu-new-content")) toolbar.insertAdjacentHTML("afterend", `<button type="button" id="feishu-new-content" class="feishu-new-content" data-media-id="${escapeHtml(mediaId)}" onclick="reloadFeishuTimeline(this)">有新内容，点击载入</button>`);
+    const state = _feishuTimelineState;
+    const known = state && state.seq === seq && state.readerSeq === readerSeq
+      ? String(state.baseline ?? baseline)
+      : String(baseline);
+    if (String(item.downloaded_at || "") !== known) {
+      const panel = $("#ima-document-panel");
+      if (panel && !$("#feishu-new-content")) panel.insertAdjacentHTML("afterbegin", `<button type="button" id="feishu-new-content" class="feishu-new-content" data-media-id="${escapeHtml(mediaId)}" data-group-id="${escapeHtml(groupId)}" onclick="applyFeishuTimelineUpdate(this)">有新内容，点击载入</button>`);
       return;
     }
   } catch { /* 保持 last-good 阅读 */ }
   if (routeStillActive(seq) && readerSeq === _imaReaderSeq) {
     _feishuTimelineTimer = setTimeout(() => checkFeishuTimelineUpdate(mediaId, groupId, baseline, seq, readerSeq), 60000);
-  }
-}
-
-async function renderImaDocument(seq, mediaId) {
-  if (!$("#kb-reader")) {
-    await renderKnowledge(seq, encodeURIComponent(mediaId));
-    return;
-  }
-  const readerSeq = ++_imaReaderSeq;
-  clearImaPdfUrl();
-  const currentQuery = routeQuery();
-  const listGroup = currentQuery.get("group") || state.imaDocumentsGroup || "";
-  const documentGroup = currentQuery.get("doc_group") || listGroup;
-  const query = currentQuery.get("q") || state.imaDocumentsQuery || "";
-  const day = currentQuery.get("day") || state.imaDocumentsDay || "";
-  const tag = currentQuery.get("tag") || state.imaDocumentsTag || "";
-  state.imaDocumentsTag = tag;
-  const groupQuery = documentGroup ? `?group=${encodeURIComponent(documentGroup)}` : "";
-  let backRoute = imaDocumentsRoute(listGroup, query, day, tag);
-  setPageTitle("研报库");
-  $("#kb-reader").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
-  try {
-    const item = await api(`/api/ima-documents/${encodeURIComponent(mediaId)}${groupQuery}`);
-    if (!currentQuery.has("group") && !currentQuery.has("doc_group") && item.group_id) {
-      backRoute = imaDocumentsRoute(item.group_id, query, day, tag);
-    }
-    if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
-    setPageTitle(item.group_name || $("#ima-doc-title")?.textContent || "研报库");
-    const ticker = imaDocTicker(item.name);
-    const tickerMeta = ticker ? `<span class="ima-reader-meta-item">${escapeHtml(ticker)}</span>` : "";
-    const dayContext = (item.sort_date || item.day)
-      ? `<span class="ima-reader-day ima-reader-meta-item">${escapeHtml(fmtImaDay(item.sort_date || item.day))}</span>`
-      : "";
-    const abstractText = item.abstract_zh || item.abstract || "";
-    const abstractLong = abstractText.length > IMA_ABSTRACT_CLAMP_CHARS;
-    const abstractMore = abstractLong
-      ? `<button type="button" class="ima-abstract-more" aria-expanded="false" onclick="toggleImaAbstract(this)">展开</button>`
-      : "";
-    const abstractHtml = abstractText
-      ? `<details open class="ima-reader-abstract${abstractLong ? " is-clamped" : ""}"><summary>摘要</summary><p id="ima-reader-abstract">${escapeHtml(abstractText)}</p>${abstractMore}</details>`
-      : "";
-    // 快照路由校验（与 currentImaListSnapshot 同思路）：与本次应返回的列表路由不匹配的旧快照不用于导航/计数
-    const listSnapshot = _imaListSnapshot && _imaListSnapshot.route === normalizeRoute(backRoute) ? _imaListSnapshot : null;
-    const standalonePwa = isStandalonePwa();
-    const isFeishuTimeline = item.type === "feishu_timeline";
-    const openLabel = standalonePwa ? "打开 PDF" : "新标签打开 PDF";
-    const openNewTab = isFeishuTimeline && item.source_url
-      ? `<a class="icon-btn" href="${escapeHtml(item.source_url)}" target="_blank" rel="noopener" aria-label="打开飞书原文" title="打开飞书原文">${EXTERNAL_LINK_ICON}</a>`
-      : item.has_pdf
-        ? `<button type="button" class="icon-btn" aria-label="${openLabel}" title="${openLabel}" onclick="openImaPdfNewTab()">${EXTERNAL_LINK_ICON}</button>`
-        : "";
-    const documentPanel = isFeishuTimeline
-      ? `<div id="ima-document-panel" class="feishu-timeline-panel" aria-busy="true"><p class="ima-reader-status" role="status">正在载入时间线…</p></div>`
-      : item.has_pdf
-        ? `<div id="ima-pdf-panel" class="ima-pdf-panel" aria-busy="true"><p class="ima-reader-status" role="status">正在打开预览…</p>${standalonePwa
-            ? `<button id="ima-pdf-pwa-open" type="button" class="btn-normal" onclick="openImaPdfNewTab()" hidden>打开 PDF</button>`
-            : `<iframe id="ima-pdf-frame" title="PDF 预览" hidden style="position:absolute;inset:0;width:100%;height:100%;border:0"></iframe>`}</div>`
-        : `<div class="ima-pdf-panel"><div class="ima-reader-empty" role="status"><p>还没有预览文件</p></div></div>`;
-    const sizeLine = fmtDocSize(item.size);
-    const sizeMeta = sizeLine ? `<span class="ima-reader-meta-item">${escapeHtml(sizeLine)}</span>` : "";
-    const fileMetaHtml = (tickerMeta || dayContext || sizeMeta)
-      ? `<div class="ima-reader-filemeta">${tickerMeta}${dayContext}${sizeMeta}</div>`
-      : "";
-    $("#kb-reader").innerHTML = `
-      <article class="ima-reader">
-        <header class="ima-reader-toolbar">
-          <button type="button" class="ima-reader-back" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back)" aria-label="返回"><span class="ima-back-icon" aria-hidden="true">‹</span>返回</button>
-          <div class="ima-reader-actions"><button type="button" class="icon-btn" aria-label="返回搜索" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back, true)">${SEARCH_ICON}</button>${openNewTab}</div>
-        </header>
-        <section class="ima-reader-info">
-          <h2 class="ima-reader-title">${escapeHtml(imaDisplayTitle(item.name))}</h2>
-          ${fileMetaHtml}
-          ${imaReaderWatchHtml(item.tags)}
-          ${abstractHtml}
-        </section>
-        ${documentPanel}
-        ${imaReaderNavHtml(mediaId, item.group_id || documentGroup, listSnapshot)}
-      </article>`;
-    if (isFeishuTimeline) await loadFeishuTimeline(item, seq, readerSeq, item.feishu_display === "document" ? "document" : "timeline");
-    else if (item.has_pdf) loadImaPdf(mediaId, readerSeq);
-    if (item.needs_translation) {
-      try {
-        const translated = await api(`/api/ima-documents/${encodeURIComponent(mediaId)}/translate${groupQuery}`, { method: "POST" });
-        if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
-        const zh = translated && translated.abstract_zh;
-        const el = $("#ima-reader-abstract");
-        if (el && zh) el.textContent = zh;
-      } catch {
-        /* keep original abstract */
-      }
-    }
-  } catch (err) {
-    if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
-    const denied = String(err.message || "").includes("知识库不存在");
-    $("#kb-reader").innerHTML = denied
-      ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('${escapeHtml(backRoute)}')">回研报库</button></div>`)
-      : emptyState(`文档加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="go('${escapeHtml(backRoute)}')">返回文档列表</button></div>`);
-  }
-}
-
-function showImaPdfFail(mediaId, seq, readerSeq) {
-  if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
-  const panel = $("#ima-pdf-panel");
-  if (!panel) return;
-  clearImaPdfUrl();
-  panel.hidden = false;
-  panel.removeAttribute("aria-busy");
-  panel.innerHTML = `<div class="ima-reader-empty" role="status"><p>预览打不开</p></div>`;
-}
-
-async function loadImaPdf(mediaId, readerSeq) {
-  const seq = routeRenderSeq;
-  const group = imaReaderDocumentGroup();
-  const groupQuery = group ? `?group=${encodeURIComponent(group)}` : "";
-  if (_imaPdfAbort) _imaPdfAbort.abort();
-  const abort = new AbortController();
-  _imaPdfAbort = abort;
-  try {
-    const blob = await apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/pdf${groupQuery}`, { signal: abort.signal });
-    if (abort.signal.aborted) return;
-    if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
-    const head = blob.size ? await blob.slice(0, 5).text() : "";
-    if (abort.signal.aborted) return;
-    if (!routeStillActive(seq) || readerSeq !== _imaReaderSeq) return;
-    if (blob.size < 64 || head !== "%PDF-") {
-      showImaPdfFail(mediaId, seq, readerSeq);
-      return;
-    }
-    if (window._imaPdfUrl) URL.revokeObjectURL(window._imaPdfUrl);
-    window._imaPdfUrl = URL.createObjectURL(blob);
-    const frame = $("#ima-pdf-frame");
-    const panel = $("#ima-pdf-panel");
-    const pwaOpen = $("#ima-pdf-pwa-open");
-    if (panel && (frame || pwaOpen)) {
-      const status = panel.querySelector(".ima-reader-status");
-      if (status) status.remove();
-      panel.hidden = false;
-      panel.removeAttribute("aria-busy");
-      if (pwaOpen) {
-        pwaOpen.hidden = false;
-      } else if (frame) {
-        frame.src = `${window._imaPdfUrl}#view=FitH&zoom=page-width`;
-        frame.hidden = false;
-        frame.addEventListener("error", () => showImaPdfFail(mediaId, seq, readerSeq), { once: true });
-      }
-    }
-  } catch (err) {
-    if (err && err.name === "AbortError") return;
-    if (routeStillActive(seq) && readerSeq === _imaReaderSeq) {
-      const message = String(err.message || "");
-      if (message.includes("频繁") || message.includes("上限")) flash(message, "error");
-      showImaPdfFail(mediaId, seq, readerSeq);
-    }
-  }
-}
-
-function openImaPdfNewTab() {
-  if (!window._imaPdfUrl) {
-    flash("PDF 还没加载好，稍后再试", "error");
-    return;
-  }
-  if (isStandalonePwa()) {
-    window.location.assign(window._imaPdfUrl);
-    return;
-  }
-  window.open(window._imaPdfUrl, "_blank", "noopener");
-}
-
-async function downloadImaPdf(mediaId) {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  const group = imaReaderDocumentGroup();
-  const groupQuery = group ? `&group=${encodeURIComponent(group)}` : "";
-  const detailQuery = group ? `?group=${encodeURIComponent(group)}` : "";
-  try {
-    const [blob, item] = await Promise.all([
-      apiBlob(`/api/ima-documents/${encodeURIComponent(mediaId)}/pdf?download=1${groupQuery}`),
-      api(`/api/ima-documents/${encodeURIComponent(mediaId)}${detailQuery}`),
-    ]);
-    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = item.name || "ima-document.pdf";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => {
-      if (sessionOwnerStillActive(routeSeq, token, sessionGeneration)) URL.revokeObjectURL(url);
-    }, 1000);
-  } catch (err) {
-    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    flash(`PDF 下载失败：${err.message}`, "error");
   }
 }
 
@@ -2935,7 +1610,7 @@ async function renderHome(seq) {
 
 function renderPlatformTabs() {
   const tabs = $("#platform-tabs");
-  if (tabs) tabs.innerHTML = tlPlazaEntries().map(([p]) => platformTabHTML(p, state.platform, "switchPlatform")).join("");
+  if (tabs) tabs.innerHTML = tlPlazaEntries().map(([p]) => platformTabHTML(p, state.platform, "home")).join("");
 }
 
 function categoryChipsHtml() {
@@ -2981,12 +1656,12 @@ function renderHomeList() {
     : emptyState(state.catalog.length ? "没有匹配的大V" : "暂无大V，管理员可在管理后台添加");
 }
 
-function platformTabHTML(p, current, handler) {
+function platformTabHTML(p, current, target) {
   const label = p ? PLATFORM_LABELS[p] : "全部";
   const short = platformShortLabel(p);
-  return `<button class="platform-tab ${p === current ? "selected" : ""}" data-platform="${p || "all"}"
+  return `<button class="platform-tab ${p === current ? "selected" : ""}" data-platform="${p}" data-platform-target="${target}"
     title="${label}" aria-label="${label}"
-    onclick="${handler}('${p}')">${PLATFORM_ICONS[p || ""]}<span class="pt-label">${short}</span></button>`;
+    onclick="selectPlatformTab(this)">${PLATFORM_ICONS[p || ""]}<span class="pt-label">${short}</span></button>`;
 }
 
 let _homeKolsSeq = 0;
@@ -4311,7 +2986,7 @@ function railFailHtml(title, lead, err) {
       <h3 class="tl-rail-title">${escapeHtml(title)}</h3>
       <div class="tl-rail-fail">
         <p class="muted">${escapeHtml(lead)}${detail}</p>
-        <button type="button" class="btn-ghost" onclick="loadTimelineRail(routeRenderSeq)">重试</button>
+        <button type="button" class="btn-ghost" onclick="reloadTimelineRail()">重试</button>
       </div>
     </section>`;
 }
@@ -4461,7 +3136,7 @@ async function loadTimeline(reset = true, routeSeq, opts) {
     if (seq !== activeSeq || !$("#feed") || !routeStillActive(routeSeq)) return;
     if (!live && reset && opts.revert) tlRestoreFilters(opts.revert);
     $("#feed").innerHTML = emptyState("加载失败: " + err.message,
-      `<div><button class="btn-normal" onclick="loadTimeline(true, routeRenderSeq)">重试</button></div>`);
+      `<div><button class="btn-normal" onclick="reloadTimeline()">重试</button></div>`);
   } finally {
     if (reset && !live) pills?.removeAttribute("aria-busy");
     if (!reset) {
@@ -4654,7 +3329,7 @@ function renderLiveFeed() {
     : (posts.length ? `<p class="muted tl-feed-end">已加载全部</p>` : "");
   const empty = allPosts.length
     ? emptyState("没有匹配的快讯")
-    : emptyState("暂无快讯", `<div><button class="btn-normal" onclick="loadTimeline(true, routeRenderSeq)">刷新</button></div>`);
+    : emptyState("暂无快讯", `<div><button class="btn-normal" onclick="reloadTimeline()">刷新</button></div>`);
   const attr = posts.length
     ? html + footer + `<p class="live-attribution muted">数据来源：<a href="https://wallstreetcn.com/live/global" target="_blank" rel="noopener">华尔街见闻 · 快讯</a></p>`
     : empty;
@@ -4908,7 +3583,7 @@ function postCard(post) {
       ${images.length ? `
         <div class="post-images">
           ${images.slice(0, 4).map((img) => `
-            <a class="post-img-link" href="#" onclick="event.preventDefault();openLightbox(this.querySelector('img'))" aria-label="查看${escapeHtml(post.kol_name)}的配图"><img src="${escapeHtml(img)}" loading="lazy" alt="${escapeHtml(post.kol_name)} 的配图" onerror="imgOnError(this)"></a>`).join("")}
+            <a class="post-img-link" href="#" onclick="event.preventDefault();openLightbox(this.querySelector('img'))" aria-label="查看${escapeHtml(post.kol_name)}的配图"><img src="${escapeHtml(imgSrcFor(img))}" loading="lazy" alt="${escapeHtml(post.kol_name)} 的配图" onerror="imgOnError(this)"></a>`).join("")}
           ${images.length > 4 ? `<span class="post-images-more">+${images.length - 4}</span>` : ""}
         </div>` : ""}
       ${postFiles(post).map((f) => {
@@ -5172,8 +3847,8 @@ async function renderSearch(seq) {
     <section class="section-panel">
       <div class="search-bar" style="margin-bottom:16px">
         ${SEARCH_ICON}
-        <input id="search-input" placeholder="输入昵称或 ID，回车搜索" value="${escapeHtml(query)}" onkeydown="if(event.key==='Enter')doSearch(routeRenderSeq)">
-        <button class="btn-ghost" onclick="doSearch(routeRenderSeq)">搜索</button>
+        <input id="search-input" placeholder="输入昵称或 ID，回车搜索" value="${escapeHtml(query)}" onkeydown="if(event.key==='Enter')runSearch()">
+        <button class="btn-ghost" onclick="runSearch()">搜索</button>
       </div>
       <div id="search-result" class="kol-grid">${emptyState("加载中…")}</div>
     </section>`;
@@ -5219,7 +3894,6 @@ async function renderSearch(seq) {
   await doSearch(seq);
   if (!query && routeStillActive(seq)) $("#search-input")?.focus();
 }
-
 
 
 function detectAskPlatform(link) {
@@ -5507,708 +4181,6 @@ async function toggleKolPageSubscribe(kolId) {
   await toggleSubscribe(kolId, $("#kol-sub-btn"));
 }
 
-// ---------- 推送设置 ----------
-let settingsPollTimer = null;
-let _pushStatusHtml = "";
-const SETTINGS_TABS = ["push", "bind", "llm", "account"];
-let _kolImageSubscriptions = [];
-const _kolImagePendingIds = new Set();
-let _kolImageLoadGeneration = 0;
-let _kolImageDataRevision = 0;
-let _kolImageReloadNeeded = false;
-
-function stopSettingsPoll() {
-  if (settingsPollTimer) {
-    clearInterval(settingsPollTimer);
-    settingsPollTimer = null;
-  }
-}
-
-function startSettingsPoll() {
-  stopSettingsPoll();
-  settingsPollTimer = setInterval(refreshSettingsStatus, 10000);
-}
-
-function pendingBindActive() {
-  return !!(pendingBind && Date.now() < pendingBind.expiresAt);
-}
-
-function settingsTargetBound(user) {
-  return !!(user && (user.telegram_chat_id || feishuChannelBound(user)));
-}
-
-async function reloadSettings(routeSeq) {
-  if (!routeStillActive(routeSeq)) return;
-  stopSettingsPoll();
-  await renderSettings(routeSeq);
-}
-
-function feishuChannelBound(user) {
-  return !!(user.feishu_open_id || user.feishu_chat_id || user.feishu_personal?.status === "active");
-}
-
-function channelStatusHtml(user) {
-  const tg = user.telegram_chat_id;
-  const tgCustom = user.custom_telegram_bot;
-  const fsOpen = user.feishu_open_id;
-  const fsChat = user.feishu_chat_id;
-  const fsPersonal = user.feishu_personal || {};
-  const fsPersonalActive = fsPersonal.status === "active";
-  const wc = user.wecom_webhook;
-  const bk = user.bark_key;
-  const wp = !!user.webpush_bound;
-  const wpCount = user.webpush_count || 0;
-  const wpOk = webPushSupported();
-  const fsOk = !!(fsOpen && fsChat);
-  const statusPill = (cls, text) => `<span class="channel-status ${cls}"><i class="dot"></i>${text}</span>`;
-  return `
-    <div class="channel-grid">
-      <div class="channel-card" data-channel="telegram">
-        <div class="channel-head">
-          <span class="channel-title">${CHANNEL_ICONS.telegram}<b>Telegram${tgCustom ? ' <span class="tag">自建</span>' : ""}</b></span>
-          ${statusPill(tg ? "status-ok" : "status-fail", tg ? "已绑定" : "未绑定")}
-        </div>
-        <p class="muted channel-desc">${tg ? (tgCustom ? "使用你自己的机器人推送" : "官方机器人推送已启用") : "按下方步骤操作"}</p>
-        <div class="channel-actions">
-          ${tg ? "" : `<div id="bind-result-telegram"></div>`}
-          ${tg
-      ? `<button class="channel-btn secondary" onclick="unbindChannel('${tgCustom ? "telegram_bot_token" : "telegram_chat_id"}')">解绑</button>`
-      : `<button class="channel-btn primary" onclick="openBindGuide('custom-bots-bind')">去绑定</button>`}
-        </div>
-      </div>
-      <div class="channel-card" data-channel="feishu">
-        <div class="channel-head">
-          <span class="channel-title">${CHANNEL_ICONS.feishu}<b>飞书${fsPersonalActive ? ' <span class="tag">个人</span>' : (fsOk ? ' <span class="tag">共享</span>' : "")}</b></span>
-          ${fsPersonalActive ? statusPill("status-ok", "已绑定")
-      : fsOk ? statusPill("status-ok", "已绑定")
-        : fsPersonal?.status === "degraded" || fsPersonal?.status === "disabled"
-          ? statusPill("status-warn", fsPersonal.status === "degraded" ? "已降级" : "已停用")
-          : fsOpen ? statusPill("status-warn", "未完成")
-            : statusPill("status-fail", "未绑定")}
-        </div>
-        <p class="muted channel-desc">
-          ${fsPersonalActive ? `个人机器人推送已启用（免共享限频）${fsPersonal.app_id_masked ? " · " + escapeHtml(fsPersonal.app_id_masked) : ""}`
-      : fsOk ? "共享机器人推送（不推荐，受限频影响）；建议升级个人机器人"
-        : (fsOpen ? "已关联账号，请先在飞书私聊机器人发一条消息"
-          : "推荐个人机器人：扫码自动创建，免共享限频")}
-        </p>
-        <div class="channel-actions">
-          ${fsOpen || fsPersonalActive ? "" : `<div id="bind-result-feishu"></div>`}
-          ${fsPersonalActive
-      ? `<button class="channel-btn secondary" onclick="unbindChannel('feishu_personal')">解绑</button>`
-      : fsOpen
-        ? `<button class="channel-btn secondary" onclick="unbindChannel('feishu')">解绑</button>`
-        : `<button class="channel-btn primary" onclick="openBindGuide('custom-bots-bind')">去绑定</button>`}
-        </div>
-      </div>
-      <div class="channel-card" data-channel="wecom">
-        <div class="channel-head">
-          <span class="channel-title">${CHANNEL_ICONS.wecom}<b>企业微信</b></span>
-          ${wc ? statusPill("status-ok", "已绑定") : statusPill("status-fail", "未绑定")}
-        </div>
-        <p class="muted channel-desc">${wc ? "群机器人推送已启用" : "在企业微信群添加群机器人，把 webhook 粘贴到下方输入框即可"}</p>
-        <div class="channel-actions">
-          ${wc
-      ? `<button class="channel-btn secondary" onclick="unbindChannel('wecom')">解绑</button>`
-      : `<button class="channel-btn primary" onclick="openBindGuide('wecom-bind')">去绑定</button>`}
-        </div>
-      </div>
-      <div class="channel-card" data-channel="bark">
-        <div class="channel-head">
-          <span class="channel-title">${CHANNEL_ICONS.bark}<b>Bark</b></span>
-          ${bk ? statusPill("status-ok", "已绑定") : statusPill("status-fail", "未绑定")}
-        </div>
-        <p class="muted channel-desc">${bk ? "iOS 推送已启用" : "iPhone 装 Bark App，把推送 key 粘贴到下方输入框即可"}</p>
-        <div class="channel-actions">
-          ${bk
-      ? `<button class="channel-btn secondary" onclick="unbindChannel('bark')">解绑</button>`
-      : `<button class="channel-btn primary" onclick="openBindGuide('bark-bind')">去绑定</button>`}
-        </div>
-      </div>
-      <div class="channel-card" data-channel="webpush">
-        <div class="channel-head">
-          <span class="channel-title">${CHANNEL_ICONS.webpush}<b>浏览器通知</b></span>
-          ${!wpOk
-      ? statusPill("status-fail", "当前环境不可用")
-      : wp ? statusPill("status-ok", wpCount > 1 ? `已开启 · ${wpCount} 台设备` : "已开启")
-        : statusPill("status-fail", "未开启")}
-        </div>
-        <p class="muted channel-desc">${!wpOk
-      ? "请用 Chrome 或 Edge，并打开 HTTPS（本机 localhost 也可以）"
-      : wp
-        ? "Chrome / Edge 系统通知已启用，关掉标签页也能收到"
-        : "在本页一键开启；Chrome / Edge 关掉标签页也能弹系统通知（需 HTTPS）"}</p>
-        <div class="channel-actions">
-          ${!wpOk
-      ? `<button type="button" class="channel-btn primary" disabled>开启</button>`
-      : wp
-        ? `<button type="button" class="channel-btn primary" onclick="enableWebPush()">在此浏览器开启</button>
-                 <button type="button" class="channel-btn secondary" onclick="disableWebPush()">关闭</button>`
-        : `<button type="button" class="channel-btn primary" onclick="enableWebPush()">开启</button>`}
-        </div>
-      </div>
-    </div>`;
-}
-
-function paintPushStatus(user) {
-  const el = $("#push-status");
-  if (!el) return;
-  const html = channelStatusHtml(user);
-  if (html === _pushStatusHtml) return;
-  const active = document.activeElement;
-  let restore = null;
-  if (active && el.contains(active)) {
-    const card = active.closest("[data-channel]");
-    restore = {
-      channel: card && card.dataset.channel,
-      text: (active.textContent || "").trim(),
-      tag: active.tagName,
-    };
-  }
-  el.innerHTML = html;
-  _pushStatusHtml = html;
-  if (!restore) return;
-  const card = restore.channel ? el.querySelector(`[data-channel="${restore.channel}"]`) : el;
-  if (!card) return;
-  const nodes = [...card.querySelectorAll(restore.tag)];
-  const match = nodes.find((n) => (n.textContent || "").trim() === restore.text) || nodes[0];
-  if (match && typeof match.focus === "function") match.focus();
-}
-
-async function refreshSettingsStatus() {
-  const seq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  try {
-    const user = await api("/api/me");
-    if (!routeStillActive(seq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    state.user = user;
-    const el = $("#push-status");
-    if (!el) {
-      stopSettingsPoll();
-      return;
-    }
-    paintPushStatus(user);
-    // 状态轮询会重绘卡片，把未过期的绑定码重新显示，避免刚生成的码被刷掉
-    if (pendingBind && Date.now() < pendingBind.expiresAt) {
-      renderBindResult(pendingBind.channel, pendingBind.code);
-    } else if (pendingBind) {
-      pendingBind = null;
-    }
-    if (!pendingBindActive() || settingsTargetBound(user)) stopSettingsPoll();
-  } catch {
-    /* 轮询失败忽略 */
-  }
-}
-
-async function renderSettings(seq) {
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  setPageTitle("设置");
-  try {
-    const user = await api("/api/me");
-    if (!routeStillActive(seq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    state.user = user;
-    stopSettingsPoll();
-    const guide = state.user.push_guide || {};
-    const tgBot = guide.telegram_bot_username || "";
-    const fsBot = guide.feishu_bot_name || "";
-    const tgTarget = tgBot
-      ? `<a href="https://t.me/${encodeURIComponent(tgBot)}" target="_blank" rel="noopener">@${escapeHtml(tgBot)}</a>`
-      : "你的机器人";
-    const fsTarget = fsBot ? `<b>${escapeHtml(fsBot)}</b>` : "你的机器人应用名";
-    $("#main").innerHTML = `
-      <div class="settings-tabs" role="tablist" aria-label="设置分页">
-        <button type="button" class="settings-tab active" role="tab" id="tab-push" aria-selected="true" aria-controls="st-push" data-tab="push" onclick="switchSettingsTab('push')">推送设置</button>
-        <button type="button" class="settings-tab" role="tab" id="tab-bind" aria-selected="false" aria-controls="st-bind" data-tab="bind" onclick="switchSettingsTab('bind')">渠道绑定</button>
-        <button type="button" class="settings-tab" role="tab" id="tab-llm" aria-selected="false" aria-controls="st-llm" data-tab="llm" onclick="switchSettingsTab('llm')">AI 摘要</button>
-        <button type="button" class="settings-tab" role="tab" id="tab-account" aria-selected="false" aria-controls="st-account" data-tab="account" onclick="switchSettingsTab('account')">账号设置</button>
-      </div>
-      <div id="st-push" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-push">
-      <section class="section-panel">
-        <header class="section-head">
-          <div>
-            <h2 class="section-title">推送开关</h2>
-            <p class="section-meta">总开关与每日精选摘要。</p>
-          </div>
-        </header>
-        <div class="form-row">
-          <label for="set-notify">新帖推送开关</label>
-          <select id="set-notify" class="form-control" onchange="saveNotify()">
-            <option value="1" ${state.user.notify_enabled ? "selected" : ""}>开启</option>
-            <option value="0" ${!state.user.notify_enabled ? "selected" : ""}>关闭</option>
-          </select>
-        </div>
-        <p class="muted">关闭后不会向任何渠道推送新帖，订阅关系保留。</p>
-        <div class="form-row" style="margin-top:16px">
-          <label for="set-daily">每日精选摘要</label>
-          <select id="set-daily" class="form-control" onchange="saveDailyReport()">
-            <option value="1" ${state.user.daily_report_enabled ? "selected" : ""}>开启（每天 20:00 推一次 AI 每日精选）</option>
-            <option value="0" ${!state.user.daily_report_enabled ? "selected" : ""}>关闭</option>
-          </select>
-        </div>
-        <p class="muted">开启后，每天 20:00 把你订阅大V当天的新动态汇总成一条推送。</p>
-        <div class="form-row" style="margin-top:16px">
-          <label for="set-x-translate">X 帖文</label>
-          <select id="set-x-translate" class="form-control" onchange="saveTranslateTwitter()">
-            <option value="1" ${state.user.translate_twitter !== false ? "selected" : ""}>翻译成中文</option>
-            <option value="0" ${state.user.translate_twitter === false ? "selected" : ""}>保留原文</option>
-          </select>
-        </div>
-        <p class="muted">只影响你的时间线和推送。管理员需开启「X 内容自动翻译」后，新抓的帖才会同时留下原文。</p>
-      </section>
-      <section class="section-panel">
-        <header class="section-head">
-          <div>
-            <h2 class="section-title">免打扰时段</h2>
-            <p class="section-meta">时段内不推送新帖（支持跨午夜），结束后一次性补一条汇总；系统告警不受影响。特别关注可设为穿透免打扰。</p>
-          </div>
-        </header>
-        <div class="dnd-form">
-          <label class="switch">
-            <input id="dnd-enabled" type="checkbox" ${state.user.dnd_start ? "checked" : ""} onchange="toggleDnd()">
-            <span class="track"></span>
-            <span>开启免打扰</span>
-          </label>
-          <div class="dnd-range-field" id="dnd-range-field">
-            <span class="dnd-range-label">免打扰时段</span>
-            <div class="dnd-range">
-              <input id="dnd-start" type="time" class="form-control" value="${escapeHtml(state.user.dnd_start || "23:00")}">
-              <span class="dnd-sep">至</span>
-              <input id="dnd-end" type="time" class="form-control" value="${escapeHtml(state.user.dnd_end || "07:00")}">
-            </div>
-          </div>
-          <label class="switch">
-            <input id="dnd-fav" type="checkbox" ${state.user.dnd_allow_favorite ? "checked" : ""}>
-            <span class="track"></span>
-            <span>特别关注可穿透免打扰</span>
-          </label>
-          <div class="dnd-actions">
-            <button class="btn-normal" onclick="saveDnd()">保存</button>
-          </div>
-        </div>
-      </section>
-      <section class="section-panel">
-        <header class="section-head">
-          <div>
-            <h2 class="section-title">关键词提醒</h2>
-            <p class="section-meta">每行一个，最多 20 个，每个不超过 50 字。动态命中会加标记并实时推送（穿透免打扰）；研报命中在每日更新后合并成一条，不穿透免打扰。</p>
-          </div>
-        </header>
-        <div class="form-row">
-          <label for="set-keywords">关键词（每行一个）</label>
-          <textarea id="set-keywords" class="form-control" rows="4"
-            placeholder="ETF&#10;降息&#10;中概股">${escapeHtml((state.user.keywords || []).join("\n"))}</textarea>
-        </div>
-        <label class="switch kw-report-switch">
-          <input id="set-kw-reports" type="checkbox" ${state.user.keywords_match_reports ? "checked" : ""} onchange="saveKeywordsMatchReports()">
-          <span class="track"></span>
-          <span>匹配研报库</span>
-        </label>
-        <div class="toolbar" style="margin-top:10px">
-          <button class="btn-normal" onclick="saveKeywords()">保存关键词</button>
-        </div>
-        <p class="muted">动态命中即实时送达。开启「匹配研报库」后，每日研报入库结束会把命中篇目合成一条推送；需要管理员已授权对应研报库。</p>
-      </section>
-      <section class="section-panel">
-        <header class="section-head">
-          <div>
-            <h2 class="section-title">动态图片</h2>
-            <p class="section-meta">关闭某位大V的图片显示后，该大V的动态图片会从网页和推送中隐藏；头像仍会显示。仅影响当前账号。</p>
-          </div>
-        </header>
-        <div id="kol-images-settings" class="muted kol-images-state" role="status">正在加载已订阅大V…</div>
-      </section>
-      </div>
-      <div id="st-bind" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-bind">
-      <section class="section-panel">
-        <header class="section-head">
-          <div>
-            <h2 class="section-title">推送渠道</h2>
-            <p class="section-meta">绑定状态每 10 秒自动刷新；绑定了多个渠道时，可在下方勾选要接收推送的渠道（不选则全部推送）。</p>
-          </div>
-        </header>
-        <div id="push-status">${channelStatusHtml(state.user)}</div>
-        <div class="channel-picks" id="push-channels-box" style="margin-top:18px;padding-top:18px;border-top:var(--border-default)">${pushChannelsHtml(state.user)}</div>
-        ${(state.user.telegram_chat_id || feishuChannelBound(state.user) || state.user.wecom_webhook || state.user.bark_key || state.user.webpush_bound)
-        ? `<div class="toolbar" style="margin-top:14px">
-               <button class="btn-normal" onclick="savePushChannels()">保存推送通道</button>
-             </div>` : ""}
-      </section>
-      <section class="section-panel">
-        <header class="section-head">
-          <div>
-            <h2 class="section-title">渠道绑定</h2>
-            <p class="section-meta">按序绑定想用的推送渠道，每个渠道的步骤可展开；绑定状态在「推送渠道状态」卡片查看。</p>
-          </div>
-        </header>
-        <div class="channel-bind-block" id="custom-bots-bind">
-          <h4 class="section-title">自建机器人（推荐，免共享限频）</h4>
-          <p class="section-meta">共享机器人所有用户共用一个应用配额；自建/个人机器人是<b>属于你自己的机器人应用</b>，推送配额独立、不受共享应用限制。Telegram 自建约 1 分钟，飞书个人扫码自动创建。</p>
-          <div class="channel-bind-block" style="padding-top:8px">
-            <h4 class="section-title">Telegram 自建机器人</h4>
-            <ol style="padding-left:20px;line-height:2">
-              <li>打开 Telegram 搜索 <b>@BotFather</b>，发 <code>/newbot</code> 创建机器人，拿到 token</li>
-              <li>给你的新机器人发任意消息（如 <code>/start</code>）</li>
-              <li>把 token 粘贴到下方点「保存」，系统自动识别你的会话，无需手动填 ID</li>
-            </ol>
-            <div class="row" style="gap:8px;margin-top:10px">
-              <input id="set-custom-tg" class="form-control" style="flex:1;min-width:220px" type="password" placeholder="123456:ABC-DEF...">
-              <button class="btn-normal" onclick="saveCustomTgBot()">保存</button>
-            </div>
-          </div>
-          <div class="channel-bind-block" style="padding-top:8px">
-            <h4 class="section-title">飞书个人机器人（扫码自动创建）</h4>
-            <div id="fs-personal-block">${feishuPersonalHtml(state.user.feishu_personal)}</div>
-          </div>
-        </div>
-        <div class="channel-bind-block" id="telegram-bind">
-          <h4 class="section-title">1. Telegram 机器人</h4>
-          ${bindGuideHtml(!!state.user.telegram_chat_id, `
-        <ol style="padding-left:20px;line-height:2">
-          <li>打开 Telegram，搜索并进入 ${tgTarget}（找不到就点上方链接）。</li>
-          <li>点击「开始」或发送任意消息（如 <code>/start</code>），系统自动记录你的会话。</li>
-          <li>回到本页，状态几秒内自动变成「已绑定 ✅」。</li>
-          <li>发 <code>/list</code> 可查看大V目录，<code>/sub 大VID</code> 直接订阅。</li>
-        </ol>`)}
-        </div>
-        <div class="channel-bind-block" id="feishu-bind">
-          <h4 class="section-title">2. 飞书机器人 · 共享备选</h4>
-          <p class="section-meta">不推荐：所有用户共用一个应用，推送配额共享，人多可能被限频。仅作为没有个人机器人时的临时备选，建议优先用上方「自建机器人」里的个人机器人。</p>
-          ${bindGuideHtml(!!(state.user.feishu_open_id && state.user.feishu_chat_id), `
-        <ol style="padding-left:20px;line-height:2">
-          <li>打开飞书 App，点顶部「搜索」，搜索 ${fsTarget} 并进入。</li>
-          <li>关键：请在该机器人的<b>「私聊」会话</b>里发任意消息（如 <code>/start</code>）——群聊不会推送新帖，这一步只是建立会话。</li>
-          <li>回到本页，在下方「与网页/小程序账号同步」里点「生成绑定码」，把 <code>/bind 6位码</code> 发给机器人。</li>
-          <li>发送后本页状态会变成「已绑定 ✅」，网页订阅与飞书推送自动同步。</li>
-          <li>发 <code>/list</code> 可查看大V目录，点卡片上的按钮即可订阅。</li>
-        </ol>`)}
-        </div>
-        <div class="channel-bind-block" id="wecom-bind">
-          <h4 class="section-title">3. 企业微信群机器人</h4>
-          <p class="section-meta">无需申请应用；在企业微信任意群里添加「群机器人」即可，推送会发到这个群。</p>
-          ${bindGuideHtml(!!state.user.wecom_webhook, `
-        <ol style="padding-left:20px;line-height:2">
-          <li>打开企业微信，进入一个群（没有就新建一个，例如「大V推送」）。</li>
-          <li>点右上角 <code>...</code> → 「群机器人」→「添加机器人」，按提示创建并起名。</li>
-          <li>创建完成后复制 webhook 地址（<code>https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...</code>）。</li>
-          <li>粘贴到下方输入框，点「保存绑定」，状态即变为「已绑定 ✅」。</li>
-        </ol>`)}
-          <div class="form-row" style="margin-top:14px">
-            <label for="set-wecom-webhook">群机器人 webhook 地址</label>
-            <div class="row" style="gap:10px;flex-wrap:wrap">
-              <input id="set-wecom-webhook" class="form-control" style="flex:1;min-width:280px"
-                type="text" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
-                value="${escapeHtml(state.user.wecom_webhook || "")}">
-              <button class="btn-normal" onclick="saveWecomWebhook()">保存绑定</button>
-            </div>
-          </div>
-          <p class="muted">⚠️ webhook 等同群管理权限，请勿泄露给他人；不同用户应使用各自的群机器人。</p>
-        </div>
-        <div class="channel-bind-block" id="bark-bind">
-          <h4 class="section-title">4. Bark（iPhone 推送）</h4>
-          <p class="section-meta">iOS 自托管用户神器：Bark App 免登录、免费、推送直达锁屏，无需申请任何开发者资质。</p>
-          ${bindGuideHtml(!!state.user.bark_key, `
-        <ol style="padding-left:20px;line-height:2">
-          <li>iPhone 在 App Store 搜索「Bark」安装，打开后主屏会显示你的推送 key（形如 <code>AaBbCcDdEe...</code>）。</li>
-          <li>把这个 key 粘贴到下方输入框，点「保存绑定」即可。</li>
-          <li>想用自建 Bark 服务器？直接把服务器里的完整地址（<code>https://bark.example.com/xxx</code>）粘贴进来也行。</li>
-        </ol>`)}
-          <div class="form-row" style="margin-top:14px">
-            <label for="set-bark-key">Bark 推送 key 或完整地址</label>
-            <div class="row" style="gap:10px;flex-wrap:wrap">
-              <input id="set-bark-key" class="form-control" style="flex:1;min-width:280px"
-                type="text" placeholder="AaBbCcDdEeFf...（Bark App 里的 key）"
-                value="${escapeHtml(state.user.bark_key || "")}">
-              <button class="btn-normal" onclick="saveBarkKey()">保存绑定</button>
-            </div>
-          </div>
-          <p class="muted">🔔 key 等同推送权限，请勿泄露；系统告警不依赖此 key（管理员另配系统级 Bark）。</p>
-        </div>
-        <div class="channel-bind-block" id="webpush-bind">
-          <h4 class="section-title">5. 浏览器通知（Chrome / Edge）</h4>
-          <p class="section-meta">网页系统通知：在「推送渠道」卡片点「开启」授权即可。关掉标签页也能收到；需 HTTPS。可在多台 Chrome / Edge 分别点「在此浏览器开启」。点「关闭」会关掉该功能（所有已开启的浏览器都不再弹）。</p>
-        </div>
-      </section>
-      </div>
-      <div id="st-llm" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-llm">
-      <section class="section-panel">
-        <header class="section-head">
-          <div>
-            <h2 class="section-title">AI 摘要（可选，用你的大模型）</h2>
-            <p class="section-meta">任意 OpenAI 兼容接口（/chat/completions 与 /models）。DeepSeek、Grok、OpenAI、本地网关均可。不填则用站点默认模型。</p>
-          </div>
-        </header>
-        <div class="form-row">
-          <label for="set-llm-base">API 地址（Base URL）</label>
-          <input id="set-llm-base" class="form-control" type="text"
-            placeholder="https://api.openai.com/v1"
-            value="${escapeHtml(state.user.llm_api_base || "")}">
-          <p class="muted" style="margin-top:4px">OpenAI 兼容的 http(s) Base URL，内网和本机也可以。留空跟站点同一套。</p>
-        </div>
-        <div class="form-row">
-          <label for="set-llm-key">API Key</label>
-          <input id="set-llm-key" class="form-control" type="password"
-            placeholder="sk-...（清空并保存 = 用站点默认）"
-            value="${escapeHtml(state.user.llm_api_key || "")}" autocomplete="off">
-        </div>
-        <div class="form-row">
-          <label for="set-llm-model">模型</label>
-          <div class="row" style="gap:10px;flex-wrap:wrap">
-            <input id="set-llm-model" class="form-control" type="text" list="set-llm-model-list"
-              placeholder="保存地址和 Key 后可拉取列表，也可手填"
-              value="${escapeHtml(state.user.llm_model || "")}" style="flex:1;min-width:220px">
-            <datalist id="set-llm-model-list"></datalist>
-            <button type="button" class="btn-ghost" onclick="loadLlmModels()">拉取模型列表</button>
-          </div>
-          <p class="muted" style="margin-top:4px">列表来自该接口的 <code>/models</code>；没有列表的网关仍可手填模型名。</p>
-        </div>
-        <div class="toolbar" style="margin-top:10px">
-          <button class="btn-normal" onclick="saveLlm()">保存</button>
-        </div>
-        <p class="muted">🔒 自己的 Key 只对当前账号生效，费用由你的 API 账号承担；生成失败会自动回退为普通摘要，不影响推送。</p>
-      </section>
-      </div>
-      <div id="st-account" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-account">
-      <section class="section-panel">
-        <header class="section-head">
-          <div>
-            <h2 class="section-title">修改密码</h2>
-            <p class="section-meta">定期更换密码，保护你的账号安全。</p>
-          </div>
-        </header>
-        <div class="form-row">
-          <label for="pw-old">原密码</label>
-          <input id="pw-old" class="form-control" type="password" placeholder="输入当前密码" autocomplete="current-password">
-        </div>
-        <div class="form-row">
-          <label for="pw-new">新密码</label>
-          <input id="pw-new" class="form-control" type="password" placeholder="至少 6 位" autocomplete="new-password">
-        </div>
-        <div class="form-row">
-          <label for="pw-confirm">确认新密码</label>
-          <input id="pw-confirm" class="form-control" type="password" placeholder="再次输入新密码" autocomplete="new-password">
-        </div>
-        <button class="btn-normal" onclick="savePassword()">修改密码</button>
-      </section>
-      <section class="section-panel">
-        <header class="section-head">
-          <div>
-            <h2 class="section-title">与网页/小程序账号同步（可选）</h2>
-            <p class="section-meta">机器人是独立账号；想让机器人订阅与网页账号合并，用绑定码。</p>
-          </div>
-        </header>
-        <details class="bind-steps">
-          <summary>展开查看同步步骤</summary>
-        <ol style="padding-left:20px;line-height:2">
-          <li>点下方「生成绑定码」。</li>
-          <li>把 <code>/bind 6位码</code> 发给 Telegram / 飞书机器人（企业微信群机器人是单向 webhook，不支持指令）。</li>
-          <li>绑定后机器人账号合并到当前账号，订阅与推送同步，一处订阅处处同步。</li>
-        </ol>
-        </details>
-        <div class="row">
-          <button class="btn-ghost" onclick="genBindCode()">生成绑定码</button>
-        </div>
-        <div id="bind-result" class="muted" style="margin-top:14px"></div>
-      </section>
-      </div>`;
-    _pushStatusHtml = channelStatusHtml(state.user);
-    if (pendingBindActive() && !settingsTargetBound(state.user)) startSettingsPoll();
-    switchSettingsTab(state.settingsTab || "push"); // 恢复上次所在分栏
-    toggleDnd(); // 根据开关初始状态同步时段输入框的禁用/置灰
-    loadKolImageSettings(seq);
-  } catch (err) {
-    if (!routeStillActive(seq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    $("#main").innerHTML = emptyState(err.message);
-  }
-}
-
-function reloadKolImageSettingsIfNeeded() {
-  if (!_kolImageReloadNeeded || _kolImagePendingIds.size) return;
-  if (!isRoute("settings")) return;
-  _kolImageReloadNeeded = false;
-  loadKolImageSettings(routeRenderSeq);
-}
-
-async function loadKolImageSettings(seq) {
-  const target = $("#kol-images-settings");
-  if (!target) return;
-  const loadGeneration = ++_kolImageLoadGeneration;
-  const loadRevision = _kolImageDataRevision;
-  target.className = "muted kol-images-state";
-  target.setAttribute("role", "status");
-  target.textContent = "正在加载已订阅大V…";
-  try {
-    const subscriptions = await api("/api/my/subscriptions");
-    if (loadGeneration !== _kolImageLoadGeneration || !routeStillActive(seq)) return;
-    if (loadRevision !== _kolImageDataRevision || _kolImagePendingIds.size) {
-      _kolImageReloadNeeded = true;
-      reloadKolImageSettingsIfNeeded();
-      return;
-    }
-    _kolImageReloadNeeded = false;
-    _kolImageSubscriptions = subscriptions;
-    renderKolImageSettings();
-  } catch (err) {
-    if (loadGeneration !== _kolImageLoadGeneration || !routeStillActive(seq)) return;
-    if (loadRevision !== _kolImageDataRevision || _kolImagePendingIds.size) {
-      _kolImageReloadNeeded = true;
-      reloadKolImageSettingsIfNeeded();
-      return;
-    }
-    _kolImageReloadNeeded = false;
-    const current = $("#kol-images-settings");
-    if (!current) return;
-    current.className = "kol-images-local-state";
-    current.setAttribute("role", "alert");
-    current.innerHTML = `
-      <p class="muted">加载失败: ${escapeHtml(err.message)}</p>
-      <button type="button" class="btn-ghost" onclick="loadKolImageSettings(routeRenderSeq)">重试</button>`;
-  }
-}
-
-function renderKolImageSettings() {
-  const target = $("#kol-images-settings");
-  if (!target) return;
-  target.className = "";
-  target.removeAttribute("role");
-  if (!_kolImageSubscriptions.length) {
-    target.innerHTML = emptyState(
-      "还没有订阅大V",
-      `<div><button type="button" class="btn-normal btn-add" onclick="go('home')">去订阅广场</button></div>`
-    );
-    return;
-  }
-  const search = _kolImageSubscriptions.length >= 12
-    ? `<div class="search-bar kol-images-search">
-         ${SEARCH_ICON}
-         <input id="kol-images-search" type="search" aria-label="搜索已订阅大V"
-           placeholder="搜索已订阅大V" oninput="filterKolImageSettings()">
-       </div>`
-    : "";
-  target.innerHTML = `${search}<div id="kol-images-list" class="kol-images-list" role="region" aria-label="已订阅大V的动态图片"></div><p id="kol-images-more" class="section-meta" hidden></p>`;
-  filterKolImageSettings();
-}
-
-function filterKolImageSettings() {
-  const list = $("#kol-images-list");
-  if (!list) return;
-  const query = ($("#kol-images-search")?.value || "").trim().toLowerCase();
-  const filtered = query
-    ? _kolImageSubscriptions.filter((kol) => {
-      const platform = PLATFORM_LABELS[kol.platform] || kol.platform || "";
-      return [kol.name, kol.external_id, platform]
-        .some((value) => String(value || "").toLowerCase().includes(query));
-    })
-    : _kolImageSubscriptions;
-  list.innerHTML = filtered.length
-    ? filtered.map(kolImageSettingsRowHtml).join("")
-    : emptyState("没有匹配的已订阅大V");
-  const more = $("#kol-images-more");
-  if (more) {
-    const extra = Math.max(0, filtered.length - 5);
-    more.hidden = extra === 0;
-    more.textContent = extra ? `还有 ${extra} 位` : "";
-  }
-}
-
-function kolImageSettingsRowHtml(kol) {
-  const platform = PLATFORM_LABELS[kol.platform] || kol.platform || "";
-  return `
-    <div class="kol-images-row">
-      ${avatarHtml(kol.name, kol.avatar_url)}
-      <div class="kol-images-info">
-        <span class="kol-images-name" title="${escapeHtml(kol.name)}">${escapeHtml(kol.name)}</span>
-        <span class="kol-images-platform">${escapeHtml(platform)}</span>
-      </div>
-      <label class="switch kol-images-switch">
-        <input type="checkbox" ${!kol.hide_images ? "checked" : ""}
-          ${_kolImagePendingIds.has(kol.id) ? "disabled" : ""}
-          data-kol-id="${kol.id}"
-          aria-label="显示${escapeHtml(kol.name)}（${escapeHtml(platform)}）的动态图片"
-          onchange="toggleKolImages(${kol.id}, this)">
-        <span class="track"></span>
-        <span>显示</span>
-      </label>
-    </div>`;
-}
-
-async function toggleKolImages(kolId, input) {
-  if (!input || input.disabled || _kolImagePendingIds.has(kolId)) return;
-  const kol = _kolImageSubscriptions.find((item) => item.id === kolId);
-  if (!kol) return;
-  const seq = routeRenderSeq;
-  const show = input.checked;
-  const previousHideImages = kol.hide_images;
-  const restoreFocus = document.activeElement === input && input.matches(":focus-visible");
-  _kolImageDataRevision += 1;
-  _kolImagePendingIds.add(kolId);
-  kol.hide_images = !show;
-  input.disabled = true;
-  try {
-    await api(`/api/subscriptions/${kolId}/hide-images`, {
-      method: "PUT",
-      body: JSON.stringify({ hide_images: !show }),
-    });
-    if (!routeStillActive(seq)) return;
-    flash(`${show ? "已显示" : "已隐藏"}「${kol ? kol.name : "该大V"}」的动态图片`);
-  } catch (err) {
-    kol.hide_images = previousHideImages;
-    if (!routeStillActive(seq)) return;
-    input.checked = !previousHideImages;
-    flash("保存失败: " + err.message, "error");
-  } finally {
-    _kolImagePendingIds.delete(kolId);
-    _kolImageDataRevision += 1;
-    const isCurrentSettings = isRoute("settings");
-    if (!routeStillActive(seq) && isCurrentSettings) _kolImageReloadNeeded = true;
-    if (_kolImagePendingIds.size === 0 && _kolImageReloadNeeded) {
-      reloadKolImageSettingsIfNeeded();
-    } else if (routeStillActive(seq)) {
-      const mountedInput = document.querySelector(`#kol-images-list input[data-kol-id="${kolId}"]`);
-      if (mountedInput) {
-        mountedInput.checked = !kol.hide_images;
-        mountedInput.disabled = false;
-        if (restoreFocus && (document.activeElement === input || document.activeElement === document.body)) {
-          mountedInput.focus({ preventScroll: true });
-        }
-      }
-    }
-  }
-}
-
-function switchSettingsTab(name) {
-  // 设置页分段导航：推送 / 渠道绑定 / AI 摘要 / 账号设置
-  if (!SETTINGS_TABS.includes(name)) name = "push";
-  state.settingsTab = name;
-  document.querySelectorAll(".settings-tab[data-tab]").forEach((b) => {
-    if (!SETTINGS_TABS.includes(b.dataset.tab)) return;
-    const on = b.dataset.tab === name;
-    b.classList.toggle("active", on);
-    b.setAttribute("aria-selected", String(on));
-  });
-  SETTINGS_TABS.forEach((t) => {
-    const el = document.getElementById("st-" + t);
-    if (!el) return;
-    const on = t === name;
-    el.style.display = on ? "" : "none";
-    el.hidden = !on;
-  });
-}
-
-const adminNewsState = {
-  settings: null,
-  sources: [],
-  selectedId: 0,
-  q: "",
-  status: "all",
-  showArchived: false,
-  busy: false,
-};
-let _adminNewsLoadSeq = 0;
 
 function statsTabsHtml(active = "config") {
   const labels = {
@@ -6321,821 +4293,6 @@ function cookieUpdatedLabel(info) {
   return info.updated_at ? `已写入（${escapeHtml(fmtTs(info.updated_at))}）` : "已写入";
 }
 
-function bindGuideHtml(bound, stepsHtml) {
-  // 渠道绑定步骤折叠：未绑定时默认展开引导，已绑定时收起来（页面不再一屏放不下）
-  return `<details class="bind-steps" ${bound ? "" : "open"}>
-    <summary>${bound ? "已绑定 ✅ · 展开查看绑定步骤" : "展开查看绑定步骤"}</summary>
-    ${stepsHtml}
-  </details>`;
-}
-
-// ---------- 飞书个人机器人（扫码注册） ----------
-const fsPersonalState = {
-  sessionId: "", bindCommand: "", bindExpiresAt: 0, verificationUri: "", qrUri: "",
-  pollTimer: null, countdownTimer: null, owner: null, refreshInFlight: false,
-};
-
-function fsPersonalOwnerActive(owner) {
-  return !!owner && fsPersonalState.owner === owner
-    && owner.token === state.token
-    && owner.sessionGeneration === imaMountState.sessionGeneration
-    && routeStillActive(owner.routeSeq);
-}
-
-
-function feishuPersonalHtml(fs) {
-  fs = fs || {};
-  if (!fs.available) {
-    return `<p class="muted">⚠️ 个人机器人功能未启用（服务端未配置 FEISHU_CREDENTIAL_KEY），请使用上方共享机器人。</p>`;
-  }
-  if (fs.status === "active") {
-    return `<div class="row" style="gap:10px;flex-wrap:wrap;align-items:center">
-      <span class="channel-status status-ok"><i class="dot"></i>个人机器人已激活${fs.app_id_masked ? " · " + escapeHtml(fs.app_id_masked) : ""}</span>
-      <button class="channel-btn secondary" onclick="unbindChannel('feishu_personal')">解绑个人机器人</button>
-    </div>
-    <p class="muted" style="margin-top:8px">推送将使用你的个人应用发送，配额独立、不受共享应用限制；共享机器人绑定保留，个人机器人失效时自动回退。</p>`;
-  }
-  if (fs.status === "degraded") {
-    return `<div class="row" style="gap:10px;flex-wrap:wrap;align-items:center">
-      <span class="channel-status status-warn"><i class="dot"></i>个人机器人已降级（暂用共享推送）</span>
-      <button class="channel-btn primary" onclick="startFeishuPersonal()">重新扫码绑定</button>
-    </div>`;
-  }
-  if (fsPersonalState.sessionId) {
-    return fsPersonalStateHtml();
-  }
-  return `<div class="row" style="gap:10px;flex-wrap:wrap;margin-top:8px">
-    <button class="btn-normal" onclick="startFeishuPersonal()">扫码创建个人机器人</button>
-    <span class="muted">需要飞书扫码；个人应用会创建在你自己的飞书租户里。</span>
-  </div>`;
-}
-
-function fsPersonalStateHtml() {
-  const st = fsPersonalState;
-  const secs = Math.max(0, Math.ceil((st.bindExpiresAt - Date.now()) / 1000));
-  const uri = st.verificationUri || "";
-  return `<div id="fs-personal-flow">
-    <div style="text-align:center;padding:8px 0 12px">
-      ${st.qrUri ? `<img class="qr-frame" src="${st.qrUri}" alt="扫码二维码">` : ""}
-      <p class="muted qr-status">用飞书「扫一扫」扫码；或点链接打开：
-        <a href="${escapeHtml(uri)}" target="_blank" rel="noopener">${escapeHtml(uri)}</a>
-      </p>
-    </div>
-    ${st.bindCommand ? `
-    <p style="line-height:1.9">下一步：打开刚创建的个人机器人<b>私聊窗口</b>，发送：<br>
-      <code class="bind-code">${escapeHtml(st.bindCommand)}</code>
-      <span id="fs-bind-countdown" class="muted" style="margin-left:8px">${secs}s</span>
-    </p>
-    <div class="row" style="gap:10px;margin-top:8px;flex-wrap:wrap">
-      <button class="btn-normal btn-sm" onclick="refreshFeishuBindCode()">重新生成绑定码</button>
-      <button class="btn-ghost btn-sm" onclick="cancelFeishuPersonal()">取消</button>
-    </div>` : `
-    <p class="muted">⏳ 等待扫码…（扫完码会自动进入下一步）</p>
-    <button class="btn-ghost btn-sm" onclick="cancelFeishuPersonal()">取消</button>`}
-  </div>`;
-}
-
-async function startFeishuPersonal() {
-  const owner = {
-    routeSeq: routeRenderSeq,
-    token: state.token,
-    sessionGeneration: imaMountState.sessionGeneration,
-  };
-  fsPersonalState.owner = owner;
-  stopFeishuPersonalPoll(owner);
-  try {
-    const data = await api("/api/me/feishu-personal/register", { method: "POST" });
-    if (!fsPersonalOwnerActive(owner)) return;
-    fsPersonalState.sessionId = data.session_id;
-    fsPersonalState.bindCommand = "";
-    fsPersonalState.verificationUri = data.verification_uri;
-    fsPersonalState.qrUri = data.qr_uri || "";
-    fsPersonalRender(owner);
-    startFeishuPersonalPoll(data.session_id, owner);
-  } catch (err) {
-    if (fsPersonalOwnerActive(owner)) flash("发起个人机器人注册失败: " + err.message, "error");
-  }
-}
-
-function fsPersonalRender(owner = fsPersonalState.owner) {
-  // 局部重绘个人机器人区块（不整页重绘：renderSettings 需要路由序号，轮询里拿不到）
-  if (!fsPersonalOwnerActive(owner)) return;
-  const el = $("#fs-personal-block");
-  if (el) el.innerHTML = feishuPersonalHtml(state.user?.feishu_personal);
-}
-
-function startFeishuPersonalPoll(sessionId, owner = fsPersonalState.owner) {
-  if (!fsPersonalOwnerActive(owner)) return;
-  stopFeishuPersonalPoll(owner);
-  const timer = setInterval(async () => {
-    if (!fsPersonalOwnerActive(owner) || fsPersonalState.pollTimer !== timer) return;
-    try {
-      const data = await api(`/api/me/feishu-personal/register/${sessionId}`);
-      if (!fsPersonalOwnerActive(owner) || fsPersonalState.pollTimer !== timer) return;
-      fsPersonalState.verificationUri = data.verification_uri;
-      fsPersonalState.qrUri = data.qr_uri || fsPersonalState.qrUri;
-      // 同步个人机器人展示状态（轮询期间 /api/me 不会刷新）
-      state.user.feishu_personal = state.user.feishu_personal || {};
-      if (data.personal_bot_status) state.user.feishu_personal.status = data.personal_bot_status;
-      if (data.status === "awaiting_bind") {
-        if (data.bind_command) {
-          const expiresAt = (data.bind_code_expires_at || 0) * 1000;
-          const changed = fsPersonalState.bindCommand !== data.bind_command
-            || fsPersonalState.bindExpiresAt !== expiresAt;
-          fsPersonalState.bindCommand = data.bind_command;
-          fsPersonalState.bindExpiresAt = expiresAt;
-          if (changed) {
-            fsPersonalRender(owner);
-            startFeishuBindCountdown(owner);
-          }
-        } else {
-          refreshFeishuBindCode();
-        }
-      } else if (data.status === "active") {
-        stopFeishuPersonalPoll(owner);
-        fsPersonalState.sessionId = "";
-        fsPersonalRender(owner);
-        flash("个人机器人已绑定");
-      } else if (["expired", "cancelled", "degraded"].includes(data.status)) {
-        stopFeishuPersonalPoll(owner);
-        fsPersonalState.sessionId = "";
-        fsPersonalRender(owner);
-        if (data.status === "degraded") flash("个人机器人绑定失败：" + (data.last_error || "未知错误"), "error");
-      } else {
-        // pending / credentials_created：局部刷新等待扫码区域
-        fsPersonalRender(owner);
-      }
-    } catch (err) {
-      // 轮询失败静默，下轮再试；会话不存在则结束
-      if (fsPersonalOwnerActive(owner) && fsPersonalState.pollTimer === timer
-        && String(err.message).includes("404")) {
-        stopFeishuPersonalPoll(owner);
-        fsPersonalState.sessionId = "";
-        fsPersonalRender(owner);
-      }
-    }
-  }, 1000);  // 绑定轮询：1s 一次，扫码/绑定完成及时反映（状态接口很轻量）
-  fsPersonalState.pollTimer = timer;
-}
-
-function stopFeishuPersonalPoll(owner = null) {
-  if (owner && fsPersonalState.owner !== owner) return;
-  if (fsPersonalState.pollTimer) {
-    clearInterval(fsPersonalState.pollTimer);
-    fsPersonalState.pollTimer = null;
-  }
-  if (fsPersonalState.countdownTimer) {
-    clearInterval(fsPersonalState.countdownTimer);
-    fsPersonalState.countdownTimer = null;
-  }
-}
-
-function startFeishuBindCountdown(owner = fsPersonalState.owner) {
-  if (!fsPersonalOwnerActive(owner)) return;
-  if (fsPersonalState.countdownTimer) clearInterval(fsPersonalState.countdownTimer);
-  const timer = setInterval(() => {
-    if (!fsPersonalOwnerActive(owner) || fsPersonalState.countdownTimer !== timer) return;
-    const secs = Math.max(0, Math.ceil((fsPersonalState.bindExpiresAt - Date.now()) / 1000));
-    const el = $("#fs-bind-countdown");
-    if (el) el.textContent = `${secs}s`;
-    if (secs <= 0) {
-      clearInterval(timer);
-      fsPersonalState.countdownTimer = null;
-      if (fsPersonalState.sessionId) refreshFeishuBindCode();
-    }
-  }, 1000);
-  fsPersonalState.countdownTimer = timer;
-}
-
-async function refreshFeishuBindCode() {
-  const owner = fsPersonalState.owner;
-  const sessionId = fsPersonalState.sessionId;
-  if (!sessionId || !fsPersonalOwnerActive(owner) || fsPersonalState.refreshInFlight) return;
-  fsPersonalState.refreshInFlight = true;
-  try {
-    const data = await api(`/api/me/feishu-personal/register/${sessionId}/refresh-code`, { method: "POST" });
-    if (!fsPersonalOwnerActive(owner) || fsPersonalState.sessionId !== sessionId) return;
-    fsPersonalState.bindCommand = data.bind_command;
-    fsPersonalState.bindExpiresAt = (data.bind_code_expires_at || 0) * 1000;
-    fsPersonalRender(owner);
-    startFeishuBindCountdown(owner);
-  } catch (err) {
-    if (fsPersonalOwnerActive(owner)) flash(err.message, "error");
-  } finally {
-    fsPersonalState.refreshInFlight = false;
-  }
-}
-
-async function cancelFeishuPersonal() {
-  const owner = fsPersonalState.owner;
-  const sessionId = fsPersonalState.sessionId;
-  if (!sessionId || !fsPersonalOwnerActive(owner)) return;
-  try {
-    await api(`/api/me/feishu-personal/register/${sessionId}/cancel`, { method: "POST" });
-  } catch { /* 忽略 */ }
-  if (!fsPersonalOwnerActive(owner) || fsPersonalState.sessionId !== sessionId) return;
-  stopFeishuPersonalPoll(owner);
-  fsPersonalState.sessionId = "";
-  fsPersonalRender(owner);
-}
-
-function openBindGuide(sectionId) {
-  // 渠道绑定块在独立「渠道绑定」分栏里，先切过去再滚动并展开步骤
-  if (sectionId.endsWith("-bind")) {
-    switchSettingsTab("bind");
-  }
-  const sec = document.getElementById(sectionId);
-  if (!sec) return;
-  sec.scrollIntoView({ behavior: "smooth", block: "start" });
-  const details = sec.querySelector("details.bind-steps");
-  if (details) details.open = true;
-}
-
-function pushChannelsHtml(user) {
-  const opts = [];
-  if (user.telegram_chat_id) opts.push(["telegram", "Telegram"]);
-  if (feishuChannelBound(user)) opts.push(["feishu", "飞书"]);
-  if (user.wecom_webhook) opts.push(["wecom", "企业微信"]);
-  if (user.bark_key) opts.push(["bark", "Bark"]);
-  if (user.webpush_bound) opts.push(["webpush", "浏览器通知"]);
-  if (!opts.length) return `<p class="muted">还没有绑定推送渠道，先完成上方任一渠道绑定后即可选择。</p>`;
-  const selected = (user.push_channels || "").split(",").map((s) => s.trim()).filter(Boolean);
-  const isChecked = (ch) => selected.length === 0 || selected.includes(ch);
-  return opts.map(([ch, label]) => `
-    <label class="channel-pick ${isChecked(ch) ? "selected" : ""}" data-channel="${ch}" title="${escapeHtml(label)}">
-      <input type="checkbox" value="${ch}" ${isChecked(ch) ? "checked" : ""}
-        onchange="this.closest('.channel-pick').classList.toggle('selected', this.checked)">
-      <span class="ch-icon-wrap">${CHANNEL_ICONS[ch]}</span>
-      <span class="ch-check">✓</span>
-    </label>`).join("");
-}
-
-async function savePushChannels() {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  const boxes = [...document.querySelectorAll("#push-channels-box input[type=checkbox]")];
-  if (!boxes.length) return;
-  const channels = boxes.filter((b) => b.checked).map((b) => b.value);
-  if (!channels.length) {
-    flash("请至少保留一个推送通道；全部不想要可以关闭「新帖推送开关」", "error");
-    return;
-  }
-  try {
-    await api("/api/me", { method: "PUT", body: JSON.stringify({ push_channels: channels.join(",") }) });
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    state.user.push_channels = channels.join(",");
-    flash("已保存");
-  } catch (err) {
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(err.message, "error");
-  }
-}
-
-async function saveNotify() {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  try {
-    await api("/api/me", {
-      method: "PUT",
-      body: JSON.stringify({ notify_enabled: $("#set-notify").value === "1" }),
-    });
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash("已保存");
-  } catch (err) {
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(err.message, "error");
-  }
-}
-
-async function saveDailyReport() {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  try {
-    await api("/api/me", {
-      method: "PUT",
-      body: JSON.stringify({ daily_report_enabled: $("#set-daily").value === "1" }),
-    });
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash("已保存");
-  } catch (err) {
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(err.message, "error");
-  }
-}
-
-async function saveTranslateTwitter() {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  try {
-    const on = $("#set-x-translate").value === "1";
-    await api("/api/me", {
-      method: "PUT",
-      body: JSON.stringify({ translate_twitter: on }),
-    });
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    state.user.translate_twitter = on;
-    flash("已保存");
-  } catch (err) {
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(err.message, "error");
-  }
-}
-
-function toggleDnd() {
-  // 免打扰开关与时段输入联动：关闭时时段输入禁用并置灰
-  const on = $("#dnd-enabled").checked;
-  const field = $("#dnd-range-field");
-  if (field) field.classList.toggle("is-off", !on);
-  $("#dnd-start").disabled = !on;
-  $("#dnd-end").disabled = !on;
-}
-
-async function saveDnd() {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  const enabled = $("#dnd-enabled").checked;
-  const start = $("#dnd-start").value;
-  const end = $("#dnd-end").value;
-  const allowFav = $("#dnd-fav").checked;
-  if (enabled && (!start || !end || start === end)) {
-    flash("请设置不同的开始与结束时间", "error");
-    return;
-  }
-  try {
-    await api("/api/me", {
-      method: "PUT",
-      body: JSON.stringify({
-        dnd_start: enabled ? start : "",
-        dnd_end: enabled ? end : "",
-        dnd_allow_favorite: allowFav,
-      }),
-    });
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    state.user.dnd_start = enabled ? start : "";
-    state.user.dnd_end = enabled ? end : "";
-    state.user.dnd_allow_favorite = allowFav;
-    flash("已保存");
-  } catch (err) {
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(err.message, "error");
-  }
-}
-
-let pendingBind = null; // { channel, code, expiresAt }——轮询重绘后恢复显示
-
-function renderBindResult(channel, code) {
-  const el = channel === "telegram" ? $("#bind-result-telegram") : $("#bind-result-feishu");
-  if (!el) return;
-  const guide = state.user.push_guide || {};
-  if (channel === "telegram" && guide.telegram_bot_username) {
-    const link = `https://t.me/${encodeURIComponent(guide.telegram_bot_username)}?start=bind_${code}`;
-    el.innerHTML = `
-      <p style="margin:10px 0 6px">点击下方按钮，Telegram 会自动打开机器人并完成绑定：</p>
-      <a class="btn-normal" href="${link}" target="_blank" rel="noopener">一键绑定 Telegram</a>
-      <p class="muted" style="margin-top:8px">按钮没反应？复制 <b>${escapeHtml(code)}</b> 粘贴给机器人也可以。</p>`;
-  } else {
-    const label = channel === "telegram" ? "Telegram" : "飞书";
-    el.innerHTML = `
-      <p style="margin:10px 0 6px">复制绑定码，粘贴发送给${label}机器人（自动识别，无需命令）：</p>
-      <b style="font-size:var(--text-icon);letter-spacing:3px;font-family:var(--font-mono);font-variant-numeric:tabular-nums">${escapeHtml(code)}</b>`;
-  }
-}
-
-async function bindChannel(channel) {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  try {
-    const data = await api("/api/me/bind-code", { method: "POST" });
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    pendingBind = {
-      channel,
-      code: data.code,
-      expiresAt: Date.now() + (data.expires_in_seconds || 600) * 1000,
-    };
-    renderBindResult(channel, data.code);
-    startSettingsPoll();
-  } catch (err) {
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(err.message, "error");
-  }
-}
-
-async function saveCustomTgBot() {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  const botToken = ($("#set-custom-tg").value || "").trim();
-  if (!botToken) {
-    flash("请先粘贴你的 bot token", "error");
-    return;
-  }
-  try {
-    await api("/api/me", { method: "PUT", body: JSON.stringify({ telegram_bot_token: botToken }) });
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash("自建机器人已绑定");
-    await reloadSettings(routeSeq);
-  } catch (err) {
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(err.message, "error");
-  }
-}
-
-async function unbindChannel(channel) {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  const label = channel === "telegram_chat_id" ? "Telegram"
-    : channel === "telegram_bot_token" ? "Telegram（自建机器人）"
-      : channel === "feishu_personal" ? "飞书个人机器人"
-        : channel === "wecom" ? "企业微信"
-          : channel === "bark" ? "Bark" : "飞书";
-  if (!(await showConfirm(`确认解绑 ${label}？解绑后将不再通过该方式推送（共享机器人绑定不受影响）。`))) return;
-  try {
-    if (channel === "feishu_personal") {
-      stopFeishuPersonalPoll();
-      fsPersonalState.sessionId = "";
-      await api("/api/me/feishu-personal", { method: "DELETE" });
-      if (!routeStillActive(routeSeq) || token !== state.token
-        || sessionGeneration !== imaMountState.sessionGeneration) return;
-      flash(`已解绑 ${label}`);
-      await reloadSettings(routeSeq);
-      return;
-    }
-    const body = channel === "feishu"
-      ? { feishu_open_id: "", feishu_chat_id: "" }
-      : channel === "wecom"
-        ? { wecom_webhook: "" }
-        : channel === "bark"
-          ? { bark_key: "" }
-          : channel === "telegram_bot_token"
-            ? { telegram_bot_token: "", telegram_chat_id: "" }
-            : { telegram_chat_id: "" };
-    await api("/api/me", { method: "PUT", body: JSON.stringify(body) });
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(`已解绑 ${label}`);
-    await reloadSettings(routeSeq);
-  } catch (err) {
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(err.message, "error");
-  }
-}
-
-async function saveWecomWebhook() {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  const webhook = ($("#set-wecom-webhook").value || "").trim();
-  if (webhook && !/^https:\/\/qyapi\.weixin\.qq\.com\/cgi-bin\/webhook\/send\?key=/.test(webhook)) {
-    flash("webhook 地址无效，应为 https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=... 格式", "error");
-    return;
-  }
-  try {
-    await api("/api/me", {
-      method: "PUT",
-      body: JSON.stringify({ wecom_webhook: webhook }),
-    });
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(webhook ? "企业微信已绑定" : "企业微信已解绑");
-    await reloadSettings(routeSeq);
-  } catch (err) {
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(err.message, "error");
-  }
-}
-
-async function saveBarkKey() {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  const key = ($("#set-bark-key").value || "").trim();
-  try {
-    await api("/api/me", {
-      method: "PUT",
-      body: JSON.stringify({ bark_key: key }),
-    });
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(key ? "Bark 已绑定" : "Bark 已解绑");
-    await reloadSettings(routeSeq);
-  } catch (err) {
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(err.message, "error");
-  }
-}
-
-function webPushSupported() {
-  return window.isSecureContext
-    && "Notification" in window
-    && "serviceWorker" in navigator
-    && "PushManager" in window;
-}
-
-function urlBase64ToUint8Array(b64) {
-  const pad = "=".repeat((4 - (b64.length % 4)) % 4);
-  const raw = atob((b64 + pad).replace(/-/g, "+").replace(/_/g, "/"));
-  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
-}
-
-async function enableWebPush() {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  if (!webPushSupported()) {
-    flash("当前环境不支持浏览器通知，请用 Chrome 或 Edge，并打开 HTTPS", "error");
-    return;
-  }
-  const btns = document.querySelectorAll('[data-channel="webpush"] .channel-btn');
-  btns.forEach((b) => { b.disabled = true; });
-  try {
-    const perm = await Notification.requestPermission();
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    if (perm !== "granted") {
-      flash("未授予通知权限，请在浏览器设置里允许本站通知", "error");
-      return;
-    }
-    const key = state.user && state.user.vapid_public_key;
-    if (!key) {
-      flash("服务端未就绪，请刷新后再试", "error");
-      return;
-    }
-    const reg = await navigator.serviceWorker.ready;
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    const sub = await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(key),
-    });
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    const json = sub.toJSON();
-    await api("/api/me/webpush", {
-      method: "POST",
-      body: JSON.stringify({ endpoint: json.endpoint, keys: json.keys }),
-    });
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash("浏览器通知已开启");
-    await reloadSettings(routeSeq);
-  } catch (err) {
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(err.message || "开启失败", "error");
-  } finally {
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    btns.forEach((b) => { b.disabled = false; });
-  }
-}
-
-async function disableWebPush() {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  if (!(await showConfirm("关闭后，所有已开启的 Chrome / Edge 都不再弹出通知。"))) return;
-  try {
-    const reg = await navigator.serviceWorker.ready;
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    const sub = await reg.pushManager.getSubscription();
-    if (sub) await sub.unsubscribe();
-  } catch {
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    /* 本地订阅清不掉也不挡服务端关闭 */
-  }
-  if (!routeStillActive(routeSeq) || token !== state.token
-    || sessionGeneration !== imaMountState.sessionGeneration) return;
-  try {
-    await api("/api/me/webpush", { method: "DELETE" });
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash("浏览器通知已关闭");
-    await reloadSettings(routeSeq);
-  } catch (err) {
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(err.message, "error");
-  }
-}
-
-async function saveKeywords() {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  const keywords = ($("#set-keywords").value || "")
-    .split(/[\n,]/)
-    .map((k) => k.trim())
-    .filter(Boolean);
-  try {
-    await api("/api/me", {
-      method: "PUT",
-      body: JSON.stringify({ keywords }),
-    });
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    if (state.user) state.user.keywords = keywords;
-    flash(`已保存 ${keywords.length} 个关键词`);
-  } catch (err) {
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(err.message, "error");
-  }
-}
-
-async function saveKeywordsMatchReports() {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  const input = $("#set-kw-reports");
-  const on = !!(input && input.checked);
-  try {
-    const data = await api("/api/me", {
-      method: "PUT",
-      body: JSON.stringify({ keywords_match_reports: on }),
-    });
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    if (state.user) state.user.keywords_match_reports = !!(data && data.keywords_match_reports);
-    flash(on ? "已开启研报匹配" : "已关闭研报匹配");
-  } catch (err) {
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    if (input) input.checked = !on;
-    flash(err.message, "error");
-  }
-}
-
-function syncReportWatchChips() {
-  const watching = userKeywordSet();
-  document.querySelectorAll(".ima-doc-tag.is-watch").forEach((btn) => {
-    const on = watching.has(String(btn.dataset.tag || "").trim());
-    btn.classList.toggle("is-selected", on);
-    btn.setAttribute("aria-pressed", on ? "true" : "false");
-    btn.title = on ? "已在关键词提醒中" : "加入关键词提醒";
-  });
-}
-
-async function toggleReportKeyword(tag) {
-  const name = String(tag || "").trim();
-  if (!name || !isReportWatchableTag(name)) return;
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  const current = [...userKeywordSet()];
-  if (current.includes(name)) {
-    flash("已在关键词提醒中");
-    return;
-  }
-  if (current.length >= KEYWORDS_MAX_COUNT) {
-    flash(`关键词最多 ${KEYWORDS_MAX_COUNT} 个`, "error");
-    return;
-  }
-  const keywords = [...current, name];
-  try {
-    const data = await api("/api/me", {
-      method: "PUT",
-      body: JSON.stringify({ keywords, keywords_match_reports: true }),
-    });
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    if (state.user) {
-      state.user.keywords = keywords;
-      state.user.keywords_match_reports = data?.keywords_match_reports !== false;
-    }
-    syncReportWatchChips();
-    flash("已加入关键词提醒，每日更新后推送");
-  } catch (err) {
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(err.message, "error");
-  }
-}
-
-async function saveLlm() {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  const payload = {
-    llm_api_base: ($("#set-llm-base").value || "").trim(),
-    llm_api_key: ($("#set-llm-key").value || "").trim(),
-    llm_model: ($("#set-llm-model").value || "").trim(),
-  };
-  try {
-    await api("/api/me", { method: "PUT", body: JSON.stringify(payload) });
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(payload.llm_api_key ? "已保存，将用你的模型" : "已保存，将用站点默认模型");
-    await reloadSettings(routeSeq);
-  } catch (err) {
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(err.message, "error");
-  }
-}
-
-async function loadLlmModels() {
-  const routeSeq = routeRenderSeq;
-  const list = $("#set-llm-model-list");
-  const input = $("#set-llm-model");
-  try {
-    const data = await api("/api/me/llm-models", {
-      method: "POST",
-      body: JSON.stringify({
-        llm_api_base: ($("#set-llm-base").value || "").trim(),
-        llm_api_key: ($("#set-llm-key").value || "").trim(),
-      }),
-    });
-    if (!routeStillActive(routeSeq)) return;
-    const models = Array.isArray(data.models) ? data.models : [];
-    if (list) {
-      list.innerHTML = models.map((id) => `<option value="${escapeHtml(id)}"></option>`).join("");
-    }
-    if (input && models.length && !input.value) input.value = models[0];
-    flash(models.length ? `已加载 ${models.length} 个模型` : "接口未返回模型，可手填模型名");
-  } catch (err) {
-    if (routeStillActive(routeSeq)) flash(err.message || "拉取模型失败", "error");
-  }
-}
-
-async function savePassword() {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  const oldPw = $("#pw-old").value;
-  const newPw = $("#pw-new").value;
-  const confirmPw = $("#pw-confirm").value;
-  if (!oldPw || newPw.length < 6) {
-    flash("请填写原密码，新密码至少 6 位", "error");
-    return;
-  }
-  if (newPw !== confirmPw) {
-    flash("两次输入的新密码不一致", "error");
-    return;
-  }
-  try {
-    await api("/api/me/password", {
-      method: "POST",
-      body: JSON.stringify({ old_password: oldPw, new_password: newPw }),
-    });
-    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    $("#pw-old").value = $("#pw-new").value = $("#pw-confirm").value = "";
-    flash("密码已修改");
-  } catch (err) {
-    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    flash(err.message, "error");
-  }
-}
-
-async function genBindCode() {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  try {
-    const data = await api("/api/me/bind-code", { method: "POST" });
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    pendingBind = {
-      channel: "any",
-      code: data.code,
-      expiresAt: Date.now() + (data.expires_in_seconds || 600) * 1000,
-    };
-    $("#bind-result").innerHTML =
-      `绑定码：<b style="font-size:var(--text-icon);letter-spacing:3px;font-family:var(--font-mono);font-variant-numeric:tabular-nums">${escapeHtml(data.code)}</b>` +
-      `（${Math.floor(data.expires_in_seconds / 60)} 分钟内有效）<br>` +
-      `发给机器人：<code>/bind ${escapeHtml(data.code)}</code>`;
-    startSettingsPoll();
-  } catch (err) {
-    if (!routeStillActive(routeSeq) || token !== state.token
-      || sessionGeneration !== imaMountState.sessionGeneration) return;
-    flash(err.message, "error");
-  }
-}
 
 // ---------- 管理后台（导航统一走左侧边栏） ----------
 let _adminRenderSeq = 0; // 当前管理后台渲染令牌：loader 写 #admin-body 前凭此丢弃过期响应
@@ -7247,844 +4404,6 @@ function rateBar(rate) {
     </div>`;
 }
 
-function imaMountCacheKey(groupId, parentId) {
-  return `${groupId}\0${parentId}`;
-}
-
-function imaMountGroup(groupId) {
-  return imaMountState.groups.find((group) => String(group.id || "") === String(groupId || "")) || null;
-}
-
-function imaMountDraft(groupId) {
-  let draft = imaMountState.drafts.get(groupId);
-  if (!draft) {
-    draft = new Set();
-    imaMountState.drafts.set(groupId, draft);
-  }
-  return draft;
-}
-
-function imaGroupIntervalSeconds(group) {
-  const sec = Number(group?.interval_seconds || 3600);
-  if (sec < 10800) return 3600;
-  if (sec < 43200) return 21600;
-  return 86400;
-}
-
-function initImaMountState(groups, preserve = false) {
-  const oldDrafts = imaMountState.drafts;
-  const oldSelected = imaMountState.selectedGroupId;
-  const oldDirty = imaMountState.dirty;
-  const oldGroupsById = new Map(
-    imaMountState.groups.map((group) => [String(group.id), group]),
-  );
-  imaMountState.groups = (Array.isArray(groups) ? groups.filter((group) => group && group.id) : []).map((group) => {
-    const previous = oldGroupsById.get(String(group.id));
-    const incoming = Number(group.interval_seconds);
-    const fallback = previous ? Number(previous.interval_seconds) || 3600 : 3600;
-    return {
-      ...group,
-      interval_seconds: Number.isFinite(incoming) && incoming > 0 ? incoming : fallback,
-    };
-  });
-  imaMountState.selectedGroupId = oldSelected;
-  imaMountState.drafts = new Map();
-  imaMountState.folders = new Map();
-  imaMountState.parents = new Map();
-  imaMountState.expanded = new Set();
-  imaMountState.loading = new Set();
-  imaMountState.errors = new Map();
-  imaMountState.folderRequests = new Map();
-  imaMountState.discoveryBusy = false;
-  imaMountState.discoveryOwner = null;
-  imaMountState.generation += 1;
-  if (!preserve && !imaMountState.saveOwner) imaMountState.revision += 1;
-  imaMountState.dirty = preserve ? oldDirty : false;
-  if (!preserve) imaMountState.discoveryEntered = false;
-  if (!preserve) imaMountState.folderPanelGroupId = "";
-  const available = new Set(imaMountState.groups.map((group) => String(group.id)));
-  for (const group of imaMountState.groups) {
-    const previous = preserve ? oldDrafts.get(String(group.id)) : null;
-    const values = previous
-      ? [...previous]
-      : (Array.isArray(group.folder_ids) ? group.folder_ids : []);
-    imaMountState.drafts.set(
-      String(group.id),
-      new Set(values.filter((folderId) => typeof folderId === "string" && folderId.trim())),
-    );
-  }
-  if (!available.has(String(imaMountState.selectedGroupId || ""))) {
-    imaMountState.selectedGroupId = imaMountState.groups[0] ? String(imaMountState.groups[0].id) : "";
-  }
-}
-
-function imaIntervalSegHtml(group) {
-  const groupId = String(group?.id || "");
-  const current = imaGroupIntervalSeconds(group);
-  return `<span class="ima-interval-seg" data-group-id="${escapeHtml(groupId)}">${
-    [[3600, "1h"], [21600, "6h"], [86400, "24h"]].map(([sec, label]) =>
-      `<button type="button" id="ima-interval-${escapeHtml(groupId)}-${sec}" data-sec="${sec}" aria-pressed="${current === sec}" class="${current === sec ? "is-on" : ""}" onclick="setImaGroupInterval(event, this)">${label}</button>`
-    ).join("")
-  }</span>`;
-}
-
-function imaMountGroupRowHtml(group) {
-  const groupId = String(group?.id || "");
-  const draft = imaMountState.drafts.get(groupId) || new Set();
-  const selected = groupId === String(imaMountState.selectedGroupId || "");
-  const source = group?.source === "discovered" ? "自动发现" : "旧配置";
-  const count = draft.size;
-  const mountText = count ? `已选择 ${count} 个文件夹` : "未挂载";
-  return `<button type="button" class="ima-mount-kb-row${selected ? " is-selected" : ""}"
-    id="ima-kb-row-${escapeHtml(groupId)}" role="option" aria-selected="${selected}"
-    data-group-id="${escapeHtml(groupId)}" onclick="selectImaMountGroup(this.dataset.groupId)">
-    <span class="ima-mount-kb-copy">
-      <span class="ima-mount-kb-name" title="${escapeHtml(group?.name || groupId)}">${escapeHtml(group?.name || groupId)}</span>
-      <span class="ima-mount-kb-meta">${escapeHtml(source)} · ${escapeHtml(mountText)}</span>
-    </span>
-    <span class="ima-mount-kb-count" aria-hidden="true">${count}</span>
-  </button>`;
-}
-
-function renderImaSelectedGroup() {
-  const group = imaMountGroup(imaMountState.selectedGroupId);
-  const title = $("#ima-selected-group-name");
-  const interval = $("#ima-selected-interval");
-  const select = $("#ima-kb-select");
-  if (select) {
-    select.innerHTML = imaMountState.groups.map((item) => {
-      const id = String(item.id || "");
-      return `<option value="${escapeHtml(id)}"${id === String(imaMountState.selectedGroupId) ? " selected" : ""}>${escapeHtml(item.name || id)}</option>`;
-    }).join("");
-  }
-  if (!group) {
-    if (title) title.textContent = "选择知识库";
-    if (interval) interval.innerHTML = "";
-    return;
-  }
-  if (title) title.textContent = group.name || String(group.id);
-  if (interval) {
-    const hours = Math.round(imaGroupIntervalSeconds(group) / 3600);
-    const note = hours >= 24 ? "每日 01:00 后自动同步（上海）" : `每 ${hours} 小时检查`;
-    interval.innerHTML = `${imaIntervalSegHtml(group)}<span class="muted">${note}</span>`;
-  }
-}
-
-function setImaGroupInterval(event, button) {
-  event?.stopPropagation?.();
-  const seg = button?.closest?.(".ima-interval-seg");
-  const groupId = seg?.dataset.groupId || "";
-  const seconds = Number(button?.dataset.sec || 0);
-  const group = imaMountGroup(groupId);
-  if (!group || ![3600, 21600, 86400].includes(seconds)) return;
-  group.interval_seconds = seconds;
-  imaMountState.revision += 1;
-  imaMountState.collectorRevision += 1;
-  imaMountState.dirty = true;
-  renderImaCollectorDirtyState();
-  const draft = rememberImaCollectorDraft();
-  if (imaMountState.saveOwner) imaMountState.saveOwner.liveSnapshot = draft;
-  const focus = imaFocusSnapshot(button);
-  renderImaMountGroups();
-  imaRestoreFocus(focus);
-}
-
-function renderImaMountGroups() {
-  const list = $("#ima-kb-list");
-  if (!list) return;
-  const groups = imaMountState.groups;
-  list.innerHTML = groups.length
-    ? groups.map((group) => imaMountGroupRowHtml(group)).join("")
-    : '<div class="empty ima-mount-empty">尚未发现共享知识库</div>';
-  const count = $("#ima-kb-count");
-  if (count) count.textContent = `${groups.length} 个`;
-  renderImaSelectedGroup();
-  renderImaFolderTree(imaMountState.selectedGroupId);
-  renderImaCollectorDirtyState();
-}
-
-function renderImaCollectorDirtyState() {
-  const bar = $("#ima-collector-savebar");
-  if (!bar) return;
-  bar.hidden = !(imaMountState.dirty || imaMountState.collectorDirty);
-}
-
-function discardImaCollectorChanges() {
-  if (!confirm("有未保存的采集配置修改，确定放弃？")) return;
-  imaMountState.saveOwner = null;
-  imaMountState.collectorDraft = null;
-  imaMountState.collectorDraftRevision = "";
-  imaMountState.collectorDirty = false;
-  imaMountState.dirty = false;
-  imaMountState.collectorConfirmedRevision = "";
-  imaMountState.collectorConfirmedLiveRevision = -1;
-  imaMountState.collectorConfirmedMountRevision = -1;
-  renderImaCollectorDirtyState();
-  loadAdminKnowledge(routeRenderSeq);
-}
-
-function imaFolderAncestorSelected(groupId, folderId) {
-  const selected = imaMountDraft(groupId);
-  const seen = new Set();
-  let parentId = imaMountState.parents.get(imaMountCacheKey(groupId, folderId)) || "";
-  while (parentId && !seen.has(parentId)) {
-    if (selected.has(parentId)) return true;
-    seen.add(parentId);
-    parentId = imaMountState.parents.get(imaMountCacheKey(groupId, parentId)) || "";
-  }
-  return false;
-}
-
-function normalizeImaMountDraft(groupId) {
-  const selected = imaMountDraft(groupId);
-  for (const folderId of [...selected]) {
-    if (imaFolderAncestorSelected(groupId, folderId)) selected.delete(folderId);
-  }
-}
-
-function imaFolderDescendantSelected(groupId, folderId) {
-  const selected = imaMountDraft(groupId);
-  for (const selectedId of selected) {
-    if (selectedId === folderId) continue;
-    const seen = new Set();
-    let parentId = imaMountState.parents.get(imaMountCacheKey(groupId, selectedId)) || "";
-    while (parentId && !seen.has(parentId)) {
-      if (parentId === folderId) return true;
-      seen.add(parentId);
-      parentId = imaMountState.parents.get(imaMountCacheKey(groupId, parentId)) || "";
-    }
-  }
-  return false;
-}
-
-function imaFolderSelectionState(groupId, folderId) {
-  const inherited = imaFolderAncestorSelected(groupId, folderId);
-  const selected = imaMountDraft(groupId).has(folderId);
-  return {
-    checked: selected || inherited,
-    disabled: inherited,
-    indeterminate: !selected && !inherited && imaFolderDescendantSelected(groupId, folderId),
-  };
-}
-
-function imaFolderRowHtml(groupId, item, depth) {
-  const folderId = String(item?.id || "");
-  const name = String(item?.name || folderId);
-  if (!folderId) return "";
-  imaMountState.parents.set(imaMountCacheKey(groupId, folderId), String(item?.parent_id || ""));
-  const childKey = imaMountCacheKey(groupId, folderId);
-  const knownEmpty = item?.has_children === false || Number(item?.folder_count) === 0;
-  const hasChildren = !knownEmpty || imaMountState.folders.has(childKey);
-  const expanded = imaMountState.expanded.has(childKey);
-  const selection = imaFolderSelectionState(groupId, folderId);
-  const inputId = `ima-folder-${groupId}-${folderId}`;
-  const expand = hasChildren
-    ? `<button type="button" class="ima-folder-expand" id="ima-folder-expand-${escapeHtml(groupId)}-${escapeHtml(folderId)}" data-group-id="${escapeHtml(groupId)}" data-folder-id="${escapeHtml(folderId)}" aria-expanded="${expanded}" aria-label="${expanded ? "收起" : "展开"} ${escapeHtml(name)}" title="${expanded ? "收起" : "展开"}" onclick="toggleImaFolderExpand(this)"><span aria-hidden="true">${expanded ? "⌄" : "›"}</span></button>`
-    : '<span class="ima-folder-expand-placeholder" aria-hidden="true"></span>';
-  const nested = expanded ? imaRenderFolderBranch(groupId, folderId, depth + 1) : "";
-  return `
-    <div class="ima-folder-node" style="--ima-folder-indent:${8 + Math.min(depth, 12) * 18}px">
-      <div class="ima-folder-row">
-        ${expand}
-        <label class="ima-folder-choice" for="${escapeHtml(inputId)}">
-          <input id="${escapeHtml(inputId)}" type="checkbox" data-group-id="${escapeHtml(groupId)}" data-folder-id="${escapeHtml(folderId)}"
-            ${selection.checked ? "checked" : ""}${selection.disabled ? " disabled" : ""}${selection.indeterminate ? ' data-indeterminate="true"' : ""}
-            onchange="toggleImaFolder(this)">
-          <span class="ima-folder-icon" aria-hidden="true">${FOLDER_ICON}</span>
-          <span class="ima-folder-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
-        </label>
-      </div>
-      ${nested}
-    </div>`;
-}
-
-function imaFolderErrorHtml(groupId, parentId, error) {
-  return `<div class="ima-folder-state ima-folder-error" role="alert"><span>${escapeHtml(error || "文件夹加载失败")}</span><button type="button" class="btn-ghost btn-sm" id="ima-folder-retry-${escapeHtml(groupId)}-${escapeHtml(parentId)}" data-group-id="${escapeHtml(groupId)}" data-parent-id="${escapeHtml(parentId)}" onclick="retryImaFolderLoad(this)">重试</button></div>`;
-}
-
-function imaRenderFolderBranch(groupId, parentId, depth) {
-  const key = imaMountCacheKey(groupId, parentId);
-  if (!imaMountState.folders.has(key)) {
-    if (imaMountState.loading.has(key)) return '<div class="ima-folder-state">正在加载文件夹…</div>';
-    const error = imaMountState.errors.get(key);
-    if (error) return imaFolderErrorHtml(groupId, parentId, error);
-    return '<div class="ima-folder-state">展开后加载文件夹</div>';
-  }
-  const items = imaMountState.folders.get(key) || [];
-  if (!items.length) return '<div class="ima-folder-state">没有可挂载的子文件夹</div>';
-  return items.map((item) => imaFolderRowHtml(groupId, item, depth)).join("");
-}
-
-function imaFolderOrphansHtml(groupId, rootId) {
-  const rootKey = imaMountCacheKey(groupId, rootId);
-  if (!imaMountState.folders.has(rootKey)) return "";
-  const known = new Set([rootId]);
-  for (const [key, items] of imaMountState.folders) {
-    if (!key.startsWith(`${groupId}\0`)) continue;
-    for (const item of items || []) known.add(String(item.id || ""));
-  }
-  const orphanIds = [...imaMountDraft(groupId)].filter((folderId) => !known.has(folderId));
-  if (!orphanIds.length) return "";
-  return `<div class="ima-folder-orphans"><p class="ima-folder-state-title">已选择但当前目录中不可见</p>${orphanIds.map((folderId) => `
-    <label class="ima-folder-orphan" for="ima-orphan-${escapeHtml(groupId)}-${escapeHtml(folderId)}">
-      <input id="ima-orphan-${escapeHtml(groupId)}-${escapeHtml(folderId)}" type="checkbox" checked data-group-id="${escapeHtml(groupId)}" data-folder-id="${escapeHtml(folderId)}" onchange="toggleImaFolder(this)">
-      <span class="ima-folder-name" title="${escapeHtml(folderId)}">${escapeHtml(folderId)}</span>
-    </label>`).join("")}</div>`;
-}
-
-function toggleImaFolderPanel(button) {
-  const groupId = String(imaMountState.selectedGroupId || "");
-  imaMountState.folderPanelGroupId = button?.getAttribute("aria-expanded") === "true" ? "" : groupId;
-  renderImaFolderTree(groupId);
-}
-
-function renderImaFolderTree(groupId) {
-  const tree = $("#ima-folder-tree");
-  if (!tree) return;
-  const open = !!groupId && imaMountState.folderPanelGroupId === String(groupId);
-  const panel = $("#ima-folder-panel");
-  const toggle = $("#ima-folder-panel-toggle");
-  const summary = $("#ima-folder-summary");
-  const selectedCount = groupId ? imaMountDraft(String(groupId)).size : 0;
-  if (toggle) toggle.setAttribute("aria-expanded", String(open));
-  if (panel) panel.hidden = !open;
-  if (summary) summary.textContent = selectedCount ? `已选 ${selectedCount} 个 · 父目录包含新子目录` : "未选择文件夹";
-  if (!open) return;
-  const group = imaMountGroup(groupId);
-  const title = $("#ima-folder-title");
-  const count = $("#ima-folder-count");
-  if (!group) {
-    if (title) title.textContent = "选择知识库";
-    if (count) count.textContent = "";
-    tree.innerHTML = '<div class="ima-folder-state">先选择一个知识库</div>';
-    return;
-  }
-  const groupKey = String(group.id);
-  const rootId = String(group.root_folder_id || "");
-  if (title) title.textContent = group.name || groupKey;
-  if (count) count.textContent = `${selectedCount} 个文件夹`;
-  const rootKey = imaMountCacheKey(groupKey, rootId);
-  const scrollTop = tree.scrollTop;
-  tree.setAttribute("aria-busy", String(imaMountState.loading.has(rootKey)));
-  tree.innerHTML = imaFolderRowHtml(groupKey, {
-    id: rootId,
-    name: "整个知识库",
-    parent_id: "",
-    has_children: true,
-  }, 0) + imaFolderOrphansHtml(groupKey, rootId);
-  tree.querySelectorAll('input[data-indeterminate="true"]').forEach((input) => {
-    input.indeterminate = true;
-  });
-  tree.scrollTop = scrollTop;
-}
-
-function imaRestoreFocus(focus) {
-  if (!focus || (document.activeElement !== focus.element && document.activeElement !== document.body)) return;
-  const target = focus.id ? document.getElementById(focus.id) : null;
-  target?.focus({ preventScroll: true });
-}
-
-function imaFocusSnapshot(element = document.activeElement) {
-  return { element, id: element?.id || "" };
-}
-
-function selectImaMountGroup(groupId) {
-  const group = imaMountGroup(groupId);
-  if (!group) return;
-  const focus = imaFocusSnapshot();
-  imaMountState.selectedGroupId = String(group.id);
-  renderImaMountGroups();
-  renderImaGroupAcl();
-  imaRestoreFocus(focus);
-}
-
-let _aclCandidateUsers = null;
-let _imaAclRenderSeq = 0;
-
-async function fetchAclCandidateUsers(force = false) {
-  if (!force && _aclCandidateUsers) return _aclCandidateUsers;
-  _aclCandidateUsers = (await api("/api/users")).filter((u) => !u.is_admin);
-  return _aclCandidateUsers;
-}
-
-function aclGrantedNames(picker) {
-  return [...(picker?.querySelectorAll("[data-acl-remove]") || [])]
-    .map((el) => el.getAttribute("data-acl-remove"))
-    .filter(Boolean);
-}
-
-function aclChipHtml(name) {
-  return `<button type="button" class="ima-acl-chip" data-acl-remove="${escapeHtml(name)}" aria-label="移除 ${escapeHtml(name)}">${escapeHtml(name)}<span aria-hidden="true">×</span></button>`;
-}
-
-function aclPickerHtml(usernames, listId, compact = false) {
-  const granted = [...new Set(usernames || [])];
-  const chips = granted.length
-    ? granted.map(aclChipHtml).join("")
-    : `<span class="muted ima-acl-none">仅管理员</span>`;
-  return `<div class="ima-acl-picker${compact ? " is-compact" : ""}" data-count="${granted.length}">
-    <input type="search" class="form-control ima-acl-search" placeholder="搜索并添加用户" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-label="搜索并添加用户" aria-controls="${listId}" autocomplete="off" oninput="filterAclSuggest(this)" onkeydown="onAclSearchKey(event)">
-    <div id="${listId}" class="ima-acl-suggest" hidden role="listbox"></div>
-    <p class="muted ima-acl-empty" hidden>没有匹配的用户</p>
-    <div class="ima-acl-chips">${chips}</div>
-    <button type="button" class="ima-acl-more" onclick="toggleImaAclExpanded(this)" hidden></button>
-    <p class="muted ima-acl-status" aria-live="polite">${granted.length ? `${granted.length} 人可看` : "仅管理员"}</p>
-  </div>`;
-}
-
-function aclSuggestItems(list) {
-  return [...(list?.querySelectorAll("[data-acl-add]") || [])];
-}
-
-function setAclActive(list, index) {
-  const items = aclSuggestItems(list);
-  const input = list?.closest(".ima-acl-picker")?.querySelector(".ima-acl-search");
-  items.forEach((el, i) => {
-    const on = i === index;
-    el.classList.toggle("is-on", on);
-    el.setAttribute("aria-selected", String(on));
-  });
-  const active = items[index];
-  if (input) input.setAttribute("aria-activedescendant", active?.id || "");
-  active?.scrollIntoView({ block: "nearest" });
-}
-
-function filterAclSuggest(input) {
-  const picker = input.closest(".ima-acl-picker");
-  const list = picker?.querySelector(".ima-acl-suggest");
-  const empty = picker?.querySelector(".ima-acl-empty");
-  if (!picker || !list) return;
-  const needle = input.value.trim().toLowerCase();
-  const granted = new Set(aclGrantedNames(picker));
-  const close = () => {
-    list.hidden = true;
-    list.innerHTML = "";
-    input.setAttribute("aria-expanded", "false");
-    input.removeAttribute("aria-activedescendant");
-  };
-  if (!needle) {
-    close();
-    if (empty) empty.hidden = true;
-    return;
-  }
-  const hits = (_aclCandidateUsers || [])
-    .map((u) => String(u.username || ""))
-    .filter((name) => name && !granted.has(name) && name.toLowerCase().includes(needle));
-  if (!hits.length) {
-    close();
-    if (empty) empty.hidden = false;
-    return;
-  }
-  if (empty) empty.hidden = true;
-  const listId = list.id || "ima-acl-list";
-  list.hidden = false;
-  input.setAttribute("aria-expanded", "true");
-  list.innerHTML = hits.map((name, i) =>
-    `<button type="button" class="ima-acl-suggest-item" role="option" id="${listId}-opt-${i}" data-acl-add="${escapeHtml(name)}" aria-selected="false">${escapeHtml(name)}</button>`
-  ).join("");
-  setAclActive(list, 0);
-}
-
-function onAclSearchKey(event) {
-  const input = event.target;
-  const picker = input.closest(".ima-acl-picker");
-  const list = picker?.querySelector(".ima-acl-suggest");
-  if (event.key === "Escape") {
-    event.preventDefault();
-    input.value = "";
-    filterAclSuggest(input);
-    return;
-  }
-  const items = aclSuggestItems(list);
-  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-    if (!items.length) return;
-    event.preventDefault();
-    const cur = items.findIndex((el) => el.classList.contains("is-on"));
-    const next = event.key === "ArrowDown"
-      ? Math.min(items.length - 1, (cur < 0 ? -1 : cur) + 1)
-      : Math.max(0, (cur < 0 ? items.length : cur) - 1);
-    setAclActive(list, next);
-    return;
-  }
-  if (event.key !== "Enter") return;
-  event.preventDefault();
-  const active = items.find((el) => el.classList.contains("is-on")) || items[0];
-  if (active) addAclUser(active.getAttribute("data-acl-add"), picker);
-}
-
-async function saveImaGroupAcl(groupId, usernames) {
-  const r = await api(`/api/admin/ima-collector/groups/${encodeURIComponent(groupId)}/acl`, {
-    method: "PUT",
-    body: JSON.stringify({ usernames }),
-  });
-  return r.acl_usernames || usernames;
-}
-
-function applyAclNamesToPicker(picker, names) {
-  const chips = picker.querySelector(".ima-acl-chips");
-  const status = picker.querySelector(".ima-acl-status");
-  if (chips) {
-    chips.innerHTML = names.length
-      ? names.map(aclChipHtml).join("")
-      : `<span class="muted ima-acl-none">仅管理员</span>`;
-  }
-  if (status) status.textContent = names.length ? `${names.length} 人可看` : "仅管理员";
-  syncImaAclMoreButton(picker, names.length);
-}
-
-function syncImaAclMoreButton(picker, count) {
-  const button = picker?.querySelector(".ima-acl-more");
-  if (!button) return;
-  picker.dataset.count = String(count);
-  button.hidden = count <= 6;
-  const expanded = picker.classList.contains("is-expanded");
-  button.textContent = expanded ? "收起" : `展开全部 ${count} 人`;
-  button.setAttribute("aria-expanded", String(expanded));
-}
-
-function toggleImaAclExpanded(button) {
-  const picker = button?.closest(".ima-acl-picker");
-  if (!picker) return;
-  picker.classList.toggle("is-expanded");
-  syncImaAclMoreButton(picker, Number(picker.dataset.count || 0));
-}
-
-function rememberAclOnModel(groupId, names) {
-  const group = imaMountGroup(groupId);
-  if (group) group.acl_usernames = names;
-  const lib = ((_localLibsLast && _localLibsLast.libraries) || [])
-    .find((item) => `local-${item.slug}` === groupId);
-  if (!lib) return;
-  lib.acl_usernames = names;
-  const el = document.querySelector(`.ima-source-block[data-slug="${lib.slug}"]`);
-  const line = el?.querySelector(".section-meta");
-  if (!line) return;
-  const n = names.length;
-  line.innerHTML = line.innerHTML.replace(
-    /· (权限 \d+ 人|仅管理员)\s*$/,
-    `· ${n ? `权限 ${n} 人` : "仅管理员"}`,
-  );
-}
-
-async function addAclUser(name, picker) {
-  if (!name || !picker || picker.dataset.busy) return;
-  const groupId = picker.dataset.groupId;
-  if (!groupId) return;
-  const current = aclGrantedNames(picker);
-  if (current.includes(name)) return;
-  picker.dataset.busy = "1";
-  try {
-    const saved = await saveImaGroupAcl(groupId, [...current, name]);
-    rememberAclOnModel(groupId, saved);
-    applyAclNamesToPicker(picker, saved);
-    const search = picker.querySelector(".ima-acl-search");
-    if (search) {
-      search.value = "";
-      filterAclSuggest(search);
-      search.focus();
-    }
-    flash("权限已保存");
-  } catch (err) {
-    flash("保存失败: " + err.message, "error");
-  } finally {
-    delete picker.dataset.busy;
-  }
-}
-
-async function removeAclUser(name, picker) {
-  if (!name || !picker || picker.dataset.busy) return;
-  const groupId = picker.dataset.groupId;
-  if (!groupId) return;
-  const current = aclGrantedNames(picker);
-  if (!current.includes(name)) return;
-  if (current.length === 1 && !confirm("将只剩管理员可看，确定？")) return;
-  picker.dataset.busy = "1";
-  try {
-    const saved = await saveImaGroupAcl(groupId, current.filter((item) => item !== name));
-    rememberAclOnModel(groupId, saved);
-    applyAclNamesToPicker(picker, saved);
-    const search = picker.querySelector(".ima-acl-search");
-    if (search?.value) filterAclSuggest(search);
-    flash("权限已保存");
-  } catch (err) {
-    flash("保存失败: " + err.message, "error");
-  } finally {
-    delete picker.dataset.busy;
-  }
-}
-
-async function renderImaGroupAcl() {
-  const slot = $("#ima-group-acl");
-  if (!slot) return;
-  const group = imaMountGroup(imaMountState.selectedGroupId);
-  if (!group) {
-    slot.innerHTML = '<p class="muted">先选择一个知识库</p>';
-    return;
-  }
-  const seq = ++_imaAclRenderSeq;
-  const groupId = String(group.id);
-  slot.innerHTML = '<p class="muted">加载用户…</p>';
-  try {
-    await fetchAclCandidateUsers();
-    if (seq !== _imaAclRenderSeq || String(imaMountState.selectedGroupId) !== groupId) return;
-    slot.innerHTML = aclPickerHtml(group.acl_usernames || [], "ima-acl-list", /* compact */ true);
-    const picker = slot.querySelector(".ima-acl-picker");
-    if (picker) {
-      picker.dataset.groupId = groupId;
-      syncImaAclMoreButton(picker, (group.acl_usernames || []).length);
-    }
-  } catch (err) {
-    if (seq !== _imaAclRenderSeq) return;
-    slot.innerHTML = `<p class="muted">用户列表加载失败：${escapeHtml(err.message)}</p>
-      <button type="button" class="btn-ghost" onclick="fetchAclCandidateUsers(true).then(renderImaGroupAcl)">重试</button>`;
-  }
-}
-
-function toggleImaFolderExpand(button) {
-  const groupId = button?.dataset.groupId || "";
-  const folderId = button?.dataset.folderId || "";
-  if (!groupId || !folderId) return;
-  const focus = imaFocusSnapshot(button);
-  const key = imaMountCacheKey(groupId, folderId);
-  const opening = !imaMountState.expanded.has(key);
-  if (opening) imaMountState.expanded.add(key);
-  else imaMountState.expanded.delete(key);
-  renderImaFolderTree(imaMountState.selectedGroupId);
-  imaRestoreFocus(focus);
-  if (opening && !imaMountState.folders.has(key)) loadImaFolderChildren(groupId, folderId);
-}
-
-function toggleImaFolder(input) {
-  const groupId = input?.dataset.groupId || "";
-  const folderId = input?.dataset.folderId || "";
-  if (!groupId || !folderId || input.disabled) return;
-  const focus = imaFocusSnapshot(input);
-  const selected = imaMountDraft(groupId);
-  const group = imaMountGroup(groupId);
-  if (input.checked) {
-    if (folderId === String(group?.root_folder_id || "")) {
-      selected.clear();
-    } else {
-      selected.delete(folderId);
-      for (const selectedId of [...selected]) {
-        const seen = new Set();
-        let parentId = imaMountState.parents.get(imaMountCacheKey(groupId, selectedId)) || "";
-        while (parentId && !seen.has(parentId)) {
-          if (parentId === folderId) selected.delete(selectedId);
-          seen.add(parentId);
-          parentId = imaMountState.parents.get(imaMountCacheKey(groupId, parentId)) || "";
-        }
-      }
-    }
-    selected.add(folderId);
-  } else {
-    selected.delete(folderId);
-  }
-  imaMountState.revision += 1;
-  imaMountState.collectorRevision += 1;
-  imaMountState.dirty = true;
-  renderImaCollectorDirtyState();
-  const draft = rememberImaCollectorDraft();
-  if (imaMountState.saveOwner) imaMountState.saveOwner.liveSnapshot = draft;
-  renderImaMountGroups();
-  imaRestoreFocus(focus);
-}
-
-async function loadImaFolderChildren(groupId, parentId, force = false) {
-  const key = imaMountCacheKey(groupId, parentId);
-  if (!force && imaMountState.folders.has(key)) return;
-  if (!force && imaMountState.loading.has(key)) return;
-  const focus = imaFocusSnapshot();
-  const request = { generation: imaMountState.generation, id: ++imaMountState.requestSeq };
-  if (force) imaMountState.folders.delete(key);
-  imaMountState.errors.delete(key);
-  imaMountState.loading.add(key);
-  imaMountState.folderRequests.set(key, request);
-  if (String(imaMountState.selectedGroupId) === String(groupId)) {
-    renderImaFolderTree(groupId);
-    imaRestoreFocus(focus);
-  }
-  try {
-    const path = `/api/admin/ima-collector/groups/${encodeURIComponent(groupId)}/folders?parent_id=${encodeURIComponent(parentId)}`;
-    const data = await api(path);
-    const current = request.generation === imaMountState.generation
-      && imaMountState.folderRequests.get(key) === request;
-    if (!current) return;
-    const items = Array.isArray(data.items) ? data.items : [];
-    imaMountState.folders.set(key, items);
-    items.forEach((item) => {
-      if (item?.id) imaMountState.parents.set(imaMountCacheKey(groupId, String(item.id)), String(item.parent_id || parentId));
-    });
-    normalizeImaMountDraft(groupId);
-  } catch (err) {
-    const current = request.generation === imaMountState.generation
-      && imaMountState.folderRequests.get(key) === request;
-    if (current) imaMountState.errors.set(key, imaSafeError(err.message || "文件夹加载失败"));
-  } finally {
-    const current = request.generation === imaMountState.generation
-      && imaMountState.folderRequests.get(key) === request;
-    if (!current) return;
-    imaMountState.folderRequests.delete(key);
-    imaMountState.loading.delete(key);
-    if (String(imaMountState.selectedGroupId) === String(groupId)) {
-      renderImaFolderTree(groupId);
-      imaRestoreFocus(focus);
-    }
-  }
-}
-
-function retryImaFolderLoad(button) {
-  loadImaFolderChildren(button?.dataset.groupId || "", button?.dataset.parentId || "", true);
-}
-
-async function discoverImaGroups() {
-  if (imaMountState.discoveryBusy) return;
-  const routeSeq = routeRenderSeq;
-  const generation = imaMountState.generation;
-  const discoverySeq = ++imaMountState.discoverySeq;
-  const request = { generation, routeSeq, seq: discoverySeq };
-  imaMountState.discoveryOwner = request;
-  imaMountState.discoveryBusy = true;
-  const button = $("#ima-discover-btn");
-  const status = $("#ima-group-discovery-status");
-  if (button) button.disabled = true;
-  if (status) status.textContent = "正在发现共享知识库…";
-  try {
-    const result = await api("/api/admin/ima-collector/discover", { method: "POST" });
-    if (generation !== imaMountState.generation
-      || imaMountState.discoverySeq !== discoverySeq
-      || imaMountState.discoveryOwner !== request
-      || !routeStillActive(routeSeq)) return;
-    if (result.ok && result.config) {
-      initImaMountState(result.config.groups, true);
-      imaMountState.discoveryOwner = request;
-      imaMountState.discoveryBusy = true;
-      renderImaMountGroups();
-      renderImaGroupAcl();
-      const currentStatus = $("#ima-group-discovery-status");
-      if (currentStatus) currentStatus.innerHTML = imaGroupDiscoveryStatusText(result);
-    } else {
-      const error = result.discovery?.error || "自动发现失败";
-      const currentStatus = $("#ima-group-discovery-status");
-      if (currentStatus) currentStatus.innerHTML = `自动发现失败：${escapeHtml(imaSafeError(error))}（已保留上次结果）`;
-    }
-  } catch (err) {
-    if (generation === imaMountState.generation
-      && imaMountState.discoverySeq === discoverySeq
-      && imaMountState.discoveryOwner === request
-      && routeStillActive(routeSeq)) {
-      const currentStatus = $("#ima-group-discovery-status");
-      if (currentStatus) currentStatus.innerHTML = `自动发现失败：${escapeHtml(imaSafeError(err.message || "请求失败"))}（已保留上次结果）`;
-    }
-  } finally {
-    if (imaMountState.discoveryOwner !== request || !routeStillActive(routeSeq)) return;
-    imaMountState.discoveryBusy = false;
-    imaMountState.discoveryOwner = null;
-    const currentButton = $("#ima-discover-btn");
-    if (currentButton && document.body.contains(currentButton)) currentButton.disabled = false;
-  }
-}
-
-function readImaMountGroups() {
-  return imaMountState.groups.map((group) => {
-    const folderIds = [...imaMountDraft(String(group.id))];
-    return {
-      id: String(group.id || "") || null,
-      name: String(group.name || "").trim(),
-      knowledge_base_id: String(group.knowledge_base_id || "").trim(),
-      root_folder_id: String(group.root_folder_id || "").trim(),
-      folder_ids: folderIds,
-      enabled: folderIds.length > 0,
-      interval_seconds: imaGroupIntervalSeconds(group),
-    };
-  });
-}
-
-function imaCollectorFormSnapshot() {
-  return {
-    uid: imaCollectorPureCache.uid || "",
-    knowledge_base_id: imaCollectorPureCache.knowledge_base_id || "",
-    root_folder_id: imaCollectorPureCache.root_folder_id || "",
-    interval_seconds: Number(imaCollectorPureCache.interval_seconds || 3600),
-    groups: readImaMountGroups(),
-    refresh_token: String(imaMountState.collectorDraft?.refresh_token || ""),
-  };
-}
-
-function imaCollectorFormRevision(snapshot) {
-  return JSON.stringify(snapshot);
-}
-
-function rememberImaCollectorDraft(snapshot = imaCollectorFormSnapshot()) {
-  imaMountState.collectorDraft = snapshot;
-  imaMountState.collectorDraftRevision = imaCollectorFormRevision(snapshot);
-  imaMountState.collectorDirty = true;
-  return snapshot;
-}
-
-function clearImaCollectorDraft(revision) {
-  if (imaMountState.collectorDraftRevision !== revision) return;
-  imaMountState.collectorDraft = null;
-  imaMountState.collectorDraftRevision = "";
-  imaMountState.collectorDirty = false;
-  if (imaMountState.collectorConfirmedRevision === revision) {
-    imaMountState.collectorConfirmedRevision = "";
-    imaMountState.collectorConfirmedLiveRevision = -1;
-    imaMountState.collectorConfirmedMountRevision = -1;
-  }
-}
-
-function imaCollectorDraftChanged(event) {
-  const target = event.target;
-  if (!target?.closest?.(".ima-interval-seg")) return;
-  if (event.type === "click") return;
-  const snapshot = rememberImaCollectorDraft();
-  imaMountState.collectorRevision += 1;
-  if (imaMountState.saveOwner) imaMountState.saveOwner.liveSnapshot = snapshot;
-}
-
-document.addEventListener("input", imaCollectorDraftChanged);
-document.addEventListener("change", imaCollectorDraftChanged);
-
-function restoreImaCollectorOwnerToken(owner, seq, draft = null) {
-  if (owner && owner !== imaMountState.saveOwner) return;
-  const draftRevision = imaMountState.collectorDraftRevision;
-  if (draftRevision === imaMountState.collectorConfirmedRevision
-    && imaMountState.collectorRevision === imaMountState.collectorConfirmedLiveRevision) return;
-  const pendingToken = owner?.liveSnapshot?.refresh_token || owner?.snapshot?.refresh_token || draft?.refresh_token;
-  if (!pendingToken) return;
-  const tokenInput = $("#ima-pure-token");
-  if (tokenInput && !tokenInput.value) tokenInput.value = pendingToken;
-}
-
-function imaSafeError(value) {
-  let text = String(value ?? "").split(/\r?\n/, 1)[0].slice(0, 240);
-  text = text.replace(/https?:\/\/\S+/gi, "<url>");
-  text = text.replace(/\bBearer\s+\S+/gi, "Bearer <redacted>");
-  text = text.replace(/(^|[?&\s])((?:token|refresh_token|authorization|sign|q-sign)\b(?:\s*[=:]\s*|\s+))[^\s&]+/gi, "$1$2<redacted>");
-  return text;
-}
-
-function imaGroupDiscoveryStatusText(status) {
-  const result = status?.last_result || {};
-  const discovery = status?.discovery || {};
-  const discoveryError = String(discovery.error || result.discovery_error || "").trim();
-  if (discoveryError) {
-    const safeError = imaSafeError(discoveryError);
-    return `自动发现失败：${escapeHtml(safeError)}（已保留上次结果）`;
-  }
-  const groups = Array.isArray(status?.config?.groups) ? status.config.groups : [];
-  if (!groups.length) {
-    return discovery.status === "ok" ? "未发现可用共享知识库" : "尚未发现共享知识库";
-  }
-  const mounted = groups.filter((group) => Array.isArray(group.folder_ids) && group.folder_ids.length).length;
-  const synced = Number.isFinite(Number(result.succeeded_groups))
-    ? ` · 最近同步 ${Number(result.succeeded_groups)} 个知识库`
-    : " · 等待同步";
-  return `已发现 ${groups.length} 个知识库 · 已挂载 ${mounted} 个${synced}`;
-}
-
-
 function isAdminSettingsPath() {
   const path = location.pathname;
   return path === "/admin/stats" || path === "/admin/knowledge";
@@ -8095,30 +4414,6 @@ async function reloadAdminSettingsPage(seq, authoritativeImaStatus = null) {
     return loadAdminKnowledge(seq, authoritativeImaStatus);
   }
   return loadAdminStats(seq, authoritativeImaStatus);
-}
-
-function switchKnowledgeSettingsTab(tab) {
-  if (tab === "cicc") tab = "local"; // 旧页签记忆迁移：中金已并入本地库
-  const allowed = ["collect", "zsxq", "storage", "local", "feishu"];
-  const next = allowed.includes(tab) ? tab : "collect";
-  if (next === "local") {
-    loadLocalLibraries();
-    loadCiccStatus();
-    startCiccPoll();
-  } else {
-    stopCiccPoll();
-  }
-  if (next === "storage") loadStorageHealth();
-  if (next === "feishu") loadFeishuDocumentSources();
-  try { sessionStorage.setItem(KS_TAB_KEY, next); } catch { /* ignore */ }
-  document.querySelectorAll(".ks-tab").forEach((btn) => {
-    const on = btn.dataset.tab === next;
-    btn.classList.toggle("is-on", on);
-    btn.setAttribute("aria-selected", String(on));
-  });
-  document.querySelectorAll(".ks-panel").forEach((panel) => {
-    panel.classList.toggle("is-on", panel.dataset.panel === next);
-  });
 }
 
 function feishuSourceStatusLabel(source) {
@@ -8146,8 +4441,13 @@ function feishuSourceRowsHtml(data) {
     ].filter(Boolean).join(" · ");
     const error = source.last_error ? `<p class="feishu-source-error">${escapeHtml(imaSafeError(source.last_error))}</p>` : "";
     const displayMode = source.display_mode === "document" ? "document" : "timeline";
+    const readable = source.sync_status === "succeeded" && Number(source.entry_count || 0) > 0;
+    const openLine = readable
+      ? `<p class="feishu-source-open">全员可读，无需单独授权</p>`
+      : `<p class="feishu-source-open is-blocked">同步成功后全员可读，当前暂无可读内容</p>`;
+    const shownTitle = source.display_name || source.title;
     return `<article class="feishu-source-row" data-source-id="${source.id}">
-      <div class="feishu-source-copy"><div class="feishu-source-title"><strong>${escapeHtml(source.title)}</strong><span class="feishu-source-state" data-status="${escapeHtml(source.sync_status)}">${escapeHtml(feishuSourceStatusLabel(source))}</span></div><p>${escapeHtml(detail)}</p>${error}</div>
+      <div class="feishu-source-copy"><div class="feishu-source-title"><strong>${escapeHtml(shownTitle)}</strong><button type="button" class="feishu-title-rename" onclick="renameFeishuDocumentSource(this.closest('[data-source-id]').dataset.sourceId,'${escapeHtml(shownTitle)}')" aria-label="修改展示名">改名</button><span class="feishu-source-state" data-status="${escapeHtml(source.sync_status)}">${escapeHtml(feishuSourceStatusLabel(source))}</span></div><p>${escapeHtml(detail)}</p>${error}</div>
       <label class="feishu-source-toggle"><span>启用</span><input type="checkbox" ${source.enabled ? "checked" : ""} onchange="toggleFeishuDocumentSource(this.closest('[data-source-id]').dataset.sourceId,this.checked,this)"></label>
       <div class="feishu-source-actions">
         <span class="feishu-display-label">展示方式</span>
@@ -8159,7 +4459,7 @@ function feishuSourceRowsHtml(data) {
         <a class="btn-ghost feishu-action" href="${escapeHtml(source.canonical_url)}" target="_blank" rel="noopener" aria-label="打开飞书原文 ${escapeHtml(source.title)}">${EXTERNAL_LINK_ICON}<span>打开原文</span></a>
         <button type="button" class="btn-ghost danger feishu-action" data-source-id="${source.id}" data-title="${escapeHtml(source.title)}" onclick="removeFeishuDocumentSource(this.dataset.sourceId,this.dataset.title,this)">移除</button>
       </div>
-      <div class="feishu-source-acl"><span>查看权限</span>${aclPickerHtml(source.acl_usernames || [], `feishu-acl-${source.id}`, true)}</div>
+      ${openLine}
     </article>`;
   }).join("")}</div>`;
 }
@@ -8193,6 +4493,23 @@ function feishuDocsConfigHtml(data) {
       <button type="button" class="btn-normal" id="feishu-cfg-save" onclick="saveFeishuDocsConfig()">保存设置</button>
     </div>
   </div>`;
+}
+
+async function renameFeishuDocumentSource(id, current) {
+  const name = prompt("新的展示名（留空则恢复飞书标题）：", current || "");
+  if (name === null) return;
+  const value = name.trim();
+  if (value.length > 200) {
+    flash("展示名过长（≤200 字）", "error");
+    return;
+  }
+  try {
+    await api(`/api/admin/feishu-documents/${id}`, { method: "PATCH", body: JSON.stringify({ display_name: value }) });
+    flash(value ? "展示名已更新，知识库内容将随之刷新" : "已恢复飞书标题，知识库内容将随之刷新");
+    await loadFeishuDocumentSources();
+  } catch (err) {
+    flash(err.message || "保存失败", "error");
+  }
 }
 
 async function saveFeishuDocsConfig() {
@@ -8236,15 +4553,6 @@ async function loadFeishuDocumentSources() {
       ? `<button type="button" class="btn-ghost" onclick="authorizeFeishuDocuments()">${data.authorized ? "重新授权" : "授权飞书"}</button>`
       : "";
     host.innerHTML = `${feishuDocsConfigHtml(data)}<div class="feishu-source-summary"><span>${escapeHtml(auth)} · 每 ${Number(data.interval_seconds) || 60} 秒检查</span>${authButton}</div>${feishuSourceRowsHtml(data)}`;
-    await fetchAclCandidateUsers();
-    if (!active()) return;
-    host.querySelectorAll(".feishu-source-row").forEach((row) => {
-      const picker = row.querySelector(".ima-acl-picker");
-      const source = (data.sources || []).find((item) => String(item.id) === row.dataset.sourceId);
-      if (!picker || !source) return;
-      picker.dataset.groupId = source.group_id;
-      syncImaAclMoreButton(picker, (source.acl_usernames || []).length);
-    });
   } catch (err) {
     if (!active()) return;
     host.innerHTML = emptyState(`飞书文档加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="loadFeishuDocumentSources()">重试</button></div>`);
@@ -8323,6 +4631,7 @@ async function addFeishuDocumentSource() {
   if (!url) { flash("请填写飞书 Wiki 或 Docx 链接", "error"); return; }
   const local = feishuLocalUrlInfo(url);
   if (!local || local.invalid) { renderFeishuDocumentPreview({ invalid: true }); flash("请输入有效的飞书 Wiki 或 Docx 链接", "error"); return; }
+  if (!confirm("飞书文档添加后全站用户可读，不支持单独授权。确认添加吗？")) return;
   if (button) button.disabled = true;
   try {
     if (_feishuPreview.url !== url || !_feishuPreview.data) {
@@ -8423,7 +4732,7 @@ function imaStoragePanelHtml(storage) {
     missing: "未配置",
     invalid: "状态无效",
   };
-  return `<section class="section-panel ks-panel" data-panel="storage" id="ima-storage-panel">
+  return `<section class="section-panel ks-panel" data-panel="storage" id="ks-panel-storage" role="tabpanel" aria-labelledby="ks-tab-storage">
     <header class="section-head"><div><h2 class="section-title">存储</h2>
     <p class="section-meta">刷新探测，备份归档。密钥不进网页。</p></div></header>
     <p class="muted" id="ima-storage-status">${escapeHtml(labels[status] || status)} · 用量 ${escapeHtml(used)} · 上次备份 ${escapeHtml(resticAt)} · 检查 ${escapeHtml(resticOk)}（${escapeHtml(checkAt)}）</p>
@@ -8442,1261 +4751,6 @@ function imaStoragePanelHtml(storage) {
   </section>`;
 }
 
-function adminNewsSourceStatus(source) {
-  const feeds = (source.feeds || []).filter((feed) => !feed.archived_at && feed.enabled);
-  if (!source.enabled || !feeds.length) return "paused";
-  if (feeds.some((feed) => feed.consecutive_failures > 0 && !feed.last_success_at)) return "unavailable";
-  if (feeds.some((feed) => feed.consecutive_failures > 0)) return "delayed";
-  return "ok";
-}
-
-function adminNewsStatusLabel(status) {
-  return ({ all: "全部", ok: "正常", paused: "已暂停", delayed: "有延迟", unavailable: "暂不可用" })[status] || status;
-}
-
-function adminNewsFilteredSources() {
-  const q = adminNewsState.q.trim().toLowerCase();
-  return adminNewsState.sources.filter((source) => {
-    if (!adminNewsState.showArchived && source.archived_at) return false;
-    if (q && !(source.name || "").toLowerCase().includes(q)) return false;
-    return adminNewsState.status === "all" || adminNewsSourceStatus(source) === adminNewsState.status;
-  });
-}
-
-function adminNewsSourceRowHtml(source) {
-  const status = adminNewsSourceStatus(source);
-  return `<button type="button" class="news-admin-source-row ${source.id === adminNewsState.selectedId ? "is-selected" : ""} ${source.archived_at ? "is-archived" : ""}" onclick="selectAdminNewsSource(${source.id})">
-    <span class="news-admin-source-name">${escapeHtml(source.name)}</span>
-    <span class="news-admin-source-meta"><span class="news-admin-status news-admin-status-${status}">${adminNewsStatusLabel(status)}</span><span>${source.article_count || 0} 篇</span></span>
-  </button>`;
-}
-
-function adminNewsFeedRowHtml(feed) {
-  const status = feed.archived_at ? "已归档" : (feed.enabled ? (feed.consecutive_failures ? "有延迟" : "启用") : "已停用");
-  const error = feed.last_error_detail ? `<p class="news-admin-feed-error">${escapeHtml(feed.last_error_detail)}</p>` : "";
-  return `<div class="news-admin-feed-row ${feed.archived_at ? "is-archived" : ""}">
-    <div class="news-admin-feed-main">
-      <div class="news-admin-feed-title"><strong>${escapeHtml(feed.name)}</strong><span class="news-admin-status">${status}</span></div>
-      <div class="news-admin-feed-url">${escapeHtml(feed.url)}</div>
-      <div class="news-admin-feed-meta">最近成功：${escapeHtml(feed.last_success_at || "无记录")} · 连续失败：${Number(feed.consecutive_failures || 0)}</div>
-      ${error}
-    </div>
-    <div class="news-admin-feed-actions">
-      ${feed.archived_at ? `<button type="button" class="btn-ghost" onclick="restoreAdminNewsFeed(${feed.id})">恢复</button>` : `
-        <button type="button" class="btn-ghost" onclick="openNewsFeedModal(${feed.source_id}, ${feed.id})">编辑</button>
-        <button type="button" class="btn-ghost" onclick="refreshAdminNewsFeed(${feed.id})" title="刷新 Feed" aria-label="刷新 Feed">${REFRESH_ICON}</button>
-        <button type="button" class="btn-ghost" onclick="toggleAdminNewsFeed(${feed.id}, ${feed.enabled ? "false" : "true"})">${feed.enabled ? "停用" : "启用"}</button>
-        <button type="button" class="btn-ghost danger" onclick="archiveAdminNewsFeed(${feed.id})">归档</button>`}
-    </div>
-  </div>`;
-}
-
-function renderAdminNews() {
-  const target = $("#admin-body");
-  if (!target) return;
-  const visible = adminNewsFilteredSources();
-  const selected = adminNewsState.sources.find((source) => source.id === adminNewsState.selectedId)
-    || visible.find((source) => !source.archived_at)
-    || visible[0];
-  if (selected && selected.id !== adminNewsState.selectedId) adminNewsState.selectedId = selected.id;
-  const detail = selected ? `
-    <section class="news-admin-detail-panel">
-      <header class="news-admin-detail-head">
-        <div><p class="section-kicker">媒体</p><h2 class="section-title">${escapeHtml(selected.name)}</h2>
-          <p class="section-meta">${selected.archived_at ? "已归档，用户暂不可读" : (selected.enabled ? "正在采集" : "已停用，仅保留历史文章")}</p></div>
-        <div class="toolbar news-admin-actions">
-          ${selected.archived_at ? `<button type="button" class="btn-normal" onclick="restoreAdminNewsSource(${selected.id})">恢复媒体</button>` : `
-            <button type="button" class="btn-ghost" onclick="openNewsSourceModal(${selected.id})">编辑媒体</button>
-            <button type="button" class="btn-ghost" onclick="toggleAdminNewsSource(${selected.id}, ${selected.enabled ? "false" : "true"})">${selected.enabled ? "停用采集" : "启用采集"}</button>
-            <button type="button" class="btn-ghost danger" onclick="archiveAdminNewsSource(${selected.id})">归档</button>`}
-        </div>
-      </header>
-      <div class="news-admin-metrics">
-        <span>文章 <strong>${selected.article_count || 0}</strong></span>
-        <span>Feed <strong>${(selected.feeds || []).filter((feed) => !feed.archived_at).length}</strong></span>
-        <span>状态 <strong>${adminNewsStatusLabel(adminNewsSourceStatus(selected))}</strong></span>
-      </div>
-      <div class="news-admin-feed-head"><div><h3>Feed 地址</h3><p class="section-meta">一个媒体可以配置多个公网 RSS/Atom Feed。</p></div>
-        ${selected.archived_at ? "" : `<button type="button" class="btn-normal" onclick="openNewsFeedModal(${selected.id})">${PLUS_ICON} 添加 Feed</button>`}
-      </div>
-      <div class="news-admin-feeds">${(selected.feeds || []).length ? selected.feeds.map(adminNewsFeedRowHtml).join("") : emptyState("还没有配置 Feed")}</div>
-    </section>` : `<section class="news-admin-detail-panel">${emptyState("选择一个媒体开始管理")}</section>`;
-  const settings = adminNewsState.settings || { enabled: true, visible: true, refresh_interval_minutes: 10 };
-  const selectedStatus = adminNewsState.status;
-  target.innerHTML = `${statsTabsHtml("news")}
-    <div id="st-news" class="news-admin-page">
-      <section class="section-panel news-admin-settings">
-        <div><h2 class="section-title">财经资讯</h2><p class="section-meta">共享采集所有启用 Feed；用户按媒体主动选择来源。</p></div>
-        <div class="news-admin-settings-controls">
-          <label class="switch"><input id="news-global-enabled" type="checkbox" ${settings.enabled ? "checked" : ""} onchange="saveAdminNewsSettings()"><span class="track"></span><span>启用财经新闻采集</span></label>
-          <label class="switch"><input id="news-global-visible" type="checkbox" ${settings.visible ? "checked" : ""} onchange="saveAdminNewsSettings()"><span class="track"></span><span>向用户显示财经新闻</span></label>
-          <label class="news-admin-interval">刷新周期 <input id="news-global-interval" class="form-control" type="number" min="5" max="1440" value="${Number(settings.refresh_interval_minutes) || 10}"> 分钟</label>
-          <button type="button" class="btn-ghost" onclick="saveAdminNewsSettings()">保存设置</button>
-          <button type="button" class="btn-normal" onclick="refreshAllAdminNews()">${REFRESH_ICON} 刷新全部</button>
-        </div>
-      </section>
-      <div class="news-admin-layout">
-        <aside class="news-admin-source-rail">
-          <div class="news-admin-source-toolbar"><input class="form-control" type="search" placeholder="搜索媒体" value="${escapeHtml(adminNewsState.q)}" oninput="adminNewsState.q=this.value;renderAdminNews()">
-            <select class="form-control" aria-label="媒体状态" onchange="adminNewsState.status=this.value;renderAdminNews()">
-              ${["all", "ok", "paused", "delayed", "unavailable"].map((status) => `<option value="${status}" ${selectedStatus === status ? "selected" : ""}>${adminNewsStatusLabel(status)}</option>`).join("")}
-            </select>
-            <label class="news-admin-archived-toggle"><input type="checkbox" ${adminNewsState.showArchived ? "checked" : ""} onchange="adminNewsState.showArchived=this.checked;renderAdminNews()"> 显示已归档</label>
-          </div>
-          <button type="button" class="btn-normal news-admin-add-source" onclick="openNewsSourceModal()">${PLUS_ICON} 新增媒体</button>
-          <div class="news-admin-source-list">${visible.length ? visible.map(adminNewsSourceRowHtml).join("") : emptyState("没有匹配的媒体")}</div>
-        </aside>
-        ${detail}
-      </div>
-    </div>`;
-}
-
-async function loadAdminNews(seq = routeRenderSeq) {
-  if (!routeStillActive(seq)) return false;
-  const loadSeq = ++_adminNewsLoadSeq;
-  stopStatsTimer();
-  try {
-    const [settings, sources] = await Promise.all([
-      api("/api/admin/news/settings"),
-      api(`/api/admin/news/sources?include_archived=${adminNewsState.showArchived ? "1" : "0"}`),
-    ]);
-    if (!routeStillActive(seq) || loadSeq !== _adminNewsLoadSeq) return false;
-    adminNewsState.settings = settings;
-    state.newsVisible = settings.visible !== false;
-    adminNewsState.sources = sources.items || [];
-    if (!adminNewsState.sources.some((source) => source.id === adminNewsState.selectedId)) adminNewsState.selectedId = 0;
-    renderSidebar(state.user);
-    renderTopbar(state.user);
-    renderBottomNav(state.user);
-    renderAdminNews();
-    return true;
-  } catch (err) {
-    if (!routeStillActive(seq) || loadSeq !== _adminNewsLoadSeq) return false;
-    $("#admin-body").innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-normal" onclick="loadAdminNews(routeRenderSeq)">重试</button></div>`);
-    return false;
-  }
-}
-
-function selectAdminNewsSource(sourceId) {
-  adminNewsState.selectedId = Number(sourceId);
-  renderAdminNews();
-}
-
-async function saveAdminNewsSettings() {
-  const seq = routeRenderSeq;
-  const enabled = $("#news-global-enabled")?.checked;
-  const visible = $("#news-global-visible")?.checked;
-  const interval = Number($("#news-global-interval")?.value);
-  if (!Number.isInteger(interval) || interval < 5 || interval > 1440) {
-    flash("刷新周期必须为 5-1440 分钟", "error");
-    return;
-  }
-  try {
-    await api("/api/admin/news/settings", { method: "PATCH", body: JSON.stringify({ enabled, visible, refresh_interval_minutes: interval }) });
-    if (!routeStillActive(seq)) return;
-    flash("财经新闻设置已保存");
-    await loadAdminNews(seq);
-  } catch (err) {
-    flash(err.message, "error");
-  }
-}
-
-async function refreshAllAdminNews() {
-  const seq = routeRenderSeq;
-  try {
-    const result = await api("/api/admin/news/refresh", { method: "POST" });
-    if (!routeStillActive(seq)) return;
-    flash(`已提交 ${result.accepted_feed_ids.length} 个 Feed，忙碌 ${result.busy_feed_ids.length} 个`);
-    await loadAdminNews(seq);
-  } catch (err) {
-    flash(err.message, "error");
-  }
-}
-
-async function refreshAdminNewsFeed(feedId) {
-  const seq = routeRenderSeq;
-  try {
-    await api(`/api/admin/news/feeds/${feedId}/refresh`, { method: "POST" });
-    if (!routeStillActive(seq)) return;
-    flash("Feed 刷新已提交");
-    await loadAdminNews(seq);
-  } catch (err) {
-    flash(err.message, "error");
-  }
-}
-
-async function refreshAdminNewsSource(sourceId) {
-  const seq = routeRenderSeq;
-  try {
-    const result = await api(`/api/admin/news/sources/${sourceId}/refresh`, { method: "POST" });
-    if (!routeStillActive(seq)) return;
-    flash(`已提交 ${result.accepted_feed_ids.length} 个 Feed`);
-    await loadAdminNews(seq);
-  } catch (err) {
-    flash(err.message, "error");
-  }
-}
-
-async function toggleAdminNewsSource(sourceId, enabled) {
-  const seq = routeRenderSeq;
-  try {
-    await api(`/api/admin/news/sources/${sourceId}`, { method: "PATCH", body: JSON.stringify({ enabled }) });
-    if (!routeStillActive(seq)) return;
-    flash(enabled ? "媒体已启用" : "媒体已停用");
-    await loadAdminNews(seq);
-  } catch (err) { flash(err.message, "error"); }
-}
-
-async function toggleAdminNewsFeed(feedId, enabled) {
-  const seq = routeRenderSeq;
-  try {
-    await api(`/api/admin/news/feeds/${feedId}`, { method: "PATCH", body: JSON.stringify({ enabled }) });
-    if (!routeStillActive(seq)) return;
-    flash(enabled ? "Feed 已启用" : "Feed 已停用");
-    await loadAdminNews(seq);
-  } catch (err) { flash(err.message, "error"); }
-}
-
-async function archiveAdminNewsSource(sourceId) {
-  const seq = routeRenderSeq;
-  if (!confirm("归档媒体后将停止采集并对用户隐藏，确认继续？")) return;
-  try {
-    await api(`/api/admin/news/sources/${sourceId}/archive`, { method: "POST" });
-    if (!routeStillActive(seq)) return;
-    flash("媒体已归档");
-    await loadAdminNews(seq);
-  } catch (err) { flash(err.message, "error"); }
-}
-
-async function restoreAdminNewsSource(sourceId) {
-  const seq = routeRenderSeq;
-  try {
-    await api(`/api/admin/news/sources/${sourceId}/restore`, { method: "POST" });
-    if (!routeStillActive(seq)) return;
-    flash("媒体已恢复");
-    await loadAdminNews(seq);
-  } catch (err) { flash(err.message, "error"); }
-}
-
-async function archiveAdminNewsFeed(feedId) {
-  const seq = routeRenderSeq;
-  if (!confirm("归档 Feed 后将停止采集，确认继续？")) return;
-  try {
-    await api(`/api/admin/news/feeds/${feedId}/archive`, { method: "POST" });
-    if (!routeStillActive(seq)) return;
-    flash("Feed 已归档");
-    await loadAdminNews(seq);
-  } catch (err) { flash(err.message, "error"); }
-}
-
-async function restoreAdminNewsFeed(feedId) {
-  const seq = routeRenderSeq;
-  try {
-    await api(`/api/admin/news/feeds/${feedId}/restore`, { method: "POST" });
-    if (!routeStillActive(seq)) return;
-    flash("Feed 已恢复");
-    await loadAdminNews(seq);
-  } catch (err) { flash(err.message, "error"); }
-}
-
-function closeNewsModal(mask) {
-  if (mask) mask.remove();
-  else document.querySelector(".news-admin-modal")?.remove();
-}
-
-function openNewsSourceModal(sourceId = 0) {
-  const source = adminNewsState.sources.find((item) => item.id === Number(sourceId));
-  const mask = document.createElement("div");
-  mask.className = "modal-mask news-admin-modal";
-  mask.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="news-source-modal-title">
-    <h3 id="news-source-modal-title">${source ? "编辑媒体" : "新增媒体"}</h3>
-    <label class="form-label">媒体名称<input id="news-source-name" class="form-control" maxlength="60" value="${escapeHtml(source?.name || "")}"></label>
-    <p class="muted">新增媒体不会自动加入任何用户的新闻流；启用全文采集前请确认内容许可。</p>
-    <div class="toolbar"><button type="button" class="btn-normal" id="news-source-save">保存</button><button type="button" class="btn-ghost" data-close>取消</button></div>
-  </div>`;
-  document.body.appendChild(mask);
-  const close = () => closeNewsModal(mask);
-  mask.addEventListener("click", (event) => { if (event.target === mask) close(); });
-  mask.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } });
-  mask.querySelector("[data-close]").addEventListener("click", close);
-  mask.querySelector("#news-source-save").addEventListener("click", async () => {
-    const name = mask.querySelector("#news-source-name").value.trim();
-    if (!name) { flash("媒体名称不能为空", "error"); return; }
-    const seq = routeRenderSeq;
-    const button = mask.querySelector("#news-source-save");
-    button.disabled = true;
-    try {
-      await api(source ? `/api/admin/news/sources/${source.id}` : "/api/admin/news/sources", {
-        method: source ? "PATCH" : "POST", body: JSON.stringify({ name }),
-      });
-      if (!routeStillActive(seq)) return;
-      close();
-      flash("媒体已保存");
-      await loadAdminNews(seq);
-    } catch (err) { flash(err.message, "error"); button.disabled = false; }
-  });
-  mask.querySelector("#news-source-name").focus();
-}
-
-function openNewsFeedModal(sourceId, feedId = 0) {
-  const source = adminNewsState.sources.find((item) => item.id === Number(sourceId));
-  if (!source) return;
-  const feed = (source.feeds || []).find((item) => item.id === Number(feedId));
-  const mask = document.createElement("div");
-  mask.className = "modal-mask news-admin-modal";
-  mask.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="news-feed-modal-title">
-    <h3 id="news-feed-modal-title">${feed ? "编辑 Feed" : "新增 Feed"}</h3>
-    <label class="form-label">Feed 名称<input id="news-feed-name" class="form-control" maxlength="80" value="${escapeHtml(feed?.name || "")}"></label>
-    <label class="form-label">公网 RSS/Atom URL<input id="news-feed-url" class="form-control" maxlength="2048" type="url" value="${escapeHtml(feed?.url || "")}" placeholder="https://example.com/feed.xml"></label>
-    <p class="muted">只接受公网 HTTP(S) Feed；保存前会使用正式 SSRF 防护验证。管理员须确认全文内容许可。</p>
-    <div id="news-feed-preview" class="news-admin-preview" aria-live="polite"></div>
-    <div class="toolbar"><button type="button" class="btn-normal" id="news-feed-save">验证并保存</button><button type="button" class="btn-ghost" data-close>取消</button></div>
-  </div>`;
-  document.body.appendChild(mask);
-  const close = () => closeNewsModal(mask);
-  mask.addEventListener("click", (event) => { if (event.target === mask) close(); });
-  mask.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } });
-  mask.querySelector("[data-close]").addEventListener("click", close);
-  mask.querySelector("#news-feed-save").addEventListener("click", () => validateNewsFeedDraft(source.id, feed?.id || 0, mask));
-  mask.querySelector("#news-feed-name").focus();
-}
-
-async function validateNewsFeedDraft(sourceId, feedId = 0, mask = document.querySelector(".news-admin-modal")) {
-  if (!mask) return;
-  const name = mask.querySelector("#news-feed-name").value.trim();
-  const url = mask.querySelector("#news-feed-url").value.trim();
-  const button = mask.querySelector("#news-feed-save");
-  const preview = mask.querySelector("#news-feed-preview");
-  if (!name || !url) { flash("请填写 Feed 名称和 URL", "error"); return; }
-  button.disabled = true;
-  try {
-    const validation = await api("/api/admin/news/feeds/validate", { method: "POST", body: JSON.stringify({ url }) });
-    preview.innerHTML = `<p><strong>${escapeHtml(validation.format)}</strong> · ${escapeHtml(validation.title || "无标题")}</p>${(validation.entries || []).map((entry) => `<p>${escapeHtml(entry.title)} · ${escapeHtml(entry.published_at || "")}<br>${escapeHtml(entry.text || "暂无纯文本预览")}</p>`).join("") || "<p>有效 Feed，暂无条目</p>"}`;
-    const feed = adminNewsState.sources.flatMap((source) => source.feeds || []).find((item) => item.id === Number(feedId));
-    await api(feedId ? `/api/admin/news/feeds/${feedId}` : `/api/admin/news/sources/${sourceId}/feeds`, {
-      method: feedId ? "PATCH" : "POST", body: JSON.stringify(feedId ? { name, url } : { name, url }),
-    });
-    if (!routeStillActive(routeRenderSeq)) return;
-    closeNewsModal(mask);
-    flash("Feed 已验证并保存");
-    await loadAdminNews(routeRenderSeq);
-  } catch (err) { flash(err.message, "error"); button.disabled = false; }
-}
-
-async function loadAdminStats(seq = _adminRenderSeq, authoritativeImaStatus = null) {
-  if (!routeStillActive(seq)) return false;
-  const tab = statsTabFromHash();
-  if (tab === "news") return loadAdminNews(seq);
-  if (tab === "legacy-dashboard") {
-    replaceRoute("admin/dashboard");
-    return false;
-  }
-  const generation = imaMountState.generation;
-  const pendingOwner = imaMountState.saveOwner;
-  if (pendingOwner && !pendingOwner.putCompleted && $("#ima-mount-layout")) {
-    pendingOwner.liveSnapshot = imaCollectorFormSnapshot();
-    rememberImaCollectorDraft(pendingOwner.liveSnapshot);
-  }
-  const statsLoadSeq = ++_adminStatsLoadSeq;
-  let s;
-  let statsLoadError = null;
-  try {
-    const stats = await api("/api/stats");
-    if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq
-      || generation !== imaMountState.generation) return false;
-    s = authoritativeImaStatus ? { ...stats, ima_collector: authoritativeImaStatus } : stats;
-    _lastAdminStatsSnapshot = s;
-  } catch (err) {
-    if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq
-      || generation !== imaMountState.generation) return false;
-    const message = `加载失败: ${err.message || "请求失败"}`;
-    const fallbackStats = _lastAdminStatsSnapshot;
-    if (fallbackStats && authoritativeImaStatus) {
-      s = { ...fallbackStats, ima_collector: authoritativeImaStatus };
-      statsLoadError = message;
-    } else {
-      const retry = `<div><button type="button" class="btn-normal" onclick="loadAdminStats(${seq})">重试</button></div>`;
-      const error = $("#stats-poll-error");
-      if (error && document.body.contains(error)) {
-        error.innerHTML = `<div class="ima-folder-state ima-folder-error" role="alert">${escapeHtml(message)}${retry}</div>`;
-      } else {
-        const body = $("#admin-body");
-        if (body) body.innerHTML = emptyState(message, retry);
-      }
-      return false;
-    }
-  }
-  if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq
-    || generation !== imaMountState.generation) return false;
-  stopStatsTimer();
-  const owner = imaMountState.saveOwner;
-  const ownerIsCurrent = owner && owner === pendingOwner;
-  const ownerLiveSnapshot = ownerIsCurrent ? owner.liveSnapshot : null;
-  const ownerHasNewerEdits = !!ownerLiveSnapshot
-    && imaCollectorFormRevision(ownerLiveSnapshot) !== owner.formRevision;
-  const ownerSnapshot = ownerIsCurrent
-    ? (owner.putCompleted
-      ? (ownerHasNewerEdits ? ownerLiveSnapshot : null)
-      : (ownerLiveSnapshot || owner.snapshot))
-    : null;
-  const pendingCollectorDraft = imaMountState.collectorDraft;
-  const confirmedCollectorDraft = pendingCollectorDraft
-    && imaMountState.collectorDraftRevision === imaMountState.collectorConfirmedRevision
-    && imaMountState.collectorRevision === imaMountState.collectorConfirmedLiveRevision
-    && imaMountState.revision === imaMountState.collectorConfirmedMountRevision;
-  const preserveMountDraft = imaMountState.dirty
-    && !confirmedCollectorDraft
-    && !(ownerIsCurrent && owner.putCompleted && !ownerHasNewerEdits);
-  const mountRevisionChangedDuringSave = ownerIsCurrent
-    && imaMountState.revision !== owner.mountRevision;
-  const preserveMountDraftForReload = preserveMountDraft || mountRevisionChangedDuringSave;
-  const xq = s.xueqiu_cookie || {};
-  const tw = s.twitter_cookie || {};
-  const ima = s.ima_credentials || {};
-  const imaCollector = s.ima_collector || {};
-  const pure = imaCollector.config || {};
-  const collectorDraft = confirmedCollectorDraft ? null
-    : (ownerSnapshot || (ownerIsCurrent && owner.putCompleted ? null : pendingCollectorDraft));
-  const collector = collectorDraft || pure;
-  const collectorGroups = collectorDraft?.groups || pure.groups || [];
-  const zq = s.zsxq_cookie || {};
-  const zc = s.zsxq_cache || { files: 0, bytes: 0 };
-  const zcSize = fmtCacheBytes(zc.bytes);
-  $("#admin-body").innerHTML = `
-    <div id="stats-poll-error"></div>
-    ${statsTabsHtml("config")}
-    <div id="st-plaza" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-plaza" style="display:none">
-      <section class="section-panel">
-        <header class="section-head">
-          <div><h2 class="section-title">动态广场显示</h2>
-          <p class="section-meta">控制时间线角标和「全部」里的内容。自动：该源启用大V 为 0 时隐藏；也可手动显示或隐藏。</p></div>
-        </header>
-        <div id="plaza-sources">${plazaSourceRowsHtml(s.plaza_sources)}</div>
-      </section>
-    </div>
-    <div id="st-config" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-config">
-      <section class="section-panel">
-        <header class="section-head">
-          <div><h2 class="section-title">抓取设置</h2>
-          <p class="section-meta">按抓取档位分组配置；保存后即时生效，无需重启。</p></div>
-        </header>
-        <div class="cfg-stack">
-          <div class="cfg-grid">
-            <div class="cfg-group">
-              <p class="cfg-group-title">基础轮询</p>
-              <div class="cfg-fields">
-                <label class="cfg-field" title="全局轮询间隔（所有大V的最低抓取频率）">
-                  <span>轮询间隔<span class="cfg-unit">秒</span></span>
-                  <input id="pc-interval" type="number" class="form-control" min="1" max="3600" value="${s.polling_config.interval_seconds}">
-                </label>
-                <label class="cfg-field" title="标记为「优先」的大V用更短间隔抓取，新帖更早送达">
-                  <span>优先大V间隔<span class="cfg-unit">秒</span></span>
-                  <input id="pc-priority" type="number" class="form-control" min="1" max="600" value="${s.polling_config.priority_interval_seconds}">
-                </label>
-                <label class="cfg-field" title="普通大V帖子按此周期合并推送摘要；0 = 实时单条推送">
-                  <span>合并推送周期<span class="cfg-unit">秒</span></span>
-                  <input id="pc-digest" type="number" class="form-control" min="0" max="86400" value="${s.polling_config.digest_interval_seconds}">
-                </label>
-              </div>
-            </div>
-            <div class="cfg-group">
-              <p class="cfg-group-title">自适应降频 <span class="hint">无新帖自动拉长</span></p>
-              <div class="cfg-fields">
-                <label class="cfg-field" title="普通大V长期无新帖时封顶的空轮间隔，控制对平台的请求频率">
-                  <span>普通大V空轮封顶<span class="cfg-unit">秒</span></span>
-                  <input id="pc-nc" type="number" class="form-control" min="5" max="86400" value="${s.polling_config.normal_idle_cap_seconds}">
-                </label>
-                <label class="cfg-field" title="优先大V长期无新帖时封顶的空轮间隔">
-                  <span>优先大V空轮封顶<span class="cfg-unit">秒</span></span>
-                  <input id="pc-pc" type="number" class="form-control" min="5" max="86400" value="${s.polling_config.priority_idle_cap_seconds}">
-                </label>
-                <label class="cfg-field" title="X 直抓失败期间封顶的抓取间隔，失败期放慢以免空打接口">
-                  <span>X失败封顶<span class="cfg-unit">秒</span></span>
-                  <input id="pc-xc" type="number" class="form-control" min="5" max="86400" value="${s.polling_config.x_fallback_cap_seconds}">
-                </label>
-              </div>
-            </div>
-            <div class="cfg-group">
-              <p class="cfg-group-title">雪球组合 <span class="hint">调仓实时推送</span></p>
-              <div class="cfg-fields">
-                <label class="cfg-field" title="组合抓取频率；无新帖时自动拉长（2 倍步进），调仓出现即恢复">
-                  <span>组合基础间隔<span class="cfg-unit">秒</span></span>
-                  <input id="pc-cb" type="number" class="form-control" min="5" max="3600" value="${s.polling_config.combination_base_seconds}">
-                </label>
-                <label class="cfg-field" title="组合长期无调仓时封顶的空轮间隔，避免空转刷接口">
-                  <span>组合空轮封顶<span class="cfg-unit">秒</span></span>
-                  <input id="pc-cc" type="number" class="form-control" min="5" max="86400" value="${s.polling_config.combination_idle_cap_seconds}">
-                </label>
-              </div>
-            </div>
-            <div class="cfg-group">
-              <p class="cfg-group-title">次要大V <span class="hint">低频合并</span></p>
-              <div class="cfg-fields">
-                <label class="cfg-field" title="次要大V基础抓取间隔（低于普通大V频率）">
-                  <span>抓取间隔<span class="cfg-unit">秒</span></span>
-                  <input id="pc-si" type="number" class="form-control" min="60" max="86400" value="${s.polling_config.secondary_interval_seconds}">
-                </label>
-                <label class="cfg-field" title="次要大V长期无新帖时封顶的空轮间隔">
-                  <span>空轮封顶<span class="cfg-unit">秒</span></span>
-                  <input id="pc-sc" type="number" class="form-control" min="60" max="86400" value="${s.polling_config.secondary_idle_cap_seconds}">
-                </label>
-                <label class="cfg-field" title="次要大V帖子按此周期合并推送；0 = 实时推送">
-                  <span>推送周期<span class="cfg-unit">秒</span></span>
-                  <input id="pc-sd" type="number" class="form-control" min="0" max="86400" value="${s.polling_config.secondary_digest_interval_seconds}">
-                </label>
-                <label class="cfg-field" title="合并推送最低条数：周期内积压不足此数则不推送、继续攒，够数才推">
-                  <span>最低条数<span class="cfg-unit">条</span></span>
-                  <input id="pc-sd-min" type="number" class="form-control" min="1" max="100" value="${s.polling_config.secondary_min_digest_count ?? 1}">
-                </label>
-              </div>
-            </div>
-          </div>
-          <div class="cfg-group">
-            <p class="cfg-group-title">通道</p>
-            <div class="cfg-flags">
-              <label class="cfg-field cfg-check" title="X 内容自动翻译成中文（配置 TWITTER_COOKIE 后走 X 官方翻译，质量同网页版）">
-                <input id="pc-translate" type="checkbox" ${s.polling_config.translate_twitter_content ? "checked" : ""}>
-                <span class="cfg-flag-text">
-                  <span>X 内容自动翻译成中文</span>
-                  <span class="cfg-check-desc">抓取时保存译文和原文；用户可在推送设置里选看哪一种</span>
-                </span>
-              </label>
-              <label class="cfg-field cfg-check" title="关闭后全部退回旧版 sendMessage + HTML，配图走相册">
-                <input id="pc-tg-rich" type="checkbox" ${s.polling_config.telegram_rich_messages !== false ? "checked" : ""}>
-                <span class="cfg-flag-text">
-                  <span>Telegram Rich Message</span>
-                  <span class="cfg-check-desc">标题分层、表格、图文一条；关掉则用原来的 HTML</span>
-                </span>
-              </label>
-            </div>
-          </div>
-          <div class="cfg-group">
-            <p class="cfg-group-title">保活与定时</p>
-            <div class="cfg-fields">
-              <label class="cfg-field" title="雪球保活探测间隔；0 = 关闭自动保活">
-                <span>雪球探测<span class="cfg-unit">秒</span></span>
-                <input id="pc-probe" type="number" class="form-control" min="0" max="86400" value="${s.polling_config.source_probe_interval_seconds}">
-              </label>
-              <label class="cfg-field" title="登录态自动保活间隔；0 = 关闭">
-                <span>cookie保活<span class="cfg-unit">秒</span></span>
-                <input id="pc-keepalive" type="number" class="form-control" min="0" max="86400" value="${s.polling_config.cookie_keepalive_interval_seconds}">
-              </label>
-              <label class="cfg-field" title="每日精选推送的小时（0-23，北京时间）">
-                <span>每日精选<span class="cfg-unit">时</span></span>
-                <input id="pc-daily" type="number" class="form-control" min="0" max="23" value="${s.polling_config.daily_report_hour}">
-              </label>
-            </div>
-          </div>
-        </div>
-        <div class="cfg-save-row">
-          <button type="button" class="btn-normal" id="pc-save" onclick="savePollingConfig()">保存抓取设置</button>
-        </div>
-        <p class="section-meta"><a href="/admin/knowledge" onclick="event.preventDefault();go('admin/knowledge')">IMA 与知识星球设置已移至研报库设置</a></p>
-      </section>
-    </div>
-    <div id="st-cookies" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-cookies" style="display:none">
-      <div id="cookie-repair-inline"></div>
-      <section class="section-panel">
-        <header class="section-head">
-          <div><h2 class="section-title">雪球 Cookie</h2>
-          <p class="section-meta">${cookieUpdatedLabel(xq)}${xq.preview ? ` · 预览 ${escapeHtml(xq.preview)}` : ""}${s.keepalive_interval_seconds > 0 ? ` · 每 ${Math.round(s.keepalive_interval_seconds / 3600)} 小时探测` : ""}。登录 xueqiu.com → F12 → Application → Cookies，复制整串后保存，即时生效。</p></div>
-        </header>
-        <label class="field-label" for="xq-cookie">雪球 Cookie</label>
-        <textarea id="xq-cookie" class="form-control cookie-paste" rows="4" placeholder="xq_a_token=...; u=..."></textarea>
-        <div class="toolbar" style="margin-top:12px">
-          <button type="button" class="btn-normal" onclick="saveXueqiuCookie()">保存雪球 Cookie</button>
-          <button type="button" class="btn-ghost" onclick="pasteCookieField('xq-cookie')">从剪贴板填入</button>
-          ${xq.set && !xq.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('xueqiu','雪球')" aria-label="清除雪球 Cookie">清除</button>` : ""}
-        </div>
-      </section>
-      <section class="section-panel">
-        <header class="section-head"><div><h2 class="section-title">微博 Cookie</h2>
-        <p class="section-meta">${cookieUpdatedLabel(s.weibo_cookie)}。用微博 App 扫码后自动保存，无需复制。</p></div></header>
-        <div class="toolbar">
-          <button type="button" class="btn-normal" id="wb-qr-start" onclick="startWeiboQr()">微博扫码登录</button>
-          ${s.weibo_cookie?.set && !s.weibo_cookie.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('weibo','微博')" aria-label="清除微博 Cookie">清除</button>` : ""}
-        </div>
-        <div id="wb-qr-box" class="qr-box"></div>
-      </section>
-      <section class="section-panel">
-        <header class="section-head">
-          <div><h2 class="section-title">X Cookie</h2>
-          <p class="section-meta">${cookieUpdatedLabel(tw)}${tw.preview ? ` · 预览 ${escapeHtml(tw.preview)}` : ""}。登录 x.com → F12 → Application → Cookies，复制整串（需含 auth_token 与 ct0），保存即时生效。</p></div>
-        </header>
-        <label class="field-label" for="tw-cookie">X Cookie</label>
-        <textarea id="tw-cookie" class="form-control cookie-paste" rows="4" placeholder="auth_token=...; ct0=..."></textarea>
-        <div class="toolbar" style="margin-top:12px">
-          <button type="button" class="btn-normal" onclick="saveTwitterCookie()">保存 X Cookie</button>
-          <button type="button" class="btn-ghost" onclick="pasteCookieField('tw-cookie')">从剪贴板填入</button>
-          ${tw.set && !tw.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('twitter','X')" aria-label="清除 X Cookie">清除</button>` : ""}
-        </div>
-      </section>
-      <p class="section-meta"><a href="/admin/knowledge" onclick="event.preventDefault();go('admin/knowledge')">IMA 与知识星球设置已移至研报库设置</a></p>
-    </div>
-    <div id="st-mx" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-mx" style="display:none">
-      <section class="section-panel">
-        <header class="section-head">
-          <div><h2 class="section-title">MX平台配置</h2>
-          <p class="section-meta">配置 MX 平台的 API Token、同步和 WebSocket 推送。</p>
-          <p class="section-meta" id="mx-token-updated" style="display:none"></p></div>
-        </header>
-        <div class="cfg-grid">
-          <div class="cfg-group">
-            <p class="cfg-group-title">基础设置</p>
-            <div class="cfg-fields">
-              <label class="cfg-field cfg-check">
-                <input id="mx-enabled" type="checkbox">
-                <span class="cfg-flag-text">启用 MX 平台</span>
-              </label>
-              <label class="cfg-field">
-                <span>API Token</span>
-                <input id="mx-token" type="text" class="form-control" placeholder="输入 MX API Token">
-              </label>
-              <label class="cfg-field">
-                <span>API 地址</span>
-                <input id="mx-api-base" type="text" class="form-control" placeholder="https://mx.2026.naaifu.cn/business-api/5">
-              </label>
-            </div>
-          </div>
-          <div class="cfg-group">
-            <p class="cfg-group-title">WebSocket 推送</p>
-            <div class="cfg-fields">
-              <label class="cfg-field cfg-check">
-                <input id="mx-ws-enabled" type="checkbox">
-                <span class="cfg-flag-text">启用实时推送</span>
-              </label>
-              <label class="cfg-field">
-                <span>WebSocket 地址</span>
-                <input id="mx-ws-url" type="text" class="form-control" placeholder="wss://mx.2026.naaifu.cn/business-api/5">
-              </label>
-              <label class="cfg-field">
-                <span>WebSocket 路径</span>
-                <input id="mx-ws-path" type="text" class="form-control" placeholder="/socket.io">
-              </label>
-              <label class="cfg-field">
-                <span>WebSocket Namespace</span>
-                <input id="mx-ws-namespace" type="text" class="form-control" placeholder="/msg">
-              </label>
-            </div>
-          </div>
-          <div class="cfg-group">
-            <p class="cfg-group-title">同步与抓取</p>
-            <div class="cfg-fields">
-              <label class="cfg-field">
-                <span>单页房间消息数</span>
-                <input id="mx-page-size" type="number" class="form-control" min="1" max="100">
-              </label>
-              <label class="cfg-field">
-                <span>最大历史页数</span>
-                <input id="mx-max-pages" type="number" class="form-control" min="1" max="100">
-              </label>
-            </div>
-          </div>
-        </div>
-        <div class="toolbar mx-config-actions">
-          <button type="button" class="btn-normal" id="mx-save-btn" onclick="saveMxConfig()">保存配置</button>
-          <button type="button" class="btn-ghost" id="mx-login-btn" onclick="mxSessionLogin()">登录</button>
-          <button type="button" class="btn-ghost" id="mx-logout-btn" onclick="mxSessionLogout()">退出</button>
-        </div>
-        <p class="section-meta" id="mx-ws-status">WebSocket 状态：加载中...</p>
-        <div id="mx-api-status" class="section-meta" style="margin-top:6px">接口状态：尚未执行（点击「登录」后显示逐接口结果）</div>
-      </section>
-      <section class="section-panel">
-        <header class="section-head">
-          <div><h2 class="section-title">房间管理</h2>
-          <p class="section-meta">管理从 MX 平台同步的房间，控制是否启用和广场显示。</p></div>
-          <div class="toolbar mx-rooms-head-actions">
-            <button class="btn-ghost" onclick="loadMxRooms()">刷新</button>
-          </div>
-        </header>
-        <div class="toolbar">
-          <input id="mx-rooms-q" type="search" class="form-control" placeholder="搜索房间..." style="max-width:320px">
-          <label class="cfg-field cfg-check mx-rooms-enabled-only">
-            <input id="mx-rooms-enabled-only" type="checkbox">
-            <span class="cfg-flag-text">只显示已启用</span>
-          </label>
-        </div>
-        <div id="mx-rooms-list"></div>
-      </section>
-    </div>
-    <div id="st-proxies" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-proxies" style="display:none"></div>`;
-  renderStatsData(s);
-  if (statsLoadError) {
-    const error = $("#stats-poll-error");
-    const retry = `<div><button type="button" class="btn-normal" onclick="loadAdminStats(${seq})">重试</button></div>`;
-    if (error) error.innerHTML = `<div class="ima-folder-state ima-folder-error" role="alert">${escapeHtml(statsLoadError)}${retry}</div>`;
-  }
-  switchStatsTab(statsTabFromHash());
-  return true;
-}
-
-
-async function loadAdminKnowledge(seq = _adminRenderSeq, authoritativeImaStatus = null) {
-  if (!routeStillActive(seq)) return false;
-  const generation = imaMountState.generation;
-  const pendingOwner = imaMountState.saveOwner;
-  if (pendingOwner && !pendingOwner.putCompleted && $("#ima-mount-layout")) {
-    pendingOwner.liveSnapshot = imaCollectorFormSnapshot();
-    rememberImaCollectorDraft(pendingOwner.liveSnapshot);
-  }
-  const statsLoadSeq = ++_adminStatsLoadSeq;
-  let s;
-  let statsLoadError = null;
-  try {
-    const stats = await api("/api/stats");
-    if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq
-      || generation !== imaMountState.generation) return false;
-    s = authoritativeImaStatus ? { ...stats, ima_collector: authoritativeImaStatus } : stats;
-    _lastAdminStatsSnapshot = s;
-  } catch (err) {
-    if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq
-      || generation !== imaMountState.generation) return false;
-    const message = `加载失败: ${err.message || "请求失败"}`;
-    const fallbackStats = _lastAdminStatsSnapshot;
-    if (fallbackStats && authoritativeImaStatus) {
-      s = { ...fallbackStats, ima_collector: authoritativeImaStatus };
-      statsLoadError = message;
-    } else {
-      const retry = `<div><button type="button" class="btn-normal" onclick="loadAdminKnowledge(${seq})">重试</button></div>`;
-      const body = $("#admin-body");
-      if (body) body.innerHTML = emptyState(message, retry);
-      return false;
-    }
-  }
-  if (!routeStillActive(seq) || statsLoadSeq !== _adminStatsLoadSeq
-    || generation !== imaMountState.generation) return false;
-  stopStatsTimer();
-  const owner = imaMountState.saveOwner;
-  const ownerIsCurrent = owner && owner === pendingOwner;
-  const ownerLiveSnapshot = ownerIsCurrent ? owner.liveSnapshot : null;
-  const ownerHasNewerEdits = !!ownerLiveSnapshot
-    && imaCollectorFormRevision(ownerLiveSnapshot) !== owner.formRevision;
-  const ownerSnapshot = ownerIsCurrent
-    ? (owner.putCompleted
-      ? (ownerHasNewerEdits ? ownerLiveSnapshot : null)
-      : (ownerLiveSnapshot || owner.snapshot))
-    : null;
-  const pendingCollectorDraft = imaMountState.collectorDraft;
-  const confirmedCollectorDraft = pendingCollectorDraft
-    && imaMountState.collectorDraftRevision === imaMountState.collectorConfirmedRevision
-    && imaMountState.collectorRevision === imaMountState.collectorConfirmedLiveRevision
-    && imaMountState.revision === imaMountState.collectorConfirmedMountRevision;
-  const preserveMountDraft = imaMountState.dirty
-    && !confirmedCollectorDraft
-    && !(ownerIsCurrent && owner.putCompleted && !ownerHasNewerEdits);
-  const mountRevisionChangedDuringSave = ownerIsCurrent
-    && imaMountState.revision !== owner.mountRevision;
-  const preserveMountDraftForReload = preserveMountDraft || mountRevisionChangedDuringSave;
-  const imaCollector = s.ima_collector || {};
-  const pure = imaCollector.config || {};
-  const collectorDraft = confirmedCollectorDraft ? null
-    : (ownerSnapshot || (ownerIsCurrent && owner.putCompleted ? null : pendingCollectorDraft));
-  const collector = collectorDraft || pure;
-  const collectorGroups = collectorDraft?.groups || pure.groups || [];
-  imaCollectorPureCache = {
-    uid: collector.uid || "",
-    interval_seconds: Number(collector.interval_seconds || 3600),
-    knowledge_base_id: collector.knowledge_base_id || "",
-    root_folder_id: collector.root_folder_id || "",
-  };
-  const zq = s.zsxq_cookie || {};
-  const zc = s.zsxq_cache || { files: 0, bytes: 0 };
-  const zcSize = fmtCacheBytes(zc.bytes);
-  setPageTitle("研报库设置");
-  $("#admin-body").innerHTML = `
-    <div id="stats-poll-error"></div>
-    <div class="knowledge-settings">
-      <div class="ks-tabs" role="tablist">
-        <button type="button" class="ks-tab is-on" data-tab="collect" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">采集</button>
-        <button type="button" class="ks-tab" data-tab="zsxq" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">星球</button>
-        <button type="button" class="ks-tab" data-tab="storage" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">存储</button>
-        <button type="button" class="ks-tab" data-tab="local" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">本地库</button>
-        <button type="button" class="ks-tab" data-tab="feishu" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">飞书文档</button>
-      </div>
-      <section class="section-panel ks-panel is-on" data-panel="collect">
-        <header class="section-head"><div><h2 class="section-title">IMA 文档采集</h2>
-        <p class="section-meta">勾选文件夹后同步其中新增 PDF。父目录包含以后新建的子目录。</p></div></header>
-        <div class="cfg-stack ima-collector-stack">
-          <div class="cfg-group ima-groups-block">
-            <div class="ima-groups-head">
-              <div>
-                <p class="cfg-group-title">共享知识库与文件夹</p>
-                <span id="ima-group-discovery-status" class="muted" aria-live="polite">${imaGroupDiscoveryStatusText(imaCollector)}</span>
-              </div>
-              <div class="toolbar ima-groups-toolbar">
-                <button type="button" class="btn-ghost" id="ima-discover-btn" onclick="discoverImaGroups()" aria-label="重新发现共享知识库">${REFRESH_ICON}<span>重新发现</span></button>
-              </div>
-            </div>
-            <div class="ima-mount-layout" id="ima-mount-layout">
-              <aside class="ima-mount-rail" aria-labelledby="ima-kb-pane-title">
-                <header class="ima-mount-pane-head"><strong id="ima-kb-pane-title">知识库</strong><span id="ima-kb-count" class="muted"></span></header>
-                <select id="ima-kb-select" class="form-control ima-kb-select" aria-label="选择知识库" onchange="selectImaMountGroup(this.value)"></select>
-                <div id="ima-kb-list" class="ima-kb-list" role="listbox" aria-label="共享知识库"></div>
-              </aside>
-              <section class="ima-mount-detail" aria-labelledby="ima-selected-group-name">
-                <header class="ima-selected-head">
-                  <div><strong id="ima-selected-group-name">选择知识库</strong><span id="ima-selected-group-state" class="muted">${imaCollectorStatusText(imaCollector)}</span></div>
-                  <button type="button" class="btn-ghost" id="ima-sync-btn" onclick="triggerImaCollector()" aria-label="同步当前库">${REFRESH_ICON}<span>同步当前库</span></button>
-                </header>
-                <section class="ima-detail-section ima-frequency-section">
-                  <div><h3>同步频率</h3><p class="section-meta">修改后需要保存。</p></div>
-                  <div id="ima-selected-interval" class="ima-selected-interval"></div>
-                </section>
-                <section class="ima-detail-section" id="ima-group-acl-block">
-                  <header><h3>查看权限</h3><p class="section-meta">添加或移除即时生效；管理员始终可看。</p></header>
-                  <div id="ima-group-acl"><p class="muted">加载中…</p></div>
-                </section>
-                <section class="ima-detail-section ima-folder-section">
-                  <button type="button" class="ima-folder-panel-toggle" id="ima-folder-panel-toggle"
-                    aria-expanded="false" aria-controls="ima-folder-panel" onclick="toggleImaFolderPanel(this)">
-                    <span><strong>采集文件夹</strong><span id="ima-folder-summary" class="muted">未选择文件夹</span></span>
-                    <span aria-hidden="true">›</span>
-                  </button>
-                  <div id="ima-folder-panel" hidden>
-                    <header class="ima-mount-pane-head"><strong id="ima-folder-title">选择知识库</strong><span id="ima-folder-count" class="muted"></span></header>
-                    <div id="ima-folder-tree" class="ima-folder-tree" role="tree" aria-label="知识库文件夹" aria-live="polite"></div>
-                  </div>
-                </section>
-              </section>
-            </div>
-          </div>
-        </div>
-        <div class="ima-collector-runtime">
-          <div id="ima-sync-progress">${imaCollectorProgressHtml(imaCollector)}</div>
-          <span id="ima-collector-status" class="muted">${imaCollectorStatusText(imaCollector)}</span>
-        </div>
-        <div class="ima-collector-savebar" id="ima-collector-savebar" hidden>
-          <span class="ima-unsaved-status"><span aria-hidden="true"></span>有未保存的采集配置修改</span>
-          <div class="toolbar">
-            <button type="button" class="btn-ghost" id="ima-collector-discard" onclick="discardImaCollectorChanges()">放弃修改</button>
-            <button type="button" class="btn-normal" id="ima-collector-save"${imaMountState.saveOwner ? " disabled" : ""} onclick="saveImaCollector()">保存采集配置</button>
-          </div>
-        </div>
-      </section>
-      <section class="section-panel ks-panel" data-panel="feishu">
-        <header class="section-head"><div><h2 class="section-title">飞书文档</h2>
-        <p class="section-meta">订阅私有 Wiki 或 Docx，按文档 revision 自动更新为时间线。移除只撤下阅读入口，历史归档永久保留。</p></div></header>
-        <form class="feishu-source-add" onsubmit="event.preventDefault();addFeishuDocumentSource()">
-          <label for="feishu-document-url" class="sr-only">飞书文档链接</label>
-          <input id="feishu-document-url" class="form-control" type="url" inputmode="url" placeholder="https://example.feishu.cn/wiki/... 或 /docx/..." autocomplete="off" oninput="queueFeishuDocumentPreview(this.value)">
-          <button type="submit" class="btn-normal" id="feishu-document-add">添加来源</button>
-          <div id="feishu-document-preview" class="feishu-document-preview" aria-live="polite"></div>
-        </form>
-        <div id="feishu-documents-body"><div class="admin-skeleton" aria-hidden="true"></div></div>
-      </section>
-      <section class="section-panel ks-panel" data-panel="zsxq">
-      <header class="section-head"><div><h2 class="section-title">知识星球</h2>
-      <p class="section-meta">Cookie 与抓取分开保存，互不覆盖。</p></div></header>
-      <div class="ima-source-stack">
-      <div class="ima-source-block">
-        <header class="ima-source-block-head"><div><h3 class="ima-source-title">Cookie</h3>
-        <p class="section-meta">${cookieUpdatedLabel(zq)}${zq.preview ? ` · 预览 ${escapeHtml(zq.preview)}` : ""}。登录 wx.zsxq.com 复制整串（含 zsxq_access_token）。</p></div></header>
-        <label class="field-label" for="zq-cookie">知识星球 Cookie</label>
-        <textarea id="zq-cookie" class="form-control cookie-paste" rows="3" placeholder="zsxq_access_token=..."></textarea>
-        <div class="ima-credential-actions toolbar">
-          <button type="button" class="btn-normal" onclick="saveZsxqCookie()">保存知识星球 Cookie</button>
-          <button type="button" class="btn-ghost" onclick="pasteCookieField('zq-cookie')">从剪贴板填入</button>
-          ${zq.set && !zq.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('zsxq','知识星球')" aria-label="清除知识星球 Cookie">清除</button>` : ""}
-        </div>
-      </div>
-      <div class="ima-source-block">
-        <header class="ima-source-block-head"><div><h3 class="ima-source-title">抓取</h3>
-        <p class="section-meta">日常只开关评论和预缓存；翻页、间隔、App 通道在高级里。</p></div></header>
-        <div class="cfg-group cfg-group--zsxq">
-          <div class="cfg-fields">
-            <label class="cfg-field cfg-check" title="新帖自动抓评论入库（可一并推送）；旧帖不动">
-              <input id="pc-zq-comments" type="checkbox" ${s.polling_config.zsxq_fetch_comments ? "checked" : ""}>
-              <span class="cfg-flag-text">
-                <span>抓取评论</span>
-                <span class="cfg-check-desc">新主题的评论在抓帖时一并入库</span>
-              </span>
-            </label>
-            <label class="cfg-field cfg-check" title="抓到新帖时就把 PDF 拉到本地；默认关闭，点开再下，省日限">
-              <input id="pc-zq-prefetch" type="checkbox" ${s.polling_config.zsxq_prefetch_files ? "checked" : ""}>
-              <span class="cfg-flag-text">
-                <span>抓取时预缓存附件</span>
-                <span class="cfg-check-desc">打开后新帖 PDF 会立刻落到本地，费配额；默认点开再下</span>
-              </span>
-            </label>
-          </div>
-          <details class="ks-advanced">
-            <summary class="cfg-group-title">高级（翻页、间隔、App 通道）</summary>
-            <div class="cfg-fields">
-              <label class="cfg-field" title="每星球每轮最多翻几页，每页 20 条">
-                <span>单轮翻页<span class="cfg-unit">页</span></span>
-                <input id="pc-zq-pages" type="number" class="form-control" min="1" max="20" value="${s.polling_config.zsxq_max_pages ?? 3}">
-              </label>
-              <label class="cfg-field" title="列表/详情请求间隔，过短容易触发 1059">
-                <span>请求间隔<span class="cfg-unit">秒</span></span>
-                <input id="pc-zq-delay" type="number" class="form-control" min="0.2" max="10" step="0.1" value="${s.polling_config.zsxq_fetch_delay_seconds ?? 1}">
-              </label>
-              <label class="cfg-field" title="附件 download_url 请求间隔，过短容易撞日限">
-                <span>附件间隔<span class="cfg-unit">秒</span></span>
-                <input id="pc-zq-file-delay" type="number" class="form-control" min="0.2" max="10" step="0.1" value="${s.polling_config.zsxq_file_delay_seconds ?? 1}">
-              </label>
-              <label class="cfg-field" title="单主题评论最多翻几页（每页 20 条）">
-                <span>评论翻页<span class="cfg-unit">页</span></span>
-                <input id="pc-zq-comment-pages" type="number" class="form-control" min="1" max="10" value="${s.polling_config.zsxq_max_comment_pages ?? 3}">
-              </label>
-              <label class="cfg-field" title="每轮最多发起的评论请求数，保护限流">
-                <span>评论预算<span class="cfg-unit">次/轮</span></span>
-                <input id="pc-zq-comment-budget" type="number" class="form-control" min="1" max="200" value="${s.polling_config.zsxq_comment_budget ?? 30}">
-              </label>
-              <label class="cfg-field cfg-check" title="用 App 通道请求头（xiaomiquan UA + X-Request-Id/X-Version）代替浏览器头；默认关，等你复测日限差异确认有收益再开">
-                <input id="pc-zq-app" type="checkbox" ${s.polling_config.zsxq_app_channel ? "checked" : ""}>
-                <span class="cfg-flag-text">
-                  <span>App 通道头</span>
-                  <span class="cfg-check-desc">伪称 Android 客户端请求；与 web 通道共用账号配额</span>
-                </span>
-              </label>
-              <label class="cfg-field cfg-field--wide" title="App 通道 UA 里的设备标识：Android 版本 + 品牌_型号，空格自动压成下划线">
-                <span>设备标识<span class="cfg-unit">RELEASE BRAND_MODEL</span></span>
-                <input id="pc-zq-app-device" type="text" class="form-control" maxlength="64" value="${escapeHtml(s.polling_config.zsxq_app_device ?? "16 OnePlus_PJD110")}">
-              </label>
-            </div>
-          </details>
-          <div class="cfg-foot">
-            <p class="muted" id="zq-cache-stat">附件缓存 ${zcSize} / ${zc.files || 0} 个文件</p>
-            <div class="toolbar">
-              <button type="button" class="btn-ghost" onclick="purgeZsxqCache()">清理未引用</button>
-              <button type="button" class="btn-normal" id="pc-zq-save" onclick="saveZsxqPollingConfig()">保存星球设置</button>
-            </div>
-          </div>
-        </div>
-      </div>
-      </div>
-    </section>
-    ${imaStoragePanelHtml(imaCollector.storage)}
-    <section class="section-panel ks-panel" data-panel="local" id="local-libs-panel">
-      <header class="section-head"><div><h2 class="section-title">本地库</h2>
-      <p class="section-meta">存储机 <code>local/&lt;slug&gt;/</code> 下的文件夹研报库；中金研报由存储机采集脚本写入 cicc-research 库。启用并授权用户后即可在研报库中阅读。</p></div></header>
-      <div id="local-libs-body"><p class="muted">加载中…</p></div>
-    </section>
-    </div>`;
-  renderStatsData(s);
-  if (statsLoadError) {
-    const error = $("#stats-poll-error");
-    const retry = `<div><button type="button" class="btn-normal" onclick="loadAdminKnowledge(${seq})">重试</button></div>`;
-    if (error) error.innerHTML = `<div class="ima-folder-state ima-folder-error" role="alert">${escapeHtml(statsLoadError)}${retry}</div>`;
-  }
-  if (collectorDraft) initImaMountState(collectorGroups, true);
-  else initImaMountState(pure.groups || [], preserveMountDraftForReload);
-  renderImaMountGroups();
-  renderImaGroupAcl();
-  document.querySelectorAll(".ima-interval-seg").forEach((seg) => {
-    const current = imaGroupIntervalSeconds(imaMountGroup(seg.dataset.groupId));
-    seg.querySelectorAll("button[data-sec]").forEach((btn) => {
-      btn.classList.toggle("is-on", Number(btn.dataset.sec) === current);
-    });
-  });
-  restoreImaCollectorOwnerToken(owner, seq, pendingCollectorDraft);
-  if (confirmedCollectorDraft) {
-    const confirmedRevision = imaMountState.collectorConfirmedRevision;
-    const confirmedLiveRevision = imaMountState.collectorConfirmedLiveRevision;
-    if (imaMountState.collectorDraftRevision === confirmedRevision
-      && imaMountState.collectorRevision === confirmedLiveRevision) {
-      clearImaCollectorDraft(confirmedRevision);
-      imaMountState.collectorConfirmedRevision = "";
-      imaMountState.collectorConfirmedLiveRevision = -1;
-      imaMountState.collectorConfirmedMountRevision = -1;
-      imaMountState.dirty = false;
-      const tokenInput = $("#ima-pure-token");
-      if (tokenInput) tokenInput.value = "";
-    }
-  }
-  let savedTab = "collect";
-  try { savedTab = sessionStorage.getItem(KS_TAB_KEY) || "collect"; } catch { /* ignore */ }
-  const knowledgeQuery = routeQuery();
-  if (knowledgeQuery.get("tab") === "feishu") savedTab = "feishu";
-  const oauthResult = knowledgeQuery.get("oauth");
-  if (oauthResult) {
-    flash(oauthResult === "success" ? "飞书文档授权已更新" : "飞书文档授权失败", oauthResult === "success" ? "success" : "error");
-    history.replaceState(null, "", "/admin/knowledge");
-  }
-  switchKnowledgeSettingsTab(savedTab);
-  if (imaCollector.running) startImaProgressPoll();
-  else {
-    stopImaProgressPoll();
-    applyImaCollectorProgress(imaCollector);
-  }
-  startDashboardLiveTimer();
-  return true;
-}
-
-function plazaSourceEffect(row) {
-  if (row.mode === "hide") return "已手动隐藏";
-  if (row.mode === "show") return "已手动显示";
-  return row.enabled_kols > 0 ? "有启用大V，自动显示" : "启用大V 为 0，自动隐藏";
-}
-
-function plazaSourceRowsHtml(rows) {
-  const modes = [["auto", "自动"], ["show", "显示"], ["hide", "隐藏"]];
-  return (rows || []).map((row) => {
-    const label = PLATFORM_LABELS[row.platform] || row.platform;
-    const shown = row.visible ? "广场显示中" : "广场已隐藏";
-    return `<div class="plaza-src" data-platform="${escapeHtml(row.platform)}">
-      <div class="plaza-src-head">
-        <span class="plaza-src-icon" data-platform="${escapeHtml(row.platform)}">${PLATFORM_ICONS[row.platform] || ""}</span>
-        <div class="plaza-src-copy">
-          <p class="plaza-src-name">${escapeHtml(label)}</p>
-          <p class="plaza-src-meta">启用大V ${row.enabled_kols} · ${shown} · ${plazaSourceEffect(row)}</p>
-        </div>
-      </div>
-      <div class="plaza-src-modes" role="radiogroup" aria-label="${escapeHtml(label)} 广场显示">
-        ${modes.map(([value, text]) => `
-          <button type="button" class="plaza-src-mode ${row.mode === value ? "selected" : ""}" role="radio" data-platform="${escapeHtml(row.platform)}" data-mode="${value}" aria-checked="${row.mode === value}" onclick="setPlazaSourceMode(this.dataset.platform,this.dataset.mode)">${text}</button>`).join("")}
-      </div>
-    </div>`;
-  }).join("");
-}
-
-function applyPlazaSources(sources) {
-  const box = $("#plaza-sources");
-  if (box) box.innerHTML = plazaSourceRowsHtml(sources);
-  if (state.user) {
-    state.user.plaza_platforms = (sources || []).filter((row) => row.visible).map((row) => row.platform);
-    const vis = new Set(state.user.plaza_platforms);
-    if (Array.isArray(state.user.timeline_platforms)) {
-      state.user.timeline_platforms = state.user.timeline_platforms.filter((p) => vis.has(p));
-    }
-  }
-}
-
-async function setPlazaSourceMode(platform, mode) {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  const current = document.querySelector(`.plaza-src[data-platform="${CSS.escape(platform)}"] .plaza-src-mode.selected`);
-  if (current && current.dataset.mode === mode) return;
-  try {
-    const data = await api("/api/admin/plaza-sources", {
-      method: "PUT",
-      body: JSON.stringify({ visibility: { [platform]: mode } }),
-    });
-    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    applyPlazaSources(data.sources);
-    flash("广场显示已更新");
-  } catch (err) {
-    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    flash(err.message, "error");
-  }
-}
-
-function staleEnabledKolRows(rows, nowMs) {
-  const cutoff = (nowMs || Date.now()) - STALE_KOL_HOURS * 3600 * 1000;
-  const live = (rows || []).filter((k) => k.enabled && (k.subscriber_count == null || Number(k.subscriber_count) > 0));
-  const stale = live.filter((k) => {
-    if (!k.last_post_at) return true;
-    const ts = parseDbUtcMs(k.last_post_at);
-    return ts == null || ts < cutoff;
-  });
-  stale.sort((a, b) => String(a.last_post_at || "").localeCompare(String(b.last_post_at || "")));
-  return stale;
-}
-
-function staleEnabledKols(rows, nowMs) {
-  return staleEnabledKolRows(rows, nowMs).slice(0, STALE_KOL_LIMIT);
-}
-
-function openAdminKolFromHealth(name) {
-  state.adminKolsQ = String(name || "").trim();
-  state.adminKolsPage = 0;
-  go("admin/kols");
-}
-
-function sourceNeverStarted(src) {
-  return !src.ok
-    && !src.last_ok_at
-    && !(Number(src.ok_24h) || 0)
-    && !(Number(src.fail_24h) || 0)
-    && !(Number(src.consecutive_fails) || 0);
-}
-
-function sourceCredentialGap(src, cookieItems) {
-  const keys = new Set((cookieItems || []).map((item) => item.key));
-  const plat = src.platform;
-  if ((plat === "xueqiu" || plat === "combination") && (keys.has("xq-missing") || keys.has("xq-bad"))) return true;
-  if (plat === "weibo" && keys.has("wb-bad")) return true;
-  if (plat === "twitter" && (keys.has("x-bad") || keys.has("x-missing"))) return true;
-  if (plat === "zsxq" && (keys.has("zq-missing") || keys.has("zq-bad"))) return true;
-  return false;
-}
-
-function sourceStatusNote(src) {
-  if (src.platform !== "twitter" || src.direct_mode !== "fallback") return "";
-  return ` <span class="status-warn" title="${escapeHtml(src.direct_fallback_reason || "")}">直抓失败</span>`;
-}
-
-function sourceStatusCell(src, cookieItems) {
-  const note = sourceStatusNote(src);
-  if (src.ok) return `<td class="status-ok" data-label="状态">正常${note}</td>`;
-  if (sourceCredentialGap(src, cookieItems)) {
-    return `<td class="dash-status-cred" data-label="状态">凭据缺失${note}</td>`;
-  }
-  if (sourceNeverStarted(src)) {
-    return `<td class="muted" data-label="状态">未开始${note}</td>`;
-  }
-  if (src.consecutive_fails >= 3) {
-    return `<td class="status-fail" data-label="状态">持续失败${note}</td>`;
-  }
-  return `<td class="status-warn" data-label="状态">暂无成功${note}</td>`;
-}
-
-function sourceRowsHtml(sources, cookieItems) {
-  const rows = sources || [];
-  if (!rows.length) return '<tr class="ak-empty"><td colspan="4" class="muted">暂无数据源</td></tr>';
-  return rows.map((src) => {
-    const warn = src.warn_24h ? ` <span class="status-warn">⚠${src.warn_24h}</span>` : "";
-    const counts = `<span class="muted dash-source-counts">${src.ok_24h} / ${src.fail_24h}${warn}</span>`;
-    const hint = [
-      src.consecutive_fails ? `连续失败 ${src.consecutive_fails}` : "",
-      src.next_retry_at ? `下次重试 ${fmtTs(src.next_retry_at)}` : "",
-      src.last_ok_at ? `最近成功 ${fmtTs(src.last_ok_at)}` : "",
-    ].filter(Boolean).join(" · ");
-    return `
-    <tr${hint ? ` title="${escapeHtml(hint)}"` : ""}>
-      <td data-label="平台">${PLATFORM_LABELS[src.platform] || escapeHtml(src.platform)}</td>
-      ${sourceStatusCell(src, cookieItems)}
-      <td class="ak-hide-mobile dash-source-rate" data-label="24h 成功率">${rateBar(src.success_rate_24h)}${counts}</td>
-      ${sourceCauseCell(src, cookieItems)}
-    </tr>`;
-  }).join("");
-}
-
-function sourceCauseCell(src, cookieItems) {
-  if (src.last_error) {
-    return `<td class="muted dash-source-cause" data-label="最近错误" title="${escapeHtml(src.last_error)}">${escapeHtml(src.last_error.slice(0, 40))}</td>`;
-  }
-  if (sourceCredentialGap(src, cookieItems)) {
-    return `<td class="dash-source-cause" data-label="最近错误"><button type="button" class="linkish" onclick="go('admin/stats?tab=cookies')">去更新 Cookie</button></td>`;
-  }
-  if (sourceNeverStarted(src)) {
-    return `<td class="muted dash-source-cause ak-hide-mobile" data-label="最近错误">还没跑过</td>`;
-  }
-  return `<td class="muted dash-source-cause" data-label="最近错误">—</td>`;
-}
-
-function abnormalSourceEvents(events, limit) {
-  return (events || []).filter((e) => e.status !== "ok").slice(0, limit || 5);
-}
-
-function sourceEventRowsHtml(events) {
-  const rows = abnormalSourceEvents(events);
-  if (!rows.length) return "";
-  return `<div class="dash-events">${rows.map((e) => `<div class="dash-event">
-    <span class="dash-event-dot ${escapeHtml(e.status)}"></span>
-    <span class="muted dash-event-time">${escapeHtml(fmtDbTime(e.created_at))}</span>
-    <span class="dash-event-platform">${PLATFORM_LABELS[e.platform] || escapeHtml(e.platform)}</span>
-    <span class="${e.status === "warn" ? "status-warn" : "status-fail"}">${e.status === "warn" ? "警告" : "失败"}</span>
-    <span class="muted dash-event-detail" title="${escapeHtml(e.detail || "")}">${escapeHtml(e.detail || "")}</span>
-  </div>`).join("")}</div>`;
-}
-
-function dashboardFetchMetaHtml(s) {
-  const items = [];
-  items.push(s.last_poll_at ? `最近抓取 ${fmtTs(s.last_poll_at)}` : "尚未轮询");
-  if (s.last_poll_duration_ms) items.push(`耗时 ${(Number(s.last_poll_duration_ms) / 1000).toFixed(1)} 秒`);
-  if (s.enabled_kols != null) items.push(`活跃抓取 ${s.active_kols || 0}/${s.enabled_kols}`);
-  items.push(`轮询 ${s.polling_interval_seconds || "—"} 秒`);
-  items.push(s.retry_pending
-    ? `<span class="status-warn">待重试 ${s.retry_pending} 条</span>`
-    : `<span class="status-ok">重试空闲</span>`);
-  const alerts = s.alerts || {};
-  if (alerts.push_alert_last_at) items.push(`<span class="status-warn">推送告警 ${escapeHtml(fmtTs(alerts.push_alert_last_at))}</span>`);
-  if (alerts.x_direct_alert_at) items.push(`<span class="status-warn">X失败告警 ${escapeHtml(fmtTs(alerts.x_direct_alert_at))}</span>`);
-  if (alerts.cookie_keepalive_alert_at) items.push(`<span class="status-warn">cookie保活告警 ${escapeHtml(fmtTs(alerts.cookie_keepalive_alert_at))}</span>`);
-  if (alerts.xueqiu_probe_alert_at) items.push(`<span class="status-warn">雪球探测告警 ${escapeHtml(fmtTs(alerts.xueqiu_probe_alert_at))}</span>`);
-  return `<p class="section-meta dash-fetch-meta" id="dash-fetch-meta">${items.map((bit) => `<span>${bit}</span>`).join("")}</p>`;
-}
-
-function fmtRelativeFromMs(ms, nowMs) {
-  if (ms == null) return "从未";
-  const hours = Math.floor(Math.max(0, (nowMs || Date.now()) - ms) / 3600000);
-  if (hours < 1) return "不到 1 小时前";
-  if (hours < 48) return `${hours} 小时前`;
-  return `${Math.floor(hours / 24)} 天前`;
-}
-
-function staleKolsHtml(rows) {
-  const all = staleEnabledKolRows(rows);
-  const stale = all.slice(0, STALE_KOL_LIMIT);
-  if (!all.length) {
-    return `<p class="muted" id="kol-health-empty">有订阅的大V 在 ${STALE_KOL_HOURS} 小时内都抓到过新帖</p>`;
-  }
-  const extra = all.length > stale.length ? `，列出 ${stale.length} 个` : "";
-  const nowMs = Date.now();
-  return `<p class="dash-stale-verdict" id="kol-health-verdict">${all.length} 个有订阅大V超过 ${STALE_KOL_HOURS} 小时没抓到新帖${extra}</p>
-    <ul class="dash-stale-list">${stale.map((h) => {
-      const when = h.last_post_at ? fmtRelativeFromMs(parseDbUtcMs(h.last_post_at), nowMs) : "从未";
-      const plat = PLATFORM_LABELS[h.platform] || h.platform || "";
-      const subs = Number(h.subscriber_count);
-      const subBit = Number.isFinite(subs) && subs > 0 ? ` · ${subs} 订` : "";
-      return `<li>
-        <button type="button" class="linkish" data-name="${escapeHtml(h.name)}" onclick="openAdminKolFromHealth(this.dataset.name)">${escapeHtml(h.name)}</button>
-        <span class="muted">${escapeHtml(plat)} · ${escapeHtml(when)}${escapeHtml(subBit)}</span>
-      </li>`;
-    }).join("")}</ul>`;
-}
-
-function dutyStripHtml(s) {
-  const sources = s.sources || [];
-  const cookies = cookieRepairItems(s);
-  let never = 0;
-  let cred = 0;
-  let failing = 0;
-  sources.forEach((src) => {
-    if (src.ok) return;
-    if (sourceCredentialGap(src, cookies)) cred += 1;
-    else if (sourceNeverStarted(src)) never += 1;
-    else failing += 1;
-  });
-  const staleAll = staleEnabledKolRows(s.kol_health).length;
-  const pending = Number(s.pending_kol_requests) || 0;
-  const bits = [];
-  if (failing) bits.push(`<li class="is-fail">${failing} 条管线持续失败</li>`);
-  if (cred) bits.push(`<li class="is-warn">${cred} 条凭据缺失</li>`);
-  if (never) bits.push(`<li class="is-idle">${never} 条尚未开始抓取</li>`);
-  if (staleAll) bits.push(`<li class="is-fail">${staleAll} 个有订阅大V停更</li>`);
-  if (pending) bits.push(`<li class="is-warn"><button type="button" class="linkish" onclick="go('admin/requests')">${pending} 条待审批</button></li>`);
-  if (!bits.length) bits.push(`<li class="is-ok">管线正常，没有停更例外</li>`);
-  return `<ul class="dash-duty-strip" id="dash-duty-strip">${bits.join("")}</ul>`;
-}
-
-function renderStatsData(s) {
-  const banner = cookieRepairBanner(s);
-  const dashCookie = $("#dash-cookie-slot");
-  if (dashCookie) dashCookie.innerHTML = banner;
-  const cookieInline = $("#cookie-repair-inline");
-  if (cookieInline) cookieInline.innerHTML = banner;
-  const meta = $("#dash-fetch-meta");
-  if (meta) meta.outerHTML = dashboardFetchMetaHtml(s);
-  const pollErr = $("#stats-poll-error");
-  if (pollErr) {
-    pollErr.innerHTML = s.last_poll_error
-      ? `<div class="notice">最近轮询异常：${escapeHtml(s.last_poll_error)}</div>`
-      : "";
-  }
-  if (s.plaza_sources) applyPlazaSources(s.plaza_sources);
-  const dutySlot = $("#dash-duty-strip-slot");
-  if (dutySlot) dutySlot.innerHTML = dutyStripHtml(s);
-  const tbody = $("#sources-table");
-  if (tbody) tbody.innerHTML = sourceRowsHtml(s.sources, cookieRepairItems(s));
-  const events = $("#dash-source-events");
-  if (events) events.innerHTML = sourceEventRowsHtml(s.recent_source_events);
-  const kh = $("#kol-health");
-  if (kh) kh.innerHTML = staleKolsHtml(s.kol_health);
-  const stalePanel = $("#dash-stale-panel");
-  if (stalePanel) stalePanel.hidden = !staleEnabledKolRows(s.kol_health).length;
-  const imaCollectorStatus = $("#ima-collector-status");
-  if (imaCollectorStatus && s.ima_collector) imaCollectorStatus.textContent = imaCollectorStatusText(s.ima_collector);
-  const imaGroupDiscoveryStatus = $("#ima-group-discovery-status");
-  if (imaGroupDiscoveryStatus && s.ima_collector) {
-    imaGroupDiscoveryStatus.innerHTML = imaGroupDiscoveryStatusText(s.ima_collector);
-  }
-
-  // Switch to tab from URL query
-  switchStatsTab(statsTabFromHash());
-}
 
 async function savePollingConfig() {
   const routeSeq = routeRenderSeq;
@@ -9765,152 +4819,11 @@ async function saveZsxqPollingConfig() {
   }
 }
 
-async function runStorageConsistency() {
-  const btn = document.getElementById("ima-consistency-run");
-  const box = document.getElementById("ima-consistency");
-  if (!box) return;
-  if (btn) { btn.disabled = true; btn.textContent = "体检中…"; }
-  try {
-    await api("/api/admin/ima-storage/consistency/run", { method: "POST" });
-    await new Promise((r) => setTimeout(r, 5000));
-    const rep = await api("/api/admin/ima-storage/consistency");
-    const items = [];
-    if ((rep.corrupt_count ?? 0) > 0) items.push(`损坏 PDF ${rep.corrupt_count} 个（${(rep.corrupt || []).slice(0, 3).join("、")}…）`);
-    if ((rep.dup_id_count ?? 0) > 0) items.push(`重复报告 id ${rep.dup_id_count} 个`);
-    if ((rep.bad_name_count ?? 0) > 0) items.push(`命名不规范 ${rep.bad_name_count} 个`);
-    if ((rep.empty_dir_count ?? 0) > 0) items.push(`空目录 ${rep.empty_dir_count} 个`);
-    if ((rep.no_sidecar_count ?? 0) > 0) items.push(`无摘要元数据 ${rep.no_sidecar_count} 篇`);
-    box.hidden = false;
-    box.innerHTML = items.length
-      ? `<p class="section-meta">体检发现：${items.join("；")}。${rep.files ?? ""} 个 PDF 已扫描。</p>`
-      : `<p class="section-meta">体检通过：未发现异常。</p>`;
-  } catch (err) {
-    box.hidden = false;
-    box.innerHTML = `<p class="muted">体检失败：${escapeHtml(err.message)}</p>`;
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = "一致性体检"; }
-  }
-}
-
-async function runStorageDedup() {
-  try {
-    const r = await api("/api/admin/ima-storage/dedup", { method: "POST" });
-    flash(r.queued ? "去重任务已启动（低优先级，日志见存储机 ui_dedup.log）" : "去重任务下发失败", r.queued ? "ok" : "error");
-  } catch (err) { flash(`下发失败：${err.message}`, "error"); }
-}
-
-async function loadStorageHealth() {
-  const box = document.getElementById("ima-storage-health");
-  const details = document.getElementById("ima-storage-details");
-  if (!box) return;
-  try {
-    const h = await api("/api/admin/ima-storage/health");
-    const st = h.storage || {};
-    const disk = st.disk || {};
-    const pct = Number(disk.pct) || 0;
-    const color = pct >= 90 ? "var(--color-danger)" : pct >= 80 ? "var(--color-warning)" : "var(--color-success)";
-    const wg = st.wg || {};
-    const nfs = st.nfs || {};
-    const cats = ((st.archive || {}).categories || []).slice(0, 8)
-      .map((c) => `<li>${escapeHtml(c.name)}：${c.files} 篇 / ${(c.bytes / 1073741824).toFixed(2)} GB</li>`).join("");
-    const alertsState = (await api("/api/admin/ima-storage/alerts")) || {};
-    const cfg = alertsState.settings || {};
-    const b = h.backup || {};
-    const snapItems = (b.snapshots || []).map((s) => {
-      const d = s.time ? new Date(s.time) : null;
-      const when = d && !Number.isNaN(d.getTime()) ? d.toLocaleString() : escapeHtml(s.time || "未知时间");
-      return `<li>${when} · <code>${escapeHtml(String(s.id || "").slice(0, 8))}</code></li>`;
-    }).join("");
-    const backupHtml = !b.configured
-      ? `<p class="muted" style="color:var(--color-danger)">备份未生效：${escapeHtml(b.reason || "存储机 env 缺 RESTIC_REPOSITORY")}，需要配置备份目标</p>`
-      : snapItems
-        ? `<ul class="muted" style="margin:4px 0 0;padding-left:18px">${snapItems}</ul>`
-        : `<p class="muted">备份目标已配置，但还没有成功快照（${escapeHtml(b.reason || "可点「立即备份」试一次")}）</p>`;
-    box.innerHTML = `
-      <p class="section-meta">磁盘 <strong style="color:${color}">${disk.used_gb ?? "—"} / ${disk.total_gb ?? "—"} GB（${pct}%）</strong>
-       · 归档 ${(st.archive && st.archive.files) ?? "—"} 个 PDF
-       · 中德链路 ${wg.ok ? `${wg.rtt_ms ?? "—"} ms` : "不通"} · 归档挂载 ${nfs.mounted ? "正常" : "异常"}</p>
-      <div class="ima-storage-bar"><div style="width:${Math.min(pct, 100)}%;background:${color}"></div></div>`;
-    if (details) {
-      details.innerHTML = `
-      ${cats ? `<ul class="muted" style="margin:4px 0 0;padding-left:18px">${cats}</ul>` : ""}
-      <p class="section-meta" style="margin:10px 0 2px"><strong>备份</strong>（快照 · 上次成功 ${b.restic_last_success ? fmtTs(b.restic_last_success) : "无"}）</p>
-      ${backupHtml}
-      <div class="toolbar ima-storage-alerts">
-        <label>告警阈值 磁盘≥<input id="ima-alert-warn" type="number" value="${cfg.disk_warn ?? 80}">% /
-        <input id="ima-alert-crit" type="number" value="${cfg.disk_crit ?? 90}">%</label>
-        <label>状态过期 ≥<input id="ima-alert-stale" type="number" value="${cfg.stale_minutes ?? 30}"> 分钟</label>
-        <label><input id="ima-alert-notify" type="checkbox" ${cfg.notify_enabled ? "checked" : ""}> 推送通知</label>
-        <button type="button" class="btn-ghost" onclick="saveStorageAlerts()">保存告警设置</button>
-        <button type="button" class="btn-ghost" onclick="runStorageDedup()">立即去重</button>
-      </div>`;
-    }
-  } catch (err) {
-    box.innerHTML = `<p class="muted">存储健康加载失败：${escapeHtml(err.message)}</p>`;
-  }
-}
-
-async function saveStorageAlerts() {
-  const body = {
-    disk_warn: Number((document.getElementById("ima-alert-warn") || {}).value) || 80,
-    disk_crit: Number((document.getElementById("ima-alert-crit") || {}).value) || 90,
-    stale_minutes: Number((document.getElementById("ima-alert-stale") || {}).value) || 30,
-    notify_enabled: !!(document.getElementById("ima-alert-notify") || {}).checked,
-  };
-  try {
-    await api("/api/admin/ima-storage/alerts", { method: "PUT", body: JSON.stringify(body) });
-    flash("告警设置已保存");
-    loadStorageHealth();
-  } catch (err) { flash(`保存失败：${err.message}`, "error"); }
-}
-
-async function refreshImaStorage() {
-  const btn = $("#ima-storage-refresh");
-  if (btn?.disabled) return;
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  if (btn) btn.disabled = true;
-  try {
-    const data = await api("/api/admin/ima-storage/refresh", { method: "POST" });
-    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    const slot = $("#ima-storage-panel");
-    if (slot) slot.outerHTML = imaStoragePanelHtml(data);
-    loadStorageHealth();
-    flash("存储状态已刷新");
-  } catch (err) {
-    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    flash(err.message, "error");
-  } finally {
-    if (btn && document.body.contains(btn)) btn.disabled = false;
-  }
-}
-
-async function backupImaStorage() {
-  const btn = $("#ima-storage-backup");
-  if (btn?.disabled) return;
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  if (btn) btn.disabled = true;
-  try {
-    const data = await api("/api/admin/ima-storage/backup", { method: "POST" });
-    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    flash(data.status === "already_running" ? "备份已在进行" : "已发送备份命令，结果稍后看存储页签");
-  } catch (err) {
-    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    flash(err.message, "error");
-  } finally {
-    if (btn && document.body.contains(btn)) btn.disabled = false;
-  }
-}
-
 let _ciccPollTimer = null;
 let _ciccLastStatus = null;
 let _ciccDetailsOpen = false; // 轮询重绘时保留「研报采集」展开状态
 let _localLibsLast = null;
 let _scanInFlight = false; // 扫描进行中：15s 轮询重渲染时按钮保持禁用，不复活
-
 function startCiccPoll() {
   stopCiccPoll();
   _ciccPollTimer = setInterval(() => {
@@ -10187,12 +5100,7 @@ function localLibraryModalShell(title, innerHtml) {
   mask.addEventListener("click", (e) => {
     if (e.target === mask) close();
   });
-  mask.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      close();
-    }
-  });
+  trapFocus(mask, close);
   mask.querySelector("[data-close]").addEventListener("click", close);
   const first = mask.querySelector("#ll-name, input, select, textarea, button");
   if (first) first.focus();
@@ -10333,550 +5241,6 @@ async function pasteCookieField(inputId) {
   }
 }
 
-function proxyStatusLabel(status) {
-  return { unknown: "未测", ok: "可用", dead: "失效" }[status] || "未知";
-}
-
-function proxyStatusClass(status) {
-  return { ok: "status-ok", dead: "status-fail" }[status] || "";
-}
-
-function proxyOptionLabel(row) {
-  const auth = row.username ? `${escapeHtml(row.username)}@` : "";
-  return `#${row.id} ${row.protocol} ${auth}${escapeHtml(row.host)}:${row.port}`;
-}
-
-function proxyBusy(btn, on) {
-  if (!btn) return false;
-  if (on && btn.disabled) return true;
-  btn.disabled = on;
-  return false;
-}
-
-// MX Platform functions
-async function refreshMxWsStatus() {
-  const el = $("#mx-ws-status");
-  if (!el) return;
-  try {
-    const s = await api("/api/admin/sources/mx/ws-status");
-    const last = s.last_message_at ? new Date(s.last_message_at).toLocaleString() : "从未收到";
-    const detail = s.detail ? `（${s.detail}）` : "";
-    el.innerHTML = `<span>WebSocket 状态：${s.connected ? "✅ 已连接" : "❌ 未连接"}，最近收到消息：${escapeHtml(last)}${escapeHtml(detail)}</span>`;
-    renderMxApiStatus(s.login_report);
-  } catch (err) {
-    el.textContent = `WebSocket 状态：获取失败（${err.message || "未知错误"}）`;
-  }
-}
-
-function renderMxApiStatus(report) {
-  const box = $("#mx-api-status");
-  if (!box) return;
-  if (!report || !Array.isArray(report.steps) || !report.steps.length) {
-    box.textContent = "接口状态：尚无会话记录（等待运行时段到点系统自动 MX 平台登录，或点击「登录」手动执行）";
-    return;
-  }
-  const rows = report.steps.map((s) => {
-    const mark = s.ok ? "✅" : "❌";
-    const ms = Number.isFinite(s.ms) ? `（${s.ms}ms）` : "";
-    return `<li>${mark} ${escapeHtml(s.name)}${ms}：${escapeHtml(s.detail || "")}</li>`;
-  }).join("");
-  const head = report.ok ? "✅ 全部成功" : "❌ 存在失败项";
-  const source = report.source === "auto" ? "系统自动登录" : "管理员手动登录";
-  box.innerHTML = `<details><summary>接口状态（${escapeHtml(report.time || "")}，${source}）：${head}</summary><ul>${rows}</ul></details>`;
-}
-
-async function mxSessionLogin() {
-  const btn = $("#mx-login-btn");
-  if (!btn || btn.disabled) return;
-  btn.disabled = true;
-  if ($("#mx-logout-btn")) $("#mx-logout-btn").disabled = true;
-  try {
-    const result = await api("/api/admin/sources/mx/session/login", { method: "POST" });
-    renderMxApiStatus(result.report);
-    flash(result.ok ? "登录成功：启动序列、房间同步与 WS 均正常" : "登录完成，存在失败项（见接口状态）", result.ok ? "success" : "error");
-  } catch (err) {
-    flash(err.message || "登录失败", "error");
-  } finally {
-    if (btn) btn.disabled = false;
-    if ($("#mx-logout-btn")) $("#mx-logout-btn").disabled = false;
-    refreshMxWsStatus();
-    setTimeout(refreshMxWsStatus, 2500);
-  }
-}
-
-async function mxSessionLogout() {
-  const btn = $("#mx-logout-btn");
-  if (!btn || btn.disabled) return;
-  btn.disabled = true;
-  try {
-    const res = await api("/api/admin/sources/mx/ws/disconnect", { method: "POST" });
-    flash(res.message || "已退出 MX 会话");
-  } catch (err) {
-    flash(err.message || "退出失败", "error");
-  } finally {
-    if (btn) btn.disabled = false;
-    refreshMxWsStatus();
-  }
-}
-
-function updateMxTokenUpdatedLabel(config) {
-  const el = $("#mx-token-updated");
-  if (!el) return;
-  if (config.token) {
-    el.textContent = config.token_updated_at
-      ? `Token 更新于 ${fmtTs(config.token_updated_at)}`
-      : "Token 更新时间：暂无记录（Token 可能由环境变量提供）";
-    el.style.display = "";
-  } else {
-    el.style.display = "none";
-  }
-}
-
-async function loadMxAdmin() {
-  const box = $("#st-mx");
-  if (!box) return;
-  try {
-    // Load MX config
-    const config = await api("/api/admin/sources/mx");
-    $("#mx-enabled").checked = config.enabled;
-    $("#mx-token").value = config.token || "";
-    $("#mx-api-base").value = config.api_base || "https://mx.2026.naaifu.cn/business-api/5";
-    $("#mx-ws-url").value = config.ws_url || "wss://mx.2026.naaifu.cn/business-api/5";
-    $("#mx-ws-path").value = config.ws_path || "/socket.io";
-    $("#mx-ws-namespace").value = config.ws_namespace || "/msg";
-    $("#mx-ws-enabled").checked = config.ws_enabled;
-    $("#mx-page-size").value = config.page_size || 30;
-    $("#mx-max-pages").value = config.max_history_pages || 100;
-    updateMxTokenUpdatedLabel(config);
-
-    // Load rooms
-    loadMxRooms();
-    refreshMxWsStatus();
-
-    // Add event listeners for search/filter
-    const qInput = $("#mx-rooms-q");
-    const enabledOnly = $("#mx-rooms-enabled-only");
-    if (qInput) {
-      let searchTimeout = null;
-      qInput.oninput = () => {
-        clearTimeout(searchTimeout);
-        searchTimeout = setTimeout(() => loadMxRooms(), 300);
-      };
-    }
-    if (enabledOnly) enabledOnly.onchange = () => loadMxRooms();
-
-  } catch (err) {
-    box.innerHTML = `<p class="muted">${escapeHtml(err.message || "加载 MX 配置失败")}</p>
-      <div class="toolbar"><button type="button" class="btn-ghost" onclick="loadMxAdmin()">重试</button></div>`;
-  }
-}
-
-async function saveMxConfig() {
-  const btn = $("#mx-save-btn");
-  if (!btn || btn.disabled) return;
-  btn.disabled = true;
-  try {
-    // Parse numbers with defaults, ensure minimum values
-    const page_size = Math.max(1, Number($("#mx-page-size").value) || 30);
-    const max_history_pages = Math.max(1, Number($("#mx-max-pages").value) || 100);
-
-    const payload = {
-      enabled: $("#mx-enabled").checked,
-      token: $("#mx-token").value.trim(),
-      api_base: $("#mx-api-base").value.trim() || "https://mx.2026.naaifu.cn/business-api/5",
-      ws_url: $("#mx-ws-url").value.trim() || "wss://mx.2026.naaifu.cn/business-api/5",
-      ws_path: $("#mx-ws-path").value.trim() || "/socket.io",
-      ws_namespace: $("#mx-ws-namespace").value.trim() || "/msg",
-      ws_enabled: $("#mx-ws-enabled").checked,
-      page_size,
-      max_history_pages,
-    };
-    console.log("Saving MX config payload:", payload);
-
-    await api("/api/admin/sources/mx", {
-      method: "PUT",
-      body: JSON.stringify(payload),
-    });
-    flash("MX配置已保存");
-    try {
-      updateMxTokenUpdatedLabel(await api("/api/admin/sources/mx"));
-    } catch {}
-    refreshMxWsStatus();
-  } catch (err) {
-    flash(err.message || "保存失败", "error");
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-}
-
-async function loadMxRooms() {
-  const listBox = $("#mx-rooms-list");
-  if (!listBox) return;
-  try {
-    const q = ($("#mx-rooms-q")?.value || "").toLowerCase();
-    const enabledOnly = $("#mx-rooms-enabled-only")?.checked;
-    const result = await api(`/api/admin/sources/mx/rooms?search=${encodeURIComponent(q)}&enabled_only=${enabledOnly ? "1" : "0"}`);
-    const rooms = result.rooms || [];
-    if (!rooms.length) {
-      listBox.innerHTML = `<p class="muted">暂无房间，请先同步</p>`;
-      return;
-    }
-    listBox.innerHTML = `<div class="table-wrap">
-      <table>
-        <thead><tr><th scope="col">房间</th><th scope="col">今日消息</th><th scope="col">最近更新</th><th scope="col">已启用</th><th scope="col">广场显示</th><th scope="col">订阅数</th><th scope="col">操作</th></tr></thead>
-        <tbody>
-          ${rooms.map((r) => `<tr>
-            <td>
-              <div class="kol-row-main">
-                ${avatarHtml(r.title, r.avatar)}
-                <div>
-                  <div class="kol-name">${escapeHtml(r.title)}</div>
-                  ${r.teaname ? `<div class="muted" style="font-size:12px">${escapeHtml(r.teaname)}</div>` : ""}
-                </div>
-              </div>
-            </td>
-            <td>${Number(r.message_today) || 0}</td>
-            <td>${r.msgtime ? escapeHtml(r.msgtime) : "-"}</td>
-            <td>${r.enabled ? "✅" : "❌"}</td>
-            <td>${r.show_in_plaza ? "✅" : "❌"}</td>
-            <td>${Number(r.subscriber_count) || 0}</td>
-	            <td>
-	              <div class="toolbar">
-	                <button type="button" class="btn-ghost" onclick="updateMxRoom(${r.id}, { enabled: !${r.enabled} })">${r.enabled ? "禁用" : "启用"}</button>
-	                <button type="button" class="btn-ghost" onclick="updateMxRoom(${r.id}, { show_in_plaza: !${r.show_in_plaza} })">${r.show_in_plaza ? "隐藏广场" : "显示广场"}</button>
-	                <button type="button" class="btn-ghost" onclick="pullMxRoomHistory(${r.id})">拉取历史消息</button>
-	              </div>
-	            </td>
-          </tr>`).join("")}
-        </tbody>
-      </table>
-    </div>`;
-  } catch (err) {
-    listBox.innerHTML = `<p class="muted">${escapeHtml(err.message || "加载房间失败")}</p>
-      <div class="toolbar"><button type="button" class="btn-ghost" onclick="loadMxRooms()">重试</button></div>`;
-  }
-}
-
-async function updateMxRoom(roomId, body) {
-  try {
-    await api(`/api/admin/sources/mx/rooms/${roomId}`, {
-      method: "PUT",
-      body: JSON.stringify(body),
-    });
-    flash("房间已更新");
-    loadMxRooms();
-  } catch (err) {
-    flash(err.message || "更新失败", "error");
-  }
-}
-
-async function pullMxRoomHistory(roomId) {
-  try {
-    await api(`/api/admin/sources/mx/rooms/${roomId}/pull-history`, {
-      method: "POST",
-    });
-    flash("历史消息拉取已触发");
-  } catch (err) {
-    flash(err.message || "拉取历史消息失败", "error");
-  }
-}
-
-async function loadProxyAdmin() {
-  const box = $("#st-proxies");
-  if (!box) return;
-  const drafts = {};
-  document.querySelectorAll("textarea[id^='pp-import-']").forEach((el) => {
-    if (el.value) drafts[el.id] = el.value;
-  });
-  try {
-    const [routes, pools, proxies] = await Promise.all([
-      api("/api/admin/proxy-routes"),
-      api("/api/admin/proxy-pools"),
-      api("/api/admin/proxies"),
-    ]);
-    box.innerHTML = renderProxyAdmin(routes, pools.items || [], proxies.items || []);
-    Object.entries(drafts).forEach(([id, text]) => {
-      const el = document.getElementById(id);
-      if (el) el.value = text;
-    });
-    ["xueqiu", "combination", "weibo", "twitter"].forEach((p) => {
-      const r = routes[p] || {};
-      if (r.pool_id && $(`#pr-${p}-pool`)) $(`#pr-${p}-pool`).value = String(r.pool_id);
-      if (r.proxy_id && $(`#pr-${p}-proxy`)) $(`#pr-${p}-proxy`).value = String(r.proxy_id);
-      syncProxyRouteInputs(p);
-    });
-  } catch (err) {
-    box.innerHTML = `<p class="muted">${escapeHtml(err.message || "加载代理失败")}</p>
-      <div class="toolbar"><button type="button" class="btn-ghost" onclick="loadProxyAdmin()">重试</button></div>`;
-  }
-}
-
-function renderProxyAdmin(routes, pools, proxies) {
-  const platforms = ["xueqiu", "combination", "weibo", "twitter"];
-  const poolOpts = pools.length
-    ? pools.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}（${p.proxy_count}）</option>`).join("")
-    : `<option value="">先创建代理池</option>`;
-  const proxyOpts = proxies.length
-    ? proxies.map((p) => `<option value="${p.id}">${proxyOptionLabel(p)}</option>`).join("")
-    : `<option value="">先导入或提取代理</option>`;
-  const routeRows = platforms.map((p) => {
-    const r = routes[p] || { mode: "direct" };
-    const label = PLATFORM_LABELS[p];
-    return `<div class="proxy-route">
-      <label class="cfg-field">
-        <span>${label}</span>
-        <select id="pr-${p}-mode" class="form-control" onchange="syncProxyRouteInputs('${p}')">
-          <option value="direct"${r.mode === "direct" ? " selected" : ""}>直连</option>
-          <option value="pool"${r.mode === "pool" ? " selected" : ""}>指定池</option>
-          <option value="proxy"${r.mode === "proxy" ? " selected" : ""}>指定代理</option>
-        </select>
-      </label>
-      <label class="cfg-field" id="pr-${p}-pool-wrap"${r.mode === "pool" ? "" : " hidden"}>
-        <span>代理池</span>
-        <select id="pr-${p}-pool" class="form-control" aria-label="${label} 代理池">${poolOpts}</select>
-      </label>
-      <label class="cfg-field" id="pr-${p}-proxy-wrap"${r.mode === "proxy" ? "" : " hidden"}>
-        <span>指定代理</span>
-        <select id="pr-${p}-proxy" class="form-control" aria-label="${label} 指定代理">${proxyOpts}</select>
-      </label>
-    </div>`;
-  }).join("");
-  const poolCards = pools.map((p) => {
-    const rows = proxies.filter((x) => x.pool_id === p.id);
-    const lines = rows.map((x) => {
-      const statusClass = proxyStatusClass(x.status);
-      return `<tr>
-      <td class="ak-hide-mobile" data-label="协议">${escapeHtml(x.protocol)}</td>
-      <td data-label="地址">${escapeHtml(x.host)}:${x.port}</td>
-      <td class="ak-hide-mobile" data-label="账号">${escapeHtml(x.username || "—")}</td>
-      <td data-label="状态"${statusClass ? ` class="${statusClass}"` : ""}>${escapeHtml(proxyStatusLabel(x.status))}</td>
-      <td class="ak-hide-mobile" data-label="来源">${x.source === "extract" ? "提取" : "手动"}</td>
-      <td data-label="过期">${x.expires_at ? fmtTs(x.expires_at) : "—"}</td>
-      <td class="ak-actions" data-label="操作">
-        <button type="button" class="btn-sm" data-proxy-test="${x.id}" onclick="testProxyNode(${x.id})">测试</button>
-        <button type="button" class="btn-sm danger" onclick="deleteProxyNode(${x.id})">删除</button>
-      </td>
-    </tr>`;
-    }).join("");
-    const extract = p.kind === "extract"
-      ? `<p class="section-meta proxy-extract-url">提取 ${escapeHtml(p.extract_url || "未填")}${p.last_error ? ` · 上次错误 ${escapeHtml(p.last_error)}` : ""}</p>
-         <div class="toolbar"><button type="button" class="btn-ghost" data-proxy-extract="${p.id}" onclick="extractProxyPool(${p.id})">立即提取</button></div>`
-      : "";
-    return `<section class="section-panel">
-      <header class="section-head rc-list-head"><div>
-        <h2 class="section-title">${escapeHtml(p.name)} <span class="hint">${p.kind === "extract" ? "提取池" : "静态池"} · ${escapeHtml(p.protocol)}</span></h2>
-        ${extract}
-      </div>
-      <button type="button" class="btn-ghost danger" onclick="deleteProxyPool(${p.id})">删除池</button></header>
-      <label class="form-label" for="pp-import-${p.id}"><span>导入节点</span>
-        <textarea id="pp-import-${p.id}" class="form-control cookie-paste proxy-import" rows="3" placeholder="host:port 或 socks5://user:pass@host:port，一行一条"></textarea>
-      </label>
-      <div class="toolbar">
-        <button type="button" class="btn-normal" data-proxy-import="${p.id}" onclick="importProxyPool(${p.id})">导入</button>
-      </div>
-      <div class="table-wrap proxy-nodes-wrap">
-        <table class="ak-table proxy-nodes">
-          <thead><tr><th>协议</th><th>地址</th><th>账号</th><th>状态</th><th>来源</th><th>过期</th><th>操作</th></tr></thead>
-          <tbody>${lines || `<tr class="ak-empty"><td colspan="7" class="muted">还没有节点，先导入或提取。</td></tr>`}</tbody>
-        </table>
-      </div>
-    </section>`;
-  }).join("");
-  return `
-    <section class="section-panel">
-      <header class="section-head"><div>
-        <h2 class="section-title">抓取出口</h2>
-        <p class="section-meta">按平台选择直连、指定池或指定代理。组合与雪球常同出口，但不强制绑定。池空时本轮抓取失败，不会偷偷直连。</p>
-      </div></header>
-      <div class="cfg-fields">${routeRows}</div>
-      <div class="cfg-save-row"><button type="button" class="btn-normal" id="pr-save" onclick="saveProxyRoutes()">保存出口</button></div>
-    </section>
-    <section class="section-panel">
-      <header class="section-head"><div>
-        <h2 class="section-title">新建代理池</h2>
-        <p class="section-meta">静态池粘贴导入；提取池填商家提取 URL（一行一个 IP），按过期秒数刷新。</p>
-      </div></header>
-      <div class="cfg-fields">
-        <label class="cfg-field"><span>名称</span><input id="pp-name" class="form-control" maxlength="40" placeholder="海外S5"></label>
-        <label class="cfg-field"><span>类型</span>
-          <select id="pp-kind" class="form-control" onchange="syncProxyPoolForm()">
-            <option value="static">静态</option>
-            <option value="extract">提取 URL</option>
-          </select>
-        </label>
-        <label class="cfg-field"><span>协议</span>
-          <select id="pp-protocol" class="form-control">
-            <option value="http">HTTP</option>
-            <option value="socks5">SOCKS5</option>
-          </select>
-        </label>
-        <label class="cfg-field" id="pp-extract-wrap" hidden><span>提取 URL</span><input id="pp-extract-url" class="form-control" placeholder="https://api.example.com/get?key="></label>
-        <label class="cfg-field" id="pp-expire-wrap" hidden><span>过期<span class="cfg-unit">秒</span></span><input id="pp-expire" type="number" class="form-control" min="0" value="300"></label>
-        <label class="cfg-field" id="pp-refresh-wrap" hidden><span>刷新<span class="cfg-unit">秒</span></span><input id="pp-refresh" type="number" class="form-control" min="0" value="180"></label>
-      </div>
-      <div class="cfg-save-row"><button type="button" class="btn-normal" id="pp-create" onclick="createProxyPool()">创建</button></div>
-    </section>
-    ${poolCards || `<p class="muted">还没有代理池。先创建一个，再导入或提取。</p>`}`;
-}
-
-function syncProxyRouteInputs(platform) {
-  const mode = $(`#pr-${platform}-mode`)?.value;
-  const poolWrap = $(`#pr-${platform}-pool-wrap`);
-  const proxyWrap = $(`#pr-${platform}-proxy-wrap`);
-  if (poolWrap) poolWrap.hidden = mode !== "pool";
-  if (proxyWrap) proxyWrap.hidden = mode !== "proxy";
-}
-
-function syncProxyPoolForm() {
-  const extract = $("#pp-kind")?.value === "extract";
-  ["pp-extract-wrap", "pp-expire-wrap", "pp-refresh-wrap"].forEach((id) => {
-    const el = document.getElementById(id);
-    if (el) el.hidden = !extract;
-  });
-}
-
-async function saveProxyRoutes() {
-  const body = {};
-  for (const p of ["xueqiu", "combination", "weibo", "twitter"]) {
-    const mode = $(`#pr-${p}-mode`).value;
-    body[p] = { mode };
-    if (mode === "pool") {
-      const poolId = $(`#pr-${p}-pool`).value;
-      if (!poolId) {
-        flash("请先创建代理池", "error");
-        return;
-      }
-      body[p].pool_id = Number(poolId);
-    }
-    if (mode === "proxy") {
-      const proxyId = $(`#pr-${p}-proxy`).value;
-      if (!proxyId) {
-        flash("请先导入或提取代理", "error");
-        return;
-      }
-      body[p].proxy_id = Number(proxyId);
-    }
-  }
-  const btn = $("#pr-save");
-  if (proxyBusy(btn, true)) return;
-  try {
-    await api("/api/admin/proxy-routes", { method: "PUT", body: JSON.stringify(body) });
-    flash("抓取出口已保存");
-    loadProxyAdmin();
-  } catch (err) {
-    flash(err.message || "保存失败", "error");
-  } finally {
-    if (btn && document.body.contains(btn)) btn.disabled = false;
-  }
-}
-
-async function createProxyPool() {
-  const name = $("#pp-name").value.trim();
-  if (!name) {
-    flash("请填写代理池名称", "error");
-    return;
-  }
-  const kind = $("#pp-kind").value;
-  if (kind === "extract" && !$("#pp-extract-url").value.trim()) {
-    flash("提取池需要填写提取 URL", "error");
-    return;
-  }
-  const btn = $("#pp-create");
-  if (proxyBusy(btn, true)) return;
-  try {
-    await api("/api/admin/proxy-pools", {
-      method: "POST",
-      body: JSON.stringify({
-        name,
-        kind,
-        protocol: $("#pp-protocol").value,
-        extract_url: $("#pp-extract-url").value,
-        expire_seconds: Number($("#pp-expire").value || 0),
-        refresh_interval_seconds: Number($("#pp-refresh").value || 0),
-      }),
-    });
-    flash("代理池已创建");
-    loadProxyAdmin();
-  } catch (err) {
-    flash(err.message || "创建失败", "error");
-  } finally {
-    if (btn && document.body.contains(btn)) btn.disabled = false;
-  }
-}
-
-async function importProxyPool(poolId) {
-  const text = $(`#pp-import-${poolId}`)?.value || "";
-  if (!text.trim()) {
-    flash("请先粘贴要导入的代理", "error");
-    return;
-  }
-  const btn = document.querySelector(`[data-proxy-import="${poolId}"]`);
-  if (proxyBusy(btn, true)) return;
-  try {
-    const result = await api(`/api/admin/proxy-pools/${poolId}/import`, {
-      method: "POST",
-      body: JSON.stringify({ text }),
-    });
-    const ta = $(`#pp-import-${poolId}`);
-    if (ta) ta.value = "";
-    flash(`导入 ${result.imported} 条`);
-    loadProxyAdmin();
-  } catch (err) {
-    flash(err.message || "导入失败", "error");
-  } finally {
-    if (btn && document.body.contains(btn)) btn.disabled = false;
-  }
-}
-
-async function extractProxyPool(poolId) {
-  const btn = document.querySelector(`[data-proxy-extract="${poolId}"]`);
-  if (proxyBusy(btn, true)) return;
-  try {
-    const result = await api(`/api/admin/proxy-pools/${poolId}/extract`, { method: "POST" });
-    flash(`提取 ${result.imported} 条`);
-    loadProxyAdmin();
-  } catch (err) {
-    flash(err.message || "提取失败", "error");
-  } finally {
-    if (btn && document.body.contains(btn)) btn.disabled = false;
-  }
-}
-
-async function deleteProxyPool(poolId) {
-  if (!(await showConfirm("删除这个代理池及其节点？"))) return;
-  try {
-    await api(`/api/admin/proxy-pools/${poolId}`, { method: "DELETE" });
-    flash("已删除");
-    loadProxyAdmin();
-  } catch (err) {
-    flash(err.message || "删除失败", "error");
-  }
-}
-
-async function deleteProxyNode(proxyId) {
-  if (!(await showConfirm("删除后需要重新导入。确定删除这个节点？"))) return;
-  try {
-    await api(`/api/admin/proxies/${proxyId}`, { method: "DELETE" });
-    flash("已删除");
-    loadProxyAdmin();
-  } catch (err) {
-    flash(err.message || "删除失败", "error");
-  }
-}
-
-async function testProxyNode(proxyId) {
-  const btn = document.querySelector(`[data-proxy-test="${proxyId}"]`);
-  if (proxyBusy(btn, true)) return;
-  try {
-    const result = await api(`/api/admin/proxies/${proxyId}/test`, { method: "POST" });
-    flash(result.ok ? "测试成功" : (result.error || `测试失败 ${result.status_code || ""}`), result.ok ? "success" : "error");
-    await loadProxyAdmin();
-  } catch (err) {
-    flash(err.message || "测试失败", "error");
-    if (btn && document.body.contains(btn)) btn.disabled = false;
-  }
-}
-
 function focusCookieField(kind) {
   const focusId = { xueqiu: "xq-cookie", weibo: "wb-qr-start", twitter: "tw-cookie", ima: "ima-cookie", zsxq: "zq-cookie" }[kind];
   if (focusId) $(`#${focusId}`)?.focus();
@@ -10963,286 +5327,6 @@ async function saveZsxqCookie() {
   } catch (err) {
     if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
     flash(err.message, "error");
-  }
-}
-
-function imaCollectorStatusText(status) {
-  const result = status.last_result || {};
-  const config = status.config || {};
-  const storage = status.storage;
-  const storageMessages = {
-    unavailable: "研报库存储暂不可用",
-    stale: "研报库存储状态过期",
-    readonly: "研报库存储当前只读",
-    capacity_blocked: "研报库存储空间已达限制",
-  };
-  if (storageMessages[storage?.status]) return storageMessages[storage.status];
-  let text;
-  if (!config.refresh_token?.set) text = "未配置 Refresh Token";
-  else if (status.running) text = "同步中…";
-  else {
-    const groups = Array.isArray(config.groups) ? config.groups : [];
-    const mounted = groups.filter((group) => Array.isArray(group.folder_ids) && group.folder_ids.length).length;
-    if (!mounted) text = "已连接 · 尚未挂载研报库";
-    else if (status.last_finished_at) {
-      const ok = Number(result.downloaded || 0);
-      const failed = Number(result.failed || 0);
-      text = `已归档 ${Number(status.documents || 0).toLocaleString()} 份 · 上次新增 ${ok} 份${failed ? ` · 失败 ${failed} 份` : ""}`;
-    } else {
-      text = `已配置 · 每 ${Math.round(Number(config.interval_seconds || 3600) / 60)} 分钟检查`;
-    }
-  }
-  if (storage?.status === "available") {
-    const used = Math.max(0, Math.min(100, Number(storage.used_percent) || 0));
-    text += ` · 存储 ${used}%`;
-  }
-  const indexMessages = {
-    rebuilding: "索引重建中",
-    fallback: "索引回退",
-    failed: "索引异常",
-  };
-  const indexStatus = status.index?.status || "ready";
-  if (indexStatus !== "ready" && indexMessages[indexStatus]) {
-    text += ` · ${indexMessages[indexStatus]}`;
-  }
-  return text;
-}
-
-async function saveImaCollector() {
-  const routeSeq = routeRenderSeq;
-  const saveButton = $("#ima-collector-save");
-  if (imaMountState.saveOwner) return;
-  if (saveButton?.disabled) return;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  const mountRevision = imaMountState.revision;
-  const collectorRevision = imaMountState.collectorRevision;
-  const focusElement = document.activeElement;
-  const focusId = focusElement?.id || "";
-  let focusMoved = false;
-  const onFocusIn = (event) => {
-    if (event.target !== focusElement && event.target !== document.body) focusMoved = true;
-  };
-  const snapshot = imaCollectorFormSnapshot();
-  rememberImaCollectorDraft(snapshot);
-  const body = {
-    uid: snapshot.uid,
-    knowledge_base_id: snapshot.knowledge_base_id,
-    root_folder_id: snapshot.root_folder_id,
-    interval_seconds: snapshot.interval_seconds,
-    groups: readImaMountGroups(),
-  };
-  const token = snapshot.refresh_token;
-  if (token) body.refresh_token = token;
-  const saveOwner = {
-    routeSeq,
-    sessionGeneration,
-    mountRevision,
-    collectorRevision,
-    formRevision: imaCollectorFormRevision(snapshot),
-    snapshot,
-  };
-  const onDraftChange = (event) => {
-    if (imaMountState.saveOwner !== saveOwner) return;
-    const target = event.target;
-    if (!target?.closest?.(".ima-interval-seg") && !target.closest?.("#ima-mount-layout")) return;
-    const liveSnapshot = rememberImaCollectorDraft();
-    if (imaMountState.saveOwner === saveOwner) saveOwner.liveSnapshot = liveSnapshot;
-  };
-  imaMountState.saveOwner = saveOwner;
-  if (saveButton) saveButton.disabled = true;
-  document.addEventListener("input", onDraftChange);
-  document.addEventListener("change", onDraftChange);
-  document.addEventListener("click", onDraftChange);
-  document.addEventListener("focusin", onFocusIn);
-  try {
-    const savedImaStatus = await api("/api/admin/ima-collector", { method: "PUT", body: JSON.stringify(body) });
-    if (sessionGeneration !== imaMountState.sessionGeneration || imaMountState.saveOwner !== saveOwner) return;
-    saveOwner.savedImaStatus = savedImaStatus;
-    saveOwner.putCompleted = true;
-    const submittedLiveRevision = saveOwner.liveSnapshot
-      ? imaCollectorFormRevision(saveOwner.liveSnapshot) : saveOwner.formRevision;
-    const formStillCurrent = submittedLiveRevision === saveOwner.formRevision;
-    const collectorStillCurrent = imaMountState.collectorRevision === saveOwner.collectorRevision;
-    const mountStillCurrent = imaMountState.revision === saveOwner.mountRevision;
-    if (formStillCurrent && collectorStillCurrent && mountStillCurrent) {
-      imaMountState.collectorConfirmedRevision = saveOwner.formRevision;
-      imaMountState.collectorConfirmedLiveRevision = saveOwner.collectorRevision;
-      imaMountState.collectorConfirmedMountRevision = saveOwner.mountRevision;
-    }
-    const currentSnapshot = routeStillActive(routeSeq) && isAdminSettingsPath()
-      && $("#ima-mount-layout") ? imaCollectorFormSnapshot() : null;
-    const currentFormRevision = currentSnapshot
-      ? imaCollectorFormRevision(currentSnapshot) : submittedLiveRevision;
-    if (currentSnapshot && currentFormRevision !== saveOwner.formRevision) {
-      saveOwner.liveSnapshot = rememberImaCollectorDraft(currentSnapshot);
-    }
-    if (sessionGeneration !== imaMountState.sessionGeneration || imaMountState.saveOwner !== saveOwner) return;
-    if (!routeStillActive(routeSeq) && !isAdminSettingsPath()) return;
-    const statsReloadSeq = routeStillActive(routeSeq) ? routeSeq : routeRenderSeq;
-    let statsReloadAccepted;
-    if (statsReloadSeq === routeSeq) {
-      statsReloadAccepted = await reloadAdminSettingsPage(routeSeq, savedImaStatus);
-    } else {
-      statsReloadAccepted = await reloadAdminSettingsPage(routeRenderSeq, savedImaStatus);
-    }
-    if (!statsReloadAccepted || sessionGeneration !== imaMountState.sessionGeneration
-      || imaMountState.saveOwner !== saveOwner) return;
-    if (!routeStillActive(statsReloadSeq) || !isAdminSettingsPath()) return;
-    const reloadedSnapshot = imaCollectorFormSnapshot();
-    const reloadedRevision = imaCollectorFormRevision(reloadedSnapshot);
-    const liveRevision = saveOwner.liveSnapshot
-      ? imaCollectorFormRevision(saveOwner.liveSnapshot) : saveOwner.formRevision;
-    const formStillCurrentAfterReload = !saveOwner.liveSnapshot || reloadedRevision === liveRevision;
-    const mountStillCurrentAfterReload = imaMountState.revision === saveOwner.mountRevision;
-    const noNewerEditsAfterReload = formStillCurrentAfterReload && mountStillCurrentAfterReload && liveRevision === saveOwner.formRevision;
-    const collectorStillCurrentAfterReload = imaMountState.collectorRevision === saveOwner.collectorRevision;
-    if (noNewerEditsAfterReload) {
-      if (collectorStillCurrentAfterReload) {
-        clearImaCollectorDraft(saveOwner.formRevision);
-        imaMountState.dirty = false;
-        const tokenInput = $("#ima-pure-token");
-        if (tokenInput) tokenInput.value = "";
-      }
-    }
-    const restoreFocus = document.activeElement === focusElement || document.activeElement === document.body;
-    if (!focusMoved && restoreFocus) {
-      const focusTarget = document.getElementById(focusId) || document.getElementById("ima-collector-save");
-      focusTarget?.focus({ preventScroll: true });
-    }
-    flash("IMA 文档采集配置已保存");
-  } catch (err) {
-    if (sessionGeneration !== imaMountState.sessionGeneration || imaMountState.saveOwner !== saveOwner) return;
-    if (routeStillActive(routeSeq) && isAdminSettingsPath()) {
-      flash(err.message || "保存失败", "error");
-    }
-  } finally {
-    document.removeEventListener("input", onDraftChange);
-    document.removeEventListener("change", onDraftChange);
-    document.removeEventListener("click", onDraftChange);
-    document.removeEventListener("focusin", onFocusIn);
-    if (imaMountState.saveOwner === saveOwner) {
-      imaMountState.saveOwner = null;
-      if (saveButton && document.body.contains(saveButton)) saveButton.disabled = false;
-      const currentSaveButton = $("#ima-collector-save");
-      if (currentSaveButton) currentSaveButton.disabled = false;
-    }
-  }
-}
-
-function imaCollectorProgressHtml(status) {
-  const p = status.progress;
-  if (!status.running || !p) return "";
-  if (p.phase === "listing") {
-    return `<div class="ima-progress"><div class="ima-progress-label">${escapeHtml(p.group_name || "")} · 列目录 ${Number(p.listed||0)}</div><div class="ima-progress-bar"><span style="width:15%"></span></div></div>`;
-  }
-  const total = Math.max(1, Number(p.pending || 0));
-  const done = Number(p.downloaded || 0);
-  const pct = Math.max(0, Math.min(100, Math.round(done * 100 / total)));
-  return `<div class="ima-progress"><div class="ima-progress-label">${escapeHtml(p.group_name || "")} · 下载 ${done} / ${Number(p.pending||0)}</div><div class="ima-progress-bar"><span style="width:${pct}%"></span></div></div>`;
-}
-
-function stopImaProgressPoll() {
-  imaProgressPollSeq += 1;
-  if (imaProgressTimer) {
-    clearInterval(imaProgressTimer);
-    imaProgressTimer = null;
-  }
-}
-
-function applyImaCollectorProgress(status) {
-  const progress = $("#ima-sync-progress");
-  if (progress) progress.innerHTML = imaCollectorProgressHtml(status);
-  const btn = $("#ima-sync-btn");
-  if (btn && document.body.contains(btn)) btn.disabled = !!status?.running;
-  const text = imaCollectorStatusText(status);
-  const target = $("#ima-collector-status");
-  if (target) target.textContent = text;
-  const selected = $("#ima-selected-group-state");
-  if (selected) selected.textContent = text;
-}
-
-function startImaProgressPoll() {
-  stopImaProgressPoll();
-  const routeSeq = routeRenderSeq;
-  const pollSeq = imaProgressPollSeq;
-  const tick = async () => {
-    try {
-      const status = await api("/api/admin/ima-collector");
-      if (pollSeq !== imaProgressPollSeq || !routeStillActive(routeSeq)) return;
-      applyImaCollectorProgress(status);
-      if (!status.running) stopImaProgressPoll();
-    } catch {
-      if (pollSeq !== imaProgressPollSeq || !routeStillActive(routeSeq)) return;
-    }
-  };
-  imaProgressTimer = setInterval(tick, 2000);
-  tick();
-}
-
-async function triggerImaCollector() {
-  const routeSeq = routeRenderSeq;
-  const btn = $("#ima-sync-btn");
-  if (btn?.disabled) return;
-  const groupId = imaMountState.selectedGroupId;
-  if (!groupId) {
-    flash("请先选择知识库", "error");
-    return;
-  }
-  const group = imaMountGroup(groupId);
-  const mounted = Array.isArray(group?.folder_ids) && group.folder_ids.length;
-  if (!mounted) {
-    flash("请先挂载该知识库并保存", "error");
-    return;
-  }
-  if (btn) btn.disabled = true;
-  try {
-    const result = await api("/api/admin/ima-collector/sync", { method: "POST", body: JSON.stringify({ group_id: groupId }) });
-    if (!routeStillActive(routeSeq)) return;
-    flash(result.status === "already_running" ? "IMA 文档同步正在进行中" : `已启动同步「${group?.name || groupId}」`);
-    const status = await api("/api/admin/ima-collector");
-    if (!routeStillActive(routeSeq)) return;
-    const target = $("#ima-collector-status");
-    if (target) target.textContent = imaCollectorStatusText(status);
-    const discovery = $("#ima-group-discovery-status");
-    if (discovery) discovery.innerHTML = imaGroupDiscoveryStatusText(status);
-    applyImaCollectorProgress(status);
-    startImaProgressPoll();
-  } catch (err) {
-    if (routeStillActive(routeSeq)) {
-      flash(err.message || "同步启动失败", "error");
-      if (btn && document.body.contains(btn)) btn.disabled = false;
-    }
-  } finally {
-    if (routeStillActive(routeSeq)) return;
-    stopImaProgressPoll();
-  }
-}
-
-async function saveImaCredentials() {
-  const routeSeq = routeRenderSeq;
-  const token = state.token;
-  const sessionGeneration = imaMountState.sessionGeneration;
-  const cookie = $("#ima-cookie")?.value?.trim() || "";
-  const cid = $("#ima-cid")?.value?.trim() || "";
-  const key = $("#ima-key")?.value?.trim() || "";
-  if (!cookie && !(cid && key)) {
-    flash("需至少填 Cookie 或 OpenAPI 凭证（clientid + apikey）", "error");
-    return;
-  }
-  try {
-    await api("/api/admin/ima-credentials", {
-      method: "POST",
-      body: JSON.stringify({ cookie, openapi_clientid: cid, openapi_apikey: key }),
-    });
-    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    flash("IMA 凭证已保存");
-    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    await reloadAdminSettingsPage(routeSeq);
-    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    focusCookieField("ima");
-  } catch (e) {
-    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
-    flash(e.message || "保存失败", "error");
   }
 }
 
@@ -11353,3693 +5437,11 @@ async function pollWeiboQr(qrid, owner) {
   }
 }
 
-function statCard(label, value) {
-  return `
-    <div class="dash-stat">
-      <div class="dash-stat-label">${escapeHtml(label)}</div>
-      <div class="dash-stat-value">${escapeHtml(String(value))}</div>
-    </div>`;
-}
-
-async function loadAdminDashboard() {
-  try {
-    const [d, st] = await Promise.all([api("/api/admin/dashboard"), api("/api/stats")]);
-    const u = d.users || {};
-    const s = d.subscriptions || {};
-    const p = d.posts || {};
-    const pu = d.pushes || {};
-    const CHANNEL_LABELS_LOOKUP = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信" };
-    const rate = pu.success_rate != null ? `${pu.success_rate}%` : "—";
-
-    // 14 天推送趋势柱状图（纯 CSS，零依赖）
-    const trend = pu.trend_14d || [];
-    const maxPushed = Math.max(1, ...trend.map((t) => t.pushed));
-    const trendHtml = trend.length
-      ? `<div class="dash-trend" role="list" aria-label="近 14 天推送趋势">${trend.map((t) => {
-        const fail = Math.max(0, t.pushed - t.ok);
-        // 红/绿分别按失败数/成功数相对最大值定高，二者之和 = 总推送量高度，不会溢出
-        const failPct = Math.floor((fail / maxPushed) * 100);
-        const okPct = Math.floor((t.ok / maxPushed) * 100);
-        const tip = `${t.date}：推送 ${t.pushed} 条，成功 ${t.ok}，失败 ${fail}`;
-        return `<div class="dash-trend-col" role="listitem" title="${escapeHtml(tip)}" aria-label="${escapeHtml(tip)}">
-            <div class="dash-trend-bar">
-              <div class="dash-trend-fail" style="height:${failPct}%"></div>
-              <div class="dash-trend-ok" style="height:${okPct}%"></div>
-            </div>
-            <div class="dash-trend-date">${escapeHtml(t.date.slice(5))}</div>
-          </div>`;
-      }).join("")}</div>`
-      : `<p class="muted">近 14 天暂无推送记录</p>`;
-
-    // 平台来源分布
-    const platformRows = Object.entries(p.by_platform || {}).map(([k, v]) => {
-      const total = p.total || 1;
-      const w = Math.round((v / total) * 100);
-      return `<div class="dash-bar-row">
-        <span class="dash-bar-label">${PLATFORM_LABELS[k] || escapeHtml(k)}</span>
-        <div class="dash-bar-track"><div class="dash-bar-fill" style="width:${w}%"></div></div>
-        <span class="dash-bar-value">${v}</span>
-      </div>`;
-    }).join("");
-
-    // 渠道推送成功率
-    const channelRows = Object.entries(pu.by_channel || {}).map(([k, v]) => {
-      const r = v.total ? Math.round((v.ok / v.total) * 100) : 0;
-      return `<div class="dash-bar-row">
-        <span class="dash-bar-label">${CHANNEL_LABELS_LOOKUP[k] || escapeHtml(k)}</span>
-        <div class="dash-bar-track"><div class="dash-bar-fill ${r < 90 ? "warn" : ""}" style="width:${r}%"></div></div>
-        <span class="dash-bar-value">${v.ok}/${v.total}（${r}%）</span>
-      </div>`;
-    }).join("");
-
-    const platformSection = platformRows
-      ? `<section class="section-panel">
-          <header class="section-head"><div><h2 class="section-title">帖子来源分布</h2></div></header>
-          ${platformRows}
-        </section>`
-      : "";
-    const channelSection = channelRows
-      ? `<section class="section-panel">
-          <header class="section-head"><div><h2 class="section-title">渠道推送成功率（7 天）</h2></div></header>
-          ${channelRows}
-        </section>`
-      : "";
-    const splitSection = (platformSection || channelSection)
-      ? `<div class="dash-split">${platformSection}${channelSection}</div>`
-      : "";
-    const volumeStats = `<div class="dash-stats">
-          ${statCard("近 7 天推送", pu.total_7d || 0)}
-          ${statCard("推送成功率", rate)}
-          ${statCard("绑定渠道用户", u.bound || 0)}
-        </div>`;
-    const volumeBody = trendHtml
-      ? `<div class="dash-volume">${volumeStats}${trendHtml}</div>`
-      : volumeStats;
-
-    if (!routeStillActive(_adminRenderSeq)) return;
-    setPageTitle("全景概览");
-    $("#admin-body").innerHTML = `
-      <div id="dash-cookie-slot"></div>
-      <div class="dash-duty-grid">
-        <section class="section-panel dash-source-panel">
-          <header class="section-head">
-            <div>
-              <h2 class="section-title">数据源健康</h2>
-              <div id="dash-duty-strip-slot"></div>
-              ${dashboardFetchMetaHtml(st)}
-            </div>
-            <div class="toolbar"><button type="button" class="btn-ghost" onclick="refreshDashboardLive()">立即刷新</button></div>
-          </header>
-          <div id="stats-poll-error"></div>
-          <div class="table-wrap">
-            <table class="ak-table dash-source-table">
-              <thead><tr>
-                <th scope="col">平台</th><th scope="col">状态</th>
-                <th class="ak-hide-mobile" scope="col">24h 成功率</th>
-                <th scope="col">最近错误</th>
-              </tr></thead>
-              <tbody id="sources-table"></tbody>
-            </table>
-          </div>
-          <div id="dash-source-events"></div>
-        </section>
-        <section class="section-panel dash-stale-panel" id="dash-stale-panel" hidden>
-          <header class="section-head"><div><h2 class="section-title">停更大V</h2></div></header>
-          <div id="kol-health"></div>
-        </section>
-      </div>
-      <section class="section-panel dash-volume-panel">
-        <header class="section-head"><div><h2 class="section-title">核心指标</h2>
-        <p class="section-meta">今日新帖 ${p.today || 0} · 今日推送 ${pu.today || 0} · 7 日新用户 ${u.new_7d || 0} · 注册 ${u.total || 0}</p></div></header>
-        ${volumeBody}
-      </section>
-      ${splitSection}`;
-    renderStatsData(st);
-    startDashboardLiveTimer();
-  } catch (err) {
-    if (!routeStillActive(_adminRenderSeq)) return;
-    $("#admin-body").innerHTML = emptyState("加载失败: " + err.message,
-      `<div><button class="btn-normal" onclick="loadAdminDashboard()">重试</button></div>`);
-  }
-}
-
-let _adminKolsSeq = 0;
-const _adminKolsPageSize = 50;
-let _adminKolsSelected = new Set(); // 批量操作选中的大V id（跨页保留）
-
-async function loadAdminKols(opts) {
-  opts = opts || {};
-  const seq = ++_adminKolsSeq;
-  let data, categories;
-  try {
-    const params = new URLSearchParams({
-      limit: String(_adminKolsPageSize),
-      offset: String((state.adminKolsPage || 0) * _adminKolsPageSize),
-    });
-    if (state.adminKolsPlatform) params.set("platform", state.adminKolsPlatform);
-    if (state.adminKolsCategory) params.set("category_id", state.adminKolsCategory);
-    if (state.adminKolsStatus !== "") params.set("status", state.adminKolsStatus);
-    if (state.adminKolsQ) params.set("q", state.adminKolsQ);
-    [data, categories] = await Promise.all([api(`/api/admin/kols?${params}`), api("/api/categories")]);
-  } catch (err) {
-    if (!routeStillActive(_adminRenderSeq)) return;
-    if (seq === _adminKolsSeq) $("#admin-body").innerHTML = emptyState("加载失败: " + err.message);
-    return;
-  }
-  if (seq !== _adminKolsSeq) return; // 已切换筛选/翻页，丢弃过期响应
-  const matchIds = new Set(data.ids || []);
-  const focusIds = opts.focusIds || [];
-  const visibleFocus = focusIds.filter((id) => matchIds.has(id));
-  if (visibleFocus.length) {
-    const idx = (data.ids || []).indexOf(visibleFocus[0]);
-    const wantPage = Math.max(0, Math.floor(idx / _adminKolsPageSize));
-    if (wantPage !== (state.adminKolsPage || 0)) {
-      state.adminKolsPage = wantPage;
-      return loadAdminKols({ focusIds: visibleFocus });
-    }
-  }
-  const highlightIds = new Set(visibleFocus);
-  const kols = data.items || [];
-  state.adminKols = kols;
-  state.adminKolsTotal = data.total || 0;
-  for (const id of [..._adminKolsSelected]) {
-    if (!matchIds.has(id)) _adminKolsSelected.delete(id);
-  }
-  const catOptions = categories.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("");
-  const page = state.adminKolsPage || 0;
-  const pages = Math.max(1, Math.ceil((data.total || 0) / _adminKolsPageSize));
-  if (!routeStillActive(_adminRenderSeq)) return;
-  const selCount = _adminKolsSelected.size;
-  const rows = kols.map((k) => {
-    const tier = k.priority ? "优先" : k.secondary ? "次要" : "普通";
-    const orig = k.platform === "weibo"
-      ? (k.original_only ? '<span class="status-ok">是</span>' : "否")
-      : "—";
-    const kwList = k.block_keywords || [];
-    const blockedCnt = Number(k.blocked_count) || 0;
-    const kwCell = (kwList.length || blockedCnt)
-      ? `<button type="button" class="btn-sm ak-kw-view${blockedCnt ? " status-warn" : ""}" title="${kwList.length ? escapeHtml(kwList.join("、")) : "未设置屏蔽词"}" onclick="adminViewKolBlock(${k.id})">${kwList.length ? `${kwList.length} 个词` : "无屏蔽词"}${blockedCnt ? ` · 拦 ${blockedCnt}` : ""}</button>`
-      : '<span class="muted">—</span>';
-    const tierSel = `<select class="form-control btn-sm ak-tier-select" aria-label="档位" onchange="adminSetTier(${k.id}, this.value)"><option value="normal" ${!k.priority && !k.secondary ? "selected" : ""}>普通档</option><option value="priority" ${k.priority ? "selected" : ""}>优先档</option><option value="secondary" ${k.secondary ? "selected" : ""}>次要档</option></select>`;
-    return `
-            <tr class="${highlightIds.has(k.id) ? "ak-row-flash" : ""}">
-              <td class="ak-check"><input type="checkbox" class="kol-check" data-id="${k.id}" ${_adminKolsSelected.has(k.id) ? "checked" : ""} onchange="adminKolToggleSelect(this)" aria-label="选择 ${escapeHtml(k.name)}"></td>
-              <td class="ak-hide-mobile" data-label="ID">${k.id}</td>
-              <td data-label="平台">${PLATFORM_LABELS[k.platform] || k.platform}</td>
-              <td data-label="昵称">${escapeHtml(k.name)}</td>
-              <td data-label="分类">${escapeHtml(k.category_name || "")}</td>
-              <td class="ak-hide-mobile" data-label="外部ID">${escapeHtml(k.external_id)}</td>
-              <td data-label="档位">${tier}</td>
-              <td class="ak-hide-mobile" data-label="原创">${orig}</td>
-              <td data-label="可见性">${k.is_private ? '<span class="status-warn">私有</span>' : "公开"}</td>
-              <td class="ak-hide-mobile" data-label="屏蔽词">${kwCell}</td>
-              <td data-label="状态" class="${k.enabled ? "status-ok" : "status-fail"}">${k.enabled ? "启用" : "停用"}</td>
-              <td class="ak-actions" data-label="操作">
-                ${tierSel}
-                ${k.platform === "system" ? `<button class="btn-sm" onclick="adminKolWebhook(${k.id})">Webhook</button>` : ""}
-                <button class="btn-sm" onclick="adminToggleKol(${k.id}, ${k.enabled ? 0 : 1})">${k.enabled ? "停用" : "启用"}</button>
-                <button class="btn-sm" onclick="adminEditKolKeywords(${k.id})">屏蔽词</button>
-                <button class="btn-sm" onclick="adminEditKol(${k.id})">编辑</button>
-                <button class="btn-sm danger" onclick="adminDeleteKol(${k.id})">删除</button>
-              </td>
-            </tr>`;
-  }).join("");
-  $("#admin-body").innerHTML = `
-    <section class="section-panel">
-      <header class="section-head">
-        <div><h2 class="section-title">添加大V</h2>
-        <p class="section-meta">每行一个：昵称 + 主页链接（昵称可省略）。平台由链接自动识别。</p></div>
-      </header>
-      <textarea id="ad-batch-lines" class="form-control ak-add-lines" rows="6" placeholder="https://xueqiu.com/u/12345&#10;段永平 https://xueqiu.com/u/12345&#10;https://weibo.com/u/1642591402&#10;https://x.com/elonmusk&#10;https://xueqiu.com/P/ZH123456" aria-label="大V主页链接，每行一个" oninput="adminBatchLinesHint()"></textarea>
-      <div class="toolbar ak-add-bar">
-        <label class="muted" for="ad-batch-system"><input type="checkbox" id="ad-batch-system" onchange="adminBatchSystemToggle()"> 系统 KOL（用于 AI 分析）</label>
-        <select id="ad-batch-category" class="form-control" aria-label="分类"><option value="">未分类</option>${catOptions}</select>
-        <button class="btn-normal" id="ad-batch-btn" onclick="adminBatchAddKols()">添加</button>
-        <div id="ad-batch-result" class="muted ak-add-result"></div>
-      </div>
-    </section>
-    <section class="section-panel">
-      <header class="section-head">
-        <div><h2 class="section-title">大V列表</h2>
-        <p class="section-meta" id="admin-kols-meta">共 ${state.adminKolsTotal} 个大V · 优先约 60 秒抓一次，次要走低频摘要</p></div>
-        <div class="toolbar ak-filters">
-          <input id="ak-q" class="form-control" style="width:200px" placeholder="昵称 / 外部ID" value="${escapeHtml(state.adminKolsQ || "")}" onkeydown="if(event.key==='Enter')adminKolsApplyFilter()">
-          <select id="ak-category" class="form-control" style="width:auto" onchange="adminKolsApplyFilter()"><option value="">全部分类</option>${catOptions}</select>
-          <select id="ak-status" class="form-control" style="width:auto" onchange="adminKolsApplyFilter()">
-            <option value="">全部状态</option>
-            <option value="1" ${state.adminKolsStatus === "1" ? "selected" : ""}>启用</option>
-            <option value="0" ${state.adminKolsStatus === "0" ? "selected" : ""}>停用</option>
-          </select>
-          <button type="button" class="btn-ghost ak-search-btn" onclick="adminKolsApplyFilter()">搜索</button>
-          <button type="button" class="btn-ghost ak-clear-btn" onclick="adminKolsClearFilter()">清除</button>
-        </div>
-        <div class="platform-tabs ak-platform-tabs" id="admin-kols-tabs"></div>
-      </header>
-      <div class="toolbar admin-batch-bar" id="ak-batch-bar" style="margin-top:10px;display:${selCount ? "flex" : "none"};align-items:center;gap:8px;flex-wrap:wrap">
-        <strong>已选 ${selCount} 个</strong>
-        <button class="btn-sm" onclick="adminKolBatch('enable')">批量启用</button>
-        <button class="btn-sm" onclick="adminKolBatch('disable')">批量停用</button>
-        <button class="btn-sm" onclick="adminKolBatch('priority', true)">批量设优先</button>
-        <button class="btn-sm" onclick="adminKolBatch('secondary', true)">批量设次要</button>
-        <button class="btn-sm" onclick="adminKolBatch('normal')">批量设普通</button>
-        <select id="ak-batch-category" class="form-control" style="width:auto"><option value="">批量改分类…</option>${catOptions}<option value="0">（清除分类）</option></select>
-        <button class="btn-sm" onclick="adminKolBatchCategory()">应用分类</button>
-        <button class="btn-sm danger" onclick="adminKolBatch('delete')">批量删除</button>
-        <button class="btn-sm" onclick="adminKolClearSelect()">取消选择</button>
-      </div>
-      <div class="table-wrap">
-        <table class="ak-table">
-          <thead><tr><th scope="col" style="width:32px"><input type="checkbox" id="ak-checkall" onchange="adminKolTogglePage(this)" aria-label="全选当前页"></th><th scope="col">ID</th><th scope="col">平台</th><th scope="col">昵称</th><th scope="col">分类</th><th scope="col">外部ID</th><th scope="col">档位</th><th scope="col">原创</th><th scope="col">可见性</th><th scope="col" class="ak-hide-mobile">屏蔽词</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead>
-          <tbody>${rows || `<tr class="ak-empty"><td colspan="12" class="muted">${state.adminKolsQ || state.adminKolsCategory || state.adminKolsStatus !== "" || state.adminKolsPlatform ? "没有匹配的大V" : "还没有大V，先用上方表单添加"}</td></tr>`}</tbody>
-        </table>
-      </div>
-      <div class="toolbar" style="margin-top:12px;justify-content:center;gap:12px;align-items:center">
-        <button class="btn-sm" ${page <= 0 ? "disabled" : ""} onclick="adminKolsPage(${page - 1})">← 上一页</button>
-        <span class="muted">第 ${page + 1}/${pages} 页 · 共 ${state.adminKolsTotal} 个</span>
-        <button class="btn-sm" ${page + 1 >= pages ? "disabled" : ""} onclick="adminKolsPage(${page + 1})">下一页 →</button>
-      </div>
-    </section>`;
-  // 回填筛选控件当前值（页面重建后）
-  const qEl = $("#ak-q"); if (qEl) qEl.value = state.adminKolsQ || "";
-  const catEl = $("#ak-category"); if (catEl) catEl.value = state.adminKolsCategory || "";
-  const statusEl = $("#ak-status"); if (statusEl) statusEl.value = state.adminKolsStatus ?? "";
-  adminKolSyncCheckall(kols);
-  $("#admin-kols-tabs").innerHTML = PLATFORM_TABS.map((p) => platformTabHTML(p, state.adminKolsPlatform, "switchAdminKolsPlatform")).join("");
-  return { hiddenFocus: focusIds.length > 0 && visibleFocus.length === 0 };
-}
-
-function switchAdminKolsPlatform(platform) {
-  const qEl = $("#ak-q");
-  if (qEl) state.adminKolsQ = qEl.value.trim();
-  state.adminKolsPlatform = platform;
-  state.adminKolsPage = 0;
-  loadAdminKols();
-}
-
-function adminKolsApplyFilter() {
-  state.adminKolsQ = $("#ak-q").value.trim();
-  state.adminKolsCategory = $("#ak-category").value;
-  state.adminKolsStatus = $("#ak-status").value;
-  state.adminKolsPage = 0;
-  loadAdminKols();
-}
-
-function adminKolsClearFilter() {
-  state.adminKolsQ = "";
-  state.adminKolsCategory = "";
-  state.adminKolsStatus = "";
-  state.adminKolsPlatform = "";
-  state.adminKolsPage = 0;
-  loadAdminKols();
-}
-
-function adminKolSyncCheckall(kols) {
-  const list = kols || state.adminKols || [];
-  const checkall = $("#ak-checkall");
-  if (!checkall) return;
-  const pageSelected = list.filter((k) => _adminKolsSelected.has(k.id)).length;
-  checkall.checked = !!list.length && pageSelected === list.length;
-  checkall.indeterminate = pageSelected > 0 && pageSelected < list.length;
-}
-
-function adminKolsPage(page) {
-  state.adminKolsPage = page;
-  loadAdminKols();
-}
-
-function adminKolToggleSelect(el) {
-  const id = Number(el.dataset.id);
-  if (el.checked) _adminKolsSelected.add(id);
-  else _adminKolsSelected.delete(id);
-  const bar = $("#ak-batch-bar");
-  if (bar) {
-    bar.style.display = _adminKolsSelected.size ? "flex" : "none";
-    const strong = bar.querySelector("strong");
-    if (strong) strong.textContent = `已选 ${_adminKolsSelected.size} 个`;
-  }
-  adminKolSyncCheckall();
-}
-
-function adminKolTogglePage(el) {
-  document.querySelectorAll(".kol-check").forEach((c) => {
-    c.checked = el.checked;
-    const id = Number(c.dataset.id);
-    if (el.checked) _adminKolsSelected.add(id);
-    else _adminKolsSelected.delete(id);
-  });
-  const bar = $("#ak-batch-bar");
-  if (bar) {
-    bar.style.display = _adminKolsSelected.size ? "flex" : "none";
-    const strong = bar.querySelector("strong");
-    if (strong) strong.textContent = `已选 ${_adminKolsSelected.size} 个`;
-  }
-  adminKolSyncCheckall();
-}
-
-function adminKolClearSelect() {
-  _adminKolsSelected.clear();
-  document.querySelectorAll(".kol-check").forEach((c) => { c.checked = false; });
-  const bar = $("#ak-batch-bar");
-  if (bar) bar.style.display = "none";
-  const checkall = $("#ak-checkall");
-  if (checkall) {
-    checkall.checked = false;
-    checkall.indeterminate = false;
-  }
-}
-
-async function adminKolBatch(action, value) {
-  const ids = [..._adminKolsSelected];
-  if (!ids.length) return;
-  if (action === "delete" && !(await showConfirm(`确认删除选中的 ${ids.length} 个大V？（将同时清理其订阅/帖子/推送记录）`))) return;
-  const bar = $("#ak-batch-bar");
-  const buttons = bar ? [...bar.querySelectorAll("button")] : [];
-  buttons.forEach((b) => { b.disabled = true; });
-  try {
-    await api("/api/admin/kols/batch", {
-      method: "POST",
-      body: JSON.stringify({ ids, action, value: value ?? null }),
-    });
-    flash(action === "normal" ? `已将 ${ids.length} 个大V设为普通档` : `已对 ${ids.length} 个大V执行批量操作`);
-    _adminKolsSelected.clear();
-    loadAdminKols();
-  } catch (err) {
-    flash("批量操作失败: " + err.message, "error");
-    buttons.forEach((b) => { b.disabled = false; });
-  }
-}
-
-async function adminKolBatchCategory() {
-  const value = $("#ak-batch-category").value;
-  if (value === "") { flash("请选择要应用到的分类", "error"); return; }
-  await adminKolBatch("category", value === "0" ? null : Number(value));
-}
-
-async function adminBatchAddKols() {
-  const lines = $("#ad-batch-lines").value;
-  if (!lines.trim()) {
-    flash("请先填写要添加的大V主页链接", "error");
-    return;
-  }
-  const category = $("#ad-batch-category").value;
-  // 系统 KOL：每行「中文名 外部ID」（空格分隔，中文名可省略），走 AI 分析专用平台
-  const systemMode = $("#ad-batch-system")?.checked;
-  const btn = $("#ad-batch-btn");
-  if (btn) btn.disabled = true;
-  try {
-    const data = await api("/api/kols/batch", {
-      method: "POST",
-      body: JSON.stringify({
-        lines,
-        platform: systemMode ? "system" : undefined,
-        category_id: category ? Number(category) : null,
-      }),
-    });
-    const failLines = data.failed.map((f) => `${f.line} — ${f.error}`).join("\n");
-    const view = await loadAdminKols({ focusIds: data.ids || [] });
-    const resultEl = $("#ad-batch-result");
-    if (resultEl) {
-      resultEl.textContent = data.failed.length
-        ? `成功 ${data.ok}/${data.total}，失败 ${data.failed.length} 条${failLines ? `\n${failLines}` : ""}`
-        : `成功 ${data.ok}/${data.total}`;
-      resultEl.style.color = data.failed.length ? "var(--color-danger)" : "var(--color-success)";
-      resultEl.style.fontWeight = "600";
-    }
-    const hidden = view && view.hiddenFocus && data.ok;
-    flash(data.failed.length
-      ? `添加完成：成功 ${data.ok}/${data.total}，失败 ${data.failed.length} 条${hidden ? "，不在当前筛选里" : ""}`
-      : hidden
-        ? `添加成功：${data.ok} 个，不在当前筛选里`
-        : `添加成功：${data.ok} 个`);
-  } catch (err) {
-    flash("添加失败: " + err.message, "error");
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-}
-
-function adminBatchLinesHint() {
-  const lines = $("#ad-batch-lines")?.value || "";
-  if (!/(?:xueqiu\.com\/P\/|ZH\d)/.test(lines)) return;
-  const cat = $("#ad-batch-category");
-  if (!cat || cat.value) return;
-  for (const opt of cat.options) {
-    if (opt.textContent.trim() === "实盘") { cat.value = opt.value; break; }
-  }
-}
-
-function adminBatchSystemToggle() {
-  const system = $("#ad-batch-system")?.checked;
-  const ta = $("#ad-batch-lines");
-  if (!ta) return;
-  const meta = ta.closest(".section-panel")?.querySelector(".section-meta");
-  if (system) {
-    ta.placeholder = "张三 sys_kol_001\n李四 sys_kol_002\nsys_kol_003";
-    if (meta) meta.textContent = "每行一个：中文名 外部ID（空格分隔，中文名可省略，仅填一段文本时整行作为外部 ID）。";
-  } else {
-    ta.placeholder = "https://xueqiu.com/u/12345\n段永平 https://xueqiu.com/u/12345\nhttps://weibo.com/u/1642591402\nhttps://x.com/elonmusk\nhttps://xueqiu.com/P/ZH123456";
-    if (meta) meta.textContent = "每行一个：昵称 + 主页链接（昵称可省略）。平台由链接自动识别。";
-  }
-}
-
-async function adminToggleKol(id, enabled) {
-  const kol = state.adminKols.find((k) => k.id === id);
-  try {
-    await api(`/api/kols/${id}`, { method: "PUT", body: JSON.stringify({ enabled: !!enabled }) });
-    flash(`已${enabled ? "启用" : "停用"}「${kol ? kol.name : "该大V"}」`);
-    loadAdminKols();
-  } catch (err) {
-    flash("操作失败: " + err.message, "error");
-  }
-}
-
-async function adminSetTier(id, tier) {
-  if (tier === "priority") return adminTogglePriority(id, true);
-  if (tier === "secondary") return adminToggleSecondary(id, true);
-  const kol = state.adminKols.find((k) => k.id === id);
-  try {
-    await api(`/api/kols/${id}`, { method: "PUT", body: JSON.stringify({ priority: false, secondary: false }) });
-    flash(`已改为普通档「${kol ? kol.name : "该大V"}」`);
-    loadAdminKols();
-  } catch (err) {
-    flash("操作失败: " + err.message, "error");
-  }
-}
-
-async function adminTogglePriority(id, priority) {
-  const kol = state.adminKols.find((k) => k.id === id);
-  try {
-    await api(`/api/kols/${id}`, { method: "PUT", body: JSON.stringify({ priority: !!priority }) });
-    flash(`已${priority ? "设为优先" : "改为普通档"}「${kol ? kol.name : "该大V"}」`);
-    loadAdminKols();
-  } catch (err) {
-    flash("操作失败: " + err.message, "error");
-  }
-}
-
-async function adminToggleSecondary(id, secondary) {
-  const kol = state.adminKols.find((k) => k.id === id);
-  try {
-    await api(`/api/kols/${id}`, { method: "PUT", body: JSON.stringify({ secondary: !!secondary }) });
-    flash(`已${secondary ? "设为次要" : "改为普通档"}「${kol ? kol.name : "该大V"}」`);
-    loadAdminKols();
-  } catch (err) {
-    flash("操作失败: " + err.message, "error");
-  }
-}
-
-async function adminDeleteKol(id) {
-  const kol = state.adminKols.find((k) => k.id === id);
-  const subs = Number(kol && kol.subscriber_count) || 0;
-  if (!(await showConfirm(`确认删除该大V${kol ? `「${kol.name}」` : ""}？将同时清理 ${subs} 个订阅及其帖子/推送记录。`))) return;
-  try {
-    await api(`/api/kols/${id}`, { method: "DELETE" });
-    flash(`已删除「${kol ? kol.name : "该大V"}」`);
-    loadAdminKols();
-  } catch (err) {
-    flash("删除失败: " + err.message, "error");
-  }
-}
-
-function adminKolEditSnapshot() {
-  return JSON.stringify({
-    name: $("#ek-name").value.trim(),
-    category: $("#ek-category").value,
-    priv: $("#ek-private").checked,
-    orig: $("#ek-original") ? $("#ek-original").checked : false,
-    users: $("#ek-users").value.trim(),
-  });
-}
-
-async function adminEditKol(id) {
-  let kol, categories;
-  try {
-    [kol, categories] = await Promise.all([api(`/api/kols/${id}`), api("/api/categories")]);
-  } catch (err) {
-    flash("加载失败: " + err.message, "error");
-    return;
-  }
-  const catOptions = categories.map((c) => `<option value="${c.id}" ${kol.category_id === c.id ? "selected" : ""}>${escapeHtml(c.name)}</option>`).join("");
-  const mask = document.createElement("div");
-  mask.className = "modal-mask";
-  mask.innerHTML = `
-    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="ek-title">
-      <h3 id="ek-title" style="margin-bottom:12px">编辑大V：${escapeHtml(kol.name)}</h3>
-      <label class="form-label">昵称
-        <input id="ek-name" class="form-control" value="${escapeHtml(kol.name)}">
-      </label>
-      <label class="form-label">分类
-        <select id="ek-category" class="form-control"><option value="">未分类</option>${catOptions}</select>
-      </label>
-      <label class="form-label" style="display:flex;align-items:center;gap:8px">
-        <input id="ek-private" type="checkbox" ${kol.is_private ? "checked" : ""} onchange="document.getElementById('ek-users-wrap').hidden=!this.checked"> 私有大V（仅白名单用户可见/可订阅）
-      </label>
-      ${kol.platform === "weibo" ? `<label class="form-label" style="display:flex;align-items:center;gap:8px">
-        <input id="ek-original" type="checkbox" ${kol.original_only ? "checked" : ""}> 只看原创（微博跳过转发，适合转发刷屏的大V）
-      </label>` : ""}
-      <label class="form-label" id="ek-users-wrap" ${kol.is_private ? "" : "hidden"}>白名单用户（逗号分隔用户名）
-        <input id="ek-users" class="form-control" value="${escapeHtml((kol.visible_users || []).join(", "))}" placeholder="user1, user2">
-      </label>
-      <div class="toolbar" style="margin-top:16px">
-        <button class="btn-normal" id="ek-save" onclick="saveKolEdit(${kol.id})">保存</button>
-        <button type="button" class="btn-sm" data-close>取消</button>
-      </div>
-    </div>`;
-  const initial = (() => {
-    document.body.appendChild(mask);
-    return adminKolEditSnapshot();
-  })();
-  const tryClose = async () => {
-    if (adminKolEditSnapshot() !== initial && !(await showConfirm("有未保存的修改，确定关闭？"))) return;
-    mask.remove();
-  };
-  mask.addEventListener("click", (e) => {
-    if (e.target === mask) tryClose();
-  });
-  mask.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      tryClose();
-      return;
-    }
-    if (e.key === "Tab") {
-      const nodes = [...mask.querySelectorAll("button, input, select, textarea")].filter((el) => !el.disabled && !el.hidden && el.offsetParent);
-      if (!nodes.length) return;
-      const first = nodes[0];
-      const last = nodes[nodes.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    }
-  });
-  mask.querySelector("[data-close]").addEventListener("click", tryClose);
-  // 焦点管理：打开聚焦首个输入框；无论以哪种方式关闭，焦点都还原到触发按钮
-  const trigger = document.activeElement;
-  const firstInput = mask.querySelector("input, select, textarea, button");
-  if (firstInput) firstInput.focus();
-  const observer = new MutationObserver(() => {
-    if (!document.body.contains(mask)) {
-      observer.disconnect();
-      if (trigger && trigger.isConnected) trigger.focus();
-    }
-  });
-  observer.observe(document.body, { childList: true });
-}
-
-async function saveKolEdit(id) {
-  const mask = document.querySelector(".modal-mask");
-  const name = $("#ek-name").value.trim();
-  const isPrivate = $("#ek-private").checked;
-  const visibleUsers = $("#ek-users").value.split(",").map((s) => s.trim()).filter(Boolean);
-  if (isPrivate && !visibleUsers.length) {
-    if (!(await showConfirm("白名单为空，该大V将对所有人隐藏。仍要保存？"))) return;
-  }
-  const body = {
-    name,
-    category_id: $("#ek-category").value ? Number($("#ek-category").value) : null,
-    is_private: isPrivate,
-    visible_users: visibleUsers,
-  };
-  if ($("#ek-original")) body.original_only = $("#ek-original").checked;
-  const btn = $("#ek-save");
-  if (btn) btn.disabled = true;
-  try {
-    await api(`/api/kols/${id}`, {
-      method: "PUT",
-      body: JSON.stringify(body),
-    });
-    if (mask) mask.remove();
-    flash(`已保存「${name}」`);
-    loadAdminKols();
-  } catch (err) {
-    flash("保存失败: " + err.message, "error");
-    if (btn) btn.disabled = false;
-  }
-}
-
-// ---- 系统 KOL Webhook（外部调用让该 KOL 发言，飞书自定义机器人风格）----
-function _kolWebhookUrl(wh) {
-  return `${location.origin}${wh.path || ""}`;
-}
-
-function _kolWebhookCurl(wh) {
-  return `curl -X POST '${_kolWebhookUrl(wh)}' -H 'Content-Type: application/json' -d '{"msg_type":"text","content":{"text":"大家好"}}'`;
-}
-
-async function adminKolWebhook(id) {
-  const row = (state.adminKols || []).find((k) => k.id === id);
-  if (!row) return;
-  let wh;
-  try {
-    wh = await api(`/api/admin/kols/${id}/webhook`);
-  } catch (err) {
-    flash("加载失败: " + err.message, "error");
-    return;
-  }
-  const mask = document.createElement("div");
-  mask.className = "modal-mask";
-  mask.innerHTML = `
-    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="kw-title">
-      <h3 id="kw-title" style="margin-bottom:12px">Webhook：${escapeHtml(row.name)}</h3>
-      <p class="muted" style="margin-top:0">外部程序 POST 消息到该地址，就会以「${escapeHtml(row.name)}」的身份发帖并推送给订阅者（参考飞书自定义机器人，兼容其请求格式）。</p>
-      <label class="form-label" style="display:flex;align-items:center;gap:8px">
-        <input id="kw-enabled" type="checkbox" ${wh.enabled ? "checked" : ""} onchange="adminKolWebhookToggle(${id}, this.checked)"> 启用 Webhook
-      </label>
-      <div id="kw-url-wrap" ${wh.enabled && wh.token ? "" : "hidden"}>
-        <label class="form-label">Webhook 地址
-          <div class="toolbar" style="gap:8px">
-            <input id="kw-url" class="form-control" readonly value="${escapeHtml(_kolWebhookUrl(wh))}" onclick="this.select()">
-            <button type="button" class="btn-sm" onclick="copyText(document.getElementById('kw-url').value, '已复制 Webhook 地址')">复制</button>
-          </div>
-        </label>
-        <label class="form-label">签名密钥（可选，防伪造；飞书同款 HMAC 校验）
-          <div class="toolbar" style="gap:8px">
-            <input id="kw-secret" class="form-control" placeholder="${wh.secret_set ? "已设置（输入新值可更换）" : "留空则不校验签名"}">
-            <button type="button" class="btn-sm" onclick="adminKolWebhookSaveSecret(${id})">保存密钥</button>
-            ${wh.secret_set ? `<button type="button" class="btn-sm" onclick="adminKolWebhookSaveSecret(${id}, true)">清除</button>` : ""}
-          </div>
-        </label>
-        <div class="toolbar" style="gap:8px">
-          <button type="button" class="btn-sm" onclick="adminKolWebhookRegenerate(${id})">重新生成 Token（旧地址立即失效）</button>
-        </div>
-        <label class="form-label">调用示例
-          <pre class="muted" style="white-space:pre-wrap;user-select:all">${escapeHtml(_kolWebhookCurl(wh))}</pre>
-        </label>
-      </div>
-      <div class="toolbar" style="margin-top:16px">
-        <button type="button" class="btn-sm" data-close>关闭</button>
-      </div>
-    </div>`;
-  document.body.appendChild(mask);
-  mask.addEventListener("click", (e) => { if (e.target === mask) mask.remove(); });
-  mask.addEventListener("keydown", (e) => { if (e.key === "Escape") mask.remove(); });
-  mask.querySelector("[data-close]").addEventListener("click", () => mask.remove());
-}
-
-async function adminKolWebhookToggle(id, enabled) {
-  try {
-    const wh = await api(`/api/admin/kols/${id}/webhook`, {
-      method: "PUT",
-      body: JSON.stringify({ enabled }),
-    });
-    flash(enabled ? "Webhook 已启用" : "Webhook 已停用");
-    const wrap = $("#kw-url-wrap");
-    if (wrap) wrap.hidden = !(wh.enabled && wh.token);
-    const urlEl = $("#kw-url");
-    if (urlEl && wh.path) urlEl.value = _kolWebhookUrl(wh);
-  } catch (err) {
-    flash("保存失败: " + err.message, "error");
-    const cb = $("#kw-enabled");
-    if (cb) cb.checked = !enabled;
-  }
-}
-
-async function adminKolWebhookSaveSecret(id, clear = false) {
-  const value = clear ? "" : ($("#kw-secret")?.value || "").trim();
-  if (!clear && !value) {
-    flash("请输入密钥，或点「清除」", "error");
-    return;
-  }
-  try {
-    const wh = await api(`/api/admin/kols/${id}/webhook`, {
-      method: "PUT",
-      body: JSON.stringify({ secret: value }),
-    });
-    flash(wh.secret_set ? "签名密钥已保存" : "签名密钥已清除");
-    const input = $("#kw-secret");
-    if (input) {
-      input.value = "";
-      input.placeholder = wh.secret_set ? "已设置（输入新值可更换）" : "留空则不校验签名";
-    }
-  } catch (err) {
-    flash("保存失败: " + err.message, "error");
-  }
-}
-
-async function adminKolWebhookRegenerate(id) {
-  if (!(await showConfirm("确定更换 Token？旧 Webhook 地址会立即失效。"))) return;
-  try {
-    const wh = await api(`/api/admin/kols/${id}/webhook/regenerate`, { method: "POST" });
-    const urlEl = $("#kw-url");
-    if (urlEl) urlEl.value = _kolWebhookUrl(wh);
-    flash("已更换 Token");
-  } catch (err) {
-    flash("操作失败: " + err.message, "error");
-  }
-}
-
-// ---- 大V 屏蔽词（关键词拦截）----
-function kolKeywordsSnapshot() {
-  return $("#ek-keywords").value;
-}
-
-async function adminViewKolBlock(id) {
-  const row = state.adminKols.find((k) => k.id === id);
-  if (!row) return;
-  const keywords = row.block_keywords || [];
-  const mask = document.createElement("div");
-  mask.className = "modal-mask";
-  mask.innerHTML = `
-    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="ak-block-title">
-      <h3 id="ak-block-title" style="margin-bottom:12px">拦截详情：${escapeHtml(row.name)}</h3>
-      <div style="margin-bottom:12px">
-        <div class="form-label" style="margin-bottom:6px">屏蔽词</div>
-        <div id="ak-block-kws">${keywords.length
-          ? keywords.map((kw) => `<span class="ak-kw-chip">${escapeHtml(kw)}</span>`).join(" ")
-          : '<span class="muted">未设置屏蔽词</span>'}</div>
-      </div>
-      <div>
-        <div class="form-label" style="margin-bottom:6px">拦截的内容</div>
-        <div id="ak-block-posts" class="ak-block-list"><p class="muted">加载中…</p></div>
-      </div>
-      <div class="toolbar" style="margin-top:16px">
-        <button class="btn-normal" onclick="this.closest('.modal-mask').remove(); adminEditKolKeywords(${id})">修改屏蔽词</button>
-        <button type="button" class="btn-sm" data-close>关闭</button>
-      </div>
-    </div>`;
-  document.body.appendChild(mask);
-  mask.addEventListener("click", (e) => {
-    if (e.target === mask) mask.remove();
-  });
-  mask.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") mask.remove();
-  });
-  mask.querySelector("[data-close]").addEventListener("click", () => mask.remove());
-  const listEl = mask.querySelector("#ak-block-posts");
-  try {
-    const posts = await api(`/api/posts?kol_id=${id}&blocked=1&limit=200`);
-    if (!posts.length) {
-      listEl.innerHTML = '<p class="muted">暂无被拦截的消息</p>';
-    } else {
-      listEl.innerHTML = posts.map((p) => `
-        <div class="ak-block-item">
-          <div class="muted ak-block-meta">${escapeHtml(fmtDbTime(p.published_at))}${p.block_hit ? ` · 命中「${escapeHtml(p.block_hit)}」` : ""}</div>
-          ${p.title ? `<div class="ak-block-title">${escapeHtml(p.title)}</div>` : ""}
-          <div class="ak-block-content">${escapeHtml(p.content || "")}</div>
-        </div>`).join("");
-      const total = Number(row.blocked_count) || 0;
-      if (total > posts.length) {
-        listEl.insertAdjacentHTML("beforeend", `<p class="muted" style="margin:8px 0 0">共拦截 ${total} 条，当前显示最近 ${posts.length} 条</p>`);
-      }
-    }
-  } catch (err) {
-    listEl.innerHTML = `<p class="muted">加载失败: ${escapeHtml(err.message)}</p>`;
-  }
-}
-
-async function adminEditKolKeywords(id) {
-  let kol;
-  try {
-    kol = await api(`/api/kols/${id}`);
-  } catch (err) {
-    flash("加载失败: " + err.message, "error");
-    return;
-  }
-  const keywords = kol.block_keywords || [];
-  const row = state.adminKols.find((k) => k.id === id);
-  const blockedCnt = Number(row && row.blocked_count) || 0;
-  const mask = document.createElement("div");
-  mask.className = "modal-mask";
-  mask.innerHTML = `
-    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="ek-keywords-title">
-      <h3 id="ek-keywords-title" style="margin-bottom:12px">屏蔽词：${escapeHtml(kol.name)}</h3>
-      <label class="form-label">关键词（每行一个，不区分大小写）
-        <textarea id="ek-keywords" class="form-control" rows="6" placeholder="广告&#10;加微信&#10;开户"></textarea>
-      </label>
-      <p class="muted" style="margin:8px 0 0">该大V的消息标题或正文包含任一关键词即被拦截：动态页不再显示，也不再推送给订阅用户。保存后立即对已抓取的历史消息生效。</p>
-      ${blockedCnt ? `<p class="muted" style="margin:8px 0 0">当前已拦截 ${blockedCnt} 条消息。</p>` : ""}
-      <div class="toolbar" style="margin-top:16px">
-        <button class="btn-normal" id="ek-keywords-save" onclick="saveKolKeywords(${kol.id})">保存</button>
-        <button type="button" class="btn-sm" data-close>取消</button>
-      </div>
-    </div>`;
-  document.body.appendChild(mask);
-  $("#ek-keywords").value = keywords.join("\n");
-  const initial = kolKeywordsSnapshot();
-  const tryClose = async () => {
-    if (kolKeywordsSnapshot() !== initial && !(await showConfirm("有未保存的修改，确定关闭？"))) return;
-    mask.remove();
-  };
-  mask.addEventListener("click", (e) => {
-    if (e.target === mask) tryClose();
-  });
-  mask.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      tryClose();
-    }
-  });
-  mask.querySelector("[data-close]").addEventListener("click", tryClose);
-  const firstInput = mask.querySelector("textarea");
-  if (firstInput) firstInput.focus();
-}
-
-async function saveKolKeywords(id) {
-  const keywords = $("#ek-keywords").value.split(/\n+/).map((s) => s.trim()).filter(Boolean);
-  const btn = $("#ek-keywords-save");
-  if (btn) btn.disabled = true;
-  try {
-    await api(`/api/kols/${id}`, {
-      method: "PUT",
-      body: JSON.stringify({ block_keywords: keywords }),
-    });
-    const mask = btn && btn.closest(".modal-mask");
-    if (mask) mask.remove();
-    flash(keywords.length ? `已保存屏蔽词（${keywords.length} 个），命中消息将被拦截` : "已清空屏蔽词");
-    loadAdminKols();
-  } catch (err) {
-    flash("保存失败: " + err.message, "error");
-    if (btn) btn.disabled = false;
-  }
-}
-
-async function loadAdminRequests() {
-  let requests, all;
-  try {
-    [requests, all] = await Promise.all([
-      api("/api/admin/kol-requests?status=pending"),
-      api("/api/admin/kol-requests"),
-    ]);
-  } catch (err) {
-    if (!routeStillActive(_adminRenderSeq)) return;
-    $("#admin-body").innerHTML = emptyState("加载失败: " + err.message);
-    return;
-  }
-  const done = all.filter((r) => r.status !== "pending");
-  const pendingRows = requests.length === 0
-    ? `<tr><td colspan="8" class="muted">暂无待审批申请</td></tr>`
-    : requests.map((r) => `
-        <tr>
-          <td>${r.id}</td><td>${PLATFORM_LABELS[r.platform] || r.platform}</td>
-          <td>${escapeHtml(r.name || "（未填）")}</td><td>${escapeHtml(r.external_id)}</td>
-          <td>${escapeHtml(r.category_name || "—")}</td>
-          <td>${escapeHtml(r.requester || r.user_id)}</td><td>${escapeHtml(fmtDbTime(r.created_at))}</td>
-          <td>
-            <button class="btn-sm" onclick="adminApproveRequest(${r.id})">通过</button>
-            <button class="btn-sm danger" onclick="adminRejectRequest(${r.id})">拒绝</button>
-          </td>
-        </tr>`).join("");
-  const historyRows = done.length === 0
-    ? `<tr><td colspan="8" class="muted">暂无处理记录</td></tr>`
-    : done.map((r) => `
-        <tr>
-          <td>${r.id}</td><td>${PLATFORM_LABELS[r.platform] || r.platform}</td>
-          <td>${escapeHtml(r.name || "（未填）")}</td><td>${escapeHtml(r.external_id)}</td>
-          <td>${escapeHtml(r.category_name || "—")}</td>
-          <td>${escapeHtml(r.requester || r.user_id)}</td>
-          <td class="${r.status === "approved" ? "status-ok" : "status-fail"}">${r.status === "approved" ? "已通过" : "已拒绝"}</td>
-          <td>${escapeHtml(fmtDbTime(r.handled_at))}</td>
-        </tr>`).join("");
-  if (!routeStillActive(_adminRenderSeq)) return;
-  $("#admin-body").innerHTML = `
-    <section class="section-panel">
-      <header class="section-head"><div><h2 class="section-title">添加审批</h2>
-      <p class="section-meta">用户申请添加的大V，审批通过后进入订阅广场。</p></div></header>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th scope="col">ID</th><th scope="col">平台</th><th scope="col">昵称</th><th scope="col">外部ID</th><th scope="col">分类</th><th scope="col">申请人</th><th scope="col">申请时间</th><th scope="col">操作</th></tr></thead>
-          <tbody>${pendingRows}</tbody>
-        </table>
-      </div>
-    </section>
-    <section class="section-panel">
-      <header class="section-head"><div><h2 class="section-title">处理记录</h2></div></header>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th scope="col">ID</th><th scope="col">平台</th><th scope="col">昵称</th><th scope="col">外部ID</th><th scope="col">分类</th><th scope="col">申请人</th><th scope="col">状态</th><th scope="col">处理时间</th></tr></thead>
-          <tbody>${historyRows}</tbody>
-        </table>
-      </div>
-    </section>`;
-}
-
-async function adminApproveRequest(id) {
-  try {
-    await api(`/api/admin/kol-requests/${id}/approve`, { method: "POST" });
-    flash("已通过申请，大V已进入订阅广场");
-    loadAdminRequests();
-  } catch (err) {
-    flash("操作失败: " + err.message, "error");
-  }
-}
-
-async function adminRejectRequest(id) {
-  if (!(await showConfirm("确认拒绝该申请？"))) return;
-  try {
-    await api(`/api/admin/kol-requests/${id}/reject`, { method: "POST" });
-    flash("已拒绝该申请");
-    loadAdminRequests();
-  } catch (err) {
-    flash("操作失败: " + err.message, "error");
-  }
-}
-
-const _codesUi = {
-  note: "",
-  count: 5,
-  expires: 7,
-  filter: "available",
-  q: "",
-  result: null,
-};
-
 function parseDbUtcMs(s) {
   if (!s) return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/.exec(String(s));
   if (!m) return null;
   return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
-}
-
-function codeStatus(c) {
-  if (c.used_by) return "used";
-  if (c.revoked_at) return "revoked";
-  const exp = parseDbUtcMs(c.expires_at);
-  if (exp != null && exp <= Date.now()) return "expired";
-  return "available";
-}
-
-function codeStatusLabel(status) {
-  return { available: "可用", used: "已用", revoked: "已作废", expired: "已过期" }[status] || status;
-}
-
-function codeStatusClass(status) {
-  return { available: "status-ok", used: "status-fail", revoked: "status-fail", expired: "status-warn" }[status] || "";
-}
-
-function formatInviteCopy(codeList, expiresDays, note) {
-  const head = expiresDays
-    ? `V Push 邀请码（一次性，${expiresDays}天内有效）`
-    : "V Push 邀请码（一次性）";
-  const lines = [head, ...codeList];
-  if (note) lines.push(`备注：${note}`);
-  return lines.join("\n");
-}
-
-function formatInviteCopyUntil(codeList, expiresAt, note) {
-  const head = expiresAt
-    ? `V Push 邀请码（一次性，有效期至 ${fmtDbTime(expiresAt)})`
-    : "V Push 邀请码（一次性）";
-  const lines = [head, ...codeList];
-  if (note) lines.push(`备注：${note}`);
-  return lines.join("\n");
-}
-
-function copyDataAttr(text) {
-  return encodeURIComponent(String(text ?? "")).replace(/'/g, "%27");
-}
-
-function copyText(text, okMsg) {
-  if (!text) return;
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(text).then(
-      () => flash(okMsg || "已复制"),
-      () => showAlert("请手动复制：\n" + text),
-    );
-  } else {
-    showAlert("请手动复制：\n" + text);
-  }
-}
-
-let _adminCodesSelected = new Set();
-
-function codeCanRevoke(c) {
-  return c && !c.used_by && !c.revoked_at;
-}
-
-function codeCanPurge(c) {
-  const st = codeStatus(c);
-  return st === "used" || st === "revoked" || st === "expired";
-}
-
-function adminCodesSelectedRows() {
-  const all = state.adminCodes || [];
-  return all.filter((c) => _adminCodesSelected.has(c.code));
-}
-
-function adminCodesSyncBar() {
-  const bar = $("#rc-batch-bar");
-  if (!bar) return;
-  const selected = adminCodesSelectedRows();
-  bar.style.display = _adminCodesSelected.size ? "flex" : "none";
-  const strong = bar.querySelector("strong");
-  if (strong) {
-    const visibleSelected = document.querySelectorAll(".rc-check:checked").length;
-    strong.textContent = visibleSelected < _adminCodesSelected.size
-      ? `已选 ${_adminCodesSelected.size} 个（当前显示 ${visibleSelected}）`
-      : `已选 ${_adminCodesSelected.size} 个`;
-  }
-  const revokeBtn = $("#rc-batch-revoke");
-  const purgeBtn = $("#rc-batch-purge");
-  if (revokeBtn) revokeBtn.disabled = !selected.some(codeCanRevoke);
-  if (purgeBtn) purgeBtn.disabled = !selected.some(codeCanPurge);
-}
-
-function adminCodesToggle(el) {
-  const code = el.dataset.code;
-  if (!code) return;
-  if (el.checked) _adminCodesSelected.add(code);
-  else _adminCodesSelected.delete(code);
-  adminCodesSyncBar();
-  adminCodesSyncBatchChecks();
-  adminCodesSyncPageCheck();
-}
-
-function adminCodesTogglePage(el) {
-  document.querySelectorAll(".rc-check").forEach((c) => {
-    c.checked = el.checked;
-    if (el.checked) _adminCodesSelected.add(c.dataset.code);
-    else _adminCodesSelected.delete(c.dataset.code);
-  });
-  adminCodesSyncBatchChecks();
-  adminCodesSyncPageCheck();
-  adminCodesSyncBar();
-}
-
-function adminCodesSyncPageCheck() {
-  const el = $("#rc-checkall");
-  if (!el) return;
-  const boxes = [...document.querySelectorAll(".rc-check")];
-  el.checked = boxes.length > 0 && boxes.every((c) => c.checked);
-  el.indeterminate = boxes.some((c) => c.checked) && !el.checked;
-}
-
-function adminCodesToggleBatch(el) {
-  const batchId = el.dataset.batch;
-  document.querySelectorAll(`.rc-check[data-batch="${batchId}"]`).forEach((c) => {
-    c.checked = el.checked;
-    if (el.checked) _adminCodesSelected.add(c.dataset.code);
-    else _adminCodesSelected.delete(c.dataset.code);
-  });
-  el.indeterminate = false;
-  adminCodesSyncBatchChecks();
-  adminCodesSyncPageCheck();
-  adminCodesSyncBar();
-}
-
-function adminCodesSyncBatchChecks() {
-  document.querySelectorAll(".rc-batch-check").forEach((el) => {
-    const boxes = [...document.querySelectorAll(`.rc-check[data-batch="${el.dataset.batch}"]`)];
-    el.checked = boxes.length > 0 && boxes.every((c) => c.checked);
-    el.indeterminate = boxes.some((c) => c.checked) && !el.checked;
-  });
-}
-
-function adminCodesClearSelect() {
-  _adminCodesSelected.clear();
-  document.querySelectorAll(".rc-check").forEach((c) => { c.checked = false; });
-  document.querySelectorAll(".rc-batch-check").forEach((c) => {
-    c.checked = false;
-    c.indeterminate = false;
-  });
-  adminCodesSyncPageCheck();
-  adminCodesSyncBar();
-}
-
-function adminCodesCopySelected() {
-  const codes = [..._adminCodesSelected];
-  if (!codes.length) return;
-  copyText(codes.join("\n"), `已复制 ${codes.length} 个邀请码`);
-}
-
-async function adminCodesBatch(action) {
-  const selected = adminCodesSelectedRows();
-  const codes = action === "revoke"
-    ? selected.filter(codeCanRevoke).map((c) => c.code)
-    : selected.filter(codeCanPurge).map((c) => c.code);
-  if (!codes.length) return;
-  const skipped = selected.length - codes.length;
-  const skipTip = skipped ? `（另有 ${skipped} 个${action === "revoke" ? "不可作废" : "不可删除"}，已跳过）` : "";
-  const ok = action === "revoke"
-    ? await showConfirm(`将作废选中的 ${codes.length} 个未使用邀请码${skipTip}，确认？`)
-    : await showConfirm(`将从列表删除选中的 ${codes.length} 个已用/已作废/已过期邀请码${skipTip}，不可恢复。确认？`);
-  if (!ok) return;
-  try {
-    const data = await api("/api/admin/register-codes/batch", {
-      method: "POST",
-      body: JSON.stringify({ codes, action }),
-    });
-    const serverSkipped = data.skipped || 0;
-    const msg = action === "revoke"
-      ? (serverSkipped ? `已作废 ${data.count} 个，跳过 ${serverSkipped} 个` : `已作废 ${data.count} 个邀请码`)
-      : (serverSkipped ? `已删除 ${data.count} 个，跳过 ${serverSkipped} 个` : `已删除 ${data.count} 个邀请码`);
-    flash(msg);
-    _adminCodesSelected.clear();
-    loadAdminCodes();
-  } catch (err) {
-    flash(err.message, "error");
-  }
-}
-
-function saveCodesForm() {
-  const note = $("#rc-note");
-  const count = $("#rc-count");
-  const exp = $("#rc-expires");
-  const q = $("#rc-q");
-  if (note) _codesUi.note = note.value;
-  if (count) _codesUi.count = Number(count.value) || 5;
-  if (exp) _codesUi.expires = exp.value === "" ? null : Number(exp.value);
-  if (q) _codesUi.q = q.value.trim();
-}
-
-function adminCodesPreset(note) {
-  const el = $("#rc-note");
-  if (el) el.value = note;
-  _codesUi.note = note;
-  adminCodesSyncPresets();
-}
-
-function adminCodesNoteInput() {
-  const el = $("#rc-note");
-  _codesUi.note = el ? el.value : "";
-  adminCodesSyncPresets();
-}
-
-function adminCodesSyncPresets() {
-  document.querySelectorAll(".rc-preset").forEach((b) => {
-    b.classList.toggle("selected", b.dataset.note === _codesUi.note);
-  });
-}
-
-async function loadAdminCodes(refetch = true) {
-  if (refetch || !state.adminCodes) {
-    state.adminCodes = await api("/api/admin/register-codes");
-  }
-  const known = new Set((state.adminCodes || []).map((c) => c.code));
-  for (const code of [..._adminCodesSelected]) {
-    if (!known.has(code)) _adminCodesSelected.delete(code);
-  }
-  if (!routeStillActive(_adminRenderSeq)) return;
-  const filter = _codesUi.filter;
-  const expVal = _codesUi.expires == null ? "" : String(_codesUi.expires);
-  const result = _codesUi.result;
-  const allCodes = state.adminCodes || [];
-  const tabCounts = { available: 0, used: 0, revoked: 0, expired: 0, all: allCodes.length };
-  for (const c of allCodes) tabCounts[codeStatus(c)] += 1;
-  const filterBtn = (key, label) =>
-    `<button type="button" class="settings-tab ${filter === key ? "active" : ""}" role="tab" aria-selected="${filter === key}" data-filter="${key}" onclick="saveCodesForm();_codesUi.filter='${key}';loadAdminCodes(false)">${label} ${tabCounts[key]}</button>`;
-
-  $("#admin-body").innerHTML = `
-    <section class="section-panel">
-      <header class="section-head">
-        <div><h2 class="section-title">生成注册邀请码</h2>
-        <p class="section-meta">一次性邀请码，按批生成；用过即废，可设有效期。</p></div>
-      </header>
-      <div class="rc-generate">
-        <label class="rc-field rc-field-note">
-          <span>备注</span>
-          <input id="rc-note" class="form-control" maxlength="40" placeholder="给谁、什么场合" value="${escapeHtml(_codesUi.note)}" oninput="adminCodesNoteInput()">
-        </label>
-        <div class="rc-field">
-          <span>常用</span>
-          <div class="rc-presets" role="group" aria-label="常用备注">
-            <button type="button" class="rc-preset${_codesUi.note === "内部" ? " selected" : ""}" data-note="内部" onclick="adminCodesPreset('内部')">内部</button>
-            <button type="button" class="rc-preset${_codesUi.note === "朋友" ? " selected" : ""}" data-note="朋友" onclick="adminCodesPreset('朋友')">朋友</button>
-          </div>
-        </div>
-        <label class="rc-field rc-field-count">
-          <span>数量</span>
-          <input id="rc-count" class="form-control" type="number" min="1" max="100" value="${escapeHtml(String(_codesUi.count))}">
-        </label>
-        <label class="rc-field rc-field-expires">
-          <span>有效期</span>
-          <select id="rc-expires" class="form-control">
-            <option value="1" ${expVal === "1" ? "selected" : ""}>1天</option>
-            <option value="7" ${expVal === "7" ? "selected" : ""}>7天</option>
-            <option value="30" ${expVal === "30" ? "selected" : ""}>30天</option>
-            <option value="" ${expVal === "" ? "selected" : ""}>永不过期</option>
-          </select>
-        </label>
-        <div class="rc-field-submit">
-          <button class="btn-normal" onclick="adminGenerateCodes()">生成</button>
-        </div>
-      </div>
-      ${result ? renderCodesResult(result) : ""}
-    </section>
-    <section class="section-panel">
-      <header class="section-head rc-list-head">
-        <div>
-          <h2 class="section-title">注册码列表</h2>
-          <p class="section-meta">${tabCounts.all} 个 · ${tabCounts.available} 可用</p>
-        </div>
-        <div class="search-bar rc-search">
-          ${SEARCH_ICON}
-          <input id="rc-q" type="search" placeholder="搜索码或备注" value="${escapeHtml(_codesUi.q)}" oninput="_codesUi.q=this.value;renderCodesList()">
-        </div>
-      </header>
-      <div class="settings-tabs rc-tabs" role="tablist" aria-label="注册码状态">
-        ${filterBtn("available", "可用")}
-        ${filterBtn("used", "已用")}
-        ${filterBtn("revoked", "已作废")}
-        ${filterBtn("expired", "已过期")}
-        ${filterBtn("all", "全部")}
-      </div>
-      <div class="toolbar admin-batch-bar" id="rc-batch-bar" style="margin-top:10px;display:${_adminCodesSelected.size ? "flex" : "none"};align-items:center;gap:8px;flex-wrap:wrap">
-        <strong>已选 ${_adminCodesSelected.size} 个</strong>
-        <button type="button" class="btn-sm" onclick="adminCodesCopySelected()">复制</button>
-        <button type="button" class="btn-sm" id="rc-batch-revoke" onclick="adminCodesBatch('revoke')">作废未用</button>
-        <button type="button" class="btn-sm danger" id="rc-batch-purge" onclick="adminCodesBatch('delete')">清掉废码</button>
-        <button type="button" class="btn-sm" onclick="adminCodesClearSelect()">取消选择</button>
-      </div>
-      <div class="rc-list-toolbar">
-        <label class="rc-checkall">
-          <input type="checkbox" id="rc-checkall" onchange="adminCodesTogglePage(this)" aria-label="全选当前筛选">
-          <span>全选当前筛选</span>
-        </label>
-      </div>
-      <div id="rc-list"></div>
-    </section>`;
-  renderCodesList();
-  adminCodesSyncBar();
-}
-
-function renderCodesList() {
-  const codes = state.adminCodes || [];
-  const filter = _codesUi.filter;
-  const q = (_codesUi.q || "").trim().toLowerCase();
-  const filtered = codes.filter((c) => {
-    if (filter !== "all" && codeStatus(c) !== filter) return false;
-    if (!q) return true;
-    return String(c.code).toLowerCase().includes(q) || String(c.note || "").toLowerCase().includes(q);
-  });
-  const groups = [];
-  const byBatch = new Map();
-  for (const c of codes) {
-    const id = c.batch_id || c.code;
-    if (!byBatch.has(id)) byBatch.set(id, []);
-    byBatch.get(id).push(c);
-  }
-  const visibleIds = new Set(filtered.map((c) => c.batch_id || c.code));
-  for (const [id, rows] of byBatch) {
-    if (!visibleIds.has(id)) continue;
-    groups.push({ id, rows, visible: rows.filter((c) => filtered.includes(c)) });
-  }
-  groups.sort((a, b) => String(b.rows[0].created_at).localeCompare(String(a.rows[0].created_at)));
-  const el = $("#rc-list");
-  if (el) el.innerHTML = renderCodeGroups(groups, filter);
-  adminCodesSyncBatchChecks();
-  adminCodesSyncPageCheck();
-  adminCodesSyncBar();
-}
-
-function renderCodesResult(result) {
-  const days = result.expires_in_days;
-  const copy = formatInviteCopy(result.codes, days, result.note);
-  return `<div class="rc-result">
-    <div class="rc-result-head">
-      <strong>已生成 ${result.codes.length} 个</strong>
-      <div class="rc-result-actions">
-        <button class="btn-sm" data-copy="${copyDataAttr(copy)}" onclick="copyText(decodeURIComponent(this.getAttribute('data-copy')), '已复制本批邀请码')">复制全部</button>
-        <button class="btn-sm danger" onclick="adminRevokeBatch('${escapeHtml(result.batch_id)}', true)">作废本批未用</button>
-        <button class="btn-sm" onclick="_codesUi.result=null;loadAdminCodes()">关闭</button>
-      </div>
-    </div>
-    <div class="rc-result-codes">${result.codes.map((code) =>
-    `<div class="rc-result-row"><code>${escapeHtml(code)}</code><button class="btn-sm" data-code="${escapeHtml(code)}" onclick="copyText(this.dataset.code, '已复制')">复制</button></div>`
-  ).join("")}</div>
-  </div>`;
-}
-
-function renderCodeGroups(groups, filter) {
-  if (groups.length === 0) {
-    const empty =
-      filter === "available"
-        ? "没有可用注册码。在上方生成一批，复制后发给对方。"
-        : filter === "used"
-          ? "还没有人用过邀请码。"
-          : "没有符合条件的注册码。";
-    return `<p class="rc-empty muted">${empty}</p>`;
-  }
-  return groups.map((g) => {
-    const all = g.rows;
-    const notes = [...new Set(all.map((c) => c.note || ""))];
-    const noteLabel = notes.length === 1 ? (notes[0] || "无备注") : "备注不一";
-    const available = all.filter((c) => codeStatus(c) === "available");
-    const usedN = all.filter((c) => codeStatus(c) === "used").length;
-    const unusedOpen = all.filter((c) => !c.used_by && !c.revoked_at);
-    const expLabel = all[0].expires_at ? `过期 ${escapeHtml(fmtDbTime(all[0].expires_at))}` : "永不过期";
-    const creator = all[0].created_by_name ? ` · ${escapeHtml(all[0].created_by_name)}` : "";
-    const copyCodes = available.map((c) => c.code);
-    const copyNote = notes.length === 1 ? notes[0] : "";
-    const copy = formatInviteCopyUntil(copyCodes, all[0].expires_at, copyNote);
-    return `<div class="rc-batch">
-      <div class="rc-batch-head">
-        <div class="rc-batch-info">
-          <div class="rc-batch-title">
-            <input type="checkbox" class="rc-batch-check" data-batch="${escapeHtml(g.id)}" onchange="adminCodesToggleBatch(this)" aria-label="全选本批可见" title="全选本批当前可见的注册码">
-            <strong>${escapeHtml(noteLabel)}</strong>
-            <span class="rc-counts">${available.length} 可用 / ${usedN} 已用</span>
-          </div>
-          <p class="muted rc-batch-meta">${escapeHtml(fmtDbTime(all[0].created_at))} · ${expLabel}${creator}</p>
-        </div>
-        <div class="rc-batch-actions">
-          <button class="btn-sm" ${copyCodes.length ? "" : "disabled"} data-copy="${copyDataAttr(copy)}" onclick="copyText(decodeURIComponent(this.getAttribute('data-copy')), '已复制未用码')">复制未用</button>
-          <button class="btn-sm danger" ${unusedOpen.length ? "" : "disabled"} onclick="adminRevokeBatch('${escapeHtml(g.id)}')">作废未用</button>
-        </div>
-      </div>
-      <div class="table-wrap">
-        <table class="rc-table">
-          <thead><tr><th scope="col">邀请码</th><th scope="col">备注</th><th scope="col">状态</th><th scope="col">使用者</th><th scope="col">时间</th><th scope="col">操作</th></tr></thead>
-          <tbody>${g.visible.map((c) => renderCodeRow(c)).join("")}</tbody>
-        </table>
-      </div>
-    </div>`;
-  }).join("");
-}
-
-function renderCodeRow(c) {
-  const st = codeStatus(c);
-  const when = c.used_at ? fmtDbTime(c.used_at) : c.revoked_at ? fmtDbTime(c.revoked_at) : c.expires_at ? fmtDbTime(c.expires_at) : fmtDbTime(c.created_at);
-  const canRevoke = st === "available" || st === "expired";
-  const checked = _adminCodesSelected.has(c.code) ? "checked" : "";
-  return `<tr>
-    <td data-label="邀请码"><span class="rc-code"><input type="checkbox" class="rc-check" data-code="${escapeHtml(c.code)}" data-batch="${escapeHtml(c.batch_id || c.code)}" ${checked} onchange="adminCodesToggle(this)" aria-label="选择邀请码"><code>${escapeHtml(c.code)}</code><button class="btn-sm" data-code="${escapeHtml(c.code)}" onclick="copyText(this.dataset.code, '已复制')">复制</button></span></td>
-    <td data-label="备注" class="rc-note-cell">${escapeHtml(c.note || "")}</td>
-    <td data-label="状态" class="${codeStatusClass(st)}">${codeStatusLabel(st)}</td>
-    <td data-label="使用者">${escapeHtml(c.used_by_name || "")}</td>
-    <td data-label="时间">${escapeHtml(when)}</td>
-    <td data-label="操作">${canRevoke ? `<button class="btn-sm danger" data-code="${escapeHtml(c.code)}" onclick="adminRevokeCode(this.dataset.code)">作废</button>` : ""}</td>
-  </tr>`;
-}
-
-async function adminRevokeCode(code) {
-  if (!(await showConfirm(`确认作废注册码 ${code}？作废后无法再使用。`))) return;
-  try {
-    await api(`/api/admin/register-codes/${encodeURIComponent(code)}/revoke`, { method: "POST" });
-    flash(`已作废邀请码 ${code}`);
-    loadAdminCodes();
-  } catch (err) {
-    flash("作废失败: " + err.message, "error");
-  }
-}
-
-async function adminRevokeBatch(batchId, fromResult) {
-  if (!(await showConfirm("将作废本批所有未使用的邀请码，确认？"))) return;
-  try {
-    await api(`/api/admin/register-code-batches/${encodeURIComponent(batchId)}/revoke-unused`, { method: "POST" });
-    flash("已作废本批未用码");
-    if (fromResult) _codesUi.result = null;
-    loadAdminCodes();
-  } catch (err) {
-    flash("作废失败: " + err.message, "error");
-  }
-}
-
-async function adminGenerateCodes() {
-  saveCodesForm();
-  try {
-    const expiresRaw = $("#rc-expires").value;
-    const expires_in_days = expiresRaw === "" ? null : Number(expiresRaw);
-    const data = await api("/api/admin/register-codes", {
-      method: "POST",
-      body: JSON.stringify({
-        count: Number($("#rc-count").value) || 5,
-        note: $("#rc-note").value.trim(),
-        expires_in_days,
-      }),
-    });
-    _codesUi.result = { ...data, expires_in_days };
-    _codesUi.filter = "available";
-    flash(`已生成 ${data.count} 个邀请码`);
-    loadAdminCodes();
-  } catch (err) {
-    flash("生成失败: " + err.message, "error");
-  }
-}
-
-async function loadAdminVocab() {
-  // 深链：/admin/vocab?tab=tags 进标签 Tab，其余值（含无参数）进分类 Tab
-  const params = routeQuery();
-  const tab = params.get("tab") === "tags" ? "tags" : "categories";
-  if (!routeStillActive(_adminRenderSeq)) return;
-  $("#admin-body").innerHTML = `
-    <section class="section-panel">
-      <header class="section-head">
-        <div><h2 class="section-title">标签分类</h2>
-        <p class="section-meta">分类按大V分组（订阅广场/动态页/管理列表筛选）；标签按关键词规则给贴文内容自动打标。</p></div>
-        <div class="settings-tabs" role="tablist" aria-label="标签分类">
-          <button class="settings-tab ${tab === "categories" ? "active" : ""}" data-tab="categories" onclick="go('admin/vocab')">分类</button>
-          <button class="settings-tab ${tab === "tags" ? "active" : ""}" data-tab="tags" onclick="go('admin/vocab?tab=tags')">标签</button>
-        </div>
-      </header>
-      <div id="vocab-tab-body" class="settings-tab-panel"></div>
-    </section>`;
-  await loadAdminVocabTab(tab);
-}
-
-async function loadAdminVocabTab(tab) {
-  if (tab === "tags") return loadAdminTagsTab();
-  return loadAdminCategoriesTab();
-}
-
-async function loadAdminCategoriesTab() {
-  const categories = await api("/api/categories");
-  if (!routeStillActive(_adminRenderSeq)) return;
-  $("#vocab-tab-body").innerHTML = `
-    <section class="section-panel">
-      <header class="section-head">
-        <div><h2 class="section-title">添加分类</h2></div>
-        <div class="toolbar" style="margin-top:12px">
-          <input id="cat-name" class="form-control" style="margin:0;width:280px" placeholder="分类名，如：实盘、宏观、行业研究">
-          <button class="btn-normal" onclick="adminAddCategory()">添加分类</button>
-        </div>
-      </header>
-    </section>
-    <section class="section-panel">
-      <header class="section-head"><div><h2 class="section-title">分类列表</h2></div></header>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th scope="col">ID</th><th scope="col">分类名</th><th scope="col">大V数</th><th scope="col">操作</th></tr></thead>
-          <tbody>${categories.map((c) => `
-            <tr>
-              <td>${c.id}</td><td>${escapeHtml(c.name)}</td><td>${c.kol_count}</td>
-              <td>
-                <button class="btn-sm" onclick="adminRenameCategory(${c.id})">重命名</button>
-                <button class="btn-sm danger" onclick="adminDeleteCategory(${c.id})">删除</button>
-              </td>
-            </tr>`).join("")}</tbody>
-        </table>
-      </div>
-    </section>`;
-}
-
-async function adminAddCategory() {
-  const name = $("#cat-name").value.trim();
-  if (!name) {
-    flash("请输入分类名", "error");
-    return;
-  }
-  try {
-    await api("/api/categories", { method: "POST", body: JSON.stringify({ name }) });
-    flash(`已添加分类「${name}」`);
-    loadAdminVocabTab("categories");
-  } catch (err) {
-    flash("添加失败: " + err.message, "error");
-  }
-}
-
-async function adminRenameCategory(id) {
-  const name = await showPrompt("新的分类名：");
-  if (name === null || !name.trim()) return;
-  try {
-    await api(`/api/categories/${id}`, { method: "PUT", body: JSON.stringify({ name: name.trim() }) });
-    flash("已重命名分类");
-    loadAdminVocabTab("categories");
-  } catch (err) {
-    flash("重命名失败: " + err.message, "error");
-  }
-}
-
-async function adminDeleteCategory(id) {
-  if (!(await showConfirm("确认删除该分类？其下大V将变为未分类"))) return;
-  try {
-    await api(`/api/categories/${id}`, { method: "DELETE" });
-    flash("已删除分类");
-    loadAdminVocabTab("categories");
-  } catch (err) {
-    flash("删除失败: " + err.message, "error");
-  }
-}
-
-async function loadAdminTagsTab() {
-  let data, tagStatus, tagReviews, aliasCands, tagPending;
-  try {
-    [data, tagStatus, tagReviews, aliasCands, tagPending] = await Promise.all([
-      api("/api/tags"),
-      api("/api/admin/mx-llm-tag/status"),
-      api("/api/admin/post-tag-reviews?status=pending"),
-      api("/api/admin/stock-alias-candidates"),
-      api("/api/admin/mx-llm-tag/pending"),
-    ]);
-  } catch (err) {
-    if (!routeStillActive(_adminRenderSeq)) return;
-    $("#vocab-tab-body").innerHTML = emptyState("加载失败: " + err.message);
-    return;
-  }
-  const tags = Array.isArray(data?.tags) ? data.tags : [];
-  const stockNames = Array.isArray(data?.stock_names) ? data.stock_names : [];
-  const stockAliases = Array.isArray(data?.stock_aliases) ? data.stock_aliases : [];
-  const excludedNames = Array.isArray(data?.excluded_stock_names) ? data.excluded_stock_names : [];
-  const universe = data?.universe && typeof data.universe === "object" ? data.universe : {};
-  const universeCount = Number(universe.count) || 0;
-  const universeUpdated = universe.updated ? String(universe.updated) : "";
-  const stats = data?.stats || { total: 0, processed: 0, tagged: 0, pending: 0 };
-  if (!routeStillActive(_adminRenderSeq)) return;
-  // 词表编辑：每行一个标签，格式「标签名 | 关键词,关键词」；关键词为空则该标签不命中
-  const vocabText = tags.map((r) => `${r.tag} | ${(r.keywords || []).join(", ")}`).join("\n");
-  // 别名表编辑：每行「别名=正式名」
-  const aliasText = stockAliases.map((a) => `${a.alias}=${a.stock}`).join("\n");
-  $("#vocab-tab-body").innerHTML = `
-    <section class="section-panel">
-      <header class="section-head">
-        <div><h2 class="section-title">贴文标签词表</h2>
-        <p class="section-meta">新帖抓取入库时按关键词规则自动打标（零成本、不依赖 LLM）。每行一个标签：<b>标签名 | 关键词1,关键词2</b>，正文/标题命中任一关键词即打该标签，每条最多 3 个。</p></div>
-      </header>
-      <textarea id="tag-vocab-input" class="form-control" rows="10" style="margin-top:12px;font-family:monospace;line-height:1.6" placeholder="宏观 | 央行,降息,GDP&#10;大盘 | A股,沪指,指数">${escapeHtml(vocabText)}</textarea>
-      <div class="toolbar" style="margin-top:12px">
-        <button class="btn-normal" onclick="adminSaveTags()">保存词表</button>
-      </div>
-      <p class="section-meta" style="margin-top:8px">已处理 ${stats.processed} / ${stats.total} 条，其中有标签 ${stats.tagged} 条，待处理 ${stats.pending} 条</p>
-    </section>
-    <section class="section-panel">
-      <header class="section-head">
-        <div><h2 class="section-title">常用股票名</h2>
-        <p class="section-meta">管理员可增删，每行一个。纯文字提及会打股票标签；$股票名(代码)$ 仍自动识别。删掉的名字每日维护不会加回，再写进列表并保存即可恢复。两字名只认这张表。</p></div>
-      </header>
-      <textarea id="stock-names-input" class="form-control" rows="8" style="margin-top:12px;font-family:monospace;line-height:1.6" placeholder="贵州茅台&#10;宁德时代">${escapeHtml(stockNames.join("\n"))}</textarea>
-      <div class="toolbar" style="margin-top:12px">
-        <button class="btn-normal" onclick="adminSaveStockNames()">保存股票名</button>
-      </div>
-      ${universeCount ? `<p class="section-meta" style="margin-top:8px">另有全市场 ${universeCount} 只 3 字及以上正式简称参与纯文字打标${universeUpdated ? `（${escapeHtml(universeUpdated)}）` : ""}，不占手改名单。</p>` : ""}
-      ${excludedNames.length ? `<p class="section-meta" style="margin-top:8px">维护不加回：${excludedNames.map((n) => escapeHtml(n)).join("、")}</p>` : ""}
-    </section>
-    <section class="section-panel">
-      <header class="section-head">
-        <div><h2 class="section-title">黑话别名</h2>
-        <p class="section-meta">常见黑话（宁王、药茅）启动时写入；雪球 $戏称(代码)$ 由系统 LLM 解析。正式名切半（宁德/英伟）不会入库。每行「别名=正式名」，正式名需在常用表或全市场名表中。</p></div>
-      </header>
-      <textarea id="stock-aliases-input" class="form-control" rows="5" style="margin-top:12px;font-family:monospace;line-height:1.6" placeholder="宁王=宁德时代">${escapeHtml(aliasText)}</textarea>
-    </section>
-    <section class="section-panel">
-      <header class="section-head">
-        <div><h2 class="section-title">标签维护</h2>
-        <p class="section-meta">合并种子黑话、解析 $标记$ 新股、去掉指数/ETF 误入的股票名，并清理过期标签与碎片别名。每日自动一次，也可立即执行。标记解析跟管理员「设置 → AI 摘要」同一套 LLM。</p></div>
-      </header>
-      <p class="section-meta" style="margin-top:8px" id="tag-maintain-meta">${escapeHtml(adminMaintainSummary(data))}</p>
-      ${data.maintain && data.maintain.llm_ready ? "" : `<p class="section-meta">未检测到站点 LLM。请到「设置 → AI 摘要」配置 OpenAI 兼容接口，或设环境变量 LLM_API_KEY。点运行仍会合并种子、清碎片和误标。</p>`}
-      <div class="toolbar" style="margin-top:12px">
-        <button class="btn-normal" onclick="adminMaintainTags('pending')">维护并回填待打标</button>
-        <button class="btn-ghost" onclick="adminMaintainTags('none')">仅维护词表</button>
-        <button class="btn-ghost" onclick="adminMaintainTags('all')">维护并重算全部</button>
-        <span id="tag-maintain-result" class="muted"></span>
-      </div>
-    </section>
-    <section class="section-panel">
-      <header class="section-head">
-        <div><h2 class="section-title">回填历史贴文</h2>
-        <p class="section-meta">给未打标贴文按当前词表 + 股票名单补标签；「按当前规则重算全部」会覆盖全部历史贴文标签（危险操作，需确认）。</p></div>
-      </header>
-      <div class="toolbar" style="margin-top:12px">
-        <button class="btn-normal" onclick="adminBackfillTags('pending')">处理待打标</button>
-        <button class="btn-ghost" onclick="adminBackfillTags('all')">按当前规则重算全部</button>
-        <span id="tag-backfill-result" class="muted"></span>
-      </div>
-    </section>
-    ${adminMxTagPanel(tagStatus, tagReviews, aliasCands, tagPending)}
-    <section class="section-panel">
-      <header class="section-head"><div><h2 class="section-title">当前词表（${tags.length} 个）</h2></div></header>
-      <div class="tag-vocab-preview">
-        ${tags.length ? tags.map((r) => `<span class="cat cat-tag">${escapeHtml(r.tag)}</span>`).join("") : "（空）"}
-      </div>
-    </section>`;
-  // 有打标任务在跑（或刚结束未确认）：恢复进度轮询，更新面板里的进度区
-  adminMxTagPollProgress();
-}
-
-const _TAG_REVIEW_KINDS = { topic: "话题", stock: "股票", action: "操作" };
-let _mxAliasCandidates = [];
-let _mxTagReviews = [];               // 当前待审标签列表（行内保留完整消息文本供「更多」展开）
-const _tagReviewExpanded = new Set(); // 已展开全文的审核记录 id（重渲染后保持展开状态）
-let _mxTagTestResult = null;
-let _mxTagPollTimer = null;
-const _mxTagSeenDoneRuns = new Set(); // 已提示过完成结果的打标任务 id（防重复弹提示）
-let _mxTagPollSeenOnce = false;  // 首次观察进度时静默采纳当前状态
-
-function adminMxTagPanel(tagStatus, tagReviews, aliasCands, tagPending) {
-  const st = tagStatus || {};
-  const pendingTotal = Number(tagPending?.total) || 0;
-  const statusLine = [
-    `未打标消息 ${pendingTotal} 条`,
-    `今日 LLM 调用 ${(st.calls_today && st.calls_today.count) || 0} 次`,
-    `待审标签 ${(st.pending_reviews || 0)} 条`,
-    `黑话候选 ${(st.pending_alias_candidates || 0)} 条`,
-  ].join("；");
-  const alertLine = st.alert_active
-    ? `<p class="status-fail" style="margin-top:8px">⚠️ 连续失败 ${st.consecutive_failures || 0} 次，已发系统告警，恢复后会再通知。</p>`
-    : "";
-  const reviewRows = (tagReviews || []).length === 0
-    ? `<tr><td colspan="6" class="muted">暂无待审标签</td></tr>`
-    : (tagReviews || []).map((r) => {
-        // 全文渲染进单元格，默认钳 2 行，超过 60 字给「更多/收起」展开按钮
-        const msg = String(r.title || r.content || "").trim();
-        const expanded = _tagReviewExpanded.has(r.id);
-        return `
-        <tr>
-          <td class="tag-review-check"><input type="checkbox" data-review-id="${r.id}" aria-label="选择审核 ${r.id}" onchange="adminTagReviewSelChange()"></td>
-          <td>${r.id}</td>
-          <td class="tag-review-msg"><span class="muted">${escapeHtml(r.kol_name || "")}：</span><span class="tag-review-msg-text${expanded ? " expanded" : ""}">${escapeHtml(msg)}</span>${msg.length > 60 ? `<button type="button" class="post-expand-btn" aria-expanded="${expanded}" onclick="toggleTagReviewMsg(${r.id}, this)">${expanded ? "收起 ▲" : "更多 ▼"}</button>` : ""}</td>
-          <td><span class="cat cat-tag">${escapeHtml(r.tag)}</span></td>
-          <td>${_TAG_REVIEW_KINDS[r.kind] || escapeHtml(r.kind || "—")}</td>
-          <td>
-            <button class="btn-sm" onclick="adminOpenTagReviewModal(${r.post_id})" title="查看该消息的全部标签并直接操作">查看</button>
-            <button class="btn-sm" onclick="adminReviewTag(${r.id}, 'approve')">通过</button>
-            <button class="btn-sm danger" onclick="adminReviewTag(${r.id}, 'reject')">拒绝</button>
-          </td>
-        </tr>`;
-      }).join("");
-  _mxAliasCandidates = Array.isArray(aliasCands?.candidates) ? aliasCands.candidates : [];
-  const candRows = _mxAliasCandidates.length === 0
-    ? `<tr><td colspan="5" class="muted">暂无黑话候选（LLM 判定为通用黑话时才会进入这里）</td></tr>`
-    : _mxAliasCandidates.map((c, idx) => `
-        <tr>
-          <td>${escapeHtml(c.alias || "")}</td>
-          <td>${escapeHtml(c.stock || "")}</td>
-          <td>${Number(c.count) || 1}</td>
-          <td>${escapeHtml(fmtDbTime(c.first_seen_at || ""))}</td>
-          <td>
-            <button class="btn-sm" onclick="adminReviewAliasCandidate(${idx}, 'approve')">通过</button>
-            <button class="btn-sm danger" onclick="adminReviewAliasCandidate(${idx}, 'reject')">拒绝</button>
-          </td>
-        </tr>`).join("");
-  return `
-    <section class="section-panel">
-      <header class="section-head">
-        <div><h2 class="section-title">MX LLM 打标（手动）</h2>
-        <p class="section-meta">选大V后对其未打标消息跑 LLM（话题/股票/操作三类标签，带准确度）：high 与消息已有标签<b>去重合并</b>写入，low 进下方审核队列（已在消息标签里的不再进审核）；发现的通用黑话进候选队列。一次最多处理 1000 条，每 100 条为一批（一次 LLM 调用只打一批）；同一时间最多 3 批并行，多余批次自动排队；自动触发见下方「MX LLM 打标（自动）」面板。</p></div>
-      </header>
-      <p class="section-meta" style="margin-top:8px">${statusLine}</p>
-      ${alertLine}
-      <div class="toolbar" style="margin-top:12px">
-        <button class="btn-normal" onclick="adminMxTagOpenRunModal()">开始 LLM 打标</button>
-        <button class="btn-ghost" onclick="adminMxTagTest()">试打 10 条（不写库）</button>
-      </div>
-      <div id="mx-tag-progress" style="margin-top:12px">${adminMxTagProgressInner()}</div>
-      ${adminMxTagTestBlock()}
-    </section>
-    ${adminMxTagAutoPanel(st)}
-    <section class="section-panel">
-      <header class="section-head"><div><h2 class="section-title">标签审核</h2>
-      <p class="section-meta">LLM 标了但不确定（low 准确度）的标签，通过后追加到该条消息。可勾选多条批量操作。</p></div></header>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th scope="col" class="tag-review-check"><input type="checkbox" id="tag-review-sel-all" aria-label="全选待审标签" onchange="adminTagReviewSelAll(this.checked)"></th><th scope="col">ID</th><th scope="col">消息</th><th scope="col">标签</th><th scope="col">类型</th><th scope="col">操作</th></tr></thead>
-          <tbody id="tag-review-tbody">${reviewRows}</tbody>
-        </table>
-      </div>
-      <div class="toolbar" style="margin-top:10px">
-        <button class="btn-normal" id="tag-review-batch-approve" disabled onclick="adminReviewTagsBatch('approve')">批量通过</button>
-        <button class="btn-ghost" id="tag-review-batch-reject" disabled onclick="adminReviewTagsBatch('reject')">批量拒绝</button>
-        <span class="muted" id="tag-review-sel-count">未选择</span>
-      </div>
-    </section>
-    <section class="section-panel">
-      <header class="section-head"><div><h2 class="section-title">黑话候选</h2>
-      <p class="section-meta">LLM 判定为「社区通用」的新黑话（仅当前消息语境成立的不会进来）。通过后写入黑话别名表，后续消息免 LLM 直接命中。</p></div></header>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th scope="col">别名</th><th scope="col">正式名</th><th scope="col">出现次数</th><th scope="col">首次发现</th><th scope="col">操作</th></tr></thead>
-          <tbody>${candRows}</tbody>
-        </table>
-      </div>
-    </section>`;
-}
-
-// ---- 手动打标：选大V弹窗 + 进度轮询 ----
-
-function adminMxTagProgressInner(prog) {
-  const runs = (prog && Array.isArray(prog.runs)) ? prog.runs : [];
-  if (!runs.length) {
-    return `<p class="section-meta">暂无进行中的打标任务。</p>`;
-  }
-  const activeHtml = runs.filter((r) => r.status === "running").map(adminMxTagRunBlock).join("");
-  const doneHtml = runs.filter((r) => r.status !== "running").map(adminMxTagRunDoneLine).join("");
-  return `${activeHtml}${doneHtml}`;
-}
-
-function mxTagRunLabel(r) {
-  const auto = r.source === "auto";
-  const kols = (r.kols || []).join("、");
-  const name = kols || (auto ? "全部大V" : `任务#${r.run_id}`);
-  return `${auto ? "[自动] " : ""}${name}`;
-}
-
-function adminMxTagRunBlock(r) {
-  const pct = r.total ? Math.min(100, Math.round(((r.processed || 0) / r.total) * 100)) : 0;
-  const settled = (r.batches_done || 0) + (r.batches_failed || 0) + (r.batches_skipped || 0);
-  const queued = Math.max(0, (r.batch_total || 0) - settled - (r.batches_running || 0));
-  return `
-    <div style="margin-bottom:10px">
-      <p class="section-meta">正在打标（${escapeHtml(mxTagRunLabel(r))}）：
-        已处理 <b>${r.processed || 0}</b>/${r.total || 0} 条 · 批次 ${r.batches_done || 0}/${r.batch_total || 0} 完成
-        （打标中 ${r.batches_running || 0} · 排队 ${queued} · 失败 ${r.batches_failed || 0}）</p>
-      <div class="mx-tag-progress-bar"><div class="mx-tag-progress-fill" style="width:${pct}%"></div></div>
-      <div class="toolbar" style="margin-top:8px">
-        <button class="btn-sm danger" onclick="adminMxTagCancel(${r.run_id})">取消任务</button>
-        ${r.cancel_requested ? `<span class="muted">取消中：当前批次完成后停止…</span>` : ""}
-      </div>
-      ${r.status === "failed" && r.error ? `<p class="status-fail" style="margin-top:4px">错误：${escapeHtml(r.error)}（剩余批次将跳过）</p>` : ""}
-    </div>`;
-}
-
-function adminMxTagRunDoneLine(r) {
-  const s = r.summary;
-  const name = escapeHtml(mxTagRunLabel(r));
-  if (!s) {
-    return `<p class="section-meta">任务（${name}）已结束${r.error ? `：${escapeHtml(r.error)}` : ""}。</p>`;
-  }
-  const stateText = s.cancelled ? "已取消" : s.error ? "出错收场" : "已完成";
-  const errLine = s.error
-    ? `<p class="status-fail" style="margin-top:4px">错误：${escapeHtml(s.error)}</p>`
-    : "";
-  return `
-    <p class="section-meta">任务（${name}）${stateText}（${escapeHtml(r.finished_at || "")}）：
-      处理 <b>${s.processed || 0}</b>/${s.total || 0} 条，合并标签 <b>${s.tagged_posts || 0}</b> 条消息，
-      进审核 ${s.reviews || 0} 个，黑话候选 ${s.candidates || 0} 个，失败批次 ${s.failed_batches || 0}。</p>
-    ${errLine}`;
-}
-
-function adminMxTagPollProgress() {
-  if (_mxTagPollTimer) return; // 已有轮询在跑
-  const tick = async () => {
-    let prog;
-    try {
-      prog = await api("/api/admin/mx-llm-tag/progress");
-    } catch {
-      _mxTagPollTimer = setTimeout(tick, 5000);
-      return;
-    }
-    const box = $("#mx-tag-progress");
-    if (box) box.innerHTML = adminMxTagProgressInner(prog);
-    const runs = Array.isArray(prog?.runs) ? prog.runs : [];
-    if (prog.running) {
-      _mxTagPollTimer = setTimeout(tick, 3000);
-    } else {
-      _mxTagPollTimer = null;
-    }
-    const doneRuns = runs.filter((r) => r.status !== "running" && r.summary);
-    if (!_mxTagPollSeenOnce) {
-      // 首次观察：静默采纳当前已完成任务（避免页面加载时对历史任务重复提示）
-      _mxTagPollSeenOnce = true;
-      doneRuns.forEach((r) => _mxTagSeenDoneRuns.add(r.run_id));
-      return;
-    }
-    const fresh = doneRuns.filter((r) => !_mxTagSeenDoneRuns.has(r.run_id));
-    if (fresh.length && routeStillActive(_adminRenderSeq)) {
-      fresh.forEach((r) => _mxTagSeenDoneRuns.add(r.run_id));
-      const msg = fresh.map((r) => {
-        const s = r.summary;
-        const base = `（${mxTagRunLabel(r)}）处理 ${s.processed || 0}/${s.total || 0} 条`;
-        const errText = s.error;
-        return errText
-          ? `${base}，出错：${errText}`
-          : `${s.cancelled ? "已取消" : "完成"}：${base}，合并标签 ${s.tagged_posts} 条消息`;
-      }).join("；");
-      flash(msg, fresh.some((r) => r.summary.error) ? "error" : "ok");
-      loadAdminVocabTab("tags");
-    }
-  };
-  tick();
-}
-
-async function adminMxTagOpenRunModal() {
-  let pending;
-  try {
-    pending = await api("/api/admin/mx-llm-tag/pending");
-  } catch (err) {
-    flash("加载未打标数据失败: " + err.message, "error");
-    return;
-  }
-  const kols = Array.isArray(pending?.kols) ? pending.kols : [];
-  const cap = Number(pending?.max_messages) || 1000;
-  if (!kols.length) {
-    flash("还没有 MX 大V，请先在「数据源 → MX」同步房间", "error");
-    return;
-  }
-  const rows = kols.map((k) => `
-    <label class="mx-tag-kol-row" data-kol="${k.kol_id}" data-pending="${k.pending}">
-      <input type="checkbox" data-kol="${k.kol_id}" ${k.pending > 0 ? "" : "disabled"}>
-      <span class="mx-tag-kol-name">${escapeHtml(k.name || `大V${k.kol_id}`)}${k.enabled ? "" : ' <span class="muted">（已停用）</span>'}</span>
-      <span class="mx-tag-kol-count ${k.pending ? "" : "muted"}">${k.pending} 条未打标</span>
-    </label>`).join("");
-  const mask = document.createElement("div");
-  mask.className = "admin-modal-mask";
-  mask.id = "mx-tag-run-mask";
-  mask.innerHTML = `
-    <div class="admin-modal" role="dialog" aria-modal="true" aria-label="选择要打标的 MX 大V">
-      <h3 class="admin-modal-title">选择要 LLM 打标的 MX 大V</h3>
-      <p class="section-meta">勾选大V，合计最多处理 ${cap} 条未打标消息（最旧优先）；单个大V超出上限时只处理其最旧的 ${cap} 条。每 100 条为一批，同一时间最多 3 批并行打标，多余批次自动排队，可与进行中的任务并存。</p>
-      <div class="admin-modal-list">${rows}</div>
-      <p class="section-meta" id="mx-tag-run-total">已选 0 / ${cap} 条</p>
-      <div class="toolbar">
-        <button class="btn-normal" id="mx-tag-run-start" disabled onclick="adminMxTagStartRun()">开始打标</button>
-        <button class="btn-ghost" onclick="document.getElementById('mx-tag-run-mask').remove()">取消</button>
-      </div>
-    </div>`;
-  document.body.appendChild(mask);
-  const recount = () => {
-    let total = 0;
-    mask.querySelectorAll("input[type=checkbox]:checked").forEach((cb) => {
-      const row = cb.closest(".mx-tag-kol-row");
-      total += Math.min(Number(row?.dataset.pending) || 0, cap);
-    });
-    const startBtn = mask.querySelector("#mx-tag-run-start");
-    startBtn.disabled = total === 0;
-    startBtn.textContent = total > cap ? `开始打标（处理最旧的 ${cap} 条）` : `开始打标（${total} 条）`;
-    mask.querySelector("#mx-tag-run-total").innerHTML = total > cap
-      ? `已选超过上限，本次将处理最旧的 <b>${cap}</b> 条`
-      : `已选 <b>${total}</b> / ${cap} 条`;
-  };
-  mask.addEventListener("change", recount);
-  recount();
-}
-
-async function adminMxTagStartRun() {
-  const mask = document.getElementById("mx-tag-run-mask");
-  const kolIds = [...mask.querySelectorAll("input[type=checkbox]:checked")]
-    .map((cb) => Number(cb.dataset.kol));
-  if (!kolIds.length) return;
-  try {
-    const data = await api("/api/admin/mx-llm-tag/run", {
-      method: "POST",
-      body: JSON.stringify({ kol_ids: kolIds, max_messages: 1000 }),
-    });
-    mask.remove();
-    flash(`打标任务已启动：${data.total} 条分 ${data.batches} 批（每批 ≤${data.batch_size} 条），与其他任务并行或排队执行`);
-    adminMxTagPollProgress();
-  } catch (err) {
-    flash("启动失败: " + err.message, "error");
-  }
-}
-
-async function adminMxTagCancel(runId) {
-  try {
-    await api("/api/admin/mx-llm-tag/cancel", {
-      method: "POST",
-      body: JSON.stringify({ run_id: runId }),
-    });
-    flash("已请求取消，当前批次完成后停止，排队批次直接跳过");
-  } catch (err) {
-    flash("取消失败: " + err.message, "error");
-  }
-}
-
-// ---- MX LLM 打标（自动）：时间段配置面板 ----
-
-function mxAutoPeriodInputs(p) {
-  const q = p || {};
-  return `
-    <input type="text" class="form-control mx-auto-name" style="width:150px" placeholder="名称（可选）" maxlength="30" value="${escapeHtml(q.name || "")}">
-    <input type="time" class="form-control mx-auto-start" style="width:auto" value="${escapeHtml(q.start || "00:00")}" aria-label="开始时间">
-    <span>–</span>
-    <input type="time" class="form-control mx-auto-end" style="width:auto" value="${escapeHtml(q.end || "23:59")}" aria-label="结束时间">
-    <span class="nowrap">新消息达</span>
-    <input type="number" class="form-control mx-auto-threshold" style="width:90px" min="1" step="1" value="${Number(q.threshold) || 50}" aria-label="触发条数">
-    <span class="nowrap">条 / 间隔</span>
-    <input type="number" class="form-control mx-auto-interval" style="width:90px" min="1" step="1" value="${Number(q.interval_minutes) || 30}" aria-label="间隔分钟">
-    <span class="nowrap">分钟也触发</span>`;
-}
-
-function adminMxTagAutoPanel(st) {
-  const auto = (st && typeof st === "object") ? st : {};
-  const enabled = !!auto.enabled;
-  const regular = auto.regular || { name: "", start: "00:00", end: "23:59", threshold: 50, interval_minutes: 30 };
-  const specials = Array.isArray(auto.specials) ? auto.specials : [];
-  const statusBits = [];
-  if (!enabled) {
-    statusBits.push("自动打标未开启");
-  } else if (!auto.active_period) {
-    statusBits.push("当前不在任何配置的时间段内，不触发");
-  } else {
-    const p = auto.active_period;
-    statusBits.push(
-      `当前时段：${p.kind === "special" ? "特殊" : "常规"}${p.name ? `「${escapeHtml(p.name)}」` : ""}${escapeHtml(p.start)}-${escapeHtml(p.end)}（达 ${p.threshold} 条 / 间隔 ${p.interval_minutes} 分钟触发）`,
-    );
-    if (auto.last_trigger_at) statusBits.push(`上次触发 ${escapeHtml(auto.last_trigger_at)}`);
-    statusBits.push(`自上次触发新消息 ${auto.new_since_trigger || 0} 条`);
-    if (auto.interval_due_at) statusBits.push(`间隔触发点 ${escapeHtml(auto.interval_due_at)}`);
-  }
-  return `
-    <section class="section-panel">
-      <header class="section-head">
-        <div><h2 class="section-title">MX LLM 打标（自动）</h2>
-        <p class="section-meta">在时间段内自动对未打标消息跑 LLM 打标，与手动任务共用同一队列（每批 ≤100 条、最多 3 批并行；同一时刻最多一个自动任务在排队/执行，防止处理不及连环入队）。每个时间段两个触发维度：<b>消息条数</b>——新消息累计达到阈值立即触发；<b>时间间隔</b>——距上次触发超过间隔分钟（且有待打标消息）也触发。任一触发后条数累计与间隔计时都重新计算，间隔之内条数先到会把下一个间隔触发点推向后。特殊时间段命中时优先按其配置执行（可增删）。</p></div>
-      </header>
-      <p class="section-meta" style="margin-top:8px">${statusBits.join("；")}。</p>
-      <div style="margin-top:12px">
-        <label style="display:inline-flex;align-items:center;gap:8px"><input type="checkbox" id="mx-auto-enabled" ${enabled ? "checked" : ""}> <b>开启自动打标</b></label>
-        <div class="mx-auto-period" id="mx-auto-regular" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px">
-          <span class="nowrap"><b>常规时间段</b>（必填）</span>
-          ${mxAutoPeriodInputs(regular)}
-        </div>
-        <div id="mx-auto-specials">
-          ${specials.map((p) => `
-          <div class="mx-auto-period" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px">
-            <span class="nowrap"><b>特殊时间段</b></span>
-            ${mxAutoPeriodInputs(p)}
-            <button type="button" class="btn-sm danger" onclick="adminMxTagAutoRemoveSpecial(this)">删除</button>
-          </div>`).join("")}
-        </div>
-        <div class="toolbar" style="margin-top:10px">
-          <button class="btn-ghost" onclick="adminMxTagAutoAddSpecial()">＋ 添加特殊时间段</button>
-          <button class="btn-normal" onclick="adminMxTagAutoSave()">保存配置</button>
-        </div>
-      </div>
-    </section>`;
-}
-
-function adminMxTagAutoAddSpecial() {
-  const box = document.getElementById("mx-auto-specials");
-  if (!box) return;
-  if (box.children.length >= 20) {
-    flash("特殊时间段最多 20 个", "error");
-    return;
-  }
-  const row = document.createElement("div");
-  row.className = "mx-auto-period";
-  row.style.cssText = "display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px";
-  row.innerHTML = `
-    <span class="nowrap"><b>特殊时间段</b></span>
-    ${mxAutoPeriodInputs({ name: "", start: "09:00", end: "11:30", threshold: 20, interval_minutes: 5 })}
-    <button type="button" class="btn-sm danger" onclick="adminMxTagAutoRemoveSpecial(this)">删除</button>`;
-  box.appendChild(row);
-}
-
-function adminMxTagAutoRemoveSpecial(btn) {
-  btn.closest(".mx-auto-period")?.remove();
-}
-
-async function adminMxTagAutoSave() {
-  const regularRow = document.getElementById("mx-auto-regular");
-  const enabledBox = document.getElementById("mx-auto-enabled");
-  if (!regularRow || !enabledBox) return;
-  const readPeriod = (row) => ({
-    name: row.querySelector(".mx-auto-name").value.trim(),
-    start: row.querySelector(".mx-auto-start").value,
-    end: row.querySelector(".mx-auto-end").value,
-    threshold: Number(row.querySelector(".mx-auto-threshold").value) || 0,
-    interval_minutes: Number(row.querySelector(".mx-auto-interval").value) || 0,
-  });
-  const payload = {
-    enabled: enabledBox.checked,
-    regular: readPeriod(regularRow),
-    specials: [...document.querySelectorAll("#mx-auto-specials .mx-auto-period")].map(readPeriod),
-  };
-  try {
-    await api("/api/admin/mx-llm-tag/auto-config", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-    flash("自动打标配置已保存");
-    loadAdminVocabTab("tags");
-  } catch (err) {
-    flash("保存失败: " + err.message, "error");
-  }
-}
-
-function adminMxTagTestBlock() {
-  const r = _mxTagTestResult;
-  if (!r) return "";
-  if (r.skipped === "no_posts") {
-    return `<p class="section-meta" style="margin-top:8px">试打结果：暂无未打标消息。</p>`;
-  }
-  const summary = r.summary || {};
-  const rows = (r.items || []).map((it) => `
-    <tr>
-      <td>${it.post_id}</td>
-      <td>${escapeHtml(it.kol_name || "")}：${escapeHtml(it.excerpt || "")}</td>
-      <td>${(it.tags || []).map((t) => `<span class="cat cat-tag">${escapeHtml(t)}</span>`).join("") || '<span class="muted">（无）</span>'}</td>
-      <td>${(it.review_tags || []).map((t) => `<span class="cat cat-tag">${escapeHtml(t.tag)}</span>`).join("") || '<span class="muted">（无）</span>'}</td>
-      <td>${(it.jargon || []).map((j) => `${escapeHtml(j.alias)}=${escapeHtml(j.stock)}`).join("、") || '<span class="muted">（无）</span>'}</td>
-    </tr>`).join("");
-  return `
-    <p class="section-meta" style="margin-top:10px">试打 ${r.tested} 条未打标消息（未写库，正式打标将与已有标签去重合并）：
-      预计直接写入 <b>${summary.would_tag || 0}</b> 条、
-      进审核 <b>${summary.would_review || 0}</b> 个标签、
-      新增黑话候选 <b>${summary.would_candidates || 0}</b> 个。</p>
-    <div class="table-wrap" style="margin-top:8px">
-      <table>
-        <thead><tr><th scope="col">ID</th><th scope="col">消息</th><th scope="col">将写入标签</th><th scope="col">将进审核</th><th scope="col">将入候选黑话</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>`;
-}
-
-async function adminMxTagTest() {
-  try {
-    const data = await api("/api/admin/mx-llm-tag/test", { method: "POST" });
-    _mxTagTestResult = data;
-    flash(`试打完成：${data.tested} 条，预计写入 ${data.summary?.would_tag || 0} 条`);
-  } catch (err) {
-    _mxTagTestResult = null;
-    flash("试打失败: " + err.message, "error");
-  }
-  loadAdminVocabTab("tags");
-}
-
-async function adminReviewTag(id, action) {
-  try {
-    await api(`/api/admin/post-tag-reviews/${id}/${action}`, { method: "POST" });
-    flash(action === "approve" ? "已通过并追加到消息标签" : "已拒绝该标签");
-    loadAdminVocabTab("tags");
-  } catch (err) {
-    flash("操作失败: " + err.message, "error");
-  }
-}
-
-// 待审标签消息默认钳 2 行，点「更多/收起」原地切换，不整表重渲染
-function toggleTagReviewMsg(id, btn) {
-  if (_tagReviewExpanded.has(id)) _tagReviewExpanded.delete(id);
-  else _tagReviewExpanded.add(id);
-  const expanded = _tagReviewExpanded.has(id);
-  const text = btn.closest("td")?.querySelector(".tag-review-msg-text");
-  if (text) text.classList.toggle("expanded", expanded);
-  btn.textContent = expanded ? "收起 ▲" : "更多 ▼";
-  btn.setAttribute("aria-expanded", String(expanded));
-}
-
-function adminTagReviewSelectedIds() {
-  return [...document.querySelectorAll("#tag-review-tbody input[data-review-id]:checked")]
-    .map((cb) => Number(cb.dataset.reviewId))
-    .filter(Number.isFinite);
-}
-
-// 勾选变化后同步全选框状态（全选/半选）、计数与批量按钮可用性
-function adminTagReviewSelChange() {
-  const ids = adminTagReviewSelectedIds();
-  const total = document.querySelectorAll("#tag-review-tbody input[data-review-id]").length;
-  const selAll = document.getElementById("tag-review-sel-all");
-  if (selAll) {
-    selAll.checked = total > 0 && ids.length === total;
-    selAll.indeterminate = ids.length > 0 && ids.length < total;
-  }
-  const count = document.getElementById("tag-review-sel-count");
-  if (count) count.textContent = ids.length ? `已选 ${ids.length} 条` : "未选择";
-  const approveBtn = document.getElementById("tag-review-batch-approve");
-  const rejectBtn = document.getElementById("tag-review-batch-reject");
-  if (approveBtn) approveBtn.disabled = !ids.length;
-  if (rejectBtn) rejectBtn.disabled = !ids.length;
-}
-
-function adminTagReviewSelAll(on) {
-  document.querySelectorAll("#tag-review-tbody input[data-review-id]").forEach((cb) => { cb.checked = on; });
-  adminTagReviewSelChange();
-}
-
-async function adminReviewTagsBatch(action) {
-  const ids = adminTagReviewSelectedIds();
-  if (!ids.length) return;
-  const label = action === "approve" ? "通过" : "拒绝";
-  const tip = action === "approve" ? "通过后标签会追加到对应消息。" : "";
-  if (!(await showConfirm(`确认${label}选中的 ${ids.length} 条待审标签？${tip}`))) return;
-  try {
-    const data = await api("/api/admin/post-tag-reviews/batch", {
-      method: "POST",
-      body: JSON.stringify({ ids, action }),
-    });
-    const okCount = Array.isArray(data.ok) ? data.ok.length : 0;
-    const failed = Array.isArray(data.failed) ? data.failed : [];
-    flash(
-      failed.length
-        ? `已${label} ${okCount} 条，失败 ${failed.length} 条：${failed.map((f) => `#${f.id} ${f.reason}`).join("；")}`
-        : `已${label} ${okCount} 条待审标签`,
-      failed.length ? "error" : "ok",
-    );
-    loadAdminVocabTab("tags");
-  } catch (err) {
-    flash(`批量${label}失败: ` + err.message, "error");
-  }
-}
-
-// ---- 审核行「查看」弹窗：消息的现有标签 / LLM 打入的标签 / 待审核标签，逐个可直接操作 ----
-
-let _tagDetailDirty = false; // 弹窗内改过标签，关闭时刷新背后的审核队列
-
-async function adminOpenTagReviewModal(postId) {
-  let data;
-  try {
-    data = await api(`/api/admin/posts/${postId}/tag-detail`);
-  } catch (err) {
-    flash("加载失败: " + err.message, "error");
-    return;
-  }
-  closeTagReviewModal(); // 防连点叠开
-  const mask = document.createElement("div");
-  mask.className = "modal-mask tag-detail-mask";
-  mask.id = "tag-detail-mask";
-  mask.setAttribute("role", "dialog");
-  mask.setAttribute("aria-modal", "true");
-  mask.setAttribute("aria-label", "标签详情");
-  mask.innerHTML = `
-    <div class="modal-card tag-detail-card">
-      <button type="button" class="tag-detail-close" aria-label="关闭" onclick="closeTagReviewModal()">×</button>
-      <h3 class="mx-raw-title">标签详情</h3>
-      <p class="mx-raw-meta">${escapeHtml(data.kol_name || "")} · ${fmtPublished(data.published_at, true)}</p>
-      <div class="tag-detail-body" id="tag-detail-body"></div>
-    </div>`;
-  mask._postId = postId;
-  mask.addEventListener("click", (e) => {
-    if (e.target === mask) closeTagReviewModal();
-  });
-  mask._onKey = (e) => {
-    if (e.key === "Escape") {
-      // 正在输入标签时按 Escape：先清空输入，再按才关弹窗
-      if (e.target && e.target.id === "tag-detail-add-input" && e.target.value) {
-        e.target.value = "";
-        e.preventDefault();
-        return;
-      }
-      e.preventDefault();
-      closeTagReviewModal();
-    }
-  };
-  document.addEventListener("keydown", mask._onKey, true);
-  document.body.appendChild(mask);
-  adminPaintTagDetail(data);
-}
-
-function _tagDetailKindLabel(kind) {
-  return _TAG_REVIEW_KINDS[kind] || (kind ? escapeHtml(kind) : "");
-}
-
-function adminTagDetailHtml(d) {
-  const llmSet = new Set((d.llm_tags || []).map((x) => x.tag));
-  const delBtn = (t) => `
-    <button type="button" class="mx-raw-tag-del" data-tag="${escapeHtml(t)}"
-      aria-label="删除标签 ${escapeHtml(t)}" title="删除标签 ${escapeHtml(t)}"
-      onclick="adminTagDetailRemoveTag(this.dataset.tag)">×</button>`;
-  const curChips = (d.tags || []).map((t) => `
-    <span class="cat cat-tag tag-detail-chip${llmSet.has(t) ? " is-llm" : ""}">
-      ${escapeHtml(t)}${llmSet.has(t) ? '<i class="tag-llm-badge" title="LLM 打标">LLM</i>' : ""}${delBtn(t)}
-    </span>`).join("") || '<span class="muted">暂无标签，可在下方输入框添加</span>';
-  const llmChips = (d.llm_tags || []).map((x) => `
-    <span class="cat cat-tag tag-detail-chip is-llm">
-      ${escapeHtml(x.tag)}<i class="tag-llm-badge" title="LLM 打标">LLM</i>${delBtn(x.tag)}
-    </span>`).join("") || '<span class="muted">暂无（LLM 直写或审核通过的标签会显示在这里）</span>';
-  const pendingRows = (d.pending_reviews || []).map((r) => `
-    <div class="tag-detail-pending-row">
-      <span class="cat cat-tag">${escapeHtml(r.tag)}</span>
-      <span class="tag-detail-pending-meta">${_tagDetailKindLabel(r.kind) || "—"} · ${r.confidence === "high" ? "高准确度" : "低准确度"}</span>
-      <span class="tag-detail-pending-ops">
-        <button class="btn-sm" onclick="adminTagReviewModalReview(${r.id}, 'approve')">通过</button>
-        <button class="btn-sm danger" onclick="adminTagReviewModalReview(${r.id}, 'reject')">拒绝</button>
-      </span>
-    </div>`).join("") || '<span class="muted">暂无待审核标签</span>';
-  const content = String(d.content || "").trim() || String(d.title || "").trim();
-  return `
-    ${content ? `<div class="tag-detail-msg">${escapeHtml(content)}</div>` : ""}
-    <section class="tag-detail-section">
-      <h4 class="tag-detail-sec-title">当前标签（${(d.tags || []).length}）</h4>
-      <div class="tag-detail-chips">${curChips}</div>
-      <div class="mx-raw-tag-add">
-        <input id="tag-detail-add-input" class="form-control" maxlength="30" placeholder="输入新标签，回车或点添加" onkeydown="if(event.key==='Enter'){event.preventDefault();adminTagDetailAddTag();}">
-        <button type="button" class="btn-sm" onclick="adminTagDetailAddTag()">添加标签</button>
-      </div>
-    </section>
-    <section class="tag-detail-section">
-      <h4 class="tag-detail-sec-title">LLM 打入的标签（${(d.llm_tags || []).length}）</h4>
-      <div class="tag-detail-chips">${llmChips}</div>
-    </section>
-    <section class="tag-detail-section">
-      <h4 class="tag-detail-sec-title">待审核标签（${(d.pending_reviews || []).length}）</h4>
-      <div class="tag-detail-pending">${pendingRows}</div>
-    </section>`;
-}
-
-function adminPaintTagDetail(data) {
-  const body = document.querySelector("#tag-detail-mask #tag-detail-body");
-  if (body) body.innerHTML = adminTagDetailHtml(data);
-}
-
-async function adminTagDetailRefresh() {
-  const mask = document.getElementById("tag-detail-mask");
-  if (!mask) return;
-  try {
-    adminPaintTagDetail(await api(`/api/admin/posts/${mask._postId}/tag-detail`));
-  } catch (err) {
-    flash("刷新失败: " + err.message, "error");
-  }
-}
-
-function closeTagReviewModal() {
-  const mask = document.getElementById("tag-detail-mask");
-  if (!mask) return;
-  document.removeEventListener("keydown", mask._onKey, true);
-  mask.remove();
-  if (_tagDetailDirty) {
-    _tagDetailDirty = false;
-    loadAdminVocabTab("tags"); // 弹窗里改过标签，关闭时同步背后的审核队列
-  }
-}
-
-async function adminTagDetailRemoveTag(tag) {
-  const mask = document.getElementById("tag-detail-mask");
-  if (!mask || !tag) return;
-  try {
-    await api(`/api/admin/posts/${mask._postId}/tags/remove`, {
-      method: "POST",
-      body: JSON.stringify({ tag }),
-    });
-    _tagDetailDirty = true;
-    flash(`已删除标签「${tag}」`);
-    adminTagDetailRefresh();
-  } catch (err) {
-    flash("删除失败: " + err.message, "error");
-  }
-}
-
-async function adminTagDetailAddTag() {
-  const mask = document.getElementById("tag-detail-mask");
-  const input = document.getElementById("tag-detail-add-input");
-  const tag = (input?.value || "").trim();
-  if (!mask || !tag) return;
-  try {
-    await api(`/api/admin/posts/${mask._postId}/tags/add`, {
-      method: "POST",
-      body: JSON.stringify({ tag }),
-    });
-    _tagDetailDirty = true;
-    flash(`已添加标签「${tag}」`);
-    adminTagDetailRefresh();
-  } catch (err) {
-    flash("添加失败: " + err.message, "error");
-  }
-}
-
-async function adminTagReviewModalReview(reviewId, action) {
-  try {
-    await api(`/api/admin/post-tag-reviews/${reviewId}/${action}`, { method: "POST" });
-    _tagDetailDirty = true;
-    flash(action === "approve" ? "已通过并追加到消息标签" : "已拒绝该标签");
-    adminTagDetailRefresh();
-  } catch (err) {
-    flash("操作失败: " + err.message, "error");
-  }
-}
-
-async function adminReviewAliasCandidate(idx, action) {
-  const cand = _mxAliasCandidates[idx];
-  if (!cand) return;
-  try {
-    await api(`/api/admin/stock-alias-candidates/${action}`, {
-      method: "POST",
-      body: JSON.stringify({ alias: cand.alias, stock: cand.stock }),
-    });
-    flash(action === "approve" ? `已把「${cand.alias}=${cand.stock}」写入黑话别名表` : "已拒绝该候选");
-    loadAdminVocabTab("tags");
-  } catch (err) {
-    flash("操作失败: " + err.message, "error");
-  }
-}
-
-async function adminSaveStockNames() {
-  const stockNames = $("#stock-names-input").value.split(/\n/).map((s) => s.trim()).filter(Boolean);
-  try {
-    const data = await api("/api/tags", { method: "PUT", body: JSON.stringify({ stock_names: stockNames }) });
-    const dropped = data.dropped_aliases || [];
-    flash(dropped.length
-      ? `已保存 ${data.stock_names.length} 只股票，去掉别名 ${dropped.map((a) => a.alias).join("、")}`
-      : `已保存 ${data.stock_names.length} 只股票`);
-    loadAdminVocabTab("tags");
-  } catch (err) {
-    flash("保存失败: " + err.message, "error");
-  }
-}
-
-async function adminSaveTags() {
-  const raw = $("#tag-vocab-input").value;
-  const tags = raw.split(/\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
-    // 每行「标签名 | 关键词,关键词」；无 | 时整行视为标签名（无关键词）
-    const [tag, kw] = line.split("|").map((s) => s.trim());
-    const keywords = kw ? kw.split(/[,，]/).map((k) => k.trim()).filter(Boolean) : [];
-    return { tag, keywords };
-  }).filter((r) => r.tag);
-  const stockNames = $("#stock-names-input").value.split(/\n/).map((s) => s.trim()).filter(Boolean);
-  const stockAliases = $("#stock-aliases-input").value.split(/\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
-    const [alias, stock] = line.split(/[=＝]/).map((s) => s.trim());
-    return { alias, stock };
-  }).filter((r) => r.alias && r.stock);
-  try {
-    const data = await api("/api/tags", { method: "PUT", body: JSON.stringify({ tags, stock_names: stockNames, stock_aliases: stockAliases }) });
-    flash(`已保存词表（${data.tags.length} 个标签，${data.stock_names.length} 只股票，${data.stock_aliases.length} 个别名）`);
-    loadAdminVocabTab("tags");
-  } catch (err) {
-    flash("保存失败: " + err.message, "error");
-  }
-}
-
-function adminMaintainSummary(data) {
-  const last = data && data.maintain && data.maintain.last;
-  if (!last || !last.at) return "尚未执行过";
-  const parts = [`上次 ${last.at}`];
-  if (last.llm_model) parts.push(String(last.llm_model));
-  if (last.llm_used) parts.push("LLM 已返回");
-  const aliases = last.added_aliases || [];
-  const names = last.added_stock_names || [];
-  const removed = last.removed_stock_names || [];
-  const purged = last.purged_aliases || [];
-  const seeded = last.seeded_aliases || [];
-  if (aliases.length) parts.push(`新增别名 ${aliases.length}`);
-  if (seeded.length) parts.push(`种子 ${seeded.length}`);
-  if (purged.length) parts.push(`清除碎片 ${purged.length}`);
-  if (names.length) parts.push(`新增股票 ${names.length}`);
-  if (removed.length) parts.push(`移除非个股 ${removed.length}`);
-  if (last.cleaned) parts.push(`清理 ${last.cleaned} 条`);
-  if (last.backfill) parts.push(`回填 ${last.backfill.processed} 条`);
-  if (last.error) parts.push("识别异常");
-  return parts.join(" · ");
-}
-
-function formatMaintainResult(data) {
-  const bits = [];
-  const aliases = data.added_aliases || [];
-  const names = data.added_stock_names || [];
-  const removed = data.removed_stock_names || [];
-  const purged = data.purged_aliases || [];
-  if (aliases.length) {
-    bits.push("新增别名 " + aliases.map((a) => `${a.alias}→${a.stock}`).join("、"));
-  } else {
-    bits.push("无新别名");
-  }
-  if (purged.length) bits.push("清除碎片 " + purged.map((a) => a.alias).join("、"));
-  if (names.length) bits.push("新增股票 " + names.join("、"));
-  if (removed.length) bits.push("移除 " + removed.join("、"));
-  if (data.llm_used) bits.push("LLM 已返回");
-  else if (data.error) bits.push("识别异常：" + data.error);
-  if (data.cleaned) bits.push(`清理误标 ${data.cleaned} 条`);
-  if (data.backfill) bits.push(`回填 ${data.backfill.processed} 条，其中 ${data.backfill.tagged} 条有标签`);
-  if (data.error && data.llm_used) bits.push("识别异常：" + data.error);
-  return bits.join("；");
-}
-
-async function adminMaintainTags(backfill = "pending") {
-  if (backfill === "all" && !(await showConfirm("将覆盖全部历史贴文标签，确定继续？"))) return;
-  const buttons = document.querySelectorAll("[onclick^='adminMaintainTags']");
-  buttons.forEach((button) => { button.disabled = true; });
-  const result = $("#tag-maintain-result");
-  if (result) result.textContent = backfill === "none" ? "维护中…" : "维护并回填中…";
-  try {
-    const data = await api("/api/tags/maintain", {
-      method: "POST",
-      body: JSON.stringify({ backfill }),
-    });
-    if (result) result.textContent = formatMaintainResult(data);
-    flash(backfill === "none" ? "标签维护完成" : "标签维护并回填完成");
-    loadAdminVocabTab("tags");
-  } catch (err) {
-    if (result) result.textContent = "";
-    flash("维护失败: " + err.message, "error");
-  } finally {
-    buttons.forEach((button) => { button.disabled = false; });
-  }
-}
-
-async function adminBackfillTags(mode = "pending") {
-  if (mode === "all" && !(await showConfirm("将覆盖全部历史贴文标签，确定继续？"))) return;
-  const buttons = document.querySelectorAll("[onclick^='adminBackfillTags']");
-  buttons.forEach((button) => { button.disabled = true; });
-  const result = $("#tag-backfill-result");
-  if (result) result.textContent = mode === "all" ? "全量重算中…" : "处理中…";
-  try {
-    const data = await api("/api/tags/backfill", {
-      method: "POST",
-      body: JSON.stringify({ mode }),
-    });
-    if (result) result.textContent = `已处理 ${data.processed} 条，其中 ${data.tagged} 条有标签`;
-    flash(mode === "all" ? "全量重算完成" : "待打标处理完成");
-    loadAdminVocabTab("tags");
-  } catch (err) {
-    if (result) result.textContent = "";
-    flash("处理失败: " + err.message, "error");
-  } finally {
-    buttons.forEach((button) => { button.disabled = false; });
-  }
-}
-
-let _adminPostsSeq = 0;
-const _adminPosts = [];
-let _adminPostsOffset = 0;
-let _adminPostsHasMore = true;
-const _adminPostsExpanded = new Set();
-let _adminKolsOptions = null;
-
-async function _adminKolsSelect() {
-  // 大V下拉选项（按平台分组），只拉一次缓存；首项空值=全部大V，选中态在渲染后按 state 同步
-  if (_adminKolsOptions) return _adminKolsOptions;
-  const kols = await api("/api/kols");
-  const groups = {};
-  for (const k of kols) {
-    const g = PLATFORM_LABELS[k.platform] || k.platform || "其他";
-    (groups[g] = groups[g] || []).push(k);
-  }
-  _adminKolsOptions = Object.entries(groups)
-    .map(([g, list]) => `<optgroup label="${escapeHtml(g)}">${list.map((k) =>
-      `<option value="${k.id}">${escapeHtml(k.name)}</option>`).join("")}</optgroup>`)
-    .join("");
-  return _adminKolsOptions;
-}
-
-function renderAdminPosts() {
-  const kolsHtml = _adminKolsOptions || "";
-  if (!routeStillActive(_adminRenderSeq)) return;
-  $("#admin-body").innerHTML = `
-    <section class="section-panel">
-      <header class="section-head">
-        <div><h2 class="section-title">帖子列表</h2><p class="section-meta">已加载 ${_adminPosts.length} 条 · 点击内容展开全文 · 按大V/平台/关键词筛选</p></div>
-        <div class="toolbar" style="margin-top:12px">
-          <input id="ad-posts-q" class="form-control" style="margin:0;width:240px" placeholder="搜索标题/内容关键词" value="${escapeHtml(state.adminPostsQ || "")}" onkeydown="if(event.key==='Enter')adminFilterPosts()">
-          <select id="ad-posts-platform" class="form-control" style="margin:0;width:auto" onchange="adminFilterPosts()">
-            <option value="">全部平台</option>
-            <option value="system" ${state.adminPostsPlatform === "system" ? "selected" : ""}>系统</option>
-            <option value="mx" ${state.adminPostsPlatform === "mx" ? "selected" : ""}>MX平台</option>
-            <option value="xueqiu" ${state.adminPostsPlatform === "xueqiu" ? "selected" : ""}>雪球</option>
-            <option value="weibo" ${state.adminPostsPlatform === "weibo" ? "selected" : ""}>微博</option>
-            <option value="twitter" ${state.adminPostsPlatform === "twitter" ? "selected" : ""}>X</option>
-            <option value="zsxq" ${state.adminPostsPlatform === "zsxq" ? "selected" : ""}>知识星球</option>
-          </select>
-          <select id="ad-posts-status" class="form-control" style="margin:0;width:auto" onchange="adminFilterPosts()" aria-label="按可见状态筛选">
-            <option value="" ${!state.adminPostsStatus ? "selected" : ""}>全部状态</option>
-            <option value="normal" ${state.adminPostsStatus === "normal" ? "selected" : ""}>未隐藏</option>
-            <option value="hidden" ${state.adminPostsStatus === "hidden" ? "selected" : ""}>已隐藏</option>
-          </select>
-          <select id="ad-posts-kol" class="form-control" style="margin:0;width:auto" onchange="adminFilterPosts()"><option value="">全部大V</option>${kolsHtml}</select>
-          <button class="btn-normal" onclick="adminFilterPosts()">筛选</button>
-        </div>
-      </header>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th scope="col">ID</th><th scope="col">大V</th><th scope="col">分类</th><th scope="col">平台</th><th scope="col">内容</th><th scope="col">时间</th><th scope="col">链接</th><th scope="col">操作</th></tr></thead>
-          <tbody>${_adminPosts.map(postRowHtml).join("")}</tbody>
-        </table>
-      </div>
-      ${_adminPostsHasMore
-      ? `<div class="toolbar" style="margin-top:14px;justify-content:center"><button class="btn-normal" onclick="adminPostsLoadMore()">加载更多</button></div>`
-      : `<p class="muted" style="text-align:center;margin-top:14px">已加载全部</p>`}
-    </section>`;
-  // 选中态随 state 同步（空值=全部大V），重渲染后不丢失
-  const kolSel = $("#ad-posts-kol");
-  if (kolSel) kolSel.value = state.adminPostsKolId ? String(state.adminPostsKolId) : "";
-}
-
-function postRowHtml(p) {
-  const expanded = _adminPostsExpanded.has(p.id);
-  const body = (p.title ? p.title + "\n" : "") + (p.content || "");
-  const safeUrl = /^https?:\/\//i.test(p.url || "") ? p.url : "";
-  const rowStyle = expanded
-    ? ' style="background:var(--color-surface-accent-soft)"'
-    : (p.hidden ? ' style="opacity:0.55"' : "");
-  return `
-    <tr${rowStyle}>
-      <td>${p.id}${p.hidden ? ' <span class="post-hidden-badge">已隐藏</span>' : ""}${p.platform === "mx" ? (p.llm_tagged ? ' <span class="cat cat-tag" title="该消息已经过 LLM 打标（判定无标签时标签列表为空）">LLM</span>' : ' <span class="muted" title="尚未经过 LLM 打标">待LLM</span>') : ""}</td>
-      <td>${escapeHtml(p.kol_name)}</td>
-      <td>${escapeHtml(p.category_name || "")}</td>
-      <td>${escapeHtml(PLATFORM_LABELS[p.platform] || p.platform)}</td>
-      <td class="post-cell" onclick="adminTogglePost(${p.id})" title="点击展开/收起全文" role="button" tabindex="0" aria-expanded="${expanded}" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();adminTogglePost(${p.id})}">
-        <pre class="content-cell">${escapeHtml(body.slice(0, expanded ? 100000 : 120))}</pre>
-        <span class="muted">${expanded ? "▲ 收起" : (body.length > 120 ? "▼ 展开全文" : "")}</span>
-      </td>
-      <td>${escapeHtml(p.published_at)}</td>
-      <td>${safeUrl ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener">原文</a>` : ""}</td>
-      <td style="white-space:nowrap">
-        ${p.hidden
-          ? `<button type="button" class="btn-sm" onclick="adminSetPostHidden(${p.id}, false)">取消隐藏</button>`
-          : `<button type="button" class="btn-sm" onclick="adminSetPostHidden(${p.id}, true)">隐藏</button>`}
-        <button type="button" class="btn-sm danger" onclick="adminDeletePost(${p.id})">删除</button>
-      </td>
-    </tr>
-    ${expanded ? `<tr><td colspan="8"><div class="post-detail">
-        <p class="muted" style="margin-bottom:8px">类型：${p.post_type === "reply" ? "回复" : "原帖"} · 平台：${escapeHtml(PLATFORM_LABELS[p.platform] || p.platform)} · 外部ID：${escapeHtml(p.external_id)} · 图片：${(p.images || []).length} 张${p.platform === "mx" ? ` · LLM 打标：${p.llm_tagged ? "已打标" : "未打标"}` : ""}${p.hidden ? " · <strong>状态：已隐藏（用户不可见）</strong>" : ""}</p>
-        <pre class="content-cell">${escapeHtml(body)}</pre>
-      </div></td></tr>` : ""}`;
-}
-
-async function loadAdminPosts(reset = true) {
-  const seq = ++_adminPostsSeq;
-  const params = new URLSearchParams({ limit: "100", offset: String(reset ? 0 : _adminPostsOffset) });
-  if (state.adminPostsQ) params.set("q", state.adminPostsQ);
-  if (state.adminPostsPlatform) params.set("platform", state.adminPostsPlatform);
-  if (state.adminPostsKolId) params.set("kol_id", state.adminPostsKolId);
-  // 状态筛选：默认全部（含已隐藏，便于恢复）；normal=未隐藏；hidden=只看已隐藏
-  if (state.adminPostsStatus === "hidden") params.set("hidden_only", "1");
-  else if (state.adminPostsStatus === "normal") { /* 默认 db 层已排除隐藏 */ }
-  else params.set("include_hidden", "1");
-  const [posts, kolsHtml] = await Promise.all([api(`/api/posts?${params}`), _adminKolsSelect()]);
-  if (seq !== _adminPostsSeq) return; // 筛选条件已变，丢弃过期响应
-  if (reset) {
-    _adminPosts.length = 0;
-    _adminPostsOffset = 0;
-    _adminPostsHasMore = true;
-  }
-  _adminPosts.push(...posts);
-  _adminPostsOffset += posts.length;
-  _adminPostsHasMore = posts.length >= 100;
-  _adminKolsOptions = kolsHtml;
-  renderAdminPosts();
-}
-
-function adminPostsLoadMore() {
-  loadAdminPosts(false);
-}
-
-function adminTogglePost(id) {
-  if (_adminPostsExpanded.has(id)) _adminPostsExpanded.delete(id);
-  else _adminPostsExpanded.add(id);
-  renderAdminPosts();
-}
-
-async function adminFilterPosts() {
-  state.adminPostsQ = $("#ad-posts-q").value.trim();
-  state.adminPostsPlatform = $("#ad-posts-platform").value;
-  state.adminPostsStatus = $("#ad-posts-status").value;
-  state.adminPostsKolId = $("#ad-posts-kol").value;
-  loadAdminPosts(true);
-}
-
-async function adminSetPostHidden(id, hidden) {
-  try {
-    await api(`/api/posts/${id}/${hidden ? "hide" : "unhide"}`, { method: "POST" });
-    const p = _adminPosts.find((x) => x.id === id);
-    if (p) p.hidden = hidden ? 1 : 0;
-    renderAdminPosts();
-    flash(hidden ? "已隐藏：所有用户不可见，内容保留可恢复" : "已恢复显示", "success");
-  } catch (err) {
-    flash("操作失败: " + err.message, "error");
-  }
-}
-
-async function adminDeletePost(id) {
-  if (!confirm("确定删除该帖子？将从数据库彻底删除（含推送记录），不可恢复")) return;
-  try {
-    await api(`/api/posts/${id}/delete`, { method: "POST" });
-    const i = _adminPosts.findIndex((x) => x.id === id);
-    if (i >= 0) {
-      _adminPosts.splice(i, 1);
-      _adminPostsExpanded.delete(id);
-      renderAdminPosts();
-    }
-    flash("已删除", "success");
-  } catch (err) {
-    flash("操作失败: " + err.message, "error");
-  }
-}
-
-let _adminLogsSeq = 0;
-async function loadAdminLogs() {
-  const seq = ++_adminLogsSeq;
-  const users = await api("/api/users");
-  const logs = await api(`/api/push-logs?limit=100${state.adminLogsFilter || ""}`);
-  if (seq !== _adminLogsSeq) return; // 筛选条件已变，丢弃过期响应
-  if (!routeStillActive(_adminRenderSeq)) return;
-  $("#admin-body").innerHTML = `
-    <section class="section-panel">
-      <header class="section-head">
-        <div><h2 class="section-title">推送记录</h2></div>
-        <div class="toolbar" style="margin-top:12px">
-          <select id="ad-logs-user" class="form-control" style="margin:0;width:auto">
-            <option value="">全部用户</option>
-            ${users.map((u) => `<option value="${u.id}" ${state.adminLogsUserId == u.id ? "selected" : ""}>${escapeHtml(u.username)}</option>`).join("")}
-          </select>
-          <select id="ad-logs-channel" class="form-control" style="margin:0;width:auto">
-            <option value="">全部渠道</option>
-            <option value="telegram" ${state.adminLogsChannel === "telegram" ? "selected" : ""}>Telegram</option>
-            <option value="feishu" ${state.adminLogsChannel === "feishu" ? "selected" : ""}>飞书</option>
-            <option value="wecom" ${state.adminLogsChannel === "wecom" ? "selected" : ""}>企业微信</option>
-          </select>
-          <select id="ad-logs-status" class="form-control" style="margin:0;width:auto">
-            <option value="">全部状态</option>
-            <option value="success" ${state.adminLogsStatus === "success" ? "selected" : ""}>成功</option>
-            <option value="failed" ${state.adminLogsStatus === "failed" ? "selected" : ""}>失败</option>
-          </select>
-          <button class="btn-normal" onclick="adminFilterLogs()">筛选</button>
-        </div>
-      </header>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th scope="col">时间</th><th scope="col">用户</th><th scope="col">大V</th><th scope="col">渠道</th><th scope="col">状态</th><th scope="col">错误</th></tr></thead>
-          <tbody>${logs.map((l) => `
-            <tr>
-              <td>${escapeHtml(fmtDbTime(l.created_at))}</td>
-              <td>${escapeHtml(l.user_name || "全局")}</td>
-              <td>${escapeHtml(l.kol_name)}</td>
-              <td>${l.channel}</td>
-              <td class="${l.status === "success" ? "status-ok" : "status-fail"}">${escapeHtml(l.status)}</td>
-              <td>${escapeHtml(l.error || "")}</td>
-            </tr>`).join("")}</tbody>
-        </table>
-      </div>
-    </section>`;
-}
-
-async function loadAdminAudit() {
-  const logs = await api("/api/admin/logs?limit=100");
-  if (!routeStillActive(_adminRenderSeq)) return;
-  $("#admin-body").innerHTML = `
-    <section class="section-panel">
-      <header class="section-head">
-        <div>
-          <h2 class="section-title">系统日志</h2>
-          <p class="section-meta">内存环形缓冲的最近 500 条日志，每 5 秒自动刷新；更完整历史见 docker logs（LOG_LEVEL=DEBUG 可开启更详细日志）。</p>
-        </div>
-        <div class="toolbar" style="margin-top:12px">
-          <select id="syslog-level" class="form-control" style="width:auto" onchange="loadAdminSysLogsPanel()">
-            <option value="">全部级别</option>
-            <option value="ERROR">ERROR+</option>
-            <option value="WARNING">WARNING+</option>
-            <option value="INFO">INFO+</option>
-            <option value="DEBUG">DEBUG（仅LOG_LEVEL=DEBUG时产生）</option>
-          </select>
-          <input id="syslog-q" class="form-control" style="width:220px" placeholder="关键词过滤（如 推送失败 / 大V名）" onkeydown="if(event.key==='Enter')loadAdminSysLogsPanel()">
-          <button class="btn-normal" onclick="loadAdminSysLogsPanel()">刷新</button>
-        </div>
-      </header>
-      <pre class="syslog" id="syslog-pre">加载中…</pre>
-    </section>
-    <section class="section-panel">
-      <header class="section-head">
-        <div>
-          <h2 class="section-title">错误记录</h2>
-          <p class="section-meta">WARNING 及以上日志持久化存储（跨重启保留最近 5000 条），即使环形缓冲滚动或重启后仍可查。</p>
-        </div>
-        <div class="toolbar" style="margin-top:12px">
-          <select id="errlog-level" class="form-control" style="width:auto" onchange="loadAdminErrorLogs()">
-            <option value="">全部级别</option>
-            <option value="ERROR">ERROR+</option>
-            <option value="WARNING">WARNING+</option>
-          </select>
-          <button class="btn-normal" onclick="loadAdminErrorLogs()">刷新</button>
-        </div>
-      </header>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th scope="col">时间</th><th scope="col">级别</th><th scope="col">来源</th><th scope="col">内容</th></tr></thead>
-          <tbody id="errlog-body"><tr><td colspan="4" class="muted">加载中…</td></tr></tbody>
-        </table>
-      </div>
-    </section>
-    <section class="section-panel">
-      <header class="section-head"><div><h2 class="section-title">操作日志</h2>
-      <p class="section-meta">管理员关键操作、系统自动 MX 平台登录/断开（mx_auto_*，管理员列显示「系统」）、以及用户知识库超额（操作 ima_quota，目标是用户名）。</p></div></header>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th scope="col">时间</th><th scope="col">管理员</th><th scope="col">操作</th><th scope="col">目标</th><th scope="col">详情</th></tr></thead>
-          <tbody>${logs.length === 0 ? `<tr><td colspan="5" class="muted">暂无记录</td></tr>` : logs.map((l) => `
-            <tr>
-              <td>${escapeHtml(fmtDbTime(l.created_at))}</td>
-              <td>${escapeHtml(l.username || (String(l.action || "").indexOf("mx_auto_") === 0 ? "系统" : ""))}</td>
-              <td>${escapeHtml(l.action)}</td>
-              <td>${escapeHtml(l.target)}</td>
-              <td class="muted">${escapeHtml(l.detail)}</td>
-            </tr>`).join("")}</tbody>
-        </table>
-      </div>
-    </section>`;
-  stopSysLogsTimer();
-  sysLogsTimer = setInterval(loadAdminSysLogsPanel, 5000);
-  loadAdminSysLogsPanel();
-  loadAdminErrorLogs();
-}
-
-async function loadAdminErrorLogs() {
-  try {
-    const params = new URLSearchParams({ limit: "200" });
-    const levelEl = $("#errlog-level");
-    const level = levelEl ? levelEl.value : "";
-    if (level) params.set("level", level);
-    const data = await api(`/api/admin/error-logs?${params.toString()}`);
-    const rows = data.logs || [];
-    const body = $("#errlog-body");
-    if (!body) return;
-    body.innerHTML = rows.length
-      ? rows.map((r) => `
-          <tr>
-            <td>${escapeHtml(fmtDbTime(r.created_at))}</td>
-            <td class="${r.level === "ERROR" || r.level === "CRITICAL" ? "status-fail" : ""}">${escapeHtml(r.level)}</td>
-            <td class="muted">${escapeHtml(r.logger)}</td>
-            <td class="muted">${escapeHtml(r.message)}</td>
-          </tr>`).join("")
-      : `<tr><td colspan="4" class="muted">暂无错误记录 🎉</td></tr>`;
-  } catch (err) {
-    const body = $("#errlog-body");
-    if (body) body.innerHTML = `<tr><td colspan="4" class="muted">加载失败: ${escapeHtml(err.message)}</td></tr>`;
-  }
-}
-
-let sysLogsTimer = null;
-
-function stopSysLogsTimer() {
-  if (sysLogsTimer) {
-    clearInterval(sysLogsTimer);
-    sysLogsTimer = null;
-  }
-}
-
-async function loadAdminSysLogsPanel() {
-  try {
-    const params = new URLSearchParams({ limit: "500" });
-    const levelEl = $("#syslog-level");
-    const qEl = $("#syslog-q");
-    const level = levelEl ? levelEl.value : "";
-    const q = qEl ? qEl.value.trim() : "";
-    if (level) params.set("level", level);
-    if (q) params.set("q", q);
-    const data = await api(`/api/admin/system-logs?${params.toString()}`);
-    const lines = data.lines || [];
-    const el = $("#syslog-pre");
-    if (el) el.textContent = lines.join("\n") || "（没有匹配的日志）";
-  } catch (err) {
-    const el = $("#syslog-pre");
-    if (el) el.textContent = "加载失败: " + err.message;
-  }
-}
-
-async function adminFilterLogs() {
-  const params = new URLSearchParams({ limit: "100" });
-  const userId = $("#ad-logs-user").value;
-  const channel = $("#ad-logs-channel").value;
-  const status = $("#ad-logs-status").value;
-  if (userId) params.set("user_id", userId);
-  if (channel) params.set("channel", channel);
-  if (status) params.set("status", status);
-  state.adminLogsFilter = `&${params.toString()}`;
-  state.adminLogsUserId = userId;
-  state.adminLogsChannel = channel;
-  state.adminLogsStatus = status;
-  loadAdminLogs();
-}
-
-function backupStatusHtml(s) {
-  const parts = [];
-  if (s.last_ok_at) {
-    parts.push(`上次<span class="status-ok">成功</span> ${escapeHtml(s.last_ok_at)}`);
-  }
-  if (s.last_error) {
-    parts.push(`上次<span class="status-fail">失败</span> ${escapeHtml(s.last_error)}`);
-  }
-  if (s.last_remote_name) parts.push(`远端 ${escapeHtml(s.last_remote_name)}`);
-  if (s.next_run_at) parts.push(`下次 ${escapeHtml(s.next_run_at)}`);
-  if (!parts.length) {
-    return `<p class="section-meta backup-status" id="backup-status">尚未执行过定时备份</p>`;
-  }
-  return `<p class="section-meta backup-status" id="backup-status">${parts.join(" · ")}</p>`;
-}
-
-function backupWebDAVBody() {
-  const body = {
-    url: $("#bk-url").value.trim(),
-    username: $("#bk-user").value.trim(),
-    path: $("#bk-path").value.trim() || "/vpush-backups",
-    hour: Number($("#bk-hour").value),
-    keep: Number($("#bk-keep").value),
-  };
-  const password = $("#bk-pass").value;
-  if (password) body.password = password;
-  return body;
-}
-
-async function loadAdminBackup() {
-  const s = await api("/api/admin/backup");
-  if (!routeStillActive(_adminRenderSeq)) return;
-  $("#admin-body").innerHTML = `
-    <section class="section-panel backup-page">
-      <header class="section-head">
-        <div>
-          <h2 class="section-title">本机备份</h2>
-          <p class="section-meta">下载当前数据库，不经过 WebDAV。</p>
-        </div>
-      </header>
-      <div class="toolbar backup-actions">
-        <button class="btn-ghost" onclick="backupDownload()">下载当前数据库</button>
-      </div>
-    </section>
-    <section class="section-panel backup-page">
-      <header class="section-head">
-        <div>
-          <h2 class="section-title">WebDAV 定时</h2>
-          <p class="section-meta">填好后由调度每天自动上传；密码只写不回显。</p>
-        </div>
-      </header>
-      <label class="form-label">地址
-        <input id="bk-url" class="form-control" type="url" autocomplete="off" placeholder="https://example.com/webdav" value="${escapeHtml(s.url || "")}">
-      </label>
-      <label class="form-label">用户名
-        <input id="bk-user" class="form-control" autocomplete="off" value="${escapeHtml(s.username || "")}">
-      </label>
-      <label class="form-label">密码
-        <input id="bk-pass" class="form-control" type="password" autocomplete="new-password" placeholder="${s.password_set ? "已设置" : "WebDAV 密码"}">
-      </label>
-      <div class="backup-grid">
-        <label class="form-label backup-path">远端目录
-          <input id="bk-path" class="form-control" autocomplete="off" placeholder="/vpush-backups" value="${escapeHtml(s.path || "/vpush-backups")}">
-        </label>
-        <label class="form-label backup-num">每天几点
-          <input id="bk-hour" class="form-control" type="number" min="0" max="23" value="${s.hour ?? 3}">
-        </label>
-        <label class="form-label backup-num">保留份数
-          <input id="bk-keep" class="form-control" type="number" min="1" max="90" value="${s.keep ?? 14}">
-        </label>
-      </div>
-      ${backupStatusHtml(s)}
-      <div class="cfg-save-row backup-actions">
-        <button class="btn-normal" onclick="saveBackupWebDAV()">保存</button>
-        <button class="btn-ghost" onclick="testBackupWebDAV()">测试连接</button>
-      </div>
-    </section>
-    <section class="section-panel backup-page">
-      <header class="section-head">
-        <div>
-          <h2 class="section-title">恢复</h2>
-          <p class="section-meta">会覆盖当前账号、订阅和帖子。恢复失败时现库不变。</p>
-        </div>
-      </header>
-      <div class="backup-stack">
-        <div class="toolbar backup-actions">
-          <button id="bk-restore-webdav" class="btn-ghost danger" onclick="backupRestoreWebDAV()">从 WebDAV 恢复最新一份</button>
-        </div>
-        <label class="form-label">本地 .db 文件
-          <input id="bk-file" class="backup-file-input" type="file" accept=".db">
-        </label>
-        <div class="toolbar backup-actions">
-          <button id="bk-restore-upload" class="btn-ghost danger" onclick="backupRestoreUpload()">用本地备份恢复</button>
-        </div>
-      </div>
-    </section>`;
-}
-
-async function saveBackupWebDAV() {
-  try {
-    await api("/api/admin/backup/webdav", {
-      method: "PUT",
-      body: JSON.stringify(backupWebDAVBody()),
-    });
-    flash("WebDAV 配置已保存");
-    $("#bk-pass").value = "";
-    await loadAdminBackup();
-  } catch (err) {
-    flash(err.message, "error");
-  }
-}
-
-async function testBackupWebDAV() {
-  try {
-    await api("/api/admin/backup/webdav/test", {
-      method: "POST",
-      body: JSON.stringify(backupWebDAVBody()),
-    });
-    flash("WebDAV 连接正常");
-  } catch (err) {
-    flash(err.message, "error");
-  }
-}
-
-async function backupDownload() {
-  const resp = await fetch("/api/admin/backup/download", {
-    headers: { Authorization: `Bearer ${state.token}` },
-  });
-  if (resp.status === 401) {
-    logout();
-    return;
-  }
-  if (!resp.ok) {
-    const data = await resp.json().catch(() => ({}));
-    flash(typeof data.detail === "string" ? data.detail : "下载失败", "error");
-    return;
-  }
-  const blob = await resp.blob();
-  const match = /filename="?([^";]+)"?/.exec(resp.headers.get("content-disposition") || "");
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = match ? match[1] : "dav-backup.db";
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
-
-async function backupRestoreWebDAV() {
-  if (!(await showConfirm("确认用备份覆盖当前数据库？当前账号、订阅和帖子都会被替换。"))) return;
-  const btn = $("#bk-restore-webdav");
-  if (btn) btn.disabled = true;
-  try {
-    await api("/api/admin/backup/restore/webdav", { method: "POST" });
-    flash("已从 WebDAV 恢复");
-    await loadAdminBackup();
-  } catch (err) {
-    flash(err.message, "error");
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-}
-
-async function backupRestoreUpload() {
-  if (!(await showConfirm("确认用备份覆盖当前数据库？当前账号、订阅和帖子都会被替换。"))) return;
-  const input = $("#bk-file");
-  if (!input?.files?.[0]) {
-    flash("请选择 .db 备份文件", "error");
-    return;
-  }
-  const btn = $("#bk-restore-upload");
-  if (btn) btn.disabled = true;
-  try {
-    const fd = new FormData();
-    fd.append("file", input.files[0]);
-    const resp = await fetch("/api/admin/backup/restore/upload", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${state.token}` },
-      body: fd,
-    });
-    if (resp.status === 401) {
-      logout();
-      return;
-    }
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) {
-      flash(typeof data.detail === "string" ? data.detail : "恢复失败", "error");
-      return;
-    }
-    flash("已从本地备份恢复");
-    await loadAdminBackup();
-  } catch (err) {
-    flash(err.message, "error");
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-}
-
-function userHasBoundChannel(u) {
-  return !!(u.telegram_bound || u.feishu_bound || u.wecom_bound || u.bark_bound || u.webpush_bound);
-}
-
-function userChannelIconsHtml(u) {
-  const bound = {
-    telegram: !!u.telegram_bound,
-    feishu: !!u.feishu_bound,
-    wecom: !!u.wecom_bound,
-    bark: !!u.bark_bound,
-    webpush: !!u.webpush_bound,
-  };
-  const names = USER_CHANNEL_KEYS.filter((ch) => bound[ch]).map((ch) => CHANNEL_LABELS[ch]);
-  const aria = names.length ? `已绑定 ${names.join("、")}` : "未绑定推送渠道";
-  return `<span class="user-channels" title="${escapeHtml(aria)}" aria-label="${escapeHtml(aria)}">${USER_CHANNEL_KEYS.map((ch) =>
-    `<span class="user-ch ${bound[ch] ? "on" : "off"}" data-channel="${ch}">${CHANNEL_ICONS[ch]}</span>`
-  ).join("")
-    }</span>`;
-}
-
-function adminUsersFiltered() {
-  const q = (state.adminUsersQ || "").trim().toLowerCase();
-  const filter = state.adminUsersFilter || "all";
-  return (state.adminUsers || []).filter((u) => {
-    if (filter === "admin" && !u.is_admin) return false;
-    if (filter === "unbound" && userHasBoundChannel(u)) return false;
-    if (filter === "push-off" && u.notify_enabled) return false;
-    if (filter === "inactive" && !u.inactive) return false;
-    if (!q) return true;
-    return [u.username, u.origin_label, u.register_code, u.register_note].some(
-      (s) => String(s || "").toLowerCase().includes(q)
-    );
-  });
-}
-
-function adminUserBoundLabels(u) {
-  return USER_CHANNEL_KEYS.filter((ch) => u[`${ch}_bound`]).map((ch) => CHANNEL_LABELS[ch]);
-}
-
-function adminUserOriginHtml(u) {
-  const label = escapeHtml(u.origin_label || "网页");
-  const note = escapeHtml(u.register_note || u.register_code || "");
-  if (u.origin === "invite" && note) {
-    return `<div class="user-origin"><span>${label}</span><span class="muted">${note}</span></div>`;
-  }
-  return `<div class="user-origin"><span>${label}</span></div>`;
-}
-
-function adminUserLoginHtml(u) {
-  const login = u.has_password
-    ? `<span class="status-ok">可登录</span>`
-    : `<span class="muted">无密码</span>`;
-  const seen = u.last_login_at
-    ? escapeHtml(fmtDbTime(u.last_login_at))
-    : "从未登录";
-  return `<div class="user-login">${login}<span class="muted">${seen}</span></div>`;
-}
-
-function adminDeleteImpact(users) {
-  const list = (users || []).filter(Boolean);
-  const subs = list.reduce((n, u) => n + (Number(u.subscription_count) || 0), 0);
-  const bound = list.filter(userHasBoundChannel).length;
-  const parts = [`订阅 ${subs} 个`];
-  if (list.length === 1) {
-    const names = adminUserBoundLabels(list[0]);
-    if (names.length) parts.push(`已绑 ${names.join("、")}`);
-  } else if (bound) {
-    parts.push(`${bound} 人已绑渠道`);
-  }
-  return parts.join(" · ");
-}
-
-let _adminUsersSelected = new Set();
-let _inactivePolicyDraft = null;
-let _inactivePolicySaving = false;
-let _auPolicyOpen = false;
-let _inactivePreview = { marked_count: 0, purge_count: 0 };
-let _inactivePreviewTimer = 0;
-let _inactivePreviewSeq = 0;
-
-function inactivePolicySaved() {
-  return state.inactivePolicy || { inactive_after_days: 90, inactive_purge_after_days: 30, customized: false };
-}
-
-function inactivePolicyDraft() {
-  return _inactivePolicyDraft || inactivePolicySaved();
-}
-
-function inactivePolicyRuleLabel() {
-  const saved = inactivePolicySaved();
-  const n = Number(saved.inactive_after_days);
-  const m = Number(saved.inactive_purge_after_days);
-  return saved.customized ? `规则 ${n}+${m}` : `默认 ${n}+${m}`;
-}
-
-function inactivePolicyHint(n, m, preview) {
-  n = Number(n);
-  m = Number(m);
-  preview = preview || _inactivePreview || {};
-  const marked = Number(preview.marked_count);
-  const doomed = Number(preview.purge_count);
-  const blast = Number.isFinite(marked)
-    ? (Number.isFinite(doomed) && doomed > 0 ? `现标 ${marked} 人，下次删 ${doomed} 人` : `现标 ${marked} 人`)
-    : "";
-  let core;
-  if (!Number.isFinite(n) || n <= 0) core = "已关闭标记与删除";
-  else if (!Number.isFinite(m) || m <= 0) core = "只标记，不自动删除";
-  else if (!inactivePolicySaved().customized && n === 90 && m === 30) core = `未改过 · 默认 ${n}+${m}`;
-  else core = `每天扫一次 · 满 ${n + m} 天删除`;
-  return blast ? `${core} · ${blast}` : core;
-}
-
-function paintInactivePolicyHint() {
-  const draft = inactivePolicyDraft();
-  const text = inactivePolicyHint(draft.inactive_after_days, draft.inactive_purge_after_days);
-  const hint = $("#au-inactive-hint");
-  const summary = document.querySelector("details.au-policy > summary .muted");
-  if (hint) hint.textContent = text;
-  if (summary) summary.textContent = text;
-}
-
-function adminInactivePolicySyncSave(queuePreview) {
-  const nEl = $("#au-inactive-n");
-  const mEl = $("#au-inactive-m");
-  const btn = $("#au-inactive-save");
-  if (!nEl || !mEl) return;
-  _inactivePolicyDraft = {
-    inactive_after_days: nEl.value,
-    inactive_purge_after_days: mEl.value,
-  };
-  paintInactivePolicyHint();
-  const saved = inactivePolicySaved();
-  const dirty =
-    Number(nEl.value) !== Number(saved.inactive_after_days) ||
-    Number(mEl.value) !== Number(saved.inactive_purge_after_days);
-  if (btn) btn.disabled = !dirty || _inactivePolicySaving;
-  if (queuePreview) adminInactivePolicyQueuePreview();
-}
-
-function adminInactivePolicyQueuePreview() {
-  const seq = ++_inactivePreviewSeq;
-  clearTimeout(_inactivePreviewTimer);
-  _inactivePreviewTimer = setTimeout(() => adminRefreshInactivePreview(seq), 360);
-}
-
-async function adminRefreshInactivePreview(seq) {
-  const draft = inactivePolicyDraft();
-  const n = Number(draft.inactive_after_days);
-  const m = Number(draft.inactive_purge_after_days);
-  if (!Number.isInteger(n) || !Number.isInteger(m) || n < 0 || n > 3650 || m < 0 || m > 3650) return;
-  try {
-    const data = await api(
-      `/api/admin/inactive-users-policy?inactive_after_days=${n}&inactive_purge_after_days=${m}`
-    );
-    if (seq && seq !== _inactivePreviewSeq) return;
-    _inactivePreview = {
-      marked_count: Number(data.marked_count) || 0,
-      purge_count: Number(data.purge_count) || 0,
-    };
-    paintInactivePolicyHint();
-  } catch {
-    /* 输入过程中的预览失败不打断保存 */
-  }
-}
-
-function adminInactivePolicyKeydown(event) {
-  if (event.key !== "Enter") return;
-  event.preventDefault();
-  adminSaveInactivePolicy();
-}
-
-function adminUsersSyncBar() {
-  const bar = $("#au-batch-bar");
-  if (!bar) return;
-  bar.style.display = _adminUsersSelected.size ? "flex" : "none";
-  const strong = bar.querySelector("strong");
-  if (strong) strong.textContent = `已选 ${_adminUsersSelected.size} 人`;
-}
-
-function adminUserToggleSelect(el) {
-  const id = Number(el.dataset.id);
-  if (el.checked) _adminUsersSelected.add(id);
-  else _adminUsersSelected.delete(id);
-  adminUsersSyncBar();
-  const checkall = $("#au-checkall");
-  const boxes = [...document.querySelectorAll(".au-check")];
-  if (checkall) {
-    checkall.checked = boxes.length > 0 && boxes.every((c) => c.checked);
-    checkall.indeterminate = boxes.some((c) => c.checked) && !checkall.checked;
-  }
-}
-
-function adminUserTogglePage(el) {
-  document.querySelectorAll(".au-check").forEach((c) => {
-    c.checked = el.checked;
-    const id = Number(c.dataset.id);
-    if (el.checked) _adminUsersSelected.add(id);
-    else _adminUsersSelected.delete(id);
-  });
-  el.indeterminate = false;
-  adminUsersSyncBar();
-}
-
-function adminUserClearSelect() {
-  _adminUsersSelected.clear();
-  document.querySelectorAll(".au-check").forEach((c) => { c.checked = false; });
-  const checkall = $("#au-checkall");
-  if (checkall) {
-    checkall.checked = false;
-    checkall.indeterminate = false;
-  }
-  adminUsersSyncBar();
-}
-
-async function adminUsersBatch(action) {
-  const ids = [..._adminUsersSelected];
-  if (!ids.length) return;
-  let payloadIds = ids;
-  if (action === "delete") {
-    const picked = ids.map((id) => (state.adminUsers || []).find((u) => u.id === id)).filter(Boolean);
-    const blocked = picked.filter((u) => u.is_admin || (state.user && u.id === state.user.id)).length;
-    const doomed = picked.filter((u) => !u.is_admin && !(state.user && u.id === state.user.id));
-    if (!doomed.length) {
-      flash(blocked ? "选中的都是管理员，已跳过" : "没有可删除的用户", "error");
-      return;
-    }
-    const extra = blocked ? `\n将跳过 ${blocked} 个管理员。` : "";
-    if (!(await showConfirm(`确认删除选中的 ${doomed.length} 个用户？${extra}\n${adminDeleteImpact(doomed)}\n删除后不可恢复。`))) return;
-    payloadIds = doomed.map((u) => u.id);
-  }
-  try {
-    const data = await api("/api/admin/users/batch", {
-      method: "POST",
-      body: JSON.stringify({ ids: payloadIds, action }),
-    });
-    const n = data.count || 0;
-    const skipped = data.skipped || 0;
-    if (action === "delete") {
-      flash(skipped ? `已删除 ${n} 人，跳过 ${skipped} 个管理员或无效项` : `已删除 ${n} 人`);
-    } else if (action === "enable_notify") {
-      flash(`已开启 ${n} 人推送`);
-    } else if (action === "disable_notify") {
-      flash(`已关闭 ${n} 人推送`);
-    }
-    _adminUsersSelected.clear();
-    loadAdminUsers();
-  } catch (err) {
-    flash(err.message, "error");
-  }
-}
-
-async function loadAdminUsers() {
-  let users;
-  let policy;
-  let collector;
-  let localLibs;
-  try {
-    [users, policy, collector, localLibs] = await Promise.all([
-      api("/api/users"),
-      api("/api/admin/inactive-users-policy"),
-      api("/api/admin/ima-collector").catch(() => null),
-      api("/api/admin/ima-local-libraries").catch(() => null),
-    ]);
-  } catch (err) {
-    if (!routeStillActive(_adminRenderSeq)) return;
-    $("#admin-body").innerHTML = emptyState("加载失败: " + err.message);
-    return;
-  }
-  state.adminUsers = users;
-  const imaGroups = ((collector && collector.config && collector.config.groups) || [])
-    .filter((group) => group && group.id && group.enabled !== false && !String(group.id).startsWith("feishu-"));
-  const localGroups = (((localLibs && localLibs.libraries) || []) || [])
-    .map((lib) => ({
-      id: String(lib.group_id || ""),
-      name: String(lib.name || lib.slug || lib.group_id || ""),
-      enabled: Boolean(lib.enabled) && !lib.error,
-      local: true,
-    }))
-    .filter((group) => group.id && group.name && !group.id.startsWith("feishu-"));
-  state.imaKbGroups = imaGroups.concat(localGroups);
-  if (policy) {
-    state.inactivePolicy = policy;
-    _inactivePreview = {
-      marked_count: Number(policy.marked_count) || 0,
-      purge_count: Number(policy.purge_count) || 0,
-    };
-  }
-  const known = new Set(users.map((u) => u.id));
-  for (const id of [..._adminUsersSelected]) {
-    if (!known.has(id)) _adminUsersSelected.delete(id);
-  }
-  renderAdminUsers();
-}
-
-function adminUsersApplyFilter(filter) {
-  const q = $("#au-q");
-  if (q) state.adminUsersQ = q.value.trim();
-  if (filter) state.adminUsersFilter = filter;
-  renderAdminUsers();
-}
-
-async function adminSaveInactivePolicy() {
-  const nEl = $("#au-inactive-n");
-  const mEl = $("#au-inactive-m");
-  const btn = $("#au-inactive-save");
-  if (!nEl || !mEl || _inactivePolicySaving) return;
-  const n = Number(nEl.value);
-  const m = Number(mEl.value);
-  if (!Number.isInteger(n) || !Number.isInteger(m) || n < 0 || n > 3650 || m < 0 || m > 3650) {
-    flash("天数须在 0–3650", "error");
-    return;
-  }
-  const saved = inactivePolicySaved();
-  if (n === Number(saved.inactive_after_days) && m === Number(saved.inactive_purge_after_days)) return;
-  _inactivePolicySaving = true;
-  if (btn) btn.disabled = true;
-  try {
-    const seq = ++_inactivePreviewSeq;
-    const preview = await api(
-      `/api/admin/inactive-users-policy?inactive_after_days=${n}&inactive_purge_after_days=${m}`
-    );
-    if (seq !== _inactivePreviewSeq) return;
-    _inactivePreview = {
-      marked_count: Number(preview.marked_count) || 0,
-      purge_count: Number(preview.purge_count) || 0,
-    };
-    paintInactivePolicyHint();
-    if (
-      _inactivePreview.purge_count > 0 &&
-      !(await showConfirm(`下次扫描将删除 ${_inactivePreview.purge_count} 个未激活账号。确认按 ${n}+${m} 天保存？`))
-    ) {
-      return;
-    }
-    state.inactivePolicy = await api("/api/admin/inactive-users-policy", {
-      method: "PUT",
-      body: JSON.stringify({ inactive_after_days: n, inactive_purge_after_days: m }),
-    });
-    _inactivePolicyDraft = null;
-    flash("已保存未激活规则");
-    await loadAdminUsers();
-  } catch (err) {
-    flash(err.message, "error");
-  } finally {
-    _inactivePolicySaving = false;
-    adminInactivePolicySyncSave();
-  }
-}
-
-function renderAdminUsers() {
-  if (!routeStillActive(_adminRenderSeq)) return;
-  const body = $("#admin-body");
-  if (!body) return;
-  const users = state.adminUsers || [];
-  const filter = state.adminUsersFilter || "all";
-  const filtered = adminUsersFiltered();
-  const boundN = users.filter(userHasBoundChannel).length;
-  const adminN = users.filter((u) => u.is_admin).length;
-  const counts = {
-    all: users.length,
-    admin: adminN,
-    unbound: users.filter((u) => !userHasBoundChannel(u)).length,
-    "push-off": users.filter((u) => !u.notify_enabled).length,
-    inactive: users.filter((u) => u.inactive).length,
-  };
-  const tab = (key, label) =>
-    `<button class="settings-tab ${filter === key ? "active" : ""}" role="tab" aria-selected="${filter === key}" onclick="adminUsersApplyFilter('${key}')">${label} ${counts[key]}</button>`;
-  const emptyMsg = users.length
-    ? (filter === "inactive"
-      ? "没有未激活账号。领码后从未登录、没绑渠道、没订阅的才会出现。"
-      : "没有匹配的用户")
-    : "还没有注册用户";
-  const rows = filtered.map((u) => {
-    const self = state.user && u.id === state.user.id;
-    const pills = `${u.is_admin ? `<span class="user-pill">管理员</span>` : ""}${self ? `<span class="user-pill muted">本人</span>` : ""}${u.username_valid === false ? `<span class="user-pill warn">登录名不合规</span>` : ""}`;
-    const push = u.inactive
-      ? (u.days_until_purge == null
-        ? `<span class="status-warn">未激活</span>`
-        : `<span class="status-warn">未激活</span><span class="muted"> · ${Number(u.days_until_purge)} 天后删除</span>`)
-      : u.notify_enabled
-        ? `<span class="status-ok">开启</span>${u.dnd_enabled ? `<span class="muted"> · 免打扰</span>` : ""}`
-        : `<span class="status-fail">关闭</span>`;
-    return `<tr>
-      <td><input type="checkbox" class="au-check" data-id="${u.id}" ${_adminUsersSelected.has(u.id) ? "checked" : ""} onchange="adminUserToggleSelect(this)" aria-label="选择用户"></td>
-      <td>
-        <div class="user-name">
-          <strong>${escapeHtml(u.username)}</strong>
-          ${pills}
-        </div>
-      </td>
-      <td>${adminUserOriginHtml(u)}</td>
-      <td>${adminUserLoginHtml(u)}</td>
-      <td>${userChannelIconsHtml(u)}</td>
-      <td>${Number(u.subscription_count) || 0}</td>
-      <td>${push}</td>
-      <td>
-        <button class="btn-sm" onclick="adminOpenUser(${u.id})">管理</button>
-        <button class="btn-sm" onclick="adminOpenUser(${u.id}, 'push')">测试推送</button>
-      </td>
-    </tr>`;
-  }).join("");
-  body.innerHTML = `
-    <section class="section-panel">
-      <header class="section-head au-head">
-        <div>
-          <h2 class="section-title">用户管理</h2>
-          <p class="section-meta">${users.length} 人 · ${adminN} 管理员 · ${boundN} 已绑定渠道 · 未激活 ${counts.inactive} · ${escapeHtml(inactivePolicyRuleLabel())}</p>
-        </div>
-        <div class="search-bar au-search">
-          ${SEARCH_ICON}
-          <input id="au-q" type="search" placeholder="搜索用户名 / 来源 / 邀请码，回车" value="${escapeHtml(state.adminUsersQ || "")}" onkeydown="if(event.key==='Enter')adminUsersApplyFilter()">
-        </div>
-      </header>
-      <div class="settings-tabs" role="tablist" aria-label="用户筛选">
-        ${tab("all", "全部")}
-        ${tab("admin", "管理员")}
-        ${tab("unbound", "未绑定")}
-        ${tab("push-off", "推送关闭")}
-        ${tab("inactive", "未激活")}
-      </div>
-      <div class="toolbar admin-batch-bar" id="au-batch-bar" style="margin-top:10px;display:${_adminUsersSelected.size ? "flex" : "none"};align-items:center;gap:8px;flex-wrap:wrap">
-        <strong>已选 ${_adminUsersSelected.size} 人</strong>
-        <button type="button" class="btn-sm" onclick="adminUsersBatch('enable_notify')">开启推送</button>
-        <button type="button" class="btn-sm" onclick="adminUsersBatch('disable_notify')">关闭推送</button>
-        <button type="button" class="btn-sm danger" onclick="adminUsersBatch('delete')">删除</button>
-        <button type="button" class="btn-sm" onclick="adminUserClearSelect()">取消选择</button>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr>
-            <th scope="col" style="width:32px"><input type="checkbox" id="au-checkall" onchange="adminUserTogglePage(this)" aria-label="全选当前筛选"></th>
-            <th scope="col">用户</th>
-            <th scope="col">来源</th>
-            <th scope="col">登录</th>
-            <th scope="col">渠道</th>
-            <th scope="col">订阅</th>
-            <th scope="col">推送</th>
-            <th scope="col">操作</th>
-          </tr></thead>
-          <tbody>${rows || `<tr><td colspan="8" class="muted">${emptyMsg}</td></tr>`}</tbody>
-        </table>
-      </div>
-      <details class="au-policy" ${_auPolicyOpen ? "open" : ""}>
-        <summary>未激活清理规则<span class="muted">${escapeHtml(inactivePolicyHint(inactivePolicyDraft().inactive_after_days, inactivePolicyDraft().inactive_purge_after_days))}</span></summary>
-        <p class="section-meta">领码或网页注册后从未登录，且没有渠道、订阅和推送记录。</p>
-        <div class="rc-generate au-inactive-policy">
-          <label class="rc-field rc-field-num">
-            <span>列为未激活 <span class="cfg-unit">天</span></span>
-            <input id="au-inactive-n" class="form-control" type="number" min="0" max="3650" inputmode="numeric" value="${escapeHtml(String(inactivePolicyDraft().inactive_after_days ?? 90))}" oninput="adminInactivePolicySyncSave(true)" onkeydown="adminInactivePolicyKeydown(event)" aria-describedby="au-inactive-hint">
-          </label>
-          <label class="rc-field rc-field-num">
-            <span>之后删除 <span class="cfg-unit">天</span></span>
-            <input id="au-inactive-m" class="form-control" type="number" min="0" max="3650" inputmode="numeric" value="${escapeHtml(String(inactivePolicyDraft().inactive_purge_after_days ?? 30))}" oninput="adminInactivePolicySyncSave(true)" onkeydown="adminInactivePolicyKeydown(event)" aria-describedby="au-inactive-hint">
-          </label>
-          <div class="rc-field-submit">
-            <button type="button" class="btn-normal" id="au-inactive-save" onclick="adminSaveInactivePolicy()">保存</button>
-          </div>
-          <span class="muted rc-generate-hint" id="au-inactive-hint">${escapeHtml(inactivePolicyHint(inactivePolicyDraft().inactive_after_days, inactivePolicyDraft().inactive_purge_after_days))}</span>
-        </div>
-      </details>
-    </section>`;
-  const qEl = $("#au-q");
-  if (qEl) qEl.value = state.adminUsersQ || "";
-  const checkall = $("#au-checkall");
-  const boxes = [...document.querySelectorAll(".au-check")];
-  if (checkall) {
-    checkall.checked = boxes.length > 0 && boxes.every((c) => _adminUsersSelected.has(Number(c.dataset.id)));
-    checkall.indeterminate = boxes.some((c) => c.checked) && !checkall.checked;
-  }
-  const policy = body.querySelector("details.au-policy");
-  if (policy) {
-    policy.addEventListener("toggle", () => { _auPolicyOpen = policy.open; });
-  }
-  adminInactivePolicySyncSave();
-}
-
-function closeAdminModal() {
-  document.querySelectorAll(".modal-mask").forEach((el) => el.remove());
-}
-
-function adminOpenUser(userId, focus) {
-  const u = (state.adminUsers || []).find((row) => row.id === userId);
-  if (!u) {
-    flash("用户不存在或列表已过期", "error");
-    return;
-  }
-  const self = state.user && u.id === state.user.id;
-  const origin = escapeHtml(u.origin_label || "网页");
-  const loginHint = u.has_password ? "可网页登录" : "无密码，不能网页登录";
-  const lastSeen = u.last_login_at ? escapeHtml(fmtDbTime(u.last_login_at)) : "从未登录";
-  const kbGroups = (state.imaKbGroups || []).filter((group) => !String(group.id || "").startsWith("feishu-"));
-  const kbGranted = new Set(u.ima_kb_groups || []);
-  const kbSubscribed = new Set(u.ima_kb_subscribed || []);
-  const kbList = kbGroups.length
-    ? `<div id="um-kb" class="um-kb-list">${kbGroups.map((group) => {
-      const id = String(group.id || "");
-      const name = group.name || id;
-      const isSub = kbSubscribed.has(id);
-      return `<label class="um-kb-item" data-kb-name="${escapeHtml(name)}"${isSub ? ` data-kb-subscribed="1"` : ""}>
-          <input type="checkbox" data-kb-group="${escapeHtml(id)}"${kbGranted.has(id) ? " checked" : ""}>
-          <span>${escapeHtml(name)}</span>
-          ${group.local ? `<span class="muted">本地库${group.enabled === false ? " · 未启用" : ""}</span>` : ""}
-          ${isSub ? `<span class="muted">已订阅</span>` : ""}
-        </label>`;
-    }).join("")}</div>
-      <div class="toolbar">
-        <button class="btn-sm" onclick="adminSaveUserKnowledge(${u.id})">保存</button>
-      </div>`
-    : `<p class="muted">还没有配置研报库。</p>`;
-  closeAdminModal();
-  const mask = document.createElement("div");
-  mask.className = "modal-mask";
-  mask.innerHTML = `
-    <div class="modal-card user-modal" role="dialog" aria-modal="true" aria-labelledby="um-title">
-      <h3 id="um-title">管理用户 · ${escapeHtml(u.username)}</h3>
-      <p class="muted um-meta">${origin} · ${loginHint} · ${lastSeen}<br>ID ${u.id} · 订阅 ${Number(u.subscription_count) || 0} · 注册 ${escapeHtml(fmtDbTime(u.created_at))}</p>
-      <section class="um-block">
-        <h4>改名</h4>
-        ${u.username_valid === false ? `<p class="muted">当前登录名不合规，保存前请改成 6-30 位中文、字母、数字、下划线或连字符，须以中文或字母开头。</p>` : ""}
-        <label class="form-label">用户名
-          <div class="row">
-            <input id="um-name" class="form-control" maxlength="30" value="${escapeHtml(u.username)}" autocomplete="username">
-            <button class="btn-sm" onclick="adminSaveUsername(${u.id})">保存</button>
-          </div>
-        </label>
-      </section>
-      <section class="um-block">
-        <h4>密码</h4>
-        ${u.has_password ? "" : `<p class="muted">这个账号没有密码，不能网页登录。设了密码后才能用账号登录。</p>`}
-        <label class="form-label">${u.has_password ? "新密码" : "设置密码"}
-          <div class="row">
-            <input id="um-pass" class="form-control" type="password" minlength="6" placeholder="至少 6 位" autocomplete="new-password">
-            <button class="btn-sm" onclick="adminSavePassword(${u.id})">${u.has_password ? "重置" : "设置"}</button>
-          </div>
-        </label>
-      </section>
-      ${self ? "" : `<section class="um-block">
-        <h4>权限</h4>
-        <div class="toolbar">
-          <button class="btn-sm" onclick="adminToggleAdmin(${u.id}, ${!u.is_admin})">${u.is_admin ? "取消管理员" : "设为管理员"}</button>
-        </div>
-      </section>`}
-      ${u.is_admin ? "" : `<section class="um-block">
-        <h4>研报库</h4>
-        <p class="muted">勾选后即可阅读；若对方开了「匹配研报库」，每日更新后会按他的关键词推一条摘要。取消勾选立即看不到，也不会再推该库。</p>
-        ${kbList}
-      </section>`}
-      <section class="um-block">
-        <h4>测试推送</h4>
-        <label class="form-label">内容
-          <textarea id="um-push-msg" class="form-control" rows="2">这是一条测试推送</textarea>
-        </label>
-        <div class="toolbar">
-          <button class="btn-sm" id="um-push-send" onclick="adminSendTestPush(${u.id})">发送测试</button>
-        </div>
-        <p id="um-push-result" class="muted um-push-result" hidden></p>
-      </section>
-      ${self || u.is_admin ? "" : `<section class="um-block user-modal-danger">
-        <h4>删除</h4>
-        <p class="muted">${escapeHtml(adminDeleteImpact([u]))}。删除后不可恢复。</p>
-        <button class="btn-sm danger" onclick="adminDeleteUser(${u.id})">删除用户</button>
-      </section>`}
-      <div class="toolbar um-close">
-        <button class="btn-sm" onclick="closeAdminModal()">关闭</button>
-      </div>
-    </div>`;
-  mask.addEventListener("click", (e) => {
-    if (e.target === mask) mask.remove();
-  });
-  mask.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") mask.remove();
-  });
-  document.body.appendChild(mask);
-  const trigger = document.activeElement;
-  const first = focus === "push" ? $("#um-push-msg") : $("#um-name");
-  if (first) first.focus();
-  const observer = new MutationObserver(() => {
-    if (!document.body.contains(mask)) {
-      observer.disconnect();
-      if (trigger && trigger.isConnected) trigger.focus();
-    }
-  });
-  observer.observe(document.body, { childList: true });
-}
-
-async function adminSaveUserKnowledge(userId) {
-  const items = Array.from(document.querySelectorAll("#um-kb .um-kb-item"));
-  const groupIds = [];
-  const revoked = [];
-  for (const item of items) {
-    const input = item.querySelector("[data-kb-group]");
-    const groupId = String(input?.dataset.kbGroup || "").trim();
-    if (!groupId) continue;
-    if (input.checked) groupIds.push(groupId);
-    else if (item.dataset.kbSubscribed === "1") {
-      revoked.push(String(item.dataset.kbName || groupId).trim());
-    }
-  }
-  if (revoked.length && !(await showConfirm(`取消勾选后，对方会立刻看不到这些研报库：${revoked.join("、")}。确定保存？`))) return;
-  try {
-    await api(`/api/admin/users/${userId}/ima-kb`, {
-      method: "PUT",
-      body: JSON.stringify({ group_ids: groupIds }),
-    });
-    closeAdminModal();
-    flash("已保存");
-    loadAdminUsers();
-  } catch (err) {
-    flash(err.message, "error");
-  }
-}
-
-async function adminSaveUsername(userId) {
-  const input = $("#um-name");
-  const trimmed = (input ? input.value : "").trim();
-  const ruleErr = usernameRuleError(trimmed);
-  if (ruleErr) {
-    flash(ruleErr, "error");
-    return;
-  }
-  try {
-    await api(`/api/users/${userId}`, {
-      method: "PUT",
-      body: JSON.stringify({ username: trimmed }),
-    });
-    if (state.user && userId === state.user.id) {
-      state.user.username = trimmed;
-      renderSidebar(state.user);
-      renderTopbar(state.user);
-    }
-    closeAdminModal();
-    flash(`已重命名用户「${trimmed}」`);
-    loadAdminUsers();
-  } catch (err) {
-    flash(err.message, "error");
-  }
-}
-
-async function adminSavePassword(userId) {
-  const input = $("#um-pass");
-  const pw = input ? input.value : "";
-  if (pw.length < 6) {
-    flash("密码至少 6 位", "error");
-    return;
-  }
-  try {
-    await api(`/api/users/${userId}`, {
-      method: "PUT",
-      body: JSON.stringify({ password: pw }),
-    });
-    closeAdminModal();
-    flash("密码已重置");
-    loadAdminUsers();
-  } catch (err) {
-    flash(err.message, "error");
-  }
-}
-
-async function adminSendTestPush(userId) {
-  const btn = $("#um-push-send");
-  const msgEl = $("#um-push-msg");
-  const resultEl = $("#um-push-result");
-  const msg = ((msgEl && msgEl.value) || "").trim() || "这是一条测试推送";
-  if (btn) btn.disabled = true;
-  try {
-    const data = await api("/api/admin/test-push", {
-      method: "POST",
-      body: JSON.stringify({ user_id: userId, message: msg }),
-    });
-    const lines = (data.results || []).map((r) => {
-      const label = CHANNEL_LABELS[r.channel] || r.channel;
-      return r.ok ? `${label}：成功` : `${label}：失败：${r.error || ""}`;
-    });
-    if (resultEl) {
-      resultEl.hidden = false;
-      resultEl.textContent = lines.join("\n") || "没有返回渠道结果";
-    }
-    const failed = (data.results || []).some((r) => !r.ok);
-    flash(failed ? "测试推送部分失败" : "测试推送已发送", failed ? "error" : "success");
-  } catch (err) {
-    flash(err.message, "error");
-    if (resultEl) {
-      resultEl.hidden = false;
-      resultEl.textContent = err.message;
-    }
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-}
-
-async function adminDeleteUser(userId) {
-  const user = (state.adminUsers || []).find((u) => u.id === userId);
-  if (!user) {
-    flash("用户不存在或列表已过期", "error");
-    return;
-  }
-  if (user.is_admin) {
-    flash("不能删除管理员", "error");
-    return;
-  }
-  if (!(await showConfirm(`确认删除用户「${user.username}」？\n${adminDeleteImpact([user])}\n删除后不可恢复。`))) return;
-  try {
-    await api(`/api/users/${userId}`, { method: "DELETE" });
-    closeAdminModal();
-    flash(`已删除用户「${user ? user.username : userId}」`);
-    loadAdminUsers();
-  } catch (err) {
-    flash(err.message, "error");
-  }
-}
-
-async function adminToggleAdmin(userId, makeAdmin) {
-  const user = (state.adminUsers || []).find((u) => u.id === userId);
-  const name = user ? user.username : String(userId);
-  if (!(await showConfirm(makeAdmin ? `确认把「${name}」设为管理员？` : `确认取消「${name}」的管理员权限？`))) return;
-  try {
-    await api(`/api/users/${userId}`, {
-      method: "PUT",
-      body: JSON.stringify({ is_admin: makeAdmin }),
-    });
-    closeAdminModal();
-    flash(makeAdmin ? `已将「${name}」设为管理员` : `已取消「${name}」的管理员权限`);
-    loadAdminUsers();
-  } catch (err) {
-    flash(err.message, "error");
-  }
 }
 
 // ---------- 主题（深色模式）----------
@@ -15066,6 +5468,8 @@ function applyTheme() {
   // 若填强调蓝会出现一条与页面不符的蓝色条（详见 PWA 顶部蓝条问题）。
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.setAttribute("content", dark ? "#11141a" : "#f8f8fb");
+  const statusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+  if (statusBar) statusBar.setAttribute("content", dark ? "black-translucent" : "default");
   // 品牌符号（登录页 + topbar + 侧边栏）用融合版，深浅各一
   const logo = document.querySelector(".topbar-logo");
   if (logo) logo.src = dark ? "/logo-mark-dark.svg" : "/logo-mark.svg";
@@ -15175,198 +5579,6 @@ function isRoute(prefix) {
   return prefix.endsWith("/") ? path.startsWith(prefix) : path === prefix || path.startsWith(prefix + "/");
 }
 
-function renderNewsCenter(seq, articleId = "") {
-  clearNewsImageUrls();
-  stopNewsAutoLoad();
-  if (!routeStillActive(seq)) return;
-  if (articleId) return renderFinancialNewsArticle(Number(articleId), seq);
-  return renderFinancialNewsList(seq);
-}
-
-function newsListItemHtml(item) {
-  const thumbnail = item.has_image
-    ? `<img class="news-list-thumb" data-news-thumbnail="${item.id}" alt="" loading="lazy">`
-    : "";
-  return `<article class="news-list-item" data-news-id="${item.id}" tabindex="0" role="link" onclick="openNewsArticle(${item.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openNewsArticle(${item.id})}">
-    ${thumbnail}<div class="news-list-copy"><div class="news-list-meta"><span>${escapeHtml(item.source_name || "")}</span><time datetime="${escapeHtml(item.published_at || "")}">${escapeHtml(fmtPublished(item.published_at, true))}</time>${item.is_new ? '<span class="news-new-label">新</span>' : ""}</div>
-    <h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary || "暂无摘要")}</p></div>
-  </article>`;
-}
-
-function newsSourceFilterOptions() {
-  const selected = new Set(state.newsSources.filter((source) => source.selected).map((source) => String(source.id)));
-  return `<option value="">全部来源</option>${state.newsSources.filter((source) => selected.has(String(source.id))).map((source) => `<option value="${source.id}" ${String(state.newsFilterSourceId) === String(source.id) ? "selected" : ""}>${escapeHtml(source.name)}</option>`).join("")}`;
-}
-
-function renderNewsListShell(collectionEnabled = true) {
-  const main = $("#main");
-  if (!main) return;
-  main.innerHTML = `<section class="news-page" id="news-page">
-    <header class="news-page-head"><div><h2 class="section-title">财经新闻</h2><p class="section-meta">按媒体聚合的长文阅读，原文链接保留。</p></div><button type="button" class="btn-normal" onclick="openNewsSourcePicker()">我的来源</button></header>
-    ${collectionEnabled ? "" : '<div class="notice notice-warn">管理员已暂停财经新闻采集，历史文章仍可阅读。</div>'}
-    <div class="news-list-toolbar"><select id="news-source-filter" class="form-control" aria-label="新闻来源" onchange="state.newsFilterSourceId=this.value;loadFinancialNews(true,routeRenderSeq)">${newsSourceFilterOptions()}</select><div class="search-bar"><input id="news-query" type="search" placeholder="搜索标题或摘要" value="${escapeHtml(state.newsQuery)}" oninput="state.newsQuery=this.value;clearTimeout(window._newsSearchTimer);window._newsSearchTimer=setTimeout(()=>loadFinancialNews(true,routeRenderSeq),250)"></div></div>
-    <div id="news-list" class="news-list"><div class="admin-skeleton" aria-hidden="true"></div></div>
-    <div id="news-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>
-  </section>`;
-}
-
-async function renderFinancialNewsList(seq) {
-  setPageTitle("财经新闻");
-  clearNewsImageUrls();
-  state.newsItems = [];
-  state.newsOffset = 0;
-  state.newsHasMore = false;
-  renderNewsListShell(true);
-  try {
-    const sources = await api("/api/news/sources");
-    if (!routeStillActive(seq)) return;
-    state.newsSources = sources.items || [];
-    if (state.newsFilterSourceId && !state.newsSources.some((source) => source.selected && String(source.id) === String(state.newsFilterSourceId))) state.newsFilterSourceId = "";
-    renderNewsListShell(sources.collection_enabled !== false);
-    await loadFinancialNews(true, seq);
-  } catch (err) {
-    if (!routeStillActive(seq)) return;
-    const list = $("#news-list");
-    if (list) list.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="renderFinancialNewsList(routeRenderSeq)">重试</button></div>`);
-  }
-}
-
-async function loadFinancialNews(reset = false, seq = routeRenderSeq) {
-  const list = $("#news-list");
-  if (!list || !routeStillActive(seq)) return;
-  const requestSeq = ++state.newsRequestSeq;
-  if (reset) {
-    stopNewsAutoLoad();
-    state.newsItems = [];
-    state.newsOffset = 0;
-    list.innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
-  }
-  const params = new URLSearchParams({ limit: "30", offset: String(state.newsOffset) });
-  if (state.newsFilterSourceId) params.set("source_id", state.newsFilterSourceId);
-  if (state.newsQuery.trim()) params.set("q", state.newsQuery.trim());
-  try {
-    const data = await api(`/api/news?${params}`);
-    if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
-    const items = data.items || [];
-    state.newsItems = reset ? items : state.newsItems.concat(items);
-    state.newsOffset = data.next_offset || state.newsItems.length;
-    state.newsHasMore = !!data.has_more;
-    if (reset) {
-      list.innerHTML = state.newsItems.length ? items.map(newsListItemHtml).join("") : emptyState(state.newsSources.some((source) => source.selected) ? "没有符合条件的财经新闻" : "还没有选择新闻来源", `<div><button type="button" class="btn-normal" onclick="openNewsSourcePicker()">选择来源</button></div>`);
-    } else if (items.length) {
-      list.insertAdjacentHTML("beforeend", items.map(newsListItemHtml).join(""));
-    }
-    for (const item of items) {
-      const image = document.querySelector(`[data-news-thumbnail="${item.id}"]`);
-      if (image) loadNewsImageBlob(item.id, 0, image, seq);
-    }
-    if (state.newsItems.length) {
-      const seenAt = data.view_started_at;
-      await Promise.resolve();
-      if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
-      if (seenAt) api("/api/news/seen", { method: "POST", body: JSON.stringify({ view_started_at: seenAt }) }).catch(() => {});
-    }
-    startNewsAutoLoad(seq);
-  } catch (err) {
-    if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
-    list.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="loadFinancialNews(${reset},routeRenderSeq)">重试</button></div>`);
-  }
-}
-
-async function loadNewsImageBlob(articleId, index, image, seq = routeRenderSeq) {
-  try {
-    const blob = await apiBlob(`/api/news/${articleId}/images/${index}`);
-    if (!routeStillActive(seq) || !image || !document.body.contains(image)) return;
-    const url = URL.createObjectURL(blob);
-    state.newsImageUrls.add(url);
-    image.src = url;
-  } catch {
-    /* 单张图片失败不阻塞文章阅读 */
-  }
-}
-
-async function renderFinancialNewsArticle(articleId, seq) {
-  setPageTitle("财经新闻", true, "news", "返回财经新闻");
-  const main = $("#main");
-  if (!main) return;
-  main.innerHTML = `<article class="news-article-page"><div class="admin-skeleton" aria-hidden="true"></div></article>`;
-  try {
-    const article = await api(`/api/news/${articleId}`);
-    if (!routeStillActive(seq)) return;
-    main.innerHTML = `<article class="news-article-page"><header class="news-article-head"><div class="news-article-meta"><span>${escapeHtml(article.source_name || "")}</span><time datetime="${escapeHtml(article.published_at || "")}">${escapeHtml(fmtPublished(article.published_at, false))}</time></div><h1>${escapeHtml(article.title)}</h1>${article.author ? `<p class="section-meta">作者：${escapeHtml(article.author)}</p>` : ""}<a class="btn-ghost news-original-link" href="${escapeHtml(article.url)}" target="_blank" rel="noopener noreferrer nofollow">打开原文 ${EXTERNAL_LINK_ICON}</a></header><div class="news-article-body">${article.content_html || `<p>${escapeHtml(article.summary || "暂无正文")}</p>`}</div></article>`;
-    loadNewsImages(articleId, seq);
-  } catch (err) {
-    if (routeStillActive(seq)) main.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="renderFinancialNewsArticle(${articleId},routeRenderSeq)">重试</button></div>`);
-  }
-}
-
-async function loadNewsImages(articleId, seq = routeRenderSeq) {
-  const images = [...document.querySelectorAll("[data-news-image-index]")];
-  await Promise.all(images.map((image) => loadNewsImageBlob(articleId, Number(image.dataset.newsImageIndex), image, seq)));
-}
-
-function openNewsArticle(articleId) {
-  const id = Number(articleId);
-  if (Number.isInteger(id) && id > 0) go(`news/${id}`);
-}
-
-function newsSourcePickerRows(filter = "", selectedIds = null) {
-  const q = filter.trim().toLowerCase();
-  return state.newsSources.filter((source) => !q || source.name.toLowerCase().includes(q)).map((source) => `<label class="news-source-option"><input type="checkbox" value="${source.id}" ${(selectedIds ? selectedIds.has(Number(source.id)) : source.selected) ? "checked" : ""}><span>${escapeHtml(source.name)}</span>${source.enabled ? "" : '<em>管理员已暂停更新</em>'}</label>`).join("") || '<p class="muted">没有匹配的媒体</p>';
-}
-
-function openNewsSourcePicker() {
-  const newsSelectedIds = new Set(state.newsSources.filter((source) => source.selected).map((source) => Number(source.id)));
-  const mask = document.createElement("div");
-  mask.className = "modal-mask news-source-modal";
-  mask._newsSelectedIds = newsSelectedIds;
-  mask.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="news-source-picker-title"><h3 id="news-source-picker-title">我的来源</h3><input id="news-source-search" class="form-control" type="search" placeholder="搜索媒体"><div id="news-source-options" class="news-source-options">${newsSourcePickerRows("", newsSelectedIds)}</div><div class="toolbar"><button type="button" class="btn-normal" onclick="saveNewsSources(this.closest('.news-source-modal'))">保存</button><button type="button" class="btn-ghost" data-close>取消</button></div></div>`;
-  document.body.appendChild(mask);
-  const close = () => mask.remove();
-  const captureSelection = () => {
-    mask.querySelectorAll(".news-source-option input").forEach((input) => {
-      const id = Number(input.value);
-      if (input.checked) newsSelectedIds.add(id);
-      else newsSelectedIds.delete(id);
-    });
-  };
-  mask.addEventListener("click", (event) => { if (event.target === mask) close(); });
-  mask.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } });
-  mask.querySelector("[data-close]").addEventListener("click", close);
-  mask.querySelector("#news-source-search").addEventListener("input", (event) => {
-    captureSelection();
-    mask.querySelector("#news-source-options").innerHTML = newsSourcePickerRows(event.target.value, newsSelectedIds);
-  });
-  mask.querySelector("#news-source-search").focus();
-}
-
-async function saveNewsSources(mask) {
-  if (!mask) return;
-  const ids = (() => {
-    const selected = mask._newsSelectedIds || new Set();
-    mask.querySelectorAll(".news-source-option input").forEach((input) => {
-      const id = Number(input.value);
-      if (input.checked) selected.add(id);
-      else selected.delete(id);
-    });
-    return [...selected];
-  })();
-  const button = mask.querySelector("button.btn-normal");
-  if (button) button.disabled = true;
-  const seq = routeRenderSeq;
-  try {
-    await api("/api/me", { method: "PUT", body: JSON.stringify({ news_source_ids: ids }) });
-    if (!routeStillActive(seq)) return;
-    mask.remove();
-    state.newsFilterSourceId = "";
-    flash("新闻来源已保存");
-    await renderFinancialNewsList(seq);
-  } catch (err) {
-    flash(err.message, "error");
-    if (button) button.disabled = false;
-  }
-}
-
 function isSpaPath(pathname) {
   const first = String(pathname || "").replace(/^\/+/, "").split("/")[0] || "";
   return SPA_PREFIXES.has(first);
@@ -15377,6 +5589,590 @@ function go(path) {
   if (location.pathname + location.search !== url) history.pushState(null, "", url);
   router();
 }
+
+const {
+  clearNewsReaderState,
+  loadFinancialNews,
+  openNewsArticle,
+  openNewsSourcePicker,
+  queueNewsSearch,
+  renderFinancialNewsArticle,
+  renderFinancialNewsList,
+  renderNewsCenter,
+  saveNewsSources,
+  selectNewsSource,
+} = createNewsView({
+  $,
+  state,
+  api,
+  apiBlob,
+  routeStillActive,
+  currentRouteSeq: () => routeRenderSeq,
+  setPageTitle,
+  emptyState,
+  go,
+  flash,
+  escapeHtml,
+  trapFocus,
+  fmtPublished,
+  externalLinkIcon: EXTERNAL_LINK_ICON,
+});
+
+const {
+  clearImaPdfUrl,
+  openImaDocument,
+  renderKnowledge,
+  renderImaDocuments,
+  refreshKnowledge,
+  subscribeKnowledge,
+  unsubscribeKnowledge,
+  backFromImaReader,
+  openImaPdfNewTab,
+  downloadImaPdf,
+  loadImaDocumentsMore,
+  clearImaDocumentsFilter,
+  clearImaDocumentsFilters,
+  copyImaAbstract,
+  pickImaDay,
+  pickImaTag,
+  queueImaDocumentsSearch,
+  refreshImaDocuments,
+  selectImaDocumentGroup,
+  selectImaDocumentsTag,
+  submitImaDocumentsSearch,
+  toggleImaAbstract,
+  toggleImaDayPicker,
+  toggleImaTagMenu,
+  restoreImaListSnapshot,
+  stopImaDocumentsAutoLoad,
+  fmtImaDay,
+  imaDocumentReaderRoute,
+  replaceImaDocumentsRoute,
+} = createImaView({
+  $,
+  state,
+  api,
+  apiBlob,
+  flash,
+  escapeHtml,
+  emptyState,
+  go,
+  isRoute,
+  isStandalonePwa,
+  normalizeRoute,
+  routePath,
+  routeQuery,
+  routeStillActive,
+  sessionOwnerStillActive,
+  currentRouteSeq: () => routeRenderSeq,
+  bumpRouteSeq: () => ++routeRenderSeq,
+  currentImaReaderSeq: () => _imaReaderSeq,
+  bumpImaReaderSeq: () => ++_imaReaderSeq,
+  setPageTitle,
+  imaMountState,
+  fmtCacheBytes,
+  loadFeishuTimeline,
+  feishuSourceDisplay,
+  feishuSourcePillsHtml,
+  resetFeishuTimelineMedia,
+  userKeywordSet,
+  isReportWatchableTag,
+  SEARCH_ICON,
+  REFRESH_ICON,
+  X_ICON,
+  EXTERNAL_LINK_ICON,
+});
+
+
+let pushSettingsView;
+const feishuPersonalView = createFeishuPersonalView({
+  $,
+  state,
+  api,
+  currentRouteSeq: () => routeRenderSeq,
+  routeStillActive,
+  sessionOwnerStillActive,
+  flash,
+  escapeHtml,
+  imaMountState,
+  feishuChannelBound: (user) => pushSettingsView.feishuChannelBound(user),
+  startSettingsPoll: () => pushSettingsView.startSettingsPoll(),
+  reloadSettings: (routeSeq) => pushSettingsView.reloadSettings(routeSeq),
+  switchSettingsTab: (name) => pushSettingsView.switchSettingsTab(name),
+  userKeywordSet,
+  isReportWatchableTag,
+  KEYWORDS_MAX_COUNT,
+  CHANNEL_ICONS,
+});
+const {
+  fsPersonalState,
+  stopFeishuPersonalPoll,
+  feishuPersonalHtml,
+  pushChannelsHtml,
+  webPushSupported,
+  renderBindResult,
+  startFeishuPersonal,
+  cancelFeishuPersonal,
+  refreshFeishuBindCode,
+  openBindGuide,
+  savePushChannels,
+  saveNotify,
+  saveDailyReport,
+  saveTranslateTwitter,
+  toggleDnd,
+  saveDnd,
+  saveCustomTgBot,
+  unbindChannel,
+  saveWecomWebhook,
+  saveBarkKey,
+  enableWebPush,
+  disableWebPush,
+  saveKeywords,
+  saveKeywordsMatchReports,
+  toggleReportKeyword,
+  saveLlm,
+  loadLlmModels,
+  savePassword,
+  genBindCode,
+} = feishuPersonalView;
+
+pushSettingsView = createPushSettingsView({
+  $,
+  state,
+  api,
+  currentRouteSeq: () => routeRenderSeq,
+  routeStillActive,
+  imaMountState,
+  flash,
+  escapeHtml,
+  emptyState,
+  go,
+  isRoute,
+  setPageTitle,
+  CHANNEL_ICONS,
+  PLATFORM_LABELS,
+  SEARCH_ICON,
+  avatarHtml,
+  feishuPersonalView,
+  feishuPersonalHtml,
+  pushChannelsHtml,
+  webPushSupported,
+  toggleDnd,
+});
+const {
+  stopSettingsPoll,
+  startSettingsPoll,
+  reloadSettings,
+  feishuChannelBound,
+  renderSettings,
+  switchSettingsTab,
+  filterKolImageSettings,
+  toggleKolImages,
+  loadKolImageSettings,
+} = pushSettingsView;
+
+const {
+  loadAdminCodes,
+  adminCodesBatch,
+  adminCodesClearSelect,
+  adminCodesCopySelected,
+  adminCodesNoteInput,
+  adminCodesPreset,
+  adminCodesToggle,
+  adminCodesToggleBatch,
+  adminCodesTogglePage,
+  adminGenerateCodes,
+  adminRevokeBatch,
+  adminRevokeCode,
+  searchAdminCodes,
+  selectAdminCodeFilter,
+  clearAdminCodesResult,
+  copyText,
+} = createAdminCodesView({
+  showConfirm,
+  $,
+  state,
+  api,
+  flash,
+  escapeHtml,
+  routeStillActive,
+  SEARCH_ICON,
+  fmtDbTime,
+  parseDbUtcMs,
+  currentAdminSeq: () => _adminRenderSeq,
+});
+
+const {
+  loadAdminNews,
+  loadAdminPosts,
+  selectAdminNewsSource,
+  saveAdminNewsSettings,
+  refreshAllAdminNews,
+  refreshAdminNewsFeed,
+  toggleAdminNewsSource,
+  toggleAdminNewsFeed,
+  archiveAdminNewsSource,
+  restoreAdminNewsSource,
+  archiveAdminNewsFeed,
+  restoreAdminNewsFeed,
+  openNewsSourceModal,
+  openNewsFeedModal,
+  updateAdminNewsQuery,
+  updateAdminNewsStatus,
+  updateAdminNewsArchived,
+  adminFilterPosts,
+  adminPostsLoadMore,
+  adminTogglePost,
+  adminDeletePost,
+  adminSetPostHidden,
+} = createAdminNewsView({
+  $,
+  state,
+  api,
+  flash,
+  escapeHtml,
+  routeStillActive,
+  currentRouteSeq: () => routeRenderSeq,
+  currentAdminSeq: () => _adminRenderSeq,
+  stopStatsTimer,
+  statsTabsHtml,
+  emptyState,
+  renderSidebar,
+  renderTopbar,
+  renderBottomNav,
+  trapFocus,
+  REFRESH_ICON,
+  PLUS_ICON,
+  PLATFORM_LABELS,
+});
+
+const {
+  loadAdminUsers,
+  loadAdminRequests,
+  adminApproveRequest,
+  adminRejectRequest,
+  adminUsersApplyFilter,
+  adminUsersBatch,
+  adminUserToggleSelect,
+  adminUserTogglePage,
+  adminUserClearSelect,
+  adminOpenUser,
+  adminSaveUserKnowledge,
+  adminSaveUsername,
+  adminSavePassword,
+  adminSendTestPush,
+  adminDeleteUser,
+  adminToggleAdmin,
+  adminSaveInactivePolicy,
+  adminInactivePolicySyncSave,
+  adminInactivePolicyKeydown,
+  closeAdminModal,
+} = createAdminUsersView({
+  showConfirm,
+  $,
+  state,
+  api,
+  flash,
+  escapeHtml,
+  routeStillActive,
+  currentAdminSeq: () => _adminRenderSeq,
+  emptyState,
+  SEARCH_ICON,
+  fmtDbTime,
+  trapFocus,
+  renderSidebar,
+  renderTopbar,
+  USER_CHANNEL_KEYS,
+  CHANNEL_LABELS,
+  CHANNEL_ICONS,
+  PLATFORM_LABELS,
+  usernameRuleError,
+});
+
+const {
+  loadAdminKols,
+  loadAdminVocab,
+  switchAdminKolsPlatform,
+  adminKolsApplyFilter,
+  adminKolsClearFilter,
+  adminKolsPage,
+  adminKolToggleSelect,
+  adminKolTogglePage,
+  adminKolClearSelect,
+  adminKolBatch,
+  adminKolBatchCategory,
+  adminBatchAddKols,
+  adminBatchLinesHint,
+  adminToggleKol,
+  adminTogglePriority,
+  adminToggleSecondary,
+  adminDeleteKol,
+  adminEditKol,
+  saveKolEdit,
+  adminAddCategory,
+  adminRenameCategory,
+  adminDeleteCategory,
+  adminSaveStockNames,
+  adminSaveTags,
+  adminMaintainTags,
+  adminBackfillTags,
+  adminSetTier,
+  adminBatchSystemToggle,
+  adminKolWebhook,
+  adminKolWebhookToggle,
+  adminKolWebhookRegenerate,
+  adminKolWebhookSaveSecret,
+  adminEditKolKeywords,
+  saveKolKeywords,
+  adminViewKolBlock,
+  adminMxTagAutoSave,
+  adminMxTagAutoAddSpecial,
+  adminMxTagAutoRemoveSpecial,
+  adminMxTagCancel,
+  adminMxTagOpenRunModal,
+  adminMxTagStartRun,
+  adminMxTagTest,
+  adminOpenTagReviewModal,
+  closeTagReviewModal,
+  toggleTagReviewMsg,
+  adminTagReviewModalReview,
+  adminTagReviewSelAll,
+  adminTagReviewSelChange,
+  adminReviewTag,
+  adminReviewTagsBatch,
+  adminReviewAliasCandidate,
+  adminTagDetailAddTag,
+  adminTagDetailRemoveTag,
+} = createAdminKolsView({
+  $,
+  state,
+  api,
+  flash,
+  escapeHtml,
+  routeStillActive,
+  currentAdminSeq: () => _adminRenderSeq,
+  emptyState,
+  trapFocus,
+  PLATFORM_LABELS,
+  PLATFORM_TABS,
+  platformTabHTML,
+  routeQuery,
+  fmtDbTime,
+  fmtPublished,
+  showConfirm,
+  copyText,
+});
+
+const {
+  runStorageConsistency,
+  runStorageDedup,
+  loadStorageHealth,
+  saveStorageAlerts,
+  refreshImaStorage,
+  backupImaStorage,
+  loadProxyAdmin,
+  syncProxyRouteInputs,
+  syncProxyPoolForm,
+  saveProxyRoutes,
+  createProxyPool,
+  importProxyPool,
+  extractProxyPool,
+  deleteProxyPool,
+  deleteProxyNode,
+  testProxyNode,
+  loadAdminBackup,
+  saveBackupWebDAV,
+  testBackupWebDAV,
+  backupDownload,
+  backupRestoreWebDAV,
+  backupRestoreUpload,
+} = createAdminInfraView({
+  showConfirm,
+  $,
+  state,
+  api,
+  flash,
+  escapeHtml,
+  routeStillActive,
+  currentRouteSeq: () => routeRenderSeq,
+  currentAdminSeq: () => _adminRenderSeq,
+  sessionOwnerStillActive,
+  imaMountState,
+  fmtTs,
+  imaStoragePanelHtml,
+  logout,
+  PLATFORM_LABELS,
+});
+
+const {
+  initImaMountState,
+  imaCollectorHasUnsaved,
+  renderImaMountGroups,
+  renderImaSelectedGroup,
+  renderImaFolderTree,
+  renderImaGroupAcl,
+  renderImaCollectorDirtyState,
+  discardImaCollectorChanges,
+  selectImaMountGroup,
+  setImaGroupInterval,
+  toggleImaFolderPanel,
+  toggleImaFolderExpand,
+  toggleImaFolder,
+  retryImaFolderLoad,
+  discoverImaGroups,
+  filterAclSuggest,
+  onAclSearchKey,
+  toggleImaAclExpanded,
+  retryImaGroupAcl,
+  saveImaCollector,
+  triggerImaCollector,
+  saveImaCredentials,
+  stopImaProgressPoll,
+  applyImaCollectorProgress,
+  startImaProgressPoll,
+  imaCollectorStatusText,
+  imaGroupDiscoveryStatusText,
+  imaCollectorProgressHtml,
+  imaMountGroup,
+  imaGroupIntervalSeconds,
+  fetchAclCandidateUsers,
+  aclPickerHtml,
+  addAclUser,
+  removeAclUser,
+  imaCollectorFormSnapshot,
+  imaCollectorFormRevision,
+  rememberImaCollectorDraft,
+  clearImaCollectorDraft,
+  restoreImaCollectorOwnerToken,
+  imaSafeError,
+} = createAdminImaCollectorView({
+  $,
+  state,
+  api,
+  flash,
+  escapeHtml,
+  emptyState,
+  routeStillActive,
+  sessionOwnerStillActive,
+  currentRouteSeq: () => routeRenderSeq,
+  bumpRouteSeq: () => ++routeRenderSeq,
+  currentAdminSeq: () => _adminRenderSeq,
+  imaMountState,
+  imaCollectorPureCache,
+  reloadAdminSettingsPage,
+});
+
+
+const {
+  loadAdminStats,
+  loadAdminDashboard,
+  loadAdminAudit,
+  loadAdminLogs,
+  loadAdminErrorLogs,
+  loadAdminSysLogsPanel,
+  adminFilterLogs,
+  stopSysLogsTimer,
+  renderStatsData,
+  openAdminKolFromHealth,
+  setPlazaSourceMode,
+} = createAdminDashboardView({
+  $,
+  state,
+  api,
+  flash,
+  escapeHtml,
+  routeStillActive,
+  currentAdminSeq: () => _adminRenderSeq,
+  emptyState,
+  statsTabsHtml,
+  switchStatsTab,
+  statsTabFromHash,
+  startDashboardLiveTimer,
+  stopStatsTimer,
+  fmtTs,
+  fmtDbTime,
+  parseDbUtcMs,
+  PLATFORM_LABELS,
+  CHANNEL_LABELS,
+  imaMountState,
+  sessionOwnerStillActive,
+  imaCollectorStatusText,
+  imaGroupDiscoveryStatusText,
+  go,
+  nextStatsLoadSeq: () => ++_adminStatsLoadSeq,
+  currentStatsLoadSeq: () => _adminStatsLoadSeq,
+  getStatsSnapshot: () => _lastAdminStatsSnapshot,
+  setStatsSnapshot: (s) => { _lastAdminStatsSnapshot = s; },
+  cookieRepairItems,
+  cookieRepairBanner,
+  cookieUpdatedLabel,
+  setPageTitle,
+  STALE_KOL_HOURS,
+  STALE_KOL_LIMIT,
+  PLATFORM_ICONS,
+  fmtCacheBytes,
+  loadAdminNews,
+  replaceRoute,
+  imaCollectorFormSnapshot,
+  rememberImaCollectorDraft,
+  imaCollectorFormRevision,
+  rateBar,
+  currentRouteSeq: () => routeRenderSeq,
+});
+
+const {
+  loadAdminKnowledge,
+  switchKnowledgeSettingsTab,
+  onKnowledgeTabsKey,
+} = createAdminKnowledgeView({
+  $,
+  state,
+  api,
+  flash,
+  escapeHtml,
+  emptyState,
+  routeStillActive,
+  currentRouteSeq: () => routeRenderSeq,
+  currentAdminSeq: () => _adminRenderSeq,
+  routeQuery,
+  setPageTitle,
+  imaMountState,
+  imaCollectorPureCache,
+  imaStoragePanelHtml,
+  fmtCacheBytes,
+  imaCollectorHasUnsaved,
+  imaCollectorFormSnapshot,
+  rememberImaCollectorDraft,
+  initImaMountState,
+  renderImaMountGroups,
+  renderImaGroupAcl,
+  imaGroupIntervalSeconds,
+  imaMountGroup,
+  restoreImaCollectorOwnerToken,
+  clearImaCollectorDraft,
+  startImaProgressPoll,
+  stopImaProgressPoll,
+  applyImaCollectorProgress,
+  imaCollectorFormRevision,
+  imaCollectorStatusText,
+  imaGroupDiscoveryStatusText,
+  imaCollectorProgressHtml,
+  cookieUpdatedLabel,
+  stopStatsTimer,
+  renderStatsData,
+  startDashboardLiveTimer,
+  loadLocalLibraries,
+  loadCiccStatus,
+  startCiccPoll,
+  stopCiccPoll,
+  loadStorageHealth,
+  loadFeishuDocumentSources,
+  nextStatsLoadSeq: () => ++_adminStatsLoadSeq,
+  currentStatsLoadSeq: () => _adminStatsLoadSeq,
+  getStatsSnapshot: () => _lastAdminStatsSnapshot,
+  setStatsSnapshot: (s) => { _lastAdminStatsSnapshot = s; },
+});
+
 
 function replaceRoute(path) {
   const url = normalizeRoute(path);
@@ -16392,6 +7188,579 @@ async function viewAiPrompt(logId) {
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => { });
 }
+
+function selectFeishuSource(button) {
+  return button.dataset.sourceTarget === "knowledge"
+    ? selectImaDocumentGroup(button.dataset.group)
+    : selectFeishuTimelineSource(button.dataset.group);
+}
+
+function selectPlatformTab(button) {
+  return button.dataset.platformTarget === "admin"
+    ? switchAdminKolsPlatform(button.dataset.platform)
+    : switchPlatform(button.dataset.platform);
+}
+
+function reloadTimelineRail() {
+  return loadTimelineRail(routeRenderSeq);
+}
+
+function reloadTimeline() {
+  return loadTimeline(true, routeRenderSeq);
+}
+
+function runSearch() {
+  return doSearch(routeRenderSeq);
+}
+
+function reloadKolImageSettings() {
+  return loadKolImageSettings(routeRenderSeq);
+}
+
+
+// ---------- MX 数据源管理（数据源页 st-mx 面板；由 switchStatsTab('mx') 触发加载） ----------
+async function loadMxAdmin() {
+  const box = $("#st-mx");
+  if (!box) return;
+  try {
+    // Load MX config
+    const config = await api("/api/admin/sources/mx");
+    $("#mx-enabled").checked = config.enabled;
+    $("#mx-token").value = config.token || "";
+    $("#mx-api-base").value = config.api_base || "https://mx.2026.naaifu.cn/business-api/5";
+    $("#mx-ws-url").value = config.ws_url || "wss://mx.2026.naaifu.cn/business-api/5";
+    $("#mx-ws-path").value = config.ws_path || "/socket.io";
+    $("#mx-ws-namespace").value = config.ws_namespace || "/msg";
+    $("#mx-ws-enabled").checked = config.ws_enabled;
+    $("#mx-page-size").value = config.page_size || 30;
+    $("#mx-max-pages").value = config.max_history_pages || 100;
+    updateMxTokenUpdatedLabel(config);
+
+    // Load rooms
+    loadMxRooms();
+    refreshMxWsStatus();
+
+    // Add event listeners for search/filter
+    const qInput = $("#mx-rooms-q");
+    const enabledOnly = $("#mx-rooms-enabled-only");
+    if (qInput) {
+      let searchTimeout = null;
+      qInput.oninput = () => {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(() => loadMxRooms(), 300);
+      };
+    }
+    if (enabledOnly) enabledOnly.onchange = () => loadMxRooms();
+
+  } catch (err) {
+    box.innerHTML = `<p class="muted">${escapeHtml(err.message || "加载 MX 配置失败")}</p>
+      <div class="toolbar"><button type="button" class="btn-ghost" onclick="loadMxAdmin()">重试</button></div>`;
+  }
+}
+
+async function saveMxConfig() {
+  const btn = $("#mx-save-btn");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    // Parse numbers with defaults, ensure minimum values
+    const page_size = Math.max(1, Number($("#mx-page-size").value) || 30);
+    const max_history_pages = Math.max(1, Number($("#mx-max-pages").value) || 100);
+
+    const payload = {
+      enabled: $("#mx-enabled").checked,
+      token: $("#mx-token").value.trim(),
+      api_base: $("#mx-api-base").value.trim() || "https://mx.2026.naaifu.cn/business-api/5",
+      ws_url: $("#mx-ws-url").value.trim() || "wss://mx.2026.naaifu.cn/business-api/5",
+      ws_path: $("#mx-ws-path").value.trim() || "/socket.io",
+      ws_namespace: $("#mx-ws-namespace").value.trim() || "/msg",
+      ws_enabled: $("#mx-ws-enabled").checked,
+      page_size,
+      max_history_pages,
+    };
+    console.log("Saving MX config payload:", payload);
+
+    await api("/api/admin/sources/mx", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    flash("MX配置已保存");
+    try {
+      updateMxTokenUpdatedLabel(await api("/api/admin/sources/mx"));
+    } catch {}
+    refreshMxWsStatus();
+  } catch (err) {
+    flash(err.message || "保存失败", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function updateMxTokenUpdatedLabel(config) {
+  const el = $("#mx-token-updated");
+  if (!el) return;
+  if (config.token) {
+    el.textContent = config.token_updated_at
+      ? `Token 更新于 ${fmtTs(config.token_updated_at)}`
+      : "Token 更新时间：暂无记录（Token 可能由环境变量提供）";
+    el.style.display = "";
+  } else {
+    el.style.display = "none";
+  }
+}
+
+async function refreshMxWsStatus() {
+  const el = $("#mx-ws-status");
+  if (!el) return;
+  try {
+    const s = await api("/api/admin/sources/mx/ws-status");
+    const last = s.last_message_at ? new Date(s.last_message_at).toLocaleString() : "从未收到";
+    const detail = s.detail ? `（${s.detail}）` : "";
+    el.innerHTML = `<span>WebSocket 状态：${s.connected ? "✅ 已连接" : "❌ 未连接"}，最近收到消息：${escapeHtml(last)}${escapeHtml(detail)}</span>`;
+    renderMxApiStatus(s.login_report);
+  } catch (err) {
+    el.textContent = `WebSocket 状态：获取失败（${err.message || "未知错误"}）`;
+  }
+}
+
+function renderMxApiStatus(report) {
+  const box = $("#mx-api-status");
+  if (!box) return;
+  if (!report || !Array.isArray(report.steps) || !report.steps.length) {
+    box.textContent = "接口状态：尚无会话记录（等待运行时段到点系统自动 MX 平台登录，或点击「登录」手动执行）";
+    return;
+  }
+  const rows = report.steps.map((s) => {
+    const mark = s.ok ? "✅" : "❌";
+    const ms = Number.isFinite(s.ms) ? `（${s.ms}ms）` : "";
+    return `<li>${mark} ${escapeHtml(s.name)}${ms}：${escapeHtml(s.detail || "")}</li>`;
+  }).join("");
+  const head = report.ok ? "✅ 全部成功" : "❌ 存在失败项";
+  const source = report.source === "auto" ? "系统自动登录" : "管理员手动登录";
+  box.innerHTML = `<details><summary>接口状态（${escapeHtml(report.time || "")}，${source}）：${head}</summary><ul>${rows}</ul></details>`;
+}
+
+async function mxSessionLogin() {
+  const btn = $("#mx-login-btn");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  if ($("#mx-logout-btn")) $("#mx-logout-btn").disabled = true;
+  try {
+    const result = await api("/api/admin/sources/mx/session/login", { method: "POST" });
+    renderMxApiStatus(result.report);
+    flash(result.ok ? "登录成功：启动序列、房间同步与 WS 均正常" : "登录完成，存在失败项（见接口状态）", result.ok ? "success" : "error");
+  } catch (err) {
+    flash(err.message || "登录失败", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+    if ($("#mx-logout-btn")) $("#mx-logout-btn").disabled = false;
+    refreshMxWsStatus();
+    setTimeout(refreshMxWsStatus, 2500);
+  }
+}
+
+async function mxSessionLogout() {
+  const btn = $("#mx-logout-btn");
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    const res = await api("/api/admin/sources/mx/ws/disconnect", { method: "POST" });
+    flash(res.message || "已退出 MX 会话");
+  } catch (err) {
+    flash(err.message || "退出失败", "error");
+  } finally {
+    if (btn) btn.disabled = false;
+    refreshMxWsStatus();
+  }
+}
+
+async function loadMxRooms() {
+  const listBox = $("#mx-rooms-list");
+  if (!listBox) return;
+  try {
+    const q = ($("#mx-rooms-q")?.value || "").toLowerCase();
+    const enabledOnly = $("#mx-rooms-enabled-only")?.checked;
+    const result = await api(`/api/admin/sources/mx/rooms?search=${encodeURIComponent(q)}&enabled_only=${enabledOnly ? "1" : "0"}`);
+    const rooms = result.rooms || [];
+    if (!rooms.length) {
+      listBox.innerHTML = `<p class="muted">暂无房间，请先同步</p>`;
+      return;
+    }
+    listBox.innerHTML = `<div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">房间</th><th scope="col">今日消息</th><th scope="col">最近更新</th><th scope="col">已启用</th><th scope="col">广场显示</th><th scope="col">订阅数</th><th scope="col">操作</th></tr></thead>
+        <tbody>
+          ${rooms.map((r) => `<tr>
+            <td>
+              <div class="kol-row-main">
+                ${avatarHtml(r.title, r.avatar)}
+                <div>
+                  <div class="kol-name">${escapeHtml(r.title)}</div>
+                  ${r.teaname ? `<div class="muted" style="font-size:12px">${escapeHtml(r.teaname)}</div>` : ""}
+                </div>
+              </div>
+            </td>
+            <td>${Number(r.message_today) || 0}</td>
+            <td>${r.msgtime ? escapeHtml(r.msgtime) : "-"}</td>
+            <td>${r.enabled ? "✅" : "❌"}</td>
+            <td>${r.show_in_plaza ? "✅" : "❌"}</td>
+            <td>${Number(r.subscriber_count) || 0}</td>
+	            <td>
+	              <div class="toolbar">
+	                <button type="button" class="btn-ghost" onclick="updateMxRoom(${r.id}, { enabled: !${r.enabled} })">${r.enabled ? "禁用" : "启用"}</button>
+	                <button type="button" class="btn-ghost" onclick="updateMxRoom(${r.id}, { show_in_plaza: !${r.show_in_plaza} })">${r.show_in_plaza ? "隐藏广场" : "显示广场"}</button>
+	                <button type="button" class="btn-ghost" onclick="pullMxRoomHistory(${r.id})">拉取历史消息</button>
+	              </div>
+	            </td>
+          </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+  } catch (err) {
+    listBox.innerHTML = `<p class="muted">${escapeHtml(err.message || "加载房间失败")}</p>
+      <div class="toolbar"><button type="button" class="btn-ghost" onclick="loadMxRooms()">重试</button></div>`;
+  }
+}
+
+async function updateMxRoom(roomId, body) {
+  try {
+    await api(`/api/admin/sources/mx/rooms/${roomId}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+    flash("房间已更新");
+    loadMxRooms();
+  } catch (err) {
+    flash(err.message || "更新失败", "error");
+  }
+}
+
+async function pullMxRoomHistory(roomId) {
+  try {
+    await api(`/api/admin/sources/mx/rooms/${roomId}/pull-history`, {
+      method: "POST",
+    });
+    flash("历史消息拉取已触发");
+  } catch (err) {
+    flash(err.message || "拉取历史消息失败", "error");
+  }
+}
+
+function mxAutoPeriodInputs(p) {
+  const q = p || {};
+  return `
+    <input type="text" class="form-control mx-auto-name" style="width:150px" placeholder="名称（可选）" maxlength="30" value="${escapeHtml(q.name || "")}">
+    <input type="time" class="form-control mx-auto-start" style="width:auto" value="${escapeHtml(q.start || "00:00")}" aria-label="开始时间">
+    <span>–</span>
+    <input type="time" class="form-control mx-auto-end" style="width:auto" value="${escapeHtml(q.end || "23:59")}" aria-label="结束时间">
+    <span class="nowrap">新消息达</span>
+    <input type="number" class="form-control mx-auto-threshold" style="width:90px" min="1" step="1" value="${Number(q.threshold) || 50}" aria-label="触发条数">
+    <span class="nowrap">条 / 间隔</span>
+    <input type="number" class="form-control mx-auto-interval" style="width:90px" min="1" step="1" value="${Number(q.interval_minutes) || 30}" aria-label="间隔分钟">
+    <span class="nowrap">分钟也触发</span>`;
+}
+
+const INLINE_HANDLERS = {
+  addFeishuDocumentSource,
+  adminAddCategory,
+  adminApproveRequest,
+  adminBackfillTags,
+  adminBatchAddKols,
+  adminBatchLinesHint,
+  adminCodesBatch,
+  adminCodesClearSelect,
+  adminCodesCopySelected,
+  adminCodesNoteInput,
+  adminCodesPreset,
+  adminCodesToggle,
+  adminCodesToggleBatch,
+  adminCodesTogglePage,
+  adminDeleteCategory,
+  adminDeleteKol,
+  adminDeleteKolFromHome,
+  adminDeleteUser,
+  adminEditKol,
+  adminFilterLogs,
+  adminFilterPosts,
+  adminGenerateCodes,
+  adminInactivePolicyKeydown,
+  adminInactivePolicySyncSave,
+  adminKolBatch,
+  adminKolBatchCategory,
+  adminKolClearSelect,
+  adminKolTogglePage,
+  adminKolToggleSelect,
+  adminKolsApplyFilter,
+  adminKolsClearFilter,
+  adminKolsPage,
+  adminMaintainTags,
+  adminOpenUser,
+  adminPostsLoadMore,
+  adminRejectRequest,
+  adminRenameCategory,
+  adminRevokeBatch,
+  adminRevokeCode,
+  adminSaveInactivePolicy,
+  adminSavePassword,
+  adminSaveStockNames,
+  adminSaveTags,
+  adminSaveUserKnowledge,
+  adminSaveUsername,
+  adminSendTestPush,
+  adminToggleAdmin,
+  adminToggleKol,
+  adminTogglePost,
+  adminTogglePriority,
+  adminToggleSecondary,
+  adminUserClearSelect,
+  adminUserTogglePage,
+  adminUserToggleSelect,
+  adminUsersApplyFilter,
+  adminUsersBatch,
+  applyFeishuTimelineUpdate,
+  archiveAdminNewsFeed,
+  archiveAdminNewsSource,
+  authorizeFeishuDocuments,
+  backFromImaReader,
+  backupDownload,
+  backupImaStorage,
+  backupRestoreUpload,
+  backupRestoreWebDAV,
+  cancelFeishuPersonal,
+  clearAdminCodesResult,
+  clearImaDocumentsFilter,
+  clearImaDocumentsFilters,
+  clearSavedCookie,
+  closeAdminModal,
+  closeLightbox,
+  copyImaAbstract,
+  copyText,
+  createProxyPool,
+  cycleTheme,
+  deleteProxyNode,
+  deleteProxyPool,
+  disableWebPush,
+  discardImaCollectorChanges,
+  discoverImaGroups,
+  downloadFeishuTimelineAsset,
+  enableWebPush,
+  extractProxyPool,
+  filterAclSuggest,
+  filterKolImageSettings,
+  genBindCode,
+  go,
+  homePickMobilePlatform,
+  homeResetFilters,
+  homeSearch,
+  homeToggleFilter,
+  imgOnError,
+  importProxyPool,
+  jumpFeishuTimelineDay,
+  jumpFeishuTimelineLatest,
+  lightboxStep,
+  loadAdminDashboard,
+  loadAdminErrorLogs,
+  loadAdminKnowledge,
+  loadAdminNews,
+  loadAdminStats,
+  loadAdminSysLogsPanel,
+  loadCiccStatus,
+  loadFeishuDocumentSources,
+  loadFinancialNews,
+  loadImaDocumentsMore,
+  loadLlmModels,
+  loadMoreFeishuTimeline,
+  loadProxyAdmin,
+  logout,
+  onAclSearchKey,
+  onAskLinkInput,
+  onKnowledgeTabsKey,
+  openAdminKolFromHealth,
+  openBindGuide,
+  openImaDocument,
+  openImaPdfNewTab,
+  openLightbox,
+  openLocalLibraryCreateModal,
+  openNewsArticle,
+  openNewsFeedModal,
+  openNewsSourceModal,
+  openNewsSourcePicker,
+  pasteCookieField,
+  pickHomeCategory,
+  pickImaDay,
+  pickImaTag,
+  purgeZsxqCache,
+  queueFeishuDocumentPreview,
+  queueImaDocumentsSearch,
+  queueNewsSearch,
+  quickSubscribe,
+  railToggleSubscribe,
+  refreshAdminNewsFeed,
+  refreshAllAdminNews,
+  refreshDashboardLive,
+  refreshFeishuBindCode,
+  refreshImaDocuments,
+  refreshImaStorage,
+  refreshKnowledge,
+  refreshTimeline,
+  reloadKolImageSettings,
+  reloadTimeline,
+  reloadTimelineRail,
+  removeFeishuDocumentSource,
+  renameFeishuDocumentSource,
+  renderFinancialNewsArticle,
+  renderFinancialNewsList,
+  renderTimeline,
+  restoreAdminNewsFeed,
+  restoreAdminNewsSource,
+  retryImaFolderLoad,
+  retryImaGroupAcl,
+  runSearch,
+  runStorageConsistency,
+  runStorageDedup,
+  saveAdminNewsSettings,
+  saveBackupWebDAV,
+  saveBarkKey,
+  saveCiccCategories,
+  saveCiccScheduleTime,
+  saveCustomTgBot,
+  saveDailyReport,
+  saveDnd,
+  saveFeishuDocsConfig,
+  saveImaCollector,
+  saveKeywords,
+  saveKeywordsMatchReports,
+  saveKolEdit,
+  saveLlm,
+  saveNewsSources,
+  saveNotify,
+  savePassword,
+  savePollingConfig,
+  saveProxyRoutes,
+  savePushChannels,
+  saveStorageAlerts,
+  saveTranslateTwitter,
+  saveTwitterCookie,
+  saveWecomWebhook,
+  saveXueqiuCookie,
+  saveZsxqCookie,
+  saveZsxqPollingConfig,
+  scanLocalLibraries,
+  searchAdminCodes,
+  selectAdminCodeFilter,
+  selectAdminNewsSource,
+  selectFeishuSource,
+  selectImaDocumentGroup,
+  selectImaDocumentsTag,
+  selectImaMountGroup,
+  selectNewsSource,
+  selectPlatformTab,
+  setFeishuSourceDisplay,
+  setImaGroupInterval,
+  setPlazaSourceMode,
+  setSubscribeType,
+  setTheme,
+  startFeishuPersonal,
+  startWeiboQr,
+  submitAsk,
+  submitImaDocumentsSearch,
+  subscribeKnowledge,
+  switchKnowledgeSettingsTab,
+  switchSettingsTab,
+  switchStatsTab,
+  syncFeishuDocumentSource,
+  syncProxyPoolForm,
+  syncProxyRouteInputs,
+  testBackupWebDAV,
+  testProxyNode,
+  tlApplyFilter,
+  tlApplyRailSearch,
+  tlFilterPanel,
+  tlOnSearchInput,
+  tlPickPlatform,
+  tlPickSource,
+  tlPickTag,
+  tlRemoveFilter,
+  tlResetFilters,
+  tlTogglePost,
+  toggleAdminNewsFeed,
+  toggleAdminNewsSource,
+  toggleCiccSchedule,
+  toggleDnd,
+  toggleFavorite,
+  toggleFeishuDocumentSource,
+  toggleHomeFavorite,
+  toggleHomeSubscribed,
+  toggleImaAbstract,
+  toggleImaAclExpanded,
+  toggleImaDayPicker,
+  toggleImaFolder,
+  toggleImaFolderExpand,
+  toggleImaFolderPanel,
+  toggleImaTagMenu,
+  toggleKolImages,
+  toggleKolPageSubscribe,
+  toggleLiveImportant,
+  togglePassword,
+  toggleReportKeyword,
+  toggleSecondary,
+  toggleSidebarSlim,
+  toggleSubscribe,
+  toggleTimelineFav,
+  toggleTimelineSecondary,
+  triggerCicc,
+  triggerImaCollector,
+  unbindChannel,
+  unsubscribeKnowledge,
+  updateAdminNewsArchived,
+  updateAdminNewsQuery,
+  updateAdminNewsStatus,
+  // ---- hmf：MX 数据源管理（st-mx 面板）----
+  loadMxAdmin,
+  saveMxConfig,
+  mxSessionLogin,
+  mxSessionLogout,
+  loadMxRooms,
+  updateMxRoom,
+  pullMxRoomHistory,
+  refreshMxWsStatus,
+  // ---- hmf：KOL 管理扩展（系统KOL/屏蔽词/档位/webhook）----
+  adminSetTier,
+  adminBatchSystemToggle,
+  adminKolWebhook,
+  adminKolWebhookToggle,
+  adminKolWebhookRegenerate,
+  adminKolWebhookSaveSecret,
+  adminEditKolKeywords,
+  saveKolKeywords,
+  adminViewKolBlock,
+  // ---- hmf：MX LLM 打标面板（词表管理 tab）----
+  adminMxTagAutoSave,
+  adminMxTagAutoAddSpecial,
+  adminMxTagAutoRemoveSpecial,
+  adminMxTagCancel,
+  adminMxTagOpenRunModal,
+  adminMxTagStartRun,
+  adminMxTagTest,
+  adminOpenTagReviewModal,
+  closeTagReviewModal,
+  toggleTagReviewMsg,
+  adminTagReviewModalReview,
+  adminTagReviewSelAll,
+  adminTagReviewSelChange,
+  adminReviewTag,
+  adminReviewTagsBatch,
+  adminReviewAliasCandidate,
+  adminTagDetailAddTag,
+  adminTagDetailRemoveTag,
+  // ---- hmf：帖子管理（隐藏/删除）----
+  adminDeletePost,
+  adminSetPostHidden,
+  // ---- hmf：灯箱缩放工具条 ----
+  _lbZoomStep,
+  _lbZoomReset,
+};
+Object.assign(window, INLINE_HANDLERS);
 
 applyTheme(); // 与 index.html 防闪脚本同一逻辑，兜底 + 同步 meta theme-color
 router();

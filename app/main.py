@@ -17,6 +17,7 @@ from . import auth
 from .api import create_api_router
 from .config import load_config
 from .db import DB
+from . import imgbed
 from .fetchers import build_fetchers
 from .feishu_documents import FeishuDocumentSyncService
 from .ima_documents import ImaDocumentService
@@ -65,7 +66,9 @@ class _NoCacheStaticFiles(StaticFiles):
 
     def file_response(self, full_path, stat_result, scope, status_code=200):
         response = super().file_response(full_path, stat_result, scope, status_code)
-        if str(full_path).endswith((".html", ".js", ".css")):
+        # manifest 也必须重新校验：WebAPK 安装时 Chrome 会取它烤入状态栏色，
+        # 命中旧缓存会把浅色 theme_color 烤进安装包（卸载重装也救不回来）
+        if str(full_path).endswith((".html", ".js", ".css", ".webmanifest", ".json")):
             response.headers["Cache-Control"] = "no-cache"
         return response
 
@@ -204,6 +207,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
                 auth.hash_password(config.web.admin_password),
                 is_admin=True,
             )
+    imgbed.configure(config)
     fetchers = build_fetchers(config, db)
     notifiers = build_notifiers(config)
     scheduler = Scheduler(
@@ -230,6 +234,8 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         if background_workers_enabled():
             ima_documents.start()
             feishu_documents.start()
+            # ponytail: 后台线程预热 timeline 缓存，不挡启动；首击不再冷读
+            threading.Thread(target=feishu_documents.warm_timeline_cache, daemon=True, name="feishu-timeline-warmup").start()
             task = asyncio.create_task(scheduler.run())
             if config.alerts_enabled and config.notifiers.telegram.bot_token:
                 from .telegram_bot import TelegramBot

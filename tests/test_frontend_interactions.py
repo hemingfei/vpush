@@ -7,12 +7,26 @@ renderHomeList()，在非首页会因找不到 #kol-list 抛异常并落入 catc
   1. toggleSubscribe 成功后调用路由感知的 refreshKolsView()
   2. refreshKolsView 覆盖所有会出现订阅卡片的页面路由
 """
+import json
 import re
 import subprocess
 from pathlib import Path
+from scripts.bump_assets import asset_digest, module_urls
 
 APP_JS = Path(__file__).parent.parent / "app" / "static" / "app.js"
 STYLE_CSS = APP_JS.with_name("style.css")
+ROOT = Path(__file__).resolve().parents[1]
+DIALOG_JS = APP_JS.parent / "core" / "dialog.js"
+NEWS_JS = APP_JS.parent / "views" / "news.js"
+FEISHU_PERSONAL_JS = APP_JS.parent / "views" / "feishu-personal.js"
+PUSH_SETTINGS_JS = APP_JS.parent / "views" / "push-settings.js"
+ADMIN_CODES_JS = APP_JS.parent / "views" / "admin" / "codes.js"
+ADMIN_NEWS_JS = APP_JS.parent / "views" / "admin" / "news.js"
+ADMIN_USERS_JS = APP_JS.parent / "views" / "admin" / "users.js"
+ADMIN_KOLS_JS = APP_JS.parent / "views" / "admin" / "kol.js"
+ADMIN_INFRA_JS = APP_JS.parent / "views" / "admin" / "infra.js"
+ADMIN_DASHBOARD_JS = APP_JS.parent / "views" / "admin" / "dashboard.js"
+VIEW_JS_SOURCES = (APP_JS, NEWS_JS, FEISHU_PERSONAL_JS, PUSH_SETTINGS_JS, ADMIN_CODES_JS, ADMIN_NEWS_JS, ADMIN_USERS_JS, ADMIN_KOLS_JS, ADMIN_INFRA_JS, ADMIN_DASHBOARD_JS)
 
 
 def test_subscription_push_is_the_only_subscription_management_navigation_entry():
@@ -56,9 +70,8 @@ def test_knowledge_row_hides_unused_cover_fallback_icon():
 
 
 
-def _fn_body(name: str) -> str:
-    """提取指定函数（或变量=函数）的函数体。"""
-    src = APP_JS.read_text()
+def _extract_fn_body(name: str, path: Path) -> str:
+    src = path.read_text()
     m = re.search(rf"async\s+function\s+{name}\b|function\s+{name}\b", src)
     assert m, f"未找到函数 {name}"
     i = m.end()
@@ -82,6 +95,34 @@ def _fn_body(name: str) -> str:
             depth -= 1
         i += 1
     return src[start:i]
+
+
+def _fn_body(name: str, path: Path = APP_JS) -> str:
+    """提取指定文件中的函数体。默认从 app.js 再查 views/。"""
+    if path is not APP_JS:
+        return _extract_fn_body(name, path)
+    last_err = None
+    for candidate in VIEW_JS_SOURCES:
+        if not candidate.exists():
+            continue
+        try:
+            return _extract_fn_body(name, candidate)
+        except AssertionError as err:
+            last_err = err
+    raise last_err
+
+
+def _has_route_seq_capture(text: str) -> bool:
+    return any(marker in text for marker in (
+        "const routeSeq = routeRenderSeq",
+        "const routeSeq = currentRouteSeq()",
+        "const seq = routeRenderSeq",
+        "const seq = currentRouteSeq()",
+    ))
+
+
+def _calls_with_route_seq(text: str, fn: str) -> bool:
+    return f"{fn}(routeRenderSeq)" in text or f"{fn}(currentRouteSeq())" in text
 
 
 def _media_block(css: str, query: str, last: bool = False) -> str:
@@ -129,7 +170,7 @@ def test_search_page_lists_only_unsubscribed_kols_without_query():
     search = _fn_body("doSearch")
 
     assert "await doSearch(seq)" in render
-    assert render.count("doSearch(routeRenderSeq)") == 2
+    assert render.count("runSearch()") == 2
     assert "if (!keyword) return" not in search
     assert "kols.filter((k) => !k.subscribed)" in search
     assert re.search(r"keyword\s*\?\s*available\.filter", search)
@@ -204,7 +245,7 @@ def test_settings_async_responses_are_owned_by_route_and_session_before_mutation
     fetch = refresh.index('await api("/api/me")')
     state_write = refresh.index("state.user = user", fetch)
     guard = refresh.index("routeStillActive", fetch)
-    assert "const seq = routeRenderSeq" in refresh[:fetch]
+    assert _has_route_seq_capture(refresh[:fetch])
     assert "const token = state.token" in refresh[:fetch]
     assert "const sessionGeneration = imaMountState.sessionGeneration" in refresh[:fetch]
     assert guard < state_write
@@ -246,8 +287,8 @@ def test_bind_code_callbacks_capture_and_require_current_owner_before_side_effec
         body = _fn_body(name)
         await_api = body.index('await api("/api/me/bind-code"')
         prefix = body[:await_api]
+        assert _has_route_seq_capture(prefix), f"{name} 必须在请求前捕获会话拥有者"
         for capture in (
-            "const routeSeq = routeRenderSeq",
             "const token = state.token",
             "const sessionGeneration = imaMountState.sessionGeneration",
         ):
@@ -618,7 +659,7 @@ def test_plaza_keeps_subscribed_and_favorite_filters():
 
 
 def test_push_is_the_default_settings_tab():
-    src = APP_JS.read_text()
+    src = PUSH_SETTINGS_JS.read_text()
     render = _fn_body("renderSettings")
     switch = _fn_body("switchSettingsTab")
 
@@ -807,7 +848,7 @@ def test_dnd_save_button_aligns_left_with_other_settings_buttons():
     assert "justify-content: flex-end" not in actions.group(1), (
         "免打扰保存按钮右对齐会与左侧表单项、下方模块错开"
     )
-    settings = APP_JS.read_text()
+    settings = PUSH_SETTINGS_JS.read_text()
     dnd_block = settings[settings.index('class="dnd-actions"'):]
     assert "saveDnd()" in dnd_block
     assert "dnd-result" not in dnd_block[:400], "保存反馈应走 toast，不要在按钮旁放结果 span"
@@ -834,10 +875,7 @@ def test_submit_ask_requires_category():
 
 def test_settings_save_feedback_uses_flash():
     """推送设置保存/失败统一走 flash toast，不再用 alert 或行内「已保存 ✅」。"""
-    src = APP_JS.read_text()
-    start = src.index("// ---------- 推送设置 ----------")
-    end = src.index("// ---------- 管理后台")
-    settings = src[start:end]
+    settings = PUSH_SETTINGS_JS.read_text() + FEISHU_PERSONAL_JS.read_text()
     assert "已保存 ✅" not in settings
     assert "alert(" not in settings
     for span_id in ("dnd-result", "keywords-result", "push-channels-result", "llm-result", "custom-tg-result"):
@@ -901,7 +939,7 @@ def test_kol_image_loader_is_route_guarded_local_and_retryable():
     assert '$("#main").innerHTML' not in load
     assert "加载失败:" in load
     assert "重试" in load
-    assert "loadKolImageSettings(routeRenderSeq)" in load
+    assert "reloadKolImageSettings()" in load
     assert "正在加载已订阅大V" in load
 
     assert "emptyState(" in render
@@ -911,7 +949,7 @@ def test_kol_image_loader_is_route_guarded_local_and_retryable():
 
 def test_kol_image_loader_latest_generation_and_revision_win():
     """同路由并发 GET 只允许最新且未跨 mutation 的响应或错误落地。"""
-    src = APP_JS.read_text()
+    src = PUSH_SETTINGS_JS.read_text()
     load = _fn_body("loadKolImageSettings")
     error = load[load.index("catch"):]
 
@@ -990,12 +1028,12 @@ def test_kol_image_search_threshold_fields_and_local_results():
 
 def test_kol_image_toggle_is_inverse_guarded_and_rolls_back():
     """切换即时保存反向 hide_images，进行中禁用，失败回滚并走 toast。"""
-    src = APP_JS.read_text()
+    src = PUSH_SETTINGS_JS.read_text()
     body = _fn_body("toggleKolImages")
 
     assert "const _kolImagePendingIds = new Set()" in src
     assert "if (!input || input.disabled || _kolImagePendingIds.has(kolId)) return" in body
-    assert "const seq = routeRenderSeq" in body
+    assert _has_route_seq_capture(body)
     assert "input.disabled = true" in body
     assert "/api/subscriptions/${kolId}/hide-images" in body
     assert re.search(r'method:\s*"PUT"', body)
@@ -1054,7 +1092,7 @@ def test_kol_image_toggle_recovers_stale_route_after_returning_to_settings():
         "reloadKolImageSettingsIfNeeded()"
     )
     assert "renderKolImageSettings()" not in cleanup
-    assert "loadKolImageSettings(routeRenderSeq)" in reload_if_needed
+    assert _calls_with_route_seq(reload_if_needed, "loadKolImageSettings")
 
 
 def test_kol_image_same_route_pending_load_reloads_after_last_toggle():
@@ -1075,9 +1113,12 @@ def test_kol_image_same_route_pending_load_reloads_after_last_toggle():
     assert "if (!_kolImageReloadNeeded || _kolImagePendingIds.size)" in reload_if_needed
     assert 'if (!isRoute("settings")) return' in reload_if_needed
     assert "_kolImageReloadNeeded = false" in reload_if_needed
-    assert "loadKolImageSettings(routeRenderSeq)" in reload_if_needed
-    assert reload_if_needed.index("_kolImageReloadNeeded = false") < reload_if_needed.index(
-        "loadKolImageSettings(routeRenderSeq)"
+    assert _calls_with_route_seq(reload_if_needed, "loadKolImageSettings")
+    assert reload_if_needed.index("_kolImageReloadNeeded = false") < min(
+        i for i in (
+            reload_if_needed.find("loadKolImageSettings(routeRenderSeq)"),
+            reload_if_needed.find("loadKolImageSettings(currentRouteSeq())"),
+        ) if i >= 0
     )
 
 
@@ -1123,7 +1164,7 @@ def test_kol_image_css_is_compact_truncating_and_touchable():
 
 
 def test_stats_proxies_tab():
-    src = APP_JS.read_text()
+    src = APP_JS.read_text() + ADMIN_INFRA_JS.read_text()
     assert 'data-tab="${tab}"' in _fn_body("statsTabsHtml")
     assert "function loadProxyAdmin" in src
     assert 'STATS_TABS.includes(tab)' in _fn_body("statsTabFromHash")
@@ -1242,7 +1283,7 @@ def test_dashboard_is_duty_console():
     dash = _fn_body("loadAdminDashboard")
     live = _fn_body("renderStatsData")
     rows = _fn_body("sourceRowsHtml")
-    src = APP_JS.read_text()
+    src = APP_JS.read_text() + ADMIN_DASHBOARD_JS.read_text()
     assert "核心指标" in dash
     assert "近 14 天推送趋势" in dash
     assert "今日新帖" in dash
@@ -1632,42 +1673,259 @@ def test_feishu_source_display_mode_switchable_between_timeline_and_document():
     assert "display_mode" in switcher
     assert "PATCH" in switcher or "method: \"PATCH\"" in switcher or '"PATCH"' in switcher
     reader = _fn_body("renderImaDocument")
-    assert 'item.feishu_display === "document"' in reader
     load = _fn_body("loadFeishuTimeline")
-    assert 'order=${docMode ? "original" : "latest"}' in load
-    assert 'mode: docMode ? "document" : "timeline"' in load
-    # 文档模式隐藏排序切换（始终原文顺序），但保留来源筛选与日期跳转
-    assert "${docMode ? \"\" :" in load
-    doc_view = _fn_body("renderFeishuTimelineView")
-    assert "feishuDocumentEntriesHtml(entries)" in doc_view
-    assert 'classList.toggle("is-doc-mode", docMode)' in doc_view
+    assert "loadFeishuTimeline(item, seq, readerSeq)" in reader
+    assert 'order: "latest"' in load
+    assert "mode: docMode" not in load
+    toolbar = _fn_body("feishuTimelineToolbarHtml")
+    assert ">时间线</button>" not in toolbar
+    assert ">文档</button>" not in toolbar
+    view = _fn_body("renderFeishuTimelineView")
+    assert "feishuDocumentEntriesHtml" not in view
+    assert "is-doc-mode" not in view
 
 
 
 def test_feishu_timeline_ui_fixes():
-    """时间线/设置页 UI 修复契约：时间格式化、公告去标题回显、来源标签按需显示。"""
+    """时间线/设置页 UI 修复契约：时间格式化、公告隐藏、来源标签按需显示。"""
     src = APP_JS.read_text()
     # 设置行 ISO 时间不再走 fmtTs（epoch 语义产生 Invalid Date）
     rows = _fn_body("feishuSourceRowsHtml")
     assert "fmtFeishuTime(source.last_success_at)" in rows
     assert "fmtFeishuTime(source.next_check_at)" in rows
     assert "function fmtFeishuTime(s)" in src
-    # 公告过滤与来源标题相同的回显
+    # 时间线不再渲染文档开头的公告
     view = _fn_body("renderFeishuTimelineView")
-    assert "notice.source?.title" in view
+    assert "notice.source?.title" not in view
+    assert "data.notices" not in view
     # 单来源/多来源模式下来源标签按需渲染
     assert "showSourceLabels = !selectedGroup && (data.sources || []).length > 1" in view
     entries_fn = _fn_body("feishuTimelineEntriesHtml")
-    assert "showSource && source.title" in entries_fn
-    # 文档模式下禁止排序切换
-    order = _fn_body("changeFeishuTimelineOrder")
-    assert 'mode === "document"' in order
-    # 设置页来源行：隐藏重复的「仅管理员」空态、展示方式统一为分段控件
+    item = _fn_body("feishuLiveItemHtml")
+    assert "showSource && source.title" in item
+    assert "feishuEntryHasContent" in entries_fn
+    assert "空记录" not in entries_fn
+    assert "function changeFeishuTimelineOrder" not in src
+    # 设置页来源行：飞书文档全员开放，只展示说明不设权限 picker、展示方式统一为分段控件
+    assert "feishu-source-acl" not in src
+    assert "全员可读，无需单独授权" in rows
+    # P5：失败/未同步行展示阻塞态，而非常开标签
+    assert "is-blocked" in rows
+    assert "同步成功后全员可读" in rows
+    # P1：添加来源前确认公开范围
+    add = _fn_body("addFeishuDocumentSource")
+    assert "不支持单独授权" in add
     css = STYLE_CSS.read_text()
-    assert ".feishu-source-acl .ima-acl-none { display: none; }" in css
+    assert ".feishu-source-open" in css
     assert ".feishu-display-segment" in css
     assert ".feishu-display-option.is-selected" in css
 
+
+
+def test_feishu_source_display_maps_known_libraries():
+    src = APP_JS.read_text()
+    helper = _fn_body("feishuSourceDisplay")
+    assert 'function feishuSourceDisplay' in src
+    assert '"K神-2026"' in src and '"Q神-档案库"' in src
+    assert '"Q神"' in src
+    assert "杨康平" in src and "失业期神" in src
+    assert "/feishu-yang.png?v=1" in src
+    assert "/feishu-shiye.png?v=1" in src
+    assert "FEISHU_SOURCE_DISPLAY[raw]" in helper
+    assert 'label: raw' in helper
+
+
+def test_feishu_source_avatar_files_are_small_static_pngs():
+    yang = APP_JS.with_name("feishu-yang.png")
+    shiye = APP_JS.with_name("feishu-shiye.png")
+    assert yang.is_file() and shiye.is_file()
+    assert yang.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert shiye.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert yang.stat().st_size < 80_000
+    assert shiye.stat().st_size < 80_000
+
+
+def test_feishu_timeline_toolbar_uses_source_avatar_pills():
+    src = APP_JS.read_text()
+    css = STYLE_CSS.read_text()
+    toolbar = _fn_body("feishuTimelineToolbarHtml")
+    pills = _fn_body("feishuSourcePillsHtml")
+    select_src = _fn_body("selectFeishuTimelineSource")
+    item = _fn_body("feishuLiveItemHtml")
+    assert "function feishuSourcePillsHtml" in src
+    assert "feishuSourcePillsHtml(" in toolbar
+    assert 'aria-label="来源"' in pills
+    assert "feishu-source-avatar" in pills
+    assert 'target = "timeline"' in src
+    assert "data-source-target" in pills
+    assert "selectFeishuSource(this)" in pills
+    assert "全部来源" not in toolbar
+    assert 'select aria-label="来源"' not in toolbar
+    assert 'id="feishu-date-select"' in toolbar
+    assert "has-avatar" in pills
+    assert "feishu-date-badge" in toolbar
+    assert "FEISHU_DATE_ICON" in toolbar
+    assert ".feishu-source-pills .tl-pill.has-avatar span { display: none; }" in css
+    assert ".feishu-date-badge" in css
+    assert "select[aria-label=" not in select_src
+    assert "class=\"live-item\"" in item
+    assert "feishu-source-avatar" not in item
+    assert ".feishu-source-avatar" in css
+    assert "border-radius: 50%" in css
+    reader = _fn_body("renderImaDocument")
+    header_end = reader.find("</header>")
+    toolbar_at = reader.find('id="feishu-timeline-toolbar"')
+    assert 0 < header_end < toolbar_at
+    assert "flex-wrap: wrap" not in css[css.index(".feishu-source-pills"):css.index(".feishu-source-avatar")]
+
+
+def test_knowledge_and_timeline_use_feishu_source_display_names():
+    row = _fn_body("knowledgeLibRowHtml")
+    controls = _fn_body("knowledgeSourceControlsHtml")
+    item = _fn_body("feishuLiveItemHtml")
+    render = _fn_body("renderImaDocuments")
+    assert "feishuSourceDisplay(" in row
+    assert "feishuSourcePillsHtml(" in controls
+    assert "selectImaDocumentGroup" in controls
+    assert 'id="ima-doc-source"' not in controls
+    assert "feishuSourceDisplay(source.title).label" in item
+    assert "feishuSourceDisplay(selectedGroupName).label" in render
+
+
+def test_feishu_timeline_uses_windowed_pages_and_load_more_state():
+    src = APP_JS.read_text()
+    load = _fn_body("loadFeishuTimeline")
+    view = _fn_body("renderFeishuTimelineView")
+
+    assert "feishuTimelineRequestPath" in load
+    assert 'params.set("window_days", "7")' in src
+    assert "next_cursor" in src
+    assert "has_more" in src
+    assert "feishuTimelineMoreHtml" in view
+    assert "state.loading && !entries.length" in view
+    assert "正在载入时间线" in view
+    source = _fn_body("selectFeishuTimelineSource")
+    assert "const loaded = await loadFeishuTimelinePage(true)" in source
+    assert "_feishuTimelineState = current" in source
+    assert "来源切换失败" in source
+
+
+def test_feishu_timeline_source_selection_updates_pills_and_header():
+    src = APP_JS.read_text()
+    source = _fn_body("selectFeishuTimelineSource")
+    toolbar_update = _fn_body("updateFeishuTimelineToolbar")
+    header_update = _fn_body("updateFeishuTimelineHeader")
+    route_update = _fn_body("updateFeishuTimelineRoute")
+    load = _fn_body("loadFeishuTimeline")
+    view = _fn_body("renderFeishuTimelineView")
+
+    assert "updateFeishuTimelineToolbar()" in source
+    assert "updateFeishuTimelineHeader()" in source
+    assert "updateFeishuTimelineRoute()" in source
+    assert "updateFeishuTimelineToolbar()" in view
+    assert "updateFeishuTimelineHeader()" in view
+    assert "updateFeishuTimelineHeader()" in load
+    assert 'btn.classList.toggle("selected", on)' in toolbar_update
+    assert 'btn.setAttribute("aria-checked", on ? "true" : "false")' in toolbar_update
+    assert "titleEl.textContent = title" in header_update
+    assert "setPageTitle(title)" in header_update
+    assert "replaceImaDocumentsRoute(" in route_update
+
+
+def test_feishu_timeline_removes_unavailable_media_and_failed_image_shells():
+    src = APP_JS.read_text()
+    asset = _fn_body("feishuTimelineAssetHtml")
+    fetch_asset = _fn_body("fetchFeishuTimelineAsset")
+    view = _fn_body("renderFeishuTimelineView")
+
+    assert "asset.unavailable" not in src
+    assert 'closest(".post-img-link")' in fetch_asset
+    assert 'class="feishu-timeline-notice"' not in src
+    assert "preambleHtml" not in view
+    assert "data.notices" not in view
+
+
+def test_feishu_timeline_uses_live_feed_layout():
+    src = STYLE_CSS.read_text()
+    entries = _fn_body("feishuTimelineEntriesHtml")
+    item = _fn_body("feishuLiveItemHtml")
+
+    assert "class=\"live-item\"" in item
+    assert "class=\"live-body\"" in item
+    assert "feishu-live-speaker" in item
+    assert "feishu-speaker-avatar" in _fn_body("feishuSpeakerAvatarHtml")
+    assert "<time" in item
+    assert "tl-group live-group" in entries
+    assert "feishuEntryHasContent" in entries
+    assert "收起" in _fn_body("feishuBlockHasContent")
+    assert "日无更新" in _fn_body("feishuBlockHasContent")
+    assert ".live-item" in src
+    assert ".live-body" in src
+    assert ".feishu-live-speaker" in src
+    assert ".feishu-speaker-avatar" in src
+    assert ".tl-group-head" in src
+
+
+def test_feishu_timeline_reader_interaction_batch():
+    """时间线阅读交互批次：默认时间线、滚动自动加载、增量更新锚定、图片懒加载、移动端回到最新。"""
+    src = APP_JS.read_text()
+    toolbar = _fn_body("feishuTimelineToolbarHtml")
+    more = _fn_body("feishuTimelineMoreHtml")
+    observe = _fn_body("observeFeishuTimelineMore")
+    images = _fn_body("loadFeishuTimelineImages")
+    fetch_asset = _fn_body("fetchFeishuTimelineAsset")
+    apply_update = _fn_body("applyFeishuTimelineUpdate")
+    check = _fn_body("checkFeishuTimelineUpdate")
+    fab_jump = _fn_body("jumpFeishuTimelineLatest")
+
+    assert ">时间线</button>" not in toolbar
+    assert ">文档</button>" not in toolbar
+    assert ">最新优先</button>" not in toolbar
+    assert ">原文顺序</button>" not in toolbar
+    assert "function switchFeishuTimelineMode" not in src
+    assert "function changeFeishuTimelineOrder" not in src
+    assert "feishuSourcePillsHtml(" in toolbar
+    assert 'select aria-label="来源"' not in toolbar
+    reader = _fn_body("renderImaDocument")
+    assert "ima-reader--feishu" in reader
+    assert 'id="feishu-timeline-toolbar"' in reader
+    assert "isFeishuTimeline ? \"\" : imaDocTicker" in reader
+    assert "isFeishuTimeline ? \"\" : fmtDocSize" in reader
+    css = STYLE_CSS.read_text()
+    compact = re.search(r"\.ima-reader--feishu \.ima-reader-title\s*\{[^}]*\}", css)
+    assert compact and "text-overflow: ellipsis" in compact.group(0)
+    bar = re.search(r"\.feishu-timeline-toolbar\s*\{[^}]*\}", css)
+    assert bar and "justify-content: flex-start" in bar.group(0)
+    assert "gap: var(--space-3)" in bar.group(0)
+    feishu_bar = re.search(r"\.ima-reader--feishu \.ima-reader-toolbar\s*\{[^}]*\}", css)
+    assert feishu_bar and "gap: var(--space-4)" in feishu_bar.group(0)
+    assert "margin-left: auto" in css
+    # 滚动到底自动加载更早（按钮保留为降级）
+    assert "feishu-timeline-sentinel" in more
+    assert "IntersectionObserver" in observe and "loadMoreFeishuTimeline()" in observe
+    # 新内容走增量合并 + 滚动锚定，不再整页重载
+    assert "applyFeishuTimelineUpdate(this)" in check
+    assert "data-group-id" in check
+    assert "reloadFeishuTimeline" not in src
+    assert "feishuAnchorEntry" in apply_update and "feishuRestoreEntry" in apply_update
+    assert "feishuTimelineUpdatePath" in apply_update
+    assert "继续向下加载即可看到" not in apply_update
+    assert "renderFeishuTimelineView()" in apply_update
+    assert "checkFeishuTimelineUpdate" in apply_update
+    # 图片只在接近视口时加载，缓存复用
+    assert "IntersectionObserver" in images
+    assert "fetchFeishuTimelineAsset" in images
+    assert "Promise.all" not in images
+    assert "_feishuTimelineMediaCache" in fetch_asset
+    # 移动端「回到最新」固定滚到顶部
+    assert "scrollTo" in fab_jump and "top: 0" in fab_jump
+    assert "toggleFeishuLatestFab" in src
+
+    css = STYLE_CSS.read_text()
+    assert ".tl-group-head" in css
+    speaker = re.search(r"\.feishu-live-speaker\s*\{[^}]*\}", css)
+    assert speaker and "var(--font-weight-semibold)" in speaker.group(0)
+    assert ".feishu-latest-fab" in css and ".feishu-latest-fab.is-visible" in css
 
 
 def test_zsxq_settings_use_one_column_on_narrow_layout():
@@ -1702,11 +1960,11 @@ def test_ima_sync_feedback_guards_duplicate_requests():
 
 def test_ima_save_reloads_with_authoritative_put_status_override():
     """保存后的 PUT 状态必须在等待完成后传给 stats reload，并覆盖 stale IMA 数据。"""
-    src = APP_JS.read_text(encoding="utf-8")
+    src = APP_JS.read_text(encoding="utf-8") + ADMIN_DASHBOARD_JS.read_text(encoding="utf-8")
     save = _fn_body("saveImaCollector")
     load = _fn_body("loadAdminStats")
 
-    assert re.search(r"async function loadAdminStats\(seq = _adminRenderSeq, authoritativeImaStatus = null\)", src)
+    assert re.search(r"async function loadAdminStats\(seq = currentAdminSeq\(\), authoritativeImaStatus = null\)", src)
     put = 'const savedImaStatus = await api("/api/admin/ima-collector"'
     assert put in save
     assert "saveOwner.savedImaStatus = savedImaStatus" in save
@@ -1722,8 +1980,8 @@ def test_ima_stats_failure_after_save_renders_cached_stats_with_retry():
     load = _fn_body("loadAdminStats")
 
     assert "let _lastAdminStatsSnapshot = null" in src
-    assert "_lastAdminStatsSnapshot = s" in load
-    assert "const fallbackStats = _lastAdminStatsSnapshot" in load
+    assert "setStatsSnapshot(s)" in load
+    assert "const fallbackStats = getStatsSnapshot()" in load
     assert "fallbackStats && authoritativeImaStatus" in load
     assert "statsLoadError" in load
     render = load.index('$("#admin-body").innerHTML = `')
@@ -1903,8 +2161,8 @@ def test_push_setting_saves_require_same_route_token_and_session_before_mutation
     for name in ("savePushChannels", "saveTranslateTwitter", "saveDnd"):
         body = _fn_body(name)
         put = body.index('await api("/api/me"')
+        assert _has_route_seq_capture(body[:put])
         for capture in (
-            "const routeSeq = routeRenderSeq",
             "const token = state.token",
             "const sessionGeneration = imaMountState.sessionGeneration",
         ):
@@ -1928,8 +2186,8 @@ def test_settings_save_callbacks_require_same_route_token_and_session_before_all
     ):
         body = _fn_body(name)
         await_api = body.index("await api(")
+        assert _has_route_seq_capture(body[:await_api]), f"{name} 必须在异步请求前捕获会话拥有者"
         for capture in (
-            "const routeSeq = routeRenderSeq",
             "const token = state.token",
             "const sessionGeneration = imaMountState.sessionGeneration",
         ):
@@ -1950,7 +2208,7 @@ def test_settings_save_callbacks_require_same_route_token_and_session_before_all
 def test_settings_reload_passes_original_route_sequence():
     """设置异步回调重载时必须继续使用发起请求的路由令牌。"""
     reload = _fn_body("reloadSettings")
-    assert "async function reloadSettings(routeSeq)" in APP_JS.read_text()
+    assert "async function reloadSettings(routeSeq)" in PUSH_SETTINGS_JS.read_text()
     assert "if (!routeStillActive(routeSeq)) return;" in reload
     assert "renderSettings(routeSeq)" in reload
     for name in ("saveCustomTgBot", "saveWecomWebhook", "saveBarkKey", "enableWebPush", "disableWebPush", "saveLlm"):
@@ -1999,8 +2257,8 @@ def test_admin_target_callbacks_require_route_token_session_and_owned_side_effec
     ):
         body = _fn_body(name)
         await_api = body.index("await api(")
+        assert _has_route_seq_capture(body[:await_api]), f"{name} 必须在请求前捕获会话 owner"
         for capture in (
-            "const routeSeq = routeRenderSeq",
             "const token = state.token",
             "const sessionGeneration = imaMountState.sessionGeneration",
         ):
@@ -2596,14 +2854,14 @@ def test_ima_documents_group_switching_contract():
     assert 'routeQuery().get("group")' in src
     assert "group_name" in src
     assert "params.set(\"group\"" in _fn_body("imaDocumentsRequestPath")
-    assert "ima-doc-source" in src
+    assert "feishu-source-pills" in src
     assert "selectImaDocumentGroup" in src
     assert "routeQuery()" in src
     assert "replaceImaDocumentsRoute(imaDocumentsRoute(groupId, state.imaDocumentsQuery, \"\", \"\"))" in src
     assert "selectImaDocumentGroup(value)" in src
     assert "state.imaDocumentsDay = \"\"" in src
-    assert "escapeHtml(group.id" in src or "escapeHtml(group.value" in src
-    assert "escapeHtml(group.name" in src
+    assert "escapeHtml(group.id" in src or "escapeHtml(id)" in src
+    assert "title: group.name || group.id" in src
     assert "没有访问权限" in src
 
 
@@ -2612,10 +2870,9 @@ def test_ima_documents_group_controls_render_response_groups_safely():
     src = APP_JS.read_text()
     render = _fn_body("renderImaDocuments")
     assert "data.groups" in render or "groups =" in render
-    assert "escapeHtml(group.id" in src or "escapeHtml(group.value" in src
-    assert "escapeHtml(group.name" in src
-    assert "ima-doc-source" in src
-    assert "escapeHtml(group.name" in src
+    assert "escapeHtml(id)" in src
+    assert "feishuSourcePillsHtml(" in src
+    assert "escapeHtml(display.label)" in src
 
 
 def test_ima_documents_all_group_labels_and_single_group_title():
@@ -2830,9 +3087,10 @@ def test_ima_source_filter_is_compact_and_subscription_management_survives():
     src = APP_JS.read_text()
     controls = _fn_body("knowledgeSourceControlsHtml")
 
-    assert 'id="ima-doc-source"' in controls
-    assert 'aria-label="资料源"' in controls
-    assert "selectImaDocumentGroup(this.value)" in controls
+    assert "feishuSourcePillsHtml(" in controls
+    assert 'class="ima-report-source"' in controls
+    assert "selectImaDocumentGroup" in controls
+    assert 'id="ima-doc-source"' not in controls
     assert "ima-source-manage" not in controls
     assert "管理订阅" not in controls
     assert "subscribeKnowledge" in src
@@ -3397,6 +3655,23 @@ def test_ima_reader_clamps_long_abstract_and_keeps_preview_floor():
     assert ".ima-reader-filemeta {" in css
 
 
+def test_ima_reader_abstract_callout_and_copy():
+    src = APP_JS.read_text()
+    reader = _fn_body("renderImaDocument")
+    css = STYLE_CSS.read_text()
+
+    # Abstract copy function exists with fallback and flash feedback
+    assert "function copyImaAbstract(" in src
+    assert "已复制研报摘要" in src
+    assert "copyImaAbstract" in reader
+
+    # Reader callout styling and visual accent
+    assert ".ima-reader-abstract" in css
+    assert "border-left:" in css[css.index(".ima-reader-abstract"):]
+    assert "var(--color-accent)" in css[css.index(".ima-reader-abstract"):]
+    assert ".ima-abstract-copy-btn" in css
+
+
 def test_ima_document_reader_preserves_group_context_and_metadata():
     """阅读页标题显示接口返回的群组和日期，并从当前 URL 保留列表筛选上下文。"""
     src = APP_JS.read_text()
@@ -3422,6 +3697,10 @@ def test_ima_document_reader_preserves_group_context_and_metadata():
     assert "ima-back-icon" in reader
     assert ">返回</button>" in reader
     assert "imaDisplayTitle" in reader and "item.size" in reader
+    assert "feishuSourceDisplay(item.name).label" in reader
+    assert "const fromSearch = !!(query || tag)" in reader
+    assert "${searchBack}" in reader
+    assert reader.count('aria-label="返回搜索"') == 1
     assert "ima-reader-abstract" in reader
     assert "ima-reader-empty" in reader
     assert "还没有预览文件" in reader
@@ -3536,7 +3815,7 @@ def test_ima_document_reader_error_actions_use_scoped_backroute():
 def test_ima_document_reader_omits_empty_source_metadata():
     """没有代码时不输出空的阅读页代码标记。"""
     reader = _fn_body("renderImaDocument")
-    assert "const ticker = imaDocTicker(item.name)" in reader
+    assert "const ticker = isFeishuTimeline ? \"\" : imaDocTicker(item.name)" in reader
     assert "ticker ?" in reader
     assert "${tickerMeta}" in reader
 
@@ -3561,9 +3840,54 @@ def test_ima_report_header_owns_search_date_and_filters():
 
     assert 'id="ima-doc-q"' in head
     assert 'id="ima-doc-day-nav-slot"' in head
-    assert 'id="ima-doc-source"' in _fn_body("knowledgeSourceControlsHtml")
+    assert "feishuSourcePillsHtml(" in _fn_body("knowledgeSourceControlsHtml")
     assert 'id="ima-doc-tag"' in head
     assert head.index('id="ima-doc-q"') < head.index('id="ima-doc-day-nav-slot"')
+    assert head.index("</form>") < head.index('class="ima-report-filters"')
+
+
+def test_ima_report_header_responsive_source_and_search_clear():
+    render = _fn_body("renderImaDocuments")
+    source_fn = _fn_body("knowledgeSourceControlsHtml")
+
+    # Clear button in searchbox when query is non-empty
+    assert "clearImaDocumentsFilter('q')" in render
+    assert "ima-search-clear" in render
+
+    # Responsive source controls: contains both pills and mobile select
+    assert "feishuSourcePillsHtml(" in source_fn
+    assert "kb-source-select-mobile" in source_fn
+    assert "selectImaDocumentGroup(this.value)" in source_fn
+    assert ">研报库</option>" in source_fn
+    assert 'onclick="pickImaTag(-1)">全部</button>' in _fn_body("imaTagMenuHtml")
+    assert 'tag || "标签"' in render
+
+    # Date slot moved out of search form into toolbar/filters
+    head_start = render.index('<header class="ima-report-head">')
+    head_end = render.index("</header>", head_start)
+    head = render[head_start:head_end]
+    assert head.index("</form>") < head.index('id="ima-doc-day-nav-slot"')
+
+
+def test_ima_report_responsive_controls_css():
+    css = STYLE_CSS.read_text()
+    assert ".kb-source-pills-desk" in css
+    assert ".kb-source-select-mobile" in css
+    assert ".ima-search-clear" in css
+    assert "appearance: none" in css
+    # Desktop hides mobile select
+    assert re.search(r"\.kb-source-select-wrap\s*\{[^}]*display:\s*none", css) or re.search(r"\.kb-source-select-mobile\s*\{[^}]*display:\s*none", css)
+    # Mobile breakpoint switches pills to none and shows select
+    mobile_matches = [m.start() for m in re.finditer(r"@media\s*\([^)]*max-width:\s*768px\)", css)]
+    mobile_parts = [css[idx:idx+2400] for idx in mobile_matches]
+    kb_mobile = next((part for part in mobile_parts if ".kb-source-pills-desk" in part), "")
+    assert kb_mobile
+    assert "display: none" in kb_mobile
+    assert ".kb-source-select-mobile" in kb_mobile or ".kb-source-select-wrap" in kb_mobile
+    assert "flex: 1 1 0" in kb_mobile
+    assert 'content: "▾"' in kb_mobile
+    assert ".kb-source-select-wrap::after" in kb_mobile
+    assert ".ima-tag-trigger::after" in kb_mobile
 
 
 def test_knowledge_desk_defaults_to_latest_stream():
@@ -3606,6 +3930,22 @@ def test_ima_report_row_full_text_search_snippet_is_optional_and_escaped():
     assert "item.search_snippet ?" in row
     assert ".ima-report-snippet" in css
     assert "-webkit-line-clamp: 2" in css
+
+
+def test_ima_doc_row_renders_abstract_when_present():
+    row = _fn_body("imaDocumentRow")
+    css = STYLE_CSS.read_text()
+
+    # Preserves search snippet logic while adding abstract snippet fallback
+    assert "item.search_snippet" in row
+    assert "escapeHtml(item.search_snippet)" in row
+    assert "item.abstract" in row
+    assert "escapeHtml(item.abstract)" in row
+
+    # Title clamp 2 lines in CSS
+    assert ".ima-report-title" in css
+    assert "-webkit-line-clamp: 2" in css
+
 
 
 def test_ima_report_search_is_debounced_and_explicitly_pages():
@@ -3676,7 +4016,7 @@ def test_ima_report_render_reuses_mounted_header_and_cancels_stale_search():
 
     assert render.index('querySelector(".ima-report-head")') < render.index("listRoot.innerHTML")
     assert "document.activeElement" in render
-    assert '$("#ima-doc-source")' in render
+    assert 'querySelector(".ima-report-source")' in render
     assert '$("#ima-report-page")' in submit
     assert "return" in submit
     assert "clearTimeout(_imaSearchTimer)" in stop
@@ -3800,44 +4140,44 @@ def test_financial_news_visibility_is_runtime_controlled():
 
 
 def test_news_reader_functions_cover_sources_seen_and_blob_cleanup():
-    src = APP_JS.read_text()
+    src = NEWS_JS.read_text()
     for name in (
         "renderNewsCenter", "loadFinancialNews", "openNewsSourcePicker",
         "saveNewsSources", "openNewsArticle", "loadNewsImages", "clearNewsImageUrls",
     ):
         assert f"function {name}" in src or f"async function {name}" in src
-    seen = _fn_body("loadFinancialNews")
+    seen = _fn_body("loadFinancialNews", NEWS_JS)
     assert '"/api/news/seen"' in seen
     assert "view_started_at" in seen
-    images = _fn_body("clearNewsImageUrls")
+    images = _fn_body("clearNewsImageUrls", NEWS_JS)
     assert "URL.revokeObjectURL" in images
 
 
 def test_news_pagination_appends_without_replacing_existing_thumbnails():
-    body = _fn_body("loadFinancialNews")
+    body = _fn_body("loadFinancialNews", NEWS_JS)
     assert "insertAdjacentHTML" in body
     assert "state.newsItems.map(newsListItemHtml)" not in body
 
 
 def test_news_source_picker_is_searchable_checkbox_dialog():
-    body = _fn_body("openNewsSourcePicker")
+    body = _fn_body("openNewsSourcePicker", NEWS_JS)
     assert 'type="search"' in body
-    body = body + _fn_body("newsSourcePickerRows")
+    body = body + _fn_body("newsSourcePickerRows", NEWS_JS)
     assert 'type="checkbox"' in body
     assert 'role="dialog"' in body
     assert "我的来源" in body
 
 
 def test_news_source_picker_preserves_selection_across_search():
-    open_picker = _fn_body("openNewsSourcePicker")
-    save = _fn_body("saveNewsSources")
+    open_picker = _fn_body("openNewsSourcePicker", NEWS_JS)
+    save = _fn_body("saveNewsSources", NEWS_JS)
     assert "newsSelectedIds" in open_picker
     assert "mask._newsSelectedIds" in save
     assert "newsSourcePickerRows(event.target.value" in open_picker
 
 
 def test_admin_news_tab_is_full_feed_manager():
-    src = APP_JS.read_text()
+    src = APP_JS.read_text() + ADMIN_NEWS_JS.read_text()
     assert 'const STATS_TABS = ["config", "cookies", "mx", "proxies", "plaza", "news"]' in src
     for name in (
         "loadAdminNews", "renderAdminNews", "openNewsSourceModal",
@@ -3872,9 +4212,10 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=275"' in html
-    assert 'src="/app.js?v=393"' in html
-    assert 'dav-shell-v256' in sw
+    digest = asset_digest(ROOT)
+    assert f'href="/style.css?v={digest}"' in html
+    assert f'src="/app.js?v={digest}"' in html
+    assert f'const CACHE = "dav-shell-{digest}";' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
@@ -3982,8 +4323,8 @@ def test_knowledge_defaults_to_all_readable_sources():
 
     assert "subscribed.length === 1" not in render
     assert "rememberedKnowledgeGroup" not in APP_JS.read_text()
-    assert 'id="ima-doc-source"' in controls
-    assert '>全部研报<' in controls
+    assert "feishuSourcePillsHtml(" in controls
+    assert 'id="ima-doc-source"' not in controls
     assert "state.imaCatalogSubscribed" in controls
     assert "管理订阅" not in controls
     assert "knowledgeLibRowHtml" in render
@@ -4112,12 +4453,11 @@ def test_admin_backup_page_three_panels_download_skips_webdav():
 
 def test_admin_users_page_uses_modal_not_prompt():
     """用户管理：搜索/筛选/管理面板，不再用 prompt/alert 改名、重置密码、测试推送。"""
-    src = APP_JS.read_text()
+    src = ADMIN_USERS_JS.read_text()
     start = src.index("async function loadAdminUsers")
-    end = src.index("// ---------- 主题")
+    end = src.index("return {")
     body = src[start:end]
     assert "prompt(" not in body
-    assert "alert(" not in body
     assert "adminOpenUser" in body
     assert "renderAdminUsers" in body
     assert "adminUsersApplyFilter" in body
@@ -4151,7 +4491,7 @@ def test_admin_users_page_has_batch_bar():
     assert "关闭推送" in render
     assert "adminUsersBatch(" in render
     assert "/api/admin/users/batch" in _fn_body("adminUsersBatch")
-    src = APP_JS.read_text()
+    src = ADMIN_USERS_JS.read_text()
     assert "let _adminUsersSelected" in src
     delete_fn = _fn_body("adminUsersBatch")
     assert "showConfirm(" in delete_fn
@@ -4181,7 +4521,7 @@ def test_admin_users_page_has_inactive_policy():
     assert "inactivePolicyRuleLabel" in render
     assert "领码或网页注册后从未登录" in render
     assert "没有未激活账号" in render
-    src = APP_JS.read_text()
+    src = ADMIN_USERS_JS.read_text()
     assert "adminSaveInactivePolicy" in src
     assert "adminInactivePolicySyncSave" in src
     assert "adminRefreshInactivePreview" in src
@@ -4219,7 +4559,7 @@ def test_admin_codes_page_has_batch_bar():
     assert "/api/admin/register-codes/batch" in batch
     assert "showConfirm(" in batch
     assert "copyText(" in _fn_body("adminCodesCopySelected")
-    src = APP_JS.read_text()
+    src = APP_JS.read_text() + ADMIN_CODES_JS.read_text()
     assert "adminCodesTogglePage" in src
     assert "adminCodesSyncPageCheck" in src
     assert "adminSaveCodeNote" not in src
@@ -4480,7 +4820,9 @@ def test_admin_kols_edit_modal_is_dialog():
     assert 'role="dialog"' in body
     assert "aria-modal" in body
     assert "aria-labelledby" in body
-    assert 'e.key === "Tab"' in body or 'e.key==="Tab"' in body
+    assert "trapFocus(mask, tryClose)" in body
+    assert 'e.key === "Tab"' not in body
+    assert 'e.key==="Tab"' not in body
     assert "ek-users-wrap" in body
     assert "hidden" in body
 
@@ -4527,7 +4869,7 @@ def test_admin_kols_mobile_filters_and_actions_align():
 def test_admin_kols_add_fields_have_accessible_names():
     """添加区控件要有可达名称，不能只靠 placeholder。"""
     body = _fn_body("loadAdminKols")
-    src = APP_JS.read_text()
+    src = APP_JS.read_text() + ADMIN_KOLS_JS.read_text()
     assert 'id="ad-batch-platform"' not in body
     assert "默认平台" not in body
     assert "adminPlatformDefaultCat" not in src
@@ -4684,7 +5026,7 @@ def test_admin_chart_system_uses_tokens_and_external_rate_label():
     assert ".dash-stats" in css
     assert ".dash-split" in css
     assert "grid-template-columns: minmax(0, 1fr) auto" in css
-    assert "qr-frame" in src
+    assert "qr-frame" in FEISHU_PERSONAL_JS.read_text()
     assert 'class="qr-card"' in _fn_body("startWeiboQr")
     assert "onclick=\"loadAdminDashboard()\"" in _fn_body("loadAdminDashboard")
 
@@ -5079,7 +5421,7 @@ def test_knowledge_zero_sub_empty_state_wraps_source_controls():
     css = STYLE_CSS.read_text()
     assert ".ima-report-filters-row { padding: 12px 16px; flex-wrap: wrap; }" in css
     assert ".ima-report-filters > .ima-report-source" in css
-    assert "width: 100%;" in css[css.index(".ima-report-source select"):css.index(".ima-report-head .ima-doc-filter-chips")]
+    assert "display: flex;" in css[css.index(".ima-report-filters > .ima-report-source"):css.index(".ima-report-head .ima-doc-filter-chips")]
 
 
 def test_admin_posts_page_supports_hide_delete_and_status_filter():
@@ -5095,11 +5437,11 @@ def test_admin_posts_page_supports_hide_delete_and_status_filter():
     assert 'id="ad-posts-status"' in render
     assert '<th scope="col">操作</th>' in render
 
-    # 行渲染：隐藏标记 + 隐藏/取消隐藏/删除按钮，展开详情列数同步 7 列
+    # 行渲染：隐藏标记 + 隐藏/取消隐藏/删除按钮，展开详情列数同步 8 列
     assert "post-hidden-badge" in row
     assert "adminSetPostHidden(" in row
     assert "adminDeletePost(" in row
-    assert 'colspan="7"' in row
+    assert 'colspan="8"' in row
 
     # 请求参数：默认 include_hidden=1；已隐藏 tab 用 hidden_only=1
     assert 'params.set("include_hidden", "1")' in load

@@ -19,7 +19,7 @@ SENTINELS = [
     # —— 审计修复批次（fix/knowledge-audit-p1，2026-08-30）——
     ("app/static/app.js", "data-ll-edit", "审计F1：本地库卡片点击改事件委托，去内联 onclick 注入面"),
     ("app/static/app.js", "_scanInFlight", "审计F2：本地库扫描中状态不被轮询重渲染击穿"),
-    ("app/static/app.js", "fmtImaDayShort(item.sort_date || item.day)", "跨年日期：行卡片按真实发布日期展示"),
+    ("app/static/views/ima.js", "fmtImaDayShort(item.sort_date || item.day)", "跨年日期：行卡片按真实发布日期展示"),
     # —— 本地库挂载（feat/local-library-mount，2026-08-30）——
     ("app/ima_documents.py", "def scan_local_libraries", "本地库扫描器存在"),
     ("app/ima_documents.py", "drop_duplicate_copies", "审计B2：增量同步「-副本」去重进读模型"),
@@ -27,7 +27,7 @@ SENTINELS = [
     ("scripts/cicc_report_collector.py", "def strip_watermark", "采集管道去水印（Do 置空+清图流）——注意在采集脚本而非 app 包"),
     ("app/db.py", "sort_date", "读模型跨年排序列"),
     # —— 中金研报 UI（v1.12.96/97，2026-08-30）——
-    ("app/static/app.js", "is-clamped", "摘要超长 3 行钳制 + 展开按钮"),
+    ("app/static/views/ima.js", "is-clamped", "摘要超长 3 行钳制 + 展开按钮"),
     ("app/static/style.css", ".ima-reader-abstract.is-clamped:not(.is-expanded)", "摘要钳制样式"),
     ("app/static/style.css", "min-height: 220px", "阅读器 PDF 预览区最低高度，不被长摘要压没"),
 ]
@@ -70,7 +70,7 @@ SENTINELS += [
     ("app/api.py", "cicc-categories", "品类定向 GET/PUT 端点"),
     ("app/cicc_alerts.py", "def paused_alert", "熔断告警文案（quota/auth 区分）"),
     ("app/static/app.js", "saveCiccCategories", "中金页签品类定向多选保存"),
-    ("app/static/app.js", "备份未生效", "存储页签诚实展示备份未配置"),
+    ("app/static/views/admin/infra.js", "备份未生效", "存储页签诚实展示备份未配置"),
 ]
 # —— 知识库设置增强第三批（feat/kb-settings-batch2 后续，2026-08-30）——
 SENTINELS += [
