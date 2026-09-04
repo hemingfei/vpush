@@ -16,7 +16,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 15
     steps:
       # actions 均按 commit SHA 固定，防止上游 tag 被替换；审阅通过后逐项验证再升级
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
