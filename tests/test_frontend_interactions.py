@@ -4214,6 +4214,12 @@ def test_admin_news_tab_is_full_feed_manager():
     assert "loadAdminNews()" in archived_toggle
     assert "renderAdminNews()" not in archived_toggle
     assert "验证并保存" in src
+    kols_select = _fn_body("_adminKolsSelect", ADMIN_NEWS_JS)
+    assert '"selected"' not in kols_select
+    assert 'value=""' not in kols_select
+    posts_render = _fn_body("renderAdminPosts", ADMIN_NEWS_JS)
+    assert '<option value="">全部大V</option>` + (_adminKolsOptions || "")' in posts_render
+    assert 'kolSelect.value = state.adminPostsKolId ? String(state.adminPostsKolId) : ""' in posts_render
 
 
 def test_admin_news_master_detail_is_responsive():

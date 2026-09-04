@@ -396,7 +396,7 @@ export function createAdminNewsView(dependencies) {
   }
 
   function renderAdminPosts() {
-    const kolsHtml = _adminKolsOptions || `<option value="">全部大V</option>`;
+    const kolsHtml = `<option value="">全部大V</option>` + (_adminKolsOptions || "");
     if (!routeStillActive(currentAdminSeq())) return;
     $("#admin-body").innerHTML = `
       <section class="section-panel">
