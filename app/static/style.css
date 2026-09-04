@@ -127,6 +127,12 @@ button:focus-visible {
 }
 @media (prefers-reduced-motion: reduce) {
   .login-card { animation: none; }
+  .icon-badge-bar .pt-icon,
+  .icon-badge-bar .funnel-icon,
+  .icon-badge-bar .star-icon { transition: none; }
+  .icon-badge-bar .tl-pill:active .pt-icon,
+  .icon-badge-bar > .fav-toggle:active .star-icon,
+  .icon-badge-bar .tl-actions button:active .funnel-icon { transform: none; }
 }
 /* 密码可见性切换 */
 .pw-field { position: relative; margin-bottom: 16px; }
@@ -2406,8 +2412,10 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   .icon-badge-bar {
     display: grid;
     grid-template-columns: repeat(8, minmax(0, 1fr));
-    gap: 6px;
-    width: 100%;
+    gap: 8px;
+    /* 两侧外扩 6px：从正文内边距借宽给格距，角标不挤正文 */
+    margin-inline: -6px;
+    width: calc(100% + 12px);
   }
   #tl-filterbar .icon-badge-bar {
     grid-template-columns: repeat(9, minmax(0, 1fr));
@@ -2428,24 +2436,23 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
     justify-content: center;
   }
   .icon-badge-bar .tl-pill span { display: none; }
-  .icon-badge-bar .tl-pill .pt-icon {
-    width: min(34px, 94%);
-    aspect-ratio: 1;
-    height: auto;
-    padding: 6px;
-  }
-  .icon-badge-bar > .fav-toggle,
-  .icon-badge-bar .tl-actions button { font-size: 0; gap: 0; }
+  .icon-badge-bar .tl-pill .pt-icon,
   .icon-badge-bar .funnel-icon,
   .icon-badge-bar .star-icon {
-    width: min(34px, 94%);
+    width: min(34px, 92%);
     aspect-ratio: 1;
     height: auto;
     padding: 6px;
     box-sizing: border-box;
     border-radius: 50%;
     background: var(--color-bg-muted);
+    transition: background var(--ease-standard), transform 120ms ease;
   }
+  .icon-badge-bar .tl-pill:active .pt-icon,
+  .icon-badge-bar > .fav-toggle:active .star-icon,
+  .icon-badge-bar .tl-actions button:active .funnel-icon { transform: scale(0.9); }
+  .icon-badge-bar > .fav-toggle,
+  .icon-badge-bar .tl-actions button { font-size: 0; gap: 0; }
   /* 选中/激活收进章本身：章变 Duty Blue、图标反白；位图 logo 保持白章原色 */
   .icon-badge-bar .tl-pill.selected .pt-icon { background: var(--color-accent); }
   .icon-badge-bar .tl-pill.selected img.pt-icon { background: #fff; }
