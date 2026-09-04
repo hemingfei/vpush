@@ -486,8 +486,6 @@ async function loadAdminMxViews() {
       </div>
       <div class="settings-panel">
         <b>新题材候选</b>
-        <!-- 候选操作走 /api/admin/mx-views/topic-candidates/adopt、/dismiss -->
-        <p class="muted">每行一个题材；LLM 优先输出这些名称，表外新题材会进下方候选。</p>
         <div id="mxv-cands">${cfg.topic_candidates.length ? cfg.topic_candidates.map((c) =>
           `<span class="cat-chip">${escapeHtml(c)}
             <button class="btn-sm" onclick="mxvAdminAdopt('${escapeHtml(c)}')">采纳</button>

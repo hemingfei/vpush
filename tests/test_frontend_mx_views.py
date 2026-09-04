@@ -98,6 +98,6 @@ def test_admin_mx_views_page_function():
     assert "async function loadAdminMxViews(" in js
     body = _fn_body("loadAdminMxViews", js)
     for marker in ("/api/admin/mx-views/config", "/api/admin/mx-views/status",
-                   "mxvAdminSaveConfig", "mxvAdminStartBackfill", "adopt"):
+                   "mxvAdminSaveConfig", "mxvAdminStartBackfill", "mxvAdminAdopt"):
         assert marker in body, marker
     assert "admin-body" in body
