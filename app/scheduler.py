@@ -25,7 +25,7 @@ _ai_task_semaphore = None
 _ai_task_max_concurrent = 3  # 最多同时3个任务
 _ai_task_running = set()  # 正在运行的任务ID
 from .logging_setup import redact_secrets
-from .mx_llm_tagging import mx_llm_tag_loop
+from .mx_llm_tagging import mx_llm_tag_auto_loop
 from .fetchers.base import (
     CN_TZ,
     PLATFORM_LABELS,
@@ -2842,17 +2842,15 @@ class Scheduler:
         ):
             await self._init_mx()
 
-        # MX LLM 打标：当前为全手动模式（后台「开始 LLM 打标」触发），
-        # 自动循环默认关闭；恢复自动触发时把 settings 的 mx_llm_tag_auto_enabled
-        # 置 1 即可（调度代码原样保留在 mx_llm_tagging.mx_llm_tag_loop）
-        if str(self.db.get_setting("mx_llm_tag_auto_enabled") or "0") == "1":
-            self._mx_tag_task = asyncio.create_task(
-                mx_llm_tag_loop(
-                    self.db,
-                    lambda: _system_llm_config(self.db, self.llm_config),
-                    publish_alert=self._publish_system_alert_sync,
-                )
+        # MX LLM 打标自动循环：常驻运行，每轮现读配置——开关关闭/未在配置的
+        # 时间段内时自行空转，改配置无需重启
+        self._mx_tag_task = asyncio.create_task(
+            mx_llm_tag_auto_loop(
+                self.db,
+                lambda: _system_llm_config(self.db, self.llm_config),
+                publish_alert=self._publish_system_alert_sync,
             )
+        )
 
         while not self._stop.is_set():
             started = time.monotonic()
