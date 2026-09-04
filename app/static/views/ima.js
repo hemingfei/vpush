@@ -313,6 +313,16 @@ export function createImaView(dependencies) {
     return `<span class="ima-doc-tags">${chips.join("")}</span>`;
   }
 
+  function imaWatchTagButton(tag) {
+    const name = String(tag || "").trim();
+    if (!name) return "";
+    const watching = userKeywordSet().has(name);
+    const pressed = watching ? "true" : "false";
+    const selected = watching ? " is-selected" : "";
+    const title = watching ? "已在关键词提醒中" : "加入关键词提醒";
+    return `<button type="button" class="ima-doc-tag is-action is-watch${selected}" data-tag="${escapeHtml(name)}" aria-pressed="${pressed}" title="${title}" onclick="event.stopPropagation();toggleReportKeyword(this.dataset.tag)">${escapeHtml(name)}</button>`;
+  }
+
   function imaReaderWatchHtml(tags) {
     const list = (Array.isArray(tags) ? tags : []).map((tag) => String(tag || "").trim()).filter(Boolean);
     if (!list.length) return "";

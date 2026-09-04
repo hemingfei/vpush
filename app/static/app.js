@@ -557,16 +557,6 @@ function userKeywordSet() {
   return new Set((state.user?.keywords || []).map((k) => String(k || "").trim()).filter(Boolean));
 }
 
-function imaWatchTagButton(tag) {
-  const name = String(tag || "").trim();
-  if (!name) return "";
-  const watching = userKeywordSet().has(name);
-  const pressed = watching ? "true" : "false";
-  const selected = watching ? " is-selected" : "";
-  const title = watching ? "已在关键词提醒中" : "加入关键词提醒";
-  return `<button type="button" class="ima-doc-tag is-action is-watch${selected}" data-tag="${escapeHtml(name)}" aria-pressed="${pressed}" title="${title}" onclick="event.stopPropagation();toggleReportKeyword(this.dataset.tag)">${escapeHtml(name)}</button>`;
-}
-
 function feishuTimelineAssetHtml(asset, mediaId, groupId) {
   if (!asset?.id) return "";
   const name = asset.name || (asset.kind === "image" ? "文档图片" : "文档附件");
