@@ -21,7 +21,8 @@ NEWS_JS = APP_JS.parent / "views" / "news.js"
 FEISHU_PERSONAL_JS = APP_JS.parent / "views" / "feishu-personal.js"
 PUSH_SETTINGS_JS = APP_JS.parent / "views" / "push-settings.js"
 ADMIN_CODES_JS = APP_JS.parent / "views" / "admin" / "codes.js"
-VIEW_JS_SOURCES = (APP_JS, NEWS_JS, FEISHU_PERSONAL_JS, PUSH_SETTINGS_JS, ADMIN_CODES_JS)
+ADMIN_NEWS_JS = APP_JS.parent / "views" / "admin" / "news.js"
+VIEW_JS_SOURCES = (APP_JS, NEWS_JS, FEISHU_PERSONAL_JS, PUSH_SETTINGS_JS, ADMIN_CODES_JS, ADMIN_NEWS_JS)
 
 
 def test_subscription_push_is_the_only_subscription_management_navigation_entry():
@@ -4114,7 +4115,7 @@ def test_news_source_picker_preserves_selection_across_search():
 
 
 def test_admin_news_tab_is_full_feed_manager():
-    src = APP_JS.read_text()
+    src = APP_JS.read_text() + ADMIN_NEWS_JS.read_text()
     assert 'const STATS_TABS = ["config", "cookies", "proxies", "plaza", "news"]' in src
     for name in (
         "loadAdminNews", "renderAdminNews", "openNewsSourceModal",

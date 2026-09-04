@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 
 APP_JS = Path(__file__).parent.parent / "app" / "static" / "app.js"
+ADMIN_NEWS_JS = APP_JS.parent / "views" / "admin" / "news.js"
 
 # 用户可控/动态数据字段（来自 API 响应或用户输入）
 USER_FIELDS = [
@@ -92,7 +93,7 @@ def test_innerhtml_templates_escape_user_fields():
 
 
 def test_admin_post_links_use_http_scheme_guard():
-    source = APP_JS.read_text()
+    source = ADMIN_NEWS_JS.read_text()
     body = source[source.index("function postRowHtml"):source.index("async function loadAdminPosts")]
     assert "safeUrl" in body
     assert 'href="${escapeHtml(p.url)}"' not in body
