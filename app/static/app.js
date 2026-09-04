@@ -52,7 +52,7 @@ const REPORT_WATCH_BLOCKED_TAGS = new Set([
 ]);
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
-const STATS_TABS = ["config", "cookies", "proxies", "plaza", "news"];
+const STATS_TABS = ["config", "cookies", "imgbed", "proxies", "plaza", "news"];
 const STALE_KOL_LIMIT = 10;
 const STALE_KOL_HOURS = 48;
 const TL_PLATFORMS = PLATFORM_TABS.map((p) => [p, p ? PLATFORM_LABELS[p] : "全部"]);
@@ -3284,6 +3284,7 @@ function statsTabsHtml(active = "config") {
   const labels = {
     config: "抓取设置",
     cookies: "Cookie 管理",
+    imgbed: "图床设置",
     proxies: "代理",
     plaza: "广场显示",
     news: "财经资讯",
@@ -3300,7 +3301,7 @@ function statsTabFromHash() {
 }
 
 function switchStatsTab(name) {
-  // 数据源页分段导航：抓取设置 / Cookie 管理 / 代理 / 广场显示 / 财经资讯
+  // 数据源页分段导航：抓取设置 / Cookie 管理 / 图床设置 / 代理 / 广场显示 / 财经资讯
   if (name === "legacy-dashboard" || name === "overview" || name === "health") {
     replaceRoute("admin/dashboard");
     return;
@@ -3387,6 +3388,73 @@ function cookieUpdatedLabel(info) {
   if (!info || !info.set) return "未写入";
   if (info.from_env) return "已从环境变量读取";
   return info.updated_at ? `已写入（${escapeHtml(fmtTs(info.updated_at))}）` : "已写入";
+}
+
+function imgbedStatusLabel(info) {
+  if (!info || !info.enabled) return "未接入";
+  if (info.token_from_env) return "已从环境变量读取";
+  return info.updated_at ? `已接入（${escapeHtml(fmtTs(info.updated_at))}）` : "已接入";
+}
+
+async function saveImgbedSettings() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
+  const baseUrl = $("#imgbed-base-url")?.value.trim() || "";
+  const apiKey = $("#imgbed-token")?.value.trim() || "";
+  const channelName = $("#imgbed-channel-name")?.value.trim() || "";
+  const folder = $("#imgbed-folder")?.value.trim() || "";
+  if (!baseUrl) {
+    flash("请填写图床地址", "error");
+    $("#imgbed-base-url")?.focus();
+    return;
+  }
+  try {
+    const saved = await api("/api/admin/imgbed", {
+      method: "PUT",
+      body: JSON.stringify({
+        base_url: baseUrl,
+        token: apiKey,
+        channel_name: channelName,
+        folder,
+      }),
+    });
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    if (saved?.last_check_error) {
+      flash(`已保存，但连通检查失败：${saved.last_check_error}`, "error");
+    } else {
+      flash("图床设置已保存，连通正常");
+    }
+    history.replaceState(null, "", "/admin/stats?tab=imgbed");
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    await loadAdminStats(routeSeq);
+  } catch (err) {
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    flash(err.message, "error");
+  }
+}
+
+let _imgbedClearPending = false;
+
+async function clearImgbedSettings() {
+  if (_imgbedClearPending) return;
+  if (!confirm("清除图床设置？清除后 X 配图退回服务端代理，直到重新接入。")) return;
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
+  _imgbedClearPending = true;
+  try {
+    await api("/api/admin/imgbed", { method: "DELETE" });
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    flash("已清除图床设置，X 配图走服务端代理");
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    await loadAdminStats(routeSeq);
+  } catch (err) {
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    flash(err.message, "error");
+  } finally {
+    _imgbedClearPending = false;
+  }
 }
 
 
@@ -5149,6 +5217,7 @@ const {
   cookieRepairItems,
   cookieRepairBanner,
   cookieUpdatedLabel,
+  imgbedStatusLabel,
   setPageTitle,
   STALE_KOL_HOURS,
   STALE_KOL_LIMIT,
@@ -5662,6 +5731,8 @@ const INLINE_HANDLERS = {
   saveDnd,
   saveFeishuDocsConfig,
   saveImaCollector,
+  saveImgbedSettings,
+  clearImgbedSettings,
   saveKeywords,
   saveKeywordsMatchReports,
   saveKolEdit,

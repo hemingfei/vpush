@@ -576,6 +576,14 @@ class CookieIn(BaseModel):
     cookie: str
 
 
+class ImgbedIn(BaseModel):
+    base_url: str = ""
+    token: str = ""
+    channel: str = ""
+    channel_name: str = ""
+    folder: str = ""
+
+
 class ImaCredentialsIn(BaseModel):
     cookie: str | None = None
     openapi_clientid: str | None = None
@@ -2972,6 +2980,95 @@ def create_api_router(
         db.set_setting(TWITTER_COOKIE_TIME_KEY, str(int(time.time())))
         _audit(admin, "set_twitter_cookie", "", f"len={len(cookie)}")
         return {"ok": True}
+
+    def _imgbed_status() -> dict:
+        from . import imgbed as imgbed_mod
+
+        stored_url = (db.get_setting("imgbed_base_url") or "").strip()
+        stored_token = (db.get_setting("imgbed_token") or "").strip()
+        stored_channel = (db.get_setting("imgbed_channel") or "").strip()
+        stored_name = (db.get_setting("imgbed_channel_name") or "").strip()
+        stored_folder = (db.get_setting("imgbed_folder") or "").strip()
+        env_url = os.environ.get("IMGBED_BASE_URL", "").strip()
+        env_token = os.environ.get("IMGBED_TOKEN", "").strip()
+        runtime = imgbed_mod.current_config()
+        base_url = stored_url or env_url or (runtime.base_url if runtime else "")
+        token = stored_token or env_token or (runtime.token if runtime else "")
+        channel = stored_channel or (runtime.channel if runtime else "telegram") or "telegram"
+        channel_name = stored_name or (runtime.channel_name if runtime else "vpush-imgbed") or "vpush-imgbed"
+        folder = stored_folder or (runtime.folder if runtime else "vpush") or "vpush"
+        counts = {
+            row["status"]: row["n"]
+            for row in db._rows("SELECT status, COUNT(*) AS n FROM hosted_images GROUP BY status")
+        }
+        return {
+            "project": "CloudFlare-ImgBed",
+            "project_url": "https://github.com/MarSeventh/CloudFlare-ImgBed",
+            "base_url": base_url,
+            "token_set": bool(token),
+            "token_from_env": bool(env_token) and not stored_token,
+            "updated_at": db.get_setting("imgbed_updated_at") or "",
+            "channel": channel,
+            "channel_name": channel_name,
+            "folder": folder,
+            "enabled": bool(base_url and token),
+            "ready_count": int(counts.get("ready") or 0),
+            "pending_count": int(counts.get("pending") or 0),
+            "failed_count": int(counts.get("failed") or 0),
+            "last_check_error": db.get_setting("imgbed_last_check_error") or "",
+        }
+
+    @router.get("/admin/imgbed", dependencies=[Depends(require_admin)])
+    def get_imgbed():
+        return _imgbed_status()
+
+    @router.delete("/admin/imgbed")
+    def clear_imgbed(admin: dict = Depends(require_admin)):
+        from . import imgbed as imgbed_mod
+
+        for key in (
+            "imgbed_base_url", "imgbed_token", "imgbed_channel", "imgbed_channel_name",
+            "imgbed_folder", "imgbed_updated_at", "imgbed_last_check_error",
+        ):
+            db.set_setting(key, "")
+        imgbed_mod.reset_to_env()
+        _audit(admin, "clear_imgbed", "", "")
+        return _imgbed_status()
+
+    @router.put("/admin/imgbed")
+    def set_imgbed(body: ImgbedIn, admin: dict = Depends(require_admin)):
+        from urllib.parse import urlparse
+
+        from . import imgbed as imgbed_mod
+
+        base_url = (body.base_url or "").strip().rstrip("/")
+        token = (body.token or "").strip()
+        current = _imgbed_status()
+        if base_url:
+            parsed = urlparse(base_url)
+            if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+                raise HTTPException(status_code=400, detail="图床地址须为 https 域名，不要带账号密码")
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+        else:
+            base_url = current["base_url"]
+        if not token:
+            if not current["token_set"]:
+                raise HTTPException(status_code=400, detail="请填写 API 密钥")
+            token = (db.get_setting("imgbed_token") or "").strip() or os.environ.get("IMGBED_TOKEN", "").strip()
+        channel = (body.channel or current["channel"] or "telegram").strip() or "telegram"
+        channel_name = (body.channel_name or current["channel_name"] or "vpush-imgbed").strip() or "vpush-imgbed"
+        folder = (body.folder or current["folder"] or "vpush").strip().strip("/") or "vpush"
+        db.set_setting("imgbed_base_url", base_url)
+        db.set_setting("imgbed_token", token)
+        db.set_setting("imgbed_channel", channel)
+        db.set_setting("imgbed_channel_name", channel_name)
+        db.set_setting("imgbed_folder", folder)
+        db.set_setting("imgbed_updated_at", str(int(time.time())))
+        imgbed_mod.apply_runtime(base_url, token, channel, channel_name, folder)
+        _, check_error = imgbed_mod.probe(base_url)
+        db.set_setting("imgbed_last_check_error", check_error)
+        _audit(admin, "set_imgbed", "", base_url)
+        return _imgbed_status()
 
     @router.get("/admin/zsxq-cookie", dependencies=[Depends(require_admin)])
     def get_zsxq_cookie():
@@ -5475,6 +5572,7 @@ def create_api_router(
                 },
             },
             "ima_collector": _ima_collector_status(),
+            "imgbed": _imgbed_status(),
             "polling_config": _effective_polling(),
             "plaza_sources": plaza_source_rows(db),
             "zsxq_cache": zsxq_cache_stats(db),

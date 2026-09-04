@@ -3627,6 +3627,78 @@ def test_img_proxy_rejects_non_image(monkeypatch):
     assert resp.status_code == 400
 
 
+def test_admin_imgbed_settings_roundtrip(monkeypatch):
+    from app import imgbed as imgbed_mod
+
+    probes = {"url": ""}
+
+    def fake_probe(url):
+        probes["url"] = url
+        return True, ""
+
+    monkeypatch.setattr(imgbed_mod, "probe", fake_probe)
+    client = make_client()
+    headers = auth_headers(client)
+    empty = client.get("/api/admin/imgbed", headers=headers).json()
+    assert empty["enabled"] is False
+    assert empty["project"] == "CloudFlare-ImgBed"
+    assert empty["token_set"] is False
+    bad = client.put(
+        "/api/admin/imgbed",
+        headers=headers,
+        json={"base_url": "http://img.example.com", "token": "imgbed_test"},
+    )
+    assert bad.status_code == 400
+    saved = client.put(
+        "/api/admin/imgbed",
+        headers=headers,
+        json={
+            "base_url": "https://img.053727.xyz/",
+            "token": "imgbed_testtoken",
+            "channel_name": "vpush-imgbed",
+            "folder": "vpush",
+        },
+    )
+    assert saved.status_code == 200
+    data = saved.json()
+    assert data["enabled"] is True
+    assert data["base_url"] == "https://img.053727.xyz"
+    assert data["token_set"] is True
+    assert data["last_check_error"] == ""
+    assert probes["url"] == "https://img.053727.xyz"
+    assert "token" not in data
+    keep = client.put(
+        "/api/admin/imgbed",
+        headers=headers,
+        json={"base_url": "https://img.053727.xyz", "token": ""},
+    )
+    assert keep.status_code == 200
+
+    def failing_probe(url):
+        return False, "ConnectError: down"
+
+    monkeypatch.setattr(imgbed_mod, "probe", failing_probe)
+    checked = client.put(
+        "/api/admin/imgbed",
+        headers=headers,
+        json={"base_url": "https://img.053727.xyz", "token": ""},
+    ).json()
+    assert checked["last_check_error"] == "ConnectError: down"
+    stats = client.get("/api/stats", headers=headers).json()
+    assert stats["imgbed"]["enabled"] is True
+    assert stats["imgbed"]["token_set"] is True
+    assert stats["imgbed"]["last_check_error"] == "ConnectError: down"
+
+    cleared = client.delete("/api/admin/imgbed", headers=headers)
+    assert cleared.status_code == 200
+    after = cleared.json()
+    assert after["enabled"] is False
+    assert after["base_url"] == ""
+    assert after["token_set"] is False
+    assert after["last_check_error"] == ""
+    assert client.get("/api/stats", headers=headers).json()["imgbed"]["enabled"] is False
+
+
 def test_img_proxy_rejects_unlisted_public_host():
     client = make_client()
     assert client.get(

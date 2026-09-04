@@ -47,6 +47,14 @@ def test_enqueue_recent_posts_backfills_twitter_images(db, cfg):
     assert db.list_pending_hosted_images()[0]["source_url"] == SOURCE
 
 
+def test_apply_runtime_updates_public_host(db, cfg):
+    imgbed.configure(type("C", (), {"imgbed": cfg})())
+    imgbed.apply_runtime("https://img.example.net", "imgbed_other")
+    assert imgbed.public_host() == "img.example.net"
+    assert imgbed.public_url("https://img.example.net/file/a.jpg") is True
+    assert imgbed.public_url("https://img.053727.xyz/file/a.jpg") is False
+
+
 def test_enqueue_and_rewrite_without_config(db, monkeypatch):
     imgbed.configure(type("C", (), {"imgbed": ImgbedConfig()})())
     assert imgbed.enqueue_urls(db, [SOURCE]) == 0

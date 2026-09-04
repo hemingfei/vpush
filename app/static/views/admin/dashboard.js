@@ -30,6 +30,7 @@ export function createAdminDashboardView(dependencies) {
     cookieRepairItems,
     cookieRepairBanner,
     cookieUpdatedLabel,
+    imgbedStatusLabel,
     setPageTitle,
     STALE_KOL_HOURS,
     STALE_KOL_LIMIT,
@@ -294,6 +295,9 @@ export function createAdminDashboardView(dependencies) {
         </section>
         <p class="section-meta"><a href="/admin/knowledge" onclick="event.preventDefault();go('admin/knowledge')">IMA 与知识星球设置已移至研报库设置</a></p>
       </div>
+      <div id="st-imgbed" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-imgbed" style="display:none">
+        ${imgbedSettingsHtml(s.imgbed || {})}
+      </div>
       <div id="st-proxies" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-proxies" style="display:none"></div>`;
     renderStatsData(s);
     if (statsLoadError) {
@@ -304,6 +308,59 @@ export function createAdminDashboardView(dependencies) {
     switchStatsTab(statsTabFromHash());
     return true;
   }
+
+  function imgbedSettingsHtml(info) {
+    const connected = !!info.enabled;
+    const tokenHint = info.token_set
+      ? (info.token_from_env ? "已从环境变量读取，留空保持原密钥" : "已配置，留空保持原密钥")
+      : "在图床后台「安全设置 → API Token 管理」创建，勾上传权限";
+    const counts = connected
+      ? `已镜像 ${info.ready_count || 0} 张 · 排队 ${info.pending_count || 0} 张 · 失败 ${info.failed_count || 0} 张`
+      : "未接入时 X 配图仍走服务端代理";
+    const checkError = connected && info.last_check_error
+      ? `<p class="cfg-field-error" role="alert">上次连通检查失败：${escapeHtml(info.last_check_error)}。保存后自动重查。</p>`
+      : "";
+    const failedNotice = info.failed_count
+      ? `<div class="notice notice-warn" role="status">
+          <div class="notice-warn-body">
+            <strong>有 ${info.failed_count} 张配图镜像失败</strong>
+            <p>会自动重试；持续失败先检查图床地址和密钥是否能打开图床。</p>
+          </div>
+        </div>`
+      : "";
+    return `${failedNotice}<section class="section-panel">
+      <header class="section-head">
+        <div>
+          <h2 class="section-title">图床</h2>
+          <p class="section-meta">${imgbedStatusLabel(info)} · ${counts}。把 X 配图镜像到自建图床，大陆直连可看；代理兜底一直在。接线：打开图床后台 → 创建 API 密钥（勾上传）→ 地址和密钥贴到下面，保存即生效。开源项目 <a href="https://github.com/MarSeventh/CloudFlare-ImgBed" target="_blank" rel="noopener">CloudFlare-ImgBed</a>。</p>
+        </div>
+      </header>
+      <label class="field-label" for="imgbed-base-url">图床地址</label>
+      <input id="imgbed-base-url" class="form-control" type="url" inputmode="url" autocomplete="off" spellcheck="false" value="${escapeHtml(info.base_url || "")}" placeholder="https://img.example.com">
+      ${checkError}
+      <label class="field-label" for="imgbed-token">API 密钥</label>
+      <input id="imgbed-token" class="form-control" type="password" autocomplete="new-password" placeholder="${escapeHtml(tokenHint)}">
+      <details class="imgbed-advanced">
+        <summary class="cfg-group-title">高级</summary>
+        <div class="cfg-fields">
+          <label class="cfg-field" for="imgbed-channel-name">
+            <span>上传渠道名<span class="cfg-unit">图床后台里的渠道</span></span>
+            <input id="imgbed-channel-name" class="form-control" autocomplete="off" value="${escapeHtml(info.channel_name || "vpush-imgbed")}" placeholder="vpush-imgbed">
+          </label>
+          <label class="cfg-field" for="imgbed-folder">
+            <span>目录<span class="cfg-unit">图床内的存放目录</span></span>
+            <input id="imgbed-folder" class="form-control" autocomplete="off" value="${escapeHtml(info.folder || "vpush")}" placeholder="vpush">
+          </label>
+        </div>
+      </details>
+      <div class="toolbar" style="margin-top:12px">
+        <button type="button" class="btn-normal" onclick="saveImgbedSettings()">保存图床设置</button>
+        <button type="button" class="btn-ghost" onclick="pasteCookieField('imgbed-token')">从剪贴板填入</button>
+        ${connected ? `<button type="button" class="btn-ghost danger" onclick="clearImgbedSettings()" aria-label="清除图床设置">清除</button>` : ""}
+      </div>
+    </section>`;
+  }
+
   function plazaSourceEffect(row) {
     if (row.mode === "hide") return "已手动隐藏";
     if (row.mode === "show") return "已手动显示";
@@ -533,11 +590,13 @@ export function createAdminDashboardView(dependencies) {
     });
     const staleAll = staleEnabledKolRows(s.kol_health).length;
     const pending = Number(s.pending_kol_requests) || 0;
+    const imgbedFailed = Number((s.imgbed || {}).failed_count) || 0;
     const bits = [];
     if (failing) bits.push(`<li class="is-fail">${failing} 条管线持续失败</li>`);
     if (cred) bits.push(`<li class="is-warn">${cred} 条凭据缺失</li>`);
     if (never) bits.push(`<li class="is-idle">${never} 条尚未开始抓取</li>`);
     if (staleAll) bits.push(`<li class="is-fail">${staleAll} 个有订阅大V停更</li>`);
+    if (imgbedFailed) bits.push(`<li class="is-warn"><button type="button" class="linkish" onclick="go('admin/stats?tab=imgbed')">${imgbedFailed} 张配图镜像失败</button></li>`);
     if (pending) bits.push(`<li class="is-warn"><button type="button" class="linkish" onclick="go('admin/requests')">${pending} 条待审批</button></li>`);
     if (!bits.length) bits.push(`<li class="is-ok">管线正常，没有停更例外</li>`);
     return `<ul class="dash-duty-strip" id="dash-duty-strip">${bits.join("")}</ul>`;

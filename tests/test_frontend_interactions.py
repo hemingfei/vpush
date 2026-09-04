@@ -801,7 +801,7 @@ def test_plaza_source_visibility_admin_and_pills():
     """管理员可设广场数据源自动/显示/隐藏；角标和旧 #/zsxq 都认可见列表。"""
     src = APP_JS.read_text()
     css = STYLE_CSS.read_text()
-    assert 'STATS_TABS = ["config", "cookies", "proxies", "plaza", "news"]' in src
+    assert 'STATS_TABS = ["config", "cookies", "imgbed", "proxies", "plaza", "news"]' in src
     tabs = _fn_body("statsTabsHtml")
     assert 'data-tab="${tab}"' in tabs
     assert "proxies:" in tabs
@@ -1262,6 +1262,45 @@ def test_stats_cookie_repair_deep_link():
     assert "src.xueqiu && !src.xueqiu.ok" in repair
 
 
+def test_stats_imgbed_tab_matches_cookie_settings_pattern():
+    src = APP_JS.read_text()
+    dashboard = ADMIN_DASHBOARD_JS.read_text()
+    assert 'imgbed: "图床设置"' in src
+    assert "st-imgbed" in dashboard
+    assert "API 密钥" in dashboard
+    assert ">API Token<" not in dashboard
+    assert "保存图床设置" in dashboard
+    # Cookie 同款工具条：粘贴助手 + 危险清除，不用抓取设置的保存行
+    assert "pasteCookieField('imgbed-token')" in dashboard
+    assert 'onclick="clearImgbedSettings()"' in dashboard
+    assert "cfg-save-row" not in dashboard.split("imgbedSettingsHtml", 1)[1].split("function plazaSourceEffect", 1)[0]
+    # 首跑接线说明：讲三步接线，GitHub 只作来源标注
+    meta = dashboard.split("section-title\">图床</h2>", 1)[1].split("</p>", 1)[0]
+    assert "打开图床后台" in meta
+    assert "创建 API 密钥" in meta
+    assert "CloudFlare-ImgBed" in meta
+    # 渠道/目录收进高级，不占首屏
+    advanced = dashboard.split("imgbed-advanced", 1)[1].split("</details>", 1)[0]
+    assert "imgbed-channel-name" in advanced
+    assert "imgbed-folder" in advanced
+    # 计数拆开，失败独立可见
+    assert "失败 ${info.failed_count || 0} 张" in dashboard
+    assert "failed_count" in _fn_body("dutyStripHtml", ADMIN_DASHBOARD_JS)
+    assert "tab=imgbed" in _fn_body("dutyStripHtml", ADMIN_DASHBOARD_JS)
+    save = _fn_body("saveImgbedSettings")
+    assert "flash(" in save
+    assert "alert(" not in save
+    assert "/api/admin/imgbed" in save
+    assert "loadAdminStats(routeSeq)" in save
+    # 只在地址为空的校验分支 focus；保存成功后不再把焦点拽回地址
+    assert save.count("focus()") == 1
+    clear = _fn_body("clearImgbedSettings")
+    assert "confirm(" in clear
+    assert 'method: "DELETE"' in clear
+    assert "type=\"password\"" in dashboard
+    assert "autocomplete=\"new-password\"" in dashboard
+
+
 def test_stats_default_tab_is_config():
     switch = _fn_body("switchStatsTab")
     assert 'name === "config" ? "/admin/stats"' in switch
@@ -1568,7 +1607,7 @@ def test_cookie_save_nested_stats_reload_preserves_owner_sequence_and_focus_guar
 def test_cookie_tab_primary_buttons_are_44px():
     """Cookie 管理主按钮提到 44px；不改全局 --control-height-2xl，避免登录/筛选错位。"""
     css = STYLE_CSS.read_text()
-    block = re.search(r"#st-cookies\s+\.btn-normal\s*\{([^}]*)\}", css)
+    block = re.search(r"#st-cookies\s+\.btn-normal,\s*#st-imgbed\s+\.btn-normal\s*\{([^}]*)\}", css)
     assert block, "缺少 #st-cookies .btn-normal"
     assert "44px" in block.group(1)
     tokens = (APP_JS.parent / "vendor" / "design-tokens.css").read_text()
@@ -4161,7 +4200,7 @@ def test_news_source_picker_preserves_selection_across_search():
 
 def test_admin_news_tab_is_full_feed_manager():
     src = APP_JS.read_text() + ADMIN_NEWS_JS.read_text()
-    assert 'const STATS_TABS = ["config", "cookies", "proxies", "plaza", "news"]' in src
+    assert 'const STATS_TABS = ["config", "cookies", "imgbed", "proxies", "plaza", "news"]' in src
     for name in (
         "loadAdminNews", "renderAdminNews", "openNewsSourceModal",
         "openNewsFeedModal", "validateNewsFeedDraft", "refreshAdminNewsFeed",
