@@ -2431,14 +2431,14 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   /* 动态/订阅/广场：一行等宽图标角标（全部+6平台+筛选/星标）。字只留 aria，禁止改回带字胶囊。 */
   .icon-badge-bar {
     display: grid;
-    grid-template-columns: repeat(8, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
     gap: 8px;
     /* 两侧外扩 6px：从正文内边距借宽给格距，角标不挤正文 */
     margin-inline: -6px;
     width: calc(100% + 12px);
   }
   #tl-filterbar .icon-badge-bar {
-    grid-template-columns: repeat(9, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
   }
   .icon-badge-bar .tl-pills,
   .icon-badge-bar .tl-actions { display: contents; }
@@ -2470,12 +2470,20 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   }
   .icon-badge-bar .tl-pill:active .pt-icon,
   .icon-badge-bar > .fav-toggle:active .star-icon,
-  .icon-badge-bar .tl-actions button:active .funnel-icon { transform: scale(0.9); }
+  .icon-badge-bar .tl-actions button:active .funnel-icon,
+  .icon-badge-bar .tl-actions button:active .star-icon { transform: scale(0.9); }
   .icon-badge-bar > .fav-toggle,
   .icon-badge-bar .tl-actions button { font-size: 0; gap: 0; }
+  /* 绿点随章走：移动端放到章的右下 */
+  .icon-badge-bar .tl-pill[data-platform="live"]::after {
+    top: auto;
+    bottom: 4px;
+    right: 4px;
+  }
   /* 选中/激活收进章本身：章变 Duty Blue、图标反白；位图 logo 保持白章原色 */
   .icon-badge-bar .tl-pill.selected .pt-icon { background: var(--color-accent); }
   .icon-badge-bar .tl-pill.selected img.pt-icon { background: #fff; }
+  .icon-badge-bar .tl-actions button.selected .star-icon { background: var(--color-accent); color: #fff; }
   .icon-badge-bar > .fav-toggle.fav-on .star-icon,
   .icon-badge-bar .tl-actions button.has-filter .funnel-icon { background: var(--color-accent); color: #fff; }
   .home-head .icon-badge-bar { margin-top: 10px; }

@@ -749,15 +749,21 @@ def test_mobile_plaza_and_timeline_filters_are_seven_equal_44px_targets():
     assert ".icon-badge-bar .tl-pill span" in css and "display: none" in css
     assert ".icon-badge-bar > .fav-toggle" in css and "font-size: 0" in css
     assert ".icon-badge-bar > .home-filter-toggle" in css
+    # 移动端角标条自带特别关注章，与面板星标同状态
+    assert 'id="tl-star-toggle"' in _fn_body("tlFilterActionsHtml")
+    assert "tlPaintViewToggles()" in _fn_body("toggleTimelineFav")
+    dashboard_or_app = APP_JS.read_text() + ADMIN_DASHBOARD_JS.read_text()
+    assert 'onclick="toggleTimelineFav()">${STAR_SVG}' in dashboard_or_app
+    assert 'tlPaintViewToggles()' in _fn_body("toggleTimelineFav") or "tlPaintViewToggles()" in _fn_body("toggleTimelineFav")
     assert 'class="icon-badge-bar"' in _fn_body("renderHome")
     assert "tl-filterbar-top icon-badge-bar" in _fn_body("renderTimeline")
     assert "#tl-filterbar .icon-badge-bar" in css
-    assert "repeat(9, minmax(0, 1fr))" in css
+    assert "repeat(auto-fit, minmax(0, 1fr))" in css
 
     mobile = _media_block(css, "@media (max-width: 768px)")
     assert re.search(
         r"\.icon-badge-bar\s*\{[^}]*grid-template-columns:\s*"
-        r"repeat\(8,\s*minmax\(0,\s*1fr\)\)", mobile,
+        r"repeat\(auto-fit,\s*minmax\(0,\s*1fr\)\)", mobile,
     )
     assert re.search(
         r"[^{}]*\.home-filter-toggle[^{}]*\{[^}]*(?:min-)?height:\s*44px", mobile,
