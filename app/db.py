@@ -267,11 +267,9 @@ DEFAULT_TAG_RULES = [
 ]
 TAG_VOCABULARY_KEY = "tag_vocabulary"
 
-# MX 实时消息 LLM 打标（app/mx_llm_tagging.py）：进度游标、开关与批参数存 settings 表。
-MX_LLM_TAG_CURSOR_KEY = "mx_llm_tag_cursor"
-MX_LLM_TAG_ENABLED_KEY = "mx_llm_tag_enabled"
+# MX 实时消息 LLM 打标（app/mx_llm_tagging.py）：自动配置与批参数存 settings 表。
+MX_LLM_TAG_AUTO_CONFIG_KEY = "mx_llm_tag_auto_config"
 MX_LLM_TAG_BATCH_SIZE_KEY = "mx_llm_tag_batch_size"
-MX_LLM_TAG_MAX_CALLS_KEY = "mx_llm_tag_max_calls_per_tick"
 # LLM 发现的新黑话候选（kind=general 才入库），人工审核通过后并入 stock_aliases
 STOCK_ALIAS_CANDIDATES_KEY = "stock_alias_candidates"
 STOCK_ALIAS_CANDIDATES_MAX = 200
@@ -5499,21 +5497,42 @@ class DB:
         )
         return review
 
-    def get_mx_llm_tag_cursor(self) -> int:
-        raw = self.get_setting(MX_LLM_TAG_CURSOR_KEY)
+    def get_mx_llm_tag_auto_config(self) -> dict:
+        """自动打标配置（JSON；未配置或损坏时返回空 dict，由调用方兜底）。"""
+        raw = self.get_setting(MX_LLM_TAG_AUTO_CONFIG_KEY)
+        if not raw:
+            return {}
         try:
-            return int(str(raw or "0"))
+            cfg = json.loads(raw)
         except ValueError:
-            return 0
+            return {}
+        return cfg if isinstance(cfg, dict) else {}
 
-    def set_mx_llm_tag_cursor(self, value: int) -> None:
-        self.set_setting(MX_LLM_TAG_CURSOR_KEY, str(int(value)))
+    def set_mx_llm_tag_auto_config(self, cfg: dict) -> None:
+        self.set_setting(
+            MX_LLM_TAG_AUTO_CONFIG_KEY, json.dumps(cfg, ensure_ascii=False)
+        )
 
-    def get_mx_llm_tag_enabled(self) -> bool:
-        return str(self.get_setting(MX_LLM_TAG_ENABLED_KEY) or "1") not in ("0", "false")
+    def max_mx_post_id(self) -> int:
+        """MX 帖当前最大 id（无帖为 0）：自动打标触发水位布防用。"""
+        rows = self._rows("SELECT COALESCE(MAX(id), 0) AS m FROM posts WHERE platform = 'mx'")
+        return int(rows[0]["m"]) if rows else 0
 
-    def set_mx_llm_tag_enabled(self, enabled: bool) -> None:
-        self.set_setting(MX_LLM_TAG_ENABLED_KEY, "1" if enabled else "0")
+    def count_mx_new_since(self, post_id: int) -> tuple[int, int]:
+        """id 大于 post_id 的 MX 新消息数（blocked/hidden 不算）与其中最大 id。
+
+        自动打标的条数触发用：返回 (新消息数, 水位推进目标)，触发后把水位
+        推进到该 max id，之后的触发只统计更新到的消息。
+        """
+        rows = self._rows(
+            "SELECT COUNT(*) AS c, COALESCE(MAX(id), ?) AS m FROM posts "
+            "WHERE platform = 'mx' AND id > ? AND COALESCE(blocked, 0) = 0 "
+            "AND COALESCE(hidden, 0) = 0",
+            (int(post_id), int(post_id)),
+        )
+        if not rows:
+            return 0, int(post_id)
+        return int(rows[0]["c"]), int(rows[0]["m"])
 
     def get_mx_llm_tag_int_setting(self, key: str, default: int) -> int:
         try:

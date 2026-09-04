@@ -12965,7 +12965,7 @@ let _mxTagReviews = [];               // 当前待审标签列表（行内保留
 const _tagReviewExpanded = new Set(); // 已展开全文的审核记录 id（重渲染后保持展开状态）
 let _mxTagTestResult = null;
 let _mxTagPollTimer = null;
-let _mxTagSeenFinishedAt = null; // 已提示过的任务完成时刻（防重复弹提示）
+const _mxTagSeenDoneRuns = new Set(); // 已提示过完成结果的打标任务 id（防重复弹提示）
 let _mxTagPollSeenOnce = false;  // 首次观察进度时静默采纳当前状态
 
 function adminMxTagPanel(tagStatus, tagReviews, aliasCands, tagPending) {
@@ -13018,7 +13018,7 @@ function adminMxTagPanel(tagStatus, tagReviews, aliasCands, tagPending) {
     <section class="section-panel">
       <header class="section-head">
         <div><h2 class="section-title">MX LLM 打标（手动）</h2>
-        <p class="section-meta">选大V后对其未打标消息跑 LLM（话题/股票/操作三类标签，带准确度）：high 与消息已有标签<b>去重合并</b>写入，low 进下方审核队列（已在消息标签里的不再进审核）；发现的通用黑话进候选队列。一次最多处理 1000 条；自动触发已停用。</p></div>
+        <p class="section-meta">选大V后对其未打标消息跑 LLM（话题/股票/操作三类标签，带准确度）：high 与消息已有标签<b>去重合并</b>写入，low 进下方审核队列（已在消息标签里的不再进审核）；发现的通用黑话进候选队列。一次最多处理 1000 条，每 100 条为一批（一次 LLM 调用只打一批）；同一时间最多 3 批并行，多余批次自动排队；自动触发见下方「MX LLM 打标（自动）」面板。</p></div>
       </header>
       <p class="section-meta" style="margin-top:8px">${statusLine}</p>
       ${alertLine}
@@ -13029,6 +13029,7 @@ function adminMxTagPanel(tagStatus, tagReviews, aliasCands, tagPending) {
       <div id="mx-tag-progress" style="margin-top:12px">${adminMxTagProgressInner()}</div>
       ${adminMxTagTestBlock()}
     </section>
+    ${adminMxTagAutoPanel(st)}
     <section class="section-panel">
       <header class="section-head"><div><h2 class="section-title">标签审核</h2>
       <p class="section-meta">LLM 标了但不确定（low 准确度）的标签，通过后追加到该条消息。可勾选多条批量操作。</p></div></header>
@@ -13058,64 +13059,96 @@ function adminMxTagPanel(tagStatus, tagReviews, aliasCands, tagPending) {
 
 // ---- 手动打标：选大V弹窗 + 进度轮询 ----
 
-function adminMxTagProgressInner(job) {
-  const j = job || {};
-  const s = j.summary;
-  if (!j.running && !s) {
+function adminMxTagProgressInner(prog) {
+  const runs = (prog && Array.isArray(prog.runs)) ? prog.runs : [];
+  if (!runs.length) {
     return `<p class="section-meta">暂无进行中的打标任务。</p>`;
   }
-  if (!j.running && s) {
-    return `
-      <p class="section-meta">上次任务${s.cancelled ? "已取消" : "已完成"}（${escapeHtml(j.finished_at || "")}）：
-        处理 <b>${s.processed || 0}</b>/${s.total || 0} 条，合并标签 <b>${s.tagged_posts || 0}</b> 条消息，
-        进审核 ${s.reviews || 0} 个，黑话候选 ${s.candidates || 0} 个，失败批次 ${s.failed_batches || 0}。</p>
-      ${s.error ? `<p class="status-fail" style="margin-top:4px">错误：${escapeHtml(s.error)}</p>` : ""}`;
-  }
-  const pct = j.total ? Math.min(100, Math.round(((j.processed || 0) / j.total) * 100)) : 0;
+  const activeHtml = runs.filter((r) => r.status === "running").map(adminMxTagRunBlock).join("");
+  const doneHtml = runs.filter((r) => r.status !== "running").map(adminMxTagRunDoneLine).join("");
+  return `${activeHtml}${doneHtml}`;
+}
+
+function mxTagRunLabel(r) {
+  const auto = r.source === "auto";
+  const kols = (r.kols || []).join("、");
+  const name = kols || (auto ? "全部大V" : `任务#${r.run_id}`);
+  return `${auto ? "[自动] " : ""}${name}`;
+}
+
+function adminMxTagRunBlock(r) {
+  const pct = r.total ? Math.min(100, Math.round(((r.processed || 0) / r.total) * 100)) : 0;
+  const settled = (r.batches_done || 0) + (r.batches_failed || 0) + (r.batches_skipped || 0);
+  const queued = Math.max(0, (r.batch_total || 0) - settled - (r.batches_running || 0));
   return `
-    <p class="section-meta">正在打标（${escapeHtml((j.kols || []).join("、"))}）：
-      已处理 <b>${j.processed || 0}</b>/${j.total || 0} 条 · 批次 ${j.batches || 0} · 失败批次 ${j.failed_batches || 0}</p>
-    <div class="mx-tag-progress-bar"><div class="mx-tag-progress-fill" style="width:${pct}%"></div></div>
-    <div class="toolbar" style="margin-top:8px">
-      <button class="btn-sm danger" onclick="adminMxTagCancel()">取消任务</button>
-      ${j.cancel_requested ? `<span class="muted">取消中：当前批次完成后停止…</span>` : ""}
+    <div style="margin-bottom:10px">
+      <p class="section-meta">正在打标（${escapeHtml(mxTagRunLabel(r))}）：
+        已处理 <b>${r.processed || 0}</b>/${r.total || 0} 条 · 批次 ${r.batches_done || 0}/${r.batch_total || 0} 完成
+        （打标中 ${r.batches_running || 0} · 排队 ${queued} · 失败 ${r.batches_failed || 0}）</p>
+      <div class="mx-tag-progress-bar"><div class="mx-tag-progress-fill" style="width:${pct}%"></div></div>
+      <div class="toolbar" style="margin-top:8px">
+        <button class="btn-sm danger" onclick="adminMxTagCancel(${r.run_id})">取消任务</button>
+        ${r.cancel_requested ? `<span class="muted">取消中：当前批次完成后停止…</span>` : ""}
+      </div>
+      ${r.status === "failed" && r.error ? `<p class="status-fail" style="margin-top:4px">错误：${escapeHtml(r.error)}（剩余批次将跳过）</p>` : ""}
     </div>`;
+}
+
+function adminMxTagRunDoneLine(r) {
+  const s = r.summary;
+  const name = escapeHtml(mxTagRunLabel(r));
+  if (!s) {
+    return `<p class="section-meta">任务（${name}）已结束${r.error ? `：${escapeHtml(r.error)}` : ""}。</p>`;
+  }
+  const stateText = s.cancelled ? "已取消" : s.error ? "出错收场" : "已完成";
+  const errLine = s.error
+    ? `<p class="status-fail" style="margin-top:4px">错误：${escapeHtml(s.error)}</p>`
+    : "";
+  return `
+    <p class="section-meta">任务（${name}）${stateText}（${escapeHtml(r.finished_at || "")}）：
+      处理 <b>${s.processed || 0}</b>/${s.total || 0} 条，合并标签 <b>${s.tagged_posts || 0}</b> 条消息，
+      进审核 ${s.reviews || 0} 个，黑话候选 ${s.candidates || 0} 个，失败批次 ${s.failed_batches || 0}。</p>
+    ${errLine}`;
 }
 
 function adminMxTagPollProgress() {
   if (_mxTagPollTimer) return; // 已有轮询在跑
   const tick = async () => {
-    let job;
+    let prog;
     try {
-      job = await api("/api/admin/mx-llm-tag/progress");
+      prog = await api("/api/admin/mx-llm-tag/progress");
     } catch {
       _mxTagPollTimer = setTimeout(tick, 5000);
       return;
     }
     const box = $("#mx-tag-progress");
-    if (box) box.innerHTML = adminMxTagProgressInner(job);
-    if (job.running) {
+    if (box) box.innerHTML = adminMxTagProgressInner(prog);
+    const runs = Array.isArray(prog?.runs) ? prog.runs : [];
+    if (prog.running) {
       _mxTagPollTimer = setTimeout(tick, 3000);
+    } else {
+      _mxTagPollTimer = null;
+    }
+    const doneRuns = runs.filter((r) => r.status !== "running" && r.summary);
+    if (!_mxTagPollSeenOnce) {
+      // 首次观察：静默采纳当前已完成任务（避免页面加载时对历史任务重复提示）
+      _mxTagPollSeenOnce = true;
+      doneRuns.forEach((r) => _mxTagSeenDoneRuns.add(r.run_id));
       return;
     }
-    _mxTagPollTimer = null;
-    const finishedAt = job.finished_at || "";
-    if (!_mxTagPollSeenOnce) {
-      // 首次观察：静默采纳当前状态（避免页面加载时对历史完成任务重复提示）
-      _mxTagPollSeenOnce = true;
-      _mxTagSeenFinishedAt = finishedAt;
-    } else if (job.summary && finishedAt !== _mxTagSeenFinishedAt) {
-      _mxTagSeenFinishedAt = finishedAt;
-      if (routeStillActive(_adminRenderSeq)) {
-        const s = job.summary;
-        flash(
-          s.error
-            ? `打标任务结束（出错）：已处理 ${s.processed}/${s.total} 条。${s.error}`
-            : `打标任务${s.cancelled ? "已取消" : "完成"}：处理 ${s.processed}/${s.total} 条，合并标签 ${s.tagged_posts} 条消息`,
-          s.error ? "error" : "ok",
-        );
-        loadAdminVocabTab("tags");
-      }
+    const fresh = doneRuns.filter((r) => !_mxTagSeenDoneRuns.has(r.run_id));
+    if (fresh.length && routeStillActive(_adminRenderSeq)) {
+      fresh.forEach((r) => _mxTagSeenDoneRuns.add(r.run_id));
+      const msg = fresh.map((r) => {
+        const s = r.summary;
+        const base = `（${mxTagRunLabel(r)}）处理 ${s.processed || 0}/${s.total || 0} 条`;
+        const errText = s.error;
+        return errText
+          ? `${base}，出错：${errText}`
+          : `${s.cancelled ? "已取消" : "完成"}：${base}，合并标签 ${s.tagged_posts} 条消息`;
+      }).join("；");
+      flash(msg, fresh.some((r) => r.summary.error) ? "error" : "ok");
+      loadAdminVocabTab("tags");
     }
   };
   tick();
@@ -13147,7 +13180,7 @@ async function adminMxTagOpenRunModal() {
   mask.innerHTML = `
     <div class="admin-modal" role="dialog" aria-modal="true" aria-label="选择要打标的 MX 大V">
       <h3 class="admin-modal-title">选择要 LLM 打标的 MX 大V</h3>
-      <p class="section-meta">勾选大V，合计最多处理 ${cap} 条未打标消息（最旧优先）；单个大V超出上限时只处理其最旧的 ${cap} 条。</p>
+      <p class="section-meta">勾选大V，合计最多处理 ${cap} 条未打标消息（最旧优先）；单个大V超出上限时只处理其最旧的 ${cap} 条。每 100 条为一批，同一时间最多 3 批并行打标，多余批次自动排队，可与进行中的任务并存。</p>
       <div class="admin-modal-list">${rows}</div>
       <p class="section-meta" id="mx-tag-run-total">已选 0 / ${cap} 条</p>
       <div class="toolbar">
@@ -13179,26 +13212,140 @@ async function adminMxTagStartRun() {
     .map((cb) => Number(cb.dataset.kol));
   if (!kolIds.length) return;
   try {
-    await api("/api/admin/mx-llm-tag/run", {
+    const data = await api("/api/admin/mx-llm-tag/run", {
       method: "POST",
       body: JSON.stringify({ kol_ids: kolIds, max_messages: 1000 }),
     });
     mask.remove();
-    flash("打标任务已启动");
-    const box = $("#mx-tag-progress");
-    if (box) box.innerHTML = adminMxTagProgressInner({ running: true });
+    flash(`打标任务已启动：${data.total} 条分 ${data.batches} 批（每批 ≤${data.batch_size} 条），与其他任务并行或排队执行`);
     adminMxTagPollProgress();
   } catch (err) {
     flash("启动失败: " + err.message, "error");
   }
 }
 
-async function adminMxTagCancel() {
+async function adminMxTagCancel(runId) {
   try {
-    await api("/api/admin/mx-llm-tag/cancel", { method: "POST" });
-    flash("已请求取消，当前批次完成后停止");
+    await api("/api/admin/mx-llm-tag/cancel", {
+      method: "POST",
+      body: JSON.stringify({ run_id: runId }),
+    });
+    flash("已请求取消，当前批次完成后停止，排队批次直接跳过");
   } catch (err) {
     flash("取消失败: " + err.message, "error");
+  }
+}
+
+// ---- MX LLM 打标（自动）：时间段配置面板 ----
+
+function mxAutoPeriodInputs(p) {
+  const q = p || {};
+  return `
+    <input type="text" class="form-control mx-auto-name" style="width:150px" placeholder="名称（可选）" maxlength="30" value="${escapeHtml(q.name || "")}">
+    <input type="time" class="form-control mx-auto-start" style="width:auto" value="${escapeHtml(q.start || "00:00")}" aria-label="开始时间">
+    <span>–</span>
+    <input type="time" class="form-control mx-auto-end" style="width:auto" value="${escapeHtml(q.end || "23:59")}" aria-label="结束时间">
+    <span class="nowrap">新消息达</span>
+    <input type="number" class="form-control mx-auto-threshold" style="width:90px" min="1" step="1" value="${Number(q.threshold) || 50}" aria-label="触发条数">
+    <span class="nowrap">条 / 间隔</span>
+    <input type="number" class="form-control mx-auto-interval" style="width:90px" min="1" step="1" value="${Number(q.interval_minutes) || 30}" aria-label="间隔分钟">
+    <span class="nowrap">分钟也触发</span>`;
+}
+
+function adminMxTagAutoPanel(st) {
+  const auto = (st && typeof st === "object") ? st : {};
+  const enabled = !!auto.enabled;
+  const regular = auto.regular || { name: "", start: "00:00", end: "23:59", threshold: 50, interval_minutes: 30 };
+  const specials = Array.isArray(auto.specials) ? auto.specials : [];
+  const statusBits = [];
+  if (!enabled) {
+    statusBits.push("自动打标未开启");
+  } else if (!auto.active_period) {
+    statusBits.push("当前不在任何配置的时间段内，不触发");
+  } else {
+    const p = auto.active_period;
+    statusBits.push(
+      `当前时段：${p.kind === "special" ? "特殊" : "常规"}${p.name ? `「${escapeHtml(p.name)}」` : ""}${escapeHtml(p.start)}-${escapeHtml(p.end)}（达 ${p.threshold} 条 / 间隔 ${p.interval_minutes} 分钟触发）`,
+    );
+    if (auto.last_trigger_at) statusBits.push(`上次触发 ${escapeHtml(auto.last_trigger_at)}`);
+    statusBits.push(`自上次触发新消息 ${auto.new_since_trigger || 0} 条`);
+    if (auto.interval_due_at) statusBits.push(`间隔触发点 ${escapeHtml(auto.interval_due_at)}`);
+  }
+  return `
+    <section class="section-panel">
+      <header class="section-head">
+        <div><h2 class="section-title">MX LLM 打标（自动）</h2>
+        <p class="section-meta">在时间段内自动对未打标消息跑 LLM 打标，与手动任务共用同一队列（每批 ≤100 条、最多 3 批并行；同一时刻最多一个自动任务在排队/执行，防止处理不及连环入队）。每个时间段两个触发维度：<b>消息条数</b>——新消息累计达到阈值立即触发；<b>时间间隔</b>——距上次触发超过间隔分钟（且有待打标消息）也触发。任一触发后条数累计与间隔计时都重新计算，间隔之内条数先到会把下一个间隔触发点推向后。特殊时间段命中时优先按其配置执行（可增删）。</p></div>
+      </header>
+      <p class="section-meta" style="margin-top:8px">${statusBits.join("；")}。</p>
+      <div style="margin-top:12px">
+        <label style="display:inline-flex;align-items:center;gap:8px"><input type="checkbox" id="mx-auto-enabled" ${enabled ? "checked" : ""}> <b>开启自动打标</b></label>
+        <div class="mx-auto-period" id="mx-auto-regular" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px">
+          <span class="nowrap"><b>常规时间段</b>（必填）</span>
+          ${mxAutoPeriodInputs(regular)}
+        </div>
+        <div id="mx-auto-specials">
+          ${specials.map((p) => `
+          <div class="mx-auto-period" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px">
+            <span class="nowrap"><b>特殊时间段</b></span>
+            ${mxAutoPeriodInputs(p)}
+            <button type="button" class="btn-sm danger" onclick="adminMxTagAutoRemoveSpecial(this)">删除</button>
+          </div>`).join("")}
+        </div>
+        <div class="toolbar" style="margin-top:10px">
+          <button class="btn-ghost" onclick="adminMxTagAutoAddSpecial()">＋ 添加特殊时间段</button>
+          <button class="btn-normal" onclick="adminMxTagAutoSave()">保存配置</button>
+        </div>
+      </div>
+    </section>`;
+}
+
+function adminMxTagAutoAddSpecial() {
+  const box = document.getElementById("mx-auto-specials");
+  if (!box) return;
+  if (box.children.length >= 20) {
+    flash("特殊时间段最多 20 个", "error");
+    return;
+  }
+  const row = document.createElement("div");
+  row.className = "mx-auto-period";
+  row.style.cssText = "display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px";
+  row.innerHTML = `
+    <span class="nowrap"><b>特殊时间段</b></span>
+    ${mxAutoPeriodInputs({ name: "", start: "09:00", end: "11:30", threshold: 20, interval_minutes: 5 })}
+    <button type="button" class="btn-sm danger" onclick="adminMxTagAutoRemoveSpecial(this)">删除</button>`;
+  box.appendChild(row);
+}
+
+function adminMxTagAutoRemoveSpecial(btn) {
+  btn.closest(".mx-auto-period")?.remove();
+}
+
+async function adminMxTagAutoSave() {
+  const regularRow = document.getElementById("mx-auto-regular");
+  const enabledBox = document.getElementById("mx-auto-enabled");
+  if (!regularRow || !enabledBox) return;
+  const readPeriod = (row) => ({
+    name: row.querySelector(".mx-auto-name").value.trim(),
+    start: row.querySelector(".mx-auto-start").value,
+    end: row.querySelector(".mx-auto-end").value,
+    threshold: Number(row.querySelector(".mx-auto-threshold").value) || 0,
+    interval_minutes: Number(row.querySelector(".mx-auto-interval").value) || 0,
+  });
+  const payload = {
+    enabled: enabledBox.checked,
+    regular: readPeriod(regularRow),
+    specials: [...document.querySelectorAll("#mx-auto-specials .mx-auto-period")].map(readPeriod),
+  };
+  try {
+    await api("/api/admin/mx-llm-tag/auto-config", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    flash("自动打标配置已保存");
+    loadAdminVocabTab("tags");
+  } catch (err) {
+    flash("保存失败: " + err.message, "error");
   }
 }
 

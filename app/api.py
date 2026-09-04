@@ -44,8 +44,6 @@ from .db import (
     _UNSET,
     ALLOWED_PLATFORMS,
     DB,
-    MX_LLM_TAG_BATCH_SIZE_KEY,
-    MX_LLM_TAG_MAX_CALLS_KEY,
     days_until_purge,
     parse_block_keywords,
     user_plain_secret,
@@ -564,13 +562,27 @@ class TagMaintainIn(BaseModel):
     backfill: Literal["none", "pending", "all"] = "none"
 
 
-class MxLlmTagToggleIn(BaseModel):
-    enabled: bool
+class MxLlmTagAutoPeriodIn(BaseModel):
+    name: str = ""
+    start: str
+    end: str
+    threshold: int
+    interval_minutes: int
+
+
+class MxLlmTagAutoConfigIn(BaseModel):
+    enabled: bool = False
+    regular: MxLlmTagAutoPeriodIn
+    specials: list[MxLlmTagAutoPeriodIn] = []
 
 
 class MxLlmTagRunIn(BaseModel):
     kol_ids: list[int]
     max_messages: int = 1000
+
+
+class MxLlmTagCancelIn(BaseModel):
+    run_id: int | None = None
 
 
 class AliasCandidateActionIn(BaseModel):
@@ -6086,30 +6098,41 @@ def create_api_router(
 
     @router.get("/admin/mx-llm-tag/status", dependencies=[Depends(require_admin)])
     def mx_llm_tag_status():
-        """打标循环运行状态：开关、游标、批参数、待审数、下次触发与运行摘要。"""
-        from .mx_llm_tagging import get_tagger_status, next_due_tick
+        """打标状态：自动打标配置/触发状态、单批上限、待审数、运行摘要。"""
+        from .mx_llm_tagging import MANUAL_BATCH_SIZE_LIMIT, get_auto_status, get_tagger_status
 
-        now = datetime.now(CN_TZ)
         return {
-            "enabled": db.get_mx_llm_tag_enabled(),
-            "cursor": db.get_mx_llm_tag_cursor(),
-            "batch_size": db.get_mx_llm_tag_int_setting(
-                MX_LLM_TAG_BATCH_SIZE_KEY, 40
-            ),
-            "max_calls_per_tick": db.get_mx_llm_tag_int_setting(
-                MX_LLM_TAG_MAX_CALLS_KEY, 5
-            ),
+            "batch_size": MANUAL_BATCH_SIZE_LIMIT,
             "pending_reviews": len(db.list_tag_reviews()),
             "pending_alias_candidates": len(db.get_stock_alias_candidates()),
-            "next_tick": next_due_tick(now).strftime("%Y-%m-%d %H:%M:%S"),
+            **get_auto_status(db),
             **get_tagger_status(),
         }
 
-    @router.post("/admin/mx-llm-tag/toggle", dependencies=[Depends(require_admin)])
-    def mx_llm_tag_toggle(body: MxLlmTagToggleIn, admin: dict = Depends(require_admin)):
-        db.set_mx_llm_tag_enabled(body.enabled)
-        _audit(admin, "mx_llm_tag_toggle", detail=f"enabled={body.enabled}")
-        return {"ok": True, "enabled": db.get_mx_llm_tag_enabled()}
+    @router.post("/admin/mx-llm-tag/auto-config", dependencies=[Depends(require_admin)])
+    def mx_llm_tag_save_auto_config(body: MxLlmTagAutoConfigIn, admin: dict = Depends(require_admin)):
+        """保存自动打标配置：开关、常规/特殊时间段与触发参数（条数、间隔分钟）。
+
+        校验失败返回 400 与具体原因；保存后按开关状态变化重置触发布防。
+        """
+        from .mx_llm_tagging import save_auto_config
+
+        clean, err = save_auto_config(
+            db,
+            {
+                "enabled": body.enabled,
+                "regular": body.regular.model_dump(),
+                "specials": [p.model_dump() for p in body.specials],
+            },
+        )
+        if err:
+            raise HTTPException(status_code=400, detail=err)
+        _audit(
+            admin,
+            "mx_llm_tag_save_auto_config",
+            detail=f"enabled={clean['enabled']} specials={len(clean['specials'])}",
+        )
+        return {"ok": True, "config": clean}
 
     @router.post("/admin/mx-llm-tag/test", dependencies=[Depends(require_admin)])
     def mx_llm_tag_test(request: Request, admin: dict = Depends(require_admin)):
@@ -6149,11 +6172,12 @@ def create_api_router(
 
     @router.post("/admin/mx-llm-tag/run", dependencies=[Depends(require_admin)])
     def mx_llm_tag_run(body: MxLlmTagRunIn, request: Request, admin: dict = Depends(require_admin)):
-        """启动手动打标后台任务：所选大V的未打标消息，最旧优先，上限 1000 条。
+        """启动手动打标：所选大V的未打标消息切成每批 ≤100 条入队，最多 3 批
+        同时打标，其余排队（已有任务在跑时新任务照常入队）。
 
         结果与每条消息已有标签去重合并；进度经 /admin/mx-llm-tag/progress 轮询。
         """
-        from .mx_llm_tagging import MAX_MANUAL_MESSAGES, start_manual_job
+        from .mx_llm_tagging import MAX_MANUAL_MESSAGES, start_manual_run
         from .scheduler import _system_llm_config
 
         kol_ids = sorted({int(kid) for kid in (body.kol_ids or [])})
@@ -6163,29 +6187,37 @@ def create_api_router(
             max(int(body.max_messages or MAX_MANUAL_MESSAGES), 1), MAX_MANUAL_MESSAGES
         )
         llm_cfg = _system_llm_config(db, getattr(request.app.state, "llm_config", None))
-        result = start_manual_job(db, llm_cfg, kol_ids, max_messages)
+        result = start_manual_run(db, llm_cfg, kol_ids, max_messages)
         if not result["started"]:
-            if result["reason"] == "busy":
-                raise HTTPException(status_code=409, detail="打标任务正在进行，请稍后再试")
+            if result["reason"] == "no_posts":
+                raise HTTPException(status_code=400, detail="所选大V暂无未打标消息")
             raise HTTPException(status_code=400, detail="未配置系统 LLM（设置 → AI 摘要）")
         _audit(admin, "mx_llm_tag_run", detail=f"kols={len(kol_ids)} max={max_messages}")
-        return {"ok": True, "max_messages": max_messages}
+        return {
+            "ok": True,
+            "run_id": result["run_id"],
+            "total": result["total"],
+            "batches": result["batches"],
+            "batch_size": result["batch_size"],
+            "max_messages": max_messages,
+        }
 
     @router.get("/admin/mx-llm-tag/progress", dependencies=[Depends(require_admin)])
     def mx_llm_tag_progress():
-        """手动打标任务进度（前台轮询）。"""
+        """手动打标进度（前台轮询）：活跃与最近完成的打标任务列表。"""
         from .mx_llm_tagging import get_manual_job_status
 
         return get_manual_job_status()
 
     @router.post("/admin/mx-llm-tag/cancel", dependencies=[Depends(require_admin)])
-    def mx_llm_tag_cancel(admin: dict = Depends(require_admin)):
-        """请求取消当前手动打标任务（当前批次完成后停止）。"""
-        from .mx_llm_tagging import request_cancel_manual_job
+    def mx_llm_tag_cancel(body: MxLlmTagCancelIn, admin: dict = Depends(require_admin)):
+        """请求取消手动打标任务（run_id 缺省=全部）：当前批次完成后停止，
+        排队批次直接跳过。"""
+        from .mx_llm_tagging import request_cancel_manual_run
 
-        if not request_cancel_manual_job():
+        if not request_cancel_manual_run(body.run_id):
             raise HTTPException(status_code=409, detail="当前没有进行中的打标任务")
-        _audit(admin, "mx_llm_tag_cancel")
+        _audit(admin, "mx_llm_tag_cancel", detail=f"run_id={body.run_id}")
         return {"ok": True}
 
     # ---- MX 大V实时观点（管理端）：配置 / 状态 / 手动跑批 / 回填管理 / 题材候选审核 ----
