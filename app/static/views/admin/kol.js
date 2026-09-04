@@ -143,9 +143,9 @@ export function createAdminKolsView(dependencies) {
             <tbody>${rows || `<tr class="ak-empty"><td colspan="11" class="muted">${state.adminKolsQ || state.adminKolsCategory || state.adminKolsStatus !== "" || state.adminKolsPlatform ? "没有匹配的大V" : "还没有大V，先用上方表单添加"}</td></tr>`}</tbody>
           </table>
         </div>
-        <div class="toolbar" style="margin-top:12px;justify-content:center;gap:12px;align-items:center">
+        <div class="pager">
           <button class="btn-sm" ${page <= 0 ? "disabled" : ""} onclick="adminKolsPage(${page - 1})">← 上一页</button>
-          <span class="muted">第 ${page + 1}/${pages} 页 · 共 ${state.adminKolsTotal} 个</span>
+          <span class="pager-count">第 ${page + 1}/${pages} 页 · 共 ${state.adminKolsTotal} 个</span>
           <button class="btn-sm" ${page + 1 >= pages ? "disabled" : ""} onclick="adminKolsPage(${page + 1})">下一页 →</button>
         </div>
       </section>`;

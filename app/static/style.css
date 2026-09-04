@@ -511,6 +511,17 @@ textarea.form-control {
 .section-title .hint { color: var(--color-text-faint); font-weight: normal; }
 .section-meta { color: var(--color-text-muted); font-size: var(--text-xs); margin-top: 4px; }
 .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+/* 列表分页：单行紧凑排布，窄屏不换行不错位 */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: nowrap;
+}
+.pager .btn-sm { flex: 0 0 auto; padding: 0 12px; }
+.pager .pager-count { white-space: nowrap; font-size: var(--text-xs); color: var(--color-text-muted); }
 @media (min-width: 769px) {
   .toolbar .btn-ghost,
   .toolbar .btn-sm {
@@ -871,6 +882,13 @@ textarea.proxy-import { min-height: 96px; }
 .pt-label { display: inline; }
 .pt-icon { width: 16px; height: 16px; flex-shrink: 0; }
 img.pt-icon { display: block; object-fit: contain; }
+/* 满版实底 logo（雪球/微博/X/Truth 位图）光学上比描边图标大一圈，统一缩一档 */
+.tl-pill img.pt-icon,
+.tl-pill[data-platform="weibo"] .pt-icon,
+.tl-pill[data-platform="twitter"] .pt-icon,
+.platform-tab img.pt-icon,
+.platform-tab[data-platform="weibo"] .pt-icon,
+.platform-tab[data-platform="twitter"] .pt-icon { width: 14px; height: 14px; }
 .tl-pill[data-platform="live"]:not(.selected) .pt-icon { color: var(--color-accent); }
 .platform-tab[data-platform="xueqiu"]:not(.selected) .pt-icon,
 .tl-pill[data-platform="xueqiu"]:not(.selected) .pt-icon { color: var(--color-brand-xueqiu); }
@@ -1627,7 +1645,10 @@ body.lightbox-open { overflow: hidden; }
   flex-shrink: 0;
 }
 .post-item .p-name-line .p-platform .pt-icon { width: 13px; height: 13px; }
-.post-item .p-name-line .p-platform[data-platform="twitter"] .pt-icon { width: 11px; height: 11px; }
+.post-item .p-name-line .p-platform[data-platform="twitter"] .pt-icon,
+.post-item .p-name-line .p-platform[data-platform="weibo"] .pt-icon,
+.post-item .p-name-line .p-platform[data-platform="xueqiu"] .pt-icon,
+.post-item .p-name-line .p-platform[data-platform="truth"] .pt-icon { width: 11px; height: 11px; }
 .post-item .p-name-line .p-platform[data-platform="xueqiu"] .pt-icon { color: var(--color-brand-xueqiu); }
 .post-item .p-name-line .p-platform[data-platform="combination"] .pt-icon { color: var(--color-brand-xueqiu); }
 .post-item .p-name-line .p-platform[data-platform="weibo"] .pt-icon { color: var(--color-brand-weibo); }
@@ -2391,6 +2412,9 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   }
   .icon-badge-bar .tl-pill span { display: none; }
   .icon-badge-bar .tl-pill .pt-icon { width: 20px; height: 20px; }
+  .icon-badge-bar .tl-pill img.pt-icon,
+  .icon-badge-bar .tl-pill[data-platform="weibo"] .pt-icon,
+  .icon-badge-bar .tl-pill[data-platform="twitter"] .pt-icon { width: 17px; height: 17px; }
   .icon-badge-bar > .fav-toggle,
   .icon-badge-bar .tl-actions button { font-size: 0; gap: 0; }
   .icon-badge-bar .funnel-icon,
