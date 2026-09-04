@@ -52,7 +52,7 @@ const REPORT_WATCH_BLOCKED_TAGS = new Set([
 ]);
 const TL_SOURCE_KEY = "timelineSource";
 const PLATFORM_TABS = ["", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
-const STATS_TABS = ["config", "cookies", "imgbed", "proxies", "plaza", "news"];
+const STATS_TABS = ["config", "cookies", "imgbed", "plaza", "news", "proxies"];
 const STALE_KOL_LIMIT = 10;
 const STALE_KOL_HOURS = 48;
 const TL_PLATFORMS = PLATFORM_TABS.map((p) => [p, p ? PLATFORM_LABELS[p] : "全部"]);
