@@ -18,6 +18,8 @@ STYLE_CSS = APP_JS.with_name("style.css")
 ROOT = Path(__file__).resolve().parents[1]
 DIALOG_JS = APP_JS.parent / "core" / "dialog.js"
 NEWS_JS = APP_JS.parent / "views" / "news.js"
+FEISHU_PERSONAL_JS = APP_JS.parent / "views" / "feishu-personal.js"
+VIEW_JS_SOURCES = (APP_JS, NEWS_JS, FEISHU_PERSONAL_JS)
 
 
 def test_subscription_push_is_the_only_subscription_management_navigation_entry():
@@ -61,8 +63,7 @@ def test_knowledge_row_hides_unused_cover_fallback_icon():
 
 
 
-def _fn_body(name: str, path: Path = APP_JS) -> str:
-    """提取指定文件中的函数体。"""
+def _extract_fn_body(name: str, path: Path) -> str:
     src = path.read_text()
     m = re.search(rf"async\s+function\s+{name}\b|function\s+{name}\b", src)
     assert m, f"未找到函数 {name}"
@@ -87,6 +88,25 @@ def _fn_body(name: str, path: Path = APP_JS) -> str:
             depth -= 1
         i += 1
     return src[start:i]
+
+
+def _fn_body(name: str, path: Path = APP_JS) -> str:
+    """提取指定文件中的函数体。默认从 app.js 再查 views/。"""
+    if path is not APP_JS:
+        return _extract_fn_body(name, path)
+    last_err = None
+    for candidate in VIEW_JS_SOURCES:
+        if not candidate.exists():
+            continue
+        try:
+            return _extract_fn_body(name, candidate)
+        except AssertionError as err:
+            last_err = err
+    raise last_err
+
+
+def _has_route_seq_capture(text: str) -> bool:
+    return "const routeSeq = routeRenderSeq" in text or "const routeSeq = currentRouteSeq()" in text
 
 
 def _media_block(css: str, query: str, last: bool = False) -> str:
@@ -251,8 +271,8 @@ def test_bind_code_callbacks_capture_and_require_current_owner_before_side_effec
         body = _fn_body(name)
         await_api = body.index('await api("/api/me/bind-code"')
         prefix = body[:await_api]
+        assert _has_route_seq_capture(prefix), f"{name} 必须在请求前捕获会话拥有者"
         for capture in (
-            "const routeSeq = routeRenderSeq",
             "const token = state.token",
             "const sessionGeneration = imaMountState.sessionGeneration",
         ):
@@ -2095,8 +2115,8 @@ def test_push_setting_saves_require_same_route_token_and_session_before_mutation
     for name in ("savePushChannels", "saveTranslateTwitter", "saveDnd"):
         body = _fn_body(name)
         put = body.index('await api("/api/me"')
+        assert _has_route_seq_capture(body[:put])
         for capture in (
-            "const routeSeq = routeRenderSeq",
             "const token = state.token",
             "const sessionGeneration = imaMountState.sessionGeneration",
         ):
@@ -2120,8 +2140,8 @@ def test_settings_save_callbacks_require_same_route_token_and_session_before_all
     ):
         body = _fn_body(name)
         await_api = body.index("await api(")
+        assert _has_route_seq_capture(body[:await_api]), f"{name} 必须在异步请求前捕获会话拥有者"
         for capture in (
-            "const routeSeq = routeRenderSeq",
             "const token = state.token",
             "const sessionGeneration = imaMountState.sessionGeneration",
         ):
@@ -2191,8 +2211,8 @@ def test_admin_target_callbacks_require_route_token_session_and_owned_side_effec
     ):
         body = _fn_body(name)
         await_api = body.index("await api(")
+        assert _has_route_seq_capture(body[:await_api]), f"{name} 必须在请求前捕获会话 owner"
         for capture in (
-            "const routeSeq = routeRenderSeq",
             "const token = state.token",
             "const sessionGeneration = imaMountState.sessionGeneration",
         ):
@@ -4922,7 +4942,7 @@ def test_admin_chart_system_uses_tokens_and_external_rate_label():
     assert ".dash-stats" in css
     assert ".dash-split" in css
     assert "grid-template-columns: minmax(0, 1fr) auto" in css
-    assert "qr-frame" in src
+    assert "qr-frame" in FEISHU_PERSONAL_JS.read_text()
     assert 'class="qr-card"' in _fn_body("startWeiboQr")
     assert "onclick=\"loadAdminDashboard()\"" in _fn_body("loadAdminDashboard")
 
@@ -5437,7 +5457,8 @@ def test_app_uses_native_module_entry():
 def test_inline_handlers_have_exact_explicit_exports():
     source = APP_JS.read_text()
     html = INDEX_HTML.read_text()
-    used = _inline_handler_calls(html + source + NEWS_JS.read_text())
+    views_src = "".join(path.read_text() for path in sorted((APP_JS.parent / "views").glob("*.js")))
+    used = _inline_handler_calls(html + source + views_src)
     exported = _inline_handler_registry(source)
     assert used == exported, (
         f"missing={sorted(used - exported)} extra={sorted(exported - used)}"
@@ -5447,7 +5468,8 @@ def test_inline_handlers_have_exact_explicit_exports():
 
 def test_inline_handlers_do_not_read_module_lexicals():
     source = APP_JS.read_text()
-    for attr in EVENT_ATTRIBUTE_RE.findall(source):
+    views_src = "".join(path.read_text() for path in sorted((APP_JS.parent / "views").glob("*.js")))
+    for attr in EVENT_ATTRIBUTE_RE.findall(source + views_src):
         assert "${" not in attr or not INLINE_DYNAMIC_CALL_RE.search(attr), attr
         stripped = re.sub(r"\$\{[^}]+\}", "", attr)
         roots = set(INLINE_MEMBER_RE.findall(stripped)) - INLINE_BUILTINS - INLINE_SAFE_MEMBER_ROOTS
