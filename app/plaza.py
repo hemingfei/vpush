@@ -6,7 +6,7 @@ import json
 from .db import DB
 
 # 与前端 PLATFORM_TABS 对齐（不含 ima：广场没有 ima 角标）
-PLAZA_PLATFORMS = ("xueqiu", "combination", "weibo", "twitter", "zsxq")
+PLAZA_PLATFORMS = ("xueqiu", "combination", "weibo", "twitter", "zsxq", "truth")
 PLAZA_MODES = ("auto", "show", "hide")
 PLAZA_VISIBILITY_KEY = "plaza_source_visibility"
 

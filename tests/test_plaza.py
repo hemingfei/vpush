@@ -28,6 +28,8 @@ def test_plaza_auto_hides_when_no_enabled_kol(tmp_path):
     zq = db.add_kol("zsxq", "前沿信息收录", "28888112822211")
     assert "xueqiu" in plaza_visible_platforms(db)
     assert "zsxq" in plaza_visible_platforms(db)
+    db.add_kol("truth", "Donald J. Trump", "realDonaldTrump")
+    assert "truth" in plaza_visible_platforms(db)
     db.set_kols_enabled([zq], False)
     assert "zsxq" not in plaza_visible_platforms(db)
     assert "zsxq" in plaza_hidden_platforms(db)
