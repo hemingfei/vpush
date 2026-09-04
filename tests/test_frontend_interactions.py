@@ -801,7 +801,7 @@ def test_plaza_source_visibility_admin_and_pills():
     """管理员可设广场数据源自动/显示/隐藏；角标和旧 #/zsxq 都认可见列表。"""
     src = APP_JS.read_text()
     css = STYLE_CSS.read_text()
-    assert 'STATS_TABS = ["config", "cookies", "imgbed", "proxies", "plaza", "news"]' in src
+    assert 'STATS_TABS = ["config", "cookies", "imgbed", "plaza", "news", "proxies"]' in src
     tabs = _fn_body("statsTabsHtml")
     assert 'data-tab="${tab}"' in tabs
     assert "proxies:" in tabs
@@ -4200,7 +4200,7 @@ def test_news_source_picker_preserves_selection_across_search():
 
 def test_admin_news_tab_is_full_feed_manager():
     src = APP_JS.read_text() + ADMIN_NEWS_JS.read_text()
-    assert 'const STATS_TABS = ["config", "cookies", "imgbed", "proxies", "plaza", "news"]' in src
+    assert 'const STATS_TABS = ["config", "cookies", "imgbed", "plaza", "news", "proxies"]' in src
     for name in (
         "loadAdminNews", "renderAdminNews", "openNewsSourceModal",
         "openNewsFeedModal", "validateNewsFeedDraft", "refreshAdminNewsFeed",
@@ -4210,6 +4210,9 @@ def test_admin_news_tab_is_full_feed_manager():
     assert "财经资讯" in src
     assert "向用户显示财经新闻" in src
     assert "显示已归档" in src
+    archived_toggle = _fn_body("updateAdminNewsArchived", ADMIN_NEWS_JS)
+    assert "loadAdminNews()" in archived_toggle
+    assert "renderAdminNews()" not in archived_toggle
     assert "验证并保存" in src
 
 
@@ -5225,6 +5228,7 @@ def test_ima_collector_dirty_bar_excludes_acl_and_can_discard():
     assert 'id="ima-sync-progress"' in runtime
     assert 'id="ima-collector-status"' in runtime
     assert "bar.hidden = !(imaMountState.dirty || imaMountState.collectorDirty)" in dirty
+    assert "renderImaCollectorDirtyState()" in _fn_body("saveImaCollector")
     assert "renderImaCollectorDirtyState()" in _fn_body("renderImaMountGroups")
     assert "renderImaCollectorDirtyState()" in _fn_body("setImaGroupInterval")
     assert "renderImaCollectorDirtyState()" in _fn_body("toggleImaFolder")

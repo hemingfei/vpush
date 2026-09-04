@@ -1005,6 +1005,7 @@ export function createAdminImaCollectorView(dependencies) {
           if (tokenInput) tokenInput.value = "";
         }
       }
+      renderImaCollectorDirtyState();
       const restoreFocus = document.activeElement === focusElement || document.activeElement === document.body;
       if (!focusMoved && restoreFocus) {
         const focusTarget = document.getElementById(focusId) || document.getElementById("ima-collector-save");

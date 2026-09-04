@@ -380,7 +380,7 @@ export function createAdminNewsView(dependencies) {
   let _adminKolsOptions = null;
 
   async function _adminKolsSelect() {
-    // 大V下拉选项（按平台分组），只拉一次缓存
+    // 大V下拉选项（按平台分组），只拉一次缓存；选中态不烤进 HTML，由 renderAdminPosts 按状态回填
     if (_adminKolsOptions) return _adminKolsOptions;
     const kols = await api("/api/kols");
     const groups = {};
@@ -390,7 +390,7 @@ export function createAdminNewsView(dependencies) {
     }
     _adminKolsOptions = Object.entries(groups)
       .map(([g, list]) => `<optgroup label="${escapeHtml(g)}">${list.map((k) =>
-        `<option value="${k.id}" ${state.adminPostsKolId == k.id ? "selected" : ""}>${escapeHtml(k.name)}</option>`).join("")}</optgroup>`)
+        `<option value="${k.id}">${escapeHtml(k.name)}</option>`).join("")}</optgroup>`)
       .join("");
     return _adminKolsOptions;
   }
@@ -425,6 +425,8 @@ export function createAdminNewsView(dependencies) {
           ? `<div class="toolbar" style="margin-top:14px;justify-content:center"><button class="btn-normal" onclick="adminPostsLoadMore()">加载更多</button></div>`
           : `<p class="muted" style="text-align:center;margin-top:14px">已加载全部</p>`}
       </section>`;
+    const kolSelect = $("#ad-posts-kol");
+    if (kolSelect) kolSelect.value = state.adminPostsKolId ? String(state.adminPostsKolId) : "";
   }
 
   function postRowHtml(p) {
@@ -497,7 +499,7 @@ export function createAdminNewsView(dependencies) {
 
   function updateAdminNewsArchived(showArchived) {
     adminNewsState.showArchived = showArchived;
-    renderAdminNews();
+    loadAdminNews();
   }
   return {
     loadAdminNews,
