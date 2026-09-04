@@ -296,3 +296,38 @@ def test_run_due_view_batch_catchup_and_failure(monkeypatch):
     assert batch["status"] == "failed" and batch["error"]
     assert db.get_mx_view_cursor() == 0  # 失败游标不动
     assert db.get_mx_view_snapshot(day, "09:20") is None  # 失败不落快照
+
+
+# ---- Task 6：回填 job（按快照表重放整天） ----
+
+
+def test_backfill_replays_days_without_touching_cursor_or_version(monkeypatch):
+    db = make_db()
+    calls = []
+
+    def fake_batch(db_, day, snapshot_at, window, kind="live", llm_config=None, advance_cursor=True):
+        calls.append((day, snapshot_at, kind, advance_cursor))
+        db_.upsert_mx_view_snapshot(day, snapshot_at, 1, kind, {"snapshot_at": snapshot_at}, 0)
+        return {"ran": True, "opinions": 0, "message_count": 0}
+
+    monkeypatch.setattr(mva, "run_snapshot_batch", fake_batch)
+    assert mva.start_backfill_job(db, "2026-09-03", "2026-09-04") is True
+    assert mva.backfill_running() is True
+    # 等线程结束（窗口总量 38×2，假函数瞬间完成）
+    import time as _t
+
+    for _ in range(100):
+        if not mva.backfill_running():
+            break
+        _t.sleep(0.05)
+    assert mva.backfill_running() is False
+    days = {c[0] for c in calls}
+    assert days == {"2026-09-03", "2026-09-04"}  # 都是工作日
+    assert all(c[2] == "backfill" and c[3] is False for c in calls)
+    assert any(c[1] == "09:20" for c in calls) and any(c[1] == "16:00" for c in calls)
+    assert mva.start_backfill_job(db, "2026-09-03", "2026-09-04") is True  # 可再次启动
+
+
+def test_backfill_rejects_range_over_30_days():
+    db = make_db()
+    assert mva.start_backfill_job(db, "2026-01-01", "2026-09-01") is False

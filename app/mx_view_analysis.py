@@ -10,7 +10,7 @@ import json
 import logging
 import re
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from . import llm
 
@@ -570,3 +570,80 @@ def run_due_view_batch(db, llm_config=None):
         return {"ran": result["ran"], "failed": False, "consecutive": get_fail_count(db)}
     except Exception as e:  # noqa: BLE001
         return {"ran": False, "failed": True, "error": str(e), "consecutive": get_fail_count(db)}
+
+
+# ---- 回填 job：按快照表重放整天（仅工作日），不推游标不推版本 ----
+
+def _iter_weekdays(day_from: str, day_to: str) -> list[str]:
+    d0 = date.fromisoformat(day_from)
+    d1 = date.fromisoformat(day_to)
+    out = []
+    d = d0
+    while d <= d1:
+        if d.weekday() < 5:
+            out.append(d.isoformat())
+        d = date.fromordinal(d.toordinal() + 1)
+    return out
+
+
+def backfill_status() -> dict:
+    with _backfill_state_lock:
+        return dict(_backfill_state)
+
+
+def request_backfill_cancel() -> None:
+    with _backfill_state_lock:
+        _backfill_state["cancel"] = True
+
+
+def start_backfill_job(db, day_from, day_to, llm_config=None) -> bool:
+    """回填 = 按快照表重放整天（仅工作日）。已在跑或日期区间非法/超 30 天返回 False。"""
+    with _backfill_state_lock:
+        if _backfill_state["running"]:
+            return False
+    try:
+        days = _iter_weekdays(day_from, day_to)
+    except ValueError:
+        return False
+    if not days or (date.fromisoformat(day_to) - date.fromisoformat(day_from)).days > 30:
+        return False
+    with _backfill_state_lock:
+        _backfill_state.update(
+            running=True, cancel=False, day_from=day_from, day_to=day_to,
+            current_day="", done_windows=0, total_windows=0, error="",
+        )
+
+    def worker():
+        try:
+            windows = snapshot_windows(resolve_schedule(load_schedule_config_raw(db)))
+            with _backfill_state_lock:
+                _backfill_state["total_windows"] = len(days) * len(windows)
+            for day in days:
+                with _backfill_state_lock:
+                    if _backfill_state["cancel"]:
+                        break
+                    _backfill_state["current_day"] = day
+                for start, end in windows:
+                    with _backfill_state_lock:
+                        if _backfill_state["cancel"]:
+                            break
+                    try:
+                        run_snapshot_batch(
+                            db, day=day, snapshot_at=end, window=(start, end),
+                            kind="backfill", llm_config=llm_config, advance_cursor=False,
+                        )
+                    except Exception as e:  # noqa: BLE001 - 单窗失败继续，错误留批次表
+                        logger.error("回填单窗失败 %s %s: %s", day, end, e)
+                    with _backfill_state_lock:
+                        _backfill_state["done_windows"] += 1
+        except Exception as e:  # noqa: BLE001
+            logger.exception("MX 观点回填任务异常")
+            with _backfill_state_lock:
+                _backfill_state["error"] = str(e)[:300]
+        finally:
+            with _backfill_state_lock:
+                _backfill_state["running"] = False
+                _backfill_state["current_day"] = ""
+
+    threading.Thread(target=worker, name="mx-view-backfill", daemon=True).start()
+    return True
