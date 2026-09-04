@@ -14,7 +14,6 @@ export function createAdminImaCollectorView(dependencies) {
     imaMountState,
     imaCollectorPureCache,
     reloadAdminSettingsPage,
-    loadAdminKnowledge,
   } = dependencies;
 
   let imaProgressTimer = null;
@@ -194,7 +193,7 @@ export function createAdminImaCollectorView(dependencies) {
     imaMountState.collectorConfirmedLiveRevision = -1;
     imaMountState.collectorConfirmedMountRevision = -1;
     renderImaCollectorDirtyState();
-    loadAdminKnowledge(currentRouteSeq());
+    reloadAdminSettingsPage(currentRouteSeq());
   }
 
   function imaFolderAncestorSelected(groupId, folderId) {
