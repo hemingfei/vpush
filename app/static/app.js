@@ -51,6 +51,7 @@ const V_ICON = `<svg class="nav-v-icon" viewBox="0 0 24 24" fill="none" stroke="
 const BOOK_ICON = `<svg class="nav-book-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>`;
 // 导航线性图标集（lucide 风格，stroke=currentColor，与 STAR/BELL/EYE 同一词汇）
 const LIST_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg>`;
+const MX_VIEWS_ICON = `<svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>`;
 const WSCN_LIVE_ICON = `<svg class="pt-icon" viewBox="180 240 640 620" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="m466.944 649.6 41.152-102.464 18.4 49.472L432.192 828.8H416.32L246.08 423.136c-11.808-26.208-34.656-46.368-62.72-54.336l-1.6-.448V367.2h216.992v.608l-.192.096c-17.664 11.84-24.48 25.696-24.48 45.056 0 5.664 2.784 14.08 2.784 14.08l90.08 222.56zm239.648-345.92h135.264v.832l-.864.128c-16.96 3.136-32.576 18.848-43.104 44.576l-1.632 4.16-161.28 424.96h-14.4L548.192 597.76l67.488-151.104 55.2 140.544L752 370.176l.032-.032c11.68-31.616-11.424-65.28-45.12-65.728h-.32v-.736zm-21.44-68.576c-1.152 2.304-5.568 12.8-5.568 12.8L538.432 573.44 433.056 310.944c-6.4-18.4-25.184-51.84-64.64-62.816v-.768h248.48v1.216h-.448c-6.784 0-53.856 1.504-53.856 51.296 0 7.168 4.512 24.096 6.304 29.248l18.304 46.24 54.336-132.544c3.936-9.984 2.048-16.256 1.472-18.496-4.416-10.88-17.312-23.68-35.648-26.56v-.448h115.904v.576c-19.584 4.192-29.632 18.944-38.144 37.184"/></svg>`;
 const NEWS_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/><path d="M6 8h9M6 12h12M6 16h8"/><path d="M17 8h1"/></svg>`;
 const GRID_ICON = `<svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>`;
@@ -1062,6 +1063,7 @@ function avatarHtml(name, url) {
 const NAV = [
   { group: "订阅", items: [
     { route: "timeline", icon: LIST_ICON, label: "最新动态" },
+    { route: "mx-views", icon: MX_VIEWS_ICON, label: "MX观点" },
     { route: "news", icon: NEWS_ICON, label: "财经新闻" },
     { route: "knowledge", icon: BOOK_ICON, label: "研报库" },
     { route: "home", icon: GRID_ICON, label: "订阅广场" },
@@ -1072,6 +1074,7 @@ const NAV = [
       { route: "admin/dashboard", icon: DASHBOARD_ICON, label: "全景概览" },
       { route: "admin/kols", icon: V_ICON, label: "大V管理" },
       { route: "admin/ai-analysis", icon: BRAIN_ICON, label: "AI分析" },
+      { route: "admin/mx-views", icon: MX_VIEWS_ICON, label: "MX观点" },
       { route: "admin/vocab", icon: FOLDER_ICON, label: "标签分类" },
       { route: "admin/requests", icon: USER_PLUS_ICON, label: "添加审批" },
     ]},
@@ -1220,6 +1223,7 @@ const MOBILE_NAV = [
   { route: "timeline", icon: LIST_ICON, label: "动态" },
   { route: "news", icon: NEWS_ICON, label: "财经新闻" },
   { route: "home", icon: GRID_ICON, label: "广场" },
+  { route: "mx-views", icon: MX_VIEWS_ICON, label: "观点" },
   { route: "settings", icon: GEAR_ICON, label: "设置" },
 ];
 
@@ -4959,7 +4963,7 @@ function togglePostTags(btn) {
 const RAW_MODAL_LABELS = { mx: "MX", system: "系统 KOL" };
 
 function openRawModal(postId, label) {
-  const post = _tlPosts.find((p) => p.id === postId) || _kolPagePosts.find((p) => p.id === postId);
+  const post = _tlPosts.find((p) => p.id === postId) || _kolPagePosts.find((p) => p.id === postId) || (Array.isArray(window._mxvPosts) ? window._mxvPosts.find((p) => p.id === postId) : null);
   if (!post) return;
   closeRawModal(); // 防连点叠开
   let detail = post.detail;
@@ -7151,7 +7155,7 @@ async function renderAdmin(tab, seq) {
         <div class="admin-sk-table-row"><div class="admin-sk-line"></div><div class="admin-sk-line"></div><div class="admin-sk-line"></div></div>
       </div>`).join("")}
     </div>`;
-  const loaders = { dashboard: loadAdminDashboard, stats: loadAdminStats, knowledge: loadAdminKnowledge, kols: loadAdminKols, "ai-analysis": loadAdminAiAnalysis, requests: loadAdminRequests, codes: loadAdminCodes, vocab: loadAdminVocab, posts: loadAdminPosts, logs: loadAdminLogs, audit: loadAdminAudit, backup: loadAdminBackup, users: loadAdminUsers };
+  const loaders = { dashboard: loadAdminDashboard, stats: loadAdminStats, knowledge: loadAdminKnowledge, kols: loadAdminKols, "ai-analysis": loadAdminAiAnalysis, requests: loadAdminRequests, codes: loadAdminCodes, vocab: loadAdminVocab, "mx-views": loadAdminMxViews, posts: loadAdminPosts, logs: loadAdminLogs, audit: loadAdminAudit, backup: loadAdminBackup, users: loadAdminUsers };
   try {
     await loaders[tab]();
   } catch (err) {
@@ -14991,6 +14995,7 @@ let routeRenderSeq = 0; // 每次路由切换递增；异步渲染完成后凭�
 const SPA_PREFIXES = new Set([
   "timeline", "home", "combinations", "mysubs", "settings", "news",
   "search", "kol", "more", "admin", "zsxq", "ima-documents", "knowledge",
+  "mx-views",
 ]);
 
 function routeStillActive(seq) {
@@ -15312,6 +15317,7 @@ async function router() {
       return;
     }
     else if (page === "timeline") await renderTimeline(renderSeq);
+    else if (page === "mx-views") await renderMxViews(renderSeq);
     else if (page === "settings") await renderSettings(renderSeq);
     else if (page === "more") await renderMore(renderSeq);
     else if (page === "search") await renderSearch(renderSeq);
