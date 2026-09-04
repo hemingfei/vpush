@@ -10,9 +10,11 @@ renderHomeList()，在非首页会因找不到 #kol-list 抛异常并落入 catc
 import re
 import subprocess
 from pathlib import Path
+from scripts.bump_assets import asset_digest, module_urls
 
 APP_JS = Path(__file__).parent.parent / "app" / "static" / "app.js"
 STYLE_CSS = APP_JS.with_name("style.css")
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_subscription_push_is_the_only_subscription_management_navigation_entry():
@@ -4104,9 +4106,10 @@ def test_static_asset_cache_bust_versions():
     """前端改动必须递增静态资源版本，避免 CDN/浏览器继续使用旧 JS/CSS。"""
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
-    assert 'href="/style.css?v=290"' in html
-    assert 'src="/app.js?v=416"' in html
-    assert 'dav-shell-v277' in sw
+    digest = asset_digest(ROOT)
+    assert f'href="/style.css?v={digest}"' in html
+    assert f'src="/app.js?v={digest}"' in html
+    assert f'const CACHE = "dav-shell-{digest}";' in sw
 
 
 def test_ima_discovery_button_stays_compact_on_mobile():
