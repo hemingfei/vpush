@@ -17,6 +17,7 @@ APP_JS = Path(__file__).parent.parent / "app" / "static" / "app.js"
 STYLE_CSS = APP_JS.with_name("style.css")
 ROOT = Path(__file__).resolve().parents[1]
 DIALOG_JS = APP_JS.parent / "core" / "dialog.js"
+ICONS_JS = APP_JS.parent / "core" / "icons.js"
 NEWS_JS = APP_JS.parent / "views" / "news.js"
 FEISHU_PERSONAL_JS = APP_JS.parent / "views" / "feishu-personal.js"
 PUSH_SETTINGS_JS = APP_JS.parent / "views" / "push-settings.js"
@@ -2851,7 +2852,7 @@ def test_new_badge_avatars_fit_inside_capsule():
     assert "52px" not in av.group(1) and "24px" not in av.group(1)
     assert arrow, "缺少箭头尺寸"
     assert "width: 20px" in arrow.group(1) and "height: 20px" in arrow.group(1)
-    assert 'd="M12 3.59l7.457 7.45-1.414 1.42L13 7.41V21h-2V7.41l-5.043 5.05-1.414-1.42L12 3.59z"' in js
+    assert 'd="M12 3.59l7.457 7.45-1.414 1.42L13 7.41V21h-2V7.41l-5.043 5.05-1.414-1.42L12 3.59z"' in ICONS_JS.read_text()
     assert not re.search(r"\.tl-new-badge-btn\s*\{[^}]*overflow:\s*visible", css)
 
 
@@ -3404,9 +3405,9 @@ def test_xueqiu_badge_uses_official_mark():
 
 def test_live_pill_icon_matches_platform_badge_size():
     """快讯角标与其他平台同尺寸，选中不得反色出白圆。"""
-    src = APP_JS.read_text()
+    src = ICONS_JS.read_text()
     css = STYLE_CSS.read_text()
-    icon = re.search(r"const WSCN_LIVE_ICON = `([^`]+)`", src).group(1)
+    icon = re.search(r"export const WSCN_LIVE_ICON = `([^`]+)`", src).group(1)
     assert 'class="pt-icon"' in icon
     assert "#FFF" not in icon and "#1378F0" not in icon
     assert 'fill="currentColor"' in icon
