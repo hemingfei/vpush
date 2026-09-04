@@ -2865,12 +2865,13 @@ def create_api_router(
         return kol
 
     @router.get("/kols/{kol_id}/posts")
-    def kol_posts(kol_id: int, limit: int = 100, user: dict = Depends(get_current_user)):
+    def kol_posts(kol_id: int, limit: int = 100, q: str = "", user: dict = Depends(get_current_user)):
+        """大V动态列表；q 为内容关键词（title/content LIKE），供大V动态页搜索框用。"""
         kol = db.get_kol(kol_id)
         if not _plaza_kol_visible(user, kol):
             raise HTTPException(status_code=404, detail="大V不存在")
         posts = apply_twitter_feed(
-            db.list_posts(limit=bounded_limit(limit), kol_id=kol_id),
+            db.list_posts(limit=bounded_limit(limit), kol_id=kol_id, q=q.strip() or None),
             user,
         )
         subscription = db.get_subscription(user["id"], kol_id)

@@ -2774,6 +2774,25 @@ def test_pagination_limits_are_bounded():
     assert len(client.get("/api/posts?limit=10&offset=-5", headers=headers).json()) == 3
 
 
+def test_kol_posts_search_by_keyword():
+    """大V动态页搜索框：q 命中 title/content，空 q / 纯空格回到全量列表。"""
+    client = make_client()
+    headers = user_headers(client, "postsearcher")
+    db = client.app.state.db
+    kid = db.add_kol("xueqiu", "搜索大V", "search1")
+    db.insert_post("xueqiu", kid, "p1", "贵州茅台点评", "白酒板块大涨", "https://xueqiu.com/1", "")
+    db.insert_post("xueqiu", kid, "p2", "新能源展望", "锂电产业链景气度回升", "https://xueqiu.com/2", "")
+
+    assert len(client.get(f"/api/kols/{kid}/posts", headers=headers).json()) == 2
+    hits = client.get(f"/api/kols/{kid}/posts", params={"q": "锂电"}, headers=headers).json()
+    assert [p["external_id"] for p in hits] == ["p2"]
+    hits = client.get(f"/api/kols/{kid}/posts", params={"q": "茅台"}, headers=headers).json()
+    assert [p["external_id"] for p in hits] == ["p1"]
+    # 无命中返回空数组；纯空格关键词等同无关键词
+    assert client.get(f"/api/kols/{kid}/posts", params={"q": "不存在的关键词"}, headers=headers).json() == []
+    assert len(client.get(f"/api/kols/{kid}/posts", params={"q": "   "}, headers=headers).json()) == 2
+
+
 def test_posts_and_push_logs_api():
     client = make_client()
     headers = auth_headers(client)

@@ -3036,14 +3036,14 @@ function kolCard(kol) {
   }
   return `
     <div class="kol-card">
-      <div class="kol-card-head">
+      <a class="kol-card-head" href="/kol/${kol.id}" title="查看${escapeHtml(kol.name)}的动态页" aria-label="查看${escapeHtml(kol.name)}的动态页">
         ${avatarHtml(kol.name, kol.avatar_url)}
         <div class="kol-card-info">
           <span class="name" title="${escapeHtml(kol.name)}">${escapeHtml(kol.name)}</span>
           ${tags.length ? `<div class="kol-card-meta">${tags.join("")}</div>` : ""}
           <div class="desc">外部 ID：${escapeHtml(kol.external_id)}${kol.enabled ? "" : " · 已停用"}</div>
         </div>
-      </div>
+      </a>
       ${kol.subscribed && kol.platform === "xueqiu" ? `<div class="kol-card-subtype">${subTypeSwitchesHtml(kol.id, kol.subscribe_type || "post")}</div>` : ""}
       <div class="kol-card-actions">
         <button class="btn-sub ${kol.subscribed ? "subscribed" : ""}" onclick="toggleSubscribe(${kol.id}, this)">
@@ -4720,7 +4720,7 @@ function toggleTimelineSecondary() {
 function tlTogglePost(id) {
   if (_tlExpanded.has(id)) _tlExpanded.delete(id);
   else _tlExpanded.add(id);
-  const post = _tlPosts.find((p) => p.id === id);
+  const post = _tlPosts.find((p) => p.id === id) || _kolPagePosts.find((p) => p.id === id);
   const card = document.querySelector(`.post-item[data-post-id="${id}"]`);
   if (post && card) {
     const wrap = document.createElement("div");
@@ -5229,6 +5229,8 @@ async function doSearch(routeSeq) {
 }
 
 // ---------- 大V动态页 ----------
+let _kolPagePosts = []; // 当前大V动态页已渲染的帖子（展开全文在非时间线路由下的取数兜底）
+
 async function renderKolPage(kolId, seq) {
   setPageTitle("大V动态", true);
   $("#main").innerHTML = `<div class="empty">加载中…</div>`;
@@ -5236,6 +5238,7 @@ async function renderKolPage(kolId, seq) {
     const kol = await api(`/api/kols/${kolId}`);
     const posts = await api(`/api/kols/${kolId}/posts?limit=50`);
     if (!routeStillActive(seq)) return; // 已切走：不写旧页面
+    _kolPagePosts = posts;
     const extra = kol.platform === "combination"
       ? await renderCombinationSnapshots(kol)
       : "";
@@ -5255,12 +5258,45 @@ async function renderKolPage(kolId, seq) {
           </div>
         </header>
         ${extra}
-        <div id="kol-posts">${posts.length ? posts.map(postCard).join("") : emptyState("暂无动态")}</div>
+        <div class="search-bar" style="margin:14px 0 12px">
+          ${SEARCH_ICON}
+          <input id="kol-posts-search" placeholder="搜索该大V的消息内容，即时过滤" aria-label="搜索该大V的消息内容" oninput="kolPageSearchInput(${kol.id}, ${seq})">
+        </div>
+        <div id="kol-posts">${kolPostsListHtml(posts, "")}</div>
       </section>`;
   } catch (err) {
     if (!routeStillActive(seq)) return;
     $("#main").innerHTML = emptyState("加载失败: " + err.message);
   }
+}
+
+function kolPostsListHtml(posts, q) {
+  if (!posts.length) return emptyState(q ? `没有匹配「${q}」的动态` : "暂无动态");
+  const meta = q ? `<p class="section-meta" style="margin-bottom:10px">匹配 ${posts.length} 条动态（搜索范围为最近 200 条）</p>` : "";
+  return meta + posts.map(postCard).join("");
+}
+
+let _kolPageSearchTimer = null;
+function kolPageSearchInput(kolId, seq) {
+  const input = $("#kol-posts-search");
+  if (!input) return;
+  const q = input.value.trim();
+  clearTimeout(_kolPageSearchTimer);
+  _kolPageSearchTimer = setTimeout(async () => {
+    try {
+      const target = $("#kol-posts");
+      if (!target || !routeStillActive(seq)) return;
+      // 关键词搜索时扩大回溯范围到 200 条（后端上限 500）；空关键词回到最近 50 条
+      const posts = await api(`/api/kols/${kolId}/posts?limit=${q ? 200 : 50}&q=${encodeURIComponent(q)}`);
+      if (!routeStillActive(seq)) return;
+      const list = $("#kol-posts");
+      if (!list) return; // 输入期间已切走
+      _kolPagePosts = posts;
+      list.innerHTML = kolPostsListHtml(posts, q);
+    } catch (err) {
+      flash("搜索失败: " + err.message, "error");
+    }
+  }, 250);
 }
 
 async function renderCombinationSnapshots(kol) {

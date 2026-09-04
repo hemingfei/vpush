@@ -906,6 +906,9 @@ img.pt-icon { display: block; object-fit: contain; }
 }
 .kol-card:hover { border-color: var(--color-accent-text); box-shadow: var(--shadow-xs); }
 .kol-card-head { display: flex; align-items: flex-start; gap: 12px; }
+/* 卡片头部即大V动态页链接：重置 <a> 默认样式，hover 时昵称提示可点 */
+a.kol-card-head { color: inherit; text-decoration: none; }
+a.kol-card-head:hover .kol-card-info .name { color: var(--color-accent-text); }
 .kol-card .kol-avatar { width: 52px; height: 52px; font-size: var(--text-icon); }
 .kol-card-info { flex: 1; min-width: 0; cursor: pointer; }
 .kol-card-info .name { display: block; font-size: var(--text-body); font-weight: var(--font-weight-semibold); color: var(--color-text-strong); line-height: 1.45; overflow-wrap: anywhere; word-break: break-word; }
