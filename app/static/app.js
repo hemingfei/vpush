@@ -1523,7 +1523,7 @@ function knowledgeSourceControlsHtml(selectedGroup = "") {
     group_id: String(group.id || ""),
     title: group.name || group.id,
   }));
-  const pillsHtml = `<div class="kb-source-pills-desk">${feishuSourcePillsHtml(sources, selectedGroup, "selectImaDocumentGroup")}</div>`;
+  const pillsHtml = `<div class="kb-source-pills-desk">${feishuSourcePillsHtml(sources, selectedGroup, "knowledge")}</div>`;
   const mobileOptions = [
     `<option value="" ${!selectedGroup ? "selected" : ""}>全部研报库</option>`,
     ...sources.map((s) => `<option value="${escapeHtml(s.group_id)}" ${s.group_id === selectedGroup ? "selected" : ""}>${escapeHtml(s.title)}</option>`)
@@ -2409,7 +2409,7 @@ async function loadFeishuTimeline(item, seq, readerSeq) {
   _feishuTimelineTimer = setTimeout(() => checkFeishuTimelineUpdate(item.media_id, item.group_id, _feishuTimelineState.baseline, seq, readerSeq), 60000);
 }
 
-function feishuSourcePillsHtml(sources, selectedGroup, onSelect = "selectFeishuTimelineSource") {
+function feishuSourcePillsHtml(sources, selectedGroup, target = "timeline") {
   const selected = String(selectedGroup || "");
   const items = sources.length > 1 ? [{ group_id: "", title: "全部" }, ...sources] : sources;
   if (!items.length) return "";
@@ -2418,7 +2418,7 @@ function feishuSourcePillsHtml(sources, selectedGroup, onSelect = "selectFeishuT
     const display = feishuSourceDisplay(source.title);
     const on = id === selected;
     const img = display.avatar ? `<img class="feishu-source-avatar" src="${escapeHtml(display.avatar)}" alt="">` : "";
-    return `<button type="button" class="tl-pill${on ? " selected" : ""}${img ? " has-avatar" : ""}" role="radio" aria-checked="${on}" data-group="${escapeHtml(id)}" aria-label="${escapeHtml(display.label)}" onclick="${onSelect}(this.dataset.group)">${img}<span>${escapeHtml(display.label)}</span></button>`;
+    return `<button type="button" class="tl-pill${on ? " selected" : ""}${img ? " has-avatar" : ""}" role="radio" aria-checked="${on}" data-group="${escapeHtml(id)}" data-source-target="${target}" aria-label="${escapeHtml(display.label)}" onclick="selectFeishuSource(this)">${img}<span>${escapeHtml(display.label)}</span></button>`;
   }).join("")}</div>`;
 }
 
@@ -3003,7 +3003,7 @@ async function renderHome(seq) {
 
 function renderPlatformTabs() {
   const tabs = $("#platform-tabs");
-  if (tabs) tabs.innerHTML = tlPlazaEntries().map(([p]) => platformTabHTML(p, state.platform, "switchPlatform")).join("");
+  if (tabs) tabs.innerHTML = tlPlazaEntries().map(([p]) => platformTabHTML(p, state.platform, "home")).join("");
 }
 
 function categoryChipsHtml() {
@@ -3049,12 +3049,12 @@ function renderHomeList() {
     : emptyState(state.catalog.length ? "没有匹配的大V" : "暂无大V，管理员可在管理后台添加");
 }
 
-function platformTabHTML(p, current, handler) {
+function platformTabHTML(p, current, target) {
   const label = p ? PLATFORM_LABELS[p] : "全部";
   const short = platformShortLabel(p);
-  return `<button class="platform-tab ${p === current ? "selected" : ""}" data-platform="${p || "all"}"
+  return `<button class="platform-tab ${p === current ? "selected" : ""}" data-platform="${p}" data-platform-target="${target}"
     title="${label}" aria-label="${label}"
-    onclick="${handler}('${p}')">${PLATFORM_ICONS[p || ""]}<span class="pt-label">${short}</span></button>`;
+    onclick="selectPlatformTab(this)">${PLATFORM_ICONS[p || ""]}<span class="pt-label">${short}</span></button>`;
 }
 
 let _homeKolsSeq = 0;
@@ -4081,7 +4081,7 @@ function railFailHtml(title, lead, err) {
       <h3 class="tl-rail-title">${escapeHtml(title)}</h3>
       <div class="tl-rail-fail">
         <p class="muted">${escapeHtml(lead)}${detail}</p>
-        <button type="button" class="btn-ghost" onclick="loadTimelineRail(routeRenderSeq)">重试</button>
+        <button type="button" class="btn-ghost" onclick="reloadTimelineRail()">重试</button>
       </div>
     </section>`;
 }
@@ -4230,7 +4230,7 @@ async function loadTimeline(reset = true, routeSeq, opts) {
     if (seq !== activeSeq || !$("#feed") || !routeStillActive(routeSeq)) return;
     if (!live && reset && opts.revert) tlRestoreFilters(opts.revert);
     $("#feed").innerHTML = emptyState("加载失败: " + err.message,
-      `<div><button class="btn-normal" onclick="loadTimeline(true, routeRenderSeq)">重试</button></div>`);
+      `<div><button class="btn-normal" onclick="reloadTimeline()">重试</button></div>`);
   } finally {
     if (reset && !live) pills?.removeAttribute("aria-busy");
     if (!reset) {
@@ -4423,7 +4423,7 @@ function renderLiveFeed() {
     : (posts.length ? `<p class="muted tl-feed-end">已加载全部</p>` : "");
   const empty = allPosts.length
     ? emptyState("没有匹配的快讯")
-    : emptyState("暂无快讯", `<div><button class="btn-normal" onclick="loadTimeline(true, routeRenderSeq)">刷新</button></div>`);
+    : emptyState("暂无快讯", `<div><button class="btn-normal" onclick="reloadTimeline()">刷新</button></div>`);
   const attr = posts.length
     ? html + footer + `<p class="live-attribution muted">数据来源：<a href="https://wallstreetcn.com/live/global" target="_blank" rel="noopener">华尔街见闻 · 快讯</a></p>`
     : empty;
@@ -4659,8 +4659,8 @@ async function renderSearch(seq) {
     <section class="section-panel">
       <div class="search-bar" style="margin-bottom:16px">
         ${SEARCH_ICON}
-        <input id="search-input" placeholder="输入昵称或 ID，回车搜索" value="${escapeHtml(query)}" onkeydown="if(event.key==='Enter')doSearch(routeRenderSeq)">
-        <button class="btn-ghost" onclick="doSearch(routeRenderSeq)">搜索</button>
+        <input id="search-input" placeholder="输入昵称或 ID，回车搜索" value="${escapeHtml(query)}" onkeydown="if(event.key==='Enter')runSearch()">
+        <button class="btn-ghost" onclick="runSearch()">搜索</button>
       </div>
       <div id="search-result" class="kol-grid">${emptyState("加载中…")}</div>
     </section>`;
@@ -5517,7 +5517,7 @@ async function loadKolImageSettings(seq) {
     current.setAttribute("role", "alert");
     current.innerHTML = `
       <p class="muted">加载失败: ${escapeHtml(err.message)}</p>
-      <button type="button" class="btn-ghost" onclick="loadKolImageSettings(routeRenderSeq)">重试</button>`;
+      <button type="button" class="btn-ghost" onclick="reloadKolImageSettings()">重试</button>`;
   }
 }
 
@@ -7278,7 +7278,7 @@ async function renderImaGroupAcl() {
   } catch (err) {
     if (seq !== _imaAclRenderSeq) return;
     slot.innerHTML = `<p class="muted">用户列表加载失败：${escapeHtml(err.message)}</p>
-      <button type="button" class="btn-ghost" onclick="fetchAclCandidateUsers(true).then(renderImaGroupAcl)">重试</button>`;
+      <button type="button" class="btn-ghost" onclick="retryImaGroupAcl()">重试</button>`;
   }
 }
 
@@ -8003,11 +8003,11 @@ function renderAdminNews() {
       </section>
       <div class="news-admin-layout">
         <aside class="news-admin-source-rail">
-          <div class="news-admin-source-toolbar"><input class="form-control" type="search" placeholder="搜索媒体" value="${escapeHtml(adminNewsState.q)}" oninput="adminNewsState.q=this.value;renderAdminNews()">
-            <select class="form-control" aria-label="媒体状态" onchange="adminNewsState.status=this.value;renderAdminNews()">
+          <div class="news-admin-source-toolbar"><input class="form-control" type="search" placeholder="搜索媒体" value="${escapeHtml(adminNewsState.q)}" oninput="updateAdminNewsQuery(this.value)">
+            <select class="form-control" aria-label="媒体状态" onchange="updateAdminNewsStatus(this.value)">
               ${["all", "ok", "paused", "delayed", "unavailable"].map((status) => `<option value="${status}" ${selectedStatus === status ? "selected" : ""}>${adminNewsStatusLabel(status)}</option>`).join("")}
             </select>
-            <label class="news-admin-archived-toggle"><input type="checkbox" ${adminNewsState.showArchived ? "checked" : ""} onchange="adminNewsState.showArchived=this.checked;renderAdminNews()"> 显示已归档</label>
+            <label class="news-admin-archived-toggle"><input type="checkbox" ${adminNewsState.showArchived ? "checked" : ""} onchange="updateAdminNewsArchived(this.checked)"> 显示已归档</label>
           </div>
           <button type="button" class="btn-normal news-admin-add-source" onclick="openNewsSourceModal()">${PLUS_ICON} 新增媒体</button>
           <div class="news-admin-source-list">${visible.length ? visible.map(adminNewsSourceRowHtml).join("") : emptyState("没有匹配的媒体")}</div>
@@ -8038,7 +8038,7 @@ async function loadAdminNews(seq = routeRenderSeq) {
     return true;
   } catch (err) {
     if (!routeStillActive(seq) || loadSeq !== _adminNewsLoadSeq) return false;
-    $("#admin-body").innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-normal" onclick="loadAdminNews(routeRenderSeq)">重试</button></div>`);
+    $("#admin-body").innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-normal" onclick="loadAdminNews()">重试</button></div>`);
     return false;
   }
 }
@@ -10766,7 +10766,7 @@ async function loadAdminKols(opts) {
   const catEl = $("#ak-category"); if (catEl) catEl.value = state.adminKolsCategory || "";
   const statusEl = $("#ak-status"); if (statusEl) statusEl.value = state.adminKolsStatus ?? "";
   adminKolSyncCheckall(kols);
-  $("#admin-kols-tabs").innerHTML = PLATFORM_TABS.map((p) => platformTabHTML(p, state.adminKolsPlatform, "switchAdminKolsPlatform")).join("");
+  $("#admin-kols-tabs").innerHTML = PLATFORM_TABS.map((p) => platformTabHTML(p, state.adminKolsPlatform, "admin")).join("");
   return { hiddenFocus: focusIds.length > 0 && visibleFocus.length === 0 };
 }
 
@@ -11387,7 +11387,7 @@ async function loadAdminCodes(refetch = true) {
   const tabCounts = { available: 0, used: 0, revoked: 0, expired: 0, all: allCodes.length };
   for (const c of allCodes) tabCounts[codeStatus(c)] += 1;
   const filterBtn = (key, label) =>
-    `<button type="button" class="settings-tab ${filter === key ? "active" : ""}" role="tab" aria-selected="${filter === key}" data-filter="${key}" onclick="saveCodesForm();_codesUi.filter='${key}';loadAdminCodes(false)">${label} ${tabCounts[key]}</button>`;
+    `<button type="button" class="settings-tab ${filter === key ? "active" : ""}" role="tab" aria-selected="${filter === key}" data-filter="${key}" onclick="selectAdminCodeFilter('${key}')">${label} ${tabCounts[key]}</button>`;
 
   $("#admin-body").innerHTML = `
     <section class="section-panel">
@@ -11434,7 +11434,7 @@ async function loadAdminCodes(refetch = true) {
         </div>
         <div class="search-bar rc-search">
           ${SEARCH_ICON}
-          <input id="rc-q" type="search" placeholder="搜索码或备注" value="${escapeHtml(_codesUi.q)}" oninput="_codesUi.q=this.value;renderCodesList()">
+          <input id="rc-q" type="search" placeholder="搜索码或备注" value="${escapeHtml(_codesUi.q)}" oninput="searchAdminCodes(this.value)">
         </div>
       </header>
       <div class="settings-tabs rc-tabs" role="tablist" aria-label="注册码状态">
@@ -11501,7 +11501,7 @@ function renderCodesResult(result) {
       <div class="rc-result-actions">
         <button class="btn-sm" data-copy="${copyDataAttr(copy)}" onclick="copyText(decodeURIComponent(this.getAttribute('data-copy')), '已复制本批邀请码')">复制全部</button>
         <button class="btn-sm danger" onclick="adminRevokeBatch('${escapeHtml(result.batch_id)}', true)">作废本批未用</button>
-        <button class="btn-sm" onclick="_codesUi.result=null;loadAdminCodes()">关闭</button>
+        <button class="btn-sm" onclick="clearAdminCodesResult()">关闭</button>
       </div>
     </div>
     <div class="rc-result-codes">${result.codes.map((code) =>
@@ -13281,13 +13281,13 @@ function renderNewsListShell(collectionEnabled = true) {
   main.innerHTML = `<section class="news-page" id="news-page">
     <header class="news-page-head"><div><h2 class="section-title">财经新闻</h2><p class="section-meta">按媒体聚合的长文阅读，原文链接保留。</p></div><button type="button" class="btn-normal" onclick="openNewsSourcePicker()">我的来源</button></header>
     ${collectionEnabled ? "" : '<div class="notice notice-warn">管理员已暂停财经新闻采集，历史文章仍可阅读。</div>'}
-    <div class="news-list-toolbar"><select id="news-source-filter" class="form-control" aria-label="新闻来源" onchange="state.newsFilterSourceId=this.value;loadFinancialNews(true,routeRenderSeq)">${newsSourceFilterOptions()}</select><div class="search-bar"><input id="news-query" type="search" placeholder="搜索标题或摘要" value="${escapeHtml(state.newsQuery)}" oninput="state.newsQuery=this.value;clearTimeout(window._newsSearchTimer);window._newsSearchTimer=setTimeout(()=>loadFinancialNews(true,routeRenderSeq),250)"></div></div>
+    <div class="news-list-toolbar"><select id="news-source-filter" class="form-control" aria-label="新闻来源" onchange="selectNewsSource(this.value)">${newsSourceFilterOptions()}</select><div class="search-bar"><input id="news-query" type="search" placeholder="搜索标题或摘要" value="${escapeHtml(state.newsQuery)}" oninput="queueNewsSearch(this.value)"></div></div>
     <div id="news-list" class="news-list">${newsListSkeletonHtml()}</div>
     <div id="news-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>
   </section>`;
 }
 
-async function renderFinancialNewsList(seq) {
+async function renderFinancialNewsList(seq = routeRenderSeq) {
   setPageTitle("财经新闻");
   clearNewsImageUrls();
   state.newsItems = [];
@@ -13304,7 +13304,7 @@ async function renderFinancialNewsList(seq) {
   } catch (err) {
     if (!routeStillActive(seq)) return;
     const list = $("#news-list");
-    if (list) list.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="renderFinancialNewsList(routeRenderSeq)">重试</button></div>`);
+    if (list) list.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="renderFinancialNewsList()">重试</button></div>`);
   }
 }
 
@@ -13346,7 +13346,7 @@ async function loadFinancialNews(reset = false, seq = routeRenderSeq) {
     startNewsAutoLoad(seq);
   } catch (err) {
     if (!routeStillActive(seq) || requestSeq !== state.newsRequestSeq) return;
-    list.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="loadFinancialNews(${reset},routeRenderSeq)">重试</button></div>`);
+    list.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="loadFinancialNews(${reset})">重试</button></div>`);
   }
 }
 
@@ -13362,7 +13362,7 @@ async function loadNewsImageBlob(articleId, index, image, seq = routeRenderSeq) 
   }
 }
 
-async function renderFinancialNewsArticle(articleId, seq) {
+async function renderFinancialNewsArticle(articleId, seq = routeRenderSeq) {
   setPageTitle("财经新闻", true, "news", "返回财经新闻");
   const main = $("#main");
   if (!main) return;
@@ -13373,7 +13373,7 @@ async function renderFinancialNewsArticle(articleId, seq) {
     main.innerHTML = `<article class="news-article-page"><header class="news-article-head"><div class="news-article-meta"><span>${escapeHtml(article.source_name || "")}</span><time datetime="${escapeHtml(article.published_at || "")}">${escapeHtml(fmtPublished(article.published_at, false))}</time></div><h1>${escapeHtml(article.title)}</h1>${article.author ? `<p class="section-meta">作者：${escapeHtml(article.author)}</p>` : ""}<a class="btn-ghost news-original-link" href="${escapeHtml(article.url)}" target="_blank" rel="noopener noreferrer nofollow">打开原文 ${EXTERNAL_LINK_ICON}</a></header><div class="news-article-body">${article.content_html || `<p>${escapeHtml(article.summary || "暂无正文")}</p>`}</div></article>`;
     loadNewsImages(articleId, seq);
   } catch (err) {
-    if (routeStillActive(seq)) main.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="renderFinancialNewsArticle(${articleId},routeRenderSeq)">重试</button></div>`);
+    if (routeStillActive(seq)) main.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="renderFinancialNewsArticle(${articleId})">重试</button></div>`);
   }
 }
 
@@ -13702,16 +13702,337 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => {});
 }
 
+function selectFeishuSource(button) {
+  return button.dataset.sourceTarget === "knowledge"
+    ? selectImaDocumentGroup(button.dataset.group)
+    : selectFeishuTimelineSource(button.dataset.group);
+}
+
+function selectPlatformTab(button) {
+  return button.dataset.platformTarget === "admin"
+    ? switchAdminKolsPlatform(button.dataset.platform)
+    : switchPlatform(button.dataset.platform);
+}
+
+function reloadTimelineRail() {
+  return loadTimelineRail(routeRenderSeq);
+}
+
+function reloadTimeline() {
+  return loadTimeline(true, routeRenderSeq);
+}
+
+function runSearch() {
+  return doSearch(routeRenderSeq);
+}
+
+function reloadKolImageSettings() {
+  return loadKolImageSettings(routeRenderSeq);
+}
+
+function retryImaGroupAcl() {
+  return fetchAclCandidateUsers(true).then(renderImaGroupAcl);
+}
+
+function selectAdminCodeFilter(key) {
+  saveCodesForm();
+  _codesUi.filter = key;
+  return loadAdminCodes(false);
+}
+
+function searchAdminCodes(query) {
+  _codesUi.q = query;
+  renderCodesList();
+}
+
+function clearAdminCodesResult() {
+  _codesUi.result = null;
+  return loadAdminCodes();
+}
+
+function selectNewsSource(sourceId) {
+  state.newsFilterSourceId = sourceId;
+  return loadFinancialNews(true, routeRenderSeq);
+}
+
+function queueNewsSearch(query) {
+  state.newsQuery = query;
+  clearTimeout(window._newsSearchTimer);
+  window._newsSearchTimer = setTimeout(() => loadFinancialNews(true, routeRenderSeq), 250);
+}
+
+function updateAdminNewsQuery(query) {
+  adminNewsState.q = query;
+  renderAdminNews();
+}
+
+function updateAdminNewsStatus(status) {
+  adminNewsState.status = status;
+  renderAdminNews();
+}
+
+function updateAdminNewsArchived(showArchived) {
+  adminNewsState.showArchived = showArchived;
+  renderAdminNews();
+}
+
+const INLINE_HANDLERS = {
+  addFeishuDocumentSource,
+  adminAddCategory,
+  adminApproveRequest,
+  adminBackfillTags,
+  adminBatchAddKols,
+  adminBatchLinesHint,
+  adminCodesBatch,
+  adminCodesClearSelect,
+  adminCodesCopySelected,
+  adminCodesNoteInput,
+  adminCodesPreset,
+  adminCodesToggle,
+  adminCodesToggleBatch,
+  adminCodesTogglePage,
+  adminDeleteCategory,
+  adminDeleteKol,
+  adminDeleteKolFromHome,
+  adminDeleteUser,
+  adminEditKol,
+  adminFilterLogs,
+  adminFilterPosts,
+  adminGenerateCodes,
+  adminInactivePolicyKeydown,
+  adminInactivePolicySyncSave,
+  adminKolBatch,
+  adminKolBatchCategory,
+  adminKolClearSelect,
+  adminKolTogglePage,
+  adminKolToggleSelect,
+  adminKolsApplyFilter,
+  adminKolsClearFilter,
+  adminKolsPage,
+  adminMaintainTags,
+  adminOpenUser,
+  adminPostsLoadMore,
+  adminRejectRequest,
+  adminRenameCategory,
+  adminRevokeBatch,
+  adminRevokeCode,
+  adminSaveInactivePolicy,
+  adminSavePassword,
+  adminSaveStockNames,
+  adminSaveTags,
+  adminSaveUserKnowledge,
+  adminSaveUsername,
+  adminSendTestPush,
+  adminToggleAdmin,
+  adminToggleKol,
+  adminTogglePost,
+  adminTogglePriority,
+  adminToggleSecondary,
+  adminUserClearSelect,
+  adminUserTogglePage,
+  adminUserToggleSelect,
+  adminUsersApplyFilter,
+  adminUsersBatch,
+  applyFeishuTimelineUpdate,
+  archiveAdminNewsFeed,
+  archiveAdminNewsSource,
+  authorizeFeishuDocuments,
+  backFromImaReader,
+  backupDownload,
+  backupImaStorage,
+  backupRestoreUpload,
+  backupRestoreWebDAV,
+  cancelFeishuPersonal,
+  clearAdminCodesResult,
+  clearImaDocumentsFilter,
+  clearImaDocumentsFilters,
+  clearSavedCookie,
+  closeAdminModal,
+  closeLightbox,
+  copyImaAbstract,
+  copyText,
+  createProxyPool,
+  cycleTheme,
+  deleteProxyNode,
+  deleteProxyPool,
+  disableWebPush,
+  discardImaCollectorChanges,
+  discoverImaGroups,
+  downloadFeishuTimelineAsset,
+  enableWebPush,
+  extractProxyPool,
+  filterAclSuggest,
+  filterKolImageSettings,
+  genBindCode,
+  go,
+  homePickMobilePlatform,
+  homeResetFilters,
+  homeSearch,
+  homeToggleFilter,
+  imgOnError,
+  importProxyPool,
+  jumpFeishuTimelineDay,
+  jumpFeishuTimelineLatest,
+  lightboxStep,
+  loadAdminDashboard,
+  loadAdminErrorLogs,
+  loadAdminKnowledge,
+  loadAdminNews,
+  loadAdminStats,
+  loadAdminSysLogsPanel,
+  loadCiccStatus,
+  loadFeishuDocumentSources,
+  loadFinancialNews,
+  loadImaDocumentsMore,
+  loadLlmModels,
+  loadMoreFeishuTimeline,
+  loadProxyAdmin,
+  logout,
+  onAclSearchKey,
+  onAskLinkInput,
+  onKnowledgeTabsKey,
+  openAdminKolFromHealth,
+  openBindGuide,
+  openImaDocument,
+  openImaPdfNewTab,
+  openLightbox,
+  openLocalLibraryCreateModal,
+  openNewsArticle,
+  openNewsFeedModal,
+  openNewsSourceModal,
+  openNewsSourcePicker,
+  pasteCookieField,
+  pickHomeCategory,
+  pickImaDay,
+  pickImaTag,
+  purgeZsxqCache,
+  queueFeishuDocumentPreview,
+  queueImaDocumentsSearch,
+  queueNewsSearch,
+  quickSubscribe,
+  railToggleSubscribe,
+  refreshAdminNewsFeed,
+  refreshAllAdminNews,
+  refreshDashboardLive,
+  refreshFeishuBindCode,
+  refreshImaDocuments,
+  refreshImaStorage,
+  refreshKnowledge,
+  refreshTimeline,
+  reloadKolImageSettings,
+  reloadTimeline,
+  reloadTimelineRail,
+  removeFeishuDocumentSource,
+  renameFeishuDocumentSource,
+  renderFinancialNewsArticle,
+  renderFinancialNewsList,
+  renderTimeline,
+  restoreAdminNewsFeed,
+  restoreAdminNewsSource,
+  retryImaFolderLoad,
+  retryImaGroupAcl,
+  runSearch,
+  runStorageConsistency,
+  runStorageDedup,
+  saveAdminNewsSettings,
+  saveBackupWebDAV,
+  saveBarkKey,
+  saveCiccCategories,
+  saveCiccScheduleTime,
+  saveCustomTgBot,
+  saveDailyReport,
+  saveDnd,
+  saveFeishuDocsConfig,
+  saveImaCollector,
+  saveKeywords,
+  saveKeywordsMatchReports,
+  saveKolEdit,
+  saveLlm,
+  saveNewsSources,
+  saveNotify,
+  savePassword,
+  savePollingConfig,
+  saveProxyRoutes,
+  savePushChannels,
+  saveStorageAlerts,
+  saveTranslateTwitter,
+  saveTwitterCookie,
+  saveWecomWebhook,
+  saveXueqiuCookie,
+  saveZsxqCookie,
+  saveZsxqPollingConfig,
+  scanLocalLibraries,
+  searchAdminCodes,
+  selectAdminCodeFilter,
+  selectAdminNewsSource,
+  selectFeishuSource,
+  selectImaDocumentGroup,
+  selectImaDocumentsTag,
+  selectImaMountGroup,
+  selectNewsSource,
+  selectPlatformTab,
+  setFeishuSourceDisplay,
+  setImaGroupInterval,
+  setPlazaSourceMode,
+  setSubscribeType,
+  setTheme,
+  startFeishuPersonal,
+  startWeiboQr,
+  submitAsk,
+  submitImaDocumentsSearch,
+  subscribeKnowledge,
+  switchKnowledgeSettingsTab,
+  switchSettingsTab,
+  switchStatsTab,
+  syncFeishuDocumentSource,
+  syncProxyPoolForm,
+  syncProxyRouteInputs,
+  testBackupWebDAV,
+  testProxyNode,
+  tlApplyFilter,
+  tlApplyRailSearch,
+  tlFilterPanel,
+  tlOnSearchInput,
+  tlPickPlatform,
+  tlPickSource,
+  tlPickTag,
+  tlRemoveFilter,
+  tlResetFilters,
+  tlTogglePost,
+  toggleAdminNewsFeed,
+  toggleAdminNewsSource,
+  toggleCiccSchedule,
+  toggleDnd,
+  toggleFavorite,
+  toggleFeishuDocumentSource,
+  toggleHomeFavorite,
+  toggleHomeSubscribed,
+  toggleImaAbstract,
+  toggleImaAclExpanded,
+  toggleImaDayPicker,
+  toggleImaFolder,
+  toggleImaFolderExpand,
+  toggleImaFolderPanel,
+  toggleImaTagMenu,
+  toggleKolImages,
+  toggleKolPageSubscribe,
+  toggleLiveImportant,
+  togglePassword,
+  toggleReportKeyword,
+  toggleSecondary,
+  toggleSidebarSlim,
+  toggleSubscribe,
+  toggleTimelineFav,
+  toggleTimelineSecondary,
+  triggerCicc,
+  triggerImaCollector,
+  unbindChannel,
+  unsubscribeKnowledge,
+  updateAdminNewsArchived,
+  updateAdminNewsQuery,
+  updateAdminNewsStatus,
+};
+Object.assign(window, INLINE_HANDLERS);
+
 applyTheme(); // 与 index.html 防闪脚本同一逻辑，兜底 + 同步 meta theme-color
 router();
-
-// VPush 全局门面（P2 模块化与可测试性）
-window.VPush = {
-  version: APP_VERSION,
-  state,
-  api,
-  flash,
-  trapFocus,
-  go,
-  router,
-};

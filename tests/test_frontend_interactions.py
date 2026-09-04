@@ -7,6 +7,7 @@ renderHomeList()，在非首页会因找不到 #kol-list 抛异常并落入 catc
   1. toggleSubscribe 成功后调用路由感知的 refreshKolsView()
   2. refreshKolsView 覆盖所有会出现订阅卡片的页面路由
 """
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -131,7 +132,7 @@ def test_search_page_lists_only_unsubscribed_kols_without_query():
     search = _fn_body("doSearch")
 
     assert "await doSearch(seq)" in render
-    assert render.count("doSearch(routeRenderSeq)") == 2
+    assert render.count("runSearch()") == 2
     assert "if (!keyword) return" not in search
     assert "kols.filter((k) => !k.subscribed)" in search
     assert re.search(r"keyword\s*\?\s*available\.filter", search)
@@ -873,7 +874,7 @@ def test_kol_image_loader_is_route_guarded_local_and_retryable():
     assert '$("#main").innerHTML' not in load
     assert "加载失败:" in load
     assert "重试" in load
-    assert "loadKolImageSettings(routeRenderSeq)" in load
+    assert "reloadKolImageSettings()" in load
     assert "正在加载已订阅大V" in load
 
     assert "emptyState(" in render
@@ -1687,8 +1688,9 @@ def test_feishu_timeline_toolbar_uses_source_avatar_pills():
     assert "feishuSourcePillsHtml(" in toolbar
     assert 'aria-label="来源"' in pills
     assert "feishu-source-avatar" in pills
-    assert "onSelect = \"selectFeishuTimelineSource\"" in src
-    assert "${onSelect}(this.dataset.group)" in pills
+    assert 'target = "timeline"' in src
+    assert "data-source-target" in pills
+    assert "selectFeishuSource(this)" in pills
     assert "全部来源" not in toolbar
     assert 'select aria-label="来源"' not in toolbar
     assert 'id="feishu-date-select"' in toolbar
@@ -5368,3 +5370,76 @@ def test_design_tokens_p0_p1_compliance():
     assert "border-radius: var(--radius-pill);" in css
     assert "@media (max-width: 640px)" in css
     assert "border-radius: var(--radius-card) var(--radius-card) 0 0;" in css
+
+
+EVENT_ATTRIBUTE_RE = re.compile(
+    r'\bon(?:click|change|input|keydown|focus|error|load|submit)="(.*?)"'
+    r'(?=\$\{|\s+[A-Za-z_:][-A-Za-z0-9_:.]*=|[>`])',
+    re.DOTALL,
+)
+INLINE_CALL_RE = re.compile(r"\b([A-Za-z_$][\w$]*)\s*\(")
+INLINE_MEMBER_RE = re.compile(r"\b([A-Za-z_$][\w$]*)\.")
+INLINE_DYNAMIC_CALL_RE = re.compile(r"\$\{([^}]+)\}\s*\(")
+INLINE_BUILTINS = {
+    "JSON", "Number", "Object", "Promise", "Array", "Date", "Math", "String",
+    "Boolean", "RegExp", "Error", "Map", "Set", "WeakMap", "WeakSet",
+    "parseInt", "parseFloat", "isNaN", "isFinite", "encodeURIComponent",
+    "decodeURIComponent", "encodeURI", "decodeURI", "escapeHtml", "undefined",
+    "NaN", "Infinity", "true", "false", "null", "this", "event", "window",
+    "document", "console", "location", "history", "navigator", "localStorage",
+    "sessionStorage", "alert", "confirm", "prompt", "setTimeout", "clearTimeout",
+    "setInterval", "clearInterval", "requestAnimationFrame", "cancelAnimationFrame",
+    "queueMicrotask", "fetch", "AbortController", "URL", "URLSearchParams",
+    "FormData", "Blob", "File", "FileReader", "Image", "Audio", "Worker",
+    "ResizeObserver", "MutationObserver", "IntersectionObserver",
+    "if", "for", "while", "switch", "return", "typeof", "void", "new", "delete",
+    "class", "function", "var", "let", "const", "in", "of", "instanceof",
+    "closest", "getAttribute", "getElementById", "preventDefault", "querySelector",
+    "remove", "stopPropagation", "toggle",
+}
+INLINE_SAFE_MEMBER_ROOTS = {"document", "event", "this", "window", "dataset", "classList", "style"}
+INDEX_HTML = APP_JS.with_name("index.html")
+
+
+def _inline_handler_calls(source: str) -> set[str]:
+    names = set()
+    for attr in EVENT_ATTRIBUTE_RE.findall(source):
+        stripped = re.sub(r"\$\{[^}]+\}", "", attr)
+        names.update(
+            name for name in INLINE_CALL_RE.findall(stripped)
+            if name not in INLINE_BUILTINS
+        )
+    return names
+
+
+def _inline_handler_registry(source: str) -> set[str]:
+    match = re.search(r"const INLINE_HANDLERS = \{(.*?)^\};", source, re.MULTILINE | re.DOTALL)
+    assert match, "missing INLINE_HANDLERS registry"
+    return set(re.findall(r"^\s*([A-Za-z_$][\w$]*)\s*,?\s*$", match.group(1), re.MULTILINE))
+
+
+def test_app_uses_native_module_entry():
+    html = INDEX_HTML.read_text()
+    assert '<script type="module" src="/app.js?v=' in html
+    assert re.search(r'<script(?![^>]*\btype=["\']module["\'])[^>]*src="/app\.js', html) is None
+
+
+def test_inline_handlers_have_exact_explicit_exports():
+    source = APP_JS.read_text()
+    html = INDEX_HTML.read_text()
+    used = _inline_handler_calls(html + source)
+    exported = _inline_handler_registry(source)
+    assert used == exported, (
+        f"missing={sorted(used - exported)} extra={sorted(exported - used)}"
+    )
+    assert "Object.assign(window, INLINE_HANDLERS);" in source
+
+
+def test_inline_handlers_do_not_read_module_lexicals():
+    source = APP_JS.read_text()
+    for attr in EVENT_ATTRIBUTE_RE.findall(source):
+        assert "${" not in attr or not INLINE_DYNAMIC_CALL_RE.search(attr), attr
+        stripped = re.sub(r"\$\{[^}]+\}", "", attr)
+        roots = set(INLINE_MEMBER_RE.findall(stripped)) - INLINE_BUILTINS - INLINE_SAFE_MEMBER_ROOTS
+        assert not roots, attr
+        assert ".then(" not in attr

@@ -38,7 +38,7 @@ jobs:
           python -m pytest -q --maxfail=1
       - name: 前端 JS 语法检查
         run: |
-          node --check app/static/app.js
+          node --input-type=module --check < app/static/app.js
           node --check miniprogram/utils/api.js
           node --check miniprogram/pages/*/*.js
       - name: sidecar 测试

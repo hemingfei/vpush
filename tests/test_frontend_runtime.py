@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import functools
 import http.server
+import json
 import threading
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 from playwright.sync_api import Page, Playwright, expect, sync_playwright
@@ -15,6 +17,12 @@ STATIC = ROOT / "app" / "static"
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         pass
+
+    def do_GET(self) -> None:
+        path = urlsplit(self.path).path
+        if path in {"/news", "/news/"}:
+            self.path = "/index.html"
+        super().do_GET()
 
 
 @pytest.fixture(scope="session")
@@ -48,68 +56,62 @@ def page(playwright_instance: Playwright, static_origin: str):
     browser.close()
 
 
-def install_json_fetch(page: Page, body: str) -> None:
-    page.evaluate(
-        """body => {
-          window.fetch = async () => ({
-            ok: true,
-            status: 200,
-            statusText: "OK",
-            json: async () => JSON.parse(body),
-          });
-        }""",
-        body,
+def install_news_bootstrap(page: Page, *, delayed: bool = False, fail_image: bool = False) -> None:
+    payload = json.dumps({
+        "delayed": delayed,
+        "failImage": fail_image,
+        "sources": {"items": [{"id": 1, "name": "Test", "selected": True}], "collection_enabled": True},
+        "news": {"items": [{
+            "id": 7, "has_image": True, "source_name": "Test",
+            "published_at": "2026-09-04T00:00:00Z", "title": "Title",
+            "summary": "Summary", "is_new": False,
+        }], "next_offset": 1, "has_more": False, "view_started_at": None},
+    }, ensure_ascii=False)
+    page.context.add_init_script(
+        "const data = " + payload + """;
+          localStorage.setItem('dav_token', 'test-token');
+          window.fetch = async (input) => {
+            const url = String(input);
+            if (url.includes('/api/me')) {
+              return { ok: true, status: 200, json: async () => ({ id: 1, username: 'test', news_visible: true }) };
+            }
+            if (url.includes('/api/news/sources')) {
+              return { ok: true, status: 200, json: async () => data.sources };
+            }
+            if (url.includes('/api/news/7/images/')) {
+              if (data.failImage) throw new Error('offline');
+              return { ok: true, status: 200, blob: async () => new Blob(['x']) };
+            }
+            if (url.includes('/api/news')) {
+              if (data.delayed) {
+                return {
+                  ok: true,
+                  status: 200,
+                  json: () => new Promise(resolve => { window.__resolveNews = resolve; }),
+                };
+              }
+              return { ok: true, status: 200, json: async () => data.news };
+            }
+            return { ok: true, status: 200, json: async () => ({}) };
+          };
+        """
     )
 
 
-def test_news_reset_keeps_full_skeleton_until_response(page: Page):
-    page.evaluate(
-        """() => {
-          document.querySelector('#main').innerHTML = '<div id="news-list"></div><div id="news-load-sentinel"></div>';
-          document.querySelector('#app-view')?.classList.remove('hidden');
-          state.newsItems = [];
-          state.newsSources = [];
-          window.fetch = async () => ({
-            ok: true,
-            status: 200,
-            statusText: 'OK',
-            json: () => new Promise(resolve => { window.resolveNews = resolve; }),
-          });
-          window.pendingNews = loadFinancialNews(true, routeRenderSeq);
-        }"""
-    )
+def test_news_reset_keeps_full_skeleton_until_response(page: Page, static_origin: str):
+    install_news_bootstrap(page, delayed=True)
+    page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
     cards = page.locator("#news-list .admin-sk-card")
     expect(cards).to_have_count(3)
     expect(cards.first).to_be_visible()
     assert cards.first.bounding_box()["height"] > 0
-    page.evaluate(
-        """() => window.resolveNews({
-          items: [], next_offset: 0, has_more: false, view_started_at: null,
-        })"""
-    )
-    page.evaluate("() => window.pendingNews")
+    page.evaluate("() => window.__resolveNews({ items: [], next_offset: 0, has_more: false, view_started_at: null })")
     expect(page.locator("#news-list .admin-sk-card")).to_have_count(0)
 
 
-def test_rejected_news_thumbnail_releases_layout_slot(page: Page):
-    page.evaluate(
-        """() => {
-          document.querySelector('#main').innerHTML = '<div id="news-list"></div>';
-          document.querySelector('#news-list').innerHTML = newsListItemHtml({
-            id: 7,
-            has_image: true,
-            source_name: 'Test',
-            published_at: '2026-09-04T00:00:00Z',
-            title: 'Title',
-            summary: 'Summary',
-            is_new: false,
-          });
-          window.fetch = async () => { throw new Error('offline'); };
-          const image = document.querySelector('[data-news-thumbnail="7"]');
-          window.pendingImage = loadNewsImageBlob(7, 0, image, routeRenderSeq);
-        }"""
-    )
-    page.evaluate("() => window.pendingImage")
+def test_rejected_news_thumbnail_releases_layout_slot(page: Page, static_origin: str):
+    install_news_bootstrap(page, fail_image=True)
+    page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
     expect(page.locator('[data-news-thumbnail="7"]')).to_have_count(0)
 
 
@@ -118,12 +120,12 @@ def test_lightbox_traps_and_restores_focus(page: Page):
         """() => {
           document.body.insertAdjacentHTML('beforeend', `
             <div class="post-images">
-              <img id="lightbox-trigger" tabindex="0" src="/logo-mark.svg" alt="one">
+              <img id="lightbox-trigger" tabindex="0" src="/logo-mark.svg" alt="one"
+                   onclick="openLightbox(this)">
               <img src="/logo.svg" alt="two">
             </div>`);
-          const trigger = document.querySelector('#lightbox-trigger');
-          trigger.focus();
-          openLightbox(trigger);
+          document.querySelector('#lightbox-trigger').focus();
+          document.querySelector('#lightbox-trigger').click();
         }"""
     )
     expect(page.locator(".lightbox-close")).to_be_focused()
@@ -142,6 +144,7 @@ def test_kol_editor_uses_shared_focus_and_dirty_close_guard(page: Page):
           const trigger = document.createElement('button');
           trigger.id = 'kol-edit-trigger';
           trigger.textContent = 'edit';
+          trigger.setAttribute('onclick', 'adminEditKol(1)');
           document.body.appendChild(trigger);
           trigger.focus();
           window.fetch = async url => ({
@@ -153,9 +156,9 @@ def test_kol_editor_uses_shared_focus_and_dirty_close_guard(page: Page):
                   visible_users: [], platform: 'twitter', original_only: false }
               : [],
           });
+          trigger.click();
         }"""
     )
-    page.evaluate("() => adminEditKol(1)")
     expect(page.locator("#ek-name")).to_be_focused()
     page.keyboard.press("Shift+Tab")
     expect(page.locator("[data-close]")).to_be_focused()
