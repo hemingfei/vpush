@@ -152,6 +152,16 @@ def add_topic_candidates(db, names: list[str]) -> None:
     db.set_setting(MX_VIEW_TOPIC_CANDIDATES_KEY, json.dumps(cands[:200], ensure_ascii=False))
 
 
+def remove_topic_candidate(db, name: str) -> None:
+    """审核落定（采纳/忽略）后从候选表删除指定题材名；名字不存在则忽略。"""
+    name = str(name or "").strip()
+    cands = get_topic_candidates(db)
+    if not name or name not in cands:
+        return
+    cands.remove(name)
+    db.set_setting(MX_VIEW_TOPIC_CANDIDATES_KEY, json.dumps(cands, ensure_ascii=False))
+
+
 def get_summary_min_interval(db) -> int:
     try:
         return max(0, int(db.get_setting(MX_VIEW_SUMMARY_MIN_INTERVAL_KEY) or 0))

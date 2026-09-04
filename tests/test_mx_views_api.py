@@ -81,3 +81,49 @@ def test_mx_views_target_detail_with_evidence():
     op = data["timeline"][0]
     assert op["kol_name"] == "王哥" and op["direction"] == "bull"
     assert op["evidence"][0]["content"] == "固态电池订单爆了"
+
+
+def test_mx_views_admin_config_and_status():
+    client = make_client()
+    admin = auth_headers(client)
+    db = client.app.state.db
+    cfg = client.get("/api/admin/mx-views/config", headers=admin).json()
+    assert cfg["enabled"] is False and cfg["batch_size"] == 600
+    assert len(cfg["schedule"]["resolved_times"]) == 38
+    assert "固态电池" in cfg["topic_hints"]
+
+    put = client.put("/api/admin/mx-views/config", headers=admin,
+                     json={"enabled": True, "batch_size": 300,
+                           "schedule": {"segments": [{"start": "09:30", "end": "09:40", "interval_min": 5}],
+                                        "extra_times": []}})
+    assert put.status_code == 200
+    cfg2 = client.get("/api/admin/mx-views/config", headers=admin).json()
+    assert cfg2["enabled"] is True and cfg2["batch_size"] == 300
+    assert cfg2["schedule"]["resolved_times"] == ["09:30", "09:35", "09:40"]
+    # 非法 schedule 422
+    bad = client.put("/api/admin/mx-views/config", headers=admin,
+                     json={"schedule": {"segments": "oops", "extra_times": []}})
+    assert bad.status_code == 422
+    # 普通用户 403
+    from test_api import user_headers
+
+    uh = user_headers(client, "plainmxv")
+    assert client.get("/api/admin/mx-views/config", headers=uh).status_code == 403
+
+    status = client.get("/api/admin/mx-views/status", headers=admin).json()
+    assert status["cursor"] == 0 and status["backfill"]["running"] is False
+
+
+def test_mx_views_admin_candidates_adopt_and_dismiss():
+    client = make_client()
+    admin = auth_headers(client)
+    db = client.app.state.db
+    mva.add_topic_candidates(db, ["可控核聚变", "固态电池"])  # 参考表已有的不入候选
+    lst = client.get("/api/admin/mx-views/topic-candidates", headers=admin).json()
+    assert lst["candidates"] == ["可控核聚变"]
+    r = client.post("/api/admin/mx-views/topic-candidates/adopt", headers=admin,
+                    json={"name": "可控核聚变"})
+    assert r.status_code == 200
+    assert "可控核聚变" in client.get("/api/admin/mx-views/config", headers=admin).json()["topic_hints"]
+    assert client.get("/api/admin/mx-views/topic-candidates", headers=admin).json()["candidates"] == []
+    client.post("/api/admin/mx-views/topic-candidates/dismiss", headers=admin, json={"name": "x"})

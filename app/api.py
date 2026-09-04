@@ -6188,6 +6188,172 @@ def create_api_router(
         _audit(admin, "mx_llm_tag_cancel")
         return {"ok": True}
 
+    # ---- MX 大V实时观点（管理端）：配置 / 状态 / 手动跑批 / 回填管理 / 题材候选审核 ----
+    import threading as _threading
+    from datetime import datetime as _dt
+
+    from .mx_view_analysis import (
+        CN_TZ,
+        MX_VIEW_BATCH_SIZE_KEY,
+        MX_VIEW_ENABLED_KEY,
+        MX_VIEW_KOL_IDS_KEY,
+        MX_VIEW_SCHEDULE_KEY,
+        MX_VIEW_SUMMARY_MIN_INTERVAL_KEY,
+        MX_VIEW_TOPIC_HINTS_KEY,
+        backfill_running,
+        backfill_status,
+        get_batch_size,
+        get_enabled,
+        get_fail_count,
+        get_kol_ids,
+        get_schedule_config,
+        get_summary_min_interval,
+        get_topic_candidates,
+        get_topic_hints,
+        get_view_version,
+        remove_topic_candidate,
+        request_backfill_cancel,
+        resolve_schedule,
+        resolve_system_llm_config,
+        run_snapshot_batch,
+        start_backfill_job,
+    )
+
+    def _mx_view_put_config(admin: dict, body: dict) -> None:
+        """部分更新配置；schedule 传即整体替换并校验可解析。"""
+        if "enabled" in body:
+            db.set_setting(MX_VIEW_ENABLED_KEY, "1" if body["enabled"] else "0")
+        if "batch_size" in body:
+            try:
+                size = max(1, int(body["batch_size"]))
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=422, detail="batch_size 须为正整数")
+            db.set_setting(MX_VIEW_BATCH_SIZE_KEY, str(size))
+        if "summary_min_interval" in body:
+            try:
+                interval = max(0, int(body["summary_min_interval"]))
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=422, detail="summary_min_interval 须为非负整数")
+            db.set_setting(MX_VIEW_SUMMARY_MIN_INTERVAL_KEY, str(interval))
+        if "kol_ids" in body:
+            ids = body["kol_ids"]
+            if not isinstance(ids, list) or not all(isinstance(i, int) for i in ids):
+                raise HTTPException(status_code=422, detail="kol_ids 须为整数数组")
+            db.set_setting(MX_VIEW_KOL_IDS_KEY, json.dumps(ids))
+        if "topic_hints" in body:
+            hints = body["topic_hints"]
+            if not isinstance(hints, list) or not all(isinstance(h, str) and h.strip() for h in hints):
+                raise HTTPException(status_code=422, detail="topic_hints 须为非空字符串数组")
+            db.set_setting(
+                MX_VIEW_TOPIC_HINTS_KEY,
+                json.dumps([h.strip() for h in hints], ensure_ascii=False),
+            )
+        if "schedule" in body:
+            schedule = body["schedule"]
+            if not isinstance(schedule, dict) or not resolve_schedule(schedule):
+                raise HTTPException(status_code=422, detail="schedule 无法解析出任何快照时刻")
+            db.set_setting(MX_VIEW_SCHEDULE_KEY, json.dumps(schedule, ensure_ascii=False))
+        _audit(admin, "mx_view_config_update", detail=",".join(sorted(body.keys())))
+
+    @router.get("/admin/mx-views/config", dependencies=[Depends(require_admin)])
+    async def admin_mx_views_config():
+        return {
+            "enabled": get_enabled(db),
+            "schedule": get_schedule_config(db),
+            "batch_size": get_batch_size(db),
+            "kol_ids": get_kol_ids(db),
+            "topic_hints": get_topic_hints(db),
+            "topic_candidates": get_topic_candidates(db),
+            "summary_min_interval": get_summary_min_interval(db),
+        }
+
+    @router.put("/admin/mx-views/config", dependencies=[Depends(require_admin)])
+    async def admin_mx_views_update_config(request: Request, admin: dict = Depends(get_current_user)):
+        body = await request.json()
+        _mx_view_put_config(admin, body)
+        return {"ok": True}
+
+    @router.get("/admin/mx-views/status", dependencies=[Depends(require_admin)])
+    async def admin_mx_views_status():
+        last = db._rows("SELECT * FROM mx_view_batches ORDER BY id DESC LIMIT 1")
+        today = _dt.now(CN_TZ).strftime("%Y-%m-%d")
+        today_n = db._rows(
+            "SELECT COUNT(*) AS n FROM mx_view_batches WHERE trading_day = ? AND kind = 'live'",
+            (today,),
+        )
+        return {
+            "enabled": get_enabled(db),
+            "cursor": db.get_mx_view_cursor(),
+            "version": get_view_version(db),
+            "fail_count": get_fail_count(db),
+            "last_batch": dict(last[0]) if last else None,
+            "batches_today": int(today_n[0]["n"]),
+            "backfill": backfill_status(),
+            "resolved_times": get_schedule_config(db)["resolved_times"],
+        }
+
+    @router.post("/admin/mx-views/run", dependencies=[Depends(require_admin)], status_code=202)
+    async def admin_mx_views_run(admin: dict = Depends(get_current_user)):
+        if backfill_running():
+            raise HTTPException(status_code=409, detail="回填进行中，稍后再试")
+        now = _dt.now(CN_TZ)
+        day, hhmm = now.strftime("%Y-%m-%d"), now.strftime("%H:%M")
+
+        def job():
+            try:
+                run_snapshot_batch(db, day=day, snapshot_at=hhmm, window=("09:15", hhmm),
+                                   kind="live", llm_config=resolve_system_llm_config(db))
+            except Exception:  # noqa: BLE001 - 失败已落批次表
+                pass
+
+        _threading.Thread(target=job, name="mx-view-manual-run", daemon=True).start()
+        _audit(admin, "mx_view_manual_run", detail=f"{day} {hhmm}")
+        return {"ok": True, "snapshot_at": hhmm}
+
+    @router.post("/admin/mx-views/backfill", dependencies=[Depends(require_admin)], status_code=202)
+    async def admin_mx_views_backfill(request: Request, admin: dict = Depends(get_current_user)):
+        body = await request.json()
+        ok = start_backfill_job(db, str(body.get("day_from") or ""), str(body.get("day_to") or ""),
+                                llm_config=resolve_system_llm_config(db))
+        if not ok:
+            raise HTTPException(status_code=409, detail="回填已在进行中，或日期区间非法/超30天")
+        _audit(admin, "mx_view_backfill", detail=f"{body.get('day_from')}~{body.get('day_to')}")
+        return {"ok": True}
+
+    @router.get("/admin/mx-views/backfill/progress", dependencies=[Depends(require_admin)])
+    async def admin_mx_views_backfill_progress():
+        return backfill_status()
+
+    @router.post("/admin/mx-views/backfill/cancel", dependencies=[Depends(require_admin)])
+    async def admin_mx_views_backfill_cancel(admin: dict = Depends(get_current_user)):
+        request_backfill_cancel()
+        _audit(admin, "mx_view_backfill_cancel")
+        return {"ok": True}
+
+    @router.get("/admin/mx-views/topic-candidates", dependencies=[Depends(require_admin)])
+    async def admin_mx_views_candidates():
+        return {"candidates": get_topic_candidates(db)}
+
+    @router.post("/admin/mx-views/topic-candidates/adopt", dependencies=[Depends(require_admin)])
+    async def admin_mx_views_candidate_adopt(request: Request, admin: dict = Depends(get_current_user)):
+        body = await request.json()
+        name = str(body.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="name 必填")
+        hints = get_topic_hints(db)
+        if name not in hints:
+            hints.append(name)
+            db.set_setting(MX_VIEW_TOPIC_HINTS_KEY, json.dumps(hints, ensure_ascii=False))
+        remove_topic_candidate(db, name)
+        _audit(admin, "mx_view_candidate_adopt", name)
+        return {"ok": True}
+
+    @router.post("/admin/mx-views/topic-candidates/dismiss", dependencies=[Depends(require_admin)])
+    async def admin_mx_views_candidate_dismiss(request: Request, admin: dict = Depends(get_current_user)):
+        body = await request.json()
+        remove_topic_candidate(db, str(body.get("name") or ""))
+        return {"ok": True}
+
     @router.get("/admin/post-tag-reviews", dependencies=[Depends(require_admin)])
     def admin_post_tag_reviews(status: str = "pending"):
         """LLM 打标 low 准确度标签的人工审核队列（默认 pending）。
