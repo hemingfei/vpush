@@ -4038,37 +4038,37 @@ def test_financial_news_visibility_is_runtime_controlled():
 
 
 def test_news_reader_functions_cover_sources_seen_and_blob_cleanup():
-    src = APP_JS.read_text()
+    src = NEWS_JS.read_text()
     for name in (
         "renderNewsCenter", "loadFinancialNews", "openNewsSourcePicker",
         "saveNewsSources", "openNewsArticle", "loadNewsImages", "clearNewsImageUrls",
     ):
         assert f"function {name}" in src or f"async function {name}" in src
-    seen = _fn_body("loadFinancialNews")
+    seen = _fn_body("loadFinancialNews", NEWS_JS)
     assert '"/api/news/seen"' in seen
     assert "view_started_at" in seen
-    images = _fn_body("clearNewsImageUrls")
+    images = _fn_body("clearNewsImageUrls", NEWS_JS)
     assert "URL.revokeObjectURL" in images
 
 
 def test_news_pagination_appends_without_replacing_existing_thumbnails():
-    body = _fn_body("loadFinancialNews")
+    body = _fn_body("loadFinancialNews", NEWS_JS)
     assert "insertAdjacentHTML" in body
     assert "state.newsItems.map(newsListItemHtml)" not in body
 
 
 def test_news_source_picker_is_searchable_checkbox_dialog():
-    body = _fn_body("openNewsSourcePicker")
+    body = _fn_body("openNewsSourcePicker", NEWS_JS)
     assert 'type="search"' in body
-    body = body + _fn_body("newsSourcePickerRows")
+    body = body + _fn_body("newsSourcePickerRows", NEWS_JS)
     assert 'type="checkbox"' in body
     assert 'role="dialog"' in body
     assert "我的来源" in body
 
 
 def test_news_source_picker_preserves_selection_across_search():
-    open_picker = _fn_body("openNewsSourcePicker")
-    save = _fn_body("saveNewsSources")
+    open_picker = _fn_body("openNewsSourcePicker", NEWS_JS)
+    save = _fn_body("saveNewsSources", NEWS_JS)
     assert "newsSelectedIds" in open_picker
     assert "mask._newsSelectedIds" in save
     assert "newsSourcePickerRows(event.target.value" in open_picker
@@ -5356,10 +5356,10 @@ def test_trap_focus_utility_and_a11y_enhancements():
 
 def test_news_list_shell_renders_shimmer_skeleton():
     """P1: 财经新闻骨架屏包含占位卡片与线条。"""
-    shell = _fn_body("renderNewsListShell")
+    shell = _fn_body("renderNewsListShell", NEWS_JS)
     assert "newsListSkeletonHtml()" in shell
     assert "admin-sk-card" not in shell
-    skeleton = _fn_body("newsListSkeletonHtml")
+    skeleton = _fn_body("newsListSkeletonHtml", NEWS_JS)
     assert "admin-sk-card" in skeleton
     assert "admin-skeleton" in skeleton
 
@@ -5429,7 +5429,7 @@ def test_app_uses_native_module_entry():
 def test_inline_handlers_have_exact_explicit_exports():
     source = APP_JS.read_text()
     html = INDEX_HTML.read_text()
-    used = _inline_handler_calls(html + source)
+    used = _inline_handler_calls(html + source + NEWS_JS.read_text())
     exported = _inline_handler_registry(source)
     assert used == exported, (
         f"missing={sorted(used - exported)} extra={sorted(exported - used)}"
@@ -5453,3 +5453,11 @@ def test_core_helpers_are_real_modules():
     assert 'from "./core/dialog.js"' in src
     assert "function escapeHtml(" not in src
     assert "function trapFocus(" not in src
+
+
+def test_financial_news_is_a_view_module():
+    src = APP_JS.read_text()
+    assert 'from "./views/news.js"' in src
+    assert "function renderNewsCenter(" not in src
+    assert "function loadNewsImageBlob(" not in src
+    assert "createNewsView({" in src
