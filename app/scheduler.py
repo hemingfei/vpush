@@ -1894,11 +1894,10 @@ def format_startup_message(*, now: datetime | None = None, instance: str | None 
 
     if instance is None:
         instance = (os.environ.get("VPUSH_INSTANCE") or "").strip()
-    stamp = (now or datetime.now(CN_TZ)).strftime("%Y-%m-%d %H:%M +0800")
-    lines = ["✅ V Push服务已启动"]
+    stamp = (now or datetime.now(CN_TZ)).strftime("%Y-%m-%d %H:%M")
+    lines = ["✅ V Push 服务已启动", f"v{APP_VERSION}", stamp]
     if instance:
         lines.append(instance)
-    lines.append(f"v{APP_VERSION} · {stamp}")
     return "\n".join(lines)
 
 

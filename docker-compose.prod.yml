@@ -11,6 +11,7 @@ services:
       - /tmp:size=64m,mode=1777
     environment:
       - TZ=Asia/Shanghai
+      - "VPUSH_INSTANCE=${VPUSH_INSTANCE:-vpush.net / DMIT}"
       - CONFIG_PATH=/app/config.yaml
       - DB_PATH=/data/dav.db
       - FEISHU_APP_ID=${FEISHU_APP_ID}
