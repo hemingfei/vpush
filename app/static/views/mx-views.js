@@ -24,7 +24,7 @@ export function createMxViewsView(dependencies) {
     applySeq: 0, tlDrag: false, tlPreviewIdx: -1,
     hlKey: "", hlPinned: false, boardMode: { topic: "heat", stock: "heat" }, hlDocBound: false };
 
-  // 点页面空白/Esc 解除高亮锁定（工厂级只绑一次；事件里按路由存活状态自然失效）
+  // 点页面空白/Esc 解除高亮锁定、关闭月历（工厂级只绑一次；事件里按路由存活状态自然失效）
   if (!_mxv.hlDocBound) {
     _mxv.hlDocBound = true;
     document.addEventListener("click", (e) => {
@@ -33,8 +33,16 @@ export function createMxViewsView(dependencies) {
       _mxv.hlPinned = false;
       mxvSetHighlight("");
     });
+    document.addEventListener("click", (e) => {
+      // 月历外点关闭（按钮自身点击交给 mxvCalToggle 切换）
+      if (!document.querySelector(".mxv-cal")) return;
+      if (e.target.closest && (e.target.closest(".mxv-cal") || e.target.closest("#mxv-day-btn"))) return;
+      mxvCalClose();
+    });
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && _mxv.hlPinned) {
+      if (e.key !== "Escape") return;
+      if (document.querySelector(".mxv-cal")) { mxvCalClose(); return; }
+      if (_mxv.hlPinned) {
         _mxv.hlPinned = false;
         mxvSetHighlight("");
       }
@@ -52,9 +60,10 @@ export function createMxViewsView(dependencies) {
     }
     const d = document.querySelector(".mxv-drawer-mask"); if (d) d.remove();
     const dr = document.querySelector(".mxv-drawer"); if (dr) dr.remove();
+    mxvCalClose();
     Object.assign(_mxv, { day: null, payload: null, at: null, drawer: null, hasNew: false, sseOk: false,
       feedBatches: [], feedKey: "", feedPending: false, feedLoading: false, feedFailed: false,
-      tlDrag: false, tlPreviewIdx: -1, hlKey: "", hlPinned: false });
+      tlDrag: false, tlPreviewIdx: -1, hlKey: "", hlPinned: false, cal: null });
   }
 
   async function renderMxViews(seq) {
@@ -194,6 +203,79 @@ export function createMxViewsView(dependencies) {
 
   function mxvPickDay(day) { go(`/mx-views?day=${encodeURIComponent(day)}`); }
 
+  // ---- 交易日月历选择器：状态栏日期按钮弹出月历，仅有观点数据的交易日可点 ----
+  function mxvCalToggle() {
+    if (document.querySelector(".mxv-cal")) { mxvCalClose(); return; }
+    const base = _mxv.day || _mxv.days[_mxv.days.length - 1] || "";
+    const parts = base.split("-").map(Number);
+    const now = new Date();
+    _mxv.cal = { y: parts[0] || now.getFullYear(), m: parts[1] || now.getMonth() + 1 };
+    mxvCalRender();
+  }
+
+  function mxvCalClose() {
+    const slot = document.getElementById("mxv-cal-slot");
+    if (slot) slot.innerHTML = "";
+    _mxv.cal = null;
+  }
+
+  function mxvCalNav(delta) {
+    if (!_mxv.cal) return;
+    let { y, m } = _mxv.cal;
+    m += delta;
+    if (m < 1) { m = 12; y -= 1; }
+    if (m > 12) { m = 1; y += 1; }
+    _mxv.cal = { y, m };
+    mxvCalRender();
+  }
+
+  function mxvCalPick(day) {
+    if (!_mxv.days.includes(day)) return;
+    mxvCalClose();
+    if (day !== _mxv.day) mxvPickDay(day);
+  }
+
+  function mxvCalRender() {
+    const slot = document.getElementById("mxv-cal-slot");
+    if (!slot || !_mxv.cal) return;
+    slot.innerHTML = mxvCalHtml(_mxv.cal.y, _mxv.cal.m);
+  }
+
+  function mxvCalHtml(y, m) {
+    const pad = (x) => String(x).padStart(2, "0");
+    const now = new Date();
+    const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    const has = new Set(_mxv.days);
+    // 周一起始的月历网格，前后补相邻月份日期（置灰禁用）
+    const firstDow = (new Date(y, m - 1, 1).getDay() + 6) % 7;
+    const nDays = new Date(y, m, 0).getDate();
+    const nPrev = new Date(y, m - 1, 0).getDate();
+    const cells = [];
+    for (let i = firstDow - 1; i >= 0; i--) cells.push({ d: nPrev - i, out: true });
+    for (let d = 1; d <= nDays; d++) cells.push({ d, out: false });
+    for (let d = 1; cells.length % 7; d++) cells.push({ d, out: true });
+    const week = ["一", "二", "三", "四", "五", "六", "日"];
+    return `
+    <div class="mxv-cal" role="dialog" aria-label="选择交易日">
+      <div class="cal-head">
+        <button type="button" class="nav" onclick="mxvCalNav(-1)" aria-label="上一月">‹</button>
+        <b>${y} 年 ${m} 月</b>
+        <button type="button" class="nav" onclick="mxvCalNav(1)" aria-label="下一月">›</button>
+      </div>
+      <div class="cal-grid">
+        ${week.map((w) => `<span class="cal-w">${w}</span>`).join("")}
+        ${cells.map((c) => {
+          const day = `${y}-${pad(m)}-${pad(c.d)}`;
+          const pickable = !c.out && has.has(day);
+          const cls = ["cal-d", c.out ? "out" : "", day === today ? "today" : "",
+            pickable ? "has" : "", day === _mxv.day ? "sel" : ""].filter(Boolean).join(" ");
+          return `<button type="button" class="${cls}" ${pickable ? `onclick="mxvCalPick('${day}')"` : "disabled"}>${c.d}</button>`;
+        }).join("")}
+      </div>
+      <div class="cal-tip">有观点数据的交易日可选</div>
+    </div>`;
+  }
+
   function mxvRenderShell() {
     const root = $("#main").querySelector(".mxv-root") || $("#main");
     root.outerHTML = mxvRootHtml();
@@ -207,8 +289,6 @@ export function createMxViewsView(dependencies) {
 
   function mxvRootHtml() {
     const p = _mxv.payload || {};
-    const dayOpts = _mxv.days.map((d) =>
-      `<option value="${d}" ${d === _mxv.day ? "selected" : ""}>${d}</option>`).join("");
     return `
     <div class="mxv-root">
       <div class="mxv-statusbar">
@@ -216,7 +296,8 @@ export function createMxViewsView(dependencies) {
         <span class="mxv-pill" id="mxv-clock">--:--:--</span>
         <span class="mxv-pill">数据 ${escapeHtml(_mxv.at || "—")}${p.message_count != null ? ` · ${p.message_count} 条消息` : ""}</span>
         <span class="mxv-pill"><span class="mxv-dot sse${_mxv.sseOk ? " on" : ""}"></span>SSE</span>
-        <select class="mxv-pill" style="color:var(--mxv-text)" onchange="mxvPickDay(this.value)" aria-label="选择交易日">${dayOpts}</select>
+        <button type="button" class="mxv-pill mxv-day-btn" id="mxv-day-btn" style="color:var(--mxv-text);cursor:pointer"
+          onclick="mxvCalToggle()" aria-label="选择交易日，当前 ${escapeHtml(_mxv.day || "")}">📅 ${escapeHtml(_mxv.day || "—")}</button>
         <button class="mxv-btn" onclick="mxvRefreshLatest()" style="margin-left:auto">刷新</button>
       </div>
       ${mxvTimelineHtml()}
@@ -224,6 +305,8 @@ export function createMxViewsView(dependencies) {
       <div id="mxv-kols"></div>
       <div id="mxv-boards"></div>
       <div id="mxv-feed"></div>
+      <!-- 月历弹层挂载点：在 .mxv-root 内以继承 --mxv-* 主题变量（绝对定位于状态栏下方） -->
+      <div id="mxv-cal-slot"></div>
       <!-- 抽屉挂载点必须在 .mxv-root 内：抽屉颜色全部走 --mxv-* 变量（fixed 定位，DOM 位置不影响视觉） -->
       <div id="mxv-drawer-slot"></div>
     </div>`;
@@ -1428,6 +1511,9 @@ export function createMxViewsView(dependencies) {
     mxvTeardown,
     renderMxViews,
     mxvPickDay,
+    mxvCalToggle,
+    mxvCalNav,
+    mxvCalPick,
     mxvRefreshLatest,
     mxvApplySnapshot,
     mxvGoLatest,

@@ -60,6 +60,27 @@
 .mxv-btn:hover{border-color:var(--mxv-accent);}
 .mxv-btn.latest{background:var(--mxv-bear-soft);border-color:var(--mxv-bear-line);color:var(--mxv-bear);}
 .mxv-btn.latest.has-new{animation:mxvBreath 1.2s infinite;}
+/* 交易日月历选择器：日期按钮弹出，居中于状态栏下方；主题色走 --mxv-* 变量 */
+.mxv-day-btn{font-variant-numeric:tabular-nums;}
+.mxv-cal{position:absolute;top:46px;left:50%;transform:translateX(-50%);z-index:80;
+  width:288px;max-width:calc(100vw - 32px);background:var(--mxv-panel);border:1px solid var(--mxv-line);
+  border-radius:12px;padding:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);}
+.mxv-cal .cal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+.mxv-cal .cal-head b{color:var(--mxv-strong);font-size:14px;font-variant-numeric:tabular-nums;}
+.mxv-cal .nav{background:none;border:1px solid var(--mxv-btn-line);color:var(--mxv-muted);border-radius:6px;
+  width:26px;height:26px;font-size:16px;line-height:1;cursor:pointer;}
+.mxv-cal .nav:hover{border-color:var(--mxv-accent);color:var(--mxv-strong);}
+.mxv-cal .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;}
+.mxv-cal .cal-w{color:var(--mxv-faint);font-size:11px;text-align:center;padding:4px 0;}
+.mxv-cal .cal-d{background:none;border:1px solid transparent;border-radius:8px;color:var(--mxv-faint);
+  font-size:13px;padding:6px 0;cursor:default;font-variant-numeric:tabular-nums;}
+.mxv-cal .cal-d.out{opacity:.45;}
+.mxv-cal .cal-d.today{border-color:var(--mxv-btn-line);}
+.mxv-cal .cal-d.has{color:var(--mxv-strong);cursor:pointer;}
+.mxv-cal .cal-d.has:hover{background:var(--mxv-hover);border-color:var(--mxv-accent);}
+.mxv-cal .cal-d.sel{background:linear-gradient(90deg,var(--mxv-accent),var(--mxv-accent-deep));color:#fff;font-weight:700;}
+.mxv-cal .cal-d.sel:hover{background:linear-gradient(90deg,var(--mxv-accent),var(--mxv-accent-deep));border-color:transparent;}
+.mxv-cal .cal-tip{margin-top:8px;color:var(--mxv-faint);font-size:11px;text-align:center;}
 .mxv-banner{background:var(--mxv-banner-bg);
   border:1px solid var(--mxv-banner-line);border-radius:12px;padding:12px 16px;margin-bottom:12px;
   box-shadow:var(--mxv-banner-shadow);}

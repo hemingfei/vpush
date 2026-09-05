@@ -182,6 +182,36 @@ def test_mx_views_boards_heat_view_default():
         assert cls in css.replace(" ", ""), cls
 
 
+def test_mx_views_day_picker_is_calendar():
+    """顶部交易日选择为真实月历弹层：周一起始网格、可翻月、仅有数据日可点；不再用 select 下拉。"""
+    js = MX_VIEWS_JS
+    root = _fn_body("mxvRootHtml", js)
+    assert "<select" not in root  # 下拉已替换
+    assert 'id="mxv-day-btn"' in root and "mxvCalToggle()" in root
+    assert 'id="mxv-cal-slot"' in root  # 弹层挂载点在 .mxv-root 内（继承主题变量）
+    assert root.index('id="mxv-cal-slot"') < root.index('id="mxv-drawer-slot"')
+    for fn in ("mxvCalToggle", "mxvCalClose", "mxvCalNav", "mxvCalPick", "mxvCalRender", "mxvCalHtml"):
+        assert f"function {fn}(" in js, fn
+    cal = _fn_body("mxvCalHtml", js)
+    assert cal.index('"一"') < cal.index('"日"')  # 周一起始的星期表头
+    assert "mxvCalNav(-1)" in cal and "mxvCalNav(1)" in cal  # 上/下月导航
+    assert "new Set(_mxv.days)" in cal and "disabled" in cal  # 无数据日禁用
+    assert "mxvCalPick(" in cal
+    # 选择：关弹层 + 换日路由；Esc/点外关闭；离开页面清理
+    pick = _fn_body("mxvCalPick", js)
+    assert "mxvCalClose()" in pick and "mxvPickDay(" in pick
+    assert 'closest("#mxv-day-btn")' in js  # 点外关闭白名单
+    assert "mxvCalClose()" in _fn_body("mxvTeardown", js)
+    # 注册：工厂返回 + app.js 内联处理器
+    exported = js.rsplit("return {", 1)[1]
+    for fn in ("mxvCalToggle", "mxvCalNav", "mxvCalPick"):
+        assert f"{fn}," in exported, fn
+        assert f"{fn}," in APP_JS, fn
+    css = (STATIC / "mx-views.css").read_text()
+    for cls in (".mxv-cal{", ".mxv-cal .cal-grid{", ".mxv-cal .cal-d.has{", ".mxv-cal .cal-d.sel{"):
+        assert cls in css, cls  # 后代选择器含空格，用原文断言
+
+
 def test_mx_views_css_key_components():
     css = (STATIC / "mx-views.css").read_text()
     for cls in (".mxv-statusbar", ".mxv-timeline", ".mxv-tl-head", ".mxv-banner", ".mxv-chip",
