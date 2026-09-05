@@ -473,11 +473,13 @@ export function createMxViewsView(dependencies) {
     return `<span class="mxv-momo flat">→</span>`;
   }
 
-  function mxvRatioHtml(bull, bear) {
-    const total = Math.max(bull + bear, 1);
+  function mxvRatioHtml(bull, bear, neutral = 0) {
+    const total = Math.max(bull + bear + neutral, 1);
     const bp = Math.round((bull / total) * 100), sp = Math.round((bear / total) * 100);
-    return `<div class="mxv-ratio" role="img" aria-label="看多${bull} 看空${bear}">
+    const np = Math.max(0, 100 - bp - sp); // 中段 = 余数，吸收取整误差
+    return `<div class="mxv-ratio" role="img" aria-label="看多${bull} 中立${neutral} 看空${bear}">
       ${bull ? `<div class="b" style="width:${bp}%"></div>` : ""}
+      ${neutral ? `<div class="n" style="width:${np}%"></div>` : ""}
       ${bear ? `<div class="s" style="width:${sp}%"></div>` : ""}</div>`;
   }
 
@@ -516,8 +518,8 @@ export function createMxViewsView(dependencies) {
         return `
         <div class="mxv-row" data-mxv-hl="topic:${escapeHtml(t.name)}" onclick="mxvOpenTargetAt(${ti})">
           <span class="rank">${i + 1}</span><span class="name">${escapeHtml(t.name)}</span>
-          ${mxvRatioHtml(t.bull, t.bear)}
-          <span class="mxv-net ${t.net > 0 ? "bull" : t.net < 0 ? "bear" : "flat"}">${t.bull}多/${t.bear}空/${t.neutral || 0}中</span>
+          ${mxvRatioHtml(t.bull, t.bear, t.neutral || 0)}
+          <span class="mxv-net ${t.net > 0 ? "bull" : t.net < 0 ? "bear" : "flat"}">${t.bull}多/${t.neutral || 0}中/${t.bear}空</span>
           ${mxvMomo(t.momentum)}
           <span class="mxv-latest-time">${escapeHtml((t.latest_at || "").slice(11, 16))}</span>
         </div>`; }).join("");
@@ -528,8 +530,8 @@ export function createMxViewsView(dependencies) {
         return `
         <div class="mxv-row" data-mxv-hl="stock:${escapeHtml(s.name)}" onclick="mxvOpenTargetAt(${si})">
           <span class="rank">${i + 1}</span><span class="name">${escapeHtml(s.name)}</span>
-          ${mxvRatioHtml(s.bull, s.bear)}
-          <span class="mxv-net ${s.net > 0 ? "bull" : s.net < 0 ? "bear" : "flat"}">${s.bull}多/${s.bear}空/${s.neutral || 0}中</span>
+          ${mxvRatioHtml(s.bull, s.bear, s.neutral || 0)}
+          <span class="mxv-net ${s.net > 0 ? "bull" : s.net < 0 ? "bear" : "flat"}">${s.bull}多/${s.neutral || 0}中/${s.bear}空</span>
           ${mxvMomo(s.momentum)}
           <span class="mxv-actions">${escapeHtml(actions)}</span>
         </div>`;
@@ -674,7 +676,7 @@ export function createMxViewsView(dependencies) {
       <div class="mxv-stockcard" onclick="mxvOpenKolStockAt(${idx})">
         <div class="n">${escapeHtml(s.name)} <span style="color:var(--mxv-faint);font-size:11px">${s.bull + s.bear + sNeu} 大V</span>
           ${actions ? `<span class="mxv-actions">${escapeHtml(actions)}</span>` : ""}</div>
-        ${mxvRatioHtml(s.bull, s.bear)}
+        ${mxvRatioHtml(s.bull, s.bear, sNeu)}
         <div class="names">${namesLine(bullNames, s.bull, "var(--mxv-bull)", "▲")}</div>
         <div class="names">${namesLine(bearNames, s.bear, "var(--mxv-bear)", "▼")}</div>
         <div class="names">${namesLine(neutralNames, sNeu, "var(--mxv-muted)", "◎")}</div>

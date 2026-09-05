@@ -203,10 +203,10 @@ def test_mx_views_board_list_matches_heat_order_and_stock_bull_bear():
     js = MX_VIEWS_JS
     boards = _fn_body("mxvRenderBoards", js)
     assert boards.count("sort(mxvByHeat)") == 2  # 题材 + 个股明细都按热力排序
-    assert "${s.bull}多/${s.bear}空/${s.neutral || 0}中" in boards  # 个股明细多空中三段与题材榜同款
+    assert "${s.bull}多/${s.neutral || 0}中/${s.bear}空" in boards  # 个股明细多/中/空三段与题材榜同款
     assert "strength" not in boards  # 明细不再显示打分
     assert '<span class="mxv-actions">' in boards  # 操作列保留在最右
-    assert boards.index("多/${s.bear}空") < boards.index('<span class="mxv-actions">')  # 多空在操作前
+    assert boards.index("中/${s.bear}空") < boards.index('<span class="mxv-actions">')  # 多空中在操作前
 
 
 def test_mx_views_board_list_more_limit():
@@ -234,8 +234,13 @@ def test_mx_views_neutral_counts_everywhere():
     """中性大V全链路可见：明细行 多/空/中，热力徽标 净/总数(含中)，抽屉顶部中立统计，大V/个股卡片中性段。"""
     js = MX_VIEWS_JS
     boards = _fn_body("mxvRenderBoards", js)
-    assert "${t.bull}多/${t.bear}空/${t.neutral || 0}中" in boards  # 题材明细三段计数
-    assert "${s.bull}多/${s.bear}空/${s.neutral || 0}中" in boards  # 个股明细同款
+    assert "${t.bull}多/${t.neutral || 0}中/${t.bear}空" in boards  # 题材明细三段计数（多/中/空）
+    assert "${s.bull}多/${s.neutral || 0}中/${s.bear}空" in boards  # 个股明细同款
+    assert boards.count("mxvRatioHtml(t.bull, t.bear, t.neutral || 0)") == 1  # 比例条中段传中性
+    assert boards.count("mxvRatioHtml(s.bull, s.bear, s.neutral || 0)") == 1
+    ratio = _fn_body("mxvRatioHtml", js)
+    assert '<div class="n" style="width:${np}%"></div>' in ratio  # 中段黄色块（.mxv-ratio .n 上色）
+    assert "看多${bull} 中立${neutral} 看空${bear}" in ratio  # 无障碍标签含中立
     heat = _fn_body("mxvHeatHtml", js)
     assert "<b>${total}</b>${escapeHtml(r.name)}<b>${net}</b>" in heat  # 布局 = (多+空+中) 名称 (多-空)
     assert "const all = (r) => r.bull + r.bear + (r.neutral || 0);" in heat  # 热度与总数含中性
@@ -250,6 +255,7 @@ def test_mx_views_neutral_counts_everywhere():
     assert "${s.bull + s.bear + sNeu} 大V" in stockcards  # 大V计数含中性
     css = (STATIC / "mx-views.css").read_text()
     assert ".mxv-kolcard .mini .n{background:var(--mxv-faint);}" in css  # 后代选择器含空格，用原文断言
+    assert ".mxv-ratio .n{background:var(--mxv-gold);}" in css  # 比例条中段=黄色中性
 
 
 def test_mx_views_day_picker_is_calendar():

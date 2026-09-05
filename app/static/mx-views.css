@@ -128,6 +128,7 @@
 .mxv-row .name{width:88px;color:var(--mxv-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .mxv-ratio{flex:1;height:10px;border-radius:5px;overflow:hidden;display:flex;background:var(--mxv-rail);}
 .mxv-ratio .b{background:linear-gradient(90deg,var(--mxv-bull-deep),var(--mxv-bull));}
+.mxv-ratio .n{background:var(--mxv-gold);} /* 中段：中立大V */
 .mxv-ratio .s{background:linear-gradient(90deg,var(--mxv-bear),var(--mxv-bear-deep));}
 .mxv-net{width:88px;text-align:right;font-size:12px;}
 .mxv-net.bull{color:var(--mxv-bull);}.mxv-net.bear{color:var(--mxv-bear);}.mxv-net.flat{color:var(--mxv-faint);}
