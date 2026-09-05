@@ -11,7 +11,7 @@ import time
 
 import httpx
 
-from .base import Fetcher, Post, ThreadLocalClient, catchup_pages, format_published_at
+from .base import Fetcher, Post, ThreadLocalClient, catchup_pages, format_published_at, is_stale_backfill
 from .xueqiu import (
     XUEQIU_COOKIE_KEY,
     merge_waf_cookie,
@@ -402,12 +402,16 @@ class CombinationFetcher(Fetcher):
                 raise RuntimeError("雪球组合接口返回异常") from None
 
         data = get_page(1)
+        watermark = self.db.max_published_at(kol["id"]) if self.db else ""
         new_rb = [
             item for item in (data.get("list") or [])
             if isinstance(item, dict)
             and item.get("status") == "success"
             and item.get("id")
             and not self.db.post_exists(self.platform, str(item["id"]))
+            and not is_stale_backfill(
+                format_published_at(str(item.get("updated_at") or "")), watermark
+            )
         ]
         # 新调仓必须重抓持仓；TTL 内旧仓会让清仓标的留在「现有持仓」、新建标的缺失
         self._refresh_snapshots(kol["id"], cube_symbol, force_holdings=bool(new_rb))
@@ -527,4 +531,9 @@ class CombinationFetcher(Fetcher):
             return posts
 
         first_posts = build(data)
-        return catchup_pages(self.db, lambda p: build(get_page(p)), first_posts)
+        posts = (
+            catchup_pages(self.db, lambda p: build(get_page(p)), first_posts)
+            if watermark
+            else first_posts
+        )
+        return [p for p in posts if not is_stale_backfill(p.published_at, watermark)]

@@ -359,6 +359,7 @@ def test_extract_cube_symbol():
 
 
 def test_combination_fetch_parses_rebalancing():
+    now_ms = int(time.time() * 1000)
     payload = {
         "list": [
             {
@@ -366,7 +367,7 @@ def test_combination_fetch_parses_rebalancing():
                 "status": "success",
                 "cash": 80.0,  # 伪值：100 − Σ变动targets
                 "cash_value": 0.0,  # 真实现金：净值 1.8472 → 0.0%
-                "updated_at": 1785822205799,
+                "updated_at": now_ms,
                 "rebalancing_histories": [
                     {
                         "stock_name": "永杉锂业",
@@ -395,7 +396,7 @@ def test_combination_fetch_parses_rebalancing():
                 "status": "success",
                 "cash": 100.0,  # 伪值
                 "cash_value": 0.4618,  # 真实现金：净值 1.8472 → 25.0%
-                "updated_at": 1785000000000,
+                "updated_at": now_ms - 60_000,
                 "rebalancing_histories": [
                     {
                         "stock_name": "三星电子",
@@ -487,6 +488,57 @@ def test_combination_fetch_parses_rebalancing():
     assert posts[1].detail["cash"] == "25.0%"
 
 
+def test_combination_skips_history_before_watermark():
+    from app.fetchers.base import format_published_at
+
+    now_ms = int(time.time() * 1000)
+    db = DB(":memory:")
+    db.insert_post(
+        "combination",
+        1,
+        "100",
+        "三只集中进攻 调仓",
+        "x",
+        "https://xueqiu.com/P/ZH2146027",
+        format_published_at(str(now_ms - 3600_000)),
+    )
+    payload = {
+        "list": [
+            {
+                "id": 100,
+                "status": "success",
+                "updated_at": now_ms,
+                "rebalancing_histories": [
+                    {"stock_name": "新", "prev_weight": 1, "target_weight": 2}
+                ],
+            },
+            {
+                "id": 99,
+                "status": "success",
+                "updated_at": now_ms - 40 * 3600 * 1000,
+                "rebalancing_histories": [
+                    {"stock_name": "旧", "prev_weight": 1, "target_weight": 0}
+                ],
+            },
+        ]
+    }
+
+    def handler(request):
+        if request.url.path == "/cubes/rebalancing/history.json":
+            return httpx.Response(200, json=payload)
+        return httpx.Response(200, json={"data": {}})
+
+    fetcher = CombinationFetcher(
+        XueqiuConfig(cookie="xq_a_token=abc"),
+        db=db,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    posts = fetcher.fetch(
+        {"id": 1, "name": "三只集中进攻", "external_id": "ZH2146027"}
+    )
+    assert [p.external_id for p in posts] == ["100"]
+
+
 def test_combination_trade_price_missing_is_omitted():
     assert _format_trade_price({"prev_weight": 10.0, "target_weight": 12.0}) == ""
     assert _format_trade_price({"price": "not-a-number"}) == ""
@@ -535,7 +587,7 @@ def test_combination_new_rebalancing_refreshes_stale_holdings():
             "id": 3001,
             "status": "success",
             "cash_value": 0.453,
-            "updated_at": 1787825000000,
+            "updated_at": int(time.time() * 1000),
             "rebalancing_histories": [{
                 "stock_name": "英特尔",
                 "stock_symbol": "INTC",
@@ -596,7 +648,7 @@ def test_combination_applies_rebalancing_when_current_lags():
             "id": 3002,
             "status": "success",
             "cash_value": 0.453,
-            "updated_at": 1787825000000,
+            "updated_at": int(time.time() * 1000),
             "rebalancing_histories": [
                 {
                     "stock_name": "半导体3X多-Direxion",
@@ -680,7 +732,7 @@ def test_combination_snapshot_failure_does_not_break_rebalancing():
                 "status": "success",
                 "cash": 0.0,
                 "cash_value": 0.0,
-                "updated_at": 1785822205799,
+                "updated_at": int(time.time() * 1000),
                 "rebalancing_histories": [
                     {"stock_name": "贵州茅台", "stock_symbol": "SH600519", "prev_weight": None, "target_weight": 5.2}
                 ],

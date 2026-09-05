@@ -2266,7 +2266,7 @@ def test_format_startup_message_instance_version_time(monkeypatch):
     )
     monkeypatch.setenv("VPUSH_INSTANCE", "vpush.net / DMIT")
     assert format_startup_message(now=now) == (
-        f"✅ V Push 服务已启动\nv{ver}\n2026-09-05 11:36\nvpush.net / DMIT"
+        f"✅ V Push 服务已启动\nv{ver}\nvpush.net / DMIT\n2026-09-05 11:36"
     )
 
 

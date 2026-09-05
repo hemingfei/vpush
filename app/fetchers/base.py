@@ -210,6 +210,21 @@ def format_published_at(raw: str) -> str:
     return dt.strftime("%Y-%m-%d %H:%M") if dt else raw
 
 
+STALE_HOURS = 36
+
+
+def is_stale_backfill(published_at: str, watermark: str = "") -> bool:
+    """早于已存水位，或无水位时早于 STALE_HOURS。"""
+    dt = parse_published_at(published_at or "")
+    if dt is None:
+        return False
+    if watermark:
+        wt = parse_published_at(watermark)
+        if wt is not None:
+            return dt < wt
+    return dt < datetime.now(dt.tzinfo or CN_TZ) - timedelta(hours=STALE_HOURS)
+
+
 class ThreadLocalClient:
     """httpx.Client 非线程安全：poll_once 同平台最多 8 并发，每线程懒建一个。"""
 
