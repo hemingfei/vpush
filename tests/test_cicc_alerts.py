@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -19,27 +19,27 @@ def _load_incremental():
 
 def test_gate_runs_when_due():
     m = _load_incremental()
-    now = datetime(2026, 8, 30, 5, 0)
+    now = datetime(2026, 8, 30, 5, 0, tzinfo=UTC)
     ok, reason = m.should_run(now, "03:00", {"date": "2026-08-29"})
     assert ok and reason == "due"
 
 
 def test_gate_skips_before_schedule_time():
     m = _load_incremental()
-    now = datetime(2026, 8, 30, 1, 0)
+    now = datetime(2026, 8, 30, 1, 0, tzinfo=UTC)
     assert m.should_run(now, "03:00", {"date": "2026-08-29"}) == (False, "before_schedule_time")
 
 
 def test_gate_skips_when_already_ran_today():
     m = _load_incremental()
-    now = datetime(2026, 8, 30, 5, 0)
+    now = datetime(2026, 8, 30, 5, 0, tzinfo=UTC)
     assert m.should_run(now, "03:00", {"date": "2026-08-30"}) == (False, "already_ran_today")
 
 
 def test_gate_default_schedule_is_0300():
     m = _load_incremental()
     assert m.read_schedule.__module__ == m.__name__  # 存在且归属正确
-    assert m.should_run(datetime(2026, 8, 30, 3, 0), "03:00", {})[0] is True
+    assert m.should_run(datetime(2026, 8, 30, 3, 0, tzinfo=UTC), "03:00", {})[0] is True
 
 
 def test_incremental_summary_written(tmp_path, monkeypatch):
@@ -114,7 +114,7 @@ def test_schedule_command_payload(tmp_path):
     cmds = list((tmp_path / "local" / ".cicc" / "commands").glob("*.json"))
     assert len(cmds) == 1
     body = json.loads(cmds[0].read_text(encoding="utf-8"))
-    assert body["mode"] == "schedule" and body["time"] == "05:30"
+    assert body["mode"] == "schedule" and body["payload"]["time"] == "05:30"
 
 
 def test_collector_keywords_filter():

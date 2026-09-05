@@ -232,3 +232,92 @@ def test_success_result_is_idempotent_on_rescan(ctrl, monkeypatch):
     mod.main()
     assert not launched, "已成功命令不得重复执行"
     assert not list((ctrl_dir / "commands").glob("*.json"))
+
+
+# —— 任务 4：关键词透传 ——
+
+def test_settings_keeps_keywords_through_dispatch(ctrl, monkeypatch):
+    """payload.keywords 必须写入 cicc_settings.json（回归：旧 dispatch 只写 categories）。"""
+    _, archive = ctrl
+    mod, _launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    cmd_id = "55" * 16
+    _write_command(ctrl_dir, f"1710000000000-settings-{cmd_id[:8]}.json",
+                   {"id": cmd_id, "mode": "settings", "actor": "admin",
+                    "ts": 1710000000,
+                    "payload": {"categories": ["公司研究"],
+                                 "keywords": ["宁德时代", "半导体"]}})
+    mod.main()
+    settings = json.loads((ctrl_dir / "cicc_settings.json").read_text(encoding="utf-8"))
+    assert settings["categories"] == ["公司研究"]
+    assert settings["keywords"] == ["宁德时代", "半导体"]
+    r = json.loads((ctrl_dir / "results" / f"{cmd_id}.json").read_text(encoding="utf-8"))
+    assert r["status"] == "success"
+
+
+def test_settings_empty_keywords_means_no_filter(ctrl, monkeypatch):
+    _, archive = ctrl
+    mod, _ = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    cmd_id = "56" * 16
+    _write_command(ctrl_dir, f"1710000000000-settings-{cmd_id[:8]}.json",
+                   {"id": cmd_id, "mode": "settings", "actor": "admin",
+                    "ts": 1710000000,
+                    "payload": {"categories": [], "keywords": []}})
+    mod.main()
+    settings = json.loads((ctrl_dir / "cicc_settings.json").read_text(encoding="utf-8"))
+    assert settings["keywords"] == []
+
+
+def test_settings_rejects_non_string_keywords(ctrl, monkeypatch):
+    _, archive = ctrl
+    mod, _ = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    cmd_id = "57" * 16
+    _write_command(ctrl_dir, f"1710000000000-settings-{cmd_id[:8]}.json",
+                   {"id": cmd_id, "mode": "settings", "actor": "admin",
+                    "ts": 1710000000,
+                    "payload": {"categories": ["公司研究"], "keywords": [123]}})
+    mod.main()
+    r = json.loads((ctrl_dir / "results" / f"{cmd_id}.json").read_text(encoding="utf-8"))
+    assert r["status"] == "failed"
+    assert r["error"] == "invalid_keywords"
+    assert not (ctrl_dir / "cicc_settings.json").exists()
+
+
+def test_keywords_survive_unicode_and_quotes(ctrl, monkeypatch):
+    """中文/逗号/引号关键词 JSON 往返不变形。"""
+    _, archive = ctrl
+    mod, _ = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    kw = ["宁德时代，新能源", "A股\"牛市\"", "半导体'龙头'", "混合,逗号"]
+    cmd_id = "58" * 16
+    _write_command(ctrl_dir, f"1710000000000-settings-{cmd_id[:8]}.json",
+                   {"id": cmd_id, "mode": "settings", "actor": "admin",
+                    "ts": 1710000000,
+                    "payload": {"categories": ["公司研究"], "keywords": kw}})
+    mod.main()
+    settings = json.loads((ctrl_dir / "cicc_settings.json").read_text(encoding="utf-8"))
+    assert settings["keywords"] == kw
+
+
+def test_retry_keeps_original_keywords(ctrl, monkeypatch):
+    """暂时性失败重试：命令文件保留，重试仍用原 payload 关键词，不从当前配置重新读。"""
+    _, archive = ctrl
+    mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    busy = iter([1, 0])
+    monkeypatch.setattr(mod, "collectors_running", lambda: next(busy))
+    cmd_id = "59" * 16
+    _write_command(ctrl_dir, f"1710000000000-incr-{cmd_id[:8]}.json",
+                   {"id": cmd_id, "mode": "incr", "actor": "admin", "ts": 1710000000,
+                    "payload": {"keywords": ["宁德时代"]}})
+    mod.main()  # 第一次忙
+    assert not launched
+    mod.main()  # 第二次成功
+    assert launched
+    argv, _ = launched[0]
+    assert "--keywords" in argv
+    assert argv[argv.index("--keywords") + 1] == "宁德时代"
+    r = json.loads((ctrl_dir / "results" / f"{cmd_id}.json").read_text(encoding="utf-8"))
+    assert r["status"] == "success" and r["attempts"] == 2

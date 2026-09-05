@@ -46,9 +46,9 @@ MAX_ATTEMPTS = 3
 # ponytail: 暂时性失败（collector 忙/OSError/脚本缺失已有分支）保留命令文件重试；
 # 参数类错误（unknown_mode/invalid_*）永久失败不重试。
 PERMANENT_ERRORS = {"unknown_mode", "invalid_time", "invalid_categories",
-                    "invalid_ts", "invalid_payload", "invalid_json",
-                    "backup_script_missing", "consistency_script_missing",
-                    "dedup_script_missing"}
+                    "invalid_keywords", "invalid_ts", "invalid_payload",
+                    "invalid_json", "backup_script_missing",
+                    "consistency_script_missing", "dedup_script_missing"}
 RESULT_STALE_SECONDS = 600  # running 结果超时视为上次运行崩溃，恢复重试
 
 
@@ -169,12 +169,20 @@ def main() -> None:
                         entry["error"] = "invalid_time"
                 elif mode == "settings":
                     cats = payload.get("categories")
-                    if isinstance(cats, list) and all(isinstance(c, str) for c in cats):
+                    kws = payload.get("keywords")
+                    valid_cats = isinstance(cats, list) and \
+                        all(isinstance(c, str) for c in cats)
+                    valid_kws = isinstance(kws, list) and \
+                        all(isinstance(k, str) for k in kws)
+                    if valid_cats and valid_kws:
                         write_json(os.path.join(CTRL, "cicc_settings.json"),
-                                   {"categories": [c for c in cats if c.strip()]})
+                                   {"categories": [c for c in cats if c.strip()],
+                                    "keywords": [k for k in kws if k.strip()]})
                         entry["ok"] = True
-                    else:
+                    elif not valid_cats:
                         entry["error"] = "invalid_categories"
+                    else:
+                        entry["error"] = "invalid_keywords"
                 elif mode == "consistency":
                     if not os.path.exists(CONSISTENCY_SCRIPT):
                         entry["error"] = "consistency_script_missing"
@@ -203,7 +211,16 @@ def main() -> None:
                     if collectors_running() > 0:
                         entry["error"] = "collector_already_running"
                     else:
-                        launch([PY, "-u", COLLECTOR, *MODE_ARGS[mode]], f"ui_{mode}.log")
+                        argv = [PY, "-u", COLLECTOR, *MODE_ARGS[mode]]
+                        cats = [c for c in payload.get("categories") or []
+                                if isinstance(c, str) and c.strip()]
+                        kws = [k for k in payload.get("keywords") or []
+                               if isinstance(k, str) and k.strip()]
+                        if cats:
+                            argv += ["--categories", ",".join(cats)]
+                        if kws:
+                            argv += ["--keywords", ",".join(kws)]
+                        launch(argv, f"ui_{mode}.log")
                         entry["ok"] = True
             if entry.get("ok"):
                 entry["status"] = "success"
