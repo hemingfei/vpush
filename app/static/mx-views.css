@@ -118,15 +118,9 @@
 .mxv-heat.bear{color:var(--mxv-bear-text);background:var(--mxv-bear-soft);border-color:var(--mxv-bear-line);}
 .mxv-heat.neutral{color:var(--mxv-muted);background:var(--mxv-soft);border-color:var(--mxv-soft-line);}
 .mxv-heat.h2{font-weight:600;}
+.mxv-heat.h3,.mxv-heat.h4{font-weight:700;}
 .mxv-heat.h4{font-size:13px;}
-.mxv-heat.bull.h3,.mxv-heat.bull.h4,.mxv-heat.bear.h3,.mxv-heat.bear.h4{color:#fff;}
-.mxv-heat.bull.h3{background:var(--mxv-bull);border-color:var(--mxv-bull-deep);}
-.mxv-heat.bull.h4{background:var(--mxv-bull-deep);border-color:var(--mxv-bull-deep);font-weight:700;}
-.mxv-heat.bear.h3{background:var(--mxv-bear);border-color:var(--mxv-bear-deep);}
-.mxv-heat.bear.h4{background:var(--mxv-bear-deep);border-color:var(--mxv-bear-deep);font-weight:700;}
-.mxv-heat.neutral.h3,.mxv-heat.neutral.h4{font-weight:700;}
-/* 暗色主题下中间档实底色偏亮，改深色字保对比 */
-.theme-dark .mxv-heat.bull.h3,.theme-dark .mxv-heat.bear.h3{color:#0b0f1a;}
+/* 热度档只用字号/字重区分：全档统一软底+描边，避免实底色与迷你条同色相撞、总数看不清 */
 /* 联动高亮：热力块/明细行/今日操作 chip 被命中时描边放大 */
 .mxv-heat.hl{box-shadow:0 0 0 2px var(--mxv-accent);transform:scale(1.08);z-index:1;}
 .mxv-row.hl{background:var(--mxv-hover);box-shadow:inset 0 0 0 1px var(--mxv-accent);}

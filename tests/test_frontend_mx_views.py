@@ -307,6 +307,9 @@ def test_mx_views_heat_two_rows_and_row_clamp():
     assert ".mxv-heat-wrap.clamped{overflow:hidden;}" in css  # 限高裁切
     assert ".mxv-heat .r2 em{" in css  # 条上居中总数
     assert ".mxv-heat .r2 i.n{background:var(--mxv-muted);}" in css  # 迷你条中段与明细同色
+    # 全档统一软底+描边：不再有实底色档（实底与迷你条同色相撞、总数看不清），热度只用字号/字重区分
+    assert ".mxv-heat.bull.h3{background:" not in css and ".mxv-heat.bear.h4{background:" not in css
+    assert ".mxv-heat.h3,.mxv-heat.h4{font-weight:700;}" in css
 
 
 def test_mx_views_day_picker_is_calendar():
