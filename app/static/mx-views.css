@@ -184,6 +184,7 @@
 .mxv-mode button.on{background:var(--mxv-rail);color:var(--mxv-strong);}
 .mxv-more{background:none;border:none;color:var(--mxv-accent);
   cursor:pointer;font-size:12px;padding:3px 6px;white-space:nowrap;}
+.mxv-board .mxv-more{display:block;margin:6px auto 0;} /* 双榜明细底部的更多/收起居中成块 */
 .mxv-more[hidden]{display:none;}
 .mxv-more:hover{color:var(--mxv-strong);}
 .mxv-kolcard{background:var(--mxv-card);border:1px solid var(--mxv-line);border-radius:10px;padding:10px;

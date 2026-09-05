@@ -22,7 +22,9 @@ export function createMxViewsView(dependencies) {
     followed: new Set(), kolMode: "kol", kolExpanded: false, kolStockTargets: [],
     feedBatches: [], feedKey: "", feedPending: false, feedLoading: false, feedFailed: false,
     applySeq: 0, tlDrag: false, tlPreviewIdx: -1,
-    hlKey: "", hlPinned: false, boardMode: { topic: "heat", stock: "heat" }, hlDocBound: false };
+    hlKey: "", hlPinned: false, boardMode: { topic: "heat", stock: "heat" },
+    boardExpanded: { topic: false, stock: false }, hlDocBound: false };
+  const MXV_BOARD_LIST_LIMIT = 20; // 双榜明细默认条数，超出走「更多」展开
 
   // 点页面空白/Esc 解除高亮锁定、关闭月历（工厂级只绑一次；事件里按路由存活状态自然失效）
   if (!_mxv.hlDocBound) {
@@ -63,7 +65,8 @@ export function createMxViewsView(dependencies) {
     mxvCalClose();
     Object.assign(_mxv, { day: null, payload: null, at: null, drawer: null, hasNew: false, sseOk: false,
       feedBatches: [], feedKey: "", feedPending: false, feedLoading: false, feedFailed: false,
-      tlDrag: false, tlPreviewIdx: -1, hlKey: "", hlPinned: false, cal: null });
+      tlDrag: false, tlPreviewIdx: -1, hlKey: "", hlPinned: false, cal: null,
+      boardExpanded: { topic: false, stock: false } });
   }
 
   async function renderMxViews(seq) {
@@ -502,7 +505,12 @@ export function createMxViewsView(dependencies) {
     }
     const boards = $("#mxv-boards");
     if (boards) {
-      const topicRows = [...(p.topics || [])].sort(mxvByHeat).map((t, i) => {
+      const topicSorted = [...(p.topics || [])].sort(mxvByHeat);
+      const stockSorted = [...(p.stocks || [])].sort(mxvByHeat);
+      // 明细默认只显示前 20 条，「更多」展开全部；热力云不受限
+      const topicList = _mxv.boardExpanded.topic ? topicSorted : topicSorted.slice(0, MXV_BOARD_LIST_LIMIT);
+      const stockList = _mxv.boardExpanded.stock ? stockSorted : stockSorted.slice(0, MXV_BOARD_LIST_LIMIT);
+      const topicRows = topicList.map((t, i) => {
         window._mxvTargets.push({ type: "topic", name: t.name });
         const ti = window._mxvTargets.length - 1;
         return `
@@ -513,7 +521,7 @@ export function createMxViewsView(dependencies) {
           ${mxvMomo(t.momentum)}
           <span class="mxv-latest-time">${escapeHtml((t.latest_at || "").slice(11, 16))}</span>
         </div>`; }).join("");
-      const stockRows = [...(p.stocks || [])].sort(mxvByHeat).map((s, i) => {
+      const stockRows = stockList.map((s, i) => {
         const actions = Object.entries(s.actions || {}).map(([k, v]) => `${k}×${v}`).join(" ");
         window._mxvTargets.push({ type: "stock", name: s.name });
         const si = window._mxvTargets.length - 1;
@@ -526,14 +534,17 @@ export function createMxViewsView(dependencies) {
           <span class="mxv-actions">${escapeHtml(actions)}</span>
         </div>`;
       }).join("");
+      const moreBtn = (kind, total) => _mxv.boardMode[kind] === "list" && total > MXV_BOARD_LIST_LIMIT
+        ? `<button type="button" class="mxv-more" onclick="mxvBoardMore('${kind}')">${_mxv.boardExpanded[kind] ? "收起 ▴" : `更多 ▾（还有 ${total - MXV_BOARD_LIST_LIMIT} 个）`}</button>`
+        : "";
       const topicBody = _mxv.boardMode.topic === "list"
         ? topicRows : mxvHeatHtml(p.topics || [], "topic", "暂无题材观点");
       const stockBody = _mxv.boardMode.stock === "list"
         ? stockRows : mxvHeatHtml(p.stocks || [], "stock", "暂无个股观点");
       boards.innerHTML = `
         <div class="mxv-boards">
-          <div class="mxv-board">${mxvBoardHead("topic", "题材多空榜", (p.topics || []).length)}${topicBody}</div>
-          <div class="mxv-board">${mxvBoardHead("stock", "个股强度榜", (p.stocks || []).length)}${stockBody}</div>
+          <div class="mxv-board">${mxvBoardHead("topic", "题材多空榜", topicSorted.length)}${topicBody}${moreBtn("topic", topicSorted.length)}</div>
+          <div class="mxv-board">${mxvBoardHead("stock", "个股强度榜", stockSorted.length)}${stockBody}${moreBtn("stock", stockSorted.length)}</div>
         </div>`;
     }
     mxvRenderFeed();
@@ -580,6 +591,13 @@ export function createMxViewsView(dependencies) {
   function mxvBoardMode(kind, mode) {
     if (_mxv.boardMode[kind] === mode) return;
     _mxv.boardMode[kind] = mode;
+    _mxv.boardExpanded[kind] = false; // 每次切入明细重新折叠到前 20
+    mxvRenderBoards();
+  }
+
+  // 明细「更多/收起」：展开显示全部，收起回到前 20
+  function mxvBoardMore(kind) {
+    _mxv.boardExpanded[kind] = !_mxv.boardExpanded[kind];
     mxvRenderBoards();
   }
 
@@ -1554,6 +1572,7 @@ export function createMxViewsView(dependencies) {
     mxvKolMode,
     mxvKolMore,
     mxvBoardMode,
+    mxvBoardMore,
     mxvOpenTargetAt,
     mxvOpenKolStockAt,
     mxvOpenKol,

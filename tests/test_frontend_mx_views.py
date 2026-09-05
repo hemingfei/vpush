@@ -209,6 +209,27 @@ def test_mx_views_board_list_matches_heat_order_and_stock_bull_bear():
     assert boards.index("多/${s.bear}空") < boards.index('<span class="mxv-actions">')  # 多空在操作前
 
 
+def test_mx_views_board_list_more_limit():
+    """双榜明细默认最多 20 条，超出出「更多」展开全部/「收起」折回；切视图与重进页面重置。"""
+    js = MX_VIEWS_JS
+    assert "const MXV_BOARD_LIST_LIMIT = 20;" in js
+    boards = _fn_body("mxvRenderBoards", js)
+    assert boards.count("slice(0, MXV_BOARD_LIST_LIMIT)") == 2  # 题材 + 个股都截断
+    assert "boardExpanded" in boards and "mxvBoardMore('${kind}')" in boards
+    assert "收起 ▴" in boards and "更多 ▾" in boards  # 展开态切换文案
+    more = _fn_body("mxvBoardMore", js)
+    assert "boardExpanded[kind] = !_mxv.boardExpanded[kind]" in more
+    mode = _fn_body("mxvBoardMode", js)
+    assert "_mxv.boardExpanded[kind] = false" in mode  # 热力/明细切换重置折叠
+    teardown = _fn_body("mxvTeardown", js)
+    assert "boardExpanded" in teardown  # 重进页面回到默认折叠
+    # 注册进工厂返回与 app.js 内联处理器
+    exported = js.rsplit("return {", 1)[1]
+    assert "mxvBoardMore," in exported and "mxvBoardMore," in APP_JS
+    css = (STATIC / "mx-views.css").read_text()
+    assert ".mxv-board .mxv-more{" in css  # 后代选择器含空格，用原文断言
+
+
 def test_mx_views_day_picker_is_calendar():
     """顶部交易日选择为真实月历弹层：周一起始网格、可翻月、仅有数据日可点；不再用 select 下拉。"""
     js = MX_VIEWS_JS
