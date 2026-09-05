@@ -860,7 +860,11 @@ def test_zsxq_is_plaza_badge_not_sidebar_page():
     assert "function postFiles" in src
     assert 'post.platform === "zsxq"' in _fn_body("postCard")
     assert "class=\"p-file\"" in _fn_body("postCard")
-    assert "/api/media/zsxq-file/" in _fn_body("postCard")
+    assert "/api/media/zsxq-file/" in _fn_body("downloadZsxqFile")
+    assert "?token=" not in _fn_body("postCard")
+    assert "?token=" not in _fn_body("downloadZsxqFile")
+    assert "downloadZsxqFile" in _fn_body("postCard")
+    assert "apiBlob" in _fn_body("downloadZsxqFile")
     assert 'return "zsxq"' in _fn_body("detectAskPlatform")
     assert 'option value="zsxq"' in _fn_body("renderSearch")
     assert "saveZsxqCookie()" in src

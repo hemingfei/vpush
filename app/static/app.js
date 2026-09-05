@@ -871,6 +871,23 @@ function loadFeishuTimelineImages() {
   images.forEach((img) => _feishuAssetObserver.observe(img));
 }
 
+async function downloadZsxqFile(button) {
+  button.disabled = true;
+  try {
+    const blob = await apiBlob(`/api/media/zsxq-file/${encodeURIComponent(button.dataset.fileId)}`);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = button.dataset.name || "附件";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (err) {
+    flash(err.message || "附件下载失败", "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function downloadFeishuTimelineAsset(button) {
   button.disabled = true;
   const query = button.dataset.groupId ? `?group=${encodeURIComponent(button.dataset.groupId)}` : "";
@@ -2948,9 +2965,10 @@ function postCard(post) {
       ${postFiles(post).map((f) => {
         // 附件一律走鉴权路由（服务端校验订阅可见性，命中本地缓存时直接下发）；
         // 历史详情里缓存的 /zsxq-files/ 静态链接已随挂载移除，不再直连
-        const href = f.file_id
-          ? `/api/media/zsxq-file/${encodeURIComponent(f.file_id)}?token=${encodeURIComponent(state.token || "")}`
-          : (f.url || "");
+        if (f.file_id) {
+          return `<button type="button" class="p-file" data-file-id="${escapeHtml(String(f.file_id))}" data-name="${escapeHtml(f.name || "附件")}" onclick="downloadZsxqFile(this)">📎 ${escapeHtml(f.name || "附件")}</button>`;
+        }
+        const href = f.url || "";
         return href
           ? `<a class="p-file" href="${escapeHtml(href)}" target="_blank" rel="noopener">📎 ${escapeHtml(f.name || "附件")}</a>`
           : `<span class="p-file">📎 ${escapeHtml(f.name || "附件")}</span>`;
@@ -5645,6 +5663,7 @@ const INLINE_HANDLERS = {
   discardImaCollectorChanges,
   discoverImaGroups,
   downloadFeishuTimelineAsset,
+  downloadZsxqFile,
   enableWebPush,
   extractProxyPool,
   filterAclSuggest,

@@ -174,6 +174,35 @@ def test_abstract_copy_reuses_toolbar_icon_button(page: Page, static_origin: str
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
+def test_zsxq_attachment_download_uses_auth_header_not_query_token(page: Page, static_origin: str):
+    page.context.add_init_script("localStorage.setItem('dav_token', 'test-token')")
+    page.goto(static_origin, wait_until="domcontentloaded")
+    page.wait_for_function("typeof downloadZsxqFile === 'function'")
+    page.evaluate("""() => {
+      document.body.insertAdjacentHTML('beforeend',
+        '<button type="button" class="p-file" data-file-id="file-1" data-name="note.pdf" onclick="downloadZsxqFile(this)">📎 note.pdf</button>');
+      window.__blobReqs = [];
+      const orig = window.fetch;
+      window.fetch = async (input, init = {}) => {
+        const url = String(input);
+        const headers = init.headers || {};
+        window.__blobReqs.push({ url, auth: headers.Authorization || headers.authorization || '' });
+        if (url.includes('/api/media/zsxq-file/')) {
+          return { ok: true, status: 200, blob: async () => new Blob(['pdf'], { type: 'application/pdf' }) };
+        }
+        return orig(input, init);
+      };
+      URL.createObjectURL = () => 'blob:test';
+      URL.revokeObjectURL = () => {};
+    }""")
+    page.locator(".p-file").click()
+    reqs = page.evaluate("window.__blobReqs")
+    assert reqs, "expected attachment fetch"
+    assert all("token=" not in item["url"] for item in reqs)
+    assert any("/api/media/zsxq-file/file-1" in item["url"] for item in reqs)
+    assert any(item["auth"] == "Bearer test-token" for item in reqs)
+
+
 def test_news_reset_keeps_full_skeleton_until_response(page: Page, static_origin: str):
     install_news_bootstrap(page, delayed=True)
     page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
