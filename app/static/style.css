@@ -1695,10 +1695,6 @@ body.lightbox-open { overflow: hidden; }
   flex-shrink: 0;
 }
 .post-item .p-name-line .p-platform .pt-icon { width: 13px; height: 13px; }
-.post-item .p-name-line .p-platform[data-platform="twitter"] .pt-icon,
-.post-item .p-name-line .p-platform[data-platform="weibo"] .pt-icon,
-.post-item .p-name-line .p-platform[data-platform="xueqiu"] .pt-icon,
-.post-item .p-name-line .p-platform[data-platform="truth"] .pt-icon { width: 11px; height: 11px; }
 .post-item .p-name-line .p-platform[data-platform="xueqiu"] .pt-icon { color: var(--color-brand-xueqiu); }
 .post-item .p-name-line .p-platform[data-platform="combination"] .pt-icon { color: var(--color-brand-xueqiu); }
 .post-item .p-name-line .p-platform[data-platform="weibo"] .pt-icon { color: var(--color-brand-weibo); }
