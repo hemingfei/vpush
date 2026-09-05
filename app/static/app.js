@@ -2714,7 +2714,8 @@ function tlKolItemsHtml() {
       ? `<span class="tl-kol-count" aria-hidden="true" title="${escapeHtml(k.name)} 有 ${n} 条新动态">${n > 99 ? "99+" : n}</span>`
       : "";
     return `<button class="tl-kol-item${selected ? " selected" : ""}" role="radio" aria-checked="${selected}"
-      aria-label="只看 ${escapeHtml(k.name)}${n ? `，${n} 条新动态` : ""}" title="${escapeHtml(k.name)}" onclick="tlPickKol(${k.id})">
+      aria-label="只看 ${escapeHtml(k.name)}${n ? `，${n} 条新动态` : ""}" title="${escapeHtml(k.name)}"
+      onclick="tlPickKol(${k.id})">
       <span class="tl-kol-avwrap"><span class="tl-kol-av">${avatar}</span>${count}</span>
       <span class="tl-kol-name">${escapeHtml(k.name)}</span>
     </button>`;
@@ -3617,7 +3618,9 @@ function postCard(post) {
         ${post.post_type === "reply" ? `<span class="cat">回复</span>` : ""}
         ${renderPostTagChips(post.tags)}
         ${post.platform === "zsxq" ? "" : RAW_MODAL_LABELS[post.platform]
-          ? `<a href="#" onclick="event.preventDefault();openRawModal(${post.id}, '${RAW_MODAL_LABELS[post.platform]}')" title="查看${RAW_MODAL_LABELS[post.platform]}原始消息">查看原文 →</a>`
+          ? `<a href="#" data-raw-label="${escapeHtml(RAW_MODAL_LABELS[post.platform])}"
+               onclick="event.preventDefault();openRawModal(${post.id}, this.dataset.rawLabel)"
+               title="查看${escapeHtml(RAW_MODAL_LABELS[post.platform])}原始消息">查看原文 →</a>`
           : `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener">查看原文 →</a>`}
       </div>
     </div>`;
@@ -3667,7 +3670,7 @@ function openRawModal(postId, label) {
   mask.innerHTML = `
     <div class="modal-card mx-raw-card">
       <h3 class="mx-raw-title">${escapeHtml(label)} 原始消息</h3>
-      <p class="mx-raw-meta">${who}${fmtPublished(post.published_at, true)}</p>
+      <p class="mx-raw-meta">${who}${fmtPublished(post.published_at)}</p>
       ${text
         ? `<button type="button" class="btn-ghost mx-raw-copy" onclick="copyText(mxRawModalText(), '已复制原始消息')">复制 JSON</button>
            <pre class="mx-raw-pre">${escapeHtml(text)}</pre>`
@@ -7450,8 +7453,8 @@ async function refreshMxWsStatus() {
   try {
     const s = await api("/api/admin/sources/mx/ws-status");
     const last = s.last_message_at ? new Date(s.last_message_at).toLocaleString() : "从未收到";
-    const detail = s.detail ? `（${s.detail}）` : "";
-    el.innerHTML = `<span>WebSocket 状态：${s.connected ? "✅ 已连接" : "❌ 未连接"}，最近收到消息：${escapeHtml(last)}${escapeHtml(detail)}</span>`;
+    const detail = s.detail ? `（${escapeHtml(s.detail)}）` : "";
+    el.innerHTML = `<span>WebSocket 状态：${s.connected ? "✅ 已连接" : "❌ 未连接"}，最近收到消息：${escapeHtml(last)}${detail}</span>`;
     renderMxApiStatus(s.login_report);
   } catch (err) {
     el.textContent = `WebSocket 状态：获取失败（${err.message || "未知错误"}）`;

@@ -376,7 +376,12 @@ def _run_snapshot(run: dict) -> dict:
 
 
 def get_manual_job_status() -> dict:
-    """手动打标进度快照：活跃 run 在前、最近完成的 run 在后（进度轮询用）。"""
+    """手动打标进度快照：活跃 run 在前、最近完成的 run 在后（进度轮询用）。
+
+    running = 有 run 处于 running 状态；unfinished = 任一 run 尚未收场
+    （全部批次有着落才 finalize）。某批失败会立刻把 run 置 failed，但兄弟批
+    可能还在跑——前端轮询应以 unfinished 为准，否则会提前停轮。
+    """
     with _runs_lock:
         active = [r for r in _runs.values() if r["status"] == "running"]
         finished = sorted(
@@ -385,8 +390,10 @@ def get_manual_job_status() -> dict:
             reverse=True,
         )
         runs = [_run_snapshot(r) for r in active + finished]
+        unfinished = any(r["summary"] is None for r in _runs.values())
     return {
         "running": bool(active),
+        "unfinished": unfinished,
         "max_concurrent": MANUAL_MAX_WORKERS,
         "batch_size": MANUAL_BATCH_SIZE_LIMIT,
         "runs": runs,

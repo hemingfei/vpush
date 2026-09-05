@@ -2026,3 +2026,39 @@ def test_load_config_keeps_custom_mx_ws_url(tmp_path):
     )
     config = load_config(cfg)
     assert config.sources.mx.ws_url == "wss://mx.2026.naaifu.cn/business-api/5"
+
+
+def test_update_mx_config_log_does_not_leak_token(monkeypatch, caplog):
+    """PUT /admin/sources/mx 的日志不得落明文 token：全局 RedactingFormatter 只匹配
+    token=/Bearer 形式，匹配不到 dict-repr 的 'token': '…'，必须在打日志前剔除。"""
+    import logging
+    from fastapi.testclient import TestClient
+
+    from app.config import Config
+    from app.main import create_app
+
+    tmp = tempfile.mkdtemp()
+    monkeypatch.setenv("CONFIG_PATH", str(Path(tmp) / "config.yaml"))
+
+    app = create_app(config=Config(), db_path=Path(tmp) / "t.db")
+    client = TestClient(app)
+
+    code = "TESTMX02"
+    client.app.state.db.add_register_code(code)
+    data = client.post(
+        "/api/auth/register",
+        json={"username": "mxadmin2", "password": "secret123", "code": code},
+    ).json()
+    client.app.state.db.update_user(data["user"]["id"], is_admin=True)
+    headers = {"Authorization": f"Bearer {data['token']}"}
+
+    secret = "super-secret-mx-token"
+    with caplog.at_level(logging.INFO, logger="app.api"):
+        resp = client.put(
+            "/api/admin/sources/mx",
+            json={"enabled": True, "token": secret, "page_size": 33},
+            headers=headers,
+        )
+    assert resp.status_code == 200, resp.text
+    assert secret not in caplog.text
+    assert "page_size" in caplog.text  # 非敏感键照常记录

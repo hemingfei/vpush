@@ -135,6 +135,10 @@ def test_mx_views_admin_config_and_status():
     bad = client.put("/api/admin/mx-views/config", headers=admin,
                      json={"schedule": {"segments": "oops", "extra_times": []}})
     assert bad.status_code == 422
+    # 超界时刻（24:00）422：落库回填后 last_done 永远压住当天 live 快照
+    bad2 = client.put("/api/admin/mx-views/config", headers=admin,
+                      json={"schedule": {"segments": [], "extra_times": ["24:00"]}})
+    assert bad2.status_code == 422 and "extra_times" in bad2.json()["detail"]
     # 普通用户 403
     from test_api import user_headers
 

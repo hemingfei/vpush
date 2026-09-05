@@ -55,6 +55,36 @@ ACTION_BOOST = {"建仓": 1.5, "加仓": 1.5, "减仓": 1.5, "清仓": 1.5, "做
 _HHMM_RE = re.compile(r"^\d{2}:\d{2}$")
 
 
+def _valid_hhmm(t: str) -> bool:
+    """严格 00:00-23:59 的 HH:MM；拒绝 "24:00" 之类——它会让 last_done 永远压住当天 live 快照。"""
+    if not _HHMM_RE.match(t):
+        return False
+    h, m = t.split(":")
+    return int(h) <= 23 and int(m) <= 59
+
+
+def validate_schedule_config(config) -> str:
+    """PUT 校验用：逐项检查时刻合法性，返回错误信息（合法为空串）。"""
+    if not isinstance(config, dict):
+        return "schedule 须为对象"
+    for seg in config.get("segments") or []:
+        if not isinstance(seg, dict):
+            return "segments 元素须为对象"
+        for key in ("start", "end"):
+            if not _valid_hhmm(str(seg.get(key) or "")):
+                return f"segment.{key} 需为 00:00-23:59 的 HH:MM"
+        try:
+            interval = int(seg.get("interval_min") or 0)
+        except (TypeError, ValueError):
+            interval = 0
+        if interval <= 0:
+            return "segment.interval_min 须为正整数"
+    for t in config.get("extra_times") or []:
+        if not _valid_hhmm(str(t)):
+            return f"extra_times 里的 {t} 需为 00:00-23:59 的 HH:MM"
+    return ""
+
+
 def _hhmm_to_min(t: str) -> int:
     h, m = t.split(":")
     return int(h) * 60 + int(m)
@@ -72,15 +102,18 @@ def resolve_schedule(config: dict | None) -> list[str]:
             interval = int(seg.get("interval_min") or 0)
         except (TypeError, ValueError):
             interval = 0
-        if not (_HHMM_RE.match(start) and _HHMM_RE.match(end) and interval > 0):
+        if not (_valid_hhmm(start) and _valid_hhmm(end) and interval > 0):
             continue
         cur, stop = _hhmm_to_min(start), _hhmm_to_min(end)
-        while cur <= stop:
+        if cur > stop:
+            continue
+        while cur < stop:  # 步进到终点前；终点无论是否整除都补上
             times.add(f"{cur // 60:02d}:{cur % 60:02d}")
             cur += interval
+        times.add(f"{stop // 60:02d}:{stop % 60:02d}")
     for t in cfg.get("extra_times") or []:
         t = str(t)
-        if _HHMM_RE.match(t):
+        if _valid_hhmm(t):
             times.add(t)
     return sorted(times)
 
@@ -579,7 +612,8 @@ def run_due_view_batch(db, llm_config=None):
     day = now.strftime("%Y-%m-%d")
     now_hhmm = now.strftime("%H:%M")
     times = resolve_schedule(load_schedule_config_raw(db))
-    done = {s["snapshot_at"] for s in db.list_mx_view_snapshots(day)}
+    # 每 20s tick 一次：只取时刻集合，不全量解析快照 payload
+    done = {r["snapshot_at"] for r in db.list_mx_view_snapshot_meta(day)}
     last_done = max(done, default="")
     pending = [t for t in times if t > last_done and t <= now_hhmm]
     if not pending:
@@ -656,6 +690,12 @@ def start_backfill_job(db, day_from, day_to, llm_config=None) -> bool:
                     with _backfill_state_lock:
                         if _backfill_state["cancel"]:
                             break
+                    if db.has_done_mx_view_batch(day, end):
+                        # 该 (trading_day, snapshot_at) 已有 done 批（live 或此前回填）：
+                        # 重放会另立批次双写同一观点，钻取时间线出现双条
+                        with _backfill_state_lock:
+                            _backfill_state["done_windows"] += 1
+                        continue
                     try:
                         run_snapshot_batch(
                             db, day=day, snapshot_at=end, window=(start, end),

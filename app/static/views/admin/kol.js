@@ -1213,8 +1213,12 @@ export function createAdminKolsView(dependencies) {
       const autoBox = $("#mx-tag-auto-progress");
       if (autoBox) autoBox.innerHTML = adminMxTagProgressInner(prog, "auto");
       const runs = Array.isArray(prog?.runs) ? prog.runs : [];
-      if (prog.running) {
+      if (prog.running || prog.unfinished) {
+        // 任一 run 未收场都续轮：某批失败会提前把 run 置 failed，兄弟批可能还在跑
         _mxTagPollTimer = setTimeout(tick, 3000);
+      } else if ($("#mx-tag-progress") || $("#mx-tag-auto-progress")) {
+        // 空闲时若打标面板还挂着，保留 15s 慢轮，兜住「挂载后才被自动触发」的任务
+        _mxTagPollTimer = setTimeout(tick, 15000);
       } else {
         _mxTagPollTimer = null;
       }
@@ -1296,6 +1300,12 @@ export function createAdminKolsView(dependencies) {
     const kolIds = [...mask.querySelectorAll("input[type=checkbox][data-kol]:checked")]
       .map((cb) => Number(cb.dataset.kol));
     if (!kolIds.length) return;
+    const startBtn = mask.querySelector("#mx-tag-run-start");
+    if (startBtn) {
+      // 防双击：await 期间禁用，避免第二个 POST 撞出「暂无未打标消息」的失败 flash
+      startBtn.disabled = true;
+      startBtn.textContent = "启动中…";
+    }
     try {
       // 不传 max_messages：后端默认 0 = 不限量，打完所选大V的全部待打标消息
       const data = await api("/api/admin/mx-llm-tag/run", {
@@ -1307,6 +1317,11 @@ export function createAdminKolsView(dependencies) {
       adminMxTagPollProgress();
     } catch (err) {
       flash("启动失败: " + err.message, "error");
+      if (startBtn) {
+        // 派发 change 让弹窗自己的 recount 恢复按钮可用态与「开始打标（N 条）」文案
+        startBtn.disabled = false;
+        mask.dispatchEvent(new Event("change"));
+      }
     }
   }
 

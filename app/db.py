@@ -2062,12 +2062,13 @@ class DB:
             raise ValueError("该大V已存在") from None
 
     def get_kol(self, kol_id: int) -> dict | None:
+        """单个大V（带 category_name；webhook 凭据字段不外泄）。"""
         rows = self._rows(
             "SELECT k.*, c.name AS category_name FROM kols k "
             "LEFT JOIN categories c ON c.id = k.category_id WHERE k.id = ?",
             (kol_id,),
         )
-        return rows[0] if rows else None
+        return _strip_webhook_fields(rows[0]) if rows else None
 
     def update_kol_avatar(self, kol_id: int, avatar_url: str) -> None:
         self._execute(
@@ -2087,11 +2088,15 @@ class DB:
         category_id: int | None = None,
         q: str | None = None,
         status: int | None = None,
+        exclude_platform: str | None = None,
     ) -> tuple[list[str], list]:
         conds, params = [], []
         if platform:
             conds.append("k.platform = ?")
             params.append(platform)
+        if exclude_platform:
+            conds.append("k.platform != ?")
+            params.append(exclude_platform)
         if category_id is not None:
             conds.append("k.category_id = ?")
             params.append(category_id)
@@ -2114,6 +2119,7 @@ class DB:
         offset: int = 0,
         with_subscriber_count: bool = False,
         with_blocked_count: bool = False,
+        exclude_platform: str | None = None,
     ) -> list[dict]:
         """大V列表：可选平台/分类/关键词/启用状态筛选 + 分页（管理列表用）。"""
         extra = (
@@ -2137,7 +2143,7 @@ class DB:
             f"SELECT k.*, c.name AS category_name{extra} FROM kols k "
             f"LEFT JOIN categories c ON c.id = k.category_id{join_counts}"
         )
-        conds, params = self._kol_filters(platform, category_id, q, status)
+        conds, params = self._kol_filters(platform, category_id, q, status, exclude_platform)
         if conds:
             sql += " WHERE " + " AND ".join(conds)
         # 推荐权重置顶（订阅广场「置顶」位），其余按 id 稳定排序
@@ -2153,9 +2159,10 @@ class DB:
         category_id: int | None = None,
         q: str | None = None,
         status: int | None = None,
+        exclude_platform: str | None = None,
     ) -> list[int]:
         """与 list_kols 同条件的全部 id（管理端跨页勾选用）。"""
-        conds, params = self._kol_filters(platform, category_id, q, status)
+        conds, params = self._kol_filters(platform, category_id, q, status, exclude_platform)
         sql = "SELECT k.id FROM kols k"
         if conds:
             sql += " WHERE " + " AND ".join(conds)
@@ -2175,9 +2182,10 @@ class DB:
         category_id: int | None = None,
         q: str | None = None,
         status: int | None = None,
+        exclude_platform: str | None = None,
     ) -> int:
         """与 list_kols 同条件的大V总数（分页控件用）。"""
-        conds, params = self._kol_filters(platform, category_id, q, status)
+        conds, params = self._kol_filters(platform, category_id, q, status, exclude_platform)
         where = f"WHERE {' AND '.join(conds)}" if conds else ""
         row = self._rows(f"SELECT COUNT(*) AS n FROM kols k {where}", params)
         return _to_int(row[0]["n"]) if row else 0
@@ -2211,11 +2219,6 @@ class DB:
             f"UPDATE kols SET category_id = ? WHERE id IN ({placeholders})",
             (category_id, *ids),
         )
-
-    def get_kol(self, kol_id: int) -> dict | None:
-        """获取单个大V"""
-        rows = self._rows("SELECT * FROM kols WHERE id = ?", (kol_id,))
-        return _strip_webhook_fields(rows[0]) if rows else None
 
     def get_kol_by_external(self, platform: str, external_id: str) -> dict | None:
         """按平台 + 外部ID 查大V（更新 external_id 时的唯一性校验用）。"""
@@ -2269,7 +2272,10 @@ class DB:
         return decrypt_stored_secret(rows[0]["webhook_secret"], self.credential_key)
 
     def recommended_kols(self, user_id: int, limit: int = 4) -> list[dict]:
-        """新用户引导推荐：启用且公开的大V，推荐权重优先，其后按订阅人数倒序。"""
+        """新用户引导推荐：启用且公开的大V，推荐权重优先，其后按订阅人数倒序。
+
+        系统 KOL（内部输出通道）不参与推荐。
+        """
         return [
             _strip_webhook_fields(r)
             for r in self._rows(
@@ -2278,7 +2284,7 @@ class DB:
                 "EXISTS(SELECT 1 FROM subscriptions mine "
                 "       WHERE mine.kol_id = k.id AND mine.user_id = ?) AS subscribed "
                 "FROM kols k LEFT JOIN categories c ON c.id = k.category_id "
-                "WHERE k.enabled = 1 AND k.is_private = 0 "
+                "WHERE k.enabled = 1 AND k.is_private = 0 AND k.platform != 'system' "
                 "ORDER BY k.recommend_weight DESC, subscriber_count DESC, k.id DESC LIMIT ?",
                 (user_id, limit),
             )
@@ -5229,6 +5235,25 @@ class DB:
         )
         return int(rows[0]["id"])
 
+    def has_done_mx_view_batch(self, trading_day, snapshot_at) -> bool:
+        """该 (交易日, 快照时刻) 是否已有 done 批（回填跳过用，不限 kind）。"""
+        rows = self._rows(
+            "SELECT 1 FROM mx_view_batches "
+            "WHERE trading_day = ? AND snapshot_at = ? AND status = 'done' LIMIT 1",
+            (trading_day, snapshot_at),
+        )
+        return bool(rows)
+
+    def abort_stale_mx_view_batches(self) -> int:
+        """启动清理：进程中断（重启/OOM）遗留的 running 批收尾为 aborted，
+        状态页不再永久「运行中」、batches_today 不虚高。返回收尾行数。"""
+        rows = self._rows("SELECT COUNT(*) AS n FROM mx_view_batches WHERE status = 'running'")
+        self._execute(
+            "UPDATE mx_view_batches SET status = 'aborted', "
+            "error = '进程中断，启动时收尾' WHERE status = 'running'"
+        )
+        return _to_int(rows[0]["n"]) if rows else 0
+
     def finish_mx_view_batch(self, batch_id, status, message_count=0, error="") -> None:
         self._execute(
             "UPDATE mx_view_batches SET status = ?, message_count = ?, error = ? WHERE id = ?",
@@ -5304,6 +5329,15 @@ class DB:
         )
         return [self._parse_snapshot_row(r) for r in rows]
 
+    def list_mx_view_snapshot_meta(self, trading_day) -> list[dict]:
+        """轻量快照元数据（不解析 payload JSON）：调度 tick 与 /mx-views/day 用。"""
+        return self._rows(
+            "SELECT snapshot_at, seq, kind, "
+            "COALESCE(json_extract(payload, '$.message_count'), 0) AS message_count "
+            "FROM mx_view_snapshots WHERE trading_day = ? ORDER BY snapshot_at ASC",
+            (trading_day,),
+        )
+
     def get_mx_view_snapshot(self, trading_day, snapshot_at):
         rows = self._rows(
             "SELECT * FROM mx_view_snapshots WHERE trading_day = ? AND snapshot_at = ?",
@@ -5331,7 +5365,8 @@ class DB:
                                 kol_ids=None, limit=600) -> list[dict]:
         """取某天某快照窗口内的 MX 消息（(start, end] 半开区间，HH:MM 字典序比较）。
 
-        blocked/hidden 不取（与打标游标同口径）；id > after_id 由游标保证不重扫。
+        blocked/hidden 不取（与打标游标同口径）；停用大V一并排除（设置里可能
+        还残留其 id，避免停用后消息仍送 LLM 研判计费）；id > after_id 由游标保证不重扫。
         MX 日消息量千条级，substr 过滤不走索引可接受。
         """
         sql = (
@@ -5339,7 +5374,8 @@ class DB:
             "FROM posts p JOIN kols k ON k.id = p.kol_id "
             "WHERE p.platform = 'mx' AND substr(p.published_at, 1, 10) = ? "
             "AND substr(p.published_at, 12, 5) > ? AND substr(p.published_at, 12, 5) <= ? "
-            "AND p.id > ? AND COALESCE(p.blocked, 0) = 0 AND COALESCE(p.hidden, 0) = 0"
+            "AND p.id > ? AND COALESCE(p.blocked, 0) = 0 AND COALESCE(p.hidden, 0) = 0 "
+            "AND k.enabled = 1"
         )
         params: list = [day, start_hhmm, end_hhmm, int(after_id)]
         if kol_ids:

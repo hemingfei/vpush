@@ -90,6 +90,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     if db_path is not None:
         config.db_path = str(db_path)
     db = DB(config.db_path, credential_key=config.notifiers.feishu.credential_key)
+    db.abort_stale_mx_view_batches()  # 上次进程中断遗留的 running 批收尾，状态页不再永久「运行中」
     logger.info(f"数据库文件: {Path(config.db_path).resolve()}（启动目录 {Path.cwd()}）")
     news_service = NewsService(db)
     index_root = Path(config.db_path).parent / "ima"

@@ -1029,3 +1029,40 @@ def test_auto_config_api_roundtrip():
         },
     )
     assert resp.status_code == 400 and "常规时间段" in resp.json()["detail"]
+
+
+def test_manual_status_unfinished_covers_failed_run_with_batches_in_flight(monkeypatch):
+    """unfinished = 任一 run 尚未收场：某批失败会立刻把 run 置 failed，但兄弟批
+    可能还在跑（单批 LLM 最长 ~10 分钟）——轮询须按 unfinished 续轮而非 running。"""
+    db = make_db()
+    kid = db.add_kol("mx", "房间F", "f1")
+    for i in range(3):
+        db.insert_post("mx", kid, f"f{i}", "", f"消息{i}", "u", "")
+    import app.llm as llm
+    orig = llm.tag_posts_llm
+
+    def fake(rows, *a, **kw):
+        return {int(r["id"]): _result(topics=[{"name": "科技", "confidence": "high"}]) for r in rows}
+
+    _reset_manual_state()
+    monkeypatch.setattr(m, "_ensure_workers_locked", lambda: None)
+    llm.tag_posts_llm = fake
+    try:
+        out = m.start_manual_run(db, make_config(), [kid], 0)  # 3 条 → 1 批
+        assert out["started"] is True
+        # 批次还没跑：running 与 unfinished 均为 True
+        status = m.get_manual_job_status()
+        assert status["running"] is True and status["unfinished"] is True
+        # 模拟「run 已被置 failed 但批次未有着落（兄弟批在跑）」的中间态
+        with m._runs_lock:
+            m._runs[out["run_id"]]["status"] = "failed"
+        status = m.get_manual_job_status()
+        assert status["running"] is False  # 只看 running 会误判「已结束」
+        assert status["unfinished"] is True  # 轮询按 unfinished 续轮
+        m._drain_manual_queue()  # 批次收场 → 摘要落定
+        status = m.get_manual_job_status()
+        assert status["unfinished"] is False
+        assert status["runs"][0]["summary"] is not None
+    finally:
+        llm.tag_posts_llm = orig
+    db.close()

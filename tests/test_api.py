@@ -193,6 +193,7 @@ def test_admin_kols_pagination_and_filters():
     # 分页
     data = client.get("/api/admin/kols?limit=5&offset=0", headers=admin_headers).json()
     assert data["total"] == 13 and len(data["items"]) == 5
+    assert all(k["platform"] != "system" for k in data["items"])  # 系统 KOL（AI 报告）不进管理列表
     assert len(data["ids"]) == 13
     assert set(data["ids"]) >= {item["id"] for item in data["items"]}
     assert all("subscriber_count" in item for item in data["items"])
@@ -215,7 +216,7 @@ def test_admin_kols_pagination_and_filters():
     # 普通用户无权限
     uh = user_headers(client, "adminkols_user")
     assert client.get("/api/admin/kols", headers=uh).status_code == 403
-    # 公开目录 /api/kols 不受影响（仍返回全部）
+    # 系统 KOL（AI 分析报告等内部输出通道）已从各列表统一排除，口径与管理列表一致
     assert len(client.get("/api/kols", headers=admin_headers).json()) == 13
 
 
@@ -568,7 +569,8 @@ def test_add_weibo_kol_auto_resolves_name_and_avatar(monkeypatch):
 
 
 def test_stats_api():
-    client = make_client()
+    # 显式 Config()：不读本机 config.yaml（其 admin_password 会在启动时建 admin 用户，污染 users 计数）
+    client = make_client(config=Config())
     headers = auth_headers(client)
     client.post(
         "/api/kols", headers=headers, json={"platform": "xueqiu", "name": "A", "external_id": "1", "priority": True}
@@ -1769,8 +1771,9 @@ def test_batch_import_system_kol_name_external_id_format():
     data = resp.json()
     assert resp.status_code == 200
     assert data["total"] == 4 and data["ok"] == 4 and not data["failed"]
-    items = client.get("/api/admin/kols", headers=headers).json()["items"]
-    by_ext = {k["external_id"]: k for k in items if k["platform"] == "system"}
+    # 系统 KOL 是内部输出通道，管理列表已统一排除：导入结果直查 DB 验证
+    db = client.app.state.db
+    by_ext = {k["external_id"]: k for k in db.list_kols(platform="system")}
     assert by_ext["sys_001"]["name"] == "张三"
     assert by_ext["sys_002"]["name"] == "李四 王五"
     assert by_ext["only_id_003"]["name"] == "system_only_id_003"

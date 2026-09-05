@@ -271,11 +271,12 @@ def test_post_tags_filter_timeline_without_inline_user_string():
 
     约束：onclick 不得把标签文本插进 JS 字符串（XSS 注入面），必须走 this.dataset.tag。
     """
-    post_card = _fn_body("postCard")
+    # tag chips 已从 postCard 位移到独立的 renderPostTagChips（不变式仍成立）
+    tag_chips = _fn_body("renderPostTagChips")
     pick_tag = _fn_body("tlPickTag")
 
-    assert 'data-tag="${escapeHtml(t)}"' in post_card
-    assert "tlPickTag(this.dataset.tag)" in post_card
+    assert 'data-tag="${escapeHtml(t)}"' in tag_chips
+    assert "tlPickTag(this.dataset.tag)" in tag_chips
     assert "state.timelineTag = tag" in pick_tag
     assert "loadTimeline(true, routeRenderSeq, { revert })" in pick_tag
 

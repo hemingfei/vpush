@@ -2422,7 +2422,8 @@ def create_api_router(
     def catalog(platform: str | None = None, category_id: int | None = None, user: dict = Depends(get_current_user)):
         if is_plaza_hidden(db, platform):
             return []
-        kols = filter_plaza_kol_rows(db, db.list_kols(platform, category_id, status=1))
+        kols = filter_plaza_kol_rows(db, db.list_kols(platform, category_id, status=1,
+                                                      exclude_platform="system"))
         if not user["is_admin"]:
             visible = db.visible_kol_ids(user["id"])
             kols = [k for k in kols if k["id"] in visible]
@@ -5116,7 +5117,10 @@ def create_api_router(
         try:
             from .config import load_config, save_config
             raw_body = await request.json()
-            logger.info(f"Received MX config update: {raw_body}")
+            # token 是凭据，不能进日志（全局 RedactingFormatter 只匹配 token=/Bearer 形式，
+            # 匹配不到 dict-repr 的 'token': '…'）：非敏感键照常落日志
+            safe_body = {k: v for k, v in (raw_body or {}).items() if k != "token"}
+            logger.info(f"Received MX config update: {safe_body}")
 
             config = load_config()
             logger.info(f"Loaded config, mx.enabled={config.sources.mx.enabled}")
@@ -5556,6 +5560,7 @@ def create_api_router(
         if status is not None and status not in (0, 1):
             raise HTTPException(status_code=400, detail="status 需为 0 或 1")
         q = (q or "").strip() or None
+        # 系统 KOL（AI 分析报告输出账号）不是真大V，管理列表/计数统一排除
         items = db.list_kols(
             platform=platform,
             category_id=category_id,
@@ -5565,14 +5570,17 @@ def create_api_router(
             offset=max(offset, 0),
             with_subscriber_count=True,
             with_blocked_count=True,
+            exclude_platform="system",
         )
         for item in items:
             # 库里存 JSON 文本，接口统一出数组（前端直接渲染）
             item["block_keywords"] = parse_block_keywords(item.get("block_keywords"))
         return {
-            "total": db.count_kols(platform=platform, category_id=category_id, q=q, status=status),
+            "total": db.count_kols(platform=platform, category_id=category_id, q=q, status=status,
+                                   exclude_platform="system"),
             "items": items,
-            "ids": db.list_kol_ids(platform=platform, category_id=category_id, q=q, status=status),
+            "ids": db.list_kol_ids(platform=platform, category_id=category_id, q=q, status=status,
+                                   exclude_platform="system"),
         }
 
     @router.post("/admin/kols/batch", dependencies=[Depends(require_admin)])
@@ -5600,7 +5608,8 @@ def create_api_router(
 
     @router.get("/kols", dependencies=[Depends(require_admin)])
     def list_kols(platform: str | None = None, category_id: int | None = None):
-        return db.list_kols(platform, category_id)
+        # 系统 KOL（AI 分析报告等内部输出通道）不是真大V：各列表/统计统一排除
+        return db.list_kols(platform, category_id, exclude_platform="system")
 
     @router.post("/kols", dependencies=[Depends(require_admin)])
     def add_kol(body: KolIn, admin: dict = Depends(require_admin)):
@@ -5635,32 +5644,32 @@ def create_api_router(
                 if err:
                     raise HTTPException(status_code=400, detail=err)
                 external_id = ext
-            if not external_id:
-                raise HTTPException(status_code=400, detail="昵称与外部ID不能为空")
-            if not name:
-                if body.platform == "system":
-                    # 系统平台：使用 external_id 作为默认名称
-                    name = external_id
-                elif body.platform == "combination":
-                    # 没填昵称时自动查组合名称（失败退回占位名）
-                    cookie = db.get_setting(XUEQIU_COOKIE_KEY) or os.environ.get("XUEQIU_COOKIE", "")
-                    profile = resolve_combination_profile(external_id, cookie, db=db)
-                    name = profile.get("name") or f"combination_{external_id}"
-                elif body.platform == "weibo":
-                    # 没填昵称时自动查微博昵称（公开接口，失败退回占位名）
-                    profile = resolve_weibo_profile(
-                        external_id,
-                        db.get_setting(WEIBO_COOKIE_KEY) or os.environ.get("WEIBO_COOKIE", ""),
-                        db=db,
-                    )
-                    name = profile.get("name") or f"weibo_{external_id}"
-                elif body.platform == "twitter":
-                    # 没填昵称时自动查 X 显示名（需 TWITTER_COOKIE，失败退回占位名）
-                    profile = resolve_x_profile(external_id, db=db)
-                    name = profile.get("name") or f"twitter_{external_id}"
-                elif body.platform == "zsxq":
-                    profile = resolve_zsxq_profile(external_id, db=db)
-                    name = profile.get("name") or f"zsxq_{external_id}"
+        if not external_id:
+            raise HTTPException(status_code=400, detail="昵称与外部ID不能为空")
+        if not name:
+            if body.platform == "system":
+                # 系统平台：使用 external_id 作为默认名称
+                name = external_id
+            elif body.platform == "combination":
+                # 没填昵称时自动查组合名称（失败退回占位名）
+                cookie = db.get_setting(XUEQIU_COOKIE_KEY) or os.environ.get("XUEQIU_COOKIE", "")
+                profile = resolve_combination_profile(external_id, cookie, db=db)
+                name = profile.get("name") or f"combination_{external_id}"
+            elif body.platform == "weibo":
+                # 没填昵称时自动查微博昵称（公开接口，失败退回占位名）
+                profile = resolve_weibo_profile(
+                    external_id,
+                    db.get_setting(WEIBO_COOKIE_KEY) or os.environ.get("WEIBO_COOKIE", ""),
+                    db=db,
+                )
+                name = profile.get("name") or f"weibo_{external_id}"
+            elif body.platform == "twitter":
+                # 没填昵称时自动查 X 显示名（需 TWITTER_COOKIE，失败退回占位名）
+                profile = resolve_x_profile(external_id, db=db)
+                name = profile.get("name") or f"twitter_{external_id}"
+            elif body.platform == "zsxq":
+                profile = resolve_zsxq_profile(external_id, db=db)
+                name = profile.get("name") or f"zsxq_{external_id}"
         if body.category_id is not None and db.get_category(body.category_id) is None:
             raise HTTPException(status_code=400, detail="分类不存在")
         kid = db.add_kol(
@@ -6020,10 +6029,10 @@ def create_api_router(
 
     @router.get("/mx-views/day")
     async def mx_views_day(day: str, current_user: dict = Depends(get_current_user)):
-        snaps = db.list_mx_view_snapshots(day)
+        snaps = db.list_mx_view_snapshot_meta(day)  # 轻量元数据，不全量解析 payload
         items = [{
             "snapshot_at": s["snapshot_at"], "seq": s["seq"], "kind": s["kind"],
-            "message_count": int(s["payload"].get("message_count") or 0),
+            "message_count": int(s["message_count"] or 0),
         } for s in snaps]
         return {"trading_day": day, "latest_at": snaps[-1]["snapshot_at"] if snaps else None,
                 "snapshots": items}
@@ -6473,6 +6482,7 @@ def create_api_router(
         resolve_system_llm_config,
         run_snapshot_batch,
         start_backfill_job,
+        validate_schedule_config,
     )
 
     def _mx_view_put_config(admin: dict, body: dict) -> None:
@@ -6506,7 +6516,10 @@ def create_api_router(
             )
         if "schedule" in body:
             schedule = body["schedule"]
-            if not isinstance(schedule, dict) or not resolve_schedule(schedule):
+            err = validate_schedule_config(schedule)
+            if err:
+                raise HTTPException(status_code=422, detail=err)
+            if not resolve_schedule(schedule):
                 raise HTTPException(status_code=422, detail="schedule 无法解析出任何快照时刻")
             db.set_setting(MX_VIEW_SCHEDULE_KEY, json.dumps(schedule, ensure_ascii=False))
         _audit(admin, "mx_view_config_update", detail=",".join(sorted(body.keys())))
@@ -7068,7 +7081,8 @@ def create_api_router(
 
     @router.get("/stats", dependencies=[Depends(require_admin)])
     def stats():
-        kols = db.list_kols(with_subscriber_count=True)
+        kols = [k for k in db.list_kols(with_subscriber_count=True)
+                if k["platform"] != "system"]  # 系统 KOL（AI 报告输出）不计入大V统计
         # 「正常」状态有新鲜度窗口：source_ok 太久没更新视为近期无成功，
         # 避免平台曾成功过一次就永远显示正常（连续失败被掩盖）。
         # 窗口取 2× 全局轮询间隔，至少 5 分钟；无启用大V的平台不判定。

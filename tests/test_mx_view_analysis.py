@@ -74,6 +74,7 @@ from app.mx_view_analysis import (
     MX_VIEW_FIRST_WINDOW_START,
     resolve_schedule,
     snapshot_windows,
+    validate_schedule_config,
 )
 
 
@@ -84,6 +85,17 @@ def test_resolve_schedule_default_has_38_snapshots():
     assert "12:00" in times and "13:20" in times and "15:00" in times and times[-1] == "16:00"
     assert len(times) == 38
     assert times == sorted(set(times))
+
+
+def test_resolve_schedule_includes_segment_end_and_rejects_out_of_range():
+    # 段终点不整除也要落格（docstring 承诺起点与终点都生成）
+    cfg = {"segments": [{"start": "09:30", "end": "11:30", "interval_min": 45}], "extra_times": []}
+    assert resolve_schedule(cfg) == ["09:30", "10:15", "11:00", "11:30"]
+    # "24:00"/"09:99" 这类超界时刻被拒：否则回填写入后 last_done 永远压住当天 live 快照
+    assert resolve_schedule({"segments": [], "extra_times": ["24:00", "09:99", "23:59"]}) == ["23:59"]
+    assert validate_schedule_config({"segments": [{"start": "09:30", "end": "24:00", "interval_min": 30}]})
+    assert validate_schedule_config({"extra_times": ["08:00"]}) == ""
+    assert validate_schedule_config({"segments": [{"start": "09:30", "end": "10:00", "interval_min": 0}]})
 
 
 def test_resolve_schedule_ignores_bad_segments_and_dedupes():
@@ -387,6 +399,67 @@ def test_backfill_rejects_range_over_30_days():
     assert mva.start_backfill_job(db, "2026-01-01", "2026-09-01") is False
 
 
+def _wait_backfill_done():
+    import time as _t
+
+    for _ in range(200):
+        if not mva.backfill_running():
+            break
+        _t.sleep(0.05)
+    assert mva.backfill_running() is False
+
+
+def test_backfill_skips_already_done_snapshots(monkeypatch):
+    """回填重放已跑过的 (trading_day, snapshot_at) 直接跳过：同一观点不会 live 批 +
+    backfill 批双写，钻取时间线不再出现同一大V同一时刻两条。"""
+    db = make_db()
+    day = "2026-09-03"
+    _seed_posts(db, day)
+    monkeypatch.setattr(mva.llm, "_chat", lambda *a, **k: _VIEW_JSON % 1)
+
+    _wait_backfill_done()  # 回填状态是模块级单例：等前一个测试的线程退净再启动
+    mva.start_backfill_job(db, day, day)
+    _wait_backfill_done()
+    first = len(db.list_mx_opinions(day))
+    assert first > 0
+
+    mva.start_backfill_job(db, day, day)  # 同一天重放
+    _wait_backfill_done()
+    assert len(db.list_mx_opinions(day)) == first  # 行数不翻倍
+    # 首轮回填已把每个 (day, snapshot_at) 落成 done 批，第二回全部跳过
+    assert db._rows("SELECT COUNT(*) AS n FROM mx_view_batches WHERE status = 'failed'")[0]["n"] == 0
+
+
+def test_has_done_mx_view_batch_and_abort_stale_sweep():
+    db = make_db()
+    day = "2026-09-03"
+    bid = db.upsert_mx_view_batch(day, "09:20", "live")  # 默认 running
+    assert db.has_done_mx_view_batch(day, "09:20") is False
+    db.finish_mx_view_batch(bid, "done", 3)
+    assert db.has_done_mx_view_batch(day, "09:20") is True
+    assert db.has_done_mx_view_batch(day, "09:26") is False
+    # 进程中断遗留的 running 批：启动 sweep 收尾为 aborted，不再永久「运行中」
+    db.upsert_mx_view_batch(day, "10:00", "live")
+    assert db.abort_stale_mx_view_batches() == 1
+    row = db._rows("SELECT status FROM mx_view_batches WHERE snapshot_at = '10:00'")[0]
+    assert row["status"] == "aborted"
+    assert db.abort_stale_mx_view_batches() == 0  # 二次启动无残留
+
+
+def test_list_mx_view_snapshot_meta_without_payload_parse():
+    """轻量元数据查询：带 message_count，不解析 payload（调度 tick 与 /mx-views/day 用）。"""
+    db = make_db()
+    day = "2026-09-03"
+    bid = db.upsert_mx_view_batch(day, "09:20", "live")
+    db.upsert_mx_view_snapshot(day, "09:20", 1, "live", {"message_count": 7, "topics": []}, bid)
+    db.upsert_mx_view_snapshot(day, "09:26", 2, "live", {}, bid)
+    meta = db.list_mx_view_snapshot_meta(day)
+    assert [r["snapshot_at"] for r in meta] == ["09:20", "09:26"]
+    assert meta[0]["message_count"] == 7 and meta[1]["message_count"] == 0
+    assert meta[0]["seq"] == 1 and meta[0]["kind"] == "live"
+    assert "payload" not in meta[0].keys()
+
+
 def test_build_mx_view_fail_alert_cooldown():
     from app.scheduler import build_mx_view_fail_alert
 
@@ -394,3 +467,15 @@ def test_build_mx_view_fail_alert_cooldown():
     first = build_mx_view_fail_alert(db, "LLM 超时")
     assert first is not None and "MX 观点" in first.title
     assert build_mx_view_fail_alert(db, "LLM 超时") is None  # 冷却窗口内不重复
+
+
+def test_list_mx_posts_in_window_excludes_disabled_kols():
+    """停用大V的消息不再进研判窗口：管理端范围设置里残留其 id 也不会送 LLM 计费。"""
+    db = make_db()
+    day = "2026-09-04"
+    kol = db.add_kol("mx", "王哥", "room1")
+    db.insert_post(platform="mx", kol_id=kol, external_id="m1", title="", url="",
+                   content="固态电池订单爆了", published_at=f"{day} 09:18:00")
+    assert [p["external_id"] for p in db.list_mx_posts_in_window(day, "09:15", "09:20")] == ["m1"]
+    db.update_kol(kol, enabled=False)
+    assert db.list_mx_posts_in_window(day, "09:15", "09:20") == []
