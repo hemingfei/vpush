@@ -4487,7 +4487,7 @@ def test_login_tabs_own_tabpanels():
     assert "challenges.cloudflare.com/turnstile/v0/api.js" in src
     assert "cf-turnstile-response" in src
     assert "initTurnstile()" in src
-    assert 'appearance: "interaction-only"' in src
+    assert 'appearance: "always"' in src
     assert 'theme: "auto"' in src
     switch = _fn_body("switchAuthMode")
     assert "loginForm.hidden = !isLogin" in switch
