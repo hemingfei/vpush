@@ -12,6 +12,7 @@ import json
 import os
 import re
 import time
+import uuid
 from pathlib import Path
 
 MODES = ("incr", "year", "all", "stop", "compress", "schedule", "settings", "backup")
@@ -41,12 +42,15 @@ class CiccControl:
             raise ValueError(f"未知操作：{mode}")
         cmds = self.ctrl / "commands"
         cmds.mkdir(parents=True, exist_ok=True)
-        name = f"{int(time.time() * 1000)}-{mode}.json"
-        tmp = cmds / f".tmp.{os.getpid()}"
-        payload = {"mode": mode, "actor": actor, "ts": int(time.time())}
+        cmd_id = uuid.uuid4().hex
+        name = f"{int(time.time() * 1000)}-{mode}-{cmd_id[:8]}.json"
+        tmp = cmds / f".tmp.{os.getpid()}.{cmd_id[:8]}"
+        payload = {}
         if extra:
             payload.update(extra)
-        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        envelope = {"id": cmd_id, "mode": mode, "actor": actor,
+                    "ts": int(time.time()), "payload": payload}
+        tmp.write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, cmds / name)  # 原子落名，dispatch 的 inotify 不会读到半截文件
         return {"queued": mode}
 

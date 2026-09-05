@@ -22,6 +22,7 @@ import time
 
 CTRL = "/srv/vpush-ima/local/.cicc"
 COMMANDS_DIR = os.path.join(CTRL, "commands")
+RESULTS_DIR = os.path.join(CTRL, "results")
 LEDGER = os.path.join(CTRL, "commands.json")
 CICC_DIR = "/root/cicc"
 COLLECTOR = os.path.join(CICC_DIR, "cicc_report_collector.py")
@@ -37,6 +38,33 @@ MODE_ARGS = {
     "year": ["--since", "2026-01-01"],
     "all": ["--all"],
 }
+
+ALL_MODES = ("stop", "compress", "schedule", "settings",
+             "consistency", "dedup", "backup", *MODE_ARGS)
+
+
+def validate_command(cmd: dict) -> str | None:
+    """返回错误原因（None=合法）。命令信封：{id, mode, actor, ts, payload}。
+
+    id 缺失不拒——旧格式（无 id）短期兼容，main() 以文件名为幂等键。
+    """
+    if not isinstance(cmd, dict):
+        return "invalid_json"
+    mode = cmd.get("mode")
+    if mode not in ALL_MODES:
+        return "unknown_mode"
+    ts = cmd.get("ts")
+    if not isinstance(ts, int) or isinstance(ts, bool) or ts <= 0:
+        return "invalid_ts"
+    payload = cmd.get("payload")
+    if payload is not None and not isinstance(payload, dict):
+        return "invalid_payload"
+    return None
+
+
+def write_result(cmd_id: str, entry: dict) -> None:
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    write_json(os.path.join(RESULTS_DIR, f"{cmd_id}.json"), entry)
 
 
 def collectors_running() -> int:
@@ -79,75 +107,90 @@ def main() -> None:
     os.makedirs(COMMANDS_DIR, exist_ok=True)
     handled = []
     for name in sorted(os.listdir(COMMANDS_DIR)):
-        if not name.endswith(".json"):
+        if not name.endswith(".json") or name.startswith("."):
             continue
         path = os.path.join(COMMANDS_DIR, name)
         cmd = read_json(path) or {}
-        mode = cmd.get("mode")
-        entry = {"ts": int(time.time()), "mode": mode,
-                 "actor": str(cmd.get("actor", ""))[:40], "ok": False}
+        # 新命令以 envelope.id 为幂等键；旧格式（无 id）以文件名为键短期兼容
+        cmd_id = str(cmd.get("id") or name)
+        started = int(time.time())
+        entry = {"id": cmd_id, "mode": cmd.get("mode"), "status": "failed",
+                 "started_at": started, "finished_at": 0, "attempts": 1,
+                 "error": None}
+        error = validate_command(cmd)
+        payload = cmd.get("payload") if isinstance(cmd.get("payload"), dict) else {}
         try:
-            if mode == "stop":
-                subprocess.run(["pkill", "-f", "cicc_repor[t]_collector"], check=False)
-                entry["ok"] = True
-            elif mode == "compress":
-                launch(["nice", "-n", "19", "ionice", "-c2", "-n7",
-                        PY, "-u", COMPRESSOR, "--root",
-                        "/srv/vpush-ima/local/cicc-research", "--strip-watermark"],
-                       "ui_compress.log")
-                entry["ok"] = True
-            elif mode == "schedule":
-                sched = str(cmd.get("time") or "")
-                if re.fullmatch(r"\d{2}:\d{2}", sched):
-                    write_json(SCHEDULE_FILE, {"time": sched})
-                    entry["ok"] = True
-                else:
-                    entry["error"] = "invalid_time"
-            elif mode == "settings":
-                cats = cmd.get("categories")
-                if isinstance(cats, list) and all(isinstance(c, str) for c in cats):
-                    write_json(os.path.join(CTRL, "cicc_settings.json"),
-                               {"categories": [c for c in cats if c.strip()]})
-                    entry["ok"] = True
-                else:
-                    entry["error"] = "invalid_categories"
-            elif mode == "consistency":
-                if not os.path.exists(CONSISTENCY_SCRIPT):
-                    entry["error"] = "consistency_script_missing"
-                else:
-                    r = subprocess.run([PY, CONSISTENCY_SCRIPT], capture_output=True,
-                                       text=True, timeout=600, check=False)
-                    entry["ok"] = r.returncode == 0
-                    if r.returncode != 0:
-                        entry["error"] = (r.stderr or "")[:200]
-            elif mode == "dedup":
-                if not os.path.exists(DEDUP_SCRIPT):
-                    entry["error"] = "dedup_script_missing"
-                else:
-                    subprocess.Popen(["nice", "-n", "19", PY, "-u", DEDUP_SCRIPT, "--apply"],
-                                     stdout=open(os.path.join(CICC_DIR, "ui_dedup.log"), "ab"),
-                                     stderr=subprocess.STDOUT, cwd=CICC_DIR,
-                                     start_new_session=True, close_fds=True)
-                    entry["ok"] = True
-            elif mode == "backup":
-                if not os.path.exists(BACKUP_SCRIPT):
-                    entry["error"] = "backup_script_missing"
-                else:
-                    # 后台跑：初次备份可达数小时，dispatch 是 oneshot 不能被拖住；
-                    # 真实成败经 restic 回写 .vpush-storage-health.json 由 status 呈现
-                    launch([BACKUP_SCRIPT], "ui_backup.log")
-                    entry["ok"] = True
-            elif mode in MODE_ARGS:
-                if collectors_running() > 0:
-                    entry["error"] = "collector_already_running"
-                else:
-                    launch([PY, "-u", COLLECTOR, *MODE_ARGS[mode]], f"ui_{mode}.log")
-                    entry["ok"] = True
+            if error is not None:
+                entry["error"] = error
             else:
-                entry["error"] = "unknown_mode"
+                mode = cmd["mode"]
+                entry["error"] = None
+                if mode == "stop":
+                    subprocess.run(["pkill", "-f", "cicc_repor[t]_collector"], check=False)
+                    entry["ok"] = True
+                elif mode == "compress":
+                    launch(["nice", "-n", "19", "ionice", "-c2", "-n7",
+                            PY, "-u", COMPRESSOR, "--root",
+                            "/srv/vpush-ima/local/cicc-research", "--strip-watermark"],
+                           "ui_compress.log")
+                    entry["ok"] = True
+                elif mode == "schedule":
+                    sched = str(payload.get("time") or "")
+                    if sched and re.fullmatch(r"\d{2}:\d{2}", sched):
+                        write_json(SCHEDULE_FILE, {"time": sched})
+                        entry["ok"] = True
+                    else:
+                        entry["error"] = "invalid_time"
+                elif mode == "settings":
+                    cats = payload.get("categories")
+                    if isinstance(cats, list) and all(isinstance(c, str) for c in cats):
+                        write_json(os.path.join(CTRL, "cicc_settings.json"),
+                                   {"categories": [c for c in cats if c.strip()]})
+                        entry["ok"] = True
+                    else:
+                        entry["error"] = "invalid_categories"
+                elif mode == "consistency":
+                    if not os.path.exists(CONSISTENCY_SCRIPT):
+                        entry["error"] = "consistency_script_missing"
+                    else:
+                        r = subprocess.run([PY, CONSISTENCY_SCRIPT], capture_output=True,
+                                           text=True, timeout=600, check=False)
+                        entry["ok"] = r.returncode == 0
+                        if r.returncode != 0:
+                            entry["error"] = (r.stderr or "")[:200]
+                elif mode == "dedup":
+                    if not os.path.exists(DEDUP_SCRIPT):
+                        entry["error"] = "dedup_script_missing"
+                    else:
+                        subprocess.Popen(["nice", "-n", "19", PY, "-u", DEDUP_SCRIPT, "--apply"],
+                                         stdout=open(os.path.join(CICC_DIR, "ui_dedup.log"), "ab"),  # noqa: SIM115 — fd 归子进程
+                                         stderr=subprocess.STDOUT, cwd=CICC_DIR,
+                                         start_new_session=True, close_fds=True)
+                        entry["ok"] = True
+                elif mode == "backup":
+                    if not os.path.exists(BACKUP_SCRIPT):
+                        entry["error"] = "backup_script_missing"
+                    else:
+                        launch([BACKUP_SCRIPT], "ui_backup.log")
+                        entry["ok"] = True
+                elif mode in MODE_ARGS:
+                    if collectors_running() > 0:
+                        entry["error"] = "collector_already_running"
+                    else:
+                        launch([PY, "-u", COLLECTOR, *MODE_ARGS[mode]], f"ui_{mode}.log")
+                        entry["ok"] = True
+            if entry.get("ok"):
+                entry["status"] = "success"
+                entry["error"] = None
         except OSError as exc:
             entry["error"] = str(exc)[:200]
-        handled.append(entry)
+        entry["finished_at"] = int(time.time())
+        write_result(cmd_id, entry)
+        kept = {"ts": cmd.get("ts") or started, "mode": cmd.get("mode"),
+                "actor": str(cmd.get("actor"))[:40],
+                "ok": entry["status"] == "success",
+                "error": entry.get("error"), "id": cmd_id}
+        handled.append(kept)
         try:
             os.remove(path)
         except OSError:
