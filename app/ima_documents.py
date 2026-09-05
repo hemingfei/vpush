@@ -3999,11 +3999,17 @@ class ImaDocumentService:
     def _worker(self) -> None:
         try:
             self.sync_once()
+            if self._cancel_requested:
+                return
             try:
                 self.scan_local_libraries()
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Local library scan failed error=%s", _safe_error(exc))
+            if self._cancel_requested:
+                return
             self._rebuild_index_if_needed()
+            if self._cancel_requested:
+                return
             try:
                 from .ima_title_zh import refresh_bank_titles_zh
                 refresh_bank_titles_zh(self)

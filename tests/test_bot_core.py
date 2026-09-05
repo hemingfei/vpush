@@ -151,6 +151,32 @@ def test_bind_code_concurrent_consume_once():
     assert db.get_user(target_id)["telegram_chat_id"] in {str(i) for i in range(8)}
 
 
+def test_bind_quota_is_atomic_across_db_connections(tmp_path):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    path = tmp_path / "bind-quota.sqlite"
+    dbs = [DB(path) for _ in range(8)]
+    try:
+        for _ in range(7):
+            dbs[0].consume_bind_quota("try:telegram_chat_id:1", 600, 8, 600)
+        barrier = threading.Barrier(len(dbs))
+
+        def consume(db):
+            barrier.wait(timeout=5)
+            return db.consume_bind_quota("try:telegram_chat_id:1", 600, 8, 600)[0]
+
+        with ThreadPoolExecutor(max_workers=len(dbs)) as pool:
+            outcomes = list(pool.map(consume, dbs))
+        assert sum(outcomes) == 1
+        assert dbs[0]._rows(
+            "SELECT count FROM bind_quota WHERE key = ?", ("try:telegram_chat_id:1",)
+        )[0]["count"] == 8
+    finally:
+        for db in dbs:
+            db.close()
+
+
 def test_feishu_bind_uses_open_id():
     db, bot, sent = make_bot()
     target_id = db.add_user("web_user", "hash")

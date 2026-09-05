@@ -4818,7 +4818,7 @@ def test_stock_alias_task_prefers_admin_grok_over_env(monkeypatch):
     )._run_stock_alias_task()
     assert seen["key"] == "sk-grok"
     assert seen["model"] == "grok-4.6"
-    assert seen["user_supplied"] is True
+    assert seen["user_supplied"] is False
 
 
 def test_stock_alias_task_runs_with_admin_llm_when_env_empty(monkeypatch):

@@ -4451,6 +4451,21 @@ def test_sync_flushes_state_on_cancel(tmp_path, monkeypatch):
     assert len(finished) == 3
 
 
+def test_worker_skips_post_processing_after_cancel(monkeypatch):
+    service = ImaDocumentService.__new__(ImaDocumentService)
+    service._cancel_requested = True
+    service._state_lock = threading.Lock()
+    calls = []
+    monkeypatch.setattr(service, "sync_once", lambda: calls.append("sync"))
+    monkeypatch.setattr(service, "scan_local_libraries", lambda: calls.append("scan"))
+    monkeypatch.setattr(service, "_rebuild_index_if_needed", lambda: calls.append("rebuild"))
+    monkeypatch.setattr("app.ima_title_zh.refresh_bank_titles_zh", lambda _: calls.append("titles"))
+
+    service._worker()
+
+    assert calls == ["sync"]
+
+
 def test_failed_listing_keeps_old_group_index(tmp_path, monkeypatch):
     service, db = _sync_ready_service(
         tmp_path,
@@ -5022,4 +5037,3 @@ def test_public_list_item_includes_truncated_abstract():
     }
     public3 = ImaDocumentService._public_list_item(item3)
     assert "abstract" not in public3
-

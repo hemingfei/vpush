@@ -134,6 +134,27 @@ def test_system_llm_still_allows_private_http_base():
     assert seen["url"] == "http://127.0.0.1:8000/v1/chat/completions"
 
 
+def test_admin_llm_config_is_trusted_for_system_use(tmp_path):
+    from app.db import DB
+    from app.scheduler import _system_llm_config
+
+    db = DB(tmp_path / "llm.sqlite")
+    user_id = db.add_user("admin", "hash")
+    db.update_user(
+        user_id,
+        is_admin=True,
+        llm_api_base="http://127.0.0.1:11434/v1",
+        llm_api_key="test-key",
+        llm_model="local-model",
+    )
+
+    config = _system_llm_config(db)
+
+    assert config.api_base == "http://127.0.0.1:11434/v1"
+    assert config.api_key == "test-key"
+    assert config.user_supplied is False
+
+
 def test_user_llm_pins_public_custom_port(monkeypatch):
     monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
     seen = {}

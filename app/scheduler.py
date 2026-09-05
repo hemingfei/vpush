@@ -1399,11 +1399,22 @@ def _user_llm_config(user: dict, fallback=None, db: DB | None = None):
 
 def _system_llm_config(db: DB, fallback=None):
     """站点 LLM：管理员推送设置（Grok）优先，没有再退环境变量。"""
+    from types import SimpleNamespace
+
+    from .db import user_plain_secret
+    from .url_safety import is_allowed_trusted_llm_base
+
     for user in db.list_users():
         if user.get("is_admin"):
-            cfg = _user_llm_config(user, db=db)
-            if cfg is not None:
-                return cfg
+            api_key = user_plain_secret(user, "llm_api_key", db)
+            api_base = (user.get("llm_api_base") or "").strip()
+            if api_key and is_allowed_trusted_llm_base(api_base):
+                return SimpleNamespace(
+                    api_base=api_base,
+                    api_key=api_key,
+                    model=(user.get("llm_model") or "").strip() or "grok-4.6",
+                    user_supplied=False,
+                )
     if fallback and getattr(fallback, "api_key", ""):
         return fallback
     return None

@@ -103,16 +103,24 @@ def is_safe_http_url(url: str) -> bool:
     return not any(_blocked_ip(ip) for ip in ips)
 
 
-def is_allowed_user_llm_base(url: str) -> bool:
-    """用户级 LLM：公网 http(s) Base URL，允许自定义端口；拒绝凭据和内网。"""
+def is_allowed_trusted_llm_base(url: str) -> bool:
+    """受信 LLM：http(s) Base URL，可使用本机或内网，但拒绝 URL 凭据。"""
     raw = (url or "").strip()
     try:
         parsed = urlparse(raw)
     except ValueError:
         return False
+    if parsed.scheme not in ALLOWED_SCHEMES or not parsed.hostname:
+        return False
     if parsed.username or parsed.password:
         return False
-    return is_safe_http_url(raw)
+    return True
+
+
+def is_allowed_user_llm_base(url: str) -> bool:
+    """用户级 LLM：公网 http(s) Base URL，允许自定义端口；拒绝凭据和内网。"""
+    raw = (url or "").strip()
+    return is_allowed_trusted_llm_base(raw) and is_safe_http_url(raw)
 
 
 def _pinned_request(url: str) -> tuple[str, str]:
@@ -234,9 +242,13 @@ def safe_request_limited(
                 content = None
                 continue
             body = _read_limited_body(response, max_bytes)
+            response_headers = dict(response.headers)
+            # iter_bytes() yields decoded bytes; prevent httpx from decoding them again.
+            response_headers.pop("content-encoding", None)
+            response_headers.pop("content-length", None)
             return httpx.Response(
                 response.status_code,
-                headers=response.headers,
+                headers=response_headers,
                 content=body,
                 request=response.request,
             )

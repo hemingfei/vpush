@@ -5640,7 +5640,7 @@ def test_ima_storage_admin_actions_conflict_when_local():
 
 def test_llm_models_lists_openai_compatible_ids(monkeypatch):
     client = make_client()
-    headers = auth_headers(client)
+    headers = user_headers(client, "llm-user")
     monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
 
     class FakeStream:
@@ -5686,13 +5686,56 @@ def test_llm_models_lists_openai_compatible_ids(monkeypatch):
 
 def test_llm_models_rejects_intranet_base():
     client = make_client()
-    headers = auth_headers(client)
+    headers = user_headers(client, "llm-private-user")
     resp = client.post(
         "/api/me/llm-models",
         json={"llm_api_base": "http://127.0.0.1:11434/v1", "llm_api_key": "sk-test"},
         headers=headers,
     )
     assert resp.status_code == 400
+
+
+def test_admin_can_save_and_list_models_from_trusted_intranet_base(monkeypatch):
+    client = make_client()
+    headers = auth_headers(client)
+    seen = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"data": [{"id": "local-model"}]}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, **kwargs):
+            seen["url"] = url
+            seen["authorization"] = kwargs["headers"]["Authorization"]
+            return FakeResponse()
+
+    monkeypatch.setattr("httpx.Client", FakeClient)
+    update = client.put(
+        "/api/me",
+        json={"llm_api_base": "http://127.0.0.1:11434/v1", "llm_api_key": "sk-local"},
+        headers=headers,
+    )
+    response = client.post("/api/me/llm-models", json={}, headers=headers)
+
+    assert update.status_code == 200
+    assert response.status_code == 200
+    assert response.json() == {"models": ["local-model"]}
+    assert seen == {
+        "url": "http://127.0.0.1:11434/v1/models",
+        "authorization": "Bearer sk-local",
+    }
 
 
 def test_admin_news_feed_crud_archives_without_deleting_articles(monkeypatch):

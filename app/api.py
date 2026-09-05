@@ -1946,9 +1946,17 @@ def create_api_router(
         if "llm_api_base" in body.model_fields_set:
             value = (body.llm_api_base or "").strip()
             if value:
-                from .url_safety import is_allowed_user_llm_base
+                from .url_safety import (
+                    is_allowed_trusted_llm_base,
+                    is_allowed_user_llm_base,
+                )
 
-                if not is_allowed_user_llm_base(value):
+                allowed = (
+                    is_allowed_trusted_llm_base(value)
+                    if user.get("is_admin")
+                    else is_allowed_user_llm_base(value)
+                )
+                if not allowed:
                     raise HTTPException(status_code=400, detail="LLM 地址须为 http(s) URL")
             updates["llm_api_base"] = value
         if "llm_model" in body.model_fields_set:
@@ -1973,7 +1981,7 @@ def create_api_router(
 
         from .llm import list_models
         from .scheduler import _system_llm_config
-        from .url_safety import is_allowed_user_llm_base
+        from .url_safety import is_allowed_trusted_llm_base, is_allowed_user_llm_base
 
         user = db.get_user(user["id"]) or user
         base = (body.llm_api_base if body.llm_api_base is not None else user.get("llm_api_base") or "").strip()
@@ -1986,9 +1994,21 @@ def create_api_router(
                 raise HTTPException(status_code=400, detail="请先填写 API 地址和 Key")
             models = list_models(cfg)
         else:
-            if not is_allowed_user_llm_base(base):
+            allowed = (
+                is_allowed_trusted_llm_base(base)
+                if user.get("is_admin")
+                else is_allowed_user_llm_base(base)
+            )
+            if not allowed:
                 raise HTTPException(status_code=400, detail="LLM 地址须为 http(s) URL")
-            models = list_models(SimpleNamespace(api_base=base, api_key=key, model="", user_supplied=True))
+            models = list_models(
+                SimpleNamespace(
+                    api_base=base,
+                    api_key=key,
+                    model="",
+                    user_supplied=not bool(user.get("is_admin")),
+                )
+            )
         if models is None:
             raise HTTPException(status_code=502, detail="无法获取模型列表，请检查地址和 Key")
         return {"models": models}

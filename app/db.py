@@ -3621,26 +3621,32 @@ class DB:
         window_seconds = max(int(window_seconds), 1)
         retry = max(period_start + window_seconds - int(time.time()), 1)
         with self._lock:
-            row = self._conn.execute(
-                "SELECT period_start, count FROM bind_quota WHERE key = ?", (key,)
-            ).fetchone()
-            if row is None or int(row["period_start"]) != period_start:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                row = self._conn.execute(
+                    "SELECT period_start, count FROM bind_quota WHERE key = ?", (key,)
+                ).fetchone()
+                if row is None or int(row["period_start"]) != period_start:
+                    self._conn.execute(
+                        "INSERT INTO bind_quota (key, period_start, count) VALUES (?, ?, 1) "
+                        "ON CONFLICT(key) DO UPDATE SET period_start = excluded.period_start, "
+                        "count = excluded.count",
+                        (key, period_start),
+                    )
+                    self._conn.commit()
+                    return True, 0
+                count = int(row["count"])
+                if count >= limit:
+                    self._conn.commit()
+                    return False, retry
                 self._conn.execute(
-                    "INSERT INTO bind_quota (key, period_start, count) VALUES (?, ?, 1) "
-                    "ON CONFLICT(key) DO UPDATE SET period_start = excluded.period_start, "
-                    "count = excluded.count",
-                    (key, period_start),
+                    "UPDATE bind_quota SET count = count + 1 WHERE key = ?", (key,)
                 )
                 self._conn.commit()
                 return True, 0
-            count = int(row["count"])
-            if count >= limit:
-                return False, retry
-            self._conn.execute(
-                "UPDATE bind_quota SET count = count + 1 WHERE key = ?", (key,)
-            )
-            self._conn.commit()
-            return True, 0
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def consume_bind_code(self, code: str, identity_type: str, identity: str) -> dict | None:
         field = (
