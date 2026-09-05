@@ -134,6 +134,13 @@ button:focus-visible {
 }
 @media (prefers-reduced-motion: reduce) {
   .login-card { animation: none; }
+  .tl-pill[data-platform="live"]::after { animation: none; }
+  .icon-badge-bar .pt-icon,
+  .icon-badge-bar .funnel-icon,
+  .icon-badge-bar .star-icon { transition: none; }
+  .icon-badge-bar .tl-pill:active .pt-icon,
+  .icon-badge-bar > .fav-toggle:active .star-icon,
+  .icon-badge-bar .tl-actions button:active .funnel-icon { transform: none; }
 }
 /* 密码可见性切换 */
 .pw-field { position: relative; margin-bottom: 16px; }
@@ -498,6 +505,17 @@ textarea.form-control {
 .section-title .hint { color: var(--color-text-faint); font-weight: normal; }
 .section-meta { color: var(--color-text-muted); font-size: var(--text-xs); margin-top: 4px; }
 .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+/* 列表分页：单行紧凑排布，窄屏不换行不错位 */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: nowrap;
+}
+.pager .btn-sm { flex: 0 0 auto; padding: 0 12px; }
+.pager .pager-count { white-space: nowrap; font-size: var(--text-xs); color: var(--color-text-muted); }
 @media (min-width: 769px) {
   .toolbar .btn-ghost,
   .toolbar .btn-sm {
@@ -853,12 +871,53 @@ textarea.proxy-import { min-height: 96px; }
   color: var(--color-white);
   font-weight: var(--font-weight-semibold);
 }
+/* 选中态：单色 SVG 走 currentColor 自动反白、章保持透明；
+   滤镜方案废弃——filter 会把章的底色一起反成白团 */
 .platform-tab.selected .pt-icon,
-.tl-pill.selected .pt-icon { filter: brightness(0) invert(1); }
+.tl-pill.selected .pt-icon { background: transparent; }
+/* 位图品牌 logo 不能反白（会糊成白团）：选中时改坐白色圆底衬，原色图形在蓝底上依旧清晰 */
+.platform-tab.selected img.pt-icon,
+.tl-pill.selected img.pt-icon {
+  background: #fff;
+}
 .pt-label { display: inline; }
 .pt-icon { width: 16px; height: 16px; flex-shrink: 0; }
 img.pt-icon { display: block; object-fit: contain; }
+/* 平台/筛选角标统一圆底衬：位图、实底、描边三种来源的外轮廓与底色归一 */
+.tl-pill .pt-icon,
+.platform-tab .pt-icon {
+  width: 22px;
+  height: 22px;
+  padding: 3px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: var(--color-bg-muted);
+}
+.tl-pill:hover .pt-icon,
+.platform-tab:hover .pt-icon { background: var(--color-accent-soft); }
+/* 选中反白时去掉底衬，避免蓝底上再叠灰圆 */
+.tl-pill.selected .pt-icon,
+.platform-tab.selected .pt-icon { background: transparent; }
 .tl-pill[data-platform="live"]:not(.selected) .pt-icon { color: var(--color-accent); }
+/* 快讯实时呼吸点：提示这是实时流（选中蓝底上换白描边） */
+.tl-pill[data-platform="live"] { position: relative; }
+.tl-pill[data-platform="live"]::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0 2px var(--color-surface);
+  animation: live-pulse 2.4s ease-in-out infinite;
+}
+.tl-pill[data-platform="live"].selected::after { box-shadow: 0 0 0 2px var(--color-accent); }
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
 .platform-tab[data-platform="xueqiu"]:not(.selected) .pt-icon,
 .tl-pill[data-platform="xueqiu"]:not(.selected) .pt-icon { color: var(--color-brand-xueqiu); }
 .platform-tab[data-platform="combination"]:not(.selected) .pt-icon,
@@ -983,6 +1042,17 @@ a.kol-card-head:hover .kol-card-info .name { color: var(--color-accent-text); }
   border-radius: inherit;
   display: block;
 }
+/* Truth Social 认证粉勾：压在头像右下角，描边圈住避免和照片糊在一起 */
+.avatar-verified { position: relative; display: inline-flex; line-height: 0; flex-shrink: 0; }
+.avatar-verified .vs-check {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--color-surface);
+}
 .kol-info { flex: 1; min-width: 0; cursor: pointer; text-decoration: none; }
 .kol-info .base { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .kol-info .name { min-width: 104px; font-size: var(--text-body); font-weight: var(--font-weight-semibold); color: var(--color-text-strong); }
@@ -1064,6 +1134,10 @@ a.kol-card-head:hover .kol-card-info .name { color: var(--color-accent-text); }
 .post-item .p-name:hover { color: var(--color-accent-text); text-decoration: underline; }
 .post-item .p-time { font-size: var(--text-xs); color: var(--color-text-muted); white-space: nowrap; flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .post-item .p-time::before { content: "·"; margin-right: 6px; color: var(--color-text-muted); }
+.post-item .p-tr { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: var(--text-xs); color: var(--color-text-muted); }
+.post-item .p-tr-grok { width: 16px; height: 15.5px; flex: none; display: block; }
+.post-item .p-tr-toggle { border: 0; background: none; padding: 0; margin-left: 4px; color: var(--color-accent-text); cursor: pointer; font: inherit; }
+.post-item .p-tr-toggle:hover { text-decoration: underline; }
 .post-item .p-title { font-size: var(--text-body); font-weight: var(--font-weight-semibold); margin-top: 12px; color: var(--color-text); }
 /* 正文限行宽：外壳铺满后保持舒适阅读行长（65-75ch），超宽屏不整行读不动 */
 .post-item .p-content { color: var(--color-text); margin-top: 8px; line-height: 1.65; overflow-wrap: break-word; word-break: normal; font-size: var(--text-body); max-width: 75ch; white-space: pre-line; }
@@ -1921,7 +1995,10 @@ body.lightbox-open { overflow: hidden; }
   flex-shrink: 0;
 }
 .post-item .p-name-line .p-platform .pt-icon { width: 13px; height: 13px; }
-.post-item .p-name-line .p-platform[data-platform="twitter"] .pt-icon { width: 11px; height: 11px; }
+.post-item .p-name-line .p-platform[data-platform="twitter"] .pt-icon,
+.post-item .p-name-line .p-platform[data-platform="weibo"] .pt-icon,
+.post-item .p-name-line .p-platform[data-platform="xueqiu"] .pt-icon,
+.post-item .p-name-line .p-platform[data-platform="truth"] .pt-icon { width: 11px; height: 11px; }
 .post-item .p-name-line .p-platform[data-platform="xueqiu"] .pt-icon { color: var(--color-brand-xueqiu); }
 .post-item .p-name-line .p-platform[data-platform="combination"] .pt-icon { color: var(--color-brand-xueqiu); }
 .post-item .p-name-line .p-platform[data-platform="weibo"] .pt-icon { color: var(--color-brand-weibo); }
@@ -2701,19 +2778,18 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   }
   .tl-feed-panel,
   #kol-list { touch-action: pan-y; }
-  /* 动态/订阅/广场：一行等宽图标角标（全部+5平台+筛选/星标）。字只留 aria，禁止改回带字胶囊。 */
+  /* 动态/订阅/广场：一行等宽图标角标（全部+6平台+筛选/星标）。字只留 aria，禁止改回带字胶囊。 */
   .icon-badge-bar {
     display: grid;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
     gap: 8px;
-    width: 100%;
+    /* 两侧外扩 6px：从正文内边距借宽给格距，角标不挤正文 */
+    margin-inline: -6px;
+    width: calc(100% + 12px);
   }
   /* 动态页：列数随「全部+快讯+平台+筛选」个数自适应，保证筛选按钮不换行独占一排 */
   #tl-filterbar .icon-badge-bar {
-    grid-template-columns: none;
-    grid-auto-flow: column;
-    grid-auto-columns: 1fr;
-    gap: 6px;
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
   }
   .icon-badge-bar .tl-pills,
   .icon-badge-bar .tl-actions { display: contents; }
@@ -2725,15 +2801,38 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
     min-width: 0;
     height: 44px;
     padding: 0;
-    border-radius: var(--radius-control);
+    border: none;
+    background: transparent;
+    border-radius: 0;
     justify-content: center;
   }
   .icon-badge-bar .tl-pill span { display: none; }
-  .icon-badge-bar .tl-pill .pt-icon { width: 20px; height: 20px; }
+  .icon-badge-bar .tl-pill .pt-icon,
+  .icon-badge-bar .funnel-icon,
+  .icon-badge-bar .star-icon {
+    width: min(34px, 92%);
+    aspect-ratio: 1;
+    height: auto;
+    padding: 6px;
+    box-sizing: border-box;
+    border-radius: 50%;
+    background: var(--color-bg-muted);
+    transition: background var(--ease-standard), transform 120ms ease;
+  }
+  .icon-badge-bar .tl-pill:active .pt-icon,
+  .icon-badge-bar > .fav-toggle:active .star-icon,
+  .icon-badge-bar .tl-actions button:active .funnel-icon,
+  .icon-badge-bar .tl-actions button:active .star-icon { transform: scale(0.9); }
   .icon-badge-bar > .fav-toggle,
   .icon-badge-bar .tl-actions button { font-size: 0; gap: 0; }
-  .icon-badge-bar .funnel-icon,
-  .icon-badge-bar .star-icon { width: 20px; height: 20px; }
+  /* 选中/激活收进章本身：章变 Duty Blue、图标反白；位图 logo 保持白章原色 */
+  .icon-badge-bar .tl-pill.selected .pt-icon { background: var(--color-accent); }
+  .icon-badge-bar .tl-pill.selected img.pt-icon { background: #fff; }
+  /* 星标章：蓝色空心（与组合/星球同族），选中蓝底白星 */
+  .icon-badge-bar .tl-actions button .star-icon { color: var(--color-accent); }
+  .icon-badge-bar .tl-actions button.selected .star-icon { background: var(--color-accent); color: #fff; }
+  .icon-badge-bar > .fav-toggle.fav-on .star-icon,
+  .icon-badge-bar .tl-actions button.has-filter .funnel-icon { background: var(--color-accent); color: #fff; }
   .home-head .icon-badge-bar { margin-top: 10px; }
   /* 大V头像行：手机端收窄头像/间距，降低筛选条第二排高度 */
   .tl-kol-item { width: 48px; gap: 3px; }

@@ -88,6 +88,17 @@ def test_single_post_rich_has_heading_paragraphs_tags():
     assert html.count("📌") == 1
 
 
+def test_translated_post_rich_marks_english_source():
+    post = make_post()
+    post.platform = "twitter"
+    post.content = "中文译文"
+    post.content_src = "Hello original"
+    html = build_telegram_rich_html(post)
+    assert "翻译自英语" in html
+    from app.notifiers.telegram import build_telegram_text
+    assert "翻译自英语" in build_telegram_text(post)
+
+
 def test_single_post_rich_marks_badges_and_reply_quote():
     post = make_post()
     post.post_type = "reply"

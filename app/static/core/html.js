@@ -14,6 +14,8 @@ const IMG_PROXY_ALWAYS_HOSTS = new Set([
   "pbs.twimg.com",
   "video.twimg.com",
   "abs.twimg.com",
+  // Truth Social 图床：大陆直连被 CDN 403，必须一开始就走代理
+  "static-assets-1.truthsocial.com",
 ]);
 
 export function imgSrcFor(url) {

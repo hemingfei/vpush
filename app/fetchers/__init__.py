@@ -7,6 +7,7 @@ from .base import Fetcher
 logger = logging.getLogger(__name__)
 from .combination import CombinationFetcher
 from .ima import ImaFetcher
+from .truth import TruthFetcher
 from .twitter import TwitterFetcher
 from .weibo import WeiboFetcher
 from .xueqiu import XueqiuFetcher
@@ -22,6 +23,7 @@ def build_fetchers(config, db) -> dict[str, Fetcher]:
         "twitter": TwitterFetcher(db=db),
         "ima": ImaFetcher(config.sources.ima, db),
         "zsxq": ZsxqFetcher(db=db),
+        "truth": TruthFetcher(db=db),
     }
     if config.sources.mx.enabled:
         try:

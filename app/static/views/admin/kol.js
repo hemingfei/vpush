@@ -149,9 +149,9 @@ export function createAdminKolsView(dependencies) {
             <tbody>${rows || `<tr class="ak-empty"><td colspan="12" class="muted">${state.adminKolsQ || state.adminKolsCategory || state.adminKolsStatus !== "" || state.adminKolsPlatform ? "没有匹配的大V" : "还没有大V，先用上方表单添加"}</td></tr>`}</tbody>
           </table>
         </div>
-        <div class="toolbar" style="margin-top:12px;justify-content:center;gap:12px;align-items:center">
+        <div class="pager">
           <button class="btn-sm" ${page <= 0 ? "disabled" : ""} onclick="adminKolsPage(${page - 1})">← 上一页</button>
-          <span class="muted">第 ${page + 1}/${pages} 页 · 共 ${state.adminKolsTotal} 个</span>
+          <span class="pager-count">第 ${page + 1}/${pages} 页 · 共 ${state.adminKolsTotal} 个</span>
           <button class="btn-sm" ${page + 1 >= pages ? "disabled" : ""} onclick="adminKolsPage(${page + 1})">下一页 →</button>
         </div>
       </section>`;
@@ -660,6 +660,10 @@ export function createAdminKolsView(dependencies) {
         <label class="form-label">分类
           <select id="ek-category" class="form-control"><option value="">未分类</option>${catOptions}</select>
         </label>
+        <label class="form-label" title="订阅广场「推荐」位排序：越大越靠前，优先于订阅人数">
+          推荐权重
+          <input id="ek-weight" class="form-control" type="number" min="0" step="1" value="${Number(kol.recommend_weight) || 0}">
+        </label>
         <label class="form-label" style="display:flex;align-items:center;gap:8px">
           <input id="ek-private" type="checkbox" ${kol.is_private ? "checked" : ""} onchange="document.getElementById('ek-users-wrap').hidden=!this.checked"> 私有大V（仅白名单用户可见/可订阅）
         </label>
@@ -703,6 +707,7 @@ export function createAdminKolsView(dependencies) {
       category_id: $("#ek-category").value ? Number($("#ek-category").value) : null,
       is_private: isPrivate,
       visible_users: visibleUsers,
+      recommend_weight: Math.max(Number($("#ek-weight")?.value) || 0, 0),
     };
     if ($("#ek-original")) body.original_only = $("#ek-original").checked;
     const btn = $("#ek-save");

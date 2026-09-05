@@ -1128,7 +1128,7 @@ CREATE TABLE IF NOT EXISTS mx_view_snapshots (
 CREATE INDEX IF NOT EXISTS idx_mx_view_snapshots_day ON mx_view_snapshots(trading_day, snapshot_at);
 """
 
-ALLOWED_PLATFORMS = {"xueqiu", "combination", "weibo", "twitter", "ima", "zsxq", "mx", "system"}
+ALLOWED_PLATFORMS = {"xueqiu", "combination", "weibo", "twitter", "ima", "zsxq", "mx", "system", "truth"}
 
 _BUILTIN_NEWS = (
     ("bloomberg", "Bloomberg", (("最新财经", "https://quanwenrss.com/bloomberg"),)),
@@ -1632,6 +1632,11 @@ class DB:
         kol_cols = {row["name"] for row in self._rows("PRAGMA table_info(kols)")}
         if "is_private" not in kol_cols:
             self._conn.execute("ALTER TABLE kols ADD COLUMN is_private INTEGER NOT NULL DEFAULT 0")
+        if "recommend_weight" not in kol_cols:
+            # 订阅广场推荐权重：越大越靠前，优先于订阅人数排序（0 = 默认）
+            self._conn.execute(
+                "ALTER TABLE kols ADD COLUMN recommend_weight INTEGER NOT NULL DEFAULT 0"
+            )
         if "avatar_url" not in kol_cols:
             self._conn.execute("ALTER TABLE kols ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''")
         if "avatar_source" not in kol_cols:
@@ -2135,7 +2140,8 @@ class DB:
         conds, params = self._kol_filters(platform, category_id, q, status)
         if conds:
             sql += " WHERE " + " AND ".join(conds)
-        sql += " ORDER BY k.id"
+        # 推荐权重置顶（订阅广场「置顶」位），其余按 id 稳定排序
+        sql += " ORDER BY k.recommend_weight DESC, k.id"
         if limit:
             sql += " LIMIT ? OFFSET ?"
             params.extend([limit, offset])
@@ -2263,7 +2269,7 @@ class DB:
         return decrypt_stored_secret(rows[0]["webhook_secret"], self.credential_key)
 
     def recommended_kols(self, user_id: int, limit: int = 4) -> list[dict]:
-        """新用户引导推荐：启用且公开的大V，按订阅人数倒序。"""
+        """新用户引导推荐：启用且公开的大V，推荐权重优先，其后按订阅人数倒序。"""
         return [
             _strip_webhook_fields(r)
             for r in self._rows(
@@ -2273,7 +2279,7 @@ class DB:
                 "       WHERE mine.kol_id = k.id AND mine.user_id = ?) AS subscribed "
                 "FROM kols k LEFT JOIN categories c ON c.id = k.category_id "
                 "WHERE k.enabled = 1 AND k.is_private = 0 "
-                "ORDER BY subscriber_count DESC, k.id DESC LIMIT ?",
+                "ORDER BY k.recommend_weight DESC, subscriber_count DESC, k.id DESC LIMIT ?",
                 (user_id, limit),
             )
         ]
@@ -2299,6 +2305,7 @@ class DB:
         silent=_UNSET,
         extra_data=None,
         block_keywords=_UNSET,
+        recommend_weight=_UNSET,
     ):
         sets, params = [], []
         if name is not None:
@@ -2338,6 +2345,9 @@ class DB:
         if block_keywords is not _UNSET:
             sets.append("block_keywords = ?")
             params.append(block_keywords)
+        if recommend_weight is not _UNSET:
+            sets.append("recommend_weight = ?")
+            params.append(max(int(recommend_weight or 0), 0))
         if not sets:
             return
         params.append(kol_id)
@@ -4512,6 +4522,14 @@ class DB:
         rows = self._rows("SELECT COUNT(*) AS n FROM posts")
         return rows[0]["n"]
 
+    def max_external_id_num(self, platform: str) -> int:
+        """平台内最大数字 external_id（Truth 存档按 id 增量拉取）。无帖返回 0。"""
+        rows = self._rows(
+            "SELECT MAX(CAST(external_id AS INTEGER)) AS m FROM posts WHERE platform = ?",
+            (platform,),
+        )
+        return int(rows[0]["m"] or 0)
+
     def delete_push_logs_older_than(self, days: int) -> int:
         """删除超过 N 天的推送日志，返回删除条数（帖子保留期之外的独立清理）。"""
         if days <= 0:
@@ -4827,9 +4845,11 @@ class DB:
         )
         return (rows[0]["hosted_url"] if rows else "") or ""
 
-    def recent_twitter_image_rows(self, limit: int = 40) -> list[dict]:
+    def recent_mirrorable_image_rows(self, limit: int = 40) -> list[dict]:
+        """最近的镜像源图（X / Truth Social），供图床缓慢回填。"""
         return self._rows(
-            "SELECT images FROM posts WHERE platform = 'twitter' AND images LIKE '%twimg.com%' "
+            "SELECT images FROM posts WHERE platform IN ('twitter', 'truth') "
+            "AND (images LIKE '%twimg.com%' OR images LIKE '%truthsocial.com%') "
             "ORDER BY id DESC LIMIT ?",
             (max(int(limit), 1),),
         )

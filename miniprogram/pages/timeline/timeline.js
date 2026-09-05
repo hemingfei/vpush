@@ -20,12 +20,20 @@ Page({
       const tagQuery = this.data.currentTag
         ? `&tag=${encodeURIComponent(this.data.currentTag)}`
         : "";
-      const posts = (await request(`/api/my/feed?limit=100${tagQuery}`)).map((p) => ({
-        ...p,
-        platform_label: platformLabel(p.platform),
-        avatar_url: resolveAvatar(p.avatar_url),
-        tags: Array.isArray(p.tags) ? p.tags : [],
-      }));
+      const posts = (await request(`/api/my/feed?limit=100${tagQuery}`)).map((p) => {
+        const src = (p.content_src || "").trim();
+        const translated = !!(src && src !== (p.content || "").trim());
+        return {
+          ...p,
+          platform_label: platformLabel(p.platform),
+          avatar_url: resolveAvatar(p.avatar_url),
+          tags: Array.isArray(p.tags) ? p.tags : [],
+          translated,
+          showSrc: false,
+          displayTitle: p.title,
+          displayContent: p.content || "（无正文）",
+        };
+      });
       this._loadedAt = Date.now();
       this.setData({ posts, loading: false });
     } catch (err) {
@@ -51,5 +59,20 @@ Page({
 
   copyLink(e) {
     wx.setClipboardData({ data: e.currentTarget.dataset.url });
+  },
+
+  toggleOrigin(e) {
+    const id = e.currentTarget.dataset.id;
+    const posts = this.data.posts.map((p) => {
+      if (p.id !== id || !p.translated) return p;
+      const showSrc = !p.showSrc;
+      return {
+        ...p,
+        showSrc,
+        displayTitle: showSrc ? (p.title_src || p.title) : p.title,
+        displayContent: showSrc ? (p.content_src || p.content) : (p.content || "（无正文）"),
+      };
+    });
+    this.setData({ posts });
   },
 });

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from html import escape
 
-from ..fetchers.base import PLATFORM_LABELS, Post, digest_body, truncate_text
+from ..fetchers.base import PLATFORM_LABELS, Post, digest_body, has_stored_translation, truncate_text
 from .base import why_badges
 
 ACTION_MARK = {"清仓": "🗑", "新建": "🆕", "增持": "➕", "减持": "➖"}
@@ -251,6 +251,8 @@ def build_telegram_rich_html(post: Post, favorite: bool = False, keyword: bool =
     kind = " · 回复" if post.post_type == "reply" else ""
     body = truncate_text(post.content, BODY_LIMIT) or post.title or "（无正文）"
     parts = [_heading(f"📌 {post.kol_name} · {platform}{kind}"), _reason(favorite, keyword)]
+    if has_stored_translation(post):
+        parts.append(_em("翻译自英语"))
     body_html = _paragraphs(body) or _p(body)
     if post.post_type == "reply":
         body_html = f"<blockquote>{body_html}</blockquote>"

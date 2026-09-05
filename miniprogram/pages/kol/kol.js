@@ -48,8 +48,13 @@ Page({
       kol.platform_label = platformLabel(kol.platform);
       kol.avatar_url = resolveAvatar(kol.avatar_url);
       posts.forEach((p) => {
+        const src = (p.content_src || "").trim();
         p.platform_label = platformLabel(p.platform || kol.platform);
         p.avatar_url = resolveAvatar(p.avatar_url || kol.avatar_url);
+        p.translated = !!(src && src !== (p.content || "").trim());
+        p.showSrc = false;
+        p.displayTitle = p.title;
+        p.displayContent = p.content || "（无正文）";
       });
       const extra = { holdings: [], holdingsUpdatedAt: "", navSeries: [], navBenchmark: [], navHint: "", quoteDisplay: null };
       if (kol.platform === "combination") {
@@ -263,5 +268,20 @@ Page({
 
   copyLink(e) {
     wx.setClipboardData({ data: e.currentTarget.dataset.url });
+  },
+
+  toggleOrigin(e) {
+    const id = e.currentTarget.dataset.id;
+    const posts = this.data.posts.map((p) => {
+      if (p.id !== id || !p.translated) return p;
+      const showSrc = !p.showSrc;
+      return {
+        ...p,
+        showSrc,
+        displayTitle: showSrc ? (p.title_src || p.title) : p.title,
+        displayContent: showSrc ? (p.content_src || p.content) : (p.content || "（无正文）"),
+      };
+    });
+    this.setData({ posts });
   },
 });

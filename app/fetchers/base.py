@@ -23,6 +23,7 @@ PLATFORM_LABELS = {
     "zsxq": "知识星球",
     "mx": "MX",
     "system": "系统",
+    "truth": "Truth Social",
 }
 
 
@@ -75,8 +76,21 @@ def twitter_translate_enabled(user: dict | None) -> bool:
     return bool(user.get("translate_twitter"))
 
 
+_TRANSLATE_PLATFORMS = frozenset({"twitter", "truth"})
+
+
+def has_stored_translation(post: Post | dict) -> bool:
+    if isinstance(post, dict):
+        src = (post.get("content_src") or "").strip()
+        content = (post.get("content") or "").strip()
+    else:
+        src = (post.content_src or "").strip()
+        content = (post.content or "").strip()
+    return bool(src) and src != content
+
+
 def with_twitter_display(post: Post, translate: bool) -> Post:
-    if post.platform != "twitter":
+    if post.platform not in _TRANSLATE_PLATFORMS:
         return post
     if translate:
         if post.content_src and is_collapsed_translation(post.content, post.content_src):
@@ -94,7 +108,7 @@ def with_twitter_display(post: Post, translate: bool) -> Post:
 
 
 def with_twitter_display_row(row: dict, translate: bool) -> dict:
-    if (row.get("platform") or "") != "twitter":
+    if (row.get("platform") or "") not in _TRANSLATE_PLATFORMS:
         return row
     src_t = row.get("title_src") or ""
     src_c = row.get("content_src") or ""

@@ -14,6 +14,7 @@ from ..fetchers.base import (
     PLATFORM_LABELS,
     Post,
     digest_body,
+    has_stored_translation,
     show_original,
     truncate_text,
 )
@@ -88,6 +89,8 @@ def build_telegram_text(post: Post, favorite: bool = False, keyword: bool = Fals
     reason = why_badges(favorite, keyword)
     if reason:
         lines.append(reason)
+    if has_stored_translation(post):
+        lines.append("<i>翻译自英语</i>")
     lines.extend(["", escape(body)])
     label = _meta_label(post)
     if label:

@@ -280,6 +280,23 @@ def test_post_tags_filter_timeline_without_inline_user_string():
     assert "loadTimeline(true, routeRenderSeq, { revert })" in pick_tag
 
 
+def test_post_card_shows_translation_origin_toggle():
+    """译文帖要标「翻译自英语」，并可切回原文。"""
+    card = _fn_body("postCard")
+    src = APP_JS.read_text()
+    css = STYLE_CSS.read_text()
+    assert "翻译自英语" in card
+    assert "显示原文" in card
+    assert "GROK_TRANSLATE_ICON" in card
+    assert "p-tr-grok" in src
+    assert 'viewBox="0 0 33 32"' in src
+    assert "tlToggleOrigin(" in card
+    assert "function tlToggleOrigin" in src
+    assert "_tlShowSrc" in src
+    assert ".post-item .p-tr" in css
+    assert ".post-item .p-tr-grok" in css
+
+
 def test_settings_async_responses_are_owned_by_route_and_session_before_mutation():
     """设置页的 /api/me 响应必须在写 state 或 DOM 前确认路由和会话仍是发起者。"""
     src = APP_JS.read_text(encoding="utf-8")
@@ -749,15 +766,18 @@ def test_mobile_plaza_and_timeline_filters_are_seven_equal_44px_targets():
     assert ".icon-badge-bar .tl-pill span" in css and "display: none" in css
     assert ".icon-badge-bar > .fav-toggle" in css and "font-size: 0" in css
     assert ".icon-badge-bar > .home-filter-toggle" in css
+    # 移动端角标条自带特别关注章，与面板星标同状态
+    assert 'id="tl-star-toggle"' in _fn_body("tlFilterActionsHtml")
+    assert "tlPaintViewToggles()" in _fn_body("toggleTimelineFav")
     assert 'class="icon-badge-bar"' in _fn_body("renderHome")
     assert "tl-filterbar-top icon-badge-bar" in _fn_body("renderTimeline")
     assert "#tl-filterbar .icon-badge-bar" in css
-    assert "repeat(8, minmax(0, 1fr))" in css
+    assert "repeat(auto-fit, minmax(0, 1fr))" in css
 
     mobile = _media_block(css, "@media (max-width: 768px)")
     assert re.search(
         r"\.icon-badge-bar\s*\{[^}]*grid-template-columns:\s*"
-        r"repeat\(7,\s*minmax\(0,\s*1fr\)\)", mobile,
+        r"repeat\(auto-fit,\s*minmax\(0,\s*1fr\)\)", mobile,
     )
     assert re.search(
         r"[^{}]*\.home-filter-toggle[^{}]*\{[^}]*(?:min-)?height:\s*44px", mobile,
@@ -3461,7 +3481,9 @@ def test_xueqiu_badge_uses_official_mark():
     assert (APP_JS.parent / "xueqiu-mark.png").is_file()
     assert "img.pt-icon { display: block; object-fit: contain; }" in css
     assert ".pt-icon { width: 16px; height: 16px; flex-shrink: 0; }" in css
-    assert ".icon-badge-bar .tl-pill .pt-icon { width: 20px; height: 20px; }" in css
+    # 平台/筛选角标统一 26px 圆底衬，选中态去底衬反白
+    assert "border-radius: 50%;\n  background: var(--color-bg-muted);" in css
+    assert ".tl-pill.selected .pt-icon,\n.platform-tab.selected .pt-icon { background: transparent; }" in css
     assert ".post-item .p-name-line .p-platform .pt-icon { width: 13px; height: 13px; }" in css
 
 
@@ -5565,3 +5587,151 @@ def test_admin_posts_page_supports_hide_delete_and_status_filter():
     css = STYLE_CSS.read_text()
     assert ".post-hidden-badge {" in css
     assert "var(--color-danger-soft)" in css
+    assert "border-left: 4px solid var(--color-accent)" not in css
+    assert ".tl-pill[data-platform=\"live\"]:not(.selected) .pt-icon { color: var(--color-accent); }" in css
+    assert "border-radius: var(--radius-pill);" in css
+    assert "@media (max-width: 640px)" in css
+    assert "border-radius: var(--radius-card) var(--radius-card) 0 0;" in css
+
+
+
+
+EVENT_ATTRIBUTE_RE = re.compile(
+    r'\bon(?:click|change|input|keydown|focus|error|load|submit)="(.*?)"'
+    r'(?=\$\{|\s+[A-Za-z_:][-A-Za-z0-9_:.]*=|[>`])',
+    re.DOTALL,
+)
+INLINE_CALL_RE = re.compile(r"\b([A-Za-z_$][\w$]*)\s*\(")
+INLINE_MEMBER_RE = re.compile(r"\b([A-Za-z_$][\w$]*)\.")
+INLINE_DYNAMIC_CALL_RE = re.compile(r"\$\{([^}]+)\}\s*\(")
+INLINE_BUILTINS = {
+    "JSON", "Number", "Object", "Promise", "Array", "Date", "Math", "String",
+    "Boolean", "RegExp", "Error", "Map", "Set", "WeakMap", "WeakSet",
+    "parseInt", "parseFloat", "isNaN", "isFinite", "encodeURIComponent",
+    "decodeURIComponent", "encodeURI", "decodeURI", "escapeHtml", "undefined",
+    "NaN", "Infinity", "true", "false", "null", "this", "event", "window",
+    "document", "console", "location", "history", "navigator", "localStorage",
+    "sessionStorage", "alert", "confirm", "prompt", "setTimeout", "clearTimeout",
+    "setInterval", "clearInterval", "requestAnimationFrame", "cancelAnimationFrame",
+    "queueMicrotask", "fetch", "AbortController", "URL", "URLSearchParams",
+    "FormData", "Blob", "File", "FileReader", "Image", "Audio", "Worker",
+    "ResizeObserver", "MutationObserver", "IntersectionObserver",
+    "if", "for", "while", "switch", "return", "typeof", "void", "new", "delete",
+    "class", "function", "var", "let", "const", "in", "of", "instanceof",
+    "closest", "getAttribute", "getElementById", "preventDefault", "querySelector",
+    "remove", "stopPropagation", "toggle",
+}
+INLINE_SAFE_MEMBER_ROOTS = {"document", "event", "this", "window", "dataset", "classList", "style"}
+INDEX_HTML = APP_JS.with_name("index.html")
+
+
+def _inline_handler_calls(source: str) -> set[str]:
+    names = set()
+    for attr in EVENT_ATTRIBUTE_RE.findall(source):
+        stripped = re.sub(r"\$\{[^}]+\}", "", attr)
+        names.update(
+            name for name in INLINE_CALL_RE.findall(stripped)
+            if name not in INLINE_BUILTINS
+        )
+    return names
+
+
+def _inline_handler_registry(source: str) -> set[str]:
+    match = re.search(r"const INLINE_HANDLERS = \{(.*?)^\};", source, re.MULTILINE | re.DOTALL)
+    assert match, "missing INLINE_HANDLERS registry"
+    return set(re.findall(r"^\s*([A-Za-z_$][\w$]*)\s*,?\s*$", match.group(1), re.MULTILINE))
+
+
+def test_app_uses_native_module_entry():
+    html = INDEX_HTML.read_text()
+    assert '<script type="module" src="/app.js?v=' in html
+    assert re.search(r'<script(?![^>]*\btype=["\']module["\'])[^>]*src="/app\.js', html) is None
+
+
+def test_inline_handlers_have_exact_explicit_exports():
+    source = APP_JS.read_text()
+    html = INDEX_HTML.read_text()
+    views_src = "".join(path.read_text() for path in sorted((APP_JS.parent / "views").rglob("*.js")))
+    core_src = "".join(path.read_text() for path in sorted((APP_JS.parent / "core").glob("*.js")))
+    used = _inline_handler_calls(html + source + views_src + core_src)
+    exported = _inline_handler_registry(source)
+    assert used == exported, (
+        f"missing={sorted(used - exported)} extra={sorted(exported - used)}"
+    )
+    assert "Object.assign(window, INLINE_HANDLERS);" in source
+
+
+def test_inline_handlers_do_not_read_module_lexicals():
+    source = APP_JS.read_text()
+    views_src = "".join(path.read_text() for path in sorted((APP_JS.parent / "views").rglob("*.js")))
+    core_src = "".join(path.read_text() for path in sorted((APP_JS.parent / "core").glob("*.js")))
+    for attr in EVENT_ATTRIBUTE_RE.findall(source + views_src + core_src):
+        assert "${" not in attr or not INLINE_DYNAMIC_CALL_RE.search(attr), attr
+        stripped = re.sub(r"\$\{[^}]+\}", "", attr)
+        roots = set(INLINE_MEMBER_RE.findall(stripped)) - INLINE_BUILTINS - INLINE_SAFE_MEMBER_ROOTS
+        assert not roots, attr
+        assert ".then(" not in attr
+
+
+def test_core_helpers_are_real_modules():
+    src = APP_JS.read_text()
+    assert 'from "./core/html.js"' in src
+    assert 'from "./core/dialog.js"' in src
+    assert "function escapeHtml(" not in src
+    assert "function trapFocus(" not in src
+
+
+def test_financial_news_is_a_view_module():
+    src = APP_JS.read_text()
+    assert 'from "./views/news.js"' in src
+    assert "function renderNewsCenter(" not in src
+    assert "function loadNewsImageBlob(" not in src
+    assert "createNewsView({" in src
+
+
+def test_phase2_admin_requests_and_audit_are_in_view_modules():
+    src = APP_JS.read_text()
+    users = (APP_JS.parent / "views" / "admin" / "users.js").read_text()
+    dashboard = (APP_JS.parent / "views" / "admin" / "dashboard.js").read_text()
+    for name in ("loadAdminRequests", "adminApproveRequest", "adminRejectRequest"):
+        assert f"function {name}(" not in src
+        assert name in users
+    assert "function loadAdminAudit(" not in src
+    assert "loadAdminAudit" in dashboard
+    for name in (
+        "loadAdminNews", "replaceRoute", "imaCollectorFormSnapshot",
+        "rememberImaCollectorDraft", "imaCollectorFormRevision", "rateBar",
+    ):
+        assert name in dashboard.split("} = dependencies;", 1)[0]
+        assert name in src.split("createAdminDashboardView({", 1)[1].split("});", 1)[0]
+    assert "currentRouteSeq" in dashboard.split("} = dependencies;", 1)[0]
+
+
+def test_twimg_post_images_render_through_proxy():
+    """帖子配图对已知被墙图床必须直接渲染为代理地址。
+
+    大陆对 twimg 的封锁形态不定：连接重置会触发 onerror 回退，但 DNS 黑洞
+    挂起永远不触发——只靠 onerror 补救会在部分网络下图挂死。
+    """
+    html_src = (APP_JS.parent / "core" / "html.js").read_text()
+    for host in ("pbs.twimg.com", "video.twimg.com", "abs.twimg.com", "static-assets-1.truthsocial.com"):
+        assert f'"{host}"' in html_src
+    assert "IMG_PROXY_ALWAYS_HOSTS" in html_src
+
+    src = APP_JS.read_text()
+    assert "imgSrcFor" in src.splitlines()[0]
+    assert 'src="${escapeHtml(imgSrcFor(img))}"' in src
+
+    html_path = APP_JS.parent / "core" / "html.js"
+    js = f"""
+const assert = require("node:assert");
+const {{ pathToFileURL }} = require("node:url");
+import(pathToFileURL({str(html_path)!r})).then(async (m) => {{
+  const proxied = m.imgSrcFor("https://pbs.twimg.com/media/abc.jpg?format=jpg");
+  assert.ok(proxied.startsWith("/api/img-proxy?url="), proxied);
+  assert.ok(decodeURIComponent(proxied).includes("https://pbs.twimg.com/media/abc.jpg"), proxied);
+  assert.equal(m.imgSrcFor("https://xqimg.imedao.com/a.png"), "https://xqimg.imedao.com/a.png");
+  assert.equal(m.imgSrcFor("not a url"), "not a url");
+}}).catch((e) => {{ console.error(e); process.exit(1); }});
+"""
+    subprocess.run(["node", "-e", js], check=True)

@@ -211,6 +211,8 @@ def _detect_platform_from_link(text: str) -> str | None:
         return "ima"
     if re.search(r"(?:wx\.)?zsxq\.com", text):
         return "zsxq"
+    if re.search(r"(?:^|[/:.])truthsocial\.com", text):
+        return "truth"
     return None
 
 
@@ -504,6 +506,7 @@ class KolUpdate(BaseModel):
     original_only: bool | None = None
     silent: bool | None = None
     block_keywords: list[str] | None = None
+    recommend_weight: int | None = None
 
 
 class KolBatchAction(BaseModel):
@@ -939,6 +942,7 @@ IMAGE_PROXY_HOSTS = frozenset({
     "pbs.twimg.com", "video.twimg.com", "abs.twimg.com",
     "xqimg.imedao.com", "xueqiuimg.com",
     "wx1.sinaimg.cn", "wx2.sinaimg.cn", "wx3.sinaimg.cn", "wx4.sinaimg.cn",
+    "static-assets-1.truthsocial.com",
 })
 
 
@@ -5926,6 +5930,9 @@ def create_api_router(
             category_id=body.category_id if "category_id" in body.model_fields_set else _UNSET,
             priority=body.priority if "priority" in body.model_fields_set else _UNSET,
             secondary=body.secondary if "secondary" in body.model_fields_set else _UNSET,
+            recommend_weight=(
+                body.recommend_weight if "recommend_weight" in body.model_fields_set else _UNSET
+            ),
         )
         if "is_private" in body.model_fields_set and body.is_private is not None:
             db.update_kol(kol_id, is_private=body.is_private)

@@ -135,6 +135,9 @@ button::after { border: none; }
 .post-header { display: flex; align-items: center; }
 .post-name { font-size: 28rpx; font-weight: 600; color: var(--text-strong); }
 .post-time { font-size: 22rpx; color: var(--text-muted); margin-top: 4rpx; }
+.post-tr { display: flex; align-items: center; gap: 10rpx; margin-top: 16rpx; font-size: 24rpx; color: var(--text-muted); }
+.post-tr-grok { width: 30rpx; height: 29rpx; flex-shrink: 0; }
+.post-tr-toggle { color: var(--accent); margin-left: 6rpx; }
 .post-title { font-size: 30rpx; font-weight: 700; margin-top: 20rpx; }
 .post-content { font-size: 28rpx; color: var(--text); margin-top: 12rpx; line-height: 1.7; word-break: break-all; }
 .post-meta { display: flex; align-items: center; flex-wrap: wrap; margin-top: 16rpx; font-size: 24rpx; color: var(--text-muted); }

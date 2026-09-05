@@ -31,14 +31,15 @@ const { openLightbox, closeLightbox, lightboxStep, _lbZoomStep, _lbZoomReset } =
   trapFocus,
 });
 
-const PLATFORM_LABELS = { xueqiu: "雪球", combination: "雪球组合", weibo: "微博", twitter: "X", ima: "ima", zsxq: "知识星球", mx: "MX平台", system: "系统" };
-const PLATFORM_SHORT_LABELS = { xueqiu: "雪球", combination: "组合", weibo: "微博", twitter: "X", ima: "ima", zsxq: "星球", mx: "MX", system: "系统" };
+const PLATFORM_LABELS = { xueqiu: "雪球", combination: "雪球组合", weibo: "微博", twitter: "X", ima: "ima", zsxq: "知识星球", mx: "MX平台", system: "系统", truth: "Truth Social" };
+const PLATFORM_SHORT_LABELS = { xueqiu: "雪球", combination: "组合", weibo: "微博", twitter: "X", ima: "ima", zsxq: "星球", mx: "MX", system: "系统", truth: "Truth" };
 function platformShortLabel(p) {
   return p ? (PLATFORM_SHORT_LABELS[p] || PLATFORM_LABELS[p]) : "全部";
 }
 const PLATFORM_ICONS = {
   "": `<svg class="pt-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg>`,
   xueqiu: `<img class="pt-icon" src="/xueqiu-mark.png" width="16" height="16" alt="" draggable="false" aria-hidden="true">`,
+  truth: `<img class="pt-icon" src="/truth-mark.png" width="16" height="16" alt="" draggable="false" aria-hidden="true">`,
   combination: `<svg class="pt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>`,
   weibo: `<svg class="pt-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10.098 20.323c-3.977.391-7.414-1.406-7.672-4.02-.259-2.609 2.759-5.047 6.74-5.441 3.979-.394 7.413 1.404 7.671 4.018.259 2.6-2.759 5.049-6.737 5.439l-.002.004zM9.05 17.219c-.384.616-1.208.884-1.829.602-.612-.279-.793-.991-.406-1.593.379-.595 1.176-.861 1.793-.601.622.263.82.972.442 1.592zm1.27-1.627c-.141.237-.449.353-.689.253-.236-.09-.313-.361-.177-.586.138-.227.436-.346.672-.24.239.09.315.36.18.601l.014-.028zm.176-2.719c-1.893-.493-4.033.45-4.857 2.118-.836 1.704-.026 3.591 1.886 4.21 1.983.64 4.318-.341 5.132-2.179.8-1.793-.201-3.642-2.161-4.149zm7.563-1.224c-.346-.105-.57-.18-.405-.615.375-.977.42-1.804 0-2.404-.781-1.112-2.915-1.053-5.364-.03 0 0-.766.331-.571-.271.376-1.217.315-2.224-.27-2.809-1.338-1.337-4.869.045-7.888 3.08C1.309 10.87 0 13.273 0 15.348c0 3.981 5.099 6.395 10.086 6.395 6.536 0 10.888-3.801 10.888-6.82 0-1.822-1.547-2.854-2.915-3.284v.01zm1.908-5.092c-.766-.856-1.908-1.187-2.96-.962-.436.09-.706.511-.616.932.09.42.511.691.932.602.511-.105 1.067.044 1.442.465.376.421.466.977.316 1.473-.136.406.089.856.51.992.405.119.857-.105.992-.512.33-1.021.12-2.178-.646-3.035l.03.045zm2.418-2.195c-1.576-1.757-3.905-2.419-6.054-1.968-.496.104-.812.587-.706 1.081.104.496.586.813 1.082.707 1.532-.331 3.185.15 4.296 1.383 1.112 1.246 1.429 2.943.947 4.416-.165.48.106 1.007.586 1.157.479.165.991-.104 1.157-.586.675-2.088.241-4.478-1.338-6.235l.03.045z"/></svg>`,
   twitter: `<svg class="pt-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M14.234 10.162 22.977 0h-2.072l-7.591 8.824L7.251 0H.258l9.168 13.343L.258 24H2.33l8.016-9.318L16.749 24h6.993zm-2.837 3.299-.929-1.329L3.076 1.56h3.182l5.965 8.532.929 1.329 7.754 11.09h-3.182z"/></svg>`,
@@ -53,9 +54,10 @@ const CHANNEL_ICONS = {
   bark: `<svg class="ch-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>`,
   webpush: `<svg class="ch-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm0 2v8h16V5H4zm4 13h8v2H8v-2z"/></svg>`,
 };
+const GROK_TRANSLATE_ICON = `<svg class="p-tr-grok" viewBox="0 0 33 32" fill="currentColor" aria-hidden="true"><path d="M12.745 20.54l10.97-8.19c.539-.4 1.307-.244 1.564.38 1.349 3.288.746 7.241-1.938 9.955-2.683 2.714-6.417 3.31-9.83 1.954l-3.728 1.745c5.347 3.697 11.84 2.782 15.898-1.324 3.219-3.255 4.216-7.692 3.284-11.693l.008.009c-1.351-5.878.332-8.227 3.782-13.031L33 0l-4.54 4.59v-.014L12.743 20.544m-2.263 1.987c-3.837-3.707-3.175-9.446.1-12.755 2.42-2.449 6.388-3.448 9.852-1.979l3.72-1.737c-.67-.49-1.53-1.017-2.515-1.387-4.455-1.854-9.789-.931-13.41 2.728-3.483 3.523-4.579 8.94-2.697 13.561 1.405 3.454-.899 5.898-3.22 8.364C1.49 30.2.666 31.074 0 32l10.478-9.466"/></svg>`;
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.139";
+const APP_VERSION = "1.12.140";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -63,7 +65,7 @@ const REPORT_WATCH_BLOCKED_TAGS = new Set([
 ]);
 const TL_SOURCE_KEY = "timelineSource";
 const KB_LAST_GROUP_KEY = "kb-last-group";
-const PLATFORM_TABS = ["", "system", "mx", "xueqiu", "combination", "weibo", "twitter", "zsxq"];
+const PLATFORM_TABS = ["", "system", "mx", "xueqiu", "combination", "weibo", "twitter", "zsxq", "truth"];
 const STATS_TABS = ["config", "cookies", "mx", "imgbed", "plaza", "news", "proxies"];
 const STALE_KOL_LIMIT = 10;
 const STALE_KOL_HOURS = 48;
@@ -536,6 +538,7 @@ function clearSessionCaches() {
   _tlOffset = 0;
   _tlHasMore = true;
   _tlExpanded.clear();
+  _tlShowSrc.clear();
   _tlLatestId = 0;
   _tlLoadedFilter = null;
   _tlSavedScrollY = 0;
@@ -633,9 +636,12 @@ function avatarImgError(img) {
   img.replaceWith(ph);
 }
 
-function avatarHtml(name, url) {
-  if (url && !_deadImgUrls.has(url)) return `<img class="kol-avatar" src="${escapeHtml(url)}" alt="" loading="lazy" data-av-name="${escapeHtml(name)}" onerror="avatarImgError(this)">`;
-  return `<div class="kol-avatar">${escapeHtml(avatarText(name))}</div>`;
+// Truth Social 官方粉勾：压在头像右下角（站外唯一带认证标的平台）
+const TRUTH_CHECK_SVG = `<svg class="vs-check" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="12" fill="#f0426b"/><path d="m6.6 12.6 3.4 3.4 7.4-8" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+function avatarHtml(name, url, platform) {
+  const inner = url && !_deadImgUrls.has(url) ? `<img class="kol-avatar" src="${escapeHtml(url)}" alt="" loading="lazy" data-av-name="${escapeHtml(name)}" onerror="avatarImgError(this)">` : `<div class="kol-avatar">${escapeHtml(avatarText(name))}</div>`;
+  if (platform !== "truth") return inner;
+  return `<span class="avatar-verified">${inner}${TRUTH_CHECK_SVG}</span>`;
 }
 
 // ---------- 壳 ----------
@@ -1836,6 +1842,7 @@ let _tlOffset = 0;
 let _tlHasMore = true;
 let _tlLoadingMore = false;
 const _tlExpanded = new Set();
+const _tlShowSrc = new Set();
 let _tlTags = null;
 let _tlDynamicTags = [];
 let _tlLatestId = 0;        // 当前已加载的最新帖 id，用于后台检测新帖
@@ -1959,6 +1966,12 @@ function tlPaintViewToggles() {
   if (fav) {
     fav.classList.toggle("fav-on", state.timelineFavorite);
     fav.setAttribute("aria-pressed", String(state.timelineFavorite));
+  }
+  // 移动端角标条上的特别关注章与面板星标同一状态
+  const barStar = $("#tl-star-toggle");
+  if (barStar) {
+    barStar.classList.toggle("selected", state.timelineFavorite);
+    barStar.setAttribute("aria-pressed", String(state.timelineFavorite));
   }
   const sec = $("#timeline-secondary-toggle");
   if (sec) {
@@ -2189,6 +2202,7 @@ function tlSyncSearchBox() {
 
 function tlFilterActionsHtml() {
   return `<div class="tl-actions">
+          <button id="tl-star-toggle" class="${state.timelineFavorite ? "selected" : ""}" aria-label="只看特别关注" aria-pressed="${state.timelineFavorite}" onclick="toggleTimelineFav()">${STAR_SVG}</button>
           <button id="tl-filter-toggle" class="fav-toggle ${tlPanelFilterOn() ? "has-filter" : ""}" aria-label="筛选" aria-expanded="false" aria-controls="tl-filter-panel" onclick="tlFilterPanel()">${FILTER_ICON}筛选</button>
         </div>`;
 }
@@ -2640,6 +2654,8 @@ function tlPickPlatform(p) {
   // 平台切换后原大V可能不属于新平台，会筛出空列表，直接清除
   state.timelineKolId = 0;
   tlClearKolNewCounts();
+  // 平台章与特别关注章互斥：切平台即退出「只看特别关注」视图
+  if (state.timelineFavorite) state.timelineFavorite = false;
   if (leftLive) {
     stopTimelinePoll();
     if ($("#tl-feed-panel")) syncTimelineSourceView();
@@ -3364,9 +3380,7 @@ function toggleTimelineSecondary() {
   loadTimeline(true, routeRenderSeq, { revert });
 }
 
-function tlTogglePost(id) {
-  if (_tlExpanded.has(id)) _tlExpanded.delete(id);
-  else _tlExpanded.add(id);
+function tlReplacePostCard(id) {
   const post = _tlPosts.find((p) => p.id === id) || _kolPagePosts.find((p) => p.id === id);
   const card = document.querySelector(`.post-item[data-post-id="${id}"]`);
   if (post && card) {
@@ -3381,6 +3395,18 @@ function tlTogglePost(id) {
     }
   }
   renderTimelineFeed();
+}
+
+function tlTogglePost(id) {
+  if (_tlExpanded.has(id)) _tlExpanded.delete(id);
+  else _tlExpanded.add(id);
+  tlReplacePostCard(id);
+}
+
+function tlToggleOrigin(id) {
+  if (_tlShowSrc.has(id)) _tlShowSrc.delete(id);
+  else _tlShowSrc.add(id);
+  tlReplacePostCard(id);
 }
 
 // published_at 支持 "YYYY-MM-DD HH:MM(:SS)"（雪球）与 RFC2822（微博/X 存 GMT/+0000），
@@ -3523,19 +3549,25 @@ function postCard(post) {
   const images = (Array.isArray(post.images) ? post.images : []).filter((u) => u && !_deadImgUrls.has(u));
   const comboHtml = post.platform === "combination" ? combinationDetailHtml(post) : "";
   const isCombination = !!comboHtml;
-  const body = post.content || "（无正文）";
+  const srcC = (post.content_src || "").trim();
+  const srcT = (post.title_src || "").trim();
+  const translated = !!(srcC && srcC !== (post.content || "").trim());
+  const showSrc = translated && _tlShowSrc.has(post.id);
+  const title = showSrc ? srcT : (post.title || "");
+  const body = (showSrc ? srcC : (post.content || "")) || "（无正文）";
   const expanded = _tlExpanded.has(post.id);
   const shown = expanded ? body : body.slice(0, 200);
   // X 帖常 title==content（如纯链接帖），标题和正文都渲染会视觉重复，跳过标题；
   // 长文帖 title 常为 content 开头一段（截断），同样跳过避免重复展示
-  const titleDup = !!post.title && (
-    post.title.trim() === (post.content || "").trim()
-    || (post.content || "").trimStart().startsWith(post.title.trim())
+  const titleDup = !!title && (
+    title.trim() === body.trim()
+    || body.trimStart().startsWith(title.trim())
   );
+  const trBar = translated ? `<div class="p-tr">${GROK_TRANSLATE_ICON}<span class="p-tr-label">翻译自英语</span><button type="button" class="p-tr-toggle" onclick="tlToggleOrigin(${post.id})">${showSrc ? "显示译文" : "显示原文"}</button></div>` : "";
   return `
     <div class="post-item" data-post-id="${post.id}">
       <div class="p-header">
-        ${avatarHtml(post.kol_name, post.avatar_url)}
+        ${avatarHtml(post.kol_name, post.avatar_url, post.platform)}
         <div class="p-name-line">
           <a class="p-name" href="/kol/${post.kol_id}" title="${escapeHtml(post.kol_name)}">${escapeHtml(post.kol_name)}</a>
           <span class="p-platform" data-platform="${escapeHtml(post.platform)}" title="${escapeHtml(PLATFORM_LABELS[post.platform] || post.platform)}">
@@ -3544,7 +3576,7 @@ function postCard(post) {
           <span class="p-time" title="${escapeHtml(post.published_at)}">${fmtPublished(post.published_at)}</span>
         </div>
       </div>
-      ${isCombination ? `<div class="combo-post">${comboHtml}</div>` : `${!titleDup && post.title ? `<div class="p-title">${escapeHtml(post.title)}</div>` : ""}
+      ${isCombination ? `<div class="combo-post">${comboHtml}</div>` : `${trBar}${!titleDup && title ? `<div class="p-title">${escapeHtml(title)}</div>` : ""}
       <div class="p-content md-body">${mdToHtml(shown)}${body.length > 200
         ? `<button class="post-expand-btn" onclick="tlTogglePost(${post.id})" aria-expanded="${expanded}">${expanded ? "收起 ▲" : "展开全文 ▼"}</button>`
         : ""}</div>`}
@@ -3871,6 +3903,7 @@ function detectAskPlatform(link) {
   if (/weibo\.(com|cn)/.test(link)) return "weibo";
   if (/(^|[\/:.])x\.com|twitter\.com/.test(link)) return "twitter";
   if (/(?:wx\.)?zsxq\.com/.test(link)) return "zsxq";
+  if (/(^|[\/:.])truthsocial\.com/.test(link)) return "truth";
   return "";
 }
 
@@ -7776,6 +7809,7 @@ const INLINE_HANDLERS = {
   tlPickTag,
   tlRemoveFilter,
   tlResetFilters,
+  tlToggleOrigin,
   tlTogglePost,
   toggleAdminNewsFeed,
   toggleAdminNewsSource,

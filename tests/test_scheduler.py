@@ -2826,6 +2826,44 @@ def test_twitter_content_translated_once_for_new_posts(monkeypatch):
     assert db.list_posts(limit=10)[0]["title"] == "Stay hungry"
 
 
+def test_truth_content_translated_without_tweet_id(monkeypatch):
+    db = make_db()
+    kid = add_kol_subscribed(db, "truth", "Trump", "realDonaldTrump")
+    db.set_setting("config_translate_twitter_content", "1")
+    post = Post(
+        platform="truth",
+        kol_id=kid,
+        kol_name="Trump",
+        external_id="117213723499789673",
+        title="Hello world",
+        content="Hello world",
+        url="https://truthsocial.com/@realDonaldTrump/posts/117213723499789673",
+        published_at="",
+    )
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=my-auth-token; ct0=ct0-token")
+    calls = []
+
+    def fake_translate(
+        text,
+        target="zh-CN",
+        client=None,
+        xai_key=None,
+        model=None,
+        tweet_id=None,
+        twitter_cookie=None,
+    ):
+        calls.append({"text": text, "tweet_id": tweet_id, "cookie": twitter_cookie})
+        return "你好世界" if "Hello" in text else text
+
+    monkeypatch.setattr("app.scheduler.translate_text", fake_translate)
+    poll_once(db, {"truth": FakeFetcher([post])}, [FakeNotifier()], interval_seconds=0)
+    row = db.list_posts(limit=5)[0]
+    assert row["content"] == "你好世界"
+    assert row["content_src"] == "Hello world"
+    assert calls and all(c["tweet_id"] in (None, "") for c in calls)
+    assert any(c["cookie"] for c in calls)
+
+
 def test_notify_subscribers_twitter_pref_uses_original(monkeypatch):
     db = make_db()
     kid = db.add_kol("twitter", "Semi", "semi")
@@ -2986,7 +3024,10 @@ def test_existing_posts_not_retagged(monkeypatch):
 
 def test_translate_text_mymemory():
     def handler(request):
-        assert "mymemory.translated.net" in str(request.url)
+        url = str(request.url)
+        if "edge.microsoft.com" in url:
+            return httpx.Response(500, text="no")
+        assert "mymemory.translated.net" in url
         return httpx.Response(
             200,
             json={"responseData": {"translatedText": "你好世界"}},
@@ -3038,13 +3079,16 @@ def test_translate_text_mymemory_429_keeps_original_and_cools_down():
 
     def handler(request):
         calls.append(str(request.url))
+        if "edge.microsoft.com" in str(request.url):
+            return httpx.Response(500, text="no")
         return httpx.Response(429, text="Too Many Requests")
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     assert translate_text("Hello world from Washington", client=client) == "Hello world from Washington"
-    assert len(calls) == 1
+    assert len(calls) == 2  # Edge 失败后再打 MyMemory
     assert translate_text("Another English sentence here", client=client) == "Another English sentence here"
-    assert len(calls) == 1  # 冷却期内不再打 MyMemory
+    assert len(calls) == 3  # 冷却期内不再打 MyMemory，仍会试 Edge
+    assert not any("mymemory" in u for u in calls[2:])
     app_scheduler._mymemory_skip_until = 0.0
 
 
@@ -3098,13 +3142,61 @@ def test_translate_text_uses_x_text_body_without_tweet_id():
 
 def test_translate_text_skips_mymemory_when_long_text_and_x_fails():
     def handler(request):
-        if "grok/translation.json" in str(request.url):
+        url = str(request.url)
+        if "grok/translation.json" in url:
             return httpx.Response(400, text="no")
+        if "edge.microsoft.com" in url:
+            return httpx.Response(500, text="no")
         raise AssertionError("MyMemory should not be called")
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     src = "word " * 200  # >500 chars, English
     assert translate_text(src, client=client, twitter_cookie="auth_token=a; ct0=b") == src.strip()
+
+
+def test_translate_text_falls_back_to_edge_when_x_fails():
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        if "grok/translation.json" in str(request.url):
+            return httpx.Response(500, text="no")
+        if "edge.microsoft.com" in str(request.url):
+            return httpx.Response(
+                200,
+                json=[{"translations": [{"text": "宁德时代固态时间表", "to": "zh-Hans"}]}],
+            )
+        raise AssertionError("MyMemory should not be called")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    result = translate_text(
+        "CATL solid-state timeline",
+        client=client,
+        twitter_cookie="auth_token=a; ct0=b",
+    )
+    assert result == "宁德时代固态时间表"
+    assert any("edge.microsoft.com" in u for u in calls)
+    assert not any("mymemory" in u for u in calls)
+
+
+def test_translate_text_edge_covers_long_text_when_x_fails():
+    def handler(request):
+        url = str(request.url)
+        if "grok/translation.json" in url:
+            return httpx.Response(500, text="no")
+        if "edge.microsoft.com" in url:
+            return httpx.Response(
+                200,
+                json=[{"translations": [{"text": "这是一段足够长的长帖译文内容", "to": "zh-Hans"}]}],
+            )
+        raise AssertionError("MyMemory should not be called")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    src = "word " * 200
+    assert (
+        translate_text(src, client=client, twitter_cookie="auth_token=a; ct0=b")
+        == "这是一段足够长的长帖译文内容"
+    )
 
 
 def test_translate_text_rejects_collapsed_ellipsis():
@@ -3131,20 +3223,23 @@ def test_translate_text_x_official_missing_cookie_falls_back():
 
     def handler(request):
         calls.append(str(request.url))
-        return httpx.Response(
-            200,
-            json={"responseData": {"translatedText": "回退译文"}},
-        )
+        if "edge.microsoft.com" in str(request.url):
+            return httpx.Response(
+                200,
+                json=[{"translations": [{"text": "回退译文", "to": "zh-Hans"}]}],
+            )
+        raise AssertionError("MyMemory should not be called when Edge works")
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     result = translate_text(
         "hello",
         client=client,
         tweet_id="123",
-        twitter_cookie="guest_id=abc",  # 没有 auth_token/ct0，走降级
+        twitter_cookie="guest_id=abc",  # 没有 auth_token/ct0，走 Edge
     )
     assert result == "回退译文"
     assert len(calls) == 1
+    assert "edge.microsoft.com" in calls[0]
 
 
 def test_twitter_translation_uses_x_official_once_with_cookie(monkeypatch):
