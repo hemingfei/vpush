@@ -3854,6 +3854,13 @@ class DB:
         """标记该大V已建立首次抓取基线（首次成功 fetch 后调用，含空列表）。"""
         self._execute("UPDATE kols SET baseline_ready = 1 WHERE id = ?", (kol_id,))
 
+    def max_published_at(self, kol_id: int) -> str:
+        rows = self._rows(
+            "SELECT MAX(published_at) AS m FROM posts WHERE kol_id = ? AND published_at != ''",
+            (kol_id,),
+        )
+        return str(rows[0]["m"] or "") if rows else ""
+
     def get_post(self, post_id: int) -> dict | None:
         rows = self._rows(
             "SELECT p.*, k.name AS kol_name, k.platform AS kol_platform "

@@ -261,6 +261,13 @@ def tail_is_unseen(db, posts: list[Post]) -> bool:
     return not db.existing_post_keys([(tail.platform, tail.external_id)])
 
 
+def page_has_known(db, posts: list[Post]) -> bool:
+    """这一页是否已有入库帖。有则说明不是整页缺口，更早的未见帖是从未存过的历史。"""
+    if db is None or not posts:
+        return False
+    return bool(db.existing_post_keys([(p.platform, p.external_id) for p in posts]))
+
+
 def warn_timeline_gap(platform: str) -> None:
     """追平页数用尽仍未撞见旧帖：WARNING 进 error_logs，把漏帖从静默变可感知。"""
     now = time.monotonic()
@@ -283,7 +290,7 @@ def catchup_pages(db, fetch_page, first: list[Post]) -> list[Post]:
     返回按 external_id 去重合并的完整列表；仅统计已推送类型的帖子，
     纯转发等被平台过滤的尾巴检测不到（设计取舍）。
     """
-    if not first or db is None or not tail_is_unseen(db, first):
+    if not first or db is None or page_has_known(db, first):
         return first
     platform = first[0].platform
     merged = {p.external_id for p in first}
@@ -302,7 +309,7 @@ def catchup_pages(db, fetch_page, first: list[Post]) -> list[Post]:
             if p.external_id not in merged:
                 merged.add(p.external_id)
                 all_posts.append(p)
-        if (batch[-1].platform, batch[-1].external_id) in seen:
+        if seen:
             caught_up = True
             break
     if not caught_up:

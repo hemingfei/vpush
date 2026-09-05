@@ -12,17 +12,19 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .backup import run_scheduled
 from .channels import channel_bound, channel_enabled
 from .db import ALLOWED_PLATFORMS, DB
 from .logging_setup import redact_secrets
 from .fetchers.base import (
+    CN_TZ,
     PLATFORM_LABELS,
     Fetcher,
     Post,
     is_collapsed_translation,
+    parse_published_at,
     twitter_translate_enabled,
     with_twitter_display,
 )
@@ -48,6 +50,8 @@ SOURCE_FAILS_KEY = "source_fails_{platform}"
 XUEQIU_PROBE_ALERT_KEY = "xueqiu_probe_alert_at"
 COOKIE_KEEPALIVE_ALERT_KEY = "cookie_keepalive_alert_at"
 WEIBO_COOKIE_TIME_KEY = "weibo_cookie_updated_at"
+# 空水位时只推这么近的帖，避免首次拉到几个月时间线当新帖刷屏
+PUSH_STALE_HOURS = 36
 WEIBO_QR_RENEWAL_KEY = "weibo_qr_renewal_at"
 # 平台级健康阈值告警：与 maybe_alert_source_failure（单 KOL 连续失败）互补，
 # 管「平台整体变差但每轮恰有 1 个大V成功」的温水煮蛙场景。每 6 小时最多一条。
@@ -885,6 +889,18 @@ def notify_subscribers(
             client.close()
 
 
+def _is_stale_backfill(post: Post, watermark: str) -> bool:
+    dt = parse_published_at(post.published_at or "")
+    if dt is None:
+        return False
+    if watermark:
+        wt = parse_published_at(watermark)
+        if wt is not None:
+            return dt < wt
+    now = datetime.now(dt.tzinfo or CN_TZ)
+    return dt < now - timedelta(hours=PUSH_STALE_HOURS)
+
+
 def poll_once(
     db: DB,
     fetchers: dict[str, Fetcher],
@@ -1215,6 +1231,7 @@ def _fetch_kol_once(
     # 否则订阅新大V时，最近 N 条历史帖会一次性连推（连珠炮刷屏）。
     # 首次成功 fetch（含空列表）即打标：空账号/偶发空窗后，下一轮新帖必须正常推送。
     first_fetch = not kol.get("baseline_ready")
+    watermark = db.max_published_at(kol["id"])
     post_ids = db.insert_posts_batch(posts)
     try:
         from . import imgbed
@@ -1238,6 +1255,12 @@ def _fetch_kol_once(
         if first_fetch:
             logger.info("基线入库 platform=%s kol=%s id=%s", post.platform, post.kol_name, post.external_id)
             continue  # 首轮仅入库建基线，历史帖不推送；后续轮次新帖正常推送
+        if _is_stale_backfill(post, watermark):
+            logger.info(
+                "历史回灌入库不推送 platform=%s kol=%s id=%s at=%s wm=%s",
+                post.platform, post.kol_name, post.external_id, post.published_at, watermark,
+            )
+            continue
         logger.info("新帖 platform=%s kol=%s id=%s", post.platform, post.kol_name, post.external_id)
         if kol.get("silent"):
             # 静默源：只入库建基线/记录，不推送到任何渠道（高频星球防轰炸用）

@@ -247,6 +247,61 @@ def test_first_fetch_establishes_baseline_without_push(monkeypatch):
     assert len(db.list_posts()) == 3
 
 
+def _tg_ncfg(monkeypatch, sent):
+    class FakeTG:
+        def __init__(self, config, chat_id=None, client=None, **kwargs):
+            self.client = SimpleNamespace(close=lambda: None)
+
+        def notify(self, post):
+            sent.append(post.external_id)
+
+    monkeypatch.setattr("app.notifiers.telegram.TelegramNotifier", FakeTG)
+    return SimpleNamespace(
+        telegram=SimpleNamespace(bot_token="t", chat_id=""),
+        feishu=SimpleNamespace(),
+        wecom=SimpleNamespace(),
+    )
+
+
+def test_catchup_history_older_than_watermark_is_not_pushed(monkeypatch):
+    """已有水位的大V：时间线里夹着的更早历史帖只入库不推。"""
+    db = make_db()
+    kid = db.add_kol("xueqiu", "A", "1")
+    db.insert_post("xueqiu", kid, "kept", "t", "c", "u", "2026-08-29 13:03")
+    db.mark_kol_baseline(kid)
+    uid = db.add_user("u", "h", telegram_chat_id="111")
+    db.add_subscription(uid, kid)
+    old = make_post(kid)
+    old.external_id = "old-may"
+    old.published_at = "2026-05-24 17:30"
+    new = make_post(kid)
+    new.external_id = "new-today"
+    new.published_at = "2026-09-04 10:00"
+    sent = []
+    poll_once(db, {"xueqiu": FakeFetcher([old, new])}, [], notifiers_config=_tg_ncfg(monkeypatch, sent))
+    assert sent == ["new-today"]
+    assert {p["external_id"] for p in db.list_posts()} >= {"kept", "old-may", "new-today"}
+
+
+def test_empty_baseline_then_months_of_history_not_pushed(monkeypatch):
+    """空基线后第一次拉到几个月时间线：古帖不推，近 36h 内的才推。"""
+    db = make_db()
+    kid = db.add_kol("xueqiu", "A", "1")
+    db.mark_kol_baseline(kid)
+    uid = db.add_user("u", "h", telegram_chat_id="111")
+    db.add_subscription(uid, kid)
+    now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
+    old = make_post(kid)
+    old.external_id = "old-july"
+    old.published_at = (now - datetime.timedelta(days=50)).strftime("%Y-%m-%d %H:%M")
+    fresh = make_post(kid)
+    fresh.external_id = "fresh"
+    fresh.published_at = now.strftime("%Y-%m-%d %H:%M")
+    sent = []
+    poll_once(db, {"xueqiu": FakeFetcher([old, fresh])}, [], notifiers_config=_tg_ncfg(monkeypatch, sent))
+    assert sent == ["fresh"]
+
+
 def test_new_post_pushed_once(monkeypatch):
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
@@ -555,22 +610,26 @@ def test_posts_pushed_in_time_order(monkeypatch):
     uid = db.add_user("u", "h", telegram_chat_id="111")
     db.add_subscription(uid, kid)
     seed_baseline_post(db, kid)
-    # 抓取返回乱序（置顶/接口顺序），发布时间为三种不同格式
+    # 抓取返回乱序（置顶/接口顺序），三种时间格式；用近 1h 以免被历史回灌过滤
+    now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
+    t1 = now - datetime.timedelta(minutes=40)
+    t2 = now - datetime.timedelta(minutes=20)
+    t3 = now - datetime.timedelta(minutes=5)
     posts = [
         Post(
             platform="weibo", kol_id=kid, kol_name="A",
             external_id="p3", title="t3", content="c", url="u",
-            published_at="2026-08-04 21:00:00",
+            published_at=t3.strftime("%Y-%m-%d %H:%M:%S"),
         ),
         Post(
             platform="weibo", kol_id=kid, kol_name="A",
             external_id="p1", title="t1", content="c", url="u",
-            published_at="Tue Aug 04 20:00:00 +0800 2026",
+            published_at=t1.strftime("%Y-%m-%d %H:%M"),
         ),
         Post(
             platform="weibo", kol_id=kid, kol_name="A",
             external_id="p2", title="t2", content="c", url="u",
-            published_at="Tue, 04 Aug 2026 20:30:00 +0800",
+            published_at=t2.strftime("%Y-%m-%dT%H:%M:%S"),
         ),
     ]
     order = []
