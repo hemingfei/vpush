@@ -4146,6 +4146,12 @@ class DB:
         if since_id:
             conds.append("p.id > ?")
             params.append(since_id)
+            # 新帖检测只认近 48h 内发布的帖：回灌入库的旧帖 id 虽大，不该进「新动态」
+            # 胶囊（与推送侧 STALE_HOURS 语义一致）。published_at 是北京时间文本，
+            # datetime('now') 是 UTC，先 +8h 对齐再截到分钟
+            conds.append(
+                "p.published_at >= substr(datetime('now', '+8 hours', '-48 hours'), 1, 16)"
+            )
         rows = _sanitize_post_detail(_normalize_post_tags(_normalize_post_images(self._rows(
             "SELECT p.*, k.name AS kol_name, k.category_id AS category_id, "
             "k.avatar_url AS avatar_url, c.name AS category_name, "
@@ -4166,9 +4172,14 @@ class DB:
         return rows
 
     def list_daily_posts(
-        self, kol_ids: list[int], since_ts: int, limit: int = 15, user_id: int | None = None
+        self, kol_ids: list[int], since: str, limit: int = 15, user_id: int | None = None
     ) -> list[dict]:
-        """用户订阅大V在 since_ts（本地零点）之后的帖子，用于每日精选。"""
+        """用户订阅大V在 since（北京时间 "YYYY-MM-DD HH:MM"）之后发布的帖，用于每日精选。
+
+        按发布时间而非入库时间筛选：回灌入库的旧帖（fetched_at 是当天）不混进当日
+        精选。published_at 与 since 同为北京钟面文本，直接字典序比较——不要经
+        strftime（SQLite 会把北京时间当 UTC 解析，窗口漂 8 小时）。
+        """
         if not kol_ids:
             return []
         placeholders = ", ".join("?" * len(kol_ids))
@@ -4178,10 +4189,10 @@ class DB:
             "JOIN kols k ON k.id = p.kol_id "
             "LEFT JOIN categories c ON c.id = k.category_id "
             "LEFT JOIN subscriptions s ON s.kol_id = p.kol_id AND s.user_id = ? "
-            f"WHERE p.kol_id IN ({placeholders}) AND strftime('%s', p.fetched_at) >= ? "
+            f"WHERE p.kol_id IN ({placeholders}) AND p.published_at >= ? "
             "AND COALESCE(k.silent, 0) = 0 "
-            "ORDER BY p.id DESC LIMIT ?",
-            (user_id, *kol_ids, since_ts, limit),
+            "ORDER BY p.published_at DESC, p.id DESC LIMIT ?",
+            (user_id, *kol_ids, since, limit),
         ), db=self)))
 
     def daily_report_users(self) -> list[dict]:

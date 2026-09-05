@@ -2625,7 +2625,13 @@ class Scheduler:
 
         failed = False
         report_date = datetime.now().strftime("%Y-%m-%d")
-        since = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+        # 精选窗口按北京时间零点起算（用户时区）；与 published_at 同为北京钟面文本，
+        # list_daily_posts 里直接字典序比较
+        since = (
+            datetime.now(CN_TZ)
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .strftime("%Y-%m-%d %H:%M")
+        )
 
         def _deliver(channel: str, user) -> None:
             """按渠道幂等投递每日精选：当日该渠道已成功则跳过（部分失败重试不重复发）。

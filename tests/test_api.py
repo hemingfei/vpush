@@ -3028,10 +3028,19 @@ def test_my_feed_filters_and_pagination():
     combined = client.get("/api/my/feed?favorite=1&platform=xueqiu&q=茅台", headers=headers).json()
     assert [p["external_id"] for p in combined] == ["p1"]
 
-    # since_id：只返回比指定 id 新的帖子（X 式新帖检测/计数）
+    # since_id：只返回比指定 id 新、且 48h 内发布的帖（X 式新帖检测/计数）；
+    # 回灌旧帖 id 虽大也不算新帖
     id_p3 = next(p["id"] for p in feed if p["external_id"] == "p3")
     new_feed = client.get(f"/api/my/feed?since_id={id_p3}", headers=headers).json()
-    assert [p["external_id"] for p in new_feed] == ["p4"]
+    assert new_feed == []
+    from datetime import datetime, timedelta
+
+    from app.fetchers.base import CN_TZ
+
+    fresh_at = (datetime.now(CN_TZ) - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M")
+    db.insert_post("twitter", kid3, "p5", "刚发的新帖", "新内容", "u5", fresh_at)
+    new_feed = client.get(f"/api/my/feed?since_id={id_p3}", headers=headers).json()
+    assert [p["external_id"] for p in new_feed] == ["p5"]
     # since_id 与筛选叠加
     new_xq = client.get(f"/api/my/feed?since_id={id_p3}&platform=xueqiu", headers=headers).json()
     assert new_xq == []
@@ -3096,8 +3105,8 @@ def test_my_feed_hides_zsxq_unless_filtered():
     uid = reg.json()["user"]["id"]
     db.add_subscription(uid, xq, type="post")
     db.add_subscription(uid, zq, type="post")
-    db.insert_post("xueqiu", xq, "xq1", "雪球帖", "正文", "u1", "")
-    db.insert_post("zsxq", zq, "zq1", "#调研纪要#", "附件", "u2", "")
+    db.insert_post("xueqiu", xq, "xq1", "雪球帖", "正文", "u1", "2026-01-01 09:00")
+    db.insert_post("zsxq", zq, "zq1", "#调研纪要#", "附件", "u2", "2026-01-01 09:00")
 
     feed = client.get("/api/my/feed", headers=headers).json()
     assert [p["external_id"] for p in feed] == ["xq1"]
@@ -3106,7 +3115,7 @@ def test_my_feed_hides_zsxq_unless_filtered():
     db.set_subscription_favorite(uid, zq, True)
     feed = client.get("/api/my/feed", headers=headers).json()
     assert [p["external_id"] for p in feed] == ["zq1", "xq1"]
-    daily = db.list_daily_posts([xq, zq], 0, 15)
+    daily = db.list_daily_posts([xq, zq], "2000-01-01 00:00", 15)
     assert [p["external_id"] for p in daily] == ["xq1"]
 
 

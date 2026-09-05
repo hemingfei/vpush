@@ -2497,10 +2497,23 @@ def test_transfer_subscriptions_preserves_favorite():
     assert db.subscribed_favorite_ids(target) == {kid}
 
 
+def _today_bj():
+    """每日精选窗口=北京零点起，测试帖的 published_at 须落在窗口内（恰取零点，含边界）。"""
+    from datetime import datetime
+
+    from app.fetchers.base import CN_TZ
+
+    return (
+        datetime.now(CN_TZ)
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .strftime("%Y-%m-%d %H:%M")
+    )
+
+
 def test_daily_report_sent_to_enabled_user(monkeypatch):
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", "")
+    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", _today_bj())
     uid = db.add_user("u", "h", telegram_chat_id="111")
     db.update_user(uid, daily_report=True)
     db.add_subscription(uid, kid)
@@ -2527,7 +2540,7 @@ def test_daily_report_sent_to_enabled_user(monkeypatch):
 def test_daily_report_sends_ai_summary(monkeypatch):
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", "")
+    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", _today_bj())
     uid = db.add_user("u", "h", telegram_chat_id="111")
     db.update_user(
         uid,
@@ -2572,7 +2585,7 @@ def test_daily_report_falls_back_to_raw_list_without_llm(monkeypatch):
     """未配置 LLM 或综述失败时，降级发送原始贴文列表，保底不空发。"""
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", "")
+    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", _today_bj())
     uid = db.add_user("u", "h", telegram_chat_id="111")
     db.update_user(uid, daily_report=True)
     db.add_subscription(uid, kid)
@@ -2602,7 +2615,7 @@ def test_daily_report_falls_back_to_raw_list_without_llm(monkeypatch):
 def test_daily_report_wecom_user(monkeypatch):
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", "")
+    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", _today_bj())
     uid = db.add_user("wc", "h")
     db.update_user(
         uid,
@@ -2672,7 +2685,7 @@ def test_daily_report_feishu_personal_only(monkeypatch):
 
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", "")
+    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", _today_bj())
     uid = db.add_user("lili", "h")
     key = Fernet.generate_key().decode()
     db.save_feishu_personal_bot(
@@ -2704,7 +2717,7 @@ def test_daily_report_feishu_personal_only(monkeypatch):
 def test_daily_report_bark_user(monkeypatch):
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", "")
+    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", _today_bj())
     uid = db.add_user("barker", "h")
     db.update_user(uid, bark_key="AaBbCcDdEeFf1234567890")
     db.update_user(uid, daily_report=True)
@@ -4035,7 +4048,7 @@ def test_daily_report_returns_false_on_failure(monkeypatch):
     db.update_user(uid, daily_report=1)
     db.add_subscription(uid, kid)
     post = make_post(kid)
-    db.insert_post("xueqiu", kid, post.external_id, post.title, post.content, post.url, post.published_at)
+    db.insert_post("xueqiu", kid, post.external_id, post.title, post.content, post.url, _today_bj())
 
     monkeypatch.setattr("app.notifiers.telegram.TelegramNotifier", _FailingRetryTG)
     ncfg = SimpleNamespace(
@@ -4067,7 +4080,7 @@ def test_daily_report_returns_true_on_success(monkeypatch):
     db.update_user(uid, daily_report=1)
     db.add_subscription(uid, kid)
     post = make_post(kid)
-    db.insert_post("xueqiu", kid, post.external_id, post.title, post.content, post.url, post.published_at)
+    db.insert_post("xueqiu", kid, post.external_id, post.title, post.content, post.url, _today_bj())
 
     monkeypatch.setattr("app.notifiers.telegram.TelegramNotifier", _RetryTG)
     ncfg = SimpleNamespace(
@@ -4602,7 +4615,7 @@ def test_daily_report_retries_only_failed_channel(monkeypatch):
     """Telegram 成功、企业微信失败：第二次调用只重试企业微信，Telegram 不重复发送。"""
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "p1", "t", "内容", "u", "")
+    db.insert_post("xueqiu", kid, "p1", "t", "内容", "u", _today_bj())
     uid = db.add_user("u", "h", telegram_chat_id="111")
     db.update_user(uid, daily_report=True, wecom_webhook="https://qyapi.weixin.qq.com/hook")
     db.add_subscription(uid, kid)
@@ -4630,7 +4643,7 @@ def test_daily_report_channel_idempotent_across_restart(monkeypatch):
     tmp = tempfile.mkdtemp()
     db = DB(Path(tmp) / "restart.db")
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "p1", "t", "内容", "u", "")
+    db.insert_post("xueqiu", kid, "p1", "t", "内容", "u", _today_bj())
     uid = db.add_user("u", "h", telegram_chat_id="111")
     db.update_user(uid, daily_report=True)
     db.add_subscription(uid, kid)
@@ -4837,7 +4850,7 @@ def test_daily_report_uses_admin_push_settings_llm(monkeypatch):
     """每日综述跟推送设置同一套：管理员自配优先于环境变量。"""
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", "")
+    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", _today_bj())
     uid = db.add_user("kale", "h", telegram_chat_id="111", is_admin=True)
     db.update_user(
         uid,
