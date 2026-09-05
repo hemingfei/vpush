@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import httpx
 
 from app.fetchers.base import Post
-from app.llm import summarize_posts
+from app.llm import _config_values, list_models, summarize_posts
 
 
 def make_post(content="正文内容", external_id="p1", title="标题", url="https://xueqiu.com/1/2") -> Post:
@@ -99,21 +99,117 @@ def test_custom_base_url_and_long_content_truncation():
     assert captured["content_len"] <= 12000
 
 
-def test_user_llm_allows_private_http_base():
+def test_config_values_rejects_user_private_keeps_system():
+    user = make_config(api_base="http://127.0.0.1:11434/v1")
+    user.user_supplied = True
+    assert _config_values(user) is None
+    system = make_config(api_base="http://127.0.0.1:11434/v1")
+    assert _config_values(system)[1] == "http://127.0.0.1:11434/v1"
+
+
+def test_user_llm_rejects_private_http_base():
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: (_ for _ in ()).throw(AssertionError("不应访问内网 LLM"))
+        )
+    )
+    config = make_config(api_base="http://127.0.0.1:8000/v1")
+    config.user_supplied = True
+    assert summarize_posts([make_post()], config, client=client) is None
+
+
+def test_system_llm_still_allows_private_http_base():
     seen = {}
 
     def handler(request):
         seen["url"] = str(request.url)
         return httpx.Response(
             200,
-            json={"choices": [{"message": {"content": "内网摘要"}}]},
+            json={"choices": [{"message": {"content": "系统摘要"}}]},
         )
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     config = make_config(api_base="http://127.0.0.1:8000/v1")
-    config.user_supplied = True
-    assert summarize_posts([make_post()], config, client=client) == "内网摘要"
+    assert summarize_posts([make_post()], config, client=client) == "系统摘要"
     assert seen["url"] == "http://127.0.0.1:8000/v1/chat/completions"
+
+
+def test_user_llm_pins_public_custom_port(monkeypatch):
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["host"] = request.headers["host"]
+        seen["auth"] = request.headers["authorization"]
+        seen["method"] = request.method
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "公网摘要"}}]},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    config = make_config(api_base="https://llm.example.com:8096/v1")
+    config.user_supplied = True
+    assert summarize_posts([make_post()], config, client=client) == "公网摘要"
+    assert seen["method"] == "POST"
+    assert seen["url"] == "https://93.184.216.34:8096/v1/chat/completions"
+    assert seen["host"] == "llm.example.com:8096"
+    assert seen["auth"] == "Bearer sk-test"
+
+
+def test_user_llm_does_not_follow_redirect_with_api_key(monkeypatch):
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+    seen = []
+
+    def handler(request):
+        seen.append((str(request.url), request.headers.get("authorization")))
+        return httpx.Response(302, headers={"location": "https://evil.example/steal"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    config = make_config(api_base="https://llm.example.com/v1")
+    config.user_supplied = True
+    assert summarize_posts([make_post()], config, client=client) is None
+    assert seen == [("https://93.184.216.34/v1/chat/completions", "Bearer sk-test")]
+
+
+def test_user_llm_drops_oversized_response_without_content_length(monkeypatch):
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+    huge = json.dumps({"choices": [{"message": {"content": "x" * (2 * 1024 * 1024)}}]}).encode()
+
+    def handler(request):
+        return httpx.Response(200, content=huge)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    config = make_config(api_base="https://llm.example.com/v1")
+    config.user_supplied = True
+    assert summarize_posts([make_post()], config, client=client) is None
+
+
+def test_user_llm_models_pins_get(monkeypatch):
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["host"] = request.headers["host"]
+        seen["method"] = request.method
+        return httpx.Response(200, json={"data": [{"id": "gpt-test"}]})
+
+    transport = httpx.MockTransport(handler)
+
+    class Factory(httpx.Client):
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = transport
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr("httpx.Client", Factory)
+    config = make_config(api_base="https://llm.example.com:8096/v1")
+    config.user_supplied = True
+    assert list_models(config) == ["gpt-test"]
+    assert seen["method"] == "GET"
+    assert seen["url"] == "https://93.184.216.34:8096/v1/models"
+    assert seen["host"] == "llm.example.com:8096"
 
 
 def test_user_llm_rejects_non_http_base_before_request():

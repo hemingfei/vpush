@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 # 摘要通常几秒到十几秒；标记解析走 thinking + JSON，16 条实测约 150s。
 DEFAULT_CHAT_TIMEOUT = 60
 MARK_RESOLVE_TIMEOUT = 180
+USER_LLM_MAX_BYTES = 2 * 1024 * 1024
 
 class _RetryableError(Exception):
     """瞬时错误（429/5xx/空响应），可重试一次。"""
@@ -69,6 +70,7 @@ def _chat(
     api_key, api_base, model = values
     import httpx
 
+    user_supplied = bool(getattr(llm_config, "user_supplied", False))
     owns_client = client is None
     client = client or httpx.Client(timeout=timeout)
     try:
@@ -84,11 +86,31 @@ def _chat(
                 }
                 if use_format:
                     payload["response_format"] = use_format
-                resp = client.post(
-                    f"{api_base}/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    json=payload,
-                )
+                if user_supplied:
+                    from .url_safety import safe_request_limited
+
+                    resp = safe_request_limited(
+                        client,
+                        "POST",
+                        f"{api_base}/chat/completions",
+                        max_bytes=USER_LLM_MAX_BYTES,
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        content=json.dumps(payload).encode(),
+                        timeout=timeout,
+                        follow_redirects=False,
+                    )
+                    if 300 <= resp.status_code < 400:
+                        last_err = _RetryableError("LLM 拒绝跟随重定向")
+                        break
+                else:
+                    resp = client.post(
+                        f"{api_base}/chat/completions",
+                        headers={"Authorization": f"Bearer {api_key}"},
+                        json=payload,
+                    )
                 if resp.status_code == 400 and use_format:
                     use_format = None
                     raise _RetryableError("LLM 不支持 response_format")
@@ -108,7 +130,7 @@ def _chat(
             except httpx.HTTPStatusError as exc:
                 last_err = exc
                 break
-            except (httpx.TransportError, _RetryableError) as exc:
+            except (httpx.TransportError, _RetryableError, ValueError) as exc:
                 last_err = exc
             if attempt + 1 < attempts:
                 time.sleep(2)
@@ -127,12 +149,29 @@ def list_models(llm_config) -> list[str] | None:
     api_key, api_base, _model = values
     import httpx
 
+    user_supplied = bool(getattr(llm_config, "user_supplied", False))
     try:
         with httpx.Client(timeout=20) as client:
-            resp = client.get(
-                f"{api_base}/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
+            if user_supplied:
+                from .url_safety import safe_request_limited
+
+                resp = safe_request_limited(
+                    client,
+                    "GET",
+                    f"{api_base}/models",
+                    max_bytes=USER_LLM_MAX_BYTES,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    timeout=20,
+                    follow_redirects=False,
+                )
+                if 300 <= resp.status_code < 400:
+                    logger.warning("LLM /models 拒绝跟随重定向")
+                    return None
+            else:
+                resp = client.get(
+                    f"{api_base}/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
         if resp.status_code >= 400:
             logger.warning("LLM /models HTTP %s", resp.status_code)
             return None

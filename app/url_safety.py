@@ -104,17 +104,15 @@ def is_safe_http_url(url: str) -> bool:
 
 
 def is_allowed_user_llm_base(url: str) -> bool:
-    """用户级 LLM：任意 http(s) Base URL，含本机和内网；拒绝带账号密码和非 http(s)。"""
+    """用户级 LLM：公网 http(s) Base URL，允许自定义端口；拒绝凭据和内网。"""
     raw = (url or "").strip()
     try:
         parsed = urlparse(raw)
     except ValueError:
         return False
-    if parsed.scheme not in ALLOWED_SCHEMES or not parsed.hostname:
-        return False
     if parsed.username or parsed.password:
         return False
-    return True
+    return is_safe_http_url(raw)
 
 
 def _pinned_request(url: str) -> tuple[str, str]:
@@ -178,6 +176,73 @@ def _strict_pinned_request(url: str, default_ports_only: bool) -> tuple[str, str
         raise ValueError(f"不安全的下载地址: {_safe_url_label(raw)}") from None
 
 
+def _read_limited_body(response: httpx.Response, max_bytes: int) -> bytes:
+    length = response.headers.get("content-length")
+    if length:
+        try:
+            declared = int(length)
+        except ValueError:
+            declared = -1
+        if declared > max_bytes:
+            raise ValueError("响应体过大")
+    body = bytearray()
+    for chunk in response.iter_bytes():
+        body.extend(chunk)
+        if len(body) > max_bytes:
+            raise ValueError("响应体过大")
+    return bytes(body)
+
+
+def safe_request_limited(
+    client: httpx.Client,
+    method: str,
+    url: str,
+    *,
+    max_bytes: int,
+    headers: dict[str, str] | None = None,
+    default_ports_only: bool = False,
+    timeout: httpx.Timeout | float = 15,
+    follow_redirects: bool = True,
+    content: bytes | None = None,
+) -> httpx.Response:
+    """固定已验证公网 IP，限制解压后的响应体；可选跟随重定向。"""
+    if max_bytes < 0:
+        raise ValueError("响应体大小限制无效")
+    current = url
+    for _ in range(MAX_REDIRECTS + 1):
+        pinned, host_header = _strict_pinned_request(current, default_ports_only)
+        hostname = urlparse(current).hostname or ""
+        request_headers = {**(headers or {}), "Host": host_header}
+        with client.stream(
+            method,
+            pinned,
+            timeout=timeout,
+            follow_redirects=False,
+            headers=request_headers,
+            content=content,
+            extensions={"sni_hostname": hostname},
+        ) as response:
+            if follow_redirects and response.status_code in (301, 302, 303, 307, 308):
+                location = response.headers.get("location")
+                if not location:
+                    return httpx.Response(
+                        response.status_code,
+                        headers=response.headers,
+                        request=response.request,
+                    )
+                current = urljoin(current, location)
+                content = None
+                continue
+            body = _read_limited_body(response, max_bytes)
+            return httpx.Response(
+                response.status_code,
+                headers=response.headers,
+                content=body,
+                request=response.request,
+            )
+    raise ValueError(f"重定向次数过多: {_safe_url_label(url)}")
+
+
 def safe_get_limited(
     client: httpx.Client,
     url: str,
@@ -188,43 +253,16 @@ def safe_get_limited(
     timeout: httpx.Timeout | float = 15,
 ) -> httpx.Response:
     """逐跳固定已验证公网 IP，并限制解压后的响应体大小。"""
-    if max_bytes < 0:
-        raise ValueError("响应体大小限制无效")
-    current = url
-    for _ in range(MAX_REDIRECTS + 1):
-        pinned, host_header = _strict_pinned_request(current, default_ports_only)
-        hostname = urlparse(current).hostname or ""
-        request_headers = {**(headers or {}), "Host": host_header}
-        with client.stream(
-            "GET",
-            pinned,
-            timeout=timeout,
-            follow_redirects=False,
-            headers=request_headers,
-            extensions={"sni_hostname": hostname},
-        ) as response:
-            if response.status_code in (301, 302, 303, 307, 308):
-                location = response.headers.get("location")
-                if not location:
-                    return httpx.Response(
-                        response.status_code,
-                        headers=response.headers,
-                        request=response.request,
-                    )
-                current = urljoin(current, location)
-                continue
-            body = bytearray()
-            for chunk in response.iter_bytes():
-                body.extend(chunk)
-                if len(body) > max_bytes:
-                    raise ValueError("响应体过大")
-            return httpx.Response(
-                response.status_code,
-                headers=response.headers,
-                content=bytes(body),
-                request=response.request,
-            )
-    raise ValueError(f"重定向次数过多: {_safe_url_label(url)}")
+    return safe_request_limited(
+        client,
+        "GET",
+        url,
+        max_bytes=max_bytes,
+        headers=headers,
+        default_ports_only=default_ports_only,
+        timeout=timeout,
+        follow_redirects=True,
+    )
 
 
 def safe_get(client: httpx.Client, url: str, timeout: float = 15) -> httpx.Response:
