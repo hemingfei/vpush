@@ -1541,6 +1541,10 @@ export function createMxViewsView(dependencies) {
     }
     if (_mxvAdmin.docClick) document.removeEventListener("click", _mxvAdmin.docClick);
     _mxvAdmin.docClick = (e) => {
+      // 勾选条目会 innerHTML 重建 #mxva-kol-items，被点条目随即脱离 DOM；点击冒泡到
+      // document 时 target 已游离，closest 查不到 .mxva-kol-wrap 会被误判为点外收起，
+      // 导致下拉每选一个就自动关闭。游离目标一律忽略。
+      if (!e.target.isConnected) return;
       if (!e.target.closest(".mxva-kol-wrap")) {
         const menu = document.querySelector(".mxva-kol-menu");
         if (menu) menu.classList.remove("open");

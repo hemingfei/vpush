@@ -420,3 +420,19 @@ def test_admin_mx_views_page_function():
                    "mxvAdminSaveConfig", "mxvAdminStartBackfill", "mxvAdminAdopt"):
         assert marker in body, marker
     assert "admin-body" in body
+
+
+def test_admin_mx_views_kol_dropdown_multiselect_keeps_open():
+    """分析大V范围下拉：勾选后菜单保持展开，可连续多选。
+
+    勾选会 innerHTML 重建 #mxva-kol-items，被点条目随即脱离 DOM；点击冒泡到 document
+    时 e.target 已游离，closest(".mxva-kol-wrap") 返回 null，点外收起处理器会误判关闭。
+    docClick 必须忽略游离目标。
+    """
+    js = MX_VIEWS_JS
+    bind = _fn_body("mxvAdminBind", js)
+    assert "isConnected" in bind  # 游离目标（勾选后列表重建所致）不参与点外判定
+    assert 'closest(".mxva-kol-wrap")' in bind
+    assert 'classList.remove("open")' in bind  # 真正点外仍要收起
+    toggle = _fn_body("mxvAdminKolToggleItem", js)
+    assert "open" not in toggle  # 勾选本身不得收起菜单
