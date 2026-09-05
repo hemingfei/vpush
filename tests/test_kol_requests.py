@@ -82,3 +82,18 @@ def test_category_override_validation_and_subscription_failure(approval, monkeyp
     kol = kol_requests.approve_kol_request(db, request_id, admin, category_id=override)
     assert kol["category_id"] == override
     assert db.get_kol_request(request_id)["status"] == "approved"
+
+
+def test_normalize_system_platform_accepts_any_nonempty_id():
+    """system 平台接受任意非空字符串作为外部 ID（AI 报告等系统 KOL 手工填 ID）。
+
+    该分支是 hmf 侧功能，随 main 把 KOL 校验抽到 kol_requests 模块而移植；
+    用例锁死行为，防后续与 main 合并时被无声覆盖。
+    """
+    assert kol_requests.normalize_kol_request_input("system", "ai-report-01") == ("ai-report-01", None)
+    assert kol_requests.normalize_kol_request_input("system", "  中文ID 99 ") == ("中文ID 99", None)
+    # 空白输入仍拒绝
+    assert kol_requests.normalize_kol_request_input("system", "   ") == ("", "请输入大V主页链接或 ID")
+    # 链接能识别出平台时仍返回纠错提示（与各平台口径一致）
+    ext, err = kol_requests.normalize_kol_request_input("system", "https://xueqiu.com/u/123")
+    assert ext == "" and err and "雪球" in err
