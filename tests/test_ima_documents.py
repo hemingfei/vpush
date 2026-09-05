@@ -1451,11 +1451,57 @@ def test_list_items_rejects_repeated_cursor(monkeypatch):
         requests.append(json.loads(request.data))
         if len(requests) > 2:
             raise RuntimeError("test guard")
-        return {"code": 0, "knowledge_list": [], "is_end": False, "next_cursor": "repeat"}, {}
+        return {
+            "code": 0,
+            "knowledge_list": [{"media_id": f"doc-{len(requests)}"}],
+            "is_end": False,
+            "next_cursor": "repeat",
+        }, {}
 
     client._open_json = open_json
-    assert client.list_items("root") == []
+    with pytest.raises(RuntimeError, match="IMA list pagination repeated cursor"):
+        client.list_items("root")
     assert len(requests) == 2
+
+
+def test_sync_keeps_manifest_when_list_repeats_cursor(tmp_path, monkeypatch):
+    group = ImaGroupConfig(
+        "group-a", "资料", "kb-a", "root-a", folder_ids=("root-a",), enabled=True
+    )
+    old_manifest = [{
+        "media_id": "old-file",
+        "name": "old.pdf",
+        "day": "0825",
+        "group_id": group.id,
+    }]
+    db = FakeDB({
+        IMA_PURE_UID_KEY: "uid",
+        IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+        IMA_PURE_KB_ID_KEY: "kb-a",
+        IMA_PURE_ROOT_FOLDER_KEY: "root-a",
+        IMA_PURE_GROUPS_KEY: json.dumps([group.public()], ensure_ascii=False),
+    })
+
+    class FakeClient(ima_documents.ImaPureClient):
+        def discover_groups(self):
+            return ()
+
+        def _token(self):
+            return "access"
+
+        def _open_json(self, request):
+            return {
+                "code": 0,
+                "knowledge_list": [{"media_id": "partial-file", "name": "partial.pdf"}],
+                "next_cursor": "repeat",
+            }, {}
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    service = ImaDocumentService(db, tmp_path / "ima")
+    service.store.save_manifest(old_manifest)
+    result = service.sync_once()
+    assert result["failed_groups"] == [group.id]
+    assert service.store.load_manifest() == old_manifest
 
 
 def test_discover_groups_rejects_repeated_cursor(monkeypatch):

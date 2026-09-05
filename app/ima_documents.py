@@ -974,7 +974,7 @@ class ImaPureClient:
                 return items
             next_cursor = str(payload["next_cursor"])
             if next_cursor in seen_cursors:
-                return items
+                raise RuntimeError("IMA list pagination repeated cursor")
             cursor = next_cursor
 
     def manifest(self, listing_cache: dict[str, Any] | None = None, title_overrides: dict[str, str] | None = None) -> list[dict[str, Any]]:
