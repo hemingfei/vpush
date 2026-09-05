@@ -40,8 +40,12 @@ def headers_for(url: str) -> dict[str, str]:
     return dict(DOWNLOAD_HEADERS)
 
 
-def cache_image_file(db, url: str, folder: str, url_prefix: str, client: httpx.Client | None = None) -> str:
-    """下载图片到数据目录 folder，返回本地 URL；内存库或失败时保留原 URL。"""
+def cache_image_file(db, url: str, folder: str, url_prefix: str, client: httpx.Client | None = None) -> str | None:
+    """下载图片到数据目录 folder，返回本地 URL；内存库或下载失败时保留原 URL。
+
+    返回 None 表示服务端 200 但 content-type 不是图片（内容确定性非图片，
+    如网页链接卡片），调用方可据此降级处理；下载失败等不确定情况仍返回原 URL。
+    """
     url = (url or "").strip()
     if not url or url.startswith("/"):
         return url
@@ -67,7 +71,10 @@ def cache_image_file(db, url: str, folder: str, url_prefix: str, client: httpx.C
             return url
         content_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()
         ext = ALLOWED_TYPES.get(content_type)
-        if not ext or len(resp.content) > MAX_BYTES or len(resp.content) <= 2048:
+        if not ext:
+            # 200 但内容不是图片（网页/文件等），与「下载失败」区分开
+            return None
+        if len(resp.content) > MAX_BYTES or len(resp.content) <= 2048:
             return url
         target = dest / f"{key}.{ext}"
         # WS 解析已并发跑在线程池里，同一 URL 可能被两个线程同时下载缓存：

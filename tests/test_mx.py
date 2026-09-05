@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from app.config import MxConfig
 from app.db import DB
 from app.fetchers.base import Post
-from app.fetchers.mx.fetcher import MxFetcher, normalize_mx_text
+from app.fetchers.mx.fetcher import MxFetcher, looks_like_image_url, normalize_mx_text
 from app.fetchers.mx.ws import MxWsClient
 from app.plaza import filter_plaza_kol_rows, kol_plaza_hidden
 from app.services.mx_sync import MXRoomSyncService
@@ -165,6 +165,71 @@ def test_file_message_non_image_kept_as_attachment():
     }
     post = fetcher._parse_message_to_post(raw, kol)
     assert post is not None
+    assert post.content == "[文件]"
+
+
+def test_looks_like_image_url_page_hosts():
+    """公众号文章/短链等纯网页宿主永不按图片处理，即使 URL 不带扩展名。"""
+    assert not looks_like_image_url("https://mp.weixin.qq.com/s/EJT-9GxmmA6JrqrmXOwsZA")
+    assert not looks_like_image_url("http://t.cn/AXpqDJRA")
+    assert not looks_like_image_url("https://url.cn/abcd12")
+    # 无后缀的真实图床 URL 仍按图片（平台转存图场景）
+    assert looks_like_image_url("https://wework.qpic.cn/wwpic3az/488494_RitDJ_taTXiJBqT_")
+    assert looks_like_image_url("https://img.test/a.png")
+
+
+def test_page_link_file_message_kept_as_attachment():
+    """微信文章链接卡片（file 项、URL 与名称都无扩展名）按附件保留，不进 images。"""
+    db = make_db()
+    fetcher = make_fetcher(db)
+    kol = make_kol(db)
+    raw = {
+        "id": 16,
+        "rid": 101,
+        "msg": '[{"type": "text", "msg": "转一篇"}, '
+               '{"type": "file", "url": "https://mp.weixin.qq.com/s/EJT-9GxmmA6JrqrmXOwsZA", "name": "洪灝：美联储豪赌日元汇率"}]',
+        "createtime": 1700000000000,
+    }
+    post = fetcher._parse_message_to_post(raw, kol)
+    assert post is not None
+    assert post.images == []
+    assert post.content == "转一篇"
+
+
+def test_page_link_card_without_text_gets_placeholder():
+    """纯链接卡片消息（无正文）：合成 [文件] 占位，不整条丢弃也不渲染死图。"""
+    db = make_db()
+    fetcher = make_fetcher(db)
+    kol = make_kol(db)
+    raw = {
+        "id": 17,
+        "rid": 101,
+        "msg": '[{"type": "file", "url": "http://t.cn/AXpqDJRA", "name": "视频号"}]',
+        "createtime": 1700000000000,
+    }
+    post = fetcher._parse_message_to_post(raw, kol)
+    assert post is not None
+    assert post.images == []
+    assert post.content == "[文件]"
+
+
+def test_file_message_confirmed_non_image_downgrades_to_attachment(monkeypatch):
+    """「疑似图片」的 file 消息实测返回非图片内容（cache 返回 None）时降级为附件。"""
+    import app.fetchers.mx.fetcher as mx_fetcher_module
+
+    monkeypatch.setattr(mx_fetcher_module, "cache_image_file", lambda *args, **kwargs: None)
+    db = make_db()
+    fetcher = make_fetcher(db)
+    kol = make_kol(db)
+    raw = {
+        "id": 18,
+        "rid": 101,
+        "msg": '[{"type": "file", "url": "https://unknown-host.test/media/lALP123", "name": "清北"}]',
+        "createtime": 1700000000000,
+    }
+    post = fetcher._parse_message_to_post(raw, kol)
+    assert post is not None
+    assert post.images == []
     assert post.content == "[文件]"
 
 

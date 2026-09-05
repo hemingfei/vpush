@@ -36,11 +36,18 @@ IMAGE_FILE_EXT_RE = re.compile(r"\.(png|jpe?g|gif|webp|bmp|avif)$", re.IGNORECAS
 ANY_FILE_EXT_RE = re.compile(r"\.[A-Za-z0-9]{2,5}$")
 # 音频扩展名：纯语音消息合成「[语音]」占位正文时区分文件类型用
 AUDIO_EXT_RE = re.compile(r"\.(mp3|m4a|aac|wav|ogg|oga|opus|amr|flac)$", re.IGNORECASE)
+# 纯网页宿主（公众号文章、微信/微博短链）：URL 必不带文件扩展名，会被
+# 「无后缀按图片」兜底误判成图片，下载下来是 text/html，当 <img> 渲染必挂。
+# 明确排除，链接卡片按附件保留
+PAGE_LINK_HOSTS = {"mp.weixin.qq.com", "url.cn", "t.cn"}
 
 
 def looks_like_image_url(url: str, name: str = "") -> bool:
     """判断 file 消息是否按图片处理：URL 带图片扩展名，或 URL 没有任何扩展名。"""
-    url_path = urlparse(str(url or "")).path
+    parsed = urlparse(str(url or ""))
+    if (parsed.hostname or "").lower() in PAGE_LINK_HOSTS:
+        return False
+    url_path = parsed.path
     name_path = urlparse(str(name or "")).path
     if IMAGE_FILE_EXT_RE.search(url_path):
         return True
@@ -397,7 +404,12 @@ class MxFetcher(Fetcher):
                         elif item_type == "file":
                             url = (item.get("url") or "").strip()
                             if url and looks_like_image_url(url, item.get("name") or ""):
-                                self._append_image(images, url)
+                                # 返回 None 仅在 db 可用、服务端确认非图片时出现
+                                if self._append_image(images, url) is None:
+                                    # 「疑似图片」的 file 消息服务端返回的却是网页/文件
+                                    # （content-type 非图片，如微信文章链接卡片）：
+                                    # 转回附件链接保留，不进 images 当死图渲染
+                                    files.append({"url": url, "name": item.get("name") or ""})
                             elif url:
                                 files.append({"url": url, "name": item.get("name") or ""})
             elif isinstance(msg_list, str):
@@ -425,11 +437,18 @@ class MxFetcher(Fetcher):
         return bool(AUDIO_EXT_RE.search(url_path) or AUDIO_EXT_RE.search(name))
 
     def _append_image(self, images, url):
-        """图片统一走本地缓存，下载失败或内存库时保留原 URL。"""
+        """图片统一走本地缓存，下载失败或内存库时保留原 URL。
+
+        返回缓存结果；None 表示服务端确认返回非图片内容（此时不往 images 塞
+        死图，调用方自行决定降级口径）。
+        """
         if self.db:
-            images.append(cache_image_file(self.db, url, "mx_images", "/mx-images"))
+            cached = cache_image_file(self.db, url, "mx_images", "/mx-images")
         else:
-            images.append(url)
+            cached = url
+        if cached is not None:
+            images.append(cached)
+        return cached
 
     def get_ws_status(self):
         """

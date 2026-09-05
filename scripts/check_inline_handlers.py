@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""INLINE_HANDLERS 每个键必须能解析到唯一定义；漏挂或重名非零退出。"""
+"""INLINE_HANDLERS 每个键必须能解析到唯一定义；漏挂或重名非零退出。
+
+同时反向校验：模板 HTML 里 on* 内联事件处理器调用到的标识符必须都挂在
+INLINE_HANDLERS 上（模块作用域函数对内联 onclick 不可见，漏挂即点击报
+「X is not defined」）。
+"""
 from __future__ import annotations
 
 import re
@@ -9,7 +14,23 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_APP = ROOT / "app" / "static" / "app.js"
-IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
+IDENT = r"[A-Za-z_$][A-Za-z0-9_$]*"
+
+# 内联处理器里合法出现的非应用标识符：关键字与 JS 内建全局。
+# 应用函数一个都不该出现在这里——内联 onclick 只能调 window 上的东西
+INLINE_GLOBALS = frozenset({
+    "if", "else", "return", "new", "typeof", "function", "void",
+    "event", "this", "arguments", "window", "document", "navigator", "location", "history",
+    "alert", "confirm", "prompt", "open", "close", "focus", "blur", "print", "stop",
+    "encodeURIComponent", "decodeURIComponent", "parseInt", "parseFloat", "isNaN",
+    "String", "Number", "Boolean", "Array", "Object", "JSON", "Math", "Date", "RegExp",
+    "Set", "Map", "Promise", "Error", "TypeError", "Symbol", "BigInt",
+    "console", "fetch", "URL", "URLSearchParams", "Blob", "File", "FileReader", "FormData",
+    "AbortController", "CustomEvent", "Event", "KeyboardEvent", "MouseEvent",
+    "crypto", "btoa", "atob", "structuredClone", "queueMicrotask",
+    "setTimeout", "clearTimeout", "setInterval", "clearInterval", "requestAnimationFrame",
+    "getComputedStyle", "matchMedia", "alert",
+})
 
 
 def _from_braces(src: str, prefix: str) -> list[str]:
@@ -36,6 +57,32 @@ def inline_keys(src: str) -> list[str]:
     if not m:
         raise SystemExit("INLINE_HANDLERS not found")
     return re.findall(rf"({IDENT})\s*,", m.group(1))
+
+
+INLINE_ATTR_RE = re.compile(r"""\bon[a-z]+\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+CALL_RE = re.compile(rf"(?<![\w$.])({IDENT})\s*\(")
+
+
+def inline_html_calls(static: Path) -> dict[str, set[str]]:
+    """扫描模板 HTML 里 on* 内联属性调用到的标识符 → 引用它的文件集合。
+
+    ${...} 模板插值是拼接时（构建期）执行的代码，不是点击时执行的，先剔除；
+    方法调用 obj.fn() 的 fn 不是全局引用（正则负向断言已排除带点前缀的名字）。
+    """
+    files = [static / "app.js", static / "index.html"]
+    files += sorted((static / "core").rglob("*.js"))
+    files += sorted((static / "views").rglob("*.js"))
+    found: dict[str, set[str]] = {}
+    for path in files:
+        if not path.is_file():
+            continue
+        for attr in INLINE_ATTR_RE.findall(path.read_text(encoding="utf-8")):
+            value = attr[0] or attr[1]
+            value = re.sub(r"\$\{[^}]*\}", "", value)
+            for name in CALL_RE.findall(value):
+                if name not in INLINE_GLOBALS:
+                    found.setdefault(name, set()).add(path.name)
+    return found
 
 
 def collect_module_names(static: Path) -> list[str]:
@@ -118,7 +165,10 @@ def check(app_js: Path) -> int:
             missing_factory_returns.append(key)
     missing = [k for k in keys if counts[k] == 0]
     dup = [k for k in keys if counts[k] > 1]
-    if missing or dup or missing_exports or missing_factory_returns:
+    keys_set = set(keys)
+    called = inline_html_calls(app_js.parent)
+    unexposed = {name: files for name, files in called.items() if name not in keys_set}
+    if missing or dup or missing_exports or missing_factory_returns or unexposed:
         if missing:
             print("missing:", ", ".join(missing))
         if dup:
@@ -127,8 +177,12 @@ def check(app_js: Path) -> int:
             print("missing export:", ", ".join(missing_exports))
         if missing_factory_returns:
             print("missing factory return:", ", ".join(missing_factory_returns))
+        if unexposed:
+            print("unexposed (called in inline on* handlers but not in INLINE_HANDLERS):")
+            for name, files in sorted(unexposed.items()):
+                print(f"  {name}  <- {', '.join(sorted(files))}")
         return 1
-    print(f"ok: {len(keys)} handlers")
+    print(f"ok: {len(keys)} handlers, {len(called)} inline-referenced names all exposed")
     return 0
 
 

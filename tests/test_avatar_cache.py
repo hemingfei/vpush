@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from app.avatar_cache import cache_avatar
+from app.avatar_cache import cache_avatar, cache_image_file
 from app.db import DB
 
 
@@ -95,3 +95,23 @@ def test_headers_for_zsxq():
     from app.avatar_cache import headers_for
     assert headers_for("https://images.zsxq.com/abc")["Referer"] == "https://wx.zsxq.com/"
     assert headers_for("https://wx2.sinaimg.cn/x.jpg")["Referer"] == "https://weibo.com/"
+
+
+def test_cache_image_file_distinguishes_html_from_failure(tmp_path):
+    """200 且 content-type 非图片 → 返回 None（确认非图片，如网页链接卡片）；
+    下载失败等不确定情况仍返回原 URL，调用方据此决定是否降级。"""
+    db = make_db(tmp_path)
+
+    def handler(request):
+        if request.url.path.startswith("/page"):
+            return httpx.Response(200, headers={"content-type": "text/html"}, content=b"<html></html>")
+        if request.url.path.startswith("/gone"):
+            return httpx.Response(404)
+        return httpx.Response(200, headers={"content-type": "image/png"}, content=b"\x89PNG" * 600)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    assert cache_image_file(db, "https://img.example/page/1", "mx_images", "/mx-images", client=client) is None
+    assert cache_image_file(db, "https://img.example/gone", "mx_images", "/mx-images", client=client) == "https://img.example/gone"
+    # 合法图片缓存需 > 2048 字节（过小按坏图退回原 URL）
+    local = cache_image_file(db, "https://img.example/real.png", "mx_images", "/mx-images", client=client)
+    assert local and local.startswith("/mx-images/")

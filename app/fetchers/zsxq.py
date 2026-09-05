@@ -599,7 +599,8 @@ class ZsxqFetcher(Fetcher):
             except (RuntimeError, ZsxqError) as exc:
                 logger.info("知识星球详情补全失败 topic=%s err=%s", topic_id, exc)
         images = [
-            cache_image_file(self.db, i["url"], "zsxq_images", "/zsxq-images")
+            # None = 内容确认非图片：星球图片 API 不会这样返回，兜底保留原 URL 走前端失效流程
+            (cache_image_file(self.db, i["url"], "zsxq_images", "/zsxq-images") or i["url"])
             if self.db is not None else i["url"]
             for i in collect_images(topic)
         ]

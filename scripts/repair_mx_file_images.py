@@ -89,7 +89,7 @@ def main() -> int:
         msg_str = resolve_msg_str(row)
         if msg_str is None:
             continue
-        content, images = fetcher._parse_msg_content(msg_str)
+        content, images, _files = fetcher._parse_msg_content(msg_str)
         old_images = json.loads(row["images"]) if row["images"] else []
         if row["content"] == content and old_images == images:
             continue

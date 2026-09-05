@@ -330,7 +330,9 @@ function imgOnError(img) {
   if (img.dataset.proxied) return;
   img.dataset.proxied = "1";
   img.src = imgProxyUrl(src);
-  img.onerror = imgOnError;
+  // DOM onerror 回调的第一个参数是 Event 不是元素，必须闭包住 img 再调，
+  // 否则代理失败这步 getAttribute 直接抛 TypeError，markImgDead 永远走不到
+  img.onerror = () => imgOnError(img);
 }
 
 let _toastTimer = null;
@@ -3466,10 +3468,16 @@ function postFiles(post) {
 const MX_IMG_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|avif)$/i;
 const MX_ANY_EXT_RE = /\.[A-Za-z0-9]{2,5}$/;
 const MX_AUDIO_EXT_RE = /\.(mp3|m4a|aac|wav|ogg|oga|opus|amr|flac)$/i;
+// 与后端 PAGE_LINK_HOSTS 同口径：公众号文章/短链等纯网页链接不带扩展名，
+// 不是图片（后端已按附件保留），必须渲染成附件链接而不是被图片兜底规则吞掉
+const MX_PAGE_LINK_HOSTS = new Set(["mp.weixin.qq.com", "url.cn", "t.cn"]);
 
 function mxLooksLikeImage(url, name) {
   const urlPath = String(url || "").split(/[?#]/)[0];
   const namePath = String(name || "").split(/[?#]/)[0];
+  try {
+    if (MX_PAGE_LINK_HOSTS.has(new URL(String(url || "")).hostname.toLowerCase())) return false;
+  } catch { /* 非法 URL 交给扩展名兜底判断 */ }
   if (MX_IMG_EXT_RE.test(urlPath)) return true;
   if (MX_ANY_EXT_RE.test(urlPath)) return false;
   if (MX_ANY_EXT_RE.test(namePath)) return MX_IMG_EXT_RE.test(namePath);
