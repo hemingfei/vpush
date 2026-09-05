@@ -887,9 +887,9 @@ textarea.proxy-import { min-height: 96px; }
 /* 选中态：单色 SVG 走 currentColor 自动反白、章保持透明 */
 .platform-tab.selected .pt-icon,
 .tl-pill.selected .pt-icon { background: transparent; }
-/* 位图平台 logo：未选中灰度（与描边单色同族），选中在蓝章上反白 */
+/* 位图平台 logo：未选中显示品牌色（雪球蓝、Truth 紫蓝），选中蓝章反白 */
 .tl-pill:not(.selected) img.pt-icon,
-.platform-tab:not(.selected) img.pt-icon { filter: grayscale(1); }
+.platform-tab:not(.selected) img.pt-icon { filter: none; }
 .platform-tab.selected img.pt-icon,
 .tl-pill.selected img.pt-icon { filter: brightness(0) invert(1); }
 .pt-label { display: inline; }
@@ -911,6 +911,9 @@ img.pt-icon { display: block; object-fit: contain; }
 .tl-pill.selected .pt-icon,
 .platform-tab.selected .pt-icon { background: transparent; }
 .tl-pill[data-platform="live"]:not(.selected) .pt-icon { color: var(--color-accent); }
+/* Truth 官方紫蓝；位图类（雪球/Truth）品牌色由图片自带，无需 color 染色 */
+.tl-pill[data-platform="truth"]:not(.selected) .pt-icon,
+.platform-tab[data-platform="truth"]:not(.selected) .pt-icon { color: #5b5df0; }
 /* 快讯实时呼吸点：提示这是实时流（选中蓝底上换白描边） */
 .tl-pill[data-platform="live"] { position: relative; }
 .tl-pill[data-platform="live"]::after {
