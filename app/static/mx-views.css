@@ -128,15 +128,18 @@
 .mxv-row .name{width:88px;color:var(--mxv-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .mxv-ratio{flex:1;height:10px;border-radius:5px;overflow:hidden;display:flex;background:var(--mxv-rail);}
 .mxv-ratio .b{background:linear-gradient(90deg,var(--mxv-bull-deep),var(--mxv-bull));}
-.mxv-ratio .n{background:var(--mxv-gold);} /* 中段：中立大V */
+.mxv-ratio .n{background:var(--mxv-muted);} /* 中段：中立大V，与文字「中」同色 */
 .mxv-ratio .s{background:linear-gradient(90deg,var(--mxv-bear),var(--mxv-bear-deep));}
+.mxv-net .neu{color:var(--mxv-muted);} /* 多/中/空 文字里的「中」与比例条中段同色 */
 .mxv-net{width:88px;text-align:right;font-size:12px;}
 .mxv-net.bull{color:var(--mxv-bull);}.mxv-net.bear{color:var(--mxv-bear);}.mxv-net.flat{color:var(--mxv-faint);}
 .mxv-momo{width:30px;text-align:center;font-size:12px;}
 .mxv-momo.up{color:var(--mxv-bull);}.mxv-momo.down{color:var(--mxv-bear);}.mxv-momo.flat{color:var(--mxv-faint);}
 .mxv-actions{font-size:11px;color:var(--mxv-gold);}
 /* 操作列定宽：长短不一的「买入×2」文字不挤压 flex:1 的比例条，保证每行红黄绿图与多/中/空列纵向对齐 */
-.mxv-row .mxv-actions{width:96px;flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.mxv-row .mxv-actions{width:96px;flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;}
+/* 点击截断的操作列：换行展开全部，再点收回 */
+.mxv-row .mxv-actions.open{white-space:normal;word-break:break-all;}
 .mxv-latest-time{font-size:11px;color:var(--mxv-faint);width:38px;text-align:right;}
 .mxv-feed,.mxv-kols{background:var(--mxv-panel);border:1px solid var(--mxv-line);border-radius:10px;
   padding:10px 12px;margin-bottom:12px;}
@@ -198,7 +201,7 @@
 .mxv-kolcard .fav{color:var(--mxv-gold);font-size:11px;margin-left:3px;}
 .mxv-kolcard .mini{display:flex;height:5px;border-radius:3px;overflow:hidden;margin:5px 0;background:var(--mxv-rail);}
 .mxv-kolcard .mini .b{background:var(--mxv-bull);}.mxv-kolcard .mini .s{background:var(--mxv-bear);}
-.mxv-kolcard .mini .n{background:var(--mxv-faint);} /* 中性占比段 */
+.mxv-kolcard .mini .n{background:var(--mxv-muted);} /* 中性占比段，与明细比例条中段同色 */
 .mxv-kolcard .tags{font-size:11px;color:var(--mxv-muted);line-height:1.6;}
 .mxv-stockcard{background:var(--mxv-card);border:1px solid var(--mxv-line);border-radius:10px;padding:10px;cursor:pointer;}
 .mxv-stockcard:hover{border-color:var(--mxv-accent);}

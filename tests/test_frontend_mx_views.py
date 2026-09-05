@@ -185,7 +185,7 @@ def test_mx_views_boards_heat_view_default():
     boards = _fn_body("mxvRenderBoards", js)
     assert "题材多空榜" in boards and "个股强度榜" in boards
     assert 'boardMode.topic === "list"' in boards and 'boardMode.stock === "list"' in boards
-    assert "mxvHeatHtml(p.topics" in boards and "mxvHeatHtml(p.stocks" in boards
+    assert "mxvHeatHtml(topicSorted" in boards and "mxvHeatHtml(stockSorted" in boards  # 回填中性后再渲染
     # 明细列表行仍保留（切换用），且带高亮键
     assert 'data-mxv-hl="topic:${escapeHtml(t.name)}"' in boards
     assert 'data-mxv-hl="stock:${escapeHtml(s.name)}"' in boards
@@ -203,15 +203,15 @@ def test_mx_views_board_list_matches_heat_order_and_stock_bull_bear():
     js = MX_VIEWS_JS
     boards = _fn_body("mxvRenderBoards", js)
     assert boards.count("sort(mxvByHeat)") == 2  # 题材 + 个股明细都按热力排序
-    assert "${s.bull}多/${s.neutral || 0}中/${s.bear}空" in boards  # 个股明细多/中/空三段与题材榜同款
+    assert '${s.bull}多/<span class="neu">${s.neutral || 0}中</span>/${s.bear}空' in boards  # 多/中/空，中与图形同色
     assert "strength" not in boards  # 明细不再显示打分
     assert '<span class="mxv-actions"' in boards  # 操作列保留在最右
-    assert boards.index("中/${s.bear}空") < boards.index('<span class="mxv-actions"')  # 多空中在操作前
+    assert boards.index('/${s.bear}空</span>') < boards.index('<span class="mxv-actions"')  # 多空中在操作前
     assert 'title="${escapeHtml(actions)}"' in boards  # 操作列定宽截断时 hover 看全文
     css = (STATIC / "mx-views.css").read_text()
     # 操作列定宽：长短不一的操作文字不挤压 flex:1 比例条，红黄绿图与多/中/空列纵向对齐
     assert (".mxv-row .mxv-actions{width:96px;flex:none;overflow:hidden;text-overflow:ellipsis;"
-            "white-space:nowrap;}") in css
+            "white-space:nowrap;cursor:pointer;}") in css
 
 
 def test_mx_views_board_list_more_limit():
@@ -239,8 +239,8 @@ def test_mx_views_neutral_counts_everywhere():
     """中性大V全链路可见：明细行 多/空/中，热力徽标 净/总数(含中)，抽屉顶部中立统计，大V/个股卡片中性段。"""
     js = MX_VIEWS_JS
     boards = _fn_body("mxvRenderBoards", js)
-    assert "${t.bull}多/${t.neutral || 0}中/${t.bear}空" in boards  # 题材明细三段计数（多/中/空）
-    assert "${s.bull}多/${s.neutral || 0}中/${s.bear}空" in boards  # 个股明细同款
+    assert '${t.bull}多/<span class="neu">${t.neutral || 0}中</span>/${t.bear}空' in boards  # 题材明细多/中/空
+    assert '${s.bull}多/<span class="neu">${s.neutral || 0}中</span>/${s.bear}空' in boards  # 个股明细同款
     assert boards.count("mxvRatioHtml(t.bull, t.bear, t.neutral || 0)") == 1  # 比例条中段传中性
     assert boards.count("mxvRatioHtml(s.bull, s.bear, s.neutral || 0)") == 1
     ratio = _fn_body("mxvRatioHtml", js)
@@ -255,12 +255,38 @@ def test_mx_views_neutral_counts_everywhere():
     kolcards = _fn_body("mxvKolCardsHtml", js)
     assert 'class="n" style="width:${Math.round((n / tot) * 100)}%"' in kolcards  # 比例条中性段
     assert "neutral_names" in kolcards and "◎" in kolcards  # 名单加中立行
+    assert "stats.byKol" in kolcards  # 旧快照无 neutral_names 时用 feed 现算兜底
     stockcards = _fn_body("mxvStockCardsHtml", js)
     assert "neutralMap" in stockcards and "namesLine(neutralNames, sNeu" in stockcards
     assert "${s.bull + s.bear + sNeu} 大V" in stockcards  # 大V计数含中性
     css = (STATIC / "mx-views.css").read_text()
-    assert ".mxv-kolcard .mini .n{background:var(--mxv-faint);}" in css  # 后代选择器含空格，用原文断言
-    assert ".mxv-ratio .n{background:var(--mxv-gold);}" in css  # 比例条中段=黄色中性
+    assert ".mxv-kolcard .mini .n{background:var(--mxv-muted);}" in css  # 后代选择器含空格，用原文断言
+    assert ".mxv-ratio .n{background:var(--mxv-muted);}" in css  # 比例条中段与文字「中」同色
+    assert ".mxv-net .neu{color:var(--mxv-muted);}" in css
+
+
+def test_mx_views_neutral_backfill_from_feed_and_actions_expand():
+    """旧快照 payload 无 neutral：由 feed 观点按当前立场口径现算回填（≤选定快照、首 hit=最新立场）；
+    明细操作列截断时点击展开多行/再点收回，未截断不拦截行点击。"""
+    js = MX_VIEWS_JS
+    stats = _fn_body("mxvNeutralStats", js)
+    assert "String(b.snapshot_at) > at" in stats  # 只统计 ≤ 选定快照的批次
+    assert "!(key in latest)" in stats  # 批次倒序+批内倒序：首 hit 即最新立场
+    assert "counts[`${ttype}:${name}`]" in stats and "byKol" in stats
+    fill = _fn_body("mxvFillNeutral", js)
+    assert "r.neutral != null" in fill  # 新快照有字段用字段，旧快照现算兜底
+    boards = _fn_body("mxvRenderBoards", js)
+    assert 'map(mxvFillNeutral("topic", stats))' in boards and 'map(mxvFillNeutral("stock", stats))' in boards
+    feed = _fn_body("mxvLoadFeed", js)
+    assert "mxvRenderBoards()" in feed  # feed 到达后重渲染双榜回填中性数
+    toggle = _fn_body("mxvActionsToggle", js)
+    assert "stopPropagation()" in toggle and 'classList.toggle("open")' in toggle
+    assert "scrollWidth" in toggle  # 未截断不拦截，行点击照常打开抽屉
+    assert 'onclick="mxvActionsToggle(this,event)"' in boards
+    exported = js.rsplit("return {", 1)[1]
+    assert "mxvActionsToggle," in exported and "mxvActionsToggle," in APP_JS
+    css = (STATIC / "mx-views.css").read_text()
+    assert ".mxv-row .mxv-actions.open{" in css  # 展开态换行显示全部（后代选择器用原文断言）
 
 
 def test_mx_views_day_picker_is_calendar():

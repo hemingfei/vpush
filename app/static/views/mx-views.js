@@ -144,6 +144,7 @@ export function createMxViewsView(dependencies) {
       _mxv.feedFailed = false;
       _mxv.feedLoading = false;
       mxvRenderFeed();
+      mxvRenderBoards(); // 双榜用 feed 现算中性数回填，数据到位后重渲染一次
     } catch (e) {
       _mxv.feedKey = ""; // 失败释放 key，下次换快照重试
       _mxv.feedLoading = false;
@@ -483,6 +484,36 @@ export function createMxViewsView(dependencies) {
       ${bear ? `<div class="s" style="width:${sp}%"></div>` : ""}</div>`;
   }
 
+  // ---- 中性数回填：旧快照 payload 无 neutral 字段，用 feed 观点按「当前立场」口径现算
+  //（批次倒序+批内时间倒序，(大V,标的) 首 hit 即 ≤选定快照的最新立场，与后端聚合同口径）
+  function mxvNeutralStats() {
+    const sig = `${_mxv.day}|${_mxv.at}|${(_mxv.feedBatches || []).length}`;
+    if (_mxv.neuStats && _mxv.neuStats.sig === sig) return _mxv.neuStats.stats;
+    const at = _mxv.at || "";
+    const latest = {};
+    for (const b of _mxv.feedBatches || []) {
+      if (at && String(b.snapshot_at) > at) continue; // 只统计 ≤ 选定快照
+      for (const o of b.opinions || []) {
+        const key = `${o.kol_id}|${o.target_type}|${o.target_name}`;
+        if (!(key in latest)) latest[key] = o.direction;
+      }
+    }
+    const stats = { counts: {}, byKol: {} };
+    for (const [key, dir] of Object.entries(latest)) {
+      if (dir !== "neutral") continue;
+      const [kid, ttype, name] = key.split("|");
+      stats.counts[`${ttype}:${name}`] = (stats.counts[`${ttype}:${name}`] || 0) + 1;
+      (stats.byKol[kid] = stats.byKol[kid] || []).push(name);
+    }
+    _mxv.neuStats = { sig, stats };
+    return stats;
+  }
+
+  // payload 已有 neutral（新快照）用字段，缺失（旧快照）用现算值兜底
+  function mxvFillNeutral(ttype, stats) {
+    return (r) => (r.neutral != null ? r : { ...r, neutral: stats.counts[`${ttype}:${r.name}`] || 0 });
+  }
+
   function mxvRenderBoards() {
     if (!_mxv.payload) return;
     window._mxvTargets = []; // 重新渲染双榜前清空标的索引
@@ -507,8 +538,9 @@ export function createMxViewsView(dependencies) {
     }
     const boards = $("#mxv-boards");
     if (boards) {
-      const topicSorted = [...(p.topics || [])].sort(mxvByHeat);
-      const stockSorted = [...(p.stocks || [])].sort(mxvByHeat);
+      const stats = mxvNeutralStats();
+      const topicSorted = [...(p.topics || [])].map(mxvFillNeutral("topic", stats)).sort(mxvByHeat);
+      const stockSorted = [...(p.stocks || [])].map(mxvFillNeutral("stock", stats)).sort(mxvByHeat);
       // 明细默认只显示前 20 条，「更多」展开全部；热力云不受限
       const topicList = _mxv.boardExpanded.topic ? topicSorted : topicSorted.slice(0, MXV_BOARD_LIST_LIMIT);
       const stockList = _mxv.boardExpanded.stock ? stockSorted : stockSorted.slice(0, MXV_BOARD_LIST_LIMIT);
@@ -519,7 +551,7 @@ export function createMxViewsView(dependencies) {
         <div class="mxv-row" data-mxv-hl="topic:${escapeHtml(t.name)}" onclick="mxvOpenTargetAt(${ti})">
           <span class="rank">${i + 1}</span><span class="name">${escapeHtml(t.name)}</span>
           ${mxvRatioHtml(t.bull, t.bear, t.neutral || 0)}
-          <span class="mxv-net ${t.net > 0 ? "bull" : t.net < 0 ? "bear" : "flat"}">${t.bull}多/${t.neutral || 0}中/${t.bear}空</span>
+          <span class="mxv-net ${t.net > 0 ? "bull" : t.net < 0 ? "bear" : "flat"}">${t.bull}多/<span class="neu">${t.neutral || 0}中</span>/${t.bear}空</span>
           ${mxvMomo(t.momentum)}
           <span class="mxv-latest-time">${escapeHtml((t.latest_at || "").slice(11, 16))}</span>
         </div>`; }).join("");
@@ -531,18 +563,19 @@ export function createMxViewsView(dependencies) {
         <div class="mxv-row" data-mxv-hl="stock:${escapeHtml(s.name)}" onclick="mxvOpenTargetAt(${si})">
           <span class="rank">${i + 1}</span><span class="name">${escapeHtml(s.name)}</span>
           ${mxvRatioHtml(s.bull, s.bear, s.neutral || 0)}
-          <span class="mxv-net ${s.net > 0 ? "bull" : s.net < 0 ? "bear" : "flat"}">${s.bull}多/${s.neutral || 0}中/${s.bear}空</span>
+          <span class="mxv-net ${s.net > 0 ? "bull" : s.net < 0 ? "bear" : "flat"}">${s.bull}多/<span class="neu">${s.neutral || 0}中</span>/${s.bear}空</span>
           ${mxvMomo(s.momentum)}
-          <span class="mxv-actions"${actions ? ` title="${escapeHtml(actions)}"` : ""}>${escapeHtml(actions)}</span>
+          <span class="mxv-actions"${actions ? ` title="${escapeHtml(actions)}"` : ""}
+            onclick="mxvActionsToggle(this,event)">${escapeHtml(actions)}</span>
         </div>`;
       }).join("");
       const moreBtn = (kind, total) => _mxv.boardMode[kind] === "list" && total > MXV_BOARD_LIST_LIMIT
         ? `<button type="button" class="mxv-more" onclick="mxvBoardMore('${kind}')">${_mxv.boardExpanded[kind] ? "收起 ▴" : `更多 ▾（还有 ${total - MXV_BOARD_LIST_LIMIT} 个）`}</button>`
         : "";
       const topicBody = _mxv.boardMode.topic === "list"
-        ? topicRows : mxvHeatHtml(p.topics || [], "topic", "暂无题材观点");
+        ? topicRows : mxvHeatHtml(topicSorted, "topic", "暂无题材观点");
       const stockBody = _mxv.boardMode.stock === "list"
-        ? stockRows : mxvHeatHtml(p.stocks || [], "stock", "暂无个股观点");
+        ? stockRows : mxvHeatHtml(stockSorted, "stock", "暂无个股观点");
       boards.innerHTML = `
         <div class="mxv-boards">
           <div class="mxv-board">${mxvBoardHead("topic", "题材多空榜", topicSorted.length)}${topicBody}${moreBtn("topic", topicSorted.length)}</div>
@@ -605,6 +638,13 @@ export function createMxViewsView(dependencies) {
     mxvRenderBoards();
   }
 
+  // 操作列展开/收回：截断时点击换行显示全部（不触发行点击打开抽屉），未截断则放行
+  function mxvActionsToggle(el, event) {
+    if (!el.classList.contains("open") && el.scrollWidth <= el.clientWidth) return;
+    event.stopPropagation();
+    el.classList.toggle("open");
+  }
+
   // ---- 大V观点总览：今日操作下方；默认一行，更多展开；关注置顶；大V/个股两种卡片 ----
   function mxvRenderKols() {
     const kols = $("#mxv-kols");
@@ -629,9 +669,11 @@ export function createMxViewsView(dependencies) {
     // 稳定排序：关注的大V固定置前，组内保持原（观点数降序）顺序
     rows.sort((a, b) =>
       (_mxv.followed.has(Number(b.kol_id)) ? 1 : 0) - (_mxv.followed.has(Number(a.kol_id)) ? 1 : 0));
+    const stats = mxvNeutralStats();
     return rows.map((k) => {
       const b = (k.bull_names || []).length, s = (k.bear_names || []).length;
-      const n = (k.neutral_names || []).length;
+      const neutralNames = k.neutral_names || stats.byKol[String(k.kol_id)] || []; // 旧快照用现算兜底
+      const n = neutralNames.length;
       const tot = Math.max(b + s + n, 1);
       const fav = _mxv.followed.has(Number(k.kol_id));
       return `
@@ -644,7 +686,7 @@ export function createMxViewsView(dependencies) {
             <div class="n" style="width:${Math.round((n / tot) * 100)}%"></div></div>
           <div class="tags">${k.bull_names && k.bull_names.length ? `<span style="color:var(--mxv-bull)">▲</span> ${escapeHtml(k.bull_names.slice(0, 4).join("、"))}` : ""}
             ${k.bear_names && k.bear_names.length ? `<br><span style="color:var(--mxv-bear)">▼</span> ${escapeHtml(k.bear_names.slice(0, 4).join("、"))}` : ""}
-            ${k.neutral_names && k.neutral_names.length ? `<br><span style="color:var(--mxv-muted)">◎</span> ${escapeHtml(k.neutral_names.slice(0, 4).join("、"))}` : ""}</div>
+            ${neutralNames.length ? `<br><span style="color:var(--mxv-muted)">◎</span> ${escapeHtml(neutralNames.slice(0, 4).join("、"))}` : ""}</div>
         </div>
       </div>`;
     }).join("");
@@ -660,7 +702,8 @@ export function createMxViewsView(dependencies) {
       (k.neutral_names || []).forEach((n) => { (neutralMap[n] = neutralMap[n] || []).push(k.name); });
     });
     _mxv.kolStockTargets = []; // 个股卡片走独立索引，避免与双榜 _mxvTargets 冲突
-    const rows = [...(p.stocks || [])].sort((a, b) =>
+    const stats = mxvNeutralStats();
+    const rows = [...(p.stocks || [])].map(mxvFillNeutral("stock", stats)).sort((a, b) =>
       (b.bull + b.bear + (b.neutral || 0)) - (a.bull + a.bear + (a.neutral || 0))
       || Math.abs(b.net) - Math.abs(a.net) || b.strength - a.strength);
     const namesLine = (names, cnt, color, arrow) => names.length
@@ -1589,6 +1632,7 @@ export function createMxViewsView(dependencies) {
     mxvKolMore,
     mxvBoardMode,
     mxvBoardMore,
+    mxvActionsToggle,
     mxvOpenTargetAt,
     mxvOpenKolStockAt,
     mxvOpenKol,
