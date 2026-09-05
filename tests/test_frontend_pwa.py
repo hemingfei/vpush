@@ -58,7 +58,7 @@ def test_frontend_assets_match_financial_news_release_revision():
     assert f'const CACHE = "dav-shell-{digest}";' in sw
     for url in module_urls(ROOT):
         assert f'"{url}"' in sw
-    assert 'const APP_VERSION = "1.12.147";' in app
+    assert 'const APP_VERSION = "1.12.148";' in app
 
 
 def test_pwa_icons_have_light_and_dark_sets():
