@@ -28,6 +28,7 @@ SCHEDULE_FILE = "/usr/local/lib/vpush-ima/cicc-schedule.json"
 PY = "/usr/bin/python3"
 BJ = timezone(timedelta(hours=8))
 DONE_RE = re.compile(r"完成：下载 (\d+)，已存在跳过 (\d+)，失败 (\d+)")
+_TIME_RE = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")
 PAUSED_AUTH_WINDOW = 48 * 3600  # Cookie 失效后自动重试多久放弃（等管理员介入）
 
 
@@ -51,7 +52,7 @@ def read_json(path: str, default=None):
 def read_schedule() -> str:
     data = read_json(SCHEDULE_FILE, {}) or {}
     t = str(data.get("time") or "03:00")
-    return t if re.fullmatch(r"\d{2}:\d{2}", t) else "03:00"
+    return t if _TIME_RE.fullmatch(t) else "03:00"
 
 
 def should_run(now: datetime, schedule_hhmm: str,
