@@ -982,7 +982,7 @@ export function createAdminKolsView(dependencies) {
           <button class="btn-normal" onclick="adminMxTagOpenRunModal()">开始 LLM 打标</button>
           <button class="btn-ghost" onclick="adminMxTagTest()">试打 10 条（不写库）</button>
         </div>
-        <div id="mx-tag-progress" style="margin-top:12px">${adminMxTagProgressInner()}</div>
+        <div id="mx-tag-progress" style="margin-top:12px">${adminMxTagProgressInner(null, "manual")}</div>
         ${adminMxTagTestBlock()}
       </section>
       ${adminMxTagAutoPanel(st)}
@@ -1039,6 +1039,7 @@ export function createAdminKolsView(dependencies) {
           <p class="section-meta">在时间段内自动对未打标消息跑 LLM 打标，与手动任务共用同一队列（每批 ≤100 条、最多 3 批并行；同一时刻最多一个自动任务在排队/执行，防止处理不及连环入队）。每个时间段两个触发维度：<b>消息条数</b>——新消息累计达到阈值立即触发；<b>时间间隔</b>——距上次触发超过间隔分钟（且有待打标消息）也触发。任一触发后条数累计与间隔计时都重新计算，间隔之内条数先到会把下一个间隔触发点推向后。特殊时间段命中时优先按其配置执行（可增删）。</p></div>
         </header>
         <p class="section-meta" style="margin-top:8px">${statusBits.join("；")}。</p>
+        <div id="mx-tag-auto-progress" style="margin-top:12px">${adminMxTagProgressInner(null, "auto")}</div>
         <div style="margin-top:12px">
           <label style="display:inline-flex;align-items:center;gap:8px"><input type="checkbox" id="mx-auto-enabled" ${enabled ? "checked" : ""}> <b>开启自动打标</b></label>
           <div class="mx-auto-period" id="mx-auto-regular" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px">
@@ -1185,7 +1186,9 @@ export function createAdminKolsView(dependencies) {
         return;
       }
       const box = $("#mx-tag-progress");
-      if (box) box.innerHTML = adminMxTagProgressInner(prog);
+      if (box) box.innerHTML = adminMxTagProgressInner(prog, "manual");
+      const autoBox = $("#mx-tag-auto-progress");
+      if (autoBox) autoBox.innerHTML = adminMxTagProgressInner(prog, "auto");
       const runs = Array.isArray(prog?.runs) ? prog.runs : [];
       if (prog.running) {
         _mxTagPollTimer = setTimeout(tick, 3000);
@@ -1217,13 +1220,16 @@ export function createAdminKolsView(dependencies) {
     tick();
   }
 
-  function adminMxTagProgressInner(prog) {
+  function adminMxTagProgressInner(prog, source) {
     const runs = (prog && Array.isArray(prog.runs)) ? prog.runs : [];
-    if (!runs.length) {
-      return `<p class="section-meta">暂无进行中的打标任务。</p>`;
+    const wantAuto = source === "auto";
+    const scoped = runs.filter((r) => (wantAuto ? r.source === "auto" : r.source !== "auto"));
+    if (!scoped.length) {
+      // 自动面板有自己的状态行，空闲时不必再占一行「暂无」
+      return wantAuto ? "" : `<p class="section-meta">暂无进行中的打标任务。</p>`;
     }
-    const activeHtml = runs.filter((r) => r.status === "running").map(adminMxTagRunBlock).join("");
-    const doneHtml = runs.filter((r) => r.status !== "running").map(adminMxTagRunDoneLine).join("");
+    const activeHtml = scoped.filter((r) => r.status === "running").map(adminMxTagRunBlock).join("");
+    const doneHtml = scoped.filter((r) => r.status !== "running").map(adminMxTagRunDoneLine).join("");
     return `${activeHtml}${doneHtml}`;
   }
 
