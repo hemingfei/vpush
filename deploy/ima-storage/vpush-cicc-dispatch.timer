@@ -1,0 +1,10 @@
+[Unit]
+Description=Retry pending V Push CICC commands
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+Unit=vpush-cicc-dispatch.service
+
+[Install]
+WantedBy=timers.target

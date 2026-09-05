@@ -72,6 +72,16 @@ def test_schedule_toggle(ctrl):
     assert not flag.exists()
 
 
+def test_read_schedule_rejects_out_of_range_stored_time(ctrl):
+    ctl, archive = ctrl
+    status_path = archive / "local" / ".cicc" / "status.json"
+    status_path.write_text(json.dumps({
+        "ts": time.time(), "storage": {"schedule": {"time": "24:99"}},
+    }), encoding="utf-8")
+
+    assert ctl.read_schedule()["time"] == "03:00"
+
+
 def test_from_env_none_without_archive(monkeypatch):
     monkeypatch.delenv("IMA_ARCHIVE_ROOT", raising=False)
     assert from_env() is None
@@ -118,6 +128,30 @@ def test_prepare_target_dir_repairs_category_parent(monkeypatch, tmp_path):
     ]
     assert target.parent.stat().st_mode & 0o777 == 0o750
     assert target.stat().st_mode & 0o777 == 0o750
+
+
+def test_load_filters_file_preserves_commas_and_rejects_invalid_values(tmp_path):
+    path = tmp_path / "filters.json"
+    path.write_text(json.dumps({
+        "categories": ["公司研究"],
+        "keywords": ["alpha,beta", "半导体"],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    assert cicc_report_collector.load_filters_file(path) == (
+        ["公司研究"], ["alpha,beta", "半导体"],
+    )
+
+    path.write_text(json.dumps({"categories": [], "keywords": [123]}), encoding="utf-8")
+    with pytest.raises(ValueError, match="keywords"):
+        cicc_report_collector.load_filters_file(path)
+
+
+def test_write_completion_marker_is_atomic(tmp_path):
+    path = tmp_path / "completed.json"
+    cicc_report_collector.write_completion_marker(path, "command-id")
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"id": "command-id"}
+    assert not list(tmp_path.glob(".completed.*"))
 
 
 

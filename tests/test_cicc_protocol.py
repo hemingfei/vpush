@@ -34,6 +34,7 @@ def _dispatch(monkeypatch, ctrl, archive):
     monkeypatch.setattr(mod, "SCHEDULE_FILE", str(ctrl / "cicc-schedule.json"))
     launched = []
     monkeypatch.setattr(mod, "launch", lambda argv, log_name: launched.append((argv, log_name)))
+    monkeypatch.setattr(mod, "run_collector", lambda argv: (launched.append((argv, "collector")) or (True, None)))
     monkeypatch.setattr(mod, "collectors_running", lambda: 0)
     (ctrl / "commands").mkdir(parents=True, exist_ok=True)
     (ctrl / "results").mkdir(parents=True, exist_ok=True)
@@ -87,7 +88,7 @@ def test_dispatch_writes_success_result_and_launches(ctrl, monkeypatch):
     mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
     cmd_id = "a" * 32
     _write_command(archive / "local" / ".cicc", f"1710000000000-incr-{cmd_id[:8]}.json",
-                   {"id": cmd_id, "mode": "incr", "actor": "admin", "ts": 1710000000,
+                   {"id": cmd_id, "mode": "incr", "actor": "admin", "ts": int(time.time()),
                     "payload": {}})
     mod.main()
     assert launched, "incr 必须触发 launch"
@@ -105,10 +106,10 @@ def test_dispatch_rejects_missing_fields_with_failed_result(ctrl, monkeypatch):
     mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
     ctrl_dir = archive / "local" / ".cicc"
     cases = {
-        "bad-mode.json": {"id": "d" * 32, "mode": "rm -rf /", "ts": 1710000000},
-        "no-mode.json": {"id": "b" * 32, "ts": 1710000000},
+        "bad-mode.json": {"id": "d" * 32, "mode": "rm -rf /", "ts": int(time.time())},
+        "no-mode.json": {"id": "b" * 32, "ts": int(time.time())},
         "no-ts.json": {"id": "c" * 32, "mode": "incr"},
-        "bad-payload.json": {"id": "f" * 32, "mode": "incr", "ts": 1710000000,
+        "bad-payload.json": {"id": "f" * 32, "mode": "incr", "ts": int(time.time()),
                              "payload": "not-a-dict"},
     }
     for name, cmd in cases.items():
@@ -129,7 +130,7 @@ def test_dispatch_ignores_temp_files(ctrl, monkeypatch):
     mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
     ctrl_dir = archive / "local" / ".cicc"
     _write_command(ctrl_dir, "1710000000000-incr.json",
-                   {"id": "e" * 32, "mode": "incr", "actor": "admin", "ts": 1710000000,
+                   {"id": "e" * 32, "mode": "incr", "actor": "admin", "ts": int(time.time()),
                     "payload": {}})
     _write_command(ctrl_dir, ".tmp.12345", {"mode": "incr"})
     mod.main()
@@ -143,7 +144,7 @@ def test_dispatch_legacy_command_without_id_still_runs(ctrl, monkeypatch):
     mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
     ctrl_dir = archive / "local" / ".cicc"
     _write_command(ctrl_dir, "1710000000000-incr.json",
-                   {"mode": "incr", "actor": "admin", "ts": 1710000000})
+                   {"mode": "incr", "actor": "admin", "ts": int(time.time())})
     mod.main()
     assert launched, "旧命令必须仍被消费"
     assert not list((ctrl_dir / "commands").glob("*.json"))
@@ -160,7 +161,7 @@ def test_transient_failure_retries_then_succeeds(ctrl, monkeypatch):
     monkeypatch.setattr(mod, "collectors_running", lambda: next(busy))
     cmd_id = "11" * 16
     _write_command(ctrl_dir, f"1710000000000-incr-{cmd_id[:8]}.json",
-                   {"id": cmd_id, "mode": "incr", "actor": "admin", "ts": 1710000000,
+                   {"id": cmd_id, "mode": "incr", "actor": "admin", "ts": int(time.time()),
                     "payload": {}})
 
     mod.main()  # 第一次：collector 忙 → 保留命令文件
@@ -187,7 +188,7 @@ def test_permanent_failure_does_not_retry(ctrl, monkeypatch):
     ctrl_dir = archive / "local" / ".cicc"
     cmd_id = "22" * 16
     _write_command(ctrl_dir, f"1710000000000-bogus-{cmd_id[:8]}.json",
-                   {"id": cmd_id, "mode": "rm -rf /", "actor": "admin", "ts": 1710000000,
+                   {"id": cmd_id, "mode": "rm -rf /", "actor": "admin", "ts": int(time.time()),
                     "payload": {}})
     mod.main()
     mod.main()  # 再来一次也不能重试
@@ -205,7 +206,7 @@ def test_transient_failure_gives_up_after_max_attempts(ctrl, monkeypatch):
     monkeypatch.setattr(mod, "collectors_running", lambda: 1)  # 永远忙
     cmd_id = "33" * 16
     _write_command(ctrl_dir, f"1710000000000-incr-{cmd_id[:8]}.json",
-                   {"id": cmd_id, "mode": "incr", "actor": "admin", "ts": 1710000000,
+                   {"id": cmd_id, "mode": "incr", "actor": "admin", "ts": int(time.time()),
                     "payload": {}})
     for _ in range(mod.MAX_ATTEMPTS):
         mod.main()
@@ -229,7 +230,7 @@ def test_success_result_is_idempotent_on_rescan(ctrl, monkeypatch):
          "started_at": 100, "finished_at": 101, "attempts": 1, "error": None}),
         encoding="utf-8")
     _write_command(ctrl_dir, f"1710000000000-incr-{cmd_id[:8]}.json",
-                   {"id": cmd_id, "mode": "incr", "actor": "admin", "ts": 1710000000,
+                   {"id": cmd_id, "mode": "incr", "actor": "admin", "ts": int(time.time()),
                     "payload": {}})
     mod.main()
     assert not launched, "已成功命令不得重复执行"
@@ -246,7 +247,7 @@ def test_settings_keeps_keywords_through_dispatch(ctrl, monkeypatch):
     cmd_id = "55" * 16
     _write_command(ctrl_dir, f"1710000000000-settings-{cmd_id[:8]}.json",
                    {"id": cmd_id, "mode": "settings", "actor": "admin",
-                    "ts": 1710000000,
+                    "ts": int(time.time()),
                     "payload": {"categories": ["公司研究"],
                                  "keywords": ["宁德时代", "半导体"]}})
     mod.main()
@@ -264,7 +265,7 @@ def test_settings_empty_keywords_means_no_filter(ctrl, monkeypatch):
     cmd_id = "56" * 16
     _write_command(ctrl_dir, f"1710000000000-settings-{cmd_id[:8]}.json",
                    {"id": cmd_id, "mode": "settings", "actor": "admin",
-                    "ts": 1710000000,
+                    "ts": int(time.time()),
                     "payload": {"categories": [], "keywords": []}})
     mod.main()
     settings = json.loads((ctrl_dir / "cicc_settings.json").read_text(encoding="utf-8"))
@@ -278,7 +279,7 @@ def test_settings_rejects_non_string_keywords(ctrl, monkeypatch):
     cmd_id = "57" * 16
     _write_command(ctrl_dir, f"1710000000000-settings-{cmd_id[:8]}.json",
                    {"id": cmd_id, "mode": "settings", "actor": "admin",
-                    "ts": 1710000000,
+                    "ts": int(time.time()),
                     "payload": {"categories": ["公司研究"], "keywords": [123]}})
     mod.main()
     r = json.loads((ctrl_dir / "results" / f"{cmd_id}.json").read_text(encoding="utf-8"))
@@ -296,7 +297,7 @@ def test_keywords_survive_unicode_and_quotes(ctrl, monkeypatch):
     cmd_id = "58" * 16
     _write_command(ctrl_dir, f"1710000000000-settings-{cmd_id[:8]}.json",
                    {"id": cmd_id, "mode": "settings", "actor": "admin",
-                    "ts": 1710000000,
+                    "ts": int(time.time()),
                     "payload": {"categories": ["公司研究"], "keywords": kw}})
     mod.main()
     settings = json.loads((ctrl_dir / "cicc_settings.json").read_text(encoding="utf-8"))
@@ -312,15 +313,16 @@ def test_retry_keeps_original_keywords(ctrl, monkeypatch):
     monkeypatch.setattr(mod, "collectors_running", lambda: next(busy))
     cmd_id = "59" * 16
     _write_command(ctrl_dir, f"1710000000000-incr-{cmd_id[:8]}.json",
-                   {"id": cmd_id, "mode": "incr", "actor": "admin", "ts": 1710000000,
+                   {"id": cmd_id, "mode": "incr", "actor": "admin", "ts": int(time.time()),
                     "payload": {"keywords": ["宁德时代"]}})
     mod.main()  # 第一次忙
     assert not launched
     mod.main()  # 第二次成功
     assert launched
     argv, _ = launched[0]
-    assert "--keywords" in argv
-    assert argv[argv.index("--keywords") + 1] == "宁德时代"
+    assert "--filters-file" in argv
+    filters = json.loads(Path(argv[argv.index("--filters-file") + 1]).read_text(encoding="utf-8"))
+    assert filters["keywords"] == ["宁德时代"]
     r = json.loads((ctrl_dir / "results" / f"{cmd_id}.json").read_text(encoding="utf-8"))
     assert r["status"] == "success" and r["attempts"] == 2
 
@@ -372,7 +374,7 @@ def test_dispatch_rejects_invalid_schedule_time(ctrl, monkeypatch):
         cmd_id = f"60{i}" + "0" * 30
         _write_command(ctrl_dir, f"1710000000000-schedule-{cmd_id[:8]}.json",
                        {"id": cmd_id, "mode": "schedule", "actor": "admin",
-                        "ts": 1710000000, "payload": {"time": bad}})
+                        "ts": int(time.time()), "payload": {"time": bad}})
     mod.main()
     assert not (ctrl_dir / "cicc-schedule.json").exists()
     results = {p.stem: json.loads(p.read_text(encoding="utf-8"))
@@ -389,7 +391,7 @@ def test_dispatch_accepts_valid_schedule_time(ctrl, monkeypatch):
     cmd_id = "61" * 16
     _write_command(ctrl_dir, f"1710000000000-schedule-{cmd_id[:8]}.json",
                    {"id": cmd_id, "mode": "schedule", "actor": "admin",
-                    "ts": 1710000000, "payload": {"time": "05:30"}})
+                    "ts": int(time.time()), "payload": {"time": "05:30"}})
     mod.main()
     sched = json.loads((ctrl_dir / "cicc-schedule.json").read_text(encoding="utf-8"))
     assert sched == {"time": "05:30"}
@@ -411,15 +413,15 @@ def test_dispatch_rejects_future_ts(ctrl, monkeypatch):
     assert r["status"] == "failed" and r["error"] == "invalid_ts"
 
 
-def test_dispatch_accepts_past_ts(ctrl, monkeypatch):
-    """过去 ts（重试/回补场景）必须放行，不得因时间而失败。"""
+def test_dispatch_accepts_recent_past_ts(ctrl, monkeypatch):
+    """阈值内的过去 ts（重试场景）必须放行。"""
     _, archive = ctrl
     mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
     ctrl_dir = archive / "local" / ".cicc"
     cmd_id = "63" * 16
     _write_command(ctrl_dir, f"1710000000000-incr-{cmd_id[:8]}.json",
                    {"id": cmd_id, "mode": "incr", "actor": "admin",
-                    "ts": 1710000000, "payload": {}})
+                    "ts": int(time.time()) - 60, "payload": {}})
     mod.main()
     assert launched
     r = json.loads((ctrl_dir / "results" / f"{cmd_id}.json").read_text(encoding="utf-8"))
@@ -457,7 +459,7 @@ def test_crash_after_write_before_dispatch_recovers(ctrl, monkeypatch):
     cmd_id = "64" * 16
     _write_command(ctrl_dir, f"1710000000000-incr-{cmd_id[:8]}.json",
                    {"id": cmd_id, "mode": "incr", "actor": "admin",
-                    "ts": 1710000000, "payload": {}})
+                    "ts": int(time.time()), "payload": {}})
     mod.main()
     assert launched
     r = json.loads((ctrl_dir / "results" / f"{cmd_id}.json").read_text(encoding="utf-8"))
@@ -472,7 +474,7 @@ def test_crash_mid_running_result_recovers_after_stale(ctrl, monkeypatch):
     cmd_id = "65" * 16
     _write_command(ctrl_dir, f"1710000000000-incr-{cmd_id[:8]}.json",
                    {"id": cmd_id, "mode": "incr", "actor": "admin",
-                    "ts": 1710000000, "payload": {}})
+                    "ts": int(time.time()), "payload": {}})
     # 模拟崩溃：result 停在 running（旧时间戳）
     (ctrl_dir / "results").mkdir(parents=True, exist_ok=True)
     (ctrl_dir / "results" / f"{cmd_id}.json").write_text(json.dumps(
@@ -494,7 +496,7 @@ def test_fresh_running_result_skips(ctrl, monkeypatch):
     cmd_id = "66" * 16
     _write_command(ctrl_dir, f"1710000000000-incr-{cmd_id[:8]}.json",
                    {"id": cmd_id, "mode": "incr", "actor": "admin",
-                    "ts": 1710000000, "payload": {}})
+                    "ts": int(time.time()), "payload": {}})
     (ctrl_dir / "results").mkdir(parents=True, exist_ok=True)
     (ctrl_dir / "results" / f"{cmd_id}.json").write_text(json.dumps(
         {"id": cmd_id, "mode": "incr", "status": "running",
@@ -513,7 +515,7 @@ def test_temp_settings_file_not_left_half_written(ctrl, monkeypatch):
     cmd_id = "67" * 16
     _write_command(ctrl_dir, f"1710000000000-settings-{cmd_id[:8]}.json",
                    {"id": cmd_id, "mode": "settings", "actor": "admin",
-                    "ts": 1710000000,
+                    "ts": int(time.time()),
                     "payload": {"categories": ["公司研究"], "keywords": ["宁德时代"]}})
     # 残留 tmp：模拟上次写入中途崩溃
     (ctrl_dir / "results" / "67.tmp.999").write_text('{"partial', encoding="utf-8")
@@ -530,13 +532,13 @@ def test_malicious_filenames_and_content_are_safe(ctrl, monkeypatch):
     mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
     ctrl_dir = archive / "local" / ".cicc"
     evil = [
-        ("..%2f..%2fetc%2fpasswd.json", {"mode": "incr", "ts": 1710000000}),
+        ("..%2f..%2fetc%2fpasswd.json", {"mode": "incr", "ts": int(time.time())}),
         (f"{'a' * 250}.json", "not-json{"),  # 超长文件名+非法 JSON（>255 会 OSError，250 是安全上限）
         ("evil$(rm).json", {"mode": "incr", "actor": ";rm -rf /",
-                            "ts": 1710000000, "payload": {}}),
+                            "ts": int(time.time()), "payload": {}}),
         ("1670000000000-incr-12345678.json",
          {"id": "68" * 16, "mode": "incr", "actor": "x" * 10000,
-          "ts": 1710000000, "payload": {"keywords": ["$(touch /tmp/pwned)"]}}),
+          "ts": int(time.time()), "payload": {"keywords": ["$(touch /tmp/pwned)"]}}),
     ]
     for name, content in evil:
         (ctrl_dir / "commands" / name).write_text(
@@ -546,8 +548,10 @@ def test_malicious_filenames_and_content_are_safe(ctrl, monkeypatch):
     assert not Path("/tmp/pwned").exists()
     assert not (ctrl_dir.parent / "passwd").exists()  # 路径穿越无效
     # 第 4 条是合法信封（含 shell 特殊字符的关键词只进 argv，不执行）
-    launched_kw = [a for a, _ in launched if "--keywords" in a]
-    assert launched_kw and "$(touch /tmp/pwned)" in launched_kw[0]
+    launched_kw = [a for a, _ in launched if "--filters-file" in a]
+    assert launched_kw
+    filters_path = Path(launched_kw[0][launched_kw[0].index("--filters-file") + 1])
+    assert "$(touch /tmp/pwned)" in json.loads(filters_path.read_text(encoding="utf-8"))["keywords"]
 
 
 def test_invalid_json_command_fails_keeps_nothing(ctrl, monkeypatch):
@@ -563,3 +567,253 @@ def test_invalid_json_command_fails_keeps_nothing(ctrl, monkeypatch):
     r = json.loads(results[0].read_text(encoding="utf-8"))
     assert r["status"] == "failed"
     assert r["error"] == "invalid_json"
+
+
+def test_command_id_cannot_escape_results_directory(ctrl, monkeypatch):
+    _, archive = ctrl
+    mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    _write_command(ctrl_dir, "escape.json", {
+        "id": "../../escaped", "mode": "incr", "actor": "admin",
+        "ts": int(time.time()), "payload": {},
+    })
+
+    mod.main()
+
+    assert not launched
+    assert not (archive / "escaped.json").exists()
+    results = list((ctrl_dir / "results").glob("*.json"))
+    assert len(results) == 1
+    assert json.loads(results[0].read_text(encoding="utf-8"))["error"] == "invalid_id"
+
+
+def test_invalid_collector_filter_type_fails_without_stopping_queue(ctrl, monkeypatch):
+    _, archive = ctrl
+    mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    now = int(time.time())
+    _write_command(ctrl_dir, "bad.json", {
+        "id": "badfilters", "mode": "incr", "actor": "admin", "ts": now,
+        "payload": {"keywords": 123},
+    })
+    _write_command(ctrl_dir, "good.json", {
+        "id": "goodfilters", "mode": "incr", "actor": "admin", "ts": now,
+        "payload": {"keywords": []},
+    })
+
+    mod.main()
+
+    assert mod.load_result("badfilters")["error"] == "invalid_keywords"
+    assert mod.load_result("goodfilters")["status"] == "success"
+    assert len(launched) == 1
+
+
+def test_stale_command_is_rejected(ctrl, monkeypatch):
+    _, archive = ctrl
+    mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    _write_command(ctrl_dir, "stale.json", {
+        "id": "stale-command", "mode": "incr", "actor": "admin",
+        "ts": int(time.time()) - mod.MAX_TS_AGE - 1, "payload": {},
+    })
+
+    mod.main()
+
+    assert not launched
+    assert mod.load_result("stale-command")["error"] == "stale_command"
+
+
+def test_legacy_schedule_fields_are_migrated_to_payload(ctrl, monkeypatch):
+    _, archive = ctrl
+    mod, _ = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    _write_command(ctrl_dir, "legacy-schedule.json", {
+        "mode": "schedule", "actor": "admin", "ts": int(time.time()), "time": "04:30",
+    })
+
+    mod.main()
+
+    assert json.loads((ctrl_dir / "cicc-schedule.json").read_text(encoding="utf-8")) == {
+        "time": "04:30",
+    }
+
+
+def test_stale_running_at_attempt_limit_is_not_executed(ctrl, monkeypatch):
+    _, archive = ctrl
+    mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    cmd_id = "attempt-limit"
+    _write_command(ctrl_dir, "attempt-limit.json", {
+        "id": cmd_id, "mode": "incr", "actor": "admin",
+        "ts": int(time.time()), "payload": {},
+    })
+    mod.write_result(cmd_id, {
+        "id": cmd_id, "mode": "incr", "status": "running",
+        "started_at": int(time.time()) - mod.RESULT_STALE_SECONDS - 1,
+        "finished_at": 0, "attempts": mod.MAX_ATTEMPTS, "error": None,
+    })
+
+    mod.main()
+
+    assert not launched
+    assert mod.load_result(cmd_id)["status"] == "failed"
+    assert mod.load_result(cmd_id)["attempts"] == mod.MAX_ATTEMPTS
+
+
+def test_collector_exit_failure_is_not_marked_success(ctrl, monkeypatch):
+    _, archive = ctrl
+    mod, _ = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    monkeypatch.setattr(mod, "run_collector", lambda argv: (False, "collector_exit_1"))
+    _write_command(ctrl_dir, "collector-failure.json", {
+        "id": "collector-failure", "mode": "incr", "actor": "admin",
+        "ts": int(time.time()), "payload": {},
+    })
+
+    mod.main()
+
+    result = mod.load_result("collector-failure")
+    assert result["status"] == "retry"
+    assert result["error"] == "collector_exit_1"
+    assert (ctrl_dir / "commands" / "collector-failure.json").exists()
+
+
+def test_collector_receives_filters_as_json_file(ctrl, monkeypatch):
+    _, archive = ctrl
+    mod, _ = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    received = []
+
+    def run(argv):
+        path = Path(argv[argv.index("--filters-file") + 1])
+        received.append(json.loads(path.read_text(encoding="utf-8")))
+        return True, None
+
+    monkeypatch.setattr(mod, "run_collector", run)
+    _write_command(ctrl_dir, "filters.json", {
+        "id": "filter-file", "mode": "incr", "actor": "admin",
+        "ts": int(time.time()),
+        "payload": {"categories": ["公司研究"], "keywords": ["alpha,beta", "半导体"]},
+    })
+
+    mod.main()
+
+    assert received == [{"categories": ["公司研究"], "keywords": ["alpha,beta", "半导体"]}]
+
+
+def test_manual_collection_snapshots_saved_filters_for_retry(ctrl, monkeypatch):
+    _, archive = ctrl
+    mod, _ = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    mod.write_json(str(ctrl_dir / "cicc_settings.json"), {
+        "categories": ["公司研究"], "keywords": ["原始关键词"],
+    })
+    received = []
+
+    outcomes = iter([(False, "collector_exit_1"), (True, None)])
+    monkeypatch.setattr(mod, "run_collector",
+                        lambda argv: (received.append(json.loads(Path(
+                            argv[argv.index("--filters-file") + 1]).read_text(encoding="utf-8")))
+                                      or next(outcomes)))
+    _write_command(ctrl_dir, "manual.json", {
+        "id": "manual-snapshot", "mode": "incr", "actor": "admin",
+        "ts": int(time.time()), "payload": {},
+    })
+
+    mod.main()
+    mod.write_json(str(ctrl_dir / "cicc_settings.json"), {
+        "categories": [], "keywords": ["后来修改"],
+    })
+    mod.main()
+
+    assert received == [
+        {"categories": ["公司研究"], "keywords": ["原始关键词"]},
+        {"categories": ["公司研究"], "keywords": ["原始关键词"]},
+    ]
+
+
+def test_dispatch_has_periodic_retry_timer():
+    root = Path(__file__).resolve().parent.parent
+    timer = root / "deploy/ima-storage/vpush-cicc-dispatch.timer"
+    assert timer.exists()
+    assert "OnUnitActiveSec=" in timer.read_text(encoding="utf-8")
+
+
+def test_dispatch_service_timeout_value_has_no_inline_comment():
+    root = Path(__file__).resolve().parent.parent
+    service = root / "deploy/ima-storage/vpush-cicc-dispatch.service"
+    timeout = next(line for line in service.read_text(encoding="utf-8").splitlines()
+                   if line.startswith("TimeoutStartSec="))
+    assert re.fullmatch(r"TimeoutStartSec=\d+", timeout)
+    dispatch = load_vps_script("cicc-dispatch")
+    assert int(timeout.partition("=")[2]) > dispatch.COLLECTOR_TIMEOUT
+
+    installer = (root / "scripts/vps/install_cicc_batch1.sh").read_text(encoding="utf-8")
+    assert "vpush-cicc-dispatch.service" in installer
+    assert timeout in installer
+
+
+def test_permission_error_is_permanent(ctrl, monkeypatch):
+    _, archive = ctrl
+    mod, _ = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    monkeypatch.setattr(mod, "run_collector",
+                        lambda argv: (_ for _ in ()).throw(PermissionError("denied")))
+    _write_command(ctrl_dir, "permission.json", {
+        "id": "permission-error", "mode": "incr", "actor": "admin",
+        "ts": int(time.time()), "payload": {},
+    })
+
+    mod.main()
+
+    result = mod.load_result("permission-error")
+    assert result["status"] == "failed"
+    assert result["error"] == "permission_denied"
+
+
+def test_pending_stop_request_is_detected_without_accepting_invalid_json(ctrl, monkeypatch):
+    _, archive = ctrl
+    mod, _ = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    (ctrl_dir / "commands" / "broken.json").write_text("{bad", encoding="utf-8")
+    assert mod.stop_requested() is False
+
+    _write_command(ctrl_dir, "stop.json", {
+        "id": "stop-request", "mode": "stop", "actor": "admin",
+        "ts": int(time.time()), "payload": {},
+    })
+    assert mod.stop_requested() is True
+
+
+def test_collector_error_uses_only_pause_marker_from_current_run(ctrl, monkeypatch):
+    _, archive = ctrl
+    mod, _ = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    assert mod.classify_collector_error(1, {"reason": "auth", "ts": 100}, 101) == \
+        "collector_exit_1"
+    assert mod.classify_collector_error(1, {"reason": "auth", "ts": 101}, 101) == \
+        "collector_auth"
+    assert mod.classify_collector_error(1, {"reason": "quota", "ts": 102}, 101) == \
+        "collector_quota"
+
+
+def test_stale_running_with_completion_marker_is_not_reexecuted(ctrl, monkeypatch):
+    _, archive = ctrl
+    mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    cmd_id = "completed-before-result"
+    _write_command(ctrl_dir, "completed.json", {
+        "id": cmd_id, "mode": "incr", "actor": "admin",
+        "ts": int(time.time()), "payload": {},
+    })
+    mod.write_result(cmd_id, {
+        "id": cmd_id, "mode": "incr", "status": "running",
+        "started_at": int(time.time()) - mod.RESULT_STALE_SECONDS - 1,
+        "finished_at": 0, "attempts": 1, "error": None,
+    })
+    mod.write_json(str(ctrl_dir / f"completed-{cmd_id}.json"), {"id": cmd_id})
+
+    mod.main()
+
+    assert not launched
+    assert mod.load_result(cmd_id)["status"] == "success"
+    assert not (ctrl_dir / "commands" / "completed.json").exists()

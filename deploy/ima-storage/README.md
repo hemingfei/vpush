@@ -227,9 +227,13 @@ systemctl enable --now vpush-cicc-dispatch.path vpush-cicc-status.timer
 - 结果按命令 `id` 写 `results/<id>.json`：`{id, mode, status, started_at, finished_at, attempts, error}`，
   `status ∈ success|failed|retry|running`。
 - 幂等：`status=success` 时残留命令文件只被清理不重跑；`running` 未超时（600s）跳过，超时恢复重试。
-- 重试：暂时性失败（collector 忙/OSError 等）保留命令文件，`attempts` 递增，最多 3 次后终判 failed；
+- 执行结果：采集命令同步等待采集器退出后才写 success；过滤条件通过权限受限的 JSON 文件传递，
+  保持关键词数组边界，不进入 shell 命令行。
+- 重试：暂时性失败（collector 忙/OSError 等）保留命令文件，由一分钟 timer 重扫，
+  `attempts` 递增，最多 3 次后终判 failed；
   永久失败（unknown_mode/invalid_*/脚本缺失）一次即 failed，不重试。
-- 旧格式（顶层 mode/actor/ts，无 id 无 payload）短期兼容：以文件名为幂等键照常消费。
+- 时效：命令超过 24 小时或未来超过 5 分钟均永久失败，避免挂载恢复后重放旧操作。
+- 旧格式（顶层 mode/actor/ts，无 id 无 payload）短期兼容：以文件名的安全摘要作为幂等键照常消费。
 - 回滚：`git checkout` 上一版 `scripts/vps/cicc-*.py` 重跑对应 install 脚本 + `daemon-reload`；
   禁用：`systemctl disable --now vpush-cicc-dispatch.path vpush-cicc-incremental.timer vpush-cicc-status.timer`。
 

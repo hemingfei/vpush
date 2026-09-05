@@ -89,6 +89,8 @@ tail -f /root/cicc/*.log     # 进度
   安装方式：`bash scripts/vps/install_cicc_batch1.sh` 开始，见 deploy/ima-storage/README「中金采集控制单元」。
 - 幂等保护：已有采集进程在跑时 incr/year/all 会被拒绝（ledger 记 `collector_already_running`）；
   stop 仅杀采集进程，已下载文件保留，重跑自动续传。
+- 命令失败由每分钟 dispatch timer 重扫，最多尝试 3 次；超过 24 小时的命令拒绝执行。
+- incr/year/all 等待采集器真实退出后写结果；品类和关键词通过 JSON 文件传递，逗号不会改变关键词边界。
 - API（仅管理员）：`GET /api/admin/cicc/status`、`POST /api/admin/cicc/trigger {mode}`、
   `PUT /api/admin/cicc/schedule {enabled}`；依赖 `IMA_ARCHIVE_ROOT` 指向 NFS 归档。
 

@@ -154,21 +154,13 @@ def test_platform_badges_keep_blue_selection(page: Page, static_origin: str, tmp
 
 
 @pytest.mark.parametrize("width", [375, 1440])
-def test_abstract_copy_reuses_toolbar_icon_button(page: Page, static_origin: str, tmp_path: Path, width: int):
+def test_abstract_has_no_copy_button(page: Page, static_origin: str, tmp_path: Path, width: int):
     install_badge_reader_bootstrap(page)
     page.set_viewport_size({"width": width, "height": 900})
     page.goto(static_origin)
     page.evaluate("() => go('knowledge/test-report')")
-    button = page.get_by_role("button", name="复制摘要", exact=True)
-    expect(button).to_be_visible()
-    assert "icon-btn" in button.get_attribute("class").split()
-    expect(button.locator("svg")).to_have_count(1)
-    assert button.inner_text() == ""
-    assert button.bounding_box()["width"] == button.bounding_box()["height"] == 44
-    page.evaluate("""() => Object.defineProperty(navigator, 'clipboard', {configurable: true,
-      value: {writeText: async text => { window.copiedAbstract = text; }}})""")
-    button.click()
-    assert page.evaluate("window.copiedAbstract") == "Summary to copy"
+    expect(page.get_by_text("Summary to copy", exact=True)).to_be_visible()
+    expect(page.get_by_role("button", name="复制摘要", exact=True)).to_have_count(0)
     expect(page.locator(".ima-reader-abstract")).to_have_attribute("open", "")
     page.screenshot(path=str(tmp_path / f"abstract-{width}.png"))
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")

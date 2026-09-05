@@ -72,7 +72,7 @@ class CiccControl:
         storage = data.get("storage") or {}
         schedule = storage.get("schedule") or {}
         t = str(schedule.get("time") or "03:00")
-        return {"time": t if re.fullmatch(r"\d{2}:\d{2}", t) else "03:00",
+        return {"time": t if validate_time_of_day(t) else "03:00",
                 "schedule_enabled": self.schedule_enabled()}
 
     def set_schedule_time(self, time_of_day: str, actor: str) -> dict:
