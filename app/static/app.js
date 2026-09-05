@@ -54,7 +54,7 @@ const CHANNEL_ICONS = {
 const GROK_TRANSLATE_ICON = `<svg class="p-tr-grok" viewBox="0 0 33 32" fill="currentColor" aria-hidden="true"><path d="M12.745 20.54l10.97-8.19c.539-.4 1.307-.244 1.564.38 1.349 3.288.746 7.241-1.938 9.955-2.683 2.714-6.417 3.31-9.83 1.954l-3.728 1.745c5.347 3.697 11.84 2.782 15.898-1.324 3.219-3.255 4.216-7.692 3.284-11.693l.008.009c-1.351-5.878.332-8.227 3.782-13.031L33 0l-4.54 4.59v-.014L12.743 20.544m-2.263 1.987c-3.837-3.707-3.175-9.446.1-12.755 2.42-2.449 6.388-3.448 9.852-1.979l3.72-1.737c-.67-.49-1.53-1.017-2.515-1.387-4.455-1.854-9.789-.931-13.41 2.728-3.483 3.523-4.579 8.94-2.697 13.561 1.405 3.454-.899 5.898-3.22 8.364C1.49 30.2.666 31.074 0 32l10.478-9.466"/></svg>`;
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.145";
+const APP_VERSION = "1.12.147";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -4649,6 +4649,7 @@ function applyTheme() {
   if (loginLogo) loginLogo.src = dark ? "/logo-mark-dark.svg" : "/logo-mark.svg";
   const favicon = document.getElementById("favicon");
   if (favicon) favicon.setAttribute("href", dark ? "/logo-mark-dark.svg" : "/logo-mark.svg");
+  updateThemeToggleIcon();
   return dark;
 }
 
@@ -4678,8 +4679,10 @@ function renderThemeSwitcher() {
 }
 
 function updateThemeToggleIcon() {
-  const btn = $("#theme-toggle-btn");
-  if (btn) btn.innerHTML = themeIconFor(themeMode());
+  const icon = themeIconFor(themeMode());
+  document.querySelectorAll(".theme-toggle-btn").forEach((btn) => {
+    btn.innerHTML = icon;
+  });
 }
 
 function cycleTheme() {
@@ -5340,6 +5343,7 @@ async function router() {
   if (!state.token) {
     $("#app-view").classList.add("hidden");
     $("#auth-view").classList.remove("hidden");
+    initTurnstile();
     return;
   }
   let user;
@@ -5427,6 +5431,73 @@ function togglePassword(inputId, btn) {
   btn.setAttribute("aria-pressed", String(show));
 }
 
+let turnstileSitekey = "";
+let turnstileScriptPromise = null;
+const turnstileWidgets = {};
+
+function renderTurnstile(elId, action) {
+  if (!turnstileSitekey || !window.turnstile) return;
+  const el = document.getElementById(elId);
+  if (!el) return;
+  if (turnstileWidgets[elId]) {
+    try { window.turnstile.remove(turnstileWidgets[elId]); } catch { /* already gone */ }
+  }
+  turnstileWidgets[elId] = window.turnstile.render(el, {
+    sitekey: turnstileSitekey,
+    action,
+    theme: "auto",
+    size: "flexible",
+    appearance: "interaction-only",
+  });
+}
+
+function resetTurnstile(elId) {
+  const id = turnstileWidgets[elId];
+  if (id && window.turnstile) {
+    try { window.turnstile.reset(id); } catch { /* ignore */ }
+  }
+}
+
+function turnstileToken(elId) {
+  const id = turnstileWidgets[elId];
+  return (id && window.turnstile && window.turnstile.getResponse(id)) || "";
+}
+
+async function ensureTurnstile() {
+  if (!turnstileSitekey) {
+    try {
+      const data = await api("/api/auth/turnstile");
+      turnstileSitekey = data.sitekey || "";
+    } catch {
+      return;
+    }
+  }
+  if (!turnstileSitekey) return;
+  if (!turnstileScriptPromise) {
+    turnstileScriptPromise = new Promise((resolve, reject) => {
+      if (window.turnstile) { resolve(); return; }
+      const s = document.createElement("script");
+      s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+      s.async = true;
+      s.defer = true;
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+  try {
+    await turnstileScriptPromise;
+  } catch {
+    return;
+  }
+  renderTurnstile("login-turnstile", "login");
+  renderTurnstile("register-turnstile", "register");
+}
+
+function initTurnstile() {
+  void ensureTurnstile();
+}
+
 async function doLogin(e) {
   e.preventDefault();
   $("#auth-error").textContent = "";
@@ -5436,7 +5507,11 @@ async function doLogin(e) {
   try {
     const data = await api("/api/auth/login", {
       method: "POST",
-      body: JSON.stringify({ username: $("#login-username").value.trim(), password: $("#login-password").value }),
+      body: JSON.stringify({
+        username: $("#login-username").value.trim(),
+        password: $("#login-password").value,
+        "cf-turnstile-response": turnstileToken("login-turnstile"),
+      }),
     });
     state.token = data.token;
     localStorage.setItem("dav_token", data.token);
@@ -5445,6 +5520,7 @@ async function doLogin(e) {
     $("#auth-error").textContent = err.message;
     btn.disabled = false;
     btn.textContent = "登 录";
+    resetTurnstile("login-turnstile");
   }
 }
 
@@ -5467,6 +5543,7 @@ async function doRegister(e) {
         username,
         password: $("#reg-password").value,
         code: $("#reg-code").value.trim(),
+        "cf-turnstile-response": turnstileToken("register-turnstile"),
       }),
     });
     state.token = data.token;
@@ -5476,6 +5553,7 @@ async function doRegister(e) {
     $("#reg-error").textContent = err.message;
     btn.disabled = false;
     btn.textContent = "创建账号";
+    resetTurnstile("register-turnstile");
   }
 }
 

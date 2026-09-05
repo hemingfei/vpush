@@ -32,6 +32,9 @@ ALL_ENV = [
     "WECHAT_APP_ID",
     "WECHAT_APP_SECRET",
     "WEB_TRUST_PROXY",
+    "TURNSTILE_SITE_KEY",
+    "TURNSTILE_SECRET",
+    "TURNSTILE_HOSTNAMES",
     "IMGBED_BASE_URL",
     "IMGBED_TOKEN",
     "IMGBED_CHANNEL",
@@ -159,6 +162,18 @@ def test_web_trust_proxy_default_false_and_env_override(tmp_path, monkeypatch):
     assert load_config(tmp_path / "nope.yaml").web.trust_proxy is False
     monkeypatch.setenv("WEB_TRUST_PROXY", "true")
     assert load_config(tmp_path / "nope.yaml").web.trust_proxy is True
+
+
+def test_turnstile_env(tmp_path, monkeypatch):
+    for name in ALL_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("TURNSTILE_SITE_KEY", "0x4AAAAAAEpFC-pepUf7vzMN")
+    monkeypatch.setenv("TURNSTILE_SECRET", "unit-secret")
+    monkeypatch.setenv("TURNSTILE_HOSTNAMES", "vpush.net")
+    config = load_config(tmp_path / "nope.yaml")
+    assert config.web.turnstile_site_key == "0x4AAAAAAEpFC-pepUf7vzMN"
+    assert config.web.turnstile_secret == "unit-secret"
+    assert config.web.turnstile_hostnames == "vpush.net"
 
 
 def test_imgbed_env(tmp_path, monkeypatch):
