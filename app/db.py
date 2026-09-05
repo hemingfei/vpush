@@ -1819,6 +1819,11 @@ class DB:
                 f"ON users({column}) WHERE {column} != ''"
             )
 
+        # MX 观点：历史合并标的名一次性拆分 + 受影响日快照重算（幂等，mx_target_split_v2）
+        from .mx_view_analysis import migrate_split_combined_target_names
+
+        migrate_split_combined_target_names(self)
+
     def _migrate_news(self) -> None:
         for slug, name, feeds in _BUILTIN_NEWS:
             self._conn.execute(

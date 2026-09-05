@@ -840,7 +840,8 @@ VIEW_SYSTEM_PROMPT_HEADER = """你是A股盘面研判助手。输入是财经社
 2. direction：看多/利好/看涨/推荐买入=bull；看空/风险提示/看跌/减仓建议=bear；中性陈述=neutral。
 3. action 仅在明确给出操作建议时输出（建仓/加仓/减仓/清仓/做T/观察），否则空串；题材观点一般无 action。
 4. target_type=stock 时 target_name 一律用 A 股正式简称，黑话按【黑话参考】还原；topic 优先用【题材参考表】名称，新题材用通行简短中文名。
-5. evidence 必须是输入里真实存在的消息 id（至少 1 个），无依据的观点不要输出；不编造大V与标的。"""
+5. evidence 必须是输入里真实存在的消息 id（至少 1 个），无依据的观点不要输出；不编造大V与标的。
+6. 一条 opinion 只含一个标的：target_name 须是单个题材名或股票名，不得带「、」「，」「,」「/」等连接符；同一段话对多个题材表达同一观点时拆成多条 opinion（evidence 可相同）。"""
 
 
 def build_view_system_prompt(topic_hints, action_tags) -> str:

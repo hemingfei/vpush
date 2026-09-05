@@ -52,6 +52,15 @@ DEFAULT_TOPIC_HINTS = [
 # 强度分权重：方向定符号（bull +1 / bear -1，neutral 不参与），操作放大绝对值
 ACTION_BOOST = {"建仓": 1.5, "加仓": 1.5, "减仓": 1.5, "清仓": 1.5, "做T": 0.7, "观察": 0.7, "": 1.0}
 
+# 合并标的名分隔符：顿号/全半角逗号/分号/斜杠等；ASCII 点号仅当「字母数字.汉字」时
+# 视为连接符（PCB.存储芯片 拆开），版本号 工业4.0 / web3.0 不拆
+TARGET_NAME_SPLIT_RE = re.compile(r"[、，,;；/｜|]+|(?<=[0-9A-Za-z])\.(?=[\u4e00-\u9fff])")
+
+
+def split_target_name(name) -> list[str]:
+    """合并标的名拆成原子列表（题材/个股通用）；无分隔符返回原名单元素，拆完为空返回空表。"""
+    return [p.strip() for p in TARGET_NAME_SPLIT_RE.split(str(name or "")) if p.strip()]
+
 _HHMM_RE = re.compile(r"^\d{2}:\d{2}$")
 
 
@@ -238,9 +247,10 @@ VALID_ACTIONS = tuple(a for a in ACTION_BOOST if a)
 
 
 def validate_opinions(raw, posts, aliases, day, snapshot_at):
-    """校验 LLM 研判结果：证据核对/作者核对/枚举/黑话归一/批内去重。
+    """校验 LLM 研判结果：证据核对/作者核对/枚举/黑话归一/合并标的拆分/批内去重。
 
-    返回 (可落库 opinions, 参考表之外的新题材名)。任何一项不满足即丢弃该条。
+    返回 (可落库 opinions, 参考表之外的新题材名)。任何一项不满足即丢弃该条；
+    target_name 含连接符时拆成多条观点（多空/证据/摘要逐条复制，个股拆后逐个过黑话表）。
     """
     posts_by_id = {}
     for p in posts or []:
@@ -276,34 +286,40 @@ def validate_opinions(raw, posts, aliases, day, snapshot_at):
         name = str(item.get("target_name") or "").strip()
         if not name:
             continue
+        # 合并标的（机器人、固态电池 / 久其软件,天娱数科）拆成逐条观点；个股拆后逐个过黑话表
         if ttype == "stock":
-            name = alias_map.get(name, name)
+            names = [alias_map.get(part, part) for part in split_target_name(name)]
+        else:
+            names = split_target_name(name)
+        if not names:
+            continue
         action = str(item.get("action") or "").strip()
         if action and action not in VALID_ACTIONS:
             action = ""
-        key = (kol_id, ttype, name)
-        if key in seen:
-            continue
-        seen.add(key)
         occurred = max(str(p.get("published_at") or "") for p in ev_posts)
-        valid.append(
-            {
-                "trading_day": day,
-                "snapshot_at": snapshot_at,
-                "kol_id": kol_id,
-                "kol_name": kol_name,
-                "target_type": ttype,
-                "target_name": name,
-                "direction": direction,
-                "action": action,
-                "confidence": str(item.get("confidence") or "high"),
-                "summary": str(item.get("summary") or "").strip()[:200],
-                "evidence_post_ids": evidence,
-                "occurred_at": occurred,
-            }
-        )
-        if ttype == "topic":
-            new_topics.append(name)
+        for name in names:
+            key = (kol_id, ttype, name)
+            if key in seen:
+                continue
+            seen.add(key)
+            valid.append(
+                {
+                    "trading_day": day,
+                    "snapshot_at": snapshot_at,
+                    "kol_id": kol_id,
+                    "kol_name": kol_name,
+                    "target_type": ttype,
+                    "target_name": name,
+                    "direction": direction,
+                    "action": action,
+                    "confidence": str(item.get("confidence") or "high"),
+                    "summary": str(item.get("summary") or "").strip()[:200],
+                    "evidence_post_ids": evidence,
+                    "occurred_at": occurred,
+                }
+            )
+            if ttype == "topic":
+                new_topics.append(name)
     return valid, sorted(set(new_topics))
 
 
@@ -818,3 +834,77 @@ def start_backfill_job(db, day_from, day_to, llm_config=None) -> bool:
 
     threading.Thread(target=worker, name="mx-view-backfill", daemon=True).start()
     return True
+
+
+# ---- 一次性迁移：拆分历史合并标的名并重算受影响日快照 ----
+
+MX_TARGET_SPLIT_DONE_KEY = "mx_target_split_v2"
+
+
+def migrate_split_combined_target_names(db) -> bool:
+    """拆分 mx_opinions 里的合并标的名（题材/个股通用）并重算受影响日快照 payload。
+
+    旧版 LLM 偶发把多个标的并成一条观点（机器人、固态电池 / 久其软件,天娱数科），
+    校验层不拆导致双榜/热力图按合并名聚合。迁移把合并名拆成原子行（replace 整批
+    重写，同批同大V撞名保留更晚一条）、清理候选表里的合并名，再按当前立场口径
+    逐快照重算受影响日（summary/message_count 原样保留）。幂等：完成标记落
+    settings；有实际改动返回 True。
+    """
+    if str(db.get_setting(MX_TARGET_SPLIT_DONE_KEY) or "") == "1":
+        return False
+    days: set[str] = set()
+    for meta in db.mx_view_days():
+        day = str(meta["trading_day"])
+        rebuilt: dict[int, list[dict]] = {}
+        day_dirty = False
+        for row in db.list_mx_opinions(day):
+            name = str(row["target_name"])
+            parts = split_target_name(name)
+            if parts != [name]:
+                day_dirty = True
+                days.add(day)
+            batch_rows = rebuilt.setdefault(int(row["batch_id"]), [])
+            for part in parts:
+                batch_rows.append({
+                    "trading_day": str(row["trading_day"]),
+                    "snapshot_at": str(row["snapshot_at"]),
+                    "kol_id": int(row["kol_id"]),
+                    "target_type": str(row["target_type"]),
+                    "target_name": part,
+                    "direction": str(row["direction"]),
+                    "action": str(row["action"] or ""),
+                    "confidence": str(row["confidence"] or "high"),
+                    "summary": str(row["summary"] or ""),
+                    "evidence_post_ids": json.loads(row["evidence_post_ids"] or "[]"),
+                    "occurred_at": str(row["occurred_at"] or ""),
+                })
+        if not day_dirty:
+            continue
+        for batch_id, ops in rebuilt.items():
+            dedup: dict[tuple, dict] = {}
+            for op in ops:  # 行序即 (snapshot_at, occurred_at, id) 升序，撞名留更晚
+                dedup[(op["kol_id"], op["target_type"], op["target_name"])] = op
+            db.replace_mx_opinions(batch_id, list(dedup.values()))
+    for day in sorted(days):
+        prev_payload = None
+        for snap in db.list_mx_view_snapshots(day):
+            payload = aggregate_day_state(
+                day, snap["snapshot_at"],
+                db.list_mx_opinions(day, up_to_at=snap["snapshot_at"]),
+                prev_payload,
+            )
+            old = snap.get("payload") or {}
+            payload["summary"] = old.get("summary")
+            payload["message_count"] = int(old.get("message_count") or 0)
+            db.upsert_mx_view_snapshot(day, snap["snapshot_at"], snap["seq"], snap["kind"],
+                                       payload, snap["batch_id"])
+            prev_payload = payload
+    if days:
+        for cand in list(get_topic_candidates(db)):
+            parts = split_target_name(cand)
+            if parts and parts != [cand]:
+                remove_topic_candidate(db, cand)
+                add_topic_candidates(db, parts)
+        bump_view_version(db)
+    db.set_setting(MX_TARGET_SPLIT_DONE_KEY, "1")
+    return bool(days)

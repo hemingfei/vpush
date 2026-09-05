@@ -595,3 +595,100 @@ def test_list_mx_posts_in_window_excludes_disabled_kols():
     assert [p["external_id"] for p in db.list_mx_posts_in_window(day, "09:15", "09:20")] == ["m1"]
     db.update_kol(kol, enabled=False)
     assert db.list_mx_posts_in_window(day, "09:15", "09:20") == []
+
+
+def test_split_target_name_separators():
+    """合并标的名拆分：顿号/逗号/分号/斜杠均拆；「字母数字.汉字」的点号拆，版本号不拆。"""
+    from app.mx_view_analysis import split_target_name
+
+    assert split_target_name("机器人、固态电池") == ["机器人", "固态电池"]
+    assert split_target_name("PCB,存储芯片") == ["PCB", "存储芯片"]
+    assert split_target_name("液冷,硅微粉,折叠屏,铜箔") == ["液冷", "硅微粉", "折叠屏", "铜箔"]
+    assert split_target_name("PCB.存储芯片") == ["PCB", "存储芯片"]  # 缩写.汉字
+    assert split_target_name("硬科技；银行/券商") == ["硬科技", "银行", "券商"]
+    assert split_target_name("AI , 液冷") == ["AI", "液冷"]  # 分隔符带空白
+    assert split_target_name("工业4.0") == ["工业4.0"]  # 版本号不拆
+    assert split_target_name("web3.0") == ["web3.0"]
+    assert split_target_name("久其软件,天娱数科") == ["久其软件", "天娱数科"]  # 个股合并名
+    assert split_target_name("固态电池") == ["固态电池"]  # 无分隔符原样返回
+    assert split_target_name("") == [] and split_target_name("、") == []
+
+
+def test_validate_opinions_splits_combined_topic_names():
+    """LLM 把多题材并成一条时拆成逐条观点：多空/证据复制，新题材逐个上报，批内去重按拆后名。"""
+    raw = [
+        {"author": "王哥", "target_type": "topic", "target_name": "机器人、固态电池", "direction": "bull",
+         "action": "", "confidence": "high", "summary": "都看好", "evidence": [11]},
+        # 拆出的「固态电池」与上一条撞名：同批同大V去重，保留首条
+        {"author": "王哥", "target_type": "topic", "target_name": "固态电池", "direction": "bear",
+         "action": "", "confidence": "high", "summary": "late", "evidence": [11]},
+        {"author": "李姐", "target_type": "topic", "target_name": "工业4.0", "direction": "bull",
+         "action": "", "confidence": "high", "summary": "版本号不拆", "evidence": [12]},
+    ]
+    valid, new_topics = validate_opinions(raw, _posts(), [], "2026-09-04", "09:20")
+    assert [(o["kol_name"], o["target_name"], o["direction"]) for o in valid] == [
+        ("王哥", "机器人", "bull"), ("王哥", "固态电池", "bull"), ("李姐", "工业4.0", "bull")]
+    assert all(o["evidence_post_ids"] == [11] for o in valid[:2])
+    assert new_topics == ["固态电池", "工业4.0", "机器人"]  # 按码点排序
+
+
+def test_validate_opinions_splits_combined_stock_names():
+    """合并个股名拆开后逐个过黑话表归一，多空/操作逐条复制。"""
+    raw = [
+        {"author": "李姐", "target_type": "stock", "target_name": "中锂、天齐", "direction": "bear",
+         "action": "减仓", "confidence": "high", "summary": "高位都减", "evidence": [12]},
+    ]
+    valid, new_topics = validate_opinions(
+        raw, _posts(), [{"alias": "中锂", "stock": "中X锂业"}, {"alias": "天齐", "stock": "天齐锂业"}],
+        "2026-09-04", "09:20")
+    assert [(o["target_type"], o["target_name"], o["direction"], o["action"]) for o in valid] == [
+        ("stock", "中X锂业", "bear", "减仓"), ("stock", "天齐锂业", "bear", "减仓")]
+    assert new_topics == []  # 个股不计新题材
+
+
+def test_migrate_split_combined_target_names_rebuilds_snapshots():
+    """历史迁移：合并题材/个股行拆开、受影响日快照按当前立场口径重算、幂等、候选表同步清理。"""
+    from app.mx_view_analysis import (
+        MX_TARGET_SPLIT_DONE_KEY,
+        get_topic_candidates,
+        migrate_split_combined_target_names,
+    )
+
+    db = make_db()
+    day = "2026-09-04"
+    kol = db.add_kol("mx", "王哥", "room1")
+    bid = db.upsert_mx_view_batch(day, "09:20", "live")
+    db.replace_mx_opinions(bid, [
+        _op(kol_id=kol, name="机器人、固态电池", direction="bull"),
+        _op(kol_id=kol, ttype="stock", name="XX股份", action="建仓"),
+        _op(kol_id=kol, ttype="stock", name="久其软件,天娱数科", direction="bear", action="减仓"),
+    ])
+    # 旧快照 payload 里是合并名聚合结果（bull=1），summary/message_count 应原样保留
+    db.upsert_mx_view_snapshot(day, "09:20", 1, "live", {
+        "message_count": 7, "summary": {"text": "旧总结"},
+        "topics": [{"name": "机器人、固态电池", "bull": 1, "bear": 0, "neutral": 0, "net": 1,
+                    "strength": 95, "momentum": 1, "latest_at": ""}],
+        "stocks": [],
+    }, bid)
+    db.set_setting("mx_view_topic_candidates", json.dumps(
+        ["机器人、固态电池", "液冷"], ensure_ascii=False))
+    db.set_setting(MX_TARGET_SPLIT_DONE_KEY, "")  # make_db 建库时 _migrate 已置完成标记
+
+    assert migrate_split_combined_target_names(db) is True
+    ops = db.list_mx_opinions(day)
+    assert sorted((o["target_type"], o["target_name"]) for o in ops) == [
+        ("stock", "XX股份"), ("stock", "久其软件"), ("stock", "天娱数科"),
+        ("topic", "固态电池"), ("topic", "机器人")]
+    snap = db.get_mx_view_snapshot(day, "09:20")["payload"]
+    assert [(t["name"], t["bull"], t["net"]) for t in snap["topics"]] == [
+        ("机器人", 1, 1), ("固态电池", 1, 1)]  # 重算：合并名拆成两行各 1 多
+    # 个股榜同步重算：XX股份 1 多，合并名拆成两行各 1 空（强度排序：多股在前，空股按拆分序）
+    assert [(s["name"], s["net"], s["strength"]) for s in snap["stocks"]] == [
+        ("XX股份", 1, 95), ("久其软件", -1, 5), ("天娱数科", -1, 5)]
+    assert snap["summary"] == {"text": "旧总结"} and snap["message_count"] == 7
+    # 合并候选拆开后，「机器人/固态电池」已在默认题材参考表 → 不入候选表
+    assert get_topic_candidates(db) == ["液冷"]
+
+    # 幂等：标记落库后二次运行不动作；候选表增量语义不受影响
+    assert db.get_setting(MX_TARGET_SPLIT_DONE_KEY) == "1"
+    assert migrate_split_combined_target_names(db) is False
