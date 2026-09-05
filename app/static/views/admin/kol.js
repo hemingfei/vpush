@@ -1352,7 +1352,7 @@ export function createAdminKolsView(dependencies) {
       <div class="modal-card tag-detail-card">
         <button type="button" class="tag-detail-close" aria-label="关闭" onclick="closeTagReviewModal()">×</button>
         <h3 class="mx-raw-title">标签详情</h3>
-        <p class="mx-raw-meta">${escapeHtml(data.kol_name || "")} · ${fmtPublished(data.published_at, true)}</p>
+        <p class="mx-raw-meta">${escapeHtml(data.kol_name || "")} · ${fmtPublished(data.published_at)}</p>
         <div class="tag-detail-body" id="tag-detail-body"></div>
       </div>`;
     mask._postId = postId;
