@@ -21,6 +21,7 @@ import { createAdminImaCollectorView } from "./views/admin/ima-collector.js";
 import { createAdminKnowledgeView } from "./views/admin/knowledge.js";
 import { createAdminDashboardView } from "./views/admin/dashboard.js";
 import { createPushSettingsView } from "./views/push-settings.js";
+import { createMxViewsView } from "./views/mx-views.js";
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -5810,6 +5811,50 @@ const {
 } = pushSettingsView;
 
 const {
+  mxvTeardown,
+  renderMxViews,
+  loadAdminMxViews,
+  mxvPickDay,
+  mxvRefreshLatest,
+  mxvStep,
+  mxvApplySnapshot,
+  mxvGoLatest,
+  mxvOpenTargetAt,
+  mxvOpenKol,
+  mxvCloseDrawer,
+  mxvAdminKolToggle,
+  mxvAdminKolAll,
+  mxvAdminKolNone,
+  mxvAdminSegAdd,
+  mxvAdminScheduleReset,
+  mxvAdminExtraAdd,
+  mxvAdminHintAdd,
+  mxvAdminHintsReset,
+  mxvAdminAdopt,
+  mxvAdminDismiss,
+  mxvAdminAdoptAll,
+  mxvAdminDismissAll,
+  mxvAdminRun,
+  mxvAdminBfPreset,
+  mxvAdminStartBackfill,
+  mxvAdminCancelBackfill,
+  mxvAdminSaveConfig,
+  mxvAdminResetConfig,
+} = createMxViewsView({
+  $,
+  state,
+  api,
+  escapeHtml,
+  setPageTitle,
+  go,
+  routeQuery,
+  routeStillActive,
+  currentAdminSeq: () => _adminRenderSeq,
+  emptyState,
+  flash,
+});
+
+const {
   loadAdminCodes,
   adminCodesBatch,
   adminCodesClearSelect,
@@ -6242,7 +6287,7 @@ async function router() {
   stopImaProgressPoll();
   stopTimelinePoll();
   // 离开 MX观点页：关 SSE 连接、停时钟/兜底轮询（重进页面时会重建）
-  if (typeof mxvTeardown === "function") mxvTeardown();
+  mxvTeardown();
   // 离开动态页前记录滚动位置，切回时恢复阅读位置
   if (document.querySelector("#feed")) {
     if (isLiveTimeline()) _liveSavedScrollY = window.scrollY;
@@ -7809,6 +7854,56 @@ const INLINE_HANDLERS = {
   // ---- hmf：灯箱缩放工具条 ----
   _lbZoomStep,
   _lbZoomReset,
+  // ---- hmf：MX观点页（/mx-views 与 admin/mx-views 面板内联 onclick）----
+  openRawModal,
+  avatarImgError,
+  mxvPickDay,
+  mxvRefreshLatest,
+  mxvStep,
+  mxvApplySnapshot,
+  mxvGoLatest,
+  mxvOpenTargetAt,
+  mxvOpenKol,
+  mxvCloseDrawer,
+  mxvAdminKolToggle,
+  mxvAdminKolAll,
+  mxvAdminKolNone,
+  mxvAdminSegAdd,
+  mxvAdminScheduleReset,
+  mxvAdminExtraAdd,
+  mxvAdminHintAdd,
+  mxvAdminHintsReset,
+  mxvAdminAdopt,
+  mxvAdminDismiss,
+  mxvAdminAdoptAll,
+  mxvAdminDismissAll,
+  mxvAdminRun,
+  mxvAdminBfPreset,
+  mxvAdminStartBackfill,
+  mxvAdminCancelBackfill,
+  mxvAdminSaveConfig,
+  mxvAdminResetConfig,
+  // ---- hmf：其余内联 onclick 引用但漏挂 window 的处理器（补 openRawModal 同类缺口）----
+  viewAiReportPost,
+  tlScrollToTop,
+  tlToggleKolbar,
+  tlPickKol,
+  mxRawRemoveTag,
+  mxRawAddTag,
+  mxRawModalText,
+  toggleMxAudio,
+  togglePostTags,
+  deleteAiTask,
+  openAiTaskModal,
+  runAiTask,
+  saveAiTask,
+  toggleAiLogDetail,
+  toggleAiTask,
+  viewAiPrompt,
+  viewAiTaskLogs,
+  kolPageSearchInput,
+  restoreDefaultPrompt,
+  toggleLightDarkTheme,
 };
 Object.assign(window, INLINE_HANDLERS);
 

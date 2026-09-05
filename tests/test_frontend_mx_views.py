@@ -4,6 +4,8 @@ from pathlib import Path
 STATIC = Path(__file__).parent.parent / "app" / "static"
 APP_JS = (STATIC / "app.js").read_text()
 INDEX = (STATIC / "index.html").read_text()
+# MX观点页已并入 ES 模块体系：由 app.js import，不再是独立 <script> 标签
+MX_VIEWS_JS = (STATIC / "views" / "mx-views.js").read_text()
 
 
 def _fn_body(name: str, src: str = APP_JS) -> str:
@@ -24,7 +26,8 @@ def _fn_body(name: str, src: str = APP_JS) -> str:
 
 def test_index_html_includes_mx_views_assets():
     assert 'href="/mx-views.css?v=2"' in INDEX
-    assert 'src="/mx-views.js?v=2"' in INDEX
+    assert 'from "./views/mx-views.js"' in APP_JS
+    assert 'src="/mx-views.js' not in INDEX  # 模块化后不再有独立 script 标签
 
 
 def test_router_and_nav_register_mx_views():
@@ -48,7 +51,7 @@ def test_open_raw_modal_falls_back_to_mxv_posts():
 
 def test_mx_views_assets_exist_with_scope():
     css = (STATIC / "mx-views.css").read_text()
-    js = (STATIC / "mx-views.js").read_text()
+    js = MX_VIEWS_JS
     assert ".mxv-root" in css
     assert "#0b0f1a" in css  # 固定暗底，不随主题
     assert "async function renderMxViews(" in js
@@ -57,7 +60,7 @@ def test_mx_views_assets_exist_with_scope():
 
 
 def test_mx_views_skeleton_functions_exist():
-    js = (STATIC / "mx-views.js").read_text()
+    js = MX_VIEWS_JS
     for fn in ("renderMxViews", "mxvLoadDay", "mxvApplySnapshot", "mxvGoLatest",
                "mxvStep", "mxvEnsureSSE", "mxvTeardown"):
         assert f"function {fn}(" in js, fn
@@ -72,7 +75,7 @@ def test_mx_views_css_key_components():
 
 
 def test_mx_views_boards_render_function():
-    js = (STATIC / "mx-views.js").read_text()
+    js = MX_VIEWS_JS
     body = _fn_body("mxvRenderBoards", js)
     for marker in ("mxv-banner", "mxv-boards", "mxv-chip", "mxv-kolcard",
                    "mxvOpenTarget", "mxvOpenKol", "mxv-feed-item"):
@@ -83,7 +86,7 @@ def test_mx_views_boards_render_function():
 
 
 def test_mx_views_drawer_functions():
-    js = (STATIC / "mx-views.js").read_text()
+    js = MX_VIEWS_JS
     for fn in ("mxvOpenTarget", "mxvOpenKol", "mxvCloseDrawer"):
         assert f"function {fn}(" in js, fn
     body = _fn_body("mxvOpenTarget", js)
@@ -95,7 +98,7 @@ def test_mx_views_drawer_functions():
 
 
 def test_admin_mx_views_page_function():
-    js = (STATIC / "mx-views.js").read_text()
+    js = MX_VIEWS_JS
     assert "async function loadAdminMxViews(" in js
     body = _fn_body("loadAdminMxViews", js)
     for marker in ("/api/admin/mx-views/config", "/api/admin/mx-views/status",

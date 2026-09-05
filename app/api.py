@@ -6426,6 +6426,8 @@ def create_api_router(
 
     from .mx_view_analysis import (
         CN_TZ,
+        DEFAULT_MX_VIEW_SCHEDULE,
+        DEFAULT_TOPIC_HINTS,
         MX_VIEW_BATCH_SIZE_KEY,
         MX_VIEW_ENABLED_KEY,
         MX_VIEW_KOL_IDS_KEY,
@@ -6492,9 +6494,11 @@ def create_api_router(
         return {
             "enabled": get_enabled(db),
             "schedule": get_schedule_config(db),
+            "schedule_default": dict(DEFAULT_MX_VIEW_SCHEDULE),
             "batch_size": get_batch_size(db),
             "kol_ids": get_kol_ids(db),
             "topic_hints": get_topic_hints(db),
+            "topic_hints_default": list(DEFAULT_TOPIC_HINTS),
             "topic_candidates": get_topic_candidates(db),
             "summary_min_interval": get_summary_min_interval(db),
         }

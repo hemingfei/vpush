@@ -102,3 +102,112 @@
 .mxv-op-evidence .ev .raw{background:none;border:none;color:var(--mxv-accent);cursor:pointer;
   font-size:12px;padding:0;}
 .mxv-empty{color:var(--mxv-faint);text-align:center;padding:30px 0;}
+
+/* ================= 管理端设置页（admin/mx-views）=================
+   走全局主题变量，不进 .mxv-root 暗色终端；前缀 mxva- 避免与页面样式冲突 */
+
+/* 页头：标题 + 启用开关两端布局 */
+.mxva-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;}
+.mxva-switch{display:inline-flex;align-items:center;gap:10px;cursor:pointer;user-select:none;flex:none;}
+.mxva-switch input{position:absolute;opacity:0;width:0;height:0;}
+.mxva-switch-ui{width:44px;height:26px;border-radius:13px;background:var(--color-line);
+  position:relative;transition:background .2s ease;flex:none;}
+.mxva-switch-ui::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;
+  border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform .2s ease;}
+.mxva-switch input:checked+.mxva-switch-ui{background:var(--color-accent);}
+.mxva-switch input:checked+.mxva-switch-ui::after{transform:translateX(18px);}
+.mxva-switch input:focus-visible+.mxva-switch-ui{outline:2px solid var(--color-accent-text);outline-offset:2px;}
+.mxva-switch-text{font-weight:600;color:var(--color-text-strong);font-size:var(--text-body);}
+
+/* 卡片网格 */
+.mxva-grid{display:grid;gap:14px;}
+.mxva-card{border:var(--border-default);border-radius:var(--radius-sm);padding:14px 16px;
+  background:var(--color-surface-hover);}
+.mxva-card-head{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;}
+.mxva-card-head b{font-size:var(--text-body);color:var(--color-text-strong);}
+.mxva-card-head .muted{font-size:var(--text-xs);}
+.mxva-head-ops{display:inline-flex;gap:8px;margin-left:auto;}
+.mxva-note{color:var(--color-text-muted);font-size:var(--text-xs);margin:10px 0 0;line-height:1.6;}
+.mxva-sub{display:flex;align-items:baseline;gap:8px;margin:14px 0 8px;font-size:var(--text-sm);}
+.mxva-sub:first-child{margin-top:0;}
+.mxva-sub .muted{font-size:var(--text-xs);}
+.mxva-row-gap{margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.mxva-toolbar-wrap{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+.mxva-warn{color:var(--color-danger);font-size:var(--text-xs);margin-top:6px;}
+
+/* 快照时刻表：时段行 + 固定时刻 chips + 解析预览 */
+.mxva-seg-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;}
+.mxva-seg-row .form-control{width:auto;min-width:118px;}
+.mxva-seg-arrow{color:var(--color-text-muted);}
+.mxva-seg-every{color:var(--color-text-muted);font-size:var(--text-sm);}
+.mxva-seg-row select.form-control{min-width:104px;}
+.mxva-extra-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.mxva-extra-row .form-control{width:118px;}
+.mxva-preview-count{font-size:var(--text-sm);color:var(--color-text-strong);margin-bottom:8px;}
+.mxva-time-chips{display:flex;gap:6px;flex-wrap:wrap;}
+.mxva-time-chip{background:var(--color-accent-soft);color:var(--color-accent-text);
+  border-radius:6px;padding:2px 8px;font-size:var(--text-xs);font-variant-numeric:tabular-nums;}
+.mxva-time-chip.gold{background:var(--color-warn-soft,#faf0d7);color:#8a6d1a;}
+.theme-dark .mxva-time-chip.gold{background:rgba(250,204,21,.15);color:#facc15;}
+
+/* 研判参数 */
+.mxva-param-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;}
+.mxva-param{display:flex;flex-direction:column;gap:6px;font-size:var(--text-sm);
+  color:var(--color-text-strong);font-weight:var(--font-weight-medium);}
+.mxva-param input{max-width:160px;}
+.mxva-param .muted{font-weight:normal;font-size:var(--text-xs);}
+
+/* 标签（chips）编辑：题材参考表 / 固定时刻 / 候选 */
+.mxva-chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
+.mxva-chips-wrap{margin-bottom:10px;}
+.mxva-tag{display:inline-flex;align-items:center;gap:6px;background:var(--color-accent-soft);
+  color:var(--color-text);border-radius:var(--radius-pill);padding:4px 6px 4px 12px;font-size:var(--text-sm);}
+.mxva-tag .btn-sm{padding:0 8px;min-height:22px;line-height:20px;}
+.mxva-tag-x{background:none;border:none;color:var(--color-text-muted);cursor:pointer;
+  font-size:15px;line-height:1;padding:2px 4px;border-radius:50%;}
+.mxva-tag-x:hover{color:var(--color-danger);background:var(--color-danger-soft);}
+.mxva-chip-add{display:flex;gap:8px;align-items:center;}
+.mxva-chip-add .form-control{max-width:280px;}
+
+/* 大V范围下拉：基于 AI分析 的 ai-kol-dropdown 基础样式做定制 */
+.mxva-kol-wrap{margin-bottom:2px;}
+.mxva-kol-menu{grid-template-columns:1fr;}
+.mxva-kol-menu.open{display:block;}
+.mxva-kol-toolbar{display:flex;gap:8px;align-items:center;margin-bottom:10px;position:sticky;top:-12px;
+  background:var(--color-surface);padding:4px 0;z-index:1;}
+.mxva-kol-toolbar .form-control{flex:1;min-width:0;}
+.mxva-kol-items{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));
+  gap:8px;max-height:340px;overflow-y:auto;}
+.mxva-kol-items .ai-kol-item.disabled .ai-kol-name{color:var(--color-text-muted);}
+.mxva-kol-items .ai-kol-item.disabled .ai-kol-platform{color:var(--color-danger);}
+.mxva-kol-empty{grid-column:1/-1;color:var(--color-text-muted);text-align:center;padding:18px 0;}
+
+/* 运行状态卡 */
+.mxva-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:10px;}
+.mxva-stat{border:var(--border-default);border-radius:var(--radius-sm);padding:8px 12px;
+  display:flex;flex-direction:column;gap:2px;background:var(--color-surface);}
+.mxva-stat .k{font-size:var(--text-xs);color:var(--color-text-muted);}
+.mxva-stat .v{font-size:var(--text-body);font-weight:var(--font-weight-semibold);
+  color:var(--color-text-strong);font-variant-numeric:tabular-nums;}
+.mxva-stat.warn .v{color:var(--color-danger);}
+.mxva-lastbatch{font-size:var(--text-sm);color:var(--color-text-muted);}
+.mxva-lastbatch.warn b{color:var(--color-danger);}
+.mxva-err{display:block;margin-top:4px;color:var(--color-danger);font-size:var(--text-xs);}
+.mxva-bf-run{margin-top:10px;border-top:var(--border-default);padding-top:10px;}
+.mxva-bf-run .row{display:flex;justify-content:space-between;align-items:center;gap:10px;
+  font-size:var(--text-sm);margin-bottom:6px;}
+.mxva-bf-bar{height:6px;border-radius:3px;background:var(--color-line);overflow:hidden;}
+.mxva-bf-bar>div{height:100%;background:var(--brand-gradient);transition:width .4s ease;}
+
+/* 保存栏：吸底随页面滚动 */
+.mxva-savebar{position:sticky;bottom:12px;z-index:20;display:flex;align-items:center;gap:12px;
+  margin-top:14px;padding:10px 16px;border:var(--border-default);border-radius:var(--radius-sm);
+  background:var(--color-surface);box-shadow:var(--shadow-lg);}
+.mxva-save-hint{flex:1;font-size:var(--text-sm);color:var(--color-text-muted);}
+.mxva-save-hint.dirty{color:var(--color-accent-text);font-weight:var(--font-weight-semibold);}
+
+@media (max-width:640px){
+  .mxva-seg-row .form-control{min-width:96px;}
+  .mxva-chip-add{flex-wrap:wrap;}
+  .mxva-chip-add .form-control{max-width:none;flex:1;}
+}
