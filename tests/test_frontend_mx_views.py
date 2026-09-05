@@ -43,6 +43,8 @@ def test_router_and_nav_register_mx_views():
     assert 'route: "admin/mx-views"' in nav and 'label: "智囊团"' in nav
     mobile = APP_JS[APP_JS.index("const MOBILE_NAV ="):APP_JS.index("function renderBottomNav")]
     assert 'route: "mx-views"' in mobile and 'label: "智囊团"' in mobile
+    # 手机底栏：智囊团紧挨「动态」右侧（与桌面导航一致），不落在广场后
+    assert mobile.index('route: "timeline"') < mobile.index('route: "mx-views"') < mobile.index('route: "home"')
     assert '"mx-views": loadAdminMxViews' in APP_JS
     # 页面/管理面板标题统一为「智囊团」
     assert 'setPageTitle("智囊团")' in MX_VIEWS_JS
@@ -127,9 +129,10 @@ def test_mx_views_feed_two_column_batch_layout():
     assert "Math.ceil(" in feed  # 左列 = 较新一半（向上取整）
     assert "slice(0, cut)" in feed and "slice(cut)" in feed
     assert "single" in feed  # 单条批次不拆两列
-    css = (STATIC / "mx-views.css").read_text().replace(" ", "")
+    css = (STATIC / "mx-views.css").read_text()
     assert ".mxv-feed-cols{display:grid;grid-template-columns:1fr 1fr" in css
-    assert "@media(max-width:760px)" in css and ".mxv-feed-cols{grid-template-columns:1fr" in css
+    compact = css.replace(" ", "")
+    assert "@media(max-width:760px)" in compact and ".mxv-feed-cols{grid-template-columns:1fr" in compact
 
 
 def test_mx_views_target_highlight_linkage():
@@ -150,7 +153,7 @@ def test_mx_views_target_highlight_linkage():
     assert ".mxv-feed-item.hl" in css
     compact = css.replace(" ", "")
     assert "scale(1.03)" in compact  # 放大一点
-    assert "transition:background .15s" in compact  # 平滑过渡不跳变
+    assert "transition:background .15s" in css  # 平滑过渡不跳变
 
 
 def test_mx_views_boards_heat_view_default():
@@ -170,8 +173,8 @@ def test_mx_views_boards_heat_view_default():
     # 明细列表行仍保留（切换用），且带高亮键
     assert 'data-mxv-hl="topic:${escapeHtml(t.name)}"' in boards
     assert 'data-mxv-hl="stock:${escapeHtml(s.name)}"' in boards
-    # 注册进工厂返回与 app.js 内联处理器
-    assert "mxvBoardMode," in js.split("return {")[1]
+    # 注册进工厂返回与 app.js 内联处理器（工厂 return 是文件里最后一个 return {）
+    assert "mxvBoardMode," in js.rsplit("return {", 1)[1]
     assert "mxvBoardMode," in APP_JS
     css = (STATIC / "mx-views.css").read_text()
     for cls in (".mxv-heat{", ".mxv-heat.bull{", ".mxv-heat.bear{", ".mxv-heat.h4{",
@@ -215,11 +218,13 @@ def test_mx_views_boards_render_function():
     # mxv-ratio 多空比例条由辅助函数 mxvRatioHtml 产出，渲染体以调用形式接入双榜
     assert "mxv-ratio" in _fn_body("mxvRatioHtml", js)
     assert body.count("mxvRatioHtml(") >= 2
-    # 大V卡片 / 观点流条目渲染移入各自函数
+    # 大V卡片 / 观点流条目渲染移入各自函数；条目模板含标的高亮键与两列容器
     kols = _fn_body("mxvRenderKols", js)
     assert "mxvKolCardsHtml" in kols and "mxvStockCardsHtml" in kols
     feed = _fn_body("mxvRenderFeed", js)
-    assert "mxv-feed-item" in feed and "mxvOpenKol" in _fn_body("mxvKolCardsHtml", js)
+    assert "mxvFeedItemHtml" in feed
+    assert "mxv-feed-item" in _fn_body("mxvFeedItemHtml", js)
+    assert "mxvOpenKol" in _fn_body("mxvKolCardsHtml", js)
 
 
 def test_mx_views_drawer_functions():

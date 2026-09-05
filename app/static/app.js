@@ -734,9 +734,9 @@ function renderSidebar(user) {
 
 const MOBILE_NAV = [
   { route: "timeline", icon: LIST_ICON, label: "动态" },
+  { route: "mx-views", icon: MX_VIEWS_ICON, label: "智囊团" },
   { route: "news", icon: NEWS_ICON, label: "财经新闻" },
   { route: "home", icon: GRID_ICON, label: "广场" },
-  { route: "mx-views", icon: MX_VIEWS_ICON, label: "智囊团" },
   { route: "settings", icon: GEAR_ICON, label: "设置" },
 ];
 
