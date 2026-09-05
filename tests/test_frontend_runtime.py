@@ -15,6 +15,111 @@ ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "app" / "static"
 
 
+@pytest.fixture
+def cicc_page(page: Page):
+    page.clock.install()
+    page.evaluate("""async () => {
+      const { createCiccView } = await import('/views/admin/cicc.js');
+      history.replaceState(null, '', '/admin/knowledge');
+      document.body.innerHTML = '<main id="cicc-host"></main>';
+      const h = window.ciccTest = {
+        calls: [], flashes: [], renders: 0, libs: [{slug:'cicc-research'}],
+        status: {available:true, ts:1, files_total:12, schedule_enabled:true,
+                 storage:{schedule:{time:'04:30'}},
+                 cicc_settings:{categories:['公司研究'], keywords:['芯片']}}
+      };
+      h.view = createCiccView({
+        api: async (path, options = {}) => {
+          const body = options.body ? JSON.parse(options.body) : null;
+          h.calls.push({path, method:options.method || 'GET', body});
+          if (path.endsWith('/status')) {
+            if (h.deferStatus) return new Promise(resolve => { h.resolveStatus = resolve; });
+            return h.status;
+          }
+          if (h.deferAction) return new Promise(resolve => { h.resolveAction = resolve; });
+          if (path.endsWith('/cicc-categories')) return {categories:body.categories};
+          if (path.endsWith('/schedule')) return {time:body.time, schedule_enabled:body.enabled};
+          return {};
+        },
+        flash: (...args) => h.flashes.push(args), fmtTs: String,
+        currentRouteSeq: () => 1, routeStillActive: () => true,
+        renderLocalTab: () => {
+          const host = document.querySelector('#cicc-host');
+          h.view.rememberDetails(host);
+          host.innerHTML = h.view.renderFallback(h.libs) +
+            h.libs.map(lib => h.view.renderLibraryControls(lib.slug)).join('');
+          h.renders++;
+        }
+      });
+      Object.assign(window, h.view);
+      await h.view.loadCiccStatus();
+    }""")
+    return page
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+def test_cicc_controls_preserve_requests_and_details(cicc_page: Page, width):
+    page = cicc_page
+    page.set_viewport_size({"width": width, "height": 900})
+    page.locator('details.cicc-collect > summary').click()
+    expect(page.locator('#cicc-schedule-time')).to_have_value('04:30')
+    page.locator('#cicc-schedule-time').fill('05:45')
+    page.get_by_role('button', name='保存时间', exact=True).click()
+    expect(page.locator('details.cicc-collect')).to_have_attribute('open', '')
+    page.locator('summary').filter(has_text='品类定向与关键词白名单').click()
+    page.locator('.cicc-cat[value="公司研究"]').uncheck()
+    page.locator('.cicc-cat[value="宏观经济"]').check()
+    page.locator('#cicc-keywords').fill('芯片,电池')
+    page.get_by_role('button', name='保存品类与关键词').click()
+    page.get_by_role('button', name='增量采集（近3天）', exact=True).click()
+    page.get_by_role('button', name='关闭每日增量', exact=False).click()
+    calls = page.evaluate('ciccTest.calls.filter(c => c.method !== "GET")')
+    assert calls == [
+        {"path": "/api/admin/cicc/schedule", "method": "PUT",
+         "body": {"enabled": True, "time": "05:45"}},
+        {"path": "/api/admin/ima-collector/cicc-categories", "method": "PUT",
+         "body": {"categories": ["宏观经济"], "keywords": "芯片,电池"}},
+        {"path": "/api/admin/cicc/trigger", "method": "POST", "body": {"mode": "incr"}},
+        {"path": "/api/admin/cicc/schedule", "method": "PUT",
+         "body": {"enabled": False, "time": "04:30"}},
+    ]
+    page.evaluate('ciccTest.libs = []; ciccTest.view.loadCiccStatus()')
+    expect(page.get_by_role('heading', name='中金研报采集')).to_be_visible()
+    expect(page.locator('details.cicc-collect')).to_have_count(0)
+
+
+def test_cicc_stop_cancels_poll_and_delayed_refresh(cicc_page: Page):
+    page = cicc_page
+    page.evaluate('ciccTest.view.startCiccPoll(); ciccTest.view.startCiccPoll()')
+    page.clock.run_for(15000)
+    assert page.evaluate('ciccTest.calls.length') == 2
+    page.evaluate('ciccTest.view.triggerCicc("incr")')
+    page.evaluate('ciccTest.view.stopCiccPoll()')
+    before = page.evaluate('ciccTest.calls.length')
+    page.clock.run_for(30000)
+    assert page.evaluate('ciccTest.calls.length') == before
+
+
+@pytest.mark.parametrize("action", [False, True])
+def test_cicc_exit_ignores_inflight_response(cicc_page: Page, action):
+    page = cicc_page
+    page.evaluate("""action => {
+      const h = ciccTest;
+      if (action) { h.deferAction = true; void h.view.triggerCicc('incr'); }
+      else { h.deferStatus = true; void h.view.loadCiccStatus(); }
+      h.view.stopCiccPoll();
+      h.view.startCiccPoll();
+      if (action) h.resolveAction({});
+      else h.resolveStatus({...h.status, files_total:999});
+    }""", action)
+    assert page.evaluate('ciccTest.renders') == 1
+    assert page.evaluate('ciccTest.flashes') == []
+    page.clock.run_for(3000)
+    assert page.evaluate('ciccTest.calls.length') == 2
+    page.evaluate('ciccTest.view.reset()')
+    assert page.evaluate('ciccTest.view.renderLibraryControls("cicc-research")') == ''
+
+
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         pass

@@ -102,7 +102,7 @@ def test_settings_empty_means_all(tmp_path):
 def test_category_list_matches_frontend():
     from app.cicc_collector import CICC_CATEGORIES
 
-    js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    js = (ROOT / "app/static/views/admin/cicc.js").read_text(encoding="utf-8")
     for cat in CICC_CATEGORIES:
         assert f'"{cat}"' in js, f"前端 CICC_CATEGORIES 缺少 {cat}"
 

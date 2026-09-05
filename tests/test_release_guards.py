@@ -76,9 +76,9 @@ SENTINELS += [
 SENTINELS += [
     ("app/static/app.js", "runStorageConsistency", "存储页签一致性体检入口"),
     ("app/static/app.js", "runStorageDedup", "去重手动触发入口"),
-    ("app/static/app.js", "cicc-keywords", "标题关键词白名单输入"),
+    ("app/static/views/admin/cicc.js", "cicc-keywords", "标题关键词白名单输入"),
     ("app/knowledge_notify.py", "def maybe_notify_knowledge_keywords", "研报关键词合并推送"),
-    ("app/static/app.js", "匹配研报库", "设置页研报匹配开关"),
+    ("app/static/views/push-settings.js", "匹配研报库", "设置页研报匹配开关"),
     ("scripts/vps/cicc-consistency.py", "def main", "本地库一致性体检脚本"),
     ("scripts/vps/cicc-dispatch.py", "consistency", "一致性命令模式"),
 ]

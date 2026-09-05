@@ -30,6 +30,7 @@ ADMIN_DASHBOARD_JS = APP_JS.parent / "views" / "admin" / "dashboard.js"
 IMA_JS = APP_JS.parent / "views" / "ima.js"
 ADMIN_IMA_COLLECTOR_JS = APP_JS.parent / "views" / "admin" / "ima-collector.js"
 ADMIN_KNOWLEDGE_JS = APP_JS.parent / "views" / "admin" / "knowledge.js"
+CICC_JS = APP_JS.parent / "views" / "admin" / "cicc.js"
 VIEW_JS_SOURCES = (
     APP_JS,
     NEWS_JS,
@@ -44,6 +45,7 @@ VIEW_JS_SOURCES = (
     IMA_JS,
     ADMIN_IMA_COLLECTOR_JS,
     ADMIN_KNOWLEDGE_JS,
+    CICC_JS,
 )
 
 
@@ -3031,7 +3033,7 @@ def test_knowledge_settings_p1_p2_control_density():
     assert "onclick=\"runStorageConsistency()\"" in storage
     health = _fn_body("loadStorageHealth")
     assert "onclick=\"runStorageDedup()\"" in health
-    card = _fn_body("localLibraryCardHtml")
+    card = _fn_body("renderLibraryControls")
     assert "<details open" not in card
     assert "details.cicc-collect" in card or 'class="cicc-collect"' in card
     modal = _fn_body("openLocalLibraryModal")
