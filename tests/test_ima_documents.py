@@ -4432,19 +4432,23 @@ def test_sync_flushes_state_on_cancel(tmp_path, monkeypatch):
     ]
     service, db = _sync_ready_service(tmp_path, monkeypatch, records)
     original_download = ima_documents.ImaPureClient.download
+    barrier = threading.Barrier(3)
+    finished = []
 
     def download_and_cancel(self, media, destination, expected_size=0):
-        result = original_download(self, media, destination, expected_size)
+        barrier.wait(timeout=5)
         service._cancel_requested = True
+        result = original_download(self, media, destination, expected_size)
+        finished.append(str(destination))
         return result
 
     monkeypatch.setattr(ima_documents.ImaPureClient, "download", download_and_cancel)
     result = service._sync_group(service.config(), service.config().groups[0], {})
-    assert result["downloaded"] >= 1
-    downloaded = db._rows(
-        "SELECT media_id FROM ima_document_index WHERE has_pdf = 1"
-    )
-    assert downloaded
+    assert result["downloaded"] == 3
+    assert result["failed"] == 0
+    rows = db._rows("SELECT media_id FROM ima_document_index WHERE has_pdf = 1")
+    assert {row["media_id"] for row in rows} == {"file_0", "file_1", "file_2"}
+    assert len(finished) == 3
 
 
 def test_failed_listing_keeps_old_group_index(tmp_path, monkeypatch):

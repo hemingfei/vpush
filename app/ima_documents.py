@@ -13,7 +13,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import ALL_COMPLETED, FIRST_COMPLETED, CancelledError, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -4219,25 +4219,11 @@ class ImaDocumentService:
                 pending_futures = {
                     pool.submit(_fetch, record, pdf) for record, pdf in jobs
                 }
-                while pending_futures:
-                    if self._cancel_requested:
-                        break
-                    remaining = max(
-                        0.0,
-                        IMA_STATE_FLUSH_SECONDS - (time.monotonic() - last_flush),
-                    )
-                    done, pending_futures = wait(
-                        pending_futures,
-                        timeout=remaining,
-                        return_when=FIRST_COMPLETED,
-                    )
-                    if not done:
-                        if dirty_records:
-                            flush()
-                        else:
-                            last_flush = time.monotonic()
-                        continue
-                    for future in done:
+                def consume_done(done_futures) -> None:
+                    nonlocal downloaded, failures, last_error
+                    for future in done_futures:
+                        if future.cancelled():
+                            continue
                         try:
                             record, pdf, size, md5 = future.result()
                             media_id = str(record["media_id"])
@@ -4265,10 +4251,40 @@ class ImaDocumentService:
                             self._set_progress(downloaded=downloaded)
                             if should_flush():
                                 flush()
+                        except CancelledError:
+                            continue
                         except Exception as exc:  # noqa: BLE001 - isolate one bad file
+                            if str(exc) == "cancelled":
+                                continue
                             failures += 1
                             self._set_progress(failed=failures)
                             last_error = _safe_error(exc)
+
+                while pending_futures:
+                    if self._cancel_requested:
+                        for future in pending_futures:
+                            future.cancel()
+                        done, pending_futures = wait(
+                            pending_futures, return_when=ALL_COMPLETED
+                        )
+                        consume_done(done)
+                        break
+                    remaining = max(
+                        0.0,
+                        IMA_STATE_FLUSH_SECONDS - (time.monotonic() - last_flush),
+                    )
+                    done, pending_futures = wait(
+                        pending_futures,
+                        timeout=remaining,
+                        return_when=FIRST_COMPLETED,
+                    )
+                    if not done:
+                        if dirty_records:
+                            flush()
+                        else:
+                            last_flush = time.monotonic()
+                        continue
+                    consume_done(done)
         finally:
             flush()
         return {
@@ -4325,6 +4341,9 @@ class ImaDocumentService:
             succeeded_groups = 0
             title_overrides = load_title_overrides(self.store.archive_root)
             for group in enabled_groups:
+                if self._cancel_requested:
+                    skipped_groups.append(group.id)
+                    continue
                 try:
                     self._mark_group_runtime(group.id, started=True)
                     try:
@@ -4368,7 +4387,8 @@ class ImaDocumentService:
             }
             self.db.set_setting(IMA_PURE_LAST_FINISHED_KEY, str(int(time.time())))
             self.db.set_setting(IMA_PURE_LAST_RESULT_KEY, json.dumps(result, ensure_ascii=False))
-            self._sync_full_text_index()
+            if not self._cancel_requested:
+                self._sync_full_text_index()
             return {"status": "finished", **result}
         finally:
             self._sync_lock.release()
