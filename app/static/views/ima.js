@@ -31,7 +31,6 @@ export function createImaView(dependencies) {
     SEARCH_ICON,
     REFRESH_ICON,
     X_ICON,
-    COPY_ICON,
     EXTERNAL_LINK_ICON,
   } = dependencies;
 
@@ -208,36 +207,6 @@ export function createImaView(dependencies) {
     const expanded = box.classList.toggle("is-expanded");
     btn.textContent = expanded ? "收起" : "展开";
     btn.setAttribute("aria-expanded", expanded ? "true" : "false");
-  }
-
-  function copyImaAbstract() {
-    const text = $("#ima-reader-abstract")?.textContent?.trim() || "";
-    if (!text) return;
-    const doFlash = () => flash("已复制研报摘要");
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(doFlash).catch(() => copyImaAbstractFallback(text, doFlash));
-    } else {
-      copyImaAbstractFallback(text, doFlash);
-    }
-  }
-
-  function copyImaAbstractFallback(text, onSuccess) {
-    const ta = document.createElement("textarea");
-    try {
-      ta.value = text;
-      ta.style.position = "fixed";
-      ta.style.opacity = "0";
-      ta.setAttribute("readonly", "");
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand("copy");
-      if (!ok) throw new Error("execCommand copy returned false");
-      if (onSuccess) onSuccess();
-    } catch (err) {
-      flash("复制失败，请手动选择复制", "error");
-    } finally {
-      if (ta.parentNode) ta.remove();
-    }
   }
 
   function fmtImaDay(day) {
@@ -1316,9 +1285,8 @@ export function createImaView(dependencies) {
       const abstractMore = abstractLong
         ? `<button type="button" class="ima-abstract-more" aria-expanded="false" onclick="toggleImaAbstract(this)">展开</button>`
         : "";
-      const copyBtn = `<button type="button" class="icon-btn ima-abstract-copy-btn" onclick="event.preventDefault();event.stopPropagation();copyImaAbstract()" aria-label="复制摘要" title="复制摘要">${COPY_ICON}</button>`;
       const abstractHtml = abstractText
-        ? `<details open class="ima-reader-abstract${abstractLong ? " is-clamped" : ""}"><summary><span>摘要</span>${copyBtn}</summary><p id="ima-reader-abstract">${escapeHtml(abstractText)}</p>${abstractMore}</details>`
+        ? `<details open class="ima-reader-abstract${abstractLong ? " is-clamped" : ""}"><summary><span>摘要</span></summary><p id="ima-reader-abstract">${escapeHtml(abstractText)}</p>${abstractMore}</details>`
         : "";
       // 快照路由校验（与 currentImaListSnapshot 同思路）：与本次应返回的列表路由不匹配的旧快照不用于导航/计数
       const listSnapshot = _imaListSnapshot && _imaListSnapshot.route === normalizeRoute(backRoute) ? _imaListSnapshot : null;
@@ -1508,8 +1476,6 @@ export function createImaView(dependencies) {
     imaDocumentsCountLabel,
     imaSnapshotIsFiltered,
     toggleImaAbstract,
-    copyImaAbstract,
-    copyImaAbstractFallback,
     fmtImaDay,
     fmtImaDayShort,
     imaDisplayTitle,

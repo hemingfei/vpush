@@ -19,7 +19,7 @@ BACKUP_ENV = "/etc/vpush/ima-storage.env"
 
 def collectors_running() -> int:
     r = subprocess.run(["pgrep", "-fc", "^python3 -u .*cicc_repor[t]_collector"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, check=False)
     try:
         return int(r.stdout.strip() or 0)
     except ValueError:
@@ -151,7 +151,7 @@ def count_pdfs() -> int:
 
 def main() -> None:
     running = subprocess.run(["pgrep", "-fc", "^python3 -u .*pdf_backfill_compres[s]"],
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, check=False)
     try:
         compress = int(running.stdout.strip() or 0)
     except ValueError:

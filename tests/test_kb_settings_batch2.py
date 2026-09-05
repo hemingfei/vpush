@@ -84,7 +84,7 @@ def test_settings_command_payload(tmp_path):
     assert len(cmds) == 1
     body = json.loads(cmds[0].read_text(encoding="utf-8"))
     assert body["mode"] == "settings"
-    assert body["categories"] == ["宏观经济", "固定收益"]
+    assert body["payload"]["categories"] == ["宏观经济", "固定收益"]
     assert body["actor"] == "tester"
 
 
@@ -94,7 +94,7 @@ def test_settings_empty_means_all(tmp_path):
     ctl = CiccControl(str(tmp_path))
     ctl.set_cicc_settings([], "tester")
     (cmd,) = (tmp_path / "local" / ".cicc" / "commands").glob("*.json")
-    assert json.loads(cmd.read_text(encoding="utf-8"))["categories"] == []
+    assert json.loads(cmd.read_text(encoding="utf-8"))["payload"]["categories"] == []
 
 
 # —— 功能2：品类名单一致性（前端硬编码 vs 后端校验）——
@@ -102,7 +102,7 @@ def test_settings_empty_means_all(tmp_path):
 def test_category_list_matches_frontend():
     from app.cicc_collector import CICC_CATEGORIES
 
-    js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    js = (ROOT / "app/static/views/admin/cicc.js").read_text(encoding="utf-8")
     for cat in CICC_CATEGORIES:
         assert f'"{cat}"' in js, f"前端 CICC_CATEGORIES 缺少 {cat}"
 

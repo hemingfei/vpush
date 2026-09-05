@@ -30,6 +30,7 @@ ADMIN_DASHBOARD_JS = APP_JS.parent / "views" / "admin" / "dashboard.js"
 IMA_JS = APP_JS.parent / "views" / "ima.js"
 ADMIN_IMA_COLLECTOR_JS = APP_JS.parent / "views" / "admin" / "ima-collector.js"
 ADMIN_KNOWLEDGE_JS = APP_JS.parent / "views" / "admin" / "knowledge.js"
+CICC_JS = APP_JS.parent / "views" / "admin" / "cicc.js"
 VIEW_JS_SOURCES = (
     APP_JS,
     NEWS_JS,
@@ -44,6 +45,7 @@ VIEW_JS_SOURCES = (
     IMA_JS,
     ADMIN_IMA_COLLECTOR_JS,
     ADMIN_KNOWLEDGE_JS,
+    CICC_JS,
 )
 
 
@@ -3066,7 +3068,7 @@ def test_knowledge_settings_p1_p2_control_density():
     assert "onclick=\"runStorageConsistency()\"" in storage
     health = _fn_body("loadStorageHealth")
     assert "onclick=\"runStorageDedup()\"" in health
-    card = _fn_body("localLibraryCardHtml")
+    card = _fn_body("renderLibraryControls")
     assert "<details open" not in card
     assert "details.cicc-collect" in card or 'class="cicc-collect"' in card
     modal = _fn_body("openLocalLibraryModal")
@@ -3769,16 +3771,14 @@ def test_ima_reader_abstract_callout_and_copy():
     reader = _fn_body("renderImaDocument")
     css = STYLE_CSS.read_text()
 
-    # Abstract copy function exists with fallback and flash feedback
-    assert "function copyImaAbstract(" in src
-    assert "已复制研报摘要" in src
-    assert "copyImaAbstract" in reader
+    # Copy button removed; ensure no residual handlers or markup
+    assert "copyImaAbstract" not in src
+    assert ".ima-abstract-copy-btn" not in css
 
     # Reader callout styling and visual accent
     assert ".ima-reader-abstract" in css
     assert "border-left:" in css[css.index(".ima-reader-abstract"):]
     assert "var(--color-accent)" in css[css.index(".ima-reader-abstract"):]
-    assert ".ima-abstract-copy-btn" in css
 
 
 def test_ima_document_reader_preserves_group_context_and_metadata():

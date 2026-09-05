@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -19,27 +21,27 @@ def _load_incremental():
 
 def test_gate_runs_when_due():
     m = _load_incremental()
-    now = datetime(2026, 8, 30, 5, 0)
+    now = datetime(2026, 8, 30, 5, 0, tzinfo=UTC)
     ok, reason = m.should_run(now, "03:00", {"date": "2026-08-29"})
     assert ok and reason == "due"
 
 
 def test_gate_skips_before_schedule_time():
     m = _load_incremental()
-    now = datetime(2026, 8, 30, 1, 0)
+    now = datetime(2026, 8, 30, 1, 0, tzinfo=UTC)
     assert m.should_run(now, "03:00", {"date": "2026-08-29"}) == (False, "before_schedule_time")
 
 
 def test_gate_skips_when_already_ran_today():
     m = _load_incremental()
-    now = datetime(2026, 8, 30, 5, 0)
+    now = datetime(2026, 8, 30, 5, 0, tzinfo=UTC)
     assert m.should_run(now, "03:00", {"date": "2026-08-30"}) == (False, "already_ran_today")
 
 
 def test_gate_default_schedule_is_0300():
     m = _load_incremental()
     assert m.read_schedule.__module__ == m.__name__  # 存在且归属正确
-    assert m.should_run(datetime(2026, 8, 30, 3, 0), "03:00", {})[0] is True
+    assert m.should_run(datetime(2026, 8, 30, 3, 0, tzinfo=UTC), "03:00", {})[0] is True
 
 
 def test_incremental_summary_written(tmp_path, monkeypatch):
@@ -70,7 +72,59 @@ def test_incremental_summary_written(tmp_path, monkeypatch):
     summary = _json.loads((tmp_path / "last_incr_summary.json").read_text())
     assert (summary["added"], summary["skipped"], summary["failed"]) == (12, 30, 1)
     assert summary["date"] == datetime.now(m.BJ).strftime("%Y-%m-%d")
-    assert calls["argv"][-2:] == ["--days", "3"]
+    assert calls["argv"][3:5] == ["--days", "3"]
+
+
+@pytest.mark.parametrize("settings", [
+    {"categories": [" sector,a ", "sector,a"], "keywords": [" x,y ", "x,y", "z"]},
+    {"categories": [], "keywords": []},
+    {},
+])
+def test_incremental_filters_reach_collector(tmp_path, monkeypatch, settings):
+    import sys
+
+    m = _load_incremental()
+    monkeypatch.setattr(m, "CTRL", str(tmp_path))
+    monkeypatch.setattr(m, "CICC_DIR", str(tmp_path))
+    monkeypatch.setattr(m, "SCHEDULE_FILE", str(tmp_path / "schedule.json"))
+    monkeypatch.setattr(m, "PY", sys.executable)
+    monkeypatch.setattr(m, "collectors_running", lambda: 0)
+    monkeypatch.setattr(m, "should_run", lambda *_: (True, "due"))
+    (tmp_path / "incremental.enabled").touch()
+    (tmp_path / "cicc_settings.json").write_text(json.dumps(settings))
+    stub = tmp_path / "collector.py"
+    stub.write_text(
+        "import importlib.util, json, sys\n"
+        "from pathlib import Path\n"
+        f"spec = importlib.util.spec_from_file_location('collector', {str(ROOT / 'scripts/cicc_report_collector.py')!r})\n"
+        "m = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(m)\n"
+        "p = Path(sys.argv[sys.argv.index('--filters-file') + 1])\n"
+        "print(json.dumps(m.load_filters_file(p)))\n"
+    )
+    monkeypatch.setattr(m, "COLLECTOR", str(stub))
+    m.main()
+    actual = json.loads((tmp_path / "auto_incr.log").read_text())
+    expected = [list(dict.fromkeys(v.strip() for v in settings.get(k, []) if v.strip()))
+                for k in ("categories", "keywords")]
+    assert actual == expected
+    assert not list(tmp_path.glob("incremental-filters-*.json"))
+
+
+@pytest.mark.parametrize("settings", [[], {"keywords": "abc"}, {"categories": [1]},
+                                     {"keywords": None}])
+def test_incremental_rejects_invalid_filters(tmp_path, monkeypatch, settings):
+    m = _load_incremental()
+    monkeypatch.setattr(m, "CTRL", str(tmp_path))
+    monkeypatch.setattr(m, "CICC_DIR", str(tmp_path))
+    monkeypatch.setattr(m, "collectors_running", lambda: 0)
+    monkeypatch.setattr(m, "should_run", lambda *_: (True, "due"))
+    monkeypatch.setattr(m, "read_schedule", lambda: "03:00")
+    monkeypatch.setattr(m.subprocess, "run", lambda *a, **k: pytest.fail("collector started"))
+    (tmp_path / "incremental.enabled").touch()
+    (tmp_path / "cicc_settings.json").write_text(json.dumps(settings))
+    with pytest.raises(ValueError):
+        m.main()
 
 
 def test_alert_thresholds():
@@ -114,7 +168,7 @@ def test_schedule_command_payload(tmp_path):
     cmds = list((tmp_path / "local" / ".cicc" / "commands").glob("*.json"))
     assert len(cmds) == 1
     body = json.loads(cmds[0].read_text(encoding="utf-8"))
-    assert body["mode"] == "schedule" and body["time"] == "05:30"
+    assert body["mode"] == "schedule" and body["payload"]["time"] == "05:30"
 
 
 def test_collector_keywords_filter():

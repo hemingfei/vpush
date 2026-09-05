@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -28,6 +29,7 @@ SCHEDULE_FILE = "/usr/local/lib/vpush-ima/cicc-schedule.json"
 PY = "/usr/bin/python3"
 BJ = timezone(timedelta(hours=8))
 DONE_RE = re.compile(r"完成：下载 (\d+)，已存在跳过 (\d+)，失败 (\d+)")
+_TIME_RE = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")
 PAUSED_AUTH_WINDOW = 48 * 3600  # Cookie 失效后自动重试多久放弃（等管理员介入）
 
 
@@ -51,7 +53,7 @@ def read_json(path: str, default=None):
 def read_schedule() -> str:
     data = read_json(SCHEDULE_FILE, {}) or {}
     t = str(data.get("time") or "03:00")
-    return t if re.fullmatch(r"\d{2}:\d{2}", t) else "03:00"
+    return t if _TIME_RE.fullmatch(t) else "03:00"
 
 
 def should_run(now: datetime, schedule_hhmm: str,
@@ -116,18 +118,28 @@ def main() -> None:
                    {"ts": int(time.time()), "note": note})
         return
     # 品类定向：cicc_settings.json 非空则只采勾选品类（空数组/缺文件=全部）
-    settings = read_json(os.path.join(CTRL, "cicc_settings.json"), {}) or {}
-    cats = [str(c) for c in (settings.get("categories") or []) if str(c).strip()]
-    keywords = [str(k) for k in (settings.get("keywords") or []) if str(k).strip()]
+    try:
+        with open(os.path.join(CTRL, "cicc_settings.json"), encoding="utf-8") as f:
+            settings = json.load(f)
+    except FileNotFoundError:
+        settings = {}
+    if not isinstance(settings, dict):
+        raise ValueError("filters must be an object")
+    filters = {}
+    for key in ("categories", "keywords"):
+        values = settings.get(key, [])
+        if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
+            raise ValueError(f"{key} must be a string list")
+        filters[key] = list(dict.fromkeys(v.strip() for v in values if v.strip()))
     argv = [PY, "-u", COLLECTOR, "--days", "3"]
-    if cats:
-        argv += ["--categories", ",".join(cats)]
-    if keywords:
-        argv += ["--keywords", ",".join(keywords)]
     os.makedirs(CICC_DIR, exist_ok=True)
-    r = subprocess.run(argv,
-                       capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", timeout=1800, check=False)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=CTRL,
+                                     prefix="incremental-filters-", suffix=".json") as f:
+        json.dump(filters, f, ensure_ascii=False)
+        f.flush()
+        r = subprocess.run(argv + ["--filters-file", f.name],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=1800, check=False)
     with open(os.path.join(CICC_DIR, "auto_incr.log"), "ab") as log:
         log.write((r.stdout or "").encode("utf-8", "replace"))
     tail = (r.stdout or "")[-2000:]

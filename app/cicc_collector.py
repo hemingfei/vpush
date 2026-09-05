@@ -12,10 +12,19 @@ import json
 import os
 import re
 import time
+import uuid
 from pathlib import Path
 
 MODES = ("incr", "year", "all", "stop", "compress", "schedule", "settings", "backup")
 STATUS_STALE_SECONDS = 300
+
+# 严格 HH:mm：小时 00..23、分钟 00..59（旧实现 \\d{2}:\\d{2} 会放过 24:99）
+_TIME_RE = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")
+
+
+def validate_time_of_day(value: str) -> bool:
+    """HH:mm 严格校验：00:00..23:59。"""
+    return isinstance(value, str) and bool(_TIME_RE.fullmatch(value))
 
 # 中金官网一级品类（collector SLUG_MAP 同源；前端多选与后端校验共用这份名单）
 CICC_CATEGORIES = ("宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -41,12 +50,15 @@ class CiccControl:
             raise ValueError(f"未知操作：{mode}")
         cmds = self.ctrl / "commands"
         cmds.mkdir(parents=True, exist_ok=True)
-        name = f"{int(time.time() * 1000)}-{mode}.json"
-        tmp = cmds / f".tmp.{os.getpid()}"
-        payload = {"mode": mode, "actor": actor, "ts": int(time.time())}
+        cmd_id = uuid.uuid4().hex
+        name = f"{int(time.time() * 1000)}-{mode}-{cmd_id[:8]}.json"
+        tmp = cmds / f".tmp.{os.getpid()}.{cmd_id[:8]}"
+        payload = {}
         if extra:
             payload.update(extra)
-        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        envelope = {"id": cmd_id, "mode": mode, "actor": actor,
+                    "ts": int(time.time()), "payload": payload}
+        tmp.write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, cmds / name)  # 原子落名，dispatch 的 inotify 不会读到半截文件
         return {"queued": mode}
 
@@ -60,11 +72,13 @@ class CiccControl:
         storage = data.get("storage") or {}
         schedule = storage.get("schedule") or {}
         t = str(schedule.get("time") or "03:00")
-        return {"time": t if re.fullmatch(r"\d{2}:\d{2}", t) else "03:00",
+        return {"time": t if validate_time_of_day(t) else "03:00",
                 "schedule_enabled": self.schedule_enabled()}
 
     def set_schedule_time(self, time_of_day: str, actor: str) -> dict:
         """下发采集时间（HH:mm），存储机 dispatch 写 cicc-schedule.json。"""
+        if not validate_time_of_day(time_of_day):
+            raise ValueError("时间格式应为 HH:mm（00:00-23:59）")
         return self.trigger("schedule", actor, extra={"time": time_of_day})
 
     def set_cicc_settings(self, categories: list[str], actor: str,

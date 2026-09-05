@@ -627,6 +627,27 @@ def compress_pdf(data: bytes) -> bytes:
     return compress_pdf_result(data)[0]
 
 
+def load_filters_file(path: Path) -> tuple[list[str], list[str]]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("filters must be an object")
+    result = []
+    for key in ("categories", "keywords"):
+        values = data.get(key, [])
+        if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
+            raise ValueError(f"{key} must be a string list")
+        result.append(list(dict.fromkeys(v.strip() for v in values if v.strip())))
+    return result[0], result[1]
+
+
+def write_completion_marker(path: Path, command_id: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".completed.{os.getpid()}")
+    tmp.write_text(json.dumps({"id": command_id}), encoding="utf-8")
+    os.chmod(tmp, 0o640)
+    os.replace(tmp, path)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--cookie-file", default="/root/cicc/cookies.txt")
@@ -636,6 +657,10 @@ def main() -> None:
     ap.add_argument("--all", action="store_true", help="全量，不按日期过滤")
     ap.add_argument("--categories", default="", help="逗号分隔的一级品类名，默认全部")
     ap.add_argument("--keywords", default="", help="逗号分隔的标题关键词白名单，默认不过滤")
+    ap.add_argument("--filters-file", default="",
+                    help="dispatch 生成的 JSON 过滤配置；优先于逗号分隔参数")
+    ap.add_argument("--completion-file", default="",
+                    help="成功结束时原子写入的命令完成标记")
     ap.add_argument("--limit", type=int, default=0, help="本次最多下载多少个 PDF（调试用）")
     ap.add_argument("--endpoint", choices=["viewer", "download"], default="viewer",
                     help="取 PDF 路径：viewer=在线阅读流 fetchPdf（不计月度配额，默认）；download=旧下载接口（计 300/月配额）")
@@ -717,6 +742,9 @@ def main() -> None:
         os.chmod(root, 0o750)
 
     wanted = [c.strip() for c in args.categories.split(",") if c.strip()]
+    keywords = [k for k in (args.keywords or "").split(",") if k.strip()]
+    if args.filters_file:
+        wanted, keywords = load_filters_file(Path(args.filters_file))
     param = fetch_param(sess)  # 列表接口是读操作：能成功即登录态有效
     all_cats = param.get("treeData") or []
     id_name = category_id_names(param)
@@ -756,13 +784,11 @@ def main() -> None:
         page, total_seen = args.page_start, 0
         while True:
             data = list_page(sess, cat["id"], page, start, None if args.all else end)
-            items = filter_by_keywords(
-                data.get("content") or [],
-                [k for k in (args.keywords or "").split(",") if k.strip()],
-            )
+            page_items = data.get("content") or []
+            items = filter_by_keywords(page_items, keywords)
             if page == 1:
                 print(f"[{name}] total={data.get('totalElements')} pages={data.get('totalPages')}")
-            if not items:
+            if not page_items:
                 break
             for it in items:
                 total_seen += 1
@@ -799,7 +825,7 @@ def main() -> None:
                     stats["failed"] += 1
                     print(f"  FAIL {rid} {it['title'][:40]}: {e}", file=sys.stderr)
                 time.sleep(SLEEP_DL)
-            if stop or page >= MAX_PAGES or len(items) < PAGE_SIZE:
+            if stop or page >= MAX_PAGES or len(page_items) < PAGE_SIZE:
                 break
             page += 1
             time.sleep(SLEEP_PAGE)
@@ -808,6 +834,11 @@ def main() -> None:
 
     flush_sidecar()
     print(f"完成：下载 {stats['downloaded']}，已存在跳过 {stats['skipped']}，失败 {stats['failed']}")
+    if stats["failed"]:
+        sys.exit(1)
+    if args.completion_file:
+        completion_path = Path(args.completion_file)
+        write_completion_marker(completion_path, completion_path.stem.removeprefix("completed-"))
 
 
 if __name__ == "__main__":

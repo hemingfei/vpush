@@ -34,6 +34,35 @@ Persistent=true
 WantedBy=timers.target
 UNIT
 
+cat > /etc/systemd/system/vpush-cicc-dispatch.timer <<'UNIT'
+[Unit]
+Description=Retry pending V Push CICC commands
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+Unit=vpush-cicc-dispatch.service
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+cat > /etc/systemd/system/vpush-cicc-dispatch.service <<'UNIT'
+[Unit]
+Description=V Push CICC collector command dispatcher
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/vpush-ima/cicc-dispatch.py
+UMask=0077
+NoNewPrivileges=true
+# 全量采集由 dispatch 同步等待，以真实退出码写结果。
+TimeoutStartSec=46800
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
 cat > /etc/systemd/system/vpush-cicc-incremental.service <<'UNIT'
 [Unit]
 Description=V Push CICC collector daily incremental (gated)
@@ -78,5 +107,6 @@ UNIT
 
 systemctl daemon-reload
 systemctl restart vpush-cicc-incremental.timer
-systemctl enable --now vpush-cicc-stats.timer vpush-cicc-status.timer vpush-cicc-dispatch.path
+systemctl enable --now vpush-cicc-stats.timer vpush-cicc-status.timer \
+  vpush-cicc-dispatch.path vpush-cicc-dispatch.timer
 echo "install done"

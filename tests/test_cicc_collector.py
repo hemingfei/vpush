@@ -72,6 +72,16 @@ def test_schedule_toggle(ctrl):
     assert not flag.exists()
 
 
+def test_read_schedule_rejects_out_of_range_stored_time(ctrl):
+    ctl, archive = ctrl
+    status_path = archive / "local" / ".cicc" / "status.json"
+    status_path.write_text(json.dumps({
+        "ts": time.time(), "storage": {"schedule": {"time": "24:99"}},
+    }), encoding="utf-8")
+
+    assert ctl.read_schedule()["time"] == "03:00"
+
+
 def test_from_env_none_without_archive(monkeypatch):
     monkeypatch.delenv("IMA_ARCHIVE_ROOT", raising=False)
     assert from_env() is None
@@ -125,6 +135,79 @@ def test_prepare_target_dir_repairs_category_parent(monkeypatch, tmp_path):
     ]
     assert target.parent.stat().st_mode & 0o777 == 0o750
     assert target.stat().st_mode & 0o777 == 0o750
+
+
+def test_load_filters_file_preserves_commas_and_rejects_invalid_values(tmp_path):
+    path = tmp_path / "filters.json"
+    path.write_text(json.dumps({
+        "categories": ["公司研究"],
+        "keywords": ["alpha,beta", "半导体"],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    assert cicc_report_collector.load_filters_file(path) == (
+        ["公司研究"], ["alpha,beta", "半导体"],
+    )
+
+    path.write_text(json.dumps({"categories": [], "keywords": [123]}), encoding="utf-8")
+    with pytest.raises(ValueError, match="keywords"):
+        cicc_report_collector.load_filters_file(path)
+
+
+def test_write_completion_marker_is_atomic(tmp_path):
+    path = tmp_path / "completed.json"
+    cicc_report_collector.write_completion_marker(path, "command-id")
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"id": "command-id"}
+    assert not list(tmp_path.glob(".completed.*"))
+
+
+@pytest.mark.parametrize("first_matches", [False, True])
+@pytest.mark.parametrize("download_fails", [False, True])
+def test_collector_filtered_pagination_and_completion(tmp_path, monkeypatch,
+                                                     first_matches, download_fails):
+    import sys
+
+    m = cicc_report_collector
+    cookie = tmp_path / "fixture-cookie.txt"
+    cookie.write_text("offline-fixture")
+    marker = tmp_path / "completed-test.json"
+    monkeypatch.setattr(sys, "argv", ["collector", "--cookie-file", str(cookie),
+                                     "--root", str(tmp_path), "--keywords", "match",
+                                     "--completion-file", str(marker)])
+    monkeypatch.setattr(m, "Session", lambda _: object())
+    monkeypatch.setattr(m, "PAUSED_FILE", str(tmp_path / "paused.json"))
+    monkeypatch.setattr(m, "fetch_param", lambda _: {"treeData": [{"id": 1, "name": "test"}]})
+    monkeypatch.setattr(m, "PAGE_SIZE", 2)
+    monkeypatch.setattr(m.time, "sleep", lambda _: None)
+    monkeypatch.setattr(m, "strip_watermark", lambda value: value)
+    pages, downloads = [], []
+
+    def row(rid, title):
+        return {"id": rid, "title": title, "publishTime": "2026-09-05T01:00:00Z"}
+
+    def list_page(_sess, _cat, page, *_dates):
+        pages.append(page)
+        return {"content": {1: [row(1, "match" if first_matches else "other"), row(2, "other")],
+                            2: [row(3, "match")]}[page]}
+
+    def download(_sess, rid):
+        downloads.append(rid)
+        if download_fails:
+            raise RuntimeError("offline download failure")
+        return b"%PDF-fixture"
+
+    monkeypatch.setattr(m, "list_page", list_page)
+    monkeypatch.setattr(m, "viewer_pdf", download)
+    if download_fails:
+        with pytest.raises(SystemExit) as exc:
+            m.main()
+        assert exc.value.code == 1
+        assert not marker.exists()
+    else:
+        m.main()
+        assert json.loads(marker.read_text()) == {"id": "test"}
+    assert pages == [1, 2]
+    assert downloads == ([1, 3] if first_matches else [3])
 
 
 
