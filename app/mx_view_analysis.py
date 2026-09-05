@@ -333,10 +333,10 @@ def aggregate_day_state(day, snapshot_at, opinions, prev_payload=None):
 
     def _blank(kind, name):
         return (
-            {"name": name, "bull": 0, "bear": 0, "net": 0, "s_bull": 0.0, "s_bear": 0.0,
+            {"name": name, "bull": 0, "bear": 0, "neutral": 0, "net": 0, "s_bull": 0.0, "s_bear": 0.0,
              "strength": 50, "momentum": 0, "latest_at": "", "actions": {}}
             if kind == "stock"
-            else {"name": name, "bull": 0, "bear": 0, "net": 0, "s_bull": 0.0, "s_bear": 0.0,
+            else {"name": name, "bull": 0, "bear": 0, "neutral": 0, "net": 0, "s_bull": 0.0, "s_bear": 0.0,
                   "strength": 50, "momentum": 0, "latest_at": ""}
         )
 
@@ -353,6 +353,8 @@ def aggregate_day_state(day, snapshot_at, opinions, prev_payload=None):
         elif w < 0:
             agg["bear"] += 1
             agg["s_bear"] += abs(w)
+        else:
+            agg["neutral"] += 1  # _opinion_weight 仅对 direction=neutral 返回 0
         occurred = str(op.get("occurred_at") or "")
         if occurred > agg["latest_at"]:
             agg["latest_at"] = occurred
@@ -362,7 +364,7 @@ def aggregate_day_state(day, snapshot_at, opinions, prev_payload=None):
         ks = kol_state.setdefault(
             kol_id,
             {"kol_id": kol_id, "name": op.get("kol_name") or "", "avatar": op.get("avatar_url") or "",
-             "opinion_count": 0, "bull_names": [], "bear_names": [], "last_at": ""},
+             "opinion_count": 0, "bull_names": [], "bear_names": [], "neutral_names": [], "last_at": ""},
         )
         ks["opinion_count"] += 1
         target = f"{name}" if ttype == "topic" else name
@@ -370,6 +372,8 @@ def aggregate_day_state(day, snapshot_at, opinions, prev_payload=None):
             ks["bull_names"].append(target)
         if w < 0 and len(ks["bear_names"]) < 8:
             ks["bear_names"].append(target)
+        if w == 0 and len(ks["neutral_names"]) < 8:
+            ks["neutral_names"].append(target)
         if occurred > ks["last_at"]:
             ks["last_at"] = occurred
 

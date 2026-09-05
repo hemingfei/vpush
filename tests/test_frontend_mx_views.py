@@ -173,9 +173,9 @@ def test_mx_views_boards_heat_view_default():
     """双榜默认热力标签云：提及总数降序，颜色=净方向、深浅/字号=热度；可切回明细列表。"""
     js = MX_VIEWS_JS
     assert "function mxvHeatHtml(" in js
-    # 热力与明细共用的排序：提及总数降序 → |净多空| 降序
-    assert ("const mxvByHeat = (a, b) => (b.bull + b.bear) - (a.bull + a.bear)"
-            " || Math.abs(b.net) - Math.abs(a.net);") in js
+    # 热力与明细共用的排序：提及大V总数（多+空+中）降序 → |净多空| 降序
+    assert ("const mxvByHeat = (a, b) => (b.bull + b.bear + (b.neutral || 0))"
+            " - (a.bull + a.bear + (a.neutral || 0))") in js
     heat = _fn_body("mxvHeatHtml", js)
     assert "sort(mxvByHeat)" in heat  # 按提及总数降序
     assert "mxv-heat-wrap" in heat and "data-mxv-hl=" in heat
@@ -203,7 +203,7 @@ def test_mx_views_board_list_matches_heat_order_and_stock_bull_bear():
     js = MX_VIEWS_JS
     boards = _fn_body("mxvRenderBoards", js)
     assert boards.count("sort(mxvByHeat)") == 2  # 题材 + 个股明细都按热力排序
-    assert "${s.bull}多/${s.bear}空" in boards  # 个股明细多空列与题材榜同款
+    assert "${s.bull}多/${s.bear}空/${s.neutral || 0}中" in boards  # 个股明细多空中三段与题材榜同款
     assert "strength" not in boards  # 明细不再显示打分
     assert '<span class="mxv-actions">' in boards  # 操作列保留在最右
     assert boards.index("多/${s.bear}空") < boards.index('<span class="mxv-actions">')  # 多空在操作前
@@ -228,6 +228,28 @@ def test_mx_views_board_list_more_limit():
     assert "mxvBoardMore," in exported and "mxvBoardMore," in APP_JS
     css = (STATIC / "mx-views.css").read_text()
     assert ".mxv-board .mxv-more{" in css  # 后代选择器含空格，用原文断言
+
+
+def test_mx_views_neutral_counts_everywhere():
+    """中性大V全链路可见：明细行 多/空/中，热力徽标 净/总数(含中)，抽屉顶部中立统计，大V/个股卡片中性段。"""
+    js = MX_VIEWS_JS
+    boards = _fn_body("mxvRenderBoards", js)
+    assert "${t.bull}多/${t.bear}空/${t.neutral || 0}中" in boards  # 题材明细三段计数
+    assert "${s.bull}多/${s.bear}空/${s.neutral || 0}中" in boards  # 个股明细同款
+    heat = _fn_body("mxvHeatHtml", js)
+    assert "<b>${net}/${total}</b>" in heat  # 徽标 = (多-空)/(多+空+中)
+    assert "const all = (r) => r.bull + r.bear + (r.neutral || 0);" in heat  # 热度与总数含中性
+    assert "中${r.neutral || 0}" in heat  # tooltip 含中性
+    drawer = _fn_body("mxvOpenTarget", js)
+    assert "中 · 截至" in drawer and "◎ 中立 ${neu.count}" in drawer  # 抽屉顶部中立统计+名单
+    kolcards = _fn_body("mxvKolCardsHtml", js)
+    assert 'class="n" style="width:${Math.round((n / tot) * 100)}%"' in kolcards  # 比例条中性段
+    assert "neutral_names" in kolcards and "◎" in kolcards  # 名单加中立行
+    stockcards = _fn_body("mxvStockCardsHtml", js)
+    assert "neutralMap" in stockcards and "namesLine(neutralNames, sNeu" in stockcards
+    assert "${s.bull + s.bear + sNeu} 大V" in stockcards  # 大V计数含中性
+    css = (STATIC / "mx-views.css").read_text()
+    assert ".mxv-kolcard .mini .n{background:var(--mxv-faint);}" in css  # 后代选择器含空格，用原文断言
 
 
 def test_mx_views_day_picker_is_calendar():

@@ -129,7 +129,7 @@
 .mxv-ratio{flex:1;height:10px;border-radius:5px;overflow:hidden;display:flex;background:var(--mxv-rail);}
 .mxv-ratio .b{background:linear-gradient(90deg,var(--mxv-bull-deep),var(--mxv-bull));}
 .mxv-ratio .s{background:linear-gradient(90deg,var(--mxv-bear),var(--mxv-bear-deep));}
-.mxv-net{width:64px;text-align:right;font-size:12px;}
+.mxv-net{width:88px;text-align:right;font-size:12px;}
 .mxv-net.bull{color:var(--mxv-bull);}.mxv-net.bear{color:var(--mxv-bear);}.mxv-net.flat{color:var(--mxv-faint);}
 .mxv-momo{width:30px;text-align:center;font-size:12px;}
 .mxv-momo.up{color:var(--mxv-bull);}.mxv-momo.down{color:var(--mxv-bear);}.mxv-momo.flat{color:var(--mxv-faint);}
@@ -195,6 +195,7 @@
 .mxv-kolcard .fav{color:var(--mxv-gold);font-size:11px;margin-left:3px;}
 .mxv-kolcard .mini{display:flex;height:5px;border-radius:3px;overflow:hidden;margin:5px 0;background:var(--mxv-rail);}
 .mxv-kolcard .mini .b{background:var(--mxv-bull);}.mxv-kolcard .mini .s{background:var(--mxv-bear);}
+.mxv-kolcard .mini .n{background:var(--mxv-faint);} /* 中性占比段 */
 .mxv-kolcard .tags{font-size:11px;color:var(--mxv-muted);line-height:1.6;}
 .mxv-stockcard{background:var(--mxv-card);border:1px solid var(--mxv-line);border-radius:10px;padding:10px;cursor:pointer;}
 .mxv-stockcard:hover{border-color:var(--mxv-accent);}

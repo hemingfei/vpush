@@ -517,7 +517,7 @@ export function createMxViewsView(dependencies) {
         <div class="mxv-row" data-mxv-hl="topic:${escapeHtml(t.name)}" onclick="mxvOpenTargetAt(${ti})">
           <span class="rank">${i + 1}</span><span class="name">${escapeHtml(t.name)}</span>
           ${mxvRatioHtml(t.bull, t.bear)}
-          <span class="mxv-net ${t.net > 0 ? "bull" : t.net < 0 ? "bear" : "flat"}">${t.bull}多/${t.bear}空</span>
+          <span class="mxv-net ${t.net > 0 ? "bull" : t.net < 0 ? "bear" : "flat"}">${t.bull}多/${t.bear}空/${t.neutral || 0}中</span>
           ${mxvMomo(t.momentum)}
           <span class="mxv-latest-time">${escapeHtml((t.latest_at || "").slice(11, 16))}</span>
         </div>`; }).join("");
@@ -529,7 +529,7 @@ export function createMxViewsView(dependencies) {
         <div class="mxv-row" data-mxv-hl="stock:${escapeHtml(s.name)}" onclick="mxvOpenTargetAt(${si})">
           <span class="rank">${i + 1}</span><span class="name">${escapeHtml(s.name)}</span>
           ${mxvRatioHtml(s.bull, s.bear)}
-          <span class="mxv-net ${s.net > 0 ? "bull" : s.net < 0 ? "bear" : "flat"}">${s.bull}多/${s.bear}空</span>
+          <span class="mxv-net ${s.net > 0 ? "bull" : s.net < 0 ? "bear" : "flat"}">${s.bull}多/${s.bear}空/${s.neutral || 0}中</span>
           ${mxvMomo(s.momentum)}
           <span class="mxv-actions">${escapeHtml(actions)}</span>
         </div>`;
@@ -566,16 +566,18 @@ export function createMxViewsView(dependencies) {
       ${mode === "heat" ? `<div class="mxv-heat-legend">颜色=净方向 · 深浅大小=提及热度 · 悬停联动观点流，点击看时间线</div>` : ""}`;
   }
 
-  // ---- 双榜共用排序：提及总数降序 → |净多空| 降序；热力与明细同序，切换视图不打乱 ----
-  const mxvByHeat = (a, b) => (b.bull + b.bear) - (a.bull + a.bear) || Math.abs(b.net) - Math.abs(a.net);
+  // ---- 双榜共用排序：提及大V总数（多+空+中）降序 → |净多空| 降序；热力与明细同序 ----
+  const mxvByHeat = (a, b) => (b.bull + b.bear + (b.neutral || 0)) - (a.bull + a.bear + (a.neutral || 0))
+    || Math.abs(b.net) - Math.abs(a.net);
 
-  // ---- 热力标签云：按 mxvByHeat 铺开，颜色=净方向，深浅字号=热度；一眼看出议论焦点 ----
+  // ---- 热力标签云：按 mxvByHeat 铺开，颜色=净方向，深浅字号=热度；徽标=净多空/提及总数（含中性） ----
   function mxvHeatHtml(rows, type, emptyText) {
     const sorted = [...rows].sort(mxvByHeat);
     if (!sorted.length) return `<div class="mxv-empty">${emptyText}</div>`;
-    const max = Math.max(1, ...sorted.map((r) => r.bull + r.bear));
+    const all = (r) => r.bull + r.bear + (r.neutral || 0);
+    const max = Math.max(1, ...sorted.map(all));
     return `<div class="mxv-heat-wrap">${sorted.map((r) => {
-      const total = r.bull + r.bear;
+      const total = all(r);
       const ratio = total / max;
       const lvl = ratio >= 0.75 ? 4 : ratio >= 0.5 ? 3 : ratio >= 0.25 ? 2 : 1;
       const dir = r.net > 0 ? "bull" : r.net < 0 ? "bear" : "neutral";
@@ -584,7 +586,7 @@ export function createMxViewsView(dependencies) {
       const net = r.net > 0 ? `+${r.net}` : `${r.net}`;
       return `<span class="mxv-heat ${dir} h${lvl}" data-mxv-hl="${type}:${escapeHtml(r.name)}"
         onclick="mxvOpenTargetAt(${idx})"
-        title="${escapeHtml(r.name)}：多${r.bull} / 空${r.bear} · 净${net}${r.momentum ? ` · 动能${r.momentum > 0 ? "+" : ""}${r.momentum}` : ""}">${escapeHtml(r.name)}<b>${total}</b></span>`;
+        title="${escapeHtml(r.name)}：多${r.bull} / 空${r.bear} / 中${r.neutral || 0} · 净${net}${r.momentum ? ` · 动能${r.momentum > 0 ? "+" : ""}${r.momentum}` : ""}">${escapeHtml(r.name)}<b>${net}/${total}</b></span>`;
     }).join("")}</div>`;
   }
 
@@ -627,7 +629,8 @@ export function createMxViewsView(dependencies) {
       (_mxv.followed.has(Number(b.kol_id)) ? 1 : 0) - (_mxv.followed.has(Number(a.kol_id)) ? 1 : 0));
     return rows.map((k) => {
       const b = (k.bull_names || []).length, s = (k.bear_names || []).length;
-      const tot = Math.max(b + s, 1);
+      const n = (k.neutral_names || []).length;
+      const tot = Math.max(b + s + n, 1);
       const fav = _mxv.followed.has(Number(k.kol_id));
       return `
       <div class="mxv-kolcard" onclick="mxvOpenKol(${k.kol_id})">
@@ -635,9 +638,11 @@ export function createMxViewsView(dependencies) {
         <div style="flex:1;min-width:0">
           <div class="n">${escapeHtml(k.name)}${fav ? `<span class="fav" title="已关注">★</span>` : ""} <span style="color:var(--mxv-faint);font-size:11px">${k.opinion_count} 观点</span></div>
           <div class="mini"><div class="b" style="width:${Math.round((b / tot) * 100)}%"></div>
-            <div class="s" style="width:${Math.round((s / tot) * 100)}%"></div></div>
+            <div class="s" style="width:${Math.round((s / tot) * 100)}%"></div>
+            <div class="n" style="width:${Math.round((n / tot) * 100)}%"></div></div>
           <div class="tags">${k.bull_names && k.bull_names.length ? `<span style="color:var(--mxv-bull)">▲</span> ${escapeHtml(k.bull_names.slice(0, 4).join("、"))}` : ""}
-            ${k.bear_names && k.bear_names.length ? `<br><span style="color:var(--mxv-bear)">▼</span> ${escapeHtml(k.bear_names.slice(0, 4).join("、"))}` : ""}</div>
+            ${k.bear_names && k.bear_names.length ? `<br><span style="color:var(--mxv-bear)">▼</span> ${escapeHtml(k.bear_names.slice(0, 4).join("、"))}` : ""}
+            ${k.neutral_names && k.neutral_names.length ? `<br><span style="color:var(--mxv-muted)">◎</span> ${escapeHtml(k.neutral_names.slice(0, 4).join("、"))}` : ""}</div>
         </div>
       </div>`;
     }).join("");
@@ -645,30 +650,34 @@ export function createMxViewsView(dependencies) {
 
   function mxvStockCardsHtml() {
     const p = _mxv.payload || {};
-    // payload.kols 的多空标的名单反查每只个股的看多/看空大V
-    const bullMap = {}, bearMap = {};
+    // payload.kols 的多空/中性标的名单反查每只个股的看多/看空/中立大V
+    const bullMap = {}, bearMap = {}, neutralMap = {};
     (p.kols || []).forEach((k) => {
       (k.bull_names || []).forEach((n) => { (bullMap[n] = bullMap[n] || []).push(k.name); });
       (k.bear_names || []).forEach((n) => { (bearMap[n] = bearMap[n] || []).push(k.name); });
+      (k.neutral_names || []).forEach((n) => { (neutralMap[n] = neutralMap[n] || []).push(k.name); });
     });
     _mxv.kolStockTargets = []; // 个股卡片走独立索引，避免与双榜 _mxvTargets 冲突
     const rows = [...(p.stocks || [])].sort((a, b) =>
-      (b.bull + b.bear) - (a.bull + a.bear) || Math.abs(b.net) - Math.abs(a.net) || b.strength - a.strength);
+      (b.bull + b.bear + (b.neutral || 0)) - (a.bull + a.bear + (a.neutral || 0))
+      || Math.abs(b.net) - Math.abs(a.net) || b.strength - a.strength);
     const namesLine = (names, cnt, color, arrow) => names.length
       ? `<span style="color:${color}">${arrow}</span> ${escapeHtml(names.slice(0, 6).join("、"))}${cnt > names.length ? `<span style="color:var(--mxv-faint)"> 等${cnt}人</span>` : ""}`
       : `<span style="color:var(--mxv-faint)">${arrow} 暂无</span>`;
     return rows.map((s) => {
       const bullNames = bullMap[s.name] || [], bearNames = bearMap[s.name] || [];
+      const neutralNames = neutralMap[s.name] || [], sNeu = s.neutral || 0;
       const actions = Object.entries(s.actions || {}).map(([k, v]) => `${k}×${v}`).join(" ");
       _mxv.kolStockTargets.push({ type: "stock", name: s.name });
       const idx = _mxv.kolStockTargets.length - 1;
       return `
       <div class="mxv-stockcard" onclick="mxvOpenKolStockAt(${idx})">
-        <div class="n">${escapeHtml(s.name)} <span style="color:var(--mxv-faint);font-size:11px">${s.bull + s.bear} 大V</span>
+        <div class="n">${escapeHtml(s.name)} <span style="color:var(--mxv-faint);font-size:11px">${s.bull + s.bear + sNeu} 大V</span>
           ${actions ? `<span class="mxv-actions">${escapeHtml(actions)}</span>` : ""}</div>
         ${mxvRatioHtml(s.bull, s.bear)}
         <div class="names">${namesLine(bullNames, s.bull, "var(--mxv-bull)", "▲")}</div>
         <div class="names">${namesLine(bearNames, s.bear, "var(--mxv-bear)", "▼")}</div>
+        <div class="names">${namesLine(neutralNames, sNeu, "var(--mxv-muted)", "◎")}</div>
       </div>`;
     }).join("");
   }
@@ -895,10 +904,11 @@ export function createMxViewsView(dependencies) {
       const body = document.getElementById("mxv-drawer-body");
       if (!body) return;
       const net = data.bull.count - data.bear.count;
+      const neu = data.neutral || { count: 0, kols: [] };
       body.innerHTML = `
         <div style="margin:6px 0 10px">
           <span class="mxv-net ${net > 0 ? "bull" : net < 0 ? "bear" : "flat"}" style="font-size:15px">净多空 ${net > 0 ? "+" : ""}${net}</span>
-          <span style="color:var(--mxv-faint);font-size:12px;margin-left:8px">${data.bull.count} 多 / ${data.bear.count} 空 · 截至 ${escapeHtml(_mxv.at || "")}</span>
+          <span style="color:var(--mxv-faint);font-size:12px;margin-left:8px">${data.bull.count} 多 / ${data.bear.count} 空 / ${neu.count} 中 · 截至 ${escapeHtml(_mxv.at || "")}</span>
         </div>
         <div style="display:flex;gap:12px;margin-bottom:8px;font-size:13px">
           <div><span style="color:var(--mxv-bull)">▲ 看多 ${data.bull.count}</span>
@@ -907,6 +917,10 @@ export function createMxViewsView(dependencies) {
         <div style="display:flex;gap:12px;margin-bottom:8px;font-size:13px">
           <div><span style="color:var(--mxv-bear)">▼ 看空 ${data.bear.count}</span>
             <span style="color:var(--mxv-muted)">　${escapeHtml(data.bear.kols.map((k) => k.name).slice(0, 8).join("、"))}</span></div>
+        </div>
+        <div style="display:flex;gap:12px;margin-bottom:8px;font-size:13px">
+          <div><span style="color:var(--mxv-muted)">◎ 中立 ${neu.count}</span>
+            <span style="color:var(--mxv-muted)">　${escapeHtml(neu.kols.map((k) => k.name).slice(0, 8).join("、"))}</span></div>
         </div>
         <div style="color:var(--mxv-accent);font-size:13px;margin:10px 0 4px">观点时间线（操作时间点已标金）</div>
         ${mxvTimelineListHtml(data.timeline)}`;

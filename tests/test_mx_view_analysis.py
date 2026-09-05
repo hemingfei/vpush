@@ -216,11 +216,13 @@ def test_aggregate_day_state_strength_momentum_kols():
         op("09:20", 5, "topic", "房地产", "bear"),
         op("09:26", 5, "topic", "房地产", "bear"),  # 当前立场口径：仍 bear
         op("09:20", 6, "topic", "房地产", "bull"),  # 但 6 翻多 → net 0
+        op("09:22", 7, "topic", "固态电池", "neutral"),  # 中性大V：计中性不计多空
     ]
     payload = aggregate_day_state(day, at, opinions, prev)
     topics = {t["name"]: t for t in payload["topics"]}
     # 当前立场口径：大V1 的两条 bull 去重为一条 → bull=2（与大V5 的 bear 去重同理）
     assert topics["固态电池"]["bull"] == 2 and topics["固态电池"]["bear"] == 1
+    assert topics["固态电池"]["neutral"] == 1  # 中性大V单列计数，不影响 net
     assert topics["固态电池"]["net"] == 1
     assert topics["固态电池"]["momentum"] == -4  # 上一快照 net=5
     stocks = {s["name"]: s for s in payload["stocks"]}
@@ -230,6 +232,8 @@ def test_aggregate_day_state_strength_momentum_kols():
     assert topics["房地产"]["net"] == 0
     assert payload["trading_day"] == day and payload["snapshot_at"] == at
     assert any(k["kol_id"] == 1 for k in payload["kols"])
+    kol7 = next(k for k in payload["kols"] if k["kol_id"] == 7)
+    assert kol7["neutral_names"] == ["固态电池"]  # 大V总览卡片的中性名单
     assert "new_opinions" not in payload  # 已退休：观点流直读 mx_opinions 表
 
 
