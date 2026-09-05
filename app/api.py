@@ -2712,7 +2712,7 @@ def create_api_router(
         if not _plaza_kol_visible(user, kol):
             raise HTTPException(status_code=404, detail="大V不存在")
         posts = apply_twitter_feed(
-            db.list_posts(limit=bounded_limit(limit), kol_id=kol_id),
+            db.list_posts(limit=bounded_limit(limit), kol_id=kol_id, order_published=True),
             user,
         )
         subscription = db.get_subscription(user["id"], kol_id)

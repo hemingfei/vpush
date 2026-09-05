@@ -1835,3 +1835,30 @@ def test_update_user_atomic_replaces_news_sources_and_preserves_empty_selection(
     with pytest.raises(ValueError, match="来源不存在"):
         db.update_user_atomic(uid, {}, news_source_ids=[999999])
     assert db.list_user_news_source_ids(uid) == []
+
+
+def test_feed_orders_by_published_at_not_insert_id(tmp_path):
+    """首见入库的旧帖（大V置顶/解除隐藏后回灌）拿到最大 id，动态页与 KOL 页必须按发布时间沉底。"""
+    from app.fetchers.base import Post
+
+    db = DB(str(tmp_path / "feed-order.db"))
+    uid = db.add_user("reader", "hash")
+    kid = db.add_kol("xueqiu", "调研爱好者", "3576712780")
+    db.add_subscription(uid, kid)
+    # 先插新帖再插旧帖：模拟旧帖后入库、id 反超新帖
+    db.insert_posts_batch(
+        [
+            Post(platform="xueqiu", kol_id=kid, kol_name="调研爱好者", external_id="aug",
+                 title="8月新帖", content="c", url="u", published_at="2026-08-31 14:35"),
+            Post(platform="xueqiu", kol_id=kid, kol_name="调研爱好者", external_id="july",
+                 title="7月旧帖", content="c", url="u", published_at="2026-07-30 20:39"),
+        ]
+    )
+    feed = db.list_feed_posts([kid], user_id=uid)
+    assert [r["external_id"] for r in feed] == ["aug", "july"]
+    assert [r["external_id"] for r in db.list_posts(kol_id=kid, order_published=True)] == [
+        "aug",
+        "july",
+    ]
+    # 打标回填的 below_id 游标依赖 id 序，保持不变
+    assert [r["external_id"] for r in db.list_posts(kol_id=kid)] == ["july", "aug"]

@@ -3992,6 +3992,7 @@ class DB:
         offset: int = 0,
         untagged_only: bool = False,
         below_id: int | None = None,
+        order_published: bool = False,
     ) -> list[dict]:
         sql = (
             "SELECT p.*, k.name AS kol_name, k.category_id AS category_id, "
@@ -4021,7 +4022,10 @@ class DB:
             params.append(below_id)
         if conds:
             sql += " WHERE " + " AND ".join(conds)
-        sql += " ORDER BY p.id DESC LIMIT ? OFFSET ?"
+        # below_id 游标（打标回填）依赖 id 序，默认保持不变；用户可见列表用发布时间序，
+        # 避免首见入库的旧帖顶着最前
+        order = "p.published_at DESC, p.id DESC" if order_published else "p.id DESC"
+        sql += f" ORDER BY {order} LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         return _sanitize_post_detail(
             _normalize_post_tags(_normalize_post_images(self._rows(sql, params), db=self))
@@ -4150,7 +4154,10 @@ class DB:
             "JOIN kols k ON k.id = p.kol_id "
             "LEFT JOIN categories c ON c.id = k.category_id "
             "LEFT JOIN subscriptions s ON s.kol_id = p.kol_id AND s.user_id = ? "
-            f"WHERE {' AND '.join(conds)} ORDER BY p.id DESC LIMIT ? OFFSET ?",
+            # 按发布时间排序而非入库 id：大V置顶旧帖/解除隐藏/删帖后浮上来的
+            # 首见旧帖会拿到最大 id，按 id 排会顶着动态页最前（推送侧有水位线，
+            # 动态页只有这一道防线）
+            f"WHERE {' AND '.join(conds)} ORDER BY p.published_at DESC, p.id DESC LIMIT ? OFFSET ?",
             (*params, limit, offset),
         ), db=self)))
         for row in rows:
