@@ -23,8 +23,9 @@ export function createMxViewsView(dependencies) {
     feedBatches: [], feedKey: "", feedPending: false, feedLoading: false, feedFailed: false,
     applySeq: 0, tlDrag: false, tlPreviewIdx: -1,
     hlKey: "", hlPinned: false, boardMode: { topic: "heat", stock: "heat" },
-    boardExpanded: { topic: false, stock: false }, hlDocBound: false };
+    boardStep: 1, hlDocBound: false };
   const MXV_BOARD_LIST_LIMIT = 20; // 双榜明细默认条数，超出走「更多」展开
+  const MXV_HEAT_ROWS = 10; // 热力云默认最多行数，超出出「更多」展开
 
   // 点页面空白/Esc 解除高亮锁定、关闭月历（工厂级只绑一次；事件里按路由存活状态自然失效）
   if (!_mxv.hlDocBound) {
@@ -66,7 +67,7 @@ export function createMxViewsView(dependencies) {
     Object.assign(_mxv, { day: null, payload: null, at: null, drawer: null, hasNew: false, sseOk: false,
       feedBatches: [], feedKey: "", feedPending: false, feedLoading: false, feedFailed: false,
       tlDrag: false, tlPreviewIdx: -1, hlKey: "", hlPinned: false, cal: null,
-      boardExpanded: { topic: false, stock: false } });
+      boardStep: 1 });
   }
 
   async function renderMxViews(seq) {
@@ -541,9 +542,10 @@ export function createMxViewsView(dependencies) {
       const stats = mxvNeutralStats();
       const topicSorted = [...(p.topics || [])].map(mxvFillNeutral("topic", stats)).sort(mxvByHeat);
       const stockSorted = [...(p.stocks || [])].map(mxvFillNeutral("stock", stats)).sort(mxvByHeat);
-      // 明细默认只显示前 20 条，「更多」展开全部；热力云不受限
-      const topicList = _mxv.boardExpanded.topic ? topicSorted : topicSorted.slice(0, MXV_BOARD_LIST_LIMIT);
-      const stockList = _mxv.boardExpanded.stock ? stockSorted : stockSorted.slice(0, MXV_BOARD_LIST_LIMIT);
+      // 双榜「更多」同步步进：任意一榜展开一档，两榜一起多显示一档（明细每档+20，热力一档=解除 10 行限高）
+      const limit = MXV_BOARD_LIST_LIMIT * _mxv.boardStep;
+      const topicList = topicSorted.slice(0, limit);
+      const stockList = stockSorted.slice(0, limit);
       const topicRows = topicList.map((t, i) => {
         window._mxvTargets.push({ type: "topic", name: t.name });
         const ti = window._mxvTargets.length - 1;
@@ -569,9 +571,18 @@ export function createMxViewsView(dependencies) {
             onclick="mxvActionsToggle(this,event)">${escapeHtml(actions)}</span>
         </div>`;
       }).join("");
-      const moreBtn = (kind, total) => _mxv.boardMode[kind] === "list" && total > MXV_BOARD_LIST_LIMIT
-        ? `<button type="button" class="mxv-more" onclick="mxvBoardMore('${kind}')">${_mxv.boardExpanded[kind] ? "收起 ▴" : `更多 ▾（还有 ${total - MXV_BOARD_LIST_LIMIT} 个）`}</button>`
-        : "";
+      // 更多/收起：明细按步进剩余个数提示；热力默认限 10 行，是否溢出由渲染后测量决定（hidden→显示）
+      const moreBtn = (kind, total) => {
+        const btn = (label, extra = "") =>
+          `<button type="button" class="mxv-more" onclick="mxvBoardMore('${kind}')"${extra}>${label}</button>`;
+        if (_mxv.boardMode[kind] === "list") {
+          if (total > limit) return btn(`更多 ▾（还有 ${total - limit} 个）`);
+          if (_mxv.boardStep > 1) return btn("收起 ▴");
+          return "";
+        }
+        if (_mxv.boardStep > 1) return btn("收起 ▴");
+        return btn("更多 ▾", " hidden data-heat-more");
+      };
       const topicBody = _mxv.boardMode.topic === "list"
         ? topicRows : mxvHeatHtml(topicSorted, "topic", "暂无题材观点");
       const stockBody = _mxv.boardMode.stock === "list"
@@ -581,6 +592,7 @@ export function createMxViewsView(dependencies) {
           <div class="mxv-board">${mxvBoardHead("topic", "题材多空榜", topicSorted.length)}${topicBody}${moreBtn("topic", topicSorted.length)}</div>
           <div class="mxv-board">${mxvBoardHead("stock", "个股强度榜", stockSorted.length)}${stockBody}${moreBtn("stock", stockSorted.length)}</div>
         </div>`;
+      mxvApplyHeatClamp();
     }
     mxvRenderFeed();
     mxvRenderKols();
@@ -598,43 +610,76 @@ export function createMxViewsView(dependencies) {
           <button type="button" class="${mode === "list" ? "on" : ""}" onclick="mxvBoardMode('${kind}','list')" aria-pressed="${mode === "list"}">明细</button>
         </div>
       </div>
-      ${mode === "heat" ? `<div class="mxv-heat-legend">颜色=净方向 · 深浅大小=提及热度 · 名称两侧=总数（多+空+中）/净多空 · 悬停联动观点流，点击看时间线</div>` : ""}`;
+      ${mode === "heat" ? `<div class="mxv-heat-legend">颜色=净方向 · 深浅=提及热度 · 上=名称+净多空 · 下=多中空条，条上为总数 · 悬停联动观点流，点击看时间线</div>` : ""}`;
   }
 
   // ---- 双榜共用排序：提及大V总数（多+空+中）降序 → |净多空| 降序；热力与明细同序 ----
   const mxvByHeat = (a, b) => (b.bull + b.bear + (b.neutral || 0)) - (a.bull + a.bear + (a.neutral || 0))
     || Math.abs(b.net) - Math.abs(a.net);
 
-  // ---- 热力标签云：按 mxvByHeat 铺开，颜色=净方向，深浅字号=热度；徽标=净多空/提及总数（含中性） ----
+  // ---- 热力标签卡：上=名称+净多空，下=多中空迷你条（条上居中显示提及总数）；颜色=净方向，深浅=热度 ----
   function mxvHeatHtml(rows, type, emptyText) {
     const sorted = [...rows].sort(mxvByHeat);
     if (!sorted.length) return `<div class="mxv-empty">${emptyText}</div>`;
-    const all = (r) => r.bull + r.bear + (r.neutral || 0);
-    const max = Math.max(1, ...sorted.map(all));
-    return `<div class="mxv-heat-wrap">${sorted.map((r) => {
-      const total = all(r);
+    const max = Math.max(1, ...sorted.map((r) => r.bull + r.bear + (r.neutral || 0)));
+    return `<div class="mxv-heat-wrap" data-kind="${type}">${sorted.map((r) => {
+      const total = r.bull + r.bear + (r.neutral || 0);
       const ratio = total / max;
       const lvl = ratio >= 0.75 ? 4 : ratio >= 0.5 ? 3 : ratio >= 0.25 ? 2 : 1;
       const dir = r.net > 0 ? "bull" : r.net < 0 ? "bear" : "neutral";
       window._mxvTargets.push({ type, name: r.name });
       const idx = window._mxvTargets.length - 1;
       const net = r.net > 0 ? `+${r.net}` : `${r.net}`;
+      const bp = Math.round((r.bull / total) * 100), sp = Math.round((r.bear / total) * 100);
+      const np = Math.max(0, 100 - bp - sp); // 中段吸收取整误差
+      const segs = [
+        r.bull ? `<i class="b" style="width:${bp}%"></i>` : "",
+        r.neutral ? `<i class="n" style="width:${np}%"></i>` : "",
+        r.bear ? `<i class="s" style="width:${sp}%"></i>` : "",
+      ].join("");
       return `<span class="mxv-heat ${dir} h${lvl}" data-mxv-hl="${type}:${escapeHtml(r.name)}"
         onclick="mxvOpenTargetAt(${idx})"
-        title="${escapeHtml(r.name)}：多${r.bull} / 空${r.bear} / 中${r.neutral || 0} · 净${net}${r.momentum ? ` · 动能${r.momentum > 0 ? "+" : ""}${r.momentum}` : ""}"><b>${total}</b>${escapeHtml(r.name)}<b>${net}</b></span>`;
+        title="${escapeHtml(r.name)}：多${r.bull} / 空${r.bear} / 中${r.neutral || 0} · 净${net}${r.momentum ? ` · 动能${r.momentum > 0 ? "+" : ""}${r.momentum}` : ""}">
+        <span class="r1">${escapeHtml(r.name)}<b>${net}</b></span>
+        <span class="r2">${segs}<em>${total}</em></span></span>`;
     }).join("")}</div>`;
+  }
+
+  // 热力云默认最多 10 行：按首块高度×行数限高，溢出才亮出「更多」；展开（步进>1）不限
+  function mxvApplyHeatClamp() {
+    document.querySelectorAll(".mxv-heat-wrap").forEach((wrap) => {
+      const chip = wrap.firstElementChild;
+      const btn = wrap.parentElement.querySelector("[data-heat-more]");
+      const rowH = chip ? chip.offsetHeight + 5 : 0; // +5 = wrap 行间距
+      const maxH = rowH * MXV_HEAT_ROWS;
+      if (_mxv.boardStep > 1 || !chip || wrap.scrollHeight <= maxH + 2) {
+        wrap.classList.remove("clamped");
+        wrap.style.maxHeight = "";
+        if (btn) btn.hidden = true;
+        return;
+      }
+      wrap.classList.add("clamped");
+      wrap.style.maxHeight = `${maxH}px`;
+      if (btn) btn.hidden = false;
+    });
   }
 
   function mxvBoardMode(kind, mode) {
     if (_mxv.boardMode[kind] === mode) return;
     _mxv.boardMode[kind] = mode;
-    _mxv.boardExpanded[kind] = false; // 每次切入明细重新折叠到前 20
+    _mxv.boardStep = 1; // 每次切入视图重新折叠
     mxvRenderBoards();
   }
 
-  // 明细「更多/收起」：展开显示全部，收起回到前 20
+  // 双榜「更多/收起」同步步进：任一榜点更多=两榜各多显示一档（明细+20、热力解除限高）；
+  // 另一榜若还有更多剩余，会继续亮出「更多」；收起=两榜一起回到默认
   function mxvBoardMore(kind) {
-    _mxv.boardExpanded[kind] = !_mxv.boardExpanded[kind];
+    const p = _mxv.payload || {};
+    const total = ((kind === "topic" ? p.topics : p.stocks) || []).length;
+    const canMore = _mxv.boardMode[kind] === "list"
+      ? total > MXV_BOARD_LIST_LIMIT * _mxv.boardStep
+      : _mxv.boardStep === 1;
+    _mxv.boardStep = canMore ? _mxv.boardStep + 1 : 1;
     mxvRenderBoards();
   }
 
@@ -759,6 +804,7 @@ export function createMxViewsView(dependencies) {
     window.addEventListener("resize", () => {
       if (t) clearTimeout(t);
       t = setTimeout(() => {
+        mxvApplyHeatClamp(); // 宽度变化影响热力换行行数，重测限高
         if (document.getElementById("mxv-kols-grid")) mxvApplyKolCollapse();
       }, 150);
     });

@@ -97,13 +97,23 @@
 .mxv-board-head h3{margin:0;margin-right:auto;color:var(--mxv-accent);font-size:14px;}
 .mxv-board-head .cnt{color:var(--mxv-faint);font-size:11px;font-weight:normal;margin-left:4px;font-variant-numeric:tabular-nums;}
 .mxv-heat-legend{font-size:11px;color:var(--mxv-faint);margin:0 0 8px;}
-/* 热力标签云：颜色=净方向，深浅/字号=提及热度；h1 最淡 → h4 最深加大 */
-.mxv-heat-wrap{display:flex;flex-wrap:wrap;gap:5px;align-items:center;}
-.mxv-heat{display:inline-flex;align-items:baseline;gap:4px;border-radius:14px;padding:2px 10px;cursor:pointer;
+/* 热力标签卡（两行）：上=名称+净多空，下=多中空迷你条、条上居中总数；颜色=净方向，深浅/字号=提及热度 */
+.mxv-heat-wrap{display:flex;flex-wrap:wrap;gap:5px;align-items:stretch;}
+.mxv-heat-wrap.clamped{overflow:hidden;}
+.mxv-heat{display:inline-flex;flex-direction:column;justify-content:space-between;gap:3px;border-radius:8px;
+  padding:5px 10px;cursor:pointer;min-width:76px;
   border:1px solid transparent;font-size:12px;line-height:1.5;position:relative;
   transition:transform .12s ease,box-shadow .12s ease;}
 .mxv-heat:hover{transform:translateY(-1px);}
+.mxv-heat .r1{display:flex;align-items:baseline;justify-content:space-between;gap:6px;white-space:nowrap;}
 .mxv-heat b{font-size:10px;font-weight:600;font-variant-numeric:tabular-nums;opacity:.75;}
+.mxv-heat .r2{position:relative;display:flex;height:9px;border-radius:4px;overflow:hidden;background:var(--mxv-rail);}
+.mxv-heat .r2 i{flex:none;height:100%;}
+.mxv-heat .r2 i.b{background:var(--mxv-bull);}
+.mxv-heat .r2 i.n{background:var(--mxv-muted);}
+.mxv-heat .r2 i.s{background:var(--mxv-bear);}
+.mxv-heat .r2 em{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-style:normal;font-size:9px;font-weight:700;line-height:1;color:#fff;text-shadow:0 0 3px rgba(0,0,0,.55);}
 .mxv-heat.bull{color:var(--mxv-bull-text);background:var(--mxv-bull-soft);border-color:var(--mxv-bull-line);}
 .mxv-heat.bear{color:var(--mxv-bear-text);background:var(--mxv-bear-soft);border-color:var(--mxv-bear-line);}
 .mxv-heat.neutral{color:var(--mxv-muted);background:var(--mxv-soft);border-color:var(--mxv-soft-line);}

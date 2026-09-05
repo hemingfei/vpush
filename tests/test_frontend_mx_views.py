@@ -215,19 +215,19 @@ def test_mx_views_board_list_matches_heat_order_and_stock_bull_bear():
 
 
 def test_mx_views_board_list_more_limit():
-    """双榜明细默认最多 20 条，超出出「更多」展开全部/「收起」折回；切视图与重进页面重置。"""
+    """双榜明细默认最多 20 条，「更多」按同步步进展开（两榜联动，每次+20）；热力/明细切换与重进页面重置。"""
     js = MX_VIEWS_JS
-    assert "const MXV_BOARD_LIST_LIMIT = 20;" in js
+    assert "const MXV_BOARD_LIST_LIMIT = 20;" in js and "const MXV_HEAT_ROWS = 10;" in js
     boards = _fn_body("mxvRenderBoards", js)
-    assert boards.count("slice(0, MXV_BOARD_LIST_LIMIT)") == 2  # 题材 + 个股都截断
-    assert "boardExpanded" in boards and "mxvBoardMore('${kind}')" in boards
-    assert "收起 ▴" in boards and "更多 ▾" in boards  # 展开态切换文案
+    assert "MXV_BOARD_LIST_LIMIT * _mxv.boardStep" in boards  # 两榜共用同步步进
+    assert "mxvBoardMore('${kind}')" in boards
+    assert "收起 ▴" in boards and "更多 ▾" in boards and "data-heat-more" in boards  # 热力按钮测量后亮出
     more = _fn_body("mxvBoardMore", js)
-    assert "boardExpanded[kind] = !_mxv.boardExpanded[kind]" in more
+    assert "_mxv.boardStep = canMore ? _mxv.boardStep + 1 : 1;" in more  # 任一榜更多=同步一档；收起=一起回默认
     mode = _fn_body("mxvBoardMode", js)
-    assert "_mxv.boardExpanded[kind] = false" in mode  # 热力/明细切换重置折叠
+    assert "_mxv.boardStep = 1;" in mode  # 热力/明细切换重置折叠
     teardown = _fn_body("mxvTeardown", js)
-    assert "boardExpanded" in teardown  # 重进页面回到默认折叠
+    assert "boardStep: 1" in teardown  # 重进页面回到默认折叠
     # 注册进工厂返回与 app.js 内联处理器
     exported = js.rsplit("return {", 1)[1]
     assert "mxvBoardMore," in exported and "mxvBoardMore," in APP_JS
@@ -247,9 +247,8 @@ def test_mx_views_neutral_counts_everywhere():
     assert '<div class="n" style="width:${np}%"></div>' in ratio  # 中段黄色块（.mxv-ratio .n 上色）
     assert "看多${bull} 中立${neutral} 看空${bear}" in ratio  # 无障碍标签含中立
     heat = _fn_body("mxvHeatHtml", js)
-    assert "<b>${total}</b>${escapeHtml(r.name)}<b>${net}</b>" in heat  # 布局 = (多+空+中) 名称 (多-空)
-    assert "const all = (r) => r.bull + r.bear + (r.neutral || 0);" in heat  # 热度与总数含中性
-    assert "中${r.neutral || 0}" in heat  # tooltip 含中性
+    assert 'max = Math.max(1, ...sorted.map((r) => r.bull + r.bear + (r.neutral || 0)))' in heat  # 热度含中性
+    assert '中${r.neutral || 0}' in heat  # tooltip 含中性
     drawer = _fn_body("mxvOpenTarget", js)
     assert "中 · 截至" in drawer and "◎ 中立 ${neu.count}" in drawer  # 抽屉顶部中立统计+名单
     kolcards = _fn_body("mxvKolCardsHtml", js)
@@ -287,6 +286,27 @@ def test_mx_views_neutral_backfill_from_feed_and_actions_expand():
     assert "mxvActionsToggle," in exported and "mxvActionsToggle," in APP_JS
     css = (STATIC / "mx-views.css").read_text()
     assert ".mxv-row .mxv-actions.open{" in css  # 展开态换行显示全部（后代选择器用原文断言）
+
+
+def test_mx_views_heat_two_rows_and_row_clamp():
+    """热力标签卡两行：上=名称+净多空，下=多中空迷你条（条上居中总数）；默认最多 10 行，溢出才亮「更多」。"""
+    js = MX_VIEWS_JS
+    heat = _fn_body("mxvHeatHtml", js)
+    assert '<span class="r1">${escapeHtml(r.name)}<b>${net}</b></span>' in heat  # 行1 = 名称+净多空
+    assert '<span class="r2">${segs}<em>${total}</em></span>' in heat  # 行2 = 多中空条+居中总数
+    assert 'data-kind="${type}"' in heat  # 限高测量按榜定位
+    clamp = _fn_body("mxvApplyHeatClamp", js)
+    assert "MXV_HEAT_ROWS" in clamp and "scrollHeight" in clamp  # 溢出测量
+    assert 'classList.add("clamped")' in clamp and "hidden = false" in clamp  # 限高并亮出更多
+    render = _fn_body("mxvRenderBoards", js)
+    assert "mxvApplyHeatClamp();" in render  # 渲染后测量限高
+    resize = _fn_body("mxvBindKolResize", js)
+    assert "mxvApplyHeatClamp()" in resize  # 窗口变化重测
+    css = (STATIC / "mx-views.css").read_text()
+    assert ".mxv-heat{display:inline-flex;flex-direction:column;" in css  # 两行卡片
+    assert ".mxv-heat-wrap.clamped{overflow:hidden;}" in css  # 限高裁切
+    assert ".mxv-heat .r2 em{" in css  # 条上居中总数
+    assert ".mxv-heat .r2 i.n{background:var(--mxv-muted);}" in css  # 迷你条中段与明细同色
 
 
 def test_mx_views_day_picker_is_calendar():
