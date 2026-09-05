@@ -42,6 +42,15 @@ MODE_ARGS = {
 ALL_MODES = ("stop", "compress", "schedule", "settings",
              "consistency", "dedup", "backup", *MODE_ARGS)
 
+MAX_ATTEMPTS = 3
+# ponytail: 暂时性失败（collector 忙/OSError/脚本缺失已有分支）保留命令文件重试；
+# 参数类错误（unknown_mode/invalid_*）永久失败不重试。
+PERMANENT_ERRORS = {"unknown_mode", "invalid_time", "invalid_categories",
+                    "invalid_ts", "invalid_payload", "invalid_json",
+                    "backup_script_missing", "consistency_script_missing",
+                    "dedup_script_missing"}
+RESULT_STALE_SECONDS = 600  # running 结果超时视为上次运行崩溃，恢复重试
+
 
 def validate_command(cmd: dict) -> str | None:
     """返回错误原因（None=合法）。命令信封：{id, mode, actor, ts, payload}。
@@ -65,6 +74,10 @@ def validate_command(cmd: dict) -> str | None:
 def write_result(cmd_id: str, entry: dict) -> None:
     os.makedirs(RESULTS_DIR, exist_ok=True)
     write_json(os.path.join(RESULTS_DIR, f"{cmd_id}.json"), entry)
+
+
+def load_result(cmd_id: str) -> dict | None:
+    return read_json(os.path.join(RESULTS_DIR, f"{cmd_id}.json"))
 
 
 def collectors_running() -> int:
@@ -113,10 +126,23 @@ def main() -> None:
         cmd = read_json(path) or {}
         # 新命令以 envelope.id 为幂等键；旧格式（无 id）以文件名为键短期兼容
         cmd_id = str(cmd.get("id") or name)
+        prev = load_result(cmd_id) or {}
+        if prev.get("status") == "success":
+            # 幂等：已成功（可能上次成功与删除之间崩溃），只清命令不重跑
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            continue
+        if prev.get("status") == "running" and \
+                int(time.time()) - int(prev.get("started_at") or 0) < RESULT_STALE_SECONDS:
+            continue  # running 且未超时：上次运行未完成（可能真在跑），跳过本次
         started = int(time.time())
-        entry = {"id": cmd_id, "mode": cmd.get("mode"), "status": "failed",
-                 "started_at": started, "finished_at": 0, "attempts": 1,
+        attempts = int(prev.get("attempts") or 0) + 1
+        entry = {"id": cmd_id, "mode": cmd.get("mode"), "status": "running",
+                 "started_at": started, "finished_at": 0, "attempts": attempts,
                  "error": None}
+        write_result(cmd_id, entry)  # 先落 running：崩溃后 stale 恢复可重试
         error = validate_command(cmd)
         payload = cmd.get("payload") if isinstance(cmd.get("payload"), dict) else {}
         try:
@@ -186,15 +212,28 @@ def main() -> None:
             entry["error"] = str(exc)[:200]
         entry["finished_at"] = int(time.time())
         write_result(cmd_id, entry)
+        keep = False
+        if entry.get("ok"):
+            entry["status"] = "success"
+            entry["error"] = None
+            keep = True
+        elif entry["error"] in PERMANENT_ERRORS or attempts >= MAX_ATTEMPTS:
+            entry["status"] = "failed"  # 永久失败或重试耗尽：终结
+            keep = True
+        else:
+            entry["status"] = "retry"  # 暂时性失败：保留命令文件待下次触发
+        write_result(cmd_id, entry)
         kept = {"ts": cmd.get("ts") or started, "mode": cmd.get("mode"),
                 "actor": str(cmd.get("actor"))[:40],
                 "ok": entry["status"] == "success",
-                "error": entry.get("error"), "id": cmd_id}
+                "error": entry.get("error"), "id": cmd_id,
+                "status": entry["status"], "attempts": attempts}
         handled.append(kept)
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+        if keep:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
     if handled:
         lock = open(os.path.join(CTRL, ".ledger.lock"), "w")  # noqa: SIM115 — 锁文件生命周期即本块

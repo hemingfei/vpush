@@ -145,3 +145,90 @@ def test_dispatch_legacy_command_without_id_still_runs(ctrl, monkeypatch):
     mod.main()
     assert launched, "旧命令必须仍被消费"
     assert not list((ctrl_dir / "commands").glob("*.json"))
+
+
+# —— 任务 3：失败重试与幂等 ——
+
+def test_transient_failure_retries_then_succeeds(ctrl, monkeypatch):
+    """collector_already_running（暂时性）第一次保留命令文件，第二次成功后删除。"""
+    _, archive = ctrl
+    mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    busy = iter([1, 0])
+    monkeypatch.setattr(mod, "collectors_running", lambda: next(busy))
+    cmd_id = "11" * 16
+    _write_command(ctrl_dir, f"1710000000000-incr-{cmd_id[:8]}.json",
+                   {"id": cmd_id, "mode": "incr", "actor": "admin", "ts": 1710000000,
+                    "payload": {}})
+
+    mod.main()  # 第一次：collector 忙 → 保留命令文件
+    assert not launched
+    assert (ctrl_dir / "commands").glob("*.json"), "暂时性失败必须保留命令文件供重试"
+    r1 = json.loads((ctrl_dir / "results" / f"{cmd_id}.json").read_text(encoding="utf-8"))
+    assert r1["status"] == "retry"
+    assert r1["error"] == "collector_already_running"
+    assert r1["attempts"] == 1
+
+    mod.main()  # 第二次：空闲 → 成功，命令文件删除
+    assert launched
+    r2 = json.loads((ctrl_dir / "results" / f"{cmd_id}.json").read_text(encoding="utf-8"))
+    assert r2["status"] == "success"
+    assert r2["attempts"] == 2
+    assert not list((ctrl_dir / "commands").glob("*.json"))
+    assert r2["id"] == cmd_id, "重试不得生成新 id"
+
+
+def test_permanent_failure_does_not_retry(ctrl, monkeypatch):
+    """unknown_mode 等参数错误：一次即失败，删除命令文件不保留。"""
+    _, archive = ctrl
+    mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    cmd_id = "22" * 16
+    _write_command(ctrl_dir, f"1710000000000-bogus-{cmd_id[:8]}.json",
+                   {"id": cmd_id, "mode": "rm -rf /", "actor": "admin", "ts": 1710000000,
+                    "payload": {}})
+    mod.main()
+    mod.main()  # 再来一次也不能重试
+    assert not launched
+    assert not list((ctrl_dir / "commands").glob("*.json")), "永久失败不得保留命令文件"
+    r = json.loads((ctrl_dir / "results" / f"{cmd_id}.json").read_text(encoding="utf-8"))
+    assert r["status"] == "failed"
+    assert r["attempts"] == 1
+
+
+def test_transient_failure_gives_up_after_max_attempts(ctrl, monkeypatch):
+    _, archive = ctrl
+    mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    monkeypatch.setattr(mod, "collectors_running", lambda: 1)  # 永远忙
+    cmd_id = "33" * 16
+    _write_command(ctrl_dir, f"1710000000000-incr-{cmd_id[:8]}.json",
+                   {"id": cmd_id, "mode": "incr", "actor": "admin", "ts": 1710000000,
+                    "payload": {}})
+    for _ in range(mod.MAX_ATTEMPTS):
+        mod.main()
+    assert not launched
+    assert not list((ctrl_dir / "commands").glob("*.json")), "耗尽后命令文件必须删除"
+    r = json.loads((ctrl_dir / "results" / f"{cmd_id}.json").read_text(encoding="utf-8"))
+    assert r["status"] == "failed"
+    assert r["attempts"] == mod.MAX_ATTEMPTS
+
+
+def test_success_result_is_idempotent_on_rescan(ctrl, monkeypatch):
+    """成功结果存在时，残留命令文件不得再次执行。"""
+    _, archive = ctrl
+    mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    cmd_id = "44" * 16
+    # 手工模拟：结果已 success，但命令文件仍在（上次删除前崩溃）
+    (ctrl_dir / "results").mkdir(parents=True, exist_ok=True)
+    (ctrl_dir / "results" / f"{cmd_id}.json").write_text(json.dumps(
+        {"id": cmd_id, "mode": "incr", "status": "success",
+         "started_at": 100, "finished_at": 101, "attempts": 1, "error": None}),
+        encoding="utf-8")
+    _write_command(ctrl_dir, f"1710000000000-incr-{cmd_id[:8]}.json",
+                   {"id": cmd_id, "mode": "incr", "actor": "admin", "ts": 1710000000,
+                    "payload": {}})
+    mod.main()
+    assert not launched, "已成功命令不得重复执行"
+    assert not list((ctrl_dir / "commands").glob("*.json"))
