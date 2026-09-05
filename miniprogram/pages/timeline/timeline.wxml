@@ -27,8 +27,13 @@
             <view class="post-time">{{item.published_at}}</view>
           </view>
         </view>
-        <view wx:if="{{item.title}}" class="post-title">{{item.title}}</view>
-        <view class="post-content">{{item.content || '（无正文）'}}</view>
+        <view wx:if="{{item.translated}}" class="post-tr">
+          <image class="post-tr-grok" src="/images/grok.svg" mode="aspectFit"></image>
+          <text class="post-tr-label">翻译自英语</text>
+          <text class="post-tr-toggle" data-id="{{item.id}}" bindtap="toggleOrigin">{{item.showSrc ? '显示译文' : '显示原文'}}</text>
+        </view>
+        <view wx:if="{{item.displayTitle}}" class="post-title">{{item.displayTitle}}</view>
+        <view class="post-content">{{item.displayContent}}</view>
         <view class="post-meta">
           <text wx:if="{{item.post_type === 'reply'}}" class="tag">回复</text>
           <text wx:if="{{item.category_name}}" class="tag">{{item.category_name}}</text>

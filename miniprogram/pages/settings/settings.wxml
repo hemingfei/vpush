@@ -128,7 +128,7 @@
       <switch checked="{{dailyReport}}" color="#1677ff" bindchange="onDaily" />
     </view>
     <view class="form-item">
-      <view class="form-label">X 帖文翻译成中文</view>
+      <view class="form-label">X / Truth 帖文翻译成中文</view>
       <switch checked="{{translateTwitter}}" color="#1677ff" bindchange="onTranslateTwitter" />
     </view>
     <view class="notice-line" style="color:var(--text-faint);font-size:22rpx;margin-top:8rpx">

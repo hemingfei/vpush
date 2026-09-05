@@ -51,9 +51,10 @@ const CHANNEL_ICONS = {
   bark: `<svg class="ch-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>`,
   webpush: `<svg class="ch-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm0 2v8h16V5H4zm4 13h8v2H8v-2z"/></svg>`,
 };
+const GROK_TRANSLATE_ICON = `<svg class="p-tr-grok" viewBox="0 0 33 32" fill="currentColor" aria-hidden="true"><path d="M12.745 20.54l10.97-8.19c.539-.4 1.307-.244 1.564.38 1.349 3.288.746 7.241-1.938 9.955-2.683 2.714-6.417 3.31-9.83 1.954l-3.728 1.745c5.347 3.697 11.84 2.782 15.898-1.324 3.219-3.255 4.216-7.692 3.284-11.693l.008.009c-1.351-5.878.332-8.227 3.782-13.031L33 0l-4.54 4.59v-.014L12.743 20.544m-2.263 1.987c-3.837-3.707-3.175-9.446.1-12.755 2.42-2.449 6.388-3.448 9.852-1.979l3.72-1.737c-.67-.49-1.53-1.017-2.515-1.387-4.455-1.854-9.789-.931-13.41 2.728-3.483 3.523-4.579 8.94-2.697 13.561 1.405 3.454-.899 5.898-3.22 8.364C1.49 30.2.666 31.074 0 32l10.478-9.466"/></svg>`;
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.139";
+const APP_VERSION = "1.12.140";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -265,6 +266,7 @@ function clearSessionCaches() {
   _tlOffset = 0;
   _tlHasMore = true;
   _tlExpanded.clear();
+  _tlShowSrc.clear();
   _tlLatestId = 0;
   _tlLoadedFilter = null;
   _tlSavedScrollY = 0;
@@ -1556,6 +1558,7 @@ let _tlOffset = 0;
 let _tlHasMore = true;
 let _tlLoadingMore = false;
 const _tlExpanded = new Set();
+const _tlShowSrc = new Set();
 let _tlTags = null;
 let _tlDynamicTags = [];
 let _tlLatestId = 0;        // 当前已加载的最新帖 id，用于后台检测新帖
@@ -2792,9 +2795,7 @@ function toggleTimelineSecondary() {
   loadTimeline(true, routeRenderSeq, { revert });
 }
 
-function tlTogglePost(id) {
-  if (_tlExpanded.has(id)) _tlExpanded.delete(id);
-  else _tlExpanded.add(id);
+function tlReplacePostCard(id) {
   const post = _tlPosts.find((p) => p.id === id);
   const card = document.querySelector(`.post-item[data-post-id="${id}"]`);
   if (post && card) {
@@ -2807,6 +2808,18 @@ function tlTogglePost(id) {
     }
   }
   renderTimelineFeed();
+}
+
+function tlTogglePost(id) {
+  if (_tlExpanded.has(id)) _tlExpanded.delete(id);
+  else _tlExpanded.add(id);
+  tlReplacePostCard(id);
+}
+
+function tlToggleOrigin(id) {
+  if (_tlShowSrc.has(id)) _tlShowSrc.delete(id);
+  else _tlShowSrc.add(id);
+  tlReplacePostCard(id);
 }
 
 // published_at 支持 "YYYY-MM-DD HH:MM(:SS)"（雪球）与 RFC2822（微博/X 存 GMT/+0000），
@@ -2902,15 +2915,21 @@ function postCard(post) {
   const safeUrl = /^https?:\/\//i.test(post.url || "") ? post.url : "#";
   const comboHtml = post.platform === "combination" ? combinationDetailHtml(post) : "";
   const isCombination = !!comboHtml;
-  const body = post.content || "（无正文）";
+  const srcC = (post.content_src || "").trim();
+  const srcT = (post.title_src || "").trim();
+  const translated = !!(srcC && srcC !== (post.content || "").trim());
+  const showSrc = translated && _tlShowSrc.has(post.id);
+  const title = showSrc ? srcT : (post.title || "");
+  const body = (showSrc ? srcC : (post.content || "")) || "（无正文）";
   const expanded = _tlExpanded.has(post.id);
   const shown = expanded ? body : body.slice(0, 200);
   // X 帖常 title==content（如纯链接帖），标题和正文都渲染会视觉重复，跳过标题；
   // 长文帖 title 常为 content 开头一段（截断），同样跳过避免重复展示
-  const titleDup = !!post.title && (
-    post.title.trim() === (post.content || "").trim()
-    || (post.content || "").trimStart().startsWith(post.title.trim())
+  const titleDup = !!title && (
+    title.trim() === body.trim()
+    || body.trimStart().startsWith(title.trim())
   );
+  const trBar = translated ? `<div class="p-tr">${GROK_TRANSLATE_ICON}<span class="p-tr-label">翻译自英语</span><button type="button" class="p-tr-toggle" onclick="tlToggleOrigin(${post.id})">${showSrc ? "显示译文" : "显示原文"}</button></div>` : "";
   return `
     <div class="post-item" data-post-id="${post.id}">
       <div class="p-header">
@@ -2923,7 +2942,7 @@ function postCard(post) {
           <span class="p-time" title="${escapeHtml(post.published_at)}">${fmtPublished(post.published_at)}</span>
         </div>
       </div>
-      ${isCombination ? `<div class="combo-post">${comboHtml}</div>` : `${!titleDup && post.title ? `<div class="p-title">${escapeHtml(post.title)}</div>` : ""}
+      ${isCombination ? `<div class="combo-post">${comboHtml}</div>` : `${trBar}${!titleDup && title ? `<div class="p-title">${escapeHtml(title)}</div>` : ""}
       <div class="p-content">${escapeHtml(shown)}${body.length > 200
         ? `<button class="post-expand-btn" onclick="tlTogglePost(${post.id})" aria-expanded="${expanded}">${expanded ? "收起 ▲" : "展开全文 ▼"}</button>`
         : ""}</div>`}
@@ -5773,6 +5792,7 @@ const INLINE_HANDLERS = {
   tlPickTag,
   tlRemoveFilter,
   tlResetFilters,
+  tlToggleOrigin,
   tlTogglePost,
   toggleAdminNewsFeed,
   toggleAdminNewsSource,

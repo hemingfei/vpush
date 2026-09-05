@@ -23,3 +23,20 @@ def test_miniprogram_timeline_tag_is_clickable_and_clearable():
     assert 'bindtap="selectTag"' in src
     assert 'data-tag="{{tag}}"' in src
     assert 'bindtap="clearTag"' in src
+
+
+def test_miniprogram_posts_can_toggle_translated_original():
+    timeline_wxml = TIMELINE_WXML.read_text()
+    timeline_js = TIMELINE_JS.read_text()
+    kol_wxml = (ROOT / "miniprogram/pages/kol/kol.wxml").read_text()
+    kol_js = (ROOT / "miniprogram/pages/kol/kol.js").read_text()
+    wxss = (ROOT / "miniprogram/app.wxss").read_text()
+    for wxml in (timeline_wxml, kol_wxml):
+        assert "翻译自英语" in wxml
+        assert 'bindtap="toggleOrigin"' in wxml
+        assert "displayContent" in wxml
+        assert "/images/grok.svg" in wxml
+    for js in (timeline_js, kol_js):
+        assert "toggleOrigin" in js
+        assert "content_src" in js
+    assert ".post-tr" in wxss

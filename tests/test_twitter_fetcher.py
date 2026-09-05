@@ -833,6 +833,22 @@ def test_twitter_display_pref_swaps_stored_src():
     assert shown.title == "Hello title" and shown.content == "Hello original"
     assert post.title == "中文标题"
 
+    truth = Post(
+        platform="truth",
+        kol_id=1,
+        kol_name="Trump",
+        external_id="117213723499789673",
+        title="中文标题",
+        content="中文译文",
+        url="u",
+        published_at="",
+        title_src="Hello title",
+        content_src="Hello original",
+    )
+    assert with_twitter_display(truth, True) is truth
+    truth_shown = with_twitter_display(truth, False)
+    assert truth_shown.title == "Hello title" and truth_shown.content == "Hello original"
+
     xq = Post(
         platform="xueqiu",
         kol_id=1,

@@ -2264,6 +2264,32 @@ def test_me_translate_twitter_pref_swaps_feed_text():
     assert kol_posts[0]["content"] == "Hello original"
 
 
+def test_me_translate_pref_swaps_truth_feed_text():
+    client = make_client()
+    headers = user_headers(client, "reader")
+    db = client.app.state.db
+    uid = client.get("/api/me", headers=headers).json()["id"]
+    kid = db.add_kol("truth", "Trump", "realDonaldTrump")
+    db.add_subscription(uid, kid)
+    db.insert_post(
+        "truth",
+        kid,
+        "117213723499789673",
+        "中文标题",
+        "中文译文",
+        "https://truthsocial.com/@realDonaldTrump/posts/117213723499789673",
+        "",
+        title_src="Hello title",
+        content_src="Hello original",
+    )
+    feed = client.get("/api/my/feed", headers=headers).json()
+    assert feed[0]["title"] == "中文标题" and feed[0]["content"] == "中文译文"
+    assert feed[0]["content_src"] == "Hello original"
+    assert client.put("/api/me", headers=headers, json={"translate_twitter": False}).status_code == 200
+    feed = client.get("/api/my/feed", headers=headers).json()
+    assert feed[0]["title"] == "Hello title" and feed[0]["content"] == "Hello original"
+
+
 def test_me_includes_push_guide():
     cfg = Config()
     cfg.notifiers.telegram.bot_username = "dav_bot"

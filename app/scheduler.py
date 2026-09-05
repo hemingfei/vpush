@@ -277,6 +277,19 @@ def _parse_x_translation_body(body: str) -> str:
     return found
 
 
+def _parse_edge_translation(payload) -> str:
+    if not isinstance(payload, list) or not payload:
+        return ""
+    item = payload[0]
+    if not isinstance(item, dict):
+        return ""
+    trans = item.get("translations")
+    if not isinstance(trans, list) or not trans:
+        return ""
+    text = trans[0].get("text") if isinstance(trans[0], dict) else ""
+    return text.strip() if isinstance(text, str) else ""
+
+
 def translate_text(
     text: str,
     target: str = "zh-CN",
@@ -285,7 +298,7 @@ def translate_text(
     twitter_cookie: str | None = None,
     **_ignored,
 ) -> str:
-    """把 X 内容转成中文。优先官方翻译，失败回退 MyMemory。"""
+    """把 X/Truth 内容转成中文。优先 Grok，失败回退 Edge，再 MyMemory。"""
     import httpx
 
     global _mymemory_skip_until
@@ -340,8 +353,28 @@ def translate_text(
                     return translated
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"x_translate: {exc}")
-            if len(text) > 500:
-                return text
+        try:
+            # ponytail: unofficial Edge 接口，挂了再走 MyMemory/原文
+            resp = client.post(
+                "https://edge.microsoft.com/translate/translatetext",
+                params={"from": "", "to": "zh-Hans", "isEnterpriseClient": "false"},
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": (
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+                    ),
+                },
+                json=[text[:2000]],
+            )
+            resp.raise_for_status()
+            translated = _parse_edge_translation(resp.json())
+            if translated and not is_collapsed_translation(translated, text):
+                return translated
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"edge_translate: {exc}")
+        if len(text) > 500:
+            return text
         if time.monotonic() < _mymemory_skip_until:
             return text
         try:
@@ -1121,13 +1154,14 @@ def _fetch_kol_once(
     for post in posts:
         post.category = kol.get("category_name") or ""
         if (
-            post.platform == "twitter"
+            post.platform in ("twitter", "truth")
             and translate_twitter
             and (post.platform, post.external_id) not in existing_keys
         ):
             # 仅翻译新帖，避免每轮重复调用翻译接口
             try:
-                tweet_id = extract_tweet_id(post.external_id)
+                # Truth 的数字 id 不是 tweet id，不能走 POST 模式
+                tweet_id = extract_tweet_id(post.external_id) if post.platform == "twitter" else ""
                 from .fetchers.twitter import configured_twitter_cookie
 
                 tw_cookie = configured_twitter_cookie(db)
@@ -1144,8 +1178,9 @@ def _fetch_kol_once(
                     post.content = translated
                     post.title = translated.splitlines()[0][:80] if translated else (post.title or "")
                 else:
-                    post.title = translate_text(post.title or "")
-                    post.content = translate_text(post.content or "")
+                    extra = {"twitter_cookie": tw_cookie} if tw_cookie else {}
+                    post.title = translate_text(post.title or "", **extra)
+                    post.content = translate_text(post.content or "", **extra)
             except Exception as exc:  # noqa: BLE001 - 翻译失败退回原文
                 logger.warning("X 内容翻译失败 post=%s err=%s", post.external_id, exc)
     # 关键词规则打标：仅对新帖（与翻译同判据），纯本地计算零成本，异常不影响入库

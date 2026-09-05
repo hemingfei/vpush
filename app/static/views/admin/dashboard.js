@@ -216,10 +216,10 @@ export function createAdminDashboardView(dependencies) {
             <div class="cfg-group">
               <p class="cfg-group-title">通道</p>
               <div class="cfg-flags">
-                <label class="cfg-field cfg-check" title="X 内容自动翻译成中文（配置 TWITTER_COOKIE 后走 X 官方翻译，质量同网页版）">
+                <label class="cfg-field cfg-check" title="X / Truth 内容自动翻译成中文（配置 TWITTER_COOKIE 后走 X 官方翻译，质量同网页版）">
                   <input id="pc-translate" type="checkbox" ${s.polling_config.translate_twitter_content ? "checked" : ""}>
                   <span class="cfg-flag-text">
-                    <span>X 内容自动翻译成中文</span>
+                    <span>X / Truth 内容自动翻译成中文</span>
                     <span class="cfg-check-desc">抓取时保存译文和原文；用户可在推送设置里选看哪一种</span>
                   </span>
                 </label>

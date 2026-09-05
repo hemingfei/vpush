@@ -280,6 +280,23 @@ def test_post_tags_filter_timeline_without_inline_user_string():
     assert "loadTimeline(true, routeRenderSeq, { revert })" in pick_tag
 
 
+def test_post_card_shows_translation_origin_toggle():
+    """译文帖要标「翻译自英语」，并可切回原文。"""
+    card = _fn_body("postCard")
+    src = APP_JS.read_text()
+    css = STYLE_CSS.read_text()
+    assert "翻译自英语" in card
+    assert "显示原文" in card
+    assert "GROK_TRANSLATE_ICON" in card
+    assert "p-tr-grok" in src
+    assert 'viewBox="0 0 33 32"' in src
+    assert "tlToggleOrigin(" in card
+    assert "function tlToggleOrigin" in src
+    assert "_tlShowSrc" in src
+    assert ".post-item .p-tr" in css
+    assert ".post-item .p-tr-grok" in css
+
+
 def test_settings_async_responses_are_owned_by_route_and_session_before_mutation():
     """设置页的 /api/me 响应必须在写 state 或 DOM 前确认路由和会话仍是发起者。"""
     src = APP_JS.read_text(encoding="utf-8")

@@ -267,13 +267,13 @@ export function createPushSettingsView(dependencies) {
           </div>
           <p class="muted">开启后，每天 20:00 把你订阅大V当天的新动态汇总成一条推送。</p>
           <div class="form-row" style="margin-top:16px">
-            <label for="set-x-translate">X 帖文</label>
+            <label for="set-x-translate">X / Truth 帖文</label>
             <select id="set-x-translate" class="form-control" onchange="saveTranslateTwitter()">
               <option value="1" ${state.user.translate_twitter !== false ? "selected" : ""}>翻译成中文</option>
               <option value="0" ${state.user.translate_twitter === false ? "selected" : ""}>保留原文</option>
             </select>
           </div>
-          <p class="muted">只影响你的时间线和推送。管理员需开启「X 内容自动翻译」后，新抓的帖才会同时留下原文。</p>
+          <p class="muted">只影响你的时间线和推送。管理员需开启「X / Truth 内容自动翻译」后，新抓的帖才会同时留下原文。</p>
         </section>
         <section class="section-panel">
           <header class="section-head">
