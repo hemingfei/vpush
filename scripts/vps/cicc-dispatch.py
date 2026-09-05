@@ -50,6 +50,7 @@ PERMANENT_ERRORS = {"unknown_mode", "invalid_time", "invalid_categories",
                     "invalid_json", "backup_script_missing",
                     "consistency_script_missing", "dedup_script_missing"}
 RESULT_STALE_SECONDS = 600  # running 结果超时视为上次运行崩溃，恢复重试
+MAX_RESULT_ID_LEN = 128  # 结果文件名为 id：超长会 OSError 炸掉 dispatch
 MAX_TS_FUTURE = 300  # 命令 ts 允许的最大未来偏差（秒），防伪造/损坏时间戳
 _TIME_RE = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")
 
@@ -132,9 +133,20 @@ def main() -> None:
         if not name.endswith(".json") or name.startswith("."):
             continue
         path = os.path.join(COMMANDS_DIR, name)
-        cmd = read_json(path) or {}
+        raw_cmd = read_json(path)
+        cmd = raw_cmd if isinstance(raw_cmd, dict) else {}
         # 新命令以 envelope.id 为幂等键；旧格式（无 id）以文件名为键短期兼容
         cmd_id = str(cmd.get("id") or name)
+        if len(cmd_id) > MAX_RESULT_ID_LEN:
+            # 超长 id（恶意/损坏文件名）：写结果会 OSError 炸掉整个 dispatch，直接清理
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            handled.append({"ts": int(time.time()), "mode": cmd.get("mode"),
+                            "actor": "", "ok": False, "error": "invalid_name",
+                            "id": cmd_id[:64], "status": "failed", "attempts": 1})
+            continue
         prev = load_result(cmd_id) or {}
         if prev.get("status") == "success":
             # 幂等：已成功（可能上次成功与删除之间崩溃），只清命令不重跑
@@ -153,6 +165,8 @@ def main() -> None:
                  "error": None}
         write_result(cmd_id, entry)  # 先落 running：崩溃后 stale 恢复可重试
         error = validate_command(cmd)
+        if raw_cmd is None:  # 非法 JSON：空 dict 会误报 unknown_mode
+            error = "invalid_json"
         payload = cmd.get("payload") if isinstance(cmd.get("payload"), dict) else {}
         try:
             if error is not None:

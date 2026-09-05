@@ -445,3 +445,121 @@ def test_systemd_units_use_absolute_paths_only():
                 _, _, value = line.partition("=")
                 assert value.startswith("/"), f"{unit.name}: ExecStart 必须是绝对路径: {line}"
                 assert "/Users" not in value, f"{unit.name}: 不得依赖开发机路径: {value}"
+
+
+# —— 任务 7：崩溃恢复与恶意输入 ——
+
+def test_crash_after_write_before_dispatch_recovers(ctrl, monkeypatch):
+    """命令落盘后、dispatch 执行前崩溃：命令文件保留，下次正常消费。"""
+    _, archive = ctrl
+    mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    cmd_id = "64" * 16
+    _write_command(ctrl_dir, f"1710000000000-incr-{cmd_id[:8]}.json",
+                   {"id": cmd_id, "mode": "incr", "actor": "admin",
+                    "ts": 1710000000, "payload": {}})
+    mod.main()
+    assert launched
+    r = json.loads((ctrl_dir / "results" / f"{cmd_id}.json").read_text(encoding="utf-8"))
+    assert r["status"] == "success"
+
+
+def test_crash_mid_running_result_recovers_after_stale(ctrl, monkeypatch):
+    """dispatch 执行中崩溃：result 停在 running，超时后恢复执行。"""
+    _, archive = ctrl
+    mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    cmd_id = "65" * 16
+    _write_command(ctrl_dir, f"1710000000000-incr-{cmd_id[:8]}.json",
+                   {"id": cmd_id, "mode": "incr", "actor": "admin",
+                    "ts": 1710000000, "payload": {}})
+    # 模拟崩溃：result 停在 running（旧时间戳）
+    (ctrl_dir / "results").mkdir(parents=True, exist_ok=True)
+    (ctrl_dir / "results" / f"{cmd_id}.json").write_text(json.dumps(
+        {"id": cmd_id, "mode": "incr", "status": "running",
+         "started_at": int(time.time()) - 3600, "finished_at": 0,
+         "attempts": 2, "error": None}), encoding="utf-8")
+    mod.main()
+    assert launched, "stale running 结果必须恢复重试"
+    r = json.loads((ctrl_dir / "results" / f"{cmd_id}.json").read_text(encoding="utf-8"))
+    assert r["status"] == "success"
+    assert r["attempts"] == 3
+
+
+def test_fresh_running_result_skips(ctrl, monkeypatch):
+    """running 未超时：跳过（可能是另一 dispatch 实例正在处理）。"""
+    _, archive = ctrl
+    mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    cmd_id = "66" * 16
+    _write_command(ctrl_dir, f"1710000000000-incr-{cmd_id[:8]}.json",
+                   {"id": cmd_id, "mode": "incr", "actor": "admin",
+                    "ts": 1710000000, "payload": {}})
+    (ctrl_dir / "results").mkdir(parents=True, exist_ok=True)
+    (ctrl_dir / "results" / f"{cmd_id}.json").write_text(json.dumps(
+        {"id": cmd_id, "mode": "incr", "status": "running",
+         "started_at": int(time.time()), "finished_at": 0,
+         "attempts": 1, "error": None}), encoding="utf-8")
+    mod.main()
+    assert not launched
+    assert list((ctrl_dir / "commands").glob("*.json")), "命令文件必须保留等下次"
+
+
+def test_temp_settings_file_not_left_half_written(ctrl, monkeypatch):
+    """settings 写入为原子 tmp+replace：结果文件不会被半截 JSON 污染。"""
+    _, archive = ctrl
+    mod, _ = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    cmd_id = "67" * 16
+    _write_command(ctrl_dir, f"1710000000000-settings-{cmd_id[:8]}.json",
+                   {"id": cmd_id, "mode": "settings", "actor": "admin",
+                    "ts": 1710000000,
+                    "payload": {"categories": ["公司研究"], "keywords": ["宁德时代"]}})
+    # 残留 tmp：模拟上次写入中途崩溃
+    (ctrl_dir / "results" / "67.tmp.999").write_text('{"partial', encoding="utf-8")
+    mod.main()
+    settings = json.loads((ctrl_dir / "cicc_settings.json").read_text(encoding="utf-8"))
+    assert settings == {"categories": ["公司研究"], "keywords": ["宁德时代"]}
+    r = json.loads((ctrl_dir / "results" / f"{cmd_id}.json").read_text(encoding="utf-8"))
+    assert r["status"] == "success"  # 结果文件是完整 JSON，不是 tmp 残留
+
+
+def test_malicious_filenames_and_content_are_safe(ctrl, monkeypatch):
+    """路径穿越文件名/非法 JSON/超长 actor/shell 特殊字符：不得执行任意命令或写出控制目录。"""
+    _, archive = ctrl
+    mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    evil = [
+        ("..%2f..%2fetc%2fpasswd.json", {"mode": "incr", "ts": 1710000000}),
+        (f"{'a' * 250}.json", "not-json{"),  # 超长文件名+非法 JSON（>255 会 OSError，250 是安全上限）
+        ("evil$(rm).json", {"mode": "incr", "actor": ";rm -rf /",
+                            "ts": 1710000000, "payload": {}}),
+        ("1670000000000-incr-12345678.json",
+         {"id": "68" * 16, "mode": "incr", "actor": "x" * 10000,
+          "ts": 1710000000, "payload": {"keywords": ["$(touch /tmp/pwned)"]}}),
+    ]
+    for name, content in evil:
+        (ctrl_dir / "commands" / name).write_text(
+            content if isinstance(content, str) else json.dumps(content),
+            encoding="utf-8")
+    mod.main()
+    assert not Path("/tmp/pwned").exists()
+    assert not (ctrl_dir.parent / "passwd").exists()  # 路径穿越无效
+    # 第 4 条是合法信封（含 shell 特殊字符的关键词只进 argv，不执行）
+    launched_kw = [a for a, _ in launched if "--keywords" in a]
+    assert launched_kw and "$(touch /tmp/pwned)" in launched_kw[0]
+
+
+def test_invalid_json_command_fails_keeps_nothing(ctrl, monkeypatch):
+    _, archive = ctrl
+    mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    (ctrl_dir / "commands" / "1710000000000-garbage.json").write_text(
+        "{not json", encoding="utf-8")
+    mod.main()
+    assert not launched
+    results = list((ctrl_dir / "results").glob("*.json"))
+    assert results, "非法 JSON 必须有 failed 结果"
+    r = json.loads(results[0].read_text(encoding="utf-8"))
+    assert r["status"] == "failed"
+    assert r["error"] == "invalid_json"
