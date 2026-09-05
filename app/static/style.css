@@ -313,6 +313,8 @@ textarea.form-control {
   line-height: 1.6;
   resize: vertical;
 }
+.cf-turnstile:empty { display: none; }
+.cf-turnstile { margin: 0; }
 .form-error { color: var(--color-danger); font-size: var(--text-sm); min-height: 18px; margin: 0 0 12px; }
 .btn-normal {
   height: var(--control-height-2xl);

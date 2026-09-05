@@ -4477,6 +4477,14 @@ def test_login_tabs_own_tabpanels():
     assert 'aria-controls="login-form"' in html
     assert 'aria-controls="register-form"' in html
     assert 'id="login-form"' in html and 'role="tabpanel"' in html
+    assert 'id="login-turnstile"' in html
+    assert 'id="register-turnstile"' in html
+    src = APP_JS.read_text()
+    assert "challenges.cloudflare.com/turnstile/v0/api.js" in src
+    assert "cf-turnstile-response" in src
+    assert "initTurnstile()" in src
+    assert 'appearance: "interaction-only"' in src
+    assert 'theme: "auto"' in src
     switch = _fn_body("switchAuthMode")
     assert "loginForm.hidden = !isLogin" in switch
     assert "registerForm.hidden = isLogin" in switch

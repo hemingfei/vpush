@@ -1475,6 +1475,93 @@ def test_login_rate_limit():
     assert client.post("/api/auth/login", json={"username": "nobody", "password": "wrong123"}).status_code == 429
 
 
+def _turnstile_cfg():
+    cfg = Config()
+    cfg.web.turnstile_site_key = "0x4AAAAAAEpFC-pepUf7vzMN"
+    cfg.web.turnstile_secret = "test-secret"
+    cfg.web.turnstile_hostnames = "vpush.net"
+    return cfg
+
+
+def test_turnstile_sitekey_hidden_until_secret():
+    client = make_client("ts-off.db")
+    assert client.get("/api/auth/turnstile").json() == {"sitekey": ""}
+
+
+def test_turnstile_blocks_login_and_register_without_token():
+    client = make_client("ts-deny.db", config=_turnstile_cfg())
+    assert client.get("/api/auth/turnstile").json()["sitekey"] == "0x4AAAAAAEpFC-pepUf7vzMN"
+    assert client.post(
+        "/api/auth/login", json={"username": "nobody", "password": "wrong123"}
+    ).status_code == 403
+    assert client.post(
+        "/api/auth/register",
+        json={"username": "alice01", "password": "pass123456", "code": "NOPE"},
+    ).status_code == 403
+
+
+def test_turnstile_login_ok_when_siteverify_passes(monkeypatch):
+    seen = []
+
+    def fake_verify(**kwargs):
+        seen.append(kwargs)
+        return True
+
+    monkeypatch.setattr("app.api.verify_turnstile", fake_verify)
+    client = make_client("ts-ok.db", config=_turnstile_cfg())
+    register(client, "alice01", "pass123456")
+    resp = client.post(
+        "/api/auth/login",
+        json={
+            "username": "alice01",
+            "password": "pass123456",
+            "cf-turnstile-response": "tok",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert seen[-1]["token"] == "tok"
+    assert seen[-1]["action"] == "login"
+    assert seen[0]["action"] == "register"
+
+
+def test_verify_turnstile_checks_action_and_hostname(monkeypatch):
+    captured = {}
+
+    class DummyResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"success": True, "action": "login", "hostname": "vpush.net"}
+
+    class DummyClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, data=None):
+            captured["url"] = url
+            captured["data"] = data
+            return DummyResp()
+
+    monkeypatch.setattr("app.api.httpx.Client", DummyClient)
+    from app.api import TURNSTILE_SITEVERIFY_URL, verify_turnstile
+
+    assert verify_turnstile(
+        secret="s", token="tok", action="login", hostnames={"vpush.net"}, ip="1.2.3.4"
+    )
+    assert captured["url"] == TURNSTILE_SITEVERIFY_URL
+    assert captured["data"]["response"] == "tok"
+    assert captured["data"]["remoteip"] == "1.2.3.4"
+    assert not verify_turnstile(secret="s", token="tok", action="register", hostnames={"vpush.net"})
+    assert not verify_turnstile(secret="s", token="", action="login", hostnames={"vpush.net"})
+
+
 def test_admin_delete_user_cascades():
     client = make_client()
     admin_headers = auth_headers(client, "boss01")
