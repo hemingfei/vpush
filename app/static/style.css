@@ -914,9 +914,9 @@ img.pt-icon { display: block; object-fit: contain; }
 .tl-pill.selected .pt-icon,
 .platform-tab.selected .pt-icon { background: transparent; }
 .tl-pill[data-platform="live"]:not(.selected) .pt-icon { color: var(--color-accent); }
-/* Truth 官方紫蓝；位图类（雪球/Truth）品牌色由图片自带，无需 color 染色 */
+/* Truth 官方紫蓝偏蓝（#4f62f0）；位图类（雪球/Truth）品牌色由图片自带，无需 color 染色 */
 .tl-pill[data-platform="truth"]:not(.selected) .pt-icon,
-.platform-tab[data-platform="truth"]:not(.selected) .pt-icon { color: #5b5df0; }
+.platform-tab[data-platform="truth"]:not(.selected) .pt-icon { color: #4f62f0; }
 /* 快讯实时呼吸点：提示这是实时流（选中蓝底上换白描边） */
 .tl-pill[data-platform="live"] { position: relative; }
 .tl-pill[data-platform="live"]::after {
