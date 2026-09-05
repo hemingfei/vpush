@@ -454,12 +454,13 @@ export function createMxViewsView(dependencies) {
     return (items || []).map((it) => {
       const cnt = it.count != null ? ` ×${it.count}` : "";
       const label = it.action ? `${it.name} ${it.action}${cnt}` : `${it.name}${cnt}`;
+      const momo = Number(it.momentum) || 0;
       const cls = it.direction === "bear" ? "bear" : it.direction === "neutral" ? "neutral" : "bull";
       const target = it.type === "stock" ? "stock" : "topic";
       window._mxvTargets.push({ type: target, name: it.name });
       const idx = window._mxvTargets.length - 1;
       return `<span class="mxv-chip ${cls}" data-mxv-hl="${target}:${escapeHtml(it.name)}"
-        onclick="mxvOpenTargetAt(${idx})">${escapeHtml(label)}</span>`;
+        onclick="mxvOpenTargetAt(${idx})">${escapeHtml(label)}${momo ? mxvMomo(momo) : ""}</span>`;
     }).join("");
   }
 
@@ -484,19 +485,24 @@ export function createMxViewsView(dependencies) {
     const banner = $("#mxv-banner");
     if (banner) {
       const s = p.summary || {};
-      banner.innerHTML = s && s.text ? `
+      const evo = String(s.evolution || "").trim();
+      const adv = String(s.advice || "").trim();
+      const legacy = String(s.text || "").trim();
+      banner.innerHTML = s && (evo || adv || legacy) ? `
         <div class="mxv-banner">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-            <b style="color:var(--mxv-strong)">⚡ 今日操作</b>
+            <b style="color:var(--mxv-strong)">⚡ 观点研判</b>
             <span style="margin-left:auto;color:var(--mxv-faint);font-size:11px">第 ${(_mxv.snapshots.find((x) => x.snapshot_at === _mxv.at) || {}).seq || "—"} 版 · ${escapeHtml(_mxv.at || "")} 生成</span>
           </div>
-          <div class="text">${escapeHtml(s.text || "")}</div>
+          ${evo ? `<div class="text"><span class="mxv-sum-tag">演变</span>${escapeHtml(evo)}</div>` : ""}
+          ${adv ? `<div class="text"><span class="mxv-sum-tag advice">建议</span>${escapeHtml(adv)}</div>` : ""}
+          ${!evo && !adv && legacy ? `<div class="text">${escapeHtml(legacy)}</div>` : ""}
           <div class="mxv-chips">${mxvChipsHtml(s.items)}</div>
         </div>` : "";
     }
     const boards = $("#mxv-boards");
     if (boards) {
-      const topicRows = (p.topics || []).map((t, i) => {
+      const topicRows = [...(p.topics || [])].sort(mxvByHeat).map((t, i) => {
         window._mxvTargets.push({ type: "topic", name: t.name });
         const ti = window._mxvTargets.length - 1;
         return `
@@ -507,7 +513,7 @@ export function createMxViewsView(dependencies) {
           ${mxvMomo(t.momentum)}
           <span class="mxv-latest-time">${escapeHtml((t.latest_at || "").slice(11, 16))}</span>
         </div>`; }).join("");
-      const stockRows = (p.stocks || []).map((s, i) => {
+      const stockRows = [...(p.stocks || [])].sort(mxvByHeat).map((s, i) => {
         const actions = Object.entries(s.actions || {}).map(([k, v]) => `${k}×${v}`).join(" ");
         window._mxvTargets.push({ type: "stock", name: s.name });
         const si = window._mxvTargets.length - 1;
@@ -515,7 +521,7 @@ export function createMxViewsView(dependencies) {
         <div class="mxv-row" data-mxv-hl="stock:${escapeHtml(s.name)}" onclick="mxvOpenTargetAt(${si})">
           <span class="rank">${i + 1}</span><span class="name">${escapeHtml(s.name)}</span>
           ${mxvRatioHtml(s.bull, s.bear)}
-          <span class="mxv-net ${s.net > 0 ? "bull" : s.net < 0 ? "bear" : "flat"}">${s.strength}</span>
+          <span class="mxv-net ${s.net > 0 ? "bull" : s.net < 0 ? "bear" : "flat"}">${s.bull}多/${s.bear}空</span>
           ${mxvMomo(s.momentum)}
           <span class="mxv-actions">${escapeHtml(actions)}</span>
         </div>`;
@@ -549,10 +555,12 @@ export function createMxViewsView(dependencies) {
       ${mode === "heat" ? `<div class="mxv-heat-legend">颜色=净方向 · 深浅大小=提及热度 · 悬停联动观点流，点击看时间线</div>` : ""}`;
   }
 
-  // ---- 热力标签云：提及总数降序铺开，颜色=净方向，深浅字号=热度；一眼看出议论焦点 ----
+  // ---- 双榜共用排序：提及总数降序 → |净多空| 降序；热力与明细同序，切换视图不打乱 ----
+  const mxvByHeat = (a, b) => (b.bull + b.bear) - (a.bull + a.bear) || Math.abs(b.net) - Math.abs(a.net);
+
+  // ---- 热力标签云：按 mxvByHeat 铺开，颜色=净方向，深浅字号=热度；一眼看出议论焦点 ----
   function mxvHeatHtml(rows, type, emptyText) {
-    const sorted = [...rows].sort((a, b) =>
-      (b.bull + b.bear) - (a.bull + a.bear) || Math.abs(b.net) - Math.abs(a.net));
+    const sorted = [...rows].sort(mxvByHeat);
     if (!sorted.length) return `<div class="mxv-empty">${emptyText}</div>`;
     const max = Math.max(1, ...sorted.map((r) => r.bull + r.bear));
     return `<div class="mxv-heat-wrap">${sorted.map((r) => {
@@ -689,7 +697,7 @@ export function createMxViewsView(dependencies) {
     if (t) mxvOpenTarget(t.type, t.name);
   }
 
-  // ---- 实时观点流：当日全部批次（首个→当前），批内时间倒序，批次横线分隔 ----
+  // ---- 实时观点流：首批次→选定快照批次（快照语义，回看不显示其后批次），批内时间倒序 ----
   // 批内两列报纸流：左列装较新一半（顶部=最新），右列续排（底部=最早）；窄屏回落单列
   function mxvFeedItemHtml(o, fresh) {
     return `
@@ -706,12 +714,14 @@ export function createMxViewsView(dependencies) {
   function mxvRenderFeed() {
     const feed = $("#mxv-feed");
     if (!feed) return;
-    const head = `<h3 style="margin:0 0 6px;color:var(--mxv-accent);font-size:14px">实时观点流</h3>`;
+    const at = _mxv.at || "";
+    // 快照语义：只显示首批次→选定批次（≤选定时刻），其后批次不显示；最新快照即全天
+    const batches = (_mxv.feedBatches || []).filter((b) => !at || String(b.snapshot_at) <= at);
+    const head = `<h3 style="margin:0 0 6px;color:var(--mxv-accent);font-size:14px">实时观点流${_mxv.atLatest ? "" : `<span style="color:var(--mxv-faint);font-weight:400;font-size:12px">（截至 ${escapeHtml(at)}）</span>`}</h3>`;
     if (_mxv.feedLoading && !(_mxv.feedBatches || []).length) {
       feed.innerHTML = head + `<div class="mxv-empty">加载中…</div>`;
       return;
     }
-    const batches = _mxv.feedBatches || [];
     if (!batches.length && _mxv.feedFailed) {
       feed.innerHTML = head + `<div class="mxv-empty">观点流加载失败，切换快照可重试</div>`;
       return;
@@ -812,17 +822,41 @@ export function createMxViewsView(dependencies) {
       </aside>`;
   }
 
+  function mxvDirCn(d) {
+    return d === "bull" ? "多" : d === "bear" ? "空" : "中性";
+  }
+
+  // 时间线翻转徽标：与同 (大V,标的) 的上一条（更早）观点比，跨度不限批次数；
+  // 方向变=翻转徽标，方向不变仅操作变=调整徽标（前端从时间线数据现算，不落快照）
+  function mxvFlipBadge(rows, i) {
+    const op = rows[i];
+    for (let j = i + 1; j < rows.length; j++) {
+      const prev = rows[j];
+      if (Number(prev.kol_id) !== Number(op.kol_id) || prev.target_type !== op.target_type
+        || prev.target_name !== op.target_name) continue;
+      if (prev.direction !== op.direction) {
+        return `<span class="mxv-badge flip">⇄ ${mxvDirCn(prev.direction)}转${mxvDirCn(op.direction)}</span>`;
+      }
+      if ((op.action || "") && (prev.action || "") !== (op.action || "")) {
+        return `<span class="mxv-badge actchg">操作 ${escapeHtml(prev.action || "—")}→${escapeHtml(op.action)}</span>`;
+      }
+      return "";
+    }
+    return "";
+  }
+
   function mxvTimelineListHtml(timeline) {
     // 最新观点置顶：批次倒序，同批次按发生时间倒序
     const rows = [...(timeline || [])].sort((a, b) =>
       String(b.snapshot_at || "").localeCompare(String(a.snapshot_at || ""))
       || String(b.occurred_at || "").localeCompare(String(a.occurred_at || "")));
-    return rows.map((op) => `
+    return rows.map((op, i) => `
       <div class="mxv-op">
         <div class="head">
           ${op.avatar ? `<img class="ava" src="${escapeHtml(op.avatar)}" alt="">` : `<div class="ava"></div>`}
           <span class="who">${escapeHtml(op.kol_name)}</span>
           ${mxvBadge(op.direction, op.action)}
+          ${mxvFlipBadge(rows, i)}
           ${(_mxv.drawer && _mxv.drawer.mode === "kol" && op.target_name) ? `<span style="color:var(--mxv-text);font-size:12px">${escapeHtml(op.target_name)}</span>` : ""}
           <span class="when">快照 ${escapeHtml(op.snapshot_at)} · ${escapeHtml((op.occurred_at || "").slice(11, 16))}</span>
         </div>

@@ -230,6 +230,52 @@ def test_aggregate_day_state_strength_momentum_kols():
     assert topics["房地产"]["net"] == 0
     assert payload["trading_day"] == day and payload["snapshot_at"] == at
     assert any(k["kol_id"] == 1 for k in payload["kols"])
+    assert "new_opinions" not in payload  # 已退休：观点流直读 mx_opinions 表
+
+
+def test_detect_stance_events_flip_act_and_group_isolation():
+    """立场变化事件：对自己上一条比、跨度不限批次；方向翻转为 flip、仅操作变为 act。"""
+
+    def op(snap, direction, action="", name="固态电池", kol=1):
+        return {"snapshot_at": snap, "kol_id": kol, "kol_name": f"大V{kol}", "kol_priority": 0,
+                "target_type": "topic", "target_name": name, "direction": direction,
+                "action": action, "occurred_at": f"2026-09-04 {snap}:00"}
+
+    opinions = [
+        op("09:20", "bull"),                       # 首条：非事件
+        op("09:40", "bear"),                       # 多转空 flip
+        op("11:00", "bear", "减仓"),                # 方向不变操作变 act
+        op("13:30", "bull"),                       # 空翻多 flip（当日第二次）
+        op("09:40", "bull", name="房地产", kol=2),  # 另一大V另一标的：互不干扰
+    ]
+    events = mva.detect_stance_events(opinions)
+    flips = [e for e in events if e["kind"] == "flip"]
+    acts = [e for e in events if e["kind"] == "act"]
+    assert [(e["from_direction"], e["to_direction"], e["from_at"], e["to_at"]) for e in flips] == [
+        ("bull", "bear", "09:20", "09:40"), ("bear", "bull", "11:00", "13:30")]
+    assert [(e["from_action"], e["to_action"]) for e in acts] == [("", "减仓")]
+    assert not [e for e in events if e["kol_id"] == 2]  # 首条观点不构成事件
+    assert all(e["target_name"] == "固态电池" for e in events if e["kol_id"] == 1)
+
+
+def test_build_target_trajectories_current_stance_per_snapshot():
+    """全天轨迹：逐快照时刻的当前立场多空计数；首次出现前的时刻无点。"""
+
+    def op(snap, kol, direction, name="固态电池", ttype="topic"):
+        return {"snapshot_at": snap, "kol_id": kol, "kol_name": f"大V{kol}", "kol_priority": 0,
+                "target_type": ttype, "target_name": name, "direction": direction,
+                "action": "", "occurred_at": f"2026-09-04 {snap}:00", "id": kol}
+
+    opinions = [
+        op("09:20", 1, "bull"), op("09:20", 2, "bull"), op("09:20", 3, "bear"),
+        op("09:40", 1, "bear"),                    # 大V1 翻空：09:40 起 2多1空 → 1多2空
+        op("09:40", 4, "bull", name="房地产"),
+    ]
+    trajs = mva.build_target_trajectories(
+        opinions, ["09:20", "09:40"], ["固态电池", "房地产"], [])
+    by_name = {t["name"]: t["points"] for t in trajs}
+    assert by_name["固态电池"] == [["09:20", 2, 1], ["09:40", 1, 2]]
+    assert by_name["房地产"] == [["09:40", 1, 0]]
 
 
 # ---- Task 5：批次全流程 ----
@@ -251,8 +297,8 @@ _VIEW_JSON = (
     '"direction":"bull","action":"","confidence":"high","summary":"订单爆了","evidence":[%d]}]}'
 )
 _SUMMARY_JSON = (
-    '{"text":"早盘王哥看多固态电池。","items":[{"type":"topic","name":"固态电池",'
-    '"direction":"bull"}]}'
+    '{"evolution":"早盘王哥率先看多固态电池。","advice":"可关注固态电池主线。",'
+    '"items":[{"type":"topic","name":"固态电池","direction":"bull"}]}'
 )
 
 
@@ -262,11 +308,13 @@ def test_run_snapshot_batch_end_to_end(monkeypatch):
     kol = _seed_posts(db, day)
     db.set_setting(mva.MX_VIEW_ENABLED_KEY, "1")
     calls = {"n": 0}
+    captured = {}
 
     def fake_chat(llm_config, messages, max_tokens, **kw):
         calls["n"] += 1
-        if calls["n"] == 1:
+        if "消息列表：" in messages[1]["content"]:
             return _VIEW_JSON % db._rows("SELECT id FROM posts")[0]["id"]
+        captured["digest"] = messages[1]["content"]
         return _SUMMARY_JSON
 
     monkeypatch.setattr(mva.llm, "_chat", fake_chat)
@@ -277,9 +325,11 @@ def test_run_snapshot_batch_end_to_end(monkeypatch):
     assert calls["n"] == 2  # 研判 + 总结
     snap = db.get_mx_view_snapshot(day, "09:20")
     assert snap["payload"]["summary"]["text"].startswith("早盘")
+    assert snap["payload"]["summary"]["advice"] == "可关注固态电池主线。"
+    assert "momentum" in snap["payload"]["summary"]["items"][0]  # 动量由聚合行回填
+    assert '"events"' in captured["digest"]  # 总结输入带结构化事件列表
     assert snap["payload"]["topics"][0]["name"] == "固态电池"
-    assert snap["payload"]["new_opinions"][0]["kol_id"] == kol
-    assert snap["payload"]["new_opinions"][0]["kol_name"] == "王哥"  # 观点流要显示作者
+    assert "new_opinions" not in snap["payload"]  # 观点流直读 mx_opinions，payload 不再冗余
     assert snap["payload"]["message_count"] == 1
     assert mva.get_view_version(db) == 1  # live 批次推版本
     m1_id = db._rows("SELECT id FROM posts WHERE external_id = 'm1'")[0]["id"]
@@ -289,6 +339,68 @@ def test_run_snapshot_batch_end_to_end(monkeypatch):
     calls["n"] = 10
     r2 = mva.run_snapshot_batch(db, day=day, snapshot_at="09:20", window=("09:15", "09:20"))
     assert r2["ran"] is False and calls["n"] == 10 and mva.get_view_version(db) == 1
+
+
+def test_run_snapshot_batch_chunk_merge_last_wins(monkeypatch):
+    """跨块合并后写覆盖：同大V同标的后块（更新的消息）表态不被首块压住。"""
+    db = make_db()
+    day = "2026-09-04"
+    kol = db.add_kol("mx", "王哥", "room1")
+    db.insert_post(platform="mx", kol_id=kol, external_id="m1", title="", url="",
+                   content="早盘看多", published_at=f"{day} 09:16:00")
+    db.insert_post(platform="mx", kol_id=kol, external_id="m2", title="", url="",
+                   content="盘中翻空", published_at=f"{day} 09:19:00")
+
+    def fake_chat(llm_config, messages, max_tokens, **kw):
+        content = messages[1]["content"]
+        if "消息列表：" not in content:
+            return _SUMMARY_JSON
+        msg = json.loads(content.split("消息列表：\n", 1)[1])[0]
+        direction = "bear" if msg["text"] == "盘中翻空" else "bull"
+        return json.dumps({"opinions": [{"author": "王哥", "target_type": "topic",
+                                         "target_name": "固态电池", "direction": direction,
+                                         "action": "", "confidence": "high", "summary": "s",
+                                         "evidence": [msg["id"]]}]}, ensure_ascii=False)
+
+    monkeypatch.setattr(mva.llm, "_chat", fake_chat)
+    db.set_setting(mva.MX_VIEW_BATCH_SIZE_KEY, "1")  # 每块 1 条 → 2 块
+    result = mva.run_snapshot_batch(db, day=day, snapshot_at="09:20", window=("09:15", "09:20"))
+    assert result["ran"] is True and result["opinions"] == 1  # 跨块去重为一条
+    ops = db.list_mx_opinions(day)
+    assert len(ops) == 1 and ops[0]["direction"] == "bear"  # 后块（更新消息）覆盖首块
+
+
+def test_run_snapshot_batch_zero_new_opinions_reuses_prev_summary(monkeypatch):
+    """有消息但全部未产出有效观点：快照照落，总结原样沿用上一版，不再调 LLM。"""
+    db = make_db()
+    day = "2026-09-04"
+    kol = _seed_posts(db, day)
+    calls = {"n": 0}
+
+    def summary_chat(llm_config, messages, max_tokens, **kw):
+        calls["n"] += 1
+        if "消息列表：" in messages[1]["content"]:
+            return _VIEW_JSON % db._rows("SELECT MIN(id) AS m FROM posts")[0]["m"]
+        return _SUMMARY_JSON
+
+    monkeypatch.setattr(mva.llm, "_chat", summary_chat)
+    r1 = mva.run_snapshot_batch(db, day=day, snapshot_at="09:20", window=("09:15", "09:20"))
+    assert r1["ran"] is True and calls["n"] == 2
+    prev_summary = db.get_mx_view_snapshot(day, "09:20")["payload"]["summary"]
+
+    db.insert_post(platform="mx", kol_id=kol, external_id="m3", title="", url="",
+                   content="闲聊无观点", published_at=f"{day} 09:21:00")
+
+    def empty_chat(llm_config, messages, max_tokens, **kw):
+        calls["n"] += 1
+        return '{"opinions":[]}'
+
+    monkeypatch.setattr(mva.llm, "_chat", empty_chat)
+    r2 = mva.run_snapshot_batch(db, day=day, snapshot_at="09:26", window=("09:20", "09:26"))
+    assert r2["ran"] is True and r2["opinions"] == 0
+    snap = db.get_mx_view_snapshot(day, "09:26")
+    assert snap["payload"]["summary"] == prev_summary  # 零新观点：原样沿用
+    assert calls["n"] == 3  # 首批 2 次 + 第二批仅研判 1 次，无总结调用
 
 
 def test_run_snapshot_batch_chunks_when_window_exceeds_limit(monkeypatch):

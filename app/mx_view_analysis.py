@@ -320,7 +320,7 @@ def _opinion_weight(op: dict) -> float:
     return sign * boost * kol_w
 
 
-def aggregate_day_state(day, snapshot_at, opinions, prev_payload=None, new_opinions=None):
+def aggregate_day_state(day, snapshot_at, opinions, prev_payload=None):
     """按「当前立场」口径聚合整页状态：每大V每标的取 ≤snapshot_at 的最新一条。
 
     opinions 须已按 (snapshot_at, occurred_at, id) 升序（list_mx_opinions 的序）。
@@ -394,20 +394,78 @@ def aggregate_day_state(day, snapshot_at, opinions, prev_payload=None, new_opini
     return {
         "trading_day": day,
         "snapshot_at": snapshot_at,
-        "summary": None,  # Task 5 填充 {"text","items"}
+        "summary": None,  # Task 5 填充 {"evolution","advice","text","items"}
         "topics": topic_rows,
         "stocks": stock_rows,
         "kols": kol_rows,
-        "new_opinions": [
-            {
-                "kol_id": int(o["kol_id"]), "kol_name": o.get("kol_name") or "",
-                "target_type": o["target_type"], "target_name": o["target_name"],
-                "direction": o["direction"], "action": o.get("action") or "",
-                "summary": o.get("summary") or "", "occurred_at": o.get("occurred_at") or "",
-            }
-            for o in (new_opinions or [])
-        ][:50],
     }
+
+
+def detect_stance_events(opinions) -> list[dict]:
+    """当日立场变化事件：每大V每标的与「自己上一条观点」比，跨度不限批次数。
+
+    opinions 须按 (snapshot_at, occurred_at, id) 升序（list_mx_opinions 的序）；
+    每 (kol, target) 每批至多一条观点，按 snapshot_at 排序无歧义。仅当日口径，
+    首条观点不是事件。direction 变化 = flip（计入翻转），方向不变 action 变化 = act。
+    """
+    last: dict[tuple, dict] = {}
+    events: list[dict] = []
+    for op in opinions or []:
+        key = (int(op["kol_id"]), str(op.get("target_type") or ""), str(op.get("target_name") or ""))
+        prev = last.get(key)
+        if prev is not None:
+            base = {
+                "kol_id": key[0], "kol_name": op.get("kol_name") or "",
+                "kol_priority": int(op.get("kol_priority") or 0),
+                "target_type": key[1], "target_name": key[2],
+                "from_direction": str(prev.get("direction") or ""),
+                "to_direction": str(op.get("direction") or ""),
+                "from_action": str(prev.get("action") or ""),
+                "to_action": str(op.get("action") or ""),
+                "from_at": str(prev.get("snapshot_at") or ""),
+                "to_at": str(op.get("snapshot_at") or ""),
+                "occurred_at": str(op.get("occurred_at") or ""),
+            }
+            if base["from_direction"] != base["to_direction"]:
+                events.append(dict(base, kind="flip"))
+            elif base["from_action"] != base["to_action"]:
+                events.append(dict(base, kind="act"))
+        last[key] = op
+    return events
+
+
+def build_target_trajectories(opinions, times, topic_names, stock_names) -> list[dict]:
+    """重点标的的全天多空轨迹：逐快照时刻的看多/看空大V数（当前立场口径）。
+
+    opinions 须升序（list_mx_opinions 序）；times 为当日快照时刻升序（含当前）。
+    单遍扫描：立场随时刻推进逐条并入，中性观点占位但不计入多空数（与聚合同口径）。
+    """
+    want = {("topic", str(n)) for n in topic_names or []} | {("stock", str(n)) for n in stock_names or []}
+    series: dict[tuple, list] = {key: [] for key in want}
+    stance: dict[tuple, dict] = {}
+    ordered = list(opinions or [])  # 已升序
+    idx, total = 0, len(ordered)
+    for t in times or []:
+        while idx < total and str(ordered[idx].get("snapshot_at") or "") <= t:
+            op = ordered[idx]
+            idx += 1
+            stance[(int(op["kol_id"]), str(op.get("target_type") or ""),
+                    str(op.get("target_name") or ""))] = op
+        counts: dict[tuple, list] = {}
+        for (_kid, ttype, name), op in stance.items():
+            key = (ttype, name)
+            if key not in want:
+                continue
+            w = _opinion_weight(op)
+            cell = counts.setdefault(key, [0, 0])
+            if w > 0:
+                cell[0] += 1
+            elif w < 0:
+                cell[1] += 1
+        for key, (bull, bear) in counts.items():
+            series[key].append([t, bull, bear])
+    return [{"type": ttype, "name": name, "points": pts}
+            for (ttype, name), pts in series.items() if pts]
 
 
 # ---- 批次全流程（研判 → 校验落库 → 聚合 → 总结 → 版本推进） ----
@@ -448,37 +506,56 @@ def backfill_running() -> bool:
 
 
 SUMMARY_SYSTEM_PROMPT = (
-    "你是A股操作建议总结助手。输入某交易日某快照时刻的群体大V观点聚合数据（JSON）。"
-    '输出 JSON：{"text":"不超过3句话的今日操作建议","items":[{"type":"topic|stock","name":"标的",'
-    '"direction":"bull|bear","action":"建仓|加仓|减仓|清仓|做T|观察（可空）"}]}。'
-    "items 最多 6 条，只选最有共识的方向与重点个股；text 用最简洁的中文讲清：主攻什么、回避什么、重点个股怎么操作。"
+    "你是A股盘面观点复盘助手。输入某交易日某快照时刻的群体大V观点状态（JSON）："
+    "topics/stocks 为当前多空榜（momentum=净多空较上一快照的变化量，strength=0-100 多空强度）；"
+    "events 为当日立场变化事件（from/to 为方向或操作，from_at/to_at 为快照时刻；"
+    "kind=flip 方向翻转、kind=act 仅操作调整）；flips_by_kol 为当日翻转较多的大V；"
+    "trajectories 为重点标的逐快照多空大V数轨迹 [时刻,看多,看空]。"
+    '输出 JSON：{"evolution":"不超过2句的本时段观点演变","advice":"不超过2句的当前操作建议",'
+    '"items":[{"type":"topic|stock","name":"标的","direction":"bull|bear",'
+    '"action":"建仓|加仓|减仓|清仓|做T|观察（可空）"}]}。'
+    "规则："
+    "1. evolution 只陈述 events 里的事件或 trajectories/榜单中可见的共识变化"
+    "（谁在何时由何转何、共识聚散）；首个快照或 events 为空时如实说明格局刚形成或延续，不得编造变化。"
+    "2. advice 用最简洁中文讲清：主攻什么、回避什么、重点个股怎么操作。"
+    "3. items 最多 6 条，只选最有共识的方向与重点个股。"
 )
 
 
-def _agg_digest(payload: dict, prev_summary: str) -> str:
+def _agg_digest(payload: dict, events: list[dict], trajectories: list[dict]) -> str:
+    """总结输入：当前状态 + 结构化变化事件 + 全天轨迹（不喂 LLM 生成的历史文本）。"""
+    flips: dict[str, int] = {}
+    for e in events:
+        if e["kind"] == "flip":
+            flips[e["kol_name"]] = flips.get(e["kol_name"], 0) + 1
+    ranked = sorted(events, key=lambda e: (-int(e.get("kol_priority") or 0),
+                                           str(e.get("to_at") or ""), str(e.get("occurred_at") or "")))
     slim = {
         "snapshot_at": payload["snapshot_at"],
         "topics": payload["topics"][:8],
         "stocks": payload["stocks"][:8],
         "kol_count": len(payload.get("kols") or []),
-        "prev_summary": prev_summary,
+        "events": ranked[:20],  # 大V权重优先、时近次之；动荡日事件截断防撑爆
+        "flips_by_kol": dict(sorted(flips.items(), key=lambda kv: -kv[1])[:10]),
+        "trajectories": trajectories,
     }
     return json.dumps(slim, ensure_ascii=False)
 
 
-def generate_summary(db, llm_config, payload, prev_summary: str = "") -> dict:
+def generate_summary(db, llm_config, payload, digest: str) -> dict:
     """每快照一版总结；LLM 失败/未配置不拖垮批次，回退占位文案。
 
-    prev_summary 由调用方传入（_maybe_summary 已读好的上一版），这里不再读快照表。
-    未配置时交由 llm._chat 自行返回 None → 回退，与配置了坏 key 的失败同路。
+    evolution/advice 拼为 text 一并返回，兼容仍读 summary.text 的旧前端/历史快照。
+    items 的 momentum 由聚合行回填，不让 LLM 转述数值。
     """
-    fallback = {"text": "（本次总结生成失败，以上一版为准）", "items": []}
+    fail_text = "（本次总结生成失败，以上一版为准）"
+    fallback = {"evolution": "", "advice": fail_text, "text": fail_text, "items": []}
     try:
         text = llm._chat(
             llm_config,
             [
                 {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
-                {"role": "user", "content": _agg_digest(payload, prev_summary)},
+                {"role": "user", "content": digest},
             ],
             4000,
             temperature=0,
@@ -498,33 +575,46 @@ def generate_summary(db, llm_config, payload, prev_summary: str = "") -> dict:
             }
             for i in (parsed.get("items") or []) if isinstance(i, dict) and str(i.get("name") or "").strip()
         ][:6]
-        return {"text": str(parsed.get("text") or "").strip()[:500] or fallback["text"], "items": items}
+        momentum = {str(r.get("name")): int(r.get("momentum") or 0)
+                    for r in list(payload.get("topics") or []) + list(payload.get("stocks") or [])}
+        for it in items:
+            it["momentum"] = momentum.get(it["name"], 0)
+        evolution = str(parsed.get("evolution") or "").strip()[:300]
+        advice = str(parsed.get("advice") or "").strip()[:300]
+        combined = " ".join(x for x in (evolution, advice) if x)
+        return {
+            "evolution": evolution,
+            "advice": advice or (fail_text if not combined else ""),
+            "text": combined or fail_text,
+            "items": items,
+        }
     except Exception:  # noqa: BLE001
         logger.exception("MX 观点总结生成失败")
         return fallback
 
 
-def _maybe_summary(db, llm_config, payload, earlier=None) -> dict:
-    """按 mx_view_summary_min_interval_min 间隔复用上一版总结（默认 0=每快照必出）。
+def _maybe_summary(db, llm_config, payload, earlier, new_count: int,
+                   events: list[dict], trajectories: list[dict]) -> dict:
+    """每快照一版总结；本批零新观点（聚合状态与上一快照相同）直接沿用上一版，不调 LLM。
 
-    earlier 为调用方已读好的当日快照行（升序）；不传则自查一次，
-    避免与 generate_summary 各自再全表读一遍当日大 payload。
+    earlier 为调用方已读好的当日快照行（升序）；mx_view_summary_min_interval_min
+    间隔内同样复用上一版。事件与轨迹仅在真正生成时进入 digest，避免白算。
     """
+    last_with = [s for s in earlier
+                 if s["snapshot_at"] < payload["snapshot_at"] and s["payload"].get("summary")]
     interval = get_summary_min_interval(db)
-    if earlier is None:
-        earlier = db.list_mx_view_snapshots(payload["trading_day"])
-    with_summary = [
-        s for s in earlier
-        if s["snapshot_at"] < payload["snapshot_at"] and s["payload"].get("summary")
-    ]
-    prev_text = ""
-    if with_summary:
-        last = with_summary[-1]
-        prev_text = last["payload"]["summary"].get("text") or ""
+    if last_with:
+        prev = last_with[-1]
+        if new_count <= 0:
+            return prev["payload"]["summary"]
         if interval > 0 and \
-                _hhmm_to_min(payload["snapshot_at"]) - _hhmm_to_min(last["snapshot_at"]) < interval:
-            return last["payload"]["summary"]
-    return generate_summary(db, llm_config, payload, prev_summary=prev_text)
+                _hhmm_to_min(payload["snapshot_at"]) - _hhmm_to_min(prev["snapshot_at"]) < interval:
+            return prev["payload"]["summary"]
+    elif new_count <= 0:
+        # 当日首批就无可研判观点：占位文案，不让 LLM 对空状态硬编内容
+        return {"evolution": "", "advice": "（本批暂无可研判观点）",
+                "text": "（本批暂无可研判观点）", "items": []}
+    return generate_summary(db, llm_config, payload, _agg_digest(payload, events, trajectories))
 
 
 def run_snapshot_batch(db, day, snapshot_at, window, kind="live", llm_config=None,
@@ -561,7 +651,9 @@ def run_snapshot_batch(db, day, snapshot_at, window, kind="live", llm_config=Non
                     raise RuntimeError("LLM 研判失败（无有效响应）")
                 chunk_valid, chunk_topics = validate_opinions(raw, chunk, aliases, day, snapshot_at)
                 for op in chunk_valid:
-                    merged.setdefault((op["kol_id"], op["target_type"], op["target_name"]), op)
+                    # 后写覆盖：同 (kol,target) 跨块保留更晚（消息 id 更大）的表态，
+                    # 首块旧观点不再压住块后段的最新立场
+                    merged[(op["kol_id"], op["target_type"], op["target_name"])] = op
                 new_topic_names.update(chunk_topics)
                 if len(chunk) < limit:
                     break
@@ -580,9 +672,15 @@ def run_snapshot_batch(db, day, snapshot_at, window, kind="live", llm_config=Non
             snaps = db.list_mx_view_snapshots(day)
             earlier = [s for s in snaps if s["snapshot_at"] < snapshot_at]
             prev_payload = earlier[-1]["payload"] if earlier else None
-            payload = aggregate_day_state(day, snapshot_at, opinions, prev_payload, new_opinions=valid)
+            payload = aggregate_day_state(day, snapshot_at, opinions, prev_payload)
             payload["message_count"] = len(posts)
-            payload["summary"] = _maybe_summary(db, llm_config, payload, earlier)
+            events = detect_stance_events(opinions)
+            trajectories = build_target_trajectories(
+                opinions, [s["snapshot_at"] for s in earlier] + [snapshot_at],
+                [t["name"] for t in payload["topics"][:8]], [s["name"] for s in payload["stocks"][:8]],
+            )
+            payload["summary"] = _maybe_summary(db, llm_config, payload, earlier, len(valid),
+                                                events, trajectories)
             seq = len(earlier) + 1
             db.upsert_mx_view_snapshot(day, snapshot_at, seq, kind, payload, batch_id)
             db.finish_mx_view_batch(batch_id, "done", len(posts))

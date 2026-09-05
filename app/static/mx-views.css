@@ -167,6 +167,11 @@
 .mxv-badge.bear{background:var(--mxv-bear-soft);color:var(--mxv-bear);}
 .mxv-badge.neutral{background:var(--mxv-soft);color:var(--mxv-muted);}
 .mxv-badge.act{background:var(--mxv-gold-soft);color:var(--mxv-gold);}
+.mxv-badge.flip{background:var(--mxv-soft);color:var(--mxv-accent);}
+.mxv-badge.actchg{background:var(--mxv-soft);color:var(--mxv-muted);}
+.mxv-sum-tag{display:inline-block;border-radius:4px;padding:0 5px;margin-right:6px;font-size:11px;
+  background:var(--mxv-soft);color:var(--mxv-accent);vertical-align:baseline;}
+.mxv-sum-tag.advice{color:var(--mxv-gold);}
 .mxv-kols{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;}
 .mxv-kols.collapsed{overflow:hidden;
   -webkit-mask-image:linear-gradient(180deg,#000 72%,transparent);mask-image:linear-gradient(180deg,#000 72%,transparent);}

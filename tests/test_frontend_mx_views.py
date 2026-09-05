@@ -112,13 +112,26 @@ def test_mx_views_kol_overview_modes_and_collapse():
 
 
 def test_mx_views_feed_all_batches_and_drawer_desc():
-    """实时观点流走全天 feed 接口；抽屉时间线最新在上。"""
+    """实时观点流走全天 feed 接口（按选定快照截断渲染）；抽屉时间线最新在上、带前端现算的翻转徽标。"""
     js = MX_VIEWS_JS
     assert "/api/mx-views/feed" in js
     feed = _fn_body("mxvRenderFeed", js)
     assert "mxv-feed-sep" in feed and "批次" in feed
     tl = _fn_body("mxvTimelineListHtml", js)
     assert "localeCompare" in tl  # 倒序排（最新在上）
+    assert "mxvFlipBadge(rows" in tl  # 翻转徽标与同 (大V,标的) 上一条现算比对
+    assert "function mxvFlipBadge(" in js
+    badge = _fn_body("mxvFlipBadge", js)
+    assert "kol_id" in badge and "target_name" in badge and "prev.direction !== op.direction" in badge
+
+
+def test_mx_views_feed_cutoff_at_selected_snapshot():
+    """快照语义：回看时观点流只显示首批次→选定批次（≤选定时刻），其后批次不显示；标题注明截止。"""
+    feed = _fn_body("mxvRenderFeed", MX_VIEWS_JS)
+    assert "filter((b) => !at || String(b.snapshot_at) <= at)" in feed  # 截断选定时刻之后的批次
+    assert "截至" in feed and "_mxv.atLatest" in feed  # 回看时标题注明截止时刻；最新快照不注
+    # 批次统计（共 X 条 · Y 批次）基于截断后的数组
+    assert feed.index("const batches =") < feed.index("const total =")
 
 
 def test_mx_views_feed_two_column_batch_layout():
@@ -160,8 +173,11 @@ def test_mx_views_boards_heat_view_default():
     """双榜默认热力标签云：提及总数降序，颜色=净方向、深浅/字号=热度；可切回明细列表。"""
     js = MX_VIEWS_JS
     assert "function mxvHeatHtml(" in js
+    # 热力与明细共用的排序：提及总数降序 → |净多空| 降序
+    assert ("const mxvByHeat = (a, b) => (b.bull + b.bear) - (a.bull + a.bear)"
+            " || Math.abs(b.net) - Math.abs(a.net);") in js
     heat = _fn_body("mxvHeatHtml", js)
-    assert "b.bull + b.bear" in heat  # 按提及总数降序
+    assert "sort(mxvByHeat)" in heat  # 按提及总数降序
     assert "mxv-heat-wrap" in heat and "data-mxv-hl=" in heat
     assert "function mxvBoardMode(" in js and "function mxvBoardHead(" in js
     head = _fn_body("mxvBoardHead", js)
@@ -180,6 +196,17 @@ def test_mx_views_boards_heat_view_default():
     for cls in (".mxv-heat{", ".mxv-heat.bull{", ".mxv-heat.bear{", ".mxv-heat.h4{",
                 ".mxv-heat.hl{", ".mxv-board-head{", ".mxv-heat-legend{"):
         assert cls in css.replace(" ", ""), cls
+
+
+def test_mx_views_board_list_matches_heat_order_and_stock_bull_bear():
+    """明细排序与热力一致；个股明细不打分，改用与题材榜一致的多空列，操作列保留最右。"""
+    js = MX_VIEWS_JS
+    boards = _fn_body("mxvRenderBoards", js)
+    assert boards.count("sort(mxvByHeat)") == 2  # 题材 + 个股明细都按热力排序
+    assert "${s.bull}多/${s.bear}空" in boards  # 个股明细多空列与题材榜同款
+    assert "strength" not in boards  # 明细不再显示打分
+    assert '<span class="mxv-actions">' in boards  # 操作列保留在最右
+    assert boards.index("多/${s.bear}空") < boards.index('<span class="mxv-actions">')  # 多空在操作前
 
 
 def test_mx_views_day_picker_is_calendar():
@@ -210,6 +237,19 @@ def test_mx_views_day_picker_is_calendar():
     css = (STATIC / "mx-views.css").read_text()
     for cls in (".mxv-cal{", ".mxv-cal .cal-grid{", ".mxv-cal .cal-d.has{", ".mxv-cal .cal-d.sel{"):
         assert cls in css, cls  # 后代选择器含空格，用原文断言
+
+
+def test_mx_views_banner_evolution_advice_and_chips_momentum():
+    """横幅总结两层渲染：evolution/advice 带标签，老快照无新字段回退单 text；chip 带动量箭头。"""
+    boards = _fn_body("mxvRenderBoards", MX_VIEWS_JS)
+    assert "s.evolution" in boards and "s.advice" in boards
+    assert "mxv-sum-tag" in boards
+    assert "legacy" in boards  # 无演变/建议时回退旧 text（历史快照兼容）
+    chips = _fn_body("mxvChipsHtml", MX_VIEWS_JS)
+    assert "it.momentum" in chips and "mxvMomo(momo)" in chips  # 动量箭头
+    css = (STATIC / "mx-views.css").read_text()
+    assert ".mxv-badge.flip{" in css.replace(" ", "") or ".mxv-badge.flip" in css
+    assert ".mxv-sum-tag" in css
 
 
 def test_mx_views_css_key_components():

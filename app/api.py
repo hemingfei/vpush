@@ -6131,17 +6131,29 @@ def create_api_router(
 
     @router.get("/mx-views/feed")
     async def mx_views_feed(day: str, current_user: dict = Depends(get_current_user)):
-        """全天实时观点流：当日全部批次的 new_opinions，最新批次在前（空批次跳过）。
-
-        批内按发生时间倒序（最新在上），并给每条观点带回所属批次 snapshot_at。
+        """全天实时观点流：直读当日 mx_opinions 全量（观点流唯一数据源，快照
+        payload 不再冗余存 new_opinions）。最新批次在前、批内按发生时间倒序
+        （最新在上），每条观点带回所属批次 snapshot_at；seq/kind 由轻量快照元数据拼回。
         """
+        meta = {str(r["snapshot_at"]): r for r in db.list_mx_view_snapshot_meta(day)}
+        grouped: dict = {}
+        for o in db.list_mx_opinions(day):
+            grouped.setdefault(str(o["snapshot_at"]), []).append(o)
         batches = []
-        for s in reversed(db.list_mx_view_snapshots(day)):
-            ops = [dict(o, snapshot_at=s["snapshot_at"])
-                   for o in (s["payload"].get("new_opinions") or []) if o]
+        for at in sorted(grouped.keys(), reverse=True):
+            m = meta.get(at)
+            if not m:  # 无批次记录的孤儿观点（理论不发生）：无 seq 可带，跳过
+                continue
+            ops = [
+                {"kol_id": int(o["kol_id"]), "kol_name": o.get("kol_name") or "",
+                 "target_type": o["target_type"], "target_name": o["target_name"],
+                 "direction": o["direction"], "action": o.get("action") or "",
+                 "summary": o.get("summary") or "", "occurred_at": o.get("occurred_at") or "",
+                 "snapshot_at": at}
+                for o in grouped[at]
+            ]
             ops.sort(key=lambda o: str(o.get("occurred_at") or ""), reverse=True)
-            if ops:
-                batches.append({"snapshot_at": s["snapshot_at"], "seq": s["seq"], "opinions": ops})
+            batches.append({"snapshot_at": at, "seq": int(m["seq"] or 0), "opinions": ops})
         return {"trading_day": day, "batches": batches}
 
     @router.get("/mx-views/target")

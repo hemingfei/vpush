@@ -93,24 +93,38 @@ def test_mx_views_target_detail_with_evidence():
 
 
 def test_mx_views_feed_all_batches_latest_first():
-    """全天观点流：最新批次在前、批内时间倒序、空批次跳过、带回批次号；未登录 401。"""
+    """全天观点流直读 mx_opinions：最新批次在前、批内时间倒序、seq 由快照元数据拼回、
+    无观点批次不出现；未登录 401。"""
     client = make_client()
     headers = auth_headers(client)
     db = client.app.state.db
-    op = lambda name, at: {"kol_id": 1, "kol_name": name, "target_type": "topic",
-                           "target_name": "固态电池", "direction": "bull", "action": "",
-                           "summary": f"{name} 看多", "occurred_at": at}
-    db.upsert_mx_view_snapshot("2026-09-04", "09:20", 1, "live", {
-        "new_opinions": [op("王哥", "2026-09-04 09:16:00"), op("李姐", "2026-09-04 09:18:00")]})
-    db.upsert_mx_view_snapshot("2026-09-04", "09:40", 2, "live", {
-        "new_opinions": [op("王哥", "2026-09-04 09:35:00")]})
-    db.upsert_mx_view_snapshot("2026-09-04", "10:00", 3, "live", {"new_opinions": []})
+    kol = db.add_kol("mx", "王哥", "room1")
+    db.insert_post(platform="mx", kol_id=kol, external_id="m1", title="", url="",
+                   content="固态电池订单爆了", published_at="2026-09-04 09:16:00")
+    post_id = db._rows("SELECT id FROM posts")[0]["id"]
+
+    def seed(at, seq, summary, occurred):
+        bid = db.upsert_mx_view_batch("2026-09-04", at, "live")
+        db.replace_mx_opinions(bid, [{
+            "trading_day": "2026-09-04", "snapshot_at": at, "kol_id": kol,
+            "target_type": "topic", "target_name": "固态电池", "direction": "bull",
+            "action": "", "confidence": "high", "summary": summary,
+            "evidence_post_ids": [post_id], "occurred_at": occurred,
+        }])
+        db.upsert_mx_view_snapshot("2026-09-04", at, seq, "live", {"message_count": 1}, bid)
+
+    seed("09:20", 1, "王哥 看多", "2026-09-04 09:16:00")
+    seed("09:40", 2, "王哥 看多(后批)", "2026-09-04 09:35:00")
+    empty = db.upsert_mx_view_batch("2026-09-04", "10:00", "live")  # 无观点批次
+    db.finish_mx_view_batch(empty, "done", 0)
+    db.upsert_mx_view_snapshot("2026-09-04", "10:00", 3, "live", {"message_count": 0}, empty)
 
     data = client.get("/api/mx-views/feed?day=2026-09-04", headers=headers).json()
     batches = data["batches"]
-    assert [b["snapshot_at"] for b in batches] == ["09:40", "09:20"]  # 最新批次在前，空批次跳过
-    assert [o["occurred_at"][11:16] for o in batches[1]["opinions"]] == ["09:18", "09:16"]  # 批内倒序
+    assert [b["snapshot_at"] for b in batches] == ["09:40", "09:20"]  # 最新批次在前，无观点批次跳过
+    assert [b["seq"] for b in batches] == [2, 1]
     assert all(o["snapshot_at"] == b["snapshot_at"] for b in batches for o in b["opinions"])
+    assert batches[0]["opinions"][0]["summary"] == "王哥 看多(后批)"
     assert client.get("/api/mx-views/feed?day=2026-09-04").status_code == 401
 
 
