@@ -578,7 +578,7 @@ class MxLlmTagAutoConfigIn(BaseModel):
 
 class MxLlmTagRunIn(BaseModel):
     kol_ids: list[int]
-    max_messages: int = 1000
+    max_messages: int = 0  # 0 = 不限量，打完所选大V的全部待打标消息
 
 
 class MxLlmTagCancelIn(BaseModel):
@@ -6358,8 +6358,6 @@ def create_api_router(
     @router.get("/admin/mx-llm-tag/pending", dependencies=[Depends(require_admin)])
     def mx_llm_tag_pending():
         """手动打标弹窗：每个 MX 大V 的未打标消息数（含 0 条的大V）与总数。"""
-        from .mx_llm_tagging import MAX_MANUAL_MESSAGES
-
         kols = db.count_mx_pending_by_kol()
         return {
             "kols": [
@@ -6372,32 +6370,29 @@ def create_api_router(
                 for r in kols
             ],
             "total": db.count_mx_pending_total(),
-            "max_messages": MAX_MANUAL_MESSAGES,
         }
 
     @router.post("/admin/mx-llm-tag/run", dependencies=[Depends(require_admin)])
     def mx_llm_tag_run(body: MxLlmTagRunIn, request: Request, admin: dict = Depends(require_admin)):
         """启动手动打标：所选大V的未打标消息切成每批 ≤100 条入队，最多 3 批
-        同时打标，其余排队（已有任务在跑时新任务照常入队）。
+        同时打标，其余排队（已有任务在跑时新任务照常入队）；不限总量。
 
         结果与每条消息已有标签去重合并；进度经 /admin/mx-llm-tag/progress 轮询。
         """
-        from .mx_llm_tagging import MAX_MANUAL_MESSAGES, start_manual_run
+        from .mx_llm_tagging import start_manual_run
         from .scheduler import _system_llm_config
 
         kol_ids = sorted({int(kid) for kid in (body.kol_ids or [])})
         if not kol_ids:
             raise HTTPException(status_code=400, detail="请至少选择一个大V")
-        max_messages = min(
-            max(int(body.max_messages or MAX_MANUAL_MESSAGES), 1), MAX_MANUAL_MESSAGES
-        )
+        max_messages = max(int(body.max_messages or 0), 0)
         llm_cfg = _system_llm_config(db, getattr(request.app.state, "llm_config", None))
         result = start_manual_run(db, llm_cfg, kol_ids, max_messages)
         if not result["started"]:
             if result["reason"] == "no_posts":
                 raise HTTPException(status_code=400, detail="所选大V暂无未打标消息")
             raise HTTPException(status_code=400, detail="未配置系统 LLM（设置 → AI 摘要）")
-        _audit(admin, "mx_llm_tag_run", detail=f"kols={len(kol_ids)} max={max_messages}")
+        _audit(admin, "mx_llm_tag_run", detail=f"kols={len(kol_ids)} max={max_messages or 'all'}")
         return {
             "ok": True,
             "run_id": result["run_id"],

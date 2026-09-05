@@ -974,7 +974,7 @@ export function createAdminKolsView(dependencies) {
       <section class="section-panel">
         <header class="section-head">
           <div><h2 class="section-title">MX LLM 打标（手动）</h2>
-          <p class="section-meta">选大V后对其未打标消息跑 LLM（话题/股票/操作三类标签，带准确度）：high 与消息已有标签<b>去重合并</b>写入，low 进下方审核队列（已在消息标签里的不再进审核）；发现的通用黑话进候选队列。一次最多处理 1000 条，每 100 条为一批（一次 LLM 调用只打一批）；同一时间最多 3 批并行，多余批次自动排队；自动触发见下方「MX LLM 打标（自动）」面板。</p></div>
+          <p class="section-meta">选大V后对其未打标消息跑 LLM（话题/股票/操作三类标签，带准确度）：high 与消息已有标签<b>去重合并</b>写入，low 进下方审核队列（已在消息标签里的不再进审核）；发现的通用黑话进候选队列。不设总量上限，待打标消息每 100 条为一批（一次 LLM 调用只打一批）；同一时间最多 3 批并行，多余批次自动排队；自动触发见下方「MX LLM 打标（自动）」面板。</p></div>
         </header>
         <p class="section-meta" style="margin-top:8px">${statusLine}</p>
         ${alertLine}
@@ -1132,7 +1132,6 @@ export function createAdminKolsView(dependencies) {
       return;
     }
     const kols = Array.isArray(pending?.kols) ? pending.kols : [];
-    const cap = Number(pending?.max_messages) || 1000;
     if (!kols.length) {
       flash("还没有 MX 大V，请先在「数据源 → MX」同步房间", "error");
       return;
@@ -1149,9 +1148,10 @@ export function createAdminKolsView(dependencies) {
     mask.innerHTML = `
       <div class="admin-modal" role="dialog" aria-modal="true" aria-label="选择要打标的 MX 大V">
         <h3 class="admin-modal-title">选择要 LLM 打标的 MX 大V</h3>
-        <p class="section-meta">勾选大V，合计最多处理 ${cap} 条未打标消息（最旧优先）；单个大V超出上限时只处理其最旧的 ${cap} 条。每 100 条为一批，同一时间最多 3 批并行打标，多余批次自动排队，可与进行中的任务并存。</p>
+        <p class="section-meta">勾选大V，对其全部未打标消息打标（最旧优先，不限总量）；每 100 条为一批，同一时间最多 3 批并行打标，多余批次自动排队，可与进行中的任务并存。</p>
+        <div style="margin:10px 0"><label style="display:inline-flex;align-items:center;gap:8px"><input type="checkbox" id="mx-tag-run-selall" onchange="adminMxTagSelAll(this.checked)"> <b>全选有消息的大V</b></label></div>
         <div class="admin-modal-list">${rows}</div>
-        <p class="section-meta" id="mx-tag-run-total">已选 0 / ${cap} 条</p>
+        <p class="section-meta" id="mx-tag-run-total">已选 0 条</p>
         <div class="toolbar">
           <button class="btn-normal" id="mx-tag-run-start" disabled onclick="adminMxTagStartRun()">开始打标</button>
           <button class="btn-ghost" onclick="document.getElementById('mx-tag-run-mask').remove()">取消</button>
@@ -1160,19 +1160,37 @@ export function createAdminKolsView(dependencies) {
     document.body.appendChild(mask);
     const recount = () => {
       let total = 0;
-      mask.querySelectorAll("input[type=checkbox]:checked").forEach((cb) => {
+      let picked = 0;
+      const boxes = [...mask.querySelectorAll("input[type=checkbox][data-kol]")];
+      boxes.forEach((cb) => {
+        if (!cb.checked) return;
+        picked += 1;
         const row = cb.closest(".mx-tag-kol-row");
-        total += Math.min(Number(row?.dataset.pending) || 0, cap);
+        total += Number(row?.dataset.pending) || 0;
       });
+      const selAll = mask.querySelector("#mx-tag-run-selall");
+      if (selAll) {
+        const usable = boxes.filter((cb) => !cb.disabled);
+        const allPicked = usable.length > 0 && usable.every((cb) => cb.checked);
+        selAll.checked = allPicked;
+        selAll.indeterminate = !allPicked && usable.some((cb) => cb.checked);
+      }
       const startBtn = mask.querySelector("#mx-tag-run-start");
-      startBtn.disabled = total === 0;
-      startBtn.textContent = total > cap ? `开始打标（处理最旧的 ${cap} 条）` : `开始打标（${total} 条）`;
-      mask.querySelector("#mx-tag-run-total").innerHTML = total > cap
-        ? `已选超过上限，本次将处理最旧的 <b>${cap}</b> 条`
-        : `已选 <b>${total}</b> / ${cap} 条`;
+      startBtn.disabled = picked === 0;
+      startBtn.textContent = `开始打标（${total} 条）`;
+      mask.querySelector("#mx-tag-run-total").innerHTML = `已选 <b>${picked}</b> 个大V / <b>${total}</b> 条未打标消息`;
     };
     mask.addEventListener("change", recount);
     recount();
+  }
+
+  function adminMxTagSelAll(checked) {
+    const mask = document.getElementById("mx-tag-run-mask");
+    if (!mask) return;
+    // 只勾选有未打标消息的大V（pending=0 的复选框本来就是禁用的）
+    mask.querySelectorAll(".mx-tag-kol-row input[type=checkbox]").forEach((cb) => {
+      if (!cb.disabled) cb.checked = checked;
+    });
   }
 
   function adminMxTagPollProgress() {
@@ -1270,13 +1288,14 @@ export function createAdminKolsView(dependencies) {
 
   async function adminMxTagStartRun() {
     const mask = document.getElementById("mx-tag-run-mask");
-    const kolIds = [...mask.querySelectorAll("input[type=checkbox]:checked")]
+    const kolIds = [...mask.querySelectorAll("input[type=checkbox][data-kol]:checked")]
       .map((cb) => Number(cb.dataset.kol));
     if (!kolIds.length) return;
     try {
+      // 不传 max_messages：后端默认 0 = 不限量，打完所选大V的全部待打标消息
       const data = await api("/api/admin/mx-llm-tag/run", {
         method: "POST",
-        body: JSON.stringify({ kol_ids: kolIds, max_messages: 1000 }),
+        body: JSON.stringify({ kol_ids: kolIds }),
       });
       mask.remove();
       flash(`打标任务已启动：${data.total} 条分 ${data.batches} 批（每批 ≤${data.batch_size} 条），与其他任务并行或排队执行`);
@@ -1769,6 +1788,7 @@ export function createAdminKolsView(dependencies) {
     adminMxTagTest,
     adminMxTagTestBlock,
     mxTagRunLabel,
+    adminMxTagSelAll,
     adminOpenTagReviewModal,
     closeTagReviewModal,
     toggleTagReviewMsg,

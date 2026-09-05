@@ -53,8 +53,6 @@ _ALERT_COOLDOWN_KEY = "mx_llm_tag_alert_at"
 MISSING_RATIO_LIMIT = 0.3
 # 管理端「试打」按钮每次取的未处理消息条数
 TEST_BATCH_SIZE = 10
-# 手动打标一次最多处理的消息条数
-MAX_MANUAL_MESSAGES = 1000
 # 手动打标单批（一次 LLM 调用）最多处理的消息条数：一次带太多消息易超时/输出
 # 截断导致整批失败
 MANUAL_BATCH_SIZE_LIMIT = 100
@@ -414,7 +412,10 @@ def request_cancel_manual_run(run_id: int | None = None) -> int:
 
 
 def start_manual_run(db, llm_config, kol_ids: list[int], max_messages: int) -> dict:
-    """创建一次手动打标 run：取待打标消息切成每批 ≤100 条入队后立即返回。"""
+    """创建一次手动打标 run：取待打标消息切成每批 ≤100 条入队后立即返回。
+
+    max_messages ≤ 0 表示不限量（打完所选大V的全部待打标消息）。
+    """
     return start_run(db, llm_config, kol_ids, max_messages, source="manual")
 
 
@@ -424,7 +425,7 @@ def start_run(
     """创建一次打标 run：取待打标消息切成每批 ≤100 条入队后立即返回。
 
     kol_ids=None 不限大V（自动打标）；否则只取指定大V（手动打标）。消息数按
-    max_messages（服务端硬顶 MAX_MANUAL_MESSAGES）截取，最旧优先；进行中 run
+    max_messages 截取（≤0 不限量），最旧优先；进行中 run
     已认领的消息不重复认领（两次选择的大V有重叠时后者顺延取剩余）。已有 run
     在跑时新 run 照常入队排队，不再拒绝。返回 started=False 时带原因。
     """
@@ -433,14 +434,19 @@ def start_run(
         return {"started": False, "reason": "no_llm"}
     if kol_ids is not None:
         kol_ids = [int(kid) for kid in kol_ids]
-    max_messages = max(1, min(int(max_messages or MAX_MANUAL_MESSAGES), MAX_MANUAL_MESSAGES))
+    max_messages = max(0, int(max_messages or 0))
     batch_size = min(
         max(db.get_mx_llm_tag_int_setting(MX_LLM_TAG_BATCH_SIZE_KEY, MANUAL_BATCH_SIZE_LIMIT), 1),
         MANUAL_BATCH_SIZE_LIMIT,
     )
     with _runs_lock:
-        rows = db.list_mx_pending_posts(kol_ids, max_messages + len(_claimed_ids))
-        rows = [r for r in rows if int(r["id"]) not in _claimed_ids][:max_messages]
+        # 多取 len(_claimed_ids) 条兜底：其中可能混有已被进行中 run 认领的消息，
+        # 过滤后仍够 max_messages 条（不限量时无此顾虑，直接全取再过滤）
+        fetch_limit = (max_messages + len(_claimed_ids)) if max_messages else 0
+        rows = db.list_mx_pending_posts(kol_ids, fetch_limit)
+        rows = [r for r in rows if int(r["id"]) not in _claimed_ids]
+        if max_messages:
+            rows = rows[:max_messages]
         if not rows:
             return {"started": False, "reason": "no_posts"}
         kol_set = set(kol_ids or [])

@@ -511,6 +511,37 @@ def test_manual_run_batches_capped_at_100(monkeypatch):
     db.close()
 
 
+def test_manual_run_unlimited_when_zero(monkeypatch):
+    """max_messages=0 表示不限量：1200 条全部入队（旧实现会被 1000 硬顶截断）。"""
+    db = make_db()
+    kid = db.add_kol("mx", "房间U", "u1")
+    for i in range(1200):
+        db.insert_post("mx", kid, f"u{i}", "", f"消息{i}", "u", "")
+    import app.llm as llm
+    orig = llm.tag_posts_llm
+
+    def fake(rows, *a, **kw):
+        return {
+            int(r["id"]): _result(topics=[{"name": "科技", "confidence": "high"}])
+            for r in rows
+        }
+
+    _reset_manual_state()
+    monkeypatch.setattr(m, "_ensure_workers_locked", lambda: None)
+    llm.tag_posts_llm = fake
+    try:
+        out = m.start_manual_run(db, make_config(), [kid], 0)
+        assert out["total"] == 1200 and out["batches"] == 12 and out["batch_size"] == 100
+        m._drain_manual_queue()
+        run = m.get_manual_job_status()["runs"][0]
+        assert run["status"] == "done" and run["processed"] == 1200
+        assert run["batches_done"] == 12 and run["batches_failed"] == 0
+        assert db.count_mx_pending_total() == 0
+    finally:
+        llm.tag_posts_llm = orig
+    db.close()
+
+
 def test_manual_run_second_run_queues_and_claims_remaining(monkeypatch):
     """任务进行中可再启动（入队不拒绝）；重叠大V的已认领消息不重复打标。"""
     db = make_db()

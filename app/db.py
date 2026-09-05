@@ -5171,6 +5171,7 @@ class DB:
         """取待 LLM 打标的 MX 帖（未打标、未拦截/隐藏，id 升序=最旧优先）。
 
         kol_ids 为 None 时不限大V（试打用）；否则只取指定大V（手动打标用）。
+        limit ≤ 0 表示不限条数（手动打标已放开总量上限）。
         行结构与 list_mx_posts_after 一致，另带 kol_id。
         """
         sql = (
@@ -5185,8 +5186,10 @@ class DB:
             placeholders = ",".join("?" for _ in kol_ids)
             sql += f"AND p.kol_id IN ({placeholders}) "
             params.extend(int(kid) for kid in kol_ids)
-        sql += "ORDER BY p.id ASC LIMIT ?"
-        params.append(int(limit))
+        sql += "ORDER BY p.id ASC"
+        if limit and int(limit) > 0:
+            sql += " LIMIT ?"
+            params.append(int(limit))
         return self._rows(sql, params)
 
     # ---- MX 大V实时观点 ----
