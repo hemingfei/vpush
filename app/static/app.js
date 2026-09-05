@@ -2253,6 +2253,8 @@ function tlPickPlatform(p) {
     tlPersistSource();
   }
   state.timelinePlatform = p;
+  // 平台章与特别关注章互斥：切平台即退出「只看特别关注」视图
+  if (state.timelineFavorite) state.timelineFavorite = false;
   if (leftLive) {
     stopTimelinePoll();
     if ($("#tl-feed-panel")) syncTimelineSourceView();

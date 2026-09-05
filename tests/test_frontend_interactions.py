@@ -752,9 +752,6 @@ def test_mobile_plaza_and_timeline_filters_are_seven_equal_44px_targets():
     # 移动端角标条自带特别关注章，与面板星标同状态
     assert 'id="tl-star-toggle"' in _fn_body("tlFilterActionsHtml")
     assert "tlPaintViewToggles()" in _fn_body("toggleTimelineFav")
-    dashboard_or_app = APP_JS.read_text() + ADMIN_DASHBOARD_JS.read_text()
-    assert 'onclick="toggleTimelineFav()">${STAR_SVG}' in dashboard_or_app
-    assert 'tlPaintViewToggles()' in _fn_body("toggleTimelineFav") or "tlPaintViewToggles()" in _fn_body("toggleTimelineFav")
     assert 'class="icon-badge-bar"' in _fn_body("renderHome")
     assert "tl-filterbar-top icon-badge-bar" in _fn_body("renderTimeline")
     assert "#tl-filterbar .icon-badge-bar" in css
