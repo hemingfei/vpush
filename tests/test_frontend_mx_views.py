@@ -237,7 +237,7 @@ def test_mx_views_neutral_counts_everywhere():
     assert "${t.bull}多/${t.bear}空/${t.neutral || 0}中" in boards  # 题材明细三段计数
     assert "${s.bull}多/${s.bear}空/${s.neutral || 0}中" in boards  # 个股明细同款
     heat = _fn_body("mxvHeatHtml", js)
-    assert "<b>${net}/${total}</b>" in heat  # 徽标 = (多-空)/(多+空+中)
+    assert "<b>${net}</b>${escapeHtml(r.name)}<b>${total}</b>" in heat  # 布局 = (多-空) 名称 (多+空+中)
     assert "const all = (r) => r.bull + r.bear + (r.neutral || 0);" in heat  # 热度与总数含中性
     assert "中${r.neutral || 0}" in heat  # tooltip 含中性
     drawer = _fn_body("mxvOpenTarget", js)

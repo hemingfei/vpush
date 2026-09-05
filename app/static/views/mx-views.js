@@ -563,7 +563,7 @@ export function createMxViewsView(dependencies) {
           <button type="button" class="${mode === "list" ? "on" : ""}" onclick="mxvBoardMode('${kind}','list')" aria-pressed="${mode === "list"}">明细</button>
         </div>
       </div>
-      ${mode === "heat" ? `<div class="mxv-heat-legend">颜色=净方向 · 深浅大小=提及热度 · 悬停联动观点流，点击看时间线</div>` : ""}`;
+      ${mode === "heat" ? `<div class="mxv-heat-legend">颜色=净方向 · 深浅大小=提及热度 · 名称两侧=净多空/总数（多+空+中） · 悬停联动观点流，点击看时间线</div>` : ""}`;
   }
 
   // ---- 双榜共用排序：提及大V总数（多+空+中）降序 → |净多空| 降序；热力与明细同序 ----
@@ -586,7 +586,7 @@ export function createMxViewsView(dependencies) {
       const net = r.net > 0 ? `+${r.net}` : `${r.net}`;
       return `<span class="mxv-heat ${dir} h${lvl}" data-mxv-hl="${type}:${escapeHtml(r.name)}"
         onclick="mxvOpenTargetAt(${idx})"
-        title="${escapeHtml(r.name)}：多${r.bull} / 空${r.bear} / 中${r.neutral || 0} · 净${net}${r.momentum ? ` · 动能${r.momentum > 0 ? "+" : ""}${r.momentum}` : ""}">${escapeHtml(r.name)}<b>${net}/${total}</b></span>`;
+        title="${escapeHtml(r.name)}：多${r.bull} / 空${r.bear} / 中${r.neutral || 0} · 净${net}${r.momentum ? ` · 动能${r.momentum > 0 ? "+" : ""}${r.momentum}` : ""}"><b>${net}</b>${escapeHtml(r.name)}<b>${total}</b></span>`;
     }).join("")}</div>`;
   }
 
