@@ -2022,6 +2022,18 @@ def create_api_router(
 
     @router.post("/me/bind-code")
     def create_bind_code(user: dict = Depends(get_current_user)):
+        from .db import BIND_ISSUE_LIMIT, BIND_ISSUE_WINDOW
+        from .user_quota import window_start
+
+        now = time.time()
+        allowed, _retry = db.consume_bind_quota(
+            f"issue:{user['id']}",
+            window_start(now, BIND_ISSUE_WINDOW),
+            BIND_ISSUE_LIMIT,
+            BIND_ISSUE_WINDOW,
+        )
+        if not allowed:
+            raise HTTPException(status_code=429, detail="绑定码生成过于频繁，请稍后再试")
         db.delete_expired_bind_codes()
         code = f"{secrets.randbelow(1_000_000):06d}"
         db.create_bind_code(code, user["id"], int(time.time()) + BIND_CODE_TTL)

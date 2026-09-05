@@ -665,6 +665,15 @@ def test_bind_code_api():
     assert row["user_id"] == me["id"]
 
 
+def test_bind_code_issue_rate_limit():
+    client = make_client()
+    headers = user_headers(client, "someone")
+    for _ in range(3):
+        assert client.post("/api/me/bind-code", headers=headers).status_code == 200
+    resp = client.post("/api/me/bind-code", headers=headers)
+    assert resp.status_code == 429
+
+
 def test_system_logs_api():
     client = make_client()
     admin_headers = auth_headers(client)

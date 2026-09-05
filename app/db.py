@@ -17,6 +17,10 @@ from pathlib import Path
 from .logging_setup import redact_secrets
 
 _UNSET = object()
+BIND_TRY_LIMIT = 8
+BIND_TRY_WINDOW = 600
+BIND_ISSUE_LIMIT = 3
+BIND_ISSUE_WINDOW = 600
 
 # ---- 用户级推送凭据的 at-rest 加密 ----
 # 存储格式：enc1:<Fernet 密文>。无前缀即存量明文（读取时原样返回），
@@ -1267,6 +1271,13 @@ class DB:
             "  period_start INTEGER NOT NULL,"
             "  count INTEGER NOT NULL,"
             "  PRIMARY KEY (user_id, bucket)"
+            ")"
+        )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS bind_quota ("
+            "  key TEXT PRIMARY KEY,"
+            "  period_start INTEGER NOT NULL,"
+            "  count INTEGER NOT NULL"
             ")"
         )
         self._ensure_ima_document_tables()
@@ -3602,7 +3613,146 @@ class DB:
     def delete_expired_bind_codes(self) -> None:
         self._execute("DELETE FROM bind_codes WHERE expires_at < ?", (int(time.time()),))
 
+    def consume_bind_quota(
+        self, key: str, period_start: int, limit: int, window_seconds: int
+    ) -> tuple[bool, int]:
+        period_start = int(period_start)
+        limit = max(int(limit), 1)
+        window_seconds = max(int(window_seconds), 1)
+        retry = max(period_start + window_seconds - int(time.time()), 1)
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT period_start, count FROM bind_quota WHERE key = ?", (key,)
+            ).fetchone()
+            if row is None or int(row["period_start"]) != period_start:
+                self._conn.execute(
+                    "INSERT INTO bind_quota (key, period_start, count) VALUES (?, ?, 1) "
+                    "ON CONFLICT(key) DO UPDATE SET period_start = excluded.period_start, "
+                    "count = excluded.count",
+                    (key, period_start),
+                )
+                self._conn.commit()
+                return True, 0
+            count = int(row["count"])
+            if count >= limit:
+                return False, retry
+            self._conn.execute(
+                "UPDATE bind_quota SET count = count + 1 WHERE key = ?", (key,)
+            )
+            self._conn.commit()
+            return True, 0
+
+    def consume_bind_code(self, code: str, identity_type: str, identity: str) -> dict | None:
+        field = (
+            "telegram_chat_id"
+            if identity_type == "telegram_chat_id"
+            else "feishu_open_id" if identity_type == "feishu_open_id" else ""
+        )
+        if not field:
+            return None
+        now = int(time.time())
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                claimed = self._conn.execute(
+                    "DELETE FROM bind_codes WHERE code = ? AND expires_at >= ? RETURNING user_id",
+                    (code, now),
+                ).fetchone()
+                if claimed is None:
+                    self._conn.commit()
+                    return None
+                target_id = int(claimed["user_id"])
+                target = self._conn.execute(
+                    "SELECT * FROM users WHERE id = ?", (target_id,)
+                ).fetchone()
+                if target is None:
+                    self._conn.commit()
+                    return None
+                existing = self._conn.execute(
+                    f"SELECT * FROM users WHERE {field} = ?", (identity,)
+                ).fetchone()
+                if existing is not None and int(existing["id"]) != target_id:
+                    self._transfer_subscriptions_body(int(existing["id"]), target_id)
+                    self._delete_user_body(int(existing["id"]))
+                self._conn.execute(
+                    f"UPDATE users SET {field} = ? WHERE id = ?", (identity, target_id)
+                )
+                self._conn.commit()
+                user = self._conn.execute(
+                    "SELECT * FROM users WHERE id = ?", (target_id,)
+                ).fetchone()
+                return dict(user) if user else None
+            except Exception:
+                self._conn.rollback()
+                raise
+
     # ---- 账号合并 ----
+    def _transfer_subscriptions_body(self, from_user_id: int, to_user_id: int) -> None:
+        rows = self._conn.execute(
+            "SELECT kol_id, type, favorite, secondary, hide_images "
+            "FROM subscriptions WHERE user_id = ?",
+            (from_user_id,),
+        ).fetchall()
+        for row in rows:
+            existing = self._conn.execute(
+                "SELECT type, favorite, secondary, hide_images FROM subscriptions "
+                "WHERE user_id = ? AND kol_id = ?",
+                (to_user_id, row["kol_id"]),
+            ).fetchone()
+            if existing is None:
+                self._conn.execute(
+                    "INSERT INTO subscriptions "
+                    "(user_id, kol_id, type, favorite, secondary, hide_images) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        to_user_id,
+                        row["kol_id"],
+                        row["type"] or "post",
+                        row["favorite"],
+                        row["secondary"],
+                        row["hide_images"],
+                    ),
+                )
+            else:
+                merged = _merge_sub_types(row["type"], existing["type"])
+                favorite = 1 if (row["favorite"] or existing["favorite"]) else 0
+                secondary = max(row["secondary"], existing["secondary"])
+                hide_images = max(row["hide_images"], existing["hide_images"])
+                self._conn.execute(
+                    "UPDATE subscriptions SET type = ?, favorite = ?, secondary = ?, "
+                    "hide_images = ? WHERE user_id = ? AND kol_id = ?",
+                    (
+                        merged,
+                        favorite,
+                        secondary,
+                        hide_images,
+                        to_user_id,
+                        row["kol_id"],
+                    ),
+                )
+        self._conn.execute(
+            "INSERT OR IGNORE INTO user_news_sources (user_id, source_id, selected_at) "
+            "SELECT ?, source_id, selected_at FROM user_news_sources WHERE user_id = ?",
+            (to_user_id, from_user_id),
+        )
+        source_anchor = self._conn.execute(
+            "SELECT news_last_seen_at FROM users WHERE id = ?", (from_user_id,)
+        ).fetchone()["news_last_seen_at"]
+        target_anchor = self._conn.execute(
+            "SELECT news_last_seen_at FROM users WHERE id = ?", (to_user_id,)
+        ).fetchone()["news_last_seen_at"]
+        if source_anchor and (not target_anchor or source_anchor > target_anchor):
+            self._conn.execute(
+                "UPDATE users SET news_last_seen_at = ? WHERE id = ?",
+                (source_anchor, to_user_id),
+            )
+        self._conn.execute(
+            "DELETE FROM user_news_sources WHERE user_id = ?", (from_user_id,)
+        )
+        self._conn.execute(
+            "DELETE FROM subscriptions WHERE user_id = ?", (from_user_id,)
+        )
+
     def transfer_subscriptions(self, from_user_id: int, to_user_id: int) -> None:
         """把源账号的订阅合并到目标账号；同一大V保留更全的订阅类型。
 
@@ -3613,106 +3763,40 @@ class DB:
         with self._lock:
             try:
                 self._conn.execute("BEGIN")
-                rows = self._conn.execute(
-                    "SELECT kol_id, type, favorite, secondary, hide_images "
-                    "FROM subscriptions WHERE user_id = ?",
-                    (from_user_id,),
-                ).fetchall()
-                for row in rows:
-                    existing = self._conn.execute(
-                        "SELECT type, favorite, secondary, hide_images FROM subscriptions "
-                        "WHERE user_id = ? AND kol_id = ?",
-                        (to_user_id, row["kol_id"]),
-                    ).fetchone()
-                    if existing is None:
-                        self._conn.execute(
-                            "INSERT INTO subscriptions "
-                            "(user_id, kol_id, type, favorite, secondary, hide_images) "
-                            "VALUES (?, ?, ?, ?, ?, ?)",
-                            (
-                                to_user_id,
-                                row["kol_id"],
-                                row["type"] or "post",
-                                row["favorite"],
-                                row["secondary"],
-                                row["hide_images"],
-                            ),
-                        )
-                    else:
-                        merged = _merge_sub_types(row["type"], existing["type"])
-                        favorite = 1 if (row["favorite"] or existing["favorite"]) else 0
-                        secondary = max(row["secondary"], existing["secondary"])
-                        hide_images = max(row["hide_images"], existing["hide_images"])
-                        self._conn.execute(
-                            "UPDATE subscriptions SET type = ?, favorite = ?, secondary = ?, "
-                            "hide_images = ? WHERE user_id = ? AND kol_id = ?",
-                            (
-                                merged,
-                                favorite,
-                                secondary,
-                                hide_images,
-                                to_user_id,
-                                row["kol_id"],
-                            ),
-                        )
-                self._conn.execute(
-                    "INSERT OR IGNORE INTO user_news_sources (user_id, source_id, selected_at) "
-                    "SELECT ?, source_id, selected_at FROM user_news_sources WHERE user_id = ?",
-                    (to_user_id, from_user_id),
-                )
-                source_anchor = self._conn.execute(
-                    "SELECT news_last_seen_at FROM users WHERE id = ?", (from_user_id,)
-                ).fetchone()["news_last_seen_at"]
-                target_anchor = self._conn.execute(
-                    "SELECT news_last_seen_at FROM users WHERE id = ?", (to_user_id,)
-                ).fetchone()["news_last_seen_at"]
-                if source_anchor and (not target_anchor or source_anchor > target_anchor):
-                    self._conn.execute(
-                        "UPDATE users SET news_last_seen_at = ? WHERE id = ?",
-                        (source_anchor, to_user_id),
-                    )
-                self._conn.execute(
-                    "DELETE FROM user_news_sources WHERE user_id = ?", (from_user_id,)
-                )
-                self._conn.execute(
-                    "DELETE FROM subscriptions WHERE user_id = ?", (from_user_id,)
-                )
+                self._transfer_subscriptions_body(from_user_id, to_user_id)
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()
                 raise
 
+    def _delete_user_body(self, user_id: int) -> None:
+        self._conn.execute("DELETE FROM bind_codes WHERE user_id = ?", (user_id,))
+        self._conn.execute("DELETE FROM user_news_sources WHERE user_id = ?", (user_id,))
+        self._conn.execute("DELETE FROM subscriptions WHERE user_id = ?", (user_id,))
+        self._conn.execute("DELETE FROM push_logs WHERE user_id = ?", (user_id,))
+        self._conn.execute("DELETE FROM kol_acl WHERE user_id = ?", (user_id,))
+        self._conn.execute("DELETE FROM ima_kb_acl WHERE user_id = ?", (user_id,))
+        self._conn.execute("DELETE FROM ima_kb_subscriptions WHERE user_id = ?", (user_id,))
+        self._conn.execute("DELETE FROM webpush_subscriptions WHERE user_id = ?", (user_id,))
+        self._conn.execute("DELETE FROM user_keywords WHERE user_id = ?", (user_id,))
+        self._conn.execute(
+            "DELETE FROM knowledge_keyword_notified WHERE user_id = ?", (user_id,)
+        )
+        self._conn.execute("DELETE FROM feishu_personal_bots WHERE user_id = ?", (user_id,))
+        self._conn.execute(
+            "DELETE FROM feishu_registration_sessions WHERE user_id = ?", (user_id,)
+        )
+        self._conn.execute(
+            "DELETE FROM daily_report_deliveries WHERE user_id = ?", (user_id,)
+        )
+        self._conn.execute("DELETE FROM kol_requests WHERE user_id = ?", (user_id,))
+        self._conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+
     def delete_user(self, user_id: int) -> None:
         with self._lock:
             try:
                 self._conn.execute("BEGIN")
-                self._conn.execute("DELETE FROM bind_codes WHERE user_id = ?", (user_id,))
-                self._conn.execute(
-                    "DELETE FROM user_news_sources WHERE user_id = ?", (user_id,)
-                )
-                self._conn.execute("DELETE FROM subscriptions WHERE user_id = ?", (user_id,))
-                self._conn.execute("DELETE FROM push_logs WHERE user_id = ?", (user_id,))
-                self._conn.execute("DELETE FROM kol_acl WHERE user_id = ?", (user_id,))
-                self._conn.execute("DELETE FROM ima_kb_acl WHERE user_id = ?", (user_id,))
-                self._conn.execute(
-                    "DELETE FROM ima_kb_subscriptions WHERE user_id = ?", (user_id,)
-                )
-                self._conn.execute("DELETE FROM webpush_subscriptions WHERE user_id = ?", (user_id,))
-                self._conn.execute("DELETE FROM user_keywords WHERE user_id = ?", (user_id,))
-                self._conn.execute(
-                    "DELETE FROM knowledge_keyword_notified WHERE user_id = ?", (user_id,)
-                )
-                self._conn.execute(
-                    "DELETE FROM feishu_personal_bots WHERE user_id = ?", (user_id,)
-                )
-                self._conn.execute(
-                    "DELETE FROM feishu_registration_sessions WHERE user_id = ?", (user_id,)
-                )
-                self._conn.execute(
-                    "DELETE FROM daily_report_deliveries WHERE user_id = ?", (user_id,)
-                )
-                self._conn.execute("DELETE FROM kol_requests WHERE user_id = ?", (user_id,))
-                self._conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+                self._delete_user_body(user_id)
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()
