@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from pathlib import Path
 
 import pytest
 from conftest import load_vps_script
@@ -423,3 +424,24 @@ def test_dispatch_accepts_past_ts(ctrl, monkeypatch):
     assert launched
     r = json.loads((ctrl_dir / "results" / f"{cmd_id}.json").read_text(encoding="utf-8"))
     assert r["status"] == "success"
+
+
+# —— 任务 6：统一部署脚本来源 ——
+
+def test_deploy_ima_storage_has_no_script_copies():
+    """canonical 只允许 scripts/vps/：deploy/ima-storage 不得再放 cicc-*.py 双份。"""
+    root = Path(__file__).resolve().parent.parent
+    stale = sorted((root / "deploy" / "ima-storage").glob("cicc-*.py"))
+    assert stale == [], f"deploy/ima-storage 不得保留脚本副本（canonical=scripts/vps）：{stale}"
+
+
+def test_systemd_units_use_absolute_paths_only():
+    """deploy/ima-storage/vpush-cicc-*.service 的 ExecStart 必须是明确绝对路径。"""
+    root = Path(__file__).resolve().parent.parent
+    for unit in (root / "deploy" / "ima-storage").glob("vpush-cicc-*.service"):
+        text = unit.read_text(encoding="utf-8")
+        for line in text.splitlines():
+            if line.startswith("ExecStart="):
+                _, _, value = line.partition("=")
+                assert value.startswith("/"), f"{unit.name}: ExecStart 必须是绝对路径: {line}"
+                assert "/Users" not in value, f"{unit.name}: 不得依赖开发机路径: {value}"

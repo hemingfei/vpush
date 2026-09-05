@@ -193,22 +193,45 @@ On DMIT, recreate `vpush` after editing `.env`. Rollback: delete `IMA_PULL_URL` 
 
 供 vpush 管理页「知识库设置 → 中金」页签远程控制采集/压缩，并承载每日增量定时。
 
+运行脚本只有一个 canonical 来源：`scripts/vps/`（dispatch/incremental/status/consistency/stats），
+由批次安装脚本复制到存储机，避免双份漂移：
+
 ```bash
-install -m 755 deploy/ima-storage/cicc-dispatch.py deploy/ima-storage/cicc-status.py \
-  deploy/ima-storage/cicc-incremental.py /usr/local/lib/vpush-ima/
-install -m 644 deploy/ima-storage/vpush-cicc-dispatch.path deploy/ima-storage/vpush-cicc-dispatch.service \
-  deploy/ima-storage/vpush-cicc-incremental.service deploy/ima-storage/vpush-cicc-incremental.timer \
-  deploy/ima-storage/vpush-cicc-status.service deploy/ima-storage/vpush-cicc-status.timer \
-  /etc/systemd/system/
-mkdir -p /srv/vpush-ima/local/.cicc/commands
-chown -R 99:100 /srv/vpush-ima/local/.cicc && chmod 770 /srv/vpush-ima/local/.cicc/commands
-echo 1 > /srv/vpush-ima/local/.cicc/incremental.enabled   # 默认开每日增量
-chown 99:100 /srv/vpush-ima/local/.cicc/incremental.enabled
-systemctl daemon-reload
-systemctl enable --now vpush-cicc-dispatch.path vpush-cicc-incremental.timer \
-  vpush-cicc-status.timer vpush-cicc-status.service
+bash scripts/vps/install_cicc_batch1.sh   # status/incremental/timer：03:00→每小时:05 门控 + stats
+bash scripts/vps/install_cicc_batch2.sh   # collector 熔断标记 + paused/backup 节 + settings/backup 模式
+bash scripts/vps/install_cicc_batch3.sh   # consistency/dedup 模式 + 关键词白名单透传
 ```
 
-Expected: `systemctl list-timers | grep cicc` shows the two timers; status file
-`/srv/vpush-ima/local/.cicc/status.json` refreshed every 60s, owned 99:100.
-Rollback: `systemctl disable --now vpush-cicc-dispatch.path vpush-cicc-incremental.timer vpush-cicc-status.timer`.
+dispatch/path/timer 单元文件在本目录（`deploy/ima-storage/vpush-cicc-*.path/.service/.timer`）：
+
+```bash
+install -m 644 deploy/ima-storage/vpush-cicc-dispatch.path deploy/ima-storage/vpush-cicc-dispatch.service \
+  /etc/systemd/system/
+mkdir -p /srv/vpush-ima/local/.cicc/commands /srv/vpush-ima/local/.cicc/results
+chown -R 99:100 /srv/vpush-ima/local/.cicc && chmod 770 /srv/vpush-ima/local/.cicc/commands
+systemctl daemon-reload
+systemctl enable --now vpush-cicc-dispatch.path vpush-cicc-status.timer
+```
+
+> 注意：`deploy/ima-storage/` 下不再保留 `cicc-*.py` 副本（曾与 `scripts/vps/` 双份漂移），
+> 生产机以 `install_cicc_batch*.sh` 安装的 `scripts/vps/` 版为准。
+
+命令协议（vpush 侧 `app/cicc_collector.py` 生成 → NFS 落盘 → dispatch 消费）：
+
+```json
+{"id": "<uuid4-hex>", "mode": "incr|year|all|stop|compress|schedule|settings|backup|consistency|dedup",
+ "actor": "admin", "ts": 1710000000, "payload": {"time": "03:00", "categories": [], "keywords": []}}
+```
+
+- 文件名 `<epoch_ms>-<mode>-<id前8位>.json`；原子 tmp+rename，dispatch 的 inotify 不读半截文件。
+- 结果按命令 `id` 写 `results/<id>.json`：`{id, mode, status, started_at, finished_at, attempts, error}`，
+  `status ∈ success|failed|retry|running`。
+- 幂等：`status=success` 时残留命令文件只被清理不重跑；`running` 未超时（600s）跳过，超时恢复重试。
+- 重试：暂时性失败（collector 忙/OSError 等）保留命令文件，`attempts` 递增，最多 3 次后终判 failed；
+  永久失败（unknown_mode/invalid_*/脚本缺失）一次即 failed，不重试。
+- 旧格式（顶层 mode/actor/ts，无 id 无 payload）短期兼容：以文件名为幂等键照常消费。
+- 回滚：`git checkout` 上一版 `scripts/vps/cicc-*.py` 重跑对应 install 脚本 + `daemon-reload`；
+  禁用：`systemctl disable --now vpush-cicc-dispatch.path vpush-cicc-incremental.timer vpush-cicc-status.timer`。
+
+命令生成（管理页动作）在 vpush 侧：`/api/admin/cicc/trigger|schedule`，依赖 `IMA_ARCHIVE_ROOT`
+指向 NFS 归档；状态读 `/srv/vpush-ima/local/.cicc/status.json`（存储机每 60s 刷新，超 300s 视为 stale）。

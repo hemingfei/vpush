@@ -6,7 +6,7 @@ Type=oneshot
 ExecStart=/usr/bin/python3 /usr/local/lib/vpush-ima/cicc-dispatch.py
 UMask=0077
 NoNewPrivileges=true
-TimeoutStartSec=120
+TimeoutStartSec=900  # consistency 分支可跑满 600s（脚本内 subprocess timeout）
 
 [Install]
 WantedBy=multi-user.target
