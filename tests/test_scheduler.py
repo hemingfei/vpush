@@ -24,6 +24,7 @@ from app.scheduler import (
     _x_fallback_advice,
     extract_tweet_id,
     flush_digest,
+    format_startup_message,
     keepalive_weibo_cookie,
     keepalive_xueqiu_cookie,
     maybe_alert_x_fallback,
@@ -2246,7 +2247,26 @@ def test_startup_message_only_to_admins(monkeypatch):
 
     asyncio.run(scheduler._send_startup_message())
 
-    assert sent == [("111", "✅ V Push服务已启动")]
+    from app.version import APP_VERSION
+
+    assert len(sent) == 1 and sent[0][0] == "111"
+    assert sent[0][1].startswith("✅ V Push服务已启动")
+    assert f"v{APP_VERSION} · " in sent[0][1]
+
+
+def test_format_startup_message_instance_version_time(monkeypatch):
+    from app.fetchers.base import CN_TZ
+    from app.version import APP_VERSION as ver
+
+    now = datetime.datetime(2026, 9, 5, 11, 36, tzinfo=CN_TZ)
+    monkeypatch.delenv("VPUSH_INSTANCE", raising=False)
+    assert format_startup_message(now=now) == (
+        f"✅ V Push服务已启动\nv{ver} · 2026-09-05 11:36 +0800"
+    )
+    monkeypatch.setenv("VPUSH_INSTANCE", "vpush.net / DMIT")
+    assert format_startup_message(now=now) == (
+        f"✅ V Push服务已启动\nvpush.net / DMIT\nv{ver} · 2026-09-05 11:36 +0800"
+    )
 
 
 def test_startup_message_respects_push_channels(monkeypatch):
@@ -2296,7 +2316,11 @@ def test_startup_message_respects_push_channels(monkeypatch):
 
     asyncio.run(scheduler._send_startup_message())
 
-    assert sent["tg"] == [("111", "✅ V Push服务已启动")]
+    from app.version import APP_VERSION
+
+    assert len(sent["tg"]) == 1 and sent["tg"][0][0] == "111"
+    assert sent["tg"][0][1].startswith("✅ V Push服务已启动")
+    assert f"v{APP_VERSION} · " in sent["tg"][0][1]
     assert sent["fs"] == []  # 未勾选飞书 → 不发
 
 

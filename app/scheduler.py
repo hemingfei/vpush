@@ -1840,6 +1840,19 @@ def _start_weibo_qr_renewal(db: DB, notifiers: list[Notifier]) -> bool:
     return True
 
 
+def format_startup_message(*, now: datetime | None = None, instance: str | None = None) -> str:
+    from .version import APP_VERSION
+
+    if instance is None:
+        instance = (os.environ.get("VPUSH_INSTANCE") or "").strip()
+    stamp = (now or datetime.now(CN_TZ)).strftime("%Y-%m-%d %H:%M +0800")
+    lines = ["✅ V Push服务已启动"]
+    if instance:
+        lines.append(instance)
+    lines.append(f"v{APP_VERSION} · {stamp}")
+    return "\n".join(lines)
+
+
 class Scheduler:
     def __init__(
         self,
@@ -1919,7 +1932,7 @@ class Scheduler:
 
         from .channels import build_channel_notifier, iter_user_channels
 
-        message = "✅ V Push服务已启动"
+        message = format_startup_message()
         client = httpx.Client(timeout=15)
         sent_any = False
         try:
