@@ -84,7 +84,9 @@ def _client_factory(handler):
 def test_process_pending_uploads_and_rewrites_feed(db, cfg, monkeypatch):
     imgbed.configure(type("C", (), {"imgbed": cfg})())
     uploaded = {}
+    prewarmed = []
     monkeypatch.setattr(imgbed, "_download", lambda url: (JPEG, "image/jpeg"))
+    monkeypatch.setattr(imgbed, "_prewarm_hosted_async", lambda url: prewarmed.append(url))
 
     def handler(request: httpx.Request):
         uploaded["auth"] = request.headers.get("authorization")
@@ -98,6 +100,7 @@ def test_process_pending_uploads_and_rewrites_feed(db, cfg, monkeypatch):
     assert uploaded["auth"] == "Bearer imgbed_testtoken"
     assert uploaded["folder"] == "vpush"
     assert uploaded["channel"] == "vpush-imgbed"
+    assert prewarmed == [HOSTED]
     kid = db.add_kol("twitter", "A", "1")
     db.insert_post("twitter", kid, "p1", "t", "c", "u", "", images=[SOURCE])
     assert db.list_posts()[0]["images"] == [HOSTED]
@@ -107,6 +110,7 @@ def test_same_hash_reuses_hosted_url(db, cfg, monkeypatch):
     imgbed.configure(type("C", (), {"imgbed": cfg})())
     uploads = {"n": 0}
     monkeypatch.setattr(imgbed, "_download", lambda url: (JPEG, "image/jpeg"))
+    monkeypatch.setattr(imgbed, "_prewarm_hosted_async", lambda url: None)
 
     def handler(request: httpx.Request):
         uploads["n"] += 1

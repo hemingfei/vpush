@@ -4351,6 +4351,24 @@ class DB:
             (max(int(limit), 1),),
         )
 
+    def list_untranslated_truth_posts(self, limit: int = 3, days: int = 1) -> list[dict]:
+        """最近未翻译的 Truth 帖（content_src 为空），供后台低频回填。"""
+        return self._rows(
+            "SELECT id, title, content FROM posts "
+            "WHERE platform = 'truth' AND content_src = '' AND length(content) >= 20 "
+            "AND published_at >= datetime('now', ?) "
+            "ORDER BY id DESC LIMIT ?",
+            (f"-{int(days)} day", max(int(limit), 1)),
+        )
+
+    def set_post_translation(
+        self, post_id: int, title: str, content: str, title_src: str, content_src: str
+    ) -> None:
+        self._execute(
+            "UPDATE posts SET title = ?, content = ?, title_src = ?, content_src = ? WHERE id = ?",
+            (title or "", content or "", title_src or "", content_src or "", int(post_id)),
+        )
+
     def list_pending_hosted_images(self, limit: int = 8) -> list[dict]:
         from .imgbed import retry_cutoff
 

@@ -404,6 +404,55 @@ def translate_text(
     return text
 
 
+def _truth_backfill_candidate(text: str) -> bool:
+    """值得回填的原文：去掉链接后仍有实质英文内容（纯链接/中文帖不翻）。"""
+    value = (text or "").strip()
+    if len(value) < 20:
+        return False
+    without_links = re.sub(r"https?://\S+", "", value).strip()
+    if len(without_links) < 8 or _already_chinese(value):
+        return False
+    return sum(1 for ch in value if ch.isascii() and ch.isalpha()) >= 8
+
+
+def backfill_truth_translations(db, limit: int = 3) -> int:
+    """低频补翻特朗普近 1 天漏翻的帖子；每轮少量，回填完自然停。
+
+    译不动（原样返回/收成省略号）的帖子写 src=content 标记为已处理，避免每轮重扫。
+    """
+    rows = db.list_untranslated_truth_posts(limit=limit * 3)
+    if not rows:
+        return 0
+    from .fetchers.twitter import configured_twitter_cookie
+
+    tw_cookie = configured_twitter_cookie(db)
+    done = 0
+    for row in rows:
+        if done >= limit:
+            break
+        content = (row["content"] or "").strip()
+        if not _truth_backfill_candidate(content):
+            db.set_post_translation(row["id"], row["title"] or "", content, row["title"] or "", content)
+            continue
+        try:
+            translated = translate_text(content, twitter_cookie=tw_cookie)
+        except Exception as exc:  # noqa: BLE001 - 单帖失败留待下轮
+            logger.warning("Truth 翻译回填失败 post=%s err=%s", row["id"], exc)
+            continue
+        if not translated or is_collapsed_translation(translated, content) or translated == content:
+            db.set_post_translation(row["id"], row["title"] or "", content, row["title"] or "", content)
+            continue
+        db.set_post_translation(
+            row["id"],
+            translated.splitlines()[0][:80],
+            translated,
+            row["title"] or "",
+            content,
+        )
+        done += 1
+    return done
+
+
 class PushRetryQueue:
     """推送失败重试队列：指数退避（1m/5m/15m），超过次数放弃。"""
 
@@ -1892,6 +1941,7 @@ class Scheduler:
         self._last_knowledge_notify = 0.0
         self._last_proxy_tick = 0.0
         self._last_imgbed = 0.0
+        self._last_truth_backfill = 0.0
 
     def _submit_news_due(self):
         if self.news_service is None:
@@ -2166,6 +2216,13 @@ class Scheduler:
                     await asyncio.to_thread(imgbed.process_pending, self.db)
                 except Exception:  # noqa: BLE001
                     logger.exception("图床镜像异常")
+            if now_mono - self._last_truth_backfill >= 60:
+                self._last_truth_backfill = now_mono
+                try:
+                    if _polling_bool(self.db, "config_translate_twitter_content", False):
+                        await asyncio.to_thread(backfill_truth_translations, self.db)
+                except Exception:  # noqa: BLE001
+                    logger.exception("Truth 翻译回填异常")
             # 股票黑话别名识别 + 误标清理：每天一次（配 LLM 才识别，清理恒执行）
             if self._stock_alias_due():
                 ran = False
