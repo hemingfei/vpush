@@ -314,7 +314,9 @@ textarea.form-control {
   resize: vertical;
 }
 .cf-turnstile:empty { display: none; }
-.cf-turnstile { margin: 0; }
+.cf-turnstile { margin: 0 auto; }
+/* Turnstile 在沙箱 iframe 内无法染 CSS，用 hue-rotate 把 Cloudflare 橙云(≈28°)转到主题蓝(≈216°)；副作用是通过后的绿勾也会偏蓝紫 */
+.cf-turnstile > iframe { filter: hue-rotate(188deg); }
 .form-error { color: var(--color-danger); font-size: var(--text-sm); min-height: 18px; margin: 0 0 12px; }
 .btn-normal {
   height: var(--control-height-2xl);
