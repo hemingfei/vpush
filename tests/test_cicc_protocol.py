@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 
 import pytest
 from conftest import load_vps_script
@@ -321,3 +322,104 @@ def test_retry_keeps_original_keywords(ctrl, monkeypatch):
     assert argv[argv.index("--keywords") + 1] == "宁德时代"
     r = json.loads((ctrl_dir / "results" / f"{cmd_id}.json").read_text(encoding="utf-8"))
     assert r["status"] == "success" and r["attempts"] == 2
+
+
+# —— 任务 5：时间字段校验 ——
+
+def test_validate_time_of_day_bounds():
+    from app.cicc_collector import validate_time_of_day as v
+
+    for ok in ("00:00", "03:00", "23:59"):
+        assert v(ok) is True
+    for bad in ("3:00", "24:00", "12:60", "12:30:00", "", "ab:cd", "12:3"):
+        assert v(bad) is False, bad
+
+
+def test_api_rejects_invalid_schedule_time(tmp_path, monkeypatch):
+    import os
+    from pathlib import Path
+
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    monkeypatch.delenv("IMA_PULL_URL", raising=False)
+    monkeypatch.setenv("IMA_ARCHIVE_ROOT", str(tmp_path / "archive"))
+    (tmp_path / "archive" / "local" / ".cicc" / "commands").mkdir(parents=True)
+    os.environ["DAV_UI_ONLY"] = "1"
+    app = create_app(config=None, db_path=Path(tmp_path) / "cicc.db")
+    client = TestClient(app)
+    client.app.state.db.add_register_code("CICC01")
+    resp = client.post("/api/auth/register", json={
+        "username": "admin1", "password": "secret123", "code": "CICC01"})
+    data = resp.json()
+    client.app.state.db.update_user(data["user"]["id"], is_admin=True)
+    headers = {"Authorization": f"Bearer {data['token']}"}
+
+    for bad in ("24:00", "12:60", "3:00"):
+        r = client.put("/api/admin/cicc/schedule",
+                       json={"enabled": True, "time": bad}, headers=headers)
+        assert r.status_code == 400, (bad, r.text)
+
+
+def test_dispatch_rejects_invalid_schedule_time(ctrl, monkeypatch):
+    """dispatch 侧 24:99 等必须 invalid_time（永久失败），不得写入 schedule 文件。"""
+    _, archive = ctrl
+    mod, _ = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    for i, bad in enumerate(("24:00", "12:60", "3:00", "")):
+        cmd_id = f"60{i}" + "0" * 30
+        _write_command(ctrl_dir, f"1710000000000-schedule-{cmd_id[:8]}.json",
+                       {"id": cmd_id, "mode": "schedule", "actor": "admin",
+                        "ts": 1710000000, "payload": {"time": bad}})
+    mod.main()
+    assert not (ctrl_dir / "cicc-schedule.json").exists()
+    results = {p.stem: json.loads(p.read_text(encoding="utf-8"))
+               for p in (ctrl_dir / "results").glob("*.json")}
+    assert len(results) == 4
+    for r in results.values():
+        assert r["status"] == "failed" and r["error"] == "invalid_time", r
+
+
+def test_dispatch_accepts_valid_schedule_time(ctrl, monkeypatch):
+    _, archive = ctrl
+    mod, _ = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    cmd_id = "61" * 16
+    _write_command(ctrl_dir, f"1710000000000-schedule-{cmd_id[:8]}.json",
+                   {"id": cmd_id, "mode": "schedule", "actor": "admin",
+                    "ts": 1710000000, "payload": {"time": "05:30"}})
+    mod.main()
+    sched = json.loads((ctrl_dir / "cicc-schedule.json").read_text(encoding="utf-8"))
+    assert sched == {"time": "05:30"}
+
+
+def test_dispatch_rejects_future_ts(ctrl, monkeypatch):
+    """命令 ts 未来超过允许时钟偏差 → invalid_ts（永久失败）。"""
+    _, archive = ctrl
+    mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    cmd_id = "62" * 16
+    far_future = int(time.time()) + 3600 * 24 * 30  # 未来 30 天
+    _write_command(ctrl_dir, f"1710000000000-incr-{cmd_id[:8]}.json",
+                   {"id": cmd_id, "mode": "incr", "actor": "admin",
+                    "ts": far_future, "payload": {}})
+    mod.main()
+    assert not launched
+    r = json.loads((ctrl_dir / "results" / f"{cmd_id}.json").read_text(encoding="utf-8"))
+    assert r["status"] == "failed" and r["error"] == "invalid_ts"
+
+
+def test_dispatch_accepts_past_ts(ctrl, monkeypatch):
+    """过去 ts（重试/回补场景）必须放行，不得因时间而失败。"""
+    _, archive = ctrl
+    mod, launched = _dispatch(monkeypatch, archive / "local" / ".cicc", archive)
+    ctrl_dir = archive / "local" / ".cicc"
+    cmd_id = "63" * 16
+    _write_command(ctrl_dir, f"1710000000000-incr-{cmd_id[:8]}.json",
+                   {"id": cmd_id, "mode": "incr", "actor": "admin",
+                    "ts": 1710000000, "payload": {}})
+    mod.main()
+    assert launched
+    r = json.loads((ctrl_dir / "results" / f"{cmd_id}.json").read_text(encoding="utf-8"))
+    assert r["status"] == "success"

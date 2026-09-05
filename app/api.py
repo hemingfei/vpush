@@ -4284,15 +4284,13 @@ def create_api_router(
 
     @router.put("/admin/cicc/schedule", dependencies=[Depends(require_admin)])
     def cicc_set_schedule(body: CiccScheduleIn, admin: dict = Depends(require_admin)):
-        import re as _re
-
-        from .cicc_collector import from_env
+        from .cicc_collector import from_env, validate_time_of_day
 
         ctl = from_env()
         if ctl is None:
             raise HTTPException(status_code=503, detail="当前部署未挂载存储归档")
-        if body.time is not None and not _re.fullmatch(r"\d{2}:\d{2}", body.time):
-            raise HTTPException(status_code=400, detail="时间格式应为 HH:mm")
+        if body.time is not None and not validate_time_of_day(body.time):
+            raise HTTPException(status_code=400, detail="时间格式应为 HH:mm（00:00-23:59）")
         result = ctl.set_schedule(body.enabled)
         if body.time is not None:
             result.update(ctl.set_schedule_time(body.time, admin["username"]))

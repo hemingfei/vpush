@@ -50,6 +50,13 @@ PERMANENT_ERRORS = {"unknown_mode", "invalid_time", "invalid_categories",
                     "invalid_json", "backup_script_missing",
                     "consistency_script_missing", "dedup_script_missing"}
 RESULT_STALE_SECONDS = 600  # running 结果超时视为上次运行崩溃，恢复重试
+MAX_TS_FUTURE = 300  # 命令 ts 允许的最大未来偏差（秒），防伪造/损坏时间戳
+_TIME_RE = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")
+
+
+def valid_time_of_day(value) -> bool:
+    """HH:mm 严格校验：00:00..23:59（旧实现会放过 24:99）。"""
+    return isinstance(value, str) and bool(_TIME_RE.fullmatch(value))
 
 
 def validate_command(cmd: dict) -> str | None:
@@ -65,6 +72,8 @@ def validate_command(cmd: dict) -> str | None:
     ts = cmd.get("ts")
     if not isinstance(ts, int) or isinstance(ts, bool) or ts <= 0:
         return "invalid_ts"
+    if ts > int(time.time()) + MAX_TS_FUTURE:
+        return "invalid_ts"  # 未来时间超允许偏差
     payload = cmd.get("payload")
     if payload is not None and not isinstance(payload, dict):
         return "invalid_payload"
@@ -161,8 +170,8 @@ def main() -> None:
                            "ui_compress.log")
                     entry["ok"] = True
                 elif mode == "schedule":
-                    sched = str(payload.get("time") or "")
-                    if sched and re.fullmatch(r"\d{2}:\d{2}", sched):
+                    sched = payload.get("time")
+                    if valid_time_of_day(sched):
                         write_json(SCHEDULE_FILE, {"time": sched})
                         entry["ok"] = True
                     else:

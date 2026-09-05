@@ -18,6 +18,14 @@ from pathlib import Path
 MODES = ("incr", "year", "all", "stop", "compress", "schedule", "settings", "backup")
 STATUS_STALE_SECONDS = 300
 
+# 严格 HH:mm：小时 00..23、分钟 00..59（旧实现 \\d{2}:\\d{2} 会放过 24:99）
+_TIME_RE = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")
+
+
+def validate_time_of_day(value: str) -> bool:
+    """HH:mm 严格校验：00:00..23:59。"""
+    return isinstance(value, str) and bool(_TIME_RE.fullmatch(value))
+
 # 中金官网一级品类（collector SLUG_MAP 同源；前端多选与后端校验共用这份名单）
 CICC_CATEGORIES = ("宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
                    "量化及ESG", "大宗商品", "外汇研究", "固定收益", "中金研究院", "其他")
@@ -69,6 +77,8 @@ class CiccControl:
 
     def set_schedule_time(self, time_of_day: str, actor: str) -> dict:
         """下发采集时间（HH:mm），存储机 dispatch 写 cicc-schedule.json。"""
+        if not validate_time_of_day(time_of_day):
+            raise ValueError("时间格式应为 HH:mm（00:00-23:59）")
         return self.trigger("schedule", actor, extra={"time": time_of_day})
 
     def set_cicc_settings(self, categories: list[str], actor: str,
