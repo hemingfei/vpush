@@ -798,7 +798,7 @@ def test_version_api(monkeypatch):
 
 def test_kol_request_requires_category(monkeypatch):
     """用户申请必须带已有分类；审批沿用申请上的分类。"""
-    monkeypatch.setattr("app.api.resolve_profile", lambda uid, cookie="", db=None: {})
+    monkeypatch.setattr("app.kol_requests.resolve_profile", lambda uid, cookie="", db=None: {})
     client = make_client()
     db = client.app.state.db
     headers = user_headers(client, "askcatreq")
@@ -990,7 +990,7 @@ def test_approve_garbage_request_returns_clear_error():
 
 def test_approve_legacy_at_twitter_request(monkeypatch):
     """旧 twitter 申请（@用户名 原样入库，未经归一化）审批二次校验应放行。"""
-    monkeypatch.setattr("app.api.resolve_x_profile", lambda uid, cookie="", db=None: {})
+    monkeypatch.setattr("app.kol_requests.resolve_x_profile", lambda uid, cookie="", db=None: {})
     client = make_client()
     admin_headers = auth_headers(client)
     u = register(client, "atuser", "pass123456")
@@ -1042,7 +1042,7 @@ def test_kol_request_tg_fail_falls_back_to_feishu(monkeypatch):
 
 def test_tg_callback_approve_reject_kol_request(monkeypatch):
     """TG 审批按钮回调：管理员点通过/拒绝直接生效，非管理员被拒绝。"""
-    monkeypatch.setattr("app.api.resolve_profile", lambda uid, cookie="", db=None: {})
+    monkeypatch.setattr("app.kol_requests.resolve_profile", lambda uid, cookie="", db=None: {})
     client = make_client()
     auth_headers(client)
     db = client.app.state.db
@@ -1100,7 +1100,7 @@ def test_tg_callback_approve_reject_kol_request(monkeypatch):
 
 def test_tg_callback_approve_kol_request_with_category(monkeypatch):
     """管理员审批时选分类，上架后 category_id 写入。"""
-    monkeypatch.setattr("app.api.resolve_profile", lambda uid, cookie="", db=None: {})
+    monkeypatch.setattr("app.kol_requests.resolve_profile", lambda uid, cookie="", db=None: {})
     client = make_client()
     auth_headers(client)
     db = client.app.state.db
@@ -2095,7 +2095,7 @@ def test_admin_can_clear_saved_cookies(monkeypatch):
 
 def test_kol_request_flow(monkeypatch):
     # 审批时会自动解析昵称/头像，测试里避免真实网络请求
-    monkeypatch.setattr("app.api.resolve_profile", lambda uid, cookie="", db=None: {})
+    monkeypatch.setattr("app.kol_requests.resolve_profile", lambda uid, cookie="", db=None: {})
     client = make_client()
     admin_headers = auth_headers(client)
     u1 = register(client, "user01", "pass123456")
@@ -3502,7 +3502,7 @@ def test_approve_request_auto_resolves_name_and_avatar(monkeypatch):
         json={"platform": "xueqiu", "external_id": "https://xueqiu.com/u/55555", "category_id": cid},
     )
     monkeypatch.setattr(
-        "app.api.resolve_profile",
+        "app.kol_requests.resolve_profile",
         lambda uid, cookie="", db=None: {"screen_name": "自动昵称", "avatar_url": ""},
     )
     req_id = client.get("/api/admin/kol-requests?status=pending", headers=admin_headers).json()[0]["id"]

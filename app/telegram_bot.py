@@ -7,7 +7,6 @@ import logging
 import time
 
 import httpx
-from fastapi import HTTPException
 
 from .bot_core import SubscriptionBot
 from .notifiers.telegram import _tg_rate_limiter
@@ -302,7 +301,7 @@ class TelegramBot:
                 request_id = int(parts[1])
             except (ValueError, IndexError):
                 request_id = 0
-            from .api import _do_approve_kol_request, _do_reject_kol_request
+            from .kol_requests import KolRequestError, approve_kol_request, reject_kol_request
 
             try:
                 if data.startswith("approve:"):
@@ -321,7 +320,7 @@ class TelegramBot:
                         category_id = int(parts[2])
                     except (ValueError, IndexError):
                         category_id = 0
-                    kol = _do_approve_kol_request(
+                    kol = approve_kol_request(
                         self.db, request_id, user,
                         category_id=category_id or None,
                     )
@@ -334,10 +333,10 @@ class TelegramBot:
                             f"✅ 已通过「{kol['name']}」的添加申请（{cat}），已上架并自动订阅申请人",
                         )
                 else:
-                    _do_reject_kol_request(self.db, request_id, user)
+                    reject_kol_request(self.db, request_id, user)
                     self._edit(chat_id, message_id, "❌ 已拒绝该添加申请")
-            except HTTPException as exc:
-                self._edit(chat_id, message_id, f"审批失败：{exc.detail}")
+            except KolRequestError as exc:
+                self._edit(chat_id, message_id, f"审批失败：{exc}")
             return
         if data.startswith(("sec:", "secundo:", "unsubundo:", "unsub:")):
             self._handle_sub_action(data, chat_id, message_id, msg, user)
