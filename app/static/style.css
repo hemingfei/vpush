@@ -2479,10 +2479,22 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   .icon-badge-bar .tl-actions button:active .star-icon { transform: scale(0.9); }
   .icon-badge-bar > .fav-toggle,
   .icon-badge-bar .tl-actions button { font-size: 0; gap: 0; }
-  /* 选中/激活收进章本身：章变 Duty Blue、图形反白（含位图灰度/反白滤镜，见全局规则） */
+  /* 独立蓝底不受位图反白滤镜影响，所有平台共用同一尺寸。 */
+  .icon-badge-bar .tl-pill { position: relative; isolation: isolate; }
+  .icon-badge-bar .tl-pill.selected::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    width: min(34px, 92%);
+    aspect-ratio: 1;
+    border-radius: 50%;
+    background: var(--color-accent);
+    pointer-events: none;
+  }
   .icon-badge-bar .tl-pill.selected .pt-icon { background: transparent; }
   .icon-badge-bar > .fav-toggle.fav-on .star-icon,
-  .icon-badge-bar .tl-actions button.has-filter .funnel-icon { background: var(--color-accent); color: #fff; }
+  .icon-badge-bar > .home-filter-toggle.has-filter .funnel-icon,
+  .icon-badge-bar .tl-actions button.has-filter .funnel-icon { background: var(--color-accent); color: var(--color-white); }
   .home-head .icon-badge-bar { margin-top: 10px; }
   .tl-new-badge-btn { min-height: 44px; overflow: hidden; }
   .kol-item { flex-wrap: wrap; }
@@ -3131,26 +3143,8 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   list-style: none;
 }
 .ima-reader-abstract summary::-webkit-details-marker { display: none; }
-.ima-abstract-copy-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 26px;
-  padding: 2px 10px;
-  border: var(--border-default);
-  border-radius: var(--radius-pill);
-  background: var(--color-surface);
-  color: var(--color-text-muted);
-  font: inherit;
-  font-size: var(--text-xs);
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-.ima-abstract-copy-btn:hover {
-  background: var(--color-surface-hover);
-  color: var(--color-accent-text);
-  border-color: var(--color-accent);
-}
+.ima-abstract-copy-btn { flex-shrink: 0; }
+.ima-abstract-copy-btn svg { width: 16px; height: 16px; }
 .ima-reader-abstract p { margin: 6px 0 0; max-width: 72ch; line-height: 1.7; }
 .ima-reader-abstract.is-clamped:not(.is-expanded) p {
   display: -webkit-box;
