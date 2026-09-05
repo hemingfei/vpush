@@ -96,6 +96,96 @@ def test_telegram_deeplink_start_bind():
     assert db.get_user(bot_account["id"]) is None
 
 
+def test_bind_code_rate_limit_and_isolation():
+    db, bot, sent = make_bot()
+    target_id = db.add_user("web_user", "hash")
+    other_id = db.add_user("other", "hash")
+    db.create_bind_code("654321", target_id, 9999999999)
+    db.create_bind_code("777888", other_id, 9999999999)
+    for i in range(8):
+        bot.handle("telegram_chat_id", "111", "u1", f"{i:06d}")
+        assert sent[-1] == "绑定码无效或已过期，请重新生成"
+    bot.handle("telegram_chat_id", "111", "u1", "654321")
+    assert sent[-1] == "绑定码无效或已过期，请重新生成"
+    assert db.get_bind_code("654321") is not None
+    bot.handle("telegram_chat_id", "222", "u2", "654321")
+    assert "已绑定到账号 web_user" in sent[-1]
+    assert db.get_bind_code("654321") is None
+    assert db.get_bind_code("777888") is not None
+
+
+def test_bind_code_expired_and_missing_share_message():
+    db, bot, sent = make_bot()
+    target_id = db.add_user("web_user", "hash")
+    db.create_bind_code("654321", target_id, 1)
+    bot.handle("telegram_chat_id", "111", "u1", "654321")
+    assert sent[-1] == "绑定码无效或已过期，请重新生成"
+    bot.handle("telegram_chat_id", "111", "u1", "000000")
+    assert sent[-1] == "绑定码无效或已过期，请重新生成"
+    bot.handle("telegram_chat_id", "111", "u1", "/bind 654321")
+    assert sent[-1] == "绑定码无效或已过期，请重新生成"
+
+
+def test_bind_code_concurrent_consume_once():
+    import threading
+
+    db, bot, sent = make_bot()
+    target_id = db.add_user("web_user", "hash")
+    db.create_bind_code("654321", target_id, 9999999999)
+    errors = []
+
+    def run(chat_id):
+        try:
+            bot.handle("telegram_chat_id", chat_id, chat_id, "654321")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run, args=(str(i),)) for i in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    assert sum("已绑定到账号 web_user" in msg for msg in sent) == 1
+    assert db.get_bind_code("654321") is None
+    assert db.get_user(target_id)["telegram_chat_id"] in {str(i) for i in range(8)}
+
+
+def test_bind_quota_is_atomic_across_db_connections(tmp_path):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    path = tmp_path / "bind-quota.sqlite"
+    dbs = [DB(path) for _ in range(8)]
+    try:
+        for _ in range(7):
+            dbs[0].consume_bind_quota("try:telegram_chat_id:1", 600, 8, 600)
+        barrier = threading.Barrier(len(dbs))
+
+        def consume(db):
+            barrier.wait(timeout=5)
+            return db.consume_bind_quota("try:telegram_chat_id:1", 600, 8, 600)[0]
+
+        with ThreadPoolExecutor(max_workers=len(dbs)) as pool:
+            outcomes = list(pool.map(consume, dbs))
+        assert sum(outcomes) == 1
+        assert dbs[0]._rows(
+            "SELECT count FROM bind_quota WHERE key = ?", ("try:telegram_chat_id:1",)
+        )[0]["count"] == 8
+    finally:
+        for db in dbs:
+            db.close()
+
+
+def test_feishu_bind_uses_open_id():
+    db, bot, sent = make_bot()
+    target_id = db.add_user("web_user", "hash")
+    db.create_bind_code("654321", target_id, 9999999999)
+    bot.handle("feishu_open_id", "ou_1", "u1", "/bind 654321")
+    assert "已绑定到账号 web_user" in sent[-1]
+    assert db.get_user(target_id)["feishu_open_id"] == "ou_1"
+
+
 def test_search_by_name_and_external_id():
     db, bot, sent = make_bot()
     db.add_kol("xueqiu", "茅台一哥", "111")

@@ -1,4 +1,4 @@
-// MX 平台大V实时观点页（/mx-views）——页面级暗色终端，样式全部 .mxv- 前缀
+// 智囊团（MX 平台大V实时观点页 /mx-views）——页面级暗色终端，样式全部 .mxv- 前缀
 // 与其他视图一致走工厂注入；内联 onclick 用到的函数由 app.js 解构后挂进 INLINE_HANDLERS
 export function createMxViewsView(dependencies) {
   const {
@@ -21,7 +21,25 @@ export function createMxViewsView(dependencies) {
     atLatest: true, hasNew: false, es: null, sseOk: false, pollTimer: null, clockTimer: null, drawer: null,
     followed: new Set(), kolMode: "kol", kolExpanded: false, kolStockTargets: [],
     feedBatches: [], feedKey: "", feedPending: false, feedLoading: false, feedFailed: false,
-    applySeq: 0, tlDrag: false, tlPreviewIdx: -1 };
+    applySeq: 0, tlDrag: false, tlPreviewIdx: -1,
+    hlKey: "", hlPinned: false, boardMode: { topic: "heat", stock: "heat" }, hlDocBound: false };
+
+  // 点页面空白/Esc 解除高亮锁定（工厂级只绑一次；事件里按路由存活状态自然失效）
+  if (!_mxv.hlDocBound) {
+    _mxv.hlDocBound = true;
+    document.addEventListener("click", (e) => {
+      if (!_mxv.hlPinned) return;
+      if (e.target.closest && e.target.closest(".mxv-root")) return; // 根内点击由各自处理器负责
+      _mxv.hlPinned = false;
+      mxvSetHighlight("");
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && _mxv.hlPinned) {
+        _mxv.hlPinned = false;
+        mxvSetHighlight("");
+      }
+    });
+  }
 
   function mxvTeardown() {
     if (_mxv.es) { try { _mxv.es.close(); } catch (e) {} _mxv.es = null; }
@@ -36,13 +54,13 @@ export function createMxViewsView(dependencies) {
     const dr = document.querySelector(".mxv-drawer"); if (dr) dr.remove();
     Object.assign(_mxv, { day: null, payload: null, at: null, drawer: null, hasNew: false, sseOk: false,
       feedBatches: [], feedKey: "", feedPending: false, feedLoading: false, feedFailed: false,
-      tlDrag: false, tlPreviewIdx: -1 });
+      tlDrag: false, tlPreviewIdx: -1, hlKey: "", hlPinned: false });
   }
 
   async function renderMxViews(seq) {
     mxvTeardown();
     _mxv.seq = seq;
-    setPageTitle("MX观点");
+    setPageTitle("智囊团");
     $("#main").innerHTML = `<div class="mxv-root"><div class="mxv-empty">加载中…</div></div>`;
     try {
       const [daysData, subRows] = await Promise.all([
@@ -65,7 +83,7 @@ export function createMxViewsView(dependencies) {
 
   async function mxvLoadDay(day, seq) {
     if (!day) {
-      $("#main").innerHTML = `<div class="mxv-root"><div class="mxv-empty">暂无快照数据：请管理员在后台开启「MX观点」并等待快照，或使用「回填」生成历史。</div></div>`;
+      $("#main").innerHTML = `<div class="mxv-root"><div class="mxv-empty">暂无快照数据：请管理员在后台开启「智囊团」并等待快照，或使用「回填」生成历史。</div></div>`;
       return;
     }
     const dayData = await api(`/api/mx-views/day?day=${encodeURIComponent(day)}`);
@@ -183,6 +201,7 @@ export function createMxViewsView(dependencies) {
     mxvBindTimeline();
     mxvBindKolResize();
     mxvRenderBoards();
+    mxvBindBoardHighlight();
     mxvRenderDrawer();
   }
 
@@ -356,7 +375,8 @@ export function createMxViewsView(dependencies) {
       const target = it.type === "stock" ? "stock" : "topic";
       window._mxvTargets.push({ type: target, name: it.name });
       const idx = window._mxvTargets.length - 1;
-      return `<span class="mxv-chip ${cls}" onclick="mxvOpenTargetAt(${idx})">${escapeHtml(label)}</span>`;
+      return `<span class="mxv-chip ${cls}" data-mxv-hl="${target}:${escapeHtml(it.name)}"
+        onclick="mxvOpenTargetAt(${idx})">${escapeHtml(label)}</span>`;
     }).join("");
   }
 
@@ -397,7 +417,7 @@ export function createMxViewsView(dependencies) {
         window._mxvTargets.push({ type: "topic", name: t.name });
         const ti = window._mxvTargets.length - 1;
         return `
-        <div class="mxv-row" onclick="mxvOpenTargetAt(${ti})">
+        <div class="mxv-row" data-mxv-hl="topic:${escapeHtml(t.name)}" onclick="mxvOpenTargetAt(${ti})">
           <span class="rank">${i + 1}</span><span class="name">${escapeHtml(t.name)}</span>
           ${mxvRatioHtml(t.bull, t.bear)}
           <span class="mxv-net ${t.net > 0 ? "bull" : t.net < 0 ? "bear" : "flat"}">${t.bull}多/${t.bear}空</span>
@@ -409,7 +429,7 @@ export function createMxViewsView(dependencies) {
         window._mxvTargets.push({ type: "stock", name: s.name });
         const si = window._mxvTargets.length - 1;
         return `
-        <div class="mxv-row" onclick="mxvOpenTargetAt(${si})">
+        <div class="mxv-row" data-mxv-hl="stock:${escapeHtml(s.name)}" onclick="mxvOpenTargetAt(${si})">
           <span class="rank">${i + 1}</span><span class="name">${escapeHtml(s.name)}</span>
           ${mxvRatioHtml(s.bull, s.bear)}
           <span class="mxv-net ${s.net > 0 ? "bull" : s.net < 0 ? "bear" : "flat"}">${s.strength}</span>
@@ -417,14 +437,59 @@ export function createMxViewsView(dependencies) {
           <span class="mxv-actions">${escapeHtml(actions)}</span>
         </div>`;
       }).join("");
+      const topicBody = _mxv.boardMode.topic === "list"
+        ? topicRows : mxvHeatHtml(p.topics || [], "topic", "暂无题材观点");
+      const stockBody = _mxv.boardMode.stock === "list"
+        ? stockRows : mxvHeatHtml(p.stocks || [], "stock", "暂无个股观点");
       boards.innerHTML = `
         <div class="mxv-boards">
-          <div class="mxv-board"><h3>题材多空榜</h3>${topicRows || `<div class="mxv-empty">暂无题材观点</div>`}</div>
-          <div class="mxv-board"><h3>个股强度榜</h3>${stockRows || `<div class="mxv-empty">暂无个股观点</div>`}</div>
+          <div class="mxv-board">${mxvBoardHead("topic", "题材多空榜", (p.topics || []).length)}${topicBody}</div>
+          <div class="mxv-board">${mxvBoardHead("stock", "个股强度榜", (p.stocks || []).length)}${stockBody}</div>
         </div>`;
     }
     mxvRenderFeed();
     mxvRenderKols();
+    if (_mxv.hlKey) mxvSetHighlight(_mxv.hlKey); // 重渲染后恢复高亮
+  }
+
+  // ---- 双榜头部：标题+标的数 + 热力/明细切换 ----
+  function mxvBoardHead(kind, label, count) {
+    const mode = _mxv.boardMode[kind] === "list" ? "list" : "heat";
+    return `
+      <div class="mxv-board-head">
+        <h3>${label}${count ? `<span class="cnt">${count}</span>` : ""}</h3>
+        <div class="mxv-mode" role="tablist" aria-label="${label}视图切换">
+          <button type="button" class="${mode === "heat" ? "on" : ""}" onclick="mxvBoardMode('${kind}','heat')" aria-pressed="${mode === "heat"}">热力</button>
+          <button type="button" class="${mode === "list" ? "on" : ""}" onclick="mxvBoardMode('${kind}','list')" aria-pressed="${mode === "list"}">明细</button>
+        </div>
+      </div>
+      ${mode === "heat" ? `<div class="mxv-heat-legend">颜色=净方向 · 深浅大小=提及热度 · 悬停联动观点流，点击看时间线</div>` : ""}`;
+  }
+
+  // ---- 热力标签云：提及总数降序铺开，颜色=净方向，深浅字号=热度；一眼看出议论焦点 ----
+  function mxvHeatHtml(rows, type, emptyText) {
+    const sorted = [...rows].sort((a, b) =>
+      (b.bull + b.bear) - (a.bull + a.bear) || Math.abs(b.net) - Math.abs(a.net));
+    if (!sorted.length) return `<div class="mxv-empty">${emptyText}</div>`;
+    const max = Math.max(1, ...sorted.map((r) => r.bull + r.bear));
+    return `<div class="mxv-heat-wrap">${sorted.map((r) => {
+      const total = r.bull + r.bear;
+      const ratio = total / max;
+      const lvl = ratio >= 0.75 ? 4 : ratio >= 0.5 ? 3 : ratio >= 0.25 ? 2 : 1;
+      const dir = r.net > 0 ? "bull" : r.net < 0 ? "bear" : "neutral";
+      window._mxvTargets.push({ type, name: r.name });
+      const idx = window._mxvTargets.length - 1;
+      const net = r.net > 0 ? `+${r.net}` : `${r.net}`;
+      return `<span class="mxv-heat ${dir} h${lvl}" data-mxv-hl="${type}:${escapeHtml(r.name)}"
+        onclick="mxvOpenTargetAt(${idx})"
+        title="${escapeHtml(r.name)}：多${r.bull} / 空${r.bear} · 净${net}${r.momentum ? ` · 动能${r.momentum > 0 ? "+" : ""}${r.momentum}` : ""}">${escapeHtml(r.name)}<b>${total}</b></span>`;
+    }).join("")}</div>`;
+  }
+
+  function mxvBoardMode(kind, mode) {
+    if (_mxv.boardMode[kind] === mode) return;
+    _mxv.boardMode[kind] = mode;
+    mxvRenderBoards();
   }
 
   // ---- 大V观点总览：今日操作下方；默认一行，更多展开；关注置顶；大V/个股两种卡片 ----
@@ -542,6 +607,19 @@ export function createMxViewsView(dependencies) {
   }
 
   // ---- 实时观点流：当日全部批次（首个→当前），批内时间倒序，批次横线分隔 ----
+  // 批内两列报纸流：左列装较新一半（顶部=最新），右列续排（底部=最早）；窄屏回落单列
+  function mxvFeedItemHtml(o, fresh) {
+    return `
+    <div class="mxv-feed-item${fresh ? " fresh" : ""}" data-mxv-hl="${escapeHtml(`${o.target_type || ""}:${o.target_name || ""}`)}">
+      <span class="t" style="color:var(--mxv-accent)">${escapeHtml((o.occurred_at || "").slice(11, 16))}</span>
+      <span class="mxv-badge ${o.direction}">${o.direction === "bull" ? "↑看多" : o.direction === "bear" ? "↓看空" : "中性"}</span>
+      ${o.action ? `<span class="mxv-badge act">${escapeHtml(o.action)}</span>` : ""}
+      <span class="target" style="color:var(--mxv-text)">${escapeHtml(o.target_name)}</span>
+      <span style="color:var(--mxv-muted)">· ${escapeHtml(o.kol_name)}</span>
+      <span class="sum" style="color:var(--mxv-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(o.summary || "")}</span>
+    </div>`;
+  }
+
   function mxvRenderFeed() {
     const feed = $("#mxv-feed");
     if (!feed) return;
@@ -557,20 +635,61 @@ export function createMxViewsView(dependencies) {
     }
     const total = batches.reduce((acc, b) => acc + (b.opinions || []).length, 0);
     const html = batches.map((b, bi) => {
-      const items = (b.opinions || []).map((o, i) => `
-        <div class="mxv-feed-item ${_mxv.atLatest && bi === 0 && i === 0 ? "fresh" : ""}">
-          <span style="color:var(--mxv-accent)">${escapeHtml((o.occurred_at || "").slice(11, 16))}</span>
-          <span class="mxv-badge ${o.direction}">${o.direction === "bull" ? "↑看多" : o.direction === "bear" ? "↓看空" : "中性"}</span>
-          ${o.action ? `<span class="mxv-badge act">${escapeHtml(o.action)}</span>` : ""}
-          <span style="color:var(--mxv-text)">${escapeHtml(o.target_name)}</span>
-          <span style="color:var(--mxv-muted)">· ${escapeHtml(o.kol_name)}</span>
-          <span style="color:var(--mxv-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(o.summary || "")}</span>
-        </div>`).join("");
-      return `<div class="mxv-feed-sep"><span>批次 ${escapeHtml(b.snapshot_at)} · ${(b.opinions || []).length} 条</span></div>${items}`;
+      const ops = b.opinions || [];
+      const cut = Math.ceil(ops.length / 2); // 左列 = 较新一半；最早一条落在右列底部
+      const cols = ops.length > 1 ? [ops.slice(0, cut), ops.slice(cut)] : [ops];
+      const grid = `<div class="mxv-feed-cols${ops.length > 1 ? "" : " single"}">${cols.map((col, ci) =>
+        `<div class="mxv-feed-col">${col.map((o, i) =>
+          mxvFeedItemHtml(o, _mxv.atLatest && bi === 0 && (ops.length > 1 ? ci === 0 : true) && i === 0)).join("")}</div>`).join("")}</div>`;
+      return `<div class="mxv-feed-sep"><span>批次 ${escapeHtml(b.snapshot_at)} · ${ops.length} 条</span></div>${grid}`;
     }).join("");
     feed.innerHTML = head +
       (html || `<div class="mxv-empty">当日暂无观点</div>`) +
       (batches.length ? `<div class="mxv-feed-sep"><span>共 ${total} 条 · ${batches.length} 批次</span></div>` : "");
+    mxvBindFeedHighlight();
+    if (_mxv.hlKey) mxvSetHighlight(_mxv.hlKey); // 重渲染后恢复高亮
+  }
+
+  // ---- 标的高亮联动：悬停/点选任一标的 → 观点流与双榜内同标的集体高亮放大；点击锁定，Esc/点空白解除 ----
+  function mxvSetHighlight(key) {
+    _mxv.hlKey = key || "";
+    document.querySelectorAll(".mxv-root [data-mxv-hl]").forEach((el) => {
+      el.classList.toggle("hl", !!_mxv.hlKey && el.dataset.mxvHl === _mxv.hlKey);
+    });
+  }
+
+  function mxvBindFeedHighlight() {
+    const feed = document.getElementById("mxv-feed");
+    if (!feed || feed.dataset.hlBound) return;
+    feed.dataset.hlBound = "1";
+    feed.addEventListener("pointerover", (e) => {
+      if (_mxv.hlPinned) return;
+      const el = e.target.closest("[data-mxv-hl]");
+      mxvSetHighlight(el ? el.dataset.mxvHl : "");
+    });
+    feed.addEventListener("pointerleave", () => { if (!_mxv.hlPinned) mxvSetHighlight(""); });
+    feed.addEventListener("click", (e) => {
+      const el = e.target.closest("[data-mxv-hl]");
+      const key = el ? el.dataset.mxvHl : "";
+      if (key && _mxv.hlPinned && _mxv.hlKey === key) { _mxv.hlPinned = false; mxvSetHighlight(""); }
+      else if (key) { _mxv.hlPinned = true; mxvSetHighlight(key); }
+      else { _mxv.hlPinned = false; mxvSetHighlight(""); }
+    });
+  }
+
+  // 双榜/今日操作悬停同样联动观点流（点击仍走原抽屉逻辑，不抢行为）
+  function mxvBindBoardHighlight() {
+    ["mxv-boards", "mxv-banner"].forEach((id) => {
+      const zone = document.getElementById(id);
+      if (!zone || zone.dataset.hlBound) return;
+      zone.dataset.hlBound = "1";
+      zone.addEventListener("pointerover", (e) => {
+        if (_mxv.hlPinned) return;
+        const el = e.target.closest("[data-mxv-hl]");
+        mxvSetHighlight(el ? el.dataset.mxvHl : "");
+      });
+      zone.addEventListener("pointerleave", () => { if (!_mxv.hlPinned) mxvSetHighlight(""); });
+    });
   }
 
   function mxvCloseDrawer() {
@@ -1053,7 +1172,7 @@ export function createMxViewsView(dependencies) {
     <section class="section-panel">
       <header class="section-head mxva-head">
         <div>
-          <h2 class="section-title">MX 观点</h2>
+          <h2 class="section-title">智囊团</h2>
           <p class="section-meta">交易时段按快照表批量研判 MX 大V消息，产出题材/个股多空观点与每日操作总结（页面 /mx-views）。</p>
         </div>
         <label class="mxva-switch" title="关闭即停止研判">
@@ -1314,6 +1433,7 @@ export function createMxViewsView(dependencies) {
     mxvGoLatest,
     mxvKolMode,
     mxvKolMore,
+    mxvBoardMode,
     mxvOpenTargetAt,
     mxvOpenKolStockAt,
     mxvOpenKol,

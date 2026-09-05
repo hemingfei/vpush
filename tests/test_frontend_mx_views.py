@@ -39,11 +39,15 @@ def test_router_and_nav_register_mx_views():
     assert 'page === "mx-views"' in router and "renderMxViews" in router
     assert "mxvTeardown" in router  # 离开页面清理 SSE/定时器
     nav = APP_JS[APP_JS.index("const NAV ="):APP_JS.index("const SIDEBAR_SLIM_KEY")]
-    assert 'route: "mx-views"' in nav and 'label: "MX观点"' in nav
-    assert 'route: "admin/mx-views"' in nav and 'label: "MX观点"' in nav
+    assert 'route: "mx-views"' in nav and 'label: "智囊团"' in nav
+    assert 'route: "admin/mx-views"' in nav and 'label: "智囊团"' in nav
     mobile = APP_JS[APP_JS.index("const MOBILE_NAV ="):APP_JS.index("function renderBottomNav")]
-    assert 'route: "mx-views"' in mobile
+    assert 'route: "mx-views"' in mobile and 'label: "智囊团"' in mobile
     assert '"mx-views": loadAdminMxViews' in APP_JS
+    # 页面/管理面板标题统一为「智囊团」
+    assert 'setPageTitle("智囊团")' in MX_VIEWS_JS
+    assert '<h2 class="section-title">智囊团</h2>' in MX_VIEWS_JS
+    assert 'label: "MX观点"' not in nav
 
 
 def test_open_raw_modal_falls_back_to_mxv_posts():
@@ -113,6 +117,66 @@ def test_mx_views_feed_all_batches_and_drawer_desc():
     assert "mxv-feed-sep" in feed and "批次" in feed
     tl = _fn_body("mxvTimelineListHtml", js)
     assert "localeCompare" in tl  # 倒序排（最新在上）
+
+
+def test_mx_views_feed_two_column_batch_layout():
+    """实时观点流批内两列报纸流：左列装较新一半（顶部=最新），右列底部=最早；窄屏回落单列。"""
+    js = MX_VIEWS_JS
+    feed = _fn_body("mxvRenderFeed", js)
+    assert "mxv-feed-cols" in feed and "mxv-feed-col" in feed
+    assert "Math.ceil(" in feed  # 左列 = 较新一半（向上取整）
+    assert "slice(0, cut)" in feed and "slice(cut)" in feed
+    assert "single" in feed  # 单条批次不拆两列
+    css = (STATIC / "mx-views.css").read_text().replace(" ", "")
+    assert ".mxv-feed-cols{display:grid;grid-template-columns:1fr 1fr" in css
+    assert "@media(max-width:760px)" in css and ".mxv-feed-cols{grid-template-columns:1fr" in css
+
+
+def test_mx_views_target_highlight_linkage():
+    """悬停/点选标的 → 观点流内同标的集体高亮放大；点击可锁定，Esc/点空白解除；双榜悬停同样联动。"""
+    js = MX_VIEWS_JS
+    assert 'data-mxv-hl=' in js  # feed 条目/双榜行/热力块/chip 均带标的键
+    for fn in ("mxvSetHighlight", "mxvBindFeedHighlight", "mxvBindBoardHighlight"):
+        assert f"function {fn}(" in js, fn
+    setter = _fn_body("mxvSetHighlight", js)
+    assert "classList.toggle" in setter and "dataset.mxvHl" in setter
+    bind = _fn_body("mxvBindFeedHighlight", js)
+    assert "pointerover" in bind and "pointerleave" in bind and "click" in bind
+    assert "hlPinned" in bind  # 点击锁定/再点解除
+    board = _fn_body("mxvBindBoardHighlight", js)
+    assert "mxv-boards" in board and "mxv-banner" in board
+    assert "Escape" in js  # Esc 解锁
+    css = (STATIC / "mx-views.css").read_text()
+    assert ".mxv-feed-item.hl" in css
+    compact = css.replace(" ", "")
+    assert "scale(1.03)" in compact  # 放大一点
+    assert "transition:background .15s" in compact  # 平滑过渡不跳变
+
+
+def test_mx_views_boards_heat_view_default():
+    """双榜默认热力标签云：提及总数降序，颜色=净方向、深浅/字号=热度；可切回明细列表。"""
+    js = MX_VIEWS_JS
+    assert "function mxvHeatHtml(" in js
+    heat = _fn_body("mxvHeatHtml", js)
+    assert "b.bull + b.bear" in heat  # 按提及总数降序
+    assert "mxv-heat-wrap" in heat and "data-mxv-hl=" in heat
+    assert "function mxvBoardMode(" in js and "function mxvBoardHead(" in js
+    head = _fn_body("mxvBoardHead", js)
+    assert "mxvBoardMode('${kind}','heat')" in head and "mxvBoardMode('${kind}','list')" in head
+    boards = _fn_body("mxvRenderBoards", js)
+    assert "题材多空榜" in boards and "个股强度榜" in boards
+    assert 'boardMode.topic === "list"' in boards and 'boardMode.stock === "list"' in boards
+    assert "mxvHeatHtml(p.topics" in boards and "mxvHeatHtml(p.stocks" in boards
+    # 明细列表行仍保留（切换用），且带高亮键
+    assert 'data-mxv-hl="topic:${escapeHtml(t.name)}"' in boards
+    assert 'data-mxv-hl="stock:${escapeHtml(s.name)}"' in boards
+    # 注册进工厂返回与 app.js 内联处理器
+    assert "mxvBoardMode," in js.split("return {")[1]
+    assert "mxvBoardMode," in APP_JS
+    css = (STATIC / "mx-views.css").read_text()
+    for cls in (".mxv-heat{", ".mxv-heat.bull{", ".mxv-heat.bear{", ".mxv-heat.h4{",
+                ".mxv-heat.hl{", ".mxv-board-head{", ".mxv-heat-legend{"):
+        assert cls in css.replace(" ", ""), cls
 
 
 def test_mx_views_css_key_components():

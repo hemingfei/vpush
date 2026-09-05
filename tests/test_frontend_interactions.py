@@ -767,9 +767,6 @@ def test_mobile_plaza_and_timeline_filters_are_seven_equal_44px_targets():
     assert ".icon-badge-bar .tl-pill span" in css and "display: none" in css
     assert ".icon-badge-bar > .fav-toggle" in css and "font-size: 0" in css
     assert ".icon-badge-bar > .home-filter-toggle" in css
-    # 移动端角标条自带特别关注章，与面板星标同状态
-    assert 'id="tl-star-toggle"' in _fn_body("tlFilterActionsHtml")
-    assert "tlPaintViewToggles()" in _fn_body("toggleTimelineFav")
     assert 'class="icon-badge-bar"' in _fn_body("renderHome")
     assert "tl-filterbar-top icon-badge-bar" in _fn_body("renderTimeline")
     assert "#tl-filterbar .icon-badge-bar" in css
@@ -868,7 +865,11 @@ def test_zsxq_is_plaza_badge_not_sidebar_page():
     assert "function postFiles" in src
     assert 'post.platform === "zsxq"' in _fn_body("postCard")
     assert "class=\"p-file\"" in _fn_body("postCard")
-    assert "/api/media/zsxq-file/" in _fn_body("postCard")
+    assert "/api/media/zsxq-file/" in _fn_body("downloadZsxqFile")
+    assert "?token=" not in _fn_body("postCard")
+    assert "?token=" not in _fn_body("downloadZsxqFile")
+    assert "downloadZsxqFile" in _fn_body("postCard")
+    assert "apiBlob" in _fn_body("downloadZsxqFile")
     assert 'return "zsxq"' in _fn_body("detectAskPlatform")
     assert 'option value="zsxq"' in _fn_body("renderSearch")
     assert "saveZsxqCookie()" in src
@@ -4543,6 +4544,14 @@ def test_login_tabs_own_tabpanels():
     assert 'aria-controls="login-form"' in html
     assert 'aria-controls="register-form"' in html
     assert 'id="login-form"' in html and 'role="tabpanel"' in html
+    assert 'id="login-turnstile"' in html
+    assert 'id="register-turnstile"' in html
+    src = APP_JS.read_text()
+    assert "challenges.cloudflare.com/turnstile/v0/api.js" in src
+    assert "cf-turnstile-response" in src
+    assert "initTurnstile()" in src
+    assert 'appearance: "always"' in src
+    assert 'theme: "auto"' in src
     switch = _fn_body("switchAuthMode")
     assert "loginForm.hidden = !isLogin" in switch
     assert "registerForm.hidden = isLogin" in switch

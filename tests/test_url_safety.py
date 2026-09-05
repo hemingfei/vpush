@@ -1,12 +1,16 @@
+import gzip
+
 import httpx
 import pytest
 
 from app.url_safety import (
     _blocked_ip,
+    is_allowed_trusted_llm_base,
     is_allowed_user_llm_base,
     is_safe_http_url,
     safe_get,
     safe_get_limited,
+    safe_request_limited,
 )
 
 
@@ -106,13 +110,25 @@ def test_user_llm_allows_public_third_party(monkeypatch):
     assert is_allowed_user_llm_base("http://llm.example.com:11434/v1") is True
 
 
-def test_user_llm_allows_intranet_and_blocks_non_http():
-    assert is_allowed_user_llm_base("http://127.0.0.1:11434") is True
-    assert is_allowed_user_llm_base("http://192.168.1.1/v1") is True
-    assert is_allowed_user_llm_base("http://10.80.0.2:8096/v1") is True
+def test_user_llm_base_rejects_reserved_networks():
+    for url in (
+        "http://127.0.0.1:11434/v1",
+        "http://10.80.0.2:8096/v1",
+        "http://192.168.1.1/v1",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://[::1]:11434/v1",
+    ):
+        assert is_allowed_user_llm_base(url) is False, url
     assert is_allowed_user_llm_base("https://user:pass@api.deepseek.com") is False
     assert is_allowed_user_llm_base("file:///etc/passwd") is False
     assert is_allowed_user_llm_base("") is False
+
+
+def test_trusted_llm_base_allows_private_http_but_rejects_credentials_and_other_schemes():
+    assert is_allowed_trusted_llm_base("http://127.0.0.1:11434/v1") is True
+    assert is_allowed_trusted_llm_base("https://10.0.0.2:8443/v1") is True
+    assert is_allowed_trusted_llm_base("https://user:pass@example.com/v1") is False
+    assert is_allowed_trusted_llm_base("file:///etc/passwd") is False
 
 
 
@@ -176,3 +192,65 @@ def test_safe_get_limited_revalidates_dns_on_same_host_redirect(monkeypatch):
     client = httpx.Client(transport=httpx.MockTransport(handler))
     with pytest.raises(ValueError):
         safe_get(client, "https://safe.example/a")
+
+
+def test_safe_request_limited_posts_without_following_redirect(monkeypatch):
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+    seen = []
+
+    def handler(request):
+        seen.append((request.method, str(request.url), request.headers.get("authorization")))
+        return httpx.Response(302, headers={"location": "https://evil.example/x"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    resp = safe_request_limited(
+        client,
+        "POST",
+        "https://llm.example.com:8096/v1/chat/completions",
+        max_bytes=1024,
+        headers={"Authorization": "Bearer secret"},
+        content=b"{}",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    assert seen == [("POST", "https://93.184.216.34:8096/v1/chat/completions", "Bearer secret")]
+
+
+def test_safe_request_limited_rejects_content_length_and_streamed_oversize(monkeypatch):
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, headers={"content-length": "2049"}, content=b"x" * 2049
+            )
+        )
+    )
+    with pytest.raises(ValueError, match="响应体过大"):
+        safe_request_limited(
+            client, "GET", "https://llm.example.com/v1/models", max_bytes=1024
+        )
+
+    class OversizedStream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b"x" * 600
+            yield b"x" * 600
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, stream=OversizedStream())
+        )
+    )
+    with pytest.raises(ValueError, match="响应体过大"):
+        safe_request_limited(
+            client, "GET", "https://llm.example.com/v1/models", max_bytes=1024
+        )
+
+
+def test_safe_request_limited_handles_compressed_response(monkeypatch):
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+    payload = b'{"data":[{"id":"gpt-test"}]}'
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(
+        200, headers={"content-encoding": "gzip"}, content=gzip.compress(payload)
+    )))
+    response = safe_request_limited(client, "GET", "https://llm.example.com/v1/models", max_bytes=1024)
+    assert response.json() == {"data": [{"id": "gpt-test"}]}

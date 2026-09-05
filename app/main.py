@@ -361,6 +361,9 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
             wechat_config=config.wechat,
             notifiers_config=config.notifiers,
             trust_proxy=config.web.trust_proxy,
+            turnstile_site_key=config.web.turnstile_site_key,
+            turnstile_secret=config.web.turnstile_secret,
+            turnstile_hostnames=config.web.turnstile_hostnames,
             ima_documents=ima_documents,
             # MX 配置保存后热应用到调度器；纯 UI 调试模式无后台任务，不做热应用
             on_mx_config_changed=scheduler.apply_mx_config if background_workers_enabled() else None,

@@ -24,6 +24,7 @@ from app.scheduler import (
     _x_fallback_advice,
     extract_tweet_id,
     flush_digest,
+    format_startup_message,
     keepalive_weibo_cookie,
     keepalive_xueqiu_cookie,
     maybe_alert_x_fallback,
@@ -245,6 +246,61 @@ def test_first_fetch_establishes_baseline_without_push(monkeypatch):
     poll_once(db, {"xueqiu": FakeFetcher(posts)}, [], notifiers_config=ncfg)
     assert sent == ["p3"]
     assert len(db.list_posts()) == 3
+
+
+def _tg_ncfg(monkeypatch, sent):
+    class FakeTG:
+        def __init__(self, config, chat_id=None, client=None, **kwargs):
+            self.client = SimpleNamespace(close=lambda: None)
+
+        def notify(self, post):
+            sent.append(post.external_id)
+
+    monkeypatch.setattr("app.notifiers.telegram.TelegramNotifier", FakeTG)
+    return SimpleNamespace(
+        telegram=SimpleNamespace(bot_token="t", chat_id=""),
+        feishu=SimpleNamespace(),
+        wecom=SimpleNamespace(),
+    )
+
+
+def test_catchup_history_older_than_watermark_is_not_pushed(monkeypatch):
+    """已有水位的大V：时间线里夹着的更早历史帖只入库不推。"""
+    db = make_db()
+    kid = db.add_kol("xueqiu", "A", "1")
+    db.insert_post("xueqiu", kid, "kept", "t", "c", "u", "2026-08-29 13:03")
+    db.mark_kol_baseline(kid)
+    uid = db.add_user("u", "h", telegram_chat_id="111")
+    db.add_subscription(uid, kid)
+    old = make_post(kid)
+    old.external_id = "old-may"
+    old.published_at = "2026-05-24 17:30"
+    new = make_post(kid)
+    new.external_id = "new-today"
+    new.published_at = "2026-09-04 10:00"
+    sent = []
+    poll_once(db, {"xueqiu": FakeFetcher([old, new])}, [], notifiers_config=_tg_ncfg(monkeypatch, sent))
+    assert sent == ["new-today"]
+    assert {p["external_id"] for p in db.list_posts()} >= {"kept", "old-may", "new-today"}
+
+
+def test_empty_baseline_then_months_of_history_not_pushed(monkeypatch):
+    """空基线后第一次拉到几个月时间线：古帖不推，近 36h 内的才推。"""
+    db = make_db()
+    kid = db.add_kol("xueqiu", "A", "1")
+    db.mark_kol_baseline(kid)
+    uid = db.add_user("u", "h", telegram_chat_id="111")
+    db.add_subscription(uid, kid)
+    now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
+    old = make_post(kid)
+    old.external_id = "old-july"
+    old.published_at = (now - datetime.timedelta(days=50)).strftime("%Y-%m-%d %H:%M")
+    fresh = make_post(kid)
+    fresh.external_id = "fresh"
+    fresh.published_at = now.strftime("%Y-%m-%d %H:%M")
+    sent = []
+    poll_once(db, {"xueqiu": FakeFetcher([old, fresh])}, [], notifiers_config=_tg_ncfg(monkeypatch, sent))
+    assert sent == ["fresh"]
 
 
 def test_new_post_pushed_once(monkeypatch):
@@ -555,22 +611,26 @@ def test_posts_pushed_in_time_order(monkeypatch):
     uid = db.add_user("u", "h", telegram_chat_id="111")
     db.add_subscription(uid, kid)
     seed_baseline_post(db, kid)
-    # 抓取返回乱序（置顶/接口顺序），发布时间为三种不同格式
+    # 抓取返回乱序（置顶/接口顺序），三种时间格式；用近 1h 以免被历史回灌过滤
+    now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
+    t1 = now - datetime.timedelta(minutes=40)
+    t2 = now - datetime.timedelta(minutes=20)
+    t3 = now - datetime.timedelta(minutes=5)
     posts = [
         Post(
             platform="weibo", kol_id=kid, kol_name="A",
             external_id="p3", title="t3", content="c", url="u",
-            published_at="2026-08-04 21:00:00",
+            published_at=t3.strftime("%Y-%m-%d %H:%M:%S"),
         ),
         Post(
             platform="weibo", kol_id=kid, kol_name="A",
             external_id="p1", title="t1", content="c", url="u",
-            published_at="Tue Aug 04 20:00:00 +0800 2026",
+            published_at=t1.strftime("%Y-%m-%d %H:%M"),
         ),
         Post(
             platform="weibo", kol_id=kid, kol_name="A",
             external_id="p2", title="t2", content="c", url="u",
-            published_at="Tue, 04 Aug 2026 20:30:00 +0800",
+            published_at=t2.strftime("%Y-%m-%dT%H:%M:%S"),
         ),
     ]
     order = []
@@ -2309,7 +2369,27 @@ def test_startup_message_only_to_admins(monkeypatch):
 
     asyncio.run(scheduler._send_startup_message())
 
-    assert sent == [("111", "✅ V Push服务已启动")]
+    from app.version import APP_VERSION
+
+    assert len(sent) == 1 and sent[0][0] == "111"
+    assert sent[0][1].startswith("✅ V Push 服务已启动")
+    assert sent[0][1].splitlines()[1] == f"v{APP_VERSION}"
+    assert "+0800" not in sent[0][1]
+
+
+def test_format_startup_message_instance_version_time(monkeypatch):
+    from app.fetchers.base import CN_TZ
+    from app.version import APP_VERSION as ver
+
+    now = datetime.datetime(2026, 9, 5, 11, 36, tzinfo=CN_TZ)
+    monkeypatch.delenv("VPUSH_INSTANCE", raising=False)
+    assert format_startup_message(now=now) == (
+        f"✅ V Push 服务已启动\nv{ver}\n2026-09-05 11:36"
+    )
+    monkeypatch.setenv("VPUSH_INSTANCE", "vpush.net / DMIT")
+    assert format_startup_message(now=now) == (
+        f"✅ V Push 服务已启动\nv{ver}\nvpush.net / DMIT\n2026-09-05 11:36"
+    )
 
 
 def test_startup_message_respects_push_channels(monkeypatch):
@@ -2359,7 +2439,11 @@ def test_startup_message_respects_push_channels(monkeypatch):
 
     asyncio.run(scheduler._send_startup_message())
 
-    assert sent["tg"] == [("111", "✅ V Push服务已启动")]
+    from app.version import APP_VERSION
+
+    assert len(sent["tg"]) == 1 and sent["tg"][0][0] == "111"
+    assert sent["tg"][0][1].startswith("✅ V Push 服务已启动")
+    assert sent["tg"][0][1].splitlines()[1] == f"v{APP_VERSION}"
     assert sent["fs"] == []  # 未勾选飞书 → 不发
 
 
@@ -2535,10 +2619,23 @@ def test_transfer_subscriptions_preserves_favorite():
     assert db.subscribed_favorite_ids(target) == {kid}
 
 
+def _today_bj():
+    """每日精选窗口=北京零点起，测试帖的 published_at 须落在窗口内（恰取零点，含边界）。"""
+    from datetime import datetime
+
+    from app.fetchers.base import CN_TZ
+
+    return (
+        datetime.now(CN_TZ)
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .strftime("%Y-%m-%d %H:%M")
+    )
+
+
 def test_daily_report_sent_to_enabled_user(monkeypatch):
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", "")
+    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", _today_bj())
     uid = db.add_user("u", "h", telegram_chat_id="111")
     db.update_user(uid, daily_report=True)
     db.add_subscription(uid, kid)
@@ -2565,7 +2662,7 @@ def test_daily_report_sent_to_enabled_user(monkeypatch):
 def test_daily_report_sends_ai_summary(monkeypatch):
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", "")
+    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", _today_bj())
     uid = db.add_user("u", "h", telegram_chat_id="111")
     db.update_user(
         uid,
@@ -2610,7 +2707,7 @@ def test_daily_report_falls_back_to_raw_list_without_llm(monkeypatch):
     """未配置 LLM 或综述失败时，降级发送原始贴文列表，保底不空发。"""
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", "")
+    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", _today_bj())
     uid = db.add_user("u", "h", telegram_chat_id="111")
     db.update_user(uid, daily_report=True)
     db.add_subscription(uid, kid)
@@ -2640,7 +2737,7 @@ def test_daily_report_falls_back_to_raw_list_without_llm(monkeypatch):
 def test_daily_report_wecom_user(monkeypatch):
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", "")
+    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", _today_bj())
     uid = db.add_user("wc", "h")
     db.update_user(
         uid,
@@ -2710,7 +2807,7 @@ def test_daily_report_feishu_personal_only(monkeypatch):
 
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", "")
+    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", _today_bj())
     uid = db.add_user("lili", "h")
     key = Fernet.generate_key().decode()
     db.save_feishu_personal_bot(
@@ -2742,7 +2839,7 @@ def test_daily_report_feishu_personal_only(monkeypatch):
 def test_daily_report_bark_user(monkeypatch):
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", "")
+    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", _today_bj())
     uid = db.add_user("barker", "h")
     db.update_user(uid, bark_key="AaBbCcDdEeFf1234567890")
     db.update_user(uid, daily_report=True)
@@ -4073,7 +4170,7 @@ def test_daily_report_returns_false_on_failure(monkeypatch):
     db.update_user(uid, daily_report=1)
     db.add_subscription(uid, kid)
     post = make_post(kid)
-    db.insert_post("xueqiu", kid, post.external_id, post.title, post.content, post.url, post.published_at)
+    db.insert_post("xueqiu", kid, post.external_id, post.title, post.content, post.url, _today_bj())
 
     monkeypatch.setattr("app.notifiers.telegram.TelegramNotifier", _FailingRetryTG)
     ncfg = SimpleNamespace(
@@ -4105,7 +4202,7 @@ def test_daily_report_returns_true_on_success(monkeypatch):
     db.update_user(uid, daily_report=1)
     db.add_subscription(uid, kid)
     post = make_post(kid)
-    db.insert_post("xueqiu", kid, post.external_id, post.title, post.content, post.url, post.published_at)
+    db.insert_post("xueqiu", kid, post.external_id, post.title, post.content, post.url, _today_bj())
 
     monkeypatch.setattr("app.notifiers.telegram.TelegramNotifier", _RetryTG)
     ncfg = SimpleNamespace(
@@ -4640,7 +4737,7 @@ def test_daily_report_retries_only_failed_channel(monkeypatch):
     """Telegram 成功、企业微信失败：第二次调用只重试企业微信，Telegram 不重复发送。"""
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "p1", "t", "内容", "u", "")
+    db.insert_post("xueqiu", kid, "p1", "t", "内容", "u", _today_bj())
     uid = db.add_user("u", "h", telegram_chat_id="111")
     db.update_user(uid, daily_report=True, wecom_webhook="https://qyapi.weixin.qq.com/hook")
     db.add_subscription(uid, kid)
@@ -4668,7 +4765,7 @@ def test_daily_report_channel_idempotent_across_restart(monkeypatch):
     tmp = tempfile.mkdtemp()
     db = DB(Path(tmp) / "restart.db")
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "p1", "t", "内容", "u", "")
+    db.insert_post("xueqiu", kid, "p1", "t", "内容", "u", _today_bj())
     uid = db.add_user("u", "h", telegram_chat_id="111")
     db.update_user(uid, daily_report=True)
     db.add_subscription(uid, kid)
@@ -4843,7 +4940,7 @@ def test_stock_alias_task_prefers_admin_grok_over_env(monkeypatch):
     )._run_stock_alias_task()
     assert seen["key"] == "sk-grok"
     assert seen["model"] == "grok-4.6"
-    assert seen["user_supplied"] is True
+    assert seen["user_supplied"] is False
 
 
 def test_stock_alias_task_runs_with_admin_llm_when_env_empty(monkeypatch):
@@ -4875,7 +4972,7 @@ def test_daily_report_uses_admin_push_settings_llm(monkeypatch):
     """每日综述跟推送设置同一套：管理员自配优先于环境变量。"""
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
-    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", "")
+    db.insert_post("xueqiu", kid, "p1", "t", "今日内容", "u", _today_bj())
     uid = db.add_user("kale", "h", telegram_chat_id="111", is_admin=True)
     db.update_user(
         uid,

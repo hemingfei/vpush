@@ -1,6 +1,6 @@
 import { escapeHtml, imgProxyUrl, imgSrcFor } from "./core/html.js";
 import {
-  ARROW_UP_ICON, BELL_ICON, BELL_OFF_ICON, BOOK_ICON, BRAIN_ICON, DATABASE_ICON, DASHBOARD_ICON, FOLDER_ICON,
+  ARROW_UP_ICON, BELL_ICON, BELL_OFF_ICON, BOOK_ICON, BRAIN_ICON, COPY_ICON, DATABASE_ICON, DASHBOARD_ICON, FOLDER_ICON,
   EYE_ICON, EYE_OFF_ICON, EXTERNAL_LINK_ICON, FEISHU_DATE_ICON, FILE_TEXT_ICON, FILTER_ICON,
   GEAR_ICON, GITHUB_ICON, GRID_ICON, HISTORY_ICON, KEY_ICON, LIST_ICON,
   MX_VIEWS_ICON, NEWS_ICON, PLUS_ICON, REFRESH_ICON, SEARCH_ICON, SEND_ICON, STAR_SVG,
@@ -39,7 +39,7 @@ function platformShortLabel(p) {
 const PLATFORM_ICONS = {
   "": `<svg class="pt-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg>`,
   xueqiu: `<img class="pt-icon" src="/xueqiu-mark.png" width="16" height="16" alt="" draggable="false" aria-hidden="true">`,
-  truth: `<img class="pt-icon" src="/truth-mark.png" width="16" height="16" alt="" draggable="false" aria-hidden="true">`,
+  truth: `<img class="pt-icon" src="/truth-mark.svg?v=2" width="16" height="16" alt="" draggable="false" aria-hidden="true">`,
   combination: `<svg class="pt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>`,
   weibo: `<svg class="pt-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10.098 20.323c-3.977.391-7.414-1.406-7.672-4.02-.259-2.609 2.759-5.047 6.74-5.441 3.979-.394 7.413 1.404 7.671 4.018.259 2.6-2.759 5.049-6.737 5.439l-.002.004zM9.05 17.219c-.384.616-1.208.884-1.829.602-.612-.279-.793-.991-.406-1.593.379-.595 1.176-.861 1.793-.601.622.263.82.972.442 1.592zm1.27-1.627c-.141.237-.449.353-.689.253-.236-.09-.313-.361-.177-.586.138-.227.436-.346.672-.24.239.09.315.36.18.601l.014-.028zm.176-2.719c-1.893-.493-4.033.45-4.857 2.118-.836 1.704-.026 3.591 1.886 4.21 1.983.64 4.318-.341 5.132-2.179.8-1.793-.201-3.642-2.161-4.149zm7.563-1.224c-.346-.105-.57-.18-.405-.615.375-.977.42-1.804 0-2.404-.781-1.112-2.915-1.053-5.364-.03 0 0-.766.331-.571-.271.376-1.217.315-2.224-.27-2.809-1.338-1.337-4.869.045-7.888 3.08C1.309 10.87 0 13.273 0 15.348c0 3.981 5.099 6.395 10.086 6.395 6.536 0 10.888-3.801 10.888-6.82 0-1.822-1.547-2.854-2.915-3.284v.01zm1.908-5.092c-.766-.856-1.908-1.187-2.96-.962-.436.09-.706.511-.616.932.09.42.511.691.932.602.511-.105 1.067.044 1.442.465.376.421.466.977.316 1.473-.136.406.089.856.51.992.405.119.857-.105.992-.512.33-1.021.12-2.178-.646-3.035l.03.045zm2.418-2.195c-1.576-1.757-3.905-2.419-6.054-1.968-.496.104-.812.587-.706 1.081.104.496.586.813 1.082.707 1.532-.331 3.185.15 4.296 1.383 1.112 1.246 1.429 2.943.947 4.416-.165.48.106 1.007.586 1.157.479.165.991-.104 1.157-.586.675-2.088.241-4.478-1.338-6.235l.03.045z"/></svg>`,
   twitter: `<svg class="pt-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M14.234 10.162 22.977 0h-2.072l-7.591 8.824L7.251 0H.258l9.168 13.343L.258 24H2.33l8.016-9.318L16.749 24h6.993zm-2.837 3.299-.929-1.329L3.076 1.56h3.182l5.965 8.532.929 1.329 7.754 11.09h-3.182z"/></svg>`,
@@ -57,7 +57,7 @@ const CHANNEL_ICONS = {
 const GROK_TRANSLATE_ICON = `<svg class="p-tr-grok" viewBox="0 0 33 32" fill="currentColor" aria-hidden="true"><path d="M12.745 20.54l10.97-8.19c.539-.4 1.307-.244 1.564.38 1.349 3.288.746 7.241-1.938 9.955-2.683 2.714-6.417 3.31-9.83 1.954l-3.728 1.745c5.347 3.697 11.84 2.782 15.898-1.324 3.219-3.255 4.216-7.692 3.284-11.693l.008.009c-1.351-5.878.332-8.227 3.782-13.031L33 0l-4.54 4.59v-.014L12.743 20.544m-2.263 1.987c-3.837-3.707-3.175-9.446.1-12.755 2.42-2.449 6.388-3.448 9.852-1.979l3.72-1.737c-.67-.49-1.53-1.017-2.515-1.387-4.455-1.854-9.789-.931-13.41 2.728-3.483 3.523-4.579 8.94-2.697 13.561 1.405 3.454-.899 5.898-3.22 8.364C1.49 30.2.666 31.074 0 32l10.478-9.466"/></svg>`;
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.140";
+const APP_VERSION = "1.12.148";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -650,7 +650,7 @@ function avatarHtml(name, url, platform) {
 const NAV = [
   { group: "订阅", items: [
     { route: "timeline", icon: LIST_ICON, label: "最新动态" },
-    { route: "mx-views", icon: MX_VIEWS_ICON, label: "MX观点" },
+    { route: "mx-views", icon: MX_VIEWS_ICON, label: "智囊团" },
     { route: "news", icon: NEWS_ICON, label: "财经新闻" },
     { route: "knowledge", icon: BOOK_ICON, label: "研报库" },
     { route: "home", icon: GRID_ICON, label: "订阅广场" },
@@ -661,7 +661,7 @@ const NAV = [
       { route: "admin/dashboard", icon: DASHBOARD_ICON, label: "全景概览" },
       { route: "admin/kols", icon: V_ICON, label: "大V管理" },
       { route: "admin/ai-analysis", icon: BRAIN_ICON, label: "AI分析" },
-      { route: "admin/mx-views", icon: MX_VIEWS_ICON, label: "MX观点" },
+      { route: "admin/mx-views", icon: MX_VIEWS_ICON, label: "智囊团" },
       { route: "admin/vocab", icon: FOLDER_ICON, label: "标签分类" },
       { route: "admin/requests", icon: USER_PLUS_ICON, label: "添加审批" },
     ]},
@@ -736,7 +736,7 @@ const MOBILE_NAV = [
   { route: "timeline", icon: LIST_ICON, label: "动态" },
   { route: "news", icon: NEWS_ICON, label: "财经新闻" },
   { route: "home", icon: GRID_ICON, label: "广场" },
-  { route: "mx-views", icon: MX_VIEWS_ICON, label: "观点" },
+  { route: "mx-views", icon: MX_VIEWS_ICON, label: "智囊团" },
   { route: "settings", icon: GEAR_ICON, label: "设置" },
 ];
 
@@ -1155,6 +1155,23 @@ function loadFeishuTimelineImages() {
     }
   }, { rootMargin: "600px 0px" });
   images.forEach((img) => _feishuAssetObserver.observe(img));
+}
+
+async function downloadZsxqFile(button) {
+  button.disabled = true;
+  try {
+    const blob = await apiBlob(`/api/media/zsxq-file/${encodeURIComponent(button.dataset.fileId)}`);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = button.dataset.name || "附件";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (err) {
+    flash(err.message || "附件下载失败", "error");
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function downloadFeishuTimelineAsset(button) {
@@ -1969,12 +1986,6 @@ function tlPaintViewToggles() {
     fav.classList.toggle("fav-on", state.timelineFavorite);
     fav.setAttribute("aria-pressed", String(state.timelineFavorite));
   }
-  // 移动端角标条上的特别关注章与面板星标同一状态
-  const barStar = $("#tl-star-toggle");
-  if (barStar) {
-    barStar.classList.toggle("selected", state.timelineFavorite);
-    barStar.setAttribute("aria-pressed", String(state.timelineFavorite));
-  }
   const sec = $("#timeline-secondary-toggle");
   if (sec) {
     sec.classList.toggle("fav-on", state.timelineSecondary);
@@ -2204,7 +2215,6 @@ function tlSyncSearchBox() {
 
 function tlFilterActionsHtml() {
   return `<div class="tl-actions">
-          <button id="tl-star-toggle" class="${state.timelineFavorite ? "selected" : ""}" aria-label="只看特别关注" aria-pressed="${state.timelineFavorite}" onclick="toggleTimelineFav()">${STAR_SVG}</button>
           <button id="tl-filter-toggle" class="fav-toggle ${tlPanelFilterOn() ? "has-filter" : ""}" aria-label="筛选" aria-expanded="false" aria-controls="tl-filter-panel" onclick="tlFilterPanel()">${FILTER_ICON}筛选</button>
         </div>`;
 }
@@ -3596,15 +3606,17 @@ function postCard(post) {
           ${images.length > 4 ? `<span class="post-images-more">+${images.length - 4}</span>` : ""}
         </div>` : ""}
       ${postFiles(post).map((f) => {
-          // 附件一律走鉴权路由（服务端校验订阅可见性，命中本地缓存时直接下发）；
-          // 历史详情里缓存的 /zsxq-files/ 静态链接已随挂载移除，不再直连
-          const href = f.file_id
-            ? `/api/media/zsxq-file/${encodeURIComponent(f.file_id)}?token=${encodeURIComponent(state.token || "")}`
-            : (f.url || "");
-          return href
-            ? `<a class="p-file" href="${escapeHtml(href)}" target="_blank" rel="noopener">📎 ${escapeHtml(f.name || "附件")}</a>`
-            : `<span class="p-file">📎 ${escapeHtml(f.name || "附件")}</span>`;
-        }).join("")}
+        // 附件一律走鉴权路由（服务端校验订阅可见性，命中本地缓存时直接下发）；
+        // 历史详情里缓存的 /zsxq-files/ 静态链接已随挂载移除，不再直连。
+        // bearer token 不进 URL：file_id 附件用按钮 + fetch 下载
+        if (f.file_id) {
+          return `<button type="button" class="p-file" data-file-id="${escapeHtml(String(f.file_id))}" data-name="${escapeHtml(f.name || "附件")}" onclick="downloadZsxqFile(this)">📎 ${escapeHtml(f.name || "附件")}</button>`;
+        }
+        const href = f.url || "";
+        return href
+          ? `<a class="p-file" href="${escapeHtml(href)}" target="_blank" rel="noopener">📎 ${escapeHtml(f.name || "附件")}</a>`
+          : `<span class="p-file">📎 ${escapeHtml(f.name || "附件")}</span>`;
+      }).join("")}
       ${mxAttachments(post).map((f) => f.audio
         ? `<div class="mx-audio-row">
             <button type="button" class="mx-audio-btn" data-url="${escapeHtml(f.url)}" onclick="toggleMxAudio(this)">
@@ -5562,6 +5574,7 @@ function applyTheme() {
   if (loginLogo) loginLogo.src = dark ? "/logo-mark-dark.svg" : "/logo-mark.svg";
   const favicon = document.getElementById("favicon");
   if (favicon) favicon.setAttribute("href", dark ? "/logo-mark-dark.svg" : "/logo-mark.svg");
+  updateThemeToggleIcon();
   return dark;
 }
 
@@ -5601,8 +5614,10 @@ function renderThemeSwitcher() {
 }
 
 function updateThemeToggleIcon() {
-  const btn = $("#theme-toggle-btn");
-  if (btn) btn.innerHTML = themeIconFor(themeMode());
+  const icon = themeIconFor(themeMode());
+  document.querySelectorAll(".theme-toggle-btn").forEach((btn) => {
+    btn.innerHTML = icon;
+  });
 }
 
 function cycleTheme() {
@@ -5763,6 +5778,7 @@ const {
   SEARCH_ICON,
   REFRESH_ICON,
   X_ICON,
+  COPY_ICON,
   EXTERNAL_LINK_ICON,
 });
 
@@ -5864,6 +5880,7 @@ const {
   mxvGoLatest,
   mxvKolMode,
   mxvKolMore,
+  mxvBoardMode,
   mxvOpenTargetAt,
   mxvOpenKolStockAt,
   mxvOpenKol,
@@ -6332,7 +6349,7 @@ async function router() {
   stopStatsTimer();
   stopImaProgressPoll();
   stopTimelinePoll();
-  // 离开 MX观点页：关 SSE 连接、停时钟/兜底轮询（重进页面时会重建）
+  // 离开 智囊团页：关 SSE 连接、停时钟/兜底轮询（重进页面时会重建）
   mxvTeardown();
   // 离开动态页前记录滚动位置，切回时恢复阅读位置
   if (document.querySelector("#feed")) {
@@ -6348,6 +6365,7 @@ async function router() {
   if (!state.token) {
     $("#app-view").classList.add("hidden");
     $("#auth-view").classList.remove("hidden");
+    initTurnstile();
     return;
   }
   let user;
@@ -6436,6 +6454,73 @@ function togglePassword(inputId, btn) {
   btn.setAttribute("aria-pressed", String(show));
 }
 
+let turnstileSitekey = "";
+let turnstileScriptPromise = null;
+const turnstileWidgets = {};
+
+function renderTurnstile(elId, action) {
+  if (!turnstileSitekey || !window.turnstile) return;
+  const el = document.getElementById(elId);
+  if (!el) return;
+  if (turnstileWidgets[elId]) {
+    try { window.turnstile.remove(turnstileWidgets[elId]); } catch { /* already gone */ }
+  }
+  turnstileWidgets[elId] = window.turnstile.render(el, {
+    sitekey: turnstileSitekey,
+    action,
+    theme: "auto",
+    size: "flexible",
+    appearance: "always",
+  });
+}
+
+function resetTurnstile(elId) {
+  const id = turnstileWidgets[elId];
+  if (id && window.turnstile) {
+    try { window.turnstile.reset(id); } catch { /* ignore */ }
+  }
+}
+
+function turnstileToken(elId) {
+  const id = turnstileWidgets[elId];
+  return (id && window.turnstile && window.turnstile.getResponse(id)) || "";
+}
+
+async function ensureTurnstile() {
+  if (!turnstileSitekey) {
+    try {
+      const data = await api("/api/auth/turnstile");
+      turnstileSitekey = data.sitekey || "";
+    } catch {
+      return;
+    }
+  }
+  if (!turnstileSitekey) return;
+  if (!turnstileScriptPromise) {
+    turnstileScriptPromise = new Promise((resolve, reject) => {
+      if (window.turnstile) { resolve(); return; }
+      const s = document.createElement("script");
+      s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+      s.async = true;
+      s.defer = true;
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+  try {
+    await turnstileScriptPromise;
+  } catch {
+    return;
+  }
+  renderTurnstile("login-turnstile", "login");
+  renderTurnstile("register-turnstile", "register");
+}
+
+function initTurnstile() {
+  void ensureTurnstile();
+}
+
 async function doLogin(e) {
   e.preventDefault();
   $("#auth-error").textContent = "";
@@ -6445,7 +6530,11 @@ async function doLogin(e) {
   try {
     const data = await api("/api/auth/login", {
       method: "POST",
-      body: JSON.stringify({ username: $("#login-username").value.trim(), password: $("#login-password").value }),
+      body: JSON.stringify({
+        username: $("#login-username").value.trim(),
+        password: $("#login-password").value,
+        "cf-turnstile-response": turnstileToken("login-turnstile"),
+      }),
     });
     state.token = data.token;
     localStorage.setItem("dav_token", data.token);
@@ -6454,6 +6543,7 @@ async function doLogin(e) {
     $("#auth-error").textContent = err.message;
     btn.disabled = false;
     btn.textContent = "登 录";
+    resetTurnstile("login-turnstile");
   }
 }
 
@@ -6476,6 +6566,7 @@ async function doRegister(e) {
         username,
         password: $("#reg-password").value,
         code: $("#reg-code").value.trim(),
+        "cf-turnstile-response": turnstileToken("register-turnstile"),
       }),
     });
     state.token = data.token;
@@ -6485,6 +6576,7 @@ async function doRegister(e) {
     $("#reg-error").textContent = err.message;
     btn.disabled = false;
     btn.textContent = "创建账号";
+    resetTurnstile("register-turnstile");
   }
 }
 
@@ -7681,6 +7773,7 @@ const INLINE_HANDLERS = {
   discardImaCollectorChanges,
   discoverImaGroups,
   downloadFeishuTimelineAsset,
+  downloadZsxqFile,
   enableWebPush,
   extractProxyPool,
   filterAclSuggest,
@@ -7901,7 +7994,7 @@ const INLINE_HANDLERS = {
   // ---- hmf：灯箱缩放工具条 ----
   _lbZoomStep,
   _lbZoomReset,
-  // ---- hmf：MX观点页（/mx-views 与 admin/mx-views 面板内联 onclick）----
+  // ---- hmf：智囊团页（/mx-views 与 admin/mx-views 面板内联 onclick）----
   openRawModal,
   avatarImgError,
   mxvPickDay,
@@ -7910,6 +8003,7 @@ const INLINE_HANDLERS = {
   mxvGoLatest,
   mxvKolMode,
   mxvKolMore,
+  mxvBoardMode,
   mxvOpenTargetAt,
   mxvOpenKolStockAt,
   mxvOpenKol,

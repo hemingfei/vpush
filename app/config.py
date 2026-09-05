@@ -182,6 +182,9 @@ class WebConfig:
     admin_password: str = ""
     token_secret: str = ""
     trust_proxy: bool = False  # 位于可信反向代理之后时置 true，才信任 X-Forwarded-For
+    turnstile_site_key: str = ""
+    turnstile_secret: str = ""
+    turnstile_hostnames: str = ""  # 逗号分隔；生产不要包含 localhost
 
 
 @dataclass
@@ -263,6 +266,9 @@ _ENV_MAP = {
     "WEB_ADMIN_PASSWORD": ("web", "admin_password"),
     "WEB_TOKEN_SECRET": ("web", "token_secret"),
     "WEB_TRUST_PROXY": ("web", "trust_proxy"),
+    "TURNSTILE_SITE_KEY": ("web", "turnstile_site_key"),
+    "TURNSTILE_SECRET": ("web", "turnstile_secret"),
+    "TURNSTILE_HOSTNAMES": ("web", "turnstile_hostnames"),
     "WECHAT_APP_ID": ("wechat", "app_id"),
     "WECHAT_APP_SECRET": ("wechat", "app_secret"),
     "DB_PATH": ("db_path",),

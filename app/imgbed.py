@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import mimetypes
+import threading
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
@@ -206,6 +207,7 @@ def _mirror_one(db, cfg, row: dict) -> bool:
                 hosted_url=reused,
                 content_hash=digest,
             )
+            _prewarm_hosted_async(reused)
             return True
         hosted = _upload(cfg, source_url, content, content_type)
         db.mark_hosted_image(
@@ -214,6 +216,7 @@ def _mirror_one(db, cfg, row: dict) -> bool:
             hosted_url=hosted,
             content_hash=digest,
         )
+        _prewarm_hosted_async(hosted)
         return True
     except Exception as exc:  # noqa: BLE001 - 镜像失败不能影响抓取
         db.mark_hosted_image(
@@ -227,6 +230,21 @@ def _mirror_one(db, cfg, row: dict) -> bool:
 
 def _http_client(**kwargs) -> httpx.Client:
     return httpx.Client(**kwargs)
+
+
+def _prewarm_hosted_async(hosted_url: str) -> None:
+    """镜像成功后立刻拉一次公开地址，把 CF 边缘缓存烧热（新图首访不再吃 7-14s 冷启动）。"""
+    if not hosted_url:
+        return
+    threading.Thread(target=_prewarm_hosted, args=(hosted_url,), daemon=True).start()
+
+
+def _prewarm_hosted(hosted_url: str) -> None:
+    try:
+        with _http_client(timeout=15, follow_redirects=False) as client:
+            client.get(hosted_url, headers={"User-Agent": BROWSER_UA})
+    except Exception:  # noqa: BLE001 - 预热失败不影响镜像
+        pass
 
 
 def _download(url: str) -> tuple[bytes, str]:

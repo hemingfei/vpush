@@ -51,6 +51,20 @@ def test_tail_seen_means_no_extra_requests():
     assert [p.external_id for p in result] == ["5", "4", "3", "2", "1"]
 
 
+def test_known_newest_on_page_does_not_backfill_older_unseen():
+    """首页已有已入库的新帖时，尾帖未见只是从未存过的更早历史，不是停机缺口。"""
+    db = StubDB({"5"})  # 最新帖已在库，尾帖 1 未见
+    calls = []
+
+    def fetch_page(page):
+        calls.append(page)
+        return post_list([0, -1])
+
+    result = catchup_pages(db, fetch_page, post_list([5, 4, 3, 2, 1]))
+    assert calls == []
+    assert [p.external_id for p in result] == ["5", "4", "3", "2", "1"]
+
+
 def test_gap_paginates_until_known_post():
     db = StubDB({"1"})
     pages = {2: post_list([0, -1]), 3: post_list([-2])}
@@ -75,6 +89,19 @@ def test_gap_stops_when_batch_tail_is_known():
     result = catchup_pages(db, fetch_page, post_list([5, 2]))
     ids = [p.external_id for p in result]
     assert "0" in ids and "-2" in ids
+
+
+def test_gap_stops_when_known_is_not_the_tail():
+    db = StubDB({"-1"})  # 第 2 页中间已知，尾帖仍未见
+    calls = []
+
+    def fetch_page(page):
+        calls.append(page)
+        return {2: post_list([0, -1, -2]), 3: post_list([-99])}.get(page, [])
+
+    result = catchup_pages(db, fetch_page, post_list([5, 2]))
+    assert 3 not in calls
+    assert "-99" not in [p.external_id for p in result]
 
 
 def test_trailing_gap_warns_once_per_window(monkeypatch):

@@ -1451,11 +1451,57 @@ def test_list_items_rejects_repeated_cursor(monkeypatch):
         requests.append(json.loads(request.data))
         if len(requests) > 2:
             raise RuntimeError("test guard")
-        return {"code": 0, "knowledge_list": [], "is_end": False, "next_cursor": "repeat"}, {}
+        return {
+            "code": 0,
+            "knowledge_list": [{"media_id": f"doc-{len(requests)}"}],
+            "is_end": False,
+            "next_cursor": "repeat",
+        }, {}
 
     client._open_json = open_json
-    assert client.list_items("root") == []
+    with pytest.raises(RuntimeError, match="IMA list pagination repeated cursor"):
+        client.list_items("root")
     assert len(requests) == 2
+
+
+def test_sync_keeps_manifest_when_list_repeats_cursor(tmp_path, monkeypatch):
+    group = ImaGroupConfig(
+        "group-a", "资料", "kb-a", "root-a", folder_ids=("root-a",), enabled=True
+    )
+    old_manifest = [{
+        "media_id": "old-file",
+        "name": "old.pdf",
+        "day": "0825",
+        "group_id": group.id,
+    }]
+    db = FakeDB({
+        IMA_PURE_UID_KEY: "uid",
+        IMA_PURE_REFRESH_TOKEN_KEY: "refresh",
+        IMA_PURE_KB_ID_KEY: "kb-a",
+        IMA_PURE_ROOT_FOLDER_KEY: "root-a",
+        IMA_PURE_GROUPS_KEY: json.dumps([group.public()], ensure_ascii=False),
+    })
+
+    class FakeClient(ima_documents.ImaPureClient):
+        def discover_groups(self):
+            return ()
+
+        def _token(self):
+            return "access"
+
+        def _open_json(self, request):
+            return {
+                "code": 0,
+                "knowledge_list": [{"media_id": "partial-file", "name": "partial.pdf"}],
+                "next_cursor": "repeat",
+            }, {}
+
+    monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
+    service = ImaDocumentService(db, tmp_path / "ima")
+    service.store.save_manifest(old_manifest)
+    result = service.sync_once()
+    assert result["failed_groups"] == [group.id]
+    assert service.store.load_manifest() == old_manifest
 
 
 def test_discover_groups_rejects_repeated_cursor(monkeypatch):
@@ -4386,19 +4432,38 @@ def test_sync_flushes_state_on_cancel(tmp_path, monkeypatch):
     ]
     service, db = _sync_ready_service(tmp_path, monkeypatch, records)
     original_download = ima_documents.ImaPureClient.download
+    barrier = threading.Barrier(3)
+    finished = []
 
     def download_and_cancel(self, media, destination, expected_size=0):
-        result = original_download(self, media, destination, expected_size)
+        barrier.wait(timeout=5)
         service._cancel_requested = True
+        result = original_download(self, media, destination, expected_size)
+        finished.append(str(destination))
         return result
 
     monkeypatch.setattr(ima_documents.ImaPureClient, "download", download_and_cancel)
     result = service._sync_group(service.config(), service.config().groups[0], {})
-    assert result["downloaded"] >= 1
-    downloaded = db._rows(
-        "SELECT media_id FROM ima_document_index WHERE has_pdf = 1"
-    )
-    assert downloaded
+    assert result["downloaded"] == 3
+    assert result["failed"] == 0
+    rows = db._rows("SELECT media_id FROM ima_document_index WHERE has_pdf = 1")
+    assert {row["media_id"] for row in rows} == {"file_0", "file_1", "file_2"}
+    assert len(finished) == 3
+
+
+def test_worker_skips_post_processing_after_cancel(monkeypatch):
+    service = ImaDocumentService.__new__(ImaDocumentService)
+    service._cancel_requested = True
+    service._state_lock = threading.Lock()
+    calls = []
+    monkeypatch.setattr(service, "sync_once", lambda: calls.append("sync"))
+    monkeypatch.setattr(service, "scan_local_libraries", lambda: calls.append("scan"))
+    monkeypatch.setattr(service, "_rebuild_index_if_needed", lambda: calls.append("rebuild"))
+    monkeypatch.setattr("app.ima_title_zh.refresh_bank_titles_zh", lambda _: calls.append("titles"))
+
+    service._worker()
+
+    assert calls == ["sync"]
 
 
 def test_failed_listing_keeps_old_group_index(tmp_path, monkeypatch):
@@ -4972,4 +5037,3 @@ def test_public_list_item_includes_truncated_abstract():
     }
     public3 = ImaDocumentService._public_list_item(item3)
     assert "abstract" not in public3
-

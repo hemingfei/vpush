@@ -115,32 +115,29 @@ class SubscriptionBot:
             self.send(reply_type or identity_type, reply_id or identity, "未知命令，发 /help 查看帮助")
 
     def _bind(self, identity_type: str, identity: str, code: str, reply_type=None, reply_id=None) -> None:
+        from .db import BIND_TRY_LIMIT, BIND_TRY_WINDOW
+        from .user_quota import window_start
+
         reply_type = reply_type or identity_type
         reply_id = reply_id or identity
         code = code.strip().upper()
         if len(code) != 6:
             self.send(reply_type, reply_id, "绑定码无效，请在网页/小程序「推送设置」里生成")
             return
-        row = self.db.get_bind_code(code)
-        if row is None or row["expires_at"] < int(time.time()):
+        now = time.time()
+        allowed, _retry = self.db.consume_bind_quota(
+            f"try:{identity_type}:{identity}",
+            window_start(now, BIND_TRY_WINDOW),
+            BIND_TRY_LIMIT,
+            BIND_TRY_WINDOW,
+        )
+        if not allowed:
             self.send(reply_type, reply_id, "绑定码无效或已过期，请重新生成")
             return
-        target = self.db.get_user(row["user_id"])
+        target = self.db.consume_bind_code(code, identity_type, identity)
         if target is None:
-            self.send(reply_type, reply_id, "绑定码无效，请重新生成")
+            self.send(reply_type, reply_id, "绑定码无效或已过期，请重新生成")
             return
-        # 若该渠道已有自动创建的账号，合并订阅后删除
-        if identity_type == "telegram_chat_id":
-            existing = self.db.get_user_by_telegram(identity)
-            update = {"telegram_chat_id": identity}
-        else:
-            existing = self.db.get_user_by_feishu(identity)
-            update = {"feishu_open_id": identity}
-        if existing and existing["id"] != target["id"]:
-            self.db.transfer_subscriptions(existing["id"], target["id"])
-            self.db.delete_user(existing["id"])
-        self.db.update_user(target["id"], **update)
-        self.db.delete_bind_code(code)
         self.send(
             reply_type,
             reply_id,

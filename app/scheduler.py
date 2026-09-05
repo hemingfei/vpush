@@ -33,6 +33,8 @@ from .fetchers.base import (
     Fetcher,
     Post,
     is_collapsed_translation,
+    is_stale_backfill,
+    parse_published_at,
     twitter_translate_enabled,
     with_twitter_display,
 )
@@ -453,6 +455,55 @@ def translate_text(
     return text
 
 
+def _truth_backfill_candidate(text: str) -> bool:
+    """值得回填的原文：去掉链接后仍有实质英文内容（纯链接/中文帖不翻）。"""
+    value = (text or "").strip()
+    if len(value) < 20:
+        return False
+    without_links = re.sub(r"https?://\S+", "", value).strip()
+    if len(without_links) < 8 or _already_chinese(value):
+        return False
+    return sum(1 for ch in value if ch.isascii() and ch.isalpha()) >= 8
+
+
+def backfill_truth_translations(db, limit: int = 3) -> int:
+    """低频补翻特朗普近 1 天漏翻的帖子；每轮少量，回填完自然停。
+
+    译不动（原样返回/收成省略号）的帖子写 src=content 标记为已处理，避免每轮重扫。
+    """
+    rows = db.list_untranslated_truth_posts(limit=limit * 3)
+    if not rows:
+        return 0
+    from .fetchers.twitter import configured_twitter_cookie
+
+    tw_cookie = configured_twitter_cookie(db)
+    done = 0
+    for row in rows:
+        if done >= limit:
+            break
+        content = (row["content"] or "").strip()
+        if not _truth_backfill_candidate(content):
+            db.set_post_translation(row["id"], row["title"] or "", content, row["title"] or "", content)
+            continue
+        try:
+            translated = translate_text(content, twitter_cookie=tw_cookie)
+        except Exception as exc:  # noqa: BLE001 - 单帖失败留待下轮
+            logger.warning("Truth 翻译回填失败 post=%s err=%s", row["id"], exc)
+            continue
+        if not translated or is_collapsed_translation(translated, content) or translated == content:
+            db.set_post_translation(row["id"], row["title"] or "", content, row["title"] or "", content)
+            continue
+        db.set_post_translation(
+            row["id"],
+            translated.splitlines()[0][:80],
+            translated,
+            row["title"] or "",
+            content,
+        )
+        done += 1
+    return done
+
+
 class PushRetryQueue:
     """推送失败重试队列：指数退避（1m/5m/15m），超过次数放弃。"""
 
@@ -736,7 +787,7 @@ def build_mx_view_fail_alert(db: DB, reason: str) -> Post | None:
     content = (
         f"MX 大V观点快照批次连续失败 {mx_view_analysis.get_fail_count(db)} 次，本次错误：\n"
         f"{(reason or '未知错误')[:300]}\n"
-        "游标未推进，下个快照时刻会自动重试；也可到 管理后台 → MX观点 手动跑一批诊断。"
+        "游标未推进，下个快照时刻会自动重试；也可到 管理后台 → 智囊团 手动跑一批诊断。"
     )
     return build_system_alert_post(db, title, content)
 
@@ -1352,6 +1403,7 @@ def _fetch_kol_once(
     # 否则订阅新大V时，最近 N 条历史帖会一次性连推（连珠炮刷屏）。
     # 首次成功 fetch（含空列表）即打标：空账号/偶发空窗后，下一轮新帖必须正常推送。
     first_fetch = not kol.get("baseline_ready")
+    watermark = db.max_published_at(kol["id"])
     post_ids = db.insert_posts_batch(posts)
     try:
         from . import imgbed
@@ -1383,6 +1435,12 @@ def _fetch_kol_once(
         if first_fetch:
             logger.info("基线入库 platform=%s kol=%s id=%s", post.platform, post.kol_name, post.external_id)
             continue  # 首轮仅入库建基线，历史帖不推送；后续轮次新帖正常推送
+        if is_stale_backfill(post.published_at, watermark):
+            logger.info(
+                "历史回灌入库不推送 platform=%s kol=%s id=%s at=%s wm=%s",
+                post.platform, post.kol_name, post.external_id, post.published_at, watermark,
+            )
+            continue
         logger.info("新帖 platform=%s kol=%s id=%s", post.platform, post.kol_name, post.external_id)
         if kol.get("silent"):
             # 静默源：只入库建基线/记录，不推送到任何渠道（高频星球防轰炸用）
@@ -1485,11 +1543,22 @@ def _user_llm_config(user: dict, fallback=None, db: DB | None = None):
 
 def _system_llm_config(db: DB, fallback=None):
     """站点 LLM：管理员推送设置（Grok）优先，没有再退环境变量。"""
+    from types import SimpleNamespace
+
+    from .db import user_plain_secret
+    from .url_safety import is_allowed_trusted_llm_base
+
     for user in db.list_users():
         if user.get("is_admin"):
-            cfg = _user_llm_config(user, db=db)
-            if cfg is not None:
-                return cfg
+            api_key = user_plain_secret(user, "llm_api_key", db)
+            api_base = (user.get("llm_api_base") or "").strip()
+            if api_key and is_allowed_trusted_llm_base(api_base):
+                return SimpleNamespace(
+                    api_base=api_base,
+                    api_key=api_key,
+                    model=(user.get("llm_model") or "").strip() or "grok-4.6",
+                    user_supplied=False,
+                )
     if fallback and getattr(fallback, "api_key", ""):
         return fallback
     return None
@@ -1963,6 +2032,19 @@ def _start_weibo_qr_renewal(db: DB, notifiers: list[Notifier]) -> bool:
     return True
 
 
+def format_startup_message(*, now: datetime | None = None, instance: str | None = None) -> str:
+    from .version import APP_VERSION
+
+    if instance is None:
+        instance = (os.environ.get("VPUSH_INSTANCE") or "").strip()
+    stamp = (now or datetime.now(CN_TZ)).strftime("%Y-%m-%d %H:%M")
+    lines = ["✅ V Push 服务已启动", f"v{APP_VERSION}"]
+    if instance:
+        lines.append(instance)
+    lines.append(stamp)
+    return "\n".join(lines)
+
+
 class Scheduler:
     def __init__(
         self,
@@ -2034,6 +2116,7 @@ class Scheduler:
         # 事件循环引用：线程侧（publish_mx_error 阻塞口径）需要把 WS 掐断投递回调度循环
         self._loop: asyncio.AbstractEventLoop | None = None
         self._last_imgbed = 0.0
+        self._last_truth_backfill = 0.0
 
     def _submit_news_due(self):
         if self.news_service is None:
@@ -2626,7 +2709,7 @@ class Scheduler:
 
         from .channels import build_channel_notifier, iter_user_channels
 
-        message = "✅ V Push服务已启动"
+        message = format_startup_message()
         client = httpx.Client(timeout=15)
         sent_any = False
         try:
@@ -3208,6 +3291,13 @@ class Scheduler:
                     await asyncio.to_thread(imgbed.process_pending, self.db)
                 except Exception:  # noqa: BLE001
                     logger.exception("图床镜像异常")
+            if now_mono - self._last_truth_backfill >= 60:
+                self._last_truth_backfill = now_mono
+                try:
+                    if _polling_bool(self.db, "config_translate_twitter_content", False):
+                        await asyncio.to_thread(backfill_truth_translations, self.db)
+                except Exception:  # noqa: BLE001
+                    logger.exception("Truth 翻译回填异常")
             # 股票黑话别名识别 + 误标清理：每天一次（配 LLM 才识别，清理恒执行）
             if self._stock_alias_due():
                 ran = False
@@ -3634,7 +3724,13 @@ class Scheduler:
 
         failed = False
         report_date = datetime.now().strftime("%Y-%m-%d")
-        since = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+        # 精选窗口按北京时间零点起算（用户时区）；与 published_at 同为北京钟面文本，
+        # list_daily_posts 里直接字典序比较
+        since = (
+            datetime.now(CN_TZ)
+            .replace(hour=0, minute=0, second=0, microsecond=0)
+            .strftime("%Y-%m-%d %H:%M")
+        )
 
         def _deliver(channel: str, user) -> None:
             """按渠道幂等投递每日精选：当日该渠道已成功则跳过（部分失败重试不重复发）。

@@ -3,6 +3,7 @@ from __future__ import annotations
 import functools
 import http.server
 import json
+import re
 import threading
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -96,6 +97,110 @@ def install_news_bootstrap(page: Page, *, delayed: bool = False, fail_image: boo
           };
         """
     )
+
+
+def install_badge_reader_bootstrap(page: Page) -> None:
+    page.context.add_init_script("localStorage.setItem('dav_token', 'test-token')")
+
+    def respond(route):
+        path = urlsplit(route.request.url).path
+        if path == "/api/me":
+            data = {"id": 1, "username": "test", "is_admin": True,
+                    "timeline_platforms": ["xueqiu", "combination", "weibo", "twitter", "truth", "zsxq"]}
+        elif path == "/api/ima-documents/test-report":
+            data = {"media_id": "test-report", "name": "Research report", "abstract": "Summary to copy"}
+        elif path in {"/api/my/feed", "/api/catalog", "/api/categories", "/api/recommendations"}:
+            data = []
+        else:
+            data = {}
+        route.fulfill(json=data)
+
+    page.route("**/api/**", respond)
+
+
+@pytest.mark.parametrize("width", [375, 768, 1440])
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_platform_badges_keep_blue_selection(page: Page, static_origin: str, tmp_path: Path, width: int, theme: str):
+    install_badge_reader_bootstrap(page)
+    page.set_viewport_size({"width": width, "height": 900})
+    page.emulate_media(reduced_motion="reduce")
+    page.goto(static_origin)
+    page.evaluate("() => go('timeline')")
+    expect(page.locator("#tl-pills .tl-pill").first).to_be_visible()
+    page.evaluate("theme => document.documentElement.className = 'theme-' + theme", theme)
+    expect(page.locator("#tl-platform-bar .star-icon")).to_have_count(0)
+    for platform in ["", "live", "xueqiu", "combination", "weibo", "twitter", "zsxq", "truth"]:
+        button = page.locator(f'#tl-pills [data-platform="{platform}"]')
+        button.click()
+        expect(button).to_have_attribute("aria-checked", "true")
+        page.wait_for_timeout(180)
+        colors = button.evaluate("""el => ({
+          base: getComputedStyle(el).backgroundColor,
+          badge: getComputedStyle(el, '::before').backgroundColor,
+          ink: getComputedStyle(el).color,
+          imageFilter: getComputedStyle(el.querySelector('.pt-icon')).filter
+        })""")
+        assert "rgb(22, 104, 224)" in (colors["base"], colors["badge"]), (platform, colors)
+        assert colors["ink"] == "rgb(255, 255, 255)", (platform, colors)
+        if platform in {"xueqiu", "truth"}:
+            assert colors["imageFilter"] == "brightness(0) invert(1)"
+    page.screenshot(path=str(tmp_path / f"badges-{width}-{theme}.png"))
+    if width <= 768:
+        page.locator("#tl-filter-toggle").click()
+        page.locator("#timeline-fav-toggle").click()
+        expect(page.locator("#tl-filter-toggle")).to_have_class(re.compile("has-filter"))
+        expect(page.locator("#tl-filter-toggle .funnel-icon")).to_have_css("background-color", "rgb(22, 104, 224)")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("width", [375, 1440])
+def test_abstract_copy_reuses_toolbar_icon_button(page: Page, static_origin: str, tmp_path: Path, width: int):
+    install_badge_reader_bootstrap(page)
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(static_origin)
+    page.evaluate("() => go('knowledge/test-report')")
+    button = page.get_by_role("button", name="复制摘要", exact=True)
+    expect(button).to_be_visible()
+    assert "icon-btn" in button.get_attribute("class").split()
+    expect(button.locator("svg")).to_have_count(1)
+    assert button.inner_text() == ""
+    assert button.bounding_box()["width"] == button.bounding_box()["height"] == 44
+    page.evaluate("""() => Object.defineProperty(navigator, 'clipboard', {configurable: true,
+      value: {writeText: async text => { window.copiedAbstract = text; }}})""")
+    button.click()
+    assert page.evaluate("window.copiedAbstract") == "Summary to copy"
+    expect(page.locator(".ima-reader-abstract")).to_have_attribute("open", "")
+    page.screenshot(path=str(tmp_path / f"abstract-{width}.png"))
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+def test_zsxq_attachment_download_uses_auth_header_not_query_token(page: Page, static_origin: str):
+    page.context.add_init_script("localStorage.setItem('dav_token', 'test-token')")
+    page.goto(static_origin, wait_until="domcontentloaded")
+    page.wait_for_function("typeof downloadZsxqFile === 'function'")
+    page.evaluate("""() => {
+      document.body.insertAdjacentHTML('beforeend',
+        '<button type="button" class="p-file" data-file-id="file-1" data-name="note.pdf" onclick="downloadZsxqFile(this)">📎 note.pdf</button>');
+      window.__blobReqs = [];
+      const orig = window.fetch;
+      window.fetch = async (input, init = {}) => {
+        const url = String(input);
+        const headers = init.headers || {};
+        window.__blobReqs.push({ url, auth: headers.Authorization || headers.authorization || '' });
+        if (url.includes('/api/media/zsxq-file/')) {
+          return { ok: true, status: 200, blob: async () => new Blob(['pdf'], { type: 'application/pdf' }) };
+        }
+        return orig(input, init);
+      };
+      URL.createObjectURL = () => 'blob:test';
+      URL.revokeObjectURL = () => {};
+    }""")
+    page.locator(".p-file").click()
+    reqs = page.evaluate("window.__blobReqs")
+    assert reqs, "expected attachment fetch"
+    assert all("token=" not in item["url"] for item in reqs)
+    assert any("/api/media/zsxq-file/file-1" in item["url"] for item in reqs)
+    assert any(item["auth"] == "Bearer test-token" for item in reqs)
 
 
 def test_news_reset_keeps_full_skeleton_until_response(page: Page, static_origin: str):

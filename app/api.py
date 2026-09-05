@@ -15,11 +15,36 @@ import sqlite3
 import threading
 import time
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+TURNSTILE_SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+TURNSTILE_TOKEN_MAX_LEN = 2048
+
+
+def verify_turnstile(*, secret: str, token: str, action: str, hostnames: set[str], ip: str = "") -> bool:
+    """Canonical siteverify. Tokens are single-use; caller must reset the widget after each attempt."""
+    if not isinstance(token, str) or not token or len(token) > TURNSTILE_TOKEN_MAX_LEN:
+        return False
+    payload = {"secret": secret, "response": token}
+    if ip and ip != "unknown":
+        payload["remoteip"] = ip
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.post(TURNSTILE_SITEVERIFY_URL, data=payload)
+            resp.raise_for_status()
+            result = resp.json()
+    except Exception:
+        return False
+    return (
+        result.get("success") is True
+        and result.get("action") == action
+        and result.get("hostname") in hostnames
+    )
+
 
 from fastapi import (
     APIRouter,
@@ -35,7 +60,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import auth, user_quota, wechat
 from .avatar_cache import cache_avatar
@@ -393,11 +418,13 @@ class RegisterIn(BaseModel):
     username: str
     password: str
     code: str = ""
+    cf_turnstile_response: Annotated[str, Field(max_length=2048, alias="cf-turnstile-response")] = ""
 
 
 class LoginIn(BaseModel):
     username: str
     password: str
+    cf_turnstile_response: Annotated[str, Field(max_length=2048, alias="cf-turnstile-response")] = ""
 
 
 class WechatLoginIn(BaseModel):
@@ -1559,6 +1586,9 @@ def create_api_router(
     on_mx_alert=None,
     feishu_documents: FeishuDocumentSyncService | None = None,
     news_service: NewsService | None = None,
+    turnstile_site_key: str = "",
+    turnstile_secret: str = "",
+    turnstile_hostnames: str = "",
 ) -> APIRouter:
     router = APIRouter(prefix="/api")
     # 登录/注册限流（内存版，单实例够用）：每 IP 窗口内失败次数超限后 429
@@ -1577,6 +1607,10 @@ def create_api_router(
     ADMIN_LOGIN_LOCK_THRESHOLD = 3
     ADMIN_LOGIN_LOCK_WINDOW = 1800
     MAX_PASSWORD_LEN = 128
+    _ts_secret = (turnstile_secret or "").strip()
+    _ts_sitekey = (turnstile_site_key or "").strip()
+    _ts_hosts = {h.strip() for h in (turnstile_hostnames or "").split(",") if h.strip()}
+    _ts_enabled = bool(_ts_secret)
     # 微博扫码登录会话：qrid -> {client, created_at}
     weibo_qr_sessions: dict[str, dict] = {}
     # 系统 KOL Webhook 入站限流：每 token 滑动窗口（单实例内存版）
@@ -1616,6 +1650,14 @@ def create_api_router(
             raise HTTPException(status_code=429, detail="尝试次数过多，请 5 分钟后再试")
         # 每次登录尝试顺带清理全量过期 IP 记录，防止无界增长（不能只删空列表）
         _prune_window_dict(login_attempts, LOGIN_WINDOW, now, max_entries=1000)
+
+    def _require_turnstile(token: str, action: str, ip: str) -> None:
+        if not _ts_enabled:
+            return
+        if not verify_turnstile(
+            secret=_ts_secret, token=token, action=action, hostnames=_ts_hosts, ip=ip
+        ):
+            raise HTTPException(status_code=403, detail="人机验证失败，请重试")
 
     def _record_login_failure(ip: str) -> None:
         login_attempts.setdefault(ip, []).append(time.time())
@@ -1954,12 +1996,18 @@ def create_api_router(
             "url": "https://github.com/icekale/vpush/releases",
         }
 
+    @router.get("/auth/turnstile")
+    def turnstile_public():
+        # 有密钥才下发 sitekey，避免前端出框、后端却跳过校验
+        return {"sitekey": _ts_sitekey if _ts_enabled and _ts_sitekey else ""}
+
     @router.post("/auth/register")
     def register(body: RegisterIn, request: Request):
         if not allow_register:
             raise HTTPException(status_code=403, detail="暂未开放注册")
         ip = _client_ip(request)
         _check_login_limit(ip)
+        _require_turnstile(body.cf_turnstile_response, "register", ip)
         try:
             try:
                 username = auth.validate_username(body.username)
@@ -1990,6 +2038,7 @@ def create_api_router(
     def login(body: LoginIn, request: Request):
         ip = _client_ip(request)
         _check_login_limit(ip)
+        _require_turnstile(body.cf_turnstile_response, "login", ip)
         username = body.username.strip()
         locked_left = _account_lock_seconds_left(username)
         if locked_left > 0:
@@ -2212,9 +2261,17 @@ def create_api_router(
         if "llm_api_base" in body.model_fields_set:
             value = (body.llm_api_base or "").strip()
             if value:
-                from .url_safety import is_allowed_user_llm_base
+                from .url_safety import (
+                    is_allowed_trusted_llm_base,
+                    is_allowed_user_llm_base,
+                )
 
-                if not is_allowed_user_llm_base(value):
+                allowed = (
+                    is_allowed_trusted_llm_base(value)
+                    if user.get("is_admin")
+                    else is_allowed_user_llm_base(value)
+                )
+                if not allowed:
                     raise HTTPException(status_code=400, detail="LLM 地址须为 http(s) URL")
             updates["llm_api_base"] = value
         if "llm_model" in body.model_fields_set:
@@ -2239,7 +2296,7 @@ def create_api_router(
 
         from .llm import list_models
         from .scheduler import _system_llm_config
-        from .url_safety import is_allowed_user_llm_base
+        from .url_safety import is_allowed_trusted_llm_base, is_allowed_user_llm_base
 
         user = db.get_user(user["id"]) or user
         base = (body.llm_api_base if body.llm_api_base is not None else user.get("llm_api_base") or "").strip()
@@ -2252,9 +2309,21 @@ def create_api_router(
                 raise HTTPException(status_code=400, detail="请先填写 API 地址和 Key")
             models = list_models(cfg)
         else:
-            if not is_allowed_user_llm_base(base):
+            allowed = (
+                is_allowed_trusted_llm_base(base)
+                if user.get("is_admin")
+                else is_allowed_user_llm_base(base)
+            )
+            if not allowed:
                 raise HTTPException(status_code=400, detail="LLM 地址须为 http(s) URL")
-            models = list_models(SimpleNamespace(api_base=base, api_key=key, model="", user_supplied=True))
+            models = list_models(
+                SimpleNamespace(
+                    api_base=base,
+                    api_key=key,
+                    model="",
+                    user_supplied=not bool(user.get("is_admin")),
+                )
+            )
         if models is None:
             raise HTTPException(status_code=502, detail="无法获取模型列表，请检查地址和 Key")
         return {"models": models}
@@ -2288,6 +2357,18 @@ def create_api_router(
 
     @router.post("/me/bind-code")
     def create_bind_code(user: dict = Depends(get_current_user)):
+        from .db import BIND_ISSUE_LIMIT, BIND_ISSUE_WINDOW
+        from .user_quota import window_start
+
+        now = time.time()
+        allowed, _retry = db.consume_bind_quota(
+            f"issue:{user['id']}",
+            window_start(now, BIND_ISSUE_WINDOW),
+            BIND_ISSUE_LIMIT,
+            BIND_ISSUE_WINDOW,
+        )
+        if not allowed:
+            raise HTTPException(status_code=429, detail="绑定码生成过于频繁，请稍后再试")
         db.delete_expired_bind_codes()
         code = f"{secrets.randbelow(1_000_000):06d}"
         db.create_bind_code(code, user["id"], int(time.time()) + BIND_CODE_TTL)
@@ -2986,7 +3067,10 @@ def create_api_router(
         if not _plaza_kol_visible(user, kol):
             raise HTTPException(status_code=404, detail="大V不存在")
         posts = apply_twitter_feed(
-            db.list_posts(limit=bounded_limit(limit), kol_id=kol_id, q=q.strip() or None),
+            db.list_posts(
+                limit=bounded_limit(limit), kol_id=kol_id,
+                q=q.strip() or None, order_published=True,
+            ),
             user,
         )
         subscription = db.get_subscription(user["id"], kol_id)

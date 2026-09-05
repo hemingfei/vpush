@@ -31,6 +31,7 @@ export function createImaView(dependencies) {
     SEARCH_ICON,
     REFRESH_ICON,
     X_ICON,
+    COPY_ICON,
     EXTERNAL_LINK_ICON,
   } = dependencies;
 
@@ -1315,7 +1316,7 @@ export function createImaView(dependencies) {
       const abstractMore = abstractLong
         ? `<button type="button" class="ima-abstract-more" aria-expanded="false" onclick="toggleImaAbstract(this)">展开</button>`
         : "";
-      const copyBtn = `<button type="button" class="ima-abstract-copy-btn" onclick="event.stopPropagation();copyImaAbstract()" aria-label="复制摘要" title="复制摘要"><span aria-hidden="true">📋</span> 复制摘要</button>`;
+      const copyBtn = `<button type="button" class="icon-btn ima-abstract-copy-btn" onclick="event.preventDefault();event.stopPropagation();copyImaAbstract()" aria-label="复制摘要" title="复制摘要">${COPY_ICON}</button>`;
       const abstractHtml = abstractText
         ? `<details open class="ima-reader-abstract${abstractLong ? " is-clamped" : ""}"><summary><span>摘要</span>${copyBtn}</summary><p id="ima-reader-abstract">${escapeHtml(abstractText)}</p>${abstractMore}</details>`
         : "";

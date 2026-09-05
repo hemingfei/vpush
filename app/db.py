@@ -17,6 +17,10 @@ from pathlib import Path
 from .logging_setup import redact_secrets
 
 _UNSET = object()
+BIND_TRY_LIMIT = 8
+BIND_TRY_WINDOW = 600
+BIND_ISSUE_LIMIT = 3
+BIND_ISSUE_WINDOW = 600
 
 # ---- 用户级推送凭据的 at-rest 加密 ----
 # 存储格式：enc1:<Fernet 密文>。无前缀即存量明文（读取时原样返回），
@@ -1561,6 +1565,13 @@ class DB:
             "  period_start INTEGER NOT NULL,"
             "  count INTEGER NOT NULL,"
             "  PRIMARY KEY (user_id, bucket)"
+            ")"
+        )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS bind_quota ("
+            "  key TEXT PRIMARY KEY,"
+            "  period_start INTEGER NOT NULL,"
+            "  count INTEGER NOT NULL"
             ")"
         )
         self._ensure_ima_document_tables()
@@ -3971,7 +3982,152 @@ class DB:
     def delete_expired_bind_codes(self) -> None:
         self._execute("DELETE FROM bind_codes WHERE expires_at < ?", (int(time.time()),))
 
+    def consume_bind_quota(
+        self, key: str, period_start: int, limit: int, window_seconds: int
+    ) -> tuple[bool, int]:
+        period_start = int(period_start)
+        limit = max(int(limit), 1)
+        window_seconds = max(int(window_seconds), 1)
+        retry = max(period_start + window_seconds - int(time.time()), 1)
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                row = self._conn.execute(
+                    "SELECT period_start, count FROM bind_quota WHERE key = ?", (key,)
+                ).fetchone()
+                if row is None or int(row["period_start"]) != period_start:
+                    self._conn.execute(
+                        "INSERT INTO bind_quota (key, period_start, count) VALUES (?, ?, 1) "
+                        "ON CONFLICT(key) DO UPDATE SET period_start = excluded.period_start, "
+                        "count = excluded.count",
+                        (key, period_start),
+                    )
+                    self._conn.commit()
+                    return True, 0
+                count = int(row["count"])
+                if count >= limit:
+                    self._conn.commit()
+                    return False, retry
+                self._conn.execute(
+                    "UPDATE bind_quota SET count = count + 1 WHERE key = ?", (key,)
+                )
+                self._conn.commit()
+                return True, 0
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def consume_bind_code(self, code: str, identity_type: str, identity: str) -> dict | None:
+        field = (
+            "telegram_chat_id"
+            if identity_type == "telegram_chat_id"
+            else "feishu_open_id" if identity_type == "feishu_open_id" else ""
+        )
+        if not field:
+            return None
+        now = int(time.time())
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                claimed = self._conn.execute(
+                    "DELETE FROM bind_codes WHERE code = ? AND expires_at >= ? RETURNING user_id",
+                    (code, now),
+                ).fetchone()
+                if claimed is None:
+                    self._conn.commit()
+                    return None
+                target_id = int(claimed["user_id"])
+                target = self._conn.execute(
+                    "SELECT * FROM users WHERE id = ?", (target_id,)
+                ).fetchone()
+                if target is None:
+                    self._conn.commit()
+                    return None
+                existing = self._conn.execute(
+                    f"SELECT * FROM users WHERE {field} = ?", (identity,)
+                ).fetchone()
+                if existing is not None and int(existing["id"]) != target_id:
+                    self._transfer_subscriptions_body(int(existing["id"]), target_id)
+                    self._delete_user_body(int(existing["id"]))
+                self._conn.execute(
+                    f"UPDATE users SET {field} = ? WHERE id = ?", (identity, target_id)
+                )
+                self._conn.commit()
+                user = self._conn.execute(
+                    "SELECT * FROM users WHERE id = ?", (target_id,)
+                ).fetchone()
+                return dict(user) if user else None
+            except Exception:
+                self._conn.rollback()
+                raise
+
     # ---- 账号合并 ----
+    def _transfer_subscriptions_body(self, from_user_id: int, to_user_id: int) -> None:
+        rows = self._conn.execute(
+            "SELECT kol_id, type, favorite, secondary, hide_images "
+            "FROM subscriptions WHERE user_id = ?",
+            (from_user_id,),
+        ).fetchall()
+        for row in rows:
+            existing = self._conn.execute(
+                "SELECT type, favorite, secondary, hide_images FROM subscriptions "
+                "WHERE user_id = ? AND kol_id = ?",
+                (to_user_id, row["kol_id"]),
+            ).fetchone()
+            if existing is None:
+                self._conn.execute(
+                    "INSERT INTO subscriptions "
+                    "(user_id, kol_id, type, favorite, secondary, hide_images) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        to_user_id,
+                        row["kol_id"],
+                        row["type"] or "post",
+                        row["favorite"],
+                        row["secondary"],
+                        row["hide_images"],
+                    ),
+                )
+            else:
+                merged = _merge_sub_types(row["type"], existing["type"])
+                favorite = 1 if (row["favorite"] or existing["favorite"]) else 0
+                secondary = max(row["secondary"], existing["secondary"])
+                hide_images = max(row["hide_images"], existing["hide_images"])
+                self._conn.execute(
+                    "UPDATE subscriptions SET type = ?, favorite = ?, secondary = ?, "
+                    "hide_images = ? WHERE user_id = ? AND kol_id = ?",
+                    (
+                        merged,
+                        favorite,
+                        secondary,
+                        hide_images,
+                        to_user_id,
+                        row["kol_id"],
+                    ),
+                )
+        self._conn.execute(
+            "INSERT OR IGNORE INTO user_news_sources (user_id, source_id, selected_at) "
+            "SELECT ?, source_id, selected_at FROM user_news_sources WHERE user_id = ?",
+            (to_user_id, from_user_id),
+        )
+        source_anchor = self._conn.execute(
+            "SELECT news_last_seen_at FROM users WHERE id = ?", (from_user_id,)
+        ).fetchone()["news_last_seen_at"]
+        target_anchor = self._conn.execute(
+            "SELECT news_last_seen_at FROM users WHERE id = ?", (to_user_id,)
+        ).fetchone()["news_last_seen_at"]
+        if source_anchor and (not target_anchor or source_anchor > target_anchor):
+            self._conn.execute(
+                "UPDATE users SET news_last_seen_at = ? WHERE id = ?",
+                (source_anchor, to_user_id),
+            )
+        self._conn.execute(
+            "DELETE FROM user_news_sources WHERE user_id = ?", (from_user_id,)
+        )
+        self._conn.execute(
+            "DELETE FROM subscriptions WHERE user_id = ?", (from_user_id,)
+        )
+
     def transfer_subscriptions(self, from_user_id: int, to_user_id: int) -> None:
         """把源账号的订阅合并到目标账号；同一大V保留更全的订阅类型。
 
@@ -3982,106 +4138,40 @@ class DB:
         with self._lock:
             try:
                 self._conn.execute("BEGIN")
-                rows = self._conn.execute(
-                    "SELECT kol_id, type, favorite, secondary, hide_images "
-                    "FROM subscriptions WHERE user_id = ?",
-                    (from_user_id,),
-                ).fetchall()
-                for row in rows:
-                    existing = self._conn.execute(
-                        "SELECT type, favorite, secondary, hide_images FROM subscriptions "
-                        "WHERE user_id = ? AND kol_id = ?",
-                        (to_user_id, row["kol_id"]),
-                    ).fetchone()
-                    if existing is None:
-                        self._conn.execute(
-                            "INSERT INTO subscriptions "
-                            "(user_id, kol_id, type, favorite, secondary, hide_images) "
-                            "VALUES (?, ?, ?, ?, ?, ?)",
-                            (
-                                to_user_id,
-                                row["kol_id"],
-                                row["type"] or "post",
-                                row["favorite"],
-                                row["secondary"],
-                                row["hide_images"],
-                            ),
-                        )
-                    else:
-                        merged = _merge_sub_types(row["type"], existing["type"])
-                        favorite = 1 if (row["favorite"] or existing["favorite"]) else 0
-                        secondary = max(row["secondary"], existing["secondary"])
-                        hide_images = max(row["hide_images"], existing["hide_images"])
-                        self._conn.execute(
-                            "UPDATE subscriptions SET type = ?, favorite = ?, secondary = ?, "
-                            "hide_images = ? WHERE user_id = ? AND kol_id = ?",
-                            (
-                                merged,
-                                favorite,
-                                secondary,
-                                hide_images,
-                                to_user_id,
-                                row["kol_id"],
-                            ),
-                        )
-                self._conn.execute(
-                    "INSERT OR IGNORE INTO user_news_sources (user_id, source_id, selected_at) "
-                    "SELECT ?, source_id, selected_at FROM user_news_sources WHERE user_id = ?",
-                    (to_user_id, from_user_id),
-                )
-                source_anchor = self._conn.execute(
-                    "SELECT news_last_seen_at FROM users WHERE id = ?", (from_user_id,)
-                ).fetchone()["news_last_seen_at"]
-                target_anchor = self._conn.execute(
-                    "SELECT news_last_seen_at FROM users WHERE id = ?", (to_user_id,)
-                ).fetchone()["news_last_seen_at"]
-                if source_anchor and (not target_anchor or source_anchor > target_anchor):
-                    self._conn.execute(
-                        "UPDATE users SET news_last_seen_at = ? WHERE id = ?",
-                        (source_anchor, to_user_id),
-                    )
-                self._conn.execute(
-                    "DELETE FROM user_news_sources WHERE user_id = ?", (from_user_id,)
-                )
-                self._conn.execute(
-                    "DELETE FROM subscriptions WHERE user_id = ?", (from_user_id,)
-                )
+                self._transfer_subscriptions_body(from_user_id, to_user_id)
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()
                 raise
 
+    def _delete_user_body(self, user_id: int) -> None:
+        self._conn.execute("DELETE FROM bind_codes WHERE user_id = ?", (user_id,))
+        self._conn.execute("DELETE FROM user_news_sources WHERE user_id = ?", (user_id,))
+        self._conn.execute("DELETE FROM subscriptions WHERE user_id = ?", (user_id,))
+        self._conn.execute("DELETE FROM push_logs WHERE user_id = ?", (user_id,))
+        self._conn.execute("DELETE FROM kol_acl WHERE user_id = ?", (user_id,))
+        self._conn.execute("DELETE FROM ima_kb_acl WHERE user_id = ?", (user_id,))
+        self._conn.execute("DELETE FROM ima_kb_subscriptions WHERE user_id = ?", (user_id,))
+        self._conn.execute("DELETE FROM webpush_subscriptions WHERE user_id = ?", (user_id,))
+        self._conn.execute("DELETE FROM user_keywords WHERE user_id = ?", (user_id,))
+        self._conn.execute(
+            "DELETE FROM knowledge_keyword_notified WHERE user_id = ?", (user_id,)
+        )
+        self._conn.execute("DELETE FROM feishu_personal_bots WHERE user_id = ?", (user_id,))
+        self._conn.execute(
+            "DELETE FROM feishu_registration_sessions WHERE user_id = ?", (user_id,)
+        )
+        self._conn.execute(
+            "DELETE FROM daily_report_deliveries WHERE user_id = ?", (user_id,)
+        )
+        self._conn.execute("DELETE FROM kol_requests WHERE user_id = ?", (user_id,))
+        self._conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+
     def delete_user(self, user_id: int) -> None:
         with self._lock:
             try:
                 self._conn.execute("BEGIN")
-                self._conn.execute("DELETE FROM bind_codes WHERE user_id = ?", (user_id,))
-                self._conn.execute(
-                    "DELETE FROM user_news_sources WHERE user_id = ?", (user_id,)
-                )
-                self._conn.execute("DELETE FROM subscriptions WHERE user_id = ?", (user_id,))
-                self._conn.execute("DELETE FROM push_logs WHERE user_id = ?", (user_id,))
-                self._conn.execute("DELETE FROM kol_acl WHERE user_id = ?", (user_id,))
-                self._conn.execute("DELETE FROM ima_kb_acl WHERE user_id = ?", (user_id,))
-                self._conn.execute(
-                    "DELETE FROM ima_kb_subscriptions WHERE user_id = ?", (user_id,)
-                )
-                self._conn.execute("DELETE FROM webpush_subscriptions WHERE user_id = ?", (user_id,))
-                self._conn.execute("DELETE FROM user_keywords WHERE user_id = ?", (user_id,))
-                self._conn.execute(
-                    "DELETE FROM knowledge_keyword_notified WHERE user_id = ?", (user_id,)
-                )
-                self._conn.execute(
-                    "DELETE FROM feishu_personal_bots WHERE user_id = ?", (user_id,)
-                )
-                self._conn.execute(
-                    "DELETE FROM feishu_registration_sessions WHERE user_id = ?", (user_id,)
-                )
-                self._conn.execute(
-                    "DELETE FROM daily_report_deliveries WHERE user_id = ?", (user_id,)
-                )
-                self._conn.execute("DELETE FROM kol_requests WHERE user_id = ?", (user_id,))
-                self._conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+                self._delete_user_body(user_id)
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()
@@ -4222,6 +4312,13 @@ class DB:
     def mark_kol_baseline(self, kol_id: int) -> None:
         """标记该大V已建立首次抓取基线（首次成功 fetch 后调用，含空列表）。"""
         self._execute("UPDATE kols SET baseline_ready = 1 WHERE id = ?", (kol_id,))
+
+    def max_published_at(self, kol_id: int) -> str:
+        rows = self._rows(
+            "SELECT MAX(published_at) AS m FROM posts WHERE kol_id = ? AND published_at != ''",
+            (kol_id,),
+        )
+        return str(rows[0]["m"] or "") if rows else ""
 
     def get_post(self, post_id: int) -> dict | None:
         rows = self._rows(
@@ -4477,6 +4574,7 @@ class DB:
         blocked_only: bool = False,
         include_hidden: bool = False,
         hidden_only: bool = False,
+        order_published: bool = False,
     ) -> list[dict]:
         sql = (
             "SELECT p.*, k.name AS kol_name, k.category_id AS category_id, "
@@ -4518,7 +4616,10 @@ class DB:
             params.append(below_id)
         if conds:
             sql += " WHERE " + " AND ".join(conds)
-        sql += " ORDER BY p.published_at DESC, p.id DESC LIMIT ? OFFSET ?"
+        # below_id 游标（打标回填）依赖 id 序，默认保持不变；用户可见列表用发布时间序，
+        # 避免首见入库的旧帖顶着最前
+        order = "p.published_at DESC, p.id DESC" if order_published else "p.id DESC"
+        sql += f" ORDER BY {order} LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         return _sanitize_post_detail(
             _normalize_post_tags(_normalize_post_images(self._rows(sql, params), db=self))
@@ -4649,6 +4750,12 @@ class DB:
         if since_id:
             conds.append("p.id > ?")
             params.append(since_id)
+            # 新帖检测只认近 48h 内发布的帖：回灌入库的旧帖 id 虽大，不该进「新动态」
+            # 胶囊（与推送侧 STALE_HOURS 语义一致）。published_at 是北京时间文本，
+            # datetime('now') 是 UTC，先 +8h 对齐再截到分钟
+            conds.append(
+                "p.published_at >= substr(datetime('now', '+8 hours', '-48 hours'), 1, 16)"
+            )
         rows = _sanitize_post_detail(_normalize_post_tags(_normalize_post_images(self._rows(
             "SELECT p.*, k.name AS kol_name, k.category_id AS category_id, "
             "k.avatar_url AS avatar_url, c.name AS category_name, "
@@ -4657,6 +4764,9 @@ class DB:
             "JOIN kols k ON k.id = p.kol_id "
             "LEFT JOIN categories c ON c.id = k.category_id "
             "LEFT JOIN subscriptions s ON s.kol_id = p.kol_id AND s.user_id = ? "
+            # 按发布时间排序而非入库 id：大V置顶旧帖/解除隐藏/删帖后浮上来的
+            # 首见旧帖会拿到最大 id，按 id 排会顶着动态页最前（推送侧有水位线，
+            # 动态页只有这一道防线）
             f"WHERE {' AND '.join(conds)} ORDER BY p.published_at DESC, p.id DESC LIMIT ? OFFSET ?",
             (*params, limit, offset),
         ), db=self)))
@@ -4666,9 +4776,14 @@ class DB:
         return rows
 
     def list_daily_posts(
-        self, kol_ids: list[int], since_ts: int, limit: int = 15, user_id: int | None = None
+        self, kol_ids: list[int], since: str, limit: int = 15, user_id: int | None = None
     ) -> list[dict]:
-        """用户订阅大V在 since_ts（本地零点）之后的帖子，用于每日精选。"""
+        """用户订阅大V在 since（北京时间 "YYYY-MM-DD HH:MM"）之后发布的帖，用于每日精选。
+
+        按发布时间而非入库时间筛选：回灌入库的旧帖（fetched_at 是当天）不混进当日
+        精选。published_at 与 since 同为北京钟面文本，直接字典序比较——不要经
+        strftime（SQLite 会把北京时间当 UTC 解析，窗口漂 8 小时）。
+        """
         if not kol_ids:
             return []
         placeholders = ", ".join("?" * len(kol_ids))
@@ -4678,12 +4793,13 @@ class DB:
             "JOIN kols k ON k.id = p.kol_id "
             "LEFT JOIN categories c ON c.id = k.category_id "
             "LEFT JOIN subscriptions s ON s.kol_id = p.kol_id AND s.user_id = ? "
-            f"WHERE p.kol_id IN ({placeholders}) AND strftime('%s', p.fetched_at) >= ? "
+            f"WHERE p.kol_id IN ({placeholders}) AND p.published_at >= ? "
+            "AND COALESCE(k.silent, 0) = 0 "
             "AND COALESCE(k.silent, 0) = 0 "
             "AND COALESCE(p.blocked, 0) = 0 "
             "AND COALESCE(p.hidden, 0) = 0 "
             "ORDER BY p.published_at DESC, p.id DESC LIMIT ?",
-            (user_id, *kol_ids, since_ts, limit),
+            (user_id, *kol_ids, since, limit),
         ), db=self)))
 
     def daily_report_users(self) -> list[dict]:
@@ -4858,6 +4974,24 @@ class DB:
             "AND (images LIKE '%twimg.com%' OR images LIKE '%truthsocial.com%') "
             "ORDER BY id DESC LIMIT ?",
             (max(int(limit), 1),),
+        )
+
+    def list_untranslated_truth_posts(self, limit: int = 3, days: int = 1) -> list[dict]:
+        """最近未翻译的 Truth 帖（content_src 为空），供后台低频回填。"""
+        return self._rows(
+            "SELECT id, title, content FROM posts "
+            "WHERE platform = 'truth' AND content_src = '' AND length(content) >= 20 "
+            "AND published_at >= datetime('now', ?) "
+            "ORDER BY id DESC LIMIT ?",
+            (f"-{int(days)} day", max(int(limit), 1)),
+        )
+
+    def set_post_translation(
+        self, post_id: int, title: str, content: str, title_src: str, content_src: str
+    ) -> None:
+        self._execute(
+            "UPDATE posts SET title = ?, content = ?, title_src = ?, content_src = ? WHERE id = ?",
+            (title or "", content or "", title_src or "", content_src or "", int(post_id)),
         )
 
     def list_pending_hosted_images(self, limit: int = 8) -> list[dict]:

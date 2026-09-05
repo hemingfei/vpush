@@ -667,6 +667,15 @@ def test_bind_code_api():
     assert row["user_id"] == me["id"]
 
 
+def test_bind_code_issue_rate_limit():
+    client = make_client()
+    headers = user_headers(client, "someone")
+    for _ in range(3):
+        assert client.post("/api/me/bind-code", headers=headers).status_code == 200
+    resp = client.post("/api/me/bind-code", headers=headers)
+    assert resp.status_code == 429
+
+
 def test_system_logs_api():
     client = make_client()
     admin_headers = auth_headers(client)
@@ -1497,6 +1506,93 @@ def test_login_rate_limit():
     for _ in range(8):
         assert client.post("/api/auth/login", json={"username": "nobody", "password": "wrong123"}).status_code == 401
     assert client.post("/api/auth/login", json={"username": "nobody", "password": "wrong123"}).status_code == 429
+
+
+def _turnstile_cfg():
+    cfg = Config()
+    cfg.web.turnstile_site_key = "0x4AAAAAAEpFC-pepUf7vzMN"
+    cfg.web.turnstile_secret = "test-secret"
+    cfg.web.turnstile_hostnames = "vpush.net"
+    return cfg
+
+
+def test_turnstile_sitekey_hidden_until_secret():
+    client = make_client("ts-off.db")
+    assert client.get("/api/auth/turnstile").json() == {"sitekey": ""}
+
+
+def test_turnstile_blocks_login_and_register_without_token():
+    client = make_client("ts-deny.db", config=_turnstile_cfg())
+    assert client.get("/api/auth/turnstile").json()["sitekey"] == "0x4AAAAAAEpFC-pepUf7vzMN"
+    assert client.post(
+        "/api/auth/login", json={"username": "nobody", "password": "wrong123"}
+    ).status_code == 403
+    assert client.post(
+        "/api/auth/register",
+        json={"username": "alice01", "password": "pass123456", "code": "NOPE"},
+    ).status_code == 403
+
+
+def test_turnstile_login_ok_when_siteverify_passes(monkeypatch):
+    seen = []
+
+    def fake_verify(**kwargs):
+        seen.append(kwargs)
+        return True
+
+    monkeypatch.setattr("app.api.verify_turnstile", fake_verify)
+    client = make_client("ts-ok.db", config=_turnstile_cfg())
+    register(client, "alice01", "pass123456")
+    resp = client.post(
+        "/api/auth/login",
+        json={
+            "username": "alice01",
+            "password": "pass123456",
+            "cf-turnstile-response": "tok",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert seen[-1]["token"] == "tok"
+    assert seen[-1]["action"] == "login"
+    assert seen[0]["action"] == "register"
+
+
+def test_verify_turnstile_checks_action_and_hostname(monkeypatch):
+    captured = {}
+
+    class DummyResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"success": True, "action": "login", "hostname": "vpush.net"}
+
+    class DummyClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, data=None):
+            captured["url"] = url
+            captured["data"] = data
+            return DummyResp()
+
+    monkeypatch.setattr("app.api.httpx.Client", DummyClient)
+    from app.api import TURNSTILE_SITEVERIFY_URL, verify_turnstile
+
+    assert verify_turnstile(
+        secret="s", token="tok", action="login", hostnames={"vpush.net"}, ip="1.2.3.4"
+    )
+    assert captured["url"] == TURNSTILE_SITEVERIFY_URL
+    assert captured["data"]["response"] == "tok"
+    assert captured["data"]["remoteip"] == "1.2.3.4"
+    assert not verify_turnstile(secret="s", token="tok", action="register", hostnames={"vpush.net"})
+    assert not verify_turnstile(secret="s", token="", action="login", hostnames={"vpush.net"})
 
 
 def test_admin_delete_user_cascades():
@@ -3100,10 +3196,19 @@ def test_my_feed_filters_and_pagination():
     combined = client.get("/api/my/feed?favorite=1&platform=xueqiu&q=茅台", headers=headers).json()
     assert [p["external_id"] for p in combined] == ["p1"]
 
-    # since_id：只返回比指定 id 新的帖子（X 式新帖检测/计数）
+    # since_id：只返回比指定 id 新、且 48h 内发布的帖（X 式新帖检测/计数）；
+    # 回灌旧帖 id 虽大也不算新帖
     id_p3 = next(p["id"] for p in feed if p["external_id"] == "p3")
     new_feed = client.get(f"/api/my/feed?since_id={id_p3}", headers=headers).json()
-    assert [p["external_id"] for p in new_feed] == ["p4"]
+    assert new_feed == []
+    from datetime import datetime, timedelta
+
+    from app.fetchers.base import CN_TZ
+
+    fresh_at = (datetime.now(CN_TZ) - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M")
+    db.insert_post("twitter", kid3, "p5", "刚发的新帖", "新内容", "u5", fresh_at)
+    new_feed = client.get(f"/api/my/feed?since_id={id_p3}", headers=headers).json()
+    assert [p["external_id"] for p in new_feed] == ["p5"]
     # since_id 与筛选叠加
     new_xq = client.get(f"/api/my/feed?since_id={id_p3}&platform=xueqiu", headers=headers).json()
     assert new_xq == []
@@ -3215,8 +3320,8 @@ def test_my_feed_hides_zsxq_unless_filtered():
     uid = reg.json()["user"]["id"]
     db.add_subscription(uid, xq, type="post")
     db.add_subscription(uid, zq, type="post")
-    db.insert_post("xueqiu", xq, "xq1", "雪球帖", "正文", "u1", "")
-    db.insert_post("zsxq", zq, "zq1", "#调研纪要#", "附件", "u2", "")
+    db.insert_post("xueqiu", xq, "xq1", "雪球帖", "正文", "u1", "2026-01-01 09:00")
+    db.insert_post("zsxq", zq, "zq1", "#调研纪要#", "附件", "u2", "2026-01-01 09:00")
 
     feed = client.get("/api/my/feed", headers=headers).json()
     assert [p["external_id"] for p in feed] == ["xq1"]
@@ -3225,7 +3330,7 @@ def test_my_feed_hides_zsxq_unless_filtered():
     db.set_subscription_favorite(uid, zq, True)
     feed = client.get("/api/my/feed", headers=headers).json()
     assert [p["external_id"] for p in feed] == ["zq1", "xq1"]
-    daily = db.list_daily_posts([xq, zq], 0, 15)
+    daily = db.list_daily_posts([xq, zq], "2000-01-01 00:00", 15)
     assert [p["external_id"] for p in daily] == ["xq1"]
 
 
@@ -5741,13 +5846,22 @@ def test_ima_storage_admin_actions_conflict_when_local():
 
 def test_llm_models_lists_openai_compatible_ids(monkeypatch):
     client = make_client()
-    headers = auth_headers(client)
+    headers = user_headers(client, "llm-user")
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
 
-    class FakeResp:
+    class FakeStream:
         status_code = 200
+        headers = {"content-type": "application/json"}
+        request = None
 
-        def json(self):
-            return {"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]}
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def iter_bytes(self):
+            yield json.dumps({"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]}).encode()
 
     class FakeClient:
         def __init__(self, *args, **kwargs):
@@ -5759,13 +5873,14 @@ def test_llm_models_lists_openai_compatible_ids(monkeypatch):
         def __exit__(self, *args):
             return False
 
-        def get(self, url, headers=None):
-            assert url == "https://api.openai.com/v1/models"
-            assert headers["Authorization"] == "Bearer sk-test"
-            return FakeResp()
+        def stream(self, method, url, **kwargs):
+            assert method == "GET"
+            assert str(url) == "https://93.184.216.34/v1/models"
+            assert kwargs["headers"]["Authorization"] == "Bearer sk-test"
+            assert kwargs["headers"]["Host"] == "api.openai.com"
+            return FakeStream()
 
     monkeypatch.setattr("httpx.Client", FakeClient)
-    monkeypatch.setattr("app.url_safety.is_allowed_user_llm_base", lambda url: True)
     resp = client.post(
         "/api/me/llm-models",
         json={"llm_api_base": "https://api.openai.com/v1", "llm_api_key": "sk-test"},
@@ -5775,11 +5890,23 @@ def test_llm_models_lists_openai_compatible_ids(monkeypatch):
     assert resp.json()["models"] == ["gpt-4o", "gpt-4o-mini"]
 
 
-def test_llm_models_allows_intranet_base(monkeypatch):
+def test_llm_models_rejects_intranet_base():
+    client = make_client()
+    headers = user_headers(client, "llm-private-user")
+    resp = client.post(
+        "/api/me/llm-models",
+        json={"llm_api_base": "http://127.0.0.1:11434/v1", "llm_api_key": "sk-test"},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+
+
+def test_admin_can_save_and_list_models_from_trusted_intranet_base(monkeypatch):
     client = make_client()
     headers = auth_headers(client)
+    seen = {}
 
-    class FakeResp:
+    class FakeResponse:
         status_code = 200
 
         def json(self):
@@ -5795,18 +5922,26 @@ def test_llm_models_allows_intranet_base(monkeypatch):
         def __exit__(self, *args):
             return False
 
-        def get(self, url, headers=None):
-            assert url == "http://127.0.0.1:11434/v1/models"
-            return FakeResp()
+        def get(self, url, **kwargs):
+            seen["url"] = url
+            seen["authorization"] = kwargs["headers"]["Authorization"]
+            return FakeResponse()
 
     monkeypatch.setattr("httpx.Client", FakeClient)
-    resp = client.post(
-        "/api/me/llm-models",
-        json={"llm_api_base": "http://127.0.0.1:11434/v1", "llm_api_key": "sk-test"},
+    update = client.put(
+        "/api/me",
+        json={"llm_api_base": "http://127.0.0.1:11434/v1", "llm_api_key": "sk-local"},
         headers=headers,
     )
-    assert resp.status_code == 200
-    assert resp.json()["models"] == ["local-model"]
+    response = client.post("/api/me/llm-models", json={}, headers=headers)
+
+    assert update.status_code == 200
+    assert response.status_code == 200
+    assert response.json() == {"models": ["local-model"]}
+    assert seen == {
+        "url": "http://127.0.0.1:11434/v1/models",
+        "authorization": "Bearer sk-local",
+    }
 
 
 def test_admin_news_feed_crud_archives_without_deleting_articles(monkeypatch):

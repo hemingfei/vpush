@@ -13,6 +13,7 @@ services:
       - "8000:8000"
     environment:
       - TZ=Asia/Shanghai
+      - VPUSH_INSTANCE=${VPUSH_INSTANCE:-}
       - CONFIG_PATH=/app/config.yaml
       - DB_PATH=/data/dav.db
       - IMA_ARCHIVE_ROOT=${IMA_ARCHIVE_ROOT:-}
