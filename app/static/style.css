@@ -315,8 +315,6 @@ textarea.form-control {
 }
 .cf-turnstile:empty { display: none; }
 .cf-turnstile { margin: 0 auto; }
-/* Turnstile 在沙箱 iframe 内无法染 CSS，用 hue-rotate 把 Cloudflare 橙云(≈28°)转到主题蓝(≈216°)；副作用是通过后的绿勾也会偏蓝紫 */
-.cf-turnstile > iframe { filter: hue-rotate(188deg); }
 .form-error { color: var(--color-danger); font-size: var(--text-sm); min-height: 18px; margin: 0 0 12px; }
 .btn-normal {
   height: var(--control-height-2xl);
@@ -508,7 +506,9 @@ textarea.form-control {
 }
 .nav-sub-label::after { content: "▸"; font-size: var(--text-xs); transition: transform var(--ease-standard); }
 .nav-sub[open] > .nav-sub-label::after { transform: rotate(90deg); }
-.nav-sub .nav-item { padding-left: 22px; width: 100%; }
+.nav-sub .nav-item { padding-left: 12px; width: 100%; }
+/* 子组图标与顶级导航对齐，仅文字缩进保留层级 */
+.nav-sub .nav-item .nav-label { margin-left: 10px; }
 .sidebar-foot { padding: 24px 12px 14px; }
 .sidebar-user { font-size: var(--text-xs); color: var(--color-text-muted); display: block; }
 /* 底部：主题切换器在上，GitHub+版本号并排在下 */
