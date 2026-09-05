@@ -111,6 +111,8 @@ def test_dispatch_rejects_missing_fields_with_failed_result(ctrl, monkeypatch):
         "no-ts.json": {"id": "c" * 32, "mode": "incr"},
         "bad-payload.json": {"id": "f" * 32, "mode": "incr", "ts": int(time.time()),
                              "payload": "not-a-dict"},
+        "null-payload.json": {"id": "a" * 32, "mode": "incr", "ts": int(time.time()),
+                              "payload": None},
     }
     for name, cmd in cases.items():
         _write_command(ctrl_dir, name, cmd)
@@ -118,7 +120,7 @@ def test_dispatch_rejects_missing_fields_with_failed_result(ctrl, monkeypatch):
     assert not launched, "非法命令不得执行"
     results = {p.stem: json.loads(p.read_text(encoding="utf-8"))
                for p in (ctrl_dir / "results").glob("*.json")}
-    assert len(results) == 4, results
+    assert len(results) == 5, results
     for r in results.values():
         assert r["status"] == "failed"
         assert r["error"], r

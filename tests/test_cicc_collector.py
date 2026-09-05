@@ -154,6 +154,55 @@ def test_write_completion_marker_is_atomic(tmp_path):
     assert not list(tmp_path.glob(".completed.*"))
 
 
+@pytest.mark.parametrize("first_matches", [False, True])
+@pytest.mark.parametrize("download_fails", [False, True])
+def test_collector_filtered_pagination_and_completion(tmp_path, monkeypatch,
+                                                     first_matches, download_fails):
+    import sys
+
+    m = cicc_report_collector
+    cookie = tmp_path / "fixture-cookie.txt"
+    cookie.write_text("offline-fixture")
+    marker = tmp_path / "completed-test.json"
+    monkeypatch.setattr(sys, "argv", ["collector", "--cookie-file", str(cookie),
+                                     "--root", str(tmp_path), "--keywords", "match",
+                                     "--completion-file", str(marker)])
+    monkeypatch.setattr(m, "Session", lambda _: object())
+    monkeypatch.setattr(m, "PAUSED_FILE", str(tmp_path / "paused.json"))
+    monkeypatch.setattr(m, "fetch_param", lambda _: {"treeData": [{"id": 1, "name": "test"}]})
+    monkeypatch.setattr(m, "PAGE_SIZE", 2)
+    monkeypatch.setattr(m.time, "sleep", lambda _: None)
+    monkeypatch.setattr(m, "strip_watermark", lambda value: value)
+    pages, downloads = [], []
+
+    def row(rid, title):
+        return {"id": rid, "title": title, "publishTime": "2026-09-05T01:00:00Z"}
+
+    def list_page(_sess, _cat, page, *_dates):
+        pages.append(page)
+        return {"content": {1: [row(1, "match" if first_matches else "other"), row(2, "other")],
+                            2: [row(3, "match")]}[page]}
+
+    def download(_sess, rid):
+        downloads.append(rid)
+        if download_fails:
+            raise RuntimeError("offline download failure")
+        return b"%PDF-fixture"
+
+    monkeypatch.setattr(m, "list_page", list_page)
+    monkeypatch.setattr(m, "viewer_pdf", download)
+    if download_fails:
+        with pytest.raises(SystemExit) as exc:
+            m.main()
+        assert exc.value.code == 1
+        assert not marker.exists()
+    else:
+        m.main()
+        assert json.loads(marker.read_text()) == {"id": "test"}
+    assert pages == [1, 2]
+    assert downloads == ([1, 3] if first_matches else [3])
+
+
 
 def test_admin_cicc_api(tmp_path, monkeypatch):
     monkeypatch.delenv("IMA_PULL_URL", raising=False)

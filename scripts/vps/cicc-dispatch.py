@@ -85,7 +85,7 @@ def validate_command(cmd: dict) -> str | None:
     if ts < int(time.time()) - MAX_TS_AGE:
         return "stale_command"
     payload = cmd.get("payload")
-    if payload is not None and not isinstance(payload, dict):
+    if not isinstance(payload, dict):
         return "invalid_payload"
     if mode in MODE_ARGS:
         for key, error in (("categories", "invalid_categories"),

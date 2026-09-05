@@ -784,13 +784,11 @@ def main() -> None:
         page, total_seen = args.page_start, 0
         while True:
             data = list_page(sess, cat["id"], page, start, None if args.all else end)
-            items = filter_by_keywords(
-                data.get("content") or [],
-                keywords,
-            )
+            page_items = data.get("content") or []
+            items = filter_by_keywords(page_items, keywords)
             if page == 1:
                 print(f"[{name}] total={data.get('totalElements')} pages={data.get('totalPages')}")
-            if not items:
+            if not page_items:
                 break
             for it in items:
                 total_seen += 1
@@ -827,7 +825,7 @@ def main() -> None:
                     stats["failed"] += 1
                     print(f"  FAIL {rid} {it['title'][:40]}: {e}", file=sys.stderr)
                 time.sleep(SLEEP_DL)
-            if stop or page >= MAX_PAGES or len(items) < PAGE_SIZE:
+            if stop or page >= MAX_PAGES or len(page_items) < PAGE_SIZE:
                 break
             page += 1
             time.sleep(SLEEP_PAGE)
@@ -836,6 +834,8 @@ def main() -> None:
 
     flush_sidecar()
     print(f"完成：下载 {stats['downloaded']}，已存在跳过 {stats['skipped']}，失败 {stats['failed']}")
+    if stats["failed"]:
+        sys.exit(1)
     if args.completion_file:
         completion_path = Path(args.completion_file)
         write_completion_marker(completion_path, completion_path.stem.removeprefix("completed-"))
