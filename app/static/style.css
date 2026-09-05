@@ -895,9 +895,9 @@ textarea.proxy-import { min-height: 96px; }
 .pt-label { display: inline; }
 .pt-icon { width: 16px; height: 16px; flex-shrink: 0; }
 img.pt-icon { display: block; object-fit: contain; }
-/* 「全部」与快讯同用 Duty Blue：平台色属于未选中图标 */
-.tl-pill[data-platform=""] .pt-icon,
-.platform-tab[data-platform=""] .pt-icon { color: var(--color-accent); }
+/* 「全部」与快讯同用 Duty Blue：平台色属于未选中图标（选中态让位给白图形） */
+.tl-pill[data-platform=""]:not(.selected) .pt-icon,
+.platform-tab[data-platform=""]:not(.selected) .pt-icon { color: var(--color-accent); }
 /* 平台/筛选角标统一圆底衬：位图、实底、描边三种来源的外轮廓与底色归一 */
 .tl-pill .pt-icon,
 .platform-tab .pt-icon {
