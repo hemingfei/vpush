@@ -3259,8 +3259,6 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
   list-style: none;
 }
 .ima-reader-abstract summary::-webkit-details-marker { display: none; }
-.ima-abstract-copy-btn { flex-shrink: 0; }
-.ima-abstract-copy-btn svg { width: 16px; height: 16px; }
 .ima-reader-abstract p { margin: 6px 0 0; max-width: 72ch; line-height: 1.7; }
 .ima-reader-abstract.is-clamped:not(.is-expanded) p {
   display: -webkit-box;

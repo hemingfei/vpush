@@ -3706,16 +3706,14 @@ def test_ima_reader_abstract_callout_and_copy():
     reader = _fn_body("renderImaDocument")
     css = STYLE_CSS.read_text()
 
-    # Abstract copy function exists with fallback and flash feedback
-    assert "function copyImaAbstract(" in src
-    assert "已复制研报摘要" in src
-    assert "copyImaAbstract" in reader
+    # Copy button removed; ensure no residual handlers or markup
+    assert "copyImaAbstract" not in src
+    assert ".ima-abstract-copy-btn" not in css
 
     # Reader callout styling and visual accent
     assert ".ima-reader-abstract" in css
     assert "border-left:" in css[css.index(".ima-reader-abstract"):]
     assert "var(--color-accent)" in css[css.index(".ima-reader-abstract"):]
-    assert ".ima-abstract-copy-btn" in css
 
 
 def test_ima_document_reader_preserves_group_context_and_metadata():
