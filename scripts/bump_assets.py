@@ -12,17 +12,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = Path("app/static")
 DIGEST_LEN = 12
+# style.css 之外的补充样式表：一并纳入内容摘要与 index.html 引用维护，
+# 改动它们也会推进 CACHE 版本，避免老客户端拿旧样式配新后端
+EXTRA_STYLESHEETS = ("mx-views.css",)
 
 
 def asset_paths(root: Path = ROOT) -> list[Path]:
     static = root / STATIC
     paths = [static / "style.css", static / "app.js"]
+    paths += [static / name for name in EXTRA_STYLESHEETS]
     paths += sorted((static / "core").glob("**/*.js")) if (static / "core").exists() else []
     paths += sorted((static / "views").glob("**/*.js")) if (static / "views").exists() else []
     missing = [path for path in paths[:2] if not path.is_file()]
     if missing:
         raise ValueError("missing required assets: " + ", ".join(map(str, missing)))
-    return sorted(paths, key=lambda path: path.relative_to(root).as_posix())
+    return sorted(set(paths), key=lambda path: path.relative_to(root).as_posix())
 
 
 def asset_digest(root: Path = ROOT) -> str:
@@ -56,6 +60,9 @@ def rendered_targets(root: Path = ROOT) -> dict[Path, str]:
     sw = (static / "sw.js").read_text("utf-8")
     index = replace_once(index, r'href="/style\.css\?v=[^"]+"',
                          f'href="/style.css?v={digest}"', "style.css reference")
+    for name in EXTRA_STYLESHEETS:
+        index = replace_once(index, rf'href="/{re.escape(name)}\?v=[^"]+"',
+                             f'href="/{name}?v={digest}"', f"{name} reference")
     index = replace_once(index, r'src="/app\.js\?v=[^"]+"',
                          f'src="/app.js?v={digest}"', "app.js reference")
     sw = replace_once(sw, r'const CACHE = "dav-shell-[^"]+";',

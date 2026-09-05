@@ -6036,6 +6036,21 @@ def create_api_router(
         return {"trading_day": day, "snapshot_at": at, "version": get_view_version(db),
                 "payload": snap["payload"]}
 
+    @router.get("/mx-views/feed")
+    async def mx_views_feed(day: str, current_user: dict = Depends(get_current_user)):
+        """全天实时观点流：当日全部批次的 new_opinions，最新批次在前（空批次跳过）。
+
+        批内按发生时间倒序（最新在上），并给每条观点带回所属批次 snapshot_at。
+        """
+        batches = []
+        for s in reversed(db.list_mx_view_snapshots(day)):
+            ops = [dict(o, snapshot_at=s["snapshot_at"])
+                   for o in (s["payload"].get("new_opinions") or []) if o]
+            ops.sort(key=lambda o: str(o.get("occurred_at") or ""), reverse=True)
+            if ops:
+                batches.append({"snapshot_at": s["snapshot_at"], "seq": s["seq"], "opinions": ops})
+        return {"trading_day": day, "batches": batches}
+
     @router.get("/mx-views/target")
     async def mx_views_target(type: str, name: str, day: str, at: str = "",
                               current_user: dict = Depends(get_current_user)):

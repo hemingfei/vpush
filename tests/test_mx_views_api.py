@@ -92,6 +92,28 @@ def test_mx_views_target_detail_with_evidence():
     assert kol["timeline"][0]["kol_name"] == "王哥" and "avatar" in kol["timeline"][0]
 
 
+def test_mx_views_feed_all_batches_latest_first():
+    """全天观点流：最新批次在前、批内时间倒序、空批次跳过、带回批次号；未登录 401。"""
+    client = make_client()
+    headers = auth_headers(client)
+    db = client.app.state.db
+    op = lambda name, at: {"kol_id": 1, "kol_name": name, "target_type": "topic",
+                           "target_name": "固态电池", "direction": "bull", "action": "",
+                           "summary": f"{name} 看多", "occurred_at": at}
+    db.upsert_mx_view_snapshot("2026-09-04", "09:20", 1, "live", {
+        "new_opinions": [op("王哥", "2026-09-04 09:16:00"), op("李姐", "2026-09-04 09:18:00")]})
+    db.upsert_mx_view_snapshot("2026-09-04", "09:40", 2, "live", {
+        "new_opinions": [op("王哥", "2026-09-04 09:35:00")]})
+    db.upsert_mx_view_snapshot("2026-09-04", "10:00", 3, "live", {"new_opinions": []})
+
+    data = client.get("/api/mx-views/feed?day=2026-09-04", headers=headers).json()
+    batches = data["batches"]
+    assert [b["snapshot_at"] for b in batches] == ["09:40", "09:20"]  # 最新批次在前，空批次跳过
+    assert [o["occurred_at"][11:16] for o in batches[1]["opinions"]] == ["09:18", "09:16"]  # 批内倒序
+    assert all(o["snapshot_at"] == b["snapshot_at"] for b in batches for o in b["opinions"])
+    assert client.get("/api/mx-views/feed?day=2026-09-04").status_code == 401
+
+
 def test_mx_views_admin_config_and_status():
     client = make_client()
     admin = auth_headers(client)

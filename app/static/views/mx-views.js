@@ -18,15 +18,25 @@ export function createMxViewsView(dependencies) {
   window._mxvPosts = []; // 证据原帖缓存，供 app.js openRawModal 查找
   window._mxvTargets = []; // 标的索引，供 onclick 按下标打开（避免外部名称注入 JS 字符串）
   const _mxv = { seq: 0, day: null, days: [], snapshots: [], at: null, payload: null,
-    atLatest: true, hasNew: false, es: null, sseOk: false, pollTimer: null, clockTimer: null, drawer: null };
+    atLatest: true, hasNew: false, es: null, sseOk: false, pollTimer: null, clockTimer: null, drawer: null,
+    followed: new Set(), kolMode: "kol", kolExpanded: false, kolStockTargets: [],
+    feedBatches: [], feedKey: "", feedPending: false, feedLoading: false, feedFailed: false,
+    applySeq: 0, tlDrag: false, tlPreviewIdx: -1 };
 
   function mxvTeardown() {
     if (_mxv.es) { try { _mxv.es.close(); } catch (e) {} _mxv.es = null; }
     if (_mxv.pollTimer) { clearInterval(_mxv.pollTimer); _mxv.pollTimer = null; }
     if (_mxv.clockTimer) { clearInterval(_mxv.clockTimer); _mxv.clockTimer = null; }
+    if (_mxv.tlDrag) { // 拖动中途离开页面：摘掉 window 级拖动监听
+      window.removeEventListener("pointermove", mxvTlMove);
+      window.removeEventListener("pointerup", mxvTlUp);
+      window.removeEventListener("pointercancel", mxvTlUp);
+    }
     const d = document.querySelector(".mxv-drawer-mask"); if (d) d.remove();
     const dr = document.querySelector(".mxv-drawer"); if (dr) dr.remove();
-    Object.assign(_mxv, { day: null, payload: null, at: null, drawer: null, hasNew: false, sseOk: false });
+    Object.assign(_mxv, { day: null, payload: null, at: null, drawer: null, hasNew: false, sseOk: false,
+      feedBatches: [], feedKey: "", feedPending: false, feedLoading: false, feedFailed: false,
+      tlDrag: false, tlPreviewIdx: -1 });
   }
 
   async function renderMxViews(seq) {
@@ -35,9 +45,14 @@ export function createMxViewsView(dependencies) {
     setPageTitle("MX观点");
     $("#main").innerHTML = `<div class="mxv-root"><div class="mxv-empty">加载中…</div></div>`;
     try {
-      const daysData = await api("/api/mx-views/days");
+      const [daysData, subRows] = await Promise.all([
+        api("/api/mx-views/days"),
+        api("/api/my/subscriptions").catch(() => []), // 关注大V置顶用；失败不阻塞页面
+      ]);
       if (!routeStillActive(seq)) return;
       _mxv.days = (daysData.days || []).map((d) => d.trading_day);
+      _mxv.followed = new Set((Array.isArray(subRows) ? subRows : [])
+        .filter((r) => r.platform === "mx").map((r) => Number(r.id)));
       const qday = routeQuery().get("day");
       await mxvLoadDay(qday && _mxv.days.includes(qday) ? qday : (_mxv.days[0] || null), seq);
       if (!routeStillActive(seq)) return;
@@ -63,26 +78,53 @@ export function createMxViewsView(dependencies) {
 
   async function mxvApplySnapshot(at) {
     if (!routeStillActive(_mxv.seq)) return;
+    const token = (_mxv.applySeq = (_mxv.applySeq || 0) + 1); // 拖动/连点防乱序：旧响应直接丢弃
     const data = await api(`/api/mx-views/snapshot?day=${encodeURIComponent(_mxv.day)}&at=${encodeURIComponent(at)}`);
-    if (!routeStillActive(_mxv.seq)) return;
+    if (!routeStillActive(_mxv.seq) || token !== _mxv.applySeq) return;
     _mxv.at = at;
     _mxv.payload = data.payload || {};
     _mxv.atLatest = _mxv.snapshots.length > 0 && at === _mxv.snapshots[_mxv.snapshots.length - 1].snapshot_at;
     if (_mxv.atLatest) _mxv.hasNew = false;
     window._mxvPosts = []; // 换快照清证据缓存
     window._mxvTargets = []; // 换快照清标的索引
+    mxvClaimFeed();
     mxvRenderShell();
+    mxvLoadFeed();
+  }
+
+  // ---- 全天观点流（feed）：day|最新快照 为 key，变了才重拉 ----
+  function mxvClaimFeed() {
+    if (!_mxv.snapshots.length) { _mxv.feedPending = false; _mxv.feedLoading = false; return; }
+    const key = `${_mxv.day}|${_mxv.snapshots[_mxv.snapshots.length - 1].snapshot_at}`;
+    if (key === _mxv.feedKey) { _mxv.feedPending = false; return; }
+    _mxv.feedKey = key; // 先占坑，连点只发一次请求
+    _mxv.feedPending = true;
+    _mxv.feedLoading = true;
+    _mxv.feedFailed = false;
+  }
+
+  async function mxvLoadFeed() {
+    if (!_mxv.feedPending) return;
+    _mxv.feedPending = false;
+    const key = _mxv.feedKey;
+    try {
+      const data = await api(`/api/mx-views/feed?day=${encodeURIComponent(_mxv.day)}`);
+      if (!routeStillActive(_mxv.seq) || key !== _mxv.feedKey) return;
+      _mxv.feedBatches = data.batches || [];
+      _mxv.feedFailed = false;
+      _mxv.feedLoading = false;
+      mxvRenderFeed();
+    } catch (e) {
+      _mxv.feedKey = ""; // 失败释放 key，下次换快照重试
+      _mxv.feedLoading = false;
+      _mxv.feedFailed = true;
+      mxvRenderFeed();
+    }
   }
 
   function mxvGoLatest() {
     if (!_mxv.snapshots.length) return;
     mxvApplySnapshot(_mxv.snapshots[_mxv.snapshots.length - 1].snapshot_at);
-  }
-
-  function mxvStep(dir) {
-    const idx = _mxv.snapshots.findIndex((s) => s.snapshot_at === _mxv.at);
-    const next = _mxv.snapshots[idx + dir];
-    if (next) mxvApplySnapshot(next.snapshot_at);
   }
 
   function mxvSseDotSync() {
@@ -138,6 +180,8 @@ export function createMxViewsView(dependencies) {
     const root = $("#main").querySelector(".mxv-root") || $("#main");
     root.outerHTML = mxvRootHtml();
     mxvStartClock();
+    mxvBindTimeline();
+    mxvBindKolResize();
     mxvRenderBoards();
     mxvRenderDrawer();
   }
@@ -158,44 +202,112 @@ export function createMxViewsView(dependencies) {
       </div>
       ${mxvTimelineHtml()}
       <div id="mxv-banner"></div>
+      <div id="mxv-kols"></div>
       <div id="mxv-boards"></div>
       <div id="mxv-feed"></div>
-      <div id="mxv-kols"></div>
-    </div>
-    <div id="mxv-drawer-slot"></div>`;
+      <!-- 抽屉挂载点必须在 .mxv-root 内：抽屉颜色全部走 --mxv-* 变量（fixed 定位，DOM 位置不影响视觉） -->
+      <div id="mxv-drawer-slot"></div>
+    </div>`;
   }
 
   function mxvTimelineHtml() {
     const snaps = _mxv.snapshots;
     if (!snaps.length) return `<div class="mxv-timeline mxv-empty">当日暂无快照</div>`;
     const n = snaps.length;
+    const idx = Math.max(0, snaps.findIndex((s) => s.snapshot_at === _mxv.at));
+    _mxv.tlPreviewIdx = idx;
+    // 均匀抽稀刻度时间标签（首尾必显；末尾常规标签离最后一个快照太近时让位），拖动/点击由 mxvBindTimeline 统一处理
+    const labelEvery = Math.max(1, Math.ceil(n / 12));
+    const lastRegular = Math.floor((n - 1) / labelEvery) * labelEvery;
+    const dropLastRegular = (n - 1) - lastRegular < Math.ceil(labelEvery / 2);
     const ticks = snaps.map((s, i) => {
       const left = n === 1 ? 50 : (i / (n - 1)) * 100;
       const active = s.snapshot_at === _mxv.at;
       const special = ["12:00", "16:00"].includes(s.snapshot_at) || i === 0;
+      const showLabel = i === n - 1
+        || (i % labelEvery === 0 && !(i === lastRegular && dropLastRegular && i !== n - 1));
       return `<div class="mxv-tl-tick ${special ? "special" : ""}" style="left:${left}%"
-        title="${s.snapshot_at} · ${s.message_count}条消息" onclick="mxvApplySnapshot('${s.snapshot_at}')"></div>
+        title="${s.snapshot_at} · ${s.message_count}条消息"></div>
         <div class="mxv-tl-head" style="left:${left}%;${active ? "" : "display:none"}">
-          <div class="t">${s.snapshot_at}</div><div class="s"></div></div>`;
+          <div class="t">${s.snapshot_at}</div><div class="s"></div></div>
+        ${showLabel ? `<div class="mxv-tl-label${special ? " special" : ""}" style="left:${left}%">${s.snapshot_at}</div>` : ""}`;
     }).join("");
-    const idx = Math.max(0, snaps.findIndex((s) => s.snapshot_at === _mxv.at));
     const doneW = n <= 1 ? 100 : (idx / (n - 1)) * 100;
     const diff = mxvDiffText();
     return `
     <div class="mxv-timeline">
       <div style="display:flex;align-items:center;gap:8px">
-        <button class="mxv-btn" onclick="mxvStep(-1)" aria-label="上一快照">◀</button>
-        <div class="mxv-tl-track"><div class="mxv-tl-rail"></div>
-          <div class="mxv-tl-done" style="left:0;width:${doneW}%"></div>${ticks}</div>
-        <button class="mxv-btn" onclick="mxvStep(1)" aria-label="下一快照">▶</button>
+        <div class="mxv-tl-track" tabindex="0" role="slider" aria-label="快照时间轴"
+          aria-valuemin="1" aria-valuemax="${n}" aria-valuenow="${idx + 1}" aria-valuetext="${snaps[idx].snapshot_at}">
+          <div class="mxv-tl-rail"></div>
+          <div class="mxv-tl-done" style="left:0;width:${doneW}%"></div>${ticks}
+        </div>
         <button class="mxv-btn latest ${_mxv.atLatest ? "" : "has-new"}" onclick="mxvGoLatest()">回最新 ▸▸</button>
       </div>
       <div class="mxv-tl-meta">
-        <span>快照 ${idx + 1}/${n}</span>
+        <span>快照 ${idx + 1}/${n} · 点击或拖动时间轴切换</span>
         ${_mxv.hasNew && !_mxv.atLatest ? `<span style="color:var(--mxv-gold)">有新快照</span>` : ""}
         ${diff ? `<span>较上版：${diff}</span>` : ""}
       </div>
     </div>`;
+  }
+
+  // ---- 时间轴交互：按住可拖动滑动，点按即切，松手才真正加载该快照 ----
+  function mxvBindTimeline() {
+    const track = document.querySelector(".mxv-tl-track");
+    if (!track) return;
+    track.addEventListener("pointerdown", mxvTlDown);
+    track.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      e.preventDefault();
+      const snap = _mxv.snapshots[_mxv.tlPreviewIdx + (e.key === "ArrowRight" ? 1 : -1)];
+      if (snap) mxvApplySnapshot(snap.snapshot_at);
+    });
+  }
+
+  function mxvTlDown(e) {
+    if (!_mxv.snapshots.length || (e.pointerType === "mouse" && e.button !== 0)) return;
+    e.preventDefault();
+    _mxv.tlDrag = true;
+    mxvTlPreview(mxvTlIdxFromX(e.clientX));
+    window.addEventListener("pointermove", mxvTlMove);
+    window.addEventListener("pointerup", mxvTlUp);
+    window.addEventListener("pointercancel", mxvTlUp);
+  }
+
+  function mxvTlMove(e) {
+    if (_mxv.tlDrag) mxvTlPreview(mxvTlIdxFromX(e.clientX));
+  }
+
+  function mxvTlUp() {
+    window.removeEventListener("pointermove", mxvTlMove);
+    window.removeEventListener("pointerup", mxvTlUp);
+    window.removeEventListener("pointercancel", mxvTlUp);
+    if (!_mxv.tlDrag) return;
+    _mxv.tlDrag = false;
+    const snap = _mxv.snapshots[_mxv.tlPreviewIdx];
+    if (snap && snap.snapshot_at !== _mxv.at) mxvApplySnapshot(snap.snapshot_at);
+    else mxvTlPreview(Math.max(0, _mxv.snapshots.findIndex((s) => s.snapshot_at === _mxv.at)));
+  }
+
+  function mxvTlIdxFromX(x) {
+    const track = document.querySelector(".mxv-tl-track");
+    const n = _mxv.snapshots.length;
+    if (!track || n < 2) return Math.max(0, n - 1);
+    const rect = track.getBoundingClientRect();
+    const frac = (x - rect.left) / Math.max(rect.width, 1);
+    return Math.min(n - 1, Math.max(0, Math.round(frac * (n - 1))));
+  }
+
+  function mxvTlPreview(idx) {
+    const track = document.querySelector(".mxv-tl-track");
+    const n = _mxv.snapshots.length;
+    if (!track || !n) return;
+    idx = Math.min(n - 1, Math.max(0, idx));
+    _mxv.tlPreviewIdx = idx;
+    const done = track.querySelector(".mxv-tl-done");
+    if (done) done.style.width = `${n <= 1 ? 100 : (idx / (n - 1)) * 100}%`;
+    track.querySelectorAll(".mxv-tl-head").forEach((h, i) => { h.style.display = i === idx ? "" : "none"; });
   }
 
   function mxvDiffText() {
@@ -272,7 +384,7 @@ export function createMxViewsView(dependencies) {
       banner.innerHTML = s && s.text ? `
         <div class="mxv-banner">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-            <b style="color:#fff">⚡ 今日操作</b>
+            <b style="color:var(--mxv-strong)">⚡ 今日操作</b>
             <span style="margin-left:auto;color:var(--mxv-faint);font-size:11px">第 ${(_mxv.snapshots.find((x) => x.snapshot_at === _mxv.at) || {}).seq || "—"} 版 · ${escapeHtml(_mxv.at || "")} 生成</span>
           </div>
           <div class="text">${escapeHtml(s.text || "")}</div>
@@ -311,10 +423,142 @@ export function createMxViewsView(dependencies) {
           <div class="mxv-board"><h3>个股强度榜</h3>${stockRows || `<div class="mxv-empty">暂无个股观点</div>`}</div>
         </div>`;
     }
+    mxvRenderFeed();
+    mxvRenderKols();
+  }
+
+  // ---- 大V观点总览：今日操作下方；默认一行，更多展开；关注置顶；大V/个股两种卡片 ----
+  function mxvRenderKols() {
+    const kols = $("#mxv-kols");
+    if (!kols) return;
+    const mode = _mxv.kolMode === "stock" ? "stock" : "kol";
+    const cards = mode === "stock" ? mxvStockCardsHtml() : mxvKolCardsHtml();
+    kols.innerHTML = `
+      <div class="mxv-kol-head">
+        <h3>大V观点总览</h3>
+        <button type="button" class="mxv-more" id="mxv-kols-more" onclick="mxvKolMore()" hidden>更多 ▾</button>
+        <div class="mxv-mode" role="tablist" aria-label="总览方式">
+          <button type="button" class="${mode === "kol" ? "on" : ""}" onclick="mxvKolMode('kol')" aria-pressed="${mode === "kol"}">按大V</button>
+          <button type="button" class="${mode === "stock" ? "on" : ""}" onclick="mxvKolMode('stock')" aria-pressed="${mode === "stock"}">按个股</button>
+        </div>
+      </div>
+      <div class="mxv-kols" id="mxv-kols-grid">${cards || `<div class="mxv-empty">暂无大V观点</div>`}</div>`;
+    mxvApplyKolCollapse();
+  }
+
+  function mxvKolCardsHtml() {
+    const rows = [...(_mxv.payload && _mxv.payload.kols || [])];
+    // 稳定排序：关注的大V固定置前，组内保持原（观点数降序）顺序
+    rows.sort((a, b) =>
+      (_mxv.followed.has(Number(b.kol_id)) ? 1 : 0) - (_mxv.followed.has(Number(a.kol_id)) ? 1 : 0));
+    return rows.map((k) => {
+      const b = (k.bull_names || []).length, s = (k.bear_names || []).length;
+      const tot = Math.max(b + s, 1);
+      const fav = _mxv.followed.has(Number(k.kol_id));
+      return `
+      <div class="mxv-kolcard" onclick="mxvOpenKol(${k.kol_id})">
+        ${k.avatar ? `<img src="${escapeHtml(k.avatar)}" alt="" loading="lazy">` : `<div class="ava"></div>`}
+        <div style="flex:1;min-width:0">
+          <div class="n">${escapeHtml(k.name)}${fav ? `<span class="fav" title="已关注">★</span>` : ""} <span style="color:var(--mxv-faint);font-size:11px">${k.opinion_count} 观点</span></div>
+          <div class="mini"><div class="b" style="width:${Math.round((b / tot) * 100)}%"></div>
+            <div class="s" style="width:${Math.round((s / tot) * 100)}%"></div></div>
+          <div class="tags">${k.bull_names && k.bull_names.length ? `<span style="color:var(--mxv-bull)">▲</span> ${escapeHtml(k.bull_names.slice(0, 4).join("、"))}` : ""}
+            ${k.bear_names && k.bear_names.length ? `<br><span style="color:var(--mxv-bear)">▼</span> ${escapeHtml(k.bear_names.slice(0, 4).join("、"))}` : ""}</div>
+        </div>
+      </div>`;
+    }).join("");
+  }
+
+  function mxvStockCardsHtml() {
+    const p = _mxv.payload || {};
+    // payload.kols 的多空标的名单反查每只个股的看多/看空大V
+    const bullMap = {}, bearMap = {};
+    (p.kols || []).forEach((k) => {
+      (k.bull_names || []).forEach((n) => { (bullMap[n] = bullMap[n] || []).push(k.name); });
+      (k.bear_names || []).forEach((n) => { (bearMap[n] = bearMap[n] || []).push(k.name); });
+    });
+    _mxv.kolStockTargets = []; // 个股卡片走独立索引，避免与双榜 _mxvTargets 冲突
+    const rows = [...(p.stocks || [])].sort((a, b) =>
+      (b.bull + b.bear) - (a.bull + a.bear) || Math.abs(b.net) - Math.abs(a.net) || b.strength - a.strength);
+    const namesLine = (names, cnt, color, arrow) => names.length
+      ? `<span style="color:${color}">${arrow}</span> ${escapeHtml(names.slice(0, 6).join("、"))}${cnt > names.length ? `<span style="color:var(--mxv-faint)"> 等${cnt}人</span>` : ""}`
+      : `<span style="color:var(--mxv-faint)">${arrow} 暂无</span>`;
+    return rows.map((s) => {
+      const bullNames = bullMap[s.name] || [], bearNames = bearMap[s.name] || [];
+      const actions = Object.entries(s.actions || {}).map(([k, v]) => `${k}×${v}`).join(" ");
+      _mxv.kolStockTargets.push({ type: "stock", name: s.name });
+      const idx = _mxv.kolStockTargets.length - 1;
+      return `
+      <div class="mxv-stockcard" onclick="mxvOpenKolStockAt(${idx})">
+        <div class="n">${escapeHtml(s.name)} <span style="color:var(--mxv-faint);font-size:11px">${s.bull + s.bear} 大V</span>
+          ${actions ? `<span class="mxv-actions">${escapeHtml(actions)}</span>` : ""}</div>
+        ${mxvRatioHtml(s.bull, s.bear)}
+        <div class="names">${namesLine(bullNames, s.bull, "var(--mxv-bull)", "▲")}</div>
+        <div class="names">${namesLine(bearNames, s.bear, "var(--mxv-bear)", "▼")}</div>
+      </div>`;
+    }).join("");
+  }
+
+  function mxvApplyKolCollapse() {
+    const grid = document.getElementById("mxv-kols-grid");
+    const more = document.getElementById("mxv-kols-more");
+    if (!grid || !more) return;
+    const card = grid.querySelector(".mxv-kolcard,.mxv-stockcard");
+    const rowH = card ? card.offsetHeight : 0;
+    const overflow = rowH > 0 && grid.scrollHeight > rowH + 4;
+    grid.classList.toggle("collapsed", !_mxv.kolExpanded && overflow);
+    grid.style.maxHeight = !_mxv.kolExpanded && overflow ? `${rowH}px` : "";
+    more.hidden = !overflow;
+    more.textContent = _mxv.kolExpanded ? "收起 ▴" : "更多 ▾";
+  }
+
+  function mxvKolMode(mode) {
+    if (_mxv.kolMode === mode) return;
+    _mxv.kolMode = mode;
+    mxvRenderKols();
+  }
+
+  function mxvKolMore() {
+    _mxv.kolExpanded = !_mxv.kolExpanded;
+    mxvRenderKols();
+  }
+
+  // 窗口尺寸变化后重测单行高度（一次绑定，页面存活期内防抖生效）
+  function mxvBindKolResize() {
+    if (_mxv.kolResizeBound) return;
+    _mxv.kolResizeBound = true;
+    let t = null;
+    window.addEventListener("resize", () => {
+      if (t) clearTimeout(t);
+      t = setTimeout(() => {
+        if (document.getElementById("mxv-kols-grid")) mxvApplyKolCollapse();
+      }, 150);
+    });
+  }
+
+  function mxvOpenKolStockAt(i) {
+    const t = (_mxv.kolStockTargets || [])[i];
+    if (t) mxvOpenTarget(t.type, t.name);
+  }
+
+  // ---- 实时观点流：当日全部批次（首个→当前），批内时间倒序，批次横线分隔 ----
+  function mxvRenderFeed() {
     const feed = $("#mxv-feed");
-    if (feed) {
-      const items = (p.new_opinions || []).map((o, i) => `
-        <div class="mxv-feed-item ${_mxv.atLatest && i === 0 ? "fresh" : ""}">
+    if (!feed) return;
+    const head = `<h3 style="margin:0 0 6px;color:var(--mxv-accent);font-size:14px">实时观点流</h3>`;
+    if (_mxv.feedLoading && !(_mxv.feedBatches || []).length) {
+      feed.innerHTML = head + `<div class="mxv-empty">加载中…</div>`;
+      return;
+    }
+    const batches = _mxv.feedBatches || [];
+    if (!batches.length && _mxv.feedFailed) {
+      feed.innerHTML = head + `<div class="mxv-empty">观点流加载失败，切换快照可重试</div>`;
+      return;
+    }
+    const total = batches.reduce((acc, b) => acc + (b.opinions || []).length, 0);
+    const html = batches.map((b, bi) => {
+      const items = (b.opinions || []).map((o, i) => `
+        <div class="mxv-feed-item ${_mxv.atLatest && bi === 0 && i === 0 ? "fresh" : ""}">
           <span style="color:var(--mxv-accent)">${escapeHtml((o.occurred_at || "").slice(11, 16))}</span>
           <span class="mxv-badge ${o.direction}">${o.direction === "bull" ? "↑看多" : o.direction === "bear" ? "↓看空" : "中性"}</span>
           ${o.action ? `<span class="mxv-badge act">${escapeHtml(o.action)}</span>` : ""}
@@ -322,29 +566,11 @@ export function createMxViewsView(dependencies) {
           <span style="color:var(--mxv-muted)">· ${escapeHtml(o.kol_name)}</span>
           <span style="color:var(--mxv-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(o.summary || "")}</span>
         </div>`).join("");
-      feed.innerHTML = `<h3 style="margin:0 0 6px;color:var(--mxv-accent);font-size:14px">实时观点流（${escapeHtml(_mxv.at || "")} 批次）</h3>` +
-        (items || `<div class="mxv-empty">本批次无新增观点</div>`);
-    }
-    const kols = $("#mxv-kols");
-    if (kols) {
-      const cards = (p.kols || []).map((k) => {
-        const b = (k.bull_names || []).length, s = (k.bear_names || []).length;
-        const tot = Math.max(b + s, 1);
-        return `
-        <div class="mxv-kolcard" onclick="mxvOpenKol(${k.kol_id})">
-          ${k.avatar ? `<img src="${escapeHtml(k.avatar)}" alt="" loading="lazy">` : `<div class="ava"></div>`}
-          <div style="flex:1;min-width:0">
-            <div class="n">${escapeHtml(k.name)} <span style="color:var(--mxv-faint);font-size:11px">${k.opinion_count} 观点</span></div>
-            <div class="mini"><div class="b" style="width:${Math.round((b / tot) * 100)}%"></div>
-              <div class="s" style="width:${Math.round((s / tot) * 100)}%"></div></div>
-            <div class="tags">${k.bull_names && k.bull_names.length ? `<span style="color:var(--mxv-bull)">▲</span> ${escapeHtml(k.bull_names.slice(0, 4).join("、"))}` : ""}
-              ${k.bear_names && k.bear_names.length ? `<br><span style="color:var(--mxv-bear)">▼</span> ${escapeHtml(k.bear_names.slice(0, 4).join("、"))}` : ""}</div>
-          </div>
-        </div>`;
-      }).join("");
-      kols.innerHTML = `<h3 style="margin:0 0 8px;color:var(--mxv-accent);font-size:14px">大V观点总览</h3>` +
-        `<div class="mxv-kols">${cards || `<div class="mxv-empty">暂无大V观点</div>`}</div>`;
-    }
+      return `<div class="mxv-feed-sep"><span>批次 ${escapeHtml(b.snapshot_at)} · ${(b.opinions || []).length} 条</span></div>${items}`;
+    }).join("");
+    feed.innerHTML = head +
+      (html || `<div class="mxv-empty">当日暂无观点</div>`) +
+      (batches.length ? `<div class="mxv-feed-sep"><span>共 ${total} 条 · ${batches.length} 批次</span></div>` : "");
   }
 
   function mxvCloseDrawer() {
@@ -365,7 +591,7 @@ export function createMxViewsView(dependencies) {
   function mxvEvidenceHtml(ev) {
     return (ev || []).map((e) => {
       window._mxvPosts.push({ id: e.post_id, kol_name: e.author, published_at: e.time,
-        content: e.content, detail: "", tags: [] });
+        content: e.content, detail: e.content, tags: [] });
       return `<div class="ev">
         <div>${escapeHtml(e.author)} · ${escapeHtml((e.time || "").slice(5, 16))}</div>
         <div class="c">${escapeHtml(e.content)}</div>
@@ -385,7 +611,11 @@ export function createMxViewsView(dependencies) {
   }
 
   function mxvTimelineListHtml(timeline) {
-    return (timeline || []).map((op) => `
+    // 最新观点置顶：批次倒序，同批次按发生时间倒序
+    const rows = [...(timeline || [])].sort((a, b) =>
+      String(b.snapshot_at || "").localeCompare(String(a.snapshot_at || ""))
+      || String(b.occurred_at || "").localeCompare(String(a.occurred_at || "")));
+    return rows.map((op) => `
       <div class="mxv-op">
         <div class="head">
           ${op.avatar ? `<img class="ava" src="${escapeHtml(op.avatar)}" alt="">` : `<div class="ava"></div>`}
@@ -448,7 +678,7 @@ export function createMxViewsView(dependencies) {
       body.innerHTML = `
         <div style="margin:6px 0 10px;display:flex;gap:10px;align-items:center">
           ${data.kol.avatar ? `<img src="${escapeHtml(data.kol.avatar)}" style="width:34px;height:34px;border-radius:50%" alt="">` : ""}
-          <b style="color:#fff">${escapeHtml(data.kol.name)}</b>
+          <b style="color:var(--mxv-strong)">${escapeHtml(data.kol.name)}</b>
           <span style="color:var(--mxv-faint);font-size:12px">${data.timeline.length} 条观点 · 截至 ${escapeHtml(_mxv.at || "")}</span>
         </div>
         ${mxvTimelineListHtml(data.timeline)}`;
@@ -702,6 +932,8 @@ export function createMxViewsView(dependencies) {
 
   function mxvAdminKolToggleItem(id) {
     if (!_mxvAdmin.selected) _mxvAdmin.selected = new Set(_mxvAdmin.cfg.kol_ids || []);
+    const k = (_mxvAdmin.kols || []).find((x) => x.id === id);
+    if (k && !k.enabled && !_mxvAdmin.selected.has(id)) return; // 停用大V不可新勾进（残留的可勾掉；后端窗口查询兜底排除）
     if (_mxvAdmin.selected.has(id)) _mxvAdmin.selected.delete(id);
     else _mxvAdmin.selected.add(id);
     mxvAdminMarkDirty();
@@ -713,7 +945,7 @@ export function createMxViewsView(dependencies) {
     const q = (_mxvAdmin.kolSearch || "").trim().toLowerCase();
     const list = q ? _mxvAdmin.kols.filter((k) => String(k.name).toLowerCase().includes(q)) : _mxvAdmin.kols;
     if (!_mxvAdmin.selected) _mxvAdmin.selected = new Set(_mxvAdmin.cfg.kol_ids || []);
-    list.forEach((k) => _mxvAdmin.selected.add(k.id));
+    list.forEach((k) => { if (k.enabled) _mxvAdmin.selected.add(k.id); }); // 全选跳过停用大V
     mxvAdminMarkDirty();
     mxvAdminKolSync();
     mxvAdminKolRefreshItems();
@@ -1078,10 +1310,12 @@ export function createMxViewsView(dependencies) {
     renderMxViews,
     mxvPickDay,
     mxvRefreshLatest,
-    mxvStep,
     mxvApplySnapshot,
     mxvGoLatest,
+    mxvKolMode,
+    mxvKolMore,
     mxvOpenTargetAt,
+    mxvOpenKolStockAt,
     mxvOpenKol,
     mxvCloseDrawer,
     loadAdminMxViews,

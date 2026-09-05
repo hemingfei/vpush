@@ -54,6 +54,9 @@ def test_frontend_assets_match_financial_news_release_revision():
     app = (STATIC / "app.js").read_text()
     digest = asset_digest(ROOT)
     assert f'href="/style.css?v={digest}"' in html
+    # mx-views.css 已纳入摘要体系：页面引用与 SW 外壳都必须随 digest 推进
+    assert f'href="/mx-views.css?v={digest}"' in html
+    assert '"/mx-views.css"' in sw
     assert f'src="/app.js?v={digest}"' in html
     assert f'const CACHE = "dav-shell-{digest}";' in sw
     for url in module_urls(ROOT):

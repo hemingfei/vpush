@@ -1,4 +1,5 @@
 """MX观点页前端注册静态回归。"""
+import re
 from pathlib import Path
 
 STATIC = Path(__file__).parent.parent / "app" / "static"
@@ -25,7 +26,8 @@ def _fn_body(name: str, src: str = APP_JS) -> str:
 
 
 def test_index_html_includes_mx_views_assets():
-    assert 'href="/mx-views.css?v=2"' in INDEX
+    # 版本号由 scripts/bump_assets.py 按内容摘要统一维护，不再手工 pin
+    assert re.search(r'href="/mx-views\.css\?v=[0-9a-f]{12}"', INDEX)
     assert 'from "./views/mx-views.js"' in APP_JS
     assert 'src="/mx-views.js' not in INDEX  # 模块化后不再有独立 script 标签
 
@@ -53,7 +55,7 @@ def test_mx_views_assets_exist_with_scope():
     css = (STATIC / "mx-views.css").read_text()
     js = MX_VIEWS_JS
     assert ".mxv-root" in css
-    assert "#0b0f1a" in css  # 固定暗底，不随主题
+    assert "#0b0f1a" in css  # 暗色主题底色（.theme-dark 覆盖，页面跟随全局主题）
     assert "async function renderMxViews(" in js
     assert "window._mxvPosts" in js
     assert "/api/mx-views/stream" in js
@@ -62,9 +64,55 @@ def test_mx_views_assets_exist_with_scope():
 def test_mx_views_skeleton_functions_exist():
     js = MX_VIEWS_JS
     for fn in ("renderMxViews", "mxvLoadDay", "mxvApplySnapshot", "mxvGoLatest",
-               "mxvStep", "mxvEnsureSSE", "mxvTeardown"):
+               "mxvBindTimeline", "mxvEnsureSSE", "mxvTeardown"):
         assert f"function {fn}(" in js, fn
     assert "EventSource(" in js and "event: version" in js.replace("\\n", "\n") or "addEventListener" in js
+
+
+def test_mx_views_timeline_is_click_drag_scrubber():
+    """时间轴替代左右按钮：pointer 拖动 + 点按滑动，无 mxvStep。"""
+    js = MX_VIEWS_JS
+    assert "function mxvStep(" not in js  # 左右按钮已移除
+    body = _fn_body("mxvTimelineHtml", js)
+    assert "mxv-tl-track" in body and "mxvGoLatest()" in body
+    assert "mxvStep(" not in body
+    for fn in ("mxvTlDown", "mxvTlMove", "mxvTlUp", "mxvTlIdxFromX", "mxvTlPreview"):
+        assert f"function {fn}(" in js, fn
+    bind = _fn_body("mxvBindTimeline", js)
+    assert "pointerdown" in bind
+    down = _fn_body("mxvTlDown", js)
+    assert "pointermove" in down and "pointerup" in down  # window 级拖动监听
+    css = (STATIC / "mx-views.css").read_text()
+    assert "touch-action:none" in css.replace(" ", "")  # 拖动不触发页面滚动
+
+
+def test_mx_views_kol_overview_modes_and_collapse():
+    """大V总览：今日操作下方、默认一行+更多展开、关注置顶、大V/个股切换。"""
+    js = MX_VIEWS_JS
+    root = _fn_body("mxvRootHtml", js)
+    assert root.index("mxv-banner") < root.index("mxv-kols") < root.index("mxv-boards") < root.index("mxv-feed")
+    for fn in ("mxvRenderKols", "mxvKolCardsHtml", "mxvStockCardsHtml",
+               "mxvApplyKolCollapse", "mxvKolMode", "mxvKolMore", "mxvOpenKolStockAt"):
+        assert f"function {fn}(" in js, fn
+    kols = _fn_body("mxvRenderKols", js)
+    assert "mxvKolMode('kol')" in kols and "mxvKolMode('stock')" in kols
+    assert "mxvKolMore()" in kols and "mxvApplyKolCollapse" in kols
+    kolcards = _fn_body("mxvKolCardsHtml", js)
+    assert "_mxv.followed" in kolcards  # 关注大V置顶
+    stocks = _fn_body("mxvStockCardsHtml", js)
+    assert "b.bull + b.bear" in stocks  # 默认按大V人数降序
+    collapse = _fn_body("mxvApplyKolCollapse", js)
+    assert "scrollHeight" in collapse and "maxHeight" in collapse
+
+
+def test_mx_views_feed_all_batches_and_drawer_desc():
+    """实时观点流走全天 feed 接口；抽屉时间线最新在上。"""
+    js = MX_VIEWS_JS
+    assert "/api/mx-views/feed" in js
+    feed = _fn_body("mxvRenderFeed", js)
+    assert "mxv-feed-sep" in feed and "批次" in feed
+    tl = _fn_body("mxvTimelineListHtml", js)
+    assert "localeCompare" in tl  # 倒序排（最新在上）
 
 
 def test_mx_views_css_key_components():
@@ -74,15 +122,40 @@ def test_mx_views_css_key_components():
         assert cls in css, cls
 
 
+def test_mx_views_theme_adaptive_and_more_in_head():
+    """用户页跟随明暗主题（浅色默认 + .theme-dark 暗色覆盖）；更多/收起按钮在头部、切换按钮左侧。"""
+    css = (STATIC / "mx-views.css").read_text()
+    assert ".mxv-root{" in css  # 浅色变量为默认
+    assert ".theme-dark .mxv-root{" in css  # 暗色变量挂在主题类下
+    for legacy in ("#101c33", "#1a2a4d", "#101a2e", "#131d33", "#2a3f6e"):
+        # 深色只允许出现在 --mxv-* 调色板变量定义行，规则里一律走变量
+        for line in css.splitlines():
+            if legacy in line:
+                assert "--mxv-" in line, f"{legacy} 出现在非变量行: {line.strip()}"
+                break
+        else:
+            assert False, f"未找到 {legacy}（暗色调色板缺失）"
+    assert ".mxv-more[hidden]{display:none;}" in css.replace(" ", "")  # hidden 不再被 display:block 抵消
+    kols = _fn_body("mxvRenderKols", MX_VIEWS_JS)
+    assert 0 < kols.index("mxv-kols-more") < kols.index("mxv-mode")  # 更多在按大V/按个股左侧
+    root = _fn_body("mxvRootHtml", MX_VIEWS_JS)
+    # 抽屉挂载点必须在 .mxv-root 内：抽屉颜色全走 --mxv-* 变量，挂在外面解析不到
+    assert root.index('id="mxv-feed"') < root.index('id="mxv-drawer-slot"') < root.rindex("</div>")
+
+
 def test_mx_views_boards_render_function():
     js = MX_VIEWS_JS
     body = _fn_body("mxvRenderBoards", js)
-    for marker in ("mxv-banner", "mxv-boards", "mxv-chip", "mxv-kolcard",
-                   "mxvOpenTarget", "mxvOpenKol", "mxv-feed-item"):
+    for marker in ("mxv-banner", "mxv-boards", "mxv-chip", "mxvRenderKols", "mxvRenderFeed"):
         assert marker in body, marker
     # mxv-ratio 多空比例条由辅助函数 mxvRatioHtml 产出，渲染体以调用形式接入双榜
     assert "mxv-ratio" in _fn_body("mxvRatioHtml", js)
     assert body.count("mxvRatioHtml(") >= 2
+    # 大V卡片 / 观点流条目渲染移入各自函数
+    kols = _fn_body("mxvRenderKols", js)
+    assert "mxvKolCardsHtml" in kols and "mxvStockCardsHtml" in kols
+    feed = _fn_body("mxvRenderFeed", js)
+    assert "mxv-feed-item" in feed and "mxvOpenKol" in _fn_body("mxvKolCardsHtml", js)
 
 
 def test_mx_views_drawer_functions():
