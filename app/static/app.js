@@ -1661,12 +1661,6 @@ function tlPaintViewToggles() {
     fav.classList.toggle("fav-on", state.timelineFavorite);
     fav.setAttribute("aria-pressed", String(state.timelineFavorite));
   }
-  // 移动端角标条上的特别关注章与面板星标同一状态
-  const barStar = $("#tl-star-toggle");
-  if (barStar) {
-    barStar.classList.toggle("selected", state.timelineFavorite);
-    barStar.setAttribute("aria-pressed", String(state.timelineFavorite));
-  }
   const sec = $("#timeline-secondary-toggle");
   if (sec) {
     sec.classList.toggle("fav-on", state.timelineSecondary);
@@ -1892,7 +1886,6 @@ function tlSyncSearchBox() {
 
 function tlFilterActionsHtml() {
   return `<div class="tl-actions">
-          <button id="tl-star-toggle" class="${state.timelineFavorite ? "selected" : ""}" aria-label="只看特别关注" aria-pressed="${state.timelineFavorite}" onclick="toggleTimelineFav()">${STAR_SVG}</button>
           <button id="tl-filter-toggle" class="fav-toggle ${tlPanelFilterOn() ? "has-filter" : ""}" aria-label="筛选" aria-expanded="false" aria-controls="tl-filter-panel" onclick="tlFilterPanel()">${FILTER_ICON}筛选</button>
         </div>`;
 }

@@ -926,7 +926,7 @@ img.pt-icon { display: block; object-fit: contain; }
   box-shadow: 0 0 0 2px var(--color-surface);
   animation: live-pulse 2.4s ease-in-out infinite;
 }
-.tl-pill[data-platform="live"].selected::after { box-shadow: 0 0 0 2px var(--color-accent); }
+.tl-pill[data-platform="live"].selected::after { box-shadow: none; }
 @keyframes live-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.5; transform: scale(0.8); }
@@ -2481,9 +2481,6 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   /* 选中/激活收进章本身：章变 Duty Blue、图标反白；位图 logo 保持白章原色 */
   .icon-badge-bar .tl-pill.selected .pt-icon { background: var(--color-accent); }
   .icon-badge-bar .tl-pill.selected img.pt-icon { background: #fff; }
-  /* 星标章：蓝色空心（与组合/星球同族），选中蓝底白星 */
-  .icon-badge-bar .tl-actions button .star-icon { color: var(--color-accent); }
-  .icon-badge-bar .tl-actions button.selected .star-icon { background: var(--color-accent); color: #fff; }
   .icon-badge-bar > .fav-toggle.fav-on .star-icon,
   .icon-badge-bar .tl-actions button.has-filter .funnel-icon { background: var(--color-accent); color: #fff; }
   .home-head .icon-badge-bar { margin-top: 10px; }
