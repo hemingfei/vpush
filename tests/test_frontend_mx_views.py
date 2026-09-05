@@ -205,8 +205,13 @@ def test_mx_views_board_list_matches_heat_order_and_stock_bull_bear():
     assert boards.count("sort(mxvByHeat)") == 2  # 题材 + 个股明细都按热力排序
     assert "${s.bull}多/${s.neutral || 0}中/${s.bear}空" in boards  # 个股明细多/中/空三段与题材榜同款
     assert "strength" not in boards  # 明细不再显示打分
-    assert '<span class="mxv-actions">' in boards  # 操作列保留在最右
-    assert boards.index("中/${s.bear}空") < boards.index('<span class="mxv-actions">')  # 多空中在操作前
+    assert '<span class="mxv-actions"' in boards  # 操作列保留在最右
+    assert boards.index("中/${s.bear}空") < boards.index('<span class="mxv-actions"')  # 多空中在操作前
+    assert 'title="${escapeHtml(actions)}"' in boards  # 操作列定宽截断时 hover 看全文
+    css = (STATIC / "mx-views.css").read_text()
+    # 操作列定宽：长短不一的操作文字不挤压 flex:1 比例条，红黄绿图与多/中/空列纵向对齐
+    assert (".mxv-row .mxv-actions{width:96px;flex:none;overflow:hidden;text-overflow:ellipsis;"
+            "white-space:nowrap;}") in css
 
 
 def test_mx_views_board_list_more_limit():

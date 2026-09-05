@@ -533,7 +533,7 @@ export function createMxViewsView(dependencies) {
           ${mxvRatioHtml(s.bull, s.bear, s.neutral || 0)}
           <span class="mxv-net ${s.net > 0 ? "bull" : s.net < 0 ? "bear" : "flat"}">${s.bull}多/${s.neutral || 0}中/${s.bear}空</span>
           ${mxvMomo(s.momentum)}
-          <span class="mxv-actions">${escapeHtml(actions)}</span>
+          <span class="mxv-actions"${actions ? ` title="${escapeHtml(actions)}"` : ""}>${escapeHtml(actions)}</span>
         </div>`;
       }).join("");
       const moreBtn = (kind, total) => _mxv.boardMode[kind] === "list" && total > MXV_BOARD_LIST_LIMIT
