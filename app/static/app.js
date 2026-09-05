@@ -4631,6 +4631,7 @@ function applyTheme() {
   if (loginLogo) loginLogo.src = dark ? "/logo-mark-dark.svg" : "/logo-mark.svg";
   const favicon = document.getElementById("favicon");
   if (favicon) favicon.setAttribute("href", dark ? "/logo-mark-dark.svg" : "/logo-mark.svg");
+  updateThemeToggleIcon();
   return dark;
 }
 
@@ -4660,8 +4661,10 @@ function renderThemeSwitcher() {
 }
 
 function updateThemeToggleIcon() {
-  const btn = $("#theme-toggle-btn");
-  if (btn) btn.innerHTML = themeIconFor(themeMode());
+  const icon = themeIconFor(themeMode());
+  document.querySelectorAll(".theme-toggle-btn").forEach((btn) => {
+    btn.innerHTML = icon;
+  });
 }
 
 function cycleTheme() {
