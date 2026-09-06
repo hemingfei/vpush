@@ -76,7 +76,7 @@ export function createImaView(dependencies) {
     const id = String(mediaId || "");
     if (!id) return;
     const listWasOpen = !!$("#ima-report-page");
-    if (listWasOpen) captureImaListSnapshot(id, groupId);
+    if (listWasOpen) captureImaListSnapshot(id, groupId, replace);
     const url = normalizeRoute(imaDocumentReaderRoute(id, groupId));
     if (location.pathname + location.search !== url) {
       if (replace) history.replaceState(null, "", url);
@@ -458,13 +458,15 @@ export function createImaView(dependencies) {
     };
   }
 
-  function captureImaListSnapshot(selectedMediaId = "", selectedGroupId = "") {
+  function captureImaListSnapshot(selectedMediaId = "", selectedGroupId = "", replaced = false) {
     const fields = cloneImaListSnapshotFields();
     if (!fields) return;
     _imaListSnapshot = {
       ...fields,
       route: location.pathname + location.search,
       selectedKey: imaDocumentKey(selectedMediaId, selectedGroupId),
+      // replaced=true：阅读器条目是用 replaceState 顶掉列表条目打开的，上一条历史不是列表
+      replaced,
     };
   }
 
@@ -1223,8 +1225,9 @@ export function createImaView(dependencies) {
   function backFromImaReader(fallbackRoute, focusSearch = false) {
     clearImaPdfUrl();
     const snapshot = _imaListSnapshot;
-    // ponytail: 直链/刷新进入时上一页不是知识库（history.back 会跑偏到广场）；列表点进来才有 selectedKey
-    if (snapshot && snapshot.selectedKey && snapshot.route === normalizeRoute(fallbackRoute)) {
+    // ponytail: history.back 只在「列表 push 进阅读器」时安全；replace 进入（飞书组直开/j-k/上下篇）时
+    // 列表条目已被顶掉，back 会跑偏到广场，改走 go() 由快照恢复列表
+    if (snapshot && snapshot.selectedKey && !snapshot.replaced && snapshot.route === normalizeRoute(fallbackRoute)) {
       if (focusSearch) snapshot.focusSearch = true;
       history.back();
       return;

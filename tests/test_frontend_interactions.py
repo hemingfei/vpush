@@ -4140,6 +4140,17 @@ def test_ima_reader_captures_and_restores_the_loaded_result_set():
     assert "renderImaDocuments" in refresh
 
 
+def test_ima_reader_back_survives_replaced_history_entry():
+    """飞书组直开用 replaceState 顶掉列表条目，返回必须走 go(列表路由) 而不是 history.back。"""
+    back = _fn_body("backFromImaReader")
+    capture = _fn_body("captureImaListSnapshot")
+    opener = _fn_body("openImaDocument")
+
+    assert "!snapshot.replaced" in back
+    assert capture.index("replaced") < capture.index("selectedKey") or "replaced," in capture
+    assert "captureImaListSnapshot(id, groupId, replace)" in opener
+
+
 def test_ima_reader_has_one_app_download_and_result_neighbors():
     reader = _fn_body("renderImaDocument")
     nav = _fn_body("imaReaderNavHtml")
