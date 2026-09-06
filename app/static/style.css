@@ -454,7 +454,7 @@ textarea.form-control {
   flex-direction: column;
   padding: 18px 12px;
 }
-.sidebar-brand { display: flex; align-items: center; gap: 12px; padding: 6px 10px 20px; border-bottom: var(--border-default); }
+.sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 6px 10px 20px; border-bottom: var(--border-default); }
 .sidebar-brand-toggle {
   border: none;
   background: transparent;
@@ -468,8 +468,8 @@ textarea.form-control {
   line-height: 0;
 }
 .sidebar-brand-toggle:hover { opacity: 0.72; }
-/* 侧边栏品牌符号：与 topbar/favicon 同源融合符号，32px 与标题协调 */
-.sidebar-logo { height: 32px; width: auto; flex-shrink: 0; pointer-events: none; }
+/* 侧边栏品牌符号：与 topbar/favicon 同源融合符号，28px 与标题协调 */
+.sidebar-logo { height: 28px; width: auto; flex-shrink: 0; pointer-events: none; }
 .sidebar-brand-text { display: flex; flex-direction: column; }
 .sidebar-brand-name { font-size: var(--text-title); font-weight: var(--font-weight-semibold); color: var(--color-text-strong); }
 .sidebar-brand-meta { font-size: var(--text-xs); color: var(--color-text-faint); letter-spacing: 0.4px; }
