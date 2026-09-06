@@ -5693,3 +5693,5 @@ def test_ai_task_modal_targets_system_kols_via_explicit_platform_query():
     assert src.count('api("/api/kols?platform=system")') >= 2
     # 旧写法（从默认列表客户端过滤平台，恒为空）不得回归
     assert "kols.filter((k) => k.platform === 'system')" not in src
+    # 系统 KOL 不再默认播种：无账号时空态给创建引导（大V管理批量导入自建）
+    assert "暂无系统 KOL：请先在「大V管理」批量导入勾选「系统 KOL」创建" in src

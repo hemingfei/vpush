@@ -6669,7 +6669,7 @@ async function openAiTaskModal(taskId = null) {
 			    .map((k) => `<option value="${k.id}" ${task && task.target_kol_id == k.id ? 'selected' : ''}>${escapeHtml(k.name)}</option>`)
 			    .join("");
 			  if (!systemKols.length) {
-			    kolSelectHtml = '<option value="">暂无系统 KOL</option>';
+			    kolSelectHtml = '<option value="">暂无系统 KOL：请先在「大V管理」批量导入勾选「系统 KOL」创建</option>';
 			  }
 			} catch {
 			  kolSelectHtml = '<option value="">加载失败，请手动输入 KOL ID</option>';
