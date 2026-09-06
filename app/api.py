@@ -64,6 +64,7 @@ from pydantic import BaseModel, Field
 
 from . import auth, kol_requests, user_quota, wechat
 from .avatar_cache import cache_avatar
+from .market import MarketQuotes
 from .bot_core import BIND_CODE_TTL
 from .db import (
     _UNSET,
@@ -1394,6 +1395,7 @@ def create_api_router(
     turnstile_hostnames: str = "",
 ) -> APIRouter:
     router = APIRouter(prefix="/api")
+    market_quotes = MarketQuotes()
     # 登录/注册限流（内存版，单实例够用）：每 IP 窗口内失败次数超限后 429
     login_attempts: dict[str, list[float]] = {}
     ima_quota_alerts: set[tuple] = set()
@@ -2783,6 +2785,10 @@ def create_api_router(
     @router.get("/my/subscriptions")
     def my_subscriptions(user: dict = Depends(get_current_user)):
         return filter_plaza_rows(db, db.list_subscriptions(user["id"]))
+
+    @router.get("/market/indices")
+    def market_indices(group: Literal["auto", "day", "night"] = "auto", user: dict = Depends(get_current_user)):
+        return market_quotes.snapshot(group)
 
     @router.get("/my/feed")
     def my_feed(

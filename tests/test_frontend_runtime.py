@@ -5,6 +5,7 @@ import http.server
 import json
 import re
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -204,6 +205,101 @@ def install_news_bootstrap(page: Page, *, delayed: bool = False, fail_image: boo
     )
 
 
+def test_market_refresh_failure_visibility_and_cleanup(page: Page):
+    page.clock.install(time=datetime(2026, 9, 4, 3, 0, tzinfo=timezone.utc))
+    page.evaluate("""async () => {
+      const { createMarketView } = await import('/views/market.js');
+      document.body.innerHTML = '<section id="tl-market"></section>';
+      const h = window.marketTest = { calls: 0, failed: false, defer: false };
+      h.payload = {status:'trading', stale:false, items:[
+        {symbol:'sh000001', name:'上证指数', status:'trading', price:3930.12, change:11.97, percent:0.3, quoted_at:'2026-09-04T10:30:00+08:00'},
+        {symbol:'sz399001', name:'深证成指', status:'trading', price:13516.97, change:-108.15, percent:-0.79, quoted_at:'2026-09-04T10:30:00+08:00'}
+      ]};
+      h.view = createMarketView({escapeHtml: s => s, api: async () => {
+        h.calls++;
+        if (h.defer) return new Promise(resolve => h.resolve = resolve);
+        if (h.failed) throw new Error('offline');
+        return h.payload;
+      }});
+      h.view.startMarketQuotes();
+    }""")
+    expect(page.locator('.market-change.positive')).to_have_text('+0.30%')
+    expect(page.locator('.market-change.negative')).to_have_text('-0.79%')
+    page.evaluate('marketTest.failed = true')
+    page.clock.run_for(30000)
+    expect(page.locator('.market-status')).to_have_text('更新失败')
+    expect(page.locator('.market-price').first).to_have_text('3,930.12')
+    page.evaluate('marketTest.failed = false')
+    page.get_by_role('button', name='重试', exact=True).click()
+    expect(page.locator('.market-status')).to_have_text('交易中')
+    count = page.evaluate('marketTest.calls')
+    page.evaluate("Object.defineProperty(document, 'visibilityState', {configurable:true, value:'hidden'})")
+    page.clock.run_for(60000)
+    assert page.evaluate('marketTest.calls') == count
+    page.evaluate("""Object.defineProperty(document, 'visibilityState', {configurable:true, value:'visible'});
+      document.dispatchEvent(new Event('visibilitychange'));""")
+    assert page.evaluate('marketTest.calls') == count + 1
+    page.evaluate('marketTest.defer = true')
+    page.clock.run_for(30000)
+    page.evaluate("marketTest.view.stopMarketQuotes(); document.querySelector('#tl-market').innerHTML = 'new route'; marketTest.resolve(marketTest.payload)")
+    page.clock.run_for(60000)
+    expect(page.locator('#tl-market')).to_have_text('new route')
+    assert page.evaluate('marketTest.calls') == count + 2
+
+
+def test_market_initial_failure_has_retry_and_no_zero_quotes(page: Page):
+    page.evaluate("""async () => {
+      const { createMarketView } = await import('/views/market.js');
+      document.body.innerHTML = '<section id="tl-market"></section>';
+      createMarketView({escapeHtml: s => s, api: async () => { throw new Error('offline'); }}).startMarketQuotes();
+    }""")
+    expect(page.locator('.market-status')).to_have_text('暂不可用')
+    expect(page.locator('.market-price')).to_have_text(['--'] * 6)
+    expect(page.get_by_role('button', name='重试', exact=True)).to_be_visible()
+
+
+@pytest.mark.parametrize("daily_percent,expected_class", [(3.52, "positive"), (-3.52, "negative"), (0, "flat")])
+def test_market_switches_automatically_and_ignores_other_group_responses(page: Page, daily_percent, expected_class):
+    page.clock.install(time=datetime(2026, 9, 4, 11, 59, 50, tzinfo=timezone.utc))
+    page.evaluate("""async () => {
+      const { createMarketView } = await import('/views/market.js');
+      document.body.innerHTML = '<section id="tl-market"></section>';
+      const h = window.marketTest = {calls: [], resolve: {}};
+      h.view = createMarketView({escapeHtml: s => s, api: path => {
+        h.calls.push(path);
+        return new Promise(resolve => h.resolve[path] = resolve);
+      }});
+      h.view.startMarketQuotes();
+    }""")
+    expect(page.get_by_role('button', name='A股 / 港股')).to_have_attribute('aria-pressed', 'true')
+    page.clock.run_for(30000)
+    expect(page.get_by_role('button', name='美股', exact=True)).to_have_attribute('aria-pressed', 'true')
+    expect(page.locator('.market-name')).to_have_text(['标普 500 指数', '纳斯达克指数', '纳斯达克 100', '道琼斯指数', 'SOXX', 'YINN'])
+    page.evaluate("marketTest.resolve['/api/market/indices?group=day']({group:'day',items:[],stale:true})")
+    expect(page.locator('.market-status')).to_have_text('加载中')
+    page.evaluate("""dailyPercent => marketTest.resolve['/api/market/indices?group=night']({group:'night',stale:false,items:[{
+      symbol:'usSOXX',name:'SOXX',price:519.86,change:17.66,percent:dailyPercent,status:'closed',quoted_at:'2026-09-04T16:00:01-04:00',
+      previous_close:502.20,
+      intraday:{date:'2026-09-04',duration:390,points:[{time:'09:30',minute:0,price:550},{time:'10:30',minute:60,price:520},{time:'11:40',minute:130,price:519.86}]}
+    }]})""", daily_percent)
+    expect(page.locator('.market-spark')).to_have_count(1)
+    expect(page.locator('.market-spark')).to_have_attribute('aria-label', re.compile('SOXX.*2026-09-04 日内分时.*09:30.*11:40.*昨收 502.20'))
+    expect(page.locator('.market-spark')).to_have_class(re.compile(expected_class))
+    assert len(page.locator('.market-spark polyline').get_attribute('points').split()) == 3
+    assert page.locator('.market-spark polyline').get_attribute('points').split()[-1].startswith('22.0,')
+    expect(page.locator('.market-spark-baseline')).to_have_attribute('y1', '18')
+    expect(page.locator('.market-footer')).to_contain_text('日内分时 · 09/04')
+    assert '近20' not in page.locator('#tl-market').inner_text()
+    assert '腾讯行情' not in page.locator('#tl-market').inner_text()
+    page.get_by_role('button', name='A股 / 港股').click()
+    expect(page.get_by_role('checkbox', name='自动')).not_to_be_checked()
+    page.clock.run_for(60000)
+    expect(page.get_by_role('button', name='A股 / 港股')).to_have_attribute('aria-pressed', 'true')
+    page.get_by_role('checkbox', name='自动').check()
+    expect(page.get_by_role('button', name='美股', exact=True)).to_have_attribute('aria-pressed', 'true')
+    page.evaluate('marketTest.view.stopMarketQuotes()')
+
+
 def install_badge_reader_bootstrap(page: Page) -> None:
     page.context.add_init_script("localStorage.setItem('dav_token', 'test-token')")
 
@@ -349,7 +445,7 @@ def test_module_shell_survives_offline_reload(playwright_instance, static_origin
     page.wait_for_function("navigator.serviceWorker.controller !== null")
     context.set_offline(True)
     page.reload(wait_until="domcontentloaded")
-    expect(page.locator(".login-brand-title")).to_have_text("V Push")
+    expect(page.locator(".login-brand-title")).to_have_text("VPush")
     context.close()
     browser.close()
 

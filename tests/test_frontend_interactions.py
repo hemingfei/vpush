@@ -5199,6 +5199,16 @@ def test_system_font_stack_keeps_brand_and_chinese_titles_naturally_spaced():
     assert "letter-spacing: -0.02em" not in title.group(1)
 
 
+def test_browser_and_pwa_brand_name_match_vpush():
+    """标签页、主屏名称和登录品牌使用同一 VPush 写法。"""
+    html = INDEX_HTML.read_text()
+    assert '<title>VPush</title>' in html
+    assert 'name="apple-mobile-web-app-title" content="VPush"' in html
+    assert 'class="login-brand-title">VPush<' in html
+    assert '"name": "VPush"' in (APP_JS.parent / "manifest.webmanifest").read_text()
+    assert 'data.title || "VPush"' in (APP_JS.parent / "sw.js").read_text()
+
+
 def test_success_token_is_muted_sage():
     """成功色用鼠尾草绿，不用高饱和交通灯绿。"""
     tokens = (APP_JS.parent / "vendor" / "design-tokens.css").read_text()
