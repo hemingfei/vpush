@@ -27,8 +27,21 @@ export function createNewsView(dependencies) {
     state.newsObserver = null;
   }
 
+  function stopNewsThumbLoad() {
+    state.newsThumbObserver?.disconnect();
+    state.newsThumbObserver = null;
+  }
+
+  function abortNewsImageRequests() {
+    state.newsImageAbort?.abort();
+    state.newsImageAbort = new AbortController();
+  }
+
   function clearNewsReaderState() {
     stopNewsAutoLoad();
+    stopNewsThumbLoad();
+    abortNewsImageRequests();
+    clearTimeout(searchTimer);
     clearNewsImageUrls();
     state.newsSources = [];
     state.newsFilterSourceId = "";
@@ -36,7 +49,37 @@ export function createNewsView(dependencies) {
     state.newsItems = [];
     state.newsOffset = 0;
     state.newsHasMore = false;
+    state.newsArticleId = 0;
     state.newsRequestSeq += 1;
+  }
+
+  // 缩略图和正文图都等进入视口再请求，避免一次列表渲染打出几十个图片代理请求
+  function dispatchNewsLazyImage(img) {
+    img.dataset.newsThumbLoaded = "1";
+    const thumbId = img.dataset.newsThumbnail;
+    if (thumbId !== undefined) loadNewsImageBlob(Number(thumbId), 0, img);
+    else if (state.newsArticleId) loadNewsImageBlob(state.newsArticleId, Number(img.dataset.newsImageIndex), img);
+  }
+
+  function observeNewsLazyImages() {
+    const pending = document.querySelectorAll(
+      "[data-news-thumbnail]:not([data-news-thumb-loaded]), [data-news-image-index]:not([data-news-thumb-loaded])"
+    );
+    if (!pending.length) return;
+    if (!("IntersectionObserver" in window)) {
+      pending.forEach(dispatchNewsLazyImage);
+      return;
+    }
+    if (!state.newsThumbObserver) {
+      state.newsThumbObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          state.newsThumbObserver?.unobserve(entry.target);
+          dispatchNewsLazyImage(entry.target);
+        }
+      }, { rootMargin: "300px 0px" });
+    }
+    pending.forEach((img) => state.newsThumbObserver.observe(img));
   }
 
   function startNewsAutoLoad(seq) {
@@ -54,6 +97,8 @@ export function createNewsView(dependencies) {
   function renderNewsCenter(seq, articleId = "") {
     clearNewsImageUrls();
     stopNewsAutoLoad();
+    stopNewsThumbLoad();
+    abortNewsImageRequests();
     if (!routeStillActive(seq)) return;
     if (articleId) return renderFinancialNewsArticle(Number(articleId), seq);
     return renderFinancialNewsList(seq);
@@ -118,6 +163,8 @@ export function createNewsView(dependencies) {
     const requestSeq = ++state.newsRequestSeq;
     if (reset) {
       stopNewsAutoLoad();
+      stopNewsThumbLoad();
+      abortNewsImageRequests();
       state.newsItems = [];
       state.newsOffset = 0;
       list.innerHTML = newsListSkeletonHtml();
@@ -137,10 +184,7 @@ export function createNewsView(dependencies) {
       } else if (items.length) {
         list.insertAdjacentHTML("beforeend", items.map(newsListItemHtml).join(""));
       }
-      for (const item of items) {
-        const image = document.querySelector(`[data-news-thumbnail="${item.id}"]`);
-        if (image) loadNewsImageBlob(item.id, 0, image, seq);
-      }
+      observeNewsLazyImages();
       if (state.newsItems.length) {
         const seenAt = data.view_started_at;
         await Promise.resolve();
@@ -156,18 +200,20 @@ export function createNewsView(dependencies) {
 
   async function loadNewsImageBlob(articleId, index, image, seq = currentRouteSeq()) {
     try {
-      const blob = await apiBlob(`/api/news/${articleId}/images/${index}`);
+      const blob = await apiBlob(`/api/news/${articleId}/images/${index}`, { signal: state.newsImageAbort?.signal });
       if (!routeStillActive(seq) || !image || !document.body.contains(image)) return;
       const url = URL.createObjectURL(blob);
       state.newsImageUrls.add(url);
       image.src = url;
-    } catch {
+    } catch (err) {
+      if (err?.name === "AbortError") return;
       if (routeStillActive(seq) && image && document.body.contains(image)) image.remove();
     }
   }
 
   async function renderFinancialNewsArticle(articleId, seq = currentRouteSeq()) {
     setPageTitle("财经新闻", true, "news", "返回财经新闻");
+    state.newsArticleId = articleId;
     const main = $("#main");
     if (!main) return;
     main.innerHTML = `<article class="news-article-page"><div class="admin-skeleton" aria-hidden="true"></div></article>`;
@@ -175,15 +221,10 @@ export function createNewsView(dependencies) {
       const article = await api(`/api/news/${articleId}`);
       if (!routeStillActive(seq)) return;
       main.innerHTML = `<article class="news-article-page"><header class="news-article-head"><div class="news-article-meta"><span>${escapeHtml(article.source_name || "")}</span><time datetime="${escapeHtml(article.published_at || "")}">${escapeHtml(fmtPublished(article.published_at, false))}</time></div><h1>${escapeHtml(article.title)}</h1>${article.author ? `<p class="section-meta">作者：${escapeHtml(article.author)}</p>` : ""}<a class="btn-ghost news-original-link" href="${escapeHtml(article.url)}" target="_blank" rel="noopener noreferrer nofollow">打开原文 ${externalLinkIcon}</a></header><div class="news-article-body">${article.content_html || `<p>${escapeHtml(article.summary || "暂无正文")}</p>`}</div></article>`;
-      loadNewsImages(articleId, seq);
+      observeNewsLazyImages();
     } catch (err) {
       if (routeStillActive(seq)) main.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="renderFinancialNewsArticle(${articleId})">重试</button></div>`);
     }
-  }
-
-  async function loadNewsImages(articleId, seq = currentRouteSeq()) {
-    const images = [...document.querySelectorAll("[data-news-image-index]")];
-    await Promise.all(images.map((image) => loadNewsImageBlob(articleId, Number(image.dataset.newsImageIndex), image, seq)));
   }
 
   function openNewsArticle(articleId) {

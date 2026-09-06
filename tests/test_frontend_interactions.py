@@ -4310,7 +4310,7 @@ def test_news_reader_functions_cover_sources_seen_and_blob_cleanup():
     src = NEWS_JS.read_text()
     for name in (
         "renderNewsCenter", "loadFinancialNews", "openNewsSourcePicker",
-        "saveNewsSources", "openNewsArticle", "loadNewsImages", "clearNewsImageUrls",
+        "saveNewsSources", "openNewsArticle", "observeNewsLazyImages", "clearNewsImageUrls",
     ):
         assert f"function {name}" in src or f"async function {name}" in src
     seen = _fn_body("loadFinancialNews", NEWS_JS)
@@ -4318,6 +4318,23 @@ def test_news_reader_functions_cover_sources_seen_and_blob_cleanup():
     assert "view_started_at" in seen
     images = _fn_body("clearNewsImageUrls", NEWS_JS)
     assert "URL.revokeObjectURL" in images
+
+
+def test_news_images_lazy_load_and_abort_on_route_change():
+    """缩略图/正文图必须进视口才请求，且切页时中断在途请求，避免图片洪泛拖垮切页。"""
+    lazy = _fn_body("observeNewsLazyImages", NEWS_JS)
+    assert "IntersectionObserver" in lazy
+    assert "[data-news-thumbnail]" in lazy and "[data-news-image-index]" in lazy
+    dispatch = _fn_body("dispatchNewsLazyImage", NEWS_JS)
+    assert "dataset.newsThumbLoaded" in dispatch
+    blob = _fn_body("loadNewsImageBlob", NEWS_JS)
+    assert "signal: state.newsImageAbort?.signal" in blob
+    assert "AbortError" in blob
+    clear = _fn_body("clearNewsReaderState", NEWS_JS)
+    assert "abortNewsImageRequests" in clear
+    reset = _fn_body("loadFinancialNews", NEWS_JS)
+    assert "observeNewsLazyImages" in reset
+    assert "newsImageAbort: null" in APP_JS.read_text()
 
 
 def test_news_pagination_appends_without_replacing_existing_thumbnails():
