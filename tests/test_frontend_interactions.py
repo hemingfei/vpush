@@ -5680,3 +5680,16 @@ import(pathToFileURL({str(html_path)!r})).then(async (m) => {{
 }}).catch((e) => {{ console.error(e); process.exit(1); }});
 """
     subprocess.run(["node", "-e", js], check=True)
+
+
+def test_ai_task_modal_targets_system_kols_via_explicit_platform_query():
+    """AI 任务目标账号下拉须显式按 platform=system 取数。
+
+    /api/kols 默认口径排除系统 KOL（内部输出通道，e95647b 口径统一），客户端
+    过滤平台拿不到数据；目标下拉显式带 platform=system，大V范围选择器仍用默认
+    /api/kols（真大V）。管理页加载并行拉系统 KOL 供任务目标名称回显。
+    """
+    src = APP_JS.read_text()
+    assert src.count('api("/api/kols?platform=system")') >= 2
+    # 旧写法（从默认列表客户端过滤平台，恒为空）不得回归
+    assert "kols.filter((k) => k.platform === 'system')" not in src

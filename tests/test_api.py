@@ -218,6 +218,12 @@ def test_admin_kols_pagination_and_filters():
     assert client.get("/api/admin/kols", headers=uh).status_code == 403
     # 系统 KOL（AI 分析报告等内部输出通道）已从各列表统一排除，口径与管理列表一致
     assert len(client.get("/api/kols", headers=admin_headers).json()) == 13
+    # 显式按 platform=system 筛选时不排除（管理页「系统」tab、AI 分析任务选目标账号）
+    sys_admin = client.get("/api/admin/kols?platform=system", headers=admin_headers).json()
+    assert sys_admin["total"] == 1
+    assert all(k["platform"] == "system" for k in sys_admin["items"])
+    sys_plain = client.get("/api/kols?platform=system", headers=admin_headers).json()
+    assert len(sys_plain) == 1 and sys_plain[0]["platform"] == "system"
 
 
 def test_admin_kols_batch_actions():

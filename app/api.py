@@ -5417,7 +5417,9 @@ def create_api_router(
         if status is not None and status not in (0, 1):
             raise HTTPException(status_code=400, detail="status 需为 0 或 1")
         q = (q or "").strip() or None
-        # 系统 KOL（AI 分析报告输出账号）不是真大V，管理列表/计数统一排除
+        # 系统 KOL（AI 分析报告输出账号）不是真大V，管理列表/计数统一排除；
+        # 显式按 platform=system 筛选时不排除（管理页「系统」tab、AI 任务选目标账号）
+        exclude = None if platform == "system" else "system"
         items = db.list_kols(
             platform=platform,
             category_id=category_id,
@@ -5427,17 +5429,17 @@ def create_api_router(
             offset=max(offset, 0),
             with_subscriber_count=True,
             with_blocked_count=True,
-            exclude_platform="system",
+            exclude_platform=exclude,
         )
         for item in items:
             # 库里存 JSON 文本，接口统一出数组（前端直接渲染）
             item["block_keywords"] = parse_block_keywords(item.get("block_keywords"))
         return {
             "total": db.count_kols(platform=platform, category_id=category_id, q=q, status=status,
-                                   exclude_platform="system"),
+                                   exclude_platform=exclude),
             "items": items,
             "ids": db.list_kol_ids(platform=platform, category_id=category_id, q=q, status=status,
-                                   exclude_platform="system"),
+                                   exclude_platform=exclude),
         }
 
     @router.post("/admin/kols/batch", dependencies=[Depends(require_admin)])
@@ -5465,8 +5467,10 @@ def create_api_router(
 
     @router.get("/kols", dependencies=[Depends(require_admin)])
     def list_kols(platform: str | None = None, category_id: int | None = None):
-        # 系统 KOL（AI 分析报告等内部输出通道）不是真大V：各列表/统计统一排除
-        return db.list_kols(platform, category_id, exclude_platform="system")
+        # 系统 KOL（AI 分析报告等内部输出通道）不是真大V：各列表/统计统一排除；
+        # 显式按 platform=system 筛选时不排除（AI 分析任务选目标账号）
+        exclude = None if platform == "system" else "system"
+        return db.list_kols(platform, category_id, exclude_platform=exclude)
 
     @router.post("/kols", dependencies=[Depends(require_admin)])
     def add_kol(body: KolIn, admin: dict = Depends(require_admin)):

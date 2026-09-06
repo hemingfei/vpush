@@ -6501,12 +6501,13 @@ window.addEventListener("hashchange", () => {
 
 // ---------- AI 分析任务管理 ----------
 async function loadAdminAiAnalysis() {
-	  let tasks, defaultPrompt, kols;
+	  let tasks, defaultPrompt, kols, systemKols;
 	  try {
-	    [tasks, defaultPrompt, kols] = await Promise.all([
+	    [tasks, defaultPrompt, kols, systemKols] = await Promise.all([
 	      api("/api/admin/ai-tasks"),
 	      api("/api/admin/ai-tasks/default-prompt").catch(() => ""),
-	      api("/api/kols")
+	      api("/api/kols"),
+	      api("/api/kols?platform=system").catch(() => [])
 	    ]);
 	  } catch (err) {
 	    if (!routeStillActive(_adminRenderSeq)) return;
@@ -6517,9 +6518,10 @@ async function loadAdminAiAnalysis() {
 	  state.aiTasks = tasks && tasks.tasks ? tasks.tasks : [];
 	  state.aiDefaultPrompt = defaultPrompt && defaultPrompt.prompt ? defaultPrompt.prompt : "";
 	  state.kols = kols || [];
-	  // 创建 KOL ID 到名称的映射
+	  state.systemKols = systemKols || [];
+	  // 创建 KOL ID 到名称的映射（并入系统 KOL：任务目标账号名显示用）
 	  state.kolIdToName = {};
-	  for (const k of kols) {
+	  for (const k of [...(kols || []), ...(systemKols || [])]) {
 	    state.kolIdToName[k.id] = k.name;
 	  }
 	  renderAdminAiAnalysis();
@@ -6659,12 +6661,10 @@ async function openAiTaskModal(taskId = null) {
 	    `;
 	  }).join('');
 		  
-			// 加载 KOL 列表用于选择目标 KOL
+			// 加载 KOL 列表用于选择目标 KOL（仅系统平台；列表口径默认排除 system，须显式按平台取）
 			let kolSelectHtml = '<option value="">加载中...</option>';
 			try {
-			  const kols = state.kols || await api("/api/kols");
-			  // 仅显示系统平台的 KOL
-			  const systemKols = kols.filter((k) => k.platform === 'system');
+			  const systemKols = await api("/api/kols?platform=system");
 			  kolSelectHtml = systemKols
 			    .map((k) => `<option value="${k.id}" ${task && task.target_kol_id == k.id ? 'selected' : ''}>${escapeHtml(k.name)}</option>`)
 			    .join("");
