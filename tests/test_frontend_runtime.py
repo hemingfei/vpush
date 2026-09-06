@@ -319,6 +319,66 @@ def install_badge_reader_bootstrap(page: Page) -> None:
     page.route("**/api/**", respond)
 
 
+@pytest.mark.parametrize("width", [320, 380, 768, 1280])
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_timeline_long_text_keeps_navigation_in_viewport(
+    playwright_instance: Playwright, static_origin: str, tmp_path: Path, width: int, theme: str,
+):
+    browser = playwright_instance.chromium.launch(channel="chrome", headless=True)
+    context = browser.new_context(
+        viewport={"width": width, "height": 840}, is_mobile=width <= 768,
+        has_touch=width <= 768, service_workers="block",
+    )
+    try:
+        page = context.new_page()
+        install_badge_reader_bootstrap(page)
+        page.route("**/api/me", lambda route: route.fulfill(json={
+            "id": 1, "username": "test", "is_admin": True, "news_visible": False,
+        }))
+        post = {"id": 1, "kol_id": 1, "kol_name": "Test", "platform": "twitter",
+                "published_at": "2026-09-05T12:00:00Z", "content": "Post body " * 120}
+        page.route("**/api/my/feed?*", lambda route: route.fulfill(json=[post]))
+        for field, value in [("title", "LongTitle" * 8),
+                             ("category_name", "LongCategory" * 8),
+                             ("tags", ["LongTag" * 12])]:
+            post[field] = value
+            page.goto(static_origin)
+            page.evaluate("go('timeline')")
+            expect(page.locator(".post-item")).to_be_visible()
+            page.evaluate("theme => document.documentElement.className = 'theme-' + theme", theme)
+            page.locator(".post-expand-btn").click()
+            for scroll_y in [0, 600, 0]:
+                page.evaluate("y => window.scrollTo(0, y)", scroll_y)
+                page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+                geometry = page.evaluate("""() => ({
+                    document: document.documentElement.scrollWidth,
+                    viewport: document.documentElement.clientWidth,
+                    navigation: [...document.querySelectorAll('.bnav-item')].map(el => {
+                        const rect = el.getBoundingClientRect();
+                        return {left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom};
+                    }),
+                })""")
+                assert geometry["document"] <= width + 1, (field, geometry)
+                assert geometry["viewport"] == width, (field, geometry)
+                if width <= 768:
+                    assert len(geometry["navigation"]) == 4
+                    for rect in geometry["navigation"]:
+                        assert 0 <= rect["left"] < rect["right"] <= width
+                        assert 0 <= rect["top"] < rect["bottom"] <= 840
+                else:
+                    expect(page.locator("#bottom-nav")).to_be_hidden()
+            page.screenshot(path=str(tmp_path / f"navigation-{field}-{width}-{theme}.png"))
+            if width <= 768:
+                page.locator('.bnav-item[data-route="home"]').click()
+                expect(page.locator("#kol-list")).to_be_visible()
+                page.locator('.bnav-item[data-route="more"]').click()
+                expect(page.locator(".more-grid")).to_be_visible()
+            del post[field]
+    finally:
+        context.close()
+        browser.close()
+
+
 def _rgb(value: str) -> tuple[int, int, int]:
     values = [int(part) for part in re.findall(r"\d+", value)[:3]]
     assert len(values) == 3, value
