@@ -5,6 +5,7 @@ import hashlib
 import html
 import json
 import logging
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -27,10 +28,14 @@ MAX_IMAGES = 30
 MAX_TITLE_CHARS = 500
 MAX_AUTHOR_CHARS = 200
 MAX_SUMMARY_CHARS = 2000
+MAX_ALT_CHARS = 200
 MAX_BODY_BYTES = 512 * 1024
 DEFAULT_RETENTION_DAYS = 30
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 _TRACKING_QUERY_KEYS = {"fbclid", "gclid"}
+# 部分源（quanwenrss 转 Mohgen Stanley 等）把整段带属性的 HTML 塞进 title/alt，
+# 去标签后残留 `标题">标题` 形态的整段重复，折叠为单份
+_DUPLICATED_MARKUP_RE = re.compile(r'^(.{1,400}?)(?:"&gt;|">)\1$', re.DOTALL)
 _ALLOWED_TAGS = {
     "p", "br", "h2", "h3", "hr", "ul", "ol", "li", "blockquote",
     "strong", "b", "em", "i", "a", "img", "figure", "figcaption",
@@ -111,9 +116,22 @@ def normalize_article_url(url: str) -> str:
 
 
 def _plain_text(value: object, limit: int) -> str:
-    text = html.unescape(str(value or ""))
+    text = str(value or "")
+    # 部分源存在双重转义（&amp;gt; 等），循环解码到稳定为止（有界，防恶意构造）
+    for _ in range(3):
+        step = html.unescape(text)
+        if step == text:
+            break
+        text = step
     text = bleach.clean(text, tags=[], attributes={}, strip=True)
-    return " ".join(text.split())[:limit]
+    # bleach 输出是 HTML 转义文本；这里必须还原为原始文本入库，
+    # 转义交给渲染端（前端所有出口都走 escapeHtml），否则 S&P 会存成 S&amp;P 二次转义
+    text = html.unescape(text)
+    text = " ".join(text.split())
+    deduped = _DUPLICATED_MARKUP_RE.match(text)
+    if deduped:
+        text = " ".join(deduped.group(1).split())
+    return text[:limit]
 
 
 def _safe_content_url(value: str, base_url: str) -> str | None:
@@ -144,6 +162,11 @@ def clean_article_html(raw_html: str, base_url: str) -> tuple[str, list[str]]:
                 elif token["type"] in {"StartTag", "EmptyTag"} and token["name"] == "img":
                     src_key = (None, "src")
                     src = token["data"].pop(src_key, None)
+                    alt = token["data"].pop((None, "alt"), None)
+                    if alt is not None:
+                        cleaned_alt = _plain_text(alt, MAX_ALT_CHARS)
+                        if cleaned_alt:
+                            token["data"][(None, "alt")] = cleaned_alt
                     if src and len(images) < MAX_IMAGES:
                         resolved = _safe_content_url(src, base_url)
                         if resolved:

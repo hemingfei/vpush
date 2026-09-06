@@ -99,6 +99,38 @@ def test_normalizers_reject_credentials_and_non_http_urls():
         normalize_article_url("javascript:alert(1)")
 
 
+def test_parse_unfolds_markup_polluted_title_and_alt():
+    """quanwenrss 类源把整段带属性的 HTML 塞进 title/alt：去标签残留 `标题">标题` 重复，须折叠为单份。"""
+    polluted = (
+        "2023年中展望 | 首席谈中国经济和股市&lt;/span&gt;\"&gt;&lt;span style=\"font-weight: 300;\"&gt;"
+        "2023年中展望 | 首席谈中国经济和股市&lt;/span&gt;"
+    )
+    payload = (
+        '<rss version="2.0"><channel><title>Dirty</title><item>'
+        f"<guid>dirty-1</guid><title>{polluted}</title>"
+        "<link>https://feed.example/dirty</link>"
+        '<description><![CDATA[<img src="/cover.jpg" alt="标题&amp;lt;/span&gt;&quot;&gt;&lt;span style=&quot;x&quot;&gt;标题&lt;/span&gt;">'
+        "<p>正文</p>]]></description></item></channel></rss>"
+    ).encode()
+    article = parse_feed(payload, "https://feed.example/rss", NOW).articles[0]
+    assert article.title == "2023年中展望 | 首席谈中国经济和股市"
+    assert 'alt="标题"' in article.content_html
+    assert "&lt;" not in article.title and "&gt;" not in article.title
+
+
+def test_parse_stores_raw_text_without_html_entities():
+    """标题入库必须是原始文本（渲染端负责转义）：S&P 不得存成 S&amp;P。"""
+    payload = (
+        '<rss version="2.0"><channel><title>Amp</title><item>'
+        "<guid>amp-1</guid><title>S&amp;P 500 &amp; 中国市场</title>"
+        "<link>https://feed.example/amp</link>"
+        "<description>PG&amp;E 最新动态</description></item></channel></rss>"
+    ).encode()
+    article = parse_feed(payload, "https://feed.example/rss", NOW).articles[0]
+    assert article.title == "S&P 500 & 中国市场"
+    assert article.summary == "PG&E 最新动态"
+
+
 
 def make_news_service(tmp_path, handler):
     from app.db import DB
