@@ -482,7 +482,8 @@ def test_timeline_pills_always_show_short_labels():
     assert 'title="${label}"' in pills
     assert 'role="radio"' in pills
     assert "aria-checked" in pills
-    assert 'combination: "组合"' in src
+    assert 'PLATFORM_SHORT_LABELS_CONFIG' in src
+    assert 'combination: { label: "雪球组合", shortLabel: "组合"' in (APP_JS.parent / "core/platforms.js").read_text()
     assert ".tl-pill-icon" not in css
     assert ".tl-pills { display: none" not in css
     assert "flex-wrap: nowrap" in css
@@ -853,8 +854,10 @@ def test_zsxq_is_plaza_badge_not_sidebar_page():
     src = APP_JS.read_text()
     css = STYLE_CSS.read_text()
     assert '"zsxq"' in src and "PLATFORM_TABS" in src
-    assert 'zsxq: "星球"' in src
-    assert "PLATFORM_ICONS" in src and "M13.012 0c.874" in src
+    platforms = (APP_JS.parent / "core/platforms.js").read_text()
+    assert "PLATFORM_BADGES" in platforms
+    assert 'zsxq: { label: "知识星球", shortLabel: "星球"' in platforms
+    assert "PLATFORM_ICONS" in platforms and "ZSXQ_ICON" in platforms
     assert 'route: "zsxq"' not in src
     assert "async function renderZsxq" not in src
     assert 'replaceRoute("timeline")' in src
@@ -3463,8 +3466,10 @@ def test_live_feed_is_prefetched_and_shares_inflight_request():
 def test_xueqiu_badge_uses_official_mark():
     """雪球角标用官方图，盒尺寸仍走 .pt-icon。"""
     src = APP_JS.read_text()
+    platforms = (APP_JS.parent / "core/platforms.js").read_text()
     css = STYLE_CSS.read_text()
-    assert 'src="/xueqiu-mark.png"' in src
+    assert 'XUEQIU_ICON' in platforms
+    assert 'src="/xueqiu-mark.png"' in platforms
     assert (APP_JS.parent / "xueqiu-mark.png").is_file()
     assert "img.pt-icon { display: block; object-fit: contain; }" in css
     assert ".pt-icon { width: 16px; height: 16px; flex-shrink: 0; }" in css

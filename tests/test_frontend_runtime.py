@@ -319,6 +319,24 @@ def install_badge_reader_bootstrap(page: Page) -> None:
     page.route("**/api/**", respond)
 
 
+def _rgb(value: str) -> tuple[int, int, int]:
+    values = [int(part) for part in re.findall(r"\d+", value)[:3]]
+    assert len(values) == 3, value
+    return tuple(values)
+
+
+def _contrast_ratio(foreground: str, background: str) -> float:
+    def luminance(rgb: tuple[int, int, int]) -> float:
+        channels = []
+        for value in rgb:
+            channel = value / 255
+            channels.append(channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4)
+        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+
+    lighter, darker = sorted((luminance(_rgb(foreground)), luminance(_rgb(background))), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
 @pytest.mark.parametrize("width", [375, 768, 1440])
 @pytest.mark.parametrize("theme", ["light", "dark"])
 def test_platform_badges_keep_blue_selection(page: Page, static_origin: str, tmp_path: Path, width: int, theme: str):
@@ -329,29 +347,56 @@ def test_platform_badges_keep_blue_selection(page: Page, static_origin: str, tmp
     page.evaluate("() => go('timeline')")
     expect(page.locator("#tl-pills .tl-pill").first).to_be_visible()
     page.evaluate("theme => document.documentElement.className = 'theme-' + theme", theme)
+    platforms = page.locator("#tl-pills .tl-pill").evaluate_all(
+        "els => els.map(el => el.dataset.platform)"
+    )
+    assert platforms == ["", "live", "xueqiu", "combination", "weibo", "twitter", "zsxq", "truth"]
     expect(page.locator("#tl-platform-bar .star-icon")).to_have_count(0)
-    truth_icon = page.locator('#tl-pills [data-platform="truth"] svg.pt-icon')
-    expect(truth_icon).to_have_count(1)
-    expect(truth_icon).to_have_css("fill", "rgb(90, 155, 245)" if theme == "dark" else "rgb(22, 104, 224)")
-    expect(truth_icon).to_have_css("filter", "none")
-    for platform in ["", "live", "xueqiu", "combination", "weibo", "twitter", "zsxq", "truth"]:
+    for platform in platforms:
         button = page.locator(f'#tl-pills [data-platform="{platform}"]')
+        icon = button.locator(".pt-icon")
+        other = "xueqiu" if platform == "" else ""
+        page.locator(f'#tl-pills [data-platform="{other}"]').click()
+        expect(button).to_have_attribute("aria-checked", "false")
+        expect(icon).to_be_visible()
+        before = icon.bounding_box()
+        assert before and before["width"] == before["height"]
+        assert 22 <= before["width"] <= 34
+        unselected = icon.evaluate("""el => ({
+          color: getComputedStyle(el).color,
+          background: getComputedStyle(el).backgroundColor,
+          filter: getComputedStyle(el).filter,
+          tag: el.tagName
+        })""")
+        if unselected["tag"] == "svg":
+            assert _contrast_ratio(unselected["color"], unselected["background"]) >= 3, (platform, unselected)
+            assert unselected["filter"] == "none"
+        else:
+            assert platform == "xueqiu"
+            assert unselected["filter"] == "none"
+
         button.click()
         expect(button).to_have_attribute("aria-checked", "true")
         page.wait_for_timeout(180)
-        colors = button.evaluate("""el => ({
+        selected = button.evaluate("""el => ({
           base: getComputedStyle(el).backgroundColor,
           badge: getComputedStyle(el, '::before').backgroundColor,
           ink: getComputedStyle(el).color,
-          imageFilter: getComputedStyle(el.querySelector('.pt-icon')).filter
+          iconColor: getComputedStyle(el.querySelector('.pt-icon')).color,
+          iconFilter: getComputedStyle(el.querySelector('.pt-icon')).filter,
+          iconTag: el.querySelector('.pt-icon').tagName
         })""")
-        assert "rgb(22, 104, 224)" in (colors["base"], colors["badge"]), (platform, colors)
-        assert colors["ink"] == "rgb(255, 255, 255)", (platform, colors)
-        if platform == "xueqiu":
-            assert colors["imageFilter"] == "brightness(0) invert(1)"
-        if platform == "truth":
-            expect(truth_icon).to_have_css("fill", "rgb(255, 255, 255)")
-            expect(truth_icon).to_have_css("filter", "none")
+        assert "rgb(22, 104, 224)" in (selected["base"], selected["badge"]), (platform, selected)
+        assert selected["ink"] == "rgb(255, 255, 255)", (platform, selected)
+        after = icon.bounding_box()
+        assert after and (after["width"], after["height"]) == (before["width"], before["height"])
+        if selected["iconTag"] == "svg":
+            assert selected["iconColor"] == "rgb(255, 255, 255)", (platform, selected)
+            assert selected["iconFilter"] == "none"
+        else:
+            assert platform == "xueqiu"
+            assert selected["iconFilter"] == "brightness(0) invert(1)"
+
     page.screenshot(path=str(tmp_path / f"badges-{width}-{theme}.png"))
     if width <= 768:
         page.locator("#tl-filter-toggle").click()
