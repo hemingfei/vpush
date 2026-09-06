@@ -1,4 +1,4 @@
-import { escapeHtml, imgProxyUrl, imgSrcFor } from "./core/html.js";
+import { escapeHtml, imgProxyUrl, imgSrcFor, jsString } from "./core/html.js";
 import {
   ARROW_UP_ICON, BELL_ICON, BELL_OFF_ICON, BOOK_ICON, BRAIN_ICON, COPY_ICON, DATABASE_ICON, DASHBOARD_ICON, FOLDER_ICON,
   EYE_ICON, EYE_OFF_ICON, EXTERNAL_LINK_ICON, FEISHU_DATE_ICON, FILE_TEXT_ICON, FILTER_ICON,
@@ -58,7 +58,7 @@ const CHANNEL_ICONS = {
 const GROK_TRANSLATE_ICON = `<svg class="p-tr-grok" viewBox="0 0 33 32" fill="currentColor" aria-hidden="true"><path d="M12.745 20.54l10.97-8.19c.539-.4 1.307-.244 1.564.38 1.349 3.288.746 7.241-1.938 9.955-2.683 2.714-6.417 3.31-9.83 1.954l-3.728 1.745c5.347 3.697 11.84 2.782 15.898-1.324 3.219-3.255 4.216-7.692 3.284-11.693l.008.009c-1.351-5.878.332-8.227 3.782-13.031L33 0l-4.54 4.59v-.014L12.743 20.544m-2.263 1.987c-3.837-3.707-3.175-9.446.1-12.755 2.42-2.449 6.388-3.448 9.852-1.979l3.72-1.737c-.67-.49-1.53-1.017-2.515-1.387-4.455-1.854-9.789-.931-13.41 2.728-3.483 3.523-4.579 8.94-2.697 13.561 1.405 3.454-.899 5.898-3.22 8.364C1.49 30.2.666 31.074 0 32l10.478-9.466"/></svg>`;
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.153";
+const APP_VERSION = "1.12.154";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -654,31 +654,18 @@ const NAV = [
     { route: "timeline", icon: LIST_ICON, label: "最新动态" },
     { route: "mx-views", icon: MX_VIEWS_ICON, label: "智囊团" },
     { route: "news", icon: NEWS_ICON, label: "财经新闻" },
-    { route: "knowledge", icon: BOOK_ICON, label: "研报库" },
+    { route: "knowledge", icon: BOOK_ICON, label: "研报中心" },
     { route: "home", icon: GRID_ICON, label: "订阅广场" },
-    { route: "settings", icon: GEAR_ICON, label: "设置" },
+    { route: "settings", icon: GEAR_ICON, label: "个人设置" },
   ]},
-  { group: "", admin: true, subs: [
-    { label: "内容管理", items: [
-      { route: "admin/dashboard", icon: DASHBOARD_ICON, label: "全景概览" },
-      { route: "admin/kols", icon: V_ICON, label: "大V管理" },
-      { route: "admin/ai-analysis", icon: BRAIN_ICON, label: "AI分析" },
-      { route: "admin/mx-views", icon: MX_VIEWS_ICON, label: "智囊团" },
-      { route: "admin/vocab", icon: FOLDER_ICON, label: "标签分类" },
-      { route: "admin/requests", icon: USER_PLUS_ICON, label: "添加审批" },
-    ]},
-    { label: "数据与日志", items: [
-      { route: "admin/stats", icon: BOOK_ICON, label: "数据源" },
-      { route: "admin/knowledge", icon: BOOK_ICON, label: "研报库设置" },
-      { route: "admin/posts", icon: FILE_TEXT_ICON, label: "帖子" },
-      { route: "admin/logs", icon: SEND_ICON, label: "推送记录" },
-      { route: "admin/audit", icon: HISTORY_ICON, label: "操作日志" },
-      { route: "admin/backup", icon: DATABASE_ICON, label: "备份" },
-    ]},
-    { label: "用户与注册", items: [
-      { route: "admin/users", icon: USERS_ICON, label: "用户" },
-      { route: "admin/codes", icon: KEY_ICON, label: "注册码" },
-    ]},
+  { group: "管理", admin: true, items: [
+    { route: "admin/content", icon: DASHBOARD_ICON, label: "内容管理", badge: "requests" },
+    { route: "admin/ai-analysis", icon: BRAIN_ICON, label: "AI分析" },
+    { route: "admin/mx-views", icon: MX_VIEWS_ICON, label: "智囊团" },
+    { route: "admin/stats", icon: BOOK_ICON, label: "数据源" },
+    { route: "admin/knowledge", icon: BOOK_ICON, label: "研报设置" },
+    { route: "admin/ops", icon: FILE_TEXT_ICON, label: "帖子与日志" },
+    { route: "admin/account", icon: USERS_ICON, label: "用户与注册" },
   ]},
 ];
 
@@ -713,6 +700,7 @@ function renderSidebar(user) {
         <button class="nav-item" data-route="${item.route}" onclick="go('${item.route}')" title="${item.label}">
           <span class="nav-icon">${item.icon}</span>
           <span class="nav-label">${item.label}</span>
+          ${item.badge ? `<span class="nav-badge" data-request-badge hidden></span>` : ""}
         </button>`;
   const html = NAV.filter((g) => !g.admin || user.is_admin)
     .map((group) => `
@@ -739,7 +727,7 @@ const MOBILE_NAV = [
   { route: "mx-views", icon: MX_VIEWS_ICON, label: "智囊团" },
   { route: "news", icon: NEWS_ICON, label: "财经新闻" },
   { route: "home", icon: GRID_ICON, label: "广场" },
-  { route: "settings", icon: GEAR_ICON, label: "设置" },
+  { route: "settings", icon: GEAR_ICON, label: "个人设置" },
 ];
 
 function renderBottomNav(user) {
@@ -1491,8 +1479,7 @@ function homeMobilePlatformsHtml() {
     return `
     <button class="tl-pill ${state.platform === p ? "selected" : ""}"
       data-platform="${p}" aria-label="${label}" title="${label}"
-      role="radio" aria-checked="${state.platform === p}"
-      onclick="homePickMobilePlatform('${p}')">
+      role="radio" aria-checked="${state.platform === p}">
       ${PLATFORM_ICONS[p || ""]}<span>${short}</span>
     </button>`;
   }).join("");
@@ -2025,7 +2012,7 @@ function tlActiveChipsHtml() {
   const chips = tlActiveChips();
   if (!chips.length) return "";
   return `<div class="tl-active-chips">${chips.map((c) => `
-    <span class="tl-active-chip">${c.label}<button class="tl-chip-x" onclick="tlRemoveFilter('${c.key}')" aria-label="移除${c.label}" title="移除该筛选">${X_ICON}</button></span>`).join("")}</div>`;
+    <span class="tl-active-chip">${c.label}<button class="tl-chip-x" data-tl-remove-filter="${c.key}" aria-label="移除${c.label}" title="移除该筛选">${X_ICON}</button></span>`).join("")}</div>`;
 }
 
 function tlRemoveFilter(key) {
@@ -2357,7 +2344,7 @@ async function renderTimeline(seq) {
     <div class="tl-ima-entry">
       <button type="button" class="tl-ima-entry-btn" onclick="go('knowledge')">
         <span class="tl-ima-entry-icon">${BOOK_ICON}</span>
-        <span><strong>研报库</strong><small>打开研报库</small></span>
+        <span><strong>研报中心</strong><small>打开研报中心</small></span>
       </button>
     </div>
     <section class="section-panel tl-feed-panel" id="tl-feed-panel">
@@ -2655,7 +2642,7 @@ function tlPillsHtml() {
     const selected = !liveSelected && state.timelinePlatform === p;
     const short = platformShortLabel(p);
     pills.push(`
-    <button class="tl-pill ${selected ? "selected" : ""}" role="radio" data-platform="${p}" aria-label="${label}" title="${label}" aria-checked="${selected}" onclick="tlPickPlatform('${p}')">
+    <button class="tl-pill ${selected ? "selected" : ""}" role="radio" data-platform="${p}" aria-label="${label}" title="${label}" aria-checked="${selected}">
       ${PLATFORM_ICONS[p || ""]}
       <span>${short}</span>
     </button>`);
@@ -4262,6 +4249,13 @@ function switchStatsTab(name) {
     loadAdminNews(routeRenderSeq);
     return;
   }
+  // 财经资讯页会整页替换 #admin-body，其余面板不在 DOM；切回时整页重载再按 hash 定位
+  if (!document.getElementById("st-" + name)) {
+    const next = name === "config" ? "/admin/stats" : `/admin/stats?tab=${name}`;
+    if (location.pathname + location.search !== next) history.replaceState(null, "", next);
+    loadAdminStats(routeRenderSeq);
+    return;
+  }
   document.querySelectorAll(".settings-tab[data-tab]").forEach((b) => {
     const on = b.dataset.tab === name;
     b.classList.toggle("active", on);
@@ -4413,6 +4407,90 @@ let _adminStatsLoadSeq = 0;
 let _adminStatsTimerSeq = 0;
 let _lastAdminStatsSnapshot = null;
 
+// 后台条目页签化：侧边栏一个条目，页内页签切换子页（路由即页签，深链可用）
+const ADMIN_TAB_GROUPS = {
+  content: { label: "内容管理", tabs: [
+    { id: "dashboard", label: "全景概览" },
+    { id: "kols", label: "大V管理" },
+    { id: "vocab", label: "标签分类" },
+    { id: "requests", label: "添加审批" },
+  ]},
+  ops: { label: "帖子与日志", tabs: [
+    { id: "posts", label: "帖子" },
+    { id: "logs", label: "推送记录" },
+    { id: "audit", label: "操作日志" },
+    { id: "backup", label: "备份" },
+  ]},
+  account: { label: "用户与注册", tabs: [
+    { id: "users", label: "用户" },
+    { id: "codes", label: "注册码" },
+  ]},
+};
+
+// 旧路由 → 容器页签：收藏/旧链接/代码内 go() 全部自动落到新地址
+const ADMIN_ROUTE_REDIRECTS = {
+  dashboard: "content?tab=dashboard",
+  kols: "content?tab=kols",
+  vocab: "content?tab=vocab",
+  requests: "content?tab=requests",
+  posts: "ops?tab=posts",
+  logs: "ops?tab=logs",
+  audit: "ops?tab=audit",
+  backup: "ops?tab=backup",
+  users: "account?tab=users",
+  codes: "account?tab=codes",
+  categories: "content?tab=vocab",
+  tags: "content?tab=vocab",
+};
+
+function adminGroupTabsHtml(groupKey, active) {
+  const group = ADMIN_TAB_GROUPS[groupKey];
+  return `<div class="settings-tabs" role="tablist" aria-label="${group.label}">
+    ${group.tabs.map((t) => {
+      const count = t.id === "requests" ? Number(state.pendingKolRequests) || 0 : 0;
+      return `<button type="button" class="settings-tab ${t.id === active ? "active" : ""}" role="tab" aria-selected="${t.id === active}" data-tab="${t.id}" onclick="go('admin/${groupKey}?tab=${t.id}')">${t.label}${count ? ` <span class="tab-count">${count}</span>` : ""}</button>`;
+    }).join("")}
+  </div>`;
+}
+
+function mountAdminGroupTabs(groupKey, active) {
+  const body = $("#admin-body");
+  if (body && !body.querySelector(".admin-group-tabs")) {
+    body.insertAdjacentHTML("afterbegin", `<div class="admin-group-tabs">${adminGroupTabsHtml(groupKey, active)}</div>`);
+  }
+}
+
+function syncRequestBadges() {
+  const count = Number(state.pendingKolRequests) || 0;
+  document.querySelectorAll("[data-request-badge]").forEach((el) => {
+    el.textContent = count ? String(count) : "";
+    el.hidden = !count;
+  });
+}
+
+// 各子页 loader 由对应视图工厂解构（运行时才解析，此处用箭头惰性引用避免 TDZ）
+const ADMIN_GROUP_LOADERS = {
+  content: { dashboard: () => loadAdminDashboard(), kols: () => loadAdminKols(), vocab: () => loadAdminVocab(), requests: () => loadAdminRequests() },
+  ops: { posts: () => loadAdminPosts(), logs: () => loadAdminLogs(), audit: () => loadAdminAudit(), backup: () => loadAdminBackup() },
+  account: { users: () => loadAdminUsers(), codes: () => loadAdminCodes() },
+};
+
+async function loadAdminGroup(groupKey, seq) {
+  seq = seq ?? _adminRenderSeq; // renderAdmin 调 loader 不带参，兜底当前渲染令牌
+  const tabs = ADMIN_TAB_GROUPS[groupKey].tabs;
+  const requested = routeQuery().get("tab");
+  const active = tabs.some((t) => t.id === requested) ? requested : tabs[0].id;
+  await ADMIN_GROUP_LOADERS[groupKey][active]();
+  if (!routeStillActive(seq)) return false;
+  mountAdminGroupTabs(groupKey, active);
+  syncRequestBadges();
+  return true;
+}
+
+async function loadAdminContent(seq) { return loadAdminGroup("content", seq); }
+async function loadAdminOps(seq) { return loadAdminGroup("ops", seq); }
+async function loadAdminAccount(seq) { return loadAdminGroup("account", seq); }
+
 async function renderAdmin(tab, seq) {
   _adminRenderSeq = seq;
   setPageTitle("管理后台");
@@ -4425,7 +4503,7 @@ async function renderAdmin(tab, seq) {
         <div class="admin-sk-table-row"><div class="admin-sk-line"></div><div class="admin-sk-line"></div><div class="admin-sk-line"></div></div>
       </div>`).join("")}
     </div>`;
-  const loaders = { dashboard: loadAdminDashboard, stats: loadAdminStats, knowledge: loadAdminKnowledge, kols: loadAdminKols, "ai-analysis": loadAdminAiAnalysis, requests: loadAdminRequests, codes: loadAdminCodes, vocab: loadAdminVocab, "mx-views": loadAdminMxViews, posts: loadAdminPosts, logs: loadAdminLogs, audit: loadAdminAudit, backup: loadAdminBackup, users: loadAdminUsers };
+  const loaders = { content: loadAdminContent, ops: loadAdminOps, account: loadAdminAccount, stats: loadAdminStats, knowledge: loadAdminKnowledge, "ai-analysis": loadAdminAiAnalysis, "mx-views": loadAdminMxViews };
   try {
     await loaders[tab]();
   } catch (err) {
@@ -4560,7 +4638,7 @@ function feishuSourceRowsHtml(data) {
       : `<p class="feishu-source-open is-blocked">同步成功后全员可读，当前暂无可读内容</p>`;
     const shownTitle = source.display_name || source.title;
     return `<article class="feishu-source-row" data-source-id="${source.id}">
-      <div class="feishu-source-copy"><div class="feishu-source-title"><strong>${escapeHtml(shownTitle)}</strong><button type="button" class="feishu-title-rename" onclick="renameFeishuDocumentSource(this.closest('[data-source-id]').dataset.sourceId,'${escapeHtml(shownTitle)}')" aria-label="修改展示名">改名</button><span class="feishu-source-state" data-status="${escapeHtml(source.sync_status)}">${escapeHtml(feishuSourceStatusLabel(source))}</span></div><p>${escapeHtml(detail)}</p>${error}</div>
+      <div class="feishu-source-copy"><div class="feishu-source-title"><strong>${escapeHtml(shownTitle)}</strong><button type="button" class="feishu-title-rename" onclick="renameFeishuDocumentSource(this.closest('[data-source-id]').dataset.sourceId,${jsString(shownTitle)})" aria-label="修改展示名">改名</button><span class="feishu-source-state" data-status="${escapeHtml(source.sync_status)}">${escapeHtml(feishuSourceStatusLabel(source))}</span></div><p>${escapeHtml(detail)}</p>${error}</div>
       <label class="feishu-source-toggle"><span>启用</span><input type="checkbox" ${source.enabled ? "checked" : ""} onchange="toggleFeishuDocumentSource(this.closest('[data-source-id]').dataset.sourceId,this.checked,this)"></label>
       <div class="feishu-source-actions">
         <span class="feishu-display-label">展示方式</span>
@@ -5596,8 +5674,6 @@ const {
   loadImaDocumentsMore,
   clearImaDocumentsFilter,
   clearImaDocumentsFilters,
-  pickImaDay,
-  pickImaTag,
   queueImaDocumentsSearch,
   refreshImaDocuments,
   selectImaDocumentGroup,
@@ -5609,6 +5685,8 @@ const {
   restoreImaListSnapshot,
   stopImaDocumentsAutoLoad,
   fmtImaDay,
+  pickImaDay,
+  pickImaTag,
   imaDocumentReaderRoute,
   replaceImaDocumentsRoute,
 } = createImaView({
@@ -5812,6 +5890,7 @@ const {
   api,
   flash,
   escapeHtml,
+  jsString,
   routeStillActive,
   SEARCH_ICON,
   fmtDbTime,
@@ -6234,8 +6313,8 @@ async function router() {
   const [page, rawParam] = path.split("/");
   if (page !== "news") clearNewsReaderState();
   if (page !== "settings") state.settingsTab = "push";
-  // 管理后台默认全景概览：/admin 与 /admin/dashboard 等价，侧边栏高亮才能对上
-  const param = page === "admin" && !rawParam ? "dashboard" : rawParam;
+  // 管理后台默认内容管理：/admin 与 /admin/content 等价，侧边栏高亮才能对上
+  const param = page === "admin" && !rawParam ? "content" : rawParam;
   if (!state.token) {
     $("#app-view").classList.add("hidden");
     $("#auth-view").classList.remove("hidden");
@@ -6303,12 +6382,17 @@ async function router() {
     else if (page === "knowledge") await renderKnowledge(renderSeq, param);
     else if (page === "admin") {
       if (!state.user.is_admin) { replaceRoute("timeline"); return; }
-      // 分类管理/标签管理已合并为 admin/vocab：旧书签自动跳转
-      if (param === "categories" || param === "tags") {
-        replaceRoute("admin/vocab");
+      // 后台条目页签化：旧路由（含更早的 categories/tags）统一重定向到容器页签
+      if (ADMIN_ROUTE_REDIRECTS[param]) {
+        const q = routeQuery();
+        const extra = new URLSearchParams();
+        q.forEach((v, k) => { if (k !== "tab") extra.append(k, v); });
+        if (param === "vocab" && q.get("tab") === "tags") extra.append("vtab", "tags");
+        const qs = extra.toString();
+        replaceRoute("admin/" + ADMIN_ROUTE_REDIRECTS[param] + (qs ? "&" + qs : ""));
         return;
       }
-      await renderAdmin(param || "dashboard", renderSeq);
+      await renderAdmin(param || "content", renderSeq);
     }
     else { replaceRoute("timeline"); return; }
   } catch (err) {
@@ -6484,6 +6568,21 @@ $("#btn-back").addEventListener("click", () => {
 });
 // 本地库卡片按钮：slug 来自存储机目录名，用 data 属性委托而非内联 onclick（防 JS 注入）
 document.addEventListener("click", (e) => {
+  const day = e.target.closest("[data-ima-day]");
+  if (day) {
+    pickImaDay(day.getAttribute("data-ima-day") || "");
+    return;
+  }
+  const tag = e.target.closest("[data-ima-tag-index]");
+  if (tag) {
+    pickImaTag(Number(tag.getAttribute("data-ima-tag-index")));
+    return;
+  }
+  const back = e.target.closest("[data-ima-back]");
+  if (back) {
+    go(back.getAttribute("data-ima-back") || "knowledge");
+    return;
+  }
   const add = e.target.closest("[data-acl-add]");
   if (add) {
     addAclUser(add.getAttribute("data-acl-add"), add.closest(".ima-acl-picker"));
@@ -6501,6 +6600,23 @@ document.addEventListener("click", (e) => {
   }
   const toggle = e.target.closest("[data-ll-toggle]");
   if (toggle) toggleLocalLibrary(toggle.dataset.llToggle, toggle.dataset.llEnabled === "true");
+  const homePlatform = e.target.closest("#home-mobile-platforms [data-platform]");
+  if (homePlatform) {
+    homePickMobilePlatform(homePlatform.dataset.platform || "");
+    return;
+  }
+  const timelinePlatform = e.target.closest("#tl-pills [data-platform]");
+  if (timelinePlatform) {
+    const platform = timelinePlatform.dataset.platform || "";
+    if (platform === "live") tlPickSource("live");
+    else tlPickPlatform(platform);
+    return;
+  }
+  const removeFilter = e.target.closest("[data-tl-remove-filter]");
+  if (removeFilter) {
+    tlRemoveFilter(removeFilter.dataset.tlRemoveFilter || "");
+    return;
+  }
 });
 document.addEventListener("click", (e) => {
   const a = e.target.closest("a[href]");
@@ -7683,7 +7799,6 @@ const INLINE_HANDLERS = {
   filterKolImageSettings,
   genBindCode,
   go,
-  homePickMobilePlatform,
   homeResetFilters,
   homeSearch,
   homeToggleFilter,
@@ -7721,8 +7836,6 @@ const INLINE_HANDLERS = {
   openNewsSourcePicker,
   pasteCookieField,
   pickHomeCategory,
-  pickImaDay,
-  pickImaTag,
   purgeZsxqCache,
   queueFeishuDocumentPreview,
   queueImaDocumentsSearch,
@@ -7813,10 +7926,8 @@ const INLINE_HANDLERS = {
   tlApplyRailSearch,
   tlFilterPanel,
   tlOnSearchInput,
-  tlPickPlatform,
   tlPickSource,
   tlPickTag,
-  tlRemoveFilter,
   tlResetFilters,
   tlToggleOrigin,
   tlTogglePost,

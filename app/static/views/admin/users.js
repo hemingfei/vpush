@@ -753,6 +753,7 @@ export function createAdminUsersView(dependencies) {
       return;
     }
     const done = all.filter((r) => r.status !== "pending");
+    state.pendingKolRequests = requests.length;
     const pendingRows = requests.length === 0
       ? `<tr><td colspan="8" class="muted">暂无待审批申请</td></tr>`
       : requests.map((r) => `

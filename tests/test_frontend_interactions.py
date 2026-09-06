@@ -76,7 +76,7 @@ def test_subscription_push_is_the_only_subscription_management_navigation_entry(
 
     for block in (nav, mobile):
         assert 'route: "settings"' in block
-        assert 'label: "设置"' in block
+        assert 'label: "个人设置"' in block
         assert 'route: "mysubs"' not in block
         assert 'route: "combinations"' not in block
     assert "TRENDING_ICON" not in src
@@ -313,6 +313,8 @@ def test_settings_async_responses_are_owned_by_route_and_session_before_mutation
     assert guard < state_write
     assert "token !== state.token" in refresh[guard:state_write]
     assert "sessionGeneration !== imaMountState.sessionGeneration" in refresh[guard:state_write]
+    assert "pollSeq !== settingsPollSeq" in refresh[fetch:state_write]
+    assert "settingsPollSeq += 1" in _fn_body("stopSettingsPoll")
 
     render = _fn_body("renderSettings")
     fetch = render.index('await api("/api/me")')
@@ -730,7 +732,7 @@ def test_push_is_the_default_settings_tab():
     assert 'id="st-subs"' not in render
     assert "settingsSubscriptionsPanelHtml()" not in render
     assert 'switchSettingsTab(state.settingsTab || "push")' in render
-    assert 'setPageTitle("设置")' in render
+    assert 'setPageTitle("个人设置")' in render
     assert 'name = "push"' in switch
 
 
@@ -809,7 +811,8 @@ def test_mobile_home_filter_reuses_native_and_shared_controls():
     assert "<details" not in render
     assert "platformShortLabel(p)" in mobile_platforms
     assert "<span>${short}</span>" in mobile_platforms
-    assert "homePickMobilePlatform('${p}')" in mobile_platforms
+    assert 'data-platform="${p}"' in mobile_platforms
+    assert 'onclick="homePickMobilePlatform' not in mobile_platforms
     assert "state.platform = platform" in pick
     assert 'toggleAttribute("hidden"' in toggle
     assert "loadHomeKols(routeRenderSeq)" in pick
@@ -1297,6 +1300,39 @@ def test_proxy_admin_hardens_write_paths():
     assert "请填写代理池名称" in create
     load = _fn_body("loadProxyAdmin")
     assert "textarea[id^='pp-import-']" in load
+
+
+def test_admin_content_group_tabs_and_redirects():
+    """后台 IA：侧边栏 5 条目、三容器页签、旧路由重定向、审批角标贯通。"""
+    src = APP_JS.read_text()
+    # 侧边栏拍平：5 个条目，无折叠组
+    for route in ("admin/content", "admin/stats", "admin/knowledge", "admin/ops", "admin/account"):
+        assert f'route: "{route}"' in src
+    assert 'group: "管理"' in src
+    assert "subs:" not in src.split("const NAV =")[1].split("];")[0]
+    # 三容器页签配置
+    for group, tabs in {
+        "content": ("全景概览", "大V管理", "标签分类", "添加审批"),
+        "ops": ("帖子", "推送记录", "操作日志", "备份"),
+        "account": ("用户", "注册码"),
+    }.items():
+        block = src.split(f"{group}: {{ label:", 1)[1].split("]},", 1)[0]
+        for label in tabs:
+            assert f'label: "{label}"' in block
+    # 旧路由 10 条 + categories/tags 全部重定向
+    redirects = src.split("const ADMIN_ROUTE_REDIRECTS = {", 1)[1].split("};", 1)[0]
+    for old in ("dashboard", "kols", "vocab", "requests", "posts", "logs", "audit", "backup", "users", "codes"):
+        assert f"{old}: " in redirects
+    # 页签点击走容器路由；待审批角标贯通侧边栏与页签
+    assert "onclick=\"go('admin/${groupKey}?tab=${t.id}')\"" in src
+    assert 'data-request-badge' in src
+    assert "state.pendingKolRequests = Number(st.pending_kol_requests) || 0" in (APP_JS.parent / "views" / "admin" / "dashboard.js").read_text()
+    assert "state.pendingKolRequests = requests.length" in (APP_JS.parent / "views" / "admin" / "users.js").read_text()
+    # vocab 内部页签改用 vtab（避免与容器 tab 参数冲突），旧深链由重定向带 vtab
+    kol = ADMIN_KOLS_JS.read_text() if (APP_JS.parent / "views" / "admin" / "kol.js").exists() else ""
+    assert 'params.get("vtab")' in kol
+    assert "go('admin/content?tab=vocab&vtab=tags')" in kol
+    assert "if (param === \"vocab\" && q.get(\"tab\") === \"tags\") extra.append(\"vtab\", \"tags\");" in src
 
 
 def test_stats_cookie_repair_deep_link():
@@ -3043,6 +3079,16 @@ def test_local_library_cards_delegate_via_data_attributes():
     assert 'e.target.closest("[data-ll-toggle]")' in src
 
 
+def test_ima_dynamic_values_do_not_enter_inline_javascript():
+    """Route/date values must stay HTML data, never become JS string literals."""
+    src = IMA_JS.read_text()
+    assert "onclick=\"pickImaDay('" not in src
+    assert "onclick=\"go('${escapeHtml(backRoute)}')\"" not in src
+    assert "data-ima-day=" in src
+    assert "data-ima-back=" in src
+    assert 'e.target.closest("[data-ima-day]")' in APP_JS.read_text()
+
+
 def test_local_scan_button_driven_by_inflight_flag():
     """扫描中状态由模块级标志驱动，15s 轮询重渲染不得复活按钮（F2）。"""
     src = APP_JS.read_text()
@@ -3175,7 +3221,7 @@ def test_ima_search_ignores_single_ascii_character():
 def test_report_keyword_watch_uses_settings_switch_not_library_subscribe():
     src = _all_view_source()
     settings = _fn_body("renderSettings")
-    assert "匹配研报库" in settings
+    assert "匹配研报中心" in settings
     assert "set-kw-reports" in settings
     assert "saveKeywordsMatchReports" in settings
     assert "每日研报入库结束" in settings
@@ -3917,7 +3963,7 @@ def test_ima_document_reader_error_actions_use_scoped_backroute():
     """详情加载失败时，权限和普通错误都必须返回当前列表筛选上下文。"""
     reader = _fn_body("renderImaDocument")
     error = reader[reader.index("  } catch (err) {"):]
-    assert error.count('onclick="go(\'${escapeHtml(backRoute)}\')"') == 2
+    assert error.count('data-ima-back="${escapeHtml(backRoute)}"') == 2
     assert 'onclick="go(\'knowledge\')"' not in error
     assert 'onclick="closeKnowledgeReader()"' not in error
 
@@ -3968,8 +4014,8 @@ def test_ima_report_header_responsive_source_and_search_clear():
     assert "feishuSourcePillsHtml(" in source_fn
     assert "kb-source-select-mobile" in source_fn
     assert "selectImaDocumentGroup(this.value)" in source_fn
-    assert ">研报库</option>" in source_fn
-    assert 'onclick="pickImaTag(-1)">全部</button>' in _fn_body("imaTagMenuHtml")
+    assert ">研报中心</option>" in source_fn
+    assert 'data-ima-tag-index="-1">全部</button>' in _fn_body("imaTagMenuHtml")
     assert 'tag || "标签"' in render
 
     # Date slot moved out of search form into toolbar/filters
@@ -4156,6 +4202,17 @@ def test_ima_reader_captures_and_restores_the_loaded_result_set():
     assert "consumed" in capture or "consumed" in restore
     assert "consumed" in current
     assert "renderImaDocuments" in refresh
+
+
+def test_ima_reader_back_survives_replaced_history_entry():
+    """飞书组直开用 replaceState 顶掉列表条目，返回必须走 go(列表路由) 而不是 history.back。"""
+    back = _fn_body("backFromImaReader")
+    capture = _fn_body("captureImaListSnapshot")
+    opener = _fn_body("openImaDocument")
+
+    assert "!snapshot.replaced" in back
+    assert capture.index("replaced") < capture.index("selectedKey") or "replaced," in capture
+    assert "captureImaListSnapshot(id, groupId, replace)" in opener
 
 
 def test_ima_reader_has_one_app_download_and_result_neighbors():
@@ -4352,7 +4409,7 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     assert nav.index('route: "timeline"') < nav.index('route: "knowledge"')
     assert 'route: "ima-documents"' not in nav
     assert "IMA 文档" not in nav
-    assert 'label: "研报库"' in nav
+    assert 'label: "研报中心"' in nav
     assert 'group: "资料"' not in nav
     assert 'route: "ima-documents"' not in mobile
     assert 'route: "knowledge"' not in mobile
@@ -4360,8 +4417,8 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     assert "知识库请在电脑上打开" not in src
     assert 'class="tl-ima-entry"' in timeline
     assert "go('knowledge')" in timeline
-    assert "研报库" in timeline
-    assert "打开研报库" in timeline
+    assert "研报中心" in timeline
+    assert "打开研报中心" in timeline
     css = STYLE_CSS.read_text()
     assert ".tl-ima-entry { display: none; }" in css
     # 手机（≤768px）也显示入口：知识库已放开移动端；hmf 端做单行紧凑化后下边距为 8px
@@ -4392,7 +4449,7 @@ def test_knowledge_parallel_loads_catalog_and_first_page():
     assert "prefetched" in list_fn
     assert "await prefetched" in list_fn
     assert "imaDocumentsRequestPath()" in list_fn
-    assert "研报库目录加载失败" in render
+    assert "研报中心目录加载失败" in render
     assert "refreshKnowledge()" in render
     assert "refreshImaDocuments()" in list_fn
     assert 'params.set("limit", "50")' in path_fn
@@ -4523,8 +4580,10 @@ def test_register_placeholder_matches_username_min_length():
 
 def test_settings_controls_are_44px_by_default():
     css = STYLE_CSS.read_text()
-    tab = css[css.index(".settings-tab {"):css.index(".settings-tab:hover")]
-    assert "min-height: 44px" in tab
+    # 分段胶囊以研报库 .ks-tab 为基准：桌面 36px，移动端触控升到 44px
+    tab = css[css.index(".settings-tab {"):css.index(".settings-tab.active")]
+    assert "min-height: 36px" in tab
+    assert ".settings-tab { flex-shrink: 0; min-height: 44px; }" in css
     btn = css[css.index(".channel-btn {"):css.index(".channel-btn.primary")]
     assert "min-height: 44px" in btn
     icon = css[css.index(".icon-btn {"):css.index(".icon-btn:hover")]
@@ -4559,9 +4618,9 @@ def test_login_tabs_own_tabpanels():
 
 
 def test_admin_backup_page_three_panels_download_skips_webdav():
-    """备份页：侧栏入口、三块标题；本机下载不得走 WebDAV 上传。"""
+    """备份页：已并入「帖子与日志」容器（备份页签）、三块标题；本机下载不得走 WebDAV 上传。"""
     src = APP_JS.read_text()
-    assert 'route: "admin/backup"' in src
+    assert '{ id: "backup", label: "备份" }' in src
     body = _fn_body("loadAdminBackup")
     assert "本机备份" in body
     assert "WebDAV 定时" in body
@@ -5129,6 +5188,17 @@ def test_type_scale_uses_four_reading_roles():
             assert "cube-nav" in window, f"{size} 只能用于图表刻度: {window!r}"
 
 
+def test_system_font_stack_keeps_brand_and_chinese_titles_naturally_spaced():
+    """优先用系统字体；品牌和中文标题不使用负字距。"""
+    tokens = (APP_JS.parent / "vendor" / "design-tokens.css").read_text()
+    css = STYLE_CSS.read_text()
+    assert re.search(r'--font-sans:\s*-apple-system,\s*BlinkMacSystemFont,', tokens)
+    assert '"PingFang SC"' in tokens and '"Microsoft YaHei"' in tokens
+    title = re.search(r"\.login-brand-title\s*\{([^}]*)\}", css)
+    assert title and "letter-spacing: 0" in title.group(1)
+    assert "letter-spacing: -0.02em" not in title.group(1)
+
+
 def test_success_token_is_muted_sage():
     """成功色用鼠尾草绿，不用高饱和交通灯绿。"""
     tokens = (APP_JS.parent / "vendor" / "design-tokens.css").read_text()
@@ -5427,12 +5497,12 @@ def test_ima_collector_storage_status_text_contract():
 def test_knowledge_settings_nav_and_empty_state():
     src = APP_JS.read_text()
     assert '{ route: "admin/knowledge"' in src
-    assert 'label: "研报库设置"' in src
+    assert 'label: "研报设置"' in src
     assert "knowledge: loadAdminKnowledge" in _fn_body("renderAdmin")
     assert "go('admin/knowledge')" in _fn_body("renderKnowledge")
     assert "admin/stats?tab=config" not in _fn_body("renderKnowledge")
     stats = _fn_body("loadAdminStats")
-    assert "研报库设置" in stats
+    assert "研报设置" in stats
     assert "go('admin/knowledge')" in stats
     assert "IMA 与知识星球设置已移至" in stats
 

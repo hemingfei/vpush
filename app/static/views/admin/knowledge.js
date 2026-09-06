@@ -176,11 +176,11 @@ export function createAdminKnowledgeView(dependencies) {
     const zq = s.zsxq_cookie || {};
     const zc = s.zsxq_cache || { files: 0, bytes: 0 };
     const zcSize = fmtCacheBytes(zc.bytes);
-    setPageTitle("研报库设置");
+    setPageTitle("研报设置");
     $("#admin-body").innerHTML = `
       <div id="stats-poll-error"></div>
       <div class="knowledge-settings">
-        <div class="ks-tabs" role="tablist" aria-label="研报库设置页签" onkeydown="onKnowledgeTabsKey(event)">
+        <div class="ks-tabs" role="tablist" aria-label="研报设置页签" onkeydown="onKnowledgeTabsKey(event)">
           <button type="button" role="tab" class="ks-tab is-on" data-tab="collect" aria-selected="true" aria-controls="ks-panel-collect" id="ks-tab-collect" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">采集</button>
           <button type="button" role="tab" class="ks-tab" data-tab="zsxq" aria-selected="false" aria-controls="ks-panel-zsxq" id="ks-tab-zsxq" tabindex="-1" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">星球</button>
           <button type="button" role="tab" class="ks-tab" data-tab="storage" aria-selected="false" aria-controls="ks-panel-storage" id="ks-tab-storage" tabindex="-1" onclick="switchKnowledgeSettingsTab(this.dataset.tab)">存储</button>
@@ -343,7 +343,7 @@ export function createAdminKnowledgeView(dependencies) {
       ${imaStoragePanelHtml(imaCollector.storage)}
       <section class="section-panel ks-panel" data-panel="local" role="tabpanel" id="ks-panel-local" aria-labelledby="ks-tab-local">
         <header class="section-head"><div><h2 class="section-title">本地库</h2>
-        <p class="section-meta">存储机 <code>local/&lt;slug&gt;/</code> 下的文件夹研报库；中金研报由存储机采集脚本写入 cicc-research 库。启用并授权用户后即可在研报库中阅读。</p></div></header>
+        <p class="section-meta">存储机 <code>local/&lt;slug&gt;/</code> 下的文件夹研报库；中金研报由存储机采集脚本写入 cicc-research 库。启用并授权用户后即可在研报中心阅读。</p></div></header>
         <div id="local-libs-body"><p class="muted">加载中…</p></div>
       </section>
       </div>`;

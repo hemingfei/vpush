@@ -25,6 +25,7 @@ export function createPushSettingsView(dependencies) {
 
   // ---------- 推送设置 ----------
   let settingsPollTimer = null;
+  let settingsPollSeq = 0;
   let _pushStatusHtml = "";
   const SETTINGS_TABS = ["push", "bind", "llm", "account"];
   let _kolImageSubscriptions = [];
@@ -34,6 +35,7 @@ export function createPushSettingsView(dependencies) {
   let _kolImageReloadNeeded = false;
 
   function stopSettingsPoll() {
+    settingsPollSeq += 1;
     if (settingsPollTimer) {
       clearInterval(settingsPollTimer);
       settingsPollTimer = null;
@@ -42,7 +44,8 @@ export function createPushSettingsView(dependencies) {
 
   function startSettingsPoll() {
     stopSettingsPoll();
-    settingsPollTimer = setInterval(refreshSettingsStatus, 10000);
+    const pollSeq = settingsPollSeq;
+    settingsPollTimer = setInterval(() => refreshSettingsStatus(pollSeq), 10000);
   }
 
   function pendingBindActive() {
@@ -191,13 +194,13 @@ export function createPushSettingsView(dependencies) {
     if (match && typeof match.focus === "function") match.focus();
   }
 
-  async function refreshSettingsStatus() {
+  async function refreshSettingsStatus(pollSeq = settingsPollSeq) {
     const seq = currentRouteSeq();
     const token = state.token;
     const sessionGeneration = imaMountState.sessionGeneration;
     try {
       const user = await api("/api/me");
-      if (!routeStillActive(seq) || token !== state.token
+      if (pollSeq !== settingsPollSeq || !routeStillActive(seq) || token !== state.token
         || sessionGeneration !== imaMountState.sessionGeneration) return;
       state.user = user;
       const el = $("#push-status");
@@ -221,7 +224,7 @@ export function createPushSettingsView(dependencies) {
   async function renderSettings(seq) {
     const token = state.token;
     const sessionGeneration = imaMountState.sessionGeneration;
-    setPageTitle("设置");
+    setPageTitle("个人设置");
     try {
       const user = await api("/api/me");
       if (!routeStillActive(seq) || token !== state.token
@@ -321,12 +324,12 @@ export function createPushSettingsView(dependencies) {
           <label class="switch kw-report-switch">
             <input id="set-kw-reports" type="checkbox" ${state.user.keywords_match_reports ? "checked" : ""} onchange="saveKeywordsMatchReports()">
             <span class="track"></span>
-            <span>匹配研报库</span>
+            <span>匹配研报中心</span>
           </label>
           <div class="toolbar" style="margin-top:10px">
             <button class="btn-normal" onclick="saveKeywords()">保存关键词</button>
           </div>
-          <p class="muted">动态命中即实时送达。开启「匹配研报库」后，每日研报入库结束会把命中篇目合成一条推送；需要管理员已授权对应研报库。</p>
+          <p class="muted">动态命中即实时送达。开启「匹配研报中心」后，每日研报入库结束会把命中篇目合成一条推送；需要管理员已授权对应研报库。</p>
         </section>
         <section class="section-panel">
           <header class="section-head">

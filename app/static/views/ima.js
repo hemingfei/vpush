@@ -76,7 +76,7 @@ export function createImaView(dependencies) {
     const id = String(mediaId || "");
     if (!id) return;
     const listWasOpen = !!$("#ima-report-page");
-    if (listWasOpen) captureImaListSnapshot(id, groupId);
+    if (listWasOpen) captureImaListSnapshot(id, groupId, replace);
     const url = normalizeRoute(imaDocumentReaderRoute(id, groupId));
     if (location.pathname + location.search !== url) {
       if (replace) history.replaceState(null, "", url);
@@ -458,13 +458,15 @@ export function createImaView(dependencies) {
     };
   }
 
-  function captureImaListSnapshot(selectedMediaId = "", selectedGroupId = "") {
+  function captureImaListSnapshot(selectedMediaId = "", selectedGroupId = "", replaced = false) {
     const fields = cloneImaListSnapshotFields();
     if (!fields) return;
     _imaListSnapshot = {
       ...fields,
       route: location.pathname + location.search,
       selectedKey: imaDocumentKey(selectedMediaId, selectedGroupId),
+      // replaced=true：阅读器条目是用 replaceState 顶掉列表条目打开的，上一条历史不是列表
+      replaced,
     };
   }
 
@@ -490,9 +492,13 @@ export function createImaView(dependencies) {
 
   function currentImaListSnapshot() {
     const snapshot = _imaListSnapshot;
-    return snapshot && !snapshot.consumed && snapshot.route === location.pathname + location.search
-      ? snapshot
-      : null;
+    if (!snapshot || snapshot.consumed || snapshot.route !== location.pathname + location.search) return null;
+    if (!snapshot.items.length) {
+      // 快照在列表数据取回前被捕获（如飞书组直开时间线），空快照不还原，走正常加载
+      snapshot.consumed = true;
+      return null;
+    }
+    return snapshot;
   }
 
   function restoreImaListSnapshot(snapshot, body) {
@@ -612,10 +618,10 @@ export function createImaView(dependencies) {
 
   function imaDayMenuHtml(day, days) {
     const current = String(day || "");
-    const items = [`<button type="button" role="option" class="kb-desk-day-option${current ? "" : " is-selected"}" aria-selected="${!current}" onclick="pickImaDay('')">最新</button>`];
+    const items = [`<button type="button" role="option" class="kb-desk-day-option${current ? "" : " is-selected"}" aria-selected="${!current}" data-ima-day="">最新</button>`];
     for (const key of imaDayMenuDays(days)) {
       const on = key === current;
-      items.push(`<button type="button" role="option" class="kb-desk-day-option${on ? " is-selected" : ""}" aria-selected="${on}" onclick="pickImaDay('${escapeHtml(key)}')">${escapeHtml(fmtImaDay(key))}</button>`);
+      items.push(`<button type="button" role="option" class="kb-desk-day-option${on ? " is-selected" : ""}" aria-selected="${on}" data-ima-day="${escapeHtml(key)}">${escapeHtml(fmtImaDay(key))}</button>`);
     }
     return `<div class="kb-desk-day-menu" role="listbox" aria-label="日期">${items.join("")}</div>`;
   }
@@ -680,10 +686,10 @@ export function createImaView(dependencies) {
     const keys = Object.keys(counts).sort((a, b) => (counts[b] || 0) - (counts[a] || 0));
     if (current && !keys.includes(current)) keys.unshift(current);
     _imaTagMenu.keys = keys;
-    const items = [`<button type="button" role="option" class="kb-desk-day-option${current ? "" : " is-selected"}" aria-selected="${!current}" onclick="pickImaTag(-1)">全部</button>`];
+    const items = [`<button type="button" role="option" class="kb-desk-day-option${current ? "" : " is-selected"}" aria-selected="${!current}" data-ima-tag-index="-1">全部</button>`];
     keys.forEach((key, i) => {
       const on = key === current;
-      items.push(`<button type="button" role="option" class="kb-desk-day-option${on ? " is-selected" : ""}" aria-selected="${on}" onclick="pickImaTag(${i})">${escapeHtml(key)}${counts[key] ? `（${counts[key]}）` : ""}</button>`);
+      items.push(`<button type="button" role="option" class="kb-desk-day-option${on ? " is-selected" : ""}" aria-selected="${on}" data-ima-tag-index="${i}">${escapeHtml(key)}${counts[key] ? `（${counts[key]}）` : ""}</button>`);
     });
     return `<div class="kb-desk-day-menu" data-tag-menu role="listbox" aria-label="标签">${items.join("")}</div>`;
   }
@@ -776,7 +782,7 @@ export function createImaView(dependencies) {
     }));
     const pillsHtml = `<div class="kb-source-pills-desk">${feishuSourcePillsHtml(sources, selectedGroup, "knowledge")}</div>`;
     const mobileOptions = [
-      `<option value="" ${!selectedGroup ? "selected" : ""}>研报库</option>`,
+      `<option value="" ${!selectedGroup ? "selected" : ""}>研报中心</option>`,
       ...sources.map((s) => `<option value="${escapeHtml(s.group_id)}" ${s.group_id === selectedGroup ? "selected" : ""}>${escapeHtml(s.title)}</option>`)
     ].join("");
     const mobileSelectHtml = `<div class="kb-source-select-wrap"><select class="kb-source-select-mobile" aria-label="切换研报库" onchange="selectImaDocumentGroup(this.value)">${mobileOptions}</select></div>`;
@@ -829,7 +835,7 @@ export function createImaView(dependencies) {
   async function renderKnowledge(seq, encodedMediaId = "") {
     stopImaDocumentsAutoLoad();
     const mediaId = encodedMediaId ? decodeURIComponent(encodedMediaId) : "";
-    setPageTitle("研报库");
+    setPageTitle("研报中心");
     if (mediaId && !$("#ima-reader-page")) {
       $("#main").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
     }
@@ -864,11 +870,11 @@ export function createImaView(dependencies) {
       } else if (documentsOk) {
         const groups = Array.isArray(documentsResult.value.groups) ? documentsResult.value.groups : [];
         subscribed = groups.map((group) => ({ id: group.id, name: group.name, enabled: true }));
-        catalogWarning = "研报库目录加载失败";
+        catalogWarning = "研报中心目录加载失败";
       } else {
         subscribed = Array.isArray(state.imaCatalogSubscribed) ? state.imaCatalogSubscribed : [];
         available = Array.isArray(state.imaCatalogAvailable) ? state.imaCatalogAvailable : [];
-        catalogWarning = "研报库目录加载失败";
+        catalogWarning = "研报中心目录加载失败";
       }
       state.imaCatalogSubscribed = subscribed;
       state.imaCatalogAvailable = available;
@@ -879,8 +885,8 @@ export function createImaView(dependencies) {
         sourceControl.outerHTML = knowledgeSourceControlsHtml(selectedGroup);
       }
       if (catalogOk && selectedGroup && !isAdmin && !subscribed.some((group) => String(group.id) === selectedGroup)) {
-        setPageTitle("研报库", true, "knowledge", "回研报库");
-        $("#main").innerHTML = emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回研报库</button></div>`);
+        setPageTitle("研报中心", true, "knowledge", "回研报中心");
+        $("#main").innerHTML = emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回研报中心</button></div>`);
         return;
       }
       state.imaDocumentsGroup = selectedGroup;
@@ -946,7 +952,7 @@ export function createImaView(dependencies) {
     state.imaDocumentsQuery = query;
     state.imaDocumentsDay = day;
     state.imaDocumentsTag = tag;
-    if (!knowledgeMediaIdFromPath()) setPageTitle("研报库");
+    if (!knowledgeMediaIdFromPath()) setPageTitle("研报中心");
     const listRoot = $("#kb-list");
     if (!listRoot) {
       await renderKnowledge(seq);
@@ -1084,7 +1090,7 @@ export function createImaView(dependencies) {
       }
       const denied = String(err.message || "").includes("知识库不存在");
       body.innerHTML = denied
-        ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回研报库</button></div>`)
+        ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回研报中心</button></div>`)
         : emptyState(`加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="refreshImaDocuments()">重试</button></div>`);
     }
   }
@@ -1223,8 +1229,9 @@ export function createImaView(dependencies) {
   function backFromImaReader(fallbackRoute, focusSearch = false) {
     clearImaPdfUrl();
     const snapshot = _imaListSnapshot;
-    // ponytail: 直链/刷新进入时上一页不是知识库（history.back 会跑偏到广场）；列表点进来才有 selectedKey
-    if (snapshot && snapshot.selectedKey && snapshot.route === normalizeRoute(fallbackRoute)) {
+    // ponytail: history.back 只在「列表 push 进阅读器」时安全；replace 进入（飞书组直开/j-k/上下篇）时
+    // 列表条目已被顶掉，back 会跑偏到广场，改走 go() 由快照恢复列表
+    if (snapshot && snapshot.selectedKey && !snapshot.replaced && snapshot.route === normalizeRoute(fallbackRoute)) {
       if (focusSearch) snapshot.focusSearch = true;
       history.back();
       return;
@@ -1261,7 +1268,7 @@ export function createImaView(dependencies) {
     state.imaDocumentsTag = tag;
     const groupQuery = documentGroup ? `?group=${encodeURIComponent(documentGroup)}` : "";
     let backRoute = imaDocumentsRoute(listGroup, query, day, tag);
-    setPageTitle("研报库");
+    setPageTitle("研报中心");
     $("#kb-reader").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
     try {
       const item = await api(`/api/ima-documents/${encodeURIComponent(mediaId)}${groupQuery}`);
@@ -1357,8 +1364,8 @@ export function createImaView(dependencies) {
       if (!routeStillActive(seq) || readerSeq !== currentImaReaderSeq()) return;
       const denied = String(err.message || "").includes("知识库不存在");
       $("#kb-reader").innerHTML = denied
-        ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('${escapeHtml(backRoute)}')">回研报库</button></div>`)
-        : emptyState(`文档加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="go('${escapeHtml(backRoute)}')">返回文档列表</button></div>`);
+        ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" data-ima-back="${escapeHtml(backRoute)}">回研报中心</button></div>`)
+        : emptyState(`文档加载失败：${err.message}`, `<div><button type="button" class="btn-normal" data-ima-back="${escapeHtml(backRoute)}">返回文档列表</button></div>`);
     }
   }
 

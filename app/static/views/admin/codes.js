@@ -5,6 +5,7 @@ export function createAdminCodesView(dependencies) {
     api,
     flash,
     escapeHtml,
+    jsString,
     routeStillActive,
     SEARCH_ICON,
     fmtDbTime,
@@ -360,7 +361,7 @@ export function createAdminCodesView(dependencies) {
         <strong>已生成 ${result.codes.length} 个</strong>
         <div class="rc-result-actions">
           <button class="btn-sm" data-copy="${copyDataAttr(copy)}" onclick="copyText(decodeURIComponent(this.getAttribute('data-copy')), '已复制本批邀请码')">复制全部</button>
-          <button class="btn-sm danger" onclick="adminRevokeBatch('${escapeHtml(result.batch_id)}', true)">作废本批未用</button>
+          <button class="btn-sm danger" onclick="adminRevokeBatch(${jsString(result.batch_id)}, true)">作废本批未用</button>
           <button class="btn-sm" onclick="clearAdminCodesResult()">关闭</button>
         </div>
       </div>
@@ -404,7 +405,7 @@ export function createAdminCodesView(dependencies) {
           </div>
           <div class="rc-batch-actions">
             <button class="btn-sm" ${copyCodes.length ? "" : "disabled"} data-copy="${copyDataAttr(copy)}" onclick="copyText(decodeURIComponent(this.getAttribute('data-copy')), '已复制未用码')">复制未用</button>
-            <button class="btn-sm danger" ${unusedOpen.length ? "" : "disabled"} onclick="adminRevokeBatch('${escapeHtml(g.id)}')">作废未用</button>
+            <button class="btn-sm danger" ${unusedOpen.length ? "" : "disabled"} onclick="adminRevokeBatch(${jsString(g.id)})">作废未用</button>
           </div>
         </div>
         <div class="table-wrap">
