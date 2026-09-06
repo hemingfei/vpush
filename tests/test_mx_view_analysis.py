@@ -658,6 +658,37 @@ def test_run_due_view_batch_catchup_and_failure(monkeypatch):
     assert db.get_mx_view_snapshot(day, "09:20") is None  # 失败不落快照
 
 
+def test_run_due_view_batch_defers_while_batch_lock_held():
+    """锁被其他线程持有时调度 tick 退避返回 None。
+
+    探忙不能依赖 Lock.locked()：_batch_lock 为手动跑批重入改用 RLock，
+    而 RLock.locked() 到 3.14 才有，3.12 容器上会 AttributeError。占用方
+    必须是另一线程——RLock 同线程重入会让非阻塞试探误判为空闲。
+    """
+    import threading
+
+    db = make_db()
+    db.set_setting(mva.MX_VIEW_ENABLED_KEY, "1")
+    acquired = threading.Event()
+    release = threading.Event()
+
+    def holder():
+        with mva._batch_lock:
+            acquired.set()
+            release.wait(timeout=5)
+
+    t = threading.Thread(target=holder, daemon=True)
+    t.start()
+    assert acquired.wait(timeout=5)
+    try:
+        assert mva.run_due_view_batch(db) is None  # 批次进行中：退避不叠加
+    finally:
+        release.set()
+        t.join(timeout=5)
+    # 锁已释放：探测空闲，无新消息时正常走到「无动作返回 None」而不抛错
+    assert mva.run_due_view_batch(db) is None
+
+
 # ---- Task 6：回填 job（按快照表重放整天） ----
 
 

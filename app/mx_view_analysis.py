@@ -495,6 +495,18 @@ def build_target_trajectories(opinions, times, topic_names, stock_names) -> list
 # RLock：管理端手动跑批的 job 线程先 acquire(timeout) 占位、再进 run_snapshot_batch
 # 重入同一把锁；跨线程互斥语义与 Lock 一致
 _batch_lock = threading.RLock()
+
+
+def _batch_lock_busy() -> bool:
+    """RLock 无 .locked()（3.14 才新增，容器是 3.12）：用非阻塞试探等价探忙。
+
+    调用方（调度 tick/回填间隙）自身从不持锁，试探成功说明空闲、立即释放；
+    探测到真正持锁之间允许竞态，由 run_snapshot_batch 内的阻塞 acquire 兜底。
+    """
+    if _batch_lock.acquire(blocking=False):
+        _batch_lock.release()
+        return False
+    return True
 _fail_lock = threading.Lock()
 _fail_count = 0
 
@@ -833,7 +845,7 @@ def run_due_view_batch(db, llm_config=None):
     _purge_old_batches_daily(db)
     if not get_enabled(db) or backfill_running():
         return None
-    if _batch_lock.locked():
+    if _batch_lock_busy():
         return None
     try:
         return _run_pending_live_batch(db, llm_config=llm_config)
@@ -915,7 +927,7 @@ def start_backfill_job(db, day_from, day_to, llm_config=None) -> bool:
                     # run_due_view_batch 见 backfill_running 直接退避，当日 live
                     # 快照会停更。每窗之后检查有无「到期未落」的 live 快照，
                     # 有则先补跑一批再继续回填（失败不中断回填）。
-                    if not _batch_lock.locked():
+                    if not _batch_lock_busy():
                         try:
                             _run_pending_live_batch(db, llm_config=llm_config)
                         except Exception:  # noqa: BLE001
