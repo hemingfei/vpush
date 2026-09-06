@@ -6,4 +6,7 @@
     <string name="custom_url_scheme">com.icekale.vpush</string>
     <string name="shortcut_switch_server">切换服务器</string>
     <string name="shortcut_switch_server_long">连接其他 V Push 服务器</string>
+    <string name="exit_confirm_message">确定退出 V Push 吗？</string>
+    <string name="exit_cancel">取消</string>
+    <string name="exit_ok">退出</string>
 </resources>

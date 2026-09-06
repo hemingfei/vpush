@@ -6499,6 +6499,25 @@ window.addEventListener("hashchange", () => {
   router();
 });
 
+// 安卓 APP 返回键接管（原生侧在 MainActivity 经 evaluateJavascript 调用本钩子）：
+// 返回键依次消费——顶层遮罩（灯箱→弹窗→智囊团抽屉）→ 页面级返回（子页回上级 / history）；
+// 全都无处可退时返回 false，交回原生弹「退出 APP」确认框。浏览器/PWA 不会调用此钩子。
+window.__VPUSH_BACK__ = function () {
+  if (document.querySelector(".lightbox:not(.closing)")) { closeLightbox(); return true; }
+  const masks = document.querySelectorAll(".modal-mask");
+  const mask = masks[masks.length - 1];
+  if (mask) {
+    // 优先点弹窗自带的取消键（可能带未保存确认）；没有取消键的（原始消息等）模拟点
+    // mask 本体，走各自「点外关闭」分支
+    (mask.querySelector("[data-close]") || mask).click();
+    return true;
+  }
+  if (document.querySelector(".mxv-drawer")) { mxvCloseDrawer(); return true; }
+  if (state.pageBackRoute) { go(state.pageBackRoute); return true; }
+  if (history.length > 1) { history.back(); return true; }
+  return false; // 已是根视图：不消费，原生弹退出确认
+};
+
 // ---------- AI 分析任务管理 ----------
 async function loadAdminAiAnalysis() {
 	  let tasks, defaultPrompt, kols, systemKols;

@@ -1,10 +1,13 @@
 package com.icekale.vpush;
 
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.ViewGroup.MarginLayoutParams;
 import android.webkit.WebView;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
@@ -36,6 +39,7 @@ public class MainActivity extends BridgeActivity {
                             WindowInsetsCompat.Type.statusBars()
                                     | WindowInsetsCompat.Type.navigationBars()
                                     | WindowInsetsCompat.Type.displayCutout());
+                    Insets ime = windowInsets.getInsets(WindowInsetsCompat.Type.ime());
                     // getInsets() 返回物理像素，而 WebView 里 1 CSS px = 1dp（viewport 为
                     // width=device-width），必须除以屏幕密度换算，否则注入的
                     // --safe-top/--safe-bottom 会放大 density 倍，顶部出现巨大留白。
@@ -43,13 +47,64 @@ public class MainActivity extends BridgeActivity {
                     barInsetTop = Math.round(bars.top / density);
                     barInsetBottom = Math.round(bars.bottom / density);
                     injectSafeAreaInsets();
+                    // 键盘：edge-to-edge 下 manifest 的 adjustResize 对 IME 不再生效——窗口
+                    // 不随键盘收缩、键盘纯悬浮，WebView 不知道键盘存在，登录页等表单聚焦时
+                    // 输入框被盖住只能盲输。把 ime inset 作为 WebView 底部 margin（物理像素；
+                    // ime.bottom 自窗口底边量起、已含导航栏区域），视口随键盘收窄，浏览器会
+                    // 自动把聚焦输入框滚到键盘上方，等价旧版 adjustResize；收起时 ime.bottom
+                    // 回 0 还原。只在值变化时 setLayoutParams，避免 insets 分发触发多余重排。
+                    MarginLayoutParams lp = (MarginLayoutParams) v.getLayoutParams();
+                    if (lp.bottomMargin != ime.bottom) {
+                        lp.bottomMargin = ime.bottom;
+                        v.setLayoutParams(lp);
+                    }
                     return windowInsets;
                 });
             }
         }
+        handleBackPress();
         if (hasSwitchServer(getIntent())) {
             gotoSetupPage();
         }
+    }
+
+    /**
+     * 返回键改为页面级返回：先问当前页面要不要自己消费（关抽屉/弹窗、页内子页返回，
+     * 见服务器前端 app.js 的 window.__VPUSH_BACK__），页面没消费时退 WebView 历史，
+     * 已到根再弹「退出」确认框，而不是按一下就退 APP。
+     * 连接设置壳页没有该钩子（返回 false），行为退化为确认退出，符合预期。
+     */
+    private void handleBackPress() {
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                WebView webView = getBridge() != null ? getBridge().getWebView() : null;
+                if (webView == null) {
+                    finish();
+                    return;
+                }
+                // 表达式返回 JS 布尔值，evaluateJavascript 回调收到 JSON 字面量 true/false（无引号）；
+                // 若返回字符串则带 JSON 引号，equals 会永远不成立
+                webView.evaluateJavascript(
+                        "(function(){try{return !!(window.__VPUSH_BACK__"
+                                + "&&window.__VPUSH_BACK__());}catch(e){return false;}})();",
+                        value -> webView.post(() -> {
+                            if ("true".equals(value)) {
+                                return; // 页面已消费（关了抽屉/弹窗或做了页内返回）
+                            }
+                            if (webView.canGoBack()) {
+                                webView.goBack();
+                                return;
+                            }
+                            new AlertDialog.Builder(MainActivity.this)
+                                    .setMessage(R.string.exit_confirm_message)
+                                    .setNegativeButton(R.string.exit_cancel, null)
+                                    .setPositiveButton(R.string.exit_ok,
+                                            (d, w) -> finish())
+                                    .show();
+                        }));
+            }
+        });
     }
 
     @Override
