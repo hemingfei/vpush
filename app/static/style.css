@@ -3062,26 +3062,30 @@ details.bind-steps[open] > summary::before { content: "▾ "; }
    -webkit-overflow-scrolling 已废弃（iOS 16+ 原生滚动），其旧的动量滚动层是 iOS 点击失效的根因之一。 */
 .settings-tabs, .platform-tabs, .home-filter-content .home-cats { touch-action: manipulation; }
 
-/* 设置页分段导航 */
-.settings-tabs { display: flex; gap: var(--space-2); margin-bottom: var(--space-4); flex-wrap: wrap; }
+/* 设置页分段导航：与研报库设置 .ks-tab 同款（36px、默认描边、surface 底） */
+.settings-tabs { display: flex; gap: 6px; margin-bottom: var(--space-4); flex-wrap: wrap; }
 .settings-tab {
   display: inline-flex;
   align-items: center;
-  padding: var(--space-2) var(--space-4);
-  min-height: 44px;
+  justify-content: center;
+  min-height: 36px;
+  padding: 6px 14px;
   border-radius: var(--radius-pill);
-  border: var(--border-strong);
-  background: transparent;
-  color: var(--color-text-muted);
+  border: var(--border-default);
+  background: var(--color-surface);
+  color: var(--color-text);
   font-size: var(--text-sm);
   cursor: pointer;
   transition: background var(--ease-standard), color var(--ease-standard), border-color var(--ease-standard);
 }
-.settings-tab:hover { border-color: var(--color-accent-text); color: var(--color-accent-text); }
 .settings-tab.active {
   background: var(--color-accent);
-  border-color: var(--color-accent-text);
+  border-color: var(--color-accent);
   color: var(--color-white);
+}
+.settings-tab:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 @media (max-width: 768px) {

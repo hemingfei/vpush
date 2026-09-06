@@ -312,6 +312,8 @@ def test_settings_async_responses_are_owned_by_route_and_session_before_mutation
     assert guard < state_write
     assert "token !== state.token" in refresh[guard:state_write]
     assert "sessionGeneration !== imaMountState.sessionGeneration" in refresh[guard:state_write]
+    assert "pollSeq !== settingsPollSeq" in refresh[fetch:state_write]
+    assert "settingsPollSeq += 1" in _fn_body("stopSettingsPoll")
 
     render = _fn_body("renderSettings")
     fetch = render.index('await api("/api/me")')
@@ -808,7 +810,8 @@ def test_mobile_home_filter_reuses_native_and_shared_controls():
     assert "<details" not in render
     assert "platformShortLabel(p)" in mobile_platforms
     assert "<span>${short}</span>" in mobile_platforms
-    assert "homePickMobilePlatform('${p}')" in mobile_platforms
+    assert 'data-platform="${p}"' in mobile_platforms
+    assert 'onclick="homePickMobilePlatform' not in mobile_platforms
     assert "state.platform = platform" in pick
     assert 'toggleAttribute("hidden"' in toggle
     assert "loadHomeKols(routeRenderSeq)" in pick
@@ -4469,8 +4472,10 @@ def test_register_placeholder_matches_username_min_length():
 
 def test_settings_controls_are_44px_by_default():
     css = STYLE_CSS.read_text()
-    tab = css[css.index(".settings-tab {"):css.index(".settings-tab:hover")]
-    assert "min-height: 44px" in tab
+    # 分段胶囊以研报库 .ks-tab 为基准：桌面 36px，移动端触控升到 44px
+    tab = css[css.index(".settings-tab {"):css.index(".settings-tab.active")]
+    assert "min-height: 36px" in tab
+    assert ".settings-tab { flex-shrink: 0; min-height: 44px; }" in css
     btn = css[css.index(".channel-btn {"):css.index(".channel-btn.primary")]
     assert "min-height: 44px" in btn
     icon = css[css.index(".icon-btn {"):css.index(".icon-btn:hover")]
