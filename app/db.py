@@ -1258,6 +1258,17 @@ class DB:
             self._conn.execute(
                 "ALTER TABLE posts ADD COLUMN llm_tagged INTEGER NOT NULL DEFAULT 0"
             )
+        review_cols = {row["name"] for row in self._rows("PRAGMA table_info(post_tag_reviews)")}
+        if "source" not in review_cols:
+            # 标签来源：llm=MX LLM 打标，mx_view=智囊团观点回流打标
+            self._conn.execute(
+                "ALTER TABLE post_tag_reviews ADD COLUMN source TEXT NOT NULL DEFAULT 'llm'"
+            )
+        if "direction" not in review_cols:
+            # 观点方向（智囊团回流登记）：bull/bear，其他来源为空串
+            self._conn.execute(
+                "ALTER TABLE post_tag_reviews ADD COLUMN direction TEXT NOT NULL DEFAULT ''"
+            )
         if "blocked" not in post_cols:
             self._conn.execute(
                 "ALTER TABLE posts ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0"
@@ -4580,6 +4591,7 @@ class DB:
         include_hidden: bool = False,
         hidden_only: bool = False,
         order_published: bool = False,
+        with_view_directions: bool = False,
     ) -> list[dict]:
         sql = (
             "SELECT p.*, k.name AS kol_name, k.category_id AS category_id, "
@@ -4626,9 +4638,13 @@ class DB:
         order = "p.published_at DESC, p.id DESC" if order_published else "p.id DESC"
         sql += f" ORDER BY {order} LIMIT ? OFFSET ?"
         params.extend([limit, offset])
-        return _sanitize_post_detail(
+        rows = _sanitize_post_detail(
             _normalize_post_tags(_normalize_post_images(self._rows(sql, params), db=self))
         )
+        if with_view_directions:
+            # 用户时间线渲染多空方向徽标用；打标回填等内部遍历不附（省一条查询）
+            self.attach_view_directions(rows)
+        return rows
 
     def count_posts(self) -> int:
         rows = self._rows("SELECT COUNT(*) AS n FROM posts")
@@ -5289,6 +5305,33 @@ class DB:
         )
         return len(merged)
 
+    def merge_post_view_tags(self, post_id: int, tags: list[str]) -> int:
+        """智囊团观点回流标签与已有标签去重合并（已有在前、新标签补位），截 POST_TAGS_MAX。
+
+        与 merge_post_tags_llm 的唯一区别：不置 llm_tagged——那是 LLM 打标
+        游标的属主标记，回流打标不把帖从 LLM 打标队列里偷走。
+        """
+        rows = self._rows("SELECT tags FROM posts WHERE id = ?", (post_id,))
+        if not rows:
+            return 0
+        try:
+            existing = json.loads(str(rows[0].get("tags") or "[]"))
+        except ValueError:
+            existing = []
+        if not isinstance(existing, list):
+            existing = []
+        merged = [str(t) for t in existing if str(t)]
+        for tag in tags or []:
+            tag = str(tag)
+            if tag and tag not in merged:
+                merged.append(tag)
+        merged = merged[:POST_TAGS_MAX]
+        self._execute(
+            "UPDATE posts SET tags = ? WHERE id = ?",
+            (json.dumps(merged, ensure_ascii=False), post_id),
+        )
+        return len(merged)
+
     # ---- MX 实时消息 LLM 打标（app/mx_llm_tagging.py） ----
 
     def list_mx_posts_after(self, cursor: int, limit: int = 40) -> list[dict]:
@@ -5693,7 +5736,8 @@ class DB:
         self.update_post_tags(post_id, [t for t in tags if t != tag])
         return True
 
-    def add_pending_tag_review(self, post_id: int, tag: str, kind: str, confidence: str) -> bool:
+    def add_pending_tag_review(self, post_id: int, tag: str, kind: str, confidence: str,
+                               source: str = "llm", direction: str = "") -> bool:
         """登记一条待人工审核的标签；同帖同标签只登记一次（审核结论不被重跑覆盖）。
 
         标签已在帖上（规则标签/上一轮已写入/管理员手动加过）时不登记：
@@ -5703,31 +5747,44 @@ class DB:
         if not tag or tag in self.get_post_tags(post_id):
             return False
         self._execute(
-            "INSERT OR IGNORE INTO post_tag_reviews (post_id, tag, kind, confidence) "
-            "VALUES (?, ?, ?, ?)",
-            (int(post_id), tag, str(kind), str(confidence)),
+            "INSERT OR IGNORE INTO post_tag_reviews (post_id, tag, kind, confidence, source, direction) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (int(post_id), tag, str(kind), str(confidence), str(source or "llm"), str(direction or "")),
         )
         return True
 
     def record_llm_applied_tag(self, post_id: int, tag: str, kind: str) -> None:
-        """登记 LLM high 直写的标签（status=applied），供「查看」弹窗区分标签来源。
+        """登记 LLM high 直写的标签（status=applied），供「查看」弹窗区分标签来源。"""
+        self.record_applied_tag(post_id, tag, kind, source="llm")
 
-        同帖同标签已有 pending 行时升级为 applied（LLM 已实际写入，无需再审）；
-        approved/rejected 行保持不变（人工审核结论不被重跑覆盖）。
+    def record_applied_tag(self, post_id: int, tag: str, kind: str,
+                           source: str = "llm", direction: str = "") -> None:
+        """登记直写标签（status=applied），带来源（llm/mx_view）与观点方向。
+
+        同帖同标签已有 pending 行时升级为 applied（已实际写入，无需再审，来源
+        保持原登记方）；applied/approved 行保持不变，仅方向非空时刷新为最新
+        立场（同帖同标签被多条观点覆盖时取更晚快照的方向）。
         """
         tag = str(tag or "").strip()
         if not tag:
             return
+        direction = str(direction or "").strip()
         self._execute(
-            "INSERT OR IGNORE INTO post_tag_reviews (post_id, tag, kind, confidence, status) "
-            "VALUES (?, ?, ?, 'high', 'applied')",
-            (int(post_id), tag, str(kind or "")),
+            "INSERT OR IGNORE INTO post_tag_reviews (post_id, tag, kind, confidence, status, source, direction) "
+            "VALUES (?, ?, ?, 'high', 'applied', ?, ?)",
+            (int(post_id), tag, str(kind or ""), str(source or "llm"), direction),
         )
         self._execute(
             "UPDATE post_tag_reviews SET status = 'applied', confidence = 'high' "
             "WHERE post_id = ? AND tag = ? AND status = 'pending'",
             (int(post_id), tag),
         )
+        if direction:
+            self._execute(
+                "UPDATE post_tag_reviews SET direction = ? "
+                "WHERE post_id = ? AND tag = ? AND status IN ('applied', 'approved')",
+                (direction, int(post_id), tag),
+            )
 
     def get_post_tag_detail(self, post_id: int) -> dict | None:
         """标签审核「查看」弹窗数据：消息内容 + 当前标签 + LLM 打入的标签 + 待审核标签。
@@ -5749,18 +5806,20 @@ class DB:
         except ValueError:
             tags = []
         reviews = self._rows(
-            "SELECT id, tag, kind, confidence, status FROM post_tag_reviews "
+            "SELECT id, tag, kind, confidence, status, source, direction FROM post_tag_reviews "
             "WHERE post_id = ? ORDER BY id",
             (int(post_id),),
         )
         tag_set = set(tags)
         llm_tags = [
-            {"tag": r["tag"], "kind": r["kind"], "status": r["status"]}
+            {"tag": r["tag"], "kind": r["kind"], "status": r["status"],
+             "source": str(r["source"] or "llm"), "direction": str(r["direction"] or "")}
             for r in reviews
             if r["status"] in ("applied", "approved") and r["tag"] in tag_set
         ]
         pending = [
-            {"id": r["id"], "tag": r["tag"], "kind": r["kind"], "confidence": r["confidence"]}
+            {"id": r["id"], "tag": r["tag"], "kind": r["kind"], "confidence": r["confidence"],
+             "source": str(r["source"] or "llm"), "direction": str(r["direction"] or "")}
             for r in reviews
             # 已在帖上的 pending 记录不展示：通过与否该标签都已在帖
             if r["status"] == "pending" and r["tag"] not in tag_set
@@ -5768,21 +5827,30 @@ class DB:
         row.update({"tags": tags, "llm_tags": llm_tags, "pending_reviews": pending})
         return row
 
-    def list_tag_reviews(self, status: str = "pending", limit: int = 200) -> list[dict]:
+    def list_tag_reviews(self, status: str = "pending", limit: int = 200,
+                         source: str | None = None) -> list[dict]:
         """按状态列审核队列（默认 pending），联 posts 取帖子摘要。
 
         pending 队列剔除标签已在帖上的记录：登记后标签又被直写/手动加上时，
         通过与否该标签都已在帖，继续挂着只会误导；其余状态原样返回。
+        source 非空时只列该来源（llm / mx_view）的记录。
         """
-        rows = self._rows(
+        sql = (
             "SELECT r.id, r.post_id, r.tag, r.kind, r.confidence, r.status, r.created_at, "
+            "r.source, r.direction, "
             "p.title, p.content, p.platform, p.tags, k.name AS kol_name "
             "FROM post_tag_reviews r "
             "JOIN posts p ON p.id = r.post_id "
             "JOIN kols k ON k.id = p.kol_id "
-            "WHERE r.status = ? ORDER BY r.id DESC LIMIT ?",
-            (str(status), int(limit)),
+            "WHERE r.status = ?"
         )
+        params: list = [str(status)]
+        if source:
+            sql += " AND r.source = ?"
+            params.append(str(source))
+        sql += " ORDER BY r.id DESC LIMIT ?"
+        params.append(int(limit))
+        rows = self._rows(sql, tuple(params))
         if status != "pending":
             return rows
         out = []
@@ -5805,6 +5873,64 @@ class DB:
             "UPDATE post_tag_reviews SET status = ? WHERE id = ?", (str(status), int(review_id))
         )
         return review
+
+    def attach_view_directions(self, rows: list[dict]) -> list[dict]:
+        """给一批帖子行附加 view_directions（{标签: bull/bear}）。
+
+        取自 post_tag_reviews 里已直写/审核通过且方向非空的登记（智囊团观点
+        回流写入），一页帖子一条 IN 查询；帖子上没有方向登记时为空 dict。
+        """
+        ids = [int(r["id"]) for r in rows if r.get("id") is not None]
+        if not ids:
+            return rows
+        placeholders = ",".join("?" for _ in ids)
+        review_rows = self._rows(
+            f"SELECT post_id, tag, direction FROM post_tag_reviews "
+            f"WHERE post_id IN ({placeholders}) AND direction != '' "
+            f"AND status IN ('applied', 'approved')",
+            tuple(ids),
+        )
+        by_post: dict[int, dict[str, str]] = {}
+        for r in review_rows:
+            by_post.setdefault(int(r["post_id"]), {})[str(r["tag"])] = str(r["direction"])
+        for row in rows:
+            row["view_directions"] = by_post.get(int(row["id"]), {})
+        return rows
+
+    def mx_view_tag_day_stats(self, day: str) -> dict:
+        """智囊团观点回流打标当日（CN 时区自然日）计数：直写与待审条数。
+
+        created_at 落库为 UTC（datetime('now')），这里把 CN 日界换算成 UTC
+        边界再做字符串区间比较。
+        """
+        cn = timezone(timedelta(hours=8))
+        day_start = datetime.fromisoformat(f"{day}T00:00:00+08:00")
+        start = day_start.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
+        end = (day_start + timedelta(days=1)).astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
+        rows = self._rows(
+            "SELECT status, COUNT(*) AS n FROM post_tag_reviews "
+            "WHERE source = 'mx_view' AND created_at >= ? AND created_at < ? "
+            "GROUP BY status",
+            (start, end),
+        )
+        counts = {str(r["status"]): int(r["n"]) for r in rows}
+        return {"applied": counts.get("applied", 0), "pending": counts.get("pending", 0)}
+
+    def view_tagged_post_ids(self, post_ids: list[int]) -> set[int]:
+        """一批帖子里有智囊团回流标签（source=mx_view，任意状态）的 id 集合。
+
+        规则回填重算全部时跳过这些帖：回流标签不重算就恢复不了。
+        """
+        ids = [int(p) for p in post_ids or []]
+        if not ids:
+            return set()
+        placeholders = ",".join("?" for _ in ids)
+        rows = self._rows(
+            f"SELECT DISTINCT post_id FROM post_tag_reviews "
+            f"WHERE source = 'mx_view' AND post_id IN ({placeholders})",
+            tuple(ids),
+        )
+        return {int(r["post_id"]) for r in rows}
 
     def get_mx_llm_tag_auto_config(self) -> dict:
         """自动打标配置（JSON；未配置或损坏时返回空 dict，由调用方兜底）。"""

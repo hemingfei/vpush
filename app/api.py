@@ -2761,24 +2761,24 @@ def create_api_router(
         user: dict = Depends(get_current_user),
     ):
         kol_ids = sorted(db.readable_subscribed_kol_ids(user["id"], user["is_admin"]))
-        return apply_twitter_feed(
-            db.list_feed_posts(
-                kol_ids,
-                limit=bounded_limit(limit),
-                user_id=user["id"],
-                offset=max(offset, 0),
-                platform=platform,
-                category_id=category_id,
-                q=q,
-                favorite=bool(favorite),
-                tag=tag,
-                include_secondary=bool(include_secondary),
-                kol_id=kol_id if kol_id and kol_id > 0 else None,
-                since_id=since_id,
-                exclude_platforms=plaza_hidden_platforms(db),
-            ),
-            user,
+        posts = db.list_feed_posts(
+            kol_ids,
+            limit=bounded_limit(limit),
+            user_id=user["id"],
+            offset=max(offset, 0),
+            platform=platform,
+            category_id=category_id,
+            q=q,
+            favorite=bool(favorite),
+            tag=tag,
+            include_secondary=bool(include_secondary),
+            kol_id=kol_id if kol_id and kol_id > 0 else None,
+            since_id=since_id,
+            exclude_platforms=plaza_hidden_platforms(db),
         )
+        # 智囊团观点回流的多空方向（{标签: bull/bear}），帖子卡片渲染方向徽标用
+        db.attach_view_directions(posts)
+        return apply_twitter_feed(posts, user)
 
     @router.get("/live/wscn")
     def wscn_live(
@@ -2840,6 +2840,7 @@ def create_api_router(
             ),
             user,
         )
+        db.attach_view_directions(posts)
         subscription = db.get_subscription(user["id"], kol_id)
         if subscription and subscription["hide_images"]:
             return [{**post, "images": []} for post in posts]
@@ -2859,6 +2860,7 @@ def create_api_router(
             or not _plaza_kol_visible(user, db.get_kol(post["kol_id"]))
         ):
             raise HTTPException(status_code=404, detail="帖子不存在")
+        db.attach_view_directions([post])
         return post
 
     @router.get("/kols/{kol_id}/holdings")
@@ -6207,16 +6209,33 @@ def create_api_router(
 
     @router.get("/admin/mx-llm-tag/status", dependencies=[Depends(require_admin)])
     def mx_llm_tag_status():
-        """打标状态：自动打标配置/触发状态、单批上限、待审数、运行摘要。"""
+        """打标状态：自动打标配置/触发状态、单批上限、待审数、运行摘要、回流开关。"""
         from .mx_llm_tagging import MANUAL_BATCH_SIZE_LIMIT, get_auto_status, get_tagger_status
+        from .mx_view_tagging import get_view_tagging_enabled
 
+        today = _dt.now(CN_TZ).strftime("%Y-%m-%d")
         return {
             "batch_size": MANUAL_BATCH_SIZE_LIMIT,
             "pending_reviews": len(db.list_tag_reviews()),
             "pending_alias_candidates": len(db.get_stock_alias_candidates()),
+            "view_tagging": {
+                "enabled": get_view_tagging_enabled(db),
+                **db.mx_view_tag_day_stats(today),
+            },
             **get_auto_status(db),
             **get_tagger_status(),
         }
+
+    @router.put("/admin/mx-view-tagging/config", dependencies=[Depends(require_admin)])
+    async def mx_view_tagging_update_config(request: Request, admin: dict = Depends(require_admin)):
+        """智囊团观点回流打标开关：开启后下一个快照批次的观点开始回写证据帖标签。"""
+        from .mx_view_tagging import set_view_tagging_enabled
+
+        body = await request.json()
+        enabled = bool(body.get("enabled"))
+        set_view_tagging_enabled(db, enabled)
+        _audit(admin, "mx_view_tagging_config", detail=f"enabled={enabled}")
+        return {"ok": True, "enabled": enabled}
 
     @router.post("/admin/mx-llm-tag/auto-config", dependencies=[Depends(require_admin)])
     def mx_llm_tag_save_auto_config(body: MxLlmTagAutoConfigIn, admin: dict = Depends(require_admin)):
@@ -6500,14 +6519,17 @@ def create_api_router(
         return {"ok": True}
 
     @router.get("/admin/post-tag-reviews", dependencies=[Depends(require_admin)])
-    def admin_post_tag_reviews(status: str = "pending"):
-        """LLM 打标 low 准确度标签的人工审核队列（默认 pending）。
+    def admin_post_tag_reviews(status: str = "pending", source: str = ""):
+        """打标 low 准确度/名单外标签的人工审核队列（默认 pending）。
 
+        source 可选过滤来源：llm=MX LLM 打标、mx_view=智囊团观点回流；空为全部。
         标签已在帖上的 pending 记录不列出：通过与否它都已在帖，审核无意义。
         """
         if status not in ("pending", "approved", "rejected"):
             raise HTTPException(status_code=400, detail=f"未知状态: {status}")
-        return db.list_tag_reviews(status=status)
+        if source and source not in ("llm", "mx_view"):
+            raise HTTPException(status_code=400, detail=f"未知来源: {source}")
+        return db.list_tag_reviews(status=status, source=source or None)
 
     @router.post(
         "/admin/post-tag-reviews/{review_id}/approve",

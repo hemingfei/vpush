@@ -299,7 +299,9 @@ def test_tag_detail_endpoint_sections():
     data = resp.json()
     assert data["kol_name"] == "标签测试"
     assert data["tags"] == ["大盘", "AI算力"]
-    assert data["llm_tags"] == [{"tag": "AI算力", "kind": "topic", "status": "applied"}]
+    assert data["llm_tags"] == [
+        {"tag": "AI算力", "kind": "topic", "status": "applied", "source": "llm", "direction": ""},
+    ]
     assert [r["tag"] for r in data["pending_reviews"]] == ["宁王"]
     assert data["pending_reviews"][0]["kind"] == "stock"
 

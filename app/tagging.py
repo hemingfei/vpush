@@ -412,7 +412,9 @@ def backfill_post_tags(db, mode: str = "pending") -> dict:
 
     mode=pending 只处理未打标（''/NULL）；mode=all 全量重算。
     两种模式都跳过已经过 LLM 打标的 MX 帖（llm_tagged=1）：LLM 游标已越过
-    它们，规则标签一旦覆盖，LLM 标签无法自动恢复。
+    它们，规则标签一旦覆盖，LLM 标签无法自动恢复。同样跳过有智囊团回流标签
+    的帖（post_tag_reviews 里 source=mx_view）：回流标签由快照研判写入，
+    规则重算覆盖后同样恢复不了。
     """
     if mode not in ("pending", "all"):
         raise ValueError(f"unknown backfill mode: {mode}")
@@ -426,6 +428,9 @@ def backfill_post_tags(db, mode: str = "pending") -> dict:
     tagged_count = 0
     for batch in iter_post_row_batches(db, untagged_only=mode == "pending"):
         batch = [r for r in batch if not r.get("llm_tagged")]
+        if mode == "all" and batch:
+            protected = db.view_tagged_post_ids([r["id"] for r in batch])
+            batch = [r for r in batch if int(r["id"]) not in protected] if protected else batch
         if not batch:
             continue
         posts = _rows_to_posts(batch)
@@ -618,6 +623,12 @@ def run_tag_maintenance(db, llm_config=None) -> dict:
     valid_tags = [r["tag"] for r in tag_rules] + stock_names
     valid_tags += [a["stock"] for a in aliases]
     valid_tags += [n for n in bundled_plain_names() if n not in excluded_names]
+    # 智囊团题材参考表：观点回流打标会把题材名写成话题标签，不在词表里也不能清
+    from .mx_view_analysis import get_topic_hints
+
+    valid_tags += [h for h in get_topic_hints(db) if h not in excluded_names]
+    # 操作词表：LLM 打标与观点回流都会把操作写成标签（建仓/减仓…），同样不能清
+    valid_tags += db.get_action_tag_vocabulary()
     cleaned = 0
     try:
         cleaned = cleanup_stale_tags(db, valid_tags)

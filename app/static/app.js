@@ -1708,14 +1708,15 @@ function kolCard(kol) {
     const gain = kol.quote.day_percent_gain;
     tags.push(`<span class="tag cube-day ${gain >= 0 ? "up" : "down"}">${gain >= 0 ? "+" : ""}${gain.toFixed(2)}%</span>`);
   }
+  // 外部 ID 并入标签行（放不下时整段换行），不独占一行压高卡片
+  tags.push(`<span class="ext-id">外部 ID：${escapeHtml(kol.external_id)}${kol.enabled ? "" : " · 已停用"}</span>`);
   return `
     <div class="kol-card">
       <a class="kol-card-head" href="/kol/${kol.id}" title="查看${escapeHtml(kol.name)}的动态页" aria-label="查看${escapeHtml(kol.name)}的动态页">
         ${avatarHtml(kol.name, kol.avatar_url)}
         <div class="kol-card-info">
           <span class="name" title="${escapeHtml(kol.name)}">${escapeHtml(kol.name)}</span>
-          ${tags.length ? `<div class="kol-card-meta">${tags.join("")}</div>` : ""}
-          <div class="desc">外部 ID：${escapeHtml(kol.external_id)}${kol.enabled ? "" : " · 已停用"}</div>
+          <div class="kol-card-meta">${tags.join("")}</div>
         </div>
       </a>
       ${kol.subscribed && kol.platform === "xueqiu" ? `<div class="kol-card-subtype">${subTypeSwitchesHtml(kol.id, kol.subscribe_type || "post")}</div>` : ""}
@@ -3630,7 +3631,7 @@ function postCard(post) {
       <div class="p-meta">
         ${post.category_name ? `<span class="cat">${escapeHtml(post.category_name)}</span>` : ""}
         ${post.post_type === "reply" ? `<span class="cat">回复</span>` : ""}
-        ${renderPostTagChips(post.tags)}
+        ${renderPostTagChips(post.tags, post.view_directions)}
         ${post.platform === "zsxq" ? "" : RAW_MODAL_LABELS[post.platform]
           ? `<a href="#" data-raw-label="${escapeHtml(RAW_MODAL_LABELS[post.platform])}"
                onclick="event.preventDefault();openRawModal(${post.id}, this.dataset.rawLabel)"
@@ -3640,14 +3641,23 @@ function postCard(post) {
     </div>`;
 }
 
-// 标签徽章：最多直接显示 6 个，超出折叠进「更多N」，点击展开/收起
-function renderPostTagChips(tags) {
+// 标签徽章：最多直接显示 6 个，超出折叠进「更多N」，点击展开/收起；
+// 智囊团观点回流带方向的标签追加看多/看空角标（post.view_directions）
+function renderPostTagChips(tags, viewDirections) {
   if (!Array.isArray(tags) || !tags.length) return "";
-  const chip = (t) => `<button type="button" class="cat cat-tag post-tag-filter" data-tag="${escapeHtml(t)}" onclick="tlPickTag(this.dataset.tag)">${escapeHtml(t)}</button>`;
+  const dirs = (viewDirections && typeof viewDirections === "object") ? viewDirections : {};
+  const chip = (t) => `<button type="button" class="cat cat-tag post-tag-filter" data-tag="${escapeHtml(t)}" onclick="tlPickTag(this.dataset.tag)">${escapeHtml(t)}${tagDirBadge(dirs[t])}</button>`;
   if (tags.length <= 6) return tags.map(chip).join("");
   return `${tags.slice(0, 6).map(chip).join("")}` +
     `<span class="tag-extra" hidden>${tags.slice(6).map(chip).join("")}</span>` +
     `<button type="button" class="cat cat-tag tags-more-btn" data-n="${tags.length - 6}" onclick="togglePostTags(this)">更多${tags.length - 6}</button>`;
+}
+
+// 标签多空方向角标：bull=看多（红）、bear=看空（绿），无方向返回空
+function tagDirBadge(direction) {
+  if (direction === "bull") return '<i class="tag-dir bull">看多</i>';
+  if (direction === "bear") return '<i class="tag-dir bear">看空</i>';
+  return "";
 }
 
 function togglePostTags(btn) {
@@ -3691,7 +3701,7 @@ function openRawModal(postId, label) {
         : `<p class="mx-raw-empty muted">该消息没有保存原始数据</p>`}
       <div class="mx-raw-tags">
         <div class="mx-raw-tags-title">标签</div>
-        <div class="mx-raw-tags-list" id="mx-raw-tags-list">${mxRawTagsHtml(post.tags, isAdmin)}</div>
+        <div class="mx-raw-tags-list" id="mx-raw-tags-list">${mxRawTagsHtml(post.tags, isAdmin, post.view_directions)}</div>
         ${isAdmin ? `
         <div class="mx-raw-tag-add">
           <input id="mx-raw-tag-input" class="form-control" maxlength="30" placeholder="输入新标签，回车或点添加" onkeydown="if(event.key==='Enter'){event.preventDefault();mxRawAddTag();}">
@@ -3720,11 +3730,12 @@ function openRawModal(postId, label) {
   document.body.appendChild(mask);
 }
 
-// 原始消息弹窗里的标签徽章：管理员带 × 删除按钮
-function mxRawTagsHtml(tags, isAdmin) {
+// 原始消息弹窗里的标签徽章：管理员带 × 删除按钮；带方向的标签追加看多/看空角标
+function mxRawTagsHtml(tags, isAdmin, viewDirections) {
   const list = Array.isArray(tags) ? tags : [];
+  const dirs = (viewDirections && typeof viewDirections === "object") ? viewDirections : {};
   const chips = list.map((t) => `
-    <span class="cat cat-tag mx-raw-tag">${escapeHtml(t)}${isAdmin
+    <span class="cat cat-tag mx-raw-tag">${escapeHtml(t)}${tagDirBadge(dirs[t])}${isAdmin
       ? `<button type="button" class="mx-raw-tag-del" data-tag="${escapeHtml(t)}" aria-label="删除标签 ${escapeHtml(t)}" title="删除标签 ${escapeHtml(t)}" onclick="mxRawRemoveTag(this.dataset.tag)">×</button>`
       : ""}</span>`).join("");
   return chips || '<span class="muted mx-raw-tag-empty">暂无标签</span>';
@@ -3740,7 +3751,9 @@ function _mxRawModalPost() {
 
 function mxRawRenderTags(tags) {
   const list = document.getElementById("mx-raw-tags-list");
-  if (list) list.innerHTML = mxRawTagsHtml(tags, !!state.user?.is_admin);
+  if (!list) return;
+  const post = _mxRawModalPost();
+  list.innerHTML = mxRawTagsHtml(tags, !!state.user?.is_admin, post?.view_directions);
 }
 
 // 增删标签后同步内存缓存，并热替换背后的帖子卡片（关弹窗即见新标签，不用整页刷新）
@@ -5941,6 +5954,8 @@ const {
   adminReviewAliasCandidate,
   adminTagDetailAddTag,
   adminTagDetailRemoveTag,
+  adminToggleViewTagging,
+  adminTagReviewSourceChange,
 } = createAdminKolsView({
   $,
   state,
@@ -7608,11 +7623,13 @@ const INLINE_HANDLERS = {
   adminSaveUserKnowledge,
   adminSaveUsername,
   adminSendTestPush,
+  adminTagReviewSourceChange,
   adminToggleAdmin,
   adminToggleKol,
   adminTogglePost,
   adminTogglePriority,
   adminToggleSecondary,
+  adminToggleViewTagging,
   adminUserClearSelect,
   adminUserTogglePage,
   adminUserToggleSelect,

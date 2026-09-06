@@ -826,7 +826,7 @@ export function createAdminKolsView(dependencies) {
       [data, tagStatus, tagReviews, aliasCands, tagPending] = await Promise.all([
         api("/api/tags"),
         api("/api/admin/mx-llm-tag/status"),
-        api("/api/admin/post-tag-reviews?status=pending"),
+        api(`/api/admin/post-tag-reviews?status=pending${_tagReviewSource ? `&source=${_tagReviewSource}` : ""}`),
         api("/api/admin/stock-alias-candidates"),
         api("/api/admin/mx-llm-tag/pending"),
       ]);
@@ -919,6 +919,7 @@ export function createAdminKolsView(dependencies) {
   let _mxAliasCandidates = [];
   let _mxTagReviews = [];               // 当前待审标签列表（行内保留完整消息文本供「更多」展开）
   const _tagReviewExpanded = new Set(); // 已展开全文的审核记录 id（重渲染后保持展开状态）
+  let _tagReviewSource = "";            // 审核队列来源筛选："" 全部 / llm / mx_view
   let _mxTagTestResult = null;
   let _mxTagPollTimer = null;
   const _mxTagSeenDoneRuns = new Set(); // 已提示过完成结果的打标任务 id（防重复弹提示）
@@ -929,9 +930,37 @@ export function createAdminKolsView(dependencies) {
     return _TAG_REVIEW_KINDS[kind] || (kind ? escapeHtml(kind) : "");
   }
 
+  // 标签来源/方向徽标：source=mx_view 为智囊团观点回流（llm 为默认来源不标），
+  // direction 为该观点方向（看多/看空）
+  function tagSourceBadge(source) {
+    return source === "mx_view" ? '<i class="tag-src-badge">智囊团</i>' : "";
+  }
+
+  function tagDirBadge(direction) {
+    if (direction === "bull") return '<i class="tag-dir bull">看多</i>';
+    if (direction === "bear") return '<i class="tag-dir bear">看空</i>';
+    return "";
+  }
+
+  async function adminToggleViewTagging(enabled) {
+    try {
+      await api("/api/admin/mx-view-tagging/config", { method: "PUT", body: JSON.stringify({ enabled }) });
+      flash(enabled ? "已开启智囊团观点回流打标，下个快照批次生效" : "已关闭智囊团观点回流打标");
+    } catch (err) {
+      flash("保存失败: " + err.message, "error");
+      loadAdminVocabTab("tags");
+    }
+  }
+
+  function adminTagReviewSourceChange(source) {
+    _tagReviewSource = String(source || "");
+    loadAdminVocabTab("tags");
+  }
+
   function adminMxTagPanel(tagStatus, tagReviews, aliasCands, tagPending) {
     const st = tagStatus || {};
     const pendingTotal = Number(tagPending?.total) || 0;
+    const vt = st.view_tagging || {};
     const statusLine = [
       `未打标消息 ${pendingTotal} 条`,
       `今日 LLM 调用 ${(st.calls_today && st.calls_today.count) || 0} 次`,
@@ -952,8 +981,8 @@ export function createAdminKolsView(dependencies) {
             <td class="tag-review-check"><input type="checkbox" data-review-id="${r.id}" aria-label="选择审核 ${r.id}" onchange="adminTagReviewSelChange()"></td>
             <td>${r.id}</td>
             <td class="tag-review-msg"><span class="muted">${escapeHtml(r.kol_name || "")}：</span><span class="tag-review-msg-text${expanded ? " expanded" : ""}">${escapeHtml(msg)}</span>${msg.length > 60 ? `<button type="button" class="post-expand-btn" aria-expanded="${expanded}" onclick="toggleTagReviewMsg(${r.id}, this)">${expanded ? "收起 ▲" : "更多 ▼"}</button>` : ""}</td>
-            <td><span class="cat cat-tag">${escapeHtml(r.tag)}</span></td>
-            <td>${_TAG_REVIEW_KINDS[r.kind] || escapeHtml(r.kind || "—")}</td>
+            <td><span class="cat cat-tag">${escapeHtml(r.tag)}</span>${tagDirBadge(r.direction)}</td>
+            <td>${_TAG_REVIEW_KINDS[r.kind] || escapeHtml(r.kind || "—")}${tagSourceBadge(r.source)}</td>
             <td>
               <button class="btn-sm" onclick="adminOpenTagReviewModal(${r.post_id})" title="查看该消息的全部标签并直接操作">查看</button>
               <button class="btn-sm" onclick="adminReviewTag(${r.id}, 'approve')">通过</button>
@@ -983,6 +1012,13 @@ export function createAdminKolsView(dependencies) {
         </header>
         <p class="section-meta" style="margin-top:8px">${statusLine}</p>
         ${alertLine}
+        <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <label style="display:inline-flex;align-items:center;gap:8px">
+            <input type="checkbox" id="mx-view-tag-enabled" ${vt.enabled ? "checked" : ""} onchange="adminToggleViewTagging(this.checked)">
+            <b>智囊团观点回流打标</b>
+          </label>
+          <span class="muted">快照研判的板块/个股多空观点回写证据帖标签（high 直写、low/名单外进审核队列）；今日直写 ${vt.applied || 0} 个、进审 ${vt.pending || 0} 个。</span>
+        </div>
         <div class="toolbar" style="margin-top:12px">
           <button class="btn-normal" onclick="adminMxTagOpenRunModal()">开始 LLM 打标</button>
           <button class="btn-ghost" onclick="adminMxTagTest()">试打 10 条（不写库）</button>
@@ -993,7 +1029,12 @@ export function createAdminKolsView(dependencies) {
       ${adminMxTagAutoPanel(st)}
       <section class="section-panel">
         <header class="section-head"><div><h2 class="section-title">标签审核</h2>
-        <p class="section-meta">LLM 标了但不确定（low 准确度）的标签，通过后追加到该条消息。可勾选多条批量操作。</p></div></header>
+        <p class="section-meta">打标时不确定（low 准确度）或个股名不在名单内的标签进这里，通过后追加到该条消息。可勾选多条批量操作。</p></div>
+        <select id="tag-review-source" aria-label="按来源筛选" onchange="adminTagReviewSourceChange(this.value)" style="align-self:flex-start">
+          <option value=""${!_tagReviewSource ? " selected" : ""}>全部来源</option>
+          <option value="llm"${_tagReviewSource === "llm" ? " selected" : ""}>LLM 打标</option>
+          <option value="mx_view"${_tagReviewSource === "mx_view" ? " selected" : ""}>智囊团回流</option>
+        </select></header>
         <div class="table-wrap">
           <table>
             <thead><tr><th scope="col" class="tag-review-check"><input type="checkbox" id="tag-review-sel-all" aria-label="全选待审标签" onchange="adminTagReviewSelAll(this.checked)"></th><th scope="col">ID</th><th scope="col">消息</th><th scope="col">标签</th><th scope="col">类型</th><th scope="col">操作</th></tr></thead>
@@ -1536,12 +1577,12 @@ export function createAdminKolsView(dependencies) {
       </span>`).join("") || '<span class="muted">暂无标签，可在下方输入框添加</span>';
     const llmChips = (d.llm_tags || []).map((x) => `
       <span class="cat cat-tag tag-detail-chip is-llm">
-        ${escapeHtml(x.tag)}<i class="tag-llm-badge" title="LLM 打标">LLM</i>${delBtn(x.tag)}
-      </span>`).join("") || '<span class="muted">暂无（LLM 直写或审核通过的标签会显示在这里）</span>';
+        ${escapeHtml(x.tag)}${tagDirBadge(x.direction)}<i class="tag-llm-badge" title="${x.source === "mx_view" ? "智囊团观点回流" : "LLM 打标"}">${x.source === "mx_view" ? "智囊团" : "LLM"}</i>${delBtn(x.tag)}
+      </span>`).join("") || '<span class="muted">暂无（LLM/智囊团回流直写或审核通过的标签会显示在这里）</span>';
     const pendingRows = (d.pending_reviews || []).map((r) => `
       <div class="tag-detail-pending-row">
         <span class="cat cat-tag">${escapeHtml(r.tag)}</span>
-        <span class="tag-detail-pending-meta">${_tagDetailKindLabel(r.kind) || "—"} · ${r.confidence === "high" ? "高准确度" : "低准确度"}</span>
+        <span class="tag-detail-pending-meta">${tagSourceBadge(r.source)}${_tagDetailKindLabel(r.kind) || "—"} · ${r.confidence === "high" ? "高准确度" : "低准确度"}${tagDirBadge(r.direction)}</span>
         <span class="tag-detail-pending-ops">
           <button class="btn-sm" onclick="adminTagReviewModalReview(${r.id}, 'approve')">通过</button>
           <button class="btn-sm danger" onclick="adminTagReviewModalReview(${r.id}, 'reject')">拒绝</button>
@@ -1559,7 +1600,7 @@ export function createAdminKolsView(dependencies) {
         </div>
       </section>
       <section class="tag-detail-section">
-        <h4 class="tag-detail-sec-title">LLM 打入的标签（${(d.llm_tags || []).length}）</h4>
+        <h4 class="tag-detail-sec-title">打标直写的标签（${(d.llm_tags || []).length}）</h4>
         <div class="tag-detail-chips">${llmChips}</div>
       </section>
       <section class="tag-detail-section">
@@ -1823,6 +1864,8 @@ export function createAdminKolsView(dependencies) {
     adminTagDetailRefresh,
     adminTagDetailAddTag,
     adminTagDetailRemoveTag,
+    adminToggleViewTagging,
+    adminTagReviewSourceChange,
     adminPaintTagDetail,
     mxAutoPeriodInputs,
   };

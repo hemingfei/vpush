@@ -13,6 +13,7 @@ import threading
 from datetime import date, datetime, timedelta, timezone
 
 from . import llm
+from . import mx_view_tagging
 
 logger = logging.getLogger(__name__)
 
@@ -687,6 +688,12 @@ def run_snapshot_batch(db, day, snapshot_at, window, kind="live", llm_config=Non
                 db.set_mx_view_cursor(max(int(p["id"]) for p in posts))
             if new_topic_names:
                 add_topic_candidates(db, sorted(new_topic_names))
+            if mx_view_tagging.get_view_tagging_enabled(db):
+                # 观点回流打标：纯本地回写证据帖标签，失败不拖垮快照主流程
+                try:
+                    mx_view_tagging.apply_view_tags(db, valid, topic_hints=hints)
+                except Exception:  # noqa: BLE001
+                    logger.exception("智囊团观点回流打标失败（快照不受影响）")
 
             opinions = db.list_mx_opinions(day)
             snaps = db.list_mx_view_snapshots(day)

@@ -1096,7 +1096,8 @@ a.kol-card-head:hover .kol-card-info .name { color: var(--color-accent-text); }
 .kol-card-info .tag.cube-day { background: transparent; padding: 2px 0; font-variant-numeric: tabular-nums; }
 .kol-card-info .tag.cube-day.up { color: var(--color-data-positive); }
 .kol-card-info .tag.cube-day.down { color: var(--color-data-negative); }
-.kol-card-info .desc { color: var(--color-text-muted); font-size: var(--text-xs); margin-top: 5px; }
+/* 外部 ID 与平台标签同行（放不下整段换行），省一行高度 */
+.kol-card-meta .ext-id { color: var(--color-text-muted); font-size: var(--text-xs); overflow-wrap: anywhere; }
 .kol-card-actions { display: flex; align-items: center; gap: 8px; margin-top: auto; }
 /* 主按钮与星标/删除圆按钮等高（44px），垂直居中，避免矮一截偏上 */
 .kol-card-actions .btn-sub { flex: 1; height: 44px; }
@@ -1538,6 +1539,19 @@ body.lightbox-open { overflow: hidden; }
 .tag-llm-badge {
   font-style: normal; font-size: 10px; line-height: 13px; padding: 0 5px;
   border-radius: var(--radius-pill); background: var(--color-accent); color: var(--color-surface, #fff);
+}
+/* 智囊团观点回流：标签多空方向角标（红涨绿跌）与来源徽标 */
+.tag-dir {
+  font-style: normal; font-size: 10px; line-height: 13px; padding: 0 4px; margin-left: 2px;
+  border-radius: var(--radius-pill); font-weight: 600;
+}
+.tag-dir.bull { background: rgba(216, 56, 79, .14); color: #c22a40; }
+.tag-dir.bear { background: rgba(12, 166, 120, .14); color: #067a56; }
+.theme-dark .tag-dir.bull { background: rgba(255, 93, 108, .16); color: #ff8090; }
+.theme-dark .tag-dir.bear { background: rgba(46, 230, 168, .14); color: #5fe8bd; }
+.tag-src-badge {
+  font-style: normal; font-size: 10px; line-height: 13px; padding: 0 5px; margin-left: 4px;
+  border-radius: var(--radius-pill); background: var(--color-surface-muted); color: var(--color-text-muted);
 }
 .tag-detail-pending-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; }
 .tag-detail-pending-row + .tag-detail-pending-row { border-top: 1px dashed var(--color-border); }
@@ -2748,6 +2762,14 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   .page-main { padding: 16px; --page-pad-x: 16px; }
 }
 
+/* 键盘弹出/矮视口：手机键盘常把可视高度压到 500px 以下（viewport meta 的
+   interactive-widget=resizes-content 与安卓壳的 ime margin 收窄视口后命中），
+   收起品牌介绍、认证页贴顶，登录卡片连同聚焦输入框完整留在键盘上方 */
+@media (max-height: 620px) {
+  .auth-view { align-items: flex-start; padding-bottom: 20px; }
+  .login-brand { display: none; }
+}
+
 @media (max-width: 1280px) {
   .proxy-route { flex: 1 1 100%; }
   .ak-table.proxy-nodes thead { display: none; }
@@ -2970,7 +2992,16 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   .kol-item { flex-wrap: wrap; }
   .kol-item .btn-sub { width: 100%; min-height: 44px; }
   .kol-item .btn-sm.danger { min-height: 44px; }
-  .kol-card { gap: 10px; }
+  /* 广场卡片紧凑化：小头像/小内边距/小间距，一屏可见更多大V（按钮触控目标仍保 44px） */
+  .kol-grid { gap: 10px; }
+  .kol-card { gap: 8px; padding: 10px 12px; }
+  .kol-card-head { gap: 10px; }
+  .kol-card .kol-avatar { width: 40px; height: 40px; font-size: 17px; }
+  .kol-card-info .name { line-height: 1.35; }
+  .kol-card-meta { margin-top: 2px; gap: 4px 6px; }
+  .kol-card-info .tag { padding: 1px 8px; }
+  .kol-card-subtype { padding-top: 0; }
+  .group-head { margin: 12px 2px 6px; padding: 6px 10px; }
   .kol-card .btn-sub, .kol-card .fav-btn, .kol-card .btn-sm.danger { min-height: 44px; }
   .cat-chip { height: 44px; padding: 0 16px; }
   .search-bar { min-height: 44px; }
