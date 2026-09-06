@@ -349,7 +349,7 @@ def test_module_shell_survives_offline_reload(playwright_instance, static_origin
     page.wait_for_function("navigator.serviceWorker.controller !== null")
     context.set_offline(True)
     page.reload(wait_until="domcontentloaded")
-    expect(page.locator(".login-brand-title")).to_have_text("V Push")
+    expect(page.locator(".login-brand-title")).to_have_text("VPush")
     context.close()
     browser.close()
 

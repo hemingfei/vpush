@@ -39,8 +39,8 @@ export function createAdminCodesView(dependencies) {
 
   function formatInviteCopy(codeList, expiresDays, note) {
     const head = expiresDays
-      ? `V Push 邀请码（一次性，${expiresDays}天内有效）`
-      : "V Push 邀请码（一次性）";
+      ? `VPush 邀请码（一次性，${expiresDays}天内有效）`
+      : "VPush 邀请码（一次性）";
     const lines = [head, ...codeList];
     if (note) lines.push(`备注：${note}`);
     return lines.join("\n");
@@ -48,8 +48,8 @@ export function createAdminCodesView(dependencies) {
 
   function formatInviteCopyUntil(codeList, expiresAt, note) {
     const head = expiresAt
-      ? `V Push 邀请码（一次性，有效期至 ${fmtDbTime(expiresAt)})`
-      : "V Push 邀请码（一次性）";
+      ? `VPush 邀请码（一次性，有效期至 ${fmtDbTime(expiresAt)})`
+      : "VPush 邀请码（一次性）";
     const lines = [head, ...codeList];
     if (note) lines.push(`备注：${note}`);
     return lines.join("\n");

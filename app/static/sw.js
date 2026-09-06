@@ -1,5 +1,5 @@
 /* V Push Service Worker —— network-first：静态外壳离线可用，API 永不缓存 */
-const CACHE = "dav-shell-f9a163304148";
+const CACHE = "dav-shell-4ee53c7726f3";
 const SHELL = [
   "/",
   "/app.js",
@@ -73,7 +73,7 @@ self.addEventListener("push", (e) => {
   } catch {
     data = { body: e.data ? e.data.text() : "" };
   }
-  e.waitUntil(self.registration.showNotification(data.title || "V Push", {
+  e.waitUntil(self.registration.showNotification(data.title || "VPush", {
     body: data.body || "",
     icon: "/icon-192.png",
     badge: "/icon-192.png",
