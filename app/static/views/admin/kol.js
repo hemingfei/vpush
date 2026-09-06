@@ -1566,14 +1566,21 @@ export function createAdminKolsView(dependencies) {
   }
 
   function adminTagDetailHtml(d) {
+    const llmByTag = new Map((d.llm_tags || []).map((x) => [x.tag, x]));
     const llmSet = new Set((d.llm_tags || []).map((x) => x.tag));
     const delBtn = (t) => `
       <button type="button" class="mx-raw-tag-del" data-tag="${escapeHtml(t)}"
         aria-label="删除标签 ${escapeHtml(t)}" title="删除标签 ${escapeHtml(t)}"
         onclick="adminTagDetailRemoveTag(this.dataset.tag)">×</button>`;
+    const srcBadgeHtml = (t) => {
+      const info = llmByTag.get(t);
+      if (!info) return "";
+      const label = info.source === "mx_view" ? "智囊团" : "LLM";
+      return `<i class="tag-llm-badge" title="${info.source === "mx_view" ? "智囊团观点回流" : "LLM 打标"}">${label}</i>`;
+    };
     const curChips = (d.tags || []).map((t) => `
       <span class="cat cat-tag tag-detail-chip${llmSet.has(t) ? " is-llm" : ""}">
-        ${escapeHtml(t)}${llmSet.has(t) ? '<i class="tag-llm-badge" title="LLM 打标">LLM</i>' : ""}${delBtn(t)}
+        ${escapeHtml(t)}${tagDirBadge(llmByTag.get(t)?.direction)}${srcBadgeHtml(t)}${delBtn(t)}
       </span>`).join("") || '<span class="muted">暂无标签，可在下方输入框添加</span>';
     const llmChips = (d.llm_tags || []).map((x) => `
       <span class="cat cat-tag tag-detail-chip is-llm">
