@@ -7,6 +7,8 @@ from typing import Any
 
 from . import llm
 from .db import DB
+# 项目统一按北京时间（东八区）解释「本地墙钟」，不依赖部署环境的 TZ 环境变量
+from .fetchers.base import CN_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -55,21 +57,25 @@ def parse_schedule_days(day_of_week_str: str) -> list[int]:
 def _local_wall_time(now_utc: datetime, days_offset: int, hhmm: str) -> datetime:
     """把表单里的「N 天后的 HH:MM」换算为本地墙钟时间。
 
-    部署约定 TZ=Asia/Shanghai（compose 已统一设置），表单时间一律按北京时间理解；
-    返回带本地时区的 aware datetime，由调用方按需转 UTC。
+    表单时间一律按北京时间（东八区）理解，固定用 CN_TZ 换算，不依赖进程时区
+    （旧实现 now_utc.astimezone() 跟随环境 TZ，部署漏配 TZ 时窗口会整体漂移）；
+    返回带东八区时区的 aware datetime，由调用方按需转 UTC。
     """
     parts = hhmm.split(":")
     hour = int(parts[0])
     minute = int(parts[1]) if len(parts) > 1 else 0
-    local = now_utc.astimezone() + timedelta(days=days_offset)
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        # API 校验层已拦一道；这里自保，防历史脏数据让 replace 抛裸 ValueError
+        raise ValueError(f"非法时刻 {hhmm!r}：小时须 0-23、分钟须 0-59")
+    local = now_utc.astimezone(CN_TZ) + timedelta(days=days_offset)
     return local.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
 
 def calculate_time_range(task: dict, now: datetime) -> tuple[datetime, datetime]:
     """根据任务配置计算实际的开始/结束时间。
 
-    表单时间按本地时区理解；posts 表 published_at/fetched_at 存 UTC 或北京时间
-    的裸字符串，调用方以本地墙钟字符串做比较，因此这里返回 aware UTC。
+    表单时间按北京时间理解；posts 表 published_at 存北京时间裸字符串
+    （YYYY-MM-DD HH:MM，全表统一），调用方以东八区墙钟字符串做比较，这里返回 aware UTC。
     """
     start = _local_wall_time(now, task["time_range_start_days_offset"], task["time_range_start_time"])
     end = _local_wall_time(now, task["time_range_end_days_offset"], task["time_range_end_time"])
@@ -84,7 +90,7 @@ def calculate_next_run(task: dict, now: datetime) -> datetime | None:
 
     # 先看今天：今天是调度日且时间未过，今天就是下次运行时间；否则从明天开始找
     next_candidate = _local_wall_time(now, 0, task["schedule_time"])
-    if next_candidate <= now.astimezone():
+    if next_candidate <= now.astimezone(CN_TZ):
         next_candidate += timedelta(days=1)
 
     for _ in range(14):  # 最多找两周
@@ -104,12 +110,22 @@ def format_next_run(task: dict, now: datetime) -> str | None:
     return next_run.isoformat() if next_run else None
 
 
+# 送入 LLM 的消息正文总字符预算：每帖虽截 2000 字，但条数不限，
+# 窗口配宽/选人大多时 prompt 可达数 MB，必然超模型上下文
+# → 两次尝试+重试耗尽 → 任务被自动停用。超预算按时间从旧到新丢弃（保最新）。
+AI_PROMPT_TOTAL_CHAR_BUDGET = 24000
+
+
 def format_messages_for_llm(posts: list[dict]) -> str:
-    """将帖子列表格式化为LLM可读的文本"""
+    """将帖子列表格式化为LLM可读的文本
+
+    调用方按时间升序传入（最新在末尾）；总量超过 AI_PROMPT_TOTAL_CHAR_BUDGET 时
+    从最早的帖子开始丢弃（保最新），并在文末注明因长度截断了多少条。
+    """
     if not posts:
         return "(无发言内容)"
-    
-    lines = []
+
+    blocks = []
     for post in posts:
         platform = post.get("platform", "")
         kol_name = post.get("kol_name", "未知")
@@ -117,16 +133,34 @@ def format_messages_for_llm(posts: list[dict]) -> str:
         fetched_at = post.get("fetched_at", "")
         title = (post.get("title") or "").strip()
         content = (post.get("content") or "").strip()
-        
+
         time_str = published_at or fetched_at
-        lines.append(f"--- [{platform}] {kol_name} @ {time_str} ---")
+        block = [f"--- [{platform}] {kol_name} @ {time_str} ---"]
         if title:
-            lines.append(f"标题: {title}")
+            block.append(f"标题: {title}")
         if content:
-            lines.append(f"内容: {content[:2000]}")  # 限制长度
-        lines.append("")
-    
-    return "\n".join(lines)
+            block.append(f"内容: {content[:2000]}")  # 限制单条长度
+        blocks.append("\n".join(block))
+
+    # 总量预算：从最新（列表末尾）往前保留，预算耗尽即停；至少保留最新一条
+    kept = []
+    total = 0
+    for block in reversed(blocks):
+        cost = len(block) + 2  # +2 为块间空行分隔符
+        if kept and total + cost > AI_PROMPT_TOTAL_CHAR_BUDGET:
+            break
+        total += cost
+        kept.append(block)
+    kept.reverse()
+    dropped = len(blocks) - len(kept)
+    if dropped > 0:
+        kept.append(f"(注：发言较多，因长度限制已省略最早的 {dropped} 条)")
+        logger.warning(
+            "[AI Task] 消息正文超预算 %d 字符，从最早开始丢弃 %d 条（共 %d 条）",
+            AI_PROMPT_TOTAL_CHAR_BUDGET, dropped, len(blocks),
+        )
+
+    return "\n\n".join(kept)
 
 
 def build_prompt(task: dict, posts: list[dict], start: datetime, end: datetime) -> str:
@@ -145,9 +179,9 @@ def build_prompt(task: dict, posts: list[dict], start: datetime, end: datetime) 
             seen_kols.add(kol_id)
             kol_names.append(kol_name)
     
-    # 格式化时间范围（按本地时区展示，与表单理解一致）
-    time_range_str = (f"{start.astimezone().strftime('%Y-%m-%d %H:%M')}"
-                      f" ~ {end.astimezone().strftime('%Y-%m-%d %H:%M')}")
+    # 格式化时间范围（按北京时间展示，与表单理解一致，不随进程时区漂移）
+    time_range_str = (f"{start.astimezone(CN_TZ).strftime('%Y-%m-%d %H:%M')}"
+                      f" ~ {end.astimezone(CN_TZ).strftime('%Y-%m-%d %H:%M')}")
     
     # 格式化消息
     messages_str = format_messages_for_llm(posts)
@@ -265,8 +299,10 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
         
         # 2. 获取需要分析的帖子
         # published_at 是发帖时间的北京时间裸字符串（YYYY-MM-DD HH:MM，全表统一），
-        # 用本地墙钟字符串做比较才能取到「对应时间段的消息」；
+        # 用东八区墙钟字符串做比较才能取到「对应时间段的消息」；
         # fetched_at 是抓取时间，会把窗口外发布、启动后才抓到的旧帖混进来。
+        # 窗口串统一到分钟粒度（与 published_at 存储格式一致）：带秒比较会让
+        # 恰好落在开始端点的帖子因串更短被排他（D6），两端语义不对称。
         selected_kol_ids = task["selected_kol_ids"]
         posts = []
         if selected_kol_ids:
@@ -280,20 +316,46 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
                    AND p.published_at >= ? AND p.published_at <= ?
                    ORDER BY p.published_at ASC""",
                 (*selected_kol_ids,
-                 start_time.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
-                 end_time.astimezone().strftime("%Y-%m-%d %H:%M:%S"))
+                 start_time.astimezone(CN_TZ).strftime("%Y-%m-%d %H:%M"),
+                 end_time.astimezone(CN_TZ).strftime("%Y-%m-%d %H:%M"))
             )
             posts = [dict(row) for row in rows]
 
         # 记录本窗口内实际拿到的发言条数（0 也记录，便于排查「分析了个啥」）
         db.update_ai_log(log_id, post_count=len(posts))
-        
-        # 3. 构建提示词
+
+        # 3. 窗口内 0 条消息：不调 LLM、不发空报告，直接落成功日志并排下次运行。
+        # 否则空窗口任务每轮都白烧一次 LLM 调用（还可能因配额/网络失败被误停用）
+        if not posts:
+            next_run = calculate_next_run(task, now)
+            db.update_ai_log(
+                log_id, status="success", message="窗口内无发言，跳过分析",
+                completed_at=datetime.now(timezone.utc).isoformat(),
+            )
+            db.update_ai_task(
+                task_id,
+                last_run_at=now.isoformat(),
+                last_run_status="success",
+                fail_count=0,
+                next_run_at=next_run.isoformat() if next_run else None,
+            )
+            logger.info(f"[AI Task] 任务 {task_id} 窗口内无发言，跳过 LLM 调用")
+            return {
+                "success": True,
+                "message": "窗口内无发言，跳过分析",
+                "post_id": None,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "retries_exhausted": False,
+            }
+
+        # 4. 构建提示词
         prompt = build_prompt(task, posts, start_time, end_time)
         # 先落库,失败/超时也能在日志里看到当时发给大模型的内容
         db.update_ai_log(log_id, prompt_text=prompt)
         
-        # 4. 调用LLM
+        # 5. 调用LLM
         from .config import load_config
         config = load_config()
         
@@ -342,12 +404,36 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
                 total_tokens=total_tokens,
             )
         
-        # 5. 保存为目标KOL的帖子
+        # LLM 返回后、发帖前重读任务 enabled：调度器取任务到线程真正执行可能间隔数十秒，
+        # 期间管理员可能已禁用任务，此时不能照常把报告发出去。
+        # 只记 skipped 日志：不发帖、不计失败（fail_count 不动），任务保持禁用，
+        # 管理员重新启用时 api 侧会重算 next_run_at。
+        latest_task = db.get_ai_task(task_id) or {}
+        if not latest_task.get("enabled"):
+            logger.warning(f"[AI Task] 任务 {task_id} 执行期间已被禁用，丢弃分析结果不发报告")
+            db.update_ai_log(
+                log_id, status="skipped", message="任务已禁用，跳过发布",
+                prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                completed_at=datetime.now(timezone.utc).isoformat(),
+            )
+            return {
+                "success": False,
+                "message": "任务已禁用，跳过发布",
+                "post_id": None,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+                "retries_exhausted": False,
+            }
+
+        # 6. 保存为目标KOL的帖子
         analysis_content = llm._message_text(llm_result) if isinstance(llm_result, dict) else str(llm_result)
 
         # 发布时间取「大模型返回结果的时刻」而不是任务开始时刻：
-        # LLM 调用可能耗时数分钟，用开始时间会让时间线里的报告出现在实际生成之前
-        completed_at_local = datetime.now(timezone.utc).astimezone()
+        # LLM 调用可能耗时数分钟，用开始时间会让时间线里的报告出现在实际生成之前；
+        # published_at 全表按北京时间展示，固定用 CN_TZ，不随进程时区漂移
+        completed_at_local = datetime.now(timezone.utc).astimezone(CN_TZ)
 
         # 生成一个唯一的external_id
         external_id = f"ai_analysis_{task_id}_{now.strftime('%Y%m%d_%H%M%S')}"
@@ -374,7 +460,7 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
                 post_type="ai_analysis"
             )
         
-        # 6. 更新日志和任务
+        # 7. 更新日志和任务
         success_msg = "分析完成（输出因 max_tokens 上限被截断，内容不完整）" if truncated else "分析完成"
         db.update_ai_log(
             log_id,
@@ -422,10 +508,3 @@ def run_analysis_task(task_id: int, db: DB) -> dict[str, Any]:
         )
 
 
-def run_due_analysis_tasks(db: DB) -> None:
-    """运行所有到期的AI分析任务"""
-    now = datetime.now(timezone.utc)
-    tasks = db.get_due_ai_tasks(now.isoformat())
-    for task in tasks:
-        if task["enabled"]:
-            run_analysis_task(task["id"], db)

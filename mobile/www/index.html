@@ -145,6 +145,18 @@
 
     let lastProbeDetail = '';
 
+    /* 原生异常串冗长且常含内网 IP/主机名，直接上界面既难读又泄露内网拓扑：
+       归类翻译成短句，其余显示「连接失败」+ 截断后的短详情；
+       完整原文保留在 console.log 便于排查。 */
+    function friendlyProbeError(raw) {
+      const s = String(raw || '');
+      if (/ConnectException/i.test(s)) return '无法连接到服务器';
+      if (/SSLException|SSLHandshake/i.test(s)) return '证书/HTTPS 错误';
+      if (/SocketTimeoutException|TimeoutException/i.test(s)) return '连接超时';
+      if (/UnknownHostException/i.test(s)) return '无法解析服务器地址';
+      return '连接失败：' + s.slice(0, 200);
+    }
+
     /* 双通道探测，任一成功即可达：
        1) 原生 HTTP（CapacitorHttp 插件，走 Java 网络栈）——不受 WebView 混合内容/图片加载限制，
           失败时给出系统级错误详情；浏览器环境（无原生桥）自动跳过
@@ -179,7 +191,9 @@
       } catch (e) {
         let msg = e && (e.errorMessage || e.message);
         if (!msg) { try { msg = JSON.stringify(e); } catch (_) { msg = String(e); } }
-        return { ok: false, detail: msg };
+        // 完整异常原文只进控制台（含内网 IP/主机名时需要原文定位）；界面只展示归类短句
+        console.log('[probe] 原生探测失败详情:', msg);
+        return { ok: false, detail: friendlyProbeError(msg) };
       }
     }
 
@@ -198,7 +212,7 @@
       const t = timeoutMs || 10000;
       const results = await anyOf([probeImg(base, t), probeNative(base, t).then((r) => {
         if (r.ok) return true;
-        if (!r.skipped) lastProbeDetail = r.detail;
+        if (!r.skipped) lastProbeDetail = String(r.detail || '').slice(0, 200); // 展示前统一截断兜底
         return false;
       })]);
       return results;

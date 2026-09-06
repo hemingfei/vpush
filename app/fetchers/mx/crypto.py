@@ -140,7 +140,7 @@ def try_decrypt_with_keys(
     date_generator,
     key_offsets: list[int] = None
 ) -> Any | None:
-    """尝试用多个密钥解密数据。
+    """尝试用多个密钥解密数据（保持单日期源签名，内部见 _decrypt_with_generators）。
 
     Args:
         encrypted_data: 加密数据
@@ -150,31 +150,46 @@ def try_decrypt_with_keys(
     Returns:
         解密后的数据（JSON解析后），失败返回 None
     """
+    return _decrypt_with_generators(encrypted_data, [date_generator], key_offsets)
+
+
+def _decrypt_with_generators(
+    encrypted_data: str,
+    date_generators: list,
+    key_offsets: list[int] = None
+) -> Any | None:
+    """解密核心：解压只做一次（与密钥无关），各日期源 × 密钥偏移逐个尝试。"""
     import base64
-    
+
     if key_offsets is None:
         key_offsets = [0, -1, 1]
-    
-    for offset in key_offsets:
-        try:
-            date = date_generator(offset)
-            date_str = date.strftime("%Y-%m-%d")
-            key, iv = generate_key(date_str)
-            
-            decompressed = lzstring_decompress(encrypted_data)
-            if not decompressed:
+
+    # lzstring 解压是整条链路最贵的一步且结果与密钥无关：提到密钥循环外只做一次；
+    # 解压失败/为空时与旧逻辑同口径——任何密钥都解不出，直接返回 None
+    try:
+        decompressed = lzstring_decompress(encrypted_data)
+    except Exception:  # noqa: BLE001 - 与逐密钥尝试同口径：解压失败视为解密失败
+        return None
+    if not decompressed:
+        return None
+
+    for date_generator in date_generators:
+        for offset in key_offsets:
+            try:
+                date = date_generator(offset)
+                date_str = date.strftime("%Y-%m-%d")
+                key, iv = generate_key(date_str)
+
+                # The decompressed string is Base64-encoded, decode it!
+                ciphertext = base64.b64decode(decompressed)
+                plaintext = aes_decrypt(ciphertext, key, iv)
+                result = json.loads(combine_surrogate_pairs(plaintext.decode("utf-8")))
+                logger.debug(f"Successfully decrypted with offset {offset}")
+                return result
+            except Exception as e:
+                logger.debug(f"Decrypt failed with offset {offset}: {e}")
                 continue
 
-            # The decompressed string is Base64-encoded, decode it!
-            ciphertext = base64.b64decode(decompressed)
-            plaintext = aes_decrypt(ciphertext, key, iv)
-            result = json.loads(combine_surrogate_pairs(plaintext.decode("utf-8")))
-            logger.debug(f"Successfully decrypted with offset {offset}")
-            return result
-        except Exception as e:
-            logger.debug(f"Decrypt failed with offset {offset}: {e}")
-            continue
-    
     return None
 
 
@@ -191,7 +206,7 @@ def decrypt_api_data(encrypted_data: str) -> dict | list | None:
 
 
 def decrypt_ws_data(encrypted_data: str) -> dict | None:
-    """解密 WebSocket 消息数据。
+    """解密 WebSocket 消息数据：本地/北京日期双路径共用一次解压。
 
     Args:
         encrypted_data: 加密数据字符串
@@ -199,7 +214,4 @@ def decrypt_ws_data(encrypted_data: str) -> dict | None:
     Returns:
         解密并解析后的 JSON 数据，失败返回 None
     """
-    result = try_decrypt_with_keys(encrypted_data, get_local_date)
-    if result is None:
-        result = try_decrypt_with_keys(encrypted_data, get_beijing_date)
-    return result
+    return _decrypt_with_generators(encrypted_data, [get_local_date, get_beijing_date])

@@ -5283,54 +5283,59 @@ class DB:
         """LLM 打标结果与已有标签去重合并（已有在前、新标签补位），置 llm_tagged=1。
 
         总数截到 POST_TAGS_MAX。返回合并后的标签数。
+        读-改-写全程持 _lock：RLock 可重入，锁内的 _rows/_execute 正常走；
+        不持锁时多打标线程并发命中同一帖会互相丢标签（单语句原子不够）。
         """
-        rows = self._rows("SELECT tags FROM posts WHERE id = ?", (post_id,))
-        if not rows:
-            return 0
-        try:
-            existing = json.loads(str(rows[0].get("tags") or "[]"))
-        except ValueError:
-            existing = []
-        if not isinstance(existing, list):
-            existing = []
-        merged = [str(t) for t in existing if str(t)]
-        for tag in tags or []:
-            tag = str(tag)
-            if tag and tag not in merged:
-                merged.append(tag)
-        merged = merged[:POST_TAGS_MAX]
-        self._execute(
-            "UPDATE posts SET tags = ?, llm_tagged = 1 WHERE id = ?",
-            (json.dumps(merged, ensure_ascii=False), post_id),
-        )
-        return len(merged)
+        with self._lock:
+            rows = self._rows("SELECT tags FROM posts WHERE id = ?", (post_id,))
+            if not rows:
+                return 0
+            try:
+                existing = json.loads(str(rows[0].get("tags") or "[]"))
+            except ValueError:
+                existing = []
+            if not isinstance(existing, list):
+                existing = []
+            merged = [str(t) for t in existing if str(t)]
+            for tag in tags or []:
+                tag = str(tag)
+                if tag and tag not in merged:
+                    merged.append(tag)
+            merged = merged[:POST_TAGS_MAX]
+            self._execute(
+                "UPDATE posts SET tags = ?, llm_tagged = 1 WHERE id = ?",
+                (json.dumps(merged, ensure_ascii=False), post_id),
+            )
+            return len(merged)
 
     def merge_post_view_tags(self, post_id: int, tags: list[str]) -> int:
         """智囊团观点回流标签与已有标签去重合并（已有在前、新标签补位），截 POST_TAGS_MAX。
 
         与 merge_post_tags_llm 的唯一区别：不置 llm_tagged——那是 LLM 打标
         游标的属主标记，回流打标不把帖从 LLM 打标队列里偷走。
+        读-改-写全程持 _lock（同 merge_post_tags_llm，防并发丢标签）。
         """
-        rows = self._rows("SELECT tags FROM posts WHERE id = ?", (post_id,))
-        if not rows:
-            return 0
-        try:
-            existing = json.loads(str(rows[0].get("tags") or "[]"))
-        except ValueError:
-            existing = []
-        if not isinstance(existing, list):
-            existing = []
-        merged = [str(t) for t in existing if str(t)]
-        for tag in tags or []:
-            tag = str(tag)
-            if tag and tag not in merged:
-                merged.append(tag)
-        merged = merged[:POST_TAGS_MAX]
-        self._execute(
-            "UPDATE posts SET tags = ? WHERE id = ?",
-            (json.dumps(merged, ensure_ascii=False), post_id),
-        )
-        return len(merged)
+        with self._lock:
+            rows = self._rows("SELECT tags FROM posts WHERE id = ?", (post_id,))
+            if not rows:
+                return 0
+            try:
+                existing = json.loads(str(rows[0].get("tags") or "[]"))
+            except ValueError:
+                existing = []
+            if not isinstance(existing, list):
+                existing = []
+            merged = [str(t) for t in existing if str(t)]
+            for tag in tags or []:
+                tag = str(tag)
+                if tag and tag not in merged:
+                    merged.append(tag)
+            merged = merged[:POST_TAGS_MAX]
+            self._execute(
+                "UPDATE posts SET tags = ? WHERE id = ?",
+                (json.dumps(merged, ensure_ascii=False), post_id),
+            )
+            return len(merged)
 
     # ---- MX 实时消息 LLM 打标（app/mx_llm_tagging.py） ----
 
@@ -5426,6 +5431,19 @@ class DB:
         )
         return bool(rows)
 
+    def purge_old_mx_view_batches(self, keep_days: int = 30) -> int:
+        """按天保留期清理 mx_view_batches（默认 30 天，对齐回填窗口上限）。
+
+        更早的批次行只剩审计价值，滚动删掉防表无限增长。trading_day 为
+        YYYY-MM-DD 字符串，字典序比较即日期比较。返回删除行数。
+        """
+        cutoff = (datetime.now() - timedelta(days=int(keep_days))).strftime("%Y-%m-%d")
+        rows = self._rows("SELECT COUNT(*) AS n FROM mx_view_batches WHERE trading_day < ?", (cutoff,))
+        if not rows or not int(rows[0]["n"]):
+            return 0
+        self._execute("DELETE FROM mx_view_batches WHERE trading_day < ?", (cutoff,))
+        return int(rows[0]["n"])
+
     def abort_stale_mx_view_batches(self) -> int:
         """启动清理：进程中断（重启/OOM）遗留的 running 批收尾为 aborted，
         状态页不再永久「运行中」、batches_today 不虚高。返回收尾行数。"""
@@ -5447,31 +5465,45 @@ class DB:
 
         观点元素不携带 trading_day/snapshot_at（接口约定），交易日与快照时刻
         取自批次记录；元素显式给出时以元素为准。
+        DELETE + INSERT 包进单事务：中断回滚不留「删了没插回」的半批脏数据，
+        executemany 一次提交，避免每行一次 fsync。
         """
         batch_id = int(batch_id)
-        self._execute("DELETE FROM mx_opinions WHERE batch_id = ?", (batch_id,))
-        batch = self._rows(
-            "SELECT trading_day, snapshot_at FROM mx_view_batches WHERE id = ?", (batch_id,)
-        )
-        batch_day = str(batch[0]["trading_day"]) if batch else ""
-        batch_at = str(batch[0]["snapshot_at"]) if batch else ""
-        for op in opinions or []:
-            self._execute(
-                "INSERT OR IGNORE INTO mx_opinions (batch_id, trading_day, snapshot_at, kol_id, "
-                "target_type, target_name, direction, action, confidence, summary, "
-                "evidence_post_ids, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    batch_id, str(op.get("trading_day") or batch_day),
-                    str(op.get("snapshot_at") or batch_at), int(op["kol_id"]),
-                    str(op["target_type"]), str(op["target_name"]), str(op["direction"]),
-                    str(op.get("action") or ""), str(op.get("confidence") or "high"),
-                    str(op.get("summary") or ""),
-                    json.dumps([int(i) for i in op.get("evidence_post_ids") or []]),
-                    str(op.get("occurred_at") or ""),
-                ),
-            )
-        rows = self._rows("SELECT COUNT(*) AS n FROM mx_opinions WHERE batch_id = ?", (batch_id,))
-        return int(rows[0]["n"])
+        with self._lock:
+            self._conn.execute("BEGIN")
+            try:
+                batch = self._conn.execute(
+                    "SELECT trading_day, snapshot_at FROM mx_view_batches WHERE id = ?", (batch_id,)
+                ).fetchall()
+                batch_day = str(batch[0]["trading_day"]) if batch else ""
+                batch_at = str(batch[0]["snapshot_at"]) if batch else ""
+                self._conn.execute("DELETE FROM mx_opinions WHERE batch_id = ?", (batch_id,))
+                self._conn.executemany(
+                    "INSERT OR IGNORE INTO mx_opinions (batch_id, trading_day, snapshot_at, kol_id, "
+                    "target_type, target_name, direction, action, confidence, summary, "
+                    "evidence_post_ids, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        (
+                            batch_id, str(op.get("trading_day") or batch_day),
+                            str(op.get("snapshot_at") or batch_at), int(op["kol_id"]),
+                            str(op["target_type"]), str(op["target_name"]), str(op["direction"]),
+                            str(op.get("action") or ""), str(op.get("confidence") or "high"),
+                            str(op.get("summary") or ""),
+                            json.dumps([int(i) for i in op.get("evidence_post_ids") or []]),
+                            str(op.get("occurred_at") or ""),
+                        )
+                        for op in opinions or []
+                    ],
+                )
+                cur = self._conn.execute(
+                    "SELECT COUNT(*) AS n FROM mx_opinions WHERE batch_id = ?", (batch_id,)
+                )
+                count = int(cur.fetchone()["n"])
+                self._conn.commit()
+                return count
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def list_mx_opinions(self, trading_day, up_to_at=None) -> list[dict]:
         sql = (
@@ -5566,6 +5598,33 @@ class DB:
         sql += " ORDER BY p.id ASC LIMIT ?"
         params.append(int(limit))
         return self._rows(sql, tuple(params))
+
+    def has_mx_posts_in_window(self, day, start_hhmm, end_hhmm, after_id=0, kol_ids=None) -> bool:
+        """窗口 (start, end] 内、游标之后是否还有可研判消息（同 list_mx_posts_in_window
+        的过滤口径：blocked/hidden/停用大V 一并排除）。
+
+        调度 tick 先查这个再决定是否建批次：静默期无新消息直接返回，
+        不再每分钟制造一条空批次行。EXISTS 命中即返回，代价可忽略。
+        """
+        sql = (
+            "SELECT 1 FROM posts p JOIN kols k ON k.id = p.kol_id "
+            "WHERE p.platform = 'mx' AND substr(p.published_at, 1, 10) = ? "
+            "AND substr(p.published_at, 12, 5) > ? AND substr(p.published_at, 12, 5) <= ? "
+            "AND p.id > ? AND COALESCE(p.blocked, 0) = 0 AND COALESCE(p.hidden, 0) = 0 "
+            "AND k.enabled = 1"
+        )
+        params: list = [day, start_hhmm, end_hhmm, int(after_id)]
+        if kol_ids:
+            sql += " AND p.kol_id IN (%s)" % ",".join("?" for _ in kol_ids)
+            params.extend(int(i) for i in kol_ids)
+        sql += " LIMIT 1"
+        return bool(self._rows(sql, tuple(params)))
+
+    def max_mx_opinion_id(self, trading_day) -> int:
+        """某交易日观点的最大 id（无观点返回 0）；/mx-views/feed 增量拉取用。"""
+        rows = self._rows("SELECT COALESCE(MAX(id), 0) AS m FROM mx_opinions WHERE trading_day = ?",
+                          (trading_day,))
+        return int(rows[0]["m"]) if rows else 0
 
     def get_mx_view_target_detail(self, trading_day, target_type, target_name, up_to_at=None):
         """题材/个股下钻：多空大V分组（各取最新一条）+ 观点时间线（含证据原帖全文）。"""
@@ -5696,19 +5755,24 @@ class DB:
         return [str(t) for t in tags if str(t)]
 
     def append_post_tag(self, post_id: int, tag: str) -> bool:
-        """给帖子追加一个标签（审核通过/管理员手动加标签）；已存在或已达上限时不写。"""
+        """给帖子追加一个标签（审核通过/管理员手动加标签）；已存在或已达上限时不写。
+
+        存在性检查 → 读标签 → 追加 → 写回全程持 _lock，与打标线程/回流打标
+        并发命中同一帖时不丢标签（RLock 可重入，锁内 get/update 正常走）。
+        """
         tag = str(tag or "").strip()
         if not tag:
             return False
-        rows = self._rows("SELECT id FROM posts WHERE id = ?", (post_id,))
-        if not rows:
-            return False
-        tags = self.get_post_tags(post_id)
-        if tag in tags or len(tags) >= POST_TAGS_MAX:
-            return False
-        tags.append(tag)
-        self.update_post_tags(post_id, tags)
-        return True
+        with self._lock:
+            rows = self._rows("SELECT id FROM posts WHERE id = ?", (post_id,))
+            if not rows:
+                return False
+            tags = self.get_post_tags(post_id)
+            if tag in tags or len(tags) >= POST_TAGS_MAX:
+                return False
+            tags.append(tag)
+            self.update_post_tags(post_id, tags)
+            return True
 
     def post_tag_add_error(self, post_id: int, tag: str) -> str | None:
         """append_post_tag 返回 False 时的具体原因（帖删/已存在/已满），能成功则 None。"""

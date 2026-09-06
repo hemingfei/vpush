@@ -25,6 +25,29 @@ from . import mx_view_analysis
 _ai_task_semaphore = None
 _ai_task_max_concurrent = 3  # 最多同时3个任务
 _ai_task_running = set()  # 正在运行的任务ID
+_ai_task_running_lock = threading.Lock()  # 手动端点线程与调度循环并发读写集合，用锁保证「查+占」原子
+
+
+def try_begin_ai_task_run(task_id: int) -> bool:
+    """手动/调度共用的 AI 任务运行互斥：任务已在跑返回 False。
+
+    调度器与 api.py 的「立即运行」端点共用同一集合：任务执行可达数分钟，
+    external_id 只带秒级时间戳，UNIQUE 约束兜不住不同秒触发的重复运行，
+    双跑会产出双份报告。占住后必须配对调用 end_ai_task_run 释放。
+    """
+    with _ai_task_running_lock:
+        if task_id in _ai_task_running:
+            return False
+        _ai_task_running.add(task_id)
+        return True
+
+
+def end_ai_task_run(task_id: int) -> None:
+    """释放 D1 互斥（配合 try_begin_ai_task_run 使用）。"""
+    with _ai_task_running_lock:
+        _ai_task_running.discard(task_id)
+
+
 from .logging_setup import redact_secrets
 from .mx_llm_tagging import mx_llm_tag_auto_loop
 from .fetchers.base import (
@@ -2111,8 +2134,15 @@ class Scheduler:
         self._mx_force_close_done = False
         # 本窗口内 WS 已永久放弃自动重连（防窗口循环反复拉起，违背「只重连一次」）
         self._mx_ws_gave_up = False
-        # TOKEN 过期熔断：置位后不再发起任何拉取/WS，直到管理员更换 TOKEN
+        # TOKEN 过期熔断：置位后不再发起任何拉取/WS，直到管理员更换 TOKEN，
+        # 或管理员手动「登录」半开重探成功（见 mx_manual_login）
         self._mx_token_expired = False
+        # 本窗口已做过手动登录尝试的窗口下标：窗口循环据此跳过自动登录，
+        # 防止手动登录部分失败后 30s tick 重跑完整启动序列
+        self._mx_manual_attempted_idx: int | None = None
+        # 最近一次会话（WS）启动时刻：自动/手动统一在 mx_ws_control("connect") 记录，
+        # 供 30s 循环做会话最长时长滚动兜底（见 _mx_maybe_session_timeout）
+        self._mx_session_started_at: datetime | None = None
         # 事件循环引用：线程侧（publish_mx_error 阻塞口径）需要把 WS 掐断投递回调度循环
         self._loop: asyncio.AbstractEventLoop | None = None
         self._last_imgbed = 0.0
@@ -2343,7 +2373,9 @@ class Scheduler:
                 await ws_client.stop(reason="TOKEN 已熔断，系统强制断开")
             except Exception:  # noqa: BLE001 - 尽力掐断
                 logger.debug("MX WS 掐断失败（忽略）", exc_info=True)
-        self._mx_ws_task = None
+        # 竞态保护：掐断期间窗口循环可能已 connect 出新任务，只清自己的旧引用
+        if self._mx_ws_task is task:
+            self._mx_ws_task = None
 
     def publish_mx_error(self, key: str, title: str, content: str):
         """MX 平台报错统一走系统 KOL「系统通知」发布；同 key 30 分钟节流。
@@ -2367,6 +2399,10 @@ class Scheduler:
 
     # ---- MX 每日运行窗口：每日三段随机时段（早/午后/晚间），窗口外零请求 ----
 
+    # 会话最长时长（小时）：晚间强关只覆盖 23:30-23:55，之后手动登录的会话
+    # 可能整夜在线；按「最近一次会话启动时刻」滚动兜底，30s 循环里超时即强断
+    _MX_MAX_SESSION_HOURS = 4
+
     def _mx_windows_today(self) -> list:
         """取（必要时生成）当天的运行窗口与兜底预约时刻，生成后当天固定。"""
         today = datetime.now(CN_TZ).date()
@@ -2376,10 +2412,15 @@ class Scheduler:
             # 重启安全：生成时刻（≈重启时刻）已过开窗点的窗口不武装——重启后
             # 不自动续连，只能管理员「登录」手动拉起，或等下一个未到点的窗口
             self._mx_armed = arm_windows(self._mx_windows, datetime.now(CN_TZ))
-            self._mx_fallback_at = pick_daily_fallback_slot(self._mx_windows)
+            # 兜底预约槽只从当天仍武装的窗口里挑：已错过开窗点的窗口不会自动
+            # 拉起会话，选中它们只会得到「时刻一到就放弃」的迟到执行
+            self._mx_fallback_at = pick_daily_fallback_slot(self._mx_windows, self._mx_armed)
             self._mx_fallback_done = False
+            # 新的一天重置「本窗口已手动登录尝试」标记（窗口下标跨天复用）
+            self._mx_manual_attempted_idx = None
             # 晚间兜底断开时刻：23:30-23:55 之间随机（与晚间关窗同区间，先到者
-            # 关窗；这条额外兜住「关窗后手动登录忘关」的场景）
+            # 关窗并 disarm 当前窗口，见 _mx_maybe_nightly_force_close；这条额外
+            # 兜住「关窗后手动登录忘关」的场景）
             self._mx_force_close_at = datetime(
                 today.year, today.month, today.day, 23, 30, tzinfo=CN_TZ
             ) + timedelta(seconds=random.randint(0, 1500))
@@ -2439,34 +2480,7 @@ class Scheduler:
         """
         while not self._stop.is_set():
             try:
-                self._mx_touch_loop()
-                idx = self._mx_current_window_index()
-                if idx is not None:
-                    if not self._mx_window_open:
-                        if not self._mx_armed[idx]:
-                            pass  # 重启前已错过该窗口的开窗时刻：不自动续连（管理员可手动「登录」）
-                        else:
-                            self._mx_window_open = True
-                            self._mx_ws_gave_up = False  # 新窗口：复位放弃标记
-                            await self._mx_session_start()
-                            start, stop = self._mx_windows[idx]
-                            await asyncio.to_thread(
-                                self._mx_log_auto_event,
-                                "mx_auto_login",
-                                f"第 {idx + 1} 段运行时段 {start:%H:%M:%S}~{stop:%H:%M:%S} "
-                                "到点，系统自动执行 MX 平台登录（启动序列 + 房间同步 + WS 推送）",
-                            )
-                elif self._mx_window_open:
-                    self._mx_window_open = False
-                    await self._mx_session_stop()
-                    await asyncio.to_thread(
-                        self._mx_log_auto_event,
-                        "mx_auto_disconnect",
-                        "运行时段结束，系统自动执行 MX 平台断开（时段外零请求）",
-                    )
-                await asyncio.to_thread(self._mx_check_token_age)
-                await self._mx_maybe_daily_fallback()
-                await self._mx_maybe_nightly_force_close()
+                await self._mx_window_tick()
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -2475,6 +2489,42 @@ class Scheduler:
                 await asyncio.sleep(30)
             except asyncio.CancelledError:
                 raise
+
+    async def _mx_window_tick(self):
+        """窗口循环单次 tick（每 30 秒一次）：开/关窗、TOKEN 时效与各类兜底检查。
+
+        独立成函数便于对「强关 disarm 后不再重拉」「手动登录后不重跑」等
+        时序约束做回归测试（tests/test_mx.py 直接驱动单次 tick）。
+        """
+        self._mx_touch_loop()
+        idx = self._mx_current_window_index()
+        if idx is not None:
+            if not self._mx_window_open:
+                if not self._mx_armed[idx] or self._mx_manual_attempted_idx == idx:
+                    pass  # 重启前已错过该窗口的开窗时刻，或本窗口已手动登录尝试过：不自动续连（管理员可手动「登录」）
+                else:
+                    self._mx_window_open = True
+                    self._mx_ws_gave_up = False  # 新窗口：复位放弃标记
+                    await self._mx_session_start()
+                    start, stop = self._mx_windows[idx]
+                    await asyncio.to_thread(
+                        self._mx_log_auto_event,
+                        "mx_auto_login",
+                        f"第 {idx + 1} 段运行时段 {start:%H:%M:%S}~{stop:%H:%M:%S} "
+                        "到点，系统自动执行 MX 平台登录（启动序列 + 房间同步 + WS 推送）",
+                    )
+        elif self._mx_window_open:
+            self._mx_window_open = False
+            await self._mx_session_stop()
+            await asyncio.to_thread(
+                self._mx_log_auto_event,
+                "mx_auto_disconnect",
+                "运行时段结束，系统自动执行 MX 平台断开（时段外零请求）",
+            )
+        await asyncio.to_thread(self._mx_check_token_age)
+        await self._mx_maybe_daily_fallback()
+        await self._mx_maybe_nightly_force_close()
+        await self._mx_maybe_session_timeout()
 
     async def _mx_session_start(self):
         """系统自动执行 MX 平台登录：按官方冷启动序列执行（启动请求 → 房间列表 → WS）。
@@ -2604,15 +2654,19 @@ class Scheduler:
     async def _mx_maybe_nightly_force_close(self):
         """晚间兜底断开：23:30-23:55 之间随机一秒，MX 若仍在线一律强制断开。
 
-        晚间窗口关窗（23:30-23:55 随机）与这条兜底同区间，先到者关窗；这条
-        额外兜住「关窗后手动登录忘关」等场景，无论会话来源（自动/手动）到点即关，
-        当天只执行一次。
+        晚间窗口关窗（23:30-23:55 随机）与这条兜底同区间，先到者关窗——强关
+        先到时必须同时 disarm 当前窗口，否则窗口循环看到「窗口内 + 未开窗 +
+        已武装」会在下个 tick 把会话重新拉起直到关窗。这条额外兜住「关窗后
+        手动登录忘关」等场景，无论会话来源（自动/手动）到点即关，当天只执行一次。
         """
         if self._mx_force_close_at is None or self._mx_force_close_done:
             return
         now = datetime.now(CN_TZ)
         if now < self._mx_force_close_at:
             return
+        # 取当前窗口下标可能触发当日窗口的首次生成（生成过程会复位各当日闩锁），
+        # 因此必须先取下标、再置「今天已强关」标记，避免生成把标记冲掉
+        idx = self._mx_current_window_index()
         self._mx_force_close_done = True
         if not (self._mx_window_open or self._mx_session_active()):
             logger.info("MX 晚间兜底检查：会话未在线，无需断开")
@@ -2623,11 +2677,46 @@ class Scheduler:
         )
         self._mx_window_open = False
         await self._mx_session_stop()
+        # disarm 当前窗口（若强关时仍在窗口内）：先于窗口关窗到达时防止重拉
+        if idx is not None:
+            self._mx_armed[idx] = False
         await asyncio.to_thread(
             self._mx_log_auto_event,
             "mx_auto_disconnect",
             f"晚间兜底检查（预约 {self._mx_force_close_at:%H:%M:%S}）："
             "系统自动执行 MX 平台断开（防止登录后未断开）",
+        )
+
+    async def _mx_maybe_session_timeout(self):
+        """会话最长时长滚动兜底：在线持续超过 _MX_MAX_SESSION_HOURS 小时强制断开。
+
+        晚间强关只覆盖 23:30-23:55，之后手动登录的会话可能整夜在线，这里按
+        最近一次会话启动时刻（自动/手动统一在 mx_ws_control("connect") 记录）
+        滚动兜底。超时强断同样 disarm 当前窗口，避免窗口循环立刻重拉；
+        会话来源不限（自动开窗/管理员手动登录一视同仁），只断当前这一个会话，
+        之后新发起的会话从新的启动时刻重新计时。
+        """
+        if self._mx_session_started_at is None or not self._mx_session_active():
+            return
+        held = datetime.now(CN_TZ) - self._mx_session_started_at
+        if held < timedelta(hours=self._MX_MAX_SESSION_HOURS):
+            return
+        logger.warning(
+            "MX 会话已持续超过 %s 小时，滚动兜底强制断开", self._MX_MAX_SESSION_HOURS
+        )
+        idx = self._mx_current_window_index()
+        if idx is not None:
+            self._mx_armed[idx] = False
+        self._mx_window_open = False
+        await self._mx_session_stop()
+        # mx_ws_control("disconnect") 内部会清启动时刻；这里显式再清一次，
+        # 防止断开链路异常时兜底被反复触发
+        self._mx_session_started_at = None
+        await asyncio.to_thread(
+            self._mx_log_auto_event,
+            "mx_auto_disconnect",
+            f"会话持续超过 {self._MX_MAX_SESSION_HOURS} 小时，"
+            "系统自动执行 MX 平台断开（超时兜底）",
         )
 
     async def _mx_fallback_pull_once(self):
@@ -2834,6 +2923,8 @@ class Scheduler:
             self._mx_window_task = None
         self._mx_window_open = False
         self._mx_ws_gave_up = False
+        # WS 任务已被取消：清掉会话启动时刻，超时兜底不再基于旧会话计时
+        self._mx_session_started_at = None
         _mx_fetcher = None
         if self._mx_sync_service:
             self._mx_sync_service.stop()
@@ -2856,7 +2947,8 @@ class Scheduler:
 
         不受每日窗口限制（管理员明确点击，与手动拉取历史同一定位）；逐接口
         结果写入模块级 _mx_login_report 供前端「接口状态」展示；TOKEN 过期即
-        熔断并计入报告。
+        熔断并计入报告。熔断态下允许「半开重探」：先解除熔断再走完整登录，
+        登录中再遇鉴权失败会重新熔断（告警仍走 30 分钟节流）。
         """
         global _mx_login_report
         self._mx_touch_loop()
@@ -2869,14 +2961,22 @@ class Scheduler:
             record("前置检查", False, "MX 平台未启用")
         elif not self.mx_config.token:
             record("前置检查", False, "未配置 API TOKEN")
-        elif self._mx_token_expired:
-            record("前置检查", False, "TOKEN 已熔断（过期），请更换 TOKEN 后重试")
         else:
+            if self._mx_token_expired:
+                # 半开重探：管理员手动点「登录」视为对 TOKEN 的主动复核，先清熔断
+                # 标记再走完整登录；若仍鉴权失败会在下方 boot/sync 链路重新熔断
+                self._mx_token_expired = False
+                logger.info("MX 手动登录：TOKEN 熔断态下半开重探，重新执行完整登录")
             service = self._mx_sync_service
             temp = None
             if service is None:
                 temp = MXRoomSyncService(self.mx_config, self.db)
                 service = temp
+            # 窗口内的手动登录尝试：无论成败都记「本窗口已尝试」，部分失败时
+            # 窗口循环不得在下个 30s tick 自动重跑完整启动序列
+            window_idx = self._mx_current_window_index()
+            if window_idx is not None:
+                self._mx_manual_attempted_idx = window_idx
             try:
                 try:
                     steps.extend(await asyncio.to_thread(service.boot_sequence))
@@ -2932,6 +3032,8 @@ class Scheduler:
             if self._mx_ws_task:
                 self._mx_ws_task.cancel()
                 self._mx_ws_task = None
+            # 会话已结束：清掉启动时刻，超时兜底从下次连接重新计时
+            self._mx_session_started_at = None
             fetcher = self.fetchers.get("mx")
             if fetcher is None:
                 raise RuntimeError("MX 平台未启用")
@@ -2964,6 +3066,9 @@ class Scheduler:
                     self._mx_ws_on_message, on_ws_give_up=self._mx_ws_on_give_up
                 )
             )
+            # 会话启动时刻（自动/手动唯一共同入口，超时兜底据此计时）；
+            # 「已在运行」的早退分支不刷新，保证时刻对应当前存活会话的真实起点
+            self._mx_session_started_at = datetime.now(CN_TZ)
             logger.info("MX WebSocket 已发起连接（%s）", source_label)
             return "已发起 MX WebSocket 连接"
         raise RuntimeError(f"未知操作：{action}")
@@ -2973,6 +3078,10 @@ class Scheduler:
         old_token = self.mx_config.token if self.mx_config else ""
         await self._stop_mx()
         self.mx_config = mx_config
+        # 保存配置即复位熔断/放弃标记（无论 token 是否变化）：管理员主动保存视为
+        # 一次人工确认，避免误熔断后「原样重存也解不开、只能重启进程」
+        self._mx_token_expired = False
+        self._mx_ws_gave_up = False
         if not (MX_AVAILABLE and mx_config and mx_config.enabled):
             logger.info("MX platform disabled, hot-reload skipped")
             return
@@ -2980,11 +3089,9 @@ class Scheduler:
 
         self.fetchers["mx"] = MxFetcher(mx_config, self.db)
         if (mx_config.token or "") != (old_token or ""):
-            # TOKEN 更换：重置 2 天时效计时，并解除过期熔断与放弃标记
+            # TOKEN 更换：重置 2 天时效计时（仅 token 实际变化才刷新更新时间）
             self.db.set_setting("mx_token_updated_at", str(int(time.time())))
-            self._mx_token_expired = False
-            self._mx_ws_gave_up = False
-            logger.info("MX TOKEN 已更换，重置时效计时并解除熔断")
+            logger.info("MX TOKEN 已更换，重置时效计时")
         await self._init_mx()
 
     async def run(self):
@@ -3188,19 +3295,17 @@ class Scheduler:
                         if next_run:
                             self.db.update_ai_task(task_id, next_run_at=next_run.isoformat())
                         continue
-                    # 检查是否已在运行
-                    if task_id in _ai_task_running:
+                    # 检查是否已在运行（手动「立即运行」端点共用同一互斥，占用必须同步完成，
+                    # 避免 create_task 尚未执行时下一轮循环再次命中同一任务）
+                    if not try_begin_ai_task_run(task_id):
                         continue
                     # 初始化信号量（懒加载）
                     global _ai_task_semaphore
                     if _ai_task_semaphore is None:
                         _ai_task_semaphore = asyncio.Semaphore(_ai_task_max_concurrent)
 
-                    # 异步运行任务
+                    # 异步运行任务（互斥已在上面占用，wrapper 只负责收尾释放）
                     async def run_task_wrapper(tid):
-                        if tid in _ai_task_running:
-                            return
-                        _ai_task_running.add(tid)
                         try:
                             async with _ai_task_semaphore:
                                 result = await asyncio.to_thread(
@@ -3212,7 +3317,7 @@ class Scheduler:
                                     tid, str(result.get("message") or "")
                                 )
                         finally:
-                            _ai_task_running.discard(tid)
+                            end_ai_task_run(tid)
 
                     # 在事件循环中运行
                     asyncio.create_task(run_task_wrapper(task_id))

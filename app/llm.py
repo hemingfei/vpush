@@ -17,6 +17,18 @@ logger = logging.getLogger(__name__)
 DEFAULT_CHAT_TIMEOUT = 60
 MARK_RESOLVE_TIMEOUT = 180
 USER_LLM_MAX_BYTES = 2 * 1024 * 1024
+# 站点配置 LLM（user_supplied=False）响应体宽松上限：正常研判/打标输出远小于此，
+# 防异常网关返回超大 body 撑爆内存。对齐 url_safety.safe_request_limited 的做法
+# （逐块读取、超限停读），但语义更宽松：超限截断并告警，不整体失败。
+SYSTEM_LLM_MAX_BYTES = 20 * 1024 * 1024
+
+
+class LlmTruncatedError(Exception):
+    """LLM 输出因 max_tokens 上限被截断（finish_reason=length），内容不完整。
+
+    仅在调用方显式传 raise_on_truncate=True 时抛出（默认只记 warning 并照常
+    返回文本，存量调用方行为不变）；调用方按需降载重试（如减小输入区块）。
+    """
 
 class _RetryableError(Exception):
     """瞬时错误（429/5xx/空响应），可重试一次。"""
@@ -63,11 +75,16 @@ def _chat(
     response_format=None,
     timeout: float = DEFAULT_CHAT_TIMEOUT,
     return_usage: bool = False,
+    raise_on_truncate: bool = False,
 ) -> str | tuple[str, dict] | None:
     """OpenAI 兼容 chat/completions；未配置或失败返回 None。
 
     return_usage=True 时成功返回 (文本, usage 字典)，失败返回 (None, {})，
-    供需要统计 token 的调用方（如 AI 分析任务）使用。
+    供需要统计 token 的调用方（如 AI 分析任务）使用；usage.finish_reason
+    即截断信息的读取通道。
+    raise_on_truncate=True 时输出被截断（finish_reason=length）抛 LlmTruncatedError
+    而不是返回半截文本——截断与输入强相关，重试同样输入无意义，故直接抛给
+    调用方降载（如减小区块）后重试。
     """
     values = _config_values(llm_config)
     if values is None:
@@ -116,11 +133,33 @@ def _chat(
                         last_err = _RetryableError("LLM 拒绝跟随重定向")
                         break
                 else:
-                    resp = client.post(
+                    # 站点配置 LLM 同样限制响应体：流式逐块读取、超限截断（与
+                    # safe_request_limited 同做法，宽松语义——截断告警不失败）
+                    with client.stream(
+                        "POST",
                         f"{api_base}/chat/completions",
                         headers={"Authorization": f"Bearer {api_key}"},
                         json=payload,
-                    )
+                    ) as raw_resp:
+                        body = bytearray()
+                        for chunk in raw_resp.iter_bytes():
+                            body.extend(chunk)
+                            if len(body) > SYSTEM_LLM_MAX_BYTES:
+                                break  # 超限即停读，不整段收进内存
+                        truncated = len(body) > SYSTEM_LLM_MAX_BYTES
+                        resp_headers = dict(raw_resp.headers)
+                        # iter_bytes() 已解压；防 httpx 对重建的 Response 再解一次
+                        resp_headers.pop("content-encoding", None)
+                        resp_headers.pop("content-length", None)
+                        resp = httpx.Response(
+                            raw_resp.status_code, headers=resp_headers,
+                            content=bytes(body[:SYSTEM_LLM_MAX_BYTES]), request=raw_resp.request,
+                        )
+                        if truncated:
+                            logger.warning(
+                                "LLM 响应体超过 %d 字节上限，已截断（持续出现时排查网关）",
+                                SYSTEM_LLM_MAX_BYTES,
+                            )
                 if resp.status_code == 400 and use_format:
                     use_format = None
                     # 参数降级不消耗重试次数
@@ -146,6 +185,11 @@ def _chat(
                 if not text:
                     raise _RetryableError("LLM 返回空")
                 if finish_reason == "length":
+                    if raise_on_truncate:
+                        # 截断由输入体量决定，重试同样输入没有意义：直接抛给调用方
+                        raise LlmTruncatedError(
+                            f"LLM 输出因 max_tokens 上限被截断（finish_reason=length，max_tokens={max_tokens}）"
+                        )
                     logger.warning("LLM 输出因 max_tokens 上限被截断（finish_reason=length），内容不完整")
                 if return_usage:
                     usage = dict(data.get("usage") or {})
@@ -881,19 +925,26 @@ def research_viewpoints(posts, topic_hints, action_tags, llm_config=None, client
     if not messages:
         return []
     system = build_view_system_prompt(topic_hints, action_tags)
-    text = _chat(
-        llm_config,
-        [
-            {"role": "system", "content": system},
-            {"role": "user", "content": "消息列表：\n" + json.dumps(messages, ensure_ascii=False)},
-        ],
-        VIEW_MAX_TOKENS,
-        client=client,
-        temperature=0,
-        attempts=2,
-        response_format={"type": "json_object"},
-        timeout=VIEW_CHAT_TIMEOUT,
-    )
+    try:
+        text = _chat(
+            llm_config,
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "消息列表：\n" + json.dumps(messages, ensure_ascii=False)},
+            ],
+            VIEW_MAX_TOKENS,
+            client=client,
+            temperature=0,
+            attempts=2,
+            response_format={"type": "json_object"},
+            timeout=VIEW_CHAT_TIMEOUT,
+            # 截断的输出 JSON 必然解析失败且下个 tick 原样重试只会再截断：
+            # 抛给调用方（run_snapshot_batch 半减小区块重试），不返回半截文本
+            raise_on_truncate=True,
+        )
+    except LlmTruncatedError as exc:
+        logger.warning("LLM 研判输出被截断，按整批失败处理: %s", exc)
+        return None
     if not text:
         return None
     match = re.search(r"\{.*\}", text, re.DOTALL)

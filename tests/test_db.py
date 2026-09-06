@@ -485,6 +485,41 @@ def test_update_post_tags_empty_list_marks_post_processed(tmp_path):
     assert db.tag_stats()["pending"] == 0
 
 
+def test_post_tag_merge_and_append_atomic_under_concurrency(tmp_path):
+    """B5: 标签读-改-写全程持 _lock——多个打标线程并发命中同一帖不互相丢标签。"""
+    import threading
+
+    db = DB(str(tmp_path / "t.db"))
+    kid = db.add_kol("xueqiu", "并发", "tags-atomic")
+    post_id = db.insert_post("xueqiu", kid, "p1", "t", "c", "u", "")
+
+    def merge_worker(base):
+        for i in range(4):
+            db.merge_post_view_tags(post_id, [f"v-{base}-{i}"])
+
+    threads = [threading.Thread(target=merge_worker, args=(b,)) for b in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    tags = db.get_post_tags(post_id)
+    # 12 个互不相同标签（< POST_TAGS_MAX）一个不丢；线程顺序不保证，按集合比对
+    assert len(tags) == 12
+    assert set(tags) == {f"v-{b}-{i}" for b in range(3) for i in range(4)}
+
+    def append_worker(base):
+        assert db.append_post_tag(post_id, f"a-{base}") is True
+
+    threads = [threading.Thread(target=append_worker, args=(b,)) for b in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    tags = db.get_post_tags(post_id)
+    assert len(tags) == 15  # 12 + 3 恰好到 POST_TAGS_MAX，无丢失
+    assert {"a-0", "a-1", "a-2"} <= set(tags)
+
+
 def test_insert_post_ignore_does_not_leave_open_txn(tmp_path):
     """IGNORE 命中唯一约束后不能留下悬空事务（否则下一个 BEGIN 报 nested transaction）。"""
     db = DB(str(tmp_path / "t.db"))

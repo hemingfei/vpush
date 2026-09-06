@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import time
 import uuid
 from pathlib import Path
 
@@ -27,6 +28,36 @@ ZSXQ_HEADERS = {"User-Agent": UA, "Referer": "https://wx.zsxq.com/"}
 # 在 MX 自家 CDN 的日志里又是一个「账号行为自相矛盾」的风控信号
 MX_SITE_DOMAIN = "naaifu.cn"
 MX_REFERER = "https://mx.2026.naaifu.cn/"
+
+# .part 临时文件清扫：写盘中断（进程崩溃/断电）会留下残留，超龄（1 小时）即清；
+# 下载函数被 WS 解析线程高频调用，清扫入口按小时节流
+_PART_MAX_AGE_SECONDS = 3600.0
+_PART_CLEANUP_INTERVAL_SECONDS = 3600.0
+_last_part_cleanup_monotonic = 0.0
+
+
+def _cleanup_stale_part_files(dest: Path) -> None:
+    """清扫目录内超龄的 .part 临时文件（正常流程写完即原子替换，残留即异常痕迹）。"""
+    now = time.time()
+    try:
+        for part in dest.glob("*.part"):
+            try:
+                if now - part.stat().st_mtime > _PART_MAX_AGE_SECONDS:
+                    part.unlink(missing_ok=True)
+            except OSError:  # noqa: BLE001 - 单个文件清不掉不影响其他文件
+                continue
+    except OSError:  # noqa: BLE001 - 目录不可读时放弃本次清扫
+        return
+
+
+def _maybe_cleanup_part_files(dest: Path) -> None:
+    """节流清扫入口：每小时最多实际扫一次目录。"""
+    global _last_part_cleanup_monotonic
+    now = time.monotonic()
+    if now - _last_part_cleanup_monotonic < _PART_CLEANUP_INTERVAL_SECONDS:
+        return
+    _last_part_cleanup_monotonic = now
+    _cleanup_stale_part_files(dest)
 
 
 def headers_for(url: str) -> dict[str, str]:
@@ -54,6 +85,7 @@ def cache_image_file(db, url: str, folder: str, url_prefix: str, client: httpx.C
         return url
     dest = Path(db_path).parent / folder
     dest.mkdir(parents=True, exist_ok=True)
+    _maybe_cleanup_part_files(dest)
     # 键必须是完整 URL 的函数：CDN 常用顺序/短文件名，取远程文件名会让
     # 不同帖子同名图片互相覆盖，引用旧内容的帖子永久显示错图
     import hashlib
@@ -117,8 +149,17 @@ def cache_avatar(db, kol_id: int, remote_url: str, client: httpx.Client | None =
             return url
         avatars = Path(db.path).parent / "avatars"
         avatars.mkdir(parents=True, exist_ok=True)
+        _maybe_cleanup_part_files(avatars)
         target = avatars / f"{kol_id}.{ext}"
-        target.write_bytes(resp.content)
+        # 与 cache_image_file 同口径：先写临时文件再原子替换，避免并发写同一
+        # 目标文件（或写盘中断）产出坏图/半张头像
+        tmp = avatars / f"{kol_id}.{uuid.uuid4().hex[:8]}.part"
+        try:
+            tmp.write_bytes(resp.content)
+            os.replace(tmp, target)
+        except OSError:  # noqa: BLE001 - 写盘失败退回远端 URL，并清掉残留临时文件
+            tmp.unlink(missing_ok=True)
+            return url
         local = f"/avatars/{kol_id}.{ext}"
         db.update_kol_avatar(kol_id, local)
         db.update_kol_avatar_source(kol_id, url)

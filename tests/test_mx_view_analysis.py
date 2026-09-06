@@ -1,6 +1,10 @@
 """MX 大V实时观点：DB 层与研判管线测试。"""
 import json
+import logging
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from app.db import DB
 
@@ -40,6 +44,22 @@ def test_mx_view_tables_and_snapshot_upsert():
     assert snaps[0]["payload"]["v"] == 2
     assert db.get_mx_view_snapshot(day, "09:26")["payload"]["seq"] == 2
     assert db.mx_view_days() == [{"trading_day": day, "snapshots": 2}]
+
+
+def test_replace_mx_opinions_atomic_on_bad_row():
+    """B1: 整批替换是单事务——中途坏行回滚，不会留下「删了没插回」的半批脏数据，
+    且不留悬空事务（下一次 BEGIN 不报 nested transaction）。"""
+    db = make_db()
+    day = "2026-09-04"
+    kol = db.add_kol("mx", "李四", "room0")
+    bid = db.upsert_mx_view_batch(day, "09:20", "live")
+    assert db.replace_mx_opinions(bid, [_op(kol_id=kol), _op(kol_id=kol, name="房地产")]) == 2
+
+    with pytest.raises((KeyError, TypeError, ValueError)):
+        db.replace_mx_opinions(bid, [_op(kol_id=kol, name="机器人"), {"target_name": "坏行"}])
+    assert len(db.list_mx_opinions(day)) == 2  # 回滚：原 2 行原样保留
+    # 无悬空事务：坏行之后的正常替换照常工作
+    assert db.replace_mx_opinions(bid, [_op(kol_id=kol, name="机器人")]) == 1
 
 
 def test_list_mx_opinions_up_to_at_and_window_query():
@@ -158,6 +178,76 @@ def test_research_viewpoints_failure_returns_none(monkeypatch):
         [], [],
     ) is None
     assert llm_mod.research_viewpoints([], [], []) == []
+
+
+def test_research_viewpoints_truncated_output_returns_none(monkeypatch):
+    """B3: 研判路径要求「截断即抛」——截断的 JSON 必然解析失败，不返回半截文本。"""
+    captured = {}
+
+    def fake_chat(llm_config, messages, max_tokens, **kw):
+        captured["raise_on_truncate"] = kw.get("raise_on_truncate")
+        raise llm_mod.LlmTruncatedError("finish_reason=length")
+
+    monkeypatch.setattr(llm_mod, "_chat", fake_chat)
+    assert llm_mod.research_viewpoints(
+        [{"id": 1, "kol_name": "A", "title": "", "content": "x", "published_at": "2026-09-04 09:00:00"}],
+        [], [],
+    ) is None
+    assert captured["raise_on_truncate"] is True
+
+
+def test_chat_raise_on_truncate_flag():
+    """B3: raise_on_truncate=True 时 finish_reason=length 抛 LlmTruncatedError 且不重试；
+    默认（False）只告警并照常返回文本，存量调用方行为不变。"""
+    import httpx
+
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "hello"}, "finish_reason": "length"}]})
+
+    cfg = SimpleNamespace(api_key="k", api_base="https://api.example.com/v1",
+                          model="m", user_supplied=False)
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(llm_mod.LlmTruncatedError):
+            llm_mod._chat(cfg, [{"role": "user", "content": "hi"}], 10,
+                          client=client, attempts=2, raise_on_truncate=True)
+    assert calls["n"] == 1  # 截断与输入强相关：不重试同样输入
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        text = llm_mod._chat(cfg, [{"role": "user", "content": "hi"}], 10, client=client, attempts=2)
+    assert text == "hello"  # 默认语义不变
+
+
+def test_chat_system_llm_caps_response_bytes(monkeypatch, caplog):
+    """B16: 站点配置 LLM 响应体超上限时截断并告警（对齐 safe_request_limited 做法）。"""
+    import httpx
+
+    big = "x" * 1000
+
+    def handler(request):
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": big}, "finish_reason": "stop"}]})
+
+    cfg = SimpleNamespace(api_key="k", api_base="https://api.example.com/v1",
+                          model="m", user_supplied=False)
+    with monkeypatch.context() as m:  # 上限调小只影响本段：触发截断
+        m.setattr(llm_mod, "SYSTEM_LLM_MAX_BYTES", 64)
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            with caplog.at_level(logging.WARNING, logger="app.llm"):
+                text = llm_mod._chat(cfg, [{"role": "user", "content": "hi"}], 10,
+                                     client=client, attempts=1)
+    assert text is None  # 截断后的 body 已非合法 JSON：走失败路径，不静默用半截
+    assert any("字节上限" in r.getMessage() for r in caplog.records)
+
+    def small_handler(request):
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]})
+
+    with httpx.Client(transport=httpx.MockTransport(small_handler)) as client:
+        assert llm_mod._chat(cfg, [{"role": "user", "content": "hi"}], 10, client=client) == "ok"
 
 
 from app.mx_view_analysis import aggregate_day_state, validate_opinions
@@ -460,6 +550,94 @@ def test_backfill_replays_history_despite_live_cursor(monkeypatch):
     assert r2["ran"] is False
 
 
+def test_run_snapshot_batch_halves_chunk_when_research_fails(monkeypatch):
+    """B3: 研判失败（截断/解析失败）按半减小区块重试一次；已到下限仍失败走原有整批失败路径。"""
+    monkeypatch.setattr(mva, "MIN_RESEARCH_CHUNK", 1)  # 测试把下限调小，便于观察半减
+    db = make_db()
+    day = "2026-09-04"
+    kol = db.add_kol("mx", "王哥", "room1")
+    db.insert_post(platform="mx", kol_id=kol, external_id="m1", title="", url="",
+                   content="早盘看多", published_at=f"{day} 09:16:00")
+    db.insert_post(platform="mx", kol_id=kol, external_id="m2", title="", url="",
+                   content="尾盘也看多", published_at=f"{day} 09:19:00")
+    db.set_setting(mva.MX_VIEW_BATCH_SIZE_KEY, "2")
+
+    calls = {"sizes": []}
+
+    def fake_research(posts, hints, vocab, llm_config=None, client=None):
+        calls["sizes"].append(len(posts))
+        if len(posts) >= 2:
+            return None  # 大块输出截断/解析失败
+        return [{"author": "王哥", "target_type": "topic", "target_name": "固态电池",
+                 "direction": "bull", "action": "", "confidence": "high",
+                 "summary": "s", "evidence": [posts[0]["id"]]}]
+
+    monkeypatch.setattr(mva.llm, "research_viewpoints", fake_research)
+    monkeypatch.setattr(mva.llm, "_chat", lambda *a, **k: _SUMMARY_JSON)
+    result = mva.run_snapshot_batch(db, day=day, snapshot_at="09:20", window=("09:15", "09:20"))
+    assert result["ran"] is True
+    assert calls["sizes"] == [2, 1, 1]  # 首块 2 条失败 → 半减（2→1）重试成功
+    assert result["message_count"] == 2  # 窗口消息全部处理，不静默丢弃
+    assert len(db.list_mx_opinions(day)) == 1  # 同大V同标的跨块去重
+
+    # 半减重试仍失败：走原有整批失败路径（游标不动、批次 failed）
+    db2 = make_db()
+    _seed_posts(db2, day)
+    db2.set_setting(mva.MX_VIEW_BATCH_SIZE_KEY, "40")
+    monkeypatch.setattr(mva.llm, "research_viewpoints", lambda *a, **k: None)
+    with pytest.raises(RuntimeError):
+        mva.run_snapshot_batch(db2, day=day, snapshot_at="09:20", window=("09:15", "09:20"))
+    batch = db2._rows("SELECT status FROM mx_view_batches")[0]
+    assert batch["status"] == "failed"
+    assert db2.get_mx_view_cursor() == 0
+
+    # 区块已到下限（limit=1 ≤ MIN_RESEARCH_CHUNK）：不重试，直接失败
+    db3 = make_db()
+    _seed_posts(db3, day)
+    db3.set_setting(mva.MX_VIEW_BATCH_SIZE_KEY, "1")
+    calls["sizes"].clear()
+    monkeypatch.setattr(mva.llm, "research_viewpoints", lambda *a, **k: calls["sizes"].append(len(a[0])) or None)
+    with pytest.raises(RuntimeError):
+        mva.run_snapshot_batch(db3, day=day, snapshot_at="09:20", window=("09:15", "09:20"))
+    assert calls["sizes"] == [1]  # 只尝试一次
+
+
+def test_run_due_view_batch_skips_empty_window_without_batch_row(monkeypatch):
+    """B2: 静默期窗口内无新消息时不建批次行直接返回（不再每 tick 制造空批次行）。"""
+    from datetime import datetime as _real_datetime
+
+    class _FixedDatetime(_real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 4, 10, 5, tzinfo=tz)  # 周五 10:05
+
+    monkeypatch.setattr(mva, "datetime", _FixedDatetime)
+    db = make_db()
+    day = "2026-09-04"
+    db.set_setting(mva.MX_VIEW_ENABLED_KEY, "1")
+
+    assert mva.run_due_view_batch(db) is None  # 无新消息：无动作
+    assert db._rows("SELECT COUNT(*) AS n FROM mx_view_batches")[0]["n"] == 0
+    assert db.get_mx_view_snapshot(day, "10:05") is None
+
+    # 窗口内来了一条消息：正常建批次、落快照
+    kol = db.add_kol("mx", "王哥", "room1")
+    db.insert_post(platform="mx", kol_id=kol, external_id="m1", title="", url="",
+                   content="固态电池订单爆了", published_at=f"{day} 09:16:00")
+    pid = db._rows("SELECT id FROM posts")[0]["id"]
+
+    def fake_chat(llm_config, messages, max_tokens, **kw):
+        if "消息列表：" in messages[1]["content"]:
+            return _VIEW_JSON % pid
+        return _SUMMARY_JSON
+
+    monkeypatch.setattr(mva.llm, "_chat", fake_chat)
+    result = mva.run_due_view_batch(db)
+    assert result is not None and result["ran"] is True
+    assert db._rows("SELECT COUNT(*) AS n FROM mx_view_batches")[0]["n"] == 1
+    assert db.get_mx_view_snapshot(day, "10:05") is not None
+
+
 def test_run_due_view_batch_catchup_and_failure(monkeypatch):
     db = make_db()
     day = "2026-09-04"
@@ -612,6 +790,25 @@ def test_split_target_name_separators():
     assert split_target_name("久其软件,天娱数科") == ["久其软件", "天娱数科"]  # 个股合并名
     assert split_target_name("固态电池") == ["固态电池"]  # 无分隔符原样返回
     assert split_target_name("") == [] and split_target_name("、") == []
+    assert split_target_name("A·B") == ["A", "B"]  # B12: 间隔号拆
+    assert split_target_name("某某．某") == ["某某", "某"]  # B12: 全角句点拆
+    assert split_target_name("工业4.0") == ["工业4.0"]  # 回归不破：ASCII 点号版本号不拆
+
+
+def test_validate_opinions_drops_cross_author_evidence():
+    """B6: 证据帖跨作者（LLM 把两人消息并成一条）时归属不明——整条丢弃，
+    不把观点挂到证据第一条的作者头上。"""
+    raw = [
+        # 证据 [11,12] 分属王哥(1)/李姐(2)：不满足 kol_id 唯一，丢弃
+        {"author": "", "target_type": "topic", "target_name": "固态电池", "direction": "bull",
+         "action": "", "confidence": "high", "summary": "并错人", "evidence": [11, 12]},
+        # 同作者多证据仍正常聚合
+        {"author": "王哥", "target_type": "topic", "target_name": "固态电池", "direction": "bull",
+         "action": "", "confidence": "high", "summary": "s", "evidence": [11]},
+    ]
+    valid, _ = validate_opinions(raw, _posts(), [], "2026-09-04", "09:20")
+    assert len(valid) == 1
+    assert valid[0]["kol_id"] == 1 and valid[0]["kol_name"] == "王哥"
 
 
 def test_validate_opinions_splits_combined_topic_names():
@@ -619,7 +816,8 @@ def test_validate_opinions_splits_combined_topic_names():
     raw = [
         {"author": "王哥", "target_type": "topic", "target_name": "机器人、固态电池", "direction": "bull",
          "action": "", "confidence": "high", "summary": "都看好", "evidence": [11]},
-        # 拆出的「固态电池」与上一条撞名：同批同大V去重，保留首条
+        # 拆出的「固态电池」与上一条撞名：同批同大V去重，后写覆盖（更晚的表态胜，
+        # 与跨块 merged、迁移 dedup 口径一致）
         {"author": "王哥", "target_type": "topic", "target_name": "固态电池", "direction": "bear",
          "action": "", "confidence": "high", "summary": "late", "evidence": [11]},
         {"author": "李姐", "target_type": "topic", "target_name": "工业4.0", "direction": "bull",
@@ -627,7 +825,8 @@ def test_validate_opinions_splits_combined_topic_names():
     ]
     valid, new_topics = validate_opinions(raw, _posts(), [], "2026-09-04", "09:20")
     assert [(o["kol_name"], o["target_name"], o["direction"]) for o in valid] == [
-        ("王哥", "机器人", "bull"), ("王哥", "固态电池", "bull"), ("李姐", "工业4.0", "bull")]
+        ("王哥", "机器人", "bull"), ("王哥", "固态电池", "bear"), ("李姐", "工业4.0", "bull")]
+    assert valid[1]["summary"] == "late"  # 后写覆盖：保留更晚条目的全部字段
     assert all(o["evidence_post_ids"] == [11] for o in valid[:2])
     assert new_topics == ["固态电池", "工业4.0", "机器人"]  # 按码点排序
 
@@ -691,4 +890,53 @@ def test_migrate_split_combined_target_names_rebuilds_snapshots():
 
     # 幂等：标记落库后二次运行不动作；候选表增量语义不受影响
     assert db.get_setting(MX_TARGET_SPLIT_DONE_KEY) == "1"
+    assert migrate_split_combined_target_names(db) is False
+
+
+def test_migrate_resume_from_persisted_days_after_crash(monkeypatch):
+    """B1: 两阶段迁移——「replace 完成、快照重算未完」之间崩溃后，重跑凭持久化的
+    受影响日清单续跑（行名已拆开、检测不出 dirty 天也能重算），最后才写完成标记。"""
+    from app.mx_view_analysis import (
+        MX_TARGET_SPLIT_DAYS_KEY,
+        MX_TARGET_SPLIT_DONE_KEY,
+        migrate_split_combined_target_names,
+    )
+
+    db = make_db()
+    day = "2026-09-04"
+    kol = db.add_kol("mx", "王哥", "room1")
+    bid = db.upsert_mx_view_batch(day, "09:20", "live")
+    db.replace_mx_opinions(bid, [_op(kol_id=kol, name="机器人、固态电池")])
+    db.upsert_mx_view_snapshot(day, "09:20", 1, "live", {
+        "message_count": 3, "summary": {"text": "旧总结"},
+        "topics": [{"name": "机器人、固态电池", "bull": 1, "bear": 0, "neutral": 0, "net": 1,
+                    "strength": 95, "momentum": 0, "latest_at": ""}],
+        "stocks": [],
+    }, bid)
+    db.set_setting(MX_TARGET_SPLIT_DONE_KEY, "")  # make_db 建库时 _migrate 已置完成标记
+
+    real_upsert = db.upsert_mx_view_snapshot
+    state = {"crashed": True}
+
+    def flaky_upsert(*a, **k):
+        if state["crashed"]:
+            raise RuntimeError("模拟改写后、重算完成前崩溃")
+        return real_upsert(*a, **k)
+
+    monkeypatch.setattr(db, "upsert_mx_view_snapshot", flaky_upsert)
+    with pytest.raises(RuntimeError):
+        migrate_split_combined_target_names(db)
+    # 未落完成标记；受影响日清单已在改写前持久化
+    assert db.get_setting(MX_TARGET_SPLIT_DONE_KEY) != "1"
+    assert json.loads(db.get_setting(MX_TARGET_SPLIT_DAYS_KEY)) == [day]
+
+    state["crashed"] = False  # 重跑：行名已拆开、检测不出 dirty 天，必须从清单续跑
+    assert migrate_split_combined_target_names(db) is True
+    ops = db.list_mx_opinions(day)
+    assert sorted(o["target_name"] for o in ops) == ["固态电池", "机器人"]
+    snap = db.get_mx_view_snapshot(day, "09:20")["payload"]  # 快照重算补上
+    assert sorted(t["name"] for t in snap["topics"]) == ["固态电池", "机器人"]
+    assert snap["summary"] == {"text": "旧总结"} and snap["message_count"] == 3
+    assert db.get_setting(MX_TARGET_SPLIT_DONE_KEY) == "1"
+    assert db.get_setting(MX_TARGET_SPLIT_DAYS_KEY) == ""  # 全部完成才清清单
     assert migrate_split_combined_target_names(db) is False

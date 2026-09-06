@@ -23,6 +23,9 @@ public class MainActivity extends BridgeActivity {
     private int barInsetTop = 0;
     private int barInsetBottom = 0;
 
+    // 退出确认框常驻引用：探针裁决是异步的，弹出前判 isShowing 防止重复弹框
+    private AlertDialog exitDialog;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -83,28 +86,52 @@ public class MainActivity extends BridgeActivity {
                     finish();
                     return;
                 }
-                // 表达式返回 JS 布尔值，evaluateJavascript 回调收到 JSON 字面量 true/false（无引号）；
-                // 若返回字符串则带 JSON 引号，equals 会永远不成立
-                webView.evaluateJavascript(
-                        "(function(){try{return !!(window.__VPUSH_BACK__"
-                                + "&&window.__VPUSH_BACK__());}catch(e){return false;}})();",
-                        value -> webView.post(() -> {
-                            if ("true".equals(value)) {
-                                return; // 页面已消费（关了抽屉/弹窗或做了页内返回）
-                            }
-                            if (webView.canGoBack()) {
-                                webView.goBack();
-                                return;
-                            }
-                            new AlertDialog.Builder(MainActivity.this)
-                                    .setMessage(R.string.exit_confirm_message)
-                                    .setNegativeButton(R.string.exit_cancel, null)
-                                    .setPositiveButton(R.string.exit_ok,
-                                            (d, w) -> finish())
-                                    .show();
-                        }));
+                // 在飞抑制：探针是异步的，快速连按返回会在第一轮裁决完成前再叠一轮，
+                // 造成双份退出确认框，或「第一下页面已消费、第二下回调迟到 → 跨级回退」。
+                // 探针发出前先禁用本回调（禁用期间 OnBackPressedDispatcher 直接跳过，
+                // 连按被安全吞掉），裁决完成后在回调内层统一恢复。
+                setEnabled(false);
+                try {
+                    // 表达式返回 JS 布尔值，evaluateJavascript 回调收到 JSON 字面量 true/false（无引号）；
+                    // 若返回字符串则带 JSON 引号，equals 会永远不成立
+                    webView.evaluateJavascript(
+                            "(function(){try{return !!(window.__VPUSH_BACK__"
+                                    + "&&window.__VPUSH_BACK__());}catch(e){return false;}})();",
+                            value -> webView.post(() -> {
+                                try {
+                                    if ("true".equals(value)) {
+                                        return; // 页面已消费（关了抽屉/弹窗或做了页内返回）
+                                    }
+                                    if (webView.canGoBack()) {
+                                        webView.goBack();
+                                        return;
+                                    }
+                                    showExitConfirm();
+                                } finally {
+                                    setEnabled(true); // 所有裁决路径（消费/回退/弹框）都要恢复返回键
+                                }
+                            }));
+                } catch (RuntimeException e) {
+                    // 探针发不出去（WebView 已销毁等异常路径）不能把返回键永久禁用；
+                    // 恢复后原样抛出，不吞异常
+                    setEnabled(true);
+                    throw e;
+                }
             }
         });
+    }
+
+    /** 弹「退出」确认框；已在显示中（正常被在飞抑制挡住，这里双保险）不再重复弹。 */
+    private void showExitConfirm() {
+        if (exitDialog != null && exitDialog.isShowing()) {
+            return;
+        }
+        exitDialog = new AlertDialog.Builder(MainActivity.this)
+                .setMessage(R.string.exit_confirm_message)
+                .setNegativeButton(R.string.exit_cancel, null)
+                .setPositiveButton(R.string.exit_ok,
+                        (d, w) -> finish())
+                .show();
     }
 
     @Override

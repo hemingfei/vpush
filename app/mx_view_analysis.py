@@ -53,9 +53,9 @@ DEFAULT_TOPIC_HINTS = [
 # 强度分权重：方向定符号（bull +1 / bear -1，neutral 不参与），操作放大绝对值
 ACTION_BOOST = {"建仓": 1.5, "加仓": 1.5, "减仓": 1.5, "清仓": 1.5, "做T": 0.7, "观察": 0.7, "": 1.0}
 
-# 合并标的名分隔符：顿号/全半角逗号/分号/斜杠等；ASCII 点号仅当「字母数字.汉字」时
-# 视为连接符（PCB.存储芯片 拆开），版本号 工业4.0 / web3.0 不拆
-TARGET_NAME_SPLIT_RE = re.compile(r"[、，,;；/｜|]+|(?<=[0-9A-Za-z])\.(?=[\u4e00-\u9fff])")
+# 合并标的名分隔符：顿号/全半角逗号/分号/斜杠/全角句点/间隔号等；ASCII 点号仅当
+# 「字母数字.汉字」时视为连接符（PCB.存储芯片 拆开），版本号 工业4.0 / web3.0 不拆
+TARGET_NAME_SPLIT_RE = re.compile(r"[、，,;；/｜|．·]+|(?<=[0-9A-Za-z])\.(?=[\u4e00-\u9fff])")
 
 
 def split_target_name(name) -> list[str]:
@@ -259,7 +259,7 @@ def validate_opinions(raw, posts, aliases, day, snapshot_at):
     alias_map = {str(a.get("alias") or ""): str(a.get("stock") or "") for a in aliases or []}
     valid: list[dict] = []
     new_topics: list[str] = []
-    seen: set[tuple] = set()
+    by_key: dict[tuple, dict] = {}  # (kol_id, ttype, name) -> opinion，后写覆盖（更晚胜）
     for item in raw or []:
         if not isinstance(item, dict):
             continue
@@ -274,6 +274,10 @@ def validate_opinions(raw, posts, aliases, day, snapshot_at):
         if not evidence:
             continue
         ev_posts = [posts_by_id[i] for i in evidence]
+        # 证据帖必须同属一位大V：LLM 把两人消息并成一条时归属不明（固定取第一条
+        # 会把观点记错人），保守整条丢弃，与作者不符等校验失败同路径
+        if len({int(p["kol_id"]) for p in ev_posts}) != 1:
+            continue
         authors = {str(p.get("kol_name") or "") for p in ev_posts}
         author = str(item.get("author") or "")
         if author and author not in authors:
@@ -300,28 +304,25 @@ def validate_opinions(raw, posts, aliases, day, snapshot_at):
         occurred = max(str(p.get("published_at") or "") for p in ev_posts)
         for name in names:
             key = (kol_id, ttype, name)
-            if key in seen:
-                continue
-            seen.add(key)
-            valid.append(
-                {
-                    "trading_day": day,
-                    "snapshot_at": snapshot_at,
-                    "kol_id": kol_id,
-                    "kol_name": kol_name,
-                    "target_type": ttype,
-                    "target_name": name,
-                    "direction": direction,
-                    "action": action,
-                    "confidence": str(item.get("confidence") or "high"),
-                    "summary": str(item.get("summary") or "").strip()[:200],
-                    "evidence_post_ids": evidence,
-                    "occurred_at": occurred,
-                }
-            )
+            # 同 key 后写覆盖：响应里后出现的条目（LLM 表述更靠后）视为更新立场，
+            # 与跨块 merged、迁移 dedup 的「更晚胜」口径一致
+            by_key[key] = {
+                "trading_day": day,
+                "snapshot_at": snapshot_at,
+                "kol_id": kol_id,
+                "kol_name": kol_name,
+                "target_type": ttype,
+                "target_name": name,
+                "direction": direction,
+                "action": action,
+                "confidence": str(item.get("confidence") or "high"),
+                "summary": str(item.get("summary") or "").strip()[:200],
+                "evidence_post_ids": evidence,
+                "occurred_at": occurred,
+            }
             if ttype == "topic":
                 new_topics.append(name)
-    return valid, sorted(set(new_topics))
+    return list(by_key.values()), sorted(set(new_topics))
 
 
 def _opinion_weight(op: dict) -> float:
@@ -491,9 +492,14 @@ def build_target_trajectories(opinions, times, topic_names, stock_names) -> list
 
 # ---- 批次全流程（研判 → 校验落库 → 聚合 → 总结 → 版本推进） ----
 
-_batch_lock = threading.Lock()
+# RLock：管理端手动跑批的 job 线程先 acquire(timeout) 占位、再进 run_snapshot_batch
+# 重入同一把锁；跨线程互斥语义与 Lock 一致
+_batch_lock = threading.RLock()
 _fail_lock = threading.Lock()
 _fail_count = 0
+
+# 研判区块半减下限：LLM 输出截断/解析失败时 600→300→…重试一次的最低每块条数
+MIN_RESEARCH_CHUNK = 50
 
 
 def get_fail_count(db) -> int:
@@ -651,18 +657,22 @@ def run_snapshot_batch(db, day, snapshot_at, window, kind="live", llm_config=Non
         batch_id = db.upsert_mx_view_batch(day, snapshot_at, kind)
         kol_ids = get_kol_ids(db)
         limit = get_batch_size(db)
-        after_id = 0 if kind == "backfill" else db.get_mx_view_cursor()
-        posts: list[dict] = []
-        try:
-            hints = get_topic_hints(db)
-            vocab = db.get_action_tag_vocabulary()
-            aliases = db.get_stock_aliases()
+        base_after_id = 0 if kind == "backfill" else db.get_mx_view_cursor()
+
+        def _research_chunked(chunk_limit: int):
+            """按 chunk_limit 分块研判整个窗口，返回 (posts, merged, new_topics)。
+
+            失败（LLM 无有效响应/输出截断/解析失败）抛 RuntimeError，由调用方
+            决定半减区块重试还是走失败路径；游标从批次起点重放，不串块。
+            """
+            posts: list[dict] = []
             merged: dict[tuple, dict] = {}  # (kol_id, target_type, target_name) 跨块去重
-            new_topic_names: set[str] = set()
+            topics: set[str] = set()
+            after_id = base_after_id
             while True:
                 chunk = db.list_mx_posts_in_window(
                     day, window[0], window[1], after_id=after_id,
-                    kol_ids=kol_ids or None, limit=limit,
+                    kol_ids=kol_ids or None, limit=chunk_limit,
                 )
                 if not chunk:
                     break
@@ -675,14 +685,32 @@ def run_snapshot_batch(db, day, snapshot_at, window, kind="live", llm_config=Non
                     # 后写覆盖：同 (kol,target) 跨块保留更晚（消息 id 更大）的表态，
                     # 首块旧观点不再压住块后段的最新立场
                     merged[(op["kol_id"], op["target_type"], op["target_name"])] = op
-                new_topic_names.update(chunk_topics)
-                if len(chunk) < limit:
+                topics.update(chunk_topics)
+                if len(chunk) < chunk_limit:
                     break
                 after_id = max(int(p["id"]) for p in chunk)
+            return posts, merged, topics
+
+        posts: list[dict] = []
+        try:
+            hints = get_topic_hints(db)
+            vocab = db.get_action_tag_vocabulary()
+            aliases = db.get_stock_aliases()
+            try:
+                posts, merged, new_topic_names = _research_chunked(limit)
+            except RuntimeError:
+                # 截断/解析失败：输入体量问题的概率最大，半减区块重试一次
+                # （600→300→…→50）；仍失败才走原有整批失败路径（游标不动）
+                if limit <= MIN_RESEARCH_CHUNK:
+                    raise
+                half = max(MIN_RESEARCH_CHUNK, limit // 2)
+                logger.warning("MX 观点研判失败，区块 %d→%d 半减重试 %s %s",
+                               limit, half, day, snapshot_at)
+                posts, merged, new_topic_names = _research_chunked(half)
+            valid = list(merged.values())
             if not posts:
                 db.finish_mx_view_batch(batch_id, "done", 0)
                 return {"ran": False, "opinions": 0, "message_count": 0}
-            valid = list(merged.values())
             db.replace_mx_opinions(batch_id, valid)
             if advance_cursor:
                 db.set_mx_view_cursor(max(int(p["id"]) for p in posts))
@@ -723,39 +751,92 @@ def run_snapshot_batch(db, day, snapshot_at, window, kind="live", llm_config=Non
             raise
 
 
-def run_due_view_batch(db, llm_config=None):
-    """调度器入口：启用且工作日且无回填时，跑最近一个到期的计划快照。
+def _due_live_snapshot(db, now: datetime):
+    """计算当前应补跑的 live 快照，无则 None。
 
-    错过多个快照（停机）时只跑一批、以实际时刻命名（时间轴不补空档）。
-    返回 {"ran":..., "failed":..., "consecutive":...} 或 None（无动作）。
+    返回 (day, snapshot_at, win_start)：pending 只看快照元数据（最近一个已计划
+    但未落快照的时刻），错过多个时快照名与窗口终点用当前时刻（时间轴不补空档）。
+    调度 tick 与回填 worker 让路共用，保证「到期未落」的判断只有一份。
     """
-    if not get_enabled(db) or backfill_running():
-        return None
-    now = datetime.now(CN_TZ)
     if now.weekday() >= 5:
         return None
     day = now.strftime("%Y-%m-%d")
     now_hhmm = now.strftime("%H:%M")
     times = resolve_schedule(load_schedule_config_raw(db))
-    # 每 20s tick 一次：只取时刻集合，不全量解析快照 payload
+    # 只取时刻集合，不全量解析快照 payload
     done = {r["snapshot_at"] for r in db.list_mx_view_snapshot_meta(day)}
     last_done = max(done, default="")
     pending = [t for t in times if t > last_done and t <= now_hhmm]
     if not pending:
         return None
-    if _batch_lock.locked():
-        return None
     idx = times.index(pending[0])
     win_start = MX_VIEW_FIRST_WINDOW_START if idx == 0 else times[idx - 1]
     # 错过多个快照：快照名与窗口终点都用当前时刻，覆盖到最后一条消息
     snapshot_at = pending[0] if len(pending) == 1 else now_hhmm
-    win_end = snapshot_at
+    return day, snapshot_at, win_start
+
+
+def _run_pending_live_batch(db, llm_config=None):
+    """有到期未落的 live 快照且窗口内有新消息时跑一批，否则返回 None。
+
+    功能未启用时直接返回（回填 worker 让路调用依赖此自检）。无新消息
+    （窗口内游标之后无可研判消息）不建批次行直接返回：静默期 snapshot_at
+    每分钟都变，不设此守卫会每 tick 制造一条空批次行，mx_view_batches
+    无限增长、管理页 batches_today 虚高。
+    """
+    if not get_enabled(db):
+        return None
+    due = _due_live_snapshot(db, datetime.now(CN_TZ))
+    if due is None:
+        return None
+    day, snapshot_at, win_start = due
+    if not db.has_mx_posts_in_window(
+        day, win_start, snapshot_at,
+        after_id=db.get_mx_view_cursor(), kol_ids=get_kol_ids(db) or None,
+    ):
+        return None
+    result = run_snapshot_batch(
+        db, day=day, snapshot_at=snapshot_at, window=(win_start, snapshot_at),
+        kind="live", llm_config=llm_config,
+    )
+    return {"ran": bool(result.get("ran")), "failed": False,
+            "consecutive": get_fail_count(db),
+            "snapshot_at": snapshot_at, "message_count": result.get("message_count", 0)}
+
+
+# 批次表保留期（天）：对齐回填窗口上限，更早的批次行滚动清理
+MX_VIEW_BATCH_RETENTION_DAYS = 30
+_last_purge_date = {"value": ""}
+
+
+def _purge_old_batches_daily(db) -> None:
+    """调度 tick 顺带清理过期批次行，每天至多执行一次（幂等，竞态最坏重复删 0 行）。"""
+    today = datetime.now(CN_TZ).strftime("%Y-%m-%d")
+    if _last_purge_date["value"] == today:
+        return
+    _last_purge_date["value"] = today
     try:
-        result = run_snapshot_batch(
-            db, day=day, snapshot_at=snapshot_at, window=(win_start, win_end),
-            kind="live", llm_config=llm_config,
-        )
-        return {"ran": result["ran"], "failed": False, "consecutive": get_fail_count(db)}
+        removed = db.purge_old_mx_view_batches(MX_VIEW_BATCH_RETENTION_DAYS)
+        if removed:
+            logger.info("mx_view_batches 清理 %d 条 %d 天前批次行", removed,
+                        MX_VIEW_BATCH_RETENTION_DAYS)
+    except Exception:  # noqa: BLE001 - 清理失败不影响主流程
+        logger.exception("mx_view_batches 保留期清理失败")
+
+
+def run_due_view_batch(db, llm_config=None):
+    """调度器入口：启用且工作日且无回填时，跑最近一个到期的计划快照。
+
+    错过多个快照（停机）时只跑一批、以实际时刻命名（时间轴不补空档）。
+    返回 {"ran":..., "failed":..., "consecutive":...} 或 None（无动作/无新消息）。
+    """
+    _purge_old_batches_daily(db)
+    if not get_enabled(db) or backfill_running():
+        return None
+    if _batch_lock.locked():
+        return None
+    try:
+        return _run_pending_live_batch(db, llm_config=llm_config)
     except Exception as e:  # noqa: BLE001
         return {"ran": False, "failed": True, "error": str(e), "consecutive": get_fail_count(db)}
 
@@ -830,6 +911,15 @@ def start_backfill_job(db, day_from, day_to, llm_config=None) -> bool:
                         logger.error("回填单窗失败 %s %s: %s", day, end, e)
                     with _backfill_state_lock:
                         _backfill_state["done_windows"] += 1
+                    # 让路 live：回填逐历史窗串行调 LLM 可达数小时，期间
+                    # run_due_view_batch 见 backfill_running 直接退避，当日 live
+                    # 快照会停更。每窗之后检查有无「到期未落」的 live 快照，
+                    # 有则先补跑一批再继续回填（失败不中断回填）。
+                    if not _batch_lock.locked():
+                        try:
+                            _run_pending_live_batch(db, llm_config=llm_config)
+                        except Exception:  # noqa: BLE001
+                            logger.exception("回填间隙补跑 live 快照失败")
         except Exception as e:  # noqa: BLE001
             logger.exception("MX 观点回填任务异常")
             with _backfill_state_lock:
@@ -846,6 +936,39 @@ def start_backfill_job(db, day_from, day_to, llm_config=None) -> bool:
 # ---- 一次性迁移：拆分历史合并标的名并重算受影响日快照 ----
 
 MX_TARGET_SPLIT_DONE_KEY = "mx_target_split_v2"
+# 两阶段迁移的受影响日清单（JSON 数组）：改写前持久化，中断后续跑依据
+MX_TARGET_SPLIT_DAYS_KEY = "mx_target_split_v2_days"
+
+
+def _rebuild_split_day_rows(db, day: str):
+    """把某日观点行按拆分规则重建成逐批行组，返回 (是否含合并名, {batch_id: [op]})。
+
+    拆分幂等：已拆过的行 parts == [name] 原样重建；阶段 2 续跑时对清单内的天
+    重复调用安全（覆盖「清单已落、replace 未完」的中断点）。
+    """
+    rebuilt: dict[int, list[dict]] = {}
+    dirty = False
+    for row in db.list_mx_opinions(day):
+        name = str(row["target_name"])
+        parts = split_target_name(name)
+        if parts != [name]:
+            dirty = True
+        batch_rows = rebuilt.setdefault(int(row["batch_id"]), [])
+        for part in parts:
+            batch_rows.append({
+                "trading_day": str(row["trading_day"]),
+                "snapshot_at": str(row["snapshot_at"]),
+                "kol_id": int(row["kol_id"]),
+                "target_type": str(row["target_type"]),
+                "target_name": part,
+                "direction": str(row["direction"]),
+                "action": str(row["action"] or ""),
+                "confidence": str(row["confidence"] or "high"),
+                "summary": str(row["summary"] or ""),
+                "evidence_post_ids": json.loads(row["evidence_post_ids"] or "[]"),
+                "occurred_at": str(row["occurred_at"] or ""),
+            })
+    return dirty, rebuilt
 
 
 def migrate_split_combined_target_names(db) -> bool:
@@ -856,37 +979,42 @@ def migrate_split_combined_target_names(db) -> bool:
     重写，同批同大V撞名保留更晚一条）、清理候选表里的合并名，再按当前立场口径
     逐快照重算受影响日（summary/message_count 原样保留）。幂等：完成标记落
     settings；有实际改动返回 True。
+
+    两阶段抗崩溃：受影响日清单在改写前先持久化（settings 存 JSON）。受影响日是
+    从「拆分后」的行名检测的，若进程在「replace 完成、快照重算未完」之间中断，
+    重跑时行名已拆开、检测不到 dirty 天——清单存在则跳过检测直接从清单续跑
+    （拆分与快照重算均幂等，重复执行安全），全部完成才清清单并写完成标记，
+    受影响日快照不会因中断而永久错。
     """
     if str(db.get_setting(MX_TARGET_SPLIT_DONE_KEY) or "") == "1":
         return False
     days: set[str] = set()
-    for meta in db.mx_view_days():
-        day = str(meta["trading_day"])
-        rebuilt: dict[int, list[dict]] = {}
-        day_dirty = False
-        for row in db.list_mx_opinions(day):
-            name = str(row["target_name"])
-            parts = split_target_name(name)
-            if parts != [name]:
-                day_dirty = True
+    rebuilt_by_day: dict[str, dict[int, list[dict]]] = {}
+    resume = False
+    pending_raw = str(db.get_setting(MX_TARGET_SPLIT_DAYS_KEY) or "")
+    if pending_raw:
+        try:
+            parsed = json.loads(pending_raw)
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, list):
+            # 第二阶段续跑：跳过全量检测，从清单继续（清单覆盖中断点的任意位置）
+            days = {str(d) for d in parsed}
+            resume = True
+    if resume:
+        for day in sorted(days):
+            rebuilt_by_day[day] = _rebuild_split_day_rows(db, day)[1]
+    else:
+        # 第一阶段：全量扫描检测（必须在改写前完成），先落清单再改写
+        for meta in db.mx_view_days():
+            day = str(meta["trading_day"])
+            dirty, rebuilt = _rebuild_split_day_rows(db, day)
+            if dirty:
                 days.add(day)
-            batch_rows = rebuilt.setdefault(int(row["batch_id"]), [])
-            for part in parts:
-                batch_rows.append({
-                    "trading_day": str(row["trading_day"]),
-                    "snapshot_at": str(row["snapshot_at"]),
-                    "kol_id": int(row["kol_id"]),
-                    "target_type": str(row["target_type"]),
-                    "target_name": part,
-                    "direction": str(row["direction"]),
-                    "action": str(row["action"] or ""),
-                    "confidence": str(row["confidence"] or "high"),
-                    "summary": str(row["summary"] or ""),
-                    "evidence_post_ids": json.loads(row["evidence_post_ids"] or "[]"),
-                    "occurred_at": str(row["occurred_at"] or ""),
-                })
-        if not day_dirty:
-            continue
+                rebuilt_by_day[day] = rebuilt
+        # 清单先于改写持久化：改写中途崩溃也能凭清单续跑
+        db.set_setting(MX_TARGET_SPLIT_DAYS_KEY, json.dumps(sorted(days), ensure_ascii=False))
+    for day, rebuilt in rebuilt_by_day.items():
         for batch_id, ops in rebuilt.items():
             dedup: dict[tuple, dict] = {}
             for op in ops:  # 行序即 (snapshot_at, occurred_at, id) 升序，撞名留更晚
@@ -913,5 +1041,6 @@ def migrate_split_combined_target_names(db) -> bool:
                 remove_topic_candidate(db, cand)
                 add_topic_candidates(db, parts)
         bump_view_version(db)
+    db.set_setting(MX_TARGET_SPLIT_DAYS_KEY, "")  # 全部完成才清清单
     db.set_setting(MX_TARGET_SPLIT_DONE_KEY, "1")
     return bool(days)

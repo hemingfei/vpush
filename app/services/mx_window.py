@@ -54,13 +54,23 @@ def arm_windows(
 
 def pick_daily_fallback_slot(
     windows: list[tuple[datetime, datetime]],
+    armed: list[bool] | None = None,
 ) -> datetime | None:
     """在窗口内随机挑一个时刻，作为当日唯一一次兜底拉取的预约时刻。
+
+    armed 提供时只从当天仍武装的窗口里挑：已错过开窗点的窗口不会自动拉起
+    会话，选中它们只会得到「时刻一到就放弃」的迟到执行；全部未武装返回
+    None（当天放弃兜底拉取）。不传 armed 保持旧行为（全窗口随机，向后兼容）。
 
     离关窗至少留 1 分钟，避免时刻落在关窗边缘导致必然放弃。
     """
     if not windows:
         return None
-    start, stop = random.choice(windows)
+    candidates = windows
+    if armed is not None:
+        candidates = [w for w, ok in zip(windows, armed) if ok]
+        if not candidates:
+            return None
+    start, stop = random.choice(candidates)
     span = max(0.0, (stop - start).total_seconds() - 60)
     return start + timedelta(seconds=random.uniform(0, span))

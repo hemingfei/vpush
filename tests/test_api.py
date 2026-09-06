@@ -6043,3 +6043,99 @@ def test_admin_news_refresh_reports_busy_feed_ids(monkeypatch):
     assert response.json()["accepted_feed_ids"] == []
     assert len(response.json()["busy_feed_ids"]) == 5
     assert len(calls) == 5
+
+
+def _ai_task_payload(kol_id: int, **over):
+    base = {
+        "name": "n", "description": "", "target_kol_id": kol_id,
+        "time_range_start_days_offset": -1, "time_range_start_time": "08:00",
+        "time_range_end_days_offset": 0, "time_range_end_time": "22:00",
+        "selected_kol_ids": [kol_id], "prompt_template": "p",
+        "schedule_day_of_week": "1,2,3", "schedule_time": "09:00",
+    }
+    base.update(over)
+    return base
+
+
+def test_admin_ai_tasks_time_and_window_validation():
+    """B13/B14: /admin/ai-tasks 与 /admin/ai-analysis 共用同一份校验——
+    HH:MM 格式 + hour≤23/minute≤59 范围；窗口 start 偏移/时刻必须早于 end。"""
+    client = make_client("ai-tasks-validation.db")
+    admin = auth_headers(client)
+    db = client.app.state.db
+    kol_id = db.add_kol("xueqiu", "测试大V", "ai-time-v")
+
+    # 范围/格式校验（create）：24:00 / 09:60 / 坏格式一律 400
+    for bad in ("24:00", "09:60", "9点", "0900", ""):
+        r = client.post("/api/admin/ai-tasks", headers=admin,
+                        json=_ai_task_payload(kol_id, schedule_time=bad))
+        assert r.status_code == 400, bad
+        assert "HH:MM" in r.json()["detail"] or "范围" in r.json()["detail"]
+    # 合法边界 23:59 通过
+    r = client.post("/api/admin/ai-tasks", headers=admin,
+                    json=_ai_task_payload(kol_id, time_range_start_time="23:59"))
+    assert r.status_code == 200, r.text
+    task_id = r.json()["task"]["id"]
+
+    # 窗口校验（update 路径）：start 偏移晚于 end → 400；修回合法 → 200
+    r = client.put(f"/api/admin/ai-tasks/{task_id}", headers=admin,
+                   json={"time_range_start_days_offset": 1})
+    assert r.status_code == 400 and "窗口" in r.json()["detail"]
+    r = client.put(f"/api/admin/ai-tasks/{task_id}", headers=admin,
+                   json={"time_range_start_days_offset": -1, "time_range_start_time": "07:00"})
+    assert r.status_code == 200
+    # 同日时刻 start >= end 也无效
+    r = client.put(f"/api/admin/ai-tasks/{task_id}", headers=admin,
+                   json={"time_range_start_days_offset": 0, "time_range_start_time": "22:00"})
+    assert r.status_code == 400
+    # PUT 只改显式传入字段（model_fields_set 口径）：enabled 不动时间字段
+    r = client.put(f"/api/admin/ai-tasks/{task_id}", headers=admin, json={"enabled": False})
+    assert r.status_code == 200
+    task = r.json()["task"]
+    assert not task["enabled"] and task["time_range_start_time"] == "07:00"
+
+    # 同一份校验在 /admin/ai-analysis 创建端点同样生效
+    r = client.post("/api/admin/ai-analysis/tasks", headers=admin,
+                    json=_ai_task_payload(kol_id, time_range_end_time="25:00"))
+    assert r.status_code == 400
+    r = client.post("/api/admin/ai-analysis/tasks", headers=admin,
+                    json=_ai_task_payload(kol_id, schedule_time="24:00"))
+    assert r.status_code == 400
+    r = client.post("/api/admin/ai-analysis/tasks", headers=admin,
+                    json=_ai_task_payload(kol_id, schedule_time="23:59"))
+    assert r.status_code == 200 and r.json()["id"] > 0
+
+
+def test_admin_ai_task_run_mutex_rejects_double_run(monkeypatch):
+    """D1 接线：手动「立即运行」与调度器共用 try_begin_ai_task_run 互斥——
+    任务在跑（调度中或上次手动未结束）时再触发返回 ok=False 不起线程；释放后恢复可跑。"""
+    monkeypatch.setattr("app.ai_analysis.run_analysis_task", lambda task_id, db: {"ok": True})
+    client = make_client("ai-tasks-run-mutex.db")
+    admin = auth_headers(client)
+    db = client.app.state.db
+    kol_id = db.add_kol("xueqiu", "测试大V", "ai-run-mutex")
+    r = client.post("/api/admin/ai-tasks", headers=admin, json=_ai_task_payload(kol_id))
+    assert r.status_code == 200, r.text
+    task_id = int(r.json()["task"]["id"])
+
+    from app.scheduler import _ai_task_running
+    _ai_task_running.add(task_id)  # 模拟调度器/上次手动触发仍占用
+    try:
+        for url in (f"/api/admin/ai-tasks/{task_id}/run",
+                    f"/api/admin/ai-analysis/tasks/{task_id}/run"):
+            r = client.post(url, headers=admin)
+            assert r.status_code == 200, url
+            body = r.json()
+            assert body["ok"] is False and "正在运行" in body["message"], url
+    finally:
+        _ai_task_running.discard(task_id)
+
+    # 释放后可再次触发（线程内 run_analysis_task 已被替换为 no-op）
+    r = client.post(f"/api/admin/ai-tasks/{task_id}/run", headers=admin)
+    assert r.status_code == 200 and r.json()["ok"] is True
+    # 等后台线程跑完释放互斥，不把占用泄漏给同进程其他用例
+    import time
+    deadline = time.time() + 5
+    while time.time() < deadline and task_id in _ai_task_running:
+        time.sleep(0.05)
+    assert task_id not in _ai_task_running

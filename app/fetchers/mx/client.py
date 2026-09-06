@@ -26,6 +26,19 @@ XHR_ACCEPT = "*/*"
 _NAV_ONLY_HEADERS = ("upgrade-insecure-requests", "sec-fetch-user")
 
 
+# 业务 msg 中「确定是 TOKEN 失效/未登录」的强特征短语（匹配前转小写、去空格）。
+# 只认强特征：WAF 拦截页、代理错误等文本可能碰巧含「认证」「过期」「token」这类
+# 弱词，而误熔断会停掉全部拉取与 WS，解锁代价高（需换 token 或手动登录半开重探）
+_TOKEN_EXPIRED_MSG_MARKERS = (
+    "token失效", "token已失效", "token过期", "token已过期",
+    "token无效", "token错误", "token不存在",
+    "invalidtoken", "tokenexpired", "expiredtoken", "tokenunauthorized",
+    "令牌失效", "令牌过期", "令牌无效",
+    "未登录", "请重新登录", "请先登录", "重新登录",
+    "登录失效", "登录过期", "登录已过期", "登录已失效",
+)
+
+
 class MXTokenExpiredError(RuntimeError):
     """TOKEN 过期/无效：调用方据此停止重试并通过系统 KOL 告警，绝不能继续打。"""
 
@@ -82,14 +95,19 @@ class MXClient:
         return headers
 
     def _check_token_expired(self, data: Any) -> bool:
-        if isinstance(data, dict):
-            code = data.get("code")
-            if code == 502 or code == 401:
-                return True
-            msg = str(data.get("msg") or "")
-            if any(keyword in msg for keyword in ("token", "登录", "认证", "过期", "无效")):
-                return True
-        return False
+        """业务响应是否「确定」指向 TOKEN 失效/未登录（弱关键词不熔断）。
+
+        精确信号只有两类：平台业务码 401/502（实测即 TOKEN 失效），以及
+        msg 中的强特征短语（见 _TOKEN_EXPIRED_MSG_MARKERS）。弱词（如仅出现
+        「认证」）不再单独触发，避免 WAF/代理错误文本误熔断停掉全部拉取。
+        """
+        if not isinstance(data, dict):
+            return False
+        code = data.get("code")
+        if code == 502 or code == 401:
+            return True
+        msg = str(data.get("msg") or "").lower().replace(" ", "").replace("\u3000", "")
+        return any(marker in msg for marker in _TOKEN_EXPIRED_MSG_MARKERS)
 
     def _request(self, method: str, path: str, json_data: dict = None, base_url: str = None) -> Any:
         url = f"{base_url or self.base_url}{path}"

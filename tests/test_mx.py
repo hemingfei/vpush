@@ -408,7 +408,7 @@ def test_ws_short_plain_content_keeps_fields(monkeypatch):
     assert parsed["rid"] == "7" and parsed["id"] == 4
 
 
-# ---- WS 重连策略：12 秒后仅重连一次，失败永久放弃 ----
+# ---- WS 重连策略：断线后仅随机重连一次，失败永久放弃 ----
 
 def test_ws_gives_up_after_one_failed_reconnect(monkeypatch):
     """断线后只重连一次：重连再失败即置 gave_up 并触发回调，不再无限重试。"""
@@ -1137,7 +1137,7 @@ def test_ws_token_expired_gives_up_immediately_without_retry(monkeypatch):
 
 
 def test_ws_non_auth_connect_error_still_retries_once(monkeypatch):
-    """非鉴权类连接错误（如网络不可达）保持「12 秒后重连一次」策略。"""
+    """非鉴权类连接错误（如网络不可达）保持「16-36 秒后重连一次」策略。"""
     import app.fetchers.mx.ws as mx_ws
 
     monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
@@ -2062,3 +2062,450 @@ def test_update_mx_config_log_does_not_leak_token(monkeypatch, caplog):
     assert resp.status_code == 200, resp.text
     assert secret not in caplog.text
     assert "page_size" in caplog.text  # 非敏感键照常记录
+
+
+# ---- 评审批次回归：强关 disarm / 熔断收窄与半开 / 窗口时序 / 兜底键 / 头像原子写 ----
+
+def _arm_manual_window(scheduler, ahead_minutes=5, span_minutes=60):
+    """把调度器手工置于一个「现在仍在窗口内」的单窗口状态（绕过当日随机生成）。"""
+    from datetime import datetime, timedelta
+
+    from app.services.mx_window import CN_TZ
+
+    now = datetime.now(CN_TZ)
+    scheduler._mx_window_date = now.date()
+    scheduler._mx_windows = [
+        (now - timedelta(minutes=ahead_minutes), now + timedelta(minutes=span_minutes))
+    ]
+    scheduler._mx_armed = [True]
+    scheduler._mx_fallback_at = None
+    scheduler._mx_fallback_done = False
+    scheduler._mx_manual_attempted_idx = None
+
+
+def _fake_disconnect(scheduler, actions):
+    """与真实 mx_ws_control("disconnect") 口径一致的桩：取消任务并置空。"""
+
+    async def fake_ws_control(action, source="manual"):
+        actions.append((action, source))
+        if scheduler._mx_ws_task and not scheduler._mx_ws_task.done():
+            scheduler._mx_ws_task.cancel()
+        scheduler._mx_ws_task = None
+        return "已断开"
+
+    scheduler.mx_ws_control = fake_ws_control
+
+
+def test_nightly_force_close_disarms_window_no_relaunch():
+    """强关先于关窗触发：会话关闭并 disarm 当前窗口，下个窗口 tick 不得重拉。"""
+    from datetime import datetime, timedelta
+
+    from app.services.mx_window import CN_TZ
+
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+    _arm_manual_window(scheduler, ahead_minutes=4 * 60, span_minutes=10)
+    scheduler._mx_force_close_at = datetime.now(CN_TZ) - timedelta(seconds=1)
+    scheduler._mx_force_close_done = False
+    scheduler._mx_window_open = True  # 会话在窗口内在线（自动或手动来源）
+
+    actions = []
+    _fake_disconnect(scheduler, actions)
+    starts = {"n": 0}
+
+    async def fake_session_start():
+        starts["n"] += 1
+        scheduler._mx_window_open = True
+
+    scheduler._mx_session_start = fake_session_start
+
+    async def scenario():
+        scheduler._mx_ws_task = asyncio.create_task(asyncio.sleep(3600))  # 模拟会话在线
+        await scheduler._mx_window_tick()  # 本次 tick 触发晚间强关
+        await scheduler._mx_window_tick()  # 下个 tick：窗口内 + 未开窗 + 曾武装
+
+    asyncio.run(scenario())
+
+    assert actions == [("disconnect", "auto")]
+    assert scheduler._mx_force_close_done is True
+    assert scheduler._mx_armed[0] is False  # 当前窗口已被 disarm
+    assert starts["n"] == 0  # 窗口循环没有重新拉起会话
+    scheduler.stop()
+
+
+def test_session_timeout_force_disconnects_and_disarms():
+    """会话在线超过上限（4 小时）：滚动兜底强断、disarm 当前窗口并记超时日志。"""
+    from datetime import datetime, timedelta
+
+    from app.services.mx_window import CN_TZ
+
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+    _arm_manual_window(scheduler)
+    scheduler._mx_force_close_at = None
+    scheduler._mx_window_open = True
+    scheduler._mx_session_started_at = datetime.now(CN_TZ) - timedelta(
+        hours=scheduler._MX_MAX_SESSION_HOURS + 1
+    )
+
+    actions = []
+    _fake_disconnect(scheduler, actions)
+
+    async def scenario():
+        scheduler._mx_ws_task = asyncio.create_task(asyncio.sleep(3600))  # 模拟会话在线
+        await scheduler._mx_maybe_session_timeout()
+
+    asyncio.run(scenario())
+
+    assert actions == [("disconnect", "auto")]
+    assert scheduler._mx_window_open is False
+    assert scheduler._mx_armed[0] is False  # 同样 disarm，防窗口循环立刻重拉
+    assert scheduler._mx_session_started_at is None
+    entry = next(
+        r for r in db.list_admin_logs(limit=10) if r["action"] == "mx_auto_disconnect"
+    )
+    assert "超时" in entry["detail"]
+    scheduler.stop()
+
+
+def test_session_timeout_keeps_fresh_session():
+    """会话在线未超过上限：不强断、不 disarm、不记日志。"""
+    from datetime import datetime, timedelta
+
+    from app.services.mx_window import CN_TZ
+
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    _arm_manual_window(scheduler)
+    scheduler._mx_window_open = True
+    scheduler._mx_session_started_at = datetime.now(CN_TZ) - timedelta(minutes=30)
+
+    actions = []
+    _fake_disconnect(scheduler, actions)
+
+    async def scenario():
+        scheduler._mx_ws_task = asyncio.create_task(asyncio.sleep(3600))
+        await scheduler._mx_maybe_session_timeout()
+
+    asyncio.run(scenario())
+
+    assert actions == []
+    assert scheduler._mx_armed[0] is True
+    assert scheduler._mx_window_open is True
+    scheduler._mx_ws_task.cancel()
+    scheduler.stop()
+
+
+def test_abort_ws_keeps_new_task_reference():
+    """掐断完成回调只清自己的旧引用：期间已 connect 出的新任务不得被置空。"""
+    db = make_db()
+    scheduler = _make_scheduler(db)
+
+    async def scenario():
+        old = asyncio.create_task(asyncio.sleep(3600))
+        scheduler._mx_ws_task = old
+        new = asyncio.create_task(asyncio.sleep(3600))  # 模拟回调执行前已 connect 出新会话
+        scheduler._mx_ws_task = new
+        await scheduler._mx_abort_ws(old, None)
+        assert scheduler._mx_ws_task is new
+        new.cancel()
+        old.cancel()
+
+    asyncio.run(scenario())
+    scheduler.stop()
+
+
+def test_pick_daily_fallback_slot_only_from_armed_windows():
+    """兜底预约槽只从当天仍武装的窗口里挑；全部未武装返回 None；不传 armed 兼容旧行为。"""
+    from datetime import date, timedelta
+
+    from app.services.mx_window import generate_mx_daily_windows, pick_daily_fallback_slot
+
+    windows = generate_mx_daily_windows(date(2026, 9, 1))
+    for _ in range(50):
+        slot = pick_daily_fallback_slot(windows, [False, True, False])
+        w2 = windows[1]
+        assert w2[0] <= slot < w2[1] - timedelta(seconds=60)
+    assert pick_daily_fallback_slot(windows, [False, False, False]) is None
+    # 向后兼容：不传 armed 时仍在全部窗口内取槽
+    slot = pick_daily_fallback_slot(windows)
+    assert slot is not None
+    assert any(start <= slot < stop for start, stop in windows)
+
+
+def test_fallback_external_id_ignores_runtime_injected_fields():
+    """_receivedAt 等运行时注入字段不参与兜底键：WS 先到、HTTP 兜底再到同键去重。"""
+    db = make_db()
+    fetcher = make_fetcher(db)
+    kol = make_kol(db)
+    base = {
+        "rid": 101,
+        # 纯图消息无正文：走原始字段序列化分支，正是受注入字段影响的路径
+        "msg": '[{"type": "pic", "url": "https://img.test/a.jpg"}]',
+        "createtime": 1700000000000,
+    }
+    p_ws = fetcher._parse_message_to_post(dict(base, _receivedAt="2026-09-06T10:00:00"), kol)
+    p_http = fetcher._parse_message_to_post(dict(base), kol)
+    assert p_ws is not None and p_http is not None
+    assert p_ws.external_id == p_http.external_id
+
+
+def test_token_expired_requires_strong_signal():
+    """熔断只认强信号：业务码 401/502 与明确短语触发；WAF 文本/弱关键词不触发。"""
+    from app.fetchers.mx.client import MXClient, MXTokenExpiredError
+
+    def trips(payload):
+        session = _FakeCffiSession([payload])
+        client = MXClient("https://mx.test/business-api/5", "t", session=session)
+        try:
+            client.get_rooms()
+        except MXTokenExpiredError:
+            return True
+        return False
+
+    # 强特征：业务码 / 明确的鉴权失败短语
+    assert trips({"code": 502, "msg": "whatever"})
+    assert trips({"code": 401, "msg": ""})
+    assert trips({"code": 200, "msg": "请重新登录"})
+    assert trips({"code": 200, "msg": "Token 已失效"})
+    # 误判样例：WAF 拦截页文本、弱关键词不再单独触发
+    assert not trips(
+        {"code": 403, "msg": "403 Forbidden 您的请求被WAF拦截，请完成人机认证后重试"}
+    )
+    assert not trips({"code": 200, "msg": "认证成功"})
+    assert not trips({"code": 200, "msg": "token 验证通过"})
+
+
+def test_ws_weak_auth_word_does_not_give_up(monkeypatch):
+    """连接报错仅含「认证」等弱词且无状态码（WAF/代理文本）：不得判为 TOKEN 过期。"""
+    import app.fetchers.mx.ws as mx_ws
+
+    monkeypatch.setattr(mx_ws, "_reconnect_delay", lambda: 0.01)
+    give_ups = []
+    client = MxWsClient(
+        SimpleNamespace(), lambda m: None,
+        on_give_up=lambda r, t: give_ups.append((r, t)),
+    )
+    attempts = {"n": 0}
+
+    async def failing_connect():
+        attempts["n"] += 1
+        raise RuntimeError("访问被拦截：请完成人机认证，或稍后重试（request blocked）")
+
+    client.connect = failing_connect
+    asyncio.run(asyncio.wait_for(client.run_forever(), timeout=5))
+
+    # 弱词不熔断：仍走唯一一次自动重连；重连也失败才放弃，且不带 token_expired
+    assert attempts["n"] == 2
+    assert give_ups and give_ups[0][1] is False
+
+
+def test_manual_login_half_open_resets_breaker_and_recovers(monkeypatch):
+    """熔断态下手动「登录」半开重探：先解熔断走完整登录，成功则保持解除。"""
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+    scheduler._mx_token_expired = True
+
+    service = MXRoomSyncService(MxConfig(token="t"), db)
+    monkeypatch.setattr(service, "boot_sequence", lambda: [])
+    monkeypatch.setattr(service, "sync_rooms", _noop_async_zero)
+    scheduler._mx_sync_service = service
+
+    report = asyncio.run(scheduler.mx_manual_login())
+
+    assert report["ok"] is True
+    assert scheduler._mx_token_expired is False
+    scheduler.stop()
+
+
+def test_manual_login_half_open_retrips_breaker_on_auth_failure(monkeypatch):
+    """半开重探中再遇鉴权失败：重新熔断（告警节流不受影响）。"""
+    from app.fetchers.mx.client import MXTokenExpiredError
+
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+    scheduler._mx_token_expired = True
+
+    service = MXRoomSyncService(MxConfig(token="t"), db)
+
+    def failing_boot():
+        raise MXTokenExpiredError("MX token expired")
+
+    monkeypatch.setattr(service, "boot_sequence", failing_boot)
+    scheduler._mx_sync_service = service
+
+    report = asyncio.run(scheduler.mx_manual_login())
+
+    assert report["ok"] is False
+    assert scheduler._mx_token_expired is True  # 重新熔断
+    scheduler.stop()
+
+
+def test_apply_mx_config_resets_breaker_without_token_change():
+    """保存配置即复位熔断/放弃标记（无论 token 是否变化），原样重存也能解锁。"""
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    cfg = MxConfig(enabled=True, token="t", ws_enabled=False)
+
+    scheduler._mx_token_expired = True
+    scheduler._mx_ws_gave_up = True
+    asyncio.run(scheduler.apply_mx_config(cfg))
+    assert scheduler._mx_token_expired is False
+    assert scheduler._mx_ws_gave_up is False
+
+    # 原样重存（token 未变）再次复位
+    scheduler._mx_token_expired = True
+    asyncio.run(scheduler.apply_mx_config(cfg))
+    assert scheduler._mx_token_expired is False
+    scheduler.stop()
+
+
+def test_window_loop_skips_auto_start_after_manual_attempt(monkeypatch):
+    """窗口内手动登录部分失败：本窗口已尝试标记生效，下个 tick 不自动重跑启动序列。"""
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+    _arm_manual_window(scheduler)
+    assert scheduler._mx_current_window_index() == 0
+
+    service = MXRoomSyncService(MxConfig(token="t"), db)
+
+    def failing_boot():
+        raise RuntimeError("启动序列临时失败")
+
+    monkeypatch.setattr(service, "boot_sequence", failing_boot)
+    monkeypatch.setattr(service, "sync_rooms", _noop_async_zero)
+    scheduler._mx_sync_service = service
+
+    starts = {"n": 0}
+
+    async def fake_session_start():
+        starts["n"] += 1
+        scheduler._mx_window_open = True
+
+    scheduler._mx_session_start = fake_session_start
+
+    async def scenario():
+        report = await scheduler.mx_manual_login()  # 手动登录失败（boot 一步失败）
+        assert report["ok"] is False
+        await scheduler._mx_window_tick()  # 30 秒后的下个窗口 tick
+
+    asyncio.run(scenario())
+
+    assert scheduler._mx_manual_attempted_idx == 0  # 已记录「本窗口已尝试」
+    assert scheduler._mx_window_open is False
+    assert starts["n"] == 0  # 窗口循环没有自动重跑
+    scheduler.stop()
+
+
+def test_ws_parse_message_runs_in_thread_pool(monkeypatch):
+    """_parse_message（含解密）必须在线程池执行：大消息高峰不得阻塞事件循环。"""
+    import threading
+
+    seen = {}
+    received = []
+
+    def fake_parse(data):
+        seen["thread"] = threading.current_thread()
+        seen["data"] = data
+        return {"rid": 1, "id": 7}
+
+    client = MxWsClient(SimpleNamespace(), received.append)
+    monkeypatch.setattr(client, "_parse_message", fake_parse)
+
+    async def scenario():
+        await client._handle_message({"rid": 1})
+        return threading.current_thread()
+
+    loop_thread = asyncio.run(scenario())
+
+    assert seen["data"] == {"rid": 1}
+    assert received == [{"rid": 1, "id": 7}]  # 分发语义不变
+    assert seen["thread"] is not loop_thread  # 不在事件循环线程上解析
+
+
+def test_ws_native_list_payload_returned_as_is():
+    """socket.io 原生数组载荷原样返回，不再落进 {"raw": ...} 被静默丢弃。"""
+    client = MxWsClient(SimpleNamespace(), lambda m: None)
+    payload = [{"rid": "5", "id": 1}, {"rid": "5", "id": 2}]
+    assert client._parse_message(payload) == payload
+
+
+def test_ws_native_list_payload_distributes_each_item():
+    """原生数组载荷端到端：逐条分发且逐条带 _receivedAt。"""
+    received = []
+    client = MxWsClient(SimpleNamespace(), received.append)
+    asyncio.run(client._handle_message([{"rid": "5", "id": 1}, {"rid": "5", "id": 2}]))
+    assert [m["id"] for m in received] == [1, 2]
+    assert all("_receivedAt" in m for m in received)
+
+
+def test_decrypt_decompresses_once_across_date_paths(monkeypatch):
+    """解压与密钥无关：本地/北京日期双路径共只解压一次（循环外提的性能口径）。"""
+    from app.fetchers.mx import crypto
+
+    calls = {"n": 0}
+    orig = crypto.lzstring_decompress
+
+    def spy(s):
+        calls["n"] += 1
+        return orig(s)
+
+    monkeypatch.setattr(crypto, "lzstring_decompress", spy)
+    # 非法密文：与旧逻辑同口径返回 None，但整条链路只解压一次
+    assert crypto.decrypt_ws_data("definitely-not-a-valid-payload") is None
+    assert calls["n"] == 1
+
+
+def test_avatar_cache_writes_atomically(monkeypatch):
+    """头像写盘必须 tmp + os.replace 原子替换，写完无 .part 残留。"""
+    import app.avatar_cache as avatar_mod
+
+    db = make_db()
+    kid = db.add_kol("mx", "房间A", "101")
+    payload = b"\x89PNG" + b"x" * 4096
+
+    class FakeResp:
+        status_code = 200
+        content = payload
+        headers = {"content-type": "image/png"}
+
+    class FakeClient:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(avatar_mod, "safe_get", lambda client, url, timeout=None: FakeResp())
+    local = avatar_mod.cache_avatar(db, kid, "https://img.test/avatar.png", client=FakeClient())
+
+    assert local == f"/avatars/{kid}.png"
+    avatars = Path(db.path).parent / "avatars"
+    assert (avatars / f"{kid}.png").read_bytes() == payload
+    assert not list(avatars.glob("*.part"))
+    assert db.get_kol(kid)["avatar_url"] == local
+
+
+def test_avatar_cache_cleans_stale_part_files():
+    """超龄（1 小时）.part 残留被清扫，新写入的 .part 不受影响。"""
+    import os
+    import time as time_mod
+
+    import app.avatar_cache as avatar_mod
+
+    db = make_db()
+    avatars = Path(db.path).parent / "avatars"
+    avatars.mkdir(parents=True, exist_ok=True)
+    stale = avatars / "999.part"
+    fresh = avatars / "888.part"
+    stale.write_bytes(b"partial")
+    fresh.write_bytes(b"partial")
+    old = time_mod.time() - 7200
+    os.utime(stale, (old, old))
+
+    avatar_mod._cleanup_stale_part_files(avatars)
+
+    assert not stale.exists()
+    assert fresh.exists()

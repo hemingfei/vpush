@@ -335,9 +335,17 @@ class MxFetcher(Fetcher):
 
     @staticmethod
     def _fallback_external_id(room_id, raw_msg, content):
-        """缺 id 消息的确定性键：同一条消息两次到达（WS/轮询）生成同一键，去重仍有效。"""
+        """缺 id 消息的确定性键：同一条消息两次到达（WS/轮询）生成同一键，去重仍有效。
+
+        下划线开头的运行时注入字段（如 WS 层逐条补的 ``_receivedAt``）不参与
+        摘要：纯图/文件消息没有正文时按原始字段序列化生成键，WS 先到、HTTP
+        兜底再到的时间戳不同，若参与摘要会生成不同键绕过去重、重复入库。
+        """
         createtime = raw_msg.get("createtime") or raw_msg.get("created_at") or raw_msg.get("ts")
-        basis = content or json.dumps(raw_msg, ensure_ascii=False, sort_keys=True, default=str)
+        basis = content
+        if not basis:
+            stable = {k: v for k, v in raw_msg.items() if not str(k).startswith("_")}
+            basis = json.dumps(stable, ensure_ascii=False, sort_keys=True, default=str)
         digest = hashlib.md5(basis.encode("utf-8")).hexdigest()[:12]
         if createtime:
             return f"{room_id}-{createtime}-{digest[:8]}"
@@ -463,10 +471,10 @@ class MxFetcher(Fetcher):
             if getattr(client, "manually_stopped", False):
                 detail = getattr(client, "stop_reason", "") or "已手动断开"
             elif gave_up:
-                # 12 秒后的那次重连也失败了：已永久放弃自动重连
+                # 唯一一次自动重连也失败了：已永久放弃自动重连
                 detail = "自动重连失败已停止，请手动接入"
             elif not client.connected:
-                # 断线后等待 12 秒自动重连；任务已退出且未放弃时需管理员接入
+                # 断线后等 16-36 秒随机重连一次；任务已退出且未放弃时需管理员接入
                 detail = "未连接，等待自动重连" if getattr(client, "running", False) else "已断线，请手动接入"
             else:
                 detail = ""

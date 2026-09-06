@@ -37,7 +37,7 @@ ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9"
 
 # 断线后的重连策略：等 16-36 秒（随机）重连一次；这次重连再失败就永久放弃自动重连。
 # 高频无上限重连是攻击性特征，固定周期的重连节拍也是机器信号（2026-09-02 由固定
-# 12 秒改为区间随机），恢复只能靠管理员在后台手动接入
+# 短周期改为区间随机），恢复只能靠管理员在后台手动接入
 RECONNECT_DELAY_RANGE = (16.0, 36.0)
 
 
@@ -45,25 +45,28 @@ def _reconnect_delay() -> float:
     """断线重连等待秒数：16-36 秒之间随机。"""
     return random.uniform(*RECONNECT_DELAY_RANGE)
 
-# 连接阶段被拒时，判定为 TOKEN 过期/无效的关键词（命中则不重试，直接放弃告警）
-_AUTH_FAIL_KEYWORDS = (
-    "401",
-    "403",
-    "unauthorized",
-    "forbidden",
-    "auth",
-    "token",
-    "登录",
-    "认证",
-    "过期",
-    "无效",
+# 连接阶段被拒时，判定「确定是鉴权失败」的精确信号：
+# - 握手状态码 401/403（aiohttp 报错形如 "Unexpected status code 401 in server response"）
+# - 明确的鉴权失败短语（token 失效/未登录/请重新登录等，匹配前转小写、去空格）
+# 弱关键词（仅出现「认证」「过期」「token」）不再单独触发：WAF 拦截页、代理错误
+# 文本可能碰巧含这些词，误放弃会停掉 WS 且只能手动接入（后台「登录」可半开重探）
+_WS_AUTH_STATUS_CODES = ("401", "403")
+_WS_AUTH_MSG_MARKERS = (
+    "unauthorized", "forbidden", "invalidtoken", "tokenexpired",
+    "token失效", "token过期", "token无效", "token错误",
+    "令牌失效", "令牌过期",
+    "未登录", "请重新登录", "请先登录", "重新登录",
+    "登录失效", "登录过期", "登录已过期", "登录已失效",
+    "鉴权失败", "认证失败",
 )
 
 
 def _looks_like_auth_failure(reason: str) -> bool:
-    """连接阶段的报错是否像 TOKEN 过期/无效（握手 401/403 或鉴权类文案）。"""
-    text = (reason or "").lower()
-    return any(kw in text for kw in _AUTH_FAIL_KEYWORDS)
+    """连接阶段的报错是否「确定」为 TOKEN 过期/无效（精确信号才放弃自动重连）。"""
+    text = (reason or "").lower().replace(" ", "").replace("\u3000", "")
+    if any(code in text for code in _WS_AUTH_STATUS_CODES):
+        return True
+    return any(marker in text for marker in _WS_AUTH_MSG_MARKERS)
 
 
 def _browser_handshake_headers(config) -> dict:
@@ -122,7 +125,7 @@ class MxWsClient:
         self._should_stop = False
         # run_forever 存活期间为 True：供状态接口区分「连接中」与「已断线」
         self.running = False
-        # 12 秒后的那次重连也失败后置 True：已永久放弃自动重连，需管理员手动接入
+        # 唯一一次自动重连也失败后置 True：已永久放弃自动重连，需管理员手动接入
         self.gave_up = False
         # 管理员主动断开标记：与掉线区分开，供状态接口展示原因
         self.manually_stopped = False
@@ -213,7 +216,10 @@ class MxWsClient:
             self.last_message_at = datetime.now()
             logger.debug(f"Received MX WebSocket message: {data}")
 
-            message = self._parse_message(data)
+            # 解析含 lzstring 解压 + AES 解密 + JSON 解码（大消息高峰 CPU 密集），
+            # 与 fetcher 的帖子解析同池：直接在 loop 上跑会拖垮 socket.io 心跳
+            # 导致服务端断连，必须丢线程池执行（逐条 await，保持消息顺序）
+            message = await asyncio.to_thread(self._parse_message, data)
             if isinstance(message, list):
                 # 事件一次送达一批消息：逐条分发给回调
                 for item in message:
@@ -225,7 +231,7 @@ class MxWsClient:
         except Exception as e:
             logger.error(f"Failed to handle MX WebSocket message: {e}", exc_info=True)
 
-    def _parse_message(self, data) -> dict | None:
+    def _parse_message(self, data) -> dict | list | None:
         """
         Parse incoming WebSocket message, following chat-monitor's logic.
 
@@ -233,9 +239,15 @@ class MxWsClient:
             data: Raw message data
 
         Returns:
-            Parsed message object or None if parsing failed
+            Parsed message object（list 表示一批消息）or None if parsing failed
         """
         parsed = None
+
+        if isinstance(data, list):
+            # socket.io 原生数组载荷（多参事件归一成列表）：原样返回，交给
+            # _handle_message 的 list 分发路径逐条处理，绝不能落进 {"raw": ...}
+            # 被静默丢弃
+            return data
 
         def _use_decrypted(decrypted):
             """解密结果可能是已解析的 dict/list，也可能是字符串；统一安全处理。"""
@@ -301,7 +313,7 @@ class MxWsClient:
         self._should_stop = False
         self.running = True
         self.gave_up = False
-        # 本次连接是否还欠一次「12 秒后重连」机会：连接成功后恢复
+        # 本次连接是否还欠一次「断线后重连」机会：连接成功后恢复
         reconnect_pending = False
         try:
             while not self._should_stop:
@@ -331,7 +343,7 @@ class MxWsClient:
                     self._fire_give_up(reason, True)
                     break
                 if reconnect_pending:
-                    # 12 秒后的那次重连也失败（或重连后立即再断）：永久放弃
+                    # 那次重连也失败（或重连后立即再断）：永久放弃
                     self.gave_up = True
                     logger.error("MX WebSocket 重连失败，已停止自动重连；请在管理后台手动接入")
                     self._fire_give_up(reason, False)

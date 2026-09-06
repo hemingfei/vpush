@@ -731,33 +731,8 @@ class BackupWebDAVIn(BaseModel):
     keep: int | None = None
 
 
-class AiTaskIn(BaseModel):
-    name: str
-    description: str | None = None
-    target_kol_id: int
-    time_range_start_days_offset: int
-    time_range_start_time: str
-    time_range_end_days_offset: int
-    time_range_end_time: str
-    selected_kol_ids: list[int]
-    prompt_template: str
-    schedule_day_of_week: str
-    schedule_time: str
-
-
-class AiTaskUpdate(BaseModel):
-    name: str | None = None
-    description: str | None = None
-    enabled: bool | None = None
-    target_kol_id: int | None = None
-    time_range_start_days_offset: int | None = None
-    time_range_start_time: str | None = None
-    time_range_end_days_offset: int | None = None
-    time_range_end_time: str | None = None
-    selected_kol_ids: list[int] | None = None
-    prompt_template: str | None = None
-    schedule_day_of_week: str | None = None
-    schedule_time: str | None = None
+# AI 分析任务的请求模型（AiTaskIn/AiTaskUpdate）唯一一份定义在本文件下方
+# TestPushIn 之前；/admin/ai-analysis 与 /admin/ai-tasks 两组端点共用。
 
 
 class SubscriptionIn(BaseModel):
@@ -793,6 +768,7 @@ class TestPushIn(BaseModel):
 
 
 class AiTaskIn(BaseModel):
+    """AI 分析任务创建请求：/admin/ai-analysis 与 /admin/ai-tasks 两组端点共用。"""
     name: str
     description: str | None = None
     target_kol_id: int
@@ -807,6 +783,7 @@ class AiTaskIn(BaseModel):
 
 
 class AiTaskUpdate(BaseModel):
+    """AI 分析任务部分更新请求：PUT 语义按 model_fields_set（显式传了才改）。"""
     name: str | None = None
     description: str | None = None
     enabled: bool | None = None
@@ -819,6 +796,43 @@ class AiTaskUpdate(BaseModel):
     prompt_template: str | None = None
     schedule_day_of_week: str | None = None
     schedule_time: str | None = None
+
+
+# ---- AI 任务时间/窗口校验（/admin/ai-analysis 与 /admin/ai-tasks 两组端点共用） ----
+
+_AI_TASK_TIME_RE = re.compile(r"^\d{1,2}:\d{2}$")
+
+
+def _validate_ai_task_hhmm(value, label: str) -> None:
+    """AI 任务时间字段校验：^\\d{1,2}:\\d{2}$ 且 hour≤23/minute≤59。
+
+    与 /admin/ai-analysis 原有的正则校验同源，外加数值范围检查——"24:00"/"09:99"
+    这类值经 _local_wall_time（ai_analysis.py，只读不动）会构造出合法却越界的
+    datetime 或直接异常，必须在 API 校验层拦下。
+    """
+    value = str(value or "")
+    if not _AI_TASK_TIME_RE.match(value):
+        raise HTTPException(status_code=400, detail=f"{label} 时间格式错误: {value}，应为 HH:MM")
+    hour, minute = value.split(":")
+    if int(hour) > 23 or int(minute) > 59:
+        raise HTTPException(
+            status_code=400, detail=f"{label} 时间超出范围: {value}（小时≤23、分钟≤59）"
+        )
+
+
+def _validate_ai_task_window(start_offset, start_time: str, end_offset, end_time: str) -> None:
+    """分析窗口校验：开始时刻必须早于结束时刻（offset 小=更早，同日再比 HH:MM）。
+
+    倒挂窗口经 calculate_time_range 会得到 start ≥ end，帖子查询必然为空。
+    """
+    invalid = (int(start_offset) > int(end_offset)) or (
+        int(start_offset) == int(end_offset) and str(start_time) >= str(end_time)
+    )
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"分析窗口无效: 开始({start_offset}天 {start_time}) 须早于 结束({end_offset}天 {end_time})",
+        )
 
 
 _SECRET_MASK_GLUE = "……"
@@ -1167,9 +1181,13 @@ WEBHOOK_MAX_IMAGES = 9
 
 
 def verify_webhook_sign(secret: str, timestamp, sign, now: int | None = None) -> bool:
-    """飞书自定义机器人同款签名校验：sign = base64(hmac_sha256(key=f"{ts}\n{secret}"))。
+    """飞书自定义机器人同款签名校验：sign = base64(hmac_sha256(key=f"{ts}\\n{secret}"))。
 
     时间戳与服务器时间相差超过 1 小时视为过期，防重放。
+
+    取舍说明：飞书协议的签名只覆盖 timestamp+secret、**不含请求体**，因此无法
+    防篡改请求内容，防重放窗口也只有 ±1 小时——这是为兼容飞书自定义机器人
+    客户端保持不改协议的代价；token 本身即凭据，签名只是可选的第二道锁。
     """
     try:
         ts = int(str(timestamp).strip())
@@ -1262,6 +1280,24 @@ def _notify_ai_task_stopped(db: DB, task_id: int, reason: str, publish) -> None:
 #（浏览器 EventSource 会按 SSE 规范自动重连，防止单连接无限驻留）。
 _MX_SSE_TICK_SECONDS = 3
 _MX_SSE_MAX_TICKS = 480  # ~24 分钟
+# 版本号进程内 TTL 缓存：SSE 每客户端每 3s tick 一次，多客户端共享 2s 内的
+# 一次 DB 读；版本变了照样推（TTL 只影响感知延迟，≤2s），语义不变
+_MX_SSE_VERSION_TTL_SECONDS = 2.0
+_MX_SSE_VERSION_CACHE = {"value": -1, "mono": 0.0}
+
+
+def _cached_mx_view_version(db) -> int:
+    """读 mx_view_version，TTL 内直接复用上次结果（模块级缓存，全客户端共享）。"""
+    now = time.monotonic()
+    cache = _MX_SSE_VERSION_CACHE
+    if cache["mono"] and now - cache["mono"] < _MX_SSE_VERSION_TTL_SECONDS:
+        return int(cache["value"])
+    from .mx_view_analysis import get_view_version
+
+    value = get_view_version(db)
+    cache["value"] = value
+    cache["mono"] = now
+    return value
 
 
 def _feishu_timeline_entry_key(entry: dict[str, Any]) -> tuple[str, str]:
@@ -5225,29 +5261,23 @@ def create_api_router(
         return {"ok": bool(report.get("ok")), "report": report}
 
     # ---- AI 分析任务管理 ----
-    @router.get("/admin/ai-analysis/tasks", dependencies=[Depends(require_admin)])
-    def list_ai_tasks(include_disabled: bool = True):
-        """列出所有 AI 分析任务。"""
-        return {"tasks": db.list_ai_tasks(include_disabled=include_disabled)}
-
-    @router.post("/admin/ai-analysis/tasks", dependencies=[Depends(require_admin)])
-    def create_ai_task(body: AiTaskIn, admin: dict = Depends(require_admin)):
-        """创建 AI 分析任务。"""
-        # 验证目标 KOL 存在
-        target_kol = db.get_kol(body.target_kol_id)
-        if not target_kol:
-            raise HTTPException(status_code=400, detail="目标 KOL 不存在")
-        
-        # 验证选中的 KOL 都存在
+    # /admin/ai-analysis 与 /admin/ai-tasks 两组 URL 均被前端使用（历史并存），
+    # 收敛为同一份实现函数与同一份校验（时间/窗口、PUT model_fields_set 口径），
+    # 仅响应体外壳按各 URL 的既有形状保留（兼容旧前端）。
+    def _ai_task_create_core(body: AiTaskIn, admin: dict) -> int:
+        """两组创建端点的同一份实现：KOL 存在性 + 时间校验 + 落库 + next_run 初始化。"""
+        if not db.get_kol(body.target_kol_id):
+            raise HTTPException(status_code=404, detail="目标 KOL 不存在")
         for kol_id in body.selected_kol_ids:
             if not db.get_kol(kol_id):
-                raise HTTPException(status_code=400, detail=f"选中的 KOL {kol_id} 不存在")
-        
-        # 验证时间格式
-        for time_str in [body.time_range_start_time, body.time_range_end_time, body.schedule_time]:
-            if not re.match(r"^\d{1,2}:\d{2}$", time_str):
-                raise HTTPException(status_code=400, detail=f"时间格式错误: {time_str}，应为 HH:MM")
-        
+                raise HTTPException(status_code=404, detail=f"选中的 KOL {kol_id} 不存在")
+        _validate_ai_task_hhmm(body.time_range_start_time, "time_range_start_time")
+        _validate_ai_task_hhmm(body.time_range_end_time, "time_range_end_time")
+        _validate_ai_task_hhmm(body.schedule_time, "schedule_time")
+        _validate_ai_task_window(
+            body.time_range_start_days_offset, body.time_range_start_time,
+            body.time_range_end_days_offset, body.time_range_end_time,
+        )
         task_id = db.create_ai_task(
             name=body.name,
             description=body.description,
@@ -5257,14 +5287,99 @@ def create_api_router(
             time_range_end_days_offset=body.time_range_end_days_offset,
             time_range_end_time=body.time_range_end_time,
             selected_kol_ids=body.selected_kol_ids,
-            prompt_template=body.prompt_template,
+            prompt_template=body.prompt_template.strip() or ai_analysis.DEFAULT_PROMPT_TEMPLATE,
             schedule_day_of_week=body.schedule_day_of_week,
-            schedule_time=body.schedule_time
+            schedule_time=body.schedule_time,
         )
-        # 初始化下次运行时间，避免 next_run_at 为空被调度器视为立即到期
+        # 初始化下次运行时间。调度器对空 next_run_at 会自动补算（不再是「视为
+        # 立即到期」），这里仍主动写上，省一轮调度轮询的等待
         db.update_ai_task(task_id, next_run_at=ai_analysis.format_next_run(
             db.get_ai_task(task_id), datetime.now(UTC)))
         _audit(admin, "create_ai_task", str(task_id), body.name)
+        return task_id
+
+    def _ai_task_update_core(task_id: int, body: AiTaskUpdate, admin: dict) -> dict:
+        """两组更新端点的同一份实现：model_fields_set 口径（显式传了才改）+ 同一份校验。"""
+        existing = db.get_ai_task(task_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="AI 分析任务不存在")
+        update_kwargs = {}
+        for field in body.model_fields_set:
+            update_kwargs[field] = getattr(body, field)
+        if update_kwargs.get("target_kol_id") is not None and not db.get_kol(update_kwargs["target_kol_id"]):
+            raise HTTPException(status_code=404, detail="目标 KOL 不存在")
+        if update_kwargs.get("selected_kol_ids") is not None:
+            for kol_id in update_kwargs["selected_kol_ids"]:
+                if not db.get_kol(kol_id):
+                    raise HTTPException(status_code=404, detail=f"选中的 KOL {kol_id} 不存在")
+        # 时间相关字段传了才校验格式/范围；窗口起止合并存量后完整时，同时校验先后
+        _AI_TIME_FIELDS = {
+            "time_range_start_days_offset", "time_range_start_time",
+            "time_range_end_days_offset", "time_range_end_time", "schedule_time",
+        }
+        if _AI_TIME_FIELDS & set(update_kwargs):
+            merged = {**existing, **update_kwargs}
+            _validate_ai_task_hhmm(merged["time_range_start_time"], "time_range_start_time")
+            _validate_ai_task_hhmm(merged["time_range_end_time"], "time_range_end_time")
+            _validate_ai_task_hhmm(merged["schedule_time"], "schedule_time")
+            _validate_ai_task_window(
+                merged["time_range_start_days_offset"], merged["time_range_start_time"],
+                merged["time_range_end_days_offset"], merged["time_range_end_time"],
+            )
+        # 调度相关字段变化时重算下次运行时间
+        if {"schedule_day_of_week", "schedule_time", "enabled"} & set(update_kwargs):
+            merged = {**existing, **update_kwargs}
+            next_run = ai_analysis.calculate_next_run(merged, datetime.now(UTC))
+            update_kwargs["next_run_at"] = next_run.isoformat() if next_run else None
+        # 重新启用时清零连续失败计数，重新保有「失败自动重试一次」的机会
+        if update_kwargs.get("enabled"):
+            update_kwargs["fail_count"] = 0
+        db.update_ai_task(task_id, **update_kwargs)
+        _audit(admin, "update_ai_task", str(task_id), f"fields={', '.join(body.model_fields_set)}")
+        return db.get_ai_task(task_id)
+
+    def _ai_task_run_core(task_id: int, admin: dict) -> dict:
+        """两组「立即运行」端点的同一份实现：后台线程跑任务，重试耗尽经系统 KOL 告知。
+
+        与调度器共用 try_begin_ai_task_run 互斥：任务已在跑（调度中或上次手动触发
+        未结束）时拒绝，防双跑双报告（报告 external_id 带秒级时间戳，UNIQUE 兜不住）。
+        """
+        task = db.get_ai_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="AI 分析任务不存在")
+        from .scheduler import try_begin_ai_task_run, end_ai_task_run
+
+        if not try_begin_ai_task_run(task_id):
+            return {"ok": False, "message": "该任务正在运行中，请稍后再试"}
+
+        def run_task():
+            logger.info(f"===== 开始后台运行 AI 任务 {task_id} =====")
+            try:
+                result = ai_analysis.run_analysis_task(task_id, db)
+                logger.info(f"===== AI 任务 {task_id} 运行完成: {result} =====")
+                # 自动重试耗尽：与调度器同策略，经系统 KOL「系统通知」告知
+                if isinstance(result, dict) and result.get("retries_exhausted"):
+                    _notify_ai_task_stopped(
+                        db, task_id, str(result.get("message") or ""), on_external_post
+                    )
+            except Exception:
+                logger.exception(f"===== AI 分析任务 {task_id} 运行异常 =====")
+            finally:
+                end_ai_task_run(task_id)
+
+        threading.Thread(target=run_task, daemon=True, name=f"ai-task-{task_id}").start()
+        _audit(admin, "run_ai_task", str(task_id), task["name"])
+        return {"ok": True, "message": "分析任务已开始运行，请稍后查看日志"}
+
+    @router.get("/admin/ai-analysis/tasks", dependencies=[Depends(require_admin)])
+    def list_ai_tasks(include_disabled: bool = True):
+        """列出所有 AI 分析任务。"""
+        return {"tasks": db.list_ai_tasks(include_disabled=include_disabled)}
+
+    @router.post("/admin/ai-analysis/tasks", dependencies=[Depends(require_admin)])
+    def create_ai_task(body: AiTaskIn, admin: dict = Depends(require_admin)):
+        """创建 AI 分析任务（与 /admin/ai-tasks 共用实现与校验）。"""
+        task_id = _ai_task_create_core(body, admin)
         return {"id": task_id}
 
     @router.get("/admin/ai-analysis/tasks/{task_id}", dependencies=[Depends(require_admin)])
@@ -5277,39 +5392,10 @@ def create_api_router(
 
     @router.put("/admin/ai-analysis/tasks/{task_id}", dependencies=[Depends(require_admin)])
     def update_ai_task(task_id: int, body: AiTaskUpdate, admin: dict = Depends(require_admin)):
-        """更新 AI 分析任务。"""
-        existing = db.get_ai_task(task_id)
-        if not existing:
+        """更新 AI 分析任务（与 /admin/ai-tasks 共用实现与校验）。"""
+        if not db.get_ai_task(task_id):
             raise HTTPException(status_code=404, detail="任务不存在")
-        
-        update_kwargs = {}
-        for field in body.model_fields_set:
-            update_kwargs[field] = getattr(body, field)
-        
-        # 验证如果更新了目标 KOL
-        if "target_kol_id" in update_kwargs:
-            target_kol = db.get_kol(update_kwargs["target_kol_id"])
-            if not target_kol:
-                raise HTTPException(status_code=400, detail="目标 KOL 不存在")
-        
-        # 验证如果更新了选中的 KOL
-        if "selected_kol_ids" in update_kwargs:
-            for kol_id in update_kwargs["selected_kol_ids"]:
-                if not db.get_kol(kol_id):
-                    raise HTTPException(status_code=400, detail=f"选中的 KOL {kol_id} 不存在")
-        
-        # 调度相关字段变化时重算下次运行时间
-        schedule_fields = {"schedule_day_of_week", "schedule_time", "enabled"}
-        if schedule_fields & set(update_kwargs):
-            merged = {**existing, **update_kwargs}
-            next_run = ai_analysis.calculate_next_run(merged, datetime.now(UTC))
-            update_kwargs["next_run_at"] = next_run.isoformat() if next_run else None
-        # 重新启用时清零连续失败计数，重新保有「失败自动重试一次」的机会
-        if update_kwargs.get("enabled"):
-            update_kwargs["fail_count"] = 0
-
-        db.update_ai_task(task_id, **update_kwargs)
-        _audit(admin, "update_ai_task", str(task_id), f"fields={', '.join(body.model_fields_set)}")
+        _ai_task_update_core(task_id, body, admin)
         return {"ok": True}
 
     @router.delete("/admin/ai-analysis/tasks/{task_id}", dependencies=[Depends(require_admin)])
@@ -5347,30 +5433,8 @@ def create_api_router(
 
     @router.post("/admin/ai-analysis/tasks/{task_id}/run", dependencies=[Depends(require_admin)])
     def run_ai_task(task_id: int, admin: dict = Depends(require_admin)):
-        """手动触发 AI 分析任务。"""
-        logger.info(f"===== 收到 AI 任务 {task_id} 运行请求 =====")
-        existing = db.get_ai_task(task_id)
-        if not existing:
-            raise HTTPException(status_code=404, detail="任务不存在")
-        logger.info(f"===== 任务详情: {existing} =====")
-
-        def run_task():
-            logger.info(f"===== 开始后台运行 AI 任务 {task_id} =====")
-            try:
-                result = ai_analysis.run_analysis_task(task_id, db)
-                logger.info(f"===== AI 任务 {task_id} 运行完成: {result} =====")
-                # 自动重试耗尽：与调度器同策略，经系统 KOL「系统通知」告知
-                if isinstance(result, dict) and result.get("retries_exhausted"):
-                    _notify_ai_task_stopped(
-                        db, task_id, str(result.get("message") or ""), on_external_post
-                    )
-            except Exception as e:
-                logger.exception(f"===== AI 分析任务 {task_id} 运行异常 =====")
-        
-        # 使用后台线程运行任务
-        threading.Thread(target=run_task, daemon=True, name=f"ai-task-{task_id}").start()
-        _audit(admin, "run_ai_task", str(task_id), existing["name"])
-        return {"ok": True, "message": "分析任务已开始运行，请稍后查看日志"}
+        """手动触发 AI 分析任务（与 /admin/ai-tasks 共用实现）。"""
+        return _ai_task_run_core(task_id, admin)
 
     @router.get("/admin/ai-analysis/tasks/{task_id}/logs", dependencies=[Depends(require_admin)])
     def get_ai_task_logs(task_id: int, limit: int = 50):
@@ -5718,6 +5782,11 @@ def create_api_router(
 
         兼容飞书自定义机器人请求体（msg_type=text/post，可选 timestamp+sign 签名）
         与简化格式 {"text": "...", "title": "...", "images": [...]}。
+
+        安全取舍：token 在 URL 路径里，会进入反代/uvicorn 的访问日志（无法避免，
+        除非改协议把 token 挪进 header，飞书兼容性不允许）——泄露后的处置是
+        管理端 regenerate 轮换让旧地址立即失效，而不是指望日志里没有它。
+        签名（若启用）只覆盖 timestamp+secret、不含请求体，见 verify_webhook_sign。
         """
         if not token or len(token) > 128 or not re.fullmatch(r"[A-Za-z0-9_-]+", token):
             raise HTTPException(status_code=404, detail="webhook 不存在")
@@ -5909,14 +5978,24 @@ def create_api_router(
                 "payload": snap["payload"]}
 
     @router.get("/mx-views/feed")
-    async def mx_views_feed(day: str, current_user: dict = Depends(get_current_user)):
+    async def mx_views_feed(day: str, after_id: int = 0,
+                            current_user: dict = Depends(get_current_user)):
         """全天实时观点流：直读当日 mx_opinions 全量（观点流唯一数据源，快照
         payload 不再冗余存 new_opinions）。最新批次在前、批内按发生时间倒序
         （最新在上），每条观点带回所属批次 snapshot_at；seq/kind 由轻量快照元数据拼回。
+
+        after_id 可选增量拉取：只返回 id > after_id 的观点，响应带 max_id（当日
+        观点当前最大 id，客户端存下它作为下次的 after_id）；不传时行为不变（全量，
+        响应也不带 max_id），旧前端零改动。
         """
         meta = {str(r["snapshot_at"]): r for r in db.list_mx_view_snapshot_meta(day)}
         grouped: dict = {}
-        for o in db.list_mx_opinions(day):
+        all_opinions = db.list_mx_opinions(day)
+        max_id = None
+        if after_id > 0:
+            all_opinions = [o for o in all_opinions if int(o["id"]) > after_id]
+            max_id = db.max_mx_opinion_id(day)
+        for o in all_opinions:
             grouped.setdefault(str(o["snapshot_at"]), []).append(o)
         batches = []
         for at in sorted(grouped.keys(), reverse=True):
@@ -5933,7 +6012,10 @@ def create_api_router(
             ]
             ops.sort(key=lambda o: str(o.get("occurred_at") or ""), reverse=True)
             batches.append({"snapshot_at": at, "seq": int(m["seq"] or 0), "opinions": ops})
-        return {"trading_day": day, "batches": batches}
+        result = {"trading_day": day, "batches": batches}
+        if max_id is not None:
+            result["max_id"] = max_id
+        return result
 
     @router.get("/mx-views/target")
     async def mx_views_target(type: str, name: str, day: str, at: str = "",
@@ -5969,8 +6051,8 @@ def create_api_router(
                 if await request.is_disconnected():
                     break
                 try:
-                    ver = await asyncio.to_thread(db.get_setting, "mx_view_version")
-                    v = int(ver or 0)
+                    # 先走进程内 TTL 缓存：TTL 内多客户端共享一次 DB 读
+                    v = await asyncio.to_thread(_cached_mx_view_version, db)
                 except Exception:  # noqa: BLE001
                     v = last
                 if v != last:
@@ -6357,6 +6439,7 @@ def create_api_router(
         MX_VIEW_SCHEDULE_KEY,
         MX_VIEW_SUMMARY_MIN_INTERVAL_KEY,
         MX_VIEW_TOPIC_HINTS_KEY,
+        _batch_lock,
         backfill_running,
         backfill_status,
         get_batch_size,
@@ -6379,19 +6462,28 @@ def create_api_router(
 
     def _mx_view_put_config(admin: dict, body: dict) -> None:
         """部分更新配置；schedule 传即整体替换并校验可解析。"""
+        # 上限常量：batch_size 撑大 LLM 输出必截断；topic_hints 撑爆提示词/计费
+        BATCH_SIZE_MAX = 2000
+        TOPIC_HINTS_MAX = 500
+        TOPIC_HINT_LEN_MAX = 50
         if "enabled" in body:
             db.set_setting(MX_VIEW_ENABLED_KEY, "1" if body["enabled"] else "0")
         if "batch_size" in body:
             try:
-                size = max(1, int(body["batch_size"]))
+                size = int(body["batch_size"])
             except (TypeError, ValueError):
-                raise HTTPException(status_code=422, detail="batch_size 须为正整数")
+                raise HTTPException(status_code=422, detail="batch_size 须为正整数") from None
+            if not 1 <= size <= BATCH_SIZE_MAX:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"batch_size 须在 1~{BATCH_SIZE_MAX} 之间（过大批次输出必截断）",
+                )
             db.set_setting(MX_VIEW_BATCH_SIZE_KEY, str(size))
         if "summary_min_interval" in body:
             try:
                 interval = max(0, int(body["summary_min_interval"]))
             except (TypeError, ValueError):
-                raise HTTPException(status_code=422, detail="summary_min_interval 须为非负整数")
+                raise HTTPException(status_code=422, detail="summary_min_interval 须为非负整数") from None
             db.set_setting(MX_VIEW_SUMMARY_MIN_INTERVAL_KEY, str(interval))
         if "kol_ids" in body:
             ids = body["kol_ids"]
@@ -6402,6 +6494,16 @@ def create_api_router(
             hints = body["topic_hints"]
             if not isinstance(hints, list) or not all(isinstance(h, str) and h.strip() for h in hints):
                 raise HTTPException(status_code=422, detail="topic_hints 须为非空字符串数组")
+            if len(hints) > TOPIC_HINTS_MAX:
+                raise HTTPException(
+                    status_code=422, detail=f"topic_hints 最多 {TOPIC_HINTS_MAX} 条"
+                )
+            too_long = [h for h in hints if len(h.strip()) > TOPIC_HINT_LEN_MAX]
+            if too_long:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"topic_hints 单条不超过 {TOPIC_HINT_LEN_MAX} 字: {too_long[0][:30]}…",
+                )
             db.set_setting(
                 MX_VIEW_TOPIC_HINTS_KEY,
                 json.dumps([h.strip() for h in hints], ensure_ascii=False),
@@ -6455,23 +6557,60 @@ def create_api_router(
             "resolved_times": get_schedule_config(db)["resolved_times"],
         }
 
-    @router.post("/admin/mx-views/run", dependencies=[Depends(require_admin)], status_code=202)
+    @router.post("/admin/mx-views/run", dependencies=[Depends(require_admin)])
     async def admin_mx_views_run(admin: dict = Depends(get_current_user)):
+        """手动跑一批快照（同步等待结果，LLM 调用可能持续数分钟）。
+
+        响应体带语义：{"ok": true, "ran": bool, "messages": n}；窗口内无新消息时
+        ran=false 并在 message 说明，不再返回「假 ok」。批次锁被占（已有批次在跑）
+        时 409——job 线程 acquire(timeout=5s) 拿不到锁就放弃，不无限阻塞。
+        """
         if backfill_running():
             raise HTTPException(status_code=409, detail="回填进行中，稍后再试")
         now = _dt.now(CN_TZ)
         day, hhmm = now.strftime("%Y-%m-%d"), now.strftime("%H:%M")
+        outcome: dict = {}
 
         def job():
+            # RLock 可重入：这里先占位（5s 拿不到说明已有批次在跑），再进
+            # run_snapshot_batch 重入同一把锁，跨线程互斥语义不变
+            if not _batch_lock.acquire(timeout=5):
+                outcome["busy"] = True
+                return
             try:
-                run_snapshot_batch(db, day=day, snapshot_at=hhmm, window=("09:15", hhmm),
-                                   kind="live", llm_config=resolve_system_llm_config(db))
-            except Exception:  # noqa: BLE001 - 失败已落批次表
-                pass
+                if not db.has_mx_posts_in_window(
+                    day, "09:15", hhmm,
+                    after_id=db.get_mx_view_cursor(), kol_ids=get_kol_ids(db) or None,
+                ):
+                    outcome["ran"] = False
+                    outcome["messages"] = 0
+                    outcome["message"] = f"窗口 09:15~{hhmm} 内无新消息，未创建批次"
+                    return
+                result = run_snapshot_batch(
+                    db, day=day, snapshot_at=hhmm, window=("09:15", hhmm),
+                    kind="live", llm_config=resolve_system_llm_config(db),
+                )
+                outcome["ran"] = bool(result.get("ran"))
+                outcome["messages"] = int(result.get("message_count") or 0)
+                outcome["opinions"] = int(result.get("opinions") or 0)
+                if not outcome["ran"]:
+                    outcome.setdefault("message", "窗口内无新消息")
+            except Exception as e:  # noqa: BLE001 - 失败已落批次表
+                outcome["ran"] = False
+                outcome["messages"] = 0
+                outcome["error"] = str(e)[:200]
+            finally:
+                _batch_lock.release()
 
-        _threading.Thread(target=job, name="mx-view-manual-run", daemon=True).start()
-        _audit(admin, "mx_view_manual_run", detail=f"{day} {hhmm}")
-        return {"ok": True, "snapshot_at": hhmm}
+        worker = _threading.Thread(target=job, name="mx-view-manual-run", daemon=True)
+        worker.start()
+        worker.join(timeout=660)  # LLM 链路自带超时，正常必返；兜底防端点永久挂起
+        if outcome.get("busy"):
+            raise HTTPException(status_code=409, detail="已有批次在跑，请稍后再试")
+        if worker.is_alive():
+            outcome.update(ran=False, messages=0, message="批次仍在后台运行，请稍后刷新状态页查看")
+        _audit(admin, "mx_view_manual_run", detail=f"{day} {hhmm} ran={outcome.get('ran')}")
+        return {"ok": True, "snapshot_at": hhmm, **outcome}
 
     @router.post("/admin/mx-views/backfill", dependencies=[Depends(require_admin)], status_code=202)
     async def admin_mx_views_backfill(request: Request, admin: dict = Depends(get_current_user)):
@@ -6856,32 +6995,8 @@ def create_api_router(
 
     @router.post("/admin/ai-tasks", dependencies=[Depends(require_admin)])
     def create_ai_task(body: AiTaskIn, admin: dict = Depends(require_admin)):
-        target_kol = db.get_kol(body.target_kol_id)
-        if not target_kol:
-            raise HTTPException(status_code=404, detail="目标 KOL 不存在")
-        
-        for kol_id in body.selected_kol_ids:
-            kol = db.get_kol(kol_id)
-            if not kol:
-                raise HTTPException(status_code=404, detail=f"所选 KOL {kol_id} 不存在")
-        
-        task_id = db.create_ai_task(
-            name=body.name,
-            description=body.description,
-            target_kol_id=body.target_kol_id,
-            time_range_start_days_offset=body.time_range_start_days_offset,
-            time_range_start_time=body.time_range_start_time,
-            time_range_end_days_offset=body.time_range_end_days_offset,
-            time_range_end_time=body.time_range_end_time,
-            selected_kol_ids=body.selected_kol_ids,
-            prompt_template=body.prompt_template.strip() or ai_analysis.DEFAULT_PROMPT_TEMPLATE,
-            schedule_day_of_week=body.schedule_day_of_week,
-            schedule_time=body.schedule_time,
-        )
-        _audit(admin, "create_ai_task", str(task_id), body.name)
-        # 初始化下次运行时间，避免 next_run_at 为空被调度器视为立即到期
-        db.update_ai_task(task_id, next_run_at=ai_analysis.format_next_run(
-            db.get_ai_task(task_id), datetime.now(UTC)))
+        """创建 AI 分析任务（与 /admin/ai-analysis 共用实现与校验，含时间/窗口检查）。"""
+        task_id = _ai_task_create_core(body, admin)
         task = db.get_ai_task(task_id)
         return {"task": task, "ok": True}
 
@@ -6894,60 +7009,17 @@ def create_api_router(
 
     @router.put("/admin/ai-tasks/{task_id}", dependencies=[Depends(require_admin)])
     def update_ai_task(task_id: int, body: AiTaskUpdate, admin: dict = Depends(require_admin)):
-        task = db.get_ai_task(task_id)
-        if not task:
+        """更新 AI 分析任务（与 /admin/ai-analysis 共用实现：model_fields_set 口径 +
+        时间格式/范围 + 窗口先后校验）。"""
+        if not db.get_ai_task(task_id):
             raise HTTPException(status_code=404, detail="AI 分析任务不存在")
-        
-        if body.target_kol_id is not None:
-            target_kol = db.get_kol(body.target_kol_id)
-            if not target_kol:
-                raise HTTPException(status_code=404, detail="目标 KOL 不存在")
-        
-        if body.selected_kol_ids is not None:
-            for kol_id in body.selected_kol_ids:
-                kol = db.get_kol(kol_id)
-                if not kol:
-                    raise HTTPException(status_code=404, detail=f"所选 KOL {kol_id} 不存在")
-        
-        update_data = body.dict(exclude_none=True)
-        # 调度相关字段变化时重算下次运行时间
-        if {"schedule_day_of_week", "schedule_time", "enabled"} & set(update_data):
-            merged = {**task, **update_data}
-            next_run = ai_analysis.calculate_next_run(merged, datetime.now(UTC))
-            update_data["next_run_at"] = next_run.isoformat() if next_run else None
-        # 重新启用时清零连续失败计数，重新保有「失败自动重试一次」的机会
-        if update_data.get("enabled"):
-            update_data["fail_count"] = 0
-        db.update_ai_task(task_id, **update_data)
-        _audit(admin, "update_ai_task", str(task_id), task["name"])
-        task = db.get_ai_task(task_id)
+        task = _ai_task_update_core(task_id, body, admin)
         return {"task": task, "ok": True}
 
     @router.post("/admin/ai-tasks/{task_id}/run", dependencies=[Depends(require_admin)])
     def run_ai_task(task_id: int, admin: dict = Depends(require_admin)):
-        logger.info(f"===== 收到 AI 任务 {task_id} 运行请求 =====")
-        task = db.get_ai_task(task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="AI 分析任务不存在")
-        logger.info(f"===== 任务详情: {task} =====")
-        
-        def run_task():
-            logger.info(f"===== 开始后台运行 AI 任务 {task_id} =====")
-            try:
-                result = ai_analysis.run_analysis_task(task_id, db)
-                logger.info(f"===== AI 任务 {task_id} 运行完成: {result} =====")
-                # 自动重试耗尽：与调度器同策略，经系统 KOL「系统通知」告知
-                if isinstance(result, dict) and result.get("retries_exhausted"):
-                    _notify_ai_task_stopped(
-                        db, task_id, str(result.get("message") or ""), on_external_post
-                    )
-            except Exception as e:
-                logger.exception(f"===== AI 分析任务 {task_id} 运行异常 =====")
-        
-        # 使用后台线程运行任务
-        threading.Thread(target=run_task, daemon=True, name=f"ai-task-{task_id}").start()
-        _audit(admin, "run_ai_task", str(task_id), task["name"])
-        return {"ok": True, "message": "分析任务已开始运行，请稍后查看日志"}
+        """手动触发 AI 分析任务（与 /admin/ai-analysis 共用实现）。"""
+        return _ai_task_run_core(task_id, admin)
 
     @router.delete("/admin/ai-tasks/{task_id}", dependencies=[Depends(require_admin)])
     def delete_ai_task(task_id: int, admin: dict = Depends(require_admin)):
