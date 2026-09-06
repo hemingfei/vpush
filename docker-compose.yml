@@ -16,6 +16,7 @@ services:
       - VPUSH_INSTANCE=${VPUSH_INSTANCE:-}
       - CONFIG_PATH=/app/config.yaml
       - DB_PATH=/data/dav.db
+      - DB_JOURNAL_MODE=${DB_JOURNAL_MODE:-}
       - IMA_ARCHIVE_ROOT=${IMA_ARCHIVE_ROOT:-}
       - IMA_PULL_URL=${IMA_PULL_URL:-}
       - IMA_PULL_TOKEN=${IMA_PULL_TOKEN:-}

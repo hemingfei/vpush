@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
 import shutil
@@ -36,7 +37,14 @@ SECRET_HASH_COLUMNS = {"wecom_webhook": "wecom_webhook_hash", "bark_key": "bark_
 # 版本号用日期风格（如 2026090601）且严格递增；runner 按 PRAGMA user_version 只执行一次，
 # 每个迁移独立提交，失败回滚该迁移并中止启动。历史遗留的「缺列即补」幂等逻辑保留在
 # _migrate() 中，两者并存：一次性/破坏性变更进这里，幂等兜底留在 _migrate()。
-SCHEMA_MIGRATIONS: list[tuple[int, str, str | tuple[str, ...]]] = []
+SCHEMA_MIGRATIONS: list[tuple[int, str, str | tuple[str, ...]]] = [
+    (
+        2026090601,
+        "ima_document_index downloaded_at 索引",
+        "CREATE INDEX IF NOT EXISTS idx_ima_doc_downloaded "
+        "ON ima_document_index(downloaded_at)",
+    ),
+]
 
 _SLOW_QUERY_SECONDS = 0.2
 
@@ -1018,9 +1026,14 @@ class DB:
         self._conn.row_factory = sqlite3.Row
         # 并发写（多 worker/健康检查脚本）时等待而非直接报错
         self._conn.execute("PRAGMA busy_timeout = 5000")
-        # Docker 里 /data 是 virtiofs 挂载，WAL 的共享内存映射不可靠（会出现
-        # wal/shm 被删除后写入丢失的问题），统一用回滚日志模式，跨进程读写一致。
-        self._conn.execute("PRAGMA journal_mode=DELETE")
+        # 默认回滚日志：Docker 里 /data 可能是 virtiofs 挂载，WAL 的共享内存映射
+        # 不可靠（wal/shm 被删除后写入丢失）。库在本地盘时（如生产 VPS）可用
+        # DB_JOURNAL_MODE=wal 切换，读不再被写阻塞——多用户下知识库列表
+        # 「读等写锁 400-800ms」的问题即源于此。
+        mode = os.environ.get("DB_JOURNAL_MODE", "delete").strip().lower() or "delete"
+        if mode not in ("delete", "wal"):
+            mode = "delete"
+        self._conn.execute(f"PRAGMA journal_mode={mode.upper()}")
         self._conn.executescript(SCHEMA)
 
     def online_backup(self, target: str | Path) -> None:
@@ -3575,7 +3588,7 @@ class DB:
         if not since:
             return []
         cap = max(1, min(int(limit), 800))
-        rows = self._rows(
+        rows = self._read_only_rows(
             "SELECT * FROM ima_document_index WHERE downloaded_at >= ? "
             "ORDER BY downloaded_at DESC, sort_date DESC LIMIT ?",
             (since, cap),
