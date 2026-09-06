@@ -65,6 +65,7 @@ def test_unknown_stock_goes_to_review_not_direct_write():
     assert "赛博努巴" not in db.get_post_tags(pid)
     row = db.list_tag_reviews(status="pending")[0]
     assert row["tag"] == "赛博努巴" and row["kind"] == "stock" and row["source"] == "mx_view"
+    assert row["direction"] == "bull"  # 待审行也带观点方向，审核时可见看多/看空
 
 
 def test_low_confidence_never_direct_writes():
