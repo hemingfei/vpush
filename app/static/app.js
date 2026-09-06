@@ -367,14 +367,14 @@ const NAV = [
   { group: "订阅", items: [
     { route: "timeline", icon: LIST_ICON, label: "最新动态" },
     { route: "news", icon: NEWS_ICON, label: "财经新闻" },
-    { route: "knowledge", icon: BOOK_ICON, label: "研报库" },
+    { route: "knowledge", icon: BOOK_ICON, label: "研报中心" },
     { route: "home", icon: GRID_ICON, label: "订阅广场" },
-    { route: "settings", icon: GEAR_ICON, label: "设置" },
+    { route: "settings", icon: GEAR_ICON, label: "个人设置" },
   ]},
-  { group: "", admin: true, items: [
+  { group: "管理", admin: true, items: [
     { route: "admin/content", icon: DASHBOARD_ICON, label: "内容管理", badge: "requests" },
     { route: "admin/stats", icon: BOOK_ICON, label: "数据源" },
-    { route: "admin/knowledge", icon: BOOK_ICON, label: "研报库设置" },
+    { route: "admin/knowledge", icon: BOOK_ICON, label: "研报设置" },
     { route: "admin/ops", icon: FILE_TEXT_ICON, label: "帖子与日志" },
     { route: "admin/account", icon: USERS_ICON, label: "用户与注册" },
   ]},
@@ -441,7 +441,7 @@ const MOBILE_NAV = [
   { route: "timeline", icon: LIST_ICON, label: "动态" },
   { route: "news", icon: NEWS_ICON, label: "财经新闻" },
   { route: "home", icon: GRID_ICON, label: "广场" },
-  { route: "settings", icon: GEAR_ICON, label: "设置" },
+  { route: "settings", icon: GEAR_ICON, label: "个人设置" },
 ];
 
 function renderBottomNav(user) {
@@ -2028,7 +2028,7 @@ async function renderTimeline(seq) {
     <div class="tl-ima-entry">
       <button type="button" class="tl-ima-entry-btn" onclick="go('knowledge')">
         <span class="tl-ima-entry-icon">${BOOK_ICON}</span>
-        <span><strong>研报库</strong><small>打开研报库</small></span>
+        <span><strong>研报中心</strong><small>打开研报中心</small></span>
       </button>
     </div>
     <section class="section-panel tl-feed-panel" id="tl-feed-panel">

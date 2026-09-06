@@ -776,7 +776,7 @@ export function createImaView(dependencies) {
     }));
     const pillsHtml = `<div class="kb-source-pills-desk">${feishuSourcePillsHtml(sources, selectedGroup, "knowledge")}</div>`;
     const mobileOptions = [
-      `<option value="" ${!selectedGroup ? "selected" : ""}>研报库</option>`,
+      `<option value="" ${!selectedGroup ? "selected" : ""}>研报中心</option>`,
       ...sources.map((s) => `<option value="${escapeHtml(s.group_id)}" ${s.group_id === selectedGroup ? "selected" : ""}>${escapeHtml(s.title)}</option>`)
     ].join("");
     const mobileSelectHtml = `<div class="kb-source-select-wrap"><select class="kb-source-select-mobile" aria-label="切换研报库" onchange="selectImaDocumentGroup(this.value)">${mobileOptions}</select></div>`;
@@ -829,7 +829,7 @@ export function createImaView(dependencies) {
   async function renderKnowledge(seq, encodedMediaId = "") {
     stopImaDocumentsAutoLoad();
     const mediaId = encodedMediaId ? decodeURIComponent(encodedMediaId) : "";
-    setPageTitle("研报库");
+    setPageTitle("研报中心");
     if (mediaId && !$("#ima-reader-page")) {
       $("#main").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
     }
@@ -864,11 +864,11 @@ export function createImaView(dependencies) {
       } else if (documentsOk) {
         const groups = Array.isArray(documentsResult.value.groups) ? documentsResult.value.groups : [];
         subscribed = groups.map((group) => ({ id: group.id, name: group.name, enabled: true }));
-        catalogWarning = "研报库目录加载失败";
+        catalogWarning = "研报中心目录加载失败";
       } else {
         subscribed = Array.isArray(state.imaCatalogSubscribed) ? state.imaCatalogSubscribed : [];
         available = Array.isArray(state.imaCatalogAvailable) ? state.imaCatalogAvailable : [];
-        catalogWarning = "研报库目录加载失败";
+        catalogWarning = "研报中心目录加载失败";
       }
       state.imaCatalogSubscribed = subscribed;
       state.imaCatalogAvailable = available;
@@ -879,8 +879,8 @@ export function createImaView(dependencies) {
         sourceControl.outerHTML = knowledgeSourceControlsHtml(selectedGroup);
       }
       if (catalogOk && selectedGroup && !isAdmin && !subscribed.some((group) => String(group.id) === selectedGroup)) {
-        setPageTitle("研报库", true, "knowledge", "回研报库");
-        $("#main").innerHTML = emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回研报库</button></div>`);
+        setPageTitle("研报中心", true, "knowledge", "回研报中心");
+        $("#main").innerHTML = emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回研报中心</button></div>`);
         return;
       }
       state.imaDocumentsGroup = selectedGroup;
@@ -946,7 +946,7 @@ export function createImaView(dependencies) {
     state.imaDocumentsQuery = query;
     state.imaDocumentsDay = day;
     state.imaDocumentsTag = tag;
-    if (!knowledgeMediaIdFromPath()) setPageTitle("研报库");
+    if (!knowledgeMediaIdFromPath()) setPageTitle("研报中心");
     const listRoot = $("#kb-list");
     if (!listRoot) {
       await renderKnowledge(seq);
@@ -1084,7 +1084,7 @@ export function createImaView(dependencies) {
       }
       const denied = String(err.message || "").includes("知识库不存在");
       body.innerHTML = denied
-        ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回研报库</button></div>`)
+        ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回研报中心</button></div>`)
         : emptyState(`加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="refreshImaDocuments()">重试</button></div>`);
     }
   }
@@ -1261,7 +1261,7 @@ export function createImaView(dependencies) {
     state.imaDocumentsTag = tag;
     const groupQuery = documentGroup ? `?group=${encodeURIComponent(documentGroup)}` : "";
     let backRoute = imaDocumentsRoute(listGroup, query, day, tag);
-    setPageTitle("研报库");
+    setPageTitle("研报中心");
     $("#kb-reader").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
     try {
       const item = await api(`/api/ima-documents/${encodeURIComponent(mediaId)}${groupQuery}`);
@@ -1357,7 +1357,7 @@ export function createImaView(dependencies) {
       if (!routeStillActive(seq) || readerSeq !== currentImaReaderSeq()) return;
       const denied = String(err.message || "").includes("知识库不存在");
       $("#kb-reader").innerHTML = denied
-        ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" data-ima-back="${escapeHtml(backRoute)}">回研报库</button></div>`)
+        ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" data-ima-back="${escapeHtml(backRoute)}">回研报中心</button></div>`)
         : emptyState(`文档加载失败：${err.message}`, `<div><button type="button" class="btn-normal" data-ima-back="${escapeHtml(backRoute)}">返回文档列表</button></div>`);
     }
   }

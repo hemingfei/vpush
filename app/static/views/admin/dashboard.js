@@ -253,7 +253,7 @@ export function createAdminDashboardView(dependencies) {
           <div class="cfg-save-row">
             <button type="button" class="btn-normal" id="pc-save" onclick="savePollingConfig()">保存抓取设置</button>
           </div>
-          <p class="section-meta"><a href="/admin/knowledge" onclick="event.preventDefault();go('admin/knowledge')">IMA 与知识星球设置已移至研报库设置</a></p>
+          <p class="section-meta"><a href="/admin/knowledge" onclick="event.preventDefault();go('admin/knowledge')">IMA 与知识星球设置已移至研报设置</a></p>
         </section>
       </div>
       <div id="st-cookies" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-cookies" style="display:none">
@@ -293,7 +293,7 @@ export function createAdminDashboardView(dependencies) {
             ${tw.set && !tw.from_env ? `<button type="button" class="btn-ghost danger" onclick="clearSavedCookie('twitter','X')" aria-label="清除 X Cookie">清除</button>` : ""}
           </div>
         </section>
-        <p class="section-meta"><a href="/admin/knowledge" onclick="event.preventDefault();go('admin/knowledge')">IMA 与知识星球设置已移至研报库设置</a></p>
+        <p class="section-meta"><a href="/admin/knowledge" onclick="event.preventDefault();go('admin/knowledge')">IMA 与知识星球设置已移至研报设置</a></p>
       </div>
       <div id="st-imgbed" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-imgbed" style="display:none">
         ${imgbedSettingsHtml(s.imgbed || {})}

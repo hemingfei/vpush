@@ -76,7 +76,7 @@ def test_subscription_push_is_the_only_subscription_management_navigation_entry(
 
     for block in (nav, mobile):
         assert 'route: "settings"' in block
-        assert 'label: "设置"' in block
+        assert 'label: "个人设置"' in block
         assert 'route: "mysubs"' not in block
         assert 'route: "combinations"' not in block
     assert "TRENDING_ICON" not in src
@@ -731,7 +731,7 @@ def test_push_is_the_default_settings_tab():
     assert 'id="st-subs"' not in render
     assert "settingsSubscriptionsPanelHtml()" not in render
     assert 'switchSettingsTab(state.settingsTab || "push")' in render
-    assert 'setPageTitle("设置")' in render
+    assert 'setPageTitle("个人设置")' in render
     assert 'name = "push"' in switch
 
 
@@ -1275,6 +1275,7 @@ def test_admin_content_group_tabs_and_redirects():
     # 侧边栏拍平：5 个条目，无折叠组
     for route in ("admin/content", "admin/stats", "admin/knowledge", "admin/ops", "admin/account"):
         assert f'route: "{route}"' in src
+    assert 'group: "管理"' in src
     assert "subs:" not in src.split("const NAV =")[1].split("];")[0]
     # 三容器页签配置
     for group, tabs in {
@@ -3185,7 +3186,7 @@ def test_ima_search_ignores_single_ascii_character():
 def test_report_keyword_watch_uses_settings_switch_not_library_subscribe():
     src = _all_view_source()
     settings = _fn_body("renderSettings")
-    assert "匹配研报库" in settings
+    assert "匹配研报中心" in settings
     assert "set-kw-reports" in settings
     assert "saveKeywordsMatchReports" in settings
     assert "每日研报入库结束" in settings
@@ -3949,7 +3950,7 @@ def test_ima_report_header_responsive_source_and_search_clear():
     assert "feishuSourcePillsHtml(" in source_fn
     assert "kb-source-select-mobile" in source_fn
     assert "selectImaDocumentGroup(this.value)" in source_fn
-    assert ">研报库</option>" in source_fn
+    assert ">研报中心</option>" in source_fn
     assert 'data-ima-tag-index="-1">全部</button>' in _fn_body("imaTagMenuHtml")
     assert 'tag || "标签"' in render
 
@@ -4333,7 +4334,7 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     assert nav.index('route: "timeline"') < nav.index('route: "knowledge"')
     assert 'route: "ima-documents"' not in nav
     assert "IMA 文档" not in nav
-    assert 'label: "研报库"' in nav
+    assert 'label: "研报中心"' in nav
     assert 'group: "资料"' not in nav
     assert 'route: "ima-documents"' not in mobile
     assert 'route: "knowledge"' not in mobile
@@ -4341,8 +4342,8 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     assert "知识库请在电脑上打开" not in src
     assert 'class="tl-ima-entry"' in timeline
     assert "go('knowledge')" in timeline
-    assert "研报库" in timeline
-    assert "打开研报库" in timeline
+    assert "研报中心" in timeline
+    assert "打开研报中心" in timeline
     css = STYLE_CSS.read_text()
     assert ".tl-ima-entry { display: none; }" in css
     # 手机（≤768px）也显示入口：知识库已放开移动端
@@ -4373,7 +4374,7 @@ def test_knowledge_parallel_loads_catalog_and_first_page():
     assert "prefetched" in list_fn
     assert "await prefetched" in list_fn
     assert "imaDocumentsRequestPath()" in list_fn
-    assert "研报库目录加载失败" in render
+    assert "研报中心目录加载失败" in render
     assert "refreshKnowledge()" in render
     assert "refreshImaDocuments()" in list_fn
     assert 'params.set("limit", "50")' in path_fn
@@ -5399,12 +5400,12 @@ def test_ima_collector_storage_status_text_contract():
 def test_knowledge_settings_nav_and_empty_state():
     src = APP_JS.read_text()
     assert '{ route: "admin/knowledge"' in src
-    assert 'label: "研报库设置"' in src
+    assert 'label: "研报设置"' in src
     assert "knowledge: loadAdminKnowledge" in _fn_body("renderAdmin")
     assert "go('admin/knowledge')" in _fn_body("renderKnowledge")
     assert "admin/stats?tab=config" not in _fn_body("renderKnowledge")
     stats = _fn_body("loadAdminStats")
-    assert "研报库设置" in stats
+    assert "研报设置" in stats
     assert "go('admin/knowledge')" in stats
     assert "IMA 与知识星球设置已移至" in stats
 
