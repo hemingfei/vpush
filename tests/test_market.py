@@ -4,14 +4,14 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from app.market import CN_TZ, GROUPS, HISTORY_SYMBOLS, MarketQuotes, default_group, parse_history, parse_quotes, quote_status
+from app.market import CN_TZ, GROUPS, MINUTE_SYMBOLS, MarketQuotes, default_group, parse_intraday, parse_quotes, quote_status
 
 
 def quote_payload(price="3930.12", timestamp="20260904103000", group="day"):
     rows = []
     for symbol, name in GROUPS[group]:
         fields = [""] * 33
-        fields[1:4] = [name, HISTORY_SYMBOLS.get(symbol, symbol)[2:], price]
+        fields[1:5] = [name, MINUTE_SYMBOLS.get(symbol, symbol)[2:], price, "3942.09"]
         formatted = timestamp
         if timestamp != "bad-time" and symbol.startswith(("hk", "us")):
             fmt = "%Y/%m/%d %H:%M:%S" if symbol.startswith("hk") else "%Y-%m-%d %H:%M:%S"
@@ -26,7 +26,7 @@ def test_parse_quotes_preserves_order_and_exchange_time():
     assert [item["symbol"] for item in items] == [symbol for symbol, _ in GROUPS["day"]]
     assert items[0] == {
         "symbol": "sh000001", "name": "上证指数", "price": 3930.12,
-        "change": -11.97, "percent": -0.3, "quoted_at": "2026-09-04T10:30:00+08:00",
+        "previous_close": 3942.09, "change": -11.97, "percent": -0.3, "quoted_at": "2026-09-04T10:30:00+08:00",
     }
 
 
@@ -54,7 +54,7 @@ def test_trading_status_requires_recent_exchange_quote(now, expected):
 def test_shared_cache_failure_cooldown_and_recovery():
     cache = MarketQuotes()
     response = httpx.Response(200, content=quote_payload().encode("gb18030"), request=httpx.Request("GET", "https://qt.gtimg.cn"))
-    with patch("app.market.httpx.Client") as factory, patch("app.market.time.monotonic", return_value=100) as clock, patch.object(cache, "_history", side_effect=lambda client, symbol: (symbol, [])):
+    with patch("app.market.httpx.Client") as factory, patch("app.market.time.monotonic", return_value=100) as clock, patch.object(cache, "_intraday", side_effect=lambda client, symbol: (symbol, None)):
         get = factory.return_value.__enter__.return_value.get
         get.return_value = response
         first = cache.snapshot("day")
@@ -133,11 +133,75 @@ def test_exchange_sessions_and_us_dst(symbol, now, expected):
     assert quote_status({"symbol": symbol, "quoted_at": now}, current) == expected
 
 
-def test_history_uses_close_prices_and_rejects_legacy_gaps():
-    rows = [["2026-09-03", "100", "105", "110"], ["2026-09-04", "106", "103", "112"]]
-    assert parse_history({"data": {"usSOXX.OQ": {"day": rows}}}, "usSOXX") == [
-        {"date": "2026-09-03", "close": 105.0}, {"date": "2026-09-04", "close": 103.0},
-    ]
-    rows[0][0] = "2011-06-02"
-    assert parse_history({"data": {"usSOXX.OQ": {"day": rows}}}, "usSOXX") == []
-    assert parse_history({"data": {"hkHSI": {"day": [["bad", "1", "NaN"]]}}}, "hkHSI") == []
+def minute_payload(symbol, rows, date="20260904"):
+    return {"data": {MINUTE_SYMBOLS.get(symbol, symbol): {"data": {"date": date, "data": rows}}}}
+
+
+@pytest.mark.parametrize("symbol,duration,afternoon", [("sh000001", 240, 120), ("hkHSI", 330, 150), ("usSOXX", 390, 210)])
+def test_intraday_uses_minute_prices_and_exchange_sessions(symbol, duration, afternoon):
+    data = parse_intraday(minute_payload(symbol, [
+        "1300 105.25 99999 12345", "0930 100 88888", "0931 NaN 1", "0932 -1 2", "0933 inf 1",
+        "bad", "2500 102 1", "0800 103 1", "1831 107 1", "0930 101 88888", "1230 104 1",
+    ]), symbol)
+    assert data["date"] == "2026-09-04" and data["duration"] == duration
+    assert data["points"][0] == {"time": "09:30", "minute": 0, "price": 101.0}
+    assert data["points"][-1] == {"time": "13:00", "minute": afternoon, "price": 105.25}
+    assert len(data["points"]) == (3 if symbol.startswith("us") else 2)
+
+
+def test_intraday_rejects_daily_history_and_invalid_dates():
+    assert parse_intraday({"data": {"hkHSI": {"day": [["2026-09-04", "100", "105"]]}}}, "hkHSI") is None
+    assert parse_intraday(minute_payload("hkHSI", ["0930 100"], "bad"), "hkHSI") is None
+    assert parse_intraday(minute_payload("hkHSI", ["0930 NaN"]), "hkHSI") is None
+
+
+@pytest.mark.parametrize("symbol,endpoint,code", [
+    ("sh000001", "minute", "sh000001"), ("hkHSI", "minute", "hkHSI"),
+    ("us.INX", "UsMinute", "us.INX"), ("usSOXX", "UsMinute", "usSOXX.OQ"), ("usYINN", "UsMinute", "usYINN.AM"),
+])
+def test_intraday_requests_correct_endpoint_and_code(symbol, endpoint, code):
+    def respond(request):
+        assert request.url.path == f"/appstock/app/{endpoint}/query"
+        assert dict(request.url.params) == {"code": code}
+        return httpx.Response(200, json=minute_payload(symbol, ["0930 100", "0931 101"]))
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        result_symbol, data = MarketQuotes()._intraday(client, symbol)
+    assert result_symbol == symbol and len(data["points"]) == 2
+
+
+def test_intraday_cache_refresh_failure_and_trading_day_rollover():
+    cache = MarketQuotes()
+    series = parse_intraday(minute_payload("sh000001", ["0930 100", "1030 101"]), "sh000001")
+    with patch("app.market.httpx.Client") as factory, patch("app.market.time.monotonic", return_value=100) as clock, patch.object(cache, "_intraday") as minute:
+        get = factory.return_value.__enter__.return_value.get
+        get.return_value = httpx.Response(200, content=quote_payload().encode("gb18030"), request=httpx.Request("GET", "https://qt.gtimg.cn"))
+        minute.side_effect = lambda client, symbol: (symbol, series)
+        first = cache.snapshot("day")["items"][0]
+        assert first["intraday"] == series and not first["intraday_stale"]
+        cache.snapshot("day")
+        assert minute.call_count == 6
+        clock.return_value = 131
+        minute.side_effect = lambda client, symbol: (symbol, None)
+        failed = cache.snapshot("day")["items"][0]
+        assert failed["intraday"] == series and failed["intraday_stale"]
+        clock.return_value = 162
+        get.return_value = httpx.Response(200, content=quote_payload(timestamp="20260907093000").encode("gb18030"), request=httpx.Request("GET", "https://qt.gtimg.cn"))
+        minute.side_effect = lambda client, symbol: (symbol, series)
+        rollover = cache.snapshot("day")["items"][0]
+        assert "intraday" not in rollover and rollover["intraday_stale"]
+        clock.return_value = 193
+        series = {**series, "date": "2026-09-07"}
+        recovered = cache.snapshot("day")["items"][0]
+        assert recovered["intraday"]["date"] == "2026-09-07" and not recovered["intraday_stale"]
+
+
+def test_live_quote_with_lagging_minutes_is_marked_delayed():
+    cache = MarketQuotes()
+    item = parse_quotes(quote_payload())[0]
+    item.update(stale=False, intraday_stale=False, intraday=parse_intraday(minute_payload("sh000001", ["0930 100", "1000 101"]), "sh000001"))
+    cache._cache["day"] = {"items": {"sh000001": item}, "retry_at": float("inf")}
+    with patch("app.market.quote_status", return_value="trading"):
+        assert cache.snapshot("day")["items"][0]["intraday_stale"]
+    with patch("app.market.quote_status", return_value="closed"):
+        assert not cache.snapshot("day")["items"][0]["intraday_stale"]

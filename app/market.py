@@ -1,4 +1,4 @@
-"""Cached quotes and daily close histories for the timeline market watch."""
+"""Cached quotes and intraday minute prices for the timeline market watch."""
 from __future__ import annotations
 
 import math
@@ -25,9 +25,9 @@ GROUPS = {
         ("usSOXX", "SOXX"), ("usYINN", "YINN"),
     ),
 }
-HISTORY_SYMBOLS = {"usSOXX": "usSOXX.OQ", "usYINN": "usYINN.AM"}
+MINUTE_SYMBOLS = {"usSOXX": "usSOXX.OQ", "usYINN": "usYINN.AM"}
 QUOTE_URL = "https://qt.gtimg.cn/q="
-HISTORY_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+MINUTE_URL = "https://web.ifzq.gtimg.cn/appstock/app/{market}/query"
 
 
 def default_group(now: datetime) -> str:
@@ -40,11 +40,11 @@ def parse_quotes(text: str, group: str = "day") -> list[dict]:
     for symbol, name in GROUPS[group]:
         fields = records.get(symbol, "").split("~")
         try:
-            expected = HISTORY_SYMBOLS.get(symbol, symbol)[2:]
+            expected = MINUTE_SYMBOLS.get(symbol, symbol)[2:]
             if len(fields) < 33 or fields[2] != expected:
                 continue
-            price, change, percent = (float(fields[i]) for i in (3, 31, 32))
-            if not all(math.isfinite(value) for value in (price, change, percent)) or price <= 0:
+            price, previous_close, change, percent = (float(fields[i]) for i in (3, 4, 31, 32))
+            if not all(math.isfinite(value) for value in (price, previous_close, change, percent)) or min(price, previous_close) <= 0:
                 continue
             fmt = "%Y-%m-%d %H:%M:%S" if symbol.startswith("us") else (
                 "%Y/%m/%d %H:%M:%S" if symbol.startswith("hk") else "%Y%m%d%H%M%S"
@@ -54,30 +54,38 @@ def parse_quotes(text: str, group: str = "day") -> list[dict]:
             continue
         items.append({
             "symbol": symbol, "name": name, "price": price,
-            "change": change, "percent": percent, "quoted_at": quoted_at.isoformat(),
+            "previous_close": previous_close, "change": change, "percent": percent, "quoted_at": quoted_at.isoformat(),
         })
     if not items:
         raise ValueError("No valid market quotes")
     return items
 
 
-def parse_history(payload: dict, symbol: str) -> list[dict]:
-    data = payload.get("data", {}).get(HISTORY_SYMBOLS.get(symbol, symbol), {})
-    rows = data.get("qfqday") or data.get("day") or []
+def parse_intraday(payload: dict, symbol: str) -> dict | None:
+    data = payload.get("data", {}).get(MINUTE_SYMBOLS.get(symbol, symbol), {}).get("data", {})
+    try:
+        date = datetime.strptime(data.get("date", ""), "%Y%m%d").date().isoformat()
+    except (ValueError, TypeError):
+        return None
+    us, hk = symbol.startswith("us"), symbol.startswith("hk")
+    end, lunch = (960 if us or hk else 900), (720 if hk else 690)
+    duration = end - 570 - (0 if us else 780 - lunch)
     points = []
-    for row in rows:
+    for row in data.get("data", []):
         try:
-            date = datetime.strptime(row[0], "%Y-%m-%d").date().isoformat()
-            close = float(row[2])
-            if math.isfinite(close) and close > 0:
-                points.append({"date": date, "close": close})
-        except (ValueError, TypeError, IndexError):
+            fields = row.split()
+            clock = datetime.strptime(fields[0], "%H%M")
+            minute, price = clock.hour * 60 + clock.minute, float(fields[1])
+            if not math.isfinite(price) or price <= 0 or not 570 <= minute <= end:
+                continue
+            if not us and lunch < minute < 780:
+                continue
+            offset = minute - 570 - (780 - lunch if not us and minute >= 780 else 0)
+            points.append({"time": clock.strftime("%H:%M"), "minute": offset, "price": price})
+        except (ValueError, TypeError, IndexError, AttributeError):
             continue
-    points = sorted({point["date"]: point for point in points}.values(), key=lambda point: point["date"])[-20:]
-    # Reject sparse legacy series instead of drawing over years of missing data.
-    if len(points) < 2 or (datetime.fromisoformat(points[-1]["date"]) - datetime.fromisoformat(points[0]["date"])).days > 45:
-        return []
-    return points
+    points = sorted({point["time"]: point for point in points}.values(), key=lambda point: point["time"])
+    return {"date": date, "duration": duration, "points": points} if points else None
 
 
 def quote_status(item: dict, now: datetime) -> str:
@@ -100,15 +108,16 @@ def quote_status(item: dict, now: datetime) -> str:
 class MarketQuotes:
     def __init__(self):
         self._locks = {group: threading.Lock() for group in GROUPS}
-        self._cache = {group: {"items": {}, "retry_at": 0.0, "history_at": 0.0} for group in GROUPS}
+        self._cache = {group: {"items": {}, "retry_at": 0.0} for group in GROUPS}
 
-    def _history(self, client: httpx.Client, symbol: str) -> tuple[str, list[dict]]:
+    def _intraday(self, client: httpx.Client, symbol: str) -> tuple[str, dict | None]:
         try:
-            response = client.get(HISTORY_URL, params={"param": f"{HISTORY_SYMBOLS.get(symbol, symbol)},day,,,20,qfq"})
+            market = "UsMinute" if symbol.startswith("us") else "minute"
+            response = client.get(MINUTE_URL.format(market=market), params={"code": MINUTE_SYMBOLS.get(symbol, symbol)})
             response.raise_for_status()
-            return symbol, parse_history(response.json(), symbol)
+            return symbol, parse_intraday(response.json(), symbol)
         except (httpx.HTTPError, ValueError, TypeError, AttributeError):
-            return symbol, []
+            return symbol, None
 
     def snapshot(self, group: str = "auto") -> dict:
         now = datetime.now(CN_TZ)
@@ -127,17 +136,29 @@ class MarketQuotes:
                     for symbol, name in GROUPS[group]:
                         previous = cache["items"].get(symbol, {"symbol": symbol, "name": name})
                         cache["items"][symbol] = {**previous, **fresh.get(symbol, {}), "stale": symbol not in fresh}
-                    if fresh and time.monotonic() >= cache["history_at"]:
+                    if fresh:
                         with ThreadPoolExecutor(max_workers=6) as pool:
-                            for symbol, points in pool.map(lambda symbol: self._history(client, symbol), fresh):
+                            for symbol, intraday in pool.map(lambda symbol: self._intraday(client, symbol), fresh):
                                 item = cache["items"][symbol]
-                                if points:
-                                    item["history"] = points
-                                item["history_stale"] = not bool(points)
-                        cache["history_at"] = time.monotonic() + 300
+                                quote_date = item["quoted_at"][:10]
+                                valid = intraday is not None and intraday["date"] == quote_date
+                                if valid:
+                                    item["intraday"] = intraday
+                                elif item.get("intraday", {}).get("date") != quote_date:
+                                    item.pop("intraday", None)
+                                item["intraday_stale"] = not valid
                 cache["retry_at"] = time.monotonic() + 30
-            items = [{**item, "status": quote_status(item, now)} for item in cache["items"].values()]
+            items = []
+            for item in cache["items"].values():
+                status = quote_status(item, now)
+                intraday = item.get("intraday")
+                lagging = False
+                if intraday and status == "trading":
+                    quoted_at = datetime.fromisoformat(item["quoted_at"])
+                    last_point = datetime.fromisoformat(f'{intraday["date"]}T{intraday["points"][-1]["time"]}').replace(tzinfo=quoted_at.tzinfo)
+                    lagging = (quoted_at - last_point).total_seconds() > 180
+                items.append({**item, "status": status, "intraday_stale": item["stale"] or item.get("intraday_stale", True) or lagging})
             return {
                 "group": group, "items": items,
-                "stale": any(item["stale"] for item in items), "history_period": 20,
+                "stale": any(item["stale"] for item in items),
             }

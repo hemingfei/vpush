@@ -258,7 +258,8 @@ def test_market_initial_failure_has_retry_and_no_zero_quotes(page: Page):
     expect(page.get_by_role('button', name='重试', exact=True)).to_be_visible()
 
 
-def test_market_switches_automatically_and_ignores_other_group_responses(page: Page):
+@pytest.mark.parametrize("daily_percent,expected_class", [(3.52, "positive"), (-3.52, "negative"), (0, "flat")])
+def test_market_switches_automatically_and_ignores_other_group_responses(page: Page, daily_percent, expected_class):
     page.clock.install(time=datetime(2026, 9, 4, 11, 59, 50, tzinfo=timezone.utc))
     page.evaluate("""async () => {
       const { createMarketView } = await import('/views/market.js');
@@ -276,13 +277,19 @@ def test_market_switches_automatically_and_ignores_other_group_responses(page: P
     expect(page.locator('.market-name')).to_have_text(['标普 500 指数', '纳斯达克指数', '纳斯达克 100', '道琼斯指数', 'SOXX', 'YINN'])
     page.evaluate("marketTest.resolve['/api/market/indices?group=day']({group:'day',items:[],stale:true})")
     expect(page.locator('.market-status')).to_have_text('加载中')
-    page.evaluate("""marketTest.resolve['/api/market/indices?group=night']({group:'night',stale:false,items:[{
-      symbol:'usSOXX',name:'SOXX',price:519.86,change:17.66,percent:3.52,status:'closed',quoted_at:'2026-09-04T16:00:01-04:00',
-      history:[{date:'2026-09-02',close:500},{date:'2026-09-03',close:520},{date:'2026-09-04',close:519.86}]
-    }]})""")
+    page.evaluate("""dailyPercent => marketTest.resolve['/api/market/indices?group=night']({group:'night',stale:false,items:[{
+      symbol:'usSOXX',name:'SOXX',price:519.86,change:17.66,percent:dailyPercent,status:'closed',quoted_at:'2026-09-04T16:00:01-04:00',
+      previous_close:502.20,
+      intraday:{date:'2026-09-04',duration:390,points:[{time:'09:30',minute:0,price:550},{time:'10:30',minute:60,price:520},{time:'11:40',minute:130,price:519.86}]}
+    }]})""", daily_percent)
     expect(page.locator('.market-spark')).to_have_count(1)
-    expect(page.locator('.market-spark')).to_have_attribute('aria-label', re.compile('SOXX.*2026-09-02.*2026-09-04'))
+    expect(page.locator('.market-spark')).to_have_attribute('aria-label', re.compile('SOXX.*2026-09-04 日内分时.*09:30.*11:40.*昨收 502.20'))
+    expect(page.locator('.market-spark')).to_have_class(re.compile(expected_class))
     assert len(page.locator('.market-spark polyline').get_attribute('points').split()) == 3
+    assert page.locator('.market-spark polyline').get_attribute('points').split()[-1].startswith('22.0,')
+    expect(page.locator('.market-spark-baseline')).to_have_attribute('y1', '18')
+    expect(page.locator('.market-footer')).to_contain_text('日内分时 · 09/04')
+    assert '近20' not in page.locator('#tl-market').inner_text()
     assert '腾讯行情' not in page.locator('#tl-market').inner_text()
     page.get_by_role('button', name='A股 / 港股').click()
     expect(page.get_by_role('checkbox', name='自动')).not_to_be_checked()
