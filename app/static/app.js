@@ -444,7 +444,41 @@ const MOBILE_NAV = [
   { route: "settings", icon: GEAR_ICON, label: "个人设置" },
 ];
 
+let bottomNavLastY = 0;
+let bottomNavTravel = 0;
+
+function resetBottomNavScroll() {
+  bottomNavLastY = Math.max(0, window.scrollY);
+  bottomNavTravel = 0;
+  const nav = $("#bottom-nav");
+  if (nav) nav.inert = false;
+}
+
+function updateBottomNavScroll() {
+  const nav = $("#bottom-nav");
+  if (!nav) return;
+  const maxY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+  // Clamp overscroll so bouncing at either edge does not reverse navigation state.
+  const y = Math.max(0, Math.min(window.scrollY, maxY));
+  const delta = y - bottomNavLastY;
+  bottomNavLastY = y;
+  if (window.innerWidth > 768 || maxY === 0 || y === 0) {
+    resetBottomNavScroll();
+    return;
+  }
+  if (!delta) return;
+  bottomNavTravel = Math.sign(delta) === Math.sign(bottomNavTravel) ? bottomNavTravel + delta : delta;
+  if (bottomNavTravel >= 24 || bottomNavTravel <= -8) {
+    nav.inert = bottomNavTravel > 0;
+    bottomNavTravel = 0;
+  }
+}
+
+window.addEventListener("scroll", updateBottomNavScroll, { passive: true });
+window.matchMedia("(max-width: 768px)").addEventListener("change", resetBottomNavScroll);
+
 function renderBottomNav(user) {
+  resetBottomNavScroll();
   const tabs = MOBILE_NAV.filter((tab) => tab.route !== "news" || state.newsVisible);
   if (user.is_admin) tabs.push({ route: "more", icon: PLUS_ICON, label: "更多" });
   $("#bottom-nav").innerHTML = tabs.map((t) => `
@@ -5351,6 +5385,8 @@ async function router() {
   } catch (err) {
     // 只在当前路由仍是本次渲染目标时才写错误状态，避免旧路由的错误覆盖新页面
     if (routeStillActive(renderSeq)) $("#main").innerHTML = emptyState(err.message);
+  } finally {
+    if (routeStillActive(renderSeq)) resetBottomNavScroll();
   }
 }
 

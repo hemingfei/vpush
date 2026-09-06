@@ -2522,6 +2522,11 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   border-top: var(--border-default);
   padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
   justify-content: space-around;
+  transition: transform 180ms ease;
+}
+.bottom-nav[inert] { transform: translateY(100%); pointer-events: none; }
+@media (prefers-reduced-motion: reduce) {
+  .bottom-nav { transition: none; }
 }
 .bnav-item {
   flex: 1;

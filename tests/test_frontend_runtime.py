@@ -319,6 +319,60 @@ def install_badge_reader_bootstrap(page: Page) -> None:
     page.route("**/api/**", respond)
 
 
+@pytest.mark.parametrize("reduced_motion", ["reduce", "no-preference"])
+def test_mobile_navigation_scroll_direction(page: Page, static_origin: str, tmp_path: Path, reduced_motion: str):
+    page.set_viewport_size({"width": 380, "height": 840})
+    page.emulate_media(reduced_motion=reduced_motion)
+    install_badge_reader_bootstrap(page)
+    page.goto(static_origin)
+    page.evaluate("go('home')")
+    expect(page.locator("#kol-list")).to_be_visible()
+    nav = page.locator("#bottom-nav")
+    page.evaluate("document.querySelector('#main').style.minHeight = '3000px'")
+
+    def scroll(y):
+        page.evaluate("y => window.scrollTo(0, y)", y)
+        page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+
+    scroll(100)
+    expect(nav).to_have_attribute("inert", "")
+    page.wait_for_function("document.querySelector('#bottom-nav').getBoundingClientRect().top >= innerHeight")
+    page.screenshot(path=str(tmp_path / f"nav-hidden-{reduced_motion}.png"))
+    page.set_viewport_size({"width": 380, "height": 880})
+    expect(nav).to_have_attribute("inert", "")
+    page.set_viewport_size({"width": 380, "height": 840})
+    scroll(96)
+    expect(nav).to_have_attribute("inert", "")
+    scroll(92)
+    expect(nav).not_to_have_attribute("inert", "")
+    page.wait_for_function("document.querySelector('#bottom-nav').getBoundingClientRect().bottom <= innerHeight")
+    scroll(102)
+    expect(nav).not_to_have_attribute("inert", "")
+    scroll(116)
+    expect(nav).to_have_attribute("inert", "")
+    scroll(0)
+    expect(nav).not_to_have_attribute("inert", "")
+    page.wait_for_function("document.querySelector('#bottom-nav').getBoundingClientRect().bottom <= innerHeight")
+    page.screenshot(path=str(tmp_path / f"nav-visible-{reduced_motion}.png"))
+    if reduced_motion == "reduce":
+        assert nav.evaluate("el => getComputedStyle(el).transitionDuration") == "0s"
+    scroll(200)
+    page.evaluate("go('more')")
+    expect(page.locator(".more-grid")).to_be_visible()
+    expect(nav).not_to_have_attribute("inert", "")
+    scroll(400)
+    expect(nav).to_have_attribute("inert", "")
+    page.set_viewport_size({"width": 1280, "height": 840})
+    expect(nav).not_to_have_attribute("inert", "")
+    expect(nav).to_be_hidden()
+    page.set_viewport_size({"width": 380, "height": 840})
+    page.evaluate("document.querySelector('#main').style.minHeight = ''")
+    page.evaluate("go('timeline')")
+    expect(page.locator("#feed")).to_be_visible()
+    scroll(0)
+    expect(nav).not_to_have_attribute("inert", "")
+
+
 @pytest.mark.parametrize("width", [320, 380, 768, 1280])
 @pytest.mark.parametrize("theme", ["light", "dark"])
 def test_timeline_long_text_keeps_navigation_in_viewport(
@@ -364,7 +418,8 @@ def test_timeline_long_text_keeps_navigation_in_viewport(
                     assert len(geometry["navigation"]) == 4
                     for rect in geometry["navigation"]:
                         assert 0 <= rect["left"] < rect["right"] <= width
-                        assert 0 <= rect["top"] < rect["bottom"] <= 840
+                        if scroll_y == 0:
+                            page.wait_for_function("document.querySelector('#bottom-nav').getBoundingClientRect().bottom <= innerHeight")
                 else:
                     expect(page.locator("#bottom-nav")).to_be_hidden()
             page.screenshot(path=str(tmp_path / f"navigation-{field}-{width}-{theme}.png"))
