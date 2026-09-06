@@ -1,4 +1,4 @@
-import { escapeHtml, imgOnError, imgProxyUrl, imgSrcFor } from "./core/html.js";
+import { escapeHtml, imgOnError, imgProxyUrl, imgSrcFor, jsString } from "./core/html.js";
 import {
   ARROW_UP_ICON, BELL_ICON, BELL_OFF_ICON, BOOK_ICON, COPY_ICON, DATABASE_ICON, DASHBOARD_ICON, FOLDER_ICON,
   EYE_ICON, EYE_OFF_ICON, EXTERNAL_LINK_ICON, FEISHU_DATE_ICON, FILE_TEXT_ICON, FILTER_ICON,
@@ -3616,7 +3616,7 @@ function feishuSourceRowsHtml(data) {
       : `<p class="feishu-source-open is-blocked">同步成功后全员可读，当前暂无可读内容</p>`;
     const shownTitle = source.display_name || source.title;
     return `<article class="feishu-source-row" data-source-id="${source.id}">
-      <div class="feishu-source-copy"><div class="feishu-source-title"><strong>${escapeHtml(shownTitle)}</strong><button type="button" class="feishu-title-rename" onclick="renameFeishuDocumentSource(this.closest('[data-source-id]').dataset.sourceId,'${escapeHtml(shownTitle)}')" aria-label="修改展示名">改名</button><span class="feishu-source-state" data-status="${escapeHtml(source.sync_status)}">${escapeHtml(feishuSourceStatusLabel(source))}</span></div><p>${escapeHtml(detail)}</p>${error}</div>
+      <div class="feishu-source-copy"><div class="feishu-source-title"><strong>${escapeHtml(shownTitle)}</strong><button type="button" class="feishu-title-rename" onclick="renameFeishuDocumentSource(this.closest('[data-source-id]').dataset.sourceId,${jsString(shownTitle)})" aria-label="修改展示名">改名</button><span class="feishu-source-state" data-status="${escapeHtml(source.sync_status)}">${escapeHtml(feishuSourceStatusLabel(source))}</span></div><p>${escapeHtml(detail)}</p>${error}</div>
       <label class="feishu-source-toggle"><span>启用</span><input type="checkbox" ${source.enabled ? "checked" : ""} onchange="toggleFeishuDocumentSource(this.closest('[data-source-id]').dataset.sourceId,this.checked,this)"></label>
       <div class="feishu-source-actions">
         <span class="feishu-display-label">展示方式</span>
@@ -4641,8 +4641,6 @@ const {
   loadImaDocumentsMore,
   clearImaDocumentsFilter,
   clearImaDocumentsFilters,
-  pickImaDay,
-  pickImaTag,
   queueImaDocumentsSearch,
   refreshImaDocuments,
   selectImaDocumentGroup,
@@ -4654,6 +4652,8 @@ const {
   restoreImaListSnapshot,
   stopImaDocumentsAutoLoad,
   fmtImaDay,
+  pickImaDay,
+  pickImaTag,
   imaDocumentReaderRoute,
   replaceImaDocumentsRoute,
 } = createImaView({
@@ -4803,6 +4803,7 @@ const {
   api,
   flash,
   escapeHtml,
+  jsString,
   routeStillActive,
   SEARCH_ICON,
   fmtDbTime,
@@ -5434,6 +5435,21 @@ $("#btn-back").addEventListener("click", () => {
 });
 // 本地库卡片按钮：slug 来自存储机目录名，用 data 属性委托而非内联 onclick（防 JS 注入）
 document.addEventListener("click", (e) => {
+  const day = e.target.closest("[data-ima-day]");
+  if (day) {
+    pickImaDay(day.getAttribute("data-ima-day") || "");
+    return;
+  }
+  const tag = e.target.closest("[data-ima-tag-index]");
+  if (tag) {
+    pickImaTag(Number(tag.getAttribute("data-ima-tag-index")));
+    return;
+  }
+  const back = e.target.closest("[data-ima-back]");
+  if (back) {
+    go(back.getAttribute("data-ima-back") || "knowledge");
+    return;
+  }
   const add = e.target.closest("[data-acl-add]");
   if (add) {
     addAclUser(add.getAttribute("data-acl-add"), add.closest(".ima-acl-picker"));
@@ -5632,8 +5648,6 @@ const INLINE_HANDLERS = {
   openNewsSourcePicker,
   pasteCookieField,
   pickHomeCategory,
-  pickImaDay,
-  pickImaTag,
   purgeZsxqCache,
   queueFeishuDocumentPreview,
   queueImaDocumentsSearch,

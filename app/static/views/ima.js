@@ -612,10 +612,10 @@ export function createImaView(dependencies) {
 
   function imaDayMenuHtml(day, days) {
     const current = String(day || "");
-    const items = [`<button type="button" role="option" class="kb-desk-day-option${current ? "" : " is-selected"}" aria-selected="${!current}" onclick="pickImaDay('')">最新</button>`];
+    const items = [`<button type="button" role="option" class="kb-desk-day-option${current ? "" : " is-selected"}" aria-selected="${!current}" data-ima-day="">最新</button>`];
     for (const key of imaDayMenuDays(days)) {
       const on = key === current;
-      items.push(`<button type="button" role="option" class="kb-desk-day-option${on ? " is-selected" : ""}" aria-selected="${on}" onclick="pickImaDay('${escapeHtml(key)}')">${escapeHtml(fmtImaDay(key))}</button>`);
+      items.push(`<button type="button" role="option" class="kb-desk-day-option${on ? " is-selected" : ""}" aria-selected="${on}" data-ima-day="${escapeHtml(key)}">${escapeHtml(fmtImaDay(key))}</button>`);
     }
     return `<div class="kb-desk-day-menu" role="listbox" aria-label="日期">${items.join("")}</div>`;
   }
@@ -680,10 +680,10 @@ export function createImaView(dependencies) {
     const keys = Object.keys(counts).sort((a, b) => (counts[b] || 0) - (counts[a] || 0));
     if (current && !keys.includes(current)) keys.unshift(current);
     _imaTagMenu.keys = keys;
-    const items = [`<button type="button" role="option" class="kb-desk-day-option${current ? "" : " is-selected"}" aria-selected="${!current}" onclick="pickImaTag(-1)">全部</button>`];
+    const items = [`<button type="button" role="option" class="kb-desk-day-option${current ? "" : " is-selected"}" aria-selected="${!current}" data-ima-tag-index="-1">全部</button>`];
     keys.forEach((key, i) => {
       const on = key === current;
-      items.push(`<button type="button" role="option" class="kb-desk-day-option${on ? " is-selected" : ""}" aria-selected="${on}" onclick="pickImaTag(${i})">${escapeHtml(key)}${counts[key] ? `（${counts[key]}）` : ""}</button>`);
+      items.push(`<button type="button" role="option" class="kb-desk-day-option${on ? " is-selected" : ""}" aria-selected="${on}" data-ima-tag-index="${i}">${escapeHtml(key)}${counts[key] ? `（${counts[key]}）` : ""}</button>`);
     });
     return `<div class="kb-desk-day-menu" data-tag-menu role="listbox" aria-label="标签">${items.join("")}</div>`;
   }
@@ -1357,8 +1357,8 @@ export function createImaView(dependencies) {
       if (!routeStillActive(seq) || readerSeq !== currentImaReaderSeq()) return;
       const denied = String(err.message || "").includes("知识库不存在");
       $("#kb-reader").innerHTML = denied
-        ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('${escapeHtml(backRoute)}')">回研报库</button></div>`)
-        : emptyState(`文档加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="go('${escapeHtml(backRoute)}')">返回文档列表</button></div>`);
+        ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" data-ima-back="${escapeHtml(backRoute)}">回研报库</button></div>`)
+        : emptyState(`文档加载失败：${err.message}`, `<div><button type="button" class="btn-normal" data-ima-back="${escapeHtml(backRoute)}">返回文档列表</button></div>`);
     }
   }
 

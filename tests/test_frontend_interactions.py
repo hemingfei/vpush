@@ -3008,6 +3008,16 @@ def test_local_library_cards_delegate_via_data_attributes():
     assert 'e.target.closest("[data-ll-toggle]")' in src
 
 
+def test_ima_dynamic_values_do_not_enter_inline_javascript():
+    """Route/date values must stay HTML data, never become JS string literals."""
+    src = IMA_JS.read_text()
+    assert "onclick=\"pickImaDay('" not in src
+    assert "onclick=\"go('${escapeHtml(backRoute)}')\"" not in src
+    assert "data-ima-day=" in src
+    assert "data-ima-back=" in src
+    assert 'e.target.closest("[data-ima-day]")' in APP_JS.read_text()
+
+
 def test_local_scan_button_driven_by_inflight_flag():
     """扫描中状态由模块级标志驱动，15s 轮询重渲染不得复活按钮（F2）。"""
     src = APP_JS.read_text()
@@ -3853,7 +3863,7 @@ def test_ima_document_reader_error_actions_use_scoped_backroute():
     """详情加载失败时，权限和普通错误都必须返回当前列表筛选上下文。"""
     reader = _fn_body("renderImaDocument")
     error = reader[reader.index("  } catch (err) {"):]
-    assert error.count('onclick="go(\'${escapeHtml(backRoute)}\')"') == 2
+    assert error.count('data-ima-back="${escapeHtml(backRoute)}"') == 2
     assert 'onclick="go(\'knowledge\')"' not in error
     assert 'onclick="closeKnowledgeReader()"' not in error
 
@@ -3905,7 +3915,7 @@ def test_ima_report_header_responsive_source_and_search_clear():
     assert "kb-source-select-mobile" in source_fn
     assert "selectImaDocumentGroup(this.value)" in source_fn
     assert ">研报库</option>" in source_fn
-    assert 'onclick="pickImaTag(-1)">全部</button>' in _fn_body("imaTagMenuHtml")
+    assert 'data-ima-tag-index="-1">全部</button>' in _fn_body("imaTagMenuHtml")
     assert 'tag || "标签"' in render
 
     # Date slot moved out of search form into toolbar/filters

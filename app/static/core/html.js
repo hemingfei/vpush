@@ -4,6 +4,10 @@ export function escapeHtml(text) {
   }[c]));
 }
 
+export function jsString(text) {
+  return escapeHtml(JSON.stringify(String(text ?? "")));
+}
+
 export function imgProxyUrl(url) {
   return `/api/img-proxy?url=${encodeURIComponent(url)}`;
 }
