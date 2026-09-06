@@ -645,6 +645,7 @@ export function createAdminDashboardView(dependencies) {
   async function loadAdminDashboard() {
     try {
       const [d, st] = await Promise.all([api("/api/admin/dashboard"), api("/api/stats")]);
+      state.pendingKolRequests = Number(st.pending_kol_requests) || 0;
       const u = d.users || {};
       const s = d.subscriptions || {};
       const p = d.posts || {};

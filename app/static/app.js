@@ -371,25 +371,12 @@ const NAV = [
     { route: "home", icon: GRID_ICON, label: "订阅广场" },
     { route: "settings", icon: GEAR_ICON, label: "设置" },
   ]},
-  { group: "", admin: true, subs: [
-    { label: "内容管理", items: [
-      { route: "admin/dashboard", icon: DASHBOARD_ICON, label: "全景概览" },
-      { route: "admin/kols", icon: V_ICON, label: "大V管理" },
-      { route: "admin/vocab", icon: FOLDER_ICON, label: "标签分类" },
-      { route: "admin/requests", icon: USER_PLUS_ICON, label: "添加审批" },
-    ]},
-    { label: "数据与日志", items: [
-      { route: "admin/stats", icon: BOOK_ICON, label: "数据源" },
-      { route: "admin/knowledge", icon: BOOK_ICON, label: "研报库设置" },
-      { route: "admin/posts", icon: FILE_TEXT_ICON, label: "帖子" },
-      { route: "admin/logs", icon: SEND_ICON, label: "推送记录" },
-      { route: "admin/audit", icon: HISTORY_ICON, label: "操作日志" },
-      { route: "admin/backup", icon: DATABASE_ICON, label: "备份" },
-    ]},
-    { label: "用户与注册", items: [
-      { route: "admin/users", icon: USERS_ICON, label: "用户" },
-      { route: "admin/codes", icon: KEY_ICON, label: "注册码" },
-    ]},
+  { group: "", admin: true, items: [
+    { route: "admin/content", icon: DASHBOARD_ICON, label: "内容管理", badge: "requests" },
+    { route: "admin/stats", icon: BOOK_ICON, label: "数据源" },
+    { route: "admin/knowledge", icon: BOOK_ICON, label: "研报库设置" },
+    { route: "admin/ops", icon: FILE_TEXT_ICON, label: "帖子与日志" },
+    { route: "admin/account", icon: USERS_ICON, label: "用户与注册" },
   ]},
 ];
 
@@ -424,6 +411,7 @@ function renderSidebar(user) {
         <button class="nav-item" data-route="${item.route}" onclick="go('${item.route}')" title="${item.label}">
           <span class="nav-icon">${item.icon}</span>
           <span class="nav-label">${item.label}</span>
+          ${item.badge ? `<span class="nav-badge" data-request-badge hidden></span>` : ""}
         </button>`;
   const html = NAV.filter((g) => !g.admin || user.is_admin)
     .map((group) => `
@@ -3485,6 +3473,90 @@ let _adminStatsLoadSeq = 0;
 let _adminStatsTimerSeq = 0;
 let _lastAdminStatsSnapshot = null;
 
+// 后台条目页签化：侧边栏一个条目，页内页签切换子页（路由即页签，深链可用）
+const ADMIN_TAB_GROUPS = {
+  content: { label: "内容管理", tabs: [
+    { id: "dashboard", label: "全景概览" },
+    { id: "kols", label: "大V管理" },
+    { id: "vocab", label: "标签分类" },
+    { id: "requests", label: "添加审批" },
+  ]},
+  ops: { label: "帖子与日志", tabs: [
+    { id: "posts", label: "帖子" },
+    { id: "logs", label: "推送记录" },
+    { id: "audit", label: "操作日志" },
+    { id: "backup", label: "备份" },
+  ]},
+  account: { label: "用户与注册", tabs: [
+    { id: "users", label: "用户" },
+    { id: "codes", label: "注册码" },
+  ]},
+};
+
+// 旧路由 → 容器页签：收藏/旧链接/代码内 go() 全部自动落到新地址
+const ADMIN_ROUTE_REDIRECTS = {
+  dashboard: "content?tab=dashboard",
+  kols: "content?tab=kols",
+  vocab: "content?tab=vocab",
+  requests: "content?tab=requests",
+  posts: "ops?tab=posts",
+  logs: "ops?tab=logs",
+  audit: "ops?tab=audit",
+  backup: "ops?tab=backup",
+  users: "account?tab=users",
+  codes: "account?tab=codes",
+  categories: "content?tab=vocab",
+  tags: "content?tab=vocab",
+};
+
+function adminGroupTabsHtml(groupKey, active) {
+  const group = ADMIN_TAB_GROUPS[groupKey];
+  return `<div class="settings-tabs" role="tablist" aria-label="${group.label}">
+    ${group.tabs.map((t) => {
+      const count = t.id === "requests" ? Number(state.pendingKolRequests) || 0 : 0;
+      return `<button type="button" class="settings-tab ${t.id === active ? "active" : ""}" role="tab" aria-selected="${t.id === active}" data-tab="${t.id}" onclick="go('admin/${groupKey}?tab=${t.id}')">${t.label}${count ? ` <span class="tab-count">${count}</span>` : ""}</button>`;
+    }).join("")}
+  </div>`;
+}
+
+function mountAdminGroupTabs(groupKey, active) {
+  const body = $("#admin-body");
+  if (body && !body.querySelector(".admin-group-tabs")) {
+    body.insertAdjacentHTML("afterbegin", `<div class="admin-group-tabs">${adminGroupTabsHtml(groupKey, active)}</div>`);
+  }
+}
+
+function syncRequestBadges() {
+  const count = Number(state.pendingKolRequests) || 0;
+  document.querySelectorAll("[data-request-badge]").forEach((el) => {
+    el.textContent = count ? String(count) : "";
+    el.hidden = !count;
+  });
+}
+
+// 各子页 loader 由对应视图工厂解构（运行时才解析，此处用箭头惰性引用避免 TDZ）
+const ADMIN_GROUP_LOADERS = {
+  content: { dashboard: () => loadAdminDashboard(), kols: () => loadAdminKols(), vocab: () => loadAdminVocab(), requests: () => loadAdminRequests() },
+  ops: { posts: () => loadAdminPosts(), logs: () => loadAdminLogs(), audit: () => loadAdminAudit(), backup: () => loadAdminBackup() },
+  account: { users: () => loadAdminUsers(), codes: () => loadAdminCodes() },
+};
+
+async function loadAdminGroup(groupKey, seq) {
+  seq = seq ?? _adminRenderSeq; // renderAdmin 调 loader 不带参，兜底当前渲染令牌
+  const tabs = ADMIN_TAB_GROUPS[groupKey].tabs;
+  const requested = routeQuery().get("tab");
+  const active = tabs.some((t) => t.id === requested) ? requested : tabs[0].id;
+  await ADMIN_GROUP_LOADERS[groupKey][active]();
+  if (!routeStillActive(seq)) return false;
+  mountAdminGroupTabs(groupKey, active);
+  syncRequestBadges();
+  return true;
+}
+
+async function loadAdminContent(seq) { return loadAdminGroup("content", seq); }
+async function loadAdminOps(seq) { return loadAdminGroup("ops", seq); }
+async function loadAdminAccount(seq) { return loadAdminGroup("account", seq); }
+
 async function renderAdmin(tab, seq) {
   _adminRenderSeq = seq;
   setPageTitle("管理后台");
@@ -3497,7 +3569,7 @@ async function renderAdmin(tab, seq) {
         <div class="admin-sk-table-row"><div class="admin-sk-line"></div><div class="admin-sk-line"></div><div class="admin-sk-line"></div></div>
       </div>`).join("")}
     </div>`;
-  const loaders = { dashboard: loadAdminDashboard, stats: loadAdminStats, knowledge: loadAdminKnowledge, kols: loadAdminKols, requests: loadAdminRequests, codes: loadAdminCodes, vocab: loadAdminVocab, posts: loadAdminPosts, logs: loadAdminLogs, audit: loadAdminAudit, backup: loadAdminBackup, users: loadAdminUsers };
+  const loaders = { content: loadAdminContent, ops: loadAdminOps, account: loadAdminAccount, stats: loadAdminStats, knowledge: loadAdminKnowledge };
   try {
     await loaders[tab]();
   } catch (err) {
@@ -5192,8 +5264,8 @@ async function router() {
   const [page, rawParam] = path.split("/");
   if (page !== "news") clearNewsReaderState();
   if (page !== "settings") state.settingsTab = "push";
-  // 管理后台默认全景概览：/admin 与 /admin/dashboard 等价，侧边栏高亮才能对上
-  const param = page === "admin" && !rawParam ? "dashboard" : rawParam;
+  // 管理后台默认内容管理：/admin 与 /admin/content 等价，侧边栏高亮才能对上
+  const param = page === "admin" && !rawParam ? "content" : rawParam;
   if (!state.token) {
     $("#app-view").classList.add("hidden");
     $("#auth-view").classList.remove("hidden");
@@ -5260,12 +5332,17 @@ async function router() {
     else if (page === "knowledge") await renderKnowledge(renderSeq, param);
     else if (page === "admin") {
       if (!state.user.is_admin) { replaceRoute("timeline"); return; }
-      // 分类管理/标签管理已合并为 admin/vocab：旧书签自动跳转
-      if (param === "categories" || param === "tags") {
-        replaceRoute("admin/vocab");
+      // 后台条目页签化：旧路由（含更早的 categories/tags）统一重定向到容器页签
+      if (ADMIN_ROUTE_REDIRECTS[param]) {
+        const q = routeQuery();
+        const extra = new URLSearchParams();
+        q.forEach((v, k) => { if (k !== "tab") extra.append(k, v); });
+        if (param === "vocab" && q.get("tab") === "tags") extra.append("vtab", "tags");
+        const qs = extra.toString();
+        replaceRoute("admin/" + ADMIN_ROUTE_REDIRECTS[param] + (qs ? "&" + qs : ""));
         return;
       }
-      await renderAdmin(param || "dashboard", renderSeq);
+      await renderAdmin(param || "content", renderSeq);
     }
     else { replaceRoute("timeline"); return; }
   } catch (err) {

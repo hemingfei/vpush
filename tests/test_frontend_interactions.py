@@ -1269,6 +1269,38 @@ def test_proxy_admin_hardens_write_paths():
     assert "textarea[id^='pp-import-']" in load
 
 
+def test_admin_content_group_tabs_and_redirects():
+    """后台 IA：侧边栏 5 条目、三容器页签、旧路由重定向、审批角标贯通。"""
+    src = APP_JS.read_text()
+    # 侧边栏拍平：5 个条目，无折叠组
+    for route in ("admin/content", "admin/stats", "admin/knowledge", "admin/ops", "admin/account"):
+        assert f'route: "{route}"' in src
+    assert "subs:" not in src.split("const NAV =")[1].split("];")[0]
+    # 三容器页签配置
+    for group, tabs in {
+        "content": ("全景概览", "大V管理", "标签分类", "添加审批"),
+        "ops": ("帖子", "推送记录", "操作日志", "备份"),
+        "account": ("用户", "注册码"),
+    }.items():
+        block = src.split(f"{group}: {{ label:", 1)[1].split("]},", 1)[0]
+        for label in tabs:
+            assert f'label: "{label}"' in block
+    # 旧路由 10 条 + categories/tags 全部重定向
+    redirects = src.split("const ADMIN_ROUTE_REDIRECTS = {", 1)[1].split("};", 1)[0]
+    for old in ("dashboard", "kols", "vocab", "requests", "posts", "logs", "audit", "backup", "users", "codes"):
+        assert f"{old}: " in redirects
+    # 页签点击走容器路由；待审批角标贯通侧边栏与页签
+    assert "onclick=\"go('admin/${groupKey}?tab=${t.id}')\"" in src
+    assert 'data-request-badge' in src
+    assert "state.pendingKolRequests = Number(st.pending_kol_requests) || 0" in (APP_JS.parent / "views" / "admin" / "dashboard.js").read_text()
+    assert "state.pendingKolRequests = requests.length" in (APP_JS.parent / "views" / "admin" / "users.js").read_text()
+    # vocab 内部页签改用 vtab（避免与容器 tab 参数冲突），旧深链由重定向带 vtab
+    kol = ADMIN_KOLS_JS.read_text() if (APP_JS.parent / "views" / "admin" / "kol.js").exists() else ""
+    assert 'params.get("vtab")' in kol
+    assert "go('admin/content?tab=vocab&vtab=tags')" in kol
+    assert "if (param === \"vocab\" && q.get(\"tab\") === \"tags\") extra.append(\"vtab\", \"tags\");" in src
+
+
 def test_stats_cookie_repair_deep_link():
     """Cookie 失效要从总览一键进 Cookie 管理，并吃 /admin/stats?tab=cookies。"""
     src = APP_JS.read_text()
@@ -4510,9 +4542,9 @@ def test_login_tabs_own_tabpanels():
 
 
 def test_admin_backup_page_three_panels_download_skips_webdav():
-    """备份页：侧栏入口、三块标题；本机下载不得走 WebDAV 上传。"""
+    """备份页：已并入「帖子与日志」容器（备份页签）、三块标题；本机下载不得走 WebDAV 上传。"""
     src = APP_JS.read_text()
-    assert 'route: "admin/backup"' in src
+    assert '{ id: "backup", label: "备份" }' in src
     body = _fn_body("loadAdminBackup")
     assert "本机备份" in body
     assert "WebDAV 定时" in body

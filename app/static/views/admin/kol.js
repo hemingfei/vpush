@@ -458,9 +458,9 @@ export function createAdminKolsView(dependencies) {
   }
 
   async function loadAdminVocab() {
-    // 深链：/admin/vocab?tab=tags 进标签 Tab，其余值（含无参数）进分类 Tab
+    // 深链：vtab=tags 进标签 Tab，其余值（含无参数）进分类 Tab；旧 /admin/vocab?tab=tags 由路由重定向带 vtab
     const params = routeQuery();
-    const tab = params.get("tab") === "tags" ? "tags" : "categories";
+    const tab = params.get("vtab") === "tags" ? "tags" : "categories";
     if (!routeStillActive(currentAdminSeq())) return;
     $("#admin-body").innerHTML = `
       <section class="section-panel">
@@ -468,8 +468,8 @@ export function createAdminKolsView(dependencies) {
           <div><h2 class="section-title">标签分类</h2>
           <p class="section-meta">分类按大V分组（订阅广场/动态页/管理列表筛选）；标签按关键词规则给贴文内容自动打标。</p></div>
           <div class="settings-tabs" role="tablist" aria-label="标签分类">
-            <button class="settings-tab ${tab === "categories" ? "active" : ""}" data-tab="categories" onclick="go('admin/vocab')">分类</button>
-            <button class="settings-tab ${tab === "tags" ? "active" : ""}" data-tab="tags" onclick="go('admin/vocab?tab=tags')">标签</button>
+            <button class="settings-tab ${tab === "categories" ? "active" : ""}" data-tab="categories" onclick="go('admin/content?tab=vocab')">分类</button>
+            <button class="settings-tab ${tab === "tags" ? "active" : ""}" data-tab="tags" onclick="go('admin/content?tab=vocab&vtab=tags')">标签</button>
           </div>
         </header>
         <div id="vocab-tab-body" class="settings-tab-panel"></div>

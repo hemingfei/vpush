@@ -492,6 +492,20 @@ textarea.form-control {
 .nav-item.active { background: var(--color-accent-soft); color: var(--color-accent-text); font-weight: var(--font-weight-semibold); }
 .nav-item .nav-icon { width: 20px; text-align: center; font-size: var(--text-body); }
 .nav-item .nav-icon svg { width: 15px; height: 15px; vertical-align: -2px; }
+/* 侧边栏待办角标（如：内容管理上的待审批数） */
+.nav-badge {
+  margin-left: auto;
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  color: var(--color-white);
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.4;
+  text-align: center;
+}
+html.sidebar-slim .nav-badge { display: none; }
 
 /* 管理侧边栏折叠子组：分组标签与顶级分组统一样式与间距 */
 .nav-sub { margin-top: 0; }
@@ -632,6 +646,20 @@ textarea.form-control {
 .section-title .hint { color: var(--color-text-faint); font-weight: normal; }
 .section-meta { color: var(--color-text-muted); font-size: var(--text-xs); margin-top: 4px; }
 .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+/* 后台容器页签条 + 待办角标（内容管理/帖子与日志/用户与注册） */
+.admin-group-tabs { margin-bottom: 14px; }
+.tab-count {
+  display: inline-block;
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  color: var(--color-white);
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.4;
+}
+.settings-tab:not(.active) .tab-count { background: var(--color-accent-soft); color: var(--color-accent-text); }
 /* 列表分页：单行紧凑排布，窄屏不换行不错位 */
 .pager {
   display: flex;
