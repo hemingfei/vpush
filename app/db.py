@@ -31,6 +31,24 @@ SECRET_COLUMNS = ("telegram_bot_token", "wecom_webhook", "bark_key", "llm_api_ke
 # 需要维护明文哈希列做唯一性查找的凭证（Fernet 非确定性，密文不能当查询条件）
 SECRET_HASH_COLUMNS = {"wecom_webhook": "wecom_webhook_hash", "bark_key": "bark_key_hash"}
 
+# ---- 有序 schema 迁移 ----
+# 新增表结构/索引/数据回填时，往 SCHEMA_MIGRATIONS 追加 (版本号, 名称, 语句或语句元组)。
+# 版本号用日期风格（如 2026090601）且严格递增；runner 按 PRAGMA user_version 只执行一次，
+# 每个迁移独立提交，失败回滚该迁移并中止启动。历史遗留的「缺列即补」幂等逻辑保留在
+# _migrate() 中，两者并存：一次性/破坏性变更进这里，幂等兜底留在 _migrate()。
+SCHEMA_MIGRATIONS: list[tuple[int, str, str | tuple[str, ...]]] = []
+
+_SLOW_QUERY_SECONDS = 0.2
+
+
+def _log_slow_query(sql: str, started: float) -> None:
+    """超过阈值的查询打 warning（只记 SQL 不记参数，参数可能含 Cookie/token）。"""
+    elapsed = time.monotonic() - started
+    if elapsed < _SLOW_QUERY_SECONDS:
+        return
+    trimmed = " ".join(str(sql).split())[:200]
+    logging.getLogger(__name__).warning("slow query %.0fms: %s", elapsed * 1000, trimmed)
+
 
 def _secret_hash(plain: str) -> str:
     """明文凭据的唯一性指纹（sha256）；空值返回空串不参与查找。"""
@@ -1523,6 +1541,8 @@ class DB:
                 f"ON users({column}) WHERE {column} != ''"
             )
 
+        self._apply_schema_migrations()
+
     def _migrate_news(self) -> None:
         for slug, name, feeds in _BUILTIN_NEWS:
             self._conn.execute(
@@ -1686,6 +1706,28 @@ class DB:
             self._conn.rollback()
             raise
 
+    def _apply_schema_migrations(self) -> None:
+        """按 PRAGMA user_version 一次性执行有序迁移；失败回滚整个迁移并抛出。"""
+        if not SCHEMA_MIGRATIONS:
+            return
+        current = self._conn.execute("PRAGMA user_version").fetchone()[0]
+        for version, name, statements in SCHEMA_MIGRATIONS:
+            if not isinstance(version, int) or version <= 0:
+                raise ValueError(f"迁移版本必须为正整数: {version} ({name})")
+            if version <= current:
+                continue
+            if not isinstance(statements, tuple):
+                statements = (statements,)
+            try:
+                for statement in statements:
+                    self._conn.execute(statement)
+                self._conn.execute(f"PRAGMA user_version = {version}")
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise RuntimeError(f"schema 迁移失败: #{version} {name}") from None
+            logging.getLogger(__name__).info("schema migration applied: #%s %s", version, name)
+
     def close(self):
         with self._lock:
             self._conn.close()
@@ -1700,13 +1742,17 @@ class DB:
         return SECRET_PREFIX + encrypt_secret(self.credential_key, value)
 
     def _rows(self, sql, params=()):
+        started = time.monotonic()
         with self._lock:
             cur = self._conn.execute(sql, params)
-            return [dict(row) for row in cur.fetchall()]
+            rows = [dict(row) for row in cur.fetchall()]
+        _log_slow_query(sql, started)
+        return rows
 
     def _read_only_rows(self, sql, params=()):
         if self.path == ":memory:":
             return self._rows(sql, params)
+        started = time.monotonic()
         with self._reader_condition:
             while self._replace_pending:
                 self._reader_condition.wait()
@@ -1718,7 +1764,7 @@ class DB:
             try:
                 conn.row_factory = sqlite3.Row
                 conn.execute("PRAGMA busy_timeout = 5000")
-                return [dict(row) for row in conn.execute(sql, params).fetchall()]
+                rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
             finally:
                 conn.close()
         finally:
@@ -1726,12 +1772,17 @@ class DB:
                 self._active_readers -= 1
                 if not self._active_readers:
                     self._reader_condition.notify_all()
+        _log_slow_query(sql, started)
+        return rows
 
     def _execute(self, sql, params=()):
+        started = time.monotonic()
         with self._lock:
             cur = self._conn.execute(sql, params)
             self._conn.commit()
-            return cur.lastrowid
+            rowid = cur.lastrowid
+        _log_slow_query(sql, started)
+        return rowid
 
     # ---- KOL ----
     def add_kol(
