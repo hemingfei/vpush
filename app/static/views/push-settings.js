@@ -25,6 +25,7 @@ export function createPushSettingsView(dependencies) {
 
   // ---------- 推送设置 ----------
   let settingsPollTimer = null;
+  let settingsPollSeq = 0;
   let _pushStatusHtml = "";
   const SETTINGS_TABS = ["push", "bind", "llm", "account"];
   let _kolImageSubscriptions = [];
@@ -34,6 +35,7 @@ export function createPushSettingsView(dependencies) {
   let _kolImageReloadNeeded = false;
 
   function stopSettingsPoll() {
+    settingsPollSeq += 1;
     if (settingsPollTimer) {
       clearInterval(settingsPollTimer);
       settingsPollTimer = null;
@@ -42,7 +44,8 @@ export function createPushSettingsView(dependencies) {
 
   function startSettingsPoll() {
     stopSettingsPoll();
-    settingsPollTimer = setInterval(refreshSettingsStatus, 10000);
+    const pollSeq = settingsPollSeq;
+    settingsPollTimer = setInterval(() => refreshSettingsStatus(pollSeq), 10000);
   }
 
   function pendingBindActive() {
@@ -191,13 +194,13 @@ export function createPushSettingsView(dependencies) {
     if (match && typeof match.focus === "function") match.focus();
   }
 
-  async function refreshSettingsStatus() {
+  async function refreshSettingsStatus(pollSeq = settingsPollSeq) {
     const seq = currentRouteSeq();
     const token = state.token;
     const sessionGeneration = imaMountState.sessionGeneration;
     try {
       const user = await api("/api/me");
-      if (!routeStillActive(seq) || token !== state.token
+      if (pollSeq !== settingsPollSeq || !routeStillActive(seq) || token !== state.token
         || sessionGeneration !== imaMountState.sessionGeneration) return;
       state.user = user;
       const el = $("#push-status");

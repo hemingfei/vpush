@@ -1205,8 +1205,7 @@ function homeMobilePlatformsHtml() {
     return `
     <button class="tl-pill ${state.platform === p ? "selected" : ""}"
       data-platform="${p}" aria-label="${label}" title="${label}"
-      role="radio" aria-checked="${state.platform === p}"
-      onclick="homePickMobilePlatform('${p}')">
+      role="radio" aria-checked="${state.platform === p}">
       ${PLATFORM_ICONS[p || ""]}<span>${short}</span>
     </button>`;
   }).join("");
@@ -1714,7 +1713,7 @@ function tlActiveChipsHtml() {
   const chips = tlActiveChips();
   if (!chips.length) return "";
   return `<div class="tl-active-chips">${chips.map((c) => `
-    <span class="tl-active-chip">${c.label}<button class="tl-chip-x" onclick="tlRemoveFilter('${c.key}')" aria-label="移除${c.label}" title="移除该筛选">${X_ICON}</button></span>`).join("")}</div>`;
+    <span class="tl-active-chip">${c.label}<button class="tl-chip-x" data-tl-remove-filter="${c.key}" aria-label="移除${c.label}" title="移除该筛选">${X_ICON}</button></span>`).join("")}</div>`;
 }
 
 function tlRemoveFilter(key) {
@@ -2251,7 +2250,7 @@ function tlPillsHtml() {
     const selected = !liveSelected && state.timelinePlatform === p;
     const short = platformShortLabel(p);
     pills.push(`
-    <button class="tl-pill ${selected ? "selected" : ""}" role="radio" data-platform="${p}" aria-label="${label}" title="${label}" aria-checked="${selected}" onclick="tlPickPlatform('${p}')">
+    <button class="tl-pill ${selected ? "selected" : ""}" role="radio" data-platform="${p}" aria-label="${label}" title="${label}" aria-checked="${selected}">
       ${PLATFORM_ICONS[p || ""]}
       <span>${short}</span>
     </button>`);
@@ -5467,6 +5466,23 @@ document.addEventListener("click", (e) => {
   }
   const toggle = e.target.closest("[data-ll-toggle]");
   if (toggle) toggleLocalLibrary(toggle.dataset.llToggle, toggle.dataset.llEnabled === "true");
+  const homePlatform = e.target.closest("#home-mobile-platforms [data-platform]");
+  if (homePlatform) {
+    homePickMobilePlatform(homePlatform.dataset.platform || "");
+    return;
+  }
+  const timelinePlatform = e.target.closest("#tl-pills [data-platform]");
+  if (timelinePlatform) {
+    const platform = timelinePlatform.dataset.platform || "";
+    if (platform === "live") tlPickSource("live");
+    else tlPickPlatform(platform);
+    return;
+  }
+  const removeFilter = e.target.closest("[data-tl-remove-filter]");
+  if (removeFilter) {
+    tlRemoveFilter(removeFilter.dataset.tlRemoveFilter || "");
+    return;
+  }
 });
 document.addEventListener("click", (e) => {
   const a = e.target.closest("a[href]");
@@ -5610,7 +5626,6 @@ const INLINE_HANDLERS = {
   filterKolImageSettings,
   genBindCode,
   go,
-  homePickMobilePlatform,
   homeResetFilters,
   homeSearch,
   homeToggleFilter,
@@ -5738,10 +5753,8 @@ const INLINE_HANDLERS = {
   tlApplyRailSearch,
   tlFilterPanel,
   tlOnSearchInput,
-  tlPickPlatform,
   tlPickSource,
   tlPickTag,
-  tlRemoveFilter,
   tlResetFilters,
   tlToggleOrigin,
   tlTogglePost,
