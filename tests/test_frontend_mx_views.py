@@ -277,7 +277,7 @@ def test_mx_views_neutral_backfill_from_feed_and_actions_expand():
     boards = _fn_body("mxvRenderBoards", js)
     assert 'map(mxvFillNeutral("topic", stats))' in boards and 'map(mxvFillNeutral("stock", stats))' in boards
     feed = _fn_body("mxvLoadFeed", js)
-    assert "mxvRenderBoards()" in feed  # feed 到达后重渲染双榜回填中性数
+    assert "mxvRenderBoards(false)" in feed  # feed 到达后重渲染双榜回填中性数；feed 已自行渲染，传 false 不重复渲染
     toggle = _fn_body("mxvActionsToggle", js)
     assert "stopPropagation()" in toggle and 'classList.toggle("open")' in toggle
     assert "scrollWidth" in toggle  # 未截断不拦截，行点击照常打开抽屉
@@ -436,3 +436,84 @@ def test_admin_mx_views_kol_dropdown_multiselect_keeps_open():
     assert 'classList.remove("open")' in bind  # 真正点外仍要收起
     toggle = _fn_body("mxvAdminKolToggleItem", js)
     assert "open" not in toggle  # 勾选本身不得收起菜单
+
+
+def test_admin_topic_candidates_use_index_delegation():
+    """新题材候选按钮不带内联 JS 字符串：只带下标，点击时从 cfg.topic_candidates 取名字。
+
+    escapeHtml 会把 `'` 转成 `&#39;`，但浏览器解析 HTML 属性时先解码实体再交给 JS 引擎，
+    LLM 自由文本题材名含撇号即按钮 SyntaxError，含 `');` 序列即任意 JS 执行。
+    """
+    js = MX_VIEWS_JS
+    assert "mxvAdminAdopt('${escapeHtml(c)}')" not in js  # 名称不得拼进内联 JS 字符串
+    assert "mxvAdminDismiss('${escapeHtml(c)}')" not in js
+    body = _fn_body("loadAdminMxViews", js)
+    assert 'data-cand-idx="${i}"' in body
+    assert 'data-cand-act="adopt"' in body and 'data-cand-act="dismiss"' in body
+    bind = _fn_body("mxvAdminBind", js)
+    assert 'closest("[data-cand-idx]")' in bind  # #mxva-cands 容器上事件委托
+    assert "topic_candidates" in bind  # 名字在点击时从 cfg 取，服务端数据不进 JS 上下文
+
+
+def test_mx_views_timeline_drag_survives_sse_and_poll():
+    """拖动时间轴中：SSE version 事件与兜底轮询不得重渲染顶掉拖动预览（松手 mxvTlUp 再对齐）。"""
+    js = MX_VIEWS_JS
+    refresh = _fn_body("mxvRefreshLatest", js)
+    assert "if (_mxv.tlDrag) return;" in refresh  # SSE/轮询/兜底定时器共用此入口
+    sse = _fn_body("mxvEnsureSSE", js)
+    assert "_mxv.tlDrag" in sse  # version 事件拖动中不抢渲染，只标记有新
+
+
+def test_mxv_posts_cache_deduped_by_post_id():
+    """证据帖缓存按 post_id 去重：抽屉反复打开不重复累积。"""
+    ev = _fn_body("mxvEvidenceHtml", MX_VIEWS_JS)
+    assert "some((p) => p.id === e.post_id)" in ev
+
+
+def test_mxv_target_drawer_race_guard_checks_type():
+    """标的抽屉竞态守卫必须同时比对 type：题材与个股同名时旧响应不得污染新抽屉。"""
+    body = _fn_body("mxvOpenTarget", MX_VIEWS_JS)
+    assert "!_mxv.drawer || _mxv.drawer.type !== type || _mxv.drawer.name !== name" in body
+
+
+def test_mxv_calendar_today_is_beijing_and_popover_positions_dynamically():
+    """月历「今天」按北京时区口径（与后端交易日对齐）；弹层按触发按钮实时定位，CSS 默认值仅作回退。"""
+    js = MX_VIEWS_JS
+    cal = _fn_body("mxvCalHtml", js)
+    assert "(480 + new Date().getTimezoneOffset())" in cal  # UTC+8 换算
+    assert "function mxvCalPlace(" in js
+    place = _fn_body("mxvCalPlace", js)
+    assert "getBoundingClientRect" in place  # 打开时按触发按钮定位
+    assert 'style.transform = "none"' in place  # 覆盖 CSS 的居中位移
+    render = _fn_body("mxvCalRender", js)
+    assert "mxvCalPlace()" in render
+    css = (STATIC / "mx-views.css").read_text()
+    assert ".mxv-cal{position:absolute;top:46px;" in css.replace(" ", "")  # 固定定位保留作回退
+
+
+def test_mx_views_timeline_server_values_are_escaped():
+    """时间轴 title/aria-valuetext 与观点流方向徽标等服务端值插值统一走 escapeHtml。"""
+    tl = _fn_body("mxvTimelineHtml", MX_VIEWS_JS)
+    assert 'title="${escapeHtml(s.snapshot_at)} · ${escapeHtml(s.message_count)}条消息"' in tl
+    assert 'aria-valuetext="${escapeHtml(snaps[idx].snapshot_at)}"' in tl
+    item = _fn_body("mxvFeedItemHtml", MX_VIEWS_JS)
+    assert 'class="mxv-badge ${escapeHtml(o.direction)}"' in item  # 受控枚举，转义后仍是同一字符串
+
+
+def test_mx_kol_collapse_reruns_once_after_lazy_avatar_loads():
+    """折叠测量早于懒加载头像：卡内 img 首个 load/error 后重测一次（防抖只跑一回）。"""
+    js = MX_VIEWS_JS
+    assert "function mxvBindKolImgReflow(" in js
+    kols = _fn_body("mxvRenderKols", js)
+    assert "mxvBindKolImgReflow()" in kols
+    reflow = _fn_body("mxvBindKolImgReflow", js)
+    assert "once: true" in reflow  # 一次性监听
+    assert "let done = false" in reflow  # 多张头像只触发一次重测，避免闪烁
+
+
+def test_mx_render_boards_feed_rerender_is_skippable():
+    """mxvRenderBoards 支持 rerenderFeed=false：feed 加载路径不重复渲染观点流两次。"""
+    js = MX_VIEWS_JS
+    boards = _fn_body("mxvRenderBoards", js)
+    assert "if (rerenderFeed) mxvRenderFeed();" in boards
+    assert "mxvRenderKols();" in boards  # 大V卡片依赖 feed 回填的中性数，仍需重渲染

@@ -145,7 +145,7 @@ export function createMxViewsView(dependencies) {
       _mxv.feedFailed = false;
       _mxv.feedLoading = false;
       mxvRenderFeed();
-      mxvRenderBoards(); // 双榜用 feed 现算中性数回填，数据到位后重渲染一次
+      mxvRenderBoards(false); // 双榜用 feed 现算中性数回填；feed 上面刚渲染过，不重复渲染第二次
     } catch (e) {
       _mxv.feedKey = ""; // 失败释放 key，下次换快照重试
       _mxv.feedLoading = false;
@@ -168,6 +168,12 @@ export function createMxViewsView(dependencies) {
     try {
       const es = new EventSource(`/api/mx-views/stream?token=${encodeURIComponent(state.token)}`);
       es.addEventListener("version", () => {
+        if (_mxv.tlDrag) { // 拖动时间轴中：不重渲染顶掉预览位置，只标记有新，松手后可「回最新」
+          _mxv.hasNew = true;
+          const btn = document.querySelector(".mxv-btn.latest");
+          if (btn) btn.classList.add("has-new");
+          return;
+        }
         if (_mxv.atLatest) { mxvRefreshLatest(); }
         else {
           _mxv.hasNew = true;
@@ -191,6 +197,7 @@ export function createMxViewsView(dependencies) {
 
   async function mxvRefreshLatest() {
     if (!routeStillActive(_mxv.seq)) return;
+    if (_mxv.tlDrag) return; // 拖动时间轴中：SSE/兜底轮询都不顶掉拖动预览（松手 mxvTlUp 自然再对齐）
     if (!_mxv.day) { // 空态停留：live 首个快照落库后自动恢复
       try {
         const daysData = await api("/api/mx-views/days");
@@ -244,12 +251,32 @@ export function createMxViewsView(dependencies) {
     const slot = document.getElementById("mxv-cal-slot");
     if (!slot || !_mxv.cal) return;
     slot.innerHTML = mxvCalHtml(_mxv.cal.y, _mxv.cal.m);
+    mxvCalPlace();
+  }
+
+  // 弹层定位：CSS 固定 top:46px 在窄屏状态栏换行时会盖住状态栏，打开/翻月时按触发按钮
+  // getBoundingClientRect 实时定位（弹层在按钮下方，视口内钳位）；CSS 默认值仅作回退
+  function mxvCalPlace() {
+    const slot = document.getElementById("mxv-cal-slot");
+    const cal = slot && slot.querySelector(".mxv-cal");
+    const btn = document.getElementById("mxv-day-btn");
+    if (!cal || !btn) return;
+    const root = cal.closest(".mxv-root");
+    const rr = root ? root.getBoundingClientRect() : { left: 0, top: 0 };
+    const br = btn.getBoundingClientRect();
+    const w = cal.offsetWidth || 288;
+    const vw = document.documentElement.clientWidth;
+    const left = Math.max(8, Math.min(br.left + br.width / 2 - w / 2, vw - w - 8));
+    cal.style.left = `${Math.round(left - rr.left)}px`;
+    cal.style.top = `${Math.round(br.bottom + 6 - rr.top)}px`;
+    cal.style.transform = "none"; // 覆盖 CSS 的水平居中位移，位置完全由 left/top 决定
   }
 
   function mxvCalHtml(y, m) {
     const pad = (x) => String(x).padStart(2, "0");
-    const now = new Date();
-    const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    // 「今天」按北京时区口径（UTC+8，与后端交易日对齐），不用客户端本地时区
+    const bj = new Date(Date.now() + (480 + new Date().getTimezoneOffset()) * 60000);
+    const today = `${bj.getFullYear()}-${pad(bj.getMonth() + 1)}-${pad(bj.getDate())}`;
     const has = new Set(_mxv.days);
     // 周一起始的月历网格，前后补相邻月份日期（置灰禁用）
     const firstDow = (new Date(y, m - 1, 1).getDay() + 6) % 7;
@@ -334,10 +361,10 @@ export function createMxViewsView(dependencies) {
       const showLabel = i === n - 1
         || (i % labelEvery === 0 && !(i === lastRegular && dropLastRegular && i !== n - 1));
       return `<div class="mxv-tl-tick ${special ? "special" : ""}" style="left:${left}%"
-        title="${s.snapshot_at} · ${s.message_count}条消息"></div>
+        title="${escapeHtml(s.snapshot_at)} · ${escapeHtml(s.message_count)}条消息"></div>
         <div class="mxv-tl-head" style="left:${left}%;${active ? "" : "display:none"}">
-          <div class="t">${s.snapshot_at}</div><div class="s"></div></div>
-        ${showLabel ? `<div class="mxv-tl-label${special ? " special" : ""}" style="left:${left}%">${s.snapshot_at}</div>` : ""}`;
+          <div class="t">${escapeHtml(s.snapshot_at)}</div><div class="s"></div></div>
+        ${showLabel ? `<div class="mxv-tl-label${special ? " special" : ""}" style="left:${left}%">${escapeHtml(s.snapshot_at)}</div>` : ""}`;
     }).join("");
     const doneW = n <= 1 ? 100 : (idx / (n - 1)) * 100;
     const diff = mxvDiffText();
@@ -345,7 +372,7 @@ export function createMxViewsView(dependencies) {
     <div class="mxv-timeline">
       <div style="display:flex;align-items:center;gap:8px">
         <div class="mxv-tl-track" tabindex="0" role="slider" aria-label="快照时间轴"
-          aria-valuemin="1" aria-valuemax="${n}" aria-valuenow="${idx + 1}" aria-valuetext="${snaps[idx].snapshot_at}">
+          aria-valuemin="1" aria-valuemax="${n}" aria-valuenow="${idx + 1}" aria-valuetext="${escapeHtml(snaps[idx].snapshot_at)}">
           <div class="mxv-tl-rail"></div>
           <div class="mxv-tl-done" style="left:0;width:${doneW}%"></div>${ticks}
         </div>
@@ -515,7 +542,7 @@ export function createMxViewsView(dependencies) {
     return (r) => (r.neutral != null ? r : { ...r, neutral: stats.counts[`${ttype}:${r.name}`] || 0 });
   }
 
-  function mxvRenderBoards() {
+  function mxvRenderBoards(rerenderFeed = true) {
     if (!_mxv.payload) return;
     window._mxvTargets = []; // 重新渲染双榜前清空标的索引
     const p = _mxv.payload;
@@ -594,7 +621,7 @@ export function createMxViewsView(dependencies) {
         </div>`;
       mxvApplyHeatClamp();
     }
-    mxvRenderFeed();
+    if (rerenderFeed) mxvRenderFeed(); // feed 加载路径已自行渲染过，传 false 跳过重复渲染
     mxvRenderKols();
     if (_mxv.hlKey) mxvSetHighlight(_mxv.hlKey); // 重渲染后恢复高亮
   }
@@ -707,6 +734,7 @@ export function createMxViewsView(dependencies) {
       </div>
       <div class="mxv-kols" id="mxv-kols-grid">${cards || `<div class="mxv-empty">暂无大V观点</div>`}</div>`;
     mxvApplyKolCollapse();
+    mxvBindKolImgReflow();
   }
 
   function mxvKolCardsHtml() {
@@ -785,6 +813,24 @@ export function createMxViewsView(dependencies) {
     more.textContent = _mxv.kolExpanded ? "收起 ▴" : "更多 ▾";
   }
 
+  // 折叠测量早于懒加载头像：首卡 offsetHeight 在 loading="lazy" 头像加载完成前测量会截半行。
+  // 卡内 img 首个 load/error 后重测一次（done 防抖只跑一回，避免反复闪烁）。
+  function mxvBindKolImgReflow() {
+    const grid = document.getElementById("mxv-kols-grid");
+    if (!grid) return;
+    let done = false;
+    const rerun = () => {
+      if (done) return;
+      done = true;
+      if (document.getElementById("mxv-kols-grid")) mxvApplyKolCollapse();
+    };
+    grid.querySelectorAll(".mxv-kolcard img,.mxv-stockcard img").forEach((img) => {
+      if (img.complete) return; // 已加载完成的头像不影响测量
+      img.addEventListener("load", rerun, { once: true });
+      img.addEventListener("error", rerun, { once: true });
+    });
+  }
+
   function mxvKolMode(mode) {
     if (_mxv.kolMode === mode) return;
     _mxv.kolMode = mode;
@@ -821,7 +867,7 @@ export function createMxViewsView(dependencies) {
     return `
     <div class="mxv-feed-item${fresh ? " fresh" : ""}" data-mxv-hl="${escapeHtml(`${o.target_type || ""}:${o.target_name || ""}`)}">
       <span class="t" style="color:var(--mxv-accent)">${escapeHtml((o.occurred_at || "").slice(11, 16))}</span>
-      <span class="mxv-badge ${o.direction}">${o.direction === "bull" ? "↑看多" : o.direction === "bear" ? "↓看空" : "中性"}</span>
+      <span class="mxv-badge ${escapeHtml(o.direction)}">${o.direction === "bull" ? "↑看多" : o.direction === "bear" ? "↓看空" : "中性"}</span>
       ${o.action ? `<span class="mxv-badge act">${escapeHtml(o.action)}</span>` : ""}
       <span class="target" style="color:var(--mxv-text)">${escapeHtml(o.target_name)}</span>
       <span style="color:var(--mxv-muted)">· ${escapeHtml(o.kol_name)}</span>
@@ -920,8 +966,11 @@ export function createMxViewsView(dependencies) {
 
   function mxvEvidenceHtml(ev) {
     return (ev || []).map((e) => {
-      window._mxvPosts.push({ id: e.post_id, kol_name: e.author, published_at: e.time,
-        content: e.content, detail: e.content, tags: [] });
+      // 按 post_id 去重：抽屉反复打开/重渲染时同一证据帖不重复累积进缓存
+      if (!window._mxvPosts.some((p) => p.id === e.post_id)) {
+        window._mxvPosts.push({ id: e.post_id, kol_name: e.author, published_at: e.time,
+          content: e.content, detail: e.content, tags: [] });
+      }
       return `<div class="ev">
         <div>${escapeHtml(e.author)} · ${escapeHtml((e.time || "").slice(5, 16))}</div>
         <div class="c">${escapeHtml(e.content)}</div>
@@ -991,7 +1040,8 @@ export function createMxViewsView(dependencies) {
     slot.innerHTML = mxvDrawerShell(name);
     try {
       const data = await api(`/api/mx-views/target?type=${type}&name=${encodeURIComponent(name)}&day=${encodeURIComponent(_mxv.day)}&at=${encodeURIComponent(_mxv.at || "")}`);
-      if (_mxv.drawer && _mxv.drawer.name !== name) return;
+      // 竞态守卫：题材与个股可同名，type 也要比对，防止旧响应污染新抽屉（同 mxvOpenKol 口径）
+      if (!_mxv.drawer || _mxv.drawer.type !== type || _mxv.drawer.name !== name) return;
       const body = document.getElementById("mxv-drawer-body");
       if (!body) return;
       const net = data.bull.count - data.bear.count;
@@ -1490,10 +1540,10 @@ export function createMxViewsView(dependencies) {
                 <button type="button" class="btn-sm" onclick="mxvAdminDismissAll()">全部忽略</button>
               </span>` : ""}
           </div>
-          <div class="mxva-chips" id="mxva-cands">${cfg.topic_candidates.length ? cfg.topic_candidates.map((c) =>
+          <div class="mxva-chips" id="mxva-cands">${cfg.topic_candidates.length ? cfg.topic_candidates.map((c, i) =>
             `<span class="mxva-tag">${escapeHtml(c)}
-              <button type="button" class="btn-sm" onclick="mxvAdminAdopt('${escapeHtml(c)}')">采纳</button>
-              <button type="button" class="btn-sm" onclick="mxvAdminDismiss('${escapeHtml(c)}')">忽略</button></span>`).join(" ")
+              <button type="button" class="btn-sm" data-cand-idx="${i}" data-cand-act="adopt">采纳</button>
+              <button type="button" class="btn-sm" data-cand-idx="${i}" data-cand-act="dismiss">忽略</button></span>`).join(" ")
             : `<span class="muted">暂无候选</span>`}</div>
         </div>
         <div class="mxva-card">
@@ -1557,6 +1607,19 @@ export function createMxViewsView(dependencies) {
       hintsBox.onclick = (e) => {
         const btn = e.target.closest("[data-hint-remove]");
         if (btn) mxvAdminHintRemove(Number(btn.dataset.hintRemove));
+      };
+    }
+    // 新题材候选：按钮只带下标，点击时从 cfg.topic_candidates 取名字——
+    // LLM 自由文本（含撇号/引号）绝不进 JS 字符串上下文，杜绝注入
+    const cands = $("#mxva-cands");
+    if (cands) {
+      cands.onclick = (e) => {
+        const btn = e.target.closest("[data-cand-idx]");
+        if (!btn) return;
+        const name = (_mxvAdmin.cfg.topic_candidates || [])[Number(btn.dataset.candIdx)];
+        if (name == null) return;
+        if (btn.dataset.candAct === "adopt") mxvAdminAdopt(name);
+        else mxvAdminDismiss(name);
       };
     }
     const hintInput = $("#mxva-hint-input");
@@ -1642,8 +1705,9 @@ export function createMxViewsView(dependencies) {
   }
 
   function mxvAdminRun() {
+    // 手动跑批已改同步语义：ran=false 时后端带原因（窗口内无新消息/已有批次在跑）
     api("/api/admin/mx-views/run", { method: "POST" })
-      .then(() => flash("已触发手动跑批"))
+      .then((res) => flash(res && res.ran ? `手动跑批完成：${res.messages} 条消息` : (res && res.message) || "已触发手动跑批"))
       .catch((err) => flash(err.message, "error"));
   }
 
@@ -1668,6 +1732,7 @@ export function createMxViewsView(dependencies) {
     }, 3000);
   }
 
+  // mxvCalClose：app.js 返回键钩子消费月历弹层用
   return {
     mxvTeardown,
     renderMxViews,
@@ -1675,6 +1740,7 @@ export function createMxViewsView(dependencies) {
     mxvCalToggle,
     mxvCalNav,
     mxvCalPick,
+    mxvCalClose,
     mxvRefreshLatest,
     mxvApplySnapshot,
     mxvGoLatest,

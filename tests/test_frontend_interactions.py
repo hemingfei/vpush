@@ -3372,7 +3372,8 @@ def test_timeline_rail_fills_main_and_survives_resize():
     )
     assert not re.search(r"\.tl-rail-search\s*\{[^}]*radius-card", css)
     assert re.search(r"\.tl-layout \.tl-feed-panel\s*\{[^}]*margin-top:\s*16px", css)
-    assert re.search(r"@media \(min-width:\s*1280px\)[\s\S]*?\.tl-rail\s*\{[^}]*top:\s*56px", css)
+    # 吸顶基准 56px；安卓壳叠加安全区后为 calc(56px + var(--safe-top))，两种形态都接受
+    assert re.search(r"@media \(min-width:\s*1280px\)[\s\S]*?\.tl-rail\s*\{[^}]*top:\s*(?:calc\(\s*)?56px", css)
     assert "calc(75ch + 2 * var(--section-padding-lg-x))" not in css
     assert ".post-item .p-content" in css and "max-width: 75ch" in css
     assert ".tl-rail-rec .btn-ghost" in css
@@ -4363,8 +4364,8 @@ def test_ima_documents_follow_latest_dynamic_navigation():
     assert "打开研报库" in timeline
     css = STYLE_CSS.read_text()
     assert ".tl-ima-entry { display: none; }" in css
-    # 手机（≤768px）也显示入口：知识库已放开移动端
-    assert "@media (max-width: 900px) {\n  .tl-ima-entry { display: block; margin: 0 0 12px; }" in css
+    # 手机（≤768px）也显示入口：知识库已放开移动端；hmf 端做单行紧凑化后下边距为 8px
+    assert "@media (max-width: 900px) {\n  .tl-ima-entry { display: block; margin: 0 0 8px; }" in css
 
 
 
@@ -5695,3 +5696,86 @@ def test_ai_task_modal_targets_system_kols_via_explicit_platform_query():
     assert "kols.filter((k) => k.platform === 'system')" not in src
     # 系统 KOL 不再默认播种：无账号时空态给创建引导（大V管理批量导入自建）
     assert "暂无系统 KOL：请先在「大V管理」批量导入勾选「系统 KOL」创建" in src
+
+
+def _back_hook_body() -> str:
+    src = APP_JS.read_text()
+    m = re.search(r"window\.__VPUSH_BACK__\s*=\s*function\s*\([^)]*\)\s*\{", src)
+    assert m, "app.js 未定义 window.__VPUSH_BACK__ 钩子"
+    start = src.index("{", m.end() - 1)
+    depth, i = 1, start + 1
+    while depth:
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+        i += 1
+    return src[start:i]
+
+
+def test_back_hook_mask_selector_covers_admin_modal_mask():
+    """安卓返回键的顶层遮罩判定必须同时覆盖 .modal-mask 与 .admin-modal-mask（打标弹窗）。"""
+    body = _back_hook_body()
+    assert 'querySelectorAll(".modal-mask, .admin-modal-mask")' in body
+    assert "(mask.querySelector(\"[data-close]\") || mask).click()" in body
+
+
+def test_back_hook_consumes_calendar_and_kol_menu_before_drawer():
+    """返回键消费链：遮罩之后、智囊团抽屉之前，先消费月历弹层与分析大V范围下拉。"""
+    body = _back_hook_body()
+    assert ".mxv-cal" in body and "mxvCalClose()" in body
+    assert ".mxva-kol-menu.open" in body and 'classList.remove("open")' in body
+    assert body.index("admin-modal-mask") < body.index(".mxv-cal") < body.index(".mxva-kol-menu") \
+        < body.index(".mxv-drawer")
+
+
+def test_mx_tag_run_modal_closable_via_data_close_and_escape():
+    """打标弹窗（admin-modal-mask）：取消键带 data-close 供返回键命中，且挂 Esc 关闭监听。"""
+    body = _fn_body("adminMxTagOpenRunModal", ADMIN_KOLS_JS)
+    assert 'mask.id = "mx-tag-run-mask"' in body
+    assert "data-close" in body  # 取消按钮可被返回键的 [data-close] 分支点中
+    assert "Escape" in body and "keydown" in body  # Esc 也能关闭
+
+
+def test_notification_sound_reuses_audio_context_singleton():
+    """提示音 AudioContext 模块级单例：多次播放不新建 context（Chrome 每页约 6 个上限，
+    用尽后构造抛错被 catch 吞掉、提示音永久失效），且播放前 resume 唤醒 suspended。"""
+    body = _fn_body("playNotificationSound")
+    assert "if (!_notifyAudioCtx)" in body  # 懒创建守卫
+    assert body.count("new (window.AudioContext || window.webkitAudioContext)()") == 1
+    assert 'audioContext.state === "suspended"' in body
+    assert "audioContext.resume()" in body
+
+
+def test_open_ai_task_modal_click_listener_is_replaced_not_accumulated():
+    """AI 任务弹窗的点外关闭监听器：处理器存变量、挂新前先摘旧，不再随开弹窗累积。"""
+    body = _fn_body("openAiTaskModal")
+    assert "removeEventListener('click', openAiTaskModal._aiKolDocClick)" in body
+    assert "addEventListener('click', openAiTaskModal._aiKolDocClick)" in body
+    # 摘旧必须先于挂新（同一处理器名；函数体内其他 addEventListener('click' 不受此约束）
+    assert body.index("removeEventListener('click', openAiTaskModal._aiKolDocClick)") \
+        < body.index("addEventListener('click', openAiTaskModal._aiKolDocClick)")
+
+
+def test_vocab_tab_auto_reload_skipped_when_textareas_dirty():
+    """词表脏保护：轮询发现打标完成/单条或批量审核/黑话候选/试打等自动重载，
+    在三个 textarea 有未保存修改时跳过整页重建，改为「已暂停自动刷新」提示；手动保存不拦。"""
+    guard = _fn_body("vocabTabSafeReload", ADMIN_KOLS_JS)
+    assert "_vocabCurrentText() === _vocabServerSnapshot" in guard
+    assert "_vocabPausedHint(true)" in guard  # dirty 时提示而非重建
+    assert "vocab-paused-hint" in _fn_body("_vocabPausedHint", ADMIN_KOLS_JS)
+    snap = _fn_body("loadAdminTagsTab", ADMIN_KOLS_JS)
+    assert "_vocabServerSnapshot = _vocabCurrentText()" in snap  # 渲染后记录服务端快照
+    for fn in ("adminMxTagPollProgress", "adminReviewTag", "adminReviewTagsBatch",
+               "adminReviewAliasCandidate", "adminMxTagTest"):
+        assert "vocabTabSafeReload()" in _fn_body(fn, ADMIN_KOLS_JS), fn
+    for fn in ("adminSaveTags", "adminSaveStockNames"):  # 手动触发的重载不受拦截
+        assert "vocabTabSafeReload" not in _fn_body(fn, ADMIN_KOLS_JS), fn
+
+
+def test_mx_tag_test_button_disabled_while_in_flight():
+    """「试打 10 条」防重：await 期间禁用按钮并切换文案，finally 恢复（对齐 adminMxTagStartRun）。"""
+    body = _fn_body("adminMxTagTest", ADMIN_KOLS_JS)
+    assert "btn.disabled = true" in body
+    assert "试打中…" in body
+    assert "finally" in body and "btn.disabled = false" in body

@@ -2457,10 +2457,16 @@ function ensureTimelineVisibilityPoll() {
   });
 }
 
-// 播放新消息提示音
+// 播放新消息提示音。
+// AudioContext 用模块级单例懒创建：每次 new 不 close 会撞 Chrome 每页约 6 个的上限，
+// 用尽后构造抛错被 catch 吞掉、提示音永久失效；轮询定时器触发时无用户手势，
+// context 可能 suspended 整段无输出，播放前 resume（promise，fire-and-forget 即可）。
+let _notifyAudioCtx = null;
 function playNotificationSound() {
   try {
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    if (!_notifyAudioCtx) _notifyAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const audioContext = _notifyAudioCtx;
+    if (audioContext.state === "suspended") audioContext.resume();
     const osc1 = audioContext.createOscillator();
     const osc2 = audioContext.createOscillator();
     const gain1 = audioContext.createGain();
@@ -5737,6 +5743,7 @@ const {
   mxvCalToggle,
   mxvCalNav,
   mxvCalPick,
+  mxvCalClose,
   mxvRefreshLatest,
   mxvApplySnapshot,
   mxvGoLatest,
@@ -6519,7 +6526,8 @@ window.addEventListener("hashchange", () => {
 // 全都无处可退时返回 false，交回原生弹「退出 APP」确认框。浏览器/PWA 不会调用此钩子。
 window.__VPUSH_BACK__ = function () {
   if (document.querySelector(".lightbox:not(.closing)")) { closeLightbox(); return true; }
-  const masks = document.querySelectorAll(".modal-mask");
+  // admin-modal-mask 是打标弹窗（kol.js）的遮罩类，与 .modal-mask 一样要先被返回键消费
+  const masks = document.querySelectorAll(".modal-mask, .admin-modal-mask");
   const mask = masks[masks.length - 1];
   if (mask) {
     // 优先点弹窗自带的取消键（可能带未保存确认）；没有取消键的（原始消息等）模拟点
@@ -6527,6 +6535,9 @@ window.__VPUSH_BACK__ = function () {
     (mask.querySelector("[data-close]") || mask).click();
     return true;
   }
+  if (document.querySelector(".mxv-cal")) { mxvCalClose(); return true; } // 智囊团月历弹层
+  const kolMenu = document.querySelector(".mxva-kol-menu.open");
+  if (kolMenu) { kolMenu.classList.remove("open"); return true; } // 分析大V范围下拉先收起
   if (document.querySelector(".mxv-drawer")) { mxvCloseDrawer(); return true; }
   if (state.pageBackRoute) { go(state.pageBackRoute); return true; }
   if (history.length > 1) { history.back(); return true; }
@@ -6943,13 +6954,16 @@ async function openAiTaskModal(taskId = null) {
 	      dropdownTrigger.classList.toggle('open');
 	    });
 	    
-	    // 点击外部关闭下拉框
-	    document.addEventListener('click', (e) => {
+	    // 点击外部关闭下拉框：处理器存变量，挂新前先摘旧（同 mxvAdminBind.docClick 的写法），
+	    // 避免每次开弹窗都在 document 上累积一个监听器
+	    if (openAiTaskModal._aiKolDocClick) document.removeEventListener('click', openAiTaskModal._aiKolDocClick);
+	    openAiTaskModal._aiKolDocClick = (e) => {
 	      if (!e.target.closest('.ai-kol-dropdown')) {
 	        dropdownMenu.classList.remove('open');
 	        dropdownTrigger.classList.remove('open');
 	      }
-	    });
+	    };
+	    document.addEventListener('click', openAiTaskModal._aiKolDocClick);
 	    
 		    // KOL 选择
 		    const kolItems = document.querySelectorAll('.ai-kol-item');
@@ -7087,11 +7101,13 @@ function aiLogStatusMeta(status) {
   if (status === "success") return { cls: "success", label: "成功" };
   if (status === "failed") return { cls: "error", label: "失败" };
   if (status === "running") return { cls: "running", label: "运行中" };
+  if (status === "skipped") return { cls: "muted", label: "已跳过" };
   return { cls: "running", label: status || "未知" };
 }
 
 function aiLogBrief(log) {
   if (log.status === "running") return "运行中…";
+  if (log.status === "skipped") return log.message || "任务已停用，跳过本次";
   if (log.status === "failed") return log.message || "运行失败";
   if (log.post_count != null) {
     return log.post_count > 0 ? `分析了 ${log.post_count} 条发言` : "窗口内没有发言";

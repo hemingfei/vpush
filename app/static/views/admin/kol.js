@@ -913,6 +913,13 @@ export function createAdminKolsView(dependencies) {
       </section>`;
     // 有打标任务在跑（或刚结束未确认）：恢复进度轮询，更新面板里的进度区
     adminMxTagPollProgress();
+    // 记录服务端快照：后续自动重载用它检测管理员未保存的手改（保存/恢复后回到同步态）
+    _vocabServerSnapshot = _vocabCurrentText();
+    // 编辑回改到与服务端一致时撤掉「已暂停」提示，自动刷新随之恢复
+    ["tag-vocab-input", "stock-names-input", "stock-aliases-input"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.oninput = () => { if (_vocabCurrentText() === _vocabServerSnapshot) _vocabPausedHint(false); };
+    });
   }
 
   const _TAG_REVIEW_KINDS = { topic: "话题", stock: "股票", action: "操作" };
@@ -925,6 +932,36 @@ export function createAdminKolsView(dependencies) {
   const _mxTagSeenDoneRuns = new Set(); // 已提示过完成结果的打标任务 id（防重复弹提示）
   let _mxTagPollSeenOnce = false;  // 首次观察进度时静默采纳当前状态
   let _tagDetailDirty = false;     // 标签详情弹窗里发生过增删，关闭时需刷新审核队列
+  let _vocabServerSnapshot = "";   // 最近一次服务端渲染的三个词表 textarea 快照（自动重载前脏检测用）
+
+  function _vocabCurrentText() {
+    return ["tag-vocab-input", "stock-names-input", "stock-aliases-input"]
+      .map((id) => { const el = document.getElementById(id); return el ? el.value : ""; }).join("\u0000");
+  }
+
+  function _vocabPausedHint(show) {
+    let hint = document.getElementById("vocab-paused-hint");
+    if (!show) { if (hint) hint.remove(); return; }
+    if (hint) return;
+    const host = document.querySelector("#vocab-tab-body .section-head");
+    if (!host) return;
+    hint = document.createElement("span");
+    hint.id = "vocab-paused-hint";
+    hint.className = "muted";
+    hint.style.cssText = "color:var(--color-warning);font-size:12px";
+    hint.textContent = "有未保存更改，已暂停自动刷新";
+    host.appendChild(hint);
+  }
+
+  // 自动重载（轮询发现任务完成/审核操作/试打）前的保护：管理员改过词表尚未保存时
+  // 跳过整页重建，只在标题旁提示「已暂停自动刷新」；保存等手动触发的重载不经过这里。
+  function vocabTabSafeReload() {
+    // 不在词表编辑视图（分类 Tab 等，textarea 不存在）时无需保护
+    if (!document.getElementById("tag-vocab-input") || !document.getElementById("vocab-tab-body")) return true;
+    if (_vocabCurrentText() === _vocabServerSnapshot) return true;
+    _vocabPausedHint(true);
+    return false;
+  }
 
   function _tagDetailKindLabel(kind) {
     return _TAG_REVIEW_KINDS[kind] || (kind ? escapeHtml(kind) : "");
@@ -1200,10 +1237,19 @@ export function createAdminKolsView(dependencies) {
         <p class="section-meta" id="mx-tag-run-total">已选 0 条</p>
         <div class="toolbar">
           <button class="btn-normal" id="mx-tag-run-start" disabled onclick="adminMxTagStartRun()">开始打标</button>
-          <button class="btn-ghost" onclick="document.getElementById('mx-tag-run-mask').remove()">取消</button>
+          <button type="button" class="btn-ghost" data-close onclick="document.getElementById('mx-tag-run-mask').remove()">取消</button>
         </div>
       </div>`;
     document.body.appendChild(mask);
+    // Esc 关闭：document 级捕获监听（焦点不在弹窗内也能关）。取消键先移除弹窗时，
+    // 残留监听在下一次 Esc 发现弹窗已不在就自摘，不泄漏。
+    mask._onEsc = (e) => {
+      if (e.key !== "Escape") return;
+      const m = document.getElementById("mx-tag-run-mask");
+      document.removeEventListener("keydown", mask._onEsc, true);
+      if (m) { e.preventDefault(); m.remove(); }
+    };
+    document.addEventListener("keydown", mask._onEsc, true);
     const recount = () => {
       let total = 0;
       let picked = 0;
@@ -1282,7 +1328,7 @@ export function createAdminKolsView(dependencies) {
             : `${s.cancelled ? "已取消" : "完成"}：${base}，合并标签 ${s.tagged_posts} 条消息`;
         }).join("；");
         flash(msg, fresh.some((r) => r.summary.error) ? "error" : "ok");
-        loadAdminVocabTab("tags");
+        if (vocabTabSafeReload()) loadAdminVocabTab("tags");
       }
     };
     tick();
@@ -1367,6 +1413,13 @@ export function createAdminKolsView(dependencies) {
   }
 
   async function adminMxTagTest() {
+    const btn = document.querySelector("[onclick^='adminMxTagTest']");
+    const label = btn ? btn.textContent : "";
+    if (btn) {
+      // 防重：LLM 试打可耗时，await 期间禁用按钮（对齐 adminMxTagStartRun 的做法），finally 恢复
+      btn.disabled = true;
+      btn.textContent = "试打中…";
+    }
     try {
       const data = await api("/api/admin/mx-llm-tag/test", { method: "POST" });
       _mxTagTestResult = data;
@@ -1374,8 +1427,10 @@ export function createAdminKolsView(dependencies) {
     } catch (err) {
       _mxTagTestResult = null;
       flash("试打失败: " + err.message, "error");
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = label; }
     }
-    loadAdminVocabTab("tags");
+    if (vocabTabSafeReload()) loadAdminVocabTab("tags");
   }
 
   function adminMxTagTestBlock() {
@@ -1519,7 +1574,7 @@ export function createAdminKolsView(dependencies) {
     try {
       await api(`/api/admin/post-tag-reviews/${id}/${action}`, { method: "POST" });
       flash(action === "approve" ? "已通过并追加到消息标签" : "已拒绝该标签");
-      loadAdminVocabTab("tags");
+      if (vocabTabSafeReload()) loadAdminVocabTab("tags");
     } catch (err) {
       flash("操作失败: " + err.message, "error");
     }
@@ -1544,7 +1599,7 @@ export function createAdminKolsView(dependencies) {
           : `已${label} ${okCount} 条待审标签`,
         failed.length ? "error" : "ok",
       );
-      loadAdminVocabTab("tags");
+      if (vocabTabSafeReload()) loadAdminVocabTab("tags");
     } catch (err) {
       flash(`批量${label}失败: ` + err.message, "error");
     }
@@ -1559,7 +1614,7 @@ export function createAdminKolsView(dependencies) {
         body: JSON.stringify({ alias: cand.alias, stock: cand.stock }),
       });
       flash(action === "approve" ? `已把「${cand.alias}=${cand.stock}」写入黑话别名表` : "已拒绝该候选");
-      loadAdminVocabTab("tags");
+      if (vocabTabSafeReload()) loadAdminVocabTab("tags");
     } catch (err) {
       flash("操作失败: " + err.message, "error");
     }
