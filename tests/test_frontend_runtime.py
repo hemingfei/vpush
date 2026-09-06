@@ -330,6 +330,10 @@ def test_platform_badges_keep_blue_selection(page: Page, static_origin: str, tmp
     expect(page.locator("#tl-pills .tl-pill").first).to_be_visible()
     page.evaluate("theme => document.documentElement.className = 'theme-' + theme", theme)
     expect(page.locator("#tl-platform-bar .star-icon")).to_have_count(0)
+    truth_icon = page.locator('#tl-pills [data-platform="truth"] svg.pt-icon')
+    expect(truth_icon).to_have_count(1)
+    expect(truth_icon).to_have_css("fill", "rgb(90, 155, 245)" if theme == "dark" else "rgb(22, 104, 224)")
+    expect(truth_icon).to_have_css("filter", "none")
     for platform in ["", "live", "xueqiu", "combination", "weibo", "twitter", "zsxq", "truth"]:
         button = page.locator(f'#tl-pills [data-platform="{platform}"]')
         button.click()
@@ -343,8 +347,11 @@ def test_platform_badges_keep_blue_selection(page: Page, static_origin: str, tmp
         })""")
         assert "rgb(22, 104, 224)" in (colors["base"], colors["badge"]), (platform, colors)
         assert colors["ink"] == "rgb(255, 255, 255)", (platform, colors)
-        if platform in {"xueqiu", "truth"}:
+        if platform == "xueqiu":
             assert colors["imageFilter"] == "brightness(0) invert(1)"
+        if platform == "truth":
+            expect(truth_icon).to_have_css("fill", "rgb(255, 255, 255)")
+            expect(truth_icon).to_have_css("filter", "none")
     page.screenshot(path=str(tmp_path / f"badges-{width}-{theme}.png"))
     if width <= 768:
         page.locator("#tl-filter-toggle").click()
