@@ -492,9 +492,13 @@ export function createImaView(dependencies) {
 
   function currentImaListSnapshot() {
     const snapshot = _imaListSnapshot;
-    return snapshot && !snapshot.consumed && snapshot.route === location.pathname + location.search
-      ? snapshot
-      : null;
+    if (!snapshot || snapshot.consumed || snapshot.route !== location.pathname + location.search) return null;
+    if (!snapshot.items.length) {
+      // 快照在列表数据取回前被捕获（如飞书组直开时间线），空快照不还原，走正常加载
+      snapshot.consumed = true;
+      return null;
+    }
+    return snapshot;
   }
 
   function restoreImaListSnapshot(snapshot, body) {
