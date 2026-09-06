@@ -968,6 +968,10 @@ class ImaPureClient:
             else:
                 items.extend(page_items)
                 pages += 1
+                # IMA 列表末尾不设 is_end：短页/空页之后仍会返回同一个 next_cursor
+                # （生产实测 CAQ=），继续跟随会空转。空页即列表结束。
+                if not page_items:
+                    return items
             if max_pages is not None and pages >= max_pages:
                 return items
             if not payload.get("next_cursor"):
