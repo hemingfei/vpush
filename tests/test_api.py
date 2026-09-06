@@ -2597,6 +2597,28 @@ def test_catalog_sorted_by_priority_and_activity():
     assert ids.index(active_id) < ids.index(normal_id)
 
 
+def test_catalog_system_platform_tab():
+    """广场「系统」tab：显式 platform=system 返回系统 KOL（普通用户也可见）；全部 tab 与隐藏源口径不变。"""
+    client = make_client()
+    admin = auth_headers(client)
+    user = user_headers(client, "sysplaza_user")
+    db = client.app.state.db
+    kid = db.add_kol("system", "AI 报告", "ai_report_plaza")
+
+    # auto 显隐：有启用系统 KOL → system 源广场可见，显式查询返回该 KOL
+    sys_cat = client.get("/api/catalog?platform=system", headers=user).json()
+    assert [k["id"] for k in sys_cat] == [kid]
+    assert [k["id"] for k in client.get("/api/catalog?platform=system", headers=admin).json()] == [kid]
+    # 「全部」tab 仍排除系统 KOL（默认口径）
+    assert kid not in {k["id"] for k in client.get("/api/catalog", headers=user).json()}
+    # 管理员把 system 源设为隐藏 → 显式查询也返回空
+    client.put("/api/admin/plaza-sources", headers=admin, json={"visibility": {"system": "hide"}})
+    assert client.get("/api/catalog?platform=system", headers=user).json() == []
+    # 恢复显示后可见
+    client.put("/api/admin/plaza-sources", headers=admin, json={"visibility": {"system": "show"}})
+    assert [k["id"] for k in client.get("/api/catalog?platform=system", headers=user).json()] == [kid]
+
+
 def test_stats_include_source_health():
     client = make_client()
     headers = auth_headers(client)

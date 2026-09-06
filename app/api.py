@@ -2306,8 +2306,10 @@ def create_api_router(
     def catalog(platform: str | None = None, category_id: int | None = None, user: dict = Depends(get_current_user)):
         if is_plaza_hidden(db, platform):
             return []
+        # 系统 KOL 非真大V：未指定平台（广场「全部」tab）仍排除；显式 platform=system（「系统」tab）时不排除
+        exclude = None if platform == "system" else "system"
         kols = filter_plaza_kol_rows(db, db.list_kols(platform, category_id, status=1,
-                                                      exclude_platform="system"))
+                                                      exclude_platform=exclude))
         if not user["is_admin"]:
             visible = db.visible_kol_ids(user["id"])
             kols = [k for k in kols if k["id"] in visible]
