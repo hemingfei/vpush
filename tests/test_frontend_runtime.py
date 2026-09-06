@@ -366,8 +366,11 @@ def test_platform_badges_keep_blue_selection(page: Page, static_origin: str, tmp
           color: getComputedStyle(el).color,
           background: getComputedStyle(el).backgroundColor,
           filter: getComputedStyle(el).filter,
-          tag: el.tagName
+          tag: el.tagName,
+          pathFills: [...el.querySelectorAll('path')].map(path => getComputedStyle(path).fill)
         })""")
+        if platform == "combination":
+            assert set(unselected["pathFills"]) == {"none"}, unselected
         if unselected["tag"] == "svg":
             assert _contrast_ratio(unselected["color"], unselected["background"]) >= 3, (platform, unselected)
             assert unselected["filter"] == "none"
@@ -384,8 +387,11 @@ def test_platform_badges_keep_blue_selection(page: Page, static_origin: str, tmp
           ink: getComputedStyle(el).color,
           iconColor: getComputedStyle(el.querySelector('.pt-icon')).color,
           iconFilter: getComputedStyle(el.querySelector('.pt-icon')).filter,
-          iconTag: el.querySelector('.pt-icon').tagName
+          iconTag: el.querySelector('.pt-icon').tagName,
+          pathFills: [...el.querySelectorAll('.pt-icon path')].map(path => getComputedStyle(path).fill)
         })""")
+        if platform == "combination":
+            assert set(selected["pathFills"]) == {"none"}, selected
         assert "rgb(22, 104, 224)" in (selected["base"], selected["badge"]), (platform, selected)
         assert selected["ink"] == "rgb(255, 255, 255)", (platform, selected)
         after = icon.bounding_box()
