@@ -1,0 +1,2 @@
+# Windows 上 core.autocrlf=true 会把工作区 shell 脚本转成 CRLF，复制到 Linux 后无法执行
+*.sh text eol=lf

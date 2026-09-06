@@ -14,6 +14,7 @@
 | `config.yaml` | 本地项目根目录 | 应用配置（挂载为容器内 `/data/config.yaml`） |
 | `.env` | 本地项目根目录 | 敏感变量（飞书/Telegram/cookie 等），不进镜像 |
 | `data/` | 可选：迁移旧数据时才传 | 数据库、日志、cookie 等持久化数据 |
+| `deploy_vps.sh` | 项目 `scripts/deploy_vps.sh` | 一键部署/回滚脚本（备份 → load → 重建 → 健康检查） |
 
 镜像统一使用 `latest` 标签（`docker build` / `docker pull` 不写 tag 时默认就是 `latest`），不需要在命令里填版本号；tar 文件名只是本地文件名，可随意（建议带上构建日期方便区分，如 `vpush-latest-20260902.tar`）。
 
@@ -50,7 +51,7 @@ docker save vpush:latest vpush-waf-bot:latest -o vpush-latest.tar
 ### 2. 上传文件到服务器
 
 ```bash
-scp vpush-latest.tar docker-compose.prod.yml config.yaml .env root@服务器IP:/root/VPush/
+scp vpush-latest.tar docker-compose.prod.yml config.yaml .env scripts/deploy_vps.sh root@服务器IP:/root/VPush/
 ```
 
 注意 `config.yaml` 和 `.env` 含敏感信息，只走 SSH/可信渠道。
@@ -76,6 +77,8 @@ EOF
 docker compose -f docker-compose.prod.yml -f docker-compose.override.yml up -d
 ```
 
+以上「创建 override + 启动」也可以在 override 就位后直接用一键脚本完成：`./deploy_vps.sh`（见下一节）。
+
 ### 4. 验证
 
 ```bash
@@ -89,6 +92,36 @@ docker logs -f vpush                   # 看启动日志
 
 ## 三、版本升级
 
+### 一键脚本（推荐）
+
+`scripts/deploy_vps.sh` 与 compose 文件放同一目录（上传一次，长期使用），把整个升级流程固化成一条命令：**部署前 SQLite 在线备份**（落在 `data/backups/`，保留 14 份）→ `docker load` → tag 对齐 → `up -d` 重建 → `/healthz` 健康检查与版本确认 → 清理悬空镜像。
+
+日常升级两步：
+
+```bash
+# 本地：构建导出后上传新 tar（文件名随意，gzip 压缩包也支持）
+scp vpush-latest.tar root@服务器IP:/root/VPush/
+
+# 服务器：
+./deploy_vps.sh                       # 默认部署 vpush-latest.tar
+./deploy_vps.sh vpush-0906.tar.gz     # 或指定镜像包
+```
+
+脚本比手动多做的几件保护：
+
+- **部署前自动备份数据库**：容器内走 `sqlite3 backup` API 在线备份（WAL 安全），校验通过才继续，`SKIP_BACKUP=1` 跳过、`BACKUP_KEEP=N` 改保留份数；
+- **tag 对齐**：override 若引用版本号 tag（如 `vpush:1.12.96`）而 tar 里是 `latest`，自动把 `latest` 重打到该版本 tag——否则 `up -d` 会命中旧的版本 tag，容器不重建，部署等于没发生；
+- **部署后确认**：健康检查端口从容器实际映射自动读取（不写死 8889），通过后打印 `/api/version` 真实版本；不通过则贴出容器最近日志并以非零退出；
+- **一键回滚**：每次部署前自动把当前镜像留成 `<镜像名>:rollback` tag（只保留上一版，不额外膨胀磁盘），出问题一条命令回到上一版：
+
+```bash
+./deploy_vps.sh --rollback
+```
+
+> 从 Windows 复制脚本到 Linux 后若报 `$'\r': command not found` 之类的错，是换行符问题，`sed -i 's/\r$//' deploy_vps.sh` 修复；仓库已加 `.gitattributes` 把 `*.sh` 固定为 LF，经 git 检出不会遇到。
+
+### 手动步骤（备用）
+
 tag 恒为 `latest`，全程不用改任何配置文件：
 
 1. 本地重复「构建 + 导出」（命令同上，tag 还是 `latest`）；
@@ -101,7 +134,7 @@ docker compose -f docker-compose.prod.yml -f docker-compose.override.yml up -d
 
 数据都在 `data/` 和 `config.yaml` 里，升级不受影响。
 
-**回滚**：`latest` 标签被新镜像占用后，旧镜像还在（`docker images -f dangling=true` 能看到，标签为 `<none>`），用镜像 ID 打回标签再启动即可：
+**回滚**：用一键脚本部署的直接 `./deploy_vps.sh --rollback`（不依赖悬空镜像）。手动兜底：`latest` 标签被新镜像占用后，旧镜像还在（`docker images -f dangling=true` 能看到，标签为 `<none>`），用镜像 ID 打回标签再启动即可：
 
 ```bash
 docker tag <旧镜像ID> vpush:latest
