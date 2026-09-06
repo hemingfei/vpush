@@ -486,6 +486,15 @@ def test_platform_badges_keep_blue_selection(page: Page, static_origin: str, tmp
         })""")
         if platform == "combination":
             assert set(unselected["pathFills"]) == {"none"}, unselected
+        if platform == "twitter":
+            accent = page.evaluate("""() => {
+              const probe = document.body.appendChild(document.createElement('span'));
+              probe.style.color = 'var(--color-accent-text)';
+              const value = getComputedStyle(probe).color;
+              probe.remove();
+              return value;
+            }""")
+            assert unselected["color"] == accent, (theme, unselected, accent)
         if unselected["tag"] == "svg":
             assert _contrast_ratio(unselected["color"], unselected["background"]) >= 3, (platform, unselected)
             assert unselected["filter"] == "none"

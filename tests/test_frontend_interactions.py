@@ -3479,6 +3479,12 @@ def test_xueqiu_badge_uses_official_mark():
     assert ".post-item .p-name-line .p-platform .pt-icon { width: 13px; height: 13px; }" in css
 
 
+def test_x_badge_uses_system_blue_in_both_themes():
+    """X 角标复用主题强调蓝，避免独立黑白色破坏平台角标的一致性。"""
+    tokens = (APP_JS.parent / "vendor/design-tokens.css").read_text()
+    assert tokens.count("--color-brand-twitter: var(--color-accent-text);") == 2
+
+
 def test_live_pill_icon_matches_platform_badge_size():
     """快讯角标与其他平台同尺寸，选中不得反色出白圆。"""
     src = ICONS_JS.read_text()
