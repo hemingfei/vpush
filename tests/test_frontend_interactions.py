@@ -5102,6 +5102,17 @@ def test_type_scale_uses_four_reading_roles():
             assert "cube-nav" in window, f"{size} 只能用于图表刻度: {window!r}"
 
 
+def test_system_font_stack_keeps_brand_and_chinese_titles_naturally_spaced():
+    """优先用系统字体；品牌和中文标题不使用负字距。"""
+    tokens = (APP_JS.parent / "vendor" / "design-tokens.css").read_text()
+    css = STYLE_CSS.read_text()
+    assert re.search(r'--font-sans:\s*-apple-system,\s*BlinkMacSystemFont,', tokens)
+    assert '"PingFang SC"' in tokens and '"Microsoft YaHei"' in tokens
+    title = re.search(r"\.login-brand-title\s*\{([^}]*)\}", css)
+    assert title and "letter-spacing: 0" in title.group(1)
+    assert "letter-spacing: -0.02em" not in title.group(1)
+
+
 def test_success_token_is_muted_sage():
     """成功色用鼠尾草绿，不用高饱和交通灯绿。"""
     tokens = (APP_JS.parent / "vendor" / "design-tokens.css").read_text()
