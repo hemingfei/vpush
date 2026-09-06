@@ -12,7 +12,6 @@ inode 的路径直接跳过。任务与 PDF 压缩共用全局锁，替换时再
 
 import argparse
 import collections
-import fcntl
 import hashlib
 import os
 import re
@@ -21,6 +20,19 @@ import stat
 import sys
 import time
 from contextlib import contextmanager
+
+try:  # fcntl 仅 POSIX 存在；Windows 用 msvcrt 锁首字节实现同等进程互斥
+    import fcntl
+
+    def _lock_fd(fd: int) -> None:
+        fcntl.lockf(fd, fcntl.LOCK_EX)
+
+except ImportError:
+    import msvcrt
+
+    def _lock_fd(fd: int) -> None:
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
 
 ROOT = "/srv/vpush-ima"
 EXCLUDE = ("/srv/vpush-ima/local/",)
@@ -48,7 +60,7 @@ def fingerprint(st: os.stat_result) -> tuple[int, int, int, int]:
 def archive_lock(root: str):
     fd = os.open(os.path.join(root, ARCHIVE_LOCK_NAME), os.O_RDWR | os.O_CREAT, 0o660)
     try:
-        fcntl.lockf(fd, fcntl.LOCK_EX)
+        _lock_fd(fd)
         yield
     finally:
         os.close(fd)
@@ -304,7 +316,7 @@ def main() -> None:
 
     os.makedirs(HERE, exist_ok=True)
     with open(GLOBAL_LOCK, "a") as global_lock:
-        fcntl.flock(global_lock, fcntl.LOCK_EX)
+        _lock_fd(global_lock.fileno())
         run(args.root, True)
 
 

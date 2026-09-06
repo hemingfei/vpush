@@ -14,6 +14,11 @@ from app.cicc_collector import CiccControl, from_env
 from app.main import create_app
 from scripts import cicc_report_collector
 
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="被测脚本面向 Linux VPS（os.chown、/srv 路径、POSIX 文件语义），Windows 无法运行",
+)
+
 
 @pytest.fixture
 def ctrl(tmp_path):

@@ -8,6 +8,13 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="被测脚本面向 Linux 存储 VPS（/srv 路径、硬链接替换、跨进程锁语义），Windows 无法运行",
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "pdf_dedup_hardlink.py"
 SPEC = importlib.util.spec_from_file_location("pdf_dedup_hardlink", SCRIPT)

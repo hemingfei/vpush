@@ -11,7 +11,6 @@
 """
 
 import argparse
-import fcntl
 import hashlib
 import json
 import os
@@ -28,6 +27,25 @@ from cicc_report_collector import (
     compress_pdf_result,
     strip_watermark_result,
 )
+
+try:  # fcntl 仅 POSIX 存在；Windows 用 msvcrt 锁首字节实现同等进程互斥
+    import fcntl
+
+    def _lock_fd(fd: int, *, nonblocking: bool = False) -> None:
+        fcntl.lockf(fd, fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0))
+
+except ImportError:
+    import errno
+    import msvcrt
+
+    def _lock_fd(fd: int, *, nonblocking: bool = False) -> None:
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK if nonblocking else msvcrt.LK_LOCK, 1)
+        except OSError as exc:
+            if nonblocking:
+                raise BlockingIOError(errno.EAGAIN, "archive lock held") from exc
+            raise
 
 ROOT = "/srv/vpush-ima"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -51,7 +69,7 @@ def default_state_path(root: str) -> str:
 def archive_lock(root: str):
     fd = os.open(os.path.join(root, ARCHIVE_LOCK_NAME), os.O_RDWR | os.O_CREAT, 0o660)
     try:
-        fcntl.lockf(fd, fcntl.LOCK_EX)
+        _lock_fd(fd)
         yield
     finally:
         os.close(fd)
@@ -333,8 +351,8 @@ def main() -> None:
     os.makedirs(os.path.dirname(args.state) or ".", exist_ok=True)
     with open(GLOBAL_LOCK, "w") as global_lock, open(args.state + ".lock", "w") as lock:
         try:
-            fcntl.flock(global_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _lock_fd(global_lock.fileno(), nonblocking=True)
+            _lock_fd(lock.fileno(), nonblocking=True)
         except BlockingIOError:
             print("已有压缩任务在运行，本次跳过", flush=True)
             return

@@ -84,22 +84,28 @@ SENTINELS += [
 ]
 
 
-# —— style.css 结构完整性（2026-09-06 财经新闻页事故）——
+# —— 静态 CSS 结构完整性（2026-09-06 财经新闻页事故）——
 # c3eb1e5 合并时丢掉 .ak-block-content 的右括号，CSS 嵌套解析把文件尾部
 # （新闻列表/文章页/新闻管理/IMA 手机适配）全部静默嵌套进上一条规则，
 # 线上列表缩略图、正文 max-width、图片约束全灭。括号配平是结构性质，
-# 用独立断言而非指纹字符串守住。
-def test_style_css_braces_balanced():
+# 用独立断言而非指纹字符串守住；覆盖 static 下全部样式表。
+def test_static_css_braces_balanced():
     import re
 
-    text = (ROOT / "app/static/style.css").read_text(encoding="utf-8")
-    stripped = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
-    stripped = re.sub(r'"[^"\n]*"|\'[^\'\n]*\'', "", stripped)
-    depth = 0
-    for line_no, line in enumerate(stripped.splitlines(), 1):
-        depth += line.count("{") - line.count("}")
-        assert depth >= 0, f"style.css 第 {line_no} 行出现多余的右括号"
-    assert depth == 0, (
-        f"style.css 花括号不配平（还差 {depth} 个右括号）：缺失会让其后所有规则"
-        "被 CSS 嵌套解析吞进上一条选择器，整段样式静默失效"
+    broken = []
+    for path in sorted((ROOT / "app/static").rglob("*.css")):
+        text = path.read_text(encoding="utf-8")
+        stripped = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+        stripped = re.sub(r'"[^"\n]*"|\'[^\'\n]*\'', "", stripped)
+        depth = 0
+        for line_no, line in enumerate(stripped.splitlines(), 1):
+            depth += line.count("{") - line.count("}")
+            if depth < 0:
+                broken.append(f"{path.name} 第 {line_no} 行多余的右括号")
+                depth = 0
+        if depth != 0:
+            broken.append(f"{path.name} 缺 {depth} 个右括号")
+    assert not broken, (
+        "CSS 花括号不配平：缺失会让其后所有规则被 CSS 嵌套解析吞进上一条选择器，"
+        "整段样式静默失效——\n" + "\n".join(broken)
     )

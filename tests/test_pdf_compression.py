@@ -11,6 +11,13 @@ import time
 from argparse import Namespace
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="被测脚本面向 Linux 存储 VPS（目录 fsync、POSIX 原子替换与锁语义），Windows 无法运行",
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "pdf_backfill_compress.py"
 INSTALLER = ROOT / "scripts" / "vps" / "install_compress_hourly.sh"

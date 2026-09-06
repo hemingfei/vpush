@@ -16,7 +16,6 @@
 """
 
 import argparse
-import fcntl
 import http.client
 import io
 import json
@@ -31,6 +30,25 @@ import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+try:  # fcntl 仅 POSIX 存在；Windows 用 msvcrt 锁首字节实现同等进程互斥
+    import fcntl
+
+    def _lock_fd(fd: int, *, nonblocking: bool = False) -> None:
+        fcntl.flock(fd, fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0))
+
+except ImportError:
+    import errno
+    import msvcrt
+
+    def _lock_fd(fd: int, *, nonblocking: bool = False) -> None:
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK if nonblocking else msvcrt.LK_LOCK, 1)
+        except OSError as exc:
+            if nonblocking:
+                raise BlockingIOError(errno.EAGAIN, "lock held elsewhere") from exc
+            raise
 
 BASE = "https://www.research.cicc.com"
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -270,7 +288,7 @@ def merge_sidecar(path: Path, updates: dict, *, fix_owner: bool = False) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_name(".vpush-local-meta.lock")
     with open(lock_path, "a+", encoding="utf-8") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        _lock_fd(lock.fileno())
         rows = load_sidecar(path)
         rows.update(updates)
         tmp = path.with_name(f".vpush-local-meta.jsonl.tmp.{os.getpid()}")

@@ -10,7 +10,12 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
-from playwright.sync_api import Page, Playwright, expect, sync_playwright
+
+pytest.importorskip(
+    "playwright.sync_api",
+    reason="需要 playwright（pip install playwright && playwright install chromium），CI 必装",
+)
+from playwright.sync_api import Page, Playwright, expect, sync_playwright  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "app" / "static"
