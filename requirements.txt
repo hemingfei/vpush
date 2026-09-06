@@ -14,3 +14,5 @@ lzstring==1.0.4
 python-dotenv>=1.0.0
 feedparser==6.0.11
 bleach==6.2.0
+# Windows 无系统 tz 数据库；app/market.py 的 zoneinfo 需要它（Linux 上无害）
+tzdata==2026.3
