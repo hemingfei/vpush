@@ -296,7 +296,8 @@ export function createNewsView(dependencies) {
   }
 
   // 增量轮询：新帖不自动插到顶部（不打断阅读位置），先攒进待读缓冲，
-  // 由返回顶部按钮的角标提示，点击按钮时回顶并一次性合并
+  // 由返回顶部按钮的角标提示；用户本来就在顶部时直接合并显示，
+  // 点击按钮或自己滚回顶部时也一次性合并
   async function pollNewsRtUpdates(seq) {
     if (document.visibilityState === "hidden") return;
     const list = $("#news-rt-list");
@@ -310,7 +311,8 @@ export function createNewsView(dependencies) {
       if (!incoming.length) return;
       state.newsRtLatestId = incoming.reduce((max, p) => Math.max(max, Number(p.id) || 0), state.newsRtLatestId);
       state.newsRtPending = [...incoming, ...state.newsRtPending];
-      newsRtSyncBacktop();
+      if (window.scrollY <= 80) newsRtMergePending();
+      else newsRtSyncBacktop();
     } catch { /* 轮询失败静默，下一轮重试 */ }
   }
 
@@ -328,6 +330,11 @@ export function createNewsView(dependencies) {
     const btn = $("#news-rt-backtop");
     if (!btn) return;
     const n = state.newsRtPending.length;
+    // 用户自己滚回顶部：待读新帖直接合并显示，不用再点一下
+    if (n && window.scrollY <= 80) {
+      newsRtMergePending();
+      return;
+    }
     btn.classList.toggle("show", window.scrollY > 600 || n > 0);
     btn.classList.toggle("has-new", n > 0);
     const tip = $("#news-rt-backtop-new");
@@ -337,17 +344,14 @@ export function createNewsView(dependencies) {
     }
   }
 
-  function newsRtBacktopClick() {
+  // 把待读新帖一次性合并进列表顶部（快讯流按 id 降序整批置顶，与原轮询置顶行为一致）
+  function newsRtMergePending() {
     const pending = state.newsRtPending;
-    if (!pending.length) {
-      window.scrollTo({ top: 0, behavior: "smooth" });
-      return;
-    }
+    if (!pending.length) return;
     state.newsRtPending = [];
     const have = new Set(state.newsRtItems.map((p) => p.id));
     const incoming = pending.filter((p) => !have.has(p.id));
     if (incoming.length) {
-      // 快讯流按 id 降序整批置顶（与原轮询置顶行为一致）
       incoming.sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0));
       state.newsRtItems = [...incoming, ...state.newsRtItems];
       // 新帖插到顶部后，已加载行的分页窗口整体后移
@@ -356,6 +360,10 @@ export function createNewsView(dependencies) {
       if (list) list.insertAdjacentHTML("afterbegin", incoming.map(newsRtItemHtml).join(""));
     }
     newsRtSyncBacktop();
+  }
+
+  function newsRtBacktopClick() {
+    newsRtMergePending();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 

@@ -2561,6 +2561,16 @@ async function pollFeedUpdates() {
     }
     if (live) _livePendingLatestId = Math.max(_livePendingLatestId, ...newer.map((p) => p.id));
     else _tlPendingLatestId = Math.max(_tlPendingLatestId, ...newer.map((p) => p.id));
+
+    // 用户本来就在顶部：新帖直接刷新显示，立刻可见，不用点任何东西
+    if (window.scrollY <= 80 && !_tlRefreshing) {
+      playNotificationSound();
+      refreshTimeline();
+      return;
+    }
+
+    // 用户在下方阅读：不打断，只提示（提示条 + 提示音 + 返回顶部按钮角标）；
+    // 用户自己滚回顶部或点提示条/返回顶部按钮时再插入
     const unit = live ? "快讯" : "动态";
     const label = `${pendingNew.length} 条新${unit}，点击查看`;
     const btn = $(".tl-new-badge-btn");
@@ -2574,9 +2584,6 @@ async function pollFeedUpdates() {
     }
     $("#tl-new-badge")?.classList.add("show");
     $("#tl-feed-panel")?.classList.add("has-new");
-
-    // 不自动刷新/滚回顶部：只提示（提示条 + 提示音 + 返回顶部按钮角标），
-    // 新帖等用户点提示条或返回顶部按钮时再插入
     playNotificationSound();
     tlSyncBacktopNew();
   } catch { /* 轮询失败静默 */ }
@@ -2820,6 +2827,8 @@ function tlSyncScrollChrome() {
   }
   const backtop = $("#tl-backtop");
   if (backtop) backtop.classList.toggle("show", y > 600 || feedPendingNew().length > 0);
+  // 用户自己滚回顶部：待读新帖直接合并显示（等同点提示条），不用再点一下
+  if (y <= 80 && feedPendingNew().length && !_tlRefreshing) refreshTimeline();
   _tlScrollLastY = y;
 }
 

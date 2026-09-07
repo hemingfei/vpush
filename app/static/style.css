@@ -1968,9 +1968,10 @@ body.lightbox-open { overflow: hidden; }
   box-sizing: border-box;
   pointer-events: none;
 }
-/* 返回顶部：移动端动态页滚动较深时出现在右下角（悬在 bottom-nav 上方） */
+/* 返回顶部：动态页/实时资讯页滚动较深时出现在右下角（移动端悬在 bottom-nav 上方）；
+   PC 和手机都显示，有待读新帖时带条数角标提前弹出 */
 .tl-backtop {
-  display: none;
+  display: inline-flex;
   position: fixed;
   right: 14px;
   bottom: calc(84px + var(--safe-bottom));
@@ -1991,6 +1992,26 @@ body.lightbox-open { overflow: hidden; }
 }
 .tl-backtop.show { opacity: 1; pointer-events: auto; transform: none; }
 .tl-backtop svg { width: 18px; height: 18px; }
+.tl-backtop-new {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--color-danger, #e5484d);
+  color: #fff;
+  font-size: 11px;
+  font-weight: var(--font-weight-semibold, 600);
+  line-height: 18px;
+  text-align: center;
+  box-shadow: 0 2px 6px rgba(229, 72, 77, 0.4);
+}
+.tl-backtop.has-new { border-color: var(--color-danger, #e5484d); color: var(--color-danger, #e5484d); }
+@media (min-width: 769px) {
+  .tl-backtop { right: 24px; bottom: 32px; }
+}
 .tl-filter-views { display: flex; flex-wrap: wrap; gap: 8px; }
 .tl-filter-views .fav-toggle { flex: 1; min-width: 0; justify-content: center; }
 .tl-filterbar .fav-toggle { height: 44px; min-height: 44px; }
@@ -2975,7 +2996,6 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
      上下 padding 收窄到 10px，压低筛选条整体高度 */
   .tl-filterbar { padding-top: 10px; padding-bottom: 10px; transition: transform 0.25s var(--ease-standard); }
   .tl-filterbar.tl-bars-hidden { transform: translateY(calc(-100% - 16px)); }
-  .tl-backtop { display: inline-flex; }
   .platform-tabs {
     flex-wrap: nowrap;
     overflow-x: auto;
