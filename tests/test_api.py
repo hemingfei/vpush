@@ -190,6 +190,12 @@ def test_news_realtime_feed_is_admin_curated_and_visible_to_all():
     # 分页：limit=1 时 has_more 为真
     paged = client.get("/api/news/realtime?limit=1", headers=user_headers_).json()
     assert len(paged["items"]) == 1 and paged["has_more"] is True
+    # 来源筛选：sources 是勾选∩启用的大V明细；kol_id 只出该大V，未勾选 id 查不到数据
+    assert [s["id"] for s in body["sources"]] == [kid_a, kid_priv]
+    assert {s["name"] for s in body["sources"]} == {"资讯A", "私密D"}
+    only_a = client.get(f"/api/news/realtime?kol_id={kid_a}", headers=user_headers_).json()
+    assert [p["external_id"] for p in only_a["items"]] == ["rtp1"]
+    assert client.get(f"/api/news/realtime?kol_id={kid_b}", headers=user_headers_).json()["items"] == []
     # 未登录拿不到
     assert client.get("/api/news/realtime").status_code == 401
 
