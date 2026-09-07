@@ -3497,6 +3497,48 @@ def test_live_pill_icon_matches_platform_badge_size():
     assert ".tl-pill .wscn-live-icon { width: 18px" not in css
 
 
+def test_web_control_icons_use_shared_registry_and_dependency_injection():
+    """网页控件图标必须来自共享注册表，并由 app.js 注入各视图。"""
+    icons = ICONS_JS.read_text()
+    app = APP_JS.read_text()
+    index = INDEX_HTML.read_text()
+    lightbox = (APP_JS.parent / "core" / "lightbox.js").read_text()
+    ima = IMA_JS.read_text()
+    knowledge = ADMIN_KNOWLEDGE_JS.read_text()
+    collector = ADMIN_IMA_COLLECTOR_JS.read_text()
+    kol = ADMIN_KOLS_JS.read_text()
+    news = ADMIN_NEWS_JS.read_text()
+
+    for name in (
+        "CHEVRON_LEFT_ICON", "CHEVRON_RIGHT_ICON", "CHEVRON_UP_ICON",
+        "CHEVRON_DOWN_ICON", "PAPERCLIP_ICON",
+    ):
+        assert f"export const {name} = `" in icons
+    assert 'export const X_ICON = `<svg class="ui-icon x-icon"' in icons
+    assert 'export const EXTERNAL_LINK_ICON = `<svg class="ui-icon external-link-icon"' in icons
+    assert re.search(r'<button id="btn-back"[^>]*></button>', index)
+    assert "CHEVRON_LEFT_ICON" in app
+    assert '$("#btn-back").innerHTML = CHEVRON_LEFT_ICON;' in app
+
+    assert "CHEVRON_LEFT_ICON" in lightbox and "CHEVRON_RIGHT_ICON" in lightbox
+    assert "CHEVRON_LEFT_ICON" in ima
+    assert "CHEVRON_RIGHT_ICON" in ima
+    assert "CHEVRON_RIGHT_ICON" in knowledge
+    assert "CHEVRON_RIGHT_ICON" in collector
+    assert "CHEVRON_DOWN_ICON" in collector and "X_ICON" in collector
+    assert "CHEVRON_LEFT_ICON" in kol and "CHEVRON_RIGHT_ICON" in kol
+    assert "CHEVRON_UP_ICON" in news and "CHEVRON_DOWN_ICON" in news
+
+    assert not any(mark in lightbox for mark in ("✕", "‹", "›"))
+    assert "‹" not in ima
+    assert "›" not in knowledge
+    assert not any(mark in collector for mark in ("›", "⌄", "×"))
+    assert "← 上一页" not in kol and "下一页 →" not in kol
+    assert "▲ 收起" not in news and "▼ 展开全文" not in news
+    assert "收起 ▲" not in app and "展开全文 ▼" not in app
+    assert "📎" not in app and "查看原文 →" not in app
+
+
 def test_timeline_pills_stay_content_sized():
     """桌面筛选胶囊按内容收缩，禁止等宽拉伸。"""
     render = _fn_body("renderTimeline")

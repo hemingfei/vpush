@@ -18,6 +18,8 @@ export function createAdminNewsView(dependencies) {
     REFRESH_ICON,
     PLUS_ICON,
     PLATFORM_LABELS,
+    CHEVRON_UP_ICON,
+    CHEVRON_DOWN_ICON,
   } = dependencies;
 
   const adminNewsState = {
@@ -439,7 +441,7 @@ export function createAdminNewsView(dependencies) {
         <td>${escapeHtml(p.category_name || "")}</td>
         <td class="post-cell" onclick="adminTogglePost(${p.id})" title="点击展开/收起全文" role="button" tabindex="0" aria-expanded="${expanded}" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();adminTogglePost(${p.id})}">
           <pre class="content-cell">${escapeHtml(body.slice(0, expanded ? 100000 : 120))}</pre>
-          <span class="muted">${expanded ? "▲ 收起" : (body.length > 120 ? "▼ 展开全文" : "")}</span>
+          <span class="muted">${expanded ? `${CHEVRON_UP_ICON} 收起` : (body.length > 120 ? `${CHEVRON_DOWN_ICON} 展开全文` : "")}</span>
         </td>
         <td>${escapeHtml(p.published_at)}</td>
         <td>${safeUrl ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener">原文</a>` : ""}</td>

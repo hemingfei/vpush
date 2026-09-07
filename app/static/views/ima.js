@@ -32,6 +32,8 @@ export function createImaView(dependencies) {
     REFRESH_ICON,
     X_ICON,
     EXTERNAL_LINK_ICON,
+    CHEVRON_LEFT_ICON,
+    CHEVRON_RIGHT_ICON,
   } = dependencies;
 
   function clearImaPdfUrl() {
@@ -1247,7 +1249,7 @@ export function createImaView(dependencies) {
     const prev = snapshot.items[index - 1];
     const next = snapshot.items[index + 1];
     const button = (item, className, label) => item
-      ? `<button type="button" class="${className}" data-media-id="${escapeHtml(item.media_id)}" data-group-id="${escapeHtml(item.group_id || "")}" onclick="openImaDocument(this.dataset.mediaId, this.dataset.groupId, true)">${label} <span>${escapeHtml(imaListTitle(item.name))}</span></button>`
+      ? `<button type="button" class="${className}" data-media-id="${escapeHtml(item.media_id)}" data-group-id="${escapeHtml(item.group_id || "")}" aria-label="${label}" title="${label}" onclick="openImaDocument(this.dataset.mediaId, this.dataset.groupId, true)">${className === "ima-reader-prev" ? CHEVRON_LEFT_ICON : ""}${label} <span>${escapeHtml(imaListTitle(item.name))}</span>${className === "ima-reader-next" ? CHEVRON_RIGHT_ICON : ""}</button>`
       : "";
     return `<nav class="ima-reader-nav" aria-label="同一结果集">${button(prev, "ima-reader-prev", "上一份")}${button(next, "ima-reader-next", "下一份")}</nav>`;
   }
@@ -1325,7 +1327,7 @@ export function createImaView(dependencies) {
         ? `
         <article class="ima-reader ima-reader--feishu">
           <header class="ima-reader-toolbar">
-            <button type="button" class="ima-reader-back" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back)" aria-label="返回"><span class="ima-back-icon" aria-hidden="true">‹</span>返回</button>
+            <button type="button" class="ima-reader-back" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back)" aria-label="返回" title="返回"><span class="ima-back-icon" aria-hidden="true">${CHEVRON_LEFT_ICON}</span>返回</button>
             <h2 class="ima-reader-title">${readerTitle}</h2>
             <div class="ima-reader-actions">${searchBack}${openNewTab}</div>
           </header>
@@ -1335,7 +1337,7 @@ export function createImaView(dependencies) {
         : `
         <article class="ima-reader">
           <header class="ima-reader-toolbar">
-            <button type="button" class="ima-reader-back" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back)" aria-label="返回"><span class="ima-back-icon" aria-hidden="true">‹</span>返回</button>
+            <button type="button" class="ima-reader-back" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back)" aria-label="返回" title="返回"><span class="ima-back-icon" aria-hidden="true">${CHEVRON_LEFT_ICON}</span>返回</button>
             <div class="ima-reader-actions">${searchBack}${openNewTab}</div>
           </header>
           <section class="ima-reader-info">

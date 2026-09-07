@@ -1,9 +1,10 @@
 import { escapeHtml, imgOnError, imgProxyUrl, imgSrcFor, jsString } from "./core/html.js";
 import {
-  ARROW_UP_ICON, BELL_ICON, BELL_OFF_ICON, BOOK_ICON, COPY_ICON, DATABASE_ICON, DASHBOARD_ICON, FOLDER_ICON,
+  ARROW_UP_ICON, BELL_ICON, BELL_OFF_ICON, BOOK_ICON, CHEVRON_DOWN_ICON, CHEVRON_LEFT_ICON, CHEVRON_RIGHT_ICON,
+  CHEVRON_UP_ICON, COPY_ICON, DATABASE_ICON, DASHBOARD_ICON, FOLDER_ICON,
   EYE_ICON, EYE_OFF_ICON, EXTERNAL_LINK_ICON, FEISHU_DATE_ICON, FILE_TEXT_ICON, FILTER_ICON,
   GEAR_ICON, GITHUB_ICON, GRID_ICON, HISTORY_ICON, HOME_ICON, KEY_ICON, LIST_ICON,
-  MORE_ICON, NEWS_ICON, PLUS_ICON, REFRESH_ICON, SEARCH_ICON, SEND_ICON, STAR_SVG,
+  MORE_ICON, NEWS_ICON, PAPERCLIP_ICON, PLUS_ICON, REFRESH_ICON, SEARCH_ICON, SEND_ICON, STAR_SVG,
   THEME_AUTO_ICON, THEME_MOON_ICON, THEME_SUN_ICON, TRASH_ICON, USER_ICON, USER_PLUS_ICON, USERS_ICON,
   V_ICON, WSCN_LIVE_ICON, X_ICON,
 } from "./core/icons.js";
@@ -31,11 +32,15 @@ import { createPushSettingsView } from "./views/push-settings.js";
 import { createMarketView } from "./views/market.js";
 
 const $ = (sel) => document.querySelector(sel);
+$("#btn-back").innerHTML = CHEVRON_LEFT_ICON;
 
 const { openLightbox, closeLightbox, lightboxStep } = createLightbox({
   escapeHtml,
   imgOnError,
   trapFocus,
+  CHEVRON_LEFT_ICON,
+  CHEVRON_RIGHT_ICON,
+  X_ICON,
 });
 
 const PLATFORM_LABELS = { ...PLATFORM_LABELS_CONFIG, ima: "ima" };
@@ -3001,7 +3006,7 @@ function postCard(post) {
       </div>
       ${isCombination ? `<div class="combo-post">${comboHtml}</div>` : `${trBar}${!titleDup && title ? `<div class="p-title">${escapeHtml(title)}</div>` : ""}
       <div class="p-content">${escapeHtml(shown)}${body.length > 200
-        ? `<button class="post-expand-btn" onclick="tlTogglePost(${post.id})" aria-expanded="${expanded}">${expanded ? "收起 ▲" : "展开全文 ▼"}</button>`
+        ? `<button class="post-expand-btn" onclick="tlTogglePost(${post.id})" aria-expanded="${expanded}" aria-label="${expanded ? "收起全文" : "展开全文"}" title="${expanded ? "收起全文" : "展开全文"}">${expanded ? `${CHEVRON_UP_ICON} 收起` : `${CHEVRON_DOWN_ICON} 展开全文`}</button>`
         : ""}</div>`}
       ${Array.isArray(post.images) && post.images.length ? `
         <div class="post-images">
@@ -3013,12 +3018,12 @@ function postCard(post) {
         // 附件一律走鉴权路由（服务端校验订阅可见性，命中本地缓存时直接下发）；
         // 历史详情里缓存的 /zsxq-files/ 静态链接已随挂载移除，不再直连
         if (f.file_id) {
-          return `<button type="button" class="p-file" data-file-id="${escapeHtml(String(f.file_id))}" data-name="${escapeHtml(f.name || "附件")}" onclick="downloadZsxqFile(this)">📎 ${escapeHtml(f.name || "附件")}</button>`;
+          return `<button type="button" class="p-file" data-file-id="${escapeHtml(String(f.file_id))}" data-name="${escapeHtml(f.name || "附件")}" onclick="downloadZsxqFile(this)" aria-label="下载附件 ${escapeHtml(f.name || "附件")}" title="下载附件 ${escapeHtml(f.name || "附件")}">${PAPERCLIP_ICON} ${escapeHtml(f.name || "附件")}</button>`;
         }
         const href = f.url || "";
         return href
-          ? `<a class="p-file" href="${escapeHtml(href)}" target="_blank" rel="noopener">📎 ${escapeHtml(f.name || "附件")}</a>`
-          : `<span class="p-file">📎 ${escapeHtml(f.name || "附件")}</span>`;
+          ? `<a class="p-file" href="${escapeHtml(href)}" target="_blank" rel="noopener" aria-label="打开附件 ${escapeHtml(f.name || "附件")}" title="打开附件 ${escapeHtml(f.name || "附件")}">${PAPERCLIP_ICON} ${escapeHtml(f.name || "附件")}</a>`
+          : `<span class="p-file" title="附件 ${escapeHtml(f.name || "附件")}">${PAPERCLIP_ICON} ${escapeHtml(f.name || "附件")}</span>`;
       }).join("")}
       <div class="p-meta">
         ${post.category_name ? `<span class="cat">${escapeHtml(post.category_name)}</span>` : ""}
@@ -3026,7 +3031,7 @@ function postCard(post) {
         ${Array.isArray(post.tags) && post.tags.length
           ? post.tags.map((t) => `<button type="button" class="cat cat-tag post-tag-filter" data-tag="${escapeHtml(t)}" onclick="tlPickTag(this.dataset.tag)">${escapeHtml(t)}</button>`).join("")
           : ""}
-        ${post.platform === "zsxq" ? "" : `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener">查看原文 →</a>`}
+        ${post.platform === "zsxq" ? "" : `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener" aria-label="查看原文" title="查看原文">查看原文 ${EXTERNAL_LINK_ICON}</a>`}
       </div>
     </div>`;
 }
@@ -4826,6 +4831,8 @@ const {
   X_ICON,
   COPY_ICON,
   EXTERNAL_LINK_ICON,
+  CHEVRON_LEFT_ICON,
+  CHEVRON_RIGHT_ICON,
 });
 
 
@@ -4987,6 +4994,8 @@ const {
   REFRESH_ICON,
   PLUS_ICON,
   PLATFORM_LABELS,
+  CHEVRON_UP_ICON,
+  CHEVRON_DOWN_ICON,
 });
 
 const {
@@ -5072,6 +5081,8 @@ const {
   PLATFORM_TABS,
   platformTabHTML,
   routeQuery,
+  CHEVRON_LEFT_ICON,
+  CHEVRON_RIGHT_ICON,
 });
 
 const {
@@ -5168,6 +5179,9 @@ const {
   bumpRouteSeq: () => ++routeRenderSeq,
   currentAdminSeq: () => _adminRenderSeq,
   FOLDER_ICON,
+  CHEVRON_RIGHT_ICON,
+  CHEVRON_DOWN_ICON,
+  X_ICON,
   imaMountState,
   imaCollectorPureCache,
   reloadAdminSettingsPage,
@@ -5251,6 +5265,7 @@ const {
   currentAdminSeq: () => _adminRenderSeq,
   routeQuery,
   REFRESH_ICON,
+  CHEVRON_RIGHT_ICON,
   setPageTitle,
   imaMountState,
   imaCollectorPureCache,

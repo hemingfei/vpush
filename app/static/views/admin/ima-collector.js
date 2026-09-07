@@ -12,6 +12,9 @@ export function createAdminImaCollectorView(dependencies) {
     bumpRouteSeq,
     currentAdminSeq,
     FOLDER_ICON,
+    CHEVRON_RIGHT_ICON,
+    CHEVRON_DOWN_ICON,
+    X_ICON,
     imaMountState,
     imaCollectorPureCache,
     reloadAdminSettingsPage,
@@ -256,7 +259,7 @@ export function createAdminImaCollectorView(dependencies) {
     const selection = imaFolderSelectionState(groupId, folderId);
     const inputId = `ima-folder-${groupId}-${folderId}`;
     const expand = hasChildren
-      ? `<button type="button" class="ima-folder-expand" id="ima-folder-expand-${escapeHtml(groupId)}-${escapeHtml(folderId)}" data-group-id="${escapeHtml(groupId)}" data-folder-id="${escapeHtml(folderId)}" aria-expanded="${expanded}" aria-label="${expanded ? "收起" : "展开"} ${escapeHtml(name)}" title="${expanded ? "收起" : "展开"}" onclick="toggleImaFolderExpand(this)"><span aria-hidden="true">${expanded ? "⌄" : "›"}</span></button>`
+      ? `<button type="button" class="ima-folder-expand" id="ima-folder-expand-${escapeHtml(groupId)}-${escapeHtml(folderId)}" data-group-id="${escapeHtml(groupId)}" data-folder-id="${escapeHtml(folderId)}" aria-expanded="${expanded}" aria-label="${expanded ? "收起" : "展开"} ${escapeHtml(name)}" title="${expanded ? "收起" : "展开"}" onclick="toggleImaFolderExpand(this)">${expanded ? CHEVRON_DOWN_ICON : CHEVRON_RIGHT_ICON}</button>`
       : '<span class="ima-folder-expand-placeholder" aria-hidden="true"></span>';
     const nested = expanded ? imaRenderFolderBranch(groupId, folderId, depth + 1) : "";
     return `
@@ -396,7 +399,7 @@ export function createAdminImaCollectorView(dependencies) {
   }
 
   function aclChipHtml(name) {
-    return `<button type="button" class="ima-acl-chip" data-acl-remove="${escapeHtml(name)}" aria-label="移除 ${escapeHtml(name)}">${escapeHtml(name)}<span aria-hidden="true">×</span></button>`;
+    return `<button type="button" class="ima-acl-chip" data-acl-remove="${escapeHtml(name)}" aria-label="移除 ${escapeHtml(name)}" title="移除 ${escapeHtml(name)}">${escapeHtml(name)}${X_ICON}</button>`;
   }
 
   function aclPickerHtml(usernames, listId, compact = false) {
