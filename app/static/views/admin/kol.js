@@ -288,6 +288,10 @@ export function createAdminKolsView(dependencies) {
     if (_newsKolOutsideBound) return;
     _newsKolOutsideBound = true;
     document.addEventListener("click", (event) => {
+      // 勾选条目会 innerHTML 重建 #news-kol-items，被点条目随即脱离 DOM；冒泡到
+      // document 时 target 已游离，closest 查不到下拉容器会被误判为点外收起，
+      // 导致每选一个就自动关闭。游离目标一律忽略（同 mx-views 的处理）。
+      if (!event.target.isConnected) return;
       const menu = $("#news-kol-menu");
       if (!menu || !menu.classList.contains("open")) return;
       if (!event.target.closest("#news-kol-dropdown")) {

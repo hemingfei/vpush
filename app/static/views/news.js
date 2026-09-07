@@ -198,8 +198,8 @@ export function createNewsView(dependencies) {
     return `<article class="news-rt-item post-item" data-post-id="${post.id}">
       <div class="p-header">
         <div class="p-name-line">
-          <a class="p-name" href="/kol/${post.kol_id}" title="${escapeHtml(post.kol_name || "")}">${escapeHtml(post.kol_name || "")}</a>
           <time class="p-time" datetime="${escapeHtml(post.published_at || "")}" title="${escapeHtml(post.published_at || "")}">${escapeHtml(fmtPublished(post.published_at))}</time>
+          <a class="p-name" href="/kol/${post.kol_id}" title="${escapeHtml(post.kol_name || "")}">${escapeHtml(post.kol_name || "")}</a>
         </div>
       </div>
       ${!titleDup && title ? `<div class="p-title">${escapeHtml(title)}</div>` : ""}
@@ -213,7 +213,6 @@ export function createNewsView(dependencies) {
           ${images.length > 4 ? `<span class="post-images-more">+${images.length - 4}</span>` : ""}
         </div>` : ""}
       <div class="p-meta">
-        ${post.category_name ? `<span class="cat">${escapeHtml(post.category_name)}</span>` : ""}
         ${tags.slice(0, 6).map((t) => `<span class="cat cat-tag">${escapeHtml(t)}</span>`).join("")}
         ${safeUrl ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer nofollow">查看原文 →</a>` : ""}
       </div>
