@@ -258,6 +258,20 @@ def test_market_initial_failure_has_retry_and_no_zero_quotes(page: Page):
     expect(page.get_by_role('button', name='重试', exact=True)).to_be_visible()
 
 
+def test_market_holiday_status_explains_previous_trading_date(page: Page):
+    page.evaluate("""async () => {
+      const { createMarketView } = await import('/views/market.js');
+      document.body.innerHTML = '<section id="tl-market"></section>';
+      createMarketView({escapeHtml: s => s, api: async () => ({group:'night',stale:false,items:[{
+        symbol:'us.INX',name:'标普 500 指数',price:7718.60,change:-29.55,percent:-0.38,status:'holiday',
+        quoted_at:'2026-09-04T16:00:00-04:00',previous_close:7748.15,
+        intraday:{date:'2026-09-04',duration:390,points:[{time:'09:30',minute:0,price:7740},{time:'16:00',minute:390,price:7718.6}]}
+      }]})}).startMarketQuotes();
+    }""")
+    expect(page.locator('.market-status')).to_have_text('今日休市')
+    expect(page.locator('.market-footer')).to_contain_text('最近交易日 · 09/04')
+
+
 @pytest.mark.parametrize("daily_percent,expected_class", [(3.52, "positive"), (-3.52, "negative"), (0, "flat")])
 def test_market_switches_automatically_and_ignores_other_group_responses(page: Page, daily_percent, expected_class):
     page.clock.install(time=datetime(2026, 9, 4, 11, 59, 50, tzinfo=timezone.utc))
@@ -288,7 +302,7 @@ def test_market_switches_automatically_and_ignores_other_group_responses(page: P
     assert len(page.locator('.market-spark polyline').get_attribute('points').split()) == 3
     assert page.locator('.market-spark polyline').get_attribute('points').split()[-1].startswith('22.0,')
     expect(page.locator('.market-spark-baseline')).to_have_attribute('y1', '18')
-    expect(page.locator('.market-footer')).to_contain_text('日内分时 · 09/04')
+    expect(page.locator('.market-footer')).to_contain_text('最近交易日 · 09/04')
     assert '近20' not in page.locator('#tl-market').inner_text()
     assert '腾讯行情' not in page.locator('#tl-market').inner_text()
     page.get_by_role('button', name='A股 / 港股').click()
