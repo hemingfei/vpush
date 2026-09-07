@@ -1176,7 +1176,7 @@ export function createAdminKolsView(dependencies) {
   // 标签来源/方向徽标：source=mx_view 为智囊团观点回流（llm 为默认来源不标），
   // direction 为该观点方向（看多/看空）
   function tagSourceBadge(source) {
-    return source === "mx_view" ? '<i class="tag-src-badge">智囊团</i>' : "";
+    return source === "mx_view" ? '<i class="tag-src-badge">观点研判</i>' : "";
   }
 
   function tagDirBadge(direction) {
@@ -1188,7 +1188,7 @@ export function createAdminKolsView(dependencies) {
   async function adminToggleViewTagging(enabled) {
     try {
       await api("/api/admin/mx-view-tagging/config", { method: "PUT", body: JSON.stringify({ enabled }) });
-      flash(enabled ? "已开启智囊团观点回流打标，下个快照批次生效" : "已关闭智囊团观点回流打标");
+      flash(enabled ? "已开启观点研判回流打标，下个快照批次生效" : "已关闭观点研判回流打标");
     } catch (err) {
       flash("保存失败: " + err.message, "error");
       loadAdminVocabTab("tags");
@@ -1258,7 +1258,7 @@ export function createAdminKolsView(dependencies) {
         <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <label style="display:inline-flex;align-items:center;gap:8px">
             <input type="checkbox" id="mx-view-tag-enabled" ${vt.enabled ? "checked" : ""} onchange="adminToggleViewTagging(this.checked)">
-            <b>智囊团观点回流打标</b>
+            <b>观点研判回流打标</b>
           </label>
           <span class="muted">快照研判的板块/个股多空观点回写证据帖标签（high 直写、low/名单外进审核队列）；今日直写 ${vt.applied || 0} 个、进审 ${vt.pending || 0} 个。</span>
         </div>
@@ -1276,7 +1276,7 @@ export function createAdminKolsView(dependencies) {
         <select id="tag-review-source" aria-label="按来源筛选" onchange="adminTagReviewSourceChange(this.value)" style="align-self:flex-start">
           <option value=""${!_tagReviewSource ? " selected" : ""}>全部来源</option>
           <option value="llm"${_tagReviewSource === "llm" ? " selected" : ""}>LLM 打标</option>
-          <option value="mx_view"${_tagReviewSource === "mx_view" ? " selected" : ""}>智囊团回流</option>
+          <option value="mx_view"${_tagReviewSource === "mx_view" ? " selected" : ""}>观点研判回流</option>
         </select></header>
         <div class="table-wrap">
           <table>
@@ -1836,8 +1836,8 @@ export function createAdminKolsView(dependencies) {
     const srcBadgeHtml = (t) => {
       const info = llmByTag.get(t);
       if (!info) return "";
-      const label = info.source === "mx_view" ? "智囊团" : "LLM";
-      return `<i class="tag-llm-badge" title="${info.source === "mx_view" ? "智囊团观点回流" : "LLM 打标"}">${label}</i>`;
+      const label = info.source === "mx_view" ? "观点研判" : "LLM";
+      return `<i class="tag-llm-badge" title="${info.source === "mx_view" ? "观点研判回流" : "LLM 打标"}">${label}</i>`;
     };
     const curChips = (d.tags || []).map((t) => `
       <span class="cat cat-tag tag-detail-chip${llmSet.has(t) ? " is-llm" : ""}">
@@ -1845,8 +1845,8 @@ export function createAdminKolsView(dependencies) {
       </span>`).join("") || '<span class="muted">暂无标签，可在下方输入框添加</span>';
     const llmChips = (d.llm_tags || []).map((x) => `
       <span class="cat cat-tag tag-detail-chip is-llm">
-        ${escapeHtml(x.tag)}${tagDirBadge(x.direction)}<i class="tag-llm-badge" title="${x.source === "mx_view" ? "智囊团观点回流" : "LLM 打标"}">${x.source === "mx_view" ? "智囊团" : "LLM"}</i>${delBtn(x.tag)}
-      </span>`).join("") || '<span class="muted">暂无（LLM/智囊团回流直写或审核通过的标签会显示在这里）</span>';
+        ${escapeHtml(x.tag)}${tagDirBadge(x.direction)}<i class="tag-llm-badge" title="${x.source === "mx_view" ? "观点研判回流" : "LLM 打标"}">${x.source === "mx_view" ? "观点研判" : "LLM"}</i>${delBtn(x.tag)}
+      </span>`).join("") || '<span class="muted">暂无（LLM/观点研判回流直写或审核通过的标签会显示在这里）</span>';
     const pendingRows = (d.pending_reviews || []).map((r) => `
       <div class="tag-detail-pending-row">
         <span class="cat cat-tag">${escapeHtml(r.tag)}</span>

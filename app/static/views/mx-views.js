@@ -73,7 +73,7 @@ export function createMxViewsView(dependencies) {
   async function renderMxViews(seq) {
     mxvTeardown();
     _mxv.seq = seq;
-    setPageTitle("智囊团");
+    setPageTitle(window.matchMedia("(max-width: 900px)").matches ? "研判" : "观点研判");
     $("#main").innerHTML = `<div class="mxv-root"><div class="mxv-empty">加载中…</div></div>`;
     try {
       const [daysData, subRows] = await Promise.all([
@@ -96,7 +96,7 @@ export function createMxViewsView(dependencies) {
 
   async function mxvLoadDay(day, seq) {
     if (!day) {
-      $("#main").innerHTML = `<div class="mxv-root"><div class="mxv-empty">暂无快照数据：请管理员在后台开启「智囊团」并等待快照，或使用「回填」生成历史。</div></div>`;
+      $("#main").innerHTML = `<div class="mxv-root"><div class="mxv-empty">暂无快照数据：请管理员在后台开启「观点研判」并等待快照，或使用「回填」生成历史。</div></div>`;
       return;
     }
     const dayData = await api(`/api/mx-views/day?day=${encodeURIComponent(day)}`);
@@ -1477,7 +1477,7 @@ export function createMxViewsView(dependencies) {
     <section class="section-panel">
       <header class="section-head mxva-head">
         <div>
-          <h2 class="section-title">智囊团</h2>
+          <h2 class="section-title">观点研判</h2>
           <p class="section-meta">交易时段按快照表批量研判 MX 大V消息，产出题材/个股多空观点与每日操作总结（页面 /mx-views）。</p>
         </div>
         <label class="mxva-switch" title="关闭即停止研判">
