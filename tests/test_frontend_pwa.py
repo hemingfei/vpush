@@ -2,6 +2,7 @@
 import re
 from pathlib import Path
 from scripts.bump_assets import asset_digest, module_urls
+from app.version import APP_VERSION
 
 SW_JS = Path(__file__).parent.parent / "app" / "static" / "sw.js"
 STATIC = SW_JS.parent
@@ -58,7 +59,7 @@ def test_frontend_assets_match_financial_news_release_revision():
     assert f'const CACHE = "dav-shell-{digest}";' in sw
     for url in module_urls(ROOT):
         assert f'"{url}"' in sw
-    assert 'const APP_VERSION = "1.12.158";' in app
+    assert f'const APP_VERSION = "{APP_VERSION}";' in app
 
 
 def test_pwa_icons_have_light_and_dark_sets():
