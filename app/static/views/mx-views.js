@@ -326,7 +326,7 @@ export function createMxViewsView(dependencies) {
       <div class="mxv-statusbar">
         <span class="mxv-pill" id="mxv-market"><span class="mxv-dot off"></span>—</span>
         <span class="mxv-pill" id="mxv-clock">--:--:--</span>
-        <span class="mxv-pill">数据 ${escapeHtml(_mxv.at || "—")}${p.message_count != null ? ` · ${p.message_count} 条消息` : ""} <span class="mxv-dot sse${_mxv.sseOk ? " on" : ""}" title="实时推送状态"></span></span>
+        <span class="mxv-pill"><span class="mxv-dot sse${_mxv.sseOk ? " on" : ""}" title="实时推送状态"></span>数据 ${escapeHtml(_mxv.at || "—")}${p.message_count != null ? ` · ${p.message_count} 条消息` : ""}</span>
         <button type="button" class="mxv-pill mxv-day-btn" id="mxv-day-btn" style="color:var(--mxv-text);cursor:pointer"
           onclick="mxvCalToggle()" aria-label="选择交易日，当前 ${escapeHtml(_mxv.day || "")}">📅 ${escapeHtml(_mxv.day || "—")}</button>
         <button class="mxv-btn" onclick="mxvRefreshLatest()" style="margin-left:auto">刷新</button>
