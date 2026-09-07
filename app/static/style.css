@@ -2540,7 +2540,7 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   z-index: 50;
   background: var(--color-bg);
   border-top: var(--border-default);
-  padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+  padding: 0 12px env(safe-area-inset-bottom);
   justify-content: space-around;
   transition: transform 180ms ease;
 }
@@ -2572,7 +2572,7 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
 }
 .bnav-item .bnav-icon { display: inline-flex; line-height: 1; }
 .bnav-item .bnav-icon { position: relative; z-index: 1; }
-.bnav-item .bnav-icon svg { width: 27px; height: 27px; }
+.bnav-item .bnav-icon svg { width: 24px; height: 24px; }
 .bnav-item.active { color: var(--color-accent-text); font-weight: var(--font-weight-semibold); }
 .bnav-item.active .bnav-icon svg { stroke-width: 2.4; }
 .bnav-item.is-feedback::before { animation: bottom-nav-feedback 220ms ease-out; }

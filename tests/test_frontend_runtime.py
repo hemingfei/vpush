@@ -501,6 +501,13 @@ def test_mobile_bottom_navigation_is_icon_only(
     expect(buttons).to_have_count(len(expected))
     assert nav.inner_text().strip() == ""
     assert buttons.evaluate_all("els => els.map(el => el.dataset.route)") == [route for route, _ in expected]
+    nav_box = nav.bounding_box()
+    pad = nav.evaluate("""el => {
+      const s = getComputedStyle(el);
+      return {top: s.paddingTop, bottom: s.paddingBottom, left: s.paddingLeft, right: s.paddingRight};
+    }""")
+    assert pad["top"] == "0px" and pad["bottom"] == "0px"
+    assert pad["left"] == "12px" and pad["right"] == "12px"
 
     for index, (_, label) in enumerate(expected):
         button = buttons.nth(index)
@@ -509,8 +516,9 @@ def test_mobile_bottom_navigation_is_icon_only(
         expect(button.locator("svg")).to_be_visible()
         button_box = button.bounding_box()
         icon_box = button.locator("svg").bounding_box()
-        assert button_box and button_box["height"] >= 48
-        assert icon_box and 26 <= icon_box["width"] <= 28 and 26 <= icon_box["height"] <= 28
+        assert button_box and 47 <= button_box["height"] <= 50
+        assert nav_box and abs(nav_box["height"] - button_box["height"]) <= 2
+        assert icon_box and 23 <= icon_box["width"] <= 25 and 23 <= icon_box["height"] <= 25
 
     active = page.locator('.bnav-item[data-route="timeline"]')
     inactive = page.locator('.bnav-item[data-route="home"]')
