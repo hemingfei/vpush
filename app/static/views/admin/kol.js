@@ -77,14 +77,6 @@ export function createAdminKolsView(dependencies) {
         ? `<button type="button" class="btn-sm ak-kw-view${blockedCnt ? " status-warn" : ""}" title="${kwList.length ? escapeHtml(kwList.join("、")) : "未设置屏蔽词"}" onclick="adminViewKolBlock(${k.id})">${kwList.length ? `${kwList.length} 个词` : "无屏蔽词"}${blockedCnt ? ` · 拦 ${blockedCnt}` : ""}</button>`
         : '<span class="muted">—</span>';
       const tierSel = `<select class="form-control btn-sm ak-tier-select" aria-label="档位" onchange="adminSetTier(${k.id}, this.value)"><option value="normal" ${!k.priority && !k.secondary ? "selected" : ""}>普通档</option><option value="priority" ${k.priority ? "selected" : ""}>优先档</option><option value="secondary" ${k.secondary ? "selected" : ""}>次要档</option></select>`;
-      const newsSelTitle = k.news_selected
-        ? (k.is_private
-          ? "私有大V已进「实时资讯」栏目：其动态在本栏目对所有用户可见，点击移出"
-          : "已进「实时资讯」栏目，点击移出")
-        : (k.is_private
-          ? "勾选进财经资讯「实时资讯」栏目（注意：私有大V勾选后其动态在本栏目对所有用户可见）"
-          : "勾选进财经资讯「实时资讯」栏目，勾选后未订阅用户也能看到");
-      const newsSel = `<button type="button" class="btn-sm${k.news_selected ? " status-ok" : ""}" title="${newsSelTitle}" onclick="adminToggleNewsSelected(${k.id}, ${k.news_selected ? 0 : 1})">${k.news_selected ? "已选" : "未选"}</button>`;
       return `
               <tr class="${highlightIds.has(k.id) ? "ak-row-flash" : ""}">
                 <td class="ak-check"><input type="checkbox" class="kol-check" data-id="${k.id}" ${_adminKolsSelected.has(k.id) ? "checked" : ""} onchange="adminKolToggleSelect(this)" aria-label="选择 ${escapeHtml(k.name)}"></td>
@@ -97,7 +89,6 @@ export function createAdminKolsView(dependencies) {
                 <td class="ak-hide-mobile" data-label="原创">${orig}</td>
                 <td data-label="可见性">${k.is_private ? '<span class="status-warn">私有</span>' : "公开"}</td>
                 <td class="ak-hide-mobile" data-label="屏蔽词">${kwCell}</td>
-                <td data-label="资讯">${newsSel}</td>
                 <td data-label="状态" class="${k.enabled ? "status-ok" : "status-fail"}">${k.enabled ? "启用" : "停用"}</td>
                 <td class="ak-actions" data-label="操作">
                   ${tierSel}
@@ -149,15 +140,13 @@ export function createAdminKolsView(dependencies) {
           <button class="btn-sm" onclick="adminKolBatch('normal')">批量设普通</button>
           <select id="ak-batch-category" class="form-control" style="width:auto"><option value="">批量改分类…</option>${catOptions}<option value="0">（清除分类）</option></select>
           <button class="btn-sm" onclick="adminKolBatchCategory()">应用分类</button>
-          <button class="btn-sm" onclick="adminKolBatch('news_selected', true)">批量加入资讯</button>
-          <button class="btn-sm" onclick="adminKolBatch('news_unselected')">批量移出资讯</button>
           <button class="btn-sm danger" onclick="adminKolBatch('delete')">批量删除</button>
           <button class="btn-sm" onclick="adminKolClearSelect()">取消选择</button>
         </div>
         <div class="table-wrap">
           <table class="ak-table">
-            <thead><tr><th scope="col" style="width:32px"><input type="checkbox" id="ak-checkall" onchange="adminKolTogglePage(this)" aria-label="全选当前页"></th><th scope="col">ID</th><th scope="col">平台</th><th scope="col">昵称</th><th scope="col">分类</th><th scope="col">外部ID</th><th scope="col">档位</th><th scope="col">原创</th><th scope="col">可见性</th><th scope="col">屏蔽词</th><th scope="col" title="财经资讯「实时资讯」栏目">资讯</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead>
-            <tbody>${rows || `<tr class="ak-empty"><td colspan="13" class="muted">${state.adminKolsQ || state.adminKolsCategory || state.adminKolsStatus !== "" || state.adminKolsPlatform ? "没有匹配的大V" : "还没有大V，先用上方表单添加"}</td></tr>`}</tbody>
+            <thead><tr><th scope="col" style="width:32px"><input type="checkbox" id="ak-checkall" onchange="adminKolTogglePage(this)" aria-label="全选当前页"></th><th scope="col">ID</th><th scope="col">平台</th><th scope="col">昵称</th><th scope="col">分类</th><th scope="col">外部ID</th><th scope="col">档位</th><th scope="col">原创</th><th scope="col">可见性</th><th scope="col">屏蔽词</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead>
+            <tbody>${rows || `<tr class="ak-empty"><td colspan="12" class="muted">${state.adminKolsQ || state.adminKolsCategory || state.adminKolsStatus !== "" || state.adminKolsPlatform ? "没有匹配的大V" : "还没有大V，先用上方表单添加"}</td></tr>`}</tbody>
           </table>
         </div>
         <div class="pager">
@@ -165,13 +154,15 @@ export function createAdminKolsView(dependencies) {
           <span class="pager-count">第 ${page + 1}/${pages} 页 · 共 ${state.adminKolsTotal} 个</span>
           <button class="btn-sm" ${page + 1 >= pages ? "disabled" : ""} onclick="adminKolsPage(${page + 1})">下一页 →</button>
         </div>
-      </section>`;
+      </section>
+      ${newsKolPanelHtml()}`;
     // 回填筛选控件当前值（页面重建后）
     const qEl = $("#ak-q"); if (qEl) qEl.value = state.adminKolsQ || "";
     const catEl = $("#ak-category"); if (catEl) catEl.value = state.adminKolsCategory || "";
     const statusEl = $("#ak-status"); if (statusEl) statusEl.value = state.adminKolsStatus ?? "";
     adminKolSyncCheckall(kols);
     $("#admin-kols-tabs").innerHTML = PLATFORM_TABS.map((p) => platformTabHTML(p, state.adminKolsPlatform, "admin")).join("");
+    loadNewsKolPanel();
     return { hiddenFocus: focusIds.length > 0 && visibleFocus.length === 0 };
   }
 
@@ -280,6 +271,206 @@ export function createAdminKolsView(dependencies) {
     const value = $("#ak-batch-category").value;
     if (value === "") { flash("请选择要应用到的分类", "error"); return; }
     await adminKolBatch("category", value === "0" ? null : Number(value));
+  }
+
+  // ---- 实时资讯大V：独立勾选面板（下拉多选交互同智囊团「分析大V范围」） ----
+  const _newsKols = {
+    kols: [],
+    selected: new Set(), // 待保存的勾选
+    saved: new Set(),    // 服务端当前勾选（放弃更改时回滚）
+    loaded: false,
+    dirty: false,
+    search: "",
+  };
+
+  let _newsKolOutsideBound = false;
+  function _bindNewsKolOutsideClose() {
+    if (_newsKolOutsideBound) return;
+    _newsKolOutsideBound = true;
+    document.addEventListener("click", (event) => {
+      const menu = $("#news-kol-menu");
+      if (!menu || !menu.classList.contains("open")) return;
+      if (!event.target.closest("#news-kol-dropdown")) {
+        menu.classList.remove("open");
+        $("#news-kol-trigger")?.classList.remove("open");
+      }
+    });
+  }
+
+  function newsKolPanelHtml() {
+    return `
+      <section class="section-panel news-kol-panel">
+        <header class="section-head">
+          <div><h2 class="section-title">实时资讯大V</h2>
+          <p class="section-meta">勾选进入财经资讯「实时资讯」栏目的大V；保存后其动态对本栏目所有用户可见（未订阅用户同样能看到，与上方列表的订阅/档位互不影响）。</p></div>
+        </header>
+        <div class="ai-kol-dropdown news-kol-dropdown" id="news-kol-dropdown">
+          <div id="news-kol-trigger" class="ai-kol-dropdown-trigger" onclick="newsKolToggle()" role="button" aria-haspopup="listbox" tabindex="0">
+            <span id="news-kol-selected-text" class="ai-kol-selected-text">加载中…</span>
+            <svg class="ai-kol-dropdown-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+          </div>
+          <div id="news-kol-menu" class="ai-kol-dropdown-menu mxva-kol-menu news-kol-menu">
+            <div class="mxva-kol-toolbar">
+              <input id="news-kol-search" class="form-control" placeholder="搜索大V名称" aria-label="搜索大V" oninput="newsKolSearch(this.value)">
+              <button type="button" class="btn-sm" onclick="newsKolAll()" title="勾选当前搜索结果里的启用大V">全选</button>
+              <button type="button" class="btn-sm" onclick="newsKolNone()">清空</button>
+            </div>
+            <div id="news-kol-items" class="mxva-kol-items"></div>
+          </div>
+        </div>
+        <p class="mxva-note" id="news-kol-note"></p>
+        <div class="toolbar" style="margin-top:10px;align-items:center;gap:8px">
+          <button type="button" class="btn-normal" id="news-kol-save" onclick="newsKolSave()" disabled>保存勾选</button>
+          <button type="button" class="btn-sm" id="news-kol-discard" onclick="newsKolDiscard()" hidden>放弃更改</button>
+          <span class="muted" id="news-kol-hint">更改保存后生效</span>
+        </div>
+      </section>`;
+  }
+
+  async function loadNewsKolPanel() {
+    _bindNewsKolOutsideClose();
+    try {
+      const kols = await api("/api/kols");
+      _newsKols.kols = kols || [];
+      _newsKols.loaded = true;
+      // 有未保存更改时保留待保存勾选，否则以服务端为准（含翻页/筛选后的重渲染）
+      if (!_newsKols.dirty) {
+        _newsKols.selected = new Set(_newsKols.kols.filter((k) => k.news_selected).map((k) => k.id));
+        _newsKols.saved = new Set(_newsKols.selected);
+      }
+    } catch {
+      _newsKols.kols = [];
+    }
+    newsKolSync();
+    newsKolRefreshItems();
+  }
+
+  function newsKolName(id) {
+    const k = _newsKols.kols.find((x) => x.id === id);
+    return k ? k.name : `#${id}`;
+  }
+
+  function newsKolTriggerText() {
+    const ids = [..._newsKols.selected];
+    if (!ids.length) return "未勾选（实时资讯栏目为空）";
+    if (ids.length <= 3 && _newsKols.kols.length) return ids.map((id) => newsKolName(id)).join("、");
+    return `已选 ${ids.length} 个大V`;
+  }
+
+  function newsKolSync() {
+    const text = $("#news-kol-selected-text");
+    const note = $("#news-kol-note");
+    const hint = $("#news-kol-hint");
+    const save = $("#news-kol-save");
+    const discard = $("#news-kol-discard");
+    if (text) text.textContent = newsKolTriggerText();
+    if (note) {
+      const n = _newsKols.selected.size;
+      note.textContent = !_newsKols.loaded
+        ? "大V列表加载中…"
+        : n
+          ? `已勾选 ${n} 个大V；其动态会按发布时间聚合进「实时资讯」栏目`
+          : "未勾选：用户端「实时资讯」栏目为空，显示引导提示";
+    }
+    if (save) save.disabled = !_newsKols.dirty;
+    if (discard) discard.hidden = !_newsKols.dirty;
+    if (hint) hint.textContent = _newsKols.dirty ? "有未保存的更改" : "更改保存后生效";
+  }
+
+  function newsKolItemsHtml() {
+    const q = _newsKols.search.trim().toLowerCase();
+    const chosen = _newsKols.selected;
+    // 勾选的排前面，其余按服务端顺序
+    const sorted = [..._newsKols.kols].sort((a, b) => {
+      const as = chosen.has(a.id), bs = chosen.has(b.id);
+      if (as !== bs) return as ? -1 : 1;
+      return 0;
+    });
+    const list = q ? sorted.filter((k) => String(k.name).toLowerCase().includes(q)) : sorted;
+    return list.map((k) => {
+      const checked = chosen.has(k.id);
+      return `
+      <div class="ai-kol-item${checked ? " checked" : ""}${k.enabled ? "" : " disabled"}" data-kol-id="${k.id}"
+        role="checkbox" aria-checked="${checked}" tabindex="0" title="${k.is_private ? "私有大V：勾选后其动态在本栏目对所有用户可见" : ""}"
+        onclick="newsKolToggleItem(${k.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();newsKolToggleItem(${k.id})}">
+        <input type="checkbox" class="ai-kol-checkbox" ${checked ? "checked" : ""} tabindex="-1" aria-hidden="true">
+        <div class="ai-kol-content">
+          <span class="ai-kol-name">${escapeHtml(k.name)}</span>
+          <span class="ai-kol-platform">${k.enabled ? "启用中" : "已停用"}${k.is_private ? " · 私有" : ""}</span>
+        </div>
+      </div>`;
+    }).join("") || `<div class="mxva-kol-empty">无匹配的大V</div>`;
+  }
+
+  function newsKolRefreshItems() {
+    const box = $("#news-kol-items");
+    if (box) box.innerHTML = newsKolItemsHtml();
+  }
+
+  async function newsKolToggle() {
+    const menu = $("#news-kol-menu");
+    if (!menu) return;
+    const open = menu.classList.toggle("open");
+    $("#news-kol-trigger")?.classList.toggle("open", open);
+    if (!open) return;
+    newsKolRefreshItems();
+    $("#news-kol-search")?.focus();
+  }
+
+  function newsKolToggleItem(id) {
+    const k = _newsKols.kols.find((x) => x.id === id);
+    if (k && !k.enabled && !_newsKols.selected.has(id)) return; // 停用大V不可新勾进（残留的可勾掉）
+    if (_newsKols.selected.has(id)) _newsKols.selected.delete(id);
+    else _newsKols.selected.add(id);
+    _newsKols.dirty = true;
+    newsKolSync();
+    newsKolRefreshItems();
+  }
+
+  function newsKolAll() {
+    const q = _newsKols.search.trim().toLowerCase();
+    const list = q ? _newsKols.kols.filter((k) => String(k.name).toLowerCase().includes(q)) : _newsKols.kols;
+    list.forEach((k) => { if (k.enabled) _newsKols.selected.add(k.id); }); // 全选跳过停用大V
+    _newsKols.dirty = true;
+    newsKolSync();
+    newsKolRefreshItems();
+  }
+
+  function newsKolNone() {
+    _newsKols.selected.clear();
+    _newsKols.dirty = true;
+    newsKolSync();
+    newsKolRefreshItems();
+  }
+
+  function newsKolSearch(q) {
+    _newsKols.search = q || "";
+    newsKolRefreshItems();
+  }
+
+  async function newsKolSave() {
+    const btn = $("#news-kol-save");
+    if (btn) btn.disabled = true;
+    try {
+      const data = await api("/api/admin/news/realtime-kols", {
+        method: "PUT",
+        body: JSON.stringify({ ids: [..._newsKols.selected] }),
+      });
+      _newsKols.saved = new Set(data.ids ?? [..._newsKols.selected]);
+      _newsKols.dirty = false;
+      flash(`实时资讯大V已保存（${data.count} 个）`);
+    } catch (err) {
+      flash("保存失败: " + err.message, "error");
+    } finally {
+      newsKolSync();
+    }
+  }
+
+  function newsKolDiscard() {
+    _newsKols.selected = new Set(_newsKols.saved);
+    _newsKols.dirty = false;
+    newsKolSync();
+    newsKolRefreshItems();
   }
 
   async function adminBatchAddKols() {
@@ -600,17 +791,6 @@ export function createAdminKolsView(dependencies) {
     try {
       await api(`/api/kols/${id}`, { method: "PUT", body: JSON.stringify({ enabled: !!enabled }) });
       flash(`已${enabled ? "启用" : "停用"}「${kol ? kol.name : "该大V"}」`);
-      loadAdminKols();
-    } catch (err) {
-      flash("操作失败: " + err.message, "error");
-    }
-  }
-
-  async function adminToggleNewsSelected(id, selected) {
-    const kol = state.adminKols.find((k) => k.id === id);
-    try {
-      await api(`/api/kols/${id}`, { method: "PUT", body: JSON.stringify({ news_selected: !!selected }) });
-      flash(`已${selected ? "加入" : "移出"}实时资讯「${kol ? kol.name : "该大V"}」`);
       loadAdminKols();
     } catch (err) {
       flash("操作失败: " + err.message, "error");
@@ -1897,12 +2077,18 @@ export function createAdminKolsView(dependencies) {
     adminBatchAddKols,
     adminBatchLinesHint,
     adminToggleKol,
-    adminToggleNewsSelected,
     adminTogglePriority,
     adminToggleSecondary,
     adminDeleteKol,
     adminEditKol,
     saveKolEdit,
+    newsKolToggle,
+    newsKolToggleItem,
+    newsKolAll,
+    newsKolNone,
+    newsKolSearch,
+    newsKolSave,
+    newsKolDiscard,
     adminAddCategory,
     adminRenameCategory,
     adminDeleteCategory,

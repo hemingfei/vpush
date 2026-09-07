@@ -93,7 +93,7 @@ SENTINELS += [
     ("app/static/views/news.js", 'tab("realtime", "实时资讯")', "实时资讯/财经新闻双栏目"),
     ("app/static/views/news.js", 'state.newsTab = "realtime"', "进入页面默认显示实时资讯"),
     ("app/static/views/news.js", "/api/news/realtime", "实时资讯聚合端点前端接线"),
-    ("app/static/views/admin/kol.js", "adminToggleNewsSelected", "管理后台大V实时资讯勾选"),
+    ("app/static/views/admin/kol.js", "newsKolSave", "管理后台「实时资讯大V」下拉勾选面板"),
     ("app/db.py", "news_selected", "kols 表勾选列（SCHEMA + 迁移）"),
     ("app/api.py", "def news_realtime", "实时资讯聚合 API"),
 ]

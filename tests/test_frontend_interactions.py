@@ -4320,14 +4320,25 @@ def test_news_center_has_realtime_and_articles_tabs():
 
 
 def test_admin_kols_list_has_news_selection_controls():
-    """管理后台大V列表：单个「资讯」勾选 + 批量加入/移出实时资讯。"""
+    """管理后台：大V列表不展示资讯列；「实时资讯大V」独立面板用下拉勾选+保存。"""
     src = ADMIN_KOLS_JS.read_text()
-    assert "adminToggleNewsSelected" in src
-    assert "news_selected" in src
-    assert "批量加入资讯" in src
-    assert "批量移出资讯" in src
+    assert "实时资讯大V" in src
+    for name in (
+        "newsKolToggle", "newsKolToggleItem", "newsKolAll", "newsKolNone",
+        "newsKolSearch", "newsKolSave", "newsKolDiscard",
+    ):
+        assert f"function {name}" in src
+    # 与智囊团「分析大V范围」同款下拉多选（ai-kol-dropdown + 搜索/全选/清空）
+    assert 'class="ai-kol-dropdown news-kol-dropdown"' in src
+    assert "全选" in src and "清空" in src and "搜索大V名称" in src
+    assert "/api/admin/news/realtime-kols" in src
+    # 大V列表内不再有资讯列/批量资讯按钮/单键切换
+    assert "批量加入资讯" not in src
+    assert "批量移出资讯" not in src
+    assert "adminToggleNewsSelected" not in src
+    assert 'data-label="资讯"' not in src
     app_src = APP_JS.read_text()
-    assert "adminToggleNewsSelected" in app_src
+    assert "newsKolSave" in app_src
 
 
 def test_financial_news_visibility_is_runtime_controlled():

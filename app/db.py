@@ -2310,6 +2310,25 @@ class DB:
             (1 if selected else 0, *ids),
         )
 
+    def replace_news_selected_kols(self, ids: list[int]) -> None:
+        """全量替换「实时资讯」勾选：列表内置 1，其余全部置 0（单事务防中间态）。"""
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                if ids:
+                    placeholders = ",".join("?" * len(ids))
+                    self._conn.execute(
+                        f"UPDATE kols SET news_selected = CASE WHEN id IN ({placeholders}) "
+                        "THEN 1 ELSE 0 END",
+                        ids,
+                    )
+                else:
+                    self._conn.execute("UPDATE kols SET news_selected = 0")
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
     def news_selected_kol_ids(self) -> list[int]:
         """「实时资讯」栏目勾选的大V：只含启用中的真实大V（系统 KOL 是内部输出通道）。"""
         return [

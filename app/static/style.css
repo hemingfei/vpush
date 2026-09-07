@@ -5817,6 +5817,9 @@ html:not(.theme-dark) .ai-form-select option {
 .news-tab.active { color: var(--color-accent); border-bottom-color: var(--color-accent); font-weight: var(--font-weight-medium); }
 .news-rt-list { display: block; }
 .news-rt-list .post-item { padding: 14px 2px; }
+/* 管理后台「实时资讯大V」勾选面板（下拉多选复用 ai-kol/mxva-kol 样式） */
+.news-kol-dropdown { max-width: 760px; }
+.news-kol-panel .mxva-note { margin-top: 8px; }
 .news-article-page { max-width: 780px; margin: 0 auto; min-width: 0; }
 .news-article-head { position: relative; padding-bottom: 16px; border-bottom: var(--border-default); }
 .news-article-meta { display: flex; gap: 10px; flex-wrap: wrap; color: var(--color-text-muted); font-size: var(--text-sm); }

@@ -453,6 +453,12 @@ class KolBatchAction(BaseModel):
     value: bool | int | None = None
 
 
+class NewsRealtimeKolsIn(BaseModel):
+    """「实时资讯」栏目勾选的全量设置：列表内勾选，列表外全部取消。"""
+
+    ids: list[int]
+
+
 class KolWebhookUpdate(BaseModel):
     """系统 KOL Webhook 配置更新；secret=None 不修改，""=清除，非空=设置。"""
 
@@ -2643,6 +2649,26 @@ def create_api_router(
             db.set_settings_atomic(values)
             _audit(admin, "news_settings_update", "", json.dumps(values, ensure_ascii=False))
         return admin_news_settings(admin)
+
+    @router.put("/admin/news/realtime-kols", dependencies=[Depends(require_admin)])
+    def admin_set_news_realtime_kols(body: NewsRealtimeKolsIn, admin: dict = Depends(require_admin)):
+        """全量设置「实时资讯」栏目勾选的大V：列表内勾选，列表外全部取消。
+
+        供内容管理大V页的「实时资讯大V」下拉勾选面板保存；勾选即对本栏目
+        所有登录用户可见（不受订阅/私有大V白名单限制）。
+        """
+        ids = sorted({int(i) for i in body.ids})
+        if ids:
+            kols = {k["id"]: k for k in db.list_kols()}
+            unknown = [i for i in ids if i not in kols]
+            if unknown:
+                raise HTTPException(status_code=400, detail=f"大V不存在: {unknown[:5]}")
+            system_ids = [i for i in ids if kols[i]["platform"] == "system"]
+            if system_ids:
+                raise HTTPException(status_code=400, detail="系统 KOL 不参与实时资讯")
+        db.replace_news_selected_kols(ids)
+        _audit(admin, "set_news_realtime_kols", str(len(ids)), f"ids={ids[:20]}")
+        return {"ok": True, "count": len(ids), "ids": ids}
 
     @router.get("/admin/news/sources")
     def admin_news_sources(

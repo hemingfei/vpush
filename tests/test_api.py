@@ -216,6 +216,47 @@ def test_news_realtime_feed_is_admin_curated_and_visible_to_all():
     ).status_code == 403
 
 
+def test_admin_news_realtime_kols_bulk_set():
+    """PUT /api/admin/news/realtime-kols：全量设置勾选，列表外全部取消。"""
+    client = make_client("news-rt-bulk.db")
+    db = client.app.state.db
+    admin_headers = auth_headers(client, "rtbulkadmin")
+    user_headers_ = user_headers(client, "rtbulkuser")
+    kid_a = db.add_kol("xueqiu", "BulkA", "bka1")
+    kid_b = db.add_kol("weibo", "BulkB", "bkb1")
+    kid_sys = db.add_kol("system", "sys-bulk", "sys-bulk-1")
+    kid_off = db.add_kol("xueqiu", "BulkOff", "bkc1")
+    db.set_kols_enabled([kid_off], False)
+    db.set_kols_news_selected([kid_off], True)  # 预置不在新列表里的勾选，应被清掉
+
+    # 全量设置：仅 A 勾选，其余（含预置勾选的停用大V）全部取消
+    resp = client.put("/api/admin/news/realtime-kols", headers=admin_headers, json={"ids": [kid_a]})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "count": 1, "ids": [kid_a]}
+    flags = {k["id"]: k["news_selected"] for k in db.list_kols()}
+    assert flags[kid_a] == 1 and flags[kid_b] == 0 and flags[kid_off] == 0
+    # 空列表 = 全部取消
+    resp = client.put("/api/admin/news/realtime-kols", headers=admin_headers, json={"ids": []})
+    assert resp.status_code == 200 and resp.json()["count"] == 0
+    assert db.news_selected_kol_ids() == []
+    # 未知 id 报 400 且不变更
+    resp = client.put(
+        "/api/admin/news/realtime-kols", headers=admin_headers, json={"ids": [kid_a, 999999]},
+    )
+    assert resp.status_code == 400 and "大V不存在" in resp.json()["detail"]
+    assert db.news_selected_kol_ids() == []
+    # 系统 KOL 拒绝勾选
+    resp = client.put(
+        "/api/admin/news/realtime-kols", headers=admin_headers, json={"ids": [kid_sys]},
+    )
+    assert resp.status_code == 400 and "系统 KOL" in resp.json()["detail"]
+    # 普通用户 403、未登录 401
+    assert client.put(
+        "/api/admin/news/realtime-kols", headers=user_headers_, json={"ids": [kid_a]},
+    ).status_code == 403
+    assert client.put("/api/admin/news/realtime-kols", json={"ids": []}).status_code == 401
+
+
 def test_news_disabled_cache_archived_detail_and_image_headers(monkeypatch):
     client = make_client("news-permissions.db")
     headers = user_headers(client, "news_permission_user")
