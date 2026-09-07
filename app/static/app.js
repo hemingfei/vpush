@@ -1464,7 +1464,6 @@ async function switchPlatform(platform) {
 
 function kolCard(kol) {
   const tags = [];
-  tags.push(`<span class="tag">${PLATFORM_LABELS[kol.platform] || escapeHtml(kol.platform)}</span>`);
   if (kol.category_name) tags.push(`<span class="tag">${escapeHtml(kol.category_name)}</span>`);
   if (kol.platform === "combination" && kol.quote && kol.quote.day_percent_gain != null) {
     const gain = kol.quote.day_percent_gain;
@@ -1475,7 +1474,10 @@ function kolCard(kol) {
       <div class="kol-card-head">
         ${avatarHtml(kol.name, kol.avatar_url)}
         <div class="kol-card-info">
-          <span class="name" title="${escapeHtml(kol.name)}">${escapeHtml(kol.name)}</span>
+          <div class="p-name-line">
+            <span class="name" title="${escapeHtml(kol.name)}">${escapeHtml(kol.name)}</span>
+            <span class="p-platform" data-platform="${escapeHtml(kol.platform)}" role="img" aria-label="${escapeHtml(PLATFORM_LABELS[kol.platform] || kol.platform)}" title="${escapeHtml(PLATFORM_LABELS[kol.platform] || kol.platform)}">${PLATFORM_ICONS[kol.platform] || ""}</span>
+          </div>
           ${tags.length ? `<div class="kol-card-meta">${tags.join("")}</div>` : ""}
           <div class="desc">外部 ID：${escapeHtml(kol.external_id)}${kol.enabled ? "" : " · 已停用"}</div>
         </div>

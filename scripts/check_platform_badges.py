@@ -45,8 +45,8 @@ def check(static: Path = ROOT / "app" / "static") -> list[str]:
     if any('<img class="pt-icon"' in source for relative, source in javascript.items() if relative != "core/platforms.js"):
         errors.append("角标图形只能定义在 core/platforms.js")
     images = re.findall(r'<img class="pt-icon"[^>]*>', platforms)
-    if images != ['<img class="pt-icon" src="/xueqiu-mark.png" width="16" height="16" alt="" draggable="false" aria-hidden="true">']:
-        errors.append("仅雪球允许使用图片角标")
+    if images or "<image" in platforms or "data:image" in platforms:
+        errors.append("平台角标必须使用内联矢量 SVG")
     if "filter:" in platforms:
         errors.append("平台配置不得自行定义滤镜")
 

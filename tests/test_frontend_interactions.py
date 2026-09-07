@@ -2842,10 +2842,10 @@ def test_post_header_does_not_clip_platform_or_time():
     后面的平台圆标和发布时间裁出可视区（VPS 手机端时间线「时间消失」）。
     """
     css = STYLE_CSS.read_text()
-    name_line = re.search(r"\.post-item \.p-name-line\s*\{([^}]*)\}", css)
+    name_line = re.search(r":is\(\.post-item, \.kol-card\) \.p-name-line\s*\{([^}]*)\}", css)
     name = re.search(r"\.post-item \.p-name\s*\{([^}]*)\}", css)
     time = re.search(r"\.post-item \.p-time\s*\{([^}]*)\}", css)
-    platform = re.search(r"\.post-item \.p-name-line \.p-platform\s*\{([^}]*)\}", css)
+    platform = re.search(r":is\(\.post-item, \.kol-card\) \.p-name-line \.p-platform\s*\{([^}]*)\}", css)
     assert name_line, "缺少 .p-name-line 规则"
     assert name, "缺少 .p-name 规则"
     assert time, "缺少 .p-time 规则"
@@ -2934,6 +2934,9 @@ def test_kol_card_name_wraps_full_combination_title():
     card = _fn_body("kolCard")
     assert "kol-card-meta" in card
     assert "PLATFORM_LABELS[kol.platform]" in card
+    assert "PLATFORM_ICONS[kol.platform]" in card
+    assert 'class="p-name-line"' in card and 'role="img" aria-label=' in card
+    assert 'tags.push(`<span class="tag">${PLATFORM_LABELS' not in card
 
 
 def test_timeline_new_badge_pins_to_sticky_filterbar():
@@ -3469,14 +3472,15 @@ def test_xueqiu_badge_uses_official_mark():
     platforms = (APP_JS.parent / "core/platforms.js").read_text()
     css = STYLE_CSS.read_text()
     assert 'XUEQIU_ICON' in platforms
-    assert 'src="/xueqiu-mark.png"' in platforms
-    assert (APP_JS.parent / "xueqiu-mark.png").is_file()
-    assert "img.pt-icon { display: block; object-fit: contain; }" in css
+    assert 'class="pt-icon xueqiu-icon"' in platforms
+    assert 'fill="var(--platform-icon-fill, #287DFF)"' in platforms
+    assert "xueqiu-mark.png" not in platforms
+    assert "img.pt-icon" not in css
     assert ".pt-icon { width: 16px; height: 16px; flex-shrink: 0; }" in css
     # 平台/筛选角标统一 26px 圆底衬，选中态去底衬反白
     assert "border-radius: 50%;\n  background: var(--color-bg-muted);" in css
     assert ".tl-pill.selected .pt-icon,\n.platform-tab.selected .pt-icon { background: transparent; }" in css
-    assert ".post-item .p-name-line .p-platform .pt-icon { width: 13px; height: 13px; }" in css
+    assert ":is(.post-item, .kol-card) .p-name-line .p-platform .pt-icon { width: 13px; height: 13px; }" in css
 
 
 def test_x_badge_uses_system_blue_in_both_themes():

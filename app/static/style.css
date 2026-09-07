@@ -1041,18 +1041,15 @@ textarea.proxy-import { min-height: 96px; }
 /* 选中态：单色 SVG 走 currentColor 自动反白、章保持透明 */
 .platform-tab.selected .pt-icon,
 .tl-pill.selected .pt-icon { background: transparent; }
-/* 位图平台 logo：未选中显示品牌色，选中蓝章反白 */
-.tl-pill:not(.selected) img.pt-icon,
-.platform-tab:not(.selected) img.pt-icon { filter: none; }
-.platform-tab.selected img.pt-icon,
-.tl-pill.selected img.pt-icon { filter: brightness(0) invert(1); }
+/* 官方填充图标默认品牌色，选中时直接反白，无需滤镜。 */
+.platform-tab.selected .pt-icon,
+.tl-pill.selected .pt-icon { --platform-icon-fill: #fff; }
 .pt-label { display: inline; }
 .pt-icon { width: 16px; height: 16px; flex-shrink: 0; }
-img.pt-icon { display: block; object-fit: contain; }
 /* 「全部」与快讯同用 Duty Blue：平台色属于未选中图标（选中态让位给白图形） */
 .tl-pill[data-platform=""]:not(.selected) .pt-icon,
 .platform-tab[data-platform=""]:not(.selected) .pt-icon { color: var(--color-accent); }
-/* 平台/筛选角标统一圆底衬：位图、实底、描边三种来源的外轮廓与底色归一 */
+/* 平台/筛选角标沿用统一圆底衬。 */
 .tl-pill .pt-icon,
 .platform-tab .pt-icon {
   width: 22px;
@@ -1298,7 +1295,8 @@ img.pt-icon { display: block; object-fit: contain; }
 .post-item:last-child { border-bottom: none; }
 .post-item .p-header { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .post-item .p-header .kol-avatar { width: 38px; height: 38px; font-size: var(--text-icon); }
-.post-item .p-name-line { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; }
+:is(.post-item, .kol-card) .p-name-line { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; }
+.kol-card .p-name-line .name { min-width: 0; }
 .post-item .p-name { display: block; font-size: var(--text-body); font-weight: var(--font-weight-semibold); color: var(--color-text-strong); text-decoration: none; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .post-item .p-name:hover { color: var(--color-accent-text); text-decoration: underline; }
 .post-item .p-time { font-size: var(--text-xs); color: var(--color-text-muted); white-space: nowrap; flex-shrink: 0; font-variant-numeric: tabular-nums; }
@@ -1869,7 +1867,7 @@ body.lightbox-open { overflow: hidden; }
 .tl-filter-row .form-control { flex: 1; min-width: 0; }
 .tl-filter-actions { display: flex; gap: 10px; justify-content: flex-end; }
 .tag-vocab-preview { display: flex; flex-wrap: wrap; gap: 8px; }
-.post-item .p-name-line .p-platform {
+:is(.post-item, .kol-card) .p-name-line .p-platform {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1879,13 +1877,19 @@ body.lightbox-open { overflow: hidden; }
   background: var(--color-bg-muted);
   flex-shrink: 0;
 }
-.post-item .p-name-line .p-platform .pt-icon { width: 13px; height: 13px; }
-.post-item .p-name-line .p-platform[data-platform="xueqiu"] .pt-icon { color: var(--color-brand-xueqiu); }
-.post-item .p-name-line .p-platform[data-platform="combination"] .pt-icon { color: var(--color-brand-xueqiu); }
-.post-item .p-name-line .p-platform[data-platform="weibo"] .pt-icon { color: var(--color-brand-weibo); }
-.post-item .p-name-line .p-platform[data-platform="twitter"] .pt-icon { color: var(--color-brand-twitter); }
-.post-item .p-name-line .p-platform[data-platform="zsxq"] .pt-icon { color: var(--color-brand-zsxq); }
+:is(.post-item, .kol-card) .p-name-line .p-platform .pt-icon { width: 13px; height: 13px; }
+:is(.post-item, .kol-card) .p-name-line .p-platform[data-platform="xueqiu"] .pt-icon { color: var(--color-brand-xueqiu); }
+:is(.post-item, .kol-card) .p-name-line .p-platform[data-platform="combination"] .pt-icon { color: var(--color-brand-xueqiu); }
+:is(.post-item, .kol-card) .p-name-line .p-platform[data-platform="weibo"] .pt-icon { color: var(--color-brand-weibo); }
+:is(.post-item, .kol-card) .p-name-line .p-platform[data-platform="twitter"] .pt-icon { color: var(--color-brand-twitter); }
+:is(.post-item, .kol-card) .p-name-line .p-platform[data-platform="zsxq"] .pt-icon { color: var(--color-brand-zsxq); }
 
+/* Compensate for the official mark's 18.4/24 artwork bounds without changing paths. */
+.pt-icon.xueqiu-icon { width: 21px; height: 21px; }
+.plaza-src-icon .pt-icon.xueqiu-icon { width: 26px; height: 26px; }
+:is(.post-item, .kol-card) .p-name-line .p-platform .xueqiu-icon { width: 17px; height: 17px; }
+.tl-pill .pt-icon.xueqiu-icon,
+.platform-tab .pt-icon.xueqiu-icon { width: 22px; height: 22px; padding: 1px; }
 /* 表格 */
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
@@ -2686,13 +2690,14 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
     background: var(--color-bg-muted);
     transition: background var(--ease-standard), transform 120ms ease;
   }
+  .icon-badge-bar .tl-pill .pt-icon.xueqiu-icon { width: min(34px, 92%); height: auto; padding: 3px; }
   .icon-badge-bar .tl-pill:active .pt-icon,
   .icon-badge-bar > .fav-toggle:active .star-icon,
   .icon-badge-bar .tl-actions button:active .funnel-icon,
   .icon-badge-bar .tl-actions button:active .star-icon { transform: scale(0.9); }
   .icon-badge-bar > .fav-toggle,
   .icon-badge-bar .tl-actions button { font-size: 0; gap: 0; }
-  /* 独立蓝底不受位图反白滤镜影响，所有平台共用同一尺寸。 */
+  /* 所有平台共用同一尺寸的独立蓝底。 */
   .icon-badge-bar .tl-pill { position: relative; isolation: isolate; }
   .icon-badge-bar .tl-pill.selected::before {
     content: "";

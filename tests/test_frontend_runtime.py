@@ -645,6 +645,9 @@ def test_platform_badges_keep_blue_selection(page: Page, static_origin: str, tmp
         })""")
         if platform == "combination":
             assert set(unselected["pathFills"]) == {"none"}, unselected
+        if platform == "xueqiu":
+            assert unselected["tag"] == "svg"
+            assert set(unselected["pathFills"]) == {"rgb(40, 125, 255)"}
         if platform == "twitter":
             accent = page.evaluate("""() => {
               const probe = document.body.appendChild(document.createElement('span'));
@@ -654,12 +657,10 @@ def test_platform_badges_keep_blue_selection(page: Page, static_origin: str, tmp
               return value;
             }""")
             assert unselected["color"] == accent, (theme, unselected, accent)
-        if unselected["tag"] == "svg":
-            assert _contrast_ratio(unselected["color"], unselected["background"]) >= 3, (platform, unselected)
-            assert unselected["filter"] == "none"
-        else:
-            assert platform == "xueqiu"
-            assert unselected["filter"] == "none"
+        assert unselected["tag"] == "svg"
+        ink = unselected["pathFills"][0] if platform == "xueqiu" else unselected["color"]
+        assert _contrast_ratio(ink, unselected["background"]) >= 3, (platform, unselected)
+        assert unselected["filter"] == "none"
 
         button.click()
         expect(button).to_have_attribute("aria-checked", "true")
@@ -675,16 +676,15 @@ def test_platform_badges_keep_blue_selection(page: Page, static_origin: str, tmp
         })""")
         if platform == "combination":
             assert set(selected["pathFills"]) == {"none"}, selected
+        if platform == "xueqiu":
+            assert set(selected["pathFills"]) == {"rgb(255, 255, 255)"}
         assert "rgb(22, 104, 224)" in (selected["base"], selected["badge"]), (platform, selected)
         assert selected["ink"] == "rgb(255, 255, 255)", (platform, selected)
         after = icon.bounding_box()
         assert after and (after["width"], after["height"]) == (before["width"], before["height"])
-        if selected["iconTag"] == "svg":
-            assert selected["iconColor"] == "rgb(255, 255, 255)", (platform, selected)
-            assert selected["iconFilter"] == "none"
-        else:
-            assert platform == "xueqiu"
-            assert selected["iconFilter"] == "brightness(0) invert(1)"
+        assert selected["iconTag"] == "svg"
+        assert selected["iconColor"] == "rgb(255, 255, 255)", (platform, selected)
+        assert selected["iconFilter"] == "none"
 
     page.screenshot(path=str(tmp_path / f"badges-{width}-{theme}.png"))
     if width <= 768:
@@ -706,6 +706,47 @@ def test_abstract_has_no_copy_button(page: Page, static_origin: str, tmp_path: P
     expect(page.locator(".ima-reader-abstract")).to_have_attribute("open", "")
     page.screenshot(path=str(tmp_path / f"abstract-{width}.png"))
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("width", [390, 768, 1280])
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_plaza_name_platform_icons(page: Page, static_origin: str, tmp_path: Path, width: int, theme: str):
+    install_badge_reader_bootstrap(page)
+    platforms = ["xueqiu", "combination", "weibo", "twitter", "zsxq", "truth"]
+    names = ["雪球", "雪球组合", "微博", "X", "知识星球", "Truth Social"]
+    catalog = [
+        {"id": i + 1, "name": "测试名字" * (12 if i == 0 else 1),
+         "platform": platform, "external_id": str(i), "enabled": True,
+         "category_name": "财经", "quote": {"day_percent_gain": -1.25}}
+        for i, platform in enumerate(platforms)
+    ]
+    page.route("**/api/catalog*", lambda route: route.fulfill(json=catalog))
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(static_origin)
+    page.evaluate("theme => setTheme(theme)", theme)
+    page.evaluate("() => go('home')")
+    expect(page.locator(".kol-card")).to_have_count(6)
+    for i, label in enumerate(names):
+        card = page.locator(".kol-card").nth(i)
+        badge = card.get_by_role("img", name=label, exact=True)
+        expect(badge).to_be_visible()
+        expect(badge).to_have_attribute("title", label)
+        expect(badge.locator("svg")).to_have_count(1)
+        expect(card.locator(".kol-card-meta")).to_have_text("财经" + ("-1.25%" if i == 1 else ""))
+        geometry = card.evaluate("""el => {
+          const name = el.querySelector('.name').getBoundingClientRect();
+          const badge = el.querySelector('.p-platform').getBoundingClientRect();
+          const card = el.getBoundingClientRect();
+          return {separate: name.right <= badge.left, contained: badge.right <= card.right,
+                  overflow: el.scrollWidth > el.clientWidth};
+        }""")
+        assert geometry == {"separate": True, "contained": True, "overflow": False}
+    icon = page.locator('.kol-card .xueqiu-icon')
+    assert icon.evaluate("el => getComputedStyle(el.querySelector('path')).fill") == "rgb(40, 125, 255)"
+    assert icon.evaluate("el => getComputedStyle(el).filter") == "none"
+    assert icon.bounding_box()["width"] == 17
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(path=str(tmp_path / f"plaza-icons-{width}-{theme}.png"), full_page=True)
 
 
 def test_zsxq_attachment_download_uses_auth_header_not_query_token(page: Page, static_origin: str):

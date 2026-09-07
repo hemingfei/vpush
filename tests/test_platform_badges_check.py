@@ -46,7 +46,7 @@ def test_rejects_unapproved_image_badge(tmp_path):
         "const TRUTH_ICON = `<svg",
         'const TRUTH_ICON = `<img class="pt-icon" src="/truth.svg"><svg',
     ))
-    assert any("仅雪球允许使用图片角标" in error for error in check(static))
+    assert any("平台角标必须使用内联矢量 SVG" in error for error in check(static))
 
 
 def test_rejects_platform_specific_selected_style(tmp_path):
