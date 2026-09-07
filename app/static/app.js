@@ -2,9 +2,9 @@ import { escapeHtml, imgOnError, imgProxyUrl, imgSrcFor, jsString } from "./core
 import {
   ARROW_UP_ICON, BELL_ICON, BELL_OFF_ICON, BOOK_ICON, COPY_ICON, DATABASE_ICON, DASHBOARD_ICON, FOLDER_ICON,
   EYE_ICON, EYE_OFF_ICON, EXTERNAL_LINK_ICON, FEISHU_DATE_ICON, FILE_TEXT_ICON, FILTER_ICON,
-  GEAR_ICON, GITHUB_ICON, GRID_ICON, HISTORY_ICON, KEY_ICON, LIST_ICON,
-  NEWS_ICON, PLUS_ICON, REFRESH_ICON, SEARCH_ICON, SEND_ICON, STAR_SVG,
-  THEME_AUTO_ICON, THEME_MOON_ICON, THEME_SUN_ICON, TRASH_ICON, USER_PLUS_ICON, USERS_ICON,
+  GEAR_ICON, GITHUB_ICON, GRID_ICON, HISTORY_ICON, HOME_ICON, KEY_ICON, LIST_ICON,
+  MORE_ICON, NEWS_ICON, PLUS_ICON, REFRESH_ICON, SEARCH_ICON, SEND_ICON, STAR_SVG,
+  THEME_AUTO_ICON, THEME_MOON_ICON, THEME_SUN_ICON, TRASH_ICON, USER_ICON, USER_PLUS_ICON, USERS_ICON,
   V_ICON, WSCN_LIVE_ICON, X_ICON,
 } from "./core/icons.js";
 import { trapFocus } from "./core/dialog.js";
@@ -438,10 +438,10 @@ function renderSidebar(user) {
 }
 
 const MOBILE_NAV = [
-  { route: "timeline", icon: LIST_ICON, label: "动态" },
+  { route: "timeline", icon: HOME_ICON, label: "动态" },
   { route: "news", icon: NEWS_ICON, label: "财经新闻" },
   { route: "home", icon: GRID_ICON, label: "广场" },
-  { route: "settings", icon: GEAR_ICON, label: "个人设置" },
+  { route: "settings", icon: USER_ICON, label: "个人设置" },
 ];
 
 let bottomNavLastY = 0;
@@ -480,11 +480,10 @@ window.matchMedia("(max-width: 768px)").addEventListener("change", resetBottomNa
 function renderBottomNav(user) {
   resetBottomNavScroll();
   const tabs = MOBILE_NAV.filter((tab) => tab.route !== "news" || state.newsVisible);
-  if (user.is_admin) tabs.push({ route: "more", icon: PLUS_ICON, label: "更多" });
+  if (user.is_admin) tabs.push({ route: "more", icon: MORE_ICON, label: "更多" });
   $("#bottom-nav").innerHTML = tabs.map((t) => `
-    <button class="bnav-item" data-route="${t.route}" onclick="go('${t.route}')">
+    <button class="bnav-item" data-route="${t.route}" aria-label="${t.label}" title="${t.label}" onclick="go('${t.route}')">
       <span class="bnav-icon">${t.icon}</span>
-      <span class="bnav-label">${t.label}</span>
     </button>`).join("");
   ensureMobilePlatformSwipe();
 }
@@ -5335,9 +5334,12 @@ async function router() {
   );
   // 底部栏高亮：管理员进后台页时高亮「更多」
   const activeBottom = navPage === "admin" ? "more" : navPage;
-  document.querySelectorAll(".bnav-item").forEach((b) =>
-    b.classList.toggle("active", b.dataset.route === activeBottom)
-  );
+  document.querySelectorAll(".bnav-item").forEach((b) => {
+    const active = b.dataset.route === activeBottom;
+    b.classList.toggle("active", active);
+    if (active) b.setAttribute("aria-current", "page");
+    else b.removeAttribute("aria-current");
+  });
   try {
     if (page === "home") await renderHome(renderSeq);
     else if (page === "combinations") {

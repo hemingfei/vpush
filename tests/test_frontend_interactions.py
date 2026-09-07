@@ -4253,7 +4253,27 @@ def test_financial_news_visibility_is_runtime_controlled():
     assert 'replaceRoute("timeline")' in router
 
 
-def test_news_reader_functions_cover_sources_seen_and_blob_cleanup():
+def test_mobile_navigation_is_icon_only_and_accessible():
+    src = APP_JS.read_text()
+    mobile = src[src.index("const MOBILE_NAV ="):src.index("let bottomNavLastY")]
+    render = _fn_body("renderBottomNav")
+    router = _fn_body("router")
+
+    for route, icon, label in (
+        ("timeline", "HOME_ICON", "动态"),
+        ("news", "NEWS_ICON", "财经新闻"),
+        ("home", "GRID_ICON", "广场"),
+        ("settings", "USER_ICON", "个人设置"),
+    ):
+        assert f'route: "{route}", icon: {icon}, label: "{label}"' in mobile
+    assert 'route: "more", icon: MORE_ICON, label: "更多"' in render
+    assert 'class="bnav-label"' not in render
+    assert 'aria-label="${t.label}"' in render
+    assert 'title="${t.label}"' in render
+    assert 'setAttribute("aria-current", "page")' in router
+    assert 'removeAttribute("aria-current")' in router
+
+
     src = NEWS_JS.read_text()
     for name in (
         "renderNewsCenter", "loadFinancialNews", "openNewsSourcePicker",
