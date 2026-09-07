@@ -3483,6 +3483,33 @@ def test_xueqiu_badge_uses_official_mark():
     assert ":is(.post-item, .kol-card) .p-name-line .p-platform .pt-icon { width: 13px; height: 13px; }" in css
 
 
+def test_truth_badge_uses_single_cropped_viewbox():
+    """Truth 角标不得重复 viewBox：HTML 取第一个，0 0 24 24 会把 T 字画小。"""
+    platforms = (APP_JS.parent / "core/platforms.js").read_text()
+    icon = re.search(r"const TRUTH_ICON = `([^`]+)`", platforms).group(1)
+    assert "${ICON_ATTRS}" not in icon
+    assert icon.count("viewBox=") == 1
+    assert 'viewBox="0 0 24 24"' not in icon
+    assert 'viewBox="3.6 4.85 16 16"' in icon
+
+
+def test_post_origin_link_matches_adjacent_tags():
+    """查看原文必须与旁边分类/标签同高，图标跟 12px 字，不能吃帖内链接 44px 触控高。"""
+    css = STYLE_CSS.read_text()
+    post_card = _fn_body("postCard")
+    assert 'class="cat"' in post_card
+    assert "查看原文 ${EXTERNAL_LINK_ICON}" in post_card
+    assert ".post-item .p-meta .ui-icon { width: 12px; height: 12px; }" in css
+    assert ".post-item .p-meta a" in css
+    mobile = re.search(
+        r"@media \(max-width: 768px\) \{.*?\.post-item \.p-meta a\s*\{([^}]*)\}",
+        css,
+        re.DOTALL,
+    )
+    assert mobile, "缺少移动端 .post-item .p-meta a 规则"
+    assert "min-height: 0" in mobile.group(1)
+
+
 def test_x_badge_uses_system_blue_in_both_themes():
     """X 角标复用主题强调蓝，避免独立黑白色破坏平台角标的一致性。"""
     tokens = (APP_JS.parent / "vendor/design-tokens.css").read_text()

@@ -3033,7 +3033,7 @@ function postCard(post) {
         ${Array.isArray(post.tags) && post.tags.length
           ? post.tags.map((t) => `<button type="button" class="cat cat-tag post-tag-filter" data-tag="${escapeHtml(t)}" onclick="tlPickTag(this.dataset.tag)">${escapeHtml(t)}</button>`).join("")
           : ""}
-        ${post.platform === "zsxq" ? "" : `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener" aria-label="查看原文" title="查看原文">查看原文 ${EXTERNAL_LINK_ICON}</a>`}
+        ${post.platform === "zsxq" ? "" : `<a class="cat" href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener" aria-label="查看原文" title="查看原文">查看原文 ${EXTERNAL_LINK_ICON}</a>`}
       </div>
     </div>`;
 }

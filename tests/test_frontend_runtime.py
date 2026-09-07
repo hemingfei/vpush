@@ -685,6 +685,13 @@ def test_platform_badges_keep_blue_selection(page: Page, static_origin: str, tmp
         assert selected["iconTag"] == "svg"
         assert selected["iconColor"] == "rgb(255, 255, 255)", (platform, selected)
         assert selected["iconFilter"] == "none"
+        if platform == "truth":
+            fill = icon.evaluate("""el => {
+              const bb = el.getBBox();
+              const vb = el.viewBox.baseVal;
+              return {x: bb.width / vb.width, y: bb.height / vb.height};
+            }""")
+            assert fill["x"] >= 0.75 and fill["y"] >= 0.70, fill
 
     page.screenshot(path=str(tmp_path / f"badges-{width}-{theme}.png"))
     if width <= 768:
@@ -693,6 +700,37 @@ def test_platform_badges_keep_blue_selection(page: Page, static_origin: str, tmp
         expect(page.locator("#tl-filter-toggle")).to_have_class(re.compile("has-filter"))
         expect(page.locator("#tl-filter-toggle .funnel-icon")).to_have_css("background-color", "rgb(22, 104, 224)")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("width", [375, 1280])
+def test_post_origin_link_aligns_with_tags(page: Page, static_origin: str, width: int):
+    install_badge_reader_bootstrap(page)
+    page.route("**/api/my/feed*", lambda route: route.fulfill(json=[{
+        "id": 1, "kol_id": 1, "kol_name": "淡淡的相思林", "platform": "xueqiu",
+        "published_at": "2026-09-07T14:14:00+08:00", "content": "body",
+        "category_name": "行业研究", "url": "https://xueqiu.com/1",
+    }]))
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(static_origin)
+    page.evaluate("() => go('timeline')")
+    expect(page.locator(".post-item .p-meta .cat:not(a)")).to_be_visible()
+    expect(page.get_by_role("link", name="查看原文")).to_be_visible()
+    geo = page.evaluate("""() => {
+      const cat = document.querySelector('.p-meta .cat:not(a)');
+      const origin = document.querySelector('.p-meta a');
+      const icon = origin.querySelector('svg');
+      const cr = cat.getBoundingClientRect();
+      const or = origin.getBoundingClientRect();
+      const ir = icon.getBoundingClientRect();
+      return {
+        catH: cr.height, originH: or.height, iconH: ir.height,
+        topDelta: Math.abs(cr.top - or.top),
+      };
+    }""")
+    assert geo["originH"] < 28, geo
+    assert abs(geo["originH"] - geo["catH"]) <= 2, geo
+    assert geo["topDelta"] <= 2, geo
+    assert 10 <= geo["iconH"] <= 14, geo
 
 
 @pytest.mark.parametrize("width", [375, 1440])
