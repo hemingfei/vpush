@@ -4274,6 +4274,24 @@ def test_mobile_navigation_is_icon_only_and_accessible():
     assert 'removeAttribute("aria-current")' in router
 
 
+def test_mobile_bottom_navigation_has_d1_feedback_contract():
+    src = APP_JS.read_text()
+    css = STYLE_CSS.read_text()
+    render = _fn_body("renderBottomNav")
+    feedback = _fn_body("playBottomNavFeedback")
+
+    assert "goFromBottomNav(this, '${t.route}')" in render
+    assert "routeSignature" in render
+    assert "playBottomNavFeedback(button)" in src
+    assert "animationend" in feedback
+    assert "-webkit-tap-highlight-color: transparent" in css
+    assert "220ms" in css
+    assert "stroke-width: 2.4" in css
+    assert "@keyframes bottom-nav-feedback" in css
+    assert "animation-duration: 80ms" in css
+    assert "transform: none" in css[css.index("@media (prefers-reduced-motion: reduce)"):]
+
+
     src = NEWS_JS.read_text()
     for name in (
         "renderNewsCenter", "loadFinancialNews", "openNewsSourcePicker",

@@ -545,6 +545,56 @@ def test_mobile_bottom_navigation_is_icon_only(
     expect(inactive).to_have_attribute("aria-current", "page")
     expect(active).not_to_have_attribute("aria-current", "page")
     page.screenshot(path=str(tmp_path / f"bottom-nav-{len(expected)}-{width}-{theme}.png"))
+
+
+def test_mobile_bottom_navigation_d1_feedback_restarts_without_rebuilding(page: Page, static_origin: str):
+    page.set_viewport_size({"width": 390, "height": 840})
+    page.emulate_media(reduced_motion="no-preference")
+    install_badge_reader_bootstrap(page)
+    page.goto(static_origin)
+    page.evaluate("() => go('timeline')")
+
+    button = page.locator('.bnav-item[data-route="timeline"]')
+    assert page.evaluate("() => document.querySelector('#bottom-nav .bnav-item').style.backgroundColor") == ""
+    button.click()
+    expect(button).to_have_class(re.compile(r"\bis-feedback\b"))
+    feedback = button.evaluate("""el => ({
+        highlight: getComputedStyle(el).webkitTapHighlightColor,
+        background: getComputedStyle(el).backgroundColor,
+        stroke: getComputedStyle(el.querySelector('svg')).strokeWidth,
+        duration: getComputedStyle(el).animationDuration,
+    })""")
+    assert feedback == {
+        "highlight": "rgba(0, 0, 0, 0)",
+        "background": "rgba(0, 0, 0, 0)",
+        "stroke": "2.4px",
+        "duration": "0.22s",
+    }
+    page.wait_for_timeout(80)
+    assert button.evaluate("el => el.getAnimations().length") == 1
+    button.click()
+    assert button.evaluate("el => el.getAnimations().length") == 1
+    page.wait_for_timeout(250)
+    assert button.evaluate("el => el.classList.contains('is-feedback')") is False
+    assert page.locator('.bnav-item.is-feedback').count() == 0
+
+
+def test_mobile_bottom_navigation_d1_feedback_reduced_motion_has_no_transform(page: Page, static_origin: str):
+    page.set_viewport_size({"width": 390, "height": 840})
+    page.emulate_media(reduced_motion="reduce")
+    install_badge_reader_bootstrap(page)
+    page.goto(static_origin)
+    page.evaluate("() => go('timeline')")
+
+    button = page.locator('.bnav-item[data-route="timeline"]')
+    button.click()
+    expect(button).to_have_class(re.compile(r"\bis-feedback\b"))
+    assert button.evaluate("el => getComputedStyle(el).animationDuration") == "0.08s"
+    transforms = page.evaluate("""() => [...document.styleSheets].flatMap(sheet => {
+        try { return [...sheet.cssRules]; } catch { return []; }
+    }).filter(rule => rule.type === CSSRule.KEYFRAMES_RULE && rule.name === 'bottom-nav-feedback')
+      .flatMap(rule => [...rule.cssRules].map(frame => frame.style.transform))""")
+    assert transforms and all(value == "none" for value in transforms)
 @pytest.mark.parametrize("width", [375, 768, 1440])
 @pytest.mark.parametrize("theme", ["light", "dark"])
 def test_platform_badges_keep_blue_selection(page: Page, static_origin: str, tmp_path: Path, width: int, theme: str):

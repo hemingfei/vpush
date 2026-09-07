@@ -446,6 +446,7 @@ const MOBILE_NAV = [
 
 let bottomNavLastY = 0;
 let bottomNavTravel = 0;
+let bottomNavRouteSignature = null;
 
 function resetBottomNavScroll() {
   bottomNavLastY = Math.max(0, window.scrollY);
@@ -477,12 +478,34 @@ function updateBottomNavScroll() {
 window.addEventListener("scroll", updateBottomNavScroll, { passive: true });
 window.matchMedia("(max-width: 768px)").addEventListener("change", resetBottomNavScroll);
 
+function playBottomNavFeedback(button) {
+  button.onanimationend = (event) => {
+    if (event.animationName === "bottom-nav-feedback") button.classList.remove("is-feedback");
+  };
+  button.getAnimations().forEach((animation) => animation.cancel());
+  button.classList.remove("is-feedback");
+  void button.offsetWidth;
+  button.classList.add("is-feedback");
+}
+
+function goFromBottomNav(button, route) {
+  playBottomNavFeedback(button);
+  go(route);
+}
+
 function renderBottomNav(user) {
   resetBottomNavScroll();
   const tabs = MOBILE_NAV.filter((tab) => tab.route !== "news" || state.newsVisible);
   if (user.is_admin) tabs.push({ route: "more", icon: MORE_ICON, label: "更多" });
-  $("#bottom-nav").innerHTML = tabs.map((t) => `
-    <button class="bnav-item" data-route="${t.route}" aria-label="${t.label}" title="${t.label}" onclick="go('${t.route}')">
+  const routeSignature = tabs.map((tab) => tab.route).join("|");
+  const nav = $("#bottom-nav");
+  if (routeSignature === bottomNavRouteSignature && nav.querySelector(".bnav-item")) {
+    ensureMobilePlatformSwipe();
+    return;
+  }
+  bottomNavRouteSignature = routeSignature;
+  nav.innerHTML = tabs.map((t) => `
+    <button class="bnav-item" data-route="${t.route}" aria-label="${t.label}" title="${t.label}" onclick="goFromBottomNav(this, '${t.route}')">
       <span class="bnav-icon">${t.icon}</span>
     </button>`).join("");
   ensureMobilePlatformSwipe();
@@ -5751,6 +5774,7 @@ const INLINE_HANDLERS = {
   filterKolImageSettings,
   genBindCode,
   go,
+  goFromBottomNav,
   homeResetFilters,
   homeSearch,
   homeToggleFilter,
