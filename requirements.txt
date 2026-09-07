@@ -11,3 +11,4 @@ curl_cffi==0.16.0
 python-multipart==0.0.20
 feedparser==6.0.11
 bleach==6.2.0
+zhconv==1.4.3

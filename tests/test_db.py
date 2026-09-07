@@ -498,6 +498,34 @@ def test_insert_post_ignore_does_not_leave_open_txn(tmp_path):
     db._conn.commit()
 
 
+def test_insert_post_stores_simplified_keeps_src(tmp_path):
+    db = DB(str(tmp_path / "t.db"))
+    kid = db.add_kol("weibo", "繁体号", "tw1")
+    pid = db.insert_post(
+        "weibo",
+        kid,
+        "p1",
+        "臺灣經濟",
+        "這個帳號發了繁體",
+        "u",
+        "",
+        title_src="臺灣經濟",
+        content_src="這個帳號發了繁體",
+    )
+    row = db.get_post(pid)
+    assert row["title"] == "台湾经济"
+    assert row["content"] == "这个账号发了繁体"
+    assert row["title_src"] == "臺灣經濟"
+    assert row["content_src"] == "這個帳號發了繁體"
+
+    db.set_post_translation(pid, "發佈更新", "這是譯文繁體", "Published", "This is traditional")
+    row = db.get_post(pid)
+    assert row["title"] == "发布更新"
+    assert row["content"] == "这是译文繁体"
+    assert row["title_src"] == "Published"
+    assert row["content_src"] == "This is traditional"
+
+
 def test_register_codes_migrate_batch_columns(tmp_path):
     path = tmp_path / "old.db"
     conn = sqlite3.connect(path)

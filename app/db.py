@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .logging_setup import redact_secrets
+from .zh_simp import to_simplified
 
 _UNSET = object()
 BIND_TRY_LIMIT = 8
@@ -4052,8 +4053,8 @@ class DB:
                         platform,
                         kol_id,
                         external_id,
-                        title,
-                        content,
+                        to_simplified(title),
+                        to_simplified(content),
                         title_src,
                         content_src,
                         post_type,
@@ -4103,8 +4104,8 @@ class DB:
                             p.platform,
                             p.kol_id,
                             p.external_id,
-                            p.title,
-                            p.content,
+                            to_simplified(p.title),
+                            to_simplified(p.content),
                             p.title_src or "",
                             p.content_src or "",
                             p.post_type,
@@ -4538,7 +4539,7 @@ class DB:
     ) -> None:
         self._execute(
             "UPDATE posts SET title = ?, content = ?, title_src = ?, content_src = ? WHERE id = ?",
-            (title or "", content or "", title_src or "", content_src or "", int(post_id)),
+            (to_simplified(title), to_simplified(content), title_src or "", content_src or "", int(post_id)),
         )
 
     def list_pending_hosted_images(self, limit: int = 8) -> list[dict]:
