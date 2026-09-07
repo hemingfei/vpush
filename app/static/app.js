@@ -4594,12 +4594,12 @@ function applyTheme() {
   // 用页面顶部背景色而非品牌强调色：iOS 用 theme-color 填充状态栏/安全区，
   // 若填强调蓝会出现一条与页面不符的蓝色条（详见 PWA 顶部蓝条问题）。
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute("content", dark ? "#11141a" : "#f8f8fb");
+  if (meta) meta.setAttribute("content", dark ? "#0f1115" : "#f5f5f7");
   const statusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
   if (statusBar) statusBar.setAttribute("content", dark ? "black-translucent" : "default");
   // 同步 manifest 链接：部分安卓 PWA 独立窗口只认 manifest 静态 theme_color
   const manifestLink = document.getElementById("manifest");
-  if (manifestLink) manifestLink.setAttribute("href", dark ? "/manifest-dark.webmanifest?v=2" : "/manifest.webmanifest?v=2");
+  if (manifestLink) manifestLink.setAttribute("href", dark ? "/manifest-dark.webmanifest?v=3" : "/manifest.webmanifest?v=3");
   // 品牌符号（登录页 + topbar + 侧边栏）用融合版，深浅各一
   const logo = document.querySelector(".topbar-logo");
   if (logo) logo.src = dark ? "/logo-mark-dark.svg" : "/logo-mark.svg";

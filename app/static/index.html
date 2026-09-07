@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#f8f8fb">
+  <meta name="theme-color" content="#f5f5f7">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="VPush">
   <title>VPush</title>
-  <link id="manifest" rel="manifest" href="/manifest.webmanifest?v=2">
+  <link id="manifest" rel="manifest" href="/manifest.webmanifest?v=3">
   <link rel="apple-touch-icon" href="/icon-192.png">
   <link rel="apple-touch-icon" href="/icon-192.png" media="(prefers-color-scheme: light)">
   <link rel="apple-touch-icon" href="/icon-192-dark.png" media="(prefers-color-scheme: dark)">
@@ -28,20 +28,20 @@
         if (dark) document.documentElement.classList.add("theme-dark");
         if (localStorage.getItem("sidebar-slim") === "1") document.documentElement.classList.add("sidebar-slim");
         var themeColor = document.querySelector('meta[name="theme-color"]');
-        if (themeColor) themeColor.content = dark ? "#11141a" : "#f8f8fb";
+        if (themeColor) themeColor.content = dark ? "#0f1115" : "#f5f5f7";
         var statusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
         if (statusBar) statusBar.content = dark ? "black-translucent" : "default";
         // 安卓部分机型独立窗口只认 manifest 静态 theme_color（无视运行时 meta）：
         // 深色时整体换成深色 manifest，状态栏/启动色才跟得上
         var manifestLink = document.getElementById("manifest");
-        if (manifestLink) manifestLink.href = dark ? "/manifest-dark.webmanifest?v=2" : "/manifest.webmanifest?v=2";
+        if (manifestLink) manifestLink.href = dark ? "/manifest-dark.webmanifest?v=3" : "/manifest.webmanifest?v=3";
         var fav = document.getElementById("favicon");
         if (fav) fav.setAttribute("href", dark ? "/logo-mark-dark.svg" : "/logo-mark.svg");
       } catch (e) { /* localStorage 不可用时静默 */ }
     })();
   </script>
-  <link rel="stylesheet" href="/vendor/design-tokens.css?v=4a3d8c6c85a0">
-  <link rel="stylesheet" href="/style.css?v=4a3d8c6c85a0">
+  <link rel="stylesheet" href="/vendor/design-tokens.css?v=f3cb1d940647">
+  <link rel="stylesheet" href="/style.css?v=f3cb1d940647">
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -172,6 +172,6 @@
     </div>
     <nav id="bottom-nav" class="bottom-nav"></nav>
   </div>
-  <script type="module" src="/app.js?v=4a3d8c6c85a0"></script>
+  <script type="module" src="/app.js?v=f3cb1d940647"></script>
 </body>
 </html>

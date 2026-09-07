@@ -319,6 +319,24 @@ def install_badge_reader_bootstrap(page: Page) -> None:
     page.route("**/api/**", respond)
 
 
+def test_theme_switch_keeps_browser_chrome_and_page_background_in_sync(page: Page):
+    for mode, color, manifest, rgb in (
+        ("light", "#f5f5f7", "/manifest.webmanifest?v=3", "rgb(245, 245, 247)"),
+        ("dark", "#0f1115", "/manifest-dark.webmanifest?v=3", "rgb(15, 17, 21)"),
+    ):
+        page.evaluate("mode => setTheme(mode)", mode)
+        assert page.locator('meta[name="theme-color"]').get_attribute("content") == color
+        assert page.locator("#manifest").get_attribute("href") == manifest
+        assert page.locator("html").evaluate("el => getComputedStyle(el).backgroundColor") == rgb
+
+    page.emulate_media(color_scheme="light")
+    page.evaluate("setTheme('auto')")
+    assert page.locator('meta[name="theme-color"]').get_attribute("content") == "#f5f5f7"
+    page.emulate_media(color_scheme="dark")
+    expect(page.locator('meta[name="theme-color"]')).to_have_attribute("content", "#0f1115")
+    expect(page.locator("#manifest")).to_have_attribute("href", "/manifest-dark.webmanifest?v=3")
+
+
 @pytest.mark.parametrize("reduced_motion", ["reduce", "no-preference"])
 def test_mobile_navigation_scroll_direction(page: Page, static_origin: str, tmp_path: Path, reduced_motion: str):
     page.set_viewport_size({"width": 380, "height": 840})

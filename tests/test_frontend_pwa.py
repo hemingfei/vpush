@@ -92,30 +92,33 @@ def test_pwa_icons_have_light_and_dark_sets():
 
 def test_status_bar_follows_app_theme():
     html = (STATIC / "index.html").read_text()
+    assert 'name="theme-color" content="#f5f5f7"' in html
+    assert 'themeColor.content = dark ? "#0f1115" : "#f5f5f7"' in html
     assert 'name="apple-mobile-web-app-status-bar-style" content="default"' in html
     assert 'statusBar.content = dark ? "black-translucent" : "default"' in html
     app = (STATIC / "app.js").read_text()
     assert 'apple-mobile-web-app-status-bar-style' in app
     assert 'dark ? "black-translucent" : "default"' in app
+    assert 'meta.setAttribute("content", dark ? "#0f1115" : "#f5f5f7")' in app
     manifest = (STATIC / "manifest.webmanifest").read_text()
-    assert '"theme_color": "#f8f8fb"' in manifest
-    assert '"background_color": "#f8f8fb"' in manifest
+    assert '"theme_color": "#f5f5f7"' in manifest
+    assert '"background_color": "#f5f5f7"' in manifest
 
 
 def test_dark_manifest_for_theme_colored_status_bars():
     """部分安卓 PWA 独立窗口只认 manifest 静态 theme_color：
     必须有深色 manifest，且防闪脚本与 applyTheme 都会按主题切换链接。"""
     dark = (STATIC / "manifest-dark.webmanifest").read_text()
-    assert '"theme_color": "#11141a"' in dark
+    assert '"theme_color": "#0f1115"' in dark
     assert '"background_color": "#0f1115"' in dark
     assert "/icon-512-dark.png" in dark
 
     html = (STATIC / "index.html").read_text()
-    assert 'id="manifest" rel="manifest" href="/manifest.webmanifest?v=2"' in html
-    assert 'manifestLink.href = dark ? "/manifest-dark.webmanifest?v=2" : "/manifest.webmanifest?v=2"' in html
+    assert 'id="manifest" rel="manifest" href="/manifest.webmanifest?v=3"' in html
+    assert 'manifestLink.href = dark ? "/manifest-dark.webmanifest?v=3" : "/manifest.webmanifest?v=3"' in html
 
     app = (STATIC / "app.js").read_text()
-    assert 'manifestLink.setAttribute("href", dark ? "/manifest-dark.webmanifest?v=2" : "/manifest.webmanifest?v=2")' in app
+    assert 'manifestLink.setAttribute("href", dark ? "/manifest-dark.webmanifest?v=3" : "/manifest.webmanifest?v=3")' in app
 
     sw = SW_JS.read_text()
     assert '"/manifest-dark.webmanifest"' in sw
