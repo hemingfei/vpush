@@ -2529,7 +2529,6 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   .bottom-nav { transition: none; }
 }
 .bnav-item {
-  --bottom-nav-feedback-opacity: 0;
   position: relative;
   flex: 1;
   display: flex; align-items: center; justify-content: center;
@@ -2547,7 +2546,7 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   width: 42px; height: 42px;
   border-radius: 50%;
   background: var(--color-accent-soft);
-  opacity: var(--bottom-nav-feedback-opacity);
+  opacity: 0;
   pointer-events: none;
   transform: translate(-50%, -50%);
 }
@@ -2556,14 +2555,14 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
 .bnav-item .bnav-icon svg { width: 27px; height: 27px; }
 .bnav-item.active { color: var(--color-accent-text); font-weight: var(--font-weight-semibold); }
 .bnav-item.active .bnav-icon svg { stroke-width: 2.4; }
-.bnav-item.is-feedback { animation: bottom-nav-feedback 220ms ease-out; }
+.bnav-item.is-feedback::before { animation: bottom-nav-feedback 220ms ease-out; }
 @keyframes bottom-nav-feedback {
-  from { --bottom-nav-feedback-opacity: 0; transform: none; }
-  50% { --bottom-nav-feedback-opacity: 1; transform: none; }
-  to { --bottom-nav-feedback-opacity: 0; transform: none; }
+  from { opacity: 0; transform: none; }
+  50% { opacity: 1; transform: none; }
+  to { opacity: 0; transform: none; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .bnav-item.is-feedback { animation-duration: 80ms; animation-timing-function: linear; }
+  .bnav-item.is-feedback::before { animation-duration: 80ms; animation-timing-function: linear; }
 }
 
 /* 「更多」页网格 */

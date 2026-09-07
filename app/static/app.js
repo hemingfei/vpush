@@ -482,7 +482,7 @@ function playBottomNavFeedback(button) {
   button.onanimationend = (event) => {
     if (event.animationName === "bottom-nav-feedback") button.classList.remove("is-feedback");
   };
-  button.getAnimations().forEach((animation) => animation.cancel());
+  button.getAnimations({ subtree: true }).forEach((animation) => animation.cancel());
   button.classList.remove("is-feedback");
   void button.offsetWidth;
   button.classList.add("is-feedback");

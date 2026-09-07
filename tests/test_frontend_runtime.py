@@ -562,18 +562,22 @@ def test_mobile_bottom_navigation_d1_feedback_restarts_without_rebuilding(page: 
         highlight: getComputedStyle(el).webkitTapHighlightColor,
         background: getComputedStyle(el).backgroundColor,
         stroke: getComputedStyle(el.querySelector('svg')).strokeWidth,
-        duration: getComputedStyle(el).animationDuration,
+        duration: getComputedStyle(el, '::before').animationDuration,
+        name: getComputedStyle(el, '::before').animationName,
+        opacity: getComputedStyle(el, '::before').opacity,
     })""")
     assert feedback == {
         "highlight": "rgba(0, 0, 0, 0)",
         "background": "rgba(0, 0, 0, 0)",
         "stroke": "2.4px",
         "duration": "0.22s",
+        "name": "bottom-nav-feedback",
+        "opacity": "0",
     }
     page.wait_for_timeout(80)
-    assert button.evaluate("el => el.getAnimations().length") == 1
+    assert button.evaluate("el => el.getAnimations({subtree: true}).filter(a => a.animationName === 'bottom-nav-feedback').length") == 1
     button.click()
-    assert button.evaluate("el => el.getAnimations().length") == 1
+    assert button.evaluate("el => el.getAnimations({subtree: true}).filter(a => a.animationName === 'bottom-nav-feedback').length") == 1
     page.wait_for_timeout(250)
     assert button.evaluate("el => el.classList.contains('is-feedback')") is False
     assert page.locator('.bnav-item.is-feedback').count() == 0
@@ -589,7 +593,7 @@ def test_mobile_bottom_navigation_d1_feedback_reduced_motion_has_no_transform(pa
     button = page.locator('.bnav-item[data-route="timeline"]')
     button.click()
     expect(button).to_have_class(re.compile(r"\bis-feedback\b"))
-    assert button.evaluate("el => getComputedStyle(el).animationDuration") == "0.08s"
+    assert button.evaluate("el => getComputedStyle(el, '::before').animationDuration") == "0.08s"
     transforms = page.evaluate("""() => [...document.styleSheets].flatMap(sheet => {
         try { return [...sheet.cssRules]; } catch { return []; }
     }).filter(rule => rule.type === CSSRule.KEYFRAMES_RULE && rule.name === 'bottom-nav-feedback')
