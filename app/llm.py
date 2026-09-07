@@ -609,17 +609,28 @@ def clean_report_extraction(data: dict, universe: dict[str, str]) -> dict:
     for item in data.get("tickers") or []:
         if not isinstance(item, dict):
             continue
-        digits = "".join(ch for ch in str(item.get("code") or "") if ch.isdigit())
+        raw_code = str(item.get("code") or "").strip()
+        digits = "".join(ch for ch in raw_code if ch.isdigit())
         code = digits[-6:] if len(digits) >= 6 else ""
+        name = str(item.get("name") or "").strip()[:32]
         if not code or code in seen:
             continue
-        if universe and code not in universe:
+        if universe and code in universe:
+            # A 股词表命中：代码归一为 6 位，名称以词表为准
+            pass
+        elif name and re.search(r"[A-Za-z]", raw_code) and re.fullmatch(
+            r"[A-Za-z0-9]{1,6}([.:][A-Za-z0-9]{1,4})?", raw_code
+        ):
+            # 非词表代码（美股/港股等）：保留原代码形态，但须带名称且形态合规
+            code = raw_code.upper()[:16]
+        else:
+            # 词表未命中且形态可疑（幻觉）→ 丢弃
             continue
         seen.add(code)
         tickers.append(
             {
                 "code": code,
-                "name": universe.get(code) or str(item.get("name") or "")[:32],
+                "name": universe.get(code) or name,
                 "stance": str(item.get("stance") or "").strip()[:16],
             }
         )
