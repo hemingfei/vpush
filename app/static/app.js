@@ -424,7 +424,7 @@ function renderSidebar(user) {
       ${(group.items || []).filter((item) => item.route !== "news" || state.newsVisible).map(navItemHtml).join("")}
       ${(group.subs || []).map((sub) => `
         <details class="nav-sub" open>
-          <summary class="nav-sub-label">${sub.label}</summary>
+          <summary class="nav-sub-label">${sub.label}${CHEVRON_RIGHT_ICON}</summary>
           ${sub.items.filter((item) => item.route !== "news" || state.newsVisible).map(navItemHtml).join("")}
         </details>`).join("")}
     `).join("");
@@ -4833,6 +4833,7 @@ const {
   EXTERNAL_LINK_ICON,
   CHEVRON_LEFT_ICON,
   CHEVRON_RIGHT_ICON,
+  CHEVRON_DOWN_ICON,
 });
 
 
@@ -4910,6 +4911,7 @@ pushSettingsView = createPushSettingsView({
   pushChannelsHtml,
   webPushSupported,
   toggleDnd,
+  CHEVRON_RIGHT_ICON,
 });
 const {
   stopSettingsPoll,
@@ -5038,6 +5040,7 @@ const {
   CHANNEL_ICONS,
   PLATFORM_LABELS,
   usernameRuleError,
+  CHEVRON_RIGHT_ICON,
 });
 
 const {

@@ -18,6 +18,7 @@ export function createAdminUsersView(dependencies) {
     CHANNEL_ICONS,
     PLATFORM_LABELS,
     usernameRuleError,
+    CHEVRON_RIGHT_ICON,
   } = dependencies;
 
   function userHasBoundChannel(u) {
@@ -463,7 +464,7 @@ export function createAdminUsersView(dependencies) {
           </table>
         </div>
         <details class="au-policy" ${_auPolicyOpen ? "open" : ""}>
-          <summary>未激活清理规则<span class="muted">${escapeHtml(inactivePolicyHint(inactivePolicyDraft().inactive_after_days, inactivePolicyDraft().inactive_purge_after_days))}</span></summary>
+          <summary>${CHEVRON_RIGHT_ICON}<span>未激活清理规则</span><span class="muted">${escapeHtml(inactivePolicyHint(inactivePolicyDraft().inactive_after_days, inactivePolicyDraft().inactive_purge_after_days))}</span></summary>
           <p class="section-meta">领码或网页注册后从未登录，且没有渠道、订阅和推送记录。</p>
           <div class="rc-generate au-inactive-policy">
             <label class="rc-field rc-field-num">

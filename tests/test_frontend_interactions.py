@@ -3539,6 +3539,49 @@ def test_web_control_icons_use_shared_registry_and_dependency_injection():
     assert "📎" not in app and "查看原文 →" not in app
 
 
+def test_dropdown_controls_use_injected_chevrons_not_css_content():
+    """真实展开/下拉控件不得再由 CSS 字符绘制，图标由视图依赖注入。"""
+    css = STYLE_CSS.read_text()
+    app = APP_JS.read_text()
+    ima = IMA_JS.read_text()
+    users = ADMIN_USERS_JS.read_text()
+    settings = PUSH_SETTINGS_JS.read_text()
+    knowledge = ADMIN_KNOWLEDGE_JS.read_text()
+
+    assert 'content: "▸"' not in css
+    assert 'content: "▾"' not in css
+    assert ".nav-sub-label::after" not in css
+    assert "details.au-policy > summary::before" not in css
+    assert "details.bind-steps > summary::before" not in css
+    assert ".ks-advanced > summary::before" not in css
+    for selector in (
+        ".nav-sub[open] > .nav-sub-label .ui-icon",
+        "details.au-policy[open] > summary .ui-icon",
+        "details.bind-steps[open] > summary .ui-icon",
+        ".ks-advanced[open] > summary .ui-icon",
+    ):
+        assert selector in css
+        assert "transform: rotate(90deg)" in css[css.index(selector):css.index("}", css.index(selector))]
+    assert ".kb-source-select-wrap > .ui-icon" in css
+    assert ".ima-tag-trigger > .ui-icon" in css
+
+    assert "${CHEVRON_RIGHT_ICON}" in app[app.index('function renderSidebar'):app.index('function renderSidebar') + 5000]
+    assert "CHEVRON_RIGHT_ICON" in users and "${CHEVRON_RIGHT_ICON}" in users
+    assert "CHEVRON_RIGHT_ICON" in settings and "${CHEVRON_RIGHT_ICON}" in settings
+    assert "CHEVRON_RIGHT_ICON" in knowledge and "${CHEVRON_RIGHT_ICON}" in knowledge
+    assert "CHEVRON_DOWN_ICON" in ima and ima.count("${CHEVRON_DOWN_ICON}") >= 2
+
+    users_call = app[app.index("createAdminUsersView({"):]
+    settings_call = app[app.index("createPushSettingsView({"):]
+    ima_call = app[app.index("createImaView({"):]
+    for call, dependency in (
+        (users_call, "CHEVRON_RIGHT_ICON"),
+        (settings_call, "CHEVRON_RIGHT_ICON"),
+        (ima_call, "CHEVRON_DOWN_ICON"),
+    ):
+        assert dependency in call[:call.index("});")]
+
+
 def test_timeline_pills_stay_content_sized():
     """桌面筛选胶囊按内容收缩，禁止等宽拉伸。"""
     render = _fn_body("renderTimeline")
@@ -4030,9 +4073,8 @@ def test_ima_report_responsive_controls_css():
     assert "display: none" in kb_mobile
     assert ".kb-source-select-mobile" in kb_mobile or ".kb-source-select-wrap" in kb_mobile
     assert "flex: 1 1 0" in kb_mobile
-    assert 'content: "▾"' in kb_mobile
-    assert ".kb-source-select-wrap::after" in kb_mobile
-    assert ".ima-tag-trigger::after" in kb_mobile
+    assert ".kb-source-select-wrap > .ui-icon" in kb_mobile
+    assert ".ima-tag-trigger > .ui-icon" in kb_mobile
 
 
 def test_knowledge_desk_defaults_to_latest_stream():

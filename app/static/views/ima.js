@@ -34,6 +34,7 @@ export function createImaView(dependencies) {
     EXTERNAL_LINK_ICON,
     CHEVRON_LEFT_ICON,
     CHEVRON_RIGHT_ICON,
+    CHEVRON_DOWN_ICON,
   } = dependencies;
 
   function clearImaPdfUrl() {
@@ -787,7 +788,7 @@ export function createImaView(dependencies) {
       `<option value="" ${!selectedGroup ? "selected" : ""}>研报中心</option>`,
       ...sources.map((s) => `<option value="${escapeHtml(s.group_id)}" ${s.group_id === selectedGroup ? "selected" : ""}>${escapeHtml(s.title)}</option>`)
     ].join("");
-    const mobileSelectHtml = `<div class="kb-source-select-wrap"><select class="kb-source-select-mobile" aria-label="切换研报库" onchange="selectImaDocumentGroup(this.value)">${mobileOptions}</select></div>`;
+    const mobileSelectHtml = `<div class="kb-source-select-wrap"><select class="kb-source-select-mobile" aria-label="切换研报库" onchange="selectImaDocumentGroup(this.value)">${mobileOptions}</select>${CHEVRON_DOWN_ICON}</div>`;
     return `<div class="ima-report-source">${pillsHtml}${mobileSelectHtml}</div>`;
   }
 
@@ -991,7 +992,7 @@ export function createImaView(dependencies) {
       <form class="ima-report-search" onsubmit="event.preventDefault();submitImaDocumentsSearch()">
         <label class="ima-report-searchbox">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜标题、公司、代码、行业或资料源" aria-label="搜索研报" oninput="queueImaDocumentsSearch()" oncompositionstart="_imaSearchComposing=true" oncompositionend="_imaSearchComposing=false;queueImaDocumentsSearch()">${clearBtn}</label>
       </form>
-      <div class="ima-report-filters">${sourceControls}<span id="ima-doc-day-nav-slot"></span><div class="ima-report-tag"><span class="sr-only">标签</span><button type="button" class="kb-desk-day ima-tag-trigger" id="ima-doc-tag" aria-haspopup="listbox" aria-expanded="false" onclick="toggleImaTagMenu(event)" hidden>标签</button></div></div>
+      <div class="ima-report-filters">${sourceControls}<span id="ima-doc-day-nav-slot"></span><div class="ima-report-tag"><span class="sr-only">标签</span><button type="button" class="kb-desk-day ima-tag-trigger" id="ima-doc-tag" aria-haspopup="listbox" aria-expanded="false" onclick="toggleImaTagMenu(event)" hidden><span class="ima-tag-label">标签</span>${CHEVRON_DOWN_ICON}</button></div></div>
       <div id="ima-doc-filter-chips" class="ima-doc-filter-chips"></div>
       <div class="ima-report-columns" aria-hidden="true"><span>日期</span><span>标题</span><span>资料源</span></div>
     </header>
@@ -1005,7 +1006,8 @@ export function createImaView(dependencies) {
       const uniqueTags = Object.keys(snapshot.tagCounts || {});
       if (tag && !uniqueTags.includes(tag)) uniqueTags.unshift(tag);
       if (tagTrigger) {
-        tagTrigger.textContent = tag || "标签";
+        const tagLabel = tagTrigger.querySelector(".ima-tag-label");
+        if (tagLabel) tagLabel.textContent = tag || "标签";
         if (uniqueTags.length || tag) tagTrigger.removeAttribute("hidden");
         else tagTrigger.hidden = true;
       }
@@ -1057,7 +1059,8 @@ export function createImaView(dependencies) {
         : Object.keys(_imaTagCounts);
       if (tag && !uniqueTags.includes(tag)) uniqueTags.unshift(tag);
       if (tagTrigger) {
-        tagTrigger.textContent = tag || "标签";
+        const tagLabel = tagTrigger.querySelector(".ima-tag-label");
+        if (tagLabel) tagLabel.textContent = tag || "标签";
         if (uniqueTags.length || tag) tagTrigger.removeAttribute("hidden");
         else tagTrigger.hidden = true;
       }

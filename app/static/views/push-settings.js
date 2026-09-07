@@ -21,6 +21,7 @@ export function createPushSettingsView(dependencies) {
     pushChannelsHtml,
     webPushSupported,
     toggleDnd,
+    CHEVRON_RIGHT_ICON,
   } = dependencies;
 
   // ---------- 推送设置 ----------
@@ -520,7 +521,7 @@ export function createPushSettingsView(dependencies) {
             </div>
           </header>
           <details class="bind-steps">
-            <summary>展开查看同步步骤</summary>
+            <summary>${CHEVRON_RIGHT_ICON}<span>展开查看同步步骤</span></summary>
           <ol style="padding-left:20px;line-height:2">
             <li>点下方「生成绑定码」。</li>
             <li>把 <code>/bind 6位码</code> 发给 Telegram / 飞书机器人（企业微信群机器人是单向 webhook，不支持指令）。</li>
@@ -721,7 +722,7 @@ export function createPushSettingsView(dependencies) {
   function bindGuideHtml(bound, stepsHtml) {
     // 渠道绑定步骤折叠：未绑定时默认展开引导，已绑定时收起来（页面不再一屏放不下）
     return `<details class="bind-steps" ${bound ? "" : "open"}>
-      <summary>${bound ? "已绑定 ✅ · 展开查看绑定步骤" : "展开查看绑定步骤"}</summary>
+      <summary>${CHEVRON_RIGHT_ICON}<span>${bound ? "已绑定 ✅ · 展开查看绑定步骤" : "展开查看绑定步骤"}</span></summary>
       ${stepsHtml}
     </details>`;
   }
