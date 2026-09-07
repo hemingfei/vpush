@@ -452,6 +452,81 @@ def _contrast_ratio(foreground: str, background: str) -> float:
     return (lighter + 0.05) / (darker + 0.05)
 
 
+@pytest.mark.parametrize(
+    ("is_admin", "news_visible", "expected"),
+    [
+        (False, False, [("timeline", "动态"), ("home", "广场"), ("settings", "个人设置")]),
+        (False, True, [("timeline", "动态"), ("news", "财经新闻"), ("home", "广场"), ("settings", "个人设置")]),
+        (True, True, [("timeline", "动态"), ("news", "财经新闻"), ("home", "广场"), ("settings", "个人设置"), ("more", "更多")]),
+    ],
+)
+@pytest.mark.parametrize("width", [320, 768])
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_mobile_bottom_navigation_is_icon_only(
+    page: Page, static_origin: str, tmp_path: Path,
+    is_admin: bool, news_visible: bool, expected: list[tuple[str, str]],
+    width: int, theme: str,
+):
+    page.set_viewport_size({"width": width, "height": 840})
+    page.emulate_media(reduced_motion="reduce")
+    install_badge_reader_bootstrap(page)
+    page.route("**/api/me", lambda route: route.fulfill(json={
+        "id": 1, "username": "test", "is_admin": is_admin,
+        "news_visible": news_visible,
+    }))
+    page.goto(static_origin)
+    page.evaluate("() => go('timeline')")
+    page.evaluate("theme => document.documentElement.className = 'theme-' + theme", theme)
+
+    nav = page.locator("#bottom-nav")
+    buttons = nav.locator(".bnav-item")
+    expect(buttons).to_have_count(len(expected))
+    assert nav.inner_text().strip() == ""
+    assert buttons.evaluate_all("els => els.map(el => el.dataset.route)") == [route for route, _ in expected]
+
+    for index, (_, label) in enumerate(expected):
+        button = buttons.nth(index)
+        expect(button).to_have_attribute("aria-label", label)
+        expect(button).to_have_attribute("title", label)
+        expect(button.locator("svg")).to_be_visible()
+        button_box = button.bounding_box()
+        icon_box = button.locator("svg").bounding_box()
+        assert button_box and button_box["height"] >= 48
+        assert icon_box and 26 <= icon_box["width"] <= 28 and 26 <= icon_box["height"] <= 28
+
+    active = page.locator('.bnav-item[data-route="timeline"]')
+    inactive = page.locator('.bnav-item[data-route="home"]')
+    expect(active).to_have_attribute("aria-current", "page")
+    active.focus()
+    expect(active).to_be_focused()
+    colors = page.evaluate("""() => {
+        const root = getComputedStyle(document.documentElement);
+        const resolveColor = (value) => {
+            const probe = document.createElement('span');
+            probe.style.color = value;
+            document.body.append(probe);
+            const color = getComputedStyle(probe).color;
+            probe.remove();
+            return color;
+        };
+        return {
+            active: getComputedStyle(document.querySelector('.bnav-item.active')).color,
+            inactive: getComputedStyle(document.querySelector('.bnav-item:not(.active)')).color,
+            activeToken: resolveColor(root.getPropertyValue('--color-accent-text')),
+            inactiveToken: resolveColor(root.getPropertyValue('--color-text-muted')),
+            background: getComputedStyle(document.querySelector('#bottom-nav')).backgroundColor,
+        };
+    }""")
+    assert _rgb(colors["active"]) == _rgb(colors["activeToken"])
+    assert _rgb(colors["inactive"]) == _rgb(colors["inactiveToken"])
+    assert _contrast_ratio(colors["active"], colors["background"]) >= 3
+    assert _contrast_ratio(colors["inactive"], colors["background"]) >= 3
+
+    inactive.click()
+    expect(page.locator("#kol-list")).to_be_visible()
+    expect(inactive).to_have_attribute("aria-current", "page")
+    expect(active).not_to_have_attribute("aria-current", "page")
+    page.screenshot(path=str(tmp_path / f"bottom-nav-{len(expected)}-{width}-{theme}.png"))
 @pytest.mark.parametrize("width", [375, 768, 1440])
 @pytest.mark.parametrize("theme", ["light", "dark"])
 def test_platform_badges_keep_blue_selection(page: Page, static_origin: str, tmp_path: Path, width: int, theme: str):

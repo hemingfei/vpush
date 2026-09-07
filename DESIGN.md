@@ -251,7 +251,7 @@ V Push 是值班台，不是内容社区，也不是营销落地页。界面服�
 ### Navigation
 - **Desktop:** 侧栏项透明底，13px，hover 极淡蓝底，active 用 accent-soft 底 + Duty Blue Text，字重 600。分组标签 Caption。
 - **Slim / ≤900px:** 图标轨，标签隐藏。
-- **Mobile ≤768px:** 底栏，图标+短标签。
+- **Mobile ≤768px:** 底栏只显示动态、财经新闻（按权限）、广场、个人设置和更多（管理员）的图标；图标等宽排列，触控区至少 48px。可见中文仅保留为 `aria-label` / `title`，当前项使用 Duty Blue，浅色/深色主题分别跟随对应 token。
 - **Theme switcher:** 无边小图标钮，选中淡蓝底 + Duty Blue Text。
 
 ### Timeline filters (signature)
