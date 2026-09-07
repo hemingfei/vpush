@@ -1621,6 +1621,7 @@ def create_api_router(
     # ---- 我的 ----
     @router.get("/me")
     def me(user: dict = Depends(get_current_user)):
+        db.touch_last_login(user["id"])
         user = db.get_user(user["id"])
         profile = public_user(user, db)
         profile["news_visible"] = db.get_setting("news_visible") != "0"

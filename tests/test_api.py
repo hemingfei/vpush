@@ -5217,6 +5217,15 @@ def test_login_sets_last_login_at_register_does_not():
     assert row["last_login_at"]
 
 
+def test_me_updates_last_login_at():
+    client = make_client()
+    reg = register(client, "me_seen", password="pass123456").json()
+    token, uid = reg["token"], reg["user"]["id"]
+    assert not client.app.state.db.get_user(uid).get("last_login_at")
+    assert client.get("/api/me", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+    assert client.app.state.db.get_user(uid)["last_login_at"]
+
+
 def test_inactive_user_policy_and_list_flags():
     from app.db import days_until_purge
 
