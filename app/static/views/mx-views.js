@@ -24,8 +24,8 @@ export function createMxViewsView(dependencies) {
     applySeq: 0, tlDrag: false, tlPreviewIdx: -1,
     hlKey: "", hlPinned: false, boardMode: { topic: "heat", stock: "heat" },
     boardStep: 1, hlDocBound: false };
-  const MXV_BOARD_LIST_LIMIT = 20; // 双榜明细默认条数，超出走「更多」展开
-  const MXV_HEAT_ROWS = 10; // 热力云默认最多行数，超出出「更多」展开
+  const MXV_BOARD_LIST_LIMIT = 4; // 双榜明细默认条数，超出走「更多」展开
+  const MXV_HEAT_ROWS = 4; // 热力云默认最多行数，超出出「更多」展开
 
   // 点页面空白/Esc 解除高亮锁定、关闭月历（工厂级只绑一次；事件里按路由存活状态自然失效）
   if (!_mxv.hlDocBound) {
@@ -569,7 +569,7 @@ export function createMxViewsView(dependencies) {
       const stats = mxvNeutralStats();
       const topicSorted = [...(p.topics || [])].map(mxvFillNeutral("topic", stats)).sort(mxvByHeat);
       const stockSorted = [...(p.stocks || [])].map(mxvFillNeutral("stock", stats)).sort(mxvByHeat);
-      // 双榜「更多」同步步进：任意一榜展开一档，两榜一起多显示一档（明细每档+20，热力一档=解除 10 行限高）
+      // 双榜「更多」同步步进：任意一榜展开一档，两榜一起多显示一档（明细每档+4，热力一档=解除 4 行限高）
       const limit = MXV_BOARD_LIST_LIMIT * _mxv.boardStep;
       const topicList = topicSorted.slice(0, limit);
       const stockList = stockSorted.slice(0, limit);
@@ -598,7 +598,7 @@ export function createMxViewsView(dependencies) {
             onclick="mxvActionsToggle(this,event)">${escapeHtml(actions)}</span>
         </div>`;
       }).join("");
-      // 更多/收起：明细按步进剩余个数提示；热力默认限 10 行，是否溢出由渲染后测量决定（hidden→显示）
+      // 更多/收起：明细按步进剩余个数提示；热力默认限 4 行，是否溢出由渲染后测量决定（hidden→显示）
       const moreBtn = (kind, total) => {
         const btn = (label, extra = "") =>
           `<button type="button" class="mxv-more" onclick="mxvBoardMore('${kind}')"${extra}>${label}</button>`;
@@ -672,7 +672,7 @@ export function createMxViewsView(dependencies) {
     }).join("")}</div>`;
   }
 
-  // 热力云默认最多 10 行：按首块高度×行数限高，溢出才亮出「更多」；展开（步进>1）不限
+  // 热力云默认最多 4 行：按首块高度×行数限高，溢出才亮出「更多」；展开（步进>1）不限
   function mxvApplyHeatClamp() {
     document.querySelectorAll(".mxv-heat-wrap").forEach((wrap) => {
       const chip = wrap.firstElementChild;
@@ -698,7 +698,7 @@ export function createMxViewsView(dependencies) {
     mxvRenderBoards();
   }
 
-  // 双榜「更多/收起」同步步进：任一榜点更多=两榜各多显示一档（明细+20、热力解除限高）；
+  // 双榜「更多/收起」同步步进：任一榜点更多=两榜各多显示一档（明细+4、热力解除限高）；
   // 另一榜若还有更多剩余，会继续亮出「更多」；收起=两榜一起回到默认
   function mxvBoardMore(kind) {
     const p = _mxv.payload || {};
