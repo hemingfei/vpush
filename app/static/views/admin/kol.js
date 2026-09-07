@@ -77,7 +77,14 @@ export function createAdminKolsView(dependencies) {
         ? `<button type="button" class="btn-sm ak-kw-view${blockedCnt ? " status-warn" : ""}" title="${kwList.length ? escapeHtml(kwList.join("、")) : "未设置屏蔽词"}" onclick="adminViewKolBlock(${k.id})">${kwList.length ? `${kwList.length} 个词` : "无屏蔽词"}${blockedCnt ? ` · 拦 ${blockedCnt}` : ""}</button>`
         : '<span class="muted">—</span>';
       const tierSel = `<select class="form-control btn-sm ak-tier-select" aria-label="档位" onchange="adminSetTier(${k.id}, this.value)"><option value="normal" ${!k.priority && !k.secondary ? "selected" : ""}>普通档</option><option value="priority" ${k.priority ? "selected" : ""}>优先档</option><option value="secondary" ${k.secondary ? "selected" : ""}>次要档</option></select>`;
-      const newsSel = `<button type="button" class="btn-sm${k.news_selected ? " status-ok" : ""}" title="${k.news_selected ? "已进「实时资讯」栏目，点击移出" : "勾选进财经资讯「实时资讯」栏目"}" onclick="adminToggleNewsSelected(${k.id}, ${k.news_selected ? 0 : 1})">${k.news_selected ? "已选" : "未选"}</button>`;
+      const newsSelTitle = k.news_selected
+        ? (k.is_private
+          ? "私有大V已进「实时资讯」栏目：其动态在本栏目对所有用户可见，点击移出"
+          : "已进「实时资讯」栏目，点击移出")
+        : (k.is_private
+          ? "勾选进财经资讯「实时资讯」栏目（注意：私有大V勾选后其动态在本栏目对所有用户可见）"
+          : "勾选进财经资讯「实时资讯」栏目，勾选后未订阅用户也能看到");
+      const newsSel = `<button type="button" class="btn-sm${k.news_selected ? " status-ok" : ""}" title="${newsSelTitle}" onclick="adminToggleNewsSelected(${k.id}, ${k.news_selected ? 0 : 1})">${k.news_selected ? "已选" : "未选"}</button>`;
       return `
               <tr class="${highlightIds.has(k.id) ? "ak-row-flash" : ""}">
                 <td class="ak-check"><input type="checkbox" class="kol-check" data-id="${k.id}" ${_adminKolsSelected.has(k.id) ? "checked" : ""} onchange="adminKolToggleSelect(this)" aria-label="选择 ${escapeHtml(k.name)}"></td>

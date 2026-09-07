@@ -2510,13 +2510,11 @@ def create_api_router(
     ):
         """实时资讯：管理员勾选的大V动态流（posts 表聚合，按发布时间倒序）。
 
-        可见性与时间线一致：私有大V只对 ACL 白名单用户可见，拦截/隐藏帖不出；
-        系统 KOL 是内部输出通道，不参与勾选。since_id 供前端轮询增量。
+        栏目语义与时间线互不影响：勾选即对本栏目所有登录用户可见，不受订阅
+        与私有大V ACL 白名单限制（后台显式勾选视为公开到本栏目）；拦截/隐藏
+        帖照常过滤，系统 KOL 不参与勾选。since_id 供前端轮询增量。
         """
-        selected = set(db.news_selected_kol_ids())
-        if not user["is_admin"]:
-            selected &= db.visible_kol_ids(user["id"])
-        kol_ids = sorted(selected)
+        kol_ids = db.news_selected_kol_ids()
         # 多取一条探 has_more，避免为分页再发一次 COUNT
         posts = db.list_feed_posts(
             kol_ids,

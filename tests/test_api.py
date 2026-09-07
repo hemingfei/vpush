@@ -137,14 +137,17 @@ def test_news_seen_rejects_naive_timestamp_and_moves_forward_only():
     ).status_code == 400
 
 
-def test_news_realtime_feed_is_admin_curated_and_acl_scoped():
-    """/api/news/realtime：只出管理员勾选的大V动态；私有大V按 ACL 可见，停用大V不出。"""
+def test_news_realtime_feed_is_admin_curated_and_visible_to_all():
+    """/api/news/realtime：只出管理员勾选的大V动态，停用大V不出。
+
+    栏目与时间线语义解耦：勾选即对所有登录用户可见——不订阅也能看，
+    私有大V不受 ACL 白名单限制（管理员显式勾选视为公开到本栏目）。
+    """
     client = make_client("news-rt-api.db")
     db = client.app.state.db
     admin_headers = auth_headers(client, "rtadmin")
     reg = register(client, "rtuser")
     user_headers_ = {"Authorization": f"Bearer {reg.json()['token']}"}
-    uid = reg.json()["user"]["id"]
 
     kid_a = db.add_kol("xueqiu", "资讯A", "rta1")
     kid_b = db.add_kol("weibo", "未选B", "rtb1")
@@ -153,8 +156,6 @@ def test_news_realtime_feed_is_admin_curated_and_acl_scoped():
     db.update_kol(kid_priv, is_private=True)
     db.set_kols_news_selected([kid_a, kid_off, kid_priv], True)
     db.set_kols_enabled([kid_off], False)
-    # ACL 白名单：私有大V对白名单用户可见
-    db.set_kol_acl(kid_priv, [uid])
 
     # 帖子发布时间取最近几小时（北京时间）：since_id 新帖检测只认近 48h
     from datetime import datetime, timedelta
@@ -167,19 +168,19 @@ def test_news_realtime_feed_is_admin_curated_and_acl_scoped():
     db.insert_post("xueqiu", kid_off, "rtp3", "c", "停用大V动态", "u3", bj(1))
     db.insert_post("xueqiu", kid_priv, "rtp4", "d", "私有大V动态", "u4", bj(0))
 
-    # 白名单用户：勾选 ∩ 可见（资讯A + 私密D），未勾选/停用不出
+    # 勾选 ∩ 启用（资讯A + 私密D），未勾选/停用不出；勾选对全员可见
     feed = client.get("/api/news/realtime", headers=user_headers_)
     assert feed.status_code == 200
     body = feed.json()
     assert [p["external_id"] for p in body["items"]] == ["rtp4", "rtp1"]
     assert body["selected_count"] == 2
     assert body["has_more"] is False
-    # 无 ACL 的用户看不到私有大V的动态
+    # 无 ACL、未订阅的用户同样能看到（含私有大V）：栏目与订阅/白名单互不影响
     other_headers = user_headers(client, "rtuser2")
     other = client.get("/api/news/realtime", headers=other_headers).json()
-    assert [p["external_id"] for p in other["items"]] == ["rtp1"]
-    assert other["selected_count"] == 1
-    # 管理员同样受「启用中」约束，但不受 ACL 约束
+    assert [p["external_id"] for p in other["items"]] == ["rtp4", "rtp1"]
+    assert other["selected_count"] == 2
+    # 管理员视角一致
     admin = client.get("/api/news/realtime", headers=admin_headers).json()
     assert [p["external_id"] for p in admin["items"]] == ["rtp4", "rtp1"]
     # since_id 增量：只回 id 更大的新帖
@@ -197,14 +198,14 @@ def test_news_realtime_feed_is_admin_curated_and_acl_scoped():
     assert put.status_code == 200
     assert put.json()["news_selected"] == 1
     after_add = client.get("/api/news/realtime", headers=other_headers).json()
-    assert [p["external_id"] for p in after_add["items"]] == ["rtp2", "rtp1"]
+    assert [p["external_id"] for p in after_add["items"]] == ["rtp4", "rtp2", "rtp1"]
     batch = client.post(
         "/api/admin/kols/batch", headers=admin_headers,
         json={"ids": [kid_b], "action": "news_unselected"},
     )
     assert batch.status_code == 200
     after_remove = client.get("/api/news/realtime", headers=other_headers).json()
-    assert [p["external_id"] for p in after_remove["items"]] == ["rtp1"]
+    assert [p["external_id"] for p in after_remove["items"]] == ["rtp4", "rtp1"]
     # 管理列表带出勾选状态
     listing = client.get("/api/admin/kols", headers=admin_headers).json()
     flags = {row["id"]: row["news_selected"] for row in listing["items"]}
