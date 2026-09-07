@@ -23,6 +23,12 @@ export function createNewsView(dependencies) {
   let searchTimer = null;
   let rtPollTimer = null;
 
+  // 实时资讯时间：当天只显示时钟，非当天才带日期（fmtPublished 当天返回「今天 HH:MM:SS」）
+  function fmtRtTime(s) {
+    const full = fmtPublished(s);
+    return full.startsWith("今天") ? fmtPublished(s, true) : full;
+  }
+
   function clearNewsImageUrls() {
     for (const url of state.newsImageUrls) URL.revokeObjectURL(url);
     state.newsImageUrls.clear();
@@ -198,7 +204,7 @@ export function createNewsView(dependencies) {
     return `<article class="news-rt-item post-item" data-post-id="${post.id}">
       <div class="p-header">
         <div class="p-name-line">
-          <time class="p-time" datetime="${escapeHtml(post.published_at || "")}" title="${escapeHtml(post.published_at || "")}">${escapeHtml(fmtPublished(post.published_at))}</time>
+          <time class="p-time" datetime="${escapeHtml(post.published_at || "")}" title="${escapeHtml(post.published_at || "")}">${escapeHtml(fmtRtTime(post.published_at))}</time>
           <a class="p-name" href="/kol/${post.kol_id}" title="${escapeHtml(post.kol_name || "")}">${escapeHtml(post.kol_name || "")}</a>
         </div>
       </div>
