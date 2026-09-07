@@ -678,6 +678,7 @@ CREATE TABLE IF NOT EXISTS kols (
     enabled INTEGER NOT NULL DEFAULT 1,
     is_private INTEGER NOT NULL DEFAULT 0,
     original_only INTEGER NOT NULL DEFAULT 0,
+    news_selected INTEGER NOT NULL DEFAULT 0,
     category_id INTEGER,
     priority INTEGER NOT NULL DEFAULT 0,
     extra_data TEXT NOT NULL DEFAULT '',
@@ -1324,6 +1325,9 @@ class DB:
         cols = {row["name"] for row in self._rows("PRAGMA table_info(kols)")}
         if "category_id" not in cols:
             self._conn.execute("ALTER TABLE kols ADD COLUMN category_id INTEGER")
+        # 财经资讯「实时资讯」栏目：管理员勾选参与聚合动态流的大V
+        if "news_selected" not in cols:
+            self._conn.execute("ALTER TABLE kols ADD COLUMN news_selected INTEGER NOT NULL DEFAULT 0")
         if "secondary" not in cols:
             self._conn.execute("ALTER TABLE kols ADD COLUMN secondary INTEGER NOT NULL DEFAULT 0")
         if "silent" not in cols:
@@ -2298,6 +2302,24 @@ class DB:
             (category_id, *ids),
         )
 
+    def set_kols_news_selected(self, ids: list[int], selected: bool) -> None:
+        """批量勾选/取消「实时资讯」栏目聚合的大V。"""
+        placeholders = ",".join("?" * len(ids))
+        self._execute(
+            f"UPDATE kols SET news_selected = ? WHERE id IN ({placeholders})",
+            (1 if selected else 0, *ids),
+        )
+
+    def news_selected_kol_ids(self) -> list[int]:
+        """「实时资讯」栏目勾选的大V：只含启用中的真实大V（系统 KOL 是内部输出通道）。"""
+        return [
+            r["id"]
+            for r in self._rows(
+                "SELECT id FROM kols WHERE news_selected = 1 AND enabled = 1 AND platform != 'system' "
+                "ORDER BY id"
+            )
+        ]
+
     def get_kol_by_external(self, platform: str, external_id: str) -> dict | None:
         """按平台 + 外部ID 查大V（更新 external_id 时的唯一性校验用）。"""
         rows = self._rows(
@@ -2382,6 +2404,7 @@ class DB:
         external_id=None,
         enabled=None,
         original_only=_UNSET,
+        news_selected=_UNSET,
         category_id=_UNSET,
         priority=_UNSET,
         secondary=_UNSET,
@@ -2404,6 +2427,9 @@ class DB:
         if original_only is not _UNSET:
             sets.append("original_only = ?")
             params.append(1 if original_only else 0)
+        if news_selected is not _UNSET:
+            sets.append("news_selected = ?")
+            params.append(1 if news_selected else 0)
         if category_id is not _UNSET:
             sets.append("category_id = ?")
             params.append(category_id)

@@ -14,8 +14,14 @@ export function createNewsView(dependencies) {
     trapFocus,
     fmtPublished,
     externalLinkIcon,
+    avatarHtml,
+    mdToHtml,
+    imgSrcFor,
+    PLATFORM_LABELS,
+    PLATFORM_ICONS,
   } = dependencies;
   let searchTimer = null;
+  let rtPollTimer = null;
 
   function clearNewsImageUrls() {
     for (const url of state.newsImageUrls) URL.revokeObjectURL(url);
@@ -32,6 +38,18 @@ export function createNewsView(dependencies) {
     state.newsThumbObserver = null;
   }
 
+  function stopNewsRtAutoLoad() {
+    state.newsRtObserver?.disconnect();
+    state.newsRtObserver = null;
+  }
+
+  function stopNewsRtPoll() {
+    if (rtPollTimer) {
+      clearInterval(rtPollTimer);
+      rtPollTimer = null;
+    }
+  }
+
   function abortNewsImageRequests() {
     state.newsImageAbort?.abort();
     state.newsImageAbort = new AbortController();
@@ -40,6 +58,8 @@ export function createNewsView(dependencies) {
   function clearNewsReaderState() {
     stopNewsAutoLoad();
     stopNewsThumbLoad();
+    stopNewsRtAutoLoad();
+    stopNewsRtPoll();
     abortNewsImageRequests();
     clearTimeout(searchTimer);
     clearNewsImageUrls();
@@ -51,6 +71,11 @@ export function createNewsView(dependencies) {
     state.newsHasMore = false;
     state.newsArticleId = 0;
     state.newsRequestSeq += 1;
+    state.newsRtItems = [];
+    state.newsRtOffset = 0;
+    state.newsRtHasMore = false;
+    state.newsRtLatestId = 0;
+    state.newsRtSeq += 1;
   }
 
   // 缩略图和正文图都等进入视口再请求，避免一次列表渲染打出几十个图片代理请求
@@ -94,15 +119,195 @@ export function createNewsView(dependencies) {
     }
   }
 
+  // ---------- 页面骨架：财经资讯 = 实时资讯（默认）+ 财经新闻 双栏目 ----------
+
+  function newsTabsHtml(active) {
+    const tab = (id, label) => `<button type="button" class="news-tab${active === id ? " active" : ""}" role="tab" aria-selected="${active === id}" onclick="selectNewsTab('${id}')">${label}</button>`;
+    return `<div class="news-tabs" role="tablist" aria-label="财经资讯栏目">${tab("realtime", "实时资讯")}${tab("articles", "财经新闻")}</div>`;
+  }
+
+  function renderNewsShell(active, panelHtml, headActionsHtml = "") {
+    const main = $("#main");
+    if (!main) return;
+    const meta = active === "realtime"
+      ? "管理员勾选的大V消息动态流，自动更新。"
+      : "按媒体聚合的长文阅读，原文链接保留。";
+    main.innerHTML = `<section class="news-page" id="news-page">
+      <header class="news-page-head"><div><h2 class="section-title">财经资讯</h2><p class="section-meta">${meta}</p></div>${headActionsHtml}</header>
+      ${newsTabsHtml(active)}
+      ${panelHtml}
+    </section>`;
+  }
+
   function renderNewsCenter(seq, articleId = "") {
     clearNewsImageUrls();
     stopNewsAutoLoad();
     stopNewsThumbLoad();
+    stopNewsRtAutoLoad();
+    stopNewsRtPoll();
     abortNewsImageRequests();
     if (!routeStillActive(seq)) return;
     if (articleId) return renderFinancialNewsArticle(Number(articleId), seq);
+    state.newsTab = "realtime"; // 每次进入页面默认显示实时资讯
+    return renderRealtimeNews(seq);
+  }
+
+  function selectNewsTab(tab) {
+    const next = tab === "articles" ? "articles" : "realtime";
+    if (next === state.newsTab) return;
+    state.newsTab = next;
+    stopNewsRtPoll();
+    stopNewsRtAutoLoad();
+    const seq = currentRouteSeq();
+    window.scrollTo(0, 0);
+    if (next === "realtime") return renderRealtimeNews(seq);
     return renderFinancialNewsList(seq);
   }
+
+  // ---------- 实时资讯：管理员勾选的大V动态流 ----------
+
+  function newsRtSkeletonHtml() {
+    const card = '<div class="admin-sk-card"><div class="admin-sk-line admin-sk-head"></div><div class="admin-sk-line"></div></div>';
+    return `<div class="admin-skeleton" aria-hidden="true">${card.repeat(4)}</div>`;
+  }
+
+  async function renderRealtimeNews(seq = currentRouteSeq()) {
+    setPageTitle("财经资讯");
+    renderNewsShell(
+      "realtime",
+      `<div id="news-rt-list" class="news-list news-rt-list">${newsRtSkeletonHtml()}</div><div id="news-rt-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>`,
+    );
+    state.newsRtItems = [];
+    state.newsRtOffset = 0;
+    state.newsRtHasMore = false;
+    state.newsRtLatestId = 0;
+    await loadRealtimeNews(true, seq);
+    startNewsRtPoll(seq);
+  }
+
+  function newsRtItemHtml(post) {
+    const images = (Array.isArray(post.images) ? post.images : []).filter(Boolean);
+    const body = (post.content || "").trim() || "（无正文）";
+    const expanded = state.newsRtExpanded.has(post.id);
+    const shown = expanded ? body : body.slice(0, 200);
+    const title = (post.title || "").trim();
+    // X 帖常 title==content 或正文以标题开头，重复渲染只会有视觉噪音
+    const titleDup = !!title && (title === body || body.startsWith(title));
+    const safeUrl = /^https?:\/\//i.test(post.url || "") ? post.url : "";
+    const tags = Array.isArray(post.tags) ? post.tags : [];
+    return `<article class="news-rt-item post-item" data-post-id="${post.id}">
+      <div class="p-header">
+        ${avatarHtml(post.kol_name, post.avatar_url, post.platform)}
+        <div class="p-name-line">
+          <a class="p-name" href="/kol/${post.kol_id}" title="${escapeHtml(post.kol_name || "")}">${escapeHtml(post.kol_name || "")}</a>
+          <span class="p-platform" data-platform="${escapeHtml(post.platform)}" title="${escapeHtml(PLATFORM_LABELS[post.platform] || post.platform)}">${PLATFORM_ICONS[post.platform] || ""}</span>
+          <time class="p-time" datetime="${escapeHtml(post.published_at || "")}" title="${escapeHtml(post.published_at || "")}">${escapeHtml(fmtPublished(post.published_at))}</time>
+        </div>
+      </div>
+      ${!titleDup && title ? `<div class="p-title">${escapeHtml(title)}</div>` : ""}
+      <div class="p-content md-body">${mdToHtml(shown)}${body.length > 200
+        ? `<button type="button" class="post-expand-btn" onclick="newsRtExpand(${post.id})" aria-expanded="${expanded}">${expanded ? "收起 ▲" : "展开全文 ▼"}</button>`
+        : ""}</div>
+      ${images.length ? `
+        <div class="post-images">
+          ${images.slice(0, 4).map((img) => `
+            <a class="post-img-link" href="#" onclick="event.preventDefault();openLightbox(this.querySelector('img'))" aria-label="查看${escapeHtml(post.kol_name || "")}的配图"><img src="${escapeHtml(imgSrcFor(img))}" loading="lazy" alt="${escapeHtml(post.kol_name || "")} 的配图" onerror="imgOnError(this)"></a>`).join("")}
+          ${images.length > 4 ? `<span class="post-images-more">+${images.length - 4}</span>` : ""}
+        </div>` : ""}
+      <div class="p-meta">
+        ${post.category_name ? `<span class="cat">${escapeHtml(post.category_name)}</span>` : ""}
+        ${tags.slice(0, 6).map((t) => `<span class="cat cat-tag">${escapeHtml(t)}</span>`).join("")}
+        ${safeUrl ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer nofollow">查看原文 →</a>` : ""}
+      </div>
+    </article>`;
+  }
+
+  async function loadRealtimeNews(reset = false, seq = currentRouteSeq()) {
+    const list = $("#news-rt-list");
+    if (!list || !routeStillActive(seq)) return;
+    const requestSeq = ++state.newsRtSeq;
+    if (reset) {
+      stopNewsRtAutoLoad();
+      state.newsRtItems = [];
+      state.newsRtOffset = 0;
+      list.innerHTML = newsRtSkeletonHtml();
+    }
+    const params = new URLSearchParams({ limit: "30", offset: String(state.newsRtOffset) });
+    try {
+      const data = await api(`/api/news/realtime?${params}`);
+      if (!routeStillActive(seq) || requestSeq !== state.newsRtSeq) return;
+      const items = data.items || [];
+      // 追加时按 id 去重：轮询预置新帖后 offset 窗口可能压到边界行
+      const have = new Set(state.newsRtItems.map((p) => p.id));
+      const fresh = reset ? items : items.filter((p) => !have.has(p.id));
+      state.newsRtItems = reset ? items : state.newsRtItems.concat(fresh);
+      state.newsRtOffset = data.next_offset || state.newsRtItems.length;
+      state.newsRtHasMore = !!data.has_more;
+      if (reset) {
+        list.innerHTML = state.newsRtItems.length
+          ? state.newsRtItems.map(newsRtItemHtml).join("")
+          : emptyState(
+            data.selected_count ? "勾选的大V暂时没有动态，稍后再来看看" : "管理员还没有勾选参与实时资讯的大V",
+            state.user?.is_admin && !data.selected_count
+              ? '<div><button type="button" class="btn-normal" onclick="go(\'admin/content?tab=kols\')">去内容管理勾选</button></div>'
+              : "",
+          );
+        state.newsRtLatestId = state.newsRtItems.reduce((max, p) => Math.max(max, Number(p.id) || 0), 0);
+      } else if (fresh.length) {
+        list.insertAdjacentHTML("beforeend", fresh.map(newsRtItemHtml).join(""));
+      }
+      startNewsRtAutoLoad(seq);
+    } catch (err) {
+      if (!routeStillActive(seq) || requestSeq !== state.newsRtSeq) return;
+      list.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="loadRealtimeNews(${reset})">重试</button></div>`);
+    }
+  }
+
+  function startNewsRtAutoLoad(seq) {
+    stopNewsRtAutoLoad();
+    const sentinel = $("#news-rt-load-sentinel");
+    if (!sentinel || !state.newsRtHasMore) return;
+    if ("IntersectionObserver" in window) {
+      state.newsRtObserver = new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) loadRealtimeNews(false, seq);
+      }, { rootMargin: "400px 0px" });
+      state.newsRtObserver.observe(sentinel);
+    }
+  }
+
+  function startNewsRtPoll(seq) {
+    stopNewsRtPoll();
+    rtPollTimer = setInterval(() => pollNewsRtUpdates(seq), 60000);
+  }
+
+  // 增量轮询：新帖直接置顶插入（消息流场景，不用动态页的「点击查看」胶囊）
+  async function pollNewsRtUpdates(seq) {
+    if (document.visibilityState === "hidden") return;
+    const list = $("#news-rt-list");
+    if (!list || !state.newsRtLatestId) return;
+    try {
+      const data = await api(`/api/news/realtime?limit=30&since_id=${state.newsRtLatestId}`);
+      if (!routeStillActive(seq) || !$("#news-rt-list")) return;
+      const incoming = (data.items || []).filter((p) => !state.newsRtItems.some((q) => q.id === p.id));
+      if (!incoming.length) return;
+      state.newsRtLatestId = incoming.reduce((max, p) => Math.max(max, Number(p.id) || 0), state.newsRtLatestId);
+      state.newsRtItems = [...incoming, ...state.newsRtItems];
+      // 新帖插到顶部后，已加载行的分页窗口整体后移
+      state.newsRtOffset += incoming.length;
+      list.insertAdjacentHTML("afterbegin", incoming.map(newsRtItemHtml).join(""));
+    } catch { /* 轮询失败静默，下一轮重试 */ }
+  }
+
+  function newsRtExpand(postId) {
+    const id = Number(postId);
+    if (state.newsRtExpanded.has(id)) state.newsRtExpanded.delete(id);
+    else state.newsRtExpanded.add(id);
+    const post = state.newsRtItems.find((p) => p.id === id);
+    const card = document.querySelector(`.news-rt-item[data-post-id="${id}"]`);
+    if (post && card) card.outerHTML = newsRtItemHtml(post);
+  }
+
+  // ---------- 财经新闻：现有媒体长文栏目 ----------
 
   function newsListItemHtml(item) {
     const thumbnail = item.has_image
@@ -124,31 +329,30 @@ export function createNewsView(dependencies) {
     return `<div class="admin-skeleton" aria-hidden="true">${card.repeat(3)}</div>`;
   }
 
-  function renderNewsListShell(collectionEnabled = true) {
-    const main = $("#main");
-    if (!main) return;
-    main.innerHTML = `<section class="news-page" id="news-page">
-      <header class="news-page-head"><div><h2 class="section-title">财经新闻</h2><p class="section-meta">按媒体聚合的长文阅读，原文链接保留。</p></div><button type="button" class="btn-normal" onclick="openNewsSourcePicker()">我的来源</button></header>
-      ${collectionEnabled ? "" : '<div class="notice notice-warn">管理员已暂停财经新闻采集，历史文章仍可阅读。</div>'}
+  function renderFinancialNewsShell(collectionEnabled = true) {
+    renderNewsShell(
+      "articles",
+      `${collectionEnabled ? "" : '<div class="notice notice-warn">管理员已暂停财经新闻采集，历史文章仍可阅读。</div>'}
       <div class="news-list-toolbar"><select id="news-source-filter" class="form-control" aria-label="新闻来源" onchange="selectNewsSource(this.value)">${newsSourceFilterOptions()}</select><div class="search-bar"><input id="news-query" type="search" placeholder="搜索标题或摘要" value="${escapeHtml(state.newsQuery)}" oninput="queueNewsSearch(this.value)"></div></div>
       <div id="news-list" class="news-list">${newsListSkeletonHtml()}</div>
-      <div id="news-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>
-    </section>`;
+      <div id="news-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>`,
+      '<button type="button" class="btn-normal" onclick="openNewsSourcePicker()">我的来源</button>',
+    );
   }
 
   async function renderFinancialNewsList(seq = currentRouteSeq()) {
-    setPageTitle("财经新闻");
+    setPageTitle("财经资讯");
     clearNewsImageUrls();
     state.newsItems = [];
     state.newsOffset = 0;
     state.newsHasMore = false;
-    renderNewsListShell(true);
+    renderFinancialNewsShell(true);
     try {
       const sources = await api("/api/news/sources");
       if (!routeStillActive(seq)) return;
       state.newsSources = sources.items || [];
       if (state.newsFilterSourceId && !state.newsSources.some((source) => source.selected && String(source.id) === String(state.newsFilterSourceId))) state.newsFilterSourceId = "";
-      renderNewsListShell(sources.collection_enabled !== false);
+      renderFinancialNewsShell(sources.collection_enabled !== false);
       await loadFinancialNews(true, seq);
     } catch (err) {
       if (!routeStillActive(seq)) return;
@@ -212,7 +416,7 @@ export function createNewsView(dependencies) {
   }
 
   async function renderFinancialNewsArticle(articleId, seq = currentRouteSeq()) {
-    setPageTitle("财经新闻", true, "news", "返回财经新闻");
+    setPageTitle("财经资讯", true, "news", "返回财经资讯");
     state.newsArticleId = articleId;
     const main = $("#main");
     if (!main) return;
@@ -303,6 +507,8 @@ export function createNewsView(dependencies) {
   return {
     clearNewsReaderState,
     loadFinancialNews,
+    loadRealtimeNews,
+    newsRtExpand,
     openNewsArticle,
     openNewsSourcePicker,
     queueNewsSearch,
@@ -311,5 +517,6 @@ export function createNewsView(dependencies) {
     renderNewsCenter,
     saveNewsSources,
     selectNewsSource,
+    selectNewsTab,
   };
 }

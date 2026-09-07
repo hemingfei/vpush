@@ -84,6 +84,20 @@ SENTINELS += [
 ]
 
 
+# —— 财经资讯双栏目改造（feat/news-realtime，2026-09-07）——
+# 「财经新闻」改名「财经资讯」并拆双栏目：实时资讯（管理员勾选大V动态流，默认）+ 财经新闻。
+# 改名指纹防发版副本回退到旧文案；kols.news_selected 列是勾选数据载体。
+SENTINELS += [
+    ("app/static/app.js", 'label: "财经资讯"', "桌面导航更名财经资讯"),
+    ("app/static/app.js", 'label: "资讯"', "手机底部导航显示「资讯」"),
+    ("app/static/views/news.js", 'tab("realtime", "实时资讯")', "实时资讯/财经新闻双栏目"),
+    ("app/static/views/news.js", 'state.newsTab = "realtime"', "进入页面默认显示实时资讯"),
+    ("app/static/views/news.js", "/api/news/realtime", "实时资讯聚合端点前端接线"),
+    ("app/static/views/admin/kol.js", "adminToggleNewsSelected", "管理后台大V实时资讯勾选"),
+    ("app/db.py", "news_selected", "kols 表勾选列（SCHEMA + 迁移）"),
+    ("app/api.py", "def news_realtime", "实时资讯聚合 API"),
+]
+
 # —— 静态 CSS 结构完整性（2026-09-06 财经新闻页事故）——
 # c3eb1e5 合并时丢掉 .ak-block-content 的右括号，CSS 嵌套解析把文件尾部
 # （新闻列表/文章页/新闻管理/IMA 手机适配）全部静默嵌套进上一条规则，

@@ -137,6 +137,82 @@ def test_news_seen_rejects_naive_timestamp_and_moves_forward_only():
     ).status_code == 400
 
 
+def test_news_realtime_feed_is_admin_curated_and_acl_scoped():
+    """/api/news/realtime：只出管理员勾选的大V动态；私有大V按 ACL 可见，停用大V不出。"""
+    client = make_client("news-rt-api.db")
+    db = client.app.state.db
+    admin_headers = auth_headers(client, "rtadmin")
+    reg = register(client, "rtuser")
+    user_headers_ = {"Authorization": f"Bearer {reg.json()['token']}"}
+    uid = reg.json()["user"]["id"]
+
+    kid_a = db.add_kol("xueqiu", "资讯A", "rta1")
+    kid_b = db.add_kol("weibo", "未选B", "rtb1")
+    kid_off = db.add_kol("xueqiu", "停用C", "rtc1")
+    kid_priv = db.add_kol("xueqiu", "私密D", "rtd1")
+    db.update_kol(kid_priv, is_private=True)
+    db.set_kols_news_selected([kid_a, kid_off, kid_priv], True)
+    db.set_kols_enabled([kid_off], False)
+    # ACL 白名单：私有大V对白名单用户可见
+    db.set_kol_acl(kid_priv, [uid])
+
+    # 帖子发布时间取最近几小时（北京时间）：since_id 新帖检测只认近 48h
+    from datetime import datetime, timedelta
+
+    def bj(offset_hours: float) -> str:
+        return (datetime.utcnow() + timedelta(hours=8 - offset_hours)).strftime("%Y-%m-%d %H:%M")
+
+    db.insert_post("xueqiu", kid_a, "rtp1", "a", "资讯动态a", "u1", bj(3))
+    db.insert_post("weibo", kid_b, "rtp2", "b", "未勾选动态", "u2", bj(2))
+    db.insert_post("xueqiu", kid_off, "rtp3", "c", "停用大V动态", "u3", bj(1))
+    db.insert_post("xueqiu", kid_priv, "rtp4", "d", "私有大V动态", "u4", bj(0))
+
+    # 白名单用户：勾选 ∩ 可见（资讯A + 私密D），未勾选/停用不出
+    feed = client.get("/api/news/realtime", headers=user_headers_)
+    assert feed.status_code == 200
+    body = feed.json()
+    assert [p["external_id"] for p in body["items"]] == ["rtp4", "rtp1"]
+    assert body["selected_count"] == 2
+    assert body["has_more"] is False
+    # 无 ACL 的用户看不到私有大V的动态
+    other_headers = user_headers(client, "rtuser2")
+    other = client.get("/api/news/realtime", headers=other_headers).json()
+    assert [p["external_id"] for p in other["items"]] == ["rtp1"]
+    assert other["selected_count"] == 1
+    # 管理员同样受「启用中」约束，但不受 ACL 约束
+    admin = client.get("/api/news/realtime", headers=admin_headers).json()
+    assert [p["external_id"] for p in admin["items"]] == ["rtp4", "rtp1"]
+    # since_id 增量：只回 id 更大的新帖
+    rtp1_id = next(p["id"] for p in body["items"] if p["external_id"] == "rtp1")
+    newer = client.get(f"/api/news/realtime?since_id={rtp1_id}", headers=user_headers_).json()
+    assert [p["external_id"] for p in newer["items"]] == ["rtp4"]
+    # 分页：limit=1 时 has_more 为真
+    paged = client.get("/api/news/realtime?limit=1", headers=user_headers_).json()
+    assert len(paged["items"]) == 1 and paged["has_more"] is True
+    # 未登录拿不到
+    assert client.get("/api/news/realtime").status_code == 401
+
+    # 管理端勾选：单个 PUT + 批量 action，勾选后动态即时进出栏目
+    put = client.put(f"/api/kols/{kid_b}", headers=admin_headers, json={"news_selected": True})
+    assert put.status_code == 200
+    assert put.json()["news_selected"] == 1
+    after_add = client.get("/api/news/realtime", headers=other_headers).json()
+    assert [p["external_id"] for p in after_add["items"]] == ["rtp2", "rtp1"]
+    batch = client.post(
+        "/api/admin/kols/batch", headers=admin_headers,
+        json={"ids": [kid_b], "action": "news_unselected"},
+    )
+    assert batch.status_code == 200
+    after_remove = client.get("/api/news/realtime", headers=other_headers).json()
+    assert [p["external_id"] for p in after_remove["items"]] == ["rtp1"]
+    # 管理列表带出勾选状态
+    listing = client.get("/api/admin/kols", headers=admin_headers).json()
+    flags = {row["id"]: row["news_selected"] for row in listing["items"]}
+    assert flags[kid_a] == 1 and flags[kid_b] == 0
+    # 普通用户不能改勾选
+    assert client.put(
+        f"/api/kols/{kid_a}", headers=user_headers_, json={"news_selected": True},
+    ).status_code == 403
 
 
 def test_news_disabled_cache_archived_detail_and_image_headers(monkeypatch):

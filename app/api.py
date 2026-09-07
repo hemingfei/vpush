@@ -440,13 +440,16 @@ class KolUpdate(BaseModel):
     visible_users: list[str] | None = None
     original_only: bool | None = None
     silent: bool | None = None
+    news_selected: bool | None = None
     block_keywords: list[str] | None = None
     recommend_weight: int | None = None
 
 
 class KolBatchAction(BaseModel):
     ids: list[int]
-    action: str  # enable|disable|priority|secondary|normal|category|delete
+    # action: enable|disable|priority|secondary|normal|category|delete|
+    #         news_selected|news_unselected（实时资讯栏目勾选）
+    action: str
     value: bool | int | None = None
 
 
@@ -2497,6 +2500,42 @@ def create_api_router(
         normalized = value.astimezone(UTC).isoformat()
         db.advance_news_seen(user["id"], normalized)
         return {"ok": True, "news_last_seen_at": normalized}
+
+    @router.get("/news/realtime")
+    def news_realtime(
+        limit: int = Query(30, ge=1, le=100),
+        offset: int = Query(0, ge=0),
+        since_id: int | None = Query(None),
+        user: dict = Depends(get_current_user),
+    ):
+        """实时资讯：管理员勾选的大V动态流（posts 表聚合，按发布时间倒序）。
+
+        可见性与时间线一致：私有大V只对 ACL 白名单用户可见，拦截/隐藏帖不出；
+        系统 KOL 是内部输出通道，不参与勾选。since_id 供前端轮询增量。
+        """
+        selected = set(db.news_selected_kol_ids())
+        if not user["is_admin"]:
+            selected &= db.visible_kol_ids(user["id"])
+        kol_ids = sorted(selected)
+        # 多取一条探 has_more，避免为分页再发一次 COUNT
+        posts = db.list_feed_posts(
+            kol_ids,
+            limit=limit + 1,
+            user_id=user["id"],
+            offset=max(offset, 0),
+            include_secondary=True,
+            since_id=since_id,
+        )
+        has_more = len(posts) > limit
+        posts = apply_twitter_feed(posts[:limit], user)
+        db.attach_view_directions(posts)
+        return {
+            "items": posts,
+            "offset": offset,
+            "next_offset": offset + len(posts),
+            "has_more": has_more,
+            "selected_count": len(kol_ids),
+        }
 
     @router.get("/news/{article_id}")
     def news_article(article_id: int, user: dict = Depends(get_current_user)):
@@ -5531,6 +5570,8 @@ def create_api_router(
             db.set_kols_flag(body.ids, "secondary", False)
         elif action == "category":
             db.set_kols_category(body.ids, body.value)
+        elif action in ("news_selected", "news_unselected"):
+            db.set_kols_news_selected(body.ids, action == "news_selected")
         elif action == "delete":
             for kol_id in body.ids:
                 db.delete_kol(kol_id)
@@ -5887,6 +5928,8 @@ def create_api_router(
             db.update_kol(kol_id, is_private=body.is_private)
         if "silent" in body.model_fields_set and body.silent is not None:
             db.update_kol(kol_id, silent=body.silent)
+        if "news_selected" in body.model_fields_set and body.news_selected is not None:
+            db.update_kol(kol_id, news_selected=body.news_selected)
         if "original_only" in body.model_fields_set and body.original_only is not None:
             db.update_kol(kol_id, original_only=body.original_only)
         if "block_keywords" in body.model_fields_set and body.block_keywords is not None:

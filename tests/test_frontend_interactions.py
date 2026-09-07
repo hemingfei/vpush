@@ -4289,9 +4289,45 @@ def test_financial_news_navigation_keeps_quick_news_in_timeline():
     nav = src[src.index("const NAV ="):src.index("const SIDEBAR_SLIM_KEY")]
     mobile = src[src.index("const MOBILE_NAV ="):src.index("function renderBottomNav")]
     assert nav.index('route: "timeline"') < nav.index('route: "news"') < nav.index('route: "knowledge"')
-    assert 'label: "财经新闻"' in nav
+    # 页面更名财经资讯：桌面导航「财经资讯」，手机底部导航窄屏显示「资讯」
+    assert 'label: "财经资讯"' in nav
+    assert 'label: "资讯"' in mobile
     assert 'route: "news"' in mobile
     assert 'data-platform="live"' in _fn_body("tlPillsHtml")
+
+
+def test_news_center_has_realtime_and_articles_tabs():
+    """财经资讯页双栏目：实时资讯（管理员勾选大V动态流，默认展示）+ 财经新闻。"""
+    src = NEWS_JS.read_text()
+    tabs = _fn_body("newsTabsHtml", NEWS_JS)
+    assert 'tab("realtime", "实时资讯")' in tabs
+    assert 'tab("articles", "财经新闻")' in tabs
+    center = _fn_body("renderNewsCenter", NEWS_JS)
+    assert 'state.newsTab = "realtime"' in center
+    realtime = _fn_body("loadRealtimeNews", NEWS_JS)
+    assert "/api/news/realtime" in realtime
+    poll = _fn_body("pollNewsRtUpdates", NEWS_JS)
+    assert "since_id" in poll
+    switch = _fn_body("selectNewsTab", NEWS_JS)
+    assert "stopNewsRtPoll" in switch
+    # 离开页面必须停掉轮询与无限滚动
+    clear = _fn_body("clearNewsReaderState", NEWS_JS)
+    assert "stopNewsRtPoll" in clear and "stopNewsRtAutoLoad" in clear
+    app_src = APP_JS.read_text()
+    deps = app_src[app_src.index("createNewsView({"):]
+    for dep in ("avatarHtml", "mdToHtml", "imgSrcFor", "PLATFORM_LABELS", "PLATFORM_ICONS"):
+        assert dep in deps[:400]  # 实时资讯卡片渲染依赖必须注入视图
+
+
+def test_admin_kols_list_has_news_selection_controls():
+    """管理后台大V列表：单个「资讯」勾选 + 批量加入/移出实时资讯。"""
+    src = ADMIN_KOLS_JS.read_text()
+    assert "adminToggleNewsSelected" in src
+    assert "news_selected" in src
+    assert "批量加入资讯" in src
+    assert "批量移出资讯" in src
+    app_src = APP_JS.read_text()
+    assert "adminToggleNewsSelected" in app_src
 
 
 def test_financial_news_visibility_is_runtime_controlled():

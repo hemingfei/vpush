@@ -77,6 +77,7 @@ export function createAdminKolsView(dependencies) {
         ? `<button type="button" class="btn-sm ak-kw-view${blockedCnt ? " status-warn" : ""}" title="${kwList.length ? escapeHtml(kwList.join("、")) : "未设置屏蔽词"}" onclick="adminViewKolBlock(${k.id})">${kwList.length ? `${kwList.length} 个词` : "无屏蔽词"}${blockedCnt ? ` · 拦 ${blockedCnt}` : ""}</button>`
         : '<span class="muted">—</span>';
       const tierSel = `<select class="form-control btn-sm ak-tier-select" aria-label="档位" onchange="adminSetTier(${k.id}, this.value)"><option value="normal" ${!k.priority && !k.secondary ? "selected" : ""}>普通档</option><option value="priority" ${k.priority ? "selected" : ""}>优先档</option><option value="secondary" ${k.secondary ? "selected" : ""}>次要档</option></select>`;
+      const newsSel = `<button type="button" class="btn-sm${k.news_selected ? " status-ok" : ""}" title="${k.news_selected ? "已进「实时资讯」栏目，点击移出" : "勾选进财经资讯「实时资讯」栏目"}" onclick="adminToggleNewsSelected(${k.id}, ${k.news_selected ? 0 : 1})">${k.news_selected ? "已选" : "未选"}</button>`;
       return `
               <tr class="${highlightIds.has(k.id) ? "ak-row-flash" : ""}">
                 <td class="ak-check"><input type="checkbox" class="kol-check" data-id="${k.id}" ${_adminKolsSelected.has(k.id) ? "checked" : ""} onchange="adminKolToggleSelect(this)" aria-label="选择 ${escapeHtml(k.name)}"></td>
@@ -89,6 +90,7 @@ export function createAdminKolsView(dependencies) {
                 <td class="ak-hide-mobile" data-label="原创">${orig}</td>
                 <td data-label="可见性">${k.is_private ? '<span class="status-warn">私有</span>' : "公开"}</td>
                 <td class="ak-hide-mobile" data-label="屏蔽词">${kwCell}</td>
+                <td data-label="资讯">${newsSel}</td>
                 <td data-label="状态" class="${k.enabled ? "status-ok" : "status-fail"}">${k.enabled ? "启用" : "停用"}</td>
                 <td class="ak-actions" data-label="操作">
                   ${tierSel}
@@ -140,13 +142,15 @@ export function createAdminKolsView(dependencies) {
           <button class="btn-sm" onclick="adminKolBatch('normal')">批量设普通</button>
           <select id="ak-batch-category" class="form-control" style="width:auto"><option value="">批量改分类…</option>${catOptions}<option value="0">（清除分类）</option></select>
           <button class="btn-sm" onclick="adminKolBatchCategory()">应用分类</button>
+          <button class="btn-sm" onclick="adminKolBatch('news_selected', true)">批量加入资讯</button>
+          <button class="btn-sm" onclick="adminKolBatch('news_unselected')">批量移出资讯</button>
           <button class="btn-sm danger" onclick="adminKolBatch('delete')">批量删除</button>
           <button class="btn-sm" onclick="adminKolClearSelect()">取消选择</button>
         </div>
         <div class="table-wrap">
           <table class="ak-table">
-            <thead><tr><th scope="col" style="width:32px"><input type="checkbox" id="ak-checkall" onchange="adminKolTogglePage(this)" aria-label="全选当前页"></th><th scope="col">ID</th><th scope="col">平台</th><th scope="col">昵称</th><th scope="col">分类</th><th scope="col">外部ID</th><th scope="col">档位</th><th scope="col">原创</th><th scope="col">可见性</th><th scope="col">屏蔽词</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead>
-            <tbody>${rows || `<tr class="ak-empty"><td colspan="12" class="muted">${state.adminKolsQ || state.adminKolsCategory || state.adminKolsStatus !== "" || state.adminKolsPlatform ? "没有匹配的大V" : "还没有大V，先用上方表单添加"}</td></tr>`}</tbody>
+            <thead><tr><th scope="col" style="width:32px"><input type="checkbox" id="ak-checkall" onchange="adminKolTogglePage(this)" aria-label="全选当前页"></th><th scope="col">ID</th><th scope="col">平台</th><th scope="col">昵称</th><th scope="col">分类</th><th scope="col">外部ID</th><th scope="col">档位</th><th scope="col">原创</th><th scope="col">可见性</th><th scope="col">屏蔽词</th><th scope="col" title="财经资讯「实时资讯」栏目">资讯</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead>
+            <tbody>${rows || `<tr class="ak-empty"><td colspan="13" class="muted">${state.adminKolsQ || state.adminKolsCategory || state.adminKolsStatus !== "" || state.adminKolsPlatform ? "没有匹配的大V" : "还没有大V，先用上方表单添加"}</td></tr>`}</tbody>
           </table>
         </div>
         <div class="pager">
@@ -589,6 +593,17 @@ export function createAdminKolsView(dependencies) {
     try {
       await api(`/api/kols/${id}`, { method: "PUT", body: JSON.stringify({ enabled: !!enabled }) });
       flash(`已${enabled ? "启用" : "停用"}「${kol ? kol.name : "该大V"}」`);
+      loadAdminKols();
+    } catch (err) {
+      flash("操作失败: " + err.message, "error");
+    }
+  }
+
+  async function adminToggleNewsSelected(id, selected) {
+    const kol = state.adminKols.find((k) => k.id === id);
+    try {
+      await api(`/api/kols/${id}`, { method: "PUT", body: JSON.stringify({ news_selected: !!selected }) });
+      flash(`已${selected ? "加入" : "移出"}实时资讯「${kol ? kol.name : "该大V"}」`);
       loadAdminKols();
     } catch (err) {
       flash("操作失败: " + err.message, "error");
@@ -1875,6 +1890,7 @@ export function createAdminKolsView(dependencies) {
     adminBatchAddKols,
     adminBatchLinesHint,
     adminToggleKol,
+    adminToggleNewsSelected,
     adminTogglePriority,
     adminToggleSecondary,
     adminDeleteKol,

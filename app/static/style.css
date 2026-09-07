@@ -5810,6 +5810,13 @@ html:not(.theme-dark) .ai-form-select option {
 .news-list-item p { display: -webkit-box; margin: 0; overflow: hidden; color: var(--color-text-muted); font-size: var(--text-sm); line-height: 1.55; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .news-new-label { padding: 1px 5px; border-radius: var(--radius-sm); background: var(--color-accent-soft); color: var(--color-accent); font-weight: var(--font-weight-medium); }
 .news-load-sentinel { min-height: 24px; }
+/* 财经资讯双栏目：实时资讯（默认）/ 财经新闻 */
+.news-tabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: var(--border-default); overflow-x: auto; }
+.news-tab { flex: none; padding: 10px 16px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--color-text-muted); font: inherit; font-size: var(--text-body); cursor: pointer; white-space: nowrap; }
+.news-tab:hover { color: var(--color-text-strong); }
+.news-tab.active { color: var(--color-accent); border-bottom-color: var(--color-accent); font-weight: var(--font-weight-medium); }
+.news-rt-list { display: block; }
+.news-rt-list .post-item { padding: 14px 2px; }
 .news-article-page { max-width: 780px; margin: 0 auto; min-width: 0; }
 .news-article-head { position: relative; padding-bottom: 16px; border-bottom: var(--border-default); }
 .news-article-meta { display: flex; gap: 10px; flex-wrap: wrap; color: var(--color-text-muted); font-size: var(--text-sm); }
