@@ -5313,16 +5313,26 @@ class DB:
                 item["extraction"] = extra
         return items
 
-    def pending_report_extractions(self, limit: int = 40) -> list[dict]:
-        """待抽取研报：有 txt、尚无抽取行；新文档优先（增量先跟上，存量慢慢回刷）。"""
+    def pending_report_extractions(
+        self, limit: int = 40, group_ids: list[str] | None = None
+    ) -> list[dict]:
+        """待抽取研报：有 txt 或 pdf、尚无抽取行；新文档优先（增量先跟上，存量慢慢回刷）。"""
+        params: list = []
+        where = ["d.has_txt = 1 AND d.txt_path != '' OR d.has_pdf = 1 AND d.pdf_path != ''"]
+        groups = [str(g).strip() for g in (group_ids or []) if str(g).strip()]
+        if groups:
+            where.append(f"d.group_id IN ({', '.join('?' for _ in groups)})")
+            params.extend(groups)
+        params.append(max(int(limit), 1))
         return self._rows(
-            "SELECT d.group_id, d.media_id, d.txt_path, d.name, d.sort_date "
+            "SELECT d.group_id, d.media_id, d.txt_path, d.pdf_path, d.name, d.sort_date "
             "FROM ima_document_index d LEFT JOIN report_extractions re "
             "ON re.group_id = d.group_id AND re.media_id = d.media_id "
-            "WHERE d.has_txt = 1 AND d.txt_path != '' AND re.media_id IS NULL "
+            f"WHERE ({where[0]}) AND {' AND '.join(where[1:]) or '1=1'} "
+            "AND re.media_id IS NULL "
             "ORDER BY (d.sort_date = '') ASC, d.sort_date DESC, d.group_id, d.media_id "
             "LIMIT ?",
-            (max(int(limit), 1),),
+            params,
         )
 
     def save_report_extraction(

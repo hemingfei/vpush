@@ -2625,15 +2625,25 @@ class Scheduler:
         if site_llm is None:
             return 0
         model = db.get_setting("report_extract_model") or "gemini-3.8-flash-high"
+        # 默认圈定研报类知识库（投行/中金/SemiAnalysis/外行），排除飞书短讯类
+        groups = [
+            g.strip()
+            for g in (
+                db.get_setting("report_extract_groups")
+                or "7479082602225992,local-cicc-research,7476629605476515,legacy"
+            ).split(",")
+            if g.strip()
+        ]
         from .llm import extract_report_structure
         from .stock_universe import bundled_universe_codes
+        from .report_text import pdf_first_pages_text as _pdf_first_pages_text
 
         universe = bundled_universe_codes()
         resolve = self.ima_archive_file
         if resolve is None:
             return 0
-        batch = min(40, daily_limit - done_today)
-        docs = db.pending_report_extractions(limit=batch)
+        batch = min(80, daily_limit - done_today)
+        docs = db.pending_report_extractions(limit=batch, group_ids=groups or None)
         if not docs:
             return 0
         import hashlib
@@ -2643,18 +2653,25 @@ class Scheduler:
         for doc in docs:
             group_id = str(doc["group_id"] or "")
             media_id = str(doc["media_id"] or "")
-            txt_path = resolve(doc["txt_path"])
-            if txt_path is None:
+            # txt 优先；txt 缺失（如中金只有 PDF）走 pymupdf 前几页兜底
+            source_path = resolve(doc["txt_path"] or doc["pdf_path"])
+            pdf_path = resolve(doc["pdf_path"]) if doc["pdf_path"] else None
+            if source_path is None:
                 # 路径解析失败可能是存储机暂时不可读：不落行，下轮重试
                 unresolved += 1
                 continue
-            if not txt_path.is_file():
-                db.save_report_extraction(group_id, media_id, status="nofile")
-                continue
             try:
-                text = txt_path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                db.save_report_extraction(group_id, media_id, status="nofile")
+                if source_path.is_file():
+                    text = source_path.read_text(encoding="utf-8", errors="replace")
+                elif pdf_path is not None and pdf_path.is_file():
+                    text = _pdf_first_pages_text(pdf_path)
+                else:
+                    text = ""
+            except (OSError, ValueError):
+                text = ""
+            if not text.strip():
+                # txt 与 pdf 都取不到文本：落行防重试（修复文本源后可重置重抽）
+                db.save_report_extraction(group_id, media_id, status="notext")
                 continue
             txt_hash = hashlib.sha256(text[:20000].encode("utf-8", "ignore")).hexdigest()[:16]
             try:
