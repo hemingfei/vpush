@@ -2653,20 +2653,20 @@ class Scheduler:
         for doc in docs:
             group_id = str(doc["group_id"] or "")
             media_id = str(doc["media_id"] or "")
-            # txt 优先；txt 缺失（如中金只有 PDF）走 pymupdf 前几页兜底
-            source_path = resolve(doc["txt_path"] or doc["pdf_path"])
+            # txt 优先；txt 缺失（如中金/投行库只有 PDF）走 pymupdf 前几页兜底
+            has_txt = bool(doc["txt_path"])
+            txt_path = resolve(doc["txt_path"]) if has_txt else None
             pdf_path = resolve(doc["pdf_path"]) if doc["pdf_path"] else None
-            if source_path is None:
-                # 路径解析失败可能是存储机暂时不可读：不落行，下轮重试
+            if has_txt and txt_path is None:
+                # 应存在的 txt 路径解析失败，可能是存储机暂时不可读：不落行，下轮重试
                 unresolved += 1
                 continue
+            text = ""
             try:
-                if source_path.is_file():
-                    text = source_path.read_text(encoding="utf-8", errors="replace")
+                if txt_path is not None and txt_path.is_file():
+                    text = txt_path.read_text(encoding="utf-8", errors="replace")
                 elif pdf_path is not None and pdf_path.is_file():
                     text = _pdf_first_pages_text(pdf_path)
-                else:
-                    text = ""
             except (OSError, ValueError):
                 text = ""
             if not text.strip():
