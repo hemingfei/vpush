@@ -2442,8 +2442,7 @@ def create_api_router(
 
     @router.get("/news/sources")
     def news_sources(user: dict = Depends(get_current_user)):
-        selected_ids = set(db.list_user_news_source_ids(user["id"]))
-        statuses = {row["id"]: row for row in db.news_source_statuses(user["id"])}
+        statuses = {row["id"]: row for row in db.news_source_statuses()}
         items = []
         for source in db.list_news_sources():
             status = statuses.get(source["id"], {"code": "paused", "last_success_at": None})
@@ -2452,7 +2451,6 @@ def create_api_router(
                 "slug": source["slug"],
                 "name": source["name"],
                 "enabled": bool(source["enabled"]),
-                "selected": source["id"] in selected_ids,
                 "status": status["code"],
                 "last_success_at": status["last_success_at"],
             })
@@ -2469,9 +2467,6 @@ def create_api_router(
         q: str = Query("", max_length=200),
         user: dict = Depends(get_current_user),
     ):
-        selected_ids = set(db.list_user_news_source_ids(user["id"]))
-        if source_id is not None and source_id not in selected_ids:
-            raise HTTPException(status_code=400, detail="只能筛选已选择的新闻来源")
         view_started_at = datetime.now(UTC).isoformat()
         anchor = (db.get_user(user["id"]) or {}).get("news_last_seen_at")
         rows = db.list_news_articles(
@@ -2489,7 +2484,7 @@ def create_api_router(
             "next_offset": offset + len(items),
             "has_more": offset + len(items) < total,
             "view_started_at": view_started_at,
-            "source_statuses": db.news_source_statuses(user["id"]),
+            "source_statuses": db.news_source_statuses(),
         }
 
     @router.post("/news/seen")
@@ -2512,6 +2507,7 @@ def create_api_router(
         limit: int = Query(30, ge=1, le=100),
         offset: int = Query(0, ge=0),
         since_id: int | None = Query(None),
+        q: str = Query("", max_length=200),
         user: dict = Depends(get_current_user),
     ):
         """实时资讯：管理员勾选的大V动态流（posts 表聚合，按发布时间倒序）。
@@ -2529,6 +2525,7 @@ def create_api_router(
             offset=max(offset, 0),
             include_secondary=True,
             since_id=since_id,
+            q=(q or "").strip() or None,
         )
         has_more = len(posts) > limit
         posts = apply_twitter_feed(posts[:limit], user)

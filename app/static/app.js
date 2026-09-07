@@ -96,6 +96,7 @@ const state = {
   newsRtOffset: 0,
   newsRtHasMore: false,
   newsRtLatestId: 0,
+  newsRtPending: [], // 轮询拉到的新帖（点返回顶部按钮时再插到列表顶部）
   newsRtSeq: 0,
   newsRtObserver: null,
   newsRtExpanded: new Set(),
@@ -665,8 +666,8 @@ function avatarHtml(name, url, platform) {
 const NAV = [
   { group: "订阅", items: [
     { route: "timeline", icon: LIST_ICON, label: "最新动态" },
-    { route: "mx-views", icon: MX_VIEWS_ICON, label: "智囊团" },
     { route: "news", icon: NEWS_ICON, label: "财经资讯" },
+    { route: "mx-views", icon: MX_VIEWS_ICON, label: "观点研判" },
     { route: "knowledge", icon: BOOK_ICON, label: "研报中心" },
     { route: "home", icon: GRID_ICON, label: "订阅广场" },
     { route: "settings", icon: GEAR_ICON, label: "个人设置" },
@@ -674,7 +675,7 @@ const NAV = [
   { group: "管理", admin: true, items: [
     { route: "admin/content", icon: DASHBOARD_ICON, label: "内容管理", badge: "requests" },
     { route: "admin/ai-analysis", icon: BRAIN_ICON, label: "AI分析" },
-    { route: "admin/mx-views", icon: MX_VIEWS_ICON, label: "智囊团" },
+    { route: "admin/mx-views", icon: MX_VIEWS_ICON, label: "观点研判" },
     { route: "admin/stats", icon: BOOK_ICON, label: "数据源" },
     { route: "admin/knowledge", icon: BOOK_ICON, label: "研报设置" },
     { route: "admin/ops", icon: FILE_TEXT_ICON, label: "帖子与日志" },
@@ -737,8 +738,8 @@ function renderSidebar(user) {
 
 const MOBILE_NAV = [
   { route: "timeline", icon: LIST_ICON, label: "动态" },
-  { route: "mx-views", icon: MX_VIEWS_ICON, label: "智囊团" },
   { route: "news", icon: NEWS_ICON, label: "资讯" },
+  { route: "mx-views", icon: MX_VIEWS_ICON, label: "研判" },
   { route: "home", icon: GRID_ICON, label: "广场" },
   { route: "settings", icon: GEAR_ICON, label: "个人设置" },
 ];
@@ -2376,7 +2377,7 @@ async function renderTimeline(seq) {
       </div>
     </aside>` : ""}
     </div>
-    <button type="button" id="tl-backtop" class="tl-backtop" aria-label="返回顶部" title="返回顶部" onclick="tlScrollToTop()">${ARROW_UP_ICON}</button>`;
+    <button type="button" id="tl-backtop" class="tl-backtop" aria-label="返回顶部" title="返回顶部" onclick="tlBacktopClick()">${ARROW_UP_ICON}<span class="tl-backtop-new" id="tl-backtop-new" hidden></span></button>`;
   tlSyncNewBadgeMode();
   startMarketQuotes();
   if (live) startLiveClock();
@@ -2573,10 +2574,11 @@ async function pollFeedUpdates() {
     }
     $("#tl-new-badge")?.classList.add("show");
     $("#tl-feed-panel")?.classList.add("has-new");
-    
-    // 自动刷新显示新消息并播放提示音
+
+    // 不自动刷新/滚回顶部：只提示（提示条 + 提示音 + 返回顶部按钮角标），
+    // 新帖等用户点提示条或返回顶部按钮时再插入
     playNotificationSound();
-    refreshTimeline();
+    tlSyncBacktopNew();
   } catch { /* 轮询失败静默 */ }
 }
 
@@ -2640,6 +2642,7 @@ async function refreshTimeline() {
     }
     $("#tl-new-badge")?.classList.remove("show");
     $("#tl-feed-panel")?.classList.remove("has-new");
+    tlSyncBacktopNew();
     window.scrollTo({ top: 0, behavior: "smooth" });
   } finally {
     _tlRefreshing = false;
@@ -2816,8 +2819,26 @@ function tlSyncScrollChrome() {
     else if (delta > 2 && y > 120) bar.classList.add("tl-bars-hidden");
   }
   const backtop = $("#tl-backtop");
-  if (backtop) backtop.classList.toggle("show", isMobileTimelineFilter() && y > 600);
+  if (backtop) backtop.classList.toggle("show", y > 600 || feedPendingNew().length > 0);
   _tlScrollLastY = y;
+}
+
+// 返回顶部按钮上的新帖角标：有待看新帖时显示条数（点击按钮回顶并加载新帖）
+function tlSyncBacktopNew() {
+  const tip = $("#tl-backtop-new");
+  if (!tip) return;
+  const n = feedPendingNew().length;
+  tip.hidden = !n;
+  tip.textContent = n > 99 ? "99+" : String(n);
+  $("#tl-backtop")?.classList.toggle("has-new", n > 0);
+}
+
+function tlBacktopClick() {
+  if (feedPendingNew().length) {
+    refreshTimeline();
+    return;
+  }
+  tlScrollToTop();
 }
 
 function tlScrollToTop() {
@@ -3110,6 +3131,7 @@ async function loadTimeline(reset = true, routeSeq, opts) {
         _livePendingLatestId = 0;
         $("#tl-new-badge")?.classList.remove("show");
         $("#tl-feed-panel")?.classList.remove("has-new");
+        tlSyncBacktopNew();
       }
     } else {
       const params = new URLSearchParams({ limit: "50", offset: String(reset ? 0 : _tlOffset) });
@@ -3136,6 +3158,7 @@ async function loadTimeline(reset = true, routeSeq, opts) {
         _tlPendingLatestId = 0;
         $("#tl-new-badge")?.classList.remove("show");
         $("#tl-feed-panel")?.classList.remove("has-new");
+        tlSyncBacktopNew();
       }
     }
     renderFeed();
@@ -3438,8 +3461,13 @@ function tlToggleOrigin(id) {
 function parsePublished(s) {
   const raw = String(s || "").trim();
   if (!raw) return null;
+  // 带时区标记（Z 或 ±hh:mm）的字符串交给 Date 原生解析；财经新闻后端存的是 UTC ISO 时间
+  if (/z$/i.test(raw) || /[+-]\d{2}:?\d{2}$/.test(raw)) {
+    const tz = new Date(raw);
+    return isNaN(tz.getTime()) ? null : tz;
+  }
   const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(raw);
-  if (m) return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4] - 8, +m[5], +(m[6] || 0)));
+  if (m) return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4] - 8, +m[5], +(m[6] || 0))); // 无时区裸时间视为北京时间
   const d = new Date(raw); // RFC2822 等 JS 可解析格式（带时区偏移，正确换算本地时间）
   return isNaN(d.getTime()) ? null : d;
 }
@@ -5651,14 +5679,14 @@ const {
   clearNewsReaderState,
   loadFinancialNews,
   loadRealtimeNews,
+  newsRtBacktopClick,
   newsRtExpand,
   openNewsArticle,
-  openNewsSourcePicker,
   queueNewsSearch,
+  queueNewsRtSearch,
   renderFinancialNewsArticle,
   renderFinancialNewsList,
   renderNewsCenter,
-  saveNewsSources,
   selectNewsSource,
   selectNewsTab,
 } = createNewsView({
@@ -5676,6 +5704,7 @@ const {
   trapFocus,
   fmtPublished,
   externalLinkIcon: EXTERNAL_LINK_ICON,
+  upArrowIcon: ARROW_UP_ICON,
   avatarHtml,
   mdToHtml,
   imgSrcFor,
@@ -7873,13 +7902,13 @@ const INLINE_HANDLERS = {
   openNewsArticle,
   openNewsFeedModal,
   openNewsSourceModal,
-  openNewsSourcePicker,
   pasteCookieField,
   pickHomeCategory,
   purgeZsxqCache,
   queueFeishuDocumentPreview,
   queueImaDocumentsSearch,
   queueNewsSearch,
+  queueNewsRtSearch,
   quickSubscribe,
   railToggleSubscribe,
   refreshAdminNewsFeed,
@@ -7921,7 +7950,6 @@ const INLINE_HANDLERS = {
   saveKeywordsMatchReports,
   saveKolEdit,
   saveLlm,
-  saveNewsSources,
   saveNotify,
   savePassword,
   savePollingConfig,
@@ -8089,6 +8117,8 @@ const INLINE_HANDLERS = {
   // ---- hmf：其余内联 onclick 引用但漏挂 window 的处理器（补 openRawModal 同类缺口）----
   viewAiReportPost,
   tlScrollToTop,
+  tlBacktopClick,
+  newsRtBacktopClick,
   tlToggleKolbar,
   tlPickKol,
   mxRawRemoveTag,

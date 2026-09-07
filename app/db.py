@@ -3628,14 +3628,13 @@ class DB:
             return cur.rowcount
 
     def _news_article_filter(
-        self, user_id: int, source_id: int | None, q: str
+        self, source_id: int | None, q: str
     ) -> tuple[str, list[object]]:
         conds = [
-            "u.user_id = ?",
             "s.id = a.source_id",
             "s.archived_at IS NULL",
         ]
-        params: list[object] = [user_id]
+        params: list[object] = []
         if source_id is not None:
             conds.append("a.source_id = ?")
             params.append(source_id)
@@ -3654,11 +3653,11 @@ class DB:
         limit: int,
         offset: int,
     ) -> list[dict]:
-        where, params = self._news_article_filter(user_id, source_id, (q or "").strip())
+        where, params = self._news_article_filter(source_id, (q or "").strip())
         params.extend([max(1, min(int(limit), 100)), max(0, int(offset))])
         rows = self._rows(
             "SELECT a.*, s.name AS source_name, s.slug AS source_slug, s.enabled AS source_enabled "
-            "FROM news_articles a JOIN user_news_sources u ON u.source_id = a.source_id "
+            "FROM news_articles a "
             "JOIN news_sources s ON s.id = a.source_id "
             f"WHERE {where} ORDER BY a.published_at DESC, a.id DESC LIMIT ? OFFSET ?",
             params,
@@ -3672,10 +3671,9 @@ class DB:
         return _to_int(rows[0]["n"]) if rows else 0
 
     def count_news_articles(self, user_id: int, *, source_id: int | None, q: str) -> int:
-        where, params = self._news_article_filter(user_id, source_id, (q or "").strip())
+        where, params = self._news_article_filter(source_id, (q or "").strip())
         rows = self._rows(
             "SELECT COUNT(*) AS n FROM news_articles a "
-            "JOIN user_news_sources u ON u.source_id = a.source_id "
             "JOIN news_sources s ON s.id = a.source_id "
             f"WHERE {where}",
             params,
@@ -3692,9 +3690,6 @@ class DB:
             "WHERE a.id = ? AND s.archived_at IS NULL"
         )
         params: list[object] = [article_id]
-        if user_id is not None:
-            sql += " AND EXISTS (SELECT 1 FROM user_news_sources u WHERE u.user_id = ? AND u.source_id = a.source_id)"
-            params.append(user_id)
         rows = self._rows(sql, params)
         return self._normalize_news_article(rows[0]) if rows else None
 
@@ -3708,10 +3703,10 @@ class DB:
             self._conn.commit()
             return cur.rowcount > 0
 
-    def news_source_statuses(self, user_id: int) -> list[dict]:
+    def news_source_statuses(self) -> list[dict]:
         statuses = []
-        for source_id in self.list_user_news_source_ids(user_id):
-            source = self.get_news_source(source_id)
+        for source in self.list_news_sources():
+            source_id = source["id"]
             feeds = self.list_news_feeds(source_id)
             enabled_feeds = [feed for feed in feeds if feed["enabled"]]
             successes = [feed["last_success_at"] for feed in enabled_feeds if feed["last_success_at"]]
