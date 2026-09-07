@@ -2079,8 +2079,12 @@ body.lightbox-open { overflow: hidden; }
   gap: 8px;
 }
 .tl-rail-view .fav-toggle { width: 100%; justify-content: center; }
-.market-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.market-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); cursor: pointer; }
 .market-heading .tl-rail-title { margin: 0; font-size: var(--text-body); font-weight: var(--font-weight-semibold); }
+.market-toggle { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; }
+.market-toggle .market-chevron { flex-shrink: 0; color: var(--color-text-muted); transition: transform var(--ease-standard); }
+.market-toggle[aria-expanded="false"] .market-chevron { transform: rotate(-90deg); }
+.market-body[hidden] { display: none; }
 .market-status, .market-footer { color: var(--color-text-muted); font-size: var(--text-xs); }
 .market-status { flex-shrink: 0; }
 .market-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-top: var(--space-3); }

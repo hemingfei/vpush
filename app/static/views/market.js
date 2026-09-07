@@ -14,6 +14,12 @@ const timeFormat = new Intl.DateTimeFormat("zh-CN", {
   hour: "2-digit", minute: "2-digit", hourCycle: "h23",
 });
 const hourFormat = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Shanghai", hour: "2-digit", hourCycle: "h23" });
+const COLLAPSE_KEY = "market_overview_collapsed";
+const CHEVRON = `<svg class="market-chevron" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+function loadCollapsed() {
+  try { return localStorage.getItem(COLLAPSE_KEY) === "1"; } catch { return false; }
+}
 
 function automaticGroup() {
   const hour = Number(hourFormat.format(new Date()));
@@ -23,6 +29,7 @@ function automaticGroup() {
 export function createMarketView({ api, escapeHtml }) {
   let stop = () => {};
   let selection = "auto";
+  let collapsed = loadCollapsed();
 
   function sparkline(item) {
     const series = item.intraday;
@@ -80,9 +87,10 @@ export function createMarketView({ api, escapeHtml }) {
         + (tradingDates.length > 1 ? `–${tradingDates.at(-1).slice(5).replace("-", "/")}` : "") : "";
       const chartDelayed = failed || available.some(item => item.intraday_stale);
       host.innerHTML = `<div class="market-heading">
-          <h3 class="tl-rail-title" id="market-title">市场概览</h3>
+          <h3 class="tl-rail-title" id="market-title"><button type="button" class="market-toggle" data-market-focus="toggle" aria-expanded="${!collapsed}" aria-controls="market-body" title="${collapsed ? "展开市场概览" : "收起市场概览"}">市场概览${CHEVRON}</button></h3>
           <span class="market-status" role="status">${status}</span>
         </div>
+        <div class="market-body" id="market-body" ${collapsed ? "hidden" : ""}>
         <div class="market-toolbar">
           <div class="market-tabs" role="group" aria-label="市场分组">
             ${[["day", "A股 / 港股"], ["night", "美股"]].map(([key, label]) => `<button type="button" data-market-group="${key}" data-market-focus="${key}" aria-pressed="${group === key}">${label}</button>`).join("")}
@@ -96,7 +104,13 @@ export function createMarketView({ api, escapeHtml }) {
         <div class="market-footer"><span title="分时日期（交易所当地日期）${chartDelayed ? ' · 部分分时更新延迟' : ''}">${chartDelayed ? "分时延迟" : "日内分时"}${dateLabel ? ` · ${dateLabel}` : ""}</span>
           ${stale ? `<button type="button" class="market-retry" data-market-focus="retry" ${pending.has(group) ? "disabled" : ""}>重试</button>` : ""}
           <span title="报价时间（北京时间）">${oldest ? `<time datetime="${oldest.toISOString()}">${escapeHtml(timeFormat.format(oldest))}</time>` : "--"}</span>
-        </div>`;
+        </div></div>`;
+      host.querySelector(".market-heading").addEventListener("click", () => {
+        collapsed = !collapsed;
+        try { localStorage.setItem(COLLAPSE_KEY, collapsed ? "1" : "0"); } catch { /* 无 localStorage 时只影响当前页 */ }
+        render();
+        if (!collapsed) refresh();
+      });
       host.querySelectorAll("[data-market-group]").forEach(button => button.addEventListener("click", () => {
         selection = button.dataset.marketGroup;
         group = selection;
@@ -113,7 +127,7 @@ export function createMarketView({ api, escapeHtml }) {
     }
 
     async function refresh() {
-      if (!active || document.visibilityState === "hidden") return;
+      if (!active || collapsed || document.visibilityState === "hidden") return;
       const next = selection === "auto" ? automaticGroup() : selection;
       if (next !== group) { group = next; render(); }
       if (pending.has(group)) return;
