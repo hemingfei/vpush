@@ -865,12 +865,12 @@ export function createMxViewsView(dependencies) {
   // 批内两列报纸流：左列装较新一半（顶部=最新），右列续排（底部=最早）；窄屏回落单列
   function mxvFeedItemHtml(o, fresh) {
     return `
-    <div class="mxv-feed-item${fresh ? " fresh" : ""}" data-mxv-hl="${escapeHtml(`${o.target_type || ""}:${o.target_name || ""}`)}">
+    <div class="mxv-feed-item${fresh ? " fresh" : ""}" data-mxv-hl="${escapeHtml(`${o.target_type || ""}:${o.target_name || ""}`)}" data-kol-id="${o.kol_id || ""}">
       <span class="t" style="color:var(--mxv-accent)">${escapeHtml((o.occurred_at || "").slice(11, 16))}</span>
       <span class="mxv-badge ${escapeHtml(o.direction)}">${o.direction === "bull" ? "↑看多" : o.direction === "bear" ? "↓看空" : "中性"}</span>
       ${o.action ? `<span class="mxv-badge act">${escapeHtml(o.action)}</span>` : ""}
-      <span class="target" style="color:var(--mxv-text)">${escapeHtml(o.target_name)}</span>
-      <span style="color:var(--mxv-muted)">· ${escapeHtml(o.kol_name)}</span>
+      <span class="target" data-act="target" style="color:var(--mxv-text)">${escapeHtml(o.target_name)}</span>
+      <span data-act="kol" style="color:var(--mxv-muted)">· ${escapeHtml(o.kol_name)}</span>
       <span class="sum" style="color:var(--mxv-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(o.summary || "")}</span>
     </div>`;
   }
@@ -926,6 +926,21 @@ export function createMxViewsView(dependencies) {
     });
     feed.addEventListener("pointerleave", () => { if (!_mxv.hlPinned) mxvSetHighlight(""); });
     feed.addEventListener("click", (e) => {
+      // 题材/个股名、大V名 → 弹右侧抽屉；不触发标的高亮锁定
+      const actEl = e.target.closest("[data-act]");
+      if (actEl) {
+        const item = actEl.closest("[data-mxv-hl]");
+        if (!item) return;
+        if (actEl.dataset.act === "target") {
+          const hl = item.dataset.mxvHl || "";
+          const ci = hl.indexOf(":");
+          mxvOpenTarget(ci >= 0 ? hl.slice(0, ci) : "", hl.slice(ci + 1));
+        } else if (actEl.dataset.act === "kol") {
+          const kolId = item.dataset.kolId;
+          if (kolId) mxvOpenKol(Number(kolId));
+        }
+        return;
+      }
       const el = e.target.closest("[data-mxv-hl]");
       const key = el ? el.dataset.mxvHl : "";
       if (key && _mxv.hlPinned && _mxv.hlKey === key) { _mxv.hlPinned = false; mxvSetHighlight(""); }

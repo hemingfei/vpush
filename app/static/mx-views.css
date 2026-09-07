@@ -163,6 +163,9 @@
 .mxv-feed-col .mxv-feed-item:first-child{border-top:none;}
 .mxv-feed-item .t,.mxv-feed-item .target{flex:none;}
 .mxv-feed-item .sum{min-width:0;}
+/* 题材个股名/大V名可点开抽屉 */
+.mxv-feed-item [data-act]{cursor:pointer;}
+.mxv-feed-item [data-act]:hover{text-decoration:underline;text-underline-offset:2px;}
 /* 标的联动高亮：整行淡底+描边并轻微放大，同标的在流内一眼成串 */
 .mxv-feed-item.hl{background:var(--mxv-hover);box-shadow:inset 0 0 0 1px var(--mxv-accent);
   transform:scale(1.03);transform-origin:left center;z-index:1;}
