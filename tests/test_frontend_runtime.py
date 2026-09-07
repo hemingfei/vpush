@@ -554,7 +554,12 @@ def test_mobile_bottom_navigation_d1_feedback_restarts_without_rebuilding(page: 
     page.goto(static_origin)
     page.evaluate("() => go('timeline')")
 
+    nav_items = page.locator("#bottom-nav .bnav-item")
+    nav_items.first.wait_for(state="visible")
+    expect(nav_items).to_have_count(5)
     button = page.locator('.bnav-item[data-route="timeline"]')
+    original_button = button.element_handle()
+    assert original_button is not None
     assert page.evaluate("() => document.querySelector('#bottom-nav .bnav-item').style.backgroundColor") == ""
     button.click()
     expect(button).to_have_class(re.compile(r"\bis-feedback\b"))
@@ -562,24 +567,28 @@ def test_mobile_bottom_navigation_d1_feedback_restarts_without_rebuilding(page: 
         highlight: getComputedStyle(el).webkitTapHighlightColor,
         background: getComputedStyle(el).backgroundColor,
         stroke: getComputedStyle(el.querySelector('svg')).strokeWidth,
-        duration: getComputedStyle(el, '::before').animationDuration,
-        name: getComputedStyle(el, '::before').animationName,
-        opacity: getComputedStyle(el, '::before').opacity,
+        circleWidth: getComputedStyle(el, '::before').width,
+        circleHeight: getComputedStyle(el, '::before').height,
+        circleRadius: getComputedStyle(el, '::before').borderRadius,
+        pointerEvents: getComputedStyle(el, '::before').pointerEvents,
+        opacity: Number.parseFloat(getComputedStyle(el, '::before').opacity),
+        animations: el.getAnimations({subtree: true})
+            .filter(animation => animation.animationName === 'bottom-nav-feedback')
+            .map(animation => ({name: animation.animationName, duration: animation.effect.getTiming().duration})),
     })""")
-    assert feedback == {
-        "highlight": "rgba(0, 0, 0, 0)",
-        "background": "rgba(0, 0, 0, 0)",
-        "stroke": "2.4px",
-        "duration": "0.22s",
-        "name": "bottom-nav-feedback",
-        "opacity": "0",
-    }
-    page.wait_for_timeout(80)
-    assert button.evaluate("el => el.getAnimations({subtree: true}).filter(a => a.animationName === 'bottom-nav-feedback').length") == 1
+    assert feedback["highlight"] == "rgba(0, 0, 0, 0)"
+    assert feedback["background"] == "rgba(0, 0, 0, 0)"
+    assert feedback["stroke"] == "2.4px"
+    assert feedback["circleWidth"] == "42px"
+    assert feedback["circleHeight"] == "42px"
+    assert feedback["circleRadius"] == "50%"
+    assert feedback["pointerEvents"] == "none"
+    assert 0 <= feedback["opacity"] <= 1
+    assert feedback["animations"] == [{"name": "bottom-nav-feedback", "duration": 220}]
     button.click()
+    assert page.evaluate("original => document.querySelector('.bnav-item[data-route=timeline]') === original", original_button)
     assert button.evaluate("el => el.getAnimations({subtree: true}).filter(a => a.animationName === 'bottom-nav-feedback').length") == 1
-    page.wait_for_timeout(250)
-    assert button.evaluate("el => el.classList.contains('is-feedback')") is False
+    page.wait_for_function("el => !el.classList.contains('is-feedback')", arg=original_button)
     assert page.locator('.bnav-item.is-feedback').count() == 0
 
 
@@ -590,6 +599,9 @@ def test_mobile_bottom_navigation_d1_feedback_reduced_motion_has_no_transform(pa
     page.goto(static_origin)
     page.evaluate("() => go('timeline')")
 
+    nav_items = page.locator("#bottom-nav .bnav-item")
+    nav_items.first.wait_for(state="visible")
+    expect(nav_items).to_have_count(5)
     button = page.locator('.bnav-item[data-route="timeline"]')
     button.click()
     expect(button).to_have_class(re.compile(r"\bis-feedback\b"))

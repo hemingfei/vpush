@@ -4288,6 +4288,10 @@ def test_mobile_bottom_navigation_has_d1_feedback_contract():
     assert "220ms" in css
     assert "stroke-width: 2.4" in css
     assert "@keyframes bottom-nav-feedback" in css
+    assert "width: 42px" in css
+    assert "height: 42px" in css
+    assert "border-radius: 50%" in css
+    assert "pointer-events: none" in css
     keyframes = css[css.index("@keyframes bottom-nav-feedback"):css.index("@media (prefers-reduced-motion: reduce)", css.index("@keyframes bottom-nav-feedback"))]
     assert "opacity:" in keyframes
     assert "--bottom-nav-feedback-opacity" not in keyframes
