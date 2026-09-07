@@ -2557,9 +2557,9 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
 .bnav-item.active .bnav-icon svg { stroke-width: 2.4; }
 .bnav-item.is-feedback::before { animation: bottom-nav-feedback 220ms ease-out; }
 @keyframes bottom-nav-feedback {
-  from { opacity: 0; transform: none; }
-  50% { opacity: 1; transform: none; }
-  to { opacity: 0; transform: none; }
+  from { opacity: 0; transform: translate(-50%, -50%); }
+  50% { opacity: 1; transform: translate(-50%, -50%); }
+  to { opacity: 0; transform: translate(-50%, -50%); }
 }
 @media (prefers-reduced-motion: reduce) {
   .bnav-item.is-feedback::before { animation-duration: 80ms; animation-timing-function: linear; }

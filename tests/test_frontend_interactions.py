@@ -4292,7 +4292,8 @@ def test_mobile_bottom_navigation_has_d1_feedback_contract():
     assert "opacity:" in keyframes
     assert "--bottom-nav-feedback-opacity" not in keyframes
     assert "animation-duration: 80ms" in css
-    assert "transform: none" in css[css.index("@media (prefers-reduced-motion: reduce)"):]
+    assert keyframes.count("transform: translate(-50%, -50%)") == 3
+    assert "transform: none" not in keyframes
 
 
     src = NEWS_JS.read_text()

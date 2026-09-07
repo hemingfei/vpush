@@ -598,7 +598,7 @@ def test_mobile_bottom_navigation_d1_feedback_reduced_motion_has_no_transform(pa
         try { return [...sheet.cssRules]; } catch { return []; }
     }).filter(rule => rule.type === CSSRule.KEYFRAMES_RULE && rule.name === 'bottom-nav-feedback')
       .flatMap(rule => [...rule.cssRules].map(frame => frame.style.transform))""")
-    assert transforms and all(value == "none" for value in transforms)
+    assert transforms and all(value == "translate(-50%, -50%)" for value in transforms)
 @pytest.mark.parametrize("width", [375, 768, 1440])
 @pytest.mark.parametrize("theme", ["light", "dark"])
 def test_platform_badges_keep_blue_selection(page: Page, static_origin: str, tmp_path: Path, width: int, theme: str):
