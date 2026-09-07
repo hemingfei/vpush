@@ -197,10 +197,8 @@ export function createNewsView(dependencies) {
     const tags = Array.isArray(post.tags) ? post.tags : [];
     return `<article class="news-rt-item post-item" data-post-id="${post.id}">
       <div class="p-header">
-        ${avatarHtml(post.kol_name, post.avatar_url, post.platform)}
         <div class="p-name-line">
           <a class="p-name" href="/kol/${post.kol_id}" title="${escapeHtml(post.kol_name || "")}">${escapeHtml(post.kol_name || "")}</a>
-          <span class="p-platform" data-platform="${escapeHtml(post.platform)}" title="${escapeHtml(PLATFORM_LABELS[post.platform] || post.platform)}">${PLATFORM_ICONS[post.platform] || ""}</span>
           <time class="p-time" datetime="${escapeHtml(post.published_at || "")}" title="${escapeHtml(post.published_at || "")}">${escapeHtml(fmtPublished(post.published_at))}</time>
         </div>
       </div>
