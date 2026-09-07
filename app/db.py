@@ -2329,15 +2329,16 @@ class DB:
                 self._conn.rollback()
                 raise
 
+    def news_selected_kols(self) -> list[dict]:
+        """「实时资讯」栏目勾选的大V明细（id/名称/平台），前端来源筛选下拉用。"""
+        return self._rows(
+            "SELECT id, name, platform FROM kols WHERE news_selected = 1 AND enabled = 1 AND platform != 'system' "
+            "ORDER BY id"
+        )
+
     def news_selected_kol_ids(self) -> list[int]:
         """「实时资讯」栏目勾选的大V：只含启用中的真实大V（系统 KOL 是内部输出通道）。"""
-        return [
-            r["id"]
-            for r in self._rows(
-                "SELECT id FROM kols WHERE news_selected = 1 AND enabled = 1 AND platform != 'system' "
-                "ORDER BY id"
-            )
-        ]
+        return [r["id"] for r in self.news_selected_kols()]
 
     def get_kol_by_external(self, platform: str, external_id: str) -> dict | None:
         """按平台 + 外部ID 查大V（更新 external_id 时的唯一性校验用）。"""

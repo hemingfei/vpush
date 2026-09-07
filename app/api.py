@@ -2507,6 +2507,7 @@ def create_api_router(
         limit: int = Query(30, ge=1, le=100),
         offset: int = Query(0, ge=0),
         since_id: int | None = Query(None),
+        kol_id: int | None = Query(None),
         q: str = Query("", max_length=200),
         user: dict = Depends(get_current_user),
     ):
@@ -2514,9 +2515,11 @@ def create_api_router(
 
         栏目语义与时间线互不影响：勾选即对本栏目所有登录用户可见，不受订阅
         与私有大V ACL 白名单限制（后台显式勾选视为公开到本栏目）；拦截/隐藏
-        帖照常过滤，系统 KOL 不参与勾选。since_id 供前端轮询增量。
+        帖照常过滤，系统 KOL 不参与勾选。since_id 供前端轮询增量；kol_id 供
+        前端「来源」下拉按大V筛选（与勾选集合取交集，越权 id 查不到数据）。
         """
-        kol_ids = db.news_selected_kol_ids()
+        selected_kols = db.news_selected_kols()
+        kol_ids = [k["id"] for k in selected_kols]
         # 多取一条探 has_more，避免为分页再发一次 COUNT
         posts = db.list_feed_posts(
             kol_ids,
@@ -2524,6 +2527,7 @@ def create_api_router(
             user_id=user["id"],
             offset=max(offset, 0),
             include_secondary=True,
+            kol_id=kol_id,
             since_id=since_id,
             q=(q or "").strip() or None,
         )
@@ -2536,6 +2540,7 @@ def create_api_router(
             "next_offset": offset + len(posts),
             "has_more": has_more,
             "selected_count": len(kol_ids),
+            "sources": selected_kols,
         }
 
     @router.get("/news/{article_id}")

@@ -86,6 +86,8 @@ export function createNewsView(dependencies) {
     state.newsRtLatestId = 0;
     state.newsRtPending = [];
     state.newsRtSeq += 1;
+    state.newsRtSources = [];
+    state.newsRtSourceId = "";
   }
 
   // 缩略图和正文图都等进入视口再请求，避免一次列表渲染打出几十个图片代理请求
@@ -181,12 +183,16 @@ export function createNewsView(dependencies) {
     return `<div class="admin-skeleton" aria-hidden="true">${card.repeat(4)}</div>`;
   }
 
+  function newsRtSourceFilterOptions() {
+    return `<option value="">全部来源</option>${state.newsRtSources.map((source) => `<option value="${source.id}" ${String(state.newsRtSourceId) === String(source.id) ? "selected" : ""}>${escapeHtml(source.name)}</option>`).join("")}`;
+  }
+
   async function renderRealtimeNews(seq = currentRouteSeq()) {
     setPageTitle("财经资讯");
     state.newsRtQuery = "";
     renderNewsShell(
       "realtime",
-      `<div class="news-list-toolbar"><div class="search-bar"><input id="news-rt-query" type="search" placeholder="搜索内容或大V" value="${escapeHtml(state.newsRtQuery || "")}" oninput="queueNewsRtSearch(this.value)"></div></div><div id="news-rt-list" class="news-list news-rt-list">${newsRtSkeletonHtml()}</div><div id="news-rt-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>
+      `<div class="news-list-toolbar"><select id="news-rt-source-filter" class="form-control" aria-label="资讯来源" onchange="selectNewsRtSource(this.value)">${newsRtSourceFilterOptions()}</select><div class="search-bar"><input id="news-rt-query" type="search" placeholder="搜索内容或大V" value="${escapeHtml(state.newsRtQuery || "")}" oninput="queueNewsRtSearch(this.value)"></div></div><div id="news-rt-list" class="news-list news-rt-list">${newsRtSkeletonHtml()}</div><div id="news-rt-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>
       <button type="button" id="news-rt-backtop" class="tl-backtop" aria-label="返回顶部" title="返回顶部" onclick="newsRtBacktopClick()">${upArrowIcon}<span class="tl-backtop-new" id="news-rt-backtop-new" hidden></span></button>`,
     );
     state.newsRtItems = [];
@@ -242,14 +248,22 @@ export function createNewsView(dependencies) {
       stopNewsRtAutoLoad();
       state.newsRtItems = [];
       state.newsRtOffset = 0;
+      // 勾选可能已被管理员改动：不在来源清单里的过滤值直接失效
+      if (state.newsRtSourceId && !state.newsRtSources.some((source) => String(source.id) === String(state.newsRtSourceId))) state.newsRtSourceId = "";
       list.innerHTML = newsRtSkeletonHtml();
     }
     const params = new URLSearchParams({ limit: "30", offset: String(state.newsRtOffset) });
+    if (state.newsRtSourceId) params.set("kol_id", state.newsRtSourceId);
     if ((state.newsRtQuery || "").trim()) params.set("q", state.newsRtQuery.trim());
     try {
       const data = await api(`/api/news/realtime?${params}`);
       if (!routeStillActive(seq) || requestSeq !== state.newsRtSeq) return;
       const items = data.items || [];
+      if (reset && Array.isArray(data.sources)) {
+        state.newsRtSources = data.sources;
+        const select = $("#news-rt-source-filter");
+        if (select) select.innerHTML = newsRtSourceFilterOptions();
+      }
       // 追加时按 id 去重：轮询预置新帖后 offset 窗口可能压到边界行
       const have = new Set(state.newsRtItems.map((p) => p.id));
       const fresh = reset ? items : items.filter((p) => !have.has(p.id));
@@ -304,7 +318,8 @@ export function createNewsView(dependencies) {
     if (!list || !state.newsRtLatestId) return;
     try {
       const q = (state.newsRtQuery || "").trim();
-      const data = await api(`/api/news/realtime?limit=30&since_id=${state.newsRtLatestId}${q ? `&q=${encodeURIComponent(q)}` : ""}`);
+      const src = state.newsRtSourceId ? `&kol_id=${encodeURIComponent(state.newsRtSourceId)}` : "";
+      const data = await api(`/api/news/realtime?limit=30&since_id=${state.newsRtLatestId}${src}${q ? `&q=${encodeURIComponent(q)}` : ""}`);
       if (!routeStillActive(seq) || !$("#news-rt-list")) return;
       const incoming = (data.items || []).filter((p) => !state.newsRtItems.some((q) => q.id === p.id)
         && !state.newsRtPending.some((q) => q.id === p.id));
@@ -509,6 +524,11 @@ export function createNewsView(dependencies) {
     return loadFinancialNews(true, currentRouteSeq());
   }
 
+  function selectNewsRtSource(sourceId) {
+    state.newsRtSourceId = sourceId;
+    return loadRealtimeNews(true, currentRouteSeq());
+  }
+
   function queueNewsSearch(query) {
     state.newsQuery = query;
     clearTimeout(searchTimer);
@@ -533,6 +553,7 @@ export function createNewsView(dependencies) {
     renderFinancialNewsArticle,
     renderFinancialNewsList,
     renderNewsCenter,
+    selectNewsRtSource,
     selectNewsSource,
     selectNewsTab,
   };
