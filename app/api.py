@@ -3153,6 +3153,8 @@ def create_api_router(
         day: str = Query("", max_length=64),
         group: str = Query("", max_length=128),
         tag: str = Query("", max_length=64),
+        rating: str = Query("", max_length=24),
+        ticker: str = Query("", max_length=24),
         limit: int = 50,
         offset: int = Query(0, ge=0, le=IMA_DOCUMENT_LIST_MAX_OFFSET),
         user: dict = Depends(get_current_user),
@@ -3173,12 +3175,15 @@ def create_api_router(
             day=effective_day,
             group=group,
             tag=tag,
+            rating=rating.strip(),
+            ticker=ticker.strip(),
             limit=bounded_limit(limit, default=50),
             offset=max(offset, 0),
         )
+        items = db.attach_report_extractions(payload["items"])
         return {
             "groups": payload.get("groups") if payload.get("groups") is not None else [],
-            "items": payload["items"],
+            "items": items,
             "days": payload["days"],
             "tags": payload["tags"],
             "tag_counts": payload.get("tag_counts") or {},
@@ -3205,6 +3210,7 @@ def create_api_router(
             document = None
         if document is None:
             raise HTTPException(status_code=404, detail="文档不存在")
+        db.attach_report_extractions([document])
         return document
 
     @router.post("/ima-documents/groups/{group_id}/subscribe")

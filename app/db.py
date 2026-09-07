@@ -344,6 +344,31 @@ CREATE TABLE IF NOT EXISTS ima_document_tags (
     PRIMARY KEY (group_id, media_id, tag)
 );
 """
+REPORT_EXTRACTIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS report_extractions (
+    group_id TEXT NOT NULL,
+    media_id TEXT NOT NULL,
+    txt_hash TEXT NOT NULL DEFAULT '',
+    report_kind TEXT NOT NULL DEFAULT '',
+    rating TEXT NOT NULL DEFAULT '',
+    target_price TEXT NOT NULL DEFAULT '',
+    thesis TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'ok',
+    extracted_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (group_id, media_id)
+);
+"""
+REPORT_EXTRACTION_TICKERS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS report_extraction_tickers (
+    group_id TEXT NOT NULL,
+    media_id TEXT NOT NULL,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    stance TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (group_id, media_id, code)
+);
+"""
 IMA_DOCUMENT_INDEX_META_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS ima_document_index_meta (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -1605,8 +1630,14 @@ class DB:
             IMA_DOCUMENT_INDEX_TABLE_SQL,
             IMA_DOCUMENT_TAGS_TABLE_SQL,
             IMA_DOCUMENT_INDEX_META_TABLE_SQL,
+            REPORT_EXTRACTIONS_TABLE_SQL,
+            REPORT_EXTRACTION_TICKERS_TABLE_SQL,
         ):
             self._conn.execute(sql)
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_report_tickers_code "
+            "ON report_extraction_tickers(code)"
+        )
 
     def _ima_index_key_columns(self, name: str) -> list[tuple[str, int]]:
         return [
@@ -5041,13 +5072,43 @@ class DB:
                 raise
 
     def _ima_page_filters(
-        self, groups: list[str], query: str, day: str, tag: str
+        self,
+        groups: list[str],
+        query: str,
+        day: str,
+        tag: str,
+        rating: str = "",
+        ticker: str = "",
     ) -> tuple[str, list, str, str | None]:
         clauses = [f"d.group_id IN ({', '.join('?' for _ in groups)})"]
         params: list = list(groups)
         if day:
             clauses.append("d.day = ?")
             params.append(day)
+        if rating:
+            # 研报结构化抽取（report_extractions）筛选：评级精确匹配
+            clauses.append(
+                "EXISTS (SELECT 1 FROM report_extractions re "
+                "WHERE re.group_id = d.group_id AND re.media_id = d.media_id "
+                "AND re.rating = ? AND re.status = 'ok')"
+            )
+            params.append(rating)
+        if ticker:
+            # 标的筛选：纯数字按代码精确匹配，否则按名称模糊
+            if ticker.isdigit():
+                clauses.append(
+                    "EXISTS (SELECT 1 FROM report_extraction_tickers rt "
+                    "WHERE rt.group_id = d.group_id AND rt.media_id = d.media_id "
+                    "AND rt.code = ?)"
+                )
+                params.append(ticker)
+            else:
+                clauses.append(
+                    "EXISTS (SELECT 1 FROM report_extraction_tickers rt "
+                    "WHERE rt.group_id = d.group_id AND rt.media_id = d.media_id "
+                    "AND rt.name LIKE ? ESCAPE '\\')"
+                )
+                params.append(_like_pattern(ticker))
         if tag:
             clauses.append(
                 "EXISTS (SELECT 1 FROM ima_document_tags t "
@@ -5093,12 +5154,16 @@ class DB:
         query: str = "",
         day: str = "",
         tag: str = "",
+        rating: str = "",
+        ticker: str = "",
         limit: int = 50,
         offset: int = 0,
     ) -> dict:
         requested_day = str(day or "").strip()
         requested_tag = str(tag or "").strip()
         requested_query = str(query or "").strip()
+        requested_rating = str(rating or "").strip()
+        requested_ticker = str(ticker or "").strip()
         if requested_query and not _ima_query_usable(requested_query):
             requested_query = ""
         page_limit = max(int(limit), 1)
@@ -5108,7 +5173,8 @@ class DB:
             return _ima_empty_page(requested_day, page_offset)
 
         where_sql, where_params, rank_sql, pattern, rank_n = self._ima_page_filters(
-            groups, requested_query, requested_day, requested_tag
+            groups, requested_query, requested_day, requested_tag,
+            requested_rating, requested_ticker,
         )
         item_params = ([pattern] * rank_n + list(where_params)) if pattern else list(where_params)
         rows = self._read_only_rows(
@@ -5196,6 +5262,8 @@ class DB:
         query: str = "",
         day: str = "",
         tag: str = "",
+        rating: str = "",
+        ticker: str = "",
     ) -> int:
         requested_query = str(query or "").strip()
         if requested_query and not _ima_query_usable(requested_query):
@@ -5208,6 +5276,8 @@ class DB:
             requested_query,
             str(day or "").strip(),
             str(tag or "").strip(),
+            str(rating or "").strip(),
+            str(ticker or "").strip(),
         )
         rows = self._read_only_rows(
             f"SELECT COUNT(*) AS n FROM ima_document_index d WHERE {where_sql}",
@@ -5225,6 +5295,131 @@ class DB:
             "ORDER BY group_id, media_id",
             groups,
         )
+
+    # ---- 研报结构化抽取（report_extractions，LLM 批处理） ----
+
+    def attach_report_extractions(self, items: list[dict]) -> list[dict]:
+        """给文档列表项就地挂 extraction 字段（无抽取结果则不挂）。"""
+        if not items:
+            return items
+        found = self.report_extractions_for_keys(
+            [(item.get("group_id"), item.get("media_id")) for item in items]
+        )
+        if not found:
+            return items
+        for item in items:
+            extra = found.get((str(item.get("group_id") or ""), str(item.get("media_id") or "")))
+            if extra:
+                item["extraction"] = extra
+        return items
+
+    def pending_report_extractions(self, limit: int = 40) -> list[dict]:
+        """待抽取研报：有 txt、尚无抽取行；新文档优先（增量先跟上，存量慢慢回刷）。"""
+        return self._rows(
+            "SELECT d.group_id, d.media_id, d.txt_path, d.name, d.sort_date "
+            "FROM ima_document_index d LEFT JOIN report_extractions re "
+            "ON re.group_id = d.group_id AND re.media_id = d.media_id "
+            "WHERE d.has_txt = 1 AND d.txt_path != '' AND re.media_id IS NULL "
+            "ORDER BY (d.sort_date = '') ASC, d.sort_date DESC, d.group_id, d.media_id "
+            "LIMIT ?",
+            (max(int(limit), 1),),
+        )
+
+    def save_report_extraction(
+        self,
+        group_id: str,
+        media_id: str,
+        *,
+        txt_hash: str = "",
+        report_kind: str = "",
+        rating: str = "",
+        target_price: str = "",
+        thesis: str = "",
+        tickers: list[dict] | None = None,
+        model: str = "",
+        status: str = "ok",
+    ) -> None:
+        """写入/覆盖单篇抽取结果；无论成败都落行，防止同篇被反复重试。"""
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                self._conn.execute(
+                    "INSERT INTO report_extractions (group_id, media_id, txt_hash, report_kind, rating, target_price, thesis, model, status, extracted_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now')) "
+                    "ON CONFLICT(group_id, media_id) DO UPDATE SET "
+                    "txt_hash = excluded.txt_hash, report_kind = excluded.report_kind, "
+                    "rating = excluded.rating, target_price = excluded.target_price, "
+                    "thesis = excluded.thesis, model = excluded.model, "
+                    "status = excluded.status, extracted_at = excluded.extracted_at",
+                    (
+                        group_id,
+                        media_id,
+                        txt_hash,
+                        report_kind,
+                        rating,
+                        target_price,
+                        thesis,
+                        model,
+                        status,
+                    ),
+                )
+                self._conn.execute(
+                    "DELETE FROM report_extraction_tickers WHERE group_id = ? AND media_id = ?",
+                    (group_id, media_id),
+                )
+                for t in tickers or []:
+                    code = str(t.get("code") or "").strip()
+                    if not code:
+                        continue
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO report_extraction_tickers "
+                        "(group_id, media_id, code, name, stance) VALUES (?, ?, ?, ?, ?)",
+                        (group_id, media_id, code, str(t.get("name") or ""), str(t.get("stance") or "")),
+                    )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def report_extractions_for_keys(
+        self, keys: list[tuple[str, str]]
+    ) -> dict[tuple[str, str], dict]:
+        """批量取抽取结果（含标的），键为 (group_id, media_id)。"""
+        out: dict[tuple[str, str], dict] = {}
+        clean = [(str(g), str(m)) for g, m in keys if str(g) and str(m)]
+        chunk = 200
+        for i in range(0, len(clean), chunk):
+            part = clean[i : i + chunk]
+            conds = " OR ".join("(group_id = ? AND media_id = ?)" for _ in part)
+            params = [x for pair in part for x in pair]
+            rows = self._rows(
+                "SELECT group_id, media_id, rating, target_price, thesis, status, model "
+                f"FROM report_extractions WHERE {conds}",
+                params,
+            )
+            if not rows:
+                continue
+            trows = self._rows(
+                "SELECT group_id, media_id, code, name, stance "
+                f"FROM report_extraction_tickers WHERE {conds}",
+                params,
+            )
+            tickmap: dict[tuple[str, str], list[dict]] = {}
+            for tr in trows:
+                tickmap.setdefault((tr["group_id"], tr["media_id"]), []).append(
+                    {"code": tr["code"], "name": tr["name"], "stance": tr["stance"]}
+                )
+            for r in rows:
+                k = (r["group_id"], r["media_id"])
+                out[k] = {
+                    "rating": r["rating"],
+                    "target_price": r["target_price"],
+                    "thesis": r["thesis"],
+                    "status": r["status"],
+                    "model": r["model"],
+                    "tickers": tickmap.get(k, []),
+                }
+        return out
 
     def ima_documents_by_keys(
         self,

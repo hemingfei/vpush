@@ -3123,6 +3123,8 @@ class ImaDocumentService:
         day: str = "",
         group: str = "",
         tag: str = "",
+        rating: str = "",
+        ticker: str = "",
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
@@ -3135,6 +3137,8 @@ class ImaDocumentService:
             lookup = getattr(self.db, "ima_documents_by_keys", None)
             if (
                 query
+                and not rating
+                and not ticker
                 and self.search_index is not None
                 and callable(count_matches)
                 and callable(lookup)
@@ -3148,6 +3152,8 @@ class ImaDocumentService:
                     query=query,
                     day=day,
                     tag=tag,
+                    rating=rating,
+                    ticker=ticker,
                 )
                 metadata_items: list[dict] = []
                 if page_offset < metadata_total:
@@ -3157,6 +3163,8 @@ class ImaDocumentService:
                         query=query,
                         day=day,
                         tag=tag,
+                        rating=rating,
+                        ticker=ticker,
                         limit=min(page_limit, metadata_total - page_offset),
                         offset=page_offset,
                     )
@@ -3289,6 +3297,8 @@ class ImaDocumentService:
                     query=query,
                     day=day,
                     tag=tag,
+                    rating=rating,
+                    ticker=ticker,
                     limit=limit,
                     offset=offset,
                 )

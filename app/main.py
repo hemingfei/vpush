@@ -194,6 +194,12 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     )
     fetchers = build_fetchers(config, db)
     notifiers = build_notifiers(config)
+    def _ima_archive_file(relative):
+        store = getattr(ima_documents, "store", None)
+        if store is None or not store.archive_readable():
+            return None
+        return store.authorized_archive_file(relative)
+
     scheduler = Scheduler(
         db,
         fetchers,
@@ -204,6 +210,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         config.sources.weibo,
         config.llm,
         news_service=news_service,
+        ima_archive_file=_ima_archive_file,
     )
 
     @asynccontextmanager

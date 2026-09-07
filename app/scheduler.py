@@ -1912,6 +1912,7 @@ class Scheduler:
         weibo_config=None,
         llm_config=None,
         news_service=None,
+        ima_archive_file=None,
     ):
         self.db = db
         self.fetchers = fetchers
@@ -1922,6 +1923,8 @@ class Scheduler:
         self.weibo_config = weibo_config
         self.llm_config = llm_config
         self.news_service = news_service
+        # callable(relative_txt_path) -> Path | None；研报结构化抽取读文本用
+        self.ima_archive_file = ima_archive_file
         self.states: dict[str, PlatformState] = {}
         self._digest: dict[int, list[Post]] = {}
         self._dnd_buffer: dict[int, list[Post]] = {}
@@ -1930,6 +1933,7 @@ class Scheduler:
         self.retry_queue = PushRetryQueue()
         self._stop = asyncio.Event()
         self._last_cleanup = 0.0
+        self._last_report_extract = time.monotonic()
         self._last_digest_flush = time.monotonic()
         self._last_xueqiu_probe = time.monotonic()
         self._last_cookie_keepalive = time.monotonic()
@@ -2237,6 +2241,16 @@ class Scheduler:
                     logger.info("清理未激活用户 %d 人", removed_users)
             except Exception:  # noqa: BLE001
                 logger.exception("未激活用户清理失败")
+            # 研报结构化抽取（每小时一批，LLM 离线批处理；失败不影响主流程）
+            if now_mono - self._last_report_extract > 3600:
+                self._last_report_extract = now_mono
+                try:
+                    done = await asyncio.to_thread(self._run_report_extraction_task)
+                    if done:
+                        logger.info("研报结构化抽取本轮完成 %d 篇", done)
+                except Exception:  # noqa: BLE001
+                    logger.exception("研报结构化抽取异常")
+
             # 定期清理过期帖子（默认每 6 小时检查一次）
             if now_mono - self._last_cleanup > 6 * 3600:
                 self._last_cleanup = now_mono
@@ -2589,6 +2603,88 @@ class Scheduler:
     def _stock_alias_due(self) -> bool:
         """股票别名识别任务是否到期：每天最多一次（settings 日期键控制）。"""
         return self.db.get_setting("stock_alias_last_date") != datetime.now().strftime("%Y-%m-%d")
+
+    def _run_report_extraction_task(self) -> int:
+        """研报结构化抽取：每小时一批，读 txt → LLM → 结构化落库。
+
+        开关与预算都在 settings：report_extract_enabled（默认开，='0' 关）、
+        report_extract_model（默认 gemini-3.8-flash-high）、
+        report_extract_daily_limit（默认 1000 篇/天）。LLM 用站点配置
+        （管理员个人 Grok/Gemini 网关），批处理不走实时路径。
+        """
+        db = self.db
+        if db.get_setting("report_extract_enabled") == "0":
+            return 0
+        daily_limit = int(db.get_setting("report_extract_daily_limit") or 1000)
+        today = time.strftime("%Y%m%d")
+        done_key = f"report_extract_done_{today}"
+        done_today = int(db.get_setting(done_key) or 0)
+        if done_today >= daily_limit:
+            return 0
+        site_llm = _system_llm_config(db, self.llm_config)
+        if site_llm is None:
+            return 0
+        model = db.get_setting("report_extract_model") or "gemini-3.8-flash-high"
+        from .llm import extract_report_structure
+        from .stock_universe import bundled_universe_codes
+
+        universe = bundled_universe_codes()
+        resolve = self.ima_archive_file
+        if resolve is None:
+            return 0
+        batch = min(40, daily_limit - done_today)
+        docs = db.pending_report_extractions(limit=batch)
+        if not docs:
+            return 0
+        import hashlib
+
+        completed = 0
+        unresolved = 0
+        for doc in docs:
+            group_id = str(doc["group_id"] or "")
+            media_id = str(doc["media_id"] or "")
+            txt_path = resolve(doc["txt_path"])
+            if txt_path is None:
+                # 路径解析失败可能是存储机暂时不可读：不落行，下轮重试
+                unresolved += 1
+                continue
+            if not txt_path.is_file():
+                db.save_report_extraction(group_id, media_id, status="nofile")
+                continue
+            try:
+                text = txt_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                db.save_report_extraction(group_id, media_id, status="nofile")
+                continue
+            txt_hash = hashlib.sha256(text[:20000].encode("utf-8", "ignore")).hexdigest()[:16]
+            try:
+                result = extract_report_structure(text, site_llm, model=model, universe=universe)
+            except Exception as exc:
+                logger.warning("研报抽取失败 %s/%s: %s", group_id, media_id, exc)
+                db.save_report_extraction(
+                    group_id, media_id, txt_hash=txt_hash, model=model, status="failed"
+                )
+                continue
+            db.save_report_extraction(
+                group_id,
+                media_id,
+                txt_hash=txt_hash,
+                report_kind=result.get("report_kind", ""),
+                rating=result.get("rating", ""),
+                target_price=result.get("target_price", ""),
+                thesis=result.get("thesis", ""),
+                tickers=result.get("tickers", []),
+                model=model,
+                status=result.get("status", "ok"),
+            )
+            completed += 1
+        if unresolved and unresolved == len(docs):
+            logger.warning("研报抽取：%d 篇路径均不可解析，疑似知识库存储不可读，本批跳过", unresolved)
+            return 0
+        if completed:
+            db.set_setting(done_key, str(done_today + completed))
+            logger.info("研报结构化抽取：%d 篇（今日累计 %d/%d）", completed, done_today + completed, daily_limit)
+        return completed
 
     def _run_stock_alias_task(self) -> bool:
         """股票黑话别名自动识别（LLM，每日一次）+ 历史误标清理（纯规则）。

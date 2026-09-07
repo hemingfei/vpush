@@ -565,3 +565,113 @@ def resolve_stock_marks(marks, llm_config=None, client=None) -> list[dict]:
         )
     logger.info("LLM 标记解析 marks=%d 解析=%d", len(marks), len(result))
     return result
+
+
+# ---- 研报结构化抽取（批处理，失败降级为无结构化数据） ----
+
+REPORT_EXTRACT_MAX_CHARS = 12000
+REPORT_EXTRACT_TIMEOUT = 90
+
+_REPORT_EXTRACT_PROMPT = (
+    "从研报文本中抽取结构化信息，只输出一个 JSON 对象（不要 markdown 代码块、不要解释），字段：\n"
+    '{"rating": "评级（如 首次覆盖/上调/下调/维持/增持/减持/中性/跑赢行业，无则空串）", '
+    '"target_price": "目标价原文（含币种或区间，无则空串）", '
+    '"thesis": "一句话核心逻辑，不超过80字，无则空串", '
+    '"report_kind": "宏观/策略/行业/公司/固收 之一", '
+    '"tickers": [{"code": "6位数字代码", "name": "证券简称", "stance": "推荐/受益/中性/风险提示"}]}\n'
+    "要求：只抽取文本明确提到的事实，不确定就留空；tickers 最多 8 个，按重要性排序。"
+)
+
+
+def _parse_report_extraction(content: str) -> dict:
+    """容错解析 LLM 抽取输出：剥代码围栏、截取首尾大括号。"""
+    text = (content or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\s*", "", text).strip()
+        text = re.sub(r"\s*```$", "", text).strip()
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("抽取结果不含 JSON 对象")
+    data = json.loads(text[start : end + 1])
+    if not isinstance(data, dict):
+        raise ValueError("抽取结果不是 JSON 对象")
+    return data
+
+
+def clean_report_extraction(data: dict, universe: dict[str, str]) -> dict:
+    """规范化抽取字段；标的按词表白名单校验，词表没有的代码视为幻觉丢弃。"""
+    rating = str(data.get("rating") or "").strip()[:24]
+    target_price = str(data.get("target_price") or "").strip()[:64]
+    thesis = " ".join(str(data.get("thesis") or "").split())[:200]
+    report_kind = str(data.get("report_kind") or "").strip()[:12]
+    tickers: list[dict] = []
+    seen: set[str] = set()
+    for item in data.get("tickers") or []:
+        if not isinstance(item, dict):
+            continue
+        digits = "".join(ch for ch in str(item.get("code") or "") if ch.isdigit())
+        code = digits[-6:] if len(digits) >= 6 else ""
+        if not code or code in seen:
+            continue
+        if universe and code not in universe:
+            continue
+        seen.add(code)
+        tickers.append(
+            {
+                "code": code,
+                "name": universe.get(code) or str(item.get("name") or "")[:32],
+                "stance": str(item.get("stance") or "").strip()[:16],
+            }
+        )
+        if len(tickers) >= 8:
+            break
+    status = "ok" if (rating or target_price or thesis or tickers) else "empty"
+    return {
+        "rating": rating,
+        "target_price": target_price,
+        "thesis": thesis,
+        "report_kind": report_kind,
+        "tickers": tickers,
+        "status": status,
+    }
+
+
+def extract_report_structure(
+    text: str,
+    llm_config=None,
+    model: str = "",
+    universe: dict[str, str] | None = None,
+    client=None,
+) -> dict:
+    """抽取单篇研报结构化信息；LLM 失败抛 RuntimeError，解析失败抛 ValueError。
+
+    成功返回 {rating, target_price, thesis, report_kind, tickers, status}，
+    文本过短或确认无结构信息时 status='empty'。
+    """
+    body = " ".join((text or "").split())
+    if len(body) < 200:
+        return clean_report_extraction({}, universe or {})
+    values = _config_values(llm_config)
+    if values is None:
+        raise RuntimeError("LLM 未配置")
+    api_key, api_base, default_model = values
+    from types import SimpleNamespace
+
+    task_cfg = SimpleNamespace(
+        api_key=api_key,
+        api_base=api_base,
+        user_supplied=False,
+        model=(model or default_model),
+    )
+    content = _chat(
+        task_cfg,
+        [{"role": "user", "content": f"{_REPORT_EXTRACT_PROMPT}\n\n文本：{body[:REPORT_EXTRACT_MAX_CHARS]}"}],
+        max_tokens=2000,
+        client=client,
+        temperature=0.1,
+        attempts=1,
+        timeout=REPORT_EXTRACT_TIMEOUT,
+    )
+    if not content:
+        raise RuntimeError("LLM 抽取请求失败")
+    return clean_report_extraction(_parse_report_extraction(content), universe or {})

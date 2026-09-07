@@ -1954,3 +1954,96 @@ def test_daily_posts_window_is_beijing_published_time(tmp_path):
     )
     daily = db.list_daily_posts([kid], at(), 15)
     assert [r["external_id"] for r in daily] == ["today_10am", "today_0030"]
+
+
+def test_report_extraction_tables_and_roundtrip(tmp_path):
+    """研报结构化抽取：建表、pending 去重、保存/读取（含标的）。"""
+    from app.fetchers.base import Post
+
+    db = DB(str(tmp_path / "report-extract.db"))
+    kid = db.add_kol("xueqiu", "K", "1")
+    db.insert_posts_batch(
+        [
+            Post(platform="xueqiu", kol_id=kid, kol_name="K", external_id="p1",
+                 title="t", content="c", url="u", published_at="2026-09-01 10:00")
+        ]
+    )
+    # ima 文档行：直接造（研报库不依赖 kol）
+    db._conn.execute(
+        "INSERT INTO ima_document_index (group_id, media_id, name, has_txt, txt_path, sort_date) "
+        "VALUES ('cicc-research', 'm1', '磷化铟产业研究', 1, 'cicc-research/行业/0907/a_1.pdf', '2026-09-07')"
+    )
+    db._conn.commit()
+
+    pending = db.pending_report_extractions(limit=10)
+    assert [(r["group_id"], r["media_id"]) for r in pending] == [("cicc-research", "m1")]
+
+    db.save_report_extraction(
+        "cicc-research", "m1", txt_hash="abc123", report_kind="行业",
+        rating="维持", target_price="25.00元", thesis="AI 算力驱动需求高增。",
+        tickers=[{"code": "002428", "name": "云南锗业", "stance": "推荐"}],
+        model="gemini-3.8-flash-high", status="ok",
+    )
+    # 已有抽取行 → 不再进 pending
+    assert db.pending_report_extractions(limit=10) == []
+
+    got = db.report_extractions_for_keys([("cicc-research", "m1")])
+    ex = got[("cicc-research", "m1")]
+    assert ex["rating"] == "维持" and ex["target_price"] == "25.00元"
+    assert ex["tickers"] == [{"code": "002428", "name": "云南锗业", "stance": "推荐"}]
+
+    attached = db.attach_report_extractions(
+        [{"group_id": "cicc-research", "media_id": "m1", "name": "磷化铟产业研究"}]
+    )
+    assert attached[0]["extraction"]["rating"] == "维持"
+    assert db.attach_report_extractions([{"group_id": "x", "media_id": "y"}]) == [
+        {"group_id": "x", "media_id": "y"}
+    ]
+
+
+def test_report_extraction_rating_ticker_filters(tmp_path):
+    """研报库列表筛选：评级精确匹配、标的代码/名称匹配。"""
+    db = DB(str(tmp_path / "report-filter.db"))
+    for group_id, media_id, rating, tickers in (
+        ("cicc-research", "m1", "上调", [{"code": "002428", "name": "云南锗业"}]),
+        ("cicc-research", "m2", "维持", [{"code": "600206", "name": "有研新材"}]),
+    ):
+        db._conn.execute(
+            "INSERT INTO ima_document_index (group_id, media_id, name, sort_date) VALUES (?, ?, 't', '2026-09-07')",
+            (group_id, media_id),
+        )
+        db._conn.commit()
+        db.save_report_extraction(group_id, media_id, rating=rating, tickers=tickers, status="ok")
+    db._conn.commit()
+    page = db.ima_document_page(["cicc-research"], rating="上调")
+    assert [i["media_id"] for i in page["items"]] == ["m1"]
+    assert db.ima_document_match_count(["cicc-research"], rating="上调") == 1
+    assert [i["media_id"] for i in db.ima_document_page(["cicc-research"], ticker="002428")["items"]] == ["m1"]
+    assert [i["media_id"] for i in db.ima_document_page(["cicc-research"], ticker="云南锗业")["items"]] == ["m1"]
+    assert db.ima_document_page(["cicc-research"], ticker="600206")["items"][0]["media_id"] == "m2"
+
+
+def test_report_extraction_parse_and_ticker_whitelist():
+    """抽取解析：剥围栏/容错截取；标的按词表白名单丢幻觉。"""
+    from types import SimpleNamespace
+
+    from app.llm import (
+        _parse_report_extraction,
+        clean_report_extraction,
+        extract_report_structure,
+    )
+
+    fenced = "```json\n{\"rating\":\"维持\",\"target_price\":\"25.00元\",\"thesis\":\"逻辑。\",\"tickers\":[{\"code\":\"002428.SZ\",\"name\":\"云南锗业\",\"stance\":\"推荐\"},{\"code\":\"999999\",\"name\":\"不存在的股票\",\"stance\":\"推荐\"}]}\n```"
+    data = _parse_report_extraction(fenced)
+    universe = {"002428": "云南锗业"}
+    cleaned = clean_report_extraction(data, universe)
+    assert cleaned["rating"] == "维持" and cleaned["status"] == "ok"
+    # 002428 归一化通过白名单；999999 不在词表 → 丢弃
+    assert cleaned["tickers"] == [{"code": "002428", "name": "云南锗业", "stance": "推荐"}]
+    with pytest.raises(ValueError):
+        _parse_report_extraction("抱歉，我无法输出")
+    # 空字段 → empty 态
+    assert clean_report_extraction({}, universe)["status"] == "empty"
+    # 文本过短直接 empty，不调 LLM
+    cfg = SimpleNamespace(api_key="k", api_base="https://gw.example/v1", model="m")
+    assert extract_report_structure("太短", cfg, universe=universe)["status"] == "empty"

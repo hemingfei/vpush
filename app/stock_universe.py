@@ -93,3 +93,19 @@ def aliases_for_tagging(aliases, excluded=None) -> list[dict]:
         if stock and stock not in excluded_set:
             out.append(item)
     return out
+
+
+@lru_cache(maxsize=1)
+def bundled_universe_codes() -> dict[str, str]:
+    """代码 → 名称（代码归一为后 6 位数字），供研报抽取做标的白名单校验。"""
+    payload = _load_payload()
+    out: dict[str, str] = {}
+    for item in payload.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        raw = str(item.get("code") or "")
+        digits = "".join(ch for ch in raw if ch.isdigit())
+        name = _normalize_name(item.get("name") or "")
+        if len(digits) >= 6 and name:
+            out.setdefault(digits[-6:], name)
+    return out

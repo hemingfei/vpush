@@ -349,10 +349,23 @@ export function createImaView(dependencies) {
     return rare.slice(0, 2).map((item) => item.tag);
   }
 
+  function imaExtractionBadgesHtml(item) {
+    const ex = item?.extraction;
+    if (!ex || ex.status !== "ok") return "";
+    const parts = [];
+    if (ex.rating) parts.push(`<span class="ima-ex-badge ima-ex-rating">${escapeHtml(ex.rating)}</span>`);
+    if (ex.target_price) parts.push(`<span class="ima-ex-badge">${escapeHtml(ex.target_price)}</span>`);
+    for (const t of (ex.tickers || []).slice(0, 3)) {
+      parts.push(`<span class="ima-ex-badge ima-ex-ticker" title="${escapeHtml(ex.thesis || "")}">${escapeHtml(t.name || t.code)}</span>`);
+    }
+    return parts.join("");
+  }
+
   function imaReportMetaHtml(item) {
     const parts = [];
     const ticker = imaDocTicker(item.name);
     if (ticker) parts.push(`<span>${escapeHtml(ticker)}</span>`);
+    parts.push(imaExtractionBadgesHtml(item));
     for (const tag of imaDistinctiveTags(item?.tags)) {
       parts.push(isReportWatchableTag(tag) ? imaWatchTagButton(tag) : `<span>${escapeHtml(tag)}</span>`);
     }
