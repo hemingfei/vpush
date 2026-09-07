@@ -1068,7 +1068,7 @@ textarea.proxy-import { min-height: 96px; }
 /* 内联 Truth 图形继承主题强调色，选中后随按钮反白。 */
 .tl-pill[data-platform="truth"]:not(.selected) .pt-icon,
 .platform-tab[data-platform="truth"]:not(.selected) .pt-icon { color: var(--color-accent-text); }
-/* 快讯实时呼吸点：提示这是实时流（选中蓝底上换白描边） */
+/* 快讯呼吸点：未选中时提示「有实时源可看」，选中后隐去（注意力只给未到达的地方） */
 .tl-pill[data-platform="live"] { position: relative; }
 .tl-pill[data-platform="live"]::after {
   content: "";
@@ -1082,7 +1082,7 @@ textarea.proxy-import { min-height: 96px; }
   box-shadow: 0 0 0 2px var(--color-surface);
   animation: live-pulse 2.4s ease-in-out infinite;
 }
-.tl-pill[data-platform="live"].selected::after { box-shadow: none; }
+.tl-pill[data-platform="live"].selected::after { display: none; }
 @keyframes live-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.5; transform: scale(0.8); }
