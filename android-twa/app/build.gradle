@@ -16,8 +16,8 @@ android {
         applicationId 'net.vpush.twa'
         minSdk 26
         targetSdk 35
-        versionCode 112160
-        versionName "1.12.160"
+        versionCode 112162
+        versionName "1.12.162"
     }
 
     signingConfigs {
