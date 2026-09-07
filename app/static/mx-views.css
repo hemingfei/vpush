@@ -185,7 +185,7 @@
 .mxv-sum-tag{display:inline-block;border-radius:4px;padding:0 5px;margin-right:6px;font-size:11px;
   background:var(--mxv-soft);color:var(--mxv-accent);vertical-align:baseline;}
 .mxv-sum-tag.advice{color:var(--mxv-gold);}
-.mxv-kols{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;}
+.mxv-kols{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;}
 /* 折叠只裁到单行：渐隐收窄到底部 10px（=卡片内边距），不再吃掉可见那行的最后一行标签 */
 .mxv-kols.collapsed{overflow:hidden;
   -webkit-mask-image:linear-gradient(180deg,#000 calc(100% - 10px),transparent);mask-image:linear-gradient(180deg,#000 calc(100% - 10px),transparent);}
