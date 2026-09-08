@@ -50,7 +50,8 @@ def _nth_weekday(year: int, month: int, weekday: int, occurrence: int) -> date:
 
 def _last_weekday(year: int, month: int, weekday: int) -> date:
     next_month = date(year + (month == 12), month % 12 + 1, 1)
-    return next_month - timedelta(days=(next_month.weekday() - weekday) % 7 + 1)
+    last_day = next_month - timedelta(days=1)
+    return last_day - timedelta(days=(last_day.weekday() - weekday) % 7)
 
 
 def _easter_sunday(year: int) -> date:
@@ -71,8 +72,10 @@ def is_us_market_holiday(day: date) -> bool:
     fixed = {
         _observed_fixed_holiday(year, month, holiday_day)
         for year in (day.year - 1, day.year, day.year + 1)
-        for month, holiday_day in ((1, 1), (6, 19), (7, 4), (12, 25))
+        for month, holiday_day in ((1, 1), (7, 4), (12, 25))
     }
+    if day.year >= 2022:
+        fixed.add(_observed_fixed_holiday(day.year, 6, 19))
     year = day.year
     movable = {
         _nth_weekday(year, 1, 0, 3),

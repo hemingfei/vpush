@@ -62,6 +62,17 @@ def test_us_market_holiday_handles_new_year_observed_on_prior_year_date():
     assert quote_status(item, datetime(2021, 12, 31, 15, tzinfo=NY_TZ)) == "holiday"
 
 
+def test_us_market_holiday_calendar_covers_memorial_day():
+    item = {"symbol": "us.INX", "quoted_at": "2026-05-22T16:00:00-04:00"}
+    assert quote_status(item, datetime(2026, 5, 25, 15, tzinfo=NY_TZ)) == "holiday"
+
+
+def test_us_market_holiday_calendar_applies_juneteenth_from_2022():
+    item = {"symbol": "us.INX", "quoted_at": "2021-06-17T16:00:00-04:00"}
+    assert quote_status(item, datetime(2021, 6, 18, 15, tzinfo=NY_TZ)) == "delayed"
+    assert quote_status(item, datetime(2022, 6, 20, 15, tzinfo=NY_TZ)) == "holiday"
+
+
 def test_shared_cache_failure_cooldown_and_recovery():
     cache = MarketQuotes()
     response = httpx.Response(200, content=quote_payload().encode("gb18030"), request=httpx.Request("GET", "https://qt.gtimg.cn"))
