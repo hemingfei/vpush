@@ -252,8 +252,9 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
 
                 FeishuPersonalManager(db, config.notifiers.feishu).expire_stale()
             if "PYTEST_CURRENT_TEST" not in os.environ:
-                from .api import start_wscn_live_refresh
+                from .api import set_wscn_auto_broadcast, start_wscn_live_refresh
 
+                set_wscn_auto_broadcast(scheduler.check_and_broadcast_wscn)
                 threading.Thread(target=start_wscn_live_refresh, daemon=True, name="wscn-refresh").start()
         else:
             logger.warning("DAV_UI_ONLY=1 已跳过调度器与机器人长连接，仅提供网页 UI")
@@ -284,6 +285,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         openapi_url="/openapi.json" if docs else None,
     )
     app.state.db = db
+    app.state.scheduler = scheduler
     app.state.llm_config = config.llm
     app.state.ima_documents = ima_documents
     app.state.feishu_documents = feishu_documents

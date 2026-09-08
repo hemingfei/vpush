@@ -15,7 +15,7 @@ import sqlite3
 import threading
 import time
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Callable, Literal
 
 import httpx
 
@@ -479,6 +479,25 @@ class InactiveUsersPolicyIn(BaseModel):
 class RegisterCodeBatchAction(BaseModel):
     codes: list[str]
     action: str  # revoke|delete
+
+
+class WscnBroadcastSettingsIn(BaseModel):
+    """快讯播报配置：启用/目标系统KOL/score阈值。"""
+
+    enabled: bool | None = None
+    kol_id: int | None = None
+    score_threshold: int | None = None
+
+
+class WscnBroadcastItemIn(BaseModel):
+    """手动播报单条快讯：前端传入快讯 item 的关键字段。"""
+
+    id: int
+    score: int = 1
+    highlight_title: str = ""
+    body: str = ""
+    published_at: str = ""
+    url: str = ""
 
 
 class CategoryIn(BaseModel):
@@ -1006,6 +1025,16 @@ _WSCN_REFRESHING: set[str] = set()
 _WSCN_CLIENT: httpx.Client | None = None
 _WSCN_HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
+# 快讯自动播报回调：刷新缓存后由调度器检查新重要快讯并播报到系统 KOL。
+# 在 main.py lifespan 中通过 set_wscn_auto_broadcast 注册；纯 UI 调试模式下为 None。
+_wscn_auto_broadcast_fn: Callable[[], None] | None = None
+
+
+def set_wscn_auto_broadcast(fn) -> None:
+    """注册快讯自动播报检查函数（由 Scheduler.check_and_broadcast_wscn 绑定）。"""
+    global _wscn_auto_broadcast_fn
+    _wscn_auto_broadcast_fn = fn
+
 
 def _wscn_evict_locked() -> None:
     """缓存条目超上限时按写入时间淘汰最旧（cursor 键空间经路由校验已有界）。"""
@@ -1105,6 +1134,11 @@ def _wscn_home_loop() -> None:
             _wscn_refresh_home()
         except Exception:
             logger.warning("wscn home loop failed", exc_info=True)
+        if _wscn_auto_broadcast_fn:
+            try:
+                _wscn_auto_broadcast_fn()
+            except Exception:
+                logger.warning("wscn auto broadcast failed", exc_info=True)
 
 
 def _fetch_wscn_lives(*, cursor: str = "", limit: int = 30) -> dict:
@@ -2912,6 +2946,123 @@ def create_api_router(
             newer = [row for row in data["items"] if row["id"] > since_id]
             data = {**data, "items": newer}
         return data
+
+    # ---- 快讯播报：将重要快讯转发到系统 KOL，订阅者收到推送 ----
+
+    def _broadcast_wscn_item(item: dict, kol_id: int, kol_name: str) -> dict:
+        """将单条快讯 item 播报到指定系统 KOL：构造 Post → 入库 + 推送。
+
+        external_id=wscn_flash_{id} 天然去重（UNIQUE(platform, external_id)），
+        重复入库返回 broadcast=False。
+        """
+        item_id = int(item.get("id") or 0)
+        if item_id <= 0:
+            return {"broadcast": False, "post_id": None, "message": "无效的快讯ID"}
+        title = (item.get("highlight_title") or "").strip() or "重要快讯"
+        content = item.get("body") or ""
+        url = (item.get("url") or "").strip()
+        # published_at 是 ISO 格式（含时区），转为北京时间裸字符串与现有帖子一致
+        raw_ts = item.get("published_at") or ""
+        try:
+            dt = datetime.fromisoformat(raw_ts) if raw_ts else datetime.now(CN_TZ)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=CN_TZ)
+            published_at = dt.astimezone(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            published_at = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        post = Post(
+            platform="system",
+            kol_id=kol_id,
+            kol_name=kol_name,
+            external_id=f"wscn_flash_{item_id}",
+            title=title,
+            content=content,
+            url=url,
+            published_at=published_at,
+            post_type="wscn_flash",
+        )
+        if on_external_post:
+            post_id = on_external_post(post)
+        else:
+            post_id = db.save_post(post)
+        if post_id:
+            return {"broadcast": True, "post_id": post_id, "message": "播报成功"}
+        return {"broadcast": False, "post_id": None, "message": "该快讯已播报过"}
+
+    @router.get("/admin/wscn-broadcast/settings")
+    def wscn_broadcast_settings(admin: dict = Depends(require_admin)):
+        """获取快讯播报配置及可选系统 KOL 列表。"""
+        enabled = db.get_setting("wscn_broadcast_enabled") == "1"
+        kol_id_raw = db.get_setting("wscn_broadcast_kol_id") or ""
+        kol_id = int(kol_id_raw) if kol_id_raw.isdigit() else 0
+        threshold_raw = db.get_setting("wscn_broadcast_score_threshold") or "2"
+        score_threshold = int(threshold_raw) if threshold_raw.isdigit() else 2
+        last_id_raw = db.get_setting("wscn_broadcast_last_id") or "0"
+        last_id = int(last_id_raw) if last_id_raw.isdigit() else 0
+        system_kols = [
+            {"id": k["id"], "name": k["name"]}
+            for k in db.list_kols(platform="system")
+        ]
+        return {
+            "enabled": enabled,
+            "kol_id": kol_id,
+            "score_threshold": score_threshold,
+            "last_id": last_id,
+            "system_kols": system_kols,
+        }
+
+    @router.put("/admin/wscn-broadcast/settings")
+    def update_wscn_broadcast_settings(
+        body: WscnBroadcastSettingsIn, admin: dict = Depends(require_admin)
+    ):
+        """更新快讯播报配置。"""
+        values = {}
+        if body.enabled is not None:
+            values["wscn_broadcast_enabled"] = "1" if body.enabled else "0"
+        if body.kol_id is not None:
+            if body.kol_id <= 0:
+                values["wscn_broadcast_kol_id"] = ""
+            else:
+                kol = db.get_kol(body.kol_id)
+                if not kol:
+                    raise HTTPException(status_code=400, detail="目标 KOL 不存在")
+                if kol["platform"] != "system":
+                    raise HTTPException(
+                        status_code=400, detail="播报目标必须是系统 KOL"
+                    )
+                values["wscn_broadcast_kol_id"] = str(body.kol_id)
+        if body.score_threshold is not None:
+            if not 1 <= body.score_threshold <= 100:
+                raise HTTPException(status_code=400, detail="score 阈值须在 1-100 之间")
+            values["wscn_broadcast_score_threshold"] = str(body.score_threshold)
+        if values:
+            db.set_settings_atomic(values)
+            _audit(admin, "wscn_broadcast_settings", "", json.dumps(values, ensure_ascii=False))
+        return {"ok": True}
+
+    @router.post("/admin/wscn-broadcast")
+    def broadcast_wscn_item(body: WscnBroadcastItemIn, admin: dict = Depends(require_admin)):
+        """手动播报单条快讯到已配置的系统 KOL。"""
+        kol_id_raw = db.get_setting("wscn_broadcast_kol_id") or ""
+        kol_id = int(kol_id_raw) if kol_id_raw.isdigit() else 0
+        if kol_id <= 0:
+            raise HTTPException(status_code=400, detail="未配置播报目标系统 KOL")
+        kol = db.get_kol(kol_id)
+        if not kol or kol["platform"] != "system":
+            raise HTTPException(status_code=400, detail="播报目标系统 KOL 已失效")
+        item = {
+            "id": body.id,
+            "score": body.score,
+            "highlight_title": body.highlight_title,
+            "body": body.body,
+            "published_at": body.published_at,
+            "url": body.url,
+        }
+        result = _broadcast_wscn_item(item, kol_id, kol["name"])
+        _audit(admin, "wscn_broadcast_manual", str(body.id), result["message"])
+        return {"success": True, **result}
+
+    # ---- 快讯播报结束 ----
 
     @router.get("/kols/{kol_id}")
     def get_kol(kol_id: int, user: dict = Depends(get_current_user)):

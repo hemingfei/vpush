@@ -155,7 +155,8 @@ export function createAdminKolsView(dependencies) {
           <button class="btn-sm" ${page + 1 >= pages ? "disabled" : ""} onclick="adminKolsPage(${page + 1})">下一页 →</button>
         </div>
       </section>
-      ${newsKolPanelHtml()}`;
+      ${newsKolPanelHtml()}
+      ${wscnBroadcastPanelHtml()}`;
     // 回填筛选控件当前值（页面重建后）
     const qEl = $("#ak-q"); if (qEl) qEl.value = state.adminKolsQ || "";
     const catEl = $("#ak-category"); if (catEl) catEl.value = state.adminKolsCategory || "";
@@ -163,6 +164,7 @@ export function createAdminKolsView(dependencies) {
     adminKolSyncCheckall(kols);
     $("#admin-kols-tabs").innerHTML = PLATFORM_TABS.map((p) => platformTabHTML(p, state.adminKolsPlatform, "admin")).join("");
     loadNewsKolPanel();
+    loadWscnBroadcastPanel();
     return { hiddenFocus: focusIds.length > 0 && visibleFocus.length === 0 };
   }
 
@@ -475,6 +477,85 @@ export function createAdminKolsView(dependencies) {
     _newsKols.dirty = false;
     newsKolSync();
     newsKolRefreshItems();
+  }
+
+  // ---- 快讯播报：将重要快讯转发到系统 KOL，订阅者收到推送 ----
+  let _wscnBc = { enabled: false, kolId: 0, threshold: 2, systemKols: [] };
+
+  function wscnBroadcastPanelHtml() {
+    return `
+      <section class="section-panel wscn-broadcast-panel" id="wscn-broadcast-panel">
+        <header class="section-head">
+          <div><h2 class="section-title">快讯播报</h2>
+          <p class="section-meta">将华尔街见闻重要快讯自动播报到指定系统 KOL，订阅该 KOL 的用户收到推送；快讯列表里也可手动单条播报。</p></div>
+        </header>
+        <div class="toolbar" style="flex-wrap:wrap;align-items:center;gap:8px">
+          <label class="switch"><input type="checkbox" id="wb-enabled"> 启用自动播报</label>
+          <label class="muted" style="display:flex;align-items:center;gap:6px">
+            播报目标
+            <select id="wb-kol" class="form-control" style="width:auto"></select>
+          </label>
+          <label class="muted" style="display:flex;align-items:center;gap:6px">
+            重要阈值
+            <input id="wb-threshold" type="number" class="form-control" style="width:70px" min="1" max="100" value="2">
+            <span class="muted">（score ≥ 此值自动播报）</span>
+          </label>
+          <button type="button" class="btn-normal" onclick="saveWscnBroadcastSettings()">保存设置</button>
+          <span class="muted" id="wb-hint"></span>
+        </div>
+      </section>`;
+  }
+
+  async function loadWscnBroadcastPanel() {
+    try {
+      const s = await api("/api/admin/wscn-broadcast/settings");
+      _wscnBc = {
+        enabled: !!s.enabled,
+        kolId: s.kol_id || 0,
+        threshold: s.score_threshold || 2,
+        systemKols: s.system_kols || [],
+      };
+    } catch {
+      _wscnBc.systemKols = [];
+    }
+    const cb = $("#wb-enabled");
+    if (cb) cb.checked = _wscnBc.enabled;
+    const sel = $("#wb-kol");
+    if (sel) {
+      sel.innerHTML =
+        '<option value="0">未配置</option>' +
+        _wscnBc.systemKols
+          .map((k) => `<option value="${k.id}"${k.id === _wscnBc.kolId ? " selected" : ""}>${escapeHtml(k.name)}（#${k.id}）</option>`)
+          .join("");
+    }
+    const th = $("#wb-threshold");
+    if (th) th.value = _wscnBc.threshold;
+    if (!_wscnBc.systemKols.length) {
+      const hint = $("#wb-hint");
+      if (hint) hint.textContent = "尚无系统 KOL，请先在上方添加（勾选「系统 KOL」）";
+    }
+  }
+
+  async function saveWscnBroadcastSettings() {
+    const enabled = $("#wb-enabled")?.checked || false;
+    const kolId = Number($("#wb-kol")?.value || 0);
+    const threshold = Math.max(1, Math.min(100, Number($("#wb-threshold")?.value || 2)));
+    const hint = $("#wb-hint");
+    if (hint) hint.textContent = "保存中…";
+    try {
+      await api("/api/admin/wscn-broadcast/settings", {
+        method: "PUT",
+        body: JSON.stringify({ enabled, kol_id: kolId, score_threshold: threshold }),
+      });
+      _wscnBc.enabled = enabled;
+      _wscnBc.kolId = kolId;
+      _wscnBc.threshold = threshold;
+      if (hint) hint.textContent = "已保存";
+      flash("快讯播报设置已保存");
+    } catch (err) {
+      if (hint) hint.textContent = "";
+      flash("保存失败: " + err.message, "error");
+    }
   }
 
   async function adminBatchAddKols() {
@@ -2093,6 +2174,8 @@ export function createAdminKolsView(dependencies) {
     newsKolSearch,
     newsKolSave,
     newsKolDiscard,
+    loadWscnBroadcastPanel,
+    saveWscnBroadcastSettings,
     adminAddCategory,
     adminRenameCategory,
     adminDeleteCategory,

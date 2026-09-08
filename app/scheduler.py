@@ -2291,6 +2291,88 @@ class Scheduler:
             return None
         return self.ingest_external_post(post)
 
+    def check_and_broadcast_wscn(self) -> None:
+        """检查快讯缓存中新的重要快讯，转发到已配置的系统 KOL 播报。
+
+        由 api.py 的 wscn 后台刷新循环每 TTL 秒调用一次。读 settings 表判断
+        是否启用及目标 KOL/score 阈值，用 wscn_broadcast_last_id 跳过已处理条目，
+        逐条 ingest_external_post（INSERT OR IGNORE 天然去重，重复不推）。
+        """
+        try:
+            if self.db.get_setting("wscn_broadcast_enabled") != "1":
+                return
+            kol_id_raw = self.db.get_setting("wscn_broadcast_kol_id") or ""
+            kol_id = int(kol_id_raw) if kol_id_raw.isdigit() else 0
+            if kol_id <= 0:
+                return
+            kol = self.db.get_kol(kol_id)
+            if not kol or kol["platform"] != "system":
+                logger.warning(
+                    "wscn auto broadcast: 目标 KOL %s 不存在或非系统平台，跳过",
+                    kol_id,
+                )
+                return
+            threshold_raw = self.db.get_setting("wscn_broadcast_score_threshold") or "2"
+            threshold = int(threshold_raw) if threshold_raw.isdigit() else 2
+            last_id_raw = self.db.get_setting("wscn_broadcast_last_id") or "0"
+            last_id = int(last_id_raw) if last_id_raw.isdigit() else 0
+
+            from .api import _fetch_wscn_lives
+
+            data = _fetch_wscn_lives(limit=30)
+            items = data.get("items") or []
+            # id 升序处理：先发的先播报，时间线顺序正确
+            candidates = [
+                it for it in items
+                if int(it.get("id") or 0) > last_id
+                and int(it.get("score") or 1) >= threshold
+            ]
+            candidates.sort(key=lambda x: int(x.get("id") or 0))
+            if not candidates:
+                return
+            kol_name = kol["name"]
+            max_id = last_id
+            broadcast_count = 0
+            for item in candidates:
+                item_id = int(item["id"])
+                title = (item.get("highlight_title") or "").strip() or "重要快讯"
+                content = item.get("body") or ""
+                url = (item.get("url") or "").strip()
+                raw_ts = item.get("published_at") or ""
+                try:
+                    dt = datetime.fromisoformat(raw_ts) if raw_ts else datetime.now(CN_TZ)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=CN_TZ)
+                    published_at = dt.astimezone(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    published_at = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+                post = Post(
+                    platform="system",
+                    kol_id=kol_id,
+                    kol_name=kol_name,
+                    external_id=f"wscn_flash_{item_id}",
+                    title=title,
+                    content=content,
+                    url=url,
+                    published_at=published_at,
+                    post_type="wscn_flash",
+                )
+                post_id = self.ingest_external_post(post)
+                if post_id:
+                    broadcast_count += 1
+                # 无论是否重复，推进 last_id 避免反复检查已处理条目
+                if item_id > max_id:
+                    max_id = item_id
+            if max_id > last_id:
+                self.db.set_setting("wscn_broadcast_last_id", str(max_id))
+            if broadcast_count:
+                logger.info(
+                    "wscn auto broadcast: 检查 %d 条重要快讯，播报 %d 条到 KOL %s",
+                    len(candidates), broadcast_count, kol_name,
+                )
+        except Exception:
+            logger.warning("wscn auto broadcast check failed", exc_info=True)
+
     async def _publish_system_alert(self, title: str, content: str):
         """用系统平台账号「系统通知」发布运行告警（异步入口）。
 

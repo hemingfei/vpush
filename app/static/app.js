@@ -1890,6 +1890,7 @@ let _livePendingLatestId = 0;
 let _liveSavedScrollY = 0;
 let _liveClockTimer = null;
 let _liveInflight = null;
+const _wscnBroadcastedIds = new Set(); // 本会话已播报的快讯 ID（后端 external_id 去重兜底）
 let _feedLoadObserver = null;
 let _feedLoadFallback = null;
 
@@ -3340,14 +3341,51 @@ function liveFeedItem(item) {
     ? `<div class="live-title">${escapeHtml(item.highlight_title)}</div>`
     : "";
   const body = mdToHtml(item.body || "");
+  const isAdmin = !!state.user?.is_admin;
+  const broadcasted = _wscnBroadcastedIds.has(item.id);
+  const btn = isAdmin
+    ? `<button type="button" class="btn-sm live-broadcast-btn${broadcasted ? " done" : ""}" onclick="broadcastWscnItem(${item.id})">${broadcasted ? "已播报" : "播报"}</button>`
+    : "";
   return `
     <article class="live-item" data-score="${score}">
       <time class="live-time" datetime="${escapeHtml(item.published_at || "")}">${fmtPublished(item.published_at, true)}</time>
       <div class="live-main">
         ${title}
         <div class="live-body">${body}</div>
+        ${btn}
       </div>
     </article>`;
+}
+
+async function broadcastWscnItem(itemId) {
+  const item = _livePosts.find((p) => p.id === itemId);
+  if (!item) return;
+  if (_wscnBroadcastedIds.has(itemId)) return;
+  const btn = document.querySelector(`.live-broadcast-btn[onclick="broadcastWscnItem(${itemId})"]`);
+  if (btn) { btn.disabled = true; btn.textContent = "播报中…"; }
+  try {
+    const res = await api("/api/admin/wscn-broadcast", {
+      method: "POST",
+      body: JSON.stringify({
+        id: item.id,
+        score: Number(item.score) || 1,
+        highlight_title: item.highlight_title || "",
+        body: item.body || "",
+        published_at: item.published_at || "",
+        url: item.url || "",
+      }),
+    });
+    if (res.broadcast) {
+      flash(`已播报到系统 KOL（帖子 #${res.post_id}）`);
+    } else {
+      flash(res.message || "该快讯已播报过");
+    }
+    _wscnBroadcastedIds.add(itemId);
+    if (btn) { btn.classList.add("done"); btn.textContent = "已播报"; }
+  } catch (err) {
+    if (btn) { btn.disabled = false; btn.textContent = "播报"; }
+    flash("播报失败: " + err.message, "error");
+  }
 }
 
 function renderLiveFeed() {
@@ -6079,6 +6117,8 @@ const {
   newsKolSearch,
   newsKolSave,
   newsKolDiscard,
+  loadWscnBroadcastPanel,
+  saveWscnBroadcastSettings,
   adminAddCategory,
   adminRenameCategory,
   adminDeleteCategory,
@@ -7847,6 +7887,7 @@ const INLINE_HANDLERS = {
   archiveAdminNewsSource,
   authorizeFeishuDocuments,
   backFromImaReader,
+  broadcastWscnItem,
   backupDownload,
   backupImaStorage,
   backupRestoreUpload,
@@ -7896,6 +7937,7 @@ const INLINE_HANDLERS = {
   loadMoreFeishuTimeline,
   loadProxyAdmin,
   loadRealtimeNews,
+  loadWscnBroadcastPanel,
   logout,
   newsKolAll,
   newsKolDiscard,
@@ -8066,6 +8108,7 @@ const INLINE_HANDLERS = {
   adminKolWebhookSaveSecret,
   adminEditKolKeywords,
   saveKolKeywords,
+  saveWscnBroadcastSettings,
   adminViewKolBlock,
   // ---- hmf：MX LLM 打标面板（词表管理 tab）----
   adminMxTagAutoSave,

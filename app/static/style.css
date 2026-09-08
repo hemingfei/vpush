@@ -1699,6 +1699,18 @@ a.kol-card-head:hover .kol-card-info .name { color: var(--color-accent-text); }
 .live-attribution a { color: var(--color-text-muted); }
 .live-attribution a:hover { color: var(--color-accent-text); }
 
+/* 快讯播报按钮：管理员在快讯卡片上手动转发到系统 KOL */
+.live-broadcast-btn {
+  margin-top: 8px;
+  font-size: var(--text-xs);
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+.live-broadcast-btn:hover { opacity: 1; }
+.live-broadcast-btn.done { opacity: 0.45; cursor: default; }
+.wscn-broadcast-panel { margin-top: 16px; }
+.wscn-broadcast-panel .switch { font-weight: var(--font-weight-medium); }
+
 .tl-filterbar {
   position: sticky;
   top: calc(56px + var(--safe-top));
