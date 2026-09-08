@@ -2254,6 +2254,18 @@ pre.content-cell { white-space: pre-wrap; overflow-wrap: break-word; min-width: 
 }
 #st-imgbed .field-label { margin-top: 14px; }
 #ts-form .cfg-field { flex: none; }
+#ts-form .toolbar {
+  margin-top: var(--space-3);
+  flex-direction: column;
+  align-items: stretch;
+}
+#ts-form .toolbar .btn-normal,
+#ts-form .toolbar .btn-ghost {
+  height: 44px;
+  min-height: 44px;
+  padding: 0 20px;
+  font-size: var(--text-body);
+}
 #st-imgbed .imgbed-advanced { margin-top: 16px; }
 #st-imgbed .imgbed-advanced summary { cursor: pointer; }
 #st-imgbed .imgbed-advanced .cfg-fields { margin-top: 10px; }

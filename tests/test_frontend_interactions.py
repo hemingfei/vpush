@@ -1340,6 +1340,8 @@ def test_account_turnstile_settings_tab():
     assert "cfg-field" in html
     assert "field-label" not in html
     assert "notice-warn" in html
+    assert "btn-normal btn-fluid" in html
+    assert "btn-ghost btn-fluid" in html
     assert 'placeholder="vpush.net"' in src
     assert 'info.hostnames || "vpush.net"' not in src
     assert "保存登录验证（未保存）" in _fn_body("markTurnstileDirty")
