@@ -4121,6 +4121,9 @@ class DB:
                 self._conn.execute("BEGIN")
                 ids: list[int | None] = []
                 for p in posts:
+                    # 写回对象，后面 notify/digest 用的是同一份 Post，不能只在 SQL 里转
+                    p.title = to_simplified(p.title)
+                    p.content = to_simplified(p.content)
                     detail_json = _detail_json(p.detail)
                     images_json = json.dumps(p.images, ensure_ascii=False) if p.images else ""
                     tags_json = (

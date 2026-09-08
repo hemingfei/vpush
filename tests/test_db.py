@@ -525,6 +525,26 @@ def test_insert_post_stores_simplified_keeps_src(tmp_path):
     assert row["title_src"] == "Published"
     assert row["content_src"] == "This is traditional"
 
+    from app.fetchers.base import Post
+
+    live = Post(
+        platform="weibo",
+        kol_id=kid,
+        kol_name="繁体号",
+        external_id="p2",
+        title="臺灣經濟",
+        content="這個帳號發了繁體",
+        url="u2",
+        published_at="",
+        title_src="臺灣經濟",
+        content_src="這個帳號發了繁體",
+    )
+    assert db.insert_posts_batch([live])[0]
+    assert live.title == "台湾经济"
+    assert live.content == "这个账号发了繁体"
+    assert live.title_src == "臺灣經濟"
+    assert live.content_src == "這個帳號發了繁體"
+
 
 def test_register_codes_migrate_batch_columns(tmp_path):
     path = tmp_path / "old.db"
