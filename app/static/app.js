@@ -59,7 +59,7 @@ const CHANNEL_ICONS = {
 const GROK_TRANSLATE_ICON = `<svg class="p-tr-grok" viewBox="0 0 33 32" fill="currentColor" aria-hidden="true"><path d="M12.745 20.54l10.97-8.19c.539-.4 1.307-.244 1.564.38 1.349 3.288.746 7.241-1.938 9.955-2.683 2.714-6.417 3.31-9.83 1.954l-3.728 1.745c5.347 3.697 11.84 2.782 15.898-1.324 3.219-3.255 4.216-7.692 3.284-11.693l.008.009c-1.351-5.878.332-8.227 3.782-13.031L33 0l-4.54 4.59v-.014L12.743 20.544m-2.263 1.987c-3.837-3.707-3.175-9.446.1-12.755 2.42-2.449 6.388-3.448 9.852-1.979l3.72-1.737c-.67-.49-1.53-1.017-2.515-1.387-4.455-1.854-9.789-.931-13.41 2.728-3.483 3.523-4.579 8.94-2.697 13.561 1.405 3.454-.899 5.898-3.22 8.364C1.49 30.2.666 31.074 0 32l10.478-9.466"/></svg>`;
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.165";
+const APP_VERSION = "1.12.166";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -3479,6 +3479,108 @@ function imgbedStatusLabel(info) {
   return info.updated_at ? `已接入（${escapeHtml(fmtTs(info.updated_at))}）` : "已接入";
 }
 
+function markTurnstileDirty() {
+  const btn = $("#ts-save");
+  if (!btn || btn.dataset.dirty === "1") return;
+  btn.dataset.dirty = "1";
+  btn.textContent = "保存登录验证（未保存）";
+}
+
+function turnstileSettingsHtml(info) {
+  const active = !!info.active;
+  const enabled = !!info.enabled;
+  const status = active
+    ? "登录/注册会显示 Cloudflare 验证框"
+    : (enabled ? "开关已开，但还缺站点密钥或密钥，验证框不会出现" : "验证已关闭，登录不再出框");
+  const secretHint = info.secret_set
+    ? (info.secret_from_env ? "已从环境变量读取，留空保持原密钥" : "已配置，留空保持原密钥")
+    : "Cloudflare Turnstile 后台的 Secret";
+  const warn = enabled && !active
+    ? `<div class="notice notice-warn" role="alert">
+        <div class="notice-warn-body">
+          <strong>验证框不会出现</strong>
+          <p>开关已开，还缺站点密钥或密钥。填好后点保存。</p>
+        </div>
+      </div>`
+    : "";
+  return `${warn}<section class="section-panel" id="ts-form" data-secret-set="${info.secret_set ? "1" : "0"}">
+    <header class="section-head">
+      <div>
+        <h2 class="section-title">登录验证</h2>
+        <p class="section-meta">${status}。站点密钥和密钥在 Cloudflare Turnstile 后台创建；保存后即时生效，无需重启。</p>
+      </div>
+    </header>
+    <label class="switch">
+      <input id="ts-enabled" type="checkbox" ${enabled ? "checked" : ""} onchange="markTurnstileDirty()">
+      <span class="track"></span>
+      <span>开启登录页人机验证</span>
+    </label>
+    <label class="field-label" for="ts-sitekey">站点密钥<span class="cfg-unit">TURNSTILE_SITE_KEY</span></label>
+    <input id="ts-sitekey" class="form-control" autocomplete="off" spellcheck="false" value="${escapeHtml(info.sitekey || "")}" placeholder="0x4AAAAA..." oninput="markTurnstileDirty()">
+    <label class="field-label" for="ts-secret">密钥<span class="cfg-unit">TURNSTILE_SECRET</span></label>
+    <input id="ts-secret" class="form-control" type="password" autocomplete="new-password" placeholder="${escapeHtml(secretHint)}" oninput="markTurnstileDirty()">
+    <label class="field-label" for="ts-hostnames">允许域名<span class="cfg-unit">TURNSTILE_HOSTNAMES</span></label>
+    <input id="ts-hostnames" class="form-control" autocomplete="off" spellcheck="false" value="${escapeHtml(info.hostnames || "")}" placeholder="vpush.net" oninput="markTurnstileDirty()">
+    <div class="toolbar" style="margin-top:12px">
+      <button type="button" class="btn-normal" id="ts-save" onclick="saveTurnstileSettings()">保存登录验证</button>
+      <button type="button" class="btn-ghost" onclick="pasteCookieField('ts-secret').then(markTurnstileDirty)">从剪贴板填入密钥</button>
+    </div>
+  </section>`;
+}
+
+async function loadAdminTurnstile() {
+  const seq = _adminRenderSeq;
+  try {
+    const info = await api("/api/admin/turnstile");
+    if (!routeStillActive(seq)) return;
+    $("#admin-body").innerHTML = turnstileSettingsHtml(info);
+  } catch (err) {
+    if (!routeStillActive(seq)) return;
+    $("#admin-body").innerHTML = emptyState("加载失败: " + err.message);
+  }
+}
+
+async function saveTurnstileSettings() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
+  const enabled = !!$("#ts-enabled")?.checked;
+  const sitekey = $("#ts-sitekey")?.value.trim() || "";
+  const secret = $("#ts-secret")?.value.trim() || "";
+  const hostnames = $("#ts-hostnames")?.value.trim() || "";
+  const secretSet = $("#ts-form")?.dataset.secretSet === "1";
+  if (enabled && !sitekey) {
+    flash("请填写站点密钥", "error");
+    $("#ts-sitekey")?.focus();
+    return;
+  }
+  if (enabled && !secret && !secretSet) {
+    flash("请填写密钥", "error");
+    $("#ts-secret")?.focus();
+    return;
+  }
+  if (enabled && !hostnames) {
+    flash("请填写允许域名", "error");
+    $("#ts-hostnames")?.focus();
+    return;
+  }
+  try {
+    const saved = await api("/api/admin/turnstile", {
+      method: "PUT",
+      body: JSON.stringify({ enabled, sitekey, secret, hostnames }),
+    });
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    if (saved?.active) flash("登录验证已开启");
+    else if (saved?.enabled) flash("开关已开，但还缺密钥，验证框不会出现", "error");
+    else flash("登录验证已关闭");
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    await loadAdminGroup("account");
+  } catch (err) {
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    flash(err.message, "error");
+  }
+}
+
 async function saveImgbedSettings() {
   const routeSeq = routeRenderSeq;
   const token = state.token;
@@ -3564,6 +3666,7 @@ const ADMIN_TAB_GROUPS = {
   account: { label: "用户与注册", tabs: [
     { id: "users", label: "用户" },
     { id: "codes", label: "注册码" },
+    { id: "turnstile", label: "登录验证" },
   ]},
 };
 
@@ -3612,7 +3715,7 @@ function syncRequestBadges() {
 const ADMIN_GROUP_LOADERS = {
   content: { dashboard: () => loadAdminDashboard(), kols: () => loadAdminKols(), vocab: () => loadAdminVocab(), requests: () => loadAdminRequests() },
   ops: { posts: () => loadAdminPosts(), logs: () => loadAdminLogs(), audit: () => loadAdminAudit(), backup: () => loadAdminBackup() },
-  account: { users: () => loadAdminUsers(), codes: () => loadAdminCodes() },
+  account: { users: () => loadAdminUsers(), codes: () => loadAdminCodes(), turnstile: () => loadAdminTurnstile() },
 };
 
 async function loadAdminGroup(groupKey, seq) {
@@ -5881,6 +5984,8 @@ const INLINE_HANDLERS = {
   saveFeishuDocsConfig,
   saveImaCollector,
   saveImgbedSettings,
+  saveTurnstileSettings,
+  markTurnstileDirty,
   clearImgbedSettings,
   saveKeywords,
   saveKeywordsMatchReports,

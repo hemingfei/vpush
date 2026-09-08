@@ -527,6 +527,13 @@ class ImgbedIn(BaseModel):
     folder: str = ""
 
 
+class TurnstileIn(BaseModel):
+    enabled: bool = True
+    sitekey: Annotated[str, Field(max_length=128)] = ""
+    secret: Annotated[str, Field(max_length=256)] = ""
+    hostnames: Annotated[str, Field(max_length=500)] = ""
+
+
 class ImaCredentialsIn(BaseModel):
     cookie: str | None = None
     openapi_clientid: str | None = None
@@ -1132,8 +1139,7 @@ def create_api_router(
     MAX_PASSWORD_LEN = 128
     _ts_secret = (turnstile_secret or "").strip()
     _ts_sitekey = (turnstile_site_key or "").strip()
-    _ts_hosts = {h.strip() for h in (turnstile_hostnames or "").split(",") if h.strip()}
-    _ts_enabled = bool(_ts_secret)
+    _ts_hosts_raw = (turnstile_hostnames or "").strip()
     # 微博扫码登录会话：qrid -> {client, created_at}
     weibo_qr_sessions: dict[str, dict] = {}
 
@@ -1159,11 +1165,47 @@ def create_api_router(
         # 每次登录尝试顺带清理全量过期 IP 记录，防止无界增长（不能只删空列表）
         _prune_window_dict(login_attempts, LOGIN_WINDOW, now, max_entries=1000)
 
+    def _turnstile_runtime() -> dict:
+        stored_enabled = db.get_setting("turnstile_enabled")
+        stored_site = (db.get_setting("turnstile_site_key") or "").strip()
+        stored_secret = (db.get_setting("turnstile_secret") or "").strip()
+        stored_hosts = (db.get_setting("turnstile_hostnames") or "").strip()
+        sitekey = stored_site or _ts_sitekey
+        secret = stored_secret or _ts_secret
+        hosts_raw = stored_hosts or _ts_hosts_raw
+        hosts = {h.strip().lower() for h in hosts_raw.split(",") if h.strip()}
+        if stored_enabled in ("0", "1"):
+            wanted = stored_enabled == "1"
+        else:
+            wanted = bool(secret)
+        return {
+            "enabled": wanted,
+            "active": wanted and bool(secret) and bool(sitekey),
+            "sitekey": sitekey,
+            "secret": secret,
+            "secret_set": bool(secret),
+            "secret_from_env": bool(_ts_secret) and not stored_secret,
+            "hostnames": hosts_raw,
+            "hosts": hosts,
+        }
+
+    def _turnstile_admin_status() -> dict:
+        rt = _turnstile_runtime()
+        return {
+            "enabled": rt["enabled"],
+            "active": rt["active"],
+            "sitekey": rt["sitekey"],
+            "secret_set": rt["secret_set"],
+            "secret_from_env": rt["secret_from_env"],
+            "hostnames": rt["hostnames"],
+        }
+
     def _require_turnstile(token: str, action: str, ip: str) -> None:
-        if not _ts_enabled:
+        rt = _turnstile_runtime()
+        if not rt["active"]:
             return
         if not verify_turnstile(
-            secret=_ts_secret, token=token, action=action, hostnames=_ts_hosts, ip=ip
+            secret=rt["secret"], token=token, action=action, hostnames=rt["hosts"], ip=ip
         ):
             raise HTTPException(status_code=403, detail="人机验证失败，请重试")
 
@@ -1506,8 +1548,9 @@ def create_api_router(
 
     @router.get("/auth/turnstile")
     def turnstile_public():
-        # 有密钥才下发 sitekey，避免前端出框、后端却跳过校验
-        return {"sitekey": _ts_sitekey if _ts_enabled and _ts_sitekey else ""}
+        rt = _turnstile_runtime()
+        # 开关开且密钥齐全才下发 sitekey，避免前端出框、后端却跳过校验
+        return {"sitekey": rt["sitekey"] if rt["active"] else ""}
 
     @router.post("/auth/register")
     def register(body: RegisterIn, request: Request):
@@ -2941,6 +2984,51 @@ def create_api_router(
         db.set_setting("imgbed_last_check_error", check_error)
         _audit(admin, "set_imgbed", "", base_url)
         return _imgbed_status()
+
+    def _parse_turnstile_hostnames(raw: str) -> str:
+        parts = [h.strip().lower().rstrip(".") for h in (raw or "").split(",") if h.strip()]
+        if not parts:
+            raise HTTPException(status_code=400, detail="请填写允许域名")
+        for host in parts:
+            if "/" in host or ":" in host or not re.fullmatch(r"[a-z0-9.-]{1,253}", host):
+                raise HTTPException(status_code=400, detail=f"域名无效: {host}")
+        return ",".join(parts)
+
+    @router.get("/admin/turnstile", dependencies=[Depends(require_admin)])
+    def get_turnstile():
+        return _turnstile_admin_status()
+
+    @router.put("/admin/turnstile")
+    def set_turnstile(body: TurnstileIn, admin: dict = Depends(require_admin)):
+        current = _turnstile_admin_status()
+        sitekey = (body.sitekey or "").strip() or current["sitekey"]
+        secret = (body.secret or "").strip()
+        if not secret:
+            secret = (db.get_setting("turnstile_secret") or "").strip() or _ts_secret
+        hosts_raw = (body.hostnames or "").strip() or current["hostnames"]
+        if body.enabled:
+            hostnames = _parse_turnstile_hostnames(hosts_raw)
+        elif (body.hostnames or "").strip():
+            hostnames = _parse_turnstile_hostnames(body.hostnames)
+        else:
+            hostnames = current["hostnames"] or ""
+        if body.enabled and not sitekey:
+            raise HTTPException(status_code=400, detail="请填写站点密钥")
+        if body.enabled and not secret:
+            raise HTTPException(status_code=400, detail="请填写密钥")
+        db.set_setting("turnstile_enabled", "1" if body.enabled else "0")
+        if (body.sitekey or "").strip():
+            db.set_setting("turnstile_site_key", sitekey)
+        if (body.secret or "").strip():
+            db.set_setting("turnstile_secret", secret)
+        db.set_setting("turnstile_hostnames", hostnames)
+        _audit(
+            admin,
+            "set_turnstile",
+            "",
+            f"enabled={int(body.enabled)} sitekey={sitekey} hostnames={hostnames} secret={'set' if secret else 'missing'}",
+        )
+        return _turnstile_admin_status()
 
     @router.get("/admin/zsxq-cookie", dependencies=[Depends(require_admin)])
     def get_zsxq_cookie():
@@ -5452,6 +5540,7 @@ def create_api_router(
             },
             "ima_collector": _ima_collector_status(),
             "imgbed": _imgbed_status(),
+            "turnstile": _turnstile_admin_status(),
             "polling_config": _effective_polling(),
             "plaza_sources": plaza_source_rows(db),
             "zsxq_cache": zsxq_cache_stats(db),

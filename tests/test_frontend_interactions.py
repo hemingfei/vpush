@@ -1325,6 +1325,29 @@ def test_stats_cookie_repair_deep_link():
     assert "src.xueqiu && !src.xueqiu.ok" in repair
 
 
+def test_account_turnstile_settings_tab():
+    src = APP_JS.read_text()
+    dashboard = ADMIN_DASHBOARD_JS.read_text()
+    assert 'id="ts-enabled"' not in dashboard
+    assert "turnstileSettingsHtml" not in dashboard
+    assert '{ id: "turnstile", label: "登录验证" }' in src
+    assert "turnstile: () => loadAdminTurnstile()" in src
+    assert "async function loadAdminTurnstile(" in src
+    assert 'id="ts-enabled"' in src
+    assert "TURNSTILE_SITE_KEY" in src
+    assert "notice-warn" in _fn_body("turnstileSettingsHtml")
+    assert 'placeholder="vpush.net"' in src
+    assert 'info.hostnames || "vpush.net"' not in src
+    assert "保存登录验证（未保存）" in _fn_body("markTurnstileDirty")
+    save = _fn_body("saveTurnstileSettings")
+    assert "loadAdminStats" not in save
+    assert 'loadAdminGroup("account")' in save
+    assert "登录验证已开启" in save
+    assert "开关已开，但还缺密钥" in save
+    assert "登录验证已关闭" in save
+    assert '"/api/admin/turnstile"' in src
+
+
 def test_stats_imgbed_tab_matches_cookie_settings_pattern():
     src = APP_JS.read_text()
     dashboard = ADMIN_DASHBOARD_JS.read_text()
