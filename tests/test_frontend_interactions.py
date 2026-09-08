@@ -1335,7 +1335,11 @@ def test_account_turnstile_settings_tab():
     assert "async function loadAdminTurnstile(" in src
     assert 'id="ts-enabled"' in src
     assert "TURNSTILE_SITE_KEY" in src
-    assert "notice-warn" in _fn_body("turnstileSettingsHtml")
+    html = _fn_body("turnstileSettingsHtml")
+    assert "cfg-stack" in html
+    assert "cfg-field" in html
+    assert "field-label" not in html
+    assert "notice-warn" in html
     assert 'placeholder="vpush.net"' in src
     assert 'info.hostnames || "vpush.net"' not in src
     assert "保存登录验证（未保存）" in _fn_body("markTurnstileDirty")

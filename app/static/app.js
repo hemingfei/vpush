@@ -59,7 +59,7 @@ const CHANNEL_ICONS = {
 const GROK_TRANSLATE_ICON = `<svg class="p-tr-grok" viewBox="0 0 33 32" fill="currentColor" aria-hidden="true"><path d="M12.745 20.54l10.97-8.19c.539-.4 1.307-.244 1.564.38 1.349 3.288.746 7.241-1.938 9.955-2.683 2.714-6.417 3.31-9.83 1.954l-3.728 1.745c5.347 3.697 11.84 2.782 15.898-1.324 3.219-3.255 4.216-7.692 3.284-11.693l.008.009c-1.351-5.878.332-8.227 3.782-13.031L33 0l-4.54 4.59v-.014L12.743 20.544m-2.263 1.987c-3.837-3.707-3.175-9.446.1-12.755 2.42-2.449 6.388-3.448 9.852-1.979l3.72-1.737c-.67-.49-1.53-1.017-2.515-1.387-4.455-1.854-9.789-.931-13.41 2.728-3.483 3.523-4.579 8.94-2.697 13.561 1.405 3.454-.899 5.898-3.22 8.364C1.49 30.2.666 31.074 0 32l10.478-9.466"/></svg>`;
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.166";
+const APP_VERSION = "1.12.167";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -3510,17 +3510,25 @@ function turnstileSettingsHtml(info) {
         <p class="section-meta">${status}。站点密钥和密钥在 Cloudflare Turnstile 后台创建；保存后即时生效，无需重启。</p>
       </div>
     </header>
-    <label class="switch">
-      <input id="ts-enabled" type="checkbox" ${enabled ? "checked" : ""} onchange="markTurnstileDirty()">
-      <span class="track"></span>
-      <span>开启登录页人机验证</span>
-    </label>
-    <label class="field-label" for="ts-sitekey">站点密钥<span class="cfg-unit">TURNSTILE_SITE_KEY</span></label>
-    <input id="ts-sitekey" class="form-control" autocomplete="off" spellcheck="false" value="${escapeHtml(info.sitekey || "")}" placeholder="0x4AAAAA..." oninput="markTurnstileDirty()">
-    <label class="field-label" for="ts-secret">密钥<span class="cfg-unit">TURNSTILE_SECRET</span></label>
-    <input id="ts-secret" class="form-control" type="password" autocomplete="new-password" placeholder="${escapeHtml(secretHint)}" oninput="markTurnstileDirty()">
-    <label class="field-label" for="ts-hostnames">允许域名<span class="cfg-unit">TURNSTILE_HOSTNAMES</span></label>
-    <input id="ts-hostnames" class="form-control" autocomplete="off" spellcheck="false" value="${escapeHtml(info.hostnames || "")}" placeholder="vpush.net" oninput="markTurnstileDirty()">
+    <div class="cfg-stack">
+      <label class="switch">
+        <input id="ts-enabled" type="checkbox" ${enabled ? "checked" : ""} onchange="markTurnstileDirty()">
+        <span class="track"></span>
+        <span>开启登录页人机验证</span>
+      </label>
+      <label class="cfg-field" for="ts-sitekey">
+        <span>站点密钥<span class="cfg-unit">TURNSTILE_SITE_KEY</span></span>
+        <input id="ts-sitekey" class="form-control" autocomplete="off" spellcheck="false" value="${escapeHtml(info.sitekey || "")}" placeholder="0x4AAAAA..." oninput="markTurnstileDirty()">
+      </label>
+      <label class="cfg-field" for="ts-secret">
+        <span>密钥<span class="cfg-unit">TURNSTILE_SECRET</span></span>
+        <input id="ts-secret" class="form-control" type="password" autocomplete="new-password" placeholder="${escapeHtml(secretHint)}" oninput="markTurnstileDirty()">
+      </label>
+      <label class="cfg-field" for="ts-hostnames">
+        <span>允许域名<span class="cfg-unit">TURNSTILE_HOSTNAMES</span></span>
+        <input id="ts-hostnames" class="form-control" autocomplete="off" spellcheck="false" value="${escapeHtml(info.hostnames || "")}" placeholder="vpush.net" oninput="markTurnstileDirty()">
+      </label>
+    </div>
     <div class="toolbar" style="margin-top:12px">
       <button type="button" class="btn-normal" id="ts-save" onclick="saveTurnstileSettings()">保存登录验证</button>
       <button type="button" class="btn-ghost" onclick="pasteCookieField('ts-secret').then(markTurnstileDirty)">从剪贴板填入密钥</button>

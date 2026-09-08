@@ -2253,6 +2253,7 @@ pre.content-cell { white-space: pre-wrap; overflow-wrap: break-word; min-width: 
   height: 44px;
 }
 #st-imgbed .field-label { margin-top: 14px; }
+#ts-form .cfg-field { flex: none; }
 #st-imgbed .imgbed-advanced { margin-top: 16px; }
 #st-imgbed .imgbed-advanced summary { cursor: pointer; }
 #st-imgbed .imgbed-advanced .cfg-fields { margin-top: 10px; }
