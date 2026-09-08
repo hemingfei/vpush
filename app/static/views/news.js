@@ -15,8 +15,10 @@ export function createNewsView(dependencies) {
     fmtPublished,
     externalLinkIcon,
     avatarHtml,
+    avatarText,
     mdToHtml,
     imgSrcFor,
+    playNotificationSound,
     upArrowIcon,
     PLATFORM_LABELS,
     PLATFORM_ICONS,
@@ -25,6 +27,7 @@ export function createNewsView(dependencies) {
   let rtPollTimer = null;
   let rtScrollRaf = 0;
   let rtScrollBound = false;
+  let rtVisibilityBound = false;
 
   // 实时资讯时间：当天只显示时钟，非当天才带日期（fmtPublished 当天返回「今天 HH:MM:SS」）
   function fmtRtTime(s) {
@@ -193,6 +196,7 @@ export function createNewsView(dependencies) {
     renderNewsShell(
       "realtime",
       `<div class="news-list-toolbar"><select id="news-rt-source-filter" class="form-control" aria-label="资讯来源" onchange="selectNewsRtSource(this.value)">${newsRtSourceFilterOptions()}</select><div class="search-bar"><input id="news-rt-query" type="search" placeholder="搜索内容或大V" value="${escapeHtml(state.newsRtQuery || "")}" oninput="queueNewsRtSearch(this.value)"></div></div><div id="news-rt-list" class="news-list news-rt-list">${newsRtSkeletonHtml()}</div><div id="news-rt-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>
+      <div class="news-rt-new-badge" id="news-rt-new-badge"><button type="button" class="news-rt-new-badge-btn" onclick="newsRtNewBadgeClick()" aria-label="有新动态，点击查看">${upArrowIcon}<span class="news-rt-badge-avatars" id="news-rt-badge-avatars"></span><span class="news-rt-new-badge-label">有新动态</span></button></div>
       <button type="button" id="news-rt-backtop" class="tl-backtop" aria-label="返回顶部" title="返回顶部" onclick="newsRtBacktopClick()">${upArrowIcon}<span class="tl-backtop-new" id="news-rt-backtop-new" hidden></span></button>`,
     );
     state.newsRtItems = [];
@@ -203,6 +207,7 @@ export function createNewsView(dependencies) {
     await loadRealtimeNews(true, seq);
     startNewsRtPoll(seq);
     ensureNewsRtScrollChrome();
+    ensureNewsRtVisibilityPoll();
     newsRtSyncBacktop();
   }
 
@@ -309,9 +314,8 @@ export function createNewsView(dependencies) {
     rtPollTimer = setInterval(() => pollNewsRtUpdates(seq), 60000);
   }
 
-  // 增量轮询：新帖不自动插到顶部（不打断阅读位置），先攒进待读缓冲，
-  // 由返回顶部按钮的角标提示；用户本来就在顶部时直接合并显示，
-  // 点击按钮或自己滚回顶部时也一次性合并
+  // 增量轮询：新帖不自动插到顶部（不打断阅读位置），先攒进待读缓冲；
+  // 用户在顶部时直接合并 + 提示音；用户在下方时弹胶囊 + 提示音，点击或滚回顶部再合并
   async function pollNewsRtUpdates(seq) {
     if (document.visibilityState === "hidden") return;
     const list = $("#news-rt-list");
@@ -326,9 +330,66 @@ export function createNewsView(dependencies) {
       if (!incoming.length) return;
       state.newsRtLatestId = incoming.reduce((max, p) => Math.max(max, Number(p.id) || 0), state.newsRtLatestId);
       state.newsRtPending = [...incoming, ...state.newsRtPending];
-      if (window.scrollY <= 80) newsRtMergePending();
-      else newsRtSyncBacktop();
+      if (window.scrollY <= 80) {
+        playNotificationSound();
+        newsRtMergePending();
+      } else {
+        playNotificationSound();
+        newsRtShowNewBadge();
+        newsRtSyncBacktop();
+      }
     } catch { /* 轮询失败静默，下一轮重试 */ }
+  }
+
+  // 新帖胶囊：头像 + 条数 + 点击查看，挂在工具栏底部
+  function newsRtShowNewBadge() {
+    const badge = $("#news-rt-new-badge");
+    if (!badge) return;
+    const n = state.newsRtPending.length;
+    const btn = badge.querySelector(".news-rt-new-badge-btn");
+    if (btn) {
+      const label = `${n} 条新动态，点击查看`;
+      btn.title = label;
+      btn.setAttribute("aria-label", label);
+    }
+    const labelEl = badge.querySelector(".news-rt-new-badge-label");
+    if (labelEl) labelEl.textContent = `${n} 条新动态`;
+    const avs = $("#news-rt-badge-avatars");
+    if (avs) avs.innerHTML = newsRtBadgeAvatarsHtml(state.newsRtPending);
+    badge.classList.add("show");
+  }
+
+  function newsRtHideNewBadge() {
+    $("#news-rt-new-badge")?.classList.remove("show");
+  }
+
+  // 胶囊头像：去重取前 3 个大V（无头像用首字色块）
+  function newsRtBadgeAvatarsHtml(posts, max = 3) {
+    const seen = new Set();
+    const avs = [];
+    for (const p of posts) {
+      const key = p.kol_id || p.kol_name;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (avs.length >= max) break;
+      avs.push(p.avatar_url
+        ? `<img src="${escapeHtml(p.avatar_url)}" alt="" data-av-name="${escapeHtml(p.kol_name)}" data-av-class="ph" onerror="avatarImgError(this)">`
+        : `<span class="ph">${escapeHtml(avatarText(p.kol_name))}</span>`);
+    }
+    return avs.join("");
+  }
+
+  // 切回标签页时立即轮询一次，不用等下一个 60s 周期。
+  // 不捕获 seq 闭包：listener 只绑一次，但每次切回实时资讯页 seq 会变，
+  // 在调用时取最新 seq 才不会因 routeStillActive 判定过期而整段丢弃
+  function ensureNewsRtVisibilityPoll() {
+    if (rtVisibilityBound) return;
+    rtVisibilityBound = true;
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") return;
+      if (!$("#news-rt-list")) return;
+      pollNewsRtUpdates(currentRouteSeq());
+    });
   }
 
   // 返回顶部按钮：滚动较深时常显；有待读新帖时即使没滚也弹出并带条数角标
@@ -374,10 +435,16 @@ export function createNewsView(dependencies) {
       const list = $("#news-rt-list");
       if (list) list.insertAdjacentHTML("afterbegin", incoming.map(newsRtItemHtml).join(""));
     }
+    newsRtHideNewBadge();
     newsRtSyncBacktop();
   }
 
   function newsRtBacktopClick() {
+    newsRtMergePending();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function newsRtNewBadgeClick() {
     newsRtMergePending();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -548,6 +615,7 @@ export function createNewsView(dependencies) {
     queueNewsRtSearch,
     newsRtBacktopClick,
     newsRtExpand,
+    newsRtNewBadgeClick,
     openNewsArticle,
     queueNewsSearch,
     renderFinancialNewsArticle,

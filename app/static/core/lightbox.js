@@ -16,6 +16,8 @@ export function createLightbox(dependencies) {
   let _lbLastTapY = 0;
   let _lbTapFromTouchAt = 0; // 移动端双击已在 touchend 处理，用于屏蔽紧随合成的 dblclick
   let _lbOnResize = null;
+  let _lbSavedScrollY = 0; // 开灯箱前锁存滚动位置：body.lightbox-open 会隐藏滚动条，
+                           // 部分浏览器会丢掉视口滚动偏移，关灯箱后需恢复
 
   function _lbImg() {
     return document.querySelector(".lightbox-img");
@@ -175,6 +177,7 @@ export function createLightbox(dependencies) {
     window.addEventListener("resize", _lbOnResize);
     document.body.appendChild(overlay);
     _lbSyncZoomUI(); // 初始 1x：禁用「−」、倍数显示 100%
+    _lbSavedScrollY = window.scrollY;
     document.body.classList.add("lightbox-open");
     document.addEventListener("keydown", lightboxKeyHandler);
     trapFocus(overlay, closeLightbox);
@@ -318,6 +321,8 @@ export function createLightbox(dependencies) {
     overlay.addEventListener("animationend", remove, { once: true });
     setTimeout(remove, 240); // 略大于关闭动画 200ms；reduced-motion 下 animationend 不触发时兜底
     document.body.classList.remove("lightbox-open");
+    // 恢复灯箱打开前的滚动位置：overflow:hidden → overflow:visible 切换可能丢偏移
+    window.scrollTo(0, _lbSavedScrollY);
     document.removeEventListener("keydown", lightboxKeyHandler);
   }
 
