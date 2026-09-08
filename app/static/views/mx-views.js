@@ -1624,6 +1624,10 @@ export function createMxViewsView(dependencies) {
           </div>
           <textarea id="mxva-view-prompt" class="form-control mxva-prompt-area" rows="12"
             placeholder="留空则使用默认研判提示词">${escapeHtml(cfg.view_prompt)}</textarea>
+          <div class="mxva-prompt-foot">
+            <button type="button" class="btn-sm" onclick="mxvAdminPreviewViewPrompt()">预览完整提示词</button>
+            <span class="muted">拼接规则段 + 题材参考表 + 操作词表</span>
+          </div>
           <p class="mxva-note">大V消息→多空观点提取的系统提示词。修改后下一批研判即生效；留空回退默认。</p>
         </div>
         <div class="mxva-card">
@@ -1633,6 +1637,10 @@ export function createMxViewsView(dependencies) {
           </div>
           <textarea id="mxva-summary-prompt" class="form-control mxva-prompt-area" rows="12"
             placeholder="留空则使用默认总结提示词">${escapeHtml(cfg.summary_prompt)}</textarea>
+          <div class="mxva-prompt-foot">
+            <button type="button" class="btn-sm" onclick="mxvAdminPreviewSummaryPrompt()">预览完整提示词</button>
+            <span class="muted">总结提示词无额外拼接，即最终文本</span>
+          </div>
           <p class="mxva-note">每快照「今日操作」总结的系统提示词。修改后下次生成总结即生效；留空回退默认。</p>
         </div>
       </div>
@@ -1780,6 +1788,57 @@ export function createMxViewsView(dependencies) {
     }
   }
 
+  // ---- 预览完整提示词（拼接待送 LLM 的最终 system prompt） ----
+
+  /** 组装研判提示词完整文本：规则段（当前编辑值或默认）+ 题材参考表 + 操作词表。
+   *  与后端 build_view_system_prompt() 的拼接逻辑保持一致。 */
+  function mxvAdminBuildFullViewPrompt() {
+    const raw = ($("#mxva-view-prompt") && $("#mxva-view-prompt").value) || "";
+    const header = raw.trim() || (_mxvAdmin.viewPromptDefault || "");
+    const hints = (_mxvAdmin.hints || []).filter((h) => h.trim());
+    const actions = (_mxvAdmin.actions || []).filter((a) => a.trim());
+    const parts = [
+      header,
+      "【题材参考表】",
+      hints.length ? hints.join("、") : "（空）",
+    ];
+    parts.push("\n【操作词表】\n" + (actions.length ? actions.join("、") : "（空）"));
+    return parts.join("\n");
+  }
+
+  function mxvAdminPreviewViewPrompt() {
+    mxvAdminShowPromptPreview("研判提示词（完整拼接）", mxvAdminBuildFullViewPrompt());
+  }
+
+  function mxvAdminPreviewSummaryPrompt() {
+    const raw = ($("#mxva-summary-prompt") && $("#mxva-summary-prompt").value) || "";
+    const text = raw.trim() || (_mxvAdmin.summaryPromptDefault || "");
+    mxvAdminShowPromptPreview("总结提示词（完整）", text);
+  }
+
+  function mxvAdminShowPromptPreview(title, content) {
+    mxvAdminClosePromptPreview();
+    const mask = document.createElement("div");
+    mask.className = "mxva-preview-mask";
+    mask.onclick = mxvAdminClosePromptPreview;
+    mask.innerHTML = `
+      <div class="mxva-preview-dialog" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}" onclick="event.stopPropagation()">
+        <div class="mxva-preview-head">
+          <b>${escapeHtml(title)}</b>
+          <button type="button" class="btn-sm" onclick="mxvAdminClosePromptPreview()" aria-label="关闭">×</button>
+        </div>
+        <pre class="mxva-preview-body">${escapeHtml(content)}</pre>
+        <div class="mxva-preview-foot">
+          <button type="button" class="btn-sm" onclick="mxvAdminClosePromptPreview()">关闭</button>
+        </div>
+      </div>`;
+    document.body.appendChild(mask);
+  }
+
+  function mxvAdminClosePromptPreview() {
+    document.querySelectorAll(".mxva-preview-mask").forEach((el) => el.remove());
+  }
+
   async function mxvAdminAdopt(name) {
     try {
       await api("/api/admin/mx-views/topic-candidates/adopt", { method: "POST", body: JSON.stringify({ name }) });
@@ -1898,5 +1957,8 @@ export function createMxViewsView(dependencies) {
     mxvAdminRestoreSummaryPrompt,
     mxvAdminActionAdd,
     mxvAdminActionsReset,
+    mxvAdminPreviewViewPrompt,
+    mxvAdminPreviewSummaryPrompt,
+    mxvAdminClosePromptPreview,
   };
 }
