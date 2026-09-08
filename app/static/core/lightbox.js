@@ -16,8 +16,8 @@ export function createLightbox(dependencies) {
   let _lbLastTapY = 0;
   let _lbTapFromTouchAt = 0; // 移动端双击已在 touchend 处理，用于屏蔽紧随合成的 dblclick
   let _lbOnResize = null;
-  let _lbSavedScrollY = 0; // 开灯箱前锁存滚动位置：body.lightbox-open 会隐藏滚动条，
-                           // 部分浏览器会丢掉视口滚动偏移，关灯箱后需恢复
+  let _lbSavedScrollY = 0; // 开灯箱前锁存滚动位置：body 改 position:fixed 后用 top 负偏移冻结视图，
+                           // 关灯箱后清除 inline 样式 + scrollTo 恢复原位
 
   function _lbImg() {
     return document.querySelector(".lightbox-img");
@@ -178,7 +178,16 @@ export function createLightbox(dependencies) {
     document.body.appendChild(overlay);
     _lbSyncZoomUI(); // 初始 1x：禁用「−」、倍数显示 100%
     _lbSavedScrollY = window.scrollY;
-    document.body.classList.add("lightbox-open");
+    // 用 position:fixed 锁定 body 而非 overflow:hidden：
+    // 后者在带 sticky 元素的页面上可能让浏览器把 scrollY 归零并发出合成 scroll 事件，
+    // 触发其他页面的滚动监听（如最新动态的 tlSyncScrollChrome → refreshTimeline → scrollTo(0)）。
+    // position:fixed 不产生 scroll 事件，关灯箱后恢复 inline 样式 + scrollTo 即可。
+    document.body.style.position = "fixed";
+    document.body.style.top = `-${_lbSavedScrollY}px`;
+    document.body.style.left = "0";
+    document.body.style.right = "0";
+    document.body.style.width = "100%";
+    document.body.style.overflow = "hidden";
     document.addEventListener("keydown", lightboxKeyHandler);
     trapFocus(overlay, closeLightbox);
     overlay.querySelector(".lightbox-close")?.focus();
@@ -320,8 +329,13 @@ export function createLightbox(dependencies) {
     const remove = () => overlay.remove();
     overlay.addEventListener("animationend", remove, { once: true });
     setTimeout(remove, 240); // 略大于关闭动画 200ms；reduced-motion 下 animationend 不触发时兜底
-    document.body.classList.remove("lightbox-open");
-    // 恢复灯箱打开前的滚动位置：overflow:hidden → overflow:visible 切换可能丢偏移
+    // 恢复 body 定位 + 滚动位置
+    document.body.style.position = "";
+    document.body.style.top = "";
+    document.body.style.left = "";
+    document.body.style.right = "";
+    document.body.style.width = "";
+    document.body.style.overflow = "";
     window.scrollTo(0, _lbSavedScrollY);
     document.removeEventListener("keydown", lightboxKeyHandler);
   }
