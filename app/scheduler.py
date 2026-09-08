@@ -2605,7 +2605,7 @@ class Scheduler:
         return self.db.get_setting("stock_alias_last_date") != datetime.now().strftime("%Y-%m-%d")
 
     def _run_report_extraction_task(self) -> int:
-        """研报结构化抽取：每小时一批，读 txt → LLM → 结构化落库。
+        """研报结构化抽取：每小时处理最近三天的一批研报。
 
         开关与预算都在 settings：report_extract_enabled（默认开，='0' 关）、
         report_extract_model（默认 gemini-3.8-flash-high）、
@@ -2625,15 +2625,13 @@ class Scheduler:
         if site_llm is None:
             return 0
         model = db.get_setting("report_extract_model") or "gemini-3.8-flash-high"
-        # 默认圈定研报类知识库（投行/中金/SemiAnalysis/外行），排除飞书短讯类
-        groups = [
-            g.strip()
-            for g in (
-                db.get_setting("report_extract_groups")
-                or "7479082602225992,local-cicc-research,7476629605476515,legacy"
-            ).split(",")
-            if g.strip()
-        ]
+        min_sort_date = (datetime.now(CN_TZ).date() - timedelta(days=2)).isoformat()
+        configured_groups = db.get_setting("report_extract_groups")
+        groups = (
+            [group.strip() for group in configured_groups.split(",") if group.strip()]
+            if configured_groups
+            else db.report_extraction_group_ids(min_sort_date=min_sort_date)
+        )
         from .llm import extract_report_structure
         from .report_text import pdf_first_pages_text as _pdf_first_pages_text
         from .stock_universe import bundled_universe_codes
@@ -2642,15 +2640,23 @@ class Scheduler:
         resolve = self.ima_archive_file
         if resolve is None:
             return 0
-        pipeline_version = "2"
+        pipeline_version = "3"
         version_key = "report_extract_pipeline_version"
         if db.get_setting(version_key) != pipeline_version:
-            reset = db.reset_report_extractions(("failed", "notext", "empty", "nofile"))
+            reset = db.reset_report_extractions(
+                ("failed", "notext", "empty", "nofile"),
+                group_ids=groups,
+                min_sort_date=min_sort_date,
+            )
             db.set_setting(version_key, pipeline_version)
             if reset:
                 logger.info("研报结构化抽取：重新排队可恢复结果 %d 篇", reset)
         batch = min(80, daily_limit - done_today)
-        docs = db.pending_report_extractions(limit=batch, group_ids=groups or None)
+        docs = db.pending_report_extractions(
+            limit=batch,
+            group_ids=groups,
+            min_sort_date=min_sort_date,
+        )
         if not docs:
             return 0
         import hashlib
@@ -2660,7 +2666,7 @@ class Scheduler:
         for doc in docs:
             group_id = str(doc["group_id"] or "")
             media_id = str(doc["media_id"] or "")
-            # txt 优先；txt 缺失（如中金/投行库只有 PDF）走 pymupdf 前几页兜底
+            # txt 优先；txt 缺失（如中金/投行库只有 PDF）走 pypdf 前几页兜底
             has_txt = bool(doc["txt_path"])
             txt_path = resolve(doc["txt_path"]) if has_txt else None
             pdf_path = resolve(doc["pdf_path"]) if doc["pdf_path"] else None
@@ -2682,7 +2688,13 @@ class Scheduler:
                 continue
             txt_hash = hashlib.sha256(text[:20000].encode("utf-8", "ignore")).hexdigest()[:16]
             try:
-                result = extract_report_structure(text, site_llm, model=model, universe=universe)
+                result = extract_report_structure(
+                    text,
+                    site_llm,
+                    model=model,
+                    universe=universe,
+                    title=str(doc["name"] or ""),
+                )
             except Exception as exc:
                 logger.warning("研报抽取失败 %s/%s: %s", group_id, media_id, exc)
                 db.save_report_extraction(

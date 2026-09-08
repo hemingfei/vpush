@@ -2021,6 +2021,33 @@ def test_report_extraction_tables_and_roundtrip(tmp_path):
     ]
 
 
+def test_report_extraction_pending_and_reset_respect_recent_cutoff(tmp_path):
+    db = DB(str(tmp_path / "report-window.db"))
+    for media_id, sort_date in (("recent", "2026-09-08"), ("old", "2026-09-05")):
+        db._execute(
+            "INSERT INTO ima_document_index "
+            "(group_id, media_id, name, has_txt, txt_path, sort_date) "
+            "VALUES ('research', ?, 'Report', 1, ?, ?)",
+            (media_id, f"{media_id}.txt", sort_date),
+        )
+
+    pending = db.pending_report_extractions(
+        limit=10, group_ids=["research"], min_sort_date="2026-09-06"
+    )
+    assert [row["media_id"] for row in pending] == ["recent"]
+
+    db.save_report_extraction("research", "recent", status="empty")
+    db.save_report_extraction("research", "old", status="empty")
+    assert db.reset_report_extractions(
+        ("empty",), group_ids=["research"], min_sort_date="2026-09-06"
+    ) == 1
+    remaining = db.report_extractions_for_keys(
+        [("research", "recent"), ("research", "old")]
+    )
+    assert ("research", "recent") not in remaining
+    assert remaining[("research", "old")]["status"] == "empty"
+
+
 def test_report_extraction_rating_ticker_filters(tmp_path):
     """研报库列表筛选：评级精确匹配、标的代码/名称匹配。"""
     db = DB(str(tmp_path / "report-filter.db"))
@@ -2137,3 +2164,43 @@ def test_report_extraction_prompt_supports_english_and_global_tickers():
     assert "英文" in captured["prompt"]
     assert "美股" in captured["prompt"]
     assert "港股" in captured["prompt"]
+
+
+def test_report_extraction_uses_title_when_pdf_text_is_too_short():
+    import json
+    from types import SimpleNamespace
+
+    import httpx
+
+    from app.llm import extract_report_structure
+
+    captured = {}
+
+    def handler(request):
+        captured["prompt"] = json.loads(request.read())["messages"][0]["content"]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"rating":"","target_price":"","thesis":"","report_kind":"公司","tickers":[]}'
+                        }
+                    }
+                ]
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    config = SimpleNamespace(api_key="key", api_base="https://example.com/v1", model="model")
+    title = "Goldman Sachs-Recruit Holdings (6098.T): AI transformation, Buy"
+    result = extract_report_structure(
+        "AHRHXHo4pVeWaY7NaO8OnPnNtRtNkPpPwPkPnNqN6MpOqRuOoMvMvPrMnP",
+        config,
+        client=client,
+        title=title,
+    )
+
+    assert title in captured["prompt"]
+    assert result["rating"] == "Buy"
+    assert result["status"] == "ok"

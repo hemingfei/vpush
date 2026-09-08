@@ -583,6 +583,39 @@ _REPORT_EXTRACT_PROMPT = (
     "只抽取文本明确提到的事实，不确定就留空；tickers 最多 8 个，按重要性排序。"
 )
 
+_REPORT_TITLE_RATINGS = (
+    "Strong Buy",
+    "Market Outperform",
+    "Outperform",
+    "Overweight",
+    "Market Perform",
+    "Equal-weight",
+    "Underperform",
+    "Underweight",
+    "Neutral",
+    "Hold",
+    "Buy",
+    "Sell",
+    "跑赢行业",
+    "首次覆盖",
+    "买入",
+    "增持",
+    "推荐",
+    "中性",
+    "持有",
+    "减持",
+    "卖出",
+)
+
+
+def _report_title_rating(title: str) -> str:
+    """只接受标题中独立出现的常见评级，避免从正文猜测。"""
+    text = str(title or "")
+    for rating in _REPORT_TITLE_RATINGS:
+        if re.search(rf"(?<![A-Za-z]){re.escape(rating)}(?![A-Za-z])", text, re.IGNORECASE):
+            return rating
+    return ""
+
 
 def _parse_report_extraction(content: str) -> dict:
     """容错解析 LLM 抽取输出：剥代码围栏、截取首尾大括号。"""
@@ -657,6 +690,7 @@ def extract_report_structure(
     model: str = "",
     universe: dict[str, str] | None = None,
     client=None,
+    title: str = "",
 ) -> dict:
     """抽取单篇研报结构化信息；LLM 失败抛 RuntimeError，解析失败抛 ValueError。
 
@@ -664,7 +698,8 @@ def extract_report_structure(
     文本过短或确认无结构信息时 status='empty'。
     """
     body = " ".join((text or "").split())
-    if len(body) < 200:
+    report_title = " ".join((title or "").split())
+    if len(body) < 200 and not report_title:
         return clean_report_extraction({}, universe or {})
     values = _config_values(llm_config)
     if values is None:
@@ -680,7 +715,13 @@ def extract_report_structure(
     )
     content = _chat(
         task_cfg,
-        [{"role": "user", "content": f"{_REPORT_EXTRACT_PROMPT}\n\n文本：{body[:REPORT_EXTRACT_MAX_CHARS]}"}],
+        [{
+            "role": "user",
+            "content": (
+                f"{_REPORT_EXTRACT_PROMPT}\n\n"
+                f"标题：{report_title}\n正文：{body[:REPORT_EXTRACT_MAX_CHARS]}"
+            ),
+        }],
         max_tokens=2000,
         client=client,
         temperature=0.1,
@@ -689,4 +730,7 @@ def extract_report_structure(
     )
     if not content:
         raise RuntimeError("LLM 抽取请求失败")
-    return clean_report_extraction(_parse_report_extraction(content), universe or {})
+    parsed = _parse_report_extraction(content)
+    if not str(parsed.get("rating") or "").strip():
+        parsed["rating"] = _report_title_rating(report_title)
+    return clean_report_extraction(parsed, universe or {})

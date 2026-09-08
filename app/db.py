@@ -5317,15 +5317,21 @@ class DB:
         return items
 
     def pending_report_extractions(
-        self, limit: int = 40, group_ids: list[str] | None = None
+        self,
+        limit: int = 40,
+        group_ids: list[str] | None = None,
+        min_sort_date: str = "",
     ) -> list[dict]:
-        """待抽取研报：有 txt 或 pdf、尚无抽取行；新文档优先（增量先跟上，存量慢慢回刷）。"""
+        """待抽取研报：有 txt 或 pdf、尚无抽取行，且可限制最早研报日期。"""
         params: list = []
         where = ["d.has_txt = 1 AND d.txt_path != '' OR d.has_pdf = 1 AND d.pdf_path != ''"]
         groups = [str(g).strip() for g in (group_ids or []) if str(g).strip()]
         if groups:
             where.append(f"d.group_id IN ({', '.join('?' for _ in groups)})")
             params.extend(groups)
+        if min_sort_date:
+            where.append("d.sort_date >= ?")
+            params.append(min_sort_date)
         params.append(max(int(limit), 1))
         return self._rows(
             "SELECT d.group_id, d.media_id, d.txt_path, d.pdf_path, d.name, d.sort_date "
@@ -5338,14 +5344,57 @@ class DB:
             params,
         )
 
-    def reset_report_extractions(self, statuses: tuple[str, ...]) -> int:
-        """删除指定失败态，使修复后的抽取管线可以重新处理；成功结果不受影响。"""
+    def report_extraction_group_ids(self, min_sort_date: str = "") -> list[str]:
+        """列出可抽取的研报库；飞书个人文档不参与研报结构化。"""
+        params: list[str] = []
+        where = [
+            "group_id NOT LIKE 'feishu-%'",
+            "(has_txt = 1 AND txt_path != '' OR has_pdf = 1 AND pdf_path != '')",
+        ]
+        if min_sort_date:
+            where.append("sort_date >= ?")
+            params.append(min_sort_date)
+        rows = self._rows(
+            "SELECT DISTINCT group_id FROM ima_document_index "
+            f"WHERE {' AND '.join(where)} ORDER BY group_id",
+            params,
+        )
+        return [str(row["group_id"]) for row in rows]
+
+    def reset_report_extractions(
+        self,
+        statuses: tuple[str, ...],
+        group_ids: list[str] | None = None,
+        min_sort_date: str = "",
+    ) -> int:
+        """删除指定范围的失败态，使修复后的抽取管线可以重新处理。"""
         recoverable = tuple(
             status for status in statuses if status in {"failed", "notext", "empty", "nofile"}
         )
         if not recoverable:
             return 0
         placeholders = ", ".join("?" for _ in recoverable)
+        groups = [str(group).strip() for group in (group_ids or []) if str(group).strip()]
+
+        def scope(alias: str) -> tuple[str, list[str]]:
+            conditions = [f"{alias}.status IN ({placeholders})"]
+            params = list(recoverable)
+            if groups:
+                conditions.append(
+                    f"{alias}.group_id IN ({', '.join('?' for _ in groups)})"
+                )
+                params.extend(groups)
+            if min_sort_date:
+                conditions.append(
+                    "EXISTS (SELECT 1 FROM ima_document_index d "
+                    f"WHERE d.group_id = {alias}.group_id AND d.media_id = {alias}.media_id "
+                    "AND d.sort_date >= ?)"
+                )
+                params.append(min_sort_date)
+            return " AND ".join(conditions), params
+
+        ticker_scope, ticker_params = scope("re")
+        extraction_scope, extraction_params = scope("report_extractions")
         with self._lock:
             try:
                 self._conn.execute("BEGIN")
@@ -5354,12 +5403,12 @@ class DB:
                     "SELECT 1 FROM report_extractions re "
                     "WHERE re.group_id = report_extraction_tickers.group_id "
                     "AND re.media_id = report_extraction_tickers.media_id "
-                    f"AND re.status IN ({placeholders}))",
-                    recoverable,
+                    f"AND {ticker_scope})",
+                    ticker_params,
                 )
                 cursor = self._conn.execute(
-                    f"DELETE FROM report_extractions WHERE status IN ({placeholders})",
-                    recoverable,
+                    f"DELETE FROM report_extractions WHERE {extraction_scope}",
+                    extraction_params,
                 )
                 self._conn.commit()
                 return max(int(cursor.rowcount), 0)

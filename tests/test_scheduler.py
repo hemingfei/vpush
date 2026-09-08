@@ -131,29 +131,52 @@ def test_report_extraction_requeues_recoverable_results_once(tmp_path, monkeypat
     source = tmp_path / relative_path
     source.parent.mkdir(parents=True)
     source.write_text("English semiconductor research. " * 20)
+    today = datetime.datetime.now(app_scheduler.CN_TZ).date()
+    recent_day = today.isoformat()
+    old_day = (today - datetime.timedelta(days=3)).isoformat()
     recoverable = ("failed", "notext", "empty", "nofile")
     for index, status in enumerate(recoverable, start=1):
         media_id = f"english-{index}"
         db._execute(
             "INSERT INTO ima_document_index "
             "(group_id, media_id, name, has_txt, txt_path, sort_date) "
-            "VALUES (?, ?, 'AI Datacenter Outlook', 1, ?, '2026-09-08')",
-            (group_id, media_id, relative_path),
+            "VALUES (?, ?, 'AI Datacenter Outlook', 1, ?, ?)",
+            (group_id, media_id, relative_path, recent_day),
         )
         db.save_report_extraction(group_id, media_id, status=status, model="old-model")
     db._execute(
         "INSERT INTO ima_document_index "
         "(group_id, media_id, name, has_txt, txt_path, sort_date) "
-        "VALUES (?, 'english-ok', 'Existing Result', 1, ?, '2026-09-08')",
-        (group_id, relative_path),
+        "VALUES (?, 'english-ok', 'Existing Result', 1, ?, ?)",
+        (group_id, relative_path, recent_day),
     )
     db.save_report_extraction(
         group_id, "english-ok", thesis="Keep this result.", status="ok", model="old-model"
     )
+    db._execute(
+        "INSERT INTO ima_document_index "
+        "(group_id, media_id, name, has_txt, txt_path, sort_date) "
+        "VALUES (?, 'english-old', 'Old Report Buy', 1, ?, ?)",
+        (group_id, relative_path, old_day),
+    )
+    db.save_report_extraction(group_id, "english-old", status="empty", model="old-model")
+    alpha_group = "7437050366161003"
+    db._execute(
+        "INSERT INTO ima_document_index "
+        "(group_id, media_id, name, has_txt, txt_path, sort_date) "
+        "VALUES (?, 'alpha-new', 'Alpha Research Buy', 1, ?, ?)",
+        (alpha_group, relative_path, recent_day),
+    )
+    db._execute(
+        "INSERT INTO ima_document_index "
+        "(group_id, media_id, name, has_txt, txt_path, sort_date) "
+        "VALUES ('feishu-personal', 'note-new', 'Personal note', 1, ?, ?)",
+        (relative_path, recent_day),
+    )
     calls = []
 
-    def fake_extract(text, llm_config, model="", universe=None, client=None):
-        calls.append((text, model))
+    def fake_extract(text, llm_config, model="", universe=None, client=None, title=""):
+        calls.append((text, model, title))
         return {
             "report_kind": "行业",
             "rating": "",
@@ -175,8 +198,10 @@ def test_report_extraction_requeues_recoverable_results_once(tmp_path, monkeypat
         ima_archive_file=lambda path: tmp_path / path,
     )
 
-    assert scheduler._run_report_extraction_task() == len(recoverable)
-    assert len(calls) == len(recoverable)
+    assert scheduler._run_report_extraction_task() == len(recoverable) + 1
+    assert len(calls) == len(recoverable) + 1
+    assert "Alpha Research Buy" in {call[2] for call in calls}
+    assert "Personal note" not in {call[2] for call in calls}
     results = db.report_extractions_for_keys(
         [(group_id, f"english-{index}") for index in range(1, len(recoverable) + 1)]
     )
@@ -185,9 +210,14 @@ def test_report_extraction_requeues_recoverable_results_once(tmp_path, monkeypat
         (group_id, "english-ok")
     ]
     assert preserved["thesis"] == "Keep this result."
+    old = db.report_extractions_for_keys([(group_id, "english-old")])[
+        (group_id, "english-old")
+    ]
+    assert old["status"] == "empty"
+    assert db.get_setting("report_extract_pipeline_version") == "3"
 
     assert scheduler._run_report_extraction_task() == 0
-    assert len(calls) == len(recoverable)
+    assert len(calls) == len(recoverable) + 1
 
 
 def add_kol_subscribed(db, platform, name, external_id, **kw):
