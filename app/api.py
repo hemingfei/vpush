@@ -70,6 +70,7 @@ from .db import (
     _UNSET,
     ALLOWED_PLATFORMS,
     DB,
+    DEFAULT_ACTION_TAGS,
     days_until_purge,
     parse_block_keywords,
     user_plain_secret,
@@ -6664,8 +6665,10 @@ def create_api_router(
         MX_VIEW_BATCH_SIZE_KEY,
         MX_VIEW_ENABLED_KEY,
         MX_VIEW_KOL_IDS_KEY,
+        MX_VIEW_PROMPT_KEY,
         MX_VIEW_SCHEDULE_KEY,
         MX_VIEW_SUMMARY_MIN_INTERVAL_KEY,
+        MX_VIEW_SUMMARY_PROMPT_KEY,
         MX_VIEW_TOPIC_HINTS_KEY,
         _batch_lock,
         backfill_running,
@@ -6676,8 +6679,10 @@ def create_api_router(
         get_kol_ids,
         get_schedule_config,
         get_summary_min_interval,
+        get_summary_prompt,
         get_topic_candidates,
         get_topic_hints,
+        get_view_prompt,
         get_view_version,
         remove_topic_candidate,
         request_backfill_cancel,
@@ -6718,6 +6723,23 @@ def create_api_router(
             if not isinstance(ids, list) or not all(isinstance(i, int) for i in ids):
                 raise HTTPException(status_code=422, detail="kol_ids 须为整数数组")
             db.set_setting(MX_VIEW_KOL_IDS_KEY, json.dumps(ids))
+        if "action_tags" in body:
+            tags = body["action_tags"]
+            ACTION_TAGS_MAX = 50
+            ACTION_TAG_LEN_MAX = 20
+            if not isinstance(tags, list) or not all(isinstance(t, str) and t.strip() for t in tags):
+                raise HTTPException(status_code=422, detail="action_tags 须为非空字符串数组")
+            if len(tags) > ACTION_TAGS_MAX:
+                raise HTTPException(
+                    status_code=422, detail=f"action_tags 最多 {ACTION_TAGS_MAX} 条"
+                )
+            too_long = [t for t in tags if len(t.strip()) > ACTION_TAG_LEN_MAX]
+            if too_long:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"action_tags 单条不超过 {ACTION_TAG_LEN_MAX} 字: {too_long[0][:30]}…",
+                )
+            db.set_action_tag_vocabulary([t.strip() for t in tags])
         if "topic_hints" in body:
             hints = body["topic_hints"]
             if not isinstance(hints, list) or not all(isinstance(h, str) and h.strip() for h in hints):
@@ -6744,6 +6766,12 @@ def create_api_router(
             if not resolve_schedule(schedule):
                 raise HTTPException(status_code=422, detail="schedule 无法解析出任何快照时刻")
             db.set_setting(MX_VIEW_SCHEDULE_KEY, json.dumps(schedule, ensure_ascii=False))
+        if "view_prompt" in body:
+            val = str(body["view_prompt"] or "")
+            db.set_setting(MX_VIEW_PROMPT_KEY, val)
+        if "summary_prompt" in body:
+            val = str(body["summary_prompt"] or "")
+            db.set_setting(MX_VIEW_SUMMARY_PROMPT_KEY, val)
         _audit(admin, "mx_view_config_update", detail=",".join(sorted(body.keys())))
 
     @router.get("/admin/mx-views/config", dependencies=[Depends(require_admin)])
@@ -6758,6 +6786,20 @@ def create_api_router(
             "topic_hints_default": list(DEFAULT_TOPIC_HINTS),
             "topic_candidates": get_topic_candidates(db),
             "summary_min_interval": get_summary_min_interval(db),
+            "view_prompt": get_view_prompt(db),
+            "summary_prompt": get_summary_prompt(db),
+            "action_tags": db.get_action_tag_vocabulary(),
+            "action_tags_default": list(DEFAULT_ACTION_TAGS),
+        }
+
+    @router.get("/admin/mx-views/default-prompt", dependencies=[Depends(require_admin)])
+    async def admin_mx_views_default_prompt():
+        """返回内置默认研判/总结提示词，供前端「恢复默认」按钮。"""
+        from .llm import VIEW_SYSTEM_PROMPT_HEADER
+        from .mx_view_analysis import SUMMARY_SYSTEM_PROMPT
+        return {
+            "view_prompt": VIEW_SYSTEM_PROMPT_HEADER,
+            "summary_prompt": SUMMARY_SYSTEM_PROMPT,
         }
 
     @router.put("/admin/mx-views/config", dependencies=[Depends(require_admin)])

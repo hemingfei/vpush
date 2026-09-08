@@ -1419,6 +1419,44 @@ export function createMxViewsView(dependencies) {
     mxvAdminHintsRefresh();
   }
 
+  // ---- 操作词表（与题材参考表同款 chips 模式） ----
+  function mxvAdminActionsHtml() {
+    return (_mxvAdmin.actions || []).map((a, i) =>
+      `<span class="mxva-tag">${escapeHtml(a)}<button type="button" class="mxva-tag-x"
+        data-action-remove="${i}" aria-label="删除 ${escapeHtml(a)}">×</button></span>`).join("")
+      || `<span class="muted">暂无操作词；LLM 将不输出 action。</span>`;
+  }
+
+  function mxvAdminActionsRefresh() {
+    const box = $("#mxva-actions-box");
+    if (box) box.innerHTML = mxvAdminActionsHtml();
+    const cnt = $("#mxva-actions-count");
+    if (cnt) cnt.textContent = String((_mxvAdmin.actions || []).length);
+  }
+
+  function mxvAdminActionAdd() {
+    const input = $("#mxva-action-input");
+    const v = (input && input.value || "").trim();
+    if (!v) return;
+    if ((_mxvAdmin.actions || []).includes(v)) { flash("该操作词已在表", "error"); return; }
+    _mxvAdmin.actions.push(v);
+    if (input) input.value = "";
+    mxvAdminMarkDirty();
+    mxvAdminActionsRefresh();
+  }
+
+  function mxvAdminActionRemove(i) {
+    _mxvAdmin.actions.splice(i, 1);
+    mxvAdminMarkDirty();
+    mxvAdminActionsRefresh();
+  }
+
+  function mxvAdminActionsReset() {
+    _mxvAdmin.actions = [...(_mxvAdmin.actionsDefault || [])];
+    mxvAdminMarkDirty();
+    mxvAdminActionsRefresh();
+  }
+
   // ---- 状态卡 ----
   function mxvAdminStatusHtml(s) {
     const last = s.last_batch;
@@ -1451,11 +1489,12 @@ export function createMxViewsView(dependencies) {
   }
 
   async function loadAdminMxViews() {
-    let cfg, status;
+    let cfg, status, defPrompt;
     try {
-      [cfg, status] = await Promise.all([
+      [cfg, status, defPrompt] = await Promise.all([
         api("/api/admin/mx-views/config"),
         api("/api/admin/mx-views/status"),
+        api("/api/admin/mx-views/default-prompt"),
       ]);
     } catch (err) {
       if (!routeStillActive(currentAdminSeq())) return;
@@ -1469,6 +1508,10 @@ export function createMxViewsView(dependencies) {
       scheduleDefault: cfg.schedule_default || {},
       hints: [...cfg.topic_hints],
       hintsDefault: cfg.topic_hints_default || [],
+      actions: [...(cfg.action_tags || [])],
+      actionsDefault: cfg.action_tags_default || [],
+      viewPromptDefault: defPrompt.view_prompt || "",
+      summaryPromptDefault: defPrompt.summary_prompt || "",
       kols: [], selected: null, kolSearch: "",
       pollTimer: _mxvAdmin.pollTimer, docClick: _mxvAdmin.docClick, dirty: false,
     };
@@ -1547,6 +1590,18 @@ export function createMxViewsView(dependencies) {
         </div>
         <div class="mxva-card">
           <div class="mxva-card-head">
+            <b>操作词表</b><span class="muted">当前 <span id="mxva-actions-count">${_mxvAdmin.actions.length}</span> 个</span>
+            <button type="button" class="btn-sm" onclick="mxvAdminActionsReset()">恢复默认</button>
+          </div>
+          <div class="mxva-chips mxva-chips-wrap" id="mxva-actions-box">${mxvAdminActionsHtml()}</div>
+          <div class="mxva-chip-add">
+            <input id="mxva-action-input" class="form-control" placeholder="输入操作词后回车，如：止盈" aria-label="新增操作词">
+            <button type="button" class="btn-sm" onclick="mxvAdminActionAdd()">添加</button>
+          </div>
+          <p class="mxva-note">LLM 输出观点时仅使用这些操作词；打标与研判共用此表。</p>
+        </div>
+        <div class="mxva-card">
+          <div class="mxva-card-head">
             <b>新题材候选</b>
             ${cfg.topic_candidates.length ? `
               <span class="mxva-head-ops">
@@ -1560,22 +1615,42 @@ export function createMxViewsView(dependencies) {
               <button type="button" class="btn-sm" data-cand-idx="${i}" data-cand-act="dismiss">忽略</button></span>`).join(" ")
             : `<span class="muted">暂无候选</span>`}</div>
         </div>
+      </div>
+      <div class="mxva-prompt-section">
         <div class="mxva-card">
-          <div class="mxva-card-head"><b>历史回填</b></div>
-          <div class="mxva-toolbar-wrap">
-            <input id="mxva-bf-from" class="form-control" type="date" aria-label="回填开始日期">
-            <span class="muted">至</span>
-            <input id="mxva-bf-to" class="form-control" type="date" aria-label="回填结束日期">
-            <button type="button" class="btn-normal" onclick="mxvAdminStartBackfill()">开始回填</button>
+          <div class="mxva-card-head">
+            <b>研判提示词</b>
+            <button type="button" class="btn-sm" onclick="mxvAdminRestoreViewPrompt()">恢复默认</button>
           </div>
-          <div class="mxva-row-gap">
-            <span class="muted">快捷：</span>
-            <button type="button" class="btn-sm" onclick="mxvAdminBfPreset(1)">昨天</button>
-            <button type="button" class="btn-sm" onclick="mxvAdminBfPreset(3)">近3天</button>
-            <button type="button" class="btn-sm" onclick="mxvAdminBfPreset(7)">近7天</button>
-          </div>
-          <p class="mxva-note">按当前快照时刻表把历史消息重新研判成快照（最多 30 天，进行中可取消）。</p>
+          <textarea id="mxva-view-prompt" class="form-control mxva-prompt-area" rows="12"
+            placeholder="留空则使用默认研判提示词">${escapeHtml(cfg.view_prompt)}</textarea>
+          <p class="mxva-note">大V消息→多空观点提取的系统提示词。修改后下一批研判即生效；留空回退默认。</p>
         </div>
+        <div class="mxva-card">
+          <div class="mxva-card-head">
+            <b>总结提示词</b>
+            <button type="button" class="btn-sm" onclick="mxvAdminRestoreSummaryPrompt()">恢复默认</button>
+          </div>
+          <textarea id="mxva-summary-prompt" class="form-control mxva-prompt-area" rows="12"
+            placeholder="留空则使用默认总结提示词">${escapeHtml(cfg.summary_prompt)}</textarea>
+          <p class="mxva-note">每快照「今日操作」总结的系统提示词。修改后下次生成总结即生效；留空回退默认。</p>
+        </div>
+      </div>
+      <div class="mxva-card">
+        <div class="mxva-card-head"><b>历史回填</b></div>
+        <div class="mxva-toolbar-wrap">
+          <input id="mxva-bf-from" class="form-control" type="date" aria-label="回填开始日期">
+          <span class="muted">至</span>
+          <input id="mxva-bf-to" class="form-control" type="date" aria-label="回填结束日期">
+          <button type="button" class="btn-normal" onclick="mxvAdminStartBackfill()">开始回填</button>
+        </div>
+        <div class="mxva-row-gap">
+          <span class="muted">快捷：</span>
+          <button type="button" class="btn-sm" onclick="mxvAdminBfPreset(1)">昨天</button>
+          <button type="button" class="btn-sm" onclick="mxvAdminBfPreset(3)">近3天</button>
+          <button type="button" class="btn-sm" onclick="mxvAdminBfPreset(7)">近7天</button>
+        </div>
+        <p class="mxva-note">按当前快照时刻表把历史消息重新研判成快照（最多 30 天，进行中可取消）。</p>
       </div>
       <div class="mxva-savebar">
         <span id="mxva-save-hint" class="mxva-save-hint">更改保存后生效</span>
@@ -1642,7 +1717,21 @@ export function createMxViewsView(dependencies) {
         if (e.key === "Enter") { e.preventDefault(); mxvAdminHintAdd(); }
       };
     }
-    ["mxva-batch", "mxva-interval", "mxva-enabled"].forEach((id) => {
+    // 操作词 chips：删除走委托
+    const actionsBox = $("#mxva-actions-box");
+    if (actionsBox) {
+      actionsBox.onclick = (e) => {
+        const btn = e.target.closest("[data-action-remove]");
+        if (btn) mxvAdminActionRemove(Number(btn.dataset.actionRemove));
+      };
+    }
+    const actionInput = $("#mxva-action-input");
+    if (actionInput) {
+      actionInput.onkeydown = (e) => {
+        if (e.key === "Enter") { e.preventDefault(); mxvAdminActionAdd(); }
+      };
+    }
+    ["mxva-batch", "mxva-interval", "mxva-enabled", "mxva-view-prompt", "mxva-summary-prompt"].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.oninput = () => mxvAdminMarkDirty();
     });
@@ -1657,6 +1746,9 @@ export function createMxViewsView(dependencies) {
       batch_size: Number($("#mxva-batch") && $("#mxva-batch").value) || 600,
       summary_min_interval: Number($("#mxva-interval") && $("#mxva-interval").value) || 0,
       topic_hints: _mxvAdmin.hints,
+      action_tags: _mxvAdmin.actions,
+      view_prompt: ($("#mxva-view-prompt") && $("#mxva-view-prompt").value) || "",
+      summary_prompt: ($("#mxva-summary-prompt") && $("#mxva-summary-prompt").value) || "",
     };
     if (_mxvAdmin.selected) body.kol_ids = Array.from(_mxvAdmin.selected);
     try {
@@ -1670,6 +1762,22 @@ export function createMxViewsView(dependencies) {
 
   function mxvAdminResetConfig() {
     loadAdminMxViews(); // 重拉配置即放弃未保存更改
+  }
+
+  function mxvAdminRestoreViewPrompt() {
+    const el = $("#mxva-view-prompt");
+    if (el && _mxvAdmin.viewPromptDefault != null) {
+      el.value = _mxvAdmin.viewPromptDefault;
+      mxvAdminMarkDirty();
+    }
+  }
+
+  function mxvAdminRestoreSummaryPrompt() {
+    const el = $("#mxva-summary-prompt");
+    if (el && _mxvAdmin.summaryPromptDefault != null) {
+      el.value = _mxvAdmin.summaryPromptDefault;
+      mxvAdminMarkDirty();
+    }
   }
 
   async function mxvAdminAdopt(name) {
@@ -1786,5 +1894,9 @@ export function createMxViewsView(dependencies) {
     mxvAdminCancelBackfill,
     mxvAdminSaveConfig,
     mxvAdminResetConfig,
+    mxvAdminRestoreViewPrompt,
+    mxvAdminRestoreSummaryPrompt,
+    mxvAdminActionAdd,
+    mxvAdminActionsReset,
   };
 }

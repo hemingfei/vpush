@@ -28,6 +28,8 @@ MX_VIEW_TOPIC_HINTS_KEY = "mx_view_topic_hints"
 MX_VIEW_TOPIC_CANDIDATES_KEY = "mx_view_topic_candidates"
 MX_VIEW_VERSION_KEY = "mx_view_version"
 MX_VIEW_SUMMARY_MIN_INTERVAL_KEY = "mx_view_summary_min_interval_min"
+MX_VIEW_PROMPT_KEY = "mx_view_prompt"
+MX_VIEW_SUMMARY_PROMPT_KEY = "mx_view_summary_prompt"
 
 # 当日首个快照（09:20）的消息窗口起点固定为 09:15（集合竞价开始），不可配
 MX_VIEW_FIRST_WINDOW_START = "09:15"
@@ -212,6 +214,18 @@ def get_summary_min_interval(db) -> int:
         return 0
 
 
+def get_view_prompt(db) -> str:
+    """研判规则提示词（管理员可配）；空串/未设回退内置默认。"""
+    val = db.get_setting(MX_VIEW_PROMPT_KEY)
+    return val if val and val.strip() else llm.VIEW_SYSTEM_PROMPT_HEADER
+
+
+def get_summary_prompt(db) -> str:
+    """总结复盘提示词（管理员可配）；空串/未设回退内置默认。"""
+    val = db.get_setting(MX_VIEW_SUMMARY_PROMPT_KEY)
+    return val if val and val.strip() else SUMMARY_SYSTEM_PROMPT
+
+
 # ---- 版本号（SSE 推送依据，settings 持久化 + 进程内无状态） ----
 
 def get_view_version(db) -> int:
@@ -244,10 +258,10 @@ def resolve_system_llm_config(db):
 
 VALID_DIRECTIONS = ("bull", "bear", "neutral")
 VALID_TARGET_TYPES = ("topic", "stock")
-VALID_ACTIONS = tuple(a for a in ACTION_BOOST if a)
 
 
-def validate_opinions(raw, posts, aliases, day, snapshot_at):
+def validate_opinions(raw, posts, aliases, day, snapshot_at,
+                       valid_actions: tuple[str, ...] = ()):
     """校验 LLM 研判结果：证据核对/作者核对/枚举/黑话归一/合并标的拆分/批内去重。
 
     返回 (可落库 opinions, 参考表之外的新题材名)。任何一项不满足即丢弃该条；
@@ -299,7 +313,7 @@ def validate_opinions(raw, posts, aliases, day, snapshot_at):
         if not names:
             continue
         action = str(item.get("action") or "").strip()
-        if action and action not in VALID_ACTIONS:
+        if action and valid_actions and action not in valid_actions:
             action = ""
         occurred = max(str(p.get("published_at") or "") for p in ev_posts)
         for name in names:
@@ -581,19 +595,22 @@ def _agg_digest(payload: dict, events: list[dict], trajectories: list[dict]) -> 
     return json.dumps(slim, ensure_ascii=False)
 
 
-def generate_summary(db, llm_config, payload, digest: str) -> dict:
+def generate_summary(db, llm_config, payload, digest: str,
+                     prompt: str | None = None) -> dict:
     """每快照一版总结；LLM 失败/未配置不拖垮批次，回退占位文案。
 
     evolution/advice 拼为 text 一并返回，兼容仍读 summary.text 的旧前端/历史快照。
     items 的 momentum 由聚合行回填，不让 LLM 转述数值。
+    prompt 为管理员自定义总结提示词，None/空串时用内置 SUMMARY_SYSTEM_PROMPT。
     """
     fail_text = "（本次总结生成失败，以上一版为准）"
     fallback = {"evolution": "", "advice": fail_text, "text": fail_text, "items": []}
+    system_prompt = prompt if prompt and prompt.strip() else SUMMARY_SYSTEM_PROMPT
     try:
         text = llm._chat(
             llm_config,
             [
-                {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": digest},
             ],
             4000,
@@ -633,7 +650,8 @@ def generate_summary(db, llm_config, payload, digest: str) -> dict:
 
 
 def _maybe_summary(db, llm_config, payload, earlier, new_count: int,
-                   events: list[dict], trajectories: list[dict]) -> dict:
+                   events: list[dict], trajectories: list[dict],
+                   summary_prompt: str | None = None) -> dict:
     """每快照一版总结；本批零新观点（聚合状态与上一快照相同）直接沿用上一版，不调 LLM。
 
     earlier 为调用方已读好的当日快照行（升序）；mx_view_summary_min_interval_min
@@ -653,7 +671,8 @@ def _maybe_summary(db, llm_config, payload, earlier, new_count: int,
         # 当日首批就无可研判观点：占位文案，不让 LLM 对空状态硬编内容
         return {"evolution": "", "advice": "（本批暂无可研判观点）",
                 "text": "（本批暂无可研判观点）", "items": []}
-    return generate_summary(db, llm_config, payload, _agg_digest(payload, events, trajectories))
+    return generate_summary(db, llm_config, payload, _agg_digest(payload, events, trajectories),
+                            prompt=summary_prompt)
 
 
 def run_snapshot_batch(db, day, snapshot_at, window, kind="live", llm_config=None,
@@ -689,10 +708,12 @@ def run_snapshot_batch(db, day, snapshot_at, window, kind="live", llm_config=Non
                 if not chunk:
                     break
                 posts.extend(chunk)
-                raw = llm.research_viewpoints(chunk, hints, vocab, llm_config=llm_config)
+                raw = llm.research_viewpoints(chunk, hints, vocab, llm_config=llm_config,
+                                              prompt_header=view_prompt)
                 if raw is None:
                     raise RuntimeError("LLM 研判失败（无有效响应）")
-                chunk_valid, chunk_topics = validate_opinions(raw, chunk, aliases, day, snapshot_at)
+                chunk_valid, chunk_topics = validate_opinions(raw, chunk, aliases, day, snapshot_at,
+                                                                valid_actions=tuple(vocab))
                 for op in chunk_valid:
                     # 后写覆盖：同 (kol,target) 跨块保留更晚（消息 id 更大）的表态，
                     # 首块旧观点不再压住块后段的最新立场
@@ -708,6 +729,8 @@ def run_snapshot_batch(db, day, snapshot_at, window, kind="live", llm_config=Non
             hints = get_topic_hints(db)
             vocab = db.get_action_tag_vocabulary()
             aliases = db.get_stock_aliases()
+            view_prompt = get_view_prompt(db)
+            summary_prompt = get_summary_prompt(db)
             try:
                 posts, merged, new_topic_names = _research_chunked(limit)
             except RuntimeError:
@@ -747,7 +770,7 @@ def run_snapshot_batch(db, day, snapshot_at, window, kind="live", llm_config=Non
                 [t["name"] for t in payload["topics"][:8]], [s["name"] for s in payload["stocks"][:8]],
             )
             payload["summary"] = _maybe_summary(db, llm_config, payload, earlier, len(valid),
-                                                events, trajectories)
+                                                events, trajectories, summary_prompt)
             seq = len(earlier) + 1
             db.upsert_mx_view_snapshot(day, snapshot_at, seq, kind, payload, batch_id)
             db.finish_mx_view_batch(batch_id, "done", len(posts))

@@ -882,25 +882,31 @@ VIEW_SYSTEM_PROMPT_HEADER = """你是A股盘面研判助手。输入是财经社
 规则：
 1. 只提取明确表达的观点，不推测；同一位大V对同一标的的多条消息合并为一条 opinion（evidence 聚合多个 id）。
 2. direction：看多/利好/看涨/推荐买入=bull；看空/风险提示/看跌/减仓建议=bear；中性陈述=neutral。
-3. action 仅在明确给出操作建议时输出（建仓/加仓/减仓/清仓/做T/观察），否则空串；题材观点一般无 action。
+3. action 仅在明确给出操作建议时输出（建仓/加仓/减仓等操作词，具体查看后续的操作词表），否则空串；题材观点一般无 action。
 4. target_type=stock 时 target_name 一律用 A 股正式简称，黑话按【黑话参考】还原；topic 优先用【题材参考表】名称，新题材用通行简短中文名。
 5. evidence 必须是输入里真实存在的消息 id（至少 1 个），无依据的观点不要输出；不编造大V与标的。
 6. 一条 opinion 只含一个标的：target_name 须是单个题材名或股票名，不得带「、」「，」「,」「/」等连接符；同一段话对多个题材表达同一观点时拆成多条 opinion（evidence 可相同）。"""
 
 
-def build_view_system_prompt(topic_hints, action_tags) -> str:
-    """多空研判系统提示词：稳定规则 + 当次题材参考表/操作词表。"""
+def build_view_system_prompt(topic_hints, action_tags, header: str | None = None) -> str:
+    """多空研判系统提示词：稳定规则 + 当次题材参考表/操作词表。
+
+    header 传入时覆盖默认规则段（管理员可配），None 时用 VIEW_SYSTEM_PROMPT_HEADER。
+    """
+    base = header if header and header.strip() else VIEW_SYSTEM_PROMPT_HEADER
     hints = [str(h).strip() for h in (topic_hints or []) if str(h).strip()]
     actions = [str(a).strip() for a in (action_tags or []) if str(a).strip()]
-    parts = [VIEW_SYSTEM_PROMPT_HEADER, "【题材参考表】", "、".join(hints) if hints else "（空）"]
+    parts = [base, "【题材参考表】", "、".join(hints) if hints else "（空）"]
     parts.append("\n【操作词表】\n" + ("、".join(actions) if actions else "（空）"))
     return "\n".join(parts)
 
 
-def research_viewpoints(posts, topic_hints, action_tags, llm_config=None, client=None):
+def research_viewpoints(posts, topic_hints, action_tags, llm_config=None, client=None,
+                        prompt_header: str | None = None):
     """让 LLM 对一批 MX 消息做多空观点研判。
 
     posts: [{id, kol_name, title, content, published_at}, ...]（id 升序）。
+    prompt_header: 管理员自定义研判规则段，None/空串时用内置默认。
     返回归一化后的 opinion 列表（宽松归一；词表校验/作者核对由调用方完成），
     空输入返回 []，调用/解析失败返回 None（整批失败语义）。
     """
@@ -924,7 +930,7 @@ def research_viewpoints(posts, topic_hints, action_tags, llm_config=None, client
         )
     if not messages:
         return []
-    system = build_view_system_prompt(topic_hints, action_tags)
+    system = build_view_system_prompt(topic_hints, action_tags, header=prompt_header)
     try:
         text = _chat(
             llm_config,

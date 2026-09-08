@@ -564,7 +564,7 @@ def test_run_snapshot_batch_halves_chunk_when_research_fails(monkeypatch):
 
     calls = {"sizes": []}
 
-    def fake_research(posts, hints, vocab, llm_config=None, client=None):
+    def fake_research(posts, hints, vocab, llm_config=None, client=None, **kw):
         calls["sizes"].append(len(posts))
         if len(posts) >= 2:
             return None  # 大块输出截断/解析失败
