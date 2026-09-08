@@ -2047,3 +2047,73 @@ def test_report_extraction_parse_and_ticker_whitelist():
     # 文本过短直接 empty，不调 LLM
     cfg = SimpleNamespace(api_key="k", api_base="https://gw.example/v1", model="m")
     assert extract_report_structure("太短", cfg, universe=universe)["status"] == "empty"
+
+
+def test_report_extraction_keeps_valid_global_tickers():
+    """英文研报常见的美股/港股代码不应被 A 股六位数字规则丢弃。"""
+    from app.llm import clean_report_extraction
+
+    cleaned = clean_report_extraction(
+        {
+            "thesis": "AI infrastructure demand remains strong.",
+            "tickers": [
+                {"code": "NVDA", "name": "NVIDIA", "stance": "beneficiary"},
+                {"code": "700.HK", "name": "Tencent", "stance": "positive"},
+                {"code": "002428.SZ", "name": "云南锗业", "stance": "推荐"},
+                {"code": "SH600000", "name": "浦发银行", "stance": "中性"},
+                {"code": "600000.SS", "name": "浦发银行", "stance": "中性"},
+                {"code": "600000.HK", "name": "Example HK", "stance": "positive"},
+                {"code": "999999", "name": "Unknown", "stance": "positive"},
+                {"code": "DROP TABLE", "name": "Invalid", "stance": "positive"},
+                {"code": "DROP600000TABLE", "name": "Invalid", "stance": "positive"},
+            ],
+        },
+        {"002428": "云南锗业", "600000": "浦发银行"},
+    )
+
+    assert cleaned["tickers"] == [
+        {"code": "NVDA", "name": "NVIDIA", "stance": "beneficiary"},
+        {"code": "700.HK", "name": "Tencent", "stance": "positive"},
+        {"code": "002428", "name": "云南锗业", "stance": "推荐"},
+        {"code": "600000", "name": "浦发银行", "stance": "中性"},
+        {"code": "600000.HK", "name": "Example HK", "stance": "positive"},
+    ]
+    suspicious = clean_report_extraction(
+        {"tickers": [{"code": "DROP600000TABLE", "name": "Invalid"}]},
+        {"600000": "浦发银行"},
+    )
+    assert suspicious["tickers"] == []
+
+
+def test_report_extraction_prompt_supports_english_and_global_tickers():
+    import json
+    from types import SimpleNamespace
+
+    import httpx
+
+    from app.llm import extract_report_structure
+
+    captured = {}
+
+    def handler(request):
+        captured["prompt"] = json.loads(request.read())["messages"][0]["content"]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"rating":"","target_price":"","thesis":"AI demand is strong.","report_kind":"industry","tickers":[]}'
+                        }
+                    }
+                ]
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    config = SimpleNamespace(api_key="key", api_base="https://example.com/v1", model="model")
+    extract_report_structure("English semiconductor report. " * 20, config, client=client)
+
+    assert "英文" in captured["prompt"]
+    assert "美股" in captured["prompt"]
+    assert "港股" in captured["prompt"]

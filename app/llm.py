@@ -573,13 +573,14 @@ REPORT_EXTRACT_MAX_CHARS = 12000
 REPORT_EXTRACT_TIMEOUT = 90
 
 _REPORT_EXTRACT_PROMPT = (
-    "从研报文本中抽取结构化信息，只输出一个 JSON 对象（不要 markdown 代码块、不要解释），字段：\n"
-    '{"rating": "评级（如 首次覆盖/上调/下调/维持/增持/减持/中性/跑赢行业，无则空串）", '
+    "从中文或英文研报文本中抽取结构化信息，只输出一个 JSON 对象（不要 markdown 代码块、不要解释），字段：\n"
+    '{"rating": "评级原文（如 首次覆盖/维持/增持/Buy/Outperform，无则空串）", '
     '"target_price": "目标价原文（含币种或区间，无则空串）", '
-    '"thesis": "一句话核心逻辑，不超过80字，无则空串", '
+    '"thesis": "简体中文的一句话核心逻辑，不超过80字，无则空串", '
     '"report_kind": "宏观/策略/行业/公司/固收 之一", '
-    '"tickers": [{"code": "6位数字代码", "name": "证券简称", "stance": "推荐/受益/中性/风险提示"}]}\n'
-    "要求：只抽取文本明确提到的事实，不确定就留空；tickers 最多 8 个，按重要性排序。"
+    '"tickers": [{"code": "证券代码", "name": "证券简称", "stance": "推荐/受益/中性/风险提示"}]}\n'
+    "证券代码保留市场常用格式：A 股用 6 位数字，美股如 NVDA，港股如 700.HK；"
+    "只抽取文本明确提到的事实，不确定就留空；tickers 最多 8 个，按重要性排序。"
 )
 
 
@@ -610,21 +611,24 @@ def clean_report_extraction(data: dict, universe: dict[str, str]) -> dict:
         if not isinstance(item, dict):
             continue
         raw_code = str(item.get("code") or "").strip()
-        digits = "".join(ch for ch in raw_code if ch.isdigit())
-        code = digits[-6:] if len(digits) >= 6 else ""
+        normalized_code = raw_code.upper()
+        a_share_match = re.fullmatch(
+            r"(?:SH|SZ|BJ)?(\d{6})(?:[.:](?:SH|SZ|BJ|SS))?", normalized_code
+        )
+        a_share_code = a_share_match.group(1) if a_share_match else ""
         name = str(item.get("name") or "").strip()[:32]
-        if not code or code in seen:
-            continue
-        if universe and code in universe:
+        if a_share_code and (not universe or a_share_code in universe):
             # A 股词表命中：代码归一为 6 位，名称以词表为准
-            pass
-        elif name and re.search(r"[A-Za-z]", raw_code) and re.fullmatch(
-            r"[A-Za-z0-9]{1,6}([.:][A-Za-z0-9]{1,4})?", raw_code
+            code = a_share_code
+        elif name and re.search(r"[A-Z]", normalized_code) and re.fullmatch(
+            r"[A-Z0-9]{1,6}([.:][A-Z0-9]{1,4})?", normalized_code
         ):
             # 非词表代码（美股/港股等）：保留原代码形态，但须带名称且形态合规
-            code = raw_code.upper()[:16]
+            code = normalized_code[:16]
         else:
             # 词表未命中且形态可疑（幻觉）→ 丢弃
+            continue
+        if code in seen:
             continue
         seen.add(code)
         tickers.append(

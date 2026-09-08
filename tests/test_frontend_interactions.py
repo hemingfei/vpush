@@ -109,6 +109,20 @@ def test_knowledge_row_hides_unused_cover_fallback_icon():
     assert "grid-template-columns: minmax(0, 1fr) 20px" not in css
 
 
+def test_report_row_shows_llm_thesis_before_document_abstract():
+    """无评级/目标价的英文行业报告仍需让用户看见结构化抽取结果。"""
+    row = _fn_body("imaDocumentRow", IMA_JS)
+
+    assert "hasExtractionBadges" in row
+    assert "extraction.rating" in row
+    assert "extraction.target_price" in row
+    assert "extraction.tickers?.length" in row
+    assert "item.extraction?.status === \"ok\"" in row
+    assert "item.extraction?.thesis" in row
+    assert "!hasExtractionBadges" in row
+    assert row.index("item.extraction?.thesis") < row.index("item.abstract")
+
+
 
 def _extract_fn_body(name: str, path: Path) -> str:
     src = path.read_text()
@@ -1340,8 +1354,10 @@ def test_account_turnstile_settings_tab():
     assert "cfg-field" in html
     assert "field-label" not in html
     assert "notice-warn" in html
-    assert "btn-normal btn-fluid" in html
-    assert "btn-ghost btn-fluid" in html
+    assert "btn-fluid" not in html
+    assert 'class="btn-normal"' in html
+    assert 'class="btn-ghost"' in html
+    assert ">从剪贴板填入</button>" in html
     assert 'placeholder="vpush.net"' in src
     assert 'info.hostnames || "vpush.net"' not in src
     assert "保存登录验证（未保存）" in _fn_body("markTurnstileDirty")
@@ -1699,8 +1715,11 @@ def test_cookie_save_nested_stats_reload_preserves_owner_sequence_and_focus_guar
 def test_cookie_tab_primary_buttons_are_44px():
     """Cookie 管理主按钮提到 44px；不改全局 --control-height-2xl，避免登录/筛选错位。"""
     css = STYLE_CSS.read_text()
-    block = re.search(r"#st-cookies\s+\.btn-normal,\s*#st-imgbed\s+\.btn-normal\s*\{([^}]*)\}", css)
-    assert block, "缺少 #st-cookies .btn-normal"
+    block = re.search(
+        r"#st-cookies\s+\.btn-normal,\s*#st-imgbed\s+\.btn-normal,\s*#ts-form\s+\.btn-normal\s*\{([^}]*)\}",
+        css,
+    )
+    assert block, "缺少 #st-cookies/#st-imgbed/#ts-form .btn-normal"
     assert "44px" in block.group(1)
     tokens = (APP_JS.parent / "vendor" / "design-tokens.css").read_text()
     root = re.search(r"^:root\s*\{", tokens, re.M)

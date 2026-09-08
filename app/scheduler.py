@@ -2635,13 +2635,20 @@ class Scheduler:
             if g.strip()
         ]
         from .llm import extract_report_structure
-        from .stock_universe import bundled_universe_codes
         from .report_text import pdf_first_pages_text as _pdf_first_pages_text
+        from .stock_universe import bundled_universe_codes
 
         universe = bundled_universe_codes()
         resolve = self.ima_archive_file
         if resolve is None:
             return 0
+        pipeline_version = "2"
+        version_key = "report_extract_pipeline_version"
+        if db.get_setting(version_key) != pipeline_version:
+            reset = db.reset_report_extractions(("failed", "notext", "empty", "nofile"))
+            db.set_setting(version_key, pipeline_version)
+            if reset:
+                logger.info("研报结构化抽取：重新排队可恢复结果 %d 篇", reset)
         batch = min(80, daily_limit - done_today)
         docs = db.pending_report_extractions(limit=batch, group_ids=groups or None)
         if not docs:

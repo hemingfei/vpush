@@ -5335,6 +5335,35 @@ class DB:
             params,
         )
 
+    def reset_report_extractions(self, statuses: tuple[str, ...]) -> int:
+        """删除指定失败态，使修复后的抽取管线可以重新处理；成功结果不受影响。"""
+        recoverable = tuple(
+            status for status in statuses if status in {"failed", "notext", "empty", "nofile"}
+        )
+        if not recoverable:
+            return 0
+        placeholders = ", ".join("?" for _ in recoverable)
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                self._conn.execute(
+                    "DELETE FROM report_extraction_tickers WHERE EXISTS ("
+                    "SELECT 1 FROM report_extractions re "
+                    "WHERE re.group_id = report_extraction_tickers.group_id "
+                    "AND re.media_id = report_extraction_tickers.media_id "
+                    f"AND re.status IN ({placeholders}))",
+                    recoverable,
+                )
+                cursor = self._conn.execute(
+                    f"DELETE FROM report_extractions WHERE status IN ({placeholders})",
+                    recoverable,
+                )
+                self._conn.commit()
+                return max(int(cursor.rowcount), 0)
+            except Exception:
+                self._conn.rollback()
+                raise
+
     def save_report_extraction(
         self,
         group_id: str,

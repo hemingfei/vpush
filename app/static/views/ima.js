@@ -380,7 +380,18 @@ export function createImaView(dependencies) {
     const day = fmtImaDayShort(item.sort_date || item.day) || "—";
     const source = String(item.group_name || "");
     const meta = imaReportMetaHtml(item); // .ima-report-meta
-    const snippet = item.search_snippet ? `<span class="ima-report-snippet">${escapeHtml(item.search_snippet)}</span>` : (item.abstract ? `<span class="ima-report-snippet">${escapeHtml(item.abstract)}</span>` : "");
+    const hasExtractionBadges = item.extraction?.status === "ok" && (
+      item.extraction.rating || item.extraction.target_price || item.extraction.tickers?.length
+    );
+    const thesis = item.extraction?.status === "ok" && !hasExtractionBadges
+      ? item.extraction?.thesis
+      : "";
+    const snippet = item.search_snippet ? `<span class="ima-report-snippet">${escapeHtml(item.search_snippet)}</span>`
+      : thesis
+        ? `<span class="ima-report-snippet">${escapeHtml(thesis)}</span>`
+        : item.abstract
+          ? `<span class="ima-report-snippet">${escapeHtml(item.abstract)}</span>`
+          : "";
     return `
       <article class="ima-doc-row" role="button" tabindex="0" data-media-id="${escapeHtml(item.media_id)}" data-group-id="${escapeHtml(item.group_id || "")}" onclick="openImaDocument(this.dataset.mediaId, this.dataset.groupId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openImaDocument(this.dataset.mediaId, this.dataset.groupId)}">
         <time class="ima-report-date">${escapeHtml(day)}</time>
