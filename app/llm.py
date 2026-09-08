@@ -901,6 +901,25 @@ def build_view_system_prompt(topic_hints, action_tags, header: str | None = None
     return "\n".join(parts)
 
 
+def build_view_user_message(posts) -> str:
+    """把帖子行格式化为研判 user message（与 research_viewpoints 同款）。"""
+    import json as _json
+    messages = []
+    for row in list(posts or []):
+        try:
+            pid = int(row["id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        text = " ".join(
+            (str(row.get("title") or "").strip(), str(row.get("content") or "").strip())
+        ).strip()[:TAG_INPUT_TEXT_MAX]
+        messages.append(
+            {"id": pid, "author": str(row.get("kol_name") or ""),
+             "time": str(row.get("published_at") or ""), "text": text}
+        )
+    return "消息列表：\n" + _json.dumps(messages, ensure_ascii=False)
+
+
 def research_viewpoints(posts, topic_hints, action_tags, llm_config=None, client=None,
                         prompt_header: str | None = None):
     """让 LLM 对一批 MX 消息做多空观点研判。

@@ -755,6 +755,50 @@ def test_backfill_skips_already_done_snapshots(monkeypatch):
     assert db._rows("SELECT COUNT(*) AS n FROM mx_view_batches WHERE status = 'failed'")[0]["n"] == 0
 
 
+def test_backfill_overwrite_deletes_and_reruns(monkeypatch):
+    """overwrite=True：回填前先删除该交易日老数据，已 done 的窗口也重跑。"""
+    db = make_db()
+    day = "2026-09-03"  # 周四
+    _seed_posts(db, day)
+    monkeypatch.setattr(mva.llm, "_chat", lambda *a, **k: _VIEW_JSON % 1)
+
+    _wait_backfill_done()
+    mva.start_backfill_job(db, day, day)
+    _wait_backfill_done()
+    first = len(db.list_mx_opinions(day))
+    assert first > 0
+
+    # 同一天默认重放 → 全部跳过，行数不变
+    mva.start_backfill_job(db, day, day)
+    _wait_backfill_done()
+    assert len(db.list_mx_opinions(day)) == first
+
+    # overwrite=True → 删除老数据后重跑，行数与首轮一致（不翻倍）
+    mva.start_backfill_job(db, day, day, overwrite=True)
+    _wait_backfill_done()
+    assert len(db.list_mx_opinions(day)) == first
+
+
+def test_delete_mx_view_day():
+    """delete_mx_view_day 清除指定交易日三张表全部数据。"""
+    db = make_db()
+    day = "2026-09-04"
+    kol = db.add_kol("mx", "李四", "room0")
+    bid = db.upsert_mx_view_batch(day, "09:20", "live")
+    db.replace_mx_opinions(bid, [_op(kol_id=kol)])
+    db.upsert_mx_view_snapshot(day, "09:20", 1, "live", {"seq": 1}, bid)
+
+    assert len(db.list_mx_opinions(day)) == 1
+    assert len(db.list_mx_view_snapshots(day)) == 1
+    assert db.has_done_mx_view_batch(day, "09:20") is False
+
+    n = db.delete_mx_view_day(day)
+    assert n == 1  # 删除了 1 个批次
+    assert len(db.list_mx_opinions(day)) == 0
+    assert len(db.list_mx_view_snapshots(day)) == 0
+    assert db._rows("SELECT COUNT(*) AS n FROM mx_view_batches WHERE trading_day = ?", (day,))[0]["n"] == 0
+
+
 def test_has_done_mx_view_batch_and_abort_stale_sweep():
     db = make_db()
     day = "2026-09-03"

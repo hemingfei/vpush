@@ -6802,6 +6802,20 @@ def create_api_router(
             "summary_prompt": SUMMARY_SYSTEM_PROMPT,
         }
 
+    @router.post("/admin/mx-views/preview-prompt", dependencies=[Depends(require_admin)])
+    async def admin_mx_views_preview_prompt(request: Request):
+        """拼接完整研判提示词预览：system（规则段+题材参考表+操作词表）
+        + user（10 条示例大V消息 JSON）。前端传当前编辑值，后端拼表 + 取样。"""
+        from .llm import build_view_system_prompt, build_view_user_message
+        body = await request.json()
+        header = str(body.get("prompt_header") or "")
+        hints = body.get("topic_hints") or []
+        actions = body.get("action_tags") or []
+        system = build_view_system_prompt(hints, actions, header=header)
+        posts = db.list_mx_posts_after(0, 10)
+        user = build_view_user_message(posts) if posts else "（暂无 MX 消息，无法拼接示例）"
+        return {"system": system, "user": user}
+
     @router.put("/admin/mx-views/config", dependencies=[Depends(require_admin)])
     async def admin_mx_views_update_config(request: Request, admin: dict = Depends(get_current_user)):
         body = await request.json()
@@ -6885,11 +6899,12 @@ def create_api_router(
     @router.post("/admin/mx-views/backfill", dependencies=[Depends(require_admin)], status_code=202)
     async def admin_mx_views_backfill(request: Request, admin: dict = Depends(get_current_user)):
         body = await request.json()
+        overwrite = bool(body.get("overwrite"))
         ok = start_backfill_job(db, str(body.get("day_from") or ""), str(body.get("day_to") or ""),
-                                llm_config=resolve_system_llm_config(db))
+                                llm_config=resolve_system_llm_config(db), overwrite=overwrite)
         if not ok:
             raise HTTPException(status_code=409, detail="回填已在进行中，或日期区间非法/超30天")
-        _audit(admin, "mx_view_backfill", detail=f"{body.get('day_from')}~{body.get('day_to')}")
+        _audit(admin, "mx_view_backfill", detail=f"{body.get('day_from')}~{body.get('day_to')} overwrite={overwrite}")
         return {"ok": True}
 
     @router.get("/admin/mx-views/backfill/progress", dependencies=[Depends(require_admin)])

@@ -1658,6 +1658,10 @@ export function createMxViewsView(dependencies) {
           <button type="button" class="btn-sm" onclick="mxvAdminBfPreset(3)">近3天</button>
           <button type="button" class="btn-sm" onclick="mxvAdminBfPreset(7)">近7天</button>
         </div>
+        <label class="mxva-note" style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" id="mxva-bf-overwrite" style="cursor:pointer;">
+          <span>覆盖老数据 — 删除所选区间已有的研判数据后重新回填</span>
+        </label>
         <p class="mxva-note">按当前快照时刻表把历史消息重新研判成快照（最多 30 天，进行中可取消）。</p>
       </div>
       <div class="mxva-savebar">
@@ -1788,46 +1792,62 @@ export function createMxViewsView(dependencies) {
     }
   }
 
-  // ---- 预览完整提示词（拼接待送 LLM 的最终 system prompt） ----
+  // ---- 预览完整提示词（拼接待送 LLM 的最终对话） ----
 
-  /** 组装研判提示词完整文本：规则段（当前编辑值或默认）+ 题材参考表 + 操作词表。
-   *  与后端 build_view_system_prompt() 的拼接逻辑保持一致。 */
-  function mxvAdminBuildFullViewPrompt() {
+  async function mxvAdminPreviewViewPrompt() {
     const raw = ($("#mxva-view-prompt") && $("#mxva-view-prompt").value) || "";
-    const header = raw.trim() || (_mxvAdmin.viewPromptDefault || "");
-    const hints = (_mxvAdmin.hints || []).filter((h) => h.trim());
-    const actions = (_mxvAdmin.actions || []).filter((a) => a.trim());
-    const parts = [
-      header,
-      "【题材参考表】",
-      hints.length ? hints.join("、") : "（空）",
-    ];
-    parts.push("\n【操作词表】\n" + (actions.length ? actions.join("、") : "（空）"));
-    return parts.join("\n");
-  }
-
-  function mxvAdminPreviewViewPrompt() {
-    mxvAdminShowPromptPreview("研判提示词（完整拼接）", mxvAdminBuildFullViewPrompt());
+    mxvAdminShowPromptPreview("研判提示词预览", null); // 先弹「加载中」
+    try {
+      const res = await api("/api/admin/mx-views/preview-prompt", {
+        method: "POST",
+        body: JSON.stringify({
+          prompt_header: raw,
+          topic_hints: _mxvAdmin.hints,
+          action_tags: _mxvAdmin.actions,
+        }),
+      });
+      mxvAdminShowPromptPreview("研判提示词预览", [
+        { label: "System Message（规则段 + 题材参考表 + 操作词表）", content: res.system },
+        { label: "User Message（10 条示例大V消息）", content: res.user },
+      ]);
+    } catch (err) {
+      mxvAdminClosePromptPreview();
+      flash("预览失败: " + err.message, "error");
+    }
   }
 
   function mxvAdminPreviewSummaryPrompt() {
     const raw = ($("#mxva-summary-prompt") && $("#mxva-summary-prompt").value) || "";
     const text = raw.trim() || (_mxvAdmin.summaryPromptDefault || "");
-    mxvAdminShowPromptPreview("总结提示词（完整）", text);
+    mxvAdminShowPromptPreview("总结提示词预览", [
+      { label: "System Message（总结提示词）", content: text },
+    ]);
   }
 
-  function mxvAdminShowPromptPreview(title, content) {
+  function mxvAdminShowPromptPreview(title, sections) {
     mxvAdminClosePromptPreview();
     const mask = document.createElement("div");
     mask.className = "mxva-preview-mask";
     mask.onclick = mxvAdminClosePromptPreview;
+    let bodyHtml;
+    if (sections === null) {
+      bodyHtml = `<div class="mxva-preview-loading">加载中…</div>`;
+    } else if (Array.isArray(sections)) {
+      bodyHtml = sections.map((s) =>
+        `<div class="mxva-preview-section">
+          <div class="mxva-preview-label">${escapeHtml(s.label)}</div>
+          <pre class="mxva-preview-code">${escapeHtml(s.content)}</pre>
+        </div>`).join("");
+    } else {
+      bodyHtml = `<pre class="mxva-preview-code">${escapeHtml(String(sections))}</pre>`;
+    }
     mask.innerHTML = `
       <div class="mxva-preview-dialog" role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}" onclick="event.stopPropagation()">
         <div class="mxva-preview-head">
           <b>${escapeHtml(title)}</b>
           <button type="button" class="btn-sm" onclick="mxvAdminClosePromptPreview()" aria-label="关闭">×</button>
         </div>
-        <pre class="mxva-preview-body">${escapeHtml(content)}</pre>
+        <div class="mxva-preview-body">${bodyHtml}</div>
         <div class="mxva-preview-foot">
           <button type="button" class="btn-sm" onclick="mxvAdminClosePromptPreview()">关闭</button>
         </div>
@@ -1876,8 +1896,10 @@ export function createMxViewsView(dependencies) {
     const dayFrom = $("#mxva-bf-from") && $("#mxva-bf-from").value;
     const dayTo = $("#mxva-bf-to") && $("#mxva-bf-to").value;
     if (!dayFrom || !dayTo) { flash("请选择回填日期范围", "error"); return; }
-    api("/api/admin/mx-views/backfill", { method: "POST", body: JSON.stringify({ day_from: dayFrom, day_to: dayTo }) })
-      .then(() => { flash("回填已启动"); })
+    const overwrite = $("#mxva-bf-overwrite") && $("#mxva-bf-overwrite").checked;
+    if (overwrite && !confirm(`确认覆盖 ${dayFrom} ~ ${dayTo} 的老数据？\n该区间的研判数据将被删除后重新回填。`)) return;
+    api("/api/admin/mx-views/backfill", { method: "POST", body: JSON.stringify({ day_from: dayFrom, day_to: dayTo, overwrite }) })
+      .then(() => { flash(overwrite ? "回填已启动（覆盖模式）" : "回填已启动"); })
       .catch((err) => flash(err.message, "error"));
   }
 

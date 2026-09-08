@@ -5523,6 +5523,18 @@ class DB:
         )
         return bool(rows)
 
+    def delete_mx_view_day(self, trading_day: str) -> int:
+        """删除指定交易日的全部观点研判数据（覆盖回填用）。
+
+        先删 mx_opinions / mx_view_snapshots 再删 mx_view_batches，
+        返回删除的批次数。
+        """
+        self._execute("DELETE FROM mx_opinions WHERE trading_day = ?", (trading_day,))
+        self._execute("DELETE FROM mx_view_snapshots WHERE trading_day = ?", (trading_day,))
+        rows = self._rows("SELECT COUNT(*) AS n FROM mx_view_batches WHERE trading_day = ?", (trading_day,))
+        self._execute("DELETE FROM mx_view_batches WHERE trading_day = ?", (trading_day,))
+        return _to_int(rows[0]["n"]) if rows else 0
+
     def purge_old_mx_view_batches(self, keep_days: int = 30) -> int:
         """按天保留期清理 mx_view_batches（默认 30 天，对齐回填窗口上限）。
 

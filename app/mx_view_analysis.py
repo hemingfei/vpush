@@ -900,8 +900,13 @@ def request_backfill_cancel() -> None:
         _backfill_state["cancel"] = True
 
 
-def start_backfill_job(db, day_from, day_to, llm_config=None) -> bool:
-    """回填 = 按快照表重放整天（仅工作日）。已在跑或日期区间非法/超 30 天返回 False。"""
+def start_backfill_job(db, day_from, day_to, llm_config=None, overwrite=False) -> bool:
+    """回填 = 按快照表重放整天（仅工作日）。已在跑或日期区间非法/超 30 天返回 False。
+
+    overwrite=True 时，回填每一天前先删除该交易日已有的全部研判数据
+    （mx_view_batches / mx_opinions / mx_view_snapshots），再逐窗重放。
+    默认 False：已有 done 批的快照窗口直接跳过，不覆盖老数据。
+    """
     with _backfill_state_lock:
         if _backfill_state["running"]:
             return False
@@ -927,6 +932,12 @@ def start_backfill_job(db, day_from, day_to, llm_config=None) -> bool:
                     if _backfill_state["cancel"]:
                         break
                     _backfill_state["current_day"] = day
+                if overwrite:
+                    try:
+                        db.delete_mx_view_day(day)
+                        logger.info("回填覆盖模式：已删除 %s 老数据", day)
+                    except Exception:  # noqa: BLE001
+                        logger.exception("回填覆盖模式删除老数据失败 %s", day)
                 for start, end in windows:
                     with _backfill_state_lock:
                         if _backfill_state["cancel"]:
