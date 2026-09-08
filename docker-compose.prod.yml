@@ -18,6 +18,7 @@ services:
       - CONFIG_PATH=/data/config.yaml
       - "VPUSH_INSTANCE=${VPUSH_INSTANCE:-vpush.net / DMIT}"
       - DB_PATH=/data/dav.db
+      - DB_JOURNAL_MODE=${DB_JOURNAL_MODE:-}
       - FEISHU_APP_ID=${FEISHU_APP_ID}
       - FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
       - FEISHU_BOT_NAME=${FEISHU_BOT_NAME}

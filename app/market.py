@@ -6,7 +6,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -32,6 +32,60 @@ MINUTE_URL = "https://web.ifzq.gtimg.cn/appstock/app/{market}/query"
 
 def default_group(now: datetime) -> str:
     return "day" if 8 <= now.astimezone(CN_TZ).hour < 20 else "night"
+
+
+def _observed_fixed_holiday(year: int, month: int, day: int) -> date:
+    holiday = date(year, month, day)
+    if holiday.weekday() == 5:
+        return holiday - timedelta(days=1)
+    if holiday.weekday() == 6:
+        return holiday + timedelta(days=1)
+    return holiday
+
+
+def _nth_weekday(year: int, month: int, weekday: int, occurrence: int) -> date:
+    first = date(year, month, 1)
+    return first + timedelta(days=(weekday - first.weekday()) % 7 + (occurrence - 1) * 7)
+
+
+def _last_weekday(year: int, month: int, weekday: int) -> date:
+    next_month = date(year + (month == 12), month % 12 + 1, 1)
+    last_day = next_month - timedelta(days=1)
+    return last_day - timedelta(days=(last_day.weekday() - weekday) % 7)
+
+
+def _easter_sunday(year: int) -> date:
+    # Anonymous Gregorian algorithm; Good Friday is the only Easter-derived NYSE closure.
+    a, b, c = year % 19, year // 100, year % 100
+    d, e = b // 4, b % 4
+    f, g = (b + 8) // 25, (b - (b + 8) // 25 + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = (h + l - 7 * m + 114) % 31 + 1
+    return date(year, month, day)
+
+
+def is_us_market_holiday(day: date) -> bool:
+    fixed = {
+        _observed_fixed_holiday(year, month, holiday_day)
+        for year in (day.year - 1, day.year, day.year + 1)
+        for month, holiday_day in ((1, 1), (7, 4), (12, 25))
+    }
+    if day.year >= 2022:
+        fixed.add(_observed_fixed_holiday(day.year, 6, 19))
+    year = day.year
+    movable = {
+        _nth_weekday(year, 1, 0, 3),
+        _nth_weekday(year, 2, 0, 3),
+        _last_weekday(year, 5, 0),
+        _nth_weekday(year, 9, 0, 1),
+        _nth_weekday(year, 11, 3, 4),
+        _easter_sunday(year) - timedelta(days=2),
+    }
+    return day in fixed or day in movable
 
 
 def parse_quotes(text: str, group: str = "day") -> list[dict]:
@@ -94,6 +148,8 @@ def quote_status(item: dict, now: datetime) -> str:
     minute = local.hour * 60 + local.minute
     end = 960 if symbol.startswith(("hk", "us")) else 900
     lunch = 720 if symbol.startswith("hk") else 690
+    if symbol.startswith("us") and is_us_market_holiday(local.date()):
+        return "holiday"
     if local.weekday() >= 5 or minute < 570 or minute >= end:
         return "closed"
     if not symbol.startswith("us") and lunch < minute < 780:

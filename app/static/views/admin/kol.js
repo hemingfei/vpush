@@ -17,6 +17,8 @@ export function createAdminKolsView(dependencies) {
     fmtPublished,
     showConfirm,
     copyText,
+    CHEVRON_LEFT_ICON,
+    CHEVRON_RIGHT_ICON,
   } = dependencies;
 
   let _adminKolsSeq = 0;
@@ -150,9 +152,9 @@ export function createAdminKolsView(dependencies) {
           </table>
         </div>
         <div class="pager">
-          <button class="btn-sm" ${page <= 0 ? "disabled" : ""} onclick="adminKolsPage(${page - 1})">← 上一页</button>
+          <button class="btn-sm" ${page <= 0 ? "disabled" : ""} aria-label="上一页" title="上一页" onclick="adminKolsPage(${page - 1})">${CHEVRON_LEFT_ICON} 上一页</button>
           <span class="pager-count">第 ${page + 1}/${pages} 页 · 共 ${state.adminKolsTotal} 个</span>
-          <button class="btn-sm" ${page + 1 >= pages ? "disabled" : ""} onclick="adminKolsPage(${page + 1})">下一页 →</button>
+          <button class="btn-sm" ${page + 1 >= pages ? "disabled" : ""} aria-label="下一页" title="下一页" onclick="adminKolsPage(${page + 1})">下一页 ${CHEVRON_RIGHT_ICON}</button>
         </div>
       </section>
       ${newsKolPanelHtml()}

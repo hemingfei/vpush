@@ -10,13 +10,16 @@ from scripts import bump_assets
 def make_tree(tmp_path: Path) -> Path:
     static = tmp_path / "app" / "static"
     (static / "core").mkdir(parents=True)
+    (static / "vendor").mkdir()
     (static / "views").mkdir()
     (static / "style.css").write_text("body { color: black; }\n")
     (static / "mx-views.css").write_text(".mxv-root { color: red; }\n")
+    (static / "vendor" / "design-tokens.css").write_text(":root { --color: black; }\n")
     (static / "app.js").write_text("import './core/html.js';\n")
     (static / "core" / "html.js").write_text("export const x = 1;\n")
     (static / "views" / "news.js").write_text("export const y = 2;\n")
     (static / "index.html").write_text(
+        '<link rel="stylesheet" href="/vendor/design-tokens.css?v=old">\n'
         '<link rel="stylesheet" href="/style.css?v=old">\n'
         '<link rel="stylesheet" href="/mx-views.css?v=old">\n'
         '<script type="module" src="/app.js?v=old"></script>\n'
@@ -54,6 +57,7 @@ def test_sync_is_deterministic(tmp_path: Path):
     [
         "app/static/style.css",
         "app/static/mx-views.css",
+        "app/static/vendor/design-tokens.css",
         "app/static/app.js",
         "app/static/core/html.js",
         "app/static/views/news.js",
@@ -70,6 +74,8 @@ def test_changed_asset_fails_check(tmp_path: Path, relative: str):
 @pytest.mark.parametrize(
     ("target_name", "old", "new", "message"),
     [
+        ("index.html", '<link rel="stylesheet" href="/vendor/design-tokens.css?v=old">\n',
+         "", "design-tokens.css reference"),
         ("index.html", '<link rel="stylesheet" href="/style.css?v=old">\n', "", "style.css reference"),
         ("index.html", '<script type="module" src="/app.js?v=old"></script>\n',
          '<script type="module" src="/app.js?v=old"></script>\n' * 2, "app.js reference"),

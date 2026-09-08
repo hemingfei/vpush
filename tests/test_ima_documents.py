@@ -5037,3 +5037,59 @@ def test_public_list_item_includes_truncated_abstract():
     }
     public3 = ImaDocumentService._public_list_item(item3)
     assert "abstract" not in public3
+
+
+def test_list_items_stops_on_empty_page_with_repeated_cursor():
+    """IMA 列表末尾返回 0 条 + 原游标（CAQ=），空页即结束，不再报 repeated cursor。"""
+    client = ImaPureClient(
+        ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
+    )
+    client._token = lambda: "access"
+    pages = iter([
+        {
+            "code": 0,
+            "knowledge_list": [
+                {"media_id": f"doc-{i}"} for i in range(4)
+            ],
+            "next_cursor": "CAQ=",
+        },
+        {
+            "code": 0,
+            "knowledge_list": [],
+            "next_cursor": "CAQ=",
+        },
+    ])
+    seen = []
+
+    def open_json(request):
+        body = json.loads(request.data)
+        seen.append(body.get("cursor") or "")
+        return next(pages), {}
+
+    client._open_json = open_json
+    items = client.list_items("root")
+    assert [item["media_id"] for item in items] == [f"doc-{i}" for i in range(4)]
+    assert len(seen) == 2
+
+
+def test_list_items_still_rejects_nonempty_repeated_cursor_pages():
+    """非空页还重复游标仍是服务端异常，保留防死循环保护。"""
+    client = ImaPureClient(
+        ImaDocumentConfig(refresh_token="refresh", root_folder_id="root")
+    )
+    client._token = lambda: "access"
+    page = {
+        "code": 0,
+        "knowledge_list": [{"media_id": "doc"}],
+        "next_cursor": "p2",
+    }
+
+    def open_json(request):
+        return dict(page), {}
+
+    client._open_json = open_json
+    try:
+        client.list_items("root")
+        raise AssertionError("应当抛出 repeated cursor")
+    except RuntimeError as exc:
+        assert "repeated cursor" in str(exc)

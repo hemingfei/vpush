@@ -211,6 +211,13 @@ V Push 是值班台，不是内容社区，也不是营销落地页。界面服�
 
 动效：`--ease-standard` 为 160ms ease。主按钮 active 下移 1px。尊重 `prefers-reduced-motion`。
 
+### Web 控件图标与底栏反馈
+
+- 通用控件图标统一由 `app/static/core/icons.js` 提供：`24×24` viewBox、`currentColor`、`2px` 圆角线框；展示尺寸由控件 CSS 决定。品牌、渠道和数据可视化 SVG 保持各自语义与所有权。
+- 图标本身使用 `aria-hidden="true"`，按钮或链接提供中文 `aria-label`；带文字的控件保留可见文字，不把图标内容作为可访问名称。
+- 移动底栏关闭原生矩形 tap highlight。点击时显示一次 `42px` 圆形淡蓝反馈，采用 `220ms` 透明度淡入淡出；动画结束后背景透明，只保留当前入口的蓝色 `2.4px` 线框。`prefers-reduced-motion: reduce` 时只保留 `80ms` 透明度反馈。
+- 选中态不改变底栏入口尺寸、位置或布局，反馈层不可阻塞点击，重复点击可重新触发反馈。
+
 ### Named Rules
 **The Flat-By-Default Rule.** 休息态平面。阴影只回答「这层浮在上面」。卡片加阴影即违规。
 
@@ -252,7 +259,8 @@ V Push 是值班台，不是内容社区，也不是营销落地页。界面服�
 ### Navigation
 - **Desktop:** 侧栏项透明底，13px，hover 极淡蓝底，active 用 accent-soft 底 + Duty Blue Text，字重 600。分组标签 Caption。
 - **Slim / ≤900px:** 图标轨，标签隐藏。
-- **Mobile ≤768px:** 底栏，图标+短标签。
+- **Mobile ≤768px:** 底栏只显示动态、财经新闻（按权限）、广场、个人设置和更多（管理员）的图标；图标等宽排列，触控区至少 48px。可见中文仅保留为 `aria-label` / `title`，当前项使用 Duty Blue，浅色/深色主题分别跟随对应 token。
+- **Bottom navigation motion:** 当前入口的稳定态不使用半透明矩形或胶囊背景；只用蓝色加粗线框表达命中，点击反馈结束后不保留淡蓝背景。
 - **Theme switcher:** 无边小图标钮，选中淡蓝底 + Duty Blue Text。
 
 ### Timeline filters (signature)

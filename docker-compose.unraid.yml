@@ -20,6 +20,7 @@ services:
       TZ: Asia/Shanghai
       CONFIG_PATH: /app/config.yaml
       DB_PATH: /data/dav.db
+      DB_JOURNAL_MODE: ${DB_JOURNAL_MODE:-}
       # 密钥走环境变量（Unraid compose 里直接填，或放同目录 .env）
       FEISHU_APP_ID: "${FEISHU_APP_ID}"
       FEISHU_APP_SECRET: "${FEISHU_APP_SECRET}"

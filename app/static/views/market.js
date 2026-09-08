@@ -69,7 +69,8 @@ export function createMarketView({ api, escapeHtml }) {
       const states = available.map(item => item.status);
       const status = !available.length ? (failed || snapshot ? "暂不可用" : "加载中")
         : stale ? "更新失败" : states.includes("delayed") ? "部分延迟"
-        : states.includes("trading") ? "交易中" : states.includes("break") ? "午间休市" : "休市";
+        : states.includes("trading") ? "交易中" : states.includes("break") ? "午间休市"
+        : states.includes("holiday") ? "今日休市" : "休市";
       const rows = GROUPS[group].map(([symbol, name, code]) => {
         const item = snapshot?.items?.find(item => item.symbol === symbol) || { symbol, name };
         const quoted = Number.isFinite(item.price);
@@ -86,6 +87,8 @@ export function createMarketView({ api, escapeHtml }) {
       const dateLabel = tradingDates.length ? tradingDates[0].slice(5).replace("-", "/")
         + (tradingDates.length > 1 ? `–${tradingDates.at(-1).slice(5).replace("-", "/")}` : "") : "";
       const chartDelayed = failed || available.some(item => item.intraday_stale);
+      const marketClosed = states.length > 0 && states.every(state => state === "closed" || state === "holiday");
+      const footerLabel = marketClosed ? "最近交易日" : chartDelayed ? "分时延迟" : "日内分时";
       host.innerHTML = `<div class="market-heading">
           <h3 class="tl-rail-title" id="market-title"><button type="button" class="market-toggle" data-market-focus="toggle" aria-expanded="${!collapsed}" aria-controls="market-body" title="${collapsed ? "展开市场概览" : "收起市场概览"}">市场概览${CHEVRON}</button></h3>
           <span class="market-status" role="status">${status}</span>
@@ -101,7 +104,7 @@ export function createMarketView({ api, escapeHtml }) {
           <thead class="sr-only"><tr><th scope="col">标的</th><th scope="col">日内分时走势</th><th scope="col">点位与涨跌幅</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
-        <div class="market-footer"><span title="分时日期（交易所当地日期）${chartDelayed ? ' · 部分分时更新延迟' : ''}">${chartDelayed ? "分时延迟" : "日内分时"}${dateLabel ? ` · ${dateLabel}` : ""}</span>
+        <div class="market-footer"><span title="分时日期（交易所当地日期）${chartDelayed ? ' · 部分分时更新延迟' : ''}">${footerLabel}${dateLabel ? ` · ${dateLabel}` : ""}</span>
           ${stale ? `<button type="button" class="market-retry" data-market-focus="retry" ${pending.has(group) ? "disabled" : ""}>重试</button>` : ""}
           <span title="报价时间（北京时间）">${oldest ? `<time datetime="${oldest.toISOString()}">${escapeHtml(timeFormat.format(oldest))}</time>` : "--"}</span>
         </div></div>`;

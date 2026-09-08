@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-  <meta name="theme-color" content="#f8f8fb">
+  <meta name="theme-color" content="#f5f5f7">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="VPush">
   <title>VPush</title>
-  <link id="manifest" rel="manifest" href="/manifest.webmanifest?v=2">
+  <link id="manifest" rel="manifest" href="/manifest.webmanifest?v=3">
   <link rel="apple-touch-icon" href="/icon-192.png">
   <link rel="apple-touch-icon" href="/icon-192.png" media="(prefers-color-scheme: light)">
   <link rel="apple-touch-icon" href="/icon-192-dark.png" media="(prefers-color-scheme: dark)">
@@ -28,21 +28,21 @@
         if (dark) document.documentElement.classList.add("theme-dark");
         if (localStorage.getItem("sidebar-slim") === "1") document.documentElement.classList.add("sidebar-slim");
         var themeColor = document.querySelector('meta[name="theme-color"]');
-        if (themeColor) themeColor.content = dark ? "#11141a" : "#f8f8fb";
+        if (themeColor) themeColor.content = dark ? "#0f1115" : "#f5f5f7";
         var statusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
         if (statusBar) statusBar.content = dark ? "black-translucent" : "default";
         // 安卓部分机型独立窗口只认 manifest 静态 theme_color（无视运行时 meta）：
         // 深色时整体换成深色 manifest，状态栏/启动色才跟得上
         var manifestLink = document.getElementById("manifest");
-        if (manifestLink) manifestLink.href = dark ? "/manifest-dark.webmanifest?v=2" : "/manifest.webmanifest?v=2";
+        if (manifestLink) manifestLink.href = dark ? "/manifest-dark.webmanifest?v=3" : "/manifest.webmanifest?v=3";
         var fav = document.getElementById("favicon");
         if (fav) fav.setAttribute("href", dark ? "/logo-mark-dark.svg" : "/logo-mark.svg");
       } catch (e) { /* localStorage 不可用时静默 */ }
     })();
   </script>
-  <link rel="stylesheet" href="/vendor/design-tokens.css?v=26">
-  <link rel="stylesheet" href="/style.css?v=c78b33f287d8">
-  <link rel="stylesheet" href="/mx-views.css?v=c78b33f287d8">
+  <link rel="stylesheet" href="/vendor/design-tokens.css?v=052bcad957c3">
+  <link rel="stylesheet" href="/style.css?v=052bcad957c3">
+  <link rel="stylesheet" href="/mx-views.css?v=052bcad957c3">
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -163,7 +163,7 @@
     <div class="main-col">
       <header class="topbar">
         <div class="topbar-title">
-          <button id="btn-back" class="icon-btn hidden" aria-label="返回上一页">‹</button>
+          <button id="btn-back" class="icon-btn hidden" aria-label="返回上一页"></button>
           <img class="topbar-logo" src="/logo-mark.svg" alt="VPush">
           <h1 id="page-title">订阅广场</h1>
         </div>
@@ -173,6 +173,6 @@
     </div>
     <nav id="bottom-nav" class="bottom-nav"></nav>
   </div>
-  <script type="module" src="/app.js?v=c78b33f287d8"></script>
+  <script type="module" src="/app.js?v=052bcad957c3"></script>
 </body>
 </html>

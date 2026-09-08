@@ -124,6 +124,72 @@ def make_db() -> DB:
     return DB(Path(tmp) / "test.db")
 
 
+def test_report_extraction_requeues_recoverable_results_once(tmp_path, monkeypatch):
+    db = DB(tmp_path / "reports.db")
+    group_id = "7476629605476515"
+    relative_path = "semi/report.txt"
+    source = tmp_path / relative_path
+    source.parent.mkdir(parents=True)
+    source.write_text("English semiconductor research. " * 20)
+    recoverable = ("failed", "notext", "empty", "nofile")
+    for index, status in enumerate(recoverable, start=1):
+        media_id = f"english-{index}"
+        db._execute(
+            "INSERT INTO ima_document_index "
+            "(group_id, media_id, name, has_txt, txt_path, sort_date) "
+            "VALUES (?, ?, 'AI Datacenter Outlook', 1, ?, '2026-09-08')",
+            (group_id, media_id, relative_path),
+        )
+        db.save_report_extraction(group_id, media_id, status=status, model="old-model")
+    db._execute(
+        "INSERT INTO ima_document_index "
+        "(group_id, media_id, name, has_txt, txt_path, sort_date) "
+        "VALUES (?, 'english-ok', 'Existing Result', 1, ?, '2026-09-08')",
+        (group_id, relative_path),
+    )
+    db.save_report_extraction(
+        group_id, "english-ok", thesis="Keep this result.", status="ok", model="old-model"
+    )
+    calls = []
+
+    def fake_extract(text, llm_config, model="", universe=None, client=None):
+        calls.append((text, model))
+        return {
+            "report_kind": "行业",
+            "rating": "",
+            "target_price": "",
+            "thesis": "AI infrastructure demand remains strong.",
+            "tickers": [{"code": "NVDA", "name": "NVIDIA", "stance": "受益"}],
+            "status": "ok",
+        }
+
+    monkeypatch.setattr("app.llm.extract_report_structure", fake_extract)
+    scheduler = Scheduler(
+        db,
+        {},
+        [],
+        SimpleNamespace(),
+        llm_config=SimpleNamespace(
+            api_key="test-key", api_base="https://example.com/v1", model="test-model"
+        ),
+        ima_archive_file=lambda path: tmp_path / path,
+    )
+
+    assert scheduler._run_report_extraction_task() == len(recoverable)
+    assert len(calls) == len(recoverable)
+    results = db.report_extractions_for_keys(
+        [(group_id, f"english-{index}") for index in range(1, len(recoverable) + 1)]
+    )
+    assert {result["status"] for result in results.values()} == {"ok"}
+    preserved = db.report_extractions_for_keys([(group_id, "english-ok")])[
+        (group_id, "english-ok")
+    ]
+    assert preserved["thesis"] == "Keep this result."
+
+    assert scheduler._run_report_extraction_task() == 0
+    assert len(calls) == len(recoverable)
+
+
 def add_kol_subscribed(db, platform, name, external_id, **kw):
     """建大V + 自动建一个订阅用户，使抓取调度认为该大V有人订阅。
 

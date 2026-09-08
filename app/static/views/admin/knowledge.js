@@ -11,6 +11,7 @@ export function createAdminKnowledgeView(dependencies) {
     currentAdminSeq,
     routeQuery,
     REFRESH_ICON,
+    CHEVRON_RIGHT_ICON,
     setPageTitle,
     imaMountState,
     imaCollectorPureCache,
@@ -224,7 +225,7 @@ export function createAdminKnowledgeView(dependencies) {
                     <button type="button" class="ima-folder-panel-toggle" id="ima-folder-panel-toggle"
                       aria-expanded="false" aria-controls="ima-folder-panel" onclick="toggleImaFolderPanel(this)">
                       <span><strong>采集文件夹</strong><span id="ima-folder-summary" class="muted">未选择文件夹</span></span>
-                      <span aria-hidden="true">›</span>
+                      ${CHEVRON_RIGHT_ICON}
                     </button>
                     <div id="ima-folder-panel" hidden>
                       <header class="ima-mount-pane-head"><strong id="ima-folder-title">选择知识库</strong><span id="ima-folder-count" class="muted"></span></header>
@@ -294,7 +295,7 @@ export function createAdminKnowledgeView(dependencies) {
               </label>
             </div>
             <details class="ks-advanced">
-              <summary class="cfg-group-title">高级（翻页、间隔、App 通道）</summary>
+              <summary class="cfg-group-title">${CHEVRON_RIGHT_ICON}<span>高级（翻页、间隔、App 通道）</span></summary>
               <div class="cfg-fields">
                 <label class="cfg-field" title="每星球每轮最多翻几页，每页 20 条">
                   <span>单轮翻页<span class="cfg-unit">页</span></span>

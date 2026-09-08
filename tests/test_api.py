@@ -1730,6 +1730,97 @@ def test_verify_turnstile_checks_action_and_hostname(monkeypatch):
     assert not verify_turnstile(secret="s", token="", action="login", hostnames={"vpush.net"})
 
 
+def test_admin_turnstile_toggle_and_tokens(monkeypatch):
+    monkeypatch.setattr("app.api.verify_turnstile", lambda **k: True)
+    client = make_client("ts-toggle.db", config=_turnstile_cfg())
+    headers = auth_headers(client, "boss01")
+    assert client.get("/api/auth/turnstile").json()["sitekey"] == "0x4AAAAAAEpFC-pepUf7vzMN"
+
+    status = client.get("/api/admin/turnstile", headers=headers)
+    assert status.status_code == 200
+    body = status.json()
+    assert body["enabled"] is True
+    assert body["active"] is True
+    assert body["secret_set"] is True
+    assert "secret" not in body
+    assert client.get("/api/stats", headers=headers).json()["turnstile"]["secret_set"] is True
+
+    off = client.put("/api/admin/turnstile", headers=headers, json={"enabled": False})
+    assert off.status_code == 200, off.text
+    assert off.json()["enabled"] is False
+    assert off.json()["active"] is False
+    assert off.json()["secret_set"] is True
+    assert client.get("/api/auth/turnstile").json() == {"sitekey": ""}
+    login = client.post(
+        "/api/auth/login", json={"username": "boss01", "password": "secret123"}
+    )
+    assert login.status_code == 200, login.text
+
+    on = client.put(
+        "/api/admin/turnstile",
+        headers=headers,
+        json={"enabled": True, "sitekey": "0xNEWKEY", "hostnames": "vpush.net"},
+    )
+    assert on.status_code == 200, on.text
+    assert on.json()["sitekey"] == "0xNEWKEY"
+    assert on.json()["active"] is True
+    assert client.get("/api/auth/turnstile").json()["sitekey"] == "0xNEWKEY"
+
+
+def test_admin_turnstile_save_requires_keys_and_rejects_non_admin():
+    client = make_client("ts-keys.db")
+    user = user_headers(client, "plain01")
+    assert client.put("/api/admin/turnstile", headers=user, json={"enabled": True}).status_code in (401, 403)
+    headers = auth_headers(client, "boss02")
+    missing = client.put("/api/admin/turnstile", headers=headers, json={"enabled": True})
+    assert missing.status_code == 400
+    bad_host = client.put(
+        "/api/admin/turnstile",
+        headers=headers,
+        json={
+            "enabled": True,
+            "sitekey": "0xabc",
+            "secret": "sec",
+            "hostnames": "https://vpush.net",
+        },
+    )
+    assert bad_host.status_code == 400
+    saved = client.put(
+        "/api/admin/turnstile",
+        headers=headers,
+        json={
+            "enabled": True,
+            "sitekey": "0xabc",
+            "secret": "sec",
+            "hostnames": "vpush.net",
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["active"] is True
+    keep = client.put(
+        "/api/admin/turnstile",
+        headers=headers,
+        json={"enabled": True, "sitekey": "0xabc", "secret": "", "hostnames": "vpush.net"},
+    )
+    assert keep.status_code == 200, keep.text
+    assert keep.json()["secret_set"] is True
+    assert "secret" not in keep.json()
+
+
+def test_admin_turnstile_hostnames_not_defaulted():
+    client = make_client("ts-hosts.db")
+    headers = auth_headers(client, "boss-h")
+    off = client.put("/api/admin/turnstile", headers=headers, json={"enabled": False})
+    assert off.status_code == 200, off.text
+    assert off.json()["hostnames"] == ""
+    missing = client.put(
+        "/api/admin/turnstile",
+        headers=headers,
+        json={"enabled": True, "sitekey": "0xabc", "secret": "sec"},
+    )
+    assert missing.status_code == 400
+
+
 def test_admin_delete_user_cascades():
     client = make_client()
     admin_headers = auth_headers(client, "boss01")
@@ -5491,6 +5582,15 @@ def test_login_sets_last_login_at_register_does_not():
     ).status_code == 200
     row = db.get_user(uid)
     assert row["last_login_at"]
+
+
+def test_me_updates_last_login_at():
+    client = make_client()
+    reg = register(client, "me_seen", password="pass123456").json()
+    token, uid = reg["token"], reg["user"]["id"]
+    assert not client.app.state.db.get_user(uid).get("last_login_at")
+    assert client.get("/api/me", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+    assert client.app.state.db.get_user(uid)["last_login_at"]
 
 
 def test_inactive_user_policy_and_list_flags():

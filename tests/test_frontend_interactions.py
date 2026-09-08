@@ -109,6 +109,20 @@ def test_knowledge_row_hides_unused_cover_fallback_icon():
     assert "grid-template-columns: minmax(0, 1fr) 20px" not in css
 
 
+def test_report_row_shows_llm_thesis_before_document_abstract():
+    """无评级/目标价的英文行业报告仍需让用户看见结构化抽取结果。"""
+    row = _fn_body("imaDocumentRow", IMA_JS)
+
+    assert "hasExtractionBadges" in row
+    assert "extraction.rating" in row
+    assert "extraction.target_price" in row
+    assert "extraction.tickers?.length" in row
+    assert "item.extraction?.status === \"ok\"" in row
+    assert "item.extraction?.thesis" in row
+    assert "!hasExtractionBadges" in row
+    assert row.index("item.extraction?.thesis") < row.index("item.abstract")
+
+
 
 def _extract_fn_body(name: str, path: Path) -> str:
     src = path.read_text()
@@ -483,7 +497,8 @@ def test_timeline_pills_always_show_short_labels():
     assert 'title="${label}"' in pills
     assert 'role="radio"' in pills
     assert "aria-checked" in pills
-    assert 'combination: "组合"' in src
+    assert 'PLATFORM_SHORT_LABELS_CONFIG' in src
+    assert 'combination: { label: "雪球组合", shortLabel: "组合"' in (APP_JS.parent / "core/platforms.js").read_text()
     assert ".tl-pill-icon" not in css
     assert ".tl-pills { display: none" not in css
     assert "flex-wrap: nowrap" in css
@@ -858,8 +873,10 @@ def test_zsxq_is_plaza_badge_not_sidebar_page():
     src = APP_JS.read_text()
     css = STYLE_CSS.read_text()
     assert '"zsxq"' in src and "PLATFORM_TABS" in src
-    assert 'zsxq: "星球"' in src
-    assert "PLATFORM_ICONS" in src and "M13.012 0c.874" in src
+    platforms = (APP_JS.parent / "core/platforms.js").read_text()
+    assert "PLATFORM_BADGES" in platforms
+    assert 'zsxq: { label: "知识星球", shortLabel: "星球"' in platforms
+    assert "PLATFORM_ICONS" in platforms and "ZSXQ_ICON" in platforms
     assert 'route: "zsxq"' not in src
     assert "async function renderZsxq" not in src
     assert 'replaceRoute("timeline")' in src
@@ -1355,6 +1372,37 @@ def test_stats_cookie_repair_deep_link():
     assert "src.xueqiu && !src.xueqiu.ok" in repair
 
 
+def test_account_turnstile_settings_tab():
+    src = APP_JS.read_text()
+    dashboard = ADMIN_DASHBOARD_JS.read_text()
+    assert 'id="ts-enabled"' not in dashboard
+    assert "turnstileSettingsHtml" not in dashboard
+    assert '{ id: "turnstile", label: "登录验证" }' in src
+    assert "turnstile: () => loadAdminTurnstile()" in src
+    assert "async function loadAdminTurnstile(" in src
+    assert 'id="ts-enabled"' in src
+    assert "TURNSTILE_SITE_KEY" in src
+    html = _fn_body("turnstileSettingsHtml")
+    assert "cfg-stack" in html
+    assert "cfg-field" in html
+    assert "field-label" not in html
+    assert "notice-warn" in html
+    assert "btn-fluid" not in html
+    assert 'class="btn-normal"' in html
+    assert 'class="btn-ghost"' in html
+    assert ">从剪贴板填入</button>" in html
+    assert 'placeholder="vpush.net"' in src
+    assert 'info.hostnames || "vpush.net"' not in src
+    assert "保存登录验证（未保存）" in _fn_body("markTurnstileDirty")
+    save = _fn_body("saveTurnstileSettings")
+    assert "loadAdminStats" not in save
+    assert 'loadAdminGroup("account")' in save
+    assert "登录验证已开启" in save
+    assert "开关已开，但还缺密钥" in save
+    assert "登录验证已关闭" in save
+    assert '"/api/admin/turnstile"' in src
+
+
 def test_stats_imgbed_tab_matches_cookie_settings_pattern():
     src = APP_JS.read_text()
     dashboard = ADMIN_DASHBOARD_JS.read_text()
@@ -1702,8 +1750,11 @@ def test_cookie_save_nested_stats_reload_preserves_owner_sequence_and_focus_guar
 def test_cookie_tab_primary_buttons_are_44px():
     """Cookie 管理主按钮提到 44px；不改全局 --control-height-2xl，避免登录/筛选错位。"""
     css = STYLE_CSS.read_text()
-    block = re.search(r"#st-cookies\s+\.btn-normal,\s*#st-imgbed\s+\.btn-normal\s*\{([^}]*)\}", css)
-    assert block, "缺少 #st-cookies .btn-normal"
+    block = re.search(
+        r"#st-cookies\s+\.btn-normal,\s*#st-imgbed\s+\.btn-normal,\s*#ts-form\s+\.btn-normal\s*\{([^}]*)\}",
+        css,
+    )
+    assert block, "缺少 #st-cookies/#st-imgbed/#ts-form .btn-normal"
     assert "44px" in block.group(1)
     tokens = (APP_JS.parent / "vendor" / "design-tokens.css").read_text()
     root = re.search(r"^:root\s*\{", tokens, re.M)
@@ -2874,10 +2925,10 @@ def test_post_header_does_not_clip_platform_or_time():
     后面的平台圆标和发布时间裁出可视区（VPS 手机端时间线「时间消失」）。
     """
     css = STYLE_CSS.read_text()
-    name_line = re.search(r"\.post-item \.p-name-line\s*\{([^}]*)\}", css)
+    name_line = re.search(r":is\(\.post-item, \.kol-card\) \.p-name-line\s*\{([^}]*)\}", css)
     name = re.search(r"\.post-item \.p-name\s*\{([^}]*)\}", css)
     time = re.search(r"\.post-item \.p-time\s*\{([^}]*)\}", css)
-    platform = re.search(r"\.post-item \.p-name-line \.p-platform\s*\{([^}]*)\}", css)
+    platform = re.search(r":is\(\.post-item, \.kol-card\) \.p-name-line \.p-platform\s*\{([^}]*)\}", css)
     assert name_line, "缺少 .p-name-line 规则"
     assert name, "缺少 .p-name 规则"
     assert time, "缺少 .p-time 规则"
@@ -2966,6 +3017,9 @@ def test_kol_card_name_wraps_full_combination_title():
     card = _fn_body("kolCard")
     assert "kol-card-meta" in card
     assert "PLATFORM_LABELS[kol.platform]" in card
+    assert "PLATFORM_ICONS[kol.platform]" in card
+    assert 'class="p-name-line"' in card and 'role="img" aria-label=' in card
+    assert 'tags.push(`<span class="tag">${PLATFORM_LABELS' not in card
 
 
 def test_timeline_new_badge_pins_to_sticky_filterbar():
@@ -3527,15 +3581,51 @@ def test_live_feed_is_prefetched_and_shares_inflight_request():
 def test_xueqiu_badge_uses_official_mark():
     """雪球角标用官方图，盒尺寸仍走 .pt-icon。"""
     src = APP_JS.read_text()
+    platforms = (APP_JS.parent / "core/platforms.js").read_text()
     css = STYLE_CSS.read_text()
-    assert 'src="/xueqiu-mark.png"' in src
-    assert (APP_JS.parent / "xueqiu-mark.png").is_file()
-    assert "img.pt-icon { display: block; object-fit: contain; }" in css
+    assert 'XUEQIU_ICON' in platforms
+    assert 'class="pt-icon xueqiu-icon"' in platforms
+    assert 'fill="var(--platform-icon-fill, #287DFF)"' in platforms
+    assert "xueqiu-mark.png" not in platforms
+    assert "img.pt-icon" not in css
     assert ".pt-icon { width: 16px; height: 16px; flex-shrink: 0; }" in css
     # 平台/筛选角标统一 26px 圆底衬，选中态去底衬反白
     assert "border-radius: 50%;\n  background: var(--color-bg-muted);" in css
     assert ".tl-pill.selected .pt-icon,\n.platform-tab.selected .pt-icon { background: transparent; }" in css
-    assert ".post-item .p-name-line .p-platform .pt-icon { width: 13px; height: 13px; }" in css
+    assert ":is(.post-item, .kol-card) .p-name-line .p-platform .pt-icon { width: 13px; height: 13px; }" in css
+
+
+def test_truth_badge_uses_single_cropped_viewbox():
+    """Truth 角标不得重复 viewBox：HTML 取第一个，0 0 24 24 会把 T 字画小。"""
+    platforms = (APP_JS.parent / "core/platforms.js").read_text()
+    icon = re.search(r"const TRUTH_ICON = `([^`]+)`", platforms).group(1)
+    assert "${ICON_ATTRS}" not in icon
+    assert icon.count("viewBox=") == 1
+    assert 'viewBox="0 0 24 24"' not in icon
+    assert 'viewBox="3.6 4.85 16 16"' in icon
+
+
+def test_post_origin_link_matches_adjacent_tags():
+    """查看原文必须与旁边分类/标签同高，图标跟 12px 字，不能吃帖内链接 44px 触控高。"""
+    css = STYLE_CSS.read_text()
+    post_card = _fn_body("postCard")
+    assert 'class="cat"' in post_card
+    assert "查看原文 ${EXTERNAL_LINK_ICON}" in post_card
+    assert ".post-item .p-meta .ui-icon { width: 12px; height: 12px; }" in css
+    assert ".post-item .p-meta a" in css
+    mobile = re.search(
+        r"@media \(max-width: 768px\) \{.*?\.post-item \.p-meta a\s*\{([^}]*)\}",
+        css,
+        re.DOTALL,
+    )
+    assert mobile, "缺少移动端 .post-item .p-meta a 规则"
+    assert "min-height: 0" in mobile.group(1)
+
+
+def test_x_badge_uses_system_blue_in_both_themes():
+    """X 角标复用主题强调蓝，避免独立黑白色破坏平台角标的一致性。"""
+    tokens = (APP_JS.parent / "vendor/design-tokens.css").read_text()
+    assert tokens.count("--color-brand-twitter: var(--color-accent-text);") == 2
 
 
 def test_live_pill_icon_matches_platform_badge_size():
@@ -3548,6 +3638,91 @@ def test_live_pill_icon_matches_platform_badge_size():
     assert 'fill="currentColor"' in icon
     assert ".tl-pill.selected .wscn-live-icon" not in css
     assert ".tl-pill .wscn-live-icon { width: 18px" not in css
+
+
+def test_web_control_icons_use_shared_registry_and_dependency_injection():
+    """网页控件图标必须来自共享注册表，并由 app.js 注入各视图。"""
+    icons = ICONS_JS.read_text()
+    app = APP_JS.read_text()
+    index = INDEX_HTML.read_text()
+    lightbox = (APP_JS.parent / "core" / "lightbox.js").read_text()
+    ima = IMA_JS.read_text()
+    knowledge = ADMIN_KNOWLEDGE_JS.read_text()
+    collector = ADMIN_IMA_COLLECTOR_JS.read_text()
+    kol = ADMIN_KOLS_JS.read_text()
+    news = ADMIN_NEWS_JS.read_text()
+
+    for name in (
+        "CHEVRON_LEFT_ICON", "CHEVRON_RIGHT_ICON", "CHEVRON_UP_ICON",
+        "CHEVRON_DOWN_ICON", "PAPERCLIP_ICON",
+    ):
+        assert f"export const {name} = `" in icons
+    assert 'export const X_ICON = `<svg class="ui-icon x-icon"' in icons
+    assert 'export const EXTERNAL_LINK_ICON = `<svg class="ui-icon external-link-icon"' in icons
+    assert re.search(r'<button id="btn-back"[^>]*></button>', index)
+    assert "CHEVRON_LEFT_ICON" in app
+    assert '$("#btn-back").innerHTML = CHEVRON_LEFT_ICON;' in app
+
+    assert "CHEVRON_LEFT_ICON" in lightbox and "CHEVRON_RIGHT_ICON" in lightbox
+    assert "CHEVRON_LEFT_ICON" in ima
+    assert "CHEVRON_RIGHT_ICON" in ima
+    assert "CHEVRON_RIGHT_ICON" in knowledge
+    assert "CHEVRON_RIGHT_ICON" in collector
+    assert "CHEVRON_DOWN_ICON" in collector and "X_ICON" in collector
+    assert "CHEVRON_LEFT_ICON" in kol and "CHEVRON_RIGHT_ICON" in kol
+    assert "CHEVRON_UP_ICON" in news and "CHEVRON_DOWN_ICON" in news
+
+    assert not any(mark in lightbox for mark in ("✕", "‹", "›"))
+    assert "‹" not in ima
+    assert "›" not in knowledge
+    assert not any(mark in collector for mark in ("›", "⌄", "×"))
+    assert "← 上一页" not in kol and "下一页 →" not in kol
+    assert "▲ 收起" not in news and "▼ 展开全文" not in news
+    assert "收起 ▲" not in app and "展开全文 ▼" not in app
+    assert "📎" not in app and "查看原文 →" not in app
+
+
+def test_dropdown_controls_use_injected_chevrons_not_css_content():
+    """真实展开/下拉控件不得再由 CSS 字符绘制，图标由视图依赖注入。"""
+    css = STYLE_CSS.read_text()
+    app = APP_JS.read_text()
+    ima = IMA_JS.read_text()
+    users = ADMIN_USERS_JS.read_text()
+    settings = PUSH_SETTINGS_JS.read_text()
+    knowledge = ADMIN_KNOWLEDGE_JS.read_text()
+
+    assert 'content: "▸"' not in css
+    assert 'content: "▾"' not in css
+    assert ".nav-sub-label::after" not in css
+    assert "details.au-policy > summary::before" not in css
+    assert "details.bind-steps > summary::before" not in css
+    assert ".ks-advanced > summary::before" not in css
+    for selector in (
+        ".nav-sub[open] > .nav-sub-label .ui-icon",
+        "details.au-policy[open] > summary .ui-icon",
+        "details.bind-steps[open] > summary .ui-icon",
+        ".ks-advanced[open] > summary .ui-icon",
+    ):
+        assert selector in css
+        assert "transform: rotate(90deg)" in css[css.index(selector):css.index("}", css.index(selector))]
+    assert ".kb-source-select-wrap > .ui-icon" in css
+    assert ".ima-tag-trigger > .ui-icon" in css
+
+    assert "${CHEVRON_RIGHT_ICON}" in app[app.index('function renderSidebar'):app.index('function renderSidebar') + 5000]
+    assert "CHEVRON_RIGHT_ICON" in users and "${CHEVRON_RIGHT_ICON}" in users
+    assert "CHEVRON_RIGHT_ICON" in settings and "${CHEVRON_RIGHT_ICON}" in settings
+    assert "CHEVRON_RIGHT_ICON" in knowledge and "${CHEVRON_RIGHT_ICON}" in knowledge
+    assert "CHEVRON_DOWN_ICON" in ima and ima.count("${CHEVRON_DOWN_ICON}") >= 2
+
+    users_call = app[app.index("createAdminUsersView({"):]
+    settings_call = app[app.index("createPushSettingsView({"):]
+    ima_call = app[app.index("createImaView({"):]
+    for call, dependency in (
+        (users_call, "CHEVRON_RIGHT_ICON"),
+        (settings_call, "CHEVRON_RIGHT_ICON"),
+        (ima_call, "CHEVRON_DOWN_ICON"),
+    ):
+        assert dependency in call[:call.index("});")]
 
 
 def test_timeline_pills_stay_content_sized():
@@ -4041,9 +4216,8 @@ def test_ima_report_responsive_controls_css():
     assert "display: none" in kb_mobile
     assert ".kb-source-select-mobile" in kb_mobile or ".kb-source-select-wrap" in kb_mobile
     assert "flex: 1 1 0" in kb_mobile
-    assert 'content: "▾"' in kb_mobile
-    assert ".kb-source-select-wrap::after" in kb_mobile
-    assert ".ima-tag-trigger::after" in kb_mobile
+    assert ".kb-source-select-wrap > .ui-icon" in kb_mobile
+    assert ".ima-tag-trigger > .ui-icon" in kb_mobile
 
 
 def test_knowledge_desk_defaults_to_latest_stream():
@@ -4289,9 +4463,9 @@ def test_financial_news_navigation_keeps_quick_news_in_timeline():
     nav = src[src.index("const NAV ="):src.index("const SIDEBAR_SLIM_KEY")]
     mobile = src[src.index("const MOBILE_NAV ="):src.index("function renderBottomNav")]
     assert nav.index('route: "timeline"') < nav.index('route: "news"') < nav.index('route: "knowledge"')
-    # 页面更名财经资讯：桌面导航「财经资讯」，手机底部导航窄屏显示「资讯」
+    # 页面更名财经资讯：桌面导航「财经资讯」；手机底栏随 X 式紧凑改版显示「财经新闻」
     assert 'label: "财经资讯"' in nav
-    assert 'label: "资讯"' in mobile
+    assert 'label: "财经新闻"' in mobile
     assert 'route: "news"' in mobile
     assert 'data-platform="live"' in _fn_body("tlPillsHtml")
 
@@ -4353,7 +4527,53 @@ def test_financial_news_visibility_is_runtime_controlled():
     assert 'replaceRoute("timeline")' in router
 
 
-def test_news_reader_functions_cover_sources_seen_and_blob_cleanup():
+def test_mobile_navigation_is_icon_only_and_accessible():
+    src = APP_JS.read_text()
+    mobile = src[src.index("const MOBILE_NAV ="):src.index("let bottomNavLastY")]
+    render = _fn_body("renderBottomNav")
+    router = _fn_body("router")
+
+    for route, icon, label in (
+        ("timeline", "HOME_ICON", "动态"),
+        ("news", "NEWS_ICON", "财经新闻"),
+        ("home", "GRID_ICON", "广场"),
+        ("settings", "USER_ICON", "个人设置"),
+    ):
+        assert f'route: "{route}", icon: {icon}, label: "{label}"' in mobile
+    assert 'route: "more", icon: MORE_ICON, label: "更多"' in render
+    assert 'class="bnav-label"' not in render
+    assert 'aria-label="${t.label}"' in render
+    assert 'title="${t.label}"' in render
+    assert 'setAttribute("aria-current", "page")' in router
+    assert 'removeAttribute("aria-current")' in router
+
+
+def test_mobile_bottom_navigation_has_d1_feedback_contract():
+    src = APP_JS.read_text()
+    css = STYLE_CSS.read_text()
+    render = _fn_body("renderBottomNav")
+    feedback = _fn_body("playBottomNavFeedback")
+
+    assert "goFromBottomNav(this, '${t.route}')" in render
+    assert "routeSignature" in render
+    assert "playBottomNavFeedback(button)" in src
+    assert "animationend" in feedback
+    assert "-webkit-tap-highlight-color: transparent" in css
+    assert "220ms" in css
+    assert "stroke-width: 2.4" in css
+    assert "@keyframes bottom-nav-feedback" in css
+    assert "width: 42px" in css
+    assert "height: 42px" in css
+    assert "border-radius: 50%" in css
+    assert "pointer-events: none" in css
+    keyframes = css[css.index("@keyframes bottom-nav-feedback"):css.index("@media (prefers-reduced-motion: reduce)", css.index("@keyframes bottom-nav-feedback"))]
+    assert "opacity:" in keyframes
+    assert "--bottom-nav-feedback-opacity" not in keyframes
+    assert "animation-duration: 80ms" in css
+    assert keyframes.count("transform: translate(-50%, -50%)") == 3
+    assert "transform: none" not in keyframes
+
+
     src = NEWS_JS.read_text()
     for name in (
         "renderNewsCenter", "loadFinancialNews", "openNewsSourcePicker",

@@ -1,13 +1,20 @@
 import { escapeHtml, imgProxyUrl, imgSrcFor, jsString } from "./core/html.js";
 import {
-  ARROW_UP_ICON, BELL_ICON, BELL_OFF_ICON, BOOK_ICON, BRAIN_ICON, COPY_ICON, DATABASE_ICON, DASHBOARD_ICON, FOLDER_ICON,
+  ARROW_UP_ICON, BELL_ICON, BELL_OFF_ICON, BOOK_ICON, BRAIN_ICON, CHEVRON_DOWN_ICON, CHEVRON_LEFT_ICON, CHEVRON_RIGHT_ICON,
+  CHEVRON_UP_ICON, COPY_ICON, DATABASE_ICON, DASHBOARD_ICON, FOLDER_ICON,
   EYE_ICON, EYE_OFF_ICON, EXTERNAL_LINK_ICON, FEISHU_DATE_ICON, FILE_TEXT_ICON, FILTER_ICON,
-  GEAR_ICON, GITHUB_ICON, GRID_ICON, HISTORY_ICON, KEY_ICON, LIST_ICON,
-  MX_VIEWS_ICON, NEWS_ICON, PLUS_ICON, REFRESH_ICON, SEARCH_ICON, SEND_ICON, STAR_SVG,
-  THEME_AUTO_ICON, THEME_MOON_ICON, THEME_SUN_ICON, TRASH_ICON, USER_PLUS_ICON, USERS_ICON,
+  GEAR_ICON, GITHUB_ICON, GRID_ICON, HISTORY_ICON, HOME_ICON, KEY_ICON, LIST_ICON,
+  MORE_ICON, MX_VIEWS_ICON, NEWS_ICON, PAPERCLIP_ICON, PLUS_ICON, REFRESH_ICON, SEARCH_ICON, SEND_ICON, STAR_SVG,
+  THEME_AUTO_ICON, THEME_MOON_ICON, THEME_SUN_ICON, TRASH_ICON, USER_ICON, USER_PLUS_ICON, USERS_ICON,
   V_ICON, WSCN_LIVE_ICON, X_ICON,
 } from "./core/icons.js";
 import { trapFocus } from "./core/dialog.js";
+import {
+  PLATFORM_ICONS as PLATFORM_ICONS_CONFIG,
+  PLATFORM_LABELS as PLATFORM_LABELS_CONFIG,
+  PLATFORM_SHORT_LABELS as PLATFORM_SHORT_LABELS_CONFIG,
+  PLATFORM_TABS as PLATFORM_TABS_CONFIG,
+} from "./core/platforms.js";
 import { createLightbox } from "./core/lightbox.js";
 import { createNewsView } from "./views/news.js";
 import { createImaView } from "./views/ima.js";
@@ -26,29 +33,23 @@ import { createMxViewsView } from "./views/mx-views.js";
 import { createMarketView } from "./views/market.js";
 
 const $ = (sel) => document.querySelector(sel);
+$("#btn-back").innerHTML = CHEVRON_LEFT_ICON;
 
 const { openLightbox, closeLightbox, lightboxStep, _lbZoomStep, _lbZoomReset } = createLightbox({
   escapeHtml,
   imgOnError,
   trapFocus,
+  CHEVRON_LEFT_ICON,
+  CHEVRON_RIGHT_ICON,
+  X_ICON,
 });
 
-const PLATFORM_LABELS = { xueqiu: "雪球", combination: "雪球组合", weibo: "微博", twitter: "X", ima: "ima", zsxq: "知识星球", mx: "MX平台", system: "系统", truth: "Truth Social" };
-const PLATFORM_SHORT_LABELS = { xueqiu: "雪球", combination: "组合", weibo: "微博", twitter: "X", ima: "ima", zsxq: "星球", mx: "MX", system: "系统", truth: "Truth" };
+const PLATFORM_LABELS = { ...PLATFORM_LABELS_CONFIG, ima: "ima" };
+const PLATFORM_SHORT_LABELS = { ...PLATFORM_SHORT_LABELS_CONFIG, ima: "ima" };
 function platformShortLabel(p) {
   return p ? (PLATFORM_SHORT_LABELS[p] || PLATFORM_LABELS[p]) : "全部";
 }
-const PLATFORM_ICONS = {
-  "": `<svg class="pt-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg>`,
-  xueqiu: `<img class="pt-icon" src="/xueqiu-mark.png" width="16" height="16" alt="" draggable="false" aria-hidden="true">`,
-  truth: `<svg class="pt-icon" viewBox="3.6 4.85 16 16" fill="currentColor" aria-hidden="true"><rect x="4.4" y="6.4" width="3.6" height="3.2"/><rect x="9.7" y="6.4" width="9.2" height="3.2"/><rect x="9.7" y="10.4" width="3.7" height="8.9"/><rect x="15.3" y="15.6" width="3.5" height="3.1" rx="0.4" opacity="0.62"/></svg>`,
-  combination: `<svg class="pt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>`,
-  weibo: `<svg class="pt-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10.098 20.323c-3.977.391-7.414-1.406-7.672-4.02-.259-2.609 2.759-5.047 6.74-5.441 3.979-.394 7.413 1.404 7.671 4.018.259 2.6-2.759 5.049-6.737 5.439l-.002.004zM9.05 17.219c-.384.616-1.208.884-1.829.602-.612-.279-.793-.991-.406-1.593.379-.595 1.176-.861 1.793-.601.622.263.82.972.442 1.592zm1.27-1.627c-.141.237-.449.353-.689.253-.236-.09-.313-.361-.177-.586.138-.227.436-.346.672-.24.239.09.315.36.18.601l.014-.028zm.176-2.719c-1.893-.493-4.033.45-4.857 2.118-.836 1.704-.026 3.591 1.886 4.21 1.983.64 4.318-.341 5.132-2.179.8-1.793-.201-3.642-2.161-4.149zm7.563-1.224c-.346-.105-.57-.18-.405-.615.375-.977.42-1.804 0-2.404-.781-1.112-2.915-1.053-5.364-.03 0 0-.766.331-.571-.271.376-1.217.315-2.224-.27-2.809-1.338-1.337-4.869.045-7.888 3.08C1.309 10.87 0 13.273 0 15.348c0 3.981 5.099 6.395 10.086 6.395 6.536 0 10.888-3.801 10.888-6.82 0-1.822-1.547-2.854-2.915-3.284v.01zm1.908-5.092c-.766-.856-1.908-1.187-2.96-.962-.436.09-.706.511-.616.932.09.42.511.691.932.602.511-.105 1.067.044 1.442.465.376.421.466.977.316 1.473-.136.406.089.856.51.992.405.119.857-.105.992-.512.33-1.021.12-2.178-.646-3.035l.03.045zm2.418-2.195c-1.576-1.757-3.905-2.419-6.054-1.968-.496.104-.812.587-.706 1.081.104.496.586.813 1.082.707 1.532-.331 3.185.15 4.296 1.383 1.112 1.246 1.429 2.943.947 4.416-.165.48.106 1.007.586 1.157.479.165.991-.104 1.157-.586.675-2.088.241-4.478-1.338-6.235l.03.045z"/></svg>`,
-  twitter: `<svg class="pt-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M14.234 10.162 22.977 0h-2.072l-7.591 8.824L7.251 0H.258l9.168 13.343L.258 24H2.33l8.016-9.318L16.749 24h6.993zm-2.837 3.299-.929-1.329L3.076 1.56h3.182l5.965 8.532.929 1.329 7.754 11.09h-3.182z"/></svg>`,
-  zsxq: `<svg class="pt-icon" viewBox="0 0 26 26" fill="currentColor" fill-rule="evenodd" aria-hidden="true"><path d="M13.012 0c.874 0 1.582.708 1.582 1.581 0 .873-.708 1.58-1.582 1.58C7.582 3.161 3.164 7.575 3.164 13c0 5.425 4.418 9.839 9.848 9.839 5.43 0 9.848-4.414 9.848-9.839 0-.873.708-1.58 1.582-1.58S26 12.127 26 13c0 7.168-5.837 13-13 13S0 20.168 0 13 5.837 0 13.012 0zm7.989 2.015a3.003 3.003 0 1 1 0 6.006 3.003 3.003 0 0 1 0-6.006z"/></svg>`,
-  mx: `<svg class="pt-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 12l7-7 2 2 3-3 6 6-6 6-3-3-2 2-7-7z"/></svg>`,
-  system: `<svg class="pt-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></svg>`,
-};
+const PLATFORM_ICONS = PLATFORM_ICONS_CONFIG;
 const CHANNEL_ICONS = {
   telegram: `<svg class="ch-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>`,
   feishu: `<svg class="ch-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.5c-2 3.4-4.6 5.4-8.8 6.2 4.2.8 6.8 2.8 8.8 6.2 2-3.4 4.6-5.4 8.8-6.2-4.2-.8-6.8-2.8-8.8-6.2z"/></svg>`,
@@ -59,7 +60,7 @@ const CHANNEL_ICONS = {
 const GROK_TRANSLATE_ICON = `<svg class="p-tr-grok" viewBox="0 0 33 32" fill="currentColor" aria-hidden="true"><path d="M12.745 20.54l10.97-8.19c.539-.4 1.307-.244 1.564.38 1.349 3.288.746 7.241-1.938 9.955-2.683 2.714-6.417 3.31-9.83 1.954l-3.728 1.745c5.347 3.697 11.84 2.782 15.898-1.324 3.219-3.255 4.216-7.692 3.284-11.693l.008.009c-1.351-5.878.332-8.227 3.782-13.031L33 0l-4.54 4.59v-.014L12.743 20.544m-2.263 1.987c-3.837-3.707-3.175-9.446.1-12.755 2.42-2.449 6.388-3.448 9.852-1.979l3.72-1.737c-.67-.49-1.53-1.017-2.515-1.387-4.455-1.854-9.789-.931-13.41 2.728-3.483 3.523-4.579 8.94-2.697 13.561 1.405 3.454-.899 5.898-3.22 8.364C1.49 30.2.666 31.074 0 32l10.478-9.466"/></svg>`;
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.156";
+const APP_VERSION = "1.12.169";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -67,7 +68,7 @@ const REPORT_WATCH_BLOCKED_TAGS = new Set([
 ]);
 const TL_SOURCE_KEY = "timelineSource";
 const KB_LAST_GROUP_KEY = "kb-last-group";
-const PLATFORM_TABS = ["", "system", "mx", "xueqiu", "combination", "weibo", "twitter", "zsxq", "truth"];
+const PLATFORM_TABS = PLATFORM_TABS_CONFIG;
 const STATS_TABS = ["config", "cookies", "mx", "imgbed", "plaza", "news", "proxies"];
 const STALE_KOL_LIMIT = 10;
 const STALE_KOL_HOURS = 48;
@@ -724,7 +725,7 @@ function renderSidebar(user) {
       ${(group.items || []).filter((item) => item.route !== "news" || state.newsVisible).map(navItemHtml).join("")}
       ${(group.subs || []).map((sub) => `
         <details class="nav-sub" open>
-          <summary class="nav-sub-label">${sub.label}</summary>
+          <summary class="nav-sub-label">${sub.label}${CHEVRON_RIGHT_ICON}</summary>
           ${sub.items.filter((item) => item.route !== "news" || state.newsVisible).map(navItemHtml).join("")}
         </details>`).join("")}
     `).join("");
@@ -739,20 +740,76 @@ function renderSidebar(user) {
 }
 
 const MOBILE_NAV = [
-  { route: "timeline", icon: LIST_ICON, label: "动态" },
-  { route: "news", icon: NEWS_ICON, label: "资讯" },
+  { route: "timeline", icon: HOME_ICON, label: "动态" },
+  { route: "news", icon: NEWS_ICON, label: "财经新闻" },
   { route: "mx-views", icon: MX_VIEWS_ICON, label: "研判" },
   { route: "home", icon: GRID_ICON, label: "广场" },
-  { route: "settings", icon: GEAR_ICON, label: "个人设置" },
+  { route: "settings", icon: USER_ICON, label: "个人设置" },
 ];
 
+let bottomNavLastY = 0;
+let bottomNavTravel = 0;
+let bottomNavRouteSignature = null;
+
+function resetBottomNavScroll() {
+  bottomNavLastY = Math.max(0, window.scrollY);
+  bottomNavTravel = 0;
+  const nav = $("#bottom-nav");
+  if (nav) nav.inert = false;
+}
+
+function updateBottomNavScroll() {
+  const nav = $("#bottom-nav");
+  if (!nav) return;
+  const maxY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+  // Clamp overscroll so bouncing at either edge does not reverse navigation state.
+  const y = Math.max(0, Math.min(window.scrollY, maxY));
+  const delta = y - bottomNavLastY;
+  bottomNavLastY = y;
+  if (window.innerWidth > 768 || maxY === 0 || y === 0) {
+    resetBottomNavScroll();
+    return;
+  }
+  if (!delta) return;
+  bottomNavTravel = Math.sign(delta) === Math.sign(bottomNavTravel) ? bottomNavTravel + delta : delta;
+  if (bottomNavTravel >= 24 || bottomNavTravel <= -8) {
+    nav.inert = bottomNavTravel > 0;
+    bottomNavTravel = 0;
+  }
+}
+
+window.addEventListener("scroll", updateBottomNavScroll, { passive: true });
+window.matchMedia("(max-width: 768px)").addEventListener("change", resetBottomNavScroll);
+
+function playBottomNavFeedback(button) {
+  button.onanimationend = (event) => {
+    if (event.animationName === "bottom-nav-feedback") button.classList.remove("is-feedback");
+  };
+  button.getAnimations({ subtree: true }).forEach((animation) => animation.cancel());
+  button.classList.remove("is-feedback");
+  void button.offsetWidth;
+  button.classList.add("is-feedback");
+}
+
+function goFromBottomNav(button, route) {
+  playBottomNavFeedback(button);
+  go(route);
+}
+
 function renderBottomNav(user) {
+  resetBottomNavScroll();
   const tabs = MOBILE_NAV.filter((tab) => tab.route !== "news" || state.newsVisible);
-  if (user.is_admin) tabs.push({ route: "more", icon: PLUS_ICON, label: "更多" });
-  $("#bottom-nav").innerHTML = tabs.map((t) => `
-    <button class="bnav-item" data-route="${t.route}" onclick="go('${t.route}')">
+  if (user.is_admin) tabs.push({ route: "more", icon: MORE_ICON, label: "更多" });
+  const routeSignature = tabs.map((tab) => tab.route).join("|");
+  const nav = $("#bottom-nav");
+  if (routeSignature === bottomNavRouteSignature && nav.querySelector(".bnav-item")) {
+    ensureMobilePlatformSwipe();
+    return;
+  }
+  bottomNavRouteSignature = routeSignature;
+  nav.innerHTML = tabs.map((t) => `
+    <button class="bnav-item" data-route="${t.route}" aria-label="${t.label}" title="${t.label}" onclick="goFromBottomNav(this, '${t.route}')">
       <span class="bnav-icon">${t.icon}</span>
-      <span class="bnav-label">${t.label}</span>
     </button>`).join("");
   ensureMobilePlatformSwipe();
 }
@@ -1705,7 +1762,6 @@ async function switchPlatform(platform) {
 
 function kolCard(kol) {
   const tags = [];
-  tags.push(`<span class="tag">${PLATFORM_LABELS[kol.platform] || escapeHtml(kol.platform)}</span>`);
   if (kol.category_name) tags.push(`<span class="tag">${escapeHtml(kol.category_name)}</span>`);
   if (kol.platform === "combination" && kol.quote && kol.quote.day_percent_gain != null) {
     const gain = kol.quote.day_percent_gain;
@@ -1718,8 +1774,11 @@ function kolCard(kol) {
       <a class="kol-card-head" href="/kol/${kol.id}" title="查看${escapeHtml(kol.name)}的动态页" aria-label="查看${escapeHtml(kol.name)}的动态页">
         ${avatarHtml(kol.name, kol.avatar_url)}
         <div class="kol-card-info">
-          <span class="name" title="${escapeHtml(kol.name)}">${escapeHtml(kol.name)}</span>
-          <div class="kol-card-meta">${tags.join("")}</div>
+          <div class="p-name-line">
+            <span class="name" title="${escapeHtml(kol.name)}">${escapeHtml(kol.name)}</span>
+            <span class="p-platform" data-platform="${escapeHtml(kol.platform)}" role="img" aria-label="${escapeHtml(PLATFORM_LABELS[kol.platform] || kol.platform)}" title="${escapeHtml(PLATFORM_LABELS[kol.platform] || kol.platform)}">${PLATFORM_ICONS[kol.platform] || ""}</span>
+          </div>
+          ${tags.length ? `<div class="kol-card-meta">${tags.join("")}</div>` : ""}
         </div>
       </a>
       ${kol.subscribed && kol.platform === "xueqiu" ? `<div class="kol-card-subtype">${subTypeSwitchesHtml(kol.id, kol.subscribe_type || "post")}</div>` : ""}
@@ -2399,7 +2458,7 @@ async function renderTimeline(seq) {
     // 恢复滚动位置不算一次「下滑」，重置方向基准，避免进页面就收起筛选条
     _tlScrollLastY = feedScrollY();
     startTimelinePoll();
-    pollFeedUpdates();
+    pollFeedUpdates().then(() => autoConsumeTimelinePending(seq));
     if (!wide && !live) loadTimelineTags().catch(() => { _tlTags = []; _tlDynamicTags = []; });
     if (wide) loadTimelineRail(seq);
     if (!live) prefetchLiveFeed();
@@ -2606,6 +2665,15 @@ function tlBadgeAvatarsHtml(posts, max = 3) {
       : `<span class="ph">${escapeHtml(avatarText(p.kol_name))}</span>`);
   }
   return avs.join("");
+}
+
+// 切回动态页时自动并入增量新帖：顶部场景与点「新动态」胶囊完全一致（并入+回顶）；
+// 深读 restored 位置超过阈值则不打扰，保留胶囊供手动查看
+async function autoConsumeTimelinePending(seq) {
+  if (!routeStillActive(seq) || isLiveTimeline()) return;
+  if (!$("#tl-feed-panel") || !feedPendingNew().length) return;
+  if (window.scrollY > 240) return;
+  await refreshTimeline();
 }
 
 async function refreshTimeline() {
@@ -3685,7 +3753,7 @@ function postCard(post) {
       </div>
       ${isCombination ? `<div class="combo-post">${comboHtml}</div>` : `${trBar}${!titleDup && title ? `<div class="p-title">${escapeHtml(title)}</div>` : ""}
       <div class="p-content md-body">${mdToHtml(shown)}${body.length > 200
-        ? `<button class="post-expand-btn" onclick="tlTogglePost(${post.id})" aria-expanded="${expanded}">${expanded ? "收起 ▲" : "展开全文 ▼"}</button>`
+        ? `<button class="post-expand-btn" onclick="tlTogglePost(${post.id})" aria-expanded="${expanded}" aria-label="${expanded ? "收起全文" : "展开全文"}" title="${expanded ? "收起全文" : "展开全文"}">${expanded ? `${CHEVRON_UP_ICON} 收起` : `${CHEVRON_DOWN_ICON} 展开全文`}</button>`
         : ""}</div>`}
       ${images.length ? `
         <div class="post-images">
@@ -3698,12 +3766,12 @@ function postCard(post) {
         // 历史详情里缓存的 /zsxq-files/ 静态链接已随挂载移除，不再直连。
         // bearer token 不进 URL：file_id 附件用按钮 + fetch 下载
         if (f.file_id) {
-          return `<button type="button" class="p-file" data-file-id="${escapeHtml(String(f.file_id))}" data-name="${escapeHtml(f.name || "附件")}" onclick="downloadZsxqFile(this)">📎 ${escapeHtml(f.name || "附件")}</button>`;
+          return `<button type="button" class="p-file" data-file-id="${escapeHtml(String(f.file_id))}" data-name="${escapeHtml(f.name || "附件")}" onclick="downloadZsxqFile(this)" aria-label="下载附件 ${escapeHtml(f.name || "附件")}" title="下载附件 ${escapeHtml(f.name || "附件")}">${PAPERCLIP_ICON} ${escapeHtml(f.name || "附件")}</button>`;
         }
         const href = f.url || "";
         return href
-          ? `<a class="p-file" href="${escapeHtml(href)}" target="_blank" rel="noopener">📎 ${escapeHtml(f.name || "附件")}</a>`
-          : `<span class="p-file">📎 ${escapeHtml(f.name || "附件")}</span>`;
+          ? `<a class="p-file" href="${escapeHtml(href)}" target="_blank" rel="noopener" aria-label="打开附件 ${escapeHtml(f.name || "附件")}" title="打开附件 ${escapeHtml(f.name || "附件")}">${PAPERCLIP_ICON} ${escapeHtml(f.name || "附件")}</a>`
+          : `<span class="p-file" title="附件 ${escapeHtml(f.name || "附件")}">${PAPERCLIP_ICON} ${escapeHtml(f.name || "附件")}</span>`;
       }).join("")}
       ${mxAttachments(post).map((f) => f.audio
         ? `<div class="mx-audio-row">
@@ -3712,7 +3780,7 @@ function postCard(post) {
               <span class="mx-audio-label">${escapeHtml(f.name || "点击播放")}</span>
             </button>
           </div>`
-        : `<a class="p-file" href="${escapeHtml(f.url)}" target="_blank" rel="noopener">📎 ${escapeHtml(f.name || "附件")}</a>`).join("")}
+        : `<a class="p-file" href="${escapeHtml(f.url)}" target="_blank" rel="noopener">${PAPERCLIP_ICON} ${escapeHtml(f.name || "附件")}</a>`).join("")}
       <div class="p-meta">
         ${post.category_name ? `<span class="cat">${escapeHtml(post.category_name)}</span>` : ""}
         ${post.post_type === "reply" ? `<span class="cat">回复</span>` : ""}
@@ -3720,8 +3788,8 @@ function postCard(post) {
         ${post.platform === "zsxq" ? "" : RAW_MODAL_LABELS[post.platform]
           ? `<a href="#" data-raw-label="${escapeHtml(RAW_MODAL_LABELS[post.platform])}"
                onclick="event.preventDefault();openRawModal(${post.id}, this.dataset.rawLabel)"
-               title="查看${escapeHtml(RAW_MODAL_LABELS[post.platform])}原始消息">查看原文 →</a>`
-          : `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener">查看原文 →</a>`}
+               title="查看${escapeHtml(RAW_MODAL_LABELS[post.platform])}原始消息">查看原始消息 ${CHEVRON_RIGHT_ICON}</a>`
+          : `<a class="cat" href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener" aria-label="查看原文" title="查看原文">查看原文 ${EXTERNAL_LINK_ICON}</a>`}
       </div>
     </div>`;
 }
@@ -4431,6 +4499,121 @@ function imgbedStatusLabel(info) {
   return info.updated_at ? `已接入（${escapeHtml(fmtTs(info.updated_at))}）` : "已接入";
 }
 
+function markTurnstileDirty() {
+  const btn = $("#ts-save");
+  if (!btn || btn.dataset.dirty === "1") return;
+  btn.dataset.dirty = "1";
+  btn.textContent = "保存登录验证（未保存）";
+}
+
+async function pasteTurnstileSecret() {
+  await pasteCookieField("ts-secret");
+  markTurnstileDirty();
+}
+
+function turnstileSettingsHtml(info) {
+  const active = !!info.active;
+  const enabled = !!info.enabled;
+  const status = active
+    ? "登录/注册会显示 Cloudflare 验证框"
+    : (enabled ? "开关已开，但还缺站点密钥或密钥，验证框不会出现" : "验证已关闭，登录不再出框");
+  const secretHint = info.secret_set
+    ? (info.secret_from_env ? "已从环境变量读取，留空保持原密钥" : "已配置，留空保持原密钥")
+    : "Cloudflare Turnstile 后台的 Secret";
+  const warn = enabled && !active
+    ? `<div class="notice notice-warn" role="alert">
+        <div class="notice-warn-body">
+          <strong>验证框不会出现</strong>
+          <p>开关已开，还缺站点密钥或密钥。填好后点保存。</p>
+        </div>
+      </div>`
+    : "";
+  return `${warn}<section class="section-panel" id="ts-form" data-secret-set="${info.secret_set ? "1" : "0"}">
+    <header class="section-head">
+      <div>
+        <h2 class="section-title">登录验证</h2>
+        <p class="section-meta">${status}。站点密钥和密钥在 Cloudflare Turnstile 后台创建；保存后即时生效，无需重启。</p>
+      </div>
+    </header>
+    <div class="cfg-stack">
+      <label class="switch">
+        <input id="ts-enabled" type="checkbox" ${enabled ? "checked" : ""} onchange="markTurnstileDirty()">
+        <span class="track"></span>
+        <span>开启登录页人机验证</span>
+      </label>
+      <label class="cfg-field" for="ts-sitekey">
+        <span>站点密钥<span class="cfg-unit">TURNSTILE_SITE_KEY</span></span>
+        <input id="ts-sitekey" class="form-control" autocomplete="off" spellcheck="false" value="${escapeHtml(info.sitekey || "")}" placeholder="0x4AAAAA..." oninput="markTurnstileDirty()">
+      </label>
+      <label class="cfg-field" for="ts-secret">
+        <span>密钥<span class="cfg-unit">TURNSTILE_SECRET</span></span>
+        <input id="ts-secret" class="form-control" type="password" autocomplete="new-password" placeholder="${escapeHtml(secretHint)}" oninput="markTurnstileDirty()">
+      </label>
+      <label class="cfg-field" for="ts-hostnames">
+        <span>允许域名<span class="cfg-unit">TURNSTILE_HOSTNAMES</span></span>
+        <input id="ts-hostnames" class="form-control" autocomplete="off" spellcheck="false" value="${escapeHtml(info.hostnames || "")}" placeholder="vpush.net" oninput="markTurnstileDirty()">
+      </label>
+    </div>
+    <div class="toolbar" style="margin-top:12px">
+      <button type="button" class="btn-normal" id="ts-save" onclick="saveTurnstileSettings()">保存登录验证</button>
+      <button type="button" class="btn-ghost" onclick="pasteTurnstileSecret()">从剪贴板填入</button>
+    </div>
+  </section>`;
+}
+
+async function loadAdminTurnstile() {
+  const seq = _adminRenderSeq;
+  try {
+    const info = await api("/api/admin/turnstile");
+    if (!routeStillActive(seq)) return;
+    $("#admin-body").innerHTML = turnstileSettingsHtml(info);
+  } catch (err) {
+    if (!routeStillActive(seq)) return;
+    $("#admin-body").innerHTML = emptyState("加载失败: " + err.message);
+  }
+}
+
+async function saveTurnstileSettings() {
+  const routeSeq = routeRenderSeq;
+  const token = state.token;
+  const sessionGeneration = imaMountState.sessionGeneration;
+  const enabled = !!$("#ts-enabled")?.checked;
+  const sitekey = $("#ts-sitekey")?.value.trim() || "";
+  const secret = $("#ts-secret")?.value.trim() || "";
+  const hostnames = $("#ts-hostnames")?.value.trim() || "";
+  const secretSet = $("#ts-form")?.dataset.secretSet === "1";
+  if (enabled && !sitekey) {
+    flash("请填写站点密钥", "error");
+    $("#ts-sitekey")?.focus();
+    return;
+  }
+  if (enabled && !secret && !secretSet) {
+    flash("请填写密钥", "error");
+    $("#ts-secret")?.focus();
+    return;
+  }
+  if (enabled && !hostnames) {
+    flash("请填写允许域名", "error");
+    $("#ts-hostnames")?.focus();
+    return;
+  }
+  try {
+    const saved = await api("/api/admin/turnstile", {
+      method: "PUT",
+      body: JSON.stringify({ enabled, sitekey, secret, hostnames }),
+    });
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    if (saved?.active) flash("登录验证已开启");
+    else if (saved?.enabled) flash("开关已开，但还缺密钥，验证框不会出现", "error");
+    else flash("登录验证已关闭");
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    await loadAdminGroup("account");
+  } catch (err) {
+    if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+    flash(err.message, "error");
+  }
+}
+
 async function saveImgbedSettings() {
   const routeSeq = routeRenderSeq;
   const token = state.token;
@@ -4516,6 +4699,7 @@ const ADMIN_TAB_GROUPS = {
   account: { label: "用户与注册", tabs: [
     { id: "users", label: "用户" },
     { id: "codes", label: "注册码" },
+    { id: "turnstile", label: "登录验证" },
   ]},
 };
 
@@ -4564,7 +4748,7 @@ function syncRequestBadges() {
 const ADMIN_GROUP_LOADERS = {
   content: { dashboard: () => loadAdminDashboard(), kols: () => loadAdminKols(), vocab: () => loadAdminVocab(), requests: () => loadAdminRequests() },
   ops: { posts: () => loadAdminPosts(), logs: () => loadAdminLogs(), audit: () => loadAdminAudit(), backup: () => loadAdminBackup() },
-  account: { users: () => loadAdminUsers(), codes: () => loadAdminCodes() },
+  account: { users: () => loadAdminUsers(), codes: () => loadAdminCodes(), turnstile: () => loadAdminTurnstile() },
 };
 
 async function loadAdminGroup(groupKey, seq) {
@@ -5595,12 +5779,12 @@ function applyTheme() {
   // 用页面顶部背景色而非品牌强调色：iOS 用 theme-color 填充状态栏/安全区，
   // 若填强调蓝会出现一条与页面不符的蓝色条（详见 PWA 顶部蓝条问题）。
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute("content", dark ? "#11141a" : "#f8f8fb");
+  if (meta) meta.setAttribute("content", dark ? "#0f1115" : "#f5f5f7");
   const statusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
   if (statusBar) statusBar.setAttribute("content", dark ? "black-translucent" : "default");
   // 同步 manifest 链接：部分安卓 PWA 独立窗口只认 manifest 静态 theme_color
   const manifestLink = document.getElementById("manifest");
-  if (manifestLink) manifestLink.setAttribute("href", dark ? "/manifest-dark.webmanifest?v=2" : "/manifest.webmanifest?v=2");
+  if (manifestLink) manifestLink.setAttribute("href", dark ? "/manifest-dark.webmanifest?v=3" : "/manifest.webmanifest?v=3");
   // 品牌符号（登录页 + topbar + 侧边栏）用融合版，深浅各一
   const logo = document.querySelector(".topbar-logo");
   if (logo) logo.src = dark ? "/logo-mark-dark.svg" : "/logo-mark.svg";
@@ -5828,6 +6012,9 @@ const {
   X_ICON,
   COPY_ICON,
   EXTERNAL_LINK_ICON,
+  CHEVRON_LEFT_ICON,
+  CHEVRON_RIGHT_ICON,
+  CHEVRON_DOWN_ICON,
 });
 
 
@@ -5905,6 +6092,7 @@ pushSettingsView = createPushSettingsView({
   pushChannelsHtml,
   webPushSupported,
   toggleDnd,
+  CHEVRON_RIGHT_ICON,
 });
 const {
   stopSettingsPoll,
@@ -6052,6 +6240,8 @@ const {
   REFRESH_ICON,
   PLUS_ICON,
   PLATFORM_LABELS,
+  CHEVRON_UP_ICON,
+  CHEVRON_DOWN_ICON,
 });
 
 const {
@@ -6095,6 +6285,7 @@ const {
   CHANNEL_ICONS,
   PLATFORM_LABELS,
   usernameRuleError,
+  CHEVRON_RIGHT_ICON,
 });
 
 const {
@@ -6181,6 +6372,8 @@ const {
   fmtPublished,
   showConfirm,
   copyText,
+  CHEVRON_LEFT_ICON,
+  CHEVRON_RIGHT_ICON,
 });
 
 const {
@@ -6278,6 +6471,9 @@ const {
   bumpRouteSeq: () => ++routeRenderSeq,
   currentAdminSeq: () => _adminRenderSeq,
   FOLDER_ICON,
+  CHEVRON_RIGHT_ICON,
+  CHEVRON_DOWN_ICON,
+  X_ICON,
   imaMountState,
   imaCollectorPureCache,
   reloadAdminSettingsPage,
@@ -6361,6 +6557,7 @@ const {
   currentAdminSeq: () => _adminRenderSeq,
   routeQuery,
   REFRESH_ICON,
+  CHEVRON_RIGHT_ICON,
   setPageTitle,
   imaMountState,
   imaCollectorPureCache,
@@ -6469,9 +6666,12 @@ async function router() {
   );
   // 底部栏高亮：管理员进后台页时高亮「更多」
   const activeBottom = navPage === "admin" ? "more" : navPage;
-  document.querySelectorAll(".bnav-item").forEach((b) =>
-    b.classList.toggle("active", b.dataset.route === activeBottom)
-  );
+  document.querySelectorAll(".bnav-item").forEach((b) => {
+    const active = b.dataset.route === activeBottom;
+    b.classList.toggle("active", active);
+    if (active) b.setAttribute("aria-current", "page");
+    else b.removeAttribute("aria-current");
+  });
   try {
     if (page === "home") await renderHome(renderSeq);
     else if (page === "combinations") {
@@ -6520,6 +6720,8 @@ async function router() {
   } catch (err) {
     // 只在当前路由仍是本次渲染目标时才写错误状态，避免旧路由的错误覆盖新页面
     if (routeStillActive(renderSeq)) $("#main").innerHTML = emptyState(err.message);
+  } finally {
+    if (routeStillActive(renderSeq)) resetBottomNavScroll();
   }
 }
 
@@ -7922,6 +8124,7 @@ const INLINE_HANDLERS = {
   filterKolImageSettings,
   genBindCode,
   go,
+  goFromBottomNav,
   homeResetFilters,
   homeSearch,
   homeToggleFilter,
@@ -7967,6 +8170,7 @@ const INLINE_HANDLERS = {
   openNewsFeedModal,
   openNewsSourceModal,
   pasteCookieField,
+  pasteTurnstileSecret,
   pickHomeCategory,
   purgeZsxqCache,
   queueFeishuDocumentPreview,
@@ -8009,6 +8213,8 @@ const INLINE_HANDLERS = {
   saveFeishuDocsConfig,
   saveImaCollector,
   saveImgbedSettings,
+  saveTurnstileSettings,
+  markTurnstileDirty,
   clearImgbedSettings,
   saveKeywords,
   saveKeywordsMatchReports,

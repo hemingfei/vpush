@@ -89,7 +89,8 @@ SENTINELS += [
 # 改名指纹防发版副本回退到旧文案；kols.news_selected 列是勾选数据载体。
 SENTINELS += [
     ("app/static/app.js", 'label: "财经资讯"', "桌面导航更名财经资讯"),
-    ("app/static/app.js", 'label: "资讯"', "手机底部导航显示「资讯」"),
+    # 合并 main 的 X 式紧凑底栏改版后，移动端「资讯」短标签统一为「财经新闻」
+    ("app/static/app.js", 'label: "财经新闻"', "手机底部导航显示「财经新闻」"),
     ("app/static/views/news.js", 'tab("realtime", "实时资讯")', "实时资讯/财经新闻双栏目"),
     ("app/static/views/news.js", 'state.newsTab = "realtime"', "进入页面默认显示实时资讯"),
     ("app/static/views/news.js", "/api/news/realtime", "实时资讯聚合端点前端接线"),

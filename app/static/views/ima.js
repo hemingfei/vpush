@@ -32,6 +32,9 @@ export function createImaView(dependencies) {
     REFRESH_ICON,
     X_ICON,
     EXTERNAL_LINK_ICON,
+    CHEVRON_LEFT_ICON,
+    CHEVRON_RIGHT_ICON,
+    CHEVRON_DOWN_ICON,
   } = dependencies;
 
   function clearImaPdfUrl() {
@@ -346,10 +349,23 @@ export function createImaView(dependencies) {
     return rare.slice(0, 2).map((item) => item.tag);
   }
 
+  function imaExtractionBadgesHtml(item) {
+    const ex = item?.extraction;
+    if (!ex || ex.status !== "ok") return "";
+    const parts = [];
+    if (ex.rating) parts.push(`<span class="ima-ex-badge ima-ex-rating">${escapeHtml(ex.rating)}</span>`);
+    if (ex.target_price) parts.push(`<span class="ima-ex-badge">${escapeHtml(ex.target_price)}</span>`);
+    for (const t of (ex.tickers || []).slice(0, 3)) {
+      parts.push(`<span class="ima-ex-badge ima-ex-ticker" title="${escapeHtml(ex.thesis || "")}">${escapeHtml(t.name || t.code)}</span>`);
+    }
+    return parts.join("");
+  }
+
   function imaReportMetaHtml(item) {
     const parts = [];
     const ticker = imaDocTicker(item.name);
     if (ticker) parts.push(`<span>${escapeHtml(ticker)}</span>`);
+    parts.push(imaExtractionBadgesHtml(item));
     for (const tag of imaDistinctiveTags(item?.tags)) {
       parts.push(isReportWatchableTag(tag) ? imaWatchTagButton(tag) : `<span>${escapeHtml(tag)}</span>`);
     }
@@ -364,7 +380,18 @@ export function createImaView(dependencies) {
     const day = fmtImaDayShort(item.sort_date || item.day) || "—";
     const source = String(item.group_name || "");
     const meta = imaReportMetaHtml(item); // .ima-report-meta
-    const snippet = item.search_snippet ? `<span class="ima-report-snippet">${escapeHtml(item.search_snippet)}</span>` : (item.abstract ? `<span class="ima-report-snippet">${escapeHtml(item.abstract)}</span>` : "");
+    const hasExtractionBadges = item.extraction?.status === "ok" && (
+      item.extraction.rating || item.extraction.target_price || item.extraction.tickers?.length
+    );
+    const thesis = item.extraction?.status === "ok" && !hasExtractionBadges
+      ? item.extraction?.thesis
+      : "";
+    const snippet = item.search_snippet ? `<span class="ima-report-snippet">${escapeHtml(item.search_snippet)}</span>`
+      : thesis
+        ? `<span class="ima-report-snippet">${escapeHtml(thesis)}</span>`
+        : item.abstract
+          ? `<span class="ima-report-snippet">${escapeHtml(item.abstract)}</span>`
+          : "";
     return `
       <article class="ima-doc-row" role="button" tabindex="0" data-media-id="${escapeHtml(item.media_id)}" data-group-id="${escapeHtml(item.group_id || "")}" onclick="openImaDocument(this.dataset.mediaId, this.dataset.groupId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openImaDocument(this.dataset.mediaId, this.dataset.groupId)}">
         <time class="ima-report-date">${escapeHtml(day)}</time>
@@ -785,7 +812,7 @@ export function createImaView(dependencies) {
       `<option value="" ${!selectedGroup ? "selected" : ""}>研报中心</option>`,
       ...sources.map((s) => `<option value="${escapeHtml(s.group_id)}" ${s.group_id === selectedGroup ? "selected" : ""}>${escapeHtml(s.title)}</option>`)
     ].join("");
-    const mobileSelectHtml = `<div class="kb-source-select-wrap"><select class="kb-source-select-mobile" aria-label="切换研报库" onchange="selectImaDocumentGroup(this.value)">${mobileOptions}</select></div>`;
+    const mobileSelectHtml = `<div class="kb-source-select-wrap"><select class="kb-source-select-mobile" aria-label="切换研报库" onchange="selectImaDocumentGroup(this.value)">${mobileOptions}</select>${CHEVRON_DOWN_ICON}</div>`;
     return `<div class="ima-report-source">${pillsHtml}${mobileSelectHtml}</div>`;
   }
 
@@ -989,7 +1016,7 @@ export function createImaView(dependencies) {
       <form class="ima-report-search" onsubmit="event.preventDefault();submitImaDocumentsSearch()">
         <label class="ima-report-searchbox">${SEARCH_ICON}<input id="ima-doc-q" type="search" value="${escapeHtml(query)}" placeholder="搜标题、公司、代码、行业或资料源" aria-label="搜索研报" oninput="queueImaDocumentsSearch()" oncompositionstart="_imaSearchComposing=true" oncompositionend="_imaSearchComposing=false;queueImaDocumentsSearch()">${clearBtn}</label>
       </form>
-      <div class="ima-report-filters">${sourceControls}<span id="ima-doc-day-nav-slot"></span><div class="ima-report-tag"><span class="sr-only">标签</span><button type="button" class="kb-desk-day ima-tag-trigger" id="ima-doc-tag" aria-haspopup="listbox" aria-expanded="false" onclick="toggleImaTagMenu(event)" hidden>标签</button></div></div>
+      <div class="ima-report-filters">${sourceControls}<span id="ima-doc-day-nav-slot"></span><div class="ima-report-tag"><span class="sr-only">标签</span><button type="button" class="kb-desk-day ima-tag-trigger" id="ima-doc-tag" aria-haspopup="listbox" aria-expanded="false" onclick="toggleImaTagMenu(event)" hidden><span class="ima-tag-label">标签</span>${CHEVRON_DOWN_ICON}</button></div></div>
       <div id="ima-doc-filter-chips" class="ima-doc-filter-chips"></div>
       <div class="ima-report-columns" aria-hidden="true"><span>日期</span><span>标题</span><span>资料源</span></div>
     </header>
@@ -1003,7 +1030,8 @@ export function createImaView(dependencies) {
       const uniqueTags = Object.keys(snapshot.tagCounts || {});
       if (tag && !uniqueTags.includes(tag)) uniqueTags.unshift(tag);
       if (tagTrigger) {
-        tagTrigger.textContent = tag || "标签";
+        const tagLabel = tagTrigger.querySelector(".ima-tag-label");
+        if (tagLabel) tagLabel.textContent = tag || "标签";
         if (uniqueTags.length || tag) tagTrigger.removeAttribute("hidden");
         else tagTrigger.hidden = true;
       }
@@ -1055,7 +1083,8 @@ export function createImaView(dependencies) {
         : Object.keys(_imaTagCounts);
       if (tag && !uniqueTags.includes(tag)) uniqueTags.unshift(tag);
       if (tagTrigger) {
-        tagTrigger.textContent = tag || "标签";
+        const tagLabel = tagTrigger.querySelector(".ima-tag-label");
+        if (tagLabel) tagLabel.textContent = tag || "标签";
         if (uniqueTags.length || tag) tagTrigger.removeAttribute("hidden");
         else tagTrigger.hidden = true;
       }
@@ -1247,7 +1276,7 @@ export function createImaView(dependencies) {
     const prev = snapshot.items[index - 1];
     const next = snapshot.items[index + 1];
     const button = (item, className, label) => item
-      ? `<button type="button" class="${className}" data-media-id="${escapeHtml(item.media_id)}" data-group-id="${escapeHtml(item.group_id || "")}" onclick="openImaDocument(this.dataset.mediaId, this.dataset.groupId, true)">${label} <span>${escapeHtml(imaListTitle(item.name))}</span></button>`
+      ? `<button type="button" class="${className}" data-media-id="${escapeHtml(item.media_id)}" data-group-id="${escapeHtml(item.group_id || "")}" aria-label="${label}" title="${label}" onclick="openImaDocument(this.dataset.mediaId, this.dataset.groupId, true)">${className === "ima-reader-prev" ? CHEVRON_LEFT_ICON : ""}${label} <span>${escapeHtml(imaListTitle(item.name))}</span>${className === "ima-reader-next" ? CHEVRON_RIGHT_ICON : ""}</button>`
       : "";
     return `<nav class="ima-reader-nav" aria-label="同一结果集">${button(prev, "ima-reader-prev", "上一份")}${button(next, "ima-reader-next", "下一份")}</nav>`;
   }
@@ -1325,7 +1354,7 @@ export function createImaView(dependencies) {
         ? `
         <article class="ima-reader ima-reader--feishu">
           <header class="ima-reader-toolbar">
-            <button type="button" class="ima-reader-back" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back)" aria-label="返回"><span class="ima-back-icon" aria-hidden="true">‹</span>返回</button>
+            <button type="button" class="ima-reader-back" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back)" aria-label="返回" title="返回"><span class="ima-back-icon" aria-hidden="true">${CHEVRON_LEFT_ICON}</span>返回</button>
             <h2 class="ima-reader-title">${readerTitle}</h2>
             <div class="ima-reader-actions">${searchBack}${openNewTab}</div>
           </header>
@@ -1335,7 +1364,7 @@ export function createImaView(dependencies) {
         : `
         <article class="ima-reader">
           <header class="ima-reader-toolbar">
-            <button type="button" class="ima-reader-back" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back)" aria-label="返回"><span class="ima-back-icon" aria-hidden="true">‹</span>返回</button>
+            <button type="button" class="ima-reader-back" data-back="${escapeHtml(backRoute)}" onclick="backFromImaReader(this.dataset.back)" aria-label="返回" title="返回"><span class="ima-back-icon" aria-hidden="true">${CHEVRON_LEFT_ICON}</span>返回</button>
             <div class="ima-reader-actions">${searchBack}${openNewTab}</div>
           </header>
           <section class="ima-reader-info">

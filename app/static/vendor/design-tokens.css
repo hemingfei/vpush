@@ -59,8 +59,8 @@
   /* 平台品牌色（图标用；深色模式在 .theme-dark 中覆盖） */
   --color-brand-xueqiu: #287dff;
   --color-brand-weibo: #e6162d;
-  --color-brand-twitter: #000000;
-  --color-brand-zsxq: #16b999;
+  --color-brand-twitter: var(--color-accent-text);
+  --color-brand-zsxq: #0b806a;
   --color-brand-telegram: #26a5e4;
   --color-brand-feishu: #3370ff;
   --color-brand-wecom: #07c160;
@@ -186,10 +186,10 @@
   --color-danger: #f87171;
   --color-danger-strong: #fca5a5;
 
-  /* 平台品牌色（深色下 X 黑色不可见 → 浅灰） */
+  /* 平台品牌色 */
   --color-brand-xueqiu: #4a9aff;
   --color-brand-weibo: #ff5d6e;
-  --color-brand-twitter: #e7e9ea;
+  --color-brand-twitter: var(--color-accent-text);
   --color-brand-zsxq: #2ad4b3;
   --color-brand-telegram: #4aa8e8;
   --color-brand-feishu: #5b8cff;

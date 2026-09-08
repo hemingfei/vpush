@@ -19,11 +19,15 @@ EXTRA_STYLESHEETS = ("mx-views.css",)
 
 def asset_paths(root: Path = ROOT) -> list[Path]:
     static = root / STATIC
-    paths = [static / "style.css", static / "app.js"]
+    paths = [
+        static / "style.css",
+        static / "app.js",
+        static / "vendor" / "design-tokens.css",
+    ]
     paths += [static / name for name in EXTRA_STYLESHEETS]
     paths += sorted((static / "core").glob("**/*.js")) if (static / "core").exists() else []
     paths += sorted((static / "views").glob("**/*.js")) if (static / "views").exists() else []
-    missing = [path for path in paths[:2] if not path.is_file()]
+    missing = [path for path in paths[:3] if not path.is_file()]
     if missing:
         raise ValueError("missing required assets: " + ", ".join(map(str, missing)))
     return sorted(set(paths), key=lambda path: path.relative_to(root).as_posix())
@@ -58,6 +62,9 @@ def rendered_targets(root: Path = ROOT) -> dict[Path, str]:
     digest = asset_digest(root)
     index = (static / "index.html").read_text("utf-8")
     sw = (static / "sw.js").read_text("utf-8")
+    index = replace_once(index, r'href="/vendor/design-tokens\.css\?v=[^"]+"',
+                         f'href="/vendor/design-tokens.css?v={digest}"',
+                         "design-tokens.css reference")
     index = replace_once(index, r'href="/style\.css\?v=[^"]+"',
                          f'href="/style.css?v={digest}"', "style.css reference")
     for name in EXTRA_STYLESHEETS:

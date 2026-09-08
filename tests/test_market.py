@@ -4,7 +4,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from app.market import CN_TZ, GROUPS, MINUTE_SYMBOLS, MarketQuotes, default_group, parse_intraday, parse_quotes, quote_status
+from app.market import CN_TZ, GROUPS, MINUTE_SYMBOLS, NY_TZ, MarketQuotes, default_group, is_us_market_holiday, parse_intraday, parse_quotes, quote_status
 
 
 def quote_payload(price="3930.12", timestamp="20260904103000", group="day"):
@@ -49,6 +49,46 @@ def test_rejects_incomplete_or_invalid_snapshot(payload):
 ])
 def test_trading_status_requires_recent_exchange_quote(now, expected):
     assert quote_status(parse_quotes(quote_payload())[0], datetime.fromisoformat(now).replace(tzinfo=CN_TZ)) == expected
+
+
+def test_us_holiday_status_is_labeled_and_other_weekdays_keep_session_rules():
+    item = {"symbol": "us.INX", "quoted_at": "2026-09-04T16:00:00-04:00"}
+    assert quote_status(item, datetime(2026, 9, 7, 15, tzinfo=NY_TZ)) == "holiday"
+    assert quote_status(item, datetime(2026, 9, 8, 15, tzinfo=NY_TZ)) == "delayed"
+
+
+def test_us_market_holiday_handles_new_year_observed_on_prior_year_date():
+    item = {"symbol": "us.INX", "quoted_at": "2021-12-30T16:00:00-05:00"}
+    assert quote_status(item, datetime(2021, 12, 31, 15, tzinfo=NY_TZ)) == "holiday"
+
+
+def test_us_market_holiday_calendar_covers_memorial_day():
+    item = {"symbol": "us.INX", "quoted_at": "2026-05-22T16:00:00-04:00"}
+    assert quote_status(item, datetime(2026, 5, 25, 15, tzinfo=NY_TZ)) == "holiday"
+
+
+def test_us_market_holiday_calendar_applies_juneteenth_from_2022():
+    item = {"symbol": "us.INX", "quoted_at": "2021-06-17T16:00:00-04:00"}
+    assert quote_status(item, datetime(2021, 6, 18, 15, tzinfo=NY_TZ)) == "delayed"
+    assert quote_status(item, datetime(2022, 6, 20, 15, tzinfo=NY_TZ)) == "holiday"
+
+
+@pytest.mark.parametrize("holiday", [
+    "2026-04-03",  # Good Friday
+    "2026-02-16",  # Presidents' Day
+    "2026-05-25",  # Memorial Day
+    "2021-07-05",  # Independence Day observed Monday
+    "2026-09-07",  # Labor Day
+    "2026-11-26",  # Thanksgiving
+    "2021-12-24",  # Christmas observed Friday
+])
+def test_us_market_holiday_calendar_covers_all_regular_full_day_closures(holiday):
+    assert is_us_market_holiday(datetime.fromisoformat(holiday).date())
+
+
+@pytest.mark.parametrize("working_day", ["2026-04-06", "2026-05-26", "2026-11-27", "2021-12-23"])
+def test_us_market_holiday_calendar_does_not_close_adjacent_workdays(working_day):
+    assert not is_us_market_holiday(datetime.fromisoformat(working_day).date())
 
 
 def test_shared_cache_failure_cooldown_and_recovery():

@@ -263,6 +263,20 @@ def test_market_initial_failure_has_retry_and_no_zero_quotes(page: Page):
     expect(page.get_by_role('button', name='重试', exact=True)).to_be_visible()
 
 
+def test_market_holiday_status_explains_previous_trading_date(page: Page):
+    page.evaluate("""async () => {
+      const { createMarketView } = await import('/views/market.js');
+      document.body.innerHTML = '<section id="tl-market"></section>';
+      createMarketView({escapeHtml: s => s, api: async () => ({group:'night',stale:false,items:[{
+        symbol:'us.INX',name:'标普 500 指数',price:7718.60,change:-29.55,percent:-0.38,status:'holiday',
+        quoted_at:'2026-09-04T16:00:00-04:00',previous_close:7748.15,
+        intraday:{date:'2026-09-04',duration:390,points:[{time:'09:30',minute:0,price:7740},{time:'16:00',minute:390,price:7718.6}]}
+      }]})}).startMarketQuotes();
+    }""")
+    expect(page.locator('.market-status')).to_have_text('今日休市')
+    expect(page.locator('.market-footer')).to_contain_text('最近交易日 · 09/04')
+
+
 @pytest.mark.parametrize("daily_percent,expected_class", [(3.52, "positive"), (-3.52, "negative"), (0, "flat")])
 def test_market_switches_automatically_and_ignores_other_group_responses(page: Page, daily_percent, expected_class):
     page.clock.install(time=datetime(2026, 9, 4, 11, 59, 50, tzinfo=timezone.utc))
@@ -293,7 +307,7 @@ def test_market_switches_automatically_and_ignores_other_group_responses(page: P
     assert len(page.locator('.market-spark polyline').get_attribute('points').split()) == 3
     assert page.locator('.market-spark polyline').get_attribute('points').split()[-1].startswith('22.0,')
     expect(page.locator('.market-spark-baseline')).to_have_attribute('y1', '18')
-    expect(page.locator('.market-footer')).to_contain_text('日内分时 · 09/04')
+    expect(page.locator('.market-footer')).to_contain_text('最近交易日 · 09/04')
     assert '近20' not in page.locator('#tl-market').inner_text()
     assert '腾讯行情' not in page.locator('#tl-market').inner_text()
     page.get_by_role('button', name='A股 / 港股').click()
@@ -324,6 +338,306 @@ def install_badge_reader_bootstrap(page: Page) -> None:
     page.route("**/api/**", respond)
 
 
+def test_theme_switch_keeps_browser_chrome_and_page_background_in_sync(page: Page):
+    for mode, color, manifest, rgb in (
+        ("light", "#f5f5f7", "/manifest.webmanifest?v=3", "rgb(245, 245, 247)"),
+        ("dark", "#0f1115", "/manifest-dark.webmanifest?v=3", "rgb(15, 17, 21)"),
+    ):
+        page.evaluate("mode => setTheme(mode)", mode)
+        assert page.locator('meta[name="theme-color"]').get_attribute("content") == color
+        assert page.locator("#manifest").get_attribute("href") == manifest
+        assert page.locator("html").evaluate("el => getComputedStyle(el).backgroundColor") == rgb
+
+    page.emulate_media(color_scheme="light")
+    page.evaluate("setTheme('auto')")
+    assert page.locator('meta[name="theme-color"]').get_attribute("content") == "#f5f5f7"
+    page.emulate_media(color_scheme="dark")
+    expect(page.locator('meta[name="theme-color"]')).to_have_attribute("content", "#0f1115")
+    expect(page.locator("#manifest")).to_have_attribute("href", "/manifest-dark.webmanifest?v=3")
+
+
+@pytest.mark.parametrize("reduced_motion", ["reduce", "no-preference"])
+def test_mobile_navigation_scroll_direction(page: Page, static_origin: str, tmp_path: Path, reduced_motion: str):
+    page.set_viewport_size({"width": 380, "height": 840})
+    page.emulate_media(reduced_motion=reduced_motion)
+    install_badge_reader_bootstrap(page)
+    page.goto(static_origin)
+    page.evaluate("go('home')")
+    expect(page.locator("#kol-list")).to_be_visible()
+    nav = page.locator("#bottom-nav")
+    page.evaluate("document.querySelector('#main').style.minHeight = '3000px'")
+
+    def scroll(y):
+        page.evaluate("y => window.scrollTo(0, y)", y)
+        page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+
+    scroll(100)
+    expect(nav).to_have_attribute("inert", "")
+    page.wait_for_function("document.querySelector('#bottom-nav').getBoundingClientRect().top >= innerHeight")
+    page.screenshot(path=str(tmp_path / f"nav-hidden-{reduced_motion}.png"))
+    page.set_viewport_size({"width": 380, "height": 880})
+    expect(nav).to_have_attribute("inert", "")
+    page.set_viewport_size({"width": 380, "height": 840})
+    scroll(96)
+    expect(nav).to_have_attribute("inert", "")
+    scroll(92)
+    expect(nav).not_to_have_attribute("inert", "")
+    page.wait_for_function("document.querySelector('#bottom-nav').getBoundingClientRect().bottom <= innerHeight")
+    scroll(102)
+    expect(nav).not_to_have_attribute("inert", "")
+    scroll(116)
+    expect(nav).to_have_attribute("inert", "")
+    scroll(0)
+    expect(nav).not_to_have_attribute("inert", "")
+    page.wait_for_function("document.querySelector('#bottom-nav').getBoundingClientRect().bottom <= innerHeight")
+    page.screenshot(path=str(tmp_path / f"nav-visible-{reduced_motion}.png"))
+    if reduced_motion == "reduce":
+        assert nav.evaluate("el => getComputedStyle(el).transitionDuration") == "0s"
+    scroll(200)
+    page.evaluate("go('more')")
+    expect(page.locator(".more-grid")).to_be_visible()
+    expect(nav).not_to_have_attribute("inert", "")
+    scroll(400)
+    expect(nav).to_have_attribute("inert", "")
+    page.set_viewport_size({"width": 1280, "height": 840})
+    expect(nav).not_to_have_attribute("inert", "")
+    expect(nav).to_be_hidden()
+    page.set_viewport_size({"width": 380, "height": 840})
+    page.evaluate("document.querySelector('#main').style.minHeight = ''")
+    page.evaluate("go('timeline')")
+    expect(page.locator("#feed")).to_be_visible()
+    scroll(0)
+    expect(nav).not_to_have_attribute("inert", "")
+
+
+@pytest.mark.parametrize("width", [320, 380, 768, 1280])
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_timeline_long_text_keeps_navigation_in_viewport(
+    playwright_instance: Playwright, static_origin: str, tmp_path: Path, width: int, theme: str,
+):
+    browser = playwright_instance.chromium.launch(channel="chrome", headless=True)
+    context = browser.new_context(
+        viewport={"width": width, "height": 840}, is_mobile=width <= 768,
+        has_touch=width <= 768, service_workers="block",
+    )
+    try:
+        page = context.new_page()
+        install_badge_reader_bootstrap(page)
+        page.route("**/api/me", lambda route: route.fulfill(json={
+            "id": 1, "username": "test", "is_admin": True, "news_visible": False,
+        }))
+        post = {"id": 1, "kol_id": 1, "kol_name": "Test", "platform": "twitter",
+                "published_at": "2026-09-05T12:00:00Z", "content": "Post body " * 120}
+        page.route("**/api/my/feed?*", lambda route: route.fulfill(json=[post]))
+        for field, value in [("title", "LongTitle" * 8),
+                             ("category_name", "LongCategory" * 8),
+                             ("tags", ["LongTag" * 12])]:
+            post[field] = value
+            page.goto(static_origin)
+            page.evaluate("go('timeline')")
+            expect(page.locator(".post-item")).to_be_visible()
+            page.evaluate("theme => document.documentElement.className = 'theme-' + theme", theme)
+            page.locator(".post-expand-btn").click()
+            for scroll_y in [0, 600, 0]:
+                page.evaluate("y => window.scrollTo(0, y)", scroll_y)
+                page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+                geometry = page.evaluate("""() => ({
+                    document: document.documentElement.scrollWidth,
+                    viewport: document.documentElement.clientWidth,
+                    navigation: [...document.querySelectorAll('.bnav-item')].map(el => {
+                        const rect = el.getBoundingClientRect();
+                        return {left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom};
+                    }),
+                })""")
+                assert geometry["document"] <= width + 1, (field, geometry)
+                assert geometry["viewport"] == width, (field, geometry)
+                if width <= 768:
+                    assert len(geometry["navigation"]) == 4
+                    for rect in geometry["navigation"]:
+                        assert 0 <= rect["left"] < rect["right"] <= width
+                        if scroll_y == 0:
+                            page.wait_for_function("document.querySelector('#bottom-nav').getBoundingClientRect().bottom <= innerHeight")
+                else:
+                    expect(page.locator("#bottom-nav")).to_be_hidden()
+            page.screenshot(path=str(tmp_path / f"navigation-{field}-{width}-{theme}.png"))
+            if width <= 768:
+                page.locator('.bnav-item[data-route="home"]').click()
+                expect(page.locator("#kol-list")).to_be_visible()
+                page.locator('.bnav-item[data-route="more"]').click()
+                expect(page.locator(".more-grid")).to_be_visible()
+            del post[field]
+    finally:
+        context.close()
+        browser.close()
+
+
+def _rgb(value: str) -> tuple[int, int, int]:
+    values = [int(part) for part in re.findall(r"\d+", value)[:3]]
+    assert len(values) == 3, value
+    return tuple(values)
+
+
+def _contrast_ratio(foreground: str, background: str) -> float:
+    def luminance(rgb: tuple[int, int, int]) -> float:
+        channels = []
+        for value in rgb:
+            channel = value / 255
+            channels.append(channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4)
+        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+
+    lighter, darker = sorted((luminance(_rgb(foreground)), luminance(_rgb(background))), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+@pytest.mark.parametrize(
+    ("is_admin", "news_visible", "expected"),
+    [
+        (False, False, [("timeline", "动态"), ("home", "广场"), ("settings", "个人设置")]),
+        (False, True, [("timeline", "动态"), ("news", "财经新闻"), ("home", "广场"), ("settings", "个人设置")]),
+        (True, True, [("timeline", "动态"), ("news", "财经新闻"), ("home", "广场"), ("settings", "个人设置"), ("more", "更多")]),
+    ],
+)
+@pytest.mark.parametrize("width", [320, 768])
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_mobile_bottom_navigation_is_icon_only(
+    page: Page, static_origin: str, tmp_path: Path,
+    is_admin: bool, news_visible: bool, expected: list[tuple[str, str]],
+    width: int, theme: str,
+):
+    page.set_viewport_size({"width": width, "height": 840})
+    page.emulate_media(reduced_motion="reduce")
+    install_badge_reader_bootstrap(page)
+    page.route("**/api/me", lambda route: route.fulfill(json={
+        "id": 1, "username": "test", "is_admin": is_admin,
+        "news_visible": news_visible,
+    }))
+    page.goto(static_origin)
+    page.evaluate("() => go('timeline')")
+    page.evaluate("theme => document.documentElement.className = 'theme-' + theme", theme)
+
+    nav = page.locator("#bottom-nav")
+    buttons = nav.locator(".bnav-item")
+    expect(buttons).to_have_count(len(expected))
+    assert nav.inner_text().strip() == ""
+    assert buttons.evaluate_all("els => els.map(el => el.dataset.route)") == [route for route, _ in expected]
+    nav_box = nav.bounding_box()
+    pad = nav.evaluate("""el => {
+      const s = getComputedStyle(el);
+      return {top: s.paddingTop, bottom: s.paddingBottom, left: s.paddingLeft, right: s.paddingRight};
+    }""")
+    assert pad["top"] == "0px" and pad["bottom"] == "0px"
+    assert pad["left"] == "12px" and pad["right"] == "12px"
+
+    for index, (_, label) in enumerate(expected):
+        button = buttons.nth(index)
+        expect(button).to_have_attribute("aria-label", label)
+        expect(button).to_have_attribute("title", label)
+        expect(button.locator("svg")).to_be_visible()
+        button_box = button.bounding_box()
+        icon_box = button.locator("svg").bounding_box()
+        assert button_box and 47 <= button_box["height"] <= 50
+        assert nav_box and abs(nav_box["height"] - button_box["height"]) <= 2
+        assert icon_box and 23 <= icon_box["width"] <= 25 and 23 <= icon_box["height"] <= 25
+
+    active = page.locator('.bnav-item[data-route="timeline"]')
+    inactive = page.locator('.bnav-item[data-route="home"]')
+    expect(active).to_have_attribute("aria-current", "page")
+    active.focus()
+    expect(active).to_be_focused()
+    colors = page.evaluate("""() => {
+        const root = getComputedStyle(document.documentElement);
+        const resolveColor = (value) => {
+            const probe = document.createElement('span');
+            probe.style.color = value;
+            document.body.append(probe);
+            const color = getComputedStyle(probe).color;
+            probe.remove();
+            return color;
+        };
+        return {
+            active: getComputedStyle(document.querySelector('.bnav-item.active')).color,
+            inactive: getComputedStyle(document.querySelector('.bnav-item:not(.active)')).color,
+            activeToken: resolveColor(root.getPropertyValue('--color-accent-text')),
+            inactiveToken: resolveColor(root.getPropertyValue('--color-text-muted')),
+            background: getComputedStyle(document.querySelector('#bottom-nav')).backgroundColor,
+        };
+    }""")
+    assert _rgb(colors["active"]) == _rgb(colors["activeToken"])
+    assert _rgb(colors["inactive"]) == _rgb(colors["inactiveToken"])
+    assert _contrast_ratio(colors["active"], colors["background"]) >= 3
+    assert _contrast_ratio(colors["inactive"], colors["background"]) >= 3
+
+    inactive.click()
+    expect(page.locator("#kol-list")).to_be_visible()
+    expect(inactive).to_have_attribute("aria-current", "page")
+    expect(active).not_to_have_attribute("aria-current", "page")
+    page.screenshot(path=str(tmp_path / f"bottom-nav-{len(expected)}-{width}-{theme}.png"))
+
+
+def test_mobile_bottom_navigation_d1_feedback_restarts_without_rebuilding(page: Page, static_origin: str):
+    page.set_viewport_size({"width": 390, "height": 840})
+    page.emulate_media(reduced_motion="no-preference")
+    install_badge_reader_bootstrap(page)
+    page.goto(static_origin)
+    page.evaluate("() => go('timeline')")
+
+    nav_items = page.locator("#bottom-nav .bnav-item")
+    nav_items.first.wait_for(state="visible")
+    expect(nav_items).to_have_count(5)
+    button = page.locator('.bnav-item[data-route="timeline"]')
+    original_button = button.element_handle()
+    assert original_button is not None
+    assert page.evaluate("() => document.querySelector('#bottom-nav .bnav-item').style.backgroundColor") == ""
+    button.click()
+    expect(button).to_have_class(re.compile(r"\bis-feedback\b"))
+    feedback = button.evaluate("""el => ({
+        highlight: getComputedStyle(el).webkitTapHighlightColor,
+        background: getComputedStyle(el).backgroundColor,
+        stroke: getComputedStyle(el.querySelector('svg')).strokeWidth,
+        circleWidth: getComputedStyle(el, '::before').width,
+        circleHeight: getComputedStyle(el, '::before').height,
+        circleRadius: getComputedStyle(el, '::before').borderRadius,
+        pointerEvents: getComputedStyle(el, '::before').pointerEvents,
+        opacity: Number.parseFloat(getComputedStyle(el, '::before').opacity),
+        animations: el.getAnimations({subtree: true})
+            .filter(animation => animation.animationName === 'bottom-nav-feedback')
+            .map(animation => ({name: animation.animationName, duration: animation.effect.getTiming().duration})),
+    })""")
+    assert feedback["highlight"] == "rgba(0, 0, 0, 0)"
+    assert feedback["background"] == "rgba(0, 0, 0, 0)"
+    assert feedback["stroke"] == "2.4px"
+    assert feedback["circleWidth"] == "42px"
+    assert feedback["circleHeight"] == "42px"
+    assert feedback["circleRadius"] == "50%"
+    assert feedback["pointerEvents"] == "none"
+    assert 0 <= feedback["opacity"] <= 1
+    assert feedback["animations"] == [{"name": "bottom-nav-feedback", "duration": 220}]
+    button.click()
+    assert page.evaluate("original => document.querySelector('.bnav-item[data-route=timeline]') === original", original_button)
+    assert button.evaluate("el => el.getAnimations({subtree: true}).filter(a => a.animationName === 'bottom-nav-feedback').length") == 1
+    page.wait_for_function("el => !el.classList.contains('is-feedback')", arg=original_button)
+    assert page.locator('.bnav-item.is-feedback').count() == 0
+
+
+def test_mobile_bottom_navigation_d1_feedback_reduced_motion_has_no_transform(page: Page, static_origin: str):
+    page.set_viewport_size({"width": 390, "height": 840})
+    page.emulate_media(reduced_motion="reduce")
+    install_badge_reader_bootstrap(page)
+    page.goto(static_origin)
+    page.evaluate("() => go('timeline')")
+
+    nav_items = page.locator("#bottom-nav .bnav-item")
+    nav_items.first.wait_for(state="visible")
+    expect(nav_items).to_have_count(5)
+    button = page.locator('.bnav-item[data-route="timeline"]')
+    button.click()
+    expect(button).to_have_class(re.compile(r"\bis-feedback\b"))
+    assert button.evaluate("el => getComputedStyle(el, '::before').animationDuration") == "0.08s"
+    transforms = page.evaluate("""() => [...document.styleSheets].flatMap(sheet => {
+        try { return [...sheet.cssRules]; } catch { return []; }
+    }).filter(rule => rule.type === CSSRule.KEYFRAMES_RULE && rule.name === 'bottom-nav-feedback')
+      .flatMap(rule => [...rule.cssRules].map(frame => frame.style.transform))""")
+    assert transforms and all(value == "translate(-50%, -50%)" for value in transforms)
 @pytest.mark.parametrize("width", [375, 768, 1440])
 @pytest.mark.parametrize("theme", ["light", "dark"])
 def test_platform_badges_keep_blue_selection(page: Page, static_origin: str, tmp_path: Path, width: int, theme: str):
@@ -334,29 +648,78 @@ def test_platform_badges_keep_blue_selection(page: Page, static_origin: str, tmp
     page.evaluate("() => go('timeline')")
     expect(page.locator("#tl-pills .tl-pill").first).to_be_visible()
     page.evaluate("theme => document.documentElement.className = 'theme-' + theme", theme)
+    platforms = page.locator("#tl-pills .tl-pill").evaluate_all(
+        "els => els.map(el => el.dataset.platform)"
+    )
+    assert platforms == ["", "live", "xueqiu", "combination", "weibo", "twitter", "zsxq", "truth"]
     expect(page.locator("#tl-platform-bar .star-icon")).to_have_count(0)
-    truth_icon = page.locator('#tl-pills [data-platform="truth"] svg.pt-icon')
-    expect(truth_icon).to_have_count(1)
-    expect(truth_icon).to_have_css("fill", "rgb(90, 155, 245)" if theme == "dark" else "rgb(22, 104, 224)")
-    expect(truth_icon).to_have_css("filter", "none")
-    for platform in ["", "live", "xueqiu", "combination", "weibo", "twitter", "zsxq", "truth"]:
+    for platform in platforms:
         button = page.locator(f'#tl-pills [data-platform="{platform}"]')
+        icon = button.locator(".pt-icon")
+        other = "xueqiu" if platform == "" else ""
+        page.locator(f'#tl-pills [data-platform="{other}"]').click()
+        expect(button).to_have_attribute("aria-checked", "false")
+        expect(icon).to_be_visible()
+        before = icon.bounding_box()
+        assert before and before["width"] == before["height"]
+        assert 22 <= before["width"] <= 34
+        unselected = icon.evaluate("""el => ({
+          color: getComputedStyle(el).color,
+          background: getComputedStyle(el).backgroundColor,
+          filter: getComputedStyle(el).filter,
+          tag: el.tagName,
+          pathFills: [...el.querySelectorAll('path')].map(path => getComputedStyle(path).fill)
+        })""")
+        if platform == "combination":
+            assert set(unselected["pathFills"]) == {"none"}, unselected
+        if platform == "xueqiu":
+            assert unselected["tag"] == "svg"
+            assert set(unselected["pathFills"]) == {"rgb(40, 125, 255)"}
+        if platform == "twitter":
+            accent = page.evaluate("""() => {
+              const probe = document.body.appendChild(document.createElement('span'));
+              probe.style.color = 'var(--color-accent-text)';
+              const value = getComputedStyle(probe).color;
+              probe.remove();
+              return value;
+            }""")
+            assert unselected["color"] == accent, (theme, unselected, accent)
+        assert unselected["tag"] == "svg"
+        ink = unselected["pathFills"][0] if platform == "xueqiu" else unselected["color"]
+        assert _contrast_ratio(ink, unselected["background"]) >= 3, (platform, unselected)
+        assert unselected["filter"] == "none"
+
         button.click()
         expect(button).to_have_attribute("aria-checked", "true")
         page.wait_for_timeout(180)
-        colors = button.evaluate("""el => ({
+        selected = button.evaluate("""el => ({
           base: getComputedStyle(el).backgroundColor,
           badge: getComputedStyle(el, '::before').backgroundColor,
           ink: getComputedStyle(el).color,
-          imageFilter: getComputedStyle(el.querySelector('.pt-icon')).filter
+          iconColor: getComputedStyle(el.querySelector('.pt-icon')).color,
+          iconFilter: getComputedStyle(el.querySelector('.pt-icon')).filter,
+          iconTag: el.querySelector('.pt-icon').tagName,
+          pathFills: [...el.querySelectorAll('.pt-icon path')].map(path => getComputedStyle(path).fill)
         })""")
-        assert "rgb(22, 104, 224)" in (colors["base"], colors["badge"]), (platform, colors)
-        assert colors["ink"] == "rgb(255, 255, 255)", (platform, colors)
+        if platform == "combination":
+            assert set(selected["pathFills"]) == {"none"}, selected
         if platform == "xueqiu":
-            assert colors["imageFilter"] == "brightness(0) invert(1)"
+            assert set(selected["pathFills"]) == {"rgb(255, 255, 255)"}
+        assert "rgb(22, 104, 224)" in (selected["base"], selected["badge"]), (platform, selected)
+        assert selected["ink"] == "rgb(255, 255, 255)", (platform, selected)
+        after = icon.bounding_box()
+        assert after and (after["width"], after["height"]) == (before["width"], before["height"])
+        assert selected["iconTag"] == "svg"
+        assert selected["iconColor"] == "rgb(255, 255, 255)", (platform, selected)
+        assert selected["iconFilter"] == "none"
         if platform == "truth":
-            expect(truth_icon).to_have_css("fill", "rgb(255, 255, 255)")
-            expect(truth_icon).to_have_css("filter", "none")
+            fill = icon.evaluate("""el => {
+              const bb = el.getBBox();
+              const vb = el.viewBox.baseVal;
+              return {x: bb.width / vb.width, y: bb.height / vb.height};
+            }""")
+            assert fill["x"] >= 0.75 and fill["y"] >= 0.70, fill
+
     page.screenshot(path=str(tmp_path / f"badges-{width}-{theme}.png"))
     if width <= 768:
         page.locator("#tl-filter-toggle").click()
@@ -364,6 +727,37 @@ def test_platform_badges_keep_blue_selection(page: Page, static_origin: str, tmp
         expect(page.locator("#tl-filter-toggle")).to_have_class(re.compile("has-filter"))
         expect(page.locator("#tl-filter-toggle .funnel-icon")).to_have_css("background-color", "rgb(22, 104, 224)")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("width", [375, 1280])
+def test_post_origin_link_aligns_with_tags(page: Page, static_origin: str, width: int):
+    install_badge_reader_bootstrap(page)
+    page.route("**/api/my/feed*", lambda route: route.fulfill(json=[{
+        "id": 1, "kol_id": 1, "kol_name": "淡淡的相思林", "platform": "xueqiu",
+        "published_at": "2026-09-07T14:14:00+08:00", "content": "body",
+        "category_name": "行业研究", "url": "https://xueqiu.com/1",
+    }]))
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(static_origin)
+    page.evaluate("() => go('timeline')")
+    expect(page.locator(".post-item .p-meta .cat:not(a)")).to_be_visible()
+    expect(page.get_by_role("link", name="查看原文")).to_be_visible()
+    geo = page.evaluate("""() => {
+      const cat = document.querySelector('.p-meta .cat:not(a)');
+      const origin = document.querySelector('.p-meta a');
+      const icon = origin.querySelector('svg');
+      const cr = cat.getBoundingClientRect();
+      const or = origin.getBoundingClientRect();
+      const ir = icon.getBoundingClientRect();
+      return {
+        catH: cr.height, originH: or.height, iconH: ir.height,
+        topDelta: Math.abs(cr.top - or.top),
+      };
+    }""")
+    assert geo["originH"] < 28, geo
+    assert abs(geo["originH"] - geo["catH"]) <= 2, geo
+    assert geo["topDelta"] <= 2, geo
+    assert 10 <= geo["iconH"] <= 14, geo
 
 
 @pytest.mark.parametrize("width", [375, 1440])
@@ -377,6 +771,47 @@ def test_abstract_has_no_copy_button(page: Page, static_origin: str, tmp_path: P
     expect(page.locator(".ima-reader-abstract")).to_have_attribute("open", "")
     page.screenshot(path=str(tmp_path / f"abstract-{width}.png"))
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("width", [390, 768, 1280])
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_plaza_name_platform_icons(page: Page, static_origin: str, tmp_path: Path, width: int, theme: str):
+    install_badge_reader_bootstrap(page)
+    platforms = ["xueqiu", "combination", "weibo", "twitter", "zsxq", "truth"]
+    names = ["雪球", "雪球组合", "微博", "X", "知识星球", "Truth Social"]
+    catalog = [
+        {"id": i + 1, "name": "测试名字" * (12 if i == 0 else 1),
+         "platform": platform, "external_id": str(i), "enabled": True,
+         "category_name": "财经", "quote": {"day_percent_gain": -1.25}}
+        for i, platform in enumerate(platforms)
+    ]
+    page.route("**/api/catalog*", lambda route: route.fulfill(json=catalog))
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(static_origin)
+    page.evaluate("theme => setTheme(theme)", theme)
+    page.evaluate("() => go('home')")
+    expect(page.locator(".kol-card")).to_have_count(6)
+    for i, label in enumerate(names):
+        card = page.locator(".kol-card").nth(i)
+        badge = card.get_by_role("img", name=label, exact=True)
+        expect(badge).to_be_visible()
+        expect(badge).to_have_attribute("title", label)
+        expect(badge.locator("svg")).to_have_count(1)
+        expect(card.locator(".kol-card-meta")).to_have_text("财经" + ("-1.25%" if i == 1 else ""))
+        geometry = card.evaluate("""el => {
+          const name = el.querySelector('.name').getBoundingClientRect();
+          const badge = el.querySelector('.p-platform').getBoundingClientRect();
+          const card = el.getBoundingClientRect();
+          return {separate: name.right <= badge.left, contained: badge.right <= card.right,
+                  overflow: el.scrollWidth > el.clientWidth};
+        }""")
+        assert geometry == {"separate": True, "contained": True, "overflow": False}
+    icon = page.locator('.kol-card .xueqiu-icon')
+    assert icon.evaluate("el => getComputedStyle(el.querySelector('path')).fill") == "rgb(40, 125, 255)"
+    assert icon.evaluate("el => getComputedStyle(el).filter") == "none"
+    assert icon.bounding_box()["width"] == 17
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.screenshot(path=str(tmp_path / f"plaza-icons-{width}-{theme}.png"), full_page=True)
 
 
 def test_zsxq_attachment_download_uses_auth_header_not_query_token(page: Page, static_origin: str):

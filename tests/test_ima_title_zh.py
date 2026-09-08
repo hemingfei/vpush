@@ -89,9 +89,12 @@ def test_refresh_uses_injected_site_llm_config(tmp_path):
     assert seen
 
 
-def test_refresh_stops_after_first_failed_batch(tmp_path):
+def test_refresh_stops_after_first_failed_batch(tmp_path, monkeypatch):
     rows = [(f"m{i}", f"Goldman-Foo-{i:06d}.pdf") for i in range(25)]
     service, _ = make_bank_service(tmp_path, rows)
+    import app.ima_title_zh as mod
+
+    monkeypatch.setattr(mod, "_edge_translate_batch", lambda texts: None)
     calls = []
     assert refresh_bank_titles_zh(
         service,
@@ -99,3 +102,42 @@ def test_refresh_stops_after_first_failed_batch(tmp_path):
         chat=lambda titles: calls.append(titles) or None,
     ) == 0
     assert len(calls) == 1
+
+
+def test_llm_failure_falls_back_to_edge_translation(tmp_path, monkeypatch):
+    """LLM 批次失败时走微软 Edge 兜底，结果仍走同一归一化并回写索引。"""
+    import app.ima_title_zh as mod
+
+    service, group_dir = make_bank_service(
+        tmp_path, [("m1", "Goldman Sachs-Foo-260801.pdf")]
+    )
+    monkeypatch.setattr(
+        mod,
+        "_edge_translate_batch",
+        lambda texts: ["高盛-测试公司" for _ in texts],
+    )
+    n = refresh_bank_titles_zh(
+        service, llm_config=object(), chat=lambda titles: None
+    )
+    assert n == 1
+    row = service.db._rows("SELECT name FROM ima_document_index WHERE media_id = ?", ("m1",))[0]
+    assert row["name"].startswith("高盛")
+    overrides = json.loads((group_dir / "titles.json").read_text(encoding="utf-8"))
+    assert "Goldman Sachs-Foo-260801" in overrides
+
+
+def test_edge_fallback_failure_keeps_original_behavior(tmp_path, monkeypatch):
+    """兜底也失败时保持原语义：告警后 break，不写任何覆盖。"""
+    import app.ima_title_zh as mod
+
+    service, group_dir = make_bank_service(
+        tmp_path, [("m1", "Goldman Sachs-Foo-260801.pdf")]
+    )
+    monkeypatch.setattr(mod, "_edge_translate_batch", lambda texts: None)
+    n = refresh_bank_titles_zh(
+        service, llm_config=object(), chat=lambda titles: None
+    )
+    assert n == 0
+    row = service.db._rows("SELECT name FROM ima_document_index WHERE media_id = ?", ("m1",))[0]
+    assert row["name"] == "Goldman Sachs-Foo-260801.pdf"
+    assert not (group_dir / "titles.json").exists()

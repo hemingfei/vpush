@@ -92,3 +92,46 @@ def test_slow_query_warning_logged(tmp_path, monkeypatch):
         assert all("secret-value" not in record.getMessage() for record in records)
     finally:
         db.close()
+
+
+def test_downloaded_at_index_migration_applied(tmp_path):
+    db = DB(tmp_path / "idx.sqlite")
+    try:
+        assert db._rows("PRAGMA user_version")[0]["user_version"] == 2026090601
+        names = {row["name"] for row in db._rows("PRAGMA index_list(ima_document_index)")}
+        assert "idx_ima_doc_downloaded" in names
+        plan = db._read_only_rows(
+            "EXPLAIN QUERY PLAN SELECT * FROM ima_document_index "
+            "WHERE downloaded_at >= ? ORDER BY downloaded_at DESC LIMIT 10",
+            ("2026-09-01",),
+        )
+        detail = " | ".join(row["detail"] for row in plan)
+        assert "idx_ima_doc_downloaded" in detail
+        assert "SCAN" not in detail
+    finally:
+        db.close()
+
+
+def test_journal_mode_env(tmp_path, monkeypatch):
+    path = tmp_path / "journal.sqlite"
+    monkeypatch.setenv("DB_JOURNAL_MODE", "wal")
+    db = DB(path)
+    try:
+        assert db._rows("PRAGMA journal_mode")[0]["journal_mode"].lower() == "wal"
+    finally:
+        db.close()
+
+    monkeypatch.setenv("DB_JOURNAL_MODE", "delete")
+    db2 = DB(tmp_path / "journal2.sqlite")
+    try:
+        assert db2._rows("PRAGMA journal_mode")[0]["journal_mode"].lower() == "delete"
+    finally:
+        db2.close()
+
+    # 非法值回落 delete
+    monkeypatch.setenv("DB_JOURNAL_MODE", "bogus")
+    db3 = DB(tmp_path / "journal3.sqlite")
+    try:
+        assert db3._rows("PRAGMA journal_mode")[0]["journal_mode"].lower() == "delete"
+    finally:
+        db3.close()

@@ -98,6 +98,39 @@ def _parse_list(text: str, n: int) -> list[str] | None:
     return [str(x).strip() for x in out]
 
 
+def _edge_translate_batch(texts: list[str]) -> list[str] | None:
+    """微软 Edge 免费翻译接口兜底；不遵循券商名等格式规则，仅保底可读。失败返回 None。"""
+    import httpx
+
+    try:
+        resp = httpx.post(
+            "https://edge.microsoft.com/translate/translatetext",
+            params={"from": "", "to": "zh-Hans", "isEnterpriseClient": "false"},
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+                ),
+            },
+            json=[text[:2000] for text in texts],
+            timeout=15,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception as exc:  # noqa: BLE001 - 兜底通道不允许抛出
+        logger.warning("Edge 翻译兜底失败: %s", exc)
+        return None
+    if not isinstance(payload, list) or len(payload) != len(texts):
+        return None
+    out: list[str] = []
+    for item in payload:
+        trans = item.get("translations") if isinstance(item, dict) else None
+        text = trans[0].get("text") if isinstance(trans, list) and trans and isinstance(trans[0], dict) else ""
+        out.append(text.strip() if isinstance(text, str) else "")
+    return out
+
+
 def refresh_bank_titles_zh(service: Any, *, llm_config=None, chat=None, limit: int = MAX_PER_RUN) -> int:
     """把尚未中文化的投行标题写入 titles.json 并回写读索引。失败返回 0。"""
     from .llm import _chat
@@ -160,6 +193,10 @@ def refresh_bank_titles_zh(service: Any, *, llm_config=None, chat=None, limit: i
                 break
             chunk = entries[i : i + min(BATCH, remaining)]
             translated = chat_fn([item["source"] for item in chunk])
+            if not translated:
+                translated = _edge_translate_batch([item["source"] for item in chunk])
+                if translated:
+                    logger.info("投行标题 LLM 失败，Edge 兜底翻译 %s 条", len(translated))
             if not translated:
                 logger.warning("投行标题翻译批次失败 group=%s offset=%s", group.id[:16], i)
                 break

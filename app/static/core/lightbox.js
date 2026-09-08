@@ -1,5 +1,5 @@
 export function createLightbox(dependencies) {
-  const { escapeHtml, imgOnError, trapFocus } = dependencies;
+  const { escapeHtml, imgOnError, trapFocus, CHEVRON_LEFT_ICON, CHEVRON_RIGHT_ICON, X_ICON } = dependencies;
 
   // ---------- 图片灯箱（点击放大原图，背景变暗，多图可左右切换；支持滚轮/双击/双指缩放与拖拽平移） ----------
   let _lightboxImages = [];
@@ -120,7 +120,7 @@ export function createLightbox(dependencies) {
     overlay.setAttribute("aria-modal", "true");
     overlay.setAttribute("aria-label", "查看大图");
     overlay.innerHTML = `
-      <button class="lightbox-close" aria-label="关闭" onclick="event.stopPropagation();closeLightbox()">✕</button>
+      <button class="lightbox-close" aria-label="关闭" title="关闭" onclick="event.stopPropagation();closeLightbox()">${X_ICON}</button>
       <div class="lightbox-zoom">
         <button class="lightbox-zbtn lightbox-zout" aria-label="缩小" onclick="event.stopPropagation();_lbZoomStep(-1)">−</button>
         <button class="lightbox-zbtn lightbox-zpct" aria-label="重置缩放" title="重置缩放" onclick="event.stopPropagation();_lbZoomReset()">100%</button>
@@ -128,8 +128,8 @@ export function createLightbox(dependencies) {
       </div>
       <img class="lightbox-img" src="${escapeHtml(_lightboxImages[_lightboxIndex])}" alt="动态配图" draggable="false" onerror="imgOnError(this)">
       ${_lightboxImages.length > 1 ? `
-        <button class="lightbox-nav lightbox-prev" aria-label="上一张" onclick="event.stopPropagation();lightboxStep(-1)">‹</button>
-        <button class="lightbox-nav lightbox-next" aria-label="下一张" onclick="event.stopPropagation();lightboxStep(1)">›</button>
+        <button class="lightbox-nav lightbox-prev" aria-label="上一张" title="上一张" onclick="event.stopPropagation();lightboxStep(-1)">${CHEVRON_LEFT_ICON}</button>
+        <button class="lightbox-nav lightbox-next" aria-label="下一张" title="下一张" onclick="event.stopPropagation();lightboxStep(1)">${CHEVRON_RIGHT_ICON}</button>
         <span class="lightbox-count">${_lightboxIndex + 1} / ${_lightboxImages.length}</span>` : ""}`;
     overlay.addEventListener("click", (e) => {
       if (e.target === overlay) closeLightbox();
