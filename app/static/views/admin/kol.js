@@ -492,7 +492,7 @@ export function createAdminKolsView(dependencies) {
           <p class="section-meta">将华尔街见闻重要快讯自动播报到指定V平台 KOL，订阅该 KOL 的用户收到推送；快讯列表里也可手动单条播报。</p></div>
         </header>
         <div class="toolbar" style="flex-wrap:wrap;align-items:center;gap:8px">
-          <label class="switch"><input type="checkbox" id="wb-enabled"> 启用自动播报</label>
+          <label class="switch"><input type="checkbox" id="wb-enabled"><span class="track"></span><span>启用自动播报</span></label>
           <label class="muted" style="display:flex;align-items:center;gap:6px">
             播报目标
             <select id="wb-kol" class="form-control" style="width:auto"></select>
