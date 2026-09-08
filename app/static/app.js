@@ -3444,7 +3444,7 @@ async function broadcastWscnItem(itemId) {
       }),
     });
     if (res.broadcast) {
-      flash(`已播报到系统 KOL（帖子 #${res.post_id}）`);
+      flash(`已播报到V平台 KOL（帖子 #${res.post_id}）`);
     } else {
       flash(res.message || "该快讯已播报过");
     }
@@ -3821,9 +3821,9 @@ function togglePostTags(btn) {
   btn.textContent = open ? `更多${btn.dataset.n || ""}` : "收起";
 }
 
-// 无外部原文链接的平台（MX/系统 KOL）「查看原文」弹窗展示入库时保存的原始消息：
-// MX = 推送解密后的原始 JSON；系统 KOL = webhook 入站原始 payload（posts.detail）
-const RAW_MODAL_LABELS = { mx: "MX", system: "系统 KOL" };
+// 无外部原文链接的平台（MX/V平台 KOL）「查看原文」弹窗展示入库时保存的原始消息：
+// MX = 推送解密后的原始 JSON；V平台 KOL = webhook 入站原始 payload（posts.detail）
+const RAW_MODAL_LABELS = { mx: "MX", system: "V平台 KOL" };
 
 function openRawModal(postId, label) {
   const post = _tlPosts.find((p) => p.id === postId) || _kolPagePosts.find((p) => p.id === postId) || (Array.isArray(window._mxvPosts) ? window._mxvPosts.find((p) => p.id === postId) : null);
@@ -7004,7 +7004,7 @@ async function loadAdminAiAnalysis() {
 	  state.aiDefaultPrompt = defaultPrompt && defaultPrompt.prompt ? defaultPrompt.prompt : "";
 	  state.kols = kols || [];
 	  state.systemKols = systemKols || [];
-	  // 创建 KOL ID 到名称的映射（并入系统 KOL：任务目标账号名显示用）
+	  // 创建 KOL ID 到名称的映射（并入V平台 KOL：任务目标账号名显示用）
 	  state.kolIdToName = {};
 	  for (const k of [...(kols || []), ...(systemKols || [])]) {
 	    state.kolIdToName[k.id] = k.name;
@@ -7146,7 +7146,7 @@ async function openAiTaskModal(taskId = null) {
 	    `;
 	  }).join('');
 		  
-			// 加载 KOL 列表用于选择目标 KOL（仅系统平台；列表口径默认排除 system，须显式按平台取）
+			// 加载 KOL 列表用于选择目标 KOL（仅 V平台：AI 报告通过该平台的账号发布，须显式按平台取）
 			let kolSelectHtml = '<option value="">加载中...</option>';
 			try {
 			  const systemKols = await api("/api/kols?platform=system");
@@ -7154,7 +7154,7 @@ async function openAiTaskModal(taskId = null) {
 			    .map((k) => `<option value="${k.id}" ${task && task.target_kol_id == k.id ? 'selected' : ''}>${escapeHtml(k.name)}</option>`)
 			    .join("");
 			  if (!systemKols.length) {
-			    kolSelectHtml = '<option value="">暂无系统 KOL：请先在「大V管理」批量导入勾选「系统 KOL」创建</option>';
+			    kolSelectHtml = '<option value="">暂无V平台 KOL：请先在「大V管理」批量导入勾选「V平台 KOL」创建</option>';
 			  }
 			} catch {
 			  kolSelectHtml = '<option value="">加载失败，请手动输入 KOL ID</option>';

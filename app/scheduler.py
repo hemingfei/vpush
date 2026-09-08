@@ -747,7 +747,7 @@ AI_TASK_STOP_ALERT_COOLDOWN = 1800
 
 
 def build_system_alert_post(db: DB, title: str, content: str) -> Post | None:
-    """构造系统 KOL「系统通知」的告警帖（必要时自动创建该 KOL），返回 Post。
+    """构造V平台「系统通知」账号的告警帖（必要时自动创建该 KOL），返回 Post。
 
     只负责构造；入库与实时推送由调用方的管线完成（Scheduler.ingest_external_post
     或 api 层的 on_external_post 回调），便于调度器内外复用同一告警形态。
@@ -783,7 +783,7 @@ def build_ai_task_stop_alert(db: DB, task_id: int, reason: str) -> Post | None:
     """构造「AI 分析任务重试耗尽已停用」告警帖；冷却窗口内返回 None 不重复发。
 
     任务在自动重试仍失败后被停用（见 ai_analysis._register_failure），此处通过
-    系统 KOL「系统通知」告知管理员，入库后实时推送给订阅者。
+    V平台 KOL「系统通知」告知管理员，入库后实时推送给订阅者。
     """
     if not _cooldown_ok(db, f"ai_task_stop_alert_{task_id}", AI_TASK_STOP_ALERT_COOLDOWN):
         return None
@@ -2201,7 +2201,7 @@ class Scheduler:
             logger.exception("关闭时个人次要缓冲推送失败")
 
     def ingest_external_post(self, post: Post) -> int | None:
-        """外部来源（系统 KOL webhook）发帖：入库 + 实时推送，返回 post_id（重复为 None）。
+        """外部来源（V平台 KOL webhook）发帖：入库 + 实时推送，返回 post_id（重复为 None）。
 
         与 MX 实时消息同链路：复用免打扰/次要合并缓冲与推送重试队列，
         大V 屏蔽词命中只入库不推送，静默源同样不打推送。
@@ -2285,9 +2285,9 @@ class Scheduler:
             )
 
     def _publish_system_alert_sync(self, title: str, content: str) -> int | None:
-        """（阻塞版）用系统平台账号「系统通知」发布告警：入库 + 实时推送。
+        """（阻塞版）用V平台账号「系统通知」发布告警：入库 + 实时推送。
 
-        与系统 KOL webhook 同链路（ingest_external_post），但无需 token/签名，
+        与V平台 KOL webhook 同链路（ingest_external_post），但无需 token/签名，
         供调度器内部发布 WS 重连失败、TOKEN 过期等运行状态消息。
         """
         post = build_system_alert_post(self.db, title, content)
@@ -2296,7 +2296,7 @@ class Scheduler:
         return self.ingest_external_post(post)
 
     def check_and_broadcast_wscn(self) -> None:
-        """检查快讯缓存中新的重要快讯，转发到已配置的系统 KOL 播报。
+        """检查快讯缓存中新的重要快讯，转发到已配置的V平台 KOL 播报。
 
         由 api.py 的 wscn 后台刷新循环每 TTL 秒调用一次。读 settings 表判断
         是否启用及目标 KOL/score 阈值，用 wscn_broadcast_last_id 跳过已处理条目，
@@ -2312,7 +2312,7 @@ class Scheduler:
             kol = self.db.get_kol(kol_id)
             if not kol or kol["platform"] != "system":
                 logger.warning(
-                    "wscn auto broadcast: 目标 KOL %s 不存在或非系统平台，跳过",
+                    "wscn auto broadcast: 目标 KOL %s 不存在或非V平台，跳过",
                     kol_id,
                 )
                 return
@@ -2378,7 +2378,7 @@ class Scheduler:
             logger.warning("wscn auto broadcast check failed", exc_info=True)
 
     async def _publish_system_alert(self, title: str, content: str):
-        """用系统平台账号「系统通知」发布运行告警（异步入口）。
+        """用V平台账号「系统通知」发布运行告警（异步入口）。
 
         发布失败只记日志，绝不能反过来影响调用方（WS 重连任务等）。
         """
@@ -2392,7 +2392,7 @@ class Scheduler:
             logger.error(f"发布系统告警失败 title={title}", exc_info=True)
 
     async def _alert_ai_task_stopped(self, task_id: int, reason: str) -> None:
-        """AI 分析任务重试耗尽被停用后，经系统 KOL「系统通知」告知。
+        """AI 分析任务重试耗尽被停用后，经V平台 KOL「系统通知」告知。
 
         构造/冷却判定走线程（阻塞 DB），推送复用 ingest_external_post 管线；
         任何异常只记日志，不影响调度主流程。
@@ -2464,7 +2464,7 @@ class Scheduler:
             self._mx_ws_task = None
 
     def publish_mx_error(self, key: str, title: str, content: str):
-        """MX 平台报错统一走系统 KOL「系统通知」发布；同 key 30 分钟节流。
+        """MX 平台报错统一走V平台 KOL「系统通知」发布；同 key 30 分钟节流。
 
         key=token_expired 时同时置熔断标记：在管理员更换 TOKEN 前不再发起
         任何 MX 拉取/连接，避免死 TOKEN 继续打加重风控处罚。
@@ -2855,7 +2855,7 @@ class Scheduler:
             )
 
     def _mx_check_token_age(self):
-        """TOKEN 时效检查：超过 2 天未更换 → 系统 KOL 提醒手动更换（每轮一次）。"""
+        """TOKEN 时效检查：超过 2 天未更换 → V平台 KOL 提醒手动更换（每轮一次）。"""
         now_ts = int(time.time())
         try:
             updated = int(self.db.get_setting("mx_token_updated_at") or 0)

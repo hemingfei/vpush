@@ -19,7 +19,7 @@ const SYSTEM_ICON = `<svg class="pt-icon" viewBox="0 0 24 24" fill="none" stroke
 
 export const PLATFORM_BADGES = {
   "": { label: "全部", shortLabel: "全部", icon: GRID_ICON },
-  system: { label: "系统", shortLabel: "系统", icon: SYSTEM_ICON },
+  system: { label: "V平台", shortLabel: "V", icon: SYSTEM_ICON },
   mx: { label: "MX平台", shortLabel: "MX", icon: MX_ICON },
   xueqiu: { label: "雪球", shortLabel: "雪球", icon: XUEQIU_ICON },
   combination: { label: "雪球组合", shortLabel: "组合", icon: COMBINATION_ICON },

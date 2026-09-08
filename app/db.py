@@ -204,7 +204,7 @@ def days_until_purge(created_at: str | None, n: int, m: int) -> int | None:
     return max(0, int(sec // 86400))
 
 
-# 系统 KOL 的 Webhook 配置列：只通过专用管理端点读写，
+# V平台 KOL 的 Webhook 配置列：只通过专用管理端点读写，
 # 通用查询（get_kol/list_kols 等）一律剥离，避免 token/密钥随接口外泄
 _WEBHOOK_COLUMNS = ("webhook_enabled", "webhook_token", "webhook_secret")
 
@@ -1373,7 +1373,7 @@ class DB:
             self._conn.execute("ALTER TABLE kols ADD COLUMN silent INTEGER NOT NULL DEFAULT 0")
         if "priority" not in cols:
             self._conn.execute("ALTER TABLE kols ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")
-        # 系统 KOL 的入站 Webhook：URL 内嵌 token 鉴权 + 可选飞书同款签名密钥
+        # V平台 KOL 的入站 Webhook：URL 内嵌 token 鉴权 + 可选飞书同款签名密钥
         if "webhook_enabled" not in cols:
             self._conn.execute("ALTER TABLE kols ADD COLUMN webhook_enabled INTEGER NOT NULL DEFAULT 0")
         if "webhook_token" not in cols:
@@ -2377,12 +2377,12 @@ class DB:
     def news_selected_kols(self) -> list[dict]:
         """「实时资讯」栏目勾选的大V明细（id/名称/平台），前端来源筛选下拉用。"""
         return self._rows(
-            "SELECT id, name, platform FROM kols WHERE news_selected = 1 AND enabled = 1 AND platform != 'system' "
+            "SELECT id, name, platform FROM kols WHERE news_selected = 1 AND enabled = 1 "
             "ORDER BY id"
         )
 
     def news_selected_kol_ids(self) -> list[int]:
-        """「实时资讯」栏目勾选的大V：只含启用中的真实大V（系统 KOL 是内部输出通道）。"""
+        """「实时资讯」栏目勾选的大V：只含启用中的大V（V平台与其他平台同口径）。"""
         return [r["id"] for r in self.news_selected_kols()]
 
     def get_kol_by_external(self, platform: str, external_id: str) -> dict | None:
@@ -2408,7 +2408,7 @@ class DB:
         token: str | None = None,
         secret: str | None = None,
     ) -> None:
-        """更新系统 KOL 的 Webhook 配置；secret 落库前按凭据密钥加密。"""
+        """更新V平台 KOL 的 Webhook 配置；secret 落库前按凭据密钥加密。"""
         sets, params = [], []
         if enabled is not None:
             sets.append("webhook_enabled = ?")
@@ -2430,7 +2430,7 @@ class DB:
         return rows[0] if rows else None
 
     def get_kol_webhook_secret(self, kol_id: int) -> str:
-        """取系统 KOL Webhook 签名密钥明文（enc1: 前缀值解密；无密钥时原样返回）。"""
+        """取V平台 KOL Webhook 签名密钥明文（enc1: 前缀值解密；无密钥时原样返回）。"""
         rows = self._rows("SELECT webhook_secret FROM kols WHERE id = ?", (kol_id,))
         if not rows:
             return ""
@@ -2439,7 +2439,7 @@ class DB:
     def recommended_kols(self, user_id: int, limit: int = 4) -> list[dict]:
         """新用户引导推荐：启用且公开的大V，推荐权重优先，其后按订阅人数倒序。
 
-        系统 KOL（内部输出通道）不参与推荐。
+        V平台 KOL 与其他平台同口径，参与推荐。
         """
         return [
             _strip_webhook_fields(r)
@@ -2449,7 +2449,7 @@ class DB:
                 "EXISTS(SELECT 1 FROM subscriptions mine "
                 "       WHERE mine.kol_id = k.id AND mine.user_id = ?) AS subscribed "
                 "FROM kols k LEFT JOIN categories c ON c.id = k.category_id "
-                "WHERE k.enabled = 1 AND k.is_private = 0 AND k.platform != 'system' "
+                "WHERE k.enabled = 1 AND k.is_private = 0 "
                 "ORDER BY k.recommend_weight DESC, subscriber_count DESC, k.id DESC LIMIT ?",
                 (user_id, limit),
             )

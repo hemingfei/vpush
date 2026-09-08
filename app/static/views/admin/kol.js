@@ -110,7 +110,7 @@ export function createAdminKolsView(dependencies) {
         </header>
         <textarea id="ad-batch-lines" class="form-control ak-add-lines" rows="6" placeholder="https://xueqiu.com/u/12345&#10;段永平 https://xueqiu.com/u/12345&#10;https://weibo.com/u/1642591402&#10;https://x.com/elonmusk&#10;https://xueqiu.com/P/ZH123456" aria-label="大V主页链接，每行一个" oninput="adminBatchLinesHint()"></textarea>
         <div class="toolbar ak-add-bar">
-          <label class="muted" for="ad-batch-system"><input type="checkbox" id="ad-batch-system" onchange="adminBatchSystemToggle()"> 系统 KOL（用于 AI 分析）</label>
+          <label class="muted" for="ad-batch-system"><input type="checkbox" id="ad-batch-system" onchange="adminBatchSystemToggle()"> V平台 KOL（用于 AI 分析、Webhook 发帖）</label>
           <select id="ad-batch-category" class="form-control" aria-label="分类"><option value="">未分类</option>${catOptions}</select>
           <button class="btn-normal" id="ad-batch-btn" onclick="adminBatchAddKols()">添加</button>
           <div id="ad-batch-result" class="muted ak-add-result"></div>
@@ -481,7 +481,7 @@ export function createAdminKolsView(dependencies) {
     newsKolRefreshItems();
   }
 
-  // ---- 快讯播报：将重要快讯转发到系统 KOL，订阅者收到推送 ----
+  // ---- 快讯播报：将重要快讯转发到V平台 KOL，订阅者收到推送 ----
   let _wscnBc = { enabled: false, kolId: 0, threshold: 2, systemKols: [] };
 
   function wscnBroadcastPanelHtml() {
@@ -489,7 +489,7 @@ export function createAdminKolsView(dependencies) {
       <section class="section-panel wscn-broadcast-panel" id="wscn-broadcast-panel">
         <header class="section-head">
           <div><h2 class="section-title">快讯播报</h2>
-          <p class="section-meta">将华尔街见闻重要快讯自动播报到指定系统 KOL，订阅该 KOL 的用户收到推送；快讯列表里也可手动单条播报。</p></div>
+          <p class="section-meta">将华尔街见闻重要快讯自动播报到指定V平台 KOL，订阅该 KOL 的用户收到推送；快讯列表里也可手动单条播报。</p></div>
         </header>
         <div class="toolbar" style="flex-wrap:wrap;align-items:center;gap:8px">
           <label class="switch"><input type="checkbox" id="wb-enabled"> 启用自动播报</label>
@@ -534,7 +534,7 @@ export function createAdminKolsView(dependencies) {
     if (th) th.value = _wscnBc.threshold;
     if (!_wscnBc.systemKols.length) {
       const hint = $("#wb-hint");
-      if (hint) hint.textContent = "尚无系统 KOL，请先在上方添加（勾选「系统 KOL」）";
+      if (hint) hint.textContent = "尚无V平台 KOL，请先在上方添加（勾选「V平台 KOL」）";
     }
   }
 
@@ -567,7 +567,7 @@ export function createAdminKolsView(dependencies) {
       return;
     }
     const category = $("#ad-batch-category").value;
-    // 系统 KOL：每行「中文名 外部ID」（空格分隔，中文名可省略），走 AI 分析专用平台
+    // V平台 KOL：每行「中文名 外部ID」（空格分隔，中文名可省略），走 AI 分析专用平台
     const systemMode = $("#ad-batch-system")?.checked;
     const btn = $("#ad-batch-btn");
     if (btn) btn.disabled = true;

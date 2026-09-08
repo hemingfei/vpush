@@ -251,11 +251,12 @@ def test_admin_news_realtime_kols_bulk_set():
     )
     assert resp.status_code == 400 and "大V不存在" in resp.json()["detail"]
     assert db.news_selected_kol_ids() == []
-    # 系统 KOL 拒绝勾选
+    # V平台 KOL 与其他平台同口径，可勾选参与实时资讯
     resp = client.put(
         "/api/admin/news/realtime-kols", headers=admin_headers, json={"ids": [kid_sys]},
     )
-    assert resp.status_code == 400 and "系统 KOL" in resp.json()["detail"]
+    assert resp.status_code == 200
+    assert db.news_selected_kol_ids() == [kid_sys]
     # 普通用户 403、未登录 401
     assert client.put(
         "/api/admin/news/realtime-kols", headers=user_headers_, json={"ids": [kid_a]},
@@ -317,7 +318,6 @@ def test_admin_kols_pagination_and_filters():
     # 分页
     data = client.get("/api/admin/kols?limit=5&offset=0", headers=admin_headers).json()
     assert data["total"] == 13 and len(data["items"]) == 5
-    assert all(k["platform"] != "system" for k in data["items"])  # 系统 KOL（AI 报告）不进管理列表
     assert len(data["ids"]) == 13
     assert set(data["ids"]) >= {item["id"] for item in data["items"]}
     assert all("subscriber_count" in item for item in data["items"])
@@ -340,19 +340,18 @@ def test_admin_kols_pagination_and_filters():
     # 普通用户无权限
     uh = user_headers(client, "adminkols_user")
     assert client.get("/api/admin/kols", headers=uh).status_code == 403
-    # 系统 KOL（AI 分析报告等内部输出通道）已从各列表统一排除，口径与管理列表一致
+    # V平台 KOL 与其他平台同口径：默认列表包含，platform=system 筛选可用
     assert len(client.get("/api/kols", headers=admin_headers).json()) == 13
-    # 系统 KOL 不再默认播种；显式按 platform=system 筛选时接口不排除
-    # （管理页「系统」tab、AI 分析任务选播报账号），管理员在大V管理自建后即可见可选
+    # 系统 KOL 不再默认播种；管理员在大V管理自建后即可见可选
     assert client.get("/api/admin/kols?platform=system", headers=admin_headers).json()["total"] == 0
     kid_sys = db.add_kol("system", "AI 报告", "ai_report_custom")
     sys_admin = client.get("/api/admin/kols?platform=system", headers=admin_headers).json()
     assert sys_admin["total"] == 1 and sys_admin["items"][0]["id"] == kid_sys
     sys_plain = client.get("/api/kols?platform=system", headers=admin_headers).json()
     assert [k["id"] for k in sys_plain] == [kid_sys]
-    # 自建系统 KOL 不进入默认口径（未指定平台的列表仍统一排除）
-    assert client.get("/api/admin/kols", headers=admin_headers).json()["total"] == 13
-    assert len(client.get("/api/kols", headers=admin_headers).json()) == 13
+    # 自建 V平台 KOL 进入默认口径（与其他平台一致，不再排除）
+    assert client.get("/api/admin/kols", headers=admin_headers).json()["total"] == 14
+    assert len(client.get("/api/kols", headers=admin_headers).json()) == 14
 
 
 def test_admin_kols_batch_actions():
@@ -2813,7 +2812,7 @@ def test_catalog_sorted_by_priority_and_activity():
 
 
 def test_catalog_system_platform_tab():
-    """广场「系统」tab：显式 platform=system 返回系统 KOL（普通用户也可见）；全部 tab 与隐藏源口径不变。"""
+    """广场「V平台」tab：显式 platform=system 返回该平台 KOL（普通用户也可见）；「全部」tab 同口径包含；隐藏源口径不变。"""
     client = make_client()
     admin = auth_headers(client)
     user = user_headers(client, "sysplaza_user")
@@ -2824,8 +2823,8 @@ def test_catalog_system_platform_tab():
     sys_cat = client.get("/api/catalog?platform=system", headers=user).json()
     assert [k["id"] for k in sys_cat] == [kid]
     assert [k["id"] for k in client.get("/api/catalog?platform=system", headers=admin).json()] == [kid]
-    # 「全部」tab 仍排除系统 KOL（默认口径）
-    assert kid not in {k["id"] for k in client.get("/api/catalog", headers=user).json()}
+    # 「全部」tab 同口径包含 V平台 KOL（与其他平台一致）
+    assert kid in {k["id"] for k in client.get("/api/catalog", headers=user).json()}
     # 管理员把 system 源设为隐藏 → 显式查询也返回空
     client.put("/api/admin/plaza-sources", headers=admin, json={"visibility": {"system": "hide"}})
     assert client.get("/api/catalog?platform=system", headers=user).json() == []

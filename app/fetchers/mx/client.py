@@ -40,7 +40,7 @@ _TOKEN_EXPIRED_MSG_MARKERS = (
 
 
 class MXTokenExpiredError(RuntimeError):
-    """TOKEN 过期/无效：调用方据此停止重试并通过系统 KOL 告警，绝不能继续打。"""
+    """TOKEN 过期/无效：调用方据此停止重试并通过V平台 KOL 告警，绝不能继续打。"""
 
 
 class MXClient:

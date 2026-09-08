@@ -83,7 +83,7 @@ def test_broadcast_settings_rejects_non_system_kol():
         json={"enabled": True, "kol_id": kid_xq, "score_threshold": 2},
     )
     assert resp.status_code == 400
-    assert "系统 KOL" in resp.json()["detail"]
+    assert "V平台 KOL" in resp.json()["detail"]
 
 
 def test_broadcast_settings_rejects_unknown_kol():
@@ -177,7 +177,7 @@ def test_broadcast_manual_no_config_returns_400():
     item = _wscn_item()
     resp = client.post("/api/admin/wscn-broadcast", headers=headers, json=item)
     assert resp.status_code == 400
-    assert "系统 KOL" in resp.json()["detail"]
+    assert "V平台 KOL" in resp.json()["detail"]
 
 
 def test_broadcast_manual_uses_fallback_title():

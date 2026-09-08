@@ -910,8 +910,8 @@ def test_post_view_original_opens_raw_message_modal():
     assert "escapeHtml(text)" in modal
     assert "closeRawModal()" in modal
     assert "function closeRawModal" in src
-    # 弹窗平台表：MX 与系统 KOL（webhook 入站原始 payload）都走弹窗
-    assert 'RAW_MODAL_LABELS = { mx: "MX", system: "系统 KOL" }' in src
+    # 弹窗平台表：MX 与V平台 KOL（webhook 入站原始 payload）都走弹窗
+    assert 'RAW_MODAL_LABELS = { mx: "MX", system: "V平台 KOL" }' in src
     css = STYLE_CSS.read_text()
     assert ".mx-raw-pre" in css
     assert ".mx-raw-card" in css
@@ -6050,16 +6050,16 @@ import(pathToFileURL({str(html_path)!r})).then(async (m) => {{
 def test_ai_task_modal_targets_system_kols_via_explicit_platform_query():
     """AI 任务目标账号下拉须显式按 platform=system 取数。
 
-    /api/kols 默认口径排除系统 KOL（内部输出通道，e95647b 口径统一），客户端
-    过滤平台拿不到数据；目标下拉显式带 platform=system，大V范围选择器仍用默认
-    /api/kols（真大V）。管理页加载并行拉系统 KOL 供任务目标名称回显。
+    目标账号限定 V平台（AI 报告经该平台账号发布），目标下拉显式带
+    platform=system；大V范围选择器仍用默认 /api/kols。管理页加载并行拉
+    V平台 KOL 供任务目标名称回显。
     """
     src = APP_JS.read_text()
     assert src.count('api("/api/kols?platform=system")') >= 2
-    # 旧写法（从默认列表客户端过滤平台，恒为空）不得回归
+    # 旧写法（从默认列表客户端过滤平台）不得回归
     assert "kols.filter((k) => k.platform === 'system')" not in src
     # 系统 KOL 不再默认播种：无账号时空态给创建引导（大V管理批量导入自建）
-    assert "暂无系统 KOL：请先在「大V管理」批量导入勾选「系统 KOL」创建" in src
+    assert "暂无V平台 KOL：请先在「大V管理」批量导入勾选「V平台 KOL」创建" in src
 
 
 def _back_hook_body() -> str:

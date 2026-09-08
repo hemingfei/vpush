@@ -222,7 +222,7 @@ def _parse_batch_kol_line(line: str, default_platform: str = "") -> tuple[str, s
 
     error 非空时本行失败。只认链接/组合码能识别出的平台（雪球主页/组合/微博/X/
     知识星球/ima）；纯数字 UID 或无法识别的 URL 不再回退默认平台。X 统一存 screen name。
-    例外：default_platform == "system"（系统 KOL 批量导入）时，支持「中文名 外部ID」
+    例外：default_platform == "system"（V平台 KOL 批量导入）时，支持「中文名 外部ID」
     （空格分隔，最后一个字段是外部 ID，中文名可省略）；识别出的链接仍按原平台导入。
     """
     nickname = ""
@@ -242,7 +242,7 @@ def _parse_batch_kol_line(line: str, default_platform: str = "") -> tuple[str, s
             continue
         if token.startswith(("http://", "https://")):
             if default_platform == "system" and not external_id:
-                external_id = token  # 系统 KOL：无法识别的源地址直接作为外部 ID
+                external_id = token  # V平台 KOL：无法识别的源地址直接作为外部 ID
             else:
                 unrecognized = True
             continue
@@ -255,7 +255,7 @@ def _parse_batch_kol_line(line: str, default_platform: str = "") -> tuple[str, s
         nickname = f"{nickname} {token}".strip()
     if not external_id:
         if default_platform == "system":
-            # 系统平台：「中文名 外部ID」按空格拆分，最后一个字段是外部 ID；
+            # V平台：「中文名 外部ID」按空格拆分，最后一个字段是外部 ID；
             # 整行只有一段文本时仍把整行作为外部 ID
             tokens = line.split()
             if len(tokens) >= 2:
@@ -461,7 +461,7 @@ class NewsRealtimeKolsIn(BaseModel):
 
 
 class KolWebhookUpdate(BaseModel):
-    """系统 KOL Webhook 配置更新；secret=None 不修改，""=清除，非空=设置。"""
+    """V平台 KOL Webhook 配置更新；secret=None 不修改，""=清除，非空=设置。"""
 
     enabled: bool | None = None
     secret: str | None = None
@@ -1033,7 +1033,7 @@ _WSCN_REFRESHING: set[str] = set()
 _WSCN_CLIENT: httpx.Client | None = None
 _WSCN_HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
-# 快讯自动播报回调：刷新缓存后由调度器检查新重要快讯并播报到系统 KOL。
+# 快讯自动播报回调：刷新缓存后由调度器检查新重要快讯并播报到V平台 KOL。
 # 在 main.py lifespan 中通过 set_wscn_auto_broadcast 注册；纯 UI 调试模式下为 None。
 _wscn_auto_broadcast_fn: Callable[[], None] | None = None
 
@@ -1223,7 +1223,7 @@ def _prune_window_dict(
             entries.pop(k, None)
 
 
-# ---- 系统 KOL Webhook（入站，飞书自定义机器人风格）----
+# ---- V平台 KOL Webhook（入站，飞书自定义机器人风格）----
 
 WEBHOOK_RATE_LIMIT = 100  # 每 token 每分钟条数上限（对齐飞书自定义机器人）
 WEBHOOK_RATE_WINDOW = 60
@@ -1313,7 +1313,7 @@ def extract_webhook_message(payload: dict) -> tuple[str, str, list[str]]:
 
 
 def _notify_ai_task_stopped(db: DB, task_id: int, reason: str, publish) -> None:
-    """手动运行触发重试耗尽时，经系统 KOL「系统通知」告知（与调度器共用冷却）。
+    """手动运行触发重试耗尽时，经V平台「系统通知」账号告知（与调度器共用冷却）。
 
     publish 是 create_api_router 收到的 on_external_post 回调（入库+实时推送）；
     纯 UI 调试模式（无后台任务）下为 None，跳过推送。
@@ -1468,7 +1468,7 @@ def create_api_router(
     _ts_hosts_raw = (turnstile_hostnames or "").strip()
     # 微博扫码登录会话：qrid -> {client, created_at}
     weibo_qr_sessions: dict[str, dict] = {}
-    # 系统 KOL Webhook 入站限流：每 token 滑动窗口（单实例内存版）
+    # V平台 KOL Webhook 入站限流：每 token 滑动窗口（单实例内存版）
     webhook_rate: dict[str, list[float]] = {}
 
     def _webhook_rate_allow(key: str) -> bool:
@@ -2396,10 +2396,8 @@ def create_api_router(
     def catalog(platform: str | None = None, category_id: int | None = None, user: dict = Depends(get_current_user)):
         if is_plaza_hidden(db, platform):
             return []
-        # 系统 KOL 非真大V：未指定平台（广场「全部」tab）仍排除；显式 platform=system（「系统」tab）时不排除
-        exclude = None if platform == "system" else "system"
-        kols = filter_plaza_kol_rows(db, db.list_kols(platform, category_id, status=1,
-                                                      exclude_platform=exclude))
+        # V平台 KOL（webhook 发帖/快讯播报/告警）与其他平台同口径，不再排除
+        kols = filter_plaza_kol_rows(db, db.list_kols(platform, category_id, status=1))
         if not user["is_admin"]:
             visible = db.visible_kol_ids(user["id"])
             kols = [k for k in kols if k["id"] in visible]
@@ -2594,8 +2592,8 @@ def create_api_router(
 
         栏目语义与时间线互不影响：勾选即对本栏目所有登录用户可见，不受订阅
         与私有大V ACL 白名单限制（后台显式勾选视为公开到本栏目）；拦截/隐藏
-        帖照常过滤，系统 KOL 不参与勾选。since_id 供前端轮询增量；kol_id 供
-        前端「来源」下拉按大V筛选（与勾选集合取交集，越权 id 查不到数据）。
+        帖照常过滤，V平台 KOL 与其他平台一样可勾选。since_id 供前端轮询增量；
+        kol_id 供前端「来源」下拉按大V筛选（与勾选集合取交集，越权 id 查不到数据）。
         """
         selected_kols = db.news_selected_kols()
         kol_ids = [k["id"] for k in selected_kols]
@@ -2744,9 +2742,6 @@ def create_api_router(
             unknown = [i for i in ids if i not in kols]
             if unknown:
                 raise HTTPException(status_code=400, detail=f"大V不存在: {unknown[:5]}")
-            system_ids = [i for i in ids if kols[i]["platform"] == "system"]
-            if system_ids:
-                raise HTTPException(status_code=400, detail="系统 KOL 不参与实时资讯")
         db.replace_news_selected_kols(ids)
         _audit(admin, "set_news_realtime_kols", str(len(ids)), f"ids={ids[:20]}")
         return {"ok": True, "count": len(ids), "ids": ids}
@@ -2992,10 +2987,10 @@ def create_api_router(
             data = {**data, "items": newer}
         return data
 
-    # ---- 快讯播报：将重要快讯转发到系统 KOL，订阅者收到推送 ----
+    # ---- 快讯播报：将重要快讯转发到V平台 KOL，订阅者收到推送 ----
 
     def _broadcast_wscn_item(item: dict, kol_id: int, kol_name: str) -> dict:
-        """将单条快讯 item 播报到指定系统 KOL：构造 Post → 入库 + 推送。
+        """将单条快讯 item 播报到指定V平台 KOL：构造 Post → 入库 + 推送。
 
         external_id=wscn_flash_{id} 天然去重（UNIQUE(platform, external_id)），
         重复入库返回 broadcast=False。
@@ -3036,7 +3031,7 @@ def create_api_router(
 
     @router.get("/admin/wscn-broadcast/settings")
     def wscn_broadcast_settings(admin: dict = Depends(require_admin)):
-        """获取快讯播报配置及可选系统 KOL 列表。"""
+        """获取快讯播报配置及可选V平台 KOL 列表。"""
         enabled = db.get_setting("wscn_broadcast_enabled") == "1"
         kol_id_raw = db.get_setting("wscn_broadcast_kol_id") or ""
         kol_id = int(kol_id_raw) if kol_id_raw.isdigit() else 0
@@ -3073,7 +3068,7 @@ def create_api_router(
                     raise HTTPException(status_code=400, detail="目标 KOL 不存在")
                 if kol["platform"] != "system":
                     raise HTTPException(
-                        status_code=400, detail="播报目标必须是系统 KOL"
+                        status_code=400, detail="播报目标必须是V平台 KOL"
                     )
                 values["wscn_broadcast_kol_id"] = str(body.kol_id)
         if body.score_threshold is not None:
@@ -3087,14 +3082,14 @@ def create_api_router(
 
     @router.post("/admin/wscn-broadcast")
     def broadcast_wscn_item(body: WscnBroadcastItemIn, admin: dict = Depends(require_admin)):
-        """手动播报单条快讯到已配置的系统 KOL。"""
+        """手动播报单条快讯到已配置的V平台 KOL。"""
         kol_id_raw = db.get_setting("wscn_broadcast_kol_id") or ""
         kol_id = int(kol_id_raw) if kol_id_raw.isdigit() else 0
         if kol_id <= 0:
-            raise HTTPException(status_code=400, detail="未配置播报目标系统 KOL")
+            raise HTTPException(status_code=400, detail="未配置播报目标V平台 KOL")
         kol = db.get_kol(kol_id)
         if not kol or kol["platform"] != "system":
-            raise HTTPException(status_code=400, detail="播报目标系统 KOL 已失效")
+            raise HTTPException(status_code=400, detail="播报目标V平台 KOL 已失效")
         item = {
             "id": body.id,
             "score": body.score,
@@ -5509,7 +5504,7 @@ def create_api_router(
                 logger.info(f"完成拉取 MX 房间 {room_id} 最新消息：共 {len(posts)} 条，新增 {new_count} 条")
             except Exception as e:
                 logger.error(f"拉取 MX 房间 {room_id} 消息失败：{e}", exc_info=True)
-                # MX 报错统一走系统 KOL「系统通知」发布；TOKEN 过期同时触发熔断
+                # MX 报错统一走V平台「系统通知」发布；TOKEN 过期同时触发熔断
                 if on_mx_alert is not None:
                     try:
                         key = (
@@ -5659,7 +5654,7 @@ def create_api_router(
         return db.get_ai_task(task_id)
 
     def _ai_task_run_core(task_id: int, admin: dict) -> dict:
-        """两组「立即运行」端点的同一份实现：后台线程跑任务，重试耗尽经系统 KOL 告知。
+        """两组「立即运行」端点的同一份实现：后台线程跑任务，重试耗尽经V平台 KOL 告知。
 
         与调度器共用 try_begin_ai_task_run 互斥：任务已在跑（调度中或上次手动触发
         未结束）时拒绝，防双跑双报告（报告 external_id 带秒级时间戳，UNIQUE 兜不住）。
@@ -5677,7 +5672,7 @@ def create_api_router(
             try:
                 result = ai_analysis.run_analysis_task(task_id, db)
                 logger.info(f"===== AI 任务 {task_id} 运行完成: {result} =====")
-                # 自动重试耗尽：与调度器同策略，经系统 KOL「系统通知」告知
+                # 自动重试耗尽：与调度器同策略，经V平台「系统通知」账号告知
                 if isinstance(result, dict) and result.get("retries_exhausted"):
                     _notify_ai_task_stopped(
                         db, task_id, str(result.get("message") or ""), on_external_post
@@ -5803,9 +5798,7 @@ def create_api_router(
         if status is not None and status not in (0, 1):
             raise HTTPException(status_code=400, detail="status 需为 0 或 1")
         q = (q or "").strip() or None
-        # 系统 KOL（AI 分析报告输出账号）不是真大V，管理列表/计数统一排除；
-        # 显式按 platform=system 筛选时不排除（管理页「系统」tab、AI 任务选目标账号）
-        exclude = None if platform == "system" else "system"
+        # V平台 KOL（webhook 发帖/快讯播报/告警）与其他平台同口径，不再排除
         items = db.list_kols(
             platform=platform,
             category_id=category_id,
@@ -5815,17 +5808,14 @@ def create_api_router(
             offset=max(offset, 0),
             with_subscriber_count=True,
             with_blocked_count=True,
-            exclude_platform=exclude,
         )
         for item in items:
             # 库里存 JSON 文本，接口统一出数组（前端直接渲染）
             item["block_keywords"] = parse_block_keywords(item.get("block_keywords"))
         return {
-            "total": db.count_kols(platform=platform, category_id=category_id, q=q, status=status,
-                                   exclude_platform=exclude),
+            "total": db.count_kols(platform=platform, category_id=category_id, q=q, status=status),
             "items": items,
-            "ids": db.list_kol_ids(platform=platform, category_id=category_id, q=q, status=status,
-                                   exclude_platform=exclude),
+            "ids": db.list_kol_ids(platform=platform, category_id=category_id, q=q, status=status),
         }
 
     @router.post("/admin/kols/batch", dependencies=[Depends(require_admin)])
@@ -5855,10 +5845,8 @@ def create_api_router(
 
     @router.get("/kols", dependencies=[Depends(require_admin)])
     def list_kols(platform: str | None = None, category_id: int | None = None):
-        # 系统 KOL（AI 分析报告等内部输出通道）不是真大V：各列表/统计统一排除；
-        # 显式按 platform=system 筛选时不排除（AI 分析任务选目标账号）
-        exclude = None if platform == "system" else "system"
-        return db.list_kols(platform, category_id, exclude_platform=exclude)
+        # V平台 KOL（webhook 发帖/快讯播报/告警）与其他平台同口径，不再排除
+        return db.list_kols(platform, category_id)
 
     @router.post("/kols", dependencies=[Depends(require_admin)])
     def add_kol(body: KolIn, admin: dict = Depends(require_admin)):
@@ -5897,7 +5885,7 @@ def create_api_router(
             raise HTTPException(status_code=400, detail="昵称与外部ID不能为空")
         if not name:
             if body.platform == "system":
-                # 系统平台：使用 external_id 作为默认名称
+                # V平台：使用 external_id 作为默认名称
                 name = external_id
             elif body.platform == "combination":
                 # 没填昵称时自动查组合名称（失败退回占位名）
@@ -5960,12 +5948,12 @@ def create_api_router(
 
         按链接自动识别平台（雪球主页/雪球组合页/微博主页/X主页/知识星球）。
         纯 UID 等无法识别的行失败，不再使用默认平台；
-        body.platform == "system" 时走系统 KOL 导入，每行「中文名 外部ID」（空格分隔，
+        body.platform == "system" 时走V平台 KOL 导入，每行「中文名 外部ID」（空格分隔，
         中文名可省略，仅一段文本时整行作为外部 ID）。
         """
         if body.category_id is not None and db.get_category(body.category_id) is None:
             raise HTTPException(status_code=400, detail="分类不存在")
-        # 平台只从每行链接识别；仅系统 KOL 导入沿用请求里显式指定的 system 平台
+        # 平台只从每行链接识别；仅V平台 KOL 导入沿用请求里显式指定的 system 平台
         default_platform = body.platform if body.platform == "system" else ""
         results = []
         for raw in body.lines.splitlines():
@@ -5979,7 +5967,7 @@ def create_api_router(
             name = nickname or f"{platform}_{external_id}"
             avatar_url = ""
             if platform == "system":
-                # 系统平台：不尝试拉取头像和昵称
+                # V平台：不尝试拉取头像和昵称
                 pass
             elif not nickname and platform == "xueqiu" and external_id.isdigit():
                 # 没填昵称时自动查雪球昵称与头像（失败则退回 xueqiu_uid）
@@ -6045,14 +6033,14 @@ def create_api_router(
             "failed": [r for r in results if not r["ok"]],
         }
 
-    # ---- 系统 KOL Webhook（外部调用让该 KOL 发言，参考飞书自定义机器人）----
+    # ---- V平台 KOL Webhook（外部调用让该 KOL 发言，参考飞书自定义机器人）----
 
     def _require_system_kol_for_webhook(kol_id: int) -> dict:
         kol = db.get_kol_webhook_config(kol_id)
         if not kol:
             raise HTTPException(status_code=404, detail="KOL 不存在")
         if kol["platform"] != "system":
-            raise HTTPException(status_code=400, detail="仅系统 KOL 支持 Webhook")
+            raise HTTPException(status_code=400, detail="仅V平台 KOL 支持 Webhook")
         return kol
 
     def _webhook_info(kol: dict) -> dict:
@@ -6068,7 +6056,7 @@ def create_api_router(
 
     @router.get("/admin/kols/{kol_id}/webhook", dependencies=[Depends(require_admin)])
     def get_kol_webhook(kol_id: int, admin: dict = Depends(require_admin)):
-        """查看系统 KOL 的 Webhook 配置（token 仅管理员可见）。"""
+        """查看V平台 KOL 的 Webhook 配置（token 仅管理员可见）。"""
         del admin
         return _webhook_info(_require_system_kol_for_webhook(kol_id))
 
@@ -6100,7 +6088,7 @@ def create_api_router(
 
     @router.post("/kol-webhook/{token}")
     async def kol_webhook_incoming(token: str, request: Request):
-        """入站 Webhook：外部调用让系统 KOL「发言」，无需登录态，token 即凭据。
+        """入站 Webhook：外部调用让V平台 KOL「发言」，无需登录态，token 即凭据。
 
         兼容飞书自定义机器人请求体（msg_type=text/post，可选 timestamp+sign 签名）
         与简化格式 {"text": "...", "title": "...", "images": [...]}。
@@ -7428,8 +7416,7 @@ def create_api_router(
 
     @router.get("/stats", dependencies=[Depends(require_admin)])
     def stats():
-        kols = [k for k in db.list_kols(with_subscriber_count=True)
-                if k["platform"] != "system"]  # 系统 KOL（AI 报告输出）不计入大V统计
+        kols = db.list_kols(with_subscriber_count=True)  # V平台 KOL 与其他平台一样计入大V统计
         # 「正常」状态有新鲜度窗口：source_ok 太久没更新视为近期无成功，
         # 避免平台曾成功过一次就永远显示正常（连续失败被掩盖）。
         # 窗口取 2× 全局轮询间隔，至少 5 分钟；无启用大V的平台不判定。

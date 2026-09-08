@@ -111,9 +111,9 @@ def normalize_kol_request_input(platform: str, raw: str) -> tuple[str, str | Non
             return text.lstrip("@"), None
         return "", "无法识别的 X 用户名，请使用 x.com/<用户名> 链接或 @用户名"
     if platform == "system":
-        # 系统平台：接受任意非空字符串作为 external_id
+        # V平台：接受任意非空字符串作为 external_id
         if not text:
-            return "", "请输入系统 KOL 的外部 ID"
+            return "", "请输入V平台 KOL 的外部 ID"
         return text, None
     return "", f"不支持的平台: {platform}"
 

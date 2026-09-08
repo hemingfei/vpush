@@ -178,8 +178,8 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     db.merge_default_tag_vocabulary()
     db.merge_default_stock_aliases()
 
-    # AI 分析报告的系统 KOL 不再默认创建：播报目标由管理员在大V管理里自建
-    # （批量导入勾选「系统 KOL」或单个添加 platform=system），建任务时自行选择。
+    # AI 分析报告的V平台 KOL 不再默认创建：播报目标由管理员在大V管理里自建
+    # （批量导入勾选「V平台 KOL」或单个添加 platform=system），建任务时自行选择。
 
     secret = auth.get_or_create_secret(db, config.web.token_secret)
 
@@ -362,11 +362,11 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
             on_mx_ws_control=scheduler.mx_ws_control if background_workers_enabled() else None,
             # MX 设置页「登录」按钮：开窗式完整启动序列 + 房间同步 + 连接 WS
             on_mx_session_login=scheduler.mx_manual_login if background_workers_enabled() else None,
-            # MX 报错统一走系统 KOL「系统通知」发布（含 TOKEN 过期熔断标记）
+            # MX 报错统一走V平台 KOL「系统通知」发布（含 TOKEN 过期熔断标记）
             on_mx_alert=scheduler.publish_mx_error if background_workers_enabled() else None,
             feishu_documents=feishu_documents,
             news_service=news_service,
-            # 系统 KOL Webhook 来帖的入库+推送回调（纯 UI 调试模式下只入库不推送）
+            # V平台 KOL Webhook 来帖的入库+推送回调（纯 UI 调试模式下只入库不推送）
             on_external_post=scheduler.ingest_external_post if background_workers_enabled() else None,
         )
     )
