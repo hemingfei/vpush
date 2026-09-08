@@ -3467,6 +3467,17 @@ def test_timeline_new_badge_shows_posted_not_count():
     assert "pollFeedUpdates()" in vis
 
 
+def test_live_feed_auto_consumes_pending_only_at_top():
+    """快讯增量在顶部自动合并，深读时必须保留气泡供手动查看。"""
+    poll = _fn_body("pollFeedUpdates")
+    auto = _fn_body("autoConsumeLivePending")
+
+    assert "autoConsumeLivePending(seq)" in poll
+    assert "isLiveTimeline()" in auto
+    assert "window.scrollY > 240" in auto
+    assert "refreshTimeline()" in auto
+
+
 def test_timeline_live_source_is_platform_pill():
     """快讯作为平台条第二项：移除独立动态按钮，保留快讯模式与平台条。"""
     render = _fn_body("renderTimeline")

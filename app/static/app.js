@@ -2236,6 +2236,7 @@ async function pollFeedUpdates() {
     }
     $("#tl-new-badge")?.classList.add("show");
     $("#tl-feed-panel")?.classList.add("has-new");
+    if (live) await autoConsumeLivePending(seq);
   } catch { /* 轮询失败静默 */ }
 }
 
@@ -2259,6 +2260,14 @@ function tlBadgeAvatarsHtml(posts, max = 3) {
 // 深读 restored 位置超过阈值则不打扰，保留胶囊供手动查看
 async function autoConsumeTimelinePending(seq) {
   if (!routeStillActive(seq) || isLiveTimeline()) return;
+  if (!$("#tl-feed-panel") || !feedPendingNew().length) return;
+  if (window.scrollY > 240) return;
+  await refreshTimeline();
+}
+
+// 快讯在最新位置时自动并入；用户深读旧内容时保留新快讯提示。
+async function autoConsumeLivePending(seq) {
+  if (!routeStillActive(seq) || !isLiveTimeline()) return;
   if (!$("#tl-feed-panel") || !feedPendingNew().length) return;
   if (window.scrollY > 240) return;
   await refreshTimeline();
