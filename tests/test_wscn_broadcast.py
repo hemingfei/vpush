@@ -130,7 +130,7 @@ def test_broadcast_manual_creates_post():
     assert len(rows) == 1
     post = rows[0]
     assert post["kol_id"] == kid
-    assert post["title"] == item["highlight_title"]
+    assert post["title"] == f"【重要快讯】{item['highlight_title']}"
     assert post["content"] == item["body"]
     assert post["url"] == item["url"]
     assert post["post_type"] == "wscn_flash"
@@ -181,7 +181,7 @@ def test_broadcast_manual_no_config_returns_400():
 
 
 def test_broadcast_manual_uses_fallback_title():
-    """POST broadcast：无 highlight_title 时用「重要快讯」做标题。"""
+    """POST broadcast：无 highlight_title 时标题为「【重要快讯】」。"""
     client = make_client("wscn-bc-fallback.db")
     db = client.app.state.db
     headers = auth_headers(client)
@@ -201,7 +201,7 @@ def test_broadcast_manual_uses_fallback_title():
         "SELECT title FROM posts WHERE platform = 'system' AND external_id = ?",
         (f"wscn_flash_{item['id']}",),
     )
-    assert rows[0]["title"] == "重要快讯"
+    assert rows[0]["title"] == "【重要快讯】"
 
 
 # ---- 权限 ----
@@ -323,3 +323,61 @@ def test_auto_broadcast_idempotent_on_recheck(monkeypatch):
         "SELECT COUNT(*) as c FROM posts WHERE platform = 'system' AND external_id = 'wscn_flash_6001'"
     )
     assert rows[0]["c"] == 1  # 仍然只有一条
+
+
+# ---- 标题前缀：score>=2 为【重要快讯】，score<2 为【快讯】 ----
+
+
+def test_broadcast_manual_score1_uses_plain_title():
+    """POST broadcast：score<2 的快讯标题用「【快讯】」前缀。"""
+    client = make_client("wscn-bc-plain.db")
+    db = client.app.state.db
+    headers = auth_headers(client)
+    kid = _make_system_kol(db)
+    client.put(
+        "/api/admin/wscn-broadcast/settings",
+        headers=headers,
+        json={"enabled": True, "kol_id": kid, "score_threshold": 2},
+    )
+
+    item = _wscn_item(item_id=3101, score=1, title="普通消息")
+    resp = client.post("/api/admin/wscn-broadcast", headers=headers, json=item)
+    assert resp.status_code == 200
+    assert resp.json()["broadcast"] is True
+
+    rows = db._rows(
+        "SELECT title FROM posts WHERE platform = 'system' AND external_id = ?",
+        (f"wscn_flash_{item['id']}",),
+    )
+    assert rows[0]["title"] == "【快讯】普通消息"
+
+
+def test_auto_broadcast_threshold1_titles(monkeypatch):
+    """threshold=1 全量播报：score>=2 标「【重要快讯】」，score<2 标「【快讯】」。"""
+    client = make_client("wscn-bc-auto-t1.db")
+    db = client.app.state.db
+    kid = _make_system_kol(db)
+    db.set_setting("wscn_broadcast_enabled", "1")
+    db.set_setting("wscn_broadcast_kol_id", str(kid))
+    db.set_setting("wscn_broadcast_score_threshold", "1")
+    db.set_setting("wscn_broadcast_last_id", "0")
+
+    fake_data = {
+        "items": [
+            _wscn_item(item_id=7001, score=1, title="普通"),
+            _wscn_item(item_id=7002, score=3, title="很重要"),
+        ],
+        "next_cursor": "",
+        "polling_cursor": 7002,
+    }
+    monkeypatch.setattr("app.api._fetch_wscn_lives", lambda **kw: fake_data)
+
+    scheduler = client.app.state.scheduler
+    scheduler.check_and_broadcast_wscn()
+
+    rows = db._rows(
+        "SELECT external_id, title FROM posts WHERE platform = 'system' AND post_type = 'wscn_flash' ORDER BY external_id"
+    )
+    titles = {r["external_id"]: r["title"] for r in rows}
+    assert titles["wscn_flash_7001"] == "【快讯】普通"
+    assert titles["wscn_flash_7002"] == "【重要快讯】很重要"

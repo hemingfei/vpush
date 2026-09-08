@@ -2339,7 +2339,9 @@ class Scheduler:
             broadcast_count = 0
             for item in candidates:
                 item_id = int(item["id"])
-                title = (item.get("highlight_title") or "").strip() or "重要快讯"
+                highlight = (item.get("highlight_title") or "").strip()
+                prefix = "【重要快讯】" if int(item.get("score") or 1) >= 2 else "【快讯】"
+                title = f"{prefix}{highlight}" if highlight else prefix
                 content = item.get("body") or ""
                 url = (item.get("url") or "").strip()
                 raw_ts = item.get("published_at") or ""
