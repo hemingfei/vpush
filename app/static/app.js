@@ -2234,9 +2234,13 @@ async function pollFeedUpdates() {
       const avatars = $("#tl-new-avatars");
       if (avatars) avatars.innerHTML = tlBadgeAvatarsHtml(pendingNew);
     }
+    if (live) {
+      await autoConsumeLivePending(seq);
+      // 顶部已并入或正在 refreshTimeline，都不要出胶囊，避免闪一下
+      if (!feedPendingNew().length || _tlRefreshing) return;
+    }
     $("#tl-new-badge")?.classList.add("show");
     $("#tl-feed-panel")?.classList.add("has-new");
-    if (live) await autoConsumeLivePending(seq);
   } catch { /* 轮询失败静默 */ }
 }
 

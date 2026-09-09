@@ -3473,6 +3473,8 @@ def test_live_feed_auto_consumes_pending_only_at_top():
     auto = _fn_body("autoConsumeLivePending")
 
     assert "autoConsumeLivePending(seq)" in poll
+    assert poll.index("autoConsumeLivePending(seq)") < poll.index('classList.add("show")')
+    assert "_tlRefreshing" in poll
     assert "isLiveTimeline()" in auto
     assert "window.scrollY > 240" in auto
     assert "refreshTimeline()" in auto
