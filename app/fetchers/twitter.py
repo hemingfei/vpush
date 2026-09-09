@@ -199,15 +199,53 @@ def _visibility_tweet(tweet: dict) -> dict:
     return tweet
 
 
+def _unwrap_tweet_result(node) -> dict | None:
+    if not isinstance(node, dict):
+        return None
+    if isinstance(node.get("result"), dict):
+        node = node["result"]
+    if not isinstance(node, dict):
+        return None
+    return _visibility_tweet(node)
+
+
 def _retweeted_tweet(tweet: dict) -> dict | None:
     legacy = tweet.get("legacy") or {}
-    nested = (
-        (legacy.get("retweeted_status_result") or {}).get("result")
-        or (tweet.get("retweeted_status_result") or {}).get("result")
+    return _unwrap_tweet_result(
+        legacy.get("retweeted_status_result") or tweet.get("retweeted_status_result")
     )
-    if isinstance(nested, dict):
-        return _visibility_tweet(nested)
-    return None
+
+
+def _quoted_tweet(tweet: dict) -> dict | None:
+    legacy = tweet.get("legacy") or {}
+    return _unwrap_tweet_result(
+        tweet.get("quoted_status_result")
+        or legacy.get("quoted_status_result")
+        or tweet.get("quoted_status")
+        or legacy.get("quoted_status")
+    )
+
+
+def _with_quoted_content(text: str, images: list[str], tweet: dict) -> tuple[str, list[str]]:
+    quoted = _quoted_tweet(tweet)
+    if not quoted:
+        return text, images
+    q_text, q_images, q_video = _tweet_text_and_images(quoted)
+    if not q_text:
+        if q_images:
+            q_text = "图片"
+        elif q_video:
+            q_text = "视频"
+        else:
+            return text, images
+    screen = _tweet_screen_name(quoted)
+    label = f"RT @{screen}:" if screen else "RT:"
+    text = f"{text}\n\n{label}\n{q_text}" if text else f"{label}\n{q_text}"
+    out = list(images)
+    for url in q_images:
+        if url not in out and len(out) < 4:
+            out.append(url)
+    return text, out
 
 
 def _tweet_screen_name(tweet: dict) -> str:
@@ -538,6 +576,7 @@ class TwitterFetcher(Fetcher):
                 screen = _tweet_screen_name(original)
                 if screen and not text.startswith(f"RT @{screen}"):
                     text = f"RT @{screen}:\n{text}" if text else f"RT @{screen}"
+            text, images = _with_quoted_content(text, images, source)
             if not text:
                 if images:
                     text = "图片"

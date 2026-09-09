@@ -972,3 +972,135 @@ def test_twitter_fetch_unwraps_retweet_original(monkeypatch):
     assert "Absolutely, 100%" in posts[0].content
     assert posts[0].content.startswith("RT @implausibleblog:")
     assert posts[0].images == ["https://pbs.twimg.com/rt.jpg"]
+
+
+def test_with_quoted_content_appends_quoted_tweet():
+    from app.fetchers.twitter import _with_quoted_content
+
+    tweet = {
+        "quoted_status_result": {
+            "result": {
+                "legacy": {"full_text": "I resigned from Anthropic today."},
+                "core": {
+                    "user_results": {
+                        "result": {"legacy": {"screen_name": "hilbertspaess"}}
+                    }
+                },
+            }
+        }
+    }
+    text, images = _with_quoted_content(
+        "This will be one of the most important reads of your life", [], tweet
+    )
+    assert "most important reads" in text
+    assert "I resigned from Anthropic today." in text
+    assert "RT @hilbertspaess:" in text
+    assert images == []
+
+
+def test_twitter_fetch_retweet_of_quote_includes_quoted(monkeypatch):
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
+
+    def handler(request):
+        if "UserByScreenName" in str(request.url):
+            return httpx.Response(200, json=_user_response())
+        if "UserTweets" in str(request.url):
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "user": {
+                            "result": {
+                                "__typename": "User",
+                                "timeline": {
+                                    "timeline": {
+                                        "instructions": [
+                                            {
+                                                "type": "TimelineAddEntries",
+                                                "entries": [
+                                                    {
+                                                        "content": {
+                                                            "__typename": "TimelineTimelineItem",
+                                                            "itemContent": {
+                                                                "tweet_results": {
+                                                                    "result": {
+                                                                        "rest_id": "2097512691648671852",
+                                                                        "legacy": {
+                                                                            "full_text": "RT @LeopoldTracker_: This will be one of the most important reads of your life",
+                                                                            "created_at": "Wed Sep 09 01:10:00 +0000 2026",
+                                                                            "id_str": "2097512691648671852",
+                                                                            "retweeted_status_result": {
+                                                                                "result": {
+                                                                                    "rest_id": "2097490197457871015",
+                                                                                    "legacy": {
+                                                                                        "full_text": "This will be one of the most important reads of your life",
+                                                                                        "created_at": "Wed Sep 09 01:00:00 +0000 2026",
+                                                                                    },
+                                                                                    "core": {
+                                                                                        "user_results": {
+                                                                                            "result": {
+                                                                                                "legacy": {
+                                                                                                    "screen_name": "LeopoldTracker_"
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                    },
+                                                                                    "quoted_status_result": {
+                                                                                        "result": {
+                                                                                            "rest_id": "2097476196791709843",
+                                                                                            "legacy": {
+                                                                                                "full_text": (
+                                                                                                    "I resigned from Anthropic today. "
+                                                                                                    "Neither company is acting responsibly."
+                                                                                                ),
+                                                                                                "extended_entities": {
+                                                                                                    "media": [
+                                                                                                        {
+                                                                                                            "type": "photo",
+                                                                                                            "media_url_https": "https://pbs.twimg.com/q.jpg",
+                                                                                                        }
+                                                                                                    ]
+                                                                                                },
+                                                                                            },
+                                                                                            "core": {
+                                                                                                "user_results": {
+                                                                                                    "result": {
+                                                                                                        "legacy": {
+                                                                                                            "screen_name": "hilbertspaess"
+                                                                                                        }
+                                                                                                    }
+                                                                                                }
+                                                                                            },
+                                                                                        }
+                                                                                    },
+                                                                                }
+                                                                            },
+                                                                        },
+                                                                    }
+                                                                }
+                                                            },
+                                                        }
+                                                    }
+                                                ],
+                                            }
+                                        ]
+                                    }
+                                },
+                            }
+                        }
+                    }
+                },
+            )
+        return httpx.Response(404)
+
+    db = DB(":memory:")
+    kid = db.add_kol("twitter", "burrytracker", "https://x.com/burrytracker")
+    fetcher = _make_fetcher(handler, db)
+    posts = fetcher.fetch(db.get_kol(kid))
+    assert len(posts) == 1
+    assert posts[0].post_type == "retweet"
+    assert posts[0].content.startswith("RT @LeopoldTracker_:")
+    assert "most important reads" in posts[0].content
+    assert "I resigned from Anthropic today." in posts[0].content
+    assert "RT @hilbertspaess:" in posts[0].content
+    assert posts[0].images == ["https://pbs.twimg.com/q.jpg"]
