@@ -171,12 +171,6 @@ def save_pdf(
     return {"size": size, "md5": digest.hexdigest(), "path": str(destination)}
 
 
-class PullError(Exception):
-    def __init__(self, status: int, message: str):
-        super().__init__(message)
-        self.status = status
-
-
 def _error_status(exc: Exception) -> int:
     text = str(exc)
     if isinstance(exc, PermissionError):

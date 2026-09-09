@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any
 
 from .cicc_collector import from_env
 from .logging_setup import redact_secrets
@@ -147,4 +146,3 @@ def maybe_check_cicc(db, notifiers: list, notifiers_config=None, *, now: int | N
             if key != "__incr__":
                 state.setdefault("alerts", {})[key] = now
     db.set_setting(ALERT_STATE_KEY, json.dumps(state))
-

@@ -25,7 +25,6 @@ from .fetchers.base import (
     Post,
     is_collapsed_translation,
     is_stale_backfill,
-    parse_published_at,
     twitter_translate_enabled,
     with_twitter_display,
 )
