@@ -97,7 +97,7 @@ def test_slow_query_warning_logged(tmp_path, monkeypatch):
 def test_downloaded_at_index_migration_applied(tmp_path):
     db = DB(tmp_path / "idx.sqlite")
     try:
-        assert db._rows("PRAGMA user_version")[0]["user_version"] == 2026090601
+        assert db._rows("PRAGMA user_version")[0]["user_version"] == db_module.SCHEMA_MIGRATIONS[-1][0]
         names = {row["name"] for row in db._rows("PRAGMA index_list(ima_document_index)")}
         assert "idx_ima_doc_downloaded" in names
         plan = db._read_only_rows(
