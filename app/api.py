@@ -755,8 +755,8 @@ IMAGE_PROXY_HOSTS = frozenset({
     "static-assets-1.truthsocial.com",
 })
 # <img src> 不能带 Authorization，所以此接口保持匿名；按 IP 卡住带宽放大。
-# 180/分钟覆盖快速滚时间线（懒加载 + 每帖最多 4 图），公司 NAT 也留余量。
-IMAGE_PROXY_MAX_PER_WINDOW = 180
+# 60/分钟：图床正常时几乎打不满；图床故障时一页 100 帖约 46 张，仍有余量。
+IMAGE_PROXY_MAX_PER_WINDOW = 60
 IMAGE_PROXY_WINDOW_SECONDS = 60
 
 
