@@ -918,6 +918,25 @@ def test_twitter_display_pref_swaps_stored_src():
     recovered = with_twitter_display_row(outer_only, True)
     assert recovered["content"] == outer_only["content_src"]
 
+    long_zh = {
+        "platform": "twitter",
+        "title": "我在这期播客中发现特别有趣的是，网络威胁将持续支撑对前沿模型的需求这一论点。",
+        "content": (
+            "我在这期播客中发现特别有趣的是，网络威胁将持续支撑对前沿模型的需求这一论点。\n\n"
+            "为了防御那些仅比前沿低一级的攻击，你需要一个前沿模型。"
+        ),
+        "title_src": "What I found especially interesting in this podcast",
+        "content_src": (
+            "What I found especially interesting in this podcast was the argument "
+            "that cyber threats will sustain demand for frontier models.\n\n"
+            "RT @quoted:\n"
+            + ("Frontier model investment must continue. " * 40)
+        ),
+    }
+    kept = with_twitter_display_row(long_zh, True)
+    assert kept["content"] == long_zh["content"]
+    assert has_stored_translation(long_zh) is True
+
 
 def test_twitter_fetch_unwraps_retweet_original(monkeypatch):
     monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")

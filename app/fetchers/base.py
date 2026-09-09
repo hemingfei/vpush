@@ -68,8 +68,8 @@ def is_collapsed_translation(translated: str, source: str) -> bool:
         return True
     author = quoted_author_text(original).strip()
     if author != original and len(original) >= 40:
-        # 「喜欢这个。」≈ 博主那句，引用没进译文
-        return len(text) <= max(len(author) + 8, 16)
+        # 只拦「喜欢这个。」这种外层短句；不能用英文博主长度当上限（Jukan 135字译文也会被回退）
+        return len(text) <= min(max(len(author) + 8, 16), 24)
     return False
 
 
