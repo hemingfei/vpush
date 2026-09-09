@@ -3144,6 +3144,29 @@ def test_translate_text_skips_already_chinese():
     assert calls == []
 
 
+def test_translate_text_skips_chinese_author_with_english_quote():
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        return httpx.Response(500)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    src = (
+        "Tibo说Astra需求太猛，可能暂停Pro新订阅。\n\n"
+        "我低头一看：今天才到16:07，四个Codex已经跑了4.94亿token。\n\n"
+        "兄弟，算力是怎么没的，我好像有点数了。\n\n"
+        "RT @thsottiaux:\n"
+        "Demand for Astra is really unprecedented. We're pulling all the levers "
+        "possible to sustain the demand, but I've not seen anything like it until now "
+        "and we went through very steep growth before. Priority will always be to keep "
+        "excellent service for existing users, but we might have to pause new Pro "
+        "subscriptions for a bit if this continues."
+    )
+    assert translate_text(src, client=client, tweet_id="1", twitter_cookie="auth_token=a; ct0=b") == src
+    assert calls == []
+
+
 def test_translate_text_mymemory_429_keeps_original_and_cools_down():
     app_scheduler._mymemory_skip_until = 0.0
     calls = []

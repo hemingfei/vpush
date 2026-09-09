@@ -881,6 +881,28 @@ def test_twitter_display_pref_swaps_stored_src():
     assert recovered["content"] == junk["content_src"]
     assert recovered["title"] == junk["title_src"]
 
+    from app.fetchers.base import has_stored_translation
+
+    quoted = {
+        "platform": "twitter",
+        "title": "Tibo说Astra需求太猛，可能暂停Pro新订阅。",
+        "content": (
+            "Tibo说Astra需求太猛，可能暂停Pro新订阅。\n\n"
+            "RT @thsottiaux：\nAstra的需求真的是前所未有的。"
+        ),
+        "title_src": "Tibo说Astra需求太猛，可能暂停Pro新订阅。",
+        "content_src": (
+            "Tibo说Astra需求太猛，可能暂停Pro新订阅。\n\n"
+            "我低头一看：今天才到16:07，四个Codex已经跑了4.94亿token。\n\n"
+            "RT @thsottiaux:\n"
+            "Demand for Astra is really unprecedented. We're pulling all the levers "
+            "possible to sustain the demand, but I've not seen anything like it until now."
+        ),
+    }
+    shown = with_twitter_display_row(quoted, True)
+    assert shown["content"] == quoted["content_src"]
+    assert has_stored_translation(quoted) is False
+
 
 def test_twitter_fetch_unwraps_retweet_original(monkeypatch):
     monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")

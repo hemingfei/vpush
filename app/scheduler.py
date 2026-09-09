@@ -23,8 +23,10 @@ from .fetchers.base import (
     PLATFORM_LABELS,
     Fetcher,
     Post,
+    already_chinese as _already_chinese,
     is_collapsed_translation,
     is_stale_backfill,
+    quoted_author_text,
     twitter_translate_enabled,
     with_twitter_display,
 )
@@ -237,18 +239,8 @@ def _effective_interval(
     return effective
 
 
-_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _MYMEMORY_COOLDOWN = 30 * 60
 _mymemory_skip_until = 0.0
-
-
-def _already_chinese(text: str) -> bool:
-    """原文已是中文就不必再译（X/MyMemory 都会空耗并刷 429）。"""
-    cjk = len(_CJK_RE.findall(text))
-    if cjk < 8:
-        return False
-    latin = sum(1 for ch in text if ch.isascii() and ch.isalpha())
-    return cjk >= latin
 
 
 def _x_translation_text(payload) -> str:
@@ -306,7 +298,7 @@ def translate_text(
     global _mymemory_skip_until
 
     text = (text or "").strip()
-    if not text or _already_chinese(text):
+    if not text or _already_chinese(quoted_author_text(text)):
         return text
     if twitter_cookie is None:
         from .fetchers.twitter import configured_twitter_cookie
