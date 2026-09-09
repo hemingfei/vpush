@@ -311,6 +311,9 @@ def translate_text(
         x_cookie = parse_twitter_cookie(twitter_cookie)
         if x_cookie.get("auth_token") and x_cookie.get("ct0"):
             try:
+                # POST 只译推文本体，引用是我们拼进去的
+                if tweet_id and quoted_author_text(text) != text:
+                    tweet_id = None
                 if tweet_id:
                     payload = {
                         "content_type": "POST",

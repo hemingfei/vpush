@@ -903,6 +903,21 @@ def test_twitter_display_pref_swaps_stored_src():
     assert shown["content"] == quoted["content_src"]
     assert has_stored_translation(quoted) is False
 
+    outer_only = {
+        "platform": "twitter",
+        "title": "喜欢这个。",
+        "content": "喜欢这个。",
+        "title_src": "Love this.",
+        "content_src": (
+            "Love this.\n\n"
+            "RT @FrancisBrennan:\n"
+            "WATCH: Meta data center community compact. We promise to not only "
+            "pay for our own electricity but to actually work to drive down costs."
+        ),
+    }
+    recovered = with_twitter_display_row(outer_only, True)
+    assert recovered["content"] == outer_only["content_src"]
+
 
 def test_twitter_fetch_unwraps_retweet_original(monkeypatch):
     monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")

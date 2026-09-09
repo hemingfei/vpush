@@ -3293,6 +3293,79 @@ def test_translate_text_edge_covers_long_text_when_x_fails():
     )
 
 
+def test_translate_text_quoted_tweet_uses_text_body():
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "text": (
+                        "喜欢这个。\n\n"
+                        "RT @FrancisBrennan：\n"
+                        "观看 Meta 的 DinaPowellMcC 在播客中介绍我们的数据中心社区契约。"
+                        "我们承诺不仅支付自己的电费，还会切实努力降低电价。"
+                    )
+                }
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    src = (
+        "Love this.\n\n"
+        "RT @FrancisBrennan:\n"
+        "WATCH: @Meta's @DinaPowellMcC on @RuthlessPodcast highlighting our "
+        "data center community compact. We promise to not only pay for our own "
+        "electricity but to actually work to drive down electricity costs."
+    )
+    result = translate_text(
+        src,
+        client=client,
+        tweet_id="2097633753875017969",
+        twitter_cookie="auth_token=a; ct0=b",
+    )
+    assert calls and calls[0]["content_type"] == "TEXT"
+    assert "id" not in calls[0]
+    assert "Love this." in calls[0]["text"]
+    assert "喜欢这个。" in result
+    assert "数据中心" in result
+
+
+def test_translate_text_rejects_outer_only_quote_translation():
+    def handler(request):
+        if "grok/translation.json" in str(request.url):
+            return httpx.Response(200, json={"result": {"text": "喜欢这个。"}})
+        if "edge.microsoft.com" in str(request.url):
+            return httpx.Response(
+                200,
+                json=[{
+                    "translations": [{
+                        "text": "喜欢这个。\n\nRT @FrancisBrennan：\n观看数据中心社区契约。",
+                        "to": "zh-Hans",
+                    }]
+                }],
+            )
+        raise AssertionError("MyMemory should not be called")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    src = (
+        "Love this.\n\n"
+        "RT @FrancisBrennan:\n"
+        "WATCH: Meta data center community compact. We promise to not only pay "
+        "for our own electricity but to actually work to drive down costs."
+    )
+    result = translate_text(
+        src,
+        client=client,
+        tweet_id="2097633753875017969",
+        twitter_cookie="auth_token=a; ct0=b",
+    )
+    assert "观看数据中心社区契约" in result
+    assert result != "喜欢这个。"
+
+
 def test_translate_text_rejects_collapsed_ellipsis():
     def handler(request):
         if "grok/translation.json" in str(request.url):

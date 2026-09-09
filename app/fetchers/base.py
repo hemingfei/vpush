@@ -64,7 +64,13 @@ def is_collapsed_translation(translated: str, source: str) -> bool:
         return True
     if _COLLAPSED_TRANSLATION_RE.fullmatch(text) and len(original) > 3:
         return True
-    return len(text) <= 4 and len(original) >= 20
+    if len(text) <= 4 and len(original) >= 20:
+        return True
+    author = quoted_author_text(original).strip()
+    if author != original and len(original) >= 40:
+        # 「喜欢这个。」≈ 博主那句，引用没进译文
+        return len(text) <= max(len(author) + 8, 16)
+    return False
 
 
 def twitter_translate_enabled(user: dict | None) -> bool:
