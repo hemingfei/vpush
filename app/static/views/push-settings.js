@@ -243,7 +243,7 @@ export function createPushSettingsView(dependencies) {
         <div class="settings-tabs" role="tablist" aria-label="设置分页">
           <button type="button" class="settings-tab active" role="tab" id="tab-push" aria-selected="true" aria-controls="st-push" data-tab="push" onclick="switchSettingsTab('push')">推送设置</button>
           <button type="button" class="settings-tab" role="tab" id="tab-bind" aria-selected="false" aria-controls="st-bind" data-tab="bind" onclick="switchSettingsTab('bind')">渠道绑定</button>
-          <button type="button" class="settings-tab" role="tab" id="tab-llm" aria-selected="false" aria-controls="st-llm" data-tab="llm" onclick="switchSettingsTab('llm')">AI 摘要</button>
+          <button type="button" class="settings-tab" role="tab" id="tab-llm" aria-selected="false" aria-controls="st-llm" data-tab="llm" onclick="switchSettingsTab('llm')">AI 网关</button>
           <button type="button" class="settings-tab" role="tab" id="tab-account" aria-selected="false" aria-controls="st-account" data-tab="account" onclick="switchSettingsTab('account')">账号设置</button>
         </div>
         <div id="st-push" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-push">
@@ -457,16 +457,23 @@ export function createPushSettingsView(dependencies) {
         <section class="section-panel">
           <header class="section-head">
             <div>
-              <h2 class="section-title">AI 摘要（可选，用你的大模型）</h2>
-              <p class="section-meta">任意 OpenAI 兼容接口（/chat/completions 与 /models）。DeepSeek、Grok、OpenAI、本地网关均可。不填则用站点默认模型。</p>
+              <h2 class="section-title">AI 网关</h2>
+              <p class="section-meta">用你自己的大模型做摘要。支持 OpenAI Chat Completions 和 Responses。不填则用站点默认。</p>
             </div>
           </header>
+          <div class="form-row">
+            <label for="set-llm-format">接口</label>
+            <select id="set-llm-format" class="form-control">
+              <option value="chat" ${state.user.llm_api_format !== "responses" ? "selected" : ""}>Chat Completions（/chat/completions）</option>
+              <option value="responses" ${state.user.llm_api_format === "responses" ? "selected" : ""}>Responses（/responses）</option>
+            </select>
+          </div>
           <div class="form-row">
             <label for="set-llm-base">API 地址（Base URL）</label>
             <input id="set-llm-base" class="form-control" type="text"
               placeholder="https://api.openai.com/v1"
               value="${escapeHtml(state.user.llm_api_base || "")}">
-            <p class="muted" style="margin-top:4px">OpenAI 兼容的 http(s) Base URL，内网和本机也可以。留空跟站点同一套。</p>
+            <p class="muted">OpenAI 兼容的 http(s) Base URL。留空跟站点同一套。</p>
           </div>
           <div class="form-row">
             <label for="set-llm-key">API Key</label>
@@ -476,19 +483,22 @@ export function createPushSettingsView(dependencies) {
           </div>
           <div class="form-row">
             <label for="set-llm-model">模型</label>
-            <div class="row" style="gap:10px;flex-wrap:wrap">
-              <input id="set-llm-model" class="form-control" type="text" list="set-llm-model-list"
-                placeholder="保存地址和 Key 后可拉取列表，也可手填"
-                value="${escapeHtml(state.user.llm_model || "")}" style="flex:1;min-width:220px">
-              <datalist id="set-llm-model-list"></datalist>
+            <select id="set-llm-model-select" class="form-control" hidden
+              onchange="if(this.value){const i=document.getElementById('set-llm-model'); if(i) i.value=this.value}">
+              <option value="">手填模型名</option>
+            </select>
+            <div class="llm-model-row">
+              <input id="set-llm-model" class="form-control" type="text"
+                placeholder="可手填，或先拉取再从上方选择"
+                value="${escapeHtml(state.user.llm_model || "")}">
               <button type="button" class="btn-ghost" onclick="loadLlmModels()">拉取模型列表</button>
             </div>
-            <p class="muted" style="margin-top:4px">列表来自该接口的 <code>/models</code>；没有列表的网关仍可手填模型名。</p>
+            <p class="muted">列表来自该接口的 <code>/models</code>。点拉取后用系统下拉选择；没有列表的网关仍可手填。</p>
           </div>
-          <div class="toolbar" style="margin-top:10px">
+          <div class="toolbar">
             <button class="btn-normal" onclick="saveLlm()">保存</button>
           </div>
-          <p class="muted">🔒 自己的 Key 只对当前账号生效，费用由你的 API 账号承担；生成失败会自动回退为普通摘要，不影响推送。</p>
+          <p class="muted">Key 只对当前账号生效，费用由你的 API 账号承担；生成失败会回退为普通摘要，不影响推送。</p>
         </section>
         </div>
         <div id="st-account" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-account">
@@ -701,7 +711,7 @@ export function createPushSettingsView(dependencies) {
   }
 
   function switchSettingsTab(name) {
-    // 设置页分段导航：推送 / 渠道绑定 / AI 摘要 / 账号设置
+    // 设置页分段导航：推送 / 渠道绑定 / AI 网关 / 账号设置
     if (!SETTINGS_TABS.includes(name)) name = "push";
     state.settingsTab = name;
     document.querySelectorAll(".settings-tab[data-tab]").forEach((b) => {

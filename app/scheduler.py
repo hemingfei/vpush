@@ -1387,6 +1387,7 @@ def _user_llm_config(user: dict, fallback=None, db: DB | None = None):
         model=(user.get("llm_model") or "").strip()
         or (getattr(fallback, "model", "") if fallback else "")
         or "grok-4.6",
+        api_format=(user.get("llm_api_format") or "chat"),
         user_supplied=True,
     )
 
@@ -1407,6 +1408,7 @@ def _system_llm_config(db: DB, fallback=None):
                     api_base=api_base,
                     api_key=api_key,
                     model=(user.get("llm_model") or "").strip() or "grok-4.6",
+                    api_format=(user.get("llm_api_format") or "chat"),
                     user_supplied=False,
                 )
     if fallback and getattr(fallback, "api_key", ""):

@@ -735,6 +735,7 @@ export function createFeishuPersonalView(dependencies) {
       llm_api_base: ($("#set-llm-base").value || "").trim(),
       llm_api_key: ($("#set-llm-key").value || "").trim(),
       llm_model: ($("#set-llm-model").value || "").trim(),
+      llm_api_format: ($("#set-llm-format").value || "chat").trim(),
     };
     try {
       await api("/api/me", { method: "PUT", body: JSON.stringify(payload) });
@@ -751,7 +752,7 @@ export function createFeishuPersonalView(dependencies) {
 
   async function loadLlmModels() {
     const routeSeq = currentRouteSeq();
-    const list = $("#set-llm-model-list");
+    const select = $("#set-llm-model-select");
     const input = $("#set-llm-model");
     try {
       const data = await api("/api/me/llm-models", {
@@ -763,10 +764,20 @@ export function createFeishuPersonalView(dependencies) {
       });
       if (!routeStillActive(routeSeq)) return;
       const models = Array.isArray(data.models) ? data.models : [];
-      if (list) {
-        list.innerHTML = models.map((id) => `<option value="${escapeHtml(id)}"></option>`).join("");
+      const current = (input && input.value) || "";
+      if (select) {
+        select.innerHTML = [`<option value="">手填模型名</option>`]
+          .concat(models.map((id) => {
+            const selected = id === current ? " selected" : "";
+            return `<option value="${escapeHtml(id)}"${selected}>${escapeHtml(id)}</option>`;
+          }))
+          .join("");
+        select.hidden = models.length === 0;
+        if (models.length && input && !input.value) {
+          input.value = models[0];
+          select.value = models[0];
+        }
       }
-      if (input && models.length && !input.value) input.value = models[0];
       flash(models.length ? `已加载 ${models.length} 个模型` : "接口未返回模型，可手填模型名");
     } catch (err) {
       if (routeStillActive(routeSeq)) flash(err.message || "拉取模型失败", "error");

@@ -18,6 +18,14 @@ DEFAULT_CHAT_TIMEOUT = 60
 MARK_RESOLVE_TIMEOUT = 180
 USER_LLM_MAX_BYTES = 2 * 1024 * 1024
 
+
+def normalize_llm_api_format(value: str | None) -> str:
+    raw = str(value or "").strip().lower().replace("_", "-")
+    if raw in ("responses", "openai-responses"):
+        return "responses"
+    return "chat"
+
+
 class _RetryableError(Exception):
     """瞬时错误（429/5xx/空响应），可重试一次。"""
 
@@ -53,6 +61,29 @@ def _message_text(message: dict) -> str:
     return str((message or {}).get("reasoning_content") or "").strip()
 
 
+def _completion_text(payload, api_format: str) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    if api_format == "responses":
+        text = str(payload.get("output_text") or "").strip()
+        if text:
+            return text
+        for item in payload.get("output") or []:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        t = str(block.get("text") or "").strip()
+                        if t:
+                            return t
+            elif isinstance(content, str) and content.strip():
+                return content.strip()
+    message = ((payload.get("choices") or [{}])[0].get("message")) or {}
+    return _message_text(message)
+
+
 def _chat(
     llm_config,
     messages,
@@ -63,11 +94,12 @@ def _chat(
     response_format=None,
     timeout: float = DEFAULT_CHAT_TIMEOUT,
 ) -> str | None:
-    """OpenAI 兼容 chat/completions；未配置或失败返回 None。"""
+    """OpenAI 兼容 chat/completions 或 /responses；未配置或失败返回 None。"""
     values = _config_values(llm_config)
     if values is None:
         return None
     api_key, api_base, model = values
+    api_format = normalize_llm_api_format(getattr(llm_config, "api_format", ""))
     import httpx
 
     user_supplied = bool(getattr(llm_config, "user_supplied", False))
@@ -78,21 +110,33 @@ def _chat(
         use_format = response_format
         for attempt in range(attempts):
             try:
-                payload = {
-                    "model": model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                }
-                if use_format:
-                    payload["response_format"] = use_format
+                if api_format == "responses":
+                    url = f"{api_base}/responses"
+                    payload = {
+                        "model": model,
+                        "input": messages,
+                        "temperature": temperature,
+                        "max_output_tokens": max_tokens,
+                    }
+                    if use_format:
+                        payload["text"] = {"format": use_format}
+                else:
+                    url = f"{api_base}/chat/completions"
+                    payload = {
+                        "model": model,
+                        "messages": messages,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                    }
+                    if use_format:
+                        payload["response_format"] = use_format
                 if user_supplied:
                     from .url_safety import safe_request_limited
 
                     resp = safe_request_limited(
                         client,
                         "POST",
-                        f"{api_base}/chat/completions",
+                        url,
                         max_bytes=USER_LLM_MAX_BYTES,
                         headers={
                             "Authorization": f"Bearer {api_key}",
@@ -107,7 +151,7 @@ def _chat(
                         break
                 else:
                     resp = client.post(
-                        f"{api_base}/chat/completions",
+                        url,
                         headers={"Authorization": f"Bearer {api_key}"},
                         json=payload,
                     )
@@ -118,12 +162,11 @@ def _chat(
                     raise _RetryableError(f"LLM HTTP {resp.status_code}")
                 resp.raise_for_status()
                 try:
-                    choices = resp.json().get("choices")
+                    body = resp.json()
                 except ValueError:
                     # 网关返回非 JSON（HTML 错误页等）：按瞬时错误走重试
                     raise _RetryableError(f"LLM 响应非 JSON: {resp.text[:120]}") from None
-                message = ((choices or [{}])[0].get("message")) or {}
-                text = _message_text(message)
+                text = _completion_text(body, api_format)
                 if not text:
                     raise _RetryableError("LLM 返回空")
                 return text

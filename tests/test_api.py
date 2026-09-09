@@ -5871,6 +5871,22 @@ def test_llm_models_lists_openai_compatible_ids(monkeypatch):
     assert resp.json()["models"] == ["gpt-4o", "gpt-4o-mini"]
 
 
+def test_me_saves_llm_api_format():
+    client = make_client()
+    headers = user_headers(client, "llm-format-user")
+    resp = client.put(
+        "/api/me",
+        json={"llm_api_format": "openai-responses", "llm_model": "gpt-test"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["llm_api_format"] == "responses"
+    me = client.get("/api/me", headers=headers)
+    assert me.status_code == 200
+    assert me.json()["llm_api_format"] == "responses"
+    assert me.json()["llm_model"] == "gpt-test"
+
+
 def test_llm_models_rejects_intranet_base():
     client = make_client()
     headers = user_headers(client, "llm-private-user")

@@ -1213,6 +1213,10 @@ class DB:
             self._conn.execute("ALTER TABLE users ADD COLUMN llm_api_key TEXT NOT NULL DEFAULT ''")
         if "llm_model" not in user_cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN llm_model TEXT NOT NULL DEFAULT ''")
+        if "llm_api_format" not in user_cols:
+            self._conn.execute(
+                "ALTER TABLE users ADD COLUMN llm_api_format TEXT NOT NULL DEFAULT 'chat'"
+            )
         if "token_version" not in user_cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0")
         if "last_login_at" not in user_cols:
@@ -2603,6 +2607,7 @@ class DB:
         "translate_twitter",
         "push_channels", "dnd_start", "dnd_end", "dnd_allow_favorite",
         "feed_token", "bark_key", "llm_api_base", "llm_api_key", "llm_model",
+        "llm_api_format",
         "token_version", "last_login_at",
         "keywords_match_reports", "keywords_match_reports_since",
     })

@@ -371,6 +371,7 @@ class MeUpdate(BaseModel):
     llm_api_base: str | None = None
     llm_api_key: str | None = None
     llm_model: str | None = None
+    llm_api_format: str | None = None
     news_source_ids: list[int] | None = None
 
 
@@ -739,6 +740,7 @@ def public_user(user: dict, db=None) -> dict:
         "llm_api_base": user.get("llm_api_base") or "",
         "llm_api_key": mask_secret(user_plain_secret(user, "llm_api_key", db)),
         "llm_model": user.get("llm_model") or "",
+        "llm_api_format": (user.get("llm_api_format") or "chat"),
         "created_at": user["created_at"],
     }
 
@@ -1828,6 +1830,10 @@ def create_api_router(
             updates["llm_api_base"] = value
         if "llm_model" in body.model_fields_set:
             updates["llm_model"] = (body.llm_model or "").strip()
+        if "llm_api_format" in body.model_fields_set:
+            from .llm import normalize_llm_api_format
+
+            updates["llm_api_format"] = normalize_llm_api_format(body.llm_api_format)
         news_source_ids = _UNSET
         if "news_source_ids" in body.model_fields_set:
             if body.news_source_ids is None:

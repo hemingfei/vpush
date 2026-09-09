@@ -954,12 +954,16 @@ def test_settings_save_feedback_uses_flash():
 
 def test_llm_settings_are_openai_compatible_with_model_list():
     render = _fn_body("renderSettings")
+    assert "AI 网关" in render
     assert "OpenAI 兼容" in render
-    assert "DeepSeek、Grok、OpenAI" in render
-    assert 'id="set-llm-model-list"' in render
+    assert 'id="set-llm-format"' in render
+    assert ">Responses（/responses）<" in render
+    assert 'id="set-llm-model-select"' in render
+    assert "set-llm-model-list" not in render
     assert "loadLlmModels()" in render
     assert "/api/me/llm-models" in _fn_body("loadLlmModels")
     assert "escapeHtml" in _fn_body("loadLlmModels")
+    assert "set-llm-model-select" in _fn_body("loadLlmModels")
 
 
 def test_kol_image_settings_is_fourth_push_section_and_loads_independently():

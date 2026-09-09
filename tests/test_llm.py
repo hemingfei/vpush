@@ -56,6 +56,65 @@ def test_success_returns_text():
     assert result == "- 要点一\n- 要点二"
 
 
+def test_responses_uses_responses_endpoint():
+    captured = {}
+
+    def handler(request):
+        captured["url"] = str(request.url)
+        captured["payload"] = json.loads(request.read())
+        return httpx.Response(200, json={"output_text": "- 要点"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    config = make_config()
+    config.api_format = "openai-responses"
+    assert summarize_posts([make_post()], config, client=client) == "- 要点"
+    assert captured["url"] == "https://api.openai.com/v1/responses"
+    assert captured["payload"]["input"][0]["role"] == "system"
+    assert "messages" not in captured["payload"]
+    assert "max_output_tokens" in captured["payload"]
+
+
+def test_responses_reads_output_blocks():
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "块文本"}],
+                    }
+                ]
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    config = make_config()
+    config.api_format = "responses"
+    assert summarize_posts([make_post()], config, client=client) == "块文本"
+
+
+def test_responses_skips_reasoning_then_reads_message():
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {"type": "reasoning", "encrypted_content": "x", "summary": []},
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "PONG"}],
+                    },
+                ]
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    config = make_config()
+    config.api_format = "responses"
+    assert summarize_posts([make_post()], config, client=client) == "PONG"
+
+
 def test_empty_choices_returns_none():
     def handler(request):
         return httpx.Response(200, json={"choices": []})
