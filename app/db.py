@@ -45,12 +45,6 @@ SCHEMA_MIGRATIONS: list[tuple[int, str, str | tuple[str, ...]]] = [
         "CREATE INDEX IF NOT EXISTS idx_ima_doc_downloaded "
         "ON ima_document_index(downloaded_at)",
     ),
-    (
-        2026090901,
-        "posts feed published order index",
-        "CREATE INDEX IF NOT EXISTS idx_posts_kol_published "
-        "ON posts(kol_id, published_at DESC, id DESC)",
-    ),
 ]
 
 _SLOW_QUERY_SECONDS = 0.2

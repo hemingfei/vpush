@@ -158,12 +158,6 @@ def test_db_migrates_secondary_column(tmp_path):
     assert "secondary" in cols
 
 
-def test_posts_have_kol_published_order_index(tmp_path):
-    db = DB(tmp_path / "dav.db")
-    indexes = {row["name"] for row in db._rows("PRAGMA index_list(posts)")}
-    assert "idx_posts_kol_published" in indexes
-
-
 def test_add_kol_with_secondary(tmp_path):
     db = DB(str(tmp_path / "t.db"))
     kid = db.add_kol("xueqiu", "测试", "999", priority=False, secondary=True)
