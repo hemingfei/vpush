@@ -727,6 +727,30 @@ export function createFeishuPersonalView(dependencies) {
     }
   }
 
+  async function testLlm() {
+    const routeSeq = currentRouteSeq();
+    try {
+      const data = await api("/api/me/llm-test", {
+        method: "POST",
+        body: JSON.stringify({
+          llm_api_base: ($("#set-llm-base").value || "").trim(),
+          llm_api_key: ($("#set-llm-key").value || "").trim(),
+          llm_model: ($("#set-llm-model").value || "").trim(),
+          llm_api_format: ($("#set-llm-format").value || "chat").trim(),
+        }),
+      });
+      if (!routeStillActive(routeSeq)) return;
+      if (data.ok) {
+        const tokens = data.usage && data.usage.total_tokens;
+        flash(`可用 ${data.latency_ms}ms` + (tokens != null ? ` · ${tokens} tokens` : ""));
+      } else {
+        flash(data.error || "测试失败", "error");
+      }
+    } catch (err) {
+      if (routeStillActive(routeSeq)) flash(err.message || "测试失败", "error");
+    }
+  }
+
   async function saveLlm() {
     const routeSeq = currentRouteSeq();
     const token = state.token;
@@ -866,6 +890,7 @@ export function createFeishuPersonalView(dependencies) {
     saveKeywordsMatchReports,
     toggleReportKeyword,
     saveLlm,
+    testLlm,
     loadLlmModels,
     savePassword,
     genBindCode,

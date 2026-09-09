@@ -717,6 +717,42 @@ def _is_masked_secret(value: str | None) -> bool:
     return _SECRET_MASK_GLUE in (value or "")
 
 
+def _me_llm_runtime(body: MeUpdate, user: dict, request: Request, db):
+    from types import SimpleNamespace
+
+    from .llm import normalize_llm_api_format
+    from .scheduler import _system_llm_config
+    from .url_safety import is_allowed_trusted_llm_base, is_allowed_user_llm_base
+
+    user = db.get_user(user["id"]) or user
+    base = (body.llm_api_base if body.llm_api_base is not None else user.get("llm_api_base") or "").strip()
+    key = (body.llm_api_key or "").strip()
+    if not key or _is_masked_secret(key):
+        key = user_plain_secret(user, "llm_api_key", db)
+    model = (body.llm_model if body.llm_model is not None else user.get("llm_model") or "").strip()
+    api_format = normalize_llm_api_format(
+        body.llm_api_format if body.llm_api_format is not None else user.get("llm_api_format")
+    )
+    if not base or not key:
+        return _system_llm_config(
+            db, getattr(request.app.state, "llm_config", None) if request else None
+        )
+    allowed = (
+        is_allowed_trusted_llm_base(base)
+        if user.get("is_admin")
+        else is_allowed_user_llm_base(base)
+    )
+    if not allowed:
+        raise HTTPException(status_code=400, detail="LLM 地址须为 http(s) URL")
+    return SimpleNamespace(
+        api_base=base,
+        api_key=key,
+        model=model,
+        api_format=api_format,
+        user_supplied=not bool(user.get("is_admin")),
+    )
+
+
 def public_user(user: dict, db=None) -> dict:
     # 凭据列已改密文存储，掩码展示必须先解出明文再取首尾 4 位
     return {
@@ -741,6 +777,7 @@ def public_user(user: dict, db=None) -> dict:
         "llm_api_key": mask_secret(user_plain_secret(user, "llm_api_key", db)),
         "llm_model": user.get("llm_model") or "",
         "llm_api_format": (user.get("llm_api_format") or "chat"),
+        "llm_last_status": user.get("llm_last_status") or "",
         "created_at": user["created_at"],
     }
 
@@ -1871,41 +1908,25 @@ def create_api_router(
     @router.post("/me/llm-models")
     def list_my_llm_models(body: MeUpdate, request: Request, user: dict = Depends(get_current_user)):
         """按 OpenAI 兼容 GET /models 拉取模型 id 列表。"""
-        from types import SimpleNamespace
-
         from .llm import list_models
-        from .scheduler import _system_llm_config
-        from .url_safety import is_allowed_trusted_llm_base, is_allowed_user_llm_base
 
-        user = db.get_user(user["id"]) or user
-        base = (body.llm_api_base if body.llm_api_base is not None else user.get("llm_api_base") or "").strip()
-        key = (body.llm_api_key or "").strip()
-        if not key or _is_masked_secret(key):
-            key = user_plain_secret(user, "llm_api_key", db)
-        if not base or not key:
-            cfg = _system_llm_config(db, getattr(request.app.state, "llm_config", None) if request else None)
-            if cfg is None:
-                raise HTTPException(status_code=400, detail="请先填写 API 地址和 Key")
-            models = list_models(cfg)
-        else:
-            allowed = (
-                is_allowed_trusted_llm_base(base)
-                if user.get("is_admin")
-                else is_allowed_user_llm_base(base)
-            )
-            if not allowed:
-                raise HTTPException(status_code=400, detail="LLM 地址须为 http(s) URL")
-            models = list_models(
-                SimpleNamespace(
-                    api_base=base,
-                    api_key=key,
-                    model="",
-                    user_supplied=not bool(user.get("is_admin")),
-                )
-            )
+        cfg = _me_llm_runtime(body, user, request, db)
+        if cfg is None:
+            raise HTTPException(status_code=400, detail="请先填写 API 地址和 Key")
+        models = list_models(cfg)
         if models is None:
             raise HTTPException(status_code=502, detail="无法获取模型列表，请检查地址和 Key")
         return {"models": models}
+
+    @router.post("/me/llm-test")
+    def test_my_llm(body: MeUpdate, request: Request, user: dict = Depends(get_current_user)):
+        """用当前表单打一条最短请求，返回耗时和用量。"""
+        from .llm import probe_llm
+
+        cfg = _me_llm_runtime(body, user, request, db)
+        if cfg is None:
+            raise HTTPException(status_code=400, detail="请先填写 API 地址和 Key")
+        return probe_llm(cfg)
 
     @router.post("/me/webpush")
     def subscribe_webpush(body: WebPushIn, request: Request, user: dict = Depends(get_current_user)):

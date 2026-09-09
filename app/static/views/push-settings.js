@@ -458,7 +458,7 @@ export function createPushSettingsView(dependencies) {
           <header class="section-head">
             <div>
               <h2 class="section-title">AI 网关</h2>
-              <p class="section-meta">用你自己的大模型做摘要。支持 OpenAI Chat Completions 和 Responses。不填则用站点默认。</p>
+              <p class="section-meta">用你自己的大模型。不填则用站点默认（环境变量），与管理员个人网关无关。</p>
             </div>
           </header>
           <div class="form-row">
@@ -497,8 +497,9 @@ export function createPushSettingsView(dependencies) {
           </div>
           <div class="toolbar">
             <button class="btn-normal" onclick="saveLlm()">保存</button>
+            <button type="button" class="btn-ghost" onclick="testLlm()">测试</button>
           </div>
-          <p class="muted">Key 只对当前账号生效，费用由你的 API 账号承担；生成失败会回退为普通摘要，不影响推送。</p>
+          <p class="muted">推送摘要固定 Chat Completions；每日精选用上面选的接口。失败会回退为普通摘要，不影响推送。${state.user.llm_last_status === "ok" ? "上次摘要已用 AI。" : state.user.llm_last_status === "fallback" ? "上次摘要已回退为普通列表。" : ""}</p>
         </section>
         </div>
         <div id="st-account" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-account">

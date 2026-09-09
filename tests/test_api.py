@@ -5927,6 +5927,39 @@ def test_llm_models_lists_openai_compatible_ids(monkeypatch):
     assert resp.json()["models"] == ["gpt-4o", "gpt-4o-mini"]
 
 
+def test_me_llm_test_returns_usage(monkeypatch):
+    client = make_client()
+    headers = user_headers(client, "llm-test-user")
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+
+    def fake_probe(cfg):
+        assert cfg.api_key == "sk-test"
+        assert cfg.model == "gpt-test"
+        assert cfg.api_format == "chat"
+        return {
+            "ok": True,
+            "latency_ms": 12,
+            "format": "chat",
+            "model": "gpt-test",
+            "usage": {"total_tokens": 9},
+        }
+
+    monkeypatch.setattr("app.llm.probe_llm", fake_probe)
+    resp = client.post(
+        "/api/me/llm-test",
+        json={
+            "llm_api_base": "https://api.openai.com/v1",
+            "llm_api_key": "sk-test",
+            "llm_model": "gpt-test",
+            "llm_api_format": "chat",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert resp.json()["usage"]["total_tokens"] == 9
+
+
 def test_me_saves_llm_api_format():
     client = make_client()
     headers = user_headers(client, "llm-format-user")

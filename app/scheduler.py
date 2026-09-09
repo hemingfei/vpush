@@ -1364,7 +1364,7 @@ def _buffer_secondary_subscribers(db, kol_id: int, post: Post, secondary_buffer)
 
 
 def _user_llm_config(user: dict, fallback=None, db: DB | None = None):
-    """用户自配 LLM 优先；没配或地址不安全时回退站点 Grok。"""
+    """用户自配 LLM 优先；没配或地址不安全时回退站点环境变量。"""
     from .db import user_plain_secret
 
     if not user.get("llm_api_key"):
@@ -1393,27 +1393,22 @@ def _user_llm_config(user: dict, fallback=None, db: DB | None = None):
 
 
 def _system_llm_config(db: DB, fallback=None):
-    """站点 LLM：管理员推送设置（Grok）优先，没有再退环境变量。"""
-    from types import SimpleNamespace
-
-    from .db import user_plain_secret
-    from .url_safety import is_allowed_trusted_llm_base
-
-    for user in db.list_users():
-        if user.get("is_admin"):
-            api_key = user_plain_secret(user, "llm_api_key", db)
-            api_base = (user.get("llm_api_base") or "").strip()
-            if api_key and is_allowed_trusted_llm_base(api_base):
-                return SimpleNamespace(
-                    api_base=api_base,
-                    api_key=api_key,
-                    model=(user.get("llm_model") or "").strip() or "grok-4.6",
-                    api_format=(user.get("llm_api_format") or "chat"),
-                    user_supplied=False,
-                )
+    """站点 LLM：只用来自环境变量/启动配置，不用管理员个人网关。"""
     if fallback and getattr(fallback, "api_key", ""):
         return fallback
     return None
+
+
+def _record_llm_status(db: DB, user: dict, llm_cfg, summary) -> None:
+    if llm_cfg is None:
+        return
+    status = "ok" if summary else "fallback"
+    try:
+        db.note_llm_status(user["id"], status)
+    except Exception:
+        logger.warning("记录 LLM 状态失败 user=%s", user.get("username"))
+    if status == "fallback":
+        logger.warning("LLM 摘要回退 user=%s", user.get("username"))
 
 
 def _admin_llm_config(db: DB, fallback=None):
@@ -1481,7 +1476,7 @@ def notify_digest_subscribers(
 ) -> None:
     """把合并摘要推送给订阅了该大V的用户（各自绑定的渠道）。
 
-    用户自配 LLM 优先，否则用站点 Grok（管理员推送设置 / 环境变量）。
+    用户自配 LLM 优先，否则用站点环境变量。
     生成失败自动降级，不影响摘要推送。summary_cache 透传给 summarize_posts，
     同一批帖文、同一模型的多个订阅用户只调一次大模型。
     """
@@ -1536,6 +1531,7 @@ def notify_digest_subscribers(
                     logger.warning(
                         "LLM 摘要异常 user=%s kol=%s err=%s", user["username"], kol["name"], exc
                     )
+            _record_llm_status(db, user, llm_cfg, summary)
             for channel in iter_user_channels(user, notifiers_config, db):
                 notifier = build_channel_notifier(
                     channel,
@@ -2506,6 +2502,7 @@ class Scheduler:
         )
 
         summary = None
+        llm_cfg = None
         if use_llm:
             from .llm import summarize_posts
 
@@ -2519,6 +2516,7 @@ class Scheduler:
                     summary = summarize_posts(posts, llm_cfg)
                 except Exception as exc:  # noqa: BLE001 - 摘要失败降级，不影响汇总
                     logger.warning("LLM 摘要异常 user=%s err=%s", user["username"], exc)
+        _record_llm_status(self.db, user, llm_cfg, summary)
 
         client = httpx.Client(timeout=15)
         try:
@@ -2605,8 +2603,7 @@ class Scheduler:
 
         开关与预算都在 settings：report_extract_enabled（默认开，='0' 关）、
         report_extract_model（默认 gemini-3.8-flash-high）、
-        report_extract_daily_limit（默认 1000 篇/天）。LLM 用站点配置
-        （管理员个人 Grok/Gemini 网关），批处理不走实时路径。
+        report_extract_daily_limit（默认 1000 篇/天）。LLM 用站点环境变量，批处理不走实时路径。
         """
         db = self.db
         if db.get_setting("report_extract_enabled") == "0":
@@ -2852,6 +2849,7 @@ class Scheduler:
                     summary = summarize_daily(posts, llm_cfg)
                 except Exception as exc:  # noqa: BLE001 - 综述失败降级为原始列表，不影响推送
                     logger.warning("LLM 每日综述异常 user=%s err=%s", user["username"], exc)
+            _record_llm_status(self.db, user, llm_cfg, summary)
             # LLM 精炼综述优先；未配置/失败时降级为原始贴文列表（保底不空发）
             daily_text = None
             if summary is not None:

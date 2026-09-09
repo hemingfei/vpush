@@ -1,4 +1,4 @@
-"""可选 LLM：站点默认 Grok（管理员推送设置），用户可自配覆盖。
+"""可选 LLM：站点默认来自环境变量，用户可自配覆盖。
 
 设计要点：
 - 失败静默降级：任何异常只记日志并返回 None，调用方回退原逻辑；
@@ -24,6 +24,16 @@ def normalize_llm_api_format(value: str | None) -> str:
     if raw in ("responses", "openai-responses"):
         return "responses"
     return "chat"
+
+
+def with_llm_overrides(llm_config, **over):
+    if llm_config is None:
+        return None
+    from types import SimpleNamespace
+
+    data = dict(vars(llm_config))
+    data.update(over)
+    return SimpleNamespace(**data)
 
 
 class _RetryableError(Exception):
@@ -84,6 +94,26 @@ def _completion_text(payload, api_format: str) -> str:
     return _message_text(message)
 
 
+def _usage_total(payload) -> int | None:
+    if not isinstance(payload, dict):
+        return None
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    for key in ("total_tokens", "total_token_count"):
+        if usage.get(key) is not None:
+            try:
+                return int(usage[key])
+            except (TypeError, ValueError):
+                return None
+    try:
+        inp = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+        out = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+    except (TypeError, ValueError):
+        return None
+    return inp + out or None
+
+
 def _chat(
     llm_config,
     messages,
@@ -93,6 +123,7 @@ def _chat(
     attempts: int = 2,
     response_format=None,
     timeout: float = DEFAULT_CHAT_TIMEOUT,
+    meta: dict | None = None,
 ) -> str | None:
     """OpenAI 兼容 chat/completions 或 /responses；未配置或失败返回 None。"""
     values = _config_values(llm_config)
@@ -169,6 +200,10 @@ def _chat(
                 text = _completion_text(body, api_format)
                 if not text:
                     raise _RetryableError("LLM 返回空")
+                if meta is not None:
+                    usage = _usage_total(body)
+                    if usage is not None:
+                        meta["usage"] = usage
                 return text
             except httpx.HTTPStatusError as exc:
                 last_err = exc
@@ -241,6 +276,34 @@ def list_models(llm_config) -> list[str] | None:
     return out
 
 
+def probe_llm(llm_config, client=None) -> dict:
+    """用当前配置打一条最短请求，返回 ok/耗时/用量。"""
+    started = time.monotonic()
+    meta: dict = {}
+    text = _chat(
+        llm_config,
+        [{"role": "user", "content": "Reply with exactly: PONG"}],
+        16,
+        client=client,
+        temperature=0,
+        attempts=1,
+        timeout=20,
+        meta=meta,
+    )
+    latency_ms = int((time.monotonic() - started) * 1000)
+    if not text:
+        return {"ok": False, "latency_ms": latency_ms, "error": "无响应或地址/Key/模型不正确"}
+    result = {
+        "ok": True,
+        "latency_ms": latency_ms,
+        "format": normalize_llm_api_format(getattr(llm_config, "api_format", "")),
+        "model": getattr(llm_config, "model", "") or "",
+    }
+    if meta.get("usage") is not None:
+        result["usage"] = {"total_tokens": meta["usage"]}
+    return result
+
+
 SUMMARY_SYSTEM_PROMPT = (
     "你是信息摘要助手。把下面用户订阅的社交动态整理成简洁的中文要点。"
     "要求：按重要性排序，每条要点一行，以「- 」开头；"
@@ -264,18 +327,20 @@ def _post_lines(posts) -> list[str]:
     return lines
 
 
-def summary_cache_key(posts, api_base: str, model: str) -> str:
+def summary_cache_key(posts, api_base: str, model: str, api_format: str = "chat") -> str:
     """摘要缓存键：平台+外部ID 有序拼接，同一批帖文（同配置）复用同一份摘要。"""
     ids = ",".join(f"{p.platform}:{p.external_id}" for p in posts)
-    return f"{api_base}|{model}|{ids}"
+    return f"{api_base}|{model}|{normalize_llm_api_format(api_format)}|{ids}"
 
 
 def summarize_posts(posts, llm_config=None, client=None, cache=None) -> str | None:
     """生成摘要文本；未配置或失败返回 None（调用方降级为普通汇总）。
 
+    推送摘要固定 Chat Completions（thinking/Responses 贵且慢）。
     cache: 可选 dict，以「配置+帖文ID列表」为键缓存摘要，同一批帖文只调一次
     大模型（批量推送时多个订阅用户共享同一份摘要）。
     """
+    llm_config = with_llm_overrides(llm_config, api_format="chat")
     values = _config_values(llm_config)
     if values is None:
         return None
@@ -284,7 +349,7 @@ def summarize_posts(posts, llm_config=None, client=None, cache=None) -> str | No
     content = "\n".join(_post_lines(posts))
     if not content.strip():
         return None
-    key = summary_cache_key(posts, api_base, model) if cache is not None else None
+    key = summary_cache_key(posts, api_base, model, "chat") if cache is not None else None
     if key is not None and key in cache:
         return cache[key]
     if not any(
@@ -495,6 +560,7 @@ def suggest_stock_aliases(candidates, known_stocks, llm_config=None, client=None
     """
     if not candidates:
         return []
+    llm_config = with_llm_overrides(llm_config, api_format="chat")
     text = _chat(
         llm_config,
         [
@@ -563,6 +629,7 @@ def resolve_stock_marks(marks, llm_config=None, client=None) -> list[dict]:
     """
     if not marks:
         return []
+    llm_config = with_llm_overrides(llm_config, api_format="chat")
     text = _chat(
         llm_config,
         [

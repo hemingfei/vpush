@@ -1217,6 +1217,10 @@ class DB:
             self._conn.execute(
                 "ALTER TABLE users ADD COLUMN llm_api_format TEXT NOT NULL DEFAULT 'chat'"
             )
+        if "llm_last_status" not in user_cols:
+            self._conn.execute(
+                "ALTER TABLE users ADD COLUMN llm_last_status TEXT NOT NULL DEFAULT ''"
+            )
         if "token_version" not in user_cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0")
         if "last_login_at" not in user_cols:
@@ -2597,6 +2601,12 @@ class DB:
         self._execute(
             "UPDATE users SET last_login_at = datetime('now') WHERE id = ?",
             (user_id,),
+        )
+
+    def note_llm_status(self, user_id: int, status: str) -> None:
+        self._execute(
+            "UPDATE users SET llm_last_status = ? WHERE id = ?",
+            (status, user_id),
         )
 
     # update_user 允许写入的字段白名单：拦截任意 key 拼接进 SQL（防注入脚枪）

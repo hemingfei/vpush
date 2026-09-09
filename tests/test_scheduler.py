@@ -1803,6 +1803,40 @@ def test_digest_uses_site_llm_when_user_has_no_key(monkeypatch):
         llm_config=SimpleNamespace(api_key="sk-grok", api_base="https://example.com/v1", model="grok-4.6"),
     )
     assert calls["n"] == 1
+    assert db.get_user(uid)["llm_last_status"] == "ok"
+
+
+def test_digest_records_llm_fallback(monkeypatch):
+    db = make_db()
+    kid = db.add_kol("xueqiu", "A", "1")
+    uid = db.add_user("u1", "h", telegram_chat_id="111")
+    db.add_subscription(uid, kid)
+    post = make_post(kid)
+    monkeypatch.setattr("app.llm.summarize_posts", lambda *a, **k: None)
+
+    class FakeTG:
+        def __init__(self, config, chat_id=None, client=None, **kwargs):
+            self.client = SimpleNamespace(close=lambda: None)
+
+        def send_text(self, text):
+            pass
+
+        def send_digest(self, posts, kol_name, platform):
+            pass
+
+    monkeypatch.setattr("app.notifiers.telegram.TelegramNotifier", FakeTG)
+    flush_digest(
+        db,
+        {kid: [post]},
+        [],
+        SimpleNamespace(
+            telegram=SimpleNamespace(bot_token="t", chat_id=""),
+            feishu=SimpleNamespace(),
+            wecom=SimpleNamespace(),
+        ),
+        llm_config=SimpleNamespace(api_key="sk-grok", api_base="https://example.com/v1", model="grok-4.6"),
+    )
+    assert db.get_user(uid)["llm_last_status"] == "fallback"
 
 
 def test_dnd_summary_failure_alerts_admin(monkeypatch):
@@ -4979,8 +5013,8 @@ def _alias_scheduler(db, llm_config):
     )
 
 
-def test_stock_alias_task_prefers_admin_grok_over_env(monkeypatch):
-    """系统别名任务跟管理员推送设置同一套 Grok，不走环境变量里的另一套。"""
+def test_stock_alias_task_uses_env_not_admin_personal(monkeypatch):
+    """系统别名任务走站点环境变量，不用管理员个人网关。"""
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
     db.insert_post("xueqiu", kid, "al-admin", "$涂改液(SZ000858)$", "戏称", "u", "")
@@ -5008,13 +5042,12 @@ def test_stock_alias_task_prefers_admin_grok_over_env(monkeypatch):
             model="deepseek-chat",
         ),
     )._run_stock_alias_task()
-    assert seen["key"] == "sk-grok"
-    assert seen["model"] == "grok-4.6"
-    assert seen["user_supplied"] is False
+    assert seen["key"] == "sk-deepseek"
+    assert seen["model"] == "deepseek-chat"
 
 
-def test_stock_alias_task_runs_with_admin_llm_when_env_empty(monkeypatch):
-    """环境变量没配 LLM 时，管理员推送设置也能跑标记解析。"""
+def test_stock_alias_task_skips_when_env_empty(monkeypatch):
+    """环境变量没配 LLM 时，不借用管理员个人网关。"""
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
     db.insert_post("xueqiu", kid, "al-only", "$涂改液(SZ000858)$", "戏称", "u", "")
@@ -5034,8 +5067,7 @@ def test_stock_alias_task_runs_with_admin_llm_when_env_empty(monkeypatch):
 
     monkeypatch.setattr("app.llm.resolve_stock_marks", fake_resolve)
     _alias_scheduler(db, None)._run_stock_alias_task()
-    assert seen["n"] == 1
-    assert seen["key"] == "sk-grok"
+    assert seen["n"] == 0
 
 
 def test_daily_report_uses_admin_push_settings_llm(monkeypatch):
