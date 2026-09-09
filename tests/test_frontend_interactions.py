@@ -3477,7 +3477,21 @@ def test_live_feed_auto_consumes_pending_only_at_top():
     assert "_tlRefreshing" in poll
     assert "isLiveTimeline()" in auto
     assert "window.scrollY > 240" in auto
-    assert "refreshTimeline()" in auto
+    assert "refreshTimeline({ pollFirst: false })" in auto
+
+
+def test_auto_consumed_feed_refresh_reuses_the_completed_poll():
+    """轮询已拿到增量时，自动合并不能立刻再发一次同类请求。"""
+    live_auto = _fn_body("autoConsumeLivePending")
+    timeline_auto = _fn_body("autoConsumeTimelinePending")
+    refresh = _fn_body("refreshTimeline")
+    source = APP_JS.read_text()
+    refresh_signature = source[source.index("async function refreshTimeline"):]
+
+    assert "refreshTimeline({ pollFirst: false })" in live_auto
+    assert "refreshTimeline({ pollFirst: false })" in timeline_auto
+    assert "{ pollFirst = true } = {}" in refresh_signature
+    assert "if (pollFirst) await pollFeedUpdates()" in refresh
 
 
 def test_timeline_live_source_is_platform_pill():

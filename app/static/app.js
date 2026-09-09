@@ -2266,7 +2266,7 @@ async function autoConsumeTimelinePending(seq) {
   if (!routeStillActive(seq) || isLiveTimeline()) return;
   if (!$("#tl-feed-panel") || !feedPendingNew().length) return;
   if (window.scrollY > 240) return;
-  await refreshTimeline();
+  await refreshTimeline({ pollFirst: false });
 }
 
 // 快讯在最新位置时自动并入；用户深读旧内容时保留新快讯提示。
@@ -2274,10 +2274,10 @@ async function autoConsumeLivePending(seq) {
   if (!routeStillActive(seq) || !isLiveTimeline()) return;
   if (!$("#tl-feed-panel") || !feedPendingNew().length) return;
   if (window.scrollY > 240) return;
-  await refreshTimeline();
+  await refreshTimeline({ pollFirst: false });
 }
 
-async function refreshTimeline() {
+async function refreshTimeline({ pollFirst = true } = {}) {
   if (_tlRefreshing) return;
   _tlRefreshing = true;
   try {
@@ -2289,7 +2289,7 @@ async function refreshTimeline() {
       window.scrollTo({ top: 0, behavior: "smooth" });
       return;
     }
-    await pollFeedUpdates();
+    if (pollFirst) await pollFeedUpdates();
     const seen = new Set(posts.map((p) => p.id));
     const incoming = pending.filter((p) => !seen.has(p.id)).sort((a, b) => b.id - a.id);
     if (incoming.length) {
