@@ -721,7 +721,6 @@ def _me_llm_runtime(body: MeUpdate, user: dict, request: Request, db):
     from types import SimpleNamespace
 
     from .llm import normalize_llm_api_format
-    from .scheduler import _system_llm_config
     from .url_safety import is_allowed_trusted_llm_base, is_allowed_user_llm_base
 
     user = db.get_user(user["id"]) or user
@@ -734,9 +733,7 @@ def _me_llm_runtime(body: MeUpdate, user: dict, request: Request, db):
         body.llm_api_format if body.llm_api_format is not None else user.get("llm_api_format")
     )
     if not base or not key:
-        return _system_llm_config(
-            db, getattr(request.app.state, "llm_config", None) if request else None
-        )
+        return None
     allowed = (
         is_allowed_trusted_llm_base(base)
         if user.get("is_admin")

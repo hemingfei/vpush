@@ -458,7 +458,7 @@ export function createPushSettingsView(dependencies) {
           <header class="section-head">
             <div>
               <h2 class="section-title">AI 网关</h2>
-              <p class="section-meta">用你自己的大模型。不填则用站点默认（环境变量），与管理员个人网关无关。</p>
+              <p class="section-meta">填了 Key 才给你做 AI 摘要。不填就普通列表。打标等全站功能仍由站点 LLM 维护。</p>
             </div>
           </header>
           <div class="form-row">
@@ -473,12 +473,12 @@ export function createPushSettingsView(dependencies) {
             <input id="set-llm-base" class="form-control" type="text"
               placeholder="https://api.openai.com/v1"
               value="${escapeHtml(state.user.llm_api_base || "")}">
-            <p class="muted">OpenAI 兼容的 http(s) Base URL。留空跟站点同一套。</p>
+            <p class="muted">OpenAI 兼容的 http(s) Base URL。不填则无法用 AI 摘要。</p>
           </div>
           <div class="form-row">
             <label for="set-llm-key">API Key</label>
             <input id="set-llm-key" class="form-control" type="password"
-              placeholder="sk-...（清空并保存 = 用站点默认）"
+              placeholder="sk-...（清空 = 不用 AI 摘要）"
               value="${escapeHtml(state.user.llm_api_key || "")}" autocomplete="off">
           </div>
           <div class="form-row">

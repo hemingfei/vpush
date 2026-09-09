@@ -602,10 +602,10 @@ export function createAdminKolsView(dependencies) {
       <section class="section-panel">
         <header class="section-head">
           <div><h2 class="section-title">标签维护</h2>
-          <p class="section-meta">合并种子黑话、解析 $标记$ 新股、去掉指数/ETF 误入的股票名，并清理过期标签与碎片别名。每日自动一次，也可立即执行。标记解析跟管理员「设置 → AI 网关」同一套 LLM。</p></div>
+          <p class="section-meta">合并种子黑话、解析 $标记$ 新股、去掉指数/ETF 误入的股票名，并清理过期标签与碎片别名。每日自动一次，也可立即执行。标记解析走站点环境变量 LLM。</p></div>
         </header>
         <p class="section-meta" style="margin-top:8px" id="tag-maintain-meta">${escapeHtml(adminMaintainSummary(data))}</p>
-        ${data.maintain && data.maintain.llm_ready ? "" : `<p class="section-meta">未检测到站点 LLM。请到「设置 → AI 网关」配置 OpenAI 兼容接口，或设环境变量 LLM_API_KEY。点运行仍会合并种子、清碎片和误标。</p>`}
+        ${data.maintain && data.maintain.llm_ready ? "" : `<p class="section-meta">未检测到站点 LLM。请设环境变量 LLM_API_KEY。点运行仍会合并种子、清碎片和误标。</p>`}
         <div class="toolbar" style="margin-top:12px">
           <button class="btn-normal" onclick="adminMaintainTags('pending')">维护并回填待打标</button>
           <button class="btn-ghost" onclick="adminMaintainTags('none')">仅维护词表</button>

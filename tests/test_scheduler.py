@@ -1765,7 +1765,7 @@ def test_digest_llm_summary_computed_once_for_multiple_subscribers(monkeypatch):
     assert calls["n"] == 1
 
 
-def test_digest_uses_site_llm_when_user_has_no_key(monkeypatch):
+def test_digest_skips_llm_when_user_has_no_key(monkeypatch):
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
     uid = db.add_user("u1", "h", telegram_chat_id="111")
@@ -1802,14 +1802,20 @@ def test_digest_uses_site_llm_when_user_has_no_key(monkeypatch):
         ncfg,
         llm_config=SimpleNamespace(api_key="sk-grok", api_base="https://example.com/v1", model="grok-4.6"),
     )
-    assert calls["n"] == 1
-    assert db.get_user(uid)["llm_last_status"] == "ok"
+    assert calls["n"] == 0
+    assert not db.get_user(uid)["llm_last_status"]
 
 
 def test_digest_records_llm_fallback(monkeypatch):
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
     uid = db.add_user("u1", "h", telegram_chat_id="111")
+    db.update_user(
+        uid,
+        llm_api_key="sk-user",
+        llm_api_base="https://api.deepseek.com",
+        llm_model="deepseek-chat",
+    )
     db.add_subscription(uid, kid)
     post = make_post(kid)
     monkeypatch.setattr("app.llm.summarize_posts", lambda *a, **k: None)

@@ -1363,30 +1363,26 @@ def _buffer_secondary_subscribers(db, kol_id: int, post: Post, secondary_buffer)
             secondary_buffer.setdefault(user["id"], []).append(post)
 
 
-def _user_llm_config(user: dict, fallback=None, db: DB | None = None):
-    """用户自配 LLM 优先；没配或地址不安全时回退站点环境变量。"""
+def _user_llm_config(user: dict, db: DB | None = None):
+    """用户自配 LLM。没 Key 或地址不安全则不用 AI 摘要，不回退站点。"""
     from .db import user_plain_secret
 
     if not user.get("llm_api_key"):
-        return fallback
+        return None
     api_key = user_plain_secret(user, "llm_api_key", db)
     if not api_key:
-        return fallback
+        return None
     from types import SimpleNamespace
 
     from .url_safety import is_allowed_user_llm_base
 
-    api_base = (user.get("llm_api_base") or "").strip() or (
-        getattr(fallback, "api_base", "") if fallback else ""
-    )
+    api_base = (user.get("llm_api_base") or "").strip()
     if not api_base or not is_allowed_user_llm_base(api_base):
-        return fallback
+        return None
     return SimpleNamespace(
         api_base=api_base,
         api_key=api_key,
-        model=(user.get("llm_model") or "").strip()
-        or (getattr(fallback, "model", "") if fallback else "")
-        or "grok-4.6",
+        model=(user.get("llm_model") or "").strip() or "grok-4.6",
         api_format=(user.get("llm_api_format") or "chat"),
         user_supplied=True,
     )
@@ -1476,9 +1472,8 @@ def notify_digest_subscribers(
 ) -> None:
     """把合并摘要推送给订阅了该大V的用户（各自绑定的渠道）。
 
-    用户自配 LLM 优先，否则用站点环境变量。
-    生成失败自动降级，不影响摘要推送。summary_cache 透传给 summarize_posts，
-    同一批帖文、同一模型的多个订阅用户只调一次大模型。
+    只有用户自己配了 Key 才做 AI 摘要；否则普通列表。生成失败自动降级。
+    summary_cache 透传给 summarize_posts，同一批帖文、同一模型的多个订阅用户只调一次大模型。
     """
     if notifiers_config is None or not posts:
         return
@@ -1487,7 +1482,6 @@ def notify_digest_subscribers(
     from .channels import build_channel_notifier, iter_user_channels
 
     client = httpx.Client(timeout=15)
-    site_llm = _system_llm_config(db, llm_config)
     try:
         subscribers = db.subscribers_of_kol(kol["id"])
         keywords_by_user = db.get_users_keywords([u["id"] for u in subscribers])
@@ -1521,7 +1515,7 @@ def notify_digest_subscribers(
                 with_twitter_display(p, twitter_translate_enabled(user)) for p in matched
             ]
             summary = None
-            llm_cfg = _user_llm_config(user, site_llm, db=db)
+            llm_cfg = _user_llm_config(user, db=db)
             if llm_cfg is not None:
                 try:
                     from .llm import summarize_posts
@@ -2506,11 +2500,7 @@ class Scheduler:
         if use_llm:
             from .llm import summarize_posts
 
-            llm_cfg = _user_llm_config(
-                user,
-                _system_llm_config(self.db, getattr(self, "llm_config", None)),
-                db=self.db,
-            )
+            llm_cfg = _user_llm_config(user, db=self.db)
             if llm_cfg is not None:
                 try:
                     summary = summarize_posts(posts, llm_cfg)
@@ -2837,11 +2827,7 @@ class Scheduler:
                 for r in rows
             ]
             summary = None
-            llm_cfg = _user_llm_config(
-                user,
-                _system_llm_config(self.db, getattr(self, "llm_config", None)),
-                db=self.db,
-            )
+            llm_cfg = _user_llm_config(user, db=self.db)
             if llm_cfg is not None:
                 try:
                     from .llm import summarize_daily

@@ -765,7 +765,7 @@ export function createFeishuPersonalView(dependencies) {
       await api("/api/me", { method: "PUT", body: JSON.stringify(payload) });
       if (!routeStillActive(routeSeq) || token !== state.token
         || sessionGeneration !== imaMountState.sessionGeneration) return;
-      flash(payload.llm_api_key ? "已保存，将用你的模型" : "已保存，将用站点默认模型");
+      flash(payload.llm_api_key ? "已保存，将用你的模型" : "已保存，未填 Key 时用普通摘要");
       await reloadSettings(routeSeq);
     } catch (err) {
       if (!routeStillActive(routeSeq) || token !== state.token

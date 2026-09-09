@@ -5976,6 +5976,13 @@ def test_me_saves_llm_api_format():
     assert me.json()["llm_model"] == "gpt-test"
 
 
+def test_llm_models_requires_key():
+    client = make_client()
+    headers = user_headers(client, "llm-empty")
+    resp = client.post("/api/me/llm-models", json={}, headers=headers)
+    assert resp.status_code == 400
+
+
 def test_llm_models_rejects_intranet_base():
     client = make_client()
     headers = user_headers(client, "llm-private-user")
