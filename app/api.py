@@ -754,6 +754,10 @@ IMAGE_PROXY_HOSTS = frozenset({
     "wx1.sinaimg.cn", "wx2.sinaimg.cn", "wx3.sinaimg.cn", "wx4.sinaimg.cn",
     "static-assets-1.truthsocial.com",
 })
+# <img src> 不能带 Authorization，所以此接口保持匿名；按 IP 卡住带宽放大。
+# 180/分钟覆盖快速滚时间线（懒加载 + 每帖最多 4 图），公司 NAT 也留余量。
+IMAGE_PROXY_MAX_PER_WINDOW = 180
+IMAGE_PROXY_WINDOW_SECONDS = 60
 
 
 ACCOUNT_ORIGIN_LABELS = {
@@ -1125,6 +1129,7 @@ def create_api_router(
     market_quotes = MarketQuotes()
     # 登录/注册限流（内存版，单实例够用）：每 IP 窗口内失败次数超限后 429
     login_attempts: dict[str, list[float]] = {}
+    img_proxy_hits: dict[str, list[float]] = {}
     ima_quota_alerts: set[tuple] = set()
     LOGIN_MAX_FAILURES = 8
     LOGIN_WINDOW = 300
@@ -1166,6 +1171,22 @@ def create_api_router(
             raise HTTPException(status_code=429, detail="尝试次数过多，请 5 分钟后再试")
         # 每次登录尝试顺带清理全量过期 IP 记录，防止无界增长（不能只删空列表）
         _prune_window_dict(login_attempts, LOGIN_WINDOW, now, max_entries=1000)
+
+    def _check_img_proxy_limit(ip: str) -> None:
+        now = time.time()
+        recent = [t for t in img_proxy_hits.get(ip, []) if now - t < IMAGE_PROXY_WINDOW_SECONDS]
+        if len(recent) >= IMAGE_PROXY_MAX_PER_WINDOW:
+            img_proxy_hits[ip] = recent
+            _prune_window_dict(img_proxy_hits, IMAGE_PROXY_WINDOW_SECONDS, now, max_entries=2000)
+            retry_after = max(1, int(IMAGE_PROXY_WINDOW_SECONDS - (now - recent[0])) + 1)
+            raise HTTPException(
+                status_code=429,
+                detail="图片加载过于频繁，请稍后再试",
+                headers={"Retry-After": str(retry_after)},
+            )
+        recent.append(now)
+        img_proxy_hits[ip] = recent
+        _prune_window_dict(img_proxy_hits, IMAGE_PROXY_WINDOW_SECONDS, now, max_entries=2000)
 
     def _turnstile_runtime() -> dict:
         stored_enabled = db.get_setting("turnstile_enabled")
@@ -5698,9 +5719,10 @@ def create_api_router(
 
     @router.get("/img-proxy")
     def img_proxy(url: str, request: Request):
-        """受信图床代理：精确域名、HTTPS、无重定向、流式限制 10 MB。"""
+        """受信图床代理：精确域名、HTTPS、无重定向、流式限制 10 MB，按 IP 限速。"""
         from urllib.parse import urlparse
 
+        _check_img_proxy_limit(_client_ip(request))
         url = (url or "").strip()
         try:
             parsed = urlparse(url)

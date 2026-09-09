@@ -4030,6 +4030,62 @@ def test_img_proxy_whitelisted_host_bypasses_dns_hijack(monkeypatch):
     assert resp.content == b"\xff\xd8\xffok"
 
 
+def test_img_proxy_rate_limit_per_ip(monkeypatch):
+    """匿名 img-proxy 按 IP 限速，避免公网刷带宽。"""
+    monkeypatch.setattr("app.api.IMAGE_PROXY_MAX_PER_WINDOW", 3)
+    client = make_client()
+    params = {"url": "https://example-cdn.com/x.jpg"}
+    for _ in range(3):
+        assert client.get("/api/img-proxy", params=params).status_code == 400
+    blocked = client.get("/api/img-proxy", params=params)
+    assert blocked.status_code == 429
+    assert blocked.headers.get("retry-after")
+    assert "频繁" in blocked.json()["detail"]
+
+
+def test_img_proxy_xff_cannot_bypass_rate_limit(monkeypatch):
+    """未信任反代时，轮换 X-Forwarded-For 不能绕过 img-proxy 限速。"""
+    monkeypatch.setattr("app.api.IMAGE_PROXY_MAX_PER_WINDOW", 3)
+    client = make_client()
+    params = {"url": "https://example-cdn.com/x.jpg"}
+    for i in range(3):
+        assert client.get(
+            "/api/img-proxy",
+            params=params,
+            headers={"X-Forwarded-For": f"1.1.1.{i}"},
+        ).status_code == 400
+    assert client.get(
+        "/api/img-proxy",
+        params=params,
+        headers={"X-Forwarded-For": "9.9.9.9"},
+    ).status_code == 429
+
+
+def test_img_proxy_rate_limit_buckets_trusted_xff(monkeypatch):
+    """信任反代后，不同 X-Forwarded-For 分桶，互不影响。"""
+    monkeypatch.setattr("app.api.IMAGE_PROXY_MAX_PER_WINDOW", 2)
+    cfg = Config()
+    cfg.web.trust_proxy = True
+    client = make_client(config=cfg)
+    params = {"url": "https://example-cdn.com/x.jpg"}
+    for _ in range(2):
+        assert client.get(
+            "/api/img-proxy",
+            params=params,
+            headers={"X-Forwarded-For": "1.1.1.1"},
+        ).status_code == 400
+    assert client.get(
+        "/api/img-proxy",
+        params=params,
+        headers={"X-Forwarded-For": "1.1.1.1"},
+    ).status_code == 429
+    assert client.get(
+        "/api/img-proxy",
+        params=params,
+        headers={"X-Forwarded-For": "2.2.2.2"},
+    ).status_code == 400
+
+
 def test_me_subscription_count():
     client = make_client()
     admin_headers = auth_headers(client)
