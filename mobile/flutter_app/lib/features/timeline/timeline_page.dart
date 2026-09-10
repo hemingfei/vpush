@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/api_client.dart';
@@ -17,28 +19,52 @@ class TimelinePage extends StatefulWidget {
   State<TimelinePage> createState() => _TimelinePageState();
 }
 
-class _TimelinePageState extends State<TimelinePage> {
+class _TimelinePageState extends State<TimelinePage>
+    with WidgetsBindingObserver {
   late final TimelineController _controller = TimelineController(
     api: widget.api,
   );
   late final MarketController _market = MarketController(api: widget.api);
   final _query = TextEditingController();
+  Timer? _pollTimer;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _controller.load();
     _market
       ..load()
       ..startPolling();
+    _pollTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+      _controller.poll();
+    });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _pollTimer?.cancel();
     _controller.dispose();
     _market.dispose();
     _query.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _market.startPolling();
+      _pollTimer ??= Timer.periodic(const Duration(seconds: 60), (_) {
+        _controller.poll();
+      });
+      _controller.poll();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _pollTimer?.cancel();
+      _pollTimer = null;
+      _market.stopPolling();
+    }
   }
 
   Future<void> _applyQuery(String value) async {
