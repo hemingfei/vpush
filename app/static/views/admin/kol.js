@@ -158,6 +158,7 @@ export function createAdminKolsView(dependencies) {
         </div>
       </section>
       ${newsKolPanelHtml()}
+      ${researchKolPanelHtml()}
       ${wscnBroadcastPanelHtml()}`;
     // 回填筛选控件当前值（页面重建后）
     const qEl = $("#ak-q"); if (qEl) qEl.value = state.adminKolsQ || "";
@@ -166,6 +167,7 @@ export function createAdminKolsView(dependencies) {
     adminKolSyncCheckall(kols);
     $("#admin-kols-tabs").innerHTML = PLATFORM_TABS.map((p) => platformTabHTML(p, state.adminKolsPlatform, "admin")).join("");
     loadNewsKolPanel();
+    loadResearchKolPanel();
     loadWscnBroadcastPanel();
     return { hiddenFocus: focusIds.length > 0 && visibleFocus.length === 0 };
   }
@@ -479,6 +481,205 @@ export function createAdminKolsView(dependencies) {
     _newsKols.dirty = false;
     newsKolSync();
     newsKolRefreshItems();
+  }
+
+  // ---- 调研纪要大V：独立勾选面板（与实时资讯大V同口径，独立勾选集） ----
+  const _researchKols = {
+    kols: [],
+    selected: new Set(),
+    saved: new Set(),
+    loaded: false,
+    dirty: false,
+    search: "",
+  };
+
+  let _researchKolOutsideBound = false;
+  function _bindResearchKolOutsideClose() {
+    if (_researchKolOutsideBound) return;
+    _researchKolOutsideBound = true;
+    document.addEventListener("click", (event) => {
+      if (!event.target.isConnected) return;
+      const menu = $("#research-kol-menu");
+      if (!menu || !menu.classList.contains("open")) return;
+      if (!event.target.closest("#research-kol-dropdown")) {
+        menu.classList.remove("open");
+        $("#research-kol-trigger")?.classList.remove("open");
+      }
+    });
+  }
+
+  function researchKolPanelHtml() {
+    return `
+      <section class="section-panel news-kol-panel">
+        <header class="section-head">
+          <div><h2 class="section-title">调研纪要大V</h2>
+          <p class="section-meta">勾选进入财经资讯「调研纪要」栏目的大V；保存后其动态对本栏目所有用户可见（未订阅用户同样能看到，与上方列表的订阅/档位互不影响）。</p></div>
+        </header>
+        <div class="ai-kol-dropdown news-kol-dropdown" id="research-kol-dropdown">
+          <div id="research-kol-trigger" class="ai-kol-dropdown-trigger" onclick="researchKolToggle()" role="button" aria-haspopup="listbox" tabindex="0">
+            <span id="research-kol-selected-text" class="ai-kol-selected-text">加载中…</span>
+            <svg class="ai-kol-dropdown-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+          </div>
+          <div id="research-kol-menu" class="ai-kol-dropdown-menu mxva-kol-menu news-kol-menu research-kol-menu">
+            <div class="mxva-kol-toolbar">
+              <input id="research-kol-search" class="form-control" placeholder="搜索大V名称" aria-label="搜索大V" oninput="researchKolSearch(this.value)">
+              <button type="button" class="btn-sm" onclick="researchKolAll()" title="勾选当前搜索结果里的启用大V">全选</button>
+              <button type="button" class="btn-sm" onclick="researchKolNone()">清空</button>
+            </div>
+            <div id="research-kol-items" class="mxva-kol-items"></div>
+          </div>
+        </div>
+        <p class="mxva-note" id="research-kol-note"></p>
+        <div class="toolbar" style="margin-top:10px;align-items:center;gap:8px">
+          <button type="button" class="btn-normal" id="research-kol-save" onclick="researchKolSave()" disabled>保存勾选</button>
+          <button type="button" class="btn-sm" id="research-kol-discard" onclick="researchKolDiscard()" hidden>放弃更改</button>
+          <span class="muted" id="research-kol-hint">更改保存后生效</span>
+        </div>
+      </section>`;
+  }
+
+  async function loadResearchKolPanel() {
+    _bindResearchKolOutsideClose();
+    try {
+      const kols = await api("/api/kols");
+      _researchKols.kols = kols || [];
+      _researchKols.loaded = true;
+      if (!_researchKols.dirty) {
+        _researchKols.selected = new Set(_researchKols.kols.filter((k) => k.research_selected).map((k) => k.id));
+        _researchKols.saved = new Set(_researchKols.selected);
+      }
+    } catch {
+      _researchKols.kols = [];
+    }
+    researchKolSync();
+    researchKolRefreshItems();
+  }
+
+  function researchKolName(id) {
+    const k = _researchKols.kols.find((x) => x.id === id);
+    return k ? k.name : `#${id}`;
+  }
+
+  function researchKolTriggerText() {
+    const ids = [..._researchKols.selected];
+    if (!ids.length) return "未勾选（调研纪要栏目为空）";
+    if (ids.length <= 3 && _researchKols.kols.length) return ids.map((id) => researchKolName(id)).join("、");
+    return `已选 ${ids.length} 个大V`;
+  }
+
+  function researchKolSync() {
+    const text = $("#research-kol-selected-text");
+    const note = $("#research-kol-note");
+    const hint = $("#research-kol-hint");
+    const save = $("#research-kol-save");
+    const discard = $("#research-kol-discard");
+    if (text) text.textContent = researchKolTriggerText();
+    if (note) {
+      const n = _researchKols.selected.size;
+      note.textContent = !_researchKols.loaded
+        ? "大V列表加载中…"
+        : n
+          ? `已勾选 ${n} 个大V；其动态会按发布时间聚合进「调研纪要」栏目`
+          : "未勾选：用户端「调研纪要」栏目为空，显示引导提示";
+    }
+    if (save) save.disabled = !_researchKols.dirty;
+    if (discard) discard.hidden = !_researchKols.dirty;
+    if (hint) hint.textContent = _researchKols.dirty ? "有未保存的更改" : "更改保存后生效";
+  }
+
+  function researchKolItemsHtml() {
+    const q = _researchKols.search.trim().toLowerCase();
+    const chosen = _researchKols.selected;
+    const sorted = [..._researchKols.kols].sort((a, b) => {
+      const as = chosen.has(a.id), bs = chosen.has(b.id);
+      if (as !== bs) return as ? -1 : 1;
+      return 0;
+    });
+    const list = q ? sorted.filter((k) => String(k.name).toLowerCase().includes(q)) : sorted;
+    return list.map((k) => {
+      const checked = chosen.has(k.id);
+      return `
+      <div class="ai-kol-item${checked ? " checked" : ""}${k.enabled ? "" : " disabled"}" data-kol-id="${k.id}"
+        role="checkbox" aria-checked="${checked}" tabindex="0" title="${k.is_private ? "私有大V：勾选后其动态在本栏目对所有用户可见" : ""}"
+        onclick="researchKolToggleItem(${k.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();researchKolToggleItem(${k.id})}">
+        <input type="checkbox" class="ai-kol-checkbox" ${checked ? "checked" : ""} tabindex="-1" aria-hidden="true">
+        <div class="ai-kol-content">
+          <span class="ai-kol-name">${escapeHtml(k.name)}</span>
+          <span class="ai-kol-platform">${k.enabled ? "启用中" : "已停用"}${k.is_private ? " · 私有" : ""}</span>
+        </div>
+      </div>`;
+    }).join("") || `<div class="mxva-kol-empty">无匹配的大V</div>`;
+  }
+
+  function researchKolRefreshItems() {
+    const box = $("#research-kol-items");
+    if (box) box.innerHTML = researchKolItemsHtml();
+  }
+
+  async function researchKolToggle() {
+    const menu = $("#research-kol-menu");
+    if (!menu) return;
+    const open = menu.classList.toggle("open");
+    $("#research-kol-trigger")?.classList.toggle("open", open);
+    if (!open) return;
+    researchKolRefreshItems();
+    $("#research-kol-search")?.focus();
+  }
+
+  function researchKolToggleItem(id) {
+    const k = _researchKols.kols.find((x) => x.id === id);
+    if (k && !k.enabled && !_researchKols.selected.has(id)) return;
+    if (_researchKols.selected.has(id)) _researchKols.selected.delete(id);
+    else _researchKols.selected.add(id);
+    _researchKols.dirty = true;
+    researchKolSync();
+    researchKolRefreshItems();
+  }
+
+  function researchKolAll() {
+    const q = _researchKols.search.trim().toLowerCase();
+    const list = q ? _researchKols.kols.filter((k) => String(k.name).toLowerCase().includes(q)) : _researchKols.kols;
+    list.forEach((k) => { if (k.enabled) _researchKols.selected.add(k.id); });
+    _researchKols.dirty = true;
+    researchKolSync();
+    researchKolRefreshItems();
+  }
+
+  function researchKolNone() {
+    _researchKols.selected.clear();
+    _researchKols.dirty = true;
+    researchKolSync();
+    researchKolRefreshItems();
+  }
+
+  function researchKolSearch(q) {
+    _researchKols.search = q || "";
+    researchKolRefreshItems();
+  }
+
+  async function researchKolSave() {
+    const btn = $("#research-kol-save");
+    if (btn) btn.disabled = true;
+    try {
+      const data = await api("/api/admin/news/research-kols", {
+        method: "PUT",
+        body: JSON.stringify({ ids: [..._researchKols.selected] }),
+      });
+      _researchKols.saved = new Set(data.ids ?? [..._researchKols.selected]);
+      _researchKols.dirty = false;
+      flash(`调研纪要大V已保存（${data.count} 个）`);
+    } catch (err) {
+      flash("保存失败: " + err.message, "error");
+    } finally {
+      researchKolSync();
+    }
+  }
+
+  function researchKolDiscard() {
+    _researchKols.selected = new Set(_researchKols.saved);
+    _researchKols.dirty = false;
+    researchKolSync();
+    researchKolRefreshItems();
   }
 
   // ---- 快讯播报：将重要快讯转发到V平台 KOL，订阅者收到推送 ----
@@ -2176,6 +2377,14 @@ export function createAdminKolsView(dependencies) {
     newsKolSearch,
     newsKolSave,
     newsKolDiscard,
+    loadResearchKolPanel,
+    researchKolToggle,
+    researchKolToggleItem,
+    researchKolAll,
+    researchKolNone,
+    researchKolSearch,
+    researchKolSave,
+    researchKolDiscard,
     loadWscnBroadcastPanel,
     saveWscnBroadcastSettings,
     adminAddCategory,

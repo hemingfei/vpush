@@ -157,12 +157,24 @@
   .mxv-feed-cols{grid-template-columns:1fr;column-gap:0;}
   .mxv-feed-cols::before{display:none;}
 }
-.mxv-feed-item{display:flex;gap:8px;align-items:baseline;padding:5px 6px;margin:0 -6px;border-top:1px solid var(--mxv-sep);
+/* 观点流行内网格列对齐：时间/多空/操作/标的/大V 定宽或限宽，正文占余宽——行行对齐不错开 */
+.mxv-feed-item{display:grid;grid-template-columns:40px 46px 38px minmax(48px,78px) minmax(64px,100px) minmax(0,1fr);
+  gap:8px;align-items:baseline;padding:5px 6px;margin:0 -6px;border-top:1px solid var(--mxv-sep);
   font-size:13px;border-radius:6px;position:relative;
   transition:background .15s ease,transform .15s ease,box-shadow .15s ease;}
 .mxv-feed-col .mxv-feed-item:first-child{border-top:none;}
-.mxv-feed-item .t,.mxv-feed-item .target{flex:none;}
+.mxv-feed-item .target,.mxv-feed-item [data-act="kol"]{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.mxv-feed-item .mxv-badge{text-align:center;}
 .mxv-feed-item .sum{min-width:0;}
+/* 中窄屏：定宽列收窄，防名称列挤掉正文（minmax 上限会优先于 fr 膨胀） */
+@media (max-width:1100px){
+  .mxv-feed-item{grid-template-columns:36px 42px 34px minmax(40px,60px) minmax(52px,100px) minmax(0,1fr);}
+}
+/* 窄屏单列流：进一步压缩，徽章减内边距 */
+@media (max-width:760px){
+  .mxv-feed-item{grid-template-columns:32px 40px 30px minmax(32px,50px) minmax(42px,72px) minmax(0,1fr);gap:8px 4px;font-size:12px;}
+  .mxv-feed-item .mxv-badge{padding:0 4px;}
+}
 /* 题材个股名/大V名可点开抽屉 */
 .mxv-feed-item [data-act]{cursor:pointer;}
 .mxv-feed-item [data-act]:hover{text-decoration:underline;text-underline-offset:2px;}

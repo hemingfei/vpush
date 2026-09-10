@@ -713,6 +713,7 @@ CREATE TABLE IF NOT EXISTS kols (
     is_private INTEGER NOT NULL DEFAULT 0,
     original_only INTEGER NOT NULL DEFAULT 0,
     news_selected INTEGER NOT NULL DEFAULT 0,
+    research_selected INTEGER NOT NULL DEFAULT 0,
     category_id INTEGER,
     priority INTEGER NOT NULL DEFAULT 0,
     extra_data TEXT NOT NULL DEFAULT '',
@@ -1367,6 +1368,9 @@ class DB:
         # 财经资讯「实时资讯」栏目：管理员勾选参与聚合动态流的大V
         if "news_selected" not in cols:
             self._conn.execute("ALTER TABLE kols ADD COLUMN news_selected INTEGER NOT NULL DEFAULT 0")
+        # 财经资讯「调研纪要」栏目：与实时资讯同口径，管理员独立勾选
+        if "research_selected" not in cols:
+            self._conn.execute("ALTER TABLE kols ADD COLUMN research_selected INTEGER NOT NULL DEFAULT 0")
         if "secondary" not in cols:
             self._conn.execute("ALTER TABLE kols ADD COLUMN secondary INTEGER NOT NULL DEFAULT 0")
         if "silent" not in cols:
@@ -2385,6 +2389,46 @@ class DB:
         """「实时资讯」栏目勾选的大V：只含启用中的大V（V平台与其他平台同口径）。"""
         return [r["id"] for r in self.news_selected_kols()]
 
+    # ---- 调研纪要栏目：与实时资讯完全同口径，独立勾选集 ----
+
+    def set_kols_research_selected(self, ids: list[int], selected: bool) -> None:
+        """批量勾选/取消「调研纪要」栏目聚合的大V。"""
+        placeholders = ",".join("?" * len(ids))
+        self._execute(
+            f"UPDATE kols SET research_selected = ? WHERE id IN ({placeholders})",
+            (1 if selected else 0, *ids),
+        )
+
+    def replace_research_selected_kols(self, ids: list[int]) -> None:
+        """全量替换「调研纪要」勾选：列表内置 1，其余全部置 0（单事务防中间态）。"""
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                if ids:
+                    placeholders = ",".join("?" * len(ids))
+                    self._conn.execute(
+                        f"UPDATE kols SET research_selected = CASE WHEN id IN ({placeholders}) "
+                        "THEN 1 ELSE 0 END",
+                        ids,
+                    )
+                else:
+                    self._conn.execute("UPDATE kols SET research_selected = 0")
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def research_selected_kols(self) -> list[dict]:
+        """「调研纪要」栏目勾选的大V明细（id/名称/平台），前端来源筛选下拉用。"""
+        return self._rows(
+            "SELECT id, name, platform FROM kols WHERE research_selected = 1 AND enabled = 1 "
+            "ORDER BY id"
+        )
+
+    def research_selected_kol_ids(self) -> list[int]:
+        """「调研纪要」栏目勾选的大V：只含启用中的大V（V平台与其他平台同口径）。"""
+        return [r["id"] for r in self.research_selected_kols()]
+
     def get_kol_by_external(self, platform: str, external_id: str) -> dict | None:
         """按平台 + 外部ID 查大V（更新 external_id 时的唯一性校验用）。"""
         rows = self._rows(
@@ -2470,6 +2514,7 @@ class DB:
         enabled=None,
         original_only=_UNSET,
         news_selected=_UNSET,
+        research_selected=_UNSET,
         category_id=_UNSET,
         priority=_UNSET,
         secondary=_UNSET,
@@ -2495,6 +2540,9 @@ class DB:
         if news_selected is not _UNSET:
             sets.append("news_selected = ?")
             params.append(1 if news_selected else 0)
+        if research_selected is not _UNSET:
+            sets.append("research_selected = ?")
+            params.append(1 if research_selected else 0)
         if category_id is not _UNSET:
             sets.append("category_id = ?")
             params.append(category_id)

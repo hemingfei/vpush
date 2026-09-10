@@ -863,14 +863,16 @@ export function createMxViewsView(dependencies) {
   // ---- 实时观点流：首批次→选定快照批次（快照语义，回看不显示其后批次），批内时间倒序 ----
   // 批内两列报纸流：左列装较新一半（顶部=最新），右列续排（底部=最早）；窄屏回落单列
   function mxvFeedItemHtml(o, fresh) {
+    const kol = o.kol_name || "";
+    const kolShort = kol.length > 6 ? `${kol.slice(0, 6).replace(/[（(【\[]$/, "")}…` : kol; // 大V名最多展示6字，全名见悬浮
     return `
     <div class="mxv-feed-item${fresh ? " fresh" : ""}" data-mxv-hl="${escapeHtml(`${o.target_type || ""}:${o.target_name || ""}`)}" data-kol-id="${o.kol_id || ""}">
       <span class="t" style="color:var(--mxv-accent)">${escapeHtml((o.occurred_at || "").slice(11, 16))}</span>
       <span class="mxv-badge ${escapeHtml(o.direction)}">${o.direction === "bull" ? "↑看多" : o.direction === "bear" ? "↓看空" : "中性"}</span>
-      ${o.action ? `<span class="mxv-badge act">${escapeHtml(o.action)}</span>` : ""}
-      <span class="target" data-act="target" style="color:var(--mxv-text)">${escapeHtml(o.target_name)}</span>
-      <span data-act="kol" style="color:var(--mxv-muted)">· ${escapeHtml(o.kol_name)}</span>
-      <span class="sum" style="color:var(--mxv-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(o.summary || "")}</span>
+      ${o.action ? `<span class="mxv-badge act" title="${escapeHtml(o.action)}">${escapeHtml(o.action)}</span>` : "<span></span>"}
+      <span class="target" data-act="target" style="color:var(--mxv-text)" title="${escapeHtml(o.target_name)}">${escapeHtml(o.target_name)}</span>
+      <span data-act="kol" style="color:var(--mxv-muted)" title="${escapeHtml(kol)}">· ${escapeHtml(kolShort)}</span>
+      <span class="sum" style="color:var(--mxv-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(o.summary || "")}">${escapeHtml(o.summary || "")}</span>
     </div>`;
   }
 

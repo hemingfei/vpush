@@ -442,6 +442,7 @@ class KolUpdate(BaseModel):
     original_only: bool | None = None
     silent: bool | None = None
     news_selected: bool | None = None
+    research_selected: bool | None = None
     block_keywords: list[str] | None = None
     recommend_weight: int | None = None
 
@@ -449,13 +450,20 @@ class KolUpdate(BaseModel):
 class KolBatchAction(BaseModel):
     ids: list[int]
     # action: enable|disable|priority|secondary|normal|category|delete|
-    #         news_selected|news_unselected（实时资讯栏目勾选）
+    #         news_selected|news_unselected（实时资讯栏目勾选）|
+    #         research_selected|research_unselected（调研纪要栏目勾选）
     action: str
     value: bool | int | None = None
 
 
 class NewsRealtimeKolsIn(BaseModel):
     """「实时资讯」栏目勾选的全量设置：列表内勾选，列表外全部取消。"""
+
+    ids: list[int]
+
+
+class NewsResearchKolsIn(BaseModel):
+    """「调研纪要」栏目勾选的全量设置：列表内勾选，列表外全部取消。"""
 
     ids: list[int]
 
@@ -2620,6 +2628,43 @@ def create_api_router(
             "sources": selected_kols,
         }
 
+    @router.get("/news/research")
+    def news_research(
+        limit: int = Query(30, ge=1, le=100),
+        offset: int = Query(0, ge=0),
+        since_id: int | None = Query(None),
+        kol_id: int | None = Query(None),
+        q: str = Query("", max_length=200),
+        user: dict = Depends(get_current_user),
+    ):
+        """调研纪要：管理员勾选的大V动态流（posts 表聚合，按发布时间倒序）。
+
+        与「实时资讯」完全同口径，仅勾选集合不同（research_selected 列）。
+        """
+        selected_kols = db.research_selected_kols()
+        kol_ids = [k["id"] for k in selected_kols]
+        posts = db.list_feed_posts(
+            kol_ids,
+            limit=limit + 1,
+            user_id=user["id"],
+            offset=max(offset, 0),
+            include_secondary=True,
+            kol_id=kol_id,
+            since_id=since_id,
+            q=(q or "").strip() or None,
+        )
+        has_more = len(posts) > limit
+        posts = apply_twitter_feed(posts[:limit], user)
+        db.attach_view_directions(posts)
+        return {
+            "items": posts,
+            "offset": offset,
+            "next_offset": offset + len(posts),
+            "has_more": has_more,
+            "selected_count": len(kol_ids),
+            "sources": selected_kols,
+        }
+
     @router.get("/news/{article_id}")
     def news_article(article_id: int, user: dict = Depends(get_current_user)):
         article = db.get_news_article(article_id, user_id=user["id"])
@@ -2744,6 +2789,23 @@ def create_api_router(
                 raise HTTPException(status_code=400, detail=f"大V不存在: {unknown[:5]}")
         db.replace_news_selected_kols(ids)
         _audit(admin, "set_news_realtime_kols", str(len(ids)), f"ids={ids[:20]}")
+        return {"ok": True, "count": len(ids), "ids": ids}
+
+    @router.put("/admin/news/research-kols", dependencies=[Depends(require_admin)])
+    def admin_set_news_research_kols(body: NewsResearchKolsIn, admin: dict = Depends(require_admin)):
+        """全量设置「调研纪要」栏目勾选的大V：列表内勾选，列表外全部取消。
+
+        供内容管理大V页的「调研纪要大V」下拉勾选面板保存；勾选即对本栏目
+        所有登录用户可见（不受订阅/私有大V白名单限制）。
+        """
+        ids = sorted({int(i) for i in body.ids})
+        if ids:
+            kols = {k["id"]: k for k in db.list_kols()}
+            unknown = [i for i in ids if i not in kols]
+            if unknown:
+                raise HTTPException(status_code=400, detail=f"大V不存在: {unknown[:5]}")
+        db.replace_research_selected_kols(ids)
+        _audit(admin, "set_news_research_kols", str(len(ids)), f"ids={ids[:20]}")
         return {"ok": True, "count": len(ids), "ids": ids}
 
     @router.get("/admin/news/sources")
@@ -5837,6 +5899,8 @@ def create_api_router(
             db.set_kols_category(body.ids, body.value)
         elif action in ("news_selected", "news_unselected"):
             db.set_kols_news_selected(body.ids, action == "news_selected")
+        elif action in ("research_selected", "research_unselected"):
+            db.set_kols_research_selected(body.ids, action == "research_selected")
         elif action == "delete":
             for kol_id in body.ids:
                 db.delete_kol(kol_id)
@@ -6193,6 +6257,8 @@ def create_api_router(
             db.update_kol(kol_id, silent=body.silent)
         if "news_selected" in body.model_fields_set and body.news_selected is not None:
             db.update_kol(kol_id, news_selected=body.news_selected)
+        if "research_selected" in body.model_fields_set and body.research_selected is not None:
+            db.update_kol(kol_id, research_selected=body.research_selected)
         if "original_only" in body.model_fields_set and body.original_only is not None:
             db.update_kol(kol_id, original_only=body.original_only)
         if "block_keywords" in body.model_fields_set and body.block_keywords is not None:
