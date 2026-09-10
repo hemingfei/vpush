@@ -16,8 +16,8 @@
 
 | 文件 | 大小 | SHA-256 |
 | --- | ---: | --- |
-| `vpush-0.1.0-armv7.apk` | 22,998,695 bytes | `6d520a9f852e3926cfb4eef0d9fb2393186a9c4449f01d169b299fba34eeefa7` |
-| `vpush-0.1.0-arm64.apk` | 27,470,001 bytes | `27fd2759b3c21ec4bf6c68cd860b0aa78edbff2b242bc79ee984bd28b4aa8a18` |
+| `vpush-0.1.0-armv7.apk` | 23,507,373 bytes | `b6e4ed295cefb3242b216515b1d1c0c03859f5b7148f204786672595b88aa53a` |
+| `vpush-0.1.0-arm64.apk` | 27,929,527 bytes | `7c2feed8e994bb354944a84ee064c2fc75f9df9ce6e1d2f1634320ecd2f56e8c` |
 
 ## 尚未通过
 

@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/material.dart';
 
 import 'package:vpush/app.dart';
 import 'package:vpush/core/api_client.dart';
@@ -27,7 +28,12 @@ void main() {
     await tester.pumpWidget(VPushApp(session: session, api: api));
     await tester.pumpAndSettle();
 
-    expect(find.text('V Push'), findsOneWidget);
+    expect(find.text('VPush'), findsOneWidget);
     expect(find.text('登录'), findsOneWidget);
+
+    await tester.tap(find.text('注册'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('register-form')), findsOneWidget);
+    expect(find.text('邀请码'), findsOneWidget);
   });
 }

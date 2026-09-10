@@ -35,12 +35,20 @@ GoRouter buildRouter({
     routes: [
       GoRoute(
         path: '/login',
-        builder: (context, state) => AuthPage(api: api, session: session),
+        builder: (context, state) => AuthPage(
+          api: api,
+          session: session,
+          themeController: themeController,
+        ),
       ),
       GoRoute(
         path: '/register',
-        builder: (context, state) =>
-            AuthPage(api: api, session: session, register: true),
+        builder: (context, state) => AuthPage(
+          api: api,
+          session: session,
+          themeController: themeController,
+          register: true,
+        ),
       ),
       ShellRoute(
         builder: (context, state, child) => AppShell(
