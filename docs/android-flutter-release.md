@@ -3,7 +3,7 @@
 ## 构建前提
 
 - Flutter 3.47.x / Dart 3.13.x。
-- JDK 17、Android SDK command-line tools、Build Tools 和 API 35（或当前 Flutter 工具链要求的版本）。
+- JDK 17、Android SDK command-line tools、Build Tools 和 API 37（`flutter_secure_storage` 11.0.0 的编译要求；target SDK 仍为 36）。
 - 已连接 ARM64 与 ARMv7 测试设备，且 `adb devices -l` 可见。
 - 正式签名资料通过本地 `android/key.properties` 注入；该文件和 keystore 不提交。
 
@@ -15,12 +15,12 @@
 API_BASE_URL=https://vpush.net scripts/build_flutter_android.sh
 ```
 
-脚本先执行格式化检查、静态分析和 Flutter 测试，再生成：
+脚本先执行格式化检查、Dart 静态分析和 Flutter 测试，再生成：
 
 - `mobile/flutter_app/build/app/outputs/flutter-apk/vpush-<version>-armv7.apk`
 - `mobile/flutter_app/build/app/outputs/flutter-apk/vpush-<version>-arm64.apk`
 
-构建参数只包含服务地址，不放 token、cookie 或签名密码。
+构建参数只包含服务地址，不放 token、cookie 或签名密码。脚本使用 `dart analyze`；Flutter 3.47.2 的 `flutter analyze` 在包含非 ASCII 字符的工作路径下存在 LSP 长度计算问题。
 
 脚本会检查两个 APK 的本地库目录只包含目标 ABI，并打印 SHA-256。CI 使用同一脚本生成并上传未签名（debug signing）测试产物；正式签名需通过受保护的 `android/key.properties` 和 keystore 配置后再构建。
 
