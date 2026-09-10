@@ -153,7 +153,8 @@ class PollingConfig:
     priority_interval_seconds: int = 60
     jitter_seconds: int = 30
     notify_on_start: bool = True
-    posts_retention_days: int = 30
+    # 0 = 不自动删除（默认永久保留）；后台「抓取设置」可调
+    posts_retention_days: int = 0
     push_logs_retention_days: int = 90
     digest_interval_seconds: int = 600
     secondary_interval_seconds: int = 900

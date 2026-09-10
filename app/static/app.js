@@ -5305,6 +5305,7 @@ async function savePollingConfig() {
     source_probe_interval_seconds: Number($("#pc-probe").value),
     cookie_keepalive_interval_seconds: Number($("#pc-keepalive").value),
     daily_report_hour: Number($("#pc-daily").value),
+    posts_retention_days: Number($("#pc-retention")?.value ?? 0),
     translate_twitter_content: $("#pc-translate").checked,
     telegram_rich_messages: $("#pc-tg-rich") ? $("#pc-tg-rich").checked : true,
     combination_base_seconds: Number($("#pc-cb").value),

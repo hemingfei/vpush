@@ -2982,6 +2982,42 @@ def test_polling_config_frequency_tiers():
     assert resp.status_code == 400
 
 
+def test_polling_config_posts_retention_days(monkeypatch):
+    """帖子保留天数：默认 0（不自动删除）、PUT 保存即时生效、0 合法、越界被拒。"""
+    # 本机 .env 可能用 POLLING_POSTS_RETENTION_DAYS 显式覆盖，出厂默认断言
+    # 需与本地环境隔离
+    monkeypatch.delenv("POLLING_POSTS_RETENTION_DAYS", raising=False)
+    client = make_client()
+    headers = auth_headers(client)
+    cfg = client.get("/api/admin/polling-config", headers=headers).json()
+    assert cfg["posts_retention_days"] == 0
+
+    resp = client.put(
+        "/api/admin/polling-config",
+        headers=headers,
+        json={"posts_retention_days": 90},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["posts_retention_days"] == 90
+
+    # 0 = 永久保留，同样是合法设置
+    resp = client.put(
+        "/api/admin/polling-config",
+        headers=headers,
+        json={"posts_retention_days": 0},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["posts_retention_days"] == 0
+
+    for bad in (-1, 3651):
+        resp = client.put(
+            "/api/admin/polling-config",
+            headers=headers,
+            json={"posts_retention_days": bad},
+        )
+        assert resp.status_code == 400
+
+
 def test_polling_config_zsxq_fields():
     """知识星球翻页/间隔/预缓存：GET 默认、PUT 保存、超范围被拒。"""
     client = make_client()

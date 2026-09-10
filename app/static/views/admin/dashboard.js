@@ -249,6 +249,15 @@ export function createAdminDashboardView(dependencies) {
                 </label>
               </div>
             </div>
+            <div class="cfg-group">
+              <p class="cfg-group-title">数据保留</p>
+              <div class="cfg-fields">
+                <label class="cfg-field" title="超过 N 天的帖子与财经新闻自动删除；0 = 永久保留。旧帖图片可在「帖子与日志 → 图片清理」单独释放">
+                  <span>帖子保留<span class="cfg-unit">天</span></span>
+                  <input id="pc-retention" type="number" class="form-control" min="0" max="3650" value="${s.polling_config.posts_retention_days ?? 0}">
+                </label>
+              </div>
+            </div>
           </div>
           <div class="cfg-save-row">
             <button type="button" class="btn-normal" id="pc-save" onclick="savePollingConfig()">保存抓取设置</button>
