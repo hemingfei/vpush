@@ -3488,6 +3488,104 @@ def test_service_skips_unmounted_group_without_sync_client(tmp_path, monkeypatch
     assert service.store.load_manifest()[0]["media_id"] == "old"
 
 
+def _folder(folder_id, name):
+    return {"media_type": 99, "folder_info": {"folder_id": folder_id, "name": name}}
+
+
+def test_manifest_follows_newer_month_siblings_under_kb_root():
+    group = ImaGroupConfig(
+        "legacy", "外行研报", "kb", "aug", True, "manual", ("aug",)
+    )
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    responses = {
+        "kb": [
+            _folder("aug", "2026年8月"),
+            _folder("sep", "2026年9月（最新）"),
+            _folder("other", "研报专题"),
+        ],
+        "aug": [{"media_id": "pdf_aug", "name": "8月.pdf", "file_size": 8}],
+        "sep": [{"media_id": "pdf_sep", "name": "9月.pdf", "file_size": 8}],
+        "other": [{"media_id": "pdf_other", "name": "专题.pdf", "file_size": 8}],
+    }
+    calls = []
+
+    def list_items(folder_id, folders_only=False, max_pages=None):
+        calls.append((folder_id, folders_only))
+        return list(responses[folder_id])
+
+    client.list_items = list_items
+    records = client.manifest()
+    assert {r["media_id"] for r in records} == {"pdf_aug", "pdf_sep"}
+    assert ("kb", True) in calls
+    assert ("sep", False) in calls
+    assert ("other", False) not in calls
+
+
+def test_manifest_does_not_follow_when_mount_is_not_a_month_folder():
+    group = ImaGroupConfig(
+        "semi", "Semi", "kb", "pin", True, "discovered", ("pin",)
+    )
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    responses = {
+        "kb": [_folder("pin", "精选"), _folder("sep", "2026年9月")],
+        "pin": [{"media_id": "pdf_pin", "name": "a.pdf", "file_size": 8}],
+        "sep": [{"media_id": "pdf_sep", "name": "b.pdf", "file_size": 8}],
+    }
+    client.list_items = lambda folder_id, folders_only=False, max_pages=None: list(responses[folder_id])
+    records = client.manifest()
+    assert {r["media_id"] for r in records} == {"pdf_pin"}
+
+
+def test_manifest_does_not_follow_older_or_equal_month_siblings():
+    group = ImaGroupConfig("g", "g", "kb", "sep", True, "discovered", ("sep",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    responses = {
+        "kb": [_folder("aug", "2026年8月"), _folder("sep", "2026年9月（最新）")],
+        "aug": [{"media_id": "pdf_aug", "name": "8.pdf", "file_size": 8}],
+        "sep": [{"media_id": "pdf_sep", "name": "9.pdf", "file_size": 8}],
+    }
+    client.list_items = lambda folder_id, folders_only=False, max_pages=None: list(responses[folder_id])
+    records = client.manifest()
+    assert {r["media_id"] for r in records} == {"pdf_sep"}
+
+
+def test_manifest_skips_month_follow_when_mount_is_kb_root():
+    group = ImaGroupConfig("g", "g", "kb", "kb", True, "discovered", ("kb",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    calls = []
+    responses = {
+        "kb": [
+            _folder("sep", "2026年9月"),
+            {"media_id": "pdf_root", "name": "r.pdf", "file_size": 8},
+        ],
+        "sep": [{"media_id": "pdf_sep", "name": "9.pdf", "file_size": 8}],
+    }
+
+    def list_items(folder_id, folders_only=False, max_pages=None):
+        calls.append((folder_id, folders_only))
+        return list(responses[folder_id])
+
+    client.list_items = list_items
+    records = client.manifest()
+    assert {r["media_id"] for r in records} == {"pdf_root", "pdf_sep"}
+    assert calls.count(("kb", True)) == 0
+
+
+def test_manifest_keeps_original_mount_if_kb_listing_fails():
+    group = ImaGroupConfig("g", "g", "kb", "aug", True, "manual", ("aug",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    responses = {"aug": [{"media_id": "pdf_aug", "name": "8.pdf", "file_size": 8}]}
+
+    def list_items(folder_id, folders_only=False, max_pages=None):
+        if folder_id == "kb":
+            raise RuntimeError("IMA list failed")
+        return list(responses[folder_id])
+
+    client.list_items = list_items
+    records = client.manifest()
+    assert {r["media_id"] for r in records} == {"pdf_aug"}
+
+
 def test_manifest_recurses_selected_folders_and_keeps_folder_metadata():
     group = ImaGroupConfig(
         "research", "研究", "kb", "root", True, "discovered", ("mount-a", "child-a")

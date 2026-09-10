@@ -995,6 +995,44 @@ class ImaPureClient:
                 raise RuntimeError("IMA list pagination repeated cursor")
             cursor = next_cursor
 
+    def _newer_month_sibling_ids(self, roots: tuple[str, ...]) -> tuple[str, ...]:
+        # ponytail: only month siblings under kb root, nested month folders stay unfollowed
+        kb = (self.effective_knowledge_base_id or "").strip()
+        extra: list[str] = []
+        seen = set(roots)
+        listed = False
+        siblings: list[dict[str, Any]] = []
+        for root in roots:
+            if not kb or root == kb:
+                continue
+            if not listed:
+                listed = True
+                try:
+                    siblings = self.list_items(kb, folders_only=True)
+                except Exception:
+                    logger.warning("IMA month-folder follow skipped kb=%s", kb, exc_info=True)
+                    return ()
+            mount_key = None
+            newer: list[tuple[tuple[int, int], str]] = []
+            for item in siblings:
+                if not is_ima_folder_item(item):
+                    continue
+                folder_id = ima_folder_id(item)
+                key = ima_month_folder_key(ima_folder_name(item, folder_id))
+                if key is None or not folder_id:
+                    continue
+                if folder_id == root:
+                    mount_key = key
+                else:
+                    newer.append((key, folder_id))
+            if mount_key is None:
+                continue
+            for key, folder_id in newer:
+                if key > mount_key and folder_id not in seen:
+                    seen.add(folder_id)
+                    extra.append(folder_id)
+        return tuple(extra)
+
     def manifest(self, listing_cache: dict[str, Any] | None = None, title_overrides: dict[str, str] | None = None) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
         title_overrides = title_overrides or {}
@@ -1003,6 +1041,9 @@ class ImaPureClient:
             if self.group is not None
             else ((self.effective_root_folder_id,) if self.effective_root_folder_id else ())
         )
+        extra = self._newer_month_sibling_ids(roots)
+        if extra:
+            roots = tuple(dict.fromkeys((*roots, *extra)))
         queue: list[str] = []
         selected_root_ids = {folder_id for folder_id in roots if folder_id}
         root_by_folder: dict[str, str] = {}
