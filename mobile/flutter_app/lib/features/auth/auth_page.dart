@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
@@ -6,6 +8,7 @@ import '../../core/api_client.dart';
 import '../../core/session_store.dart';
 import '../../core/theme/theme_controller.dart';
 import '../../core/theme/vpush_motion.dart';
+import '../../platform/push_registration.dart';
 import 'auth_controller.dart';
 
 class AuthPage extends StatefulWidget {
@@ -51,7 +54,12 @@ class _AuthPageState extends State<AuthPage> {
     final success = _register
         ? await _controller.register(_username.text, _password.text, _code.text)
         : await _controller.login(_username.text, _password.text);
-    if (success && mounted) context.go('/timeline');
+    if (success && mounted) {
+      unawaited(
+        PushRegistrationService(api: widget.api).registerCurrentDevice(),
+      );
+      context.go(widget.session.takePendingRoute() ?? '/timeline');
+    }
   }
 
   @override

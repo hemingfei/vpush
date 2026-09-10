@@ -48,7 +48,7 @@
 ## 环境记录
 
 - Flutter 3.47.2 / Dart 3.13.2：可用。
-- Android command-line tools：缺失，`flutter doctor -v` 未通过 Android toolchain。
-- Java Runtime：当前 shell 未找到，无法运行 Gradle。
+- Android command-line tools：已配置，API 37 / Build Tools 36.0.0 可用。
+- Java Runtime：已配置 Homebrew OpenJDK 17，双 ABI release 构建通过。
 - 真机/模拟器：`adb devices -l` 当前没有 Android 设备。
-- 结论：可完成 Dart 工程和文档基线；Android APK、插件 ABI、真机视觉和通知验收需补齐工具链后执行。
+- 结论：双 ABI 测试 APK 已可构建；插件行为、真机视觉和通知验收仍需设备与测试凭证。

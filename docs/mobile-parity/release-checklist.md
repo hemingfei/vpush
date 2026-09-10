@@ -11,20 +11,22 @@
 - v7 包：`net.vpush.app.dev`，versionName `0.1.0`，versionCode `1001`，minSdk `26`，targetSdk `36`，仅含 `armeabi-v7a`。
 - arm64 包：`net.vpush.app.dev`，versionName `0.1.0`，versionCode `2001`，minSdk `26`，targetSdk `36`，仅含 `arm64-v8a`。
 - 两个 APK 均通过 `apksigner verify`（APK Signature Scheme v2）和 `zipalign -c -P 16`；当前使用 debug 签名证书。
+- 深链白名单解析与登录后目标恢复测试通过；仅接受 `vpush.net`/`www.vpush.net` 支持路由，外部 URL 不进入 App。
+- Android 设备归属 API 测试通过：重复注册更新 token、账号切换转移归属、注销删除，`/api/me` 只返回设备数量。
 
 本次构建产物（2026-09-10）：
 
 | 文件 | 大小 | SHA-256 |
 | --- | ---: | --- |
-| `vpush-0.1.0-armv7.apk` | 23,507,373 bytes | `b6e4ed295cefb3242b216515b1d1c0c03859f5b7148f204786672595b88aa53a` |
-| `vpush-0.1.0-arm64.apk` | 27,929,527 bytes | `7c2feed8e994bb354944a84ee064c2fc75f9df9ce6e1d2f1634320ecd2f56e8c` |
+| `vpush-0.1.0-armv7.apk` | 23,524,057 bytes | `5fba07fa1f0e4b21ef2896b69487bf5f4a5e2687f2d1e84d0e2578997b58d706` |
+| `vpush-0.1.0-arm64.apk` | 27,929,827 bytes | `da88723302f0471f22ba0ccefb6d2c020e4e6ad99713a438848f90362c8724d2` |
 
 ## 尚未通过
 
-- 正式签名、干净安装/覆盖升级和 App Links 证书配置。
+- 正式签名、干净安装/覆盖升级和 App Links `assetlinks.json` 证书配置。
 - ARMv7 真机安装及运行；当前主机没有 ARMv7 设备或系统镜像。
 - 真实账号的 Web ↔ Flutter 三种宽度、双主题截图/动效对照。
-- Turnstile、原生 Android 通知、无 GMS 设备通道和通知点击路由。
+- Turnstile、远程 Android 通知 provider、无 GMS 设备通道和通知点击真机证据；设备注册与白名单深链基础已完成。
 - 完整管理员子页面、真实飞书附件/长 PDF 循环和 profile 性能采样。
 
 以上未完成项关闭前，产物只能作为可运行 Beta 测试包分发。

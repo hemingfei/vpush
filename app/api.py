@@ -318,6 +318,13 @@ class WebPushIn(BaseModel):
     keys: WebPushKeys
 
 
+class AndroidDeviceIn(BaseModel):
+    token: Annotated[str, Field(min_length=1, max_length=4096)]
+    provider: Literal["fcm", "huawei", "xiaomi", "oppo", "vivo", "meizu", "other"]
+    device_model: Annotated[str, Field(max_length=128)] = ""
+    app_version: Annotated[str, Field(max_length=64)] = ""
+
+
 class NewsSeenIn(BaseModel):
     view_started_at: str
 
@@ -1750,6 +1757,7 @@ def create_api_router(
         profile["vapid_public_key"] = vapid_pub
         profile["webpush_count"] = db.count_webpush_subscriptions(user["id"])
         profile["webpush_bound"] = profile["webpush_count"] > 0
+        profile["android_device_count"] = db.count_android_devices(user["id"])
         profile["plaza_platforms"] = plaza_visible_platforms(db)
         profile["timeline_platforms"] = user_timeline_platforms(
             db, user["id"], bool(user.get("is_admin"))
@@ -1951,6 +1959,43 @@ def create_api_router(
     def unsubscribe_webpush(user: dict = Depends(get_current_user)):
         db.delete_webpush_subscriptions(user["id"])
         return {"ok": True, "webpush_bound": False, "webpush_count": 0}
+
+    @router.put("/me/android-devices/{installation_id}")
+    def register_android_device(
+        installation_id: str,
+        body: AndroidDeviceIn,
+        user: dict = Depends(get_current_user),
+    ):
+        installation_id = installation_id.strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{7,127}", installation_id):
+            raise HTTPException(status_code=400, detail="设备安装标识无效")
+        token = body.token.strip()
+        if not token:
+            raise HTTPException(status_code=400, detail="设备 token 不能为空")
+        db.upsert_android_device(
+            installation_id,
+            user["id"],
+            token,
+            body.provider,
+            body.device_model.strip(),
+            body.app_version.strip(),
+        )
+        return {
+            "ok": True,
+            "installation_id": installation_id,
+            "provider": body.provider,
+            "device_count": db.count_android_devices(user["id"]),
+        }
+
+    @router.delete("/me/android-devices/{installation_id}")
+    def unregister_android_device(
+        installation_id: str, user: dict = Depends(get_current_user)
+    ):
+        installation_id = installation_id.strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{7,127}", installation_id):
+            raise HTTPException(status_code=400, detail="设备安装标识无效")
+        db.delete_android_device(installation_id, user["id"])
+        return {"ok": True, "device_count": db.count_android_devices(user["id"])}
 
     @router.post("/me/bind-code")
     def create_bind_code(user: dict = Depends(get_current_user)):

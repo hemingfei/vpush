@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/session_store.dart';
+import '../../core/api_client.dart';
 import '../../core/theme/theme_controller.dart';
 import '../../core/theme/vpush_motion.dart';
 import '../../core/theme/vpush_tokens.dart';
+import '../../platform/push_registration.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({
@@ -12,12 +14,14 @@ class AppShell extends StatefulWidget {
     required this.child,
     required this.location,
     required this.session,
+    required this.api,
     required this.themeController,
   });
 
   final Widget child;
   final String location;
   final SessionStore session;
+  final ApiClient api;
   final ThemeController themeController;
 
   @override
@@ -70,6 +74,8 @@ class _AppShellState extends State<AppShell> {
           IconButton(
             tooltip: '退出登录',
             onPressed: () async {
+              await PushRegistrationService(api: widget.api)
+                  .unregisterCurrentDevice();
               await widget.session.clear();
               if (context.mounted) context.go('/login');
             },

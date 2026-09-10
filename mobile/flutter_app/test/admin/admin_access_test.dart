@@ -57,4 +57,24 @@ void main() {
     expect(router.routeInformationProvider.value.uri.path, '/timeline');
     router.dispose();
   });
+
+  testWidgets('an unauthenticated deep link is saved for the login redirect', (
+    tester,
+  ) async {
+    final session = SessionStore(vault: _MemoryVault());
+    await session.load();
+    final router = buildRouter(
+      api: ApiClient(session: session),
+      session: session,
+      themeController: ThemeController(),
+      initialLocation: '/news/11',
+    );
+
+    await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+    await tester.pumpAndSettle();
+
+    expect(router.routeInformationProvider.value.uri.path, '/login');
+    expect(session.pendingRoute, '/news/11');
+    router.dispose();
+  });
 }

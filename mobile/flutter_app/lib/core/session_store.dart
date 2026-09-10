@@ -31,6 +31,7 @@ class SessionStore extends ChangeNotifier {
   final SessionVault _vault;
   String? _token;
   Map<String, dynamic>? _user;
+  String? _pendingRoute;
   int _generation = 0;
   bool _loaded = false;
 
@@ -41,6 +42,17 @@ class SessionStore extends ChangeNotifier {
   int get generation => _generation;
   bool get isAdmin => _user?['is_admin'] == true;
   bool get newsVisible => _user?['news_visible'] != false;
+  String? get pendingRoute => _pendingRoute;
+
+  void rememberPendingRoute(String route) {
+    if (route.isNotEmpty) _pendingRoute = route;
+  }
+
+  String? takePendingRoute() {
+    final route = _pendingRoute;
+    _pendingRoute = null;
+    return route;
+  }
 
   Future<void> load() async {
     _token = await _vault.read(_tokenKey);
@@ -72,6 +84,7 @@ class SessionStore extends ChangeNotifier {
     await _vault.delete(_tokenKey);
     _token = null;
     _user = null;
+    _pendingRoute = null;
     _generation++;
     notifyListeners();
   }

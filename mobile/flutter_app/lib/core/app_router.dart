@@ -12,19 +12,26 @@ import '../features/timeline/timeline_page.dart';
 import 'api_client.dart';
 import 'session_store.dart';
 import 'theme/theme_controller.dart';
+import '../platform/app_links.dart';
 
 GoRouter buildRouter({
   required ApiClient api,
   required SessionStore session,
   required ThemeController themeController,
+  String? initialLocation,
 }) {
   return GoRouter(
-    initialLocation: session.isAuthenticated ? '/timeline' : '/login',
+    initialLocation:
+        initialLocation ?? (session.isAuthenticated ? '/timeline' : '/login'),
     refreshListenable: session,
     redirect: (context, state) {
       final path = state.uri.path;
       final isAuthRoute = path == '/login' || path == '/register';
-      if (!session.isAuthenticated && !isAuthRoute) return '/login';
+      if (!session.isAuthenticated && !isAuthRoute) {
+        final route = AppLinkResolver.resolveRoute(state.uri.toString());
+        if (route != null) session.rememberPendingRoute(route);
+        return '/login';
+      }
       if (session.isAuthenticated && isAuthRoute) return '/timeline';
       if (path.startsWith('/news') && !session.newsVisible) return '/timeline';
       if ((path == '/more' || path.startsWith('/admin')) && !session.isAdmin) {
@@ -54,6 +61,7 @@ GoRouter buildRouter({
         builder: (context, state, child) => AppShell(
           location: state.uri.path,
           session: session,
+          api: api,
           themeController: themeController,
           child: child,
         ),

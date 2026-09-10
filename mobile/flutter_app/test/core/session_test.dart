@@ -28,4 +28,12 @@ void main() {
     await session.clearIfGeneration(generation);
     expect(session.isAuthenticated, isFalse);
   });
+
+  test('pending deep link is consumed once after authentication', () async {
+    final session = SessionStore(vault: _MemoryVault());
+    session.rememberPendingRoute('/news/42');
+    expect(session.pendingRoute, '/news/42');
+    expect(session.takePendingRoute(), '/news/42');
+    expect(session.takePendingRoute(), isNull);
+  });
 }

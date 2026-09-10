@@ -16,7 +16,7 @@
 - 仓库根目录：`/Users/kale/Documents/微信小程序大 v 订阅/dav-subscription`。本文任务中的文件路径均相对此目录。
 - 已检查的基线：`04ea67bbf44b07e2cca4967090022a3275cee252`；当前工作区的 `work/` 是已有未跟踪内容，不纳入客户端修改。
 - 已读取 Web 源码、产品与设计文档、API 路由及现有 Android 包装层。尚未用登录账号在真实 Android Chrome 逐页录制，因此源码值仍是候选基线，最终以阶段 0 的实际渲染取样校正。
-- 本机已安装 Flutter 3.47.2 / Dart 3.13.2；`flutter build apk --help` 确认支持 `android-arm`、`android-arm64`。Android 工程已创建并通过 Dart 分析/Flutter 测试，但本机仍缺 Java Runtime、Android command-line tools 和 Android 设备，release APK/插件真机验证待工具链恢复。
+- 本机已安装 Flutter 3.47.2 / Dart 3.13.2；`flutter build apk --help` 确认支持 `android-arm`、`android-arm64`。Android 工程已通过 Dart 分析、Flutter 测试和双 ABI release 构建；当前仍无 ARM 真机/模拟器，插件真机验证待设备接入。
 - 客户端实现已在 `feat/vpush-flutter-android` 工作树开始：认证/外壳、动态、广场、财经新闻、研报/PDF、个人设置和管理员入口已接入；真实账号视觉对照、Turnstile、系统通知和双 ABI 发布仍未完成。
 - 文档沿用仓库 `docs/plans/` 目录；技能默认的 `docs/superpowers/` 被本项目 `.gitignore` 忽略，因此不作为本计划的最终保存位置。
 
@@ -160,7 +160,7 @@ scripts/build_flutter_android.sh      # 本地与 CI 共用打包入口
 
 每个阶段完成后进行一次独立提交。涉及状态、鉴权和数据变更的代码先写可复现失败的测试，再实现并复测；纯 Token 和文案搬运使用视觉核对，不编写镜像实现的无意义单测。
 
-**执行进度（2026-09-10）：** 阶段 1 的 Android-only 工程和候选依赖已建立；阶段 2–5 的可运行页面骨架、API controller、图片/附件/行情组件和测试已完成首轮；阶段 6–8 已接入研报/PDF、飞书时间线、设置绑定轮询和管理员分区的首轮功能；阶段 9 已加入外链校验、缓存文件和系统打开入口；阶段 10 已加入双 ABI 构建脚本、ABI 校验、校验和输出和 CI。`html` 固定为 `0.15.6` 以兼容 `flutter_html 3.0.0`。真实账号视觉对照、Turnstile、原生通知、管理员全部子页面、真机插件/性能/签名验证仍未完成，当前只能称为可运行 Beta，不能称为完整视觉复刻或正式发布。
+**执行进度（2026-09-10）：** 阶段 1 的 Android-only 工程和候选依赖已建立；阶段 2–5 的可运行页面骨架、API controller、图片/附件/行情组件和测试已完成首轮；阶段 6–8 已接入研报/PDF、飞书时间线、设置绑定轮询和管理员分区的首轮功能；阶段 9 已加入外链校验、缓存文件、系统打开入口、App Links 白名单解析、登录后深链恢复、Android 设备归属 API 和 MethodChannel 平台骨架；阶段 10 已加入双 ABI 构建脚本、ABI 校验、校验和输出和 CI。`html` 固定为 `0.15.6` 以兼容 `flutter_html 3.0.0`。真实账号视觉对照、Turnstile、远程通知 provider、管理员全部子页面、真机插件/性能/签名验证仍未完成，当前只能称为可运行 Beta，不能称为完整视觉复刻或正式发布。
 
 ### 阶段 0：冻结移动 Web 基线（2–3 人日）
 
@@ -178,7 +178,7 @@ scripts/build_flutter_android.sh      # 本地与 CI 共用打包入口
 
 **新建文件：** `mobile/flutter_app/`、`docs/mobile-parity/platform-spikes.md`。
 
-- [x] 在实现分支建立 Android-only Flutter 工程，并记录 Flutter/Dart 版本；JDK/Android SDK 缺失已记录为阻塞。
+- [x] 在实现分支建立 Android-only Flutter 工程，并记录 Flutter/Dart/JDK/Android SDK 版本；本机 JDK 17、API 37 和 Build Tools 36.0.0 已验证。
 
 ```bash
 flutter doctor -v
@@ -186,7 +186,7 @@ flutter create --platforms=android --org net.vpush --project-name vpush mobile/f
 ```
 
 - [x] 工程生成后把开发包 applicationId 设置为 `net.vpush.app.dev`、namespace 设置为 `net.vpush.app.dev`、minSdk 设为 26，并保留调试签名。
-- [ ] 第一轮构建两个 release ABI 并安装到 ARM64/ARMv7 设备；当前被 Android command-line tools、JDK 和设备缺失阻塞。空工程与候选依赖已完成 `pub get`。
+- [ ] 第一轮构建两个 release ABI 并安装到 ARM64/ARMv7 设备；双 ABI 构建、ABI/manifest/签名/对齐检查已通过，当前仅缺 ARM64/ARMv7 设备安装运行证据。
 - [ ] PDF 优先验证 `pdfrx` 候选；依赖已解析，中文/鉴权/长文档/双 ABI/16KB 页真机验证待工具链和 fixture。
 - [ ] 用真实测试实例验证 Turnstile：受控 HTTPS 验证页仅传回一次性 challenge token，Flutter 提交现有登录/注册 API；白名单限制域名与回调，JWT 不通过 URL 传递。验证通过/取消/过期/失败四条路径。
 - [ ] 如果站点 WAF 对原生 HTTP 请求发起浏览器挑战，定位为客户端接入配置问题，采用站点支持的接入方式验证；不得把验证关闭作为客户端完成条件。

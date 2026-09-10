@@ -956,6 +956,18 @@ CREATE TABLE IF NOT EXISTS webpush_subscriptions (
 );
 CREATE INDEX IF NOT EXISTS idx_webpush_user ON webpush_subscriptions(user_id);
 
+CREATE TABLE IF NOT EXISTS android_devices (
+    installation_id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    token TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    device_model TEXT NOT NULL DEFAULT '',
+    app_version TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_android_devices_user ON android_devices(user_id);
+
 CREATE TABLE IF NOT EXISTS proxy_pools (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
@@ -1299,6 +1311,21 @@ class DB:
         )
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_webpush_user ON webpush_subscriptions(user_id)"
+        )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS android_devices ("
+            "  installation_id TEXT PRIMARY KEY,"
+            "  user_id INTEGER NOT NULL,"
+            "  token TEXT NOT NULL,"
+            "  provider TEXT NOT NULL,"
+            "  device_model TEXT NOT NULL DEFAULT '',"
+            "  app_version TEXT NOT NULL DEFAULT '',"
+            "  created_at TEXT NOT NULL DEFAULT (datetime('now')),"
+            "  updated_at TEXT NOT NULL DEFAULT (datetime('now'))"
+            ")"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_android_devices_user ON android_devices(user_id)"
         )
         feishu_oauth_session_cols = {
             row["name"] for row in self._rows("PRAGMA table_info(feishu_document_oauth_sessions)")
@@ -2546,6 +2573,53 @@ class DB:
 
     def delete_webpush_subscriptions(self, user_id: int) -> None:
         self._execute("DELETE FROM webpush_subscriptions WHERE user_id = ?", (user_id,))
+
+    def list_android_devices(self, user_id: int) -> list[dict]:
+        return self._rows(
+            "SELECT installation_id, user_id, token, provider, device_model, app_version, "
+            "created_at, updated_at FROM android_devices WHERE user_id = ? "
+            "ORDER BY updated_at DESC, installation_id",
+            (user_id,),
+        )
+
+    def count_android_devices(self, user_id: int) -> int:
+        rows = self._rows(
+            "SELECT COUNT(*) AS n FROM android_devices WHERE user_id = ?", (user_id,)
+        )
+        return int(rows[0]["n"]) if rows else 0
+
+    def upsert_android_device(
+        self,
+        installation_id: str,
+        user_id: int,
+        token: str,
+        provider: str,
+        device_model: str = "",
+        app_version: str = "",
+    ) -> None:
+        self._execute(
+            "INSERT INTO android_devices "
+            "(installation_id, user_id, token, provider, device_model, app_version) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(installation_id) DO UPDATE SET "
+            "user_id = excluded.user_id, token = excluded.token, "
+            "provider = excluded.provider, device_model = excluded.device_model, "
+            "app_version = excluded.app_version, updated_at = datetime('now')",
+            (
+                installation_id,
+                user_id,
+                token,
+                provider,
+                device_model or "",
+                app_version or "",
+            ),
+        )
+
+    def delete_android_device(self, installation_id: str, user_id: int) -> None:
+        self._execute(
+            "DELETE FROM android_devices WHERE installation_id = ? AND user_id = ?",
+            (installation_id, user_id),
+        )
 
     def get_user_by_openid(self, openid: str) -> dict | None:
         rows = self._rows("SELECT * FROM users WHERE wechat_openid = ?", (openid,))
@@ -3895,6 +3969,7 @@ class DB:
         self._conn.execute("DELETE FROM ima_kb_acl WHERE user_id = ?", (user_id,))
         self._conn.execute("DELETE FROM ima_kb_subscriptions WHERE user_id = ?", (user_id,))
         self._conn.execute("DELETE FROM webpush_subscriptions WHERE user_id = ?", (user_id,))
+        self._conn.execute("DELETE FROM android_devices WHERE user_id = ?", (user_id,))
         self._conn.execute("DELETE FROM user_keywords WHERE user_id = ?", (user_id,))
         self._conn.execute(
             "DELETE FROM knowledge_keyword_notified WHERE user_id = ?", (user_id,)
