@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api_client.dart';
 import '../../core/session_store.dart';
 import '../../core/theme/vpush_tokens.dart';
+import '../../platform/external_links.dart';
 import 'settings_controller.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -395,7 +395,7 @@ class _SettingsPageState extends State<SettingsPage> {
         Text('状态：${_controller.feishuRegistrationStatus}'),
         if (uri.isNotEmpty)
           TextButton.icon(
-            onPressed: () => launchUrl(Uri.parse(uri)),
+            onPressed: () => ExternalLinks.open(uri),
             icon: const Icon(Icons.open_in_new),
             label: const Text('打开飞书验证页'),
           ),

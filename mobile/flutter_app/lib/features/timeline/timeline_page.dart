@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api_client.dart';
 import '../../core/theme/vpush_tokens.dart';
+import '../../platform/external_links.dart';
+import '../../platform/file_actions.dart';
 import 'timeline_controller.dart';
 import 'timeline_models.dart';
 import 'market_controller.dart';
@@ -353,7 +354,7 @@ class _PostCardState extends State<_PostCard> {
             Align(
               alignment: Alignment.centerRight,
               child: TextButton.icon(
-                onPressed: () => launchUrl(Uri.parse(post.sourceUrl!)),
+                onPressed: () => ExternalLinks.open(post.sourceUrl!),
                 icon: const Icon(Icons.open_in_new, size: 17),
                 label: const Text('查看原文'),
               ),
@@ -366,7 +367,7 @@ class _PostCardState extends State<_PostCard> {
   Future<void> _downloadFile(TimelineFile file) async {
     if (_downloading) return;
     if (file.url.isNotEmpty) {
-      await launchUrl(Uri.parse(file.url));
+      await ExternalLinks.open(file.url);
       return;
     }
     if (file.id.isEmpty) return;
@@ -375,10 +376,11 @@ class _PostCardState extends State<_PostCard> {
       final bytes = await widget.api.getBytes(
         '/media/zsxq-file/${Uri.encodeComponent(file.id)}',
       );
+      final uri = await FileActions.cacheBytes(name: file.name, bytes: bytes);
+      await FileActions.openCachedFile(uri);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${file.name} 已加载（${bytes.length} bytes）')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('已交给系统打开 ${file.name}')));
       }
     } on ApiException catch (exception) {
       if (mounted) {

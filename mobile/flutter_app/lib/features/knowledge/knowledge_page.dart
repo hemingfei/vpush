@@ -4,10 +4,11 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:pdfrx/pdfrx.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api_client.dart';
 import '../../core/theme/vpush_tokens.dart';
+import '../../platform/external_links.dart';
+import '../../platform/file_actions.dart';
 import 'knowledge_controller.dart';
 import 'knowledge_models.dart';
 
@@ -207,7 +208,7 @@ class _KnowledgePageState extends State<KnowledgePage> {
               document.sourceUrl.isNotEmpty) ...[
             const SizedBox(height: 8),
             OutlinedButton.icon(
-              onPressed: () => launchUrl(Uri.parse(document.sourceUrl)),
+              onPressed: () => ExternalLinks.open(document.sourceUrl),
               icon: const Icon(Icons.open_in_new),
               label: const Text('打开原文'),
             ),
@@ -245,6 +246,11 @@ class _KnowledgePageState extends State<KnowledgePage> {
           ],
           if (_controller.pdfBytes != null) ...[
             const SizedBox(height: 14),
+            OutlinedButton.icon(
+              onPressed: () => _openPdfExternally(document),
+              icon: const Icon(Icons.open_in_new),
+              label: const Text('交给系统打开 PDF'),
+            ),
             SizedBox(
               height: 620,
               child: PdfViewer.data(
@@ -257,6 +263,23 @@ class _KnowledgePageState extends State<KnowledgePage> {
       );
     },
   );
+
+  Future<void> _openPdfExternally(KnowledgeDocument document) async {
+    final bytes = _controller.pdfBytes;
+    if (bytes == null) return;
+    try {
+      final uri = await FileActions.cacheBytes(
+        name: '${document.name}.pdf',
+        bytes: bytes,
+      );
+      await FileActions.openCachedFile(uri);
+    } on Object catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('无法打开 PDF：$error')));
+      }
+    }
+  }
 
   void _search(String value) {
     _searchTimer?.cancel();

@@ -3,10 +3,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_html/flutter_html.dart';
 import 'package:go_router/go_router.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api_client.dart';
 import '../../core/theme/vpush_tokens.dart';
+import '../../platform/external_links.dart';
 import 'news_controller.dart';
 import 'news_models.dart';
 
@@ -239,7 +239,7 @@ class _NewsArticlePageState extends State<NewsArticlePage> {
               if (article.url.isNotEmpty)
                 IconButton(
                   tooltip: '打开原文',
-                  onPressed: () => launchUrl(Uri.parse(article.url)),
+                  onPressed: () => ExternalLinks.open(article.url),
                   icon: const Icon(Icons.open_in_new),
                 ),
             ],
