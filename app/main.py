@@ -212,6 +212,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         news_service=news_service,
         ima_archive_file=_ima_archive_file,
     )
+    ima_documents.on_files_ready = scheduler._run_report_extraction_task
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

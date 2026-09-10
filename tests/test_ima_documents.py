@@ -4575,6 +4575,28 @@ def test_worker_skips_post_processing_after_cancel(monkeypatch):
     assert calls == ["sync"]
 
 
+def _bare_worker(monkeypatch, result):
+    service = ImaDocumentService.__new__(ImaDocumentService)
+    service._cancel_requested = False
+    service._state_lock = threading.Lock()
+    kicks = []
+    service.on_files_ready = lambda: kicks.append("extract")
+    monkeypatch.setattr(service, "sync_once", lambda: result)
+    monkeypatch.setattr(service, "scan_local_libraries", lambda: None)
+    monkeypatch.setattr(service, "_rebuild_index_if_needed", lambda: None)
+    monkeypatch.setattr("app.ima_title_zh.refresh_bank_titles_zh", lambda _: None)
+    service._worker()
+    return kicks
+
+
+def test_worker_kicks_report_extract_after_download(monkeypatch):
+    assert _bare_worker(monkeypatch, {"status": "finished", "downloaded": 2}) == ["extract"]
+
+
+def test_worker_skips_report_extract_when_nothing_downloaded(monkeypatch):
+    assert _bare_worker(monkeypatch, {"status": "finished", "downloaded": 0}) == []
+
+
 def test_failed_listing_keeps_old_group_index(tmp_path, monkeypatch):
     service, db = _sync_ready_service(
         tmp_path,

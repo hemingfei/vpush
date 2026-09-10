@@ -4065,9 +4065,20 @@ class ImaDocumentService:
             self._worker_thread.start()
         return {"status": "started"}
 
+    def _kick_report_extract(self, result: dict[str, Any] | None) -> None:
+        if not isinstance(result, dict) or int(result.get("downloaded") or 0) <= 0:
+            return
+        hook = getattr(self, "on_files_ready", None)
+        if not callable(hook):
+            return
+        try:
+            hook()
+        except Exception:
+            logger.exception("研报结构化抽取（同步后）异常")
+
     def _worker(self) -> None:
         try:
-            self.sync_once()
+            result = self.sync_once()
             if self._cancel_requested:
                 return
             try:
@@ -4084,6 +4095,7 @@ class ImaDocumentService:
                 refresh_bank_titles_zh(self)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("投行标题翻译失败 error=%s", _safe_error(exc))
+            self._kick_report_extract(result)
         except Exception as exc:  # noqa: BLE001 - worker must release its lock
             error = _safe_error(exc)
             logger.error("IMA document sync failed error=%s", error)
