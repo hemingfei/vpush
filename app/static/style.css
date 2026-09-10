@@ -5985,6 +5985,19 @@ html:not(.theme-dark) .ai-form-select option {
 .news-article-body th,
 .news-article-body td { padding: 6px 10px; border: var(--border-default); white-space: nowrap; }
 .news-article-body a { color: var(--color-accent); }
+/* 财经新闻文章弹窗（替代整页跳转） */
+.news-article-modal .modal-card { width: min(780px, calc(100vw - 28px)); padding: 0; overflow: hidden; }
+.news-article-modal-close { position: absolute; top: 10px; right: 10px; z-index: 1; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; border: none; border-radius: var(--radius-control); background: var(--color-surface-muted); color: var(--color-text-muted); cursor: pointer; transition: all 0.15s ease; }
+.news-article-modal-close:hover { background: var(--color-border); color: var(--color-text-strong); }
+.news-article-modal-content { max-height: calc(90vh - 0px); overflow-y: auto; padding: 28px 28px 24px; }
+.news-article-modal-content .news-article-page { max-width: none; }
+.news-article-modal-content .admin-skeleton { min-height: 200px; }
+@media (max-width: 640px) {
+  .news-article-modal .modal-card { max-height: 85vh; }
+  .news-article-modal-content { max-height: 85vh; padding: 28px 18px 20px; }
+  .news-article-modal-content .news-article-head h1 { font-size: 22px; }
+  .news-article-modal-content .news-article-body { font-size: 16px; padding-top: 16px; }
+}
 .news-source-modal .modal-card { width: min(520px, calc(100vw - 28px)); }
 .news-source-options { display: grid; max-height: 360px; gap: 4px; margin: 12px 0; overflow-y: auto; }
 .news-source-option { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 8px; border-radius: var(--radius-control); }

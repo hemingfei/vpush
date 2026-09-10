@@ -84,6 +84,7 @@ export function createNewsView(dependencies) {
   }
 
   function clearNewsReaderState() {
+    closeNewsArticleModal();
     stopNewsAutoLoad();
     stopNewsThumbLoad();
     stopNewsRtAutoLoad();
@@ -201,6 +202,7 @@ export function createNewsView(dependencies) {
     const next = tab === "articles" ? "articles" : tab === "research" ? "research" : "realtime";
     if (next === state.newsTab) return;
     state.newsTab = next;
+    closeNewsArticleModal();
     stopNewsRtPoll();
     stopNewsRtAutoLoad();
     stopNewsResearchPoll();
@@ -879,9 +881,43 @@ export function createNewsView(dependencies) {
     }
   }
 
+  function closeNewsArticleModal(mask) {
+    state.newsArticleId = 0;
+    if (mask) mask.remove();
+    else document.querySelector(".news-article-modal")?.remove();
+  }
+
+  async function openNewsArticleModal(articleId) {
+    const id = Number(articleId);
+    if (!Number.isInteger(id) || id <= 0) return;
+    closeNewsArticleModal();
+    const mask = document.createElement("div");
+    mask.className = "modal-mask news-article-modal";
+    mask.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="news-article-modal-title">
+      <button type="button" class="news-article-modal-close" data-close aria-label="关闭弹窗"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      <div class="news-article-modal-content"><div class="admin-skeleton" aria-hidden="true"></div></div>
+    </div>`;
+    document.body.appendChild(mask);
+    state.newsArticleId = id;
+    const close = () => closeNewsArticleModal(mask);
+    trapFocus(mask, close);
+    mask.addEventListener("click", (event) => { if (event.target === mask) close(); });
+    mask.querySelector("[data-close]").addEventListener("click", close);
+    const content = mask.querySelector(".news-article-modal-content");
+    try {
+      const article = await api(`/api/news/${id}`);
+      if (!document.body.contains(mask)) return;
+      content.innerHTML = `<article class="news-article-page"><header class="news-article-head"><div class="news-article-meta"><span>${escapeHtml(article.source_name || "")}</span><time datetime="${escapeHtml(article.published_at || "")}">${escapeHtml(fmtPublished(article.published_at, false))}</time></div><h1 id="news-article-modal-title">${escapeHtml(article.title)}</h1>${article.author ? `<p class="section-meta">作者：${escapeHtml(article.author)}</p>` : ""}<a class="btn-ghost news-original-link" href="${escapeHtml(article.url)}" target="_blank" rel="noopener noreferrer nofollow">打开原文 ${externalLinkIcon}</a></header><div class="news-article-body">${article.content_html || `<p>${escapeHtml(article.summary || "暂无正文")}</p>`}</div></article>`;
+      observeNewsLazyImages();
+    } catch (err) {
+      if (!document.body.contains(mask)) return;
+      content.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="openNewsArticle(${id})">重试</button></div>`);
+    }
+  }
+
   function openNewsArticle(articleId) {
     const id = Number(articleId);
-    if (Number.isInteger(id) && id > 0) go(`news/${id}`);
+    if (Number.isInteger(id) && id > 0) openNewsArticleModal(id);
   }
 
   function selectNewsSource(sourceId) {
@@ -931,6 +967,7 @@ export function createNewsView(dependencies) {
     newsResearchExpand,
     newsResearchNewBadgeClick,
     openNewsArticle,
+    openNewsArticleModal,
     queueNewsSearch,
     renderFinancialNewsArticle,
     renderFinancialNewsList,
