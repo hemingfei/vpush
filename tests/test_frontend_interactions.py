@@ -508,7 +508,7 @@ def test_timeline_pills_always_show_short_labels():
 
 
 def test_mobile_platform_swipe_switches_adjacent_tab():
-    """手机在列表上左右滑切相邻平台；胶囊条和按钮不抢手势；不循环。"""
+    """手机在列表上左右滑切相邻角标；动态含快讯，与胶囊同序；不循环。"""
     src = APP_JS.read_text()
     css = STYLE_CSS.read_text()
     ignore = _fn_body("mobilePlatformSwipeIgnore")
@@ -517,10 +517,16 @@ def test_mobile_platform_swipe_switches_adjacent_tab():
     adj = _fn_body("mobileSwipeAdjacent")
     start = _fn_body("onPlatSwipeStart")
     end = _fn_body("onPlatSwipeEnd")
+    swipe = _fn_body("tlSwipeEntries")
     assert "isMobileTimelineFilter()" in start
     assert "surface" in start
     assert 'return "timeline"' in surface
+    assert "isLiveTimeline()" not in surface
+    assert "tlSwipeEntries" in ctx
+    assert "tlPickSource" in ctx
     assert "tlPickPlatform" in ctx
+    assert '"live"' in swipe
+    assert "快讯" in swipe
     assert "homePickMobilePlatform" in ctx
     assert "switchMySubsPlatform" not in ctx
     assert 'return "mysubs"' not in surface
@@ -850,7 +856,8 @@ def test_plaza_source_visibility_admin_and_pills():
     assert "plazaSourceRowsHtml(s.plaza_sources)" in _fn_body("loadAdminStats")
     assert "plaza_platforms" in _fn_body("plazaVisibleSet")
     assert "timeline_platforms" in _fn_body("timelineVisibleSet")
-    assert "tlTimelineEntries()" in _fn_body("tlPillsHtml")
+    assert "tlTimelineEntries()" in _fn_body("tlSwipeEntries")
+    assert "tlSwipeEntries()" in _fn_body("tlPillsHtml")
     assert "tlPlazaEntries()" in _fn_body("renderPlatformTabs")
     assert "tlPlazaEntries()" in _fn_body("homeMobilePlatformsHtml")
     assert "ensurePlazaPlatformSelection()" in _fn_body("renderTimeline")
