@@ -8,7 +8,7 @@ import logging
 import re
 import time
 from typing import Callable
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from ...avatar_cache import cache_image_file
 from ..base import (
@@ -59,6 +59,36 @@ def looks_like_image_url(url: str, name: str = "") -> bool:
     if ANY_FILE_EXT_RE.search(name_path):
         return bool(IMAGE_FILE_EXT_RE.search(name_path))
     return True
+
+
+# text 消息内嵌文件链接的两种形态（客户端把文件分享序列化成纯文本下发，msg type
+# 仍是 text 而非 file，按纯文本展示会是一行裸 URL）：
+# 1. 「url=<URL>,fileName=<文件名>」键值串（URL 不含空白，可带中文或百分号编码）
+# 2. 微信式分享文案「分享了一份文件：<文件名>\n<URL>」（URL 可带签名查询串）
+# 仅当整条 text 就是文件分享时才提取，正文里顺带提到文件的普通消息不受影响
+TEXT_FILE_KV_RE = re.compile(r"^url=(\S+),fileName=(.*)$")
+TEXT_FILE_SHARE_RE = re.compile(r"^分享了一份文件[：:](.+)\n(https?://\S+)$")
+
+
+def extract_text_embedded_file(text: str) -> dict | None:
+    """整条 text 消息就是一个文件分享时提取附件 {url, name}，否则返回 None。"""
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    url = name = ""
+    kv = TEXT_FILE_KV_RE.match(raw)
+    if kv:
+        url, name = kv.group(1), kv.group(2).strip()
+    else:
+        share = TEXT_FILE_SHARE_RE.match(raw)
+        if share:
+            name, url = share.group(1).strip(), share.group(2)
+    if not url.startswith(("http://", "https://")):
+        return None
+    if not name:
+        # 文件名缺失时用 URL path 末段解码兜底（路径可能百分号编码）
+        name = unquote(urlparse(url).path.rstrip("/").rsplit("/", 1)[-1])
+    return {"url": url, "name": name}
 
 
 def normalize_mx_text(text: str) -> str:
@@ -296,6 +326,10 @@ class MxFetcher(Fetcher):
             msg_field = raw_msg.get("msg") or raw_msg.get("message") or ""
             content, images, files = self._parse_msg_content(msg_field)
 
+            # 提取出的附件合入 detail["files"]（与星球口径一致）：推送渠道按此
+            # 渲染 📎 附件行；原始 msg 键保留，前端时间线仍从 detail.msg 解析附件
+            detail = {**raw_msg, "files": files} if files else raw_msg
+
             # 完全解析不出文本/图片/文件的消息才丢弃：把原始 JSON 整包当正文入库
             # 会变成垃圾推送；纯文件消息（语音/PDF 等）已在解析时合成占位正文保留
             if not content and not images and not files:
@@ -327,7 +361,7 @@ class MxFetcher(Fetcher):
                 published_at=self._format_published_at(createtime),
                 post_type="post",
                 images=images,
-                detail=raw_msg,
+                detail=detail,
             )
         except Exception as e:
             logger.error(f"Failed to parse MX message to post: {e}", exc_info=True)
@@ -404,7 +438,11 @@ class MxFetcher(Fetcher):
                         if item_type == "text":
                             text = item.get("msg", "")
                             if text:
-                                content_parts.append(text)
+                                embedded = extract_text_embedded_file(text)
+                                if embedded:
+                                    files.append(embedded)
+                                else:
+                                    content_parts.append(text)
                         elif item_type == "pic":
                             url = item.get("url", "")
                             if url:

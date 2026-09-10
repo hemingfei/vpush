@@ -19,6 +19,8 @@ export function createNewsView(dependencies) {
     mdToHtml,
     imgSrcFor,
     playNotificationSound,
+    mxDisplayBody,
+    mxAttachmentCards,
     upArrowIcon,
     PLATFORM_LABELS,
     PLATFORM_ICONS,
@@ -248,7 +250,7 @@ export function createNewsView(dependencies) {
 
   function newsRtItemHtml(post) {
     const images = (Array.isArray(post.images) ? post.images : []).filter(Boolean);
-    const body = (post.content || "").trim() || "（无正文）";
+    const body = mxDisplayBody(post) || "（无正文）";
     const expanded = state.newsRtExpanded.has(post.id);
     const shown = expanded ? body : body.slice(0, 200);
     const title = (post.title || "").trim();
@@ -273,6 +275,7 @@ export function createNewsView(dependencies) {
             <a class="post-img-link" href="#" onclick="event.preventDefault();openLightbox(this.querySelector('img'))" aria-label="查看${escapeHtml(post.kol_name || "")}的配图"><img src="${escapeHtml(imgSrcFor(img))}" loading="lazy" alt="${escapeHtml(post.kol_name || "")} 的配图" onerror="imgOnError(this)"></a>`).join("")}
           ${images.length > 4 ? `<span class="post-images-more">+${images.length - 4}</span>` : ""}
         </div>` : ""}
+      ${mxAttachmentCards(post)}
       <div class="p-meta">
         ${tags.slice(0, 6).map((t) => `<span class="cat cat-tag">${escapeHtml(t)}</span>`).join("")}
         ${safeUrl ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer nofollow">查看原文 →</a>` : ""}
@@ -527,7 +530,7 @@ export function createNewsView(dependencies) {
 
   function newsResearchItemHtml(post) {
     const images = (Array.isArray(post.images) ? post.images : []).filter(Boolean);
-    const body = (post.content || "").trim() || "（无正文）";
+    const body = mxDisplayBody(post) || "（无正文）";
     const expanded = state.newsResearchExpanded.has(post.id);
     const shown = expanded ? body : body.slice(0, 200);
     const title = (post.title || "").trim();
@@ -551,6 +554,7 @@ export function createNewsView(dependencies) {
             <a class="post-img-link" href="#" onclick="event.preventDefault();openLightbox(this.querySelector('img'))" aria-label="查看${escapeHtml(post.kol_name || "")}的配图"><img src="${escapeHtml(imgSrcFor(img))}" loading="lazy" alt="${escapeHtml(post.kol_name || "")} 的配图" onerror="imgOnError(this)"></a>`).join("")}
           ${images.length > 4 ? `<span class="post-images-more">+${images.length - 4}</span>` : ""}
         </div>` : ""}
+      ${mxAttachmentCards(post)}
       <div class="p-meta">
         ${tags.slice(0, 6).map((t) => `<span class="cat cat-tag">${escapeHtml(t)}</span>`).join("")}
         ${safeUrl ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer nofollow">查看原文 →</a>` : ""}

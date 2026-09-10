@@ -265,6 +265,114 @@ def test_text_with_pdf_file_keeps_text():
     assert post.content == "看报告"
 
 
+def test_text_embedded_file_kv_extracted_as_attachment():
+    """text 消息整条是「url=...,fileName=...」键值串（客户端把文件分享序列化成文本）：
+    提取为附件、正文合成 [文件] 占位，files 同时合入 detail 供推送渠道渲染。"""
+    db = make_db()
+    fetcher = make_fetcher(db)
+    kol = make_kol(db)
+    raw = {
+        "id": 21,
+        "rid": 101,
+        "msg": '[{"type":"text","msg":"url=https://dpmedia.oss-cn-chengdu.aliyuncs.com/20260829/%E4%B8%AD%E6%8A%A5%E4%BA%A4%E6%B5%81.pdf,fileName=中报交流纪要合集.pdf"}]',
+        "createtime": 1700000000000,
+    }
+    post = fetcher._parse_message_to_post(raw, kol)
+    assert post is not None
+    assert post.content == "[文件]"
+    assert post.detail["files"] == [{
+        "url": "https://dpmedia.oss-cn-chengdu.aliyuncs.com/20260829/%E4%B8%AD%E6%8A%A5%E4%BA%A4%E6%B5%81.pdf",
+        "name": "中报交流纪要合集.pdf",
+    }]
+
+
+def test_text_embedded_file_share_text_extracted():
+    """「分享了一份文件：文件名\\nURL（带签名查询串）」同样提取为附件。"""
+    db = make_db()
+    fetcher = make_fetcher(db)
+    kol = make_kol(db)
+    raw = {
+        "id": 22,
+        "rid": 101,
+        "msg": '[{"type":"text","msg":"分享了一份文件：中报交流纪要合集（陆续补充）-截止20260828.pdf\\n'
+               'https://jf119255422.oss-cn-hangzhou.aliyuncs.com/%E4%B8%AD%E6%8A%A5.pdf?Expires=1787950690&OSSAccessKeyId=LTAI&Signature=b1%3D"}]',
+        "createtime": 1700000000000,
+    }
+    post = fetcher._parse_message_to_post(raw, kol)
+    assert post is not None
+    assert post.content == "[文件]"
+    files = post.detail["files"]
+    assert len(files) == 1
+    assert files[0]["name"] == "中报交流纪要合集（陆续补充）-截止20260828.pdf"
+    assert files[0]["url"].endswith("Signature=b1%3D")
+
+
+def test_text_embedded_file_keeps_other_text():
+    """文件分享文本与普通文字混排：正文只留普通文字，附件进 files。"""
+    db = make_db()
+    fetcher = make_fetcher(db)
+    kol = make_kol(db)
+    raw = {
+        "id": 23,
+        "rid": 101,
+        "msg": '[{"type":"text","msg":"看报告"},'
+               '{"type":"text","msg":"url=https://x.test/a.pdf,fileName=报告.pdf"}]',
+        "createtime": 1700000000000,
+    }
+    post = fetcher._parse_message_to_post(raw, kol)
+    assert post is not None
+    assert post.content == "看报告"
+    assert post.detail["files"] == [{"url": "https://x.test/a.pdf", "name": "报告.pdf"}]
+
+
+def test_plain_text_with_url_not_extracted_as_file():
+    """普通正文不误伤：url= 缺 fileName、链接单独成行等保持纯文本，不进 files。"""
+    db = make_db()
+    fetcher = make_fetcher(db)
+    kol = make_kol(db)
+    for text in (
+        "url=https://x.test/a.pdf",
+        "分享了一份文件：报告 https://x.test/a.pdf",
+        "推荐看这篇 https://x.test/a.pdf",
+    ):
+        raw = {
+            "id": 24,
+            "rid": 101,
+            "msg": f'[{{"type":"text","msg":"{text}"}}]',
+            "createtime": 1700000000000,
+        }
+        post = fetcher._parse_message_to_post(raw, kol)
+        assert post is not None
+        assert post.content == text
+        assert "files" not in post.detail
+
+
+def test_file_message_files_merged_into_detail():
+    """type=file 消息的附件同样合入 detail["files"]，纯图片消息不加 files 键。"""
+    db = make_db()
+    fetcher = make_fetcher(db)
+    kol = make_kol(db)
+    file_raw = {
+        "id": 25,
+        "rid": 101,
+        "msg": '[{"type":"file","url":"https://img.test/doc.pdf","name":"文档"}]',
+        "createtime": 1700000000000,
+    }
+    post = fetcher._parse_message_to_post(file_raw, kol)
+    assert post is not None
+    assert post.detail["files"] == [{"url": "https://img.test/doc.pdf", "name": "文档"}]
+
+    pic_raw = {
+        "id": 26,
+        "rid": 101,
+        "msg": '[{"type":"text","msg":"看图"},{"type":"pic","url":"https://img.test/a.jpg"}]',
+        "createtime": 1700000000000,
+    }
+    post = fetcher._parse_message_to_post(pic_raw, kol)
+    assert post is not None
+    assert "files" not in post.detail
+
+
 def test_json_encoded_plain_string_msg():
     db = make_db()
     fetcher = make_fetcher(db)
