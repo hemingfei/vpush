@@ -10,6 +10,22 @@ _PDF_MAX_PAGES = 4
 _PDF_MAX_CHARS = 12000
 
 
+def usable_report_text(text: str) -> str:
+    """Return extracted text unless it is a short broken-font mapping.
+
+    Some broker PDFs contain no usable font resources; pypdf then returns a few
+    long alphanumeric tokens that are not report content. Those tokens should
+    not be sent to the LLM as if they were readable text.
+    """
+    normalized = " ".join((text or "").split())
+    if not normalized:
+        return ""
+    words = normalized.split(" ")
+    if len(normalized) <= 200 and max((len(word) for word in words), default=0) >= 18:
+        return ""
+    return normalized
+
+
 def pdf_first_pages_text(pdf_path: Path, max_pages: int = _PDF_MAX_PAGES) -> str:
     """用项目既有的 pypdf 读取 PDF 前 N 页；解析失败返回空串。"""
     try:

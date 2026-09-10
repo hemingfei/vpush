@@ -2617,13 +2617,14 @@ class Scheduler:
         )
         from .llm import extract_report_structure
         from .report_text import pdf_first_pages_text as _pdf_first_pages_text
+        from .report_text import usable_report_text
         from .stock_universe import bundled_universe_codes
 
         universe = bundled_universe_codes()
         resolve = self.ima_archive_file
         if resolve is None:
             return 0
-        pipeline_version = "3"
+        pipeline_version = "4"
         version_key = "report_extract_pipeline_version"
         if db.get_setting(version_key) != pipeline_version:
             reset = db.reset_report_extractions(
@@ -2665,8 +2666,9 @@ class Scheduler:
                     text = _pdf_first_pages_text(pdf_path)
             except (OSError, ValueError):
                 text = ""
-            if not text.strip():
-                # txt 与 pdf 都取不到文本：落行防重试（修复文本源后可重置重抽）
+            text = usable_report_text(text)
+            if not text.strip() and not str(doc["name"] or "").strip():
+                # txt 与 pdf 都取不到文本且没有标题：落行防重试（修复文本源后可重置重抽）
                 db.save_report_extraction(group_id, media_id, status="notext")
                 continue
             txt_hash = hashlib.sha256(text[:20000].encode("utf-8", "ignore")).hexdigest()[:16]

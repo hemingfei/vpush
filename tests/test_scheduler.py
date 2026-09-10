@@ -214,10 +214,42 @@ def test_report_extraction_requeues_recoverable_results_once(tmp_path, monkeypat
         (group_id, "english-old")
     ]
     assert old["status"] == "empty"
-    assert db.get_setting("report_extract_pipeline_version") == "3"
+    assert db.get_setting("report_extract_pipeline_version") == "4"
 
     assert scheduler._run_report_extraction_task() == 0
     assert len(calls) == len(recoverable) + 1
+
+
+def test_report_extraction_uses_title_when_pdf_has_no_text(tmp_path, monkeypatch):
+    db = DB(tmp_path / "title-only.db")
+    group_id = "7479082602225992"
+    pdf = tmp_path / "report.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    today = datetime.datetime.now(app_scheduler.CN_TZ).date().isoformat()
+    db._execute(
+        "INSERT INTO ima_document_index "
+        "(group_id, media_id, name, has_pdf, pdf_path, sort_date) "
+        "VALUES (?, 'title-only', 'Nomura AI Strategy Buy-260909.pdf', 1, 'report.pdf', ?)",
+        (group_id, today),
+    )
+    calls = []
+
+    def fake_extract(text, llm_config, model="", universe=None, client=None, title=""):
+        calls.append((text, title))
+        return {"report_kind": "策略", "rating": "Buy", "target_price": "", "thesis": "AI demand remains strong.", "tickers": [], "status": "ok"}
+
+    monkeypatch.setattr("app.llm.extract_report_structure", fake_extract)
+    scheduler = Scheduler(
+        db,
+        {},
+        [],
+        SimpleNamespace(),
+        llm_config=SimpleNamespace(api_key="test-key", api_base="https://example.com/v1", model="test-model"),
+        ima_archive_file=lambda path: tmp_path / path,
+    )
+
+    assert scheduler._run_report_extraction_task() == 1
+    assert calls == [("", "Nomura AI Strategy Buy-260909.pdf")]
 
 
 def add_kol_subscribed(db, platform, name, external_id, **kw):
