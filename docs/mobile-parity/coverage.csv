@@ -1,0 +1,26 @@
+id,role,route,viewport,theme,state,action,expected,api,artifact,status
+AUTH-001,user,login,360,light,initial,open app,显示登录表单与 V Push 标识,,screenshot,source-ready
+AUTH-002,user,login,360,dark,error,输入错误密码提交,保留表单并显示后端业务错误,/api/auth/login,screenshot,pending-capture
+AUTH-003,user,register,390,light,initial,切换注册,显示邀请码和注册表单,/api/auth/turnstile,screenshot,pending-capture
+SHELL-001,user,timeline,390,light,loaded,登录后进入动态,显示顶栏和手机底部图标导航,/api/me,screenshot,source-ready
+SHELL-002,user,timeline,390,dark,scroll,向下滚动 24px,底栏向下隐藏且不可点击,,video,source-ready
+SHELL-003,user,timeline,390,dark,scroll,向上滚动 8px,底栏以 180ms 显示,,video,source-ready
+TL-001,user,timeline,360,light,loaded,打开动态,显示平台角标与订阅内容,/api/my/feed,screenshot,pending-capture
+TL-002,user,timeline,390,light,refresh,有新内容时点击提示,顶部平滑回到最新内容,/api/my/feed,video,pending-capture
+TL-003,user,timeline,412,dark,lightbox,点击图片并左右滑动,灯箱显示原尺寸并可切图,,video,pending-capture
+TL-004,user,timeline,390,light,error,断网后重试,错误说人话并可重试,/api/my/feed,screenshot,pending-capture
+PLAZA-001,user,home,390,light,loaded,打开广场,显示筛选和目录,/api/catalog,/api/recommendations,screenshot,pending-capture
+PLAZA-002,user,home,390,light,search,输入搜索词,200ms 防抖后显示对应结果,/api/catalog,screenshot,pending-capture
+PLAZA-003,user,kol,390,dark,loaded,打开大 V 详情,显示资料、动态和操作,/api/kols/{kol_id},/api/kols/{kol_id}/posts,screenshot,pending-capture
+NEWS-001,user,news,360,light,loaded,打开财经新闻,显示来源和文章列表,/api/news/sources,/api/news,screenshot,pending-capture
+NEWS-002,user,news/article,390,dark,loaded,打开长文,站内正文与受鉴权图片可读,/api/news/{article_id},video,pending-capture
+KB-001,user,knowledge,390,light,loaded,从动态进入研报中心,显示库、日期、标签和搜索,/api/ima-documents/catalog,/api/ima-documents,screenshot,pending-capture
+KB-002,user,knowledge/document,390,dark,loaded,打开 PDF 文档,显示摘要、元信息和 PDF 阅读器,/api/ima-documents/{media_id},/api/ima-documents/{media_id}/pdf,video,pending-capture
+KB-003,user,knowledge/document,390,light,back,从搜索结果进入后返回,恢复原 query/day/tag 与滚动位置,,video,pending-capture
+SET-001,user,settings,390,light,loaded,打开推送设置,显示四个设置页签,/api/me,screenshot,pending-capture
+SET-002,user,settings,390,dark,edit,修改免打扰并保存,服务端确认后显示新状态,/api/me,screenshot,pending-capture
+SET-003,user,settings,390,light,binding,创建飞书个人机器人,显示二维码和轮询状态,/api/me/feishu-personal/register,video,pending-capture
+ADMIN-001,admin,admin/content,390,light,loaded,打开管理员更多,显示管理容器与页签,/api/admin/dashboard,screenshot,pending-capture
+ADMIN-002,user,admin/content,390,dark,permission,普通用户打开管理员深链,拒绝并回到动态,/api/admin/dashboard,screenshot,pending-capture
+ANDROID-001,user,any,390,light,lifecycle,按返回键/预测返回,优先关闭弹窗或阅读器再返回页面,,video,pending-device
+ANDROID-002,user,any,390,dark,notification,点击本机通知,重新鉴权后打开对应动态,,video,pending-device

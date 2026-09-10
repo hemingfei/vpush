@@ -164,10 +164,10 @@ scripts/build_flutter_android.sh      # 本地与 CI 共用打包入口
 
 **新建文件：** `docs/mobile-parity/baseline.md`、`coverage.csv`、`api-contracts.md`、`motion.json`、`captures/`、`fixtures/`。
 
-- [ ] 记录基线 commit、设备/浏览器、实际计算样式、账号权限、新闻功能开关；如线上版本与当前仓库不同，使用可复现测试实例作为本轮统一基线。
-- [ ] 按页面覆盖矩阵枚举所有手机可达入口、子页签与弹窗，并补上源码检查没有展开的管理员功能。
+- [x] 记录基线 commit、设备/浏览器、实际计算样式候选值、客户端工具链状态；真实账号权限、新闻功能开关仍待测试实例。
+- [x] 按页面覆盖矩阵枚举源码确认的手机入口、子页签和管理员容器；真实账号可达性仍待测试实例确认。
 - [ ] 用脱敏数据采集三种宽度、两种主题的截图；为底栏、列表更新、弹窗、灯箱和登录制作操作录屏。
-- [ ] 逐页记录请求方法、URL、query/body、返回 shape、分页终止条件及错误响应。API 样本放 fixture，移除 token、cookie、绑定码和私人正文。
+- [x] 记录已核实的请求方法与 URL、鉴权和错误语义；真实返回 shape、分页样本和脱敏 fixture 仍待测试实例。
 - [ ] 采集断网、401、403、422、429、500、无权限库、无 PDF、长标题、超长正文和重复分页样本。
 
 **验收：** 每个可达功能在 coverage.csv 有编号、入口、角色、操作步骤与期望；每个页面族至少一个可重复的视觉与接口样本。没有登录测试账号时可继续源码清单，但不能声称视觉基线已完成。
@@ -176,19 +176,19 @@ scripts/build_flutter_android.sh      # 本地与 CI 共用打包入口
 
 **新建文件：** `mobile/flutter_app/`、`docs/mobile-parity/platform-spikes.md`。
 
-- [ ] 在实现分支建立 Android-only Flutter 工程，检查 Flutter/JDK/SDK/Gradle 工具链，并锁定验证通过的版本。
+- [x] 在实现分支建立 Android-only Flutter 工程，并记录 Flutter/Dart 版本；JDK/Android SDK 缺失已记录为阻塞。
 
 ```bash
 flutter doctor -v
 flutter create --platforms=android --org net.vpush --project-name vpush mobile/flutter_app
 ```
 
-- [ ] 工程生成后把开发包 applicationId 设置为 `net.vpush.app.dev`，minSdk 设为 26，并记录实际 namespace、入口 Activity 和签名配置；不要把脚手架自动生成的包名当作正式包名。
-- [ ] 第一轮即构建两个 release ABI，安装在 ARM64 设备及能运行 32 位 App 的设备；空工程成功后逐个加入安全存储、SVG、PDF、授权和通知候选依赖再构建。
-- [ ] PDF 优先验证 `pdfrx` 候选：中文字体、受鉴权下载、100 页以上文档、缩放、返回、内存回收、armv7 与 arm64、64 位库的 16KB 页兼容。插件不通过则验证 Android PdfRenderer 平台桥接；选择前不铺开阅读器实现。
+- [x] 工程生成后把开发包 applicationId 设置为 `net.vpush.app.dev`、namespace 设置为 `net.vpush.app.dev`、minSdk 设为 26，并保留调试签名。
+- [ ] 第一轮构建两个 release ABI 并安装到 ARM64/ARMv7 设备；当前被 Android command-line tools、JDK 和设备缺失阻塞。空工程与候选依赖已完成 `pub get`。
+- [ ] PDF 优先验证 `pdfrx` 候选；依赖已解析，中文/鉴权/长文档/双 ABI/16KB 页真机验证待工具链和 fixture。
 - [ ] 用真实测试实例验证 Turnstile：受控 HTTPS 验证页仅传回一次性 challenge token，Flutter 提交现有登录/注册 API；白名单限制域名与回调，JWT 不通过 URL 传递。验证通过/取消/过期/失败四条路径。
 - [ ] 如果站点 WAF 对原生 HTTP 请求发起浏览器挑战，定位为客户端接入配置问题，采用站点支持的接入方式验证；不得把验证关闭作为客户端完成条件。
-- [ ] 检查原生 HTML 渲染候选对段落、链接、引用、表格、内联样式、图片和文本选择的覆盖；使用真实脱敏文章与转发样本。无法满足的元素写入差异表并给出具体渲染方案。
+- [ ] `flutter_html` 候选依赖已解析；真实脱敏文章、表格、图片和文本选择覆盖待 fixture 后验证。
 - [ ] 选定通知 SDK/服务覆盖范围并验证两个 ABI；大陆安卓优先评估一个支持所需厂商通道的聚合服务，FCM 仅适用于明确依赖 GMS 的设备范围。资格/凭证、SDK 许可证、厂商覆盖和服务费用是选型输入。
 
 **验收：** 两个 ABI 的插件验证 APK 可安装、启动并执行 PDF/验证/通知样例；形成通过/失败证据和唯一选定依赖组合。CLI 列出 armv7 不能代替插件真机验证。
