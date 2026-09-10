@@ -2839,11 +2839,16 @@ function renderTlKolBar() {
   }
   bar.hidden = false;
   bar.classList.toggle("expanded", _tlKolbarExpanded);
-  bar.innerHTML = `
-    <div class="tl-kolbar-strip" id="tl-kolbar-strip" role="radiogroup" aria-label="按大V筛选">${tlKolItemsHtml()}</div>
+  // 展开态：开关作为 strip 内最后一个换行项，不再从每行右侧占宽度，各行头像能用满整行；
+  // 收起态：单行横向滚动，开关固定在滚动区右侧。
+  const toggleHtml = `
     <button type="button" class="tl-kolbar-toggle" aria-expanded="${_tlKolbarExpanded}" aria-controls="tl-kolbar-strip" onclick="tlToggleKolbar()">
       ${_tlKolbarExpanded ? "收起" : "展开"}${TL_CARET_SVG}
     </button>`;
+  const itemsHtml = tlKolItemsHtml();
+  bar.innerHTML = `
+    <div class="tl-kolbar-strip" id="tl-kolbar-strip" role="radiogroup" aria-label="按大V筛选">${itemsHtml}${_tlKolbarExpanded ? toggleHtml : ""}</div>
+    ${_tlKolbarExpanded ? "" : toggleHtml}`;
   tlSyncKolbarToggle();
 }
 

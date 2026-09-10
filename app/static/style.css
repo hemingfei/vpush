@@ -1918,7 +1918,8 @@ a.kol-card-head:hover .kol-card-info .name { color: var(--color-accent-text); }
   white-space: nowrap;
   transition: border-color var(--ease-standard), color var(--ease-standard);
 }
-.tl-kolbar.expanded .tl-kolbar-toggle { margin-top: 23px; }
+/* 展开态开关在 strip 内作为换行项，与首行头像圆垂直居中：(头像40 - 开关26) / 2 */
+.tl-kolbar.expanded .tl-kolbar-toggle { margin-top: 7px; }
 .tl-kolbar-toggle:hover { border-color: var(--color-accent-text); color: var(--color-accent-text); }
 .tl-kolbar-toggle:focus-visible { outline: 2px solid var(--color-accent-text); outline-offset: 2px; }
 .tl-kolbar-toggle[hidden] { display: none; }
@@ -3185,7 +3186,7 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   .tl-kol-item { width: 48px; gap: 3px; }
   .tl-kol-av { width: 36px; height: 36px; }
   .tl-kolbar-strip { gap: 8px; }
-  .tl-kolbar.expanded .tl-kolbar-toggle { margin-top: 11px; }
+  .tl-kolbar.expanded .tl-kolbar-toggle { margin-top: 5px; } /* (头像36 - 开关26) / 2 */
   .tl-new-badge-btn { min-height: 44px; overflow: hidden; }
   .news-rt-new-badge-btn { min-height: 44px; overflow: hidden; }
   .kol-item { flex-wrap: wrap; }
