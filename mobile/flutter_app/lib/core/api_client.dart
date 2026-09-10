@@ -21,7 +21,7 @@ class ApiClient {
             BaseOptions(
               baseUrl: const String.fromEnvironment(
                 'API_BASE_URL',
-                defaultValue: 'https://vpush.net/api',
+                defaultValue: 'https://vpush.net',
               ),
               connectTimeout: const Duration(seconds: 12),
               receiveTimeout: const Duration(seconds: 30),
@@ -36,14 +36,29 @@ class ApiClient {
     String path, {
     Map<String, dynamic>? query,
     CancelToken? cancelToken,
-  }) => _request('GET', path, query: query, cancelToken: cancelToken);
+  }) => _requestJson('GET', path, query: query, cancelToken: cancelToken);
+
+  Future<List<dynamic>> getList(
+    String path, {
+    Map<String, dynamic>? query,
+    CancelToken? cancelToken,
+  }) async {
+    final data = await _requestData(
+      'GET',
+      path,
+      query: query,
+      cancelToken: cancelToken,
+    );
+    if (data is List) return data;
+    throw ApiException('服务端返回了无法识别的列表数据');
+  }
 
   Future<Map<String, dynamic>> postJson(
     String path, {
     Map<String, dynamic>? body,
     Map<String, dynamic>? query,
     CancelToken? cancelToken,
-  }) => _request(
+  }) => _requestJson(
     'POST',
     path,
     body: body,
@@ -56,10 +71,105 @@ class ApiClient {
     Map<String, dynamic>? body,
     Map<String, dynamic>? query,
     CancelToken? cancelToken,
-  }) =>
-      _request('PUT', path, body: body, query: query, cancelToken: cancelToken);
+  }) => _requestJson(
+    'PUT',
+    path,
+    body: body,
+    query: query,
+    cancelToken: cancelToken,
+  );
 
-  Future<Map<String, dynamic>> _request(
+  Future<Map<String, dynamic>> patchJson(
+    String path, {
+    Map<String, dynamic>? body,
+    Map<String, dynamic>? query,
+    CancelToken? cancelToken,
+  }) => _requestJson(
+    'PATCH',
+    path,
+    body: body,
+    query: query,
+    cancelToken: cancelToken,
+  );
+
+  Future<Map<String, dynamic>> deleteJson(
+    String path, {
+    Map<String, dynamic>? query,
+    CancelToken? cancelToken,
+  }) => _requestJson('DELETE', path, query: query, cancelToken: cancelToken);
+
+  Future<List<int>> getBytes(
+    String path, {
+    Map<String, dynamic>? query,
+    CancelToken? cancelToken,
+  }) async {
+    final requestGeneration = session.generation;
+    final token = session.token;
+    try {
+      final response = await _dio.get<List<int>>(
+        _apiPath(path),
+        queryParameters: query,
+        cancelToken: cancelToken,
+        options: Options(
+          responseType: ResponseType.bytes,
+          headers: token == null ? null : {'Authorization': 'Bearer $token'},
+        ),
+      );
+      return response.data ?? const [];
+    } on DioException catch (error) {
+      if (error.response?.statusCode == 401 && !path.startsWith('/auth/')) {
+        await session.clearIfGeneration(requestGeneration);
+      }
+      throw _toApiException(error);
+    }
+  }
+
+  Future<String> getText(
+    String path, {
+    Map<String, dynamic>? query,
+    CancelToken? cancelToken,
+  }) async {
+    final requestGeneration = session.generation;
+    final token = session.token;
+    try {
+      final response = await _dio.get<String>(
+        _apiPath(path),
+        queryParameters: query,
+        cancelToken: cancelToken,
+        options: Options(
+          responseType: ResponseType.plain,
+          headers: token == null ? null : {'Authorization': 'Bearer $token'},
+        ),
+      );
+      return response.data ?? '';
+    } on DioException catch (error) {
+      if (error.response?.statusCode == 401 && !path.startsWith('/auth/')) {
+        await session.clearIfGeneration(requestGeneration);
+      }
+      throw _toApiException(error);
+    }
+  }
+
+  Future<Map<String, dynamic>> _requestJson(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+    Map<String, dynamic>? query,
+    CancelToken? cancelToken,
+  }) async {
+    final data = await _requestData(
+      method,
+      path,
+      body: body,
+      query: query,
+      cancelToken: cancelToken,
+    );
+    if (data is Map<String, dynamic>) return data;
+    if (data is Map) return Map<String, dynamic>.from(data);
+    throw ApiException('服务端返回了无法识别的对象数据');
+  }
+
+  Future<dynamic> _requestData(
     String method,
     String path, {
     Map<String, dynamic>? body,
@@ -70,7 +180,7 @@ class ApiClient {
     final token = session.token;
     try {
       final response = await _dio.request<dynamic>(
-        path,
+        _apiPath(path),
         data: body,
         queryParameters: query,
         cancelToken: cancelToken,
@@ -79,10 +189,7 @@ class ApiClient {
           headers: token == null ? null : {'Authorization': 'Bearer $token'},
         ),
       );
-      final data = response.data;
-      if (data is Map<String, dynamic>) return data;
-      if (data is Map) return Map<String, dynamic>.from(data);
-      throw ApiException('服务端返回了无法识别的数据');
+      return response.data;
     } on DioException catch (error) {
       final statusCode = error.response?.statusCode;
       if (statusCode == 401 && !path.startsWith('/auth/')) {
@@ -105,5 +212,11 @@ class ApiClient {
       _ => error.type == DioExceptionType.cancel ? '请求已取消' : '网络连接失败，请稍后重试',
     };
     return ApiException(message, statusCode: statusCode, detail: detail);
+  }
+
+  String _apiPath(String path) {
+    if (path == '/api' || path.startsWith('/api/')) return path;
+    if (path.startsWith('/')) return '/api$path';
+    return '/api/$path';
   }
 }

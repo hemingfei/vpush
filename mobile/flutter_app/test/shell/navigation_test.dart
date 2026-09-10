@@ -22,4 +22,15 @@ void main() {
     navigation.update(pixels: 16, maxScrollExtent: 200);
     expect(navigation.visible, isTrue);
   });
+
+  test('reset restores a visible navigation bar for a new route', () {
+    final navigation = BottomNavVisibility();
+    navigation.update(pixels: 24, maxScrollExtent: 200);
+    expect(navigation.visible, isFalse);
+
+    navigation.reset();
+    expect(navigation.visible, isTrue);
+    navigation.update(pixels: 1, maxScrollExtent: 200);
+    expect(navigation.visible, isTrue);
+  });
 }

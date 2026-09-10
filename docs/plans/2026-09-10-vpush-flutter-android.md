@@ -15,9 +15,9 @@
 - 计划日期：2026-09-10。
 - 仓库根目录：`/Users/kale/Documents/微信小程序大 v 订阅/dav-subscription`。本文任务中的文件路径均相对此目录。
 - 已检查的基线：`04ea67bbf44b07e2cca4967090022a3275cee252`；当前工作区的 `work/` 是已有未跟踪内容，不纳入客户端修改。
-- 已读取 Web 源码、产品与设计文档、API 路由及现有 Android 包装层。尚未用登录账号在真实 Android Chrome 逐页录制，因此源码值是候选基线，最终以阶段 0 的实际渲染取样校正。
-- 本机已安装 Flutter 3.47.2 / Dart 3.13.2；`flutter build apk --help` 确认支持 `android-arm`、`android-arm64`。尚未创建 Flutter 工程，也未验证 Android SDK、插件构建或签名。
-- 本次交付是实施计划；没有开始客户端实现、修改后端或执行发布。
+- 已读取 Web 源码、产品与设计文档、API 路由及现有 Android 包装层。尚未用登录账号在真实 Android Chrome 逐页录制，因此源码值仍是候选基线，最终以阶段 0 的实际渲染取样校正。
+- 本机已安装 Flutter 3.47.2 / Dart 3.13.2；`flutter build apk --help` 确认支持 `android-arm`、`android-arm64`。Android 工程已创建并通过 Dart 分析/Flutter 测试，但本机仍缺 Java Runtime、Android command-line tools 和 Android 设备，release APK/插件真机验证待工具链恢复。
+- 客户端实现已在 `feat/vpush-flutter-android` 工作树开始：认证/外壳、动态、广场、财经新闻、研报/PDF、个人设置和管理员入口已接入；真实账号视觉对照、Turnstile、系统通知和双 ABI 发布仍未完成。
 - 文档沿用仓库 `docs/plans/` 目录；技能默认的 `docs/superpowers/` 被本项目 `.gitignore` 忽略，因此不作为本计划的最终保存位置。
 
 ### 本计划采用的假设
@@ -159,6 +159,8 @@ scripts/build_flutter_android.sh      # 本地与 CI 共用打包入口
 ## 6. 分阶段执行任务
 
 每个阶段完成后进行一次独立提交。涉及状态、鉴权和数据变更的代码先写可复现失败的测试，再实现并复测；纯 Token 和文案搬运使用视觉核对，不编写镜像实现的无意义单测。
+
+**执行进度（2026-09-10）：** 阶段 1 的 Android-only 工程和候选依赖已建立；阶段 2–5 的可运行页面骨架、API controller 和测试已完成首轮；阶段 6–8 已接入研报/PDF、设置和管理员分区的首轮功能。`html` 固定为 `0.15.6` 以兼容 `flutter_html 3.0.0`。剩余复刻项按下列未勾选条目继续推进，不能把当前状态称为完整视觉复刻或正式发布。
 
 ### 阶段 0：冻结移动 Web 基线（2–3 人日）
 

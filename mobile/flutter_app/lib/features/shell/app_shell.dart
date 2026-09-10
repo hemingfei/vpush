@@ -27,6 +27,14 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   final _bottomNav = BottomNavVisibility();
 
+  @override
+  void didUpdateWidget(covariant AppShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.location != widget.location) {
+      _bottomNav.reset();
+    }
+  }
+
   bool _onScroll(ScrollNotification notification) {
     if (notification is! ScrollUpdateNotification) return false;
     final metrics = notification.metrics;
@@ -134,10 +142,16 @@ class _AppShellState extends State<AppShell> {
   }
 
   int _selectedIndex(String location) {
-    if (location.startsWith('/news')) return 1;
-    if (location.startsWith('/home') || location.startsWith('/kol')) return 2;
-    if (location.startsWith('/settings')) return 3;
-    if (location.startsWith('/more') || location.startsWith('/admin')) return 4;
+    if (location.startsWith('/news')) return widget.session.newsVisible ? 1 : 0;
+    if (location.startsWith('/home') || location.startsWith('/kol')) {
+      return widget.session.newsVisible ? 2 : 1;
+    }
+    if (location.startsWith('/settings')) {
+      return widget.session.newsVisible ? 3 : 2;
+    }
+    if (location.startsWith('/more') || location.startsWith('/admin')) {
+      return widget.session.newsVisible ? 4 : 3;
+    }
     return 0;
   }
 
@@ -158,6 +172,12 @@ class BottomNavVisibility {
   bool visible = true;
   double _lastPixels = 0;
   double _travel = 0;
+
+  void reset() {
+    visible = true;
+    _lastPixels = 0;
+    _travel = 0;
+  }
 
   void update({required double pixels, required double maxScrollExtent}) {
     final clamped = pixels.clamp(0.0, maxScrollExtent).toDouble();

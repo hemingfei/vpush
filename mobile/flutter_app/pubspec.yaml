@@ -42,6 +42,9 @@ dependencies:
   url_launcher: ^6.3.2
   pdfrx: ^2.6.1
   flutter_html: ^3.0.0
+  # flutter_html 3.0.0 uses the public matches(Element, String) helper,
+  # which was removed in html 0.15.7.
+  html: 0.15.6
 
 dev_dependencies:
   flutter_test:
