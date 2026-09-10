@@ -357,11 +357,12 @@ def test_ima_month_folder_key_parses_year_month_and_ignores_suffix():
     assert ima_documents.ima_month_folder_key("2026年8月") < ima_documents.ima_month_folder_key("2026年9月（最新）")
 
 
-def test_default_config_targets_august_folder():
+def test_default_config_targets_knowledge_base_root():
     cfg = ImaDocumentConfig.from_db(FakeDB())
     assert cfg.uid == "001aa361168019ef"
     assert cfg.knowledge_base_id == "7464369361259867"
-    assert cfg.root_folder_id == "folder_7489327974078249"
+    assert cfg.root_folder_id == "7464369361259867"
+    assert cfg.root_folder_id == ima_documents.IMA_PURE_KB_ID_DEFAULT
     assert cfg.interval_seconds == 3600
 
 
