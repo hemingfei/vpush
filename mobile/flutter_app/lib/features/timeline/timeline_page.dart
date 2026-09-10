@@ -27,6 +27,7 @@ class _TimelinePageState extends State<TimelinePage>
   late final MarketController _market = MarketController(api: widget.api);
   final _query = TextEditingController();
   Timer? _pollTimer;
+  bool _loadMoreScheduled = false;
 
   @override
   void initState() {
@@ -116,7 +117,7 @@ class _TimelinePageState extends State<TimelinePage>
                         (_controller.hasMore ? 1 : 0),
                     itemBuilder: (context, index) {
                       if (index == _controller.posts.length) {
-                        _controller.load(reset: false);
+                        _scheduleLoadMore();
                         return const Padding(
                           padding: EdgeInsets.all(16),
                           child: Center(
@@ -146,6 +147,15 @@ class _TimelinePageState extends State<TimelinePage>
         );
       },
     );
+  }
+
+  void _scheduleLoadMore() {
+    if (_loadMoreScheduled) return;
+    _loadMoreScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadMoreScheduled = false;
+      if (mounted) _controller.load(reset: false);
+    });
   }
 
   Widget _buildToolbar(BuildContext context) {
