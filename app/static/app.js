@@ -4769,6 +4769,7 @@ const ADMIN_TAB_GROUPS = {
     { id: "posts", label: "帖子" },
     { id: "logs", label: "推送记录" },
     { id: "audit", label: "操作日志" },
+    { id: "images", label: "图片清理" },
     { id: "backup", label: "备份" },
   ]},
   account: { label: "用户与注册", tabs: [
@@ -4822,7 +4823,7 @@ function syncRequestBadges() {
 // 各子页 loader 由对应视图工厂解构（运行时才解析，此处用箭头惰性引用避免 TDZ）
 const ADMIN_GROUP_LOADERS = {
   content: { dashboard: () => loadAdminDashboard(), kols: () => loadAdminKols(), vocab: () => loadAdminVocab(), requests: () => loadAdminRequests() },
-  ops: { posts: () => loadAdminPosts(), logs: () => loadAdminLogs(), audit: () => loadAdminAudit(), backup: () => loadAdminBackup() },
+  ops: { posts: () => loadAdminPosts(), logs: () => loadAdminLogs(), audit: () => loadAdminAudit(), images: () => loadAdminImages(), backup: () => loadAdminBackup() },
   account: { users: () => loadAdminUsers(), codes: () => loadAdminCodes(), turnstile: () => loadAdminTurnstile() },
 };
 
@@ -6493,6 +6494,12 @@ const {
   backupDownload,
   backupRestoreWebDAV,
   backupRestoreUpload,
+  loadAdminImages,
+  loadImageDirectHosts,
+  saveImageDirectHosts,
+  scanImageCleanup,
+  toggleAllImageCleanup,
+  runImageCleanup,
 } = createAdminInfraView({
   showConfirm,
   $,
@@ -8229,6 +8236,7 @@ const INLINE_HANDLERS = {
   lightboxStep,
   loadAdminDashboard,
   loadAdminErrorLogs,
+  loadAdminImages,
   loadAdminKnowledge,
   loadAdminNews,
   loadAdminStats,
@@ -8308,6 +8316,7 @@ const INLINE_HANDLERS = {
   restoreAdminNewsSource,
   retryImaFolderLoad,
   retryImaGroupAcl,
+  runImageCleanup,
   runSearch,
   runStorageConsistency,
   runStorageDedup,
@@ -8341,6 +8350,8 @@ const INLINE_HANDLERS = {
   saveXueqiuCookie,
   saveZsxqCookie,
   saveZsxqPollingConfig,
+  saveImageDirectHosts,
+  scanImageCleanup,
   scanLocalLibraries,
   searchAdminCodes,
   selectAdminCodeFilter,
@@ -8383,6 +8394,7 @@ const INLINE_HANDLERS = {
   tlTogglePost,
   toggleAdminNewsFeed,
   toggleAdminNewsSource,
+  toggleAllImageCleanup,
   toggleCiccSchedule,
   toggleDnd,
   toggleFavorite,

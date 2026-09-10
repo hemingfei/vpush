@@ -385,6 +385,11 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     mx_images_dir = Path(config.db_path).parent / "mx_images"
     mx_images_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/mx-images", StaticFiles(directory=mx_images_dir), name="mx-images")
+    # 微博帖子图片补缓存（数据目录/weibo_images），由 image_backfill 事后转本地：
+    # sinaimg 防盗链/签名链接易过期，外链死图风险最高的图床
+    weibo_images_dir = Path(config.db_path).parent / "weibo_images"
+    weibo_images_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/weibo-images", StaticFiles(directory=weibo_images_dir), name="weibo-images")
     # 知识星球附件不设静态挂载：附件可能是私有大V的付费内容，
     # 一律走鉴权路由 /api/media/zsxq-file/{id}（命中本地缓存时直接下发）
     app.mount(

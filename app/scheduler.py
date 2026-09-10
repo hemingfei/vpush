@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from .backup import run_scheduled
 from .channels import channel_bound, channel_enabled, is_permanent_push_error
 from .db import _UNSET, ALLOWED_PLATFORMS, DB, POST_TAGS_MAX, days_until_purge, user_plain_secret
+from .image_backfill import backfill_external_images
 from . import ai_analysis
 from . import mx_view_analysis
 
@@ -137,6 +138,8 @@ SOURCE_HEALTH_CHECK_INTERVAL = 600  # 主循环里每 10 分钟检查一次
 CICC_ALERT_CHECK_INTERVAL = 600  # 中金存储告警/通知检查节流
 WEIBO_QR_RENEWAL_COOLDOWN = 15 * 60
 PROXY_TICK_INTERVAL = 60
+# 外链图片补缓存：采集时下载失败的帖子图片事后重试转本地，每 30 分钟一小批
+IMAGE_BACKFILL_TICK_INTERVAL = 1800
 
 # X 网页端公开的 guest bearer token（来自 abs.twimg.com 前端包），用于内部翻译接口
 X_GUEST_BEARER_TOKEN = (
@@ -2114,6 +2117,8 @@ class Scheduler:
         self._last_proxy_tick = 0.0
         self._last_mx_view_check = 0.0
         self._mx_view_check_running = False
+        self._last_image_backfill = 0.0
+        self._image_backfill_running = False
         self._mx_sync_service = None
         self._mx_ws_task = None
         self._mx_ws_on_message = None
@@ -3476,6 +3481,34 @@ class Scheduler:
                     await asyncio.to_thread(tick_proxy_pools, self.db)
                 except Exception:  # noqa: BLE001
                     logger.exception("代理池刷新异常")
+            # --- 外链图片补缓存（每 30 分钟一批） ---
+            if now_mono - self._last_image_backfill >= IMAGE_BACKFILL_TICK_INTERVAL:
+                self._last_image_backfill = now_mono
+                # 一批最多 20 张、每张下载最长 15s：必须后台单飞执行，
+                # 内联 await 会卡住调度主循环，延误重试/保活/备份等任务
+                if not self._image_backfill_running:
+                    self._image_backfill_running = True
+
+                    async def _image_backfill_tick() -> None:
+                        try:
+                            result = await asyncio.to_thread(
+                                backfill_external_images, self.db
+                            )
+                            if result["images_ok"] or result["images_failed"]:
+                                logger.info(
+                                    "外链图片补缓存：成功 %s 张，失败 %s 张（冷却重试），"
+                                    "跳过 %s 张，更新帖子 %s 条",
+                                    result["images_ok"],
+                                    result["images_failed"],
+                                    result["images_skipped"],
+                                    result["posts_updated"],
+                                )
+                        except Exception:  # noqa: BLE001
+                            logger.exception("外链图片补缓存异常")
+                        finally:
+                            self._image_backfill_running = False
+
+                    asyncio.create_task(_image_backfill_tick())
             if now_mono - self._last_imgbed >= 20:
                 self._last_imgbed = now_mono
                 try:
@@ -3517,10 +3550,15 @@ class Scheduler:
                 except Exception:  # noqa: BLE001
                     logger.exception("研报结构化抽取异常")
 
-            # 定期清理过期帖子（默认每 6 小时检查一次）
+            # 定期清理过期帖子（默认每 6 小时检查一次）；保留天数后台可调，
+            # 与其他抓取设置同走 config_* 覆盖（0 = 不删除）
             if now_mono - self._last_cleanup > 6 * 3600:
                 self._last_cleanup = now_mono
-                retention = self.polling_config.posts_retention_days
+                retention = _polling_setting(
+                    self.db,
+                    "config_posts_retention_days",
+                    self.polling_config.posts_retention_days,
+                )
                 if retention > 0:
                     try:
                         removed = await asyncio.to_thread(

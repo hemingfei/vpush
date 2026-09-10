@@ -154,6 +154,13 @@ from .ima_kb import (
     readable_group_ids,
 )
 from .ima_kb import catalog as ima_kb_catalog
+from .image_cleanup import preview_image_cleanup, run_image_cleanup
+from .image_backfill import backfill_external_images
+from .avatar_cache import (
+    DIRECT_HOSTS_SETTING,
+    direct_access_hosts,
+    normalize_direct_hosts,
+)
 from .plaza import (
     filter_plaza_kol_rows,
     filter_plaza_rows,
@@ -468,6 +475,32 @@ class NewsResearchKolsIn(BaseModel):
     ids: list[int]
 
 
+class ImageCleanupPreviewIn(BaseModel):
+    """帖子本地图片清理统计：按 N 个月前的时间阈值做预览。"""
+
+    months: int = Field(ge=1, le=120)
+
+
+class ImageCleanupRunIn(BaseModel):
+    """执行帖子本地图片清理：勾选的大V + 孤儿图开关，两者至少其一。"""
+
+    months: int = Field(ge=1, le=120)
+    kol_ids: list[int] = []
+    include_orphans: bool = False
+
+
+class ImageBackfillRunIn(BaseModel):
+    """手动触发外链图片补缓存：单轮最多下载的图片张数。"""
+
+    limit: int = Field(default=20, ge=1, le=200)
+
+
+class ImageCachePolicyIn(BaseModel):
+    """图片直连（不缓存）名单：名单内域名的图片保留外链直接访问。"""
+
+    direct_hosts: list[str] = []
+
+
 class KolWebhookUpdate(BaseModel):
     """V平台 KOL Webhook 配置更新；secret=None 不修改，""=清除，非空=设置。"""
 
@@ -622,6 +655,8 @@ class PollingConfigIn(BaseModel):
     zsxq_app_device: str | None = None
     zsxq_ws_enabled: bool | None = None
     zsxq_ws_address: str | None = None
+    # 帖子/财经新闻保留天数：0 = 永久保留（不自动删除）
+    posts_retention_days: int | None = None
 
 
 class PlazaSourcesIn(BaseModel):
@@ -1692,6 +1727,8 @@ def create_api_router(
             86400,
         ),
         ("daily_report_hour", "config_daily_report_hour", "stats_daily_report_hour", 0, 23),
+        # 帖子/财经新闻保留天数：0 = 不删除；scheduler 清理任务经 _polling_setting 读取
+        ("posts_retention_days", "config_posts_retention_days", "stats_posts_retention_days", 0, 3650),
         # 采集频率档位：无新帖自适应降频参数（scheduler._effective_interval 读取）
         (
             "combination_base_seconds",
@@ -3689,6 +3726,54 @@ def create_api_router(
         result = purge_unreferenced_zsxq_files(db)
         _audit(admin, "purge_zsxq_cache", "", f"deleted={result['deleted']}")
         return result
+
+    @router.post("/admin/images/cleanup/preview", dependencies=[Depends(require_admin)])
+    def admin_image_cleanup_preview(body: ImageCleanupPreviewIn):
+        return preview_image_cleanup(db, body.months)
+
+    @router.post("/admin/images/cleanup", dependencies=[Depends(require_admin)])
+    def admin_image_cleanup_run(body: ImageCleanupRunIn, admin: dict = Depends(require_admin)):
+        if not body.include_orphans and not body.kol_ids:
+            raise HTTPException(status_code=400, detail="请先勾选要清理的大V或选择清理孤儿图片")
+        result = run_image_cleanup(db, body.months, body.kol_ids, body.include_orphans)
+        _audit(
+            admin,
+            "image_cleanup",
+            "",
+            f"months={body.months} kols={len(body.kol_ids)} orphans={body.include_orphans} "
+            f"deleted={result['deleted_files']} freed={result['freed_bytes']} "
+            f"orphan_deleted={result['orphan_files']} kept_shared={result['kept_shared']}",
+        )
+        return result
+
+    @router.post("/admin/images/backfill", dependencies=[Depends(require_admin)])
+    def admin_image_backfill_run(body: ImageBackfillRunIn, admin: dict = Depends(require_admin)):
+        # 同步执行（一批至多 200 张，AnyIO worker 线程承载）：调度器每 30 分钟
+        # 自动跑小批，此端点供补缓存积压时手动加大批次追赶
+        result = backfill_external_images(db, limit=body.limit)
+        _audit(
+            admin,
+            "image_backfill",
+            "",
+            f"limit={body.limit} ok={result['images_ok']} fail={result['images_failed']} "
+            f"skip={result['images_skipped']} posts={result['posts_updated']}",
+        )
+        return result
+
+    @router.get("/admin/images/policy", dependencies=[Depends(require_admin)])
+    def admin_image_policy_get():
+        return {"direct_hosts": direct_access_hosts(db)}
+
+    @router.put("/admin/images/policy", dependencies=[Depends(require_admin)])
+    def admin_image_policy_set(body: ImageCachePolicyIn, admin: dict = Depends(require_admin)):
+        try:
+            hosts = normalize_direct_hosts(body.direct_hosts)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        # 空名单也落库：显式覆盖默认名单（默认含 static.dingtalk.com）
+        db.set_setting(DIRECT_HOSTS_SETTING, "\n".join(hosts))
+        _audit(admin, "image_policy", "", f"direct_hosts={len(hosts)}")
+        return {"direct_hosts": hosts}
 
     def _zsxq_file_hits(file_id: str) -> list[dict]:
         return db.find_zsxq_file_posts(file_id)

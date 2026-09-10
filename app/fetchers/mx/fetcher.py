@@ -10,7 +10,7 @@ import time
 from typing import Callable
 from urllib.parse import unquote, urlparse
 
-from ...avatar_cache import cache_image_file
+from ...avatar_cache import cache_image_file, should_direct_access
 from ..base import (
     BACKFILL_PAGES,
     Fetcher,
@@ -485,10 +485,12 @@ class MxFetcher(Fetcher):
     def _append_image(self, images, url):
         """图片统一走本地缓存，下载失败或内存库时保留原 URL。
 
+        直连名单内的域名（如钉钉 CDN）跳过缓存，保留外链由浏览器直接访问。
+
         返回缓存结果；None 表示服务端确认返回非图片内容（此时不往 images 塞
         死图，调用方自行决定降级口径）。
         """
-        if self.db:
+        if self.db and not should_direct_access(self.db, url):
             cached = cache_image_file(self.db, url, "mx_images", "/mx-images")
         else:
             cached = url
