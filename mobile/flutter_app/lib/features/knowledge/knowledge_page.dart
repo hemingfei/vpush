@@ -272,7 +272,7 @@ class _KnowledgePageState extends State<KnowledgePage> {
         name: '${document.name}.pdf',
         bytes: bytes,
       );
-      await FileActions.openCachedFile(uri);
+      await FileActions.openCachedFile(uri, mimeType: 'application/pdf');
     } on Object catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context)

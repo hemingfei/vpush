@@ -1,7 +1,7 @@
 import 'dart:io';
 
+import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 class FileActions {
   const FileActions._();
@@ -16,8 +16,10 @@ class FileActions {
     return Uri.file(file.path);
   }
 
-  static Future<bool> openCachedFile(Uri uri) =>
-      launchUrl(uri, mode: LaunchMode.externalApplication);
+  static Future<bool> openCachedFile(Uri uri, {String? mimeType}) async {
+    final result = await OpenFilex.open(uri.toFilePath(), type: mimeType);
+    return result.type == ResultType.done;
+  }
 
   static String safeName(String value) => _safeName(value);
 

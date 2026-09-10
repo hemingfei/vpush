@@ -377,7 +377,7 @@ class _PostCardState extends State<_PostCard> {
         '/media/zsxq-file/${Uri.encodeComponent(file.id)}',
       );
       final uri = await FileActions.cacheBytes(name: file.name, bytes: bytes);
-      await FileActions.openCachedFile(uri);
+      await FileActions.openCachedFile(uri, mimeType: _mimeType(file.name));
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text('已交给系统打开 ${file.name}')));
@@ -390,6 +390,15 @@ class _PostCardState extends State<_PostCard> {
     } finally {
       if (mounted) setState(() => _downloading = false);
     }
+  }
+
+  String _mimeType(String name) {
+    final lower = name.toLowerCase();
+    if (lower.endsWith('.pdf')) return 'application/pdf';
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.txt')) return 'text/plain';
+    return 'application/octet-stream';
   }
 }
 

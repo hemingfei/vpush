@@ -22,6 +22,8 @@ API_BASE_URL=https://vpush.net scripts/build_flutter_android.sh
 
 构建参数只包含服务地址，不放 token、cookie 或签名密码。
 
+脚本会检查两个 APK 的本地库目录只包含目标 ABI，并打印 SHA-256。CI 使用同一脚本生成并上传未签名（debug signing）测试产物；正式签名需通过受保护的 `android/key.properties` 和 keystore 配置后再构建。
+
 ## 签名与 APK 检查
 
 配置正式签名后重新构建，随后对每个 APK 执行：
