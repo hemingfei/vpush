@@ -1,10 +1,12 @@
 import 'dart:io';
 
-import 'package:open_filex/open_filex.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 class FileActions {
   const FileActions._();
+
+  static const _channel = MethodChannel('net.vpush/file_actions');
 
   static Future<Uri> cacheBytes({
     required String name,
@@ -17,8 +19,12 @@ class FileActions {
   }
 
   static Future<bool> openCachedFile(Uri uri, {String? mimeType}) async {
-    final result = await OpenFilex.open(uri.toFilePath(), type: mimeType);
-    return result.type == ResultType.done;
+    if (!Platform.isAndroid) return false;
+    final result = await _channel.invokeMethod<bool>('openFile', {
+      'path': uri.toFilePath(),
+      'mimeType': mimeType ?? 'application/octet-stream',
+    });
+    return result ?? false;
   }
 
   static String safeName(String value) => _safeName(value);

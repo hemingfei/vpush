@@ -403,10 +403,18 @@ class _PostCardState extends State<_PostCard> {
         '/media/zsxq-file/${Uri.encodeComponent(file.id)}',
       );
       final uri = await FileActions.cacheBytes(name: file.name, bytes: bytes);
-      await FileActions.openCachedFile(uri, mimeType: _mimeType(file.name));
+      final opened = await FileActions.openCachedFile(
+        uri,
+        mimeType: _mimeType(file.name),
+      );
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('已交给系统打开 ${file.name}')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              opened ? '已交给系统打开 ${file.name}' : '没有可打开 ${file.name} 的应用',
+            ),
+          ),
+        );
       }
     } on ApiException catch (exception) {
       if (mounted) {

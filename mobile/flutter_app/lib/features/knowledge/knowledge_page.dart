@@ -272,7 +272,14 @@ class _KnowledgePageState extends State<KnowledgePage> {
         name: '${document.name}.pdf',
         bytes: bytes,
       );
-      await FileActions.openCachedFile(uri, mimeType: 'application/pdf');
+      final opened = await FileActions.openCachedFile(
+        uri,
+        mimeType: 'application/pdf',
+      );
+      if (mounted && !opened) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('没有可打开 PDF 的应用')));
+      }
     } on Object catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -531,11 +538,21 @@ class _FeishuAssetState extends State<_FeishuAsset> {
     if (future == null) return;
     try {
       final bytes = await future;
+      final uri = await FileActions.cacheBytes(
+        name: '${widget.asset['name'] ?? 'feishu-asset'}',
+        bytes: bytes,
+      );
+      final opened = await FileActions.openCachedFile(
+        uri,
+        mimeType: '${widget.asset['mime'] ?? 'application/octet-stream'}',
+      );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              '${widget.asset['name'] ?? '附件'} 已加载（${bytes.length} bytes）',
+              opened
+                  ? '已交给系统打开 ${widget.asset['name'] ?? '附件'}'
+                  : '没有可打开 ${widget.asset['name'] ?? '附件'} 的应用',
             ),
           ),
         );
