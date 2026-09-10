@@ -27,6 +27,10 @@ class KnowledgeController extends ChangeNotifier {
   Uint8List? pdfBytes;
   String? textContent;
   bool isLoadingText = false;
+  List<Map<String, dynamic>> timelineEntries = const [];
+  List<Map<String, dynamic>> timelineNotices = const [];
+  bool isLoadingTimeline = false;
+  String timelineOrder = 'latest';
   int _offset = 0;
   int _requestId = 0;
   int _readerRequestId = 0;
@@ -159,6 +163,8 @@ class KnowledgeController extends ChangeNotifier {
     document = null;
     pdfBytes = null;
     textContent = null;
+    timelineEntries = const [];
+    timelineNotices = const [];
     readerError = null;
     notifyListeners();
     try {
@@ -168,10 +174,49 @@ class KnowledgeController extends ChangeNotifier {
       );
       if (requestId != _readerRequestId) return;
       document = KnowledgeDocument.fromJson(data);
+      if (document?.type == 'feishu_timeline') {
+        await loadTimeline(mediaId, groupId: groupId, requestId: requestId);
+      }
     } on ApiException catch (exception) {
       if (requestId == _readerRequestId) readerError = exception.message;
     }
     if (requestId == _readerRequestId) notifyListeners();
+  }
+
+  Future<void> loadTimeline(
+    String mediaId, {
+    String groupId = '',
+    int? requestId,
+  }) async {
+    final currentRequest = requestId ?? _readerRequestId;
+    isLoadingTimeline = true;
+    readerError = null;
+    notifyListeners();
+    try {
+      final data = await api.getJson(
+        '/ima-documents/${Uri.encodeComponent(mediaId)}/timeline',
+        query: {
+          if (groupId.isNotEmpty) 'group': groupId,
+          'order': timelineOrder,
+        },
+      );
+      if (currentRequest != _readerRequestId) return;
+      final entries = data['entries'];
+      final notices = data['notices'];
+      timelineEntries = entries is List
+          ? entries.whereType<Map>().map(Map<String, dynamic>.from).toList()
+          : const [];
+      timelineNotices = notices is List
+          ? notices.whereType<Map>().map(Map<String, dynamic>.from).toList()
+          : const [];
+    } on ApiException catch (exception) {
+      if (currentRequest == _readerRequestId) readerError = exception.message;
+    } finally {
+      if (currentRequest == _readerRequestId) {
+        isLoadingTimeline = false;
+        notifyListeners();
+      }
+    }
   }
 
   Future<void> translateDocument() async {

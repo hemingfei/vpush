@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api_client.dart';
 import '../../core/theme/vpush_tokens.dart';
 import 'timeline_controller.dart';
 import 'timeline_models.dart';
+import 'market_controller.dart';
 
 class TimelinePage extends StatefulWidget {
   const TimelinePage({super.key, required this.api});
@@ -18,17 +20,22 @@ class _TimelinePageState extends State<TimelinePage> {
   late final TimelineController _controller = TimelineController(
     api: widget.api,
   );
+  late final MarketController _market = MarketController(api: widget.api);
   final _query = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _controller.load();
+    _market
+      ..load()
+      ..startPolling();
   }
 
   @override
   void dispose() {
     _controller.dispose();
+    _market.dispose();
     _query.dispose();
     super.dispose();
   }
@@ -49,6 +56,7 @@ class _TimelinePageState extends State<TimelinePage> {
           child: CustomScrollView(
             slivers: [
               SliverToBoxAdapter(child: _buildToolbar(context)),
+              SliverToBoxAdapter(child: MarketPanel(controller: _market)),
               if (_controller.isLoading && _controller.posts.isEmpty)
                 const SliverFillRemaining(
                   hasScrollBody: false,
@@ -89,7 +97,10 @@ class _TimelinePageState extends State<TimelinePage> {
                           ),
                         );
                       }
-                      return _PostCard(post: _controller.posts[index]);
+                      return _PostCard(
+                        api: widget.api,
+                        post: _controller.posts[index],
+                      );
                     },
                   ),
                 ),
@@ -229,14 +240,41 @@ class _FilterButton extends StatelessWidget {
   }
 }
 
-class _PostCard extends StatelessWidget {
-  const _PostCard({required this.post});
+class _PostCard extends StatefulWidget {
+  const _PostCard({required this.api, required this.post});
 
+  final ApiClient api;
   final TimelinePost post;
+
+  @override
+  State<_PostCard> createState() => _PostCardState();
+}
+
+class _PostCardState extends State<_PostCard> {
+  bool _expanded = false;
+  bool _showOriginal = false;
+  bool _downloading = false;
+
+  TimelinePost get post => widget.post;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final source = _showOriginal && post.contentSource.isNotEmpty
+        ? post.contentSource
+        : post.content;
+    final title = _showOriginal && post.titleSource.isNotEmpty
+        ? post.titleSource
+        : post.title;
+    final titleDuplicate =
+        title.trim().isNotEmpty &&
+        (title.trim() == source.trim() ||
+            source.trimLeft().startsWith(title.trim()));
+    final truncated = source.length > 200 && !_expanded;
+    final body = truncated ? '${source.substring(0, 200)}…' : source;
+    final translated =
+        post.contentSource.trim().isNotEmpty &&
+        post.contentSource.trim() != post.content.trim();
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(16),
@@ -250,15 +288,7 @@ class _PostCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              CircleAvatar(
-                radius: 18,
-                backgroundImage: post.avatarUrl == null
-                    ? null
-                    : NetworkImage(post.avatarUrl!),
-                child: post.avatarUrl == null
-                    ? Text(post.author.characters.first)
-                    : null,
-              ),
+              _PostAvatar(post: post),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(post.author, style: theme.textTheme.titleMedium),
@@ -268,11 +298,333 @@ class _PostCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-          Text(post.content, style: theme.textTheme.bodyLarge),
+          if (!titleDuplicate && title.trim().isNotEmpty)
+            Text(title, style: theme.textTheme.titleMedium),
+          if (translated)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => setState(() => _showOriginal = !_showOriginal),
+                icon: const Icon(Icons.translate, size: 17),
+                label: Text(_showOriginal ? '显示译文' : '显示原文'),
+              ),
+            ),
+          Text(body.isEmpty ? '（无正文）' : body, style: theme.textTheme.bodyLarge),
+          if (source.length > 200)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => setState(() => _expanded = !_expanded),
+                icon: Icon(
+                  _expanded
+                      ? Icons.keyboard_arrow_up
+                      : Icons.keyboard_arrow_down,
+                  size: 18,
+                ),
+                label: Text(_expanded ? '收起全文' : '展开全文'),
+              ),
+            ),
+          if (post.images.isNotEmpty)
+            _PostImages(images: post.images, author: post.author),
+          if (post.files.isNotEmpty)
+            _PostFiles(
+              files: post.files,
+              downloading: _downloading,
+              onDownload: _downloadFile,
+            ),
+          if (post.tags.isNotEmpty)
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: post.tags
+                  .map(
+                    (tag) => Chip(
+                      label: Text(tag),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  )
+                  .toList(),
+            ),
           if (post.timestamp != null) ...[
             const SizedBox(height: 10),
             Text(post.timestamp!, style: theme.textTheme.bodyMedium),
           ],
+          if (post.sourceUrl?.isNotEmpty == true && post.platform != 'zsxq')
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: () => launchUrl(Uri.parse(post.sourceUrl!)),
+                icon: const Icon(Icons.open_in_new, size: 17),
+                label: const Text('查看原文'),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _downloadFile(TimelineFile file) async {
+    if (_downloading) return;
+    if (file.url.isNotEmpty) {
+      await launchUrl(Uri.parse(file.url));
+      return;
+    }
+    if (file.id.isEmpty) return;
+    setState(() => _downloading = true);
+    try {
+      final bytes = await widget.api.getBytes(
+        '/media/zsxq-file/${Uri.encodeComponent(file.id)}',
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${file.name} 已加载（${bytes.length} bytes）')),
+        );
+      }
+    } on ApiException catch (exception) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(exception.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _downloading = false);
+    }
+  }
+}
+
+class _PostAvatar extends StatelessWidget {
+  const _PostAvatar({required this.post});
+
+  final TimelinePost post;
+
+  @override
+  Widget build(BuildContext context) => CircleAvatar(
+    radius: 18,
+    backgroundImage: post.avatarUrl?.isNotEmpty == true
+        ? NetworkImage(post.avatarUrl!)
+        : null,
+    child: post.avatarUrl?.isNotEmpty == true
+        ? null
+        : Text(post.author.isEmpty ? '?' : post.author.characters.first),
+  );
+}
+
+class _PostImages extends StatelessWidget {
+  const _PostImages({required this.images, required this.author});
+
+  final List<String> images;
+  final String author;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: 12),
+    child: Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: [
+        for (var index = 0; index < images.length && index < 4; index++)
+          GestureDetector(
+            onTap: () => _openGallery(context, index),
+            child: Hero(
+              tag: '${author}_${index}_${images[index]}',
+              child: Image.network(
+                images[index],
+                width: images.length == 1 ? double.infinity : 96,
+                height: images.length == 1 ? 210 : 96,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stack) => Container(
+                  width: images.length == 1 ? double.infinity : 96,
+                  height: images.length == 1 ? 210 : 96,
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  child: const Icon(Icons.broken_image_outlined),
+                ),
+              ),
+            ),
+          ),
+        if (images.length > 4) Center(child: Text('+${images.length - 4}')),
+      ],
+    ),
+  );
+
+  Future<void> _openGallery(BuildContext context, int initial) =>
+      showDialog<void>(
+        context: context,
+        barrierColor: Colors.black87,
+        builder: (context) => Dialog.fullscreen(
+          backgroundColor: Colors.black,
+          child: Stack(
+            children: [
+              PageView.builder(
+                controller: PageController(initialPage: initial),
+                itemCount: images.length,
+                itemBuilder: (context, index) => InteractiveViewer(
+                  child: Center(
+                    child: Image.network(
+                      images[index],
+                      fit: BoxFit.contain,
+                      errorBuilder: (context, error, stack) => const Icon(
+                        Icons.broken_image_outlined,
+                        color: Colors.white,
+                        size: 48,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              SafeArea(
+                child: Align(
+                  alignment: Alignment.topRight,
+                  child: IconButton(
+                    tooltip: '关闭图片',
+                    color: Colors.white,
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+}
+
+class _PostFiles extends StatelessWidget {
+  const _PostFiles({
+    required this.files,
+    required this.downloading,
+    required this.onDownload,
+  });
+
+  final List<TimelineFile> files;
+  final bool downloading;
+  final Future<void> Function(TimelineFile file) onDownload;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: 10),
+    child: Wrap(
+      spacing: 8,
+      runSpacing: 6,
+      children: files
+          .map(
+            (file) => OutlinedButton.icon(
+              onPressed: downloading ? null : () => onDownload(file),
+              icon: const Icon(Icons.attach_file, size: 17),
+              label: Text(file.name),
+            ),
+          )
+          .toList(),
+    ),
+  );
+}
+
+class MarketPanel extends StatelessWidget {
+  const MarketPanel({super.key, required this.controller});
+
+  final MarketController controller;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: controller,
+    builder: (context, child) {
+      final theme = Theme.of(context);
+      final quotes = controller.quotes;
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(
+          VPushTokens.pagePadding,
+          8,
+          VPushTokens.pagePadding,
+          6,
+        ),
+        child: Card(
+          elevation: 0,
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text('市场概览', style: theme.textTheme.titleSmall),
+                    const Spacer(),
+                    Text(
+                      controller.status.isEmpty
+                          ? (controller.isLoading ? '加载中' : '')
+                          : controller.status,
+                    ),
+                    IconButton(
+                      tooltip: '刷新行情',
+                      onPressed: controller.isLoading ? null : controller.load,
+                      icon: const Icon(Icons.refresh, size: 18),
+                    ),
+                  ],
+                ),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'day', label: Text('A 股 / 港股')),
+                    ButtonSegment(value: 'night', label: Text('美股')),
+                  ],
+                  selected: {controller.group},
+                  onSelectionChanged: (value) =>
+                      controller.load(requestedGroup: value.first),
+                ),
+                if (controller.error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      controller.error!,
+                      style: TextStyle(color: theme.colorScheme.error),
+                    ),
+                  ),
+                if (quotes.isNotEmpty)
+                  ...quotes.take(6).map((quote) => _MarketRow(quote: quote)),
+                if (!controller.isLoading &&
+                    quotes.isEmpty &&
+                    controller.error == null)
+                  const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: Text('暂无行情'),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
+
+class _MarketRow extends StatelessWidget {
+  const _MarketRow({required this.quote});
+
+  final MarketQuote quote;
+
+  @override
+  Widget build(BuildContext context) {
+    final percent = quote.percent;
+    final color = percent == null
+        ? null
+        : percent >= 0
+        ? const Color(0xffb05b63)
+        : const Color(0xff23714a);
+    String display(double? value) =>
+        value == null ? '--' : value.toStringAsFixed(2);
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        children: [
+          Expanded(child: Text('${quote.name}  ${quote.symbol}')),
+          Text(display(quote.price)),
+          const SizedBox(width: 10),
+          SizedBox(
+            width: 64,
+            child: Text(
+              percent == null
+                  ? '--'
+                  : '${percent >= 0 ? '+' : ''}${display(percent)}%',
+              textAlign: TextAlign.end,
+              style: TextStyle(color: color),
+            ),
+          ),
         ],
       ),
     );

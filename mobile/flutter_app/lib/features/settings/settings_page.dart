@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api_client.dart';
 import '../../core/session_store.dart';
@@ -235,10 +236,25 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Widget _buildBindTab(BuildContext context) {
     final user = _controller.user;
-    final selected = '${user['push_channels'] ?? ''}'
+    final configured = '${user['push_channels'] ?? ''}'
         .split(',')
         .where((item) => item.isNotEmpty)
         .toSet();
+    final selected = configured.isNotEmpty
+        ? configured
+        : {
+            if (user['telegram_chat_id'] != null ||
+                user['custom_telegram_bot'] == true)
+              'telegram',
+            if (user['feishu_open_id'] != null ||
+                user['feishu_chat_id'] != null ||
+                user['feishu_personal'] is Map &&
+                    (user['feishu_personal'] as Map)['status'] == 'active')
+              'feishu',
+            if ('${user['wecom_webhook'] ?? ''}'.isNotEmpty) 'wecom',
+            if ('${user['bark_key'] ?? ''}'.isNotEmpty) 'bark',
+            if (user['webpush_bound'] == true) 'webpush',
+          };
     return Column(
       children: [
         _Panel(
@@ -252,16 +268,32 @@ class _SettingsPageState extends State<SettingsPage> {
                   labelText: 'Telegram 自建机器人 token',
                 ),
               ),
+              if (_telegram.text.isNotEmpty ||
+                  user['custom_telegram_bot'] == true)
+                _UnbindButton(
+                  label: '解绑 Telegram',
+                  onPressed: () => _controller.unbind('telegram'),
+                ),
               const SizedBox(height: 10),
               TextField(
                 controller: _wecom,
                 decoration: const InputDecoration(labelText: '企业微信 webhook'),
               ),
+              if (_wecom.text.isNotEmpty)
+                _UnbindButton(
+                  label: '解绑企业微信',
+                  onPressed: () => _controller.unbind('wecom'),
+                ),
               const SizedBox(height: 10),
               TextField(
                 controller: _bark,
                 decoration: const InputDecoration(labelText: 'Bark key 或地址'),
               ),
+              if (_bark.text.isNotEmpty)
+                _UnbindButton(
+                  label: '解绑 Bark',
+                  onPressed: () => _controller.unbind('bark'),
+                ),
               const SizedBox(height: 10),
               for (final channel in const [
                 'telegram',
@@ -301,6 +333,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ],
           ),
         ),
+        _Panel(title: '飞书个人机器人', child: _buildFeishuPersonal(context, user)),
         _Panel(
           title: '账号绑定码',
           child: Row(
@@ -319,6 +352,69 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ],
           ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFeishuPersonal(BuildContext context, Map<String, dynamic> user) {
+    final personal = user['feishu_personal'];
+    final available = personal is Map && personal['available'] == true;
+    final active = personal is Map && personal['status'] == 'active';
+    if (!available) return const Text('服务端未启用个人机器人功能');
+    if (active && !_controller.isRegisteringFeishu) {
+      return Row(
+        children: [
+          const Expanded(child: Text('个人机器人已激活')),
+          OutlinedButton(
+            onPressed: () => _controller.unbind('feishu_personal'),
+            child: const Text('解绑'),
+          ),
+        ],
+      );
+    }
+    if (!_controller.isRegisteringFeishu) {
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: FilledButton.icon(
+          onPressed: _controller.startFeishuRegistration,
+          icon: const Icon(Icons.qr_code_scanner),
+          label: const Text('扫码创建个人机器人'),
+        ),
+      );
+    }
+    final uri = _controller.feishuVerificationUri;
+    final expires = _controller.feishuBindExpiresAt > 0
+        ? DateTime.fromMillisecondsSinceEpoch(
+            _controller.feishuBindExpiresAt * 1000,
+          )
+        : null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('状态：${_controller.feishuRegistrationStatus}'),
+        if (uri.isNotEmpty)
+          TextButton.icon(
+            onPressed: () => launchUrl(Uri.parse(uri)),
+            icon: const Icon(Icons.open_in_new),
+            label: const Text('打开飞书验证页'),
+          ),
+        if (_controller.feishuBindCommand.isNotEmpty)
+          SelectableText('绑定码：${_controller.feishuBindCommand}'),
+        if (expires != null) Text('绑定码有效至 ${expires.toLocal()}'),
+        Wrap(
+          spacing: 8,
+          children: [
+            OutlinedButton.icon(
+              onPressed: _controller.refreshFeishuBindCode,
+              icon: const Icon(Icons.refresh),
+              label: const Text('刷新绑定码'),
+            ),
+            TextButton(
+              onPressed: _controller.cancelFeishuRegistration,
+              child: const Text('取消'),
+            ),
+          ],
         ),
       ],
     );
@@ -498,6 +594,23 @@ class _Message extends StatelessWidget {
             ? Theme.of(context).colorScheme.error
             : Theme.of(context).colorScheme.primary,
       ),
+    ),
+  );
+}
+
+class _UnbindButton extends StatelessWidget {
+  const _UnbindButton({required this.label, required this.onPressed});
+
+  final String label;
+  final Future<bool> Function() onPressed;
+
+  @override
+  Widget build(BuildContext context) => Align(
+    alignment: Alignment.centerLeft,
+    child: TextButton.icon(
+      onPressed: () => onPressed(),
+      icon: const Icon(Icons.link_off, size: 17),
+      label: Text(label),
     ),
   );
 }

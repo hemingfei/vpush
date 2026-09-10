@@ -136,15 +136,17 @@ class NewsController extends ChangeNotifier {
   }
 
   Future<void> openArticle(int id) async {
+    final requestId = ++_requestId;
     article = null;
     error = null;
     notifyListeners();
     try {
       final data = await api.getJson('/news/$id');
+      if (requestId != _requestId) return;
       article = NewsArticle.fromJson(data);
     } on ApiException catch (exception) {
-      error = exception.message;
+      if (requestId == _requestId) error = exception.message;
     }
-    notifyListeners();
+    if (requestId == _requestId) notifyListeners();
   }
 }

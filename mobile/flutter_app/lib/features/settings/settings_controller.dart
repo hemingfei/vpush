@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../../core/api_client.dart';
@@ -16,6 +18,14 @@ class SettingsController extends ChangeNotifier {
   String bindCode = '';
   int bindCodeExpiresIn = 0;
   List<String> models = [];
+  String feishuSessionId = '';
+  String feishuBindCommand = '';
+  String feishuVerificationUri = '';
+  String feishuQrUri = '';
+  int feishuBindExpiresAt = 0;
+  String feishuRegistrationStatus = '';
+  Timer? _feishuPoll;
+  bool isRegisteringFeishu = false;
 
   Future<void> load() async {
     isLoading = true;
@@ -120,5 +130,132 @@ class SettingsController extends ChangeNotifier {
       error = exception.message;
     }
     notifyListeners();
+  }
+
+  Future<bool> startFeishuRegistration() async {
+    stopFeishuRegistration();
+    error = null;
+    success = null;
+    isRegisteringFeishu = true;
+    notifyListeners();
+    try {
+      final data = await api.postJson('/me/feishu-personal/register');
+      feishuSessionId = '${data['session_id'] ?? ''}';
+      feishuVerificationUri = '${data['verification_uri'] ?? ''}';
+      feishuQrUri = '${data['qr_uri'] ?? ''}';
+      feishuRegistrationStatus = '${data['status'] ?? 'pending'}';
+      if (feishuSessionId.isEmpty) throw ApiException('服务端未返回注册会话');
+      _feishuPoll = Timer.periodic(
+        const Duration(seconds: 1),
+        (_) => pollFeishuRegistration(),
+      );
+      return true;
+    } on ApiException catch (exception) {
+      error = exception.message;
+      isRegisteringFeishu = false;
+      return false;
+    } finally {
+      notifyListeners();
+    }
+  }
+
+  Future<void> pollFeishuRegistration() async {
+    final sessionId = feishuSessionId;
+    if (sessionId.isEmpty || !isRegisteringFeishu) return;
+    try {
+      final data = await api.getJson('/me/feishu-personal/register/$sessionId');
+      if (sessionId != feishuSessionId) return;
+      feishuRegistrationStatus =
+          '${data['status'] ?? feishuRegistrationStatus}';
+      feishuVerificationUri =
+          '${data['verification_uri'] ?? feishuVerificationUri}';
+      feishuQrUri = '${data['qr_uri'] ?? feishuQrUri}';
+      final bindCommand = '${data['bind_command'] ?? ''}';
+      if (bindCommand.isNotEmpty) feishuBindCommand = bindCommand;
+      final expires = data['bind_code_expires_at'];
+      if (expires is num) feishuBindExpiresAt = expires.toInt();
+      if (feishuRegistrationStatus == 'active') {
+        stopFeishuRegistration();
+        success = '飞书个人机器人已绑定';
+        await load();
+      } else if (const {
+        'expired',
+        'cancelled',
+        'degraded',
+      }.contains(feishuRegistrationStatus)) {
+        stopFeishuRegistration();
+      }
+    } on ApiException catch (exception) {
+      if (exception.statusCode == 404) stopFeishuRegistration();
+    }
+    notifyListeners();
+  }
+
+  Future<void> refreshFeishuBindCode() async {
+    final sessionId = feishuSessionId;
+    if (sessionId.isEmpty) return;
+    try {
+      final data = await api.postJson(
+        '/me/feishu-personal/register/$sessionId/refresh-code',
+      );
+      feishuBindCommand = '${data['bind_command'] ?? ''}';
+      final expires = data['bind_code_expires_at'];
+      if (expires is num) feishuBindExpiresAt = expires.toInt();
+      notifyListeners();
+    } on ApiException catch (exception) {
+      error = exception.message;
+      notifyListeners();
+    }
+  }
+
+  Future<void> cancelFeishuRegistration() async {
+    final sessionId = feishuSessionId;
+    if (sessionId.isNotEmpty) {
+      try {
+        await api.postJson('/me/feishu-personal/register/$sessionId/cancel');
+      } on ApiException {
+        // Local cancellation still stops polling when the session is gone.
+      }
+    }
+    stopFeishuRegistration();
+    notifyListeners();
+  }
+
+  void stopFeishuRegistration() {
+    _feishuPoll?.cancel();
+    _feishuPoll = null;
+    feishuSessionId = '';
+    feishuBindCommand = '';
+    feishuBindExpiresAt = 0;
+    isRegisteringFeishu = false;
+  }
+
+  Future<bool> unbind(String channel) async {
+    final updates = switch (channel) {
+      'telegram' => {'telegram_chat_id': '', 'telegram_bot_token': ''},
+      'feishu' => {'feishu_open_id': '', 'feishu_chat_id': ''},
+      'wecom' => {'wecom_webhook': ''},
+      'bark' => {'bark_key': ''},
+      _ => <String, dynamic>{},
+    };
+    if (channel == 'feishu_personal') {
+      try {
+        await api.deleteJson('/me/feishu-personal');
+        await load();
+        return true;
+      } on ApiException catch (exception) {
+        error = exception.message;
+        notifyListeners();
+        return false;
+      }
+    }
+    if (updates.isEmpty) return false;
+    return save(updates);
+  }
+
+  @override
+  void dispose() {
+    stopFeishuRegistration();
+    super.dispose();
   }
 }

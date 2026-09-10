@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vpush/core/api_client.dart';
 import 'package:vpush/core/session_store.dart';
 import 'package:vpush/features/timeline/timeline_controller.dart';
+import 'package:vpush/features/timeline/timeline_models.dart';
 
 class _MemoryVault implements SessionVault {
   @override
@@ -40,6 +41,29 @@ Map<String, dynamic> _post(int id) => {
 };
 
 void main() {
+  test('parses translated content, images, tags, and attachment details', () {
+    final post = TimelinePost.fromJson({
+      'id': '8',
+      'kol_name': '作者',
+      'kol_id': 4,
+      'platform': 'zsxq',
+      'title': '标题',
+      'content': '译文',
+      'content_src': 'Original',
+      'images': ['https://example.com/a.jpg'],
+      'tags': ['宏观'],
+      'detail': '{"files":[{"file_id":"f1","name":"附件.pdf"}]}',
+    });
+
+    expect(post.id, 8);
+    expect(post.kolId, 4);
+    expect(post.contentSource, 'Original');
+    expect(post.images, ['https://example.com/a.jpg']);
+    expect(post.tags, ['宏观']);
+    expect(post.files.single.id, 'f1');
+    expect(post.files.single.name, '附件.pdf');
+  });
+
   test('deduplicates repeated IDs from a feed and poll', () async {
     var call = 0;
     final api = _FakeApiClient((_) async {

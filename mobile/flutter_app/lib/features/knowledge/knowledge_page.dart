@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -180,6 +181,15 @@ class _KnowledgePageState extends State<KnowledgePage> {
             const SizedBox(height: 6),
             Text(abstract),
           ],
+          if (document.type == 'feishu_timeline')
+            _FeishuTimeline(
+              api: widget.api,
+              mediaId: document.mediaId,
+              groupId: document.groupId,
+              entries: _controller.timelineEntries,
+              notices: _controller.timelineNotices,
+              loading: _controller.isLoadingTimeline,
+            ),
           if (document.needsTranslation) ...[
             const SizedBox(height: 10),
             Align(
@@ -254,6 +264,265 @@ class _KnowledgePageState extends State<KnowledgePage> {
       _controller.setQuery(value);
       await _controller.loadDocuments(reset: true);
     });
+  }
+}
+
+class _FeishuTimeline extends StatelessWidget {
+  const _FeishuTimeline({
+    required this.api,
+    required this.mediaId,
+    required this.groupId,
+    required this.entries,
+    required this.notices,
+    required this.loading,
+  });
+
+  final ApiClient api;
+  final String mediaId;
+  final String groupId;
+  final List<Map<String, dynamic>> entries;
+  final List<Map<String, dynamic>> notices;
+  final bool loading;
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading && entries.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 24),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 18),
+        Text('飞书时间线', style: Theme.of(context).textTheme.titleMedium),
+        if (notices.isNotEmpty)
+          ...notices.map(
+            (notice) => Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                '${notice['text'] ?? notice['message'] ?? ''}',
+                style: TextStyle(color: Theme.of(context).colorScheme.primary),
+              ),
+            ),
+          ),
+        if (entries.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Text('暂无时间线记录'),
+          )
+        else
+          ...entries.map(
+            (entry) => _FeishuEntry(
+              api: api,
+              mediaId: mediaId,
+              groupId: groupId,
+              entry: entry,
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _FeishuEntry extends StatelessWidget {
+  const _FeishuEntry({
+    required this.api,
+    required this.mediaId,
+    required this.groupId,
+    required this.entry,
+  });
+
+  final ApiClient api;
+  final String mediaId;
+  final String groupId;
+  final Map<String, dynamic> entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final blocks = entry['blocks'];
+    final blockList = blocks is List
+        ? blocks.whereType<Map>().map(Map<String, dynamic>.from).toList()
+        : const <Map<String, dynamic>>[];
+    return Card(
+      margin: const EdgeInsets.only(top: 10),
+      elevation: 0,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${entry['day'] ?? ''}  ${entry['time'] ?? entry['timestamp'] ?? ''}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            ...blockList.map(
+              (block) => _FeishuBlock(
+                api: api,
+                mediaId: mediaId,
+                groupId: groupId,
+                block: block,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FeishuBlock extends StatelessWidget {
+  const _FeishuBlock({
+    required this.api,
+    required this.mediaId,
+    required this.groupId,
+    required this.block,
+  });
+
+  final ApiClient api;
+  final String mediaId;
+  final String groupId;
+  final Map<String, dynamic> block;
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = block['rows'];
+    final assets = block['assets'];
+    final text = '${block['text'] ?? ''}'.trim();
+    final speaker = '${block['speaker'] ?? ''}'.trim();
+    final assetList = assets is List
+        ? assets.whereType<Map>().map(Map<String, dynamic>.from).toList()
+        : const <Map<String, dynamic>>[];
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (speaker.isNotEmpty)
+            Text(speaker, style: Theme.of(context).textTheme.labelLarge),
+          if (text.isNotEmpty) SelectableText(text),
+          if (rows is List)
+            ...rows.whereType<List>().map(
+              (row) => Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  row
+                      .map(
+                        (cell) => '${cell is Map ? cell['text'] ?? '' : cell}',
+                      )
+                      .join('  '),
+                ),
+              ),
+            ),
+          if (assetList.isNotEmpty)
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: assetList
+                  .map(
+                    (asset) => _FeishuAsset(
+                      api: api,
+                      mediaId: mediaId,
+                      groupId: groupId,
+                      asset: asset,
+                    ),
+                  )
+                  .toList(),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FeishuAsset extends StatefulWidget {
+  const _FeishuAsset({
+    required this.api,
+    required this.mediaId,
+    required this.groupId,
+    required this.asset,
+  });
+
+  final ApiClient api;
+  final String mediaId;
+  final String groupId;
+  final Map<String, dynamic> asset;
+
+  @override
+  State<_FeishuAsset> createState() => _FeishuAssetState();
+}
+
+class _FeishuAssetState extends State<_FeishuAsset> {
+  Future<List<int>>? _future;
+
+  @override
+  void initState() {
+    super.initState();
+    final id = '${widget.asset['id'] ?? ''}';
+    if (id.isNotEmpty) {
+      _future = widget.api.getBytes(
+        '/ima-documents/${Uri.encodeComponent(widget.mediaId)}/assets/${Uri.encodeComponent(id)}',
+        query: widget.groupId.isEmpty ? null : {'group': widget.groupId},
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final name = '${widget.asset['name'] ?? '附件'}';
+    final isImage =
+        '${widget.asset['mime'] ?? ''}'.startsWith('image/') ||
+        widget.asset['kind'] == 'image';
+    if (!isImage || _future == null) {
+      return OutlinedButton.icon(
+        onPressed: _future == null ? null : _download,
+        icon: const Icon(Icons.attach_file, size: 17),
+        label: Text(name),
+      );
+    }
+    return FutureBuilder<List<int>>(
+      future: _future,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) return Text(name);
+        if (!snapshot.hasData) {
+          return const SizedBox(
+            width: 96,
+            height: 96,
+            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+          );
+        }
+        return Image.memory(
+          Uint8List.fromList(snapshot.data!),
+          width: 96,
+          height: 96,
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stack) => Text(name),
+        );
+      },
+    );
+  }
+
+  Future<void> _download() async {
+    final future = _future;
+    if (future == null) return;
+    try {
+      final bytes = await future;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '${widget.asset['name'] ?? '附件'} 已加载（${bytes.length} bytes）',
+            ),
+          ),
+        );
+      }
+    } on Object catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$error')));
+      }
+    }
   }
 }
 

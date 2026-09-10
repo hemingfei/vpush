@@ -271,11 +271,38 @@ class _NewsArticlePageState extends State<NewsArticlePage> {
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(12, 4, 12, 32),
-              child: Html(data: article.contentHtml),
+              child: Html(
+                data: _articleHtml(article.id, article.contentHtml),
+                extensions: [
+                  ImageExtension(
+                    networkHeaders: widget.api.session.token == null
+                        ? const {}
+                        : {
+                            'Authorization':
+                                'Bearer ${widget.api.session.token}',
+                          },
+                  ),
+                ],
+              ),
             ),
           ),
         ],
       );
+    },
+  );
+
+  String _articleHtml(int articleId, String html) => html.replaceAllMapped(
+    RegExp(
+      r'''<img\b([^>]*?)data-news-image-index=["'](\d+)["']([^>]*)>''',
+      caseSensitive: false,
+    ),
+    (match) {
+      final attributes = '${match.group(1)}${match.group(3)}';
+      final withoutSrc = attributes.replaceAll(
+        RegExp(r'''\bsrc=["'][^"']*["']''', caseSensitive: false),
+        '',
+      );
+      return '<img$withoutSrc src="/api/news/$articleId/images/${match.group(2)}">';
     },
   );
 }
