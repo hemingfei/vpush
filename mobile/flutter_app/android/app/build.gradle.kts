@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "net.vpush.app.dev"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

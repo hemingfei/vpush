@@ -8,7 +8,8 @@ api_base_url="${API_BASE_URL:-https://vpush.net}"
 cd "${app_dir}"
 flutter pub get
 dart format --output=none --set-exit-if-changed lib test
-flutter analyze
+# Flutter 3.47.2's LSP framing miscounts UTF-8 bytes for non-ASCII paths.
+dart analyze
 flutter test
 flutter build apk --release --split-per-abi \
   --target-platform android-arm,android-arm64 \
@@ -26,7 +27,7 @@ verify_abi() {
   local expected="$2"
   test -s "${apk}"
   local libraries
-  libraries="$(unzip -Z1 "${apk}" | sed -n 's#^lib/\([^/]\+\)/.*#\1#p' | sort -u)"
+  libraries="$(unzip -Z1 "${apk}" | sed -E -n 's#^lib/([^/]+)/.*#\1#p' | sort -u)"
   if [[ "${libraries}" != "${expected}" ]]; then
     printf 'Unexpected ABI set in %s: %s (expected %s)\n' "${apk}" "${libraries//$'\n'/,}" "${expected}" >&2
     exit 1
