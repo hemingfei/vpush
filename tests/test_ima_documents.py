@@ -347,6 +347,16 @@ def test_concurrent_group_manifest_writes_retain_both_groups(tmp_path):
     assert {item["group_id"] for item in store.load_manifest()} == {"first", "second"}
 
 
+def test_ima_month_folder_key_parses_year_month_and_ignores_suffix():
+    assert ima_documents.ima_month_folder_key("2026年8月") == (2026, 8)
+    assert ima_documents.ima_month_folder_key("2026年9月（最新）") == (2026, 9)
+    assert ima_documents.ima_month_folder_key("2026年09月") == (2026, 9)
+    assert ima_documents.ima_month_folder_key("研报") is None
+    assert ima_documents.ima_month_folder_key("2026年13月") is None
+    assert ima_documents.ima_month_folder_key("") is None
+    assert ima_documents.ima_month_folder_key("2026年8月") < ima_documents.ima_month_folder_key("2026年9月（最新）")
+
+
 def test_default_config_targets_august_folder():
     cfg = ImaDocumentConfig.from_db(FakeDB())
     assert cfg.uid == "001aa361168019ef"

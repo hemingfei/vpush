@@ -391,6 +391,20 @@ def ima_folder_name(item: dict[str, Any], folder_id: str) -> str:
     return folder_id
 
 
+_MONTH_FOLDER_RE = re.compile(r"^(\d{4})年(\d{1,2})月")
+
+
+def ima_month_folder_key(name: str) -> tuple[int, int] | None:
+    """Parse IMA month folder names like 2026年8月 / 2026年9月（最新）."""
+    match = _MONTH_FOLDER_RE.match((name or "").strip())
+    if not match:
+        return None
+    month = int(match.group(2))
+    if month < 1 or month > 12:
+        return None
+    return int(match.group(1)), month
+
+
 def is_ima_folder_item(item: dict[str, Any]) -> bool:
     if not isinstance(item, dict):
         return False
