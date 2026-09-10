@@ -10,6 +10,8 @@
 | Android 设备 | 未提供 | `adb devices -l` 无设备；需 ARM64 与 32 位 ARM 测试机/模拟器 |
 | 空 Flutter 工程 pub get | 通过 | Flutter 工程已创建，依赖解析通过 |
 | Android release APK | 未执行 | 等待 Android SDK/JDK 与设备 |
+| 双 ABI 构建命令探测 | 阻塞 | `flutter build apk --release --split-per-abi ...` 已进入 Gradle，但因当前 shell 找不到 Java Runtime 退出 |
+| 受鉴权文件打开 | 已接入代码，待真机 | `path_provider` 缓存 + `open_filex` FileProvider；需在 Android 外部 PDF/附件应用存在与不存在两种状态验证 |
 | `pdfrx` / Android PdfRenderer | 未选定 | 在工具链恢复后先跑中文、鉴权 PDF、100 页、缩放和内存测试 |
 | HTML 正文渲染 | 未选定 | 用真实脱敏新闻/研报 fixture 比较段落、表格、图片、链接、选中文本 |
 | Turnstile | 未执行 | 需要 HTTPS 测试实例和一次性 challenge；不在没有服务端验证的情况下绕过 |
@@ -23,4 +25,4 @@
 4. 脱敏测试账号、测试实例地址和稳定 fixture；如启用 Turnstile，提供允许的测试域名。
 5. 若要求 App 关后台仍收通知，明确厂商通道、服务端凭证与测试范围。
 
-恢复工具链后按顺序执行：`flutter doctor -v` → `flutter pub get` → `flutter build apk --release --split-per-abi` → 双 ABI 安装 → 插件 spike → 页面实现。
+恢复工具链后按顺序执行：`flutter doctor -v` → `flutter pub get` → `flutter build apk --release --split-per-abi` → 双 ABI 安装 → `pdfrx`/`open_filex` 插件 spike → 页面实现。
