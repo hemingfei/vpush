@@ -2595,7 +2595,7 @@ class Scheduler:
         开关与预算都在 settings：report_extract_enabled（默认开，='0' 关）、
         report_extract_interval_seconds（默认 3600）、report_extract_batch（默认 80）、
         report_extract_backfill_days（默认 2，0=不限窗口回填存量）、
-        report_extract_model（默认 gemini-3.8-flash-high）、
+        report_extract_model（默认跟随站点 LLM 模型）、
         report_extract_daily_limit（默认 1000 篇/天）。LLM 用站点环境变量，批处理不走实时路径。
         """
         db = self.db
