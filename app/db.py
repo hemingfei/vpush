@@ -1006,6 +1006,7 @@ CREATE INDEX IF NOT EXISTS idx_proxies_expires ON proxies(expires_at);
 CREATE INDEX IF NOT EXISTS idx_posts_kol_id ON posts(kol_id);
 CREATE INDEX IF NOT EXISTS idx_posts_fetched_at ON posts(fetched_at);
 CREATE INDEX IF NOT EXISTS idx_posts_kol_id_id ON posts(kol_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_platform_id ON posts(platform, id DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_kol_published ON posts(kol_id, published_at);
 CREATE INDEX IF NOT EXISTS idx_push_logs_created_at ON push_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_push_logs_post_id ON push_logs(post_id);
@@ -4645,11 +4646,19 @@ class DB:
         return (rows[0]["hosted_url"] if rows else "") or ""
 
     def recent_mirrorable_image_rows(self, limit: int = 40) -> list[dict]:
-        """最近的镜像源图（X / Truth Social），供图床缓慢回填。"""
-        return self._rows(
-            "SELECT images FROM posts WHERE platform IN ('twitter', 'truth') "
-            "AND (images LIKE '%twimg.com%' OR images LIKE '%truthsocial.com%') "
-            "ORDER BY id DESC LIMIT ?",
+        """最近的镜像源图（X / Truth Social），供图床缓慢回填。
+
+        UNION ALL 双分支各自走 (platform, id DESC) 索引逆序扫，LIKE 只在
+        命中平台内过滤，不再全表扫（批处理查询走只读连接不占写锁）。
+        """
+        return self._read_only_rows(
+            "SELECT images FROM ("
+            "SELECT id, images FROM posts WHERE platform = 'twitter' "
+            "AND images LIKE '%twimg.com%' "
+            "UNION ALL "
+            "SELECT id, images FROM posts WHERE platform = 'truth' "
+            "AND images LIKE '%truthsocial.com%'"
+            ") ORDER BY id DESC LIMIT ?",
             (max(int(limit), 1),),
         )
 
@@ -5428,7 +5437,7 @@ class DB:
             where.append("d.sort_date >= ?")
             params.append(min_sort_date)
         params.append(max(int(limit), 1))
-        return self._rows(
+        return self._read_only_rows(
             "SELECT d.group_id, d.media_id, d.txt_path, d.pdf_path, d.name, d.sort_date "
             "FROM ima_document_index d LEFT JOIN report_extractions re "
             "ON re.group_id = d.group_id AND re.media_id = d.media_id "
@@ -5917,7 +5926,7 @@ class DB:
         if cached is not None and now - getattr(self, "_tag_aggregate_at", 0.0) < ttl_seconds:
             return cached[:limit]
         counts: dict[str, int] = {}
-        for row in self._rows("SELECT tags FROM posts WHERE tags != ''"):
+        for row in self._read_only_rows("SELECT tags FROM posts WHERE tags != ''"):
             raw = row["tags"]
             if not raw:
                 continue
