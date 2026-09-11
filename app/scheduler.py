@@ -1920,6 +1920,7 @@ class Scheduler:
         self._stop = asyncio.Event()
         self._last_cleanup = 0.0
         self._last_report_extract = time.monotonic()
+        self._report_extract_running = False
         self._last_digest_flush = time.monotonic()
         self._last_xueqiu_probe = time.monotonic()
         self._last_cookie_keepalive = time.monotonic()
@@ -2229,14 +2230,25 @@ class Scheduler:
                 logger.exception("未激活用户清理失败")
             # 研报结构化抽取（每小时一批，LLM 离线批处理；失败不影响主流程）
             extract_interval = int(self.db.get_setting("report_extract_interval_seconds") or 3600)
-            if now_mono - self._last_report_extract > extract_interval:
+            if (
+                now_mono - self._last_report_extract > extract_interval
+                and not self._report_extract_running
+            ):
+                # 大批次单轮可达 20-30 分钟：后台任务化，主循环的采集/推送不被阻塞
                 self._last_report_extract = now_mono
-                try:
-                    done = await asyncio.to_thread(self._run_report_extraction_task)
-                    if done:
-                        logger.info("研报结构化抽取本轮完成 %d 篇", done)
-                except Exception:  # noqa: BLE001
-                    logger.exception("研报结构化抽取异常")
+                self._report_extract_running = True
+
+                async def _run_extract_round():
+                    try:
+                        done = await asyncio.to_thread(self._run_report_extraction_task)
+                        if done:
+                            logger.info("研报结构化抽取本轮完成 %d 篇", done)
+                    except Exception:  # noqa: BLE001
+                        logger.exception("研报结构化抽取异常")
+                    finally:
+                        self._report_extract_running = False
+
+                asyncio.create_task(_run_extract_round(), name="report-extraction")
 
             # 定期清理过期帖子（默认每 6 小时检查一次）
             if now_mono - self._last_cleanup > 6 * 3600:
