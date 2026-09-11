@@ -2601,16 +2601,6 @@ class ImaDocumentStore:
         self.save_local_library_marker(marker_path, marker)
 
 
-def convert_pdf(pdf: Path, txt: Path) -> int:
-    from pypdf import PdfReader
-
-    text = "\n".join(page.extract_text() or "" for page in PdfReader(str(pdf)).pages)
-    temp = txt.with_suffix(txt.suffix + ".tmp")
-    temp.write_text(text, encoding="utf-8")
-    os.replace(temp, txt)
-    return len(text)
-
-
 def _tag_document(db: Any, record: dict[str, Any], txt: Path | None) -> list[str]:
     from .stock_universe import aliases_for_tagging, names_for_plain_text_tagging
     from .tagging import tag_text

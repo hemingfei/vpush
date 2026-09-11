@@ -320,10 +320,6 @@ def fetch_param(sess: Session) -> dict:
     return sess.request("/reports/api/v3/param")["data"]
 
 
-def fetch_categories(sess: Session) -> list[dict]:
-    return fetch_param(sess)["treeData"]
-
-
 def list_page(sess: Session, cat_id: int, page: int, start: str | None, end: str | None) -> dict:
     body = dict(DEFAULT_BODY)
     body["portalCategoryId"] = str(cat_id)

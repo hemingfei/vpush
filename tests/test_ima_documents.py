@@ -1707,21 +1707,6 @@ def test_encrypt_body_uses_aes_128_gcm_and_rsa_oaep():
     assert decrypt_body(body, key) == plaintext
 
 
-def test_convert_pdf_writes_txt_archive(tmp_path):
-    from pypdf import PdfWriter
-
-    from app.ima_documents import convert_pdf
-
-    pdf = tmp_path / "report.pdf"
-    txt = tmp_path / "report.txt"
-    writer = PdfWriter()
-    writer.add_blank_page(width=200, height=200)
-    with pdf.open("wb") as output:
-        writer.write(output)
-    assert convert_pdf(pdf, txt) == 0
-    assert txt.read_text(encoding="utf-8") == ""
-
-
 @pytest.mark.parametrize("value", ["", "../outside", "/tmp/outside"])
 def test_invalid_media_ids_are_not_accepted(tmp_path, value):
     store = ImaDocumentStore(tmp_path / "ima")
@@ -2020,11 +2005,6 @@ def test_separate_root_partial_write_failure_and_recovery(tmp_path, monkeypatch)
             return 8, "md5"
 
     monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
-    monkeypatch.setattr(
-        ima_documents,
-        "convert_pdf",
-        lambda pdf, txt: (txt.write_text("text", encoding="utf-8") or 4),
-    )
 
     first = service.sync_once()
     assert first["downloaded"] == 0
@@ -3173,7 +3153,6 @@ def test_service_sync_is_incremental(tmp_path, monkeypatch):
             return 8, "md5"
 
     monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
-    monkeypatch.setattr(ima_documents, "convert_pdf", lambda pdf, txt: (txt.write_text("text", encoding="utf-8") or 4))
     service = ImaDocumentService(db, tmp_path / "ima")
     assert service.sync_once()["downloaded"] == 1
     pdf = next((tmp_path / "ima").joinpath("0825").glob("*.pdf"))
@@ -4123,11 +4102,6 @@ def test_sync_redownloads_when_pull_url_set_even_if_file_exists(tmp_path, monkey
     monkeypatch.setenv("IMA_PULL_TOKEN", "tok")
     monkeypatch.setenv("IMA_ARCHIVE_ROOT", str(archive))
     monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
-    monkeypatch.setattr(
-        ima_documents,
-        "convert_pdf",
-        lambda pdf, txt: (txt.write_text("text", encoding="utf-8") or 4),
-    )
     service = ImaDocumentService(db, archive)
     planted = service.store.pdf_path(record)
     planted.parent.mkdir(parents=True, exist_ok=True)

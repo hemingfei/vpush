@@ -63,28 +63,6 @@ def attach_catalog_summary(
     return listed
 
 
-def attach_catalog_stats(
-    listed: dict[str, list[dict[str, Any]]],
-    documents: Iterable[dict[str, Any]],
-) -> dict[str, list[dict[str, Any]]]:
-    stats: dict[str, dict[str, Any]] = {}
-    for item in documents:
-        group_id = str(item.get("group_id") or "")
-        if not group_id:
-            continue
-        bucket = stats.setdefault(
-            group_id,
-            {"document_count": 0, "latest_day": "", "latest_title": "", "latest_media_id": ""},
-        )
-        bucket["document_count"] += 1
-        day = str(item.get("day") or "")
-        if _DAY_KEY.fullmatch(day) and day >= str(bucket["latest_day"] or ""):
-            bucket["latest_day"] = day
-            bucket["latest_title"] = str(item.get("name") or "")
-            bucket["latest_media_id"] = str(item.get("media_id") or "")
-    return attach_catalog_summary(listed, stats)
-
-
 def attach_catalog_acl(listed: dict[str, list[dict[str, Any]]], db: Any, user: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     if not is_admin(user):
         return listed

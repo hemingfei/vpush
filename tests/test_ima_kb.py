@@ -17,7 +17,7 @@ from app.ima_documents import (
     ima_kb_valid_tags,
     purge_ima_document_tags,
 )
-from app.ima_kb import attach_catalog_stats, attach_catalog_summary, catalog, readable_group_ids
+from app.ima_kb import attach_catalog_summary, catalog, readable_group_ids
 from app.main import create_app
 from app.stock_universe import bundled_plain_names
 from app.tagging import tag_text
@@ -339,27 +339,6 @@ def test_catalog_endpoint_does_not_dispatch_to_dynamic_detail(tmp_path, monkeypa
 
     assert response.status_code == 200, response.text
     assert set(response.json()) >= {"subscribed", "available"}
-
-
-def test_attach_catalog_stats_uses_latest_mmdd_title():
-    listed = {
-        "subscribed": [{"id": "banking", "name": "投行研报", "enabled": True}],
-        "available": [{"id": "macro", "name": "宏观", "enabled": True}],
-    }
-    attach_catalog_stats(
-        listed,
-        [
-            {"group_id": "banking", "day": "unknown", "name": "坏日期", "media_id": "bad"},
-            {"group_id": "banking", "day": "0810", "name": "旧稿", "media_id": "old"},
-            {"group_id": "banking", "day": "0826", "name": "新稿.pdf", "media_id": "new"},
-            {"group_id": "macro", "day": "0101", "name": "宏观一", "media_id": "m1"},
-        ],
-    )
-    assert listed["subscribed"][0]["document_count"] == 3
-    assert listed["subscribed"][0]["latest_day"] == "0826"
-    assert listed["subscribed"][0]["latest_title"] == "新稿.pdf"
-    assert listed["subscribed"][0]["latest_media_id"] == "new"
-    assert listed["available"][0]["document_count"] == 1
 
 
 def test_attach_catalog_summary_copies_precomputed_stats():

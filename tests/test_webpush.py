@@ -15,7 +15,6 @@ from app.notifiers.webpush import (
     WebPushNotifier,
     b64url,
     build_webpush_payload,
-    decrypt_webpush,
     encrypt_webpush,
     generate_vapid_keys,
     is_valid_push_endpoint,
@@ -63,14 +62,6 @@ def test_is_valid_subscription_keys():
     assert not is_valid_subscription_keys("short", auth)
     assert not is_valid_subscription_keys(p256dh, "nope")
     assert not is_valid_subscription_keys("", "")
-
-
-def test_encrypt_decrypt_roundtrip():
-    ua_private, p256dh, auth = make_subscriber()
-    plaintext = json.dumps({"title": "t", "body": "b"}, ensure_ascii=False).encode()
-    body = encrypt_webpush(plaintext, p256dh, auth)
-    assert body[20] == 65
-    assert decrypt_webpush(body, ua_private, auth) == plaintext
 
 
 def test_vapid_authorization_shape():

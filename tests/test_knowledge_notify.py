@@ -6,7 +6,6 @@ from app.knowledge_notify import (
     SETTINGS_LAST_CHECK,
     document_keyword_hit,
     format_digest,
-    is_watchable_report_tag,
     maybe_notify_knowledge_keywords,
 )
 from tests.test_api import make_client, user_headers
@@ -28,15 +27,6 @@ def _doc(**kwargs):
     }
     base.update(kwargs)
     return base
-
-
-def test_watchable_tags_skip_library_and_cicc_categories():
-    assert is_watchable_report_tag("宁德时代")
-    assert is_watchable_report_tag("宏观")
-    assert not is_watchable_report_tag("中金研报")
-    assert not is_watchable_report_tag("公司研究")
-    assert not is_watchable_report_tag("行业研究")
-    assert not is_watchable_report_tag("")
 
 
 def test_document_keyword_hit_title_abstract_and_tags():

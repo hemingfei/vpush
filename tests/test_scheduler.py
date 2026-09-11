@@ -5016,7 +5016,6 @@ def test_stock_alias_task_expands_names_from_marks(monkeypatch):
         ],
     )
     # 跳过正文候选识别（返回空即可），只测 $标记$ 扩充
-    monkeypatch.setattr("app.llm.suggest_stock_aliases", lambda c, s, cfg, client=None: [])
     scheduler = Scheduler(
         db, {}, [],
         SimpleNamespace(),

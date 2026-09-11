@@ -1407,11 +1407,6 @@ def _record_llm_status(db: DB, user: dict, llm_cfg, summary) -> None:
         logger.warning("LLM 摘要回退 user=%s", user.get("username"))
 
 
-def _admin_llm_config(db: DB, fallback=None):
-    """旧名兼容，等同 _system_llm_config。"""
-    return _system_llm_config(db, fallback)
-
-
 def _send_digest_bundle(
     notifier,
     summary,

@@ -29,14 +29,6 @@ def write_request_file(path: str | Path) -> None:
         pass
 
 
-def request_pending(path: str | Path, last_success: object, *, window: int = BACKUP_REQUEST_WINDOW) -> bool:
-    target = Path(path)
-    if not target.is_file():
-        return False
-    requested = int(target.stat().st_mtime)
-    return requested > int(last_success or 0) and (int(time.time()) - requested) < window
-
-
 def _clamp_percent(value: object) -> int:
     try:
         number = int(value)  # type: ignore[arg-type]

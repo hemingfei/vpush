@@ -203,12 +203,3 @@ def test_public_includes_restic_allowlist(tmp_path):
     assert public["restic_last_check_at"] == 90
     assert public["restic_last_check_ok"] is True
 
-
-def test_write_request_file_and_pending(tmp_path):
-    from app.ima_storage import request_pending, write_request_file
-
-    path = tmp_path / ".vpush-backup-request"
-    write_request_file(path)
-    assert path.is_file()
-    assert request_pending(path, 0) is True
-    assert request_pending(path, int(time.time()) + 10) is False

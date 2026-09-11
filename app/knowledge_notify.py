@@ -27,11 +27,6 @@ SETTINGS_LAST_CHECK = "knowledge_keyword_last_check"
 REPORTS_URL = "https://vpush.net/knowledge"
 
 
-def is_watchable_report_tag(tag: str) -> bool:
-    name = (tag or "").strip()
-    return bool(name) and name not in BROAD_REPORT_TAGS
-
-
 def document_keyword_hit(keywords: list[str], doc: dict) -> list[str]:
     """返回命中的关键词（保序去重）。大小写不敏感子串，对齐动态关键词。"""
     cleaned = [kw.strip() for kw in keywords if (kw or "").strip()]

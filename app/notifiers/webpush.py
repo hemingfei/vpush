@@ -175,37 +175,6 @@ def encrypt_webpush(plaintext: bytes, p256dh: str, auth: str) -> bytes:
     return salt + struct.pack("!L", 4096) + bytes([65]) + local_public + ciphertext
 
 
-def decrypt_webpush(body: bytes, ua_private, auth: str) -> bytes:
-    """测试用：解开 encrypt_webpush 的密文。"""
-    salt, rs, idlen = body[:16], struct.unpack("!L", body[16:20])[0], body[20]
-    if rs != 4096 or idlen != 65:
-        raise ValueError("header 无效")
-    local_public, ciphertext = body[21:86], body[86:]
-    ua_public_bytes = (
-        b"\x04"
-        + ua_private.public_key().public_numbers().x.to_bytes(32, "big")
-        + ua_private.public_key().public_numbers().y.to_bytes(32, "big")
-    )
-    shared = ua_private.exchange(ec.ECDH(), _load_uncompressed(local_public))
-    auth_secret = b64url_decode(auth)
-    ikm = HKDF(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=auth_secret,
-        info=b"WebPush: info\x00" + ua_public_bytes + local_public,
-    ).derive(shared)
-    cek = HKDF(
-        algorithm=hashes.SHA256(), length=16, salt=salt, info=b"Content-Encoding: aes128gcm\x00",
-    ).derive(ikm)
-    nonce = HKDF(
-        algorithm=hashes.SHA256(), length=12, salt=salt, info=b"Content-Encoding: nonce\x00",
-    ).derive(ikm)
-    padded = AESGCM(cek).decrypt(nonce, ciphertext, None)
-    if not padded.endswith(b"\x02"):
-        raise ValueError("padding 无效")
-    return padded[:-1]
-
-
 def vapid_authorization(endpoint: str, private_pem: str, public_b64: str, mailto: str) -> str:
     parsed = urlparse(endpoint)
     aud = f"{parsed.scheme}://{parsed.netloc}"
