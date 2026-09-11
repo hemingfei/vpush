@@ -1006,6 +1006,7 @@ CREATE INDEX IF NOT EXISTS idx_proxies_expires ON proxies(expires_at);
 CREATE INDEX IF NOT EXISTS idx_posts_kol_id ON posts(kol_id);
 CREATE INDEX IF NOT EXISTS idx_posts_fetched_at ON posts(fetched_at);
 CREATE INDEX IF NOT EXISTS idx_posts_kol_id_id ON posts(kol_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_kol_published ON posts(kol_id, published_at);
 CREATE INDEX IF NOT EXISTS idx_push_logs_created_at ON push_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_push_logs_post_id ON push_logs(post_id);
 CREATE INDEX IF NOT EXISTS idx_kol_acl_user ON kol_acl(user_id);
@@ -4050,10 +4051,14 @@ class DB:
         chunk = 200
         for i in range(0, len(pairs), chunk):
             part = pairs[i : i + chunk]
-            conds = " OR ".join("(platform = ? AND external_id = ?)" for _ in part)
+            # row-value IN 让规划器稳定走 UNIQUE(platform, external_id)，
+            # 200 对 OR 写法会退化成全表扫（慢日志高频项）
+            values = ", ".join("(?, ?)" for _ in part)
             params = [x for pair in part for x in pair]
             for row in self._rows(
-                f"SELECT platform, external_id FROM posts WHERE {conds}", params
+                f"SELECT platform, external_id FROM posts "
+                f"WHERE (platform, external_id) IN (VALUES {values})",
+                params,
             ):
                 found.add((row["platform"], row["external_id"]))
         return found
@@ -5900,12 +5905,17 @@ class DB:
         """保存最近一次标签维护摘要。"""
         self.set_setting(TAG_MAINTAIN_LAST_KEY, json.dumps(data, ensure_ascii=False))
 
-    def aggregate_post_tags(self, limit: int = 50) -> list[str]:
+    def aggregate_post_tags(self, limit: int = 50, ttl_seconds: int = 600) -> list[str]:
         """聚合贴文里出现过的全部标签（去重，按出现次数降序）。
 
         供前端动态标签筛选下拉使用（词表标签之外的实际标签，如股票名）。
-        全表扫描 tags 列；1500+ 帖量级一次扫描可接受。
+        全表扫描 + Python 聚合，结果带 TTL 缓存（标签变化低频，10 分钟内
+        新标签可接受）；防缓存击穿用 monotonic 时间戳。
         """
+        now = time.monotonic()
+        cached = getattr(self, "_tag_aggregate_cache", None)
+        if cached is not None and now - getattr(self, "_tag_aggregate_at", 0.0) < ttl_seconds:
+            return cached[:limit]
         counts: dict[str, int] = {}
         for row in self._rows("SELECT tags FROM posts WHERE tags != ''"):
             raw = row["tags"]
@@ -5921,7 +5931,10 @@ class DB:
                 tag = str(tag).strip()
                 if tag:
                     counts[tag] = counts.get(tag, 0) + 1
-        return [tag for tag, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))][:limit]
+        ranked = [tag for tag, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+        self._tag_aggregate_cache = ranked
+        self._tag_aggregate_at = now
+        return ranked[:limit]
 
     # ---- 每日精选投递状态（按渠道幂等） ----
     def daily_report_delivered(self, user_id: int, report_date: str, channel: str) -> bool:
