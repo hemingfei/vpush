@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import struct
 import time
 from urllib.parse import urlparse
@@ -23,6 +24,14 @@ from ..fetchers.base import PLATFORM_LABELS, Post, digest_body
 from .base import Notifier, why_badges
 
 MAX_BODY = 180
+_TEXT_URL_RE = re.compile(r"https?://[^\s<>\"']+")
+_URL_TAIL_CHARS = "。，、；：）)】」》\"'"
+
+
+def text_click_url(text: str) -> str:
+    """取正文里第一个 http(s) 链接作为通知点击目标；没有则空串。"""
+    match = _TEXT_URL_RE.search(text or "")
+    return match.group(0).rstrip(_URL_TAIL_CHARS) if match else ""
 DIGEST_MAX_ITEMS = 8
 DND_MAX_ITEMS = 10
 DEFAULT_MAILTO = "mailto:admin@localhost"
@@ -339,4 +348,11 @@ class WebPushNotifier(Notifier):
         lines = (text or "").strip().splitlines()
         title = lines[0][:60] if lines else "V Push"
         body = "\n".join(lines[1:]).strip() or title
-        self._post_payload({"title": title, "body": body[:MAX_BODY], "url": "/", "tag": "text"})
+        self._post_payload(
+            {
+                "title": title,
+                "body": body[:MAX_BODY],
+                "url": text_click_url(text) or "/",
+                "tag": "text",
+            }
+        )

@@ -127,6 +127,24 @@ def test_notifier_posts_encrypted_body_and_drops_gone(monkeypatch):
     assert deleted == [gone]
 
 
+def test_send_text_clicks_url_from_text():
+    notifier = WebPushNotifier(client=httpx.Client(), subscriptions=[])
+    captured = []
+    notifier._post_payload = captured.append
+    notifier.send_text(
+        "今日研报 1 篇命中关键词\n\n· 标题（八大顶级投行研报VIP）\n\n打开研报库查看 https://vpush.net/knowledge"
+    )
+    assert captured[0]["url"] == "https://vpush.net/knowledge"
+
+
+def test_send_text_without_url_keeps_root():
+    notifier = WebPushNotifier(client=httpx.Client(), subscriptions=[])
+    captured = []
+    notifier._post_payload = captured.append
+    notifier.send_text("📊 AI 摘要\n\n今天大盘涨了。")
+    assert captured[0]["url"] == "/"
+
+
 def test_webpush_subscribe_and_disable_api():
     tmp = tempfile.mkdtemp()
     client = TestClient(create_app(db_path=Path(tmp) / "webpush.db"))

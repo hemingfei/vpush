@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from app.knowledge_notify import (
+    REPORTS_URL,
     SETTINGS_LAST_CHECK,
     document_keyword_hit,
     format_digest,
@@ -53,6 +54,7 @@ def test_format_digest_caps_and_extra():
     assert "· 标题0（中金点睛）" in text
     assert "还有 2 篇" in text
     assert "打开研报库查看" in text
+    assert REPORTS_URL in text
 
 
 def _seed_user_and_doc(db, *, match=True, dnd=False, acl=True, admin=False):

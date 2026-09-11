@@ -23,6 +23,8 @@ TITLE_MAX = 80
 BROAD_REPORT_TAGS = frozenset(("中金研报", *CICC_CATEGORIES))
 
 SETTINGS_LAST_CHECK = "knowledge_keyword_last_check"
+# 研报中心入口：推送里给纯文本 URL，Telegram 客户端会自己转成可点链接
+REPORTS_URL = "https://vpush.net/knowledge"
 
 
 def is_watchable_report_tag(tag: str) -> bool:
@@ -79,7 +81,7 @@ def format_digest(docs: list[dict], *, extra: int = 0) -> str:
     if extra:
         lines.append(f"· 还有 {extra} 篇")
     lines.append("")
-    lines.append("打开研报库查看")
+    lines.append(f"打开研报库查看 {REPORTS_URL}")
     return "\n".join(lines)
 
 
