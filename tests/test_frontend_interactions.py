@@ -4489,8 +4489,9 @@ def test_news_center_has_realtime_and_articles_tabs():
     assert "stopNewsRtPoll" in clear and "stopNewsRtAutoLoad" in clear
     app_src = APP_JS.read_text()
     deps = app_src[app_src.index("createNewsView({"):]
-    for dep in ("avatarHtml", "mdToHtml", "imgSrcFor", "PLATFORM_LABELS", "PLATFORM_ICONS"):
-        assert dep in deps[:400]  # 实时资讯卡片渲染依赖必须注入视图
+    # 实时资讯卡片渲染依赖必须注入视图（含 mx 附件卡片/正文占位）
+    for dep in ("avatarHtml", "mdToHtml", "imgSrcFor", "mxDisplayBody", "mxAttachmentCards", "PLATFORM_LABELS", "PLATFORM_ICONS"):
+        assert dep in deps[:450]
 
 
 def test_admin_kols_list_has_news_selection_controls():

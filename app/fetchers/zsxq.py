@@ -21,7 +21,7 @@ from urllib.parse import urlencode
 
 import httpx
 
-from ..avatar_cache import cache_avatar, cache_image_file, headers_for
+from ..avatar_cache import cache_avatar, cache_image_file, headers_for, should_direct_access
 from .base import Fetcher, Post, ThreadLocalClient, format_published_at
 from .zsxq_inspect import (
     classify_topic,
@@ -599,9 +599,14 @@ class ZsxqFetcher(Fetcher):
             except (RuntimeError, ZsxqError) as exc:
                 logger.info("知识星球详情补全失败 topic=%s err=%s", topic_id, exc)
         images = [
-            # None = 内容确认非图片：星球图片 API 不会这样返回，兜底保留原 URL 走前端失效流程
-            (cache_image_file(self.db, i["url"], "zsxq_images", "/zsxq-images") or i["url"])
-            if self.db is not None else i["url"]
+            # None = 内容确认非图片：星球图片 API 不会这样返回，兜底保留原 URL 走前端失效流程；
+            # 直连名单内的域名跳过缓存，保留外链由浏览器直接访问
+            (
+                cache_image_file(self.db, i["url"], "zsxq_images", "/zsxq-images")
+                or i["url"]
+            )
+            if self.db is not None and not should_direct_access(self.db, i["url"])
+            else i["url"]
             for i in collect_images(topic)
         ]
         files_meta = collect_files(topic)

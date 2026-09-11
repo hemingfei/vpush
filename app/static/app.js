@@ -2850,11 +2850,16 @@ function renderTlKolBar() {
   }
   bar.hidden = false;
   bar.classList.toggle("expanded", _tlKolbarExpanded);
-  bar.innerHTML = `
-    <div class="tl-kolbar-strip" id="tl-kolbar-strip" role="radiogroup" aria-label="按大V筛选">${tlKolItemsHtml()}</div>
+  // 展开态：开关作为 strip 内最后一个换行项，不再从每行右侧占宽度，各行头像能用满整行；
+  // 收起态：单行横向滚动，开关固定在滚动区右侧。
+  const toggleHtml = `
     <button type="button" class="tl-kolbar-toggle" aria-expanded="${_tlKolbarExpanded}" aria-controls="tl-kolbar-strip" onclick="tlToggleKolbar()">
       ${_tlKolbarExpanded ? "收起" : "展开"}${TL_CARET_SVG}
     </button>`;
+  const itemsHtml = tlKolItemsHtml();
+  bar.innerHTML = `
+    <div class="tl-kolbar-strip" id="tl-kolbar-strip" role="radiogroup" aria-label="按大V筛选">${itemsHtml}${_tlKolbarExpanded ? toggleHtml : ""}</div>
+    ${_tlKolbarExpanded ? "" : toggleHtml}`;
   tlSyncKolbarToggle();
 }
 
@@ -3633,6 +3638,9 @@ function feedDateBucket(s) {
 }
 
 function postFiles(post) {
+  // mx 的附件统一由 mxAttachments 从 detail.msg 解析（含 text 内嵌文件），
+  // detail.files 只供推送渠道渲染附件行，这里跳过避免同一附件渲染两次
+  if (post.platform === "mx") return [];
   let d = post.detail;
   if (typeof d === "string" && d) {
     try { d = JSON.parse(d); } catch { return []; }
@@ -3675,18 +3683,74 @@ function mxAttachments(post) {
   }
   if (!Array.isArray(msgList)) return [];
   return msgList
-    .filter((item) => item && item.type === "file" && /^https?:\/\//i.test(String(item.url || "").trim()))
     .map((item) => {
+      if (!item) return null;
+      if (item.type === "text") {
+        // 客户端把文件分享序列化成 text 下发（url=...,fileName=... 或
+        // 「分享了一份文件：名\n链接」），按附件渲染，正文占位见 mxDisplayBody
+        const embedded = mxEmbeddedFileFromText(item.msg);
+        if (!embedded) return null;
+        return withMxAudioFlag({ url: embedded.url, name: embedded.name });
+      }
+      if (item.type !== "file" || !/^https?:\/\//i.test(String(item.url || "").trim())) return null;
       const url = String(item.url).trim();
       const name = String(item.name || "");
       if (mxLooksLikeImage(url, name)) return null; // 图片类已由后端转 images
-      return {
-        url,
-        name,
-        audio: MX_AUDIO_EXT_RE.test(url.split(/[?#]/)[0]) || MX_AUDIO_EXT_RE.test(name),
-      };
+      return withMxAudioFlag({ url, name });
     })
     .filter(Boolean);
+}
+
+// 与后端 fetchers/mx/fetcher.py extract_text_embedded_file 同口径：识别两种
+// 内嵌文件形态——「url=<URL>,fileName=<文件名>」键值串、「分享了一份文件：<文件名>
+// \n<URL>」微信式分享文案。整条文本就是文件分享才命中，正文里顺带提到文件不受影响
+const MX_TEXT_FILE_KV_RE = /^url=(\S+),fileName=(.*)$/;
+const MX_TEXT_FILE_SHARE_RE = /^分享了一份文件[：:](.+)\n(https?:\/\/\S+)$/;
+
+function mxEmbeddedFileFromText(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+  let url = "";
+  let name = "";
+  const kv = MX_TEXT_FILE_KV_RE.exec(raw);
+  if (kv) {
+    url = kv[1];
+    name = kv[2].trim();
+  } else {
+    const share = MX_TEXT_FILE_SHARE_RE.exec(raw);
+    if (share) {
+      name = share[1].trim();
+      url = share[2];
+    }
+  }
+  if (!/^https?:\/\//i.test(url)) return null;
+  if (!name) {
+    const seg = url.split(/[?#]/)[0].replace(/\/+$/, "").split("/").pop() || "";
+    try { name = decodeURIComponent(seg); } catch { name = seg; }
+  }
+  return { url, name };
+}
+
+function withMxAudioFlag(file) {
+  return {
+    ...file,
+    audio: MX_AUDIO_EXT_RE.test(file.url.split(/[?#]/)[0]) || MX_AUDIO_EXT_RE.test(file.name || ""),
+  };
+}
+
+// mx 正文展示：整条正文就是文件分享文本的（含历史入库的裸链接），与后端占位
+// 口径对齐显示 [文件]，附件本体由附件卡片渲染
+function mxDisplayBody(post) {
+  const raw = String(post.content || "").trim();
+  if (post.platform === "mx" && mxEmbeddedFileFromText(raw)) return "[文件]";
+  return raw;
+}
+
+// 附件卡片 HTML（非音频）：供 news 页等不渲染音频按钮的场景复用；
+// 时间线 postCard 自己渲染（音频走播放按钮），不要用这个
+function mxAttachmentCards(post) {
+  return mxAttachments(post).filter((f) => !f.audio).map((f) =>
+    `<a class="p-file" href="${escapeHtml(f.url)}" target="_blank" rel="noopener" aria-label="打开附件 ${escapeHtml(f.name || "附件")}" title="打开附件 ${escapeHtml(f.name || "附件")}">${PAPERCLIP_ICON} ${escapeHtml(f.name || "附件")}</a>`).join("");
 }
 
 function combinationDetailHtml(post) {
@@ -3740,7 +3804,7 @@ function postCard(post) {
   const translated = !!(srcC && srcC !== (post.content || "").trim());
   const showSrc = translated && _tlShowSrc.has(post.id);
   const title = showSrc ? srcT : (post.title || "");
-  const body = (showSrc ? srcC : (post.content || "")) || "（无正文）";
+  const body = (showSrc ? srcC : mxDisplayBody(post)) || "（无正文）";
   const expanded = _tlExpanded.has(post.id);
   const shown = expanded ? body : body.slice(0, 200);
   // X 帖常 title==content（如纯链接帖），标题和正文都渲染会视觉重复，跳过标题；
@@ -4705,6 +4769,7 @@ const ADMIN_TAB_GROUPS = {
     { id: "posts", label: "帖子" },
     { id: "logs", label: "推送记录" },
     { id: "audit", label: "操作日志" },
+    { id: "images", label: "图片清理" },
     { id: "backup", label: "备份" },
   ]},
   account: { label: "用户与注册", tabs: [
@@ -4758,7 +4823,7 @@ function syncRequestBadges() {
 // 各子页 loader 由对应视图工厂解构（运行时才解析，此处用箭头惰性引用避免 TDZ）
 const ADMIN_GROUP_LOADERS = {
   content: { dashboard: () => loadAdminDashboard(), kols: () => loadAdminKols(), vocab: () => loadAdminVocab(), requests: () => loadAdminRequests() },
-  ops: { posts: () => loadAdminPosts(), logs: () => loadAdminLogs(), audit: () => loadAdminAudit(), backup: () => loadAdminBackup() },
+  ops: { posts: () => loadAdminPosts(), logs: () => loadAdminLogs(), audit: () => loadAdminAudit(), images: () => loadAdminImages(), backup: () => loadAdminBackup() },
   account: { users: () => loadAdminUsers(), codes: () => loadAdminCodes(), turnstile: () => loadAdminTurnstile() },
 };
 
@@ -5241,6 +5306,7 @@ async function savePollingConfig() {
     source_probe_interval_seconds: Number($("#pc-probe").value),
     cookie_keepalive_interval_seconds: Number($("#pc-keepalive").value),
     daily_report_hour: Number($("#pc-daily").value),
+    posts_retention_days: Number($("#pc-retention")?.value ?? 0),
     translate_twitter_content: $("#pc-translate").checked,
     telegram_rich_messages: $("#pc-tg-rich") ? $("#pc-tg-rich").checked : true,
     combination_base_seconds: Number($("#pc-cb").value),
@@ -5964,6 +6030,8 @@ const {
   mdToHtml,
   imgSrcFor,
   playNotificationSound,
+  mxDisplayBody,
+  mxAttachmentCards,
   PLATFORM_LABELS,
   PLATFORM_ICONS,
 });
@@ -6426,6 +6494,12 @@ const {
   backupDownload,
   backupRestoreWebDAV,
   backupRestoreUpload,
+  loadAdminImages,
+  loadImageDirectHosts,
+  saveImageDirectHosts,
+  scanImageCleanup,
+  toggleAllImageCleanup,
+  runImageCleanup,
 } = createAdminInfraView({
   showConfirm,
   $,
@@ -8162,6 +8236,7 @@ const INLINE_HANDLERS = {
   lightboxStep,
   loadAdminDashboard,
   loadAdminErrorLogs,
+  loadAdminImages,
   loadAdminKnowledge,
   loadAdminNews,
   loadAdminStats,
@@ -8241,6 +8316,7 @@ const INLINE_HANDLERS = {
   restoreAdminNewsSource,
   retryImaFolderLoad,
   retryImaGroupAcl,
+  runImageCleanup,
   runSearch,
   runStorageConsistency,
   runStorageDedup,
@@ -8274,6 +8350,8 @@ const INLINE_HANDLERS = {
   saveXueqiuCookie,
   saveZsxqCookie,
   saveZsxqPollingConfig,
+  saveImageDirectHosts,
+  scanImageCleanup,
   scanLocalLibraries,
   searchAdminCodes,
   selectAdminCodeFilter,
@@ -8316,6 +8394,7 @@ const INLINE_HANDLERS = {
   tlTogglePost,
   toggleAdminNewsFeed,
   toggleAdminNewsSource,
+  toggleAllImageCleanup,
   toggleCiccSchedule,
   toggleDnd,
   toggleFavorite,

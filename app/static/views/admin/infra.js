@@ -157,6 +157,182 @@ export function createAdminInfraView(dependencies) {
     }
   }
 
+  function fmtBytes(n) {
+    const v = Number(n) || 0;
+    if (v >= 1073741824) return (v / 1073741824).toFixed(2) + " GB";
+    if (v >= 1048576) return (v / 1048576).toFixed(1) + " MB";
+    if (v >= 1024) return (v / 1024).toFixed(1) + " KB";
+    return v + " B";
+  }
+
+  function imageCleanMonths() {
+    return Number((document.getElementById("img-clean-months") || {}).value) || 3;
+  }
+
+  async function loadImageDirectHosts() {
+    const ta = document.getElementById("img-direct-hosts");
+    if (!ta) return;
+    try {
+      const data = await api("/api/admin/images/policy");
+      ta.value = (data.direct_hosts || []).join("\n");
+    } catch (err) {
+      flash(`直连名单加载失败：${err.message}`, "error");
+    }
+  }
+
+  async function saveImageDirectHosts() {
+    const ta = document.getElementById("img-direct-hosts");
+    if (!ta) return;
+    const btn = document.getElementById("img-direct-save");
+    if (btn) { btn.disabled = true; }
+    try {
+      const directHosts = ta.value.split("\n").map((s) => s.trim()).filter(Boolean);
+      const data = await api("/api/admin/images/policy", {
+        method: "PUT",
+        body: JSON.stringify({ direct_hosts: directHosts }),
+      });
+      ta.value = (data.direct_hosts || []).join("\n");
+      flash("直连域名已保存，之后采集的图片按新名单处理");
+    } catch (err) {
+      flash(`保存失败：${err.message}`, "error");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function loadAdminImages() {
+    const body = $("#admin-body");
+    if (!body) return;
+    body.innerHTML = `
+      <section class="section-panel">
+        <header class="section-head"><div>
+          <h2 class="section-title">图片直连（不缓存）</h2>
+          <p class="section-meta">名单内域名的帖子图片不做服务端下载缓存，浏览器直接访问原图地址，图片补缓存任务同样跳过。匹配含子域名（填 dingtalk.com 会命中全部子域）。未配置时默认直连 static.dingtalk.com；清空并保存可关闭直连、恢复全部缓存。</p>
+        </div></header>
+        <label class="form-label"><span>直连域名</span>
+          <textarea id="img-direct-hosts" class="form-control" rows="4" placeholder="static.dingtalk.com&#10;一行一个域名"></textarea>
+        </label>
+        <div class="cfg-save-row"><button type="button" class="btn-normal" id="img-direct-save" onclick="saveImageDirectHosts()">保存直连域名</button></div>
+      </section>
+      <section class="section-panel">
+        <header class="section-head"><div>
+          <h2 class="section-title">本地图片缓存清理</h2>
+          <p class="section-meta">删除帖子图片的本地缓存文件以释放磁盘。帖子与正文保留，但被清理的图片将无法再显示。同一张图若仍被时间范围外的帖子引用则自动保留；「孤儿图片」指帖子已被定期清理删除、文件却留在磁盘的老图，无法归属大V，按文件时间单独勾选清理。</p>
+        </div></header>
+        <div class="toolbar">
+          <label>清理 <select id="img-clean-months" class="form-control">
+            <option value="1">1 个月</option>
+            <option value="3" selected>3 个月</option>
+            <option value="6">6 个月</option>
+            <option value="12">12 个月</option>
+            <option value="24">24 个月</option>
+          </select> 前的图片</label>
+          <button type="button" class="btn-normal" id="img-clean-scan" onclick="scanImageCleanup()">统计</button>
+        </div>
+        <div id="img-clean-result"><p class="muted">先选时间范围，点「统计」看可清理量。</p></div>
+      </section>`;
+    loadImageDirectHosts();
+  }
+
+  function renderImageCleanupPreview(data) {
+    const box = document.getElementById("img-clean-result");
+    if (!box) return;
+    const kols = data.kols || [];
+    const orphan = data.orphans || { images: 0, bytes: 0 };
+    if (!kols.length && !orphan.images) {
+      box.innerHTML = `<p class="section-meta">没有可清理的图片——该时间范围内没有老图。</p>`;
+      return;
+    }
+    const rows = kols.map((k) => `
+      <tr>
+        <td><input type="checkbox" class="imgclean-kol" data-id="${k.kol_id}" checked></td>
+        <td data-label="大V">${escapeHtml(k.kol_name || `KOL ${k.kol_id}`)}</td>
+        <td class="ak-hide-mobile" data-label="平台">${escapeHtml(PLATFORM_LABELS[k.platform] || k.platform || "—")}</td>
+        <td data-label="图片">${k.images} 张</td>
+        <td data-label="体积">${fmtBytes(k.bytes)}</td>
+      </tr>`).join("");
+    const orphanRow = orphan.images ? `
+      <tr>
+        <td><input type="checkbox" id="imgclean-orphans" checked></td>
+        <td data-label="大V">无引用孤儿图片</td>
+        <td class="ak-hide-mobile" data-label="平台">—</td>
+        <td data-label="图片">${orphan.images} 张</td>
+        <td data-label="体积">${fmtBytes(orphan.bytes)}</td>
+      </tr>` : "";
+    const skips = [];
+    if ((data.skipped_undated ?? 0) > 0) skips.push(`${data.skipped_undated} 个帖子时间无法判定已跳过`);
+    if ((data.skipped_invalid ?? 0) > 0) skips.push(`${data.skipped_invalid} 条异常图片记录已跳过`);
+    box.innerHTML = `
+      ${skips.length ? `<p class="section-meta">${escapeHtml(skips.join("；"))}</p>` : ""}
+      <div class="table-wrap">
+        <table class="ak-table">
+          <thead><tr>
+            <th><input type="checkbox" onchange="toggleAllImageCleanup(this)" checked></th>
+            <th>大V</th><th class="ak-hide-mobile">平台</th><th>图片</th><th>体积</th>
+          </tr></thead>
+          <tbody>${rows}${orphanRow}</tbody>
+        </table>
+      </div>
+      <div class="cfg-save-row">
+        <button type="button" class="btn-normal danger" id="img-clean-run" onclick="runImageCleanup()">执行清理</button>
+      </div>`;
+  }
+
+  async function scanImageCleanup() {
+    const box = document.getElementById("img-clean-result");
+    const btn = document.getElementById("img-clean-scan");
+    if (!box) return;
+    if (btn) { btn.disabled = true; btn.textContent = "统计中…"; }
+    try {
+      const data = await api("/api/admin/images/cleanup/preview", {
+        method: "POST",
+        body: JSON.stringify({ months: imageCleanMonths() }),
+      });
+      renderImageCleanupPreview(data);
+    } catch (err) {
+      box.innerHTML = `<p class="muted">统计失败：${escapeHtml(err.message)}</p>`;
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "统计"; }
+    }
+  }
+
+  function toggleAllImageCleanup(cb) {
+    document.querySelectorAll(".imgclean-kol").forEach((el) => { el.checked = cb.checked; });
+    const orphan = document.getElementById("imgclean-orphans");
+    if (orphan) orphan.checked = cb.checked;
+  }
+
+  async function runImageCleanup() {
+    const kolIds = [...document.querySelectorAll(".imgclean-kol:checked")].map((el) => Number(el.dataset.id));
+    const includeOrphans = !!(document.getElementById("imgclean-orphans") || {}).checked;
+    if (!kolIds.length && !includeOrphans) {
+      flash("请先勾选要清理的大V或孤儿图片", "error");
+      return;
+    }
+    if (!(await showConfirm("确认删除选中的本地图片文件？删除后对应帖子的图片将无法再显示。"))) return;
+    const btn = document.getElementById("img-clean-run");
+    if (btn) { btn.disabled = true; btn.textContent = "清理中…"; }
+    try {
+      const r = await api("/api/admin/images/cleanup", {
+        method: "POST",
+        body: JSON.stringify({
+          months: imageCleanMonths(),
+          kol_ids: kolIds,
+          include_orphans: includeOrphans,
+        }),
+      });
+      const totalDeleted = (r.deleted_files || 0) + (r.orphan_files || 0);
+      const parts = [`已删除图片 ${totalDeleted} 张`, `释放 ${fmtBytes((r.freed_bytes || 0) + (r.orphan_bytes || 0))}`];
+      if (r.kept_shared) parts.push(`${r.kept_shared} 张因仍被其他帖子引用而保留`);
+      flash(parts.join("，"));
+      scanImageCleanup();
+    } catch (err) {
+      flash(`清理失败：${err.message}`, "error");
+    } finally {
+      if (btn && document.body.contains(btn)) { btn.disabled = false; btn.textContent = "执行清理"; }
+    }
+  }
+
   function proxyStatusLabel(status) {
     return { unknown: "未测", ok: "可用", dead: "失效" }[status] || "未知";
   }
@@ -691,5 +867,11 @@ export function createAdminInfraView(dependencies) {
     backupDownload,
     backupRestoreWebDAV,
     backupRestoreUpload,
+    loadAdminImages,
+    loadImageDirectHosts,
+    saveImageDirectHosts,
+    scanImageCleanup,
+    toggleAllImageCleanup,
+    runImageCleanup,
   };
 }

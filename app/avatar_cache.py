@@ -5,9 +5,11 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 
@@ -34,6 +36,62 @@ MX_REFERER = "https://mx.2026.naaifu.cn/"
 _PART_MAX_AGE_SECONDS = 3600.0
 _PART_CLEANUP_INTERVAL_SECONDS = 3600.0
 _last_part_cleanup_monotonic = 0.0
+
+# 图片直连（不缓存）策略：settings 键与默认名单。名单内域名的帖子图片不做
+# 服务端下载缓存，保留原始外链由浏览器直接访问（如钉钉 CDN 国内直连快、
+# 服务端下载反而慢且有风控）；图片补缓存任务同样跳过这些域名。
+DIRECT_HOSTS_SETTING = "image_direct_hosts"
+DEFAULT_DIRECT_HOSTS = "static.dingtalk.com"
+
+# 域名形态校验：一段或多段「字母数字连字符」标签，至少两段（必须有 TLD）
+_HOST_RE = re.compile(
+    r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$"
+)
+
+
+def normalize_direct_hosts(entries) -> list[str]:
+    """清洗直连域名列表：小写、去尾点、去空、去重保序；非法条目抛 ValueError。"""
+    out: list[str] = []
+    seen: set[str] = set()
+    for entry in entries or []:
+        host = str(entry or "").strip().lower().rstrip(".")
+        if not host:
+            continue
+        if not _HOST_RE.match(host):
+            raise ValueError(f"非法域名：{entry}")
+        if host not in seen:
+            seen.add(host)
+            out.append(host)
+    return out
+
+
+def _parse_direct_hosts(raw: str) -> list[str]:
+    """settings 存储值 → 域名列表（容忍逗号/换行混用与空白）。"""
+    hosts: list[str] = []
+    for chunk in (raw or "").replace(",", "\n").split("\n"):
+        host = chunk.strip().lower().rstrip(".")
+        if host:
+            hosts.append(host)
+    return hosts
+
+
+def direct_access_hosts(db) -> list[str]:
+    """读取直连域名名单；从未配置时用默认名单。"""
+    raw = db.get_setting(DIRECT_HOSTS_SETTING)
+    if raw is None:
+        raw = DEFAULT_DIRECT_HOSTS
+    return _parse_direct_hosts(raw)
+
+
+def should_direct_access(db, url: str) -> bool:
+    """URL 是否命中直连名单：host 精确相等或是名单域名的子域名。"""
+    host = (urlparse(str(url or "")).hostname or "").lower()
+    if not host:
+        return False
+    for entry in direct_access_hosts(db):
+        if host == entry or host.endswith("." + entry):
+            return True
+    return False
 
 
 def _cleanup_stale_part_files(dest: Path) -> None:
