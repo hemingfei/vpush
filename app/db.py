@@ -5425,8 +5425,13 @@ class DB:
         limit: int = 40,
         group_ids: list[str] | None = None,
         min_sort_date: str = "",
+        per_group: int | None = None,
     ) -> list[dict]:
-        """待抽取研报：有 txt 或 pdf、尚无抽取行，且可限制最早研报日期。"""
+        """待抽取研报：有 txt 或 pdf、尚无抽取行，且可限制最早研报日期。
+
+        per_group 开启按库轮转公平配额（ROW_NUMBER 分组编号后 rn<=N），
+        避免单个大库的存量垄断队列头导致其他库饿死；空则退化为全局新→旧。
+        """
         params: list = []
         where = ["d.has_txt = 1 AND d.txt_path != '' OR d.has_pdf = 1 AND d.pdf_path != ''"]
         groups = [str(g).strip() for g in (group_ids or []) if str(g).strip()]
@@ -5436,15 +5441,21 @@ class DB:
         if min_sort_date:
             where.append("d.sort_date >= ?")
             params.append(min_sort_date)
+        if per_group:
+            params.append(max(int(per_group), 1))
         params.append(max(int(limit), 1))
+        rn_filter = "WHERE rn <= ? " if per_group else ""
         return self._read_only_rows(
-            "SELECT d.group_id, d.media_id, d.txt_path, d.pdf_path, d.name, d.sort_date "
+            "SELECT group_id, media_id, txt_path, pdf_path, name, sort_date FROM ("
+            "SELECT d.group_id AS group_id, d.media_id AS media_id, d.txt_path AS txt_path, "
+            "d.pdf_path AS pdf_path, d.name AS name, d.sort_date AS sort_date, "
+            "ROW_NUMBER() OVER (PARTITION BY d.group_id "
+            "ORDER BY (d.sort_date = '') ASC, d.sort_date DESC, d.media_id) AS rn "
             "FROM ima_document_index d LEFT JOIN report_extractions re "
             "ON re.group_id = d.group_id AND re.media_id = d.media_id "
             f"WHERE ({where[0]}) AND {' AND '.join(where[1:]) or '1=1'} "
-            "AND re.media_id IS NULL "
-            "ORDER BY (d.sort_date = '') ASC, d.sort_date DESC, d.group_id, d.media_id "
-            "LIMIT ?",
+            "AND re.media_id IS NULL"
+            f") {rn_filter}ORDER BY sort_date DESC, group_id LIMIT ?",
             params,
         )
 

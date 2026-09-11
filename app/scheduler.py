@@ -2228,7 +2228,8 @@ class Scheduler:
             except Exception:  # noqa: BLE001
                 logger.exception("未激活用户清理失败")
             # 研报结构化抽取（每小时一批，LLM 离线批处理；失败不影响主流程）
-            if now_mono - self._last_report_extract > 3600:
+            extract_interval = int(self.db.get_setting("report_extract_interval_seconds") or 3600)
+            if now_mono - self._last_report_extract > extract_interval:
                 self._last_report_extract = now_mono
                 try:
                     done = await asyncio.to_thread(self._run_report_extraction_task)
@@ -2592,6 +2593,8 @@ class Scheduler:
         """研报结构化抽取：每小时处理最近三天的一批研报。
 
         开关与预算都在 settings：report_extract_enabled（默认开，='0' 关）、
+        report_extract_interval_seconds（默认 3600）、report_extract_batch（默认 80）、
+        report_extract_backfill_days（默认 2，0=不限窗口回填存量）、
         report_extract_model（默认 gemini-3.8-flash-high）、
         report_extract_daily_limit（默认 1000 篇/天）。LLM 用站点环境变量，批处理不走实时路径。
         """
@@ -2608,7 +2611,14 @@ class Scheduler:
         if site_llm is None:
             return 0
         model = db.get_setting("report_extract_model") or "gemini-3.8-flash-high"
-        min_sort_date = (datetime.now(CN_TZ).date() - timedelta(days=2)).isoformat()
+        # 抽取窗口默认只看最近 2 天（增量及时性）；回填存量时调大
+        # report_extract_backfill_days（0 = 不限），配合按库轮转不会饿死增量
+        backfill_days = int(db.get_setting("report_extract_backfill_days") or 2)
+        min_sort_date = (
+            (datetime.now(CN_TZ).date() - timedelta(days=backfill_days)).isoformat()
+            if backfill_days > 0
+            else ""
+        )
         configured_groups = db.get_setting("report_extract_groups")
         groups = (
             [group.strip() for group in configured_groups.split(",") if group.strip()]
@@ -2635,11 +2645,14 @@ class Scheduler:
             db.set_setting(version_key, pipeline_version)
             if reset:
                 logger.info("研报结构化抽取：重新排队可恢复结果 %d 篇", reset)
-        batch = min(80, daily_limit - done_today)
+        batch = min(int(db.get_setting("report_extract_batch") or 80), daily_limit - done_today)
+        # 按库轮转公平配额：避免单库存量垄断队列头（其余库饿死）
+        per_group = max(1, batch // len(groups)) if groups else None
         docs = db.pending_report_extractions(
             limit=batch,
             group_ids=groups,
             min_sort_date=min_sort_date,
+            per_group=per_group,
         )
         if not docs:
             return 0

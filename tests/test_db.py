@@ -2204,3 +2204,31 @@ def test_report_extraction_uses_title_when_pdf_text_is_too_short():
     assert title in captured["prompt"]
     assert result["rating"] == "Buy"
     assert result["status"] == "ok"
+
+
+def test_report_extraction_round_robin_quota(tmp_path):
+    """按库轮转：每库最多 per_group 篇、组内新→旧，存量不被单库垄断。"""
+    db = DB(str(tmp_path / "rr.db"))
+    groups = {"g1": ["09-01", "09-02", "09-03"], "g2": ["09-05"], "g3": ["08-20", "08-25"]}
+    for gid, dates in groups.items():
+        for i, sd in enumerate(dates):
+            db._conn.execute(
+                "INSERT INTO ima_document_index (group_id, media_id, name, has_txt, txt_path, sort_date) "
+                "VALUES (?, ?, ?, 1, 'x', ?)",
+                (gid, f"m{gid}{i}", "研报", f"2026-{sd}"),
+            )
+    db._conn.commit()
+    rows = db.pending_report_extractions(limit=80, group_ids=list(groups), per_group=2)
+    by_group = {}
+    for r in rows:
+        by_group.setdefault(r["group_id"], []).append(r["sort_date"])
+    # 每库 ≤2，组内新→旧
+    assert by_group["g1"] == ["2026-09-03", "2026-09-02"]
+    assert by_group["g2"] == ["2026-09-05"]
+    assert by_group["g3"] == ["2026-08-25", "2026-08-20"]
+    # 无 per_group：退化为全局新→旧（g2 的 09-05 唯一最新在前）
+    rows = db.pending_report_extractions(limit=80, group_ids=list(groups))
+    assert rows[0]["group_id"] == "g2"
+    # min_sort_date 窗口仍然生效
+    rows = db.pending_report_extractions(limit=80, group_ids=list(groups), min_sort_date="2026-09-01", per_group=2)
+    assert all(r["sort_date"] >= "2026-09-01" for r in rows)
