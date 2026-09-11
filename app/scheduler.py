@@ -2610,7 +2610,9 @@ class Scheduler:
         site_llm = _system_llm_config(db, self.llm_config)
         if site_llm is None:
             return 0
-        model = db.get_setting("report_extract_model") or "gemini-3.8-flash-high"
+        # 模型默认跟随站点 LLM 解析结果（isolate 后为 env 配置的模型），
+        # report_extract_model 仅作显式覆盖——覆盖值必须与站点 base 兼容
+        model = db.get_setting("report_extract_model") or site_llm.model
         # 抽取窗口默认只看最近 2 天（增量及时性）；回填存量时调大
         # report_extract_backfill_days（0 = 不限），配合按库轮转不会饿死增量
         backfill_days = int(db.get_setting("report_extract_backfill_days") or 2)
