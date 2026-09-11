@@ -2438,6 +2438,7 @@ async function renderTimeline(seq) {
       ${live ? liveFeedHeadHtml() : ""}
       <div id="feed">${reuse ? "" : TL_SKELETON}</div>
     </section>
+    <button type="button" id="tl-backtop" class="tl-backtop" aria-label="返回顶部" title="返回顶部" onclick="tlBacktopClick()">${ARROW_UP_ICON}<span class="tl-backtop-new" id="tl-backtop-new" hidden></span></button>
     </div>
     ${wide ? `<aside class="tl-rail" id="tl-rail" aria-label="发现">
       <div class="tl-rail-head">${tlSearchBarHtml()}</div>
@@ -2449,8 +2450,7 @@ async function renderTimeline(seq) {
         <div id="tl-rail-tags"></div>
       </div>
     </aside>` : ""}
-    </div>
-    <button type="button" id="tl-backtop" class="tl-backtop" aria-label="返回顶部" title="返回顶部" onclick="tlBacktopClick()">${ARROW_UP_ICON}<span class="tl-backtop-new" id="tl-backtop-new" hidden></span></button>`;
+    </div>`;
   tlSyncNewBadgeMode();
   startMarketQuotes();
   if (live) startLiveClock();

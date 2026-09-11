@@ -2038,8 +2038,17 @@ a.kol-card-head:hover .kol-card-info .name { color: var(--color-accent-text); }
   box-shadow: 0 2px 6px rgba(229, 72, 77, 0.4);
 }
 .tl-backtop.has-new { border-color: var(--color-danger, #e5484d); color: var(--color-danger, #e5484d); }
+/* PC：不再 fixed 在视口右下角（宽屏会落到右侧栏下面，很难看到），改为 sticky 挂在动态列末尾，
+   始终贴着动态框右缘——滚动途中悬在窗口底部，滚到列表末尾就停靠在动态框右下方 */
 @media (min-width: 769px) {
-  .tl-backtop { right: 24px; bottom: 32px; }
+  .tl-backtop {
+    position: sticky;
+    display: flex;
+    margin: 10px 0 0 auto;
+    top: auto;
+    right: auto;
+    bottom: 32px;
+  }
 }
 /* 实时资讯新帖胶囊（fixed 吸顶，与最新动态的 tl-new-badge 视觉一致） */
 .news-rt-new-badge {
