@@ -59,7 +59,7 @@ const CHANNEL_ICONS = {
 const GROK_TRANSLATE_ICON = `<svg class="p-tr-grok" viewBox="0 0 33 32" fill="currentColor" aria-hidden="true"><path d="M12.745 20.54l10.97-8.19c.539-.4 1.307-.244 1.564.38 1.349 3.288.746 7.241-1.938 9.955-2.683 2.714-6.417 3.31-9.83 1.954l-3.728 1.745c5.347 3.697 11.84 2.782 15.898-1.324 3.219-3.255 4.216-7.692 3.284-11.693l.008.009c-1.351-5.878.332-8.227 3.782-13.031L33 0l-4.54 4.59v-.014L12.743 20.544m-2.263 1.987c-3.837-3.707-3.175-9.446.1-12.755 2.42-2.449 6.388-3.448 9.852-1.979l3.72-1.737c-.67-.49-1.53-1.017-2.515-1.387-4.455-1.854-9.789-.931-13.41 2.728-3.483 3.523-4.579 8.94-2.697 13.561 1.405 3.454-.899 5.898-3.22 8.364C1.49 30.2.666 31.074 0 32l10.478-9.466"/></svg>`;
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.181";
+const APP_VERSION = "1.12.182";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -2197,13 +2197,17 @@ function ensureTimelineVisibilityPoll() {
   });
 }
 
+let _tlPollFeedBusy = false;
+
 async function pollFeedUpdates() {
-  if (document.visibilityState === "hidden") return;
+  // 计时器/visibilitychange/路由切入三路都会触发，防重叠轮询
+  if (document.visibilityState === "hidden" || _tlPollFeedBusy) return;
   const live = isLiveTimeline();
   const latestId = live ? _liveLatestId : _tlLatestId;
   const pendingLatestId = live ? _livePendingLatestId : _tlPendingLatestId;
   const pendingNew = feedPendingNew();
   if (!latestId || !$("#feed") || (live && !isLiveTimeline()) || (!live && isLiveTimeline())) return;
+  _tlPollFeedBusy = true;
   const seq = routeRenderSeq;
   try {
     let newer = [];
@@ -2212,7 +2216,7 @@ async function pollFeedUpdates() {
         limit: "30",
         since_id: String(pendingLatestId || latestId),
       });
-      const data = await api(`/api/live/wscn?${params}`);
+      const data = await api(`/api/live/wscn?${params}`, { signal: AbortSignal.timeout(15000) });
       if (!routeStillActive(seq) || !$("#feed") || !isLiveTimeline()) return;
       newer = data.items || [];
     } else {
@@ -2223,7 +2227,7 @@ async function pollFeedUpdates() {
       if (state.timelineTag) params.set("tag", state.timelineTag);
       if (state.timelineFavorite) params.set("favorite", "1");
       if (state.timelineSecondary) params.set("include_secondary", "1");
-      const posts = await api(`/api/my/feed?${params}`);
+      const posts = await api(`/api/my/feed?${params}`, { signal: AbortSignal.timeout(15000) });
       if (!routeStillActive(seq) || !$("#feed") || isLiveTimeline()) return;
       newer = posts.filter((p) => p.id > pendingLatestId);
     }
@@ -2255,7 +2259,9 @@ async function pollFeedUpdates() {
     }
     $("#tl-new-badge")?.classList.add("show");
     $("#tl-feed-panel")?.classList.add("has-new");
-  } catch { /* 轮询失败静默 */ }
+  } catch { /* 轮询失败静默 */ } finally {
+    _tlPollFeedBusy = false;
+  }
 }
 
 // 新帖胶囊头像：去重取前 3 个（无头像用首字色块）；超出的作者不另画 +N，条数只在 aria-label
@@ -2280,7 +2286,11 @@ async function autoConsumeTimelinePending(seq) {
   if (!routeStillActive(seq) || isLiveTimeline()) return;
   if (!$("#tl-feed-panel") || !feedPendingNew().length) return;
   if (window.scrollY > 240) return;
-  await refreshTimeline({ pollFirst: false });
+  try {
+    await refreshTimeline({ pollFirst: false });
+  } catch (e) {
+    console.warn("自动并入新帖失败，保留胶囊供重试", e);
+  }
 }
 
 // 快讯在最新位置时自动并入；用户深读旧内容时保留新快讯提示。
@@ -2288,7 +2298,11 @@ async function autoConsumeLivePending(seq) {
   if (!routeStillActive(seq) || !isLiveTimeline()) return;
   if (!$("#tl-feed-panel") || !feedPendingNew().length) return;
   if (window.scrollY > 240) return;
-  await refreshTimeline({ pollFirst: false });
+  try {
+    await refreshTimeline({ pollFirst: false });
+  } catch (e) {
+    console.warn("自动并入新帖失败，保留胶囊供重试", e);
+  }
 }
 
 async function refreshTimeline({ pollFirst = true } = {}) {
@@ -2323,6 +2337,9 @@ async function refreshTimeline({ pollFirst = true } = {}) {
     $("#tl-new-badge")?.classList.remove("show");
     $("#tl-feed-panel")?.classList.remove("has-new");
     window.scrollTo({ top: 0, behavior: "smooth" });
+  } catch (e) {
+    // 渲染/网络异常：保留胶囊供重试（_tlRefreshing 已在 finally 复位）
+    console.warn("动态页刷新异常", e);
   } finally {
     _tlRefreshing = false;
   }
@@ -2848,14 +2865,28 @@ function renderTimelineFeed() {
   }
   const grouped = new Map();
   for (const p of posts) {
-    const bucket = feedDateBucket(p.published_at);
+    let bucket;
+    try {
+      bucket = feedDateBucket(p.published_at);
+    } catch (e) {
+      bucket = "未知时间";
+    }
     if (!grouped.has(bucket)) grouped.set(bucket, []);
     grouped.get(bucket).push(p);
   }
+  // 单帖渲染失败只降级该卡片，不拖垮整屏（否则胶囊会卡在「有新动态」且点击无效）
+  const safePostCard = (p) => {
+    try {
+      return postCard(p);
+    } catch (e) {
+      console.warn("动态卡片渲染失败", p && p.id, e);
+      return `<article class="tl-post"><div class="tl-post-body"><strong class="tl-post-title muted">（此条动态渲染失败）</strong></div></article>`;
+    }
+  };
   const html = [...grouped.entries()].map(([bucket, list], gi) => `
     <div class="tl-group">
       <div class="tl-group-head"><span>${escapeHtml(bucket)}</span>${gi === 0 ? `<span class="tl-group-count">已加载 ${_tlPosts.length} 条动态</span>` : ""}</div>
-      ${list.map(postCard).join("")}
+      ${list.map(safePostCard).join("")}
     </div>`).join("");
   const footer = _tlHasMore
     ? `<div id="feed-load-sentinel" class="tl-feed-more" role="status" aria-live="polite"></div>`
