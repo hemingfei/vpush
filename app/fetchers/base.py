@@ -10,6 +10,8 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 
+from ..zh_simp import to_simplified
+
 logger = logging.getLogger(__name__)
 
 # 项目面向中文社交平台，发布时间统一按北京时间展示，避免依赖服务器时区
@@ -108,6 +110,11 @@ def _prefer_source(content: str, content_src: str) -> bool:
         return False
     if is_collapsed_translation(body, src):
         return True
+    # 繁转简后 content 是简体、src 是繁体，不能回退
+    if to_simplified(src) == body or to_simplified(quoted_author_text(src)) == quoted_author_text(
+        body
+    ):
+        return False
     return already_chinese(quoted_author_text(src))
 
 

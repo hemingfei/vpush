@@ -937,6 +937,17 @@ def test_twitter_display_pref_swaps_stored_src():
     assert kept["content"] == long_zh["content"]
     assert has_stored_translation(long_zh) is True
 
+    trad = {
+        "platform": "twitter",
+        "title": "如果我们有喊票就能涨起来的能力",
+        "content": "如果我们有喊票就能涨起来的能力，那么我们就天天喊自己持仓中所有的票了。",
+        "title_src": "如果我們有喊票就能漲起來的能力",
+        "content_src": "如果我們有喊票就能漲起來的能力，那麼我們就天天喊自己持倉中所有的票了。",
+    }
+    simp = with_twitter_display_row(trad, True)
+    assert simp["content"] == trad["content"]
+    assert has_stored_translation(trad) is False
+
 
 def test_twitter_fetch_unwraps_retweet_original(monkeypatch):
     monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
