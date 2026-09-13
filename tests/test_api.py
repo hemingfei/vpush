@@ -4462,6 +4462,49 @@ def test_background_workers_flag(monkeypatch):
     assert background_workers_enabled() is True
 
 
+def test_ima_page_warmup_flag(monkeypatch):
+    from app.main import ima_page_warmup_enabled
+
+    monkeypatch.delenv("IMA_PAGE_WARMUP", raising=False)
+    assert ima_page_warmup_enabled() is True
+    monkeypatch.setenv("IMA_PAGE_WARMUP", "0")
+    assert ima_page_warmup_enabled() is False
+    monkeypatch.setenv("IMA_PAGE_WARMUP", "1")
+    assert ima_page_warmup_enabled() is True
+
+
+def test_start_ima_page_warmup_respects_flag(monkeypatch):
+    from app import main as main_module
+
+    created = []
+
+    class FakeThread:
+        def __init__(self, *, target, daemon, name):
+            self.target = target
+            self.daemon = daemon
+            self.name = name
+            self.start_count = 0
+            created.append(self)
+
+        def start(self):
+            self.start_count += 1
+
+    db = SimpleNamespace(warm_ima_document_page=lambda: None)
+    monkeypatch.setattr(main_module.threading, "Thread", FakeThread)
+
+    monkeypatch.setenv("IMA_PAGE_WARMUP", "0")
+    assert main_module.start_ima_page_warmup(db) is None
+    assert created == []
+
+    monkeypatch.setenv("IMA_PAGE_WARMUP", "1")
+    thread = main_module.start_ima_page_warmup(db)
+    assert created == [thread]
+    assert thread.target is db.warm_ima_document_page
+    assert thread.daemon is True
+    assert thread.name == "ima-page-warmup"
+    assert thread.start_count == 1
+
+
 def test_passwordless_user_can_set_first_password():
     """微信/机器人自动创建的无密码账号：已持有会话即可首次设密，之后改密需旧密码。"""
     from app import auth

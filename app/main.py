@@ -32,6 +32,7 @@ from .scheduler import Scheduler, set_alerts_enabled
 # 抢生产 Telegram 机器人（getUpdates 409）、用测试配置误发降级告警
 # （曾因本地测试实例未配 TWITTER_COOKIE 给生产群发「未配置 TWITTER_COOKIE」）。
 WORKERS_ENV = "DAV_UI_ONLY"
+IMA_PAGE_WARMUP_ENV = "IMA_PAGE_WARMUP"
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,23 @@ logger = logging.getLogger(__name__)
 def background_workers_enabled() -> bool:
     """调度器/机器人等后台任务是否启用（DAV_UI_ONLY=1 时关闭）。"""
     return os.environ.get(WORKERS_ENV, "0") != "1"
+
+
+def ima_page_warmup_enabled() -> bool:
+    """研报列表页启动预热是否启用（默认启用，IMA_PAGE_WARMUP=0 时关闭）。"""
+    return os.environ.get(IMA_PAGE_WARMUP_ENV, "1") != "0"
+
+
+def start_ima_page_warmup(db: DB) -> threading.Thread | None:
+    if not ima_page_warmup_enabled():
+        return None
+    thread = threading.Thread(
+        target=db.warm_ima_document_page,
+        daemon=True,
+        name="ima-page-warmup",
+    )
+    thread.start()
+    return thread
 
 
 def docs_enabled() -> bool:
@@ -236,7 +254,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
             # ponytail: 后台线程预热 timeline 缓存，不挡启动；首击不再冷读
             threading.Thread(target=feishu_documents.warm_timeline_cache, daemon=True, name="feishu-timeline-warmup").start()
             # ponytail: 同上，预热研报列表页（冷页缓存下首屏列表查询实测 6.5-12s）
-            threading.Thread(target=db.warm_ima_document_page, daemon=True, name="ima-page-warmup").start()
+            start_ima_page_warmup(db)
             task = asyncio.create_task(scheduler.run())
             if config.alerts_enabled and config.notifiers.telegram.bot_token:
                 from .telegram_bot import TelegramBot
