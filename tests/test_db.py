@@ -1,4 +1,5 @@
 """DB 层单元测试：迁移、唯一性与事务一致性。"""
+import logging
 import sqlite3
 import threading
 from pathlib import Path
@@ -1639,6 +1640,42 @@ def test_warm_ima_document_page_runs_one_page_query(tmp_path, monkeypatch):
 def test_warm_ima_document_page_empty_db_is_noop(tmp_path):
     db = DB(str(tmp_path / "empty-warm.sqlite"))
     assert db.warm_ima_document_page() == 0
+
+
+@pytest.mark.parametrize(
+    ("failure_stage", "error_text"),
+    [
+        ("group-enumeration", "group enumeration failed"),
+        ("page-query", "page query failed"),
+    ],
+)
+def test_warm_ima_document_page_logs_and_degrades_on_failure(
+    tmp_path, monkeypatch, caplog, failure_stage, error_text
+):
+    db = DB(str(tmp_path / f"warm-{failure_stage}.sqlite"))
+
+    def fail(*args, **kwargs):
+        raise RuntimeError(error_text)
+
+    if failure_stage == "group-enumeration":
+        monkeypatch.setattr(db, "_read_only_rows", fail)
+    else:
+        db.replace_ima_document_index(
+            [_index_row("group-1", "media-1", "2026-09-06")], "fp", 1
+        )
+        monkeypatch.setattr(db, "ima_document_page", fail)
+
+    with caplog.at_level(logging.WARNING, logger="app.db"):
+        assert db.warm_ima_document_page() == 0
+
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+        and record.getMessage().startswith("[ima-page-warmup]")
+    ]
+    assert len(warnings) == 1
+    assert error_text in warnings[0]
 
 
 def test_ima_document_catalog_stats_and_detail_ambiguity(tmp_path):

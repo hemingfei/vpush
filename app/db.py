@@ -5419,16 +5419,20 @@ class DB:
 
     def warm_ima_document_page(self, limit: int = 50) -> int:
         """启动后预热研报列表页：按首屏同样形态跑一次只读查询，把索引页/数据页带进页缓存。"""
-        groups = [
-            row["group_id"]
-            for row in self._read_only_rows(
-                "SELECT DISTINCT d.group_id FROM ima_document_index d"
-            )
-        ]
-        if not groups:
+        try:
+            groups = [
+                row["group_id"]
+                for row in self._read_only_rows(
+                    "SELECT DISTINCT d.group_id FROM ima_document_index d"
+                )
+            ]
+            if not groups:
+                return 0
+            self.ima_document_page(groups, limit=limit)
+            return len(groups)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("[ima-page-warmup] %s", exc)
             return 0
-        self.ima_document_page(groups, limit=limit)
-        return len(groups)
 
     def ima_document_match_count(
         self,
