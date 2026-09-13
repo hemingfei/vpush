@@ -33,9 +33,9 @@ INLINE_GLOBALS = frozenset({
 })
 
 
-def _from_braces(src: str, prefix: str) -> list[str]:
+def _from_braces(src: str, prefix: str, suffix: str = "") -> list[str]:
     names: list[str] = []
-    for block in re.findall(rf"{prefix}\s*\{{([^}}]+)\}}", src, re.M):
+    for block in re.findall(rf"{prefix}\s*\{{([^}}]+)\}}\s*{suffix}", src, re.M):
         for part in block.split(","):
             bits = part.replace("\n", " ").split()
             if not bits or bits[0] == "...":
@@ -49,21 +49,8 @@ def parse_bindings(src: str) -> list[str]:
     names += re.findall(rf"^(?:export\s+)?const\s+({IDENT})\s*=", src, re.M)
     names += _from_braces(src, r"^(?:export\s+|import\s+)")
     names += _from_braces(src, r"^const")
-    names += _let_names(src)
-    return names
-
-
-def _let_names(src: str) -> list[str]:
-    """let/var 声明（admin 视图懒加载用 let 占位、ensureAdminViews() 里赋值）。
-
-    声明列表可跨多行以逗号分隔，各段可带初始化器（let a = 1, b;），取 = 前标识符。
-    """
-    names: list[str] = []
-    for block in re.findall(r"^(?:export\s+)?(?:let|var)\s+([^;]+);", src, re.M):
-        for part in block.split(","):
-            candidate = part.split("=")[0].strip()
-            if re.fullmatch(IDENT, candidate):
-                names.append(candidate)
+    # 懒加载视图：ensureAdminViews() 内部的括号解构赋值 ({ a, b } = view = factory({...}))
+    names += _from_braces(src, r"\(\s*", r"=")
     return names
 
 
