@@ -402,6 +402,40 @@ def test_normalize_mx_text_unescapes_and_collapses():
     assert normalize_mx_text(once) == once
 
 
+def test_normalize_strips_dangling_list_markers():
+    """只含列表符号的悬空占位行剔除（文件本体是独立 file 消息，占位行只会渲染成空列表项）。"""
+    assert normalize_mx_text("文件：\n- \n- ") == "文件："
+    assert normalize_mx_text("A\n-\nB") == "A\nB"
+    assert normalize_mx_text("A\n*\n1.\nB") == "A\nB"
+    # 带内容的列表项、水平分隔线、正常引用不动
+    assert normalize_mx_text("- 条目内容\n---\n> 引用") == "- 条目内容\n---\n> 引用"
+    # 「1. 5倍」数字开头有正文不是悬空序号
+    assert normalize_mx_text("涨了\n1. 5倍") == "涨了\n1. 5倍"
+
+
+def test_file_list_message_strips_placeholder_bullets():
+    """「文件：」+ 逐条 file 消息的调研帖：占位短横线不进正文，文件全部抽成附件。"""
+    db = make_db()
+    fetcher = make_fetcher(db)
+    kol = make_kol(db)
+    raw = {
+        "id": 30,
+        "rid": 101,
+        "msg": '[{"type": "text", "msg": "#### 每日调研\\n> 发布人：冷静相逢\\n「文件」\\n文件：\\n- \\n"}, '
+               '{"type": "file", "url": "https://pic.test/down/6f1d3020.docx", "name": "AI设备投资框架之光模块设备260910_原文.docx"}, '
+               '{"type": "text", "msg": "\\n- \\n"}, '
+               '{"type": "file", "url": "https://pic.test/down/748399540.docx", "name": "黄酒经销商渠道交流20260911_原文.docx"}]',
+        "createtime": 1700000000000,
+    }
+    post = fetcher._parse_message_to_post(raw, kol)
+    assert post is not None
+    assert post.content == "#### 每日调研\n> 发布人：冷静相逢\n「文件」\n文件："
+    assert [f["name"] for f in post.detail["files"]] == [
+        "AI设备投资框架之光模块设备260910_原文.docx",
+        "黄酒经销商渠道交流20260911_原文.docx",
+    ]
+
+
 def test_message_newlines_normalized_in_post():
     """入库正文：服务端双重转义的字面量换行还原，跨 text 片段的连续换行也折叠。"""
     db = make_db()

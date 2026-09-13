@@ -69,6 +69,11 @@ def looks_like_image_url(url: str, name: str = "") -> bool:
 TEXT_FILE_KV_RE = re.compile(r"^url=(\S+),fileName=(.*)$")
 TEXT_FILE_SHARE_RE = re.compile(r"^分享了一份文件[：:](.+)\n(https?://\S+)$")
 
+# 只含列表符号的悬空占位行（「-」「- 」「*」「1.」「1、」等）。单独一个符号
+# 不构成任何列表项，只会被 markdown 渲染成空圆点/孤立短横线；「---」是水平
+# 分隔线不在此列（字符类限长 1）
+DANGLING_LIST_MARKER_RE = re.compile(r"^\s*(?:[-*+•·◦]|\d{1,3}[.、)])\s*$")
+
 
 def extract_text_embedded_file(text: str) -> dict | None:
     """整条 text 消息就是一个文件分享时提取附件 {url, name}，否则返回 None。"""
@@ -98,6 +103,10 @@ def normalize_mx_text(text: str) -> str:
     「反斜杠+n/r」（与真实 CR、CRLF 混杂，如编辑前缀「xx [编辑]\r\n正文」）。
     统一还原成真实换行，再把连续换行压成单个换行；只有空白字符（含全角空格）
     的行按空行处理。
+
+    另剔除只含列表符号的悬空占位行（如「- 」「1.」）：「文件：」后跟列表的
+    帖子，文件本体是独立 file 消息、由附件卡片另行渲染，占位行留在正文里
+    只会渲染成空列表项/孤立短横线。
     """
     if not text:
         return ""
@@ -110,7 +119,11 @@ def normalize_mx_text(text: str) -> str:
         .replace("\r\n", "\n")
         .replace("\r", "\n")
     )
-    return "\n".join(line for line in s.split("\n") if line.strip())
+    return "\n".join(
+        line
+        for line in s.split("\n")
+        if line.strip() and not DANGLING_LIST_MARKER_RE.match(line)
+    )
 
 
 class MxFetcher(Fetcher):

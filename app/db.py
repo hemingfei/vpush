@@ -1480,6 +1480,26 @@ class DB:
                 self._conn.execute(
                     "UPDATE posts SET content = ? WHERE id = ?", (cleaned, row["id"])
                 )
+        # MX 帖正文里只含列表符号的悬空占位行（如「文件：」后的「- 」）：文件本体
+        # 是独立 file 消息、已抽成附件单独渲染，占位行只会渲染成空列表项/孤立
+        # 短横线。一次性清理历史正文，与新抓取走同一判定；打标记保证只全量扫一遍
+        if (self.get_setting("mx_dangling_marker_cleanup_v1") or "") != "1":
+            from .fetchers.mx.fetcher import DANGLING_LIST_MARKER_RE
+
+            for row in self._rows("SELECT id, content FROM posts WHERE platform = 'mx'"):
+                cleaned = "\n".join(
+                    line
+                    for line in row["content"].split("\n")
+                    if not DANGLING_LIST_MARKER_RE.match(line)
+                )
+                if cleaned != row["content"]:
+                    self._conn.execute(
+                        "UPDATE posts SET content = ? WHERE id = ?", (cleaned, row["id"])
+                    )
+            self._conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('mx_dangling_marker_cleanup_v1', '1') "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+            )
         # 知识星球帖的 published_at 曾存带毫秒+时区的 ISO 串（2026-09-03T15:48:42.756+0800），
         # 与其余帖子「北京时间裸字符串」的约定不一致：字符串排序会把星球帖顶到同日最前，
         # 展示也带 T/毫秒。统一换算成北京时间裸字符串；按「日期+T」特征筛选保持幂等，
