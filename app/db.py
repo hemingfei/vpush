@@ -426,13 +426,13 @@ _IMA_DOC_INT_COLUMNS = frozenset({"size", "chars", "has_pdf", "has_txt"})
 _IMA_INDEX_SPECS = (
     (
         "idx_ima_doc_latest",
-        "ima_document_index(sort_date DESC, name DESC)",
-        (("sort_date", 1), ("name", 1)),
+        "ima_document_index(sort_date DESC, name DESC, group_id ASC, media_id ASC)",
+        (("sort_date", 1), ("name", 1), ("group_id", 0), ("media_id", 0)),
     ),
     (
         "idx_ima_doc_group_latest",
-        "ima_document_index(group_id, sort_date DESC, name DESC)",
-        (("group_id", 0), ("sort_date", 1), ("name", 1)),
+        "ima_document_index(group_id, sort_date DESC, name DESC, media_id ASC)",
+        (("group_id", 0), ("sort_date", 1), ("name", 1), ("media_id", 0)),
     ),
     (
         "idx_ima_doc_tag_group",
@@ -5290,13 +5290,30 @@ class DB:
                 f"SELECT d.*, {rank_sql} AS match_rank FROM ima_document_index d "
                 f"WHERE {where_sql} "
                 # 跨年排序：sort_date（YYYY-MM-DD）DESC，空串（unknown）沉底
-                "ORDER BY match_rank DESC, (d.sort_date = '') ASC, d.sort_date DESC, d.name DESC "
-                "LIMIT ? OFFSET ?",
+                "ORDER BY match_rank DESC, (d.sort_date = '') ASC, d.sort_date DESC, "
+                "d.name DESC, d.group_id ASC, d.media_id ASC LIMIT ? OFFSET ?",
                 (*item_params, page_limit + 1, page_offset),
             )
+        elif not any(
+            (requested_day, requested_tag, requested_rating, requested_ticker)
+        ):
+            if len(groups) == 1:
+                rows = self._read_only_rows(
+                    "SELECT d.* FROM ima_document_index d INDEXED BY idx_ima_doc_group_latest "
+                    f"WHERE {where_sql} "
+                    "ORDER BY d.sort_date DESC, d.name DESC, d.media_id ASC "
+                    "LIMIT ? OFFSET ?",
+                    (*where_params, page_limit + 1, page_offset),
+                )
+            else:
+                rows = self._read_only_rows(
+                    "SELECT d.* FROM ima_document_index d INDEXED BY idx_ima_doc_latest "
+                    f"WHERE {where_sql} "
+                    "ORDER BY d.sort_date DESC, d.name DESC, d.group_id ASC, d.media_id ASC "
+                    "LIMIT ? OFFSET ?",
+                    (*where_params, page_limit + 1, page_offset),
+                )
         else:
-            # 默认列表按组各取一段索引有序切片（idx_ima_doc_group_latest，每组 <= offset+limit+1 行）再归并。
-            # 旧写法用常量 match_rank 开头排序：必须等值扫描覆盖索引再全表排序，冷页缓存下生产实测 6.5-12s。
             branches: list[str] = []
             slice_params: list[object] = []
             for group_id in groups:
@@ -5307,12 +5324,13 @@ class DB:
                 branches.append(
                     "SELECT * FROM (SELECT d.* FROM ima_document_index d "
                     f"WHERE {group_where} "
-                    "ORDER BY d.sort_date DESC, d.name DESC LIMIT ?)"
+                    "ORDER BY d.sort_date DESC, d.name DESC, d.media_id ASC LIMIT ?)"
                 )
                 slice_params.extend([*group_params, page_offset + page_limit + 1])
             rows = self._read_only_rows(
-                f"SELECT * FROM ({' UNION ALL '.join(branches)}) "
-                "ORDER BY sort_date DESC, name DESC LIMIT ? OFFSET ?",
+                f"SELECT * FROM ({' UNION ALL '.join(branches)}) d "
+                "ORDER BY d.sort_date DESC, d.name DESC, d.group_id ASC, d.media_id ASC "
+                "LIMIT ? OFFSET ?",
                 (*slice_params, page_limit + 1, page_offset),
             )
         has_more = len(rows) > page_limit
@@ -5401,16 +5419,20 @@ class DB:
 
     def warm_ima_document_page(self, limit: int = 50) -> int:
         """启动后预热研报列表页：按首屏同样形态跑一次只读查询，把索引页/数据页带进页缓存。"""
-        groups = [
-            row["group_id"]
-            for row in self._read_only_rows(
-                "SELECT DISTINCT d.group_id FROM ima_document_index d"
-            )
-        ]
-        if not groups:
+        try:
+            groups = [
+                row["group_id"]
+                for row in self._read_only_rows(
+                    "SELECT DISTINCT d.group_id FROM ima_document_index d"
+                )
+            ]
+            if not groups:
+                return 0
+            self.ima_document_page(groups, limit=limit)
+            return len(groups)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("[ima-page-warmup] %s", exc)
             return 0
-        self.ima_document_page(groups, limit=limit)
-        return len(groups)
 
     def ima_document_match_count(
         self,
