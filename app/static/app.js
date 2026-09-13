@@ -3872,7 +3872,7 @@ function postCard(post) {
       <div class="p-meta">
         ${post.category_name ? `<span class="cat">${escapeHtml(post.category_name)}</span>` : ""}
         ${post.post_type === "reply" ? `<span class="cat">回复</span>` : ""}
-        ${renderPostTagChips(post.tags, post.view_directions)}
+        ${renderPostTagChips(post.tags, post.view_directions, post.pending_tags)}
         ${post.platform === "zsxq" ? "" : RAW_MODAL_LABELS[post.platform]
           ? `<a href="#" data-raw-label="${escapeHtml(RAW_MODAL_LABELS[post.platform])}"
                onclick="event.preventDefault();openRawModal(${post.id}, this.dataset.rawLabel)"
@@ -3883,15 +3883,24 @@ function postCard(post) {
 }
 
 // 标签徽章：最多直接显示 6 个，超出折叠进「更多N」，点击展开/收起；
-// 智囊团观点回流带方向的标签追加看多/看空角标（post.view_directions）
-function renderPostTagChips(tags, viewDirections) {
-  if (!Array.isArray(tags) || !tags.length) return "";
+// 智囊团观点回流带方向的标签追加看多/看空角标（post.view_directions）；
+// 审核队列待审标签（post.pending_tags）虚线展示 + 待审角标，仅供实时决策参考，不可点筛选
+function renderPostTagChips(tags, viewDirections, pendingTags) {
   const dirs = (viewDirections && typeof viewDirections === "object") ? viewDirections : {};
   const chip = (t) => `<button type="button" class="cat cat-tag post-tag-filter" data-tag="${escapeHtml(t)}" onclick="tlPickTag(this.dataset.tag)">${escapeHtml(t)}${tagDirBadge(dirs[t])}</button>`;
-  if (tags.length <= 6) return tags.map(chip).join("");
+  const pendingChip = (pt) => {
+    const t = (pt && typeof pt === "object") ? pt.tag : pt;
+    if (!t) return "";
+    const dir = dirs[t] || ((pt && typeof pt === "object" && pt.direction) || "");
+    return `<span class="cat cat-tag tag-pending" title="待审核标签，仅供参考">${escapeHtml(t)}${tagDirBadge(dir)}<i class="tag-pending-badge">待审</i></span>`;
+  };
+  const pending = Array.isArray(pendingTags) ? pendingTags.map(pendingChip).join("") : "";
+  if (!Array.isArray(tags) || !tags.length) return pending;
+  if (tags.length <= 6) return tags.map(chip).join("") + pending;
   return `${tags.slice(0, 6).map(chip).join("")}` +
     `<span class="tag-extra" hidden>${tags.slice(6).map(chip).join("")}</span>` +
-    `<button type="button" class="cat cat-tag tags-more-btn" data-n="${tags.length - 6}" onclick="togglePostTags(this)">更多${tags.length - 6}</button>`;
+    `<button type="button" class="cat cat-tag tags-more-btn" data-n="${tags.length - 6}" onclick="togglePostTags(this)">更多${tags.length - 6}</button>` +
+    pending;
 }
 
 // 标签多空方向角标：bull=看多（红）、bear=看空（绿），无方向返回空
@@ -3942,7 +3951,7 @@ function openRawModal(postId, label) {
         : `<p class="mx-raw-empty muted">该消息没有保存原始数据</p>`}
       <div class="mx-raw-tags">
         <div class="mx-raw-tags-title">标签</div>
-        <div class="mx-raw-tags-list" id="mx-raw-tags-list">${mxRawTagsHtml(post.tags, isAdmin, post.view_directions)}</div>
+        <div class="mx-raw-tags-list" id="mx-raw-tags-list">${mxRawTagsHtml(post.tags, isAdmin, post.view_directions, post.pending_tags)}</div>
         ${isAdmin ? `
         <div class="mx-raw-tag-add">
           <input id="mx-raw-tag-input" class="form-control" maxlength="30" placeholder="输入新标签，回车或点添加" onkeydown="if(event.key==='Enter'){event.preventDefault();mxRawAddTag();}">
@@ -3971,15 +3980,22 @@ function openRawModal(postId, label) {
   document.body.appendChild(mask);
 }
 
-// 原始消息弹窗里的标签徽章：管理员带 × 删除按钮；带方向的标签追加看多/看空角标
-function mxRawTagsHtml(tags, isAdmin, viewDirections) {
+// 原始消息弹窗里的标签徽章：管理员带 × 删除按钮；带方向的标签追加看多/看空角标；
+// 待审标签只读展示（虚线 + 待审角标），通过/拒绝在后台审核队列操作
+function mxRawTagsHtml(tags, isAdmin, viewDirections, pendingTags) {
   const list = Array.isArray(tags) ? tags : [];
   const dirs = (viewDirections && typeof viewDirections === "object") ? viewDirections : {};
   const chips = list.map((t) => `
     <span class="cat cat-tag mx-raw-tag">${escapeHtml(t)}${tagDirBadge(dirs[t])}${isAdmin
       ? `<button type="button" class="mx-raw-tag-del" data-tag="${escapeHtml(t)}" aria-label="删除标签 ${escapeHtml(t)}" title="删除标签 ${escapeHtml(t)}" onclick="mxRawRemoveTag(this.dataset.tag)">×</button>`
       : ""}</span>`).join("");
-  return chips || '<span class="muted mx-raw-tag-empty">暂无标签</span>';
+  const pending = (Array.isArray(pendingTags) ? pendingTags : []).map((pt) => {
+    const t = (pt && typeof pt === "object") ? pt.tag : pt;
+    if (!t) return "";
+    const dir = dirs[t] || ((pt && typeof pt === "object" && pt.direction) || "");
+    return `<span class="cat cat-tag mx-raw-tag tag-pending" title="待审核标签，审核通过后才计入帖子标签">${escapeHtml(t)}${tagDirBadge(dir)}<i class="tag-pending-badge">待审</i></span>`;
+  }).join("");
+  return (chips + pending) || '<span class="muted mx-raw-tag-empty">暂无标签</span>';
 }
 
 function _mxRawModalPost() {
@@ -3994,7 +4010,7 @@ function mxRawRenderTags(tags) {
   const list = document.getElementById("mx-raw-tags-list");
   if (!list) return;
   const post = _mxRawModalPost();
-  list.innerHTML = mxRawTagsHtml(tags, !!state.user?.is_admin, post?.view_directions);
+  list.innerHTML = mxRawTagsHtml(tags, !!state.user?.is_admin, post?.view_directions, post?.pending_tags);
 }
 
 // 增删标签后同步内存缓存，并热替换背后的帖子卡片（关弹窗即见新标签，不用整页刷新）

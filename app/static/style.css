@@ -1594,6 +1594,14 @@ a.kol-card-head:hover .kol-card-info .name { color: var(--color-accent-text); }
   font-style: normal; font-size: var(--text-xs); line-height: 14px; padding: 0 5px; margin-left: 4px;
   border-radius: var(--radius-pill); background: var(--color-surface-muted); color: var(--color-text-muted);
 }
+/* 待审标签：审核队列未通过的标签提示性展示（虚线框 + 待审角标），仅供实时决策参考，不可点筛选 */
+.cat.tag-pending { border: 1px dashed currentColor; cursor: default; }
+.post-item .p-meta .cat.tag-pending { opacity: .75; }
+.tag-pending-badge {
+  font-style: normal; font-size: var(--text-xs); line-height: 14px; padding: 0 4px; margin-left: 2px;
+  border-radius: var(--radius-pill); background: rgba(176, 127, 44, .16); color: #96690f; font-weight: 600;
+}
+.theme-dark .tag-pending-badge { background: rgba(255, 193, 94, .16); color: #ffc861; }
 .tag-detail-pending-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; }
 .tag-detail-pending-row + .tag-detail-pending-row { border-top: 1px dashed var(--color-border); }
 .tag-detail-pending-meta { flex: 1; font-size: var(--text-xs); color: var(--color-text-muted); }

@@ -6144,8 +6144,9 @@ class DB:
     def attach_view_directions(self, rows: list[dict]) -> list[dict]:
         """给一批帖子行附加 view_directions（{标签: bull/bear}）。
 
-        取自 post_tag_reviews 里已直写/审核通过且方向非空的登记（智囊团观点
-        回流写入），一页帖子一条 IN 查询；帖子上没有方向登记时为空 dict。
+        取自 post_tag_reviews 里方向非空的登记（智囊团观点回流写入）；待审
+        （pending）的也带上，供用户侧待审标签提示（实时决策需要尽早看到方向，
+        拒绝的除外），一页帖子一条 IN 查询；帖子上没有方向登记时为空 dict。
         """
         ids = [int(r["id"]) for r in rows if r.get("id") is not None]
         if not ids:
@@ -6154,7 +6155,7 @@ class DB:
         review_rows = self._rows(
             f"SELECT post_id, tag, direction FROM post_tag_reviews "
             f"WHERE post_id IN ({placeholders}) AND direction != '' "
-            f"AND status IN ('applied', 'approved')",
+            f"AND status IN ('pending', 'applied', 'approved')",
             tuple(ids),
         )
         by_post: dict[int, dict[str, str]] = {}
@@ -6162,6 +6163,35 @@ class DB:
             by_post.setdefault(int(r["post_id"]), {})[str(r["tag"])] = str(r["direction"])
         for row in rows:
             row["view_directions"] = by_post.get(int(row["id"]), {})
+        return rows
+
+    def attach_pending_tags(self, rows: list[dict]) -> list[dict]:
+        """给一批帖子行附加 pending_tags（审核队列中待审标签的提示性下发）。
+
+        实时决策需要尽早看到标签，待审标签不再对用户隐藏；这里只读登记表，
+        不写 posts.tags，审核通过与否的正式口径不变（前端以待审样式区分）。
+        UNIQUE(post_id, tag) 保证同帖同标签至多一条；无待审标签的帖子为空列表。
+        """
+        ids = [int(r["id"]) for r in rows if r.get("id") is not None]
+        if not ids:
+            return rows
+        placeholders = ",".join("?" for _ in ids)
+        review_rows = self._rows(
+            f"SELECT post_id, tag, kind, confidence, source, direction FROM post_tag_reviews "
+            f"WHERE post_id IN ({placeholders}) AND status = 'pending'",
+            tuple(ids),
+        )
+        by_post: dict[int, list[dict]] = {}
+        for r in review_rows:
+            by_post.setdefault(int(r["post_id"]), []).append({
+                "tag": str(r["tag"]),
+                "kind": str(r["kind"]),
+                "confidence": str(r["confidence"]),
+                "source": str(r["source"]),
+                "direction": str(r["direction"]),
+            })
+        for row in rows:
+            row["pending_tags"] = by_post.get(int(row["id"]), [])
         return rows
 
     def mx_view_tag_day_stats(self, day: str) -> dict:

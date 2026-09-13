@@ -2666,6 +2666,7 @@ def create_api_router(
         has_more = len(posts) > limit
         posts = apply_twitter_feed(posts[:limit], user)
         db.attach_view_directions(posts)
+        db.attach_pending_tags(posts)
         return {
             "items": posts,
             "offset": offset,
@@ -2703,6 +2704,7 @@ def create_api_router(
         has_more = len(posts) > limit
         posts = apply_twitter_feed(posts[:limit], user)
         db.attach_view_directions(posts)
+        db.attach_pending_tags(posts)
         return {
             "items": posts,
             "offset": offset,
@@ -3070,6 +3072,8 @@ def create_api_router(
         )
         # 智囊团观点回流的多空方向（{标签: bull/bear}），帖子卡片渲染方向徽标用
         db.attach_view_directions(posts)
+        # 待审标签提示性下发：只读登记表不改 posts.tags，实时决策可见待审标签
+        db.attach_pending_tags(posts)
         return apply_twitter_feed(posts, user)
 
     @router.get("/live/wscn")
@@ -3227,6 +3231,7 @@ def create_api_router(
             user,
         )
         db.attach_view_directions(posts)
+        db.attach_pending_tags(posts)
         subscription = db.get_subscription(user["id"], kol_id)
         if subscription and subscription["hide_images"]:
             return [{**post, "images": []} for post in posts]
@@ -3247,6 +3252,7 @@ def create_api_router(
         ):
             raise HTTPException(status_code=404, detail="帖子不存在")
         db.attach_view_directions([post])
+        db.attach_pending_tags([post])
         return post
 
     @router.get("/kols/{kol_id}/holdings")

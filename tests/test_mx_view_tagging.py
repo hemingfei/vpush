@@ -203,6 +203,28 @@ def test_day_stats_and_attach_directions():
     assert "view_directions" not in db.list_posts(limit=10)[0]
 
 
+def test_pending_tags_attached_with_direction_and_dropped_after_reject():
+    """待审标签提示性下发：pending 附到帖子行（带方向/来源），拒绝后不再下发。"""
+    db = make_db()
+    kol, pid = _setup(db)
+    mx_view_tagging.apply_view_tags(
+        db, [_op(kol, "宁德时代", confidence="low", direction="bear", evidence=[pid])], topic_hints=[],
+    )
+    # 待审标签附到帖子行：用户侧实时可见，带方向与来源
+    rows = db.attach_pending_tags([{"id": pid}])
+    pending = rows[0]["pending_tags"]
+    assert len(pending) == 1
+    assert pending[0]["tag"] == "宁德时代" and pending[0]["direction"] == "bear"
+    assert pending[0]["source"] == "mx_view" and pending[0]["confidence"] == "low"
+    # 待审方向也进入 view_directions（方向角标在待审标签上同样可用）
+    assert db.attach_view_directions([{"id": pid}])[0]["view_directions"].get("宁德时代") == "bear"
+    # 审核拒绝：pending 下发与方向都撤掉
+    review_id = db.list_tag_reviews(status="pending")[0]["id"]
+    db.set_tag_review_status(review_id, "rejected")
+    assert db.attach_pending_tags([{"id": pid}])[0]["pending_tags"] == []
+    assert "宁德时代" not in db.attach_view_directions([{"id": pid}])[0]["view_directions"]
+
+
 def test_run_snapshot_batch_applies_tags_when_enabled(monkeypatch):
     """挂钩集成：开关开启时快照批次把研判观点回写证据帖标签，关闭时不写。"""
     db = make_db()
