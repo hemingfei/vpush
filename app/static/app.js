@@ -3825,11 +3825,17 @@ function mxDisplayBody(post) {
   return raw;
 }
 
-// 附件卡片 HTML（非音频）：供 news 页等不渲染音频按钮的场景复用；
-// 时间线 postCard 自己渲染（音频走播放按钮），不要用这个
+// 附件卡片 HTML：音频渲染播放按钮（toggleMxAudio 全局可用，与时间线 postCard
+// 同款标记），其余渲染直链；实时资讯/调研纪要栏目经 news.js 复用
 function mxAttachmentCards(post) {
-  return mxAttachments(post).filter((f) => !f.audio).map((f) =>
-    `<a class="p-file" href="${escapeHtml(f.url)}" target="_blank" rel="noopener" aria-label="打开附件 ${escapeHtml(f.name || "附件")}" title="打开附件 ${escapeHtml(f.name || "附件")}">${PAPERCLIP_ICON} ${escapeHtml(f.name || "附件")}</a>`).join("");
+  return mxAttachments(post).map((f) => f.audio
+    ? `<div class="mx-audio-row">
+        <button type="button" class="mx-audio-btn" data-url="${escapeHtml(f.url)}" onclick="toggleMxAudio(this)">
+          <span class="mx-audio-icon" aria-hidden="true">▶</span>
+          <span class="mx-audio-label">${escapeHtml(f.name || "点击播放")}</span>
+        </button>
+      </div>`
+    : `<a class="p-file" href="${escapeHtml(f.url)}" target="_blank" rel="noopener" aria-label="打开附件 ${escapeHtml(f.name || "附件")}" title="打开附件 ${escapeHtml(f.name || "附件")}">${PAPERCLIP_ICON} ${escapeHtml(f.name || "附件")}</a>`).join("");
 }
 
 function combinationDetailHtml(post) {
