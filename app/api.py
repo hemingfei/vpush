@@ -181,6 +181,7 @@ from .proxy import (
     public_proxy,
 )
 from .weibo_qr import create_qr, poll_qr
+from .wscn_flash import build_wscn_post
 from . import ai_analysis
 
 # 关键词提醒规则上限（每个用户）与单关键词长度上限
@@ -485,7 +486,7 @@ class ImageCleanupRunIn(BaseModel):
     """执行帖子本地图片清理：勾选的大V + 孤儿图开关，两者至少其一。"""
 
     months: int = Field(ge=1, le=120)
-    kol_ids: list[int] = []
+    kol_ids: list[int] = Field(default_factory=list)
     include_orphans: bool = False
 
 
@@ -498,7 +499,7 @@ class ImageBackfillRunIn(BaseModel):
 class ImageCachePolicyIn(BaseModel):
     """图片直连（不缓存）名单：名单内域名的图片保留外链直接访问。"""
 
-    direct_hosts: list[str] = []
+    direct_hosts: list[str] = Field(default_factory=list)
 
 
 class KolWebhookUpdate(BaseModel):
@@ -1109,6 +1110,14 @@ def start_wscn_live_refresh() -> None:
     threading.Thread(target=_wscn_home_loop, daemon=True, name="wscn-refresh").start()
 
 
+_wscn_stop = threading.Event()
+
+
+def stop_wscn_live_refresh() -> None:
+    """通知快讯刷新循环退出（main.py lifespan 关闭时调用）。"""
+    _wscn_stop.set()
+
+
 def _wscn_client() -> httpx.Client:
     global _WSCN_CLIENT
     if _WSCN_CLIENT is None:
@@ -1179,8 +1188,9 @@ def _wscn_refresh_home() -> None:
 
 
 def _wscn_home_loop() -> None:
-    while True:
-        time.sleep(_WSCN_CACHE_TTL)
+    # Event.wait(TTL) 代替 time.sleep(TTL)：stop_wscn_live_refresh 可立即唤醒退出，
+    # 否则 lifespan 关闭后线程还要睡满一个 TTL（daemon 兜底，但收尾不干脆）
+    while not _wscn_stop.wait(_WSCN_CACHE_TTL):
         try:
             _wscn_refresh_home()
         except Exception:
@@ -3094,34 +3104,9 @@ def create_api_router(
         external_id=wscn_flash_{id} 天然去重（UNIQUE(platform, external_id)），
         重复入库返回 broadcast=False。
         """
-        item_id = int(item.get("id") or 0)
-        if item_id <= 0:
+        post = build_wscn_post(item, kol_id, kol_name)
+        if post is None:
             return {"broadcast": False, "post_id": None, "message": "无效的快讯ID"}
-        highlight = (item.get("highlight_title") or "").strip()
-        prefix = "【重要快讯】" if int(item.get("score") or 1) >= 2 else "【快讯】"
-        title = f"{prefix}{highlight}" if highlight else prefix
-        content = item.get("body") or ""
-        url = (item.get("url") or "").strip()
-        # published_at 是 ISO 格式（含时区），转为北京时间裸字符串与现有帖子一致
-        raw_ts = item.get("published_at") or ""
-        try:
-            dt = datetime.fromisoformat(raw_ts) if raw_ts else datetime.now(CN_TZ)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=CN_TZ)
-            published_at = dt.astimezone(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:
-            published_at = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
-        post = Post(
-            platform="system",
-            kol_id=kol_id,
-            kol_name=kol_name,
-            external_id=f"wscn_flash_{item_id}",
-            title=title,
-            content=content,
-            url=url,
-            published_at=published_at,
-            post_type="wscn_flash",
-        )
         if on_external_post:
             post_id = on_external_post(post)
         else:
@@ -6432,7 +6417,9 @@ def create_api_router(
             "message_count": int(s["message_count"] or 0),
         } for s in snaps]
         return {"trading_day": day, "latest_at": snaps[-1]["snapshot_at"] if snaps else None,
-                "snapshots": items}
+                "snapshots": items,
+                # 操作词表全量下发：抽屉/观点流筛选需展示 0 计数词，避免继承的筛选无法取消
+                "action_tags": db.get_action_tag_vocabulary()}
 
     @router.get("/mx-views/snapshot")
     async def mx_views_snapshot(day: str, at: str, current_user: dict = Depends(get_current_user)):
@@ -6469,6 +6456,7 @@ def create_api_router(
                 continue
             ops = [
                 {"kol_id": int(o["kol_id"]), "kol_name": o.get("kol_name") or "",
+                 "avatar": o.get("avatar_url") or "",
                  "target_type": o["target_type"], "target_name": o["target_name"],
                  "direction": o["direction"], "action": o.get("action") or "",
                  "summary": o.get("summary") or "", "occurred_at": o.get("occurred_at") or "",

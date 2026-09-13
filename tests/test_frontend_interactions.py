@@ -4478,10 +4478,12 @@ def test_news_center_has_realtime_and_articles_tabs():
     assert 'tab("articles", "财经新闻")' in tabs
     center = _fn_body("renderNewsCenter", NEWS_JS)
     assert 'state.newsTab = "realtime"' in center
-    realtime = _fn_body("loadRealtimeNews", NEWS_JS)
-    assert "/api/news/realtime" in realtime
-    poll = _fn_body("pollNewsRtUpdates", NEWS_JS)
-    assert "since_id" in poll
+    # 实时/调研双流共用 createStreamFeed 工厂：API 路径与 since_id 增量轮询在工厂内实现
+    assert 'apiPath: "/api/news/realtime"' in src
+    assert 'apiPath: "/api/news/research"' in src
+    assert "since_id=" in src
+    assert "function createStreamFeed" in src
+    assert src.count("createStreamFeed({") == 2  # 实时资讯 + 调研纪要各一个实例
     switch = _fn_body("selectNewsTab", NEWS_JS)
     assert "stopNewsRtPoll" in switch
     # 离开页面必须停掉轮询与无限滚动

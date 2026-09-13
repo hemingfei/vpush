@@ -10,7 +10,7 @@ import time
 from typing import Callable
 from urllib.parse import unquote, urlparse
 
-from ...avatar_cache import cache_image_file, should_direct_access
+from ...avatar_cache import PLATFORM_IMAGE_DIRS, cache_image_file, should_direct_access
 from ..base import (
     BACKFILL_PAGES,
     Fetcher,
@@ -491,7 +491,8 @@ class MxFetcher(Fetcher):
         死图，调用方自行决定降级口径）。
         """
         if self.db and not should_direct_access(self.db, url):
-            cached = cache_image_file(self.db, url, "mx_images", "/mx-images")
+            folder, prefix = PLATFORM_IMAGE_DIRS["mx"]
+            cached = cache_image_file(self.db, url, folder, prefix)
         else:
             cached = url
         if cached is not None:

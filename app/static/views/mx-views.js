@@ -21,11 +21,42 @@ export function createMxViewsView(dependencies) {
     atLatest: true, hasNew: false, es: null, sseOk: false, pollTimer: null, clockTimer: null, drawer: null,
     followed: new Set(), kolMode: "kol", kolExpanded: false, kolStockTargets: [],
     feedBatches: [], feedKey: "", feedPending: false, feedLoading: false, feedFailed: false,
+    feedView: "stream", feedDirs: new Set(), feedActs: new Set(), feedKols: new Set(),
+    feedKolOpen: false, feedKolSearch: "", feedFreshPending: false, actionTags: [],
     applySeq: 0, tlDrag: false, tlPreviewIdx: -1,
     hlKey: "", hlPinned: false, boardMode: { topic: "heat", stock: "heat" },
     boardStep: 1, hlDocBound: false };
   const MXV_BOARD_LIST_LIMIT = 4; // 双榜明细默认条数，超出走「更多」展开
   const MXV_HEAT_ROWS = 4; // 热力云默认最多行数，超出出「更多」展开
+  const MXV_FILTERS_KEY = "mxv_feed_filters"; // 筛选状态本地持久化：刷新/重进页面不丢
+
+  function mxvSaveFilters() {
+    try {
+      localStorage.setItem(MXV_FILTERS_KEY, JSON.stringify({
+        view: _mxv.feedView, dirs: [..._mxv.feedDirs],
+        acts: [..._mxv.feedActs], kols: [..._mxv.feedKols],
+      }));
+    } catch (e) { /* 存储不可用（隐私模式等）：筛选仍在本页生效，只是不跨刷新 */ }
+  }
+
+  function mxvLoadFilters() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(MXV_FILTERS_KEY) || "null");
+      if (!saved || typeof saved !== "object") return;
+      if (["stream", "stock", "topic", "kol"].includes(saved.view)) _mxv.feedView = saved.view;
+      if (Array.isArray(saved.dirs)) {
+        _mxv.feedDirs = new Set(saved.dirs.filter((d) => ["bull", "bear", "neutral"].includes(d)));
+      }
+      if (Array.isArray(saved.acts)) {
+        _mxv.feedActs = new Set(saved.acts.map(String).filter(Boolean));
+      }
+      if (Array.isArray(saved.kols)) {
+        _mxv.feedKols = new Set(saved.kols.map(Number).filter((n) => Number.isInteger(n) && n > 0));
+      }
+    } catch (e) { /* 坏数据忽略，用默认筛选 */ }
+  }
+
+  mxvLoadFilters(); // 恢复上次筛选（视图/方向/操作词/大V），点进抽屉也带着同一套状态
 
   // 点页面空白/Esc 解除高亮锁定、关闭月历（工厂级只绑一次；事件里按路由存活状态自然失效）
   if (!_mxv.hlDocBound) {
@@ -45,6 +76,7 @@ export function createMxViewsView(dependencies) {
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
       if (document.querySelector(".mxv-cal")) { mxvCalClose(); return; }
+      if (_mxv.feedKolOpen) { _mxv.feedKolOpen = false; mxvRenderFeed(); return; }
       if (_mxv.hlPinned) {
         _mxv.hlPinned = false;
         mxvSetHighlight("");
@@ -66,6 +98,7 @@ export function createMxViewsView(dependencies) {
     mxvCalClose();
     Object.assign(_mxv, { day: null, payload: null, at: null, drawer: null, hasNew: false, sseOk: false,
       feedBatches: [], feedKey: "", feedPending: false, feedLoading: false, feedFailed: false,
+      feedKolOpen: false, feedKolSearch: "", feedFreshPending: false, actionTags: [], // 筛选集不清：跨路由保留
       tlDrag: false, tlPreviewIdx: -1, hlKey: "", hlPinned: false, cal: null,
       boardStep: 1 });
   }
@@ -103,6 +136,7 @@ export function createMxViewsView(dependencies) {
     if (seq !== undefined && !routeStillActive(seq)) return;
     _mxv.day = day;
     _mxv.snapshots = dayData.snapshots || [];
+    _mxv.actionTags = Array.isArray(dayData.action_tags) ? dayData.action_tags.map(String) : [];
     const target = dayData.latest_at;
     if (target) { await mxvApplySnapshot(target); } else { mxvRenderShell(); }
   }
@@ -144,6 +178,7 @@ export function createMxViewsView(dependencies) {
       _mxv.feedBatches = data.batches || [];
       _mxv.feedFailed = false;
       _mxv.feedLoading = false;
+      _mxv.feedFreshPending = true; // 仅数据到达后的这次渲染播 fresh 动画，筛选/切视图重渲染不播
       mxvRenderFeed();
       mxvRenderBoards(false); // 双榜用 feed 现算中性数回填；feed 上面刚渲染过，不重复渲染第二次
     } catch (e) {
@@ -210,6 +245,7 @@ export function createMxViewsView(dependencies) {
     const dayData = await api(`/api/mx-views/day?day=${encodeURIComponent(_mxv.day)}`).catch(() => null);
     if (!dayData || !routeStillActive(_mxv.seq)) return;
     _mxv.snapshots = dayData.snapshots || [];
+    if (Array.isArray(dayData.action_tags)) _mxv.actionTags = dayData.action_tags.map(String);
     if (dayData.latest_at && dayData.latest_at !== _mxv.at) await mxvApplySnapshot(dayData.latest_at);
   }
 
@@ -876,36 +912,241 @@ export function createMxViewsView(dependencies) {
     </div>`;
   }
 
+  // ---- 观点流筛选与视图：右上角切换 观点流/个股/题材/大V；筛选三组多选——方向（多/空/中）、
+  // 操作词（词表词逐个多选，随观点数据自动出现）、大V（搜索多选下拉）；
+  // 全部前端现算，流视图筛选后空批次整段隐藏，「重置」一键清空 ----
+  function mxvFeedPool() {
+    const at = _mxv.at || "";
+    return (_mxv.feedBatches || []).filter((b) => !at || String(b.snapshot_at) <= at);
+  }
+
+  function mxvFeedFlat(pool) {
+    // 批次序=最新批次在前、批内时间倒序：扁平化后同 (kol,标的) 首见即最新表态
+    const out = [];
+    pool.forEach((b) => (b.opinions || []).forEach((o) => out.push(o)));
+    return out;
+  }
+
+  function mxvFeedMatch(o) {
+    if (_mxv.feedDirs.size && !_mxv.feedDirs.has(o.direction)) return false;
+    if (_mxv.feedActs.size && !_mxv.feedActs.has(o.action || "")) return false;
+    if (_mxv.feedKols.size && !_mxv.feedKols.has(Number(o.kol_id))) return false;
+    return true;
+  }
+
+  function mxvFeedFiltersHtml(pool) {
+    const dirCounts = { bull: 0, bear: 0, neutral: 0 };
+    const actCounts = {};
+    const kols = [];
+    const seen = new Set();
+    pool.forEach((b) => (b.opinions || []).forEach((o) => {
+      if (o.direction in dirCounts) dirCounts[o.direction] += 1;
+      if (o.action) actCounts[o.action] = (actCounts[o.action] || 0) + 1;
+      if (!seen.has(Number(o.kol_id))) {
+        seen.add(Number(o.kol_id));
+        kols.push({ id: Number(o.kol_id), name: o.kol_name || "" });
+      }
+    }));
+    kols.sort((a, b) => a.name.localeCompare(b.name, "zh"));
+    // 已选但当前数据没有的词保留 chip（显示 0），否则无法取消、卡死筛选
+    const actWords = [...Object.keys(actCounts).sort((a, b) => actCounts[b] - actCounts[a]),
+      ...[..._mxv.feedActs].filter((w) => !(w in actCounts))];
+    const dirty = _mxv.feedDirs.size + _mxv.feedActs.size + _mxv.feedKols.size;
+    const dirChip = (key, label, cls) => `<button type="button" class="mxv-fchip ${cls}${_mxv.feedDirs.has(key) ? " on" : ""}"
+      data-feed-dir="${key}" aria-pressed="${_mxv.feedDirs.has(key)}">${label} ${dirCounts[key]}</button>`;
+    const actChip = (word) => `<button type="button" class="mxv-fchip${_mxv.feedActs.has(word) ? " on" : ""}"
+      data-feed-act="${escapeHtml(word)}" aria-pressed="${_mxv.feedActs.has(word)}">${escapeHtml(word)} ${actCounts[word] || 0}</button>`;
+    const kw = _mxv.feedKolSearch.trim();
+    const kolItems = kols.filter((k) => !kw || k.name.includes(kw));
+    return `
+    <div class="mxv-feed-filters">
+      <span class="mxv-fgroup"><span class="lab">方向</span>${dirChip("bull", "看多", "bull")}${dirChip("bear", "看空", "bear")}${dirChip("neutral", "中性", "neutral")}</span>
+      <span class="mxv-fgroup"><span class="lab">操作</span>${actWords.map(actChip).join("")}</span>
+      <span class="mxv-fgroup">
+        <span class="lab">大V</span>
+        <span class="mxv-fkol-wrap">
+        <button type="button" class="mxv-fchip${_mxv.feedKols.size ? " on" : ""}" data-feed-kol-toggle
+          aria-haspopup="listbox" aria-expanded="${_mxv.feedKolOpen}">${_mxv.feedKols.size ? `已选 ${_mxv.feedKols.size}` : "全部"} ▾</button>
+        ${!_mxv.feedKolOpen ? "" : `
+        <div class="mxv-fkol-panel" role="listbox" aria-label="多选大V">
+          <div class="mxv-fkol-toolbar">
+            <input class="form-control mxv-fkol-search" placeholder="搜索大V" value="${escapeHtml(_mxv.feedKolSearch)}" aria-label="搜索大V">
+            <button type="button" class="mxv-fchip" data-feed-kol-clear>清空</button>
+          </div>
+          <label class="mxv-fkol-item mxv-fkol-all">
+            <input type="checkbox" data-feed-kol-all${kols.length && kols.every((k) => _mxv.feedKols.has(k.id)) ? " checked" : ""}>
+            <span>全选</span>
+          </label>
+          <div class="mxv-fkol-list">${kolItems.map((k) => `
+            <label class="mxv-fkol-item${_mxv.feedKols.has(k.id) ? " on" : ""}">
+              <input type="checkbox" data-feed-kol="${k.id}"${_mxv.feedKols.has(k.id) ? " checked" : ""}>
+              <span>${escapeHtml(k.name)}</span></label>`).join("") || `<div class="mxv-fkol-empty">无匹配大V</div>`}
+          </div>
+        </div>`}
+        </span>
+        ${dirty ? `<button type="button" class="mxv-fchip" data-feed-reset>重置</button>` : ""}
+      </span>
+    </div>`;
+  }
+
+  // 个股/题材视图：名单与排序用筛选后数据（同大V取最新表态，按大V数→|净多空|排）；
+  // 比例条固定展示该标的当日完整多/中/空结构（全量口径，不随筛选变化，保持参照意义）
+  function mxvFeedTargetHtml(flat, ttype, allFlat) {
+    const allLatest = {}; // 标的名 -> Map(kol_id -> 最新观点)，全量口径供比例条
+    (allFlat || []).forEach((o) => {
+      if (o.target_type !== ttype) return;
+      const m = allLatest[o.target_name] = allLatest[o.target_name] || new Map();
+      const kid = Number(o.kol_id);
+      if (!m.has(kid)) m.set(kid, o); // flat 新批次在前：首见即最新表态
+    });
+    const barStats = (name, fallbackOps) => {
+      const ops = allLatest[name] ? [...allLatest[name].values()] : fallbackOps;
+      const bull = ops.filter((o) => o.direction === "bull").length;
+      const bear = ops.filter((o) => o.direction === "bear").length;
+      return { bull, bear, neutral: ops.length - bull - bear };
+    };
+    const groups = {};
+    flat.forEach((o) => {
+      if (o.target_type !== ttype) return;
+      const key = `${o.target_type}|${o.target_name}`;
+      const g = groups[key] = groups[key]
+        || { type: o.target_type, name: o.target_name, latest: new Map() };
+      const kid = Number(o.kol_id);
+      if (!g.latest.has(kid)) g.latest.set(kid, o); // flat 新批次在前：首见即最新表态
+    });
+    const rows = Object.values(groups).map((g) => {
+      const ops = [...g.latest.values()];
+      const bull = ops.filter((o) => o.direction === "bull").length;
+      const bear = ops.filter((o) => o.direction === "bear").length;
+      return { ...g, ops, bull, bear, neutral: ops.length - bull - bear,
+        total: ops.length, net: bull - bear };
+    }).sort((a, b) => b.total - a.total || Math.abs(b.net) - Math.abs(a.net)
+      || a.name.localeCompare(b.name, "zh"));
+    if (!rows.length) return `<div class="mxv-empty">${ttype === "topic" ? "当前筛选无题材观点" : "当前筛选无个股观点"}</div>`;
+    const line = (ops, color, arrow) => !ops.length ? "" : `
+      <div class="names"><span style="color:${color}">${arrow}</span> ${ops.map((o) =>
+        `<span data-act="kol" data-kol-id="${Number(o.kol_id)}" style="cursor:pointer"
+          title="${escapeHtml(`${o.kol_name} · ${(o.occurred_at || "").slice(11, 16)} ${o.summary || ""}`)}">${escapeHtml(o.kol_name)}${o.action ? `·${escapeHtml(o.action)}` : ""}</span>`).join("、")}</div>`;
+    return `<div class="mxv-kols">${rows.map((g) => {
+      const bar = barStats(g.name, g.ops);
+      return `
+      <div class="mxv-stockcard" data-mxv-hl="${escapeHtml(`${g.type}:${g.name}`)}">
+        <div class="n"><span data-act="target" style="cursor:pointer">${escapeHtml(g.name)}</span>
+          <span style="color:var(--mxv-faint);font-size:11px">${g.total} 大V</span></div>
+        ${mxvRatioHtml(bar.bull, bar.bear, bar.neutral)}
+        ${line(g.ops.filter((o) => o.direction === "bull"), "var(--mxv-bull)", "▲")}
+        ${line(g.ops.filter((o) => o.direction === "bear"), "var(--mxv-bear)", "▼")}
+        ${line(g.ops.filter((o) => o.direction !== "bull" && o.direction !== "bear"), "var(--mxv-muted)", "◎")}
+      </div>`;
+    }).join("")}</div>`;
+  }
+
+  // 大V视图：名单/计数用筛选后数据；迷你比例条固定展示该大V当日全标的完整多/中/空结构
+  // （全量口径、不随筛选变化；点卡片其他区域开大V抽屉）
+  function mxvFeedKolHtml(flat, allFlat) {
+    const allLatest = {}; // kol_id -> Map(标的 -> 最新观点)，全量口径供比例条
+    (allFlat || []).forEach((o) => {
+      const m = allLatest[Number(o.kol_id)] = allLatest[Number(o.kol_id)] || new Map();
+      const key = `${o.target_type}|${o.target_name}`;
+      if (!m.has(key)) m.set(key, o);
+    });
+    const groups = {};
+    flat.forEach((o) => {
+      const g = groups[Number(o.kol_id)] = groups[Number(o.kol_id)]
+        || { id: Number(o.kol_id), name: o.kol_name || "", avatar: o.avatar || "", ops: [] };
+      g.ops.push(o);
+    });
+    const rows = Object.values(groups).sort((a, b) =>
+      (_mxv.followed.has(b.id) ? 1 : 0) - (_mxv.followed.has(a.id) ? 1 : 0)
+      || b.ops.length - a.ops.length || a.name.localeCompare(b.name, "zh"));
+    return `<div class="mxv-kols">${rows.map((g) => {
+      const allOps = allLatest[g.id] ? [...allLatest[g.id].values()] : g.ops;
+      const bull = allOps.filter((o) => o.direction === "bull").length;
+      const bear = allOps.filter((o) => o.direction === "bear").length;
+      const neutral = allOps.length - bull - bear;
+      const tot = Math.max(allOps.length, 1);
+      const actCounts = {};
+      g.ops.forEach((o) => { if (o.action) actCounts[o.action] = (actCounts[o.action] || 0) + 1; });
+      const chips = Object.entries(actCounts).map(([a, n]) =>
+        `<span class="mxv-badge act">${escapeHtml(a)}×${n}</span>`).join(" ");
+      return `
+      <div class="mxv-kolcard" data-act="kol" data-kol-id="${g.id}">
+        ${g.avatar ? `<img src="${escapeHtml(g.avatar)}" alt="" loading="lazy">` : `<div class="ava"></div>`}
+        <div style="flex:1;min-width:0">
+          <div class="n">${escapeHtml(g.name)}${_mxv.followed.has(g.id) ? `<span class="fav" title="已关注">★</span>` : ""}
+            <span style="color:var(--mxv-faint);font-size:11px">${g.ops.length} 观点</span></div>
+          <div class="mini"><div class="b" style="width:${Math.round((bull / tot) * 100)}%"></div>
+            <div class="s" style="width:${Math.round((bear / tot) * 100)}%"></div>
+            <div class="n" style="width:${Math.round((neutral / tot) * 100)}%"></div></div>
+          ${chips ? `<div style="margin:4px 0 2px">${chips}</div>` : ""}
+          <div class="tags">${g.ops.slice(0, 10).map((o) => {
+            const color = o.direction === "bull" ? "var(--mxv-bull)" : o.direction === "bear" ? "var(--mxv-bear)" : "var(--mxv-muted)";
+            return `<span data-act="target" data-mxv-hl="${escapeHtml(`${o.target_type}:${o.target_name}`)}" style="cursor:pointer"
+              title="${escapeHtml(o.summary || "")}"><span style="color:${color}">${escapeHtml(o.target_name)}</span>${o.action ? `·${escapeHtml(o.action)}` : ""} <span style="color:var(--mxv-faint)">${escapeHtml((o.occurred_at || "").slice(11, 16))}</span></span>`;
+          }).join("、")}${g.ops.length > 10 ? `<span style="color:var(--mxv-faint)"> 等${g.ops.length}条</span>` : ""}</div>
+        </div>
+      </div>`;
+    }).join("")}</div>`;
+  }
+
   function mxvRenderFeed() {
     const feed = $("#mxv-feed");
     if (!feed) return;
     const at = _mxv.at || "";
-    // 快照语义：只显示首批次→选定批次（≤选定时刻），其后批次不显示；最新快照即全天
-    const batches = (_mxv.feedBatches || []).filter((b) => !at || String(b.snapshot_at) <= at);
-    const head = `<h3 style="margin:0 0 6px;color:var(--mxv-accent);font-size:14px">实时观点流${_mxv.atLatest ? "" : `<span style="color:var(--mxv-faint);font-weight:400;font-size:12px">（截至 ${escapeHtml(at)}）</span>`}</h3>`;
+    const pool = mxvFeedPool(); // 快照语义：只显示首批次→选定批次（≤选定时刻），其后批次不显示
+    const viewBtn = (key, label) => `<button type="button" class="${_mxv.feedView === key ? "on" : ""}"
+      data-feed-view="${key}" aria-pressed="${_mxv.feedView === key}">${label}</button>`;
+    const head = `
+    <div class="mxv-kol-head">
+      <h3 style="margin:0;margin-right:auto;color:var(--mxv-accent);font-size:14px">实时观点流${_mxv.atLatest ? "" : `<span style="color:var(--mxv-faint);font-weight:400;font-size:12px">（截至 ${escapeHtml(at)}）</span>`}</h3>
+      <div class="mxv-mode" role="tablist" aria-label="观点流视图">
+        ${viewBtn("stream", "观点流")}${viewBtn("stock", "个股")}${viewBtn("topic", "题材")}${viewBtn("kol", "大V")}
+      </div>
+    </div>` + (pool.length ? mxvFeedFiltersHtml(pool) : "");
     if (_mxv.feedLoading && !(_mxv.feedBatches || []).length) {
       feed.innerHTML = head + `<div class="mxv-empty">加载中…</div>`;
       return;
     }
-    if (!batches.length && _mxv.feedFailed) {
+    if (!pool.length && _mxv.feedFailed) {
       feed.innerHTML = head + `<div class="mxv-empty">观点流加载失败，切换快照可重试</div>`;
       return;
     }
-    const total = batches.reduce((acc, b) => acc + (b.opinions || []).length, 0);
-    const html = batches.map((b, bi) => {
-      const ops = b.opinions || [];
-      const cut = Math.ceil(ops.length / 2); // 左列 = 较新一半；最早一条落在右列底部
-      const cols = ops.length > 1 ? [ops.slice(0, cut), ops.slice(cut)] : [ops];
-      const grid = `<div class="mxv-feed-cols${ops.length > 1 ? "" : " single"}">${cols.map((col, ci) =>
-        `<div class="mxv-feed-col">${col.map((o, i) =>
-          mxvFeedItemHtml(o, _mxv.atLatest && bi === 0 && (ops.length > 1 ? ci === 0 : true) && i === 0)).join("")}</div>`).join("")}</div>`;
-      return `<div class="mxv-feed-sep"><span>批次 ${escapeHtml(b.snapshot_at)} · ${ops.length} 条</span></div>${grid}`;
-    }).join("");
-    feed.innerHTML = head +
-      (html || `<div class="mxv-empty">当日暂无观点</div>`) +
-      (batches.length ? `<div class="mxv-feed-sep"><span>共 ${total} 条 · ${batches.length} 批次</span></div>` : "");
+    const allFlat = mxvFeedFlat(pool); // 全量口径（比例条用，不随筛选变化）
+    const flat = allFlat.filter(mxvFeedMatch);
+    let body;
+    if (!flat.length) {
+      body = `<div class="mxv-empty">${pool.length ? "当前筛选无观点" : "当日暂无观点"}</div>`;
+    } else if (_mxv.feedView === "stock") {
+      body = mxvFeedTargetHtml(flat, "stock", allFlat);
+    } else if (_mxv.feedView === "topic") {
+      body = mxvFeedTargetHtml(flat, "topic", allFlat);
+    } else if (_mxv.feedView === "kol") {
+      body = mxvFeedKolHtml(flat, allFlat);
+    } else {
+      // 流视图：按批次分组两列报纸流；筛选后空批次整段隐藏
+      const shown = pool
+        .map((b) => ({ ...b, opinions: (b.opinions || []).filter(mxvFeedMatch) }))
+        .filter((b) => b.opinions.length);
+      body = shown.map((b, bi) => {
+        const ops = b.opinions;
+        const cut = Math.ceil(ops.length / 2); // 左列 = 较新一半；最早一条落在右列底部
+        const cols = ops.length > 1 ? [ops.slice(0, cut), ops.slice(cut)] : [ops];
+        const grid = `<div class="mxv-feed-cols${ops.length > 1 ? "" : " single"}">${cols.map((col, ci) =>
+          `<div class="mxv-feed-col">${col.map((o, i) =>
+            mxvFeedItemHtml(o, _mxv.atLatest && _mxv.feedFreshPending && bi === 0 && (ops.length > 1 ? ci === 0 : true) && i === 0)).join("")}</div>`).join("")}</div>`;
+        return `<div class="mxv-feed-sep"><span>批次 ${escapeHtml(b.snapshot_at)} · ${ops.length} 条</span></div>${grid}`;
+      }).join("") + `<div class="mxv-feed-sep"><span>共 ${flat.length} 条 · ${shown.length} 批次${shown.length < pool.length ? `（原 ${pool.length} 批）` : ""}</span></div>`;
+    }
+    feed.innerHTML = head + body;
+    _mxv.feedFreshPending = false; // fresh 只播一次，之后的筛选重渲染不再闪
+    mxvSaveFilters(); // 状态变更必经渲染，这里统一持久化
     mxvBindFeedHighlight();
     if (_mxv.hlKey) mxvSetHighlight(_mxv.hlKey); // 重渲染后恢复高亮
+  }
+
+  function mxvFeedToggle(set, value) {
+    if (set.has(value)) set.delete(value); else set.add(value);
+    mxvRenderFeed();
   }
 
   // ---- 标的高亮联动：悬停/点选任一标的 → 观点流与双榜内同标的集体高亮放大；点击锁定，Esc/点空白解除 ----
@@ -927,6 +1168,30 @@ export function createMxViewsView(dependencies) {
     });
     feed.addEventListener("pointerleave", () => { if (!_mxv.hlPinned) mxvSetHighlight(""); });
     feed.addEventListener("click", (e) => {
+      // 视图切换 / 筛选交互（不触发票击高亮锁定）
+      const viewEl = e.target.closest("[data-feed-view]");
+      if (viewEl) { _mxv.feedView = viewEl.dataset.feedView; mxvRenderFeed(); return; }
+      const dirEl = e.target.closest("[data-feed-dir]");
+      if (dirEl) { mxvFeedToggle(_mxv.feedDirs, dirEl.dataset.feedDir); return; }
+      const actEl2 = e.target.closest("[data-feed-act]");
+      if (actEl2) { mxvFeedToggle(_mxv.feedActs, actEl2.dataset.feedAct); return; }
+      if (e.target.closest("[data-feed-kol-toggle]")) {
+        _mxv.feedKolOpen = !_mxv.feedKolOpen;
+        mxvRenderFeed();
+        return;
+      }
+      if (e.target.closest("[data-feed-kol-clear]")) {
+        _mxv.feedKols.clear();
+        mxvRenderFeed();
+        return;
+      }
+      if (e.target.closest("[data-feed-reset]")) {
+        _mxv.feedDirs.clear();
+        _mxv.feedActs.clear();
+        _mxv.feedKols.clear();
+        mxvRenderFeed();
+        return;
+      }
       // 题材/个股名、大V名 → 弹右侧抽屉；不触发标的高亮锁定
       const actEl = e.target.closest("[data-act]");
       if (actEl) {
@@ -935,10 +1200,10 @@ export function createMxViewsView(dependencies) {
         if (actEl.dataset.act === "target") {
           const hl = item.dataset.mxvHl || "";
           const ci = hl.indexOf(":");
-          mxvOpenTarget(ci >= 0 ? hl.slice(0, ci) : "", hl.slice(ci + 1));
+          mxvOpenTarget(ci >= 0 ? hl.slice(0, ci) : "", hl.slice(ci + 1), true);
         } else if (actEl.dataset.act === "kol") {
-          const kolId = item.dataset.kolId;
-          if (kolId) mxvOpenKol(Number(kolId));
+          const kolId = actEl.dataset.kolId || item.dataset.kolId;
+          if (kolId) mxvOpenKol(Number(kolId), true);
         }
         return;
       }
@@ -947,6 +1212,36 @@ export function createMxViewsView(dependencies) {
       if (key && _mxv.hlPinned && _mxv.hlKey === key) { _mxv.hlPinned = false; mxvSetHighlight(""); }
       else if (key) { _mxv.hlPinned = true; mxvSetHighlight(key); }
       else { _mxv.hlPinned = false; mxvSetHighlight(""); }
+    });
+    // 大V多选下拉：复选框勾选即筛选；搜索框过滤列表（重渲染后恢复焦点与光标）
+    feed.addEventListener("change", (e) => {
+      const allBox = e.target.closest("input[data-feed-kol-all]");
+      if (allBox) {
+        // 全选 ⇄ 全不选：配合摘选个别大V快速排除（先全选再取消那几个）
+        const all = [...new Set(mxvFeedFlat(mxvFeedPool()).map((o) => Number(o.kol_id)))];
+        const allSel = all.length && all.every((id) => _mxv.feedKols.has(id));
+        _mxv.feedKols = allSel ? new Set() : new Set(all);
+        mxvRenderFeed();
+        return;
+      }
+      const box = e.target.closest("input[data-feed-kol]");
+      if (!box) return;
+      mxvFeedToggle(_mxv.feedKols, Number(box.dataset.feedKol));
+    });
+    feed.addEventListener("input", (e) => {
+      const search = e.target.closest(".mxv-fkol-search");
+      if (!search) return;
+      _mxv.feedKolSearch = search.value;
+      mxvRenderFeed();
+      const el = document.querySelector(".mxv-fkol-search");
+      if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+    });
+    // 点下拉面板外部收起（容器级只绑一次；面板开着才需要处理）
+    document.addEventListener("click", (e) => {
+      if (!_mxv.feedKolOpen) return;
+      if (e.target.closest && e.target.closest(".mxv-fkol-wrap")) return;
+      _mxv.feedKolOpen = false;
+      mxvRenderFeed();
     });
   }
 
@@ -1028,38 +1323,119 @@ export function createMxViewsView(dependencies) {
     return "";
   }
 
-  function mxvTimelineListHtml(timeline) {
-    // 最新观点置顶：批次倒序，同批次按发生时间倒序
-    const rows = [...(timeline || [])].sort((a, b) =>
-      String(b.snapshot_at || "").localeCompare(String(a.snapshot_at || ""))
-      || String(b.occurred_at || "").localeCompare(String(a.occurred_at || "")));
-    return rows.map((op, i) => `
-      <div class="mxv-op">
-        <div class="head">
-          ${op.avatar ? `<img class="ava" src="${escapeHtml(op.avatar)}" alt="">` : `<div class="ava"></div>`}
-          <span class="who">${escapeHtml(op.kol_name)}</span>
-          ${mxvBadge(op.direction, op.action)}
-          ${mxvFlipBadge(rows, i)}
-          ${(_mxv.drawer && _mxv.drawer.mode === "kol" && op.target_name) ? `<span style="color:var(--mxv-text);font-size:12px">${escapeHtml(op.target_name)}</span>` : ""}
-          <span class="when">快照 ${escapeHtml(op.snapshot_at)} · ${escapeHtml((op.occurred_at || "").slice(11, 16))}</span>
-        </div>
-        ${op.summary ? `<p class="sum">${escapeHtml(op.summary)}</p>` : ""}
-        ${op.evidence && op.evidence.length ? `<details class="mxv-op-evidence">
-          <summary>依据消息（${op.evidence.length}）</summary>${mxvEvidenceHtml(op.evidence)}</details>` : ""}
-      </div>`).join("") || `<div class="mxv-empty">该快照前暂无观点</div>`;
+  // ---- 抽屉筛选：抽屉内自带独立的方向/操作词（标的抽屉另有大V）筛选。打开时若观点流
+  // 带着筛选则继承之，否则恢复抽屉上次自己的状态（localStorage）；抽屉内随时可再调，即时生效并保存 ----
+  const MXV_DRAWER_FILTERS_KEY = "mxv_drawer_filters";
+
+  function mxvSaveDrawerFilters() {
+    try {
+      const f = _mxv.drawerFilters || { dirs: new Set(), acts: new Set(), kols: new Set() };
+      localStorage.setItem(MXV_DRAWER_FILTERS_KEY, JSON.stringify({
+        dirs: [...f.dirs], acts: [...f.acts], kols: [...f.kols],
+      }));
+    } catch (e) { /* 存储不可用（隐私模式等）：筛选仍在本抽屉生效，只是不跨刷新 */ }
   }
 
-  async function mxvOpenTarget(type, name) {
-    _mxv.drawer = { mode: "target", type, name, title: name };
-    const slot = document.getElementById("mxv-drawer-slot");
-    if (!slot) return;
-    slot.innerHTML = mxvDrawerShell(name);
-    try {
-      const data = await api(`/api/mx-views/target?type=${type}&name=${encodeURIComponent(name)}&day=${encodeURIComponent(_mxv.day)}&at=${encodeURIComponent(_mxv.at || "")}`);
-      // 竞态守卫：题材与个股可同名，type 也要比对，防止旧响应污染新抽屉（同 mxvOpenKol 口径）
-      if (!_mxv.drawer || _mxv.drawer.type !== type || _mxv.drawer.name !== name) return;
-      const body = document.getElementById("mxv-drawer-body");
-      if (!body) return;
+  function mxvDrawerFiltersFromSaved() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(MXV_DRAWER_FILTERS_KEY) || "null"); } catch (e) { /* 坏数据忽略 */ }
+    return {
+      dirs: saved && Array.isArray(saved.dirs)
+        ? new Set(saved.dirs.filter((d) => ["bull", "bear", "neutral"].includes(d))) : new Set(),
+      acts: saved && Array.isArray(saved.acts)
+        ? new Set(saved.acts.map(String).filter(Boolean)) : new Set(),
+      kols: saved && Array.isArray(saved.kols)
+        ? new Set(saved.kols.map(Number).filter((n) => Number.isInteger(n) && n > 0)) : new Set(),
+    };
+  }
+
+  function mxvInitDrawerFilters(fromFeed) {
+    // 仅从实时观点流打开时继承观点流筛选；其他入口（双榜/总览/banner）恢复抽屉上次状态
+    _mxv.drawerFilters = (fromFeed
+      && (_mxv.feedDirs.size || _mxv.feedActs.size || _mxv.feedKols.size))
+      ? { dirs: new Set(_mxv.feedDirs), acts: new Set(_mxv.feedActs), kols: new Set(_mxv.feedKols) }
+      : mxvDrawerFiltersFromSaved();
+  }
+
+  // 抽屉时间线筛选；大V维度只作用于标的抽屉（大V抽屉本身就是单一大V视角）
+  function mxvDrawerMatch(op) {
+    const f = _mxv.drawerFilters;
+    if (!f) return true;
+    if (f.dirs.size && !f.dirs.has(op.direction)) return false;
+    if (f.acts.size && !f.acts.has(op.action || "")) return false;
+    if (f.kols.size && (!_mxv.drawer || _mxv.drawer.mode !== "kol")
+      && !f.kols.has(Number(op.kol_id))) return false;
+    return true;
+  }
+
+  function mxvDrawerFiltersHtml(timeline) {
+    const kolMode = _mxv.drawer && _mxv.drawer.mode === "kol";
+    const dirCounts = { bull: 0, bear: 0, neutral: 0 };
+    const actCounts = {};
+    const kols = [];
+    const seen = new Set();
+    (timeline || []).forEach((op) => {
+      if (op.direction in dirCounts) dirCounts[op.direction] += 1;
+      if (op.action) actCounts[op.action] = (actCounts[op.action] || 0) + 1;
+      const kid = Number(op.kol_id);
+      if (!kolMode && !seen.has(kid)) {
+        seen.add(kid);
+        kols.push({ id: kid, name: op.kol_name || "" });
+      }
+    });
+    kols.sort((a, b) => a.name.localeCompare(b.name, "zh"));
+    const f = _mxv.drawerFilters || { dirs: new Set(), acts: new Set(), kols: new Set() };
+    const dirty = f.dirs.size + f.acts.size + (kolMode ? 0 : f.kols.size);
+    if (!dirty && !dirCounts.bull && !dirCounts.bear && !dirCounts.neutral && !Object.keys(actCounts).length) return "";
+    const chip = (attr, value, label, on, cls = "") => `<button type="button" class="mxv-fchip${on ? " on" : ""}${cls ? ` ${cls}` : ""}"
+      data-${attr}="${escapeHtml(String(value))}" aria-pressed="${on}">${escapeHtml(label)}</button>`;
+    const dirRow = `<span class="mxv-fgroup"><span class="lab">方向</span>${chip("drawer-dir", "bull", `看多 ${dirCounts.bull}`, f.dirs.has("bull"))}${chip("drawer-dir", "bear", `看空 ${dirCounts.bear}`, f.dirs.has("bear"))}${chip("drawer-dir", "neutral", `中性 ${dirCounts.neutral}`, f.dirs.has("neutral"))}</span>`;
+    // 操作行展示完整词表（0 计数置后半透明，仍可点击取消）：继承的筛选词无数据时按钮不能消失，否则卡死
+    const vocab = Array.isArray(_mxv.actionTags) ? _mxv.actionTags : [];
+    const present = Object.keys(actCounts).sort((a, b) => actCounts[b] - actCounts[a]);
+    const selectedAbsent = [...f.acts].filter((w) => !(w in actCounts) && !vocab.includes(w));
+    const actWords = [...present, ...vocab.filter((w) => !(w in actCounts)), ...selectedAbsent];
+    const actRow = actWords.length ? `<span class="mxv-fgroup"><span class="lab">操作</span>${actWords.map((w) => {
+      const on = f.acts.has(w);
+      return chip("drawer-act", w, `${w} ${actCounts[w] || 0}`, on, !actCounts[w] && !on ? "zero" : "");
+    }).join("")}</span>` : "";
+    const kolRow = kolMode ? "" : (kols.length ? `<span class="mxv-fgroup"><span class="lab">大V</span>${kols.map((k) =>
+      chip("drawer-kol", k.id, k.name, f.kols.has(k.id))).join("")}</span>` : "");
+    return `<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start;margin:4px 0 8px">
+      ${dirRow}${actRow}${kolRow}
+      ${dirty ? chip("drawer-reset", "", "重置", false) : ""}
+    </div>`;
+  }
+
+  function mxvBindDrawerFilters() {
+    const body = document.getElementById("mxv-drawer-body");
+    if (!body || body.dataset.dfilterBound) return;
+    body.dataset.dfilterBound = "1";
+    body.addEventListener("click", (e) => {
+      const f = _mxv.drawerFilters;
+      if (!f) return;
+      const toggle = (set, v) => { if (set.has(v)) set.delete(v); else set.add(v); };
+      const dirEl = e.target.closest("[data-drawer-dir]");
+      if (dirEl) { toggle(f.dirs, dirEl.dataset.drawerDir); mxvSaveDrawerFilters(); mxvRenderDrawerBody(); return; }
+      const actEl = e.target.closest("[data-drawer-act]");
+      if (actEl) { toggle(f.acts, actEl.dataset.drawerAct); mxvSaveDrawerFilters(); mxvRenderDrawerBody(); return; }
+      const kolEl = e.target.closest("[data-drawer-kol]");
+      if (kolEl) { toggle(f.kols, Number(kolEl.dataset.drawerKol)); mxvSaveDrawerFilters(); mxvRenderDrawerBody(); return; }
+      if (e.target.closest("[data-drawer-reset]")) {
+        f.dirs.clear(); f.acts.clear(); f.kols.clear();
+        mxvSaveDrawerFilters(); mxvRenderDrawerBody();
+      }
+    });
+  }
+
+  // 抽屉正文按缓存数据渲染：筛选切换只重渲染，不重新请求
+  function mxvRenderDrawerBody() {
+    const d = _mxv.drawer;
+    const data = d && d.data;
+    if (!data) return;
+    const body = document.getElementById("mxv-drawer-body");
+    if (!body) return;
+    if (d.mode === "target") {
       const net = data.bull.count - data.bear.count;
       const neu = data.neutral || { count: 0, kols: [] };
       body.innerHTML = `
@@ -1080,33 +1456,88 @@ export function createMxViewsView(dependencies) {
             <span style="color:var(--mxv-muted)">　${escapeHtml(neu.kols.map((k) => k.name).slice(0, 8).join("、"))}</span></div>
         </div>
         <div style="color:var(--mxv-accent);font-size:13px;margin:10px 0 4px">观点时间线（操作时间点已标金）</div>
+        ${mxvDrawerFiltersHtml(data.timeline)}
         ${mxvTimelineListHtml(data.timeline)}`;
-    } catch (err) {
-      const body = document.getElementById("mxv-drawer-body");
-      if (body) body.innerHTML = `<div class="mxv-empty">${escapeHtml(err.message)}</div>`;
-    }
-  }
-
-  async function mxvOpenKol(kolId) {
-    _mxv.drawer = { mode: "kol", kolId, title: `大V #${kolId}` };
-    const slot = document.getElementById("mxv-drawer-slot");
-    if (!slot) return;
-    slot.innerHTML = mxvDrawerShell("大V观点");
-    try {
-      const data = await api(`/api/mx-views/kol/${kolId}?day=${encodeURIComponent(_mxv.day)}&at=${encodeURIComponent(_mxv.at || "")}`);
-      if (!_mxv.drawer || _mxv.drawer.kolId !== kolId) return;
-      const body = document.getElementById("mxv-drawer-body");
-      if (!body) return;
-      _mxv.drawer.title = data.kol.name;
-      const h = document.getElementById("mxv-drawer-title");
-      if (h) h.textContent = data.kol.name;
+    } else {
       body.innerHTML = `
         <div style="margin:6px 0 10px;display:flex;gap:10px;align-items:center">
           ${data.kol.avatar ? `<img src="${escapeHtml(data.kol.avatar)}" style="width:34px;height:34px;border-radius:50%" alt="">` : ""}
           <b style="color:var(--mxv-strong)">${escapeHtml(data.kol.name)}</b>
           <span style="color:var(--mxv-faint);font-size:12px">${data.timeline.length} 条观点 · 截至 ${escapeHtml(_mxv.at || "")}</span>
         </div>
+        ${mxvDrawerFiltersHtml(data.timeline)}
         ${mxvTimelineListHtml(data.timeline)}`;
+    }
+  }
+
+  function mxvTimelineListHtml(timeline) {
+    const all = [...(timeline || [])];
+    const rows = all.filter(mxvDrawerMatch)
+      .sort((a, b) => // 最新观点置顶：批次倒序，同批次按发生时间倒序
+        String(b.snapshot_at || "").localeCompare(String(a.snapshot_at || ""))
+        || String(b.occurred_at || "").localeCompare(String(a.occurred_at || "")));
+    const hint = rows.length < all.length
+      ? `<div style="color:var(--mxv-faint);font-size:11px;margin:2px 0 4px">已按当前筛选显示 ${rows.length}/${all.length} 条</div>` : "";
+    if (!rows.length) {
+      return hint + `<div class="mxv-empty">${all.length ? "当前筛选下暂无观点" : "该快照前暂无观点"}</div>`;
+    }
+    return hint + rows.map((op, i) => `
+      <div class="mxv-op">
+        <div class="head">
+          ${op.avatar ? `<img class="ava" src="${escapeHtml(op.avatar)}" alt="">` : `<div class="ava"></div>`}
+          <span class="who">${escapeHtml(op.kol_name)}</span>
+          ${mxvBadge(op.direction, op.action)}
+          ${mxvFlipBadge(rows, i)}
+          ${(_mxv.drawer && _mxv.drawer.mode === "kol" && op.target_name) ? `<span style="color:var(--mxv-text);font-size:12px">${escapeHtml(op.target_name)}</span>` : ""}
+          <span class="when">快照 ${escapeHtml(op.snapshot_at)} · ${escapeHtml((op.occurred_at || "").slice(11, 16))}</span>
+        </div>
+        ${op.summary ? `<p class="sum">${escapeHtml(op.summary)}</p>` : ""}
+        ${op.evidence && op.evidence.length ? `<details class="mxv-op-evidence">
+          <summary>依据消息（${op.evidence.length}）</summary>${mxvEvidenceHtml(op.evidence)}</details>` : ""}
+      </div>`).join("");
+  }
+
+  async function mxvOpenTarget(type, name, fromFeed) {
+    const slot = document.getElementById("mxv-drawer-slot");
+    if (!slot) return;
+    const fresh = !_mxv.drawer || _mxv.drawer.mode !== "target"
+      || _mxv.drawer.type !== type || _mxv.drawer.name !== name;
+    if (fresh) {
+      _mxv.drawer = { mode: "target", type, name, title: name };
+      mxvInitDrawerFilters(fromFeed);
+      slot.innerHTML = mxvDrawerShell(name);
+      mxvBindDrawerFilters();
+    }
+    try {
+      const data = await api(`/api/mx-views/target?type=${type}&name=${encodeURIComponent(name)}&day=${encodeURIComponent(_mxv.day)}&at=${encodeURIComponent(_mxv.at || "")}`);
+      // 竞态守卫：题材与个股可同名，type 也要比对，防止旧响应污染新抽屉（同 mxvOpenKol 口径）
+      if (!_mxv.drawer || _mxv.drawer.type !== type || _mxv.drawer.name !== name) return;
+      _mxv.drawer.data = data; // 缓存数据：抽屉内筛选切换只重渲染，不重新请求
+      mxvRenderDrawerBody();
+    } catch (err) {
+      const body = document.getElementById("mxv-drawer-body");
+      if (body) body.innerHTML = `<div class="mxv-empty">${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  async function mxvOpenKol(kolId, fromFeed) {
+    const slot = document.getElementById("mxv-drawer-slot");
+    if (!slot) return;
+    const fresh = !_mxv.drawer || _mxv.drawer.mode !== "kol" || _mxv.drawer.kolId !== kolId;
+    if (fresh) {
+      _mxv.drawer = { mode: "kol", kolId, title: `大V #${kolId}` };
+      mxvInitDrawerFilters(fromFeed);
+      slot.innerHTML = mxvDrawerShell("大V观点");
+      mxvBindDrawerFilters();
+    }
+    try {
+      const data = await api(`/api/mx-views/kol/${kolId}?day=${encodeURIComponent(_mxv.day)}&at=${encodeURIComponent(_mxv.at || "")}`);
+      if (!_mxv.drawer || _mxv.drawer.kolId !== kolId) return;
+      _mxv.drawer.data = data;
+      _mxv.drawer.title = data.kol.name;
+      const h = document.getElementById("mxv-drawer-title");
+      if (h) h.textContent = data.kol.name;
+      mxvRenderDrawerBody();
     } catch (err) {
       const body = document.getElementById("mxv-drawer-body");
       if (body) body.innerHTML = `<div class="mxv-empty">${escapeHtml(err.message)}</div>`;

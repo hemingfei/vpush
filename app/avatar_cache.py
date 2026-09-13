@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+import hashlib
+import logging
 import os
 import re
 import time
@@ -13,13 +15,24 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .url_safety import safe_get
+from .url_safety import safe_get_limited
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_TYPES = {
     "image/jpeg": "jpg",
     "image/png": "png",
     "image/webp": "webp",
     "image/gif": "gif",
+}
+
+# 平台 → (数据目录名, 本地 URL 前缀)：采集侧 cache_image_file、补缓存 image_backfill、
+# 清理 image_cleanup、静态挂载 main.py 全部引用此唯一映射，防止新增平台时漏改某处。
+PLATFORM_IMAGE_DIRS = {
+    "mx": ("mx_images", "/mx-images"),
+    "zsxq": ("zsxq_images", "/zsxq-images"),
+    "xueqiu": ("xq_images", "/xq-images"),
+    "weibo": ("weibo_images", "/weibo-images"),
 }
 MAX_BYTES = 5 * 1024 * 1024
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
@@ -47,6 +60,12 @@ DEFAULT_DIRECT_HOSTS = "static.dingtalk.com"
 _HOST_RE = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$"
 )
+
+# 直连名单缓存：名单变更频率极低，但 should_direct_access 被采集入库和补缓存
+# 热循环逐 URL 调用，每次查库+解析字符串开销不必要。30 秒 TTL 足够管理员改完
+# 策略后快速生效，同时消除每轮补缓存 ~200 次冗余 DB 读。
+_DIRECT_HOSTS_CACHE: dict = {"db_path": None, "raw": None, "hosts": [], "expires": 0.0}
+_DIRECT_HOSTS_TTL = 30.0
 
 
 def normalize_direct_hosts(entries) -> list[str]:
@@ -76,11 +95,26 @@ def _parse_direct_hosts(raw: str) -> list[str]:
 
 
 def direct_access_hosts(db) -> list[str]:
-    """读取直连域名名单；从未配置时用默认名单。"""
+    """读取直连域名名单；从未配置时用默认名单。
+
+    带 30 秒 TTL 内存缓存：should_direct_access 被采集/补缓存热循环逐 URL
+    调用，名单变更极少，缓存消除每轮数百次冗余 DB 读+字符串解析。
+    """
+    now = time.time()
+    db_path = str(getattr(db, "path", "") or "")
+    cache = _DIRECT_HOSTS_CACHE
     raw = db.get_setting(DIRECT_HOSTS_SETTING)
     if raw is None:
         raw = DEFAULT_DIRECT_HOSTS
-    return _parse_direct_hosts(raw)
+    if (
+        cache["db_path"] == db_path
+        and cache["raw"] == raw
+        and now < cache["expires"]
+    ):
+        return cache["hosts"]
+    hosts = _parse_direct_hosts(raw)
+    cache.update(db_path=db_path, raw=raw, hosts=hosts, expires=now + _DIRECT_HOSTS_TTL)
+    return hosts
 
 
 def should_direct_access(db, url: str) -> bool:
@@ -146,8 +180,6 @@ def cache_image_file(db, url: str, folder: str, url_prefix: str, client: httpx.C
     _maybe_cleanup_part_files(dest)
     # 键必须是完整 URL 的函数：CDN 常用顺序/短文件名，取远程文件名会让
     # 不同帖子同名图片互相覆盖，引用旧内容的帖子永久显示错图
-    import hashlib
-
     key = hashlib.sha1(url.encode()).hexdigest()[:16]
     for ext in ALLOWED_TYPES.values():
         existing = dest / f"{key}.{ext}"
@@ -156,7 +188,9 @@ def cache_image_file(db, url: str, folder: str, url_prefix: str, client: httpx.C
     owns_client = client is None
     client = client or httpx.Client(timeout=15, follow_redirects=True, headers=headers_for(url))
     try:
-        resp = safe_get(client, url, timeout=15)
+        resp = safe_get_limited(
+            client, url, max_bytes=MAX_BYTES, headers=headers_for(url), timeout=15
+        )
         if resp.status_code != 200 or not resp.content:
             return url
         content_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()
@@ -164,7 +198,7 @@ def cache_image_file(db, url: str, folder: str, url_prefix: str, client: httpx.C
         if not ext:
             # 200 但内容不是图片（网页/文件等），与「下载失败」区分开
             return None
-        if len(resp.content) > MAX_BYTES or len(resp.content) <= 2048:
+        if len(resp.content) <= 2048:
             return url
         target = dest / f"{key}.{ext}"
         # WS 解析已并发跑在线程池里，同一 URL 可能被两个线程同时下载缓存：
@@ -177,7 +211,8 @@ def cache_image_file(db, url: str, folder: str, url_prefix: str, client: httpx.C
             tmp.unlink(missing_ok=True)
             return url
         return f"{url_prefix}/{target.name}"
-    except Exception:
+    except Exception:  # noqa: BLE001 - 下载失败/响应过大等退回原 URL
+        logger.debug("cache_image_file 下载失败: %s", url[:120], exc_info=True)
         return url
     finally:
         if owns_client:
@@ -198,7 +233,9 @@ def cache_avatar(db, kol_id: int, remote_url: str, client: httpx.Client | None =
     owns_client = client is None
     client = client or httpx.Client(timeout=15, follow_redirects=True, headers=headers_for(url))
     try:
-        resp = safe_get(client, url, timeout=15)
+        resp = safe_get_limited(
+            client, url, max_bytes=MAX_BYTES, headers=headers_for(url), timeout=15
+        )
         if resp.status_code != 200 or not resp.content:
             return url
         content_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()
@@ -223,6 +260,7 @@ def cache_avatar(db, kol_id: int, remote_url: str, client: httpx.Client | None =
         db.update_kol_avatar_source(kol_id, url)
         return local
     except Exception:  # noqa: BLE001 - 缓存失败退回远端 URL
+        logger.debug("cache_avatar 下载失败: %s", url[:120], exc_info=True)
         return url
     finally:
         if owns_client:

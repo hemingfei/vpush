@@ -2526,11 +2526,17 @@ function stopTimelinePoll() {
 function ensureTimelineVisibilityPoll() {
   if (ensureTimelineVisibilityPoll.bound) return;
   ensureTimelineVisibilityPoll.bound = true;
-  document.addEventListener("visibilitychange", () => {
+  const onVisibility = () => {
     if (document.visibilityState !== "visible") return;
-    if (!$("#feed")) return;
+    // 离开动态页后 #feed 消失：listener 自摘除（下次进入页面再绑），不常驻堆积
+    if (!$("#feed")) {
+      document.removeEventListener("visibilitychange", onVisibility);
+      ensureTimelineVisibilityPoll.bound = false;
+      return;
+    }
     pollFeedUpdates();
-  });
+  };
+  document.addEventListener("visibilitychange", onVisibility);
 }
 
 // 播放新消息提示音。
@@ -2898,10 +2904,17 @@ let _tlScrollRaf = 0;
 function ensureTimelineScrollChrome() {
   if (_tlScrollChromeBound) return;
   _tlScrollChromeBound = true;
-  window.addEventListener("scroll", () => {
+  const onScroll = () => {
+    // 离开动态页后 #tl-backtop 消失：listener 自摘除（下次进入页面再绑），不常驻堆积
+    if (!document.getElementById("tl-backtop")) {
+      window.removeEventListener("scroll", onScroll);
+      _tlScrollChromeBound = false;
+      return;
+    }
     if (_tlScrollRaf) return;
     _tlScrollRaf = requestAnimationFrame(() => { _tlScrollRaf = 0; tlSyncScrollChrome(); });
-  }, { passive: true });
+  };
+  window.addEventListener("scroll", onScroll, { passive: true });
 }
 
 function tlSyncScrollChrome() {
@@ -6001,7 +6014,6 @@ const {
   queueNewsSearch,
   queueNewsRtSearch,
   queueNewsResearchSearch,
-  renderFinancialNewsArticle,
   renderFinancialNewsList,
   renderNewsCenter,
   renderResearchNews,
@@ -8308,7 +8320,6 @@ const INLINE_HANDLERS = {
   reloadTimelineRail,
   removeFeishuDocumentSource,
   renameFeishuDocumentSource,
-  renderFinancialNewsArticle,
   renderFinancialNewsList,
   renderResearchNews,
   renderTimeline,

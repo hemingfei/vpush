@@ -17,15 +17,12 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .avatar_cache import PLATFORM_IMAGE_DIRS
 from .fetchers.base import CN_TZ, parse_published_at
 
-# 帖子图片本地缓存：URL 前缀 → 数据目录下的文件夹（与 main.py 的静态挂载一一对应）
-POST_IMAGE_DIRS = {
-    "/mx-images": "mx_images",
-    "/zsxq-images": "zsxq_images",
-    "/xq-images": "xq_images",
-    "/weibo-images": "weibo_images",
-}
+# 帖子图片本地缓存：URL 前缀 → 数据目录下的文件夹，由权威映射 PLATFORM_IMAGE_DIRS
+# 派生（avatar_cache.py 定义，采集/补缓存/清理/静态挂载共用同一份）
+POST_IMAGE_DIRS = {prefix: folder for folder, prefix in PLATFORM_IMAGE_DIRS.values()}
 
 # 与 avatar_cache 的 sha1 键同形态：<16位hex>.<图片扩展名>；顺带挡住路径穿越
 FILE_NAME_RE = re.compile(r"^[0-9a-f]{16}\.(jpg|png|webp|gif)$")

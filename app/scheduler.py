@@ -64,6 +64,7 @@ from .fetchers.base import (
 )
 from .notifiers.base import Notifier
 from .proxy import note_fetch_proxy, tick_proxy_pools
+from .wscn_flash import build_wscn_post
 
 # MX 相关导入
 try:
@@ -2344,30 +2345,9 @@ class Scheduler:
             broadcast_count = 0
             for item in candidates:
                 item_id = int(item["id"])
-                highlight = (item.get("highlight_title") or "").strip()
-                prefix = "【重要快讯】" if int(item.get("score") or 1) >= 2 else "【快讯】"
-                title = f"{prefix}{highlight}" if highlight else prefix
-                content = item.get("body") or ""
-                url = (item.get("url") or "").strip()
-                raw_ts = item.get("published_at") or ""
-                try:
-                    dt = datetime.fromisoformat(raw_ts) if raw_ts else datetime.now(CN_TZ)
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=CN_TZ)
-                    published_at = dt.astimezone(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
-                except Exception:
-                    published_at = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
-                post = Post(
-                    platform="system",
-                    kol_id=kol_id,
-                    kol_name=kol_name,
-                    external_id=f"wscn_flash_{item_id}",
-                    title=title,
-                    content=content,
-                    url=url,
-                    published_at=published_at,
-                    post_type="wscn_flash",
-                )
+                post = build_wscn_post(item, kol_id, kol_name)
+                if post is None:
+                    continue
                 post_id = self.ingest_external_post(post)
                 if post_id:
                     broadcast_count += 1

@@ -21,7 +21,13 @@ from urllib.parse import urlencode
 
 import httpx
 
-from ..avatar_cache import cache_avatar, cache_image_file, headers_for, should_direct_access
+from ..avatar_cache import (
+    PLATFORM_IMAGE_DIRS,
+    cache_avatar,
+    cache_image_file,
+    headers_for,
+    should_direct_access,
+)
 from .base import Fetcher, Post, ThreadLocalClient, format_published_at
 from .zsxq_inspect import (
     classify_topic,
@@ -34,6 +40,9 @@ from .zsxq_inspect import (
 )
 
 logger = logging.getLogger(__name__)
+
+# 知识星球图片的本地缓存目录/URL 前缀：与权威映射同源，防止字面量漂移
+_ZSXQ_IMAGE_DIR = PLATFORM_IMAGE_DIRS["zsxq"]
 
 API_BASE = "https://api.zsxq.com/v2"
 DEFAULT_PAGE_LIMIT = 20
@@ -602,7 +611,7 @@ class ZsxqFetcher(Fetcher):
             # None = 内容确认非图片：星球图片 API 不会这样返回，兜底保留原 URL 走前端失效流程；
             # 直连名单内的域名跳过缓存，保留外链由浏览器直接访问
             (
-                cache_image_file(self.db, i["url"], "zsxq_images", "/zsxq-images")
+                cache_image_file(self.db, i["url"], *_ZSXQ_IMAGE_DIR)
                 or i["url"]
             )
             if self.db is not None and not should_direct_access(self.db, i["url"])

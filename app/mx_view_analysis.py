@@ -53,7 +53,8 @@ DEFAULT_TOPIC_HINTS = [
 ]
 
 # 强度分权重：方向定符号（bull +1 / bear -1，neutral 不参与），操作放大绝对值
-ACTION_BOOST = {"建仓": 1.5, "加仓": 1.5, "减仓": 1.5, "清仓": 1.5, "做T": 0.7, "观察": 0.7, "": 1.0}
+ACTION_BOOST = {"建仓": 1.5, "加仓": 1.5, "低吸": 1.5, "减仓": 1.5, "高抛": 1.5,
+                "清仓": 1.5, "做T": 0.7, "观察": 0.7, "": 1.0}
 
 # 合并标的名分隔符：顿号/全半角逗号/分号/斜杠/全角句点/间隔号等；ASCII 点号仅当
 # 「字母数字.汉字」时视为连接符（PCB.存储芯片 拆开），版本号 工业4.0 / web3.0 不拆
@@ -621,7 +622,11 @@ def generate_summary(db, llm_config, payload, digest: str,
         )
         if not text:
             return fallback
-        parsed = json.loads(re.search(r"\{.*\}", text, re.DOTALL).group(0))
+        # LLM 偶发输出无 JSON 对象的纯文本：无匹配时走 fallback，不靠 AttributeError 兜底
+        matched = re.search(r"\{.*\}", text, re.DOTALL)
+        if not matched:
+            return fallback
+        parsed = json.loads(matched.group(0))
         items = [
             {
                 "type": str(i.get("type") or "topic"),

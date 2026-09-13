@@ -58,6 +58,7 @@ def test_mx_views_days_day_snapshot_roundtrip():
     day = client.get("/api/mx-views/day?day=2026-09-04", headers=headers).json()
     assert day["latest_at"] == "09:20"
     assert day["snapshots"] == [{"snapshot_at": "09:20", "seq": 1, "kind": "live", "message_count": 1}]
+    assert isinstance(day["action_tags"], list) and "建仓" in day["action_tags"]  # 词表全量下发（0 计数 chip 用）
 
     snap = client.get("/api/mx-views/snapshot?day=2026-09-04&at=09:20", headers=headers).json()
     assert snap["version"] >= 1

@@ -14,7 +14,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException
 
 from . import auth
-from .api import create_api_router
+from .api import create_api_router, stop_wscn_live_refresh
+from .avatar_cache import PLATFORM_IMAGE_DIRS
 from .config import load_config
 from .db import DB
 from . import imgbed
@@ -270,6 +271,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         if task is not None:
             scheduler.stop()
             await task
+        stop_wscn_live_refresh()  # 快讯刷新循环（Event.wait 可立即唤醒退出）
         if bot_task is not None:
             bot_task.cancel()
             try:
@@ -374,22 +376,13 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     avatars_dir = Path(config.db_path).parent / "avatars"
     avatars_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/avatars", StaticFiles(directory=avatars_dir), name="avatars")
-    # 雪球新采集图片去水印后的本地缓存（数据目录/xq_images）
-    xq_images_dir = Path(config.db_path).parent / "xq_images"
-    xq_images_dir.mkdir(parents=True, exist_ok=True)
-    app.mount("/xq-images", StaticFiles(directory=xq_images_dir), name="xq-images")
-    zsxq_images_dir = Path(config.db_path).parent / "zsxq_images"
-    zsxq_images_dir.mkdir(parents=True, exist_ok=True)
-    app.mount("/zsxq-images", StaticFiles(directory=zsxq_images_dir), name="zsxq-images")
-    # MX 房间图片本地缓存（数据目录/mx_images），与 fetchers/mx 的 /mx-images 前缀对应
-    mx_images_dir = Path(config.db_path).parent / "mx_images"
-    mx_images_dir.mkdir(parents=True, exist_ok=True)
-    app.mount("/mx-images", StaticFiles(directory=mx_images_dir), name="mx-images")
-    # 微博帖子图片补缓存（数据目录/weibo_images），由 image_backfill 事后转本地：
+    # 帖子图片本地缓存挂载：与权威映射 PLATFORM_IMAGE_DIRS（avatar_cache.py）一一对应。
+    # mx/zsxq/xq 采集入库即缓存；weibo 由 image_backfill 事后转本地——
     # sinaimg 防盗链/签名链接易过期，外链死图风险最高的图床
-    weibo_images_dir = Path(config.db_path).parent / "weibo_images"
-    weibo_images_dir.mkdir(parents=True, exist_ok=True)
-    app.mount("/weibo-images", StaticFiles(directory=weibo_images_dir), name="weibo-images")
+    for _folder, _prefix in PLATFORM_IMAGE_DIRS.values():
+        _dir = Path(config.db_path).parent / _folder
+        _dir.mkdir(parents=True, exist_ok=True)
+        app.mount(_prefix, StaticFiles(directory=_dir), name=_prefix.lstrip("/"))
     # 知识星球附件不设静态挂载：附件可能是私有大V的付费内容，
     # 一律走鉴权路由 /api/media/zsxq-file/{id}（命中本地缓存时直接下发）
     app.mount(

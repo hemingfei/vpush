@@ -45,6 +45,11 @@ SCHEMA_MIGRATIONS: list[tuple[int, str, str | tuple[str, ...]]] = [
         "CREATE INDEX IF NOT EXISTS idx_ima_doc_downloaded "
         "ON ima_document_index(downloaded_at)",
     ),
+    (
+        2026091101,
+        "posts published_at 索引（图片补缓存候选窗口查询消除全表排序）",
+        "CREATE INDEX IF NOT EXISTS idx_posts_published_at ON posts(published_at)",
+    ),
 ]
 
 _SLOW_QUERY_SECONDS = 0.2
@@ -310,7 +315,7 @@ STOCK_ALIAS_CANDIDATES_MAX = 200
 
 # 操作类型词表（LLM 打标的第三类标签，管理端可改）
 ACTION_TAG_VOCABULARY_KEY = "action_tag_vocabulary"
-DEFAULT_ACTION_TAGS = ["建仓", "加仓", "减仓", "清仓", "做T", "观察"]
+DEFAULT_ACTION_TAGS = ["建仓", "加仓", "低吸", "减仓", "高抛", "清仓", "做T", "观察"]
 # 帖子标签总数上限（话题+股票+操作），与规则打标的话题≤3+股票≤6 体系对齐
 POST_TAGS_MAX = 15
 # 其中股票标签最多 6 个（LLM 打标与规则打标同口径）
@@ -1064,6 +1069,7 @@ CREATE INDEX IF NOT EXISTS idx_proxies_expires ON proxies(expires_at);
 -- 性能索引：帖子/日志/订阅按数据量增长后的高频查询
 CREATE INDEX IF NOT EXISTS idx_posts_kol_id ON posts(kol_id);
 CREATE INDEX IF NOT EXISTS idx_posts_fetched_at ON posts(fetched_at);
+CREATE INDEX IF NOT EXISTS idx_posts_published_at ON posts(published_at);
 CREATE INDEX IF NOT EXISTS idx_posts_kol_id_id ON posts(kol_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_push_logs_created_at ON push_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_push_logs_post_id ON push_logs(post_id);
@@ -3711,7 +3717,7 @@ class DB:
         return row
 
     def delete_news_articles_older_than(self, days: int) -> int:
-        if days < 0:
+        if days <= 0:
             return 0
         cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
         with self._lock:

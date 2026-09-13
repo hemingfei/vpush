@@ -127,11 +127,12 @@ def test_mx_views_feed_all_batches_and_drawer_desc():
 
 def test_mx_views_feed_cutoff_at_selected_snapshot():
     """快照语义：回看时观点流只显示首批次→选定批次（≤选定时刻），其后批次不显示；标题注明截止。"""
+    pool = _fn_body("mxvFeedPool", MX_VIEWS_JS)
+    assert "filter((b) => !at || String(b.snapshot_at) <= at)" in pool  # 截断选定时刻之后的批次
     feed = _fn_body("mxvRenderFeed", MX_VIEWS_JS)
-    assert "filter((b) => !at || String(b.snapshot_at) <= at)" in feed  # 截断选定时刻之后的批次
-    assert "截至" in feed and "_mxv.atLatest" in feed  # 回看时标题注明截止时刻；最新快照不注
-    # 批次统计（共 X 条 · Y 批次）基于截断后的数组
-    assert feed.index("const batches =") < feed.index("const total =")
+    assert "mxvFeedPool()" in feed and "截至" in feed and "_mxv.atLatest" in feed  # 回看时标题注明截止时刻
+    # 批次统计基于截断后的 pool（flat/shown 均出自 mxvFeedPool 结果）
+    assert feed.index("mxvFeedPool()") < feed.index("mxvFeedFlat(pool)")
 
 
 def test_mx_views_feed_two_column_batch_layout():
@@ -249,7 +250,7 @@ def test_mx_views_neutral_counts_everywhere():
     heat = _fn_body("mxvHeatHtml", js)
     assert 'max = Math.max(1, ...sorted.map((r) => r.bull + r.bear + (r.neutral || 0)))' in heat  # 热度含中性
     assert '中${r.neutral || 0}' in heat  # tooltip 含中性
-    drawer = _fn_body("mxvOpenTarget", js)
+    drawer = _fn_body("mxvRenderDrawerBody", js)
     assert "中 · 截至" in drawer and "◎ 中立 ${neu.count}" in drawer  # 抽屉顶部中立统计+名单
     kolcards = _fn_body("mxvKolCardsHtml", js)
     assert 'class="n" style="width:${Math.round((n / tot) * 100)}%"' in kolcards  # 比例条中性段
@@ -517,3 +518,52 @@ def test_mx_render_boards_feed_rerender_is_skippable():
     boards = _fn_body("mxvRenderBoards", js)
     assert "if (rerenderFeed) mxvRenderFeed();" in boards
     assert "mxvRenderKols();" in boards  # 大V卡片依赖 feed 回填的中性数，仍需重渲染
+
+
+def test_mx_views_feed_filters():
+    """观点流筛选：右上角 观点流/个股/大V 视图切换；方向/操作词/大V 三组多选 +
+    「操作」一键全选真实操作 + 搜索多选大V下拉 + 重置；空批次隐藏。"""
+    js = MX_VIEWS_JS
+    assert "mxvFeedAction" not in js and "mxvFeedKol(" not in js  # 旧单选处理器已移除
+    assert 'data-feed-view=' in js and '${key}' in js  # 右上角四视图切换（模板插值）
+    render = _fn_body("mxvRenderFeed", js)
+    for view in ('"stream"', '"stock"', '"topic"', '"kol"'):
+        assert f'viewBtn({view}' in render
+    assert 'mxvFeedTargetHtml(flat, "stock", allFlat)' in render and 'mxvFeedTargetHtml(flat, "topic", allFlat)' in render
+    # 个股/题材视图各只显示自己的标的类型；名单排序用筛选数据，比例条用全量口径（不随筛选变化）
+    target = _fn_body("mxvFeedTargetHtml", js)
+    assert "o.target_type !== ttype" in target and "当前筛选无题材观点" in target
+    assert "mxvRatioHtml(bar.bull, bar.bear, bar.neutral)" in target  # 多/中/空比例条（全量）
+    assert "b.total - a.total || Math.abs(b.net) - Math.abs(a.net)" in target  # 大V数→|净多空|排序
+    assert "mxvFeedKolHtml(flat, allFlat)" in render  # 大V视图迷你比例条同全量口径
+    for token in ("data-feed-dir=", "data-feed-act=", "data-feed-kol=",
+                  "data-feed-kol-toggle", "data-feed-kol-clear", "data-feed-reset",
+                  "data-feed-kol-all"):
+        assert token in js  # 方向/操作词多选 + 大V多选下拉（含全选切换）+ 重置
+    # 操作词不做特殊归类：无「观察」白名单、「操作」一键等硬编码，chips 随观点数据自动出现
+    assert "WATCH_ACTIONS" not in js and "data-feed-ops" not in js
+    assert "mxvFeedFlat" in js and "mxvFeedTargetHtml" in js and "mxvFeedKolHtml" in js
+    render = _fn_body("mxvRenderFeed", js)
+    assert "当前筛选无观点" in render and "mxvFeedPool" in render
+    bind = _fn_body("mxvBindFeedHighlight", js)
+    assert "data-feed-kol-toggle" in bind and 'addEventListener("change"' in bind
+    assert 'addEventListener("input"' in bind  # 下拉搜索
+    assert "feedFreshPending" in js  # fresh 动画仅在数据到达后播一次，筛选重渲染不闪
+    assert "mxv_feed_filters" in js and "mxvSaveFilters" in js and "mxvLoadFilters" in js  # 筛选本地持久化
+    # 抽屉独立筛选：打开继承观点流筛选（有筛选时）否则恢复上次抽屉状态；抽屉内可再调并存 localStorage
+    assert "mxv_drawer_filters" in js and "mxvInitDrawerFilters" in js and "mxvSaveDrawerFilters" in js
+    init_fn = _fn_body("mxvInitDrawerFilters", js)
+    assert "fromFeed" in init_fn  # 仅观点流入口继承；双榜/总览入口用抽屉上次状态
+    bind_fn = _fn_body("mxvBindFeedHighlight", js)
+    assert "mxvOpenKol(Number(kolId), true)" in bind_fn and ", hl.slice(ci + 1), true)" in bind_fn  # 观点流入口带来源
+    for token in ('[data-drawer-dir]', '[data-drawer-act]', '[data-drawer-kol]', '[data-drawer-reset]'):
+        assert token in js  # 抽屉内筛选 chips（点击委托选择器）
+    assert 'chip("drawer-dir"' in js and 'chip("drawer-act"' in js and 'chip("drawer-kol"' in js
+    timeline = _fn_body("mxvTimelineListHtml", js)
+    assert "mxvDrawerMatch" in timeline and "已按当前筛选显示" in timeline  # 抽屉时间线走抽屉筛选
+    # 抽屉操作行展示完整词表（0 计数置后半透明可点）+ 已选无数据词保留，杜绝筛选卡死
+    dfn = _fn_body("mxvDrawerFiltersHtml", js)
+    assert "vocab.filter((w) => !(w in actCounts))" in dfn and 'cls = ""' in dfn
+    assert "mxv-fchip.zero" in Path("app/static/mx-views.css").read_text(encoding="utf-8")
+    ffn = _fn_body("mxvFeedFiltersHtml", js)
+    assert "[..._mxv.feedActs].filter((w) => !(w in actCounts))" in ffn  # 观点流同样保留已选 0 计数词

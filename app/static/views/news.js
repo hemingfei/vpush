@@ -25,15 +25,7 @@ export function createNewsView(dependencies) {
     PLATFORM_LABELS,
     PLATFORM_ICONS,
   } = dependencies;
-  let searchTimer = null;
-  let rtPollTimer = null;
-  let rtScrollRaf = 0;
-  let rtScrollBound = false;
-  let rtVisibilityBound = false;
-  let researchPollTimer = null;
-  let researchScrollRaf = 0;
-  let researchScrollBound = false;
-  let researchVisibilityBound = false;
+  let searchTimer = null; // 财经新闻/实时/调研共用的搜索去抖定时器（同一时刻只有一个栏目可见）
 
   // 实时资讯时间：当天只显示时钟，非当天才带日期（fmtPublished 当天返回「今天 HH:MM:SS」）
   function fmtRtTime(s) {
@@ -56,29 +48,7 @@ export function createNewsView(dependencies) {
     state.newsThumbObserver = null;
   }
 
-  function stopNewsRtAutoLoad() {
-    state.newsRtObserver?.disconnect();
-    state.newsRtObserver = null;
-  }
-
-  function stopNewsRtPoll() {
-    if (rtPollTimer) {
-      clearInterval(rtPollTimer);
-      rtPollTimer = null;
-    }
-  }
-
-  function stopNewsResearchAutoLoad() {
-    state.newsResearchObserver?.disconnect();
-    state.newsResearchObserver = null;
-  }
-
-  function stopNewsResearchPoll() {
-    if (researchPollTimer) {
-      clearInterval(researchPollTimer);
-      researchPollTimer = null;
-    }
-  }
+  // 实时资讯/调研纪要的 stop* 与具名入口统一放在 createStreamFeed 双实例之后
 
   function abortNewsImageRequests() {
     state.newsImageAbort?.abort();
@@ -195,9 +165,12 @@ export function createNewsView(dependencies) {
     stopNewsResearchPoll();
     abortNewsImageRequests();
     if (!routeStillActive(seq)) return;
-    if (articleId) return renderFinancialNewsArticle(Number(articleId), seq);
     state.newsTab = "realtime"; // 每次进入页面默认显示实时资讯
-    return renderRealtimeNews(seq);
+    const render = renderRealtimeNews(seq);
+    // 深链 /news/<id>：列表先渲染，文章统一走弹窗（与点击卡片同口径）
+    const id = Number(articleId);
+    if (Number.isInteger(id) && id > 0) openNewsArticleModal(id);
+    return render;
   }
 
   function selectNewsTab(tab) {
@@ -216,49 +189,39 @@ export function createNewsView(dependencies) {
     return renderFinancialNewsList(seq);
   }
 
-  // ---------- 实时资讯：管理员勾选的大V动态流 ----------
+  // ---------- 大V动态流（实时资讯/调研纪要）：参数化工厂双实例 ----------
+  //
+  // 两栏目仅 5 类差异：API 路径、DOM id/类名、state 键、全局 handler 名、空态文案；
+  // 其余（增量轮询、待读胶囊、返回顶部、展开收起、来源筛选、搜索去抖）完全一致，
+  // 统一在 createStreamFeed 里维护，避免改一处漏一处的双份镜像。
 
-  function newsRtSkeletonHtml() {
-    const card = '<div class="admin-sk-card"><div class="admin-sk-line admin-sk-head"></div><div class="admin-sk-line"></div></div>';
-    return `<div class="admin-skeleton" aria-hidden="true">${card.repeat(4)}</div>`;
-  }
+  function createStreamFeed(cfg) {
+    const S = (key) => state[cfg.keys[key]];
+    let pollTimer = null;
+    let scrollRaf = 0;
+    let scrollBound = false;
+    let visibilityBound = false;
 
-  function newsRtSourceFilterOptions() {
-    return `<option value="">全部来源</option>${state.newsRtSources.map((source) => `<option value="${source.id}" ${String(state.newsRtSourceId) === String(source.id) ? "selected" : ""}>${escapeHtml(source.name)}</option>`).join("")}`;
-  }
+    function skeletonHtml() {
+      const card = '<div class="admin-sk-card"><div class="admin-sk-line admin-sk-head"></div><div class="admin-sk-line"></div></div>';
+      return `<div class="admin-skeleton" aria-hidden="true">${card.repeat(4)}</div>`;
+    }
 
-  async function renderRealtimeNews(seq = currentRouteSeq()) {
-    setPageTitle("财经资讯");
-    state.newsRtQuery = "";
-    renderNewsShell(
-      "realtime",
-      `<div class="news-list-toolbar"><select id="news-rt-source-filter" class="form-control" aria-label="资讯来源" onchange="selectNewsRtSource(this.value)">${newsRtSourceFilterOptions()}</select><div class="search-bar"><input id="news-rt-query" type="search" placeholder="搜索内容或大V" value="${escapeHtml(state.newsRtQuery || "")}" oninput="queueNewsRtSearch(this.value)"></div></div><div id="news-rt-list" class="news-list news-rt-list">${newsRtSkeletonHtml()}</div><div id="news-rt-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>
-      <div class="news-rt-new-badge" id="news-rt-new-badge"><button type="button" class="news-rt-new-badge-btn" onclick="newsRtNewBadgeClick()" aria-label="有新动态，点击查看">${upArrowIcon}<span class="news-rt-badge-avatars" id="news-rt-badge-avatars"></span><span class="news-rt-new-badge-label">有新动态</span></button></div>
-      <button type="button" id="news-rt-backtop" class="tl-backtop" aria-label="返回顶部" title="返回顶部" onclick="newsRtBacktopClick()">${upArrowIcon}<span class="tl-backtop-new" id="news-rt-backtop-new" hidden></span></button>`,
-    );
-    state.newsRtItems = [];
-    state.newsRtOffset = 0;
-    state.newsRtHasMore = false;
-    state.newsRtLatestId = 0;
-    state.newsRtPending = [];
-    await loadRealtimeNews(true, seq);
-    startNewsRtPoll(seq);
-    ensureNewsRtScrollChrome();
-    ensureNewsRtVisibilityPoll();
-    newsRtSyncBacktop();
-  }
+    function sourceFilterOptions() {
+      return `<option value="">全部来源</option>${S("sources").map((source) => `<option value="${source.id}" ${String(S("sourceId")) === String(source.id) ? "selected" : ""}>${escapeHtml(source.name)}</option>`).join("")}`;
+    }
 
-  function newsRtItemHtml(post) {
-    const images = (Array.isArray(post.images) ? post.images : []).filter(Boolean);
-    const body = mxDisplayBody(post) || "（无正文）";
-    const expanded = state.newsRtExpanded.has(post.id);
-    const shown = expanded ? body : body.slice(0, 200);
-    const title = (post.title || "").trim();
-    // X 帖常 title==content 或正文以标题开头，重复渲染只会有视觉噪音
-    const titleDup = !!title && (title === body || body.startsWith(title));
-    const safeUrl = /^https?:\/\//i.test(post.url || "") ? post.url : "";
-    const tags = Array.isArray(post.tags) ? post.tags : [];
-    return `<article class="news-rt-item post-item" data-post-id="${post.id}">
+    function itemHtml(post) {
+      const images = (Array.isArray(post.images) ? post.images : []).filter(Boolean);
+      const body = mxDisplayBody(post) || "（无正文）";
+      const expanded = S("expanded").has(post.id);
+      const shown = expanded ? body : body.slice(0, 200);
+      const title = (post.title || "").trim();
+      // X 帖常 title==content 或正文以标题开头，重复渲染只会有视觉噪音
+      const titleDup = !!title && (title === body || body.startsWith(title));
+      const safeUrl = /^https?:\/\//i.test(post.url || "") ? post.url : "";
+      const tags = Array.isArray(post.tags) ? post.tags : [];
+      return `<article class="${cfg.itemClass} post-item" data-post-id="${post.id}">
       <div class="p-header">
         <div class="p-name-line">
           <time class="p-time" datetime="${escapeHtml(post.published_at || "")}" title="${escapeHtml(post.published_at || "")}">${escapeHtml(fmtRtTime(post.published_at))}</time>
@@ -267,7 +230,7 @@ export function createNewsView(dependencies) {
       </div>
       ${!titleDup && title ? `<div class="p-title">${escapeHtml(title)}</div>` : ""}
       <div class="p-content md-body">${mdToHtml(shown)}${body.length > 200
-        ? `<button type="button" class="post-expand-btn" onclick="newsRtExpand(${post.id})" aria-expanded="${expanded}">${expanded ? "收起 ▲" : "展开全文 ▼"}</button>`
+        ? `<button type="button" class="post-expand-btn" onclick="${cfg.globals.expand}(${post.id})" aria-expanded="${expanded}">${expanded ? "收起 ▲" : "展开全文 ▼"}</button>`
         : ""}</div>
       ${images.length ? `
         <div class="post-images">
@@ -281,486 +244,365 @@ export function createNewsView(dependencies) {
         ${safeUrl ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer nofollow">查看原文 →</a>` : ""}
       </div>
     </article>`;
-  }
-
-  async function loadRealtimeNews(reset = false, seq = currentRouteSeq()) {
-    const list = $("#news-rt-list");
-    if (!list || !routeStillActive(seq)) return;
-    const requestSeq = ++state.newsRtSeq;
-    if (reset) {
-      stopNewsRtAutoLoad();
-      state.newsRtItems = [];
-      state.newsRtOffset = 0;
-      // 勾选可能已被管理员改动：不在来源清单里的过滤值直接失效
-      if (state.newsRtSourceId && !state.newsRtSources.some((source) => String(source.id) === String(state.newsRtSourceId))) state.newsRtSourceId = "";
-      list.innerHTML = newsRtSkeletonHtml();
     }
-    const params = new URLSearchParams({ limit: "30", offset: String(state.newsRtOffset) });
-    if (state.newsRtSourceId) params.set("kol_id", state.newsRtSourceId);
-    if ((state.newsRtQuery || "").trim()) params.set("q", state.newsRtQuery.trim());
-    try {
-      const data = await api(`/api/news/realtime?${params}`);
-      if (!routeStillActive(seq) || requestSeq !== state.newsRtSeq) return;
-      const items = data.items || [];
-      if (reset && Array.isArray(data.sources)) {
-        state.newsRtSources = data.sources;
-        const select = $("#news-rt-source-filter");
-        if (select) select.innerHTML = newsRtSourceFilterOptions();
-      }
-      // 追加时按 id 去重：轮询预置新帖后 offset 窗口可能压到边界行
-      const have = new Set(state.newsRtItems.map((p) => p.id));
-      const fresh = reset ? items : items.filter((p) => !have.has(p.id));
-      state.newsRtItems = reset ? items : state.newsRtItems.concat(fresh);
-      state.newsRtOffset = data.next_offset || state.newsRtItems.length;
-      state.newsRtHasMore = !!data.has_more;
+
+    function panelHtml() {
+      return `<div class="news-list-toolbar"><select id="${cfg.filterId}" class="form-control" aria-label="资讯来源" onchange="${cfg.globals.source}(this.value)">${sourceFilterOptions()}</select><div class="search-bar"><input id="${cfg.queryId}" type="search" placeholder="搜索内容或大V" value="${escapeHtml(S("query") || "")}" oninput="${cfg.globals.search}(this.value)"></div></div><div id="${cfg.listId}" class="news-list ${cfg.listClass}">${skeletonHtml()}</div><div id="${cfg.sentinelId}" class="news-load-sentinel" role="status" aria-live="polite"></div>
+      <div class="news-rt-new-badge" id="${cfg.badgeId}"><button type="button" class="news-rt-new-badge-btn" onclick="${cfg.globals.badge}()" aria-label="有新动态，点击查看">${upArrowIcon}<span class="news-rt-badge-avatars" id="${cfg.badgeAvatarsId}"></span><span class="news-rt-new-badge-label">有新动态</span></button></div>
+      <button type="button" id="${cfg.backtopId}" class="tl-backtop" aria-label="返回顶部" title="返回顶部" onclick="${cfg.globals.backtop}()">${upArrowIcon}<span class="tl-backtop-new" id="${cfg.backtopNewId}" hidden></span></button>`;
+    }
+
+    async function render(seq = currentRouteSeq()) {
+      setPageTitle("财经资讯");
+      state[cfg.keys.query] = "";
+      renderNewsShell(cfg.tab, panelHtml());
+      state[cfg.keys.items] = [];
+      state[cfg.keys.offset] = 0;
+      state[cfg.keys.hasMore] = false;
+      state[cfg.keys.latestId] = 0;
+      state[cfg.keys.pending] = [];
+      await load(true, seq);
+      startPoll(seq);
+      ensureScrollChrome();
+      ensureVisibilityPoll();
+      syncBacktop();
+    }
+
+    async function load(reset = false, seq = currentRouteSeq()) {
+      const list = $(`#${cfg.listId}`);
+      if (!list || !routeStillActive(seq)) return;
+      const requestSeq = ++state[cfg.keys.seq];
       if (reset) {
-        list.innerHTML = state.newsRtItems.length
-          ? state.newsRtItems.map(newsRtItemHtml).join("")
-          : emptyState(
-            (state.newsRtQuery || "").trim()
-              ? "没有符合条件的内容"
-              : data.selected_count ? "勾选的大V暂时没有动态，稍后再来看看" : "管理员还没有勾选参与实时资讯的大V",
-            state.user?.is_admin && !data.selected_count
-              ? '<div><button type="button" class="btn-normal" onclick="go(\'admin/content?tab=kols\')">去内容管理勾选</button></div>'
-              : "",
-          );
-        state.newsRtLatestId = state.newsRtItems.reduce((max, p) => Math.max(max, Number(p.id) || 0), 0);
-      } else if (fresh.length) {
-        list.insertAdjacentHTML("beforeend", fresh.map(newsRtItemHtml).join(""));
+        stopAutoLoad();
+        state[cfg.keys.items] = [];
+        state[cfg.keys.offset] = 0;
+        // 勾选可能已被管理员改动：不在来源清单里的过滤值直接失效
+        if (S("sourceId") && !S("sources").some((source) => String(source.id) === String(S("sourceId")))) state[cfg.keys.sourceId] = "";
+        list.innerHTML = skeletonHtml();
       }
-      startNewsRtAutoLoad(seq);
-    } catch (err) {
-      if (!routeStillActive(seq) || requestSeq !== state.newsRtSeq) return;
-      list.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="loadRealtimeNews(${reset})">重试</button></div>`);
-    }
-  }
-
-  function startNewsRtAutoLoad(seq) {
-    stopNewsRtAutoLoad();
-    const sentinel = $("#news-rt-load-sentinel");
-    if (!sentinel || !state.newsRtHasMore) return;
-    if ("IntersectionObserver" in window) {
-      state.newsRtObserver = new IntersectionObserver((entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) loadRealtimeNews(false, seq);
-      }, { rootMargin: "400px 0px" });
-      state.newsRtObserver.observe(sentinel);
-    }
-  }
-
-  function startNewsRtPoll(seq) {
-    stopNewsRtPoll();
-    rtPollTimer = setInterval(() => pollNewsRtUpdates(seq), 60000);
-  }
-
-  // 增量轮询：新帖不自动插到顶部（不打断阅读位置），先攒进待读缓冲；
-  // 用户在顶部时直接合并 + 提示音；用户在下方时弹胶囊 + 提示音，点击或滚回顶部再合并
-  async function pollNewsRtUpdates(seq) {
-    if (document.visibilityState === "hidden") return;
-    const list = $("#news-rt-list");
-    if (!list || !state.newsRtLatestId) return;
-    try {
-      const q = (state.newsRtQuery || "").trim();
-      const src = state.newsRtSourceId ? `&kol_id=${encodeURIComponent(state.newsRtSourceId)}` : "";
-      const data = await api(`/api/news/realtime?limit=30&since_id=${state.newsRtLatestId}${src}${q ? `&q=${encodeURIComponent(q)}` : ""}`);
-      if (!routeStillActive(seq) || !$("#news-rt-list")) return;
-      const incoming = (data.items || []).filter((p) => !state.newsRtItems.some((q) => q.id === p.id)
-        && !state.newsRtPending.some((q) => q.id === p.id));
-      if (!incoming.length) return;
-      state.newsRtLatestId = incoming.reduce((max, p) => Math.max(max, Number(p.id) || 0), state.newsRtLatestId);
-      state.newsRtPending = [...incoming, ...state.newsRtPending];
-      if (window.scrollY <= 80) {
-        playNotificationSound();
-        newsRtMergePending();
-      } else {
-        playNotificationSound();
-        newsRtShowNewBadge();
-        newsRtSyncBacktop();
+      const params = new URLSearchParams({ limit: "30", offset: String(S("offset")) });
+      if (S("sourceId")) params.set("kol_id", S("sourceId"));
+      if ((S("query") || "").trim()) params.set("q", S("query").trim());
+      try {
+        const data = await api(`${cfg.apiPath}?${params}`);
+        if (!routeStillActive(seq) || requestSeq !== state[cfg.keys.seq]) return;
+        const items = data.items || [];
+        if (reset && Array.isArray(data.sources)) {
+          state[cfg.keys.sources] = data.sources;
+          const select = $(`#${cfg.filterId}`);
+          if (select) select.innerHTML = sourceFilterOptions();
+        }
+        // 追加时按 id 去重：轮询预置新帖后 offset 窗口可能压到边界行
+        const have = new Set(S("items").map((p) => p.id));
+        const fresh = reset ? items : items.filter((p) => !have.has(p.id));
+        state[cfg.keys.items] = reset ? items : S("items").concat(fresh);
+        state[cfg.keys.offset] = data.next_offset || S("items").length;
+        state[cfg.keys.hasMore] = !!data.has_more;
+        if (reset) {
+          list.innerHTML = S("items").length
+            ? S("items").map(itemHtml).join("")
+            : emptyState(
+              (S("query") || "").trim()
+                ? "没有符合条件的内容"
+                : data.selected_count ? cfg.emptyNoItems : cfg.emptyNotSelected,
+              state.user?.is_admin && !data.selected_count
+                ? '<div><button type="button" class="btn-normal" onclick="go(\'admin/content?tab=kols\')">去内容管理勾选</button></div>'
+                : "",
+            );
+          state[cfg.keys.latestId] = S("items").reduce((max, p) => Math.max(max, Number(p.id) || 0), 0);
+        } else if (fresh.length) {
+          list.insertAdjacentHTML("beforeend", fresh.map(itemHtml).join(""));
+        }
+        startAutoLoad(seq);
+      } catch (err) {
+        if (!routeStillActive(seq) || requestSeq !== state[cfg.keys.seq]) return;
+        list.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="${cfg.globals.load}(${reset})">重试</button></div>`);
       }
-    } catch { /* 轮询失败静默，下一轮重试 */ }
-  }
-
-  // 新帖胶囊：头像 + 条数 + 点击查看，挂在工具栏底部
-  function newsRtShowNewBadge() {
-    const badge = $("#news-rt-new-badge");
-    if (!badge) return;
-    const n = state.newsRtPending.length;
-    const btn = badge.querySelector(".news-rt-new-badge-btn");
-    if (btn) {
-      const label = `${n} 条新动态，点击查看`;
-      btn.title = label;
-      btn.setAttribute("aria-label", label);
     }
-    const labelEl = badge.querySelector(".news-rt-new-badge-label");
-    if (labelEl) labelEl.textContent = `${n} 条新动态`;
-    const avs = $("#news-rt-badge-avatars");
-    if (avs) avs.innerHTML = newsRtBadgeAvatarsHtml(state.newsRtPending);
-    badge.classList.add("show");
-  }
 
-  function newsRtHideNewBadge() {
-    $("#news-rt-new-badge")?.classList.remove("show");
-  }
-
-  // 胶囊头像：去重取前 3 个大V（无头像用首字色块）
-  function newsRtBadgeAvatarsHtml(posts, max = 3) {
-    const seen = new Set();
-    const avs = [];
-    for (const p of posts) {
-      const key = p.kol_id || p.kol_name;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      if (avs.length >= max) break;
-      avs.push(p.avatar_url
-        ? `<img src="${escapeHtml(p.avatar_url)}" alt="" data-av-name="${escapeHtml(p.kol_name)}" data-av-class="ph" onerror="avatarImgError(this)">`
-        : `<span class="ph">${escapeHtml(avatarText(p.kol_name))}</span>`);
-    }
-    return avs.join("");
-  }
-
-  // 切回标签页时立即轮询一次，不用等下一个 60s 周期。
-  // 不捕获 seq 闭包：listener 只绑一次，但每次切回实时资讯页 seq 会变，
-  // 在调用时取最新 seq 才不会因 routeStillActive 判定过期而整段丢弃
-  function ensureNewsRtVisibilityPoll() {
-    if (rtVisibilityBound) return;
-    rtVisibilityBound = true;
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState !== "visible") return;
-      if (!$("#news-rt-list")) return;
-      pollNewsRtUpdates(currentRouteSeq());
-    });
-  }
-
-  // 返回顶部按钮：滚动较深时常显；有待读新帖时即使没滚也弹出并带条数角标
-  function ensureNewsRtScrollChrome() {
-    if (rtScrollBound) return;
-    rtScrollBound = true;
-    window.addEventListener("scroll", () => {
-      if (rtScrollRaf) return;
-      rtScrollRaf = requestAnimationFrame(() => { rtScrollRaf = 0; newsRtSyncBacktop(); });
-    }, { passive: true });
-  }
-
-  function newsRtSyncBacktop() {
-    const btn = $("#news-rt-backtop");
-    if (!btn) return;
-    const n = state.newsRtPending.length;
-    // 用户自己滚回顶部：待读新帖直接合并显示，不用再点一下
-    if (n && window.scrollY <= 80) {
-      newsRtMergePending();
-      return;
-    }
-    btn.classList.toggle("show", window.scrollY > 600 || n > 0);
-    btn.classList.toggle("has-new", n > 0);
-    const tip = $("#news-rt-backtop-new");
-    if (tip) {
-      tip.hidden = !n;
-      tip.textContent = n > 99 ? "99+" : String(n);
-    }
-  }
-
-  // 把待读新帖一次性合并进列表顶部（快讯流按 id 降序整批置顶，与原轮询置顶行为一致）
-  function newsRtMergePending() {
-    const pending = state.newsRtPending;
-    if (!pending.length) return;
-    state.newsRtPending = [];
-    const have = new Set(state.newsRtItems.map((p) => p.id));
-    const incoming = pending.filter((p) => !have.has(p.id));
-    if (incoming.length) {
-      incoming.sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0));
-      state.newsRtItems = [...incoming, ...state.newsRtItems];
-      // 新帖插到顶部后，已加载行的分页窗口整体后移
-      state.newsRtOffset += incoming.length;
-      const list = $("#news-rt-list");
-      if (list) list.insertAdjacentHTML("afterbegin", incoming.map(newsRtItemHtml).join(""));
-    }
-    newsRtHideNewBadge();
-    newsRtSyncBacktop();
-  }
-
-  function newsRtBacktopClick() {
-    newsRtMergePending();
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
-
-  function newsRtNewBadgeClick() {
-    newsRtMergePending();
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
-
-  function newsRtExpand(postId) {
-    const id = Number(postId);
-    if (state.newsRtExpanded.has(id)) state.newsRtExpanded.delete(id);
-    else state.newsRtExpanded.add(id);
-    const post = state.newsRtItems.find((p) => p.id === id);
-    const card = document.querySelector(`.news-rt-item[data-post-id="${id}"]`);
-    if (post && card) card.outerHTML = newsRtItemHtml(post);
-  }
-
-  // ---------- 调研纪要：管理员勾选的大V动态流（与实时资讯同口径，独立勾选集） ----------
-
-  function newsResearchSkeletonHtml() {
-    const card = '<div class="admin-sk-card"><div class="admin-sk-line admin-sk-head"></div><div class="admin-sk-line"></div></div>';
-    return `<div class="admin-skeleton" aria-hidden="true">${card.repeat(4)}</div>`;
-  }
-
-  function newsResearchSourceFilterOptions() {
-    return `<option value="">全部来源</option>${state.newsResearchSources.map((source) => `<option value="${source.id}" ${String(state.newsResearchSourceId) === String(source.id) ? "selected" : ""}>${escapeHtml(source.name)}</option>`).join("")}`;
-  }
-
-  async function renderResearchNews(seq = currentRouteSeq()) {
-    setPageTitle("财经资讯");
-    state.newsResearchQuery = "";
-    renderNewsShell(
-      "research",
-      `<div class="news-list-toolbar"><select id="news-research-source-filter" class="form-control" aria-label="资讯来源" onchange="selectNewsResearchSource(this.value)">${newsResearchSourceFilterOptions()}</select><div class="search-bar"><input id="news-research-query" type="search" placeholder="搜索内容或大V" value="${escapeHtml(state.newsResearchQuery || "")}" oninput="queueNewsResearchSearch(this.value)"></div></div><div id="news-research-list" class="news-list news-research-list">${newsResearchSkeletonHtml()}</div><div id="news-research-load-sentinel" class="news-load-sentinel" role="status" aria-live="polite"></div>
-      <div class="news-rt-new-badge news-research-new-badge" id="news-research-new-badge"><button type="button" class="news-rt-new-badge-btn news-research-new-badge-btn" onclick="newsResearchNewBadgeClick()" aria-label="有新动态，点击查看">${upArrowIcon}<span class="news-rt-badge-avatars news-research-badge-avatars" id="news-research-badge-avatars"></span><span class="news-rt-new-badge-label news-research-new-badge-label">有新动态</span></button></div>
-      <button type="button" id="news-research-backtop" class="tl-backtop" aria-label="返回顶部" title="返回顶部" onclick="newsResearchBacktopClick()">${upArrowIcon}<span class="tl-backtop-new" id="news-research-backtop-new" hidden></span></button>`,
-    );
-    state.newsResearchItems = [];
-    state.newsResearchOffset = 0;
-    state.newsResearchHasMore = false;
-    state.newsResearchLatestId = 0;
-    state.newsResearchPending = [];
-    await loadResearchNews(true, seq);
-    startNewsResearchPoll(seq);
-    ensureNewsResearchScrollChrome();
-    ensureNewsResearchVisibilityPoll();
-    newsResearchSyncBacktop();
-  }
-
-  function newsResearchItemHtml(post) {
-    const images = (Array.isArray(post.images) ? post.images : []).filter(Boolean);
-    const body = mxDisplayBody(post) || "（无正文）";
-    const expanded = state.newsResearchExpanded.has(post.id);
-    const shown = expanded ? body : body.slice(0, 200);
-    const title = (post.title || "").trim();
-    const titleDup = !!title && (title === body || body.startsWith(title));
-    const safeUrl = /^https?:\/\//i.test(post.url || "") ? post.url : "";
-    const tags = Array.isArray(post.tags) ? post.tags : [];
-    return `<article class="news-research-item post-item" data-post-id="${post.id}">
-      <div class="p-header">
-        <div class="p-name-line">
-          <time class="p-time" datetime="${escapeHtml(post.published_at || "")}" title="${escapeHtml(post.published_at || "")}">${escapeHtml(fmtRtTime(post.published_at))}</time>
-          <a class="p-name" href="/kol/${post.kol_id}" title="${escapeHtml(post.kol_name || "")}">${escapeHtml(post.kol_name || "")}</a>
-        </div>
-      </div>
-      ${!titleDup && title ? `<div class="p-title">${escapeHtml(title)}</div>` : ""}
-      <div class="p-content md-body">${mdToHtml(shown)}${body.length > 200
-        ? `<button type="button" class="post-expand-btn" onclick="newsResearchExpand(${post.id})" aria-expanded="${expanded}">${expanded ? "收起 ▲" : "展开全文 ▼"}</button>`
-        : ""}</div>
-      ${images.length ? `
-        <div class="post-images">
-          ${images.slice(0, 4).map((img) => `
-            <a class="post-img-link" href="#" onclick="event.preventDefault();openLightbox(this.querySelector('img'))" aria-label="查看${escapeHtml(post.kol_name || "")}的配图"><img src="${escapeHtml(imgSrcFor(img))}" loading="lazy" alt="${escapeHtml(post.kol_name || "")} 的配图" onerror="imgOnError(this)"></a>`).join("")}
-          ${images.length > 4 ? `<span class="post-images-more">+${images.length - 4}</span>` : ""}
-        </div>` : ""}
-      ${mxAttachmentCards(post)}
-      <div class="p-meta">
-        ${tags.slice(0, 6).map((t) => `<span class="cat cat-tag">${escapeHtml(t)}</span>`).join("")}
-        ${safeUrl ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer nofollow">查看原文 →</a>` : ""}
-      </div>
-    </article>`;
-  }
-
-  async function loadResearchNews(reset = false, seq = currentRouteSeq()) {
-    const list = $("#news-research-list");
-    if (!list || !routeStillActive(seq)) return;
-    const requestSeq = ++state.newsResearchSeq;
-    if (reset) {
-      stopNewsResearchAutoLoad();
-      state.newsResearchItems = [];
-      state.newsResearchOffset = 0;
-      if (state.newsResearchSourceId && !state.newsResearchSources.some((source) => String(source.id) === String(state.newsResearchSourceId))) state.newsResearchSourceId = "";
-      list.innerHTML = newsResearchSkeletonHtml();
-    }
-    const params = new URLSearchParams({ limit: "30", offset: String(state.newsResearchOffset) });
-    if (state.newsResearchSourceId) params.set("kol_id", state.newsResearchSourceId);
-    if ((state.newsResearchQuery || "").trim()) params.set("q", state.newsResearchQuery.trim());
-    try {
-      const data = await api(`/api/news/research?${params}`);
-      if (!routeStillActive(seq) || requestSeq !== state.newsResearchSeq) return;
-      const items = data.items || [];
-      if (reset && Array.isArray(data.sources)) {
-        state.newsResearchSources = data.sources;
-        const select = $("#news-research-source-filter");
-        if (select) select.innerHTML = newsResearchSourceFilterOptions();
+    function startAutoLoad(seq) {
+      stopAutoLoad();
+      const sentinel = $(`#${cfg.sentinelId}`);
+      if (!sentinel || !S("hasMore")) return;
+      if ("IntersectionObserver" in window) {
+        state[cfg.keys.observer] = new IntersectionObserver((entries) => {
+          if (entries.some((entry) => entry.isIntersecting)) load(false, seq);
+        }, { rootMargin: "400px 0px" });
+        state[cfg.keys.observer].observe(sentinel);
       }
-      const have = new Set(state.newsResearchItems.map((p) => p.id));
-      const fresh = reset ? items : items.filter((p) => !have.has(p.id));
-      state.newsResearchItems = reset ? items : state.newsResearchItems.concat(fresh);
-      state.newsResearchOffset = data.next_offset || state.newsResearchItems.length;
-      state.newsResearchHasMore = !!data.has_more;
-      if (reset) {
-        list.innerHTML = state.newsResearchItems.length
-          ? state.newsResearchItems.map(newsResearchItemHtml).join("")
-          : emptyState(
-            (state.newsResearchQuery || "").trim()
-              ? "没有符合条件的内容"
-              : data.selected_count ? "勾选的大V暂时没有调研纪要，稍后再来看看" : "管理员还没有勾选参与调研纪要的大V",
-            state.user?.is_admin && !data.selected_count
-              ? '<div><button type="button" class="btn-normal" onclick="go(\'admin/content?tab=kols\')">去内容管理勾选</button></div>'
-              : "",
-          );
-        state.newsResearchLatestId = state.newsResearchItems.reduce((max, p) => Math.max(max, Number(p.id) || 0), 0);
-      } else if (fresh.length) {
-        list.insertAdjacentHTML("beforeend", fresh.map(newsResearchItemHtml).join(""));
+    }
+
+    function stopAutoLoad() {
+      state[cfg.keys.observer]?.disconnect();
+      state[cfg.keys.observer] = null;
+    }
+
+    function startPoll(seq) {
+      stopPoll();
+      pollTimer = setInterval(() => pollUpdates(seq), 60000);
+    }
+
+    function stopPoll() {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
       }
-      startNewsResearchAutoLoad(seq);
-    } catch (err) {
-      if (!routeStillActive(seq) || requestSeq !== state.newsResearchSeq) return;
-      list.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="loadResearchNews(${reset})">重试</button></div>`);
     }
-  }
 
-  function startNewsResearchAutoLoad(seq) {
-    stopNewsResearchAutoLoad();
-    const sentinel = $("#news-research-load-sentinel");
-    if (!sentinel || !state.newsResearchHasMore) return;
-    if ("IntersectionObserver" in window) {
-      state.newsResearchObserver = new IntersectionObserver((entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) loadResearchNews(false, seq);
-      }, { rootMargin: "400px 0px" });
-      state.newsResearchObserver.observe(sentinel);
+    // 增量轮询：新帖不自动插到顶部（不打断阅读位置），先攒进待读缓冲；
+    // 用户在顶部时直接合并 + 提示音；用户在下方时弹胶囊 + 提示音，点击或滚回顶部再合并
+    async function pollUpdates(seq) {
+      if (document.visibilityState === "hidden") return;
+      const list = $(`#${cfg.listId}`);
+      if (!list || !S("latestId")) return;
+      try {
+        const q = (S("query") || "").trim();
+        const src = S("sourceId") ? `&kol_id=${encodeURIComponent(S("sourceId"))}` : "";
+        const data = await api(`${cfg.apiPath}?limit=30&since_id=${S("latestId")}${src}${q ? `&q=${encodeURIComponent(q)}` : ""}`);
+        if (!routeStillActive(seq) || !$(`#${cfg.listId}`)) return;
+        const seen = new Set([...S("items"), ...S("pending")].map((p) => p.id));
+        const incoming = (data.items || []).filter((p) => !seen.has(p.id));
+        if (!incoming.length) return;
+        state[cfg.keys.latestId] = incoming.reduce((max, p) => Math.max(max, Number(p.id) || 0), S("latestId"));
+        state[cfg.keys.pending] = [...incoming, ...S("pending")];
+        if (window.scrollY <= 80) {
+          playNotificationSound();
+          mergePending();
+        } else {
+          playNotificationSound();
+          showNewBadge();
+          syncBacktop();
+        }
+      } catch { /* 轮询失败静默，下一轮重试 */ }
     }
-  }
 
-  function startNewsResearchPoll(seq) {
-    stopNewsResearchPoll();
-    researchPollTimer = setInterval(() => pollNewsResearchUpdates(seq), 60000);
-  }
-
-  async function pollNewsResearchUpdates(seq) {
-    if (document.visibilityState === "hidden") return;
-    const list = $("#news-research-list");
-    if (!list || !state.newsResearchLatestId) return;
-    try {
-      const q = (state.newsResearchQuery || "").trim();
-      const src = state.newsResearchSourceId ? `&kol_id=${encodeURIComponent(state.newsResearchSourceId)}` : "";
-      const data = await api(`/api/news/research?limit=30&since_id=${state.newsResearchLatestId}${src}${q ? `&q=${encodeURIComponent(q)}` : ""}`);
-      if (!routeStillActive(seq) || !$("#news-research-list")) return;
-      const incoming = (data.items || []).filter((p) => !state.newsResearchItems.some((q) => q.id === p.id)
-        && !state.newsResearchPending.some((q) => q.id === p.id));
-      if (!incoming.length) return;
-      state.newsResearchLatestId = incoming.reduce((max, p) => Math.max(max, Number(p.id) || 0), state.newsResearchLatestId);
-      state.newsResearchPending = [...incoming, ...state.newsResearchPending];
-      if (window.scrollY <= 80) {
-        playNotificationSound();
-        newsResearchMergePending();
-      } else {
-        playNotificationSound();
-        newsResearchShowNewBadge();
-        newsResearchSyncBacktop();
+    // 新帖胶囊：头像 + 条数 + 点击查看，挂在工具栏底部
+    function showNewBadge() {
+      const badge = $(`#${cfg.badgeId}`);
+      if (!badge) return;
+      const n = S("pending").length;
+      const btn = badge.querySelector(".news-rt-new-badge-btn");
+      if (btn) {
+        const label = `${n} 条新动态，点击查看`;
+        btn.title = label;
+        btn.setAttribute("aria-label", label);
       }
-    } catch { /* 轮询失败静默，下一轮重试 */ }
-  }
-
-  function newsResearchShowNewBadge() {
-    const badge = $("#news-research-new-badge");
-    if (!badge) return;
-    const n = state.newsResearchPending.length;
-    const btn = badge.querySelector(".news-research-new-badge-btn");
-    if (btn) {
-      const label = `${n} 条新动态，点击查看`;
-      btn.title = label;
-      btn.setAttribute("aria-label", label);
+      const labelEl = badge.querySelector(".news-rt-new-badge-label");
+      if (labelEl) labelEl.textContent = `${n} 条新动态`;
+      const avs = $(`#${cfg.badgeAvatarsId}`);
+      if (avs) avs.innerHTML = badgeAvatarsHtml(S("pending"));
+      badge.classList.add("show");
     }
-    const labelEl = badge.querySelector(".news-research-new-badge-label");
-    if (labelEl) labelEl.textContent = `${n} 条新动态`;
-    const avs = $("#news-research-badge-avatars");
-    if (avs) avs.innerHTML = newsResearchBadgeAvatarsHtml(state.newsResearchPending);
-    badge.classList.add("show");
-  }
 
-  function newsResearchHideNewBadge() {
-    $("#news-research-new-badge")?.classList.remove("show");
-  }
-
-  function newsResearchBadgeAvatarsHtml(posts, max = 3) {
-    const seen = new Set();
-    const avs = [];
-    for (const p of posts) {
-      const key = p.kol_id || p.kol_name;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      if (avs.length >= max) break;
-      avs.push(p.avatar_url
-        ? `<img src="${escapeHtml(p.avatar_url)}" alt="" data-av-name="${escapeHtml(p.kol_name)}" data-av-class="ph" onerror="avatarImgError(this)">`
-        : `<span class="ph">${escapeHtml(avatarText(p.kol_name))}</span>`);
+    function hideNewBadge() {
+      $(`#${cfg.badgeId}`)?.classList.remove("show");
     }
-    return avs.join("");
-  }
 
-  function ensureNewsResearchVisibilityPoll() {
-    if (researchVisibilityBound) return;
-    researchVisibilityBound = true;
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState !== "visible") return;
-      if (!$("#news-research-list")) return;
-      pollNewsResearchUpdates(currentRouteSeq());
-    });
-  }
-
-  function ensureNewsResearchScrollChrome() {
-    if (researchScrollBound) return;
-    researchScrollBound = true;
-    window.addEventListener("scroll", () => {
-      if (researchScrollRaf) return;
-      researchScrollRaf = requestAnimationFrame(() => { researchScrollRaf = 0; newsResearchSyncBacktop(); });
-    }, { passive: true });
-  }
-
-  function newsResearchSyncBacktop() {
-    const btn = $("#news-research-backtop");
-    if (!btn) return;
-    const n = state.newsResearchPending.length;
-    if (n && window.scrollY <= 80) {
-      newsResearchMergePending();
-      return;
+    // 胶囊头像：去重取前 3 个大V（无头像用首字色块）
+    function badgeAvatarsHtml(posts, max = 3) {
+      const seen = new Set();
+      const avs = [];
+      for (const p of posts) {
+        const key = p.kol_id || p.kol_name;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (avs.length >= max) break;
+        avs.push(p.avatar_url
+          ? `<img src="${escapeHtml(p.avatar_url)}" alt="" data-av-name="${escapeHtml(p.kol_name)}" data-av-class="ph" onerror="avatarImgError(this)">`
+          : `<span class="ph">${escapeHtml(avatarText(p.kol_name))}</span>`);
+      }
+      return avs.join("");
     }
-    btn.classList.toggle("show", window.scrollY > 600 || n > 0);
-    btn.classList.toggle("has-new", n > 0);
-    const tip = $("#news-research-backtop-new");
-    if (tip) {
-      tip.hidden = !n;
-      tip.textContent = n > 99 ? "99+" : String(n);
+
+    // 切回标签页时立即轮询一次，不用等下一个 60s 周期。
+    // 不捕获 seq 闭包：listener 只绑一次，但每次切回本页 seq 会变，
+    // 在调用时取最新 seq 才不会因 routeStillActive 判定过期而整段丢弃。
+    // 离开本页后目标 DOM 消失，listener 自摘除（下次 render 再绑），不常驻堆积
+    function ensureVisibilityPoll() {
+      if (visibilityBound) return;
+      visibilityBound = true;
+      const onVisibility = () => {
+        if (document.visibilityState !== "visible") return;
+        if (!document.getElementById(cfg.listId)) {
+          document.removeEventListener("visibilitychange", onVisibility);
+          visibilityBound = false;
+          return;
+        }
+        pollUpdates(currentRouteSeq());
+      };
+      document.addEventListener("visibilitychange", onVisibility);
     }
-  }
 
-  function newsResearchMergePending() {
-    const pending = state.newsResearchPending;
-    if (!pending.length) return;
-    state.newsResearchPending = [];
-    const have = new Set(state.newsResearchItems.map((p) => p.id));
-    const incoming = pending.filter((p) => !have.has(p.id));
-    if (incoming.length) {
-      incoming.sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0));
-      state.newsResearchItems = [...incoming, ...state.newsResearchItems];
-      state.newsResearchOffset += incoming.length;
-      const list = $("#news-research-list");
-      if (list) list.insertAdjacentHTML("afterbegin", incoming.map(newsResearchItemHtml).join(""));
+    // 返回顶部按钮：滚动较深时常显；有待读新帖时即使没滚也弹出并带条数角标。
+    // 同上：离开本页 listener 自摘除，避免多栏目滚动监听常驻堆积
+    function ensureScrollChrome() {
+      if (scrollBound) return;
+      scrollBound = true;
+      const onScroll = () => {
+        if (!document.getElementById(cfg.backtopId)) {
+          window.removeEventListener("scroll", onScroll);
+          scrollBound = false;
+          return;
+        }
+        if (scrollRaf) return;
+        scrollRaf = requestAnimationFrame(() => { scrollRaf = 0; syncBacktop(); });
+      };
+      window.addEventListener("scroll", onScroll, { passive: true });
     }
-    newsResearchHideNewBadge();
-    newsResearchSyncBacktop();
+
+    function syncBacktop() {
+      const btn = $(`#${cfg.backtopId}`);
+      if (!btn) return;
+      const n = S("pending").length;
+      // 用户自己滚回顶部：待读新帖直接合并显示，不用再点一下
+      if (n && window.scrollY <= 80) {
+        mergePending();
+        return;
+      }
+      btn.classList.toggle("show", window.scrollY > 600 || n > 0);
+      btn.classList.toggle("has-new", n > 0);
+      const tip = $(`#${cfg.backtopNewId}`);
+      if (tip) {
+        tip.hidden = !n;
+        tip.textContent = n > 99 ? "99+" : String(n);
+      }
+    }
+
+    // 把待读新帖一次性合并进列表顶部（快讯流按 id 降序整批置顶，与原轮询置顶行为一致）
+    function mergePending() {
+      const pending = S("pending");
+      if (!pending.length) return;
+      state[cfg.keys.pending] = [];
+      const have = new Set(S("items").map((p) => p.id));
+      const incoming = pending.filter((p) => !have.has(p.id));
+      if (incoming.length) {
+        incoming.sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0));
+        state[cfg.keys.items] = [...incoming, ...S("items")];
+        // 新帖插到顶部后，已加载行的分页窗口整体后移
+        state[cfg.keys.offset] += incoming.length;
+        const list = $(`#${cfg.listId}`);
+        if (list) list.insertAdjacentHTML("afterbegin", incoming.map(itemHtml).join(""));
+      }
+      hideNewBadge();
+      syncBacktop();
+    }
+
+    function backtopClick() {
+      mergePending();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function newBadgeClick() {
+      backtopClick();
+    }
+
+    function expand(postId) {
+      const id = Number(postId);
+      if (S("expanded").has(id)) S("expanded").delete(id);
+      else S("expanded").add(id);
+      const post = S("items").find((p) => p.id === id);
+      const card = document.querySelector(`.${cfg.itemClass}[data-post-id="${id}"]`);
+      if (post && card) card.outerHTML = itemHtml(post);
+    }
+
+    function selectSource(sourceId) {
+      state[cfg.keys.sourceId] = sourceId;
+      return load(true, currentRouteSeq());
+    }
+
+    function queueSearch(query) {
+      state[cfg.keys.query] = query;
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => load(true, currentRouteSeq()), 250);
+    }
+
+    return {
+      render, load, stopPoll, stopAutoLoad,
+      selectSource, queueSearch, backtopClick, newBadgeClick, expand,
+    };
   }
 
-  function newsResearchBacktopClick() {
-    newsResearchMergePending();
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
+  const rtFeed = createStreamFeed({
+    tab: "realtime",
+    apiPath: "/api/news/realtime",
+    listId: "news-rt-list",
+    listClass: "news-rt-list",
+    filterId: "news-rt-source-filter",
+    queryId: "news-rt-query",
+    sentinelId: "news-rt-load-sentinel",
+    badgeId: "news-rt-new-badge",
+    badgeAvatarsId: "news-rt-badge-avatars",
+    backtopId: "news-rt-backtop",
+    backtopNewId: "news-rt-backtop-new",
+    itemClass: "news-rt-item",
+    globals: {
+      source: "selectNewsRtSource",
+      search: "queueNewsRtSearch",
+      expand: "newsRtExpand",
+      badge: "newsRtNewBadgeClick",
+      backtop: "newsRtBacktopClick",
+      load: "loadRealtimeNews",
+    },
+    keys: {
+      items: "newsRtItems", offset: "newsRtOffset", hasMore: "newsRtHasMore",
+      latestId: "newsRtLatestId", pending: "newsRtPending", seq: "newsRtSeq",
+      sources: "newsRtSources", sourceId: "newsRtSourceId", query: "newsRtQuery",
+      expanded: "newsRtExpanded", observer: "newsRtObserver",
+    },
+    emptyNoItems: "勾选的大V暂时没有动态，稍后再来看看",
+    emptyNotSelected: "管理员还没有勾选参与实时资讯的大V",
+  });
 
-  function newsResearchNewBadgeClick() {
-    newsResearchMergePending();
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
+  const researchFeed = createStreamFeed({
+    tab: "research",
+    apiPath: "/api/news/research",
+    listId: "news-research-list",
+    listClass: "news-research-list",
+    filterId: "news-research-source-filter",
+    queryId: "news-research-query",
+    sentinelId: "news-research-load-sentinel",
+    badgeId: "news-research-new-badge",
+    badgeAvatarsId: "news-research-badge-avatars",
+    backtopId: "news-research-backtop",
+    backtopNewId: "news-research-backtop-new",
+    itemClass: "news-research-item",
+    globals: {
+      source: "selectNewsResearchSource",
+      search: "queueNewsResearchSearch",
+      expand: "newsResearchExpand",
+      badge: "newsResearchNewBadgeClick",
+      backtop: "newsResearchBacktopClick",
+      load: "loadResearchNews",
+    },
+    keys: {
+      items: "newsResearchItems", offset: "newsResearchOffset", hasMore: "newsResearchHasMore",
+      latestId: "newsResearchLatestId", pending: "newsResearchPending", seq: "newsResearchSeq",
+      sources: "newsResearchSources", sourceId: "newsResearchSourceId", query: "newsResearchQuery",
+      expanded: "newsResearchExpanded", observer: "newsResearchObserver",
+    },
+    emptyNoItems: "勾选的大V暂时没有调研纪要，稍后再来看看",
+    emptyNotSelected: "管理员还没有勾选参与调研纪要的大V",
+  });
 
-  function newsResearchExpand(postId) {
-    const id = Number(postId);
-    if (state.newsResearchExpanded.has(id)) state.newsResearchExpanded.delete(id);
-    else state.newsResearchExpanded.add(id);
-    const post = state.newsResearchItems.find((p) => p.id === id);
-    const card = document.querySelector(`.news-research-item[data-post-id="${id}"]`);
-    if (post && card) card.outerHTML = newsResearchItemHtml(post);
-  }
+  // 具名入口：内联 onclick 与 INLINE_HANDLERS 依赖这些全局名，保持不变
+  async function renderRealtimeNews(seq = currentRouteSeq()) { return rtFeed.render(seq); }
+  async function renderResearchNews(seq = currentRouteSeq()) { return researchFeed.render(seq); }
+  async function loadRealtimeNews(reset = false, seq = currentRouteSeq()) { return rtFeed.load(reset, seq); }
+  async function loadResearchNews(reset = false, seq = currentRouteSeq()) { return researchFeed.load(reset, seq); }
+  function stopNewsRtPoll() { rtFeed.stopPoll(); }
+  function stopNewsRtAutoLoad() { rtFeed.stopAutoLoad(); }
+  function stopNewsResearchPoll() { researchFeed.stopPoll(); }
+  function stopNewsResearchAutoLoad() { researchFeed.stopAutoLoad(); }
+  function selectNewsRtSource(sourceId) { return rtFeed.selectSource(sourceId); }
+  function selectNewsResearchSource(sourceId) { return researchFeed.selectSource(sourceId); }
+  function queueNewsRtSearch(query) { rtFeed.queueSearch(query); }
+  function queueNewsResearchSearch(query) { researchFeed.queueSearch(query); }
+  function newsRtBacktopClick() { rtFeed.backtopClick(); }
+  function newsRtNewBadgeClick() { rtFeed.newBadgeClick(); }
+  function newsRtExpand(postId) { rtFeed.expand(postId); }
+  function newsResearchBacktopClick() { researchFeed.backtopClick(); }
+  function newsResearchNewBadgeClick() { researchFeed.newBadgeClick(); }
+  function newsResearchExpand(postId) { researchFeed.expand(postId); }
 
   // ---------- 财经新闻：现有媒体长文栏目 ----------
 
@@ -869,22 +711,6 @@ export function createNewsView(dependencies) {
     }
   }
 
-  async function renderFinancialNewsArticle(articleId, seq = currentRouteSeq()) {
-    setPageTitle("财经资讯", true, "news", "返回财经资讯");
-    state.newsArticleId = articleId;
-    const main = $("#main");
-    if (!main) return;
-    main.innerHTML = `<article class="news-article-page"><div class="admin-skeleton" aria-hidden="true"></div></article>`;
-    try {
-      const article = await api(`/api/news/${articleId}`);
-      if (!routeStillActive(seq)) return;
-      main.innerHTML = `<article class="news-article-page"><header class="news-article-head"><div class="news-article-meta"><span>${escapeHtml(article.source_name || "")}</span><time datetime="${escapeHtml(article.published_at || "")}">${escapeHtml(fmtPublished(article.published_at, false))}</time></div><h1>${escapeHtml(article.title)}</h1>${article.author ? `<p class="section-meta">作者：${escapeHtml(article.author)}</p>` : ""}<a class="btn-ghost news-original-link" href="${escapeHtml(article.url)}" target="_blank" rel="noopener noreferrer nofollow">打开原文 ${externalLinkIcon}</a></header><div class="news-article-body">${article.content_html || `<p>${escapeHtml(article.summary || "暂无正文")}</p>`}</div></article>`;
-      observeNewsLazyImages();
-    } catch (err) {
-      if (routeStillActive(seq)) main.innerHTML = emptyState("加载失败: " + err.message, `<div><button type="button" class="btn-ghost" onclick="renderFinancialNewsArticle(${articleId})">重试</button></div>`);
-    }
-  }
-
   function closeNewsArticleModal(mask) {
     state.newsArticleId = 0;
     if (mask) mask.remove();
@@ -973,7 +799,6 @@ export function createNewsView(dependencies) {
     openNewsArticle,
     openNewsArticleModal,
     queueNewsSearch,
-    renderFinancialNewsArticle,
     renderFinancialNewsList,
     renderNewsCenter,
     renderResearchNews,

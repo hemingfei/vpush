@@ -2586,7 +2586,10 @@ def test_avatar_cache_writes_atomically(monkeypatch):
         def close(self):
             pass
 
-    monkeypatch.setattr(avatar_mod, "safe_get", lambda client, url, timeout=None: FakeResp())
+    monkeypatch.setattr(
+        avatar_mod, "safe_get_limited",
+        lambda client, url, max_bytes=None, headers=None, timeout=None: FakeResp(),
+    )
     local = avatar_mod.cache_avatar(db, kid, "https://img.test/avatar.png", client=FakeClient())
 
     assert local == f"/avatars/{kid}.png"

@@ -21,25 +21,18 @@ import time
 
 import httpx
 
-from .avatar_cache import cache_image_file, should_direct_access
-from .image_cleanup import POST_IMAGE_DIRS
+from .avatar_cache import PLATFORM_IMAGE_DIRS, cache_image_file, should_direct_access
 
 logger = logging.getLogger(__name__)
 
-# 平台 → (数据目录, 本地 URL 前缀)：与采集侧 cache_image_file 的调用口径一致；
-# weibo 采集侧从未缓存过帖子图片，补缓存是它第一次有本地目录
-PREFIX_BY_PLATFORM = {
-    "mx": ("mx_images", "/mx-images"),
-    "zsxq": ("zsxq_images", "/zsxq-images"),
-    "xueqiu": ("xq_images", "/xq-images"),
-    "weibo": ("weibo_images", "/weibo-images"),
-}
-
 # 单轮最多发起下载的图片张数：每张超时上限 15s，任务跑在后台线程不阻塞调度循环
 BATCH_LIMIT = 20
-# 每轮扫描的候选帖子窗口（按发布时间倒序取最近 N 条带外链图的帖子），
+# 每轮扫描的候选帖子窗口（按发布时间取一端的 N 条带外链图的帖子），
 # 避免全表扫描；失败的 URL 靠冷却轮转让出批次名额
 CANDIDATE_WINDOW = 200
+# 候选窗口扫描方向每轮交替（新→旧 / 旧→新）：固定倒序时，外链图帖子总数一旦
+# 超过窗口，最老的一批失败 URL 会被新帖永久挤出窗口、再无重试机会
+CANDIDATE_WINDOW_DIRECTION_KEY = "oldest_first"
 # 下载失败后的重试冷却：期内不再碰该 URL
 URL_COOLDOWN_SECONDS = 6 * 3600
 # 跳过表（确定性非图片的 URL 键）上限，超出丢最旧的
@@ -56,15 +49,16 @@ def _url_key(url: str) -> str:
 def _load_state(db) -> dict:
     raw = db.get_setting(_STATE_KEY)
     if not raw:
-        return {"skip": [], "cooldown": {}}
+        return {"skip": [], "cooldown": {}, "oldest_first": False}
     try:
         state = json.loads(raw)
     except (TypeError, ValueError):
-        return {"skip": [], "cooldown": {}}
+        return {"skip": [], "cooldown": {}, "oldest_first": False}
     if not isinstance(state, dict):
-        return {"skip": [], "cooldown": {}}
+        return {"skip": [], "cooldown": {}, "oldest_first": False}
     state.setdefault("skip", [])
     state.setdefault("cooldown", {})
+    state.setdefault("oldest_first", False)
     return state
 
 
@@ -73,7 +67,14 @@ def _save_state(db, state: dict, now: float) -> None:
     cooldown = {k: v for k, v in state["cooldown"].items() if v > now}
     db.set_setting(
         _STATE_KEY,
-        json.dumps({"skip": skip, "cooldown": cooldown}, ensure_ascii=False),
+        json.dumps(
+            {
+                "skip": skip,
+                "cooldown": cooldown,
+                "oldest_first": bool(state.get("oldest_first")),
+            },
+            ensure_ascii=False,
+        ),
     )
 
 
@@ -102,19 +103,24 @@ def backfill_external_images(
     state = _load_state(db)
     skip = set(state["skip"])
     cooldown = state["cooldown"]
-    state_dirty = False
+    # 本轮从新→旧扫描，下一轮从旧→新：两端的失败 URL 都能定期轮到重试；
+    # 方向翻转每轮都发生，状态每轮必落库
+    oldest_first = bool(state[CANDIDATE_WINDOW_DIRECTION_KEY])
+    state[CANDIDATE_WINDOW_DIRECTION_KEY] = not oldest_first
+    state_dirty = True
     owns_client = client is None
     client = client or httpx.Client(timeout=15, follow_redirects=True)
     try:
         rows = db._rows(
             "SELECT platform, external_id, images FROM posts "
-            "WHERE images LIKE '%http%' ORDER BY published_at DESC LIMIT ?",
+            f"WHERE images LIKE '%http%' ORDER BY published_at "
+            f"{'ASC' if oldest_first else 'DESC'} LIMIT ?",
             (CANDIDATE_WINDOW,),
         )
         for row in rows:
             if stats["images_ok"] + stats["images_failed"] >= limit:
                 break
-            mapping = PREFIX_BY_PLATFORM.get(row["platform"])
+            mapping = PLATFORM_IMAGE_DIRS.get(row["platform"])
             if not mapping:
                 continue
             folder, prefix = mapping
@@ -175,5 +181,7 @@ def backfill_external_images(
         if owns_client:
             client.close()
     if state_dirty:
-        _save_state(db, {"skip": sorted(skip), "cooldown": cooldown}, now)
+        state["skip"] = sorted(skip)
+        state["cooldown"] = cooldown
+        _save_state(db, state, now)
     return stats

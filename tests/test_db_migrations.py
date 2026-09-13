@@ -97,7 +97,8 @@ def test_slow_query_warning_logged(tmp_path, monkeypatch):
 def test_downloaded_at_index_migration_applied(tmp_path):
     db = DB(tmp_path / "idx.sqlite")
     try:
-        assert db._rows("PRAGMA user_version")[0]["user_version"] == 2026090601
+        latest = max(v for v, _, _ in db_module.SCHEMA_MIGRATIONS)
+        assert db._rows("PRAGMA user_version")[0]["user_version"] == latest
         names = {row["name"] for row in db._rows("PRAGMA index_list(ima_document_index)")}
         assert "idx_ima_doc_downloaded" in names
         plan = db._read_only_rows(
@@ -108,6 +109,23 @@ def test_downloaded_at_index_migration_applied(tmp_path):
         detail = " | ".join(row["detail"] for row in plan)
         assert "idx_ima_doc_downloaded" in detail
         assert "SCAN" not in detail
+    finally:
+        db.close()
+
+
+def test_posts_published_at_index_migration_applied(tmp_path):
+    """图片补缓存候选窗口（images LIKE + ORDER BY published_at）靠该索引消除全表排序。"""
+    db = DB(tmp_path / "posts-idx.sqlite")
+    try:
+        names = {row["name"] for row in db._rows("PRAGMA index_list(posts)")}
+        assert "idx_posts_published_at" in names
+        plan = db._read_only_rows(
+            "EXPLAIN QUERY PLAN SELECT platform, external_id, images FROM posts "
+            "WHERE images LIKE '%http%' ORDER BY published_at DESC LIMIT 200",
+            (),
+        )
+        detail = " | ".join(row["detail"] for row in plan)
+        assert "idx_posts_published_at" in detail
     finally:
         db.close()
 
