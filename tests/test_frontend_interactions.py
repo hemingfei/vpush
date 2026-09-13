@@ -184,17 +184,28 @@ def _calls_with_route_seq(text: str, fn: str) -> bool:
 
 
 def _media_block(css: str, query: str, last: bool = False) -> str:
-    idx = css.rfind(query) if last else css.find(query)
-    assert idx != -1, f"缺少 {query}"
-    start = css.find("{", idx)
-    depth, i = 1, start + 1
-    while depth and i < len(css):
-        if css[i] == "{":
-            depth += 1
-        elif css[i] == "}":
-            depth -= 1
-        i += 1
-    return css[start:i]
+    """`query` 媒体块的块体；同一断点 query 在 style.css 里出现多次，
+
+    默认返回所有匹配块的并集：`x in block` 于是表达「x 被这个断点辖制」，
+    而不是「x 恰好在第一块里」。
+    """
+    starts = [m.start() for m in re.finditer(re.escape(query), css)]
+    assert starts, f"缺少 {query}"
+
+    def body(idx: int) -> str:
+        start = css.find("{", idx)
+        depth, i = 1, start + 1
+        while depth and i < len(css):
+            if css[i] == "{":
+                depth += 1
+            elif css[i] == "}":
+                depth -= 1
+            i += 1
+        return css[start:i]
+
+    if last:
+        return body(starts[-1])
+    return "\n".join(body(idx) for idx in starts)
 
 
 def test_toggle_subscribe_refreshes_by_route_not_home():
@@ -630,8 +641,10 @@ def test_mobile_platform_filter_is_five_equal_44px_targets():
     assert pill and "44px" in pill.group(1)
     assert "tl-filterbar-top icon-badge-bar" in render
     assert ".icon-badge-bar .tl-pill span" in css and "display: none" in css
-    assert "display: none" not in re.search(r"\.topbar-title h1\s*\{([^}]*)\}", mobile).group(1)
-    assert "clip: rect(0, 0, 0, 0)" in re.search(r"\.topbar-title h1\s*\{([^}]*)\}", mobile).group(1)
+    title = re.search(r"\.topbar-title h1\s*\{([^}]*)\}", mobile)
+    assert title, "手机端缺少 .topbar-title h1 规则"
+    assert "display: none" not in title.group(1)
+    assert "clip: rect(0, 0, 0, 0)" in title.group(1)
 
 
 def test_timeline_polish_matches_chip_row_and_browser_surfaces():

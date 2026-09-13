@@ -484,7 +484,7 @@ export function createPushSettingsView(dependencies) {
           <div class="form-row">
             <label for="set-llm-model">模型</label>
             <select id="set-llm-model-select" class="form-control" hidden
-              onchange="if(this.value){const i=document.getElementById('set-llm-model'); if(i) i.value=this.value}">
+              onchange="if(this.value){document.getElementById('set-llm-model').value=this.value}">
               <option value="">手填模型名</option>
             </select>
             <div class="llm-model-row">

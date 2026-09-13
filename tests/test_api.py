@@ -714,21 +714,31 @@ def test_recent_logs_debug_exact_match():
     assert len(recent_logs(level="ERROR")) == 1
 
 
-def test_error_logs_persist_and_filter():
-    """错误记录：WARNING+ 落库、级别过滤、跨重启语义（DB 存储）。"""
+def test_error_logs_persist_and_filter(monkeypatch):
+    """错误记录：WARNING+ 落库、级别过滤、跨重启语义（DB 存储）。
+
+    断言只看本用例写的那批（logger=app.test）：慢机器上 app.db 的 slow query
+    WARNING 也会落进同一张表，全局断言会随机多出一行（CI 慢磁盘上必现）。
+    """
+    from app import db as db_module
+
+    # 阀值压到 0：每条语句都产生 slow query WARNING，持续复现 CI 的慢磁盘场景
+    monkeypatch.setattr(db_module, "_SLOW_QUERY_SECONDS", 0.0)
     client = make_client()
     admin_headers = auth_headers(client)
     db = client.app.state.db
     db.record_error_log("WARNING", "app.test", "磁盘快满了")
     db.record_error_log("ERROR", "app.test", "抓取失败 traceback")
     db.record_error_log("INFO", "app.test", "普通信息不入错误记录")
-    resp = client.get("/api/admin/error-logs", headers=admin_headers)
-    assert resp.status_code == 200
-    logs = resp.json()["logs"]
-    assert [l["level"] for l in logs] == ["INFO", "ERROR", "WARNING"]  # 新->旧
+
+    def own_logs(query=""):
+        resp = client.get(f"/api/admin/error-logs?q=app.test{query}", headers=admin_headers)
+        assert resp.status_code == 200
+        return resp.json()["logs"]
+
+    assert [l["level"] for l in own_logs()] == ["INFO", "ERROR", "WARNING"]  # 新->旧
     # 级别过滤：ERROR+ 只看 ERROR（含 CRITICAL）
-    resp = client.get("/api/admin/error-logs?level=ERROR", headers=admin_headers)
-    assert [l["level"] for l in resp.json()["logs"]] == ["ERROR"]
+    assert [l["level"] for l in own_logs("&level=ERROR")] == ["ERROR"]
     # 关键词过滤
     resp = client.get("/api/admin/error-logs?q=磁盘", headers=admin_headers)
     assert [l["message"] for l in resp.json()["logs"]] == ["磁盘快满了"]
@@ -752,6 +762,30 @@ def test_error_db_handler_captures_warnings():
     logging.getLogger("app.test").info("普通信息不该进")
     assert ("WARNING", "app.test", "测试告警") in captured
     assert not any("普通信息" in c[2] for c in captured)
+
+
+def test_error_db_handler_does_not_reenter_itself():
+    """sink 写库期间产生的 WARNING 不再回灌：慢库上否则会自激循环。"""
+    import logging
+
+    from app import logging_setup
+
+    captured = []
+
+    def sink(record):
+        captured.append(record.getMessage())
+        # 模拟「写库超阀值 → 又一条 slow query WARNING」
+        logging.getLogger("app.db").warning("slow query 900ms: INSERT INTO error_logs")
+
+    logging_setup.setup_logging(level="INFO")  # 幂等：handler 只挂一次
+    previous = logging_setup._error_sink
+    logging_setup.register_error_sink(sink)
+    try:
+        logging.getLogger("app.test").warning("外层告警")
+    finally:
+        logging_setup.register_error_sink(previous)
+
+    assert captured == ["外层告警"]
 
 
 def test_no_rsshub_fallback_in_frontend_or_compose():

@@ -2225,7 +2225,7 @@ def test_report_extraction_uses_title_when_pdf_text_is_too_short():
     )
 
     assert title in captured["prompt"]
-    assert result["rating"] == "Buy"
+    assert result["rating"] == "买入"  # 标题里的 Buy 经中文评级归一
     assert result["status"] == "ok"
 
 
