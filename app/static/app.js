@@ -5148,21 +5148,23 @@ let knowledgeView, loadAdminKnowledge, switchKnowledgeSettingsTab, onKnowledgeTa
 // router 序章 / feishuSourceRowsHtml）。
 let adminViewsLoaded = false;
 let adminViewsPromise = null;
+let adminViewsRetry = 0;
 
 async function ensureAdminViews() {
   if (adminViewsLoaded) return; // 并发去重：多个 await 同时进来只跑一次
   if (adminViewsPromise) return adminViewsPromise;
+  const retry = adminViewsRetry ? `?retry=${adminViewsRetry}` : "";
   adminViewsPromise = (async () => {
     const [modCicc, modCodes, modNews, modUsers, modKol, modInfra, modIma, modDashboard, modKnowledge] = await Promise.all([
-      import("./views/admin/cicc.js"),
-      import("./views/admin/codes.js"),
-      import("./views/admin/news.js"),
-      import("./views/admin/users.js"),
-      import("./views/admin/kol.js"),
-      import("./views/admin/infra.js"),
-      import("./views/admin/ima-collector.js"),
-      import("./views/admin/dashboard.js"),
-      import("./views/admin/knowledge.js"),
+      import(`./views/admin/cicc.js${retry}`),
+      import(`./views/admin/codes.js${retry}`),
+      import(`./views/admin/news.js${retry}`),
+      import(`./views/admin/users.js${retry}`),
+      import(`./views/admin/kol.js${retry}`),
+      import(`./views/admin/infra.js${retry}`),
+      import(`./views/admin/ima-collector.js${retry}`),
+      import(`./views/admin/dashboard.js${retry}`),
+      import(`./views/admin/knowledge.js${retry}`),
     ]);
 
     ciccView = modCicc.createCiccView({
@@ -5562,7 +5564,13 @@ async function ensureAdminViews() {
     }
     adminViewsLoaded = true;
   })();
-  await adminViewsPromise;
+  try {
+    await adminViewsPromise;
+  } catch (error) {
+    adminViewsPromise = null;
+    adminViewsRetry += 1;
+    throw error;
+  }
 }
 
 

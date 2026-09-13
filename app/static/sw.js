@@ -1,5 +1,5 @@
 /* V Push Service Worker —— network-first：静态外壳离线可用，API 永不缓存 */
-const CACHE = "dav-shell-8bfe7808e76b";
+const CACHE = "dav-shell-0e7353dede64";
 const SHELL = [
   "/",
   "/app.js",
@@ -122,11 +122,15 @@ async function networkFirst(req) {
   if (fresh && fresh.ok && fresh.type === "basic") {
     // 后台写缓存：Cache.put 对 206（大文件 Range）等响应会抛错，
     // 绝不能影响已经拿到的网络响应
+    let cacheKey;
+    try {
+      // 用裸路径作缓存键，避免 ?v= 版本号 query 撑爆缓存
+      cacheKey = new Request(new URL(req.url).pathname);
+    } catch {
+      return fresh;
+    }
     caches.open(CACHE)
-      .then((cache) =>
-        // 用裸路径作缓存键，避免 ?v= 版本号 query 撑爆缓存
-        cache.put(new Request(new URL(req.url).pathname), fresh.clone())
-      )
+      .then((cache) => cache.put(cacheKey, fresh.clone()))
       .catch(() => {});
   }
   return fresh;

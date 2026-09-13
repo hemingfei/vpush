@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""研报列表首载基准：冷/热查询耗时 + 响应体体积 + EXPLAIN QUERY PLAN（可复跑）。
+"""研报首屏 DB 冷测：列表/分面查询耗时与 EXPLAIN QUERY PLAN（可复跑）。
+
+这里只测 DB 查询，不含 FastAPI 授权、服务层附加或 JSON 序列化；HTTP
+耗时与响应体 raw/gzip 字节数由 scripts/ima_first_load_probe.py 实测。
 
 用法：
   python3 scripts/ima_page_bench.py --db data/dav.db                # 热态，本地
@@ -19,8 +22,7 @@
 from __future__ import annotations
 
 import argparse
-import gzip
-import json
+import statistics
 import sys
 import time
 from pathlib import Path
@@ -43,41 +45,7 @@ def drop_page_cache(path: str) -> None:
         finally:
             os.close(fd)
     except OSError:
-        pass
-
-
-def int_or_zero(value) -> int:
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
-def endpoint_payload(page: dict) -> dict:
-    """按 app/api.py 的返回形状组装响应体。"""
-    return {
-        "groups": page.get("groups") if page.get("groups") is not None else [],
-        "items": page["items"],
-        "days": page["days"],
-        "tags": page["tags"],
-        "tag_counts": page.get("tag_counts") or {},
-        "document_count": int_or_zero(page.get("document_count")),
-        "day": page.get("day") or "",
-        "has_more": bool(page.get("has_more")),
-        "offset": int_or_zero(page.get("offset")),
-    }
-
-
-def json_bytes(value) -> int:
-    return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode())
-
-
-def field_bytes(items: list[dict]) -> list[tuple[str, int]]:
-    totals: dict[str, int] = {}
-    for item in items:
-        for key, value in item.items():
-            totals[key] = totals.get(key, 0) + json_bytes(value)
-    return sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
+        return
 
 
 def spy_reads(db) -> list[tuple[str, tuple]]:
@@ -93,11 +61,66 @@ def spy_reads(db) -> list[tuple[str, tuple]]:
     return calls
 
 
-def explain(db, calls: list[tuple[str, tuple]]) -> None:
-    print("\n--- EXPLAIN QUERY PLAN（首屏列表那条 SQL）---")
-    for sql, params in calls[:1]:
-        for row in db._read_only_rows(f"EXPLAIN QUERY PLAN {sql}", params):
-            print(f"  {row['detail']}")
+def open_benchmark_db(path: str, *, cold: bool):
+    from app.db import DB
+
+    if cold:
+        drop_page_cache(path)
+    return DB(path)
+
+
+def benchmark_once(
+    path: str,
+    groups: list[str],
+    *,
+    cold: bool,
+    limit: int,
+    offset: int,
+) -> tuple[list[tuple[str, tuple]], float, float]:
+    list_db = open_benchmark_db(path, cold=cold)
+    try:
+        calls = spy_reads(list_db)
+        started = time.perf_counter()
+        list_db.ima_document_page(groups, limit=limit, offset=offset, facets=False)
+        list_ms = (time.perf_counter() - started) * 1000
+        del calls[1:]
+    finally:
+        list_db.close()
+
+    facets_db = open_benchmark_db(path, cold=cold)
+    try:
+        started = time.perf_counter()
+        facets_db.ima_document_page(groups, limit=1, offset=0)
+        facets_ms = (time.perf_counter() - started) * 1000
+    finally:
+        facets_db.close()
+    return calls, list_ms, facets_ms
+
+
+def run_benchmarks(
+    path: str,
+    groups: list[str],
+    *,
+    cold: bool,
+    limit: int,
+    offset: int,
+    runs: int,
+) -> list[tuple[list[tuple[str, tuple]], float, float]]:
+    return [
+        benchmark_once(path, groups, cold=cold, limit=limit, offset=offset)
+        for _ in range(max(runs, 1))
+    ]
+
+
+def explain(path: str, calls: list[tuple[str, tuple]]) -> None:
+    db = open_benchmark_db(path, cold=False)
+    try:
+        print("\n--- EXPLAIN QUERY PLAN（首屏列表那条 SQL）---")
+        for sql, params in calls[:1]:
+            for row in db._read_only_rows(f"EXPLAIN QUERY PLAN {sql}", params):
+                print(f"  {row['detail']}")
+    finally:
+        db.close()
 
 
 def main() -> int:
@@ -110,65 +133,36 @@ def main() -> int:
     parser.add_argument("--groups", default="", help="逗号分隔；默认取库里全部 group_id")
     args = parser.parse_args()
 
-    from app.db import DB
-
-    db = DB(args.db)
-    if args.groups:
-        groups = [item.strip() for item in args.groups.split(",") if item.strip()]
-    else:
-        rows = db._read_only_rows(
-            "SELECT group_id, COUNT(*) AS n FROM ima_document_index"  # noqa: S608 - 无外部输入
-            " GROUP BY group_id ORDER BY n DESC",
-        )
-        groups = [str(row["group_id"]) for row in rows]
+    groups = [item.strip() for item in args.groups.split(",") if item.strip()]
+    if not groups:
+        db = open_benchmark_db(args.db, cold=False)
+        try:
+            rows = db._read_only_rows(
+                "SELECT group_id, COUNT(*) AS n FROM ima_document_index"  # noqa: S608 - 无外部输入
+                " GROUP BY group_id ORDER BY n DESC",
+            )
+            groups = [str(row["group_id"]) for row in rows]
+        finally:
+            db.close()
     print(f"db={args.db} groups={len(groups)} limit={args.limit} offset={args.offset}")
 
-    page: dict = {}
-    calls: list[tuple[str, tuple]] = []
-    for run in range(1, max(args.runs, 1) + 1):
-        if args.cold:
-            drop_page_cache(args.db)
-        started = time.perf_counter()
-        calls = spy_reads(db)
-        page = db.ima_document_page(
-            groups,
-            limit=args.limit,
-            offset=args.offset,
-            facets=False,
-        )
-        del calls[1:]  # 只留首屏列表那条 SELECT
-        list_ms = (time.perf_counter() - started) * 1000
-        if args.cold:
-            drop_page_cache(args.db)
-        started = time.perf_counter()
-        db.ima_document_page(groups, limit=1, offset=0)
-        facets_ms = (time.perf_counter() - started) * 1000
-        print(f"run{run}: 列表(facets=False) {list_ms:8.1f} ms | 分面 {facets_ms:8.1f} ms")
-
-    payload = endpoint_payload(page)
-    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
-    print(
-        f"\n首屏列表响应体: {len(raw) / 1024:.1f} KB raw / "
-        f"{len(gzip.compress(raw)) / 1024:.1f} KB gzip, "
-        f"items={len(payload['items'])}, document_count={payload['document_count']}",
+    samples = run_benchmarks(
+        args.db,
+        groups,
+        cold=args.cold,
+        limit=args.limit,
+        offset=args.offset,
+        runs=args.runs,
     )
+    for run, (_calls, list_ms, facets_ms) in enumerate(samples, 1):
+        print(f"run{run}: DB 列表 {list_ms:8.1f} ms | DB 分面 {facets_ms:8.1f} ms")
 
-    print("\n--- 响应体字段占比 ---")
-    for key, value in sorted(
-        payload.items(),
-        key=lambda kv: json_bytes(kv[1]),
-        reverse=True,
-    ):
-        size = json_bytes(value)
-        extra = f" (len={len(value)})" if isinstance(value, (list, dict)) else ""
-        print(f"{size:9d} B  {100 * size / max(len(raw), 1):5.1f}%  {key}{extra}")
-
-    if payload["items"]:
-        print("\n--- items 字段占比（0 表示可去）---")
-        for key, size in field_bytes(payload["items"]):
-            print(f"{size:9d} B  {key}")
-
-    explain(db, calls)
+    print(
+        f"\n{len(samples)} 次 fresh DB: "
+        f"list p50={statistics.median(sample[1] for sample in samples):.1f} ms | "
+        f"facets p50={statistics.median(sample[2] for sample in samples):.1f} ms",
+    )
+    explain(args.db, samples[-1][0])
     return 0
 
 

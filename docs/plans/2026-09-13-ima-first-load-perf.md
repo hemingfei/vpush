@@ -140,6 +140,16 @@ docker run --rm -u 0 -v /tmp:/host -w /app -e PYTHONPATH=/app \
   dav-subscription-vpush:latest python3 -B /app/scripts/ima_page_bench.py --db /host/snap.db --cold --runs 3
 ```
 
+### Review 后复核（2026-09-13）
+
+针对验收评审补齐了动态 import 真实重取、静态摘要同步、基准 fresh-connection 语义与真实 FastAPI 计时：
+
+- 生产 `/data/dav.db` 用 SQLite online backup 创建 3 个独立快照，每轮独立进程、列表/分面各自 fresh connection：列表 `30.0 / 33.9 / 27.6 ms`，**P50 30.0 ms**；分面 `815.9 / 912.3 / 810.7 ms`，**P50 815.9 ms**。
+- 同一生产快照经 FastAPI `TestClient` 请求精确 URL `/api/ima-documents?limit=50&include_facets=0`：`200`，**28.5 ms**，`64,361 B raw / 21,333 B gzip`。
+- `tests/test_frontend_runtime.py::test_admin_views_retry_after_chunk_load_failure` 用 Playwright 锁定失败后第二次请求：请求数为 2，且第二个 module specifier 带递增 `retry` 参数。
+- `.venv/bin/python -m pytest -q`：**2211 passed**；`node --check app/static/app.js`、`scripts/bump_assets.py --check`、新增测试收集门禁均通过；摘要为 `0e7353dede64`。
+- 验收产生的 `/data/.ima-acceptance-*` 临时副本已删除；生产源库未写入。
+
 ## 风险与回滚
 
 - Phase 1 改动直接影响列表内容顺序，等价性测试是硬门槛；若等价性无法满足，退回「保留 `(sort_date='')` 但去掉 `match_rank`」的中间方案（单组可走索引，多组仍排序）。

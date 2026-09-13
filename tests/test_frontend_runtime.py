@@ -5,8 +5,9 @@ import http.server
 import json
 import re
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 import pytest
@@ -206,7 +207,7 @@ def install_news_bootstrap(page: Page, *, delayed: bool = False, fail_image: boo
 
 
 def test_market_refresh_failure_visibility_and_cleanup(page: Page):
-    page.clock.install(time=datetime(2026, 9, 4, 3, 0, tzinfo=timezone.utc))
+    page.clock.install(time=datetime(2026, 9, 4, 3, 0, tzinfo=UTC))
     page.evaluate("""async () => {
       const { createMarketView } = await import('/views/market.js');
       document.body.innerHTML = '<section id="tl-market"></section>';
@@ -274,7 +275,7 @@ def test_market_holiday_status_explains_previous_trading_date(page: Page):
 
 @pytest.mark.parametrize("daily_percent,expected_class", [(3.52, "positive"), (-3.52, "negative"), (0, "flat")])
 def test_market_switches_automatically_and_ignores_other_group_responses(page: Page, daily_percent, expected_class):
-    page.clock.install(time=datetime(2026, 9, 4, 11, 59, 50, tzinfo=timezone.utc))
+    page.clock.install(time=datetime(2026, 9, 4, 11, 59, 50, tzinfo=UTC))
     page.evaluate("""async () => {
       const { createMarketView } = await import('/views/market.js');
       document.body.innerHTML = '<section id="tl-market"></section>';
@@ -299,8 +300,10 @@ def test_market_switches_automatically_and_ignores_other_group_responses(page: P
     expect(page.locator('.market-spark')).to_have_count(1)
     expect(page.locator('.market-spark')).to_have_attribute('aria-label', re.compile('SOXX.*2026-09-04 日内分时.*09:30.*11:40.*昨收 502.20'))
     expect(page.locator('.market-spark')).to_have_class(re.compile(expected_class))
-    assert len(page.locator('.market-spark polyline').get_attribute('points').split()) == 3
-    assert page.locator('.market-spark polyline').get_attribute('points').split()[-1].startswith('22.0,')
+    points = page.locator('.market-spark polyline').get_attribute('points')
+    assert points is not None
+    assert len(points.split()) == 3
+    assert points.split()[-1].startswith('22.0,')
     expect(page.locator('.market-spark-baseline')).to_have_attribute('y1', '18')
     expect(page.locator('.market-footer')).to_contain_text('最近交易日 · 09/04')
     assert '近20' not in page.locator('#tl-market').inner_text()
@@ -352,7 +355,12 @@ def test_theme_switch_keeps_browser_chrome_and_page_background_in_sync(page: Pag
 
 
 @pytest.mark.parametrize("reduced_motion", ["reduce", "no-preference"])
-def test_mobile_navigation_scroll_direction(page: Page, static_origin: str, tmp_path: Path, reduced_motion: str):
+def test_mobile_navigation_scroll_direction(
+    page: Page,
+    static_origin: str,
+    tmp_path: Path,
+    reduced_motion: Literal["reduce", "no-preference"],
+):
     page.set_viewport_size({"width": 380, "height": 840})
     page.emulate_media(reduced_motion=reduced_motion)
     install_badge_reader_bootstrap(page)
@@ -469,7 +477,7 @@ def test_timeline_long_text_keeps_navigation_in_viewport(
 def _rgb(value: str) -> tuple[int, int, int]:
     values = [int(part) for part in re.findall(r"\d+", value)[:3]]
     assert len(values) == 3, value
-    return tuple(values)
+    return values[0], values[1], values[2]
 
 
 def _contrast_ratio(foreground: str, background: str) -> float:
@@ -804,7 +812,9 @@ def test_plaza_name_platform_icons(page: Page, static_origin: str, tmp_path: Pat
     icon = page.locator('.kol-card .xueqiu-icon')
     assert icon.evaluate("el => getComputedStyle(el.querySelector('path')).fill") == "rgb(40, 125, 255)"
     assert icon.evaluate("el => getComputedStyle(el).filter") == "none"
-    assert icon.bounding_box()["width"] == 17
+    icon_box = icon.bounding_box()
+    assert icon_box is not None
+    assert icon_box["width"] == 17
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.screenshot(path=str(tmp_path / f"plaza-icons-{width}-{theme}.png"), full_page=True)
 
@@ -844,7 +854,9 @@ def test_news_reset_keeps_full_skeleton_until_response(page: Page, static_origin
     cards = page.locator("#news-list .admin-sk-card")
     expect(cards).to_have_count(3)
     expect(cards.first).to_be_visible()
-    assert cards.first.bounding_box()["height"] > 0
+    card_box = cards.first.bounding_box()
+    assert card_box is not None
+    assert card_box["height"] > 0
     page.evaluate("() => window.__resolveNews({ items: [], next_offset: 0, has_more: false, view_started_at: null })")
     expect(page.locator("#news-list .admin-sk-card")).to_have_count(0)
 
@@ -876,6 +888,33 @@ def test_lightbox_traps_and_restores_focus(page: Page):
     page.keyboard.press("Escape")
     expect(page.locator(".lightbox")).to_have_count(0, timeout=1_000)
     expect(page.locator("#lightbox-trigger")).to_be_focused()
+
+
+def test_admin_views_retry_after_chunk_load_failure(page: Page, static_origin: str):
+    install_badge_reader_bootstrap(page)
+    attempts: list[str] = []
+
+    def serve_cicc(route):
+        attempts.append(route.request.url)
+        if len(attempts) == 1:
+            route.fulfill(status=503, content_type="text/javascript", body="")
+        else:
+            route.continue_()
+
+    page.route("**/views/admin/cicc.js*", serve_cicc)
+    page.goto(static_origin, wait_until="domcontentloaded")
+    page.wait_for_function("typeof window.go === 'function'")
+
+    with page.expect_request(lambda req: "/views/admin/cicc.js" in req.url):
+        page.evaluate("go('admin/content')")
+    page.wait_for_timeout(200)
+    with page.expect_request(lambda req: "/views/admin/cicc.js" in req.url):
+        page.evaluate("go('admin/content')")
+    page.wait_for_timeout(200)
+
+    assert len(attempts) == 2
+    assert "retry=" not in attempts[0]
+    assert attempts[1].endswith("?retry=1")
 
 
 def test_module_shell_survives_offline_reload(playwright_instance, static_origin):
