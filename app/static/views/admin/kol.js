@@ -1369,6 +1369,9 @@ export function createAdminKolsView(dependencies) {
           <p class="section-meta">常见黑话（宁王、药茅）启动时写入；雪球 $戏称(代码)$ 由系统 LLM 解析。正式名切半（宁德/英伟）不会入库。每行「别名=正式名」，正式名需在常用表或全市场名表中。</p></div>
         </header>
         <textarea id="stock-aliases-input" class="form-control" rows="5" style="margin-top:12px;font-family:monospace;line-height:1.6" placeholder="宁王=宁德时代">${escapeHtml(aliasText)}</textarea>
+        <div class="toolbar" style="margin-top:12px">
+          <button class="btn-normal" onclick="adminSaveAliases()">保存别名</button>
+        </div>
       </section>
       <section class="section-panel">
         <header class="section-head">
@@ -2261,6 +2264,20 @@ export function createAdminKolsView(dependencies) {
     }
   }
 
+  async function adminSaveAliases() {
+    const stockAliases = $("#stock-aliases-input").value.split(/\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+      const [alias, stock] = line.split(/[=＝]/).map((s) => s.trim());
+      return { alias, stock };
+    }).filter((r) => r.alias && r.stock);
+    try {
+      const data = await api("/api/tags", { method: "PUT", body: JSON.stringify({ stock_aliases: stockAliases }) });
+      flash(`已保存 ${data.stock_aliases.length} 个别名`);
+      loadAdminVocabTab("tags");
+    } catch (err) {
+      alert("保存失败: " + err.message);
+    }
+  }
+
   function adminMaintainSummary(data) {
     const last = data && data.maintain && data.maintain.last;
     if (!last || !last.at) return "尚未执行过";
@@ -2393,6 +2410,7 @@ export function createAdminKolsView(dependencies) {
     adminDeleteCategory,
     adminSaveStockNames,
     adminSaveTags,
+    adminSaveAliases,
     adminMaintainTags,
     adminBackfillTags,
     adminSetTier,
