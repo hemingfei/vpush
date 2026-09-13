@@ -1511,6 +1511,60 @@ def _seed_page_perf_db(tmp_path):
     return db
 
 
+def test_ima_document_page_single_group_uses_group_index_for_small_authorized_slice(
+    tmp_path, monkeypatch
+):
+    db = DB(str(tmp_path / "single-group-page-perf.sqlite"))
+    rows = [
+        _index_row(
+            "requested",
+            f"requested-{index:02d}",
+            f"09{index + 1:02d}",
+            name=f"requested-{index:02d}.pdf",
+        )
+        for index in range(3)
+    ]
+    rows.extend(
+        _index_row(
+            "unrelated",
+            f"unrelated-{index:03d}",
+            f"08{index % 30 + 1:02d}",
+            name=f"unrelated-{index:03d}.pdf",
+        )
+        for index in range(300)
+    )
+    db.replace_ima_document_index(rows, "fp", 1)
+
+    captured: list[tuple[str, list]] = []
+    original = db._read_only_rows
+
+    def spy(sql, params=()):
+        if "FROM ima_document_index" in sql and "LIMIT" in sql:
+            captured.append((sql, list(params)))
+        return original(sql, params)
+
+    monkeypatch.setattr(db, "_read_only_rows", spy)
+    page = db.ima_document_page(
+        ["requested"], limit=2, offset=0, facets=False
+    )
+
+    assert [item["group_id"] for item in page["items"]] == [
+        "requested",
+        "requested",
+    ]
+    assert len(captured) == 1
+    sql, params = captured[0]
+    assert "INDEXED BY idx_ima_doc_group_latest" in sql
+    assert "WHERE d.group_id IN (?)" in sql
+    assert "ORDER BY d.sort_date DESC, d.name DESC, d.media_id ASC" in sql
+    plan = [
+        row["detail"]
+        for row in db._rows("EXPLAIN QUERY PLAN " + sql, params)
+    ]
+    assert any("idx_ima_doc_group_latest" in detail for detail in plan), plan
+    assert not any("TEMP B-TREE FOR ORDER BY" in detail for detail in plan), plan
+
+
 def test_ima_document_page_plan_uses_latest_index_without_temp_sort(
     tmp_path, monkeypatch
 ):

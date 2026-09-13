@@ -5297,13 +5297,22 @@ class DB:
         elif not any(
             (requested_day, requested_tag, requested_rating, requested_ticker)
         ):
-            rows = self._read_only_rows(
-                "SELECT d.* FROM ima_document_index d INDEXED BY idx_ima_doc_latest "
-                f"WHERE {where_sql} "
-                "ORDER BY d.sort_date DESC, d.name DESC, d.group_id ASC, d.media_id ASC "
-                "LIMIT ? OFFSET ?",
-                (*where_params, page_limit + 1, page_offset),
-            )
+            if len(groups) == 1:
+                rows = self._read_only_rows(
+                    "SELECT d.* FROM ima_document_index d INDEXED BY idx_ima_doc_group_latest "
+                    f"WHERE {where_sql} "
+                    "ORDER BY d.sort_date DESC, d.name DESC, d.media_id ASC "
+                    "LIMIT ? OFFSET ?",
+                    (*where_params, page_limit + 1, page_offset),
+                )
+            else:
+                rows = self._read_only_rows(
+                    "SELECT d.* FROM ima_document_index d INDEXED BY idx_ima_doc_latest "
+                    f"WHERE {where_sql} "
+                    "ORDER BY d.sort_date DESC, d.name DESC, d.group_id ASC, d.media_id ASC "
+                    "LIMIT ? OFFSET ?",
+                    (*where_params, page_limit + 1, page_offset),
+                )
         else:
             branches: list[str] = []
             slice_params: list[object] = []
