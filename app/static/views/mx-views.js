@@ -28,6 +28,7 @@ export function createMxViewsView(dependencies) {
     boardStep: 1, hlDocBound: false };
   const MXV_BOARD_LIST_LIMIT = 4; // 双榜明细默认条数，超出走「更多」展开
   const MXV_HEAT_ROWS = 4; // 热力云默认最多行数，超出出「更多」展开
+  const MXV_KOL_COLLAPSE_ROWS = 4; // 大V总览单列（手机）默认露出的卡片数，超出走「更多」展开
   const MXV_FILTERS_KEY = "mxv_feed_filters"; // 筛选状态本地持久化：刷新/重进页面不丢
 
   function mxvSaveFilters() {
@@ -756,7 +757,7 @@ export function createMxViewsView(dependencies) {
     el.classList.toggle("open");
   }
 
-  // ---- 大V观点总览：今日操作下方；默认一行，更多展开；关注置顶；大V/个股两种卡片 ----
+  // ---- 大V观点总览：今日操作下方；默认限一行（手机单列放宽到4张），更多展开；关注置顶；大V/个股两种卡片 ----
   function mxvRenderKols() {
     const kols = $("#mxv-kols");
     if (!kols) return;
@@ -845,9 +846,21 @@ export function createMxViewsView(dependencies) {
     if (!grid || !more) return;
     const card = grid.querySelector(".mxv-kolcard,.mxv-stockcard");
     const rowH = card ? card.offsetHeight : 0;
-    const overflow = rowH > 0 && grid.scrollHeight > rowH + 4;
+    const gap = parseFloat(getComputedStyle(grid).rowGap) || 0;
+    const cards = [...grid.children];
+    const singleCol = cards.length > 1 && cards[1].offsetTop > cards[0].offsetTop;
+    let maxH = rowH; // 多列（桌面）：同行等高，首卡高度即一行高
+    if (singleCol) {
+      // 单列（手机）一行只有 1 张太少：放宽到露前 4 张；限高取第 5 张上缘-行间距，
+      // 天然兼容各卡行高不齐与转屏后列数变化，不足 4 张则全露出不折叠
+      const cap = cards[MXV_KOL_COLLAPSE_ROWS];
+      maxH = cap
+        ? cap.getBoundingClientRect().top - grid.getBoundingClientRect().top - gap
+        : Infinity;
+    }
+    const overflow = rowH > 0 && grid.scrollHeight > maxH + 4;
     grid.classList.toggle("collapsed", !_mxv.kolExpanded && overflow);
-    grid.style.maxHeight = !_mxv.kolExpanded && overflow ? `${rowH}px` : "";
+    grid.style.maxHeight = !_mxv.kolExpanded && overflow ? `${maxH}px` : "";
     more.hidden = !overflow;
     more.textContent = _mxv.kolExpanded ? "收起 ▴" : "更多 ▾";
   }

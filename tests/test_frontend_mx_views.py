@@ -109,6 +109,9 @@ def test_mx_views_kol_overview_modes_and_collapse():
     assert "b.bull + b.bear" in stocks  # 默认按大V人数降序
     collapse = _fn_body("mxvApplyKolCollapse", js)
     assert "scrollHeight" in collapse and "maxHeight" in collapse
+    # 手机单列默认露 4 张：单列检测后按第 5 张上缘定限高，张数常量=4
+    assert "singleCol" in collapse and "MXV_KOL_COLLAPSE_ROWS" in collapse
+    assert re.search(r"MXV_KOL_COLLAPSE_ROWS = 4", js)
 
 
 def test_mx_views_feed_all_batches_and_drawer_desc():
