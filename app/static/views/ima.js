@@ -859,7 +859,17 @@ export function createImaView(dependencies) {
     }
   }
 
-  async function renderKnowledge(seq, encodedMediaId = "") {
+  function prefetchKnowledge(mediaId = "") {
+    const catalog = api("/api/ima-documents/catalog");
+    const documents = mediaId || currentImaListSnapshot() ? null : api(imaDocumentsRequestPath());
+    return {
+      catalog,
+      documents,
+      settled: Promise.allSettled(documents ? [catalog, documents] : [catalog]),
+    };
+  }
+
+  async function renderKnowledge(seq, encodedMediaId = "", prefetched = null) {
     stopImaDocumentsAutoLoad();
     const mediaId = encodedMediaId ? decodeURIComponent(encodedMediaId) : "";
     setPageTitle("研报中心");
@@ -867,15 +877,13 @@ export function createImaView(dependencies) {
       $("#main").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
     }
     if (!mediaId) mountKnowledgeListShell();
-    const catalogPromise = api("/api/ima-documents/catalog");
-    const documentsPromise = mediaId || currentImaListSnapshot() ? null : api(imaDocumentsRequestPath());
+    const requests = prefetched || prefetchKnowledge(mediaId);
+    const documentsPromise = requests.documents;
     const documentsRenderTask = mediaId
       ? null
       : renderImaDocuments(seq, { prefetched: documentsPromise });
     try {
-      const settled = await Promise.allSettled(
-        documentsPromise ? [catalogPromise, documentsPromise] : [catalogPromise]
-      );
+      const settled = await requests.settled;
       if (!routeStillActive(seq)) return;
       const catalogResult = settled[0];
       const documentsResult = documentsPromise ? settled[1] : null;
@@ -1567,6 +1575,7 @@ export function createImaView(dependencies) {
     refreshKnowledge,
     subscribeKnowledge,
     unsubscribeKnowledge,
+    prefetchKnowledge,
     renderKnowledge,
     renderImaDocuments,
     imaDocumentsFilterChipsHtml,

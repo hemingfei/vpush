@@ -4621,25 +4621,25 @@ def test_ima_documents_follow_latest_dynamic_navigation():
 
 
 def test_knowledge_parallel_loads_catalog_and_first_page():
+    prefetch = _fn_body("prefetchKnowledge")
     render = _fn_body("renderKnowledge")
     list_shell = _fn_body("mountKnowledgeListShell")
     list_fn = _fn_body("renderImaDocuments")
     path_fn = _fn_body("imaDocumentsRequestPath")
+    catalog = prefetch.index('api("/api/ima-documents/catalog")')
+    documents = prefetch.index("api(imaDocumentsRequestPath())")
+    settled = prefetch.index("Promise.allSettled")
     mount = render.index("if (!mediaId) mountKnowledgeListShell();")
-    catalog = render.index('api("/api/ima-documents/catalog")')
-    documents = render.index("api(imaDocumentsRequestPath())")
+    requests = render.index("prefetched || prefetchKnowledge(mediaId)")
     render_task = render.index("renderImaDocuments(seq, { prefetched: documentsPromise })")
     first_await = render.index("await ")
-    settled = render.index("Promise.allSettled")
-    assert mount < catalog < first_await
-    assert mount < documents < first_await
-    assert documents < render_task < settled
+    assert catalog < documents < settled
+    assert mount < requests < render_task < first_await
     assert render.count("renderImaDocuments(seq, { prefetched: documentsPromise })") == 1
     assert "await documentsRenderTask" in render
     assert render.count("mountKnowledgeListShell()") == 1
     assert 'id="kb-list" tabindex="-1"><div class="admin-skeleton"' in list_shell
-    assert "Promise.allSettled" in render
-    assert settled >= first_await
+    assert "Promise.allSettled" in prefetch
     assert "prefetched" in list_fn
     assert "await prefetched" in list_fn
     assert "imaDocumentsRequestPath()" in list_fn
@@ -4648,14 +4648,27 @@ def test_knowledge_parallel_loads_catalog_and_first_page():
     assert "refreshImaDocuments()" in list_fn
     assert 'params.set("limit", "50")' in path_fn
     assert 'params.set("q", query)' in path_fn
-    assert "currentImaListSnapshot()" in render
-    assert "mediaId || currentImaListSnapshot()" in render
+    assert "currentImaListSnapshot()" in prefetch
+    assert "mediaId || currentImaListSnapshot()" in prefetch
     assert "!mediaId && !snapshot" in render
     assert "catalogOk && selectedGroup" in render
     assert "!subscribed.length && catalogOk" in render
     assert "knowledgeSourceControlsHtml(selectedGroup)" in render
     assert ".ima-report-source" in render
     assert "if (mediaId)" in render
+
+
+def test_knowledge_cold_route_prefetches_before_session_round_trip():
+    router = _fn_body("router")
+    render = _fn_body("renderKnowledge")
+    prefetch = router.index("const knowledgePrefetch =")
+    me = router.index('await api("/api/me")')
+
+    assert prefetch < me
+    assert "prefetchKnowledge(rawParam)" in router[prefetch:me]
+    assert router.count("renderKnowledge(renderSeq, param, knowledgePrefetch)") == 2
+    assert "prefetched || prefetchKnowledge(mediaId)" in render
+    assert "if (!knowledgePrefetch) prefetchLiveFeed()" in router
 
 
 def test_knowledge_index_status_copy_is_admin_only():

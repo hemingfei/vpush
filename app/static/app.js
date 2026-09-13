@@ -4955,6 +4955,7 @@ const {
 const {
   clearImaPdfUrl,
   openImaDocument,
+  prefetchKnowledge,
   renderKnowledge,
   renderImaDocuments,
   refreshKnowledge,
@@ -5534,6 +5535,9 @@ async function router() {
     initTurnstile();
     return;
   }
+  const knowledgePrefetch = page === "knowledge" || page === "ima-documents"
+    ? prefetchKnowledge(rawParam)
+    : null;
   let user;
   try {
     user = await api("/api/me");
@@ -5553,7 +5557,7 @@ async function router() {
   renderSidebar(state.user);
   renderTopbar(state.user);
   renderBottomNav(state.user);
-  prefetchLiveFeed();
+  if (!knowledgePrefetch) prefetchLiveFeed();
   const navPage = page === "ima-documents" ? "knowledge" : page;
   document.querySelectorAll(".nav-item").forEach((b) =>
     b.classList.toggle("active", b.dataset.route === navPage || b.dataset.route === `${navPage}/${param}`)
@@ -5592,9 +5596,9 @@ async function router() {
     else if (page === "ima-documents") {
       const next = `${location.pathname.replace(/^\/ima-documents\b/, "/knowledge")}${location.search}`;
       if (location.pathname + location.search !== next) history.replaceState(null, "", next);
-      await renderKnowledge(renderSeq, param);
+      await renderKnowledge(renderSeq, param, knowledgePrefetch);
     }
-    else if (page === "knowledge") await renderKnowledge(renderSeq, param);
+    else if (page === "knowledge") await renderKnowledge(renderSeq, param, knowledgePrefetch);
     else if (page === "admin") {
       if (!state.user.is_admin) { replaceRoute("timeline"); return; }
       // 后台条目页签化：旧路由（含更早的 categories/tags）统一重定向到容器页签
