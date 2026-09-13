@@ -834,11 +834,17 @@ def test_ima_document_index_schema_and_migration(tmp_path):
             for row in db._rows(f"PRAGMA index_info({name})")
         ]
 
-    assert index_columns("idx_ima_doc_latest") == ["sort_date", "name"]
+    assert index_columns("idx_ima_doc_latest") == [
+        "sort_date",
+        "name",
+        "group_id",
+        "media_id",
+    ]
     assert index_columns("idx_ima_doc_group_latest") == [
         "group_id",
         "sort_date",
         "name",
+        "media_id",
     ]
     assert index_columns("idx_ima_doc_tag_group") == ["tag", "group_id"]
     assert index_columns("idx_ima_doc_group_tag") == ["group_id", "tag"]
@@ -858,11 +864,14 @@ def test_ima_document_index_schema_and_migration(tmp_path):
     assert _ima_index_key_columns(db, "idx_ima_doc_latest") == [
         ("sort_date", 1),
         ("name", 1),
+        ("group_id", 0),
+        ("media_id", 0),
     ]
     assert _ima_index_key_columns(db, "idx_ima_doc_group_latest") == [
         ("group_id", 0),
         ("sort_date", 1),
         ("name", 1),
+        ("media_id", 0),
     ]
     assert _ima_index_key_columns(db, "idx_ima_doc_tag_group") == [
         ("tag", 0),
@@ -1155,11 +1164,14 @@ def test_ima_document_index_index_column_order_and_desc(tmp_path):
     assert _ima_index_key_columns(db, "idx_ima_doc_latest") == [
         ("sort_date", 1),
         ("name", 1),
+        ("group_id", 0),
+        ("media_id", 0),
     ]
     assert _ima_index_key_columns(db, "idx_ima_doc_group_latest") == [
         ("group_id", 0),
         ("sort_date", 1),
         ("name", 1),
+        ("media_id", 0),
     ]
     assert _ima_index_key_columns(db, "idx_ima_doc_tag_group") == [
         ("tag", 0),
@@ -1417,6 +1429,40 @@ def test_ima_document_index_search_ranking_and_literal_wildcards(tmp_path):
     assert db.ima_document_page([], query="ai")["document_count"] == 0
 
 
+def test_ima_document_page_has_stable_cross_group_tie_order(tmp_path):
+    db = DB(str(tmp_path / "stable-page-order.sqlite"))
+    db.replace_ima_document_index(
+        [
+            _index_row("b", "b2", "0901", name="同名.pdf", tags=["tie"]),
+            _index_row("a", "a2", "0901", name="同名.pdf", tags=["tie"]),
+            _index_row("b", "b1", "0901", name="同名.pdf", tags=["tie"]),
+            _index_row("a", "a1", "0901", name="同名.pdf", tags=["tie"]),
+        ],
+        "fp",
+        1,
+    )
+
+    for kwargs in ({}, {"tag": "tie"}, {"query": "同名"}):
+        first = db.ima_document_page(
+            ["b", "a"], limit=2, offset=0, facets=False, **kwargs
+        )
+        second = db.ima_document_page(
+            ["b", "a"], limit=2, offset=2, facets=False, **kwargs
+        )
+        assert first == db.ima_document_page(
+            ["b", "a"], limit=2, offset=0, facets=False, **kwargs
+        )
+        assert second == db.ima_document_page(
+            ["b", "a"], limit=2, offset=2, facets=False, **kwargs
+        )
+        assert first["has_more"] is True
+        assert second["has_more"] is False
+        assert [
+            (item["group_id"], item["media_id"])
+            for item in first["items"] + second["items"]
+        ] == [("a", "a1"), ("a", "a2"), ("b", "b1"), ("b", "b2")]
+
+
 def _legacy_ima_page_items(
     db, groups, *, query="", day="", tag="", rating="", ticker="", limit=50, offset=0
 ):
@@ -1428,8 +1474,8 @@ def _legacy_ima_page_items(
     rows = db._read_only_rows(
         f"SELECT d.*, {rank_sql} AS match_rank FROM ima_document_index d "
         f"WHERE {where_sql} "
-        "ORDER BY match_rank DESC, (d.sort_date = '') ASC, d.sort_date DESC, d.name DESC "
-        "LIMIT ? OFFSET ?",
+        "ORDER BY match_rank DESC, (d.sort_date = '') ASC, d.sort_date DESC, d.name DESC, "
+        "d.group_id ASC, d.media_id ASC LIMIT ? OFFSET ?",
         (*params, limit + 1, offset),
     )
     return [(row["group_id"], row["media_id"]) for row in rows[:limit]], len(rows) > limit
@@ -1465,26 +1511,27 @@ def _seed_page_perf_db(tmp_path):
     return db
 
 
-def test_ima_document_page_plan_uses_group_index(tmp_path, monkeypatch):
-    """默认列表必须按组走 idx_ima_doc_group_latest 索引切片，不再全扫+排序。"""
+def test_ima_document_page_plan_uses_latest_index_without_temp_sort(
+    tmp_path, monkeypatch
+):
     db = _seed_page_perf_db(tmp_path)
-    captured: dict = {}
+    captured: list[tuple[str, list]] = []
     original = db._read_only_rows
 
     def spy(sql, params=()):
         if "FROM ima_document_index" in sql and "LIMIT" in sql:
-            captured.setdefault("page", (sql, list(params)))
+            captured.append((sql, list(params)))
         return original(sql, params)
 
     monkeypatch.setattr(db, "_read_only_rows", spy)
-    db.ima_document_page(["semi", "other"], limit=50, offset=0)
-    sql, params = captured["page"]
-    assert "match_rank" not in sql
-    assert "(d.sort_date = '')" not in sql
+    db.ima_document_page(
+        ["semi", "other"], limit=50, offset=0, facets=False
+    )
+    assert len(captured) == 1
+    sql, params = captured[0]
     plan = [row["detail"] for row in db._rows("EXPLAIN QUERY PLAN " + sql, params)]
-    assert not any("SCAN d" in detail for detail in plan), plan
-    assert not any("sqlite_autoindex_ima_document_index_1" in detail for detail in plan), plan
-    assert sum("idx_ima_doc_group_latest" in detail for detail in plan) == 2, plan
+    assert any("idx_ima_doc_latest" in detail for detail in plan), plan
+    assert not any("TEMP B-TREE FOR ORDER BY" in detail for detail in plan), plan
 
 
 def test_ima_document_page_matches_legacy_order(tmp_path):
@@ -1529,7 +1576,10 @@ def test_warm_ima_document_page_runs_one_page_query(tmp_path, monkeypatch):
 
     monkeypatch.setattr(db, "_read_only_rows", spy)
     assert db.warm_ima_document_page(limit=50) == 3
-    assert sum("UNION ALL" in sql for sql in seen) == 1
+    assert sum(
+        "INDEXED BY idx_ima_doc_latest" in sql and "LIMIT" in sql
+        for sql in seen
+    ) == 1
 
 
 def test_warm_ima_document_page_empty_db_is_noop(tmp_path):
