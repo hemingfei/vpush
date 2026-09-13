@@ -1,4 +1,5 @@
 import base64
+import gzip
 import hashlib
 import inspect
 import io
@@ -2619,6 +2620,10 @@ def test_group_aware_document_api_returns_summary_and_filters_items(tmp_path, mo
     store = client.app.state.ima_documents.store
     records = [
         {"media_id": "banking-doc", "name": "银行报告.pdf", "day": "2026-08-25", "group_id": "banking", "group_name": "投行研报"},
+        *(
+            {"media_id": f"banking-{index:02d}", "name": f"研报-{index:02d}.pdf", "day": "2026-08-25", "group_id": "banking", "group_name": "投行研报"}
+            for index in range(49)
+        ),
         {"media_id": "disabled-doc", "name": "停用报告.pdf", "day": "2026-08-25", "group_id": "disabled", "group_name": "停用资料"},
     ]
     state = {}
@@ -2639,10 +2644,11 @@ def test_group_aware_document_api_returns_summary_and_filters_items(tmp_path, mo
     assert response.status_code == 200
     payload = response.json()
     assert payload["groups"] == [
-        {"id": "banking", "name": "投行研报", "count": 1},
+        {"id": "banking", "name": "投行研报", "count": 50},
         {"id": "empty", "name": "空群组", "count": 0},
     ]
-    assert [item["group_id"] for item in payload["items"]] == ["banking"]
+    assert {item["group_id"] for item in payload["items"]} == {"banking"}
+    assert len(payload["items"]) == 50
     assert payload["items"][0]["group_name"] == "投行研报"
     detail = client.get("/api/ima-documents/banking-doc", headers=headers)
     assert detail.status_code == 200
@@ -2658,20 +2664,37 @@ def test_group_aware_document_api_returns_summary_and_filters_items(tmp_path, mo
     all_groups = client.get("/api/ima-documents", headers=headers)
     assert all_groups.status_code == 200
     assert {item["group_id"] for item in all_groups.json()["items"]} == {"banking"}
-    # 首屏瘦身：include_facets=0 只少分面，列表照旧
-    brief = client.get("/api/ima-documents?group=banking&include_facets=0", headers=headers)
+    started = time.perf_counter()
+    brief = client.get("/api/ima-documents?limit=50&include_facets=0", headers=headers)
+    elapsed_ms = (time.perf_counter() - started) * 1000
     assert brief.status_code == 200
-    assert [item["group_id"] for item in brief.json()["items"]] == ["banking"]
-    assert brief.json()["document_count"] == 0
-    assert brief.json()["tags"] == []
-    assert brief.json()["tag_counts"] == {}
-    # 分面单独一次请求：只回分面、不回列表
+    assert len(brief.json()["items"]) == 50
+    assert len(brief.content) <= 120 * 1024
+    assert elapsed_ms > 0
+    print(
+        f"IMA API: {elapsed_ms:.1f}ms, status={brief.status_code}, "
+        f"raw={len(brief.content)}, gzip={len(gzip.compress(brief.content))}"
+    )
+    assert set(brief.json()["items"][0]) == {
+        "media_id", "name", "day", "sort_date", "size", "chars",
+        "downloaded_at", "tags", "has_pdf", "has_txt", "group_id",
+        "group_name",
+    }
+    detail_payload = client.get(
+        "/api/ima-documents/banking-doc?group=banking", headers=headers
+    ).json()
+    assert set(detail_payload) == {
+        "media_id", "name", "day", "size", "chars", "downloaded_at",
+        "group_id", "group_name", "abstract", "abstract_zh",
+        "needs_translation", "cover_url", "tags", "has_pdf", "has_txt",
+        "type", "source_url", "feishu_display",
+    }
     facets = client.get("/api/ima-documents?group=banking&facets_only=1", headers=headers)
     assert facets.status_code == 200
     assert facets.json()["items"] == []
     assert facets.json()["has_more"] is False
     assert facets.json()["offset"] == 0
-    assert facets.json()["document_count"] == 1
+    assert facets.json()["document_count"] == 50
     assert client.get("/api/ima-documents?q=银行", headers=headers).json()["items"][0]["media_id"] == "banking-doc"
     assert client.get("/api/ima-documents?day=not-found", headers=headers).json()["items"] == []
 
