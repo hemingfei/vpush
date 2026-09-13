@@ -3335,6 +3335,9 @@ def create_api_router(
         ticker: str = Query("", max_length=24),
         limit: int = 50,
         offset: int = Query(0, ge=0, le=IMA_DOCUMENT_LIST_MAX_OFFSET),
+        # 首屏默认只取列表（include_facets=0），分面随后用 facets_only=1 单独取
+        include_facets: int = Query(1, ge=0, le=1),
+        facets_only: int = Query(0, ge=0, le=1),
         user: dict = Depends(get_current_user),
     ):
         _enforce_ima_list_quota(user)
@@ -3347,18 +3350,27 @@ def create_api_router(
         requested = day.strip()
         search_mode = bool(query or tag)
         effective_day = "" if search_mode or not requested else requested
-        payload = ima_documents.list_documents(
-            groups=groups,
-            query=query,
-            day=effective_day,
-            group=group,
-            tag=tag,
-            rating=rating.strip(),
-            ticker=ticker.strip(),
-            limit=bounded_limit(limit, default=50),
-            offset=max(offset, 0),
-        )
-        items = db.attach_report_extractions(payload["items"])
+        list_kwargs = {
+            "groups": groups,
+            "query": query,
+            "day": effective_day,
+            "group": group,
+            "tag": tag,
+            "rating": rating.strip(),
+            "ticker": ticker.strip(),
+        }
+        if facets_only:
+            # 分面单独一次请求：不带列表条目（首屏先画列表，计数/日期/标签随后补齐）
+            payload = ima_documents.list_documents(**list_kwargs, limit=1, offset=0)
+            items = []
+        else:
+            payload = ima_documents.list_documents(
+                **list_kwargs,
+                limit=bounded_limit(limit, default=50),
+                offset=max(offset, 0),
+                facets=include_facets == 1,
+            )
+            items = db.attach_report_extractions(payload["items"])
         return {
             "groups": payload.get("groups") if payload.get("groups") is not None else [],
             "items": items,
@@ -3367,8 +3379,8 @@ def create_api_router(
             "tag_counts": payload.get("tag_counts") or {},
             "document_count": int(payload.get("document_count") or 0),
             "day": payload.get("day") or effective_day,
-            "has_more": bool(payload.get("has_more")),
-            "offset": int(payload.get("offset") or 0),
+            "has_more": bool(payload.get("has_more")) and not facets_only,
+            "offset": 0 if facets_only else int(payload.get("offset") or 0),
         }
 
     @router.get("/ima-documents/catalog")

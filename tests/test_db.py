@@ -1398,10 +1398,143 @@ def test_ima_document_index_search_ranking_and_literal_wildcards(tmp_path):
     dated = db.ima_document_page(["semi"], day="0828")
     assert [item["media_id"] for item in dated["items"]] == ["title"]
     assert dated["day"] == "0828"
+
+    # 首屏瘦身：facets=False 时列表不变，分面留空（由 facets_only 请求随后补）
+    brief = db.ima_document_page(["semi"], limit=50, offset=0, facets=False)
+    assert [item["media_id"] for item in brief["items"]] == [
+        item["media_id"] for item in latest["items"]
+    ]
+    assert brief["tag_counts"] == {}
+    assert brief["tags"] == []
+    assert brief["days"] == []
+    assert brief["document_count"] == 0
+    assert brief["group_counts"] == {}
+    assert brief["has_more"] is False
+    assert brief["offset"] == 0
     assert dated["days"] == ["0828"]
 
     assert db.ima_document_page(["semi"], group="other")["items"] == []
     assert db.ima_document_page([], query="ai")["document_count"] == 0
+
+
+def _legacy_ima_page_items(
+    db, groups, *, query="", day="", tag="", rating="", ticker="", limit=50, offset=0
+):
+    """旧实现副本：常量 match_rank 打头的全局排序，作为等价性基准。"""
+    where_sql, where_params, rank_sql, pattern, rank_n = db._ima_page_filters(
+        groups, query, day, tag, rating, ticker
+    )
+    params = ([pattern] * rank_n + list(where_params)) if pattern else list(where_params)
+    rows = db._read_only_rows(
+        f"SELECT d.*, {rank_sql} AS match_rank FROM ima_document_index d "
+        f"WHERE {where_sql} "
+        "ORDER BY match_rank DESC, (d.sort_date = '') ASC, d.sort_date DESC, d.name DESC "
+        "LIMIT ? OFFSET ?",
+        (*params, limit + 1, offset),
+    )
+    return [(row["group_id"], row["media_id"]) for row in rows[:limit]], len(rows) > limit
+
+
+def _seed_page_perf_db(tmp_path):
+    """足够多的行，让优化器选择索引有序切片而不是全扫+排序。"""
+    db = DB(str(tmp_path / "page-perf.sqlite"))
+    rows = []
+    for group, total in (("semi", 60), ("other", 60)):
+        for index in range(total):
+            day = f"{index % 28 + 1:02d}{(index % 12) + 1:02d}"
+            rows.append(
+                _index_row(
+                    group,
+                    f"m{index:02d}",
+                    day,
+                    name=f"{group}-{index:02d}.pdf",
+                    tags=["AI"] if index % 3 == 0 else [],
+                    abstract="AI 算力继续增长" if index % 5 == 0 else "",
+                )
+            )
+    rows.append(_index_row("semi", "no-date", "unknown", name="无日期.pdf"))
+    rows.append(_index_row("macro", "macro-0", "0901", name="宏观.pdf"))
+    db.replace_ima_document_index(rows, "fp", 1)
+    db.save_report_extraction(
+        "semi",
+        "m00",
+        rating="买入",
+        tickers=[{"code": "002428", "name": "云南锗业"}],
+        status="ok",
+    )
+    return db
+
+
+def test_ima_document_page_plan_uses_group_index(tmp_path, monkeypatch):
+    """默认列表必须按组走 idx_ima_doc_group_latest 索引切片，不再全扫+排序。"""
+    db = _seed_page_perf_db(tmp_path)
+    captured: dict = {}
+    original = db._read_only_rows
+
+    def spy(sql, params=()):
+        if "FROM ima_document_index" in sql and "LIMIT" in sql:
+            captured.setdefault("page", (sql, list(params)))
+        return original(sql, params)
+
+    monkeypatch.setattr(db, "_read_only_rows", spy)
+    db.ima_document_page(["semi", "other"], limit=50, offset=0)
+    sql, params = captured["page"]
+    assert "match_rank" not in sql
+    assert "(d.sort_date = '')" not in sql
+    plan = [row["detail"] for row in db._rows("EXPLAIN QUERY PLAN " + sql, params)]
+    assert not any("SCAN d" in detail for detail in plan), plan
+    assert not any("sqlite_autoindex_ima_document_index_1" in detail for detail in plan), plan
+    assert sum("idx_ima_doc_group_latest" in detail for detail in plan) == 2, plan
+
+
+def test_ima_document_page_matches_legacy_order(tmp_path):
+    """新查询与旧实现（常量 match_rank 全局排序）在筛选/分页矩阵下结果一致。"""
+    db = _seed_page_perf_db(tmp_path)
+    cases = [
+        {},
+        {"limit": 3},
+        {"limit": 3, "offset": 2},
+        {"limit": 2, "offset": 121},
+        {"limit": 2, "offset": 200},
+        {"day": "0901"},
+        {"tag": "AI"},
+        {"query": "算力"},
+        {"query": "ai"},
+        {"query": "semi-0"},
+        {"rating": "买入"},
+        {"ticker": "002428"},
+        {"ticker": "云南锗业"},
+    ]
+    for groups in (["semi"], ["semi", "other"], ["semi", "other", "macro"]):
+        for kwargs in cases:
+            expected, expected_more = _legacy_ima_page_items(db, groups, **kwargs)
+            page = db.ima_document_page(groups, **kwargs)
+            actual = [(item["group_id"], item["media_id"]) for item in page["items"]]
+            label = f"groups={groups} kwargs={kwargs}"
+            assert actual == expected, label
+            assert page["has_more"] is expected_more, label
+            assert [item["media_id"] for item in page["items"]] == [
+                media_id for _group, media_id in expected
+            ], label
+
+
+def test_warm_ima_document_page_runs_one_page_query(tmp_path, monkeypatch):
+    db = _seed_page_perf_db(tmp_path)
+    seen: list[str] = []
+    original = db._read_only_rows
+
+    def spy(sql, params=()):
+        seen.append(sql)
+        return original(sql, params)
+
+    monkeypatch.setattr(db, "_read_only_rows", spy)
+    assert db.warm_ima_document_page(limit=50) == 3
+    assert sum("UNION ALL" in sql for sql in seen) == 1
+
+
+def test_warm_ima_document_page_empty_db_is_noop(tmp_path):
+    db = DB(str(tmp_path / "empty-warm.sqlite"))
+    assert db.warm_ima_document_page() == 0
 
 
 def test_ima_document_catalog_stats_and_detail_ambiguity(tmp_path):

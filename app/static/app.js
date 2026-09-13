@@ -19,15 +19,6 @@ import { createLightbox } from "./core/lightbox.js";
 import { createNewsView } from "./views/news.js";
 import { createImaView } from "./views/ima.js";
 import { createFeishuPersonalView } from "./views/feishu-personal.js";
-import { createAdminCodesView } from "./views/admin/codes.js";
-import { createAdminNewsView } from "./views/admin/news.js";
-import { createAdminUsersView } from "./views/admin/users.js";
-import { createAdminKolsView } from "./views/admin/kol.js";
-import { createAdminInfraView } from "./views/admin/infra.js";
-import { createAdminImaCollectorView } from "./views/admin/ima-collector.js";
-import { createCiccView } from "./views/admin/cicc.js";
-import { createAdminKnowledgeView } from "./views/admin/knowledge.js";
-import { createAdminDashboardView } from "./views/admin/dashboard.js";
 import { createPushSettingsView } from "./views/push-settings.js";
 import { createMarketView } from "./views/market.js";
 
@@ -59,7 +50,7 @@ const CHANNEL_ICONS = {
 const GROK_TRANSLATE_ICON = `<svg class="p-tr-grok" viewBox="0 0 33 32" fill="currentColor" aria-hidden="true"><path d="M12.745 20.54l10.97-8.19c.539-.4 1.307-.244 1.564.38 1.349 3.288.746 7.241-1.938 9.955-2.683 2.714-6.417 3.31-9.83 1.954l-3.728 1.745c5.347 3.697 11.84 2.782 15.898-1.324 3.219-3.255 4.216-7.692 3.284-11.693l.008.009c-1.351-5.878.332-8.227 3.782-13.031L33 0l-4.54 4.59v-.014L12.743 20.544m-2.263 1.987c-3.837-3.707-3.175-9.446.1-12.755 2.42-2.449 6.388-3.448 9.852-1.979l3.72-1.737c-.67-.49-1.53-1.017-2.515-1.387-4.455-1.854-9.789-.931-13.41 2.728-3.483 3.523-4.579 8.94-2.697 13.561 1.405 3.454-.899 5.898-3.22 8.364C1.49 30.2.666 31.074 0 32l10.478-9.466"/></svg>`;
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.186";
+const APP_VERSION = "1.12.187";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -251,7 +242,7 @@ function isStandalonePwa() {
 
 function clearSessionCaches() {
   stopMarketQuotes();
-  ciccView.reset();
+  if (ciccView) ciccView.reset();
   clearImaPdfUrl();
   if (typeof stopTimelinePoll === "function") stopTimelinePoll();
   // 飞书扫码轮询不能跨会话存活：登出后它会每秒拿旧 token 打 401 循环
@@ -3933,7 +3924,7 @@ function feishuSourceRowsHtml(data) {
       source.last_success_at ? `最近成功 ${fmtFeishuTime(source.last_success_at)}` : "尚未同步成功",
       source.next_check_at && source.enabled ? `下次检查 ${fmtFeishuTime(source.next_check_at)}` : "",
     ].filter(Boolean).join(" · ");
-    const error = source.last_error ? `<p class="feishu-source-error">${escapeHtml(imaSafeError(source.last_error))}</p>` : "";
+    const error = source.last_error ? `<p class="feishu-source-error">${escapeHtml(typeof imaSafeError === "function" ? imaSafeError(source.last_error) : source.last_error)}</p>` : "";
     const displayMode = source.display_mode === "document" ? "document" : "timeline";
     const readable = source.sync_status === "succeeded" && Number(source.entry_count || 0) > 0;
     const openLine = readable
@@ -4316,13 +4307,8 @@ async function saveZsxqPollingConfig() {
 let _localLibsLast = null;
 let _scanInFlight = false; // 扫描进行中：15s 轮询重渲染时按钮保持禁用，不复活
 
-const ciccView = createCiccView({
-  api, flash, fmtTs, currentRouteSeq: () => routeRenderSeq, routeStillActive, renderLocalTab,
-});
-const {
-  loadCiccStatus, startCiccPoll, stopCiccPoll,
-  saveCiccCategories, triggerCicc, saveCiccScheduleTime, toggleCiccSchedule,
-} = ciccView;
+// admin 视图懒加载：cicc 由 ensureAdminViews() 赋值，求值期读到的是 undefined
+let ciccView, loadCiccStatus, startCiccPoll, stopCiccPoll, saveCiccCategories, triggerCicc, saveCiccScheduleTime, toggleCiccSchedule;
 
 function localLibraryCardHtml(lib) {
   const meta = lib.error ? `异常：${escapeHtml(lib.error)}` : `${lib.pdf_count ?? 0} 个 PDF`;
@@ -5111,7 +5097,83 @@ const {
   loadKolImageSettings,
 } = pushSettingsView;
 
-const {
+// admin 视图懒加载：codes 由 ensureAdminViews() 赋值，求值期读到的是 undefined
+let codesView, loadAdminCodes, adminCodesBatch, adminCodesClearSelect, adminCodesCopySelected, adminCodesNoteInput, adminCodesPreset, adminCodesToggle,
+  adminCodesToggleBatch, adminCodesTogglePage, adminGenerateCodes, adminRevokeBatch, adminRevokeCode, searchAdminCodes, selectAdminCodeFilter,
+  clearAdminCodesResult, copyText;
+
+// admin 视图懒加载：news 由 ensureAdminViews() 赋值，求值期读到的是 undefined
+let newsView, loadAdminNews, loadAdminPosts, selectAdminNewsSource, saveAdminNewsSettings, refreshAllAdminNews, refreshAdminNewsFeed, toggleAdminNewsSource,
+  toggleAdminNewsFeed, archiveAdminNewsSource, restoreAdminNewsSource, archiveAdminNewsFeed, restoreAdminNewsFeed, openNewsSourceModal, openNewsFeedModal,
+  updateAdminNewsQuery, updateAdminNewsStatus, updateAdminNewsArchived, adminFilterPosts, adminPostsLoadMore, adminTogglePost;
+
+// admin 视图懒加载：users 由 ensureAdminViews() 赋值，求值期读到的是 undefined
+let usersView, loadAdminUsers, loadAdminRequests, adminApproveRequest, adminRejectRequest, adminUsersApplyFilter, adminUsersBatch, adminUserToggleSelect,
+  adminUserTogglePage, adminUserClearSelect, adminOpenUser, adminSaveUserKnowledge, adminSaveUsername, adminSavePassword, adminSendTestPush, adminDeleteUser,
+  adminToggleAdmin, adminSaveInactivePolicy, adminInactivePolicySyncSave, adminInactivePolicyKeydown, closeAdminModal;
+
+// admin 视图懒加载：kol 由 ensureAdminViews() 赋值，求值期读到的是 undefined
+let kolView, loadAdminKols, loadAdminVocab, switchAdminKolsPlatform, adminKolsApplyFilter, adminKolsClearFilter, adminKolsPage, adminKolToggleSelect,
+  adminKolTogglePage, adminKolClearSelect, adminKolBatch, adminKolBatchCategory, adminBatchAddKols, adminBatchLinesHint, adminToggleKol, adminTogglePriority,
+  adminToggleSecondary, adminDeleteKol, adminEditKol, saveKolEdit, adminAddCategory, adminRenameCategory, adminDeleteCategory, adminSaveStockNames,
+  adminSaveTags, adminMaintainTags, adminBackfillTags;
+
+// admin 视图懒加载：infra 由 ensureAdminViews() 赋值，求值期读到的是 undefined
+let infraView, runStorageConsistency, runStorageDedup, loadStorageHealth, saveStorageAlerts, refreshImaStorage, backupImaStorage, loadProxyAdmin,
+  syncProxyRouteInputs, syncProxyPoolForm, saveProxyRoutes, createProxyPool, importProxyPool, extractProxyPool, deleteProxyPool, deleteProxyNode, testProxyNode,
+  loadAdminBackup, saveBackupWebDAV, testBackupWebDAV, backupDownload, backupRestoreWebDAV, backupRestoreUpload;
+
+// admin 视图懒加载：ima 由 ensureAdminViews() 赋值，求值期读到的是 undefined
+let imaCollectorView, initImaMountState, imaCollectorHasUnsaved, renderImaMountGroups, renderImaSelectedGroup, renderImaFolderTree, renderImaGroupAcl,
+  renderImaCollectorDirtyState, discardImaCollectorChanges, selectImaMountGroup, setImaGroupInterval, toggleImaFolderPanel, toggleImaFolderExpand,
+  toggleImaFolder, retryImaFolderLoad, discoverImaGroups, filterAclSuggest, onAclSearchKey, toggleImaAclExpanded, retryImaGroupAcl, saveImaCollector,
+  triggerImaCollector, saveImaCredentials, stopImaProgressPoll, applyImaCollectorProgress, startImaProgressPoll, imaCollectorStatusText,
+  imaGroupDiscoveryStatusText, imaCollectorProgressHtml, imaMountGroup, imaGroupIntervalSeconds, fetchAclCandidateUsers, aclPickerHtml, addAclUser,
+  removeAclUser, imaCollectorFormSnapshot, imaCollectorFormRevision, rememberImaCollectorDraft, clearImaCollectorDraft, restoreImaCollectorOwnerToken,
+  imaSafeError;
+
+
+// admin 视图懒加载：dashboard 由 ensureAdminViews() 赋值，求值期读到的是 undefined
+let dashboardView, loadAdminStats, loadAdminDashboard, loadAdminAudit, loadAdminLogs, loadAdminErrorLogs, loadAdminSysLogsPanel, adminFilterLogs,
+  stopSysLogsTimer, renderStatsData, openAdminKolFromHealth, setPlazaSourceMode;
+
+// admin 视图懒加载：knowledge 由 ensureAdminViews() 赋值，求值期读到的是 undefined
+let knowledgeView, loadAdminKnowledge, switchKnowledgeSettingsTab, onKnowledgeTabsKey;
+
+// ---------- admin 视图懒加载 ----------
+// 9 个 admin 视图工厂不再静态 import，只在真正进入 admin 路由时 import()，
+// 首屏因此少下载约 73KB gz（研报中心等页面不再付这份钱）。
+// 上面各视图名与 options / 解构块整块搬进本函数，保持原缩进不改动，
+// 以便 diff 只剩真正新增的行；同步调用点需自己守卫（clearSessionCaches /
+// router 序章 / feishuSourceRowsHtml）。
+let adminViewsLoaded = false;
+let adminViewsPromise = null;
+
+async function ensureAdminViews() {
+  if (adminViewsLoaded) return; // 并发去重：多个 await 同时进来只跑一次
+  if (adminViewsPromise) return adminViewsPromise;
+  adminViewsPromise = (async () => {
+    const [modCicc, modCodes, modNews, modUsers, modKol, modInfra, modIma, modDashboard, modKnowledge] = await Promise.all([
+      import("./views/admin/cicc.js"),
+      import("./views/admin/codes.js"),
+      import("./views/admin/news.js"),
+      import("./views/admin/users.js"),
+      import("./views/admin/kol.js"),
+      import("./views/admin/infra.js"),
+      import("./views/admin/ima-collector.js"),
+      import("./views/admin/dashboard.js"),
+      import("./views/admin/knowledge.js"),
+    ]);
+
+    ciccView = modCicc.createCiccView({
+  api, flash, fmtTs, currentRouteSeq: () => routeRenderSeq, routeStillActive, renderLocalTab,
+    });
+    ({
+  loadCiccStatus, startCiccPoll, stopCiccPoll,
+  saveCiccCategories, triggerCicc, saveCiccScheduleTime, toggleCiccSchedule,
+    } = ciccView);
+
+    ({
   loadAdminCodes,
   adminCodesBatch,
   adminCodesClearSelect,
@@ -5128,7 +5190,7 @@ const {
   selectAdminCodeFilter,
   clearAdminCodesResult,
   copyText,
-} = createAdminCodesView({
+    } = (codesView = modCodes.createAdminCodesView({
   $,
   state,
   api,
@@ -5140,9 +5202,9 @@ const {
   fmtDbTime,
   parseDbUtcMs,
   currentAdminSeq: () => _adminRenderSeq,
-});
+    })));
 
-const {
+    ({
   loadAdminNews,
   loadAdminPosts,
   selectAdminNewsSource,
@@ -5163,7 +5225,7 @@ const {
   adminFilterPosts,
   adminPostsLoadMore,
   adminTogglePost,
-} = createAdminNewsView({
+    } = (newsView = modNews.createAdminNewsView({
   $,
   state,
   api,
@@ -5184,9 +5246,9 @@ const {
   PLATFORM_LABELS,
   CHEVRON_UP_ICON,
   CHEVRON_DOWN_ICON,
-});
+    })));
 
-const {
+    ({
   loadAdminUsers,
   loadAdminRequests,
   adminApproveRequest,
@@ -5207,7 +5269,7 @@ const {
   adminInactivePolicySyncSave,
   adminInactivePolicyKeydown,
   closeAdminModal,
-} = createAdminUsersView({
+    } = (usersView = modUsers.createAdminUsersView({
   $,
   state,
   api,
@@ -5227,9 +5289,9 @@ const {
   PLATFORM_LABELS,
   usernameRuleError,
   CHEVRON_RIGHT_ICON,
-});
+    })));
 
-const {
+    ({
   loadAdminKols,
   loadAdminVocab,
   switchAdminKolsPlatform,
@@ -5256,7 +5318,7 @@ const {
   adminSaveTags,
   adminMaintainTags,
   adminBackfillTags,
-} = createAdminKolsView({
+    } = (kolView = modKol.createAdminKolsView({
   $,
   state,
   api,
@@ -5272,9 +5334,9 @@ const {
   routeQuery,
   CHEVRON_LEFT_ICON,
   CHEVRON_RIGHT_ICON,
-});
+    })));
 
-const {
+    ({
   runStorageConsistency,
   runStorageDedup,
   loadStorageHealth,
@@ -5297,7 +5359,7 @@ const {
   backupDownload,
   backupRestoreWebDAV,
   backupRestoreUpload,
-} = createAdminInfraView({
+    } = (infraView = modInfra.createAdminInfraView({
   $,
   state,
   api,
@@ -5312,9 +5374,9 @@ const {
   imaStoragePanelHtml,
   logout,
   PLATFORM_LABELS,
-});
+    })));
 
-const {
+    ({
   initImaMountState,
   imaCollectorHasUnsaved,
   renderImaMountGroups,
@@ -5355,7 +5417,7 @@ const {
   clearImaCollectorDraft,
   restoreImaCollectorOwnerToken,
   imaSafeError,
-} = createAdminImaCollectorView({
+    } = (imaCollectorView = modIma.createAdminImaCollectorView({
   $,
   state,
   api,
@@ -5377,10 +5439,9 @@ const {
   isAdminSettingsPath,
   currentLocalLibraries: () => _localLibsLast,
   focusCookieField,
-});
+    })));
 
-
-const {
+    ({
   loadAdminStats,
   loadAdminDashboard,
   loadAdminAudit,
@@ -5392,7 +5453,7 @@ const {
   renderStatsData,
   openAdminKolFromHealth,
   setPlazaSourceMode,
-} = createAdminDashboardView({
+    } = (dashboardView = modDashboard.createAdminDashboardView({
   $,
   state,
   api,
@@ -5436,13 +5497,13 @@ const {
   imaCollectorFormRevision,
   rateBar,
   currentRouteSeq: () => routeRenderSeq,
-});
+    })));
 
-const {
+    ({
   loadAdminKnowledge,
   switchKnowledgeSettingsTab,
   onKnowledgeTabsKey,
-} = createAdminKnowledgeView({
+    } = (knowledgeView = modKnowledge.createAdminKnowledgeView({
   $,
   state,
   api,
@@ -5491,7 +5552,19 @@ const {
   currentStatsLoadSeq: () => _adminStatsLoadSeq,
   getStatsSnapshot: () => _lastAdminStatsSnapshot,
   setStatsSnapshot: (s) => { _lastAdminStatsSnapshot = s; },
-});
+    })));
+
+    // 工厂返回值含未解构的内部方法（如 ciccView.reset），不能整体 spread 进
+    // INLINE_HANDLERS，否则会给 window 多挂一批名字；按 INLINE_HANDLERS 已有的键回填。
+    const lazyViews = { ...ciccView, ...codesView, ...newsView, ...usersView, ...kolView, ...infraView, ...imaCollectorView, ...dashboardView, ...knowledgeView };
+    for (const name of Object.keys(INLINE_HANDLERS)) {
+      if (typeof lazyViews[name] === "function") INLINE_HANDLERS[name] = lazyViews[name];
+    }
+    adminViewsLoaded = true;
+  })();
+  await adminViewsPromise;
+}
+
 
 
 function replaceRoute(path) {
@@ -5509,14 +5582,17 @@ function migrateHashRoute() {
 
 async function router() {
   stopMarketQuotes();
-  stopCiccPoll();
+  // admin 视图懒加载：这三个 stop 来自 admin 模块，未加载时没有在跑的轮询要停
+  if (adminViewsLoaded) {
+    stopCiccPoll();
+    stopSysLogsTimer();
+    stopImaProgressPoll();
+  }
   const renderSeq = ++routeRenderSeq;
   const token = state.token;
   const sessionGeneration = imaMountState.sessionGeneration;
   stopSettingsPoll();
-  stopSysLogsTimer();
   stopStatsTimer();
-  stopImaProgressPoll();
   stopTimelinePoll();
   // 离开动态页前记录滚动位置，切回时恢复阅读位置
   if (document.querySelector("#feed")) {
@@ -5611,6 +5687,7 @@ async function router() {
         replaceRoute("admin/" + ADMIN_ROUTE_REDIRECTS[param] + (qs ? "&" + qs : ""));
         return;
       }
+      await ensureAdminViews();
       await renderAdmin(param || "content", renderSeq);
     }
     else { replaceRoute("timeline"); return; }
@@ -6152,6 +6229,27 @@ const INLINE_HANDLERS = {
   updateAdminNewsStatus,
 };
 Object.assign(window, INLINE_HANDLERS);
+// admin 视图懒加载：INLINE_HANDLERS 里来自 admin 工厂的名字此刻还是 undefined，
+// 用 window getter 让内联 onclick 始终读到加载后的真实函数（admin 路由渲染前
+// 已经 await ensureAdminViews()，正常流程取到的一直是已就绪的值）。
+// 若在视图就绪前就被调用（例如非 admin 页面里被注入的 admin 内联按钮），
+// 先补齐视图再执行，而不是拿 undefined 静默炸掉。
+for (const name of Object.keys(INLINE_HANDLERS)) {
+  Object.defineProperty(window, name, {
+    configurable: true,
+    get() {
+      const handler = INLINE_HANDLERS[name];
+      if (typeof handler === "function") return handler;
+      return (...args) =>
+        ensureAdminViews().then(() => {
+          const ready = INLINE_HANDLERS[name];
+          return ready(...args);
+        });
+    },
+    // 运行时可覆盖：浏览器测试会把视图方法 Object.assign 回 window
+    set(value) { INLINE_HANDLERS[name] = value; },
+  });
+}
 
 const { startMarketQuotes, stopMarketQuotes } = createMarketView({ api, escapeHtml });
 

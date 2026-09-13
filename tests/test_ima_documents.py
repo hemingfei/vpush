@@ -2658,6 +2658,20 @@ def test_group_aware_document_api_returns_summary_and_filters_items(tmp_path, mo
     all_groups = client.get("/api/ima-documents", headers=headers)
     assert all_groups.status_code == 200
     assert {item["group_id"] for item in all_groups.json()["items"]} == {"banking"}
+    # 首屏瘦身：include_facets=0 只少分面，列表照旧
+    brief = client.get("/api/ima-documents?group=banking&include_facets=0", headers=headers)
+    assert brief.status_code == 200
+    assert [item["group_id"] for item in brief.json()["items"]] == ["banking"]
+    assert brief.json()["document_count"] == 0
+    assert brief.json()["tags"] == []
+    assert brief.json()["tag_counts"] == {}
+    # 分面单独一次请求：只回分面、不回列表
+    facets = client.get("/api/ima-documents?group=banking&facets_only=1", headers=headers)
+    assert facets.status_code == 200
+    assert facets.json()["items"] == []
+    assert facets.json()["has_more"] is False
+    assert facets.json()["offset"] == 0
+    assert facets.json()["document_count"] == 1
     assert client.get("/api/ima-documents?q=银行", headers=headers).json()["items"][0]["media_id"] == "banking-doc"
     assert client.get("/api/ima-documents?day=not-found", headers=headers).json()["items"] == []
 

@@ -2662,6 +2662,9 @@ def purge_ima_document_tags(store: ImaDocumentStore, valid_tags: set[str]) -> in
 
 
 class ImaDocumentService:
+    # 由 app 装配时注入的文件就绪回调（app/main.py:215）；未注入时为 None
+    on_files_ready: Any = None
+
     def __init__(
         self,
         db: Any,
@@ -3172,7 +3175,9 @@ class ImaDocumentService:
         ticker: str = "",
         limit: int = 50,
         offset: int = 0,
+        facets: bool = True,
     ) -> dict[str, Any]:
+        """列表页数据。`facets=False` 只取列表，计数/日期/标签分面省去这一次请求。"""
         if self._index_usable():
             readable_ids = [item.id for item in groups]
             page_limit = max(int(limit), 1)
@@ -3346,6 +3351,7 @@ class ImaDocumentService:
                     ticker=ticker,
                     limit=limit,
                     offset=offset,
+                    facets=facets,
                 )
             counts = page.get("group_counts") or {}
             page["groups"] = [
@@ -3372,14 +3378,18 @@ class ImaDocumentService:
         )
         has_more = len(items) > page_limit
         items = [self._public_list_item(item) for item in items[:page_limit]]
-        facets = self.store.document_facets(group_id=group, groups=groups)
+        store_facets = (
+            self.store.document_facets(group_id=group, groups=groups)
+            if facets
+            else {"days": [], "tags": [], "tag_counts": {}, "document_count": 0}
+        )
         summaries = self.store.group_summary(groups)
         return {
             "items": items,
-            "days": facets["days"],
-            "tags": facets["tags"],
-            "tag_counts": facets["tag_counts"],
-            "document_count": facets["document_count"],
+            "days": store_facets["days"],
+            "tags": store_facets["tags"],
+            "tag_counts": store_facets["tag_counts"],
+            "document_count": store_facets["document_count"],
             "day": str(day or "").strip(),
             "has_more": has_more,
             "offset": page_offset,

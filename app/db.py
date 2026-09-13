@@ -5186,7 +5186,7 @@ class DB:
         tag: str,
         rating: str = "",
         ticker: str = "",
-    ) -> tuple[str, list, str, str | None]:
+    ) -> tuple[str, list, str, str | None, int]:
         clauses = [f"d.group_id IN ({', '.join('?' for _ in groups)})"]
         params: list = list(groups)
         if day:
@@ -5265,6 +5265,7 @@ class DB:
         ticker: str = "",
         limit: int = 50,
         offset: int = 0,
+        facets: bool = True,
     ) -> dict:
         requested_day = str(day or "").strip()
         requested_tag = str(tag or "").strip()
@@ -5283,15 +5284,37 @@ class DB:
             groups, requested_query, requested_day, requested_tag,
             requested_rating, requested_ticker,
         )
-        item_params = ([pattern] * rank_n + list(where_params)) if pattern else list(where_params)
-        rows = self._read_only_rows(
-            f"SELECT d.*, {rank_sql} AS match_rank FROM ima_document_index d "
-            f"WHERE {where_sql} "
-            # 跨年排序：sort_date（YYYY-MM-DD）DESC，空串（unknown）沉底
-            "ORDER BY match_rank DESC, (d.sort_date = '') ASC, d.sort_date DESC, d.name DESC "
-            "LIMIT ? OFFSET ?",
-            (*item_params, page_limit + 1, page_offset),
-        )
+        if pattern:
+            item_params = [pattern] * rank_n + list(where_params)
+            rows = self._read_only_rows(
+                f"SELECT d.*, {rank_sql} AS match_rank FROM ima_document_index d "
+                f"WHERE {where_sql} "
+                # 跨年排序：sort_date（YYYY-MM-DD）DESC，空串（unknown）沉底
+                "ORDER BY match_rank DESC, (d.sort_date = '') ASC, d.sort_date DESC, d.name DESC "
+                "LIMIT ? OFFSET ?",
+                (*item_params, page_limit + 1, page_offset),
+            )
+        else:
+            # 默认列表按组各取一段索引有序切片（idx_ima_doc_group_latest，每组 <= offset+limit+1 行）再归并。
+            # 旧写法用常量 match_rank 开头排序：必须等值扫描覆盖索引再全表排序，冷页缓存下生产实测 6.5-12s。
+            branches: list[str] = []
+            slice_params: list[object] = []
+            for group_id in groups:
+                group_where, group_params, *_ = self._ima_page_filters(
+                    [group_id], "", requested_day, requested_tag,
+                    requested_rating, requested_ticker,
+                )
+                branches.append(
+                    "SELECT * FROM (SELECT d.* FROM ima_document_index d "
+                    f"WHERE {group_where} "
+                    "ORDER BY d.sort_date DESC, d.name DESC LIMIT ?)"
+                )
+                slice_params.extend([*group_params, page_offset + page_limit + 1])
+            rows = self._read_only_rows(
+                f"SELECT * FROM ({' UNION ALL '.join(branches)}) "
+                "ORDER BY sort_date DESC, name DESC LIMIT ? OFFSET ?",
+                (*slice_params, page_limit + 1, page_offset),
+            )
         has_more = len(rows) > page_limit
         items = [_ima_public_document(row) for row in rows[:page_limit]]
 
@@ -5303,6 +5326,21 @@ class DB:
                 "tags": [],
                 "tag_counts": {},
                 "document_count": page_offset + len(items) + int(has_more),
+                "day": requested_day,
+                "has_more": has_more,
+                "offset": page_offset,
+                "group_counts": {},
+            }
+
+        if not facets:
+            # 首屏只要列表：分面（总数/分组/日期/标签）由客户端随后单独取一次，
+            # 冷页缓存下聚合查询比列表切片慢得多，不拖首屏。
+            return {
+                "items": items,
+                "days": [],
+                "tags": [],
+                "tag_counts": {},
+                "document_count": 0,
                 "day": requested_day,
                 "has_more": has_more,
                 "offset": page_offset,
@@ -5360,6 +5398,19 @@ class DB:
             "offset": page_offset,
             "group_counts": group_counts,
         }
+
+    def warm_ima_document_page(self, limit: int = 50) -> int:
+        """启动后预热研报列表页：按首屏同样形态跑一次只读查询，把索引页/数据页带进页缓存。"""
+        groups = [
+            row["group_id"]
+            for row in self._read_only_rows(
+                "SELECT DISTINCT d.group_id FROM ima_document_index d"
+            )
+        ]
+        if not groups:
+            return 0
+        self.ima_document_page(groups, limit=limit)
+        return len(groups)
 
     def ima_document_match_count(
         self,

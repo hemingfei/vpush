@@ -3068,7 +3068,7 @@ def test_ima_documents_all_group_labels_and_single_group_title():
     src = _all_view_source()
     assert "item.group_name" in src
     assert "selectedGroupName" in src or "groupName" in src
-    assert "count" in _fn_body("renderImaDocuments")
+    assert "count" in _fn_body("applyImaListFacets")
 
 
 def test_ima_document_group_switch_refreshes_locally():
@@ -3873,6 +3873,7 @@ def test_ima_document_counts_use_real_total_not_page_plus():
     """列表/阅读器计数用 document_count，不再用当前页条数拼 50+。"""
     src = _all_view_source()
     render = _fn_body("renderImaDocuments")
+    facets = _fn_body("applyImaListFacets")
     more = _fn_body("loadImaDocumentsMore")
     reader = _fn_body("renderImaDocument")
     assert "function imaResolvedCount(" in src
@@ -3880,7 +3881,8 @@ def test_ima_document_counts_use_real_total_not_page_plus():
     assert "function imaReaderBackLabel(" not in src
     assert "imaDocumentsCountLabel(" in render
     assert "snapshot.documentCount" in render
-    assert "data.document_count" in render
+    assert "applyImaListFacets(data" in render
+    assert "data.document_count" in facets
     assert "imaDocumentsCountLabel(" in more
     assert "imaReaderBackLabel" not in reader
     assert "ima-back-count" not in reader
@@ -4671,6 +4673,23 @@ def test_knowledge_parallel_loads_catalog_and_first_page():
     assert "if (mediaId)" in render
 
 
+def test_knowledge_first_paint_defers_list_facets():
+    path_fn = _fn_body("imaDocumentsRequestPath", IMA_JS)
+    facets_fn = _fn_body("refreshImaListFacets", IMA_JS)
+    deferred_fn = _fn_body("imaFacetsDeferred", IMA_JS)
+    list_fn = _fn_body("renderImaDocuments", IMA_JS)
+    # 默认列表首屏只取列表；分面由 facets_only 单独请求补上
+    assert 'if (options.facetsOnly) params.set("facets_only", "1");' in path_fn
+    assert 'else if (imaFacetsDeferred()) params.set("include_facets", "0");' in path_fn
+    assert 'params.get("tag")' in deferred_fn and 'params.get("day")' in deferred_fn
+    assert "if (!imaFacetsDeferred()) return;" in facets_fn
+    assert "api(imaDocumentsRequestPath({ facetsOnly: true }))" in facets_fn
+    # 列表先画、分面后补：不阻塞首屏（发请求不 await）且分面失败不回滚列表
+    assert "void refreshImaListFacets(seq);" in list_fn
+    assert list_fn.index("void refreshImaListFacets(seq);") < list_fn.index("ima-doc-list")
+    assert "ima facets refresh failed" in facets_fn
+
+
 def test_knowledge_cold_route_prefetches_before_session_round_trip():
     router = _fn_body("router")
     render = _fn_body("renderKnowledge")
@@ -4759,7 +4778,7 @@ def test_ima_report_metadata_contract_keeps_existing_capabilities():
 
     assert 'placeholder="搜标题、公司、代码、行业或资料源"' in render
     assert 'params.set("tag"' in _fn_body("imaDocumentsRequestPath")
-    assert "data.days" in render
+    assert "data.days" in _fn_body("applyImaListFacets")
     assert "loadImaDocumentsMore" in src
     assert "loadImaPdf(mediaId, readerSeq)" in reader
     assert "needs_translation" in reader
