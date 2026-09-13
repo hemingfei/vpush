@@ -113,6 +113,32 @@
 6. 清理 VPS：`/tmp/measure`、`/tmp/vpush-v1.12.187`、临时脚本。
 7. 出验收报告：改前/改后数字表 + 未做项 + 回滚命令。
 
+## 验收结果（v1.12.187，2026-09-13）
+
+冻结快照 `/tmp/measure/dav.db`（37,478 行、7 组）拷成两份，同一镜像 `icekale/vpush:v1.12.186` 起两个一次性容器，`posix_fadvise(DONTNEED)` 造冷页缓存，x3 次：
+
+| 指标 | 改前（v1.12.186 代码） | 改后（本分支代码） | 目标 | 结论 |
+| --- | --- | --- | --- | --- |
+| 默认列表查询（全组、limit=50、offset=0，冷页缓存） | 10.5 / 12.1 / 10.7 s | 列表 122.4 / 121.4 / 146.6 ms（P50 122ms）；分面另一次请求 856.6 / 801.6 / 785.8 ms | P50 < 150ms | ✅（~85×） |
+| `EXPLAIN QUERY PLAN` | `SCAN d` + `USE TEMP B-TREE FOR ORDER BY`（37,478 行全表排序） | 每组 `SEARCH d USING INDEX idx_ima_doc_group_latest (group_id=?)`；排序降为每组 ≤51 行（7 组 ≤357 行）切片归并；单组无排序步骤 | 无全表排序 | ✅ |
+| 首屏 JS 静态闭包 | 184.5 KB gz / 19 文件（admin 9 个 73.2 KB） | **110.0 KB gz / 9 文件**（admin 0） | ≤ 120 KB | ✅ |
+| `/api/ima-documents?limit=50` 响应体 | 231 KB raw / 77 KB gz | **69.5 KB raw / 20.7 KB gz** | ≤ 120 KB | ✅ |
+| 全量 pytest | 2194 passed | **2199 passed**（+5 用例）；`node --check app/static/app.js` OK | 绿 | ✅ |
+| VPS 部署 | — | v1.12.187 容器 healthy、APP_VERSION=1.12.187、`/app/app/version.py`+`app.js`+`db.py` md5 与 tag 源一致、启动日志见 `[ima-page-warmup]` 预热 | healthy / md5 对齐 | ✅ |
+
+与计划的差异：
+
+- Phase 3 原计划「移除 `pdf_path`/`abstract_src_hash`/`txt_path` 并截断 abstract」；实测体积大头是分面（`days`/`tags`/`COUNT`）而非单条字段，改为「首屏 `facets=False`、分面随后单独取」。`abstract_src_hash`/`txt_path` 已移除，**`cover_url` 与 `pdf_path` 保留**（`mobile/flutter_app/lib/features/knowledge/knowledge_models.dart:104` 消费 `cover_url`）；体积目标已达成，不再裁剪。
+- Phase 4 的 admin 视图懒加载为最小语义 diff（144+/46-，搬移块保留原缩进），未采用整文件重缩进版本。
+
+复跑命令（VPS 上，容器内）：
+
+```sh
+cp /opt/vpush/data/dav.db /tmp/snap.db && chmod 666 /tmp/snap.db
+docker run --rm -u 0 -v /tmp:/host -w /app -e PYTHONPATH=/app \
+  dav-subscription-vpush:latest python3 -B /app/scripts/ima_page_bench.py --db /host/snap.db --cold --runs 3
+```
+
 ## 风险与回滚
 
 - Phase 1 改动直接影响列表内容顺序，等价性测试是硬门槛；若等价性无法满足，退回「保留 `(sort_date='')` 但去掉 `match_rank`」的中间方案（单组可走索引，多组仍排序）。
