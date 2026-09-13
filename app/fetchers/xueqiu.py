@@ -160,12 +160,6 @@ def _avatar_url(user: dict) -> str:
     return ""
 
 
-# 雪球水印与正文内容烘焙在同一像素层，无法在不破坏图片的前提下可靠移除。
-# 保留兼容函数供旧调用/测试使用，但新采集始终返回原图 URL；历史本地缓存继续可访问。
-def _crop_watermark(img):
-    return img.copy()
-
-
 def _dewatermark_image(url: str, images_dir: str | Path) -> str:
     return url
 

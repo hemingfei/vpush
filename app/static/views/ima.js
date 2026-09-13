@@ -437,7 +437,7 @@ export function createImaView(dependencies) {
     return routeQuery().get("group") || "";
   }
 
-  function imaDocumentsRequestPath() {
+  function imaDocumentsRequestPath(options = {}) {
     const params = new URLSearchParams();
     const query = imaUsableSearchQuery(routeQuery().get("q") || "");
     const day = routeQuery().get("day") || "";
@@ -452,7 +452,17 @@ export function createImaView(dependencies) {
     } else {
       params.set("day", day);
     }
+    // 首屏只取列表：无筛选的全量列表在冷页缓存下分面聚合比列表切片慢一个量级，改由 refreshImaListFacets() 随后单独取
+    if (options.facetsOnly) params.set("facets_only", "1");
+    else if (imaFacetsDeferred()) params.set("include_facets", "0");
     return `/api/ima-documents?${params.toString()}`;
+  }
+
+  // 只有无筛选的默认列表才延后分面（这种全量列表的分面聚合最贵）；搜索/标签/按日路径照旧一次拿全
+  function imaFacetsDeferred() {
+    const params = routeQuery();
+    if (imaUsableSearchQuery(params.get("q") || "")) return false;
+    return !params.get("tag") && !params.get("day");
   }
 
   function imaDocumentsRoute(group, query, day, tag) {
@@ -859,7 +869,17 @@ export function createImaView(dependencies) {
     }
   }
 
-  async function renderKnowledge(seq, encodedMediaId = "") {
+  function prefetchKnowledge(mediaId = "") {
+    const catalog = api("/api/ima-documents/catalog");
+    const documents = mediaId || currentImaListSnapshot() ? null : api(imaDocumentsRequestPath());
+    return {
+      catalog,
+      documents,
+      settled: Promise.allSettled(documents ? [catalog, documents] : [catalog]),
+    };
+  }
+
+  async function renderKnowledge(seq, encodedMediaId = "", prefetched = null) {
     stopImaDocumentsAutoLoad();
     const mediaId = encodedMediaId ? decodeURIComponent(encodedMediaId) : "";
     setPageTitle("研报中心");
@@ -867,15 +887,13 @@ export function createImaView(dependencies) {
       $("#main").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
     }
     if (!mediaId) mountKnowledgeListShell();
-    const catalogPromise = api("/api/ima-documents/catalog");
-    const documentsPromise = mediaId || currentImaListSnapshot() ? null : api(imaDocumentsRequestPath());
+    const requests = prefetched || prefetchKnowledge(mediaId);
+    const documentsPromise = requests.documents;
     const documentsRenderTask = mediaId
       ? null
       : renderImaDocuments(seq, { prefetched: documentsPromise });
     try {
-      const settled = await Promise.allSettled(
-        documentsPromise ? [catalogPromise, documentsPromise] : [catalogPromise]
-      );
+      const settled = await requests.settled;
       if (!routeStillActive(seq)) return;
       const catalogResult = settled[0];
       const documentsResult = documentsPromise ? settled[1] : null;
@@ -1066,38 +1084,14 @@ export function createImaView(dependencies) {
       const selectedGroupInfo = groups.find((group) => String(group.id || "") === selectedGroup);
       const selectedGroupName = selectedGroupInfo?.name || (selectedGroup ? selectedGroup : "全部");
       const title = $("#ima-doc-title");
-      const meta = $("#ima-doc-meta");
       if (title) title.textContent = "最新研报";
-      const resultCount = imaDocumentsCountLabel(!!(query || tag), data.document_count, items.length, data.has_more);
-      if (meta) meta.textContent = resultCount;
       if (!knowledgeMediaIdFromPath()) setPageTitle(feishuSourceDisplay(selectedGroupName).label);
-      const days = Array.isArray(data.days)
-        ? data.days.filter(Boolean)
-        : [...new Set(items.map((item) => item.day).filter(Boolean))];
-      state.imaDocumentsDays = days;
-      const tagTrigger = $("#ima-doc-tag");
-      _imaTagCounts = imaTagCountsFromData(data);
-      _imaDocumentCount = Number(data.document_count) || imaTagCoverageBase(_imaTagCounts, 0);
-      const uniqueTags = Array.isArray(data.tags)
-        ? data.tags.filter(Boolean)
-        : Object.keys(_imaTagCounts);
-      if (tag && !uniqueTags.includes(tag)) uniqueTags.unshift(tag);
-      if (tagTrigger) {
-        const tagLabel = tagTrigger.querySelector(".ima-tag-label");
-        if (tagLabel) tagLabel.textContent = tag || "标签";
-        if (uniqueTags.length || tag) tagTrigger.removeAttribute("hidden");
-        else tagTrigger.hidden = true;
-      }
-      const navSlot = $("#ima-doc-day-nav-slot");
-      if (navSlot) {
-        closeImaDayPicker();
-        navSlot.innerHTML = imaDocumentsDayNavHtml(searchMode ? "" : day, days);
-      }
+      applyImaListFacets(data, items.length, !!data.has_more);
       const hasFilter = !!(query || tag);
-      syncImaDocumentsFilterStatus();
       _imaItems.length = 0;
       _imaItems.push(...items);
       state.imaDocumentsHasMore = !!(paged && data.has_more);
+      void refreshImaListFacets(seq);
       const body = $("#ima-docs-body");
       if (!items.length) {
         body.innerHTML = imaDocumentsEmptyHtml(hasFilter);
@@ -1121,6 +1115,51 @@ export function createImaView(dependencies) {
       body.innerHTML = denied
         ? emptyState("没有访问权限", `<div><button type="button" class="btn-normal" onclick="go('knowledge')">回研报中心</button></div>`)
         : emptyState(`加载失败：${err.message}`, `<div><button type="button" class="btn-normal" onclick="refreshImaDocuments()">重试</button></div>`);
+    }
+  }
+
+  function applyImaListFacets(data, itemCount, hasMore) {
+    const params = routeQuery();
+    const query = imaUsableSearchQuery(params.get("q") || "");
+    const tag = params.get("tag") || "";
+    const day = params.get("day") || "";
+    const searchMode = !!(query || tag);
+    const days = Array.isArray(data.days)
+      ? data.days.filter(Boolean)
+      : [...new Set(_imaItems.map((item) => item.day).filter(Boolean))];
+    state.imaDocumentsDays = days;
+    _imaTagCounts = imaTagCountsFromData(data);
+    _imaDocumentCount = Number(data.document_count) || imaTagCoverageBase(_imaTagCounts, 0);
+    const uniqueTags = Array.isArray(data.tags) ? data.tags.filter(Boolean) : Object.keys(_imaTagCounts);
+    if (tag && !uniqueTags.includes(tag)) uniqueTags.unshift(tag);
+    const tagTrigger = $("#ima-doc-tag");
+    if (tagTrigger) {
+      const tagLabel = tagTrigger.querySelector(".ima-tag-label");
+      if (tagLabel) tagLabel.textContent = tag || "标签";
+      if (uniqueTags.length || tag) tagTrigger.removeAttribute("hidden");
+      else tagTrigger.hidden = true;
+    }
+    const navSlot = $("#ima-doc-day-nav-slot");
+    if (navSlot) {
+      closeImaDayPicker();
+      navSlot.innerHTML = imaDocumentsDayNavHtml(searchMode ? "" : day, days);
+    }
+    const meta = $("#ima-doc-meta");
+    if (meta) {
+      meta.textContent = imaDocumentsCountLabel(searchMode, data.document_count, itemCount, hasMore);
+    }
+    syncImaDocumentsFilterStatus();
+  }
+
+  // 列表已画完才去补分面（计数/日期/标签）；失败仅影响这几个显示，列表照常可用
+  async function refreshImaListFacets(seq) {
+    if (!imaFacetsDeferred()) return;
+    try {
+      const data = await api(imaDocumentsRequestPath({ facetsOnly: true }));
+      if (!routeStillActive(seq)) return;
+      applyImaListFacets(data, _imaItems.length, state.imaDocumentsHasMore);
+    } catch (err) {
+      console.warn("ima facets refresh failed", err);
     }
   }
 
@@ -1567,6 +1606,7 @@ export function createImaView(dependencies) {
     refreshKnowledge,
     subscribeKnowledge,
     unsubscribeKnowledge,
+    prefetchKnowledge,
     renderKnowledge,
     renderImaDocuments,
     imaDocumentsFilterChipsHtml,

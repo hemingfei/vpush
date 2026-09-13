@@ -1032,6 +1032,18 @@ CREATE TABLE IF NOT EXISTS webpush_subscriptions (
 );
 CREATE INDEX IF NOT EXISTS idx_webpush_user ON webpush_subscriptions(user_id);
 
+CREATE TABLE IF NOT EXISTS android_devices (
+    installation_id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    token TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    device_model TEXT NOT NULL DEFAULT '',
+    app_version TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_android_devices_user ON android_devices(user_id);
+
 CREATE TABLE IF NOT EXISTS proxy_pools (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
@@ -1071,6 +1083,8 @@ CREATE INDEX IF NOT EXISTS idx_posts_kol_id ON posts(kol_id);
 CREATE INDEX IF NOT EXISTS idx_posts_fetched_at ON posts(fetched_at);
 CREATE INDEX IF NOT EXISTS idx_posts_published_at ON posts(published_at);
 CREATE INDEX IF NOT EXISTS idx_posts_kol_id_id ON posts(kol_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_platform_id ON posts(platform, id DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_kol_published ON posts(kol_id, published_at);
 CREATE INDEX IF NOT EXISTS idx_push_logs_created_at ON push_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_push_logs_post_id ON push_logs(post_id);
 CREATE INDEX IF NOT EXISTS idx_kol_acl_user ON kol_acl(user_id);
@@ -1552,6 +1566,14 @@ class DB:
             self._conn.execute("ALTER TABLE users ADD COLUMN llm_api_key TEXT NOT NULL DEFAULT ''")
         if "llm_model" not in user_cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN llm_model TEXT NOT NULL DEFAULT ''")
+        if "llm_api_format" not in user_cols:
+            self._conn.execute(
+                "ALTER TABLE users ADD COLUMN llm_api_format TEXT NOT NULL DEFAULT 'chat'"
+            )
+        if "llm_last_status" not in user_cols:
+            self._conn.execute(
+                "ALTER TABLE users ADD COLUMN llm_last_status TEXT NOT NULL DEFAULT ''"
+            )
         if "token_version" not in user_cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0")
         if "last_login_at" not in user_cols:
@@ -1630,6 +1652,21 @@ class DB:
         )
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_webpush_user ON webpush_subscriptions(user_id)"
+        )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS android_devices ("
+            "  installation_id TEXT PRIMARY KEY,"
+            "  user_id INTEGER NOT NULL,"
+            "  token TEXT NOT NULL,"
+            "  provider TEXT NOT NULL,"
+            "  device_model TEXT NOT NULL DEFAULT '',"
+            "  app_version TEXT NOT NULL DEFAULT '',"
+            "  created_at TEXT NOT NULL DEFAULT (datetime('now')),"
+            "  updated_at TEXT NOT NULL DEFAULT (datetime('now'))"
+            ")"
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_android_devices_user ON android_devices(user_id)"
         )
         feishu_oauth_session_cols = {
             row["name"] for row in self._rows("PRAGMA table_info(feishu_document_oauth_sessions)")
@@ -3043,6 +3080,53 @@ class DB:
     def delete_webpush_subscriptions(self, user_id: int) -> None:
         self._execute("DELETE FROM webpush_subscriptions WHERE user_id = ?", (user_id,))
 
+    def list_android_devices(self, user_id: int) -> list[dict]:
+        return self._rows(
+            "SELECT installation_id, user_id, token, provider, device_model, app_version, "
+            "created_at, updated_at FROM android_devices WHERE user_id = ? "
+            "ORDER BY updated_at DESC, installation_id",
+            (user_id,),
+        )
+
+    def count_android_devices(self, user_id: int) -> int:
+        rows = self._rows(
+            "SELECT COUNT(*) AS n FROM android_devices WHERE user_id = ?", (user_id,)
+        )
+        return int(rows[0]["n"]) if rows else 0
+
+    def upsert_android_device(
+        self,
+        installation_id: str,
+        user_id: int,
+        token: str,
+        provider: str,
+        device_model: str = "",
+        app_version: str = "",
+    ) -> None:
+        self._execute(
+            "INSERT INTO android_devices "
+            "(installation_id, user_id, token, provider, device_model, app_version) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(installation_id) DO UPDATE SET "
+            "user_id = excluded.user_id, token = excluded.token, "
+            "provider = excluded.provider, device_model = excluded.device_model, "
+            "app_version = excluded.app_version, updated_at = datetime('now')",
+            (
+                installation_id,
+                user_id,
+                token,
+                provider,
+                device_model or "",
+                app_version or "",
+            ),
+        )
+
+    def delete_android_device(self, installation_id: str, user_id: int) -> None:
+        self._execute(
+            "DELETE FROM android_devices WHERE installation_id = ? AND user_id = ?",
+            (installation_id, user_id),
+        )
+
     def get_user_by_openid(self, openid: str) -> dict | None:
         rows = self._rows("SELECT * FROM users WHERE wechat_openid = ?", (openid,))
         return rows[0] if rows else None
@@ -3099,6 +3183,12 @@ class DB:
             (user_id,),
         )
 
+    def note_llm_status(self, user_id: int, status: str) -> None:
+        self._execute(
+            "UPDATE users SET llm_last_status = ? WHERE id = ?",
+            (status, user_id),
+        )
+
     # update_user 允许写入的字段白名单：拦截任意 key 拼接进 SQL（防注入脚枪）
     _UPDATE_USER_COLUMNS = frozenset({
         "username", "password_hash", "is_admin", "wechat_openid",
@@ -3107,6 +3197,7 @@ class DB:
         "translate_twitter",
         "push_channels", "dnd_start", "dnd_end", "dnd_allow_favorite",
         "feed_token", "bark_key", "llm_api_base", "llm_api_key", "llm_model",
+        "llm_api_format",
         "token_version", "last_login_at",
         "keywords_match_reports", "keywords_match_reports_since",
     })
@@ -4380,6 +4471,7 @@ class DB:
         self._conn.execute("DELETE FROM ima_kb_acl WHERE user_id = ?", (user_id,))
         self._conn.execute("DELETE FROM ima_kb_subscriptions WHERE user_id = ?", (user_id,))
         self._conn.execute("DELETE FROM webpush_subscriptions WHERE user_id = ?", (user_id,))
+        self._conn.execute("DELETE FROM android_devices WHERE user_id = ?", (user_id,))
         self._conn.execute("DELETE FROM user_keywords WHERE user_id = ?", (user_id,))
         self._conn.execute(
             "DELETE FROM knowledge_keyword_notified WHERE user_id = ?", (user_id,)
@@ -4460,10 +4552,14 @@ class DB:
         chunk = 200
         for i in range(0, len(pairs), chunk):
             part = pairs[i : i + chunk]
-            conds = " OR ".join("(platform = ? AND external_id = ?)" for _ in part)
+            # row-value IN 让规划器稳定走 UNIQUE(platform, external_id)，
+            # 200 对 OR 写法会退化成全表扫（慢日志高频项）
+            values = ", ".join("(?, ?)" for _ in part)
             params = [x for pair in part for x in pair]
             for row in self._rows(
-                f"SELECT platform, external_id FROM posts WHERE {conds}", params
+                f"SELECT platform, external_id FROM posts "
+                f"WHERE (platform, external_id) IN (VALUES {values})",
+                params,
             ):
                 found.add((row["platform"], row["external_id"]))
         return found
@@ -4733,6 +4829,9 @@ class DB:
                 ids: list[int | None] = []
                 kw_cache: dict[int, list[str]] = {}
                 for p in posts:
+                    # 写回对象，后面 notify/digest 用的是同一份 Post，不能只在 SQL 里转
+                    p.title = to_simplified(p.title)
+                    p.content = to_simplified(p.content)
                     detail_json = _detail_json(p.detail)
                     images_json = json.dumps(p.images, ensure_ascii=False) if p.images else ""
                     tags_json = (
@@ -5200,11 +5299,19 @@ class DB:
         return (rows[0]["hosted_url"] if rows else "") or ""
 
     def recent_mirrorable_image_rows(self, limit: int = 40) -> list[dict]:
-        """最近的镜像源图（X / Truth Social），供图床缓慢回填。"""
-        return self._rows(
-            "SELECT images FROM posts WHERE platform IN ('twitter', 'truth') "
-            "AND (images LIKE '%twimg.com%' OR images LIKE '%truthsocial.com%') "
-            "ORDER BY id DESC LIMIT ?",
+        """最近的镜像源图（X / Truth Social），供图床缓慢回填。
+
+        UNION ALL 双分支各自走 (platform, id DESC) 索引逆序扫，LIKE 只在
+        命中平台内过滤，不再全表扫（批处理查询走只读连接不占写锁）。
+        """
+        return self._read_only_rows(
+            "SELECT images FROM ("
+            "SELECT id, images FROM posts WHERE platform = 'twitter' "
+            "AND images LIKE '%twimg.com%' "
+            "UNION ALL "
+            "SELECT id, images FROM posts WHERE platform = 'truth' "
+            "AND images LIKE '%truthsocial.com%'"
+            ") ORDER BY id DESC LIMIT ?",
             (max(int(limit), 1),),
         )
 
@@ -6611,7 +6718,7 @@ class DB:
         tag: str,
         rating: str = "",
         ticker: str = "",
-    ) -> tuple[str, list, str, str | None]:
+    ) -> tuple[str, list, str, str | None, int]:
         clauses = [f"d.group_id IN ({', '.join('?' for _ in groups)})"]
         params: list = list(groups)
         if day:
@@ -6690,6 +6797,7 @@ class DB:
         ticker: str = "",
         limit: int = 50,
         offset: int = 0,
+        facets: bool = True,
     ) -> dict:
         requested_day = str(day or "").strip()
         requested_tag = str(tag or "").strip()
@@ -6708,15 +6816,37 @@ class DB:
             groups, requested_query, requested_day, requested_tag,
             requested_rating, requested_ticker,
         )
-        item_params = ([pattern] * rank_n + list(where_params)) if pattern else list(where_params)
-        rows = self._read_only_rows(
-            f"SELECT d.*, {rank_sql} AS match_rank FROM ima_document_index d "
-            f"WHERE {where_sql} "
-            # 跨年排序：sort_date（YYYY-MM-DD）DESC，空串（unknown）沉底
-            "ORDER BY match_rank DESC, (d.sort_date = '') ASC, d.sort_date DESC, d.name DESC "
-            "LIMIT ? OFFSET ?",
-            (*item_params, page_limit + 1, page_offset),
-        )
+        if pattern:
+            item_params = [pattern] * rank_n + list(where_params)
+            rows = self._read_only_rows(
+                f"SELECT d.*, {rank_sql} AS match_rank FROM ima_document_index d "
+                f"WHERE {where_sql} "
+                # 跨年排序：sort_date（YYYY-MM-DD）DESC，空串（unknown）沉底
+                "ORDER BY match_rank DESC, (d.sort_date = '') ASC, d.sort_date DESC, d.name DESC "
+                "LIMIT ? OFFSET ?",
+                (*item_params, page_limit + 1, page_offset),
+            )
+        else:
+            # 默认列表按组各取一段索引有序切片（idx_ima_doc_group_latest，每组 <= offset+limit+1 行）再归并。
+            # 旧写法用常量 match_rank 开头排序：必须等值扫描覆盖索引再全表排序，冷页缓存下生产实测 6.5-12s。
+            branches: list[str] = []
+            slice_params: list[object] = []
+            for group_id in groups:
+                group_where, group_params, *_ = self._ima_page_filters(
+                    [group_id], "", requested_day, requested_tag,
+                    requested_rating, requested_ticker,
+                )
+                branches.append(
+                    "SELECT * FROM (SELECT d.* FROM ima_document_index d "
+                    f"WHERE {group_where} "
+                    "ORDER BY d.sort_date DESC, d.name DESC LIMIT ?)"
+                )
+                slice_params.extend([*group_params, page_offset + page_limit + 1])
+            rows = self._read_only_rows(
+                f"SELECT * FROM ({' UNION ALL '.join(branches)}) "
+                "ORDER BY sort_date DESC, name DESC LIMIT ? OFFSET ?",
+                (*slice_params, page_limit + 1, page_offset),
+            )
         has_more = len(rows) > page_limit
         items = [_ima_public_document(row) for row in rows[:page_limit]]
 
@@ -6728,6 +6858,21 @@ class DB:
                 "tags": [],
                 "tag_counts": {},
                 "document_count": page_offset + len(items) + int(has_more),
+                "day": requested_day,
+                "has_more": has_more,
+                "offset": page_offset,
+                "group_counts": {},
+            }
+
+        if not facets:
+            # 首屏只要列表：分面（总数/分组/日期/标签）由客户端随后单独取一次，
+            # 冷页缓存下聚合查询比列表切片慢得多，不拖首屏。
+            return {
+                "items": items,
+                "days": [],
+                "tags": [],
+                "tag_counts": {},
+                "document_count": 0,
                 "day": requested_day,
                 "has_more": has_more,
                 "offset": page_offset,
@@ -6786,6 +6931,19 @@ class DB:
             "group_counts": group_counts,
         }
 
+    def warm_ima_document_page(self, limit: int = 50) -> int:
+        """启动后预热研报列表页：按首屏同样形态跑一次只读查询，把索引页/数据页带进页缓存。"""
+        groups = [
+            row["group_id"]
+            for row in self._read_only_rows(
+                "SELECT DISTINCT d.group_id FROM ima_document_index d"
+            )
+        ]
+        if not groups:
+            return 0
+        self.ima_document_page(groups, limit=limit)
+        return len(groups)
+
     def ima_document_match_count(
         self,
         readable_group_ids: list[str],
@@ -6839,42 +6997,106 @@ class DB:
         )
         if not found:
             return items
+        from .llm import report_rating_zh
+
         for item in items:
             extra = found.get((str(item.get("group_id") or ""), str(item.get("media_id") or "")))
             if extra:
+                extra = dict(extra)
+                extra["rating"] = report_rating_zh(extra.get("rating") or "")
                 item["extraction"] = extra
         return items
 
     def pending_report_extractions(
-        self, limit: int = 40, group_ids: list[str] | None = None
+        self,
+        limit: int = 40,
+        group_ids: list[str] | None = None,
+        min_sort_date: str = "",
+        per_group: int | None = None,
     ) -> list[dict]:
-        """待抽取研报：有 txt 或 pdf、尚无抽取行；新文档优先（增量先跟上，存量慢慢回刷）。"""
+        """待抽取研报：有 txt 或 pdf、尚无抽取行，且可限制最早研报日期。
+
+        per_group 开启按库轮转公平配额（ROW_NUMBER 分组编号后 rn<=N），
+        避免单个大库的存量垄断队列头导致其他库饿死；空则退化为全局新→旧。
+        """
         params: list = []
         where = ["d.has_txt = 1 AND d.txt_path != '' OR d.has_pdf = 1 AND d.pdf_path != ''"]
         groups = [str(g).strip() for g in (group_ids or []) if str(g).strip()]
         if groups:
             where.append(f"d.group_id IN ({', '.join('?' for _ in groups)})")
             params.extend(groups)
+        if min_sort_date:
+            where.append("d.sort_date >= ?")
+            params.append(min_sort_date)
+        if per_group:
+            params.append(max(int(per_group), 1))
         params.append(max(int(limit), 1))
-        return self._rows(
-            "SELECT d.group_id, d.media_id, d.txt_path, d.pdf_path, d.name, d.sort_date "
+        rn_filter = "WHERE rn <= ? " if per_group else ""
+        return self._read_only_rows(
+            "SELECT group_id, media_id, txt_path, pdf_path, name, sort_date FROM ("
+            "SELECT d.group_id AS group_id, d.media_id AS media_id, d.txt_path AS txt_path, "
+            "d.pdf_path AS pdf_path, d.name AS name, d.sort_date AS sort_date, "
+            "ROW_NUMBER() OVER (PARTITION BY d.group_id "
+            "ORDER BY (d.sort_date = '') ASC, d.sort_date DESC, d.media_id) AS rn "
             "FROM ima_document_index d LEFT JOIN report_extractions re "
             "ON re.group_id = d.group_id AND re.media_id = d.media_id "
             f"WHERE ({where[0]}) AND {' AND '.join(where[1:]) or '1=1'} "
-            "AND re.media_id IS NULL "
-            "ORDER BY (d.sort_date = '') ASC, d.sort_date DESC, d.group_id, d.media_id "
-            "LIMIT ?",
+            "AND re.media_id IS NULL"
+            f") {rn_filter}ORDER BY sort_date DESC, group_id LIMIT ?",
             params,
         )
 
-    def reset_report_extractions(self, statuses: tuple[str, ...]) -> int:
-        """删除指定失败态，使修复后的抽取管线可以重新处理；成功结果不受影响。"""
+    def report_extraction_group_ids(self, min_sort_date: str = "") -> list[str]:
+        """列出可抽取的研报库；飞书个人文档不参与研报结构化。"""
+        params: list[str] = []
+        where = [
+            "group_id NOT LIKE 'feishu-%'",
+            "(has_txt = 1 AND txt_path != '' OR has_pdf = 1 AND pdf_path != '')",
+        ]
+        if min_sort_date:
+            where.append("sort_date >= ?")
+            params.append(min_sort_date)
+        rows = self._rows(
+            "SELECT DISTINCT group_id FROM ima_document_index "
+            f"WHERE {' AND '.join(where)} ORDER BY group_id",
+            params,
+        )
+        return [str(row["group_id"]) for row in rows]
+
+    def reset_report_extractions(
+        self,
+        statuses: tuple[str, ...],
+        group_ids: list[str] | None = None,
+        min_sort_date: str = "",
+    ) -> int:
+        """删除指定范围的失败态，使修复后的抽取管线可以重新处理。"""
         recoverable = tuple(
             status for status in statuses if status in {"failed", "notext", "empty", "nofile"}
         )
         if not recoverable:
             return 0
         placeholders = ", ".join("?" for _ in recoverable)
+        groups = [str(group).strip() for group in (group_ids or []) if str(group).strip()]
+
+        def scope(alias: str) -> tuple[str, list[str]]:
+            conditions = [f"{alias}.status IN ({placeholders})"]
+            params = list(recoverable)
+            if groups:
+                conditions.append(
+                    f"{alias}.group_id IN ({', '.join('?' for _ in groups)})"
+                )
+                params.extend(groups)
+            if min_sort_date:
+                conditions.append(
+                    "EXISTS (SELECT 1 FROM ima_document_index d "
+                    f"WHERE d.group_id = {alias}.group_id AND d.media_id = {alias}.media_id "
+                    "AND d.sort_date >= ?)"
+                )
+                params.append(min_sort_date)
+            return " AND ".join(conditions), params
+
+        ticker_scope, ticker_params = scope("re")
+        extraction_scope, extraction_params = scope("report_extractions")
         with self._lock:
             try:
                 self._conn.execute("BEGIN")
@@ -6883,12 +7105,12 @@ class DB:
                     "SELECT 1 FROM report_extractions re "
                     "WHERE re.group_id = report_extraction_tickers.group_id "
                     "AND re.media_id = report_extraction_tickers.media_id "
-                    f"AND re.status IN ({placeholders}))",
-                    recoverable,
+                    f"AND {ticker_scope})",
+                    ticker_params,
                 )
                 cursor = self._conn.execute(
-                    f"DELETE FROM report_extractions WHERE status IN ({placeholders})",
-                    recoverable,
+                    f"DELETE FROM report_extractions WHERE {extraction_scope}",
+                    extraction_params,
                 )
                 self._conn.commit()
                 return max(int(cursor.rowcount), 0)
@@ -7290,14 +7512,19 @@ class DB:
         """保存最近一次标签维护摘要。"""
         self.set_setting(TAG_MAINTAIN_LAST_KEY, json.dumps(data, ensure_ascii=False))
 
-    def aggregate_post_tags(self, limit: int = 50) -> list[str]:
+    def aggregate_post_tags(self, limit: int = 50, ttl_seconds: int = 600) -> list[str]:
         """聚合贴文里出现过的全部标签（去重，按出现次数降序）。
 
         供前端动态标签筛选下拉使用（词表标签之外的实际标签，如股票名）。
-        全表扫描 tags 列；1500+ 帖量级一次扫描可接受。
+        全表扫描 + Python 聚合，结果带 TTL 缓存（标签变化低频，10 分钟内
+        新标签可接受）；防缓存击穿用 monotonic 时间戳。
         """
+        now = time.monotonic()
+        cached = getattr(self, "_tag_aggregate_cache", None)
+        if cached is not None and now - getattr(self, "_tag_aggregate_at", 0.0) < ttl_seconds:
+            return cached[:limit]
         counts: dict[str, int] = {}
-        for row in self._rows("SELECT tags FROM posts WHERE tags != ''"):
+        for row in self._read_only_rows("SELECT tags FROM posts WHERE tags != ''"):
             raw = row["tags"]
             if not raw:
                 continue
@@ -7311,7 +7538,10 @@ class DB:
                 tag = str(tag).strip()
                 if tag:
                     counts[tag] = counts.get(tag, 0) + 1
-        return [tag for tag, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))][:limit]
+        ranked = [tag for tag, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+        self._tag_aggregate_cache = ranked
+        self._tag_aggregate_at = now
+        return ranked[:limit]
 
     # ---- 每日精选投递状态（按渠道幂等） ----
     def daily_report_delivered(self, user_id: int, report_date: str, channel: str) -> bool:

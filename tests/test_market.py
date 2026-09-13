@@ -1,10 +1,23 @@
+import threading
+import time
 from datetime import datetime
 from unittest.mock import patch
 
 import httpx
 import pytest
 
-from app.market import CN_TZ, GROUPS, MINUTE_SYMBOLS, NY_TZ, MarketQuotes, default_group, is_us_market_holiday, parse_intraday, parse_quotes, quote_status
+from app.market import (
+    CN_TZ,
+    GROUPS,
+    MINUTE_SYMBOLS,
+    NY_TZ,
+    MarketQuotes,
+    default_group,
+    is_us_market_holiday,
+    parse_intraday,
+    parse_quotes,
+    quote_status,
+)
 
 
 def quote_payload(price="3930.12", timestamp="20260904103000", group="day"):
@@ -19,6 +32,13 @@ def quote_payload(price="3930.12", timestamp="20260904103000", group="day"):
         fields[30:33] = [formatted, "-11.97", "-0.30"]
         rows.append(f'v_{symbol}="{"~".join(fields)}";')
     return "\n".join(rows)
+
+
+def wait_for_market_refresh(cache, group):
+    deadline = time.perf_counter() + 1
+    while cache._cache[group].get("refreshing") and time.perf_counter() < deadline:
+        time.sleep(0.01)
+    assert not cache._cache[group].get("refreshing")
 
 
 def test_parse_quotes_preserves_order_and_exchange_time():
@@ -103,6 +123,8 @@ def test_shared_cache_failure_cooldown_and_recovery():
         assert get.call_count == 1
         clock.return_value = 131
         get.side_effect = httpx.ReadTimeout("unavailable")
+        cache.snapshot("day")
+        wait_for_market_refresh(cache, "day")
         failed = cache.snapshot("day")
         assert failed["stale"]
         assert [item["price"] for item in failed["items"]] == [item["price"] for item in first["items"]]
@@ -111,7 +133,95 @@ def test_shared_cache_failure_cooldown_and_recovery():
         assert get.call_count == 2
         clock.return_value = 162
         get.side_effect = None
+        cache.snapshot("day")
+        wait_for_market_refresh(cache, "day")
         assert not cache.snapshot("day")["stale"]
+
+
+def test_expired_warm_cache_returns_while_one_background_refresh_runs():
+    cache = MarketQuotes()
+    old_response = httpx.Response(
+        200,
+        content=quote_payload(price="3930.12").encode("gb18030"),
+        request=httpx.Request("GET", "https://qt.gtimg.cn"),
+    )
+    new_response = httpx.Response(
+        200,
+        content=quote_payload(price="4000.00").encode("gb18030"),
+        request=httpx.Request("GET", "https://qt.gtimg.cn"),
+    )
+    refresh_started = threading.Event()
+    release_refresh = threading.Event()
+
+    def get_quote(*_args, **_kwargs):
+        if get.call_count == 1:
+            return old_response
+        refresh_started.set()
+        release_refresh.wait(timeout=1)
+        return new_response
+
+    with (
+        patch("app.market.httpx.Client") as factory,
+        patch("app.market.time.monotonic", return_value=100) as clock,
+        patch.object(cache, "_intraday", side_effect=lambda client, symbol: (symbol, None)),
+    ):
+        get = factory.return_value.__enter__.return_value.get
+        get.side_effect = get_quote
+        first = cache.snapshot("day")
+        assert first["items"][0]["price"] == 3930.12
+
+        clock.return_value = 131
+        started = time.perf_counter()
+        expired = cache.snapshot("day")
+        elapsed = time.perf_counter() - started
+
+        assert elapsed < 0.1
+        assert expired["items"][0]["price"] == 3930.12
+        assert refresh_started.wait(timeout=1)
+        cache.snapshot("day")
+        assert get.call_count == 2
+
+        release_refresh.set()
+        wait_for_market_refresh(cache, "day")
+        assert cache.snapshot("day")["items"][0]["price"] == 4000.0
+
+
+def test_concurrent_cold_request_returns_stale_placeholders():
+    cache = MarketQuotes()
+    refresh_started = threading.Event()
+    release_refresh = threading.Event()
+    first_result = {}
+    response = httpx.Response(
+        200,
+        content=quote_payload().encode("gb18030"),
+        request=httpx.Request("GET", "https://qt.gtimg.cn"),
+    )
+
+    def get_quote(*_args, **_kwargs):
+        refresh_started.set()
+        release_refresh.wait(timeout=1)
+        return response
+
+    with (
+        patch("app.market.httpx.Client") as factory,
+        patch.object(cache, "_intraday", side_effect=lambda client, symbol: (symbol, None)),
+    ):
+        factory.return_value.__enter__.return_value.get.side_effect = get_quote
+        first = threading.Thread(
+            target=lambda: first_result.setdefault("snapshot", cache.snapshot("day"))
+        )
+        first.start()
+        assert refresh_started.wait(timeout=1)
+
+        concurrent = cache.snapshot("day")
+        assert concurrent["stale"]
+        assert len(concurrent["items"]) == len(GROUPS["day"])
+        assert all("price" not in item for item in concurrent["items"])
+
+        release_refresh.set()
+        first.join(timeout=1)
+        assert not first.is_alive()
+        assert not first_result["snapshot"]["stale"]
 
 
 def test_cold_failure_returns_no_fabricated_quotes():
@@ -223,15 +333,21 @@ def test_intraday_cache_refresh_failure_and_trading_day_rollover():
         assert minute.call_count == 6
         clock.return_value = 131
         minute.side_effect = lambda client, symbol: (symbol, None)
+        cache.snapshot("day")
+        wait_for_market_refresh(cache, "day")
         failed = cache.snapshot("day")["items"][0]
         assert failed["intraday"] == series and failed["intraday_stale"]
         clock.return_value = 162
         get.return_value = httpx.Response(200, content=quote_payload(timestamp="20260907093000").encode("gb18030"), request=httpx.Request("GET", "https://qt.gtimg.cn"))
         minute.side_effect = lambda client, symbol: (symbol, series)
+        cache.snapshot("day")
+        wait_for_market_refresh(cache, "day")
         rollover = cache.snapshot("day")["items"][0]
         assert "intraday" not in rollover and rollover["intraday_stale"]
         clock.return_value = 193
         series = {**series, "date": "2026-09-07"}
+        cache.snapshot("day")
+        wait_for_market_refresh(cache, "day")
         recovered = cache.snapshot("day")["items"][0]
         assert recovered["intraday"]["date"] == "2026-09-07" and not recovered["intraday_stale"]
 

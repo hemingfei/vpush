@@ -56,9 +56,10 @@ from .fetchers.base import (
     PLATFORM_LABELS,
     Fetcher,
     Post,
+    already_chinese as _already_chinese,
     is_collapsed_translation,
     is_stale_backfill,
-    parse_published_at,
+    quoted_author_text,
     twitter_translate_enabled,
     with_twitter_display,
 )
@@ -317,18 +318,8 @@ def _effective_interval(
     return effective
 
 
-_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _MYMEMORY_COOLDOWN = 30 * 60
 _mymemory_skip_until = 0.0
-
-
-def _already_chinese(text: str) -> bool:
-    """原文已是中文就不必再译（X/MyMemory 都会空耗并刷 429）。"""
-    cjk = len(_CJK_RE.findall(text))
-    if cjk < 8:
-        return False
-    latin = sum(1 for ch in text if ch.isascii() and ch.isalpha())
-    return cjk >= latin
 
 
 def _x_translation_text(payload) -> str:
@@ -386,7 +377,7 @@ def translate_text(
     global _mymemory_skip_until
 
     text = (text or "").strip()
-    if not text or _already_chinese(text):
+    if not text or _already_chinese(quoted_author_text(text)):
         return text
     if twitter_cookie is None:
         from .fetchers.twitter import configured_twitter_cookie
@@ -399,6 +390,9 @@ def translate_text(
         x_cookie = parse_twitter_cookie(twitter_cookie)
         if x_cookie.get("auth_token") and x_cookie.get("ct0"):
             try:
+                # POST 只译推文本体，引用是我们拼进去的
+                if tweet_id and quoted_author_text(text) != text:
+                    tweet_id = None
                 if tweet_id:
                     payload = {
                         "content_type": "POST",
@@ -1540,60 +1534,48 @@ def _buffer_secondary_subscribers(db, kol_id: int, post: Post, secondary_buffer)
             secondary_buffer.setdefault(user["id"], []).append(post)
 
 
-def _user_llm_config(user: dict, fallback=None, db: DB | None = None):
-    """用户自配 LLM 优先；没配或地址不安全时回退站点 Grok。"""
+def _user_llm_config(user: dict, db: DB | None = None):
+    """用户自配 LLM。没 Key 或地址不安全则不用 AI 摘要，不回退站点。"""
     from .db import user_plain_secret
 
     if not user.get("llm_api_key"):
-        return fallback
+        return None
     api_key = user_plain_secret(user, "llm_api_key", db)
     if not api_key:
-        return fallback
+        return None
     from types import SimpleNamespace
 
     from .url_safety import is_allowed_user_llm_base
 
-    api_base = (user.get("llm_api_base") or "").strip() or (
-        getattr(fallback, "api_base", "") if fallback else ""
-    )
+    api_base = (user.get("llm_api_base") or "").strip()
     if not api_base or not is_allowed_user_llm_base(api_base):
-        return fallback
+        return None
     return SimpleNamespace(
         api_base=api_base,
         api_key=api_key,
-        model=(user.get("llm_model") or "").strip()
-        or (getattr(fallback, "model", "") if fallback else "")
-        or "grok-4.6",
+        model=(user.get("llm_model") or "").strip() or "grok-4.6",
+        api_format=(user.get("llm_api_format") or "chat"),
         user_supplied=True,
     )
 
 
 def _system_llm_config(db: DB, fallback=None):
-    """站点 LLM：管理员推送设置（Grok）优先，没有再退环境变量。"""
-    from types import SimpleNamespace
-
-    from .db import user_plain_secret
-    from .url_safety import is_allowed_trusted_llm_base
-
-    for user in db.list_users():
-        if user.get("is_admin"):
-            api_key = user_plain_secret(user, "llm_api_key", db)
-            api_base = (user.get("llm_api_base") or "").strip()
-            if api_key and is_allowed_trusted_llm_base(api_base):
-                return SimpleNamespace(
-                    api_base=api_base,
-                    api_key=api_key,
-                    model=(user.get("llm_model") or "").strip() or "grok-4.6",
-                    user_supplied=False,
-                )
+    """站点 LLM：只用来自环境变量/启动配置，不用管理员个人网关。"""
     if fallback and getattr(fallback, "api_key", ""):
         return fallback
     return None
 
 
-def _admin_llm_config(db: DB, fallback=None):
-    """旧名兼容，等同 _system_llm_config。"""
-    return _system_llm_config(db, fallback)
+def _record_llm_status(db: DB, user: dict, llm_cfg, summary) -> None:
+    if llm_cfg is None:
+        return
+    status = "ok" if summary else "fallback"
+    try:
+        db.note_llm_status(user["id"], status)
+    except Exception:
+        logger.warning("记录 LLM 状态失败 user=%s", user.get("username"))
+    if status == "fallback":
+        logger.warning("LLM 摘要回退 user=%s", user.get("username"))
 
 
 def _send_digest_bundle(
@@ -1657,9 +1639,8 @@ def notify_digest_subscribers(
 ) -> None:
     """把合并摘要推送给订阅了该大V的用户（各自绑定的渠道）。
 
-    用户自配 LLM 优先，否则用站点 Grok（管理员推送设置 / 环境变量）。
-    生成失败自动降级，不影响摘要推送。summary_cache 透传给 summarize_posts，
-    同一批帖文、同一模型的多个订阅用户只调一次大模型。
+    只有用户自己配了 Key 才做 AI 摘要；否则普通列表。生成失败自动降级。
+    summary_cache 透传给 summarize_posts，同一批帖文、同一模型的多个订阅用户只调一次大模型。
     """
     if notifiers_config is None or not posts:
         return
@@ -1668,7 +1649,6 @@ def notify_digest_subscribers(
     from .channels import build_channel_notifier, iter_user_channels
 
     client = httpx.Client(timeout=15)
-    site_llm = _system_llm_config(db, llm_config)
     try:
         subscribers = db.subscribers_of_kol(kol["id"])
         keywords_by_user = db.get_users_keywords([u["id"] for u in subscribers])
@@ -1702,7 +1682,7 @@ def notify_digest_subscribers(
                 with_twitter_display(p, twitter_translate_enabled(user)) for p in matched
             ]
             summary = None
-            llm_cfg = _user_llm_config(user, site_llm, db=db)
+            llm_cfg = _user_llm_config(user, db=db)
             if llm_cfg is not None:
                 try:
                     from .llm import summarize_posts
@@ -1712,6 +1692,7 @@ def notify_digest_subscribers(
                     logger.warning(
                         "LLM 摘要异常 user=%s kol=%s err=%s", user["username"], kol["name"], exc
                     )
+            _record_llm_status(db, user, llm_cfg, summary)
             for channel in iter_user_channels(user, notifiers_config, db):
                 notifier = build_channel_notifier(
                     channel,
@@ -2108,6 +2089,7 @@ class Scheduler:
         self._stop = asyncio.Event()
         self._last_cleanup = 0.0
         self._last_report_extract = time.monotonic()
+        self._report_extract_running = False
         self._last_digest_flush = time.monotonic()
         self._last_xueqiu_probe = time.monotonic()
         self._last_cookie_keepalive = time.monotonic()
@@ -3521,14 +3503,26 @@ class Scheduler:
             except Exception:  # noqa: BLE001
                 logger.exception("未激活用户清理失败")
             # 研报结构化抽取（每小时一批，LLM 离线批处理；失败不影响主流程）
-            if now_mono - self._last_report_extract > 3600:
+            extract_interval = int(self.db.get_setting("report_extract_interval_seconds") or 3600)
+            if (
+                now_mono - self._last_report_extract > extract_interval
+                and not self._report_extract_running
+            ):
+                # 大批次单轮可达 20-30 分钟：后台任务化，主循环的采集/推送不被阻塞
                 self._last_report_extract = now_mono
-                try:
-                    done = await asyncio.to_thread(self._run_report_extraction_task)
-                    if done:
-                        logger.info("研报结构化抽取本轮完成 %d 篇", done)
-                except Exception:  # noqa: BLE001
-                    logger.exception("研报结构化抽取异常")
+                self._report_extract_running = True
+
+                async def _run_extract_round():
+                    try:
+                        done = await asyncio.to_thread(self._run_report_extraction_task)
+                        if done:
+                            logger.info("研报结构化抽取本轮完成 %d 篇", done)
+                    except Exception:  # noqa: BLE001
+                        logger.exception("研报结构化抽取异常")
+                    finally:
+                        self._report_extract_running = False
+
+                asyncio.create_task(_run_extract_round(), name="report-extraction")
 
             # 定期清理过期帖子（默认每 6 小时检查一次）；保留天数后台可调，
             # 与其他抓取设置同走 config_* 覆盖（0 = 不删除）
@@ -3804,19 +3798,17 @@ class Scheduler:
         )
 
         summary = None
+        llm_cfg = None
         if use_llm:
             from .llm import summarize_posts
 
-            llm_cfg = _user_llm_config(
-                user,
-                _system_llm_config(self.db, getattr(self, "llm_config", None)),
-                db=self.db,
-            )
+            llm_cfg = _user_llm_config(user, db=self.db)
             if llm_cfg is not None:
                 try:
                     summary = summarize_posts(posts, llm_cfg)
                 except Exception as exc:  # noqa: BLE001 - 摘要失败降级，不影响汇总
                     logger.warning("LLM 摘要异常 user=%s err=%s", user["username"], exc)
+        _record_llm_status(self.db, user, llm_cfg, summary)
 
         client = httpx.Client(timeout=15)
         try:
@@ -3900,12 +3892,13 @@ class Scheduler:
         return self.db.get_setting("stock_alias_last_date") != datetime.now().strftime("%Y-%m-%d")
 
     def _run_report_extraction_task(self) -> int:
-        """研报结构化抽取：每小时一批，读 txt → LLM → 结构化落库。
+        """研报结构化抽取：每小时处理最近三天的一批研报。
 
         开关与预算都在 settings：report_extract_enabled（默认开，='0' 关）、
-        report_extract_model（默认 gemini-3.8-flash-high）、
-        report_extract_daily_limit（默认 1000 篇/天）。LLM 用站点配置
-        （管理员个人 Grok/Gemini 网关），批处理不走实时路径。
+        report_extract_interval_seconds（默认 3600）、report_extract_batch（默认 80）、
+        report_extract_backfill_days（默认 2，0=不限窗口回填存量）、
+        report_extract_model（默认跟随站点 LLM 模型）、
+        report_extract_daily_limit（默认 1000 篇/天）。LLM 用站点环境变量，批处理不走实时路径。
         """
         db = self.db
         if db.get_setting("report_extract_enabled") == "0":
@@ -3919,33 +3912,52 @@ class Scheduler:
         site_llm = _system_llm_config(db, self.llm_config)
         if site_llm is None:
             return 0
-        model = db.get_setting("report_extract_model") or "gemini-3.8-flash-high"
-        # 默认圈定研报类知识库（投行/中金/SemiAnalysis/外行），排除飞书短讯类
-        groups = [
-            g.strip()
-            for g in (
-                db.get_setting("report_extract_groups")
-                or "7479082602225992,local-cicc-research,7476629605476515,legacy"
-            ).split(",")
-            if g.strip()
-        ]
+        # 模型默认跟随站点 LLM 解析结果（isolate 后为 env 配置的模型），
+        # report_extract_model 仅作显式覆盖——覆盖值必须与站点 base 兼容
+        model = db.get_setting("report_extract_model") or site_llm.model
+        # 抽取窗口默认只看最近 2 天（增量及时性）；回填存量时调大
+        # report_extract_backfill_days（0 = 不限），配合按库轮转不会饿死增量
+        backfill_days = int(db.get_setting("report_extract_backfill_days") or 2)
+        min_sort_date = (
+            (datetime.now(CN_TZ).date() - timedelta(days=backfill_days)).isoformat()
+            if backfill_days > 0
+            else ""
+        )
+        configured_groups = db.get_setting("report_extract_groups")
+        groups = (
+            [group.strip() for group in configured_groups.split(",") if group.strip()]
+            if configured_groups
+            else db.report_extraction_group_ids(min_sort_date=min_sort_date)
+        )
         from .llm import extract_report_structure
         from .report_text import pdf_first_pages_text as _pdf_first_pages_text
+        from .report_text import usable_report_text
         from .stock_universe import bundled_universe_codes
 
         universe = bundled_universe_codes()
         resolve = self.ima_archive_file
         if resolve is None:
             return 0
-        pipeline_version = "2"
+        pipeline_version = "4"
         version_key = "report_extract_pipeline_version"
         if db.get_setting(version_key) != pipeline_version:
-            reset = db.reset_report_extractions(("failed", "notext", "empty", "nofile"))
+            reset = db.reset_report_extractions(
+                ("failed", "notext", "empty", "nofile"),
+                group_ids=groups,
+                min_sort_date=min_sort_date,
+            )
             db.set_setting(version_key, pipeline_version)
             if reset:
                 logger.info("研报结构化抽取：重新排队可恢复结果 %d 篇", reset)
-        batch = min(80, daily_limit - done_today)
-        docs = db.pending_report_extractions(limit=batch, group_ids=groups or None)
+        batch = min(int(db.get_setting("report_extract_batch") or 80), daily_limit - done_today)
+        # 按库轮转公平配额：避免单库存量垄断队列头（其余库饿死）
+        per_group = max(1, batch // len(groups)) if groups else None
+        docs = db.pending_report_extractions(
+            limit=batch,
+            group_ids=groups,
+            min_sort_date=min_sort_date,
+            per_group=per_group,
+        )
         if not docs:
             return 0
         import hashlib
@@ -3955,7 +3967,7 @@ class Scheduler:
         for doc in docs:
             group_id = str(doc["group_id"] or "")
             media_id = str(doc["media_id"] or "")
-            # txt 优先；txt 缺失（如中金/投行库只有 PDF）走 pymupdf 前几页兜底
+            # txt 优先；txt 缺失（如中金/投行库只有 PDF）走 pypdf 前几页兜底
             has_txt = bool(doc["txt_path"])
             txt_path = resolve(doc["txt_path"]) if has_txt else None
             pdf_path = resolve(doc["pdf_path"]) if doc["pdf_path"] else None
@@ -3971,13 +3983,20 @@ class Scheduler:
                     text = _pdf_first_pages_text(pdf_path)
             except (OSError, ValueError):
                 text = ""
-            if not text.strip():
-                # txt 与 pdf 都取不到文本：落行防重试（修复文本源后可重置重抽）
+            text = usable_report_text(text)
+            if not text.strip() and not str(doc["name"] or "").strip():
+                # txt 与 pdf 都取不到文本且没有标题：落行防重试（修复文本源后可重置重抽）
                 db.save_report_extraction(group_id, media_id, status="notext")
                 continue
             txt_hash = hashlib.sha256(text[:20000].encode("utf-8", "ignore")).hexdigest()[:16]
             try:
-                result = extract_report_structure(text, site_llm, model=model, universe=universe)
+                result = extract_report_structure(
+                    text,
+                    site_llm,
+                    model=model,
+                    universe=universe,
+                    title=str(doc["name"] or ""),
+                )
             except Exception as exc:
                 logger.warning("研报抽取失败 %s/%s: %s", group_id, media_id, exc)
                 db.save_report_extraction(
@@ -4127,11 +4146,7 @@ class Scheduler:
                 for r in rows
             ]
             summary = None
-            llm_cfg = _user_llm_config(
-                user,
-                _system_llm_config(self.db, getattr(self, "llm_config", None)),
-                db=self.db,
-            )
+            llm_cfg = _user_llm_config(user, db=self.db)
             if llm_cfg is not None:
                 try:
                     from .llm import summarize_daily
@@ -4139,6 +4154,7 @@ class Scheduler:
                     summary = summarize_daily(posts, llm_cfg)
                 except Exception as exc:  # noqa: BLE001 - 综述失败降级为原始列表，不影响推送
                     logger.warning("LLM 每日综述异常 user=%s err=%s", user["username"], exc)
+            _record_llm_status(self.db, user, llm_cfg, summary)
             # LLM 精炼综述优先；未配置/失败时降级为原始贴文列表（保底不空发）
             daily_text = None
             if summary is not None:

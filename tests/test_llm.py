@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import httpx
 
 from app.fetchers.base import Post
-from app.llm import _config_values, list_models, summarize_posts
+from app.llm import _chat, _config_values, list_models, probe_llm, summary_cache_key, summarize_posts
 
 
 def make_post(content="正文内容", external_id="p1", title="标题", url="https://xueqiu.com/1/2") -> Post:
@@ -54,6 +54,113 @@ def test_success_returns_text():
     client = httpx.Client(transport=httpx.MockTransport(handler))
     result = summarize_posts([make_post()], make_config(), client=client)
     assert result == "- 要点一\n- 要点二"
+
+
+def test_responses_uses_responses_endpoint():
+    captured = {}
+
+    def handler(request):
+        captured["url"] = str(request.url)
+        captured["payload"] = json.loads(request.read())
+        return httpx.Response(200, json={"output_text": "- 要点"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    config = make_config()
+    config.api_format = "openai-responses"
+    assert _chat(
+        config,
+        [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+        32,
+        client=client,
+    ) == "- 要点"
+    assert captured["url"] == "https://api.openai.com/v1/responses"
+    assert captured["payload"]["input"][0]["role"] == "system"
+    assert "messages" not in captured["payload"]
+    assert "max_output_tokens" in captured["payload"]
+
+
+def test_responses_reads_output_blocks():
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "块文本"}],
+                    }
+                ]
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    config = make_config()
+    config.api_format = "responses"
+    assert _chat(config, [{"role": "user", "content": "hi"}], 32, client=client) == "块文本"
+
+
+def test_responses_skips_reasoning_then_reads_message():
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {"type": "reasoning", "encrypted_content": "x", "summary": []},
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "PONG"}],
+                    },
+                ]
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    config = make_config()
+    config.api_format = "responses"
+    assert _chat(config, [{"role": "user", "content": "hi"}], 32, client=client) == "PONG"
+
+
+def test_summarize_posts_forces_chat_even_if_responses():
+    captured = {}
+
+    def handler(request):
+        captured["url"] = str(request.url)
+        captured["payload"] = json.loads(request.read())
+        return httpx.Response(200, json={"choices": [{"message": {"content": "- 要点"}}]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    config = make_config()
+    config.api_format = "responses"
+    assert summarize_posts([make_post()], config, client=client) == "- 要点"
+    assert captured["url"] == "https://api.openai.com/v1/chat/completions"
+    assert "messages" in captured["payload"]
+
+
+def test_summary_cache_key_includes_format():
+    posts = [make_post()]
+    chat = summary_cache_key(posts, "https://api.openai.com/v1", "gpt", "chat")
+    responses = summary_cache_key(posts, "https://api.openai.com/v1", "gpt", "responses")
+    assert chat != responses
+    assert "|chat|" in chat
+    assert "|responses|" in responses
+
+
+def test_probe_llm_returns_usage():
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "PONG"}}],
+                "usage": {"total_tokens": 12},
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    result = probe_llm(make_config(), client=client)
+    assert result["ok"] is True
+    assert result["usage"]["total_tokens"] == 12
+    assert result["format"] == "chat"
+    assert result["latency_ms"] >= 0
 
 
 def test_empty_choices_returns_none():
@@ -134,7 +241,9 @@ def test_system_llm_still_allows_private_http_base():
     assert seen["url"] == "http://127.0.0.1:8000/v1/chat/completions"
 
 
-def test_admin_llm_config_is_trusted_for_system_use(tmp_path):
+def test_system_llm_ignores_admin_personal_gateway(tmp_path):
+    from types import SimpleNamespace
+
     from app.db import DB
     from app.scheduler import _system_llm_config
 
@@ -148,11 +257,13 @@ def test_admin_llm_config_is_trusted_for_system_use(tmp_path):
         llm_model="local-model",
     )
 
-    config = _system_llm_config(db)
-
-    assert config.api_base == "http://127.0.0.1:11434/v1"
-    assert config.api_key == "test-key"
-    assert config.user_supplied is False
+    assert _system_llm_config(db) is None
+    env = SimpleNamespace(
+        api_key="sk-env", api_base="https://api.deepseek.com", model="deepseek-chat"
+    )
+    config = _system_llm_config(db, env)
+    assert config.api_key == "sk-env"
+    assert config.model == "deepseek-chat"
 
 
 def test_user_llm_pins_public_custom_port(monkeypatch):
@@ -532,41 +643,12 @@ def test_render_daily_summary_skips_link_when_posts_have_no_url():
 
 # ---- 股票黑话别名识别 ----
 
-from app.llm import suggest_stock_aliases
-
 
 def _alias_handler(content):
     def handler(request):
         return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
 
     return handler
-
-
-def test_suggest_aliases_parses_and_filters_confidence():
-    client = httpx.Client(transport=httpx.MockTransport(_alias_handler(
-        '[{"alias": "宁王", "stock": "宁德时代", "confidence": "high"},'
-        '{"alias": "药茅", "stock": "恒瑞医药", "confidence": "medium"},'
-        '{"alias": "废话", "stock": "宁德时代", "confidence": "none"},'
-        '{"alias": "乱写", "stock": "不存在的股票", "confidence": "high"}]'
-    )))
-    result = suggest_stock_aliases(["宁王", "药茅", "废话", "乱写"], ["宁德时代", "恒瑞医药"], make_config(), client=client)
-    # high/medium 保留；none 丢弃；stock 不在已知列表的丢弃
-    assert {r["alias"] for r in result} == {"宁王", "药茅"}
-    assert all(r["stock"] in ("宁德时代", "恒瑞医药") for r in result)
-
-
-def test_suggest_aliases_empty_and_failure():
-    # 无候选词 / 未配置 → []
-    assert suggest_stock_aliases([], ["宁德时代"], make_config()) == []
-    assert suggest_stock_aliases(["宁王"], ["宁德时代"], None) == []
-    # 非 JSON 响应 → []
-    client = httpx.Client(transport=httpx.MockTransport(_alias_handler("抱歉，我不知道")))
-    assert suggest_stock_aliases(["宁王"], ["宁德时代"], make_config(), client=client) == []
-    # 5xx → []
-    def err(request):
-        return httpx.Response(500, json={})
-    client2 = httpx.Client(transport=httpx.MockTransport(err))
-    assert suggest_stock_aliases(["宁王"], ["宁德时代"], make_config(), client=client2) == []
 
 
 # ---- 股票标记解析（$标记$ → 官方名/戏称） ----

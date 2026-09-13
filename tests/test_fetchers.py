@@ -14,7 +14,6 @@ from app.db import DB
 from app.fetchers.combination import CombinationFetcher, _format_trade_price, extract_cube_symbol
 from app.fetchers.xueqiu import (
     XueqiuFetcher,
-    _crop_watermark,
     _dewatermark_image,
     _dewatermark_images,
     _load_waf_cookies,
@@ -30,41 +29,6 @@ def _weibo_test_pubkey_hex() -> str:
     # 微博登录 mock 只要能喂给 cryptography 加密的模数；不解密。
     key = crypto_rsa.generate_private_key(public_exponent=65537, key_size=1024)
     return format(key.public_key().public_numbers().n, "x")
-
-
-def test_xueqiu_dewatermark_crops_corner(monkeypatch, tmp_path):
-    """雪球图片处理不得改变画布尺寸；失败降级原 URL；仅精确官方域名处理。"""
-    class FakeImage:
-        size = (400, 300)
-
-        def copy(self):
-            return self
-
-    # 兼容函数不得改变画布或像素对象。
-    img = FakeImage()
-    assert _crop_watermark(img) is img
-
-    # 水印与正文同层，无法可靠移除时保留原图，不再下载和破坏像素。
-    monkeypatch.setattr(
-        "app.fetchers.xueqiu.httpx.get",
-        lambda url, **kw: (_ for _ in ()).throw(AssertionError("不应下载处理")),
-    )
-    original = "https://xqimg.imedao.com/abc.png"
-    assert _dewatermark_image(original, tmp_path) == original
-
-    db_fake = SimpleNamespace(path=str(tmp_path / "db.sqlite"))
-    out_list = _dewatermark_images(
-        [
-            "https://xqimg.imedao.com/zz.png",
-            "https://other.example.com/a.jpg?next=xqimg.imedao.com",
-            "https://xqimg.imedao.com.evil.test/a.jpg",
-        ], db_fake
-    )
-    assert out_list == [
-        "https://xqimg.imedao.com/zz.png",
-        "https://other.example.com/a.jpg?next=xqimg.imedao.com",
-        "https://xqimg.imedao.com.evil.test/a.jpg",
-    ]
 
 
 def test_xueqiu_parse_fixture():

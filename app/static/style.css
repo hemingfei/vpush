@@ -2714,6 +2714,13 @@ pre.content-cell { white-space: pre-wrap; overflow-wrap: break-word; min-width: 
 .form-row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
 .form-row label { font-size: var(--text-sm); font-weight: var(--font-weight-medium); color: var(--color-text-strong); }
 .form-row .form-control { margin-bottom: 0; }
+.llm-model-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; }
+.llm-model-row .form-control { flex: 1; min-width: 220px; }
+.llm-model-row .btn-ghost { flex: 0 0 auto; }
+@media (max-width: 768px) {
+  .llm-model-row .form-control,
+  .llm-model-row .btn-ghost { width: 100%; min-width: 0; }
+}
 /* 横向工具栏/行内的表单控件不需要纵向间距，避免与按钮错位 */
 .toolbar .form-control,
 .row .form-control { margin-bottom: 0; }

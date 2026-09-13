@@ -13,14 +13,13 @@ from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException
 
-from . import auth
+from . import auth, imgbed
 from .api import create_api_router, stop_wscn_live_refresh
 from .avatar_cache import PLATFORM_IMAGE_DIRS
 from .config import load_config
 from .db import DB
-from . import imgbed
-from .fetchers import build_fetchers
 from .feishu_documents import FeishuDocumentSyncService
+from .fetchers import build_fetchers
 from .ima_documents import ImaDocumentService
 from .ima_search import ImaSearchIndex
 from .ima_storage import ImaStorageStatus
@@ -221,6 +220,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         news_service=news_service,
         ima_archive_file=_ima_archive_file,
     )
+    ima_documents.on_files_ready = scheduler._run_report_extraction_task
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -235,6 +235,8 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
             feishu_documents.start()
             # ponytail: 后台线程预热 timeline 缓存，不挡启动；首击不再冷读
             threading.Thread(target=feishu_documents.warm_timeline_cache, daemon=True, name="feishu-timeline-warmup").start()
+            # ponytail: 同上，预热研报列表页（冷页缓存下首屏列表查询实测 6.5-12s）
+            threading.Thread(target=db.warm_ima_document_page, daemon=True, name="ima-page-warmup").start()
             task = asyncio.create_task(scheduler.run())
             if config.alerts_enabled and config.notifiers.telegram.bot_token:
                 from .telegram_bot import TelegramBot
@@ -309,7 +311,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         path = request.url.path
-        if path == "/news" or path.startswith("/news/") or path == "/api/news" or path.startswith("/api/news/"):
+        if path.startswith(("/news/", "/api/news/")) or path in ("/news", "/api/news"):
             response.headers.setdefault("X-Robots-Tag", "noindex, nofollow")
         return response
 

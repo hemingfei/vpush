@@ -560,6 +560,26 @@ def test_insert_post_stores_simplified_keeps_src(tmp_path):
     assert row["title_src"] == "Published"
     assert row["content_src"] == "This is traditional"
 
+    from app.fetchers.base import Post
+
+    live = Post(
+        platform="weibo",
+        kol_id=kid,
+        kol_name="繁体号",
+        external_id="p2",
+        title="臺灣經濟",
+        content="這個帳號發了繁體",
+        url="u2",
+        published_at="",
+        title_src="臺灣經濟",
+        content_src="這個帳號發了繁體",
+    )
+    assert db.insert_posts_batch([live])[0]
+    assert live.title == "台湾经济"
+    assert live.content == "这个账号发了繁体"
+    assert live.title_src == "臺灣經濟"
+    assert live.content_src == "這個帳號發了繁體"
+
 
 def test_register_codes_migrate_batch_columns(tmp_path):
     path = tmp_path / "old.db"
@@ -1413,10 +1433,143 @@ def test_ima_document_index_search_ranking_and_literal_wildcards(tmp_path):
     dated = db.ima_document_page(["semi"], day="0828")
     assert [item["media_id"] for item in dated["items"]] == ["title"]
     assert dated["day"] == "0828"
+
+    # 首屏瘦身：facets=False 时列表不变，分面留空（由 facets_only 请求随后补）
+    brief = db.ima_document_page(["semi"], limit=50, offset=0, facets=False)
+    assert [item["media_id"] for item in brief["items"]] == [
+        item["media_id"] for item in latest["items"]
+    ]
+    assert brief["tag_counts"] == {}
+    assert brief["tags"] == []
+    assert brief["days"] == []
+    assert brief["document_count"] == 0
+    assert brief["group_counts"] == {}
+    assert brief["has_more"] is False
+    assert brief["offset"] == 0
     assert dated["days"] == ["0828"]
 
     assert db.ima_document_page(["semi"], group="other")["items"] == []
     assert db.ima_document_page([], query="ai")["document_count"] == 0
+
+
+def _legacy_ima_page_items(
+    db, groups, *, query="", day="", tag="", rating="", ticker="", limit=50, offset=0
+):
+    """旧实现副本：常量 match_rank 打头的全局排序，作为等价性基准。"""
+    where_sql, where_params, rank_sql, pattern, rank_n = db._ima_page_filters(
+        groups, query, day, tag, rating, ticker
+    )
+    params = ([pattern] * rank_n + list(where_params)) if pattern else list(where_params)
+    rows = db._read_only_rows(
+        f"SELECT d.*, {rank_sql} AS match_rank FROM ima_document_index d "
+        f"WHERE {where_sql} "
+        "ORDER BY match_rank DESC, (d.sort_date = '') ASC, d.sort_date DESC, d.name DESC "
+        "LIMIT ? OFFSET ?",
+        (*params, limit + 1, offset),
+    )
+    return [(row["group_id"], row["media_id"]) for row in rows[:limit]], len(rows) > limit
+
+
+def _seed_page_perf_db(tmp_path):
+    """足够多的行，让优化器选择索引有序切片而不是全扫+排序。"""
+    db = DB(str(tmp_path / "page-perf.sqlite"))
+    rows = []
+    for group, total in (("semi", 60), ("other", 60)):
+        for index in range(total):
+            day = f"{index % 28 + 1:02d}{(index % 12) + 1:02d}"
+            rows.append(
+                _index_row(
+                    group,
+                    f"m{index:02d}",
+                    day,
+                    name=f"{group}-{index:02d}.pdf",
+                    tags=["AI"] if index % 3 == 0 else [],
+                    abstract="AI 算力继续增长" if index % 5 == 0 else "",
+                )
+            )
+    rows.append(_index_row("semi", "no-date", "unknown", name="无日期.pdf"))
+    rows.append(_index_row("macro", "macro-0", "0901", name="宏观.pdf"))
+    db.replace_ima_document_index(rows, "fp", 1)
+    db.save_report_extraction(
+        "semi",
+        "m00",
+        rating="买入",
+        tickers=[{"code": "002428", "name": "云南锗业"}],
+        status="ok",
+    )
+    return db
+
+
+def test_ima_document_page_plan_uses_group_index(tmp_path, monkeypatch):
+    """默认列表必须按组走 idx_ima_doc_group_latest 索引切片，不再全扫+排序。"""
+    db = _seed_page_perf_db(tmp_path)
+    captured: dict = {}
+    original = db._read_only_rows
+
+    def spy(sql, params=()):
+        if "FROM ima_document_index" in sql and "LIMIT" in sql:
+            captured.setdefault("page", (sql, list(params)))
+        return original(sql, params)
+
+    monkeypatch.setattr(db, "_read_only_rows", spy)
+    db.ima_document_page(["semi", "other"], limit=50, offset=0)
+    sql, params = captured["page"]
+    assert "match_rank" not in sql
+    assert "(d.sort_date = '')" not in sql
+    plan = [row["detail"] for row in db._rows("EXPLAIN QUERY PLAN " + sql, params)]
+    assert not any("SCAN d" in detail for detail in plan), plan
+    assert not any("sqlite_autoindex_ima_document_index_1" in detail for detail in plan), plan
+    assert sum("idx_ima_doc_group_latest" in detail for detail in plan) == 2, plan
+
+
+def test_ima_document_page_matches_legacy_order(tmp_path):
+    """新查询与旧实现（常量 match_rank 全局排序）在筛选/分页矩阵下结果一致。"""
+    db = _seed_page_perf_db(tmp_path)
+    cases = [
+        {},
+        {"limit": 3},
+        {"limit": 3, "offset": 2},
+        {"limit": 2, "offset": 121},
+        {"limit": 2, "offset": 200},
+        {"day": "0901"},
+        {"tag": "AI"},
+        {"query": "算力"},
+        {"query": "ai"},
+        {"query": "semi-0"},
+        {"rating": "买入"},
+        {"ticker": "002428"},
+        {"ticker": "云南锗业"},
+    ]
+    for groups in (["semi"], ["semi", "other"], ["semi", "other", "macro"]):
+        for kwargs in cases:
+            expected, expected_more = _legacy_ima_page_items(db, groups, **kwargs)
+            page = db.ima_document_page(groups, **kwargs)
+            actual = [(item["group_id"], item["media_id"]) for item in page["items"]]
+            label = f"groups={groups} kwargs={kwargs}"
+            assert actual == expected, label
+            assert page["has_more"] is expected_more, label
+            assert [item["media_id"] for item in page["items"]] == [
+                media_id for _group, media_id in expected
+            ], label
+
+
+def test_warm_ima_document_page_runs_one_page_query(tmp_path, monkeypatch):
+    db = _seed_page_perf_db(tmp_path)
+    seen: list[str] = []
+    original = db._read_only_rows
+
+    def spy(sql, params=()):
+        seen.append(sql)
+        return original(sql, params)
+
+    monkeypatch.setattr(db, "_read_only_rows", spy)
+    assert db.warm_ima_document_page(limit=50) == 3
+    assert sum("UNION ALL" in sql for sql in seen) == 1
+
+
+def test_warm_ima_document_page_empty_db_is_noop(tmp_path):
+    db = DB(str(tmp_path / "empty-warm.sqlite"))
+    assert db.warm_ima_document_page() == 0
 
 
 def test_ima_document_catalog_stats_and_detail_ambiguity(tmp_path):
@@ -2036,6 +2189,33 @@ def test_report_extraction_tables_and_roundtrip(tmp_path):
     ]
 
 
+def test_report_extraction_pending_and_reset_respect_recent_cutoff(tmp_path):
+    db = DB(str(tmp_path / "report-window.db"))
+    for media_id, sort_date in (("recent", "2026-09-08"), ("old", "2026-09-05")):
+        db._execute(
+            "INSERT INTO ima_document_index "
+            "(group_id, media_id, name, has_txt, txt_path, sort_date) "
+            "VALUES ('research', ?, 'Report', 1, ?, ?)",
+            (media_id, f"{media_id}.txt", sort_date),
+        )
+
+    pending = db.pending_report_extractions(
+        limit=10, group_ids=["research"], min_sort_date="2026-09-06"
+    )
+    assert [row["media_id"] for row in pending] == ["recent"]
+
+    db.save_report_extraction("research", "recent", status="empty")
+    db.save_report_extraction("research", "old", status="empty")
+    assert db.reset_report_extractions(
+        ("empty",), group_ids=["research"], min_sort_date="2026-09-06"
+    ) == 1
+    remaining = db.report_extractions_for_keys(
+        [("research", "recent"), ("research", "old")]
+    )
+    assert ("research", "recent") not in remaining
+    assert remaining[("research", "old")]["status"] == "empty"
+
+
 def test_report_extraction_rating_ticker_filters(tmp_path):
     """研报库列表筛选：评级精确匹配、标的代码/名称匹配。"""
     db = DB(str(tmp_path / "report-filter.db"))
@@ -2056,6 +2236,29 @@ def test_report_extraction_rating_ticker_filters(tmp_path):
     assert [i["media_id"] for i in db.ima_document_page(["cicc-research"], ticker="002428")["items"]] == ["m1"]
     assert [i["media_id"] for i in db.ima_document_page(["cicc-research"], ticker="云南锗业")["items"]] == ["m1"]
     assert db.ima_document_page(["cicc-research"], ticker="600206")["items"][0]["media_id"] == "m2"
+
+
+def test_report_rating_english_to_zh(tmp_path):
+    """卖方英文评级入库/展示换成中文投资评级。"""
+    from app.llm import clean_report_extraction, report_rating_zh
+
+    assert report_rating_zh("Overweight") == "增持"
+    assert report_rating_zh("OUTPERFORM") == "跑赢大市"
+    assert report_rating_zh("Equal-weight") == "标配"
+    assert report_rating_zh("Market Perform") == "与大市同步"
+    assert report_rating_zh("Buy") == "买入"
+    assert report_rating_zh("增持") == "增持"
+    assert clean_report_extraction({"rating": "Overweight"}, {})["rating"] == "增持"
+
+    db = DB(str(tmp_path / "rating-zh.db"))
+    db._conn.execute(
+        "INSERT INTO ima_document_index (group_id, media_id, name, sort_date) VALUES ('g', 'm', 't', '2026-09-12')"
+    )
+    db._conn.commit()
+    db.save_report_extraction("g", "m", rating="Overweight", status="ok")
+    items = [{"group_id": "g", "media_id": "m"}]
+    db.attach_report_extractions(items)
+    assert items[0]["extraction"]["rating"] == "增持"
 
 
 def test_report_extraction_parse_and_ticker_whitelist():
@@ -2152,3 +2355,71 @@ def test_report_extraction_prompt_supports_english_and_global_tickers():
     assert "英文" in captured["prompt"]
     assert "美股" in captured["prompt"]
     assert "港股" in captured["prompt"]
+
+
+def test_report_extraction_uses_title_when_pdf_text_is_too_short():
+    import json
+    from types import SimpleNamespace
+
+    import httpx
+
+    from app.llm import extract_report_structure
+
+    captured = {}
+
+    def handler(request):
+        captured["prompt"] = json.loads(request.read())["messages"][0]["content"]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"rating":"","target_price":"","thesis":"","report_kind":"公司","tickers":[]}'
+                        }
+                    }
+                ]
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    config = SimpleNamespace(api_key="key", api_base="https://example.com/v1", model="model")
+    title = "Goldman Sachs-Recruit Holdings (6098.T): AI transformation, Buy"
+    result = extract_report_structure(
+        "AHRHXHo4pVeWaY7NaO8OnPnNtRtNkPpPwPkPnNqN6MpOqRuOoMvMvPrMnP",
+        config,
+        client=client,
+        title=title,
+    )
+
+    assert title in captured["prompt"]
+    assert result["rating"] == "买入"  # 标题里的 Buy 经中文评级归一
+    assert result["status"] == "ok"
+
+
+def test_report_extraction_round_robin_quota(tmp_path):
+    """按库轮转：每库最多 per_group 篇、组内新→旧，存量不被单库垄断。"""
+    db = DB(str(tmp_path / "rr.db"))
+    groups = {"g1": ["09-01", "09-02", "09-03"], "g2": ["09-05"], "g3": ["08-20", "08-25"]}
+    for gid, dates in groups.items():
+        for i, sd in enumerate(dates):
+            db._conn.execute(
+                "INSERT INTO ima_document_index (group_id, media_id, name, has_txt, txt_path, sort_date) "
+                "VALUES (?, ?, ?, 1, 'x', ?)",
+                (gid, f"m{gid}{i}", "研报", f"2026-{sd}"),
+            )
+    db._conn.commit()
+    rows = db.pending_report_extractions(limit=80, group_ids=list(groups), per_group=2)
+    by_group = {}
+    for r in rows:
+        by_group.setdefault(r["group_id"], []).append(r["sort_date"])
+    # 每库 ≤2，组内新→旧
+    assert by_group["g1"] == ["2026-09-03", "2026-09-02"]
+    assert by_group["g2"] == ["2026-09-05"]
+    assert by_group["g3"] == ["2026-08-25", "2026-08-20"]
+    # 无 per_group：退化为全局新→旧（g2 的 09-05 唯一最新在前）
+    rows = db.pending_report_extractions(limit=80, group_ids=list(groups))
+    assert rows[0]["group_id"] == "g2"
+    # min_sort_date 窗口仍然生效
+    rows = db.pending_report_extractions(limit=80, group_ids=list(groups), min_sort_date="2026-09-01", per_group=2)
+    assert all(r["sort_date"] >= "2026-09-01" for r in rows)

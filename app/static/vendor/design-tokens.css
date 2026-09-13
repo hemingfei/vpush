@@ -56,11 +56,11 @@
   /* 品牌渐变（logo/头像底）：两端都深过亮蓝，白字全程 ≥4.5:1 */
   --brand-gradient: linear-gradient(180deg, var(--color-accent), var(--color-accent-strong));
 
-  /* 平台品牌色（图标用；深色模式在 .theme-dark 中覆盖） */
-  --color-brand-xueqiu: #287dff;
-  --color-brand-weibo: #e6162d;
+  /* 平台角标统一 Duty Blue；通知渠道仍用品牌色 */
+  --color-brand-xueqiu: var(--color-accent-text);
+  --color-brand-weibo: var(--color-accent-text);
   --color-brand-twitter: var(--color-accent-text);
-  --color-brand-zsxq: #0b806a;
+  --color-brand-zsxq: var(--color-accent-text);
   --color-brand-telegram: #26a5e4;
   --color-brand-feishu: #3370ff;
   --color-brand-wecom: #07c160;
@@ -186,11 +186,11 @@
   --color-danger: #f87171;
   --color-danger-strong: #fca5a5;
 
-  /* 平台品牌色 */
-  --color-brand-xueqiu: #4a9aff;
-  --color-brand-weibo: #ff5d6e;
+  /* 平台角标随 accent-text（深色已提亮） */
+  --color-brand-xueqiu: var(--color-accent-text);
+  --color-brand-weibo: var(--color-accent-text);
   --color-brand-twitter: var(--color-accent-text);
-  --color-brand-zsxq: #2ad4b3;
+  --color-brand-zsxq: var(--color-accent-text);
   --color-brand-telegram: #4aa8e8;
   --color-brand-feishu: #5b8cff;
   --color-brand-wecom: #35c26e;

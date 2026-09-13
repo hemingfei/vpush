@@ -358,6 +358,13 @@ class WebPushIn(BaseModel):
     keys: WebPushKeys
 
 
+class AndroidDeviceIn(BaseModel):
+    token: Annotated[str, Field(min_length=1, max_length=4096)]
+    provider: Literal["fcm", "huawei", "xiaomi", "oppo", "vivo", "meizu", "other"]
+    device_model: Annotated[str, Field(max_length=128)] = ""
+    app_version: Annotated[str, Field(max_length=64)] = ""
+
+
 class NewsSeenIn(BaseModel):
     view_started_at: str
 
@@ -411,6 +418,7 @@ class MeUpdate(BaseModel):
     llm_api_base: str | None = None
     llm_api_key: str | None = None
     llm_model: str | None = None
+    llm_api_format: str | None = None
     news_source_ids: list[int] | None = None
 
 
@@ -937,6 +945,39 @@ def _is_masked_secret(value: str | None) -> bool:
     return _SECRET_MASK_GLUE in (value or "")
 
 
+def _me_llm_runtime(body: MeUpdate, user: dict, request: Request, db):
+    from types import SimpleNamespace
+
+    from .llm import normalize_llm_api_format
+    from .url_safety import is_allowed_trusted_llm_base, is_allowed_user_llm_base
+
+    user = db.get_user(user["id"]) or user
+    base = (body.llm_api_base if body.llm_api_base is not None else user.get("llm_api_base") or "").strip()
+    key = (body.llm_api_key or "").strip()
+    if not key or _is_masked_secret(key):
+        key = user_plain_secret(user, "llm_api_key", db)
+    model = (body.llm_model if body.llm_model is not None else user.get("llm_model") or "").strip()
+    api_format = normalize_llm_api_format(
+        body.llm_api_format if body.llm_api_format is not None else user.get("llm_api_format")
+    )
+    if not base or not key:
+        return None
+    allowed = (
+        is_allowed_trusted_llm_base(base)
+        if user.get("is_admin")
+        else is_allowed_user_llm_base(base)
+    )
+    if not allowed:
+        raise HTTPException(status_code=400, detail="LLM 地址须为 http(s) URL")
+    return SimpleNamespace(
+        api_base=base,
+        api_key=key,
+        model=model,
+        api_format=api_format,
+        user_supplied=not bool(user.get("is_admin")),
+    )
+
+
 def public_user(user: dict, db=None) -> dict:
     # 凭据列已改密文存储，掩码展示必须先解出明文再取首尾 4 位
     return {
@@ -960,6 +1001,8 @@ def public_user(user: dict, db=None) -> dict:
         "llm_api_base": user.get("llm_api_base") or "",
         "llm_api_key": mask_secret(user_plain_secret(user, "llm_api_key", db)),
         "llm_model": user.get("llm_model") or "",
+        "llm_api_format": (user.get("llm_api_format") or "chat"),
+        "llm_last_status": user.get("llm_last_status") or "",
         "created_at": user["created_at"],
     }
 
@@ -973,6 +1016,10 @@ IMAGE_PROXY_HOSTS = frozenset({
     "wx1.sinaimg.cn", "wx2.sinaimg.cn", "wx3.sinaimg.cn", "wx4.sinaimg.cn",
     "static-assets-1.truthsocial.com",
 })
+# <img src> 不能带 Authorization，所以此接口保持匿名；按 IP 卡住带宽放大。
+# 60/分钟：图床正常时几乎打不满；图床故障时一页 100 帖约 46 张，仍有余量。
+IMAGE_PROXY_MAX_PER_WINDOW = 60
+IMAGE_PROXY_WINDOW_SECONDS = 60
 
 
 ACCOUNT_ORIGIN_LABELS = {
@@ -1502,6 +1549,7 @@ def create_api_router(
     market_quotes = MarketQuotes()
     # 登录/注册限流（内存版，单实例够用）：每 IP 窗口内失败次数超限后 429
     login_attempts: dict[str, list[float]] = {}
+    img_proxy_hits: dict[str, list[float]] = {}
     ima_quota_alerts: set[tuple] = set()
     LOGIN_MAX_FAILURES = 8
     LOGIN_WINDOW = 300
@@ -1558,6 +1606,22 @@ def create_api_router(
             raise HTTPException(status_code=429, detail="尝试次数过多，请 5 分钟后再试")
         # 每次登录尝试顺带清理全量过期 IP 记录，防止无界增长（不能只删空列表）
         _prune_window_dict(login_attempts, LOGIN_WINDOW, now, max_entries=1000)
+
+    def _check_img_proxy_limit(ip: str) -> None:
+        now = time.time()
+        recent = [t for t in img_proxy_hits.get(ip, []) if now - t < IMAGE_PROXY_WINDOW_SECONDS]
+        if len(recent) >= IMAGE_PROXY_MAX_PER_WINDOW:
+            img_proxy_hits[ip] = recent
+            _prune_window_dict(img_proxy_hits, IMAGE_PROXY_WINDOW_SECONDS, now, max_entries=2000)
+            retry_after = max(1, int(IMAGE_PROXY_WINDOW_SECONDS - (now - recent[0])) + 1)
+            raise HTTPException(
+                status_code=429,
+                detail="图片加载过于频繁，请稍后再试",
+                headers={"Retry-After": str(retry_after)},
+            )
+        recent.append(now)
+        img_proxy_hits[ip] = recent
+        _prune_window_dict(img_proxy_hits, IMAGE_PROXY_WINDOW_SECONDS, now, max_entries=2000)
 
     def _turnstile_runtime() -> dict:
         stored_enabled = db.get_setting("turnstile_enabled")
@@ -2089,6 +2153,7 @@ def create_api_router(
         profile["vapid_public_key"] = vapid_pub
         profile["webpush_count"] = db.count_webpush_subscriptions(user["id"])
         profile["webpush_bound"] = profile["webpush_count"] > 0
+        profile["android_device_count"] = db.count_android_devices(user["id"])
         profile["plaza_platforms"] = plaza_visible_platforms(db)
         profile["timeline_platforms"] = user_timeline_platforms(
             db, user["id"], bool(user.get("is_admin"))
@@ -2224,6 +2289,10 @@ def create_api_router(
             updates["llm_api_base"] = value
         if "llm_model" in body.model_fields_set:
             updates["llm_model"] = (body.llm_model or "").strip()
+        if "llm_api_format" in body.model_fields_set:
+            from .llm import normalize_llm_api_format
+
+            updates["llm_api_format"] = normalize_llm_api_format(body.llm_api_format)
         news_source_ids = _UNSET
         if "news_source_ids" in body.model_fields_set:
             if body.news_source_ids is None:
@@ -2240,41 +2309,25 @@ def create_api_router(
     @router.post("/me/llm-models")
     def list_my_llm_models(body: MeUpdate, request: Request, user: dict = Depends(get_current_user)):
         """按 OpenAI 兼容 GET /models 拉取模型 id 列表。"""
-        from types import SimpleNamespace
-
         from .llm import list_models
-        from .scheduler import _system_llm_config
-        from .url_safety import is_allowed_trusted_llm_base, is_allowed_user_llm_base
 
-        user = db.get_user(user["id"]) or user
-        base = (body.llm_api_base if body.llm_api_base is not None else user.get("llm_api_base") or "").strip()
-        key = (body.llm_api_key or "").strip()
-        if not key or _is_masked_secret(key):
-            key = user_plain_secret(user, "llm_api_key", db)
-        if not base or not key:
-            cfg = _system_llm_config(db, getattr(request.app.state, "llm_config", None) if request else None)
-            if cfg is None:
-                raise HTTPException(status_code=400, detail="请先填写 API 地址和 Key")
-            models = list_models(cfg)
-        else:
-            allowed = (
-                is_allowed_trusted_llm_base(base)
-                if user.get("is_admin")
-                else is_allowed_user_llm_base(base)
-            )
-            if not allowed:
-                raise HTTPException(status_code=400, detail="LLM 地址须为 http(s) URL")
-            models = list_models(
-                SimpleNamespace(
-                    api_base=base,
-                    api_key=key,
-                    model="",
-                    user_supplied=not bool(user.get("is_admin")),
-                )
-            )
+        cfg = _me_llm_runtime(body, user, request, db)
+        if cfg is None:
+            raise HTTPException(status_code=400, detail="请先填写 API 地址和 Key")
+        models = list_models(cfg)
         if models is None:
             raise HTTPException(status_code=502, detail="无法获取模型列表，请检查地址和 Key")
         return {"models": models}
+
+    @router.post("/me/llm-test")
+    def test_my_llm(body: MeUpdate, request: Request, user: dict = Depends(get_current_user)):
+        """用当前表单打一条最短请求，返回耗时和用量。"""
+        from .llm import probe_llm
+
+        cfg = _me_llm_runtime(body, user, request, db)
+        if cfg is None:
+            raise HTTPException(status_code=400, detail="请先填写 API 地址和 Key")
+        return probe_llm(cfg)
 
     @router.post("/me/webpush")
     def subscribe_webpush(body: WebPushIn, request: Request, user: dict = Depends(get_current_user)):
@@ -2302,6 +2355,43 @@ def create_api_router(
     def unsubscribe_webpush(user: dict = Depends(get_current_user)):
         db.delete_webpush_subscriptions(user["id"])
         return {"ok": True, "webpush_bound": False, "webpush_count": 0}
+
+    @router.put("/me/android-devices/{installation_id}")
+    def register_android_device(
+        installation_id: str,
+        body: AndroidDeviceIn,
+        user: dict = Depends(get_current_user),
+    ):
+        installation_id = installation_id.strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{7,127}", installation_id):
+            raise HTTPException(status_code=400, detail="设备安装标识无效")
+        token = body.token.strip()
+        if not token:
+            raise HTTPException(status_code=400, detail="设备 token 不能为空")
+        db.upsert_android_device(
+            installation_id,
+            user["id"],
+            token,
+            body.provider,
+            body.device_model.strip(),
+            body.app_version.strip(),
+        )
+        return {
+            "ok": True,
+            "installation_id": installation_id,
+            "provider": body.provider,
+            "device_count": db.count_android_devices(user["id"]),
+        }
+
+    @router.delete("/me/android-devices/{installation_id}")
+    def unregister_android_device(
+        installation_id: str, user: dict = Depends(get_current_user)
+    ):
+        installation_id = installation_id.strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{7,127}", installation_id):
+            raise HTTPException(status_code=400, detail="设备安装标识无效")
+        db.delete_android_device(installation_id, user["id"])
+        return {"ok": True, "device_count": db.count_android_devices(user["id"])}
 
     @router.post("/me/bind-code")
     def create_bind_code(user: dict = Depends(get_current_user)):
@@ -3925,6 +4015,9 @@ def create_api_router(
         ticker: str = Query("", max_length=24),
         limit: int = 50,
         offset: int = Query(0, ge=0, le=IMA_DOCUMENT_LIST_MAX_OFFSET),
+        # 首屏默认只取列表（include_facets=0），分面随后用 facets_only=1 单独取
+        include_facets: int = Query(1, ge=0, le=1),
+        facets_only: int = Query(0, ge=0, le=1),
         user: dict = Depends(get_current_user),
     ):
         _enforce_ima_list_quota(user)
@@ -3937,18 +4030,27 @@ def create_api_router(
         requested = day.strip()
         search_mode = bool(query or tag)
         effective_day = "" if search_mode or not requested else requested
-        payload = ima_documents.list_documents(
-            groups=groups,
-            query=query,
-            day=effective_day,
-            group=group,
-            tag=tag,
-            rating=rating.strip(),
-            ticker=ticker.strip(),
-            limit=bounded_limit(limit, default=50),
-            offset=max(offset, 0),
-        )
-        items = db.attach_report_extractions(payload["items"])
+        list_kwargs = {
+            "groups": groups,
+            "query": query,
+            "day": effective_day,
+            "group": group,
+            "tag": tag,
+            "rating": rating.strip(),
+            "ticker": ticker.strip(),
+        }
+        if facets_only:
+            # 分面单独一次请求：不带列表条目（首屏先画列表，计数/日期/标签随后补齐）
+            payload = ima_documents.list_documents(**list_kwargs, limit=1, offset=0)
+            items = []
+        else:
+            payload = ima_documents.list_documents(
+                **list_kwargs,
+                limit=bounded_limit(limit, default=50),
+                offset=max(offset, 0),
+                facets=include_facets == 1,
+            )
+            items = db.attach_report_extractions(payload["items"])
         return {
             "groups": payload.get("groups") if payload.get("groups") is not None else [],
             "items": items,
@@ -3957,8 +4059,8 @@ def create_api_router(
             "tag_counts": payload.get("tag_counts") or {},
             "document_count": int(payload.get("document_count") or 0),
             "day": payload.get("day") or effective_day,
-            "has_more": bool(payload.get("has_more")),
-            "offset": int(payload.get("offset") or 0),
+            "has_more": bool(payload.get("has_more")) and not facets_only,
+            "offset": 0 if facets_only else int(payload.get("offset") or 0),
         }
 
     @router.get("/ima-documents/catalog")
@@ -7856,9 +7958,10 @@ def create_api_router(
 
     @router.get("/img-proxy")
     def img_proxy(url: str, request: Request):
-        """受信图床代理：精确域名、HTTPS、无重定向、流式限制 10 MB。"""
+        """受信图床代理：精确域名、HTTPS、无重定向、流式限制 10 MB，按 IP 限速。"""
         from urllib.parse import urlparse
 
+        _check_img_proxy_limit(_client_ip(request))
         url = (url or "").strip()
         try:
             parsed = urlparse(url)

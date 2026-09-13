@@ -19,15 +19,6 @@ import { createLightbox } from "./core/lightbox.js";
 import { createNewsView } from "./views/news.js";
 import { createImaView } from "./views/ima.js";
 import { createFeishuPersonalView } from "./views/feishu-personal.js";
-import { createAdminCodesView } from "./views/admin/codes.js";
-import { createAdminNewsView } from "./views/admin/news.js";
-import { createAdminUsersView } from "./views/admin/users.js";
-import { createAdminKolsView } from "./views/admin/kol.js";
-import { createAdminInfraView } from "./views/admin/infra.js";
-import { createAdminImaCollectorView } from "./views/admin/ima-collector.js";
-import { createCiccView } from "./views/admin/cicc.js";
-import { createAdminKnowledgeView } from "./views/admin/knowledge.js";
-import { createAdminDashboardView } from "./views/admin/dashboard.js";
 import { createPushSettingsView } from "./views/push-settings.js";
 import { createMxViewsView } from "./views/mx-views.js";
 import { createMarketView } from "./views/market.js";
@@ -60,7 +51,7 @@ const CHANNEL_ICONS = {
 const GROK_TRANSLATE_ICON = `<svg class="p-tr-grok" viewBox="0 0 33 32" fill="currentColor" aria-hidden="true"><path d="M12.745 20.54l10.97-8.19c.539-.4 1.307-.244 1.564.38 1.349 3.288.746 7.241-1.938 9.955-2.683 2.714-6.417 3.31-9.83 1.954l-3.728 1.745c5.347 3.697 11.84 2.782 15.898-1.324 3.219-3.255 4.216-7.692 3.284-11.693l.008.009c-1.351-5.878.332-8.227 3.782-13.031L33 0l-4.54 4.59v-.014L12.743 20.544m-2.263 1.987c-3.837-3.707-3.175-9.446.1-12.755 2.42-2.449 6.388-3.448 9.852-1.979l3.72-1.737c-.67-.49-1.53-1.017-2.515-1.387-4.455-1.854-9.789-.931-13.41 2.728-3.483 3.523-4.579 8.94-2.697 13.561 1.405 3.454-.899 5.898-3.22 8.364C1.49 30.2.666 31.074 0 32l10.478-9.466"/></svg>`;
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.169";
+const APP_VERSION = "1.12.187";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -548,7 +539,7 @@ function isStandalonePwa() {
 
 function clearSessionCaches() {
   stopMarketQuotes();
-  ciccView.reset();
+  if (ciccView) ciccView.reset();
   clearImaPdfUrl();
   if (typeof stopTimelinePoll === "function") stopTimelinePoll();
   // 飞书扫码轮询不能跨会话存活：登出后它会每秒拿旧 token 打 401 循环
@@ -847,7 +838,7 @@ async function renderMore(seq) {
 
 let _feishuTimelineTimer = null;
 let _feishuTimelineMediaUrls = [];
-let _feishuTimelineMediaCache = new Map();
+const _feishuTimelineMediaCache = new Map();
 let _feishuTimelineState = null;
 let _feishuMoreObserver = null;
 let _feishuAssetObserver = null;
@@ -1943,7 +1934,7 @@ let _tlDynamicTags = [];
 let _tlLatestId = 0;        // 当前已加载的最新帖 id，用于后台检测新帖
 let _tlLoadedFilter = null; // 缓存列表对应的筛选条件快照
 let _tlSavedScrollY = 0;    // 离开动态页时的滚动位置，切回时恢复
-let _tlPendingNew = [];     // 轮询拉到的新帖（点提示条时直接插到列表顶部）
+const _tlPendingNew = [];     // 轮询拉到的新帖（点提示条时直接插到列表顶部）
 let _tlPendingLatestId = 0; // 已拉取的新帖中最新 id，轮询去重
 let _tlRefreshing = false;  // 刷新锁：防止连点/并发 poll 重复插入新帖
 let _tlPollTimer = null;    // 新帖轮询定时器
@@ -1955,7 +1946,7 @@ let _liveCursor = "";
 let _liveHasMore = true;
 let _liveLoadingMore = false;
 let _liveLatestId = 0;
-let _livePendingNew = [];
+const _livePendingNew = [];
 let _livePendingLatestId = 0;
 let _liveSavedScrollY = 0;
 let _liveClockTimer = null;
@@ -2163,15 +2154,29 @@ function mobilePlatformSwipeIgnore(el) {
   return !!el.closest("a, button, input, select, textarea, .tl-pills, .tl-kolbar, .platform-tabs, .icon-badge-bar, .tl-filter-panel, .home-filter-content, .lightbox, .bottom-nav, .post-images");
 }
 
+function tlSwipeEntries() {
+  const out = [];
+  for (const entry of tlTimelineEntries()) {
+    out.push(entry);
+    if (!entry[0]) out.push(["live", "快讯"]);
+  }
+  return out;
+}
+
 function mobilePlatformSwipeSurface(el) {
-  if (isLiveTimeline()) return null;
   if ($("#tl-feed-panel") && el.closest(".tl-main")) return "timeline";
   if ($("#home-mobile-platforms") && ($("#kol-list")?.contains(el) || el.closest(".home-panel"))) return "home";
   return null;
 }
 
 function mobilePlatformSwipeContext(surface) {
-  if (surface === "timeline") return { current: () => state.timelinePlatform, apply: (p) => tlPickPlatform(p), entries: tlTimelineEntries };
+  if (surface === "timeline") {
+    return {
+      current: () => (isLiveTimeline() ? "live" : state.timelinePlatform),
+      apply: (p) => (p === "live" ? tlPickSource("live") : tlPickPlatform(p)),
+      entries: tlSwipeEntries,
+    };
+  }
   if (surface === "home") return { current: () => state.platform, apply: (p) => homePickMobilePlatform(p), entries: tlPlazaEntries };
   return null;
 }
@@ -2333,13 +2338,13 @@ function syncTimelineSourceView() {
   if (wide) {
     panel?.remove();
     $("#tl-filterbar")?.classList.remove("open");
-  } else if (!panel) {
+  } else if (panel) {
+    panel.outerHTML = tlFilterPanelHtml();
+  } else {
     const badge = $("#tl-new-badge");
     if (badge) badge.insertAdjacentHTML("beforebegin", tlFilterPanelHtml());
     else $("#tl-filterbar")?.insertAdjacentHTML("beforeend", tlFilterPanelHtml());
     if (!live) loadTimelineTags().catch(() => { _tlTags = []; _tlDynamicTags = []; });
-  } else {
-    panel.outerHTML = tlFilterPanelHtml();
   }
   $("#tl-filterbar")?.classList.remove("open");
   const filterBtn = $("#tl-filter-toggle");
@@ -2578,13 +2583,17 @@ function playNotificationSound() {
   }
 }
 
+let _tlPollFeedBusy = false;
+
 async function pollFeedUpdates() {
-  if (document.visibilityState === "hidden") return;
+  // 计时器/visibilitychange/路由切入三路都会触发，防重叠轮询
+  if (document.visibilityState === "hidden" || _tlPollFeedBusy) return;
   const live = isLiveTimeline();
   const latestId = live ? _liveLatestId : _tlLatestId;
   const pendingLatestId = live ? _livePendingLatestId : _tlPendingLatestId;
   const pendingNew = feedPendingNew();
   if (!latestId || !$("#feed") || (live && !isLiveTimeline()) || (!live && isLiveTimeline())) return;
+  _tlPollFeedBusy = true;
   const seq = routeRenderSeq;
   try {
     let newer = [];
@@ -2593,7 +2602,7 @@ async function pollFeedUpdates() {
         limit: "30",
         since_id: String(pendingLatestId || latestId),
       });
-      const data = await api(`/api/live/wscn?${params}`);
+      const data = await api(`/api/live/wscn?${params}`, { signal: AbortSignal.timeout(15000) });
       if (!routeStillActive(seq) || !$("#feed") || !isLiveTimeline()) return;
       newer = data.items || [];
     } else {
@@ -2605,7 +2614,7 @@ async function pollFeedUpdates() {
       if (state.timelineTag) params.set("tag", state.timelineTag);
       if (state.timelineFavorite) params.set("favorite", "1");
       if (state.timelineSecondary) params.set("include_secondary", "1");
-      const posts = await api(`/api/my/feed?${params}`);
+      const posts = await api(`/api/my/feed?${params}`, { signal: AbortSignal.timeout(15000) });
       if (!routeStillActive(seq) || !$("#feed") || isLiveTimeline()) return;
       // 「新帖」以发布时间为准（锚点=列表里时间最新的一条），不能只按 id 过滤：
       // 补历史会给旧消息发新 id，按 id 过滤会把它们当成新帖顶到时间线最上面。
@@ -2661,11 +2670,18 @@ async function pollFeedUpdates() {
       const avatars = $("#tl-new-avatars");
       if (avatars) avatars.innerHTML = tlBadgeAvatarsHtml(pendingNew);
     }
+    if (live) {
+      await autoConsumeLivePending(seq);
+      // 顶部已并入或正在 refreshTimeline，都不要出胶囊，避免闪一下
+      if (!feedPendingNew().length || _tlRefreshing) return;
+    }
     $("#tl-new-badge")?.classList.add("show");
     $("#tl-feed-panel")?.classList.add("has-new");
     playNotificationSound();
     tlSyncBacktopNew();
-  } catch { /* 轮询失败静默 */ }
+  } catch { /* 轮询失败静默 */ } finally {
+    _tlPollFeedBusy = false;
+  }
 }
 
 // 新帖胶囊头像：去重取前 3 个（无头像用首字色块）；超出的作者不另画 +N，条数只在 aria-label
@@ -2690,10 +2706,26 @@ async function autoConsumeTimelinePending(seq) {
   if (!routeStillActive(seq) || isLiveTimeline()) return;
   if (!$("#tl-feed-panel") || !feedPendingNew().length) return;
   if (window.scrollY > 240) return;
-  await refreshTimeline();
+  try {
+    await refreshTimeline({ pollFirst: false });
+  } catch (e) {
+    console.warn("自动并入新帖失败，保留胶囊供重试", e);
+  }
 }
 
-async function refreshTimeline() {
+// 快讯在最新位置时自动并入；用户深读旧内容时保留新快讯提示。
+async function autoConsumeLivePending(seq) {
+  if (!routeStillActive(seq) || !isLiveTimeline()) return;
+  if (!$("#tl-feed-panel") || !feedPendingNew().length) return;
+  if (window.scrollY > 240) return;
+  try {
+    await refreshTimeline({ pollFirst: false });
+  } catch (e) {
+    console.warn("自动并入新帖失败，保留胶囊供重试", e);
+  }
+}
+
+async function refreshTimeline({ pollFirst = true } = {}) {
   if (_tlRefreshing) return;
   _tlRefreshing = true;
   try {
@@ -2705,7 +2737,7 @@ async function refreshTimeline() {
       window.scrollTo({ top: 0, behavior: "smooth" });
       return;
     }
-    await pollFeedUpdates();
+    if (pollFirst) await pollFeedUpdates();
     const seen = new Set(posts.map((p) => p.id));
     const incoming = pending.filter((p) => !seen.has(p.id));
     if (incoming.length) {
@@ -2739,6 +2771,9 @@ async function refreshTimeline() {
     $("#tl-feed-panel")?.classList.remove("has-new");
     tlSyncBacktopNew();
     window.scrollTo({ top: 0, behavior: "smooth" });
+  } catch (e) {
+    // 渲染/网络异常：保留胶囊供重试（_tlRefreshing 已在 finally 复位）
+    console.warn("动态页刷新异常", e);
   } finally {
     _tlRefreshing = false;
   }
@@ -2746,22 +2781,21 @@ async function refreshTimeline() {
 
 function tlPillsHtml() {
   const liveSelected = isLiveTimeline();
-  const livePill = `
+  return tlSwipeEntries().map(([p, label]) => {
+    if (p === "live") {
+      return `
     <button class="tl-pill ${liveSelected ? "selected" : ""}" role="radio" data-platform="live" aria-label="快讯" title="快讯" aria-checked="${liveSelected}" onclick="tlPickSource('live')">
       ${WSCN_LIVE_ICON}<span>快讯</span>
     </button>`;
-  const pills = [];
-  for (const [p, label] of tlTimelineEntries()) {
+    }
     const selected = !liveSelected && state.timelinePlatform === p;
     const short = platformShortLabel(p);
-    pills.push(`
+    return `
     <button class="tl-pill ${selected ? "selected" : ""}" role="radio" data-platform="${p}" aria-label="${label}" title="${label}" aria-checked="${selected}">
       ${PLATFORM_ICONS[p || ""]}
       <span>${short}</span>
-    </button>`);
-    if (!p) pills.push(livePill);
-  }
-  return pills.join("");
+    </button>`;
+  }).join("");
 }
 
 function tlPickPlatform(p) {
@@ -3498,7 +3532,7 @@ function renderLiveFeed() {
   }
   const html = [...grouped.entries()].map(([bucket, list], gi) => `
     <div class="tl-group live-group">
-      <div class="tl-group-head"><span>${escapeHtml(bucket)}</span>${gi === 0 ? `<span class="tl-group-count">已加载 ${posts.length}${posts.length !== allPosts.length ? ` / ${allPosts.length}` : ""} 条快讯</span>` : ""}</div>
+      <div class="tl-group-head"><span>${escapeHtml(bucket)}</span>${gi === 0 ? `<span class="tl-group-count">已加载 ${posts.length}${posts.length === allPosts.length ? "" : ` / ${allPosts.length}`} 条快讯</span>` : ""}</div>
       <div class="live-feed">${list.map(liveFeedItem).join("")}</div>
     </div>`).join("");
   const footer = _liveHasMore && posts.length
@@ -3527,14 +3561,28 @@ function renderTimelineFeed() {
   }
   const grouped = new Map();
   for (const p of posts) {
-    const bucket = feedDateBucket(p.published_at);
+    let bucket;
+    try {
+      bucket = feedDateBucket(p.published_at);
+    } catch (e) {
+      bucket = "未知时间";
+    }
     if (!grouped.has(bucket)) grouped.set(bucket, []);
     grouped.get(bucket).push(p);
   }
+  // 单帖渲染失败只降级该卡片，不拖垮整屏（否则胶囊会卡在「有新动态」且点击无效）
+  const safePostCard = (p) => {
+    try {
+      return postCard(p);
+    } catch (e) {
+      console.warn("动态卡片渲染失败", p && p.id, e);
+      return `<article class="tl-post"><div class="tl-post-body"><strong class="tl-post-title muted">（此条动态渲染失败）</strong></div></article>`;
+    }
+  };
   const html = [...grouped.entries()].map(([bucket, list], gi) => `
     <div class="tl-group">
       <div class="tl-group-head"><span>${escapeHtml(bucket)}</span>${gi === 0 ? `<span class="tl-group-count">已加载 ${_tlPosts.length} 条动态</span>` : ""}</div>
-      ${list.map(postCard).join("")}
+      ${list.map(safePostCard).join("")}
     </div>`).join("");
   const footer = _tlHasMore
     ? `<div id="feed-load-sentinel" class="tl-feed-more" role="status" aria-live="polite"></div>`
@@ -4196,9 +4244,9 @@ function detectAskPlatform(link) {
   if (/(?:xueqiu\.com\/P\/|ZH\d)/.test(link)) return "combination";
   if (link.includes("xueqiu.com")) return "xueqiu";
   if (/weibo\.(com|cn)/.test(link)) return "weibo";
-  if (/(^|[\/:.])x\.com|twitter\.com/.test(link)) return "twitter";
+  if (/(^|[/:.])x\.com|twitter\.com/.test(link)) return "twitter";
   if (/(?:wx\.)?zsxq\.com/.test(link)) return "zsxq";
-  if (/(^|[\/:.])truthsocial\.com/.test(link)) return "truth";
+  if (/(^|[/:.])truthsocial\.com/.test(link)) return "truth";
   return "";
 }
 
@@ -4374,8 +4422,8 @@ async function renderCombinationSnapshots(kol) {
     const q = kol.quote || {};
     const quoteHtml = q.day_percent_gain != null || q.net_value != null ? `
       <div class="cube-quote">
-        <div class="cube-quote-item"><span class="cube-quote-label">净值</span><span class="cube-quote-value">${q.net_value != null ? q.net_value.toFixed(3) : "—"}</span></div>
-        <div class="cube-quote-item"><span class="cube-quote-label">今日涨跌</span><span class="cube-quote-value ${q.day_percent_gain != null ? (q.day_percent_gain >= 0 ? "up" : "down") : ""}">${q.day_percent_gain != null ? (q.day_percent_gain >= 0 ? "+" : "") + q.day_percent_gain.toFixed(2) + "%" : "—"}</span></div>
+        <div class="cube-quote-item"><span class="cube-quote-label">净值</span><span class="cube-quote-value">${q.net_value == null ? "—" : q.net_value.toFixed(3)}</span></div>
+        <div class="cube-quote-item"><span class="cube-quote-label">今日涨跌</span><span class="cube-quote-value ${q.day_percent_gain == null ? "" : (q.day_percent_gain >= 0 ? "up" : "down")}">${q.day_percent_gain == null ? "—" : (q.day_percent_gain >= 0 ? "+" : "") + q.day_percent_gain.toFixed(2) + "%"}</span></div>
         ${kol.quote_at ? `<div class="cube-quote-item"><span class="cube-quote-label">快照</span><span class="cube-quote-value small">${escapeHtml(formatSnapshotTs(kol.quote_at))}</span></div>` : ""}
       </div>` : "";
     const rows = (holdings.holdings || []).map((h) => {
@@ -5011,7 +5059,7 @@ function feishuSourceRowsHtml(data) {
       source.last_success_at ? `最近成功 ${fmtFeishuTime(source.last_success_at)}` : "尚未同步成功",
       source.next_check_at && source.enabled ? `下次检查 ${fmtFeishuTime(source.next_check_at)}` : "",
     ].filter(Boolean).join(" · ");
-    const error = source.last_error ? `<p class="feishu-source-error">${escapeHtml(imaSafeError(source.last_error))}</p>` : "";
+    const error = source.last_error ? `<p class="feishu-source-error">${escapeHtml(typeof imaSafeError === "function" ? imaSafeError(source.last_error) : source.last_error)}</p>` : "";
     const displayMode = source.display_mode === "document" ? "document" : "timeline";
     const readable = source.sync_status === "succeeded" && Number(source.entry_count || 0) > 0;
     const openLine = readable
@@ -5395,13 +5443,8 @@ async function saveZsxqPollingConfig() {
 let _localLibsLast = null;
 let _scanInFlight = false; // 扫描进行中：15s 轮询重渲染时按钮保持禁用，不复活
 
-const ciccView = createCiccView({
-  api, flash, fmtTs, currentRouteSeq: () => routeRenderSeq, routeStillActive, renderLocalTab,
-});
-const {
-  loadCiccStatus, startCiccPoll, stopCiccPoll,
-  saveCiccCategories, triggerCicc, saveCiccScheduleTime, toggleCiccSchedule,
-} = ciccView;
+// admin 视图懒加载：cicc 由 ensureAdminViews() 赋值，求值期读到的是 undefined
+let ciccView, loadCiccStatus, startCiccPoll, stopCiccPoll, saveCiccCategories, triggerCicc, saveCiccScheduleTime, toggleCiccSchedule;
 
 function localLibraryCardHtml(lib) {
   const meta = lib.error ? `异常：${escapeHtml(lib.error)}` : `${lib.pdf_count ?? 0} 个 PDF`;
@@ -6067,6 +6110,7 @@ const {
 const {
   clearImaPdfUrl,
   openImaDocument,
+  prefetchKnowledge,
   renderKnowledge,
   renderImaDocuments,
   refreshKnowledge,
@@ -6180,6 +6224,7 @@ const {
   saveKeywordsMatchReports,
   toggleReportKeyword,
   saveLlm,
+  testLlm,
   loadLlmModels,
   savePassword,
   genBindCode,
@@ -6281,7 +6326,90 @@ const {
   flash,
 });
 
-const {
+// admin 视图懒加载：codes 由 ensureAdminViews() 赋值，求值期读到的是 undefined
+let codesView, loadAdminCodes, adminCodesBatch, adminCodesClearSelect, adminCodesCopySelected, adminCodesNoteInput, adminCodesPreset, adminCodesToggle,
+  adminCodesToggleBatch, adminCodesTogglePage, adminGenerateCodes, adminRevokeBatch, adminRevokeCode, searchAdminCodes, selectAdminCodeFilter,
+  clearAdminCodesResult, copyText;
+
+// admin 视图懒加载：news 由 ensureAdminViews() 赋值，求值期读到的是 undefined
+let newsView, loadAdminNews, loadAdminPosts, selectAdminNewsSource, saveAdminNewsSettings, refreshAllAdminNews, refreshAdminNewsFeed, toggleAdminNewsSource,
+  toggleAdminNewsFeed, archiveAdminNewsSource, restoreAdminNewsSource, archiveAdminNewsFeed, restoreAdminNewsFeed, openNewsSourceModal, openNewsFeedModal,
+  updateAdminNewsQuery, updateAdminNewsStatus, updateAdminNewsArchived, adminFilterPosts, adminPostsLoadMore, adminTogglePost, adminDeletePost, adminSetPostHidden;
+
+// admin 视图懒加载：users 由 ensureAdminViews() 赋值，求值期读到的是 undefined
+let usersView, loadAdminUsers, loadAdminRequests, adminApproveRequest, adminRejectRequest, adminUsersApplyFilter, adminUsersBatch, adminUserToggleSelect,
+  adminUserTogglePage, adminUserClearSelect, adminOpenUser, adminSaveUserKnowledge, adminSaveUsername, adminSavePassword, adminSendTestPush, adminDeleteUser,
+  adminToggleAdmin, adminSaveInactivePolicy, adminInactivePolicySyncSave, adminInactivePolicyKeydown, closeAdminModal;
+
+// admin 视图懒加载：kol 由 ensureAdminViews() 赋值，求值期读到的是 undefined
+let kolView, loadAdminKols, loadAdminVocab, switchAdminKolsPlatform, adminKolsApplyFilter, adminKolsClearFilter, adminKolsPage, adminKolToggleSelect,
+  adminKolTogglePage, adminKolClearSelect, adminKolBatch, adminKolBatchCategory, adminBatchAddKols, adminBatchLinesHint, adminToggleKol, adminTogglePriority,
+  adminToggleSecondary, adminDeleteKol, adminEditKol, saveKolEdit, adminAddCategory, adminRenameCategory, adminDeleteCategory, adminSaveStockNames,
+  adminSaveTags, adminMaintainTags, adminBackfillTags, adminSetTier, adminBatchSystemToggle, adminKolWebhook, adminKolWebhookToggle, adminKolWebhookRegenerate,
+  adminKolWebhookSaveSecret, adminEditKolKeywords, saveKolKeywords, adminViewKolBlock, adminMxTagAutoSave, adminMxTagAutoAddSpecial, adminMxTagAutoRemoveSpecial,
+  adminMxTagCancel, adminMxTagOpenRunModal, adminMxTagSelAll, adminMxTagStartRun, adminMxTagTest, adminOpenTagReviewModal, closeTagReviewModal, toggleTagReviewMsg,
+  adminTagReviewModalReview, adminTagReviewSelAll, adminTagReviewSelChange, adminReviewTag, adminReviewTagsBatch, adminReviewAliasCandidate, adminTagDetailAddTag,
+  adminTagDetailRemoveTag, adminToggleViewTagging, adminTagReviewSourceChange, newsKolToggle, newsKolToggleItem, newsKolAll, newsKolNone, newsKolSearch,
+  newsKolSave, newsKolDiscard, loadResearchKolPanel, researchKolToggle, researchKolToggleItem, researchKolAll, researchKolNone, researchKolSearch, researchKolSave,
+  researchKolDiscard, loadWscnBroadcastPanel, saveWscnBroadcastSettings;
+
+// admin 视图懒加载：infra 由 ensureAdminViews() 赋值，求值期读到的是 undefined
+let infraView, runStorageConsistency, runStorageDedup, loadStorageHealth, saveStorageAlerts, refreshImaStorage, backupImaStorage, loadProxyAdmin,
+  syncProxyRouteInputs, syncProxyPoolForm, saveProxyRoutes, createProxyPool, importProxyPool, extractProxyPool, deleteProxyPool, deleteProxyNode, testProxyNode,
+  loadAdminBackup, saveBackupWebDAV, testBackupWebDAV, backupDownload, backupRestoreWebDAV, backupRestoreUpload,
+  loadAdminImages, loadImageDirectHosts, saveImageDirectHosts, scanImageCleanup, toggleAllImageCleanup, runImageCleanup;
+
+// admin 视图懒加载：ima 由 ensureAdminViews() 赋值，求值期读到的是 undefined
+let imaCollectorView, initImaMountState, imaCollectorHasUnsaved, renderImaMountGroups, renderImaSelectedGroup, renderImaFolderTree, renderImaGroupAcl,
+  renderImaCollectorDirtyState, discardImaCollectorChanges, selectImaMountGroup, setImaGroupInterval, toggleImaFolderPanel, toggleImaFolderExpand,
+  toggleImaFolder, retryImaFolderLoad, discoverImaGroups, filterAclSuggest, onAclSearchKey, toggleImaAclExpanded, retryImaGroupAcl, saveImaCollector,
+  triggerImaCollector, saveImaCredentials, stopImaProgressPoll, applyImaCollectorProgress, startImaProgressPoll, imaCollectorStatusText,
+  imaGroupDiscoveryStatusText, imaCollectorProgressHtml, imaMountGroup, imaGroupIntervalSeconds, fetchAclCandidateUsers, aclPickerHtml, addAclUser,
+  removeAclUser, imaCollectorFormSnapshot, imaCollectorFormRevision, rememberImaCollectorDraft, clearImaCollectorDraft, restoreImaCollectorOwnerToken,
+  imaSafeError;
+
+
+// admin 视图懒加载：dashboard 由 ensureAdminViews() 赋值，求值期读到的是 undefined
+let dashboardView, loadAdminStats, loadAdminDashboard, loadAdminAudit, loadAdminLogs, loadAdminErrorLogs, loadAdminSysLogsPanel, adminFilterLogs,
+  stopSysLogsTimer, renderStatsData, openAdminKolFromHealth, setPlazaSourceMode;
+
+// admin 视图懒加载：knowledge 由 ensureAdminViews() 赋值，求值期读到的是 undefined
+let knowledgeView, loadAdminKnowledge, switchKnowledgeSettingsTab, onKnowledgeTabsKey;
+
+// ---------- admin 视图懒加载 ----------
+// 9 个 admin 视图工厂不再静态 import，只在真正进入 admin 路由时 import()，
+// 首屏因此少下载约 73KB gz（研报中心等页面不再付这份钱）。
+// 上面各视图名与 options / 解构块整块搬进本函数，保持原缩进不改动，
+// 以便 diff 只剩真正新增的行；同步调用点需自己守卫（clearSessionCaches /
+// router 序章 / feishuSourceRowsHtml）。
+let adminViewsLoaded = false;
+let adminViewsPromise = null;
+
+async function ensureAdminViews() {
+  if (adminViewsLoaded) return; // 并发去重：多个 await 同时进来只跑一次
+  if (adminViewsPromise) return adminViewsPromise;
+  adminViewsPromise = (async () => {
+    const [modCicc, modCodes, modNews, modUsers, modKol, modInfra, modIma, modDashboard, modKnowledge] = await Promise.all([
+      import("./views/admin/cicc.js"),
+      import("./views/admin/codes.js"),
+      import("./views/admin/news.js"),
+      import("./views/admin/users.js"),
+      import("./views/admin/kol.js"),
+      import("./views/admin/infra.js"),
+      import("./views/admin/ima-collector.js"),
+      import("./views/admin/dashboard.js"),
+      import("./views/admin/knowledge.js"),
+    ]);
+
+    ciccView = modCicc.createCiccView({
+  api, flash, fmtTs, currentRouteSeq: () => routeRenderSeq, routeStillActive, renderLocalTab,
+    });
+    ({
+  loadCiccStatus, startCiccPoll, stopCiccPoll,
+  saveCiccCategories, triggerCicc, saveCiccScheduleTime, toggleCiccSchedule,
+    } = ciccView);
+
+    ({
   loadAdminCodes,
   adminCodesBatch,
   adminCodesClearSelect,
@@ -6298,7 +6426,7 @@ const {
   selectAdminCodeFilter,
   clearAdminCodesResult,
   copyText,
-} = createAdminCodesView({
+    } = (codesView = modCodes.createAdminCodesView({
   showConfirm,
   $,
   state,
@@ -6311,9 +6439,9 @@ const {
   fmtDbTime,
   parseDbUtcMs,
   currentAdminSeq: () => _adminRenderSeq,
-});
+    })));
 
-const {
+    ({
   loadAdminNews,
   loadAdminPosts,
   selectAdminNewsSource,
@@ -6336,7 +6464,7 @@ const {
   adminTogglePost,
   adminDeletePost,
   adminSetPostHidden,
-} = createAdminNewsView({
+    } = (newsView = modNews.createAdminNewsView({
   $,
   state,
   api,
@@ -6357,9 +6485,9 @@ const {
   PLATFORM_LABELS,
   CHEVRON_UP_ICON,
   CHEVRON_DOWN_ICON,
-});
+    })));
 
-const {
+    ({
   loadAdminUsers,
   loadAdminRequests,
   adminApproveRequest,
@@ -6380,7 +6508,7 @@ const {
   adminInactivePolicySyncSave,
   adminInactivePolicyKeydown,
   closeAdminModal,
-} = createAdminUsersView({
+    } = (usersView = modUsers.createAdminUsersView({
   showConfirm,
   $,
   state,
@@ -6401,9 +6529,9 @@ const {
   PLATFORM_LABELS,
   usernameRuleError,
   CHEVRON_RIGHT_ICON,
-});
+    })));
 
-const {
+    ({
   loadAdminKols,
   loadAdminVocab,
   switchAdminKolsPlatform,
@@ -6477,7 +6605,7 @@ const {
   adminTagDetailRemoveTag,
   adminToggleViewTagging,
   adminTagReviewSourceChange,
-} = createAdminKolsView({
+    } = (kolView = modKol.createAdminKolsView({
   $,
   state,
   api,
@@ -6497,9 +6625,9 @@ const {
   copyText,
   CHEVRON_LEFT_ICON,
   CHEVRON_RIGHT_ICON,
-});
+    })));
 
-const {
+    ({
   runStorageConsistency,
   runStorageDedup,
   loadStorageHealth,
@@ -6528,7 +6656,7 @@ const {
   scanImageCleanup,
   toggleAllImageCleanup,
   runImageCleanup,
-} = createAdminInfraView({
+    } = (infraView = modInfra.createAdminInfraView({
   showConfirm,
   $,
   state,
@@ -6544,9 +6672,9 @@ const {
   imaStoragePanelHtml,
   logout,
   PLATFORM_LABELS,
-});
+    })));
 
-const {
+    ({
   initImaMountState,
   imaCollectorHasUnsaved,
   renderImaMountGroups,
@@ -6587,7 +6715,7 @@ const {
   clearImaCollectorDraft,
   restoreImaCollectorOwnerToken,
   imaSafeError,
-} = createAdminImaCollectorView({
+    } = (imaCollectorView = modIma.createAdminImaCollectorView({
   $,
   state,
   api,
@@ -6609,10 +6737,9 @@ const {
   isAdminSettingsPath,
   currentLocalLibraries: () => _localLibsLast,
   focusCookieField,
-});
+    })));
 
-
-const {
+    ({
   loadAdminStats,
   loadAdminDashboard,
   loadAdminAudit,
@@ -6624,7 +6751,7 @@ const {
   renderStatsData,
   openAdminKolFromHealth,
   setPlazaSourceMode,
-} = createAdminDashboardView({
+    } = (dashboardView = modDashboard.createAdminDashboardView({
   $,
   state,
   api,
@@ -6668,13 +6795,13 @@ const {
   imaCollectorFormRevision,
   rateBar,
   currentRouteSeq: () => routeRenderSeq,
-});
+    })));
 
-const {
+    ({
   loadAdminKnowledge,
   switchKnowledgeSettingsTab,
   onKnowledgeTabsKey,
-} = createAdminKnowledgeView({
+    } = (knowledgeView = modKnowledge.createAdminKnowledgeView({
   $,
   state,
   api,
@@ -6723,7 +6850,19 @@ const {
   currentStatsLoadSeq: () => _adminStatsLoadSeq,
   getStatsSnapshot: () => _lastAdminStatsSnapshot,
   setStatsSnapshot: (s) => { _lastAdminStatsSnapshot = s; },
-});
+    })));
+
+    // 工厂返回值含未解构的内部方法（如 ciccView.reset），不能整体 spread 进
+    // INLINE_HANDLERS，否则会给 window 多挂一批名字；按 INLINE_HANDLERS 已有的键回填。
+    const lazyViews = { ...ciccView, ...codesView, ...newsView, ...usersView, ...kolView, ...infraView, ...imaCollectorView, ...dashboardView, ...knowledgeView };
+    for (const name of Object.keys(INLINE_HANDLERS)) {
+      if (typeof lazyViews[name] === "function") INLINE_HANDLERS[name] = lazyViews[name];
+    }
+    adminViewsLoaded = true;
+  })();
+  await adminViewsPromise;
+}
+
 
 
 function replaceRoute(path) {
@@ -6741,14 +6880,17 @@ function migrateHashRoute() {
 
 async function router() {
   stopMarketQuotes();
-  stopCiccPoll();
+  // admin 视图懒加载：这三个 stop 来自 admin 模块，未加载时没有在跑的轮询要停
+  if (adminViewsLoaded) {
+    stopCiccPoll();
+    stopSysLogsTimer();
+    stopImaProgressPoll();
+  }
   const renderSeq = ++routeRenderSeq;
   const token = state.token;
   const sessionGeneration = imaMountState.sessionGeneration;
   stopSettingsPoll();
-  stopSysLogsTimer();
   stopStatsTimer();
-  stopImaProgressPoll();
   stopTimelinePoll();
   // 离开 智囊团页：关 SSE 连接、停时钟/兜底轮询（重进页面时会重建）
   mxvTeardown();
@@ -6769,6 +6911,9 @@ async function router() {
     initTurnstile();
     return;
   }
+  const knowledgePrefetch = page === "knowledge" || page === "ima-documents"
+    ? prefetchKnowledge(rawParam)
+    : null;
   let user;
   try {
     user = await api("/api/me");
@@ -6788,7 +6933,7 @@ async function router() {
   renderSidebar(state.user);
   renderTopbar(state.user);
   renderBottomNav(state.user);
-  prefetchLiveFeed();
+  if (!knowledgePrefetch) prefetchLiveFeed();
   const navPage = page === "ima-documents" ? "knowledge" : page;
   document.querySelectorAll(".nav-item").forEach((b) =>
     b.classList.toggle("active", b.dataset.route === navPage || b.dataset.route === `${navPage}/${param}`)
@@ -6828,9 +6973,9 @@ async function router() {
     else if (page === "ima-documents") {
       const next = `${location.pathname.replace(/^\/ima-documents\b/, "/knowledge")}${location.search}`;
       if (location.pathname + location.search !== next) history.replaceState(null, "", next);
-      await renderKnowledge(renderSeq, param);
+      await renderKnowledge(renderSeq, param, knowledgePrefetch);
     }
-    else if (page === "knowledge") await renderKnowledge(renderSeq, param);
+    else if (page === "knowledge") await renderKnowledge(renderSeq, param, knowledgePrefetch);
     else if (page === "admin") {
       if (!state.user.is_admin) { replaceRoute("timeline"); return; }
       // 后台条目页签化：旧路由（含更早的 categories/tags）统一重定向到容器页签
@@ -6843,6 +6988,7 @@ async function router() {
         replaceRoute("admin/" + ADMIN_ROUTE_REDIRECTS[param] + (qs ? "&" + qs : ""));
         return;
       }
+      await ensureAdminViews();
       await renderAdmin(param || "content", renderSeq);
     }
     else { replaceRoute("timeline"); return; }
@@ -8365,6 +8511,7 @@ const INLINE_HANDLERS = {
   saveKeywordsMatchReports,
   saveKolEdit,
   saveLlm,
+  testLlm,
   saveNotify,
   savePassword,
   savePollingConfig,
@@ -8568,6 +8715,27 @@ const INLINE_HANDLERS = {
   toggleLightDarkTheme,
 };
 Object.assign(window, INLINE_HANDLERS);
+// admin 视图懒加载：INLINE_HANDLERS 里来自 admin 工厂的名字此刻还是 undefined，
+// 用 window getter 让内联 onclick 始终读到加载后的真实函数（admin 路由渲染前
+// 已经 await ensureAdminViews()，正常流程取到的一直是已就绪的值）。
+// 若在视图就绪前就被调用（例如非 admin 页面里被注入的 admin 内联按钮），
+// 先补齐视图再执行，而不是拿 undefined 静默炸掉。
+for (const name of Object.keys(INLINE_HANDLERS)) {
+  Object.defineProperty(window, name, {
+    configurable: true,
+    get() {
+      const handler = INLINE_HANDLERS[name];
+      if (typeof handler === "function") return handler;
+      return (...args) =>
+        ensureAdminViews().then(() => {
+          const ready = INLINE_HANDLERS[name];
+          return ready(...args);
+        });
+    },
+    // 运行时可覆盖：浏览器测试会把视图方法 Object.assign 回 window
+    set(value) { INLINE_HANDLERS[name] = value; },
+  });
+}
 
 const { startMarketQuotes, stopMarketQuotes } = createMarketView({ api, escapeHtml });
 

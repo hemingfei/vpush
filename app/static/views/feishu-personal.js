@@ -727,6 +727,30 @@ export function createFeishuPersonalView(dependencies) {
     }
   }
 
+  async function testLlm() {
+    const routeSeq = currentRouteSeq();
+    try {
+      const data = await api("/api/me/llm-test", {
+        method: "POST",
+        body: JSON.stringify({
+          llm_api_base: ($("#set-llm-base").value || "").trim(),
+          llm_api_key: ($("#set-llm-key").value || "").trim(),
+          llm_model: ($("#set-llm-model").value || "").trim(),
+          llm_api_format: ($("#set-llm-format").value || "chat").trim(),
+        }),
+      });
+      if (!routeStillActive(routeSeq)) return;
+      if (data.ok) {
+        const tokens = data.usage && data.usage.total_tokens;
+        flash(`可用 ${data.latency_ms}ms` + (tokens != null ? ` · ${tokens} tokens` : ""));
+      } else {
+        flash(data.error || "测试失败", "error");
+      }
+    } catch (err) {
+      if (routeStillActive(routeSeq)) flash(err.message || "测试失败", "error");
+    }
+  }
+
   async function saveLlm() {
     const routeSeq = currentRouteSeq();
     const token = state.token;
@@ -735,12 +759,13 @@ export function createFeishuPersonalView(dependencies) {
       llm_api_base: ($("#set-llm-base").value || "").trim(),
       llm_api_key: ($("#set-llm-key").value || "").trim(),
       llm_model: ($("#set-llm-model").value || "").trim(),
+      llm_api_format: ($("#set-llm-format").value || "chat").trim(),
     };
     try {
       await api("/api/me", { method: "PUT", body: JSON.stringify(payload) });
       if (!routeStillActive(routeSeq) || token !== state.token
         || sessionGeneration !== imaMountState.sessionGeneration) return;
-      flash(payload.llm_api_key ? "已保存，将用你的模型" : "已保存，将用站点默认模型");
+      flash(payload.llm_api_key ? "已保存，将用你的模型" : "已保存，未填 Key 时用普通摘要");
       await reloadSettings(routeSeq);
     } catch (err) {
       if (!routeStillActive(routeSeq) || token !== state.token
@@ -751,7 +776,7 @@ export function createFeishuPersonalView(dependencies) {
 
   async function loadLlmModels() {
     const routeSeq = currentRouteSeq();
-    const list = $("#set-llm-model-list");
+    const select = $("#set-llm-model-select");
     const input = $("#set-llm-model");
     try {
       const data = await api("/api/me/llm-models", {
@@ -763,10 +788,20 @@ export function createFeishuPersonalView(dependencies) {
       });
       if (!routeStillActive(routeSeq)) return;
       const models = Array.isArray(data.models) ? data.models : [];
-      if (list) {
-        list.innerHTML = models.map((id) => `<option value="${escapeHtml(id)}"></option>`).join("");
+      const current = (input && input.value) || "";
+      if (select) {
+        select.innerHTML = [`<option value="">手填模型名</option>`]
+          .concat(models.map((id) => {
+            const selected = id === current ? " selected" : "";
+            return `<option value="${escapeHtml(id)}"${selected}>${escapeHtml(id)}</option>`;
+          }))
+          .join("");
+        select.hidden = models.length === 0;
+        if (models.length && input && !input.value) {
+          input.value = models[0];
+          select.value = models[0];
+        }
       }
-      if (input && models.length && !input.value) input.value = models[0];
       flash(models.length ? `已加载 ${models.length} 个模型` : "接口未返回模型，可手填模型名");
     } catch (err) {
       if (routeStillActive(routeSeq)) flash(err.message || "拉取模型失败", "error");
@@ -855,6 +890,7 @@ export function createFeishuPersonalView(dependencies) {
     saveKeywordsMatchReports,
     toggleReportKeyword,
     saveLlm,
+    testLlm,
     loadLlmModels,
     savePassword,
     genBindCode,

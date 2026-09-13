@@ -1,4 +1,4 @@
-"""可选 LLM：站点默认 Grok（管理员推送设置），用户可自配覆盖。
+"""可选 LLM：站点默认来自环境变量，用户可自配覆盖。
 
 设计要点：
 - 失败静默降级：任何异常只记日志并返回 None，调用方回退原逻辑；
@@ -29,6 +29,24 @@ class LlmTruncatedError(Exception):
     仅在调用方显式传 raise_on_truncate=True 时抛出（默认只记 warning 并照常
     返回文本，存量调用方行为不变）；调用方按需降载重试（如减小输入区块）。
     """
+
+
+def normalize_llm_api_format(value: str | None) -> str:
+    raw = str(value or "").strip().lower().replace("_", "-")
+    if raw in ("responses", "openai-responses"):
+        return "responses"
+    return "chat"
+
+
+def with_llm_overrides(llm_config, **over):
+    if llm_config is None:
+        return None
+    from types import SimpleNamespace
+
+    data = dict(vars(llm_config))
+    data.update(over)
+    return SimpleNamespace(**data)
+
 
 class _RetryableError(Exception):
     """瞬时错误（429/5xx/空响应），可重试一次。"""
@@ -65,6 +83,49 @@ def _message_text(message: dict) -> str:
     return str((message or {}).get("reasoning_content") or "").strip()
 
 
+def _completion_text(payload, api_format: str) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    if api_format == "responses":
+        text = str(payload.get("output_text") or "").strip()
+        if text:
+            return text
+        for item in payload.get("output") or []:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        t = str(block.get("text") or "").strip()
+                        if t:
+                            return t
+            elif isinstance(content, str) and content.strip():
+                return content.strip()
+    message = ((payload.get("choices") or [{}])[0].get("message")) or {}
+    return _message_text(message)
+
+
+def _usage_total(payload) -> int | None:
+    if not isinstance(payload, dict):
+        return None
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    for key in ("total_tokens", "total_token_count"):
+        if usage.get(key) is not None:
+            try:
+                return int(usage[key])
+            except (TypeError, ValueError):
+                return None
+    try:
+        inp = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+        out = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+    except (TypeError, ValueError):
+        return None
+    return inp + out or None
+
+
 def _chat(
     llm_config,
     messages,
@@ -76,8 +137,9 @@ def _chat(
     timeout: float = DEFAULT_CHAT_TIMEOUT,
     return_usage: bool = False,
     raise_on_truncate: bool = False,
+    meta: dict | None = None,
 ) -> str | tuple[str, dict] | None:
-    """OpenAI 兼容 chat/completions；未配置或失败返回 None。
+    """OpenAI 兼容 chat/completions 或 /responses；未配置或失败返回 None。
 
     return_usage=True 时成功返回 (文本, usage 字典)，失败返回 (None, {})，
     供需要统计 token 的调用方（如 AI 分析任务）使用；usage.finish_reason
@@ -85,11 +147,13 @@ def _chat(
     raise_on_truncate=True 时输出被截断（finish_reason=length）抛 LlmTruncatedError
     而不是返回半截文本——截断与输入强相关，重试同样输入无意义，故直接抛给
     调用方降载（如减小区块）后重试。
+    meta 非 None 时往里写入 usage 总 token 数（probe_llm 用）。
     """
     values = _config_values(llm_config)
     if values is None:
         return (None, {}) if return_usage else None
     api_key, api_base, model = values
+    api_format = normalize_llm_api_format(getattr(llm_config, "api_format", ""))
     import httpx
 
     user_supplied = bool(getattr(llm_config, "user_supplied", False))
@@ -102,24 +166,37 @@ def _chat(
         attempt = 0
         while attempt < attempts:
             try:
-                payload = {
-                    "model": model,
-                    "messages": messages,
-                    "temperature": temperature,
-                }
-                # 部分服务端（如火山方舟）会校验 max_tokens 并对超限值返回 400，
-                # 触发后降级为不传该字段，由服务端按模型自身的输出上限处理
-                if use_max_tokens:
-                    payload["max_tokens"] = max_tokens
-                if use_format:
-                    payload["response_format"] = use_format
+                if api_format == "responses":
+                    url = f"{api_base}/responses"
+                    payload = {
+                        "model": model,
+                        "input": messages,
+                        "temperature": temperature,
+                    }
+                    if use_max_tokens:
+                        payload["max_output_tokens"] = max_tokens
+                    if use_format:
+                        payload["text"] = {"format": use_format}
+                else:
+                    url = f"{api_base}/chat/completions"
+                    payload = {
+                        "model": model,
+                        "messages": messages,
+                        "temperature": temperature,
+                    }
+                    # 部分服务端（如火山方舟）会校验 max_tokens 并对超限值返回 400，
+                    # 触发后降级为不传该字段，由服务端按模型自身的输出上限处理
+                    if use_max_tokens:
+                        payload["max_tokens"] = max_tokens
+                    if use_format:
+                        payload["response_format"] = use_format
                 if user_supplied:
                     from .url_safety import safe_request_limited
 
                     resp = safe_request_limited(
                         client,
                         "POST",
-                        f"{api_base}/chat/completions",
+                        url,
                         max_bytes=USER_LLM_MAX_BYTES,
                         headers={
                             "Authorization": f"Bearer {api_key}",
@@ -137,7 +214,7 @@ def _chat(
                     # safe_request_limited 同做法，宽松语义——截断告警不失败）
                     with client.stream(
                         "POST",
-                        f"{api_base}/chat/completions",
+                        url,
                         headers={"Authorization": f"Bearer {api_key}"},
                         json=payload,
                     ) as raw_resp:
@@ -174,16 +251,14 @@ def _chat(
                     raise _RetryableError(f"LLM HTTP {resp.status_code}")
                 resp.raise_for_status()
                 try:
-                    data = resp.json()
+                    body = resp.json()
                 except ValueError:
                     # 网关返回非 JSON（HTML 错误页等）：按瞬时错误走重试
                     raise _RetryableError(f"LLM 响应非 JSON: {resp.text[:120]}") from None
-                choice = (data.get("choices") or [{}])[0]
-                message = choice.get("message") or {}
-                finish_reason = choice.get("finish_reason")
-                text = _message_text(message)
+                text = _completion_text(body, api_format)
                 if not text:
                     raise _RetryableError("LLM 返回空")
+                finish_reason = ((body.get("choices") or [{}])[0]).get("finish_reason")
                 if finish_reason == "length":
                     if raise_on_truncate:
                         # 截断由输入体量决定，重试同样输入没有意义：直接抛给调用方
@@ -191,8 +266,12 @@ def _chat(
                             f"LLM 输出因 max_tokens 上限被截断（finish_reason=length，max_tokens={max_tokens}）"
                         )
                     logger.warning("LLM 输出因 max_tokens 上限被截断（finish_reason=length），内容不完整")
+                if meta is not None:
+                    usage_total = _usage_total(body)
+                    if usage_total is not None:
+                        meta["usage"] = usage_total
                 if return_usage:
-                    usage = dict(data.get("usage") or {})
+                    usage = dict(body.get("usage") or {})
                     usage["finish_reason"] = finish_reason
                     return text, usage
                 return text
@@ -268,6 +347,34 @@ def list_models(llm_config) -> list[str] | None:
     return out
 
 
+def probe_llm(llm_config, client=None) -> dict:
+    """用当前配置打一条最短请求，返回 ok/耗时/用量。"""
+    started = time.monotonic()
+    meta: dict = {}
+    text = _chat(
+        llm_config,
+        [{"role": "user", "content": "Reply with exactly: PONG"}],
+        16,
+        client=client,
+        temperature=0,
+        attempts=1,
+        timeout=20,
+        meta=meta,
+    )
+    latency_ms = int((time.monotonic() - started) * 1000)
+    if not text:
+        return {"ok": False, "latency_ms": latency_ms, "error": "无响应或地址/Key/模型不正确"}
+    result = {
+        "ok": True,
+        "latency_ms": latency_ms,
+        "format": normalize_llm_api_format(getattr(llm_config, "api_format", "")),
+        "model": getattr(llm_config, "model", "") or "",
+    }
+    if meta.get("usage") is not None:
+        result["usage"] = {"total_tokens": meta["usage"]}
+    return result
+
+
 SUMMARY_SYSTEM_PROMPT = (
     "你是信息摘要助手。把下面用户订阅的社交动态整理成简洁的中文要点。"
     "要求：按重要性排序，每条要点一行，以「- 」开头；"
@@ -291,18 +398,20 @@ def _post_lines(posts) -> list[str]:
     return lines
 
 
-def summary_cache_key(posts, api_base: str, model: str) -> str:
+def summary_cache_key(posts, api_base: str, model: str, api_format: str = "chat") -> str:
     """摘要缓存键：平台+外部ID 有序拼接，同一批帖文（同配置）复用同一份摘要。"""
     ids = ",".join(f"{p.platform}:{p.external_id}" for p in posts)
-    return f"{api_base}|{model}|{ids}"
+    return f"{api_base}|{model}|{normalize_llm_api_format(api_format)}|{ids}"
 
 
 def summarize_posts(posts, llm_config=None, client=None, cache=None) -> str | None:
     """生成摘要文本；未配置或失败返回 None（调用方降级为普通汇总）。
 
+    推送摘要固定 Chat Completions（thinking/Responses 贵且慢）。
     cache: 可选 dict，以「配置+帖文ID列表」为键缓存摘要，同一批帖文只调一次
     大模型（批量推送时多个订阅用户共享同一份摘要）。
     """
+    llm_config = with_llm_overrides(llm_config, api_format="chat")
     values = _config_values(llm_config)
     if values is None:
         return None
@@ -311,7 +420,7 @@ def summarize_posts(posts, llm_config=None, client=None, cache=None) -> str | No
     content = "\n".join(_post_lines(posts))
     if not content.strip():
         return None
-    key = summary_cache_key(posts, api_base, model) if cache is not None else None
+    key = summary_cache_key(posts, api_base, model, "chat") if cache is not None else None
     if key is not None and key in cache:
         return cache[key]
     if not any(
@@ -503,67 +612,6 @@ def summarize_daily(posts, llm_config=None, client=None) -> DailySummary | None:
 
 # ---- 股票黑话别名识别（每日一次低频任务） ----
 
-ALIAS_SYSTEM_PROMPT = (
-    "你是财经社区黑话翻译器。用户会给你一份帖子中高频出现的候选词列表，"
-    "以及一份已知股票名列表。请判断哪些候选词是某只已知股票的别名/昵称"
-    "（如「宁王」→「宁德时代」、「药茅」→「恒瑞医药」）。"
-    "只输出 JSON 数组，每个元素："
-    '{"alias": "候选词", "stock": "对应已知股票名", "confidence": "high|medium|none"}。'
-    "confidence 为 high（确定是别名）或 medium（很可能是，但需留意）；"
-    "不是股票别名的标 none 或直接省略。除 JSON 外不要输出任何内容。"
-)
-
-
-def suggest_stock_aliases(candidates, known_stocks, llm_config=None, client=None) -> list[dict]:
-    """让 LLM 判断候选词是否为已知股票别名，返回 [{"alias","stock","confidence"}]。
-
-    未配置 LLM 或任何失败返回 []（调用方跳过本次识别）；confidence 为
-    high/medium 的条目保留（调度层只采纳 high 自动写入），none 丢弃。
-    """
-    if not candidates:
-        return []
-    text = _chat(
-        llm_config,
-        [
-            {"role": "system", "content": ALIAS_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": (
-                    f"候选词（可能含股票别名）：{json.dumps(candidates[:100], ensure_ascii=False)}\n"
-                    f"已知股票名：{json.dumps(known_stocks, ensure_ascii=False)}"
-                ),
-            },
-        ],
-        2000,
-        client=client,
-        temperature=0,
-        attempts=1,
-        response_format={"type": "json_object"},
-    )
-    if not text:
-        return []
-    match = re.search(r"\[.*\]", text, re.DOTALL)
-    if not match:
-        logger.warning("LLM 别名识别无 JSON 数组: %.100s", text)
-        return []
-    try:
-        parsed = json.loads(match.group(0))
-    except ValueError:
-        return []
-    result = []
-    known_lower = {str(s).lower() for s in known_stocks}
-    for item in parsed if isinstance(parsed, list) else []:
-        if not isinstance(item, dict):
-            continue
-        alias = str(item.get("alias") or "").strip()
-        stock = str(item.get("stock") or "").strip()
-        confidence = str(item.get("confidence") or "none").strip().lower()
-        if alias and stock and stock.lower() in known_lower and confidence in ("high", "medium"):
-            result.append({"alias": alias, "stock": stock, "confidence": confidence})
-    logger.info("LLM 别名识别候选=%d 采纳=%d", len(candidates), len(result))
-    return result
-
-
 # ---- 股票标记解析（$标记$ → 官方名/戏称） ----
 
 MARK_RESOLVE_SYSTEM_PROMPT = (
@@ -590,6 +638,7 @@ def resolve_stock_marks(marks, llm_config=None, client=None) -> list[dict]:
     """
     if not marks:
         return []
+    llm_config = with_llm_overrides(llm_config, api_format="chat")
     text = _chat(
         llm_config,
         [
@@ -1030,9 +1079,43 @@ def research_viewpoints(posts, topic_hints, action_tags, llm_config=None, client
 REPORT_EXTRACT_MAX_CHARS = 12000
 REPORT_EXTRACT_TIMEOUT = 90
 
+_REPORT_RATING_ZH = {
+    "strong buy": "强烈买入",
+    "speculative buy": "投机买入",
+    "long term buy": "长期买入",
+    "buy": "买入",
+    "accumulate": "增持",
+    "add": "增持",
+    "overweight": "增持",
+    "outperform": "跑赢大市",
+    "market outperform": "跑赢大市",
+    "sector outperform": "跑赢行业",
+    "market perform": "与大市同步",
+    "sector perform": "与行业同步",
+    "equal weight": "标配",
+    "equalweight": "标配",
+    "neutral": "中性",
+    "hold": "持有",
+    "underperform": "跑输大市",
+    "sector underperform": "跑输行业",
+    "underweight": "减持",
+    "reduce": "减持",
+    "sell": "卖出",
+}
+
+
+def report_rating_zh(rating: str) -> str:
+    """卖方英文评级 → 中文投资评级；已是中文则原样返回。"""
+    raw = str(rating or "").strip()
+    if not raw:
+        return ""
+    key = " ".join(raw.lower().replace("_", " ").replace("-", " ").split())
+    return _REPORT_RATING_ZH.get(key, raw)
+
+
 _REPORT_EXTRACT_PROMPT = (
     "从中文或英文研报文本中抽取结构化信息，只输出一个 JSON 对象（不要 markdown 代码块、不要解释），字段：\n"
-    '{"rating": "评级原文（如 首次覆盖/维持/增持/Buy/Outperform，无则空串）", '
+    '{"rating": "中文投资评级（买入/增持/中性/减持/卖出/跑赢大市/跑输大市等，不要英文）", '
     '"target_price": "目标价原文（含币种或区间，无则空串）", '
     '"thesis": "简体中文的一句话核心逻辑，不超过80字，无则空串", '
     '"report_kind": "宏观/策略/行业/公司/固收 之一", '
@@ -1040,6 +1123,39 @@ _REPORT_EXTRACT_PROMPT = (
     "证券代码保留市场常用格式：A 股用 6 位数字，美股如 NVDA，港股如 700.HK；"
     "只抽取文本明确提到的事实，不确定就留空；tickers 最多 8 个，按重要性排序。"
 )
+
+_REPORT_TITLE_RATINGS = (
+    "Strong Buy",
+    "Market Outperform",
+    "Outperform",
+    "Overweight",
+    "Market Perform",
+    "Equal-weight",
+    "Underperform",
+    "Underweight",
+    "Neutral",
+    "Hold",
+    "Buy",
+    "Sell",
+    "跑赢行业",
+    "首次覆盖",
+    "买入",
+    "增持",
+    "推荐",
+    "中性",
+    "持有",
+    "减持",
+    "卖出",
+)
+
+
+def _report_title_rating(title: str) -> str:
+    """只接受标题中独立出现的常见评级，避免从正文猜测。"""
+    text = str(title or "")
+    for rating in _REPORT_TITLE_RATINGS:
+        if re.search(rf"(?<![A-Za-z]){re.escape(rating)}(?![A-Za-z])", text, re.IGNORECASE):
+            return rating
+    return ""
 
 
 def _parse_report_extraction(content: str) -> dict:
@@ -1059,7 +1175,7 @@ def _parse_report_extraction(content: str) -> dict:
 
 def clean_report_extraction(data: dict, universe: dict[str, str]) -> dict:
     """规范化抽取字段；标的按词表白名单校验，词表没有的代码视为幻觉丢弃。"""
-    rating = str(data.get("rating") or "").strip()[:24]
+    rating = report_rating_zh(str(data.get("rating") or "").strip())[:24]
     target_price = str(data.get("target_price") or "").strip()[:64]
     thesis = " ".join(str(data.get("thesis") or "").split())[:200]
     report_kind = str(data.get("report_kind") or "").strip()[:12]
@@ -1115,6 +1231,7 @@ def extract_report_structure(
     model: str = "",
     universe: dict[str, str] | None = None,
     client=None,
+    title: str = "",
 ) -> dict:
     """抽取单篇研报结构化信息；LLM 失败抛 RuntimeError，解析失败抛 ValueError。
 
@@ -1122,7 +1239,8 @@ def extract_report_structure(
     文本过短或确认无结构信息时 status='empty'。
     """
     body = " ".join((text or "").split())
-    if len(body) < 200:
+    report_title = " ".join((title or "").split())
+    if len(body) < 200 and not report_title:
         return clean_report_extraction({}, universe or {})
     values = _config_values(llm_config)
     if values is None:
@@ -1138,7 +1256,13 @@ def extract_report_structure(
     )
     content = _chat(
         task_cfg,
-        [{"role": "user", "content": f"{_REPORT_EXTRACT_PROMPT}\n\n文本：{body[:REPORT_EXTRACT_MAX_CHARS]}"}],
+        [{
+            "role": "user",
+            "content": (
+                f"{_REPORT_EXTRACT_PROMPT}\n\n"
+                f"标题：{report_title}\n正文：{body[:REPORT_EXTRACT_MAX_CHARS]}"
+            ),
+        }],
         max_tokens=2000,
         client=client,
         temperature=0.1,
@@ -1147,4 +1271,7 @@ def extract_report_structure(
     )
     if not content:
         raise RuntimeError("LLM 抽取请求失败")
-    return clean_report_extraction(_parse_report_extraction(content), universe or {})
+    parsed = _parse_report_extraction(content)
+    if not str(parsed.get("rating") or "").strip():
+        parsed["rating"] = _report_title_rating(report_title)
+    return clean_report_extraction(parsed, universe or {})

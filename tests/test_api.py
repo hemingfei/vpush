@@ -850,21 +850,31 @@ def test_recent_logs_debug_exact_match():
     assert len(recent_logs(level="ERROR")) == 1
 
 
-def test_error_logs_persist_and_filter():
-    """错误记录：WARNING+ 落库、级别过滤、跨重启语义（DB 存储）。"""
+def test_error_logs_persist_and_filter(monkeypatch):
+    """错误记录：WARNING+ 落库、级别过滤、跨重启语义（DB 存储）。
+
+    断言只看本用例写的那批（logger=app.test）：慢机器上 app.db 的 slow query
+    WARNING 也会落进同一张表，全局断言会随机多出一行（CI 慢磁盘上必现）。
+    """
+    from app import db as db_module
+
+    # 阀值压到 0：每条语句都产生 slow query WARNING，持续复现 CI 的慢磁盘场景
+    monkeypatch.setattr(db_module, "_SLOW_QUERY_SECONDS", 0.0)
     client = make_client()
     admin_headers = auth_headers(client)
     db = client.app.state.db
     db.record_error_log("WARNING", "app.test", "磁盘快满了")
     db.record_error_log("ERROR", "app.test", "抓取失败 traceback")
     db.record_error_log("INFO", "app.test", "普通信息不入错误记录")
-    resp = client.get("/api/admin/error-logs", headers=admin_headers)
-    assert resp.status_code == 200
-    logs = resp.json()["logs"]
-    assert [l["level"] for l in logs] == ["INFO", "ERROR", "WARNING"]  # 新->旧
+
+    def own_logs(query=""):
+        resp = client.get(f"/api/admin/error-logs?q=app.test{query}", headers=admin_headers)
+        assert resp.status_code == 200
+        return resp.json()["logs"]
+
+    assert [l["level"] for l in own_logs()] == ["INFO", "ERROR", "WARNING"]  # 新->旧
     # 级别过滤：ERROR+ 只看 ERROR（含 CRITICAL）
-    resp = client.get("/api/admin/error-logs?level=ERROR", headers=admin_headers)
-    assert [l["level"] for l in resp.json()["logs"]] == ["ERROR"]
+    assert [l["level"] for l in own_logs("&level=ERROR")] == ["ERROR"]
     # 关键词过滤
     resp = client.get("/api/admin/error-logs?q=磁盘", headers=admin_headers)
     assert [l["message"] for l in resp.json()["logs"]] == ["磁盘快满了"]
@@ -888,6 +898,30 @@ def test_error_db_handler_captures_warnings():
     logging.getLogger("app.test").info("普通信息不该进")
     assert ("WARNING", "app.test", "测试告警") in captured
     assert not any("普通信息" in c[2] for c in captured)
+
+
+def test_error_db_handler_does_not_reenter_itself():
+    """sink 写库期间产生的 WARNING 不再回灌：慢库上否则会自激循环。"""
+    import logging
+
+    from app import logging_setup
+
+    captured = []
+
+    def sink(record):
+        captured.append(record.getMessage())
+        # 模拟「写库超阀值 → 又一条 slow query WARNING」
+        logging.getLogger("app.db").warning("slow query 900ms: INSERT INTO error_logs")
+
+    logging_setup.setup_logging(level="INFO")  # 幂等：handler 只挂一次
+    previous = logging_setup._error_sink
+    logging_setup.register_error_sink(sink)
+    try:
+        logging.getLogger("app.test").warning("外层告警")
+    finally:
+        logging_setup.register_error_sink(previous)
+
+    assert captured == ["外层告警"]
 
 
 def test_no_rsshub_fallback_in_frontend_or_compose():
@@ -4341,6 +4375,62 @@ def test_img_proxy_whitelisted_host_bypasses_dns_hijack(monkeypatch):
     assert resp.content == b"\xff\xd8\xffok"
 
 
+def test_img_proxy_rate_limit_per_ip(monkeypatch):
+    """匿名 img-proxy 按 IP 限速，避免公网刷带宽。"""
+    monkeypatch.setattr("app.api.IMAGE_PROXY_MAX_PER_WINDOW", 3)
+    client = make_client()
+    params = {"url": "https://example-cdn.com/x.jpg"}
+    for _ in range(3):
+        assert client.get("/api/img-proxy", params=params).status_code == 400
+    blocked = client.get("/api/img-proxy", params=params)
+    assert blocked.status_code == 429
+    assert blocked.headers.get("retry-after")
+    assert "频繁" in blocked.json()["detail"]
+
+
+def test_img_proxy_xff_cannot_bypass_rate_limit(monkeypatch):
+    """未信任反代时，轮换 X-Forwarded-For 不能绕过 img-proxy 限速。"""
+    monkeypatch.setattr("app.api.IMAGE_PROXY_MAX_PER_WINDOW", 3)
+    client = make_client()
+    params = {"url": "https://example-cdn.com/x.jpg"}
+    for i in range(3):
+        assert client.get(
+            "/api/img-proxy",
+            params=params,
+            headers={"X-Forwarded-For": f"1.1.1.{i}"},
+        ).status_code == 400
+    assert client.get(
+        "/api/img-proxy",
+        params=params,
+        headers={"X-Forwarded-For": "9.9.9.9"},
+    ).status_code == 429
+
+
+def test_img_proxy_rate_limit_buckets_trusted_xff(monkeypatch):
+    """信任反代后，不同 X-Forwarded-For 分桶，互不影响。"""
+    monkeypatch.setattr("app.api.IMAGE_PROXY_MAX_PER_WINDOW", 2)
+    cfg = Config()
+    cfg.web.trust_proxy = True
+    client = make_client(config=cfg)
+    params = {"url": "https://example-cdn.com/x.jpg"}
+    for _ in range(2):
+        assert client.get(
+            "/api/img-proxy",
+            params=params,
+            headers={"X-Forwarded-For": "1.1.1.1"},
+        ).status_code == 400
+    assert client.get(
+        "/api/img-proxy",
+        params=params,
+        headers={"X-Forwarded-For": "1.1.1.1"},
+    ).status_code == 429
+    assert client.get(
+        "/api/img-proxy",
+        params=params,
+        headers={"X-Forwarded-For": "2.2.2.2"},
+    ).status_code == 400
+
+
 def test_me_subscription_count():
     client = make_client()
     admin_headers = auth_headers(client)
@@ -6180,6 +6270,62 @@ def test_llm_models_lists_openai_compatible_ids(monkeypatch):
     )
     assert resp.status_code == 200
     assert resp.json()["models"] == ["gpt-4o", "gpt-4o-mini"]
+
+
+def test_me_llm_test_returns_usage(monkeypatch):
+    client = make_client()
+    headers = user_headers(client, "llm-test-user")
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
+
+    def fake_probe(cfg):
+        assert cfg.api_key == "sk-test"
+        assert cfg.model == "gpt-test"
+        assert cfg.api_format == "chat"
+        return {
+            "ok": True,
+            "latency_ms": 12,
+            "format": "chat",
+            "model": "gpt-test",
+            "usage": {"total_tokens": 9},
+        }
+
+    monkeypatch.setattr("app.llm.probe_llm", fake_probe)
+    resp = client.post(
+        "/api/me/llm-test",
+        json={
+            "llm_api_base": "https://api.openai.com/v1",
+            "llm_api_key": "sk-test",
+            "llm_model": "gpt-test",
+            "llm_api_format": "chat",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert resp.json()["usage"]["total_tokens"] == 9
+
+
+def test_me_saves_llm_api_format():
+    client = make_client()
+    headers = user_headers(client, "llm-format-user")
+    resp = client.put(
+        "/api/me",
+        json={"llm_api_format": "openai-responses", "llm_model": "gpt-test"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["llm_api_format"] == "responses"
+    me = client.get("/api/me", headers=headers)
+    assert me.status_code == 200
+    assert me.json()["llm_api_format"] == "responses"
+    assert me.json()["llm_model"] == "gpt-test"
+
+
+def test_llm_models_requires_key():
+    client = make_client()
+    headers = user_headers(client, "llm-empty")
+    resp = client.post("/api/me/llm-models", json={}, headers=headers)
+    assert resp.status_code == 400
 
 
 def test_llm_models_rejects_intranet_base():

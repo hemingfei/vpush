@@ -1,6 +1,7 @@
 """Cached quotes and intraday minute prices for the timeline market watch."""
 from __future__ import annotations
 
+import logging
 import math
 import re
 import threading
@@ -10,6 +11,8 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 NY_TZ = ZoneInfo("America/New_York")
@@ -58,7 +61,7 @@ def _easter_sunday(year: int) -> date:
     # Anonymous Gregorian algorithm; Good Friday is the only Easter-derived NYSE closure.
     a, b, c = year % 19, year // 100, year % 100
     d, e = b // 4, b % 4
-    f, g = (b + 8) // 25, (b - (b + 8) // 25 + 1) // 3
+    g = (b - (b + 8) // 25 + 1) // 3
     h = (19 * a + b - d - g + 15) % 30
     i, k = c // 4, c % 4
     l = (32 + 2 * e + 2 * i - h - k) % 7
@@ -164,7 +167,10 @@ def quote_status(item: dict, now: datetime) -> str:
 class MarketQuotes:
     def __init__(self):
         self._locks = {group: threading.Lock() for group in GROUPS}
-        self._cache = {group: {"items": {}, "retry_at": 0.0} for group in GROUPS}
+        self._cache = {
+            group: {"items": {}, "retry_at": 0.0, "refreshing": False}
+            for group in GROUPS
+        }
 
     def _intraday(self, client: httpx.Client, symbol: str) -> tuple[str, dict | None]:
         try:
@@ -175,46 +181,123 @@ class MarketQuotes:
         except (httpx.HTTPError, ValueError, TypeError, AttributeError):
             return symbol, None
 
+    def _fetch_group(self, group: str, previous_items: dict) -> dict:
+        fresh = {}
+        with httpx.Client(timeout=8.0) as client:
+            try:
+                response = client.get(QUOTE_URL + ",".join(symbol for symbol, _ in GROUPS[group]))
+                response.raise_for_status()
+                fresh = {
+                    item["symbol"]: item
+                    for item in parse_quotes(response.content.decode("gb18030"), group)
+                }
+            except (httpx.HTTPError, ValueError, UnicodeError):
+                pass
+            items = {}
+            for symbol, name in GROUPS[group]:
+                previous = previous_items.get(symbol, {"symbol": symbol, "name": name})
+                items[symbol] = {
+                    **previous,
+                    **fresh.get(symbol, {}),
+                    "stale": symbol not in fresh,
+                }
+            if fresh:
+                with ThreadPoolExecutor(max_workers=6) as pool:
+                    for symbol, intraday in pool.map(
+                        lambda symbol: self._intraday(client, symbol), fresh
+                    ):
+                        item = items[symbol]
+                        quote_date = item["quoted_at"][:10]
+                        valid = intraday is not None and intraday["date"] == quote_date
+                        if valid:
+                            item["intraday"] = intraday
+                        elif item.get("intraday", {}).get("date") != quote_date:
+                            item.pop("intraday", None)
+                        item["intraday_stale"] = not valid
+        return items
+
+    def _refresh_group(self, group: str) -> None:
+        lock = self._locks[group]
+        with lock:
+            previous_items = {
+                symbol: dict(item)
+                for symbol, item in self._cache[group]["items"].items()
+            }
+        items = None
+        try:
+            items = self._fetch_group(group, previous_items)
+        except Exception:  # noqa: BLE001 - a background refresh must release its flag
+            logger.exception("market quote refresh failed group=%s", group)
+        finally:
+            with lock:
+                cache = self._cache[group]
+                if items is not None:
+                    cache["items"] = items
+                else:
+                    for item in cache["items"].values():
+                        item["stale"] = True
+                cache["retry_at"] = time.monotonic() + 30
+                cache["refreshing"] = False
+
+    def _start_refresh(self, group: str) -> None:
+        threading.Thread(
+            target=self._refresh_group,
+            args=(group,),
+            name=f"market-{group}-refresh",
+            daemon=True,
+        ).start()
+
+    def _snapshot_locked(self, group: str, now: datetime) -> dict:
+        items = []
+        for item in self._cache[group]["items"].values():
+            status = quote_status(item, now)
+            intraday = item.get("intraday")
+            lagging = False
+            if intraday and status == "trading":
+                quoted_at = datetime.fromisoformat(item["quoted_at"])
+                last_point = datetime.fromisoformat(
+                    f'{intraday["date"]}T{intraday["points"][-1]["time"]}'
+                ).replace(tzinfo=quoted_at.tzinfo)
+                lagging = (quoted_at - last_point).total_seconds() > 180
+            items.append(
+                {
+                    **item,
+                    "status": status,
+                    "intraday_stale": item["stale"]
+                    or item.get("intraday_stale", True)
+                    or lagging,
+                }
+            )
+        return {
+            "group": group,
+            "items": items,
+            "stale": any(item["stale"] for item in items),
+        }
+
     def snapshot(self, group: str = "auto") -> dict:
         now = datetime.now(CN_TZ)
         group = default_group(now) if group == "auto" else group
-        with self._locks[group]:
+        refresh_sync = False
+        refresh_async = False
+        lock = self._locks[group]
+        with lock:
             cache = self._cache[group]
-            if time.monotonic() >= cache["retry_at"]:
-                fresh = {}
-                with httpx.Client(timeout=8.0) as client:
-                    try:
-                        response = client.get(QUOTE_URL + ",".join(symbol for symbol, _ in GROUPS[group]))
-                        response.raise_for_status()
-                        fresh = {item["symbol"]: item for item in parse_quotes(response.content.decode("gb18030"), group)}
-                    except (httpx.HTTPError, ValueError, UnicodeError):
-                        pass
-                    for symbol, name in GROUPS[group]:
-                        previous = cache["items"].get(symbol, {"symbol": symbol, "name": name})
-                        cache["items"][symbol] = {**previous, **fresh.get(symbol, {}), "stale": symbol not in fresh}
-                    if fresh:
-                        with ThreadPoolExecutor(max_workers=6) as pool:
-                            for symbol, intraday in pool.map(lambda symbol: self._intraday(client, symbol), fresh):
-                                item = cache["items"][symbol]
-                                quote_date = item["quoted_at"][:10]
-                                valid = intraday is not None and intraday["date"] == quote_date
-                                if valid:
-                                    item["intraday"] = intraday
-                                elif item.get("intraday", {}).get("date") != quote_date:
-                                    item.pop("intraday", None)
-                                item["intraday_stale"] = not valid
-                cache["retry_at"] = time.monotonic() + 30
-            items = []
-            for item in cache["items"].values():
-                status = quote_status(item, now)
-                intraday = item.get("intraday")
-                lagging = False
-                if intraday and status == "trading":
-                    quoted_at = datetime.fromisoformat(item["quoted_at"])
-                    last_point = datetime.fromisoformat(f'{intraday["date"]}T{intraday["points"][-1]["time"]}').replace(tzinfo=quoted_at.tzinfo)
-                    lagging = (quoted_at - last_point).total_seconds() > 180
-                items.append({**item, "status": status, "intraday_stale": item["stale"] or item.get("intraday_stale", True) or lagging})
-            return {
-                "group": group, "items": items,
-                "stale": any(item["stale"] for item in items),
-            }
+            if (
+                time.monotonic() >= cache["retry_at"]
+                and not cache.get("refreshing", False)
+            ):
+                cold_cache = not cache["items"]
+                cache["refreshing"] = True
+                if cold_cache:
+                    cache["items"] = {
+                        symbol: {"symbol": symbol, "name": name, "stale": True}
+                        for symbol, name in GROUPS[group]
+                    }
+                refresh_sync = cold_cache
+                refresh_async = not cold_cache
+        if refresh_sync:
+            self._refresh_group(group)
+        elif refresh_async:
+            self._start_refresh(group)
+        with lock:
+            return self._snapshot_locked(group, now)

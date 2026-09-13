@@ -881,6 +881,73 @@ def test_twitter_display_pref_swaps_stored_src():
     assert recovered["content"] == junk["content_src"]
     assert recovered["title"] == junk["title_src"]
 
+    from app.fetchers.base import has_stored_translation
+
+    quoted = {
+        "platform": "twitter",
+        "title": "Tibo说Astra需求太猛，可能暂停Pro新订阅。",
+        "content": (
+            "Tibo说Astra需求太猛，可能暂停Pro新订阅。\n\n"
+            "RT @thsottiaux：\nAstra的需求真的是前所未有的。"
+        ),
+        "title_src": "Tibo说Astra需求太猛，可能暂停Pro新订阅。",
+        "content_src": (
+            "Tibo说Astra需求太猛，可能暂停Pro新订阅。\n\n"
+            "我低头一看：今天才到16:07，四个Codex已经跑了4.94亿token。\n\n"
+            "RT @thsottiaux:\n"
+            "Demand for Astra is really unprecedented. We're pulling all the levers "
+            "possible to sustain the demand, but I've not seen anything like it until now."
+        ),
+    }
+    shown = with_twitter_display_row(quoted, True)
+    assert shown["content"] == quoted["content_src"]
+    assert has_stored_translation(quoted) is False
+
+    outer_only = {
+        "platform": "twitter",
+        "title": "喜欢这个。",
+        "content": "喜欢这个。",
+        "title_src": "Love this.",
+        "content_src": (
+            "Love this.\n\n"
+            "RT @FrancisBrennan:\n"
+            "WATCH: Meta data center community compact. We promise to not only "
+            "pay for our own electricity but to actually work to drive down costs."
+        ),
+    }
+    recovered = with_twitter_display_row(outer_only, True)
+    assert recovered["content"] == outer_only["content_src"]
+
+    long_zh = {
+        "platform": "twitter",
+        "title": "我在这期播客中发现特别有趣的是，网络威胁将持续支撑对前沿模型的需求这一论点。",
+        "content": (
+            "我在这期播客中发现特别有趣的是，网络威胁将持续支撑对前沿模型的需求这一论点。\n\n"
+            "为了防御那些仅比前沿低一级的攻击，你需要一个前沿模型。"
+        ),
+        "title_src": "What I found especially interesting in this podcast",
+        "content_src": (
+            "What I found especially interesting in this podcast was the argument "
+            "that cyber threats will sustain demand for frontier models.\n\n"
+            "RT @quoted:\n"
+            + ("Frontier model investment must continue. " * 40)
+        ),
+    }
+    kept = with_twitter_display_row(long_zh, True)
+    assert kept["content"] == long_zh["content"]
+    assert has_stored_translation(long_zh) is True
+
+    trad = {
+        "platform": "twitter",
+        "title": "如果我们有喊票就能涨起来的能力",
+        "content": "如果我们有喊票就能涨起来的能力，那么我们就天天喊自己持仓中所有的票了。",
+        "title_src": "如果我們有喊票就能漲起來的能力",
+        "content_src": "如果我們有喊票就能漲起來的能力，那麼我們就天天喊自己持倉中所有的票了。",
+    }
+    simp = with_twitter_display_row(trad, True)
+    assert simp["content"] == trad["content"]
+    assert has_stored_translation(trad) is False
+
 
 def test_twitter_fetch_unwraps_retweet_original(monkeypatch):
     monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
@@ -972,3 +1039,135 @@ def test_twitter_fetch_unwraps_retweet_original(monkeypatch):
     assert "Absolutely, 100%" in posts[0].content
     assert posts[0].content.startswith("RT @implausibleblog:")
     assert posts[0].images == ["https://pbs.twimg.com/rt.jpg"]
+
+
+def test_with_quoted_content_appends_quoted_tweet():
+    from app.fetchers.twitter import _with_quoted_content
+
+    tweet = {
+        "quoted_status_result": {
+            "result": {
+                "legacy": {"full_text": "I resigned from Anthropic today."},
+                "core": {
+                    "user_results": {
+                        "result": {"legacy": {"screen_name": "hilbertspaess"}}
+                    }
+                },
+            }
+        }
+    }
+    text, images = _with_quoted_content(
+        "This will be one of the most important reads of your life", [], tweet
+    )
+    assert "most important reads" in text
+    assert "I resigned from Anthropic today." in text
+    assert "RT @hilbertspaess:" in text
+    assert images == []
+
+
+def test_twitter_fetch_retweet_of_quote_includes_quoted(monkeypatch):
+    monkeypatch.setenv("TWITTER_COOKIE", "auth_token=a; ct0=b")
+
+    def handler(request):
+        if "UserByScreenName" in str(request.url):
+            return httpx.Response(200, json=_user_response())
+        if "UserTweets" in str(request.url):
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "user": {
+                            "result": {
+                                "__typename": "User",
+                                "timeline": {
+                                    "timeline": {
+                                        "instructions": [
+                                            {
+                                                "type": "TimelineAddEntries",
+                                                "entries": [
+                                                    {
+                                                        "content": {
+                                                            "__typename": "TimelineTimelineItem",
+                                                            "itemContent": {
+                                                                "tweet_results": {
+                                                                    "result": {
+                                                                        "rest_id": "2097512691648671852",
+                                                                        "legacy": {
+                                                                            "full_text": "RT @LeopoldTracker_: This will be one of the most important reads of your life",
+                                                                            "created_at": "Wed Sep 09 01:10:00 +0000 2026",
+                                                                            "id_str": "2097512691648671852",
+                                                                            "retweeted_status_result": {
+                                                                                "result": {
+                                                                                    "rest_id": "2097490197457871015",
+                                                                                    "legacy": {
+                                                                                        "full_text": "This will be one of the most important reads of your life",
+                                                                                        "created_at": "Wed Sep 09 01:00:00 +0000 2026",
+                                                                                    },
+                                                                                    "core": {
+                                                                                        "user_results": {
+                                                                                            "result": {
+                                                                                                "legacy": {
+                                                                                                    "screen_name": "LeopoldTracker_"
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                    },
+                                                                                    "quoted_status_result": {
+                                                                                        "result": {
+                                                                                            "rest_id": "2097476196791709843",
+                                                                                            "legacy": {
+                                                                                                "full_text": (
+                                                                                                    "I resigned from Anthropic today. "
+                                                                                                    "Neither company is acting responsibly."
+                                                                                                ),
+                                                                                                "extended_entities": {
+                                                                                                    "media": [
+                                                                                                        {
+                                                                                                            "type": "photo",
+                                                                                                            "media_url_https": "https://pbs.twimg.com/q.jpg",
+                                                                                                        }
+                                                                                                    ]
+                                                                                                },
+                                                                                            },
+                                                                                            "core": {
+                                                                                                "user_results": {
+                                                                                                    "result": {
+                                                                                                        "legacy": {
+                                                                                                            "screen_name": "hilbertspaess"
+                                                                                                        }
+                                                                                                    }
+                                                                                                }
+                                                                                            },
+                                                                                        }
+                                                                                    },
+                                                                                }
+                                                                            },
+                                                                        },
+                                                                    }
+                                                                }
+                                                            },
+                                                        }
+                                                    }
+                                                ],
+                                            }
+                                        ]
+                                    }
+                                },
+                            }
+                        }
+                    }
+                },
+            )
+        return httpx.Response(404)
+
+    db = DB(":memory:")
+    kid = db.add_kol("twitter", "burrytracker", "https://x.com/burrytracker")
+    fetcher = _make_fetcher(handler, db)
+    posts = fetcher.fetch(db.get_kol(kid))
+    assert len(posts) == 1
+    assert posts[0].post_type == "retweet"
+    assert posts[0].content.startswith("RT @LeopoldTracker_:")
+    assert "most important reads" in posts[0].content
+    assert "I resigned from Anthropic today." in posts[0].content
+    assert "RT @hilbertspaess:" in posts[0].content
+    assert posts[0].images == ["https://pbs.twimg.com/q.jpg"]

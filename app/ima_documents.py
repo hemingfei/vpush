@@ -118,7 +118,7 @@ IMA_LEGACY_GROUP_ID = "legacy"
 IMA_LEGACY_GROUP_NAME = "IMA 文档"
 IMA_PURE_UID_DEFAULT = "001aa361168019ef"
 IMA_PURE_KB_ID_DEFAULT = "7464369361259867"
-IMA_PURE_ROOT_FOLDER_DEFAULT = "folder_7489327974078249"
+IMA_PURE_ROOT_FOLDER_DEFAULT = IMA_PURE_KB_ID_DEFAULT
 IMA_PURE_INTERVAL_DEFAULT = 3600
 IMA_PURE_INTERVAL_MIN = 1800
 IMA_PURE_INTERVAL_MAX = 604800
@@ -400,6 +400,20 @@ def ima_folder_name(item: dict[str, Any], folder_id: str) -> str:
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip()[:200]
     return folder_id
+
+
+_MONTH_FOLDER_RE = re.compile(r"^(\d{4})年(\d{1,2})月")
+
+
+def ima_month_folder_key(name: str) -> tuple[int, int] | None:
+    """Parse IMA month folder names like 2026年8月 / 2026年9月（最新）."""
+    match = _MONTH_FOLDER_RE.match((name or "").strip())
+    if not match:
+        return None
+    month = int(match.group(2))
+    if month < 1 or month > 12:
+        return None
+    return int(match.group(1)), month
 
 
 def is_ima_folder_item(item: dict[str, Any]) -> bool:
@@ -992,6 +1006,44 @@ class ImaPureClient:
                 raise RuntimeError("IMA list pagination repeated cursor")
             cursor = next_cursor
 
+    def _newer_month_sibling_ids(self, roots: tuple[str, ...]) -> tuple[str, ...]:
+        # ponytail: only month siblings under kb root, nested month folders stay unfollowed
+        kb = (self.effective_knowledge_base_id or "").strip()
+        extra: list[str] = []
+        seen = set(roots)
+        listed = False
+        siblings: list[dict[str, Any]] = []
+        for root in roots:
+            if not kb or root == kb:
+                continue
+            if not listed:
+                listed = True
+                try:
+                    siblings = self.list_items(kb, folders_only=True)
+                except Exception:
+                    logger.warning("IMA month-folder follow skipped kb=%s", kb, exc_info=True)
+                    return ()
+            mount_key = None
+            newer: list[tuple[tuple[int, int], str]] = []
+            for item in siblings:
+                if not is_ima_folder_item(item):
+                    continue
+                folder_id = ima_folder_id(item)
+                key = ima_month_folder_key(ima_folder_name(item, folder_id))
+                if key is None or not folder_id:
+                    continue
+                if folder_id == root:
+                    mount_key = key
+                else:
+                    newer.append((key, folder_id))
+            if mount_key is None:
+                continue
+            for key, folder_id in newer:
+                if key > mount_key and folder_id not in seen:
+                    seen.add(folder_id)
+                    extra.append(folder_id)
+        return tuple(extra)
+
     def manifest(self, listing_cache: dict[str, Any] | None = None, title_overrides: dict[str, str] | None = None) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
         title_overrides = title_overrides or {}
@@ -1000,6 +1052,9 @@ class ImaPureClient:
             if self.group is not None
             else ((self.effective_root_folder_id,) if self.effective_root_folder_id else ())
         )
+        extra = self._newer_month_sibling_ids(roots)
+        if extra:
+            roots = tuple(dict.fromkeys((*roots, *extra)))
         queue: list[str] = []
         selected_root_ids = {folder_id for folder_id in roots if folder_id}
         root_by_folder: dict[str, str] = {}
@@ -2557,16 +2612,6 @@ class ImaDocumentStore:
         self.save_local_library_marker(marker_path, marker)
 
 
-def convert_pdf(pdf: Path, txt: Path) -> int:
-    from pypdf import PdfReader
-
-    text = "\n".join(page.extract_text() or "" for page in PdfReader(str(pdf)).pages)
-    temp = txt.with_suffix(txt.suffix + ".tmp")
-    temp.write_text(text, encoding="utf-8")
-    os.replace(temp, txt)
-    return len(text)
-
-
 def _tag_document(db: Any, record: dict[str, Any], txt: Path | None) -> list[str]:
     from .stock_universe import aliases_for_tagging, names_for_plain_text_tagging
     from .tagging import tag_text
@@ -2628,6 +2673,9 @@ def purge_ima_document_tags(store: ImaDocumentStore, valid_tags: set[str]) -> in
 
 
 class ImaDocumentService:
+    # 由 app 装配时注入的文件就绪回调（app/main.py:215）；未注入时为 None
+    on_files_ready: Any = None
+
     def __init__(
         self,
         db: Any,
@@ -3138,7 +3186,9 @@ class ImaDocumentService:
         ticker: str = "",
         limit: int = 50,
         offset: int = 0,
+        facets: bool = True,
     ) -> dict[str, Any]:
+        """列表页数据。`facets=False` 只取列表，计数/日期/标签分面省去这一次请求。"""
         if self._index_usable():
             readable_ids = [item.id for item in groups]
             page_limit = max(int(limit), 1)
@@ -3312,6 +3362,7 @@ class ImaDocumentService:
                     ticker=ticker,
                     limit=limit,
                     offset=offset,
+                    facets=facets,
                 )
             counts = page.get("group_counts") or {}
             page["groups"] = [
@@ -3338,14 +3389,18 @@ class ImaDocumentService:
         )
         has_more = len(items) > page_limit
         items = [self._public_list_item(item) for item in items[:page_limit]]
-        facets = self.store.document_facets(group_id=group, groups=groups)
+        store_facets = (
+            self.store.document_facets(group_id=group, groups=groups)
+            if facets
+            else {"days": [], "tags": [], "tag_counts": {}, "document_count": 0}
+        )
         summaries = self.store.group_summary(groups)
         return {
             "items": items,
-            "days": facets["days"],
-            "tags": facets["tags"],
-            "tag_counts": facets["tag_counts"],
-            "document_count": facets["document_count"],
+            "days": store_facets["days"],
+            "tags": store_facets["tags"],
+            "tag_counts": store_facets["tag_counts"],
+            "document_count": store_facets["document_count"],
             "day": str(day or "").strip(),
             "has_more": has_more,
             "offset": page_offset,
@@ -4021,9 +4076,20 @@ class ImaDocumentService:
             self._worker_thread.start()
         return {"status": "started"}
 
+    def _kick_report_extract(self, result: dict[str, Any] | None) -> None:
+        if not isinstance(result, dict) or int(result.get("downloaded") or 0) <= 0:
+            return
+        hook = getattr(self, "on_files_ready", None)
+        if not callable(hook):
+            return
+        try:
+            hook()
+        except Exception:
+            logger.exception("研报结构化抽取（同步后）异常")
+
     def _worker(self) -> None:
         try:
-            self.sync_once()
+            result = self.sync_once()
             if self._cancel_requested:
                 return
             try:
@@ -4040,6 +4106,7 @@ class ImaDocumentService:
                 refresh_bank_titles_zh(self)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("投行标题翻译失败 error=%s", _safe_error(exc))
+            self._kick_report_extract(result)
         except Exception as exc:  # noqa: BLE001 - worker must release its lock
             error = _safe_error(exc)
             logger.error("IMA document sync failed error=%s", error)

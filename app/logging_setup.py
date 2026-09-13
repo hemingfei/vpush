@@ -85,6 +85,9 @@ class RingBufferHandler(logging.Handler):
 
 # WARNING+ 持久化 sink（由 create_app 注入 DB 写入函数；未注入时丢弃）
 _error_sink = None
+# 落库本身也是 DB 写入：库变慢时会再产生 slow query WARNING，形成
+# 「告警→写库→更慢→更多告警」的自激循环。同一线程写库期间丢弃后续记录（其他线程不受影响）。
+_sink_busy = threading.local()
 
 
 def register_error_sink(sink) -> None:
@@ -114,8 +117,9 @@ class ErrorDbHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         sink = _error_sink
-        if sink is None:
+        if sink is None or getattr(_sink_busy, "value", False):
             return
+        _sink_busy.value = True
         try:
             safe_record = copy.copy(record)
             message = record.getMessage()
@@ -130,6 +134,8 @@ class ErrorDbHandler(logging.Handler):
             sink(safe_record)
         except Exception:  # noqa: BLE001, S110 - 错误日志落库失败不影响业务
             pass
+        finally:
+            _sink_busy.value = False
 
 
 def recent_logs(limit: int = 200, level: str | None = None, q: str | None = None) -> list[str]:

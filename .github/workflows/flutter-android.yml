@@ -1,0 +1,49 @@
+name: Flutter Android
+
+on:
+  pull_request:
+    paths:
+      - 'mobile/flutter_app/**'
+      - 'scripts/build_flutter_android.sh'
+      - '.github/workflows/flutter-android.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/flutter_app/**'
+      - 'scripts/build_flutter_android.sh'
+      - '.github/workflows/flutter-android.yml'
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile/flutter_app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.2'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: dart format --output=none --set-exit-if-changed lib test
+      - run: flutter analyze
+      - run: flutter test
+
+  build:
+    if: github.event_name == 'push'
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.2'
+          channel: stable
+          cache: true
+      - run: API_BASE_URL=https://vpush.net scripts/build_flutter_android.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vpush-android-${{ github.sha }}
+          path: mobile/flutter_app/build/app/outputs/flutter-apk/*release.apk

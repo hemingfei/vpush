@@ -26,8 +26,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.error
-import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -338,10 +336,6 @@ def setup_library(root: Path, slug: str, name: str, *, fix_owner: bool) -> None:
 
 def fetch_param(sess: Session) -> dict:
     return sess.request("/reports/api/v3/param")["data"]
-
-
-def fetch_categories(sess: Session) -> list[dict]:
-    return fetch_param(sess)["treeData"]
 
 
 def list_page(sess: Session, cat_id: int, page: int, start: str | None, end: str | None) -> dict:

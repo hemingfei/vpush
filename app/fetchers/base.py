@@ -10,6 +10,8 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 
+from ..zh_simp import to_simplified
+
 logger = logging.getLogger(__name__)
 
 # 项目面向中文社交平台，发布时间统一按北京时间展示，避免依赖服务器时区
@@ -66,7 +68,13 @@ def is_collapsed_translation(translated: str, source: str) -> bool:
         return True
     if _COLLAPSED_TRANSLATION_RE.fullmatch(text) and len(original) > 3:
         return True
-    return len(text) <= 4 and len(original) >= 20
+    if len(text) <= 4 and len(original) >= 20:
+        return True
+    author = quoted_author_text(original).strip()
+    if author != original and len(original) >= 40:
+        # 只拦「喜欢这个。」这种外层短句；不能用英文博主长度当上限（Jukan 135字译文也会被回退）
+        return len(text) <= min(max(len(author) + 8, 16), 24)
+    return False
 
 
 def twitter_translate_enabled(user: dict | None) -> bool:
@@ -77,6 +85,39 @@ def twitter_translate_enabled(user: dict | None) -> bool:
 
 
 _TRANSLATE_PLATFORMS = frozenset({"twitter", "truth"})
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def quoted_author_text(text: str) -> str:
+    """博主自己的话。后面用空行 + RT @ 拼上的引用不参与语种判断。"""
+    head, sep, _ = (text or "").partition("\n\nRT @")
+    if sep and head.strip():
+        return head
+    return text or ""
+
+
+def already_chinese(text: str) -> bool:
+    """原文已是中文就不必再译（X/MyMemory 都会空耗并刷 429）。"""
+    cjk = len(_CJK_RE.findall(text or ""))
+    if cjk < 8:
+        return False
+    latin = sum(1 for ch in text if ch.isascii() and ch.isalpha())
+    return cjk >= latin
+
+
+def _prefer_source(content: str, content_src: str) -> bool:
+    src = (content_src or "").strip()
+    body = (content or "").strip()
+    if not src or src == body:
+        return False
+    if is_collapsed_translation(body, src):
+        return True
+    # 繁转简后 content 是简体、src 是繁体，不能回退
+    if to_simplified(src) == body or to_simplified(quoted_author_text(src)) == quoted_author_text(
+        body
+    ):
+        return False
+    return already_chinese(quoted_author_text(src))
 
 
 def has_stored_translation(post: Post | dict) -> bool:
@@ -86,14 +127,18 @@ def has_stored_translation(post: Post | dict) -> bool:
     else:
         src = (post.content_src or "").strip()
         content = (post.content or "").strip()
-    return bool(src) and src != content
+    if not src or src == content:
+        return False
+    if already_chinese(quoted_author_text(src)):
+        return False
+    return True
 
 
 def with_twitter_display(post: Post, translate: bool) -> Post:
     if post.platform not in _TRANSLATE_PLATFORMS:
         return post
     if translate:
-        if post.content_src and is_collapsed_translation(post.content, post.content_src):
+        if _prefer_source(post.content, post.content_src):
             return replace(
                 post,
                 title=post.title_src or post.title,
@@ -113,7 +158,7 @@ def with_twitter_display_row(row: dict, translate: bool) -> dict:
     src_t = row.get("title_src") or ""
     src_c = row.get("content_src") or ""
     if translate:
-        if src_c and is_collapsed_translation(row.get("content") or "", src_c):
+        if _prefer_source(row.get("content") or "", src_c):
             out = dict(row)
             out["content"] = src_c
             if src_t:

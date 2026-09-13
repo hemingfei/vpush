@@ -4,7 +4,7 @@ from pathlib import Path
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
-from app.report_text import pdf_first_pages_text
+from app.report_text import pdf_first_pages_text, usable_report_text
 
 
 def _write_text_pdf(path: Path, text: str) -> None:
@@ -32,3 +32,12 @@ def test_pdf_first_pages_text_uses_installed_pdf_reader(tmp_path):
     _write_text_pdf(pdf, "NVIDIA target price 250 dollars")
 
     assert "NVIDIA target price 250 dollars" in pdf_first_pages_text(pdf)
+
+
+def test_usable_report_text_rejects_short_garbled_pdf_mapping():
+    assert usable_report_text("4FOEZFp5oUeWcW9PbPbR QoOnPtNlOmMyRkPrRwOaQrQqQvP") == ""
+
+
+def test_usable_report_text_preserves_real_short_text():
+    text = "Buy rating and target price 250 dollars."
+    assert usable_report_text(text) == text

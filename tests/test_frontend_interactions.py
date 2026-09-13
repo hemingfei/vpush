@@ -184,17 +184,28 @@ def _calls_with_route_seq(text: str, fn: str) -> bool:
 
 
 def _media_block(css: str, query: str, last: bool = False) -> str:
-    idx = css.rfind(query) if last else css.find(query)
-    assert idx != -1, f"缺少 {query}"
-    start = css.find("{", idx)
-    depth, i = 1, start + 1
-    while depth and i < len(css):
-        if css[i] == "{":
-            depth += 1
-        elif css[i] == "}":
-            depth -= 1
-        i += 1
-    return css[start:i]
+    """`query` 媒体块的块体；同一断点 query 在 style.css 里出现多次，
+
+    默认返回所有匹配块的并集：`x in block` 于是表达「x 被这个断点辖制」，
+    而不是「x 恰好在第一块里」。
+    """
+    starts = [m.start() for m in re.finditer(re.escape(query), css)]
+    assert starts, f"缺少 {query}"
+
+    def body(idx: int) -> str:
+        start = css.find("{", idx)
+        depth, i = 1, start + 1
+        while depth and i < len(css):
+            if css[i] == "{":
+                depth += 1
+            elif css[i] == "}":
+                depth -= 1
+            i += 1
+        return css[start:i]
+
+    if last:
+        return body(starts[-1])
+    return "\n".join(body(idx) for idx in starts)
 
 
 def test_toggle_subscribe_refreshes_by_route_not_home():
@@ -509,7 +520,7 @@ def test_timeline_pills_always_show_short_labels():
 
 
 def test_mobile_platform_swipe_switches_adjacent_tab():
-    """手机在列表上左右滑切相邻平台；胶囊条和按钮不抢手势；不循环。"""
+    """手机在列表上左右滑切相邻角标；动态含快讯，与胶囊同序；不循环。"""
     src = APP_JS.read_text()
     css = STYLE_CSS.read_text()
     ignore = _fn_body("mobilePlatformSwipeIgnore")
@@ -518,10 +529,16 @@ def test_mobile_platform_swipe_switches_adjacent_tab():
     adj = _fn_body("mobileSwipeAdjacent")
     start = _fn_body("onPlatSwipeStart")
     end = _fn_body("onPlatSwipeEnd")
+    swipe = _fn_body("tlSwipeEntries")
     assert "isMobileTimelineFilter()" in start
     assert "surface" in start
     assert 'return "timeline"' in surface
+    assert "isLiveTimeline()" not in surface
+    assert "tlSwipeEntries" in ctx
+    assert "tlPickSource" in ctx
     assert "tlPickPlatform" in ctx
+    assert '"live"' in swipe
+    assert "快讯" in swipe
     assert "homePickMobilePlatform" in ctx
     assert "switchMySubsPlatform" not in ctx
     assert 'return "mysubs"' not in surface
@@ -625,8 +642,10 @@ def test_mobile_platform_filter_is_five_equal_44px_targets():
     assert pill and "44px" in pill.group(1)
     assert "tl-filterbar-top icon-badge-bar" in render
     assert ".icon-badge-bar .tl-pill span" in css and "display: none" in css
-    assert "display: none" not in re.search(r"\.topbar-title h1\s*\{([^}]*)\}", mobile).group(1)
-    assert "clip: rect(0, 0, 0, 0)" in re.search(r"\.topbar-title h1\s*\{([^}]*)\}", mobile).group(1)
+    title = re.search(r"\.topbar-title h1\s*\{([^}]*)\}", mobile)
+    assert title, "手机端缺少 .topbar-title h1 规则"
+    assert "display: none" not in title.group(1)
+    assert "clip: rect(0, 0, 0, 0)" in title.group(1)
 
 
 def test_timeline_polish_matches_chip_row_and_browser_surfaces():
@@ -855,7 +874,8 @@ def test_plaza_source_visibility_admin_and_pills():
     assert "plazaSourceRowsHtml(s.plaza_sources)" in _fn_body("loadAdminStats")
     assert "plaza_platforms" in _fn_body("plazaVisibleSet")
     assert "timeline_platforms" in _fn_body("timelineVisibleSet")
-    assert "tlTimelineEntries()" in _fn_body("tlPillsHtml")
+    assert "tlTimelineEntries()" in _fn_body("tlSwipeEntries")
+    assert "tlSwipeEntries()" in _fn_body("tlPillsHtml")
     assert "tlPlazaEntries()" in _fn_body("renderPlatformTabs")
     assert "tlPlazaEntries()" in _fn_body("homeMobilePlatformsHtml")
     assert "ensurePlazaPlatformSelection()" in _fn_body("renderTimeline")
@@ -987,12 +1007,16 @@ def test_settings_save_feedback_uses_flash():
 
 def test_llm_settings_are_openai_compatible_with_model_list():
     render = _fn_body("renderSettings")
+    assert "AI 网关" in render
     assert "OpenAI 兼容" in render
-    assert "DeepSeek、Grok、OpenAI" in render
-    assert 'id="set-llm-model-list"' in render
+    assert 'id="set-llm-format"' in render
+    assert ">Responses（/responses）<" in render
+    assert 'id="set-llm-model-select"' in render
+    assert "set-llm-model-list" not in render
     assert "loadLlmModels()" in render
     assert "/api/me/llm-models" in _fn_body("loadLlmModels")
     assert "escapeHtml" in _fn_body("loadLlmModels")
+    assert "set-llm-model-select" in _fn_body("loadLlmModels")
 
 
 def test_kol_image_settings_is_fourth_push_section_and_loads_independently():
@@ -3079,7 +3103,7 @@ def test_ima_documents_all_group_labels_and_single_group_title():
     src = _all_view_source()
     assert "item.group_name" in src
     assert "selectedGroupName" in src or "groupName" in src
-    assert "count" in _fn_body("renderImaDocuments")
+    assert "count" in _fn_body("applyImaListFacets")
 
 
 def test_ima_document_group_switch_refreshes_locally():
@@ -3531,6 +3555,33 @@ def test_feed_time_comparator_keeps_seconds_tiebreak():
     assert "feedTimeAsc(acc, p) < 0" in newest
 
 
+def test_live_feed_auto_consumes_pending_only_at_top():
+    """快讯增量在顶部自动合并，深读时必须保留气泡供手动查看。"""
+    poll = _fn_body("pollFeedUpdates")
+    auto = _fn_body("autoConsumeLivePending")
+
+    assert "autoConsumeLivePending(seq)" in poll
+    assert poll.index("autoConsumeLivePending(seq)") < poll.index('classList.add("show")')
+    assert "_tlRefreshing" in poll
+    assert "isLiveTimeline()" in auto
+    assert "window.scrollY > 240" in auto
+    assert "refreshTimeline({ pollFirst: false })" in auto
+
+
+def test_auto_consumed_feed_refresh_reuses_the_completed_poll():
+    """轮询已拿到增量时，自动合并不能立刻再发一次同类请求。"""
+    live_auto = _fn_body("autoConsumeLivePending")
+    timeline_auto = _fn_body("autoConsumeTimelinePending")
+    refresh = _fn_body("refreshTimeline")
+    source = APP_JS.read_text()
+    refresh_signature = source[source.index("async function refreshTimeline"):]
+
+    assert "refreshTimeline({ pollFirst: false })" in live_auto
+    assert "refreshTimeline({ pollFirst: false })" in timeline_auto
+    assert "{ pollFirst = true } = {}" in refresh_signature
+    assert "if (pollFirst) await pollFeedUpdates()" in refresh
+
+
 def test_timeline_live_source_is_platform_pill():
     """快讯作为平台条第二项：移除独立动态按钮，保留快讯模式与平台条。"""
     render = _fn_body("renderTimeline")
@@ -3886,6 +3937,7 @@ def test_ima_document_counts_use_real_total_not_page_plus():
     """列表/阅读器计数用 document_count，不再用当前页条数拼 50+。"""
     src = _all_view_source()
     render = _fn_body("renderImaDocuments")
+    facets = _fn_body("applyImaListFacets")
     more = _fn_body("loadImaDocumentsMore")
     reader = _fn_body("renderImaDocument")
     assert "function imaResolvedCount(" in src
@@ -3893,7 +3945,8 @@ def test_ima_document_counts_use_real_total_not_page_plus():
     assert "function imaReaderBackLabel(" not in src
     assert "imaDocumentsCountLabel(" in render
     assert "snapshot.documentCount" in render
-    assert "data.document_count" in render
+    assert "applyImaListFacets(data" in render
+    assert "data.document_count" in facets
     assert "imaDocumentsCountLabel(" in more
     assert "imaReaderBackLabel" not in reader
     assert "ima-back-count" not in reader
@@ -4714,25 +4767,25 @@ def test_ima_documents_follow_latest_dynamic_navigation():
 
 
 def test_knowledge_parallel_loads_catalog_and_first_page():
+    prefetch = _fn_body("prefetchKnowledge")
     render = _fn_body("renderKnowledge")
     list_shell = _fn_body("mountKnowledgeListShell")
     list_fn = _fn_body("renderImaDocuments")
     path_fn = _fn_body("imaDocumentsRequestPath")
+    catalog = prefetch.index('api("/api/ima-documents/catalog")')
+    documents = prefetch.index("api(imaDocumentsRequestPath())")
+    settled = prefetch.index("Promise.allSettled")
     mount = render.index("if (!mediaId) mountKnowledgeListShell();")
-    catalog = render.index('api("/api/ima-documents/catalog")')
-    documents = render.index("api(imaDocumentsRequestPath())")
+    requests = render.index("prefetched || prefetchKnowledge(mediaId)")
     render_task = render.index("renderImaDocuments(seq, { prefetched: documentsPromise })")
     first_await = render.index("await ")
-    settled = render.index("Promise.allSettled")
-    assert mount < catalog < first_await
-    assert mount < documents < first_await
-    assert documents < render_task < settled
+    assert catalog < documents < settled
+    assert mount < requests < render_task < first_await
     assert render.count("renderImaDocuments(seq, { prefetched: documentsPromise })") == 1
     assert "await documentsRenderTask" in render
     assert render.count("mountKnowledgeListShell()") == 1
     assert 'id="kb-list" tabindex="-1"><div class="admin-skeleton"' in list_shell
-    assert "Promise.allSettled" in render
-    assert settled >= first_await
+    assert "Promise.allSettled" in prefetch
     assert "prefetched" in list_fn
     assert "await prefetched" in list_fn
     assert "imaDocumentsRequestPath()" in list_fn
@@ -4741,14 +4794,44 @@ def test_knowledge_parallel_loads_catalog_and_first_page():
     assert "refreshImaDocuments()" in list_fn
     assert 'params.set("limit", "50")' in path_fn
     assert 'params.set("q", query)' in path_fn
-    assert "currentImaListSnapshot()" in render
-    assert "mediaId || currentImaListSnapshot()" in render
+    assert "currentImaListSnapshot()" in prefetch
+    assert "mediaId || currentImaListSnapshot()" in prefetch
     assert "!mediaId && !snapshot" in render
     assert "catalogOk && selectedGroup" in render
     assert "!subscribed.length && catalogOk" in render
     assert "knowledgeSourceControlsHtml(selectedGroup)" in render
     assert ".ima-report-source" in render
     assert "if (mediaId)" in render
+
+
+def test_knowledge_first_paint_defers_list_facets():
+    path_fn = _fn_body("imaDocumentsRequestPath", IMA_JS)
+    facets_fn = _fn_body("refreshImaListFacets", IMA_JS)
+    deferred_fn = _fn_body("imaFacetsDeferred", IMA_JS)
+    list_fn = _fn_body("renderImaDocuments", IMA_JS)
+    # 默认列表首屏只取列表；分面由 facets_only 单独请求补上
+    assert 'if (options.facetsOnly) params.set("facets_only", "1");' in path_fn
+    assert 'else if (imaFacetsDeferred()) params.set("include_facets", "0");' in path_fn
+    assert 'params.get("tag")' in deferred_fn and 'params.get("day")' in deferred_fn
+    assert "if (!imaFacetsDeferred()) return;" in facets_fn
+    assert "api(imaDocumentsRequestPath({ facetsOnly: true }))" in facets_fn
+    # 列表先画、分面后补：不阻塞首屏（发请求不 await）且分面失败不回滚列表
+    assert "void refreshImaListFacets(seq);" in list_fn
+    assert list_fn.index("void refreshImaListFacets(seq);") < list_fn.index("ima-doc-list")
+    assert "ima facets refresh failed" in facets_fn
+
+
+def test_knowledge_cold_route_prefetches_before_session_round_trip():
+    router = _fn_body("router")
+    render = _fn_body("renderKnowledge")
+    prefetch = router.index("const knowledgePrefetch =")
+    me = router.index('await api("/api/me")')
+
+    assert prefetch < me
+    assert "prefetchKnowledge(rawParam)" in router[prefetch:me]
+    assert router.count("renderKnowledge(renderSeq, param, knowledgePrefetch)") == 2
+    assert "prefetched || prefetchKnowledge(mediaId)" in render
+    assert "if (!knowledgePrefetch) prefetchLiveFeed()" in router
 
 
 def test_knowledge_index_status_copy_is_admin_only():
@@ -4826,7 +4909,7 @@ def test_ima_report_metadata_contract_keeps_existing_capabilities():
 
     assert 'placeholder="搜标题、公司、代码、行业或资料源"' in render
     assert 'params.set("tag"' in _fn_body("imaDocumentsRequestPath")
-    assert "data.days" in render
+    assert "data.days" in _fn_body("applyImaListFacets")
     assert "loadImaDocumentsMore" in src
     assert "loadImaPdf(mediaId, readerSeq)" in reader
     assert "needs_translation" in reader

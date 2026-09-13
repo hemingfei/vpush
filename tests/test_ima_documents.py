@@ -347,11 +347,22 @@ def test_concurrent_group_manifest_writes_retain_both_groups(tmp_path):
     assert {item["group_id"] for item in store.load_manifest()} == {"first", "second"}
 
 
-def test_default_config_targets_august_folder():
+def test_ima_month_folder_key_parses_year_month_and_ignores_suffix():
+    assert ima_documents.ima_month_folder_key("2026年8月") == (2026, 8)
+    assert ima_documents.ima_month_folder_key("2026年9月（最新）") == (2026, 9)
+    assert ima_documents.ima_month_folder_key("2026年09月") == (2026, 9)
+    assert ima_documents.ima_month_folder_key("研报") is None
+    assert ima_documents.ima_month_folder_key("2026年13月") is None
+    assert ima_documents.ima_month_folder_key("") is None
+    assert ima_documents.ima_month_folder_key("2026年8月") < ima_documents.ima_month_folder_key("2026年9月（最新）")
+
+
+def test_default_config_targets_knowledge_base_root():
     cfg = ImaDocumentConfig.from_db(FakeDB())
     assert cfg.uid == "001aa361168019ef"
     assert cfg.knowledge_base_id == "7464369361259867"
-    assert cfg.root_folder_id == "folder_7489327974078249"
+    assert cfg.root_folder_id == "7464369361259867"
+    assert cfg.root_folder_id == ima_documents.IMA_PURE_KB_ID_DEFAULT
     assert cfg.interval_seconds == 3600
 
 
@@ -1696,21 +1707,6 @@ def test_encrypt_body_uses_aes_128_gcm_and_rsa_oaep():
     assert decrypt_body(body, key) == plaintext
 
 
-def test_convert_pdf_writes_txt_archive(tmp_path):
-    from pypdf import PdfWriter
-
-    from app.ima_documents import convert_pdf
-
-    pdf = tmp_path / "report.pdf"
-    txt = tmp_path / "report.txt"
-    writer = PdfWriter()
-    writer.add_blank_page(width=200, height=200)
-    with pdf.open("wb") as output:
-        writer.write(output)
-    assert convert_pdf(pdf, txt) == 0
-    assert txt.read_text(encoding="utf-8") == ""
-
-
 @pytest.mark.parametrize("value", ["", "../outside", "/tmp/outside"])
 def test_invalid_media_ids_are_not_accepted(tmp_path, value):
     store = ImaDocumentStore(tmp_path / "ima")
@@ -2009,11 +2005,6 @@ def test_separate_root_partial_write_failure_and_recovery(tmp_path, monkeypatch)
             return 8, "md5"
 
     monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
-    monkeypatch.setattr(
-        ima_documents,
-        "convert_pdf",
-        lambda pdf, txt: (txt.write_text("text", encoding="utf-8") or 4),
-    )
 
     first = service.sync_once()
     assert first["downloaded"] == 0
@@ -2667,6 +2658,20 @@ def test_group_aware_document_api_returns_summary_and_filters_items(tmp_path, mo
     all_groups = client.get("/api/ima-documents", headers=headers)
     assert all_groups.status_code == 200
     assert {item["group_id"] for item in all_groups.json()["items"]} == {"banking"}
+    # 首屏瘦身：include_facets=0 只少分面，列表照旧
+    brief = client.get("/api/ima-documents?group=banking&include_facets=0", headers=headers)
+    assert brief.status_code == 200
+    assert [item["group_id"] for item in brief.json()["items"]] == ["banking"]
+    assert brief.json()["document_count"] == 0
+    assert brief.json()["tags"] == []
+    assert brief.json()["tag_counts"] == {}
+    # 分面单独一次请求：只回分面、不回列表
+    facets = client.get("/api/ima-documents?group=banking&facets_only=1", headers=headers)
+    assert facets.status_code == 200
+    assert facets.json()["items"] == []
+    assert facets.json()["has_more"] is False
+    assert facets.json()["offset"] == 0
+    assert facets.json()["document_count"] == 1
     assert client.get("/api/ima-documents?q=银行", headers=headers).json()["items"][0]["media_id"] == "banking-doc"
     assert client.get("/api/ima-documents?day=not-found", headers=headers).json()["items"] == []
 
@@ -3162,7 +3167,6 @@ def test_service_sync_is_incremental(tmp_path, monkeypatch):
             return 8, "md5"
 
     monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
-    monkeypatch.setattr(ima_documents, "convert_pdf", lambda pdf, txt: (txt.write_text("text", encoding="utf-8") or 4))
     service = ImaDocumentService(db, tmp_path / "ima")
     assert service.sync_once()["downloaded"] == 1
     pdf = next((tmp_path / "ima").joinpath("0825").glob("*.pdf"))
@@ -3476,6 +3480,104 @@ def test_service_skips_unmounted_group_without_sync_client(tmp_path, monkeypatch
     assert result["skipped_groups"] == ["empty"]
     assert calls["manifest"] == 0
     assert service.store.load_manifest()[0]["media_id"] == "old"
+
+
+def _folder(folder_id, name):
+    return {"media_type": 99, "folder_info": {"folder_id": folder_id, "name": name}}
+
+
+def test_manifest_follows_newer_month_siblings_under_kb_root():
+    group = ImaGroupConfig(
+        "legacy", "外行研报", "kb", "aug", True, "manual", ("aug",)
+    )
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    responses = {
+        "kb": [
+            _folder("aug", "2026年8月"),
+            _folder("sep", "2026年9月（最新）"),
+            _folder("other", "研报专题"),
+        ],
+        "aug": [{"media_id": "pdf_aug", "name": "8月.pdf", "file_size": 8}],
+        "sep": [{"media_id": "pdf_sep", "name": "9月.pdf", "file_size": 8}],
+        "other": [{"media_id": "pdf_other", "name": "专题.pdf", "file_size": 8}],
+    }
+    calls = []
+
+    def list_items(folder_id, folders_only=False, max_pages=None):
+        calls.append((folder_id, folders_only))
+        return list(responses[folder_id])
+
+    client.list_items = list_items
+    records = client.manifest()
+    assert {r["media_id"] for r in records} == {"pdf_aug", "pdf_sep"}
+    assert ("kb", True) in calls
+    assert ("sep", False) in calls
+    assert ("other", False) not in calls
+
+
+def test_manifest_does_not_follow_when_mount_is_not_a_month_folder():
+    group = ImaGroupConfig(
+        "semi", "Semi", "kb", "pin", True, "discovered", ("pin",)
+    )
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    responses = {
+        "kb": [_folder("pin", "精选"), _folder("sep", "2026年9月")],
+        "pin": [{"media_id": "pdf_pin", "name": "a.pdf", "file_size": 8}],
+        "sep": [{"media_id": "pdf_sep", "name": "b.pdf", "file_size": 8}],
+    }
+    client.list_items = lambda folder_id, folders_only=False, max_pages=None: list(responses[folder_id])
+    records = client.manifest()
+    assert {r["media_id"] for r in records} == {"pdf_pin"}
+
+
+def test_manifest_does_not_follow_older_or_equal_month_siblings():
+    group = ImaGroupConfig("g", "g", "kb", "sep", True, "discovered", ("sep",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    responses = {
+        "kb": [_folder("aug", "2026年8月"), _folder("sep", "2026年9月（最新）")],
+        "aug": [{"media_id": "pdf_aug", "name": "8.pdf", "file_size": 8}],
+        "sep": [{"media_id": "pdf_sep", "name": "9.pdf", "file_size": 8}],
+    }
+    client.list_items = lambda folder_id, folders_only=False, max_pages=None: list(responses[folder_id])
+    records = client.manifest()
+    assert {r["media_id"] for r in records} == {"pdf_sep"}
+
+
+def test_manifest_skips_month_follow_when_mount_is_kb_root():
+    group = ImaGroupConfig("g", "g", "kb", "kb", True, "discovered", ("kb",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    calls = []
+    responses = {
+        "kb": [
+            _folder("sep", "2026年9月"),
+            {"media_id": "pdf_root", "name": "r.pdf", "file_size": 8},
+        ],
+        "sep": [{"media_id": "pdf_sep", "name": "9.pdf", "file_size": 8}],
+    }
+
+    def list_items(folder_id, folders_only=False, max_pages=None):
+        calls.append((folder_id, folders_only))
+        return list(responses[folder_id])
+
+    client.list_items = list_items
+    records = client.manifest()
+    assert {r["media_id"] for r in records} == {"pdf_root", "pdf_sep"}
+    assert calls.count(("kb", True)) == 0
+
+
+def test_manifest_keeps_original_mount_if_kb_listing_fails():
+    group = ImaGroupConfig("g", "g", "kb", "aug", True, "manual", ("aug",))
+    client = ImaPureClient(ImaDocumentConfig(refresh_token="refresh"), group=group)
+    responses = {"aug": [{"media_id": "pdf_aug", "name": "8.pdf", "file_size": 8}]}
+
+    def list_items(folder_id, folders_only=False, max_pages=None):
+        if folder_id == "kb":
+            raise RuntimeError("IMA list failed")
+        return list(responses[folder_id])
+
+    client.list_items = list_items
+    records = client.manifest()
+    assert {r["media_id"] for r in records} == {"pdf_aug"}
 
 
 def test_manifest_recurses_selected_folders_and_keeps_folder_metadata():
@@ -4014,11 +4116,6 @@ def test_sync_redownloads_when_pull_url_set_even_if_file_exists(tmp_path, monkey
     monkeypatch.setenv("IMA_PULL_TOKEN", "tok")
     monkeypatch.setenv("IMA_ARCHIVE_ROOT", str(archive))
     monkeypatch.setattr(ima_documents, "ImaPureClient", FakeClient)
-    monkeypatch.setattr(
-        ima_documents,
-        "convert_pdf",
-        lambda pdf, txt: (txt.write_text("text", encoding="utf-8") or 4),
-    )
     service = ImaDocumentService(db, archive)
     planted = service.store.pdf_path(record)
     planted.parent.mkdir(parents=True, exist_ok=True)
@@ -4464,6 +4561,28 @@ def test_worker_skips_post_processing_after_cancel(monkeypatch):
     service._worker()
 
     assert calls == ["sync"]
+
+
+def _bare_worker(monkeypatch, result):
+    service = ImaDocumentService.__new__(ImaDocumentService)
+    service._cancel_requested = False
+    service._state_lock = threading.Lock()
+    kicks = []
+    service.on_files_ready = lambda: kicks.append("extract")
+    monkeypatch.setattr(service, "sync_once", lambda: result)
+    monkeypatch.setattr(service, "scan_local_libraries", lambda: None)
+    monkeypatch.setattr(service, "_rebuild_index_if_needed", lambda: None)
+    monkeypatch.setattr("app.ima_title_zh.refresh_bank_titles_zh", lambda _: None)
+    service._worker()
+    return kicks
+
+
+def test_worker_kicks_report_extract_after_download(monkeypatch):
+    assert _bare_worker(monkeypatch, {"status": "finished", "downloaded": 2}) == ["extract"]
+
+
+def test_worker_skips_report_extract_when_nothing_downloaded(monkeypatch):
+    assert _bare_worker(monkeypatch, {"status": "finished", "downloaded": 0}) == []
 
 
 def test_failed_listing_keeps_old_group_index(tmp_path, monkeypatch):

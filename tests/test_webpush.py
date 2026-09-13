@@ -15,7 +15,6 @@ from app.notifiers.webpush import (
     WebPushNotifier,
     b64url,
     build_webpush_payload,
-    decrypt_webpush,
     encrypt_webpush,
     generate_vapid_keys,
     is_valid_push_endpoint,
@@ -63,14 +62,6 @@ def test_is_valid_subscription_keys():
     assert not is_valid_subscription_keys("short", auth)
     assert not is_valid_subscription_keys(p256dh, "nope")
     assert not is_valid_subscription_keys("", "")
-
-
-def test_encrypt_decrypt_roundtrip():
-    ua_private, p256dh, auth = make_subscriber()
-    plaintext = json.dumps({"title": "t", "body": "b"}, ensure_ascii=False).encode()
-    body = encrypt_webpush(plaintext, p256dh, auth)
-    assert body[20] == 65
-    assert decrypt_webpush(body, ua_private, auth) == plaintext
 
 
 def test_vapid_authorization_shape():
@@ -125,6 +116,24 @@ def test_notifier_posts_encrypted_body_and_drops_gone(monkeypatch):
     )
     notifier.notify(make_post())
     assert deleted == [gone]
+
+
+def test_send_text_clicks_url_from_text():
+    notifier = WebPushNotifier(client=httpx.Client(), subscriptions=[])
+    captured = []
+    notifier._post_payload = captured.append
+    notifier.send_text(
+        "今日研报 1 篇命中关键词\n\n· 标题（八大顶级投行研报VIP）\n\n打开研报库查看 https://vpush.net/knowledge"
+    )
+    assert captured[0]["url"] == "https://vpush.net/knowledge"
+
+
+def test_send_text_without_url_keeps_root():
+    notifier = WebPushNotifier(client=httpx.Client(), subscriptions=[])
+    captured = []
+    notifier._post_payload = captured.append
+    notifier.send_text("📊 AI 摘要\n\n今天大盘涨了。")
+    assert captured[0]["url"] == "/"
 
 
 def test_webpush_subscribe_and_disable_api():

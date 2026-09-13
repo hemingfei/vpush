@@ -131,29 +131,52 @@ def test_report_extraction_requeues_recoverable_results_once(tmp_path, monkeypat
     source = tmp_path / relative_path
     source.parent.mkdir(parents=True)
     source.write_text("English semiconductor research. " * 20)
+    today = datetime.datetime.now(app_scheduler.CN_TZ).date()
+    recent_day = today.isoformat()
+    old_day = (today - datetime.timedelta(days=3)).isoformat()
     recoverable = ("failed", "notext", "empty", "nofile")
     for index, status in enumerate(recoverable, start=1):
         media_id = f"english-{index}"
         db._execute(
             "INSERT INTO ima_document_index "
             "(group_id, media_id, name, has_txt, txt_path, sort_date) "
-            "VALUES (?, ?, 'AI Datacenter Outlook', 1, ?, '2026-09-08')",
-            (group_id, media_id, relative_path),
+            "VALUES (?, ?, 'AI Datacenter Outlook', 1, ?, ?)",
+            (group_id, media_id, relative_path, recent_day),
         )
         db.save_report_extraction(group_id, media_id, status=status, model="old-model")
     db._execute(
         "INSERT INTO ima_document_index "
         "(group_id, media_id, name, has_txt, txt_path, sort_date) "
-        "VALUES (?, 'english-ok', 'Existing Result', 1, ?, '2026-09-08')",
-        (group_id, relative_path),
+        "VALUES (?, 'english-ok', 'Existing Result', 1, ?, ?)",
+        (group_id, relative_path, recent_day),
     )
     db.save_report_extraction(
         group_id, "english-ok", thesis="Keep this result.", status="ok", model="old-model"
     )
+    db._execute(
+        "INSERT INTO ima_document_index "
+        "(group_id, media_id, name, has_txt, txt_path, sort_date) "
+        "VALUES (?, 'english-old', 'Old Report Buy', 1, ?, ?)",
+        (group_id, relative_path, old_day),
+    )
+    db.save_report_extraction(group_id, "english-old", status="empty", model="old-model")
+    alpha_group = "7437050366161003"
+    db._execute(
+        "INSERT INTO ima_document_index "
+        "(group_id, media_id, name, has_txt, txt_path, sort_date) "
+        "VALUES (?, 'alpha-new', 'Alpha Research Buy', 1, ?, ?)",
+        (alpha_group, relative_path, recent_day),
+    )
+    db._execute(
+        "INSERT INTO ima_document_index "
+        "(group_id, media_id, name, has_txt, txt_path, sort_date) "
+        "VALUES ('feishu-personal', 'note-new', 'Personal note', 1, ?, ?)",
+        (relative_path, recent_day),
+    )
     calls = []
 
-    def fake_extract(text, llm_config, model="", universe=None, client=None):
-        calls.append((text, model))
+    def fake_extract(text, llm_config, model="", universe=None, client=None, title=""):
+        calls.append((text, model, title))
         return {
             "report_kind": "行业",
             "rating": "",
@@ -175,8 +198,10 @@ def test_report_extraction_requeues_recoverable_results_once(tmp_path, monkeypat
         ima_archive_file=lambda path: tmp_path / path,
     )
 
-    assert scheduler._run_report_extraction_task() == len(recoverable)
-    assert len(calls) == len(recoverable)
+    assert scheduler._run_report_extraction_task() == len(recoverable) + 1
+    assert len(calls) == len(recoverable) + 1
+    assert "Alpha Research Buy" in {call[2] for call in calls}
+    assert "Personal note" not in {call[2] for call in calls}
     results = db.report_extractions_for_keys(
         [(group_id, f"english-{index}") for index in range(1, len(recoverable) + 1)]
     )
@@ -185,9 +210,46 @@ def test_report_extraction_requeues_recoverable_results_once(tmp_path, monkeypat
         (group_id, "english-ok")
     ]
     assert preserved["thesis"] == "Keep this result."
+    old = db.report_extractions_for_keys([(group_id, "english-old")])[
+        (group_id, "english-old")
+    ]
+    assert old["status"] == "empty"
+    assert db.get_setting("report_extract_pipeline_version") == "4"
 
     assert scheduler._run_report_extraction_task() == 0
-    assert len(calls) == len(recoverable)
+    assert len(calls) == len(recoverable) + 1
+
+
+def test_report_extraction_uses_title_when_pdf_has_no_text(tmp_path, monkeypatch):
+    db = DB(tmp_path / "title-only.db")
+    group_id = "7479082602225992"
+    pdf = tmp_path / "report.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    today = datetime.datetime.now(app_scheduler.CN_TZ).date().isoformat()
+    db._execute(
+        "INSERT INTO ima_document_index "
+        "(group_id, media_id, name, has_pdf, pdf_path, sort_date) "
+        "VALUES (?, 'title-only', 'Nomura AI Strategy Buy-260909.pdf', 1, 'report.pdf', ?)",
+        (group_id, today),
+    )
+    calls = []
+
+    def fake_extract(text, llm_config, model="", universe=None, client=None, title=""):
+        calls.append((text, title))
+        return {"report_kind": "策略", "rating": "Buy", "target_price": "", "thesis": "AI demand remains strong.", "tickers": [], "status": "ok"}
+
+    monkeypatch.setattr("app.llm.extract_report_structure", fake_extract)
+    scheduler = Scheduler(
+        db,
+        {},
+        [],
+        SimpleNamespace(),
+        llm_config=SimpleNamespace(api_key="test-key", api_base="https://example.com/v1", model="test-model"),
+        ima_archive_file=lambda path: tmp_path / path,
+    )
+
+    assert scheduler._run_report_extraction_task() == 1
+    assert calls == [("", "Nomura AI Strategy Buy-260909.pdf")]
 
 
 def add_kol_subscribed(db, platform, name, external_id, **kw):
@@ -1857,7 +1919,7 @@ def test_digest_llm_summary_computed_once_for_multiple_subscribers(monkeypatch):
     assert calls["n"] == 1
 
 
-def test_digest_uses_site_llm_when_user_has_no_key(monkeypatch):
+def test_digest_skips_llm_when_user_has_no_key(monkeypatch):
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
     uid = db.add_user("u1", "h", telegram_chat_id="111")
@@ -1894,7 +1956,47 @@ def test_digest_uses_site_llm_when_user_has_no_key(monkeypatch):
         ncfg,
         llm_config=SimpleNamespace(api_key="sk-grok", api_base="https://example.com/v1", model="grok-4.6"),
     )
-    assert calls["n"] == 1
+    assert calls["n"] == 0
+    assert not db.get_user(uid)["llm_last_status"]
+
+
+def test_digest_records_llm_fallback(monkeypatch):
+    db = make_db()
+    kid = db.add_kol("xueqiu", "A", "1")
+    uid = db.add_user("u1", "h", telegram_chat_id="111")
+    db.update_user(
+        uid,
+        llm_api_key="sk-user",
+        llm_api_base="https://api.deepseek.com",
+        llm_model="deepseek-chat",
+    )
+    db.add_subscription(uid, kid)
+    post = make_post(kid)
+    monkeypatch.setattr("app.llm.summarize_posts", lambda *a, **k: None)
+
+    class FakeTG:
+        def __init__(self, config, chat_id=None, client=None, **kwargs):
+            self.client = SimpleNamespace(close=lambda: None)
+
+        def send_text(self, text):
+            pass
+
+        def send_digest(self, posts, kol_name, platform):
+            pass
+
+    monkeypatch.setattr("app.notifiers.telegram.TelegramNotifier", FakeTG)
+    flush_digest(
+        db,
+        {kid: [post]},
+        [],
+        SimpleNamespace(
+            telegram=SimpleNamespace(bot_token="t", chat_id=""),
+            feishu=SimpleNamespace(),
+            wecom=SimpleNamespace(),
+        ),
+        llm_config=SimpleNamespace(api_key="sk-grok", api_base="https://example.com/v1", model="grok-4.6"),
+    )
+    assert db.get_user(uid)["llm_last_status"] == "fallback"
 
 
 def test_dnd_summary_failure_alerts_admin(monkeypatch):
@@ -3236,6 +3338,29 @@ def test_translate_text_skips_already_chinese():
     assert calls == []
 
 
+def test_translate_text_skips_chinese_author_with_english_quote():
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        return httpx.Response(500)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    src = (
+        "Tibo说Astra需求太猛，可能暂停Pro新订阅。\n\n"
+        "我低头一看：今天才到16:07，四个Codex已经跑了4.94亿token。\n\n"
+        "兄弟，算力是怎么没的，我好像有点数了。\n\n"
+        "RT @thsottiaux:\n"
+        "Demand for Astra is really unprecedented. We're pulling all the levers "
+        "possible to sustain the demand, but I've not seen anything like it until now "
+        "and we went through very steep growth before. Priority will always be to keep "
+        "excellent service for existing users, but we might have to pause new Pro "
+        "subscriptions for a bit if this continues."
+    )
+    assert translate_text(src, client=client, tweet_id="1", twitter_cookie="auth_token=a; ct0=b") == src
+    assert calls == []
+
+
 def test_translate_text_mymemory_429_keeps_original_and_cools_down():
     app_scheduler._mymemory_skip_until = 0.0
     calls = []
@@ -3360,6 +3485,79 @@ def test_translate_text_edge_covers_long_text_when_x_fails():
         translate_text(src, client=client, twitter_cookie="auth_token=a; ct0=b")
         == "这是一段足够长的长帖译文内容"
     )
+
+
+def test_translate_text_quoted_tweet_uses_text_body():
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "text": (
+                        "喜欢这个。\n\n"
+                        "RT @FrancisBrennan：\n"
+                        "观看 Meta 的 DinaPowellMcC 在播客中介绍我们的数据中心社区契约。"
+                        "我们承诺不仅支付自己的电费，还会切实努力降低电价。"
+                    )
+                }
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    src = (
+        "Love this.\n\n"
+        "RT @FrancisBrennan:\n"
+        "WATCH: @Meta's @DinaPowellMcC on @RuthlessPodcast highlighting our "
+        "data center community compact. We promise to not only pay for our own "
+        "electricity but to actually work to drive down electricity costs."
+    )
+    result = translate_text(
+        src,
+        client=client,
+        tweet_id="2097633753875017969",
+        twitter_cookie="auth_token=a; ct0=b",
+    )
+    assert calls and calls[0]["content_type"] == "TEXT"
+    assert "id" not in calls[0]
+    assert "Love this." in calls[0]["text"]
+    assert "喜欢这个。" in result
+    assert "数据中心" in result
+
+
+def test_translate_text_rejects_outer_only_quote_translation():
+    def handler(request):
+        if "grok/translation.json" in str(request.url):
+            return httpx.Response(200, json={"result": {"text": "喜欢这个。"}})
+        if "edge.microsoft.com" in str(request.url):
+            return httpx.Response(
+                200,
+                json=[{
+                    "translations": [{
+                        "text": "喜欢这个。\n\nRT @FrancisBrennan：\n观看数据中心社区契约。",
+                        "to": "zh-Hans",
+                    }]
+                }],
+            )
+        raise AssertionError("MyMemory should not be called")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    src = (
+        "Love this.\n\n"
+        "RT @FrancisBrennan:\n"
+        "WATCH: Meta data center community compact. We promise to not only pay "
+        "for our own electricity but to actually work to drive down costs."
+    )
+    result = translate_text(
+        src,
+        client=client,
+        tweet_id="2097633753875017969",
+        twitter_cookie="auth_token=a; ct0=b",
+    )
+    assert "观看数据中心社区契约" in result
+    assert result != "喜欢这个。"
 
 
 def test_translate_text_rejects_collapsed_ellipsis():
@@ -4940,7 +5138,6 @@ def test_stock_alias_task_expands_names_from_marks(monkeypatch):
         ],
     )
     # 跳过正文候选识别（返回空即可），只测 $标记$ 扩充
-    monkeypatch.setattr("app.llm.suggest_stock_aliases", lambda c, s, cfg, client=None: [])
     scheduler = Scheduler(
         db, {}, [],
         SimpleNamespace(),
@@ -4975,8 +5172,8 @@ def _alias_scheduler(db, llm_config):
     )
 
 
-def test_stock_alias_task_prefers_admin_grok_over_env(monkeypatch):
-    """系统别名任务跟管理员推送设置同一套 Grok，不走环境变量里的另一套。"""
+def test_stock_alias_task_uses_env_not_admin_personal(monkeypatch):
+    """系统别名任务走站点环境变量，不用管理员个人网关。"""
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
     db.insert_post("xueqiu", kid, "al-admin", "$涂改液(SZ000858)$", "戏称", "u", "")
@@ -5004,13 +5201,12 @@ def test_stock_alias_task_prefers_admin_grok_over_env(monkeypatch):
             model="deepseek-chat",
         ),
     )._run_stock_alias_task()
-    assert seen["key"] == "sk-grok"
-    assert seen["model"] == "grok-4.6"
-    assert seen["user_supplied"] is False
+    assert seen["key"] == "sk-deepseek"
+    assert seen["model"] == "deepseek-chat"
 
 
-def test_stock_alias_task_runs_with_admin_llm_when_env_empty(monkeypatch):
-    """环境变量没配 LLM 时，管理员推送设置也能跑标记解析。"""
+def test_stock_alias_task_skips_when_env_empty(monkeypatch):
+    """环境变量没配 LLM 时，不借用管理员个人网关。"""
     db = make_db()
     kid = db.add_kol("xueqiu", "A", "1")
     db.insert_post("xueqiu", kid, "al-only", "$涂改液(SZ000858)$", "戏称", "u", "")
@@ -5030,8 +5226,7 @@ def test_stock_alias_task_runs_with_admin_llm_when_env_empty(monkeypatch):
 
     monkeypatch.setattr("app.llm.resolve_stock_marks", fake_resolve)
     _alias_scheduler(db, None)._run_stock_alias_task()
-    assert seen["n"] == 1
-    assert seen["key"] == "sk-grok"
+    assert seen["n"] == 0
 
 
 def test_daily_report_uses_admin_push_settings_llm(monkeypatch):
