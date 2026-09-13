@@ -86,6 +86,10 @@ export function createMxViewsView(dependencies) {
 
   function mxvTeardown() {
     if (_mxv.es) { try { _mxv.es.close(); } catch (e) {} _mxv.es = null; }
+    if (_mxvAdmin.docClick) { // 管理面板的 document 级点外收起监听随页卸载，不能泄漏到大V管理等其他页
+      document.removeEventListener("click", _mxvAdmin.docClick);
+      _mxvAdmin.docClick = null;
+    }
     if (_mxv.pollTimer) { clearInterval(_mxv.pollTimer); _mxv.pollTimer = null; }
     if (_mxv.clockTimer) { clearInterval(_mxv.clockTimer); _mxv.clockTimer = null; }
     if (_mxv.tlDrag) { // 拖动中途离开页面：摘掉 window 级拖动监听
@@ -2129,10 +2133,15 @@ export function createMxViewsView(dependencies) {
       // document 时 target 已游离，closest 查不到 .mxva-kol-wrap 会被误判为点外收起，
       // 导致下拉每选一个就自动关闭。游离目标一律忽略。
       if (!e.target.isConnected) return;
-      if (!e.target.closest(".mxva-kol-wrap")) {
-        const menu = document.querySelector(".mxva-kol-menu");
-        if (menu) menu.classList.remove("open");
-      }
+      // 本监听挂在 document 上，切页后靠 teardown 摘除；摘除前若本面板已不在 DOM，
+      // 绝不能越权去关别处同款菜单——大V管理页（admin/kol.js）的「实时资讯/调研纪要
+      // 大V」下拉曾同样挂 .mxva-kol-menu class，被这里 document.querySelector 误命中，
+      // 点开瞬间即被关上，表现为「下拉打不开」。只在自身面板范围内收起。
+      const wrap = document.querySelector(".mxva-kol-wrap");
+      if (!wrap) return;
+      if (wrap.contains(e.target)) return;
+      const menu = $("#mxva-kol-menu");
+      if (menu) menu.classList.remove("open");
     };
     document.addEventListener("click", _mxvAdmin.docClick);
     // 题材 chips：删除走委托

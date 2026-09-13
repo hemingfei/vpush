@@ -5990,6 +5990,10 @@ html:not(.theme-dark) .ai-form-select option {
 .news-research-list .post-item .p-name { font-weight: 400; }
 /* 管理后台「实时资讯大V」勾选面板（下拉多选复用 ai-kol/mxva-kol 样式） */
 .news-kol-dropdown { max-width: 760px; }
+/* 菜单容器不挂 .mxva-kol-menu（智囊团管理面板的钩子 class，误挂会撞上它的点外收起
+   监听导致下拉打不开），这里补齐原先由该 class 提供的单列布局 */
+.news-kol-menu { grid-template-columns: 1fr; }
+.news-kol-menu.open { display: block; }
 .news-kol-panel .mxva-note { margin-top: 8px; }
 .news-article-page { max-width: 780px; margin: 0 auto; min-width: 0; }
 .news-article-head { position: relative; padding-bottom: 16px; border-bottom: var(--border-default); }

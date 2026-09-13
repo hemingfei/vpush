@@ -7105,8 +7105,8 @@ window.__VPUSH_BACK__ = function () {
     return true;
   }
   if (document.querySelector(".mxv-cal")) { mxvCalClose(); return true; } // 智囊团月历弹层
-  const kolMenu = document.querySelector(".mxva-kol-menu.open");
-  if (kolMenu) { kolMenu.classList.remove("open"); return true; } // 分析大V范围下拉先收起
+  const kolMenu = document.querySelector(".mxva-kol-menu.open, .news-kol-menu.open");
+  if (kolMenu) { kolMenu.classList.remove("open"); return true; } // 分析大V范围/实时资讯·调研纪要大V下拉先收起
   if (document.querySelector(".mxv-drawer")) { mxvCloseDrawer(); return true; }
   if (state.pageBackRoute) { go(state.pageBackRoute); return true; }
   if (history.length > 1) { history.back(); return true; }

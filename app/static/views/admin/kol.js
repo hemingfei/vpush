@@ -319,7 +319,8 @@ export function createAdminKolsView(dependencies) {
             <span id="news-kol-selected-text" class="ai-kol-selected-text">加载中…</span>
             <svg class="ai-kol-dropdown-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
           </div>
-          <div id="news-kol-menu" class="ai-kol-dropdown-menu mxva-kol-menu news-kol-menu">
+          <!-- 不挂 .mxva-kol-menu class：那是智囊团管理面板的菜单钩子，误挂会撞上它的点外收起监听 -->
+          <div id="news-kol-menu" class="ai-kol-dropdown-menu news-kol-menu">
             <div class="mxva-kol-toolbar">
               <input id="news-kol-search" class="form-control" placeholder="搜索大V名称" aria-label="搜索大V" oninput="newsKolSearch(this.value)">
               <button type="button" class="btn-sm" onclick="newsKolAll()" title="勾选当前搜索结果里的启用大V">全选</button>
@@ -520,7 +521,7 @@ export function createAdminKolsView(dependencies) {
             <span id="research-kol-selected-text" class="ai-kol-selected-text">加载中…</span>
             <svg class="ai-kol-dropdown-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
           </div>
-          <div id="research-kol-menu" class="ai-kol-dropdown-menu mxva-kol-menu news-kol-menu research-kol-menu">
+          <div id="research-kol-menu" class="ai-kol-dropdown-menu news-kol-menu research-kol-menu">
             <div class="mxva-kol-toolbar">
               <input id="research-kol-search" class="form-control" placeholder="搜索大V名称" aria-label="搜索大V" oninput="researchKolSearch(this.value)">
               <button type="button" class="btn-sm" onclick="researchKolAll()" title="勾选当前搜索结果里的启用大V">全选</button>
