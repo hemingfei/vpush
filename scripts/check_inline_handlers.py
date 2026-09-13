@@ -12,9 +12,9 @@ DEFAULT_APP = ROOT / "app" / "static" / "app.js"
 IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
 
 
-def _from_braces(src: str, prefix: str) -> list[str]:
+def _from_braces(src: str, prefix: str, suffix: str = "") -> list[str]:
     names: list[str] = []
-    for block in re.findall(rf"{prefix}\s*\{{([^}}]+)\}}", src, re.M):
+    for block in re.findall(rf"{prefix}\s*\{{([^}}]+)\}}\s*{suffix}", src, re.M):
         for part in block.split(","):
             bits = part.replace("\n", " ").split()
             if not bits or bits[0] == "...":
@@ -28,6 +28,8 @@ def parse_bindings(src: str) -> list[str]:
     names += re.findall(rf"^(?:export\s+)?const\s+({IDENT})\s*=", src, re.M)
     names += _from_braces(src, r"^(?:export\s+|import\s+)")
     names += _from_braces(src, r"^const")
+    # 懒加载视图：ensureAdminViews() 内部的括号解构赋值 ({ a, b } = view = factory({...}))
+    names += _from_braces(src, r"\(\s*", r"=")
     return names
 
 
