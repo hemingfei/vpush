@@ -12,6 +12,8 @@ export function createNewsView(dependencies) {
     flash,
     escapeHtml,
     trapFocus,
+    lockBodyScroll,
+    unlockBodyScroll,
     fmtPublished,
     externalLinkIcon,
     avatarHtml,
@@ -712,15 +714,20 @@ export function createNewsView(dependencies) {
   }
 
   function closeNewsArticleModal(mask) {
+    const existing = mask || document.querySelector(".news-article-modal");
     state.newsArticleId = 0;
-    if (mask) mask.remove();
-    else document.querySelector(".news-article-modal")?.remove();
+    // 无弹窗时必须空操作:路由器每次切页都经 clearNewsReaderState 无条件调到这里,
+    // 若无条件解锁会误解同一次点击里其他弹窗(如原始消息弹窗)刚加的滚动锁
+    if (!existing) return;
+    unlockBodyScroll();
+    existing.remove();
   }
 
   async function openNewsArticleModal(articleId) {
     const id = Number(articleId);
     if (!Number.isInteger(id) || id <= 0) return;
     closeNewsArticleModal();
+    lockBodyScroll(); // 锁背景滚动：内层滚到头后 touchmove/wheel 不再穿透到新闻列表
     const mask = document.createElement("div");
     mask.className = "modal-mask news-article-modal";
     mask.innerHTML = `<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="news-article-modal-title">

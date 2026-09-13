@@ -65,3 +65,41 @@ export function trapFocus(container, onEscape) {
     }
   };
 }
+
+/**
+ * Body 滚动锁（弹窗打开期间禁止背景页面滚动，防止弹窗内滚动穿透到下面的列表）：
+ * 用 position:fixed 锁定 body 而非 overflow:hidden —— 后者在带 sticky 元素的页面上
+ * 可能让浏览器把 scrollY 归零并发出合成 scroll 事件，触发其他页面的滚动监听
+ * （如最新动态的 tlSyncScrollChrome → refreshTimeline → scrollTo(0)）；
+ * position:fixed 不产生 scroll 事件，全部解锁后恢复 inline 样式 + scrollTo 即可。
+ * 引用计数：弹窗可叠加（新闻弹窗上再开确认框等），全部关闭才恢复滚动位置。
+ */
+let _lockCount = 0;
+let _savedScrollY = 0;
+
+export function lockBodyScroll() {
+  if (_lockCount === 0) {
+    _savedScrollY = window.scrollY;
+    document.body.style.position = "fixed";
+    document.body.style.top = `-${_savedScrollY}px`;
+    document.body.style.left = "0";
+    document.body.style.right = "0";
+    document.body.style.width = "100%";
+    document.body.style.overflow = "hidden";
+  }
+  _lockCount += 1;
+}
+
+export function unlockBodyScroll() {
+  if (_lockCount === 0) return; // 无锁可解（如路由切换清理时弹窗早已关闭）
+  _lockCount -= 1;
+  if (_lockCount === 0) {
+    document.body.style.position = "";
+    document.body.style.top = "";
+    document.body.style.left = "";
+    document.body.style.right = "";
+    document.body.style.width = "";
+    document.body.style.overflow = "";
+    window.scrollTo(0, _savedScrollY);
+  }
+}

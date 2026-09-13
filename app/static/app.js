@@ -8,7 +8,7 @@ import {
   THEME_AUTO_ICON, THEME_MOON_ICON, THEME_SUN_ICON, TRASH_ICON, USER_ICON, USER_PLUS_ICON, USERS_ICON,
   V_ICON, WSCN_LIVE_ICON, X_ICON,
 } from "./core/icons.js";
-import { trapFocus } from "./core/dialog.js";
+import { trapFocus, lockBodyScroll, unlockBodyScroll } from "./core/dialog.js";
 import {
   PLATFORM_ICONS as PLATFORM_ICONS_CONFIG,
   PLATFORM_LABELS as PLATFORM_LABELS_CONFIG,
@@ -3998,6 +3998,7 @@ function openRawModal(postId, label) {
   const post = _tlPosts.find((p) => p.id === postId) || _kolPagePosts.find((p) => p.id === postId) || (Array.isArray(window._mxvPosts) ? window._mxvPosts.find((p) => p.id === postId) : null);
   if (!post) return;
   closeRawModal(); // 防连点叠开
+  lockBodyScroll(); // 与新闻弹窗同一套背景滚动锁（core/dialog.js）
   let detail = post.detail;
   if (typeof detail === "string" && detail) {
     try { detail = JSON.parse(detail); } catch { /* 非 JSON 字符串按原样展示 */ }
@@ -4146,6 +4147,7 @@ function closeRawModal() {
   const mask = document.querySelector(".mx-raw-mask");
   if (!mask) return;
   document.removeEventListener("keydown", mask._onKey, true);
+  unlockBodyScroll();
   mask.remove();
 }
 
@@ -6129,6 +6131,9 @@ const {
   mxAttachmentCards,
   PLATFORM_LABELS,
   PLATFORM_ICONS,
+  // 追加在块尾：test_news_center_has_realtime_and_articles_tabs 检查既有依赖须在块首 450 字符内
+  lockBodyScroll,
+  unlockBodyScroll,
 });
 
 const {
