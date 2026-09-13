@@ -1440,29 +1440,43 @@ async function checkFeishuTimelineUpdate(mediaId, groupId, baseline, seq, reader
   }
 }
 
+let _versionCheckAt = 0;
+let _versionInflight = null;
+
 async function checkUpdate() {
-  try {
-    const v = await api("/api/version");
-    if (v.current && v.current !== APP_VERSION) {
-      const refreshKey = `dav_version_refresh_${v.current}`;
-      if (!sessionStorage.getItem(refreshKey)) {
-        sessionStorage.setItem(refreshKey, "1");
-        location.reload();
-        return;
+  // 渲染/focus/visibilitychange 三路都会触发，且服务端缓存 6 小时：
+  // 60s 节流 + in-flight 去重，避免 version 请求风暴占满浏览器连接槽
+  if (_versionInflight) return _versionInflight;
+  const now = Date.now();
+  if (now - _versionCheckAt < 60000) return undefined;
+  _versionCheckAt = now;
+  _versionInflight = (async () => {
+    try {
+      const v = await api("/api/version");
+      if (v.current && v.current !== APP_VERSION) {
+        const refreshKey = `dav_version_refresh_${v.current}`;
+        if (!sessionStorage.getItem(refreshKey)) {
+          sessionStorage.setItem(refreshKey, "1");
+          location.reload();
+          return;
+        }
       }
+      const link = $("#sidebar-gh-link");
+      const meta = $("#sidebar-version");
+      if (!link || !meta) return;
+      // 始终显示服务端返回的当前版本，避免本地硬编码版本过期
+      meta.innerHTML = `v${escapeHtml(v.current)}`;
+      if (v.update_available && v.latest) {
+        link.classList.add("has-update");
+        meta.innerHTML += ` <a class="sidebar-update" href="${escapeHtml(v.url)}" target="_blank" rel="noopener" title="有新版本">↑ ${escapeHtml(v.latest)}</a>`;
+      }
+    } catch {
+      /* 更新检查失败不打扰，保留本地硬编码版本兜底 */
+    } finally {
+      _versionInflight = null;
     }
-    const link = $("#sidebar-gh-link");
-    const meta = $("#sidebar-version");
-    if (!link || !meta) return;
-    // 始终显示服务端返回的当前版本，避免本地硬编码版本过期
-    meta.innerHTML = `v${escapeHtml(v.current)}`;
-    if (v.update_available && v.latest) {
-      link.classList.add("has-update");
-      meta.innerHTML += ` <a class="sidebar-update" href="${escapeHtml(v.url)}" target="_blank" rel="noopener" title="有新版本">↑ ${escapeHtml(v.latest)}</a>`;
-    }
-  } catch {
-    /* 更新检查失败不打扰，保留本地硬编码版本兜底 */
-  }
+  })();
+  return _versionInflight;
 }
 
 function ensureVersionRefreshCheck() {
