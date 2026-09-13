@@ -2070,6 +2070,29 @@ def test_report_extraction_rating_ticker_filters(tmp_path):
     assert db.ima_document_page(["cicc-research"], ticker="600206")["items"][0]["media_id"] == "m2"
 
 
+def test_report_rating_english_to_zh(tmp_path):
+    """卖方英文评级入库/展示换成中文投资评级。"""
+    from app.llm import clean_report_extraction, report_rating_zh
+
+    assert report_rating_zh("Overweight") == "增持"
+    assert report_rating_zh("OUTPERFORM") == "跑赢大市"
+    assert report_rating_zh("Equal-weight") == "标配"
+    assert report_rating_zh("Market Perform") == "与大市同步"
+    assert report_rating_zh("Buy") == "买入"
+    assert report_rating_zh("增持") == "增持"
+    assert clean_report_extraction({"rating": "Overweight"}, {})["rating"] == "增持"
+
+    db = DB(str(tmp_path / "rating-zh.db"))
+    db._conn.execute(
+        "INSERT INTO ima_document_index (group_id, media_id, name, sort_date) VALUES ('g', 'm', 't', '2026-09-12')"
+    )
+    db._conn.commit()
+    db.save_report_extraction("g", "m", rating="Overweight", status="ok")
+    items = [{"group_id": "g", "media_id": "m"}]
+    db.attach_report_extractions(items)
+    assert items[0]["extraction"]["rating"] == "增持"
+
+
 def test_report_extraction_parse_and_ticker_whitelist():
     """抽取解析：剥围栏/容错截取；标的按词表白名单丢幻觉。"""
     from types import SimpleNamespace

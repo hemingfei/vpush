@@ -5414,9 +5414,13 @@ class DB:
         )
         if not found:
             return items
+        from .llm import report_rating_zh
+
         for item in items:
             extra = found.get((str(item.get("group_id") or ""), str(item.get("media_id") or "")))
             if extra:
+                extra = dict(extra)
+                extra["rating"] = report_rating_zh(extra.get("rating") or "")
                 item["extraction"] = extra
         return items
 

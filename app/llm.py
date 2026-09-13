@@ -620,9 +620,43 @@ def resolve_stock_marks(marks, llm_config=None, client=None) -> list[dict]:
 REPORT_EXTRACT_MAX_CHARS = 12000
 REPORT_EXTRACT_TIMEOUT = 90
 
+_REPORT_RATING_ZH = {
+    "strong buy": "强烈买入",
+    "speculative buy": "投机买入",
+    "long term buy": "长期买入",
+    "buy": "买入",
+    "accumulate": "增持",
+    "add": "增持",
+    "overweight": "增持",
+    "outperform": "跑赢大市",
+    "market outperform": "跑赢大市",
+    "sector outperform": "跑赢行业",
+    "market perform": "与大市同步",
+    "sector perform": "与行业同步",
+    "equal weight": "标配",
+    "equalweight": "标配",
+    "neutral": "中性",
+    "hold": "持有",
+    "underperform": "跑输大市",
+    "sector underperform": "跑输行业",
+    "underweight": "减持",
+    "reduce": "减持",
+    "sell": "卖出",
+}
+
+
+def report_rating_zh(rating: str) -> str:
+    """卖方英文评级 → 中文投资评级；已是中文则原样返回。"""
+    raw = str(rating or "").strip()
+    if not raw:
+        return ""
+    key = " ".join(raw.lower().replace("_", " ").replace("-", " ").split())
+    return _REPORT_RATING_ZH.get(key, raw)
+
+
 _REPORT_EXTRACT_PROMPT = (
     "从中文或英文研报文本中抽取结构化信息，只输出一个 JSON 对象（不要 markdown 代码块、不要解释），字段：\n"
-    '{"rating": "评级原文（如 首次覆盖/维持/增持/Buy/Outperform，无则空串）", '
+    '{"rating": "中文投资评级（买入/增持/中性/减持/卖出/跑赢大市/跑输大市等，不要英文）", '
     '"target_price": "目标价原文（含币种或区间，无则空串）", '
     '"thesis": "简体中文的一句话核心逻辑，不超过80字，无则空串", '
     '"report_kind": "宏观/策略/行业/公司/固收 之一", '
@@ -682,7 +716,7 @@ def _parse_report_extraction(content: str) -> dict:
 
 def clean_report_extraction(data: dict, universe: dict[str, str]) -> dict:
     """规范化抽取字段；标的按词表白名单校验，词表没有的代码视为幻觉丢弃。"""
-    rating = str(data.get("rating") or "").strip()[:24]
+    rating = report_rating_zh(str(data.get("rating") or "").strip())[:24]
     target_price = str(data.get("target_price") or "").strip()[:64]
     thesis = " ".join(str(data.get("thesis") or "").split())[:200]
     report_kind = str(data.get("report_kind") or "").strip()[:12]
