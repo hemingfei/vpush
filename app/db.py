@@ -1255,14 +1255,42 @@ class DB:
         self._conn.executescript(SCHEMA)
 
     def online_backup(self, target: str | Path) -> None:
+        """整库备份。走独立只读连接：大库整库 copy 耗时数秒，持全局锁会把
+        所有 API 请求一起卡住（生产实测 3 秒级停顿），只挡写提交并受 5s 忙等约束。
+        与 replace_database 互斥靠 _reader_condition 登记。"""
         Path(target).parent.mkdir(parents=True, exist_ok=True)
-        with self._lock:
-            dst = sqlite3.connect(str(target))
+        if self.path == ":memory:":
+            with self._lock:
+                dst = sqlite3.connect(str(target))
+                try:
+                    with dst:
+                        self._conn.backup(dst)
+                finally:
+                    dst.close()
+            return
+        with self._reader_condition:
+            while self._replace_pending:
+                self._reader_condition.wait()
+            self._active_readers += 1
+        try:
+            src = sqlite3.connect(
+                Path(self.path).resolve().as_uri() + "?mode=ro", uri=True
+            )
             try:
-                with dst:
-                    self._conn.backup(dst)
+                src.execute("PRAGMA busy_timeout = 5000")
+                dst = sqlite3.connect(str(target))
+                try:
+                    with dst:
+                        src.backup(dst)
+                finally:
+                    dst.close()
             finally:
-                dst.close()
+                src.close()
+        finally:
+            with self._reader_condition:
+                self._active_readers -= 1
+                if not self._active_readers:
+                    self._reader_condition.notify_all()
 
     def reopen(self) -> None:
         with self._lock:
@@ -4823,46 +4851,79 @@ class DB:
         """一个事务批量插入帖子，返回与入参对齐的 id 列表（已存在为 None）。"""
         if not posts:
             return []
+        # 繁转简/JSON 序列化/拦截词命中全部在锁外预计算：OpenCC 是 CPU 大头，
+        # 长帖批量入库时在锁内做会把所有 API 请求卡住数秒，锁内只留纯 SQL
+        kw_cache: dict[int, list[str]] = {}
+        prepared: list[tuple] = []
+        for p in posts:
+            # 写回对象，后面 notify/digest 用的是同一份 Post，不能只在 SQL 里转
+            p.title = to_simplified(p.title)
+            p.content = to_simplified(p.content)
+            if p.kol_id not in kw_cache:
+                kw_cache[p.kol_id] = self._kol_block_keywords(p.kol_id)
+            hit = block_hit_keyword(
+                kw_cache[p.kol_id], p.content, p.title, p.content_src, p.title_src
+            )
+            prepared.append(
+                (
+                    p.platform,
+                    p.kol_id,
+                    p.external_id,
+                    p.title,
+                    p.content,
+                    p.title_src or "",
+                    p.content_src or "",
+                    p.post_type,
+                    json.dumps(p.images, ensure_ascii=False) if p.images else "",
+                    p.url,
+                    p.published_at,
+                    _detail_json(p.detail),
+                    json.dumps(p.tags, ensure_ascii=False) if p.tags is not None else "",
+                    1 if hit else 0,
+                    hit,
+                )
+            )
         with self._lock:
             try:
                 self._conn.execute("BEGIN")
                 ids: list[int | None] = []
-                kw_cache: dict[int, list[str]] = {}
-                for p in posts:
-                    # 写回对象，后面 notify/digest 用的是同一份 Post，不能只在 SQL 里转
-                    p.title = to_simplified(p.title)
-                    p.content = to_simplified(p.content)
-                    detail_json = _detail_json(p.detail)
-                    images_json = json.dumps(p.images, ensure_ascii=False) if p.images else ""
-                    tags_json = (
-                        json.dumps(p.tags, ensure_ascii=False)
-                        if p.tags is not None
-                        else ""
-                    )
-                    if p.kol_id not in kw_cache:
-                        kw_cache[p.kol_id] = self._kol_block_keywords(p.kol_id)
-                    hit = block_hit_keyword(
-                        kw_cache[p.kol_id], p.content, p.title, p.content_src, p.title_src
-                    )
+                for p, row in zip(posts, prepared):
+                    (
+                        platform,
+                        kol_id,
+                        external_id,
+                        title,
+                        content,
+                        title_src,
+                        content_src,
+                        post_type,
+                        images_json,
+                        url,
+                        published_at,
+                        detail_json,
+                        tags_json,
+                        blocked,
+                        block_hit,
+                    ) = row
                     cur = self._conn.execute(
                         "INSERT OR IGNORE INTO posts (platform, kol_id, external_id, title, content, title_src, content_src, post_type, images, url, published_at, detail, tags, blocked, block_hit) "
                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
-                            p.platform,
-                            p.kol_id,
-                            p.external_id,
-                            to_simplified(p.title),
-                            to_simplified(p.content),
-                            p.title_src or "",
-                            p.content_src or "",
-                            p.post_type,
+                            platform,
+                            kol_id,
+                            external_id,
+                            title,
+                            content,
+                            title_src,
+                            content_src,
+                            post_type,
                             images_json,
-                            p.url,
-                            p.published_at,
+                            url,
+                            published_at,
                             detail_json,
                             tags_json,
-                            1 if hit else 0,
-                            hit,
+                            blocked,
+                            block_hit,
                         ),
                     )
                     if cur.rowcount:

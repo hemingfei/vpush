@@ -117,9 +117,14 @@ def test_shared_cache_failure_cooldown_and_recovery():
     with patch("app.market.httpx.Client") as factory, patch("app.market.time.monotonic", return_value=100) as clock, patch.object(cache, "_intraday", side_effect=lambda client, symbol: (symbol, None)):
         get = factory.return_value.__enter__.return_value.get
         get.return_value = response
+        # 冷缓存只后台刷新：首访立即返回占位快照（不上游请求），后台完成后真数据到位
+        placeholder = cache.snapshot("day")
+        assert placeholder["stale"]
+        assert placeholder["items"]
+        assert get.call_count == 0
+        wait_for_market_refresh(cache, "day")
         first = cache.snapshot("day")
         assert not first["stale"]
-        assert cache.snapshot("day") == first
         assert get.call_count == 1
         clock.return_value = 131
         get.side_effect = httpx.ReadTimeout("unavailable")
@@ -167,6 +172,9 @@ def test_expired_warm_cache_returns_while_one_background_refresh_runs():
     ):
         get = factory.return_value.__enter__.return_value.get
         get.side_effect = get_quote
+        cold = cache.snapshot("day")
+        assert cold["stale"]
+        wait_for_market_refresh(cache, "day")
         first = cache.snapshot("day")
         assert first["items"][0]["price"] == 3930.12
 
@@ -190,7 +198,6 @@ def test_concurrent_cold_request_returns_stale_placeholders():
     cache = MarketQuotes()
     refresh_started = threading.Event()
     release_refresh = threading.Event()
-    first_result = {}
     response = httpx.Response(
         200,
         content=quote_payload().encode("gb18030"),
@@ -207,10 +214,11 @@ def test_concurrent_cold_request_returns_stale_placeholders():
         patch.object(cache, "_intraday", side_effect=lambda client, symbol: (symbol, None)),
     ):
         factory.return_value.__enter__.return_value.get.side_effect = get_quote
-        first = threading.Thread(
-            target=lambda: first_result.setdefault("snapshot", cache.snapshot("day"))
-        )
-        first.start()
+        # 冷缓存首访立即返回占位快照，真数据由后台刷新线程补上
+        first = cache.snapshot("day")
+        assert first["stale"]
+        assert len(first["items"]) == len(GROUPS["day"])
+        assert all("price" not in item for item in first["items"])
         assert refresh_started.wait(timeout=1)
 
         concurrent = cache.snapshot("day")
@@ -219,9 +227,10 @@ def test_concurrent_cold_request_returns_stale_placeholders():
         assert all("price" not in item for item in concurrent["items"])
 
         release_refresh.set()
-        first.join(timeout=1)
-        assert not first.is_alive()
-        assert not first_result["snapshot"]["stale"]
+        wait_for_market_refresh(cache, "day")
+        fresh = cache.snapshot("day")
+        assert not fresh["stale"]
+        assert fresh["items"][0]["price"]
 
 
 def test_cold_failure_returns_no_fabricated_quotes():
@@ -327,6 +336,9 @@ def test_intraday_cache_refresh_failure_and_trading_day_rollover():
         get = factory.return_value.__enter__.return_value.get
         get.return_value = httpx.Response(200, content=quote_payload().encode("gb18030"), request=httpx.Request("GET", "https://qt.gtimg.cn"))
         minute.side_effect = lambda client, symbol: (symbol, series)
+        cold = cache.snapshot("day")
+        assert cold["stale"]
+        wait_for_market_refresh(cache, "day")
         first = cache.snapshot("day")["items"][0]
         assert first["intraday"] == series and not first["intraday_stale"]
         cache.snapshot("day")

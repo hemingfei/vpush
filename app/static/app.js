@@ -475,11 +475,29 @@ function showPrompt(message, { title = "请输入", okText = "确定", value = "
   return showDialog({ title, message, okText, cancelText: "取消", input: { value, placeholder } });
 }
 
+// 服务端存在间歇性停顿窗口（全局写锁/外网抖动），请求无超时会一直转骨架屏：
+// GET 幂等，默认 12s 超时并自动重试一次；写操作与调用方自带的 signal 不套超时
+const API_GET_TIMEOUT_MS = 12000;
+
 async function api(path, options = {}) {
   const requestToken = state.token;
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   if (requestToken) headers.Authorization = `Bearer ${requestToken}`;
-  const resp = await fetch(path, { ...options, headers });
+  const isGet = (options.method || "GET").toUpperCase() === "GET";
+  const doFetch = () => {
+    const opts = { ...options, headers };
+    if (isGet && !opts.signal) opts.signal = AbortSignal.timeout(API_GET_TIMEOUT_MS);
+    return fetch(path, opts);
+  };
+  let resp;
+  try {
+    resp = await doFetch();
+  } catch (err) {
+    const retriable = isGet && (err?.name === "TimeoutError" || err?.name === "TypeError");
+    if (!retriable) throw err;
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    resp = await doFetch();
+  }
   // 登录/注册的 401 是「凭据错误」业务响应：透出后端 detail，不清会话
   if (resp.status === 401 && !path.startsWith("/api/auth/") && state.token === requestToken) {
     logout();

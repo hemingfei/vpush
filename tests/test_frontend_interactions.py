@@ -5278,12 +5278,26 @@ def test_api_401_only_logs_out_the_session_that_started_the_request():
             end += 1
         body = src[brace:end]
         token = body.index("const requestToken = state.token")
-        fetch = body.index("await fetch(", token)
+        fetch = body.index("fetch(path, opts)" if name == "api" else "await fetch(", token)
         unauthorized = body.index("resp.status === 401", fetch)
         assert token < fetch < unauthorized
         assert "state.token === requestToken" in body[unauthorized:]
         assert body.index("logout()", unauthorized) > body.index("state.token === requestToken", unauthorized)
         assert body.index("path.startsWith(\"/api/auth/\")", unauthorized) < body.index("logout()", unauthorized)
+
+
+def test_api_get_has_timeout_and_single_retry():
+    """服务端存在间歇性停顿窗口（全局写锁/外网抖动）：GET 必须有默认超时，
+    超时/网络错误自动重试一次，不再无限骨架屏；写操作与调用方自带 signal 不套。"""
+    src = APP_JS.read_text(encoding="utf-8")
+    assert "const API_GET_TIMEOUT_MS = 12000" in src
+    body = _fn_body("api")
+    # 仅 GET 且调用方未自带 signal 时套默认超时（写操作可能合法地跑很久）
+    assert "isGet && !opts.signal" in body
+    assert "AbortSignal.timeout(API_GET_TIMEOUT_MS)" in body
+    # 重试仅限 GET 的超时/网络错误（TimeoutError/TypeError），调用方主动 abort 不重试
+    assert 'err?.name === "TimeoutError" || err?.name === "TypeError"' in body
+    assert body.count("await doFetch()") == 2
 
 
 def test_sticky_chrome_is_opaque_canvas_not_glass():

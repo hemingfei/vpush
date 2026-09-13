@@ -277,8 +277,6 @@ class MarketQuotes:
     def snapshot(self, group: str = "auto") -> dict:
         now = datetime.now(CN_TZ)
         group = default_group(now) if group == "auto" else group
-        refresh_sync = False
-        refresh_async = False
         lock = self._locks[group]
         with lock:
             cache = self._cache[group]
@@ -293,11 +291,9 @@ class MarketQuotes:
                         symbol: {"symbol": symbol, "name": name, "stale": True}
                         for symbol, name in GROUPS[group]
                     }
-                refresh_sync = cold_cache
-                refresh_async = not cold_cache
-        if refresh_sync:
-            self._refresh_group(group)
-        elif refresh_async:
-            self._start_refresh(group)
+                # 冷缓存也只后台刷新：上游最坏 8s×N 的同步刷新会把请求线程挂住
+                # 约一分钟（生产实测冷启动首次访问 60s）。页面先拿占位快照，
+                # 行情页 30s 轮询自动补上真数据。
+                self._start_refresh(group)
         with lock:
             return self._snapshot_locked(group, now)

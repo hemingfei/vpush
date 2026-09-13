@@ -18,7 +18,9 @@ services:
       - CONFIG_PATH=/data/config.yaml
       - "VPUSH_INSTANCE=${VPUSH_INSTANCE:-vpush.net / DMIT}"
       - DB_PATH=/data/dav.db
-      - DB_JOURNAL_MODE=${DB_JOURNAL_MODE:-}
+      # WAL：读不再被写事务阻塞（单连接全局锁下秒级写会把所有 API 卡住数秒）。
+      # 仅限库在本地盘（./data bind mount）；virtiofs/网络盘部署请显式设回 delete
+      - DB_JOURNAL_MODE=${DB_JOURNAL_MODE:-wal}
       - FEISHU_APP_ID=${FEISHU_APP_ID}
       - FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
       - FEISHU_BOT_NAME=${FEISHU_BOT_NAME}
