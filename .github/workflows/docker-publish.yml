@@ -2,7 +2,7 @@ name: Publish Docker image
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "hmf"]
     tags: ["v*"]
 
 env:
@@ -168,3 +168,54 @@ jobs:
               "${DOCKERHUB_USERNAME}/${IMAGE_NAME}:${GITHUB_REF_NAME}" \
               "${DOCKERHUB_USERNAME}/${IMAGE_NAME}:${GITHUB_REF_NAME}-arm64"
           fi
+
+  # hmf 开发分支：每次 push 复用 test 作业做门禁后，构建 amd64 单架构开发镜像，
+  # 固定推 :hmf tag（Docker Hub 用仓库级 DOCKERHUB_USERNAME/TOKEN，即本人账号），
+  # 不动版本 tag / latest，arm64 与多架构清单仍只保留给 v* tag 正式发布
+  publish-hmf:
+    needs: test
+    if: github.ref == 'refs/heads/hmf'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      actions: write
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: 设置 Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - name: 登录 GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 登录 Docker Hub
+        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: 镜像 tags
+        id: meta
+        run: |
+          {
+            echo "tags<<EOF"
+            echo "${GHCR_IMAGE}:hmf"
+            if [ -n "${DOCKERHUB_USERNAME}" ]; then
+              echo "${DOCKERHUB_USERNAME}/${IMAGE_NAME}:hmf"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: 构建并推送 hmf 开发镜像（amd64）
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha,scope=amd64
+          cache-to: type=gha,mode=max,scope=amd64
