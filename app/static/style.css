@@ -2040,7 +2040,7 @@ a.kol-card-head:hover .kol-card-info .name { color: var(--color-accent-text); }
   border-radius: 9px;
   background: var(--color-danger, #e5484d);
   color: #fff;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: var(--font-weight-semibold, 600);
   line-height: 18px;
   text-align: center;

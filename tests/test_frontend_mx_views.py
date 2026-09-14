@@ -39,16 +39,16 @@ def test_router_and_nav_register_mx_views():
     assert 'page === "mx-views"' in router and "renderMxViews" in router
     assert "mxvTeardown" in router  # 离开页面清理 SSE/定时器
     nav = APP_JS[APP_JS.index("const NAV ="):APP_JS.index("const SIDEBAR_SLIM_KEY")]
-    assert 'route: "mx-views"' in nav and 'label: "智囊团"' in nav
-    assert 'route: "admin/mx-views"' in nav and 'label: "智囊团"' in nav
+    assert 'route: "mx-views"' in nav and 'label: "观点研判"' in nav
+    assert 'route: "admin/mx-views"' in nav and 'label: "观点研判"' in nav
     mobile = APP_JS[APP_JS.index("const MOBILE_NAV ="):APP_JS.index("function renderBottomNav")]
-    assert 'route: "mx-views"' in mobile and 'label: "智囊团"' in mobile
-    # 手机底栏：智囊团紧挨「动态」右侧（与桌面导航一致），不落在广场后
+    assert 'route: "mx-views"' in mobile and 'label: "研判"' in mobile
+    # 手机底栏：研判紧挨「动态」（与桌面导航一致），不落在广场后
     assert mobile.index('route: "timeline"') < mobile.index('route: "mx-views"') < mobile.index('route: "home"')
     assert '"mx-views": loadAdminMxViews' in APP_JS
-    # 页面/管理面板标题统一为「智囊团」
-    assert 'setPageTitle("智囊团")' in MX_VIEWS_JS
-    assert '<h2 class="section-title">智囊团</h2>' in MX_VIEWS_JS
+    # 页面标题随视口宽度在「研判/观点研判」间取用，管理面板标题为「观点研判」
+    assert 'setPageTitle(' in MX_VIEWS_JS and '"观点研判"' in MX_VIEWS_JS
+    assert '<h2 class="section-title">观点研判</h2>' in MX_VIEWS_JS
     assert 'label: "MX观点"' not in nav
 
 
@@ -226,9 +226,9 @@ def test_mx_views_board_list_matches_heat_order_and_stock_bull_bear():
 
 
 def test_mx_views_board_list_more_limit():
-    """双榜明细默认最多 20 条，「更多」按同步步进展开（两榜联动，每次+20）；热力/明细切换与重进页面重置。"""
+    """双榜明细默认最多 4 条，「更多」按同步步进展开（两榜联动，每次+4）；热力/明细切换与重进页面重置。"""
     js = MX_VIEWS_JS
-    assert "const MXV_BOARD_LIST_LIMIT = 20;" in js and "const MXV_HEAT_ROWS = 10;" in js
+    assert "const MXV_BOARD_LIST_LIMIT = 4;" in js and "const MXV_HEAT_ROWS = 4;" in js
     boards = _fn_body("mxvRenderBoards", js)
     assert "MXV_BOARD_LIST_LIMIT * _mxv.boardStep" in boards  # 两榜共用同步步进
     assert "mxvBoardMore('${kind}')" in boards
@@ -437,13 +437,13 @@ def test_admin_mx_views_kol_dropdown_multiselect_keeps_open():
     """分析大V范围下拉：勾选后菜单保持展开，可连续多选。
 
     勾选会 innerHTML 重建 #mxva-kol-items，被点条目随即脱离 DOM；点击冒泡到 document
-    时 e.target 已游离，closest(".mxva-kol-wrap") 返回 null，点外收起处理器会误判关闭。
-    docClick 必须忽略游离目标。
+    时 e.target 已游离，点外判定会查不到元素而误判关闭。docClick 必须忽略游离目标；
+    点外收起还必须限定在自身面板（.mxva-kol-wrap）内，不能越权关掉别处同款菜单。
     """
     js = MX_VIEWS_JS
     bind = _fn_body("mxvAdminBind", js)
     assert "isConnected" in bind  # 游离目标（勾选后列表重建所致）不参与点外判定
-    assert 'closest(".mxva-kol-wrap")' in bind
+    assert "wrap.contains(e.target)" in bind  # 点外判定限定自身面板内（querySelector .mxva-kol-wrap）
     assert 'classList.remove("open")' in bind  # 真正点外仍要收起
     toggle = _fn_body("mxvAdminKolToggleItem", js)
     assert "open" not in toggle  # 勾选本身不得收起菜单

@@ -4640,8 +4640,8 @@ def test_mobile_bottom_navigation_has_d1_feedback_contract():
 
     src = NEWS_JS.read_text()
     for name in (
-        "renderNewsCenter", "loadFinancialNews", "openNewsSourcePicker",
-        "saveNewsSources", "openNewsArticle", "observeNewsLazyImages", "clearNewsImageUrls",
+        "renderNewsCenter", "loadFinancialNews",
+        "openNewsArticle", "observeNewsLazyImages", "clearNewsImageUrls",
     ):
         assert f"function {name}" in src or f"async function {name}" in src
     seen = _fn_body("loadFinancialNews", NEWS_JS)
@@ -4672,23 +4672,6 @@ def test_news_pagination_appends_without_replacing_existing_thumbnails():
     body = _fn_body("loadFinancialNews", NEWS_JS)
     assert "insertAdjacentHTML" in body
     assert "state.newsItems.map(newsListItemHtml)" not in body
-
-
-def test_news_source_picker_is_searchable_checkbox_dialog():
-    body = _fn_body("openNewsSourcePicker", NEWS_JS)
-    assert 'type="search"' in body
-    body = body + _fn_body("newsSourcePickerRows", NEWS_JS)
-    assert 'type="checkbox"' in body
-    assert 'role="dialog"' in body
-    assert "我的来源" in body
-
-
-def test_news_source_picker_preserves_selection_across_search():
-    open_picker = _fn_body("openNewsSourcePicker", NEWS_JS)
-    save = _fn_body("saveNewsSources", NEWS_JS)
-    assert "newsSelectedIds" in open_picker
-    assert "mask._newsSelectedIds" in save
-    assert "newsSourcePickerRows(event.target.value" in open_picker
 
 
 def test_admin_news_tab_is_full_feed_manager():
