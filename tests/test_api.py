@@ -76,26 +76,46 @@ def test_news_list_and_seen_anchor_are_user_scoped():
     first_headers = user_headers(client, "news_first")
     second_headers = user_headers(client, "news_second")
     db = client.app.state.db
-    first_uid = db.get_user_by_username("news_first")["id"]
-    second_uid = db.get_user_by_username("news_second")["id"]
     source_ids = [row["id"] for row in db.list_news_sources()]
-    db.set_user_news_sources(first_uid, source_ids[:1])
-    db.set_user_news_sources(second_uid, [])
     article_id = insert_news_article(db, source_ids[0], "2026-09-01T10:00:00+00:00")
 
+    # 用户自选来源已下线（去除「我的来源」）：/api/news/sources 对所有用户一致，
+    # 不再有 per-user selected 字段
     sources = client.get("/api/news/sources", headers=first_headers)
     assert sources.status_code == 200
-    assert sources.json()["items"][0]["selected"] is True
+    assert sources.json()["items"]
+    assert "collection_enabled" in sources.json()
+
+    # 首次查看：锚点为空 → is_new=False；标记已读只推进 first 用户自己的锚点
     first = client.get("/api/news", headers=first_headers).json()
     assert first["items"][0]["id"] == article_id
     assert first["items"][0]["is_new"] is False
     assert "view_started_at" in first
     assert client.post(
         "/api/news/seen", headers=first_headers,
-        json={"view_started_at": first["view_started_at"]},
+        json={"view_started_at": "2026-09-02T10:00:00+00:00"},
     ).status_code == 200
-    assert client.get(f"/api/news/{article_id}", headers=second_headers).status_code == 404
-    assert client.get("/api/news", headers=second_headers).json()["items"] == []
+
+    # 文章可见性不再按用户来源过滤：second 同样能看列表与详情
+    assert client.get(f"/api/news/{article_id}", headers=second_headers).status_code == 200
+    second = client.get("/api/news", headers=second_headers).json()
+    assert second["items"][0]["id"] == article_id
+    assert second["items"][0]["is_new"] is False
+
+    # 锚点按用户隔离：同一篇新文章，锚点已推进的 first 算 is_new，
+    # 从未看过的 second 不算；second 推进锚点也影响不到 first
+    newer_id = insert_news_article(db, source_ids[0], "2026-09-03T10:00:00+00:00")
+    first_after = client.get("/api/news", headers=first_headers).json()
+    assert first_after["items"][0]["id"] == newer_id
+    assert first_after["items"][0]["is_new"] is True
+    assert client.post(
+        "/api/news/seen", headers=second_headers,
+        json={"view_started_at": "2026-09-05T10:00:00+00:00"},
+    ).status_code == 200
+    second_after = client.get("/api/news", headers=second_headers).json()
+    assert second_after["items"][0]["is_new"] is False
+    first_final = client.get("/api/news", headers=first_headers).json()
+    assert first_final["items"][0]["is_new"] is True
 
 
 def test_news_source_selection_and_invalid_selection_are_authenticated():
