@@ -126,7 +126,7 @@ def test_fetch_web_mode_maps_fields_and_skips_folders():
         post = posts[0]
         assert post.title == "新文档.txt"
         assert post.content == "AI摘要: 摘要内容"
-        assert post.published_at == "2026-08-19 23:10"
+        assert post.published_at == "2026-08-19 23:10:23"
         assert post.images == ["https://ima-share-kb.image.myqcloud.com/5/x/c.jpg?sign=1"]
         assert post.post_type == "txt"
         assert post.url == "https://ima.qq.com/wikis?knowledgeBaseId=7304333330762611"
