@@ -1538,7 +1538,8 @@ a.kol-card-head:hover .kol-card-info .name { color: var(--color-accent-text); }
   background: var(--color-accent-soft);
   color: var(--color-accent-text);
   font-size: var(--text-xs);
-  white-space: nowrap;
+  /* 不加 white-space:nowrap：极端长的无空格标签（用户输入）会撑破 320px 小屏视口，
+     换行交给 .post-item 的 overflow-wrap:anywhere 处理 */
 }
 .post-item .p-meta .cat-tag { margin: 0; }
 /* 「更多N」展开按钮：与标签徽章同形，可点击 */

@@ -460,7 +460,8 @@ def test_timeline_long_text_keeps_navigation_in_viewport(
                 assert geometry["document"] <= width + 1, (field, geometry)
                 assert geometry["viewport"] == width, (field, geometry)
                 if width <= 768:
-                    assert len(geometry["navigation"]) == 4
+                    # MOBILE_NAV 五项：动态/财经新闻/研判/广场/个人设置（hmf 加入研判）
+                    assert len(geometry["navigation"]) == 5
                     for rect in geometry["navigation"]:
                         assert 0 <= rect["left"] < rect["right"] <= width
                         if scroll_y == 0:
@@ -500,9 +501,9 @@ def _contrast_ratio(foreground: str, background: str) -> float:
 @pytest.mark.parametrize(
     ("is_admin", "news_visible", "expected"),
     [
-        (False, False, [("timeline", "动态"), ("home", "广场"), ("settings", "个人设置")]),
-        (False, True, [("timeline", "动态"), ("news", "财经新闻"), ("home", "广场"), ("settings", "个人设置")]),
-        (True, True, [("timeline", "动态"), ("news", "财经新闻"), ("home", "广场"), ("settings", "个人设置"), ("more", "更多")]),
+        (False, False, [("timeline", "动态"), ("mx-views", "研判"), ("home", "广场"), ("settings", "个人设置")]),
+        (False, True, [("timeline", "动态"), ("news", "财经新闻"), ("mx-views", "研判"), ("home", "广场"), ("settings", "个人设置")]),
+        (True, True, [("timeline", "动态"), ("news", "财经新闻"), ("mx-views", "研判"), ("home", "广场"), ("settings", "个人设置"), ("more", "更多")]),
     ],
 )
 @pytest.mark.parametrize("width", [320, 768])
@@ -591,7 +592,8 @@ def test_mobile_bottom_navigation_d1_feedback_restarts_without_rebuilding(page: 
 
     nav_items = page.locator("#bottom-nav .bnav-item")
     nav_items.first.wait_for(state="visible")
-    expect(nav_items).to_have_count(5)
+    # bootstrap 管理员（news 可见）：MOBILE_NAV 五项 + admin「更多」= 6
+    expect(nav_items).to_have_count(6)
     button = page.locator('.bnav-item[data-route="timeline"]')
     original_button = button.element_handle()
     assert original_button is not None
@@ -636,7 +638,7 @@ def test_mobile_bottom_navigation_d1_feedback_reduced_motion_has_no_transform(pa
 
     nav_items = page.locator("#bottom-nav .bnav-item")
     nav_items.first.wait_for(state="visible")
-    expect(nav_items).to_have_count(5)
+    expect(nav_items).to_have_count(6)
     button = page.locator('.bnav-item[data-route="timeline"]')
     button.click()
     expect(button).to_have_class(re.compile(r"\bis-feedback\b"))
@@ -805,7 +807,7 @@ def test_plaza_name_platform_icons(page: Page, static_origin: str, tmp_path: Pat
         expect(badge).to_be_visible()
         expect(badge).to_have_attribute("title", label)
         expect(badge.locator("svg")).to_have_count(1)
-        expect(card.locator(".kol-card-meta")).to_have_text("财经" + ("-1.25%" if i == 1 else ""))
+        expect(card.locator(".kol-card-meta")).to_have_text("财经" + ("-1.25%" if i == 1 else "") + f"外部 ID：{i}")
         geometry = card.evaluate("""el => {
           const name = el.querySelector('.name').getBoundingClientRect();
           const badge = el.querySelector('.p-platform').getBoundingClientRect();
@@ -856,14 +858,15 @@ def test_zsxq_attachment_download_uses_auth_header_not_query_token(page: Page, s
 def test_news_reset_keeps_full_skeleton_until_response(page: Page, static_origin: str):
     install_news_bootstrap(page, delayed=True)
     page.goto(f"{static_origin}/news", wait_until="domcontentloaded")
-    cards = page.locator("#news-list .admin-sk-card")
-    expect(cards).to_have_count(3)
+    # hmf 新闻页改版为 .news-page 多栏目布局，加载骨架在实时资讯栏 #news-rt-list 内，共 4 张
+    cards = page.locator(".news-page .admin-sk-card")
+    expect(cards).to_have_count(4)
     expect(cards.first).to_be_visible()
     card_box = cards.first.bounding_box()
     assert card_box is not None
     assert card_box["height"] > 0
     page.evaluate("() => window.__resolveNews({ items: [], next_offset: 0, has_more: false, view_started_at: null })")
-    expect(page.locator("#news-list .admin-sk-card")).to_have_count(0)
+    expect(page.locator(".news-page .admin-sk-card")).to_have_count(0)
 
 
 def test_rejected_news_thumbnail_releases_layout_slot(page: Page, static_origin: str):
