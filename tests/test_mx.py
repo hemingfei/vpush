@@ -1031,6 +1031,9 @@ def test_update_mx_config_endpoint_hot_applies(monkeypatch):
     tmp = tempfile.mkdtemp()
     config_path = Path(tmp) / "config.yaml"
     monkeypatch.setenv("CONFIG_PATH", str(config_path))
+    # 本用例要求后台任务启用（热应用回调仅在 background_workers_enabled() 时接线）；
+    # 前序测试若泄漏 DAV_UI_ONLY=1 会把 create_app 打成 UI-only，热应用不发生
+    monkeypatch.delenv("DAV_UI_ONLY", raising=False)
 
     calls = []
     orig_apply = sched_mod.Scheduler.apply_mx_config

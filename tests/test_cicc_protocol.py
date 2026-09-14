@@ -351,7 +351,9 @@ def test_api_rejects_invalid_schedule_time(tmp_path, monkeypatch):
     monkeypatch.delenv("IMA_PULL_URL", raising=False)
     monkeypatch.setenv("IMA_ARCHIVE_ROOT", str(tmp_path / "archive"))
     (tmp_path / "archive" / "local" / ".cicc" / "commands").mkdir(parents=True)
-    os.environ["DAV_UI_ONLY"] = "1"
+    # 必须 monkeypatch：直写 os.environ 会泄漏到会话后续测试（如 test_mx 的热应用
+    # 用例依赖后台任务启用，被这里残留的 DAV_UI_ONLY=1 打成 UI-only 而失败）
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
     app = create_app(config=None, db_path=Path(tmp_path) / "cicc.db")
     client = TestClient(app)
     client.app.state.db.add_register_code("CICC01")
