@@ -266,7 +266,11 @@ def test_admin_mx_views_run_reports_semantics(monkeypatch):
     # 窗口内有消息：同步等结果，ran/messages 如实上报
     kol = db.add_kol("mx", "王哥", "room1")
     pub = (datetime.now(mva.CN_TZ) - timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S")
-    # 注：发布时刻取当前-30s 落入 (09:15, now] 窗口；本地时间恰在 09:15 前后 30s 内跑测试会退化
+    # 注：发布时刻取当前-30s 落入 (09:15, now] 窗口；北京时间 00:00~09:15 时
+    # now < 当日窗口起点 09:15，真实窗口恒为空（端点字符串比较语义），因此这里
+    # 打桩放行窗口判定，专注验证「有消息时批次如实上报」；发布时刻仍取当前-30s
+    # 保持批次 day 断言的真实性
+    monkeypatch.setattr(db, "has_mx_posts_in_window", lambda *a, **k: True)
     db.insert_post(platform="mx", kol_id=kol, external_id="m1", title="", url="",
                    content="固态电池订单爆了", published_at=pub)
     resp = client.post("/api/admin/mx-views/run", headers=admin)
