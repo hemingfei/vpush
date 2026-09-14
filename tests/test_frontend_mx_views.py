@@ -57,6 +57,13 @@ def test_open_raw_modal_falls_back_to_mxv_posts():
     assert "_mxvPosts" in body
 
 
+def test_mxv_evidence_raw_button_admin_only():
+    """证据帖「查看原始消息」按钮仅管理员渲染，普通账号不显示 MX 原始消息入口。"""
+    body = _fn_body("mxvEvidenceHtml", MX_VIEWS_JS)
+    assert "state.user?.is_admin" in body
+    assert "'MX原始消息'" in body
+
+
 def test_mx_views_assets_exist_with_scope():
     css = (STATIC / "mx-views.css").read_text()
     js = MX_VIEWS_JS

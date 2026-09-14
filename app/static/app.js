@@ -3959,7 +3959,7 @@ function postCard(post) {
         ${post.category_name ? `<span class="cat">${escapeHtml(post.category_name)}</span>` : ""}
         ${post.post_type === "reply" ? `<span class="cat">回复</span>` : ""}
         ${renderPostTagChips(post.tags, post.view_directions, post.pending_tags)}
-        ${post.platform === "zsxq" ? "" : RAW_MODAL_LABELS[post.platform]
+        ${post.platform === "zsxq" || (post.platform === "mx" && !state.user?.is_admin) ? "" : RAW_MODAL_LABELS[post.platform]
           ? `<a href="#" data-raw-label="${escapeHtml(RAW_MODAL_LABELS[post.platform])}"
                onclick="event.preventDefault();openRawModal(${post.id}, this.dataset.rawLabel)"
                title="查看${escapeHtml(RAW_MODAL_LABELS[post.platform])}原始消息">查看原始消息 ${CHEVRON_RIGHT_ICON}</a>`
@@ -4011,6 +4011,8 @@ const RAW_MODAL_LABELS = { mx: "MX", system: "V平台 KOL" };
 function openRawModal(postId, label) {
   const post = _tlPosts.find((p) => p.id === postId) || _kolPagePosts.find((p) => p.id === postId) || (Array.isArray(window._mxvPosts) ? window._mxvPosts.find((p) => p.id === postId) : null);
   if (!post) return;
+  // MX 原始消息仅管理员可看：入口按钮已按角色隐藏，这里兜底（缓存 DOM 重放/误触发仍打不开）
+  if (!state.user?.is_admin && (post.platform === "mx" || label === "MX原始消息")) return;
   closeRawModal(); // 防连点叠开
   lockBodyScroll(); // 与新闻弹窗同一套背景滚动锁（core/dialog.js）
   let detail = post.detail;

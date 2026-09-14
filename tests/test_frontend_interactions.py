@@ -937,6 +937,14 @@ def test_post_view_original_opens_raw_message_modal():
     assert ".mx-raw-card" in css
 
 
+def test_mx_raw_message_admin_only():
+    """MX 平台原始消息仅管理员可看：普通账号时间线不渲染入口，openRawModal 兜底拒绝；system KOL 不受影响。"""
+    post_card = _fn_body("postCard")
+    assert 'post.platform === "mx" && !state.user?.is_admin' in post_card
+    modal = _fn_body("openRawModal")
+    assert '!state.user?.is_admin && (post.platform === "mx" || label === "MX原始消息")' in modal
+
+
 def test_timeline_time_shows_seconds():
     """时间线时间必须精确到秒：同分钟多条消息的次序只能靠秒位分辨；后端 published_at 同样保留秒。"""
     fmt = _fn_body("fmtPublished")

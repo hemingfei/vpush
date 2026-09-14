@@ -1302,7 +1302,7 @@ export function createMxViewsView(dependencies) {
       return `<div class="ev">
         <div>${escapeHtml(e.author)} · ${escapeHtml((e.time || "").slice(5, 16))}</div>
         <div class="c">${escapeHtml(e.content)}</div>
-        <button class="raw" onclick="openRawModal(${e.post_id}, 'MX原始消息')">查看原始消息</button>
+        ${state.user?.is_admin ? `<button class="raw" onclick="openRawModal(${e.post_id}, 'MX原始消息')">查看原始消息</button>` : ""}
       </div>`;
     }).join("");
   }
