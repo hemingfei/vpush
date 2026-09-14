@@ -2177,7 +2177,7 @@ def test_news_source_status_is_paused_when_all_feeds_are_disabled(tmp_path):
         f"UPDATE news_feeds SET enabled = 0 WHERE id IN ({','.join('?' * len(feed_ids))})",
         feed_ids,
     )
-    status = next(item for item in db.news_source_statuses(uid) if item["id"] == source_id)
+    status = next(item for item in db.news_source_statuses() if item["id"] == source_id)
     assert status["code"] == "paused"
 
 
