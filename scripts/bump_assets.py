@@ -37,7 +37,10 @@ def asset_digest(root: Path = ROOT) -> str:
     digest = hashlib.sha256()
     for path in asset_paths(root):
         relative = path.relative_to(root).as_posix().encode()
-        digest.update(relative + b"\0" + path.read_bytes() + b"\0")
+        # Windows autocrlf 工作区是 CRLF、CI 检出是 LF：哈希前归一化换行，
+        # 让摘要只由内容决定，两边对同一提交算出同一值
+        content = path.read_bytes().replace(b"\r\n", b"\n")
+        digest.update(relative + b"\0" + content + b"\0")
     return digest.hexdigest()[:DIGEST_LEN]
 
 
