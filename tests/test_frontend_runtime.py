@@ -995,8 +995,12 @@ def test_holdings_view_manage_cards_feed_flow(page: Page):
       h.views = (holder) => ({
         window_days: 30, max_id: 11,
         summary: {targets: [
-          {target_type: 'stock', target_name: '贵州茅台', bull: 1, bear: 1, neutral: 0, total: 2, latest_at: '2026-09-15 10:00:00'},
-          {target_type: 'topic', target_name: 'AI算力', bull: 0, bear: 0, neutral: 1, total: 1, latest_at: '2026-09-14 09:00:00'},
+          {target_type: 'stock', target_name: '贵州茅台', bull: 1, bear: 1, neutral: 0, total: 2, latest_at: '2026-09-15 10:00:00',
+           kols: {count: 2, bull: 1, bear: 1, neutral: 0, bull_names: ['王哥'], bear_names: ['李哥'], neutral_names: []},
+           actions: {减仓: 1}},
+          {target_type: 'topic', target_name: 'AI算力', bull: 0, bear: 0, neutral: 1, total: 1, latest_at: '2026-09-14 09:00:00',
+           kols: {count: 1, bull: 0, bear: 0, neutral: 1, bull_names: [], bear_names: [], neutral_names: ['王哥']},
+           actions: {}},
         ]},
         items: holder ? h.allItems.filter(it => it.target_name === holder.split(':')[1]) : h.allItems,
       });
@@ -1037,11 +1041,21 @@ def test_holdings_view_manage_cards_feed_flow(page: Page):
       await h.view.renderHoldings(1);
     }""")
     expect(page.locator(".hd-item")).to_have_count(2)
-    expect(page.locator(".hd-card")).to_have_count(2)
+    expect(page.locator(".mxv-stockcard")).to_have_count(2)
     expect(page.locator(".mxv-feed-item")).to_have_count(3)
     expect(page.locator(".mxv-feed-item .target").first).to_have_text("贵州茅台")
-    expect(page.locator(".hd-net").first).to_have_text("净 0")  # 多空各一 → 净 0
-    expect(page.locator(".hd-counts .tagc").first).to_have_text("#2")  # 标签提及数
+    # 聚合卡 = 总览按个股卡同构：名称 + 股/题徽章 + N 大V + 操作词 + 占比条 + 三行名单
+    card = page.locator(".mxv-stockcard").first
+    expect(card.locator(".n b")).to_have_text("贵州茅台")
+    expect(card.locator(".n")).to_contain_text("2 大V")
+    expect(card.locator(".n")).to_contain_text("#2 帖")  # 标签提及数
+    expect(card.locator(".mxv-actions")).to_have_text("减仓×1")
+    expect(card.locator(".mxv-ratio .b")).to_be_visible()
+    expect(card.locator(".mxv-ratio .s")).to_be_visible()
+    expect(card.locator(".names")).to_have_count(3)
+    expect(card.locator(".names").nth(0)).to_contain_text("王哥")
+    expect(card.locator(".names").nth(1)).to_contain_text("李哥")
+    expect(card.locator(".names").nth(2)).to_contain_text("暂无")
     # 相关观点按天分段单列：一天一段、一行一条消息（无批次时间分割）
     expect(page.locator(".mxv-feed-cols.single")).to_have_count(2)
     expect(page.locator(".mxv-feed-sep").first).to_have_text("09-15 · 2 条")

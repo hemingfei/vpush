@@ -6255,7 +6255,13 @@ class DB:
 
     def holdings_opinion_summary(self, user_id: int, since: str,
                                  ) -> list[dict]:
-        """全窗口按标的聚合的多空计数（恒为全量口径，不随 items 筛选变化）。"""
+        """全窗口按标的聚合的多空计数（恒为全量口径，不随 items 筛选变化）。
+
+        附带总览卡数据（与观点研判「大V观点总览」按个股卡同构）：
+        - kols：去重大V口径——总数 + 各方向计数与名单（按该标的观点数降序，
+          同数按最新观点时间降序，截前 12；计数不受截断影响）；
+        - actions：操作词 × 次数（按次数降序、词序稳定）。
+        """
         pairs = [(h["target_type"], h["target_name"])
                  for h in self.list_user_holdings(user_id)]
         if not pairs:
@@ -6279,6 +6285,53 @@ class DB:
             "latest_at": r["latest_at"] or "",
         } for r in rows]
         out.sort(key=lambda x: (x["total"], x["latest_at"]), reverse=True)
+
+        detail = self._rows(
+            "SELECT o.target_type, o.target_name, o.direction, o.action, "
+            "k.name AS kol_name, COUNT(*) AS c, MAX(o.occurred_at) AS latest "
+            "FROM mx_opinions o JOIN kols k ON k.id = o.kol_id "
+            f"WHERE o.occurred_at >= ? AND ({clause}) "
+            "GROUP BY o.target_type, o.target_name, o.direction, o.action, k.name",
+            tuple([since] + params),
+        )
+        names_cap = 12
+        agg: dict[tuple[str, str], dict] = {}
+        for r in detail:
+            slot = agg.setdefault((str(r["target_type"]), str(r["target_name"])),
+                                  {"bull": {}, "bear": {}, "neutral": {}, "actions": {}})
+            d = str(r["direction"] or "")
+            if d in slot:
+                # 同大V同方向被 action 维度拆成多组：Python 侧按大V合并计数、取最新时间
+                prev = slot[d].get(str(r["kol_name"]), (0, ""))
+                slot[d][str(r["kol_name"])] = (
+                    prev[0] + int(r["c"] or 0), max(prev[1], str(r["latest"] or "")))
+            action = str(r["action"] or "")
+            if action:
+                slot["actions"][action] = slot["actions"].get(action, 0) + int(r["c"] or 0)
+
+        def cap_names(by: dict[str, tuple[int, str]]) -> list[str]:
+            # 次序：观点数降序 → 最新观点时间降序 → 名称升序；借助稳定性按次序从低到高分三轮排
+            ordered = sorted(by.items(), key=lambda kv: kv[0])
+            ordered.sort(key=lambda kv: kv[1][1], reverse=True)
+            ordered.sort(key=lambda kv: kv[1][0], reverse=True)
+            return [name for name, _c in ordered[:names_cap]]
+
+        for item in out:
+            a = agg.get((str(item["target_type"]), str(item["target_name"])))
+            if not a:
+                item["kols"] = {"count": 0, "bull": 0, "bear": 0, "neutral": 0,
+                                "bull_names": [], "bear_names": [], "neutral_names": []}
+                item["actions"] = {}
+                continue
+            kols: dict = {"bull": len(a["bull"]), "bear": len(a["bear"]),
+                          "neutral": len(a["neutral"])}
+            kols["count"] = len(set(a["bull"]) | set(a["bear"]) | set(a["neutral"]))
+            kols["bull_names"] = cap_names(a["bull"])
+            kols["bear_names"] = cap_names(a["bear"])
+            kols["neutral_names"] = cap_names(a["neutral"])
+            item["kols"] = kols
+            item["actions"] = dict(sorted(a["actions"].items(),
+                                          key=lambda kv: (-kv[1], kv[0])))
         return out
 
     def list_holdings_tag_posts(self, pairs: list[tuple[str, str]], since: str,

@@ -14,15 +14,16 @@ def _ts(**delta) -> str:
 _batch_seq = 0
 
 
-def _add_opinion(db, kol_id, ttype, name, direction, occurred, summary="摘要", evidence=None):
+def _add_opinion(db, kol_id, ttype, name, direction, occurred, summary="摘要",
+                 evidence=None, action=""):
     """直插一条研判观点（批次号自增避让 (batch_id, kol_id, type, name) 唯一约束）。"""
     global _batch_seq
     _batch_seq += 1
     return db._execute(
         "INSERT INTO mx_opinions (batch_id, trading_day, snapshot_at, kol_id, target_type, "
         "target_name, direction, action, confidence, summary, evidence_post_ids, occurred_at) "
-        "VALUES (?, ?, '09:20', ?, ?, ?, ?, '', 'high', ?, ?, ?)",
-        (_batch_seq, occurred[:10], kol_id, ttype, name, direction, summary,
+        "VALUES (?, ?, '09:20', ?, ?, ?, ?, ?, 'high', ?, ?, ?)",
+        (_batch_seq, occurred[:10], kol_id, ttype, name, direction, action, summary,
          json.dumps(evidence or []), occurred),
     )
 
@@ -284,3 +285,52 @@ def test_holdings_tag_posts_window_direction_holder_and_pagination():
     empty = client.get("/api/my/holdings/tag-posts", headers=other).json()
     assert empty["items"] == [] and empty["summary"]["targets"] == []
     assert client.get("/api/my/holdings/tag-posts").status_code == 401
+
+
+def test_holdings_views_summary_kols_and_actions():
+    """总览卡数据：summary 附带去重大V名单（计数不受截断影响）与操作词统计。"""
+    client = make_client()
+    admin = auth_headers(client)
+    db = client.app.state.db
+    k1 = db.add_kol("mx", "王哥", "room1")
+    k2 = db.add_kol("mx", "李哥", "room2")
+
+    assert client.post("/api/my/holdings", headers=admin,
+                       json={"target_type": "stock", "target_name": "贵州茅台"}).status_code == 201
+    assert client.post("/api/my/holdings", headers=admin,
+                       json={"target_type": "topic", "target_name": "AI算力"}).status_code == 201
+
+    # 王哥：茅台 2 看多（1 条带建仓）+ 1 看空；李哥：茅台 1 看多（带加仓）
+    _add_opinion(db, k1, "stock", "贵州茅台", "bull", _ts(hours=-1), "批价回暖", action="建仓")
+    _add_opinion(db, k1, "stock", "贵州茅台", "bull", _ts(hours=-2), "继续看好")
+    _add_opinion(db, k1, "stock", "贵州茅台", "bear", _ts(hours=-3), "批价松动")
+    _add_opinion(db, k2, "stock", "贵州茅台", "bull", _ts(hours=-4), "跟随", action="加仓")
+    # 王哥 40 天前的看空：窗口外，不进聚合
+    _add_opinion(db, k1, "stock", "贵州茅台", "bear", _ts(days=-40), "窗口外")
+    # 名单截断：13 位大V看多 AI算力 → 名单截前 12、计数仍 13
+    for i in range(13):
+        ki = db.add_kol("mx", f"大V{i:02d}", f"airoom{i}")
+        _add_opinion(db, ki, "topic", "AI算力", "bull", _ts(hours=-1), f"观点{i}")
+
+    data = client.get("/api/my/holdings/views", headers=admin).json()
+    targets = {(t["target_type"], t["target_name"]): t for t in data["summary"]["targets"]}
+
+    mt = targets[("stock", "贵州茅台")]
+    assert (mt["bull"], mt["bear"], mt["total"]) == (3, 1, 4)  # 观点口径不含窗口外
+    assert mt["kols"]["count"] == 2  # 去重大V（王哥跨方向只计一次）
+    assert (mt["kols"]["bull"], mt["kols"]["bear"], mt["kols"]["neutral"]) == (2, 1, 0)
+    # 名单按该标的观点数降序：王哥(3) > 李哥(1)
+    assert mt["kols"]["bull_names"] == ["王哥", "李哥"]
+    assert mt["kols"]["bear_names"] == ["王哥"]
+    assert mt["actions"] == {"建仓": 1, "加仓": 1}  # 次数同则按词序稳定
+
+    ai = targets[("topic", "AI算力")]
+    assert ai["kols"]["count"] == 13 and ai["kols"]["bull"] == 13
+    assert len(ai["kols"]["bull_names"]) == 12  # 截前 12，计数不受影响
+    assert ai["actions"] == {}
+    # 无观点标的不进 summary（前端自行兜底空结构）
+    client.post("/api/my/holdings", headers=admin,
+                json={"target_type": "topic", "target_name": "液冷"})
+    names = {(t["target_type"], t["target_name"])
+             for t in client.get("/api/my/holdings/views", headers=admin).json()["summary"]["targets"]}
+    assert ("topic", "液冷") not in names

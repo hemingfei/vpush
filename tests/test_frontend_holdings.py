@@ -36,11 +36,11 @@ def test_index_html_includes_holdings_assets():
     # 版本号由 scripts/bump_assets.py 按内容摘要统一维护
     assert re.search(r'href="/holdings\.css\?v=[0-9a-f]{12}"', INDEX)
     assert ".hd-root" in HOLDINGS_CSS  # 页面级样式自包含，全部 .hd- 前缀
-    # 观点流复用 mx-views.css 的 .mxv-feed-* 类：只允许在 .hd-feed 作用域注入
-    # --mxv-* 变量取色，不得复制/重定义其样式规则（不改动观点研判样式文件）
+    # --mxv-* 变量在 .hd-root 作用域注入（观点流 + 总览卡同取一套色），不复制其样式规则
     css = HOLDINGS_CSS.replace(" ", "")
-    assert ".hd-feed{--mxv-" in css and ".theme-dark.hd-feed{--mxv-" in css
-    assert ".mxv-feed-item{" not in HOLDINGS_CSS
+    assert ".hd-root{--mxv-" in css and ".theme-dark.hd-root{--mxv-" in css
+    assert "--mxv-bull-deep" in css and "--mxv-bear-deep" in css  # 占比条渐变端色
+    assert ".mxv-feed-item{" not in HOLDINGS_CSS and ".mxv-stockcard{" not in HOLDINGS_CSS
 
 
 def test_holdings_feed_matches_mx_views_feed_contract():
@@ -54,6 +54,11 @@ def test_holdings_feed_matches_mx_views_feed_contract():
     assert "hdFeedTab" in HOLDINGS_JS and "hdTagItemHtml" in HOLDINGS_JS
     assert "has-post" in HOLDINGS_JS and "tag-posts" in HOLDINGS_JS
     assert "tagc" in HOLDINGS_JS and "tagSummary" in HOLDINGS_JS
+    # 聚合卡 = 总览「按个股」卡同构：mxv-stockcard + 占比条 + 名单行（前缀股/题徽章）
+    assert "mxv-stockcard" in HOLDINGS_JS and "mxv-ratio" in HOLDINGS_JS
+    assert "hdRatioHtml" in HOLDINGS_JS and "namesLine" in HOLDINGS_JS
+    assert "kols" in HOLDINGS_JS and "mxv-actions" in HOLDINGS_JS
+    assert "repeat(auto-fill,minmax(240px,1fr))" in HOLDINGS_CSS.replace(" ", "")
     # 关注列表：左右分栏（个股/板块）、整体可折叠（localStorage 持久化）
     assert '"hd-cols"' in HOLDINGS_JS and "hdWatchToggle" in HOLDINGS_JS
     assert "hd_watch_open" in HOLDINGS_JS

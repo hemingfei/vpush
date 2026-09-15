@@ -137,5 +137,6 @@ CREATE INDEX IF NOT EXISTS idx_user_holdings_user ON user_holdings(user_id);
 
 - **命中口径**：`posts.tags` 精确含标的名（JSON 元素边界匹配，与动态页标签筛选同源；规则/LLM/观点回流打标都落这一列）。多空方向角标取观点回流登记（`attach_view_directions`）。
 - **API**：`GET /api/my/holdings/tag-posts`，与 `/views` 同参语义（`after_id` 增量 / `before_id` 翻页 / `holder` 下钻，`summary` 恒全量）；`max_id` 用全局 `max_post_id_any()` 水位（未命中标的的帖也推进游标）。聚合为 `holdings_tag_post_summary`（单次扫描，每标的一对 `SUM/MAX(CASE … LIKE …)` 列）。
-- **前端**：流区改双页签——「观点」（原相关观点流）/「快讯」（标签命中帖，同一 `mxv-feed-item` 行网格，行尾「全文」展开原帖正文）；两条流统一按天分段、单列一行一条消息（观点流分组键由「交易日+批次」收敛为按天，分隔行不再带快照时刻）；聚合卡计数行加 `#N`（近 30 天标签提及帖数）。
+- **前端**：流区改双页签——「观点」（原相关观点流）/「快讯」（标签命中帖，同一 `mxv-feed-item` 行网格，行尾「全文」展开原帖正文）；两条流统一按天分段、单列一行一条消息（观点流分组键由「交易日+批次」收敛为按天，分隔行不再带快照时刻）；**聚合卡与观点研判「大V观点总览」按个股卡同构**（`mxv-stockcard`：标的名前缀股/题徽章 + N 大V + 操作词统计 + 多/中/空占比条 + 三行去重大V名单，卡区改 auto-fill 网格，`--mxv-*` 变量注入提升到 `.hd-root` 作用域），卡名行追加 `#N 帖`（近 30 天标签提及）。
+- **总览卡数据**：`summary.targets` 附带 `kols`（去重大V口径：总数 + 各方向计数与名单，名单按该标的观点数降序截前 12、计数不受截断影响；同大V跨方向只计一次）与 `actions`（操作词 × 次数，按次数降序、词序稳定）；同大V同方向被 action 维度拆组时在聚合层合并。
 - **实时**：新帖入库不 `bump_view_version`，快讯到账靠恒开 60s 兜底轮询（SSE version 事件仍同时增量拉两条流）。

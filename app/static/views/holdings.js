@@ -419,27 +419,53 @@ export function createHoldingsView(dependencies) {
     }
   }
 
+  // 占比条：同观点研判总览卡（红=看多 / 灰=中立 / 绿=看空，中段吸收取整误差）
+  function hdRatioHtml(bull, bear, neutral) {
+    const total = Math.max(bull + bear + neutral, 1);
+    const bp = Math.round((bull / total) * 100), sp = Math.round((bear / total) * 100);
+    const np = Math.max(0, 100 - bp - sp);
+    return `<div class="mxv-ratio" role="img" aria-label="看多${bull} 中立${neutral} 看空${bear}">
+      ${bull ? `<div class="b" style="width:${bp}%"></div>` : ""}
+      ${neutral ? `<div class="n" style="width:${np}%"></div>` : ""}
+      ${bear ? `<div class="s" style="width:${sp}%"></div>` : ""}</div>`;
+  }
+
   function hdRenderCards() {
     const el = document.getElementById("hd-cards");
     if (!el) return;
     const sumMap = new Map(_hd.summary.map((s) => [`${s.target_type}:${s.target_name}`, s]));
     const cards = _hd.holdings.map((h) => ({
       h,
-      s: sumMap.get(`${h.target_type}:${h.target_name}`) ||
-        { bull: 0, bear: 0, neutral: 0, total: 0, latest_at: "" },
+      s: sumMap.get(`${h.target_type}:${h.target_name}`) || {
+        bull: 0, bear: 0, neutral: 0, total: 0, latest_at: "",
+        kols: { count: 0, bull: 0, bear: 0, neutral: 0,
+                bull_names: [], bear_names: [], neutral_names: [] },
+        actions: {},
+      },
     })).sort((a, b) => b.s.total - a.s.total); // 稳定排序：无观点保持清单原序垫底
     window._hdTargets = cards.map((c) => ({ type: c.h.target_type, name: c.h.target_name }));
+    // 名单行：同总览按个股卡——前 6 个大V名顿号相连，超出补「等 N 人」（N=去重计数）
+    const namesLine = (names, cnt, colorVar, arrow) => (names && names.length)
+      ? `<span style="color:${colorVar}">${arrow}</span> ${escapeHtml(names.slice(0, 6).join("、"))}` +
+        (cnt > names.length ? `<span style="color:var(--mxv-faint)"> 等${cnt}人</span>` : "")
+      : `<span style="color:var(--mxv-faint)">${arrow} 暂无</span>`;
     el.innerHTML = cards.map((c, i) => {
-      const net = c.s.bull - c.s.bear;
+      const k = c.s.kols || { count: 0, bull: 0, bear: 0, neutral: 0,
+                              bull_names: [], bear_names: [], neutral_names: [] };
+      const actionsHtml = Object.entries(c.s.actions || {}).map(([w, n]) => `${w}×${n}`).join(" ");
       const tagc = (_hd.tagSummary.get(c.h.target_name) || {}).tag_count || 0;
       const active = _hd.filter && _hd.filter.type === c.h.target_type
         && _hd.filter.name === c.h.target_name;
       return `
-      <button type="button" class="hd-card${active ? " active" : ""}${c.s.total ? "" : " zero"}" onclick="hdFilter(${i})">
-        <span class="hd-card-head">${hdTypeBadge(c.h.target_type)}<b>${escapeHtml(c.h.target_name)}</b></span>
-        <span class="hd-net ${net > 0 ? "bull" : net < 0 ? "bear" : "flat"}">${c.s.total ? `净 ${net > 0 ? "+" : ""}${net}` : "暂无观点"}</span>
-        <span class="hd-counts"><i class="bull">▲${c.s.bull}</i><i class="bear">▼${c.s.bear}</i><i class="neutral">○${c.s.neutral}</i><i class="tagc" title="近 ${WINDOW_DAYS} 天标签提及 ${tagc} 帖">#${tagc}</i></span>
-        ${c.s.latest_at ? `<span class="hd-latest">最新 ${escapeHtml(fmtTime(c.s.latest_at))}</span>` : ""}
+      <button type="button" class="mxv-stockcard hd-card${active ? " active" : ""}" onclick="hdFilter(${i})">
+        <span class="n">${hdTypeBadge(c.h.target_type)}<b>${escapeHtml(c.h.target_name)}</b>
+          <span style="color:var(--mxv-faint);font-size:11px">${k.count} 大V</span>
+          ${tagc ? `<span style="color:var(--mxv-faint);font-size:11px" title="近 ${WINDOW_DAYS} 天标签提及 ${tagc} 帖">· #${tagc} 帖</span>` : ""}
+          ${actionsHtml ? `<span class="mxv-actions">${escapeHtml(actionsHtml)}</span>` : ""}</span>
+        ${hdRatioHtml(k.bull, k.bear, k.neutral)}
+        <span class="names">${namesLine(k.bull_names, k.bull, "var(--mxv-bull)", "▲")}</span>
+        <span class="names">${namesLine(k.bear_names, k.bear, "var(--mxv-bear)", "▼")}</span>
+        <span class="names">${namesLine(k.neutral_names, k.neutral, "var(--mxv-muted)", "◎")}</span>
       </button>`;
     }).join("");
   }
