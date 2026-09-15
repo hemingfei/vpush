@@ -14,6 +14,7 @@ MAIN_PY = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
 HD_HANDLERS = [
     "hdAddType", "hdSugInput", "hdSugPick", "hdAddSubmit", "hdEditOpen",
     "hdEditSave", "hdEditCancel", "hdDelete", "hdFilter", "hdExpand", "hdMore",
+    "hdWatchToggle",
 ]
 
 
@@ -35,7 +36,22 @@ def test_index_html_includes_holdings_assets():
     # 版本号由 scripts/bump_assets.py 按内容摘要统一维护
     assert re.search(r'href="/holdings\.css\?v=[0-9a-f]{12}"', INDEX)
     assert ".hd-root" in HOLDINGS_CSS  # 页面级样式自包含，全部 .hd- 前缀
-    assert "--mxv-" not in HOLDINGS_CSS  # 不复用/不改动静色页样式变量
+    # 观点流复用 mx-views.css 的 .mxv-feed-* 类：只允许在 .hd-feed 作用域注入
+    # --mxv-* 变量取色，不得复制/重定义其样式规则（不改动观点研判样式文件）
+    css = HOLDINGS_CSS.replace(" ", "")
+    assert ".hd-feed{--mxv-" in css and ".theme-dark.hd-feed{--mxv-" in css
+    assert ".mxv-feed-item{" not in HOLDINGS_CSS
+
+
+def test_holdings_feed_matches_mx_views_feed_contract():
+    # 观点流行结构 = 观点研判实时观点流同一套类（行内网格/两列报纸流/批次分隔行）
+    assert "mxv-feed-item" in HOLDINGS_JS and "mxv-feed-cols" in HOLDINGS_JS
+    assert "mxv-feed-sep" in HOLDINGS_JS and "mxv-kol-head" in HOLDINGS_JS
+    assert "mxv-badge" in HOLDINGS_JS and "mxv-empty" in HOLDINGS_JS
+    # 关注列表：左右分栏（个股/板块）、整体可折叠（localStorage 持久化）
+    assert '"hd-cols"' in HOLDINGS_JS and "hdWatchToggle" in HOLDINGS_JS
+    assert "hd_watch_open" in HOLDINGS_JS
+    assert "关注列表" in HOLDINGS_JS and "板块" in HOLDINGS_JS
 
 
 def test_router_and_nav_register_holdings():

@@ -1022,21 +1022,26 @@ def test_holdings_view_manage_cards_feed_flow(page: Page):
     }""")
     expect(page.locator(".hd-item")).to_have_count(2)
     expect(page.locator(".hd-card")).to_have_count(2)
-    expect(page.locator(".hd-op")).to_have_count(3)
-    expect(page.locator(".hd-op-target").first).to_have_text("贵州茅台")
+    expect(page.locator(".mxv-feed-item")).to_have_count(3)
+    expect(page.locator(".mxv-feed-item .target").first).to_have_text("贵州茅台")
     expect(page.locator(".hd-net").first).to_have_text("净 0")  # 多空各一 → 净 0
-    # 依据原帖展开/收起
-    expect(page.locator(".hd-ev-toggle")).to_have_count(1)
-    page.locator(".hd-ev-toggle").click()
+    # 关注列表可折叠：收起后添加区消失，再展开恢复
+    page.get_by_role("button", name="收起", exact=True).click()
+    expect(page.locator("#hd-add-input")).to_have_count(0)
+    page.get_by_role("button", name="展开", exact=True).click()
+    expect(page.locator("#hd-add-input")).to_have_count(1)
+    # 依据原帖：有依据的行点击展开/收起（行尾「依据 N」指示）
+    expect(page.locator(".mxv-feed-item.has-ev")).to_have_count(1)
+    page.locator(".mxv-feed-item.has-ev").click()
     expect(page.locator(".hd-ev-content")).to_have_text("飞天批价回暖")
-    page.locator(".hd-ev-toggle").click()
+    page.locator(".mxv-feed-item.has-ev").click()
     expect(page.locator(".hd-ev-item")).to_have_count(0)
     # 聚合卡筛选：请求带 holder；再点取消恢复全量
     page.locator(".hd-card").first.click()
-    expect(page.locator(".hd-op")).to_have_count(2)
+    expect(page.locator(".mxv-feed-item")).to_have_count(2)
     assert len(page.evaluate("hdTest.calls.filter(c => c.path.includes('holder='))")) == 1
     page.locator(".hd-card").first.click()
-    expect(page.locator(".hd-op")).to_have_count(3)
+    expect(page.locator(".mxv-feed-item")).to_have_count(3)
     # 建议：输入防抖后拉取候选，点选回填输入框
     page.fill("#hd-add-input", "贵")
     expect(page.locator(".hd-sug-item")).to_be_visible()
@@ -1058,7 +1063,7 @@ def test_holdings_view_manage_cards_feed_flow(page: Page):
                         "body": {"target_name": "宁德时代", "note": "白酒龙头"}}]
     # 删除：confirm 接受后 DELETE + flash 反馈
     page.on("dialog", lambda dialog: dialog.accept())
-    page.get_by_role("button", name="删除").first.click()
+    page.get_by_role("button", name="删", exact=True).first.click()
     deletes = page.evaluate("hdTest.calls.filter(c => c.method === 'DELETE')")
     assert deletes == [{"path": "/api/my/holdings/1", "method": "DELETE", "body": None}]
     assert "已删除" in [f[0] for f in page.evaluate("hdTest.flashes")]

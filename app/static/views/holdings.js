@@ -13,7 +13,11 @@ export function createHoldingsView(dependencies) {
     expanded: new Set(), es: null, sseOk: false, pollTimer: null,
     addType: "stock", sugTimer: null, editId: null,
     exhausted: false, loadingMore: false, freshIds: new Set(),
+    watchOpen: true, // 关注列表折叠状态（localStorage 持久化）
   };
+  try {
+    _hd.watchOpen = localStorage.getItem("hd_watch_open") !== "0";
+  } catch (e) { /* 存储不可用：默认展开 */ }
   const PAGE_SIZE = 50;
   const HD_MAX = 30;
   const WINDOW_DAYS = 30;
@@ -149,7 +153,6 @@ export function createHoldingsView(dependencies) {
   function hdRenderAll() {
     $("#main").innerHTML = `
       <div class="hd-root">
-        <span class="hd-statusbar"><span class="hd-pill"><span class="hd-dot sse"></span>实时</span><span class="hd-pill">近 ${WINDOW_DAYS} 天</span></span>
         <section class="hd-panel" id="hd-manage"></section>
         <section class="hd-cards-wrap" id="hd-cards"></section>
         <section class="hd-feed" id="hd-feed"></section>
@@ -164,12 +167,32 @@ export function createHoldingsView(dependencies) {
     return `<span class="hd-badge ${t === "stock" ? "stock" : "topic"}">${t === "stock" ? "股" : "题"}</span>`;
   }
 
+  function hdWatchToggle() {
+    _hd.watchOpen = !_hd.watchOpen;
+    try { localStorage.setItem("hd_watch_open", _hd.watchOpen ? "1" : "0"); } catch (e) { /* 本页生效即可 */ }
+    hdRenderManage();
+  }
+
   function hdRenderManage() {
     const el = document.getElementById("hd-manage");
     if (!el) return;
     const n = _hd.holdings.length;
     const atMax = n >= HD_MAX;
-    const rows = _hd.holdings.map((h) => {
+    const head = `
+      <div class="hd-panel-head">
+        <b>关注列表</b>
+        <span class="hd-hint">${n}/${HD_MAX}${atMax ? " · 已达上限" : ""}</span>
+        <span class="hd-pills">
+          <span class="hd-pill"><span class="hd-dot sse"></span>实时</span>
+          <span class="hd-pill">近 ${WINDOW_DAYS} 天</span>
+        </span>
+        <button type="button" class="hd-btn sm" aria-expanded="${_hd.watchOpen}" onclick="hdWatchToggle()">${_hd.watchOpen ? "收起" : "展开"}</button>
+      </div>`;
+    if (!_hd.watchOpen) {
+      el.innerHTML = head;
+      return;
+    }
+    const chip = (h) => {
       if (_hd.editId === h.id) {
         return `
         <div class="hd-item editing" data-holding-id="${h.id}">
@@ -186,39 +209,44 @@ export function createHoldingsView(dependencies) {
       }
       return `
       <div class="hd-item" data-holding-id="${h.id}">
-        ${hdTypeBadge(h.target_type)}
-        <span class="hd-name">${escapeHtml(h.target_name)}</span>
-        <span class="hd-note">${escapeHtml(h.note || "")}</span>
-        <span class="hd-item-ops">
-          <button type="button" class="hd-btn sm" onclick="hdEditOpen(${h.id})">编辑</button>
-          <button type="button" class="hd-btn sm danger" onclick="hdDelete(${h.id})">删除</button>
-        </span>
-      </div>`;
-    }).join("");
-    el.innerHTML = `
-      <div class="hd-panel-head">
-        <b>我的持股</b>
-        <span class="hd-hint">${n}/${HD_MAX}${atMax ? " · 已达上限" : ""}</span>
-      </div>
-      <div class="hd-add">
-        <div class="hd-seg" role="tablist">
-          <button type="button" class="hd-seg-btn${_hd.addType === "stock" ? " on" : ""}" onclick="hdAddType('stock')">个股</button>
-          <button type="button" class="hd-seg-btn${_hd.addType === "topic" ? " on" : ""}" onclick="hdAddType('topic')">题材</button>
+        <div class="hd-item-main">
+          ${hdTypeBadge(h.target_type)}
+          <span class="hd-name" title="${escapeHtml(h.target_name)}">${escapeHtml(h.target_name)}</span>
+          <span class="hd-item-ops">
+            <button type="button" class="hd-btn sm" onclick="hdEditOpen(${h.id})">编辑</button>
+            <button type="button" class="hd-btn sm danger" onclick="hdDelete(${h.id})">删</button>
+          </span>
         </div>
+        ${h.note ? `<div class="hd-note" title="${escapeHtml(h.note)}">${escapeHtml(h.note)}</div>` : ""}
+      </div>`;
+    };
+    const stocks = _hd.holdings.filter((h) => h.target_type === "stock");
+    const topics = _hd.holdings.filter((h) => h.target_type !== "stock");
+    const group = (title, list) => `
+      <div class="hd-col">
+        <div class="hd-col-head">${title} <span>${list.length}</span></div>
+        <div class="hd-grid">${list.map(chip).join("") || `<div class="hd-empty-sm">暂无</div>`}</div>
+      </div>`;
+    el.innerHTML = head + `
+      <div class="hd-add">
         <div class="hd-add-fields">
+          <div class="hd-seg" role="tablist">
+            <button type="button" class="hd-seg-btn${_hd.addType === "stock" ? " on" : ""}" onclick="hdAddType('stock')">个股</button>
+            <button type="button" class="hd-seg-btn${_hd.addType === "topic" ? " on" : ""}" onclick="hdAddType('topic')">板块</button>
+          </div>
           <div class="hd-add-name">
             <input id="hd-add-input" autocomplete="off" maxlength="40"
-              placeholder="${_hd.addType === "stock" ? "输入 A 股简称，如 贵州茅台" : "输入题材，如 AI算力"}"
+              placeholder="${_hd.addType === "stock" ? "输入 A 股简称，如 贵州茅台" : "输入板块名，如 AI算力"}"
               aria-label="标的名称" oninput="hdSugInput(this.value)">
             <div class="hd-sug" id="hd-sug" hidden></div>
           </div>
           <input id="hd-add-note" maxlength="200" placeholder="备注（可选）" aria-label="备注">
           <button type="button" class="hd-btn primary" onclick="hdAddSubmit()"${atMax ? " disabled" : ""}>添加</button>
         </div>
-        ${_hd.addType === "topic" ? `<div class="hd-hint">题材开放输入，无相关观点时先空着；研判覆盖到该题材后自动汇入。</div>` : ""}
+        ${_hd.addType === "topic" ? `<div class="hd-hint">板块开放输入，无相关观点时先空着；研判覆盖到该板块后自动汇入。</div>` : ""}
       </div>
-      ${n ? `<div class="hd-list">${rows}</div>`
-          : `<div class="hd-empty-sm">还没有持股：先添加你持有的个股或关注的题材，下方才开始汇总相关观点。</div>`}
+      ${n ? `<div class="hd-cols">${group("个股", stocks)}${group("板块", topics)}</div>`
+          : `<div class="hd-empty-sm">还没有关注：先添加你持有的个股或关注的板块，下方才开始汇总相关观点。</div>`}
     `;
   }
 
@@ -376,54 +404,64 @@ export function createHoldingsView(dependencies) {
     await hdReloadFeed();
   }
 
-  function hdDirBadge(d) {
-    if (d === "bull") return `<span class="hd-dir bull">▲ 看多</span>`;
-    if (d === "bear") return `<span class="hd-dir bear">▼ 看空</span>`;
-    return `<span class="hd-dir neutral">◎ 中性</span>`;
+  // ---- 相关观点流：样式对齐观点研判页实时观点流（行内网格两列报纸流 + 批次分隔） ----
+  function hdFeedItemHtml(it) {
+    const kol = it.kol_name || "";
+    const kolShort = kol.length > 6 ? `${kol.slice(0, 6).replace(/[（(【\[]$/, "")}…` : kol;
+    const ev = it.evidence || [];
+    const open = ev.length && _hd.expanded.has(it.id);
+    return `
+    <div class="mxv-feed-item${_hd.freshIds.has(it.id) ? " fresh" : ""}${ev.length ? ` has-ev${open ? " open" : ""}` : ""}"
+      ${ev.length ? `data-ev="${ev.length}" data-op-id="${it.id}" title="点击展开依据原帖" onclick="hdExpand(${it.id})"` : ""}>
+      <span class="t" style="color:var(--mxv-accent)">${escapeHtml((it.occurred_at || "").slice(11, 16))}</span>
+      <span class="mxv-badge ${escapeHtml(it.direction)}">${it.direction === "bull" ? "↑看多" : it.direction === "bear" ? "↓看空" : "中性"}</span>
+      ${it.action ? `<span class="mxv-badge act" title="${escapeHtml(it.action)}">${escapeHtml(it.action)}</span>` : "<span></span>"}
+      <span class="target" style="color:var(--mxv-text)" title="${escapeHtml(it.target_name)}">${escapeHtml(it.target_name)}</span>
+      <span style="color:var(--mxv-muted)" title="${escapeHtml(kol)}">· ${escapeHtml(kolShort)}</span>
+      <span class="sum" style="color:var(--mxv-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(it.summary || "")}">${escapeHtml(it.summary || "")}</span>
+    </div>
+    ${open ? `<div class="hd-ev">${ev.map((evItem) => `
+      <div class="hd-ev-item">
+        <div class="hd-ev-meta">${escapeHtml(evItem.author || "")} · ${escapeHtml(fmtTime(evItem.time))}</div>
+        <div class="hd-ev-content">${escapeHtml(evItem.content || "")}</div>
+      </div>`).join("")}</div>` : ""}`;
   }
 
   function hdRenderFeed() {
     const el = document.getElementById("hd-feed");
     if (!el) return;
-    const rows = _hd.items.map((it) => {
-      const evs = it.evidence || [];
-      const open = _hd.expanded.has(it.id);
-      return `
-      <div class="hd-op${_hd.freshIds.has(it.id) ? " fresh" : ""}" data-op-id="${it.id}">
-        <div class="hd-op-head">
-          ${hdDirBadge(it.direction)}
-          <span class="hd-op-target">${escapeHtml(it.target_name)}</span>
-          ${it.action ? `<span class="hd-action">${escapeHtml(it.action)}</span>` : ""}
-          <span class="hd-op-meta">${escapeHtml(it.kol_name || "")} · ${escapeHtml(fmtTime(it.occurred_at))}</span>
-          ${evs.length ? `<button type="button" class="hd-ev-toggle" onclick="hdExpand(${it.id})">${open ? "收起依据" : `依据 ${evs.length}`}</button>` : ""}
-        </div>
-        ${it.summary ? `<div class="hd-op-summary">${escapeHtml(it.summary)}</div>` : ""}
-        ${open && evs.length ? `<div class="hd-ev">${evs.map((ev) => `
-          <div class="hd-ev-item">
-            <div class="hd-ev-meta">${escapeHtml(ev.author || "")} · ${escapeHtml(fmtTime(ev.time))}</div>
-            <div class="hd-ev-content">${escapeHtml(ev.content || "")}</div>
-          </div>`).join("")}</div>` : ""}
-      </div>`;
-    }).join("");
-    const chip = _hd.filter
-      ? `<button type="button" class="hd-chip" onclick="hdFilter(-1)">✕ ${escapeHtml(_hd.filter.name)}</button>`
-      : "";
-    el.innerHTML = `
-      <div class="hd-feed-head">
-        <b>相关观点</b>
-        <span class="hd-hint">近 ${WINDOW_DAYS} 天</span>
-        ${chip}
-        <span class="hd-hint right">${_hd.items.length ? `${_hd.items.length} 条` : ""}</span>
-      </div>
-      ${!_hd.holdings.length
-        ? `<div class="hd-empty">先在上方添加持股，相关观点会在这里按月汇总、实时更新。</div>`
-        : !_hd.items.length
-          ? `<div class="hd-empty">${_hd.filter ? "该标的最近一个月暂无相关观点" : "最近一个月暂无与你持股相关的观点"}</div>`
-          : rows}
-      ${_hd.items.length && !_hd.exhausted
-        ? `<div class="hd-more-wrap"><button type="button" class="hd-btn" onclick="hdMore()"${_hd.loadingMore ? " disabled" : ""}>${_hd.loadingMore ? "加载中…" : "加载更多"}</button></div>`
-        : ""}
-    `;
+    const head = `
+    <div class="mxv-kol-head">
+      <h3>相关观点<span class="hd-feed-sub">近 ${WINDOW_DAYS} 天</span></h3>
+      ${_hd.filter ? `<button type="button" class="mxv-fchip on" onclick="hdFilter(-1)">✕ ${escapeHtml(_hd.filter.name)}</button>` : ""}
+      <span class="hd-hint">${_hd.items.length ? `${_hd.items.length} 条` : ""}</span>
+    </div>`;
+    let body;
+    if (!_hd.holdings.length) {
+      body = `<div class="mxv-empty">先在上方添加关注，相关观点会在这里按月汇总、实时更新。</div>`;
+    } else if (!_hd.items.length) {
+      body = `<div class="mxv-empty">${_hd.filter ? "该标的最近一个月暂无相关观点" : "最近一个月暂无与你关注标的相关的观点"}</div>`;
+    } else {
+      // 按交易日+批次分组两列报纸流：左列 = 较新一半；最早一条落在右列底部（同 mx-views 流视图）
+      const groups = new Map();
+      _hd.items.forEach((it) => {
+        const key = `${it.trading_day || ""}|${it.snapshot_at || ""}`;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(it);
+      });
+      body = [...groups.entries()].map(([key, ops]) => {
+        const cut = Math.ceil(ops.length / 2);
+        const cols = ops.length > 1 ? [ops.slice(0, cut), ops.slice(cut)] : [ops];
+        const [day, at] = key.split("|");
+        const grid = `<div class="mxv-feed-cols${ops.length > 1 ? "" : " single"}">${cols.map((col) =>
+          `<div class="mxv-feed-col">${col.map(hdFeedItemHtml).join("")}</div>`).join("")}</div>`;
+        return `<div class="mxv-feed-sep"><span>${escapeHtml((day || "").slice(5))} ${escapeHtml(at || "")} · ${ops.length} 条</span></div>${grid}`;
+      }).join("") + `<div class="mxv-feed-sep"><span>共 ${_hd.items.length} 条</span></div>`;
+      if (!_hd.exhausted) {
+        body += `<div class="hd-more-wrap"><button type="button" class="hd-btn" onclick="hdMore()"${_hd.loadingMore ? " disabled" : ""}>${_hd.loadingMore ? "加载中…" : "加载更多"}</button></div>`;
+      }
+    }
+    el.innerHTML = head + body;
   }
 
   function hdExpand(id) {
@@ -467,5 +505,6 @@ export function createHoldingsView(dependencies) {
     hdFilter,
     hdExpand,
     hdMore,
+    hdWatchToggle,
   };
 }

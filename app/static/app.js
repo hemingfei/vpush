@@ -6532,6 +6532,7 @@ const {
   hdFilter,
   hdExpand,
   hdMore,
+  hdWatchToggle,
 } = createHoldingsView({
   $,
   state,
@@ -8640,6 +8641,7 @@ const INLINE_HANDLERS = {
   hdMore,
   hdSugInput,
   hdSugPick,
+  hdWatchToggle,
   homeResetFilters,
   homeSearch,
   homeToggleFilter,
