@@ -78,6 +78,7 @@ export function createMxViewsView(dependencies) {
     });
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
+      if (e.isComposing || e.keyCode === 229) return; // 输入法组字中：Esc 先取消组词，不当页面级 Esc 处理
       if (document.querySelector(".mxv-cal")) { mxvCalClose(); return; }
       if (_mxv.feedKolOpen) { _mxv.feedKolOpen = false; mxvRenderFeed(); return; }
       const fsearch = document.activeElement && document.activeElement.closest
@@ -1305,21 +1306,47 @@ export function createMxViewsView(dependencies) {
       mxvFeedToggle(_mxv.feedKols, Number(box.dataset.feedKol));
     });
     feed.addEventListener("input", (e) => {
+      // 中文输入法组字期间（isComposing）绝不重渲染：innerHTML 重建会替换输入框、打断组词，
+      // 拼音字母被直接上屏成英文；组字提交由下方 compositionend 统一筛选
+      if (e.isComposing) return;
+      const refocus = (sel) => {
+        const el = document.querySelector(sel);
+        if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+      };
       // 搜索行（标的/大V名关键词）：输入即筛选，重渲染后恢复焦点与光标
       const fsearch = e.target.closest(".mxv-fsearch");
       if (fsearch) {
         _mxv.feedSearch = fsearch.value;
         mxvRenderFeed();
-        const el = document.querySelector(".mxv-fsearch");
-        if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+        refocus(".mxv-fsearch");
         return;
       }
       const search = e.target.closest(".mxv-fkol-search");
       if (!search) return;
       _mxv.feedKolSearch = search.value;
       mxvRenderFeed();
-      const el = document.querySelector(".mxv-fkol-search");
-      if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+      refocus(".mxv-fkol-search");
+    });
+    // 输入法组字提交：此刻组词已结束，重建 DOM 安全；最终文本此刻才进筛选并持久化。
+    // Firefox/Safari 在 compositionend 后会对旧输入框补发 input，isConnected 过滤游离目标的重复渲染
+    feed.addEventListener("compositionend", (e) => {
+      if (!e.target.isConnected) return;
+      const refocus = (sel) => {
+        const el = document.querySelector(sel);
+        if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+      };
+      const fsearch = e.target.closest && e.target.closest(".mxv-fsearch");
+      if (fsearch) {
+        _mxv.feedSearch = fsearch.value;
+        mxvRenderFeed();
+        refocus(".mxv-fsearch");
+        return;
+      }
+      const search = e.target.closest && e.target.closest(".mxv-fkol-search");
+      if (!search) return;
+      _mxv.feedKolSearch = search.value;
+      mxvRenderFeed();
+      refocus(".mxv-fkol-search");
     });
     // 点下拉面板外部收起（容器级只绑一次；面板开着才需要处理）
     document.addEventListener("click", (e) => {

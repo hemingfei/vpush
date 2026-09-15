@@ -596,3 +596,9 @@ def test_mx_views_feed_filters():
     bind = _fn_body("mxvBindFeedHighlight", js)
     assert 'data-feed-search-clear' in bind and ".mxv-fsearch" in bind  # 清空按钮 + 输入委托
     assert bind.count('_mxv.feedSearch = ""') >= 2  # 清空按钮与「重置」都清搜索词
+    # 中文输入法兼容：组字期间（isComposing）不重渲染——innerHTML 重建输入框会打断组词、拼音上屏成英文；
+    # compositionend 才统一筛选，并过滤游离目标的重复事件；Esc 同样避开组字期（先取消组词）
+    assert "if (e.isComposing) return;" in bind
+    assert 'addEventListener("compositionend"' in bind
+    assert "!e.target.isConnected" in bind
+    assert "e.isComposing || e.keyCode === 229" in js
