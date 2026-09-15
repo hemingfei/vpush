@@ -8,6 +8,31 @@ import sys
 import time
 
 
+def snapshot_files(folder: pathlib.Path) -> list[pathlib.Path]:
+    """应用 dav-<ts>.db + 部署 dav.db.<ts>；按 mtime，不含 shm/wal。"""
+    files: list[pathlib.Path] = []
+    if not folder.is_dir():
+        return files
+    for path in folder.iterdir():
+        if not path.is_file():
+            continue
+        name = path.name
+        if name.endswith(("-shm", "-wal")):
+            continue
+        if (name.startswith("dav-") and name.endswith(".db")) or name.startswith("dav.db."):
+            files.append(path)
+    files.sort(key=lambda item: (item.stat().st_mtime, item.name))
+    return files
+
+
+def prune(folder: pathlib.Path, keep: int) -> None:
+    files = snapshot_files(folder)
+    for old in files[:-keep]:
+        old.unlink(missing_ok=True)
+        pathlib.Path(str(old) + "-shm").unlink(missing_ok=True)
+        pathlib.Path(str(old) + "-wal").unlink(missing_ok=True)
+
+
 def main() -> int:
     db_path = sys.argv[1] if len(sys.argv) > 1 else "data/dav.db"
     backup_dir = pathlib.Path(sys.argv[2] if len(sys.argv) > 2 else "backups")
@@ -36,9 +61,7 @@ def main() -> int:
         raise RuntimeError(f"备份校验失败: {result}")
     target.chmod(0o600)
 
-    backups = sorted(backup_dir.glob("dav-*.db"))
-    for old in backups[:-keep]:
-        old.unlink()
+    prune(backup_dir, keep)
     print(f"备份完成: {target}（保留最近 {keep} 份）")
     return 0
 

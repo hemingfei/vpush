@@ -122,6 +122,49 @@ def test_snapshot_quick_check_ok_and_keeps_three(tmp_path):
     assert _quick_check(remaining[-1]) == "ok"
 
 
+def _write_mtime(path: Path, epoch: int, data: bytes = b"x") -> Path:
+    path.write_bytes(data)
+    os.utime(path, (epoch, epoch))
+    return path
+
+
+def test_prune_keeps_newest_by_mtime_across_naming(tmp_path):
+    """keep 按 mtime：lex 更靠后的 dav-before-* 不能挤掉更新的日备/部署备。"""
+    from app.backup import _prune_local
+
+    folder = tmp_path / "backups"
+    folder.mkdir()
+    stale = _write_mtime(folder / "dav-before-report-v4-20260910-092108.db", 1)
+    _write_mtime(folder / "dav-before-report-v4-20260910-092108.db-shm", 1, b"s")
+    _write_mtime(folder / "dav.db.20260912-215700", 2)
+    deploy = _write_mtime(folder / "dav.db.20260914-220418", 3)
+    daily = _write_mtime(folder / "dav-20260915-030001.db", 4)
+    (folder / "backup.log").write_text("keep")
+    _prune_local(folder, keep=2)
+    names = sorted(p.name for p in folder.iterdir())
+    assert names == ["backup.log", daily.name, deploy.name]
+    assert not stale.exists()
+    assert not (folder / "dav-before-report-v4-20260910-092108.db-shm").exists()
+
+
+def test_scripts_backup_prune_covers_deploy_naming(tmp_path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "vpush_backup_script",
+        Path(__file__).resolve().parents[1] / "scripts" / "backup.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    folder = tmp_path / "backups"
+    folder.mkdir()
+    _write_mtime(folder / "dav-before-report-v4.db", 1)
+    newest = _write_mtime(folder / "dav.db.20260914-220418", 9)
+    mod.prune(folder, 1)
+    assert sorted(p.name for p in folder.iterdir()) == [newest.name]
+
+
 def test_webdav_put_latest_and_keep(tmp_path):
     from app.backup import WebDAV
 
