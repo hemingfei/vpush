@@ -1042,6 +1042,9 @@ def test_holdings_view_manage_cards_feed_flow(page: Page):
     expect(page.locator(".mxv-feed-item .target").first).to_have_text("贵州茅台")
     expect(page.locator(".hd-net").first).to_have_text("净 0")  # 多空各一 → 净 0
     expect(page.locator(".hd-counts .tagc").first).to_have_text("#2")  # 标签提及数
+    # 相关观点按天分段单列：一天一段、一行一条消息（无批次时间分割）
+    expect(page.locator(".mxv-feed-cols.single")).to_have_count(2)
+    expect(page.locator(".mxv-feed-sep").first).to_have_text("09-15 · 2 条")
     # 快讯页签：标签命中帖同一行网格，方向徽章来自观点回流登记；点击展开全文
     page.locator(".hd-feed-tabs").get_by_role("button", name="快讯").click()
     expect(page.locator(".mxv-feed-item.has-post")).to_have_count(2)

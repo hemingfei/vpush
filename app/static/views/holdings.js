@@ -515,7 +515,7 @@ export function createHoldingsView(dependencies) {
       if (!_hd.tagItems.length) {
         body = `<div class="mxv-empty">${_hd.filter ? "该标的最近一个月暂无命中标签的快讯" : "最近一个月暂无命中你关注标的标签的快讯"}</div>`;
       } else {
-        // 按发布日分组两列报纸流（同 mx-views 流视图）：左列 = 较新一半
+        // 按发布日分段单列流（与观点流同构）：一天一段，一行一条消息
         const groups = new Map();
         _hd.tagItems.forEach((it) => {
           const day = (it.published_at || "").slice(0, 10);
@@ -523,11 +523,8 @@ export function createHoldingsView(dependencies) {
           groups.get(day).push(it);
         });
         body = [...groups.entries()].map(([day, posts]) => {
-          const cut = Math.ceil(posts.length / 2);
-          const cols = posts.length > 1 ? [posts.slice(0, cut), posts.slice(cut)] : [posts];
-          const grid = `<div class="mxv-feed-cols${posts.length > 1 ? "" : " single"}">${cols.map((col) =>
-            `<div class="mxv-feed-col">${col.map(hdTagItemHtml).join("")}</div>`).join("")}</div>`;
-          return `<div class="mxv-feed-sep"><span>${escapeHtml((day || "").slice(5))} · ${posts.length} 条</span></div>${grid}`;
+          const grid = `<div class="mxv-feed-cols single"><div class="mxv-feed-col">${posts.map(hdTagItemHtml).join("")}</div></div>`;
+          return `<div class="mxv-feed-sep"><span>${escapeHtml((day || "").slice(5) || "—")} · ${posts.length} 条</span></div>${grid}`;
         }).join("") + `<div class="mxv-feed-sep"><span>共 ${_hd.tagItems.length} 条</span></div>`;
         if (!_hd.tagExhausted) {
           body += `<div class="hd-more-wrap"><button type="button" class="hd-btn" onclick="hdTagMore()"${_hd.tagLoadingMore ? " disabled" : ""}>${_hd.tagLoadingMore ? "加载中…" : "加载更多"}</button></div>`;
@@ -536,20 +533,16 @@ export function createHoldingsView(dependencies) {
     } else if (!_hd.items.length) {
       body = `<div class="mxv-empty">${_hd.filter ? "该标的最近一个月暂无相关观点" : "最近一个月暂无与你关注标的相关的观点"}</div>`;
     } else {
-      // 按交易日+批次分组两列报纸流：左列 = 较新一半；最早一条落在右列底部（同 mx-views 流视图）
+      // 按交易日分段单列流：一天一段（不看批次/快照时刻），一行一条消息
       const groups = new Map();
       _hd.items.forEach((it) => {
-        const key = `${it.trading_day || ""}|${it.snapshot_at || ""}`;
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(it);
+        const day = it.trading_day || (it.occurred_at || "").slice(0, 10);
+        if (!groups.has(day)) groups.set(day, []);
+        groups.get(day).push(it);
       });
-      body = [...groups.entries()].map(([key, ops]) => {
-        const cut = Math.ceil(ops.length / 2);
-        const cols = ops.length > 1 ? [ops.slice(0, cut), ops.slice(cut)] : [ops];
-        const [day, at] = key.split("|");
-        const grid = `<div class="mxv-feed-cols${ops.length > 1 ? "" : " single"}">${cols.map((col) =>
-          `<div class="mxv-feed-col">${col.map(hdFeedItemHtml).join("")}</div>`).join("")}</div>`;
-        return `<div class="mxv-feed-sep"><span>${escapeHtml((day || "").slice(5))} ${escapeHtml(at || "")} · ${ops.length} 条</span></div>${grid}`;
+      body = [...groups.entries()].map(([day, ops]) => {
+        const grid = `<div class="mxv-feed-cols single"><div class="mxv-feed-col">${ops.map(hdFeedItemHtml).join("")}</div></div>`;
+        return `<div class="mxv-feed-sep"><span>${escapeHtml((day || "").slice(5) || "—")} · ${ops.length} 条</span></div>${grid}`;
       }).join("") + `<div class="mxv-feed-sep"><span>共 ${_hd.items.length} 条</span></div>`;
       if (!_hd.exhausted) {
         body += `<div class="hd-more-wrap"><button type="button" class="hd-btn" onclick="hdMore()"${_hd.loadingMore ? " disabled" : ""}>${_hd.loadingMore ? "加载中…" : "加载更多"}</button></div>`;

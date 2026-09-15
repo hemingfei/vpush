@@ -44,10 +44,12 @@ def test_index_html_includes_holdings_assets():
 
 
 def test_holdings_feed_matches_mx_views_feed_contract():
-    # 观点流行结构 = 观点研判实时观点流同一套类（行内网格/两列报纸流/批次分隔行）
+    # 行结构 = 观点研判实时观点流同一套行内网格类；流分段按天单列（不看批次/快照时刻）
     assert "mxv-feed-item" in HOLDINGS_JS and "mxv-feed-cols" in HOLDINGS_JS
     assert "mxv-feed-sep" in HOLDINGS_JS and "mxv-kol-head" in HOLDINGS_JS
     assert "mxv-badge" in HOLDINGS_JS and "mxv-empty" in HOLDINGS_JS
+    assert "mxv-feed-cols single" in HOLDINGS_JS  # 单列：一行一条消息
+    assert "snapshot_at" not in HOLDINGS_JS  # 分组键只到天，无批次时间分割
     # 快讯页签：标签命中帖同一行网格（has-post 全文展开），聚合卡带 #N 标签提及数
     assert "hdFeedTab" in HOLDINGS_JS and "hdTagItemHtml" in HOLDINGS_JS
     assert "has-post" in HOLDINGS_JS and "tag-posts" in HOLDINGS_JS
