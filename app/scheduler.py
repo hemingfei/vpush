@@ -1598,7 +1598,7 @@ def probe_xueqiu(db: DB, notifiers: list[Notifier], source_config) -> None:
     from .fetchers.xueqiu import (
         XUEQIU_COOKIE_KEY,
         XUEQIU_TIMELINE_URL,
-        _is_waf_html,
+        xueqiu_session_dead,
         normalize_xueqiu_id,
     )
 
@@ -1631,17 +1631,7 @@ def probe_xueqiu(db: DB, notifiers: list[Notifier], source_config) -> None:
             XUEQIU_TIMELINE_URL,
             params={"user_id": xueqiu_uid, "page": 1, "count": 1},
         )
-        blocked = (
-            _is_waf_html(resp)
-            or resp.status_code in (401, 403)
-            or resp.headers.get("content-type", "").startswith("text/html")
-        )
-        if resp.status_code == 200 and not blocked:
-            try:
-                resp.json()
-            except ValueError:
-                blocked = True
-        if blocked:
+        if xueqiu_session_dead(resp):
             db.set_setting(SOURCE_ERR_KEY.format(platform="xueqiu"), "接口异常（探测）")
             now = int(time.time())
             last = db.get_setting(XUEQIU_PROBE_ALERT_KEY)
@@ -1691,6 +1681,7 @@ def keepalive_xueqiu_cookie(
         XUEQIU_TIMELINE_URL,
         merge_cookie_strings,
         normalize_xueqiu_id,
+        xueqiu_session_dead,
     )
 
     cookie = db.get_setting(XUEQIU_COOKIE_KEY) or source_config.cookie
@@ -1730,15 +1721,9 @@ def keepalive_xueqiu_cookie(
             XUEQIU_TIMELINE_URL,
             params={"user_id": xueqiu_uid, "page": 1, "count": 1},
         )
-        status = resp.status_code
-        if status == 200:
-            try:
-                resp.json()
-            except ValueError:
-                status = 0  # 内容不是合法 JSON，按失效处理
-        if status != 200:
+        if xueqiu_session_dead(resp):
             db.set_setting(SOURCE_ERR_KEY.format(platform="xueqiu"), "cookie 无效或已过期（保活探测）")
-            _alert_cookie_keepalive(db, notifiers, "雪球", f"timeline HTTP {status}")
+            _alert_cookie_keepalive(db, notifiers, "雪球", f"timeline HTTP {resp.status_code}")
             return
         # 会话有效：合并本次响应下发的 cookie（一般无新 token，原样保留），更新状态
         new_cookie = merge_cookie_strings(cookie, client.cookies, "xueqiu.com")

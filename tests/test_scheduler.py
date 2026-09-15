@@ -28,6 +28,7 @@ from app.scheduler import (
     keepalive_weibo_cookie,
     keepalive_xueqiu_cookie,
     maybe_alert_x_fallback,
+    probe_xueqiu,
     notify_digest_subscribers,
     notify_subscribers,
     parse_twitter_cookie,
@@ -3583,6 +3584,77 @@ def test_xueqiu_cookie_keepalive_expired_alerts():
     assert "无效或已过期" in (db.get_setting("source_err_xueqiu") or "")
     assert any("雪球" in t for t in notifier.texts)
     assert db.get_setting("cookie_keepalive_alert_at")
+
+
+def test_xueqiu_session_dead_auth_codes():
+    from app.fetchers.xueqiu import xueqiu_session_dead
+
+    assert xueqiu_session_dead(httpx.Response(400, json={"error_code": 400016}))
+    assert xueqiu_session_dead(httpx.Response(200, json={"error_code": "10022"}))
+    assert xueqiu_session_dead(httpx.Response(200, text="<html>waf</html>"))
+    assert not xueqiu_session_dead(httpx.Response(200, json={"statuses": []}))
+
+
+def _probe_client(monkeypatch, handler):
+    monkeypatch.setattr("app.proxy.acquire_client_proxy", lambda *a, **k: ("http://127.0.0.1:9", "p"))
+    real_client = httpx.Client
+
+    def fake_client(*a, **k):
+        k.pop("proxy", None)
+        k["transport"] = httpx.MockTransport(handler)
+        return real_client(*a, **k)
+
+    monkeypatch.setattr("httpx.Client", fake_client)
+
+
+def test_probe_xueqiu_http400_does_not_mark_ok(monkeypatch):
+    db = make_db()
+    db.add_kol("xueqiu", "A", "1")
+    db.set_setting("xueqiu_cookie", "xq_a_token=expired")
+    notifier = FakeNotifier()
+
+    def handler(request):
+        return httpx.Response(
+            400,
+            json={"error_code": 400016, "error_description": "请重新登录"},
+        )
+
+    _probe_client(monkeypatch, handler)
+    probe_xueqiu(db, [notifier], SimpleNamespace(cookie=""))
+    assert "探测" in (db.get_setting("source_err_xueqiu") or "")
+    assert not db.get_setting("source_ok_xueqiu")
+    assert any("探测异常" in t for t in notifier.texts)
+
+
+def test_probe_xueqiu_ok_timeline(monkeypatch):
+    db = make_db()
+    db.add_kol("xueqiu", "A", "1")
+    db.set_setting("xueqiu_cookie", "xq_a_token=ok")
+    notifier = FakeNotifier()
+
+    def handler(request):
+        return httpx.Response(200, json={"statuses": []})
+
+    _probe_client(monkeypatch, handler)
+    probe_xueqiu(db, [notifier], SimpleNamespace(cookie=""))
+    assert db.get_setting("source_ok_xueqiu")
+    assert db.get_setting("source_err_xueqiu") in (None, "")
+    assert notifier.texts == []
+
+
+def test_xueqiu_keepalive_200_auth_error_alerts():
+    db = make_db()
+    db.add_kol("xueqiu", "A", "1")
+    db.set_setting("xueqiu_cookie", "xq_a_token=expired; u=1")
+    notifier = FakeNotifier()
+
+    def handler(request):
+        return httpx.Response(200, json={"error_code": 400016, "error_description": "请重新登录"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    keepalive_xueqiu_cookie(db, [notifier], SimpleNamespace(cookie=""), client=client)
+    assert "无效或已过期" in (db.get_setting("source_err_xueqiu") or "")
+    assert any("雪球" in t for t in notifier.texts)
 
 
 def test_weibo_cookie_keepalive_refresh_and_expired_alert():

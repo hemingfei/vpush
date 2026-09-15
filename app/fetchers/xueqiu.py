@@ -126,6 +126,22 @@ def _is_waf_html(resp: httpx.Response) -> bool:
     )
 
 
+XUEQIU_AUTH_ERROR_CODES = {"10022", "400016"}
+
+
+def xueqiu_session_dead(resp: httpx.Response) -> bool:
+    """登录失效：非 200，或 JSON error_code 为 10022/400016（int/str 均可）。"""
+    if resp.status_code != 200:
+        return True
+    try:
+        data = resp.json()
+    except ValueError:
+        return True
+    if not isinstance(data, dict):
+        return False
+    return str(data.get("error_code") or "") in XUEQIU_AUTH_ERROR_CODES
+
+
 def merge_cookie_strings(old: str, cookies, prefer_domain: str = "") -> str:
     """把旧 Cookie 与本次会话新下发的 cookie 合并（同名以新值为准）。
 
