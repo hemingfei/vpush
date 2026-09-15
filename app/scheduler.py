@@ -25,6 +25,7 @@ from .fetchers.base import (
     Post,
     already_chinese as _already_chinese,
     is_collapsed_translation,
+    is_notify_stale,
     is_stale_backfill,
     quoted_author_text,
     twitter_translate_enabled,
@@ -1289,6 +1290,12 @@ def _fetch_kol_once(
             logger.info(
                 "历史回灌入库不推送 platform=%s kol=%s id=%s at=%s wm=%s",
                 post.platform, post.kol_name, post.external_id, post.published_at, watermark,
+            )
+            continue
+        if is_notify_stale(post.published_at):
+            logger.info(
+                "补抓入库不推送 platform=%s kol=%s id=%s at=%s",
+                post.platform, post.kol_name, post.external_id, post.published_at,
             )
             continue
         logger.info("新帖 platform=%s kol=%s id=%s", post.platform, post.kol_name, post.external_id)

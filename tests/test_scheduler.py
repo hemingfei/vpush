@@ -11,7 +11,7 @@ import httpx
 
 from app.config import FeishuConfig, NotifiersConfig, TelegramConfig
 from app.db import DB
-from app.fetchers.base import Post
+from app.fetchers.base import Post, is_notify_stale
 import app.scheduler as app_scheduler
 from app.scheduler import (
     PlatformState,
@@ -405,11 +405,46 @@ def test_catchup_history_older_than_watermark_is_not_pushed(monkeypatch):
     old.published_at = "2026-05-24 17:30"
     new = make_post(kid)
     new.external_id = "new-today"
-    new.published_at = "2026-09-04 10:00"
+    new.published_at = datetime.datetime.now(
+        datetime.timezone(datetime.timedelta(hours=8))
+    ).strftime("%Y-%m-%d %H:%M")
     sent = []
     poll_once(db, {"xueqiu": FakeFetcher([old, new])}, [], notifiers_config=_tg_ncfg(monkeypatch, sent))
     assert sent == ["new-today"]
     assert {p["external_id"] for p in db.list_posts()} >= {"kept", "old-may", "new-today"}
+
+
+def test_is_notify_stale_skips_catchup_keeps_fresh():
+    now = datetime.datetime(2026, 9, 15, 22, 0, tzinfo=datetime.timezone(datetime.timedelta(hours=8)))
+    assert is_notify_stale("2026-09-15 20:00", now=now) is True
+    assert is_notify_stale("2026-09-15 21:30", now=now) is False
+    assert is_notify_stale("", now=now) is False
+
+
+def test_gap_catchup_older_than_fresh_window_is_not_pushed(monkeypatch):
+    """断线补抓：比水位新但超过 60 分钟的帖入库不推，避免 cookie 恢复后连珠炮。"""
+    db = make_db()
+    kid = db.add_kol("combination", "组合A", "ZH1")
+    db.insert_post("combination", kid, "kept", "t", "c", "u", "2026-09-15 12:00")
+    db.mark_kol_baseline(kid)
+    uid = db.add_user("u", "h", telegram_chat_id="111")
+    db.add_subscription(uid, kid)
+    now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
+    stale = make_post(kid)
+    stale.platform = "combination"
+    stale.external_id = "gap-old"
+    stale.published_at = (now - datetime.timedelta(hours=4)).strftime("%Y-%m-%d %H:%M")
+    fresh = make_post(kid)
+    fresh.platform = "combination"
+    fresh.external_id = "gap-fresh"
+    fresh.published_at = (now - datetime.timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M")
+    sent = []
+    poll_once(
+        db, {"combination": FakeFetcher([stale, fresh])}, [],
+        notifiers_config=_tg_ncfg(monkeypatch, sent),
+    )
+    assert sent == ["gap-fresh"]
+    assert {p["external_id"] for p in db.list_posts()} >= {"kept", "gap-old", "gap-fresh"}
 
 
 def test_empty_baseline_then_months_of_history_not_pushed(monkeypatch):
@@ -2382,8 +2417,6 @@ def test_scheduler_stop_flushes_pending_digest(monkeypatch):
 
 
 def test_startup_message_only_to_admins(monkeypatch):
-    import asyncio
-
     db = make_db()
     db.add_user("kale", "h", telegram_chat_id="111", is_admin=True)
     db.add_user("user", "h", telegram_chat_id="222")
@@ -2440,8 +2473,6 @@ def test_format_startup_message_instance_version_time(monkeypatch):
 
 def test_startup_message_respects_push_channels(monkeypatch):
     """管理员只勾选 telegram 时，启动提示不应发到已绑定的飞书渠道。"""
-    import asyncio
-
     db = make_db()
     uid = db.add_user("kale", "h", telegram_chat_id="111", feishu_chat_id="fc1", is_admin=True)
     db.update_user(uid, push_channels="telegram")
@@ -2495,8 +2526,6 @@ def test_startup_message_respects_push_channels(monkeypatch):
 
 def test_startup_message_defaults_to_all_bound_channels(monkeypatch):
     """push_channels 未设置时，已绑定渠道都应收到启动提示（默认行为）。"""
-    import asyncio
-
     db = make_db()
     db.add_user("kale", "h", telegram_chat_id="111", feishu_chat_id="fc1", is_admin=True)
     sent = {"tg": [], "fs": []}
@@ -3943,8 +3972,6 @@ def test_scheduler_loop_delay_uses_min_interval():
 
 def test_scheduler_run_loop_sleeps_priority_interval(monkeypatch):
     """主循环单轮等待时长应取最短间隔（雪球组合 30s），而非全局/优先间隔。"""
-    import asyncio
-
     db = make_db()
     ncfg = SimpleNamespace(
         telegram=SimpleNamespace(bot_token="", chat_id=""),
@@ -5126,7 +5153,6 @@ def test_daily_report_uses_admin_push_settings_llm(monkeypatch):
     def fake_daily(posts, cfg, client=None):
         seen["key"] = cfg.api_key
         seen["model"] = cfg.model
-        return None
 
     monkeypatch.setattr("app.llm.summarize_daily", fake_daily)
     fake = FakeDailyNotifier()
