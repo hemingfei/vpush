@@ -3447,8 +3447,12 @@ def create_api_router(
         items.sort(key=lambda item: order.get((item.get("group_id"), item.get("media_id")), 0))
         cached = db.ima_ticker_digest(ticker)
         # 综述是按全部库编译的：只授了部分库的人看到它，就拿到了其他库里的要点。
-        # 读不全来源库就整块隐藏（时间线仍按可见库过滤返回）。
-        if cached and not set(db.ima_ticker_groups(ticker)) <= set(group_ids):
+        # 读不全来源库就整块隐藏（时间线仍按可见库过滤返回）。只比已配置的库：
+        # 库里会残留旧配置/已下线的 group_id，不该因此把综述藏给所有人。
+        source_groups = set(db.ima_ticker_groups(ticker)) & {
+            group_config.id for group_config in _configured_groups()
+        }
+        if cached and not source_groups <= set(group_ids):
             cached = {}
         return {
             "code": ticker,

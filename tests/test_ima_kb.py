@@ -2644,3 +2644,13 @@ def test_ima_ticker_page_returns_timeline_and_digest(tmp_path, monkeypatch):
     assert granted.status_code == 200, granted.text
     assert [item["media_id"] for item in granted.json()["items"]] == ["r3", "r2", "r1"]
     assert granted.json()["digest"]["consensus"] == "共识"
+
+    # 库里残留旧配置/已下线的 group_id（不在已配置库内）：不该因此把综述藏给所有人
+    db._conn.execute(
+        "INSERT INTO report_extraction_tickers (group_id, media_id, code, name) VALUES (?, ?, ?, ?)",
+        ("group-legacy", "r9", "NVDA", "英伟达"),
+    )
+    db._conn.commit()
+    legacy = client.get("/api/ima-documents/tickers/英伟达", headers=reader_headers)
+    assert legacy.status_code == 200, legacy.text
+    assert legacy.json()["digest"]["consensus"] == "共识"
