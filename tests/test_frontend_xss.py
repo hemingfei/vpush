@@ -28,6 +28,8 @@ SAFE_CONTEXTS = [
     r"PLATFORM_LABELS\[|PLATFORM_ICONS\[|CHANNEL_ICONS\[|statusPill\(|PLATFORM_TABS",
     # 安全渲染辅助函数（内部已转义或为纯数字）
     r"avatarHtml\(|avatarText\(|emptyState\(|format_published_at\(|fmtDbTime\(|fmtTs\(|rateBar\(|userChannelIconsHtml\(",
+    # 审核状态角标：内部按 status 映射固定文案（已通过/已拒绝/待审），不透传原始值
+    r"_tagVoteStatusBadge\(",
     # URL 编码 / 数值转换
     r"encodeURIComponent\(|Number\(|parseInt\(",
     # 内部筛选状态（来自硬编码 PLATFORM_TABS，非用户数据）
