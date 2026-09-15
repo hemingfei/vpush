@@ -30,8 +30,6 @@ _SOURCE_FIELDS = (
     "group_name",
     "metadata_folded",
     "abstract",
-    "abstract_zh",
-    "thesis_zh",
     "tags_json",
     "txt_path",
     "downloaded_at",
@@ -255,16 +253,6 @@ class ImaSearchIndex:
                     except OSError:
                         missing += 1
                         continue
-                    # 中文编译产物（机器摘要 + LLM thesis）入 body：正文以英文为主，
-                    # trigram FTS 的中文查询只能靠它们命中。
-                    zh = _plain_text(
-                        " ".join(
-                            str(source.get(field) or "")
-                            for field in ("abstract_zh", "thesis_zh")
-                        )
-                    )
-                    if zh:
-                        body = f"{zh} {body}"
                     metadata = " ".join(
                         str(source.get(field) or "")
                         for field in ("group_name", "metadata_folded", "abstract", "tags_json")

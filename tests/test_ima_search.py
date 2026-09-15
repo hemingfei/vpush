@@ -350,28 +350,6 @@ def test_full_text_search_matches_body_column_only(tmp_path):
     )] == ["body-only"]
 
 
-def test_full_text_search_indexes_chinese_compiled_fields(tmp_path):
-    """正文全英文时，中文查询仍要能命中 abstract_zh / thesis_zh，且编译产物变化触发重索引。"""
-    archive = tmp_path / "archive"
-    archive.mkdir()
-    (archive / "zh.txt").write_text("Free cash flow inflected higher.", encoding="utf-8")
-    (archive / "plain.txt").write_text("Free cash flow inflected higher.", encoding="utf-8")
-    index = ImaSearchIndex(tmp_path / "ima-search.db", archive, ("semi",))
-    row = _row("semi", "zh", "zh.txt")
-    index.sync([
-        {**row, "abstract_zh": "算力资本开支回升", "thesis_zh": "维持买入评级"},
-        _row("semi", "plain", "plain.txt"),
-    ])
-
-    assert [item["media_id"] for item in index.search("算力资本开支", ["semi"], 10)] == ["zh"]
-    assert [item["media_id"] for item in index.search("维持买入评级", ["semi"], 10)] == ["zh"]
-
-    changed = {**row, "abstract_zh": "算力资本开支回升", "thesis_zh": "下调至中性"}
-    assert index.sync([changed])["updated"] == 1
-    assert index.search("维持买入评级", ["semi"], 10) == []
-    assert [item["media_id"] for item in index.search("下调至中性", ["semi"], 10)] == ["zh"]
-
-
 def test_full_text_search_supports_bounded_offset_pages(tmp_path):
     archive = tmp_path / "archive"
     archive.mkdir()

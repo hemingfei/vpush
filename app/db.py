@@ -5478,14 +5478,11 @@ class DB:
         groups = list(dict.fromkeys(str(item).strip() for item in group_ids if str(item).strip()))
         if not groups:
             return []
-        # thesis（LLM 中文核心逻辑）随行带出供全文检索索引使用，不在列表接口暴露。
+        # ponytail: 全库 FTS 体量索引在生产跑不动（NFS 归档 + 1C1G），这里不再带 thesis。
         return self._rows(
-            "SELECT d.*, re.thesis AS thesis_zh FROM ima_document_index d "
-            "LEFT JOIN report_extractions re "
-            "ON re.group_id = d.group_id AND re.media_id = d.media_id "
-            "AND re.status = 'ok' "
-            f"WHERE d.group_id IN ({', '.join('?' for _ in groups)}) "
-            "ORDER BY d.group_id, d.media_id",
+            "SELECT * FROM ima_document_index "
+            f"WHERE group_id IN ({', '.join('?' for _ in groups)}) "
+            "ORDER BY group_id, media_id",
             groups,
         )
 

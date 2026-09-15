@@ -3504,15 +3504,11 @@ class ImaDocumentService:
         }
 
     def _sync_full_text_index(self) -> None:
-        if self.search_index is None:
+        if self.search_index is None or not self.search_index.enabled:
             return
         try:
-            # 索引范围跟随产品组（IMA 组 + 启用本地库 + 飞书），不靠 IMA_SEARCH_GROUP_IDS 手工维护：
-            # 新增组/本地库后下一轮 sync 自动补齐。必须在 enabled 判断之前——env 为空时
-            # 全靠这一步把索引打开（否则整个 FTS 路径静默不生效）。
-            self.search_index.add_group_ids(group.id for group in self.product_groups())
-            if not self.search_index.enabled:
-                return
+            # 范围仍由 IMA_SEARCH_GROUP_IDS 决定（生产上 Archive 在 NFS 上，全库建体量索引要数小时，
+            # 扩展到全部产品组已回退，中文召回由 db.py 的 LIKE 路径负责）。
             rows = self.db.ima_document_index_rows(self.search_index.group_ids)
             self.search_index.sync(rows)
         except Exception:  # noqa: BLE001 - optional search must not stop IMA workers
