@@ -22,7 +22,7 @@ export function createMxViewsView(dependencies) {
     followed: new Set(), kolMode: "kol", kolExpanded: false, kolStockTargets: [],
     feedBatches: [], feedKey: "", feedPending: false, feedLoading: false, feedFailed: false,
     feedView: "stream", feedDirs: new Set(), feedActs: new Set(), feedKols: new Set(),
-    feedKolOpen: false, feedKolSearch: "", feedFreshPending: false, actionTags: [],
+    feedSearch: "", feedKolOpen: false, feedKolSearch: "", feedFreshPending: false, actionTags: [],
     applySeq: 0, tlDrag: false, tlPreviewIdx: -1,
     hlKey: "", hlPinned: false, boardMode: { topic: "heat", stock: "heat" },
     boardStep: 1, hlDocBound: false };
@@ -36,6 +36,7 @@ export function createMxViewsView(dependencies) {
       localStorage.setItem(MXV_FILTERS_KEY, JSON.stringify({
         view: _mxv.feedView, dirs: [..._mxv.feedDirs],
         acts: [..._mxv.feedActs], kols: [..._mxv.feedKols],
+        search: _mxv.feedSearch,
       }));
     } catch (e) { /* 存储不可用（隐私模式等）：筛选仍在本页生效，只是不跨刷新 */ }
   }
@@ -54,10 +55,11 @@ export function createMxViewsView(dependencies) {
       if (Array.isArray(saved.kols)) {
         _mxv.feedKols = new Set(saved.kols.map(Number).filter((n) => Number.isInteger(n) && n > 0));
       }
+      if (typeof saved.search === "string") _mxv.feedSearch = saved.search.slice(0, 100);
     } catch (e) { /* 坏数据忽略，用默认筛选 */ }
   }
 
-  mxvLoadFilters(); // 恢复上次筛选（视图/方向/操作词/大V），点进抽屉也带着同一套状态
+  mxvLoadFilters(); // 恢复上次筛选（视图/方向/操作词/大V/搜索词），点进抽屉也带着同一套状态
 
   // 点页面空白/Esc 解除高亮锁定、关闭月历（工厂级只绑一次；事件里按路由存活状态自然失效）
   if (!_mxv.hlDocBound) {
@@ -78,6 +80,15 @@ export function createMxViewsView(dependencies) {
       if (e.key !== "Escape") return;
       if (document.querySelector(".mxv-cal")) { mxvCalClose(); return; }
       if (_mxv.feedKolOpen) { _mxv.feedKolOpen = false; mxvRenderFeed(); return; }
+      const fsearch = document.activeElement && document.activeElement.closest
+        && document.activeElement.closest(".mxv-fsearch");
+      if (fsearch) { // Esc 清空观点流搜索并归还焦点，连续筛选不用找清空按钮
+        _mxv.feedSearch = "";
+        mxvRenderFeed();
+        const el = document.querySelector(".mxv-fsearch");
+        if (el) el.focus();
+        return;
+      }
       if (_mxv.hlPinned) {
         _mxv.hlPinned = false;
         mxvSetHighlight("");
@@ -913,8 +924,9 @@ export function createMxViewsView(dependencies) {
     if (t) mxvOpenTarget(t.type, t.name);
   }
 
-  // ---- 实时观点流：首批次→选定快照批次（快照语义，回看不显示其后批次），批内时间倒序 ----
-  // 批内两列报纸流：左列装较新一半（顶部=最新），右列续排（底部=最早）；窄屏回落单列
+  // ---- 实时观点流：首批次→选定快照批次（快照语义，回看不显示其后批次）；展示按观点发生
+  // 时间取整到整点/半点（00/30）分时段，时段内时间倒序、新时段在前 ----
+  // 时段内两列报纸流：左列装较新一半（顶部=最新），右列续排（底部=最早）；窄屏回落单列
   function mxvFeedItemHtml(o, fresh) {
     const kol = o.kol_name || "";
     const kolShort = kol.length > 6 ? `${kol.slice(0, 6).replace(/[（(【\[]$/, "")}…` : kol; // 大V名最多展示6字，全名见悬浮
@@ -930,8 +942,8 @@ export function createMxViewsView(dependencies) {
   }
 
   // ---- 观点流筛选与视图：右上角切换 观点流/个股/题材/大V；筛选三组多选——方向（多/空/中）、
-  // 操作词（词表词逐个多选，随观点数据自动出现）、大V（搜索多选下拉）；
-  // 全部前端现算，流视图筛选后空批次整段隐藏，「重置」一键清空 ----
+  // 操作词（词表词逐个多选，随观点数据自动出现）、大V（搜索多选下拉）+ 关键词搜索行（标的/大V名）；
+  // 全部前端现算，流视图筛选后空时段整段隐藏，「重置」一键清空 ----
   function mxvFeedPool() {
     const at = _mxv.at || "";
     return (_mxv.feedBatches || []).filter((b) => !at || String(b.snapshot_at) <= at);
@@ -944,10 +956,32 @@ export function createMxViewsView(dependencies) {
     return out;
   }
 
+  // 流视图时段分桶：按观点发生时间向下取整到整点/半点（00/30）；key 含日期防跨日串组，
+  // 缺 occurred_at 的兜底进「—」组（key 空串排序自然垫底）
+  function mxvFeedBucketKey(occurredAt) {
+    const m = /^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2})/.exec(String(occurredAt || ""));
+    if (!m) return { key: "", label: "—", end: "" };
+    const pad = (x) => String(x).padStart(2, "0");
+    const hhmm = (mins) => `${pad(Math.floor(mins / 60))}:${pad(mins % 60)}`;
+    const start = Number(m[2]) * 60 + Number(m[3]);
+    const from = start - (start % 30);
+    return { key: `${m[1]} ${hhmm(from)}`, label: hhmm(from), end: hhmm(from + 29) };
+  }
+
+  function mxvFeedSearchKws() {
+    return _mxv.feedSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  }
+
   function mxvFeedMatch(o) {
     if (_mxv.feedDirs.size && !_mxv.feedDirs.has(o.direction)) return false;
     if (_mxv.feedActs.size && !_mxv.feedActs.has(o.action || "")) return false;
     if (_mxv.feedKols.size && !_mxv.feedKols.has(Number(o.kol_id))) return false;
+    const kws = mxvFeedSearchKws();
+    // 关键词搜标的/大V名（空格分隔=全部命中才留）；大小写不敏感，个股/题材同名都算
+    if (kws.length) {
+      const hay = `${o.target_name || ""}\n${o.kol_name || ""}`.toLowerCase();
+      if (!kws.every((k) => hay.includes(k))) return false;
+    }
     return true;
   }
 
@@ -968,7 +1002,8 @@ export function createMxViewsView(dependencies) {
     // 已选但当前数据没有的词保留 chip（显示 0），否则无法取消、卡死筛选
     const actWords = [...Object.keys(actCounts).sort((a, b) => actCounts[b] - actCounts[a]),
       ...[..._mxv.feedActs].filter((w) => !(w in actCounts))];
-    const dirty = _mxv.feedDirs.size + _mxv.feedActs.size + _mxv.feedKols.size;
+    const dirty = _mxv.feedDirs.size + _mxv.feedActs.size + _mxv.feedKols.size
+      + (_mxv.feedSearch.trim() ? 1 : 0);
     const dirChip = (key, label, cls) => `<button type="button" class="mxv-fchip ${cls}${_mxv.feedDirs.has(key) ? " on" : ""}"
       data-feed-dir="${key}" aria-pressed="${_mxv.feedDirs.has(key)}">${label} ${dirCounts[key]}</button>`;
     const actChip = (word) => `<button type="button" class="mxv-fchip${_mxv.feedActs.has(word) ? " on" : ""}"
@@ -1002,6 +1037,14 @@ export function createMxViewsView(dependencies) {
         </div>`}
         </span>
         ${dirty ? `<button type="button" class="mxv-fchip" data-feed-reset>重置</button>` : ""}
+      </span>
+      <span class="mxv-fgroup">
+        <span class="lab">搜索</span>
+        <span class="mxv-fsearch-wrap">
+          <input class="form-control mxv-fsearch" placeholder="股票 / 题材 / 大V名称"
+            value="${escapeHtml(_mxv.feedSearch)}" aria-label="搜索标的或大V名称，输入即筛选">
+          ${_mxv.feedSearch.trim() ? `<button type="button" class="mxv-fchip" data-feed-search-clear aria-label="清空搜索">✕</button>` : ""}
+        </span>
       </span>
     </div>`;
   }
@@ -1140,19 +1183,27 @@ export function createMxViewsView(dependencies) {
     } else if (_mxv.feedView === "kol") {
       body = mxvFeedKolHtml(flat, allFlat);
     } else {
-      // 流视图：按批次分组两列报纸流；筛选后空批次整段隐藏
-      const shown = pool
-        .map((b) => ({ ...b, opinions: (b.opinions || []).filter(mxvFeedMatch) }))
-        .filter((b) => b.opinions.length);
-      body = shown.map((b, bi) => {
-        const ops = b.opinions;
+      // 流视图：按观点发生时间取整到整点/半点（00/30）分时段，两列报纸流；筛选后空时段整段隐藏
+      const groups = [];
+      const byBucket = new Map();
+      flat.forEach((o) => {
+        const bk = mxvFeedBucketKey(o.occurred_at);
+        const g = byBucket.get(bk.key);
+        if (g) g.ops.push(o);
+        else { groups.push({ key: bk.key, label: bk.label, end: bk.end, ops: [o] }); byBucket.set(bk.key, groups[groups.length - 1]); }
+      });
+      groups.sort((a, b) => b.key.localeCompare(a.key)); // 新时段在前（缺时间 key "" 自然垫底）
+      groups.forEach((g) => g.ops.sort((a, b) => String(b.occurred_at || "").localeCompare(String(a.occurred_at || ""))));
+      const poolBuckets = new Set(allFlat.map((o) => mxvFeedBucketKey(o.occurred_at).key));
+      body = groups.map((g, gi) => {
+        const ops = g.ops;
         const cut = Math.ceil(ops.length / 2); // 左列 = 较新一半；最早一条落在右列底部
         const cols = ops.length > 1 ? [ops.slice(0, cut), ops.slice(cut)] : [ops];
         const grid = `<div class="mxv-feed-cols${ops.length > 1 ? "" : " single"}">${cols.map((col, ci) =>
           `<div class="mxv-feed-col">${col.map((o, i) =>
-            mxvFeedItemHtml(o, _mxv.atLatest && _mxv.feedFreshPending && bi === 0 && (ops.length > 1 ? ci === 0 : true) && i === 0)).join("")}</div>`).join("")}</div>`;
-        return `<div class="mxv-feed-sep"><span>批次 ${escapeHtml(b.snapshot_at)} · ${ops.length} 条</span></div>${grid}`;
-      }).join("") + `<div class="mxv-feed-sep"><span>共 ${flat.length} 条 · ${shown.length} 批次${shown.length < pool.length ? `（原 ${pool.length} 批）` : ""}</span></div>`;
+            mxvFeedItemHtml(o, _mxv.atLatest && _mxv.feedFreshPending && gi === 0 && (ops.length > 1 ? ci === 0 : true) && i === 0)).join("")}</div>`).join("")}</div>`;
+        return `<div class="mxv-feed-sep"><span>时段 ${escapeHtml(g.end ? `${g.label}~${g.end}` : g.label)} · ${ops.length} 条</span></div>${grid}`;
+      }).join("") + `<div class="mxv-feed-sep"><span>共 ${flat.length} 条 · ${groups.length} 时段${groups.length < poolBuckets.size ? `（原 ${poolBuckets.size} 时段）` : ""}</span></div>`;
     }
     feed.innerHTML = head + body;
     _mxv.feedFreshPending = false; // fresh 只播一次，之后的筛选重渲染不再闪
@@ -1202,10 +1253,18 @@ export function createMxViewsView(dependencies) {
         mxvRenderFeed();
         return;
       }
+      if (e.target.closest("[data-feed-search-clear]")) {
+        _mxv.feedSearch = "";
+        mxvRenderFeed();
+        const el = document.querySelector(".mxv-fsearch");
+        if (el) el.focus();
+        return;
+      }
       if (e.target.closest("[data-feed-reset]")) {
         _mxv.feedDirs.clear();
         _mxv.feedActs.clear();
         _mxv.feedKols.clear();
+        _mxv.feedSearch = "";
         mxvRenderFeed();
         return;
       }
@@ -1246,6 +1305,15 @@ export function createMxViewsView(dependencies) {
       mxvFeedToggle(_mxv.feedKols, Number(box.dataset.feedKol));
     });
     feed.addEventListener("input", (e) => {
+      // 搜索行（标的/大V名关键词）：输入即筛选，重渲染后恢复焦点与光标
+      const fsearch = e.target.closest(".mxv-fsearch");
+      if (fsearch) {
+        _mxv.feedSearch = fsearch.value;
+        mxvRenderFeed();
+        const el = document.querySelector(".mxv-fsearch");
+        if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+        return;
+      }
       const search = e.target.closest(".mxv-fkol-search");
       if (!search) return;
       _mxv.feedKolSearch = search.value;

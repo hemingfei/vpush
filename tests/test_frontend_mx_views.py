@@ -121,12 +121,20 @@ def test_mx_views_kol_overview_modes_and_collapse():
     assert re.search(r"MXV_KOL_COLLAPSE_ROWS = 4", js)
 
 
-def test_mx_views_feed_all_batches_and_drawer_desc():
-    """实时观点流走全天 feed 接口（按选定快照截断渲染）；抽屉时间线最新在上、带前端现算的翻转徽标。"""
+def test_mx_views_feed_half_hour_groups_and_drawer_desc():
+    """实时观点流走全天 feed 接口（按选定快照截断渲染），展示按观点发生时间取整到
+    整点/半点（00/30）分时段（不再按研判批次分组）；抽屉时间线最新在上、带前端现算的翻转徽标。"""
     js = MX_VIEWS_JS
     assert "/api/mx-views/feed" in js
     feed = _fn_body("mxvRenderFeed", js)
-    assert "mxv-feed-sep" in feed and "批次" in feed
+    assert "mxv-feed-sep" in feed and "时段" in feed
+    assert "mxvFeedBucketKey(o.occurred_at)" in feed  # 分桶键=观点发生时间（非批次时刻）
+    assert "b.key.localeCompare(a.key)" in feed  # 新时段在前，缺时间兜底组垫底
+    assert "`${g.label}~${g.end}`" in feed  # 分隔行标出半小时区间
+    assert "groups.length < poolBuckets.size" in feed  # 汇总行注明筛选隐藏的时段数
+    bucket = _fn_body("mxvFeedBucketKey", js)
+    assert "start % 30" in bucket  # 向下取整到整点/半点
+    assert "/^(\\d{4}-\\d{2}-\\d{2}) (\\d{2}):(\\d{2})/" in bucket  # key 含日期防跨日串组
     tl = _fn_body("mxvTimelineListHtml", js)
     assert "localeCompare" in tl  # 倒序排（最新在上）
     assert "mxvFlipBadge(rows" in tl  # 翻转徽标与同 (大V,标的) 上一条现算比对
@@ -141,18 +149,18 @@ def test_mx_views_feed_cutoff_at_selected_snapshot():
     assert "filter((b) => !at || String(b.snapshot_at) <= at)" in pool  # 截断选定时刻之后的批次
     feed = _fn_body("mxvRenderFeed", MX_VIEWS_JS)
     assert "mxvFeedPool()" in feed and "截至" in feed and "_mxv.atLatest" in feed  # 回看时标题注明截止时刻
-    # 批次统计基于截断后的 pool（flat/shown 均出自 mxvFeedPool 结果）
+    # 时段统计基于截断后的 pool（flat/allFlat 均出自 mxvFeedPool 结果）
     assert feed.index("mxvFeedPool()") < feed.index("mxvFeedFlat(pool)")
 
 
 def test_mx_views_feed_two_column_batch_layout():
-    """实时观点流批内两列报纸流：左列装较新一半（顶部=最新），右列底部=最早；窄屏回落单列。"""
+    """实时观点流时段内两列报纸流：左列装较新一半（顶部=最新），右列底部=最早；窄屏回落单列。"""
     js = MX_VIEWS_JS
     feed = _fn_body("mxvRenderFeed", js)
     assert "mxv-feed-cols" in feed and "mxv-feed-col" in feed
     assert "Math.ceil(" in feed  # 左列 = 较新一半（向上取整）
     assert "slice(0, cut)" in feed and "slice(cut)" in feed
-    assert "single" in feed  # 单条批次不拆两列
+    assert "single" in feed  # 单条时段不拆两列
     css = (STATIC / "mx-views.css").read_text()
     assert ".mxv-feed-cols{display:grid;grid-template-columns:1fr 1fr" in css
     compact = css.replace(" ", "")
@@ -532,7 +540,7 @@ def test_mx_render_boards_feed_rerender_is_skippable():
 
 def test_mx_views_feed_filters():
     """观点流筛选：右上角 观点流/个股/大V 视图切换；方向/操作词/大V 三组多选 +
-    「操作」一键全选真实操作 + 搜索多选大V下拉 + 重置；空批次隐藏。"""
+    「操作」一键全选真实操作 + 搜索多选大V下拉 + 关键词搜索行（标的/大V名，输入即筛选）+ 重置；空时段隐藏。"""
     js = MX_VIEWS_JS
     assert "mxvFeedAction" not in js and "mxvFeedKol(" not in js  # 旧单选处理器已移除
     assert 'data-feed-view=' in js and '${key}' in js  # 右上角四视图切换（模板插值）
@@ -577,3 +585,14 @@ def test_mx_views_feed_filters():
     assert "mxv-fchip.zero" in Path("app/static/mx-views.css").read_text(encoding="utf-8")
     ffn = _fn_body("mxvFeedFiltersHtml", js)
     assert "[..._mxv.feedActs].filter((w) => !(w in actCounts))" in ffn  # 观点流同样保留已选 0 计数词
+    # 关键词搜索行：搜标的（个股/题材）与大V名，空格分隔=全部命中；随筛选持久化、计入 dirty、重置/清空按钮/Esc 都能清
+    assert 'feedSearch: ""' in js  # 状态初始化
+    assert "search: _mxv.feedSearch" in _fn_body("mxvSaveFilters", js)  # 与方向/操作/大V 同套持久化
+    assert 'typeof saved.search === "string"' in _fn_body("mxvLoadFilters", js)
+    match_fn = _fn_body("mxvFeedMatch", js)
+    assert "mxvFeedSearchKws()" in match_fn and "kws.every((k) => hay.includes(k))" in match_fn
+    assert "mxv-fsearch" in ffn and "data-feed-search-clear" in ffn
+    assert "_mxv.feedSearch.trim() ? 1 : 0" in ffn  # 搜索词计入 dirty（亮「重置」）
+    bind = _fn_body("mxvBindFeedHighlight", js)
+    assert 'data-feed-search-clear' in bind and ".mxv-fsearch" in bind  # 清空按钮 + 输入委托
+    assert bind.count('_mxv.feedSearch = ""') >= 2  # 清空按钮与「重置」都清搜索词
