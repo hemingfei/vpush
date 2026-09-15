@@ -4600,6 +4600,8 @@ def test_mobile_navigation_is_icon_only_and_accessible():
     for route, icon, label in (
         ("timeline", "HOME_ICON", "动态"),
         ("news", "NEWS_ICON", "财经新闻"),
+        ("mx-views", "MX_VIEWS_ICON", "研判"),
+        ("holdings", "HOLDINGS_ICON", "持股"),
         ("home", "GRID_ICON", "广场"),
         ("settings", "USER_ICON", "个人设置"),
     ):

@@ -384,6 +384,18 @@ class NewsSourceUpdateIn(BaseModel):
     enabled: bool | None = None
 
 
+class HoldingCreateIn(BaseModel):
+    target_type: str
+    target_name: str
+    note: str = ""
+
+
+class HoldingUpdateIn(BaseModel):
+    target_type: str | None = None
+    target_name: str | None = None
+    note: str | None = None
+
+
 class NewsFeedCreateIn(BaseModel):
     name: str
     url: str
@@ -610,6 +622,18 @@ class AliasCandidateActionIn(BaseModel):
 class TagReviewBatchIn(BaseModel):
     ids: list[int]
     action: Literal["approve", "reject"]
+
+
+class TagReviewVoteIn(BaseModel):
+    """大众评审投票：普通用户对待审标签的通过/拒绝意向。"""
+    action: Literal["approve", "reject"]
+
+
+class TagReviewConfigIn(BaseModel):
+    """大众评审配置：开关 + 一致裁决人数 + 最终裁决人数（区间校验在保存层）。"""
+    public_voting: bool
+    unanimous_n: int
+    max_voters: int
 
 
 class PostTagEditIn(BaseModel):
@@ -6630,6 +6654,177 @@ def create_api_router(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    # ---- 持股研判（用户端）：持股清单 + 相关观点流 ----
+    HOLDINGS_MAX = 30
+    HOLDING_NAME_MAX = 40
+    HOLDING_NOTE_MAX = 200
+    HOLDING_EVIDENCE_MAX = 3
+    HOLDINGS_WINDOW_DAYS = 30
+
+    def _stock_universe_names() -> list[str]:
+        """个股合法名单：常用股票名表（含两字名）+ 全市场 3 字及以上简称，去排除项。"""
+        from .stock_universe import names_for_plain_text_tagging
+
+        return names_for_plain_text_tagging(
+            db.get_stock_names(), db.get_stock_name_exclusions()
+        )
+
+    def _holding_validate(target_type, target_name) -> tuple[str, str]:
+        """入参校验 + 归一，返回 (target_type, target_name)；个股强制在名单内。"""
+        if target_type not in ("stock", "topic"):
+            raise HTTPException(status_code=400, detail="target_type 须为 stock|topic")
+        name = str(target_name or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="标的名称不能为空")
+        if len(name) > HOLDING_NAME_MAX:
+            raise HTTPException(status_code=400, detail=f"标的名称最多 {HOLDING_NAME_MAX} 个字符")
+        if target_type == "stock":
+            from .stock_universe import normalize_name
+
+            norm = normalize_name(name)
+            if norm not in set(_stock_universe_names()):
+                raise HTTPException(status_code=400, detail=f"未收录的 A 股简称: {name}")
+            return "stock", norm
+        return "topic", name
+
+    @router.get("/my/holdings")
+    async def my_holdings_list(current_user: dict = Depends(get_current_user)):
+        return db.list_user_holdings(int(current_user["id"]))
+
+    @router.post("/my/holdings", status_code=201)
+    async def my_holding_add(body: HoldingCreateIn,
+                             current_user: dict = Depends(get_current_user)):
+        uid = int(current_user["id"])
+        ttype, name = _holding_validate(body.target_type, body.target_name)
+        if db.count_user_holdings(uid) >= HOLDINGS_MAX:
+            raise HTTPException(status_code=400, detail=f"持股最多 {HOLDINGS_MAX} 条")
+        note = (body.note or "").strip()[:HOLDING_NOTE_MAX]
+        try:
+            hid = db.add_user_holding(uid, ttype, name, note)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
+        return db.get_user_holding(uid, hid)
+
+    @router.patch("/my/holdings/{holding_id}")
+    async def my_holding_update(holding_id: int, body: HoldingUpdateIn,
+                                current_user: dict = Depends(get_current_user)):
+        uid = int(current_user["id"])
+        current = db.get_user_holding(uid, holding_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="持股不存在")
+        fields: dict = {}
+        if "target_type" in body.model_fields_set or "target_name" in body.model_fields_set:
+            # 改名 = 换标的：类型/名称须整体重新校验（另一侧取现值）
+            ttype = body.target_type if "target_type" in body.model_fields_set else current["target_type"]
+            name = body.target_name if "target_name" in body.model_fields_set else current["target_name"]
+            t, n = _holding_validate(ttype, name)
+            fields["target_type"], fields["target_name"] = t, n
+        if "note" in body.model_fields_set:
+            fields["note"] = (body.note or "").strip()[:HOLDING_NOTE_MAX]
+        if not fields:
+            return current
+        try:
+            db.update_user_holding(uid, holding_id, fields)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
+        return db.get_user_holding(uid, holding_id)
+
+    @router.delete("/my/holdings/{holding_id}", status_code=204)
+    async def my_holding_delete(holding_id: int,
+                                current_user: dict = Depends(get_current_user)):
+        uid = int(current_user["id"])
+        if db.get_user_holding(uid, holding_id) is None:
+            raise HTTPException(status_code=404, detail="持股不存在")
+        db.delete_user_holding(uid, holding_id)
+        return None
+
+    @router.get("/my/holdings/suggestions")
+    async def my_holding_suggestions(type: str, q: str = "",
+                                     current_user: dict = Depends(get_current_user)):
+        """输入建议：个股全市场名单（强校验同源）；题材只建议不拦截。"""
+        del current_user
+        q = (q or "").strip()
+        if type == "stock":
+            from .stock_universe import bundled_universe_codes, normalize_name
+
+            needle = normalize_name(q)
+            code_by_name: dict[str, str] = {}
+            for code, name in bundled_universe_codes().items():
+                code_by_name.setdefault(name, code)
+            items = []
+            for n in _stock_universe_names():
+                if needle and needle not in normalize_name(n):
+                    continue
+                items.append({"name": n, "extra": code_by_name.get(n, "")})
+                if len(items) >= 20:
+                    break
+            return {"items": items}
+        if type == "topic":
+            from datetime import date, timedelta
+
+            from .mx_view_analysis import get_topic_hints
+
+            since_day = (date.today() - timedelta(days=90)).strftime("%Y-%m-%d")
+            seen: list[str] = []
+            for n in db.recent_topic_names(since_day) + get_topic_hints(db):
+                if n not in seen:
+                    seen.append(n)
+            hits = [n for n in seen if not q or q in n][:20]
+            return {"items": [{"name": n} for n in hits]}
+        raise HTTPException(status_code=422, detail="type 须为 stock|topic")
+
+    @router.get("/my/holdings/views")
+    async def my_holding_views(after_id: int = 0, before_id: int = 0,
+                               limit: int = 50, holder: str = "",
+                               current_user: dict = Depends(get_current_user)):
+        """相关观点流 + 全窗口聚合。
+
+        after_id 增量拉新（SSE 版本变更后带游标来取）；before_id 翻旧页（加载更多）；
+        holder=type:名称 只看单标的（只过滤 items，summary 恒为全窗口口径）。
+        窗口：occurred_at 在最近 30 个自然日内（观点发生时间，跨天排序正确）。
+        """
+        from datetime import datetime, timedelta
+
+        from .mx_view_analysis import CN_TZ
+
+        uid = int(current_user["id"])
+        limit = max(1, min(int(limit), 200))
+        holder_pair = None
+        if holder:
+            ttype, _, name = holder.partition(":")
+            if ttype not in ("stock", "topic") or not name:
+                raise HTTPException(status_code=422, detail="holder 须为 stock|topic:名称")
+            holder_pair = (ttype, name)
+        since = (datetime.now(CN_TZ) - timedelta(days=HOLDINGS_WINDOW_DAYS)).strftime(
+            "%Y-%m-%d %H:%M:%S")
+        rows = db.list_holdings_opinions(uid, since, after_id=after_id,
+                                         before_id=before_id, holder=holder_pair,
+                                         limit=limit)
+        item_ev: list[list[int]] = []
+        for r in rows:
+            try:
+                ids = [int(i) for i in json.loads(r["evidence_post_ids"] or "[]")]
+            except (TypeError, ValueError):
+                ids = []
+            item_ev.append(ids[:HOLDING_EVIDENCE_MAX])
+        all_ev = list(dict.fromkeys(i for ids in item_ev for i in ids))
+        ev_by_id = db.get_posts_brief_by_ids(all_ev)
+        items = [{
+            "id": int(r["id"]), "target_type": r["target_type"],
+            "target_name": r["target_name"], "direction": r["direction"],
+            "action": r["action"] or "", "confidence": r["confidence"] or "",
+            "summary": r["summary"] or "", "occurred_at": r["occurred_at"] or "",
+            "trading_day": r["trading_day"], "snapshot_at": r["snapshot_at"],
+            "kol_name": r["kol_name"] or "", "avatar": r["avatar_url"] or "",
+            "evidence": [ev_by_id[i] for i in ids if i in ev_by_id],
+        } for r, ids in zip(rows, item_ev)]
+        return {
+            "window_days": HOLDINGS_WINDOW_DAYS,
+            "max_id": db.max_mx_opinion_id_any(),
+            "summary": {"targets": db.holdings_opinion_summary(uid, since)},
+            "items": items,
+        }
+
     @router.get("/tags")
     def list_tags(request: Request, user: dict = Depends(get_current_user)):
         """贴文话题词表：登录用户可读（动态页标签筛选），管理与写入仍需管理员。
@@ -7273,6 +7468,144 @@ def create_api_router(
         remove_topic_candidate(db, str(body.get("name") or ""))
         _audit(admin, "mx_view_candidate_dismiss", str(body.get("name") or ""))
         return {"ok": True}
+
+    # ---- 待审标签大众评审：普通用户点开待审标签投票，票型达标自动裁决 ----
+
+    def _apply_tag_review_verdict(review_id: int, status: str) -> dict | None:
+        """条件裁决一条审核（仅 pending 可裁），approve 时把标签追加到帖子。
+
+        追加失败回滚为 pending 等后续投票再触发，报 409 给出确切原因；被并发
+        抢先裁决时返回 None（调用方按最终状态响应）。
+        """
+        review = db.decide_tag_review(review_id, status)
+        if review is None:
+            return None
+        if status == "approved" and not db.append_post_tag(review["post_id"], review["tag"]):
+            db.set_tag_review_status(review_id, "pending")
+            raise HTTPException(
+                status_code=409,
+                detail="裁决为通过但追加标签失败："
+                + (db.post_tag_add_error(review["post_id"], review["tag"]) or "未知原因"),
+            )
+        return review
+
+    def _tag_review_payload(review_id: int, user: dict) -> dict:
+        """用户侧审核详情：审核行 + 帖子摘要 + 投票进度 + 配置与当前用户可操作性。"""
+        from .tag_review_voting import get_review_config
+
+        review = db.get_tag_review(review_id)
+        if review is None:
+            raise HTTPException(status_code=404, detail="审核记录不存在")
+        cfg = get_review_config(db)
+        is_admin = bool(user.get("is_admin"))
+        summary = db.tag_review_vote_summary(review_id, user_id=user["id"])
+        post = db.get_post(review["post_id"])
+        excerpt = ""
+        if post:
+            text = str(post.get("content") or post.get("title") or "").strip()
+            excerpt = (text[:120] + "…") if len(text) > 120 else text
+        return {
+            "id": review["id"],
+            "post_id": review["post_id"],
+            "tag": review["tag"],
+            "kind": review["kind"],
+            "confidence": review["confidence"],
+            "source": str(review["source"] or "llm"),
+            "direction": str(review["direction"] or ""),
+            "status": review["status"],
+            "votes": {
+                "approve": summary["approve"],
+                "reject": summary["reject"],
+                "total": summary["total"],
+            },
+            "my_vote": summary.get("my_vote"),
+            "post": (
+                {
+                    "kol_name": post.get("kol_name") or "",
+                    "published_at": post.get("published_at") or "",
+                    "excerpt": excerpt,
+                }
+                if post
+                else None
+            ),
+            "config": cfg,
+            "is_admin": is_admin,
+            # 已裁决的不能再操作；未裁决时管理员随时可直判，普通用户看开关
+            "can_vote": review["status"] == "pending" and (is_admin or cfg["public_voting"]),
+        }
+
+    @router.get("/tag-reviews/{review_id}")
+    def tag_review_detail(review_id: int, user: dict = Depends(get_current_user)):
+        """待审标签审核详情（弹窗数据），所有登录用户可读。"""
+        return _tag_review_payload(review_id, user)
+
+    @router.post("/tag-reviews/{review_id}/vote")
+    def vote_tag_review(review_id: int, body: TagReviewVoteIn, user: dict = Depends(get_current_user)):
+        """对待审标签投出一票：管理员直判立即生效；普通用户计入票型，达标自动裁决。
+
+        一致裁决（unanimous_n 人全部同向）立即定局；票型分裂继续收集，
+        达到 max_voters 人按多数定局（平票判拒绝）。一人一票，重复提交不改投。
+        """
+        from .tag_review_voting import (
+            VOTE_APPROVE,
+            VOTE_REJECT,
+            get_review_config,
+            resolve_vote_decision,
+        )
+
+        review = db.get_tag_review(review_id)
+        if review is None:
+            raise HTTPException(status_code=404, detail="审核记录不存在")
+        if str(review["status"]) != "pending":
+            raise HTTPException(status_code=409, detail="该标签已完成审核")
+        is_admin = bool(user.get("is_admin"))
+        cfg = get_review_config(db)
+        if is_admin:
+            verdict = "approved" if body.action == VOTE_APPROVE else "rejected"
+            decided = _apply_tag_review_verdict(review_id, verdict)
+            if decided is not None:
+                _audit(
+                    user,
+                    "decide_post_tag_review",
+                    detail=f"post={review['post_id']} tag={review['tag']} verdict={verdict}",
+                )
+        else:
+            if not cfg["public_voting"]:
+                raise HTTPException(status_code=403, detail="标签大众评审未开放，仅管理员可审核")
+            db.add_tag_review_vote(review_id, user["id"], body.action)
+            summary = db.tag_review_vote_summary(review_id)
+            verdict = resolve_vote_decision(summary["approve"], summary["reject"], cfg)
+            if verdict:
+                # resolve 返回票向（approve/reject），落库状态是 approved/rejected
+                _apply_tag_review_verdict(
+                    review_id, "approved" if verdict == VOTE_APPROVE else "rejected"
+                )
+        return _tag_review_payload(review_id, user)
+
+    @router.get("/admin/tag-review/config", dependencies=[Depends(require_admin)])
+    def admin_tag_review_config():
+        """大众评审配置：普通用户投票开关、一致裁决人数、最终裁决人数。"""
+        from .tag_review_voting import get_review_config
+
+        return get_review_config(db)
+
+    @router.put("/admin/tag-review/config", dependencies=[Depends(require_admin)])
+    def admin_tag_review_update_config(body: TagReviewConfigIn, admin: dict = Depends(require_admin)):
+        """保存大众评审配置；人数区间/大小关系非法返回 400 与具体原因。"""
+        from .tag_review_voting import save_review_config
+
+        clean, err = save_review_config(db, body.public_voting, body.unanimous_n, body.max_voters)
+        if err:
+            raise HTTPException(status_code=400, detail=err)
+        _audit(
+            admin,
+            "tag_review_config",
+            detail=(
+                f"public_voting={clean['public_voting']} unanimous_n={clean['unanimous_n']} "
+                f"max_voters={clean['max_voters']}"
+            ),
+        )
+        return {"ok": True, "config": clean}
 
     @router.get("/admin/post-tag-reviews", dependencies=[Depends(require_admin)])
     def admin_post_tag_reviews(status: str = "pending", source: str = ""):

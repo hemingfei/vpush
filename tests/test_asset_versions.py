@@ -14,6 +14,7 @@ def make_tree(tmp_path: Path) -> Path:
     (static / "views").mkdir()
     (static / "style.css").write_text("body { color: black; }\n")
     (static / "mx-views.css").write_text(".mxv-root { color: red; }\n")
+    (static / "holdings.css").write_text(".hd-root { color: blue; }\n")
     (static / "vendor" / "design-tokens.css").write_text(":root { --color: black; }\n")
     (static / "app.js").write_text("import './core/html.js';\n")
     (static / "core" / "html.js").write_text("export const x = 1;\n")
@@ -22,6 +23,7 @@ def make_tree(tmp_path: Path) -> Path:
         '<link rel="stylesheet" href="/vendor/design-tokens.css?v=old">\n'
         '<link rel="stylesheet" href="/style.css?v=old">\n'
         '<link rel="stylesheet" href="/mx-views.css?v=old">\n'
+        '<link rel="stylesheet" href="/holdings.css?v=old">\n'
         '<script type="module" src="/app.js?v=old"></script>\n'
     )
     (static / "sw.js").write_text(
@@ -57,6 +59,7 @@ def test_sync_is_deterministic(tmp_path: Path):
     [
         "app/static/style.css",
         "app/static/mx-views.css",
+        "app/static/holdings.css",
         "app/static/vendor/design-tokens.css",
         "app/static/app.js",
         "app/static/core/html.js",

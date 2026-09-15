@@ -17,6 +17,11 @@ def _normalize_name(name: str) -> str:
     return cleaned.replace("Ａ", "A").replace("Ｂ", "B").strip()
 
 
+def normalize_name(name: str) -> str:
+    """公开别名：用户输入个股名归一（持股校验与建议匹配共用，与词库同口径）。"""
+    return _normalize_name(name)
+
+
 def _load_payload() -> dict:
     if not _RESOURCE.is_file():
         return {}

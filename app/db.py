@@ -1159,6 +1159,18 @@ CREATE TABLE IF NOT EXISTS post_tag_reviews (
 );
 CREATE INDEX IF NOT EXISTS idx_post_tag_reviews_status ON post_tag_reviews(status, id);
 
+-- 待审标签大众评审投票：普通用户对 pending 审核记录一人一票（不可改投），
+-- 管理员直判不落此表；UNIQUE(review_id, user_id) 防重复投票
+CREATE TABLE IF NOT EXISTS tag_review_votes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    review_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    vote TEXT NOT NULL,                      -- approve/reject
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(review_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_tag_review_votes_review ON tag_review_votes(review_id);
+
 -- MX 大V实时观点：结构化多空观点明细 / 研判批次 / 快照存档
 CREATE TABLE IF NOT EXISTS mx_opinions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1204,6 +1216,20 @@ CREATE TABLE IF NOT EXISTS mx_view_snapshots (
     UNIQUE (trading_day, snapshot_at)
 );
 CREATE INDEX IF NOT EXISTS idx_mx_view_snapshots_day ON mx_view_snapshots(trading_day, snapshot_at);
+
+-- 持股研判：用户的标的清单（个股/题材）。只是用户侧筛选指针，
+-- 删除只影响该用户页面内容，posts/mx_opinions 等共享数据不动
+CREATE TABLE IF NOT EXISTS user_holdings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    target_type TEXT NOT NULL,
+    target_name TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (user_id, target_type, target_name)
+);
+CREATE INDEX IF NOT EXISTS idx_user_holdings_user ON user_holdings(user_id);
 """
 
 ALLOWED_PLATFORMS = {"xueqiu", "combination", "weibo", "twitter", "ima", "zsxq", "mx", "system", "truth"}
@@ -6128,6 +6154,159 @@ class DB:
             "trading_day": trading_day, "timeline": timeline,
         }
 
+    # ---- 持股研判：用户持股（用户侧筛选指针，不触碰共享数据） ----
+    def list_user_holdings(self, user_id: int) -> list[dict]:
+        """该用户的持股清单，添加时间倒序（新持仓在前）。"""
+        return self._rows(
+            "SELECT id, target_type, target_name, note, created_at, updated_at "
+            "FROM user_holdings WHERE user_id = ? ORDER BY created_at DESC, id DESC",
+            (int(user_id),),
+        )
+
+    def get_user_holding(self, user_id: int, holding_id: int) -> dict | None:
+        rows = self._rows(
+            "SELECT id, target_type, target_name, note, created_at, updated_at "
+            "FROM user_holdings WHERE user_id = ? AND id = ?",
+            (int(user_id), int(holding_id)),
+        )
+        return rows[0] if rows else None
+
+    def count_user_holdings(self, user_id: int) -> int:
+        rows = self._rows(
+            "SELECT COUNT(*) AS c FROM user_holdings WHERE user_id = ?", (int(user_id),)
+        )
+        return int(rows[0]["c"]) if rows else 0
+
+    def add_user_holding(self, user_id: int, target_type: str, target_name: str,
+                         note: str = "") -> int:
+        try:
+            return self._execute(
+                "INSERT INTO user_holdings (user_id, target_type, target_name, note) "
+                "VALUES (?, ?, ?, ?)",
+                (int(user_id), target_type, target_name, note),
+            )
+        except sqlite3.IntegrityError:
+            raise ValueError(f"持股已存在: {target_name}") from None
+
+    def update_user_holding(self, user_id: int, holding_id: int, fields: dict) -> None:
+        """部分更新（字段已在校验层白名单过滤）；改名撞唯一约束抛 ValueError。"""
+        sets = ", ".join(f"{key} = ?" for key in fields)
+        params = list(fields.values()) + [int(user_id), int(holding_id)]
+        try:
+            self._execute(
+                f"UPDATE user_holdings SET {sets}, updated_at = datetime('now') "
+                "WHERE user_id = ? AND id = ?",
+                tuple(params),
+            )
+        except sqlite3.IntegrityError:
+            raise ValueError("持股已存在") from None
+
+    def delete_user_holding(self, user_id: int, holding_id: int) -> None:
+        self._execute(
+            "DELETE FROM user_holdings WHERE user_id = ? AND id = ?",
+            (int(user_id), int(holding_id)),
+        )
+
+    @staticmethod
+    def _holding_pairs_clause(pairs: list[tuple[str, str]]) -> tuple[str, list]:
+        clause = " OR ".join("(o.target_type = ? AND o.target_name = ?)" for _ in pairs)
+        params: list = []
+        for ttype, name in pairs:
+            params.extend([ttype, name])
+        return clause, params
+
+    def list_holdings_opinions(self, user_id: int, since: str, after_id: int = 0,
+                               before_id: int = 0, holder: tuple[str, str] | None = None,
+                               limit: int = 50) -> list[dict]:
+        """该用户持股在 since 之后的相关观点（occurred_at 倒序）。
+
+        holder 传 (target_type, target_name) 时只取该标 的（聚合卡下钻用）；
+        after_id/before_id 为 id 游标：增量拉新与「加载更多」共用一张表。
+        """
+        if holder:
+            pairs = [tuple(holder)]
+        else:
+            pairs = [(h["target_type"], h["target_name"])
+                     for h in self.list_user_holdings(user_id)]
+        if not pairs:
+            return []
+        clause, params = self._holding_pairs_clause(pairs)
+        sql = (
+            "SELECT o.id, o.target_type, o.target_name, o.direction, o.action, "
+            "o.confidence, o.summary, o.occurred_at, o.evidence_post_ids, "
+            "o.trading_day, o.snapshot_at, k.name AS kol_name, k.avatar_url "
+            "FROM mx_opinions o JOIN kols k ON k.id = o.kol_id "
+            f"WHERE o.occurred_at >= ? AND o.id > ? AND ({clause})"
+        )
+        values: list = [since, int(after_id)] + params
+        if before_id > 0:
+            sql += " AND o.id < ?"
+            values.append(int(before_id))
+        sql += " ORDER BY o.occurred_at DESC, o.id DESC LIMIT ?"
+        values.append(int(limit))
+        return self._rows(sql, tuple(values))
+
+    def holdings_opinion_summary(self, user_id: int, since: str,
+                                 ) -> list[dict]:
+        """全窗口按标的聚合的多空计数（恒为全量口径，不随 items 筛选变化）。"""
+        pairs = [(h["target_type"], h["target_name"])
+                 for h in self.list_user_holdings(user_id)]
+        if not pairs:
+            return []
+        clause, params = self._holding_pairs_clause(pairs)
+        rows = self._rows(
+            "SELECT o.target_type, o.target_name, "
+            "SUM(CASE WHEN o.direction = 'bull' THEN 1 ELSE 0 END) AS bull, "
+            "SUM(CASE WHEN o.direction = 'bear' THEN 1 ELSE 0 END) AS bear, "
+            "SUM(CASE WHEN o.direction = 'neutral' THEN 1 ELSE 0 END) AS neutral, "
+            "COUNT(*) AS total, MAX(o.occurred_at) AS latest_at "
+            "FROM mx_opinions o "
+            f"WHERE o.occurred_at >= ? AND ({clause}) "
+            "GROUP BY o.target_type, o.target_name",
+            tuple([since] + params),
+        )
+        out = [{
+            "target_type": r["target_type"], "target_name": r["target_name"],
+            "bull": int(r["bull"] or 0), "bear": int(r["bear"] or 0),
+            "neutral": int(r["neutral"] or 0), "total": int(r["total"] or 0),
+            "latest_at": r["latest_at"] or "",
+        } for r in rows]
+        out.sort(key=lambda x: (x["total"], x["latest_at"]), reverse=True)
+        return out
+
+    def recent_topic_names(self, since_day: str, limit: int = 200) -> list[str]:
+        """近 N 天研判产出过的题材名（按出现频次降序），题材建议列表用。"""
+        rows = self._rows(
+            "SELECT target_name, COUNT(*) AS c FROM mx_opinions "
+            "WHERE target_type = 'topic' AND trading_day >= ? "
+            "GROUP BY target_name ORDER BY c DESC, MAX(occurred_at) DESC LIMIT ?",
+            (since_day, int(limit)),
+        )
+        return [r["target_name"] for r in rows]
+
+    def max_mx_opinion_id_any(self) -> int:
+        """全表观点最大 id（无观点返回 0）；持股相关观点流的增量游标。"""
+        rows = self._rows("SELECT COALESCE(MAX(id), 0) AS m FROM mx_opinions")
+        return int(rows[0]["m"]) if rows else 0
+
+    def get_posts_brief_by_ids(self, post_ids) -> dict[int, dict]:
+        """证据原帖简要信息（作者/时间/正文截断），按 id 索引；不存在的 id 跳过。"""
+        unique_ids = list(dict.fromkeys(int(i) for i in post_ids or []))
+        if not unique_ids:
+            return {}
+        marks = ",".join("?" for _ in unique_ids)
+        out: dict[int, dict] = {}
+        for p in self._rows(
+            f"SELECT p.id, p.content, p.published_at, k.name AS author FROM posts p "
+            f"JOIN kols k ON k.id = p.kol_id WHERE p.id IN ({marks})",
+            tuple(unique_ids),
+        ):
+            out[int(p["id"])] = {
+                "post_id": int(p["id"]), "author": p["author"],
+                "time": p["published_at"], "content": (p["content"] or "")[:800],
+            }
+        return out
+
     def has_post(self, post_id: int) -> bool:
         """帖子是否存在（手动加标签区分 404 与标签满/重复用）。"""
         return bool(self._rows("SELECT 1 FROM posts WHERE id = ?", (int(post_id),)))
@@ -6279,6 +6458,20 @@ class DB:
             # 已在帖上的 pending 记录不展示：通过与否该标签都已在帖
             if r["status"] == "pending" and r["tag"] not in tag_set
         ]
+        if pending:
+            # 大众评审进度：管理员裁决前可参考普通用户的投票分布
+            placeholders = ",".join("?" for _ in pending)
+            vote_rows = self._rows(
+                f"SELECT review_id, vote, COUNT(*) AS n FROM tag_review_votes "
+                f"WHERE review_id IN ({placeholders}) GROUP BY review_id, vote",
+                tuple(int(p["id"]) for p in pending),
+            )
+            votes_by_review: dict[int, dict[str, int]] = {}
+            for vr in vote_rows:
+                votes_by_review.setdefault(int(vr["review_id"]), {})[str(vr["vote"])] = int(vr["n"])
+            for p in pending:
+                counts = votes_by_review.get(int(p["id"]), {})
+                p["votes"] = {"approve": counts.get("approve", 0), "reject": counts.get("reject", 0)}
         row.update({"tags": tags, "llm_tags": llm_tags, "pending_reviews": pending})
         return row
 
@@ -6329,6 +6522,60 @@ class DB:
         )
         return review
 
+    def get_tag_review(self, review_id: int) -> dict | None:
+        """取单条审核记录（含 post_id/tag/status），不存在返回 None。"""
+        rows = self._rows("SELECT * FROM post_tag_reviews WHERE id = ?", (int(review_id),))
+        return rows[0] if rows else None
+
+    def add_tag_review_vote(self, review_id: int, user_id: int, vote: str) -> bool:
+        """记录一次大众评审投票；一人一票，重复提交忽略不改投。返回是否为新投票。"""
+        existing = self._rows(
+            "SELECT vote FROM tag_review_votes WHERE review_id = ? AND user_id = ?",
+            (int(review_id), int(user_id)),
+        )
+        if existing:
+            return False
+        self._execute(
+            "INSERT OR IGNORE INTO tag_review_votes (review_id, user_id, vote) VALUES (?, ?, ?)",
+            (int(review_id), int(user_id), str(vote)),
+        )
+        return True
+
+    def tag_review_vote_summary(self, review_id: int, user_id: int | None = None) -> dict:
+        """某审核的投票汇总：approve/reject 计数与 total；user_id 非空时带该用户所投。"""
+        rows = self._rows(
+            "SELECT vote, COUNT(*) AS n FROM tag_review_votes WHERE review_id = ? GROUP BY vote",
+            (int(review_id),),
+        )
+        counts = {str(r["vote"]): int(r["n"]) for r in rows}
+        summary = {"approve": counts.get("approve", 0), "reject": counts.get("reject", 0)}
+        summary["total"] = summary["approve"] + summary["reject"]
+        if user_id is not None:
+            mine = self._rows(
+                "SELECT vote FROM tag_review_votes WHERE review_id = ? AND user_id = ?",
+                (int(review_id), int(user_id)),
+            )
+            summary["my_vote"] = str(mine[0]["vote"]) if mine else None
+        return summary
+
+    def decide_tag_review(self, review_id: int, status: str) -> dict | None:
+        """条件裁决：仅当记录仍为 pending 时置为目标状态，返回裁决前的审核行。
+
+        并发投票下防重复/翻转裁决：记录不存在、已被裁决或条件更新被并发抢先
+        （再次读取状态与目标不符）都返回 None。approve 方的上帖失败回滚由调用方负责。
+        """
+        rows = self._rows("SELECT * FROM post_tag_reviews WHERE id = ?", (int(review_id),))
+        if not rows or str(rows[0]["status"]) != "pending":
+            return None
+        self._execute(
+            "UPDATE post_tag_reviews SET status = ? WHERE id = ? AND status = 'pending'",
+            (str(status), int(review_id)),
+        )
+        check = self._rows("SELECT status FROM post_tag_reviews WHERE id = ?", (int(review_id),))
+        if not check or str(check[0]["status"]) != str(status):
+            return None
+        return rows[0]
+
     def attach_view_directions(self, rows: list[dict]) -> list[dict]:
         """给一批帖子行附加 view_directions（{标签: bull/bear}）。
 
@@ -6365,13 +6612,14 @@ class DB:
             return rows
         placeholders = ",".join("?" for _ in ids)
         review_rows = self._rows(
-            f"SELECT post_id, tag, kind, confidence, source, direction FROM post_tag_reviews "
+            f"SELECT id, post_id, tag, kind, confidence, source, direction FROM post_tag_reviews "
             f"WHERE post_id IN ({placeholders}) AND status = 'pending'",
             tuple(ids),
         )
         by_post: dict[int, list[dict]] = {}
         for r in review_rows:
             by_post.setdefault(int(r["post_id"]), []).append({
+                "id": int(r["id"]),
                 "tag": str(r["tag"]),
                 "kind": str(r["kind"]),
                 "confidence": str(r["confidence"]),

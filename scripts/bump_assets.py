@@ -14,7 +14,7 @@ STATIC = Path("app/static")
 DIGEST_LEN = 12
 # style.css 之外的补充样式表：一并纳入内容摘要与 index.html 引用维护，
 # 改动它们也会推进 CACHE 版本，避免老客户端拿旧样式配新后端
-EXTRA_STYLESHEETS = ("mx-views.css",)
+EXTRA_STYLESHEETS = ("mx-views.css", "holdings.css")
 
 
 def asset_paths(root: Path = ROOT) -> list[Path]:

@@ -460,8 +460,8 @@ def test_timeline_long_text_keeps_navigation_in_viewport(
                 assert geometry["document"] <= width + 1, (field, geometry)
                 assert geometry["viewport"] == width, (field, geometry)
                 if width <= 768:
-                    # MOBILE_NAV 五项：动态/财经新闻/研判/广场/个人设置（hmf 加入研判）
-                    assert len(geometry["navigation"]) == 5
+                    # MOBILE_NAV 六项：动态/财经新闻/研判/持股/广场/个人设置
+                    assert len(geometry["navigation"]) == 6
                     for rect in geometry["navigation"]:
                         assert 0 <= rect["left"] < rect["right"] <= width
                         if scroll_y == 0:
@@ -501,9 +501,9 @@ def _contrast_ratio(foreground: str, background: str) -> float:
 @pytest.mark.parametrize(
     ("is_admin", "news_visible", "expected"),
     [
-        (False, False, [("timeline", "动态"), ("mx-views", "研判"), ("home", "广场"), ("settings", "个人设置")]),
-        (False, True, [("timeline", "动态"), ("news", "财经新闻"), ("mx-views", "研判"), ("home", "广场"), ("settings", "个人设置")]),
-        (True, True, [("timeline", "动态"), ("news", "财经新闻"), ("mx-views", "研判"), ("home", "广场"), ("settings", "个人设置"), ("more", "更多")]),
+        (False, False, [("timeline", "动态"), ("mx-views", "研判"), ("holdings", "持股"), ("home", "广场"), ("settings", "个人设置")]),
+        (False, True, [("timeline", "动态"), ("news", "财经新闻"), ("mx-views", "研判"), ("holdings", "持股"), ("home", "广场"), ("settings", "个人设置")]),
+        (True, True, [("timeline", "动态"), ("news", "财经新闻"), ("mx-views", "研判"), ("holdings", "持股"), ("home", "广场"), ("settings", "个人设置"), ("more", "更多")]),
     ],
 )
 @pytest.mark.parametrize("width", [320, 768])
@@ -592,8 +592,8 @@ def test_mobile_bottom_navigation_d1_feedback_restarts_without_rebuilding(page: 
 
     nav_items = page.locator("#bottom-nav .bnav-item")
     nav_items.first.wait_for(state="visible")
-    # bootstrap 管理员（news 可见）：MOBILE_NAV 五项 + admin「更多」= 6
-    expect(nav_items).to_have_count(6)
+    # bootstrap 管理员（news 可见）：MOBILE_NAV 六项 + admin「更多」= 7
+    expect(nav_items).to_have_count(7)
     button = page.locator('.bnav-item[data-route="timeline"]')
     original_button = button.element_handle()
     assert original_button is not None
@@ -638,7 +638,7 @@ def test_mobile_bottom_navigation_d1_feedback_reduced_motion_has_no_transform(pa
 
     nav_items = page.locator("#bottom-nav .bnav-item")
     nav_items.first.wait_for(state="visible")
-    expect(nav_items).to_have_count(6)
+    expect(nav_items).to_have_count(7)
     button = page.locator('.bnav-item[data-route="timeline"]')
     button.click()
     expect(button).to_have_class(re.compile(r"\bis-feedback\b"))
@@ -973,3 +973,92 @@ def test_kol_editor_uses_shared_focus_and_dirty_close_guard(page: Page):
     page.keyboard.press("Escape")
     expect(page.locator(".modal-mask")).to_have_count(0)
     expect(page.locator("#kol-edit-trigger")).to_be_focused()
+
+
+def test_holdings_view_manage_cards_feed_flow(page: Page):
+    """持股研判视图（工厂级打桩）：管理区渲染/建议回填/增改删、聚合卡筛选联动、
+    时间流依据展开；持仓变更后整页重拉（桩数据不变，断言请求与反馈）。"""
+    page.evaluate("""async () => {
+      const { createHoldingsView } = await import('/views/holdings.js');
+      document.body.innerHTML = '<main id="main"></main>';
+      const h = window.hdTest = { calls: [], flashes: [] };
+      h.holdings = [
+        {id: 1, target_type: 'stock', target_name: '贵州茅台', note: '白酒龙头'},
+        {id: 2, target_type: 'topic', target_name: 'AI算力', note: ''},
+      ];
+      h.allItems = [
+        {id: 11, target_type: 'stock', target_name: '贵州茅台', direction: 'bull', action: '', confidence: 'high', summary: '批价回暖', occurred_at: '2026-09-15 10:00:00', kol_name: '王哥', avatar: '', evidence: [{post_id: 3, author: '王哥', time: '2026-09-15 09:59:00', content: '飞天批价回暖'}]},
+        {id: 10, target_type: 'stock', target_name: '贵州茅台', direction: 'bear', action: '减仓', confidence: 'high', summary: '批价松动', occurred_at: '2026-09-15 09:30:00', kol_name: '李哥', avatar: '', evidence: []},
+        {id: 9, target_type: 'topic', target_name: 'AI算力', direction: 'neutral', action: '', confidence: 'high', summary: '中性观察', occurred_at: '2026-09-14 09:00:00', kol_name: '王哥', avatar: '', evidence: []},
+      ];
+      h.views = (holder) => ({
+        window_days: 30, max_id: 11,
+        summary: {targets: [
+          {target_type: 'stock', target_name: '贵州茅台', bull: 1, bear: 1, neutral: 0, total: 2, latest_at: '2026-09-15 10:00:00'},
+          {target_type: 'topic', target_name: 'AI算力', bull: 0, bear: 0, neutral: 1, total: 1, latest_at: '2026-09-14 09:00:00'},
+        ]},
+        items: holder ? h.allItems.filter(it => it.target_name === holder.split(':')[1]) : h.allItems,
+      });
+      h.view = createHoldingsView({
+        $: (sel) => document.querySelector(sel),
+        state: {token: ''},
+        api: async (path, options = {}) => {
+          h.calls.push({path, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : null});
+          if (path === '/api/my/holdings') return h.holdings;
+          if (path.startsWith('/api/my/holdings/suggestions')) return {items: [{name: '贵州茅台', extra: '600519'}]};
+          if (path.startsWith('/api/my/holdings/views')) {
+            const u = new URL(path, location.origin);
+            return h.views(u.searchParams.get('holder') || '');
+          }
+          return {};
+        },
+        escapeHtml: (s) => String(s ?? ''),
+        setPageTitle: () => {},
+        routeStillActive: () => true,
+        flash: (msg, type) => h.flashes.push([msg, type || 'success']),
+      });
+      Object.assign(window, h.view);
+      await h.view.renderHoldings(1);
+    }""")
+    expect(page.locator(".hd-item")).to_have_count(2)
+    expect(page.locator(".hd-card")).to_have_count(2)
+    expect(page.locator(".hd-op")).to_have_count(3)
+    expect(page.locator(".hd-op-target").first).to_have_text("贵州茅台")
+    expect(page.locator(".hd-net").first).to_have_text("净 0")  # 多空各一 → 净 0
+    # 依据原帖展开/收起
+    expect(page.locator(".hd-ev-toggle")).to_have_count(1)
+    page.locator(".hd-ev-toggle").click()
+    expect(page.locator(".hd-ev-content")).to_have_text("飞天批价回暖")
+    page.locator(".hd-ev-toggle").click()
+    expect(page.locator(".hd-ev-item")).to_have_count(0)
+    # 聚合卡筛选：请求带 holder；再点取消恢复全量
+    page.locator(".hd-card").first.click()
+    expect(page.locator(".hd-op")).to_have_count(2)
+    assert len(page.evaluate("hdTest.calls.filter(c => c.path.includes('holder='))")) == 1
+    page.locator(".hd-card").first.click()
+    expect(page.locator(".hd-op")).to_have_count(3)
+    # 建议：输入防抖后拉取候选，点选回填输入框
+    page.fill("#hd-add-input", "贵")
+    expect(page.locator(".hd-sug-item")).to_be_visible()
+    page.locator(".hd-sug-item").click()
+    assert page.input_value("#hd-add-input") == "贵州茅台"
+    # 添加：POST 携带类型/名称/备注，成功后整页重拉
+    page.fill("#hd-add-note", "新买入")
+    page.get_by_role("button", name="添加", exact=True).click()
+    adds = page.evaluate("hdTest.calls.filter(c => c.method === 'POST')")
+    assert adds == [{"path": "/api/my/holdings", "method": "POST",
+                     "body": {"target_type": "stock", "target_name": "贵州茅台", "note": "新买入"}}]
+    expect(page.locator(".hd-item")).to_have_count(2)  # 桩数据不变，重拉后仍两行
+    # 编辑：行内改名+备注 → PATCH
+    page.get_by_role("button", name="编辑").first.click()
+    page.fill("#hd-edit-name-1", "宁德时代")
+    page.get_by_role("button", name="保存", exact=True).click()
+    patches = page.evaluate("hdTest.calls.filter(c => c.method === 'PATCH')")
+    assert patches == [{"path": "/api/my/holdings/1", "method": "PATCH",
+                        "body": {"target_name": "宁德时代", "note": "白酒龙头"}}]
+    # 删除：confirm 接受后 DELETE + flash 反馈
+    page.on("dialog", lambda dialog: dialog.accept())
+    page.get_by_role("button", name="删除").first.click()
+    deletes = page.evaluate("hdTest.calls.filter(c => c.method === 'DELETE')")
+    assert deletes == [{"path": "/api/my/holdings/1", "method": "DELETE", "body": None}]
+    assert "已删除" in [f[0] for f in page.evaluate("hdTest.flashes")]

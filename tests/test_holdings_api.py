@@ -1,0 +1,209 @@
+"""持股研判用户端 API 测试：CRUD 校验、用户隔离、相关观点窗口/聚合/增量。"""
+import json
+from datetime import datetime, timedelta
+
+from test_api import auth_headers, make_client, user_headers
+
+from app.mx_view_analysis import CN_TZ
+
+
+def _ts(**delta) -> str:
+    return (datetime.now(CN_TZ) + timedelta(**delta)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+_batch_seq = 0
+
+
+def _add_opinion(db, kol_id, ttype, name, direction, occurred, summary="摘要", evidence=None):
+    """直插一条研判观点（批次号自增避让 (batch_id, kol_id, type, name) 唯一约束）。"""
+    global _batch_seq
+    _batch_seq += 1
+    return db._execute(
+        "INSERT INTO mx_opinions (batch_id, trading_day, snapshot_at, kol_id, target_type, "
+        "target_name, direction, action, confidence, summary, evidence_post_ids, occurred_at) "
+        "VALUES (?, ?, '09:20', ?, ?, ?, ?, '', 'high', ?, ?, ?)",
+        (_batch_seq, occurred[:10], kol_id, ttype, name, direction, summary,
+         json.dumps(evidence or []), occurred),
+    )
+
+
+def _mk_post(db, kol_id, external_id, content, published_at):
+    db.insert_post(platform="mx", kol_id=kol_id, external_id=external_id, title="", url="",
+                   content=content, published_at=published_at)
+    return db._rows("SELECT id FROM posts WHERE external_id = ?", (external_id,))[0]["id"]
+
+
+def test_holdings_crud_validation_and_isolation():
+    client = make_client()
+    admin = auth_headers(client)
+    other = user_headers(client, "holdings_other")
+
+    r = client.post("/api/my/holdings", headers=admin,
+                    json={"target_type": "stock", "target_name": " 贵 州 茅 台 ", "note": " 白酒 "})
+    assert r.status_code == 201
+    row = r.json()
+    # 个股名按全市场名单口径归一后落库，备注 trim
+    assert row["target_name"] == "贵州茅台" and row["note"] == "白酒"
+
+    # 重复（归一后撞唯一约束）409；同名不同类型可并存
+    assert client.post("/api/my/holdings", headers=admin,
+                       json={"target_type": "stock", "target_name": "贵州茅台"}).status_code == 409
+    topic_row = client.post("/api/my/holdings", headers=admin,
+                            json={"target_type": "topic", "target_name": "贵州茅台"}).json()
+
+    # 校验：名单外个股 / 空题材 / 非法类型 / 超长名
+    assert "未收录" in client.post(
+        "/api/my/holdings", headers=admin,
+        json={"target_type": "stock", "target_name": "不存在的股票"}).json()["detail"]
+    assert client.post("/api/my/holdings", headers=admin,
+                       json={"target_type": "topic", "target_name": "   "}).status_code == 400
+    assert client.post("/api/my/holdings", headers=admin,
+                       json={"target_type": "weird", "target_name": "x"}).status_code == 400
+    assert client.post("/api/my/holdings", headers=admin,
+                       json={"target_type": "topic", "target_name": "x" * 41}).status_code == 400
+
+    # 改名 = 换标的：整体重新校验；note 部分更新
+    r = client.patch(f"/api/my/holdings/{row['id']}", headers=admin,
+                     json={"target_name": "宁德时代", "note": "改备注"})
+    assert r.status_code == 200 and r.json()["target_name"] == "宁德时代"
+    # 类型+名称整体校验后与已有持股撞唯一约束 → 409
+    r = client.patch(f"/api/my/holdings/{topic_row['id']}", headers=admin,
+                     json={"target_type": "stock", "target_name": "宁德时代"})
+    assert r.status_code == 409
+    # 空体 PATCH 返回现值
+    r = client.patch(f"/api/my/holdings/{row['id']}", headers=admin, json={})
+    assert r.status_code == 200 and r.json()["note"] == "改备注"
+    # 不存在的持股 404
+    assert client.patch("/api/my/holdings/99999", headers=admin,
+                        json={"note": "x"}).status_code == 404
+
+    # 隔离：他人 PATCH/DELETE 一律 404；未登录 401
+    assert client.patch(f"/api/my/holdings/{row['id']}", headers=other,
+                        json={"note": "x"}).status_code == 404
+    assert client.delete(f"/api/my/holdings/{row['id']}", headers=other).status_code == 404
+    assert client.get("/api/my/holdings").status_code == 401
+    assert client.post("/api/my/holdings",
+                       json={"target_type": "topic", "target_name": "x"}).status_code == 401
+
+    # 删除 204，再删 404；列表只剩 topic 那条
+    assert client.delete(f"/api/my/holdings/{row['id']}", headers=admin).status_code == 204
+    assert client.delete(f"/api/my/holdings/{row['id']}", headers=admin).status_code == 404
+    rest = [(h["target_type"], h["target_name"])
+            for h in client.get("/api/my/holdings", headers=admin).json()]
+    assert rest == [("topic", "贵州茅台")]
+
+
+def test_holdings_limit_30():
+    client = make_client()
+    admin = auth_headers(client)
+    for i in range(30):
+        r = client.post("/api/my/holdings", headers=admin,
+                        json={"target_type": "topic", "target_name": f"题材{i:02d}"})
+        assert r.status_code == 201, r.text
+    r = client.post("/api/my/holdings", headers=admin,
+                    json={"target_type": "topic", "target_name": "第31条"})
+    assert r.status_code == 400 and "30" in r.json()["detail"]
+
+
+def test_holdings_suggestions():
+    client = make_client()
+    admin = auth_headers(client)
+    db = client.app.state.db
+    kol = db.add_kol("mx", "王哥", "room1")
+    _add_opinion(db, kol, "topic", "可控核聚变", "bull", _ts(days=-1))
+
+    stocks = client.get("/api/my/holdings/suggestions?type=stock&q=茅",
+                        headers=admin).json()["items"]
+    assert stocks[0] == {"name": "贵州茅台", "extra": "600519"}  # 常用名在前并带代码
+    assert len(stocks) <= 20
+
+    recent = client.get("/api/my/holdings/suggestions?type=topic&q=聚变",
+                        headers=admin).json()["items"]
+    assert {"name": "可控核聚变"} in recent  # 近 90 天研判产出过的题材
+    hints = client.get("/api/my/holdings/suggestions?type=topic&q=AI",
+                       headers=admin).json()["items"]
+    assert {"name": "AI算力"} in hints  # 内置词表兜底
+
+    assert client.get("/api/my/holdings/suggestions?type=bad",
+                      headers=admin).status_code == 422
+    assert client.get("/api/my/holdings/suggestions?type=stock").status_code == 401
+
+
+def test_holdings_views_window_summary_holder_and_evidence_cap():
+    client = make_client()
+    admin = auth_headers(client)
+    db = client.app.state.db
+    kol = db.add_kol("mx", "王哥", "room1")
+    ev_ids = [_mk_post(db, kol, f"p{i}", f"原帖{i}", _ts(hours=-2)) for i in range(1, 5)]
+
+    assert client.post("/api/my/holdings", headers=admin,
+                       json={"target_type": "stock", "target_name": "贵州茅台"}).status_code == 201
+    assert client.post("/api/my/holdings", headers=admin,
+                       json={"target_type": "topic", "target_name": "AI算力"}).status_code == 201
+
+    _add_opinion(db, kol, "stock", "贵州茅台", "bull", _ts(hours=-1), "批价回暖", ev_ids)
+    _add_opinion(db, kol, "stock", "贵州茅台", "bear", _ts(days=-2), "批价松动")
+    _add_opinion(db, kol, "topic", "AI算力", "neutral", _ts(hours=-3), "中性观察")
+    _add_opinion(db, kol, "stock", "贵州茅台", "bull", _ts(days=-40), "一个月窗口外")
+    _add_opinion(db, kol, "stock", "中际旭创", "bull", _ts(hours=-1), "未持有标的")
+
+    data = client.get("/api/my/holdings/views", headers=admin).json()
+    assert data["window_days"] == 30
+    # occurred_at 倒序；40 天前与未持有标的都不出现
+    assert [(it["target_type"], it["target_name"], it["direction"]) for it in data["items"]] == [
+        ("stock", "贵州茅台", "bull"),
+        ("topic", "AI算力", "neutral"),
+        ("stock", "贵州茅台", "bear"),
+    ]
+    targets = {(t["target_type"], t["target_name"]): t for t in data["summary"]["targets"]}
+    assert targets[("stock", "贵州茅台")]["bull"] == 1
+    assert targets[("stock", "贵州茅台")]["bear"] == 1
+    assert targets[("stock", "贵州茅台")]["total"] == 2
+    assert targets[("topic", "AI算力")]["neutral"] == 1
+    assert set(targets) == {("stock", "贵州茅台"), ("topic", "AI算力")}
+    assert data["max_id"] == db.max_mx_opinion_id_any()
+    # 证据原帖内联且封顶 3 条（种了 4 条）
+    newest = data["items"][0]
+    assert len(newest["evidence"]) == 3
+    assert newest["evidence"][0]["content"] == "原帖1" and newest["evidence"][0]["author"] == "王哥"
+    assert newest["kol_name"] == "王哥"
+
+    # holder 只过滤 items，summary 恒为全窗口口径；非法 holder 422
+    held = client.get("/api/my/holdings/views?holder=stock:贵州茅台", headers=admin).json()
+    assert {it["target_name"] for it in held["items"]} == {"贵州茅台"}
+    assert held["summary"] == data["summary"]
+    assert client.get("/api/my/holdings/views?holder=junk", headers=admin).status_code == 422
+    # 无持股用户空态
+    other = user_headers(client, "views_other")
+    empty = client.get("/api/my/holdings/views", headers=other).json()
+    assert empty["items"] == [] and empty["summary"]["targets"] == []
+    assert client.get("/api/my/holdings/views").status_code == 401
+
+
+def test_holdings_views_after_id_increment_and_pagination():
+    client = make_client()
+    admin = auth_headers(client)
+    db = client.app.state.db
+    kol = db.add_kol("mx", "王哥", "room1")
+    client.post("/api/my/holdings", headers=admin,
+                json={"target_type": "topic", "target_name": "固态电池"})
+    first = _add_opinion(db, kol, "topic", "固态电池", "bull", _ts(hours=-2), "旧观点")
+    second = _add_opinion(db, kol, "topic", "固态电池", "bear", _ts(hours=-1), "新观点")
+
+    full = client.get("/api/my/holdings/views", headers=admin).json()
+    assert [it["id"] for it in full["items"]] == [second, first]
+    assert full["max_id"] == second
+
+    # after_id 增量：只回游标之后的相关观点，并带当前全局 max_id
+    inc = client.get(f"/api/my/holdings/views?after_id={first}", headers=admin).json()
+    assert [it["id"] for it in inc["items"]] == [second]
+    assert inc["max_id"] == second
+    none = client.get(f"/api/my/holdings/views?after_id={second}", headers=admin).json()
+    assert none["items"] == [] and none["max_id"] == second
+
+    # before_id 翻旧页：按 id 游标取更旧一页
+    page1 = client.get("/api/my/holdings/views?limit=1", headers=admin).json()
+    assert [it["id"] for it in page1["items"]] == [second]
+    page2 = client.get(f"/api/my/holdings/views?limit=1&before_id={second}",
+                       headers=admin).json()
+    assert [it["id"] for it in page2["items"]] == [first]

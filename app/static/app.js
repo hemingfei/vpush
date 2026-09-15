@@ -3,7 +3,7 @@ import {
   ARROW_UP_ICON, BELL_ICON, BELL_OFF_ICON, BOOK_ICON, BRAIN_ICON, CHEVRON_DOWN_ICON, CHEVRON_LEFT_ICON, CHEVRON_RIGHT_ICON,
   CHEVRON_UP_ICON, COPY_ICON, DATABASE_ICON, DASHBOARD_ICON, FOLDER_ICON,
   EYE_ICON, EYE_OFF_ICON, EXTERNAL_LINK_ICON, FEISHU_DATE_ICON, FILE_TEXT_ICON, FILTER_ICON,
-  GEAR_ICON, GITHUB_ICON, GRID_ICON, HISTORY_ICON, HOME_ICON, KEY_ICON, LIST_ICON,
+  GEAR_ICON, GITHUB_ICON, GRID_ICON, HISTORY_ICON, HOLDINGS_ICON, HOME_ICON, KEY_ICON, LIST_ICON,
   MORE_ICON, MX_VIEWS_ICON, NEWS_ICON, PAPERCLIP_ICON, PLUS_ICON, REFRESH_ICON, SEARCH_ICON, SEND_ICON, STAR_SVG,
   THEME_AUTO_ICON, THEME_MOON_ICON, THEME_SUN_ICON, TRASH_ICON, USER_ICON, USER_PLUS_ICON, USERS_ICON,
   V_ICON, WSCN_LIVE_ICON, X_ICON,
@@ -21,6 +21,7 @@ import { createImaView } from "./views/ima.js";
 import { createFeishuPersonalView } from "./views/feishu-personal.js";
 import { createPushSettingsView } from "./views/push-settings.js";
 import { createMxViewsView } from "./views/mx-views.js";
+import { createHoldingsView } from "./views/holdings.js";
 import { createMarketView } from "./views/market.js";
 
 const $ = (sel) => document.querySelector(sel);
@@ -691,6 +692,7 @@ const NAV = [
     { route: "timeline", icon: LIST_ICON, label: "最新动态" },
     { route: "news", icon: NEWS_ICON, label: "财经资讯" },
     { route: "mx-views", icon: MX_VIEWS_ICON, label: "观点研判" },
+    { route: "holdings", icon: HOLDINGS_ICON, label: "持股研判" },
     { route: "knowledge", icon: BOOK_ICON, label: "研报中心" },
     { route: "home", icon: GRID_ICON, label: "订阅广场" },
     { route: "settings", icon: GEAR_ICON, label: "个人设置" },
@@ -763,6 +765,7 @@ const MOBILE_NAV = [
   { route: "timeline", icon: HOME_ICON, label: "动态" },
   { route: "news", icon: NEWS_ICON, label: "财经新闻" },
   { route: "mx-views", icon: MX_VIEWS_ICON, label: "研判" },
+  { route: "holdings", icon: HOLDINGS_ICON, label: "持股" },
   { route: "home", icon: GRID_ICON, label: "广场" },
   { route: "settings", icon: USER_ICON, label: "个人设置" },
 ];
@@ -3970,7 +3973,8 @@ function postCard(post) {
 
 // 标签徽章：最多直接显示 6 个，超出折叠进「更多N」，点击展开/收起；
 // 智囊团观点回流带方向的标签追加看多/看空角标（post.view_directions）；
-// 审核队列待审标签（post.pending_tags）虚线展示 + 待审角标，仅供实时决策参考，不可点筛选
+// 审核队列待审标签（post.pending_tags）虚线展示 + 待审角标，带审核 id 的可点开
+// 大众评审弹窗（投票/管理员直判），旧缓存 payload 无 id 退化为只读虚线样式
 function renderPostTagChips(tags, viewDirections, pendingTags) {
   const dirs = (viewDirections && typeof viewDirections === "object") ? viewDirections : {};
   const chip = (t) => `<button type="button" class="cat cat-tag post-tag-filter" data-tag="${escapeHtml(t)}" onclick="tlPickTag(this.dataset.tag)">${escapeHtml(t)}${tagDirBadge(dirs[t])}</button>`;
@@ -3978,6 +3982,10 @@ function renderPostTagChips(tags, viewDirections, pendingTags) {
     const t = (pt && typeof pt === "object") ? pt.tag : pt;
     if (!t) return "";
     const dir = dirs[t] || ((pt && typeof pt === "object" && pt.direction) || "");
+    const rid = (pt && typeof pt === "object" && pt.id) ? Number(pt.id) : 0;
+    if (rid) {
+      return `<button type="button" class="cat cat-tag tag-pending tag-review-open" data-review-id="${rid}" title="待审核标签，点击参与审核" aria-label="参与审核标签 ${escapeHtml(t)}" onclick="openTagVoteModal(${rid})">${escapeHtml(t)}${tagDirBadge(dir)}<i class="tag-pending-badge">待审</i></button>`;
+    }
     return `<span class="cat cat-tag tag-pending" title="待审核标签，仅供参考">${escapeHtml(t)}${tagDirBadge(dir)}<i class="tag-pending-badge">待审</i></span>`;
   };
   const pending = Array.isArray(pendingTags) ? pendingTags.map(pendingChip).join("") : "";
@@ -4070,7 +4078,7 @@ function openRawModal(postId, label) {
 }
 
 // 原始消息弹窗里的标签徽章：管理员带 × 删除按钮；带方向的标签追加看多/看空角标；
-// 待审标签只读展示（虚线 + 待审角标），通过/拒绝在后台审核队列操作
+// 待审标签虚线 + 待审角标，带审核 id 的可点开大众评审弹窗（同消息卡片徽章）
 function mxRawTagsHtml(tags, isAdmin, viewDirections, pendingTags) {
   const list = Array.isArray(tags) ? tags : [];
   const dirs = (viewDirections && typeof viewDirections === "object") ? viewDirections : {};
@@ -4082,6 +4090,10 @@ function mxRawTagsHtml(tags, isAdmin, viewDirections, pendingTags) {
     const t = (pt && typeof pt === "object") ? pt.tag : pt;
     if (!t) return "";
     const dir = dirs[t] || ((pt && typeof pt === "object" && pt.direction) || "");
+    const rid = (pt && typeof pt === "object" && pt.id) ? Number(pt.id) : 0;
+    if (rid) {
+      return `<button type="button" class="cat cat-tag mx-raw-tag tag-pending tag-review-open" data-review-id="${rid}" title="待审核标签，点击参与审核" aria-label="参与审核标签 ${escapeHtml(t)}" onclick="openTagVoteModal(${rid})">${escapeHtml(t)}${tagDirBadge(dir)}<i class="tag-pending-badge">待审</i></button>`;
+    }
     return `<span class="cat cat-tag mx-raw-tag tag-pending" title="待审核标签，审核通过后才计入帖子标签">${escapeHtml(t)}${tagDirBadge(dir)}<i class="tag-pending-badge">待审</i></span>`;
   }).join("");
   return (chips + pending) || '<span class="muted mx-raw-tag-empty">暂无标签</span>';
@@ -4165,6 +4177,142 @@ function closeRawModal() {
   document.removeEventListener("keydown", mask._onKey, true);
   unlockBodyScroll();
   mask.remove();
+}
+
+// ---------- 待审标签大众评审弹窗 ----------
+// 点开待审标签投票：普通用户一人一票，达到配置人数自动裁决（一致→立即定局，
+// 分裂→继续收集，达到上限→多数定局）；管理员点通过/拒绝直判立即生效。
+let _tagVoteData = null; // 当前弹窗的审核详情（/api/tag-reviews/{id} 响应）
+
+async function openTagVoteModal(reviewId) {
+  closeTagVoteModal(); // 防连点叠开
+  lockBodyScroll();
+  const mask = document.createElement("div");
+  mask.className = "modal-mask tag-vote-mask";
+  mask.id = "tag-vote-mask";
+  mask.setAttribute("role", "dialog");
+  mask.setAttribute("aria-modal", "true");
+  mask.setAttribute("aria-label", "标签审核");
+  mask.innerHTML = `<div class="modal-card tag-vote-card"><p class="muted">加载中…</p></div>`;
+  mask.addEventListener("click", (e) => {
+    if (e.target === mask) closeTagVoteModal();
+  });
+  mask._onKey = (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeTagVoteModal();
+    }
+  };
+  document.addEventListener("keydown", mask._onKey, true);
+  document.body.appendChild(mask);
+  try {
+    const data = await api(`/api/tag-reviews/${reviewId}`);
+    _tagVoteData = data;
+    paintTagVoteModal(data);
+  } catch (err) {
+    closeTagVoteModal();
+    flash("打开标签审核失败: " + err.message, "error");
+  }
+}
+
+function closeTagVoteModal() {
+  const mask = document.getElementById("tag-vote-mask");
+  if (!mask) return;
+  document.removeEventListener("keydown", mask._onKey, true);
+  unlockBodyScroll();
+  mask.remove();
+}
+
+function _tagVoteStatusBadge(status) {
+  if (status === "approved") return '<i class="tag-pending-badge is-approved">已通过</i>';
+  if (status === "rejected") return '<i class="tag-pending-badge is-rejected">已拒绝</i>';
+  return '<i class="tag-pending-badge">待审</i>';
+}
+
+function paintTagVoteModal(data) {
+  const mask = document.getElementById("tag-vote-mask");
+  if (!mask) return;
+  const decided = data.status !== "pending";
+  const isAdmin = !!data.is_admin;
+  const cfg = data.config || {};
+  const votes = data.votes || { approve: 0, reject: 0, total: 0 };
+  const canVote = !!data.can_vote && !decided;
+  const alreadyVoted = !isAdmin && !!data.my_vote;
+  const dirBadge = data.direction === "bull" ? tagDirBadge("bull")
+    : data.direction === "bear" ? tagDirBadge("bear") : "";
+  const who = data.post?.kol_name ? `${escapeHtml(data.post.kol_name)} · ` : "";
+  const when = data.post?.published_at ? fmtPublished(data.post.published_at) : "";
+  let ruleHint;
+  if (decided) {
+    ruleHint = data.status === "approved" ? "该标签已裁决为通过并生效"
+      : "该标签已裁决为拒绝，不再展示为待审";
+  } else if (isAdmin) {
+    ruleHint = "管理员直判：点击后立即生效，不经过大众投票";
+  } else if (alreadyVoted) {
+    ruleHint = `你已投「${data.my_vote === "approve" ? "通过" : "拒绝"}」，一人一票不可改投，等待更多用户审核`;
+  } else if (!cfg.public_voting) {
+    ruleHint = "大众评审未开放，该标签由管理员审核";
+  } else {
+    ruleHint = `满 ${cfg.unanimous_n ?? "N"} 人投票且全部同向立即裁决；票型分裂则继续收集，满 ${cfg.max_voters ?? "N"} 人按多数裁决（平票判拒绝）`;
+  }
+  mask.innerHTML = `
+    <div class="modal-card tag-vote-card">
+      <button type="button" class="tag-detail-close" aria-label="关闭" onclick="closeTagVoteModal()">×</button>
+      <h3 class="mx-raw-title">标签审核</h3>
+      <p class="mx-raw-meta">${who}${when}</p>
+      <div class="tag-vote-target">
+        <span class="cat cat-tag tag-pending">${escapeHtml(data.tag)}${dirBadge}${_tagVoteStatusBadge(data.status)}</span>
+        ${data.source === "mx_view" ? '<span class="muted tag-vote-source">观点研判回流</span>' : ""}
+      </div>
+      ${data.post?.excerpt ? `<p class="tag-vote-excerpt muted">${escapeHtml(data.post.excerpt)}</p>` : ""}
+      <div class="tag-vote-progress">
+        <span class="tag-vote-count approve">通过 ${votes.approve}</span>
+        <span class="tag-vote-count reject">拒绝 ${votes.reject}</span>
+        <span class="muted">已投 ${votes.total} 人</span>
+      </div>
+      <p class="tag-vote-hint muted">${ruleHint}</p>
+      ${canVote ? `
+      <div class="tag-vote-actions">
+        <button type="button" class="btn-normal" ${alreadyVoted ? "disabled" : ""}
+          onclick="submitTagVote(${data.id}, 'approve')">通过${isAdmin ? "（直判生效）" : ""}</button>
+        <button type="button" class="btn-ghost danger" ${alreadyVoted ? "disabled" : ""}
+          onclick="submitTagVote(${data.id}, 'reject')">拒绝${isAdmin ? "（直判生效）" : ""}</button>
+      </div>` : ""}
+    </div>`;
+}
+
+async function submitTagVote(reviewId, action) {
+  try {
+    const data = await api(`/api/tag-reviews/${reviewId}/vote`, {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    });
+    _tagVoteData = data;
+    paintTagVoteModal(data);
+    refreshTagVoteChips(data);
+    if (data.status === "approved") {
+      flash(`标签「${data.tag}」已裁决为通过，已生效`);
+    } else if (data.status === "rejected") {
+      flash(`标签「${data.tag}」已裁决为拒绝`);
+    } else {
+      flash(action === "approve" ? "已投通过，等待更多用户审核" : "已投拒绝，等待更多用户审核");
+    }
+  } catch (err) {
+    flash("投票失败: " + err.message, "error");
+  }
+}
+
+// 裁决后就地更新页面上该审核的所有待审徽章（下次刷新列表自然与数据一致）
+function refreshTagVoteChips(data) {
+  if (data.status !== "approved" && data.status !== "rejected") return;
+  const approved = data.status === "approved";
+  document.querySelectorAll(`.tag-review-open[data-review-id="${Number(data.id)}"]`).forEach((chip) => {
+    chip.disabled = true;
+    chip.classList.remove("tag-review-open");
+    chip.title = approved ? "已通过审核" : "已拒绝";
+    const badge = chip.querySelector(".tag-pending-badge");
+    if (badge) badge.textContent = approved ? "已通过" : "已拒绝";
+  });
 }
 
 // ---------- MX 语音播放 ----------
@@ -6055,7 +6203,7 @@ let routeRenderSeq = 0; // 每次路由切换递增；异步渲染完成后凭�
 const SPA_PREFIXES = new Set([
   "timeline", "home", "combinations", "mysubs", "settings", "news",
   "search", "kol", "more", "admin", "zsxq", "ima-documents", "knowledge",
-  "mx-views",
+  "mx-views", "holdings",
 ]);
 
 function routeStillActive(seq) {
@@ -6371,6 +6519,29 @@ const {
   flash,
 });
 
+const {
+  renderHoldings,
+  hdAddType,
+  hdSugInput,
+  hdSugPick,
+  hdAddSubmit,
+  hdEditOpen,
+  hdEditSave,
+  hdEditCancel,
+  hdDelete,
+  hdFilter,
+  hdExpand,
+  hdMore,
+} = createHoldingsView({
+  $,
+  state,
+  api,
+  escapeHtml,
+  setPageTitle,
+  routeStillActive,
+  flash,
+});
+
 // admin 视图懒加载：codes 由 ensureAdminViews() 赋值，求值期读到的是 undefined
 let codesView, loadAdminCodes, adminCodesBatch, adminCodesClearSelect, adminCodesCopySelected, adminCodesNoteInput, adminCodesPreset, adminCodesToggle,
   adminCodesToggleBatch, adminCodesTogglePage, adminGenerateCodes, adminRevokeBatch, adminRevokeCode, searchAdminCodes, selectAdminCodeFilter,
@@ -6394,7 +6565,7 @@ let kolView, loadAdminKols, loadAdminVocab, switchAdminKolsPlatform, adminKolsAp
   adminKolWebhookSaveSecret, adminEditKolKeywords, saveKolKeywords, adminViewKolBlock, adminMxTagAutoSave, adminMxTagAutoAddSpecial, adminMxTagAutoRemoveSpecial,
   adminMxTagCancel, adminMxTagOpenRunModal, adminMxTagSelAll, adminMxTagStartRun, adminMxTagTest, adminOpenTagReviewModal, closeTagReviewModal, toggleTagReviewMsg,
   adminTagReviewModalReview, adminTagReviewSelAll, adminTagReviewSelChange, adminReviewTag, adminReviewTagsBatch, adminReviewAliasCandidate, adminTagDetailAddTag,
-  adminTagDetailRemoveTag, adminToggleViewTagging, adminTagReviewSourceChange, newsKolToggle, newsKolToggleItem, newsKolAll, newsKolNone, newsKolSearch,
+  adminTagDetailRemoveTag, adminToggleViewTagging, adminTagReviewSourceChange, adminSaveTagReviewConfig, newsKolToggle, newsKolToggleItem, newsKolAll, newsKolNone, newsKolSearch,
   newsKolSave, newsKolDiscard, loadResearchKolPanel, researchKolToggle, researchKolToggleItem, researchKolAll, researchKolNone, researchKolSearch, researchKolSave,
   researchKolDiscard, loadWscnBroadcastPanel, saveWscnBroadcastSettings;
 
@@ -6653,6 +6824,7 @@ async function ensureAdminViews() {
   adminTagDetailRemoveTag,
   adminToggleViewTagging,
   adminTagReviewSourceChange,
+  adminSaveTagReviewConfig,
     } = (kolView = modKol.createAdminKolsView({
   $,
   state,
@@ -7020,6 +7192,7 @@ async function router() {
     }
     else if (page === "timeline") await renderTimeline(renderSeq);
     else if (page === "mx-views") await renderMxViews(renderSeq);
+    else if (page === "holdings") await renderHoldings(renderSeq);
     else if (page === "settings") await renderSettings(renderSeq);
     else if (page === "more") await renderMore(renderSeq);
     else if (page === "search") await renderSearch(renderSeq);
@@ -8406,6 +8579,7 @@ const INLINE_HANDLERS = {
   adminSavePassword,
   adminSaveStockNames,
   adminSaveTags,
+  adminSaveTagReviewConfig,
   adminSaveUserKnowledge,
   adminSaveUsername,
   adminSendTestPush,
@@ -8455,6 +8629,17 @@ const INLINE_HANDLERS = {
   genBindCode,
   go,
   goFromBottomNav,
+  hdAddSubmit,
+  hdAddType,
+  hdDelete,
+  hdEditCancel,
+  hdEditOpen,
+  hdEditSave,
+  hdExpand,
+  hdFilter,
+  hdMore,
+  hdSugInput,
+  hdSugPick,
   homeResetFilters,
   homeSearch,
   homeToggleFilter,
@@ -8702,6 +8887,10 @@ const INLINE_HANDLERS = {
   _lbZoomReset,
   // ---- hmf：智囊团页（/mx-views 与 admin/mx-views 面板内联 onclick）----
   openRawModal,
+  openTagVoteModal,
+  closeTagVoteModal,
+  submitTagVote,
+  refreshTagVoteChips,
   avatarImgError,
   mxvPickDay,
   mxvCalToggle,
