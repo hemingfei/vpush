@@ -12,7 +12,7 @@ export function createHoldingsView(dependencies) {
     seq: 0, holdings: [], summary: [], items: [], maxId: 0,
     filter: null, // {type, name} 单标的筛选；null = 全部
     expanded: new Set(), es: null, sseOk: false, pollTimer: null,
-    addType: "stock", sugTimer: null, editId: null,
+    sugTimer: null, pickedType: null, // 添加框点选建议记住的类型（手输时提交前探测）
     exhausted: false, loadingMore: false, freshIds: new Set(),
     watchOpen: true, // 关注列表折叠状态（localStorage 持久化）
     // 标签快讯流：posts.tags 命中关注标的名（相关观点之外的标签口径信号）
@@ -35,12 +35,12 @@ export function createHoldingsView(dependencies) {
     if (_hd.sugTimer) { clearTimeout(_hd.sugTimer); _hd.sugTimer = null; }
     Object.assign(_hd, {
       holdings: [], summary: [], items: [], maxId: 0, filter: null,
-      expanded: new Set(), sseOk: false, editId: null,
+      expanded: new Set(), sseOk: false,
       exhausted: false, loadingMore: false, freshIds: new Set(),
       tab: "opinions",
       tagItems: [], tagMaxId: 0, tagSummary: new Map(),
       tagExhausted: false, tagLoadingMore: false, tagFresh: new Set(),
-      postOpen: new Set(),
+      postOpen: new Set(), pickedType: null,
     });
   }
 
@@ -248,34 +248,16 @@ export function createHoldingsView(dependencies) {
       el.innerHTML = head;
       return;
     }
-    const chip = (h) => {
-      if (_hd.editId === h.id) {
-        return `
-        <div class="hd-item editing" data-holding-id="${h.id}">
-          <div class="hd-edit-row">
-            ${hdTypeBadge(h.target_type)}
-            <input id="hd-edit-name-${h.id}" value="${escapeHtml(h.target_name)}" maxlength="40" aria-label="标的名称">
-            <input id="hd-edit-note-${h.id}" value="${escapeHtml(h.note || "")}" maxlength="200" placeholder="备注" aria-label="备注">
-          </div>
-          <div class="hd-item-ops">
-            <button type="button" class="hd-btn primary sm" onclick="hdEditSave(${h.id})">保存</button>
-            <button type="button" class="hd-btn sm" onclick="hdEditCancel()">取消</button>
-          </div>
-        </div>`;
-      }
-      return `
+    const chip = (h) => `
       <div class="hd-item" data-holding-id="${h.id}">
         <div class="hd-item-main">
           ${hdTypeBadge(h.target_type)}
           <span class="hd-name" title="${escapeHtml(h.target_name)}">${escapeHtml(h.target_name)}</span>
           <span class="hd-item-ops">
-            <button type="button" class="hd-btn sm" onclick="hdEditOpen(${h.id})">编辑</button>
-            <button type="button" class="hd-btn sm danger" onclick="hdDelete(${h.id})">删</button>
+            <button type="button" class="hd-btn sm ghost" onclick="hdDelete(${h.id})">删</button>
           </span>
         </div>
-        ${h.note ? `<div class="hd-note" title="${escapeHtml(h.note)}">${escapeHtml(h.note)}</div>` : ""}
       </div>`;
-    };
     const stocks = _hd.holdings.filter((h) => h.target_type === "stock");
     const topics = _hd.holdings.filter((h) => h.target_type !== "stock");
     const group = (title, list) => `
@@ -286,29 +268,26 @@ export function createHoldingsView(dependencies) {
     el.innerHTML = head + `
       <div class="hd-add">
         <div class="hd-add-fields">
-          <div class="hd-seg" role="tablist">
-            <button type="button" class="hd-seg-btn${_hd.addType === "stock" ? " on" : ""}" onclick="hdAddType('stock')">个股</button>
-            <button type="button" class="hd-seg-btn${_hd.addType === "topic" ? " on" : ""}" onclick="hdAddType('topic')">板块</button>
-          </div>
           <div class="hd-add-name">
             <input id="hd-add-input" autocomplete="off" maxlength="40"
-              placeholder="${_hd.addType === "stock" ? "输入 A 股简称，如 贵州茅台" : "输入板块名，如 AI算力"}"
+              placeholder="输入个股或板块名，如 贵州茅台 / AI算力"
               aria-label="标的名称" oninput="hdSugInput(this.value)">
             <div class="hd-sug" id="hd-sug" hidden></div>
           </div>
-          <input id="hd-add-note" maxlength="200" placeholder="备注（可选）" aria-label="备注">
           <button type="button" class="hd-btn primary" onclick="hdAddSubmit()"${atMax ? " disabled" : ""}>添加</button>
         </div>
-        ${_hd.addType === "topic" ? `<div class="hd-hint">板块开放输入，无相关观点时先空着；研判覆盖到该板块后自动汇入。</div>` : ""}
+        <div class="hd-hint">个股须在全市场名单内（建议点选自动识别类型）；板块开放输入，无相关观点时先空着。</div>
       </div>
       ${n ? `<div class="hd-cols">${group("个股", stocks)}${group("板块", topics)}</div>`
           : `<div class="hd-empty-sm">还没有关注：先添加你持有的个股或关注的板块，下方才开始汇总相关观点。</div>`}
     `;
   }
 
-  // 输入建议（个股=名单强校验源；题材=研判产出+词表，只建议不拦截），250ms 防抖
+  // 输入建议：个股（名单强校验源）与板块（研判产出+词表，只建议不拦截）共用一个搜索框，
+  // 两路并行合并——个股在前、按名去重（同名优先个股口径），250ms 防抖；输入即清掉点选类型记忆
   function hdSugInput(value) {
     if (_hd.sugTimer) clearTimeout(_hd.sugTimer);
+    _hd.pickedType = null;
     const q = String(value || "").trim();
     const box = document.getElementById("hd-sug");
     if (!q) {
@@ -318,9 +297,22 @@ export function createHoldingsView(dependencies) {
     _hd.sugTimer = setTimeout(async () => {
       _hd.sugTimer = null;
       try {
-        const data = await api(`/api/my/holdings/suggestions?type=${_hd.addType}&q=${encodeURIComponent(q)}`);
+        const [stocks, topics] = await Promise.all([
+          api(`/api/my/holdings/suggestions?type=stock&q=${encodeURIComponent(q)}`),
+          api(`/api/my/holdings/suggestions?type=topic&q=${encodeURIComponent(q)}`),
+        ]);
         if (!routeStillActive(_hd.seq)) return;
-        const items = (data && data.items) || [];
+        const seen = new Set();
+        const items = [];
+        for (const it of [
+          ...((stocks && stocks.items) || []).map((x) => ({ ...x, type: "stock" })),
+          ...((topics && topics.items) || []).map((x) => ({ ...x, type: "topic" })),
+        ]) {
+          if (!it.name || seen.has(it.name)) continue;
+          seen.add(it.name);
+          items.push(it);
+          if (items.length >= SUG_LIMIT) break;
+        }
         window._hdSug = items;
         if (!box) return;
         if (!items.length) { box.hidden = true; box.innerHTML = ""; return; }
@@ -336,67 +328,31 @@ export function createHoldingsView(dependencies) {
   function hdSugPick(idx) {
     const it = window._hdSug[idx];
     const input = document.getElementById("hd-add-input");
-    if (it && input) input.value = it.name;
+    if (it && input) {
+      input.value = it.name;
+      _hd.pickedType = it.type || null; // 点选即记住类型，提交不再探测
+    }
     const box = document.getElementById("hd-sug");
     if (box) { box.hidden = true; box.innerHTML = ""; }
   }
 
-  function hdAddType(t) {
-    const next = t === "topic" ? "topic" : "stock";
-    if (next === _hd.addType) return;
-    const prevInput = document.getElementById("hd-add-input");
-    const prevNote = document.getElementById("hd-add-note");
-    const name = prevInput ? prevInput.value : "";
-    const note = prevNote ? prevNote.value : "";
-    _hd.addType = next;
-    hdRenderManage();
-    const input = document.getElementById("hd-add-input");
-    const noteEl = document.getElementById("hd-add-note");
-    if (input) input.value = name;
-    if (noteEl) noteEl.value = note;
-  }
-
   async function hdAddSubmit() {
     const input = document.getElementById("hd-add-input");
-    const note = document.getElementById("hd-add-note");
     const name = String((input && input.value) || "").trim();
     if (!name) { flash("请先输入标的名称", "error"); return; }
     try {
+      // 类型识别：点选建议自带；手输时按个股名单探测——命中即个股，否则按开放输入的板块
+      let type = _hd.pickedType;
+      if (type !== "stock" && type !== "topic") {
+        const sug = await api(`/api/my/holdings/suggestions?type=stock&q=${encodeURIComponent(name)}`);
+        type = ((sug && sug.items) || []).some((it) => it.name === name) ? "stock" : "topic";
+      }
       await api("/api/my/holdings", { method: "POST", body: JSON.stringify({
-        target_type: _hd.addType,
+        target_type: type,
         target_name: name,
-        note: String((note && note.value) || "").trim(),
       }) });
       flash("已添加");
-      _hd.editId = null;
-      await hdReload();
-    } catch (err) {
-      flash(err.message, "error");
-    }
-  }
-
-  function hdEditOpen(id) {
-    _hd.editId = id;
-    hdRenderManage();
-    const el = document.getElementById(`hd-edit-name-${id}`);
-    if (el) el.focus();
-  }
-
-  function hdEditCancel() {
-    _hd.editId = null;
-    hdRenderManage();
-  }
-
-  async function hdEditSave(id) {
-    const nameEl = document.getElementById(`hd-edit-name-${id}`);
-    const noteEl = document.getElementById(`hd-edit-note-${id}`);
-    try {
-      await api(`/api/my/holdings/${id}`, { method: "PATCH", body: JSON.stringify({
-        target_name: String((nameEl && nameEl.value) || "").trim(),
-        note: String((noteEl && noteEl.value) || "").trim(),
-      }) });
-      flash("已保存");
-      _hd.editId = null;
+      _hd.pickedType = null;
       await hdReload();
     } catch (err) {
       flash(err.message, "error");
@@ -657,13 +613,9 @@ export function createHoldingsView(dependencies) {
 
   return {
     renderHoldings,
-    hdAddType,
     hdSugInput,
     hdSugPick,
     hdAddSubmit,
-    hdEditOpen,
-    hdEditSave,
-    hdEditCancel,
     hdDelete,
     hdFilter,
     hdExpand,

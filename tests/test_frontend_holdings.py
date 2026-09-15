@@ -12,9 +12,8 @@ MAIN_PY = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
 
 # 视图导出且必须注册进 INLINE_HANDLERS 的内联 handler（check_inline_handlers.py 同一契约）
 HD_HANDLERS = [
-    "hdAddType", "hdSugInput", "hdSugPick", "hdAddSubmit", "hdEditOpen",
-    "hdEditSave", "hdEditCancel", "hdDelete", "hdFilter", "hdExpand", "hdMore",
-    "hdFeedTab", "hdPostExpand", "hdTagMore", "hdWatchToggle",
+    "hdSugInput", "hdSugPick", "hdAddSubmit", "hdDelete", "hdFilter", "hdExpand",
+    "hdMore", "hdFeedTab", "hdPostExpand", "hdTagMore", "hdWatchToggle",
 ]
 
 
@@ -63,6 +62,12 @@ def test_holdings_feed_matches_mx_views_feed_contract():
     assert '"hd-cols"' in HOLDINGS_JS and "hdWatchToggle" in HOLDINGS_JS
     assert "hd_watch_open" in HOLDINGS_JS
     assert "关注列表" in HOLDINGS_JS and "板块" in HOLDINGS_JS
+    # 关注列表精简：个股/板块共用搜索框（建议合并、点选记类型、手输探测）、无备注、
+    # 无编辑行、删除按钮低调灰（ghost）
+    assert "hdAddType" not in HOLDINGS_JS and "hdEditOpen" not in HOLDINGS_JS
+    assert "hdEditSave" not in HOLDINGS_JS and "hdEditCancel" not in HOLDINGS_JS
+    assert "备注" not in HOLDINGS_JS and "ghost" in HOLDINGS_JS
+    assert "pickedType" in HOLDINGS_JS
 
 
 def test_router_and_nav_register_holdings():

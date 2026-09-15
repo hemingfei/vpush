@@ -76,15 +76,14 @@
 .hd-dot.sse{background:var(--hd-faint);}
 .hd-dot.sse.on{background:var(--hd-accent);box-shadow:0 0 6px rgba(91,140,255,.8);}
 
-/* 添加行：seg + 输入 + 添加 单行铺开 */
+/* 添加行：共用一个搜索框（个股/板块自动识别）+ 添加按钮紧跟其后，不定宽铺满 */
 .hd-add{display:flex;flex-direction:column;gap:5px;margin-bottom:8px;}
-.hd-add-fields{display:flex;gap:6px;flex-wrap:wrap;}
-.hd-add-name{position:relative;flex:1 1 200px;min-width:0;}
+.hd-add-fields{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
+.hd-add-name{position:relative;flex:0 1 300px;min-width:0;}
 .hd-root input{background:var(--hd-card);border:1px solid var(--hd-line);border-radius:6px;
   color:var(--hd-strong);padding:4px 9px;font-size:13px;min-width:0;}
 .hd-root input:focus{outline:none;border-color:var(--hd-accent);}
 .hd-add-name input{width:100%;}
-.hd-add-fields > input{flex:1 1 140px;}
 .hd-seg{display:inline-flex;border:1px solid var(--hd-btn-line);border-radius:6px;overflow:hidden;}
 .hd-seg-btn{background:transparent;border:none;color:var(--hd-muted);padding:4px 12px;
   cursor:pointer;font-size:12px;}
@@ -105,7 +104,9 @@
 .hd-btn.primary{background:var(--hd-accent);border-color:var(--hd-accent-deep);color:#fff;}
 .hd-btn.primary:disabled{opacity:.5;cursor:not-allowed;}
 .hd-btn.sm{padding:1px 7px;font-size:11px;}
-.hd-btn.danger{color:var(--hd-bull-text);border-color:var(--hd-bull-line);background:var(--hd-bull-soft);}
+/* 删除按钮：低调灰（不抢视觉），悬停才显露危险色 */
+.hd-btn.ghost{background:transparent;border-color:transparent;color:var(--hd-faint);}
+.hd-btn.ghost:hover{color:var(--hd-bull-text);border-color:var(--hd-bull-line);background:var(--hd-bull-soft);}
 
 /* 关注列表两栏（左个股/右板块），栏内一行两个 */
 .hd-cols{display:grid;grid-template-columns:1fr 1fr;column-gap:22px;position:relative;}
@@ -117,12 +118,7 @@
 .hd-item{background:var(--hd-card);border:1px solid var(--hd-sep);border-radius:6px;
   padding:4px 8px;min-width:0;}
 .hd-item-main{display:flex;align-items:center;gap:5px;min-width:0;}
-.hd-item.editing{grid-column:1 / -1;border-color:var(--hd-accent);}
-.hd-edit-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
-.hd-edit-row input{flex:1 1 120px;}
 .hd-name{color:var(--hd-strong);font-weight:600;font-size:13px;overflow:hidden;
-  text-overflow:ellipsis;white-space:nowrap;}
-.hd-note{color:var(--hd-faint);font-size:11px;margin-top:2px;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;}
 .hd-item-ops{margin-left:auto;display:flex;gap:4px;flex:none;}
 .hd-badge{display:inline-block;border-radius:4px;padding:0 5px;font-size:10px;line-height:1.7;flex:none;}

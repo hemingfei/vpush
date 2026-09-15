@@ -1089,26 +1089,29 @@ def test_holdings_view_manage_cards_feed_flow(page: Page):
     assert holder_calls == ["/api/my/holdings/views", "/api/my/holdings/tag-posts"]
     page.locator(".hd-card").first.click()
     expect(page.locator(".mxv-feed-item")).to_have_count(3)
-    # 建议：输入防抖后拉取候选，点选回填输入框
+    # 建议：个股/板块共用搜索框，两路合并去重；点选回填并记住类型
     page.fill("#hd-add-input", "贵")
-    expect(page.locator(".hd-sug-item")).to_be_visible()
+    expect(page.locator(".hd-sug-item")).to_have_count(1)  # 桩两路同名 → 去重一条
     page.locator(".hd-sug-item").click()
     assert page.input_value("#hd-add-input") == "贵州茅台"
-    # 添加：POST 携带类型/名称/备注，成功后整页重拉
-    page.fill("#hd-add-note", "新买入")
+    # 添加：POST 携带类型/名称（点选自动识别，无备注字段），成功后整页重拉
     page.get_by_role("button", name="添加", exact=True).click()
     adds = page.evaluate("hdTest.calls.filter(c => c.method === 'POST')")
     assert adds == [{"path": "/api/my/holdings", "method": "POST",
-                     "body": {"target_type": "stock", "target_name": "贵州茅台", "note": "新买入"}}]
+                     "body": {"target_type": "stock", "target_name": "贵州茅台"}}]
     expect(page.locator(".hd-item")).to_have_count(2)  # 桩数据不变，重拉后仍两行
-    # 编辑：行内改名+备注 → PATCH
-    page.get_by_role("button", name="编辑").first.click()
-    page.fill("#hd-edit-name-1", "宁德时代")
-    page.get_by_role("button", name="保存", exact=True).click()
-    patches = page.evaluate("hdTest.calls.filter(c => c.method === 'PATCH')")
-    assert patches == [{"path": "/api/my/holdings/1", "method": "PATCH",
-                        "body": {"target_name": "宁德时代", "note": "白酒龙头"}}]
-    # 删除：confirm 接受后 DELETE + flash 反馈
+    # 手输类型探测：未点选建议时按个股名单精确命中 → stock（提交前发探测请求）
+    page.fill("#hd-add-input", "贵州茅台")
+    expect(page.locator(".hd-sug-item")).to_have_count(1)
+    page.get_by_role("button", name="添加", exact=True).click()
+    adds = page.evaluate("hdTest.calls.filter(c => c.method === 'POST')")
+    assert adds[-1]["body"] == {"target_type": "stock", "target_name": "贵州茅台"}
+    sug_calls = page.evaluate(
+        "hdTest.calls.filter(c => c.path.includes('/api/my/holdings/suggestions')).map(c => c.path)")
+    assert any("suggestions?type=stock&q=%E8%B4%B5%E5%B7%9E%E8%8C%85%E5%8F%B0" in p
+               for p in sug_calls)  # 提交前探测请求发生过
+    # 删除：confirm 接受后 DELETE + flash 反馈；按钮为低调灰 ghost 样式
+    assert "ghost" in page.locator(".hd-btn.ghost").first.get_attribute("class")
     page.on("dialog", lambda dialog: dialog.accept())
     page.get_by_role("button", name="删", exact=True).first.click()
     deletes = page.evaluate("hdTest.calls.filter(c => c.method === 'DELETE')")
