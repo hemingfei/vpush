@@ -130,3 +130,12 @@ CREATE INDEX IF NOT EXISTS idx_user_holdings_user ON user_holdings(user_id);
 ## 影响与回滚
 
 全部为新增（新表、新端点、新视图文件、导航增量），不改任何现有端点与页面行为；唯一共享改动是导航数组与 SPA_PREFIXES 两处数组追加。回滚即移除新增文件与两处数组项。
+
+## 增量：标签快讯接入（2026-09-15）
+
+在 LLM 观点之外，把现有标签体系作为第二条信号源接入本页（只读 `posts.tags`，仍不写任何共享数据）：
+
+- **命中口径**：`posts.tags` 精确含标的名（JSON 元素边界匹配，与动态页标签筛选同源；规则/LLM/观点回流打标都落这一列）。多空方向角标取观点回流登记（`attach_view_directions`）。
+- **API**：`GET /api/my/holdings/tag-posts`，与 `/views` 同参语义（`after_id` 增量 / `before_id` 翻页 / `holder` 下钻，`summary` 恒全量）；`max_id` 用全局 `max_post_id_any()` 水位（未命中标的的帖也推进游标）。聚合为 `holdings_tag_post_summary`（单次扫描，每标的一对 `SUM/MAX(CASE … LIKE …)` 列）。
+- **前端**：流区改双页签——「观点」（原相关观点流）/「快讯」（标签命中帖，同一 `mxv-feed-item` 行网格，行尾「全文」展开原帖正文，按发布日分组的两列报纸流）；聚合卡计数行加 `#N`（近 30 天标签提及帖数）。
+- **实时**：新帖入库不 `bump_view_version`，快讯到账靠恒开 60s 兜底轮询（SSE version 事件仍同时增量拉两条流）。

@@ -14,7 +14,7 @@ MAIN_PY = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
 HD_HANDLERS = [
     "hdAddType", "hdSugInput", "hdSugPick", "hdAddSubmit", "hdEditOpen",
     "hdEditSave", "hdEditCancel", "hdDelete", "hdFilter", "hdExpand", "hdMore",
-    "hdWatchToggle",
+    "hdFeedTab", "hdPostExpand", "hdTagMore", "hdWatchToggle",
 ]
 
 
@@ -48,6 +48,10 @@ def test_holdings_feed_matches_mx_views_feed_contract():
     assert "mxv-feed-item" in HOLDINGS_JS and "mxv-feed-cols" in HOLDINGS_JS
     assert "mxv-feed-sep" in HOLDINGS_JS and "mxv-kol-head" in HOLDINGS_JS
     assert "mxv-badge" in HOLDINGS_JS and "mxv-empty" in HOLDINGS_JS
+    # 快讯页签：标签命中帖同一行网格（has-post 全文展开），聚合卡带 #N 标签提及数
+    assert "hdFeedTab" in HOLDINGS_JS and "hdTagItemHtml" in HOLDINGS_JS
+    assert "has-post" in HOLDINGS_JS and "tag-posts" in HOLDINGS_JS
+    assert "tagc" in HOLDINGS_JS and "tagSummary" in HOLDINGS_JS
     # 关注列表：左右分栏（个股/板块）、整体可折叠（localStorage 持久化）
     assert '"hd-cols"' in HOLDINGS_JS and "hdWatchToggle" in HOLDINGS_JS
     assert "hd_watch_open" in HOLDINGS_JS
@@ -85,7 +89,11 @@ def test_holdings_page_contract_basics():
     body = _fn_body("renderHoldings", HOLDINGS_JS)
     assert 'setPageTitle("持股研判")' in body
     assert "/api/my/holdings/views" in HOLDINGS_JS
+    assert "/api/my/holdings/tag-posts" in HOLDINGS_JS  # 标签命中快讯流
     assert "/api/mx-views/stream" in HOLDINGS_JS  # 复用观点研判版本号 SSE
     assert "hdTeardown" in HOLDINGS_JS  # 离开页面清理 SSE/定时器
     # 加载更多走 before_id 翻旧页，实时增量走 after_id
     assert "before_id" in HOLDINGS_JS and "after_id" in HOLDINGS_JS
+    # 新帖入库不 bump 观点版本号：快讯到账靠恒开兜底轮询
+    poll = _fn_body("hdEnsureSSE", HOLDINGS_JS)
+    assert "setInterval(hdIncAll" in poll

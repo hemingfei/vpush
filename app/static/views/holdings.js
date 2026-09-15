@@ -1,5 +1,6 @@
 // 持股研判页（/holdings）：顶部用户持股管理（个股/题材），下方最近一个月相关观点
-// 聚合卡 + 时间流，SSE 版本变更增量上屏。样式全部 .hd- 前缀（holdings.css，跟随全局主题）
+// 聚合卡 + 双页签流（观点=LLM 研判 / 快讯=标签命中帖），SSE 版本变更 + 60s 兜底轮询
+// 增量上屏。样式全部 .hd- 前缀（holdings.css，跟随全局主题）
 export function createHoldingsView(dependencies) {
   const {
     $, state, api, escapeHtml, setPageTitle, routeStillActive, flash,
@@ -14,6 +15,11 @@ export function createHoldingsView(dependencies) {
     addType: "stock", sugTimer: null, editId: null,
     exhausted: false, loadingMore: false, freshIds: new Set(),
     watchOpen: true, // 关注列表折叠状态（localStorage 持久化）
+    // 标签快讯流：posts.tags 命中关注标的名（相关观点之外的标签口径信号）
+    tab: "opinions", // 流内页签：opinions=相关观点 | tags=相关快讯
+    tagItems: [], tagMaxId: 0, tagSummary: new Map(),
+    tagExhausted: false, tagLoadingMore: false, tagFresh: new Set(),
+    postOpen: new Set(), // 快讯行展开全文
   };
   try {
     _hd.watchOpen = localStorage.getItem("hd_watch_open") !== "0";
@@ -31,6 +37,10 @@ export function createHoldingsView(dependencies) {
       holdings: [], summary: [], items: [], maxId: 0, filter: null,
       expanded: new Set(), sseOk: false, editId: null,
       exhausted: false, loadingMore: false, freshIds: new Set(),
+      tab: "opinions",
+      tagItems: [], tagMaxId: 0, tagSummary: new Map(),
+      tagExhausted: false, tagLoadingMore: false, tagFresh: new Set(),
+      postOpen: new Set(),
     });
   }
 
@@ -52,19 +62,29 @@ export function createHoldingsView(dependencies) {
     _hd.exhausted = _hd.items.length < PAGE_SIZE;
   }
 
+  function hdApplyTagPosts(data) {
+    const sum = (data && data.summary && data.summary.targets) || [];
+    _hd.tagSummary = new Map(sum.map((s) => [s.target_name, s]));
+    _hd.tagMaxId = (data && data.max_id) || _hd.tagMaxId;
+    _hd.tagItems = (data && data.items) || [];
+    _hd.tagExhausted = _hd.tagItems.length < PAGE_SIZE;
+  }
+
   async function renderHoldings(seq) {
     hdTeardown();
     _hd.seq = seq;
     setPageTitle("持股研判");
     $("#main").innerHTML = `<div class="hd-root"><div class="hd-empty">加载中…</div></div>`;
     try {
-      const [holdings, views] = await Promise.all([
+      const [holdings, views, tagPosts] = await Promise.all([
         api("/api/my/holdings"),
         api(`/api/my/holdings/views?limit=${PAGE_SIZE}${hdHolderQ()}`),
+        api(`/api/my/holdings/tag-posts?limit=${PAGE_SIZE}${hdHolderQ()}`),
       ]);
       if (!routeStillActive(seq)) return;
       _hd.holdings = Array.isArray(holdings) ? holdings : [];
       hdApplyViews(views);
+      hdApplyTagPosts(tagPosts);
       hdRenderAll();
       hdEnsureSSE();
     } catch (err) {
@@ -77,13 +97,15 @@ export function createHoldingsView(dependencies) {
   async function hdReload() {
     const seq = _hd.seq;
     try {
-      const [holdings, views] = await Promise.all([
+      const [holdings, views, tagPosts] = await Promise.all([
         api("/api/my/holdings"),
         api(`/api/my/holdings/views?limit=${PAGE_SIZE}${hdHolderQ()}`),
+        api(`/api/my/holdings/tag-posts?limit=${PAGE_SIZE}${hdHolderQ()}`),
       ]);
       if (!routeStillActive(seq)) return;
       _hd.holdings = Array.isArray(holdings) ? holdings : [];
       hdApplyViews(views);
+      hdApplyTagPosts(tagPosts);
       hdRenderAll();
     } catch (err) {
       flash(`刷新失败: ${err.message}`, "error");
@@ -92,16 +114,20 @@ export function createHoldingsView(dependencies) {
 
   async function hdReloadFeed() {
     try {
-      const data = await api(`/api/my/holdings/views?limit=${PAGE_SIZE}${hdHolderQ()}`);
+      const [views, tagPosts] = await Promise.all([
+        api(`/api/my/holdings/views?limit=${PAGE_SIZE}${hdHolderQ()}`),
+        api(`/api/my/holdings/tag-posts?limit=${PAGE_SIZE}${hdHolderQ()}`),
+      ]);
       if (!routeStillActive(_hd.seq)) return;
-      hdApplyViews(data);
+      hdApplyViews(views);
+      hdApplyTagPosts(tagPosts);
       hdRenderFeed();
     } catch (err) {
       flash(`刷新失败: ${err.message}`, "error");
     }
   }
 
-  // SSE 版本变更：增量拉新插入顶部（响应同时带回重算后的全窗口聚合）
+  // SSE 版本变更/兜底轮询：两条流各自增量拉新插入顶部（响应同时带回重算后的全窗口聚合）
   async function hdIncRefresh() {
     if (!routeStillActive(_hd.seq)) return;
     try {
@@ -125,26 +151,56 @@ export function createHoldingsView(dependencies) {
     } catch (e) { /* 静默：下次版本变更/兜底轮询再试 */ }
   }
 
+  // 标签快讯增量：新帖入库不 bump 观点版本号，主要靠兜底轮询到账
+  async function hdTagIncRefresh() {
+    if (!routeStillActive(_hd.seq)) return;
+    try {
+      const data = await api(`/api/my/holdings/tag-posts?limit=${PAGE_SIZE}&after_id=${_hd.tagMaxId}${hdHolderQ()}`);
+      if (!routeStillActive(_hd.seq)) return;
+      const sum = (data.summary && data.summary.targets) || [];
+      _hd.tagSummary = new Map(sum.map((s) => [s.target_name, s]));
+      _hd.tagMaxId = data.max_id || _hd.tagMaxId;
+      const known = new Set(_hd.tagItems.map((it) => it.id));
+      const fresh = (data.items || []).filter((it) => !known.has(it.id));
+      if (fresh.length) {
+        fresh.forEach((it) => _hd.tagFresh.add(it.id));
+        _hd.tagItems = fresh.concat(_hd.tagItems);
+        if (fresh.length >= PAGE_SIZE) _hd.tagExhausted = false;
+        setTimeout(() => {
+          _hd.tagFresh.clear();
+          if (routeStillActive(_hd.seq)) hdRenderFeed();
+        }, 2600);
+      }
+      hdRenderCards();
+      if (_hd.tab === "tags") hdRenderFeed();
+    } catch (e) { /* 静默：下次兜底轮询再试 */ }
+  }
+
+  function hdIncAll() {
+    hdIncRefresh();
+    hdTagIncRefresh();
+  }
+
   function hdSseSync() {
     const dot = document.querySelector(".hd-dot.sse");
     if (dot) dot.classList.toggle("on", !!_hd.sseOk);
   }
 
-  // 复用观点研判的版本号 SSE：新批次落库 → version 事件 → 增量拉相关观点
+  // 复用观点研判的版本号 SSE：新批次落库 → version 事件 → 增量拉相关观点/快讯
   function hdEnsureSSE() {
+    // 新帖入库不 bump 观点版本号，标签快讯的到账靠 60s 兜底轮询（恒开，覆盖 SSE 断连）
+    if (!_hd.pollTimer) _hd.pollTimer = setInterval(hdIncAll, 60000);
     if (!state.token || _hd.es) return;
     try {
       const es = new EventSource(`/api/mx-views/stream?token=${encodeURIComponent(state.token)}`);
-      es.addEventListener("version", () => { hdIncRefresh(); });
-      es.onerror = () => { // EventSource 自动重连；兜底 60s 轮询
+      es.addEventListener("version", () => { hdIncAll(); });
+      es.onerror = () => { // EventSource 自动重连；连接状态只管实时点
         _hd.sseOk = false;
         hdSseSync();
-        if (!_hd.pollTimer) _hd.pollTimer = setInterval(hdIncRefresh, 60000);
       };
       es.onopen = () => {
         _hd.sseOk = true;
         hdSseSync();
-        if (_hd.pollTimer) { clearInterval(_hd.pollTimer); _hd.pollTimer = null; }
       };
       _hd.es = es;
     } catch (e) { /* SSE 不可用时静默 */ }
@@ -375,13 +431,14 @@ export function createHoldingsView(dependencies) {
     window._hdTargets = cards.map((c) => ({ type: c.h.target_type, name: c.h.target_name }));
     el.innerHTML = cards.map((c, i) => {
       const net = c.s.bull - c.s.bear;
+      const tagc = (_hd.tagSummary.get(c.h.target_name) || {}).tag_count || 0;
       const active = _hd.filter && _hd.filter.type === c.h.target_type
         && _hd.filter.name === c.h.target_name;
       return `
       <button type="button" class="hd-card${active ? " active" : ""}${c.s.total ? "" : " zero"}" onclick="hdFilter(${i})">
         <span class="hd-card-head">${hdTypeBadge(c.h.target_type)}<b>${escapeHtml(c.h.target_name)}</b></span>
         <span class="hd-net ${net > 0 ? "bull" : net < 0 ? "bear" : "flat"}">${c.s.total ? `净 ${net > 0 ? "+" : ""}${net}` : "暂无观点"}</span>
-        <span class="hd-counts"><i class="bull">▲${c.s.bull}</i><i class="bear">▼${c.s.bear}</i><i class="neutral">○${c.s.neutral}</i></span>
+        <span class="hd-counts"><i class="bull">▲${c.s.bull}</i><i class="bear">▼${c.s.bear}</i><i class="neutral">○${c.s.neutral}</i><i class="tagc" title="近 ${WINDOW_DAYS} 天标签提及 ${tagc} 帖">#${tagc}</i></span>
         ${c.s.latest_at ? `<span class="hd-latest">最新 ${escapeHtml(fmtTime(c.s.latest_at))}</span>` : ""}
       </button>`;
     }).join("");
@@ -404,41 +461,78 @@ export function createHoldingsView(dependencies) {
     await hdReloadFeed();
   }
 
-  // ---- 相关观点流：样式对齐观点研判页实时观点流（行内网格两列报纸流 + 批次分隔） ----
-  function hdFeedItemHtml(it) {
+  // ---- 流区：观点（LLM 研判）与快讯（标签命中）双页签，样式对齐观点研判实时观点流 ----
+  function hdFeedTab(t) {
+    const next = t === "tags" ? "tags" : "opinions";
+    if (next === _hd.tab) return;
+    _hd.tab = next;
+    hdRenderFeed();
+  }
+
+  // 标签快讯行：同一 mxv 行内网格（时间/多空徽章/标的/大V/摘要），点击展开全文
+  function hdTagItemHtml(it) {
     const kol = it.kol_name || "";
     const kolShort = kol.length > 6 ? `${kol.slice(0, 6).replace(/[（(【\[]$/, "")}…` : kol;
-    const ev = it.evidence || [];
-    const open = ev.length && _hd.expanded.has(it.id);
+    const names = it.target_names || [];
+    const dir = it.direction === "bull" || it.direction === "bear" ? it.direction : "";
+    const open = _hd.postOpen.has(it.id);
     return `
-    <div class="mxv-feed-item${_hd.freshIds.has(it.id) ? " fresh" : ""}${ev.length ? ` has-ev${open ? " open" : ""}` : ""}"
-      ${ev.length ? `data-ev="${ev.length}" data-op-id="${it.id}" title="点击展开依据原帖" onclick="hdExpand(${it.id})"` : ""}>
-      <span class="t" style="color:var(--mxv-accent)">${escapeHtml((it.occurred_at || "").slice(11, 16))}</span>
-      <span class="mxv-badge ${escapeHtml(it.direction)}">${it.direction === "bull" ? "↑看多" : it.direction === "bear" ? "↓看空" : "中性"}</span>
-      ${it.action ? `<span class="mxv-badge act" title="${escapeHtml(it.action)}">${escapeHtml(it.action)}</span>` : "<span></span>"}
-      <span class="target" style="color:var(--mxv-text)" title="${escapeHtml(it.target_name)}">${escapeHtml(it.target_name)}</span>
+    <div class="mxv-feed-item${_hd.tagFresh.has(it.id) ? " fresh" : ""} has-post${open ? " open" : ""}"
+      data-post-id="${it.id}" title="点击展开全文" onclick="hdPostExpand(${it.id})">
+      <span class="t" style="color:var(--mxv-accent)">${escapeHtml((it.published_at || "").slice(11, 16))}</span>
+      ${dir
+        ? `<span class="mxv-badge ${dir}">${dir === "bull" ? "↑看多" : "↓看空"}</span>`
+        : `<span class="mxv-badge neutral">帖</span>`}
+      <span></span>
+      <span class="target" style="color:var(--mxv-text)" title="${escapeHtml(names.join(" · "))}">${escapeHtml(names[0] || "")}</span>
       <span style="color:var(--mxv-muted)" title="${escapeHtml(kol)}">· ${escapeHtml(kolShort)}</span>
-      <span class="sum" style="color:var(--mxv-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(it.summary || "")}">${escapeHtml(it.summary || "")}</span>
+      <span class="sum" style="color:var(--mxv-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(it.content || "")}">${escapeHtml(it.content || "")}</span>
     </div>
-    ${open ? `<div class="hd-ev">${ev.map((evItem) => `
-      <div class="hd-ev-item">
-        <div class="hd-ev-meta">${escapeHtml(evItem.author || "")} · ${escapeHtml(fmtTime(evItem.time))}</div>
-        <div class="hd-ev-content">${escapeHtml(evItem.content || "")}</div>
-      </div>`).join("")}</div>` : ""}`;
+    ${open ? `<div class="hd-ev"><div class="hd-ev-item">
+      <div class="hd-ev-meta">${escapeHtml(kol)} · ${escapeHtml(fmtTime(it.published_at))}</div>
+      <div class="hd-ev-content">${escapeHtml(it.content || "")}</div>
+    </div></div>` : ""}`;
   }
 
   function hdRenderFeed() {
     const el = document.getElementById("hd-feed");
     if (!el) return;
+    const count = _hd.tab === "tags" ? _hd.tagItems.length : _hd.items.length;
     const head = `
     <div class="mxv-kol-head">
-      <h3>相关观点<span class="hd-feed-sub">近 ${WINDOW_DAYS} 天</span></h3>
+      <h3>${_hd.tab === "tags" ? "相关快讯" : "相关观点"}<span class="hd-feed-sub">近 ${WINDOW_DAYS} 天</span></h3>
+      <div class="hd-seg hd-feed-tabs" role="tablist">
+        <button type="button" class="hd-seg-btn${_hd.tab !== "tags" ? " on" : ""}" onclick="hdFeedTab('opinions')">观点</button>
+        <button type="button" class="hd-seg-btn${_hd.tab === "tags" ? " on" : ""}" onclick="hdFeedTab('tags')">快讯</button>
+      </div>
       ${_hd.filter ? `<button type="button" class="mxv-fchip on" onclick="hdFilter(-1)">✕ ${escapeHtml(_hd.filter.name)}</button>` : ""}
-      <span class="hd-hint">${_hd.items.length ? `${_hd.items.length} 条` : ""}</span>
+      <span class="hd-hint">${count ? `${count} 条` : ""}</span>
     </div>`;
     let body;
     if (!_hd.holdings.length) {
       body = `<div class="mxv-empty">先在上方添加关注，相关观点会在这里按月汇总、实时更新。</div>`;
+    } else if (_hd.tab === "tags") {
+      if (!_hd.tagItems.length) {
+        body = `<div class="mxv-empty">${_hd.filter ? "该标的最近一个月暂无命中标签的快讯" : "最近一个月暂无命中你关注标的标签的快讯"}</div>`;
+      } else {
+        // 按发布日分组两列报纸流（同 mx-views 流视图）：左列 = 较新一半
+        const groups = new Map();
+        _hd.tagItems.forEach((it) => {
+          const day = (it.published_at || "").slice(0, 10);
+          if (!groups.has(day)) groups.set(day, []);
+          groups.get(day).push(it);
+        });
+        body = [...groups.entries()].map(([day, posts]) => {
+          const cut = Math.ceil(posts.length / 2);
+          const cols = posts.length > 1 ? [posts.slice(0, cut), posts.slice(cut)] : [posts];
+          const grid = `<div class="mxv-feed-cols${posts.length > 1 ? "" : " single"}">${cols.map((col) =>
+            `<div class="mxv-feed-col">${col.map(hdTagItemHtml).join("")}</div>`).join("")}</div>`;
+          return `<div class="mxv-feed-sep"><span>${escapeHtml((day || "").slice(5))} · ${posts.length} 条</span></div>${grid}`;
+        }).join("") + `<div class="mxv-feed-sep"><span>共 ${_hd.tagItems.length} 条</span></div>`;
+        if (!_hd.tagExhausted) {
+          body += `<div class="hd-more-wrap"><button type="button" class="hd-btn" onclick="hdTagMore()"${_hd.tagLoadingMore ? " disabled" : ""}>${_hd.tagLoadingMore ? "加载中…" : "加载更多"}</button></div>`;
+        }
+      }
     } else if (!_hd.items.length) {
       body = `<div class="mxv-empty">${_hd.filter ? "该标的最近一个月暂无相关观点" : "最近一个月暂无与你关注标的相关的观点"}</div>`;
     } else {
@@ -468,6 +562,56 @@ export function createHoldingsView(dependencies) {
     if (_hd.expanded.has(id)) _hd.expanded.delete(id);
     else _hd.expanded.add(id);
     hdRenderFeed();
+  }
+
+  function hdPostExpand(id) {
+    if (_hd.postOpen.has(id)) _hd.postOpen.delete(id);
+    else _hd.postOpen.add(id);
+    hdRenderFeed();
+  }
+
+  async function hdTagMore() {
+    if (_hd.tagLoadingMore || !_hd.tagItems.length) return;
+    _hd.tagLoadingMore = true;
+    hdRenderFeed();
+    try {
+      const before = _hd.tagItems[_hd.tagItems.length - 1].id;
+      const data = await api(`/api/my/holdings/tag-posts?limit=${PAGE_SIZE}&before_id=${before}${hdHolderQ()}`);
+      if (!routeStillActive(_hd.seq)) return;
+      const more = data.items || [];
+      const known = new Set(_hd.tagItems.map((it) => it.id));
+      _hd.tagItems = _hd.tagItems.concat(more.filter((it) => !known.has(it.id)));
+      _hd.tagExhausted = more.length < PAGE_SIZE;
+      _hd.tagMaxId = data.max_id || _hd.tagMaxId;
+    } catch (err) {
+      flash(`加载失败: ${err.message}`, "error");
+    } finally {
+      _hd.tagLoadingMore = false;
+      if (routeStillActive(_hd.seq)) hdRenderFeed();
+    }
+  }
+
+  // 观点行：LLM 研判结论（依据原帖可展开）
+  function hdFeedItemHtml(it) {
+    const kol = it.kol_name || "";
+    const kolShort = kol.length > 6 ? `${kol.slice(0, 6).replace(/[（(【\[]$/, "")}…` : kol;
+    const ev = it.evidence || [];
+    const open = ev.length && _hd.expanded.has(it.id);
+    return `
+    <div class="mxv-feed-item${_hd.freshIds.has(it.id) ? " fresh" : ""}${ev.length ? ` has-ev${open ? " open" : ""}` : ""}"
+      ${ev.length ? `data-ev="${ev.length}" data-op-id="${it.id}" title="点击展开依据原帖" onclick="hdExpand(${it.id})"` : ""}>
+      <span class="t" style="color:var(--mxv-accent)">${escapeHtml((it.occurred_at || "").slice(11, 16))}</span>
+      <span class="mxv-badge ${escapeHtml(it.direction)}">${it.direction === "bull" ? "↑看多" : it.direction === "bear" ? "↓看空" : "中性"}</span>
+      ${it.action ? `<span class="mxv-badge act" title="${escapeHtml(it.action)}">${escapeHtml(it.action)}</span>` : "<span></span>"}
+      <span class="target" style="color:var(--mxv-text)" title="${escapeHtml(it.target_name)}">${escapeHtml(it.target_name)}</span>
+      <span style="color:var(--mxv-muted)" title="${escapeHtml(kol)}">· ${escapeHtml(kolShort)}</span>
+      <span class="sum" style="color:var(--mxv-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(it.summary || "")}">${escapeHtml(it.summary || "")}</span>
+    </div>
+    ${open ? `<div class="hd-ev">${ev.map((evItem) => `
+      <div class="hd-ev-item">
+        <div class="hd-ev-meta">${escapeHtml(evItem.author || "")} · ${escapeHtml(fmtTime(evItem.time))}</div>
+        <div class="hd-ev-content">${escapeHtml(evItem.content || "")}</div>
+      </div>`).join("")}</div>` : ""}`;
   }
 
   async function hdMore() {
@@ -505,6 +649,9 @@ export function createHoldingsView(dependencies) {
     hdFilter,
     hdExpand,
     hdMore,
+    hdFeedTab,
+    hdPostExpand,
+    hdTagMore,
     hdWatchToggle,
   };
 }

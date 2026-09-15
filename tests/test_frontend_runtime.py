@@ -977,7 +977,8 @@ def test_kol_editor_uses_shared_focus_and_dirty_close_guard(page: Page):
 
 def test_holdings_view_manage_cards_feed_flow(page: Page):
     """持股研判视图（工厂级打桩）：管理区渲染/建议回填/增改删、聚合卡筛选联动、
-    时间流依据展开；持仓变更后整页重拉（桩数据不变，断言请求与反馈）。"""
+    时间流依据展开、快讯页签（标签命中帖）展开全文；持仓变更后整页重拉
+    （桩数据不变，断言请求与反馈）。"""
     page.evaluate("""async () => {
       const { createHoldingsView } = await import('/views/holdings.js');
       document.body.innerHTML = '<main id="main"></main>';
@@ -999,6 +1000,17 @@ def test_holdings_view_manage_cards_feed_flow(page: Page):
         ]},
         items: holder ? h.allItems.filter(it => it.target_name === holder.split(':')[1]) : h.allItems,
       });
+      h.tagPosts = (holder) => ({
+        window_days: 30, max_id: 33,
+        summary: {targets: [
+          {target_type: 'stock', target_name: '贵州茅台', tag_count: 2, latest_at: '2026-09-15 09:00:00'},
+          {target_type: 'topic', target_name: 'AI算力', tag_count: 0, latest_at: ''},
+        ]},
+        items: [
+          {id: 33, platform: 'mx', published_at: '2026-09-15 09:00:00', kol_name: '王哥', avatar: '', content: '飞天整箱批价 rose', target_names: ['贵州茅台'], direction: 'bull'},
+          {id: 32, platform: 'mx', published_at: '2026-09-15 08:30:00', kol_name: '李哥', avatar: '', content: '白酒板块成交低迷', target_names: ['贵州茅台'], direction: ''},
+        ].filter(it => !holder || it.target_names.includes(holder.split(':')[1])),
+      });
       h.view = createHoldingsView({
         $: (sel) => document.querySelector(sel),
         state: {token: ''},
@@ -1009,6 +1021,10 @@ def test_holdings_view_manage_cards_feed_flow(page: Page):
           if (path.startsWith('/api/my/holdings/views')) {
             const u = new URL(path, location.origin);
             return h.views(u.searchParams.get('holder') || '');
+          }
+          if (path.startsWith('/api/my/holdings/tag-posts')) {
+            const u = new URL(path, location.origin);
+            return h.tagPosts(u.searchParams.get('holder') || '');
           }
           return {};
         },
@@ -1025,6 +1041,18 @@ def test_holdings_view_manage_cards_feed_flow(page: Page):
     expect(page.locator(".mxv-feed-item")).to_have_count(3)
     expect(page.locator(".mxv-feed-item .target").first).to_have_text("贵州茅台")
     expect(page.locator(".hd-net").first).to_have_text("净 0")  # 多空各一 → 净 0
+    expect(page.locator(".hd-counts .tagc").first).to_have_text("#2")  # 标签提及数
+    # 快讯页签：标签命中帖同一行网格，方向徽章来自观点回流登记；点击展开全文
+    page.locator(".hd-feed-tabs").get_by_role("button", name="快讯").click()
+    expect(page.locator(".mxv-feed-item.has-post")).to_have_count(2)
+    expect(page.locator(".mxv-feed-item .mxv-badge.bull")).to_have_text("↑看多")
+    expect(page.locator(".mxv-feed-item .mxv-badge.neutral")).to_have_text("帖")
+    page.locator(".mxv-feed-item.has-post").first.click()
+    expect(page.locator(".hd-ev-content")).to_have_text("飞天整箱批价 rose")
+    page.locator(".mxv-feed-item.has-post").first.click()
+    expect(page.locator(".hd-ev-item")).to_have_count(0)
+    page.locator(".hd-feed-tabs").get_by_role("button", name="观点").click()
+    expect(page.locator(".mxv-feed-item")).to_have_count(3)
     # 关注列表可折叠：收起后添加区消失，再展开恢复
     page.get_by_role("button", name="收起", exact=True).click()
     expect(page.locator("#hd-add-input")).to_have_count(0)
@@ -1036,10 +1064,12 @@ def test_holdings_view_manage_cards_feed_flow(page: Page):
     expect(page.locator(".hd-ev-content")).to_have_text("飞天批价回暖")
     page.locator(".mxv-feed-item.has-ev").click()
     expect(page.locator(".hd-ev-item")).to_have_count(0)
-    # 聚合卡筛选：请求带 holder；再点取消恢复全量
+    # 聚合卡筛选：两条流请求都带 holder；再点取消恢复全量
     page.locator(".hd-card").first.click()
     expect(page.locator(".mxv-feed-item")).to_have_count(2)
-    assert len(page.evaluate("hdTest.calls.filter(c => c.path.includes('holder='))")) == 1
+    holder_calls = page.evaluate(
+        "hdTest.calls.filter(c => c.path.includes('holder=') && c.method === 'GET').map(c => c.path.split('?')[0])")
+    assert holder_calls == ["/api/my/holdings/views", "/api/my/holdings/tag-posts"]
     page.locator(".hd-card").first.click()
     expect(page.locator(".mxv-feed-item")).to_have_count(3)
     # 建议：输入防抖后拉取候选，点选回填输入框

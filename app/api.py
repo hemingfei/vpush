@@ -6825,6 +6825,62 @@ def create_api_router(
             "items": items,
         }
 
+    @router.get("/my/holdings/tag-posts")
+    async def my_holding_tag_posts(after_id: int = 0, before_id: int = 0,
+                                   limit: int = 50, holder: str = "",
+                                   current_user: dict = Depends(get_current_user)):
+        """关注标的标签命中的快讯流 + 全窗口标签提及聚合。
+
+        与 /my/holdings/views 同参语义（after_id 增量拉新 / before_id 翻旧页 /
+        holder=type:名称 单标的下钻，summary 恒为全窗口口径）；命中口径 =
+        posts.tags 精确含标的名（规则/LLM/观点回流打标同列），方向取观点回流
+        登记的看多/看空（首个命中标的的登记，无登记为空）。
+        """
+        from datetime import datetime, timedelta
+
+        from .mx_view_analysis import CN_TZ
+
+        uid = int(current_user["id"])
+        limit = max(1, min(int(limit), 200))
+        holder_pair = None
+        if holder:
+            ttype, _, name = holder.partition(":")
+            if ttype not in ("stock", "topic") or not name:
+                raise HTTPException(status_code=422, detail="holder 须为 stock|topic:名称")
+            holder_pair = (ttype, name)
+        since = (datetime.now(CN_TZ) - timedelta(days=HOLDINGS_WINDOW_DAYS)).strftime(
+            "%Y-%m-%d %H:%M:%S")
+        pairs = [(h["target_type"], h["target_name"])
+                 for h in db.list_user_holdings(uid)]
+        rows = db.list_holdings_tag_posts(pairs, since, after_id=after_id,
+                                          before_id=before_id, holder=holder_pair,
+                                          limit=limit)
+        name_pool = [holder_pair] if holder_pair else pairs
+        items = []
+        for r in rows:
+            tags = r.get("tags") or []
+            matched = [name for _t, name in name_pool if name in tags]
+            if not matched:
+                continue  # LIKE 命中但精确匹配落空（异常编码）：保守跳过不展示
+            dirs = r.get("view_directions") or {}
+            items.append({
+                "id": int(r["id"]), "platform": r["platform"] or "",
+                "published_at": r["published_at"] or "",
+                "kol_name": r["kol_name"] or "", "avatar": r["avatar_url"] or "",
+                "content": (" · ".join(x for x in (
+                    str(r.get("title") or "").strip(), str(r.get("content") or "").strip()
+                ) if x))[:800],
+                "target_names": matched,
+                "direction": next((dirs[n] for n in matched
+                                   if dirs.get(n) in ("bull", "bear")), ""),
+            })
+        return {
+            "window_days": HOLDINGS_WINDOW_DAYS,
+            "max_id": db.max_post_id_any(),
+            "summary": {"targets": db.holdings_tag_post_summary(pairs, since)},
+            "items": items,
+        }
+
     @router.get("/tags")
     def list_tags(request: Request, user: dict = Depends(get_current_user)):
         """贴文话题词表：登录用户可读（动态页标签筛选），管理与写入仍需管理员。

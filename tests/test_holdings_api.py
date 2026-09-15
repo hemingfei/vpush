@@ -207,3 +207,80 @@ def test_holdings_views_after_id_increment_and_pagination():
     page2 = client.get(f"/api/my/holdings/views?limit=1&before_id={second}",
                        headers=admin).json()
     assert [it["id"] for it in page2["items"]] == [first]
+
+
+def test_holdings_tag_posts_window_direction_holder_and_pagination():
+    """标签快讯流：窗口过滤、方向角标、holder 下钻、翻页与增量、参数校验。"""
+    client = make_client()
+    admin = auth_headers(client)
+    db = client.app.state.db
+    kol = db.add_kol("mx", "王哥", "room1")
+
+    def _mk_tagged(external_id, tags, published_at, direction_tag=""):
+        pid = _mk_post(db, kol, external_id, f"正文{external_id}", published_at)
+        db.update_post_tags(pid, tags)
+        if direction_tag:
+            db.record_applied_tag(pid, direction_tag, "stock", source="mx_view",
+                                  direction="bull")
+        return pid
+
+    assert client.post("/api/my/holdings", headers=admin,
+                       json={"target_type": "stock", "target_name": "贵州茅台"}).status_code == 201
+    assert client.post("/api/my/holdings", headers=admin,
+                       json={"target_type": "topic", "target_name": "AI算力"}).status_code == 201
+
+    # 按时间旧→新入库（posts.id 随发帖递增，与线上到达序一致）
+    p_both = _mk_tagged("t3", ["贵州茅台", "AI算力"], _ts(hours=-3))
+    p_topic = _mk_tagged("t2", ["AI算力"], _ts(hours=-2))
+    p_bull = _mk_tagged("t1", ["贵州茅台", "白酒"], _ts(hours=-1), direction_tag="贵州茅台")
+    _mk_tagged("t4", ["中际旭创"], _ts(hours=-1))  # 未持有标的：不命中
+    _mk_tagged("t5", ["贵州茅台"], _ts(days=-40))  # 窗口外
+
+    data = client.get("/api/my/holdings/tag-posts", headers=admin).json()
+    assert data["window_days"] == 30
+    # published_at 倒序；窗口外与未持有标的都不出现；一帖多标的按持股清单序全列（新添加在前）
+    assert [(it["id"], it["target_names"]) for it in data["items"]] == [
+        (p_bull, ["贵州茅台"]),
+        (p_topic, ["AI算力"]),
+        (p_both, ["AI算力", "贵州茅台"]),
+    ]
+    # 方向取观点回流登记（首个命中标的的登记）；无登记为空
+    assert data["items"][0]["direction"] == "bull"
+    assert data["items"][1]["direction"] == ""
+    assert data["items"][0]["kol_name"] == "王哥"
+    assert data["items"][0]["content"].startswith("正文t1")
+    assert data["max_id"] == db.max_post_id_any()
+    # 聚合：恒全量口径；同名股票/题材计数各自成立
+    targets = {(t["target_type"], t["target_name"]): t["tag_count"]
+               for t in data["summary"]["targets"]}
+    assert targets[("stock", "贵州茅台")] == 2
+    assert targets[("topic", "AI算力")] == 2
+
+    # holder 只过滤 items，summary 恒为全窗口口径；非法 holder 422
+    held = client.get("/api/my/holdings/tag-posts?holder=stock:贵州茅台",
+                      headers=admin).json()
+    assert {it["target_names"][0] for it in held["items"]} == {"贵州茅台"}
+    assert held["summary"] == data["summary"]
+    assert client.get("/api/my/holdings/tag-posts?holder=junk",
+                      headers=admin).status_code == 422
+
+    # before_id 翻旧页 / after_id 增量（posts.id 游标；水位含未命中标的的全局帖）
+    page1 = client.get("/api/my/holdings/tag-posts?limit=1", headers=admin).json()
+    assert [it["id"] for it in page1["items"]] == [p_bull]
+    page2 = client.get(f"/api/my/holdings/tag-posts?limit=2&before_id={p_bull}",
+                       headers=admin).json()
+    assert [it["id"] for it in page2["items"]] == [p_topic, p_both]
+    inc = client.get(f"/api/my/holdings/tag-posts?after_id={p_topic}",
+                     headers=admin).json()
+    assert [it["id"] for it in inc["items"]] == [p_bull]
+    # 游标推到最新已命中帖后：未命中的 t4/t5 不出现，但水位照全局帖推进
+    none = client.get(f"/api/my/holdings/tag-posts?after_id={p_bull}",
+                      headers=admin).json()
+    assert none["items"] == []
+    assert none["max_id"] == db.max_post_id_any() > p_bull
+
+    # 无持股用户空态；未登录 401
+    other = user_headers(client, "tag_posts_other")
+    empty = client.get("/api/my/holdings/tag-posts", headers=other).json()
+    assert empty["items"] == [] and empty["summary"]["targets"] == []
+    assert client.get("/api/my/holdings/tag-posts").status_code == 401

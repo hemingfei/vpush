@@ -240,6 +240,16 @@ def _normalize_post_images(rows: list[dict], db=None) -> list[dict]:
     return rows
 
 
+def post_tag_like_pattern(tag: str) -> str:
+    """posts.tags（JSON 数组文本）的元素边界 LIKE 模式（%"标签"%）。
+
+    避免「宏观」误中「宏观经济」；标签含引号/反斜杠时 json.dumps 保证转义一致。
+    """
+    escaped = json.dumps(str(tag), ensure_ascii=False)[1:-1]
+    escaped = escaped.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f'%"{escaped}"%'
+
+
 def _normalize_post_tags(rows: list[dict]) -> list[dict]:
     """posts 行的 tags 是 JSON 数组文本（LLM 打标结果），统一解析为列表。"""
     for row in rows:
@@ -5157,12 +5167,9 @@ class DB:
             like = f"%{escaped}%"
             params.extend([like, like])
         if tag:
-            # tags 列存 JSON 数组文本，按 JSON 编码后的元素边界匹配（%"标签"%），
-            # 避免「宏观」误中「宏观经济」；标签含引号/反斜杠时 json.dumps 保证转义一致
-            escaped_tag = json.dumps(tag, ensure_ascii=False)[1:-1]
-            escaped = escaped_tag.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            # tags 列存 JSON 数组文本，按 JSON 编码后的元素边界匹配（%"标签"%）
             conds.append("p.tags LIKE ? ESCAPE '\\'")
-            params.append(f'%"{escaped}"%')
+            params.append(post_tag_like_pattern(tag))
         if favorite:
             conds.append("s.favorite = 1")
         if since_id:
@@ -6273,6 +6280,78 @@ class DB:
         } for r in rows]
         out.sort(key=lambda x: (x["total"], x["latest_at"]), reverse=True)
         return out
+
+    def list_holdings_tag_posts(self, pairs: list[tuple[str, str]], since: str,
+                                after_id: int = 0, before_id: int = 0,
+                                holder: tuple[str, str] | None = None,
+                                limit: int = 50) -> list[dict]:
+        """关注标的标签命中的快讯（posts.tags 精确含标的名，published_at 倒序）。
+
+        标签口径与动态页标签筛选同源：规则/LLM/观点回流打标都落在 posts.tags
+        一列，按 JSON 元素边界匹配；多空方向取观点回流登记（attach_view_directions）。
+        holder 传 (target_type, target_name) 时只取该标的；after_id/before_id 为
+        posts.id 游标：增量拉新与「加载更多」共用一张表。
+        """
+        if holder:
+            pairs = [tuple(holder)]
+        else:
+            pairs = list(pairs or [])
+        if not pairs:
+            return []
+        likes = " OR ".join("p.tags LIKE ? ESCAPE '\\'" for _ in pairs)
+        sql = (
+            "SELECT p.id, p.platform, p.title, p.content, p.published_at, p.tags, "
+            "k.name AS kol_name, k.avatar_url FROM posts p "
+            "JOIN kols k ON k.id = p.kol_id "
+            f"WHERE p.published_at >= ? AND COALESCE(p.blocked, 0) = 0 "
+            f"AND COALESCE(p.hidden, 0) = 0 AND ({likes}) AND p.id > ?"
+        )
+        values: list = [since, *[post_tag_like_pattern(name) for _t, name in pairs],
+                        int(after_id)]
+        if before_id > 0:
+            sql += " AND p.id < ?"
+            values.append(int(before_id))
+        sql += " ORDER BY p.published_at DESC, p.id DESC LIMIT ?"
+        values.append(int(limit))
+        rows = _sanitize_post_detail(_normalize_post_tags(self._rows(sql, tuple(values))))
+        return self.attach_view_directions(rows)
+
+    def holdings_tag_post_summary(self, pairs: list[tuple[str, str]], since: str) -> list[dict]:
+        """全窗口按标的聚合的标签提及数（恒为全量口径，不随 items 筛选变化）。
+
+        单次扫描：每标的一对 SUM/MAX(CASE tags LIKE ...) 列，避免 N 次 LIKE 全表查。
+        """
+        pairs = list(pairs or [])
+        if not pairs:
+            return []
+        cols: list[str] = []
+        params: list = []
+        for i, (_ttype, name) in enumerate(pairs):
+            pattern = post_tag_like_pattern(name)
+            cols.append(
+                f"SUM(CASE WHEN p.tags LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END) AS c{i}, "
+                f"MAX(CASE WHEN p.tags LIKE ? ESCAPE '\\' THEN p.published_at END) AS t{i}"
+            )
+            params.extend([pattern, pattern])
+        rows = self._rows(
+            f"SELECT {', '.join(cols)} FROM posts p "
+            "WHERE p.published_at >= ? AND COALESCE(p.blocked, 0) = 0 "
+            "AND COALESCE(p.hidden, 0) = 0",
+            tuple([*params, since]),
+        )
+        row = rows[0] if rows else {}
+        out = [{
+            "target_type": ttype, "target_name": name,
+            "tag_count": int(row.get(f"c{i}") or 0),
+            "latest_at": row.get(f"t{i}") or "",
+        } for i, (ttype, name) in enumerate(pairs)]
+        out.sort(key=lambda x: (x["tag_count"], x["latest_at"]), reverse=True)
+        return out
+
+    def max_post_id_any(self) -> int:
+        """全表快讯最大 id（无帖返回 0）；持股相关快讯流的增量游标。"""
+        rows = self._rows("SELECT COALESCE(MAX(id), 0) AS m FROM posts")
+        return int(rows[0]["m"]) if rows else 0
 
     def recent_topic_names(self, since_day: str, limit: int = 200) -> list[str]:
         """近 N 天研判产出过的题材名（按出现频次降序），题材建议列表用。"""
