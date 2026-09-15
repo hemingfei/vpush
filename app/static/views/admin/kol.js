@@ -1312,14 +1312,15 @@ export function createAdminKolsView(dependencies) {
   }
 
   async function loadAdminTagsTab() {
-    let data, tagStatus, tagReviews, aliasCands, tagPending;
+    let data, tagStatus, tagReviews, aliasCands, tagPending, tagReviewCfg;
     try {
-      [data, tagStatus, tagReviews, aliasCands, tagPending] = await Promise.all([
+      [data, tagStatus, tagReviews, aliasCands, tagPending, tagReviewCfg] = await Promise.all([
         api("/api/tags"),
         api("/api/admin/mx-llm-tag/status"),
         api(`/api/admin/post-tag-reviews?status=pending${_tagReviewSource ? `&source=${_tagReviewSource}` : ""}`),
         api("/api/admin/stock-alias-candidates"),
         api("/api/admin/mx-llm-tag/pending"),
+        api("/api/admin/tag-review/config"),
       ]);
     } catch (err) {
       if (!routeStillActive(currentAdminSeq())) return;
@@ -1398,7 +1399,7 @@ export function createAdminKolsView(dependencies) {
           <span id="tag-backfill-result" class="muted"></span>
         </div>
       </section>
-      ${adminMxTagPanel(tagStatus, tagReviews, aliasCands, tagPending)}
+      ${adminMxTagPanel(tagStatus, tagReviews, aliasCands, tagPending, tagReviewCfg)}
       <section class="section-panel">
         <header class="section-head"><div><h2 class="section-title">当前词表（${tags.length} 个）</h2></div></header>
         <div class="tag-vocab-preview">
@@ -1488,10 +1489,25 @@ export function createAdminKolsView(dependencies) {
     loadAdminVocabTab("tags");
   }
 
-  function adminMxTagPanel(tagStatus, tagReviews, aliasCands, tagPending) {
+  async function adminSaveTagReviewConfig() {
+    const body = {
+      public_voting: !!document.getElementById("tag-review-public")?.checked,
+      unanimous_n: Number(document.getElementById("tag-review-unanimous")?.value || 0),
+      max_voters: Number(document.getElementById("tag-review-max")?.value || 0),
+    };
+    try {
+      await api("/api/admin/tag-review/config", { method: "PUT", body: JSON.stringify(body) });
+      flash("大众评审配置已保存");
+    } catch (err) {
+      flash("保存失败: " + err.message, "error");
+    }
+  }
+
+  function adminMxTagPanel(tagStatus, tagReviews, aliasCands, tagPending, tagReviewCfg) {
     const st = tagStatus || {};
     const pendingTotal = Number(tagPending?.total) || 0;
     const vt = st.view_tagging || {};
+    const vcfg = tagReviewCfg || {};
     const statusLine = [
       `未打标消息 ${pendingTotal} 条`,
       `今日 LLM 调用 ${(st.calls_today && st.calls_today.count) || 0} 次`,
@@ -1566,6 +1582,14 @@ export function createAdminKolsView(dependencies) {
           <option value="llm"${_tagReviewSource === "llm" ? " selected" : ""}>LLM 打标</option>
           <option value="mx_view"${_tagReviewSource === "mx_view" ? " selected" : ""}>观点研判回流</option>
         </select></header>
+        <div class="tag-review-vote-config" aria-label="大众评审配置">
+          <label class="tag-review-vote-toggle"><input type="checkbox" id="tag-review-public" ${vcfg.public_voting ? "checked" : ""}> 开放大众评审（普通用户点开待审标签可直接投票）</label>
+          <span class="tag-review-vote-num">一致裁决
+            <input type="number" id="tag-review-unanimous" min="1" max="50" value="${Number(vcfg.unanimous_n) || 2}" aria-label="一致裁决人数"> 人全部同向立即裁决</span>
+          <span class="tag-review-vote-num">最终裁决
+            <input type="number" id="tag-review-max" min="1" max="200" value="${Number(vcfg.max_voters) || 10}" aria-label="最终裁决人数"> 人按多数裁决（平票判拒绝）</span>
+          <button type="button" class="btn-sm" onclick="adminSaveTagReviewConfig()">保存配置</button>
+        </div>
         <div class="table-wrap">
           <table>
             <thead><tr><th scope="col" class="tag-review-check"><input type="checkbox" id="tag-review-sel-all" aria-label="全选待审标签" onchange="adminTagReviewSelAll(this.checked)"></th><th scope="col">ID</th><th scope="col">消息</th><th scope="col">标签</th><th scope="col">类型</th><th scope="col">操作</th></tr></thead>
@@ -2454,6 +2478,7 @@ export function createAdminKolsView(dependencies) {
     adminTagDetailRemoveTag,
     adminToggleViewTagging,
     adminTagReviewSourceChange,
+    adminSaveTagReviewConfig,
     adminPaintTagDetail,
     mxAutoPeriodInputs,
   };
