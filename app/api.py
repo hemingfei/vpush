@@ -3446,6 +3446,10 @@ def create_api_router(
         order = {key: index for index, key in enumerate(keys)}
         items.sort(key=lambda item: order.get((item.get("group_id"), item.get("media_id")), 0))
         cached = db.ima_ticker_digest(ticker)
+        # 综述是按全部库编译的：只授了部分库的人看到它，就拿到了其他库里的要点。
+        # 读不全来源库就整块隐藏（时间线仍按可见库过滤返回）。
+        if cached and not set(db.ima_ticker_groups(ticker)) <= set(group_ids):
+            cached = {}
         return {
             "code": ticker,
             "name": str(cached.get("name") or (rows[0]["ticker_name"] if rows else "")),

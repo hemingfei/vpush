@@ -5734,6 +5734,17 @@ class DB:
             params,
         )
 
+    def ima_ticker_groups(self, code) -> list[str]:
+        """该标的被哪些库收录（综述按全部库编译，据此判定谁能看这份摘要）。"""
+        normalized = self.ima_ticker_code(code)
+        if not normalized:
+            return []
+        rows = self._read_only_rows(
+            "SELECT DISTINCT group_id FROM report_extraction_tickers WHERE code = ?",
+            (normalized,),
+        )
+        return [str(row["group_id"]) for row in rows]
+
     def ima_ticker_digest(self, code, kind: str = "ticker") -> dict:
         """读缓存的聚合综述（无则空字典）。"""
         rows = self._rows(

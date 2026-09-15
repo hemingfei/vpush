@@ -2571,7 +2571,7 @@ def test_ima_ticker_page_returns_timeline_and_digest(tmp_path, monkeypatch):
     monkeypatch.setenv("DAV_UI_ONLY", "1")
     client = TestClient(create_app(db_path=tmp_path / "ticker-page.sqlite"))
     headers = _headers(client, "ticker_page_admin", "TICKERPAGE1", admin=True)
-    group_id, _ = _configure_two_groups(client, headers)
+    group_id, group_b = _configure_two_groups(client, headers)
     db = client.app.state.db
     for media_id, sort_date in (("r1", "2026-09-10"), ("r2", "2026-09-12")):
         db._conn.execute(
@@ -2617,3 +2617,30 @@ def test_ima_ticker_page_returns_timeline_and_digest(tmp_path, monkeypatch):
     assert empty.status_code == 200, empty.text
     assert empty.json()["digest"] == {}
     assert empty.json()["items"] == []
+
+    # 综述按全部库编译：只授了部分库的人不得看到它（时间线仍按可见库过滤）
+    reader_headers = _headers(client, "ticker_page_reader", "TICKERPAGE2")
+    reader_id = db._rows("SELECT id FROM users WHERE username = ?", ("ticker_page_reader",))[0]["id"]
+    db._conn.execute(
+        "INSERT INTO ima_document_index (group_id, media_id, name, sort_date, day) VALUES (?, ?, ?, ?, ?)",
+        (group_b, "r3", "r3 标题", "2026-09-13", "2026-09-13"),
+    )
+    db._conn.commit()
+    db.save_report_extraction(
+        group_b,
+        "r3",
+        thesis="r3 要点",
+        tickers=[{"code": "NVDA", "name": "英伟达"}],
+        status="ok",
+    )
+    db.set_ima_kb_acl(group_id, [reader_id])
+    partial = client.get("/api/ima-documents/tickers/英伟达", headers=reader_headers)
+    assert partial.status_code == 200, partial.text
+    assert [item["media_id"] for item in partial.json()["items"]] == ["r2", "r1"]
+    assert partial.json()["digest"] == {}
+
+    db.set_ima_kb_acl(group_b, [reader_id])
+    granted = client.get("/api/ima-documents/tickers/英伟达", headers=reader_headers)
+    assert granted.status_code == 200, granted.text
+    assert [item["media_id"] for item in granted.json()["items"]] == ["r3", "r2", "r1"]
+    assert granted.json()["digest"]["consensus"] == "共识"
