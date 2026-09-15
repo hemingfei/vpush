@@ -3507,6 +3507,9 @@ class ImaDocumentService:
         if self.search_index is None or not self.search_index.enabled:
             return
         try:
+            # 索引范围跟随产品组（IMA 组 + 启用本地库 + 飞书），不靠 IMA_SEARCH_GROUP_IDS 手工维护：
+            # 新增组/本地库后下一轮 sync 自动补齐。
+            self.search_index.add_group_ids(group.id for group in self.product_groups())
             rows = self.db.ima_document_index_rows(self.search_index.group_ids)
             self.search_index.sync(rows)
         except Exception:  # noqa: BLE001 - optional search must not stop IMA workers

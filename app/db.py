@@ -5229,6 +5229,13 @@ class DB:
             "WHERE t.group_id = d.group_id AND t.media_id = d.media_id "
             "AND t.tag {like})"
         )
+        # 中文编译产物（机器摘要 abstract_zh + LLM 抽取 thesis）：正文以英文为主，
+        # 中文查询只能靠它们召回，因此与 metadata/标签同级参与 LIKE 与排序。
+        thesis_like = (
+            "EXISTS (SELECT 1 FROM report_extractions re "
+            "WHERE re.group_id = d.group_id AND re.media_id = d.media_id "
+            f"AND re.status = 'ok' AND re.thesis {like})"
+        )
         rank_sql = "0"
         pattern = None
         rank_placeholders = 0
@@ -5242,15 +5249,17 @@ class DB:
             else:
                 clauses.append(
                     f"(d.name_folded {like} OR d.metadata_folded {like} "
-                    f"OR d.abstract_folded {like} OR {tag_like.format(like=like)})"
+                    f"OR d.abstract_folded {like} OR d.abstract_zh {like} "
+                    f"OR {tag_like.format(like=like)} OR {thesis_like})"
                 )
-                params.extend([pattern, pattern, pattern, pattern])
+                params.extend([pattern] * 6)
                 rank_sql = (
                     f"CASE WHEN d.name_folded {like} THEN 3 "
-                    f"WHEN d.metadata_folded {like} OR {tag_like.format(like=like)} THEN 2 "
+                    f"WHEN d.metadata_folded {like} OR d.abstract_zh {like} "
+                    f"OR {tag_like.format(like=like)} OR {thesis_like} THEN 2 "
                     "ELSE 1 END"
                 )
-                rank_placeholders = 3
+                rank_placeholders = 5
         return " AND ".join(clauses), params, rank_sql, pattern, rank_placeholders
 
     def ima_document_page(
@@ -5469,10 +5478,14 @@ class DB:
         groups = list(dict.fromkeys(str(item).strip() for item in group_ids if str(item).strip()))
         if not groups:
             return []
+        # thesis（LLM 中文核心逻辑）随行带出供全文检索索引使用，不在列表接口暴露。
         return self._rows(
-            "SELECT * FROM ima_document_index "
-            f"WHERE group_id IN ({', '.join('?' for _ in groups)}) "
-            "ORDER BY group_id, media_id",
+            "SELECT d.*, re.thesis AS thesis_zh FROM ima_document_index d "
+            "LEFT JOIN report_extractions re "
+            "ON re.group_id = d.group_id AND re.media_id = d.media_id "
+            "AND re.status = 'ok' "
+            f"WHERE d.group_id IN ({', '.join('?' for _ in groups)}) "
+            "ORDER BY d.group_id, d.media_id",
             groups,
         )
 

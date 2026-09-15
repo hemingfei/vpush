@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Any
 
 MAX_BODY_BYTES = 8 * 1024 * 1024
+# 首次全量建索引可能上万篇：每 N 篇提交一次，避免单个巨型事务的 WAL/内存峰值；
+# 中断后下一轮按 source_hash 跳过已完成部分继续（否则每次都要从头重来）。
+SYNC_COMMIT_EVERY = 500
 MAX_QUERY_CHARS = 256
 
 _EMPTY_COUNTS = {
@@ -27,6 +30,8 @@ _SOURCE_FIELDS = (
     "group_name",
     "metadata_folded",
     "abstract",
+    "abstract_zh",
+    "thesis_zh",
     "tags_json",
     "txt_path",
     "downloaded_at",
@@ -250,6 +255,16 @@ class ImaSearchIndex:
                     except OSError:
                         missing += 1
                         continue
+                    # 中文编译产物（机器摘要 + LLM thesis）入 body：正文以英文为主，
+                    # trigram FTS 的中文查询只能靠它们命中。
+                    zh = _plain_text(
+                        " ".join(
+                            str(source.get(field) or "")
+                            for field in ("abstract_zh", "thesis_zh")
+                        )
+                    )
+                    if zh:
+                        body = f"{zh} {body}"
                     metadata = " ".join(
                         str(source.get(field) or "")
                         for field in ("group_name", "metadata_folded", "abstract", "tags_json")
@@ -271,6 +286,8 @@ class ImaSearchIndex:
                         ),
                     )
                     updated += 1
+                    if updated % SYNC_COMMIT_EVERY == 0:
+                        connection.commit()
 
                 removed_keys = set(existing) - present
                 for group_id, media_id in removed_keys:

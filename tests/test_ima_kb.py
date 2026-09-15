@@ -1772,6 +1772,36 @@ def _seed_full_text_search(client, records_and_tags):
     return service
 
 
+def test_full_text_index_scope_follows_product_groups(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    monkeypatch.setenv("IMA_SEARCH_GROUP_IDS", "group-a")
+    client = TestClient(create_app(db_path=tmp_path / "product-scope.sqlite"))
+    headers = _headers(client, "fts_scope_admin", "FTSSCOPE1", admin=True)
+    _, group_b = _configure_two_groups(client, headers)
+
+    # group-b 不在 IMA_SEARCH_GROUP_IDS（种子）里，但属于产品组 → 索引范围应自动覆盖。
+    service = _seed_full_text_search(
+        client,
+        [
+            (
+                {
+                    "media_id": "group-b-hit",
+                    "name": "Group B report.pdf",
+                    "day": "0901",
+                    "group_id": group_b,
+                    "abstract": "unrelated",
+                },
+                [],
+                "widened scope body text",
+            )
+        ],
+    )
+
+    assert group_b in service.search_index.group_ids
+    hits = service.search_index.search("widened scope", [group_b], 10)
+    assert [hit["media_id"] for hit in hits] == ["group-b-hit"]
+
+
 def _full_text_search_client(tmp_path, monkeypatch, name):
     monkeypatch.setenv("DAV_UI_ONLY", "1")
     monkeypatch.setenv("IMA_SEARCH_GROUP_IDS", "group-a,group-b")

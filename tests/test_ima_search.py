@@ -196,6 +196,41 @@ def test_sync_and_search_overlap_serves_a_committed_version(tmp_path, monkeypatc
     assert index.search("updated committed", ["semi"], 10)[0]["media_id"] == "report"
 
 
+def test_sync_commits_every_batch_without_losing_rows(tmp_path, monkeypatch):
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    media_ids = ("a", "b", "c")
+    for media_id in media_ids:
+        (archive / f"{media_id}.txt").write_text(f"{media_id} body text", encoding="utf-8")
+    monkeypatch.setattr(ima_search, "SYNC_COMMIT_EVERY", 1)
+
+    index = ImaSearchIndex(tmp_path / "ima-search.db", archive, ("semi",))
+    rows = [_row("semi", media_id, f"{media_id}.txt") for media_id in media_ids]
+    commits: list[int] = []
+
+    class CountingConnection(sqlite3.Connection):
+        def commit(self):
+            commits.append(1)
+            return super().commit()
+
+    original_connect = index._connect
+
+    def controlled_connect(*, readonly=False):
+        if readonly:
+            return original_connect(readonly=True)
+        return _writer_connection(index, CountingConnection)
+
+    monkeypatch.setattr(index, "_connect", controlled_connect)
+
+    assert index.sync(rows)["updated"] == len(media_ids)
+    # 每篇一次分批提交（事务退出那一次走 C 层，不进计数器）；为 0 说明又退回单个巨型事务。
+    assert len(commits) == len(media_ids)
+    assert index.status()["documents"] == len(media_ids)
+    hits = index.search("body text", ["semi"], 10)
+    assert {hit["media_id"] for hit in hits} == set(media_ids)
+    assert index.sync(rows[:2])["removed"] == 1
+
+
 def test_sync_removes_configured_documents_absent_from_next_input(tmp_path):
     archive = tmp_path / "archive"
     archive.mkdir()
@@ -313,6 +348,28 @@ def test_full_text_search_matches_body_column_only(tmp_path):
     assert [item["media_id"] for item in index.search(
         "quantum interconnect", ["semi"], 10
     )] == ["body-only"]
+
+
+def test_full_text_search_indexes_chinese_compiled_fields(tmp_path):
+    """正文全英文时，中文查询仍要能命中 abstract_zh / thesis_zh，且编译产物变化触发重索引。"""
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    (archive / "zh.txt").write_text("Free cash flow inflected higher.", encoding="utf-8")
+    (archive / "plain.txt").write_text("Free cash flow inflected higher.", encoding="utf-8")
+    index = ImaSearchIndex(tmp_path / "ima-search.db", archive, ("semi",))
+    row = _row("semi", "zh", "zh.txt")
+    index.sync([
+        {**row, "abstract_zh": "算力资本开支回升", "thesis_zh": "维持买入评级"},
+        _row("semi", "plain", "plain.txt"),
+    ])
+
+    assert [item["media_id"] for item in index.search("算力资本开支", ["semi"], 10)] == ["zh"]
+    assert [item["media_id"] for item in index.search("维持买入评级", ["semi"], 10)] == ["zh"]
+
+    changed = {**row, "abstract_zh": "算力资本开支回升", "thesis_zh": "下调至中性"}
+    assert index.sync([changed])["updated"] == 1
+    assert index.search("维持买入评级", ["semi"], 10) == []
+    assert [item["media_id"] for item in index.search("下调至中性", ["semi"], 10)] == ["zh"]
 
 
 def test_full_text_search_supports_bounded_offset_pages(tmp_path):

@@ -672,7 +672,9 @@ def _ima_row(group_id, media_id, *, name=None, tags=None, **kwargs):
     return row
 
 
-def _index_row(group_id, media_id, day, *, name="研报.pdf", tags=None, abstract=""):
+def _index_row(
+    group_id, media_id, day, *, name="研报.pdf", tags=None, abstract="", abstract_zh=""
+):
     tags = tags or []
     return {
         "group_id": group_id,
@@ -685,7 +687,7 @@ def _index_row(group_id, media_id, day, *, name="研报.pdf", tags=None, abstrac
         "metadata_folded": f"{group_id} {' '.join(tags)}".casefold(),
         "abstract": abstract,
         "abstract_folded": abstract.casefold(),
-        "abstract_zh": "",
+        "abstract_zh": abstract_zh,
         "abstract_src_hash": "",
         "cover_url": "",
         "tags": tags,
@@ -1428,6 +1430,32 @@ def test_ima_document_index_search_ranking_and_literal_wildcards(tmp_path):
 
     assert db.ima_document_page(["semi"], group="other")["items"] == []
     assert db.ima_document_page([], query="ai")["document_count"] == 0
+
+
+def test_ima_document_query_matches_chinese_compiled_fields(tmp_path):
+    """中文编译产物（abstract_zh / LLM thesis）必须能搜到，且只认 status='ok'。"""
+    db = DB(str(tmp_path / "zh-search.sqlite"))
+    db.replace_ima_document_index(
+        [
+            _index_row("semi", "abstract", "0830", abstract_zh="算力资本开支回升"),
+            _index_row("semi", "thesis", "0831"),
+            _index_row("semi", "failed", "0832"),
+        ],
+        "fp",
+        1,
+    )
+    db.save_report_extraction(
+        "semi", "thesis", thesis="算力资本开支回升带动盈利上修"
+    )
+    db.save_report_extraction(
+        "semi", "failed", thesis="算力资本开支回升待确认", status="failed"
+    )
+
+    page = db.ima_document_page(["semi"], query="算力资本开支", limit=50, offset=0)
+    assert sorted(item["media_id"] for item in page["items"]) == ["abstract", "thesis"]
+    assert page["document_count"] == 2
+    assert db.ima_document_match_count(["semi"], query="算力资本开支") == 2
+    assert db.ima_document_match_count(["semi"], query="盈利上修") == 1
 
 
 def test_ima_document_page_has_stable_cross_group_tie_order(tmp_path):

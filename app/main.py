@@ -112,6 +112,8 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     archive_root = Path(archive_env) if archive_env else index_root
     status_env = os.environ.get("IMA_STORAGE_STATUS_PATH", "").strip()
     storage_status = ImaStorageStatus(status_env or None, remote=bool(archive_env))
+    # 全文检索索引的开关与种子：启用与否看它；范围会在运行时跟随产品组（IMA 组/本地库/飞书）扩展，
+    # 见 ImaDocumentService._sync_full_text_index。
     search_group_ids = tuple(
         dict.fromkeys(
             item.strip()
