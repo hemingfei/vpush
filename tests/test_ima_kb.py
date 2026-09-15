@@ -1774,12 +1774,13 @@ def _seed_full_text_search(client, records_and_tags):
 
 def test_full_text_index_scope_follows_product_groups(tmp_path, monkeypatch):
     monkeypatch.setenv("DAV_UI_ONLY", "1")
-    monkeypatch.setenv("IMA_SEARCH_GROUP_IDS", "group-a")
+    # 生产上 IMA_SEARCH_GROUP_IDS 为空：索引必须靠产品组自行打开，而不是靠环境变量种子。
+    monkeypatch.setenv("IMA_SEARCH_GROUP_IDS", "")
     client = TestClient(create_app(db_path=tmp_path / "product-scope.sqlite"))
     headers = _headers(client, "fts_scope_admin", "FTSSCOPE1", admin=True)
     _, group_b = _configure_two_groups(client, headers)
 
-    # group-b 不在 IMA_SEARCH_GROUP_IDS（种子）里，但属于产品组 → 索引范围应自动覆盖。
+    # group-b 不在环境变量（种子）里，但属于产品组 → 索引范围应自动覆盖。
     service = _seed_full_text_search(
         client,
         [
