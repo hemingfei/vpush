@@ -144,6 +144,7 @@ from .ima_kb import (
     readable_group_ids,
 )
 from .ima_kb import catalog as ima_kb_catalog
+from .ima_digest import digest_view
 from .plaza import (
     filter_plaza_rows,
     is_plaza_hidden,
@@ -3425,6 +3426,33 @@ def create_api_router(
         db.ima_kb_unsubscribe(user["id"], group_id)
         _audit(user, "unsubscribe_ima_kb", group_id)
         return {"ok": True}
+
+    @router.get("/ima-documents/tickers/{code}")
+    def ima_ticker_page(
+        code: str,
+        group: str = Query("", max_length=128),
+        limit: int = 100,
+        user: dict = Depends(get_current_user),
+    ):
+        """标的页：该标的的研报时间线 + 已编译的跨文档综述（未编译则只有时间线）。"""
+        groups = _require_readable_group(user, group)
+        group_ids = [group_config.id for group_config in groups]
+        ticker = db.ima_ticker_code(code[:64])
+        rows = db.ima_ticker_reports(
+            ticker, group_ids, limit=bounded_limit(limit, default=100)
+        )
+        keys = [(row["group_id"], row["media_id"]) for row in rows]
+        items = db.attach_report_extractions(db.ima_documents_by_keys(keys, group_ids))
+        order = {key: index for index, key in enumerate(keys)}
+        items.sort(key=lambda item: order.get((item.get("group_id"), item.get("media_id")), 0))
+        cached = db.ima_ticker_digest(ticker)
+        return {
+            "code": ticker,
+            "name": str(cached.get("name") or (rows[0]["ticker_name"] if rows else "")),
+            "digest": digest_view(cached) if cached else {},
+            "items": items,
+            "count": len(items),
+        }
 
     @router.get("/ima-documents/{media_id}")
     def get_ima_document(

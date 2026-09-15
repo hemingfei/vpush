@@ -356,7 +356,8 @@ export function createImaView(dependencies) {
     if (ex.rating) parts.push(`<span class="ima-ex-badge ima-ex-rating">${escapeHtml(ex.rating)}</span>`);
     if (ex.target_price) parts.push(`<span class="ima-ex-badge">${escapeHtml(ex.target_price)}</span>`);
     for (const t of (ex.tickers || []).slice(0, 3)) {
-      parts.push(`<span class="ima-ex-badge ima-ex-ticker" title="${escapeHtml(ex.thesis || "")}">${escapeHtml(t.name || t.code)}</span>`);
+      // 标的徐章就是入口：/ticker/<code> 交给全局 <a href> 拦截器走 SPA 路由
+      parts.push(`<a class="ima-ex-badge ima-ex-ticker" href="/ticker/${encodeURIComponent(t.code || t.name || "")}" title="${escapeHtml(ex.thesis || "")}">${escapeHtml(t.name || t.code)}</a>`);
     }
     return parts.join("");
   }
@@ -877,6 +878,76 @@ export function createImaView(dependencies) {
       documents,
       settled: Promise.allSettled(documents ? [catalog, documents] : [catalog]),
     };
+  }
+
+  function tickerDigestHtml(digest) {
+    if (!digest) return "";
+    const steps = (digest.evolution || []).map((step) => `
+        <li class="ima-tk-step"><time>${escapeHtml(step.date || "")}</time><span>${escapeHtml(step.point)}</span></li>`).join("");
+    if (!digest.consensus && !digest.divergence && !steps) return "";
+    const updated = String(digest.updated_at || "").slice(0, 16);
+    return `
+      <section class="ima-tk-digest" aria-label="标的综述">
+        <header class="ima-tk-digest-head">
+          <strong>综述</strong>
+          <span class="section-meta">由 ${digest.source_count || 0} 篇研报要点编译${updated ? ` · ${escapeHtml(updated)}` : ""}</span>
+        </header>
+        ${digest.consensus ? `<p class="ima-tk-consensus">${escapeHtml(digest.consensus)}</p>` : ""}
+        ${steps ? `<ol class="ima-tk-steps">${steps}</ol>` : ""}
+        ${digest.divergence ? `<p class="ima-tk-divergence"><strong>分歧与风险：</strong>${escapeHtml(digest.divergence)}</p>` : ""}
+      </section>`;
+  }
+
+  function tickerTimelineRowHtml(item, groupNames) {
+    const ex = item.extraction || {};
+    const day = fmtImaDayShort(item.sort_date || item.day) || "—";
+    const badges = [
+      ex.rating ? `<span class="ima-ex-badge ima-ex-rating">${escapeHtml(ex.rating)}</span>` : "",
+      ex.target_price ? `<span class="ima-ex-badge">${escapeHtml(ex.target_price)}</span>` : "",
+    ].join("");
+    const source = groupNames.get(String(item.group_id || "")) || "";
+    return `
+      <article class="ima-doc-row ima-tk-row" role="button" tabindex="0" data-media-id="${escapeHtml(item.media_id)}" data-group-id="${escapeHtml(item.group_id || "")}" onclick="openImaDocument(this.dataset.mediaId, this.dataset.groupId)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openImaDocument(this.dataset.mediaId,this.dataset.groupId)}">
+        <time class="ima-report-date">${escapeHtml(day)}</time>
+        <span class="ima-report-copy"><strong class="ima-report-title">${escapeHtml(imaListTitle(item.name))}</strong>${ex.thesis ? `<span class="ima-report-snippet">${escapeHtml(ex.thesis)}</span>` : ""}<span class="ima-report-meta">${badges}</span></span>
+        <span class="ima-report-source">${escapeHtml(source)}</span>
+      </article>`;
+  }
+
+  async function renderTickerPage(seq, encodedCode = "") {
+    stopImaDocumentsAutoLoad();
+    const code = encodedCode ? decodeURIComponent(encodedCode) : "";
+    setPageTitle("标的综述", true, "knowledge", "回研报中心");
+    if (!code) {
+      $("#main").innerHTML = emptyState("缺少标的代码", `<div><a class="btn-normal" href="/knowledge">回研报中心</a></div>`);
+      return;
+    }
+    $("#main").innerHTML = `<div class="admin-skeleton" aria-hidden="true"></div>`;
+    let data;
+    try {
+      data = await api(`/api/ima-documents/tickers/${encodeURIComponent(code)}`);
+    } catch (err) {
+      if (!routeStillActive(seq)) return;
+      $("#main").innerHTML = emptyState(`加载失败：${err.message}`, `<div><a class="btn-normal" href="/knowledge">回研报中心</a></div>`);
+      return;
+    }
+    if (!routeStillActive(seq)) return;
+    const groupNames = new Map();
+    for (const group of [...(state.imaCatalogSubscribed || []), ...(state.imaCatalogAvailable || [])]) {
+      groupNames.set(String(group.id), String(group.name || ""));
+    }
+    const digest = data.digest || {};
+    const rows = (data.items || []).map((item) => tickerTimelineRowHtml(item, groupNames)).join("");
+    const title = data.name ? `${data.name} ${data.code}` : String(data.code || code);
+    $("#main").innerHTML = `
+      <div class="ima-tk-page">
+        <header class="ima-tk-head">
+          <h2 class="ima-tk-title">${escapeHtml(title)}</h2>
+          <p class="section-meta">${data.count || 0} 篇研报</p>
+        </header>
+        ${tickerDigestHtml(digest)}
+        ${rows ? `<div class="ima-doc-list">${rows}</div>` : emptyState("该标的暂无可见研报", "")}
+      </div>`;
   }
 
   async function renderKnowledge(seq, encodedMediaId = "", prefetched = null) {
@@ -1536,6 +1607,7 @@ export function createImaView(dependencies) {
 
   return {
     clearImaPdfUrl,
+    renderTickerPage,
     _imaDocumentRoute,
     imaDocumentReaderRoute,
     imaReaderDocumentGroup,

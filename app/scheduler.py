@@ -1916,6 +1916,8 @@ class Scheduler:
         self._last_cleanup = 0.0
         self._last_report_extract = time.monotonic()
         self._report_extract_running = False
+        self._last_ima_digest = time.monotonic()
+        self._ima_digest_running = False
         self._last_digest_flush = time.monotonic()
         self._last_xueqiu_probe = time.monotonic()
         self._last_cookie_keepalive = time.monotonic()
@@ -2244,6 +2246,23 @@ class Scheduler:
                         self._report_extract_running = False
 
                 asyncio.create_task(_run_extract_round(), name="report-extraction")
+
+            # 标的聚合编译（每小时一批，LLM 跨文档汇编；源研报没变就不重编）
+            if now_mono - self._last_ima_digest > 3600 and not self._ima_digest_running:
+                self._last_ima_digest = now_mono
+                self._ima_digest_running = True
+
+                async def _run_digest_round():
+                    try:
+                        done = await asyncio.to_thread(self._run_ticker_digest_task)
+                        if done:
+                            logger.info("标的综述编译本轮完成 %d 个", done)
+                    except Exception:  # noqa: BLE001
+                        logger.exception("标的综述编译异常")
+                    finally:
+                        self._ima_digest_running = False
+
+                asyncio.create_task(_run_digest_round(), name="ima-ticker-digest")
 
             # 定期清理过期帖子（默认每 6 小时检查一次）
             if now_mono - self._last_cleanup > 6 * 3600:
@@ -2595,6 +2614,57 @@ class Scheduler:
     def _stock_alias_due(self) -> bool:
         """股票别名识别任务是否到期：每天最多一次（settings 日期键控制）。"""
         return self.db.get_setting("stock_alias_last_date") != datetime.now().strftime("%Y-%m-%d")
+
+    def _run_ticker_digest_task(self) -> int:
+        """标的聚合编译：把同一标的多篇研报要点汇编成一篇持续更新的综述（LLM，增量）。
+
+        与逐篇抽取不同，这是跨文档产物：谁给了什么评级/目标价、观点怎么演变。
+        settings：ima_digest_enabled（默认开，='0' 关）、ima_digest_batch（默认 5 个标/轮）、
+        ima_digest_min_reports（默认 3 篇起）、ima_digest_daily_limit（默认 30 个/天）、
+        ima_digest_model（默认跟随站点 LLM 模型）。源签名（篇数:最新日期）没变就不重编。
+        """
+        db = self.db
+        if db.get_setting("ima_digest_enabled") == "0":
+            return 0
+        daily_limit = int(db.get_setting("ima_digest_daily_limit") or 30)
+        done_key = f"ima_digest_done_{time.strftime('%Y%m%d')}"
+        done_today = int(db.get_setting(done_key) or 0)
+        if done_today >= daily_limit:
+            return 0
+        site_llm = _system_llm_config(db, self.llm_config)
+        if site_llm is None:
+            return 0
+        from .ima_digest import compile_and_store
+
+        min_reports = int(db.get_setting("ima_digest_min_reports") or 3)
+        batch = min(int(db.get_setting("ima_digest_batch") or 5), daily_limit - done_today)
+        model = db.get_setting("ima_digest_model") or site_llm.model
+        # 候选按研报数降序：每轮优先编最有料的标的
+        pending = [
+            row
+            for row in db.ima_digest_candidates(min_reports=min_reports, limit=200)
+            if row["stale"]
+        ][:batch]
+        if not pending:
+            return 0
+        done = 0
+        for row in pending:
+            try:
+                compile_and_store(
+                    db,
+                    str(row["code"]),
+                    site_llm,
+                    name=str(row["name"] or ""),
+                    signature=str(row["source_signature"]),
+                    source_count=int(row["report_count"]),
+                    model=model,
+                )
+                done += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("标的综述编译失败 %s: %s", row["code"], exc)
+        if done:
+            db.set_setting(done_key, str(done_today + done))
+        return done
 
     def _run_report_extraction_task(self) -> int:
         """研报结构化抽取：每小时处理最近三天的一批研报。

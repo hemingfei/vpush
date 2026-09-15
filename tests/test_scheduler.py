@@ -5407,3 +5407,74 @@ def test_purge_inactive_skips_within_24h():
     db.set_setting("inactive_users_last_purge_at", str(int(time.time()) - 25 * 3600))
     assert db.purge_inactive_users_if_due() == 1
     assert db.get_user(gone) is None
+
+
+def test_ticker_digest_task_compiles_only_stale(tmp_path, monkeypatch):
+    """标的聚合任务：只编源签名变化的标的、限量、二次调用不再花钱。"""
+    db = DB(tmp_path / "ticker-digest-task.db")
+    for media_id, sort_date, code, name in (
+        ("r1", "2026-09-10", "NVDA", "英伟达"),
+        ("r2", "2026-09-12", "NVDA", "英伟达"),
+        ("r3", "2026-09-12", "00700", "腾讯控股"),
+    ):
+        db._execute(
+            "INSERT INTO ima_document_index (group_id, media_id, name, sort_date, day) "
+            "VALUES ('g1', ?, ?, ?, ?)",
+            (media_id, f"{media_id} 标题", sort_date, sort_date),
+        )
+        db.save_report_extraction(
+            "g1",
+            media_id,
+            thesis=f"{media_id} 要点",
+            tickers=[{"code": code, "name": name}],
+            status="ok",
+        )
+    db.set_setting("ima_digest_min_reports", "1")
+    calls = []
+
+    def fake_compile(reports, code, llm_config=None, *, name="", model="", client=None):
+        calls.append((code, name, len(reports)))
+        return {"digest": {"consensus": "共识", "evolution": [], "divergence": ""}, "model": "m", "source_count": len(reports)}
+
+    monkeypatch.setattr("app.ima_digest.compile_ticker_digest", fake_compile)
+    scheduler = Scheduler(
+        db,
+        {},
+        [],
+        SimpleNamespace(),
+        llm_config=SimpleNamespace(
+            api_key="test-key", api_base="https://example.com/v1", model="test-model"
+        ),
+    )
+
+    assert scheduler._run_ticker_digest_task() == 2
+    assert sorted(code for code, _, _ in calls) == ["00700", "NVDA"]
+    assert db.ima_ticker_digest("NVDA")["status"] == "ok"
+    assert db.get_setting(f"ima_digest_done_{time.strftime('%Y%m%d')}") == "2"
+
+    # 源签名没变 → 不再重复编译
+    assert scheduler._run_ticker_digest_task() == 0
+    assert len(calls) == 2
+
+    # 新增一篇 → 只重编该标的
+    db._execute(
+        "INSERT INTO ima_document_index (group_id, media_id, name, sort_date, day) "
+        "VALUES ('g1', 'r4', '新报告', '2026-09-15', '2026-09-15')"
+    )
+    db.save_report_extraction(
+        "g1",
+        "r4",
+        thesis="新要点",
+        tickers=[{"code": "NVDA", "name": "英伟达"}],
+        status="ok",
+    )
+    assert scheduler._run_ticker_digest_task() == 1
+    assert calls[-1][0] == "NVDA" and calls[-1][2] == 3
+
+    # 关开关 / 到日限额都不再调用
+    db.set_setting("ima_digest_enabled", "0")
+    assert scheduler._run_ticker_digest_task() == 0
+    db.set_setting("ima_digest_enabled", "1")
+    db.set_setting("ima_digest_daily_limit", "0")
+    assert scheduler._run_ticker_digest_task() == 0
+    assert len(calls) == 3

@@ -6061,3 +6061,34 @@ import(pathToFileURL({str(html_path)!r})).then(async (m) => {{
 }}).catch((e) => {{ console.error(e); process.exit(1); }});
 """
     subprocess.run(["node", "-e", js], check=True)
+
+
+def test_ticker_page_route_and_entry_points():
+    """标的综述页：/ticker/<code> 路由 + 徽章入口 + 空综述不出壳。"""
+    app = APP_JS.read_text()
+    ima = IMA_JS.read_text()
+    style = STYLE_CSS.read_text()
+    main_src = (ROOT / "app" / "main.py").read_text()
+
+    # 服务端与客户端白名单都要放行 /ticker/...，否则徽章链接会被当站外路径整页刷新
+    assert '"ticker"' in main_src.split("SPA_PREFIXES = frozenset({")[1].split("})")[0]
+    prefixes = app[app.index("const SPA_PREFIXES"):app.index("function routeStillActive")]
+    assert '"ticker"' in prefixes
+    router = _fn_body("router")
+    assert 'page === "ticker"' in router
+    assert "renderTickerPage(renderSeq, param)" in router
+
+    # 徽章即入口：根相对链接交给全局 <a href> 拦截器走 SPA 路由（相对链接在 /knowledge 下会拼错路径）
+    badges = _fn_body("imaExtractionBadgesHtml", IMA_JS)
+    assert 'href="/ticker/${encodeURIComponent(t.code || t.name || "")}"' in badges
+    assert '<span class="ima-ex-badge ima-ex-ticker"' not in badges
+
+    page = _fn_body("renderTickerPage", IMA_JS)
+    assert "/api/ima-documents/tickers/" in page
+    assert 'setPageTitle("标的综述", true, "knowledge", "回研报中心")' in page
+    assert "routeStillActive(seq)" in page
+    digest = _fn_body("tickerDigestHtml", IMA_JS)
+    assert "digest.consensus" in digest and "digest.divergence" in digest and "digest.evolution" in digest
+    assert 'if (!digest) return "";' in digest
+
+    assert ".ima-tk-digest" in style and ".ima-tk-row" in style
