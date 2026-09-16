@@ -1457,12 +1457,14 @@ def test_xueqiu_factory_uses_assigned_proxy(tmp_path, monkeypatch):
     class FakeClient:
         def __init__(self, *args, **kwargs):
             seen["proxy"] = kwargs.get("proxy")
+            seen["follow_redirects"] = kwargs.get("follow_redirects")
             self.headers = httpx.Headers()
 
     monkeypatch.setattr("app.fetchers.xueqiu.httpx.Client", FakeClient)
     fetcher = XueqiuFetcher(XueqiuConfig(cookie=""), db)
     client = fetcher.client
     assert "1.2.3.4:8080" in (seen.get("proxy") or "")
+    assert seen.get("follow_redirects") is True
     assert client._vpush_proxy_id
 
 

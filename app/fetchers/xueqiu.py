@@ -130,13 +130,13 @@ XUEQIU_AUTH_ERROR_CODES = {"10022", "400016"}
 
 
 def xueqiu_session_dead(resp: httpx.Response) -> bool:
-    """登录失效：非 200，或 JSON error_code 为 10022/400016（int/str 均可）。"""
-    if resp.status_code != 200:
+    """登录失效：401/403，或 JSON error_code 为 10022/400016。瞬时 400/302/WAF 不算。"""
+    if resp.status_code in (401, 403):
         return True
     try:
         data = resp.json()
     except ValueError:
-        return True
+        return False
     if not isinstance(data, dict):
         return False
     return str(data.get("error_code") or "") in XUEQIU_AUTH_ERROR_CODES
@@ -275,7 +275,9 @@ class XueqiuFetcher(Fetcher):
             from ..proxy import acquire_client_proxy, attach_proxy
 
             proxy, pid = acquire_client_proxy(self.db, "xueqiu")
-            c = httpx.Client(timeout=20, headers=headers, proxy=proxy)
+            c = httpx.Client(
+                timeout=20, headers=headers, proxy=proxy, follow_redirects=True
+            )
             if cookie:
                 c.headers["Cookie"] = cookie
             attach_proxy(c, pid)

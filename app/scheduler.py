@@ -1644,6 +1644,12 @@ def probe_xueqiu(db: DB, notifiers: list[Notifier], source_config) -> None:
                     "雪球探测告警",
                 )
             return
+        if resp.status_code != 200:
+            db.set_setting(
+                SOURCE_ERR_KEY.format(platform="xueqiu"),
+                f"探测 HTTP {resp.status_code}",
+            )
+            return
         db.set_setting(SOURCE_OK_KEY.format(platform="xueqiu"), str(int(time.time())))
         db.set_setting(SOURCE_ERR_KEY.format(platform="xueqiu"), "")
     except Exception as exc:  # noqa: BLE001
@@ -1724,6 +1730,8 @@ def keepalive_xueqiu_cookie(
         if xueqiu_session_dead(resp):
             db.set_setting(SOURCE_ERR_KEY.format(platform="xueqiu"), "cookie 无效或已过期（保活探测）")
             _alert_cookie_keepalive(db, notifiers, "雪球", f"timeline HTTP {resp.status_code}")
+            return
+        if resp.status_code != 200:
             return
         # 会话有效：合并本次响应下发的 cookie（一般无新 token，原样保留），更新状态
         new_cookie = merge_cookie_strings(cookie, client.cookies, "xueqiu.com")
