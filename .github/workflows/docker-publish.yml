@@ -220,9 +220,39 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha,scope=amd64
           cache-to: type=gha,mode=max,scope=amd64
-      # 镜像推完后触发 VPS 上的 Jenkins 拉新镜像重启容器（compose pull && up -d）。
-      # 任务带 IMAGE 参数（默认 :hmf），必须走 /buildWithParameters；/build 端点对参数化任务返回 400。
+      # 镜像推完后先经V平台「系统通知」KOL 预告即将重启（webhook 飞书同款签名），
+      # 再触发 VPS 上的 Jenkins 拉新镜像重启容器（compose pull && up -d）。
+      # 预告是礼节性通知：webhook 抖动不阻断部署（continue-on-error 红标留痕）。
+      # Jenkins 任务带 IMAGE 参数（默认 :hmf），必须走 /buildWithParameters；/build 端点对参数化任务返回 400。
       # Jenkins 侧轮询触发已移除，本步骤是唯一自动部署入口；token 在 openclaw 账号 API Token（github-actions-vpush）。
+      - name: 发布部署预告（系统通知）
+        if: ${{ success() }}
+        continue-on-error: true
+        run: |
+          python3 - <<'EOF'
+          import base64, hashlib, hmac, json, os, time, urllib.request
+
+          ts = int(time.time())
+          secret = os.environ["VPUSH_WEBHOOK_SECRET"]
+          sign = base64.b64encode(
+              hmac.new(f"{ts}\n{secret}".encode(), digestmod=hashlib.sha256).digest()
+          ).decode()
+          payload = json.dumps({
+              "title": "镜像更新预告",
+              "text": f"docker 镜像已更新（commit {os.environ['GITHUB_SHA'][:7]}），"
+                      "即将重启服务，请稍候。",
+              "timestamp": ts,
+              "sign": sign,
+          }, ensure_ascii=False).encode("utf-8")
+          req = urllib.request.Request(
+              os.environ["VPUSH_WEBHOOK_URL"], data=payload, method="POST",
+              headers={"Content-Type": "application/json; charset=utf-8"})
+          with urllib.request.urlopen(req, timeout=15) as r:
+              print("webhook HTTP", r.status, r.read().decode("utf-8"))
+          EOF
+        env:
+          VPUSH_WEBHOOK_URL: ${{ secrets.VPUSH_WEBHOOK_URL }}
+          VPUSH_WEBHOOK_SECRET: ${{ secrets.VPUSH_WEBHOOK_SECRET }}
       - name: 触发 Jenkins 部署
         if: ${{ success() }}
         run: |
