@@ -3659,14 +3659,14 @@ def test_xueqiu_keepalive_200_auth_error_alerts():
 
 def test_weibo_cookie_keepalive_refresh_and_expired_alert():
     db = make_db()
+    db.add_kol("weibo", "A", "1")
     db.set_setting("weibo_cookie", "SUB=old; UID=1")
 
     def handler(request):
         return httpx.Response(
             200,
-            text="<html>ok</html>",
+            json={"ok": 1, "data": {"list": []}},
             headers={
-                "content-type": "text/html",
                 "set-cookie": "SUBP=newsubp; Path=/; Domain=.weibo.com",
             },
         )
@@ -3705,6 +3705,27 @@ def test_weibo_cookie_keepalive_refresh_and_expired_alert():
     )
     assert any("保活失败" in t for t in notifier2.texts)
     assert "会话已失效" in db.get_setting("source_err_weibo")
+
+
+def test_weibo_keepalive_html200_is_dead():
+    db = make_db()
+    db.add_kol("weibo", "A", "1")
+    db.set_setting("weibo_cookie", "SUB=dead")
+    notifier = FakeNotifier()
+
+    def handler(request):
+        return httpx.Response(200, text="<html>login wall</html>", headers={"content-type": "text/html"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
+    keepalive_weibo_cookie(
+        db,
+        [notifier],
+        SimpleNamespace(cookie="", username="", password=""),
+        client=client,
+    )
+    assert any("保活失败" in t for t in notifier.texts)
+    assert "会话已失效" in (db.get_setting("source_err_weibo") or "")
+    assert "SUBP=" not in (db.get_setting("weibo_cookie") or "")
 
 
 def test_push_failure_logged(monkeypatch):

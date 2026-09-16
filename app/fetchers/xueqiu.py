@@ -89,7 +89,7 @@ def merge_waf_cookie(cookie: str) -> str:
     return "; ".join(f"{c['name']}={c['value']}" for c in waf)
 
 
-def normalize_xueqiu_id(external_id: str) -> str:
+def normalize_xueqiu_id(external_id: str | None) -> str:
     """从雪球主页链接提取数字用户 ID；纯数字原样返回；其余原样返回（保留原有报错信息）。
 
     管理后台允许粘贴「主页链接/UID」（如 https://xueqiu.com/u/4514680565），

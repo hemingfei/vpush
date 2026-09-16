@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa as crypto_rsa
 
 from app.config import XueqiuConfig
 from app.db import DB
+from app.proxy import ProxyRouter, ProxyUnavailable
 from app.fetchers.combination import CombinationFetcher, _format_trade_price, extract_cube_symbol
 from app.fetchers.xueqiu import (
     XueqiuFetcher,
@@ -904,7 +905,7 @@ def test_xueqiu_waf_html_raises_clear_error():
 
 from app.config import WeiboConfig
 from app.fetchers.base import format_published_at
-from app.fetchers.weibo import WeiboFetcher, resolve_weibo_profile
+from app.fetchers.weibo import WeiboFetcher, resolve_weibo_profile, weibo_session_dead
 
 
 def test_format_published_at():
@@ -912,6 +913,21 @@ def test_format_published_at():
     assert format_published_at("1785840071") == "2026-08-04 18:41"
     assert format_published_at("Tue Aug 04 21:00:00 +0800 2026") == "2026-08-04 21:00"
     assert format_published_at("") == ""
+
+
+def test_weibo_session_dead():
+    ajax = httpx.Request("GET", "https://weibo.com/ajax/statuses/mymblog")
+    assert weibo_session_dead(httpx.Response(200, text="<html>login</html>", request=ajax))
+    assert weibo_session_dead(
+        httpx.Response(
+            200,
+            text="<html>login</html>",
+            request=httpx.Request("GET", "https://passport.weibo.com/sso/signin"),
+        )
+    )
+    assert weibo_session_dead(httpx.Response(200, json={"ok": 0, "msg": "请登录"}, request=ajax))
+    assert not weibo_session_dead(httpx.Response(200, json={"ok": 1, "data": {"list": []}}, request=ajax))
+    assert not weibo_session_dead(httpx.Response(432, json={"ok": 0, "msg": "freq"}, request=ajax))
 
 
 def test_xueqiu_extract_images():
@@ -1106,7 +1122,7 @@ def test_weibo_auto_login_and_retry():
     from app.fetchers.base import BACKFILL_PAGES as _bp
 
     assert timeline_hits["n"] == 2 + _bp
-    assert "SUB=sub123" in db.get_setting("weibo_cookie")
+    assert "SUB=sub123" in (db.get_setting("weibo_cookie") or "")
 
 
 def test_weibo_html_login_redirect_triggers_auto_login():
@@ -1155,7 +1171,45 @@ def test_weibo_html_login_redirect_triggers_auto_login():
     from app.fetchers.base import BACKFILL_PAGES as _bp
 
     assert timeline_hits["n"] == 2 + _bp
-    assert "SUB=sub123" in db.get_setting("weibo_cookie")
+    assert "SUB=sub123" in (db.get_setting("weibo_cookie") or "")
+
+
+def test_weibo_html200_timeline_triggers_auto_login():
+    fixture = json.loads((FIXTURES / "weibo_sample.json").read_text(encoding="utf-8"))
+    pubkey_hex = _weibo_test_pubkey_hex()
+    timeline_hits = {"n": 0}
+
+    def handler(request):
+        path = request.url.path
+        if path == "/sso/prelogin.php":
+            return httpx.Response(
+                200,
+                text=(
+                    'sinaSSOController.preloginCallBack({"retcode":0,'
+                    f'"pubkey":"{pubkey_hex}","nonce":"abc","rsakv":"1",'
+                    '"servertime":"1700000000","pcid":"pc1"})'
+                ),
+            )
+        if path == "/sso/login.php":
+            return httpx.Response(
+                200,
+                text="location.replace('https://weibo.cn/?retcode=0')",
+                headers={"set-cookie": "SUB=sub123; Path=/"},
+            )
+        timeline_hits["n"] += 1
+        if timeline_hits["n"] == 1:
+            return httpx.Response(200, text="<html>login wall</html>", headers={"content-type": "text/html"})
+        return httpx.Response(200, json=fixture)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
+    db = DB(":memory:")
+    fetcher = WeiboFetcher(WeiboConfig(username="u", password="p"), db=db, client=client)
+    posts = fetcher.fetch({"id": 2, "name": "微博大V", "external_id": "123"})
+    assert len(posts) == 1
+    from app.fetchers.base import BACKFILL_PAGES as _bp
+
+    assert timeline_hits["n"] == 2 + _bp
+    assert "SUB=sub123" in (db.get_setting("weibo_cookie") or "")
 
 
 def test_weibo_login_failure_raises():
@@ -1363,7 +1417,7 @@ def test_normalize_xueqiu_id():
     # 无法识别时原样返回（保留原错误信息），不抛异常
     assert normalize_xueqiu_id("https://xueqiu.com/Syedc") == "https://xueqiu.com/Syedc"
     assert normalize_xueqiu_id("") == ""
-    assert normalize_xueqiu_id(None) == ""
+    assert normalize_xueqiu_id(None) == ""  # type: ignore[arg-type]
 
 
 def test_shared_fetchers_use_thread_local_http_clients():
@@ -1379,8 +1433,8 @@ def test_shared_fetchers_use_thread_local_http_clients():
     for fetcher in fetchers:
         ids = []
 
-        def grab(f=fetcher):
-            ids.append(id(f.client))
+        def grab(f=fetcher, acc=ids):
+            acc.append(id(f.client))
 
         t1 = threading.Thread(target=grab)
         t2 = threading.Thread(target=grab)
@@ -1409,11 +1463,10 @@ def test_xueqiu_factory_uses_assigned_proxy(tmp_path, monkeypatch):
     fetcher = XueqiuFetcher(XueqiuConfig(cookie=""), db)
     client = fetcher.client
     assert "1.2.3.4:8080" in (seen.get("proxy") or "")
-    assert getattr(client, "_vpush_proxy_id")
+    assert client._vpush_proxy_id
 
 
 def test_xueqiu_factory_raises_when_pool_empty(tmp_path):
-    from app.proxy import ProxyUnavailable, ProxyRouter
 
     db = DB(str(tmp_path / "t.db"))
     pool_id = db.create_proxy_pool("空")

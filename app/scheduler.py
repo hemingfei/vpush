@@ -1738,11 +1738,14 @@ def keepalive_xueqiu_cookie(
 
 
 def keepalive_weibo_cookie(db: DB, notifiers: list[Notifier], weibo_config, client=None) -> None:
-    """定时访问微博首页刷新会话；失效时尝试账号密码自动登录，失败则告警。"""
-    from .fetchers.weibo import WEIBO_COOKIE_KEY, WeiboFetcher
+    """打动态 AJAX 刷新会话；失效时尝试账号密码自动登录，否则发扫码。"""
+    from .fetchers.weibo import TIMELINE_URL, WEIBO_COOKIE_KEY, WeiboFetcher, weibo_session_dead
 
     cookie = db.get_setting(WEIBO_COOKIE_KEY) or weibo_config.cookie
     if not cookie:
+        return
+    kols = db.list_kols(platform="weibo", status=1, limit=1)
+    if not kols:
         return
     import httpx
 
@@ -1767,9 +1770,11 @@ def keepalive_weibo_cookie(db: DB, notifiers: list[Notifier], weibo_config, clie
             },
         )
     try:
-        resp = client.get("https://weibo.com/")
-        # 会话有效：最终停留在 weibo.com（未登录会被 302 到 passport 登录页）
-        if resp.status_code == 200 and "passport.weibo.com" not in str(resp.url):
+        resp = client.get(TIMELINE_URL, params={"uid": kols[0]["external_id"], "page": 1})
+        if resp.status_code == 432:
+            logger.warning("微博保活：反爬 432，本轮不续期")
+            return
+        if not weibo_session_dead(resp):
             from .fetchers.xueqiu import merge_cookie_strings
 
             new_cookie = merge_cookie_strings(cookie, client.cookies, "weibo.com")
