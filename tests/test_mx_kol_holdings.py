@@ -96,6 +96,100 @@ def test_replay_topics_separate_from_stocks():
     assert [x["target_name"] for x in out["topics"]] == ["AI算力"]
 
 
+def _seed_tag_posts(db, kol_id, rows):
+    """rows: [(day, hhmm, tags, content)]——直接落带标签的 MX 消息。
+
+    标签配对要求个股在常用股票名单内（黑话/名单外不判仓），把用到的
+    测试股名一并写入名单。
+    """
+    extra = {t for _, _, tags, _ in rows for t in tags
+             if t not in db.get_action_tag_vocabulary()}
+    names = list(dict.fromkeys([*db.get_stock_names(), *extra]))
+    db.set_stock_names(names)
+    for i, (day, hhmm, tags, content) in enumerate(rows):
+        db.insert_post(platform="mx", kol_id=kol_id, external_id=f"tagp{i}",
+                       title="", url="", content=content,
+                       published_at=f"{day} {hhmm}:00", tags=tags)
+
+
+def test_tag_events_fill_when_opinion_missing():
+    """标签补位：消息带操作标签但观点研判没覆盖该标的时，按标签推仓。
+
+    - 观点只研判了 贵州茅台（建仓），标签帖覆盖 中科曙光（加仓）→ 后者经标签入持仓；
+    - 标签行 source=tag；同标同操作多帖去重只记一条。
+    """
+    client = make_client()
+    db = client.app.state.db
+    kol = db.add_kol("mx", "标签大V", "room1")
+    t = _today()
+    _seed_opinions(db, kol, [
+        (t, "09:20", "09:16", "stock", "贵州茅台", "bull", "建仓"),
+    ])
+    _seed_tag_posts(db, kol, [
+        (t, "10:00", ["中科曙光", "加仓"], "中科曙光又加了一笔"),
+        (t, "10:30", ["中科曙光", "加仓"], "继续加仓中科曙光（同操作去重）"),
+        (t, "11:00", ["宁德时代", "清仓"], "宁德时代全部出了"),
+    ])
+    out = mkh.build_kol_holdings(db, kol)
+    names = {h["target_name"]: h for h in out["holdings"]}
+    assert set(names) == {"贵州茅台", "中科曙光"}  # 清仓不入持仓
+    tag_rows = [e for e in out["timeline"] if e["source"] == "tag"]
+    assert len(tag_rows) == 2  # 中科曙光两条加仓去重成一条 + 宁德清仓
+    assert tag_rows[0]["kind"] == "clear" and tag_rows[0]["target_name"] == "宁德时代"
+    # 无先前头寸的首条加仓：记持仓态（kind=hold）、按加仓力度 2 分入仓
+    assert tag_rows[1]["kind"] == "hold" and tag_rows[1]["target_name"] == "中科曙光"
+    assert names["中科曙光"]["score"] == 2.0
+
+
+def test_tag_events_yield_to_same_day_opinion_actions():
+    """同标当日观点已给操作词：标签让位不重复加减仓。"""
+    client = make_client()
+    db = client.app.state.db
+    kol = db.add_kol("mx", "让位大V", "room1")
+    t = _today()
+    _seed_opinions(db, kol, [
+        (t, "09:20", "09:16", "stock", "中科曙光", "bull", "建仓"),
+        (t, "14:20", "14:15", "stock", "中科曙光", "bull", "加仓"),
+    ])
+    _seed_tag_posts(db, kol, [
+        (t, "10:00", ["中科曙光", "加仓"], "上午聊过加仓（被观点让位）"),
+        (t, "15:00", ["中科曙光", "减仓"], "尾盘减仓（观点当日已有操作，也让位）"),
+    ])
+    out = mkh.build_kol_holdings(db, kol)
+    # 仅观点两条事件：建仓 3 + 加仓 2 = 5；标签减仓被同日观点操作顶掉
+    assert [h["score"] for h in out["holdings"] if h["target_name"] == "中科曙光"] == [5.0]
+    assert all(e["source"] == "opinion" for e in out["timeline"])
+
+
+def test_tag_only_kol_without_opinions():
+    """纯标签大V：没有任何观点数据，仅靠操作标签也能推出演练仓位。"""
+    client = make_client()
+    db = client.app.state.db
+    kol = db.add_kol("mx", "纯标签大V", "room1")
+    _seed_tag_posts(db, kol, [
+        (_today(), "09:16", ["老白干酒", "建仓"], "老白干酒建仓了"),
+        (_today(), "10:16", ["老白干酒", "高抛"], "老白干酒高抛部分"),
+    ])
+    out = mkh.build_kol_holdings(db, kol)
+    assert out is not None
+    assert [h["target_name"] for h in out["holdings"]] == ["老白干酒"]
+    kinds = {e["kind"]: e["source"] for e in out["timeline"]}
+    assert kinds == {"open": "tag", "trim": "tag"}
+
+
+def test_tag_events_skip_ambiguous_multi_stock_posts():
+    """一帖命中超过 3 只个股时操作归属含糊：整帖跳过不配对。"""
+    client = make_client()
+    db = client.app.state.db
+    kol = db.add_kol("mx", "歧义大V", "room1")
+    _seed_tag_posts(db, kol, [
+        (_today(), "09:16", ["贵州茅台", "宁德时代", "中科曙光", "中际旭创", "建仓"],
+         "一帖聊了四只票"),
+    ])
+    out = mkh.build_kol_holdings(db, kol)
+    assert out is None  # 无有效事件：返回 None（API 层转空态）
+
+
 def test_api_returns_holdings_and_empty_state():
     """端点：正常返回结构 + 无观点大V回空结构 + 非 MX 平台 400 + 未登录 401。"""
     client = make_client()

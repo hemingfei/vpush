@@ -185,6 +185,7 @@ export function createMxKolHoldingsView(dependencies) {
       ${mxcKindBadge(e.kind, e.action)}
       ${dir}
       <span class="target" style="color:var(--mxv-text)" title="${escapeHtml(e.target_name)}">${escapeHtml(e.target_name)}</span>
+      ${e.source === "tag" ? `<span class="mxc-src" title="操作来自消息标签（观点研判未覆盖该条），仅供参考">标签</span>` : ""}
       <span class="sum" style="color:var(--mxv-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(e.summary || "")}">${escapeHtml(e.summary || "")}</span>
     </div>`;
   }

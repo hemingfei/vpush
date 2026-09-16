@@ -5969,6 +5969,29 @@ class DB:
         )
         return self._rows(sql, (int(kol_id), f"-{int(days)} day"))
 
+    def list_mx_action_tag_posts_for_kol(self, kol_id, since_day, action_tags) -> list[dict]:
+        """单大V窗口内标签含操作词的 MX 消息（预估持仓的标签补充信号源）。
+
+        标签打标是独立 LLM 管线，覆盖消息比观点研判窗口更全；LLM 研判漏提
+        操作时，标签里的操作词（同一张词表）可补位。posts.tags 按元素边界
+        LIKE 匹配任一操作词；blocked/hidden/停用大V排除。时间升序，tags 已
+        解析为列表。
+        """
+        action_tags = [str(t).strip() for t in (action_tags or []) if str(t).strip()]
+        if not action_tags:
+            return []
+        likes = " OR ".join("p.tags LIKE ? ESCAPE '\\'" for _ in action_tags)
+        sql = (
+            "SELECT p.id, substr(p.published_at, 1, 10) AS trading_day, p.published_at, "
+            "p.content, p.tags FROM posts p JOIN kols k ON k.id = p.kol_id "
+            "WHERE p.platform = 'mx' AND p.kol_id = ? AND substr(p.published_at, 1, 10) >= ? "
+            "AND COALESCE(p.blocked, 0) = 0 AND COALESCE(p.hidden, 0) = 0 AND k.enabled = 1 "
+            f"AND ({likes}) ORDER BY p.published_at ASC, p.id ASC"
+        )
+        rows = self._rows(sql, (int(kol_id), str(since_day),
+                                *[post_tag_like_pattern(t) for t in action_tags]))
+        return _normalize_post_tags(rows)
+
     def upsert_mx_view_snapshot(self, trading_day, snapshot_at, seq, kind, payload: dict, batch_id=0) -> None:
         self._execute(
             "INSERT INTO mx_view_snapshots (trading_day, snapshot_at, seq, kind, payload, batch_id) "

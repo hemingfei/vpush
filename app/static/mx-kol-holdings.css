@@ -41,6 +41,10 @@
 .mxc-kind.sell{color:var(--hd-bear-text);background:var(--hd-bear-soft);border-color:var(--hd-bear-line);}
 .mxc-row .target{font-weight:600;}
 
+/* 标签来源徽章：操作来自消息标签（观点研判未覆盖），弱化为描边小标 */
+.mxc-src{font-size:10px;color:var(--hd-muted);border:1px dashed var(--hd-btn-line);
+  border-radius:4px;padding:0 5px;white-space:nowrap;justify-self:start;}
+
 /* 大V动态页「持仓」按钮：与订阅按钮并排，弱化为线框样式避免抢主操作 */
 .btn-sub.holdings{background:var(--hd-panel);color:var(--hd-accent);
   border:1px solid var(--hd-btn-line);}
