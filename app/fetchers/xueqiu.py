@@ -89,6 +89,16 @@ def merge_waf_cookie(cookie: str) -> str:
     return "; ".join(f"{c['name']}={c['value']}" for c in waf)
 
 
+def apply_xueqiu_cookie(client: httpx.Client, cookie: str) -> None:
+    """用域 Cookie jar 发送登录态，让 HTTPX 跟随 www 跳转时仍携带 Cookie。"""
+    client.headers.pop("Cookie", None)
+    client.cookies.clear()
+    for part in (cookie or "").split(";"):
+        name, separator, value = part.strip().partition("=")
+        if separator and name:
+            client.cookies.set(name, value, domain=".xueqiu.com", path="/")
+
+
 def normalize_xueqiu_id(external_id: str | None) -> str:
     """从雪球主页链接提取数字用户 ID；纯数字原样返回；其余原样返回（保留原有报错信息）。
 
@@ -235,9 +245,9 @@ def resolve_profile(external_id: str, cookie: str = "", db=None) -> dict:
                 "Accept": "application/json, text/plain, */*",
                 "X-Requested-With": "XMLHttpRequest",
                 "Referer": f"https://xueqiu.com/u/{uid}",
-                **({"Cookie": cookie} if cookie else {}),
             },
         )
+        apply_xueqiu_cookie(client, cookie)
     except Exception:  # noqa: BLE001 - 非 ASCII ID（误填昵称）构造请求头失败时回退空结果，不阻断审批
         return {}
     try:
@@ -284,8 +294,7 @@ class XueqiuFetcher(Fetcher):
             c = httpx.Client(
                 timeout=20, headers=headers, proxy=proxy, follow_redirects=True
             )
-            if cookie:
-                c.headers["Cookie"] = cookie
+            apply_xueqiu_cookie(c, cookie)
             attach_proxy(c, pid)
             return c
 
@@ -300,9 +309,9 @@ class XueqiuFetcher(Fetcher):
         self._http.set(value)
 
     def _apply_cookie(self) -> None:
-        """合并 cookie：登录态（DB/配置）打底，叠加 sidecar cookie（同名覆盖）。"""
+        """应用与当前登录 seed 匹配的 sidecar cookie，否则使用 DB/配置。"""
         cookie = self.db.get_setting(XUEQIU_COOKIE_KEY) or self.source_config.cookie
-        self.client.headers["Cookie"] = merge_waf_cookie(cookie)
+        apply_xueqiu_cookie(self.client, merge_waf_cookie(cookie))
 
     def _refresh_cookie(self) -> None:
         """雪球 cookie 失效时无法自动续期，直接抛错进入退避告警链路。"""

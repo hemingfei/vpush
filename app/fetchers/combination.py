@@ -14,6 +14,7 @@ import httpx
 from .base import Fetcher, Post, ThreadLocalClient, catchup_pages, format_published_at, is_stale_backfill
 from .xueqiu import (
     XUEQIU_COOKIE_KEY,
+    apply_xueqiu_cookie,
     merge_waf_cookie,
 )
 
@@ -49,9 +50,9 @@ def _cube_client(cookie: str, db=None) -> httpx.Client:
             "Accept": "application/json, text/plain, */*",
             "X-Requested-With": "XMLHttpRequest",
             "Referer": "https://xueqiu.com/P/",
-            **({"Cookie": cookie} if cookie else {}),
         },
     )
+    apply_xueqiu_cookie(client, cookie)
     attach_proxy(client, pid)
     return client
 
@@ -330,7 +331,7 @@ class CombinationFetcher(Fetcher):
 
     def _apply_cookie(self) -> None:
         cookie = self.db.get_setting(XUEQIU_COOKIE_KEY) or self.source_config.cookie
-        self.client.headers["Cookie"] = merge_waf_cookie(cookie)
+        apply_xueqiu_cookie(self.client, merge_waf_cookie(cookie))
 
     def _refresh_cookie(self) -> None:
         """雪球 cookie 失效时直接抛错（与雪球帖抓取共用，无法自动续期）。"""

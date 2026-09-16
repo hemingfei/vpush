@@ -55,6 +55,87 @@ def test_xueqiu_parse_fixture():
     assert posts[0].kol_name == "大V"
 
 
+@pytest.mark.parametrize(
+    ("fetcher_class", "external_id"),
+    [(XueqiuFetcher, "123"), (CombinationFetcher, "ZH123")],
+)
+def test_xueqiu_cookie_survives_www_redirect(fetcher_class, external_id, monkeypatch, tmp_path):
+    monkeypatch.setattr("app.fetchers.xueqiu.WAF_COOKIE_FILE", str(tmp_path / "missing.json"))
+    seen: list[tuple[str, str]] = []
+
+    def handler(request):
+        seen.append((request.url.host, request.headers.get("Cookie", "")))
+        if request.url.host == "xueqiu.com":
+            return httpx.Response(
+                302, headers={"location": str(request.url.copy_with(host="www.xueqiu.com"))}
+            )
+        return httpx.Response(200, json={"statuses": [], "list": []})
+
+    db = DB(":memory:")
+    with httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True) as client:
+        fetcher = fetcher_class(XueqiuConfig(cookie="xq_a_token=abc"), db=db, client=client)
+        for cookie in ("xq_a_token=abc", "xq_a_token=new; u=123"):
+            db.set_setting("xueqiu_cookie", cookie)
+            seen.clear()
+            fetcher.fetch({"id": 1, "name": "大V", "external_id": external_id})
+            assert len(seen) >= 2 and len(seen) % 2 == 0
+            assert set(seen[::2]) == {("xueqiu.com", cookie)}
+            assert set(seen[1::2]) == {("www.xueqiu.com", cookie)}
+
+
+def test_xueqiu_cookie_jar_replaces_old_values_and_scopes_domain():
+    from app.fetchers.xueqiu import apply_xueqiu_cookie
+
+    seen = []
+
+    def handler(request):
+        seen.append(request.headers.get("Cookie", ""))
+        return httpx.Response(200)
+
+    with httpx.Client(transport=httpx.MockTransport(handler), headers={"Cookie": "stale=1"}) as client:
+        client.cookies.set("xq_a_token", "old", domain="www.xueqiu.com", path="/")
+        apply_xueqiu_cookie(client, "xq_a_token=new==; u=123")
+        client.get("https://www.xueqiu.com/")
+        client.get("https://example.com/")
+        apply_xueqiu_cookie(client, "")
+        client.get("https://www.xueqiu.com/")
+    assert seen == ["xq_a_token=new==; u=123", "", ""]
+
+
+@pytest.mark.parametrize("platform", ["xueqiu", "combination"])
+def test_xueqiu_profile_cookie_survives_www_redirect(platform, monkeypatch):
+    from app.fetchers.combination import resolve_combination_profile
+    from app.fetchers.xueqiu import resolve_profile
+
+    seen = []
+
+    def handler(request):
+        seen.append((request.url.host, request.headers.get("Cookie", "")))
+        if request.url.host == "xueqiu.com":
+            return httpx.Response(
+                302, headers={"location": str(request.url.copy_with(host="www.xueqiu.com"))}
+            )
+        return httpx.Response(200, json={
+            "statuses": [{"user": {"screen_name": "测试用户"}}],
+            "list": [{"symbol": "ZH123", "name": "测试组合"}],
+        })
+
+    real_client = httpx.Client
+
+    def client_factory(**kwargs):
+        return real_client(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr("httpx.Client", client_factory)
+    monkeypatch.setattr("app.fetchers.combination._profile_cache", {})
+    if platform == "xueqiu":
+        result = resolve_profile("123", cookie="xq_a_token=abc")
+        assert result["screen_name"] == "测试用户"
+    else:
+        result = resolve_combination_profile("ZH123", cookie="xq_a_token=abc")
+        assert result["name"] == "测试组合"
+    assert seen == [("xueqiu.com", "xq_a_token=abc"), ("www.xueqiu.com", "xq_a_token=abc")]
+
+
 def test_xueqiu_waf_cookie_merged_into_request(monkeypatch, tmp_path):
     """sidecar cookie 文件存在时整套使用，请求 cookie 与文件一致。"""
     waf_file = tmp_path / "waf_cookies.json"
@@ -1459,6 +1540,7 @@ def test_xueqiu_factory_uses_assigned_proxy(tmp_path, monkeypatch):
             seen["proxy"] = kwargs.get("proxy")
             seen["follow_redirects"] = kwargs.get("follow_redirects")
             self.headers = httpx.Headers()
+            self.cookies = httpx.Cookies()
 
     monkeypatch.setattr("app.fetchers.xueqiu.httpx.Client", FakeClient)
     fetcher = XueqiuFetcher(XueqiuConfig(cookie=""), db)

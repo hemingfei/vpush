@@ -3543,8 +3543,14 @@ def test_xueqiu_cookie_keepalive():
     db.add_kol("xueqiu", "A", "1")  # 默认 enabled
     db.set_setting("xueqiu_cookie", "xq_a_token=old; u=1")
     notifier = FakeNotifier()
+    seen = []
 
     def handler(request):
+        seen.append((request.url.host, request.headers.get("Cookie", "")))
+        if request.url.host == "xueqiu.com":
+            return httpx.Response(
+                302, headers={"location": str(request.url.copy_with(host="www.xueqiu.com"))}
+            )
         # 保活探测 timeline JSON 接口：200 + 合法 JSON + 下发新 cookie
         return httpx.Response(
             200,
@@ -3552,11 +3558,12 @@ def test_xueqiu_cookie_keepalive():
             headers={"set-cookie": "xq_a_token=new; Path=/; Domain=.xueqiu.com"},
         )
 
-    client = httpx.Client(transport=httpx.MockTransport(handler))
+    client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
     keepalive_xueqiu_cookie(
         db, [notifier], SimpleNamespace(cookie=""), client=client
     )
-    assert "xq_a_token=new" in db.get_setting("xueqiu_cookie")
+    assert seen == [("xueqiu.com", "xq_a_token=old; u=1"), ("www.xueqiu.com", "xq_a_token=old; u=1")]
+    assert db.get_setting("xueqiu_cookie") == "xq_a_token=new; u=1"
     assert db.get_setting("xueqiu_cookie_updated_at")
     assert db.get_setting("source_ok_xueqiu")  # 保活成功刷新「正常」状态
     assert db.get_setting("source_err_xueqiu") in (None, "")
@@ -3656,12 +3663,19 @@ def test_probe_xueqiu_ok_timeline(monkeypatch):
     db.add_kol("xueqiu", "A", "1")
     db.set_setting("xueqiu_cookie", "xq_a_token=ok")
     notifier = FakeNotifier()
+    seen = []
 
     def handler(request):
+        seen.append((request.url.host, request.headers.get("Cookie", "")))
+        if request.url.host == "xueqiu.com":
+            return httpx.Response(
+                302, headers={"location": str(request.url.copy_with(host="www.xueqiu.com"))}
+            )
         return httpx.Response(200, json={"statuses": []})
 
     _probe_client(monkeypatch, handler)
     probe_xueqiu(db, [notifier], SimpleNamespace(cookie=""))
+    assert seen == [("xueqiu.com", "xq_a_token=ok"), ("www.xueqiu.com", "xq_a_token=ok")]
     assert db.get_setting("source_ok_xueqiu")
     assert db.get_setting("source_err_xueqiu") in (None, "")
     assert notifier.texts == []

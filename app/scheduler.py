@@ -1598,8 +1598,9 @@ def probe_xueqiu(db: DB, notifiers: list[Notifier], source_config) -> None:
     from .fetchers.xueqiu import (
         XUEQIU_COOKIE_KEY,
         XUEQIU_TIMELINE_URL,
-        xueqiu_session_dead,
+        apply_xueqiu_cookie,
         normalize_xueqiu_id,
+        xueqiu_session_dead,
     )
 
     cookie = db.get_setting(XUEQIU_COOKIE_KEY) or source_config.cookie
@@ -1623,9 +1624,9 @@ def probe_xueqiu(db: DB, notifiers: list[Notifier], source_config) -> None:
             "Accept": "application/json, text/plain, */*",
             "X-Requested-With": "XMLHttpRequest",
             "Referer": f"https://xueqiu.com/u/{xueqiu_uid}",
-            **({"Cookie": cookie} if cookie else {}),
         },
     )
+    apply_xueqiu_cookie(client, cookie)
     try:
         resp = client.get(
             XUEQIU_TIMELINE_URL,
@@ -1685,6 +1686,7 @@ def keepalive_xueqiu_cookie(
         XUEQIU_COOKIE_KEY,
         XUEQIU_COOKIE_TIME_KEY,
         XUEQIU_TIMELINE_URL,
+        apply_xueqiu_cookie,
         merge_cookie_strings,
         normalize_xueqiu_id,
         xueqiu_session_dead,
@@ -1719,9 +1721,9 @@ def keepalive_xueqiu_cookie(
                 "Accept": "application/json, text/plain, */*",
                 "X-Requested-With": "XMLHttpRequest",
                 "Referer": f"https://xueqiu.com/u/{xueqiu_uid}",
-                "Cookie": cookie,
             },
         )
+    apply_xueqiu_cookie(client, cookie)
     try:
         resp = client.get(
             XUEQIU_TIMELINE_URL,
