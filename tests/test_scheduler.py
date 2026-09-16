@@ -3591,6 +3591,12 @@ def test_xueqiu_session_dead_auth_codes():
 
     assert xueqiu_session_dead(httpx.Response(400, json={"error_code": 400016}))
     assert xueqiu_session_dead(httpx.Response(200, json={"error_code": "10022"}))
+    assert xueqiu_session_dead(
+        httpx.Response(
+            400,
+            json={"error_description": "遇到错误，请刷新页面或者重新登录帐号后再试"},
+        )
+    )
     assert xueqiu_session_dead(httpx.Response(401, text="unauthorized"))
     assert not xueqiu_session_dead(httpx.Response(200, text="<html>waf</html>"))
     assert not xueqiu_session_dead(httpx.Response(302, headers={"location": "https://www.xueqiu.com/"}))

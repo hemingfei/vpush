@@ -127,10 +127,11 @@ def _is_waf_html(resp: httpx.Response) -> bool:
 
 
 XUEQIU_AUTH_ERROR_CODES = {"10022", "400016"}
+XUEQIU_AUTH_ERROR_MARKERS = ("重新登录", "请登录", "登录帐号", "登录账号", "login", "cookie")
 
 
 def xueqiu_session_dead(resp: httpx.Response) -> bool:
-    """登录失效：401/403，或 JSON error_code 为 10022/400016。瞬时 400/302/WAF 不算。"""
+    """登录失效：401/403、认证错误码，或 JSON 中明确要求重新登录。"""
     if resp.status_code in (401, 403):
         return True
     try:
@@ -139,7 +140,12 @@ def xueqiu_session_dead(resp: httpx.Response) -> bool:
         return False
     if not isinstance(data, dict):
         return False
-    return str(data.get("error_code") or "") in XUEQIU_AUTH_ERROR_CODES
+    if str(data.get("error_code") or "") in XUEQIU_AUTH_ERROR_CODES:
+        return True
+    auth_text = " ".join(
+        str(data.get(key) or "") for key in ("error_description", "msg", "message")
+    ).lower()
+    return any(marker in auth_text for marker in XUEQIU_AUTH_ERROR_MARKERS)
 
 
 def merge_cookie_strings(old: str, cookies, prefer_domain: str = "") -> str:
