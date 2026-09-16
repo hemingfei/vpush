@@ -77,6 +77,7 @@ try:
         generate_mx_daily_windows,
         in_window as mx_in_window,
         pick_daily_fallback_slot,
+        restart_login_allowed,
     )
     MX_AVAILABLE = True
 except Exception as e:
@@ -2125,8 +2126,12 @@ class Scheduler:
         self._mx_windows: list | None = None
         self._mx_window_date = None
         self._mx_window_open = False
-        # 重启安全：开窗时刻已错过的窗口不武装（重启后不自动续连）
+        # 重启安全：开窗时刻已错过的窗口不武装（重启后不自动续连）；工作日
+        # 08:00-22:00 例外——见 _mx_windows_today 的重启自动登录补登
         self._mx_armed: list[bool] | None = None
+        # 重启自动登录待办：重启落在工作日运行时段的窗口间隙时置位，
+        # 窗口循环在下一个 tick 立即补登一次（见 _mx_window_tick）
+        self._mx_restart_login_pending = False
         # 每日一次兜底拉取的预约时刻（随窗口一起生成，当天固定；错过不补打）
         self._mx_fallback_at: datetime | None = None
         self._mx_fallback_done = False
@@ -2471,11 +2476,21 @@ class Scheduler:
         """取（必要时生成）当天的运行窗口与兜底预约时刻，生成后当天固定。"""
         today = datetime.now(CN_TZ).date()
         if self._mx_window_date != today or self._mx_windows is None:
+            now = datetime.now(CN_TZ)
             self._mx_window_date = today
             self._mx_windows = generate_mx_daily_windows(today)
             # 重启安全：生成时刻（≈重启时刻）已过开窗点的窗口不武装——重启后
-            # 不自动续连，只能管理员「登录」手动拉起，或等下一个未到点的窗口
-            self._mx_armed = arm_windows(self._mx_windows, datetime.now(CN_TZ))
+            # 不自动续连，只能管理员「登录」手动拉起，或等下一个未到点的窗口。
+            # 例外（2026-09-16 起）：工作日 08:00-22:00 内重启允许自动登录——
+            # 正处的窗口重新武装（下个 tick 到点补登）；落在窗口间隙时置一次性
+            # 补登标记，窗口循环立即拉起。前提是 TOKEN 在 2 天时效内：超龄
+            # TOKEN 不自动登录（也不重武装），并发系统消息提醒管理员更换
+            token_fresh = self._mx_token_age_fresh()
+            restart_login = restart_login_allowed(now) and token_fresh
+            self._mx_armed = arm_windows(self._mx_windows, now, restart_login=restart_login)
+            self._mx_restart_login_pending = restart_login and not mx_in_window(
+                now, self._mx_windows
+            )
             # 兜底预约槽只从当天仍武装的窗口里挑：已错过开窗点的窗口不会自动
             # 拉起会话，选中它们只会得到「时刻一到就放弃」的迟到执行
             self._mx_fallback_at = pick_daily_fallback_slot(self._mx_windows, self._mx_armed)
@@ -2490,8 +2505,20 @@ class Scheduler:
             ) + timedelta(seconds=random.randint(0, 1500))
             self._mx_force_close_done = False
             missed = [i + 1 for i, armed in enumerate(self._mx_armed) if not armed]
+            restart_note = ""
+            if restart_login:
+                restart_note = "；工作日运行时段内服务重启，将自动补登一次"
+            elif restart_login_allowed(now) and not token_fresh:
+                restart_note = "；工作日运行时段内服务重启，但 TOKEN 已超 2 天时效，未自动登录"
+                self._publish_system_alert_sync(
+                    "MX TOKEN 已超 2 天，服务重启后未自动登录",
+                    "⚠️ 检测到服务重启（工作日运行时段内），但 MX TOKEN 已超过 2 天时效，"
+                    "本次重启未自动登录。\n"
+                    "请到后台「数据源 → MX」更换 TOKEN（TOKEN 需每 2 天更换一次）；"
+                    "更换后可点「登录」手动接入，或等下个运行时段自动开启。",
+                )
             logger.info(
-                "MX 今日运行时段：%s；每日兜底拉取预约时刻：%s%s",
+                "MX 今日运行时段：%s；每日兜底拉取预约时刻：%s%s%s",
                 "、".join(
                     f"{s.strftime('%H:%M:%S')}~{e.strftime('%H:%M:%S')}"
                     for s, e in self._mx_windows
@@ -2500,6 +2527,7 @@ class Scheduler:
                 f"；第 {'、'.join(map(str, missed))} 段因重启错过登录时刻，今天不再自动登录"
                 if missed
                 else "",
+                restart_note,
             )
         return self._mx_windows
 
@@ -2559,6 +2587,8 @@ class Scheduler:
 
         独立成函数便于对「强关 disarm 后不再重拉」「手动登录后不重跑」等
         时序约束做回归测试（tests/test_mx.py 直接驱动单次 tick）。
+        工作日 08:00-22:00 的服务重启会触发补登：正处的窗口重新武装后照常
+        到点开启；窗口间隙则由 _mx_restart_login_pending 立即补登一次。
         """
         self._mx_touch_loop()
         idx = self._mx_current_window_index()
@@ -2570,6 +2600,11 @@ class Scheduler:
                     self._mx_window_open = True
                     self._mx_ws_gave_up = False  # 新窗口：复位放弃标记
                     await self._mx_session_start()
+                    # 会话若在开窗前已存活（如工作日重启补登先于本窗口拉起），
+                    # 把 4h 滚动兜底的计时起点重新对齐到本窗口开启时刻，避免
+                    # 兜底把会话掐断后 disarm 掉整个窗口（时段中段起全 offline）
+                    if self._mx_session_active():
+                        self._mx_session_started_at = datetime.now(CN_TZ)
                     start, stop = self._mx_windows[idx]
                     await asyncio.to_thread(
                         self._mx_log_auto_event,
@@ -2585,6 +2620,18 @@ class Scheduler:
                 "mx_auto_disconnect",
                 "运行时段结束，系统自动执行 MX 平台断开（时段外零请求）",
             )
+        elif self._mx_restart_login_pending:
+            # 工作日 08:00-22:00 重启且落在窗口间隙：立即补登一次。只补登一次，
+            # 会话后续由 4h 滚动兜底/晚间强关/下一窗口开窗收口
+            self._mx_restart_login_pending = False
+            if not (self._mx_ws_gave_up or self._mx_session_active()):
+                await self._mx_session_start()
+                await asyncio.to_thread(
+                    self._mx_log_auto_event,
+                    "mx_auto_login",
+                    "服务重启于工作日运行时段（08:00-22:00）内且不在任何运行时段，"
+                    "系统自动执行 MX 平台登录（启动序列 + 房间同步 + WS 推送）",
+                )
         await asyncio.to_thread(self._mx_check_token_age)
         await self._mx_maybe_daily_fallback()
         await self._mx_maybe_nightly_force_close()
@@ -2832,6 +2879,21 @@ class Scheduler:
                 f"⚠️ MX 兜底拉取房间 {kol.get('name')}（{kol.get('external_id')}）失败：{exc}",
             )
 
+    def _mx_token_age_fresh(self) -> bool:
+        """MX TOKEN 是否在 2 天时效内（mx_token_updated_at 缺失视为刚起用）。
+
+        与 _mx_check_token_age 的时效口径一致：超过 2 天即视为过期。重启自动
+        登录以此为准绳——超龄 TOKEN 不自动登录，避免拿大概率已失效的凭据
+        撞出鉴权失败流量（真实失效由熔断链路另行兜底）。
+        """
+        try:
+            updated = int(self.db.get_setting("mx_token_updated_at") or 0)
+        except (TypeError, ValueError):
+            updated = 0
+        if not updated:
+            return True
+        return int(time.time()) - updated < 2 * 86400
+
     def _mx_check_token_age(self):
         """TOKEN 时效检查：超过 2 天未更换 → V平台 KOL 提醒手动更换（每轮一次）。"""
         now_ts = int(time.time())
@@ -2987,6 +3049,8 @@ class Scheduler:
             self._mx_window_task = None
         self._mx_window_open = False
         self._mx_ws_gave_up = False
+        # MX 禁用/重配不算服务重启：丢弃未消费的重启补登标记
+        self._mx_restart_login_pending = False
         # WS 任务已被取消：清掉会话启动时刻，超时兜底不再基于旧会话计时
         self._mx_session_started_at = None
         _mx_fetcher = None

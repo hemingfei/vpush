@@ -1551,6 +1551,42 @@ def test_arm_windows_disarms_missed_on_restart():
     assert arm_windows(windows, mid_w2) == [False, False, True]
 
 
+def test_restart_login_allowed_workday_hours_only():
+    """重启自动登录只在工作日（周一至周五）08:00-22:00（北京时间）允许。"""
+    from datetime import datetime
+
+    from app.services.mx_window import CN_TZ, restart_login_allowed
+
+    def at(day, hour, minute=0, second=0):
+        return datetime(2026, 9, day, hour, minute, second, tzinfo=CN_TZ)
+
+    # 2026-09-14 周一、09-18 周五、09-19 周六、09-20 周日
+    assert restart_login_allowed(at(14, 8, 0, 0)) is True  # 周一 08:00 整起
+    assert restart_login_allowed(at(14, 7, 59, 59)) is False  # 8 点前不允许
+    assert restart_login_allowed(at(18, 21, 59, 59)) is True  # 周五 22:00 前
+    assert restart_login_allowed(at(18, 22, 0, 0)) is False  # 22:00 整止（不含）
+    assert restart_login_allowed(at(19, 10)) is False  # 周六
+    assert restart_login_allowed(at(20, 10)) is False  # 周日
+
+
+def test_arm_windows_rearms_current_window_when_restart_login_allowed():
+    """工作日重启自动登录：now 所处的窗口重新武装；已结束/未开始的窗口不受影响。"""
+    from datetime import date, timedelta
+
+    from app.services.mx_window import arm_windows, generate_mx_daily_windows
+
+    windows = generate_mx_daily_windows(date(2026, 9, 14))  # 周一
+    # 重启落在第一段窗口内：当前段补登武装，二三段照常
+    mid_w1 = windows[0][0] + timedelta(minutes=10)
+    assert arm_windows(windows, mid_w1, restart_login=True) == [True, True, True]
+    # 重启落在第二段窗口内：已结束的第一段仍不武装，当前段补登武装
+    mid_w2 = windows[1][0] + timedelta(minutes=5)
+    assert arm_windows(windows, mid_w2, restart_login=True) == [False, True, True]
+    # 重启落在窗口间隙：无窗口可重武装，等价旧行为
+    gap = windows[1][1] + timedelta(minutes=10)
+    assert arm_windows(windows, gap, restart_login=True) == [False, False, True]
+
+
 def test_nightly_force_close_time_within_bounds():
     """晚间断开时刻必须落在 23:30:00-23:55:00 之间（每天随机）。"""
     db = make_db()
@@ -2544,6 +2580,255 @@ def test_window_loop_skips_auto_start_after_manual_attempt(monkeypatch):
     assert scheduler._mx_manual_attempted_idx == 0  # 已记录「本窗口已尝试」
     assert scheduler._mx_window_open is False
     assert starts["n"] == 0  # 窗口循环没有自动重跑
+    scheduler.stop()
+
+
+def test_windows_today_sets_restart_login_state(monkeypatch):
+    """工作日 8-22 重启 glue：窗口内重武装当前段；窗口间隙置一次性补登标记。"""
+    from datetime import date, datetime, timedelta
+
+    import app.scheduler as sched_mod
+
+    from app.services.mx_window import generate_mx_daily_windows
+
+    day = date(2026, 9, 14)  # 周一
+    windows = generate_mx_daily_windows(day)
+    db = make_db()
+    scheduler = _make_scheduler(db)
+
+    class FixedDatetime(datetime):
+        fixed = None
+
+        @classmethod
+        def now(cls, tz=None):
+            value = cls.fixed
+            return value.astimezone(tz) if tz else value.replace(tzinfo=None)
+
+    monkeypatch.setattr(sched_mod, "datetime", FixedDatetime)
+    # 窗口生成必须用同一份随机结果，否则固定时刻与生成窗口错位导致断言不定
+    monkeypatch.setattr(
+        sched_mod, "generate_mx_daily_windows", lambda d: list(windows)
+    )
+    monkeypatch.setattr(sched_mod, "restart_login_allowed", lambda now: True)
+
+    # 重启落在第二段窗口内：当前段重新武装，不置补登标记（到点补登走窗口开启分支）
+    FixedDatetime.fixed = windows[1][0] + timedelta(minutes=10)
+    scheduler._mx_window_date = None
+    scheduler._mx_windows_today()
+    assert scheduler._mx_armed == [False, True, True]
+    assert scheduler._mx_restart_login_pending is False
+
+    # 重启落在窗口间隙（第二段关窗后）：已结束窗口不武装，置一次性补登标记
+    FixedDatetime.fixed = windows[1][1] + timedelta(minutes=10)
+    scheduler._mx_window_date = None
+    scheduler._mx_windows_today()
+    assert scheduler._mx_armed == [False, False, True]
+    assert scheduler._mx_restart_login_pending is True
+    scheduler.stop()
+
+
+def test_windows_today_no_restart_login_outside_hours(monkeypatch):
+    """非工作时段（夜间/周末）重启：维持旧口径，不重武装、不置补登标记。"""
+    from datetime import date, datetime, timedelta
+
+    import app.scheduler as sched_mod
+
+    from app.services.mx_window import generate_mx_daily_windows
+
+    day = date(2026, 9, 20)  # 周日
+    windows = generate_mx_daily_windows(day)
+
+    class FixedDatetime(datetime):
+        fixed = windows[0][0] + timedelta(minutes=10)  # 周日早市窗口内
+
+        @classmethod
+        def now(cls, tz=None):
+            value = cls.fixed
+            return value.astimezone(tz) if tz else value.replace(tzinfo=None)
+
+    monkeypatch.setattr(sched_mod, "datetime", FixedDatetime)
+    monkeypatch.setattr(
+        sched_mod, "generate_mx_daily_windows", lambda d: list(windows)
+    )
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler._mx_window_date = None
+    scheduler._mx_windows_today()
+    assert scheduler._mx_armed == [False, True, True]  # 旧口径：错过不续连
+    assert scheduler._mx_restart_login_pending is False
+    scheduler.stop()
+
+
+def test_restart_login_gated_by_token_age(monkeypatch):
+    """重启自动登录的 TOKEN 时效门槛：超龄不重武装/不补登并发系统消息，新鲜才放行。"""
+    import time as timelib
+    from datetime import date, datetime, timedelta
+
+    import app.scheduler as sched_mod
+
+    from app.services.mx_window import generate_mx_daily_windows
+
+    day = date(2026, 9, 14)  # 周一
+    windows = generate_mx_daily_windows(day)
+    db = make_db()
+    scheduler = _make_scheduler(db)
+
+    class FixedDatetime(datetime):
+        fixed = windows[1][0] + timedelta(minutes=10)  # 周一午后窗口内
+
+        @classmethod
+        def now(cls, tz=None):
+            value = cls.fixed
+            return value.astimezone(tz) if tz else value.replace(tzinfo=None)
+
+    monkeypatch.setattr(sched_mod, "datetime", FixedDatetime)
+    monkeypatch.setattr(
+        sched_mod, "generate_mx_daily_windows", lambda d: list(windows)
+    )
+    monkeypatch.setattr(sched_mod, "restart_login_allowed", lambda now: True)
+
+    def alert_posts():
+        kol = db.get_kol_by_external("system", "system_alert")
+        if kol is None:
+            return []
+        return db._rows("SELECT content FROM posts WHERE kol_id = ?", (kol["id"],))
+
+    # TOKEN 超龄（3 天前更新）：当前段不重武装、不置补登标记，并发系统消息提醒
+    db.set_setting("mx_token_updated_at", str(int(timelib.time()) - 3 * 86400))
+    scheduler._mx_window_date = None
+    scheduler._mx_windows_today()
+    assert scheduler._mx_armed == [False, False, True]  # 旧口径：错过不续连
+    assert scheduler._mx_restart_login_pending is False
+    posts = alert_posts()
+    assert len(posts) == 1
+    assert "重启" in posts[0]["content"] and "未自动登录" in posts[0]["content"]
+
+    # TOKEN 新鲜（1 天前更新）：当前段重新武装放行，且不新增提醒
+    db.set_setting("mx_token_updated_at", str(int(timelib.time()) - 86400))
+    scheduler._mx_window_date = None
+    scheduler._mx_windows_today()
+    assert scheduler._mx_armed == [False, True, True]
+    assert scheduler._mx_restart_login_pending is False
+    assert len(alert_posts()) == 1
+    scheduler.stop()
+
+
+def test_restart_login_pending_fires_once_between_windows():
+    """工作日窗口间隙重启的补登：置位时 tick 立即拉起一次，不重复、不锚定窗口。"""
+    from datetime import datetime, timedelta
+
+    from app.services.mx_window import CN_TZ
+
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+
+    now = datetime.now(CN_TZ)
+    scheduler._mx_window_date = now.date()
+    scheduler._mx_windows = [(now + timedelta(hours=1), now + timedelta(hours=2))]
+    scheduler._mx_armed = [True]
+    scheduler._mx_fallback_at = None
+    scheduler._mx_fallback_done = False
+    scheduler._mx_force_close_at = None
+    scheduler._mx_restart_login_pending = True
+
+    starts = {"n": 0}
+
+    async def fake_session_start():
+        starts["n"] += 1
+
+    scheduler._mx_session_start = fake_session_start
+
+    async def scenario():
+        await scheduler._mx_window_tick()  # 补登 tick
+        await scheduler._mx_window_tick()  # 下个 tick：标记已消费，不重复
+
+    asyncio.run(scenario())
+
+    assert starts["n"] == 1
+    assert scheduler._mx_restart_login_pending is False
+    # 间隙补登不置 _mx_window_open：否则下个 tick（不在窗口内）会立刻关掉会话
+    assert scheduler._mx_window_open is False
+    entry = next(
+        r for r in db.list_admin_logs(limit=10) if r["action"] == "mx_auto_login"
+    )
+    assert "重启" in entry["detail"]
+    scheduler.stop()
+
+
+def test_restart_login_pending_skips_when_session_active_or_gave_up():
+    """会话已存活（如管理员已手动登录）或 WS 已放弃：补登标记只消费、不拉起。"""
+    from datetime import datetime, timedelta
+
+    from app.services.mx_window import CN_TZ
+
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+
+    now = datetime.now(CN_TZ)
+    scheduler._mx_window_date = now.date()
+    scheduler._mx_windows = [(now + timedelta(hours=1), now + timedelta(hours=2))]
+    scheduler._mx_armed = [True]
+    scheduler._mx_fallback_at = None
+    scheduler._mx_fallback_done = False
+    scheduler._mx_force_close_at = None
+
+    starts = {"n": 0}
+
+    async def fake_session_start():
+        starts["n"] += 1
+
+    scheduler._mx_session_start = fake_session_start
+
+    async def scenario(active, gave_up):
+        scheduler._mx_restart_login_pending = True
+        scheduler._mx_ws_gave_up = gave_up
+        task = asyncio.create_task(asyncio.sleep(3600)) if active else None
+        scheduler._mx_ws_task = task
+        await scheduler._mx_window_tick()
+        assert scheduler._mx_restart_login_pending is False
+        if task is not None:
+            task.cancel()
+            scheduler._mx_ws_task = None
+
+    # 会话已在线：不重复拉起
+    asyncio.run(scenario(active=True, gave_up=False))
+    # WS 已永久放弃：不重拉（防窗口循环反复拉起）
+    asyncio.run(scenario(active=False, gave_up=True))
+    assert starts["n"] == 0
+    scheduler.stop()
+
+
+def test_window_open_realigns_session_clock_for_preexisting_session():
+    """补登会话跨入下一窗口：开窗时 4h 滚动兜底计时重新对齐，避免掐断后 disarm。"""
+    from datetime import datetime, timedelta
+
+    from app.services.mx_window import CN_TZ
+
+    db = make_db()
+    scheduler = _make_scheduler(db)
+    scheduler.mx_config = MxConfig(enabled=True, token="t", ws_enabled=False)
+    _arm_manual_window(scheduler, ahead_minutes=30, span_minutes=60)
+    scheduler._mx_force_close_at = None
+    stale = datetime.now(CN_TZ) - timedelta(hours=3)
+    scheduler._mx_session_started_at = stale  # 补登会话已在线 3 小时
+
+    async def fake_session_start():
+        pass  # 会话已存活，ws_enabled=False 下不新建任务
+
+    scheduler._mx_session_start = fake_session_start
+
+    async def scenario():
+        scheduler._mx_ws_task = asyncio.create_task(asyncio.sleep(3600))  # 补登会话在线
+        await scheduler._mx_window_tick()
+
+    asyncio.run(scenario())
+
+    assert scheduler._mx_window_open is True
+    assert scheduler._mx_session_started_at > stale  # 已重新对齐到开窗时刻
+    assert scheduler._mx_armed[0] is True  # 对齐后 4h 兜底未触发，窗口未被 disarm
+    scheduler._mx_ws_task.cancel()
     scheduler.stop()
 
 
