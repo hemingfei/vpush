@@ -445,6 +445,20 @@ CREATE TABLE IF NOT EXISTS report_extraction_tickers (
     PRIMARY KEY (group_id, media_id, code)
 );
 """
+IMA_TICKER_DIGEST_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS ima_ticker_digests (
+    kind TEXT NOT NULL DEFAULT 'ticker',
+    code TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    signature TEXT NOT NULL DEFAULT '',
+    source_count INTEGER NOT NULL DEFAULT 0,
+    digest TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (kind, code)
+);
+"""
 IMA_DOCUMENT_INDEX_META_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS ima_document_index_meta (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -2079,6 +2093,7 @@ class DB:
             IMA_DOCUMENT_INDEX_META_TABLE_SQL,
             REPORT_EXTRACTIONS_TABLE_SQL,
             REPORT_EXTRACTION_TICKERS_TABLE_SQL,
+            IMA_TICKER_DIGEST_TABLE_SQL,
         ):
             self._conn.execute(sql)
         self._conn.execute(
@@ -7202,6 +7217,13 @@ class DB:
             "WHERE t.group_id = d.group_id AND t.media_id = d.media_id "
             "AND t.tag {like})"
         )
+        # 中文编译产物（机器摘要 abstract_zh + LLM 抽取 thesis）：正文以英文为主，
+        # 中文查询只能靠它们召回，因此与 metadata/标签同级参与 LIKE 与排序。
+        thesis_like = (
+            "EXISTS (SELECT 1 FROM report_extractions re "
+            "WHERE re.group_id = d.group_id AND re.media_id = d.media_id "
+            f"AND re.status = 'ok' AND re.thesis {like})"
+        )
         rank_sql = "0"
         pattern = None
         rank_placeholders = 0
@@ -7215,15 +7237,17 @@ class DB:
             else:
                 clauses.append(
                     f"(d.name_folded {like} OR d.metadata_folded {like} "
-                    f"OR d.abstract_folded {like} OR {tag_like.format(like=like)})"
+                    f"OR d.abstract_folded {like} OR d.abstract_zh {like} "
+                    f"OR {tag_like.format(like=like)} OR {thesis_like})"
                 )
-                params.extend([pattern, pattern, pattern, pattern])
+                params.extend([pattern] * 6)
                 rank_sql = (
                     f"CASE WHEN d.name_folded {like} THEN 3 "
-                    f"WHEN d.metadata_folded {like} OR {tag_like.format(like=like)} THEN 2 "
+                    f"WHEN d.metadata_folded {like} OR d.abstract_zh {like} "
+                    f"OR {tag_like.format(like=like)} OR {thesis_like} THEN 2 "
                     "ELSE 1 END"
                 )
-                rank_placeholders = 3
+                rank_placeholders = 5
         return " AND ".join(clauses), params, rank_sql, pattern, rank_placeholders
 
     def ima_document_page(
@@ -7442,6 +7466,7 @@ class DB:
         groups = list(dict.fromkeys(str(item).strip() for item in group_ids if str(item).strip()))
         if not groups:
             return []
+        # ponytail: 全库 FTS 体量索引在生产跑不动（NFS 归档 + 1C1G），这里不再带 thesis。
         return self._rows(
             "SELECT * FROM ima_document_index "
             f"WHERE group_id IN ({', '.join('?' for _ in groups)}) "
@@ -7632,6 +7657,144 @@ class DB:
                         "(group_id, media_id, code, name, stance) VALUES (?, ?, ?, ?, ?)",
                         (group_id, media_id, code, str(t.get("name") or ""), str(t.get("stance") or "")),
                     )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    # ---- 标的聚合编译（ima_ticker_digests，LLM 增量综述） ----
+
+    def ima_ticker_code(self, ticker: str) -> str:
+        """把标的筛选词解析成规范代码（聚合键）：纯数字/代码直通，名称查词表。
+
+        与列表筛选同语义：纯数字按代码，非数字是名称（中文库名习惯）。
+        """
+        raw = str(ticker or "").strip()
+        if not raw or raw.isdigit():
+            return raw
+        rows = self._rows(
+            "SELECT code FROM report_extraction_tickers WHERE name = ? "
+            "GROUP BY code ORDER BY COUNT(*) DESC LIMIT 1",
+            (raw,),
+        )
+        return str(rows[0]["code"]) if rows else raw.upper()
+
+    def ima_ticker_reports(self, code, group_ids=None, limit: int = 200) -> list[dict]:
+        """单个标的的历史研报时间线（按可读库过滤）：标的页与综述编译共用。
+
+        ponytail: 按 sort_date 取最近 limit 篇；热门标的历史更长，需要全量时再分页。
+        """
+        code = self.ima_ticker_code(code)  # 名称或代码都接受（列表筛选同语义）
+        if not code:
+            return []
+        where = ["t.code = ?"]
+        params: list = [code]
+        groups = [str(g).strip() for g in (group_ids or []) if str(g).strip()]
+        if groups:
+            where.append(f"t.group_id IN ({', '.join('?' for _ in groups)})")
+            params.extend(groups)
+        params.append(max(int(limit), 1))
+        return self._read_only_rows(
+            "SELECT t.group_id AS group_id, t.media_id AS media_id, t.name AS ticker_name, "
+            "t.stance AS stance, d.name AS name, d.sort_date AS sort_date, d.day AS day, "
+            "d.has_txt AS has_txt, re.rating AS rating, re.target_price AS target_price, "
+            "re.thesis AS thesis, re.report_kind AS report_kind, re.status AS status "
+            "FROM report_extraction_tickers t "
+            "JOIN ima_document_index d ON d.group_id = t.group_id AND d.media_id = t.media_id "
+            "LEFT JOIN report_extractions re ON re.group_id = t.group_id AND re.media_id = t.media_id "
+            f"WHERE {' AND '.join(where)} "
+            "ORDER BY (d.sort_date = '') ASC, d.sort_date DESC, d.media_id DESC LIMIT ?",
+            params,
+        )
+
+    def ima_ticker_groups(self, code) -> list[str]:
+        """该标的被哪些库收录（综述按全部库编译，据此判定谁能看这份摘要）。"""
+        normalized = self.ima_ticker_code(code)
+        if not normalized:
+            return []
+        rows = self._read_only_rows(
+            "SELECT DISTINCT group_id FROM report_extraction_tickers WHERE code = ?",
+            (normalized,),
+        )
+        return [str(row["group_id"]) for row in rows]
+
+    def ima_ticker_digest(self, code, kind: str = "ticker") -> dict:
+        """读缓存的聚合综述（无则空字典）。"""
+        rows = self._rows(
+            "SELECT * FROM ima_ticker_digests WHERE kind = ? AND code = ?",
+            (kind, str(code or "").strip()),
+        )
+        return rows[0] if rows else {}
+
+    def ima_digest_candidates(
+        self,
+        kind: str = "ticker",
+        group_ids=None,
+        min_reports: int = 2,
+        limit: int = 50,
+    ) -> list[dict]:
+        """聚合单元候选（按研报数排序）+ 当前源签名，调用方比签名决定是否重编。"""
+        where: list[str] = []
+        params: list = [kind]
+        groups = [str(g).strip() for g in (group_ids or []) if str(g).strip()]
+        if groups:
+            where.append(f"t.group_id IN ({', '.join('?' for _ in groups)})")
+            params.extend(groups)
+        params.extend((max(int(min_reports), 1), max(int(limit), 1)))
+        rows = self._rows(
+            "SELECT t.code AS code, MAX(t.name) AS name, "
+            "COUNT(DISTINCT t.group_id || '/' || t.media_id) AS report_count, "
+            "COALESCE(MAX(d.sort_date), '') AS latest_date, "
+            "COALESCE(g.signature, '') AS signature, COALESCE(g.digest, '') AS digest "
+            "FROM report_extraction_tickers t "
+            "JOIN ima_document_index d ON d.group_id = t.group_id AND d.media_id = t.media_id "
+            "LEFT JOIN ima_ticker_digests g ON g.kind = ? AND g.code = t.code "
+            f"WHERE {' AND '.join(where) or '1=1'} "
+            "GROUP BY t.code HAVING report_count >= ? "
+            "ORDER BY report_count DESC, latest_date DESC LIMIT ?",
+            params,
+        )
+        for row in rows:
+            row["source_signature"] = f"{row['report_count']}:{row['latest_date']}"
+            # 缓存行不存在（没编过）或源签名变了才重编；失败行也落了签名，不空转惹 LLM
+            row["stale"] = row["signature"] != row["source_signature"]
+        return rows
+
+    def save_ima_digest(
+        self,
+        code,
+        *,
+        kind: str = "ticker",
+        name: str = "",
+        signature: str = "",
+        source_count: int = 0,
+        digest: str = "",
+        model: str = "",
+        status: str = "ok",
+    ) -> None:
+        """写入聚合综述（签名相同则内容不会变，重编失败也要落行以免每轮重试）。"""
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                self._conn.execute(
+                    "INSERT INTO ima_ticker_digests (kind, code, name, signature, source_count, digest, model, status, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now')) "
+                    "ON CONFLICT(kind, code) DO UPDATE SET "
+                    "name = excluded.name, signature = excluded.signature, "
+                    "source_count = excluded.source_count, digest = excluded.digest, "
+                    "model = excluded.model, status = excluded.status, "
+                    "updated_at = excluded.updated_at",
+                    (
+                        kind,
+                        str(code or "").strip(),
+                        name,
+                        signature,
+                        int(source_count),
+                        digest,
+                        model,
+                        status,
+                    ),
+                )
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()

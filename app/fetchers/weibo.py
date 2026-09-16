@@ -31,6 +31,23 @@ LOGIN_URL = "https://login.sina.com.cn/sso/login.php"
 TIMELINE_URL = "https://weibo.com/ajax/statuses/mymblog"
 
 
+def weibo_session_dead(resp: httpx.Response) -> bool:
+    """登录失效：passport / 401/403/302 / JSON 要求登录，或 AJAX 返回了 HTML。"""
+    if resp.status_code in (401, 403, 302):
+        return True
+    request = getattr(resp, "_request", None)
+    if request is not None and "passport.weibo.com" in str(request.url):
+        return True
+    try:
+        data = resp.json()
+    except ValueError:
+        return True
+    if not isinstance(data, dict):
+        return True
+    msg = str(data.get("msg") or "").lower()
+    return data.get("ok") == 0 and ("login" in msg or "登录" in msg)
+
+
 def resolve_weibo_profile(uid: str, cookie: str = "", db=None) -> dict:
     """按微博 UID 解析昵称与头像。
 
@@ -310,23 +327,6 @@ class WeiboFetcher(Fetcher):
         cookie = cookie_header(self.client.cookies)
         self.db.set_setting(WEIBO_COOKIE_KEY, cookie)
 
-    @staticmethod
-    def _login_required(resp: httpx.Response) -> bool:
-        if resp.status_code in (401, 403, 302):
-            return True
-        try:
-            data = resp.json()
-        except ValueError:
-            return False
-        msg = str(((data or {}).get("msg")) or "").lower()
-        return data.get("ok") == 0 and ("login" in msg or "登录" in msg)
-
-    @staticmethod
-    def _html_login_redirect(resp: httpx.Response) -> bool:
-        """weibo.com 接口未登录时会 302 到 passport.weibo.com 的 HTML 登录页。"""
-        content_type = resp.headers.get("content-type", "")
-        return "text/html" in content_type and "passport.weibo.com" in str(resp.url)
-
     def fetch(self, kol: dict) -> list[Post]:
         self._apply_cookie()
         feature = "1" if kol.get("original_only") else "0"
@@ -336,7 +336,7 @@ class WeiboFetcher(Fetcher):
             resp = self.client.get(TIMELINE_URL, params=params)
             if resp.status_code == 432:
                 raise RuntimeError("微博反爬拦截（HTTP 432），请检查 cookie/账号配置或降低抓取频率后重试")
-            if self._login_required(resp) or self._html_login_redirect(resp):
+            if weibo_session_dead(resp):
                 self._login()
                 self._apply_cookie()
                 resp = self.client.get(TIMELINE_URL, params=params)

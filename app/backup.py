@@ -101,10 +101,29 @@ def _new_snapshot_path(folder: Path) -> Path:
     return target
 
 
+def _snapshot_files(folder: Path) -> list[Path]:
+    """本地快照：应用 dav-<ts>.db、部署 dav.db.<ts>，不含 shm/wal。按 mtime 排序。"""
+    files: list[Path] = []
+    if not folder.is_dir():
+        return files
+    for path in folder.iterdir():
+        if not path.is_file():
+            continue
+        name = path.name
+        if name.endswith(("-shm", "-wal")):
+            continue
+        if (name.startswith("dav-") and name.endswith(".db")) or name.startswith("dav.db."):
+            files.append(path)
+    files.sort(key=lambda item: (item.stat().st_mtime, item.name))
+    return files
+
+
 def _prune_local(folder: Path, keep: int = LOCAL_KEEP) -> None:
-    files = sorted(folder.glob("dav-*.db"))
+    files = _snapshot_files(folder)
     for old in files[:-keep]:
         old.unlink(missing_ok=True)
+        Path(str(old) + "-shm").unlink(missing_ok=True)
+        Path(str(old) + "-wal").unlink(missing_ok=True)
 
 
 def snapshot(db: DB) -> Path:

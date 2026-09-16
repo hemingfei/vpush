@@ -707,7 +707,9 @@ def _ima_row(group_id, media_id, *, name=None, tags=None, **kwargs):
     return row
 
 
-def _index_row(group_id, media_id, day, *, name="研报.pdf", tags=None, abstract=""):
+def _index_row(
+    group_id, media_id, day, *, name="研报.pdf", tags=None, abstract="", abstract_zh=""
+):
     tags = tags or []
     return {
         "group_id": group_id,
@@ -720,7 +722,7 @@ def _index_row(group_id, media_id, day, *, name="研报.pdf", tags=None, abstrac
         "metadata_folded": f"{group_id} {' '.join(tags)}".casefold(),
         "abstract": abstract,
         "abstract_folded": abstract.casefold(),
-        "abstract_zh": "",
+        "abstract_zh": abstract_zh,
         "abstract_src_hash": "",
         "cover_url": "",
         "tags": tags,
@@ -1463,6 +1465,32 @@ def test_ima_document_index_search_ranking_and_literal_wildcards(tmp_path):
 
     assert db.ima_document_page(["semi"], group="other")["items"] == []
     assert db.ima_document_page([], query="ai")["document_count"] == 0
+
+
+def test_ima_document_query_matches_chinese_compiled_fields(tmp_path):
+    """中文编译产物（abstract_zh / LLM thesis）必须能搜到，且只认 status='ok'。"""
+    db = DB(str(tmp_path / "zh-search.sqlite"))
+    db.replace_ima_document_index(
+        [
+            _index_row("semi", "abstract", "0830", abstract_zh="算力资本开支回升"),
+            _index_row("semi", "thesis", "0831"),
+            _index_row("semi", "failed", "0832"),
+        ],
+        "fp",
+        1,
+    )
+    db.save_report_extraction(
+        "semi", "thesis", thesis="算力资本开支回升带动盈利上修"
+    )
+    db.save_report_extraction(
+        "semi", "failed", thesis="算力资本开支回升待确认", status="failed"
+    )
+
+    page = db.ima_document_page(["semi"], query="算力资本开支", limit=50, offset=0)
+    assert sorted(item["media_id"] for item in page["items"]) == ["abstract", "thesis"]
+    assert page["document_count"] == 2
+    assert db.ima_document_match_count(["semi"], query="算力资本开支") == 2
+    assert db.ima_document_match_count(["semi"], query="盈利上修") == 1
 
 
 def test_ima_document_page_has_stable_cross_group_tie_order(tmp_path):
@@ -2564,3 +2592,150 @@ def test_report_extraction_round_robin_quota(tmp_path):
     # min_sort_date 窗口仍然生效
     rows = db.pending_report_extractions(limit=80, group_ids=list(groups), min_sort_date="2026-09-01", per_group=2)
     assert all(r["sort_date"] >= "2026-09-01" for r in rows)
+
+
+def test_ticker_digest_timeline_and_staleness(tmp_path):
+    """标的聚合：名称解析成代码、时间线按可读库过滤并新→旧、源签名变了才算 stale。"""
+    db = DB(str(tmp_path / "ticker-digest.db"))
+    rows = (
+        ("g1", "r1", "2026-09-10", [{"code": "NVDA", "name": "英伟达"}], "Buy"),
+        ("g2", "r2", "2026-09-12", [{"code": "NVDA", "name": "英伟达"}], "中性"),
+        ("g2", "r3", "2026-09-12", [{"code": "00700", "name": "腾讯控股"}], "增持"),
+    )
+    for group_id, media_id, sort_date, tickers, rating in rows:
+        db._conn.execute(
+            "INSERT INTO ima_document_index (group_id, media_id, name, sort_date, day) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (group_id, media_id, f"{media_id} 标题", sort_date, sort_date),
+        )
+        db._conn.commit()
+        db.save_report_extraction(
+            group_id,
+            media_id,
+            rating=rating,
+            target_price="185",
+            thesis=f"{media_id} 要点",
+            tickers=tickers,
+            status="ok",
+        )
+
+    assert db.ima_ticker_code("英伟达") == "NVDA"
+    assert db.ima_ticker_code("600519") == "600519"
+    assert db.ima_ticker_code("NVDA") == "NVDA"
+    timeline = db.ima_ticker_reports("英伟达", ["g1", "g2"])
+    assert [row["media_id"] for row in timeline] == ["r2", "r1"]
+    assert timeline[0]["name"] == "r2 标题"
+    assert timeline[0]["thesis"] == "r2 要点"
+    # 可读库过滤：g1 不可读时只剩 r1
+    assert [row["media_id"] for row in db.ima_ticker_reports("NVDA", ["g1"])] == ["r1"]
+    assert db.ima_ticker_reports("", ["g1", "g2"]) == []
+
+    candidates = {row["code"]: row for row in db.ima_digest_candidates(min_reports=1)}
+    assert candidates["NVDA"]["source_signature"] == "2:2026-09-12"
+    assert candidates["NVDA"]["stale"] is True  # 还没编过
+    db.save_ima_digest(
+        "NVDA",
+        name="英伟达",
+        signature="2:2026-09-12",
+        source_count=2,
+        digest='{"consensus": "共识"}',
+        model="test-model",
+    )
+    candidates = {row["code"]: row for row in db.ima_digest_candidates(min_reports=1)}
+    assert candidates["NVDA"]["stale"] is False
+    assert candidates["00700"]["stale"] is True
+
+    # 新增一篇研报 → 签名变化 → 重新待编译
+    db._conn.execute(
+        "INSERT INTO ima_document_index (group_id, media_id, name, sort_date, day) "
+        "VALUES ('g1', 'r4', '新报告', '2026-09-15', '2026-09-15')"
+    )
+    db._conn.commit()
+    db.save_report_extraction(
+        "g1",
+        "r4",
+        rating="买入",
+        thesis="新要点",
+        tickers=[{"code": "NVDA", "name": "英伟达"}],
+        status="ok",
+    )
+    candidates = {row["code"]: row for row in db.ima_digest_candidates(min_reports=1)}
+    assert candidates["NVDA"]["stale"] is True
+    assert candidates["NVDA"]["source_signature"] == "3:2026-09-15"
+    assert db.ima_ticker_digest("NVDA")["model"] == "test-model"
+
+
+def test_compile_ticker_digest_normalizes_and_stores(tmp_path):
+    """聚合编译：prompt 带中文评级与要点、围栏 JSON 可解析、失败落 failed 不空转。"""
+    import json
+    from types import SimpleNamespace
+
+    import httpx
+
+    from app.ima_digest import compile_and_store, digest_view
+
+    db = DB(str(tmp_path / "digest-compile.db"))
+    for media_id, sort_date, rating, thesis in (
+        ("r1", "2026-09-10", "Buy", "AI 需求强劲"),
+        ("r2", "2026-09-12", "中性", "估值偏高"),
+    ):
+        db._conn.execute(
+            "INSERT INTO ima_document_index (group_id, media_id, name, sort_date, day) "
+            "VALUES ('g', ?, ?, ?, ?)",
+            (media_id, f"{media_id} 标题", sort_date, sort_date),
+        )
+        db._conn.commit()
+        db.save_report_extraction(
+            "g",
+            media_id,
+            rating=rating,
+            thesis=thesis,
+            tickers=[{"code": "NVDA", "name": "英伟达"}],
+            status="ok",
+        )
+
+    captured: dict = {}
+
+    def handler(request):
+        captured["prompt"] = json.loads(request.read())["messages"][0]["content"]
+        body = (
+            "```json\n"
+            '{"consensus":"需求强、估值贵并存","evolution":[{"date":"2026-09-12","point":"目标价上调"}],'
+            '"divergence":"分歧在毛利率"}\n```'
+        )
+        return httpx.Response(200, json={"choices": [{"message": {"content": body}}]})
+
+    llm = SimpleNamespace(api_key="k", api_base="https://example.com/v1", model="model-x")
+    stored = compile_and_store(
+        db,
+        "NVDA",
+        llm,
+        name="英伟达",
+        signature="2:2026-09-12",
+        source_count=2,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    assert stored["status"] == "ok"
+    assert "AI 需求强劲" in captured["prompt"]
+    assert "英伟达" in captured["prompt"]
+    assert "买入" in captured["prompt"]  # 评级中文化后再进 prompt
+    view = digest_view(db.ima_ticker_digest("NVDA"))
+    assert view["consensus"] == "需求强、估值贵并存"
+    assert view["evolution"][0]["point"] == "目标价上调"
+    assert view["divergence"] == "分歧在毛利率"
+    assert view["model"] == "model-x" and view["source_count"] == 2
+
+    def bad_handler(request):
+        return httpx.Response(200, json={"choices": [{"message": {"content": "没有 JSON"}}]})
+
+    with pytest.raises(ValueError):
+        compile_and_store(
+            db,
+            "NVDA",
+            llm,
+            name="英伟达",
+            signature="2:2026-09-12",
+            source_count=2,
+            client=httpx.Client(transport=httpx.MockTransport(bad_handler)),
+        )
+    assert db.ima_ticker_digest("NVDA")["status"].startswith("failed")

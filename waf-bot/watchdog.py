@@ -33,7 +33,8 @@ PROBE_PARAMS = {"user_id": "1247347556", "page": 1, "count": 1}
 # 配置了登录 cookie 时，先做一次需登录的探测，通过后才覆盖共享文件。
 AUTH_PROBE_URL = "https://xueqiu.com/cubes/rebalancing/history.json"
 AUTH_PROBE_PARAMS = {"cube_symbol": "ZH000001", "page": 1, "count": 1}
-AUTH_ERROR_CODE = "10022"
+# 10022=未登录；400016=请重新登录。接口可能给 int 或 str。
+AUTH_ERROR_CODES = {"10022", "400016"}
 
 TARGETS = [
     {
@@ -178,7 +179,7 @@ def refresh(
             return False
         if seed:
             # 需登录的探测失败时不覆盖已有文件。
-            if not isinstance(payload, dict) or payload.get("error_code") == AUTH_ERROR_CODE:
+            if not isinstance(payload, dict) or str(payload.get("error_code")) in AUTH_ERROR_CODES:
                 return False
         else:
             if probe.status_code != 200:

@@ -2564,3 +2564,93 @@ def test_indexed_api_no_json_read_stays_stable_across_repeated_queries(tmp_path,
             response = client.get(route, headers=admin_headers)
             assert response.status_code == 200, response.text
 
+
+
+def test_ima_ticker_page_returns_timeline_and_digest(tmp_path, monkeypatch):
+    """标的页：名称解析成代码、时间线新→旧、带已编译综述（未编译则只有时间线）。"""
+    monkeypatch.setenv("DAV_UI_ONLY", "1")
+    client = TestClient(create_app(db_path=tmp_path / "ticker-page.sqlite"))
+    headers = _headers(client, "ticker_page_admin", "TICKERPAGE1", admin=True)
+    group_id, group_b = _configure_two_groups(client, headers)
+    db = client.app.state.db
+    for media_id, sort_date in (("r1", "2026-09-10"), ("r2", "2026-09-12")):
+        db._conn.execute(
+            "INSERT INTO ima_document_index (group_id, media_id, name, sort_date, day) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (group_id, media_id, f"{media_id} 标题", sort_date, sort_date),
+        )
+        db._conn.commit()
+        db.save_report_extraction(
+            group_id,
+            media_id,
+            rating="Buy",
+            target_price="185",
+            thesis=f"{media_id} 要点",
+            tickers=[{"code": "NVDA", "name": "英伟达"}],
+            status="ok",
+        )
+    db.save_ima_digest(
+        "NVDA",
+        name="英伟达",
+        signature="2:2026-09-12",
+        source_count=2,
+        digest=json.dumps(
+            {"consensus": "共识", "evolution": [{"date": "2026-09-12", "point": "上调"}], "divergence": ""},
+            ensure_ascii=False,
+        ),
+        model="test-model",
+    )
+
+    response = client.get("/api/ima-documents/tickers/英伟达", headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["code"] == "NVDA"
+    assert payload["name"] == "英伟达"
+    assert [item["media_id"] for item in payload["items"]] == ["r2", "r1"]
+    assert payload["items"][0]["extraction"]["rating"] == "买入"
+    assert payload["digest"]["consensus"] == "共识"
+    assert payload["digest"]["evolution"][0]["point"] == "上调"
+    assert payload["digest"]["source_count"] == 2
+
+    # 未编译的标的：只有时间线，综述为空
+    empty = client.get("/api/ima-documents/tickers/600519", headers=headers)
+    assert empty.status_code == 200, empty.text
+    assert empty.json()["digest"] == {}
+    assert empty.json()["items"] == []
+
+    # 综述按全部库编译：只授了部分库的人不得看到它（时间线仍按可见库过滤）
+    reader_headers = _headers(client, "ticker_page_reader", "TICKERPAGE2")
+    reader_id = db._rows("SELECT id FROM users WHERE username = ?", ("ticker_page_reader",))[0]["id"]
+    db._conn.execute(
+        "INSERT INTO ima_document_index (group_id, media_id, name, sort_date, day) VALUES (?, ?, ?, ?, ?)",
+        (group_b, "r3", "r3 标题", "2026-09-13", "2026-09-13"),
+    )
+    db._conn.commit()
+    db.save_report_extraction(
+        group_b,
+        "r3",
+        thesis="r3 要点",
+        tickers=[{"code": "NVDA", "name": "英伟达"}],
+        status="ok",
+    )
+    db.set_ima_kb_acl(group_id, [reader_id])
+    partial = client.get("/api/ima-documents/tickers/英伟达", headers=reader_headers)
+    assert partial.status_code == 200, partial.text
+    assert [item["media_id"] for item in partial.json()["items"]] == ["r2", "r1"]
+    assert partial.json()["digest"] == {}
+
+    db.set_ima_kb_acl(group_b, [reader_id])
+    granted = client.get("/api/ima-documents/tickers/英伟达", headers=reader_headers)
+    assert granted.status_code == 200, granted.text
+    assert [item["media_id"] for item in granted.json()["items"]] == ["r3", "r2", "r1"]
+    assert granted.json()["digest"]["consensus"] == "共识"
+
+    # 库里残留旧配置/已下线的 group_id（不在已配置库内）：不该因此把综述藏给所有人
+    db._conn.execute(
+        "INSERT INTO report_extraction_tickers (group_id, media_id, code, name) VALUES (?, ?, ?, ?)",
+        ("group-legacy", "r9", "NVDA", "英伟达"),
+    )
+    db._conn.commit()
+    legacy = client.get("/api/ima-documents/tickers/英伟达", headers=reader_headers)
+    assert legacy.status_code == 200, legacy.text
+    assert legacy.json()["digest"]["consensus"] == "共识"

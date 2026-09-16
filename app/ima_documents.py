@@ -3518,6 +3518,8 @@ class ImaDocumentService:
         if self.search_index is None or not self.search_index.enabled:
             return
         try:
+            # 范围仍由 IMA_SEARCH_GROUP_IDS 决定（生产上 Archive 在 NFS 上，全库建体量索引要数小时，
+            # 扩展到全部产品组已回退，中文召回由 db.py 的 LIKE 路径负责）。
             rows = self.db.ima_document_index_rows(self.search_index.group_ids)
             self.search_index.sync(rows)
         except Exception:  # noqa: BLE001 - optional search must not stop IMA workers

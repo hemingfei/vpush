@@ -11,7 +11,7 @@ import httpx
 
 from app.config import FeishuConfig, NotifiersConfig, TelegramConfig
 from app.db import DB
-from app.fetchers.base import Post
+from app.fetchers.base import Post, is_notify_stale
 import app.scheduler as app_scheduler
 from app.scheduler import (
     PlatformState,
@@ -28,6 +28,7 @@ from app.scheduler import (
     keepalive_weibo_cookie,
     keepalive_xueqiu_cookie,
     maybe_alert_x_fallback,
+    probe_xueqiu,
     notify_digest_subscribers,
     notify_subscribers,
     parse_twitter_cookie,
@@ -405,11 +406,46 @@ def test_catchup_history_older_than_watermark_is_not_pushed(monkeypatch):
     old.published_at = "2026-05-24 17:30"
     new = make_post(kid)
     new.external_id = "new-today"
-    new.published_at = "2026-09-04 10:00"
+    new.published_at = datetime.datetime.now(
+        datetime.timezone(datetime.timedelta(hours=8))
+    ).strftime("%Y-%m-%d %H:%M")
     sent = []
     poll_once(db, {"xueqiu": FakeFetcher([old, new])}, [], notifiers_config=_tg_ncfg(monkeypatch, sent))
     assert sent == ["new-today"]
     assert {p["external_id"] for p in db.list_posts()} >= {"kept", "old-may", "new-today"}
+
+
+def test_is_notify_stale_skips_catchup_keeps_fresh():
+    now = datetime.datetime(2026, 9, 15, 22, 0, tzinfo=datetime.timezone(datetime.timedelta(hours=8)))
+    assert is_notify_stale("2026-09-15 20:00", now=now) is True
+    assert is_notify_stale("2026-09-15 21:30", now=now) is False
+    assert is_notify_stale("", now=now) is False
+
+
+def test_gap_catchup_older_than_fresh_window_is_not_pushed(monkeypatch):
+    """断线补抓：比水位新但超过 60 分钟的帖入库不推，避免 cookie 恢复后连珠炮。"""
+    db = make_db()
+    kid = db.add_kol("combination", "组合A", "ZH1")
+    db.insert_post("combination", kid, "kept", "t", "c", "u", "2026-09-15 12:00")
+    db.mark_kol_baseline(kid)
+    uid = db.add_user("u", "h", telegram_chat_id="111")
+    db.add_subscription(uid, kid)
+    now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
+    stale = make_post(kid)
+    stale.platform = "combination"
+    stale.external_id = "gap-old"
+    stale.published_at = (now - datetime.timedelta(hours=4)).strftime("%Y-%m-%d %H:%M")
+    fresh = make_post(kid)
+    fresh.platform = "combination"
+    fresh.external_id = "gap-fresh"
+    fresh.published_at = (now - datetime.timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M")
+    sent = []
+    poll_once(
+        db, {"combination": FakeFetcher([stale, fresh])}, [],
+        notifiers_config=_tg_ncfg(monkeypatch, sent),
+    )
+    assert sent == ["gap-fresh"]
+    assert {p["external_id"] for p in db.list_posts()} >= {"kept", "gap-old", "gap-fresh"}
 
 
 def test_empty_baseline_then_months_of_history_not_pushed(monkeypatch):
@@ -2504,8 +2540,6 @@ def test_scheduler_stop_flushes_pending_digest(monkeypatch):
 
 
 def test_startup_message_only_to_admins(monkeypatch):
-    import asyncio
-
     db = make_db()
     db.add_user("kale", "h", telegram_chat_id="111", is_admin=True)
     db.add_user("user", "h", telegram_chat_id="222")
@@ -2562,8 +2596,6 @@ def test_format_startup_message_instance_version_time(monkeypatch):
 
 def test_startup_message_respects_push_channels(monkeypatch):
     """管理员只勾选 telegram 时，启动提示不应发到已绑定的飞书渠道。"""
-    import asyncio
-
     db = make_db()
     uid = db.add_user("kale", "h", telegram_chat_id="111", feishu_chat_id="fc1", is_admin=True)
     db.update_user(uid, push_channels="telegram")
@@ -2617,8 +2649,6 @@ def test_startup_message_respects_push_channels(monkeypatch):
 
 def test_startup_message_defaults_to_all_bound_channels(monkeypatch):
     """push_channels 未设置时，已绑定渠道都应收到启动提示（默认行为）。"""
-    import asyncio
-
     db = make_db()
     db.add_user("kale", "h", telegram_chat_id="111", feishu_chat_id="fc1", is_admin=True)
     sent = {"tg": [], "fs": []}
@@ -3635,8 +3665,14 @@ def test_xueqiu_cookie_keepalive():
     db.add_kol("xueqiu", "A", "1")  # 默认 enabled
     db.set_setting("xueqiu_cookie", "xq_a_token=old; u=1")
     notifier = FakeNotifier()
+    seen = []
 
     def handler(request):
+        seen.append((request.url.host, request.headers.get("Cookie", "")))
+        if request.url.host == "xueqiu.com":
+            return httpx.Response(
+                302, headers={"location": str(request.url.copy_with(host="www.xueqiu.com"))}
+            )
         # 保活探测 timeline JSON 接口：200 + 合法 JSON + 下发新 cookie
         return httpx.Response(
             200,
@@ -3644,11 +3680,12 @@ def test_xueqiu_cookie_keepalive():
             headers={"set-cookie": "xq_a_token=new; Path=/; Domain=.xueqiu.com"},
         )
 
-    client = httpx.Client(transport=httpx.MockTransport(handler))
+    client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
     keepalive_xueqiu_cookie(
         db, [notifier], SimpleNamespace(cookie=""), client=client
     )
-    assert "xq_a_token=new" in db.get_setting("xueqiu_cookie")
+    assert seen == [("xueqiu.com", "xq_a_token=old; u=1"), ("www.xueqiu.com", "xq_a_token=old; u=1")]
+    assert db.get_setting("xueqiu_cookie") == "xq_a_token=new; u=1"
     assert db.get_setting("xueqiu_cookie_updated_at")
     assert db.get_setting("source_ok_xueqiu")  # 保活成功刷新「正常」状态
     assert db.get_setting("source_err_xueqiu") in (None, "")
@@ -3678,16 +3715,134 @@ def test_xueqiu_cookie_keepalive_expired_alerts():
     assert db.get_setting("cookie_keepalive_alert_at")
 
 
+def test_xueqiu_session_dead_auth_codes():
+    from app.fetchers.xueqiu import xueqiu_session_dead
+
+    assert xueqiu_session_dead(httpx.Response(400, json={"error_code": 400016}))
+    assert xueqiu_session_dead(httpx.Response(200, json={"error_code": "10022"}))
+    assert xueqiu_session_dead(
+        httpx.Response(
+            400,
+            json={"error_description": "遇到错误，请刷新页面或者重新登录帐号后再试"},
+        )
+    )
+    assert xueqiu_session_dead(httpx.Response(401, text="unauthorized"))
+    assert not xueqiu_session_dead(httpx.Response(200, text="<html>waf</html>"))
+    assert not xueqiu_session_dead(httpx.Response(302, headers={"location": "https://www.xueqiu.com/"}))
+    assert not xueqiu_session_dead(httpx.Response(400, json={"error_code": 1}))
+    assert not xueqiu_session_dead(httpx.Response(200, json={"statuses": []}))
+
+
+def _probe_client(monkeypatch, handler):
+    monkeypatch.setattr("app.proxy.acquire_client_proxy", lambda *a, **k: ("http://127.0.0.1:9", "p"))
+    real_client = httpx.Client
+
+    def fake_client(*a, **k):
+        k.pop("proxy", None)
+        k["transport"] = httpx.MockTransport(handler)
+        return real_client(*a, **k)
+
+    monkeypatch.setattr("httpx.Client", fake_client)
+
+
+def test_probe_xueqiu_http400_does_not_mark_ok(monkeypatch):
+    db = make_db()
+    db.add_kol("xueqiu", "A", "1")
+    db.set_setting("xueqiu_cookie", "xq_a_token=expired")
+    notifier = FakeNotifier()
+
+    def handler(request):
+        return httpx.Response(
+            400,
+            json={"error_code": 400016, "error_description": "请重新登录"},
+        )
+
+    _probe_client(monkeypatch, handler)
+    probe_xueqiu(db, [notifier], SimpleNamespace(cookie=""))
+    assert "探测" in (db.get_setting("source_err_xueqiu") or "")
+    assert not db.get_setting("source_ok_xueqiu")
+    assert any("探测异常" in t for t in notifier.texts)
+
+
+def test_probe_xueqiu_transient_400_does_not_alert_cookie(monkeypatch):
+    db = make_db()
+    db.add_kol("xueqiu", "A", "1")
+    db.set_setting("xueqiu_cookie", "xq_a_token=ok")
+    notifier = FakeNotifier()
+
+    def handler(request):
+        return httpx.Response(400, json={"error_code": 1})
+
+    _probe_client(monkeypatch, handler)
+    probe_xueqiu(db, [notifier], SimpleNamespace(cookie=""))
+    assert notifier.texts == []
+    assert not db.get_setting("source_ok_xueqiu")
+    assert "探测 HTTP 400" in (db.get_setting("source_err_xueqiu") or "")
+
+
+def test_probe_xueqiu_ok_timeline(monkeypatch):
+    db = make_db()
+    db.add_kol("xueqiu", "A", "1")
+    db.set_setting("xueqiu_cookie", "xq_a_token=ok")
+    notifier = FakeNotifier()
+    seen = []
+
+    def handler(request):
+        seen.append((request.url.host, request.headers.get("Cookie", "")))
+        if request.url.host == "xueqiu.com":
+            return httpx.Response(
+                302, headers={"location": str(request.url.copy_with(host="www.xueqiu.com"))}
+            )
+        return httpx.Response(200, json={"statuses": []})
+
+    _probe_client(monkeypatch, handler)
+    probe_xueqiu(db, [notifier], SimpleNamespace(cookie=""))
+    assert seen == [("xueqiu.com", "xq_a_token=ok"), ("www.xueqiu.com", "xq_a_token=ok")]
+    assert db.get_setting("source_ok_xueqiu")
+    assert db.get_setting("source_err_xueqiu") in (None, "")
+    assert notifier.texts == []
+
+
+def test_xueqiu_keepalive_200_auth_error_alerts():
+    db = make_db()
+    db.add_kol("xueqiu", "A", "1")
+    db.set_setting("xueqiu_cookie", "xq_a_token=expired; u=1")
+    notifier = FakeNotifier()
+
+    def handler(request):
+        return httpx.Response(200, json={"error_code": 400016, "error_description": "请重新登录"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    keepalive_xueqiu_cookie(db, [notifier], SimpleNamespace(cookie=""), client=client)
+    assert "无效或已过期" in (db.get_setting("source_err_xueqiu") or "")
+    assert any("雪球" in t for t in notifier.texts)
+
+
+def test_xueqiu_keepalive_transient_400_does_not_alert():
+    db = make_db()
+    db.add_kol("xueqiu", "A", "1")
+    db.set_setting("xueqiu_cookie", "xq_a_token=ok; u=1")
+    notifier = FakeNotifier()
+
+    def handler(request):
+        return httpx.Response(400, json={"error_code": 1})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    keepalive_xueqiu_cookie(db, [notifier], SimpleNamespace(cookie=""), client=client)
+    assert notifier.texts == []
+    assert "无效或已过期" not in (db.get_setting("source_err_xueqiu") or "")
+
+
 def test_weibo_cookie_keepalive_refresh_and_expired_alert():
     db = make_db()
+    db.add_kol("weibo", "A", "1")
     db.set_setting("weibo_cookie", "SUB=old; UID=1")
 
     def handler(request):
         return httpx.Response(
             200,
-            text="<html>ok</html>",
+            json={"ok": 1, "data": {"list": []}},
             headers={
-                "content-type": "text/html",
                 "set-cookie": "SUBP=newsubp; Path=/; Domain=.weibo.com",
             },
         )
@@ -3726,6 +3881,27 @@ def test_weibo_cookie_keepalive_refresh_and_expired_alert():
     )
     assert any("保活失败" in t for t in notifier2.texts)
     assert "会话已失效" in db.get_setting("source_err_weibo")
+
+
+def test_weibo_keepalive_html200_is_dead():
+    db = make_db()
+    db.add_kol("weibo", "A", "1")
+    db.set_setting("weibo_cookie", "SUB=dead")
+    notifier = FakeNotifier()
+
+    def handler(request):
+        return httpx.Response(200, text="<html>login wall</html>", headers={"content-type": "text/html"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
+    keepalive_weibo_cookie(
+        db,
+        [notifier],
+        SimpleNamespace(cookie="", username="", password=""),
+        client=client,
+    )
+    assert any("保活失败" in t for t in notifier.texts)
+    assert "会话已失效" in (db.get_setting("source_err_weibo") or "")
+    assert "SUBP=" not in (db.get_setting("weibo_cookie") or "")
 
 
 def test_push_failure_logged(monkeypatch):
@@ -4065,8 +4241,6 @@ def test_scheduler_loop_delay_uses_min_interval():
 
 def test_scheduler_run_loop_sleeps_priority_interval(monkeypatch):
     """主循环单轮等待时长应取最短间隔（雪球组合 30s），而非全局/优先间隔。"""
-    import asyncio
-
     db = make_db()
     ncfg = SimpleNamespace(
         telegram=SimpleNamespace(bot_token="", chat_id=""),
@@ -5248,7 +5422,6 @@ def test_daily_report_uses_admin_push_settings_llm(monkeypatch):
     def fake_daily(posts, cfg, client=None):
         seen["key"] = cfg.api_key
         seen["model"] = cfg.model
-        return None
 
     monkeypatch.setattr("app.llm.summarize_daily", fake_daily)
     fake = FakeDailyNotifier()
@@ -5529,3 +5702,74 @@ def test_purge_inactive_skips_within_24h():
     db.set_setting("inactive_users_last_purge_at", str(int(time.time()) - 25 * 3600))
     assert db.purge_inactive_users_if_due() == 1
     assert db.get_user(gone) is None
+
+
+def test_ticker_digest_task_compiles_only_stale(tmp_path, monkeypatch):
+    """标的聚合任务：只编源签名变化的标的、限量、二次调用不再花钱。"""
+    db = DB(tmp_path / "ticker-digest-task.db")
+    for media_id, sort_date, code, name in (
+        ("r1", "2026-09-10", "NVDA", "英伟达"),
+        ("r2", "2026-09-12", "NVDA", "英伟达"),
+        ("r3", "2026-09-12", "00700", "腾讯控股"),
+    ):
+        db._execute(
+            "INSERT INTO ima_document_index (group_id, media_id, name, sort_date, day) "
+            "VALUES ('g1', ?, ?, ?, ?)",
+            (media_id, f"{media_id} 标题", sort_date, sort_date),
+        )
+        db.save_report_extraction(
+            "g1",
+            media_id,
+            thesis=f"{media_id} 要点",
+            tickers=[{"code": code, "name": name}],
+            status="ok",
+        )
+    db.set_setting("ima_digest_min_reports", "1")
+    calls = []
+
+    def fake_compile(reports, code, llm_config=None, *, name="", model="", client=None):
+        calls.append((code, name, len(reports)))
+        return {"digest": {"consensus": "共识", "evolution": [], "divergence": ""}, "model": "m", "source_count": len(reports)}
+
+    monkeypatch.setattr("app.ima_digest.compile_ticker_digest", fake_compile)
+    scheduler = Scheduler(
+        db,
+        {},
+        [],
+        SimpleNamespace(),
+        llm_config=SimpleNamespace(
+            api_key="test-key", api_base="https://example.com/v1", model="test-model"
+        ),
+    )
+
+    assert scheduler._run_ticker_digest_task() == 2
+    assert sorted(code for code, _, _ in calls) == ["00700", "NVDA"]
+    assert db.ima_ticker_digest("NVDA")["status"] == "ok"
+    assert db.get_setting(f"ima_digest_done_{time.strftime('%Y%m%d')}") == "2"
+
+    # 源签名没变 → 不再重复编译
+    assert scheduler._run_ticker_digest_task() == 0
+    assert len(calls) == 2
+
+    # 新增一篇 → 只重编该标的
+    db._execute(
+        "INSERT INTO ima_document_index (group_id, media_id, name, sort_date, day) "
+        "VALUES ('g1', 'r4', '新报告', '2026-09-15', '2026-09-15')"
+    )
+    db.save_report_extraction(
+        "g1",
+        "r4",
+        thesis="新要点",
+        tickers=[{"code": "NVDA", "name": "英伟达"}],
+        status="ok",
+    )
+    assert scheduler._run_ticker_digest_task() == 1
+    assert calls[-1][0] == "NVDA" and calls[-1][2] == 3
+
+    # 关开关 / 到日限额都不再调用
+    db.set_setting("ima_digest_enabled", "0")
+    assert scheduler._run_ticker_digest_task() == 0
+    db.set_setting("ima_digest_enabled", "1")
+    db.set_setting("ima_digest_daily_limit", "0")
+    assert scheduler._run_ticker_digest_task() == 0
+    assert len(calls) == 3

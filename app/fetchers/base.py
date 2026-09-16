@@ -129,9 +129,7 @@ def has_stored_translation(post: Post | dict) -> bool:
         content = (post.content or "").strip()
     if not src or src == content:
         return False
-    if already_chinese(quoted_author_text(src)):
-        return False
-    return True
+    return not already_chinese(quoted_author_text(src))
 
 
 def with_twitter_display(post: Post, translate: bool) -> Post:
@@ -217,9 +215,9 @@ def parse_published_at(raw: str) -> datetime | None:
     if not raw:
         return None
     if raw.isdigit():
-        ts = int(raw)
-        ts = ts / 1000 if ts > 1e12 else ts
         try:
+            ts = int(raw)
+            ts = ts / 1000 if ts > 1e12 else ts
             return datetime.fromtimestamp(ts, tz=CN_TZ)
         except (ValueError, OSError, OverflowError):
             return None
@@ -269,6 +267,8 @@ def format_published_at(raw: str) -> str:
 
 
 STALE_HOURS = 36
+# 断线补抓：比水位新但超过此时长的帖入库不推。实时源退避（组合≤10min、X 429=15min）远小于此。
+NOTIFY_FRESH_MINUTES = 60
 
 
 def is_stale_backfill(published_at: str, watermark: str = "") -> bool:
@@ -281,6 +281,17 @@ def is_stale_backfill(published_at: str, watermark: str = "") -> bool:
         if wt is not None:
             return dt < wt
     return dt < datetime.now(dt.tzinfo or CN_TZ) - timedelta(hours=STALE_HOURS)
+
+
+def is_notify_stale(published_at: str, now: datetime | None = None) -> bool:
+    """发布时间早于 NOTIFY_FRESH_MINUTES：入库，不推送（cookie 恢复后防连珠炮）。"""
+    dt = parse_published_at(published_at or "")
+    if dt is None:
+        return False
+    now = now or datetime.now(dt.tzinfo or CN_TZ)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=dt.tzinfo or CN_TZ)
+    return dt < now - timedelta(minutes=NOTIFY_FRESH_MINUTES)
 
 
 class ThreadLocalClient:

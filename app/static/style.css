@@ -6109,3 +6109,28 @@ html:not(.theme-dark) .ai-form-select option {
   font-weight: var(--font-weight-medium);
 }
 .ima-ex-badge.ima-ex-ticker { color: var(--color-text); }
+
+/* 标的综述页：/ticker/<code> 一页聚合该标的多篇研报（时间线 + 编译综述） */
+.ima-tk-page { max-width: 860px; margin: 0 auto; padding: 16px; }
+.ima-tk-head { margin-bottom: 12px; }
+.ima-tk-title { margin: 0 0 4px; color: var(--color-text-strong); font-size: var(--text-lg); }
+.ima-tk-digest {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-soft);
+}
+.ima-tk-digest-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; color: var(--color-text-strong); }
+.ima-tk-consensus { margin: 0 0 8px; color: var(--color-text); font-size: var(--text-sm); line-height: 1.55; }
+.ima-tk-steps { margin: 0 0 8px; padding-left: 18px; color: var(--color-text); font-size: var(--text-sm); line-height: 1.5; }
+.ima-tk-step { margin-bottom: 2px; }
+.ima-tk-step time { margin-right: 8px; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+.ima-tk-divergence { margin: 0; color: var(--color-text-muted); font-size: var(--text-sm); line-height: 1.5; }
+.ima-tk-row .ima-report-meta { margin-top: 2px; }
+a.ima-ex-badge.ima-ex-ticker { text-decoration: none; }
+a.ima-ex-badge.ima-ex-ticker:hover { border-color: var(--color-accent); color: var(--color-accent); }
+@media (max-width: 640px) {
+  .ima-tk-row { grid-template-columns: 52px minmax(0, 1fr); }
+  .ima-tk-row .ima-report-source { display: none; }
+}

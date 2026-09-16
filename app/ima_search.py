@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Any
 
 MAX_BODY_BYTES = 8 * 1024 * 1024
+# 首次全量建索引可能上万篇：每 N 篇提交一次，避免单个巨型事务的 WAL/内存峰值；
+# 中断后下一轮按 source_hash 跳过已完成部分继续（否则每次都要从头重来）。
+SYNC_COMMIT_EVERY = 500
 MAX_QUERY_CHARS = 256
 
 _EMPTY_COUNTS = {
@@ -271,6 +274,8 @@ class ImaSearchIndex:
                         ),
                     )
                     updated += 1
+                    if updated % SYNC_COMMIT_EVERY == 0:
+                        connection.commit()
 
                 removed_keys = set(existing) - present
                 for group_id, media_id in removed_keys:

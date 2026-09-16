@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 import watchdog
@@ -36,6 +37,8 @@ class FakeResponse:
 
 
 class FakeSession:
+    cookies: Any
+
     def __init__(self, responses, cookies=None):
         self.responses = list(responses)
         self.cookies = FakeCookies(cookies)
@@ -281,6 +284,32 @@ def test_seed_cookie_uses_auth_probe_and_10022_preserves_old_file(tmp_path):
     assert output.read_text(encoding="utf-8") == "old cookies"
     assert session.calls[1][0] == watchdog.AUTH_PROBE_URL
     assert session.calls[1][1]["params"] == watchdog.AUTH_PROBE_PARAMS
+
+
+def test_seed_cookie_auth_probe_rejects_400016(tmp_path):
+    # 生产上 400016 是 int；与 10022 一样视为掉登录，不得当业务错误放行。
+    output = tmp_path / "waf_cookies.json"
+    write_old(output)
+    config = target()
+    config["seed_cookie"] = "xq_a_token=token"
+    session = FakeSession(
+        [
+            FakeResponse("home", content_type="text/html"),
+            FakeResponse(
+                "{}",
+                content_type="application/json",
+                status_code=400,
+                json_value={
+                    "error_code": 400016,
+                    "error_description": "遇到错误，请刷新页面或者重新登录帐号后再试",
+                },
+            ),
+        ],
+        {"xq_a_token": "token"},
+    )
+
+    assert not watchdog.refresh(config, session=session, output=output)
+    assert output.read_text(encoding="utf-8") == "old cookies"
 
 
 def test_seed_cookie_auth_probe_rejects_http_400(tmp_path):

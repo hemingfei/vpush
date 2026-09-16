@@ -58,6 +58,7 @@ from .fetchers.base import (
     Post,
     already_chinese as _already_chinese,
     is_collapsed_translation,
+    is_notify_stale,
     is_stale_backfill,
     quoted_author_text,
     twitter_translate_enabled,
@@ -1462,6 +1463,12 @@ def _fetch_kol_once(
                 post.platform, post.kol_name, post.external_id, post.published_at, watermark,
             )
             continue
+        if is_notify_stale(post.published_at):
+            logger.info(
+                "补抓入库不推送 platform=%s kol=%s id=%s at=%s",
+                post.platform, post.kol_name, post.external_id, post.published_at,
+            )
+            continue
         logger.info("新帖 platform=%s kol=%s id=%s", post.platform, post.kol_name, post.external_id)
         if kol.get("silent"):
             # 静默源：只入库建基线/记录，不推送到任何渠道（高频星球防轰炸用）
@@ -1763,8 +1770,9 @@ def probe_xueqiu(db: DB, notifiers: list[Notifier], source_config) -> None:
     from .fetchers.xueqiu import (
         XUEQIU_COOKIE_KEY,
         XUEQIU_TIMELINE_URL,
-        _is_waf_html,
+        apply_xueqiu_cookie,
         normalize_xueqiu_id,
+        xueqiu_session_dead,
     )
 
     cookie = db.get_setting(XUEQIU_COOKIE_KEY) or source_config.cookie
@@ -1788,25 +1796,15 @@ def probe_xueqiu(db: DB, notifiers: list[Notifier], source_config) -> None:
             "Accept": "application/json, text/plain, */*",
             "X-Requested-With": "XMLHttpRequest",
             "Referer": f"https://xueqiu.com/u/{xueqiu_uid}",
-            **({"Cookie": cookie} if cookie else {}),
         },
     )
+    apply_xueqiu_cookie(client, cookie)
     try:
         resp = client.get(
             XUEQIU_TIMELINE_URL,
             params={"user_id": xueqiu_uid, "page": 1, "count": 1},
         )
-        blocked = (
-            _is_waf_html(resp)
-            or resp.status_code in (401, 403)
-            or resp.headers.get("content-type", "").startswith("text/html")
-        )
-        if resp.status_code == 200 and not blocked:
-            try:
-                resp.json()
-            except ValueError:
-                blocked = True
-        if blocked:
+        if xueqiu_session_dead(resp):
             db.set_setting(SOURCE_ERR_KEY.format(platform="xueqiu"), "接口异常（探测）")
             now = int(time.time())
             last = db.get_setting(XUEQIU_PROBE_ALERT_KEY)
@@ -1818,6 +1816,12 @@ def probe_xueqiu(db: DB, notifiers: list[Notifier], source_config) -> None:
                     "cookie 可能失效。请到后台「数据源 → Cookie 管理」粘贴新的雪球 Cookie。",
                     "雪球探测告警",
                 )
+            return
+        if resp.status_code != 200:
+            db.set_setting(
+                SOURCE_ERR_KEY.format(platform="xueqiu"),
+                f"探测 HTTP {resp.status_code}",
+            )
             return
         db.set_setting(SOURCE_OK_KEY.format(platform="xueqiu"), str(int(time.time())))
         db.set_setting(SOURCE_ERR_KEY.format(platform="xueqiu"), "")
@@ -1854,8 +1858,10 @@ def keepalive_xueqiu_cookie(
         XUEQIU_COOKIE_KEY,
         XUEQIU_COOKIE_TIME_KEY,
         XUEQIU_TIMELINE_URL,
+        apply_xueqiu_cookie,
         merge_cookie_strings,
         normalize_xueqiu_id,
+        xueqiu_session_dead,
     )
 
     cookie = db.get_setting(XUEQIU_COOKIE_KEY) or source_config.cookie
@@ -1887,23 +1893,19 @@ def keepalive_xueqiu_cookie(
                 "Accept": "application/json, text/plain, */*",
                 "X-Requested-With": "XMLHttpRequest",
                 "Referer": f"https://xueqiu.com/u/{xueqiu_uid}",
-                "Cookie": cookie,
             },
         )
+    apply_xueqiu_cookie(client, cookie)
     try:
         resp = client.get(
             XUEQIU_TIMELINE_URL,
             params={"user_id": xueqiu_uid, "page": 1, "count": 1},
         )
-        status = resp.status_code
-        if status == 200:
-            try:
-                resp.json()
-            except ValueError:
-                status = 0  # 内容不是合法 JSON，按失效处理
-        if status != 200:
+        if xueqiu_session_dead(resp):
             db.set_setting(SOURCE_ERR_KEY.format(platform="xueqiu"), "cookie 无效或已过期（保活探测）")
-            _alert_cookie_keepalive(db, notifiers, "雪球", f"timeline HTTP {status}")
+            _alert_cookie_keepalive(db, notifiers, "雪球", f"timeline HTTP {resp.status_code}")
+            return
+        if resp.status_code != 200:
             return
         # 会话有效：合并本次响应下发的 cookie（一般无新 token，原样保留），更新状态
         new_cookie = merge_cookie_strings(cookie, client.cookies, "xueqiu.com")
@@ -1918,11 +1920,14 @@ def keepalive_xueqiu_cookie(
 
 
 def keepalive_weibo_cookie(db: DB, notifiers: list[Notifier], weibo_config, client=None) -> None:
-    """定时访问微博首页刷新会话；失效时尝试账号密码自动登录，失败则告警。"""
-    from .fetchers.weibo import WEIBO_COOKIE_KEY, WeiboFetcher
+    """打动态 AJAX 刷新会话；失效时尝试账号密码自动登录，否则发扫码。"""
+    from .fetchers.weibo import TIMELINE_URL, WEIBO_COOKIE_KEY, WeiboFetcher, weibo_session_dead
 
     cookie = db.get_setting(WEIBO_COOKIE_KEY) or weibo_config.cookie
     if not cookie:
+        return
+    kols = db.list_kols(platform="weibo", status=1, limit=1)
+    if not kols:
         return
     import httpx
 
@@ -1947,9 +1952,11 @@ def keepalive_weibo_cookie(db: DB, notifiers: list[Notifier], weibo_config, clie
             },
         )
     try:
-        resp = client.get("https://weibo.com/")
-        # 会话有效：最终停留在 weibo.com（未登录会被 302 到 passport 登录页）
-        if resp.status_code == 200 and "passport.weibo.com" not in str(resp.url):
+        resp = client.get(TIMELINE_URL, params={"uid": kols[0]["external_id"], "page": 1})
+        if resp.status_code == 432:
+            logger.warning("微博保活：反爬 432，本轮不续期")
+            return
+        if not weibo_session_dead(resp):
             from .fetchers.xueqiu import merge_cookie_strings
 
             new_cookie = merge_cookie_strings(cookie, client.cookies, "weibo.com")
@@ -2090,6 +2097,8 @@ class Scheduler:
         self._last_cleanup = 0.0
         self._last_report_extract = time.monotonic()
         self._report_extract_running = False
+        self._last_ima_digest = time.monotonic()
+        self._ima_digest_running = False
         self._last_digest_flush = time.monotonic()
         self._last_xueqiu_probe = time.monotonic()
         self._last_cookie_keepalive = time.monotonic()
@@ -3524,6 +3533,23 @@ class Scheduler:
 
                 asyncio.create_task(_run_extract_round(), name="report-extraction")
 
+            # 标的聚合编译（每小时一批，LLM 跨文档汇编；源研报没变就不重编）
+            if now_mono - self._last_ima_digest > 3600 and not self._ima_digest_running:
+                self._last_ima_digest = now_mono
+                self._ima_digest_running = True
+
+                async def _run_digest_round():
+                    try:
+                        done = await asyncio.to_thread(self._run_ticker_digest_task)
+                        if done:
+                            logger.info("标的综述编译本轮完成 %d 个", done)
+                    except Exception:  # noqa: BLE001
+                        logger.exception("标的综述编译异常")
+                    finally:
+                        self._ima_digest_running = False
+
+                asyncio.create_task(_run_digest_round(), name="ima-ticker-digest")
+
             # 定期清理过期帖子（默认每 6 小时检查一次）；保留天数后台可调，
             # 与其他抓取设置同走 config_* 覆盖（0 = 不删除）
             if now_mono - self._last_cleanup > 6 * 3600:
@@ -3890,6 +3916,57 @@ class Scheduler:
     def _stock_alias_due(self) -> bool:
         """股票别名识别任务是否到期：每天最多一次（settings 日期键控制）。"""
         return self.db.get_setting("stock_alias_last_date") != datetime.now().strftime("%Y-%m-%d")
+
+    def _run_ticker_digest_task(self) -> int:
+        """标的聚合编译：把同一标的多篇研报要点汇编成一篇持续更新的综述（LLM，增量）。
+
+        与逐篇抽取不同，这是跨文档产物：谁给了什么评级/目标价、观点怎么演变。
+        settings：ima_digest_enabled（默认开，='0' 关）、ima_digest_batch（默认 5 个标/轮）、
+        ima_digest_min_reports（默认 3 篇起）、ima_digest_daily_limit（默认 30 个/天）、
+        ima_digest_model（默认跟随站点 LLM 模型）。源签名（篇数:最新日期）没变就不重编。
+        """
+        db = self.db
+        if db.get_setting("ima_digest_enabled") == "0":
+            return 0
+        daily_limit = int(db.get_setting("ima_digest_daily_limit") or 30)
+        done_key = f"ima_digest_done_{time.strftime('%Y%m%d')}"
+        done_today = int(db.get_setting(done_key) or 0)
+        if done_today >= daily_limit:
+            return 0
+        site_llm = _system_llm_config(db, self.llm_config)
+        if site_llm is None:
+            return 0
+        from .ima_digest import compile_and_store
+
+        min_reports = int(db.get_setting("ima_digest_min_reports") or 3)
+        batch = min(int(db.get_setting("ima_digest_batch") or 5), daily_limit - done_today)
+        model = db.get_setting("ima_digest_model") or site_llm.model
+        # 候选按研报数降序：每轮优先编最有料的标的
+        pending = [
+            row
+            for row in db.ima_digest_candidates(min_reports=min_reports, limit=200)
+            if row["stale"]
+        ][:batch]
+        if not pending:
+            return 0
+        done = 0
+        for row in pending:
+            try:
+                compile_and_store(
+                    db,
+                    str(row["code"]),
+                    site_llm,
+                    name=str(row["name"] or ""),
+                    signature=str(row["source_signature"]),
+                    source_count=int(row["report_count"]),
+                    model=model,
+                )
+                done += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("标的综述编译失败 %s: %s", row["code"], exc)
+        if done:
+            db.set_setting(done_key, str(done_today + done))
+        return done
 
     def _run_report_extraction_task(self) -> int:
         """研报结构化抽取：每小时处理最近三天的一批研报。

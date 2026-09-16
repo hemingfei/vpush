@@ -89,7 +89,17 @@ def merge_waf_cookie(cookie: str) -> str:
     return "; ".join(f"{c['name']}={c['value']}" for c in waf)
 
 
-def normalize_xueqiu_id(external_id: str) -> str:
+def apply_xueqiu_cookie(client: httpx.Client, cookie: str) -> None:
+    """用域 Cookie jar 发送登录态，让 HTTPX 跟随 www 跳转时仍携带 Cookie。"""
+    client.headers.pop("Cookie", None)
+    client.cookies.clear()
+    for part in (cookie or "").split(";"):
+        name, separator, value = part.strip().partition("=")
+        if separator and name:
+            client.cookies.set(name, value, domain=".xueqiu.com", path="/")
+
+
+def normalize_xueqiu_id(external_id: str | None) -> str:
     """从雪球主页链接提取数字用户 ID；纯数字原样返回；其余原样返回（保留原有报错信息）。
 
     管理后台允许粘贴「主页链接/UID」（如 https://xueqiu.com/u/4514680565），
@@ -124,6 +134,28 @@ def _is_waf_html(resp: httpx.Response) -> bool:
     return "text/html" in content_type and any(
         marker in resp.text for marker in ("renderData", "aliyun_waf", "acw_sc__v2")
     )
+
+
+XUEQIU_AUTH_ERROR_CODES = {"10022", "400016"}
+XUEQIU_AUTH_ERROR_MARKERS = ("重新登录", "请登录", "登录帐号", "登录账号", "login", "cookie")
+
+
+def xueqiu_session_dead(resp: httpx.Response) -> bool:
+    """登录失效：401/403、认证错误码，或 JSON 中明确要求重新登录。"""
+    if resp.status_code in (401, 403):
+        return True
+    try:
+        data = resp.json()
+    except ValueError:
+        return False
+    if not isinstance(data, dict):
+        return False
+    if str(data.get("error_code") or "") in XUEQIU_AUTH_ERROR_CODES:
+        return True
+    auth_text = " ".join(
+        str(data.get(key) or "") for key in ("error_description", "msg", "message")
+    ).lower()
+    return any(marker in auth_text for marker in XUEQIU_AUTH_ERROR_MARKERS)
 
 
 def merge_cookie_strings(old: str, cookies, prefer_domain: str = "") -> str:
@@ -213,9 +245,9 @@ def resolve_profile(external_id: str, cookie: str = "", db=None) -> dict:
                 "Accept": "application/json, text/plain, */*",
                 "X-Requested-With": "XMLHttpRequest",
                 "Referer": f"https://xueqiu.com/u/{uid}",
-                **({"Cookie": cookie} if cookie else {}),
             },
         )
+        apply_xueqiu_cookie(client, cookie)
     except Exception:  # noqa: BLE001 - 非 ASCII ID（误填昵称）构造请求头失败时回退空结果，不阻断审批
         return {}
     try:
@@ -259,9 +291,10 @@ class XueqiuFetcher(Fetcher):
             from ..proxy import acquire_client_proxy, attach_proxy
 
             proxy, pid = acquire_client_proxy(self.db, "xueqiu")
-            c = httpx.Client(timeout=20, headers=headers, proxy=proxy)
-            if cookie:
-                c.headers["Cookie"] = cookie
+            c = httpx.Client(
+                timeout=20, headers=headers, proxy=proxy, follow_redirects=True
+            )
+            apply_xueqiu_cookie(c, cookie)
             attach_proxy(c, pid)
             return c
 
@@ -276,9 +309,9 @@ class XueqiuFetcher(Fetcher):
         self._http.set(value)
 
     def _apply_cookie(self) -> None:
-        """合并 cookie：登录态（DB/配置）打底，叠加 sidecar cookie（同名覆盖）。"""
+        """应用与当前登录 seed 匹配的 sidecar cookie，否则使用 DB/配置。"""
         cookie = self.db.get_setting(XUEQIU_COOKIE_KEY) or self.source_config.cookie
-        self.client.headers["Cookie"] = merge_waf_cookie(cookie)
+        apply_xueqiu_cookie(self.client, merge_waf_cookie(cookie))
 
     def _refresh_cookie(self) -> None:
         """雪球 cookie 失效时无法自动续期，直接抛错进入退避告警链路。"""

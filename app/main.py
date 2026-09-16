@@ -69,7 +69,7 @@ def docs_enabled() -> bool:
 
 SPA_PREFIXES = frozenset({
     "timeline", "home", "combinations", "mysubs", "settings", "news",
-    "search", "kol", "more", "admin", "zsxq", "ima-documents", "knowledge",
+    "search", "kol", "more", "admin", "zsxq", "ima-documents", "knowledge", "ticker",
     "mx-views", "holdings",
 })
 
@@ -116,6 +116,8 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     archive_root = Path(archive_env) if archive_env else index_root
     status_env = os.environ.get("IMA_STORAGE_STATUS_PATH", "").strip()
     storage_status = ImaStorageStatus(status_env or None, remote=bool(archive_env))
+    # 全文检索索引：只当 IMA_SEARCH_GROUP_IDS 非空时启用；为空则整个 FTS 路径关闭，检索回退到
+    # db.py 的 LIKE 路径（中文编译产物的召回在那里，不依赖索引）。
     search_group_ids = tuple(
         dict.fromkeys(
             item.strip()
