@@ -45,6 +45,15 @@
 .mxc-src{font-size:10px;color:var(--hd-muted);border:1px dashed var(--hd-btn-line);
   border-radius:4px;padding:0 5px;white-space:nowrap;justify-self:start;}
 
+/* 最近观点天数滑动栏：即时筛选持仓汇总，值不过服务端（前端按 last_day 过滤） */
+.mxc-recent{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:6px 2px 8px;border-bottom:1px solid var(--hd-sep);margin-bottom:6px;}
+.mxc-recent .lab{color:var(--hd-muted);font-size:12px;white-space:nowrap;}
+.mxc-recent input[type="range"]{flex:0 1 180px;accent-color:var(--hd-accent);cursor:pointer;}
+.mxc-recent .val{color:var(--hd-accent);font-size:12px;white-space:nowrap;min-width:38px;}
+.mxc-recent .val b{font-size:15px;}
+.mxc-recent .tip{color:var(--hd-faint);font-size:11px;}
+
 /* 大V动态页「持仓」按钮：与订阅按钮并排，弱化为线框样式避免抢主操作 */
 .btn-sub.holdings{background:var(--hd-panel);color:var(--hd-accent);
   border:1px solid var(--hd-btn-line);}

@@ -6549,6 +6549,7 @@ const {
   renderMxKolHoldings,
   mxcSetView,
   mxcChangeDays,
+  mxcRecentInput,
 } = createMxKolHoldingsView({
   $,
   state,
@@ -8932,6 +8933,7 @@ const INLINE_HANDLERS = {
   // ---- hmf：MX 大V预估持仓页（/mx-kol/id 内联 onclick）----
   mxcSetView,
   mxcChangeDays,
+  mxcRecentInput,
   mxvAdminKolToggle,
   mxvAdminKolAll,
   mxvAdminKolNone,

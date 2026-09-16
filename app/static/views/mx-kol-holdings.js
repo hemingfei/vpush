@@ -6,8 +6,11 @@ export function createMxKolHoldingsView(dependencies) {
     $, state, api, escapeHtml, setPageTitle, go, routeStillActive, emptyState, flash,
   } = dependencies;
 
-  const _mxc = { seq: 0, data: null, days: 30, expanded: new Set(), view: "all" };
+  const _mxc = { seq: 0, data: null, days: 30, expanded: new Set(), view: "all", recent: 5 };
   const MXC_VIEWS = { all: "全部", open: "建仓", add: "加仓", trim: "减仓", clear: "清仓" };
+  // 最近观点天数筛选：只看最近 N 天内还被大V提及的在持标的（0=不筛选）。
+  // 部分票太老、没识别出清仓但大V其实早清了——限近期提及至少保证展示的票基本还在仓
+  const MXC_RECENT_KEY = "mxc_recent_days";
 
   // 操作事件 → 徽章文案与色彩语义（A股口径：买入=红、卖出=绿）
   const MXC_KINDS = {
@@ -21,12 +24,33 @@ export function createMxKolHoldingsView(dependencies) {
 
   function mxcTeardown() {
     Object.assign(_mxc, { data: null, expanded: new Set(), view: "all" });
+    // recent（最近观点天数）跨路由保留：回来时还是用户上次调的口径
+  }
+
+  function mxcLoadRecent() {
+    try {
+      const v = Number(localStorage.getItem(MXC_RECENT_KEY));
+      if (Number.isInteger(v) && v >= 0 && v <= 20) _mxc.recent = v;
+    } catch (e) { /* 存储不可用：用默认 5 */ }
+  }
+
+  function mxcSaveRecent() {
+    try { localStorage.setItem(MXC_RECENT_KEY, String(_mxc.recent)); } catch (e) { /* 本页生效即可 */ }
+  }
+
+  // last_day（YYYY-MM-DD）距今是否超过 n 天（北京时区口径，与后端交易日对齐）
+  function mxcRecentCutoff(n) {
+    const bj = new Date(Date.now() + (480 + new Date().getTimezoneOffset()) * 60000);
+    bj.setDate(bj.getDate() - n);
+    const p = (x) => String(x).padStart(2, "0");
+    return `${bj.getFullYear()}-${p(bj.getMonth() + 1)}-${p(bj.getDate())}`;
   }
 
   async function renderMxKolHoldings(kolId, seq) {
     mxcTeardown();
     _mxc.seq = seq;
     _mxc.kolId = kolId;
+    mxcLoadRecent();
     setPageTitle("预估持仓");
     $("#main").innerHTML = `<div class="mxc-root hd-root"><div class="mxv-empty">加载中…</div></div>`;
     try {
@@ -86,16 +110,56 @@ export function createMxKolHoldingsView(dependencies) {
     return `<div class="mxc-bar"><div class="fill" style="width:${Math.max(2, Math.min(100, w))}%"></div></div>`;
   }
 
+  // 最近观点天数滑动栏：即时筛选持仓汇总（重渲染不重拉数据），值持久化 localStorage
+  function mxcRecentHtml() {
+    return `
+    <div class="mxc-recent">
+      <span class="lab">最近观点</span>
+      <input type="range" min="0" max="20" step="1" value="${_mxc.recent}"
+        id="mxc-recent-range" aria-label="最近观点天数，0 为不筛选"
+        oninput="mxcRecentInput(this.value)">
+      <span class="val"><b id="mxc-recent-val">${_mxc.recent}</b> 天</span>
+      <span class="tip">${_mxc.recent ? `仅显示 ${_mxc.recent} 天内被提及的标的` : "不筛选（显示全部在持标的）"}</span>
+    </div>`;
+  }
+
+  function mxcRecentInput(value) {
+    const v = Math.max(0, Math.min(20, Math.round(Number(value))));
+    if (v === _mxc.recent) return;
+    _mxc.recent = v;
+    mxcSaveRecent();
+    const valEl = document.getElementById("mxc-recent-val");
+    if (valEl) valEl.textContent = String(v);
+    const tipEl = document.querySelector(".mxc-recent .tip");
+    if (tipEl) tipEl.textContent = v ? `仅显示 ${v} 天内被提及的标的` : "不筛选（显示全部在持标的）";
+    mxcRenderSummary();
+  }
+
+  // 时间线筛选条件共享：最近 N 天内无任何事件的标的不参与持仓汇总
+  function mxcFilterByRecent(list) {
+    if (!_mxc.recent) return list;
+    const cutoff = mxcRecentCutoff(_mxc.recent);
+    return (list || []).filter((x) => String(x.last_day || "") >= cutoff);
+  }
+
   function mxcRenderSummary() {
     const el = document.getElementById("mxc-summary");
     if (!el) return;
     const d = _mxc.data;
-    const holdings = d.holdings || [];
-    const topics = d.topics || [];
-    if (!holdings.length && !topics.length) {
+    const allHoldings = d.holdings || [];
+    const allTopics = d.topics || [];
+    const holdings = mxcFilterByRecent(allHoldings);
+    const topics = mxcFilterByRecent(allTopics);
+    const headRight = `${holdings.length} 只个股${topics.length ? ` · ${topics.length} 个板块` : ""}`
+      + (holdings.length ? ` · 合计 ${Math.round(holdings.reduce((s, h) => s + h.weight, 0))}%` : "");
+    const filteredNote = _mxc.recent && (holdings.length < allHoldings.length || topics.length < allTopics.length)
+      ? `<span class="hd-hint" title="滑动栏筛掉了更久未被提及的标的">已滤 ${allHoldings.length - holdings.length + allTopics.length - topics.length} 个超 ${_mxc.recent} 天未提及</span>`
+      : "";
+    if (!allHoldings.length && !allTopics.length) {
       el.innerHTML = `
         <div class="hd-panel-head"><b>当前预估持仓</b>
           <span class="hd-hint">${d.opinion_count ? "窗口内无在持标的" : "暂无观点"}</span></div>
+        ${mxcRecentHtml()}
         <div class="mxv-empty">${d.opinion_count
           ? `近 ${d.window_days} 天有 ${d.opinion_count} 条观点，但按回放规则当前无在持标的（均已清仓/翻空/超 ${10} 天未再提及）。`
           : `近 ${d.window_days} 天内没有可研判的观点，暂无法推演持仓。`}</div>`;
@@ -115,8 +179,10 @@ export function createMxKolHoldingsView(dependencies) {
         `<span class="mxc-topic" title="最近提及 ${escapeHtml((t.last_at || "").slice(5, 16))}">${escapeHtml(t.target_name)}</span>`).join("")}</div>` : "";
     el.innerHTML = `
       <div class="hd-panel-head"><b>当前预估持仓</b>
-        <span class="hd-hint">${holdings.length} 只个股${topics.length ? ` · ${topics.length} 个板块` : ""} · 合计 ${Math.round(holdings.reduce((s, h) => s + h.weight, 0))}%</span></div>
-      ${stockRows}${topicRows}
+        <span class="hd-hint">${headRight}</span>${filteredNote}</div>
+      ${mxcRecentHtml()}
+      ${holdings.length || topics.length ? stockRows + topicRows
+        : `<div class="mxv-empty">最近 ${_mxc.recent} 天内没有大V提及的在持标的——可能早已清仓但未被识别，试着调大天数或设为 0 看全部。</div>`}
       <p class="mxc-note">持仓由大V公开观点（方向 + 操作词）回放估算，非真实仓位；仅供参考，不构成投资建议。</p>`;
   }
 
@@ -195,5 +261,5 @@ export function createMxKolHoldingsView(dependencies) {
     mxcRenderTimeline();
   }
 
-  return { renderMxKolHoldings, mxcSetView, mxcChangeDays };
+  return { renderMxKolHoldings, mxcSetView, mxcChangeDays, mxcRecentInput };
 }
