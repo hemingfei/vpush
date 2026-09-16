@@ -49,6 +49,21 @@ export function createHoldingsView(dependencies) {
     return s.length >= 16 ? s.slice(5, 16) : s; // "YYYY-MM-DD HH:MM:SS" → "MM-DD HH:MM"
   }
 
+  // 分组日期头：最近两天显示 今天/昨天，其余显示 MM-DD
+  function hdDayLabel(day) {
+    const d = String(day || "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return d.slice(5) || "—";
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yKey = `${yesterday.getFullYear()}-${pad(yesterday.getMonth() + 1)}-${pad(yesterday.getDate())}`;
+    if (d === today) return "今天";
+    if (d === yKey) return "昨天";
+    return d.slice(5);
+  }
+
   function hdHolderQ() {
     return _hd.filter
       ? `&holder=${encodeURIComponent(`${_hd.filter.type}:${_hd.filter.name}`)}`
@@ -506,7 +521,7 @@ export function createHoldingsView(dependencies) {
         });
         body = [...groups.entries()].map(([day, posts]) => {
           const grid = `<div class="mxv-feed-cols single"><div class="mxv-feed-col">${posts.map(hdTagItemHtml).join("")}</div></div>`;
-          return `<div class="mxv-feed-sep"><span>${escapeHtml((day || "").slice(5) || "—")} · ${posts.length} 条</span></div>${grid}`;
+          return `<div class="mxv-feed-sep"><span>${escapeHtml(hdDayLabel(day))} · ${posts.length} 条</span></div>${grid}`;
         }).join("") + `<div class="mxv-feed-sep"><span>共 ${_hd.tagItems.length} 条</span></div>`;
         if (!_hd.tagExhausted) {
           body += `<div class="hd-more-wrap"><button type="button" class="hd-btn" onclick="hdTagMore()"${_hd.tagLoadingMore ? " disabled" : ""}>${_hd.tagLoadingMore ? "加载中…" : "加载更多"}</button></div>`;
@@ -524,7 +539,7 @@ export function createHoldingsView(dependencies) {
       });
       body = [...groups.entries()].map(([day, ops]) => {
         const grid = `<div class="mxv-feed-cols single"><div class="mxv-feed-col">${ops.map(hdFeedItemHtml).join("")}</div></div>`;
-        return `<div class="mxv-feed-sep"><span>${escapeHtml((day || "").slice(5) || "—")} · ${ops.length} 条</span></div>${grid}`;
+        return `<div class="mxv-feed-sep"><span>${escapeHtml(hdDayLabel(day))} · ${ops.length} 条</span></div>${grid}`;
       }).join("") + `<div class="mxv-feed-sep"><span>共 ${_hd.items.length} 条</span></div>`;
       if (!_hd.exhausted) {
         body += `<div class="hd-more-wrap"><button type="button" class="hd-btn" onclick="hdMore()"${_hd.loadingMore ? " disabled" : ""}>${_hd.loadingMore ? "加载中…" : "加载更多"}</button></div>`;
