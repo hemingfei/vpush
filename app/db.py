@@ -5956,6 +5956,19 @@ class DB:
         sql += " ORDER BY o.snapshot_at ASC, o.occurred_at ASC, o.id ASC"
         return self._rows(sql, tuple(params))
 
+    def list_mx_opinions_for_kol(self, kol_id, days=30) -> list[dict]:
+        """单大V跨天观点回放：近 N 个自然日内按发生时间升序（同 list_mx_opinions 序）。
+
+        预估持仓（mx_kol_holdings）唯一数据源：排序键必须与聚合同口径，
+        occurred_at 缺失时按 snapshot_at 天序兜底，id 最终兜底。
+        """
+        sql = (
+            "SELECT o.*, k.name AS kol_name, k.avatar_url FROM mx_opinions o "
+            "JOIN kols k ON k.id = o.kol_id WHERE o.kol_id = ? AND o.trading_day >= date('now', ?) "
+            "ORDER BY o.trading_day ASC, o.occurred_at ASC, o.snapshot_at ASC, o.id ASC"
+        )
+        return self._rows(sql, (int(kol_id), f"-{int(days)} day"))
+
     def upsert_mx_view_snapshot(self, trading_day, snapshot_at, seq, kind, payload: dict, batch_id=0) -> None:
         self._execute(
             "INSERT INTO mx_view_snapshots (trading_day, snapshot_at, seq, kind, payload, batch_id) "

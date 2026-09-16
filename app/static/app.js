@@ -22,6 +22,7 @@ import { createFeishuPersonalView } from "./views/feishu-personal.js";
 import { createPushSettingsView } from "./views/push-settings.js";
 import { createMxViewsView } from "./views/mx-views.js";
 import { createHoldingsView } from "./views/holdings.js";
+import { createMxKolHoldingsView } from "./views/mx-kol-holdings.js";
 import { createMarketView } from "./views/market.js";
 
 const $ = (sel) => document.querySelector(sel);
@@ -4556,6 +4557,7 @@ async function renderKolPage(kolId, seq) {
           </div>
           <div class="toolbar" style="margin-top:12px">
             ${kol.subscribed && kol.platform === "xueqiu" ? subTypeSwitchesHtml(kol.id, kol.subscribe_type || "post") : ""}
+            ${kol.platform === "mx" ? `<button class="btn-sub holdings" id="kol-holdings-btn" onclick="go('/mx-kol/${kol.id}')" title="按该大V近 30 天多空观点回放推演的预估持仓">持仓</button>` : ""}
             <button class="btn-sub ${kol.subscribed ? "subscribed" : ""}" id="kol-sub-btn" onclick="toggleKolPageSubscribe(${kol.id})">
               ${kol.subscribed ? "✓ 已订阅" : "订阅"}
             </button>
@@ -6203,7 +6205,7 @@ let routeRenderSeq = 0; // 每次路由切换递增；异步渲染完成后凭�
 const SPA_PREFIXES = new Set([
   "timeline", "home", "combinations", "mysubs", "settings", "news",
   "search", "kol", "more", "admin", "zsxq", "ima-documents", "knowledge", "ticker",
-  "mx-views", "holdings",
+  "mx-views", "holdings", "mx-kol",
 ]);
 
 function routeStillActive(seq) {
@@ -6540,6 +6542,22 @@ const {
   escapeHtml,
   setPageTitle,
   routeStillActive,
+  flash,
+});
+
+const {
+  renderMxKolHoldings,
+  mxcSetView,
+  mxcChangeDays,
+} = createMxKolHoldingsView({
+  $,
+  state,
+  api,
+  escapeHtml,
+  setPageTitle,
+  go,
+  routeStillActive,
+  emptyState,
   flash,
 });
 
@@ -7194,6 +7212,7 @@ async function router() {
     else if (page === "timeline") await renderTimeline(renderSeq);
     else if (page === "mx-views") await renderMxViews(renderSeq);
     else if (page === "holdings") await renderHoldings(renderSeq);
+    else if (page === "mx-kol") await renderMxKolHoldings(Number(param), renderSeq);
     else if (page === "settings") await renderSettings(renderSeq);
     else if (page === "more") await renderMore(renderSeq);
     else if (page === "search") await renderSearch(renderSeq);
@@ -8910,6 +8929,9 @@ const INLINE_HANDLERS = {
   mxvOpenKolStockAt,
   mxvOpenKol,
   mxvCloseDrawer,
+  // ---- hmf：MX 大V预估持仓页（/mx-kol/id 内联 onclick）----
+  mxcSetView,
+  mxcChangeDays,
   mxvAdminKolToggle,
   mxvAdminKolAll,
   mxvAdminKolNone,

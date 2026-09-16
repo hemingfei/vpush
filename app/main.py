@@ -70,7 +70,7 @@ def docs_enabled() -> bool:
 SPA_PREFIXES = frozenset({
     "timeline", "home", "combinations", "mysubs", "settings", "news",
     "search", "kol", "more", "admin", "zsxq", "ima-documents", "knowledge", "ticker",
-    "mx-views", "holdings",
+    "mx-views", "holdings", "mx-kol",
 })
 
 

@@ -6656,6 +6656,34 @@ def create_api_router(
             raise HTTPException(status_code=404, detail="该大V当日暂无观点")
         return detail
 
+    @router.get("/kols/{kol_id}/mx-holdings")
+    async def kol_mx_holdings(kol_id: int, days: int = 30,
+                              user: dict = Depends(get_current_user)):
+        """MX 大V预估持仓：回放其近 N 天多空观点推演的当前仓位（纯计算不落库）。
+
+        依据是观点研判产出的结构化观点（方向 + 操作词），非实时行情；
+        days 限 7-90，越界钳到边界。
+        """
+        from .mx_kol_holdings import build_kol_holdings
+
+        kol = db.get_kol(kol_id)
+        if not _plaza_kol_visible(user, kol):
+            raise HTTPException(status_code=404, detail="大V不存在")
+        if kol.get("platform") != "mx":
+            raise HTTPException(status_code=400, detail="仅 MX 平台大V支持预估持仓")
+        days = min(max(int(days), 7), 90)
+        result = build_kol_holdings(db, kol_id, days=days)
+        if not result:
+            # 大V存在但窗口内无观点：回空结构，前端给「暂无可研判观点」空态
+            return {
+                "kol": {"kol_id": kol_id, "name": kol.get("name") or "",
+                        "avatar": kol.get("avatar_url") or "", "platform": "mx"},
+                "window_days": days, "timeline": [], "holdings": [], "topics": [],
+                "opinion_count": 0,
+                "generated_at": datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M"),
+            }
+        return result
+
     @router.get("/mx-views/stream")
     async def mx_views_stream(request: Request, current_user: dict = Depends(get_current_user)):
         """SSE：推版本号变更，客户端收到后自行拉最新快照。单实例进程内轮询 settings。

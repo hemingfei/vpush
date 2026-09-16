@@ -1,0 +1,53 @@
+/* MX 大V预估持仓页（/mx-kol/{id}）——复用持股研判页的 .hd-root 变量注入
+   （明暗两套 token 在 holdings.css），本文件只补页面专属布局，样式全部 .mxc- 前缀。
+   时间线行复用 mx-views.css 的 .mxv-feed-* / .mxv-badge 类 */
+.mxc-root{display:flex;flex-direction:column;gap:10px;}
+
+/* 页头：返回按钮 + 头像 + 名称 + 窗口切换 */
+.mxc-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  background:var(--hd-panel);border:1px solid var(--hd-line);border-radius:10px;padding:12px 14px;}
+.mxc-ava{width:42px;height:42px;border-radius:50%;object-fit:cover;border:1px solid var(--hd-sep);}
+.mxc-head-main{flex:1;min-width:180px;}
+.mxc-head-main h2{margin:0;font-size:16px;color:var(--hd-strong);}
+.mxc-sub{color:var(--hd-faint);font-size:11px;}
+.mxc-days{display:inline-flex;border:1px solid var(--hd-btn-line);border-radius:8px;overflow:hidden;}
+.mxc-days .hd-seg-btn{border:none;border-radius:0;}
+.mxc-days .hd-seg-btn + .hd-seg-btn{border-left:1px solid var(--hd-btn-line);}
+
+/* 持仓汇总：名称 + 方向 + 权重条 + 权重 + 建仓/最近时间，单行网格 */
+.mxc-holding{display:grid;grid-template-columns:minmax(84px,auto) auto 1fr auto;gap:8px;
+  align-items:center;padding:7px 4px;border-bottom:1px solid var(--hd-sep);}
+.mxc-holding:last-of-type{border-bottom:none;}
+.mxc-h-name{color:var(--hd-strong);font-weight:600;font-size:13px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;}
+.mxc-h-dir{font-size:11px;color:var(--hd-faint);}
+.mxc-h-dir.bull{color:var(--hd-bull);}
+.mxc-h-dir.bear{color:var(--hd-bear);}
+.mxc-bar{height:8px;border-radius:4px;background:var(--hd-soft);overflow:hidden;min-width:60px;}
+.mxc-bar .fill{height:100%;border-radius:4px;
+  background:linear-gradient(90deg,var(--mxv-accent-deep),var(--mxv-accent));}
+.mxc-h-weight{color:var(--hd-accent);font-weight:600;font-size:12px;min-width:44px;text-align:right;}
+.mxc-h-meta{grid-column:1/-1;color:var(--hd-faint);font-size:11px;}
+.mxc-topics-head{color:var(--hd-faint);font-size:11px;margin:10px 0 6px;}
+.mxc-topics{display:flex;flex-wrap:wrap;gap:6px;}
+.mxc-topic{font-size:12px;color:var(--hd-topic);background:var(--hd-topic-soft);
+  border:1px solid var(--hd-line);border-radius:6px;padding:2px 8px;}
+.mxc-note{color:var(--hd-faint);font-size:11px;margin:10px 0 0;}
+
+/* 操作时间线行：徽章配色（买入=红系 / 卖出=绿系 / 持仓=中性） */
+.mxc-kind{font-size:11px;border-radius:4px;padding:0 6px;border:1px solid var(--hd-btn-line);
+  background:var(--hd-soft);color:var(--hd-muted);white-space:nowrap;justify-self:start;}
+.mxc-kind.buy{color:var(--hd-bull-text);background:var(--hd-bull-soft);border-color:var(--hd-bull-line);}
+.mxc-kind.sell{color:var(--hd-bear-text);background:var(--hd-bear-soft);border-color:var(--hd-bear-line);}
+.mxc-row .target{font-weight:600;}
+
+/* 大V动态页「持仓」按钮：与订阅按钮并排，弱化为线框样式避免抢主操作 */
+.btn-sub.holdings{background:var(--hd-panel);color:var(--hd-accent);
+  border:1px solid var(--hd-btn-line);}
+
+@media (max-width:640px){
+  .mxc-holding{grid-template-columns:minmax(72px,1fr) auto 64px;}
+  .mxc-holding .mxc-bar{grid-column:1/-1;order:5;}
+  .mxc-h-weight{min-width:48px;}
+  .mxc-head{padding:10px;}
+}
