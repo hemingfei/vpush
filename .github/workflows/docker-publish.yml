@@ -171,7 +171,8 @@ jobs:
 
   # hmf 开发分支：每次 push 复用 test 作业做门禁后，构建 amd64 单架构开发镜像，
   # 固定推 :hmf tag（Docker Hub 用仓库级 DOCKERHUB_USERNAME/TOKEN，即本人账号），
-  # 不动版本 tag / latest，arm64 与多架构清单仍只保留给 v* tag 正式发布
+  # 不动版本 tag / latest，arm64 与多架构清单仍只保留给 v* tag 正式发布；
+  # 推送成功后触发 Jenkins 把 VPS 上的 :hmf 容器滚动到新镜像
   publish-hmf:
     needs: test
     if: github.ref == 'refs/heads/hmf'
@@ -219,3 +220,12 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha,scope=amd64
           cache-to: type=gha,mode=max,scope=amd64
+      # 镜像推完后触发 VPS 上的 Jenkins 拉新镜像重启容器（compose pull && up -d）。
+      # 任务带 IMAGE 参数（默认 :hmf），必须走 /buildWithParameters；/build 端点对参数化任务返回 400。
+      # Jenkins 侧轮询触发已移除，本步骤是唯一自动部署入口；token 在 openclaw 账号 API Token（github-actions-vpush）。
+      - name: 触发 Jenkins 部署
+        if: ${{ success() }}
+        run: |
+          curl -sf -X POST \
+            -u "openclaw:${{ secrets.JENKINS_TOKEN }}" \
+            "http://106.15.153.53:1180/job/vpush-deploy/buildWithParameters?delay=0sec"
