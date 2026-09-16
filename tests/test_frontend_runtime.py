@@ -979,6 +979,9 @@ def test_holdings_view_manage_cards_feed_flow(page: Page):
     """持股研判视图（工厂级打桩）：管理区渲染/建议回填/增改删、聚合卡筛选联动、
     时间流依据展开、快讯页签（标签命中帖）展开全文；持仓变更后整页重拉
     （桩数据不变，断言请求与反馈）。"""
+    # 桩数据日期硬编码 09-15/09-14，而 hdDayLabel 对今天/昨天显示相对文案——
+    # 固定浏览器时钟到 09-20，桩日期永远落在 MM-DD 分支，断言与真实运行日期解耦
+    page.clock.install(time=datetime(2026, 9, 20, 3, 0, tzinfo=UTC))
     page.evaluate("""async () => {
       const { createHoldingsView } = await import('/views/holdings.js');
       document.body.innerHTML = '<main id="main"></main>';
