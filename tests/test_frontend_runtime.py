@@ -748,19 +748,23 @@ def test_post_origin_link_aligns_with_tags(page: Page, static_origin: str, width
     expect(page.get_by_role("link", name="查看原文")).to_be_visible()
     geo = page.evaluate("""() => {
       const cat = document.querySelector('.p-meta span.cat');
-      const origin = document.querySelector('.p-meta a');
+      const exportBtn = document.querySelector('.p-meta .post-card-export');
+      const origin = document.querySelector('.p-meta-actions a');
       const icon = origin.querySelector('svg');
       const cr = cat.getBoundingClientRect();
+      const er = exportBtn.getBoundingClientRect();
       const or = origin.getBoundingClientRect();
       const ir = icon.getBoundingClientRect();
       return {
         catH: cr.height, originH: or.height, iconH: ir.height,
-        topDelta: Math.abs(cr.top - or.top),
+        actionTopDelta: Math.abs(er.top - or.top),
+        exportLeft: er.left, originLeft: or.left,
       };
     }""")
     assert geo["originH"] < 28, geo
     assert abs(geo["originH"] - geo["catH"]) <= 2, geo
-    assert geo["topDelta"] <= 2, geo
+    assert geo["actionTopDelta"] <= 2, geo
+    assert geo["exportLeft"] < geo["originLeft"], geo
     assert 10 <= geo["iconH"] <= 14, geo
 
 
