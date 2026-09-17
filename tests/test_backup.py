@@ -110,6 +110,23 @@ def test_join_webdav_strips_duplicate_slashes():
     )
 
 
+def test_snapshot_encrypts_when_credential_key(tmp_path):
+    from cryptography.fernet import Fernet
+
+    from app.backup import BACKUP_MAGIC, decrypt_backup_bytes, snapshot
+
+    key = Fernet.generate_key().decode()
+    db = DB(tmp_path / "dav.db", credential_key=key)
+    db.set_setting("probe", "1")
+    path = snapshot(db)
+    raw = path.read_bytes()
+    assert raw.startswith(BACKUP_MAGIC)
+    plain = tmp_path / "plain.db"
+    plain.write_bytes(decrypt_backup_bytes(raw, key))
+    assert _quick_check(plain) == "ok"
+    db.close()
+
+
 def test_snapshot_quick_check_ok_and_keeps_three(tmp_path):
     from app.backup import snapshot
 

@@ -67,6 +67,33 @@ def _blocked_ip(ip: str) -> bool:
     return any(addr in net for net in _BLOCKED_NETWORKS)
 
 
+# 家庭/公司透明代理常把图床解析到 198.18/15；img-proxy 白名单主机允许该段，其余保留网段仍拒
+_IMG_PROXY_HIJACK = ipaddress.ip_network("198.18.0.0/15")
+
+
+def _img_proxy_ip_blocked(ip: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip.split("%", 1)[0])
+    except ValueError:
+        return True
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped:
+            addr = addr.ipv4_mapped
+        elif addr in _NAT64_NETWORK:
+            addr = ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)
+    if addr in _IMG_PROXY_HIJACK:
+        return False
+    return _blocked_ip(str(addr))
+
+
+def img_proxy_resolved_ok(host: str) -> bool:
+    """白名单主机解析后的 IP：允许公网和 198.18/15，拒绝其余内网/元数据。"""
+    ips = _resolve_host_ips(host)
+    if not ips:
+        return True
+    return not any(_img_proxy_ip_blocked(ip) for ip in ips)
+
+
 def _resolve_host_ips(host: str) -> list[str]:
     """解析主机名到 IP（IPv4/IPv6 去重）；解析失败返回空列表。"""
     try:

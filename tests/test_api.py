@@ -659,10 +659,14 @@ def test_bind_code_api():
     resp = client.post("/api/me/bind-code", headers=headers)
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data["code"]) == 6
+    assert len(data["code"]) == 8
+    assert data["code"].isalnum()
     assert data["expires_in_seconds"] == 600
     row = client.app.state.db.get_bind_code(data["code"])
     assert row["user_id"] == me["id"]
+    stored = client.app.state.db._rows("SELECT code FROM bind_codes")[0]["code"]
+    assert stored != data["code"]
+    assert len(stored) == 64
 
 
 def test_bind_code_issue_rate_limit():
@@ -3391,15 +3395,38 @@ def test_wechat_login(monkeypatch):
         lambda code, app_id, app_secret: {"openid": "openid_abc", "session_key": "k"},
     )
     resp = client.post("/api/auth/wechat", json={"code": "c1"})
+    assert resp.status_code == 400
+    assert "邀请码" in resp.json()["detail"]
+
+    client.app.state.db.add_register_code("WXINVITE")
+    resp = client.post("/api/auth/wechat", json={"code": "c1", "invite_code": "WXINVITE"})
     assert resp.status_code == 200
     data = resp.json()
     assert data["user"]["username"].startswith("wx_")
     assert data["user"]["is_admin"] is False  # 小程序用户不会自动成为管理员
 
-    # 再次登录返回同一用户
+    # 再次登录返回同一用户，不必再带邀请码
     resp2 = client.post("/api/auth/wechat", json={"code": "c2"})
     assert resp2.json()["user"]["id"] == data["user"]["id"]
     assert client.app.state.db.get_user(data["user"]["id"])["last_login_at"]
+
+
+def test_wechat_login_respects_allow_register(monkeypatch):
+    cfg = Config()
+    cfg.wechat.app_id = "wx_app"
+    cfg.wechat.app_secret = "wx_secret"
+    cfg.web.allow_register = False
+    tmp = tempfile.mkdtemp()
+    app = create_app(config=cfg, db_path=Path(tmp) / "wx-closed.db")
+    client = TestClient(app)
+    monkeypatch.setattr(
+        "app.wechat.code2session",
+        lambda code, app_id, app_secret: {"openid": "openid_closed", "session_key": "k"},
+    )
+    client.app.state.db.add_register_code("WXCLOSED")
+    resp = client.post("/api/auth/wechat", json={"code": "c1", "invite_code": "WXCLOSED"})
+    assert resp.status_code == 403
+    assert "暂未开放注册" in resp.json()["detail"]
 
 
 def test_add_combination_kol_auto_fills_name(monkeypatch):
@@ -3540,21 +3567,9 @@ def test_healthz_ok_when_ima_storage_missing(tmp_path, monkeypatch):
     resp = client.get("/healthz/ima-storage")
     assert resp.status_code == 503
     payload = resp.json()
-    assert set(payload) == {
-        "status",
-        "available",
-        "writable",
-        "checked_at",
-        "used_percent",
-        "inode_percent",
-        "monthly_tx_bytes",
-        "reason",
-        "restic_last_success",
-        "restic_last_check_at",
-        "restic_last_check_ok",
-    }
+    assert set(payload) == {"status", "available"}
     assert payload["available"] is False
-    assert "capacity_blocked" not in payload
+    assert "used_percent" not in payload
     assert "path" not in payload
 
 
@@ -3590,8 +3605,8 @@ def test_healthz_ima_storage_available(tmp_path, monkeypatch):
     payload = resp.json()
     assert payload["status"] == "available"
     assert payload["available"] is True
-    assert payload["writable"] is True
-    assert "capacity_blocked" not in payload
+    assert "writable" not in payload
+    assert "used_percent" not in payload
 
 
 def test_update_kol_duplicate_external_id_rejected():
@@ -4064,6 +4079,44 @@ def test_img_proxy_whitelisted_host_bypasses_dns_hijack(monkeypatch):
     assert resp.content == b"\xff\xd8\xffok"
 
 
+def test_img_proxy_rejects_private_resolution(monkeypatch):
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["192.168.1.8"])
+    client = make_client()
+    assert client.get(
+        "/api/img-proxy", params={"url": "https://pbs.twimg.com/media/x.jpg"}
+    ).status_code == 400
+
+
+def test_img_proxy_allows_transparent_proxy_range(monkeypatch):
+    import httpx as _httpx
+
+    fake_resp = _httpx.Response(200, content=b"\xff\xd8\xffok", headers={"content-type": "image/jpeg"})
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            self.headers = {}
+
+        def stream(self, method, url, **kwargs):
+            class Stream:
+                def __enter__(self):
+                    return fake_resp
+
+                def __exit__(self, *args):
+                    return False
+
+            fake_resp.iter_bytes = lambda: iter([fake_resp.content])
+            return Stream()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["198.18.0.1"])
+    monkeypatch.setattr(_httpx, "Client", FakeClient)
+    client = make_client()
+    resp = client.get("/api/img-proxy", params={"url": "https://pbs.twimg.com/media/x.jpg"})
+    assert resp.status_code == 200
+
+
 def test_img_proxy_rate_limit_per_ip(monkeypatch):
     """匿名 img-proxy 按 IP 限速，避免公网刷带宽。"""
     monkeypatch.setattr("app.api.IMAGE_PROXY_MAX_PER_WINDOW", 3)
@@ -4291,6 +4344,9 @@ def test_security_headers():
     assert resp.headers.get("x-content-type-options") == "nosniff"
     assert resp.headers.get("x-frame-options") == "DENY"
     assert resp.headers.get("referrer-policy") == "no-referrer"
+    csp = resp.headers.get("content-security-policy") or ""
+    assert "default-src 'self'" in csp
+    assert "frame-ancestors 'none'" in csp
 
     # 静态页面同样带安全头
     page = client.get("/")
@@ -5717,6 +5773,14 @@ def test_zsxq_file_download_ascii_safe_disposition():
     resp2 = client.get(f"/api/media/zsxq-file/181528458481522?token={token}")
     assert resp2.status_code == 200, resp2.text
     assert resp2.content == b"%PDF-1.7 data"
+
+
+def test_query_token_rejected_on_json_api():
+    client = make_client()
+    headers = user_headers(client, "qtoken")
+    token = headers["Authorization"].replace("Bearer ", "")
+    assert client.get(f"/api/me?token={token}").status_code == 401
+    assert client.get("/api/me", headers=headers).status_code == 200
 
 
 def test_wscn_plain_body_strips_tags():

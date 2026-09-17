@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import secrets
 import time
 from math import ceil
 
@@ -17,7 +18,7 @@ HELP_TEXT = (
     "/unsub 1 / 雪球/微博主页链接 / UID — 取消订阅\n"
     "/ask 主页链接/UID 分类名 — 申请添加大V，管理员审批\n"
     "/mysubs — 我的订阅（带退订/改类型按钮）\n"
-    "/bind 6位绑定码 — 绑定网页/小程序账号\n"
+    "/bind 8位绑定码 — 绑定网页/小程序账号\n"
     "📌 飞书用户请在本机器人的「私聊」会话使用，群聊不会推送新帖\n"
     "/help — 帮助"
 )
@@ -30,14 +31,29 @@ WELCOME_TEXT = (
     "2️⃣ 发 /sub 大VID 订阅，例如 /sub 1\n"
     "3️⃣ 已订阅大V发新帖时，会自动推送到这里\n\n"
     "💡 如果你用网页/小程序登录：请在网页「推送设置」生成绑定码，"
-    "再把 /bind 6位码 发给我，账号即合并，一处订阅处处同步。\n\n"
+    "再把 /bind 8位码 发给我，账号即合并，一处订阅处处同步。\n\n"
     "📌 飞书用户：请在本机器人的「私聊」会话里使用，群聊不会推送新帖"
 )
 
 BIND_CODE_TTL = 600
+BIND_CODE_LEN = 8
+BIND_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 LIST_PAGE_SIZE = 20
 SEARCH_MAX = 10
 SUB_TYPE_LABELS = {"post": "帖子", "reply": "回复", "both": "帖子+回复"}
+
+
+def normalize_bind_code(code: str) -> str:
+    return (code or "").strip().upper()
+
+
+def is_bind_code(code: str) -> bool:
+    code = normalize_bind_code(code)
+    return len(code) == BIND_CODE_LEN and all(c in BIND_CODE_ALPHABET for c in code)
+
+
+def new_bind_code() -> str:
+    return "".join(secrets.choice(BIND_CODE_ALPHABET) for _ in range(BIND_CODE_LEN))
 
 
 class SubscriptionBot:
@@ -73,10 +89,9 @@ class SubscriptionBot:
                 self._bind(identity_type, identity, arg.strip()[5:], reply_type, reply_id)
                 return
         else:
-            # 直接粘贴的 6 位绑定码：自动识别，无需记 /bind 命令
-            cleaned = text.upper()
-            if len(cleaned) == 6 and cleaned.isalnum():
-                self._bind(identity_type, identity, cleaned, reply_type, reply_id)
+            # 直接粘贴绑定码：自动识别，无需记 /bind 命令
+            if is_bind_code(text):
+                self._bind(identity_type, identity, text, reply_type, reply_id)
             return
         cmd, _, arg = text.partition(" ")
         cmd = cmd.lower()
@@ -120,8 +135,8 @@ class SubscriptionBot:
 
         reply_type = reply_type or identity_type
         reply_id = reply_id or identity
-        code = code.strip().upper()
-        if len(code) != 6:
+        code = normalize_bind_code(code)
+        if not is_bind_code(code):
             self.send(reply_type, reply_id, "绑定码无效，请在网页/小程序「推送设置」里生成")
             return
         now = time.time()

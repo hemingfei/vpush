@@ -143,8 +143,8 @@ def test_bot_bind_merges_subscriptions():
     assert db.subscribed_kol_ids(bot_user["id"]) == {kid}
 
     # 生成绑定码后 /bind，订阅合并到网页账号，自动账号删除
-    db.create_bind_code("654321", target_id, int(time.time()) + 600)
-    bot.handle_update(update(111, "/bind 654321"))
+    db.create_bind_code("ABCDEF23", target_id, int(time.time()) + 600)
+    bot.handle_update(update(111, "/bind ABCDEF23"))
     assert "已绑定" in sent[-1][1]
     assert db.subscribed_kol_ids(target_id) == {kid}
     assert db.get_user_by_telegram("111")["id"] == target_id

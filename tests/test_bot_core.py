@@ -69,13 +69,13 @@ def test_ask_creates_request_and_list_filters_private():
 def test_pasted_bind_code_auto_merges():
     db, bot, sent = make_bot()
     target_id = db.add_user("web_user", "hash")
-    db.create_bind_code("654321", target_id, 9999999999)
+    db.create_bind_code("ABCDEF23", target_id, 9999999999)
     # 机器人账号已存在（TG 发过命令自动创建）
     bot.handle("telegram_chat_id", "111", "u1", "/list")
     bot_account = db.get_user_by_telegram("111")
 
-    # 直接粘贴 6 位绑定码（无 /bind 前缀）自动绑定
-    bot.handle("telegram_chat_id", "111", "u1", "654321")
+    # 直接粘贴绑定码（无 /bind 前缀）自动绑定
+    bot.handle("telegram_chat_id", "111", "u1", "ABCDEF23")
     assert "已绑定到账号 web_user" in sent[-1]
     target = db.get_user(target_id)
     assert target["telegram_chat_id"] == "111"
@@ -85,12 +85,12 @@ def test_pasted_bind_code_auto_merges():
 def test_telegram_deeplink_start_bind():
     db, bot, sent = make_bot()
     target_id = db.add_user("web_user", "hash")
-    db.create_bind_code("111222", target_id, 9999999999)
+    db.create_bind_code("K7N2P4Q8", target_id, 9999999999)
     bot.handle("telegram_chat_id", "222", "u2", "/list")
     bot_account = db.get_user_by_telegram("222")
 
     # 深链触发：Telegram 自动发送 /start bind_码
-    bot.handle("telegram_chat_id", "222", "u2", "/start bind_111222")
+    bot.handle("telegram_chat_id", "222", "u2", "/start bind_K7N2P4Q8")
     assert "已绑定到账号 web_user" in sent[-1]
     assert db.get_user(target_id)["telegram_chat_id"] == "222"
     assert db.get_user(bot_account["id"]) is None
@@ -100,29 +100,29 @@ def test_bind_code_rate_limit_and_isolation():
     db, bot, sent = make_bot()
     target_id = db.add_user("web_user", "hash")
     other_id = db.add_user("other", "hash")
-    db.create_bind_code("654321", target_id, 9999999999)
-    db.create_bind_code("777888", other_id, 9999999999)
+    db.create_bind_code("ABCDEF23", target_id, 9999999999)
+    db.create_bind_code("K7N2P4Q8", other_id, 9999999999)
     for i in range(8):
-        bot.handle("telegram_chat_id", "111", "u1", f"{i:06d}")
+        bot.handle("telegram_chat_id", "111", "u1", f"ZZZZZZZ{i + 2}")
         assert sent[-1] == "绑定码无效或已过期，请重新生成"
-    bot.handle("telegram_chat_id", "111", "u1", "654321")
+    bot.handle("telegram_chat_id", "111", "u1", "ABCDEF23")
     assert sent[-1] == "绑定码无效或已过期，请重新生成"
-    assert db.get_bind_code("654321") is not None
-    bot.handle("telegram_chat_id", "222", "u2", "654321")
+    assert db.get_bind_code("ABCDEF23") is not None
+    bot.handle("telegram_chat_id", "222", "u2", "ABCDEF23")
     assert "已绑定到账号 web_user" in sent[-1]
-    assert db.get_bind_code("654321") is None
-    assert db.get_bind_code("777888") is not None
+    assert db.get_bind_code("ABCDEF23") is None
+    assert db.get_bind_code("K7N2P4Q8") is not None
 
 
 def test_bind_code_expired_and_missing_share_message():
     db, bot, sent = make_bot()
     target_id = db.add_user("web_user", "hash")
-    db.create_bind_code("654321", target_id, 1)
-    bot.handle("telegram_chat_id", "111", "u1", "654321")
+    db.create_bind_code("ABCDEF23", target_id, 1)
+    bot.handle("telegram_chat_id", "111", "u1", "ABCDEF23")
     assert sent[-1] == "绑定码无效或已过期，请重新生成"
-    bot.handle("telegram_chat_id", "111", "u1", "000000")
+    bot.handle("telegram_chat_id", "111", "u1", "ZZZZZZZ2")
     assert sent[-1] == "绑定码无效或已过期，请重新生成"
-    bot.handle("telegram_chat_id", "111", "u1", "/bind 654321")
+    bot.handle("telegram_chat_id", "111", "u1", "/bind ABCDEF23")
     assert sent[-1] == "绑定码无效或已过期，请重新生成"
 
 
@@ -131,12 +131,12 @@ def test_bind_code_concurrent_consume_once():
 
     db, bot, sent = make_bot()
     target_id = db.add_user("web_user", "hash")
-    db.create_bind_code("654321", target_id, 9999999999)
+    db.create_bind_code("ABCDEF23", target_id, 9999999999)
     errors = []
 
     def run(chat_id):
         try:
-            bot.handle("telegram_chat_id", chat_id, chat_id, "654321")
+            bot.handle("telegram_chat_id", chat_id, chat_id, "ABCDEF23")
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)
 
@@ -147,7 +147,7 @@ def test_bind_code_concurrent_consume_once():
         thread.join()
     assert errors == []
     assert sum("已绑定到账号 web_user" in msg for msg in sent) == 1
-    assert db.get_bind_code("654321") is None
+    assert db.get_bind_code("ABCDEF23") is None
     assert db.get_user(target_id)["telegram_chat_id"] in {str(i) for i in range(8)}
 
 
@@ -180,8 +180,8 @@ def test_bind_quota_is_atomic_across_db_connections(tmp_path):
 def test_feishu_bind_uses_open_id():
     db, bot, sent = make_bot()
     target_id = db.add_user("web_user", "hash")
-    db.create_bind_code("654321", target_id, 9999999999)
-    bot.handle("feishu_open_id", "ou_1", "u1", "/bind 654321")
+    db.create_bind_code("ABCDEF23", target_id, 9999999999)
+    bot.handle("feishu_open_id", "ou_1", "u1", "/bind ABCDEF23")
     assert "已绑定到账号 web_user" in sent[-1]
     assert db.get_user(target_id)["feishu_open_id"] == "ou_1"
 

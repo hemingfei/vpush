@@ -38,7 +38,12 @@ def test_write_encrypts_and_hash_allows_lookup(tmp_path):
         "INSERT INTO users (username, password_hash) VALUES ('u1', 'x')", ()
     )
     db.update_user_atomic(
-        uid, {"bark_key": "AaBbCcDdEeFf1234567890", "llm_api_key": "sk-abc12345678"}
+        uid,
+        {
+            "bark_key": "AaBbCcDdEeFf1234567890",
+            "llm_api_key": "sk-abc12345678",
+            "telegram_bot_token": "111:AAAbbbCCCdddEEE",
+        },
     )
     raw = _raw_value(str(tmp_path / "d.db"), "bark_key")
     assert raw.startswith(SECRET_PREFIX) and "AaBb" not in raw
@@ -46,6 +51,8 @@ def test_write_encrypts_and_hash_allows_lookup(tmp_path):
     hit = db.get_user_by_bark_key("AaBbCcDdEeFf1234567890")
     assert hit is not None and hit["id"] == uid
     assert db.get_user_by_bark_key("different") is None
+    assert db.get_user_by_telegram_bot("111:AAAbbbCCCdddEEE")["id"] == uid
+    assert db.get_user_by_telegram_bot("111:other") is None
     # 解出明文
     assert user_plain_secret(db.get_user(uid), "bark_key", db) == "AaBbCcDdEeFf1234567890"
     db.close()
@@ -75,6 +82,7 @@ def test_migration_encrypts_legacy_plaintext_idempotent(tmp_path):
         assert user_plain_secret(db1.get_user(uid), col, db1) == plain
     assert db1.get_user_by_wecom_webhook(legacy_vals["wecom_webhook"])["id"] == uid
     assert db1.get_user_by_bark_key(legacy_vals["bark_key"])["id"] == uid
+    assert db1.get_user_by_telegram_bot(legacy_vals["telegram_bot_token"])["id"] == uid
 
     # 再次重启（同密钥）：幂等，不再改写
     before = {c: _raw_value(db_path, c) for c in legacy_vals}
@@ -109,3 +117,17 @@ def test_clear_binding_resets_hash(tmp_path):
 def test_secret_hash_empty_is_empty():
     assert _secret_hash("") == ""
     assert _secret_hash(None) == ""
+
+
+def test_telegram_bot_token_unique_under_fernet(tmp_path):
+    db = DB(str(tmp_path / "dup.db"), credential_key=KEY)
+    db._execute("INSERT INTO users (username, password_hash) VALUES ('u1', 'x')", ())
+    db._execute("INSERT INTO users (username, password_hash) VALUES ('u2', 'x')", ())
+    db.update_user_atomic(1, {"telegram_bot_token": "123:same-token"})
+    try:
+        db.update_user_atomic(2, {"telegram_bot_token": "123:same-token"})
+        raise AssertionError("duplicate telegram bot token should fail")
+    except sqlite3.IntegrityError:
+        pass
+    assert db.get_user_by_telegram_bot("123:same-token")["id"] == 1
+    db.close()

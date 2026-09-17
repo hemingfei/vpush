@@ -68,7 +68,7 @@ def _solve_challenge(html: str, url: str) -> str:
         [
             "node",
             "--permission",
-            "--allow-fs-read=.",
+            "--allow-fs-read=./solver.js",
             "--allow-fs-read=./node_modules",
             "./solver.js",
         ],

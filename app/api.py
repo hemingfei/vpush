@@ -63,7 +63,7 @@ from pydantic import BaseModel, Field
 from . import auth, kol_requests, user_quota, wechat
 from .avatar_cache import cache_avatar
 from .market import MarketQuotes
-from .bot_core import BIND_CODE_TTL
+from .bot_core import BIND_CODE_TTL, new_bind_code
 from .db import _UNSET, ALLOWED_PLATFORMS, DB, days_until_purge, user_plain_secret
 from .news import (
     NewsInputError,
@@ -307,6 +307,7 @@ class LoginIn(BaseModel):
 
 class WechatLoginIn(BaseModel):
     code: str
+    invite_code: str = ""
 
 
 class WebPushKeys(BaseModel):
@@ -1504,13 +1505,7 @@ def create_api_router(
         out["zsxq_ws_address"] = _ws_address(db)
         return out
 
-    def get_current_user(authorization: str | None = Header(None), token: str | None = Query(None)):
-        # 浏览器 <a href> / <img> 整页导航不带 Authorization 头，允许 token 走 query
-        if not (authorization and authorization.startswith("Bearer ")) and token:
-            authorization = f"Bearer {token}"
-        token = ""
-        if authorization and authorization.startswith("Bearer "):
-            token = authorization[7:]
+    def _user_from_bearer(token: str) -> dict:
         payload = auth.verify_token(token, secret)
         if not payload:
             raise HTTPException(status_code=401, detail="未登录或登录已过期")
@@ -1520,6 +1515,24 @@ def create_api_router(
         if int(payload.get("ver", 0)) != int(user.get("token_version") or 0):
             raise HTTPException(status_code=401, detail="登录已失效，请重新登录")
         return user
+
+    def get_current_user(authorization: str | None = Header(None)):
+        token = ""
+        if authorization and authorization.startswith("Bearer "):
+            token = authorization[7:]
+        return _user_from_bearer(token)
+
+    def get_download_user(
+        authorization: str | None = Header(None),
+        token: str | None = Query(None),
+    ):
+        # 文件下载可能是 <a href> / <img>，允许一次性 query；JSON API 只认 Authorization
+        if not (authorization and authorization.startswith("Bearer ")) and token:
+            authorization = f"Bearer {token}"
+        bearer = ""
+        if authorization and authorization.startswith("Bearer "):
+            bearer = authorization[7:]
+        return _user_from_bearer(bearer)
 
     def require_admin(user: dict = Depends(get_current_user)):
         if not user["is_admin"]:
@@ -1697,27 +1710,45 @@ def create_api_router(
         }
 
     @router.post("/auth/wechat")
-    def wechat_login(body: WechatLoginIn):
+    def wechat_login(body: WechatLoginIn, request: Request):
         if wechat_config is None or not wechat_config.app_id or not wechat_config.app_secret:
             raise HTTPException(status_code=400, detail="未配置微信小程序 app_id/app_secret")
+        ip = _client_ip(request)
+        _check_login_limit(ip)
         try:
             data = wechat.code2session(body.code, wechat_config.app_id, wechat_config.app_secret)
         except Exception as exc:  # noqa: BLE001
+            _record_login_failure(ip)
             raise HTTPException(status_code=400, detail=str(exc)) from None
         openid = data["openid"]
         user = db.get_user_by_openid(openid)
         if user is None:
+            if not allow_register:
+                _record_login_failure(ip)
+                raise HTTPException(status_code=403, detail="暂未开放注册")
+            invite = (body.invite_code or "").strip()
+            if not invite:
+                _record_login_failure(ip)
+                raise HTTPException(status_code=400, detail="注册需要邀请码，请向管理员索取")
             base = f"wx_{openid[:10]}"
             username, i = base, 1
             while db.get_user_by_username_ci(username) is not None:
                 username = f"{base}{i}"
                 i += 1
-            uid = db.add_user(
-                username,
-                "",
-                wechat_openid=openid,
-            )
-            user = db.get_user(uid)
+            try:
+                uid = db.register_wechat_with_code(invite, username, openid)
+            except ValueError as exc:
+                raced = db.get_user_by_openid(openid)
+                if raced is not None:
+                    user = raced
+                else:
+                    _record_login_failure(ip)
+                    raise HTTPException(status_code=400, detail=str(exc)) from None
+            else:
+                user = db.get_user(uid)
+        if user is None:
+            raise HTTPException(status_code=400, detail="微信登录失败")
+        login_attempts.pop(ip, None)
         db.touch_last_login(user["id"])
         return {
             "token": auth.create_token(
@@ -2013,8 +2044,15 @@ def create_api_router(
         if not allowed:
             raise HTTPException(status_code=429, detail="绑定码生成过于频繁，请稍后再试")
         db.delete_expired_bind_codes()
-        code = f"{secrets.randbelow(1_000_000):06d}"
-        db.create_bind_code(code, user["id"], int(time.time()) + BIND_CODE_TTL)
+        code = new_bind_code()
+        for _ in range(8):
+            try:
+                db.create_bind_code(code, user["id"], int(time.time()) + BIND_CODE_TTL)
+                break
+            except sqlite3.IntegrityError:
+                code = new_bind_code()
+        else:
+            raise HTTPException(status_code=500, detail="绑定码生成失败，请重试")
         return {"code": code, "expires_in_seconds": BIND_CODE_TTL}
 
     # ---- 飞书个人机器人（扫码注册） ----
@@ -2344,7 +2382,7 @@ def create_api_router(
 
     @router.get("/news/{article_id}/images/{index}")
     def news_article_image(
-        article_id: int, index: int, user: dict = Depends(get_current_user)
+        article_id: int, index: int, user: dict = Depends(get_download_user)
     ):
         try:
             body, content_type = _news_service_or_503().fetch_image(
@@ -3217,8 +3255,11 @@ def create_api_router(
         from urllib.parse import quote
 
         n = name or fallback
+        ascii_name = "".join(
+            c for c in n if c.isascii() and c not in '"\\\r\n' and ord(c) >= 32
+        ) or "download"
         return (
-            f"attachment; filename=\"{''.join(c for c in n if ord(c) < 128) or 'download'}\"; "
+            f"attachment; filename=\"{ascii_name}\"; "
             f"filename*=UTF-8''{quote(n)}"
         )
 
@@ -3244,7 +3285,7 @@ def create_api_router(
         db.update_post_details(updates)
 
     @router.get("/media/zsxq-file/{file_id}")
-    def download_zsxq_file(file_id: str, user: dict = Depends(get_current_user)):
+    def download_zsxq_file(file_id: str, user: dict = Depends(get_download_user)):
         if not file_id.isdigit() or len(file_id) > 32:
             raise HTTPException(status_code=400, detail="无效附件")
         hits = _zsxq_file_hits(file_id)
@@ -3627,7 +3668,7 @@ def create_api_router(
         media_id: str,
         asset_id: str,
         group: str = Query("", max_length=128),
-        user: dict = Depends(get_current_user),
+        user: dict = Depends(get_download_user),
     ):
         _enforce_ima_file_quota(user)
         if feishu_documents is None:
@@ -3646,7 +3687,7 @@ def create_api_router(
     def get_ima_document_text(
         media_id: str,
         group: str = Query("", max_length=128),
-        user: dict = Depends(get_current_user),
+        user: dict = Depends(get_download_user),
     ):
         _enforce_ima_file_quota(user)
         document = _ima_document(user, media_id, group)
@@ -3664,7 +3705,7 @@ def create_api_router(
         media_id: str,
         group: str = Query("", max_length=128),
         download: int = Query(0, ge=0, le=1),
-        user: dict = Depends(get_current_user),
+        user: dict = Depends(get_download_user),
     ):
         _enforce_ima_file_quota(user)
         document = _ima_document(user, media_id, group)
@@ -5848,7 +5889,10 @@ def create_api_router(
             or parsed.password
         ):
             raise HTTPException(status_code=400, detail="不支持的图片地址")
+        from .url_safety import img_proxy_resolved_ok
 
+        if not img_proxy_resolved_ok(parsed.hostname):
+            raise HTTPException(status_code=400, detail="不支持的图片地址")
 
         client = httpx.Client(
             timeout=15,

@@ -401,7 +401,7 @@ export function createPushSettingsView(dependencies) {
           <ol style="padding-left:20px;line-height:2">
             <li>打开飞书 App，点顶部「搜索」，搜索 ${fsTarget} 并进入。</li>
             <li>关键：请在该机器人的<b>「私聊」会话</b>里发任意消息（如 <code>/start</code>）——群聊不会推送新帖，这一步只是建立会话。</li>
-            <li>回到本页，在下方「与网页/小程序账号同步」里点「生成绑定码」，把 <code>/bind 6位码</code> 发给机器人。</li>
+            <li>回到本页，在下方「与网页/小程序账号同步」里点「生成绑定码」，把 <code>/bind 8位码</code> 发给机器人。</li>
             <li>发送后本页状态会变成「已绑定 ✅」，网页订阅与飞书推送自动同步。</li>
             <li>发 <code>/list</code> 可查看大V目录，点卡片上的按钮即可订阅。</li>
           </ol>`)}
@@ -535,7 +535,7 @@ export function createPushSettingsView(dependencies) {
             <summary>${CHEVRON_RIGHT_ICON}<span>展开查看同步步骤</span></summary>
           <ol style="padding-left:20px;line-height:2">
             <li>点下方「生成绑定码」。</li>
-            <li>把 <code>/bind 6位码</code> 发给 Telegram / 飞书机器人（企业微信群机器人是单向 webhook，不支持指令）。</li>
+            <li>把 <code>/bind 8位码</code> 发给 Telegram / 飞书机器人（企业微信群机器人是单向 webhook，不支持指令）。</li>
             <li>绑定后机器人账号合并到当前账号，订阅与推送同步，一处订阅处处同步。</li>
           </ol>
           </details>
