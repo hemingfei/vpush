@@ -1450,36 +1450,39 @@ body.lightbox-open { overflow: hidden; }
   .toast { animation: none; }
 }
 .post-item .p-file { display: block; margin-top: 8px; padding: 0; border: 0; background: none; font: inherit; font-size: var(--text-xs); color: var(--color-accent-text); text-align: left; cursor: pointer; word-break: break-all; }
-.post-item .p-meta { display: flex; flex-direction: column; align-items: stretch; gap: 8px; margin-top: 10px; font-size: var(--text-xs); color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
-.post-item .p-meta-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-.post-item .p-meta-actions { display: flex; align-items: center; gap: 10px; align-self: flex-end; }
+.post-item .p-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 10px; font-size: var(--text-xs); color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+.post-item .p-meta-tags,
+.post-item .p-meta-actions { display: contents; }
 .post-item .p-meta .cat { color: var(--color-accent-text); background: var(--color-accent-soft); border-radius: var(--radius-pill); padding: 2px 10px; }
-.post-item .p-meta a.cat {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  text-decoration: none;
-  position: relative;
-}
-.post-item .p-meta .ui-icon { width: 12px; height: 12px; }
-.post-item .p-meta .cat.post-tag-filter,
-.post-item .p-meta button.cat-export {
+.post-item .p-meta .cat.post-tag-filter {
   position: relative;
   border: 0;
   font: inherit;
   cursor: pointer;
 }
-.post-item .p-meta button.cat-export {
+.post-item .p-meta .p-action {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: 20px;
+  text-decoration: none;
+  cursor: pointer;
+  position: relative;
 }
+.post-item .p-meta .ui-icon { width: 12px; height: 12px; }
 .post-item .p-meta button.cat-export[data-busy="1"] { cursor: wait; opacity: .7; }
 .post-item .p-meta .cat.post-tag-filter:hover,
 .post-item .p-meta .cat.post-tag-filter:focus-visible,
-.post-item .p-meta button.cat-export:hover,
-.post-item .p-meta button.cat-export:focus-visible {
-  color: var(--color-accent);
+.post-item .p-meta .p-action:hover,
+.post-item .p-meta .p-action:focus-visible {
+  color: var(--color-accent-text);
   outline: 2px solid var(--color-accent-text);
   outline-offset: 2px;
 }
@@ -2762,16 +2765,15 @@ html.sidebar-slim .nav-sub .nav-item { padding-left: 12px; }
   .post-item { padding: 14px 4px; }
   .post-item a { min-height: 44px; display: inline-flex; align-items: center; }
   .post-item .p-meta a,
-  .post-item .p-meta button.cat-export {
+  .post-item .p-meta .p-action {
     min-height: 0;
     height: auto;
   }
   .post-item .p-meta .cat.post-tag-filter::before,
-  .post-item .p-meta a.cat::before,
-  .post-item .p-meta button.cat-export::before {
+  .post-item .p-meta .p-action::before {
     content: "";
     position: absolute;
-    inset: -11px -8px;
+    inset: -12px -8px;
   }
   /* 名字必须盖过上一行 .post-item a：inline-flex + min-height 会让文字贴顶、角标居中，移动端错位。
      block + 固定行高才能同时保留省略号、44px 触控，并与平台角标/时间同一中线。 */
