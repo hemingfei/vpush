@@ -989,7 +989,7 @@ def test_auto_config_api_roundtrip():
     client.app.state.db.add_register_code("AUTO0001")
     data = client.post(
         "/api/auth/register",
-        json={"username": "autoadmin", "password": "secret123", "code": "AUTO0001"},
+        json={"username": "autoadmin", "password": "secret1234", "code": "AUTO0001"},
     ).json()
     client.app.state.db.update_user(data["user"]["id"], is_admin=True)
     headers = {"Authorization": f"Bearer {data['token']}"}

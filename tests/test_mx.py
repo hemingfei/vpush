@@ -1051,7 +1051,7 @@ def test_update_mx_config_endpoint_hot_applies(monkeypatch):
     client.app.state.db.add_register_code(code)
     data = client.post(
         "/api/auth/register",
-        json={"username": "mxadmin", "password": "secret123", "code": code},
+        json={"username": "mxadmin", "password": "secret1234", "code": code},
     ).json()
     client.app.state.db.update_user(data["user"]["id"], is_admin=True)
     headers = {"Authorization": f"Bearer {data['token']}"}
@@ -1110,7 +1110,7 @@ def test_mx_token_updated_at_recorded_only_on_change(monkeypatch):
     db.add_register_code(code)
     data = client.post(
         "/api/auth/register",
-        json={"username": "mxtokadmin", "password": "secret123", "code": code},
+        json={"username": "mxtokadmin", "password": "secret1234", "code": code},
     ).json()
     db.update_user(data["user"]["id"], is_admin=True)
     headers = {"Authorization": f"Bearer {data['token']}"}
@@ -2228,7 +2228,7 @@ def test_update_mx_config_log_does_not_leak_token(monkeypatch, caplog):
     client.app.state.db.add_register_code(code)
     data = client.post(
         "/api/auth/register",
-        json={"username": "mxadmin2", "password": "secret123", "code": code},
+        json={"username": "mxadmin2", "password": "secret1234", "code": code},
     ).json()
     client.app.state.db.update_user(data["user"]["id"], is_admin=True)
     headers = {"Authorization": f"Bearer {data['token']}"}
