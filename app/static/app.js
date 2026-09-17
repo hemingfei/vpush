@@ -3,6 +3,7 @@ import {
   ARROW_UP_ICON, BELL_ICON, BELL_OFF_ICON, BOOK_ICON, CHEVRON_DOWN_ICON, CHEVRON_LEFT_ICON, CHEVRON_RIGHT_ICON,
   CHEVRON_UP_ICON, COPY_ICON, DATABASE_ICON, DASHBOARD_ICON, FOLDER_ICON,
   EYE_ICON, EYE_OFF_ICON, EXTERNAL_LINK_ICON, FEISHU_DATE_ICON, FILE_TEXT_ICON, FILTER_ICON,
+  IMAGE_CARD_ICON,
   GEAR_ICON, GITHUB_ICON, GRID_ICON, HISTORY_ICON, HOME_ICON, KEY_ICON, LIST_ICON,
   MORE_ICON, NEWS_ICON, PAPERCLIP_ICON, PLUS_ICON, REFRESH_ICON, SEARCH_ICON, SEND_ICON, STAR_SVG,
   THEME_AUTO_ICON, THEME_MOON_ICON, THEME_SUN_ICON, TRASH_ICON, USER_ICON, USER_PLUS_ICON, USERS_ICON,
@@ -21,6 +22,7 @@ import { createImaView } from "./views/ima.js";
 import { createFeishuPersonalView } from "./views/feishu-personal.js";
 import { createPushSettingsView } from "./views/push-settings.js";
 import { createMarketView } from "./views/market.js";
+import { createPostCardExport } from "./views/post-card-export.js";
 
 const $ = (sel) => document.querySelector(sel);
 $("#btn-back").innerHTML = CHEVRON_LEFT_ICON;
@@ -50,7 +52,7 @@ const CHANNEL_ICONS = {
 const GROK_TRANSLATE_ICON = `<svg class="p-tr-grok" viewBox="0 0 33 32" fill="currentColor" aria-hidden="true"><path d="M12.745 20.54l10.97-8.19c.539-.4 1.307-.244 1.564.38 1.349 3.288.746 7.241-1.938 9.955-2.683 2.714-6.417 3.31-9.83 1.954l-3.728 1.745c5.347 3.697 11.84 2.782 15.898-1.324 3.219-3.255 4.216-7.692 3.284-11.693l.008.009c-1.351-5.878.332-8.227 3.782-13.031L33 0l-4.54 4.59v-.014L12.743 20.544m-2.263 1.987c-3.837-3.707-3.175-9.446.1-12.755 2.42-2.449 6.388-3.448 9.852-1.979l3.72-1.737c-.67-.49-1.53-1.017-2.515-1.387-4.455-1.854-9.789-.931-13.41 2.728-3.483 3.523-4.579 8.94-2.697 13.561 1.405 3.454-.899 5.898-3.22 8.364C1.49 30.2.666 31.074 0 32l10.478-9.466"/></svg>`;
 const CHANNEL_LABELS = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", bark: "Bark", webpush: "浏览器通知" };
 const USER_CHANNEL_KEYS = ["telegram", "feishu", "wecom", "bark", "webpush"];
-const APP_VERSION = "1.12.202";
+const APP_VERSION = "1.12.203";
 const KEYWORDS_MAX_COUNT = 20;
 const REPORT_WATCH_BLOCKED_TAGS = new Set([
   "中金研报", "宏观经济", "市场策略", "全球研究", "行业研究", "公司研究",
@@ -261,6 +263,7 @@ function clearSessionCaches() {
   }
   clearNewsReaderState();
   _tlPosts.length = 0;
+  _kolPosts.length = 0;
   _tlOffset = 0;
   _tlHasMore = true;
   _tlExpanded.clear();
@@ -1614,6 +1617,7 @@ async function setSubscribeType(kolId, input) {
 // ---------- 动态 ----------
 let _tlSeq = 0;
 const _tlPosts = [];
+const _kolPosts = [];
 let _tlOffset = 0;
 let _tlHasMore = true;
 let _tlLoadingMore = false;
@@ -3090,6 +3094,7 @@ function postCard(post) {
         ${Array.isArray(post.tags) && post.tags.length
           ? post.tags.map((t) => `<button type="button" class="cat cat-tag post-tag-filter" data-tag="${escapeHtml(t)}" onclick="tlPickTag(this.dataset.tag)">${escapeHtml(t)}</button>`).join("")
           : ""}
+        <button type="button" class="cat cat-export post-card-export" onclick="exportPostCard(${post.id}, event)" aria-label="复制图卡" title="复制图卡">${IMAGE_CARD_ICON} 图卡</button>
         ${post.platform === "zsxq" ? "" : `<a class="cat" href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener" aria-label="查看原文" title="查看原文">查看原文 ${EXTERNAL_LINK_ICON}</a>`}
       </div>
     </div>`;
@@ -3264,6 +3269,13 @@ async function renderKolPage(kolId, seq) {
     const kol = await api(`/api/kols/${kolId}`);
     const posts = await api(`/api/kols/${kolId}/posts?limit=50`);
     if (!routeStillActive(seq)) return; // 已切走：不写旧页面
+    _kolPosts.length = 0;
+    _kolPosts.push(...posts.map((p) => ({
+      ...p,
+      kol_name: p.kol_name || kol.name,
+      avatar_url: p.avatar_url || kol.avatar_url,
+      kol_external_id: p.kol_external_id || kol.external_id,
+    })));
     const extra = kol.platform === "combination"
       ? await renderCombinationSnapshots(kol)
       : "";
@@ -3283,7 +3295,7 @@ async function renderKolPage(kolId, seq) {
           </div>
         </header>
         ${extra}
-        <div id="kol-posts">${posts.length ? posts.map(postCard).join("") : emptyState("暂无动态")}</div>
+        <div id="kol-posts">${_kolPosts.length ? _kolPosts.map(postCard).join("") : emptyState("暂无动态")}</div>
       </section>`;
   } catch (err) {
     if (!routeStillActive(seq)) return;
@@ -4910,6 +4922,17 @@ function go(path) {
   router();
 }
 
+function findExportablePost(id) {
+  const nid = Number(id);
+  return _tlPosts.find((p) => Number(p.id) === nid) || _kolPosts.find((p) => Number(p.id) === nid) || null;
+}
+
+const { exportPostCard } = createPostCardExport({
+  findPost: findExportablePost,
+  isShowSrc: (id) => _tlShowSrc.has(id),
+  flash,
+});
+
 const {
   clearNewsReaderState,
   loadFinancialNews,
@@ -6063,6 +6086,7 @@ const INLINE_HANDLERS = {
   downloadFeishuTimelineAsset,
   downloadZsxqFile,
   enableWebPush,
+  exportPostCard,
   extractProxyPool,
   filterAclSuggest,
   filterKolImageSettings,
