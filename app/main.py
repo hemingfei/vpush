@@ -202,6 +202,13 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         logging.getLogger(__name__).warning(
             "WEB_TOKEN_SECRET 未配置，会话签名密钥写在数据库里，备份即可伪造登录"
         )
+    if not (
+        (config.web.turnstile_secret or "").strip()
+        and (config.web.turnstile_site_key or "").strip()
+    ):
+        logging.getLogger(__name__).warning(
+            "Turnstile 未配齐，登录注册将跳过人机验证"
+        )
 
     if config.web.admin_password:
         admin = db.get_user_by_username("admin")

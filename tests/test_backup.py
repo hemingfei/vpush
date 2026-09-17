@@ -26,7 +26,7 @@ def make_client(name="test.db"):
     return TestClient(app)
 
 
-def register(client, username="testadmin", password="secret123"):
+def register(client, username="testadmin", password="secret1234"):
     global _reg_code_seq
     _reg_code_seq += 1
     code = f"BKP{_reg_code_seq:04d}"
@@ -39,7 +39,7 @@ def register(client, username="testadmin", password="secret123"):
     return resp
 
 
-def auth_headers(client, username="testadmin", password="secret123"):
+def auth_headers(client, username="testadmin", password="secret1234"):
     data = register(client, username, password).json()
     client.app.state.db.update_user(data["user"]["id"], is_admin=True)
     return {"Authorization": f"Bearer {data['token']}"}

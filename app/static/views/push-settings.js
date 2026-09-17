@@ -516,7 +516,7 @@ export function createPushSettingsView(dependencies) {
           </div>
           <div class="form-row">
             <label for="pw-new">新密码</label>
-            <input id="pw-new" class="form-control" type="password" placeholder="至少 6 位" autocomplete="new-password">
+            <input id="pw-new" class="form-control" type="password" placeholder="至少 10 位" autocomplete="new-password">
           </div>
           <div class="form-row">
             <label for="pw-confirm">确认新密码</label>

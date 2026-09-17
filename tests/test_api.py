@@ -19,7 +19,7 @@ def make_client(name="test.db", config=None):
     return TestClient(app)
 
 
-def register(client, username="testadmin", password="secret123", expect=200, code=None):
+def register(client, username="testadmin", password="secret1234", expect=200, code=None):
     global _reg_code_seq
     if code is None:
         _reg_code_seq += 1
@@ -33,7 +33,7 @@ def register(client, username="testadmin", password="secret123", expect=200, cod
     return resp
 
 
-def auth_headers(client, username="testadmin", password="secret123"):
+def auth_headers(client, username="testadmin", password="secret1234"):
     data = register(client, username, password).json()
     # 测试辅助：注册后通过 DB 提升为管理员（生产环境只能由管理员指定）
     client.app.state.db.update_user(data["user"]["id"], is_admin=True)
@@ -1381,18 +1381,31 @@ def test_change_password_api():
         headers=headers,
         json={"old_password": "pass123456", "new_password": "123"},
     )
-    assert resp.status_code == 400 and "至少6位" in resp.json()["detail"]
+    assert resp.status_code == 400 and "至少10位" in resp.json()["detail"]
 
-    # 正常修改后旧密码失效、新密码可登录
+    # 正常修改后旧 token 失效，响应带回新 token
     resp = client.post(
         "/api/me/password",
         headers=headers,
         json={"old_password": "pass123456", "new_password": "newpass123"},
     )
     assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    new_token = resp.json()["token"]
+    assert new_token
     assert client.get("/api/me", headers=headers).status_code == 401
+    assert client.get("/api/me", headers={"Authorization": f"Bearer {new_token}"}).status_code == 200
     assert client.post("/api/auth/login", json={"username": "pwuser", "password": "pass123456"}).status_code == 401
     assert client.post("/api/auth/login", json={"username": "pwuser", "password": "newpass123"}).status_code == 200
+
+
+def test_logout_revokes_server_token():
+    client = make_client()
+    headers = user_headers(client, "logoutuser")
+    assert client.get("/api/me", headers=headers).status_code == 200
+    assert client.post("/api/auth/logout", headers=headers).status_code == 200
+    assert client.get("/api/me", headers=headers).status_code == 401
+    assert client.post("/api/auth/logout", headers=headers).status_code == 401
 
 
 def test_channel_claim_conflict():
@@ -1631,7 +1644,7 @@ def test_admin_turnstile_toggle_and_tokens(monkeypatch):
     assert off.json()["secret_set"] is True
     assert client.get("/api/auth/turnstile").json() == {"sitekey": ""}
     login = client.post(
-        "/api/auth/login", json={"username": "boss01", "password": "secret123"}
+        "/api/auth/login", json={"username": "boss01", "password": "secret1234"}
     )
     assert login.status_code == 200, login.text
 
@@ -2343,14 +2356,14 @@ def test_register_requires_invite_code():
     # 不带注册码
     resp = client.post(
         "/api/auth/register",
-        json={"username": "nocode", "password": "secret123"},
+        json={"username": "nocode", "password": "secret1234"},
     )
     assert resp.status_code == 400 and "邀请码" in resp.json()["detail"]
 
     # 无效注册码
     resp = client.post(
         "/api/auth/register",
-        json={"username": "badcode", "password": "secret123", "code": "NOPE1234"},
+        json={"username": "badcode", "password": "secret1234", "code": "NOPE1234"},
     )
     assert resp.status_code == 400 and "无效或已被使用" in resp.json()["detail"]
 
@@ -2370,7 +2383,7 @@ def test_register_requires_invite_code():
     # 用生成码注册成功，且码被消费
     resp = client.post(
         "/api/auth/register",
-        json={"username": "invited", "password": "secret123", "code": codes[0]},
+        json={"username": "invited", "password": "secret1234", "code": codes[0]},
     )
     assert resp.status_code == 200
     row = next(
@@ -2381,7 +2394,7 @@ def test_register_requires_invite_code():
     # 同一注册码不能再用
     resp = client.post(
         "/api/auth/register",
-        json={"username": "invited2", "password": "secret123", "code": codes[0]},
+        json={"username": "invited2", "password": "secret1234", "code": codes[0]},
     )
     assert resp.status_code == 400 and "无效或已被使用" in resp.json()["detail"]
 
@@ -2446,7 +2459,7 @@ def test_register_expired_and_revoked_codes_have_distinct_errors():
     )
     resp = client.post(
         "/api/auth/register",
-        json={"username": "expire1", "password": "secret123", "code": "EXPIRED1"},
+        json={"username": "expire1", "password": "secret1234", "code": "EXPIRED1"},
     )
     assert resp.status_code == 400 and "已过期" in resp.json()["detail"]
 
@@ -2454,7 +2467,7 @@ def test_register_expired_and_revoked_codes_have_distinct_errors():
     db.revoke_register_code("REVOKED1")
     resp = client.post(
         "/api/auth/register",
-        json={"username": "revoke1", "password": "secret123", "code": "REVOKED1"},
+        json={"username": "revoke1", "password": "secret1234", "code": "REVOKED1"},
     )
     assert resp.status_code == 400 and "已作废" in resp.json()["detail"]
 
@@ -3029,7 +3042,7 @@ def test_auth_flow():
     # 弱密码 / 重复用户名
     assert client.post("/api/auth/register", json={"username": "u2", "password": "123"}).status_code == 400
     assert client.post(
-        "/api/auth/register", json={"username": "admin01", "password": "secret123"}
+        "/api/auth/register", json={"username": "admin01", "password": "secret1234"}
     ).status_code == 400
 
     # 登录失败/成功
@@ -3042,7 +3055,7 @@ def test_auth_flow():
     assert client.get("/api/posts", headers=headers).status_code == 403
 
     # 管理员在后台指定另一个用户为管理员
-    admin_headers = auth_headers(client, "boss01", "secret123")
+    admin_headers = auth_headers(client, "boss01", "secret1234")
     self_id = client.get("/api/me", headers=admin_headers).json()["id"]
     target_id = next(
         u["id"] for u in client.get("/api/users", headers=admin_headers).json() if u["id"] != self_id
@@ -3781,12 +3794,12 @@ def test_register_failures_count_toward_limit():
     for _ in range(8):
         r = client.post(
             "/api/auth/register",
-            json={"username": f"u{_}", "password": "secret123", "code": "INVALID"},
+            json={"username": f"u{_}", "password": "secret1234", "code": "INVALID"},
         )
         assert r.status_code == 400
     r = client.post(
         "/api/auth/register",
-        json={"username": "u9", "password": "secret123", "code": "INVALID"},
+        json={"username": "u9", "password": "secret1234", "code": "INVALID"},
     )
     assert r.status_code == 429
 
@@ -4296,7 +4309,7 @@ def test_register_username_case_insensitive_unique():
     client.app.state.db.add_register_code("CODE1")
     resp = client.post(
         "/api/auth/register",
-        json={"username": "bob001", "password": "secret123", "code": "CODE1"},
+        json={"username": "bob001", "password": "secret1234", "code": "CODE1"},
     )
     assert resp.status_code == 200
     uid = next(
@@ -4312,12 +4325,12 @@ def test_register_username_case_insensitive_unique():
 def test_login_username_case_insensitive():
     """注册用 COLLATE NOCASE 判重，登录也必须大小写不敏感，否则同名不同大小写无法登录。"""
     client = make_client()
-    register(client, "Yansy102", "secret123")
+    register(client, "Yansy102", "secret1234")
     # 大小写变体登录成功
-    resp = client.post("/api/auth/login", json={"username": "yansy102", "password": "secret123"})
+    resp = client.post("/api/auth/login", json={"username": "yansy102", "password": "secret1234"})
     assert resp.status_code == 200
     assert resp.json()["user"]["username"] == "Yansy102"  # token 中保留数据库原始用户名
-    resp = client.post("/api/auth/login", json={"username": "YANSY102", "password": "secret123"})
+    resp = client.post("/api/auth/login", json={"username": "YANSY102", "password": "secret1234"})
     assert resp.status_code == 200
     # 密码错误仍被拒
     assert client.post(
@@ -4485,7 +4498,7 @@ def test_admin_account_locks_sooner():
         assert r.status_code == 401
     r = client.post(
         "/api/auth/login",
-        json={"username": "boss01", "password": "secret123"},
+        json={"username": "boss01", "password": "secret1234"},
         headers={"X-Forwarded-For": "4.4.4.4"},
     )
     assert r.status_code == 429
@@ -4580,7 +4593,7 @@ def test_register_username_min_length_6():
         db.add_register_code(f"MINLEN{i}")
         resp = client.post(
             "/api/auth/register",
-            json={"username": name, "password": "secret123", "code": f"MINLEN{i}"},
+            json={"username": name, "password": "secret1234", "code": f"MINLEN{i}"},
         )
         expected = 200 if len(name) >= 6 else 400
         assert resp.status_code == expected, f"{name} 应 {expected}"
@@ -4592,7 +4605,7 @@ def test_register_username_min_length_6():
         json={"username": "goodname", "password": "123", "code": "SHORTPW1"},
     )
     assert pw.status_code == 400
-    assert pw.json()["detail"] == "密码至少6位"
+    assert pw.json()["detail"] == "密码至少10位"
     assert db.get_register_code("SHORTPW1")["used_by"] is None
 
 
@@ -4605,7 +4618,7 @@ def test_register_rejects_unreasonable_username():
     db.add_register_code("BADNAME1")
     resp = client.post(
         "/api/auth/register",
-        json={"username": "ag's trend", "password": "secret123", "code": "BADNAME1"},
+        json={"username": "ag's trend", "password": "secret1234", "code": "BADNAME1"},
     )
     assert resp.status_code == 400
     assert USERNAME_CHARSET_MSG in resp.json()["detail"]
@@ -4619,10 +4632,10 @@ def test_existing_unreasonable_username_can_still_login():
     db = client.app.state.db
     from app.auth import hash_password
 
-    db.add_user("ag's trend", hash_password("secret123"))
+    db.add_user("ag's trend", hash_password("secret1234"))
     assert client.post(
         "/api/auth/login",
-        json={"username": "ag's trend", "password": "secret123"},
+        json={"username": "ag's trend", "password": "secret1234"},
     ).status_code == 200
 
 
@@ -5796,7 +5809,7 @@ def test_wscn_live_requires_auth():
 
 def test_wscn_live_returns_normalized_items(monkeypatch):
     client = make_client("wscn_live.db")
-    headers = auth_headers(client, "wscnuser", "secret123")
+    headers = auth_headers(client, "wscnuser", "secret1234")
 
     def fake_fetch(*, cursor: str = "", limit: int = 30):
         del cursor, limit
@@ -5834,7 +5847,7 @@ def test_wscn_live_rejects_freeform_cursor():
     import time as _time
 
     client = make_client("wscn_cursor.db")
-    headers = auth_headers(client, "wscncur", "secret123")
+    headers = auth_headers(client, "wscncur", "secret1234")
     for bad in ("abc", "1;drop", "x" * 17):
         resp = client.get(f"/api/live/wscn?cursor={bad}", headers=headers)
         assert resp.status_code == 400, bad

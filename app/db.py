@@ -2663,23 +2663,36 @@ class DB:
         device_model: str = "",
         app_version: str = "",
     ) -> None:
-        self._execute(
-            "INSERT INTO android_devices "
-            "(installation_id, user_id, token, provider, device_model, app_version) "
-            "VALUES (?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(installation_id) DO UPDATE SET "
-            "user_id = excluded.user_id, token = excluded.token, "
-            "provider = excluded.provider, device_model = excluded.device_model, "
-            "app_version = excluded.app_version, updated_at = datetime('now')",
-            (
-                installation_id,
-                user_id,
-                token,
-                provider,
-                device_model or "",
-                app_version or "",
-            ),
-        )
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                row = self._conn.execute(
+                    "SELECT user_id FROM android_devices WHERE installation_id = ?",
+                    (installation_id,),
+                ).fetchone()
+                if row is not None and int(row["user_id"]) != int(user_id):
+                    raise ValueError("该设备已绑定其他账号")
+                self._conn.execute(
+                    "INSERT INTO android_devices "
+                    "(installation_id, user_id, token, provider, device_model, app_version) "
+                    "VALUES (?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(installation_id) DO UPDATE SET "
+                    "token = excluded.token, provider = excluded.provider, "
+                    "device_model = excluded.device_model, "
+                    "app_version = excluded.app_version, updated_at = datetime('now')",
+                    (
+                        installation_id,
+                        user_id,
+                        token,
+                        provider,
+                        device_model or "",
+                        app_version or "",
+                    ),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def delete_android_device(self, installation_id: str, user_id: int) -> None:
         self._execute(
@@ -3962,6 +3975,17 @@ class DB:
             except Exception:
                 self._conn.rollback()
                 raise
+
+    def get_quota_count(self, key: str, period_start: int) -> int:
+        rows = self._rows(
+            "SELECT period_start, count FROM bind_quota WHERE key = ?", (key,)
+        )
+        if not rows or int(rows[0]["period_start"]) != int(period_start):
+            return 0
+        return int(rows[0]["count"])
+
+    def clear_quota(self, key: str) -> None:
+        self._execute("DELETE FROM bind_quota WHERE key = ?", (key,))
 
     def consume_bind_code(self, code: str, identity_type: str, identity: str) -> dict | None:
         field = (

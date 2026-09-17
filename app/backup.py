@@ -292,7 +292,7 @@ class WebDAV:
         self.folder = join_webdav(url, path or DEFAULT_PATH)
         self.auth = (username or "", password or "")
         self._owns_client = client is None
-        self.client = client or httpx.Client(timeout=60.0, follow_redirects=True)
+        self.client = client or httpx.Client(timeout=60.0, follow_redirects=False)
 
     def close(self) -> None:
         if self._owns_client:

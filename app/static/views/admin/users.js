@@ -552,7 +552,7 @@ export function createAdminUsersView(dependencies) {
           ${u.has_password ? "" : `<p class="muted">这个账号没有密码，不能网页登录。设了密码后才能用账号登录。</p>`}
           <label class="form-label">${u.has_password ? "新密码" : "设置密码"}
             <div class="row">
-              <input id="um-pass" class="form-control" type="password" minlength="6" placeholder="至少 6 位" autocomplete="new-password">
+              <input id="um-pass" class="form-control" type="password" minlength="10" placeholder="至少 10 位" autocomplete="new-password">
               <button class="btn-sm" onclick="adminSavePassword(${u.id})">${u.has_password ? "重置" : "设置"}</button>
             </div>
           </label>
@@ -652,8 +652,8 @@ export function createAdminUsersView(dependencies) {
   async function adminSavePassword(userId) {
     const input = $("#um-pass");
     const pw = input ? input.value : "";
-    if (pw.length < 6) {
-      flash("密码至少 6 位", "error");
+    if (pw.length < 10) {
+      flash("密码至少 10 位", "error");
       return;
     }
     try {

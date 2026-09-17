@@ -365,12 +365,14 @@ def test_oauth_start_uses_s256_pkce_and_encrypted_verifier(tmp_path):
     db, _ima, service = _service(tmp_path, fake)
     admin_id = db.add_user("pkce-admin", "hash", is_admin=True)
 
-    url = service.oauth_start(admin_id)
+    url, state_hash = service.oauth_begin(admin_id)
     state = url.split("state=", 1)[1].split("&", 1)[0]
     raw = db._rows("SELECT * FROM feishu_document_oauth_sessions")[0]
     ciphertext = raw["code_verifier_ciphertext"]
     assert ciphertext.startswith("enc1:")
     assert "code_challenge=" in url
+    assert state_hash == raw["state_hash"]
+    assert raw["expires_at"] <= int(time.time()) + 300 + 2
 
     fake.exchange_code = lambda code, verifier="": captured.update(code=code, verifier=verifier) or {
         "access_token": "access",

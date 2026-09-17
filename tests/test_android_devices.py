@@ -59,16 +59,17 @@ def test_android_device_register_update_transfer_and_delete(tmp_path: Path):
         headers=second_headers,
         json={"token": "token-c", "provider": "huawei"},
     )
-    assert transferred.status_code == 200
+    assert transferred.status_code == 409
+    assert "其他账号" in transferred.json()["detail"]
     assert client.app.state.db.count_android_devices(
         client.app.state.db.get_user_by_username("android_first")["id"]
-    ) == 0
+    ) == 1
     assert client.app.state.db.count_android_devices(
         client.app.state.db.get_user_by_username("android_second")["id"]
-    ) == 1
+    ) == 0
 
     deleted = client.delete(
-        "/api/me/android-devices/install-a", headers=second_headers
+        "/api/me/android-devices/install-a", headers=first_headers
     )
     assert deleted.status_code == 200
     assert deleted.json() == {"ok": True, "device_count": 0}

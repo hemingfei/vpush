@@ -491,7 +491,7 @@ class FeishuDocumentSyncService:
                 logger.exception("Feishu document sync loop failed")
             self._stop.wait(max(int(self.config.interval_seconds), 15))
 
-    def oauth_start(self, user_id: int) -> str:
+    def oauth_begin(self, user_id: int) -> tuple[str, str]:
         if not self.configured:
             raise FeishuDocumentError("飞书文档应用尚未配置")
         state = secrets.token_urlsafe(32)
@@ -499,13 +499,18 @@ class FeishuDocumentSyncService:
         challenge = base64.urlsafe_b64encode(
             hashlib.sha256(verifier.encode()).digest()
         ).rstrip(b"=").decode("ascii")
+        state_hash = hashlib.sha256(state.encode()).hexdigest()
         self.db.create_feishu_oauth_session(
-            hashlib.sha256(state.encode()).hexdigest(),
+            state_hash,
             user_id,
-            int(time.time()) + 600,
+            int(time.time()) + 300,
             verifier,
         )
-        return self.client.authorization_url(state, challenge)
+        return self.client.authorization_url(state, challenge), state_hash
+
+    def oauth_start(self, user_id: int) -> str:
+        url, _state_hash = self.oauth_begin(user_id)
+        return url
 
     def oauth_callback(self, state: str, code: str) -> int:
         session = self.db.consume_feishu_oauth_session(hashlib.sha256(state.encode()).hexdigest(), int(time.time()))

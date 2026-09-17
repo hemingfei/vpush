@@ -4975,7 +4975,7 @@ def test_register_placeholder_matches_username_min_length():
     html = (APP_JS.parent / "index.html").read_text()
     assert 'id="reg-username"' in html
     assert "6-30 位，字母或中文开头" in html
-    assert "至少 6 位字符" in html
+    assert "至少 10 位字符" in html
     assert "至少 2 位字符" not in html
     assert "USERNAME_RE" in APP_JS.read_text()
     assert "usernameRuleError" in APP_JS.read_text()
@@ -5206,7 +5206,11 @@ def test_register_codes_desktop_controls_share_one_grid():
 def test_logout_clears_timeline_and_bind_cache():
     """登出必须清掉动态缓存和绑定码，避免下一账号看到上一账号的数据。"""
     body = _fn_body("logout")
+    assert 'api("/api/auth/logout"' in body
     assert "clearSessionCaches()" in body
+    pw = _fn_body("savePassword")
+    assert "newPw.length < 10" in pw
+    assert 'localStorage.setItem("dav_token"' in pw
     clear = _fn_body("clearSessionCaches")
     assert "_tlPosts.length = 0" in clear
     assert "_kolPosts.length = 0" in clear
