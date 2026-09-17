@@ -265,7 +265,13 @@ def test_incoming_rejects_bad_token_and_disabled():
     _post_incoming(client, token, {"text": "hi"}, expect=404)
 
 
-def test_incoming_rate_limit():
+def test_incoming_rate_limit(monkeypatch):
+    # 满载 runner 上 101 个请求可能拖过 60s 窗口，早期条目滑出导致第 101 个不限流；
+    # 放大窗口只回归计数逻辑本身，时序行为由生产配置保证
+    from app import api as api_mod
+
+    monkeypatch.setattr(api_mod, "WEBHOOK_RATE_WINDOW", 3600)
+
     client = make_client()
     admin = auth_headers(client)
     kid = _make_system_kol(client, "KOL 限流")
