@@ -9,12 +9,14 @@ export function createMxKolHoldingsView(dependencies) {
     closeViewsDrawer,
   } = dependencies;
 
-  const _mxc = { seq: 0, data: null, days: 30, expanded: new Set(), view: "all", recent: 5,
+  const _mxc = { seq: 0, data: null, days: 30, expanded: new Set(), view: "all", recent: 5, sort: "weight",
     kolId: 0, drawerEl: null, drawerBody: null, token: 0 };
   const MXC_VIEWS = { all: "全部", open: "建仓", add: "加仓", trim: "减仓", clear: "清仓" };
   // 最近观点天数筛选：只看最近 N 天内还被大V提及的在持标的（0=不筛选）。
   // 部分票太老、没识别出清仓但大V其实早清了——限近期提及至少保证展示的票基本还在仓
   const MXC_RECENT_KEY = "mxc_recent_days";
+  // 持仓排序：weight=按仓位权重（后端默认序），time=按最近观点时间最新在前
+  const MXC_SORT_KEY = "mxc_sort";
 
   // 操作事件 → 徽章文案与色彩语义（A股口径：买入=红、卖出=绿）
   const MXC_KINDS = {
@@ -67,15 +69,22 @@ export function createMxKolHoldingsView(dependencies) {
     $("#main").innerHTML = `<div class="mxc-root hd-root"><div class="mxv-empty">加载失败: ${escapeHtml(err.message)}</div></div>`;
   }
 
-  function mxcLoadRecent() {
+  // 挂载时恢复本地口径：最近观点天数 + 排序方式（都只影响前端展示，不过服务端）
+  function mxcLoadPrefs() {
     try {
       const v = Number(localStorage.getItem(MXC_RECENT_KEY));
       if (Number.isInteger(v) && v >= 0 && v <= 20) _mxc.recent = v;
-    } catch (e) { /* 存储不可用：用默认 5 */ }
+      const s = localStorage.getItem(MXC_SORT_KEY);
+      if (s === "weight" || s === "time") _mxc.sort = s;
+    } catch (e) { /* 存储不可用：用默认值 */ }
   }
 
   function mxcSaveRecent() {
     try { localStorage.setItem(MXC_RECENT_KEY, String(_mxc.recent)); } catch (e) { /* 本页生效即可 */ }
+  }
+
+  function mxcSaveSort() {
+    try { localStorage.setItem(MXC_SORT_KEY, _mxc.sort); } catch (e) { /* 本页生效即可 */ }
   }
 
   // last_day（YYYY-MM-DD）距今是否超过 n 天（北京时区口径，与后端交易日对齐）
@@ -90,7 +99,7 @@ export function createMxKolHoldingsView(dependencies) {
     mxcTeardown(); // 页面宿主接管：清掉抽屉宿主残留引用（其 DOM 已由路由 teardown 移除）
     _mxc.seq = seq;
     _mxc.kolId = kolId;
-    mxcLoadRecent();
+    mxcLoadPrefs();
     setPageTitle("预估持仓");
     $("#main").innerHTML = `<div class="mxc-root hd-root"><div class="mxv-empty">加载中…</div></div>`;
     await mxcLoad(kolId, ++_mxc.token, seq);
@@ -106,7 +115,7 @@ export function createMxKolHoldingsView(dependencies) {
     const slot = document.getElementById("mxv-drawer-slot") || $("#main");
     if (!slot) return;
     _mxc.kolId = kolId;
-    mxcLoadRecent();
+    mxcLoadPrefs();
     const shell = document.createElement("div");
     shell.innerHTML = `
       <div class="mxc-drawer-mask" onclick="mxcCloseDrawer()"></div>
@@ -181,29 +190,51 @@ export function createMxKolHoldingsView(dependencies) {
     return `<div class="mxc-bar"><div class="fill" style="width:${Math.max(2, Math.min(100, w))}%"></div></div>`;
   }
 
-  // 最近观点天数滑动栏：即时筛选持仓汇总（重渲染不重拉数据），值持久化 localStorage
+  // 最近观点天数滑动栏 + 排序切换共用一条控制带。
+  // 拖动中（input）只同步数值/提示文案——此处若重绘汇总会连带替换 range 元素自身，
+  // 按住拖动即被打断；松手（change）才刷新汇总并持久化
   function mxcRecentHtml() {
     return `
     <div class="mxc-recent">
       <span class="lab">最近观点</span>
       <input type="range" min="0" max="20" step="1" value="${_mxc.recent}"
         id="mxc-recent-range" aria-label="最近观点天数，0 为不筛选"
-        oninput="mxcRecentInput(this.value)">
+        oninput="mxcRecentInput(this.value)" onchange="mxcRecentChange(this.value)">
       <span class="val"><b id="mxc-recent-val">${_mxc.recent}</b> 天</span>
-      <span class="tip">${_mxc.recent ? `仅显示 ${_mxc.recent} 天内被提及的标的` : "不筛选（显示全部在持标的）"}</span>
+      <span class="tip">${mxcRecentTip(_mxc.recent)}</span>
+      <span class="hd-seg mxc-sort" role="tablist" aria-label="持仓排序">
+        ${[["weight", "按仓位", "按预估仓位权重从高到低"], ["time", "按时间", "按最近观点时间新→旧"]]
+          .map(([k, label, tip]) => `<button type="button" title="${tip}"
+            class="hd-seg-btn${_mxc.sort === k ? " on" : ""}" onclick="mxcSetSort('${k}')">${label}</button>`).join("")}
+      </span>
     </div>`;
+  }
+
+  function mxcRecentTip(v) {
+    return v ? `仅显示 ${v} 天内被提及的标的` : "不筛选（显示全部在持标的）";
   }
 
   function mxcRecentInput(value) {
     const v = Math.max(0, Math.min(20, Math.round(Number(value))));
     if (v === _mxc.recent) return;
     _mxc.recent = v;
+    mxcRecentText(v);
+  }
+
+  // 松手/键盘步进（change）才落地：刷新持仓汇总 + 持久化（拖动全程写存储太密）
+  function mxcRecentChange(value) {
+    const v = Math.max(0, Math.min(20, Math.round(Number(value))));
+    _mxc.recent = v;
     mxcSaveRecent();
+    mxcRecentText(v);
+    mxcRenderSummary();
+  }
+
+  function mxcRecentText(v) {
     const valEl = document.getElementById("mxc-recent-val");
     if (valEl) valEl.textContent = String(v);
     const tipEl = document.querySelector(".mxc-recent .tip");
-    if (tipEl) tipEl.textContent = v ? `仅显示 ${v} 天内被提及的标的` : "不筛选（显示全部在持标的）";
-    mxcRenderSummary();
+    if (tipEl) tipEl.textContent = mxcRecentTip(v);
   }
 
   // 时间线筛选条件共享：最近 N 天内无任何事件的标的不参与持仓汇总
@@ -213,14 +244,28 @@ export function createMxKolHoldingsView(dependencies) {
     return (list || []).filter((x) => String(x.last_day || "") >= cutoff);
   }
 
+  // 排序：按仓位=后端权重降序原序；按时间=最近提及（last_at 为 YYYY-MM-DD HH:MM，字典序可比）
+  // 新→旧。同刻并列时 sort 稳定，回落到仓位序
+  function mxcSortRows(rows) {
+    if (_mxc.sort !== "time") return rows;
+    return [...(rows || [])].sort((a, b) => String(b.last_at || "").localeCompare(String(a.last_at || "")));
+  }
+
+  function mxcSetSort(s) {
+    if (_mxc.sort === s) return;
+    _mxc.sort = s === "time" ? "time" : "weight";
+    mxcSaveSort();
+    mxcRenderSummary();
+  }
+
   function mxcRenderSummary() {
     const el = document.getElementById("mxc-summary");
     if (!el) return;
     const d = _mxc.data;
     const allHoldings = d.holdings || [];
     const allTopics = d.topics || [];
-    const holdings = mxcFilterByRecent(allHoldings);
-    const topics = mxcFilterByRecent(allTopics);
+    const holdings = mxcSortRows(mxcFilterByRecent(allHoldings));
+    const topics = mxcSortRows(mxcFilterByRecent(allTopics));
     const headRight = `${holdings.length} 只个股${topics.length ? ` · ${topics.length} 个板块` : ""}`
       + (holdings.length ? ` · 合计 ${Math.round(holdings.reduce((s, h) => s + h.weight, 0))}%` : "");
     const filteredNote = _mxc.recent && (holdings.length < allHoldings.length || topics.length < allTopics.length)
@@ -332,5 +377,6 @@ export function createMxKolHoldingsView(dependencies) {
     mxcRenderTimeline();
   }
 
-  return { renderMxKolHoldings, mxcOpenDrawer, mxcCloseDrawer, mxcSetView, mxcChangeDays, mxcRecentInput };
+  return { renderMxKolHoldings, mxcOpenDrawer, mxcCloseDrawer, mxcSetView, mxcChangeDays, mxcRecentInput,
+    mxcRecentChange, mxcSetSort };
 }

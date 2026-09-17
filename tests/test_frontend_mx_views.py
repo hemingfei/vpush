@@ -664,3 +664,38 @@ def test_mx_feed_kol_card_click_still_opens_drawer():
     # kol 分支不再依赖 data-mxv-hl 祖先；target 分支仍须守卫（观点流行外无 hl 上下文）
     assert "if (!item) return;" in bind
     assert bind.index('actEl.dataset.act === "kol"') < bind.index('actEl.dataset.act === "target"')
+
+
+def test_mx_kol_holdings_slider_change_and_sort():
+    """最近观点滑动栏可整程拖动 + 松手刷新 + 按仓位/按时间排序。
+
+    回归：此前 oninput 直接重绘汇总，innerHTML 连带替换 range 元素自身，
+    按住拖动即被打断；现拖动中（input）只改数值/提示文案，松手（change）才刷新并持久化。"""
+    mxc = (STATIC / "views" / "mx-kol-holdings.js").read_text(encoding="utf-8")
+    html = _fn_body("mxcRecentHtml", mxc)
+    assert 'oninput="mxcRecentInput(this.value)"' in html
+    assert 'onchange="mxcRecentChange(this.value)"' in html
+    # 排序段控与滑动栏同带：按仓位（默认）/按时间，点击走 mxcSetSort
+    assert "mxcSetSort('${k}')" in html
+    assert '["weight", "按仓位"' in html and '["time", "按时间"' in html
+    # 拖动中不得重绘汇总（重绘会替换 range 元素、拖动即断），也不写存储
+    inp = _fn_body("mxcRecentInput", mxc)
+    assert "mxcRenderSummary" not in inp and "localStorage" not in inp
+    # 松手才刷新汇总 + 持久化
+    chg = _fn_body("mxcRecentChange", mxc)
+    assert "mxcSaveRecent" in chg and "mxcRenderSummary" in chg
+    # 排序切换：按时间按 last_at 新→旧，切换即重绘
+    srt = _fn_body("mxcSetSort", mxc)
+    assert "mxcSaveSort" in srt and "mxcRenderSummary" in srt
+    sort_rows = _fn_body("mxcSortRows", mxc)
+    assert "last_at" in sort_rows and "localeCompare" in sort_rows
+    # 口径持久化：天数 + 排序都在挂载时恢复
+    prefs = _fn_body("mxcLoadPrefs", mxc)
+    assert "MXC_RECENT_KEY" in prefs and "MXC_SORT_KEY" in prefs
+    # window 注册（内联 onclick 可达）
+    handlers = APP_JS[APP_JS.index("const INLINE_HANDLERS"):]
+    for name in ("mxcRecentInput", "mxcRecentChange", "mxcSetSort"):
+        assert name in handlers, name
+    # 排序段控样式（贴行尾 + 小号按钮）
+    mxc_css = (STATIC / "mx-kol-holdings.css").read_text(encoding="utf-8")
+    assert ".mxc-recent .mxc-sort" in mxc_css
