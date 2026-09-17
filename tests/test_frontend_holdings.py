@@ -42,6 +42,33 @@ def test_index_html_includes_holdings_assets():
     assert ".mxv-feed-item{" not in HOLDINGS_CSS and ".mxv-stockcard{" not in HOLDINGS_CSS
 
 
+def test_css_comment_trap_does_not_swallow_rules():
+    # 回归：注释文本里写过「.mxv-feed-*/」——*/ 把注释提前闭合，残余中文说明
+    # 变成非法选择器，连带吞掉紧跟的 .hd-root 浅色变量块（浅色模式失效）。
+    # 用浏览器同款分词法扫描：注释在第一个 */ 处结束，任何选择器段都不该含中文或 */。
+    def browser_rules(text: str) -> list[str]:
+        rules, buf, i = [], "", 0
+        while i < len(text):
+            if text.startswith("/*", i):
+                end = text.find("*/", i + 2)
+                i = len(text) if end == -1 else end + 2
+                continue
+            if text[i] == "{":
+                close = text.find("}", i)
+                rules.append(buf.strip())
+                buf = ""
+                i = (close + 1) if close != -1 else len(text)
+                continue
+            buf += text[i]
+            i += 1
+        return rules
+
+    for css_name in ("holdings.css", "mx-views.css", "mx-kol-holdings.css", "style.css"):
+        css_text = (STATIC / css_name).read_text(encoding="utf-8")
+        bad = [sel for sel in browser_rules(css_text) if re.search(r"[\u4e00-\u9fff]|\*/", sel)]
+        assert not bad, f"{css_name} 注释提前闭合吞掉了规则: {bad[:3]}"
+
+
 def test_holdings_feed_matches_mx_views_feed_contract():
     # 行结构 = 观点研判实时观点流同一套行内网格类；流分段按天单列（不看批次/快照时刻）
     assert "mxv-feed-item" in HOLDINGS_JS and "mxv-feed-cols" in HOLDINGS_JS
