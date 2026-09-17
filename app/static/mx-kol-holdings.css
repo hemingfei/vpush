@@ -45,6 +45,18 @@
 .mxc-src{font-size:10px;color:var(--hd-muted);border:1px dashed var(--hd-btn-line);
   border-radius:4px;padding:0 5px;white-space:nowrap;justify-self:start;}
 
+/* 时间线行自定列模板（时间/操作徽章/方向/标的/标签?/摘要），不再借用 .mxv-feed-item
+   为观点流行定宽的六列：那边第 2/3 列只有 46/38px，「持仓 · 观望」「↑看多」会溢出
+   相邻列、徽章折成两行；且本页行没有大V列，无「标签」徽章的行摘要会掉进原模板
+   100px 窄列被截到几个字。徽章列改 max-content 保单行，摘要显式钉在第 6 列吃满余宽，
+   无标签时第 5 列自动塌缩为 0 */
+.mxc-row{grid-template-columns:36px max-content max-content minmax(48px,84px) auto minmax(0,1fr);gap:8px 6px;}
+.mxc-row .sum{grid-column:6;}
+/* 窄屏（抽屉全宽）：再收一档，给摘要多留字 */
+@media (max-width:760px){
+  .mxc-row{grid-template-columns:30px max-content max-content minmax(40px,64px) auto minmax(0,1fr);gap:8px 4px;}
+}
+
 /* 最近观点天数滑动栏 + 排序切换：拖动中只改文案，松手（change）才刷新持仓汇总 */
 .mxc-recent{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
   padding:6px 2px 8px;border-bottom:1px solid var(--hd-sep);margin-bottom:6px;}
@@ -69,7 +81,9 @@
   background:var(--hd-panel);min-height:0;padding:0;
   border-left:1px solid var(--hd-line);box-shadow:-8px 0 30px rgba(29,42,74,.15);
   overflow-y:auto;display:flex;flex-direction:column;}
-.mxc-drawer-top{display:flex;align-items:center;gap:8px;padding:10px 14px;
+/* 顶部条让出状态栏：安卓 15 edge-to-edge / 刘海屏下 --safe-top 为系统栏高度
+   （style.css :root 定义，安卓壳由原生注入真实值，浏览器 env() 为 0）；sticky 保持吸顶 */
+.mxc-drawer-top{display:flex;align-items:center;gap:8px;padding:calc(10px + var(--safe-top)) 14px 10px;
   border-bottom:1px solid var(--hd-sep);position:sticky;top:0;background:var(--hd-panel);z-index:1;}
 .mxc-drawer-top b{color:var(--hd-strong);font-size:14px;margin-right:auto;}
 .mxc-drawer-top .full{background:var(--hd-soft);border:1px solid var(--hd-btn-line);color:var(--hd-accent);
@@ -78,11 +92,13 @@
 .mxc-drawer-top .close{background:none;border:none;color:var(--hd-faint);font-size:18px;
   cursor:pointer;line-height:1;padding:2px 4px;}
 .mxc-drawer-top .close:hover{color:var(--hd-strong);}
-.mxc-drawer-body{padding:12px 14px 20px;}
+.mxc-drawer-body{padding:12px 14px calc(20px + var(--safe-bottom));}
 @media (max-width:640px){
-  .mxc-drawer-body{padding:10px;}
+  .mxc-drawer-body{padding:10px 10px calc(16px + var(--safe-bottom));}
   /* 窄屏抽屉全宽：页头天窗切换换行更从容 */
   .mxc-drawer .mxc-head{row-gap:8px;}
+  /* 时间线头（标题+五档筛选+条数）一行放不下时折行，不再互相挤压 */
+  .mxc-drawer .mxv-kol-head{flex-wrap:wrap;}
 }
 
 @media (max-width:640px){

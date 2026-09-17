@@ -7528,7 +7528,7 @@ window.addEventListener("hashchange", () => {
 });
 
 // 安卓 APP 返回键接管（原生侧在 MainActivity 经 evaluateJavascript 调用本钩子）：
-// 返回键依次消费——顶层遮罩（灯箱→弹窗→智囊团抽屉）→ 页面级返回（子页回上级 / history）；
+// 返回键依次消费——顶层遮罩（灯箱→弹窗→预估持仓抽屉→智囊团抽屉）→ 页面级返回（子页回上级 / history）；
 // 全都无处可退时返回 false，交回原生弹「退出 APP」确认框。浏览器/PWA 不会调用此钩子。
 window.__VPUSH_BACK__ = function () {
   if (document.querySelector(".lightbox:not(.closing)")) { closeLightbox(); return true; }
@@ -7544,6 +7544,7 @@ window.__VPUSH_BACK__ = function () {
   if (document.querySelector(".mxv-cal")) { mxvCalClose(); return true; } // 智囊团月历弹层
   const kolMenu = document.querySelector(".mxva-kol-menu.open, .news-kol-menu.open");
   if (kolMenu) { kolMenu.classList.remove("open"); return true; } // 分析大V范围/实时资讯·调研纪要大V下拉先收起
+  if (document.querySelector(".mxc-drawer")) { mxcCloseDrawer(); return true; } // 预估持仓抽屉（可能盖在智囊团抽屉之上，先关它）
   if (document.querySelector(".mxv-drawer")) { mxvCloseDrawer(); return true; }
   if (state.pageBackRoute) { go(state.pageBackRoute); return true; }
   if (history.length > 1) { history.back(); return true; }
