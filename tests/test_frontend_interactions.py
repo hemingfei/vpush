@@ -327,6 +327,37 @@ def test_post_card_shows_translation_origin_toggle():
     assert ".post-item .p-tr-grok" in css
 
 
+def test_mx_post_card_holdings_button_first_in_tag_row():
+    """最新动态 MX 帖 tag 区首位出「持仓」按钮，点开右侧预估持仓抽屉（不跳页）。
+
+    约束：仅 MX 平台帖渲染；onclick 不得把 kol_id 拼进 JS 字符串以外的用户可控值
+    （走 this.dataset.kolId）；renderTimeline 整页重绘前须先摘抽屉，防 DOM 被清而
+    工厂引用还挂着的错位状态。
+    """
+    card = _fn_body("postCard")
+    assert 'post.platform === "mx"' in card
+    assert 'class="cat cat-tag tl-hold-btn" data-kol-id=' in card
+    assert "mxcOpenDrawer(this.dataset.kolId)" in card
+    # 按钮在 tag 区第一位：p-meta 内先于 category/回复/标签 chips
+    meta = card[card.index('<div class="p-meta">'):]
+    assert meta.index("tl-hold-btn") < meta.index("renderPostTagChips")
+    assert meta.index("tl-hold-btn") < meta.index('post.category_name ?')
+    # 抽屉复用 mx-kol-holdings 工厂（与 /mx-views 入口同一实现），按钮已挂 window
+    src = APP_JS.read_text(encoding="utf-8")
+    mxc = (APP_JS.parent / "views" / "mx-kol-holdings.js").read_text(encoding="utf-8")
+    assert "function mxcOpenDrawer(" in mxc
+    assert 'document.getElementById("mxv-drawer-slot") || $("#main")' in mxc  # 时间线无 slot 兜底挂 #main
+    handlers = src[src.index("const INLINE_HANDLERS"):]
+    assert "mxcOpenDrawer" in handlers
+    # 时间线整页重绘（换筛选/重进页）先关抽屉；loadTimeline 只重写 #feed 不动抽屉
+    render = _fn_body("renderTimeline")
+    assert "mxcCloseDrawer();" in render
+    load = _fn_body("loadTimeline")
+    assert '$("#feed")' in load and "innerHTML = TL_SKELETON" in load
+    css = STYLE_CSS.read_text(encoding="utf-8")
+    assert ".post-item .p-meta .tl-hold-btn" in css  # 描边式与只读标签区分
+
+
 def test_settings_async_responses_are_owned_by_route_and_session_before_mutation():
     """设置页的 /api/me 响应必须在写 state 或 DOM 前确认路由和会话仍是发起者。"""
     src = APP_JS.read_text(encoding="utf-8")

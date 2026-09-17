@@ -2453,6 +2453,9 @@ async function renderTimeline(seq) {
     ? _livePosts.length > 0
     : (_tlPosts.length && _tlLoadedFilter === tlFilterKey());
   const wide = isWideTimeline();
+  // 换筛选/回动态页整页重绘：先摘掉可能开着的持仓抽屉（mx-kol-holdings），
+  // 否则 innerHTML 重写后抽屉 DOM 被清但工厂引用还在，状态与界面不一致
+  mxcCloseDrawer();
   $("#main").innerHTML = `
     <div class="tl-layout${live ? " live-mode" : ""}">
     <div class="tl-main">
@@ -3963,6 +3966,9 @@ function postCard(post) {
           </div>`
         : `<a class="p-file" href="${escapeHtml(f.url)}" target="_blank" rel="noopener">${PAPERCLIP_ICON} ${escapeHtml(f.name || "附件")}</a>`).join("")}
       <div class="p-meta">
+        ${post.platform === "mx" ? `<button type="button" class="cat cat-tag tl-hold-btn" data-kol-id="${Number(post.kol_id) || 0}"
+          onclick="mxcOpenDrawer(this.dataset.kolId)" title="按该大V近 30 天多空观点回放推演的预估持仓"
+          aria-label="查看${escapeHtml(post.kol_name)}的预估持仓">持仓</button>` : ""}
         ${post.category_name ? `<span class="cat">${escapeHtml(post.category_name)}</span>` : ""}
         ${post.post_type === "reply" ? `<span class="cat">回复</span>` : ""}
         ${renderPostTagChips(post.tags, post.view_directions, post.pending_tags)}

@@ -1542,6 +1542,15 @@ a.kol-card-head:hover .kol-card-info .name { color: var(--color-accent-text); }
      换行交给 .post-item 的 overflow-wrap:anywhere 处理 */
 }
 .post-item .p-meta .cat-tag { margin: 0; }
+/* 最新动态 MX 帖 tag 区首位的「持仓」按钮：描边式与只读标签区分，点开右侧持仓抽屉 */
+.post-item .p-meta .tl-hold-btn {
+  border: 1px solid var(--color-border, rgba(128, 128, 128, .35));
+  background: var(--color-bg, transparent);
+  color: var(--color-accent-text, var(--color-accent));
+  font: inherit;
+  cursor: pointer;
+}
+.post-item .p-meta .tl-hold-btn:hover { border-color: var(--color-accent); }
 /* 「更多N」展开按钮：与标签徽章同形，可点击 */
 .tags-more-btn { border: 0; font: inherit; cursor: pointer; }
 /* 手动 LLM 打标进度条 */
