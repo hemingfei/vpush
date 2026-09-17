@@ -746,6 +746,7 @@ def test_post_origin_link_aligns_with_tags(page: Page, static_origin: str, width
         "id": 1, "kol_id": 1, "kol_name": "淡淡的相思林", "platform": "xueqiu",
         "published_at": "2026-09-07T14:14:00+08:00", "content": "body",
         "category_name": "行业研究", "url": "https://xueqiu.com/1",
+        "tags": ["实盘", "大盘", "调仓", "德明利", "剑桥科技"],
     }]))
     page.set_viewport_size({"width": width, "height": 900})
     page.goto(static_origin)
@@ -755,20 +756,34 @@ def test_post_origin_link_aligns_with_tags(page: Page, static_origin: str, width
     expect(page.get_by_role("link", name="查看原文")).to_be_visible()
     geo = page.evaluate("""() => {
       const cat = document.querySelector('.p-meta span.cat');
-      const origin = document.querySelector('.p-meta a');
+      const exportBtn = document.querySelector('.p-meta .post-card-export');
+      const origin = document.querySelector('.p-meta-actions a');
       const icon = origin.querySelector('svg');
       const cr = cat.getBoundingClientRect();
+      const er = exportBtn.getBoundingClientRect();
       const or = origin.getBoundingClientRect();
       const ir = icon.getBoundingClientRect();
+      const tags = [...document.querySelectorAll('.p-meta > .cat')];
+      const lastTag = tags[tags.length - 1].getBoundingClientRect();
+      const pills = [...document.querySelectorAll('.p-meta > .cat, .p-meta-actions .cat, .p-meta-actions a')];
+      const rows = new Set(pills.map((el) => Math.round(el.getBoundingClientRect().top / 4)));
       return {
         catH: cr.height, originH: or.height, iconH: ir.height,
-        topDelta: Math.abs(cr.top - or.top),
+        actionTopDelta: Math.abs(er.top - or.top),
+        exportLeft: er.left, originLeft: or.left,
+        rowCount: rows.size,
+        actionsAfterTags: er.top + 2 >= lastTag.top,
+        firstRowGap: er.top <= cr.top + 4 && lastTag.top > cr.bottom + 4,
       };
     }""")
     assert geo["originH"] < 28, geo
     assert abs(geo["originH"] - geo["catH"]) <= 2, geo
-    assert geo["topDelta"] <= 2, geo
+    assert geo["actionTopDelta"] <= 2, geo
+    assert geo["exportLeft"] < geo["originLeft"], geo
     assert 10 <= geo["iconH"] <= 14, geo
+    assert geo["rowCount"] <= 4, geo
+    assert geo["actionsAfterTags"], geo
+    assert not geo["firstRowGap"], geo
 
 
 def _install_card_export_stub(page: Page) -> None:
@@ -862,6 +877,30 @@ def test_post_card_export_copies_from_timeline_and_kol(page: Page, static_origin
     page.wait_for_function("() => (window.__exportCardHtml || '').includes('X post full text')")
     expect(page.locator("#toast")).to_contain_text("已复制，去微信粘贴即可")
     assert "@icekale" in page.evaluate("window.__exportCardHtml")
+
+
+def test_post_card_export_shares_on_phone(page: Page, static_origin: str):
+    install_badge_reader_bootstrap(page)
+    page.route("**/api/my/feed*", lambda route: route.fulfill(json=[{
+        "id": 11, "kol_id": 2, "kol_name": "Kale", "platform": "twitter",
+        "kol_external_id": "icekale", "published_at": "2026-09-17 09:00",
+        "title": "Hello", "content": "X post full text",
+        "url": "https://x.com/icekale/status/1", "images": [],
+    }]))
+    page.set_viewport_size({"width": 375, "height": 900})
+    page.goto(static_origin)
+    _install_card_export_stub(page)
+    page.evaluate("""() => {
+      window.__shares = [];
+      navigator.canShare = () => true;
+      navigator.share = async (data) => { window.__shares.push(data); };
+    }""")
+    page.evaluate("() => go('timeline')")
+    page.get_by_role("button", name="复制图卡").click()
+    page.wait_for_function("() => (window.__shares || []).length === 1")
+    shared = page.evaluate("() => window.__shares[0]")
+    assert shared["files"]
+    assert page.evaluate("window.__clipWrites.length") == 0
 
 
 @pytest.mark.parametrize("width", [375, 1440])

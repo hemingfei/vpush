@@ -2,9 +2,9 @@ import { escapeHtml, imgProxyUrl, imgSrcFor } from "../core/html.js";
 import { PLATFORM_ICONS } from "../core/platforms.js";
 
 const CARD_WIDTH = 600;
-const EXPORT_SCALE = 1;
-const PHOTO_MAX = 720;
-const AVATAR_MAX = 128;
+const EXPORT_SCALE = 2;
+const PHOTO_MAX = 1440;
+const AVATAR_MAX = 256;
 const CARD_ACCENT = "#1668e0";
 const CARD_ACCENT_DARK = "#5a9bf5";
 const HOST_ID = "vpush-post-card-host";
@@ -359,7 +359,7 @@ async function fitImage(url, maxEdge) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return dataUrl;
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL("image/jpeg", 0.88);
+    return canvas.toDataURL("image/jpeg", 0.92);
   } catch {
     return "";
   }
@@ -480,6 +480,20 @@ async function copyPng(pngPromise) {
   await clipboard.write([new Item({ "image/png": pngPromise })]);
 }
 
+function isPhone() {
+  return window.matchMedia("(max-width: 768px)").matches;
+}
+
+async function sharePng(blob, filename) {
+  const file = new File([blob], filename, { type: "image/png" });
+  const data = { files: [file] };
+  if (typeof navigator.share !== "function") throw new Error("share-unavailable");
+  if (typeof navigator.canShare === "function" && !navigator.canShare(data)) {
+    throw new Error("share-unavailable");
+  }
+  await navigator.share(data);
+}
+
 export function createPostCardExport({ findPost, isShowSrc, flash }) {
   async function startExportFromClick(post, button) {
     if (button?.dataset.busy === "1") return;
@@ -489,18 +503,36 @@ export function createPostCardExport({ findPost, isShowSrc, flash }) {
       return;
     }
     const pngPromise = renderPngBlob(model);
-    let copied = Promise.reject(new Error("clipboard-unavailable"));
-    try {
-      copied = copyPng(pngPromise);
-    } catch {
-      copied = Promise.reject(new Error("clipboard-unavailable"));
-    }
     if (button) {
       button.dataset.busy = "1";
       button.setAttribute("aria-busy", "true");
     }
-    const [pngResult, copyResult] = await Promise.allSettled([pngPromise, copied]);
     try {
+      if (isPhone() && typeof navigator.share === "function") {
+        const blob = await pngPromise;
+        try {
+          await sharePng(blob, cardFilename(model));
+          return;
+        } catch (err) {
+          if (err?.name === "AbortError") return;
+        }
+        try {
+          await copyPng(Promise.resolve(blob));
+          flash("已复制，去微信粘贴即可");
+          return;
+        } catch {
+          downloadBlob(blob, cardFilename(model));
+          flash("无法复制，已改为下载");
+          return;
+        }
+      }
+      let copied = Promise.reject(new Error("clipboard-unavailable"));
+      try {
+        copied = copyPng(pngPromise);
+      } catch {
+        copied = Promise.reject(new Error("clipboard-unavailable"));
+      }
+      const [pngResult, copyResult] = await Promise.allSettled([pngPromise, copied]);
       if (copyResult.status === "fulfilled") {
         flash("已复制，去微信粘贴即可");
         return;
@@ -511,6 +543,8 @@ export function createPostCardExport({ findPost, isShowSrc, flash }) {
         return;
       }
       flash(pngResult.reason?.message || "生成失败，请再试一次", "error");
+    } catch (err) {
+      flash(err?.message || "生成失败，请再试一次", "error");
     } finally {
       if (button) {
         button.dataset.busy = "0";
