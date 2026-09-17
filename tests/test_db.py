@@ -2247,6 +2247,8 @@ def test_feed_orders_by_published_at_not_insert_id(tmp_path):
     ]
     # 打标回填的 below_id 游标依赖 id 序，保持不变
     assert [r["external_id"] for r in db.list_posts(kol_id=kid)] == ["july", "aug"]
+    assert feed[0]["kol_external_id"] == "3576712780"
+    assert db.list_posts(kol_id=kid)[0]["kol_external_id"] == "3576712780"
 
 
 def test_feed_since_id_ignores_backfilled_old_posts(tmp_path):

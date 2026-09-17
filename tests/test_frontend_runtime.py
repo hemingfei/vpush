@@ -750,10 +750,11 @@ def test_post_origin_link_aligns_with_tags(page: Page, static_origin: str, width
     page.set_viewport_size({"width": width, "height": 900})
     page.goto(static_origin)
     page.evaluate("() => go('timeline')")
-    expect(page.locator(".post-item .p-meta .cat:not(a)")).to_be_visible()
+    expect(page.locator(".post-item .p-meta span.cat")).to_be_visible()
+    expect(page.get_by_role("button", name="复制图卡")).to_be_visible()
     expect(page.get_by_role("link", name="查看原文")).to_be_visible()
     geo = page.evaluate("""() => {
-      const cat = document.querySelector('.p-meta .cat:not(a)');
+      const cat = document.querySelector('.p-meta span.cat');
       const origin = document.querySelector('.p-meta a');
       const icon = origin.querySelector('svg');
       const cr = cat.getBoundingClientRect();
@@ -768,6 +769,99 @@ def test_post_origin_link_aligns_with_tags(page: Page, static_origin: str, width
     assert abs(geo["originH"] - geo["catH"]) <= 2, geo
     assert geo["topDelta"] <= 2, geo
     assert 10 <= geo["iconH"] <= 14, geo
+
+
+def _install_card_export_stub(page: Page) -> None:
+    page.evaluate("""() => {
+      window.htmlToImage = {
+        toCanvas: async (node) => {
+          window.__exportCardHtml = node.outerHTML;
+          const canvas = document.createElement("canvas");
+          canvas.width = 12;
+          canvas.height = 12;
+          const ctx = canvas.getContext("2d");
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(0, 0, 12, 12);
+          return canvas;
+        },
+      };
+      window.__clipWrites = [];
+      navigator.clipboard.write = async (items) => { window.__clipWrites.push(items); };
+      window.ClipboardItem = class { constructor(dict) { this.dict = dict; } };
+    }""")
+
+
+def test_post_card_export_copies_from_timeline_and_kol(page: Page, static_origin: str):
+    install_badge_reader_bootstrap(page)
+    posts = [
+        {
+            "id": 11, "kol_id": 2, "kol_name": "Kale", "platform": "twitter",
+            "kol_external_id": "icekale", "published_at": "2026-09-17 09:00",
+            "title": "Hello", "content": "X post full text",
+            "url": "https://x.com/icekale/status/1", "images": [],
+        },
+        {
+            "id": 12, "kol_id": 1, "kol_name": "调研爱好者", "platform": "xueqiu",
+            "kol_external_id": "3576712780", "published_at": "2026-09-17 08:00",
+            "title": "雪球标题", "content": "雪球正文很长，超过两百字。" + ("哈" * 80),
+            "url": "https://xueqiu.com/1", "category_name": "行业研究",
+        },
+        {
+            "id": 13, "kol_id": 3, "kol_name": "组合A", "platform": "combination",
+            "published_at": "2026-09-17 07:00", "content": "",
+            "detail": {
+                "stats": [["仓位", "80%"]],
+                "actions": [{"type": "买入", "stock": "茅台", "symbol": "600519", "prev": "0%", "target": "10%"}],
+                "holdings": [{"name": "茅台", "symbol": "600519", "weight": 10}],
+                "cash": "20%",
+            },
+            "url": "https://xueqiu.com/P/ZH1",
+        },
+    ]
+    page.route("**/api/my/feed*", lambda route: route.fulfill(json=posts))
+    page.route("**/api/kols/2/posts*", lambda route: route.fulfill(json=[posts[0]]))
+    page.route("**/api/kols/2", lambda route: route.fulfill(json={
+        "id": 2, "name": "Kale", "platform": "twitter", "external_id": "icekale", "subscribed": True,
+    }))
+    page.set_viewport_size({"width": 1280, "height": 900})
+    page.goto(static_origin)
+    _install_card_export_stub(page)
+    page.evaluate("() => go('timeline')")
+    expect(page.get_by_role("button", name="复制图卡")).to_have_count(3)
+    page.get_by_role("button", name="复制图卡").first.click()
+    page.wait_for_function("() => (window.__exportCardHtml || '').includes('X post full text')")
+    expect(page.locator("#toast")).to_contain_text("已复制，去微信粘贴即可")
+    twitter_html = page.evaluate("window.__exportCardHtml")
+    assert "@icekale" in twitter_html
+    assert "VPush" in twitter_html
+    assert "vpush.net" not in twitter_html
+    assert page.evaluate("window.__clipWrites.length") == 1
+
+    page.get_by_role("button", name="复制图卡").nth(1).click()
+    page.wait_for_function("() => (window.__exportCardHtml || '').includes('超过两百字')")
+    xueqiu_html = page.evaluate("window.__exportCardHtml")
+    assert "哈" * 80 in xueqiu_html
+    assert 'data-platform="xueqiu"' in xueqiu_html
+    assert "xueqiu-icon" in xueqiu_html
+
+    page.evaluate("() => setTheme('dark')")
+    page.get_by_role("button", name="复制图卡").nth(2).click()
+    page.wait_for_function("() => (window.__exportCardHtml || '').includes('调仓明细')")
+    combo_html = page.evaluate("window.__exportCardHtml")
+    assert "is-dark" in combo_html
+    assert 'data-platform="combination"' in combo_html
+    assert "茅台" in combo_html
+    assert "现有持仓" in combo_html
+    assert "调仓明细" in combo_html
+
+    page.evaluate("() => go('kol/2')")
+    expect(page.get_by_role("heading", name="Kale · 最近动态")).to_be_visible()
+    expect(page.get_by_role("button", name="复制图卡")).to_have_count(1)
+    page.evaluate("() => { window.__exportCardHtml = ''; }")
+    page.get_by_role("button", name="复制图卡").click()
+    page.wait_for_function("() => (window.__exportCardHtml || '').includes('X post full text')")
+    expect(page.locator("#toast")).to_contain_text("已复制，去微信粘贴即可")
+    assert "@icekale" in page.evaluate("window.__exportCardHtml")
 
 
 @pytest.mark.parametrize("width", [375, 1440])

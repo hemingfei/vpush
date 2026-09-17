@@ -28,6 +28,7 @@ ADMIN_KOLS_JS = APP_JS.parent / "views" / "admin" / "kol.js"
 ADMIN_INFRA_JS = APP_JS.parent / "views" / "admin" / "infra.js"
 ADMIN_DASHBOARD_JS = APP_JS.parent / "views" / "admin" / "dashboard.js"
 IMA_JS = APP_JS.parent / "views" / "ima.js"
+POST_CARD_EXPORT_JS = APP_JS.parent / "views" / "post-card-export.js"
 ADMIN_IMA_COLLECTOR_JS = APP_JS.parent / "views" / "admin" / "ima-collector.js"
 ADMIN_KNOWLEDGE_JS = APP_JS.parent / "views" / "admin" / "knowledge.js"
 CICC_JS = APP_JS.parent / "views" / "admin" / "cicc.js"
@@ -43,6 +44,7 @@ VIEW_JS_SOURCES = (
     ADMIN_INFRA_JS,
     ADMIN_DASHBOARD_JS,
     IMA_JS,
+    POST_CARD_EXPORT_JS,
     ADMIN_IMA_COLLECTOR_JS,
     ADMIN_KNOWLEDGE_JS,
     CICC_JS,
@@ -3673,12 +3675,162 @@ def test_post_origin_link_matches_adjacent_tags():
     assert ".post-item .p-meta .ui-icon { width: 12px; height: 12px; }" in css
     assert ".post-item .p-meta a" in css
     mobile = re.search(
-        r"@media \(max-width: 768px\) \{.*?\.post-item \.p-meta a\s*\{([^}]*)\}",
+        r"@media \(max-width: 768px\) \{.*?\.post-item \.p-meta a(?:,\s*\.post-item \.p-meta button\.cat-export)?\s*\{([^}]*)\}",
         css,
         re.DOTALL,
     )
     assert mobile, "缺少移动端 .post-item .p-meta a 规则"
     assert "min-height: 0" in mobile.group(1)
+
+
+def test_post_card_has_image_export_button():
+    """时间线和大 V 帖底栏都有图卡入口，知识星球没有原文链接也要能导出。"""
+    card = _fn_body("postCard")
+    export_fn = _fn_body("exportPostCard")
+    src = APP_JS.read_text()
+    css = STYLE_CSS.read_text()
+    assert "exportPostCard(${post.id}, event)" in card
+    assert "class=\"cat cat-export post-card-export\"" in card
+    assert "IMAGE_CARD_ICON" in card
+    assert "复制图卡" in card
+    assert 'from "./views/post-card-export.js"' in src
+    assert "createPostCardExport({" in src
+    assert "_kolPosts" in src
+    assert "findExportablePost" in src
+    assert "startExportFromClick" in export_fn
+    assert "button.cat-export" in css
+    assert "button.cat-export::before" in css
+
+
+def test_post_to_card_model_maps_full_text_and_platform_fields():
+    """图卡用全文、跟原文/译文开关，雪球不带 handle，组合带调仓明细。"""
+    js = r"""
+import assert from "node:assert/strict";
+import { postToCardModel, hasCardContent, cardHandle, formatCardTime } from "./app/static/views/post-card-export.js";
+
+const xueqiu = postToCardModel({
+  id: 1,
+  platform: "xueqiu",
+  kol_name: "调研爱好者",
+  kol_external_id: "3576712780",
+  title: "标题",
+  content: "标题后面还有很长的正文，超过时间线截断。",
+  images: ["https://example.com/a.jpg", "https://example.com/b.jpg"],
+  published_at: "2026-09-17 09:00",
+});
+assert.equal(xueqiu.title, "");
+assert.match(xueqiu.body, /超过时间线截断/);
+assert.equal(xueqiu.handle, "");
+assert.equal(xueqiu.images.length, 2);
+assert.equal(hasCardContent(xueqiu), true);
+
+const tweet = postToCardModel({
+  id: 2,
+  platform: "twitter",
+  kol_name: "Kale",
+  kol_external_id: "icekale",
+  title: "Hello",
+  content: "Hello translated",
+  title_src: "Hello",
+  content_src: "Hello original full text that must not be truncated.",
+}, { showSrc: true });
+assert.equal(tweet.handle, "icekale");
+assert.equal(tweet.body, "Hello original full text that must not be truncated.");
+assert.equal(cardHandle({ platform: "weibo", kol_external_id: "123456" }), "");
+
+const combo = postToCardModel({
+  id: 3,
+  platform: "combination",
+  kol_name: "组合",
+  content: "",
+  detail: {
+    stats: [["仓位", "80%"]],
+    actions: [{ type: "买入", stock: "茅台", symbol: "600519", prev: "0%", target: "10%", price: "1800" }],
+    holdings: [{ name: "茅台", symbol: "600519", weight: 10 }],
+    cash: "20%",
+  },
+});
+assert.equal(combo.body, "");
+assert.deepEqual(combo.combo.stats[0], ["仓位", "80%"]);
+assert.equal(combo.combo.actions[0].stock, "茅台");
+assert.equal(combo.combo.holdings[0].weight, 10);
+assert.equal(combo.combo.cash, "20%");
+assert.equal(hasCardContent(combo), true);
+
+const now = new Date(Date.UTC(2026, 8, 17, 1, 0));
+assert.match(formatCardTime("2026-09-17 09:00", now), /今天/);
+"""
+    subprocess.run(["node", "--input-type=module", "-e", js], cwd=ROOT, check=True)
+
+
+def test_post_card_marks_use_platform_icons_in_duty_blue():
+    """雪球/微博/Truth 用各自角标，颜色跟卡面蓝；组合多调仓和持仓。"""
+    js = r"""
+import assert from "node:assert/strict";
+import { postToCardModel, renderCardHtml } from "./app/static/views/post-card-export.js";
+
+const now = new Date(Date.UTC(2026, 8, 17, 1, 0));
+const html = (platform, extra = {}) => renderCardHtml(postToCardModel({
+  id: 1,
+  platform,
+  kol_name: "作者",
+  content: "正文",
+  published_at: "2026-09-17 09:00",
+  ...extra,
+}), { now });
+
+const xueqiu = html("xueqiu");
+assert.match(xueqiu, /data-platform="xueqiu"/);
+assert.match(xueqiu, /xueqiu-icon/);
+assert.match(xueqiu, /fill="#1668e0"/);
+assert.doesNotMatch(xueqiu, /#287DFF|#e6162d|#ff8200/i);
+
+const weibo = html("weibo");
+assert.match(weibo, /data-platform="weibo"/);
+assert.match(weibo, /M10\.1 20\.3/);
+assert.match(weibo, /fill="#1668e0"/);
+assert.doesNotMatch(weibo, /#e6162d|#ff8200|#287DFF/i);
+
+const truth = html("truth", { kol_external_id: "realDonaldTrump" });
+assert.match(truth, /data-platform="truth"/);
+assert.match(truth, /rect x="4\.4"/);
+assert.match(truth, /fill="#1668e0"/);
+assert.match(truth, /@realDonaldTrump/);
+
+const tweet = html("twitter", { kol_external_id: "icekale" });
+assert.match(tweet, /M14\.2 10\.2/);
+assert.match(tweet, /@icekale/);
+
+const combo = html("combination", {
+  content: "",
+  detail: {
+    stats: [["仓位", "80%"]],
+    actions: [{ type: "买入", stock: "茅台", symbol: "600519", prev: "0%", target: "10%" }],
+    holdings: [{ name: "茅台", symbol: "600519", weight: 10 }],
+    cash: "20%",
+  },
+});
+assert.match(combo, /data-platform="combination"/);
+assert.match(combo, /M21 16V8/);
+assert.match(combo, /调仓明细/);
+assert.match(combo, /现有持仓/);
+assert.match(combo, /茅台/);
+
+assert.match(xueqiu, /class="brand"/);
+assert.match(xueqiu, /VPush/);
+assert.match(xueqiu, /class="brand-logo"/);
+assert.doesNotMatch(xueqiu, /vpush\.net/);
+
+const dark = renderCardHtml(postToCardModel({
+  id: 2, platform: "weibo", kol_name: "作者", content: "正文",
+}), { darkCard: true });
+assert.match(dark, /fill="#5a9bf5"/);
+assert.match(dark, /VPush/);
+assert.doesNotMatch(dark, /vpush\.net/);
+assert.match(dark, /stroke="#e4e6eb"/);
+assert.doesNotMatch(dark, /#e6162d|#ff8200/i);
+"""
+    subprocess.run(["node", "--input-type=module", "-e", js], cwd=ROOT, check=True)
 
 
 def test_x_badge_uses_system_blue_in_both_themes():
@@ -5166,6 +5318,7 @@ def test_logout_clears_timeline_and_bind_cache():
     assert "clearSessionCaches()" in body
     clear = _fn_body("clearSessionCaches")
     assert "_tlPosts.length = 0" in clear
+    assert "_kolPosts.length = 0" in clear
     assert "_tlLoadedFilter = null" in clear
     assert "pendingBind = null" in clear
     assert "state.timelineFavorite = false" in clear

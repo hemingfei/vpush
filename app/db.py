@@ -5017,7 +5017,8 @@ class DB:
     ) -> list[dict]:
         sql = (
             "SELECT p.*, k.name AS kol_name, k.category_id AS category_id, "
-            "k.avatar_url AS avatar_url, c.name AS category_name FROM posts p "
+            "k.avatar_url AS avatar_url, k.external_id AS kol_external_id, "
+            "c.name AS category_name FROM posts p "
             "JOIN kols k ON k.id = p.kol_id "
             "LEFT JOIN categories c ON c.id = k.category_id"
         )
@@ -5198,7 +5199,8 @@ class DB:
             )
         rows = _sanitize_post_detail(_normalize_post_tags(_normalize_post_images(self._rows(
             "SELECT p.*, k.name AS kol_name, k.category_id AS category_id, "
-            "k.avatar_url AS avatar_url, c.name AS category_name, "
+            "k.avatar_url AS avatar_url, k.external_id AS kol_external_id, "
+            "c.name AS category_name, "
             "COALESCE(s.favorite, 0) AS favorite, "
             "COALESCE(s.hide_images, 0) AS _hide_images FROM posts p "
             "JOIN kols k ON k.id = p.kol_id "
