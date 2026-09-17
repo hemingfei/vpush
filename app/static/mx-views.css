@@ -223,7 +223,7 @@
   background:var(--mxv-panel);color:var(--mxv-muted);font-size:10px;line-height:1;
   border-radius:8px;padding:2px 4px;cursor:pointer;}
 .mxv-hold-btn:hover{color:var(--mxv-accent);border-color:var(--mxv-accent);}
-.mxv-hold-btn.inline{position:static;margin-left:auto;padding:2px 8px;font-size:11px;} /* 大V抽屉头部行内变体 */
+.mxv-hold-btn.inline{position:static;margin:0 0 8px;padding:3px 12px;font-size:12px;} /* 大V抽屉头部下方块按钮（头像下、筛选行上） */
 .mxv-kolcard .n{color:var(--mxv-text);font-size:13px;}
 .mxv-kolcard .fav{color:var(--mxv-gold);font-size:11px;margin-left:3px;}
 .mxv-kolcard .mini{display:flex;height:5px;border-radius:3px;overflow:hidden;margin:5px 0;background:var(--mxv-rail);}

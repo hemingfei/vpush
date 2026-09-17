@@ -624,12 +624,13 @@ def test_mx_kol_holdings_drawer_entry_and_shell():
     bind = _fn_body("mxvBindFeedHighlight", js)
     assert 'dataset.act === "mxc"' in bind and "openHoldingsDrawer(" in bind
     # 大V抽屉头部行内变体：委托挂 #mxv-drawer-body，点击换壳（先收起原抽屉）；
-    # 位置在头像行下方、方向/操作筛选行上方（独立块，不再顶右上角）
+    # 位置在头像行下方、方向/操作筛选行上方（独立块，不再顶右上角）——在 kol 分支内比对顺序
     drawer_body = _fn_body("mxvRenderDrawerBody", js)
     assert 'mxv-hold-btn inline" data-kol-id=' in drawer_body
     assert "查看持仓</button>" in drawer_body
-    assert drawer_body.index('mxv-hold-btn inline"') > drawer_body.index("border-radius:50%")
-    assert drawer_body.index('mxv-hold-btn inline"') < drawer_body.index("mxvDrawerFiltersHtml(")
+    kol_branch = drawer_body[drawer_body.index("} else {"):]
+    assert kol_branch.index("border-radius:50%") < kol_branch.index('mxv-hold-btn inline"')
+    assert kol_branch.index('mxv-hold-btn inline"') < kol_branch.index("mxvDrawerFiltersHtml(")
     dbind = _fn_body("mxvBindDrawerFilters", js)
     assert ".mxv-hold-btn[data-kol-id]" in dbind and "openHoldingsDrawer(" in dbind
     # 抽屉实现（mx-kol-holdings.js）：外壳/关闭/Esc/路由离开清理/完整页跳转

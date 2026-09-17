@@ -1598,13 +1598,13 @@ export function createMxViewsView(dependencies) {
         ${mxvTimelineListHtml(data.timeline)}`;
     } else {
       body.innerHTML = `
-        <div style="margin:6px 0 10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <div style="margin:6px 0 8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
           ${data.kol.avatar ? `<img src="${escapeHtml(data.kol.avatar)}" style="width:34px;height:34px;border-radius:50%" alt="">` : ""}
           <b style="color:var(--mxv-strong)">${escapeHtml(data.kol.name)}</b>
           <span style="color:var(--mxv-faint);font-size:12px">${data.timeline.length} 条观点 · 截至 ${escapeHtml(_mxv.at || "")}</span>
-          <button type="button" class="mxv-hold-btn inline" data-kol-id="${Number(data.kol.kol_id || _mxv.drawer.kolId)}"
-            title="预估持仓（近 30 天多空观点回放）">持仓</button>
         </div>
+        <button type="button" class="mxv-hold-btn inline" data-kol-id="${Number(data.kol.kol_id || _mxv.drawer.kolId)}"
+          title="预估持仓（近 30 天多空观点回放）" aria-label="查看${escapeHtml(data.kol.name)}的预估持仓">查看持仓</button>
         ${mxvDrawerFiltersHtml(data.timeline)}
         ${mxvTimelineListHtml(data.timeline)}`;
     }
