@@ -337,7 +337,7 @@ def test_mx_post_card_holdings_button_first_in_tag_row():
     card = _fn_body("postCard")
     assert 'post.platform === "mx"' in card
     assert 'class="cat tl-hold-btn" data-kol-id=' in card
-    assert "HOLDINGS_ICON} 持仓" in card  # 与「图卡」按钮同款：图标 + 文字
+    assert "持仓 ${HOLDINGS_ICON}" in card  # 与「图卡」按钮同款：文字 + 图标（图标在右）
     assert "mxcOpenDrawer(this.dataset.kolId)" in card
     # 按钮在 tag 区第一位：p-meta 内先于 category/回复/标签 chips
     meta = card[card.index('<div class="p-meta">'):]
