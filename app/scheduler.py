@@ -2317,6 +2317,13 @@ class Scheduler:
                         logger.info("清理操作日志 %d 条（保留 180 天）", removed_admin)
                 except Exception:  # noqa: BLE001
                     logger.exception("操作日志清理失败")
+                try:
+                    from . import imgbed as imgbed_mod
+                    removed_img = await asyncio.to_thread(imgbed_mod.purge_expired, self.db)
+                    if removed_img:
+                        logger.info("清理过期图床镜像 %d 条", removed_img)
+                except Exception:  # noqa: BLE001
+                    logger.exception("图床镜像清理失败")
             elapsed = time.monotonic() - started
             delay = _scheduler_loop_delay(
                 interval_seconds,

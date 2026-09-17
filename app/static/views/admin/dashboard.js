@@ -313,7 +313,7 @@ export function createAdminDashboardView(dependencies) {
     const connected = !!info.enabled;
     const tokenHint = info.token_set
       ? (info.token_from_env ? "已从环境变量读取，留空保持原密钥" : "已配置，留空保持原密钥")
-      : "在图床后台「安全设置 → API Token 管理」创建，勾上传权限";
+      : "在图床后台「安全设置 → API Token 管理」创建，勾上传和删除权限";
     const counts = connected
       ? `已镜像 ${info.ready_count || 0} 张 · 排队 ${info.pending_count || 0} 张 · 失败 ${info.failed_count || 0} 张`
       : "未接入时 X 配图仍走服务端代理";
@@ -332,7 +332,7 @@ export function createAdminDashboardView(dependencies) {
       <header class="section-head">
         <div>
           <h2 class="section-title">图床</h2>
-          <p class="section-meta">${imgbedStatusLabel(info)} · ${counts}。把 X 配图镜像到自建图床，大陆直连可看；代理兜底一直在。接线：打开图床后台 → 创建 API 密钥（勾上传）→ 地址和密钥贴到下面，保存即生效。开源项目 <a href="https://github.com/MarSeventh/CloudFlare-ImgBed" target="_blank" rel="noopener">CloudFlare-ImgBed</a>。</p>
+          <p class="section-meta">${imgbedStatusLabel(info)} · ${counts}。把 X 配图镜像到自建图床，大陆直连可看；代理兜底一直在。接线：打开图床后台 → 创建 API 密钥（勾上传和删除）→ 地址和密钥贴到下面，保存即生效。开源项目 <a href="https://github.com/MarSeventh/CloudFlare-ImgBed" target="_blank" rel="noopener">CloudFlare-ImgBed</a>。</p>
         </div>
       </header>
       <label class="field-label" for="imgbed-base-url">图床地址</label>
@@ -340,6 +340,12 @@ export function createAdminDashboardView(dependencies) {
       ${checkError}
       <label class="field-label" for="imgbed-token">API 密钥</label>
       <input id="imgbed-token" class="form-control" type="password" autocomplete="new-password" placeholder="${escapeHtml(tokenHint)}">
+      <div class="cfg-fields">
+        <label class="cfg-field" for="imgbed-retention-days" title="超过后删除图床文件和镜像记录，展示退回原图；0 表示不清理">
+          <span>图片保留时间<span class="cfg-unit">天</span></span>
+          <input id="imgbed-retention-days" class="form-control" type="number" min="0" max="3650" value="${info.retention_days ?? 30}">
+        </label>
+      </div>
       <details class="imgbed-advanced">
         <summary class="cfg-group-title">高级</summary>
         <div class="cfg-fields">
