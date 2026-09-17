@@ -1214,3 +1214,75 @@ def test_holdings_view_manage_cards_feed_flow(page: Page):
     deletes = page.evaluate("hdTest.calls.filter(c => c.method === 'DELETE')")
     assert deletes == [{"path": "/api/my/holdings/1", "method": "DELETE", "body": None}]
     assert "已删除" in [f[0] for f in page.evaluate("hdTest.flashes")]
+
+
+def test_mx_kol_holdings_slider_drags_while_held_and_sorts(page: Page):
+    """预估持仓「最近观点」滑块按住可整程左右拖动，松手（change）才刷新汇总并持久化；
+    排序段控按仓位/按时间（last_at 新→旧）可切换。抽屉宿主装配（mxcOpenDrawer 桩依赖）。
+
+    回归：此前 oninput 直接重绘汇总，innerHTML 连带替换 range 元素自身，
+    按住拖动即被打断——用例断言拖动全程元素存活且值跟手。"""
+    page.clock.install(time=datetime(2026, 9, 17, 4, 0, tzinfo=UTC))  # 北京 12:00
+    page.evaluate("""async () => {
+      localStorage.setItem("mxc_recent_days", "0");
+      localStorage.removeItem("mxc_sort");
+      document.body.innerHTML = '<main id="mxv-drawer-slot"></main>';
+      const { createMxKolHoldingsView } = await import("/views/mx-kol-holdings.js");
+      const h = window.mxcTest = {};
+      const holdings = [
+        { target_name: "甲股", weight: 50, direction: "bull", since: "2026-08-01 09:00", last_at: "2026-08-25 10:00", last_day: "2026-08-25" },
+        { target_name: "乙股", weight: 30, direction: "bull", since: "2026-09-02 09:00", last_at: "2026-09-17 09:00", last_day: "2026-09-17" },
+        { target_name: "丙股", weight: 20, direction: "neutral", since: "2026-09-03 09:00", last_at: "2026-09-15 15:00", last_day: "2026-09-15" },
+      ];
+      const view = createMxKolHoldingsView({
+        $: (sel) => document.querySelector(sel),
+        state: {},
+        api: async () => ({ kol: { kol_id: 42, name: "测试大V", avatar: "" }, window_days: 30,
+          timeline: [], holdings, topics: [], opinion_count: 3, generated_at: "2026-09-17 12:00" }),
+        escapeHtml: (s) => String(s), setPageTitle: () => {}, go: () => {},
+        routeStillActive: () => true, emptyState: () => "", flash: () => {},
+        closeViewsDrawer: () => {},
+      });
+      Object.assign(window, view);
+      h.rows = () => [...document.querySelectorAll("#mxc-summary .mxc-h-name")].map((e) => e.textContent);
+    }""")
+    page.evaluate("mxcOpenDrawer(42)")
+    page.wait_for_selector("#mxc-summary .mxc-h-name")
+    assert page.evaluate("window.mxcTest.rows()") == ["甲股", "乙股", "丙股"]  # 不筛选：全量按仓位序
+
+    box = page.locator("#mxc-recent-range").bounding_box()
+    cy = box["y"] + box["height"] / 2
+    handle = page.evaluate_handle("document.getElementById('mxc-recent-range')")
+    # 按住拖动：中点 → 最右 → 最左 → 中点偏右，全程不松手
+    page.mouse.move(box["x"] + box["width"] / 2, cy)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] - 2, cy, steps=8)
+    assert page.evaluate("Number(document.getElementById('mxc-recent-range').value)") == 20
+    assert page.evaluate("el => el.isConnected", handle)  # 旧代码此处已被重绘替换 → False，拖动即断
+    page.mouse.move(box["x"] + 2, cy, steps=8)
+    assert page.evaluate("Number(document.getElementById('mxc-recent-range').value)") == 0
+    # 拖动中只改数值/提示文案：汇总不刷新（仍 3 行）
+    assert page.evaluate("window.mxcTest.rows()") == ["甲股", "乙股", "丙股"]
+    assert page.evaluate('document.getElementById("mxc-recent-val").textContent') == "0"
+    page.mouse.move(box["x"] + box["width"] * 0.55, cy, steps=6)
+    page.mouse.up()
+    # 松手（change）才刷新：v≈11 → cutoff 09-06 滤掉甲股（08-25），并落 localStorage
+    expect(page.locator("#mxc-summary .mxc-h-name")).to_have_count(2)
+    assert page.evaluate("window.mxcTest.rows()") == ["乙股", "丙股"]
+    assert page.evaluate('localStorage.getItem("mxc_recent_days")') == "11"
+    assert page.locator("#mxc-summary .hd-hint[title]").count() == 1  # 「已滤」提示
+
+    # 排序：回不筛选后按时间 = last_at 新→旧；按仓位回落权重序；选择落 localStorage
+    page.evaluate("mxcRecentChange(0)")
+    page.locator(".mxc-recent .mxc-sort button", has_text="按时间").click()
+    assert page.evaluate("window.mxcTest.rows()") == ["乙股", "丙股", "甲股"]
+    assert page.locator(".mxc-recent .mxc-sort .on", has_text="按时间").count() == 1
+    page.locator(".mxc-recent .mxc-sort button", has_text="按仓位").click()
+    assert page.evaluate("window.mxcTest.rows()") == ["甲股", "乙股", "丙股"]
+    assert page.evaluate('localStorage.getItem("mxc_sort")') == "weight"
+
+    # 键盘步进走同一 change 路径：数值 +1 即时刷新（cutoff 09-16 滤掉丙股）
+    page.focus("#mxc-recent-range")
+    page.keyboard.press("ArrowRight")
+    assert page.evaluate("Number(document.getElementById('mxc-recent-range').value)") == 1
+    assert page.evaluate("window.mxcTest.rows()") == ["乙股"]
