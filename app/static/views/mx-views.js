@@ -13,7 +13,10 @@ export function createMxViewsView(dependencies) {
     currentAdminSeq,
     emptyState,
     flash,
+    openHoldingsDrawer,
   } = dependencies;
+  // Esc 关闭持仓抽屉：实现随抽屉工厂走（参数解构里箭头函数默认值不合法，拆出来赋值）
+  const closeHoldingsDrawer = dependencies.closeHoldingsDrawer;
 
   window._mxvPosts = []; // 证据原帖缓存，供 app.js openRawModal 查找
   window._mxvTargets = []; // 标的索引，供 onclick 按下标打开（避免外部名称注入 JS 字符串）
@@ -80,6 +83,7 @@ export function createMxViewsView(dependencies) {
       if (e.key !== "Escape") return;
       if (e.isComposing || e.keyCode === 229) return; // 输入法组字中：Esc 先取消组词，不当页面级 Esc 处理
       if (document.querySelector(".mxv-cal")) { mxvCalClose(); return; }
+      if (document.querySelector(".mxc-drawer")) { closeHoldingsDrawer(); return; }
       if (_mxv.feedKolOpen) { _mxv.feedKolOpen = false; mxvRenderFeed(); return; }
       const fsearch = document.activeElement && document.activeElement.closest
         && document.activeElement.closest(".mxv-fsearch");
@@ -112,6 +116,9 @@ export function createMxViewsView(dependencies) {
     }
     const d = document.querySelector(".mxv-drawer-mask"); if (d) d.remove();
     const dr = document.querySelector(".mxv-drawer"); if (dr) dr.remove();
+    // 预估持仓抽屉（mx-kol-holdings.js）同一时刻最多一个，路由离开一并摘除
+    const md = document.querySelector(".mxc-drawer-mask"); if (md) md.remove();
+    const mdr = document.querySelector(".mxc-drawer"); if (mdr) mdr.remove();
     mxvCalClose();
     Object.assign(_mxv, { day: null, payload: null, at: null, drawer: null, hasNew: false, sseOk: false,
       feedBatches: [], feedKey: "", feedPending: false, feedLoading: false, feedFailed: false,
@@ -803,7 +810,11 @@ export function createMxViewsView(dependencies) {
       const fav = _mxv.followed.has(Number(k.kol_id));
       return `
       <div class="mxv-kolcard" onclick="mxvOpenKol(${k.kol_id})">
-        ${k.avatar ? `<img src="${escapeHtml(k.avatar)}" alt="" loading="lazy">` : `<div class="ava"></div>`}
+        <div class="mxv-avawrap">
+          ${k.avatar ? `<img src="${escapeHtml(k.avatar)}" alt="" loading="lazy">` : `<div class="ava"></div>`}
+          <button type="button" class="mxv-hold-btn" onclick="event.stopPropagation();mxcOpenDrawer(${k.kol_id})"
+            title="预估持仓（近 30 天多空观点回放）" aria-label="查看${escapeHtml(k.name)}的预估持仓">持仓</button>
+        </div>
         <div style="flex:1;min-width:0">
           <div class="n">${escapeHtml(k.name)}${fav ? `<span class="fav" title="已关注">★</span>` : ""} <span style="color:var(--mxv-faint);font-size:11px">${k.opinion_count} 观点</span></div>
           <div class="mini"><div class="b" style="width:${Math.round((b / tot) * 100)}%"></div>
@@ -1132,7 +1143,11 @@ export function createMxViewsView(dependencies) {
         `<span class="mxv-badge act">${escapeHtml(a)}×${n}</span>`).join(" ");
       return `
       <div class="mxv-kolcard" data-act="kol" data-kol-id="${g.id}">
-        ${g.avatar ? `<img src="${escapeHtml(g.avatar)}" alt="" loading="lazy">` : `<div class="ava"></div>`}
+        <div class="mxv-avawrap">
+          ${g.avatar ? `<img src="${escapeHtml(g.avatar)}" alt="" loading="lazy">` : `<div class="ava"></div>`}
+          <button type="button" class="mxv-hold-btn" data-act="mxc" data-kol-id="${g.id}"
+            title="预估持仓（近 30 天多空观点回放）" aria-label="查看${escapeHtml(g.name)}的预估持仓">持仓</button>
+        </div>
         <div style="flex:1;min-width:0">
           <div class="n">${escapeHtml(g.name)}${_mxv.followed.has(g.id) ? `<span class="fav" title="已关注">★</span>` : ""}
             <span style="color:var(--mxv-faint);font-size:11px">${g.ops.length} 观点</span></div>
@@ -1272,15 +1287,23 @@ export function createMxViewsView(dependencies) {
       // 题材/个股名、大V名 → 弹右侧抽屉；不触发标的高亮锁定
       const actEl = e.target.closest("[data-act]");
       if (actEl) {
+        if (actEl.dataset.act === "mxc") { // 头像旁「持仓」按钮 → 预估持仓抽屉
+          openHoldingsDrawer(Number(actEl.dataset.kolId));
+          return;
+        }
         const item = actEl.closest("[data-mxv-hl]");
+        if (actEl.dataset.act === "kol") {
+          // 大V视图卡片自身带 data-kol-id（卡上无 data-mxv-hl 祖先，不再被守卫拦死）；
+          // 观点流内的大V名则借所属 feed item 的 data-kol-id
+          const kolId = actEl.dataset.kolId || (item && item.dataset.kolId);
+          if (kolId) mxvOpenKol(Number(kolId), true);
+          return;
+        }
         if (!item) return;
         if (actEl.dataset.act === "target") {
           const hl = item.dataset.mxvHl || "";
           const ci = hl.indexOf(":");
           mxvOpenTarget(ci >= 0 ? hl.slice(0, ci) : "", hl.slice(ci + 1), true);
-        } else if (actEl.dataset.act === "kol") {
-          const kolId = actEl.dataset.kolId || item.dataset.kolId;
-          if (kolId) mxvOpenKol(Number(kolId), true);
         }
         return;
       }
@@ -1524,6 +1547,9 @@ export function createMxViewsView(dependencies) {
     if (!body || body.dataset.dfilterBound) return;
     body.dataset.dfilterBound = "1";
     body.addEventListener("click", (e) => {
+      // 大V抽屉头部「持仓」按钮 → 预估持仓抽屉（换壳：收起当前抽屉再开新抽屉）
+      const holdEl = e.target.closest(".mxv-hold-btn[data-kol-id]");
+      if (holdEl) { openHoldingsDrawer(Number(holdEl.dataset.kolId)); return; }
       const f = _mxv.drawerFilters;
       if (!f) return;
       const toggle = (set, v) => { if (set.has(v)) set.delete(v); else set.add(v); };
@@ -1572,10 +1598,12 @@ export function createMxViewsView(dependencies) {
         ${mxvTimelineListHtml(data.timeline)}`;
     } else {
       body.innerHTML = `
-        <div style="margin:6px 0 10px;display:flex;gap:10px;align-items:center">
+        <div style="margin:6px 0 10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
           ${data.kol.avatar ? `<img src="${escapeHtml(data.kol.avatar)}" style="width:34px;height:34px;border-radius:50%" alt="">` : ""}
           <b style="color:var(--mxv-strong)">${escapeHtml(data.kol.name)}</b>
           <span style="color:var(--mxv-faint);font-size:12px">${data.timeline.length} 条观点 · 截至 ${escapeHtml(_mxv.at || "")}</span>
+          <button type="button" class="mxv-hold-btn inline" data-kol-id="${Number(data.kol.kol_id || _mxv.drawer.kolId)}"
+            title="预估持仓（近 30 天多空观点回放）">持仓</button>
         </div>
         ${mxvDrawerFiltersHtml(data.timeline)}
         ${mxvTimelineListHtml(data.timeline)}`;

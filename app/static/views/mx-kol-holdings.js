@@ -1,12 +1,16 @@
-// MX 大V预估持仓页（/mx-kol/{id}）：按历史观点回放推演的仓位——顶部当前持仓汇总
-// （权重条），下方操作时间线（买入建仓/买入加仓/卖出减仓/卖出清仓/翻空减仓/持仓表态）。
-// 视觉与持股研判页同一套 .hd- token（holdings.css），样式全部 .mxc- 前缀
+// MX 大V预估持仓——两种宿主共用一套渲染：
+// ① 独立页 /mx-kol/{id}；② /mx-views 大V头像旁「持仓」按钮弹出的右侧抽屉。
+// 顶部当前持仓汇总（权重条），下方操作时间线（买入建仓/买入加仓/卖出减仓/卖出清仓/翻空减仓/持仓表态）。
+// 视觉与持股研判页同一套 .hd- token（holdings.css），样式全部 .mxc- 前缀；
+// 抽屉外壳自带 .hd-root 变量作用域，挂进 #mxv-drawer-slot（与智囊团抽屉同位，同一时刻只留一个）
 export function createMxKolHoldingsView(dependencies) {
   const {
     $, state, api, escapeHtml, setPageTitle, go, routeStillActive, emptyState, flash,
+    closeViewsDrawer,
   } = dependencies;
 
-  const _mxc = { seq: 0, data: null, days: 30, expanded: new Set(), view: "all", recent: 5 };
+  const _mxc = { seq: 0, data: null, days: 30, expanded: new Set(), view: "all", recent: 5,
+    kolId: 0, drawerEl: null, drawerBody: null, token: 0 };
   const MXC_VIEWS = { all: "全部", open: "建仓", add: "加仓", trim: "减仓", clear: "清仓" };
   // 最近观点天数筛选：只看最近 N 天内还被大V提及的在持标的（0=不筛选）。
   // 部分票太老、没识别出清仓但大V其实早清了——限近期提及至少保证展示的票基本还在仓
@@ -23,8 +27,44 @@ export function createMxKolHoldingsView(dependencies) {
   };
 
   function mxcTeardown() {
-    Object.assign(_mxc, { data: null, expanded: new Set(), view: "all" });
+    Object.assign(_mxc, { data: null, expanded: new Set(), view: "all", drawerEl: null, drawerBody: null });
     // recent（最近观点天数）跨路由保留：回来时还是用户上次调的口径
+  }
+
+  // 竞态守卫：token 拦截同宿主内的旧响应（快速换天数/换大V重开）；
+  // 抽屉宿主看 DOM 连通性（路由切换由 mxvTeardown 摘除节点），页面宿主沿用路由 seq
+  function mxcStale(token, seq) {
+    if (token !== _mxc.token) return true;
+    if (_mxc.drawerEl) return !_mxc.drawerEl.isConnected;
+    return seq != null && !routeStillActive(seq);
+  }
+
+  // 统一取数+落盘：初次加载失败出整屏错误；换窗口失败只 flash 并回显旧数据
+  async function mxcLoad(kolId, token, seq) {
+    try {
+      const data = await api(`/api/kols/${kolId}/mx-holdings?days=${_mxc.days}`);
+      if (mxcStale(token, seq)) return;
+      _mxc.data = data;
+      _mxc.kolId = kolId;
+      mxcRenderAll();
+    } catch (err) {
+      if (mxcStale(token, seq)) return;
+      if (!_mxc.data) {
+        mxcRenderError(err);
+        return;
+      }
+      flash(`刷新失败: ${err.message}`, "error");
+      mxcRenderAll();
+    }
+  }
+
+  function mxcRenderError(err) {
+    if (_mxc.drawerEl) {
+      if (_mxc.drawerBody) _mxc.drawerBody.innerHTML =
+        `<div class="mxv-empty">加载失败: ${escapeHtml(err.message)}</div>`;
+      return;
+    }
+    $("#main").innerHTML = `<div class="mxc-root hd-root"><div class="mxv-empty">加载失败: ${escapeHtml(err.message)}</div></div>`;
   }
 
   function mxcLoadRecent() {
@@ -47,63 +87,94 @@ export function createMxKolHoldingsView(dependencies) {
   }
 
   async function renderMxKolHoldings(kolId, seq) {
-    mxcTeardown();
+    mxcTeardown(); // 页面宿主接管：清掉抽屉宿主残留引用（其 DOM 已由路由 teardown 移除）
     _mxc.seq = seq;
     _mxc.kolId = kolId;
     mxcLoadRecent();
     setPageTitle("预估持仓");
     $("#main").innerHTML = `<div class="mxc-root hd-root"><div class="mxv-empty">加载中…</div></div>`;
-    try {
-      const data = await api(`/api/kols/${kolId}/mx-holdings?days=${_mxc.days}`);
-      if (!routeStillActive(seq)) return;
-      _mxc.data = data;
-      mxcRenderAll();
-    } catch (err) {
-      if (!routeStillActive(seq)) return;
-      $("#main").innerHTML = `<div class="mxc-root hd-root"><div class="mxv-empty">加载失败: ${escapeHtml(err.message)}</div></div>`;
-    }
+    await mxcLoad(kolId, ++_mxc.token, seq);
+  }
+
+  // 右侧持仓抽屉：/mx-views 大V卡片头像旁/大V抽屉头部的「持仓」按钮打开。
+  // 从大V抽屉进入时先收起原抽屉（同一时刻只留一个）；抽屉数据按天窗实时取，不随快照刷新
+  function mxcOpenDrawer(kolId) {
+    kolId = Number(kolId);
+    if (!Number.isInteger(kolId) || kolId <= 0) return;
+    if (typeof closeViewsDrawer === "function") closeViewsDrawer();
+    mxcTeardown();
+    const slot = document.getElementById("mxv-drawer-slot") || $("#main");
+    if (!slot) return;
+    _mxc.kolId = kolId;
+    mxcLoadRecent();
+    const shell = document.createElement("div");
+    shell.innerHTML = `
+      <div class="mxc-drawer-mask" onclick="mxcCloseDrawer()"></div>
+      <aside class="mxc-drawer hd-root" role="dialog" aria-label="预估持仓">
+        <div class="mxc-drawer-top">
+          <b>预估持仓</b>
+          <button type="button" class="full" onclick="go('/mx-kol/${kolId}')" title="打开独立持仓页">完整页</button>
+          <button type="button" class="close" onclick="mxcCloseDrawer()" aria-label="关闭">✕</button>
+        </div>
+        <div class="mxc-root mxc-drawer-body"><div class="mxv-empty">加载中…</div></div>
+      </aside>`;
+    const mask = shell.querySelector(".mxc-drawer-mask");
+    const aside = shell.querySelector(".mxc-drawer");
+    _mxc.drawerEl = aside;
+    _mxc.drawerBody = aside.querySelector(".mxc-drawer-body");
+    slot.appendChild(mask);
+    slot.appendChild(aside);
+    mxcLoad(kolId, ++_mxc.token, null);
+  }
+
+  function mxcCloseDrawer() {
+    const mask = document.querySelector(".mxc-drawer-mask");
+    const drawer = document.querySelector(".mxc-drawer");
+    if (mask) mask.remove();
+    if (drawer) drawer.remove();
+    mxcTeardown();
   }
 
   async function mxcChangeDays(days) {
     _mxc.days = days;
-    const seq = _mxc.seq;
-    const feed = $("#mxc-timeline");
+    const seq = _mxc.drawerEl ? null : _mxc.seq;
+    const feed = document.getElementById("mxc-timeline");
     if (feed) feed.innerHTML = `<div class="mxv-empty">加载中…</div>`;
-    try {
-      const data = await api(`/api/kols/${_mxc.kolId}/mx-holdings?days=${days}`);
-      if (!routeStillActive(seq)) return;
-      _mxc.data = data;
-      mxcRenderAll();
-    } catch (err) {
-      flash(`刷新失败: ${err.message}`, "error");
-      mxcRenderAll();
-    }
+    await mxcLoad(_mxc.kolId, ++_mxc.token, seq);
   }
 
   function mxcRenderAll() {
     const d = _mxc.data;
     if (!d) return;
-    const kol = d.kol || {};
-    $("#main").innerHTML = `
-      <div class="mxc-root hd-root">
-        <section class="mxc-head">
-          <button type="button" class="hd-btn sm" onclick="go('/kol/${Number(kol.kol_id || 0)}')" aria-label="返回大V动态">‹ 动态</button>
-          ${kol.avatar ? `<img class="mxc-ava" src="${escapeHtml(kol.avatar)}" alt="" loading="lazy"
-            onerror="this.style.display='none'">` : ""}
-          <div class="mxc-head-main">
-            <h2>${escapeHtml(kol.name || "")}</h2>
-            <span class="mxc-sub">预估持仓 · 近 ${d.window_days} 天观点回放 · 生成于 ${escapeHtml(d.generated_at || "")}</span>
-          </div>
-          <span class="mxc-days">
-            ${[30, 60, 90].map((n) => `<button type="button" class="hd-seg-btn${d.window_days === n ? " on" : ""}"
-              onclick="mxcChangeDays(${n})">${n}天</button>`).join("")}
-          </span>
-        </section>
-        <section class="hd-panel" id="mxc-summary"></section>
-        <section class="hd-feed" id="mxc-timeline"></section>
-      </div>`;
+    if (_mxc.drawerEl) {
+      if (!_mxc.drawerEl.isConnected || !_mxc.drawerBody) return;
+      _mxc.drawerBody.innerHTML = mxcInnerHtml(d);
+    } else {
+      $("#main").innerHTML = `<div class="mxc-root hd-root">${mxcInnerHtml(d)}</div>`;
+    }
     mxcRenderSummary();
     mxcRenderTimeline();
+  }
+
+  // 页面/抽屉共用主体：页头（抽屉宿主不出「‹ 动态」返回钮，关闭走外壳 ✕）+ 汇总 + 时间线
+  function mxcInnerHtml(d) {
+    const kol = d.kol || {};
+    return `
+      <section class="mxc-head">
+        ${_mxc.drawerEl ? "" : `<button type="button" class="hd-btn sm" onclick="go('/kol/${Number(kol.kol_id || 0)}')" aria-label="返回大V动态">‹ 动态</button>`}
+        ${kol.avatar ? `<img class="mxc-ava" src="${escapeHtml(kol.avatar)}" alt="" loading="lazy"
+          onerror="this.style.display='none'">` : ""}
+        <div class="mxc-head-main">
+          <h2>${escapeHtml(kol.name || "")}</h2>
+          <span class="mxc-sub">预估持仓 · 近 ${d.window_days} 天观点回放 · 生成于 ${escapeHtml(d.generated_at || "")}</span>
+        </div>
+        <span class="mxc-days">
+          ${[30, 60, 90].map((n) => `<button type="button" class="hd-seg-btn${d.window_days === n ? " on" : ""}"
+            onclick="mxcChangeDays(${n})">${n}天</button>`).join("")}
+        </span>
+      </section>
+      <section class="hd-panel" id="mxc-summary"></section>
+      <section class="hd-feed" id="mxc-timeline"></section>`;
   }
 
   function mxcWeightBar(w) {
@@ -261,5 +332,5 @@ export function createMxKolHoldingsView(dependencies) {
     mxcRenderTimeline();
   }
 
-  return { renderMxKolHoldings, mxcSetView, mxcChangeDays, mxcRecentInput };
+  return { renderMxKolHoldings, mxcOpenDrawer, mxcCloseDrawer, mxcSetView, mxcChangeDays, mxcRecentInput };
 }

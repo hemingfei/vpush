@@ -6520,6 +6520,9 @@ const {
   currentAdminSeq: () => _adminRenderSeq,
   emptyState,
   flash,
+  // 预估持仓抽屉入口：mxcOpenDrawer/mxcCloseDrawer 定义在下方工厂（模块级 const），调用时已初始化
+  openHoldingsDrawer: (kolId) => mxcOpenDrawer(kolId),
+  closeHoldingsDrawer: () => mxcCloseDrawer(),
 });
 
 const {
@@ -6547,6 +6550,8 @@ const {
 
 const {
   renderMxKolHoldings,
+  mxcOpenDrawer,
+  mxcCloseDrawer,
   mxcSetView,
   mxcChangeDays,
   mxcRecentInput,
@@ -6560,6 +6565,8 @@ const {
   routeStillActive,
   emptyState,
   flash,
+  // 从 /mx-views 大V抽屉头部进入持仓抽屉时先收起原抽屉（同一时刻只留一个）
+  closeViewsDrawer: () => mxvCloseDrawer(),
 });
 
 // admin 视图懒加载：codes 由 ensureAdminViews() 赋值，求值期读到的是 undefined
@@ -8930,7 +8937,9 @@ const INLINE_HANDLERS = {
   mxvOpenKolStockAt,
   mxvOpenKol,
   mxvCloseDrawer,
-  // ---- hmf：MX 大V预估持仓页（/mx-kol/id 内联 onclick）----
+  // ---- hmf：MX 大V预估持仓页（/mx-kol/id 内联 onclick；抽屉入口见 mx-views 段）----
+  mxcOpenDrawer,
+  mxcCloseDrawer,
   mxcSetView,
   mxcChangeDays,
   mxcRecentInput,

@@ -602,3 +602,65 @@ def test_mx_views_feed_filters():
     assert 'addEventListener("compositionend"' in bind
     assert "!e.target.isConnected" in bind
     assert "e.isComposing || e.keyCode === 229" in js
+
+
+def test_mx_kol_holdings_drawer_entry_and_shell():
+    """大V头像旁「持仓」按钮打开右侧预估持仓抽屉（不跳页）。
+
+    两个卡片入口都出 .mxv-hold-btn：大V总览卡片（内联 onclick + stopPropagation 防触发
+    卡片本身的 mxvOpenKol）与观点流大V卡片（data-act 委托）；大V抽屉头部也有行内
+    变体（data-kol-id 委托，换壳开持仓抽屉）。抽屉外壳复用 #mxv-drawer-slot 挂载、
+    与智囊团抽屉同 z-index 体系、Esc 可关；页头不出「‹ 动态」返回钮（关闭走外壳 ✕）。
+    """
+    js = MX_VIEWS_JS
+    mxc = (STATIC / "views" / "mx-kol-holdings.js").read_text(encoding="utf-8")
+    # 总览卡片：头像包进 .mxv-avawrap，角标按钮带 stopPropagation
+    kol_cards = _fn_body("mxvKolCardsHtml", js)
+    assert "mxv-avawrap" in kol_cards and "mxv-hold-btn" in kol_cards
+    assert 'event.stopPropagation();mxcOpenDrawer(' in kol_cards
+    # 观点流大V卡片：走 data-act="mxc" 委托（innerHTML 重建不重绑）
+    feed_kol = _fn_body("mxvFeedKolHtml", js)
+    assert 'class="mxv-hold-btn" data-act="mxc" data-kol-id=' in feed_kol
+    bind = _fn_body("mxvBindFeedHighlight", js)
+    assert 'dataset.act === "mxc"' in bind and "openHoldingsDrawer(" in bind
+    # 大V抽屉头部行内变体：委托挂 #mxv-drawer-body，点击换壳（先收起原抽屉）
+    drawer_body = _fn_body("mxvRenderDrawerBody", js)
+    assert 'mxv-hold-btn inline" data-kol-id=' in drawer_body
+    dbind = _fn_body("mxvBindDrawerFilters", js)
+    assert ".mxv-hold-btn[data-kol-id]" in dbind and "openHoldingsDrawer(" in dbind
+    # 抽屉实现（mx-kol-holdings.js）：外壳/关闭/Esc/路由离开清理/完整页跳转
+    for fn in ("mxcOpenDrawer", "mxcCloseDrawer"):
+        assert f"function {fn}(" in mxc, fn
+    open_fn = _fn_body("mxcOpenDrawer", mxc)
+    assert "mxv-drawer-slot" in open_fn and "closeViewsDrawer" in open_fn  # 与智囊团抽屉互斥
+    assert "mxc-drawer-mask" in open_fn and 'class="mxc-drawer hd-root"' in open_fn
+    assert "go('/mx-kol/" in open_fn  # 外壳「完整页」按钮
+    inner = _fn_body("mxcInnerHtml", mxc)
+    assert "‹ 动态" in inner  # 返回钮仅页面宿主出（抽屉宿主由 _mxc.drawerEl 三元裁掉）
+    teardown = _fn_body("mxvTeardown", js)
+    assert ".mxc-drawer-mask" in teardown and ".mxc-drawer" in teardown  # 路由离开摘抽屉
+    # Esc 关闭：与月历同层 keydown
+    assert 'querySelector(".mxc-drawer")' in js and "closeHoldingsDrawer()" in js
+    # 装配：工厂互调依赖（打开/关闭）+ window 注册（内联 onclick 可达）
+    app = APP_JS
+    assert "openHoldingsDrawer: (kolId) => mxcOpenDrawer(kolId)" in app
+    assert "closeViewsDrawer: () => mxvCloseDrawer()" in app
+    assert "closeHoldingsDrawer: () => mxcCloseDrawer()" in app
+    handlers = app[app.index("const INLINE_HANDLERS"):]
+    for name in ("mxcOpenDrawer", "mxcCloseDrawer", "mxcSetView", "mxcChangeDays", "mxcRecentInput"):
+        assert name in handlers, name
+    css = (STATIC / "mx-views.css").read_text(encoding="utf-8")
+    mxc_css = (STATIC / "mx-kol-holdings.css").read_text(encoding="utf-8")
+    assert ".mxv-avawrap" in css and ".mxv-hold-btn" in css and ".mxv-hold-btn.inline" in css
+    assert ".mxc-drawer-mask" in mxc_css and ".mxc-drawer{" in mxc_css and ".mxc-drawer-top" in mxc_css
+
+
+def test_mx_feed_kol_card_click_still_opens_drawer():
+    """观点流大V卡片点主体开大V抽屉的守卫修复：卡上无 data-mxv-hl 祖先时，
+    kol 分支须用自身 data-kol-id 兜底，不能被 closest("[data-mxv-hl]") 拦死（ca94378 引入的回归）。"""
+    js = MX_VIEWS_JS
+    bind = _fn_body("mxvBindFeedHighlight", js)
+    assert "const kolId = actEl.dataset.kolId || (item && item.dataset.kolId);" in bind
+    # kol 分支不再依赖 data-mxv-hl 祖先；target 分支仍须守卫（观点流行外无 hl 上下文）
+    assert "if (!item) return;" in bind
+    assert bind.index('actEl.dataset.act === "kol"') < bind.index('actEl.dataset.act === "target"')

@@ -217,6 +217,13 @@
   cursor:pointer;display:flex;gap:10px;}
 .mxv-kolcard:hover{border-color:var(--mxv-accent);}
 .mxv-kolcard img,.mxv-kolcard .ava{width:36px;height:36px;border-radius:50%;background:var(--mxv-rail);flex:none;}
+/* 头像右下角「持仓」角标按钮：大V总览/观点流大V卡片通用，点开预估持仓抽屉 */
+.mxv-avawrap{position:relative;flex:none;}
+.mxv-hold-btn{position:absolute;right:-5px;bottom:-4px;border:1px solid var(--mxv-btn-line);
+  background:var(--mxv-panel);color:var(--mxv-muted);font-size:10px;line-height:1;
+  border-radius:8px;padding:2px 4px;cursor:pointer;}
+.mxv-hold-btn:hover{color:var(--mxv-accent);border-color:var(--mxv-accent);}
+.mxv-hold-btn.inline{position:static;margin-left:auto;padding:2px 8px;font-size:11px;} /* 大V抽屉头部行内变体 */
 .mxv-kolcard .n{color:var(--mxv-text);font-size:13px;}
 .mxv-kolcard .fav{color:var(--mxv-gold);font-size:11px;margin-left:3px;}
 .mxv-kolcard .mini{display:flex;height:5px;border-radius:3px;overflow:hidden;margin:5px 0;background:var(--mxv-rail);}
