@@ -480,6 +480,20 @@ async function copyPng(pngPromise) {
   await clipboard.write([new Item({ "image/png": pngPromise })]);
 }
 
+function isPhone() {
+  return window.matchMedia("(max-width: 768px)").matches;
+}
+
+async function sharePng(blob, filename) {
+  const file = new File([blob], filename, { type: "image/png" });
+  const data = { files: [file] };
+  if (typeof navigator.share !== "function") throw new Error("share-unavailable");
+  if (typeof navigator.canShare === "function" && !navigator.canShare(data)) {
+    throw new Error("share-unavailable");
+  }
+  await navigator.share(data);
+}
+
 export function createPostCardExport({ findPost, isShowSrc, flash }) {
   async function startExportFromClick(post, button) {
     if (button?.dataset.busy === "1") return;
@@ -489,18 +503,36 @@ export function createPostCardExport({ findPost, isShowSrc, flash }) {
       return;
     }
     const pngPromise = renderPngBlob(model);
-    let copied = Promise.reject(new Error("clipboard-unavailable"));
-    try {
-      copied = copyPng(pngPromise);
-    } catch {
-      copied = Promise.reject(new Error("clipboard-unavailable"));
-    }
     if (button) {
       button.dataset.busy = "1";
       button.setAttribute("aria-busy", "true");
     }
-    const [pngResult, copyResult] = await Promise.allSettled([pngPromise, copied]);
     try {
+      if (isPhone() && typeof navigator.share === "function") {
+        const blob = await pngPromise;
+        try {
+          await sharePng(blob, cardFilename(model));
+          return;
+        } catch (err) {
+          if (err?.name === "AbortError") return;
+        }
+        try {
+          await copyPng(Promise.resolve(blob));
+          flash("已复制，去微信粘贴即可");
+          return;
+        } catch {
+          downloadBlob(blob, cardFilename(model));
+          flash("无法复制，已改为下载");
+          return;
+        }
+      }
+      let copied = Promise.reject(new Error("clipboard-unavailable"));
+      try {
+        copied = copyPng(pngPromise);
+      } catch {
+        copied = Promise.reject(new Error("clipboard-unavailable"));
+      }
+      const [pngResult, copyResult] = await Promise.allSettled([pngPromise, copied]);
       if (copyResult.status === "fulfilled") {
         flash("已复制，去微信粘贴即可");
         return;
@@ -511,6 +543,8 @@ export function createPostCardExport({ findPost, isShowSrc, flash }) {
         return;
       }
       flash(pngResult.reason?.message || "生成失败，请再试一次", "error");
+    } catch (err) {
+      flash(err?.message || "生成失败，请再试一次", "error");
     } finally {
       if (button) {
         button.dataset.busy = "0";

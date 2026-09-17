@@ -3619,7 +3619,8 @@ def test_post_card_has_image_export_button():
     css = STYLE_CSS.read_text()
     assert "exportPostCard(${post.id}, event)" in card
     assert "class=\"cat cat-export post-card-export\"" in card
-    assert "p-meta-tags" in card and "p-meta-actions" in card
+    assert "p-meta-actions" in card
+    assert "p-meta-tags" not in card
     assert "图卡 ${IMAGE_CARD_ICON}" in card
     assert "复制图卡" in card
     assert 'from "./views/post-card-export.js"' in src
@@ -3627,6 +3628,10 @@ def test_post_card_has_image_export_button():
     assert "_kolPosts" in src
     assert "findExportablePost" in src
     assert "startExportFromClick" in export_fn
+    export_src = POST_CARD_EXPORT_JS.read_text()
+    assert "navigator.share" in export_src
+    assert "AbortError" in export_src
+    assert "(max-width: 768px)" in export_src
     assert "button.cat-export" in css
     assert "button.cat-export::before" in css
 
