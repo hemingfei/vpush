@@ -253,11 +253,11 @@ export function createHoldingsView(dependencies) {
       <div class="hd-panel-head">
         <b>关注列表</b>
         <span class="hd-hint">${n}/${HD_MAX}${atMax ? " · 已达上限" : ""}</span>
+        <button type="button" class="hd-btn sm" aria-expanded="${_hd.watchOpen}" onclick="hdWatchToggle()">${_hd.watchOpen ? "收起" : "展开"}</button>
         <span class="hd-pills">
           <span class="hd-pill"><span class="hd-dot sse"></span>实时</span>
           <span class="hd-pill">近 ${WINDOW_DAYS} 天</span>
         </span>
-        <button type="button" class="hd-btn sm" aria-expanded="${_hd.watchOpen}" onclick="hdWatchToggle()">${_hd.watchOpen ? "收起" : "展开"}</button>
       </div>`;
     if (!_hd.watchOpen) {
       el.innerHTML = head;
@@ -502,8 +502,10 @@ export function createHoldingsView(dependencies) {
         <button type="button" class="hd-seg-btn${_hd.tab !== "tags" ? " on" : ""}" onclick="hdFeedTab('opinions')">观点</button>
         <button type="button" class="hd-seg-btn${_hd.tab === "tags" ? " on" : ""}" onclick="hdFeedTab('tags')">快讯</button>
       </div>
-      ${_hd.filter ? `<button type="button" class="mxv-fchip on" onclick="hdFilter(-1)">✕ ${escapeHtml(_hd.filter.name)}</button>` : ""}
-      <span class="hd-hint">${count ? `${count} 条` : ""}</span>
+      <div class="hd-feed-tail">
+        ${_hd.filter ? `<button type="button" class="mxv-fchip on" onclick="hdFilter(-1)">✕ ${escapeHtml(_hd.filter.name)}</button>` : ""}
+        <span class="hd-hint">${count ? `${count} 条` : ""}</span>
+      </div>
     </div>`;
     let body;
     if (!_hd.holdings.length) {

@@ -1,8 +1,10 @@
-/* 持股研判页（/holdings）——暗色终端风格，与观点研判页同一套视觉 token；
+/* 持股研判页（/holdings）——终端风格，与观点研判页同一套视觉 token；
    跟随全局主题（html.theme-dark 切换明暗两套变量），样式全部 .hd- 前缀；
-   观点流区域复用 mx-views.css 的 .mxv-feed-* 类，仅在 .hd-feed 作用域注入 --mxv-* 变量 */
-/* 观点流与聚合卡：mx-views.css 的 .mxv-feed-*/.mxv-stockcard/.mxv-ratio 等类靠 --mxv-*
-   变量取色，这里在 .hd-root 作用域注入同一套变量值（明暗两套），不复制其样式规则 */
+   观点流区域复用 mx-views.css 的 .mxv-feed 系列 类，仅在 .hd-root 作用域注入 --mxv-* 变量 */
+/* 观点流与聚合卡：mx-views.css 的 .mxv-feed 系列、.mxv-stockcard、.mxv-ratio 等类靠 --mxv-* 系列
+   变量取色，这里在 .hd-root 作用域注入同一套变量值（明暗两套），不复制其样式规则。
+   注意：本注释不可写出「.mxv-feed 加斜杠星号」的类名缩写——注释内的斜杠星号会把注释提前闭合，
+   残余中文说明变成非法选择器，连带吞掉下一条 .hd-root 规则（浅色变量块丢失、浅色模式失效的根源） */
 .hd-root{--mxv-panel:#ffffff;--mxv-card:#f6f8fd;--mxv-soft:#e9eef9;--mxv-soft-line:#ccd6ec;
   --mxv-line:#d9e1f2;--mxv-sep:#e3e9f5;--mxv-rail:#d4dded;--mxv-hover:#eaf0fb;--mxv-btn-line:#b7c6e8;
   --mxv-strong:#17203a;--mxv-text:#2a3550;--mxv-muted:#55648a;--mxv-faint:#8b98b8;
@@ -60,8 +62,11 @@
   overflow-wrap:anywhere;}
 .hd-feed-sub{color:var(--mxv-faint);font-weight:400;font-size:12px;margin-left:8px;}
 .hd-more-wrap{display:flex;justify-content:center;padding-top:8px;}
-.hd-feed-tabs{margin-left:auto;flex:none;}
+/* 观点/快讯页签紧跟标题左侧：抵消 .mxv-kol-head h3 的 margin-right:auto，尾组（筛选+条数）右推 */
+.hd-feed .mxv-kol-head h3{margin-right:0;}
+.hd-feed-tabs{flex:none;}
 .hd-feed-tabs .hd-seg-btn{padding:2px 10px;}
+.hd-feed-tail{margin-left:auto;display:flex;gap:8px;align-items:center;min-width:0;}
 
 /* 顶部面板：关注列表（紧凑） */
 .hd-panel{background:var(--hd-panel);border:1px solid var(--hd-line);border-radius:10px;
@@ -125,6 +130,7 @@
 .hd-badge.stock{background:var(--hd-bull-soft);color:var(--hd-bull-text);border:1px solid var(--hd-bull-line);}
 .hd-badge.topic{background:var(--hd-topic-soft);color:var(--hd-topic);border:1px solid transparent;}
 .hd-empty-sm{color:var(--hd-faint);font-size:12px;padding:6px 2px;}
+.hd-empty{color:var(--hd-faint);font-size:14px;text-align:center;padding:60px 0;}
 
 /* 聚合卡区：总览卡网格（同 mx-views「大V观点总览」auto-fill 网格）；
    卡体/占比条/名单行直接用 .mxv-stockcard/.mxv-ratio 类取色，这里只补 button 形态适配 */
