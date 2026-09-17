@@ -14,6 +14,11 @@ _reg_code_seq = 0
 
 
 def make_client(name="test.db", config=None):
+    # 默认构造全新出厂 Config()，不落回 load_config()——后者会读开发机工作目录的
+    # config.yaml（如 posts_retention_days: 30），悄悄漏进用例断言（出厂默认应为 0）。
+    # 每次现造而非默认参数共享：create_app 会原地改 config.db_path，共享实例会串库
+    if config is None:
+        config = Config()
     tmp = tempfile.mkdtemp()
     app = create_app(config=config, db_path=Path(tmp) / name)
     return TestClient(app)

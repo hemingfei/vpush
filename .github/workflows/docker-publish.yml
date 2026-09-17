@@ -16,7 +16,10 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # pytest 全量已稳定在 12-14 分钟（CI 实测），15 分钟红线贴脸跑：慢一点的 runner
+    # 直接整 job 被硬取消（曾发生：a074e0e 的 sidecar 步骤被砍、发布全部 skipped）。
+    # 提到 25 分钟 + 各步骤分设上限，单步卡死快速暴露而不是拖满整个 job
+    timeout-minutes: 25
     steps:
       # actions 均按 commit SHA 固定，防止上游 tag 被替换；审阅通过后逐项验证再升级
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -33,10 +36,12 @@ jobs:
           cache: npm
           cache-dependency-path: waf-bot/package-lock.json
       - name: 安装依赖并跑测试
+        timeout-minutes: 20
         run: |
           pip install -r requirements.txt -r requirements-test.txt
           python -m pytest -q --maxfail=1
       - name: 前端静态检查
+        timeout-minutes: 3
         run: |
           find app/static -type f -name '*.js' -print0 | while IFS= read -r -d '' file; do
             node --input-type=module --check < "$file"
@@ -47,6 +52,7 @@ jobs:
           node --check miniprogram/utils/api.js
           node --check miniprogram/pages/*/*.js
       - name: sidecar 测试
+        timeout-minutes: 3
         working-directory: waf-bot
         run: |
           npm ci --ignore-scripts
