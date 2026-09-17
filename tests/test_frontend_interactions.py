@@ -3601,13 +3601,13 @@ def test_post_origin_link_matches_adjacent_tags():
     assert 'class="cat"' in post_card
     assert "查看原文 ${EXTERNAL_LINK_ICON}" in post_card
     assert ".post-item .p-meta .ui-icon { width: 12px; height: 12px; }" in css
-    assert ".post-item .p-meta .p-action" in css
+    assert ".post-item .p-meta a" in css
     mobile = re.search(
-        r"@media \(max-width: 768px\) \{.*?\.post-item \.p-meta a(?:,\s*\.post-item \.p-meta \.p-action)?\s*\{([^}]*)\}",
+        r"@media \(max-width: 768px\) \{.*?\.post-item \.p-meta a(?:,\s*\.post-item \.p-meta button\.cat-export)?\s*\{([^}]*)\}",
         css,
         re.DOTALL,
     )
-    assert mobile, "缺少移动端 .post-item .p-meta 操作规则"
+    assert mobile, "缺少移动端 .post-item .p-meta a 规则"
     assert "min-height: 0" in mobile.group(1)
 
 
@@ -3618,9 +3618,9 @@ def test_post_card_has_image_export_button():
     src = APP_JS.read_text()
     css = STYLE_CSS.read_text()
     assert "exportPostCard(${post.id}, event)" in card
-    assert "class=\"p-action cat-export post-card-export\"" in card
+    assert "class=\"cat cat-export post-card-export\"" in card
     assert "p-meta-tags" in card and "p-meta-actions" in card
-    assert "${IMAGE_CARD_ICON} 图卡" in card
+    assert "图卡 ${IMAGE_CARD_ICON}" in card
     assert "复制图卡" in card
     assert 'from "./views/post-card-export.js"' in src
     assert "createPostCardExport({" in src
@@ -3628,7 +3628,7 @@ def test_post_card_has_image_export_button():
     assert "findExportablePost" in src
     assert "startExportFromClick" in export_fn
     assert "button.cat-export" in css
-    assert ".p-action::before" in css
+    assert "button.cat-export::before" in css
 
 
 def test_post_to_card_model_maps_full_text_and_platform_fields():

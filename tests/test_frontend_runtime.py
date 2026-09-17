@@ -739,7 +739,6 @@ def test_post_origin_link_aligns_with_tags(page: Page, static_origin: str, width
         "id": 1, "kol_id": 1, "kol_name": "淡淡的相思林", "platform": "xueqiu",
         "published_at": "2026-09-07T14:14:00+08:00", "content": "body",
         "category_name": "行业研究", "url": "https://xueqiu.com/1",
-        "tags": ["实盘", "大盘", "调仓", "德明利", "剑桥科技"],
     }]))
     page.set_viewport_size({"width": width, "height": 900})
     page.goto(static_origin)
@@ -749,31 +748,24 @@ def test_post_origin_link_aligns_with_tags(page: Page, static_origin: str, width
     expect(page.get_by_role("link", name="查看原文")).to_be_visible()
     geo = page.evaluate("""() => {
       const cat = document.querySelector('.p-meta span.cat');
-      const tags = document.querySelector('.p-meta-tags');
-      const actions = document.querySelector('.p-meta-actions');
       const exportBtn = document.querySelector('.p-meta .post-card-export');
-      const origin = document.querySelector('.p-meta-actions .p-action[href], .p-meta a.p-action');
+      const origin = document.querySelector('.p-meta-actions a');
       const icon = origin.querySelector('svg');
       const cr = cat.getBoundingClientRect();
-      const tr = tags.getBoundingClientRect();
-      const ar = actions.getBoundingClientRect();
       const er = exportBtn.getBoundingClientRect();
       const or = origin.getBoundingClientRect();
       const ir = icon.getBoundingClientRect();
-      const post = document.querySelector('.post-item').getBoundingClientRect();
       return {
         catH: cr.height, originH: or.height, iconH: ir.height,
         actionTopDelta: Math.abs(er.top - or.top),
         exportLeft: er.left, originLeft: or.left,
-        tagsBottom: tr.bottom, actionsTop: ar.top,
-        tagsWidth: tr.width, postWidth: post.width,
       };
     }""")
     assert geo["originH"] < 28, geo
-    assert geo["actionTopDelta"] <= 4, geo
+    assert abs(geo["originH"] - geo["catH"]) <= 2, geo
+    assert geo["actionTopDelta"] <= 2, geo
     assert geo["exportLeft"] < geo["originLeft"], geo
     assert 10 <= geo["iconH"] <= 14, geo
-    assert abs(geo["originH"] - geo["catH"]) <= 8, geo
 
 
 def _install_card_export_stub(page: Page) -> None:
