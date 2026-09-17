@@ -404,6 +404,12 @@ def test_render_settings_catch_only_mutates_owned_route_and_session():
 
 
 
+def test_shared_bot_bind_copy_uses_eight_char_code():
+    text = PUSH_SETTINGS_JS.read_text()
+    assert "/bind 8位码" in text
+    assert "/bind 6位码" not in text
+
+
 def test_bind_code_callbacks_capture_and_require_current_owner_before_side_effects():
     """绑定码响应只能由发起请求的路由、token 和会话写入状态或 DOM。"""
     for name in ("bindChannel", "genBindCode"):
@@ -944,6 +950,7 @@ def test_zsxq_is_plaza_badge_not_sidebar_page():
     assert "/api/media/zsxq-file/" in _fn_body("downloadZsxqFile")
     assert "?token=" not in _fn_body("postCard")
     assert "?token=" not in _fn_body("downloadZsxqFile")
+    assert "/^https?:\\/\\//i.test(f.url" in _fn_body("postCard")
     assert "downloadZsxqFile" in _fn_body("postCard")
     assert "apiBlob" in _fn_body("downloadZsxqFile")
     assert 'return "zsxq"' in _fn_body("detectAskPlatform")
@@ -5124,7 +5131,7 @@ def test_register_placeholder_matches_username_min_length():
     html = (APP_JS.parent / "index.html").read_text()
     assert 'id="reg-username"' in html
     assert "6-30 位，字母或中文开头" in html
-    assert "至少 6 位字符" in html
+    assert "至少 10 位字符" in html
     assert "至少 2 位字符" not in html
     assert "USERNAME_RE" in APP_JS.read_text()
     assert "usernameRuleError" in APP_JS.read_text()
@@ -5355,7 +5362,11 @@ def test_register_codes_desktop_controls_share_one_grid():
 def test_logout_clears_timeline_and_bind_cache():
     """登出必须清掉动态缓存和绑定码，避免下一账号看到上一账号的数据。"""
     body = _fn_body("logout")
+    assert 'api("/api/auth/logout"' in body
     assert "clearSessionCaches()" in body
+    pw = _fn_body("savePassword")
+    assert "newPw.length < 10" in pw
+    assert 'localStorage.setItem("dav_token"' in pw
     clear = _fn_body("clearSessionCaches")
     assert "_tlPosts.length = 0" in clear
     assert "_kolPosts.length = 0" in clear

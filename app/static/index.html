@@ -40,11 +40,11 @@
       } catch (e) { /* localStorage 不可用时静默 */ }
     })();
   </script>
-  <link rel="stylesheet" href="/vendor/design-tokens.css?v=e93798a83e69">
-  <link rel="stylesheet" href="/style.css?v=e93798a83e69">
-  <link rel="stylesheet" href="/mx-views.css?v=e93798a83e69">
-  <link rel="stylesheet" href="/holdings.css?v=e93798a83e69">
-  <link rel="stylesheet" href="/mx-kol-holdings.css?v=e93798a83e69">
+  <link rel="stylesheet" href="/vendor/design-tokens.css?v=12b644fb8ed5">
+  <link rel="stylesheet" href="/style.css?v=12b644fb8ed5">
+  <link rel="stylesheet" href="/mx-views.css?v=12b644fb8ed5">
+  <link rel="stylesheet" href="/holdings.css?v=12b644fb8ed5">
+  <link rel="stylesheet" href="/mx-kol-holdings.css?v=12b644fb8ed5">
 </head>
 <body>
   <!-- 登录 / 注册 -->
@@ -128,7 +128,7 @@
             <input id="reg-username" class="form-control" placeholder="6-30 位，字母或中文开头" autocomplete="username" maxlength="30" required>
             <label class="field-label" for="reg-password">密码</label>
             <div class="pw-field">
-              <input id="reg-password" class="form-control" type="password" placeholder="至少 6 位字符" autocomplete="new-password" required>
+              <input id="reg-password" class="form-control" type="password" placeholder="至少 10 位字符" autocomplete="new-password" required>
               <button type="button" class="pw-toggle" aria-label="显示密码" onclick="togglePassword('reg-password', this)">
                 <svg class="pw-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                 <svg class="pw-eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19M14.12 14.12a3 3 0 1 1-4.24-4.24"/><path d="m1 1 22 22"/></svg>
@@ -175,6 +175,6 @@
     </div>
     <nav id="bottom-nav" class="bottom-nav"></nav>
   </div>
-  <script type="module" src="/app.js?v=e93798a83e69"></script>
+  <script type="module" src="/app.js?v=12b644fb8ed5"></script>
 </body>
 </html>

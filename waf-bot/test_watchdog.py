@@ -178,7 +178,7 @@ def test_solver_rejects_whitespace_signed_url(monkeypatch):
     assert calls["command"] == [
         "node",
         "--permission",
-        "--allow-fs-read=.",
+        "--allow-fs-read=./solver.js",
         "--allow-fs-read=./node_modules",
         "./solver.js",
     ]

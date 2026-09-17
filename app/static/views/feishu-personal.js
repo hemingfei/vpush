@@ -815,8 +815,8 @@ export function createFeishuPersonalView(dependencies) {
     const oldPw = $("#pw-old").value;
     const newPw = $("#pw-new").value;
     const confirmPw = $("#pw-confirm").value;
-    if (!oldPw || newPw.length < 6) {
-      flash("请填写原密码，新密码至少 6 位", "error");
+    if (!oldPw || newPw.length < 10) {
+      flash("请填写原密码，新密码至少 10 位", "error");
       return;
     }
     if (newPw !== confirmPw) {
@@ -824,11 +824,15 @@ export function createFeishuPersonalView(dependencies) {
       return;
     }
     try {
-      await api("/api/me/password", {
+      const data = await api("/api/me/password", {
         method: "POST",
         body: JSON.stringify({ old_password: oldPw, new_password: newPw }),
       });
       if (!sessionOwnerStillActive(routeSeq, token, sessionGeneration)) return;
+      if (data.token) {
+        state.token = data.token;
+        localStorage.setItem("dav_token", data.token);
+      }
       $("#pw-old").value = $("#pw-new").value = $("#pw-confirm").value = "";
       flash("密码已修改");
     } catch (err) {

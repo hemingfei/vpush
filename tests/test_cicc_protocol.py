@@ -358,7 +358,7 @@ def test_api_rejects_invalid_schedule_time(tmp_path, monkeypatch):
     client = TestClient(app)
     client.app.state.db.add_register_code("CICC01")
     resp = client.post("/api/auth/register", json={
-        "username": "admin1", "password": "secret123", "code": "CICC01"})
+        "username": "admin1", "password": "secret1234", "code": "CICC01"})
     data = resp.json()
     client.app.state.db.update_user(data["user"]["id"], is_admin=True)
     headers = {"Authorization": f"Bearer {data['token']}"}

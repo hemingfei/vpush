@@ -113,7 +113,7 @@ def _admin_client():
 def _admin_headers(client):
     client.app.state.db.add_register_code("CICC01")
     resp = client.post("/api/auth/register", json={
-        "username": "admin1", "password": "secret123", "code": "CICC01"})
+        "username": "admin1", "password": "secret1234", "code": "CICC01"})
     assert resp.status_code == 200, resp.text
     data = resp.json()
     client.app.state.db.update_user(data["user"]["id"], is_admin=True)

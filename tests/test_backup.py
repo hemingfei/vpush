@@ -33,7 +33,7 @@ def make_client(name="test.db"):
     return TestClient(app)
 
 
-def register(client, username="testadmin", password="secret123"):
+def register(client, username="testadmin", password="secret1234"):
     global _reg_code_seq
     _reg_code_seq += 1
     code = f"BKP{_reg_code_seq:04d}"
@@ -46,7 +46,7 @@ def register(client, username="testadmin", password="secret123"):
     return resp
 
 
-def auth_headers(client, username="testadmin", password="secret123"):
+def auth_headers(client, username="testadmin", password="secret1234"):
     data = register(client, username, password).json()
     client.app.state.db.update_user(data["user"]["id"], is_admin=True)
     return {"Authorization": f"Bearer {data['token']}"}
@@ -115,6 +115,23 @@ def test_join_webdav_strips_duplicate_slashes():
     assert join_webdav("https://a.com/dav/", "vpush-backups/") == (
         "https://a.com/dav/vpush-backups"
     )
+
+
+def test_snapshot_encrypts_when_credential_key(tmp_path):
+    from cryptography.fernet import Fernet
+
+    from app.backup import BACKUP_MAGIC, decrypt_backup_bytes, snapshot
+
+    key = Fernet.generate_key().decode()
+    db = DB(tmp_path / "dav.db", credential_key=key)
+    db.set_setting("probe", "1")
+    path = snapshot(db)
+    raw = path.read_bytes()
+    assert raw.startswith(BACKUP_MAGIC)
+    plain = tmp_path / "plain.db"
+    plain.write_bytes(decrypt_backup_bytes(raw, key))
+    assert _quick_check(plain) == "ok"
+    db.close()
 
 
 def test_snapshot_quick_check_ok_and_keeps_three(tmp_path):

@@ -578,7 +578,7 @@ def test_api_register_unavailable():
     app = create_app(config=_api_config(""), db_path=Path(tempfile.mkdtemp()) / "a.db")
     client = TestClient(app)
     client.app.state.db.add_register_code("TEST0001")
-    token = client.post("/api/auth/register", json={"username": "userone", "password": "secret123", "code": "TEST0001"}).json()["token"]
+    token = client.post("/api/auth/register", json={"username": "userone", "password": "secret1234", "code": "TEST0001"}).json()["token"]
     h = {"Authorization": f"Bearer {token}"}
     resp = client.post("/api/me/feishu-personal/register", headers=h)
     assert resp.status_code == 400 and "未启用" in resp.json()["detail"]
@@ -595,7 +595,7 @@ def test_api_register_and_session(monkeypatch):
     client = TestClient(app)
     db = client.app.state.db
     db.add_register_code("TEST0002")
-    token = client.post("/api/auth/register", json={"username": "userone", "password": "secret123", "code": "TEST0002"}).json()["token"]
+    token = client.post("/api/auth/register", json={"username": "userone", "password": "secret1234", "code": "TEST0002"}).json()["token"]
     h = {"Authorization": f"Bearer {token}"}
 
     monkeypatch.setattr(fp, "begin_registration", lambda base_url="https://accounts.feishu.cn": (begin_payload(), base_url))
@@ -611,7 +611,7 @@ def test_api_register_and_session(monkeypatch):
     sid = data["session_id"]
     # 别人的 session → 404
     db.add_register_code("TEST0003")
-    token2 = client.post("/api/auth/register", json={"username": "usertwo", "password": "secret123", "code": "TEST0003"}).json()["token"]
+    token2 = client.post("/api/auth/register", json={"username": "usertwo", "password": "secret1234", "code": "TEST0003"}).json()["token"]
     h2 = {"Authorization": f"Bearer {token2}"}
     assert client.get(f"/api/me/feishu-personal/register/{sid}", headers=h2).status_code == 404
 

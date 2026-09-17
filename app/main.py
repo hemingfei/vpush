@@ -202,6 +202,21 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     # （批量导入勾选「V平台 KOL」或单个添加 platform=system），建任务时自行选择。
 
     secret = auth.get_or_create_secret(db, config.web.token_secret)
+    if not (config.notifiers.feishu.credential_key or "").strip():
+        logging.getLogger(__name__).warning(
+            "FEISHU_CREDENTIAL_KEY 未配置，用户推送凭据将明文落库"
+        )
+    if not (config.web.token_secret or "").strip():
+        logging.getLogger(__name__).warning(
+            "WEB_TOKEN_SECRET 未配置，会话签名密钥写在数据库里，备份即可伪造登录"
+        )
+    if not (
+        (config.web.turnstile_secret or "").strip()
+        and (config.web.turnstile_site_key or "").strip()
+    ):
+        logging.getLogger(__name__).warning(
+            "Turnstile 未配齐，登录注册将跳过人机验证"
+        )
 
     if config.web.admin_password:
         admin = db.get_user_by_username("admin")
@@ -330,6 +345,20 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob: https:; "
+            "connect-src 'self' https://challenges.cloudflare.com; "
+            "frame-src https://challenges.cloudflare.com; "
+            "worker-src 'self'; "
+            "manifest-src 'self'; "
+            "base-uri 'self'; "
+            "form-action 'self'; "
+            "frame-ancestors 'none'",
+        )
         path = request.url.path
         if path.startswith(("/news/", "/api/news/")) or path in ("/news", "/api/news"):
             response.headers.setdefault("X-Robots-Tag", "noindex, nofollow")
@@ -366,7 +395,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
         payload = ima_documents.storage_status.public()
         if not ima_documents.store.archive_readable():
             response.status_code = 503
-        return payload
+        return {"status": payload.get("status"), "available": payload.get("available")}
 
     app.include_router(
         create_api_router(

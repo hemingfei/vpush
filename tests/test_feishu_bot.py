@@ -84,8 +84,8 @@ def test_feishu_group_replies_to_chat():
 def test_feishu_bind():
     db, bot, sent = make_bot()
     target = db.add_user("webuser", "hash")
-    db.create_bind_code("111222", target, int(time.time()) + 600)
-    bot.handle_message("", "p2p", "ou_9", "Kale", "/bind 111222")
+    db.create_bind_code("K7N2P4Q8", target, int(time.time()) + 600)
+    bot.handle_message("", "p2p", "ou_9", "Kale", "/bind K7N2P4Q8")
     assert "已绑定" in sent[-1][2]
     assert db.get_user(target)["feishu_open_id"] == "ou_9"
 

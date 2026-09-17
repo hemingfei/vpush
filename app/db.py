@@ -31,7 +31,11 @@ SECRET_PREFIX = "enc1:"
 # users 表中以密文落库的凭证列；feed_token 刻意除外（本身随 RSS URL 公开）
 SECRET_COLUMNS = ("telegram_bot_token", "wecom_webhook", "bark_key", "llm_api_key")
 # 需要维护明文哈希列做唯一性查找的凭证（Fernet 非确定性，密文不能当查询条件）
-SECRET_HASH_COLUMNS = {"wecom_webhook": "wecom_webhook_hash", "bark_key": "bark_key_hash"}
+SECRET_HASH_COLUMNS = {
+    "wecom_webhook": "wecom_webhook_hash",
+    "bark_key": "bark_key_hash",
+    "telegram_bot_token": "telegram_bot_token_hash",
+}
 
 # ---- 有序 schema 迁移 ----
 # 新增表结构/索引/数据回填时，往 SCHEMA_MIGRATIONS 追加 (版本号, 名称, 语句或语句元组)。
@@ -103,6 +107,11 @@ def block_hit_keyword(keywords: list[str], *texts: str) -> str:
         if kw.lower() in haystack:
             return kw
     return ""
+
+
+def _bind_code_digest(code: str) -> str:
+    """绑定码只存大写规范化后的哈希，库里不留明文。"""
+    return _secret_hash((code or "").strip().upper())
 
 
 def decrypt_stored_secret(value: str | None, credential_key: str) -> str:
@@ -824,6 +833,7 @@ CREATE TABLE IF NOT EXISTS users (
     wechat_openid TEXT NOT NULL DEFAULT '',
     telegram_chat_id TEXT NOT NULL DEFAULT '',
     telegram_bot_token TEXT NOT NULL DEFAULT '',
+    telegram_bot_token_hash TEXT NOT NULL DEFAULT '',
     feishu_open_id TEXT NOT NULL DEFAULT '',
     feishu_chat_id TEXT NOT NULL DEFAULT '',
     wecom_webhook TEXT NOT NULL DEFAULT '',
@@ -1663,6 +1673,10 @@ class DB:
             self._conn.execute("ALTER TABLE users ADD COLUMN wecom_webhook_hash TEXT NOT NULL DEFAULT ''")
         if "bark_key_hash" not in user_cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN bark_key_hash TEXT NOT NULL DEFAULT ''")
+        if "telegram_bot_token_hash" not in user_cols:
+            self._conn.execute(
+                "ALTER TABLE users ADD COLUMN telegram_bot_token_hash TEXT NOT NULL DEFAULT ''"
+            )
         if "keywords_match_reports" not in user_cols:
             self._conn.execute(
                 "ALTER TABLE users ADD COLUMN keywords_match_reports INTEGER NOT NULL DEFAULT 0"
@@ -1678,6 +1692,10 @@ class DB:
         self._conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_bark_key "
             "ON users(bark_key) WHERE bark_key != ''"
+        )
+        self._conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_telegram_bot_token_hash "
+            "ON users(telegram_bot_token_hash) WHERE telegram_bot_token_hash != ''"
         )
         # 凭据加密迁移：配了凭据密钥才把明文收编成 enc1: 密文，并补齐
         # 唯一性哈希列；全部幂等（已是密文且哈希正确的行直接跳过）
@@ -1717,6 +1735,32 @@ class DB:
                             f"UPDATE users SET {col} = ? WHERE id = ?",
                             (target_cipher, row["id"]),
                         )
+        # 无密钥时也能给明文凭据补哈希，保证查重列可用
+        for col, hash_col in SECRET_HASH_COLUMNS.items():
+            rows = self._rows(
+                f"SELECT id, {col} AS v, {hash_col} AS h FROM users WHERE {col} != ''"
+            )
+            for row in rows:
+                stored = row["v"]
+                if stored.startswith(SECRET_PREFIX):
+                    if not self.credential_key:
+                        continue
+                    from .feishu_personal import decrypt_secret
+
+                    try:
+                        plain = decrypt_secret(
+                            self.credential_key, stored[len(SECRET_PREFIX):]
+                        )
+                    except Exception:  # noqa: S112
+                        continue
+                else:
+                    plain = stored
+                digest = _secret_hash(plain)
+                if row["h"] != digest:
+                    self._conn.execute(
+                        f"UPDATE users SET {hash_col} = ? WHERE id = ?",
+                        (digest, row["id"]),
+                    )
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS webpush_subscriptions ("
             "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -3096,7 +3140,12 @@ class DB:
         return rows[0] if rows else None
 
     def get_user_by_telegram_bot(self, bot_token: str) -> dict | None:
-        rows = self._rows("SELECT * FROM users WHERE telegram_bot_token = ?", (bot_token,))
+        digest = _secret_hash(bot_token)
+        if not digest:
+            return None
+        rows = self._rows(
+            "SELECT * FROM users WHERE telegram_bot_token_hash = ?", (digest,)
+        )
         return rows[0] if rows else None
 
     def get_user_by_feishu(self, open_id: str) -> dict | None:
@@ -3182,23 +3231,36 @@ class DB:
         device_model: str = "",
         app_version: str = "",
     ) -> None:
-        self._execute(
-            "INSERT INTO android_devices "
-            "(installation_id, user_id, token, provider, device_model, app_version) "
-            "VALUES (?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(installation_id) DO UPDATE SET "
-            "user_id = excluded.user_id, token = excluded.token, "
-            "provider = excluded.provider, device_model = excluded.device_model, "
-            "app_version = excluded.app_version, updated_at = datetime('now')",
-            (
-                installation_id,
-                user_id,
-                token,
-                provider,
-                device_model or "",
-                app_version or "",
-            ),
-        )
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                row = self._conn.execute(
+                    "SELECT user_id FROM android_devices WHERE installation_id = ?",
+                    (installation_id,),
+                ).fetchone()
+                if row is not None and int(row["user_id"]) != int(user_id):
+                    raise ValueError("该设备已绑定其他账号")
+                self._conn.execute(
+                    "INSERT INTO android_devices "
+                    "(installation_id, user_id, token, provider, device_model, app_version) "
+                    "VALUES (?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(installation_id) DO UPDATE SET "
+                    "token = excluded.token, provider = excluded.provider, "
+                    "device_model = excluded.device_model, "
+                    "app_version = excluded.app_version, updated_at = datetime('now')",
+                    (
+                        installation_id,
+                        user_id,
+                        token,
+                        provider,
+                        device_model or "",
+                        app_version or "",
+                    ),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def delete_android_device(self, installation_id: str, user_id: int) -> None:
         self._execute(
@@ -3605,6 +3667,61 @@ class DB:
                     )
                 except sqlite3.IntegrityError:
                     raise ValueError(f"用户名已存在: {username}") from None
+                uid = insert.lastrowid
+                self._insert_default_news_sources(uid)
+                self._conn.execute(
+                    "UPDATE register_codes SET used_by = ? WHERE code = ?",
+                    (uid, code),
+                )
+                self._conn.commit()
+                return uid
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def register_wechat_with_code(self, code: str, username: str, wechat_openid: str) -> int:
+        """微信首次登录：原子消费邀请码并创建带 openid 的用户。"""
+        code = code.strip().upper()
+        wechat_openid = (wechat_openid or "").strip()
+        if not wechat_openid:
+            raise ValueError("微信登录态无效")
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN")
+                existing = self._conn.execute(
+                    "SELECT id FROM users WHERE wechat_openid = ?", (wechat_openid,)
+                ).fetchone()
+                if existing is not None:
+                    raise ValueError("微信账号已存在")
+                cur = self._conn.execute(
+                    "UPDATE register_codes SET used_at = datetime('now') "
+                    "WHERE code = ? AND used_by IS NULL AND revoked_at IS NULL "
+                    "AND (expires_at IS NULL OR expires_at > datetime('now'))",
+                    (code,),
+                )
+                if cur.rowcount == 0:
+                    row = self._conn.execute(
+                        "SELECT used_by, revoked_at, expires_at FROM register_codes WHERE code = ?",
+                        (code,),
+                    ).fetchone()
+                    if row is None or row["used_by"] is not None:
+                        raise ValueError("邀请码无效或已被使用")
+                    if row["revoked_at"]:
+                        raise ValueError("邀请码已作废，请向管理员索取新的")
+                    raise ValueError("邀请码已过期，请向管理员索取新的")
+                if self._conn.execute(
+                    "SELECT id FROM users WHERE username = ? COLLATE NOCASE",
+                    (username,),
+                ).fetchone():
+                    raise ValueError(f"用户名已存在: {username}")
+                try:
+                    insert = self._conn.execute(
+                        "INSERT INTO users (username, password_hash, is_admin, wechat_openid) "
+                        "VALUES (?, '', 0, ?)",
+                        (username, wechat_openid),
+                    )
+                except sqlite3.IntegrityError:
+                    raise ValueError("微信账号已存在") from None
                 uid = insert.lastrowid
                 self._insert_default_news_sources(uid)
                 self._conn.execute(
@@ -4364,17 +4481,26 @@ class DB:
 
     # ---- 绑定码 ----
     def create_bind_code(self, code: str, user_id: int, expires_at: int) -> None:
+        digest = _bind_code_digest(code)
+        if not digest:
+            raise ValueError("绑定码无效")
         self._execute(
             "INSERT INTO bind_codes (code, user_id, expires_at) VALUES (?, ?, ?)",
-            (code, user_id, expires_at),
+            (digest, user_id, expires_at),
         )
 
     def get_bind_code(self, code: str) -> dict | None:
-        rows = self._rows("SELECT * FROM bind_codes WHERE code = ?", (code,))
+        digest = _bind_code_digest(code)
+        if not digest:
+            return None
+        rows = self._rows("SELECT * FROM bind_codes WHERE code = ?", (digest,))
         return rows[0] if rows else None
 
     def delete_bind_code(self, code: str) -> None:
-        self._execute("DELETE FROM bind_codes WHERE code = ?", (code,))
+        digest = _bind_code_digest(code)
+        if not digest:
+            return
+        self._execute("DELETE FROM bind_codes WHERE code = ?", (digest,))
 
     def delete_expired_bind_codes(self) -> None:
         self._execute("DELETE FROM bind_codes WHERE expires_at < ?", (int(time.time()),))
@@ -4414,6 +4540,17 @@ class DB:
                 self._conn.rollback()
                 raise
 
+    def get_quota_count(self, key: str, period_start: int) -> int:
+        rows = self._rows(
+            "SELECT period_start, count FROM bind_quota WHERE key = ?", (key,)
+        )
+        if not rows or int(rows[0]["period_start"]) != int(period_start):
+            return 0
+        return int(rows[0]["count"])
+
+    def clear_quota(self, key: str) -> None:
+        self._execute("DELETE FROM bind_quota WHERE key = ?", (key,))
+
     def consume_bind_code(self, code: str, identity_type: str, identity: str) -> dict | None:
         field = (
             "telegram_chat_id"
@@ -4423,12 +4560,15 @@ class DB:
         if not field:
             return None
         now = int(time.time())
+        digest = _bind_code_digest(code)
+        if not digest:
+            return None
         with self._lock:
             try:
                 self._conn.execute("BEGIN")
                 claimed = self._conn.execute(
                     "DELETE FROM bind_codes WHERE code = ? AND expires_at >= ? RETURNING user_id",
-                    (code, now),
+                    (digest, now),
                 ).fetchone()
                 if claimed is None:
                     self._conn.commit()

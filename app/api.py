@@ -65,7 +65,7 @@ from pydantic import BaseModel, Field
 from . import auth, kol_requests, user_quota, wechat
 from .avatar_cache import cache_avatar
 from .market import MarketQuotes
-from .bot_core import BIND_CODE_TTL
+from .bot_core import BIND_CODE_TTL, new_bind_code
 from .db import (
     _UNSET,
     ALLOWED_PLATFORMS,
@@ -347,6 +347,7 @@ class LoginIn(BaseModel):
 
 class WechatLoginIn(BaseModel):
     code: str
+    invite_code: str = ""
 
 
 class WebPushKeys(BaseModel):
@@ -1572,22 +1573,19 @@ def create_api_router(
 ) -> APIRouter:
     router = APIRouter(prefix="/api")
     market_quotes = MarketQuotes()
-    # 登录/注册限流（内存版，单实例够用）：每 IP 窗口内失败次数超限后 429
-    login_attempts: dict[str, list[float]] = {}
-    img_proxy_hits: dict[str, list[float]] = {}
+    # 登录/注册与 img-proxy 限流落在 bind_quota，多进程共享同一 SQLite
     ima_quota_alerts: set[tuple] = set()
     LOGIN_MAX_FAILURES = 8
     LOGIN_WINDOW = 300
     # 账号级失败锁定（防 IP 轮换爆破，独立于上面的 IP 限流）：
     # 1 小时滚动窗口内连续失败超阈值即锁定该账号，锁定期内即使密码正确也拒绝；
     # 管理员账号更敏感（3 次锁 30 分钟），普通账号 10 次锁 15 分钟；成功登录立即解锁。
-    account_failures: dict[str, list[float]] = {}  # username -> [窗口内失败时间戳]
-    account_locked_until: dict[str, float] = {}  # username -> 解锁时间戳
     ACCOUNT_FAILURE_WINDOW = 3600
     LOGIN_ACCOUNT_LOCK_THRESHOLD = 10
     LOGIN_ACCOUNT_LOCK_WINDOW = 900
     ADMIN_LOGIN_LOCK_THRESHOLD = 3
     ADMIN_LOGIN_LOCK_WINDOW = 1800
+    MIN_PASSWORD_LEN = 10
     MAX_PASSWORD_LEN = 128
     _ts_secret = (turnstile_secret or "").strip()
     _ts_sitekey = (turnstile_site_key or "").strip()
@@ -1625,28 +1623,24 @@ def create_api_router(
 
     def _check_login_limit(ip: str) -> None:
         now = time.time()
-        recent = [t for t in login_attempts.get(ip, []) if now - t < LOGIN_WINDOW]
-        login_attempts[ip] = recent
-        if len(recent) >= LOGIN_MAX_FAILURES:
+        period = user_quota.window_start(now, LOGIN_WINDOW)
+        if db.get_quota_count(f"login_fail:{ip}", period) >= LOGIN_MAX_FAILURES:
             raise HTTPException(status_code=429, detail="尝试次数过多，请 5 分钟后再试")
-        # 每次登录尝试顺带清理全量过期 IP 记录，防止无界增长（不能只删空列表）
-        _prune_window_dict(login_attempts, LOGIN_WINDOW, now, max_entries=1000)
 
     def _check_img_proxy_limit(ip: str) -> None:
         now = time.time()
-        recent = [t for t in img_proxy_hits.get(ip, []) if now - t < IMAGE_PROXY_WINDOW_SECONDS]
-        if len(recent) >= IMAGE_PROXY_MAX_PER_WINDOW:
-            img_proxy_hits[ip] = recent
-            _prune_window_dict(img_proxy_hits, IMAGE_PROXY_WINDOW_SECONDS, now, max_entries=2000)
-            retry_after = max(1, int(IMAGE_PROXY_WINDOW_SECONDS - (now - recent[0])) + 1)
+        allowed, retry_after = db.consume_bind_quota(
+            f"img_proxy:{ip}",
+            user_quota.window_start(now, IMAGE_PROXY_WINDOW_SECONDS),
+            IMAGE_PROXY_MAX_PER_WINDOW,
+            IMAGE_PROXY_WINDOW_SECONDS,
+        )
+        if not allowed:
             raise HTTPException(
                 status_code=429,
                 detail="图片加载过于频繁，请稍后再试",
-                headers={"Retry-After": str(retry_after)},
+                headers={"Retry-After": str(max(int(retry_after), 1))},
             )
-        recent.append(now)
-        img_proxy_hits[ip] = recent
-        _prune_window_dict(img_proxy_hits, IMAGE_PROXY_WINDOW_SECONDS, now, max_entries=2000)
 
     def _turnstile_runtime() -> dict:
         stored_enabled = db.get_setting("turnstile_enabled")
@@ -1693,39 +1687,59 @@ def create_api_router(
             raise HTTPException(status_code=403, detail="人机验证失败，请重试")
 
     def _record_login_failure(ip: str) -> None:
-        login_attempts.setdefault(ip, []).append(time.time())
+        now = time.time()
+        db.consume_bind_quota(
+            f"login_fail:{ip}",
+            user_quota.window_start(now, LOGIN_WINDOW),
+            LOGIN_MAX_FAILURES,
+            LOGIN_WINDOW,
+        )
+
+    def _account_lock_key(username: str) -> str:
+        return f"login_lock:{_account_key(username)}"
+
+    def _account_fail_key(username: str) -> str:
+        return f"acct_fail:{_account_key(username)}"
 
     def _account_lock_seconds_left(username: str) -> int:
         """账号剩余锁定秒数；未锁定返回 0（过期记录自动清理）。"""
-        key = _account_key(username)
-        until = account_locked_until.get(key)
-        if not until:
+        raw = db.get_setting(_account_lock_key(username))
+        if not raw:
+            return 0
+        try:
+            until = float(raw)
+        except (TypeError, ValueError):
+            db.set_setting(_account_lock_key(username), "")
             return 0
         left = int(until - time.time())
         if left <= 0:
-            account_locked_until.pop(key, None)
+            db.set_setting(_account_lock_key(username), "")
             return 0
         return left
 
     def _record_account_failure(username: str, is_admin: bool, ip: str) -> None:
         """账号级失败计数（1 小时滚动窗口）；超阈值锁定账号并写操作日志。"""
-        key = _account_key(username)
         now = time.time()
-        recent = [t for t in account_failures.get(key, []) if now - t < ACCOUNT_FAILURE_WINDOW]
-        recent.append(now)
-        account_failures[key] = recent
         threshold = ADMIN_LOGIN_LOCK_THRESHOLD if is_admin else LOGIN_ACCOUNT_LOCK_THRESHOLD
-        if len(recent) >= threshold:
+        fail_key = _account_fail_key(username)
+        allowed, _retry = db.consume_bind_quota(
+            fail_key,
+            user_quota.window_start(now, ACCOUNT_FAILURE_WINDOW),
+            threshold,
+            ACCOUNT_FAILURE_WINDOW,
+        )
+        count = db.get_quota_count(
+            fail_key, user_quota.window_start(now, ACCOUNT_FAILURE_WINDOW)
+        )
+        if not allowed or count >= threshold:
             window = ADMIN_LOGIN_LOCK_WINDOW if is_admin else LOGIN_ACCOUNT_LOCK_WINDOW
-            account_locked_until[key] = now + window
+            db.set_setting(_account_lock_key(username), str(now + window))
             db.log_admin_action(
                 None,
                 "login_locked",
                 username,
-                f"ip={ip} role={'admin' if is_admin else 'user'} 1小时内失败{len(recent)}次，锁定{window // 60}分钟",
+                f"ip={ip} role={'admin' if is_admin else 'user'} 1小时内失败{count}次，锁定{window // 60}分钟",
             )
-        # 每次失败顺带清理全量过期账号记录，防止无界增长（不能只删空列表）
-        _prune_window_dict(account_failures, ACCOUNT_FAILURE_WINDOW, now, max_entries=2000)
 
     def _audit(admin: dict, action: str, target: str = "", detail: str = "") -> None:
         db.log_admin_action(admin["id"], action, target, detail)
@@ -1924,13 +1938,7 @@ def create_api_router(
         out["zsxq_ws_address"] = _ws_address(db)
         return out
 
-    def get_current_user(authorization: str | None = Header(None), token: str | None = Query(None)):
-        # 浏览器 <a href> / <img> 整页导航不带 Authorization 头，允许 token 走 query
-        if not (authorization and authorization.startswith("Bearer ")) and token:
-            authorization = f"Bearer {token}"
-        token = ""
-        if authorization and authorization.startswith("Bearer "):
-            token = authorization[7:]
+    def _user_from_bearer(token: str) -> dict:
         payload = auth.verify_token(token, secret)
         if not payload:
             raise HTTPException(status_code=401, detail="未登录或登录已过期")
@@ -1940,6 +1948,24 @@ def create_api_router(
         if int(payload.get("ver", 0)) != int(user.get("token_version") or 0):
             raise HTTPException(status_code=401, detail="登录已失效，请重新登录")
         return user
+
+    def get_current_user(authorization: str | None = Header(None)):
+        token = ""
+        if authorization and authorization.startswith("Bearer "):
+            token = authorization[7:]
+        return _user_from_bearer(token)
+
+    def get_download_user(
+        authorization: str | None = Header(None),
+        token: str | None = Query(None),
+    ):
+        # 文件下载可能是 <a href> / <img>，允许一次性 query；JSON API 只认 Authorization
+        if not (authorization and authorization.startswith("Bearer ")) and token:
+            authorization = f"Bearer {token}"
+        bearer = ""
+        if authorization and authorization.startswith("Bearer "):
+            bearer = authorization[7:]
+        return _user_from_bearer(bearer)
 
     def require_admin(user: dict = Depends(get_current_user)):
         if not user["is_admin"]:
@@ -2049,8 +2075,8 @@ def create_api_router(
                 username = auth.validate_username(body.username)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from None
-            if len(body.password) < 6:
-                raise HTTPException(status_code=400, detail="密码至少6位")
+            if len(body.password) < MIN_PASSWORD_LEN:
+                raise HTTPException(status_code=400, detail=f"密码至少{MIN_PASSWORD_LEN}位")
             if len(body.password) > MAX_PASSWORD_LEN:
                 raise HTTPException(status_code=400, detail=f"密码最长{MAX_PASSWORD_LEN}位")
             if not body.code.strip():
@@ -2105,9 +2131,9 @@ def create_api_router(
             _record_login_failure(ip)
             _record_account_failure(username, bool(user["is_admin"]), ip)
             raise HTTPException(status_code=401, detail="用户名或密码错误")
-        login_attempts.pop(ip, None)  # 登录成功清零，避免历史失败锁住正常用户
-        account_failures.pop(_account_key(username), None)
-        account_locked_until.pop(_account_key(username), None)
+        db.clear_quota(f"login_fail:{ip}")
+        db.clear_quota(_account_fail_key(username))
+        db.set_setting(_account_lock_key(username), "")
         db.touch_last_login(user["id"])
         return {
             "token": auth.create_token(
@@ -2117,27 +2143,45 @@ def create_api_router(
         }
 
     @router.post("/auth/wechat")
-    def wechat_login(body: WechatLoginIn):
+    def wechat_login(body: WechatLoginIn, request: Request):
         if wechat_config is None or not wechat_config.app_id or not wechat_config.app_secret:
             raise HTTPException(status_code=400, detail="未配置微信小程序 app_id/app_secret")
+        ip = _client_ip(request)
+        _check_login_limit(ip)
         try:
             data = wechat.code2session(body.code, wechat_config.app_id, wechat_config.app_secret)
         except Exception as exc:  # noqa: BLE001
+            _record_login_failure(ip)
             raise HTTPException(status_code=400, detail=str(exc)) from None
         openid = data["openid"]
         user = db.get_user_by_openid(openid)
         if user is None:
+            if not allow_register:
+                _record_login_failure(ip)
+                raise HTTPException(status_code=403, detail="暂未开放注册")
+            invite = (body.invite_code or "").strip()
+            if not invite:
+                _record_login_failure(ip)
+                raise HTTPException(status_code=400, detail="注册需要邀请码，请向管理员索取")
             base = f"wx_{openid[:10]}"
             username, i = base, 1
             while db.get_user_by_username_ci(username) is not None:
                 username = f"{base}{i}"
                 i += 1
-            uid = db.add_user(
-                username,
-                "",
-                wechat_openid=openid,
-            )
-            user = db.get_user(uid)
+            try:
+                uid = db.register_wechat_with_code(invite, username, openid)
+            except ValueError as exc:
+                raced = db.get_user_by_openid(openid)
+                if raced is not None:
+                    user = raced
+                else:
+                    _record_login_failure(ip)
+                    raise HTTPException(status_code=400, detail=str(exc)) from None
+            else:
+                user = db.get_user(uid)
+        if user is None:
+            raise HTTPException(status_code=400, detail="微信登录失败")
+        db.clear_quota(f"login_fail:{ip}")
         db.touch_last_login(user["id"])
         return {
             "token": auth.create_token(
@@ -2393,14 +2437,17 @@ def create_api_router(
         token = body.token.strip()
         if not token:
             raise HTTPException(status_code=400, detail="设备 token 不能为空")
-        db.upsert_android_device(
-            installation_id,
-            user["id"],
-            token,
-            body.provider,
-            body.device_model.strip(),
-            body.app_version.strip(),
-        )
+        try:
+            db.upsert_android_device(
+                installation_id,
+                user["id"],
+                token,
+                body.provider,
+                body.device_model.strip(),
+                body.app_version.strip(),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
         return {
             "ok": True,
             "installation_id": installation_id,
@@ -2433,8 +2480,15 @@ def create_api_router(
         if not allowed:
             raise HTTPException(status_code=429, detail="绑定码生成过于频繁，请稍后再试")
         db.delete_expired_bind_codes()
-        code = f"{secrets.randbelow(1_000_000):06d}"
-        db.create_bind_code(code, user["id"], int(time.time()) + BIND_CODE_TTL)
+        code = new_bind_code()
+        for _ in range(8):
+            try:
+                db.create_bind_code(code, user["id"], int(time.time()) + BIND_CODE_TTL)
+                break
+            except sqlite3.IntegrityError:
+                code = new_bind_code()
+        else:
+            raise HTTPException(status_code=500, detail="绑定码生成失败，请重试")
         return {"code": code, "expires_in_seconds": BIND_CODE_TTL}
 
     # ---- 飞书个人机器人（扫码注册） ----
@@ -2540,17 +2594,28 @@ def create_api_router(
         _feishu_personal_manager().disable(user["id"])
         return {"ok": True}
 
+    @router.post("/auth/logout")
+    def logout(user: dict = Depends(get_current_user)):
+        db.update_user_atomic(user["id"], {}, revoke_tokens=True)
+        return {"ok": True}
+
     @router.post("/me/password")
     def change_password(body: PasswordChangeIn, user: dict = Depends(get_current_user)):
-        if len(body.new_password) < 6:
-            raise HTTPException(status_code=400, detail="新密码至少6位")
+        if len(body.new_password) < MIN_PASSWORD_LEN:
+            raise HTTPException(status_code=400, detail=f"新密码至少{MIN_PASSWORD_LEN}位")
         if len(body.new_password) > MAX_PASSWORD_LEN:
             raise HTTPException(status_code=400, detail=f"新密码最长{MAX_PASSWORD_LEN}位")
         # 微信/机器人自动创建的账号没有密码：已持有会话即可首次设密
         if user["password_hash"] and not auth.verify_password(body.old_password, user["password_hash"]):
             raise HTTPException(status_code=400, detail="原密码错误")
         db.update_user_password(user["id"], auth.hash_password(body.new_password))
-        return {"ok": True}
+        fresh = db.get_user(user["id"])
+        return {
+            "ok": True,
+            "token": auth.create_token(
+                fresh["id"], fresh["username"], secret, fresh.get("token_version") or 0
+            ),
+        }
 
     def _plaza_kol_visible(user: dict, kol: dict | None) -> bool:
         if kol is None:
@@ -2840,7 +2905,7 @@ def create_api_router(
 
     @router.get("/news/{article_id}/images/{index}")
     def news_article_image(
-        article_id: int, index: int, user: dict = Depends(get_current_user)
+        article_id: int, index: int, user: dict = Depends(get_download_user)
     ):
         try:
             body, content_type = _news_service_or_503().fetch_image(
@@ -3921,8 +3986,11 @@ def create_api_router(
         from urllib.parse import quote
 
         n = name or fallback
+        ascii_name = "".join(
+            c for c in n if c.isascii() and c not in '"\\\r\n' and ord(c) >= 32
+        ) or "download"
         return (
-            f"attachment; filename=\"{''.join(c for c in n if ord(c) < 128) or 'download'}\"; "
+            f"attachment; filename=\"{ascii_name}\"; "
             f"filename*=UTF-8''{quote(n)}"
         )
 
@@ -3948,7 +4016,7 @@ def create_api_router(
         db.update_post_details(updates)
 
     @router.get("/media/zsxq-file/{file_id}")
-    def download_zsxq_file(file_id: str, user: dict = Depends(get_current_user)):
+    def download_zsxq_file(file_id: str, user: dict = Depends(get_download_user)):
         if not file_id.isdigit() or len(file_id) > 32:
             raise HTTPException(status_code=400, detail="无效附件")
         hits = _zsxq_file_hits(file_id)
@@ -4331,7 +4399,7 @@ def create_api_router(
         media_id: str,
         asset_id: str,
         group: str = Query("", max_length=128),
-        user: dict = Depends(get_current_user),
+        user: dict = Depends(get_download_user),
     ):
         _enforce_ima_file_quota(user)
         if feishu_documents is None:
@@ -4350,7 +4418,7 @@ def create_api_router(
     def get_ima_document_text(
         media_id: str,
         group: str = Query("", max_length=128),
-        user: dict = Depends(get_current_user),
+        user: dict = Depends(get_download_user),
     ):
         _enforce_ima_file_quota(user)
         document = _ima_document(user, media_id, group)
@@ -4368,7 +4436,7 @@ def create_api_router(
         media_id: str,
         group: str = Query("", max_length=128),
         download: int = Query(0, ge=0, le=1),
-        user: dict = Depends(get_current_user),
+        user: dict = Depends(get_download_user),
     ):
         _enforce_ima_file_quota(user)
         document = _ima_document(user, media_id, group)
@@ -4523,33 +4591,61 @@ def create_api_router(
         }
 
     @router.post("/admin/feishu-documents/oauth/start")
-    def start_feishu_documents_oauth(admin: dict = Depends(require_admin)):
+    def start_feishu_documents_oauth(
+        request: Request,
+        response: Response,
+        admin: dict = Depends(require_admin),
+    ):
         service = _require_feishu_documents()
         try:
-            url = service.oauth_start(int(admin["id"]))
+            url, state_hash = service.oauth_begin(int(admin["id"]))
         except FeishuDocumentError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        response.set_cookie(
+            "feishu_oauth",
+            state_hash,
+            max_age=300,
+            httponly=True,
+            samesite="lax",
+            path="/api/admin/feishu-documents/oauth/callback",
+            secure=request.url.scheme == "https",
+        )
         _audit(admin, "start_feishu_documents_oauth")
         return {"url": url}
 
     @router.post("/admin/feishu-documents/oauth/callback")
-    def finish_feishu_documents_oauth(body: FeishuDocumentOauthCallbackIn):
+    def finish_feishu_documents_oauth(
+        body: FeishuDocumentOauthCallbackIn,
+        admin: dict = Depends(require_admin),
+    ):
         service = _require_feishu_documents()
         try:
             admin_id = service.oauth_callback(body.state.strip(), body.code.strip())
         except FeishuDocumentError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        admin = db.get_user(admin_id)
-        if admin is None or not admin.get("is_admin"):
+        if int(admin_id) != int(admin["id"]):
+            raise HTTPException(status_code=403, detail="授权会话不属于当前管理员")
+        started_by = db.get_user(admin_id)
+        if started_by is None or not started_by.get("is_admin"):
             raise HTTPException(status_code=403, detail="授权发起账号不是管理员")
         _audit(admin, "finish_feishu_documents_oauth")
         return {"ok": True}
 
     @router.get("/admin/feishu-documents/oauth/callback")
     def finish_feishu_documents_oauth_redirect(
+        request: Request,
         state: str = Query("", max_length=256),
         code: str = Query("", max_length=4096),
     ):
+        expected = hashlib.sha256((state or "").strip().encode()).hexdigest()
+        if (request.cookies.get("feishu_oauth") or "") != expected:
+            from fastapi.responses import RedirectResponse
+
+            logger.warning("Feishu OAuth callback rejected: missing or mismatched cookie")
+            return RedirectResponse(
+                url="/admin/knowledge?tab=feishu&oauth=failed",
+                status_code=303,
+            )
         service = _require_feishu_documents()
         try:
             admin_id = service.oauth_callback(state.strip(), code.strip())
@@ -8288,8 +8384,8 @@ def create_api_router(
             updates["is_admin"] = body.is_admin
         if "password" in body.model_fields_set:
             password = body.password or ""
-            if len(password) < 6:
-                raise HTTPException(status_code=400, detail="密码至少6位")
+            if len(password) < MIN_PASSWORD_LEN:
+                raise HTTPException(status_code=400, detail=f"密码至少{MIN_PASSWORD_LEN}位")
             if len(password) > MAX_PASSWORD_LEN:
                 raise HTTPException(status_code=400, detail=f"密码最长{MAX_PASSWORD_LEN}位")
             updates["password_hash"] = auth.hash_password(password)
@@ -8429,7 +8525,10 @@ def create_api_router(
             or parsed.password
         ):
             raise HTTPException(status_code=400, detail="不支持的图片地址")
+        from .url_safety import img_proxy_resolved_ok
 
+        if not img_proxy_resolved_ok(parsed.hostname):
+            raise HTTPException(status_code=400, detail="不支持的图片地址")
 
         client = httpx.Client(
             timeout=15,

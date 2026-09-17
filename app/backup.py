@@ -24,6 +24,10 @@ MSG_ROLLBACK = "恢复失败，已保持恢复前的数据库"
 MSG_BAD_UPLOAD = "请上传有效的 .db 备份文件"
 MSG_BUSY = "已有备份或恢复在进行"
 MSG_HTTPS = "WebDAV 地址需要 https"
+MSG_ENCRYPTED = "备份已加密，请配置 FEISHU_CREDENTIAL_KEY 后再恢复"
+MSG_DECRYPT = "备份解密失败，密钥不匹配"
+
+BACKUP_MAGIC = b"VPUSH1\0"
 
 KEY_URL = "backup_webdav_url"
 KEY_USER = "backup_webdav_username"
@@ -126,6 +130,25 @@ def _prune_local(folder: Path, keep: int = LOCAL_KEEP) -> None:
         Path(str(old) + "-wal").unlink(missing_ok=True)
 
 
+def encrypt_backup_bytes(data: bytes, key: str) -> bytes:
+    from cryptography.fernet import Fernet
+
+    return BACKUP_MAGIC + Fernet(key.encode()).encrypt(data)
+
+
+def decrypt_backup_bytes(data: bytes, key: str) -> bytes:
+    if not data.startswith(BACKUP_MAGIC):
+        return data
+    if not (key or "").strip():
+        raise BackupError(MSG_ENCRYPTED)
+    from cryptography.fernet import Fernet, InvalidToken
+
+    try:
+        return Fernet(key.encode()).decrypt(data[len(BACKUP_MAGIC):])
+    except InvalidToken as exc:
+        raise BackupError(MSG_DECRYPT) from exc
+
+
 def snapshot(db: DB) -> Path:
     folder = backups_dir(db)
     folder.mkdir(parents=True, exist_ok=True)
@@ -134,6 +157,9 @@ def snapshot(db: DB) -> Path:
     if not quick_check(target):
         target.unlink(missing_ok=True)
         raise BackupError("备份校验失败，请稍后重试")
+    key = (getattr(db, "credential_key", "") or "").strip()
+    if key:
+        target.write_bytes(encrypt_backup_bytes(target.read_bytes(), key))
     try:
         target.chmod(0o600)
     except OSError:
@@ -266,7 +292,7 @@ class WebDAV:
         self.folder = join_webdav(url, path or DEFAULT_PATH)
         self.auth = (username or "", password or "")
         self._owns_client = client is None
-        self.client = client or httpx.Client(timeout=60.0, follow_redirects=True)
+        self.client = client or httpx.Client(timeout=60.0, follow_redirects=False)
 
     def close(self) -> None:
         if self._owns_client:
@@ -358,6 +384,7 @@ def restore_from_bytes(db: DB, data: bytes) -> None:
     folder = backups_dir(db)
     folder.mkdir(parents=True, exist_ok=True)
     candidate = folder / f"restore-{time.time_ns()}.db"
+    data = decrypt_backup_bytes(data, getattr(db, "credential_key", "") or "")
     candidate.write_bytes(data)
     try:
         if not quick_check(candidate):

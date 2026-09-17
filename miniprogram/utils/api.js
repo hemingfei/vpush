@@ -50,14 +50,14 @@ function request(path, options = {}) {
 }
 
 // 微信登录：wx.login 拿 code -> 后端换 token
-function loginWithWechat() {
+function loginWithWechat(inviteCode) {
   return new Promise((resolve, reject) => {
     wx.login({
       success: async ({ code }) => {
         try {
           const data = await request("/api/auth/wechat", {
             method: "POST",
-            data: { code },
+            data: { code, invite_code: inviteCode || "" },
           });
           wx.setStorageSync("dav_token", data.token);
           wx.setStorageSync("dav_user", data.user);
