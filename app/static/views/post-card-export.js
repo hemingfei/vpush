@@ -2,9 +2,9 @@ import { escapeHtml, imgProxyUrl, imgSrcFor } from "../core/html.js";
 import { PLATFORM_ICONS } from "../core/platforms.js";
 
 const CARD_WIDTH = 600;
-const EXPORT_SCALE = 1;
-const PHOTO_MAX = 720;
-const AVATAR_MAX = 128;
+const EXPORT_SCALE = 2;
+const PHOTO_MAX = 1440;
+const AVATAR_MAX = 256;
 const CARD_ACCENT = "#1668e0";
 const CARD_ACCENT_DARK = "#5a9bf5";
 const HOST_ID = "vpush-post-card-host";
@@ -359,7 +359,7 @@ async function fitImage(url, maxEdge) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return dataUrl;
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL("image/jpeg", 0.88);
+    return canvas.toDataURL("image/jpeg", 0.92);
   } catch {
     return "";
   }

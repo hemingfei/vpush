@@ -3629,6 +3629,8 @@ def test_post_card_has_image_export_button():
     assert "findExportablePost" in src
     assert "startExportFromClick" in export_fn
     export_src = POST_CARD_EXPORT_JS.read_text()
+    assert "const EXPORT_SCALE = 2;" in export_src
+    assert "const PHOTO_MAX = 1440;" in export_src
     assert "navigator.share" in export_src
     assert "AbortError" in export_src
     assert "(max-width: 768px)" in export_src
