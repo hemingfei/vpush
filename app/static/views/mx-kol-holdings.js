@@ -9,7 +9,7 @@ export function createMxKolHoldingsView(dependencies) {
     closeViewsDrawer,
   } = dependencies;
 
-  const _mxc = { seq: 0, data: null, days: 30, expanded: new Set(), view: "all", recent: 5, sort: "weight",
+  const _mxc = { seq: 0, data: null, days: 30, expanded: new Set(), view: "all", recent: 3, sort: "weight",
     kolId: 0, drawerEl: null, drawerBody: null, token: 0 };
   const MXC_VIEWS = { all: "全部", open: "建仓", add: "加仓", trim: "减仓", clear: "清仓" };
   // 最近观点天数筛选：只看最近 N 天内还被大V提及的在持标的（0=不筛选）。
@@ -72,8 +72,12 @@ export function createMxKolHoldingsView(dependencies) {
   // 挂载时恢复本地口径：最近观点天数 + 排序方式（都只影响前端展示，不过服务端）
   function mxcLoadPrefs() {
     try {
-      const v = Number(localStorage.getItem(MXC_RECENT_KEY));
-      if (Number.isInteger(v) && v >= 0 && v <= 20) _mxc.recent = v;
+      // 从未存过（null）不覆盖默认：Number(null)=0 会把默认天数顶成“0=不筛选”
+      const raw = localStorage.getItem(MXC_RECENT_KEY);
+      if (raw != null) {
+        const v = Number(raw);
+        if (Number.isInteger(v) && v >= 0 && v <= 20) _mxc.recent = v;
+      }
       const s = localStorage.getItem(MXC_SORT_KEY);
       if (s === "weight" || s === "time") _mxc.sort = s;
     } catch (e) { /* 存储不可用：用默认值 */ }

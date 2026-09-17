@@ -608,8 +608,8 @@ def test_mx_kol_holdings_drawer_entry_and_shell():
     """大V头像旁「持仓」按钮打开右侧预估持仓抽屉（不跳页）。
 
     两个卡片入口都出 .mxv-hold-btn：大V总览卡片（内联 onclick + stopPropagation 防触发
-    卡片本身的 mxvOpenKol）与观点流大V卡片（data-act 委托）；大V抽屉头部也有行内
-    变体（data-kol-id 委托，换壳开持仓抽屉）。抽屉外壳复用 #mxv-drawer-slot 挂载、
+    卡片本身的 mxvOpenKol）与观点流大V卡片（data-act 委托）；大V抽屉里按钮在头像下方、
+    筛选行上方独立成块（data-kol-id 委托，换壳开持仓抽屉）。抽屉外壳复用 #mxv-drawer-slot 挂载、
     与智囊团抽屉同 z-index 体系、Esc 可关；页头不出「‹ 动态」返回钮（关闭走外壳 ✕）。
     """
     js = MX_VIEWS_JS
@@ -623,9 +623,13 @@ def test_mx_kol_holdings_drawer_entry_and_shell():
     assert 'class="mxv-hold-btn" data-act="mxc" data-kol-id=' in feed_kol
     bind = _fn_body("mxvBindFeedHighlight", js)
     assert 'dataset.act === "mxc"' in bind and "openHoldingsDrawer(" in bind
-    # 大V抽屉头部行内变体：委托挂 #mxv-drawer-body，点击换壳（先收起原抽屉）
+    # 大V抽屉头部行内变体：委托挂 #mxv-drawer-body，点击换壳（先收起原抽屉）；
+    # 位置在头像行下方、方向/操作筛选行上方（独立块，不再顶右上角）
     drawer_body = _fn_body("mxvRenderDrawerBody", js)
     assert 'mxv-hold-btn inline" data-kol-id=' in drawer_body
+    assert "查看持仓</button>" in drawer_body
+    assert drawer_body.index('mxv-hold-btn inline"') > drawer_body.index("border-radius:50%")
+    assert drawer_body.index('mxv-hold-btn inline"') < drawer_body.index("mxvDrawerFiltersHtml(")
     dbind = _fn_body("mxvBindDrawerFilters", js)
     assert ".mxv-hold-btn[data-kol-id]" in dbind and "openHoldingsDrawer(" in dbind
     # 抽屉实现（mx-kol-holdings.js）：外壳/关闭/Esc/路由离开清理/完整页跳转
@@ -692,6 +696,9 @@ def test_mx_kol_holdings_slider_change_and_sort():
     # 口径持久化：天数 + 排序都在挂载时恢复
     prefs = _fn_body("mxcLoadPrefs", mxc)
     assert "MXC_RECENT_KEY" in prefs and "MXC_SORT_KEY" in prefs
+    # 默认 3 天；从未存过（null）不得覆盖默认——Number(null)=0 会把天数顶成“0=不筛选”
+    assert "recent: 3" in mxc
+    assert "raw != null" in prefs and "localStorage.getItem(MXC_RECENT_KEY)" in prefs
     # window 注册（内联 onclick 可达）
     handlers = APP_JS[APP_JS.index("const INLINE_HANDLERS"):]
     for name in ("mxcRecentInput", "mxcRecentChange", "mxcSetSort"):

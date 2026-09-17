@@ -1263,7 +1263,7 @@ def test_mx_kol_holdings_slider_drags_while_held_and_sorts(page: Page):
     按住拖动即被打断——用例断言拖动全程元素存活且值跟手。"""
     page.clock.install(time=datetime(2026, 9, 17, 4, 0, tzinfo=UTC))  # 北京 12:00
     page.evaluate("""async () => {
-      localStorage.setItem("mxc_recent_days", "0");
+      localStorage.removeItem("mxc_recent_days");
       localStorage.removeItem("mxc_sort");
       document.body.innerHTML = '<main id="mxv-drawer-slot"></main>';
       const { createMxKolHoldingsView } = await import("/views/mx-kol-holdings.js");
@@ -1287,7 +1287,10 @@ def test_mx_kol_holdings_slider_drags_while_held_and_sorts(page: Page):
     }""")
     page.evaluate("mxcOpenDrawer(42)")
     page.wait_for_selector("#mxc-summary .mxc-h-name")
-    assert page.evaluate("window.mxcTest.rows()") == ["甲股", "乙股", "丙股"]  # 不筛选：全量按仓位序
+    # 全新存储（键不存在）默认 3 天：甲股(08-25)超 3 天被滤——null 守卫防 Number(null)=0 顶掉默认
+    assert page.evaluate('Number(document.getElementById("mxc-recent-range").value)') == 3
+    assert page.evaluate('localStorage.getItem("mxc_recent_days")') is None
+    assert page.evaluate("window.mxcTest.rows()") == ["乙股", "丙股"]
 
     box = page.locator("#mxc-recent-range").bounding_box()
     cy = box["y"] + box["height"] / 2
@@ -1300,8 +1303,8 @@ def test_mx_kol_holdings_slider_drags_while_held_and_sorts(page: Page):
     assert page.evaluate("el => el.isConnected", handle)  # 旧代码此处已被重绘替换 → False，拖动即断
     page.mouse.move(box["x"] + 2, cy, steps=8)
     assert page.evaluate("Number(document.getElementById('mxc-recent-range').value)") == 0
-    # 拖动中只改数值/提示文案：汇总不刷新（仍 3 行）
-    assert page.evaluate("window.mxcTest.rows()") == ["甲股", "乙股", "丙股"]
+    # 拖动中只改数值/提示文案：汇总不刷新（保持默认 3 天口径的 2 行，不随拖动值变化）
+    assert page.evaluate("window.mxcTest.rows()") == ["乙股", "丙股"]
     assert page.evaluate('document.getElementById("mxc-recent-val").textContent') == "0"
     page.mouse.move(box["x"] + box["width"] * 0.55, cy, steps=6)
     page.mouse.up()
