@@ -3966,9 +3966,9 @@ function postCard(post) {
           </div>`
         : `<a class="p-file" href="${escapeHtml(f.url)}" target="_blank" rel="noopener">${PAPERCLIP_ICON} ${escapeHtml(f.name || "附件")}</a>`).join("")}
       <div class="p-meta">
-        ${post.platform === "mx" ? `<button type="button" class="cat cat-tag tl-hold-btn" data-kol-id="${Number(post.kol_id) || 0}"
+        ${post.platform === "mx" ? `<button type="button" class="cat tl-hold-btn" data-kol-id="${Number(post.kol_id) || 0}"
           onclick="mxcOpenDrawer(this.dataset.kolId)" title="按该大V近 30 天多空观点回放推演的预估持仓"
-          aria-label="查看${escapeHtml(post.kol_name)}的预估持仓">持仓</button>` : ""}
+          aria-label="查看${escapeHtml(post.kol_name)}的预估持仓">${HOLDINGS_ICON} 持仓</button>` : ""}
         ${post.category_name ? `<span class="cat">${escapeHtml(post.category_name)}</span>` : ""}
         ${post.post_type === "reply" ? `<span class="cat">回复</span>` : ""}
         ${renderPostTagChips(post.tags, post.view_directions, post.pending_tags)}
@@ -6586,6 +6586,8 @@ const {
   mxcSetView,
   mxcChangeDays,
   mxcRecentInput,
+  mxcRecentChange,
+  mxcSetSort,
 } = createMxKolHoldingsView({
   $,
   state,
@@ -8975,6 +8977,8 @@ const INLINE_HANDLERS = {
   mxcSetView,
   mxcChangeDays,
   mxcRecentInput,
+  mxcRecentChange,
+  mxcSetSort,
   mxvAdminKolToggle,
   mxvAdminKolAll,
   mxvAdminKolNone,

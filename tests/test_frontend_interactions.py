@@ -336,7 +336,8 @@ def test_mx_post_card_holdings_button_first_in_tag_row():
     """
     card = _fn_body("postCard")
     assert 'post.platform === "mx"' in card
-    assert 'class="cat cat-tag tl-hold-btn" data-kol-id=' in card
+    assert 'class="cat tl-hold-btn" data-kol-id=' in card
+    assert "HOLDINGS_ICON} 持仓" in card  # 与「图卡」按钮同款：图标 + 文字
     assert "mxcOpenDrawer(this.dataset.kolId)" in card
     # 按钮在 tag 区第一位：p-meta 内先于 category/回复/标签 chips
     meta = card[card.index('<div class="p-meta">'):]
@@ -355,7 +356,7 @@ def test_mx_post_card_holdings_button_first_in_tag_row():
     load = _fn_body("loadTimeline")
     assert '$("#feed")' in load and "innerHTML = TL_SKELETON" in load
     css = STYLE_CSS.read_text(encoding="utf-8")
-    assert ".post-item .p-meta .tl-hold-btn" in css  # 描边式与只读标签区分
+    assert ".post-item .p-meta button.tl-hold-btn" in css  # 与「图卡」按钮同款软底 pill（含图标尺寸）
 
 
 def test_settings_async_responses_are_owned_by_route_and_session_before_mutation():

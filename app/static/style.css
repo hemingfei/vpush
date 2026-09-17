@@ -1542,15 +1542,9 @@ a.kol-card-head:hover .kol-card-info .name { color: var(--color-accent-text); }
      换行交给 .post-item 的 overflow-wrap:anywhere 处理 */
 }
 .post-item .p-meta .cat-tag { margin: 0; }
-/* 最新动态 MX 帖 tag 区首位的「持仓」按钮：描边式与只读标签区分，点开右侧持仓抽屉 */
-.post-item .p-meta .tl-hold-btn {
-  border: 1px solid var(--color-border, rgba(128, 128, 128, .35));
-  background: var(--color-bg, transparent);
-  color: var(--color-accent-text, var(--color-accent));
-  font: inherit;
-  cursor: pointer;
-}
-.post-item .p-meta .tl-hold-btn:hover { border-color: var(--color-accent); }
+/* 最新动态 MX 帖 tag 区首位的「持仓」按钮：与「图卡」按钮同款软底 pill + 图标，点开右侧持仓抽屉
+   （按钮本体样式随 .cat 基础形态，flex/gap/hover 与 button.cat-export 共用下方选择器组） */
+.post-item .p-meta .tl-hold-btn .nav-svg { width: 12px; height: 12px; flex: 0 0 auto; }
 /* 「更多N」展开按钮：与标签徽章同形，可点击 */
 .tags-more-btn { border: 0; font: inherit; cursor: pointer; }
 /* 手动 LLM 打标进度条 */
@@ -1679,13 +1673,15 @@ a.kol-card-head:hover .kol-card-info .name { color: var(--color-accent-text); }
 }
 .post-item .p-meta .ui-icon { width: 12px; height: 12px; }
 .post-item .p-meta .cat.post-tag-filter,
-.post-item .p-meta button.cat-export {
+.post-item .p-meta button.cat-export,
+.post-item .p-meta button.tl-hold-btn {
   position: relative;
   border: 0;
   font: inherit;
   cursor: pointer;
 }
-.post-item .p-meta button.cat-export {
+.post-item .p-meta button.cat-export,
+.post-item .p-meta button.tl-hold-btn {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1694,7 +1690,9 @@ a.kol-card-head:hover .kol-card-info .name { color: var(--color-accent-text); }
 .post-item .p-meta .cat.post-tag-filter:hover,
 .post-item .p-meta .cat.post-tag-filter:focus-visible,
 .post-item .p-meta button.cat-export:hover,
-.post-item .p-meta button.cat-export:focus-visible {
+.post-item .p-meta button.cat-export:focus-visible,
+.post-item .p-meta button.tl-hold-btn:hover,
+.post-item .p-meta button.tl-hold-btn:focus-visible {
   color: var(--color-accent);
   outline: 2px solid var(--color-accent-text);
   outline-offset: 2px;
