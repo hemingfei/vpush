@@ -20,6 +20,10 @@ from ..fetchers.base import (
 )
 from ..url_safety import safe_get
 from .base import Notifier, why_badges
+
+
+def _is_video_url(url: str) -> bool:
+    return str(url).lower().split("?", 1)[0].endswith((".mp4", ".webm"))
 from .telegram_rich import (
     DIGEST_MAX_ITEMS,
     DND_MAX_ITEMS,
@@ -377,6 +381,12 @@ class TelegramNotifier(Notifier):
         if self.rich_messages:
             try:
                 self._send_rich(html, keyboard, media=build_rich_message_media(post.images))
+                # rich 媒体只收图片（build_rich_message_media 已过滤），视频单独送
+                for video_url in (u for u in post.images[:4] if _is_video_url(u)):
+                    try:
+                        self._send_video_url(video_url)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Telegram 视频发送失败 err=%s", type(exc).__name__)
                 return
             except Exception as exc:  # noqa: BLE001
                 # token-free log (do not stringify HTTPStatusError)
@@ -399,7 +409,10 @@ class TelegramNotifier(Notifier):
             logger.warning("Telegram 相册发送失败，降级为逐张发送: %s", type(exc).__name__)
             for image_url in post.images[:4]:
                 try:
-                    self._send_photo_url(image_url)
+                    if _is_video_url(image_url):
+                        self._send_video_url(image_url)
+                    else:
+                        self._send_photo_url(image_url)
                 except Exception as inner:  # noqa: BLE001
                     logger.warning("Telegram 图片发送失败 err=%s", type(inner).__name__)
 
@@ -417,21 +430,61 @@ class TelegramNotifier(Notifier):
     def _send_media_group(self, post: Post) -> None:
         if not self.bot_token or not self.chat_id:
             raise RuntimeError("未配置 telegram bot_token/chat_id")
-        urls = post.images[:4]
-        blobs = self._download_images(urls)
-        if len(blobs) == 1:
-            self.send_photo(blobs[0])
-            return
-        if len(blobs) >= 2:
-            media = [{"type": "photo", "media": f"attach://p{i}"} for i in range(len(blobs))]
-            files = {f"p{i}": (f"p{i}.jpg", blob, "image/jpeg") for i, blob in enumerate(blobs)}
-            self._post_media_group(media, files=files)
-            return
-        if len(urls) == 1:
-            self._send_photo_url(urls[0])
-            return
-        media = [{"type": "photo", "media": url} for url in urls]
-        self._post_media_group(media)
+        urls = [u for u in post.images[:4] if not _is_video_url(u)]
+        videos = [u for u in post.images[:4] if _is_video_url(u)]
+        if urls:
+            blobs = self._download_images(urls)
+            if len(blobs) == 1:
+                self.send_photo(blobs[0])
+            elif len(blobs) >= 2:
+                media = [{"type": "photo", "media": f"attach://p{i}"} for i in range(len(blobs))]
+                files = {f"p{i}": (f"p{i}.jpg", blob, "image/jpeg") for i, blob in enumerate(blobs)}
+                self._post_media_group(media, files=files)
+            elif len(urls) == 1:
+                self._send_photo_url(urls[0])
+            else:
+                media = [{"type": "photo", "media": url} for url in urls]
+                self._post_media_group(media)
+        for video_url in videos:
+            try:
+                self._send_video_url(video_url)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Telegram 视频发送失败 err=%s", type(exc).__name__)
+
+    def _send_video_url(self, video_url: str) -> None:
+        """视频：优先 URL 直传（TG 服务器代取）；源站拒绝 TG 抓取时本机下载转上传。
+
+        TG bot 上传上限 50MB，Truth 视频实测 13~36MB 在限内。
+        """
+        if not self.bot_token or not self.chat_id:
+            raise RuntimeError("未配置 telegram bot_token/chat_id")
+        try:
+            _tg_rate_limiter.wait()
+            resp = self._post(
+                f"https://api.telegram.org/bot{self.bot_token}/sendVideo",
+                data={
+                    "chat_id": self.chat_id,
+                    "video": video_url,
+                    "supports_streaming": "true",
+                },
+            )
+            resp.raise_for_status()
+            if resp.json().get("ok"):
+                return
+            raise RuntimeError("Telegram 返回错误")
+        except Exception:  # noqa: BLE001 - URL 直传失败 → 本机下载转上传
+            blob_resp = safe_get(self.client, video_url, timeout=120)
+            if blob_resp.status_code != 200 or not blob_resp.content:
+                raise RuntimeError(f"视频下载失败 HTTP {blob_resp.status_code}") from None
+            _tg_rate_limiter.wait()
+            up = self._post(
+                f"https://api.telegram.org/bot{self.bot_token}/sendVideo",
+                data={"chat_id": self.chat_id, "supports_streaming": "true"},
+                files={"video": ("video.mp4", blob_resp.content, "video/mp4")},
+            )
+            up.raise_for_status()
+            if not up.json().get("ok"):
+                raise RuntimeError(f"Telegram 返回错误: {up.json()}")
 
     def _post_media_group(self, media: list[dict], files: dict | None = None) -> None:
         _tg_rate_limiter.wait()

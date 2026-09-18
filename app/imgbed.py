@@ -31,8 +31,13 @@ ALLOWED_TYPES = {
     "image/png": "png",
     "image/webp": "webp",
     "image/gif": "gif",
+    "video/mp4": "mp4",  # Truth 视频帖（图床支持视频）
+    "video/quicktime": "mp4",  # Truth 部分视频返回 quicktime 类型，容器同为 mp4
 }
 MAX_BYTES = 10 * 1024 * 1024
+VIDEO_MAX_BYTES = 60 * 1024 * 1024  # Trump 视频实测 13~36MB，留余量
+VIDEO_EXTS = (".mp4", ".webm")
+VIDEO_UPLOAD_TIMEOUT = 240
 UPLOAD_TIMEOUT = 30
 BATCH_LIMIT = 8
 PURGE_LIMIT = 100
@@ -293,9 +298,12 @@ def _prewarm_hosted(hosted_url: str) -> None:
 
 
 def _download(url: str) -> tuple[bytes, str]:
-    client = _http_client(timeout=15, follow_redirects=False, headers=headers_for(url))
+    is_video = url.lower().split("?", 1)[0].endswith(VIDEO_EXTS)
+    max_bytes = VIDEO_MAX_BYTES if is_video else MAX_BYTES
+    timeout = 90 if is_video else 15
+    client = _http_client(timeout=timeout, follow_redirects=False, headers=headers_for(url))
     try:
-        resp = safe_get_limited(client, url, max_bytes=MAX_BYTES, timeout=15)
+        resp = safe_get_limited(client, url, max_bytes=max_bytes, timeout=timeout)
     finally:
         client.close()
     if resp.status_code != 200 or not resp.content:
@@ -329,7 +337,8 @@ def _upload(cfg, source_url: str, content: bytes, content_type: str) -> str:
         "Origin": cfg.base_url.rstrip("/"),
         "Referer": cfg.base_url.rstrip("/") + "/",
     }
-    with _http_client(timeout=UPLOAD_TIMEOUT, follow_redirects=False) as client:
+    upload_timeout = VIDEO_UPLOAD_TIMEOUT if content_type == "video/mp4" else UPLOAD_TIMEOUT
+    with _http_client(timeout=upload_timeout, follow_redirects=False) as client:
         resp = client.post(
             cfg.base_url.rstrip("/") + "/upload",
             params=params,
