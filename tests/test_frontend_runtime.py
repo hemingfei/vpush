@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
+from app.static_assets import resolve_fingerprinted_path
+
 import pytest
 from playwright.sync_api import Page, Playwright, expect, sync_playwright
 
@@ -127,8 +129,13 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         pass
 
     def do_GET(self) -> None:
-        path = urlsplit(self.path).path
-        if path in {"/news", "/news/"}:
+        parsed = urlsplit(self.path)
+        path = parsed.path
+        logical = resolve_fingerprinted_path(STATIC, path)
+        if logical:
+            query = f"?{parsed.query}" if parsed.query else ""
+            self.path = f"/{logical}{query}"
+        elif path in {"/news", "/news/"}:
             self.path = "/index.html"
         super().do_GET()
 
@@ -1034,14 +1041,17 @@ def test_admin_views_retry_after_chunk_load_failure(page: Page, static_origin: s
         else:
             route.continue_()
 
-    page.route("**/views/admin/cicc.js*", serve_cicc)
+    page.route(re.compile(r".*/views/admin/cicc(?:\.[0-9a-f]{12})?\.js"), serve_cicc)
     page.goto(static_origin, wait_until="domcontentloaded")
     page.wait_for_function("typeof window.go === 'function'")
 
-    with page.expect_request(lambda req: "/views/admin/cicc.js" in req.url):
+    def is_cicc_module(req):
+        return bool(re.search(r"/views/admin/cicc(?:\.[0-9a-f]{12})?\.js", req.url))
+
+    with page.expect_request(is_cicc_module):
         page.evaluate("go('admin/content')")
     page.wait_for_timeout(200)
-    with page.expect_request(lambda req: "/views/admin/cicc.js" in req.url):
+    with page.expect_request(is_cicc_module):
         page.evaluate("go('admin/content')")
     page.wait_for_timeout(200)
 

@@ -11,7 +11,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from scripts.bump_assets import asset_digest
+from scripts.bump_assets import asset_digest, hashed_url, static_dir
 
 APP_JS = Path(__file__).parent.parent / "app" / "static" / "app.js"
 STYLE_CSS = APP_JS.with_name("style.css")
@@ -4752,8 +4752,10 @@ def test_static_asset_cache_bust_versions():
     html = (APP_JS.parent / "index.html").read_text()
     sw = (APP_JS.parent / "sw.js").read_text()
     digest = asset_digest(ROOT)
-    assert f'href="/style.css?v={digest}"' in html
-    assert f'src="/app.js?v={digest}"' in html
+    style = hashed_url(static_dir(ROOT) / "style.css", ROOT)
+    app_js = hashed_url(static_dir(ROOT) / "app.js", ROOT)
+    assert f'href="{style}"' in html
+    assert f'src="{app_js}"' in html
     assert f'const CACHE = "dav-shell-{digest}";' in sw
 
 
@@ -6127,8 +6129,9 @@ def _inline_handler_registry(source: str) -> set[str]:
 
 def test_app_uses_native_module_entry():
     html = INDEX_HTML.read_text()
-    assert '<script type="module" src="/app.js?v=' in html
-    assert re.search(r'<script(?![^>]*\btype=["\']module["\'])[^>]*src="/app\.js', html) is None
+    app_js = hashed_url(static_dir(ROOT) / "app.js", ROOT)
+    assert f'<script type="module" src="{app_js}"' in html
+    assert re.search(r'<script(?![^>]*\btype=["\']module["\'])[^>]*src="/app(?:\.[0-9a-f]{12})?\.js', html) is None
 
 
 def test_inline_handlers_have_exact_explicit_exports():

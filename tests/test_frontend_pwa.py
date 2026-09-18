@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 
 from app.version import APP_VERSION
-from scripts.bump_assets import asset_digest, module_urls
+from scripts.bump_assets import asset_digest, hashed_url, module_urls, static_dir
 
 SW_JS = Path(__file__).parent.parent / "app" / "static" / "sw.js"
 STATIC = SW_JS.parent
@@ -55,8 +55,10 @@ def test_frontend_assets_match_financial_news_release_revision():
     sw = SW_JS.read_text()
     app = (STATIC / "app.js").read_text()
     digest = asset_digest(ROOT)
-    assert f'href="/style.css?v={digest}"' in html
-    assert f'src="/app.js?v={digest}"' in html
+    style = hashed_url(static_dir(ROOT) / "style.css", ROOT)
+    app_js = hashed_url(static_dir(ROOT) / "app.js", ROOT)
+    assert f'href="{style}"' in html
+    assert f'src="{app_js}"' in html
     assert f'const CACHE = "dav-shell-{digest}";' in sw
     for url in module_urls(ROOT):
         assert f'"{url}"' in sw

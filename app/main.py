@@ -26,6 +26,12 @@ from .logging_setup import register_error_sink, setup_logging
 from .news import NewsService
 from .notifiers import build_notifiers
 from .scheduler import Scheduler, set_alerts_enabled
+from .static_assets import (
+    IMMUTABLE_CACHE_CONTROL,
+    REVALIDATE_CACHE_CONTROL,
+    resolve_fingerprinted_path,
+    should_revalidate,
+)
 
 # 纯 UI 调试模式开关：置 1 时跳过调度器与机器人长连接，避免测试实例
 # 抢生产 Telegram 机器人（getUpdates 409）、用测试配置误发降级告警
@@ -78,24 +84,27 @@ def is_spa_path(path: str) -> bool:
     return first in SPA_PREFIXES
 
 
-class _NoCacheStaticFiles(StaticFiles):
-    """html/js/css 每次请求都重新校验（ETag/304），避免浏览器缓存旧版本前端。"""
-
-    def file_response(self, full_path, stat_result, scope, status_code=200):
-        response = super().file_response(full_path, stat_result, scope, status_code)
-        # manifest 也必须重新校验：WebAPK 安装时 Chrome 会取它烤入状态栏色，
-        # 命中旧缓存会把浅色 theme_color 烤进安装包（卸载重装也救不回来）
-        if str(full_path).endswith((".html", ".js", ".css", ".webmanifest", ".json")):
-            response.headers["Cache-Control"] = "no-cache"
-        return response
+class _SpaStaticFiles(StaticFiles):
+    """SPA 静态资源：带内容哈希的 JS/CSS 长期不可变缓存；HTML/manifest 每次校验。"""
 
     async def get_response(self, path, scope):
+        directory = Path(self.directory)
+        logical = resolve_fingerprinted_path(directory, path)
+        cache_control = IMMUTABLE_CACHE_CONTROL if logical else (
+            REVALIDATE_CACHE_CONTROL if should_revalidate(path) else None
+        )
+        serve_path = logical or path
         try:
-            return await super().get_response(path, scope)
+            response = await super().get_response(serve_path, scope)
         except HTTPException as exc:
             if exc.status_code == 404 and is_spa_path(path):
-                return await super().get_response("index.html", scope)
+                response = await super().get_response("index.html", scope)
+                response.headers["Cache-Control"] = REVALIDATE_CACHE_CONTROL
+                return response
             raise
+        if cache_control:
+            response.headers["Cache-Control"] = cache_control
+        return response
 
 setup_logging()
 access_logger = logging.getLogger("app.access")
@@ -416,7 +425,7 @@ def create_app(config=None, db_path: str | Path | None = None) -> FastAPI:
     # 一律走鉴权路由 /api/media/zsxq-file/{id}（命中本地缓存时直接下发）
     app.mount(
         "/",
-        _NoCacheStaticFiles(directory=Path(__file__).parent / "static", html=True),
+        _SpaStaticFiles(directory=Path(__file__).parent / "static", html=True),
         name="static",
     )
     return app
