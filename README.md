@@ -279,6 +279,8 @@ uvicorn app.main:app --reload
 
 测试：`python -m pytest -q`
 
+前端静态资源改完后跑 `python scripts/bump_assets.py --sync`：它按文件内容写成 `/app.<hash>.js`、`/style.<hash>.css` 以及 ES module 的 import map，无需手改哈希。源站对带哈希的 JS/CSS 发 `Cache-Control: public, max-age=31536000, immutable`，Cloudflare 可以长期 HIT；`index.html`、SPA 回退 HTML 和 `*.webmanifest` 仍是 `no-cache`（带 ETag 再校验），避免用户卡在旧前端。`/api/*` 与私有媒体不走这套缓存。
+
 ## 常见问题
 
 - **登录被锁定 / 提示尝试次数过多？** 同一 IP 连续失败 8 次会临时限流（5 分钟）；账号连续失败（管理员 3 次、普通用户 10 次，1 小时内）会触发账号级临时锁定（15–30 分钟自动解锁），锁定期内即使密码正确也拒绝。锁定事件会在管理后台「操作日志」中留痕，方便排查是否被爆破。
