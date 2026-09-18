@@ -266,37 +266,6 @@ jobs:
         env:
           VPUSH_WEBHOOK_URL: ${{ secrets.VPUSH_WEBHOOK_URL }}
           VPUSH_WEBHOOK_SECRET: ${{ secrets.VPUSH_WEBHOOK_SECRET }}
-      # 预告先发、部署触发在后：触发失败时已发过「即将重启」，补发失败对冲，
-      # 免得订阅者白等一次不会发生的重启（同 webhook、同样失败不阻断主流程）
-      - name: 部署触发失败对冲通知
-        if: ${{ failure() && steps.jenkins.outcome == 'failure' }}
-        continue-on-error: true
-        run: |
-          python3 - <<'EOF'
-          import base64, hashlib, hmac, json, os, time, urllib.request
-
-          ts = int(time.time())
-          secret = os.environ["VPUSH_WEBHOOK_SECRET"]
-          sign = base64.b64encode(
-              hmac.new(f"{ts}\n{secret}".encode(), digestmod=hashlib.sha256).digest()
-          ).decode()
-          payload = json.dumps({
-              "title": "部署触发失败",
-              "text": f"docker 镜像已推送（commit {os.environ['GITHUB_SHA'][:7]}），"
-                      "但触发 Jenkins 部署失败，本次服务不会重启；"
-                      "请检查 GitHub Actions 运行日志与 Jenkins 状态。",
-              "timestamp": ts,
-              "sign": sign,
-          }, ensure_ascii=False).encode("utf-8")
-          req = urllib.request.Request(
-              os.environ["VPUSH_WEBHOOK_URL"], data=payload, method="POST",
-              headers={"Content-Type": "application/json; charset=utf-8"})
-          with urllib.request.urlopen(req, timeout=15) as r:
-              print("webhook HTTP", r.status)
-          EOF
-        env:
-          VPUSH_WEBHOOK_URL: ${{ secrets.VPUSH_WEBHOOK_URL }}
-          VPUSH_WEBHOOK_SECRET: ${{ secrets.VPUSH_WEBHOOK_SECRET }}
       - name: 触发 Jenkins 部署并跟踪全程
         id: jenkins
         if: ${{ success() }}
@@ -367,3 +336,36 @@ jobs:
           echo ""
           echo "===== deploy result: $RESULT ====="
           [ "$RESULT" = "SUCCESS" ] || exit 1
+      # 对冲通知必须定义在 jenkins 步骤之后：steps.<id>.outcome 只对后续步骤可见，
+      # 放在前面时求值恒为空、条件恒 false，步骤永远不会执行（已实测踩坑）。
+      # 触发失败时上面的「即将重启」预告已发过，这里补发失败对冲，
+      # 免得订阅者白等一次不会发生的重启（同 webhook、失败不改变作业红叉）
+      - name: 部署触发失败对冲通知
+        if: ${{ failure() && steps.jenkins.outcome == 'failure' }}
+        continue-on-error: true
+        run: |
+          python3 - <<'EOF'
+          import base64, hashlib, hmac, json, os, time, urllib.request
+
+          ts = int(time.time())
+          secret = os.environ["VPUSH_WEBHOOK_SECRET"]
+          sign = base64.b64encode(
+              hmac.new(f"{ts}\n{secret}".encode(), digestmod=hashlib.sha256).digest()
+          ).decode()
+          payload = json.dumps({
+              "title": "部署触发失败",
+              "text": f"docker 镜像已推送（commit {os.environ['GITHUB_SHA'][:7]}），"
+                      "但触发 Jenkins 部署失败，本次服务不会重启；"
+                      "请检查 GitHub Actions 运行日志与 Jenkins 状态。",
+              "timestamp": ts,
+              "sign": sign,
+          }, ensure_ascii=False).encode("utf-8")
+          req = urllib.request.Request(
+              os.environ["VPUSH_WEBHOOK_URL"], data=payload, method="POST",
+              headers={"Content-Type": "application/json; charset=utf-8"})
+          with urllib.request.urlopen(req, timeout=15) as r:
+              print("webhook HTTP", r.status)
+          EOF
+        env:
+          VPUSH_WEBHOOK_URL: ${{ secrets.VPUSH_WEBHOOK_URL }}
+          VPUSH_WEBHOOK_SECRET: ${{ secrets.VPUSH_WEBHOOK_SECRET }}

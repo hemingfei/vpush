@@ -144,16 +144,33 @@ export function createHoldingsView(dependencies) {
   }
 
   // SSE 版本变更/兜底轮询：两条流各自增量拉新插入顶部（响应同时带回重算后的全窗口聚合）。
-  // 增量循环拉到不足一页为止：积压超过一页时中间段不会形成「顶部新 + 底部旧」的断层
+  // 积压可能超一页：带 after_id 用复合游标（before_at+before_id）向后续页，拉到
+  // 不足一页为止攒齐一次插入，中段不留「顶部新 + 底部旧」断层。续页不能拿
+  // 「本页最小 id」当 after_id——排序键是 occurred_at 而 after_id 只按 id 过滤，
+  // 回填的「id 新、时间旧」批次上每页只前进一条；复合游标与排序键一致才逐页收敛。
+  // 响应 max_id 恒为全表最大，水位整段追平后才推进：中途断线下次从旧水位重拉，
+  // known 去重兜底，不会重复上屏。
   async function hdIncRefresh() {
     if (!routeStillActive(_hd.seq)) return;
     try {
-      const data = await api(`/api/my/holdings/views?limit=${PAGE_SIZE}&after_id=${_hd.maxId}${hdHolderQ()}`);
-      if (!routeStillActive(_hd.seq)) return;
-      _hd.summary = (data.summary && data.summary.targets) || [];
-      _hd.maxId = Math.max(_hd.maxId, data.max_id || 0);
+      const pages = [];
+      let cursor = null; // 上一页最底行的 (occurred_at, id)
+      for (;;) {
+        const cur = cursor ? `&before_at=${encodeURIComponent(cursor.at)}&before_id=${cursor.id}` : "";
+        const data = await api(`/api/my/holdings/views?limit=${PAGE_SIZE}&after_id=${_hd.maxId}${cur}${hdHolderQ()}`);
+        if (!routeStillActive(_hd.seq)) return;
+        const items = data.items || [];
+        pages.push(items);
+        if (items.length < PAGE_SIZE) {
+          _hd.summary = (data.summary && data.summary.targets) || [];
+          _hd.maxId = Math.max(_hd.maxId, data.max_id || 0);
+          break;
+        }
+        const last = items[items.length - 1];
+        cursor = { at: last.occurred_at || "", id: last.id };
+      }
       const known = new Set(_hd.items.map((it) => it.id));
-      const fresh = (data.items || []).filter((it) => !known.has(it.id));
+      const fresh = [].concat(...pages).filter((it) => !known.has(it.id));
       if (fresh.length) {
         fresh.forEach((it) => _hd.freshIds.add(it.id));
         _hd.items = fresh.concat(_hd.items);
@@ -168,17 +185,31 @@ export function createHoldingsView(dependencies) {
     } catch (e) { /* 静默：下次版本变更/兜底轮询再试 */ }
   }
 
-  // 标签快讯增量：新帖入库不 bump 观点版本号，主要靠兜底轮询到账
+  // 标签快讯增量：新帖入库不 bump 观点版本号，主要靠兜底轮询到账。
+  // 续页拉满与 hdIncRefresh 同因同修：回灌旧帖「id 新、published_at 旧」，
+  // 积压超一页时复合游标续页到不足一页为止，水位追平后才推进
   async function hdTagIncRefresh() {
     if (!routeStillActive(_hd.seq)) return;
     try {
-      const data = await api(`/api/my/holdings/tag-posts?limit=${PAGE_SIZE}&after_id=${_hd.tagMaxId}${hdHolderQ()}`);
-      if (!routeStillActive(_hd.seq)) return;
-      const sum = (data.summary && data.summary.targets) || [];
-      _hd.tagSummary = new Map(sum.map((s) => [`${s.target_type}:${s.target_name}`, s]));
-      _hd.tagMaxId = Math.max(_hd.tagMaxId, data.max_id || 0);
+      const pages = [];
+      let cursor = null; // 上一页最底行的 (published_at, id)
+      for (;;) {
+        const cur = cursor ? `&before_at=${encodeURIComponent(cursor.at)}&before_id=${cursor.id}` : "";
+        const data = await api(`/api/my/holdings/tag-posts?limit=${PAGE_SIZE}&after_id=${_hd.tagMaxId}${cur}${hdHolderQ()}`);
+        if (!routeStillActive(_hd.seq)) return;
+        const items = data.items || [];
+        pages.push(items);
+        if (items.length < PAGE_SIZE) {
+          const sum = (data.summary && data.summary.targets) || [];
+          _hd.tagSummary = new Map(sum.map((s) => [`${s.target_type}:${s.target_name}`, s]));
+          _hd.tagMaxId = Math.max(_hd.tagMaxId, data.max_id || 0);
+          break;
+        }
+        const last = items[items.length - 1];
+        cursor = { at: last.published_at || "", id: last.id };
+      }
       const known = new Set(_hd.tagItems.map((it) => it.id));
-      const fresh = (data.items || []).filter((it) => !known.has(it.id));
+      const fresh = [].concat(...pages).filter((it) => !known.has(it.id));
       if (fresh.length) {
         fresh.forEach((it) => _hd.tagFresh.add(it.id));
         _hd.tagItems = fresh.concat(_hd.tagItems);
