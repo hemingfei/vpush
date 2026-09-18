@@ -49,15 +49,21 @@ def status_to_entry(status: dict) -> dict | None:
         return None
     inner = status.get("reblog") or status  # 转发取原帖内容，id/时间用转发层
     raw = str(inner.get("content") or "")
+    media = [
+        m["url"]
+        for m in (inner.get("media_attachments") or [])
+        if m.get("type") == "image" and m.get("url")
+    ]
+    if not media:
+        # 原帖自带链接预览卡（题图）时带上，还原 Truth 端的卡片观感
+        card_image = ((inner.get("card") or {}).get("image")) or ""
+        if card_image:
+            media.append(card_image)
     return {
         "id": external_id,
         "created_at": status.get("created_at"),
         "content": strip_html(_PARA_RE.sub("\n", raw)),
-        "media": [
-            m["url"]
-            for m in (inner.get("media_attachments") or [])
-            if m.get("type") == "image" and m.get("url")
-        ],
+        "media": media,
         "url": status.get("url") or inner.get("url") or "",
     }
 
@@ -175,7 +181,12 @@ class TruthFetcher(Fetcher):
         url = str(entry.get("url") or "")
         if not url:
             url = f"https://truthsocial.com/@realDonaldTrump/{external_id}"
-        title = content.splitlines()[0][:80] if content else "图片"
+        first_line = content.splitlines()[0] if content else ""
+        url_at = first_line.find("http")
+        if url_at > 0:
+            # 标题是给通知/列表用的摘要：URL 不进标题，避免 80 字截断切出断链
+            first_line = first_line[:url_at].rstrip(" ：:，,")
+        title = first_line[:80] if first_line else "图片"
         return Post(
             platform=self.platform,
             kol_id=kol["id"],

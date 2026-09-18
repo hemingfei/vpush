@@ -96,6 +96,34 @@ def test_status_to_entry_reblog_uses_inner_content():
     assert status_to_entry({"id": ""}) is None
 
 
+def test_status_to_entry_card_image_as_fallback_media():
+    no_media = dict(API_STATUS, media_attachments=[])
+    no_media["card"] = {
+        "image": "https://static-assets-1.truthsocial.com/cache/preview.jpeg",
+        "title": "Ruddy: 'A Rising Trump Lifts All Boats'",
+    }
+    assert status_to_entry(no_media)["media"] == [
+        "https://static-assets-1.truthsocial.com/cache/preview.jpeg"
+    ]
+    with_media = dict(API_STATUS, card={"image": "https://x/card.jpeg"})
+    assert status_to_entry(with_media)["media"] == [
+        "https://static-assets-1.truthsocial.com/a.jpg"
+    ]  # 有真实图片时不混入预览卡题图
+
+
+def test_title_excludes_trailing_url():
+    entry = {
+        "id": "117292378116430890",
+        "created_at": "2026-09-18T13:54:16.318Z",
+        "content": "Ruddy: 'A Rising Trump Lifts All Boats': https://www.newsmax.com/ruddy/ruddy-donald-trump-economy/2026/09/13/id/1269294/",
+        "media": [],
+        "url": "u",
+    }
+    post = TruthFetcher()._to_post({"id": 1, "name": "特朗普"}, entry)
+    assert post.title == "Ruddy: 'A Rising Trump Lifts All Boats'"
+    assert "1269294/" in post.content  # 正文保留完整 URL
+
+
 @pytest.fixture(autouse=True)
 def _no_avatar_download(monkeypatch):
     """默认拦掉真实头像下载：抓取器引导逻辑单独在用例里打桩验证。"""

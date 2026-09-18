@@ -155,7 +155,13 @@ export function postToCardModel(post, options = {}) {
   const useSrc = showSrc && translated;
   const title = (useSrc ? srcT : (post?.title || "")).trim();
   const body = ((useSrc ? srcC : (post?.content || "")) || "").trim();
-  const titleDup = !!title && (title === body || body.startsWith(title));
+  // 译文标题/正文来自两次独立翻译，措辞可能不同导致前缀匹配漏判；
+  // 原文侧 title_src 是 content_src 的截断前缀，用原文比对兜住
+  const titleDup = !!title && (
+    title === body
+    || body.startsWith(title)
+    || (!!(srcT && srcC) && srcC.startsWith(srcT))
+  );
   const images = Array.isArray(post?.images) ? post.images.filter(Boolean).slice(0, 4) : [];
   return {
     id: post?.id ?? "",

@@ -3055,10 +3055,14 @@ function postCard(post) {
   const expanded = _tlExpanded.has(post.id);
   const shown = expanded ? body : body.slice(0, 200);
   // X 帖常 title==content（如纯链接帖），标题和正文都渲染会视觉重复，跳过标题；
-  // 长文帖 title 常为 content 开头一段（截断），同样跳过避免重复展示
+  // 长文帖 title 常为 content 开头一段（截断），同样跳过避免重复展示。
+  // 译文标题/正文来自两次独立翻译、措辞可能不同，前缀匹配要落在原文侧才稳
+  const srcTitle = (post.title_src || title || "").trim();
+  const srcBody = (post.content_src || body || "").trim();
   const titleDup = !!title && (
     title.trim() === body.trim()
     || body.trimStart().startsWith(title.trim())
+    || !!(srcTitle && srcBody && srcBody.startsWith(srcTitle))
   );
   const trBar = translated ? `<div class="p-tr">${GROK_TRANSLATE_ICON}<span class="p-tr-label">翻译自英语</span><button type="button" class="p-tr-toggle" onclick="tlToggleOrigin(${post.id})">${showSrc ? "显示译文" : "显示原文"}</button></div>` : "";
   return `
