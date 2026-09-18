@@ -502,7 +502,6 @@ def run_tag_maintenance(db, llm_config=None) -> dict:
     if llm_ok:
         try:
             from .llm import resolve_stock_marks
-
             from .stock_universe import bundled_plain_names
 
             existing_aliases = {a["alias"] for a in aliases}

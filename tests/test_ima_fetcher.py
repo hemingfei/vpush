@@ -1,4 +1,3 @@
-import json
 import os
 
 import httpx
@@ -6,9 +5,9 @@ import pytest
 
 from app.fetchers.ima import (
     ImaFetcher,
+    _decode_text,
     configured_ima_cookie,
     configured_openapi_creds,
-    _decode_text,
 )
 
 OPENAPI_LIST_OK = {
@@ -143,10 +142,10 @@ def test_fetch_openapi_mode_full_text_replaces_abstract():
         routes = {
             "get_knowledge_list": httpx.Response(200, json=OPENAPI_LIST_OK),
             "get_media_info": httpx.Response(200, json=MEDIA_INFO_WITH_URL),
-            "cdn.example": httpx.Response(200, content="这是完整正文。".encode("utf-8")),
+            "cdn.example": httpx.Response(200, content="这是完整正文。".encode()),
         }
         db = type("DB", (), {"post_exists": lambda self, p, e: False, "get_setting": lambda self, k: ""})()
-        fetcher, handler = _make(db=db, routes=routes)
+        fetcher, _ = _make(db=db, routes=routes)
         posts = fetcher.fetch({"id": 7, "name": "Z哥策略", "external_id": "kb_openapi_1"})
         assert len(posts) == 1
         assert posts[0].content == "这是完整正文。"
@@ -172,7 +171,7 @@ def test_fetch_openapi_mode_gated_falls_back_to_abstract():
             "get_media_info": httpx.Response(200, json=MEDIA_INFO_GATED),
         }
         db = type("DB", (), {"post_exists": lambda self, p, e: False, "get_setting": lambda self, k: ""})()
-        fetcher, handler = _make(db=db, routes=routes)
+        fetcher, _ = _make(db=db, routes=routes)
         posts = fetcher.fetch({"id": 7, "name": "Z哥策略", "external_id": "kb_openapi_1"})
         assert len(posts) == 1
         assert posts[0].content == "AI摘要: 摘要内容"  # 订阅库降级：摘要在手
@@ -185,7 +184,7 @@ def test_fetch_openapi_mode_gated_falls_back_to_abstract():
 def test_fetch_binary_content_falls_back():
     assert _decode_text(b"") == ""
     assert _decode_text(b"\x00\x01\x02pdf") == ""  # 二进制
-    assert _decode_text("中文正文".encode("utf-8")) == "中文正文"
+    assert _decode_text("中文正文".encode()) == "中文正文"
 
 
 def test_fetch_without_credentials_raises():

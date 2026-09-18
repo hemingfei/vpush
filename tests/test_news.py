@@ -1,12 +1,11 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
-import pytest
 import httpx
+import pytest
 
 from app.news import (
     NewsNotFound,
-    ParsedArticle,
     clean_article_html,
     normalize_article_url,
     normalize_feed_url,
@@ -118,7 +117,7 @@ def make_news_service(tmp_path, handler):
 def test_validate_feed_preview_contains_plain_text(tmp_path, monkeypatch):
     payload = (FIXTURES / "news_rss.xml").read_bytes()
     monkeypatch.setattr("app.url_safety._resolve_host_ips", lambda host: ["93.184.216.34"])
-    service, db, client, feed_id = make_news_service(
+    service, db, client, _ = make_news_service(
         tmp_path, lambda request: httpx.Response(200, content=payload)
     )
     preview = service.validate_feed("https://feed.example/rss")

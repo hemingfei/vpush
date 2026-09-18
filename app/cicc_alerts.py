@@ -118,9 +118,13 @@ def maybe_check_cicc(db, notifiers: list, notifiers_config=None, *, now: int | N
         summary = (status.get("storage") or {}).get("last_incr_summary") or {}
         s_ts = int(summary.get("ts") or 0)
         if s_ts > int(state.get("incr_notified_ts") or 0):
-            pending.append(("__incr__",
-                            f"📥 中金增量完成：新增 {summary.get('added', 0)} 篇，"
-                            f"失败 {summary.get('failed', 0)} 篇。"))
+            pending.append((
+                "__incr__",
+                (
+                    f"📥 中金增量完成：新增 {summary.get('added', 0)} 篇，"
+                    f"失败 {summary.get('failed', 0)} 篇。"
+                ),
+            ))
             state["incr_notified_ts"] = s_ts
 
     sendable = [(key, msg) for key, msg in pending

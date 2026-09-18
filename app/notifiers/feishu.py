@@ -8,7 +8,13 @@ import time
 
 import httpx
 
-from ..fetchers.base import PLATFORM_LABELS, Post, digest_body, show_original, truncate_text
+from ..fetchers.base import (
+    PLATFORM_LABELS,
+    Post,
+    digest_body,
+    show_original,
+    truncate_text,
+)
 from ..url_safety import safe_get
 from .base import Notifier, why_badges
 

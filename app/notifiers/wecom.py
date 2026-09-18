@@ -8,7 +8,13 @@ from __future__ import annotations
 
 import httpx
 
-from ..fetchers.base import PLATFORM_LABELS, Post, attachment_lines, digest_body, show_original
+from ..fetchers.base import (
+    PLATFORM_LABELS,
+    Post,
+    attachment_lines,
+    digest_body,
+    show_original,
+)
 from .base import Notifier, why_badges
 
 DIGEST_MAX_ITEMS = 5

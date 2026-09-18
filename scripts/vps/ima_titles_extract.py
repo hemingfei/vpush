@@ -21,7 +21,7 @@ import fitz
 CJK = re.compile(r"[\u4e00-\u9fff]{4,}")
 AUTHOR_LIKE = re.compile(r"^[A-Z][A-Z\s,\.&]{3,}$")
 DATE_LIKE = re.compile(r"\b(AUG|SEP|OCT|NOV|DEC|JAN|FEB|MAR|APR|MAY|JUL|20\d\d)\b")
-URL_LIKE = re.compile(r"https?://|semianalysis\.com", re.I)
+URL_LIKE = re.compile(r"https?://|semianalysis\.com", re.IGNORECASE)
 MAX_TITLE_LINES = 3
 MAX_TITLE_CHARS = 120
 

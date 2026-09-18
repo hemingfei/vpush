@@ -14,7 +14,14 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from ..avatar_cache import cache_avatar
 from ..logging_setup import redact_secrets
-from .base import Fetcher, Post, ThreadLocalClient, catchup_pages, format_published_at, strip_html
+from .base import (
+    Fetcher,
+    Post,
+    ThreadLocalClient,
+    catchup_pages,
+    format_published_at,
+    strip_html,
+)
 
 logger = logging.getLogger(__name__)
 

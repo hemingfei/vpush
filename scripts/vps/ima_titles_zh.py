@@ -96,7 +96,7 @@ def chat(titles: list[str], endpoint: tuple[str, str, str]) -> list[str] | None:
     try:
         out = json.loads(text)
     except json.JSONDecodeError:
-        m = re.search(r"\[.*\]", text, re.S)
+        m = re.search(r"\[.*\]", text, re.DOTALL)
         if not m:
             return None
         try:

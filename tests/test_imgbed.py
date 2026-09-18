@@ -3,10 +3,9 @@ import hashlib
 import httpx
 import pytest
 
+from app import imgbed
 from app.config import ImgbedConfig
 from app.db import DB
-from app import imgbed
-
 
 JPEG = b"\xff\xd8\xff" + b"x" * 3000
 PNG = b"\x89PNG\r\n\x1a\n" + b"y" * 3000

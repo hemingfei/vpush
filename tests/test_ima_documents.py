@@ -1869,7 +1869,7 @@ def test_separate_root_keeps_indexes_local_and_files_remote(tmp_path):
     relative_pdf = str(pdf.relative_to(store.archive_root))
     relative_txt = str(txt.relative_to(store.archive_root))
     assert not relative_pdf.startswith("/")
-    assert relative_pdf.endswith("0827/Report.pdf") or relative_pdf.endswith("unknown/Report.pdf") or "/0827/Report.pdf" in relative_pdf
+    assert relative_pdf.endswith(("0827/Report.pdf", "unknown/Report.pdf")) or "/0827/Report.pdf" in relative_pdf
     store.save_manifest([record])
     store.save_state(
         {
@@ -4919,7 +4919,7 @@ def test_remote_archive_maintenance_serializes_checkpoint_decision(
 
     monkeypatch.setattr(service.store, "restore_original_filenames", restore)
     monkeypatch.setattr(service.store, "rebuild_manifest_from_state", lambda: 0)
-    monkeypatch.setattr(service, "retag_all", lambda: {})
+    monkeypatch.setattr(service, "retag_all", dict)
 
     def maintain():
         try:
@@ -5033,7 +5033,7 @@ def test_remote_archive_maintenance_checkpoints_completed_source(
         service.store, "restore_original_filenames", lambda: {"renamed": 0}
     )
     monkeypatch.setattr(service.store, "rebuild_manifest_from_state", lambda: 0)
-    monkeypatch.setattr(service, "retag_all", lambda: {})
+    monkeypatch.setattr(service, "retag_all", dict)
 
     service._archive_maintenance()
 

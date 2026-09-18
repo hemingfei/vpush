@@ -46,8 +46,10 @@ SCHEMA_MIGRATIONS: list[tuple[int, str, str | tuple[str, ...]]] = [
     (
         2026090601,
         "ima_document_index downloaded_at 索引",
-        "CREATE INDEX IF NOT EXISTS idx_ima_doc_downloaded "
-        "ON ima_document_index(downloaded_at)",
+        (
+            "CREATE INDEX IF NOT EXISTS idx_ima_doc_downloaded "
+            "ON ima_document_index(downloaded_at)"
+        ),
     ),
 ]
 

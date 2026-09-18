@@ -21,8 +21,8 @@ from ..fetchers.base import (
 from ..url_safety import safe_get
 from .base import Notifier, why_badges
 from .telegram_rich import (
-    DND_MAX_ITEMS,
     DIGEST_MAX_ITEMS,
+    DND_MAX_ITEMS,
     action_label,
     build_telegram_daily_rich,
     build_telegram_digest_rich,

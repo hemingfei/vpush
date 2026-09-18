@@ -225,14 +225,14 @@ def main() -> int:
             if i == 12:
                 try:
                     page.get_by_text("登录", exact=False).first.click(timeout=2000)
-                except Exception:
+                except Exception:  # noqa: BLE001, S110 - 登录按钮不在就跳过
                     pass
             if captured.get("logged_in") and i in (12, 18, 25, 35, 50):
                 target = pages[-1] if pages else page
                 try:
                     print(f"打开知识库页 {wiki_url}")
                     target.goto(wiki_url, wait_until="domcontentloaded")
-                except Exception:
+                except Exception:  # noqa: BLE001, S110 - 轮询里尽力而为
                     pass
             if captured.get("logged_in") and i % 5 == 0 and captured.get("cookie"):
                 ok, note = _validate_cookie(

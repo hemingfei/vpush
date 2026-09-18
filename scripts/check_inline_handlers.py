@@ -14,7 +14,7 @@ IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
 
 def _from_braces(src: str, prefix: str, suffix: str = "") -> list[str]:
     names: list[str] = []
-    for block in re.findall(rf"{prefix}\s*\{{([^}}]+)\}}\s*{suffix}", src, re.M):
+    for block in re.findall(rf"{prefix}\s*\{{([^}}]+)\}}\s*{suffix}", src, re.MULTILINE):
         for part in block.split(","):
             bits = part.replace("\n", " ").split()
             if not bits or bits[0] == "...":
@@ -24,8 +24,8 @@ def _from_braces(src: str, prefix: str, suffix: str = "") -> list[str]:
 
 
 def parse_bindings(src: str) -> list[str]:
-    names = re.findall(rf"^(?:export\s+)?(?:async\s+)?function\s+({IDENT})", src, re.M)
-    names += re.findall(rf"^(?:export\s+)?const\s+({IDENT})\s*=", src, re.M)
+    names = re.findall(rf"^(?:export\s+)?(?:async\s+)?function\s+({IDENT})", src, re.MULTILINE)
+    names += re.findall(rf"^(?:export\s+)?const\s+({IDENT})\s*=", src, re.MULTILINE)
     names += _from_braces(src, r"^(?:export\s+|import\s+)")
     names += _from_braces(src, r"^const")
     # 懒加载视图：ensureAdminViews() 内部的括号解构赋值 ({ a, b } = view = factory({...}))
@@ -52,7 +52,7 @@ def collect_module_names(static: Path) -> list[str]:
 
 def imported_exports(src: str) -> dict[str, tuple[str, str]]:
     imports: dict[str, tuple[str, str]] = {}
-    for block, module in re.findall(r'import\s*\{([^}]+)\}\s*from\s*["\']([^"\']+)["\']', src, re.M):
+    for block, module in re.findall(r'import\s*\{([^}]+)\}\s*from\s*["\']([^"\']+)["\']', src, re.MULTILINE):
         for part in block.split(","):
             bits = part.split()
             if not bits:
@@ -63,9 +63,9 @@ def imported_exports(src: str) -> dict[str, tuple[str, str]]:
 
 
 def module_exports(src: str) -> set[str]:
-    names = set(re.findall(rf"^export\s+(?:async\s+)?function\s+({IDENT})", src, re.M))
-    names.update(re.findall(rf"^export\s+const\s+({IDENT})\s*=", src, re.M))
-    for block in re.findall(r"^export\s*\{([^}]+)\}", src, re.M):
+    names = set(re.findall(rf"^export\s+(?:async\s+)?function\s+({IDENT})", src, re.MULTILINE))
+    names.update(re.findall(rf"^export\s+const\s+({IDENT})\s*=", src, re.MULTILINE))
+    for block in re.findall(r"^export\s*\{([^}]+)\}", src, re.MULTILINE):
         for part in block.split(","):
             bits = part.split()
             if bits:
@@ -76,7 +76,7 @@ def module_exports(src: str) -> set[str]:
 def factory_bindings(src: str) -> dict[str, tuple[str, str]]:
     bindings: dict[str, tuple[str, str]] = {}
     pattern = rf"const\s*\{{([^}}]+)\}}\s*=\s*({IDENT})\s*\("
-    for block, factory in re.findall(pattern, src, re.M):
+    for block, factory in re.findall(pattern, src, re.MULTILINE):
         for part in block.split(","):
             bits = part.strip().split(":", 1)
             prop = bits[0].strip()
@@ -87,7 +87,7 @@ def factory_bindings(src: str) -> dict[str, tuple[str, str]]:
 
 
 def factory_return_names(src: str) -> set[str]:
-    blocks = re.findall(r"^\s*return\s*\{([^}]*)\}", src, re.M)
+    blocks = re.findall(r"^\s*return\s*\{([^}]*)\}", src, re.MULTILINE)
     if not blocks:
         return set()
     return {

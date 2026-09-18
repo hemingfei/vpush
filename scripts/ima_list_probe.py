@@ -16,7 +16,7 @@ import urllib.request
 sys.path.insert(0, "/app")
 
 from app.db import DB  # noqa: E402
-from app.ima_documents import ImaDocumentConfig, ImaPureClient, BASE  # noqa: E402
+from app.ima_documents import BASE, ImaDocumentConfig, ImaPureClient  # noqa: E402
 
 DB_PATH = "/data/dav.db"
 MAX_PAGES = 400

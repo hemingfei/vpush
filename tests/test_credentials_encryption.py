@@ -4,8 +4,8 @@ import sqlite3
 from cryptography.fernet import Fernet
 
 from app.db import (
-    SECRET_PREFIX,
     DB,
+    SECRET_PREFIX,
     _secret_hash,
     decrypt_stored_secret,
     user_plain_secret,

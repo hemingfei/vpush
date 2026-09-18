@@ -9,7 +9,14 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from time import struct_time
-from urllib.parse import SplitResult, parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import (
+    SplitResult,
+    parse_qsl,
+    urlencode,
+    urljoin,
+    urlsplit,
+    urlunsplit,
+)
 
 import bleach
 import feedparser

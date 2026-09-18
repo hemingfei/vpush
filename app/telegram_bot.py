@@ -301,7 +301,11 @@ class TelegramBot:
                 request_id = int(parts[1])
             except (ValueError, IndexError):
                 request_id = 0
-            from .kol_requests import KolRequestError, approve_kol_request, reject_kol_request
+            from .kol_requests import (
+                KolRequestError,
+                approve_kol_request,
+                reject_kol_request,
+            )
 
             try:
                 if data.startswith("approve:"):

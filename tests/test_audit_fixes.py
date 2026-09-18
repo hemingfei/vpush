@@ -5,14 +5,12 @@ import time
 from pathlib import Path
 
 import httpx
-import pytest
 from fastapi.testclient import TestClient
 
 from app.db import DB
 from app.fetchers.base import Post
 from app.main import create_app
 from app.scheduler import PlatformState, flush_digest, poll_once
-
 from tests.test_api import auth_headers, user_headers
 from tests.test_scheduler import add_kol_subscribed, make_db, make_post
 
@@ -76,7 +74,7 @@ def test_flush_digest_keeps_buffer_when_notify_raises(monkeypatch):
 
     monkeypatch.setattr("app.scheduler.notify_digest_subscribers", boom)
     flush_digest(db, digest, [], None)
-    assert kid in digest and digest[kid]
+    assert digest.get(kid)
 
 
 def test_delete_user_removes_keywords_and_feishu_bot():
@@ -145,7 +143,7 @@ def test_catalog_hides_disabled_kol():
 def test_subscribe_disabled_kol_404():
     tmp = Path(tempfile.mkdtemp())
     client = TestClient(create_app(config=None, db_path=tmp / "t.db"))
-    admin = auth_headers(client)
+    auth_headers(client)
     kid = client.app.state.db.add_kol("xueqiu", "停用的", "off2")
     client.app.state.db.update_kol(kid, enabled=False)
     user = user_headers(client, "suboff")
@@ -156,7 +154,7 @@ def test_subscribe_disabled_kol_404():
 def test_resubscribe_updates_type():
     tmp = Path(tempfile.mkdtemp())
     client = TestClient(create_app(config=None, db_path=tmp / "t.db"))
-    admin = auth_headers(client)
+    auth_headers(client)
     kid = client.app.state.db.add_kol("xueqiu", "A", "re1")
     user = user_headers(client, "resub01")
     client.post("/api/subscriptions", headers=user, json={"kol_id": kid, "type": "post"})
@@ -335,7 +333,7 @@ def test_ima_post_exists_error_still_tries_full_text():
                     json={"retcode": 0, "data": {"url_info": {"url": "https://cdn.example/raw.txt"}}},
                 )
             if "cdn.example" in str(request.url):
-                return httpx.Response(200, content="全文".encode("utf-8"))
+                return httpx.Response(200, content="全文".encode())
             return httpx.Response(404)
 
         class BoomDB:

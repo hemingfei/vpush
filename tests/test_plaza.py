@@ -1,4 +1,6 @@
 """动态广场数据源显隐：自动（启用大V=0 隐藏）/ 显示 / 隐藏。"""
+from test_api import auth_headers, make_client, user_headers
+
 from app.db import DB
 from app.plaza import (
     PLAZA_PLATFORMS,
@@ -8,8 +10,6 @@ from app.plaza import (
     plaza_visible_platforms,
     set_plaza_visibility,
 )
-
-from test_api import auth_headers, make_client, user_headers
 
 
 def test_parse_plaza_visibility_defaults_and_ignores_junk():

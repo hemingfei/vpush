@@ -139,9 +139,7 @@ def is_allowed_trusted_llm_base(url: str) -> bool:
         return False
     if parsed.scheme not in ALLOWED_SCHEMES or not parsed.hostname:
         return False
-    if parsed.username or parsed.password:
-        return False
-    return True
+    return not (parsed.username or parsed.password)
 
 
 def is_allowed_user_llm_base(url: str) -> bool:

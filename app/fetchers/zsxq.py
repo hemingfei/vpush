@@ -276,8 +276,7 @@ def cache_zsxq_file(db, file_id: str, name: str, url: str, client=None) -> str:
     client = client or httpx.Client(timeout=30, follow_redirects=True, headers=headers_for(url))
     tmp = None
     try:
-        with _ZSXQ_DL_SLOTS:
-            with client.stream("GET", url, follow_redirects=True) as resp:
+        with _ZSXQ_DL_SLOTS, client.stream("GET", url, follow_redirects=True) as resp:
                 if resp.status_code != 200:
                     return ""
                 ext = _ext_for(name, resp.headers.get("content-type", ""))

@@ -2,7 +2,6 @@ from pathlib import Path
 
 from scripts.check_platform_badges import check
 
-
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "app" / "static"
 

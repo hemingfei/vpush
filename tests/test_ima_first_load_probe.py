@@ -65,6 +65,7 @@ def _run(path: Path, *args: str) -> subprocess.CompletedProcess[str]:
         env=env,
         text=True,
         capture_output=True,
+        check=False,  # 用例会故意跑失败场景检查降级行为，由调用方断言 returncode
     )
 
 

@@ -13,7 +13,13 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ALL_COMPLETED, FIRST_COMPLETED, CancelledError, ThreadPoolExecutor, wait
+from concurrent.futures import (
+    ALL_COMPLETED,
+    FIRST_COMPLETED,
+    CancelledError,
+    ThreadPoolExecutor,
+    wait,
+)
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -81,7 +87,7 @@ def shanghai_schedule_gate(now: float, hour: int = IMA_SCHEDULE_HOUR) -> float:
     return dt.replace(hour=hour, minute=0, second=0, microsecond=0).timestamp()
 
 
-def group_next_run_at(group: "ImaGroupConfig", last_started_at: float, now: float) -> float:
+def group_next_run_at(group: ImaGroupConfig, last_started_at: float, now: float) -> float:
     interval = _clamp_group_interval(group.interval_seconds)
     if interval >= 86400:
         gate = shanghai_schedule_gate(now)
@@ -1423,7 +1429,7 @@ def item_display_name(item: dict[str, Any], media_id: str) -> str:
 
 def _name_stem(name: str) -> str:
     folded = str(name or "").strip().casefold()
-    return folded[:-4] if folded.endswith(".pdf") else folded
+    return folded.removesuffix(".pdf")
 
 
 def duplicate_base_stem(name: str) -> str:
@@ -3661,7 +3667,7 @@ class ImaDocumentService:
         if not raw:
             return 0.0
         try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+            return datetime.fromisoformat(raw).timestamp()
         except ValueError:
             return 0.0
 

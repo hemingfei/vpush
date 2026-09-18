@@ -15,7 +15,7 @@ MIN_SORT = "2026-07-01"
 BATCH = 12
 MAX_PER_RUN = 240
 CJK = re.compile(r"[\u4e00-\u9fff]")
-DATE_SUFFIX = re.compile(r"-(\d{6})\.pdf$", re.I)
+DATE_SUFFIX = re.compile(r"-(\d{6})\.pdf$", re.IGNORECASE)
 TITLE_TRANSLATION_TIMEOUT = 20
 TITLE_TRANSLATION_BUDGET_SECONDS = 180
 PROMPT = (
@@ -86,7 +86,7 @@ def _parse_list(text: str, n: int) -> list[str] | None:
     try:
         out = json.loads(raw)
     except json.JSONDecodeError:
-        m = re.search(r"\[.*\]", raw, re.S)
+        m = re.search(r"\[.*\]", raw, re.DOTALL)
         if not m:
             return None
         try:

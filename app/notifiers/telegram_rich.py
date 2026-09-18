@@ -3,7 +3,13 @@ from __future__ import annotations
 
 from html import escape
 
-from ..fetchers.base import PLATFORM_LABELS, Post, digest_body, has_stored_translation, truncate_text
+from ..fetchers.base import (
+    PLATFORM_LABELS,
+    Post,
+    digest_body,
+    has_stored_translation,
+    truncate_text,
+)
 from .base import why_badges
 
 ACTION_MARK = {"清仓": "🗑", "新建": "🆕", "增持": "➕", "减持": "➖"}

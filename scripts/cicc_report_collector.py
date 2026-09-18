@@ -171,7 +171,7 @@ def fit_bytes(name: str, budget: int) -> str:
 
 
 def day_dir(publish_time: str) -> str:
-    dt = datetime.fromisoformat(publish_time.replace("Z", "+00:00"))
+    dt = datetime.fromisoformat(publish_time)
     return (dt.astimezone(TZ_BJ)).strftime("%m%d")
 
 
@@ -185,7 +185,7 @@ def publish_date(publish_time: str) -> str:
     if not raw:
         return ""
     try:
-        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(raw)
         return dt.astimezone(TZ_BJ).strftime("%Y-%m-%d")
     except ValueError:
         day = raw[:10]

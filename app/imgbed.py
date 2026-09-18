@@ -288,7 +288,7 @@ def _prewarm_hosted(hosted_url: str) -> None:
     try:
         with _http_client(timeout=15, follow_redirects=False) as client:
             client.get(hosted_url, headers={"User-Agent": BROWSER_UA})
-    except Exception:  # noqa: BLE001 - 预热失败不影响镜像
+    except Exception:  # noqa: BLE001, S110 - 预热失败不影响镜像
         pass
 
 

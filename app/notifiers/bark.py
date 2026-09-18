@@ -13,7 +13,13 @@ import urllib.parse
 
 import httpx
 
-from ..fetchers.base import PLATFORM_LABELS, Post, attachment_lines, digest_body, show_original
+from ..fetchers.base import (
+    PLATFORM_LABELS,
+    Post,
+    attachment_lines,
+    digest_body,
+    show_original,
+)
 from .base import Notifier, why_badges
 
 MAX_CONTENT_CHARS = 1600  # Bark 单条消息过长会被截断，正文截断到 1600 字

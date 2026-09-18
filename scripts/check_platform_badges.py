@@ -36,8 +36,8 @@ def check(static: Path = ROOT / "app" / "static") -> list[str]:
         if app.count(f"const {name} =") != 1 or expected not in app or sorted(definitions) != ["app.js", "core/platforms.js"]:
             errors.append(f"平台配置只能定义在 core/platforms.js：{name}")
 
-    badge_block = re.search(r"export const PLATFORM_BADGES = \{(.*?)\n\};", platforms, re.S)
-    keys = set(re.findall(r'^\s*(?:"([^"]*)"|([a-z]+)):\s*\{', badge_block.group(1) if badge_block else "", re.M))
+    badge_block = re.search(r"export const PLATFORM_BADGES = \{(.*?)\n\};", platforms, re.DOTALL)
+    keys = set(re.findall(r'^\s*(?:"([^"]*)"|([a-z]+)):\s*\{', badge_block.group(1) if badge_block else "", re.MULTILINE))
     actual = {quoted or bare for quoted, bare in keys}
     if actual != EXPECTED_PLATFORMS:
         errors.append(f"平台清单不完整：{sorted(actual)}")
@@ -50,7 +50,7 @@ def check(static: Path = ROOT / "app" / "static") -> list[str]:
     if "filter:" in platforms:
         errors.append("平台配置不得自行定义滤镜")
 
-    selectors = re.findall(r"([^{}]+)\{", re.sub(r"/\*.*?\*/", "", css, flags=re.S))
+    selectors = re.findall(r"([^{}]+)\{", re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL))
     selected_platform_rules = []
     for selector_group in selectors:
         for selector in selector_group.split(","):

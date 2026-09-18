@@ -1,8 +1,9 @@
 """PWA Service Worker 静态回归测试：API 永不缓存，外壳仍可离线。"""
 import re
 from pathlib import Path
-from scripts.bump_assets import asset_digest, module_urls
+
 from app.version import APP_VERSION
+from scripts.bump_assets import asset_digest, module_urls
 
 SW_JS = Path(__file__).parent.parent / "app" / "static" / "sw.js"
 STATIC = SW_JS.parent

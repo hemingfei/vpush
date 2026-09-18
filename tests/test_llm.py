@@ -5,7 +5,14 @@ from types import SimpleNamespace
 import httpx
 
 from app.fetchers.base import Post
-from app.llm import _chat, _config_values, list_models, probe_llm, summary_cache_key, summarize_posts
+from app.llm import (
+    _chat,
+    _config_values,
+    list_models,
+    probe_llm,
+    summarize_posts,
+    summary_cache_key,
+)
 
 
 def make_post(content="正文内容", external_id="p1", title="标题", url="https://xueqiu.com/1/2") -> Post:
