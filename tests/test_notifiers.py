@@ -377,6 +377,57 @@ def test_telegram_album_uploads_downloaded_images(monkeypatch):
     assert "sendPhoto" not in str(sent[0].url)
 
 
+def test_telegram_media_group_splits_video_and_photo(monkeypatch):
+    sent = []
+
+    def handler(request):
+        sent.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    def fake_safe_get(client, url, timeout=12):
+        return httpx.Response(200, content=b"img-one")
+
+    monkeypatch.setattr("app.notifiers.telegram.safe_get", fake_safe_get)
+    tg = TelegramNotifier(
+        TelegramConfig(bot_token="123:abc", chat_id="456"),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    post = make_post()
+    post.images = ["https://a/1.jpg", "https://a/v.mp4"]
+    tg._send_media_group(post)
+
+    urls = [str(r.url) for r in sent]
+    assert any("sendPhoto" in u for u in urls)  # 图片仍走照片通道
+    assert any("sendVideo" in u for u in urls)  # 视频单独 sendVideo
+    video_req = next(r for r in sent if "sendVideo" in str(r.url))
+    assert b"v.mp4" in video_req.read()  # URL 直传（TG 服务器代取，表单编码）
+
+
+def test_telegram_video_url_rejected_falls_back_to_upload(monkeypatch):
+    sent = []
+
+    def handler(request):
+        sent.append(request)
+        multipart = "multipart/form-data" in (request.headers.get("content-type") or "")
+        # URL 直传（纯 data）模拟 TG 拒绝，multipart 文件上传放行
+        return httpx.Response(200, json={"ok": bool(multipart)})
+
+    def fake_safe_get(client, url, timeout=12):
+        return httpx.Response(200, content=b"VIDEOFALLBACK")
+
+    monkeypatch.setattr("app.notifiers.telegram.safe_get", fake_safe_get)
+    tg = TelegramNotifier(
+        TelegramConfig(bot_token="123:abc", chat_id="456"),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    post = make_post()
+    post.images = ["https://a/v.mp4"]
+    tg._send_media_group(post)
+
+    uploads = [r for r in sent if "sendVideo" in str(r.url) and "multipart" in (r.headers.get("content-type") or "")]
+    assert uploads and b"VIDEOFALLBACK" in uploads[-1].read()  # 本机下载转上传兜底成功
+
+
 def test_feishu_notify_adds_images(monkeypatch):
     client = httpx.Client(
         transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"code": 0, "msg": "success"}))

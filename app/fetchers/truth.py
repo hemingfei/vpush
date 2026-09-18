@@ -29,7 +29,7 @@ BASELINE_DAYS = 30
 TRUMP_X_AVATAR = (
     "https://pbs.twimg.com/profile_images/874276197357596672/kUuht00m_400x400.jpg"
 )
-_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+_MEDIA_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4")
 _PARA_RE = re.compile(r"</p>\s*<p[^>]*>")
 
 
@@ -52,7 +52,7 @@ def status_to_entry(status: dict) -> dict | None:
     media = [
         m["url"]
         for m in (inner.get("media_attachments") or [])
-        if m.get("type") == "image" and m.get("url")
+        if m.get("type") in ("image", "video", "gifv") and m.get("url")
     ]
     if not media:
         # 原帖自带链接预览卡（题图）时带上，还原 Truth 端的卡片观感
@@ -86,7 +86,7 @@ def entry_published_at(entry: dict) -> str:
 def entry_images(entry: dict) -> list[str]:
     return [
         u for u in (entry.get("media") or [])
-        if str(u).lower().split("?", 1)[0].endswith(_IMAGE_EXTS)
+        if str(u).lower().split("?", 1)[0].endswith(_MEDIA_EXTS)
     ]
 
 
@@ -186,14 +186,19 @@ class TruthFetcher(Fetcher):
         if url_at > 0:
             # 标题是给通知/列表用的摘要：URL 不进标题，避免 80 字截断切出断链
             first_line = first_line[:url_at].rstrip(" ：:，,")
-        title = first_line[:80] if first_line else "图片"
+        placeholder = (
+            "视频"
+            if images and all(u.lower().split("?", 1)[0].endswith(".mp4") for u in images)
+            else "图片"
+        )
+        title = first_line[:80] if first_line else placeholder
         return Post(
             platform=self.platform,
             kol_id=kol["id"],
             kol_name=kol["name"],
             external_id=external_id,
             title=title,
-            content=content or "图片",
+            content=content or placeholder,
             url=url,
             published_at=entry_published_at(entry),
             images=images,

@@ -1316,6 +1316,12 @@ textarea.proxy-import { min-height: 96px; }
   border: var(--border-soft);
   background: var(--color-bg-muted);
 }
+.post-images video {
+  width: min(320px, 100%); aspect-ratio: 16 / 9; object-fit: contain;
+  border-radius: var(--radius-control);
+  border: var(--border-soft);
+  background: #000; display: block;
+}
 .post-images { position: relative; }
 .post-images-more {
   position: absolute; right: 8px; bottom: 8px;

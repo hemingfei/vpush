@@ -73,7 +73,10 @@ def test_parse_archive_head_cuts_at_last_complete_object():
 
 
 def test_entry_helpers_filter_images_and_format_time():
-    assert entry_images(NEW) == ["https://static-assets.truthsocial.com/x/original/pic.jpg"]
+    assert entry_images(NEW) == [
+        "https://static-assets.truthsocial.com/x/original/pic.jpg",
+        "https://static-assets.truthsocial.com/x/original/clip.mp4",  # 视频链接保留
+    ]
     assert entry_images({"media": []}) == []
     assert entry_published_at(NEW) == "2026-09-04 20:00"
 
@@ -82,7 +85,10 @@ def test_status_to_entry_strips_html_and_filters_media():
     entry = status_to_entry(API_STATUS)
     assert entry["id"] == "117290107011309524"
     assert entry["content"] == "Very interesting. A must read!\nSecond line & more"
-    assert entry["media"] == ["https://static-assets-1.truthsocial.com/a.jpg"]
+    assert entry["media"] == [
+        "https://static-assets-1.truthsocial.com/a.jpg",
+        "https://static-assets-1.truthsocial.com/v.mp4",  # 视频附件保留
+    ]
     assert entry["url"].endswith("/117290107011309524")
 
 
@@ -107,7 +113,8 @@ def test_status_to_entry_card_image_as_fallback_media():
     ]
     with_media = dict(API_STATUS, card={"image": "https://x/card.jpeg"})
     assert status_to_entry(with_media)["media"] == [
-        "https://static-assets-1.truthsocial.com/a.jpg"
+        "https://static-assets-1.truthsocial.com/a.jpg",
+        "https://static-assets-1.truthsocial.com/v.mp4",
     ]  # 有真实图片时不混入预览卡题图
 
 
@@ -122,6 +129,35 @@ def test_title_excludes_trailing_url():
     post = TruthFetcher()._to_post({"id": 1, "name": "特朗普"}, entry)
     assert post.title == "Ruddy: 'A Rising Trump Lifts All Boats'"
     assert "1269294/" in post.content  # 正文保留完整 URL
+
+
+API_VIDEO_STATUS = {
+    "id": "117289658560181496",
+    "created_at": "2026-09-18T02:22:39.184Z",
+    "content": "<p></p>",
+    "url": "https://truthsocial.com/@realDonaldTrump/117289658560181496",
+    "media_attachments": [
+        {
+            "type": "video",
+            "url": "https://static-assets-1.truthsocial.com/files/v.mp4",
+            "preview_url": "https://static-assets-1.truthsocial.com/files/t.jpg",
+        }
+    ],
+}
+
+
+def test_status_to_entry_includes_video_attachment():
+    entry = status_to_entry(API_VIDEO_STATUS)
+    assert entry["media"] == ["https://static-assets-1.truthsocial.com/files/v.mp4"]
+
+
+def test_video_only_post_uses_video_placeholder():
+    post = TruthFetcher()._to_post(
+        {"id": 1, "name": "特朗普"}, status_to_entry(API_VIDEO_STATUS)
+    )
+    assert post.title == "视频"
+    assert post.content == "视频"
+    assert post.images == ["https://static-assets-1.truthsocial.com/files/v.mp4"]
 
 
 @pytest.fixture(autouse=True)
@@ -153,7 +189,10 @@ def test_first_fetch_is_baseline_only_recent_30d(db, monkeypatch):
     assert posts[0].platform == "truth"
     assert posts[0].title == "A big announcement!"
     assert posts[0].published_at == "2026-09-04 20:00"
-    assert posts[0].images == [NEW["media"][0]]
+    assert posts[0].images == [
+        NEW["media"][0],
+        NEW["media"][1],  # 视频链接（clip.mp4）也入库
+    ]
     assert posts[0].url.endswith("/" + NEW["id"])
     assert db.max_external_id_num("truth") == 0  # 未入库前仍为 0，入库由调度器负责
 

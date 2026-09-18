@@ -120,7 +120,13 @@ def _file_block(post: Post) -> str:
 
 
 def _https_images(images: list[str]) -> list[str]:
-    urls = [u for u in images if isinstance(u, str) and u.startswith(("http://", "https://"))]
+    # rich 媒体只放图片：视频混进 type=photo 会发送失败，由调用方单独 sendVideo
+    urls = [
+        u
+        for u in images
+        if isinstance(u, str) and u.startswith(("http://", "https://"))
+        and not u.lower().split("?", 1)[0].endswith((".mp4", ".webm"))
+    ]
     return urls[:RICH_IMAGE_MAX]
 
 
