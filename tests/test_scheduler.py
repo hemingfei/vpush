@@ -9,10 +9,10 @@ from types import SimpleNamespace
 
 import httpx
 
+import app.scheduler as app_scheduler
 from app.config import FeishuConfig, NotifiersConfig, TelegramConfig
 from app.db import DB
 from app.fetchers.base import Post, is_notify_stale
-import app.scheduler as app_scheduler
 from app.scheduler import (
     PlatformState,
     PushRetryQueue,
@@ -28,11 +28,11 @@ from app.scheduler import (
     keepalive_weibo_cookie,
     keepalive_xueqiu_cookie,
     maybe_alert_x_fallback,
-    probe_xueqiu,
     notify_digest_subscribers,
     notify_subscribers,
     parse_twitter_cookie,
     poll_once,
+    probe_xueqiu,
     translate_text,
 )
 

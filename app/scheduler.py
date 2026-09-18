@@ -17,13 +17,11 @@ from datetime import datetime, timedelta
 from .backup import run_scheduled
 from .channels import channel_bound, channel_enabled
 from .db import ALLOWED_PLATFORMS, DB
-from .logging_setup import redact_secrets
 from .fetchers.base import (
     CN_TZ,
     PLATFORM_LABELS,
     Fetcher,
     Post,
-    already_chinese as _already_chinese,
     is_collapsed_translation,
     is_notify_stale,
     is_stale_backfill,
@@ -31,6 +29,10 @@ from .fetchers.base import (
     twitter_translate_enabled,
     with_twitter_display,
 )
+from .fetchers.base import (
+    already_chinese as _already_chinese,
+)
+from .logging_setup import redact_secrets
 from .notifiers.base import Notifier
 from .proxy import note_fetch_proxy, tick_proxy_pools
 
@@ -1754,7 +1756,12 @@ def keepalive_xueqiu_cookie(
 
 def keepalive_weibo_cookie(db: DB, notifiers: list[Notifier], weibo_config, client=None) -> None:
     """打动态 AJAX 刷新会话；失效时尝试账号密码自动登录，否则发扫码。"""
-    from .fetchers.weibo import TIMELINE_URL, WEIBO_COOKIE_KEY, WeiboFetcher, weibo_session_dead
+    from .fetchers.weibo import (
+        TIMELINE_URL,
+        WEIBO_COOKIE_KEY,
+        WeiboFetcher,
+        weibo_session_dead,
+    )
 
     cookie = db.get_setting(WEIBO_COOKIE_KEY) or weibo_config.cookie
     if not cookie:

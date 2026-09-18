@@ -62,15 +62,12 @@ from pydantic import BaseModel, Field
 
 from . import auth, kol_requests, user_quota, wechat
 from .avatar_cache import cache_avatar
-from .market import MarketQuotes
 from .bot_core import BIND_CODE_TTL, new_bind_code
 from .db import _UNSET, ALLOWED_PLATFORMS, DB, days_until_purge, user_plain_secret
-from .news import (
-    NewsInputError,
-    NewsNotFound,
-    NewsService,
-    NewsUpstreamError,
-    normalize_feed_url,
+from .feishu_documents import (
+    FeishuDocumentError,
+    FeishuDocumentSyncService,
+    parse_feishu_document_url,
 )
 from .fetchers.base import CN_TZ, PLATFORM_LABELS, apply_twitter_feed, strip_html
 from .fetchers.combination import extract_cube_symbol, resolve_combination_profile
@@ -112,11 +109,7 @@ from .fetchers.zsxq import (
     resolve_zsxq_profile,
     zsxq_cache_stats,
 )
-from .feishu_documents import (
-    FeishuDocumentError,
-    FeishuDocumentSyncService,
-    parse_feishu_document_url,
-)
+from .ima_digest import digest_view
 from .ima_documents import (
     IMA_FOLDER_LIST_MAX_PAGES,
     IMA_MOUNT_FOLDER_ID_MAX,
@@ -144,7 +137,14 @@ from .ima_kb import (
     readable_group_ids,
 )
 from .ima_kb import catalog as ima_kb_catalog
-from .ima_digest import digest_view
+from .market import MarketQuotes
+from .news import (
+    NewsInputError,
+    NewsNotFound,
+    NewsService,
+    NewsUpstreamError,
+    normalize_feed_url,
+)
 from .plaza import (
     filter_plaza_rows,
     is_plaza_hidden,
@@ -939,9 +939,9 @@ def _wscn_client() -> httpx.Client:
 
 
 def _wscn_plain_body(content: str) -> str:
-    text = re.sub(r"<br\s*/?>", "\n", content or "", flags=re.I)
-    text = re.sub(r"</p>", "\n", text, flags=re.I)
-    text = re.sub(r"<p[^>]*>", "", text, flags=re.I)
+    text = re.sub(r"<br\s*/?>", "\n", content or "", flags=re.IGNORECASE)
+    text = re.sub(r"</p>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<p[^>]*>", "", text, flags=re.IGNORECASE)
     return strip_html(text).strip()
 
 
@@ -2397,7 +2397,7 @@ def create_api_router(
     def mark_news_seen(body: NewsSeenIn, user: dict = Depends(get_current_user)):
         raw = (body.view_started_at or "").strip()
         try:
-            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            value = datetime.fromisoformat(raw)
         except ValueError:
             raise HTTPException(status_code=400, detail="时间必须是带时区的 ISO 8601 时间") from None
         if value.tzinfo is None or value.utcoffset() is None:
@@ -3780,7 +3780,7 @@ def create_api_router(
         if last_checked and source.get("enabled") and not source.get("deleted_at"):
             try:
                 next_check_at = (
-                    datetime.fromisoformat(last_checked.replace("Z", "+00:00"))
+                    datetime.fromisoformat(last_checked)
                     + timedelta(seconds=interval)
                 ).isoformat()
             except ValueError:

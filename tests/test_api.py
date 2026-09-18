@@ -5418,7 +5418,7 @@ def test_admin_users_batch_notify_and_delete():
     admin_headers = auth_headers(client)
     admin = client.get("/api/me", headers=admin_headers).json()
     a_headers = user_headers(client, "batchu_a")
-    b_headers = user_headers(client, "batchu_b")
+    user_headers(client, "batchu_b")  # 建 b 账号供后续断言，凭据本身用不到
     users = client.get("/api/users", headers=admin_headers).json()
     uid_a = next(u["id"] for u in users if u["username"] == "batchu_a")
     uid_b = next(u["id"] for u in users if u["username"] == "batchu_b")
@@ -5869,8 +5869,9 @@ def test_wscn_live_returns_normalized_items(monkeypatch):
 
 def test_wscn_live_rejects_freeform_cursor():
     """cursor 进缓存键与上游查询串，必须限定为短数字串（非法请求到不了取数层）。"""
-    from app.api import _wscn_evict_locked, _WSCN_CACHE, _WSCN_LOCK
     import time as _time
+
+    from app.api import _WSCN_CACHE, _WSCN_LOCK, _wscn_evict_locked
 
     client = make_client("wscn_cursor.db")
     headers = auth_headers(client, "wscncur", "secret1234")
@@ -5930,6 +5931,7 @@ def test_wscn_fetch_reuses_cache_and_http_client(monkeypatch):
 
 def test_wscn_serves_stale_cache_while_refreshing(monkeypatch):
     import threading
+
     from app import api as api_mod
 
     calls = []
@@ -5991,6 +5993,7 @@ def test_wscn_warmup_fetches_first_page_and_swallows_errors(monkeypatch):
 
 def test_wscn_refresh_does_not_hold_lock_during_http(monkeypatch):
     import threading
+
     from app import api as api_mod
 
     entered = threading.Event()
