@@ -1172,6 +1172,7 @@ def test_holdings_view_manage_cards_feed_flow(page: Page):
         setPageTitle: () => {},
         routeStillActive: () => true,
         flash: (msg, type) => h.flashes.push([msg, type || 'success']),
+        showConfirm: async () => true, // 应用内确认弹窗（f35a7c9 起替代原生 confirm）
       });
       Object.assign(window, h.view);
       await h.view.renderHoldings(1);
@@ -1246,9 +1247,8 @@ def test_holdings_view_manage_cards_feed_flow(page: Page):
         "hdTest.calls.filter(c => c.path.includes('/api/my/holdings/suggestions')).map(c => c.path)")
     assert any("suggestions?type=stock&q=%E8%B4%B5%E5%B7%9E%E8%8C%85%E5%8F%B0" in p
                for p in sug_calls)  # 提交前探测请求发生过
-    # 删除：confirm 接受后 DELETE + flash 反馈；按钮为低调灰 ghost 样式
+    # 删除：应用内确认弹窗（桩 showConfirm 恒真）后 DELETE + flash 反馈；按钮为低调灰 ghost 样式
     assert "ghost" in page.locator(".hd-btn.ghost").first.get_attribute("class")
-    page.on("dialog", lambda dialog: dialog.accept())
     page.get_by_role("button", name="删", exact=True).first.click()
     deletes = page.evaluate("hdTest.calls.filter(c => c.method === 'DELETE')")
     assert deletes == [{"path": "/api/my/holdings/1", "method": "DELETE", "body": None}]
