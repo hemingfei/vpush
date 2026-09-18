@@ -177,6 +177,7 @@ def _load_poll_tuning(
     return {
         "interval": interval_seconds,
         "priority_interval": priority_interval_seconds,
+        "truth_base": _polling_setting(db, "config_truth_interval_seconds", 0),
         "combination_base": _polling_setting(
             db, "config_combination_base_seconds", COMBINATION_BASE_SECONDS, positive=True
         ),
@@ -213,15 +214,19 @@ def _effective_interval(
 ) -> int:
     """单个大V本轮的有效抓取间隔。
 
-    基础间隔（雪球组合高频档 > 优先大V > 普通大V）× 空轮拉伸（2 倍步进，
-    封顶）→ 有效间隔；平台为 X 且直抓失败时再 ×4（封顶），避免空打已挂接口。
-    各档位数值可在后台「数据源」页调参。
+    基础间隔（雪球组合高频档 / Truth 专属档 > 优先大V > 普通大V）× 空轮拉伸
+    （2 倍步进，封顶）→ 有效间隔；平台为 X 且直抓失败时再 ×4（封顶），
+    避免空打已挂接口。各档位数值可在后台「数据源」页调参。
     """
     if tuning is None and db is not None:
         tuning = _load_poll_tuning(db, interval_seconds, priority_interval_seconds)
     if kol["platform"] == "combination":
         base = (tuning or {}).get("combination_base") or COMBINATION_BASE_SECONDS
         cap = (tuning or {}).get("combination_cap") or COMBINATION_IDLE_CAP_SECONDS
+    elif kol["platform"] == "truth" and (tuning or {}).get("truth_base"):
+        # Truth 专属间隔（后台可调，0=跟随优先档）；空轮封顶沿用优先档
+        base = tuning["truth_base"]
+        cap = (tuning or {}).get("priority_cap") or PRIORITY_IDLE_CAP_SECONDS
     else:
         if kol.get("priority"):
             base = priority_interval_seconds

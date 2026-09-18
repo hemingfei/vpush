@@ -491,6 +491,8 @@ class RegisterCodeNoteIn(BaseModel):
 class PollingConfigIn(BaseModel):
     interval_seconds: int | None = None
     priority_interval_seconds: int | None = None
+    # Truth 专属轮询间隔（0 = 跟随优先档）
+    truth_interval_seconds: int | None = None
     digest_interval_seconds: int | None = None
     source_probe_interval_seconds: int | None = None
     cookie_keepalive_interval_seconds: int | None = None
@@ -1405,6 +1407,13 @@ def create_api_router(
             "config_priority_interval_seconds",
             "stats_priority_interval_seconds",
             1,
+            600,
+        ),
+        (
+            "truth_interval_seconds",
+            "config_truth_interval_seconds",
+            "config_truth_interval_seconds",
+            0,
             600,
         ),
         ("digest_interval_seconds", "config_digest_interval_seconds", "stats_digest_interval_seconds", 0, 86400),

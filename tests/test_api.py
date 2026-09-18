@@ -2720,6 +2720,21 @@ def test_polling_config_get_and_update():
     cfg = client.get("/api/admin/polling-config", headers=headers).json()
     assert cfg["interval_seconds"] > 0 and cfg["daily_report_hour"] == 20
     assert cfg["telegram_rich_messages"] is True
+    assert cfg["truth_interval_seconds"] == 0  # 默认 0 = 跟随优先档
+
+    resp = client.put(
+        "/api/admin/polling-config",
+        headers=headers,
+        json={"truth_interval_seconds": 15},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["truth_interval_seconds"] == 15
+    resp = client.put(
+        "/api/admin/polling-config",
+        headers=headers,
+        json={"truth_interval_seconds": 601},
+    )
+    assert resp.status_code == 400
 
     resp = client.put(
         "/api/admin/polling-config",

@@ -4266,6 +4266,7 @@ async function savePollingConfig() {
   const body = {
     interval_seconds: Number($("#pc-interval").value),
     priority_interval_seconds: Number($("#pc-priority").value),
+    truth_interval_seconds: Number($("#pc-truth").value),
     digest_interval_seconds: Number($("#pc-digest").value),
     source_probe_interval_seconds: Number($("#pc-probe").value),
     cookie_keepalive_interval_seconds: Number($("#pc-keepalive").value),

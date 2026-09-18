@@ -1660,6 +1660,21 @@ def test_frequency_settings_override_effective_interval():
     assert _effective_interval(db, kol_c, state, 180, 60) == COMBINATION_BASE_SECONDS
 
 
+def test_truth_interval_override():
+    """Truth 专属间隔（config_truth_interval_seconds）：0/未设=跟随优先档，空轮封顶沿用优先档。"""
+    db = make_db()
+    state = PlatformState()
+    kol = {"id": 5, "priority": 1, "platform": "truth"}
+    assert _effective_interval(db, kol, state, 180, 60) == 60  # 未设置 → 优先档
+    db.set_setting("config_truth_interval_seconds", "15")
+    assert _effective_interval(db, kol, state, 180, 60) == 15
+    state.empty_rounds[5] = 4  # 15*16=240 → 封顶 180（优先档封顶）
+    assert _effective_interval(db, kol, state, 180, 60) == 180
+    db.set_setting("config_truth_interval_seconds", "0")
+    state.empty_rounds[5] = 0
+    assert _effective_interval(db, kol, state, 180, 60) == 60  # 0 = 恢复跟随优先档
+
+
 def test_source_health_recorded():
     db = make_db()
     add_kol_subscribed(db, "xueqiu", "A", "1")
