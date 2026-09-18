@@ -104,6 +104,8 @@ class _SpaStaticFiles(StaticFiles):
             raise
         if cache_control:
             response.headers["Cache-Control"] = cache_control
+        elif "text/html" in response.headers.get("content-type", ""):
+            response.headers["Cache-Control"] = REVALIDATE_CACHE_CONTROL
         return response
 
 setup_logging()

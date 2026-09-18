@@ -13,6 +13,7 @@ from app.static_assets import (
     file_digest,
     hashed_url,
     resolve_fingerprinted_path,
+    should_revalidate,
     static_dir,
 )
 
@@ -70,6 +71,16 @@ def test_api_and_health_are_not_immutable():
         cache = resp.headers.get("cache-control", "")
         assert "max-age=31536000" not in cache
         assert "immutable" not in cache
+
+
+def test_should_revalidate_directory_and_html_paths():
+    assert should_revalidate("")
+    assert should_revalidate("/")
+    assert should_revalidate(".")
+    assert should_revalidate("index.html")
+    assert should_revalidate("manifest.webmanifest")
+    assert should_revalidate("app.js")
+    assert not should_revalidate("logo-mark.svg")
 
 
 def test_resolve_fingerprinted_path_rejects_traversal(tmp_path: Path):

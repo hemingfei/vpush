@@ -158,7 +158,7 @@ def resolve_fingerprinted_path(static: Path, request_path: str) -> str | None:
 
 def should_revalidate(path: str) -> bool:
     lowered = path.replace("\\", "/").lower().strip("/")
-    if not lowered or lowered == "index.html":
+    if not lowered or lowered in {".", "index.html"}:
         return True
     return lowered.endswith(REVALIDATE_SUFFIXES)
 

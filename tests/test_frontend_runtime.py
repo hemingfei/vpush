@@ -10,10 +10,10 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from app.static_assets import resolve_fingerprinted_path
-
 import pytest
 from playwright.sync_api import Page, Playwright, expect, sync_playwright
+
+from app.static_assets import resolve_fingerprinted_path
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "app" / "static"
