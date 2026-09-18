@@ -130,9 +130,14 @@ def test_holdings_page_contract_basics():
     assert "/api/my/holdings/views" in HOLDINGS_JS
     assert "/api/my/holdings/tag-posts" in HOLDINGS_JS  # 标签命中快讯流
     assert "/api/mx-views/stream" in HOLDINGS_JS  # 复用观点研判版本号 SSE
-    assert "hdTeardown" in HOLDINGS_JS  # 离开页面清理 SSE/定时器
-    # 加载更多走 before_id 翻旧页，实时增量走 after_id
-    assert "before_id" in HOLDINGS_JS and "after_id" in HOLDINGS_JS
+    # 生命周期：离开页面时 router 关 SSE/停兜底轮询（防 EventSource 与定时器跨页泄漏）
+    router = _fn_body("router")
+    assert "hdTeardown" in router and "mxvTeardown" in router
+    # 加载更多走复合游标翻旧页（排序键 occurred_at/published_at + id），实时增量走 after_id
+    assert "before_id" in HOLDINGS_JS and "before_at" in HOLDINGS_JS
+    assert "after_id" in HOLDINGS_JS
+    # 水位只增不减：翻旧页响应里的 max_id 可能落后于增量已推进的值
+    assert "Math.max(_hd.maxId" in HOLDINGS_JS and "Math.max(_hd.tagMaxId" in HOLDINGS_JS
     # 新帖入库不 bump 观点版本号：快讯到账靠恒开兜底轮询
     poll = _fn_body("hdEnsureSSE", HOLDINGS_JS)
     assert "setInterval(hdIncAll" in poll

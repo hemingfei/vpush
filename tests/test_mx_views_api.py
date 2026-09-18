@@ -91,6 +91,32 @@ def test_mx_views_stream_pushes_initial_version(monkeypatch):
         assert '"version"' in second
 
 
+def test_mx_views_stream_accepts_query_token_without_header(monkeypatch):
+    """SSE 鉴权走 query token（EventSource 无法带 Authorization header）。
+
+    不带任何 header、只带 ?token= 的请求（真实浏览器 EventSource 的形态）
+    必须 200 且能收到 version 事件；无 token 401。
+    """
+    from app import api as api_module
+
+    monkeypatch.setattr(api_module, "_MX_SSE_MAX_TICKS", 2)
+    monkeypatch.setattr(api_module, "_MX_SSE_TICK_SECONDS", 0.01)
+    client = make_client()
+    headers = auth_headers(client)
+    db = client.app.state.db
+    _seed_snapshot(db)
+    token = headers["Authorization"].split(" ", 1)[1]
+
+    # 真实 EventSource 形态：只有 query token，没有 Authorization header
+    with client.stream("GET", f"/api/mx-views/stream?token={token}") as resp:
+        assert resp.status_code == 200
+        lines = resp.iter_lines()
+        assert next(lines) == "event: version"
+
+    # 无凭据 401（不建流）
+    assert client.get("/api/mx-views/stream").status_code == 401
+
+
 def test_mx_views_target_detail_with_evidence():
     client = make_client()
     headers = auth_headers(client)

@@ -2626,6 +2626,31 @@ def create_api_router(
             return False
         return not kol_plaza_hidden(db, kol)
 
+    # MX 原始消息（detail 为解密后的完整平台载荷）仅管理员可见——ee143d9 只做了
+    # 前端入口隐藏，数据面在此收口：非管理员的 MX 帖只保留 msg 字段（前端
+    # mxAttachments 从 msg 解析附件卡片，剥掉会丢附件），oid/rid/uid/createtime
+    # 等平台侧标识不下发。其余平台 detail（星球 files/webhook payload）不受影响。
+    def strip_mx_detail(rows: list, user: dict) -> list:
+        if user.get("is_admin"):
+            return rows
+        for row in rows:
+            if row.get("platform") != "mx":
+                continue
+            raw = row.get("detail")
+            if not raw:
+                continue
+            try:
+                detail = json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError):
+                row["detail"] = None  # 解析失败的原始文本一并不下发
+                continue
+            if isinstance(detail, dict):
+                msg = detail.get("msg")
+                row["detail"] = {"msg": msg} if msg else None
+            else:
+                row["detail"] = None
+        return rows
+
     # ---- 目录与订阅 ----
     @router.get("/catalog")
     def catalog(platform: str | None = None, category_id: int | None = None, user: dict = Depends(get_current_user)):
@@ -2844,7 +2869,7 @@ def create_api_router(
             q=(q or "").strip() or None,
         )
         has_more = len(posts) > limit
-        posts = apply_twitter_feed(posts[:limit], user)
+        posts = strip_mx_detail(apply_twitter_feed(posts[:limit], user), user)
         db.attach_view_directions(posts)
         db.attach_pending_tags(posts)
         return {
@@ -2882,7 +2907,7 @@ def create_api_router(
             q=(q or "").strip() or None,
         )
         has_more = len(posts) > limit
-        posts = apply_twitter_feed(posts[:limit], user)
+        posts = strip_mx_detail(apply_twitter_feed(posts[:limit], user), user)
         db.attach_view_directions(posts)
         db.attach_pending_tags(posts)
         return {
@@ -3254,7 +3279,7 @@ def create_api_router(
         db.attach_view_directions(posts)
         # 待审标签提示性下发：只读登记表不改 posts.tags，实时决策可见待审标签
         db.attach_pending_tags(posts)
-        return apply_twitter_feed(posts, user)
+        return strip_mx_detail(apply_twitter_feed(posts, user), user)
 
     @router.get("/live/wscn")
     def wscn_live(
@@ -3403,10 +3428,13 @@ def create_api_router(
         kol = db.get_kol(kol_id)
         if not _plaza_kol_visible(user, kol):
             raise HTTPException(status_code=404, detail="大V不存在")
-        posts = apply_twitter_feed(
-            db.list_posts(
-                limit=bounded_limit(limit), kol_id=kol_id,
-                q=q.strip() or None, order_published=True,
+        posts = strip_mx_detail(
+            apply_twitter_feed(
+                db.list_posts(
+                    limit=bounded_limit(limit), kol_id=kol_id,
+                    q=q.strip() or None, order_published=True,
+                ),
+                user,
             ),
             user,
         )
@@ -3433,7 +3461,7 @@ def create_api_router(
             raise HTTPException(status_code=404, detail="帖子不存在")
         db.attach_view_directions([post])
         db.attach_pending_tags([post])
-        return post
+        return strip_mx_detail([post], user)[0]
 
     @router.get("/kols/{kol_id}/holdings")
     def kol_holdings(kol_id: int, user: dict = Depends(get_current_user)):
@@ -6775,16 +6803,19 @@ def create_api_router(
                 "kol": {"kol_id": kol_id, "name": kol.get("name") or "",
                         "avatar": kol.get("avatar_url") or "", "platform": "mx"},
                 "window_days": days, "timeline": [], "holdings": [], "topics": [],
-                "opinion_count": 0,
+                "opinion_count": 0, "stale_days": 10,
                 "generated_at": datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M"),
             }
         return result
 
     @router.get("/mx-views/stream")
-    async def mx_views_stream(request: Request, current_user: dict = Depends(get_current_user)):
+    async def mx_views_stream(request: Request,
+                              current_user: dict = Depends(get_download_user)):
         """SSE：推版本号变更，客户端收到后自行拉最新快照。单实例进程内轮询 settings。
 
         跳满 _MX_SSE_MAX_TICKS 后主动断开（EventSource 自动重连），客户端断开亦即止。
+        鉴权用 get_download_user：EventSource 无法带 Authorization header，
+        前端把 token 放在 ?token= query（与文件下载同口径）。
         """
         import asyncio
         import json as _json
@@ -6821,13 +6852,37 @@ def create_api_router(
     HOLDING_EVIDENCE_MAX = 3
     HOLDINGS_WINDOW_DAYS = 30
 
+    # 个股名单缓存：名单存在 settings 单键里（stock_names/excluded 两个 JSON），
+    # 以两键原文为版本键——内容不变直接命中，校验/建议不再每次全量重建 5000+ 集合
+    _stock_universe_cache: dict = {"key": None, "names": []}
+
     def _stock_universe_names() -> list[str]:
         """个股合法名单：常用股票名表（含两字名）+ 全市场 3 字及以上简称，去排除项。"""
         from .stock_universe import names_for_plain_text_tagging
 
-        return names_for_plain_text_tagging(
+        raw_names = db.get_setting("stock_names") or ""
+        raw_excl = db.get_setting("stock_names_excluded") or ""
+        key = (raw_names, raw_excl)
+        if _stock_universe_cache["key"] == key:
+            return _stock_universe_cache["names"]
+        names = names_for_plain_text_tagging(
             db.get_stock_names(), db.get_stock_name_exclusions()
         )
+        _stock_universe_cache["key"] = key
+        _stock_universe_cache["names"] = names
+        return names
+
+    _stock_universe_set_cache: dict = {"key": None, "names": frozenset()}
+
+    def _stock_universe_set() -> frozenset:
+        """名单集合（校验用）：与 _stock_universe_names 同版本键，避免每次校验重建 set。"""
+        raw_names = db.get_setting("stock_names") or ""
+        raw_excl = db.get_setting("stock_names_excluded") or ""
+        key = (raw_names, raw_excl)
+        if _stock_universe_set_cache["key"] != key:
+            _stock_universe_set_cache["key"] = key
+            _stock_universe_set_cache["names"] = frozenset(_stock_universe_names())
+        return _stock_universe_set_cache["names"]
 
     def _holding_validate(target_type, target_name) -> tuple[str, str]:
         """入参校验 + 归一，返回 (target_type, target_name)；个股强制在名单内。"""
@@ -6842,7 +6897,7 @@ def create_api_router(
             from .stock_universe import normalize_name
 
             norm = normalize_name(name)
-            if norm not in set(_stock_universe_names()):
+            if norm not in _stock_universe_set():
                 raise HTTPException(status_code=400, detail=f"未收录的 A 股简称: {name}")
             return "stock", norm
         return "topic", name
@@ -6935,11 +6990,13 @@ def create_api_router(
 
     @router.get("/my/holdings/views")
     async def my_holding_views(after_id: int = 0, before_id: int = 0,
-                               limit: int = 50, holder: str = "",
+                               before_at: str = "", limit: int = 50, holder: str = "",
                                current_user: dict = Depends(get_current_user)):
         """相关观点流 + 全窗口聚合。
 
-        after_id 增量拉新（SSE 版本变更后带游标来取）；before_id 翻旧页（加载更多）；
+        after_id 增量拉新（SSE 版本变更后带游标来取）；
+        翻旧页（加载更多）传复合游标 before_at+before_id（列表最底行的
+        occurred_at 与 id，与排序键一致，防批次回填的乱序行漏页）；
         holder=type:名称 只看单标的（只过滤 items，summary 恒为全窗口口径）。
         窗口：occurred_at 在最近 30 个自然日内（观点发生时间，跨天排序正确）。
         """
@@ -6951,6 +7008,9 @@ def create_api_router(
         limit = max(1, min(int(limit), 200))
         holder_pair = None
         if holder:
+            # partition 从左切第一个冒号：题材名可含冒号（开放输入），如
+            # "topic:AI:算力" 解析为 ("topic", "AI:算力")。勿改成 rpartition/
+            # split(":")——会破坏含冒号的题材名
             ttype, _, name = holder.partition(":")
             if ttype not in ("stock", "topic") or not name:
                 raise HTTPException(status_code=422, detail="holder 须为 stock|topic:名称")
@@ -6958,7 +7018,8 @@ def create_api_router(
         since = (datetime.now(CN_TZ) - timedelta(days=HOLDINGS_WINDOW_DAYS)).strftime(
             "%Y-%m-%d %H:%M:%S")
         rows = db.list_holdings_opinions(uid, since, after_id=after_id,
-                                         before_id=before_id, holder=holder_pair,
+                                         before_id=before_id, before_at=before_at,
+                                         holder=holder_pair,
                                          limit=limit)
         item_ev: list[list[int]] = []
         for r in rows:
@@ -6987,14 +7048,14 @@ def create_api_router(
 
     @router.get("/my/holdings/tag-posts")
     async def my_holding_tag_posts(after_id: int = 0, before_id: int = 0,
-                                   limit: int = 50, holder: str = "",
+                                   before_at: str = "", limit: int = 50, holder: str = "",
                                    current_user: dict = Depends(get_current_user)):
         """关注标的标签命中的快讯流 + 全窗口标签提及聚合。
 
-        与 /my/holdings/views 同参语义（after_id 增量拉新 / before_id 翻旧页 /
-        holder=type:名称 单标的下钻，summary 恒为全窗口口径）；命中口径 =
-        posts.tags 精确含标的名（规则/LLM/观点回流打标同列），方向取观点回流
-        登记的看多/看空（首个命中标的的登记，无登记为空）。
+        与 /my/holdings/views 同参语义（after_id 增量拉新 / 翻旧页传复合游标
+        before_at+before_id / holder=type:名称 单标的下钻，summary 恒为全窗口
+        口径）；命中口径 = posts.tags 精确含标的名（规则/LLM/观点回流打标同列），
+        方向取观点回流登记的看多/看空（首个命中标的的登记，无登记为空）。
         """
         from datetime import datetime, timedelta
 
@@ -7004,6 +7065,7 @@ def create_api_router(
         limit = max(1, min(int(limit), 200))
         holder_pair = None
         if holder:
+            # partition 从左切第一个冒号（题材名可含冒号），与 /views 同约定
             ttype, _, name = holder.partition(":")
             if ttype not in ("stock", "topic") or not name:
                 raise HTTPException(status_code=422, detail="holder 须为 stock|topic:名称")
@@ -7013,7 +7075,8 @@ def create_api_router(
         pairs = [(h["target_type"], h["target_name"])
                  for h in db.list_user_holdings(uid)]
         rows = db.list_holdings_tag_posts(pairs, since, after_id=after_id,
-                                          before_id=before_id, holder=holder_pair,
+                                          before_id=before_id, before_at=before_at,
+                                          holder=holder_pair,
                                           limit=limit)
         name_pool = [holder_pair] if holder_pair else pairs
         items = []
@@ -7807,21 +7870,44 @@ def create_api_router(
 
     @router.put("/admin/tag-review/config", dependencies=[Depends(require_admin)])
     def admin_tag_review_update_config(body: TagReviewConfigIn, admin: dict = Depends(require_admin)):
-        """保存大众评审配置；人数区间/大小关系非法返回 400 与具体原因。"""
-        from .tag_review_voting import save_review_config
+        """保存大众评审配置；人数区间/大小关系非法返回 400 与具体原因。
+
+        阈值收紧（如 max_voters 调小）时对已投满的 pending 回溯补一次裁决：
+        裁决只在有人新投票时触发，收紧后已分裂且投满的审核不会再有新票，
+        不回溯就永久挂在 pending 只能管理员直判。
+        """
+        from .tag_review_voting import (
+            VOTE_APPROVE,
+            get_review_config,
+            resolve_vote_decision,
+            save_review_config,
+        )
 
         clean, err = save_review_config(db, body.public_voting, body.unanimous_n, body.max_voters)
         if err:
             raise HTTPException(status_code=400, detail=err)
+        retro = 0
+        for row in db.list_tag_reviews(status="pending"):
+            summary = db.tag_review_vote_summary(row["id"])
+            if not summary["total"]:
+                continue
+            verdict = resolve_vote_decision(summary["approve"], summary["reject"], clean)
+            if verdict:
+                decided = _apply_tag_review_verdict(
+                    row["id"], "approved" if verdict == VOTE_APPROVE else "rejected"
+                )
+                if decided is not None:
+                    retro += 1
         _audit(
             admin,
             "tag_review_config",
             detail=(
                 f"public_voting={clean['public_voting']} unanimous_n={clean['unanimous_n']} "
                 f"max_voters={clean['max_voters']}"
+                + (f" retro_decided={retro}" if retro else "")
             ),
         )
-        return {"ok": True, "config": clean}
+        return {"ok": True, "config": clean, "retro_decided": retro}
 
     @router.get("/admin/post-tag-reviews", dependencies=[Depends(require_admin)])
     def admin_post_tag_reviews(status: str = "pending", source: str = ""):

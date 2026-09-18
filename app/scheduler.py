@@ -2132,6 +2132,9 @@ class Scheduler:
         # 重启自动登录待办：重启落在工作日运行时段的窗口间隙时置位，
         # 窗口循环在下一个 tick 立即补登一次（见 _mx_window_tick）
         self._mx_restart_login_pending = False
+        # 重启时 TOKEN 超龄/年龄未知的告警待发标记（_mx_windows_today 同步路径
+        # 只置标记，_mx_window_tick 末尾 to_thread 异步推送 + 30 分钟节流）
+        self._mx_stale_token_alert_pending = False
         # 每日一次兜底拉取的预约时刻（随窗口一起生成，当天固定；错过不补打）
         self._mx_fallback_at: datetime | None = None
         self._mx_fallback_done = False
@@ -2509,14 +2512,12 @@ class Scheduler:
             if restart_login:
                 restart_note = "；工作日运行时段内服务重启，将自动补登一次"
             elif restart_login_allowed(now) and not token_fresh:
-                restart_note = "；工作日运行时段内服务重启，但 TOKEN 已超 2 天时效，未自动登录"
-                self._publish_system_alert_sync(
-                    "MX TOKEN 已超 2 天，服务重启后未自动登录",
-                    "⚠️ 检测到服务重启（工作日运行时段内），但 MX TOKEN 已超过 2 天时效，"
-                    "本次重启未自动登录。\n"
-                    "请到后台「数据源 → MX」更换 TOKEN（TOKEN 需每 2 天更换一次）；"
-                    "更换后可点「登录」手动接入，或等下个运行时段自动开启。",
-                )
+                restart_note = "；工作日运行时段内服务重启，但 TOKEN 已超 2 天时效（或年龄未知），未自动登录"
+                # 只置标记不在此发告警：本函数跑在共享事件循环上（窗口循环 tick
+                # 链路），_publish_system_alert_sync 的入库+全订阅者推送可能长阻塞；
+                # 实际推送由 _mx_window_tick 末尾 to_thread 异步完成，且带 30 分钟
+                # 节流（崩溃-重启循环下不会形成告警风暴）
+                self._mx_stale_token_alert_pending = True
             logger.info(
                 "MX 今日运行时段：%s；每日兜底拉取预约时刻：%s%s%s",
                 "、".join(
@@ -2633,6 +2634,21 @@ class Scheduler:
                     "系统自动执行 MX 平台登录（启动序列 + 房间同步 + WS 推送）",
                 )
         await asyncio.to_thread(self._mx_check_token_age)
+        # 重启时 TOKEN 超龄/年龄未知的告警：_mx_windows_today 只置标记（同步路径
+        # 不能做入库+推送），这里 to_thread 异步发；30 分钟节流防崩溃重启循环风暴
+        if getattr(self, "_mx_stale_token_alert_pending", False):
+            self._mx_stale_token_alert_pending = False
+            def _publish_stale_token_alert():
+                if not _cooldown_ok(self.db, "mx_restart_login_skip", 1800):
+                    return
+                self._publish_system_alert_sync(
+                    "MX TOKEN 已超 2 天，服务重启后未自动登录",
+                    "⚠️ 检测到服务重启（工作日运行时段内），但 MX TOKEN 已超过 2 天时效"
+                    "（或起用时间未知），本次重启未自动登录。\n"
+                    "请到后台「数据源 → MX」更换 TOKEN（TOKEN 需每 2 天更换一次）；"
+                    "更换后可点「登录」手动接入，或等下个运行时段自动开启。",
+                )
+            await asyncio.to_thread(_publish_stale_token_alert)
         await self._mx_maybe_daily_fallback()
         await self._mx_maybe_nightly_force_close()
         await self._mx_maybe_session_timeout()
@@ -2880,18 +2896,20 @@ class Scheduler:
             )
 
     def _mx_token_age_fresh(self) -> bool:
-        """MX TOKEN 是否在 2 天时效内（mx_token_updated_at 缺失视为刚起用）。
+        """MX TOKEN 是否在 2 天时效内（未知年龄按过期处理，缺省保守）。
 
         与 _mx_check_token_age 的时效口径一致：超过 2 天即视为过期。重启自动
         登录以此为准绳——超龄 TOKEN 不自动登录，避免拿大概率已失效的凭据
         撞出鉴权失败流量（真实失效由熔断链路另行兜底）。
+        时间戳缺失（换库/恢复备份/settings 被清）说明 TOKEN 年龄未知：按
+        过期处理并提醒管理员换 TOKEN，不允许「未知 = 新鲜」绕过门禁。
         """
         try:
             updated = int(self.db.get_setting("mx_token_updated_at") or 0)
         except (TypeError, ValueError):
             updated = 0
         if not updated:
-            return True
+            return False
         return int(time.time()) - updated < 2 * 86400
 
     def _mx_check_token_age(self):

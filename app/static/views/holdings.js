@@ -3,7 +3,7 @@
 // 增量上屏。样式全部 .hd- 前缀（holdings.css，跟随全局主题）
 export function createHoldingsView(dependencies) {
   const {
-    $, state, api, escapeHtml, setPageTitle, routeStillActive, flash,
+    $, state, api, escapeHtml, setPageTitle, routeStillActive, flash, showConfirm,
   } = dependencies;
 
   window._hdTargets = []; // 聚合卡下标索引：onclick 传下标，避免标的名称注入 JS 字符串
@@ -72,15 +72,16 @@ export function createHoldingsView(dependencies) {
 
   function hdApplyViews(data) {
     _hd.summary = (data && data.summary && data.summary.targets) || [];
-    _hd.maxId = (data && data.max_id) || _hd.maxId;
+    _hd.maxId = Math.max(_hd.maxId, (data && data.max_id) || 0);
     _hd.items = (data && data.items) || [];
     _hd.exhausted = _hd.items.length < PAGE_SIZE;
   }
 
   function hdApplyTagPosts(data) {
     const sum = (data && data.summary && data.summary.targets) || [];
-    _hd.tagSummary = new Map(sum.map((s) => [s.target_name, s]));
-    _hd.tagMaxId = (data && data.max_id) || _hd.tagMaxId;
+    // 复合键：股票与题材可同名，单 name 键会互相覆盖计数
+    _hd.tagSummary = new Map(sum.map((s) => [`${s.target_type}:${s.target_name}`, s]));
+    _hd.tagMaxId = Math.max(_hd.tagMaxId, (data && data.max_id) || 0);
     _hd.tagItems = (data && data.items) || [];
     _hd.tagExhausted = _hd.tagItems.length < PAGE_SIZE;
   }
@@ -142,14 +143,15 @@ export function createHoldingsView(dependencies) {
     }
   }
 
-  // SSE 版本变更/兜底轮询：两条流各自增量拉新插入顶部（响应同时带回重算后的全窗口聚合）
+  // SSE 版本变更/兜底轮询：两条流各自增量拉新插入顶部（响应同时带回重算后的全窗口聚合）。
+  // 增量循环拉到不足一页为止：积压超过一页时中间段不会形成「顶部新 + 底部旧」的断层
   async function hdIncRefresh() {
     if (!routeStillActive(_hd.seq)) return;
     try {
       const data = await api(`/api/my/holdings/views?limit=${PAGE_SIZE}&after_id=${_hd.maxId}${hdHolderQ()}`);
       if (!routeStillActive(_hd.seq)) return;
       _hd.summary = (data.summary && data.summary.targets) || [];
-      _hd.maxId = data.max_id || _hd.maxId;
+      _hd.maxId = Math.max(_hd.maxId, data.max_id || 0);
       const known = new Set(_hd.items.map((it) => it.id));
       const fresh = (data.items || []).filter((it) => !known.has(it.id));
       if (fresh.length) {
@@ -173,8 +175,8 @@ export function createHoldingsView(dependencies) {
       const data = await api(`/api/my/holdings/tag-posts?limit=${PAGE_SIZE}&after_id=${_hd.tagMaxId}${hdHolderQ()}`);
       if (!routeStillActive(_hd.seq)) return;
       const sum = (data.summary && data.summary.targets) || [];
-      _hd.tagSummary = new Map(sum.map((s) => [s.target_name, s]));
-      _hd.tagMaxId = data.max_id || _hd.tagMaxId;
+      _hd.tagSummary = new Map(sum.map((s) => [`${s.target_type}:${s.target_name}`, s]));
+      _hd.tagMaxId = Math.max(_hd.tagMaxId, data.max_id || 0);
       const known = new Set(_hd.tagItems.map((it) => it.id));
       const fresh = (data.items || []).filter((it) => !known.has(it.id));
       if (fresh.length) {
@@ -377,7 +379,11 @@ export function createHoldingsView(dependencies) {
   async function hdDelete(id) {
     const h = _hd.holdings.find((x) => x.id === id);
     if (!h) return;
-    if (!confirm(`删除持股「${h.target_name}」？仅影响你的持股研判页，原始消息与观点研判不受影响。`)) return;
+    // 应用内确认弹窗（原生 confirm 与全站弹窗体系不一致，且部分内嵌 WebView 禁用）
+    const ok = await showConfirm(
+      `删除持股「${h.target_name}」？仅影响你的持股研判页，原始消息与观点研判不受影响。`,
+      { title: "删除持股", okText: "删除", danger: true });
+    if (!ok) return;
     try {
       await api(`/api/my/holdings/${id}`, { method: "DELETE" });
       flash("已删除");
@@ -424,7 +430,7 @@ export function createHoldingsView(dependencies) {
       const k = c.s.kols || { count: 0, bull: 0, bear: 0, neutral: 0,
                               bull_names: [], bear_names: [], neutral_names: [] };
       const actionsHtml = Object.entries(c.s.actions || {}).map(([w, n]) => `${w}×${n}`).join(" ");
-      const tagc = (_hd.tagSummary.get(c.h.target_name) || {}).tag_count || 0;
+      const tagc = (_hd.tagSummary.get(`${c.h.target_type}:${c.h.target_name}`) || {}).tag_count || 0;
       const active = _hd.filter && _hd.filter.type === c.h.target_type
         && _hd.filter.name === c.h.target_name;
       return `
@@ -567,14 +573,16 @@ export function createHoldingsView(dependencies) {
     _hd.tagLoadingMore = true;
     hdRenderFeed();
     try {
-      const before = _hd.tagItems[_hd.tagItems.length - 1].id;
-      const data = await api(`/api/my/holdings/tag-posts?limit=${PAGE_SIZE}&before_id=${before}${hdHolderQ()}`);
+      // 复合游标：与观点流同因同修（回灌旧帖 id 新、published_at 旧，纯 id 漏页）
+      const last = _hd.tagItems[_hd.tagItems.length - 1];
+      const data = await api(`/api/my/holdings/tag-posts?limit=${PAGE_SIZE}`
+        + `&before_at=${encodeURIComponent(last.published_at || "")}&before_id=${last.id}${hdHolderQ()}`);
       if (!routeStillActive(_hd.seq)) return;
       const more = data.items || [];
       const known = new Set(_hd.tagItems.map((it) => it.id));
       _hd.tagItems = _hd.tagItems.concat(more.filter((it) => !known.has(it.id)));
       _hd.tagExhausted = more.length < PAGE_SIZE;
-      _hd.tagMaxId = data.max_id || _hd.tagMaxId;
+      _hd.tagMaxId = Math.max(_hd.tagMaxId, data.max_id || 0);
     } catch (err) {
       flash(`加载失败: ${err.message}`, "error");
     } finally {
@@ -611,14 +619,18 @@ export function createHoldingsView(dependencies) {
     _hd.loadingMore = true;
     hdRenderFeed();
     try {
-      const before = _hd.items[_hd.items.length - 1].id;
-      const data = await api(`/api/my/holdings/views?limit=${PAGE_SIZE}&before_id=${before}${hdHolderQ()}`);
+      // 复合游标：列表最底行的 occurred_at + id（与后端排序键一致）。
+      // 研判批次会回填「id 新、occurred_at 旧」的观点，纯 id 游标会整段跳过这类行
+      const last = _hd.items[_hd.items.length - 1];
+      const data = await api(`/api/my/holdings/views?limit=${PAGE_SIZE}`
+        + `&before_at=${encodeURIComponent(last.occurred_at || "")}&before_id=${last.id}${hdHolderQ()}`);
       if (!routeStillActive(_hd.seq)) return;
       const more = data.items || [];
       const known = new Set(_hd.items.map((it) => it.id));
       _hd.items = _hd.items.concat(more.filter((it) => !known.has(it.id)));
       _hd.exhausted = more.length < PAGE_SIZE;
-      _hd.maxId = data.max_id || _hd.maxId;
+      // 水位只增不减：翻旧页响应里的 max_id 可能落后于增量已推进的值
+      _hd.maxId = Math.max(_hd.maxId, data.max_id || 0);
       _hd.summary = (data.summary && data.summary.targets) || _hd.summary;
     } catch (err) {
       flash(`加载失败: ${err.message}`, "error");
@@ -630,6 +642,7 @@ export function createHoldingsView(dependencies) {
 
   return {
     renderHoldings,
+    hdTeardown,
     hdSugInput,
     hdSugPick,
     hdAddSubmit,

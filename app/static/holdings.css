@@ -41,20 +41,22 @@
 
 /* 观点流面板底色沿用总览面板色 */
 .hd-feed{background:var(--mxv-panel);}
-/* 依据原帖展开：行尾「依据 N/收起」指示随行高亮，展开面板缩进展示 */
-.mxv-feed-item.has-ev{cursor:pointer;padding-right:56px;}
-.mxv-feed-item.has-ev:hover{background:var(--mxv-hover);}
-.mxv-feed-item.has-ev::after{content:"依据 " attr(data-ev);position:absolute;right:8px;top:50%;
+/* 依据原帖展开：行尾「依据 N/收起」指示随行高亮，展开面板缩进展示。
+   全部限定 .hd-feed 作用域（.mxv-feed-item 是 mx-views 的行网格类，
+   裸写会跨页污染它的布局） */
+.hd-feed .mxv-feed-item.has-ev{cursor:pointer;padding-right:56px;}
+.hd-feed .mxv-feed-item.has-ev:hover{background:var(--mxv-hover);}
+.hd-feed .mxv-feed-item.has-ev::after{content:"依据 " attr(data-ev);position:absolute;right:8px;top:50%;
   transform:translateY(-50%);font-size:11px;color:var(--mxv-accent);
   border:1px solid var(--mxv-btn-line);border-radius:4px;padding:0 5px;background:var(--mxv-soft);}
-.mxv-feed-item.has-ev.open::after{content:"收起 ▴";}
+.hd-feed .mxv-feed-item.has-ev.open::after{content:"收起 ▴";}
 /* 标签快讯行：同一行网格，行尾「全文/收起」指示，点击展开帖文全文 */
-.mxv-feed-item.has-post{cursor:pointer;padding-right:56px;}
-.mxv-feed-item.has-post:hover{background:var(--mxv-hover);}
-.mxv-feed-item.has-post::after{content:"全文";position:absolute;right:8px;top:50%;
+.hd-feed .mxv-feed-item.has-post{cursor:pointer;padding-right:56px;}
+.hd-feed .mxv-feed-item.has-post:hover{background:var(--mxv-hover);}
+.hd-feed .mxv-feed-item.has-post::after{content:"全文";position:absolute;right:8px;top:50%;
   transform:translateY(-50%);font-size:11px;color:var(--mxv-accent);
   border:1px solid var(--mxv-btn-line);border-radius:4px;padding:0 5px;background:var(--mxv-soft);}
-.mxv-feed-item.has-post.open::after{content:"收起 ▴";}
+.hd-feed .mxv-feed-item.has-post.open::after{content:"收起 ▴";}
 .hd-feed .hd-ev{margin:2px 0 6px;display:flex;flex-direction:column;gap:5px;}
 .hd-ev-item{background:var(--hd-card);border:1px solid var(--hd-sep);border-radius:6px;padding:6px 9px;}
 .hd-ev-meta{color:var(--hd-faint);font-size:11px;margin-bottom:2px;}

@@ -41,10 +41,6 @@ TAG_BUY_ACTIONS = ("建仓", "加仓", "低吸")
 TAG_PAIR_STOCK_MAX = 3
 
 
-def _now_date() -> str:
-    return datetime.now(CN_TZ).strftime("%Y-%m-%d")
-
-
 def _days_ago(day: str, n: int) -> bool:
     try:
         d = datetime.strptime(day, "%Y-%m-%d").date()
@@ -53,24 +49,48 @@ def _days_ago(day: str, n: int) -> bool:
     return d < (datetime.now(CN_TZ).date() - timedelta(days=n))
 
 
+# 词表进程内缓存：三份词表都在 settings 单键里、变更频率极低，而预估持仓每次
+# 请求都要全量构建（操作词/全市场个股名/别名映射）。以三键原文为版本键——
+# 内容不变直接命中，管理员改词表即刻生效。
+_vocab_cache: dict = {"key": None, "data": (set(), set(), {})}
+
+
 def _load_tag_vocab(db) -> tuple[set, set, dict]:
     """标签分类用的词表：操作词表 / 个股正式名集合 / 黑话→正式名映射。"""
+    from .db import (
+        ACTION_TAG_VOCABULARY_KEY,
+        STOCK_ALIASES_KEY,
+        STOCK_NAMES_EXCLUDED_KEY,
+        STOCK_NAMES_KEY,
+    )
+
+    key = (
+        db.get_setting(ACTION_TAG_VOCABULARY_KEY) or "",
+        db.get_setting(STOCK_NAMES_KEY) or "",
+        db.get_setting(STOCK_NAMES_EXCLUDED_KEY) or "",
+        db.get_setting(STOCK_ALIASES_KEY) or "",
+    )
+    if _vocab_cache["key"] == key:
+        return _vocab_cache["data"]
     action_set = {str(t).strip() for t in db.get_action_tag_vocabulary() if str(t).strip()}
     stock_set = {str(n).strip() for n in db.get_stock_names() if str(n).strip()}
     alias_map = {str(a.get("alias") or "").strip(): str(a.get("stock") or "").strip()
                  for a in db.get_stock_aliases()}
-    return action_set, stock_set, alias_map
+    data = (action_set, stock_set, alias_map)
+    _vocab_cache["key"] = key
+    _vocab_cache["data"] = data
+    return data
 
 
-def _build_tag_events(db, kol_id, days, action_set, stock_set, alias_map) -> list[dict]:
+def _build_tag_events(db, kol_id, since_day, action_set, stock_set, alias_map) -> list[dict]:
     """标签含操作词的帖子 → 候选操作事件（个股配对，题材不判仓）。
 
     同帖操作词 × 个股标签做笛卡尔配对：标签体系不记录操作归属，个股名与
     操作词同帖即视为相关（LLM 打标时同帖标的与操作本就来自同一段话）。
+    since_day 由调用方统一按北京时间算好传入（与观点源同一天窗）。
     """
-    since = (datetime.now(CN_TZ) - timedelta(days=days)).strftime("%Y-%m-%d")
     events: list[dict] = []
-    for r in db.list_mx_action_tag_posts_for_kol(kol_id, since, sorted(action_set)):
+    for r in db.list_mx_action_tag_posts_for_kol(kol_id, since_day, sorted(action_set)):
         tags = [str(t).strip() for t in (r.get("tags") or []) if str(t).strip()]
         actions = [t for t in tags if t in action_set][:2]
         stocks: list[str] = []
@@ -108,11 +128,14 @@ def build_kol_holdings(db, kol_id, days: int = WINDOW_DAYS) -> dict | None:
     kol = db.get_kol(int(kol_id))
     if not kol:
         return None
-    rows = db.list_mx_opinions_for_kol(kol_id, days=days)
+    # 窗口下界统一北京时间算（观点源与标签源同一天，不能一边 CN 一边 UTC）
+    since = (datetime.now(CN_TZ) - timedelta(days=days)).strftime("%Y-%m-%d")
+    rows = db.list_mx_opinions_for_kol(kol_id, since_day=since)
 
-    # 事件流：观点为主、标签补位。同标的当日观点已给出操作词时该日标签事件
-    # 整体让位（观点管线对证据/作者有强校验，可信度更高）；同标的同日同操作
-    # 的多条标签帖只取最早一条，不重复加减仓。
+    # 事件流：观点为主、标签补位。同标的当日观点已给出**有仓位语义的**操作词时
+    # 该日标签事件整体让位（观点管线对证据/作者有强校验，可信度更高）；观察/做T
+    # 等词表外操作不参与打分，也不参与压制——否则「观察」会吞掉同日标签的
+    # 真实建仓信号。同标的同日同操作的多条标签帖只取最早一条，不重复加减仓。
     events: list[dict] = []
     opinion_action_days: dict[tuple, set] = {}
     for r in rows:  # 升序：早 → 晚
@@ -124,7 +147,7 @@ def build_kol_holdings(db, kol_id, days: int = WINDOW_DAYS) -> dict | None:
         direction = str(r.get("direction") or "")
         action = str(r.get("action") or "").strip()
         occurred = str(r.get("occurred_at") or "") or f"{day} {r.get('snapshot_at') or ''}"
-        if action:
+        if action in ACTION_POINTS:
             opinion_action_days.setdefault((ttype, name), set()).add(day)
         events.append({
             "trading_day": day, "occurred_at": occurred,
@@ -137,7 +160,7 @@ def build_kol_holdings(db, kol_id, days: int = WINDOW_DAYS) -> dict | None:
     # 标签补位与观点是否为空无关：大V没被研判过但消息打了操作标签时，纯标签也能推仓
     action_set, stock_set, alias_map = _load_tag_vocab(db)
     seen_tag: set[tuple] = set()
-    for ev in _build_tag_events(db, kol_id, days, action_set, stock_set, alias_map):
+    for ev in _build_tag_events(db, kol_id, since, action_set, stock_set, alias_map):
         if ev["trading_day"] in opinion_action_days.get(("stock", ev["target_name"]), set()):
             continue
         dedup = (ev["target_name"], ev["action"], ev["trading_day"])
@@ -214,7 +237,7 @@ def build_kol_holdings(db, kol_id, days: int = WINDOW_DAYS) -> dict | None:
             continue
         live[key] = st
 
-    def _finalize(bucket_keys, label):
+    def _finalize(bucket_keys):
         rows_out = []
         total = sum(max(0.0, live[k]["score"]) for k in bucket_keys if k in live) or 1.0
         for key in bucket_keys:
@@ -239,9 +262,10 @@ def build_kol_holdings(db, kol_id, days: int = WINDOW_DAYS) -> dict | None:
         "kol": {"kol_id": int(kol_id), "name": kol.get("name") or "",
                 "avatar": kol.get("avatar_url") or "", "platform": kol.get("platform") or ""},
         "window_days": days,
+        "stale_days": STALE_DAYS,  # 前端空态文案同口径，避免常量双写漂移
         "timeline": timeline,
-        "holdings": _finalize(stock_keys, "stock"),
-        "topics": _finalize(topic_keys, "topic"),
+        "holdings": _finalize(stock_keys),
+        "topics": _finalize(topic_keys),
         "opinion_count": len(timeline),
         "generated_at": datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M"),
     }

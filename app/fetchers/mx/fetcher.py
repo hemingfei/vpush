@@ -119,10 +119,12 @@ def normalize_mx_text(text: str) -> str:
         .replace("\r\n", "\n")
         .replace("\r", "\n")
     )
+    # 悬空列表符号行替换为空行而非删除：大V手打的「-」「·」单字符分隔行被清掉后，
+    # 上下两段正文会直接粘连；保一个空行至少段落边界还在（markdown 渲染段距同款）
     return "\n".join(
-        line
+        "" if DANGLING_LIST_MARKER_RE.match(line) else line
         for line in s.split("\n")
-        if line.strip() and not DANGLING_LIST_MARKER_RE.match(line)
+        if line.strip() or DANGLING_LIST_MARKER_RE.match(line)
     )
 
 

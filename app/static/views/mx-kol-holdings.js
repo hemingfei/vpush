@@ -9,7 +9,7 @@ export function createMxKolHoldingsView(dependencies) {
     closeViewsDrawer,
   } = dependencies;
 
-  const _mxc = { seq: 0, data: null, days: 30, expanded: new Set(), view: "all", recent: 3, sort: "weight",
+  const _mxc = { seq: 0, data: null, days: 30, view: "all", recent: 3, sort: "weight",
     kolId: 0, drawerEl: null, drawerBody: null, token: 0 };
   const MXC_VIEWS = { all: "全部", open: "建仓", add: "加仓", trim: "减仓", clear: "清仓" };
   // 最近观点天数筛选：只看最近 N 天内还被大V提及的在持标的（0=不筛选）。
@@ -29,8 +29,9 @@ export function createMxKolHoldingsView(dependencies) {
   };
 
   function mxcTeardown() {
-    Object.assign(_mxc, { data: null, expanded: new Set(), view: "all", drawerEl: null, drawerBody: null });
-    // recent（最近观点天数）跨路由保留：回来时还是用户上次调的口径
+    Object.assign(_mxc, { data: null, view: "all", drawerEl: null, drawerBody: null });
+    // recent（最近观点天数）跨路由保留：回来时还是用户上次调的口径；
+    // days 不保留——每个大V/宿主入口都按默认 30 天开（按钮 title 的承诺）
   }
 
   // 竞态守卫：token 拦截同宿主内的旧响应（快速换天数/换大V重开）；
@@ -72,9 +73,9 @@ export function createMxKolHoldingsView(dependencies) {
   // 挂载时恢复本地口径：最近观点天数 + 排序方式（都只影响前端展示，不过服务端）
   function mxcLoadPrefs() {
     try {
-      // 从未存过（null）不覆盖默认：Number(null)=0 会把默认天数顶成“0=不筛选”
+      // 从未存过（null）或存成空串都不覆盖默认：Number(null/""())=0 会把默认天数顶成「0=不筛选」
       const raw = localStorage.getItem(MXC_RECENT_KEY);
-      if (raw != null) {
+      if (raw != null && raw !== "") {
         const v = Number(raw);
         if (Number.isInteger(v) && v >= 0 && v <= 20) _mxc.recent = v;
       }
@@ -103,6 +104,7 @@ export function createMxKolHoldingsView(dependencies) {
     mxcTeardown(); // 页面宿主接管：清掉抽屉宿主残留引用（其 DOM 已由路由 teardown 移除）
     _mxc.seq = seq;
     _mxc.kolId = kolId;
+    _mxc.days = 30; // 换大V/重新进页：天窗回默认，不带上一个大V的残留口径
     mxcLoadPrefs();
     setPageTitle("预估持仓");
     $("#main").innerHTML = `<div class="mxc-root hd-root"><div class="mxv-empty">加载中…</div></div>`;
@@ -119,6 +121,7 @@ export function createMxKolHoldingsView(dependencies) {
     const slot = document.getElementById("mxv-drawer-slot") || $("#main");
     if (!slot) return;
     _mxc.kolId = kolId;
+    _mxc.days = 30; // 每个大V的抽屉入口都承诺近 30 天：不带其他大V/页面的残留口径
     mxcLoadPrefs();
     const shell = document.createElement("div");
     shell.innerHTML = `
@@ -281,7 +284,7 @@ export function createMxKolHoldingsView(dependencies) {
           <span class="hd-hint">${d.opinion_count ? "窗口内无在持标的" : "暂无观点"}</span></div>
         ${mxcRecentHtml()}
         <div class="mxv-empty">${d.opinion_count
-          ? `近 ${d.window_days} 天有 ${d.opinion_count} 条观点，但按回放规则当前无在持标的（均已清仓/翻空/超 ${10} 天未再提及）。`
+          ? `近 ${d.window_days} 天有 ${d.opinion_count} 条观点，但按回放规则当前无在持标的（均已清仓/翻空/超 ${d.stale_days || 10} 天未再提及）。`
           : `近 ${d.window_days} 天内没有可研判的观点，暂无法推演持仓。`}</div>`;
       return;
     }
@@ -349,9 +352,14 @@ export function createMxKolHoldingsView(dependencies) {
     });
     const dayLabel = (day) => {
       const s = String(day || "");
-      const now = new Date();
+      // 今天/昨天按北京时间判（与后端交易日同口径；海外浏览器本地时区会差一天）
+      const bj = new Date(Date.now() + (480 + new Date().getTimezoneOffset()) * 60000);
       const p = (n) => String(n).padStart(2, "0");
-      if (s === `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`) return "今天";
+      const today = `${bj.getFullYear()}-${p(bj.getMonth() + 1)}-${p(bj.getDate())}`;
+      if (s === today) return "今天";
+      bj.setDate(bj.getDate() - 1);
+      const yesterday = `${bj.getFullYear()}-${p(bj.getMonth() + 1)}-${p(bj.getDate())}`;
+      if (s === yesterday) return "昨天";
       return s.slice(5) || "—";
     };
     const body = [...groups.entries()].map(([day, evs]) => `

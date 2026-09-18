@@ -6711,3 +6711,83 @@ def test_admin_ai_task_run_mutex_rejects_double_run(monkeypatch):
     while time.time() < deadline and task_id in _ai_task_running:
         time.sleep(0.05)
     assert task_id not in _ai_task_running
+
+
+# ---- MX 原始消息按角色剥离（strip_mx_detail）----
+
+def _seed_mx_kol_with_detail_post(db, content="MX 原始消息内容"):
+    """公开 MX 大V + 一条带完整原始载荷的帖子，返回 (kol_id, post_id)。"""
+    kol_id = db.add_kol("mx", "MX测试大V", "mx-strip-detail")
+    detail = {
+        "msg": json.dumps([{"type": "text", "msg": content}], ensure_ascii=False),
+        "oid": 151356119, "rid": 39176, "uid": 0, "id": 151398609,
+        "createtime": 1788500253566, "_receivedAt": "2026-09-04T13:37:33",
+    }
+    post_id = db.insert_post(
+        platform="mx", kol_id=kol_id, external_id="mx-strip-1", title="", url="",
+        content=content, published_at="2026-09-10 09:00:00", detail=detail,
+    )
+    return kol_id, post_id
+
+
+def test_mx_post_detail_stripped_for_non_admin():
+    """普通用户：所有下发帖子的端点只见 detail.msg（附件渲染用），平台标识字段全剥离。"""
+    client = make_client("mx-detail-strip.db")
+    user = user_headers(client, "mx_plain_user")
+    db = client.app.state.db
+    kol_id, post_id = _seed_mx_kol_with_detail_post(db)
+
+    # 单帖详情
+    r = client.get(f"/api/posts/{post_id}", headers=user)
+    assert r.status_code == 200
+    detail = r.json()["detail"]
+    assert detail == {"msg": detail["msg"]} and detail["msg"], "只保留 msg 字段"
+
+    # 大V动态列表（list_posts 路径）
+    r = client.get(f"/api/kols/{kol_id}/posts", headers=user)
+    assert r.status_code == 200
+    row = next(p for p in r.json() if p["id"] == post_id)
+    assert set(row["detail"].keys()) == {"msg"}
+
+    # 订阅时间线（list_feed_posts 路径）
+    uid = client.get("/api/me", headers=user).json()["id"]
+    db.add_subscription(uid, kol_id)
+    r = client.get("/api/my/feed", headers=user)
+    assert r.status_code == 200
+    row = next((p for p in r.json() if p["id"] == post_id), None)
+    assert row is not None and set(row["detail"].keys()) == {"msg"}
+
+
+def test_mx_post_detail_kept_for_admin():
+    """管理员：detail 原样下发（原始消息弹窗的数据源）。
+
+    单帖详情不走 _sanitize_post_detail，detail 保持 JSON 字符串（前端
+    openRawModal 自行 JSON.parse），测试同口径解析后断言。
+    """
+    client = make_client("mx-detail-admin.db")
+    admin = auth_headers(client)
+    db = client.app.state.db
+    _, post_id = _seed_mx_kol_with_detail_post(db)
+
+    r = client.get(f"/api/posts/{post_id}", headers=admin)
+    assert r.status_code == 200
+    detail = r.json()["detail"]
+    if isinstance(detail, str):
+        detail = json.loads(detail)
+    assert detail.get("oid") == 151356119 and "msg" in detail
+
+
+def test_mx_detail_without_msg_stripped_to_none():
+    """detail 无 msg（纯图片帖等）：普通用户整包不下发（None），不残留在响应里。"""
+    client = make_client("mx-detail-nomsg.db")
+    user = user_headers(client, "mx_plain_user2")
+    db = client.app.state.db
+    kol_id = db.add_kol("mx", "MX图片大V", "mx-strip-img")
+    post_id = db.insert_post(
+        platform="mx", kol_id=kol_id, external_id="mx-strip-img-1", title="", url="",
+        content="[图片]", published_at="2026-09-10 09:01:00",
+        detail={"msg": None, "oid": 1, "rid": 2},
+    )
+    r = client.get(f"/api/posts/{post_id}", headers=user)
+    assert r.status_code == 200
+    assert r.json()["detail"] is None

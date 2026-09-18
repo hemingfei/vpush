@@ -403,10 +403,12 @@ def test_normalize_mx_text_unescapes_and_collapses():
 
 
 def test_normalize_strips_dangling_list_markers():
-    """只含列表符号的悬空占位行剔除（文件本体是独立 file 消息，占位行只会渲染成空列表项）。"""
-    assert normalize_mx_text("文件：\n- \n- ") == "文件："
-    assert normalize_mx_text("A\n-\nB") == "A\nB"
-    assert normalize_mx_text("A\n*\n1.\nB") == "A\nB"
+    """只含列表符号的悬空占位行替换为空行（文件本体是独立 file 消息，占位行
+    只会渲染成空列表项；替换而非删除，大V手打的「-」「·」分隔行被清掉后
+    上下两段正文不会直接粘连）。"""
+    assert normalize_mx_text("文件：\n- \n- ") == "文件：\n\n"
+    assert normalize_mx_text("A\n-\nB") == "A\n\nB"
+    assert normalize_mx_text("A\n*\n1.\nB") == "A\n\n\nB"
     # 带内容的列表项、水平分隔线、正常引用不动
     assert normalize_mx_text("- 条目内容\n---\n> 引用") == "- 条目内容\n---\n> 引用"
     # 「1. 5倍」数字开头有正文不是悬空序号
@@ -429,7 +431,8 @@ def test_file_list_message_strips_placeholder_bullets():
     }
     post = fetcher._parse_message_to_post(raw, kol)
     assert post is not None
-    assert post.content == "#### 每日调研\n> 发布人：冷静相逢\n「文件」\n文件："
+    # 占位行替换为空行而非删除（正文与文件附件间的段落边界保留，结尾空白无妨）
+    assert post.content == "#### 每日调研\n> 发布人：冷静相逢\n「文件」\n文件：\n\n"
     assert [f["name"] for f in post.detail["files"]] == [
         "AI设备投资框架之光模块设备260910_原文.docx",
         "黄酒经销商渠道交流20260911_原文.docx",
@@ -2611,6 +2614,12 @@ def test_windows_today_sets_restart_login_state(monkeypatch):
     )
     monkeypatch.setattr(sched_mod, "restart_login_allowed", lambda now: True)
 
+    # TOKEN 新鲜（重启自动登录的另一个前提；缺失按过期处理见
+    # test_restart_login_gated_by_token_age）
+    import time as timelib
+
+    db.set_setting("mx_token_updated_at", str(int(timelib.time()) - 3600))
+
     # 重启落在第二段窗口内：当前段重新武装，不置补登标记（到点补登走窗口开启分支）
     FixedDatetime.fixed = windows[1][0] + timedelta(minutes=10)
     scheduler._mx_window_date = None
@@ -2660,7 +2669,8 @@ def test_windows_today_no_restart_login_outside_hours(monkeypatch):
 
 
 def test_restart_login_gated_by_token_age(monkeypatch):
-    """重启自动登录的 TOKEN 时效门槛：超龄不重武装/不补登并发系统消息，新鲜才放行。"""
+    """重启自动登录的 TOKEN 时效门槛：超龄/年龄未知不重武装、不补登，
+    告警由 tick 异步发（带 30 分钟节流）；新鲜才放行。"""
     import time as timelib
     from datetime import date, datetime, timedelta
 
@@ -2687,29 +2697,50 @@ def test_restart_login_gated_by_token_age(monkeypatch):
     )
     monkeypatch.setattr(sched_mod, "restart_login_allowed", lambda now: True)
 
+    async def tick():
+        await scheduler._mx_window_tick()
+
     def alert_posts():
         kol = db.get_kol_by_external("system", "system_alert")
         if kol is None:
             return []
         return db._rows("SELECT content FROM posts WHERE kol_id = ?", (kol["id"],))
 
-    # TOKEN 超龄（3 天前更新）：当前段不重武装、不置补登标记，并发系统消息提醒
+    # TOKEN 超龄（3 天前更新）：当前段不重武装、不置补登标记；
+    # 告警标记置位，跑一次 tick 后异步发出系统消息（同轮 tick 的定期
+    # TOKEN 2 天提醒也会发一条，两者语义不同，按内容区分断言）
     db.set_setting("mx_token_updated_at", str(int(timelib.time()) - 3 * 86400))
     scheduler._mx_window_date = None
     scheduler._mx_windows_today()
     assert scheduler._mx_armed == [False, False, True]  # 旧口径：错过不续连
     assert scheduler._mx_restart_login_pending is False
-    posts = alert_posts()
-    assert len(posts) == 1
-    assert "重启" in posts[0]["content"] and "未自动登录" in posts[0]["content"]
+    assert scheduler._mx_stale_token_alert_pending is True
+    asyncio.run(tick())
+    assert scheduler._mx_stale_token_alert_pending is False
+    restart_alerts = [p for p in alert_posts() if "未自动登录" in p["content"]]
+    assert len(restart_alerts) == 1
+    assert "重启" in restart_alerts[0]["content"]
 
-    # TOKEN 新鲜（1 天前更新）：当前段重新武装放行，且不新增提醒
+    # 节流：30 分钟内再触发（换库重置窗口模拟重启）不重复发重启告警
+    scheduler._mx_window_date = None
+    scheduler._mx_windows_today()
+    asyncio.run(tick())
+    assert len([p for p in alert_posts() if "未自动登录" in p["content"]]) == 1
+
+    # TOKEN 年龄未知（时间戳缺失，换库/恢复备份场景）：按过期处理，不放行
+    db._execute("DELETE FROM settings WHERE key = 'mx_token_updated_at'")
+    scheduler._mx_window_date = None
+    scheduler._mx_windows_today()
+    assert scheduler._mx_armed == [False, False, True]
+    assert scheduler._mx_restart_login_pending is False
+
+    # TOKEN 新鲜（1 天前更新）：当前段重新武装放行，且不新增重启告警
     db.set_setting("mx_token_updated_at", str(int(timelib.time()) - 86400))
     scheduler._mx_window_date = None
     scheduler._mx_windows_today()
     assert scheduler._mx_armed == [False, True, True]
     assert scheduler._mx_restart_login_pending is False
-    assert len(alert_posts()) == 1
+    assert len([p for p in alert_posts() if "未自动登录" in p["content"]]) == 1
     scheduler.stop()
 
 

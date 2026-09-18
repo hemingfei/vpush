@@ -210,6 +210,41 @@ def test_holdings_views_after_id_increment_and_pagination():
     assert [it["id"] for it in page2["items"]] == [first]
 
 
+def test_holdings_views_composite_cursor_no_loss_on_backfill():
+    """复合游标回归：批次回填「id 新、occurred_at 旧」的观点时翻页不丢数据。
+
+    旧实现翻页只按 id 游标，而排序键是 (occurred_at, id)——后插入的旧时间
+    观点（LLM 从当天消息提取历史观点的常态）会整段漏页。
+    """
+    client = make_client()
+    admin = auth_headers(client)
+    db = client.app.state.db
+    kol = db.add_kol("mx", "回填哥", "room-cursor")
+    for t in ("贵州茅台", "五粮液", "泸州老窖"):
+        assert client.post("/api/my/holdings", headers=admin,
+                           json={"target_type": "stock", "target_name": t}).status_code == 201
+
+    # 批次1（id 1-3）：今天的新观点；批次2（id 4-6）：昨天回填的旧观点（id 新时间旧）
+    new_ids = [_add_opinion(db, kol, "stock", t, "bull", _ts(hours=-1))
+               for t in ("贵州茅台", "五粮液", "泸州老窖")]
+    old_ids = [_add_opinion(db, kol, "stock", t, "bull", _ts(days=-1))
+               for t in ("贵州茅台", "五粮液", "泸州老窖")]
+
+    # 纯 id 游标翻页（旧行为）会漏掉全部回填行；复合游标必须两页取全 6 条
+    page1 = client.get("/api/my/holdings/views?limit=3", headers=admin).json()
+    assert [it["id"] for it in page1["items"]] == list(reversed(new_ids)), "首页应是最新时间的 3 条"
+    last = page1["items"][-1]
+    page2 = client.get(
+        f"/api/my/holdings/views?limit=3&before_id={last['id']}"
+        f"&before_at={last['occurred_at']}", headers=admin).json()
+    assert [it["id"] for it in page2["items"]] == list(reversed(old_ids)), "第二页应取到全部回填行"
+
+    # 旧客户端只带 before_id：仍按 id 回落，不 422（结果可能漏，行为兼容）
+    page2_legacy = client.get(
+        f"/api/my/holdings/views?limit=3&before_id={last['id']}", headers=admin).json()
+    assert len(page2_legacy["items"]) <= 3
+
+
 def test_holdings_tag_posts_window_direction_holder_and_pagination():
     """标签快讯流：窗口过滤、方向角标、holder 下钻、翻页与增量、参数校验。"""
     client = make_client()

@@ -319,6 +319,44 @@ def test_admin_tag_detail_includes_vote_counts():
     assert pending and pending[0]["votes"] == {"approve": 1, "reject": 1}
 
 
+def test_config_tightening_retro_decides_overflowed_pending():
+    """阈值收紧时回溯补裁决：分裂且已投满的 pending 不会再有新票触发判定，
+    保存配置时必须按新阈值补一次，否则永久挂起只能管理员直判。"""
+    client = make_client()
+    pid, rid = _seed_post_and_review(client)
+    admin = auth_headers(client)
+    # 先放宽到 max_voters=5，投 4 票分裂（2/2）——未达 5 不裁决
+    assert client.put(
+        "/api/admin/tag-review/config", headers=admin,
+        json={"public_voting": True, "unanimous_n": 2, "max_voters": 5},
+    ).status_code == 200
+    votes = ["approve", "reject", "approve", "reject"]
+    first_voter = None
+    for i, v in enumerate(votes):
+        u = user_headers(client, f"retro_voter{i}")
+        if i == 0:
+            first_voter = u
+        r = client.post(f"/api/tag-reviews/{rid}/vote", headers=u, json={"action": v})
+        assert r.status_code == 200 and r.json()["status"] == "pending"
+
+    # 收紧到 max_voters=4：4 票已满、2/2 平票按保守口径判拒绝，就地定局
+    r = client.put(
+        "/api/admin/tag-review/config", headers=admin,
+        json={"public_voting": True, "unanimous_n": 2, "max_voters": 4},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["retro_decided"] == 1
+    detail = client.get(f"/api/tag-reviews/{rid}", headers=first_voter).json()
+    assert detail["status"] == "rejected"
+
+    # 再保存一次（无新增超限 pending）：回溯数 0，不重复裁决
+    r = client.put(
+        "/api/admin/tag-review/config", headers=admin,
+        json={"public_voting": True, "unanimous_n": 2, "max_voters": 4},
+    )
+    assert r.json()["retro_decided"] == 0
+
+
 @pytest.mark.parametrize("approve,reject,cfg,expected", [
     (1, 1, {"unanimous_n": 2, "max_voters": 10}, None),
     (0, 2, {"unanimous_n": 2, "max_voters": 10}, VOTE_REJECT),

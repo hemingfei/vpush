@@ -5485,15 +5485,18 @@ def test_api_401_only_logs_out_the_session_that_started_the_request():
 
 def test_api_get_has_timeout_and_single_retry():
     """服务端存在间歇性停顿窗口（全局写锁/外网抖动）：GET 必须有默认超时，
-    超时/网络错误自动重试一次，不再无限骨架屏；写操作与调用方自带 signal 不套。"""
+    超时自动重试一次（抖动退避），不再无限骨架屏；写操作与调用方自带 signal 不套。"""
     src = APP_JS.read_text(encoding="utf-8")
     assert "const API_GET_TIMEOUT_MS = 12000" in src
     body = _fn_body("api")
     # 仅 GET 且调用方未自带 signal 时套默认超时（写操作可能合法地跑很久）
     assert "isGet && !opts.signal" in body
     assert "AbortSignal.timeout(API_GET_TIMEOUT_MS)" in body
-    # 重试仅限 GET 的超时/网络错误（TimeoutError/TypeError），调用方主动 abort 不重试
-    assert 'err?.name === "TimeoutError" || err?.name === "TypeError"' in body
+    # 重试仅限 GET 超时（网络彻底不通重试无意义），调用方主动 abort 不重试；
+    # 退避带随机抖动：停顿窗口下多个并发 GET 同时到点不形成同步脉冲
+    assert 'err?.name === "TimeoutError"' in body
+    assert 'err?.name === "TypeError"' not in body
+    assert "300 + Math.random() * 600" in body
     assert body.count("await doFetch()") == 2
 
 
@@ -6382,12 +6385,22 @@ def test_back_hook_mask_selector_covers_admin_modal_mask():
 
 
 def test_back_hook_consumes_calendar_and_kol_menu_before_drawer():
-    """返回键消费链：遮罩之后、智囊团抽屉之前，先消费月历弹层与分析大V范围下拉。"""
+    """返回键消费链：遮罩之后、智囊团抽屉之前，先消费月历弹层/提示词预览/
+    大V下拉（含观点流浮层）等轻量浮层。"""
     body = _back_hook_body()
     assert ".mxv-cal" in body and "mxvCalClose()" in body
+    assert ".mxva-preview-mask" in body and "mxvAdminClosePromptPreview()" in body
     assert ".mxva-kol-menu.open" in body and 'classList.remove("open")' in body
+    assert ".mxv-fkol-panel" in body and "mxvCloseKolPanel()" in body
     assert body.index("admin-modal-mask") < body.index(".mxv-cal") < body.index(".mxva-kol-menu") \
-        < body.index(".mxv-drawer")
+        < body.index(".mxv-fkol-panel") < body.index(".mxv-drawer")
+
+
+def test_router_closes_body_level_modals_on_popstate():
+    """弹窗挂在 document.body 上（路由重绘打不掉）：router 切页统一收口，
+    否则 body 滚动锁引用计数停在 1、position:fixed 的页面永久锁死滚不动。"""
+    body = _fn_body("router")
+    assert "closeRawModal()" in body and "closeTagVoteModal()" in body
 
 
 def test_mx_tag_run_modal_closable_via_data_close_and_escape():

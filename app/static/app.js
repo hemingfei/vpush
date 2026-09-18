@@ -496,9 +496,12 @@ async function api(path, options = {}) {
   try {
     resp = await doFetch();
   } catch (err) {
-    const retriable = isGet && (err?.name === "TimeoutError" || err?.name === "TypeError");
+    // 只重试超时：网络彻底不通（TypeError=离线/DNS/CORS）重试没有意义；
+    // 服务端停顿窗口下多个并发 GET 会同时到点，抖动退避避免同步脉冲打向
+    // 正在恢复的服务端
+    const retriable = isGet && err?.name === "TimeoutError";
     if (!retriable) throw err;
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    await new Promise((resolve) => setTimeout(resolve, 300 + Math.random() * 600));
     resp = await doFetch();
   }
   // 登录/注册的 401 是「凭据错误」业务响应：透出后端 detail，不清会话
@@ -6522,6 +6525,7 @@ const {
   mxvOpenKolStockAt,
   mxvOpenKol,
   mxvCloseDrawer,
+  mxvCloseKolPanel,
   mxvAdminKolToggle,
   mxvAdminKolAll,
   mxvAdminKolNone,
@@ -6577,6 +6581,7 @@ const {
   hdPostExpand,
   hdTagMore,
   hdWatchToggle,
+  hdTeardown,
 } = createHoldingsView({
   $,
   state,
@@ -6585,6 +6590,7 @@ const {
   setPageTitle,
   routeStillActive,
   flash,
+  showConfirm,
 });
 
 const {
@@ -7174,6 +7180,10 @@ function migrateHashRoute() {
 
 async function router() {
   stopMarketQuotes();
+  // 弹窗挂在 document.body 上（路由重绘打不掉）：切页/popstate 统一收口，
+  // 否则 body 滚动锁引用计数停在 1、position:fixed 的页面永久锁死滚不动
+  closeRawModal();
+  closeTagVoteModal();
   // admin 视图懒加载：这三个 stop 来自 admin 模块，未加载时没有在跑的轮询要停
   if (adminViewsLoaded) {
     stopCiccPoll();
@@ -7188,6 +7198,8 @@ async function router() {
   stopTimelinePoll();
   // 离开 智囊团页：关 SSE 连接、停时钟/兜底轮询（重进页面时会重建）
   mxvTeardown();
+  // 离开 持股研判页：同样关 SSE/兜底轮询，防 EventSource 与 60s 定时器跨页泄漏
+  hdTeardown();
   // 离开动态页前记录滚动位置，切回时恢复阅读位置
   if (document.querySelector("#feed")) {
     if (isLiveTimeline()) _liveSavedScrollY = window.scrollY;
@@ -7548,8 +7560,10 @@ window.__VPUSH_BACK__ = function () {
     return true;
   }
   if (document.querySelector(".mxv-cal")) { mxvCalClose(); return true; } // 智囊团月历弹层
+  if (document.querySelector(".mxva-preview-mask")) { mxvAdminClosePromptPreview(); return true; } // 提示词预览
   const kolMenu = document.querySelector(".mxva-kol-menu.open, .news-kol-menu.open");
   if (kolMenu) { kolMenu.classList.remove("open"); return true; } // 分析大V范围/实时资讯·调研纪要大V下拉先收起
+  if (document.querySelector(".mxv-fkol-panel")) { mxvCloseKolPanel(); return true; } // 观点流大V下拉浮层
   if (document.querySelector(".mxc-drawer")) { mxcCloseDrawer(); return true; } // 预估持仓抽屉（可能盖在智囊团抽屉之上，先关它）
   if (document.querySelector(".mxv-drawer")) { mxvCloseDrawer(); return true; }
   if (state.pageBackRoute) { go(state.pageBackRoute); return true; }

@@ -178,7 +178,9 @@ jobs:
   # hmf 开发分支：每次 push 复用 test 作业做门禁后，构建 amd64 单架构开发镜像，
   # 固定推 :hmf tag（Docker Hub 用仓库级 DOCKERHUB_USERNAME/TOKEN，即本人账号），
   # 不动版本 tag / latest，arm64 与多架构清单仍只保留给 v* tag 正式发布；
-  # 推送成功后触发 Jenkins 把 VPS 上的 :hmf 容器滚动到新镜像
+  # 推送成功后触发 Jenkins 把 VPS 上的 :hmf 容器滚动到新镜像。
+  # 依赖 secrets：JENKINS_URL（基地址，支持 https——强烈建议套 TLS，Basic Auth 不过明文）、
+  # JENKINS_TOKEN（openclaw 账号 API Token）、VPUSH_WEBHOOK_URL/SECRET（系统通知预告）。
   publish-hmf:
     needs: test
     if: github.ref == 'refs/heads/hmf'
@@ -264,12 +266,48 @@ jobs:
         env:
           VPUSH_WEBHOOK_URL: ${{ secrets.VPUSH_WEBHOOK_URL }}
           VPUSH_WEBHOOK_SECRET: ${{ secrets.VPUSH_WEBHOOK_SECRET }}
+      # 预告先发、部署触发在后：触发失败时已发过「即将重启」，补发失败对冲，
+      # 免得订阅者白等一次不会发生的重启（同 webhook、同样失败不阻断主流程）
+      - name: 部署触发失败对冲通知
+        if: ${{ failure() && steps.jenkins.outcome == 'failure' }}
+        continue-on-error: true
+        run: |
+          python3 - <<'EOF'
+          import base64, hashlib, hmac, json, os, time, urllib.request
+
+          ts = int(time.time())
+          secret = os.environ["VPUSH_WEBHOOK_SECRET"]
+          sign = base64.b64encode(
+              hmac.new(f"{ts}\n{secret}".encode(), digestmod=hashlib.sha256).digest()
+          ).decode()
+          payload = json.dumps({
+              "title": "部署触发失败",
+              "text": f"docker 镜像已推送（commit {os.environ['GITHUB_SHA'][:7]}），"
+                      "但触发 Jenkins 部署失败，本次服务不会重启；"
+                      "请检查 GitHub Actions 运行日志与 Jenkins 状态。",
+              "timestamp": ts,
+              "sign": sign,
+          }, ensure_ascii=False).encode("utf-8")
+          req = urllib.request.Request(
+              os.environ["VPUSH_WEBHOOK_URL"], data=payload, method="POST",
+              headers={"Content-Type": "application/json; charset=utf-8"})
+          with urllib.request.urlopen(req, timeout=15) as r:
+              print("webhook HTTP", r.status)
+          EOF
+        env:
+          VPUSH_WEBHOOK_URL: ${{ secrets.VPUSH_WEBHOOK_URL }}
+          VPUSH_WEBHOOK_SECRET: ${{ secrets.VPUSH_WEBHOOK_SECRET }}
       - name: 触发 Jenkins 部署并跟踪全程
+        id: jenkins
         if: ${{ success() }}
         timeout-minutes: 15
+        env:
+          # Jenkins 基地址走 secret（JENKINS_URL）：vpush 部署实例的地址与端口
+          # 属基础设施信息，不进仓库；支持 https（推荐）与 http（内网/临时）。
+          JENKINS_URL: ${{ secrets.JENKINS_URL }}
         run: |
           set -euo pipefail
-          J="http://106.15.153.53:1180"
+          J="${JENKINS_URL%/}"
           AUTH="openclaw:${{ secrets.JENKINS_TOKEN }}"
           JOB="vpush-deploy"
 
@@ -281,19 +319,26 @@ jobs:
           LOC=$([ -f /tmp/jenkins_hdrs ] && tr -d '\r' < /tmp/jenkins_hdrs | awk 'tolower($1)=="location:"{print $2}' || true)
           if [ -z "$LOC" ]; then
             echo "ERROR: queue request rejected (HTTP status: '${HTTP_CODE:-network error}')"
-            echo "       check JENKINS_TOKEN, job name '$JOB', and that the job has no parameters"
+            echo "       check JENKINS_URL/JENKINS_TOKEN secrets, job name '$JOB', and that the job has no parameters"
             exit 1
           fi
 
           echo "==> deploy queued, waiting to start..."
+          # 排队等待与部署预算同量级（~10 分钟）：hmf 每 push 都部署，上一轮
+          # 未结束时新 build 会排队；等不到就取消排队项再红叉，保证
+          # 「Actions 报失败 = 真的没部署」，避免部署脱管照跑。
           BUILD_URL=""
-          for i in $(seq 1 30); do
+          for i in $(seq 1 300); do
             BUILD_URL=$(curl -sf -u "$AUTH" "$LOC/api/json" \
               | python3 -c 'import sys,json; print(json.load(sys.stdin).get("executable",{}).get("url",""))' 2>/dev/null || true)
             [ -n "$BUILD_URL" ] && break
             sleep 2
           done
-          [ -n "$BUILD_URL" ] || { echo "ERROR: build did not start within 60s"; exit 1; }
+          if [ -z "$BUILD_URL" ]; then
+            echo "ERROR: build did not start within ~10min (previous deploy still running? cancelling queued item)"
+            curl -s -m 15 -X POST -u "$AUTH" "$LOC/cancelItem" >/dev/null 2>&1 || true
+            exit 1
+          fi
           N=$(basename "$BUILD_URL")
           echo "==> deploy build #${N} started: $J/job/$JOB/$N/"
 

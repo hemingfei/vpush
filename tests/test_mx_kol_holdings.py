@@ -161,6 +161,29 @@ def test_tag_events_yield_to_same_day_opinion_actions():
     assert all(e["source"] == "opinion" for e in out["timeline"])
 
 
+def test_semanticless_opinion_action_does_not_suppress_tag():
+    """词表外操作（观察/做T）不参与打分，也不参与压制——回归：
+    旧实现把所有非空 action 都登记进让位日，「观察」观点会吞掉同日标签的
+    真实建仓信号，该股从持仓里凭空消失。
+    """
+    client = make_client()
+    db = client.app.state.db
+    kol = db.add_kol("mx", "观察大V", "room1")
+    t = _today()
+    _seed_opinions(db, kol, [
+        (t, "09:20", "09:16", "stock", "中科曙光", "bull", "观察"),  # 无仓位语义
+    ])
+    _seed_tag_posts(db, kol, [
+        (t, "10:00", ["中科曙光", "建仓"], "标签识别出真实建仓"),
+    ])
+    out = mkh.build_kol_holdings(db, kol)
+    # 标签建仓不被「观察」压制：看多表态 1 分（观察性轻仓）+ 标签建仓 3 分 = 4
+    assert [h["score"] for h in out["holdings"] if h["target_name"] == "中科曙光"] == [4.0]
+    # 标签事件在场（未被观点让位丢弃）：已有头寸后的建仓按加仓力度计
+    tag_rows = [e for e in out["timeline"] if e["source"] == "tag"]
+    assert len(tag_rows) == 1 and tag_rows[0]["kind"] == "add"
+
+
 def test_tag_only_kol_without_opinions():
     """纯标签大V：没有任何观点数据，仅靠操作标签也能推出演练仓位。"""
     client = make_client()
@@ -221,3 +244,21 @@ def test_api_returns_holdings_and_empty_state():
     clamped = client.get(f"/api/kols/{kol}/mx-holdings?days=365", headers=headers).json()
     assert clamped["window_days"] == 90
     assert client.get(f"/api/kols/{kol}/mx-holdings").status_code == 401
+
+
+def test_tag_vocab_cache_invalidates_on_content_change():
+    """词表缓存以 settings 原文为版本键：内容不变命中缓存，改名单即刻生效。"""
+    client = make_client()
+    db = client.app.state.db
+    db.set_stock_names(["贵州茅台"])
+    a1 = mkh._load_tag_vocab(db)
+    # 同内容再次加载：命中缓存（同一对象身份），零重建
+    assert mkh._load_tag_vocab(db) is a1
+    # 名单变化：缓存失效重建，新股名可见
+    db.set_stock_names(["贵州茅台", "五粮液"])
+    a2 = mkh._load_tag_vocab(db)
+    assert a2 is not a1 and "五粮液" in a2[1]
+    # 操作词表变化同样失效
+    db.set_setting("action_tag_vocabulary", '["建仓", "加仓", "自定义词"]')
+    a3 = mkh._load_tag_vocab(db)
+    assert a3 is not a2 and "自定义词" in a3[0]

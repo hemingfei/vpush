@@ -19,6 +19,8 @@ from .logging_setup import redact_secrets
 from .zh_simp import to_simplified
 
 _UNSET = object()
+# 北京时区（与 fetchers.base / mx_view_analysis 同款定义，避免跨模块导入环）
+CN_TZ = timezone(timedelta(hours=8))
 BIND_TRY_LIMIT = 8
 BIND_TRY_WINDOW = 600
 BIND_ISSUE_LIMIT = 3
@@ -6017,8 +6019,10 @@ class DB:
 
         更早的批次行只剩审计价值，滚动删掉防表无限增长。trading_day 为
         YYYY-MM-DD 字符串，字典序比较即日期比较。返回删除行数。
+        cutoff 按北京时间算：trading_day 是北京日期，非北京时区部署下
+        datetime.now() 会把保留期边界偏移数小时。
         """
-        cutoff = (datetime.now() - timedelta(days=int(keep_days))).strftime("%Y-%m-%d")
+        cutoff = (datetime.now(CN_TZ) - timedelta(days=int(keep_days))).strftime("%Y-%m-%d")
         rows = self._rows("SELECT COUNT(*) AS n FROM mx_view_batches WHERE trading_day < ?", (cutoff,))
         if not rows or not int(rows[0]["n"]):
             return 0
@@ -6098,18 +6102,23 @@ class DB:
         sql += " ORDER BY o.snapshot_at ASC, o.occurred_at ASC, o.id ASC"
         return self._rows(sql, tuple(params))
 
-    def list_mx_opinions_for_kol(self, kol_id, days=30) -> list[dict]:
+    def list_mx_opinions_for_kol(self, kol_id, since_day: str = "") -> list[dict]:
         """单大V跨天观点回放：近 N 个自然日内按发生时间升序（同 list_mx_opinions 序）。
 
         预估持仓（mx_kol_holdings）唯一数据源：排序键必须与聚合同口径，
         occurred_at 缺失时按 snapshot_at 天序兜底，id 最终兜底。
+        窗口下界由调用方按北京时间算好传入（SQLite date('now') 是 UTC，
+        北京 00:00-07:59 两者差一天，会让观点源与标签源窗口边界错位）。
         """
+        since_day = str(since_day or "").strip() or (
+            (datetime.now(CN_TZ) - timedelta(days=30)).strftime("%Y-%m-%d")
+        )
         sql = (
             "SELECT o.*, k.name AS kol_name, k.avatar_url FROM mx_opinions o "
-            "JOIN kols k ON k.id = o.kol_id WHERE o.kol_id = ? AND o.trading_day >= date('now', ?) "
+            "JOIN kols k ON k.id = o.kol_id WHERE o.kol_id = ? AND o.trading_day >= ? "
             "ORDER BY o.trading_day ASC, o.occurred_at ASC, o.snapshot_at ASC, o.id ASC"
         )
-        return self._rows(sql, (int(kol_id), f"-{int(days)} day"))
+        return self._rows(sql, (int(kol_id), since_day))
 
     def list_mx_action_tag_posts_for_kol(self, kol_id, since_day, action_tags) -> list[dict]:
         """单大V窗口内标签含操作词的 MX 消息（预估持仓的标签补充信号源）。
@@ -6416,12 +6425,17 @@ class DB:
         return clause, params
 
     def list_holdings_opinions(self, user_id: int, since: str, after_id: int = 0,
-                               before_id: int = 0, holder: tuple[str, str] | None = None,
+                               before_id: int = 0, before_at: str = "",
+                               holder: tuple[str, str] | None = None,
                                limit: int = 50) -> list[dict]:
         """该用户持股在 since 之后的相关观点（occurred_at 倒序）。
 
-        holder 传 (target_type, target_name) 时只取该标 的（聚合卡下钻用）；
-        after_id/before_id 为 id 游标：增量拉新与「加载更多」共用一张表。
+        holder 传 (target_type, target_name) 时只取该标的（聚合卡下钻用）；
+        after_id 为增量拉新游标（id 单调即可：新批次 id 恒大于已见水位）；
+        翻旧页必须传复合游标 (before_at, before_id)：排序键是
+        (occurred_at, id)，而批次回填会产生「id 新、occurred_at 旧」的行——
+        只按 id 翻页会把这类行整段跳过（实测丢数据），复合游标与排序键
+        严格一致才不漏。before_at 为空时回落纯 id 游标（兼容旧客户端）。
         """
         if holder:
             pairs = [tuple(holder)]
@@ -6439,7 +6453,11 @@ class DB:
             f"WHERE o.occurred_at >= ? AND o.id > ? AND ({clause})"
         )
         values: list = [since, int(after_id)] + params
-        if before_id > 0:
+        if before_at:
+            # 复合游标：严格小于 (before_at, before_id)，与 ORDER BY 键一致
+            sql += " AND (o.occurred_at < ? OR (o.occurred_at = ? AND o.id < ?))"
+            values.extend([before_at, before_at, int(before_id)])
+        elif before_id > 0:
             sql += " AND o.id < ?"
             values.append(int(before_id))
         sql += " ORDER BY o.occurred_at DESC, o.id DESC LIMIT ?"
@@ -6529,14 +6547,17 @@ class DB:
 
     def list_holdings_tag_posts(self, pairs: list[tuple[str, str]], since: str,
                                 after_id: int = 0, before_id: int = 0,
+                                before_at: str = "",
                                 holder: tuple[str, str] | None = None,
                                 limit: int = 50) -> list[dict]:
         """关注标的标签命中的快讯（posts.tags 精确含标的名，published_at 倒序）。
 
         标签口径与动态页标签筛选同源：规则/LLM/观点回流打标都落在 posts.tags
         一列，按 JSON 元素边界匹配；多空方向取观点回流登记（attach_view_directions）。
-        holder 传 (target_type, target_name) 时只取该标的；after_id/before_id 为
-        posts.id 游标：增量拉新与「加载更多」共用一张表。
+        holder 传 (target_type, target_name) 时只取该标的；after_id 为增量拉新游标；
+        翻旧页传复合游标 (before_at, before_id)——排序键是 (published_at, id)，
+        回灌入库的旧帖「id 新、published_at 旧」，纯 id 游标会整段漏页
+        （与 list_holdings_opinions 同因同修）。before_at 为空回落纯 id 兼容旧客户端。
         """
         if holder:
             pairs = [tuple(holder)]
@@ -6554,7 +6575,11 @@ class DB:
         )
         values: list = [since, *[post_tag_like_pattern(name) for _t, name in pairs],
                         int(after_id)]
-        if before_id > 0:
+        if before_at:
+            # 复合游标：严格小于 (before_at, before_id)，与 ORDER BY 键一致
+            sql += " AND (p.published_at < ? OR (p.published_at = ? AND p.id < ?))"
+            values.extend([before_at, before_at, int(before_id)])
+        elif before_id > 0:
             sql += " AND p.id < ?"
             values.append(int(before_id))
         sql += " ORDER BY p.published_at DESC, p.id DESC LIMIT ?"
@@ -6565,32 +6590,40 @@ class DB:
     def holdings_tag_post_summary(self, pairs: list[tuple[str, str]], since: str) -> list[dict]:
         """全窗口按标的聚合的标签提及数（恒为全量口径，不随 items 筛选变化）。
 
-        单次扫描：每标的一对 SUM/MAX(CASE tags LIKE ...) 列，避免 N 次 LIKE 全表查。
+        单次扫描窗口内帖子的 tags（有 published_at 索引），Python 侧对标的
+        名集合计数——60s 兜底轮询 × 每在线用户的固定成本，LIKE 列方案会随
+        持股数（上限 30 × 2 列）与帖子量线性放大，这里只读一遍 tags 列。
         """
         pairs = list(pairs or [])
         if not pairs:
             return []
-        cols: list[str] = []
-        params: list = []
-        for i, (_ttype, name) in enumerate(pairs):
-            pattern = post_tag_like_pattern(name)
-            cols.append(
-                f"SUM(CASE WHEN p.tags LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END) AS c{i}, "
-                f"MAX(CASE WHEN p.tags LIKE ? ESCAPE '\\' THEN p.published_at END) AS t{i}"
-            )
-            params.extend([pattern, pattern])
         rows = self._rows(
-            f"SELECT {', '.join(cols)} FROM posts p "
+            "SELECT p.tags, p.published_at FROM posts p "
             "WHERE p.published_at >= ? AND COALESCE(p.blocked, 0) = 0 "
-            "AND COALESCE(p.hidden, 0) = 0",
-            tuple([*params, since]),
+            "AND COALESCE(p.hidden, 0) = 0 AND p.tags LIKE '%\"%'",
+            (since,),
         )
-        row = rows[0] if rows else {}
+        counts = {name: 0 for _t, name in pairs}
+        latest = {name: "" for _t, name in pairs}
+        for r in rows:
+            try:
+                tags = json.loads(r["tags"] or "[]")
+            except (TypeError, ValueError):
+                continue
+            # 一帖对每标的至多计 1 次提及（与旧 SUM(CASE LIKE) 按帖计数同口径）
+            hits = {str(t).strip() for t in tags} & counts.keys()
+            if not hits:
+                continue
+            at = r["published_at"] or ""
+            for name in hits:
+                counts[name] += 1
+                if at > latest[name]:
+                    latest[name] = at
         out = [{
             "target_type": ttype, "target_name": name,
-            "tag_count": int(row.get(f"c{i}") or 0),
-            "latest_at": row.get(f"t{i}") or "",
-        } for i, (ttype, name) in enumerate(pairs)]
+            "tag_count": counts[name],
+            "latest_at": latest[name],
+        } for ttype, name in pairs]
         out.sort(key=lambda x: (x["tag_count"], x["latest_at"]), reverse=True)
         return out
 

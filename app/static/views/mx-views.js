@@ -1329,9 +1329,12 @@ export function createMxViewsView(dependencies) {
       mxvFeedToggle(_mxv.feedKols, Number(box.dataset.feedKol));
     });
     feed.addEventListener("input", (e) => {
-      // 中文输入法组字期间（isComposing）绝不重渲染：innerHTML 重建会替换输入框、打断组词，
-      // 拼音字母被直接上屏成英文；组字提交由下方 compositionend 统一筛选
-      if (e.isComposing) return;
+      // 中文输入法组字期间（isComposing；旧 Safari/WebView 需补看 keyCode 229）
+      // 绝不重渲染：innerHTML 重建会替换输入框、打断组词，拼音字母被直接
+      // 上屏成英文；组字提交由下方 compositionend 统一筛选。
+      // isConnected 过滤游离目标：Firefox/Safari 组字后对已被替换的旧输入框
+      // 补发 input，用旧 value 重渲染一次没有意义
+      if (e.isComposing || e.keyCode === 229 || !e.target.isConnected) return;
       const refocus = (sel) => {
         const el = document.querySelector(sel);
         if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
@@ -1401,6 +1404,14 @@ export function createMxViewsView(dependencies) {
     if (mask) mask.remove();
     if (drawer) drawer.remove();
     _mxv.drawer = null;
+  }
+
+  // 观点流大V下拉收起（返回键/外部入口用；面板显隐由 feedKolOpen 状态渲染）
+  function mxvCloseKolPanel() {
+    if (!_mxv.feedKolOpen) return false;
+    _mxv.feedKolOpen = false;
+    mxvRenderFeed();
+    return true;
   }
 
   function mxvBadge(direction, action) {
@@ -2534,6 +2545,7 @@ export function createMxViewsView(dependencies) {
     mxvOpenKolStockAt,
     mxvOpenKol,
     mxvCloseDrawer,
+    mxvCloseKolPanel,
     loadAdminMxViews,
     mxvAdminKolToggle,
     mxvAdminKolAll,
