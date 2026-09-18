@@ -143,3 +143,89 @@ def test_upload_failure_keeps_original_url(db, cfg, monkeypatch):
     row = db._rows("SELECT status, last_error FROM hosted_images WHERE source_url = ?", (SOURCE,))[0]
     assert row["status"] == "failed"
     assert row["last_error"]
+
+
+def test_purge_expired_hosted_images_uses_retention_days(db):
+    old = SOURCE
+    fresh = "https://pbs.twimg.com/media/fresh.jpg"
+    db.enqueue_hosted_image(old)
+    db.enqueue_hosted_image(fresh)
+    db._conn.execute(
+        "UPDATE hosted_images SET created_at = datetime('now', '-40 days') WHERE source_url = ?",
+        (old,),
+    )
+    db._conn.commit()
+    assert imgbed.purge_expired(db) == 1
+    left = {row["source_url"] for row in db._rows("SELECT source_url FROM hosted_images")}
+    assert left == {fresh}
+    db.set_setting("imgbed_retention_days", "0")
+    db._conn.execute(
+        "UPDATE hosted_images SET created_at = datetime('now', '-40 days') WHERE source_url = ?",
+        (fresh,),
+    )
+    db._conn.commit()
+    assert imgbed.purge_expired(db) == 0
+    assert db._rows("SELECT source_url FROM hosted_images")[0]["source_url"] == fresh
+
+
+def _age_hosted(db, source_url, days=40):
+    db._conn.execute(
+        "UPDATE hosted_images SET created_at = datetime('now', ?) WHERE source_url = ?",
+        (f"-{days} days", source_url),
+    )
+    db._conn.commit()
+
+
+def test_purge_expired_deletes_remote_file(db, cfg, monkeypatch):
+    imgbed.configure(type("C", (), {"imgbed": cfg})())
+    db.enqueue_hosted_image(SOURCE)
+    db.mark_hosted_image(SOURCE, status="ready", hosted_url=HOSTED)
+    _age_hosted(db, SOURCE)
+    deleted = []
+
+    def handler(request: httpx.Request):
+        deleted.append((request.method, str(request.url), request.headers.get("authorization")))
+        return httpx.Response(200, json={"success": True, "fileId": "vpush/1.png"})
+
+    monkeypatch.setattr(imgbed, "_http_client", _client_factory(handler))
+    assert imgbed.purge_expired(db) == 1
+    assert deleted[0][0] == "GET"
+    assert "/api/manage/delete/vpush/1.png" in deleted[0][1]
+    assert deleted[0][2] == "Bearer imgbed_testtoken"
+    assert db._rows("SELECT source_url FROM hosted_images") == []
+
+
+def test_purge_expired_keeps_shared_remote_file(db, cfg, monkeypatch):
+    imgbed.configure(type("C", (), {"imgbed": cfg})())
+    old = SOURCE
+    fresh = "https://pbs.twimg.com/media/fresh.jpg"
+    db.enqueue_hosted_image(old)
+    db.enqueue_hosted_image(fresh)
+    db.mark_hosted_image(old, status="ready", hosted_url=HOSTED)
+    db.mark_hosted_image(fresh, status="ready", hosted_url=HOSTED)
+    _age_hosted(db, old)
+    deleted = []
+
+    def handler(request: httpx.Request):
+        deleted.append(str(request.url))
+        return httpx.Response(200, json={"success": True})
+
+    monkeypatch.setattr(imgbed, "_http_client", _client_factory(handler))
+    assert imgbed.purge_expired(db) == 1
+    assert deleted == []
+    left = {row["source_url"] for row in db._rows("SELECT source_url FROM hosted_images")}
+    assert left == {fresh}
+
+
+def test_purge_expired_keeps_local_when_remote_delete_fails(db, cfg, monkeypatch):
+    imgbed.configure(type("C", (), {"imgbed": cfg})())
+    db.enqueue_hosted_image(SOURCE)
+    db.mark_hosted_image(SOURCE, status="ready", hosted_url=HOSTED)
+    _age_hosted(db, SOURCE)
+
+    def handler(request: httpx.Request):
+        return httpx.Response(403, json={"success": False, "error": "no delete permission"})
+
+    monkeypatch.setattr(imgbed, "_http_client", _client_factory(handler))
+    assert imgbed.purge_expired(db) == 0
+    assert db._rows("SELECT source_url FROM hosted_images")[0]["source_url"] == SOURCE

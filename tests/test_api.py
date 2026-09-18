@@ -4286,6 +4286,7 @@ def test_admin_imgbed_settings_roundtrip(monkeypatch):
     assert empty["enabled"] is False
     assert empty["project"] == "CloudFlare-ImgBed"
     assert empty["token_set"] is False
+    assert empty["retention_days"] == 30
     bad = client.put(
         "/api/admin/imgbed",
         headers=headers,
@@ -4300,6 +4301,7 @@ def test_admin_imgbed_settings_roundtrip(monkeypatch):
             "token": "imgbed_testtoken",
             "channel_name": "vpush-imgbed",
             "folder": "vpush",
+            "retention_days": 7,
         },
     )
     assert saved.status_code == 200
@@ -4308,6 +4310,7 @@ def test_admin_imgbed_settings_roundtrip(monkeypatch):
     assert data["base_url"] == "https://img.053727.xyz"
     assert data["token_set"] is True
     assert data["last_check_error"] == ""
+    assert data["retention_days"] == 7
     assert probes["url"] == "https://img.053727.xyz"
     assert "token" not in data
     keep = client.put(
@@ -4316,6 +4319,13 @@ def test_admin_imgbed_settings_roundtrip(monkeypatch):
         json={"base_url": "https://img.053727.xyz", "token": ""},
     )
     assert keep.status_code == 200
+    assert keep.json()["retention_days"] == 7
+    bad_days = client.put(
+        "/api/admin/imgbed",
+        headers=headers,
+        json={"base_url": "https://img.053727.xyz", "token": "", "retention_days": 3651},
+    )
+    assert bad_days.status_code == 400
 
     def failing_probe(url):
         return False, "ConnectError: down"
@@ -4339,6 +4349,7 @@ def test_admin_imgbed_settings_roundtrip(monkeypatch):
     assert after["base_url"] == ""
     assert after["token_set"] is False
     assert after["last_check_error"] == ""
+    assert after["retention_days"] == 7
     assert client.get("/api/stats", headers=headers).json()["imgbed"]["enabled"] is False
 
 

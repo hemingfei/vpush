@@ -5625,6 +5625,38 @@ class DB:
             ),
         )
 
+    def list_hosted_images_older_than(self, days: int, limit: int = 100) -> list[dict]:
+        if days <= 0:
+            return []
+        return self._rows(
+            "SELECT source_url, hosted_url FROM hosted_images "
+            "WHERE created_at < datetime('now', ?) ORDER BY created_at LIMIT ?",
+            (f"-{int(days)} days", max(int(limit), 1)),
+        )
+
+    def hosted_url_has_newer(self, hosted_url: str, days: int) -> bool:
+        url = (hosted_url or "").strip()
+        if not url or days <= 0:
+            return False
+        return bool(self._rows(
+            "SELECT 1 FROM hosted_images WHERE hosted_url = ? "
+            "AND created_at >= datetime('now', ?) LIMIT 1",
+            (url, f"-{int(days)} days"),
+        ))
+
+    def delete_hosted_images(self, source_urls: list[str]) -> int:
+        urls = [str(u).strip() for u in source_urls if str(u).strip()]
+        if not urls:
+            return 0
+        placeholders = ",".join("?" * len(urls))
+        with self._lock:
+            cur = self._conn.execute(
+                f"DELETE FROM hosted_images WHERE source_url IN ({placeholders})",
+                urls,
+            )
+            self._conn.commit()
+            return cur.rowcount
+
     def get_setting(self, key: str) -> str | None:
         reader = self._read_only_rows if str(key).startswith("ima_") else self._rows
         rows = reader("SELECT value FROM settings WHERE key = ?", (key,))

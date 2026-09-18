@@ -10,7 +10,7 @@ import logging
 import mimetypes
 import threading
 from datetime import UTC, datetime, timedelta
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -35,6 +35,9 @@ ALLOWED_TYPES = {
 MAX_BYTES = 10 * 1024 * 1024
 UPLOAD_TIMEOUT = 30
 BATCH_LIMIT = 8
+PURGE_LIMIT = 100
+DEFAULT_RETENTION_DAYS = 30
+MAX_RETENTION_DAYS = 3650
 RETRY_AFTER = timedelta(minutes=15)
 BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -185,6 +188,48 @@ def process_pending(db, config=None, limit: int = BATCH_LIMIT) -> int:
     return done
 
 
+def retention_days(db) -> int:
+    raw = (db.get_setting("imgbed_retention_days") or "").strip()
+    if not raw:
+        return DEFAULT_RETENTION_DAYS
+    try:
+        days = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_RETENTION_DAYS
+    return max(0, min(days, MAX_RETENTION_DAYS))
+
+
+def purge_expired(db, config=None) -> int:
+    days = retention_days(db)
+    if days <= 0:
+        return 0
+    rows = db.list_hosted_images_older_than(days, PURGE_LIMIT)
+    if not rows:
+        return 0
+    if config is None:
+        cfg = _config
+    else:
+        cfg = getattr(config, "imgbed", None) or config
+    drop = []
+    remote = {}
+    for row in rows:
+        src = (row.get("source_url") or "").strip()
+        hosted = (row.get("hosted_url") or "").strip()
+        if not src:
+            continue
+        if not hosted:
+            drop.append(src)
+            continue
+        remote.setdefault(hosted, []).append(src)
+    for hosted, sources in remote.items():
+        if db.hosted_url_has_newer(hosted, days):
+            drop.extend(sources)
+            continue
+        if enabled(cfg) and _delete_remote(cfg, hosted):
+            drop.extend(sources)
+    return db.delete_hosted_images(drop) if drop else 0
+
+
 def _mirror_one(db, cfg, row: dict) -> bool:
     source_url = (row.get("source_url") or "").strip()
     if not is_source_url(source_url):
@@ -318,6 +363,47 @@ def _extract_hosted_url(payload, base_url: str) -> str:
                 return base_url.rstrip("/") + raw
             return raw
     return ""
+
+
+def _hosted_file_path(hosted_url: str, base_url: str) -> str:
+    prefix = (base_url or "").rstrip("/") + "/file/"
+    if hosted_url.startswith(prefix):
+        return hosted_url[len(prefix):].lstrip("/")
+    path = urlparse(hosted_url).path or ""
+    marker = "/file/"
+    if marker in path:
+        return path.split(marker, 1)[1].lstrip("/")
+    return ""
+
+
+def _delete_remote(cfg, hosted_url: str) -> bool:
+    path = _hosted_file_path(hosted_url, getattr(cfg, "base_url", ""))
+    if not path:
+        return True
+    url = getattr(cfg, "base_url", "").rstrip("/") + "/api/manage/delete/" + quote(path, safe="/")
+    headers = {
+        "Authorization": f"Bearer {getattr(cfg, 'token', '')}",
+        "User-Agent": BROWSER_UA,
+    }
+    try:
+        with _http_client(timeout=15, follow_redirects=False) as client:
+            resp = client.get(url, headers=headers)
+    except Exception as exc:  # noqa: BLE001 - 删除失败下次再试
+        logger.warning("图床删除失败 url=%s err=%s", hosted_url[:120], type(exc).__name__)
+        return False
+    if resp.status_code in (404, 410):
+        return True
+    if resp.status_code >= 400:
+        logger.warning("图床删除失败 HTTP %s path=%s", resp.status_code, path[:120])
+        return False
+    try:
+        payload = resp.json()
+    except ValueError:
+        return True
+    if isinstance(payload, dict) and not payload.get("success", True):
+        logger.warning("图床删除失败 path=%s", path[:120])
+        return False
+    return True
 
 
 def utc_now() -> str:

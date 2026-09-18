@@ -1494,11 +1494,15 @@ def test_stats_imgbed_tab_matches_cookie_settings_pattern():
     meta = dashboard.split("section-title\">图床</h2>", 1)[1].split("</p>", 1)[0]
     assert "打开图床后台" in meta
     assert "创建 API 密钥" in meta
+    assert "勾上传和删除" in dashboard
     assert "CloudFlare-ImgBed" in meta
     # 渠道/目录收进高级，不占首屏
     advanced = dashboard.split("imgbed-advanced", 1)[1].split("</details>", 1)[0]
     assert "imgbed-channel-name" in advanced
     assert "imgbed-folder" in advanced
+    assert "imgbed-retention-days" not in advanced
+    assert "图片保留时间" in dashboard
+    assert "imgbed-retention-days" in dashboard
     # 计数拆开，失败独立可见
     assert "失败 ${info.failed_count || 0} 张" in dashboard
     assert "failed_count" in _fn_body("dutyStripHtml", ADMIN_DASHBOARD_JS)
@@ -1507,6 +1511,7 @@ def test_stats_imgbed_tab_matches_cookie_settings_pattern():
     assert "flash(" in save
     assert "alert(" not in save
     assert "/api/admin/imgbed" in save
+    assert "retention_days" in save
     assert "loadAdminStats(routeSeq)" in save
     # 只在地址为空的校验分支 focus；保存成功后不再把焦点拽回地址
     assert save.count("focus()") == 1

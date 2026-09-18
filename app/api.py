@@ -708,6 +708,7 @@ class ImgbedIn(BaseModel):
     channel: str = ""
     channel_name: str = ""
     folder: str = ""
+    retention_days: int | None = None
 
 
 class TurnstileIn(BaseModel):
@@ -3771,6 +3772,7 @@ def create_api_router(
             "pending_count": int(counts.get("pending") or 0),
             "failed_count": int(counts.get("failed") or 0),
             "last_check_error": db.get_setting("imgbed_last_check_error") or "",
+            "retention_days": imgbed_mod.retention_days(db),
         }
 
     @router.get("/admin/imgbed", dependencies=[Depends(require_admin)])
@@ -3818,6 +3820,10 @@ def create_api_router(
         db.set_setting("imgbed_channel", channel)
         db.set_setting("imgbed_channel_name", channel_name)
         db.set_setting("imgbed_folder", folder)
+        if body.retention_days is not None:
+            if body.retention_days < 0 or body.retention_days > imgbed_mod.MAX_RETENTION_DAYS:
+                raise HTTPException(status_code=400, detail="图片保留天数须在 0–3650")
+            db.set_setting("imgbed_retention_days", str(int(body.retention_days)))
         db.set_setting("imgbed_updated_at", str(int(time.time())))
         imgbed_mod.apply_runtime(base_url, token, channel, channel_name, folder)
         _, check_error = imgbed_mod.probe(base_url)
