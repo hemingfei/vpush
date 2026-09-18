@@ -32,6 +32,7 @@ ALLOWED_TYPES = {
     "image/webp": "webp",
     "image/gif": "gif",
     "video/mp4": "mp4",  # Truth 视频帖（图床支持视频）
+    "video/quicktime": "mp4",  # Truth 部分视频返回 quicktime 类型，容器同为 mp4
 }
 MAX_BYTES = 10 * 1024 * 1024
 VIDEO_MAX_BYTES = 60 * 1024 * 1024  # Trump 视频实测 13~36MB，留余量
