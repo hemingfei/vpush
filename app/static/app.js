@@ -3084,7 +3084,7 @@ function postCard(post) {
       ${Array.isArray(post.images) && post.images.length ? `
         <div class="post-images">
           ${post.images.slice(0, 4).map((img) => (/\.(mp4|webm)(\?|$)/i.test(img) ? `
-            <video class="post-video" src="${escapeHtml(imgSrcFor(img))}" controls playsinline preload="metadata"></video>` : `
+            <video class="post-video" src="${escapeHtml(imgSrcFor(img))}" controls playsinline preload="none"></video>` : `
             <a class="post-img-link" href="#" onclick="event.preventDefault();openLightbox(this.querySelector('img'))" aria-label="查看${escapeHtml(post.kol_name)}的配图"><img src="${escapeHtml(imgSrcFor(img))}" loading="lazy" alt="${escapeHtml(post.kol_name)} 的配图" onerror="imgOnError(this)"></a>`)).join("")}
           ${post.images.length > 4 ? `<span class="post-images-more">+${post.images.length - 4}</span>` : ""}
         </div>` : ""}
