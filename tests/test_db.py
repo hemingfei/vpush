@@ -2083,6 +2083,29 @@ def test_news_source_hard_delete_cascades_related_rows(tmp_path):
     db.close()
 
 
+def test_news_feed_hard_delete_cascades_articles(tmp_path):
+    db = DB(str(tmp_path / "feed-delete.db"))
+    source_id = db.add_news_source("双 Feed 媒体")
+    feed_a = db.add_news_feed(source_id, "主源", "https://a.example/rss", "https://a.example/rss")
+    feed_b = db.add_news_feed(source_id, "副源", "https://b.example/rss", "https://b.example/rss")
+    article = {
+        "source_id": source_id, "external_id": "guid-1",
+        "title": "T", "url": "https://example.com/1", "author": "A",
+        "summary": "S", "content_html": "", "images": [],
+        "published_at": "2026-09-01T00:00:00+00:00",
+        "fetched_at": "2026-09-01T00:01:00+00:00", "content_hash": "h1",
+    }
+    db.upsert_news_article({**article, "feed_id": feed_a})
+    keep_id = db.upsert_news_article({**article, "feed_id": feed_b, "external_id": "guid-2"})
+    assert db.delete_news_feed(feed_a)["id"] == feed_a
+    assert db.delete_news_feed(feed_a) is None
+    assert db.get_news_feed(feed_a) is None
+    assert db.get_news_feed(feed_b) is not None
+    assert db.count_news_articles_for_source(source_id) == 1
+    assert db.get_news_article(keep_id) is not None
+    db.close()
+
+
 def test_news_article_upsert_updates_without_duplicate(tmp_path):
     db = DB(str(tmp_path / "article.db"))
     source_id = db.add_news_source("测试媒体")

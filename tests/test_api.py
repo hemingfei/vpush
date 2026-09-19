@@ -133,6 +133,28 @@ def test_admin_news_source_hard_delete_works_without_archive():
     ).status_code == 404
 
 
+def test_admin_news_feed_hard_delete_cascades_articles():
+    client = make_client("news-feed-delete-api.db")
+    headers = auth_headers(client)
+    db = client.app.state.db
+    source_id = db.add_news_source("硬删源")
+    feed_id = db.add_news_feed(
+        source_id, "主源", "https://feed.example/rss", "https://feed.example/rss"
+    )
+    insert_news_article(db, source_id, "2026-09-01T10:00:00+00:00")
+    assert client.delete(
+        f"/api/admin/news/feeds/{feed_id}", headers={"Authorization": "Bearer nope"}
+    ).status_code == 401
+    assert client.delete(
+        f"/api/admin/news/feeds/{feed_id}", headers=headers
+    ).status_code == 200
+    assert db.get_news_feed(feed_id) is None
+    assert db.count_news_articles_for_source(source_id) == 0
+    assert client.delete(
+        f"/api/admin/news/feeds/{feed_id}", headers=headers
+    ).status_code == 404
+
+
 def test_news_seen_rejects_naive_timestamp_and_moves_forward_only():
     client = make_client("news-seen-api.db")
     headers = user_headers(client, "news_seen_user")

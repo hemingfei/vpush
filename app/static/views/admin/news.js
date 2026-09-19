@@ -73,11 +73,13 @@ export function createAdminNewsView(dependencies) {
         ${error}
       </div>
       <div class="news-admin-feed-actions">
-        ${feed.archived_at ? `<button type="button" class="btn-ghost" onclick="restoreAdminNewsFeed(${feed.id})">恢复</button>` : `
+        ${feed.archived_at ? `<button type="button" class="btn-ghost" onclick="restoreAdminNewsFeed(${feed.id})">恢复</button>
+          <button type="button" class="btn-ghost danger" onclick="deleteAdminNewsFeed(${feed.id})">彻底删除</button>` : `
           <button type="button" class="btn-ghost" onclick="openNewsFeedModal(${feed.source_id}, ${feed.id})">编辑</button>
           <button type="button" class="btn-ghost" onclick="refreshAdminNewsFeed(${feed.id})" title="刷新 Feed" aria-label="刷新 Feed">${REFRESH_ICON}</button>
           <button type="button" class="btn-ghost" onclick="toggleAdminNewsFeed(${feed.id}, ${feed.enabled ? "false" : "true"})">${feed.enabled ? "停用" : "启用"}</button>
-          <button type="button" class="btn-ghost danger" onclick="archiveAdminNewsFeed(${feed.id})">归档</button>`}
+          <button type="button" class="btn-ghost danger" onclick="archiveAdminNewsFeed(${feed.id})">归档</button>
+          <button type="button" class="btn-ghost danger" onclick="deleteAdminNewsFeed(${feed.id})">彻底删除</button>`}
       </div>
     </div>`;
   }
@@ -300,6 +302,17 @@ export function createAdminNewsView(dependencies) {
       await api(`/api/admin/news/feeds/${feedId}/restore`, { method: "POST" });
       if (!routeStillActive(seq)) return;
       flash("Feed 已恢复");
+      await loadAdminNews(seq);
+    } catch (err) { flash(err.message, "error"); }
+  }
+
+  async function deleteAdminNewsFeed(feedId) {
+    const seq = currentRouteSeq();
+    if (!confirm("彻底删除该 Feed 将同时清除它抓取的全部文章，且不可恢复，确认继续？")) return;
+    try {
+      await api(`/api/admin/news/feeds/${feedId}`, { method: "DELETE" });
+      if (!routeStillActive(seq)) return;
+      flash("Feed 已彻底删除");
       await loadAdminNews(seq);
     } catch (err) { flash(err.message, "error"); }
   }
@@ -531,6 +544,7 @@ export function createAdminNewsView(dependencies) {
     deleteAdminNewsSource,
     archiveAdminNewsFeed,
     restoreAdminNewsFeed,
+    deleteAdminNewsFeed,
     openNewsSourceModal,
     openNewsFeedModal,
     updateAdminNewsQuery,

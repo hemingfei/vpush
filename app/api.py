@@ -2756,6 +2756,15 @@ def create_api_router(
         _audit(admin, "news_feed_restore", str(feed_id))
         return {"ok": True}
 
+    @router.delete("/admin/news/feeds/{feed_id}")
+    def delete_admin_news_feed(feed_id: int, admin: dict = Depends(require_admin)):
+        feed = db.get_news_feed(feed_id)
+        if feed is None:
+            raise HTTPException(status_code=404, detail="Feed 不存在")
+        db.delete_news_feed(feed_id)
+        _audit(admin, "news_feed_delete", str(feed_id), feed["name"])
+        return {"ok": True}
+
     @router.post("/admin/news/feeds/{feed_id}/refresh")
     def refresh_admin_news_feed(
         feed_id: int, response: Response, admin: dict = Depends(require_admin)
