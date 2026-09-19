@@ -10,6 +10,10 @@
   （半吊子数字比没有更误导）。
 题材（topic）无价格概念，不参与盈亏。
 
+每票附 actions 操作时间线（kind+at，建仓/加仓/减仓/清仓/翻空减仓）：
+按台账份额语义分类（买入无底仓=建仓、卖出吃光持有=清仓），与盈亏数字
+同源；行情缺价的事件也照记——操作发生是事实，缺的只是价格。
+
 价格来源 kol_price_feed：名称→代码→(code, at) 批量查价（契约见
 docs/price-query-api.md），历史价永久缓存、最新价 TTL 300s。
 行情源未接入（桩模式）时 available=false，前端显示占位提示。
@@ -23,6 +27,22 @@ from datetime import datetime, timedelta, timezone
 logger = logging.getLogger(__name__)
 
 CN_TZ = timezone(timedelta(hours=8))
+
+
+def _action_kind(delta: float, units_before: float, ev_kind: str = "") -> str:
+    """按台账份额语义分类单笔操作（open/add/trim/clear/flip，前端 1:1 出徽章）。
+
+    与 holdings 时间线的 kind 同源但修正两类口径：
+    - 首条即「加仓」词（时间线 kind=hold 但 delta>0）：无先前头寸，对用户实为建仓；
+    - 减仓把份额恰好打光 = 清仓（台账视角持有归零）；翻空（flip）保留独立
+      语义（变盘信号）优先于清仓判定。
+    units_before 必须是**本事件入账前**的影子份额（仅累加 delta，不吃价格缺失）。
+    """
+    if delta > 0:
+        return "add" if units_before > 0 else "open"
+    if ev_kind == "flip":
+        return "flip"
+    return "clear" if units_before + delta <= 0 else "trim"
 
 # 与 mx_kol_holdings.STALE_DAYS 同口径的展示文案；天数本身以 holdings 返回为准
 STALE_LABEL = "超时未提及"
@@ -94,6 +114,8 @@ def build_kol_pnl(db, kol_id: int, days: int = 30, price_lookup=None) -> dict | 
         closed_at = ""
         priced_events = 0
         moved_events = 0
+        actions: list[dict] = []  # 操作时间线（kind+at）：操作是事实，行情缺价也照记
+        shadow_units = 0.0        # 影子份额（仅累加 delta）：操作分类锚点，不吃价格缺失
         for ev in evs:  # 早 → 晚
             delta = float(ev.get("delta") or 0.0)
             if not opened_at:
@@ -101,12 +123,20 @@ def build_kol_pnl(db, kol_id: int, days: int = 30, price_lookup=None) -> dict | 
             if not delta:
                 continue  # hold 表态不动台账，但也不需要价格
             moved_events += 1
-            px = _price(code, ev.get("occurred_at") or "") if code else None
+            ev_kind = str(ev.get("kind") or "")
+            at = ev.get("occurred_at") or ""
+            # 操作分类（先于价格判定）：买入无底仓=建仓/有底仓=加仓；卖出吃光
+            # 影子份额=清仓、部分=减仓；翻空单列。钳位后无实际变动的不记
+            kind = _action_kind(delta, shadow_units, ev_kind) if delta > 0 or shadow_units > 0 else ""
+            if kind:
+                actions.append({"kind": kind, "at": at})
+            shadow_units = max(0.0, shadow_units + delta)
+            px = _price(code, at) if code else None
             if not px:
                 continue  # 价格缺失：该事件无法入账（票级严格覆盖判定兜底）
             priced_events += 1
             price = px["price"]
-            event_prices[f"{name}|{ev.get('occurred_at') or ''}"] = f"@ {price:.2f}"
+            event_prices[f"{name}|{at}"] = f"@ {price:.2f}"
             if delta > 0:
                 units += delta
                 cost_pool += delta * price
@@ -119,7 +149,7 @@ def build_kol_pnl(db, kol_id: int, days: int = 30, price_lookup=None) -> dict | 
                 realized += (price - avg) * sell
                 units -= sell
                 cost_pool -= avg * sell
-                closed_at = ev.get("occurred_at") or closed_at
+                closed_at = at or closed_at
         if not moved_events:
             continue  # 全程只有表态无操作：无价格锚点，不进盈亏名单
 
@@ -154,6 +184,7 @@ def build_kol_pnl(db, kol_id: int, days: int = 30, price_lookup=None) -> dict | 
                 "units": round(units, 2),
                 "opened_at": opened_at,
                 "closed_at": closed_at,
+                "actions": actions,
                 "events_priced": priced_events,
                 "events_total": moved_events,
                 "exit_note": "部分操作事件缺行情，无法估算",
@@ -181,6 +212,7 @@ def build_kol_pnl(db, kol_id: int, days: int = 30, price_lookup=None) -> dict | 
             "units": round(units, 2),
             "opened_at": opened_at,
             "closed_at": closed_at,
+            "actions": actions,
             "events_priced": priced_events,
             "events_total": moved_events,
             "exit_note": exit_note,

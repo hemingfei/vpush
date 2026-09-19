@@ -777,3 +777,26 @@ def test_mx_kol_pnl_panel_contract():
     # 离线外壳：SHELL 预缓存名单带上两个补充样式表（离线打开持仓/盈亏页不裸奔）
     sw = (STATIC / "sw.js").read_text(encoding="utf-8")
     assert '"/holdings.css"' in sw and '"/mx-kol-holdings.css"' in sw
+
+
+def test_mx_kol_pnl_actions_contract():
+    """盈亏行操作时间线：后端 actions=[{kind,at}] 逐笔渲染建仓/加仓/减仓/清仓/翻空徽章。
+
+    徽章复用时间线 MXC_KINDS 文案与配色（买=红系/卖=绿系）；在持与已了结两段
+    都嵌；行情缺价的票操作也照记（降级行同样有时间线）。
+    """
+    mxc = (STATIC / "views" / "mx-kol-holdings.js").read_text(encoding="utf-8")
+    # 渲染函数消费 actions 字段，文案/配色走 MXC_KINDS（与时间线徽章同源无双写）
+    acts = _fn_body("mxcPnlActs", mxc)
+    assert "actions" in acts and "MXC_KINDS" in acts
+    for label in ("买入建仓", "买入加仓", "卖出减仓", "卖出清仓", "翻空减仓"):
+        assert label in mxc, label
+    # 在持与已了结行都嵌操作时间线
+    pnl = _fn_body("mxcRenderPnl", mxc)
+    assert pnl.count("mxcPnlActs(") >= 2  # liveRows + closedRows
+    # 徽章带时间：title 提示全量时刻，行内显示 MM-DD HH:MM
+    assert "slice(5, 16)" in acts
+    # 样式：折行容器（多笔操作铺开）+ 徽章配色复用 .mxc-kind buy/sell
+    mxc_css = (STATIC / "mx-kol-holdings.css").read_text(encoding="utf-8")
+    assert ".mxc-pnl-acts" in mxc_css and "flex-wrap:wrap" in mxc_css
+    assert ".mxc-kind.buy" in mxc_css and ".mxc-kind.sell" in mxc_css

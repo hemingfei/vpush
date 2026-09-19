@@ -295,6 +295,17 @@ export function createMxKolHoldingsView(dependencies) {
     return map;
   }
 
+  // 盈亏行内操作时间线徽章：后端 actions=[{kind,at}]，文案/配色与时间线徽章同源
+  // （MXC_KINDS）。建仓/加仓/减仓/清仓/翻空各带发生时间；多笔时折行铺开
+  function mxcPnlActs(p) {
+    const acts = (p && p.actions) || [];
+    if (!acts.length) return "";
+    return `<div class="mxc-pnl-acts">${acts.map((a) => {
+      const k = MXC_KINDS[a.kind] || MXC_KINDS.hold;
+      return `<span class="mxc-kind ${k.cls}" title="${escapeHtml(k.label)} ${escapeHtml((a.at || "").slice(5, 16))}">${k.label} ${(a.at || "").slice(5, 16)}</span>`;
+    }).join("")}</div>`;
+  }
+
   // 预估盈亏面板：浮动（在持）+ 已了结分开两列；行情未接入出低调占位。
   // 独立渲染入口——盈亏接口比持仓慢时不等它，谁先到谁先画
   function mxcRenderPnl() {
@@ -334,6 +345,7 @@ export function createMxKolHoldingsView(dependencies) {
           ${p.last_price != null ? ` → 现价 ${Number(p.last_price).toFixed(2)}` : ""}</span>
         ${p.floating_pnl_pct != null ? mxcPctBadge(p.floating_pnl_pct)
           : `<span class="mxc-pnl-na" title="该票行情不全，无法估算">—</span>`}
+        ${mxcPnlActs(p)}
       </div>`;
     }).join("");
     // 已了结列表：清仓/翻空出仓/超时未提及，按了结时间新→旧。
@@ -349,6 +361,7 @@ export function createMxKolHoldingsView(dependencies) {
           : (p.events_priced != null && p.events_priced < p.events_total ? "行情不全" : "无卖出事件")}</span>
         ${p.realized_pnl_pct != null ? mxcPctBadge(p.realized_pnl_pct) : `<span class="mxc-pnl-na">—</span>`}
         ${p.exit_note ? `<span class="mxc-pnl-exit" title="${escapeHtml(p.exit_note)}">${escapeHtml(p.state === "stale" ? "超时" : "出仓")}</span>` : ""}
+        ${mxcPnlActs(p)}
       </div>`).join("") : "";
     el.innerHTML = `
       ${head}

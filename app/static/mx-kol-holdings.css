@@ -132,6 +132,9 @@
   border-radius:4px;padding:0 5px;white-space:nowrap;}
 .mxc-pnl-sub{color:var(--hd-muted);font-size:11px;margin:10px 0 2px;}
 .mxc-pnl-note{color:var(--hd-faint);font-size:11px;margin:10px 0 0;}
+/* 盈亏行内操作时间线（建仓/加仓/减仓/清仓/翻空 各带时间）：徽章复用时间线
+   .mxc-kind 配色（买=红系/卖=绿系），整行折行铺开吃满行宽 */
+.mxc-pnl-acts{display:flex;flex-wrap:wrap;gap:3px 6px;flex-basis:100%;padding-top:2px;}
 /* 持仓汇总行内嵌的浮动盈亏徽章：第 5 列贴右，与权重数字同行 */
 .mxc-holding .mxc-pnl-pct{justify-self:end;font-size:11px;}
 /* 时间线行的成交价标（@ 15.20）：弱化为数字等宽小标，与「标签」徽章同视觉档 */
