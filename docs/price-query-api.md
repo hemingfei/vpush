@@ -128,3 +128,28 @@ item 层（批量内单项失败，`status: "error"`）：
 ## 5. 调用方接入示例（联调参考）
 
 打开大V盈亏页 → 收集其 30-90 天窗口内全部事件 (code, occurred_at) + 在持股最新价 → 去重 → 1 次 POST /api/v1/prices → 历史项写本地永久缓存，最新价项 TTL 300s。
+
+## 6. 已接入实现：tickflow-stock-panel（2026-09）
+
+当前生产实现是 tickflow-stock-panel（同机 docker，`0.0.0.0:3018`），其仓库
+`docs/price-query-api.md` 是该实现的适配契约（价格口径：不复权原始价；北交所按
+`unknown_code`；本地无分钟K的交易日降级为日线边界）。联调实测要点：
+
+- **最新价 item 必须整体省略 `at` 字段**：发空串 `"at": ""` 会被服务端按
+  at 格式非法拒 400（整批失败）。vpush 侧 `fetch_remote` 已按此构造请求体。
+- token 在 tickflow 侧生成（`POST /api/v1/token` 面板登录态调用，存其
+  `data/user_data/secrets.json` 的 `vpush_api_token`；未配置时端点一律 401）。
+
+vpush 侧接入配置（config.yaml 或环境变量，两者均填才生效，半套即桩模式）：
+
+```yaml
+price_api_base: "http://host.docker.internal:3018/api/v1"
+price_api_token: "<tickflow 生成的 token>"
+```
+
+- 生产 docker（自定义网络 `dav`）：vpush 容器访问同机宿主机端口用
+  `host.docker.internal`（`docker-compose.prod.yml` 已配 `extra_hosts:
+  host-gateway`），不要用 `127.0.0.1`（那是容器自身）。
+- 环境变量 `PRICE_API_BASE` / `PRICE_API_TOKEN` 由 `.env` 注入（compose
+  `env_file`），`PRICE_API_BASE` 形如 `http://host.docker.internal:3018/api/v1`。
+- 两者留空（或只填其一）即桩模式：盈亏页显示「行情数据未接入」。

@@ -205,6 +205,11 @@ class Config:
     feishu_documents: FeishuDocumentsConfig = field(default_factory=FeishuDocumentsConfig)
     imgbed: ImgbedConfig = field(default_factory=ImgbedConfig)
     db_path: str = "data/dav.db"
+    # 大V预估盈亏的行情源（tickflow-stock-panel 股价查询 API，契约
+    # docs/price-query-api.md）。base 形如 http://127.0.0.1:3018/api/v1；
+    # 两者留空（或只填其一）即桩模式：盈亏页显示「行情数据未接入」。
+    price_api_base: str = ""
+    price_api_token: str = ""
     # 管理员告警总开关：false 时不发任何告警、不启动 TG/飞书 bot 长轮询。
     # 本地开发/测试实例务必置 false，避免用生产 config 误发告警、抢生产 bot 轮询。
     alerts_enabled: bool = True
@@ -274,6 +279,8 @@ _ENV_MAP = {
     "WECHAT_APP_SECRET": ("wechat", "app_secret"),
     "DB_PATH": ("db_path",),
     "ALERTS_ENABLED": ("alerts_enabled",),
+    "PRICE_API_BASE": ("price_api_base",),
+    "PRICE_API_TOKEN": ("price_api_token",),
     "IMGBED_BASE_URL": ("imgbed", "base_url"),
     "IMGBED_TOKEN": ("imgbed", "token"),
     "IMGBED_CHANNEL": ("imgbed", "channel"),

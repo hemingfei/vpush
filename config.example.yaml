@@ -26,6 +26,13 @@ llm:
   api_key: ""
   model: "gpt-4o-mini"
 
+# 大V预估盈亏的行情源（tickflow-stock-panel 股价查询 API，契约 docs/price-query-api.md）
+# base 形如 http://127.0.0.1:3018/api/v1（同机 docker 部署时指向 tickflow 宿主机端口）
+# token 在 tickflow 侧生成（POST /api/v1/token，存其 secrets.json 的 vpush_api_token）
+# 两者留空（或只填其一）即桩模式：盈亏页显示「行情数据未接入」
+price_api_base: ""
+price_api_token: ""
+
 sources:
   ima:
     cookie: ''          # 网页 x-ima-cookie（列表/摘要）

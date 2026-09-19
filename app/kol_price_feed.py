@@ -1,9 +1,14 @@
 """大V预估盈亏的行情接入层：名称→代码、远程价格查询、本地缓存。
 
 行情源按 docs/price-query-api.md 契约接入（批量 POST /api/v1/prices，
-逐 item 独立成败）。PRICE_API_BASE / PRICE_API_TOKEN 为空即桩模式：
+逐 item 独立成败）。当前实现在跑 tickflow-stock-panel（同机 docker，
+0.0.0.0:3018，实现侧契约见其仓库 docs/price-query-api.md）。
+
+接入地址与 token 从配置读（config.yaml `price_api:` 或环境变量
+PRICE_API_BASE / PRICE_API_TOKEN，生产 .env 注入）。两者均空即桩模式：
 不发起任何网络请求，get_prices 全部未命中——盈亏页显示「行情数据未接入」。
-接入真实源时只需填这两个常量，其余链路（缓存/重试/调用方）零改动。
+base 未配而 token 已配（或反之）同样按桩处理：半套配置多半是漏填，
+宁可不出数也不打无鉴权/错地址的请求。
 
 缓存语义（db.kol_price_cache）：
 - 历史 (code, at) 永久缓存：上游契约保证同一时刻价不可变；
@@ -22,13 +27,29 @@ logger = logging.getLogger(__name__)
 
 CN_TZ = timezone(timedelta(hours=8))
 
-# 接入真实行情源时改这里（唯一改动点）。BASE 形如 https://host/api/v1
-PRICE_API_BASE = ""
-PRICE_API_TOKEN = ""
-
 BATCH_MAX = 50          # 契约：单次批量上限
 LATEST_TTL = 300.0      # 最新价缓存 TTL（秒）
 _HTTP_TIMEOUT = 8.0
+
+
+def _load_price_api_config() -> tuple[str, str]:
+    """读配置的 (base, token)。base 形如 http://127.0.0.1:3018/api/v1。
+
+    每次调用现读（load_config 本身无缓存）：管理后台改配置后无需重启进程，
+    与 api.py 里 MX 配置的读法同口径。读失败按未配置处理（保持桩模式）。
+    """
+    try:
+        from .config import load_config
+        cfg = load_config()
+        base = (getattr(cfg, "price_api_base", "") or "").strip().rstrip("/")
+        token = (getattr(cfg, "price_api_token", "") or "").strip()
+    except Exception as exc:  # 配置文件损坏等：行情是增强功能，不连坐主流程
+        logger.warning("price_api config load failed, fallback to stub: %s", exc)
+        return "", ""
+    # 半套配置视为未配置（见模块 docstring）
+    if not base or not token:
+        return "", ""
+    return base, token
 
 
 @lru_cache(maxsize=1)
@@ -87,17 +108,24 @@ def fetch_remote(requests: list[dict]) -> dict[tuple[str, str], dict]:
     返回 {(code, at): {"price", "actual_at", "name"}}，仅含成功项；
     网络失败/桩模式返回 {}（调用方把缺失视为查不到，不重试炸接口）。
     """
-    if not PRICE_API_BASE or not requests:
+    base, token = _load_price_api_config()
+    if not requests:
         return {}
     out: dict[tuple[str, str], dict] = {}
     with httpx.Client(timeout=_HTTP_TIMEOUT) as client:
         for i in range(0, len(requests), BATCH_MAX):
             chunk = requests[i:i + BATCH_MAX]
+            # 契约：最新价是「省略 at 字段」而非空串（实测空串会被服务端按
+            # at 格式非法拒 400，整批拖死），这里只放非空 at
+            payload = {"items": [
+                {"code": r["code"]} | ({"at": r["at"]} if r["at"] else {})
+                for r in chunk
+            ]}
             try:
                 resp = client.post(
-                    f"{PRICE_API_BASE.rstrip('/')}/prices",
-                    json={"items": [{"code": r["code"], "at": r["at"]} for r in chunk]},
-                    headers={"Authorization": f"Bearer {PRICE_API_TOKEN}"} if PRICE_API_TOKEN else {},
+                    f"{base}/prices",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {token}"},
                 )
                 resp.raise_for_status()
                 items = (resp.json() or {}).get("items") or []

@@ -77,6 +77,13 @@ services:
       - IMGBED_CHANNEL=${IMGBED_CHANNEL:-telegram}
       - IMGBED_CHANNEL_NAME=${IMGBED_CHANNEL_NAME:-vpush-imgbed}
       - IMGBED_FOLDER=${IMGBED_FOLDER:-vpush}
+      # 大V预估盈亏行情源（tickflow-stock-panel，同机 docker 0.0.0.0:3018）。
+      # 容器在 dav 自定义网络，走宿主机网关而非 127.0.0.1（那是容器自身）。
+      # extra_hosts 把 host.docker.internal 指向宿主（Linux 上 compose 网关默认不解析）
+      - PRICE_API_BASE=${PRICE_API_BASE:-}
+      - PRICE_API_TOKEN=${PRICE_API_TOKEN:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./config.yaml:/data/config.yaml
       - ./data:/data

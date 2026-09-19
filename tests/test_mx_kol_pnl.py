@@ -323,9 +323,90 @@ def test_resolve_codes_normalizes_input(monkeypatch):
     assert kpf.resolve_codes(["A公司"]) == {"A公司": "sz000001"}
 
 
+def test_price_api_config_load(monkeypatch):
+    """配置 → (base, token)：环境变量注入；半套配置按桩模式处理。
+
+    fetch_remote 的请求 URL/头由该函数决定，桩掉它即等价于断言 fetch_remote
+    不发请求（不依赖 httpx mock）。
+    """
+    from app.config import Config
+
+    # 未配置：两者皆空
+    monkeypatch.delenv("PRICE_API_BASE", raising=False)
+    monkeypatch.delenv("PRICE_API_TOKEN", raising=False)
+    monkeypatch.setattr("app.config.load_config", lambda *a, **k: Config())
+    assert kpf._load_price_api_config() == ("", "")
+    # 半套配置（只有 base 或只有 token）：视为未配置
+    cfg = Config()
+    cfg.price_api_base = "http://127.0.0.1:3018/api/v1/"
+    monkeypatch.setattr("app.config.load_config", lambda *a, **k: cfg)
+    assert kpf._load_price_api_config() == ("", "")
+    cfg = Config()
+    cfg.price_api_token = "tok"
+    monkeypatch.setattr("app.config.load_config", lambda *a, **k: cfg)
+    assert kpf._load_price_api_config() == ("", "")
+    # 成套配置：base 去尾部斜杠
+    cfg = Config()
+    cfg.price_api_base = "http://host.docker.internal:3018/api/v1/"
+    cfg.price_api_token = "tok"
+    monkeypatch.setattr("app.config.load_config", lambda *a, **k: cfg)
+    assert kpf._load_price_api_config() == ("http://host.docker.internal:3018/api/v1", "tok")
+    # 配置读取异常：按桩处理，不抛
+    def boom(*a, **k):
+        raise RuntimeError("config broken")
+    monkeypatch.setattr("app.config.load_config", boom)
+    assert kpf._load_price_api_config() == ("", "")
+
+
+def test_fetch_remote_omits_empty_at(monkeypatch):
+    """契约细节：最新价 item 只发 code，不发空串 at（实测空串被服务端 400 整批拒）。
+
+    用桩 httpx.Client 捕获实际请求体断言，不发真实网络请求。
+    """
+    import httpx
+
+    monkeypatch.setattr(kpf, "_load_price_api_config",
+                        lambda: ("http://tickflow.local/api/v1", "tok"))
+    captured: list[dict] = []
+
+    class _Resp:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"items": [
+                {"code": "sh600519", "status": "ok", "price": 10.0,
+                 "actual_at": "", "name": "贵州茅台"},
+                {"code": "sz300750", "status": "ok", "price": 20.0,
+                 "actual_at": "", "name": "宁德时代"},
+            ]}
+
+    class _Client:
+        def __init__(self, timeout=None): pass
+        def __enter__(self): return self
+        def __exit__(self, *exc): return False
+        def post(self, url, json=None, headers=None):
+            captured.append({"url": url, "json": json, "headers": headers})
+            return _Resp()
+
+    monkeypatch.setattr(kpf.httpx, "Client", _Client)
+    out = kpf.fetch_remote([
+        {"code": "sh600519", "at": "2026-09-15T09:16:00"},
+        {"code": "sz300750", "at": ""},   # 最新价：at 应整体省略
+    ])
+    body = captured[0]["json"]
+    assert body["items"][0] == {"code": "sh600519", "at": "2026-09-15T09:16:00"}
+    assert body["items"][1] == {"code": "sz300750"}          # 不含空串 at
+    assert "at" not in body["items"][1]
+    assert captured[0]["url"] == "http://tickflow.local/api/v1/prices"
+    assert captured[0]["headers"] == {"Authorization": "Bearer tok"}
+    assert out[("sz300750", "")]["price"] == 20.0            # 响应无 at 也能对齐键
+
+
 def test_api_endpoint_contract(monkeypatch):
     """端点：正常结构 + 空态 available=false + 401/400/404/days 钳位。"""
     _patch_codes(monkeypatch)
+    # 桩模式（真实链路走 fetch_remote，price_api 配置为空）：
+    # 显式桩掉配置读取，避免本机 config.yaml / 环境变量让测试打到真实行情源
+    monkeypatch.setattr(kpf, "_load_price_api_config", lambda: ("", ""))
     client = make_client()
     headers = auth_headers(client)
     db = client.app.state.db
@@ -334,7 +415,7 @@ def test_api_endpoint_contract(monkeypatch):
     _seed_opinions(db, kol, [
         (t, "09:20", "09:16", "stock", "贵州茅台", "bull", "建仓"),
     ])
-    # 桩模式（真实链路走 fetch_remote，PRICE_API_BASE 为空）
+    # 桩模式（price_api 配置为空 → fetch_remote 不发请求）
     resp = client.get(f"/api/kols/{kol}/mx-pnl", headers=headers)
     assert resp.status_code == 200
     data = resp.json()
