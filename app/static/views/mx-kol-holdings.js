@@ -9,7 +9,7 @@ export function createMxKolHoldingsView(dependencies) {
     closeViewsDrawer,
   } = dependencies;
 
-  const _mxc = { seq: 0, data: null, days: 30, view: "all", recent: 3, sort: "weight",
+  const _mxc = { seq: 0, data: null, pnl: null, days: 30, view: "all", recent: 3, sort: "weight",
     kolId: 0, drawerEl: null, drawerBody: null, token: 0 };
   const MXC_VIEWS = { all: "全部", open: "建仓", add: "加仓", trim: "减仓", clear: "清仓" };
   // 最近观点天数筛选：只看最近 N 天内还被大V提及的在持标的（0=不筛选）。
@@ -29,7 +29,7 @@ export function createMxKolHoldingsView(dependencies) {
   };
 
   function mxcTeardown() {
-    Object.assign(_mxc, { data: null, view: "all", drawerEl: null, drawerBody: null });
+    Object.assign(_mxc, { data: null, pnl: null, view: "all", drawerEl: null, drawerBody: null });
     // recent（最近观点天数）跨路由保留：回来时还是用户上次调的口径；
     // days 不保留——每个大V/宿主入口都按默认 30 天开（按钮 title 的承诺）
   }
@@ -42,8 +42,16 @@ export function createMxKolHoldingsView(dependencies) {
     return seq != null && !routeStillActive(seq);
   }
 
-  // 统一取数+落盘：初次加载失败出整屏错误；换窗口失败只 flash 并回显旧数据
+  // 统一取数+落盘：初次加载失败出整屏错误；换窗口失败只 flash 并回显旧数据。
+  // 持仓与盈亏并行拉取、各自落盘：盈亏链路带行情查询可能慢/失败，
+  // 不能让它阻塞持仓渲染（渐进展示，谁先到谁先画）。盈亏后到时补刷一次
+  // 汇总——持仓行内嵌的浮动盈亏徽章吃 pnl 数据，不刷会一直缺席
   async function mxcLoad(kolId, token, seq) {
+    const pnlPromise = api(`/api/kols/${kolId}/mx-pnl?days=${_mxc.days}`)
+      .then((pnl) => {
+        if (!mxcStale(token, seq)) { _mxc.pnl = pnl; mxcRenderPnl(); mxcRenderSummary(); }
+      })
+      .catch(() => { if (!mxcStale(token, seq)) { _mxc.pnl = null; mxcRenderPnl(); } });
     try {
       const data = await api(`/api/kols/${kolId}/mx-holdings?days=${_mxc.days}`);
       if (mxcStale(token, seq)) return;
@@ -58,6 +66,8 @@ export function createMxKolHoldingsView(dependencies) {
       }
       flash(`刷新失败: ${err.message}`, "error");
       mxcRenderAll();
+    } finally {
+      await pnlPromise;  // 竞态守卫兜底：面板渲染完才允许本次 token 结束
     }
   }
 
@@ -169,10 +179,11 @@ export function createMxKolHoldingsView(dependencies) {
       $("#main").innerHTML = `<div class="mxc-root hd-root">${mxcInnerHtml(d)}</div>`;
     }
     mxcRenderSummary();
+    mxcRenderPnl();
     mxcRenderTimeline();
   }
 
-  // 页面/抽屉共用主体：页头（抽屉宿主不出「‹ 动态」返回钮，关闭走外壳 ✕）+ 汇总 + 时间线
+  // 页面/抽屉共用主体：页头（抽屉宿主不出「‹ 动态」返回钮，关闭走外壳 ✕）+ 汇总 + 盈亏 + 时间线
   function mxcInnerHtml(d) {
     const kol = d.kol || {};
     return `
@@ -190,6 +201,7 @@ export function createMxKolHoldingsView(dependencies) {
         </span>
       </section>
       <section class="hd-panel" id="mxc-summary"></section>
+      <section class="hd-panel" id="mxc-pnl"></section>
       <section class="hd-feed" id="mxc-timeline"></section>`;
   }
 
@@ -228,13 +240,15 @@ export function createMxKolHoldingsView(dependencies) {
     mxcRecentText(v);
   }
 
-  // 松手/键盘步进（change）才落地：刷新持仓汇总 + 持久化（拖动全程写存储太密）
+  // 松手/键盘步进（change）才落地：刷新持仓汇总 + 盈亏面板（两者共用过滤口径）并持久化
+  // （拖动全程写存储太密）
   function mxcRecentChange(value) {
     const v = Math.max(0, Math.min(20, Math.round(Number(value))));
     _mxc.recent = v;
     mxcSaveRecent();
     mxcRecentText(v);
     mxcRenderSummary();
+    mxcRenderPnl();
   }
 
   function mxcRecentText(v) {
@@ -263,6 +277,86 @@ export function createMxKolHoldingsView(dependencies) {
     _mxc.sort = s === "time" ? "time" : "weight";
     mxcSaveSort();
     mxcRenderSummary();
+    mxcRenderPnl();
+  }
+
+  // 盈亏百分比徽章：A股口径盈=红、亏=绿，0 走中性灰。null/undefined 返回空串
+  function mxcPctBadge(pct, title) {
+    if (pct == null || !Number.isFinite(Number(pct))) return "";
+    const v = Number(pct);
+    const cls = v > 0 ? "up" : v < 0 ? "down" : "flat";
+    const label = `${v > 0 ? "+" : ""}${v.toFixed(2)}%`;
+    return `<span class="mxc-pnl-pct ${cls}"${title ? ` title="${escapeHtml(title)}"` : ""}>${label}</span>`;
+  }
+
+  function mxcPnlByStock() {
+    const map = {};
+    (_mxc.pnl && _mxc.pnl.stocks || []).forEach((s) => { map[s.target_name] = s; });
+    return map;
+  }
+
+  // 预估盈亏面板：浮动（在持）+ 已了结分开两列；行情未接入出低调占位。
+  // 独立渲染入口——盈亏接口比持仓慢时不等它，谁先到谁先画
+  function mxcRenderPnl() {
+    const el = document.getElementById("mxc-pnl");
+    if (!el) return;
+    const pnl = _mxc.pnl;
+    if (!pnl || !pnl.available) {
+      // 桩阶段/接口失败：单行提示，不占版面不报错（持仓功能照常）
+      el.innerHTML = `
+        <div class="hd-panel-head"><b>预估盈亏</b>
+          <span class="hd-hint">待行情接入</span></div>
+        <p class="mxc-pnl-note">行情数据未接入，预估盈亏暂不可用；接入后自动展示每只票的浮动/已了结收益。</p>`;
+      return;
+    }
+    const s = pnl.summary || {};
+    // 窗口内无个股操作（空态）：不是行情问题，给中性空态文案
+    if (!pnl.stocks || !pnl.stocks.length) {
+      el.innerHTML = `
+        <div class="hd-panel-head"><b>预估盈亏</b></div>
+        <div class="mxv-empty">窗口内无个股操作，暂无盈亏记录。</div>`;
+      return;
+    }
+    const head = `
+      <div class="hd-panel-head"><b>预估盈亏</b>
+        <span class="hd-hint">${s.holding_count ? `在持 ${s.holding_count}` : ""}${s.closed_count ? ` · 已了结 ${s.closed_count}` : ""}${(s.total_return_pct != null) ? ` · 平均 ${s.total_return_pct > 0 ? "+" : ""}${s.total_return_pct}%` : ""}${(s.winners || s.losers) ? ` · ${s.winners}盈${s.losers}亏` : ""}</span></div>`;
+    const byName = mxcPnlByStock();
+    const cov = (s.coverage != null && s.coverage < 1)
+      ? `<span class="hd-hint" title="部分操作事件未取到行情，涉及票的盈亏按可得价格估算或留空">行情覆盖 ${Math.round(s.coverage * 100)}%</span>` : "";
+    // 在持浮动列表：按持仓汇总同口径过滤（最近观点天数）与排序
+    const holdings = mxcSortRows(mxcFilterByRecent(_mxc.data ? _mxc.data.holdings || [] : []));
+    const liveRows = holdings.map((h) => {
+      const p = byName[h.target_name] || {};
+      return `
+      <div class="mxc-pnl-row">
+        <span class="mxc-pnl-name" title="${escapeHtml(h.target_name)}">${escapeHtml(h.target_name)}</span>
+        <span class="mxc-pnl-cost">${p.avg_cost != null ? `成本 ${Number(p.avg_cost).toFixed(2)}` : ""}
+          ${p.last_price != null ? ` → 现价 ${Number(p.last_price).toFixed(2)}` : ""}</span>
+        ${p.floating_pnl_pct != null ? mxcPctBadge(p.floating_pnl_pct)
+          : `<span class="mxc-pnl-na" title="该票行情不全，无法估算">—</span>`}
+      </div>`;
+    }).join("");
+    // 已了结列表：清仓/翻空出仓/超时未提及，按了结时间新→旧。
+    // 无收益率的两类区分归因：部分事件缺价（行情不全）vs 从未有卖出事件
+    // （跌破阈值被动出仓，压根无成交可算）
+    const closed = (pnl.stocks || []).filter((x) => x.state !== "holding")
+      .sort((a, b) => String(b.closed_at || "").localeCompare(String(a.closed_at || "")));
+    const closedRows = closed.length ? closed.map((p) => `
+      <div class="mxc-pnl-row closed">
+        <span class="mxc-pnl-name" title="${escapeHtml(p.target_name)}">${escapeHtml(p.target_name)}</span>
+        <span class="mxc-pnl-cost">${p.realized_pnl_pct != null
+          ? `了结收益 ${p.realized_pnl_pct > 0 ? "+" : ""}${p.realized_pnl_pct}%`
+          : (p.events_priced != null && p.events_priced < p.events_total ? "行情不全" : "无卖出事件")}</span>
+        ${p.realized_pnl_pct != null ? mxcPctBadge(p.realized_pnl_pct) : `<span class="mxc-pnl-na">—</span>`}
+        ${p.exit_note ? `<span class="mxc-pnl-exit" title="${escapeHtml(p.exit_note)}">${escapeHtml(p.state === "stale" ? "超时" : "出仓")}</span>` : ""}
+      </div>`).join("") : "";
+    el.innerHTML = `
+      ${head}
+      ${cov}
+      ${liveRows ? `<div class="mxc-pnl-sub">在持浮动</div>${liveRows}` : ""}
+      ${closedRows ? `<div class="mxc-pnl-sub">已了结</div>${closedRows}` : ""}
+      ${(!liveRows && !closedRows) ? `<div class="mxv-empty">窗口内无个股操作，暂无盈亏记录。</div>` : ""}
+      <p class="mxc-pnl-note">盈亏以操作事件时刻股价为成本/卖价回放估算，非真实持仓收益；仅供参考。</p>`;
   }
 
   function mxcRenderSummary() {
@@ -288,14 +382,19 @@ export function createMxKolHoldingsView(dependencies) {
           : `近 ${d.window_days} 天内没有可研判的观点，暂无法推演持仓。`}</div>`;
       return;
     }
-    const stockRows = holdings.map((h) => `
+    const pnlByName = mxcPnlByStock();
+    const stockRows = holdings.map((h) => {
+      const p = pnlByName[h.target_name];
+      return `
       <div class="mxc-holding">
         <span class="mxc-h-name">${escapeHtml(h.target_name)}</span>
         <span class="mxc-h-dir ${h.direction === "bull" ? "bull" : h.direction === "bear" ? "bear" : ""}">${h.direction === "bull" ? "看多" : h.direction === "bear" ? "看空" : "中性"}</span>
         ${mxcWeightBar(h.weight)}
         <span class="mxc-h-weight">${h.weight}%</span>
+        ${p && p.floating_pnl_pct != null ? mxcPctBadge(p.floating_pnl_pct, `预估浮动盈亏（成本 ${p.avg_cost != null ? Number(p.avg_cost).toFixed(2) : "?"}）`) : ""}
         <span class="mxc-h-meta" title="首次建仓 ${escapeHtml(h.since || "")}">建仓 ${escapeHtml((h.since || "").slice(5, 10))} · 最近 ${escapeHtml((h.last_at || "").slice(5, 16))}</span>
-      </div>`).join("");
+      </div>`;
+    }).join("");
     const topicRows = topics.length ? `
       <div class="mxc-topics-head">关注板块（不计入仓位占比）</div>
       <div class="mxc-topics">${topics.map((t) =>
@@ -373,12 +472,14 @@ export function createMxKolHoldingsView(dependencies) {
     const dir = e.direction === "bull" ? `<span class="mxv-badge bull">↑看多</span>`
       : e.direction === "bear" ? `<span class="mxv-badge bear">↓看空</span>`
       : `<span class="mxv-badge neutral">中性</span>`;
+    const at = (_mxc.pnl && _mxc.pnl.event_prices || {})[`${e.target_name}|${e.occurred_at || ""}`] || "";
     return `
     <div class="mxv-feed-item mxc-row">
       <span class="t" style="color:var(--mxv-accent)">${escapeHtml((e.occurred_at || "").slice(11, 16))}</span>
       ${mxcKindBadge(e.kind, e.action)}
       ${dir}
       <span class="target" style="color:var(--mxv-text)" title="${escapeHtml(e.target_name)}">${escapeHtml(e.target_name)}</span>
+      ${at ? `<span class="mxc-price">${escapeHtml(at)}</span>` : ""}
       ${e.source === "tag" ? `<span class="mxc-src" title="操作来自消息标签（观点研判未覆盖该条），仅供参考">标签</span>` : ""}
       <span class="sum" style="color:var(--mxv-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(e.summary || "")}">${escapeHtml(e.summary || "")}</span>
     </div>`;

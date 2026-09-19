@@ -709,3 +709,71 @@ def test_mx_kol_holdings_slider_change_and_sort():
     # 排序段控样式（贴行尾 + 小号按钮）
     mxc_css = (STATIC / "mx-kol-holdings.css").read_text(encoding="utf-8")
     assert ".mxc-recent .mxc-sort" in mxc_css
+
+
+def test_mx_kol_pnl_panel_contract():
+    """预估盈亏面板：持仓+盈亏并行拉取渐进渲染、桩态占位、徽章配色与 @价标。
+
+    盈亏接口（/mx-pnl）与持仓（/mx-holdings）分端点：行情链路慢时持仓先画，
+    盈亏后到（mxcRenderPnl 独立入口）；行情未接入（available=false）出低调占位
+    不报错；盈亏徽章 A 股口径盈红亏绿；时间线行内嵌成交价 @ 15.20。
+    """
+    mxc = (STATIC / "views" / "mx-kol-holdings.js").read_text(encoding="utf-8")
+    # 并行取数：盈亏失败不阻塞持仓（catch 落空态而非抛错）
+    load = _fn_body("mxcLoad", mxc)
+    assert "/api/kols/${kolId}/mx-pnl?days=" in load
+    assert "mxcRenderPnl" in load
+    pnl_catch = load[load.index(".catch"):]
+    assert "_mxc.pnl = null" in pnl_catch  # 失败落空态（面板出「待行情接入」）
+    # 主体结构：盈亏面板节插在汇总与时间线之间
+    inner = _fn_body("mxcInnerHtml", mxc)
+    assert 'id="mxc-pnl"' in inner
+    assert inner.index('id="mxc-summary"') < inner.index('id="mxc-pnl"') < inner.index('id="mxc-timeline"')
+    # 渲染入口：RenderAll 里持仓渲染后跟盈亏渲染
+    render_all = _fn_body("mxcRenderAll", mxc)
+    assert "mxcRenderPnl()" in render_all
+    # 桩态占位：available=false 单行提示不报错
+    pnl_fn = _fn_body("mxcRenderPnl", mxc)
+    assert "行情数据未接入" in pnl_fn
+    assert "待行情接入" in pnl_fn
+    # 在持浮动 + 已了结分段；覆盖率不足给提示
+    assert "在持浮动" in pnl_fn and "已了结" in pnl_fn
+    assert "行情覆盖" in pnl_fn
+    # 徽章：盈=up 红、亏=down 绿、持平=flat（A 股口径），null 不出徽章
+    badge = _fn_body("mxcPctBadge", mxc)
+    for cls in ('"up"', '"down"', '"flat"'):
+        assert cls in badge, cls
+    assert "return \"\"" in badge  # pct 为 null 返回空串（不占位）
+    # 持仓汇总行内嵌浮动盈亏徽章
+    summary = _fn_body("mxcRenderSummary", mxc)
+    assert "pnlByName" in summary and "mxcPctBadge" in summary
+    # 时间线 @价标：event_prices 以 名称|occurred_at 为键
+    row = _fn_body("mxcRowHtml", mxc)
+    assert "event_prices" in row and "mxc-price" in row
+    # teardown 清盈亏态（换大V不带残留）
+    teardown = _fn_body("mxcTeardown", mxc)
+    assert "pnl: null" in teardown
+    # 样式：盈亏行/徽章/价标/说明齐备，配色走 .hd- token（明暗双主题随变量切换）
+    mxc_css = (STATIC / "mx-kol-holdings.css").read_text(encoding="utf-8")
+    for sel in (".mxc-pnl-row", ".mxc-pnl-pct", ".mxc-pnl-sub", ".mxc-pnl-note",
+                ".mxc-pnl-name", ".mxc-pnl-cost", ".mxc-price", ".mxc-pnl-exit"):
+        assert sel in mxc_css, sel
+    assert ".mxc-pnl-pct.up" in mxc_css and ".mxc-pnl-pct.down" in mxc_css
+    assert "var(--hd-bull-soft)" in mxc_css and "var(--hd-bear-soft)" in mxc_css
+    # 滑杆/排序与盈亏面板同口径：change/setSort 都要连刷 mxcRenderPnl，
+    # 否则拖完滑杆后汇总和盈亏列表的过滤范围不一致
+    recent_change = _fn_body("mxcRecentChange", mxc)
+    assert "mxcRenderPnl()" in recent_change
+    set_sort = _fn_body("mxcSetSort", mxc)
+    assert "mxcRenderPnl()" in set_sort
+    # 无收益率归因区分：行情不全 vs 无卖出事件（被动出仓没有成交可算）
+    assert "无卖出事件" in pnl_fn
+    # available=true 且无个股操作：中性空态（不再误报「待行情接入」）
+    assert "窗口内无个股操作" in pnl_fn
+    # 持仓行第 5 列徽章：grid 必须有 5 列，否则徽章掉到下一行首列
+    assert "grid-template-columns:minmax(84px,auto) auto 1fr auto auto" in mxc_css
+    # 盈亏行 flex-wrap：窄屏成本说明折行到徽章下（无 wrap 时 order 不生效）
+    assert "flex-wrap:wrap" in mxc_css
+    # 离线外壳：SHELL 预缓存名单带上两个补充样式表（离线打开持仓/盈亏页不裸奔）
+    sw = (STATIC / "sw.js").read_text(encoding="utf-8")
+    assert '"/holdings.css"' in sw and '"/mx-kol-holdings.css"' in sw

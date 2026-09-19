@@ -56,6 +56,19 @@ SCHEMA_MIGRATIONS: list[tuple[int, str, str | tuple[str, ...]]] = [
         "posts published_at 索引（图片补缓存候选窗口查询消除全表排序）",
         "CREATE INDEX IF NOT EXISTS idx_posts_published_at ON posts(published_at)",
     ),
+    (
+        2026091801,
+        "大V预估盈亏行情缓存表 kol_price_cache",
+        "CREATE TABLE IF NOT EXISTS kol_price_cache (\n"
+        "    code TEXT NOT NULL,\n"
+        "    at TEXT NOT NULL DEFAULT '',\n"
+        "    price REAL NOT NULL,\n"
+        "    actual_at TEXT NOT NULL DEFAULT '',\n"
+        "    fetched_at TEXT NOT NULL DEFAULT (datetime('now')),\n"
+        "    fetched_ts REAL NOT NULL DEFAULT 0,\n"
+        "    PRIMARY KEY (code, at)\n"
+        ")",
+    ),
 ]
 
 _SLOW_QUERY_SECONDS = 0.2
@@ -1266,6 +1279,19 @@ CREATE TABLE IF NOT EXISTS user_holdings (
     UNIQUE (user_id, target_type, target_name)
 );
 CREATE INDEX IF NOT EXISTS idx_user_holdings_user ON user_holdings(user_id);
+
+-- 大V预估盈亏的行情缓存（kol_price_feed）。(code, at) 为键：
+-- 历史 at 存事件时刻价（上游契约保证不可变，永久缓存），
+-- at='' 存最新价（TTL 300s，由读侧判过期重查）。
+CREATE TABLE IF NOT EXISTS kol_price_cache (
+    code TEXT NOT NULL,
+    at TEXT NOT NULL DEFAULT '',
+    price REAL NOT NULL,
+    actual_at TEXT NOT NULL DEFAULT '',
+    fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+    fetched_ts REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (code, at)
+);
 """
 
 ALLOWED_PLATFORMS = {"xueqiu", "combination", "weibo", "twitter", "ima", "zsxq", "mx", "system", "truth"}
@@ -5668,6 +5694,55 @@ class DB:
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (key, value),
         )
+
+    def get_kol_price_cache(self, keys: list[tuple[str, str]]) -> dict[tuple[str, str], dict]:
+        """批量读行情缓存：keys 为 (code, at) 列表，返回 {(code, at): row_dict}。
+
+        合并成单条 IN 查询：逐对查询要打 N 次数据库锁，批量场景（盈亏页
+        单次几十键）没必要。行值 IN 需 SQLite 3.15+；参数上限 999，超出分批。
+        """
+        uniq: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for code, at in keys or []:
+            key = (str(code or ""), str(at or ""))
+            if not key[0] or key in seen:
+                continue
+            seen.add(key)
+            uniq.append(key)
+        out: dict[tuple[str, str], dict] = {}
+        for i in range(0, len(uniq), 900):
+            chunk = uniq[i:i + 900]
+            rows = self._rows(
+                "SELECT code, at, price, actual_at, fetched_ts FROM kol_price_cache "
+                f"WHERE (code, at) IN ({','.join('(?,?)' for _ in chunk)})",
+                [v for key in chunk for v in key],
+            )
+            for row in rows:
+                out[(row["code"], row["at"])] = dict(row)
+        return out
+
+    def upsert_kol_price_cache(self, rows: list[dict]) -> None:
+        """批量写行情缓存：rows 为 {code, at, price, actual_at} 列表。"""
+        rows = [r for r in rows or [] if r.get("code") and r.get("price")]
+        if not rows:
+            return
+        now_text = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        now_ts = time.time()
+        params = [
+            (str(r["code"]), str(r.get("at") or ""), float(r["price"]),
+             str(r.get("actual_at") or ""), now_text, now_ts)
+            for r in rows
+        ]
+        with self._lock:
+            self._conn.executemany(
+                "INSERT INTO kol_price_cache (code, at, price, actual_at, fetched_at, fetched_ts) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(code, at) DO UPDATE SET price = excluded.price, "
+                "actual_at = excluded.actual_at, fetched_at = excluded.fetched_at, "
+                "fetched_ts = excluded.fetched_ts",
+                params,
+            )
+            self._conn.commit()
 
     def set_settings_atomic(self, values: dict[str, str]) -> None:
         if not values:

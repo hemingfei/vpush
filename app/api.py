@@ -6814,6 +6814,38 @@ def create_api_router(
             }
         return result
 
+    @router.get("/kols/{kol_id}/mx-pnl")
+    def kol_mx_pnl(kol_id: int, days: int = 30,
+                   user: dict = Depends(get_current_user)):
+        """MX 大V预估盈亏：持仓回放叠加价格台账（事件时刻价≈成本/卖价）。
+
+        与 mx-holdings 分端点：行情查询可能慢，前端持仓先渲染、盈亏后到。
+        行情源未接入时 available=false（空结构不是错误）。
+        同步 def 走线程池：build_kol_pnl 内的行情查询是同步 httpx，
+        不能放 async def 里阻塞整个事件循环（SSE 等长连接会被卡死）。
+        """
+        from .mx_kol_pnl import build_kol_pnl
+
+        kol = db.get_kol(kol_id)
+        if not _plaza_kol_visible(user, kol):
+            raise HTTPException(status_code=404, detail="大V不存在")
+        if kol.get("platform") != "mx":
+            raise HTTPException(status_code=400, detail="仅 MX 平台大V支持预估盈亏")
+        days = min(max(int(days), 7), 90)
+        result = build_kol_pnl(db, kol_id, days=days)
+        if not result:
+            # 窗口内无任何信号：不涉及行情，available 如实为 true
+            return {
+                "kol": {"kol_id": kol_id, "name": kol.get("name") or "",
+                        "avatar": kol.get("avatar_url") or "", "platform": "mx"},
+                "window_days": days, "stale_days": 10, "available": True,
+                "stocks": [], "event_prices": {},
+                "summary": {"holding_count": 0, "closed_count": 0, "winners": 0,
+                            "losers": 0, "total_return_pct": None, "coverage": 1.0},
+                "generated_at": datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M"),
+            }
+        return result
+
     @router.get("/mx-views/stream")
     async def mx_views_stream(request: Request,
                               current_user: dict = Depends(get_download_user)):

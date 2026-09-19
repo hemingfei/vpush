@@ -211,8 +211,12 @@ def build_kol_holdings(db, kol_id, days: int = WINDOW_DAYS) -> dict | None:
 
         if kind == "clear":
             new_score = 0.0
+            # 清仓的仓位变动 = 清仓前分数全部卖出（盈亏台账按此了结全部份额）
+            delta = -(prev["score"] if prev else 0.0)
         else:
             new_score = max(0.0, (prev["score"] if prev else 0.0) + delta)
+            # 首条减仓/翻空等无仓可减：分数钳到 0，delta 相应截断（卖出量按持有量算）
+            delta = new_score - (prev["score"] if prev else 0.0)
 
         scores[key] = {
             "score": new_score, "direction": direction or prev_dir, "last_day": day,
@@ -224,6 +228,7 @@ def build_kol_holdings(db, kol_id, days: int = WINDOW_DAYS) -> dict | None:
             "target_type": ttype, "target_name": name,
             "direction": direction, "action": action,
             "kind": kind, "source": ev["source"],
+            "delta": round(delta, 2),
             "summary": ev["summary"],
             "evidence": ev["evidence_post_ids"],
         })
