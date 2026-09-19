@@ -1,0 +1,47 @@
+# Add this service to /opt/vpush-ima-lab compose (lab only).
+# Not production vpush. Not a reading desk.
+#
+# Bind stays on loopback. Access from your laptop:
+#   ssh -L 8055:127.0.0.1:8055 oracle-sj-arm
+# then http://127.0.0.1:8055
+#
+# WARNING: do not change ARM_OPS_HOST / ports to 0.0.0.0 unless you
+# understand that the ops password then sits on every NIC. There is no
+# extra reverse proxy in this snippet.
+
+services:
+  arm-lab-ops:
+    build: ./arm-lab-ops
+    container_name: arm-lab-ops
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TZ: Asia/Shanghai
+      ARM_OPS_HOST: "127.0.0.1"
+      ARM_OPS_PORT: "8055"
+      CACHE_ROOT: /data/vpush-ima-cache
+      P115_COOKIES_FILE: /secrets/115-cookies.txt
+      IMA_PURE_SECRETS_FILE: /secrets/ima-pure.json
+      ARM_OPS_PASSWORD_FILE: /secrets/arm-ops-password.txt
+      # Prefer the file above. If you inject env instead, do it from a
+      # host env file that is never committed.
+      # ARM_OPS_PASSWORD: ""
+      P115_DEVICE_TYPE: harmony
+      OPENLIST_PUBLIC_URL: http://127.0.0.1:5244/lab-hot
+      # Optional: HTTP or file JSON from healthcheck.py
+      # PULLER_HEALTH_URL: http://127.0.0.1:8099/health
+      # PULLER_HEALTH_FILE: /data/vpush-ima-cache/logs/health.json
+      # PULLER_CONTAINER_NAME: vpush-ima-lab-puller
+    volumes:
+      - /data/vpush-ima-cache:/data/vpush-ima-cache:ro
+      # rw only so QR login can replace 115-cookies.txt (0600). Do not
+      # mount this into any public service.
+      - /secrets:/secrets
+      # Optional: puller container status when docker.sock is present.
+      # - /var/run/docker.sock:/var/run/docker.sock:ro
+    # Alternative to network_mode: host (container must then listen on
+    # 0.0.0.0 *inside* the netns; host publish MUST stay 127.0.0.1):
+    # ports:
+    #   - "127.0.0.1:8055:8055"
+    # environment:
+    #   ARM_OPS_HOST: "0.0.0.0"   # WARNING: container-internal only

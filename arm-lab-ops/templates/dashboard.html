@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ARM 实验室运维</title>
+  <link rel="stylesheet" href="/static/ops.css">
+</head>
+<body class="paper">
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">Oracle-SJ-ARM · phase 1</p>
+      <h1>实验室运维</h1>
+    </div>
+    <form method="post" action="/logout">
+      <button type="submit" class="btn btn-ghost">退出</button>
+    </form>
+  </header>
+
+  <main class="board">
+    <section class="card" id="cache-card">
+      <h2>缓存盘</h2>
+      <p class="meta" id="cache-root">{{ status.cache.root if status.cache is defined else "" }}</p>
+      <dl class="metrics" id="cache-metrics">
+        <div><dt>盘已用</dt><dd id="disk-used">—</dd></div>
+        <div><dt>staging</dt><dd id="st-used">—</dd></div>
+        <div><dt>hot</dt><dd id="hot-used">—</dd></div>
+        <div><dt>failed</dt><dd id="fail-used">—</dd></div>
+      </dl>
+    </section>
+
+    <section class="card" id="puller-card">
+      <h2>Puller</h2>
+      <p class="meta" id="puller-source">—</p>
+      <p id="puller-timer">—</p>
+      <p id="puller-docker">—</p>
+      <pre class="log" id="puller-log" hidden></pre>
+    </section>
+
+    <section class="card" id="ima-card">
+      <h2>IMA 凭据</h2>
+      <p id="ima-meta">—</p>
+      <p class="note">本面板不做 IMA 扫码。请在 Mac 上用 <code>ima_phone_sync</code> 换票，再把 <code>ima-pure.json</code> 放到 secrets。</p>
+    </section>
+
+    <section class="card" id="p115-card">
+      <h2>115 Cookie</h2>
+      <p id="p115-meta">—</p>
+      <form id="qr-form" class="qr-row">
+        <label class="field compact">
+          <span>设备</span>
+          <select name="device_type" id="device-type">
+            {% for app in device_types %}
+            <option value="{{ app }}" {% if app == default_device %}selected{% endif %}>{{ app }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit" class="btn btn-primary" id="qr-start">开始扫码</button>
+      </form>
+      <p class="hint" id="qr-hint">扫码成功只写 <code>/secrets/115-cookies.txt</code>（0600），接口不回传 Cookie。</p>
+      <p class="banner" id="qr-status" hidden></p>
+      <img id="qr-img" alt="115 登录二维码" hidden>
+    </section>
+
+    <section class="card" id="openlist-card">
+      <h2>OpenList</h2>
+      <p id="openlist-link">未配置 <code>OPENLIST_PUBLIC_URL</code></p>
+    </section>
+  </main>
+
+  <script>
+    const statusBoot = {{ status_json | safe }};
+
+    function fmtBytes(n) {
+      if (n == null || n === "") return "—";
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      let v = Number(n);
+      let i = 0;
+      while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
+      return (i === 0 ? String(v) : v.toFixed(1)) + " " + units[i];
+    }
+
+    function bucket(b) {
+      if (!b) return "—";
+      if (!b.exists) return "无目录";
+      const mark = b.truncated ? " · 已截断" : "";
+      return (b.files || 0) + " 个 · " + fmtBytes(b.bytes) + mark;
+    }
+
+    function render(s) {
+      if (!s || !s.ok) return;
+      const cache = s.cache || {};
+      document.getElementById("cache-root").textContent = cache.root || "";
+      const disk = cache.disk;
+      document.getElementById("disk-used").textContent = disk
+        ? fmtBytes(disk.used_bytes) + " / " + fmtBytes(disk.total_bytes) + "（" + disk.used_pct + "%）"
+        : "—";
+      document.getElementById("st-used").textContent = bucket(cache.staging);
+      document.getElementById("hot-used").textContent = bucket(cache.hot);
+      document.getElementById("fail-used").textContent = bucket(cache.failed);
+
+      const puller = s.puller || {};
+      document.getElementById("puller-source").textContent = "来源 " + (puller.source || "none");
+      const timer = puller.timer || {};
+      document.getElementById("puller-timer").textContent =
+        (timer.unit || "timer") + " · " + (timer.active || "unknown");
+      const boxes = (puller.docker && puller.docker.containers) || [];
+      document.getElementById("puller-docker").textContent = boxes.length
+        ? boxes.map((c) => (c.name || "") + " " + (c.state || c.status || "")).join(" · ")
+        : (puller.docker && puller.docker.available ? "docker 可见，无 puller 容器" : "未挂 docker.sock");
+      const logs = puller.logs || [];
+      const pre = document.getElementById("puller-log");
+      if (logs.length && logs[0].tail && logs[0].tail.length) {
+        pre.hidden = false;
+        pre.textContent = logs.map((f) => "# " + f.name + "\n" + (f.tail || []).join("\n")).join("\n\n");
+      } else {
+        pre.hidden = true;
+      }
+
+      const ima = s.ima || {};
+      document.getElementById("ima-meta").textContent = ima.present
+        ? "在场 · mtime " + (ima.mtime || "—") + " · uid_len " + (ima.uid_len || 0)
+        : "未找到 ima-pure.json";
+
+      const p115 = s.p115 || {};
+      document.getElementById("p115-meta").textContent = p115.present
+        ? "在场 · mtime " + (p115.mtime || "—") + " · length " + (p115.length || 0)
+        : "未找到 115-cookies.txt";
+
+      const url = (s.openlist && s.openlist.url) || "";
+      const slot = document.getElementById("openlist-link");
+      if (url) {
+        slot.innerHTML = "";
+        const a = document.createElement("a");
+        a.href = url;
+        a.textContent = "打开 /lab-hot";
+        slot.appendChild(a);
+      } else {
+        slot.textContent = "未配置 OPENLIST_PUBLIC_URL";
+      }
+    }
+
+    async function refresh() {
+      const r = await fetch("/api/status", { credentials: "same-origin" });
+      if (r.status === 401) {
+        location.href = "/login";
+        return;
+      }
+      render(await r.json());
+    }
+
+    const qrStatus = document.getElementById("qr-status");
+    const qrImg = document.getElementById("qr-img");
+    let qrTimer = null;
+
+    function showQr(msg, kind) {
+      qrStatus.hidden = false;
+      qrStatus.className = "banner " + (kind || "");
+      qrStatus.textContent = msg;
+    }
+
+    async function pollQr(sessionId) {
+      const r = await fetch("/api/115/qr/status?session_id=" + encodeURIComponent(sessionId), {
+        credentials: "same-origin",
+      });
+      const data = await r.json();
+      if (data.status === "pending") {
+        showQr("等待扫码…", "");
+        return;
+      }
+      if (data.status === "scanned") {
+        showQr("已扫码，请在手机上确认", "");
+        return;
+      }
+      clearInterval(qrTimer);
+      qrTimer = null;
+      if (data.ok && data.status === "ok") {
+        qrImg.hidden = true;
+        showQr("已写入 Cookie，长度 " + data.cookie_len, "banner-ok");
+        refresh();
+        return;
+      }
+      showQr(data.error || data.status || "扫码失败", "banner-warn");
+    }
+
+    document.getElementById("qr-form").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      if (qrTimer) clearInterval(qrTimer);
+      showQr("正在取码…", "");
+      const device = document.getElementById("device-type").value;
+      const r = await fetch("/api/115/qr/start", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device_type: device }),
+      });
+      const data = await r.json();
+      if (!data.ok) {
+        qrImg.hidden = true;
+        showQr(data.error || "无法开始扫码", "banner-warn");
+        return;
+      }
+      qrImg.src = data.qr_png;
+      qrImg.hidden = false;
+      showQr("用 115 App 扫码（设备 " + data.device_type + "）", "");
+      qrTimer = setInterval(() => pollQr(data.session_id), 1500);
+    });
+
+    render(statusBoot);
+    setInterval(refresh, 8000);
+  </script>
+</body>
+</html>

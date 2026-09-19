@@ -80,6 +80,7 @@ IMA 现网落盘是 `<group_id>__<hash>/<MMDD>/`（无年份）。中间层负�
 | ima lab sync | ARM 限量 list+download → staging，默认关 | `scripts/ima_arm_lab_sync.py` |
 | ima remap | 旧归档树拷进 staging，默认关 | `scripts/ima_to_arm_staging.py`（不下载） |
 | nfs-sync | hot/staging → 旧 NFS 布局 | **已落地（默认关）** `scripts/arm_nfs_sync.py`（`--enable` / `VPUSH_ARM_NFS_SYNC=1`；独立于中间层开关） |
+| arm-lab-ops | 实验室只读看板 + 115 QR | **phase 1** `arm-lab-ops/`（`127.0.0.1:8055`，SSH tunnel；不是生产后台） |
 
 ## 6. 开关
 
@@ -181,6 +182,7 @@ $VPUSH_ARM_STAGING_ROOT/local/ima/<group_id>/YYYY/MM/DD/<safe_filename>.pdf
 5. 阅读台切流 — 运维决策，见下方决策记录（本仓库不改 live UI、不改生产 compose）
 6. 实验室 puller 入库 — **已落地（宿主机原件）** `scripts/puller_loop.py` + `lab_common.py` + `manifest.py`（见 [puller_loop.md](../scripts/puller_loop.md)）；拷到 `/opt/vpush-ima-lab/scripts/`
 7. 中金 ARM 限量同步 — **已落地（默认关）** `scripts/cicc_arm_lab_sync.py`
+8. ARM 实验室运维面板 — **phase 1 已入库** `arm-lab-ops/`（只读状态 + 115 QR；不是阅读台 / 生产后台）
 
 ARM 实验室 `puller_loop` / 同步 timer 是**宿主机 systemd**（脚本在仓库，timer 由 ops 另做），不是生产 compose 服务。**不要把 `VPUSH_ARM_MIDDLEWARE=1` 写进生产 compose。**
 
@@ -194,3 +196,15 @@ ARM 实验室 `puller_loop` / 同步 timer 是**宿主机 systemd**（脚本在�
 | 挂 ARM 导出的 NFS | 仅当原存储不可恢复、或明确迁阅读根 | 运维另决策；不在本 PR 启用 |
 
 `arm_nfs_sync` 只生成兼容树，供以后挂载；**不**把生产 compose 指向 ARM，也**不**打开中间层采集。阅读台切流保持为后续 ops 决策。
+
+## 11. ARM 实验室运维面板（phase 1）
+
+`arm-lab-ops/` 是给 Oracle-SJ-ARM 中间层用的薄运维 UI：看缓存水位、puller / timer、凭据是否在场，以及 **115 QR 写 Cookie**。它不是阅读台，也不是生产 vpush 后台。Phase 1 **没有**破坏性 apply / dry-run 按钮。
+
+- **访问：** 进程默认只绑 `127.0.0.1:8055`。从笔记本：`ssh -L 8055:127.0.0.1:8055 oracle-sj-arm`，再开 `http://127.0.0.1:8055`。compose 示例见 `arm-lab-ops/docker-compose.snippet.yml`（host 网络 + loopback）。**不要**把默认改成 `0.0.0.0`。
+- **口令：** `ARM_OPS_PASSWORD` 或 `/secrets/arm-ops-password.txt`。Session Cookie `arm_ops`（HttpOnly, SameSite=Lax）。
+- **115 QR：** 本面板拥有扫码写 `/secrets/115-cookies.txt`（0600）的路径；JSON **只回** `{ok, cookie_len}`，不回 Cookie 正文。设备默认 `harmony`，与 p115client apps 一致。缺 `p115client` 则扫码失败并保持关闭。
+- **IMA：** 只显示 `{present, mtime, uid_len}`。**不做 IMA 扫码**——换票仍在 Mac 上走 `ima_phone_sync`，再把 `ima-pure.json` 放到 secrets。
+- **OpenList：** 看板上的 `/lab-hot` 链接来自 `OPENLIST_PUBLIC_URL`（只读浏览热缓存，不暴露 115）。
+
+本地跑法与 ARM 合入步骤见 [arm-lab-ops/README.md](../arm-lab-ops/README.md)。
