@@ -270,6 +270,7 @@ def test_ensure_hot_modes_is_umask_friendly(tmp_path):
 
 def test_resolve_batch_size_prefers_settings_json(tmp_path, monkeypatch):
     cache = lab_common.cache_root()
+    cache.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("PULLER_BATCH_SIZE", "20")
     assert puller.resolve_batch_size() == 20
     (cache / puller.OPS_LAB_SETTINGS_NAME).write_text(
